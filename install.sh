@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="01b133e62a0a"
+COREGSM_BUILD="f5dca6cf3ec0"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -62112,9 +62112,10 @@ __COREGSM_EOF__
  * gets a small celebration), when the community usually plays, and the latest arrivals.
  */
 import NickPic from '../NickPic';
+import { t, useI18n } from '../../i18n';
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../../api';
-import { AnimatedNumber, Burst, GameAvatar, ago, fmtDateTime, plural, usePoll, num } from '../../ui';
+import { AnimatedNumber, Burst, GameAvatar, ago, fmtDateTime, usePoll, num } from '../../ui';
 import '../../styles/community.css';
 
 export interface TopPlayer { name: string; hours: number; servers: number; online: boolean; prev: number | null }
@@ -62131,8 +62132,8 @@ export interface Community {
   servers: { id: number; name: string; game: string; online: boolean; players: number; maxPlayers: number }[];
 }
 
-export const DOW_SHORT = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
-const DOW_IN = ['по понедельникам', 'по вторникам', 'по средам', 'по четвергам', 'по пятницам', 'по субботам', 'по воскресеньям'];
+/** weekday names in the panel's language, Monday first */
+export const dowShort = (): string[] => Array.from({ length: 7 }, (_, i) => t(`cm.dow.${i}` as const));
 const RECORD_KEY = 'coregsm_record_seen';
 
 /** the community data with the time of the last answer and a way to ask again at once */
@@ -62166,12 +62167,12 @@ export function PlayerAvatar({ name, size = 30, online = false }: { name: string
 export function MiniHeat({ cells, big = false, now }: { cells: (number | null)[][]; big?: boolean; now?: { dow: number; hour: number } }) {
   const max = Math.max(1, ...cells.flat().map((v) => v ?? 0));
   return (
-    <div className={`cm-heat ${big ? 'is-big' : ''}`} role="img" aria-label="Когда играет сообщество: по дням недели и часам">
+    <div className={`cm-heat ${big ? 'is-big' : ''}`} role="img" aria-label={t('cm.heat.aria')}>
       {cells.map((row, d) => (
         <div key={d} className="contents">
-          <span className="cm-heat-d">{DOW_SHORT[d]}</span>
+          <span className="cm-heat-d">{dowShort()[d]}</span>
           {row.map((v, h) => (
-            <span key={h} className={`cm-heat-c ${now && now.dow === d && now.hour === h ? 'is-now' : ''}`} style={v == null ? undefined : { ['--a' as string]: (0.12 + 0.88 * (v / max)).toFixed(3) }} title={v == null ? undefined : `${DOW_SHORT[d]} ${String(h).padStart(2, '0')}:00 — в среднем ${num(v)}`} />
+            <span key={h} className={`cm-heat-c ${now && now.dow === d && now.hour === h ? 'is-now' : ''}`} style={v == null ? undefined : { ['--a' as string]: (0.12 + 0.88 * (v / max)).toFixed(3) }} title={v == null ? undefined : t('cm.heat.cell', { d: dowShort()[d], time: `${String(h).padStart(2, '0')}:00`, n: num(v) })} />
           ))}
         </div>
       ))}
@@ -62185,13 +62186,13 @@ export function MiniHeat({ cells, big = false, now }: { cells: (number | null)[]
 export function HeatLegend() {
   return (
     <p className="cm-heat-scale" aria-hidden>
-      меньше {[0.15, 0.4, 0.7, 1].map((a) => <i key={a} style={{ ['--a' as string]: a }} />)} больше
+      {t('cm.heat.less')} {[0.15, 0.4, 0.7, 1].map((a) => <i key={a} style={{ ['--a' as string]: a }} />)} {t('cm.heat.more')}
     </p>
   );
 }
 
 export function busiestText(b: Community['heatmap']['busiest']) {
-  return b ? `Больше всего игроков ${DOW_IN[b.dow]} около ${String(b.hour).padStart(2, '0')}:00` : 'Данных пока мало';
+  return b ? t('cm.busiest', { when: t(`cm.dowIn.${b.dow}` as const), time: `${String(b.hour).padStart(2, '0')}:00` }) : t('cm.busiest.none');
 }
 
 export function FeedItem({ f }: { f: Community['feed'][number] }) {
@@ -62204,13 +62205,13 @@ export function FeedItem({ f }: { f: Community['feed'][number] }) {
       <span className="min-w-0 flex-1">
         <span className="block truncate text-sm">
           <a href={`/player/${encodeURIComponent(f.name)}`} className="font-extrabold hover:text-link">{f.name}</a>
-          <span className="text-mute"> зашёл на </span>
+          <span className="text-mute">{t('cm.joined')}</span>
           <a href={`/servers/${f.serverId}`} className="font-bold hover:text-link">{f.serverName}</a>
         </span>
         <span className="flex items-center gap-2 text-xs font-bold text-mute">
           {ago(f.at)}
-          {f.online && <span className="cm-live">в игре</span>}
-          {f.newcomer && <span className="cm-new">новичок</span>}
+          {f.online && <span className="cm-live">{t('cm.live')}</span>}
+          {f.newcomer && <span className="cm-new">{t('cm.new')}</span>}
         </span>
       </span>
     </li>
@@ -62218,6 +62219,7 @@ export function FeedItem({ f }: { f: Community['feed'][number] }) {
 }
 
 export default function CommunityBento() {
+  useI18n();
   const c = useCommunity();
   const [celebrate, setCelebrate] = useState(false);
   const shown = useRef(false);
@@ -62243,37 +62245,37 @@ export default function CommunityBento() {
   const isRecord = !!rec && c.now.players > 0 && c.now.players >= rec.players;
   return (
     <div className="cm-bento fade-in">
-      <section className={`tile cm-now ${isRecord ? 'is-record' : ''}`} aria-label="Сейчас играют">
-        <div className="cm-k">Сейчас играют</div>
+      <section className={`tile cm-now ${isRecord ? 'is-record' : ''}`} aria-label={t('cm.b.now')}>
+        <div className="cm-k">{t('cm.b.now')}</div>
         <div className="relative inline-flex items-baseline gap-2">
           <AnimatedNumber value={c.now.players} className="cm-big" pulse />
-          <span className="font-extrabold text-mute">{plural(c.now.players, ['игрок', 'игрока', 'игроков'])}</span>
+          <span className="font-extrabold text-mute">{t('cm.word.players', { n: c.now.players })}</span>
           {celebrate && <Burst count={14} radius={46} />}
         </div>
         <div className="cm-meter" aria-hidden><span style={{ width: `${toRecord * 100}%` }} /></div>
         <p className="cm-sub">
-          {isRecord ? '🎉 Это рекорд за 30 дней!' : rec ? `Рекорд за 30 дней: ${rec.players} (${fmtDateTime(rec.at)})` : 'Рекорд появится, когда накопится история'}
+          {isRecord ? t('cm.rec.now') : rec ? t('cm.b.rec', { n: rec.players, when: fmtDateTime(rec.at) }) : t('cm.b.recNone')}
         </p>
-        <a href="/community" className="cm-more">Сообщество: кто и когда играет →</a>
+        <a href="/community" className="cm-more">{t('cm.b.more')}</a>
         <dl className="cm-mini">
-          <div><dt>Серверов в сети</dt><dd>{c.now.online} из {c.now.servers}</dd></div>
-          <div><dt>Игроков за неделю</dt><dd>{c.players.week}</dd></div>
-          <div><dt>Новых за неделю</dt><dd>{c.players.newWeek}</dd></div>
+          <div><dt>{t('cm.b.online')}</dt><dd>{t('cm.b.of', { a: c.now.online, b: c.now.servers })}</dd></div>
+          <div><dt>{t('cm.b.week')}</dt><dd>{c.players.week}</dd></div>
+          <div><dt>{t('cm.st.new')}</dt><dd>{c.players.newWeek}</dd></div>
         </dl>
       </section>
 
-      <section className="tile cm-when" aria-label="Когда играет сообщество">
-        <div className="cm-k">Когда играет сообщество</div>
+      <section className="tile cm-when" aria-label={t('cm.when')}>
+        <div className="cm-k">{t('cm.when')}</div>
         <MiniHeat cells={c.heatmap.cells} />
         <p className="cm-sub">{busiestText(c.heatmap.busiest)}</p>
       </section>
 
-      <section className="tile cm-feed" aria-label="Живая лента">
+      <section className="tile cm-feed" aria-label={t('cm.feed')}>
         <div className="flex items-center justify-between gap-2">
-          <div className="cm-k">Живая лента</div>
-          <a href="/community" className="text-xs font-extrabold text-link hover:underline">Сообщество →</a>
+          <div className="cm-k">{t('cm.feed')}</div>
+          <a href="/community" className="text-xs font-extrabold text-link hover:underline">{t('cm.b.comm')}</a>
         </div>
-        {c.feed.length ? <ul className="cm-feed-list">{c.feed.slice(0, 5).map((f) => <FeedItem key={`${f.name}-${f.at}`} f={f} />)}</ul> : <p className="cm-sub">Пока никто не заходил.</p>}
+        {c.feed.length ? <ul className="cm-feed-list">{c.feed.slice(0, 5).map((f) => <FeedItem key={`${f.name}-${f.at}`} f={f} />)}</ul> : <p className="cm-sub">{t('cm.b.noFeed')}</p>}
       </section>
     </div>
   );
@@ -67564,6 +67566,623 @@ const en: Record<keyof typeof ru, string> = {
   'adm.tbl.d.updated': 'Polled',
   'adm.tbl.d.maint': 'Maintenance',
   'adm.density': 'Compact',
+  'st.dur.m': '{m} min',
+  'st.dur.h': '{h} h',
+  'st.dur.hm': '{h} h {m} min',
+  'st.outages': '{n} outage|{n} outages',
+  'st.noOutages': 'no outages',
+  'st.day.none': '{d}: no data',
+  'st.day.up': '{d}: available {p}',
+  'st.day.down': 'downtime {dur}{inc}',
+  'st.day.planned': 'planned maintenance {dur}',
+  'st.up.none': 'No uptime data for 30 days',
+  'st.up.sum': '30-day uptime: {p}',
+  'st.up.aria': '{s}. Use the arrow keys to browse the days',
+  'st.nodata': 'No data',
+  'st.tip.up': 'Available {p}',
+  'st.tip.down': 'Downtime {dur}{inc}',
+  'st.tip.none': 'No outages',
+  'st.tip.planned': 'Planned maintenance {dur}',
+  'st.today': 'today',
+  'st.lat.k': 'Response, 24 h',
+  'st.lat.label': 'Ping over 24 hours: from {lo} to {hi} ms',
+  'st.lat.max': 'Peak {hi} ms',
+  'st.lat.v': 'min {lo} · avg {avg} · max {hi} ms',
+  'st.players.title': '{p} of {m} players',
+  'st.players.word': 'players',
+  'st.inc30': '{n} outage in 30 days|{n} outages in 30 days',
+  'st.noInc30': 'no outages in 30 days',
+  'st.ping': 'ping {n} ms',
+  'st.hero.ok': 'All servers are up',
+  'st.hero.okText': 'Players can join any server.',
+  'st.hero.bad': 'All servers are down',
+  'st.hero.badText': 'We can see the problem: the page updates by itself when the servers are back.',
+  'st.hero.some': '{n} server is down|{n} servers are down',
+  'st.hero.someText': 'The others work as usual.',
+  'st.last.now': 'An outage is going on right now',
+  'st.last.ago': 'Last outage: {when}',
+  'st.last.none': 'No outages in 30 days',
+  'st.seg.aria': '{up} of {total} online',
+  'st.seg.on': '{name}: online',
+  'st.seg.off': '{name}: down',
+  'st.stat.online': 'Online',
+  'st.stat.of': '{a} of {b}',
+  'st.stat.players': 'Players',
+  'st.stat.uptime': '30-day uptime',
+  'st.stat.now': 'Outages now',
+  'st.updated': 'updated {ago}',
+  'st.inc.planned': 'Planned maintenance',
+  'st.inc.live': 'Ongoing',
+  'st.inc.done': 'Resolved',
+  'st.inc.liveText': 'Not responding for {dur}, since {from}',
+  'st.inc.pastText': 'Down for {dur}: {from} – {to}',
+  'st.inc.players': ' · {n} player was online| · {n} players were online',
+  'st.hist': 'Outage history',
+  'st.hist.none': 'No outages in 30 days',
+  'st.hist.noneText': 'Every server answered every poll.',
+  'st.hist.more': 'Show more ({n})',
+  'st.leg.ok': 'no outages',
+  'st.leg.blip': 'up to 15 min',
+  'st.leg.warn': '15–60 min',
+  'st.leg.bad': 'over an hour',
+  'st.leg.planned': 'planned maintenance',
+  'st.leg.none': 'no data',
+  'st.sub': '{servers} · {outages}',
+  'st.servers': '{n} server|{n} servers',
+  'st.sub.none': 'Server availability and outage history for 30 days',
+  'st.title': 'Status',
+  'st.loading': 'Loading',
+  'st.empty': 'No servers yet',
+  'st.emptyText': 'Their availability will show up here once servers are added.',
+  'st.add': 'Add a server',
+  'cm.dow.0': 'Mon',
+  'cm.dow.1': 'Tue',
+  'cm.dow.2': 'Wed',
+  'cm.dow.3': 'Thu',
+  'cm.dow.4': 'Fri',
+  'cm.dow.5': 'Sat',
+  'cm.dow.6': 'Sun',
+  'cm.dowIn.0': 'on Mondays',
+  'cm.dowIn.1': 'on Tuesdays',
+  'cm.dowIn.2': 'on Wednesdays',
+  'cm.dowIn.3': 'on Thursdays',
+  'cm.dowIn.4': 'on Fridays',
+  'cm.dowIn.5': 'on Saturdays',
+  'cm.dowIn.6': 'on Sundays',
+  'cm.h': '{n} h',
+  'cm.word.players': 'player|players',
+  'cm.word.days': 'day|days',
+  'cm.word.servers': 'server|servers',
+  'cm.onServers': 'on {n} server|on {n} servers',
+  'cm.delta.same': 'Same as in the previous period',
+  'cm.delta.prev': 'In the previous period: {n}',
+  'cm.greet.aria': 'Your activity',
+  'cm.greet.hi': 'Hi, {name}!',
+  'cm.greet.nonick': 'Set your in-game nick in the profile and your hours will show up here.',
+  'cm.greet.unseen': 'The nick {nick} has not been seen on the servers yet.',
+  'cm.greet.counting': 'Counting your hours…',
+  'cm.greet.today': 'You have played {h} h today{streak}.',
+  'cm.greet.streak': ', a streak of {n} {days} in a row',
+  'cm.greet.none': 'You haven\'t played today yet.',
+  'cm.greet.card': 'My card',
+  'cm.greet.profile': 'Profile',
+  'cm.season.run': '{n} {days} so far, since {from}',
+  'cm.season.place': 'You are #{n} in the season: {h} h',
+  'cm.season.out': 'You are not in the season top ten yet, nick {nick}',
+  'cm.season.empty': 'Nobody has played this season yet: be the first.',
+  'cm.season.first': 'First to join this season:',
+  'cm.fame': 'Hall of fame',
+  'cm.place': 'place {n}',
+  'cm.nobody': 'Nobody played',
+  'cm.when': 'When the community plays',
+  'cm.when.today': 'Today the best time to join:',
+  'cm.when.peak': '. Right now is the peak.',
+  'cm.when.dow': 'On {d} the most people play around',
+  'cm.when.note': '30-day averages across all servers. The current hour is outlined.',
+  'cm.when.typical': 'A typical day',
+  'cm.busiest': 'Most players {when} around {time}',
+  'cm.busiest.none': 'Not enough data yet',
+  'cm.heat.aria': 'When the community plays: by weekday and hour',
+  'cm.heat.cell': '{d} {time}: {n} on average',
+  'cm.heat.less': 'less',
+  'cm.heat.more': 'more',
+  'cm.joined': ' joined ',
+  'cm.live': 'in game',
+  'cm.new': 'newcomer',
+  'cm.who': 'Who plays what',
+  'cm.who.none': 'Nobody is on the servers right now.',
+  'cm.hot': 'The busiest server',
+  'cm.hot.none': 'All servers are empty right now.',
+  'cm.hot.of': ' of {max}, {pct}%',
+  'cm.copyAddr': 'Copy address',
+  'cm.p.day': 'Day',
+  'cm.p.week': 'Week',
+  'cm.p.month': 'Month',
+  'cm.p.all': 'All time',
+  'cm.move.new': 'Was not in the top of the previous period',
+  'cm.move.newText': 'new',
+  'cm.move.same': 'Place unchanged',
+  'cm.move.was': 'Was #{n} before',
+  'cm.top': 'Most active',
+  'cm.top.period': 'Period',
+  'cm.top.find': 'Find a player by nick…',
+  'cm.top.findAria': 'Find a player by nick',
+  'cm.top.open': 'Open',
+  'cm.top.quiet': 'Quiet so far',
+  'cm.top.quietDay': 'Nobody played in the last day. Check back later.',
+  'cm.top.quietText': 'The most active players will show up here.',
+  'cm.top.less': 'Collapse',
+  'cm.top.more': 'Show {n} more',
+  'cm.feedG.hour': 'Last hour',
+  'cm.feedG.today': 'Today',
+  'cm.feedG.earlier': 'Earlier',
+  'cm.feed': 'Live feed',
+  'cm.feed.filter': 'Feed filter',
+  'cm.feed.all': 'All',
+  'cm.feed.online': 'In game',
+  'cm.feed.new': 'Newcomers',
+  'cm.feed.none': 'Nobody has joined yet',
+  'cm.feed.noneText': 'Players joining will show up here by themselves.',
+  'cm.feed.noNew': 'No newcomers among the latest joins.',
+  'cm.feed.noOnline': 'None of the latest joins is in game now.',
+  'cm.gal': 'Gallery',
+  'cm.gal.all': 'Whole gallery →',
+  'cm.gal.upload': 'Upload a screenshot →',
+  'cm.gal.none': 'No screenshots yet',
+  'cm.gal.noneText': 'Share the first shot from the game.',
+  'cm.gal.uploadBtn': 'Upload',
+  'cm.gal.shot': 'Screenshot {n}',
+  'cm.gal.best': 'Best',
+  'cm.srv': 'Where people play now',
+  'cm.srv.sort': 'Sort',
+  'cm.srv.byPlayers': 'By players',
+  'cm.srv.byFill': 'By fill',
+  'cm.srv.byName': 'By name',
+  'cm.srv.game': 'Game',
+  'cm.srv.allGames': 'All',
+  'cm.srv.none': 'No servers',
+  'cm.srv.noneText': 'Servers will show up here once they are added.',
+  'cm.srv.off': 'offline',
+  'cm.nav': 'Page sections',
+  'cm.loading': 'Loading',
+  'cm.title': 'Community',
+  'cm.sub': 'Who plays, when and where',
+  'cm.subLive': 'Who plays, when and where: live numbers from all servers',
+  'cm.nav.now': 'Now',
+  'cm.nav.season': 'Season',
+  'cm.nav.when': 'Activity',
+  'cm.nav.top': 'Top',
+  'cm.nav.feed': 'Feed',
+  'cm.nav.gallery': 'Gallery',
+  'cm.nav.servers': 'Servers',
+  'cm.refresh.title': 'The data refreshes by itself. Press to refresh now',
+  'cm.refresh.busy': 'refreshing…',
+  'cm.refresh.ago': 'updated {ago}',
+  'cm.now.k': 'Playing now',
+  'cm.now.line': '{pl} {on}',
+  'cm.now.vsHour': 'Against an hour ago',
+  'cm.now.perHour': ' per hour',
+  'cm.rec.now': '🎉 This is the 30-day record!',
+  'cm.rec.to': 'To the record',
+  'cm.rec.is': '. 30-day record:',
+  'cm.ticks.ago': '24 h ago',
+  'cm.ticks.now': 'now',
+  'cm.st.day': 'Day',
+  'cm.st.week': 'Week',
+  'cm.st.month': 'Month',
+  'cm.st.new': 'New this week',
+  'cm.st.newShow': 'Show newcomers in the feed',
+  'cm.b.now': 'Playing now',
+  'cm.b.recNone': 'The record will appear once history builds up',
+  'cm.b.rec': '30-day record: {n} ({when})',
+  'cm.b.more': 'Community: who plays and when →',
+  'cm.b.online': 'Servers online',
+  'cm.b.of': '{a} of {b}',
+  'cm.b.week': 'Players this week',
+  'cm.b.noFeed': 'Nobody has joined yet.',
+  'cm.b.comm': 'Community →',
+  'al.k.down': 'Server down',
+  'al.k.up': 'Server back',
+  'al.k.test': 'Test',
+  'al.k.low': 'Few players',
+  'al.k.ping': 'Ping up',
+  'al.k.full': 'Almost full',
+  'al.k.digest': 'Weekly digest',
+  'al.k.restart': 'Restart',
+  'al.s.low': 'Unusually few players',
+  'al.s.lowText': 'Online has been below a third of the usual for this weekday and hour for 20 minutes (last four weeks).',
+  'al.s.ping': 'Ping went up',
+  'al.s.pingText': 'Ping has been above 150 ms and twice the daily average for 15 minutes.',
+  'al.s.full': 'Server almost full',
+  'al.s.fullText': '90% of the slots have been taken for over 15 minutes: time to think about slots.',
+  'al.m.down': 'Server “Survival” has not answered for 3 minutes',
+  'al.m.up': 'Server “Survival” is back online after 12 minutes of downtime',
+  'al.m.low': '“Survival” has unusually few players for this hour',
+  'al.m.ping': 'Ping on “Survival” went up: 240 ms instead of the usual 60',
+  'al.m.full': '“Survival” is 94% full',
+  'al.where.channel': 'channel {id}',
+  'al.where.none': 'no channel selected',
+  'al.kinds': 'Which messages you get',
+  'al.kinds.text': 'This is how they look in the channel; grey cards are off.',
+  'al.on': 'on',
+  'al.off': 'off',
+  'al.q.title': 'Quiet hours',
+  'al.q.text': 'Messages about servers still arrive in these hours, but without @here and @everyone: nobody is woken at night.',
+  'al.q.noMention': 'Do not mention in quiet hours',
+  'al.q.now': 'quiet hours now',
+  'al.q.normal': 'normal mode now',
+  'al.q.from': 'From',
+  'al.q.to': 'To',
+  'al.q.same': 'Start and end are equal: no quiet hours.',
+  'al.q.span': 'Quiet hours per day: {n}. In the panel time.',
+  'al.q.aria': 'Quiet hours: from {a} to {b}',
+  'al.q.quiet': ': quiet',
+  'al.queue.aria': 'Sent {sent}, waiting {wait}, errors {bad}',
+  'al.queue.line': 'Sent: {sent} · waiting: {wait} · failed: {bad}',
+  'al.queue.first': ' (shown first)',
+  'al.test.done': 'Test message queued',
+  'al.title': 'Alerts',
+  'al.sub': 'A Discord message when a game server stops answering and when it is back',
+  'al.hint': 'The bot posts to the chosen channel when a game server stops answering and tells when it is back.',
+  'al.help': 'Outages shorter than the chosen time send nothing. @here or @everyone is used only when a server goes down. You can send a test message before turning it on.',
+  'al.sendTest': 'Send a test message',
+  'al.noToken': 'Set the bot token',
+  'al.noTokenText': 'Alerts will not arrive: the bot has no token and is not connected to Discord.',
+  'al.on.done': 'Alerts on',
+  'al.off.done': 'Alerts off',
+  'al.enable': 'Alert about unavailable servers',
+  'al.enableText': 'The bot posts to the chosen channel and, when the server is back, tells how long it was down.',
+  'al.channel': 'Alerts channel',
+  'al.channel.n': 'Channel {id}',
+  'al.channel.none': 'not selected',
+  'al.change': 'Change',
+  'al.pick': 'Choose a channel',
+  'al.channel.saved': 'Channel saved',
+  'al.after': 'Treat a server as down after',
+  'al.saved': 'Saved',
+  'al.after.n': '{n} minute without an answer|{n} minutes without an answer',
+  'al.afterText': 'Outages shorter than this send no message.',
+  'al.mention': 'Whom to mention when a server goes down',
+  'al.mention.none': 'Nobody',
+  'al.mention.here': '@here (who is online)',
+  'al.mentionText': 'The “server is back” message never mentions anyone.',
+  'al.smart': 'Smart alerts',
+  'al.smartText': 'The server works, but something is off. Each rule fires only when its condition holds for a while, then stays quiet for several hours.',
+  'al.smart.on': 'On',
+  'al.smart.off': 'Off',
+  'al.smart.first': 'Turn the alerts on above first.',
+  'al.recent': 'Recent alerts',
+  'al.loading': 'Loading',
+  'al.none': 'Nothing sent yet',
+  'al.none.ch': 'When a server stops answering, the bot posts to the channel. You can test it beforehand.',
+  'al.none.noCh': 'Choose a channel: the bot will post about server outages there.',
+  'al.sent': 'sent {ago}',
+  'al.waits': 'waiting for the bot…',
+  'al.failed': 'not sent: {e}',
+  'dc.delFail': 'Could not delete the binding',
+  'dc.deleted': 'Binding deleted',
+  'dc.deletedN': 'Bindings deleted: {n}',
+  'dc.paused': 'Paused',
+  'dc.resumed': 'Resumed',
+  'dc.sub': 'Where the bot posts the state of the servers',
+  'dc.hint': 'A binding means “show this server in this channel”. The bot posts one message and keeps updating it. One message can show several servers.',
+  'dc.help': 'Choose the main game server and a Discord channel. If there are several servers, tick the others: all of them show up in one message (up to 10). The message can be an embed, a card picture or both. A binding can be paused without deleting the message in Discord.',
+  'dc.bind': '+ Bind a channel',
+  'dc.setToken': 'Set the token in settings',
+  'dc.noToken': 'The bot is not connected: without a token it cannot post to Discord.',
+  'dc.addServer': 'Add a server',
+  'dc.noServers': 'Add a server first: there is nothing to bind yet.',
+  'dc.bot': 'Bot',
+  'dc.guilds': 'Discord servers: {n}',
+  'dc.channels': ' · channels to post in: {n}',
+  'dc.invite': 'Invite the bot',
+  'dc.noGuild': 'The bot is online but is on no Discord server (it may have been removed). Nothing is posted and commands do not work. Invite the bot again with the link.',
+  'dc.cmds': 'Bot commands',
+  'dc.cmds0': 'Commands are not registered yet. Re-invite the bot with the link below so the /register commands work.',
+  'dc.cmdsNote': 'Commands work if the bot was invited with a link that has the “applications.commands” scope:',
+  'dc.inviteLink': 'invite link',
+  'dc.wizard': 'Setup wizard',
+  'dc.loading': 'Loading',
+  'dc.none': 'No channels yet',
+  'dc.noneText': 'Bind a channel and the bot posts the card of the chosen server there.',
+  'dc.addFirst': 'Add a server first',
+  'dc.picked': 'Selected: {n}',
+  'dc.pickAll': 'Select all',
+  'dc.pause': 'Pause',
+  'dc.resume': 'Resume',
+  'dc.delete': 'Delete',
+  'dc.pickOne': 'Select binding',
+  'dc.srv': 'Server #{id}',
+  'dc.chId': 'Channel ID {id}',
+  'dc.ch': 'Channel {id}',
+  'dc.st.paused': 'PAUSED',
+  'dc.st.error': 'ERROR',
+  'dc.st.ok': 'WORKING',
+  'dc.st.wait': 'WAITING',
+  'dc.flow': 'Binding flow',
+  'dc.flow.server': 'Server',
+  'dc.flow.channel': 'Channel',
+  'dc.flow.message': 'Message',
+  'dc.flow.online': 'online',
+  'dc.flow.down': 'unreachable',
+  'dc.flow.gone': 'deleted',
+  'dc.flow.nofound': 'not found',
+  'dc.flow.paused': 'paused',
+  'dc.flow.err': 'error',
+  'dc.flow.waits': 'waiting',
+  'dc.inOne': '{n} server in one message|{n} servers in one message',
+  'dc.previewFirst': 'The preview shows the first server; the others follow in the same message.',
+  'dc.card': 'Card: {name}',
+  'dc.every': 'Every {n} s',
+  'dc.updated': 'Updated: {ago}',
+  'dc.actions': 'Binding actions',
+  'dc.doPause': 'Pause',
+  'dc.doResume': 'Resume',
+  'dc.edit': 'Edit',
+  'dc.saved': 'Binding saved',
+  'dc.savedFirst': 'Binding saved. The bot sends the message within a minute',
+  'dc.openCh': 'Open the channel in Discord',
+  'dc.pickErr': 'Choose a channel from the list or enter its ID',
+  'dc.f.edit': 'Edit binding',
+  'dc.f.new': 'New binding',
+  'dc.f.server': 'Server',
+  'dc.f.more': 'Show more servers in the same message',
+  'dc.f.moreNote': 'All selected servers go into one message. At most 10.',
+  'dc.f.guild': 'Discord server',
+  'dc.f.chIn': 'Channel on “{name}”',
+  'dc.f.channel': 'Channel',
+  'dc.f.pick': 'Choose a channel…',
+  'dc.f.manual': 'Enter the channel ID by hand',
+  'dc.f.refreshing': 'Refreshing…',
+  'dc.f.refresh': 'Refresh the list',
+  'dc.f.chId': 'Discord channel ID',
+  'dc.f.help1': 'The bot cannot see any Discord server yet. Invite it with the “Invite the bot to a server” button (on this page), then press “Refresh the list”. Meanwhile you can enter the channel ID by hand: turn on developer mode in Discord, right-click the channel and choose “Copy channel ID”.',
+  'dc.f.help2': 'The bot is on the Discord server “{names}”{hidden}, but cannot post to any channel. Give the bot (its role) the “View Channel”, “Send Messages” and “Attach Files” permissions on the channel and press “Refresh the list”.',
+  'dc.f.hidden': ' and sees {n} text channels',
+  'dc.f.help3': 'Developer mode in Discord: right-click the channel and choose “Copy channel ID”.',
+  'dc.f.fromList': 'Choose from the list',
+  'dc.f.style': 'Message style',
+  'dc.f.embed': 'Embed: colour, emoji, fields (recommended)',
+  'dc.f.cardOpt': 'Card picture',
+  'dc.f.both': 'Embed and picture',
+  'dc.f.interval': 'Update every, seconds (30–3600)',
+  'dc.f.enabled': 'Enabled',
+  'us.preset.news': 'News editor',
+  'us.preset.comm': 'Community moderator',
+  'us.preset.srv': 'Server admin',
+  'us.preset.none': 'Clear all',
+  'us.seen.never': 'never signed in',
+  'us.seen.online': 'online',
+  'us.seen.was': 'seen {ago}',
+  'us.role.player': 'Player',
+  'us.role.moderator': 'Moderator',
+  'us.role.admin': 'Administrator',
+  'us.saved': 'Saved',
+  'us.approved': '“{name}” approved',
+  'us.delFail': 'Not everyone could be deleted',
+  'us.rejected': 'Request rejected',
+  'us.approvedMany': 'Approved: {a}, failed: {b}',
+  'us.approvedAll': 'Requests approved: {n}',
+  'us.rulesMax': 'At most 5000 characters',
+  'us.rulesBar': 'community rules',
+  'us.permsSaved': 'Moderator permissions saved',
+  'us.roleChanged': 'Role changed',
+  'us.pwTitle': 'New password for “{name}”',
+  'us.pwLabel': 'New password (8+ characters)',
+  'us.pwBtn': 'Change password',
+  'us.pwMin': 'At least 8 characters',
+  'us.pwDone': 'Password changed',
+  'us.userDeleted': 'User deleted',
+  'us.title': 'Users',
+  'us.sub': 'Accounts, roles, registration and rules',
+  'us.hint': 'This decides who can open the panel, who can register and what each person may do. The role defines the rights.',
+  'us.help': 'A player only views servers and news. A moderator also writes news. An administrator manages everything. All administrator actions go to the journal.',
+  'us.journal': 'Journal: who changed what',
+  'us.who': 'Who sees the panel',
+  'us.public': 'Open to everyone',
+  'us.publicHint': 'Servers and news are visible without signing in. Turn off to require signing in.',
+  'us.reg': 'Player registration',
+  'us.regHint': 'Anyone can create a player account (without administrator rights).',
+  'us.regMode': 'Registration mode',
+  'us.regOpen': 'Open: at once',
+  'us.regApproval': 'By request: after an administrator approves',
+  'us.guestNote': 'Players and guests only view servers and news. Administrators add servers and change settings.',
+  'us.r.player': 'Player',
+  'us.r.playerText': ': views servers and news, keeps their own profile.',
+  'us.r.mod': 'Moderator',
+  'us.r.modText': ': writes, publishes and deletes news, changes the default news channel. Servers, settings, users and the system are not available to them.',
+  'us.r.admin': 'Administrator',
+  'us.r.adminText': ': full access to everything.',
+  'us.rules': 'Community rules',
+  'us.rulesText': 'If a text is set, registration requires accepting it. Leave empty for no rules. The text is saved by itself.',
+  'us.rulesLabel': 'Rules text',
+  'us.rulesHolder': '1. Respect the other players…',
+  'us.req': 'Registration requests',
+  'us.unselect': 'Clear selection',
+  'us.selectAll': 'Select all',
+  'us.approve': 'Approve',
+  'us.reject': 'Reject',
+  'us.approveN': 'Approve ({n})',
+  'us.rejectN': 'Reject ({n})',
+  'us.rejectedN': 'Requests rejected: {n}',
+  'us.pick': 'Select: {name}',
+  'us.reqAt': 'Requested {ago}',
+  'us.reqWait': 'Waiting for approval',
+  'us.reqRules': ' · accepted the rules',
+  'us.users': 'Users',
+  'us.search': 'Search by name…',
+  'us.searchAria': 'Search for a user',
+  'us.roleAria': 'Role',
+  'us.f.all': 'All',
+  'us.f.admin': 'Admins',
+  'us.f.mod': 'Moderators',
+  'us.f.player': 'Players',
+  'us.loading': 'Loading',
+  'us.none': 'Nobody found.',
+  'us.onlineTip': 'Online',
+  'us.you': ' (you)',
+  'us.since': ' · with us since {d}',
+  'us.pending': 'REQUEST',
+  'us.roleOf': 'Role of {name}',
+  'us.pwTip': 'Change password',
+  'us.pwOf': 'Change password: {name}',
+  'us.delTip': 'Delete',
+  'us.delOf': 'Delete: {name}',
+  'us.permsOf': 'Moderator permissions of {name}',
+  'us.set': 'Preset:',
+  'us.given': '· granted {n} of {m}',
+  'us.pwNote': 'The administrator’s own password is changed in',
+  'us.pwLink': 'Settings: Security',
+  'us.perm.news': 'News',
+  'us.perm.news.hint': 'write, schedule and publish',
+  'us.perm.moderation': 'Moderation',
+  'us.perm.moderation.hint': 'reviews and the screenshot gallery',
+  'us.perm.servers': 'Servers',
+  'us.perm.servers.hint': 'add and edit (only an administrator deletes)',
+  'us.perm.maintenance': 'Maintenance',
+  'us.perm.maintenance.hint': 'maintenance windows',
+  'us.perm.journal': 'Journal',
+  'us.perm.journal.hint': 'who changed what in the panel',
+  'ne.pasted': 'Image uploaded from clipboard',
+  'ne.tplTitle': 'Replace the current text with the template?',
+  'ne.tplText': 'The text you entered will be lost.',
+  'ne.replace': 'Replace',
+  'ne.del': 'Delete',
+  'ne.future': 'Pick a time in the future',
+  'ne.sending': 'The news is being sent to Discord',
+  'ne.scheduled': 'News scheduled',
+  'ne.edited': 'Changes sent to Discord',
+  'ne.draftSaved': 'Draft saved',
+  'ne.testSent': 'Test message sent',
+  'ne.testFail': 'Could not send the test',
+  'ne.testQueued': 'Test queued',
+  'ne.testNA': 'Test sending is not available on this server.',
+  'ne.restored': 'Draft restored',
+  'ne.ownColor': 'Custom colour',
+  'ne.loading': 'Loading',
+  'ne.mode': 'Mode',
+  'ne.embedTabs': 'Embed blocks',
+  'ne.msgType': 'Message type',
+  'ne.pvView': 'Preview view',
+  'ne.when': 'When',
+  'ne.cdLabel': 'Countdown label',
+  'ne.own': 'custom',
+  'ne.games': 'Games',
+  'ne.toNews': 'Back to news',
+  'ne.needChannel': 'Pick a channel to publish or schedule.',
+  'ne.saveEdit': 'Save changes to Discord',
+  'ne.moreWays': 'Other ways to publish',
+  'ne.whenPub': 'When to publish',
+  'ne.repeat': 'Repeat',
+  'ne.rep.none': 'Do not repeat',
+  'ne.rep.daily': 'Every day',
+  'ne.rep.weekly': 'Every week',
+  'ne.rep.monthly': 'Every month',
+  'ne.cancel': 'Cancel',
+  'ne.schedule': 'Schedule',
+  'ne.sendTest': 'Send test',
+  'ne.restore': 'Restore',
+  'ne.discard': 'Discard',
+  'ne.tabEditor': 'Editor',
+  'ne.tabPreview': 'Preview',
+  'ne.makeDefault': 'Make the default news channel',
+  'ne.m.none': 'No mention',
+  'ne.m.here': '@here: online members',
+  'ne.m.everyone': '@everyone: everyone',
+  'ne.clear': 'Clear',
+  'ne.addEmbed': '+ Add embed',
+  'ne.moreSum': 'Author, thumbnail and large image',
+  'ne.cdRemove': 'Remove countdown',
+  'ne.remove': 'Remove',
+  'ne.addImg': '+ Add image',
+  'ne.addItem': '+ Add item',
+  'ne.addBtn': '+ Add button',
+  'ne.https': 'The link must start with https://',
+  'ne.pvDiscord': 'In Discord',
+  'ne.pvSite': 'How it looks on the site',
+  'ne.pvEmpty': 'Start writing: the news card will appear here.',
+  'ne.pvLive': 'Server cards are shown as a sample: real data appears when sent.',
+  'ne.allNews': '← All news',
+  'ne.showTs': 'Show publication time',
+  'ne.pin': 'Pin to the top of the feed',
+  'ne.mentionPerm': 'For the mention to work, the bot needs the “Mention @everyone, @here and All Roles” permission in this channel.',
+  'ne.sWhere': 'Where to send',
+  'ne.channel': 'Channel',
+  'ne.mention': 'Mention',
+  'ne.sTpl': 'Template',
+  'ne.tplHint': 'A ready-made starting point you can change. Replace words like DATE and TIME with your own.',
+  'ne.sText': 'Text',
+  'ne.textHint': 'Plain text above the card. May be left empty.',
+  'ne.message': 'Message',
+  'ne.msgHolder': 'For example: Friends, we have news!',
+  'ne.sEmbed': 'Appearance (embed)',
+  'ne.embedHint': 'A coloured card with a title, text, fields and an image. A message may hold several blocks.',
+  'ne.barColor': 'Bar colour',
+  'ne.title': 'Title',
+  'ne.titleHolder': '📢 News title',
+  'ne.titleUrl': 'Title link (optional)',
+  'ne.descHolder': 'Tell what happened. Discord formatting is supported.',
+  'ne.authorName': 'Author (name)',
+  'ne.authorHolder': 'Administration',
+  'ne.authorIcon': 'Author avatar (link)',
+  'ne.thumb': 'Thumbnail, top right',
+  'ne.bigImg': 'Large image at the bottom',
+  'ne.sFields': 'Fields',
+  'ne.fieldsHint': '“Name and value” blocks. Drag by the handle or use the arrows; short fields can sit three in a row.',
+  'ne.sFooter': 'Footer',
+  'ne.footerText': 'Bottom text',
+  'ne.footerHolder': 'For example: Server administration',
+  'ne.sStatus': 'Server status',
+  'ne.statusHint': 'A live block: the bot adds cards of the chosen servers (online, players) and keeps them updated.',
+  'ne.sSite': 'On the site',
+  'ne.siteHint': 'These fields are only shown on the panel’s news page; they do not go to Discord.',
+  'ne.category': 'Category',
+  'ne.game': 'Game (for the default cover)',
+  'ne.none': 'none',
+  'ne.countdown': 'Countdown',
+  'ne.cdHolder': 'Wipe',
+  'ne.whatHolder': 'What exactly',
+  'ne.moreHolder': 'Read more',
+  'ne.pubNow': 'Publish now',
+  'ne.saving': 'Saving…',
+  'ne.sendingBtn': 'Sending…',
+  'ne.scheduleDots': 'Schedule…',
+  'ne.pickDate': 'Pick date and time',
+  'ne.asDraft': 'Save as draft',
+  'ne.asDraftHint': 'Nothing is sent to Discord',
+  'ne.change': 'Change',
+  'ne.choose': 'Choose',
+  'ne.tEdit': 'Editing a published news item',
+  'ne.tEdit2': 'Editing news',
+  'ne.tNew': 'New news item',
+  'ne.subSent': 'The Discord message will be edited; a new one will not be sent.',
+  'ne.head': 'Fill in the channel and text, check the preview on the right and press “Publish now”. You can also schedule it or save as a draft.',
+  'ne.help': 'Click a part of the message in the preview to jump to its field. Ctrl+Enter publishes. Replace the words DATE and TIME in templates with your own. Before sending, the panel checks Discord limits and common mistakes. Changes are saved to a draft automatically.',
+  'ne.noTestCh': 'No test channel set: the test goes to the news channel. ',
+  'ne.noCh': 'No channel selected. Set a default channel and it will be filled into every new news item:',
+  'ne.pickDefault': 'Choose default channel',
+  'ne.authorNote': 'Name and photo come from Discord if linked, otherwise from the site profile; name case as in Discord.',
+  'ne.delEmbed': 'Delete embed {n}?',
+  'ne.delEmbedBtn': 'Delete embed {n}',
+  'ne.testGoes': 'The test goes to {where}.',
+  'ne.channelN': 'channel {id}',
+  'ne.autoSavedAt': 'Draft autosaved at {t}',
+  'ne.willPub': 'Will be published {t}.',
+  'ne.foundDraft': 'An unsaved draft was found',
+  'ne.foundDraftTs': 'An unsaved draft from {t} was found.',
+  'ne.emptyAria': 'empty',
+  'ne.fromProfile': 'From profile',
+  'ne.fromProfileDc': 'From profile (Discord)',
+  'ne.cdNote': 'On the site: “Wipe in 2 d 4 h 10 min”, and “Started” once the time has passed.',
+  'ne.gallery': 'Gallery ({n} of {m})',
+  'ne.image': 'Image {n}',
+  'ne.changes': 'What changed ({n} of {m})',
+  'ne.changeType': 'Change type {n}',
+  'ne.changeText': 'Change text {n}',
+  'ne.buttons': 'Buttons ({n} of {m})',
+  'ne.btnLabel': 'Button label {n}',
+  'ne.btnUrl': 'Button link {n}',
+  'ne.mainText': 'Main text',
 };
 
 export default en;
@@ -68917,6 +69536,623 @@ const ru = {
   'adm.tbl.d.updated': 'Опрошен',
   'adm.tbl.d.maint': 'Тех. работы',
   'adm.density': 'Компактно',
+  'st.dur.m': '{m} мин',
+  'st.dur.h': '{h} ч',
+  'st.dur.hm': '{h} ч {m} мин',
+  'st.outages': '{n} сбой|{n} сбоя|{n} сбоев',
+  'st.noOutages': 'без сбоев',
+  'st.day.none': '{d}: нет данных',
+  'st.day.up': '{d}: доступен {p}',
+  'st.day.down': 'простой {dur}{inc}',
+  'st.day.planned': 'плановые работы {dur}',
+  'st.up.none': 'Нет данных об аптайме за 30 дней',
+  'st.up.sum': 'Аптайм за 30 дней: {p}',
+  'st.up.aria': '{s}. Стрелками можно просмотреть дни',
+  'st.nodata': 'Нет данных',
+  'st.tip.up': 'Доступен {p}',
+  'st.tip.down': 'Простой {dur}{inc}',
+  'st.tip.none': 'Без сбоев',
+  'st.tip.planned': 'Плановые работы {dur}',
+  'st.today': 'сегодня',
+  'st.lat.k': 'Отклик за 24 ч',
+  'st.lat.label': 'Пинг за 24 часа: от {lo} до {hi} мс',
+  'st.lat.max': 'Максимум {hi} мс',
+  'st.lat.v': 'мин {lo} · ср {avg} · макс {hi} мс',
+  'st.players.title': '{p} из {m} игроков',
+  'st.players.word': 'игроков',
+  'st.inc30': '{n} сбой за 30 дней|{n} сбоя за 30 дней|{n} сбоев за 30 дней',
+  'st.noInc30': 'без сбоев за 30 дней',
+  'st.ping': 'пинг {n} мс',
+  'st.hero.ok': 'Все серверы работают',
+  'st.hero.okText': 'Игроки могут заходить на любой сервер.',
+  'st.hero.bad': 'Все серверы недоступны',
+  'st.hero.badText': 'Мы уже видим проблему: страница обновится сама, когда серверы вернутся.',
+  'st.hero.some': '{n} сервер недоступен|{n} сервера недоступны|{n} серверов недоступны',
+  'st.hero.someText': 'Остальные работают в обычном режиме.',
+  'st.last.now': 'Сбой продолжается прямо сейчас',
+  'st.last.ago': 'Последний сбой: {when}',
+  'st.last.none': 'За 30 дней сбоев не было',
+  'st.seg.aria': 'Онлайн {up} из {total}',
+  'st.seg.on': '{name}: онлайн',
+  'st.seg.off': '{name}: недоступен',
+  'st.stat.online': 'Онлайн',
+  'st.stat.of': '{a} из {b}',
+  'st.stat.players': 'Игроков',
+  'st.stat.uptime': 'Аптайм 30 дн',
+  'st.stat.now': 'Сбоев сейчас',
+  'st.updated': 'обновлено {ago}',
+  'st.inc.planned': 'Плановые работы',
+  'st.inc.live': 'Продолжается',
+  'st.inc.done': 'Решено',
+  'st.inc.liveText': 'Не отвечает {dur}, с {from}',
+  'st.inc.pastText': 'Недоступен {dur}: {from} – {to}',
+  'st.inc.players': ' · в игре было {n} игрок| · в игре было {n} игрока| · в игре было {n} игроков',
+  'st.hist': 'История сбоев',
+  'st.hist.none': 'За 30 дней ни одного сбоя',
+  'st.hist.noneText': 'Все серверы отвечали на каждый опрос.',
+  'st.hist.more': 'Показать ещё ({n})',
+  'st.leg.ok': 'без сбоев',
+  'st.leg.blip': 'до 15 мин',
+  'st.leg.warn': '15–60 мин',
+  'st.leg.bad': 'больше часа',
+  'st.leg.planned': 'плановые работы',
+  'st.leg.none': 'нет данных',
+  'st.sub': '{servers} · {outages}',
+  'st.servers': '{n} сервер|{n} сервера|{n} серверов',
+  'st.sub.none': 'Доступность серверов и история сбоев за 30 дней',
+  'st.title': 'Статус',
+  'st.loading': 'Загрузка',
+  'st.empty': 'Серверов пока нет',
+  'st.emptyText': 'Когда серверы будут добавлены, здесь появится их доступность.',
+  'st.add': 'Добавить сервер',
+  'cm.dow.0': 'Пн',
+  'cm.dow.1': 'Вт',
+  'cm.dow.2': 'Ср',
+  'cm.dow.3': 'Чт',
+  'cm.dow.4': 'Пт',
+  'cm.dow.5': 'Сб',
+  'cm.dow.6': 'Вс',
+  'cm.dowIn.0': 'по понедельникам',
+  'cm.dowIn.1': 'по вторникам',
+  'cm.dowIn.2': 'по средам',
+  'cm.dowIn.3': 'по четвергам',
+  'cm.dowIn.4': 'по пятницам',
+  'cm.dowIn.5': 'по субботам',
+  'cm.dowIn.6': 'по воскресеньям',
+  'cm.h': '{n} ч',
+  'cm.word.players': 'игрок|игрока|игроков',
+  'cm.word.days': 'день|дня|дней',
+  'cm.word.servers': 'сервер|сервера|серверов',
+  'cm.onServers': 'на {n} сервере|на {n} серверах|на {n} серверах',
+  'cm.delta.same': 'Столько же, сколько в прошлом периоде',
+  'cm.delta.prev': 'В прошлом периоде: {n}',
+  'cm.greet.aria': 'Ваша активность',
+  'cm.greet.hi': 'Привет, {name}!',
+  'cm.greet.nonick': 'Укажите игровой ник в профиле, и здесь появятся ваши часы.',
+  'cm.greet.unseen': 'Ник {nick} пока не встречался на серверах.',
+  'cm.greet.counting': 'Считаю ваши часы…',
+  'cm.greet.today': 'Сегодня вы уже сыграли {h} ч{streak}.',
+  'cm.greet.streak': ', серия {n} {days} подряд',
+  'cm.greet.none': 'Сегодня вы ещё не играли.',
+  'cm.greet.card': 'Моя карточка',
+  'cm.greet.profile': 'Профиль',
+  'cm.season.run': 'идёт {n} {days}, с {from}',
+  'cm.season.place': 'Вы на {n} месте в сезоне: {h} ч',
+  'cm.season.out': 'Вас пока нет в десятке сезона, ник {nick}',
+  'cm.season.empty': 'В этом сезоне ещё никто не играл: станьте первым.',
+  'cm.season.first': 'Первым в сезоне зашёл',
+  'cm.fame': 'Зал славы',
+  'cm.place': '{n} место',
+  'cm.nobody': 'Никто не играл',
+  'cm.when': 'Когда играет сообщество',
+  'cm.when.today': 'Сегодня лучшее время зайти:',
+  'cm.when.peak': '. Сейчас как раз пик.',
+  'cm.when.dow': 'В {d} людей больше всего около',
+  'cm.when.note': 'Средние за 30 дней по всем серверам. Рамкой отмечен текущий час.',
+  'cm.when.typical': 'Типичный день',
+  'cm.busiest': 'Больше всего игроков {when} около {time}',
+  'cm.busiest.none': 'Данных пока мало',
+  'cm.heat.aria': 'Когда играет сообщество: по дням недели и часам',
+  'cm.heat.cell': '{d} {time}: в среднем {n}',
+  'cm.heat.less': 'меньше',
+  'cm.heat.more': 'больше',
+  'cm.joined': ' зашёл на ',
+  'cm.live': 'в игре',
+  'cm.new': 'новичок',
+  'cm.who': 'Кто во что играет',
+  'cm.who.none': 'Сейчас на серверах никого нет.',
+  'cm.hot': 'Самый людный сервер',
+  'cm.hot.none': 'Сейчас все серверы пусты.',
+  'cm.hot.of': ' из {max}, {pct}%',
+  'cm.copyAddr': 'Скопировать адрес',
+  'cm.p.day': 'Сутки',
+  'cm.p.week': 'Неделя',
+  'cm.p.month': 'Месяц',
+  'cm.p.all': 'Всё время',
+  'cm.move.new': 'Не было в топе прошлого периода',
+  'cm.move.newText': 'новый',
+  'cm.move.same': 'Место не изменилось',
+  'cm.move.was': 'Раньше было {n} место',
+  'cm.top': 'Самые активные',
+  'cm.top.period': 'Период',
+  'cm.top.find': 'Найти игрока по нику…',
+  'cm.top.findAria': 'Найти игрока по нику',
+  'cm.top.open': 'Открыть',
+  'cm.top.quiet': 'Пока тихо',
+  'cm.top.quietDay': 'За сутки никто не играл. Загляните позже.',
+  'cm.top.quietText': 'Здесь появятся самые активные игроки.',
+  'cm.top.less': 'Свернуть',
+  'cm.top.more': 'Показать ещё {n}',
+  'cm.feedG.hour': 'Последний час',
+  'cm.feedG.today': 'Сегодня',
+  'cm.feedG.earlier': 'Раньше',
+  'cm.feed': 'Живая лента',
+  'cm.feed.filter': 'Фильтр ленты',
+  'cm.feed.all': 'Все',
+  'cm.feed.online': 'В игре',
+  'cm.feed.new': 'Новички',
+  'cm.feed.none': 'Пока никто не заходил',
+  'cm.feed.noneText': 'Заходы игроков появятся здесь сами.',
+  'cm.feed.noNew': 'Новичков среди последних заходов нет.',
+  'cm.feed.noOnline': 'Из последних заходов никого нет в игре.',
+  'cm.gal': 'Галерея',
+  'cm.gal.all': 'Вся галерея →',
+  'cm.gal.upload': 'Загрузить скриншот →',
+  'cm.gal.none': 'Скриншотов пока нет',
+  'cm.gal.noneText': 'Поделитесь первым кадром из игры.',
+  'cm.gal.uploadBtn': 'Загрузить',
+  'cm.gal.shot': 'Скриншот {n}',
+  'cm.gal.best': 'Лучшее',
+  'cm.srv': 'Где играют сейчас',
+  'cm.srv.sort': 'Сортировка',
+  'cm.srv.byPlayers': 'По игрокам',
+  'cm.srv.byFill': 'По заполнению',
+  'cm.srv.byName': 'По имени',
+  'cm.srv.game': 'Игра',
+  'cm.srv.allGames': 'Все',
+  'cm.srv.none': 'Серверов нет',
+  'cm.srv.noneText': 'Когда серверы добавят, они появятся здесь.',
+  'cm.srv.off': 'не в сети',
+  'cm.nav': 'Разделы страницы',
+  'cm.loading': 'Загрузка',
+  'cm.title': 'Сообщество',
+  'cm.sub': 'Кто играет, когда и где',
+  'cm.subLive': 'Кто играет, когда и где: живые цифры всех серверов',
+  'cm.nav.now': 'Сейчас',
+  'cm.nav.season': 'Сезон',
+  'cm.nav.when': 'Активность',
+  'cm.nav.top': 'Топ',
+  'cm.nav.feed': 'Лента',
+  'cm.nav.gallery': 'Галерея',
+  'cm.nav.servers': 'Серверы',
+  'cm.refresh.title': 'Данные обновляются сами. Нажмите, чтобы обновить сейчас',
+  'cm.refresh.busy': 'обновляю…',
+  'cm.refresh.ago': 'обновлено {ago}',
+  'cm.now.k': 'Сейчас в игре',
+  'cm.now.line': '{pl} {on}',
+  'cm.now.vsHour': 'Против часа назад',
+  'cm.now.perHour': ' за час',
+  'cm.rec.now': '🎉 Это рекорд за 30 дней!',
+  'cm.rec.to': 'До рекорда',
+  'cm.rec.is': '. Рекорд за 30 дней:',
+  'cm.ticks.ago': '24 ч назад',
+  'cm.ticks.now': 'сейчас',
+  'cm.st.day': 'За сутки',
+  'cm.st.week': 'За неделю',
+  'cm.st.month': 'За месяц',
+  'cm.st.new': 'Новых за неделю',
+  'cm.st.newShow': 'Показать новичков в ленте',
+  'cm.b.now': 'Сейчас играют',
+  'cm.b.recNone': 'Рекорд появится, когда накопится история',
+  'cm.b.rec': 'Рекорд за 30 дней: {n} ({when})',
+  'cm.b.more': 'Сообщество: кто и когда играет →',
+  'cm.b.online': 'Серверов в сети',
+  'cm.b.of': '{a} из {b}',
+  'cm.b.week': 'Игроков за неделю',
+  'cm.b.noFeed': 'Пока никто не заходил.',
+  'cm.b.comm': 'Сообщество →',
+  'al.k.down': 'Сервер упал',
+  'al.k.up': 'Сервер вернулся',
+  'al.k.test': 'Проверка',
+  'al.k.low': 'Мало игроков',
+  'al.k.ping': 'Вырос пинг',
+  'al.k.full': 'Почти заполнен',
+  'al.k.digest': 'Итоги недели',
+  'al.k.restart': 'Перезапуск',
+  'al.s.low': 'Необычно мало игроков',
+  'al.s.lowText': 'Онлайн 20 минут ниже трети обычного для этого дня недели и часа (по последним четырём неделям).',
+  'al.s.ping': 'Вырос пинг',
+  'al.s.pingText': 'Пинг 15 минут выше 150 мс и вдвое выше среднего за сутки.',
+  'al.s.full': 'Сервер почти заполнен',
+  'al.s.fullText': 'Занято 90% мест и больше 15 минут подряд: пора подумать о слотах.',
+  'al.m.down': 'Сервер «Survival» не отвечает уже 3 минуты',
+  'al.m.up': 'Сервер «Survival» снова в сети, простой 12 минут',
+  'al.m.low': 'На «Survival» необычно мало игроков для этого часа',
+  'al.m.ping': 'На «Survival» вырос пинг: 240 мс при обычных 60',
+  'al.m.full': '«Survival» заполнен на 94%',
+  'al.where.channel': 'канал {id}',
+  'al.where.none': 'канал не выбран',
+  'al.kinds': 'Какие сообщения приходят',
+  'al.kinds.text': 'Так они выглядят в канале; серые карточки выключены.',
+  'al.on': 'включено',
+  'al.off': 'выключено',
+  'al.q.title': 'Тихие часы',
+  'al.q.text': 'В эти часы сообщения о серверах всё равно приходят, но без @here и @everyone: никого не будят ночью.',
+  'al.q.noMention': 'Не упоминать в тихие часы',
+  'al.q.now': 'сейчас тихие часы',
+  'al.q.normal': 'сейчас обычный режим',
+  'al.q.from': 'С',
+  'al.q.to': 'До',
+  'al.q.same': 'Начало и конец совпадают: тихих часов нет.',
+  'al.q.span': 'Тихих часов в сутки: {n}. По времени панели.',
+  'al.q.aria': 'Тихие часы: с {a} до {b}',
+  'al.q.quiet': ': тихо',
+  'al.queue.aria': 'Отправлено {sent}, ждёт {wait}, ошибок {bad}',
+  'al.queue.line': 'Отправлено: {sent} · ждёт: {wait} · с ошибкой: {bad}',
+  'al.queue.first': ' (они выше остальных)',
+  'al.test.done': 'Тестовое сообщение поставлено в очередь',
+  'al.title': 'Оповещения',
+  'al.sub': 'Сообщение в Discord, когда игровой сервер перестал отвечать и когда вернулся',
+  'al.hint': 'Бот сам напишет в выбранный канал, если игровой сервер перестал отвечать, и сообщит, когда он вернулся.',
+  'al.help': 'Короткие сбои короче выбранного времени сообщений не вызывают. Упоминание @here или @everyone срабатывает только при падении. Перед включением можно отправить тестовое сообщение.',
+  'al.sendTest': 'Отправить тестовое сообщение',
+  'al.noToken': 'Указать токен бота',
+  'al.noTokenText': 'Оповещения не дойдут: у бота нет токена, он не подключён к Discord.',
+  'al.on.done': 'Оповещения включены',
+  'al.off.done': 'Оповещения выключены',
+  'al.enable': 'Оповещать о недоступности серверов',
+  'al.enableText': 'Бот напишет в выбранный канал, а когда сервер вернётся, сообщит об этом и покажет, сколько он простоял.',
+  'al.channel': 'Канал для оповещений',
+  'al.channel.n': 'Канал {id}',
+  'al.channel.none': 'не выбран',
+  'al.change': 'Изменить',
+  'al.pick': 'Выбрать канал',
+  'al.channel.saved': 'Канал сохранён',
+  'al.after': 'Считать сервер упавшим через',
+  'al.saved': 'Сохранено',
+  'al.after.n': '{n} минуту без ответа|{n} минуты без ответа|{n} минут без ответа',
+  'al.afterText': 'Короткие сбои короче этого времени не отправляют сообщение.',
+  'al.mention': 'Кого упоминать при падении',
+  'al.mention.none': 'Никого',
+  'al.mention.here': '@here (кто в сети)',
+  'al.mentionText': 'Сообщение о возвращении сервера всегда без упоминания.',
+  'al.smart': 'Умные оповещения',
+  'al.smartText': 'Сервер работает, но что-то не так. Каждое правило срабатывает, только если условие держится какое-то время, и потом молчит несколько часов.',
+  'al.smart.on': 'Включено',
+  'al.smart.off': 'Выключено',
+  'al.smart.first': 'Сначала включите оповещения выше.',
+  'al.recent': 'Последние оповещения',
+  'al.loading': 'Загрузка',
+  'al.none': 'Пока ничего не отправлялось',
+  'al.none.ch': 'Когда сервер перестанет отвечать, бот напишет в канал. Можно проверить заранее.',
+  'al.none.noCh': 'Выберите канал: туда бот будет писать о падениях серверов.',
+  'al.sent': 'отправлено {ago}',
+  'al.waits': 'ждёт бота…',
+  'al.failed': 'не отправлено: {e}',
+  'dc.delFail': 'Не удалось удалить привязку',
+  'dc.deleted': 'Привязка удалена',
+  'dc.deletedN': 'Удалено привязок: {n}',
+  'dc.paused': 'Поставлены на паузу',
+  'dc.resumed': 'Включены',
+  'dc.sub': 'Куда бот публикует состояние серверов',
+  'dc.hint': 'Привязка = «этот сервер показывать в этом канале». Бот отправит одно сообщение и будет обновлять его само. В одном сообщении можно показать сразу несколько серверов.',
+  'dc.help': 'Выберите главный игровой сервер и канал Discord. Если серверов несколько, отметьте остальные: все они появятся в одном сообщении (до 10). Сообщение можно оформить карточкой, картинкой или обеими способами. Привязку можно поставить на паузу, не удаляя сообщение в Discord.',
+  'dc.bind': '+ Привязать канал',
+  'dc.setToken': 'Указать токен в настройках',
+  'dc.noToken': 'Бот не подключён: без токена он не сможет писать в Discord.',
+  'dc.addServer': 'Добавить сервер',
+  'dc.noServers': 'Сначала добавьте сервер: привязывать пока нечего.',
+  'dc.bot': 'Бот',
+  'dc.guilds': 'Серверов Discord: {n}',
+  'dc.channels': ' · каналов для публикации: {n}',
+  'dc.invite': 'Пригласить бота',
+  'dc.noGuild': 'Бот в сети, но не добавлен ни на один сервер Discord (его могли исключить). Сообщения не публикуются, команды не работают. Пригласите бота заново по ссылке.',
+  'dc.cmds': 'Команды бота',
+  'dc.cmds0': 'Команды ещё не зарегистрированы. Переприглашите бота со ссылкой ниже, чтобы работали команды /register.',
+  'dc.cmdsNote': 'Команды работают, если бот приглашён со ссылкой с правом «applications.commands»:',
+  'dc.inviteLink': 'ссылка-приглашение',
+  'dc.wizard': 'Мастер подключения',
+  'dc.loading': 'Загрузка',
+  'dc.none': 'Каналов пока нет',
+  'dc.noneText': 'Привяжите канал, и бот опубликует там карточку выбранного сервера.',
+  'dc.addFirst': 'Сначала добавьте сервер',
+  'dc.picked': 'Выбрано: {n}',
+  'dc.pickAll': 'Выбрать все',
+  'dc.pause': 'Пауза',
+  'dc.resume': 'Включить',
+  'dc.delete': 'Удалить',
+  'dc.pickOne': 'Выбрать привязку',
+  'dc.srv': 'Сервер #{id}',
+  'dc.chId': 'ID канала {id}',
+  'dc.ch': 'Канал {id}',
+  'dc.st.paused': 'ПАУЗА',
+  'dc.st.error': 'ОШИБКА',
+  'dc.st.ok': 'РАБОТАЕТ',
+  'dc.st.wait': 'ОЖИДАНИЕ',
+  'dc.flow': 'Схема привязки',
+  'dc.flow.server': 'Сервер',
+  'dc.flow.channel': 'Канал',
+  'dc.flow.message': 'Сообщение',
+  'dc.flow.online': 'онлайн',
+  'dc.flow.down': 'недоступен',
+  'dc.flow.gone': 'удалён',
+  'dc.flow.nofound': 'не найден',
+  'dc.flow.paused': 'пауза',
+  'dc.flow.err': 'ошибка',
+  'dc.flow.waits': 'ждёт',
+  'dc.inOne': '{n} сервер в одном сообщении|{n} сервера в одном сообщении|{n} серверов в одном сообщении',
+  'dc.previewFirst': 'В предпросмотре показан первый сервер, остальные идут следом в том же сообщении.',
+  'dc.card': 'Карточка: {name}',
+  'dc.every': 'Каждые {n} с',
+  'dc.updated': 'Обновлено: {ago}',
+  'dc.actions': 'Действия с привязкой',
+  'dc.doPause': 'Поставить на паузу',
+  'dc.doResume': 'Включить',
+  'dc.edit': 'Изменить',
+  'dc.saved': 'Привязка сохранена',
+  'dc.savedFirst': 'Привязка сохранена. Бот отправит сообщение в течение минуты',
+  'dc.openCh': 'Открыть канал в Discord',
+  'dc.pickErr': 'Выберите канал из списка или введите его ID',
+  'dc.f.edit': 'Изменить привязку',
+  'dc.f.new': 'Новая привязка',
+  'dc.f.server': 'Сервер',
+  'dc.f.more': 'Показать в этом же сообщении ещё серверы',
+  'dc.f.moreNote': 'Все выбранные серверы будут в одном сообщении. Максимум 10.',
+  'dc.f.guild': 'Сервер Discord',
+  'dc.f.chIn': 'Канал на сервере «{name}»',
+  'dc.f.channel': 'Канал',
+  'dc.f.pick': 'Выберите канал…',
+  'dc.f.manual': 'Ввести ID канала вручную',
+  'dc.f.refreshing': 'Обновляю…',
+  'dc.f.refresh': 'Обновить список',
+  'dc.f.chId': 'ID канала Discord',
+  'dc.f.help1': 'Бот пока не видит ни одного сервера Discord. Пригласите его кнопкой «Пригласить бота на сервер» (на этой странице), затем нажмите «Обновить список». Пока можно ввести ID канала вручную: включите в Discord режим разработчика, нажмите на канал правой кнопкой и выберите «Копировать ID канала».',
+  'dc.f.help2': 'Бот есть на сервере Discord «{names}»{hidden}, но не может писать ни в один из них. Выдайте боту (его роли) права «Просмотр канала», «Отправка сообщений» и «Прикрепление файлов» на нужном канале и нажмите «Обновить список».',
+  'dc.f.hidden': ' и видит {n} текстовых каналов',
+  'dc.f.help3': 'Режим разработчика в Discord: нажмите на канал правой кнопкой и выберите «Копировать ID канала».',
+  'dc.f.fromList': 'Выбрать из списка',
+  'dc.f.style': 'Оформление сообщения',
+  'dc.f.embed': 'Embed: цвет, эмодзи, поля (рекомендуется)',
+  'dc.f.cardOpt': 'Картинка-карточка',
+  'dc.f.both': 'Embed и картинка',
+  'dc.f.interval': 'Обновлять каждые, секунд (30–3600)',
+  'dc.f.enabled': 'Включена',
+  'us.preset.news': 'Редактор новостей',
+  'us.preset.comm': 'Модератор сообщества',
+  'us.preset.srv': 'Админ серверов',
+  'us.preset.none': 'Снять все',
+  'us.seen.never': 'ещё не заходил',
+  'us.seen.online': 'в сети',
+  'us.seen.was': 'был {ago}',
+  'us.role.player': 'Игрок',
+  'us.role.moderator': 'Модератор',
+  'us.role.admin': 'Администратор',
+  'us.saved': 'Сохранено',
+  'us.approved': '«{name}» одобрен',
+  'us.delFail': 'Не всех удалось удалить',
+  'us.rejected': 'Заявка отклонена',
+  'us.approvedMany': 'Одобрено: {a}, не удалось: {b}',
+  'us.approvedAll': 'Одобрено заявок: {n}',
+  'us.rulesMax': 'Не больше 5000 символов',
+  'us.rulesBar': 'правила сообщества',
+  'us.permsSaved': 'Права модератора сохранены',
+  'us.roleChanged': 'Роль изменена',
+  'us.pwTitle': 'Новый пароль для «{name}»',
+  'us.pwLabel': 'Новый пароль (от 8 символов)',
+  'us.pwBtn': 'Сменить пароль',
+  'us.pwMin': 'Минимум 8 символов',
+  'us.pwDone': 'Пароль изменён',
+  'us.userDeleted': 'Пользователь удалён',
+  'us.title': 'Пользователи',
+  'us.sub': 'Аккаунты, роли, регистрация и правила',
+  'us.hint': 'Здесь решается, кто может открывать панель, регистрироваться и что кому разрешено. Роль определяет права человека.',
+  'us.help': 'Игрок только смотрит серверы и новости. Модератор ещё и пишет новости. Администратор управляет всем. Все действия администраторов попадают в журнал.',
+  'us.journal': 'Журнал: кто что менял',
+  'us.who': 'Кто видит панель',
+  'us.public': 'Открыта для всех',
+  'us.publicHint': 'Серверы и новости видны без входа. Выключите, чтобы панель открывалась только после авторизации.',
+  'us.reg': 'Регистрация игроков',
+  'us.regHint': 'Любой желающий может создать аккаунт игрока (без прав администратора).',
+  'us.regMode': 'Режим регистрации',
+  'us.regOpen': 'Открытая: сразу',
+  'us.regApproval': 'По заявке: после одобрения администратором',
+  'us.guestNote': 'Игроки и гости только смотрят серверы и новости. Добавлять серверы и менять настройки могут администраторы.',
+  'us.r.player': 'Игрок',
+  'us.r.playerText': ': смотрит серверы и новости, ведёт свой профиль.',
+  'us.r.mod': 'Модератор',
+  'us.r.modText': ': пишет, публикует и удаляет новости, меняет канал новостей по умолчанию. Серверы, настройки, пользователи и система ему недоступны.',
+  'us.r.admin': 'Администратор',
+  'us.r.adminText': ': полный доступ ко всему.',
+  'us.rules': 'Правила сообщества',
+  'us.rulesText': 'Если текст задан, при регистрации нужно подтвердить согласие с ним. Оставьте пустым, чтобы правил не было. Текст сохраняется сам.',
+  'us.rulesLabel': 'Текст правил',
+  'us.rulesHolder': '1. Уважайте других игроков…',
+  'us.req': 'Заявки на регистрацию',
+  'us.unselect': 'Снять выбор',
+  'us.selectAll': 'Выбрать все',
+  'us.approve': 'Одобрить',
+  'us.reject': 'Отклонить',
+  'us.approveN': 'Одобрить ({n})',
+  'us.rejectN': 'Отклонить ({n})',
+  'us.rejectedN': 'Отклонено заявок: {n}',
+  'us.pick': 'Выбрать: {name}',
+  'us.reqAt': 'Заявка подана {ago}',
+  'us.reqWait': 'Ждёт одобрения',
+  'us.reqRules': ' · принял правила',
+  'us.users': 'Пользователи',
+  'us.search': 'Поиск по имени…',
+  'us.searchAria': 'Поиск пользователя',
+  'us.roleAria': 'Роль',
+  'us.f.all': 'Все',
+  'us.f.admin': 'Админы',
+  'us.f.mod': 'Модераторы',
+  'us.f.player': 'Игроки',
+  'us.loading': 'Загрузка',
+  'us.none': 'Никого не найдено.',
+  'us.onlineTip': 'В сети',
+  'us.you': ' (вы)',
+  'us.since': ' · с нами с {d}',
+  'us.pending': 'ЗАЯВКА',
+  'us.roleOf': 'Роль {name}',
+  'us.pwTip': 'Сменить пароль',
+  'us.pwOf': 'Сменить пароль: {name}',
+  'us.delTip': 'Удалить',
+  'us.delOf': 'Удалить: {name}',
+  'us.permsOf': 'Права модератора {name}',
+  'us.set': 'Набор:',
+  'us.given': '· выдано {n} из {m}',
+  'us.pwNote': 'Пароль самого администратора меняется в',
+  'us.pwLink': 'Настройки: Безопасность',
+  'us.perm.news': 'Новости',
+  'us.perm.news.hint': 'писать, планировать и публиковать',
+  'us.perm.moderation': 'Модерация',
+  'us.perm.moderation.hint': 'отзывы и галерея скриншотов',
+  'us.perm.servers': 'Серверы',
+  'us.perm.servers.hint': 'добавлять и изменять (удаляет только администратор)',
+  'us.perm.maintenance': 'Обслуживание',
+  'us.perm.maintenance.hint': 'окна технических работ',
+  'us.perm.journal': 'Журнал',
+  'us.perm.journal.hint': 'кто и что менял в панели',
+  'ne.pasted': 'Картинка загружена из буфера',
+  'ne.tplTitle': 'Заменить текущий текст шаблоном?',
+  'ne.tplText': 'Введённый текст будет потерян.',
+  'ne.replace': 'Заменить',
+  'ne.del': 'Удалить',
+  'ne.future': 'Выберите время в будущем',
+  'ne.sending': 'Новость отправляется в Discord',
+  'ne.scheduled': 'Новость запланирована',
+  'ne.edited': 'Изменения отправлены в Discord',
+  'ne.draftSaved': 'Черновик сохранён',
+  'ne.testSent': 'Тестовое сообщение отправлено',
+  'ne.testFail': 'Не удалось отправить тест',
+  'ne.testQueued': 'Тест поставлен в очередь',
+  'ne.testNA': 'Тестовая отправка недоступна на этом сервере.',
+  'ne.restored': 'Черновик восстановлен',
+  'ne.ownColor': 'Свой цвет',
+  'ne.loading': 'Загрузка',
+  'ne.mode': 'Режим',
+  'ne.embedTabs': 'Embed-блоки',
+  'ne.msgType': 'Тип сообщения',
+  'ne.pvView': 'Вид предпросмотра',
+  'ne.when': 'Когда',
+  'ne.cdLabel': 'Подпись отсчёта',
+  'ne.own': 'свой',
+  'ne.games': 'Игры',
+  'ne.toNews': 'К новостям',
+  'ne.needChannel': 'Выберите канал, чтобы опубликовать или запланировать.',
+  'ne.saveEdit': 'Сохранить изменения в Discord',
+  'ne.moreWays': 'Другие способы публикации',
+  'ne.whenPub': 'Когда опубликовать',
+  'ne.repeat': 'Повторять',
+  'ne.rep.none': 'Не повторять',
+  'ne.rep.daily': 'Каждый день',
+  'ne.rep.weekly': 'Каждую неделю',
+  'ne.rep.monthly': 'Каждый месяц',
+  'ne.cancel': 'Отмена',
+  'ne.schedule': 'Запланировать',
+  'ne.sendTest': 'Отправить тест',
+  'ne.restore': 'Восстановить',
+  'ne.discard': 'Отбросить',
+  'ne.tabEditor': 'Редактор',
+  'ne.tabPreview': 'Превью',
+  'ne.makeDefault': 'Сделать каналом новостей по умолчанию',
+  'ne.m.none': 'Без упоминания',
+  'ne.m.here': '@here: онлайн-участникам',
+  'ne.m.everyone': '@everyone: всем',
+  'ne.clear': 'Очистить',
+  'ne.addEmbed': '+ Добавить embed',
+  'ne.moreSum': 'Автор, миниатюра и большая картинка',
+  'ne.cdRemove': 'Убрать отсчёт',
+  'ne.remove': 'Убрать',
+  'ne.addImg': '+ Добавить картинку',
+  'ne.addItem': '+ Добавить пункт',
+  'ne.addBtn': '+ Добавить кнопку',
+  'ne.https': 'Ссылка должна начинаться с https://',
+  'ne.pvDiscord': 'В Discord',
+  'ne.pvSite': 'Как будет на сайте',
+  'ne.pvEmpty': 'Начните писать: здесь появится карточка новости.',
+  'ne.pvLive': 'Карточки серверов показаны образцом: настоящие данные появятся при отправке.',
+  'ne.allNews': '← Все новости',
+  'ne.showTs': 'Показывать время публикации',
+  'ne.pin': 'Закрепить вверху ленты',
+  'ne.mentionPerm': 'Чтобы упоминание сработало, у бота должно быть право «Упоминать @everyone, @here и все роли» в этом канале.',
+  'ne.sWhere': 'Куда отправить',
+  'ne.channel': 'Канал',
+  'ne.mention': 'Упоминание',
+  'ne.sTpl': 'Шаблон',
+  'ne.tplHint': 'Готовая заготовка, которую можно изменить. Слова ДАТА, ВРЕМЯ и т. п. замените на свои.',
+  'ne.sText': 'Текст',
+  'ne.textHint': 'Обычный текст над рамкой. Можно оставить пустым.',
+  'ne.message': 'Сообщение',
+  'ne.msgHolder': 'Например: Друзья, у нас новости!',
+  'ne.sEmbed': 'Оформление (embed)',
+  'ne.embedHint': 'Цветная карточка с заголовком, текстом, полями и картинкой. В одном сообщении можно несколько блоков.',
+  'ne.barColor': 'Цвет полосы',
+  'ne.title': 'Заголовок',
+  'ne.titleHolder': '📢 Заголовок новости',
+  'ne.titleUrl': 'Ссылка заголовка (необязательно)',
+  'ne.descHolder': 'Расскажите, что произошло. Поддерживается оформление Discord.',
+  'ne.authorName': 'Автор (имя)',
+  'ne.authorHolder': 'Администрация',
+  'ne.authorIcon': 'Аватар автора (ссылка)',
+  'ne.thumb': 'Миниатюра справа сверху',
+  'ne.bigImg': 'Большая картинка внизу',
+  'ne.sFields': 'Поля',
+  'ne.fieldsHint': 'Блоки «название и значение». Перетаскивайте за ручку или используйте стрелки; короткие поля можно ставить в ряд по три.',
+  'ne.sFooter': 'Подпись',
+  'ne.footerText': 'Текст внизу',
+  'ne.footerHolder': 'Например: Администрация сервера',
+  'ne.sStatus': 'Статус серверов',
+  'ne.statusHint': 'Живой блок: бот добавит карточки выбранных серверов (онлайн, игроки) и будет обновлять их.',
+  'ne.sSite': 'На сайте',
+  'ne.siteHint': 'Эти поля видны только на странице новостей панели; в Discord они не попадают.',
+  'ne.category': 'Рубрика',
+  'ne.game': 'Игра (для обложки по умолчанию)',
+  'ne.none': 'нет',
+  'ne.countdown': 'Отсчёт времени',
+  'ne.cdHolder': 'Вайп',
+  'ne.whatHolder': 'Что именно',
+  'ne.moreHolder': 'Подробнее',
+  'ne.pubNow': 'Опубликовать сейчас',
+  'ne.saving': 'Сохраняю…',
+  'ne.sendingBtn': 'Отправляю…',
+  'ne.scheduleDots': 'Запланировать…',
+  'ne.pickDate': 'Выбрать дату и время',
+  'ne.asDraft': 'Сохранить как черновик',
+  'ne.asDraftHint': 'Ничего не отправляется в Discord',
+  'ne.change': 'Изменить',
+  'ne.choose': 'Выбрать',
+  'ne.tEdit': 'Правка опубликованной новости',
+  'ne.tEdit2': 'Редактирование новости',
+  'ne.tNew': 'Новая новость',
+  'ne.subSent': 'Сообщение в Discord будет отредактировано, новое отправлено не будет.',
+  'ne.head': 'Заполните канал и текст, проверьте предпросмотр справа и нажмите «Опубликовать сейчас». Можно запланировать или сохранить как черновик.',
+  'ne.help': 'Нажмите на часть сообщения в предпросмотре, чтобы перейти к её полю. Ctrl+Enter публикует. Слова ДАТА и ВРЕМЯ в шаблонах замените на свои. Перед отправкой панель проверяет лимиты Discord и типичные ошибки. Изменения сохраняются в черновик автоматически.',
+  'ne.noTestCh': 'Тестовый канал не задан: тест уйдёт в канал новости. ',
+  'ne.noCh': 'Канал не выбран. Задайте канал по умолчанию, и он будет подставляться в каждую новую новость:',
+  'ne.pickDefault': 'Выбрать канал по умолчанию',
+  'ne.authorNote': 'Ник и фото берутся из Discord, если он привязан, иначе из профиля на сайте; регистр ника как в Discord.',
+  'ne.delEmbed': 'Удалить embed {n}?',
+  'ne.delEmbedBtn': 'Удалить Embed {n}',
+  'ne.testGoes': 'Тест уйдёт в {where}.',
+  'ne.channelN': 'канал {id}',
+  'ne.autoSavedAt': 'Черновик автоматически сохранён в {t}',
+  'ne.willPub': 'Будет опубликовано {t}.',
+  'ne.foundDraft': 'Найден несохранённый черновик',
+  'ne.foundDraftTs': 'Найден несохранённый черновик от {t}.',
+  'ne.emptyAria': 'пустой',
+  'ne.fromProfile': 'Из профиля',
+  'ne.fromProfileDc': 'Из профиля (Discord)',
+  'ne.cdNote': 'На сайте: «Вайп через 2 д 4 ч 10 мин», после времени «Началось».',
+  'ne.gallery': 'Галерея ({n} из {m})',
+  'ne.image': 'Картинка {n}',
+  'ne.changes': 'Что изменилось ({n} из {m})',
+  'ne.changeType': 'Тип изменения {n}',
+  'ne.changeText': 'Текст изменения {n}',
+  'ne.buttons': 'Кнопки ({n} из {m})',
+  'ne.btnLabel': 'Подпись кнопки {n}',
+  'ne.btnUrl': 'Ссылка кнопки {n}',
+  'ne.mainText': 'Основной текст',
 };
 
 export default ru;
@@ -71048,6 +72284,7 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/Alerts.tsx" << '__COREGSM_EOF__'
 import { useState } from 'react';
+import { t, useI18n, type TKey } from '../i18n';
 import DigestSection from '../components/DigestSection';
 import { api, type SettingsInfo } from '../api';
 import { ChannelPicker } from '../components/ChannelPicker';
@@ -71067,43 +72304,43 @@ interface AlertsInfo {
 }
 
 const KIND = {
-  down: { label: 'Сервер упал', cls: 'pill-bad' },
-  up: { label: 'Сервер вернулся', cls: 'pill-ok' },
-  test: { label: 'Проверка', cls: 'pill-mute' },
-  low: { label: 'Мало игроков', cls: 'pill-warn' },
-  ping: { label: 'Вырос пинг', cls: 'pill-warn' },
-  full: { label: 'Почти заполнен', cls: 'pill-mute' },
-  digest: { label: 'Итоги недели', cls: 'pill-ok' },
-  restart: { label: 'Перезапуск', cls: 'pill-mute' },
-} as const;
+  down: { label: 'al.k.down', cls: 'pill-bad' },
+  up: { label: 'al.k.up', cls: 'pill-ok' },
+  test: { label: 'al.k.test', cls: 'pill-mute' },
+  low: { label: 'al.k.low', cls: 'pill-warn' },
+  ping: { label: 'al.k.ping', cls: 'pill-warn' },
+  full: { label: 'al.k.full', cls: 'pill-mute' },
+  digest: { label: 'al.k.digest', cls: 'pill-ok' },
+  restart: { label: 'al.k.restart', cls: 'pill-mute' },
+} as const satisfies Record<string, { label: TKey; cls: string }>;
 
-const SMART: { key: 'low' | 'ping' | 'full'; title: string; text: string }[] = [
-  { key: 'low', title: 'Необычно мало игроков', text: 'Онлайн 20 минут ниже трети обычного для этого дня недели и часа (по последним четырём неделям).' },
-  { key: 'ping', title: 'Вырос пинг', text: 'Пинг 15 минут выше 150 мс и вдвое выше среднего за сутки.' },
-  { key: 'full', title: 'Сервер почти заполнен', text: 'Занято 90% мест и больше 15 минут подряд: пора подумать о слотах.' },
+const SMART: { key: 'low' | 'ping' | 'full'; title: TKey; text: TKey }[] = [
+  { key: 'low', title: 'al.s.low', text: 'al.s.lowText' },
+  { key: 'ping', title: 'al.s.ping', text: 'al.s.pingText' },
+  { key: 'full', title: 'al.s.full', text: 'al.s.fullText' },
 ];
 
 /** what each kind of message looks like in the channel */
-const SAMPLES: { kind: keyof typeof KIND; icon: string; text: string; on: (i: AlertsInfo) => boolean }[] = [
-  { kind: 'down', icon: '🔴', text: 'Сервер «Survival» не отвечает уже 3 минуты', on: (i) => i.enabled },
-  { kind: 'up', icon: '🟢', text: 'Сервер «Survival» снова в сети, простой 12 минут', on: (i) => i.enabled },
-  { kind: 'low', icon: '📉', text: 'На «Survival» необычно мало игроков для этого часа', on: (i) => i.enabled && !!i.smart?.low },
-  { kind: 'ping', icon: '📶', text: 'На «Survival» вырос пинг: 240 мс при обычных 60', on: (i) => i.enabled && !!i.smart?.ping },
-  { kind: 'full', icon: '👥', text: '«Survival» заполнен на 94%', on: (i) => i.enabled && !!i.smart?.full },
+const SAMPLES: { kind: keyof typeof KIND; icon: string; text: TKey; on: (i: AlertsInfo) => boolean }[] = [
+  { kind: 'down', icon: '🔴', text: 'al.m.down', on: (i) => i.enabled },
+  { kind: 'up', icon: '🟢', text: 'al.m.up', on: (i) => i.enabled },
+  { kind: 'low', icon: '📉', text: 'al.m.low', on: (i) => i.enabled && !!i.smart?.low },
+  { kind: 'ping', icon: '📶', text: 'al.m.ping', on: (i) => i.enabled && !!i.smart?.ping },
+  { kind: 'full', icon: '👥', text: 'al.m.full', on: (i) => i.enabled && !!i.smart?.full },
 ];
 
 /** the cards of the message kinds: a sample line and whether the kind is on */
 function KindCards({ info }: { info: AlertsInfo }) {
-  const where = info.channelId ? (info.channelName ? `# ${info.channelName}` : `канал ${info.channelId}`) : 'канал не выбран';
+  const where = info.channelId ? (info.channelName ? `# ${info.channelName}` : t('al.where.channel', { id: info.channelId })) : t('al.where.none');
   return (
-    <Section title="Какие сообщения приходят" description="Так они выглядят в канале; серые карточки выключены.">
+    <Section title={t('al.kinds')} description={t('al.kinds.text')}>
       <div className="al-kinds">
         {SAMPLES.map((x) => {
           const on = x.on(info);
           return (
             <div key={x.kind} className={`al-kind ${on ? '' : 'is-off'}`}>
-              <div className="flex items-center gap-2"><span className={`pill ${KIND[x.kind].cls}`}>{KIND[x.kind].label}</span><span className="ml-auto text-xs font-bold text-mute">{on ? 'включено' : 'выключено'}</span></div>
-              <p className="al-msg"><span aria-hidden>{x.icon}</span> {x.text}</p>
+              <div className="flex items-center gap-2"><span className={`pill ${KIND[x.kind].cls}`}>{t(KIND[x.kind].label)}</span><span className="ml-auto text-xs font-bold text-mute">{on ? t('al.on') : t('al.off')}</span></div>
+              <p className="al-msg"><span aria-hidden>{x.icon}</span> {t(x.text)}</p>
               <p className="text-xs font-semibold text-mute">{where}</p>
             </div>
           );
@@ -71122,30 +72359,30 @@ function QuietHours({ info, save }: { info: AlertsInfo; save: (p: { quiet: { ena
   const set = (patch: Partial<{ enabled: boolean; from: number; to: number }>) => void save({ quiet: { enabled: q.enabled, from: q.from, to: q.to, ...patch } });
   const span = q.from === q.to ? 0 : (q.to - q.from + 24) % 24;
   return (
-    <Section title="Тихие часы" description="В эти часы сообщения о серверах всё равно приходят, но без @here и @everyone: никого не будят ночью.">
+    <Section title={t('al.q.title')} description={t('al.q.text')}>
       <label className="flex cursor-pointer items-center gap-3">
         <Switch checked={q.enabled} onChange={(on) => set({ enabled: on })} />
-        <span className="font-extrabold">Не упоминать в тихие часы</span>
-        {q.enabled && <span className={`pill ml-auto ${q.now ? 'pill-warn' : 'pill-mute'}`}>{q.now ? 'сейчас тихие часы' : 'сейчас обычный режим'}</span>}
+        <span className="font-extrabold">{t('al.q.noMention')}</span>
+        {q.enabled && <span className={`pill ml-auto ${q.now ? 'pill-warn' : 'pill-mute'}`}>{q.now ? t('al.q.now') : t('al.q.normal')}</span>}
       </label>
       {q.enabled && (
         <div className="space-y-3">
           <div className="flex flex-wrap items-end gap-3">
             <div>
-              <label htmlFor="quiet-from" className="label">С</label>
+              <label htmlFor="quiet-from" className="label">{t('al.q.from')}</label>
               <select id="quiet-from" className="input" value={q.from} onChange={(e) => set({ from: Number(e.target.value) })}>{HOURS.map((h) => <option key={h} value={h}>{hh(h)}</option>)}</select>
             </div>
             <div>
-              <label htmlFor="quiet-to" className="label">До</label>
+              <label htmlFor="quiet-to" className="label">{t('al.q.to')}</label>
               <select id="quiet-to" className="input" value={q.to} onChange={(e) => set({ to: Number(e.target.value) })}>{HOURS.map((h) => <option key={h} value={h}>{hh(h)}</option>)}</select>
             </div>
-            <p className="pb-2 text-sm font-semibold text-mute">{span === 0 ? 'Начало и конец совпадают: тихих часов нет.' : `Тихих часов в сутки: ${span}. По времени панели.`}</p>
+            <p className="pb-2 text-sm font-semibold text-mute">{span === 0 ? t('al.q.same') : t('al.q.span', { n: span })}</p>
           </div>
           {/* the day at a glance: shaded cells are quiet */}
-          <div className="qh-day" role="img" aria-label={`Тихие часы: с ${hh(q.from)} до ${hh(q.to)}`}>
+          <div className="qh-day" role="img" aria-label={t('al.q.aria', { a: hh(q.from), b: hh(q.to) })}>
             {HOURS.map((h) => {
               const quiet = span > 0 && (q.from < q.to ? h >= q.from && h < q.to : h >= q.from || h < q.to);
-              return <span key={h} className={quiet ? 'is-quiet' : ''} title={`${hh(h)}${quiet ? ': тихо' : ''}`} />;
+              return <span key={h} className={quiet ? 'is-quiet' : ''} title={`${hh(h)}${quiet ? t('al.q.quiet') : ''}`} />;
             })}
           </div>
           <div className="qh-ticks" aria-hidden><span>0</span><span>6</span><span>12</span><span>18</span><span>24</span></div>
@@ -71163,16 +72400,17 @@ function Queue({ recent }: { recent: AlertsInfo['recent'] }) {
   const pct = (n: number) => `${(n / recent.length) * 100}%`;
   return (
     <div className="space-y-1.5">
-      <div className="al-queue" role="img" aria-label={`Отправлено ${sent}, ждёт ${wait}, ошибок ${bad}`}>
+      <div className="al-queue" role="img" aria-label={t('al.queue.aria', { sent, wait, bad })}>
         <i className="is-ok" style={{ width: pct(sent) }} /><i className="is-warn" style={{ width: pct(wait) }} /><i className="is-bad" style={{ width: pct(bad) }} />
       </div>
-      <p className="text-xs font-bold text-mute">Отправлено: {sent} · ждёт: {wait} · с ошибкой: {bad}{bad > 0 ? ' (они выше остальных)' : ''}</p>
+      <p className="text-xs font-bold text-mute">{t('al.queue.line', { sent, wait, bad })}{bad > 0 ? t('al.queue.first') : ''}</p>
     </div>
   );
 }
 
 /** Messages to a Discord channel when a game server stops answering and when it is back. */
 export default function AlertsPage() {
+  useI18n();
   const [info, setInfo] = useState<AlertsInfo | null>(null);
   const [error, setError] = useState('');
   const [changing, setChanging] = useState(false);
@@ -71190,7 +72428,7 @@ export default function AlertsPage() {
       .catch((e: Error) => setError(e.message));
   };
   const test = async () => {
-    await api<AlertsInfo>('/alerts/test', 'POST').then((a) => { setInfo(a); toast('Тестовое сообщение поставлено в очередь'); }).catch((e: Error) => setError(e.message));
+    await api<AlertsInfo>('/alerts/test', 'POST').then((a) => { setInfo(a); toast(t('al.test.done')); }).catch((e: Error) => setError(e.message));
   };
 
   return (
@@ -71199,78 +72437,78 @@ export default function AlertsPage() {
       head={(
         <PageHead
           icon={<IconBell />}
-          title="Оповещения"
-          subtitle="Сообщение в Discord, когда игровой сервер перестал отвечать и когда вернулся"
-          hint="Бот сам напишет в выбранный канал, если игровой сервер перестал отвечать, и сообщит, когда он вернулся."
-          help={<p>Короткие сбои короче выбранного времени сообщений не вызывают. Упоминание @here или @everyone срабатывает только при падении. Перед включением можно отправить тестовое сообщение.</p>}
+          title={t('al.title')}
+          subtitle={t('al.sub')}
+          hint={t('al.hint')}
+          help={<p>{t('al.help')}</p>}
         >
-          <button className="btn btn-soft" onClick={() => void test()} disabled={!info?.channelId}>Отправить тестовое сообщение</button>
+          <button className="btn btn-soft" onClick={() => void test()} disabled={!info?.channelId}>{t('al.sendTest')}</button>
         </PageHead>
       )}
     >
       {error && !info ? <LoadError error={error} onRetry={() => void load()} /> : <ErrorLine text={error} />}
       {tokenSet === false && (
-        <Notice action={<GoLink href="/admin/settings/bot">Указать токен бота</GoLink>}>
-          Оповещения не дойдут: у бота нет токена, он не подключён к Discord.
+        <Notice action={<GoLink href="/admin/settings/bot">{t('al.noToken')}</GoLink>}>
+          {t('al.noTokenText')}
         </Notice>
       )}
 
       {info && (
         <Section>
           <label className="flex cursor-pointer items-start gap-3">
-            <Switch className="mt-0.5" checked={info.enabled} onChange={(on) => void save({ enabled: on }, on ? 'Оповещения включены' : 'Оповещения выключены')} />
+            <Switch className="mt-0.5" checked={info.enabled} onChange={(on) => void save({ enabled: on }, on ? t('al.on.done') : t('al.off.done'))} />
             <span>
-              <span className="block font-extrabold">Оповещать о недоступности серверов</span>
-              <span className="block text-sm font-semibold text-mute">Бот напишет в выбранный канал, а когда сервер вернётся, сообщит об этом и покажет, сколько он простоял.</span>
+              <span className="block font-extrabold">{t('al.enable')}</span>
+              <span className="block text-sm font-semibold text-mute">{t('al.enableText')}</span>
             </span>
           </label>
 
           <div>
-            <span className="label">Канал для оповещений</span>
+            <span className="label">{t('al.channel')}</span>
             <div className="flex flex-wrap items-center gap-3">
-              <span className="font-black">{info.channelId ? (info.channelName ? `# ${info.channelName}${info.guildName ? ` · ${info.guildName}` : ''}` : `Канал ${info.channelId}`) : 'не выбран'}</span>
-              <button className="btn btn-soft btn-sm" onClick={() => setChanging((v) => !v)} aria-expanded={changing}>{info.channelId ? 'Изменить' : 'Выбрать канал'}</button>
+              <span className="font-black">{info.channelId ? (info.channelName ? `# ${info.channelName}${info.guildName ? ` · ${info.guildName}` : ''}` : t('al.channel.n', { id: info.channelId })) : t('al.channel.none')}</span>
+              <button className="btn btn-soft btn-sm" onClick={() => setChanging((v) => !v)} aria-expanded={changing}>{info.channelId ? t('al.change') : t('al.pick')}</button>
             </div>
             {changing && (
               <div className="mt-3">
-                <ChannelPicker id="alerts-channel" value={info.channelId} onChange={(v) => { if (/^\d{15,25}$/.test(v)) { void save({ channelId: v }, 'Канал сохранён'); setChanging(false); } }} />
+                <ChannelPicker id="alerts-channel" value={info.channelId} onChange={(v) => { if (/^\d{15,25}$/.test(v)) { void save({ channelId: v }, t('al.channel.saved')); setChanging(false); } }} />
               </div>
             )}
           </div>
 
           <div className="grid gap-4 sm:grid-cols-2">
             <div>
-              <label htmlFor="alerts-after" className="label">Считать сервер упавшим через</label>
-              <select id="alerts-after" className="input" value={info.afterMin} onChange={(e) => void save({ afterMin: Number(e.target.value) }, 'Сохранено')}>
-                {[1, 2, 3, 5, 10, 15, 30, 60].map((m) => <option key={m} value={m}>{m} {m === 1 ? 'минуту' : m < 5 ? 'минуты' : 'минут'} без ответа</option>)}
+              <label htmlFor="alerts-after" className="label">{t('al.after')}</label>
+              <select id="alerts-after" className="input" value={info.afterMin} onChange={(e) => void save({ afterMin: Number(e.target.value) }, t('al.saved'))}>
+                {[1, 2, 3, 5, 10, 15, 30, 60].map((m) => <option key={m} value={m}>{t('al.after.n', { n: m })}</option>)}
               </select>
-              <p className="mt-1 text-sm font-semibold text-mute">Короткие сбои короче этого времени не отправляют сообщение.</p>
+              <p className="mt-1 text-sm font-semibold text-mute">{t('al.afterText')}</p>
             </div>
             <div>
-              <label htmlFor="alerts-mention" className="label">Кого упоминать при падении</label>
-              <select id="alerts-mention" className="input" value={info.mention} onChange={(e) => void save({ mention: e.target.value as AlertsInfo['mention'] }, 'Сохранено')}>
-                <option value="none">Никого</option>
-                <option value="here">@here (кто в сети)</option>
+              <label htmlFor="alerts-mention" className="label">{t('al.mention')}</label>
+              <select id="alerts-mention" className="input" value={info.mention} onChange={(e) => void save({ mention: e.target.value as AlertsInfo['mention'] }, t('al.saved'))}>
+                <option value="none">{t('al.mention.none')}</option>
+                <option value="here">{t('al.mention.here')}</option>
                 <option value="everyone">@everyone</option>
               </select>
-              <p className="mt-1 text-sm font-semibold text-mute">Сообщение о возвращении сервера всегда без упоминания.</p>
+              <p className="mt-1 text-sm font-semibold text-mute">{t('al.mentionText')}</p>
             </div>
           </div>
         </Section>
       )}
 
       {info && (
-        <Section title="Умные оповещения" description="Сервер работает, но что-то не так. Каждое правило срабатывает, только если условие держится какое-то время, и потом молчит несколько часов.">
+        <Section title={t('al.smart')} description={t('al.smartText')}>
           {SMART.map((r) => (
             <label key={r.key} className="flex cursor-pointer items-start gap-3">
-              <Switch className="mt-0.5" checked={!!info.smart?.[r.key]} disabled={!info.enabled} onChange={(on) => void save({ smart: { ...(info.smart ?? { low: false, ping: false, full: false }), [r.key]: on } }, on ? 'Включено' : 'Выключено')} />
+              <Switch className="mt-0.5" checked={!!info.smart?.[r.key]} disabled={!info.enabled} onChange={(on) => void save({ smart: { ...(info.smart ?? { low: false, ping: false, full: false }), [r.key]: on } }, on ? t('al.smart.on') : t('al.smart.off'))} />
               <span>
-                <span className="block font-extrabold">{r.title}</span>
-                <span className="block text-sm font-semibold text-mute">{r.text}</span>
+                <span className="block font-extrabold">{t(r.title)}</span>
+                <span className="block text-sm font-semibold text-mute">{t(r.text)}</span>
               </span>
             </label>
           ))}
-          {!info.enabled && <p className="text-sm font-semibold text-mute">Сначала включите оповещения выше.</p>}
+          {!info.enabled && <p className="text-sm font-semibold text-mute">{t('al.smart.first')}</p>}
         </Section>
       )}
 
@@ -71280,27 +72518,27 @@ export default function AlertsPage() {
 
       <DigestSection alertsChannel={info?.channelId ?? ''} />
 
-      <Section title="Последние оповещения">
-        {!info && <div className="skeleton h-14 rounded-ui-lg" aria-busy="true" aria-label="Загрузка" />}
+      <Section title={t('al.recent')}>
+        {!info && <div className="skeleton h-14 rounded-ui-lg" aria-busy="true" aria-label={t('al.loading')} />}
         {info && info.recent.length === 0 && (
           <div className="fade-in flex flex-col items-center gap-1 py-2 text-center">
             <AlertsArt />
-            <p className="font-extrabold">Пока ничего не отправлялось</p>
+            <p className="font-extrabold">{t('al.none')}</p>
             <p className="max-w-sm text-sm font-semibold text-mute">
-              {info.channelId ? 'Когда сервер перестанет отвечать, бот напишет в канал. Можно проверить заранее.' : 'Выберите канал: туда бот будет писать о падениях серверов.'}
+              {info.channelId ? t('al.none.ch') : t('al.none.noCh')}
             </p>
-            {!info.channelId && <button className="btn mt-2" onClick={() => setChanging(true)}>Выбрать канал</button>}
+            {!info.channelId && <button className="btn mt-2" onClick={() => setChanging(true)}>{t('al.pick')}</button>}
           </div>
         )}
         {info && info.recent.length > 0 && <Queue recent={info.recent} />}
         <ul className="divide-y divide-line">
           {info && [...info.recent].sort((a, b) => Number(b.status === 'error') - Number(a.status === 'error')).map((r) => (
             <li key={r.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2.5">
-              <span className={`pill ${KIND[r.kind].cls}`}>{KIND[r.kind].label}</span>
+              <span className={`pill ${KIND[r.kind].cls}`}>{t(KIND[r.kind].label)}</span>
               <span className="min-w-0 flex-1 truncate font-bold">{r.serverName}</span>
-              {r.status === 'sent' && <span className="text-sm font-semibold text-mute">отправлено {ago(r.sentAt)}</span>}
-              {(r.status === 'queued' || r.status === 'sending') && <span className="text-sm font-semibold text-warn">ждёт бота…</span>}
-              {r.status === 'error' && <span className="text-sm font-bold text-bad" title={r.error ?? ''}>не отправлено: {r.error}</span>}
+              {r.status === 'sent' && <span className="text-sm font-semibold text-mute">{t('al.sent', { ago: ago(r.sentAt) })}</span>}
+              {(r.status === 'queued' || r.status === 'sending') && <span className="text-sm font-semibold text-warn">{t('al.waits')}</span>}
+              {r.status === 'error' && <span className="text-sm font-bold text-bad" title={r.error ?? ''}>{t('al.failed', { e: r.error ?? '' })}</span>}
             </li>
           ))}
         </ul>
@@ -71765,9 +73003,10 @@ __COREGSM_EOF__
 import { useEffect, useMemo, useState, type PointerEvent } from 'react';
 import { api, type PlayerProfile, type Server } from '../api';
 import { useAuth } from '../auth';
+import { getPrefs, t, useI18n } from '../i18n';
 import { gameColor, gameLabel } from '../games';
-import { busiestText, DOW_SHORT, FeedItem, HeatLegend, MiniHeat, PlayerAvatar, useCommunityLive, type Community, type TopPlayer } from '../components/servers/CommunityBento';
-import { AnimatedNumber, CopyButton, Empty, GameAvatar, MiniSpark, PageHead, ago, fmtDate, fmtDateTime, navigate, plural, num } from '../ui';
+import { busiestText, dowShort, FeedItem, HeatLegend, MiniHeat, PlayerAvatar, useCommunityLive, type Community, type TopPlayer } from '../components/servers/CommunityBento';
+import { AnimatedNumber, CopyButton, Empty, GameAvatar, MiniSpark, PageHead, ago, fmtDate, fmtDateTime, navigate, num } from '../ui';
 import '../styles/analytics.css';
 import '../styles/community.css';
 import '../styles/gallery.css';
@@ -71817,8 +73056,8 @@ function Delta({ now, prev }: { now: number; prev: number }) {
   if (now === 0 && prev === 0) return null;
   const up = now >= prev;
   const text = prev > 0 ? `${up ? '+' : '−'}${Math.abs(Math.round(((now - prev) / prev) * 100))}%` : `+${now}`;
-  if (now === prev) return <span className="cm-delta" title="Столько же, сколько в прошлом периоде">=</span>;
-  return <span className={`cm-delta ${up ? 'up' : 'down'}`} title={`В прошлом периоде: ${prev}`}><span aria-hidden>{up ? '▲' : '▼'}</span> {text}</span>;
+  if (now === prev) return <span className="cm-delta" title={t('cm.delta.same')}>=</span>;
+  return <span className={`cm-delta ${up ? 'up' : 'down'}`} title={t('cm.delta.prev', { n: prev })}><span aria-hidden>{up ? '▲' : '▼'}</span> {text}</span>;
 }
 
 /** a little line chart with a cursor and a tooltip; `values` are equally spaced, null = no data */
@@ -71880,15 +73119,15 @@ function Greeting() {
   const midnight = new Date().setHours(0, 0, 0, 0);
   const today = card ? card.recent.reduce((n, v) => n + Math.max(0, (v.to ?? Date.now()) - Math.max(v.from, midnight)), 0) / 3_600_000 : 0;
   return (
-    <section className="tile cm-greet fade-in" aria-label="Ваша активность">
+    <section className="tile cm-greet fade-in" aria-label={t('cm.greet.aria')}>
       <PlayerAvatar name={nick || me.username} size={40} online={!!card?.online} />
       <div className="min-w-0 flex-1">
-        <div className="font-extrabold">Привет, {me.username}!</div>
+        <div className="font-extrabold">{t('cm.greet.hi', { name: me.username })}</div>
         <div className="text-sm font-semibold text-mute">
-          {!nick ? 'Укажите игровой ник в профиле, и здесь появятся ваши часы.' : card === null ? `Ник ${nick} пока не встречался на серверах.` : card === undefined ? 'Считаю ваши часы…' : today > 0.01 ? `Сегодня вы уже сыграли ${num(Math.round(today * 10) / 10)} ч${card.streak > 1 ? `, серия ${card.streak} ${plural(card.streak, ['день', 'дня', 'дней'])} подряд` : ''}.` : 'Сегодня вы ещё не играли.'}
+          {!nick ? t('cm.greet.nonick') : card === null ? t('cm.greet.unseen', { nick }) : card === undefined ? t('cm.greet.counting') : today > 0.01 ? t('cm.greet.today', { h: num(Math.round(today * 10) / 10), streak: card.streak > 1 ? t('cm.greet.streak', { n: card.streak, days: t('cm.word.days', { n: card.streak }) }) : '' }) : t('cm.greet.none')}
         </div>
       </div>
-      <a href={nick && card ? playerHref(nick) : '/profile'} className="btn btn-soft btn-sm">{nick && card ? 'Моя карточка' : 'Профиль'}</a>
+      <a href={nick && card ? playerHref(nick) : '/profile'} className="btn btn-soft btn-sm">{nick && card ? t('cm.greet.card') : t('cm.greet.profile')}</a>
     </section>
   );
 }
@@ -71905,10 +73144,10 @@ function SeasonBlocks({ s, mine }: { s: Seasons; mine: string }) {
         <section id="cm-season" className="tile cm-season fade-in p-4 sm:p-5">
           <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
             <h2 className="text-lg font-extrabold">🏁 {cur.name}</h2>
-            <span className="text-sm font-bold text-mute">идёт {days} {plural(days, ['день', 'дня', 'дней'])}, с {fmtDate(cur.startsAt)}</span>
+            <span className="text-sm font-bold text-mute">{t('cm.season.run', { n: days, days: t('cm.word.days', { n: days }), from: fmtDate(cur.startsAt) })}</span>
           </div>
-          {mine && <p className={`cm-me ${myIdx < 0 ? 'is-out' : ''}`}>{myIdx >= 0 ? `Вы на ${myIdx + 1} месте в сезоне: ${num(cur.top[myIdx].hours)} ч` : `Вас пока нет в десятке сезона, ник ${mine}`}</p>}
-          {cur.top.length === 0 ? <p className="cm-sub">В этом сезоне ещё никто не играл: станьте первым.</p> : (
+          {mine && <p className={`cm-me ${myIdx < 0 ? 'is-out' : ''}`}>{myIdx >= 0 ? t('cm.season.place', { n: myIdx + 1, h: num(cur.top[myIdx].hours) }) : t('cm.season.out', { nick: mine })}</p>}
+          {cur.top.length === 0 ? <p className="cm-sub">{t('cm.season.empty')}</p> : (
             <ol className="an-top">
               {cur.top.map((p, i) => (
                 <li key={p.name} className={i === myIdx ? 'is-me' : ''}>
@@ -71918,17 +73157,17 @@ function SeasonBlocks({ s, mine }: { s: Seasons; mine: string }) {
                     <a href={playerHref(p.name)} className="block truncate font-extrabold hover:text-link">{p.name}</a>
                     <span className="an-top-bar"><span style={{ width: `${(p.hours / maxH) * 100}%`, background: 'rgb(var(--warn-fill))' }} /></span>
                   </span>
-                  <span className="shrink-0 font-extrabold tabular-nums">{num(p.hours)} ч</span>
+                  <span className="shrink-0 font-extrabold tabular-nums">{t('cm.h', { n: num(p.hours) })}</span>
                 </li>
               ))}
             </ol>
           )}
-          {cur.first && <p className="cm-sub">Первым в сезоне зашёл <a href={playerHref(cur.first.name)} className="text-ink hover:text-link">{cur.first.name}</a>, {fmtDateTime(cur.first.at)}</p>}
+          {cur.first && <p className="cm-sub">{t('cm.season.first')} <a href={playerHref(cur.first.name)} className="text-ink hover:text-link">{cur.first.name}</a>, {fmtDateTime(cur.first.at)}</p>}
         </section>
       )}
       {s.past.length > 0 && (
         <section className="tile p-4 sm:p-5">
-          <h2 className="mb-3 text-lg font-extrabold">🏆 Зал славы</h2>
+          <h2 className="mb-3 text-lg font-extrabold">🏆 {t('cm.fame')}</h2>
           <ul className="cm-fame">
             {s.past.map((x) => (
               <li key={x.id} className="cm-fame-i">
@@ -71937,13 +73176,13 @@ function SeasonBlocks({ s, mine }: { s: Seasons; mine: string }) {
                 <ol className="mt-2 grid gap-1.5">
                   {x.podium.map((p, i) => (
                     <li key={p.name} className="flex items-center gap-2">
-                      <span aria-label={`${i + 1} место`}>{MEDALS[i]}</span>
+                      <span aria-label={t('cm.place', { n: i + 1 })}>{MEDALS[i]}</span>
                       <PlayerAvatar name={p.name} size={26} />
                       <a href={playerHref(p.name)} className="min-w-0 flex-1 truncate font-bold hover:text-link">{p.name}</a>
-                      <span className="text-sm font-extrabold tabular-nums text-mute">{num(p.hours)} ч</span>
+                      <span className="text-sm font-extrabold tabular-nums text-mute">{t('cm.h', { n: num(p.hours) })}</span>
                     </li>
                   ))}
-                  {x.podium.length === 0 && <li className="text-sm font-semibold text-mute">Никто не играл</li>}
+                  {x.podium.length === 0 && <li className="text-sm font-semibold text-mute">{t('cm.nobody')}</li>}
                 </ol>
               </li>
             ))}
@@ -71968,20 +73207,20 @@ function WhenBlock({ c }: { c: Community }) {
   const inPeak = !!best && dow === here.dow && here.hour >= best.h && here.hour <= best.h + 1;
   return (
     <section id="cm-when" className="tile p-4 sm:p-5">
-      <h2 className="mb-3 text-lg font-extrabold">Когда играет сообщество</h2>
+      <h2 className="mb-3 text-lg font-extrabold">{t('cm.when')}</h2>
       {peak ? (
         <p className={`cm-best ${inPeak ? 'is-now' : ''}`}>
           <span aria-hidden>🕗</span>
-          {dow === here.dow ? <>Сегодня лучшее время зайти: <b>{peak}</b>{inPeak ? '. Сейчас как раз пик.' : ''}</> : <>В {DOW_SHORT[dow]} людей больше всего около <b>{peak}</b></>}
+          {dow === here.dow ? <>{t('cm.when.today')} <b>{peak}</b>{inPeak ? t('cm.when.peak') : ''}</> : <>{t('cm.when.dow', { d: dowShort()[dow] })} <b>{peak}</b></>}
         </p>
       ) : null}
       <MiniHeat cells={c.heatmap.cells} big now={here} />
       <HeatLegend />
-      <p className="cm-sub">{busiestText(c.heatmap.busiest)}. Средние за 30 дней по всем серверам. Рамкой отмечен текущий час.</p>
-      <div className="cm-days" role="group" aria-label="Типичный день">
-        {DOW_SHORT.map((d, i) => <button key={d} type="button" className="seg-item" aria-pressed={dow === i} onClick={() => setDow(i)}>{d}</button>)}
+      <p className="cm-sub">{busiestText(c.heatmap.busiest)}. {t('cm.when.note')}</p>
+      <div className="cm-days" role="group" aria-label={t('cm.when.typical')}>
+        {dowShort().map((d, i) => <button key={d} type="button" className="seg-item" aria-pressed={dow === i} onClick={() => setDow(i)}>{d}</button>)}
       </div>
-      <TinyChart values={row} label={(i) => `${DOW_SHORT[dow]} ${hh(i)}`} mark={dow === here.dow ? here.hour : null} className="cm-chart-day" />
+      <TinyChart values={row} label={(i) => `${dowShort()[dow]} ${hh(i)}`} mark={dow === here.dow ? here.hour : null} className="cm-chart-day" />
       <div className="cm-chart-ticks" aria-hidden><span>0:00</span><span>6:00</span><span>12:00</span><span>18:00</span><span>24:00</span></div>
     </section>
   );
@@ -71995,8 +73234,8 @@ function GamesShare({ servers }: { servers: Community['servers'] }) {
   const total = list.reduce((n, [, v]) => n + v, 0);
   return (
     <section className="tile p-4 sm:p-5">
-      <h2 className="mb-3 text-lg font-extrabold">Кто во что играет</h2>
-      {total === 0 ? <p className="cm-sub">Сейчас на серверах никого нет.</p> : (
+      <h2 className="mb-3 text-lg font-extrabold">{t('cm.who')}</h2>
+      {total === 0 ? <p className="cm-sub">{t('cm.who.none')}</p> : (
         <>
           <div className="cm-share" role="img" aria-label={list.map(([g, v]) => `${gameLabel(g)}: ${v}`).join(', ')}>
             {list.map(([g, v]) => <span key={g} style={{ width: `${(v / total) * 100}%`, background: gameColor(g) }} title={`${gameLabel(g)}: ${v}`} />)}
@@ -72020,32 +73259,32 @@ function HotServer({ servers }: { servers: Community['servers'] }) {
   const addr = hot ? all?.find((x) => x.id === hot.id)?.address : undefined;
   return (
     <section className="tile cm-hot p-4 sm:p-5">
-      <h2 className="mb-3 text-lg font-extrabold">Самый людный сервер</h2>
-      {!hot ? <p className="cm-sub">Сейчас все серверы пусты.</p> : (
+      <h2 className="mb-3 text-lg font-extrabold">{t('cm.hot')}</h2>
+      {!hot ? <p className="cm-sub">{t('cm.hot.none')}</p> : (
         <div className="flex items-center gap-3">
           <GameAvatar game={hot.game} size={48} />
           <div className="min-w-0 flex-1">
             <a href={`/servers/${hot.id}`} className="block truncate text-lg font-extrabold hover:text-link">{hot.name}</a>
-            <div className="text-sm font-bold text-mute"><AnimatedNumber value={hot.players} />{hot.maxPlayers ? ` из ${hot.maxPlayers}, ${Math.round((hot.players / hot.maxPlayers) * 100)}%` : ''} · {gameLabel(hot.game)}</div>
+            <div className="text-sm font-bold text-mute"><AnimatedNumber value={hot.players} />{hot.maxPlayers ? t('cm.hot.of', { max: hot.maxPlayers, pct: Math.round((hot.players / hot.maxPlayers) * 100) }) : ''} · {gameLabel(hot.game)}</div>
             {addr && <code className="mt-0.5 block truncate font-mono text-xs font-semibold text-mute">{addr}</code>}
           </div>
-          {addr && <CopyButton text={addr} label="Скопировать адрес" />}
+          {addr && <CopyButton text={addr} label={t('cm.copyAddr')} />}
         </div>
       )}
     </section>
   );
 }
 
-const PERIODS = [['day', 'Сутки'], ['week', 'Неделя'], ['month', 'Месяц'], ['all', 'Всё время']] as const;
-type Period = (typeof PERIODS)[number][0];
+const PERIODS = ['day', 'week', 'month', 'all'] as const;
+type Period = (typeof PERIODS)[number];
 
 /** the change of the place against the period before */
 function Move({ p, i, period }: { p: TopPlayer; i: number; period: Period }) {
   if (period === 'all') return null;
-  if (p.prev == null) return <span className="cm-move new" title="Не было в топе прошлого периода">новый</span>;
+  if (p.prev == null) return <span className="cm-move new" title={t('cm.move.new')}>{t('cm.move.newText')}</span>;
   const d = p.prev - (i + 1);
-  if (d === 0) return <span className="cm-move" title="Место не изменилось">=</span>;
-  return <span className={`cm-move ${d > 0 ? 'up' : 'down'}`} title={`Раньше было ${p.prev} место`}><span aria-hidden>{d > 0 ? '▲' : '▼'}</span>{Math.abs(d)}</span>;
+  if (d === 0) return <span className="cm-move" title={t('cm.move.same')}>=</span>;
+  return <span className={`cm-move ${d > 0 ? 'up' : 'down'}`} title={t('cm.move.was', { n: p.prev })}><span aria-hidden>{d > 0 ? '▲' : '▼'}</span>{Math.abs(d)}</span>;
 }
 
 /** the most active players: a period switch, a podium, the rest as a list, «show more» and a search by nick */
@@ -72069,26 +73308,26 @@ function TopBlock({ c, mine }: { c: Community; mine: string }) {
         <span className="an-top-bar"><span style={{ width: `${(p.hours / maxH) * 100}%`, background: 'rgb(var(--brand))' }} /></span>
       </span>
       <span className="shrink-0 text-right">
-        <span className="block font-extrabold tabular-nums">{num(p.hours)} ч</span>
-        <span className="block text-xs font-bold text-mute">{p.servers} {plural(p.servers, ['сервер', 'сервера', 'серверов'])}</span>
+        <span className="block font-extrabold tabular-nums">{t('cm.h', { n: num(p.hours) })}</span>
+        <span className="block text-xs font-bold text-mute">{p.servers} {t('cm.word.servers', { n: p.servers })}</span>
       </span>
     </li>
   );
   return (
     <section id="cm-top" className="tile p-4 sm:p-5">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-lg font-extrabold">Самые активные</h2>
-        <div className="seg" role="group" aria-label="Период">
-          {PERIODS.map(([id, label]) => <button key={id} type="button" className="seg-item" aria-pressed={period === id} onClick={() => { setPeriod(id); setMore(false); }}>{label}</button>)}
+        <h2 className="text-lg font-extrabold">{t('cm.top')}</h2>
+        <div className="seg" role="group" aria-label={t('cm.top.period')}>
+          {PERIODS.map((id) => <button key={id} type="button" className="seg-item" aria-pressed={period === id} onClick={() => { setPeriod(id); setMore(false); }}>{t(`cm.p.${id}` as const)}</button>)}
         </div>
       </div>
       <form className="cm-search" onSubmit={go} role="search">
-        <input className="input" type="search" list="cm-names" placeholder="Найти игрока по нику…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Найти игрока по нику" maxLength={64} />
+        <input className="input" type="search" list="cm-names" placeholder={t('cm.top.find')} value={q} onChange={(e) => setQ(e.target.value)} aria-label={t('cm.top.findAria')} maxLength={64} />
         <datalist id="cm-names">{names.map((n) => <option key={n} value={n} />)}</datalist>
-        <button type="submit" className="btn btn-soft" disabled={!q.trim()}>Открыть</button>
+        <button type="submit" className="btn btn-soft" disabled={!q.trim()}>{t('cm.top.open')}</button>
       </form>
       {items.length === 0 ? (
-        <Empty art={<PeopleArt />} title="Пока тихо" text={period === 'day' ? 'За сутки никто не играл. Загляните позже.' : 'Здесь появятся самые активные игроки.'} />
+        <Empty art={<PeopleArt />} title={t('cm.top.quiet')} text={period === 'day' ? t('cm.top.quietDay') : t('cm.top.quietText')} />
       ) : (
         <>
           {podium.length === 3 && (
@@ -72100,7 +73339,7 @@ function TopBlock({ c, mine }: { c: Community; mine: string }) {
                     <span aria-hidden className="text-xl">{MEDALS[i]}</span>
                     <PlayerAvatar name={p.name} size={i === 0 ? 52 : 42} online={p.online} />
                     <span className="max-w-full truncate font-extrabold">{p.name}</span>
-                    <span className="text-sm font-extrabold tabular-nums text-mute">{num(p.hours)} ч</span>
+                    <span className="text-sm font-extrabold tabular-nums text-mute">{t('cm.h', { n: num(p.hours) })}</span>
                     <Move p={p} i={i} period={period} />
                   </a>
                 );
@@ -72109,7 +73348,7 @@ function TopBlock({ c, mine }: { c: Community; mine: string }) {
           )}
           {rest.length > 0 && <ol className="an-top" start={podium.length + 1}>{rest.map((p, i) => row(p, i + podium.length))}</ol>}
           {items.length > 10 && (
-            <button type="button" className="btn btn-soft mt-3" onClick={() => setMore((v) => !v)}>{more ? 'Свернуть' : `Показать ещё ${items.length - 10}`}</button>
+            <button type="button" className="btn btn-soft mt-3" onClick={() => setMore((v) => !v)}>{more ? t('cm.top.less') : t('cm.top.more', { n: items.length - 10 })}</button>
           )}
         </>
       )}
@@ -72125,20 +73364,20 @@ function FeedBlock({ c, filter, setFilter }: { c: Community; filter: FeedFilter;
   const midnight = new Date().setHours(0, 0, 0, 0);
   const groups: [string, typeof list][] = [];
   for (const f of list) {
-    const label = Date.now() - f.at < 3_600_000 ? 'Последний час' : f.at >= midnight ? 'Сегодня' : 'Раньше';
+    const label = Date.now() - f.at < 3_600_000 ? t('cm.feedG.hour') : f.at >= midnight ? t('cm.feedG.today') : t('cm.feedG.earlier');
     const g = groups.find((x) => x[0] === label);
     if (g) g[1].push(f); else groups.push([label, [f]]);
   }
   return (
     <section id="cm-feed" className="tile p-4 sm:p-5">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-lg font-extrabold">Живая лента</h2>
-        <div className="seg" role="group" aria-label="Фильтр ленты">
-          {([['all', 'Все'], ['online', 'В игре'], ['new', 'Новички']] as [FeedFilter, string][]).map(([id, label]) => <button key={id} type="button" className="seg-item" aria-pressed={filter === id} onClick={() => setFilter(id)}>{label}</button>)}
+        <h2 className="text-lg font-extrabold">{t('cm.feed')}</h2>
+        <div className="seg" role="group" aria-label={t('cm.feed.filter')}>
+          {([['all', t('cm.feed.all')], ['online', t('cm.feed.online')], ['new', t('cm.feed.new')]] as [FeedFilter, string][]).map(([id, label]) => <button key={id} type="button" className="seg-item" aria-pressed={filter === id} onClick={() => setFilter(id)}>{label}</button>)}
         </div>
       </div>
-      {c.feed.length === 0 ? <Empty art={<PeopleArt />} title="Пока никто не заходил" text="Заходы игроков появятся здесь сами." />
-        : list.length === 0 ? <p className="cm-sub">{filter === 'new' ? 'Новичков среди последних заходов нет.' : 'Из последних заходов никого нет в игре.'}</p>
+      {c.feed.length === 0 ? <Empty art={<PeopleArt />} title={t('cm.feed.none')} text={t('cm.feed.noneText')} />
+        : list.length === 0 ? <p className="cm-sub">{filter === 'new' ? t('cm.feed.noNew') : t('cm.feed.noOnline')}</p>
         : groups.map(([label, items]) => (
           <div key={label} className="cm-feed-group">
             <h3 className="cm-feed-h">{label}</h3>
@@ -72157,18 +73396,18 @@ function GalleryStrip() {
   return (
     <section id="cm-gallery" className="tile p-4 sm:p-5">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-lg font-extrabold">Галерея</h2>
-        <a href="/gallery" className="text-sm font-extrabold text-link hover:underline">{list?.length ? 'Вся галерея →' : 'Загрузить скриншот →'}</a>
+        <h2 className="text-lg font-extrabold">{t('cm.gal')}</h2>
+        <a href="/gallery" className="text-sm font-extrabold text-link hover:underline">{list?.length ? t('cm.gal.all') : t('cm.gal.upload')}</a>
       </div>
       {list === null ? <div className="skeleton h-48 rounded-2xl" />
-        : list.length === 0 ? <Empty art={<PeopleArt />} title="Скриншотов пока нет" text="Поделитесь первым кадром из игры."><a href="/gallery" className="btn">Загрузить</a></Empty>
+        : list.length === 0 ? <Empty art={<PeopleArt />} title={t('cm.gal.none')} text={t('cm.gal.noneText')}><a href="/gallery" className="btn">{t('cm.gal.uploadBtn')}</a></Empty>
         : (
           <ul className={`cm-gal n${Math.min(list.length, 5)}`}>
             {list.slice(0, 5).map((s, i) => (
               <li key={s.id} className={i === 0 && list.length >= 3 ? 'is-big' : ''}>
-                <button type="button" className="gl-shot" onClick={() => setOpen(i)} aria-label={s.caption || `Скриншот ${i + 1}`}>
+                <button type="button" className="gl-shot" onClick={() => setOpen(i)} aria-label={s.caption || t('cm.gal.shot', { n: i + 1 })}>
                   <img src={s.thumb} alt="" loading="lazy" />
-                  {s.featured && <span className="gl-star" title="Лучшее">★</span>}
+                  {s.featured && <span className="gl-star" title={t('cm.gal.best')}>★</span>}
                   {(s.caption || s.author) && (
                     <span className="gl-cap">
                       {s.caption && <span className="block truncate font-extrabold">{s.caption}</span>}
@@ -72200,18 +73439,18 @@ function ServersBlock({ servers }: { servers: Community['servers'] }) {
   return (
     <section id="cm-servers" className="tile p-4 sm:p-5">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-lg font-extrabold">Где играют сейчас</h2>
-        <div className="seg" role="group" aria-label="Сортировка">
-          {([['players', 'По игрокам'], ['fill', 'По заполнению'], ['name', 'По имени']] as [SrvSort, string][]).map(([id, label]) => <button key={id} type="button" className="seg-item" aria-pressed={sort === id} onClick={() => setSort(id)}>{label}</button>)}
+        <h2 className="text-lg font-extrabold">{t('cm.srv')}</h2>
+        <div className="seg" role="group" aria-label={t('cm.srv.sort')}>
+          {([['players', t('cm.srv.byPlayers')], ['fill', t('cm.srv.byFill')], ['name', t('cm.srv.byName')]] as [SrvSort, string][]).map(([id, label]) => <button key={id} type="button" className="seg-item" aria-pressed={sort === id} onClick={() => setSort(id)}>{label}</button>)}
         </div>
       </div>
       {games.length > 1 && (
-        <div className="cm-chips" role="group" aria-label="Игра">
-          <button type="button" className="cm-chip" aria-pressed={!game} onClick={() => setGame('')}>Все</button>
+        <div className="cm-chips" role="group" aria-label={t('cm.srv.game')}>
+          <button type="button" className="cm-chip" aria-pressed={!game} onClick={() => setGame('')}>{t('cm.srv.allGames')}</button>
           {games.map((g) => <button key={g} type="button" className="cm-chip" aria-pressed={game === g} onClick={() => setGame(g)}><i style={{ background: gameColor(g) }} aria-hidden />{gameLabel(g)}</button>)}
         </div>
       )}
-      {list.length === 0 ? <Empty art={<PeopleArt />} title="Серверов нет" text="Когда серверы добавят, они появятся здесь." /> : (
+      {list.length === 0 ? <Empty art={<PeopleArt />} title={t('cm.srv.none')} text={t('cm.srv.noneText')} /> : (
         <ul className="grid gap-2.5">
           {list.map((s) => (
             <li key={s.id}>
@@ -72223,7 +73462,7 @@ function ServersBlock({ servers }: { servers: Community['servers'] }) {
                 </span>
                 <span className="cm-srv-spark max-sm:hidden">{s.online ? <MiniSpark serverId={s.id} color={gameColor(s.game)} /> : null}</span>
                 <span className="shrink-0 text-right font-extrabold tabular-nums">
-                  {s.online ? <>{s.players}{s.maxPlayers ? ` / ${s.maxPlayers}` : ''}{s.maxPlayers ? <span className="block text-xs font-bold text-mute">{Math.round(fill(s) * 100)}%</span> : null}</> : <span className="text-bad">не в сети</span>}
+                  {s.online ? <>{s.players}{s.maxPlayers ? ` / ${s.maxPlayers}` : ''}{s.maxPlayers ? <span className="block text-xs font-bold text-mute">{Math.round(fill(s) * 100)}%</span> : null}</> : <span className="text-bad">{t('cm.srv.off')}</span>}
                 </span>
               </a>
             </li>
@@ -72257,7 +73496,7 @@ function SectionNav({ items }: { items: [string, string][] }) {
     el.scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' });
   };
   return (
-    <nav className="cm-nav" aria-label="Разделы страницы">
+    <nav className="cm-nav" aria-label={t('cm.nav')}>
       {items.map(([id, label]) => <button key={id} type="button" className="cm-nav-i" aria-current={cur === id ? 'true' : undefined} onClick={() => go(id)}>{label}</button>)}
     </nav>
   );
@@ -72265,8 +73504,8 @@ function SectionNav({ items }: { items: [string, string][] }) {
 
 function CommunitySkeleton() {
   return (
-    <div className="space-y-5" aria-busy="true" aria-label="Загрузка">
-      <PageHead icon={<IconPeople />} title="Сообщество" subtitle="Кто играет, когда и где" />
+    <div className="space-y-5" aria-busy="true" aria-label={t('cm.loading')}>
+      <PageHead icon={<IconPeople />} title={t('cm.title')} subtitle={t('cm.sub')} />
       <div className="tile skeleton h-40" />
       <div className="tile p-5"><div className="skeleton mb-3 h-6 w-56 rounded-lg" /><div className="skeleton h-40 rounded-2xl" /></div>
       <div className="grid gap-5 lg:grid-cols-2">
@@ -72279,6 +73518,7 @@ function CommunitySkeleton() {
 }
 
 export default function CommunityPage() {
+  useI18n();
   const { data: c, at, busy, refresh } = useCommunityLive();
   const [seasons, setSeasons] = useState<Seasons | null>(null);
   const [feedFilter, setFeedFilter] = useState<FeedFilter>('all');
@@ -72299,21 +73539,21 @@ export default function CommunityPage() {
   const showFeed = (f: FeedFilter) => { setFeedFilter(f); document.getElementById('cm-feed')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); };
 
   const nav: [string, string][] = [
-    ['cm-now', 'Сейчас'],
-    ...(hasSeason ? [['cm-season', 'Сезон'] as [string, string]] : []),
-    ['cm-when', 'Активность'],
-    ['cm-top', 'Топ'],
-    ['cm-feed', 'Лента'],
-    ['cm-gallery', 'Галерея'],
-    ['cm-servers', 'Серверы'],
+    ['cm-now', t('cm.nav.now')],
+    ...(hasSeason ? [['cm-season', t('cm.nav.season')] as [string, string]] : []),
+    ['cm-when', t('cm.nav.when')],
+    ['cm-top', t('cm.nav.top')],
+    ['cm-feed', t('cm.nav.feed')],
+    ['cm-gallery', t('cm.nav.gallery')],
+    ['cm-servers', t('cm.nav.servers')],
   ];
 
   return (
     <div className="space-y-5">
-      <PageHead icon={<IconPeople />} title="Сообщество" subtitle="Кто играет, когда и где: живые цифры всех серверов">
-        <button type="button" className="cm-refresh" onClick={refresh} aria-busy={busy || undefined} title="Данные обновляются сами. Нажмите, чтобы обновить сейчас">
+      <PageHead icon={<IconPeople />} title={t('cm.title')} subtitle={t('cm.subLive')}>
+        <button type="button" className="cm-refresh" onClick={refresh} aria-busy={busy || undefined} title={t('cm.refresh.title')}>
           <span className="live-dot" aria-hidden />
-          {busy ? 'обновляю…' : `обновлено ${ago(at)}`}
+          {busy ? t('cm.refresh.busy') : t('cm.refresh.ago', { ago: ago(at) })}
         </button>
       </PageHead>
       <SectionNav items={nav} />
@@ -72322,30 +73562,30 @@ export default function CommunityPage() {
 
       <section id="cm-now" className="tile cm-hero fade-in">
         <div className="cm-hero-main">
-          <div className="cm-k">Сейчас в игре</div>
+          <div className="cm-k">{t('cm.now.k')}</div>
           <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
             <AnimatedNumber value={c.now.players} className="cm-hero-n" pulse />
-            <span className="text-lg font-extrabold text-mute">{plural(c.now.players, ['игрок', 'игрока', 'игроков'])} на {c.now.online} {plural(c.now.online, ['сервере', 'серверах', 'серверах'])}</span>
-            {trend != null && trend !== 0 && <span className={`cm-delta ${trend > 0 ? 'up' : 'down'}`} title="Против часа назад"><span aria-hidden>{trend > 0 ? '▲' : '▼'}</span> {trend > 0 ? '+' : '−'}{Math.abs(trend)} за час</span>}
+            <span className="text-lg font-extrabold text-mute">{t('cm.word.players', { n: c.now.players })} {t('cm.onServers', { n: c.now.online })}</span>
+            {trend != null && trend !== 0 && <span className={`cm-delta ${trend > 0 ? 'up' : 'down'}`} title={t('cm.now.vsHour')}><span aria-hidden>{trend > 0 ? '▲' : '▼'}</span> {trend > 0 ? '+' : '−'}{Math.abs(trend)}{t('cm.now.perHour')}</span>}
           </div>
           {rec && (
             <>
               <div className="cm-meter" aria-hidden><span style={{ width: `${toRecord * 100}%` }} /></div>
               <p className="cm-sub">
-                {isRecord ? '🎉 Это рекорд за 30 дней!' : <>До рекорда <b className="text-ink">{Math.max(0, rec.players - c.now.players)}</b> {plural(Math.max(0, rec.players - c.now.players), ['игрок', 'игрока', 'игроков'])}. Рекорд за 30 дней: <b className="text-ink">{rec.players}</b>, {fmtDateTime(rec.at)}</>}
+                {isRecord ? t('cm.rec.now') : <>{t('cm.rec.to')} <b className="text-ink">{Math.max(0, rec.players - c.now.players)}</b> {t('cm.word.players', { n: Math.max(0, rec.players - c.now.players) })}{t('cm.rec.is')} <b className="text-ink">{rec.players}</b>, {fmtDateTime(rec.at)}</>}
               </p>
             </>
           )}
-          {c.series.length > 2 && <TinyChart values={c.series.map((p) => p.players)} label={(i) => new Date(c.series[i].ts).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })} mark={c.series.length - 1} className="cm-chart-hero" />}
-          {c.series.length > 2 && <div className="cm-chart-ticks" aria-hidden><span>24 ч назад</span><span>сейчас</span></div>}
+          {c.series.length > 2 && <TinyChart values={c.series.map((p) => p.players)} label={(i) => new Date(c.series[i].ts).toLocaleTimeString(getPrefs().lang === 'en' ? 'en-US' : 'ru-RU', { hour: '2-digit', minute: '2-digit' })} mark={c.series.length - 1} className="cm-chart-hero" />}
+          {c.series.length > 2 && <div className="cm-chart-ticks" aria-hidden><span>{t('cm.ticks.ago')}</span><span>{t('cm.ticks.now')}</span></div>}
         </div>
         <dl className="cm-hero-stats">
-          <div><dt>За сутки</dt><dd><AnimatedNumber value={c.players.day} /></dd><Delta now={c.players.day} prev={c.players.prev.day} /></div>
-          <div><dt>За неделю</dt><dd><AnimatedNumber value={c.players.week} /></dd><Delta now={c.players.week} prev={c.players.prev.week} /></div>
-          <div><dt>За месяц</dt><dd><AnimatedNumber value={c.players.month} /></dd><Delta now={c.players.month} prev={c.players.prev.month} /></div>
+          <div><dt>{t('cm.st.day')}</dt><dd><AnimatedNumber value={c.players.day} /></dd><Delta now={c.players.day} prev={c.players.prev.day} /></div>
+          <div><dt>{t('cm.st.week')}</dt><dd><AnimatedNumber value={c.players.week} /></dd><Delta now={c.players.week} prev={c.players.prev.week} /></div>
+          <div><dt>{t('cm.st.month')}</dt><dd><AnimatedNumber value={c.players.month} /></dd><Delta now={c.players.month} prev={c.players.prev.month} /></div>
           <div>
-            <dt>Новых за неделю</dt>
-            <dd>{c.players.newWeek > 0 ? <button type="button" className="cm-stat-link" onClick={() => showFeed('new')} title="Показать новичков в ленте"><AnimatedNumber value={c.players.newWeek} /></button> : 0}</dd>
+            <dt>{t('cm.st.new')}</dt>
+            <dd>{c.players.newWeek > 0 ? <button type="button" className="cm-stat-link" onClick={() => showFeed('new')} title={t('cm.st.newShow')}><AnimatedNumber value={c.players.newWeek} /></button> : 0}</dd>
             <Delta now={c.players.newWeek} prev={c.players.prev.newWeek} />
           </div>
         </dl>
@@ -72381,7 +73621,8 @@ import DiscordExtras from '../components/DiscordExtras';
 import PlayersShownCard from '../components/PlayersShownCard';
 import { DiscordArt } from '../components/Illustrations';
 import { confirmDialog } from '../confirm';
-import { Button, Empty, ErrorLine, Field, LoadError, GameAvatar, GoLink, plural, IconDiscord, IconEdit, IconPause, IconPlay, IconTrash, InviteButton, Modal, Notice, PageHead, Strip, Switch, AdminPage, ago, toast, undoable, usePoll, navigate } from '../ui';
+import { t, useI18n } from '../i18n';
+import { Button, Empty, ErrorLine, Field, LoadError, GameAvatar, GoLink, IconDiscord, IconEdit, IconPause, IconPlay, IconTrash, InviteButton, Modal, Notice, PageHead, Strip, Switch, AdminPage, ago, toast, undoable, usePoll, navigate } from '../ui';
 import { BotPill } from './Settings';
 import { MissingNote } from '../components/ChannelPicker';
 import EmbedPreview from './EmbedPreview';
@@ -72391,6 +73632,7 @@ interface Draft { id?: number; serverId: number; /** more servers shown in the s
 
 /** the sub-route: «new» opens an empty binding form, «new/<serverId>» opens it with that server chosen */
 export default function DiscordPage({ sub = '' }: { sub?: string }) {
+  useI18n();
   const [servers, setServers] = useState<Server[]>([]);
   const [bindings, setBindings] = useState<Binding[]>([]);
   const [loaded, setLoaded] = useState(false);
@@ -72450,22 +73692,22 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
           else await api('/bindings/bulk', 'POST', { ids, action: 'delete' });
         } catch (e) {
           setError((e as Error).message);
-          toast('Не удалось удалить привязку', 'err');
+          toast(t('dc.delFail'), 'err');
         }
         setHidden((h) => h.filter((x) => !ids.includes(x)));
         load();
       },
     });
   };
-  const remove = (b: Binding) => removeMany([b.id], 'Привязка удалена');
+  const remove = (b: Binding) => removeMany([b.id], t('dc.deleted'));
 
   const bulk = async (action: 'pause' | 'resume' | 'delete') => {
     if (action === 'delete') {
-      removeMany(picked, `Удалено привязок: ${picked.length}`);
+      removeMany(picked, t('dc.deletedN', { n: picked.length }));
       return;
     }
     await api('/bindings/bulk', 'POST', { ids: picked, action })
-      .then(() => toast(action === 'pause' ? 'Поставлены на паузу' : 'Включены'))
+      .then(() => toast(action === 'pause' ? t('dc.paused') : t('dc.resumed')))
       .catch((e: Error) => setError(e.message));
     setPicked([]);
     load();
@@ -72491,36 +73733,36 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
         <PageHead
           icon={<IconDiscord />}
           title="Discord"
-          subtitle="Куда бот публикует состояние серверов"
-          hint="Привязка = «этот сервер показывать в этом канале». Бот отправит одно сообщение и будет обновлять его само. В одном сообщении можно показать сразу несколько серверов."
-          help={<p>Выберите главный игровой сервер и канал Discord. Если серверов несколько, отметьте остальные: все они появятся в одном сообщении (до 10). Сообщение можно оформить карточкой, картинкой или обеими способами. Привязку можно поставить на паузу, не удаляя сообщение в Discord.</p>}
+          subtitle={t('dc.sub')}
+          hint={t('dc.hint')}
+          help={<p>{t('dc.help')}</p>}
         >
-          <button data-tour="bind-channel" className="btn" disabled={servers.length === 0} onClick={() => setDraft({ serverId: servers[0].id, channelId: '', intervalSec: 60, enabled: true, style: 'embed' })}>+ Привязать канал</button>
+          <button data-tour="bind-channel" className="btn" disabled={servers.length === 0} onClick={() => setDraft({ serverId: servers[0].id, channelId: '', intervalSec: 60, enabled: true, style: 'embed' })}>{t('dc.bind')}</button>
         </PageHead>
       )}
     >
       {error && servers.length === 0 && bindings.length === 0 && !settings ? <LoadError error={error} onRetry={() => void load()} /> : <ErrorLine text={error} />}
       {loaded && settings && !settings.discordTokenSet && (
-        <Notice action={<GoLink href="/admin/settings/bot">Указать токен в настройках</GoLink>}>
-          Бот не подключён: без токена он не сможет писать в Discord.
+        <Notice action={<GoLink href="/admin/settings/bot">{t('dc.setToken')}</GoLink>}>
+          {t('dc.noToken')}
         </Notice>
       )}
       {loaded && servers.length === 0 && (
-        <Notice tone="info" action={<GoLink href="/admin/servers/new">Добавить сервер</GoLink>}>
-          Сначала добавьте сервер: привязывать пока нечего.
+        <Notice tone="info" action={<GoLink href="/admin/servers/new">{t('dc.addServer')}</GoLink>}>
+          {t('dc.noServers')}
         </Notice>
       )}
 
       <Strip>
         <div className="flex items-center gap-3">
           <span className={`dc-ring is-${bot?.state ?? 'idle'}`} aria-hidden title={bot?.tag ?? undefined} />
-          <span className="font-black">Бот</span>
+          <span className="font-black">{t('dc.bot')}</span>
           <BotPill status={bot} tokenSet={!!settings?.discordTokenSet} />
         </div>
         {settings?.discordTokenSet && bot?.state === 'online' && typeof bot.guildCount === 'number' && (
           <span className="text-sm font-bold text-mute">
-            Серверов Discord: {bot.guildCount}
-            {bot.guildCount > 0 ? ` · каналов для публикации: ${bot.channelCount ?? 0}` : ''}
+            {t('dc.guilds', { n: bot.guildCount })}
+            {bot.guildCount > 0 ? t('dc.channels', { n: bot.channelCount ?? 0 }) : ''}
           </span>
         )}
         {settings?.discordTokenSet && <InviteButton url={bot?.inviteUrl ?? null} className="btn-soft btn-sm" />}
@@ -72530,18 +73772,18 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
       {settings?.discordTokenSet && bot?.state === 'online' && bot.guildCount === 0 && (
         <Notice
           tone="warn"
-          action={bot.inviteUrl ? <a className="btn btn-sm" href={bot.inviteUrl} target="_blank" rel="noreferrer">Пригласить бота<span aria-hidden>↗</span></a> : undefined}
+          action={bot.inviteUrl ? <a className="btn btn-sm" href={bot.inviteUrl} target="_blank" rel="noreferrer">{t('dc.invite')}<span aria-hidden>↗</span></a> : undefined}
         >
-          Бот в сети, но не добавлен ни на один сервер Discord (его могли исключить). Сообщения не публикуются, команды не работают. Пригласите бота заново по ссылке.
+          {t('dc.noGuild')}
         </Notice>
       )}
 
       {settings?.discordTokenSet && bot?.state === 'online' && (
         <div className="panel space-y-2 p-5">
-          <h2 className="text-lg font-black">Команды бота</h2>
+          <h2 className="text-lg font-black">{t('dc.cmds')}</h2>
           {bot.commands === 0 && (
-            <Notice tone="info" action={bot.inviteUrl ? <a className="btn btn-sm" href={bot.inviteUrl} target="_blank" rel="noreferrer">Пригласить бота<span aria-hidden>↗</span></a> : undefined}>
-              Команды ещё не зарегистрированы. Переприглашите бота со ссылкой ниже, чтобы работали команды /register.
+            <Notice tone="info" action={bot.inviteUrl ? <a className="btn btn-sm" href={bot.inviteUrl} target="_blank" rel="noreferrer">{t('dc.invite')}<span aria-hidden>↗</span></a> : undefined}>
+              {t('dc.cmds0')}
             </Notice>
           )}
           <ul className="space-y-1.5">
@@ -72553,7 +73795,7 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
           </ul>
           {bot.inviteUrl && (
             <p className="text-sm font-semibold text-mute">
-              Команды работают, если бот приглашён со ссылкой с правом «applications.commands»: <a className="btn-link" href={bot.inviteUrl} target="_blank" rel="noreferrer">ссылка-приглашение</a>.
+              {t('dc.cmdsNote')} <a className="btn-link" href={bot.inviteUrl} target="_blank" rel="noreferrer">{t('dc.inviteLink')}</a>.
             </p>
           )}
         </div>
@@ -72570,16 +73812,16 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
         />
       )}
       {loaded && settings && wizard.complete && !wizardOpen && (
-        <p className="text-sm font-bold"><button type="button" className="btn-link" onClick={() => setWizardOpen(true)}>Мастер подключения</button></p>
+        <p className="text-sm font-bold"><button type="button" className="btn-link" onClick={() => setWizardOpen(true)}>{t('dc.wizard')}</button></p>
       )}
 
-      {!loaded && <div className="skeleton panel h-64" aria-busy="true" aria-label="Загрузка" />}
+      {!loaded && <div className="skeleton panel h-64" aria-busy="true" aria-label={t('dc.loading')} />}
 
       {loaded && settings && shown.length === 0 && (
-        <Empty art={<DiscordArt />} title="Каналов пока нет" text="Привяжите канал, и бот опубликует там карточку выбранного сервера.">
+        <Empty art={<DiscordArt />} title={t('dc.none')} text={t('dc.noneText')}>
           {servers.length > 0
-            ? <button className="btn mt-3" onClick={() => setDraft({ serverId: servers[0].id, channelId: '', intervalSec: 60, enabled: true, style: 'embed' })}>+ Привязать канал</button>
-            : <a className="btn mt-3" href="/admin/servers/new">Сначала добавьте сервер</a>}
+            ? <button className="btn mt-3" onClick={() => setDraft({ serverId: servers[0].id, channelId: '', intervalSec: 60, enabled: true, style: 'embed' })}>{t('dc.bind')}</button>
+            : <a className="btn mt-3" href="/admin/servers/new">{t('dc.addFirst')}</a>}
         </Empty>
       )}
 
@@ -72587,13 +73829,13 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
         <div className="flex flex-wrap items-center gap-2 rounded-ui-lg bg-soft px-4 py-2.5">
           <label className="flex items-center gap-2 font-bold">
             <input type="checkbox" className="h-4 w-4 accent-brand" checked={picked.length === shown.length} onChange={(e) => setPicked(e.target.checked ? shown.map((b) => b.id) : [])} />
-            {picked.length ? `Выбрано: ${picked.length}` : 'Выбрать все'}
+            {picked.length ? t('dc.picked', { n: picked.length }) : t('dc.pickAll')}
           </label>
           {picked.length > 0 && (
             <div className="ml-auto flex flex-wrap gap-2">
-              <button className="btn btn-soft btn-sm" onClick={() => void bulk('pause')}>Пауза</button>
-              <button className="btn btn-soft btn-sm" onClick={() => void bulk('resume')}>Включить</button>
-              <button className="btn btn-danger btn-sm" onClick={() => void bulk('delete')}>Удалить</button>
+              <button className="btn btn-soft btn-sm" onClick={() => void bulk('pause')}>{t('dc.pause')}</button>
+              <button className="btn btn-soft btn-sm" onClick={() => void bulk('resume')}>{t('dc.resume')}</button>
+              <button className="btn btn-danger btn-sm" onClick={() => void bulk('delete')}>{t('dc.delete')}</button>
             </div>
           )}
         </div>
@@ -72606,22 +73848,22 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
             <div key={b.id} className={`panel min-w-0 space-y-3 p-5 ${picked.includes(b.id) ? 'ring-2 ring-brand/60' : ''}`}>
               <div className="flex items-start justify-between gap-3">
                 <div className="flex min-w-0 items-center gap-3">
-                  {shown.length > 1 && <input type="checkbox" className="h-4 w-4 shrink-0 accent-brand" checked={picked.includes(b.id)} onChange={() => pick(b.id)} aria-label="Выбрать привязку" />}
+                  {shown.length > 1 && <input type="checkbox" className="h-4 w-4 shrink-0 accent-brand" checked={picked.includes(b.id)} onChange={() => pick(b.id)} aria-label={t('dc.pickOne')} />}
                   {s && <GameAvatar game={s.game} size={40} />}
                   <div className="min-w-0">
-                    <div className="line-clamp-2 wrap-break-word font-black leading-tight" title={s?.name}>{s?.name ?? `Сервер #${b.serverId}`}</div>
-                    <div className="truncate text-sm font-bold text-mute" title={`ID канала ${b.channelId}`}>
-                      {b.channelName ? `# ${b.channelName}${b.guildName ? ` · ${b.guildName}` : ''}` : `Канал ${b.channelId}`}
+                    <div className="line-clamp-2 wrap-break-word font-black leading-tight" title={s?.name}>{s?.name ?? t('dc.srv', { id: b.serverId })}</div>
+                    <div className="truncate text-sm font-bold text-mute" title={t('dc.chId', { id: b.channelId })}>
+                      {b.channelName ? `# ${b.channelName}${b.guildName ? ` · ${b.guildName}` : ''}` : t('dc.ch', { id: b.channelId })}
                     </div>
                   </div>
                 </div>
-                {!b.enabled ? <span className="pill pill-mute">ПАУЗА</span> : b.lastError ? <span className="pill pill-bad">ОШИБКА</span> : b.lastUpdate ? <span className="pill pill-ok">РАБОТАЕТ</span> : <span className="pill pill-warn">ОЖИДАНИЕ</span>}
+                {!b.enabled ? <span className="pill pill-mute">{t('dc.st.paused')}</span> : b.lastError ? <span className="pill pill-bad">{t('dc.st.error')}</span> : b.lastUpdate ? <span className="pill pill-ok">{t('dc.st.ok')}</span> : <span className="pill pill-warn">{t('dc.st.wait')}</span>}
               </div>
 
-              <ol className="dc-flow" aria-label="Схема привязки">
-                <li className="is-ok"><b>Сервер</b><span className="truncate">{s?.online ? 'онлайн' : s ? 'недоступен' : 'удалён'}</span></li>
-                <li className={bot?.state === 'online' ? 'is-ok' : 'is-bad'}><b>Канал</b><span className="truncate">{b.channelName ? `# ${b.channelName}` : 'не найден'}</span></li>
-                <li className={!b.enabled ? 'is-mute' : b.lastError ? 'is-bad' : b.lastUpdate ? 'is-ok' : 'is-warn'}><b>Сообщение</b><span className="truncate">{!b.enabled ? 'пауза' : b.lastError ? 'ошибка' : b.lastUpdate ? ago(b.lastUpdate) : 'ждёт'}</span></li>
+              <ol className="dc-flow" aria-label={t('dc.flow')}>
+                <li className="is-ok"><b>{t('dc.flow.server')}</b><span className="truncate">{s?.online ? t('dc.flow.online') : s ? t('dc.flow.down') : t('dc.flow.gone')}</span></li>
+                <li className={bot?.state === 'online' ? 'is-ok' : 'is-bad'}><b>{t('dc.flow.channel')}</b><span className="truncate">{b.channelName ? `# ${b.channelName}` : t('dc.flow.nofound')}</span></li>
+                <li className={!b.enabled ? 'is-mute' : b.lastError ? 'is-bad' : b.lastUpdate ? 'is-ok' : 'is-warn'}><b>{t('dc.flow.message')}</b><span className="truncate">{!b.enabled ? t('dc.flow.paused') : b.lastError ? t('dc.flow.err') : b.lastUpdate ? ago(b.lastUpdate) : t('dc.flow.waits')}</span></li>
               </ol>
 
               {(b.serverIds ?? []).length > 1 && (
@@ -72633,18 +73875,18 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
                     })}
                   </span>
                   <span className="min-w-0 text-sm font-extrabold text-mute">
-                    {(b.serverIds ?? []).length} {plural((b.serverIds ?? []).length, ['сервер', 'сервера', 'серверов'])} в одном сообщении
+                    {t('dc.inOne', { n: (b.serverIds ?? []).length })}
                   </span>
                 </div>
               )}
               {b.style !== 'card' && <EmbedPreview serverId={b.serverId} intervalSec={b.intervalSec} />}
               {b.style !== 'card' && (b.serverIds ?? []).length > 1 && (
-                <p className="-mt-1 text-sm font-semibold text-mute">В предпросмотре показан первый сервер, остальные идут следом в том же сообщении.</p>
+                <p className="-mt-1 text-sm font-semibold text-mute">{t('dc.previewFirst')}</p>
               )}
               {b.style !== 'embed' && (
                 <img
                   src={`/api/card/${b.serverId}.png?v=${s?.updatedAt ?? 0}`}
-                  alt={`Карточка: ${s?.name ?? ''}`}
+                  alt={t('dc.card', { name: s?.name ?? '' })}
                   loading="lazy"
                   className="aspect-5/2 w-full rounded-2xl bg-soft object-cover"
                 />
@@ -72652,17 +73894,17 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
 
               {b.lastError && b.enabled && <p className="rounded-xl bg-badbg px-3 py-2 text-sm font-bold text-bad">{b.lastError}</p>}
               <div className="flex justify-between text-sm font-bold text-mute">
-                <span>Каждые {b.intervalSec} с</span>
-                <span>Обновлено: {ago(b.lastUpdate)}</span>
+                <span>{t('dc.every', { n: b.intervalSec })}</span>
+                <span>{t('dc.updated', { ago: ago(b.lastUpdate) })}</span>
               </div>
-              <div className="flex items-center justify-end gap-1.5" role="group" aria-label="Действия с привязкой">
-                <button type="button" className="row-act" title={b.enabled ? 'Поставить на паузу' : 'Включить'} aria-label={b.enabled ? 'Поставить на паузу' : 'Включить'} onClick={() => void toggle(b)}>
+              <div className="flex items-center justify-end gap-1.5" role="group" aria-label={t('dc.actions')}>
+                <button type="button" className="row-act" title={b.enabled ? t('dc.doPause') : t('dc.doResume')} aria-label={b.enabled ? t('dc.doPause') : t('dc.doResume')} onClick={() => void toggle(b)}>
                   {b.enabled ? <IconPause /> : <IconPlay />}
                 </button>
-                <button type="button" className="row-act" title="Изменить" aria-label="Изменить" onClick={() => setDraft({ id: b.id, serverId: b.serverId, extraServerIds: (b.serverIds ?? []).slice(1), channelId: b.channelId, intervalSec: b.intervalSec, enabled: b.enabled, style: b.style })}>
+                <button type="button" className="row-act" title={t('dc.edit')} aria-label={t('dc.edit')} onClick={() => setDraft({ id: b.id, serverId: b.serverId, extraServerIds: (b.serverIds ?? []).slice(1), channelId: b.channelId, intervalSec: b.intervalSec, enabled: b.enabled, style: b.style })}>
                   <IconEdit />
                 </button>
-                <button type="button" className="row-act row-act-danger" title="Удалить" aria-label="Удалить" onClick={() => void remove(b)}>
+                <button type="button" className="row-act row-act-danger" title={t('dc.delete')} aria-label={t('dc.delete')} onClick={() => void remove(b)}>
                   <IconTrash />
                 </button>
               </div>
@@ -72683,8 +73925,8 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
           onSaved={(url) => {
             const first = bindings.length === 0 && !draft.id;
             closeDraft();
-            if (first && url) toast('Привязка сохранена. Бот отправит сообщение в течение минуты', 'ok', undefined, { label: 'Открыть канал в Discord', href: url });
-            else toast('Привязка сохранена');
+            if (first && url) toast(t('dc.savedFirst'), 'ok', undefined, { label: t('dc.openCh'), href: url });
+            else toast(t('dc.saved'));
             void load();
           }}
         />
@@ -72694,6 +73936,7 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
 }
 
 function BindingForm({ servers, initial, onClose, onSaved }: { servers: Server[]; initial: Draft; onClose: () => void; onSaved: (channelUrl?: string) => void }) {
+  useI18n();
   const [f, setF] = useState(initial);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -72729,7 +73972,7 @@ function BindingForm({ servers, initial, onClose, onSaved }: { servers: Server[]
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
-    if (!/^\d{15,25}$/.test(f.channelId)) return setError('Выберите канал из списка или введите его ID');
+    if (!/^\d{15,25}$/.test(f.channelId)) return setError(t('dc.pickErr'));
     setBusy(true);
     setError('');
     const { id, ...rest } = f;
@@ -72746,16 +73989,16 @@ function BindingForm({ servers, initial, onClose, onSaved }: { servers: Server[]
   };
 
   return (
-    <Modal title={f.id ? 'Изменить привязку' : 'Новая привязка'} onClose={onClose}>
+    <Modal title={f.id ? t('dc.f.edit') : t('dc.f.new')} onClose={onClose}>
       <form onSubmit={submit} className="space-y-3.5">
-        <Field label="Сервер">
+        <Field label={t('dc.f.server')}>
           <select id="bind-server" className="input" value={f.serverId} onChange={(e) => setF({ ...f, serverId: Number(e.target.value), extraServerIds: extras.filter((x) => x !== Number(e.target.value)) })}>
             {servers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
           </select>
         </Field>
         {others.length > 0 && (
           <fieldset className="space-y-2">
-            <legend className="label">Показать в этом же сообщении ещё серверы</legend>
+            <legend className="label">{t('dc.f.more')}</legend>
             <div className="max-h-48 space-y-1 overflow-y-auto rounded-2xl bg-soft p-2">
               {others.map((s) => {
                 const on = extras.includes(s.id);
@@ -72775,67 +74018,67 @@ function BindingForm({ servers, initial, onClose, onSaved }: { servers: Server[]
                 );
               })}
             </div>
-            <p className="text-sm font-semibold text-mute">Все выбранные серверы будут в одном сообщении. Максимум 10.</p>
+            <p className="text-sm font-semibold text-mute">{t('dc.f.moreNote')}</p>
           </fieldset>
         )}
 
         {hasList && !manual ? (
           <>
             {guilds!.length > 1 && (
-              <Field label="Сервер Discord">
+              <Field label={t('dc.f.guild')}>
                 <select id="bind-guild" className="input" value={guildId} onChange={(e) => { setGuildId(e.target.value); setF({ ...f, channelId: '' }); }}>
                   {guilds!.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
                 </select>
               </Field>
             )}
-            <Field label={guilds!.length === 1 ? `Канал на сервере «${guild?.name ?? ''}»` : 'Канал'}>
+            <Field label={guilds!.length === 1 ? t('dc.f.chIn', { name: guild?.name ?? '' }) : t('dc.f.channel')}>
               <select id="bind-channel-pick" className="input" value={f.channelId} onChange={(e) => setF({ ...f, channelId: e.target.value })} required>
-                <option value="" disabled>Выберите канал…</option>
+                <option value="" disabled>{t('dc.f.pick')}</option>
                 {guild?.channels.map((c) => <option key={c.id} value={c.id}>{`# ${c.name}${c.missing?.length ? ' ⚠' : ''}`}</option>)}
               </select>
             </Field>
             <MissingNote guild={guild} channelId={f.channelId} />
             <div className="flex flex-wrap gap-x-4 gap-y-1">
-              <button type="button" className="btn-link" onClick={() => setManual(true)}>Ввести ID канала вручную</button>
-              <button type="button" className="btn-link" onClick={refresh} disabled={refreshing}>{refreshing ? 'Обновляю…' : 'Обновить список'}</button>
+              <button type="button" className="btn-link" onClick={() => setManual(true)}>{t('dc.f.manual')}</button>
+              <button type="button" className="btn-link" onClick={refresh} disabled={refreshing}>{refreshing ? t('dc.f.refreshing') : t('dc.f.refresh')}</button>
             </div>
           </>
         ) : (
           <>
-            <Field label="ID канала Discord">
+            <Field label={t('dc.f.chId')}>
               <input id="bind-channel" className="input font-mono" value={f.channelId} onChange={(e) => setF({ ...f, channelId: e.target.value.trim() })} placeholder="123456789012345678" required pattern="\d{15,25}" inputMode="numeric" autoFocus />
             </Field>
             <p className="-mt-2 text-sm font-semibold text-mute">
               {guilds && guilds.length === 0 && allGuilds.length === 0
-                ? 'Бот пока не видит ни одного сервера Discord. Пригласите его кнопкой «Пригласить бота на сервер» (на этой странице), затем нажмите «Обновить список». Пока можно ввести ID канала вручную: включите в Discord режим разработчика, нажмите на канал правой кнопкой и выберите «Копировать ID канала».'
+                ? t('dc.f.help1')
                 : guilds && guilds.length === 0
-                  ? `Бот есть на сервере Discord «${allGuilds.map((g) => g.name).join('», «')}»${allGuilds.some((g) => g.hidden) ? ` и видит ${allGuilds.reduce((n, g) => n + (g.hidden ?? 0), 0)} текстовых каналов`: ''}, но не может писать ни в один из них. Выдайте боту (его роли) права «Просмотр канала», «Отправка сообщений» и «Прикрепление файлов» на нужном канале и нажмите «Обновить список».`
-                  : 'Режим разработчика в Discord: нажмите на канал правой кнопкой и выберите «Копировать ID канала».'}
+                  ? t('dc.f.help2', { names: allGuilds.map((g) => g.name).join('», «'), hidden: allGuilds.some((g) => g.hidden) ? t('dc.f.hidden', { n: allGuilds.reduce((n, g) => n + (g.hidden ?? 0), 0) }) : '' })
+                  : t('dc.f.help3')}
             </p>
             <div className="flex flex-wrap gap-x-4 gap-y-1">
-              {hasList && <button type="button" className="btn-link" onClick={() => setManual(false)}>Выбрать из списка</button>}
-              <button type="button" className="btn-link" onClick={refresh} disabled={refreshing}>{refreshing ? 'Обновляю…' : 'Обновить список'}</button>
+              {hasList && <button type="button" className="btn-link" onClick={() => setManual(false)}>{t('dc.f.fromList')}</button>}
+              <button type="button" className="btn-link" onClick={refresh} disabled={refreshing}>{refreshing ? t('dc.f.refreshing') : t('dc.f.refresh')}</button>
             </div>
           </>
         )}
 
-        <Field label="Оформление сообщения">
+        <Field label={t('dc.f.style')}>
           <select id="bind-style" className="input" value={f.style} onChange={(e) => setF({ ...f, style: e.target.value as Style })}>
-            <option value="embed">Embed: цвет, эмодзи, поля (рекомендуется)</option>
-            <option value="card">Картинка-карточка</option>
-            <option value="both">Embed и картинка</option>
+            <option value="embed">{t('dc.f.embed')}</option>
+            <option value="card">{t('dc.f.cardOpt')}</option>
+            <option value="both">{t('dc.f.both')}</option>
           </select>
         </Field>
-        <Field label="Обновлять каждые, секунд (30–3600)">
+        <Field label={t('dc.f.interval')}>
           <input id="bind-interval" className="input" type="number" min={30} max={3600} value={f.intervalSec} onChange={(e) => setF({ ...f, intervalSec: Number(e.target.value) })} required />
         </Field>
         <label className="flex items-center gap-3 font-bold text-mute">
-          <Switch id="bind-enabled" checked={f.enabled} onChange={(on) => setF({ ...f, enabled: on })} /> Включена
+          <Switch id="bind-enabled" checked={f.enabled} onChange={(on) => setF({ ...f, enabled: on })} /> {t('dc.f.enabled')}
         </label>
         <ErrorLine text={error} />
         <div className="flex justify-end gap-2 pt-1">
-          <button type="button" className="btn btn-ghost" onClick={onClose}>Отмена</button>
-          <Button loading={busy}>Сохранить</Button>
+          <button type="button" className="btn btn-ghost" onClick={onClose}>{t('common.cancel')}</button>
+          <Button loading={busy}>{t('common.save')}</Button>
         </div>
       </form>
     </Modal>
@@ -74254,6 +75497,7 @@ import { Preview } from '../components/news/Preview';
 import { PublicFeed } from '../components/news/PublicFeed';
 import { CATEGORY_LABEL_RU, CHANGE_LABEL_RU, CHANGE_ORDER, NEWS_CATEGORIES, isChangeKind, isHttpsUrl } from '../components/news/newsLogic';
 import { GAMES } from '../games';
+import { t, useI18n } from '../i18n';
 import { StatusServers } from '../components/news/StatusServers';
 import type { PreviewPart } from './EmbedPreview';
 import { Button, ErrorLine, Field, GoLink, IconNews, Notice, PageHead, SplitButton, StateView, Switch, errorKind, fmtDateTime, toast, navigate } from '../ui';
@@ -74290,13 +75534,11 @@ function ColorPicker({ value, onChange, games }: { value: number; onChange: (n: 
       <div className="flex flex-wrap items-center gap-2">
         {PALETTE.map(([n, c]) => dot(n, c))}
         <label className="ml-1 flex cursor-pointer items-center gap-2 text-sm font-extrabold text-mute">
-          <input type="color" value={hex(value)} onChange={(e) => onChange(parseHex(e.target.value))} className="h-8 w-10 cursor-pointer rounded-sm border-2 border-line bg-card" aria-label="Свой цвет" />
-          свой
-        </label>
+          <input type="color" value={hex(value)} onChange={(e) => onChange(parseHex(e.target.value))} className="h-8 w-10 cursor-pointer rounded-sm border-2 border-line bg-card" aria-label={t('ne.ownColor')} />{t('ne.own')}</label>
       </div>
       {games.length > 0 && (
         <div className="flex flex-wrap items-center gap-2">
-          <span className="text-xs font-extrabold uppercase tracking-wide text-mute">Игры</span>
+          <span className="text-xs font-extrabold uppercase tracking-wide text-mute">{t('ne.games')}</span>
           {games.map(([n, c]) => dot(n, c))}
         </div>
       )}
@@ -74310,6 +75552,7 @@ const PART_ID: Record<PreviewPart['part'], string> = {
 
 // ---------- the editor ----------
 export default function NewsEditor({ id, template }: { id: number | null; template?: string }) {
+  useI18n();
   const [d, setD] = useState<Draft | null>(null);
   const [author, setAuthor] = useState<NewsAuthor | null>(null);
   const [item, setItem] = useState<NewsItem | null>(null);
@@ -74405,12 +75648,12 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
     if (!d || restore || autosaveOff.current) return;
     const payload = toPayload(d);
     if (payloadKey(payload) === baseline.current) return;
-    const t = setTimeout(() => {
+    const timer = setTimeout(() => {
       api(`/news/autosave`, 'PUT', { key: akey, payload: { ...payload, channelId: d.channelId } })
         .then(() => setSavedAt(Date.now()))
         .catch((e) => { if (e instanceof ApiError && (e.status === 404 || e.status === 405)) autosaveOff.current = true; });
     }, 1500);
-    return () => clearTimeout(t);
+    return () => clearTimeout(timer);
   }, [d, restore, akey]);
 
   // ----- Ctrl+Enter publishes -----
@@ -74432,10 +75675,10 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
   if (!d) {
     return error ? (
       <StateView kind={errorKind(error)} text={errorKind(error) === 'error' ? error : undefined} onRetry={() => window.location.reload()}>
-        <a className="btn btn-soft" href="/admin/news">К новостям</a>
+        <a className="btn btn-soft" href="/admin/news">{t('ne.toNews')}</a>
       </StateView>
     ) : (
-      <div className="space-y-5" aria-busy="true" aria-label="Загрузка">
+      <div className="space-y-5" aria-busy="true" aria-label={t('ne.loading')}>
         <div className="skeleton h-9 w-56 rounded-full" />
         <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,460px)]">
           <div className="space-y-5">
@@ -74494,15 +75737,15 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
       const name = await uploadImage(file);
       setE({ imageUpload: name, imageUrl: '' });
       setMoreOpen(true);
-      toast('Картинка загружена из буфера');
+      toast(t('ne.pasted'));
     } catch (err) {
       setError((err as Error).message);
     }
   };
 
-  const applyTemplate = async (t: (typeof TEMPLATES)[number]) => {
-    if (dirtyText && !(await confirmDialog({ title: 'Заменить текущий текст шаблоном?', text: 'Введённый текст будет потерян.', confirmLabel: 'Заменить' }))) return;
-    setD((c) => (c ? { ...applyTpl(c, t.apply), statusServerIds: c.statusServerIds } : c));
+  const applyTemplate = async (tp: (typeof TEMPLATES)[number]) => {
+    if (dirtyText && !(await confirmDialog({ title: t('ne.tplTitle'), text: t('ne.tplText'), confirmLabel: t('ne.replace') }))) return;
+    setD((c) => (c ? { ...applyTpl(c, tp.apply), statusServerIds: c.statusServerIds } : c));
     setActive(0);
   };
 
@@ -74513,7 +75756,7 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
   };
   const removeEmbed = async () => {
     if (d.embeds.length <= 1) return;
-    if (embedHasContent(e) && !(await confirmDialog({ title: `Удалить embed ${cur + 1}?`, confirmLabel: 'Удалить', danger: true }))) return;
+    if (embedHasContent(e) && !(await confirmDialog({ title: t('ne.delEmbed', { n: cur + 1 }), confirmLabel: t('ne.del'), danger: true }))) return;
     set({ embeds: d.embeds.filter((_, i) => i !== cur) });
     setActive(Math.max(0, cur - 1));
   };
@@ -74530,12 +75773,12 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
         scheduledAt: action === 'schedule' ? new Date(when).getTime() : undefined,
         repeat: action === 'schedule' ? repeat : undefined,
       };
-      if (action === 'schedule' && !(new Date(when).getTime() > Date.now())) throw new Error('Выберите время в будущем');
+      if (action === 'schedule' && !(new Date(when).getTime() > Date.now())) throw new Error(t('ne.future'));
       await api(id ? `/news/${id}` : '/news', id ? 'PUT' : 'POST', body);
       if (makeDefault && d.channelId) await api('/news/settings', 'PUT', { channelId: d.channelId });
       await api(`/news/autosave?key=${encodeURIComponent(akey)}`, 'DELETE').catch(() => undefined);
       baseline.current = payloadKey(toPayload(d));
-      toast(action === 'now' ? 'Новость отправляется в Discord' : action === 'schedule' ? 'Новость запланирована' : isSent ? 'Изменения отправлены в Discord' : 'Черновик сохранён');
+      toast(action === 'now' ? t('ne.sending') : action === 'schedule' ? t('ne.scheduled') : isSent ? t('ne.edited') : t('ne.draftSaved'));
       navigate('/admin/news');
     } catch (err) {
       setError((err as Error).message);
@@ -74546,7 +75789,7 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
 
   const request = (mode: 'now' | 'schedule' | 'edit') => {
     setError('');
-    if (mode === 'schedule' && !(new Date(when).getTime() > Date.now())) { setError('Выберите время в будущем'); return; }
+    if (mode === 'schedule' && !(new Date(when).getTime() > Date.now())) { setError(t('ne.future')); return; }
     setCheck(mode);
   };
   primary.current = () => {
@@ -74566,11 +75809,11 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
         await new Promise((res) => setTimeout(res, 1000));
         st = await api<NewsTestStatus>(`/news/test/${r.testId}`);
       }
-      if (st.status === 'sent') toast('Тестовое сообщение отправлено');
-      else if (st.status === 'error') setError(st.error || 'Не удалось отправить тест');
-      else toast('Тест поставлен в очередь', 'ok');
+      if (st.status === 'sent') toast(t('ne.testSent'));
+      else if (st.status === 'error') setError(st.error || t('ne.testFail'));
+      else toast(t('ne.testQueued'), 'ok');
     } catch (err) {
-      setError(err instanceof ApiError && err.status === 404 ? 'Тестовая отправка недоступна на этом сервере.' : (err as Error).message);
+      setError(err instanceof ApiError && err.status === 404 ? t('ne.testNA') : (err as Error).message);
     } finally {
       setTesting(false);
     }
@@ -74590,7 +75833,7 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
     setD(nd);
     setActive(0);
     setRestore(null);
-    toast('Черновик восстановлен');
+    toast(t('ne.restored'));
   };
   const dropRestore = () => {
     setRestore(null);
@@ -74602,9 +75845,9 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
   const actions = (
     <div className="panel fixed inset-x-0 bottom-0 z-30 max-h-[75dvh] space-y-3 overflow-auto rounded-b-none p-4 pb-[max(1rem,env(safe-area-inset-bottom))] lg:static lg:max-h-none lg:overflow-visible lg:rounded-b-3xl lg:pb-4">
       <ErrorLine text={error} />
-      {noChannel && !isSent && <p className="text-sm font-bold text-mute">Выберите канал, чтобы опубликовать или запланировать.</p>}
+      {noChannel && !isSent && <p className="text-sm font-bold text-mute">{t('ne.needChannel')}</p>}
       {isSent ? (
-        <Button className="w-full" loading={busy} onClick={() => request('edit')}>{busy ? 'Сохраняю…' : 'Сохранить изменения в Discord'}</Button>
+        <Button className="w-full" loading={busy} onClick={() => request('edit')}>{busy ? t('ne.saving') : t('ne.saveEdit')}</Button>
       ) : (
         <>
           <SplitButton
@@ -74612,58 +75855,58 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
             magnetic
             loading={busy}
             disabled={noChannel}
-            label={busy ? 'Отправляю…' : 'Опубликовать сейчас'}
+            label={busy ? t('ne.sendingBtn') : t('ne.pubNow')}
             onClick={() => request('now')}
-            menuLabel="Другие способы публикации"
+            menuLabel={t('ne.moreWays')}
             items={[
-              { key: 'schedule', label: 'Запланировать…', hint: 'Выбрать дату и время', onSelect: () => setScheduling(true) },
-              { key: 'draft', label: 'Сохранить как черновик', hint: 'Ничего не отправляется в Discord', onSelect: () => void save('draft') },
+              { key: 'schedule', label: t('ne.scheduleDots'), hint: t('ne.pickDate'), onSelect: () => setScheduling(true) },
+              { key: 'draft', label: t('ne.asDraft'), hint: t('ne.asDraftHint'), onSelect: () => void save('draft') },
             ]}
           />
           {scheduling && (
             <div className="space-y-2 rounded-2xl bg-soft p-3">
-              <label htmlFor="news-when" className="label">Когда опубликовать</label>
+              <label htmlFor="news-when" className="label">{t('ne.whenPub')}</label>
               <input id="news-when" type="datetime-local" className="input" value={when} min={toLocalInput(Date.now())} onChange={(ev) => setWhen(ev.target.value)} />
-              <label htmlFor="news-repeat" className="label">Повторять</label>
+              <label htmlFor="news-repeat" className="label">{t('ne.repeat')}</label>
               <select id="news-repeat" className="input" value={repeat} onChange={(ev) => setRepeat(ev.target.value as typeof repeat)}>
-                <option value="none">Не повторять</option>
-                <option value="daily">Каждый день</option>
-                <option value="weekly">Каждую неделю</option>
-                <option value="monthly">Каждый месяц</option>
+                <option value="none">{t('ne.rep.none')}</option>
+                <option value="daily">{t('ne.rep.daily')}</option>
+                <option value="weekly">{t('ne.rep.weekly')}</option>
+                <option value="monthly">{t('ne.rep.monthly')}</option>
               </select>
               <div className="flex gap-2">
-                <Button variant="ghost" onClick={() => setScheduling(false)}>Отмена</Button>
-                <Button className="flex-1" loading={busy} disabled={noChannel} onClick={() => request('schedule')}>Запланировать</Button>
+                <Button variant="ghost" onClick={() => setScheduling(false)}>{t('ne.cancel')}</Button>
+                <Button className="flex-1" loading={busy} disabled={noChannel} onClick={() => request('schedule')}>{t('ne.schedule')}</Button>
               </div>
             </div>
           )}
         </>
       )}
       <div className="flex flex-wrap items-center gap-2 border-t-2 border-line pt-3">
-        <Button variant="soft" loading={testing} disabled={!settings?.testChannelId && noChannel} onClick={() => void sendTest()}>Отправить тест</Button>
+        <Button variant="soft" loading={testing} disabled={!settings?.testChannelId && noChannel} onClick={() => void sendTest()}>{t('ne.sendTest')}</Button>
         <span className="min-w-0 flex-1 text-xs font-semibold text-mute">
           {settings?.testChannelId
-            ? <>Тест уйдёт в {settings.testChannelName ? `# ${settings.testChannelName}` : `канал ${settings.testChannelId}`}{settings.testGuildName ? ` · ${settings.testGuildName}` : ''}. </>
-            : 'Тестовый канал не задан: тест уйдёт в канал новости. '}
-          <button type="button" className="btn-link" onClick={() => setPickTest((v) => !v)} aria-expanded={pickTest}>{settings?.testChannelId ? 'Изменить' : 'Выбрать'}</button>
+            ? <>{t('ne.testGoes', { where: (settings.testChannelName ? `# ${settings.testChannelName}` : t('ne.channelN', { id: settings.testChannelId })) + (settings.testGuildName ? ` · ${settings.testGuildName}` : '') })} </>
+            : t('ne.noTestCh')}
+          <button type="button" className="btn-link" onClick={() => setPickTest((v) => !v)} aria-expanded={pickTest}>{settings?.testChannelId ? t('ne.change') : t('ne.choose')}</button>
         </span>
         {pickTest && <div className="w-full"><ChannelPicker id="news-test-channel" value={settings?.testChannelId ?? ''} onChange={(v) => void setTestChannel(v)} /></div>}
       </div>
-      {savedAt && <p className="text-xs font-semibold text-mute">Черновик автоматически сохранён в {fmtDateTime(savedAt)}</p>}
+      {savedAt && <p className="text-xs font-semibold text-mute">{t('ne.autoSavedAt', { t: fmtDateTime(savedAt) })}</p>}
     </div>
   );
 
-  const scheduleText = check === 'schedule' ? `Будет опубликовано ${fmtDateTime(new Date(when).getTime())}.` : undefined;
+  const scheduleText = check === 'schedule' ? t('ne.willPub', { t: fmtDateTime(new Date(when).getTime()) }) : undefined;
 
   return (
     <div className="space-y-5 pb-40 lg:pb-0">
-      <a href="/admin/news" className="inline-flex items-center gap-1 font-extrabold text-link hover:underline">← Все новости</a>
+      <a href="/admin/news" className="inline-flex items-center gap-1 font-extrabold text-link hover:underline">{t('ne.allNews')}</a>
       <PageHead
         icon={<IconNews />}
-        title={id ? (isSent ? 'Правка опубликованной новости' : 'Редактирование новости') : 'Новая новость'}
-        subtitle={isSent ? 'Сообщение в Discord будет отредактировано, новое отправлено не будет.' : undefined}
-        hint="Заполните канал и текст, проверьте предпросмотр справа и нажмите «Опубликовать сейчас». Можно запланировать или сохранить как черновик."
-        help={<p>Нажмите на часть сообщения в предпросмотре, чтобы перейти к её полю. Ctrl+Enter публикует. Слова ДАТА и ВРЕМЯ в шаблонах замените на свои. Перед отправкой панель проверяет лимиты Discord и типичные ошибки. Изменения сохраняются в черновик автоматически.</p>}
+        title={id ? (isSent ? t('ne.tEdit') : t('ne.tEdit2')) : t('ne.tNew')}
+        subtitle={isSent ? t('ne.subSent') : undefined}
+        hint={t('ne.head')}
+        help={<p>{t('ne.help')}</p>}
       />
 
       {restore && (
@@ -74671,76 +75914,75 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
           tone="info"
           action={
             <span className="flex gap-3">
-              <button type="button" className="btn-link btn-link-tone" onClick={doRestore}>Восстановить</button>
-              <button type="button" className="btn-link btn-link-tone" onClick={dropRestore}>Отбросить</button>
+              <button type="button" className="btn-link btn-link-tone" onClick={doRestore}>{t('ne.restore')}</button>
+              <button type="button" className="btn-link btn-link-tone" onClick={dropRestore}>{t('ne.discard')}</button>
             </span>
           }
         >
-          Найден несохранённый черновик{restore.ts ? ` от ${fmtDateTime(restore.ts)}` : ''}.
+          {restore.ts ? t('ne.foundDraftTs', { t: fmtDateTime(restore.ts) }) : t('ne.foundDraft') + '.'}
         </Notice>
       )}
 
-      <div className="seg lg:hidden" role="group" aria-label="Режим">
-        <button type="button" className="seg-item" aria-pressed={mobileTab === 'editor'} onClick={() => setMobileTab('editor')}>Редактор</button>
-        <button type="button" className="seg-item" aria-pressed={mobileTab === 'preview'} onClick={() => setMobileTab('preview')}>Превью</button>
+      <div className="seg lg:hidden" role="group" aria-label={t('ne.mode')}>
+        <button type="button" className="seg-item" aria-pressed={mobileTab === 'editor'} onClick={() => setMobileTab('editor')}>{t('ne.tabEditor')}</button>
+        <button type="button" className="seg-item" aria-pressed={mobileTab === 'preview'} onClick={() => setMobileTab('preview')}>{t('ne.tabPreview')}</button>
       </div>
 
       <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,460px)]">
         <div className={`space-y-5 ${mobileTab === 'preview' ? 'hidden lg:block lg:space-y-5' : ''}`}>
-          <Section title="Куда отправить">
-            <Field label="Канал">
+          <Section title={t('ne.sWhere')}>
+            <Field label={t('ne.channel')}>
               {isSent ? <p className="font-bold">{item?.channelName ? `# ${item.channelName}` : item?.channelId}{item?.guildName ? ` · ${item.guildName}` : ''}</p> : <ChannelPicker id="news-channel" value={d.channelId} onChange={(v) => set({ channelId: v })} />}
             </Field>
             {!isSent && noChannel && (
               <p className="-mt-1 text-sm font-semibold text-mute">
-                Канал не выбран. Задайте канал по умолчанию, и он будет подставляться в каждую новую новость:{' '}
-                <GoLink href="/admin/news">Выбрать канал по умолчанию</GoLink>
+                {t('ne.noCh')}{' '}
+                <GoLink href="/admin/news">{t('ne.pickDefault')}</GoLink>
               </p>
             )}
             {!isSent && (
               <label className="flex items-center gap-3 text-sm font-bold text-mute">
-                <Switch checked={makeDefault} onChange={setMakeDefault} /> Сделать каналом новостей по умолчанию
-              </label>
+                <Switch checked={makeDefault} onChange={setMakeDefault} />{t('ne.makeDefault')}</label>
             )}
-            <Field label="Упоминание">
+            <Field label={t('ne.mention')}>
               <select id="news-mention" className="input" value={d.mention} onChange={(ev) => set({ mention: ev.target.value as Draft['mention'] })}>
-                <option value="none">Без упоминания</option>
-                <option value="here">@here: онлайн-участникам</option>
-                <option value="everyone">@everyone: всем</option>
+                <option value="none">{t('ne.m.none')}</option>
+                <option value="here">{t('ne.m.here')}</option>
+                <option value="everyone">{t('ne.m.everyone')}</option>
               </select>
             </Field>
-            {d.mention !== 'none' && <p className="-mt-2 text-sm font-semibold text-mute">Чтобы упоминание сработало, у бота должно быть право «Упоминать @everyone, @here и все роли» в этом канале.</p>}
+            {d.mention !== 'none' && <p className="-mt-2 text-sm font-semibold text-mute">{t('ne.mentionPerm')}</p>}
           </Section>
 
           {!id && (
-            <Section title="Шаблон" hint="Готовая заготовка, которую можно изменить. Слова ДАТА, ВРЕМЯ и т. п. замените на свои.">
+            <Section title={t('ne.sTpl')} hint={t('ne.tplHint')}>
               <div className="flex flex-wrap gap-2">
-                {TEMPLATES.map((t) => <button key={t.id} type="button" className="btn btn-soft btn-sm" onClick={() => void applyTemplate(t)}>{t.label}</button>)}
-                <button type="button" className="btn btn-soft btn-sm" onClick={() => { set({ ...blank(d.channelId), statusServerIds: d.statusServerIds }); setActive(0); }}>Очистить</button>
+                {TEMPLATES.map((tp) => <button key={tp.id} type="button" className="btn btn-soft btn-sm" onClick={() => void applyTemplate(tp)}>{tp.label}</button>)}
+                <button type="button" className="btn btn-soft btn-sm" onClick={() => { set({ ...blank(d.channelId), statusServerIds: d.statusServerIds }); setActive(0); }}>{t('ne.clear')}</button>
               </div>
             </Section>
           )}
 
-          <Section title="Текст" hint="Обычный текст над рамкой. Можно оставить пустым.">
-            <MarkdownField id="news-content" label="Сообщение" value={d.content} onChange={(v) => set({ content: v })} max={LIMITS.content} rows={3} placeholder="Например: Друзья, у нас новости!" variables={variables} onImage={(f) => void pasteImage(f)} />
+          <Section title={t('ne.sText')} hint={t('ne.textHint')}>
+            <MarkdownField id="news-content" label={t('ne.message')} value={d.content} onChange={(v) => set({ content: v })} max={LIMITS.content} rows={3} placeholder={t('ne.msgHolder')} variables={variables} onImage={(f) => void pasteImage(f)} />
           </Section>
 
-          <Section title="Оформление (embed)" hint="Цветная карточка с заголовком, текстом, полями и картинкой. В одном сообщении можно несколько блоков.">
-            <div className="no-scrollbar flex items-center gap-2 overflow-x-auto" role="tablist" aria-label="Embed-блоки">
+          <Section title={t('ne.sEmbed')} hint={t('ne.embedHint')}>
+            <div className="no-scrollbar flex items-center gap-2 overflow-x-auto" role="tablist" aria-label={t('ne.embedTabs')}>
               <div className="seg flex w-fit shrink-0">
                 {d.embeds.map((x, i) => (
                   <button key={i} type="button" role="tab" aria-selected={i === cur} aria-pressed={i === cur} className="seg-item whitespace-nowrap" onClick={() => setActive(i)}>
-                    Embed {i + 1}{!embedHasContent(x) && <span className="ml-1 text-mute" aria-label="пустой">·</span>}
+                    Embed {i + 1}{!embedHasContent(x) && <span className="ml-1 text-mute" aria-label={t('ne.emptyAria')}>·</span>}
                   </button>
                 ))}
               </div>
-              <button type="button" className="btn btn-soft btn-sm shrink-0" disabled={d.embeds.length >= LIMITS.embeds} onClick={addEmbed}>+ Добавить embed</button>
-              {d.embeds.length > 1 && <button type="button" className="btn btn-danger btn-sm shrink-0" onClick={() => void removeEmbed()}>Удалить Embed {cur + 1}</button>}
+              <button type="button" className="btn btn-soft btn-sm shrink-0" disabled={d.embeds.length >= LIMITS.embeds} onClick={addEmbed}>{t('ne.addEmbed')}</button>
+              {d.embeds.length > 1 && <button type="button" className="btn btn-danger btn-sm shrink-0" onClick={() => void removeEmbed()}>{t('ne.delEmbedBtn', { n: cur + 1 })}</button>}
             </div>
 
             <div>
-              <span className="label">Тип сообщения</span>
-              <div className="flex flex-wrap gap-2" role="group" aria-label="Тип сообщения">
+              <span className="label">{t('ne.msgType')}</span>
+              <div className="flex flex-wrap gap-2" role="group" aria-label={t('ne.msgType')}>
                 {PRESETS.map((p) => {
                   const on = presetOf(e)?.id === p.id;
                   return (
@@ -74752,87 +75994,85 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
               </div>
             </div>
 
-            <Field label="Цвет полосы"><ColorPicker value={e.color} onChange={(c) => setE({ color: c })} games={games} /></Field>
+            <Field label={t('ne.barColor')}><ColorPicker value={e.color} onChange={(c) => setE({ color: c })} games={games} /></Field>
             <div>
-              <div className="mb-1.5 flex items-center justify-between"><label htmlFor="news-title" className="label mb-0!">Заголовок</label><Counter value={e.title.length} max={LIMITS.title} /></div>
-              <input id="news-title" className="input" value={e.title} onChange={(ev) => setE({ title: ev.target.value })} placeholder="📢 Заголовок новости" />
+              <div className="mb-1.5 flex items-center justify-between"><label htmlFor="news-title" className="label mb-0!">{t('ne.title')}</label><Counter value={e.title.length} max={LIMITS.title} /></div>
+              <input id="news-title" className="input" value={e.title} onChange={(ev) => setE({ title: ev.target.value })} placeholder={t('ne.titleHolder')} />
             </div>
-            <Field label="Ссылка заголовка (необязательно)">
+            <Field label={t('ne.titleUrl')}>
               <input id="news-url" className="input" value={e.url} onChange={(ev) => setE({ url: ev.target.value.trim() })} placeholder="https://…" />
             </Field>
-            <MarkdownField id="news-desc" label="Основной текст" value={e.description} onChange={(v) => setE({ description: v })} max={LIMITS.description} rows={8} placeholder="Расскажите, что произошло. Поддерживается оформление Discord." variables={variables} onImage={(f) => void pasteImage(f)} />
+            <MarkdownField id="news-desc" label={t('ne.mainText')} value={e.description} onChange={(v) => setE({ description: v })} max={LIMITS.description} rows={8} placeholder={t('ne.descHolder')} variables={variables} onImage={(f) => void pasteImage(f)} />
 
             <details className="rounded-2xl border-2 border-line px-4 py-2.5" open={moreOpen || !!(e.authorName || e.thumbnail || e.imageUrl || e.imageUpload)} onToggle={(ev) => setMoreOpen(ev.currentTarget.open)}>
-              <summary className="cursor-pointer select-none font-extrabold text-link">Автор, миниатюра и большая картинка</summary>
+              <summary className="cursor-pointer select-none font-extrabold text-link">{t('ne.moreSum')}</summary>
               <div className="mt-3 space-y-3.5">
                 <div className="flex flex-wrap items-center gap-2">
-                  <button type="button" className="btn btn-soft btn-sm" onClick={() => void useProfileAuthor()}>Из профиля{author?.source === 'discord' ? ' (Discord)' : ''}</button>
-                  <span className="text-sm font-semibold text-mute">Ник и фото берутся из Discord, если он привязан, иначе из профиля на сайте; регистр ника как в Discord.</span>
+                  <button type="button" className="btn btn-soft btn-sm" onClick={() => void useProfileAuthor()}>{author?.source === 'discord' ? t('ne.fromProfileDc') : t('ne.fromProfile')}</button>
+                  <span className="text-sm font-semibold text-mute">{t('ne.authorNote')}</span>
                 </div>
                 <div className="grid gap-3 sm:grid-cols-2">
-                  <label className="block"><span className="label">Автор (имя)</span><input id="news-author" className="input" value={e.authorName} onChange={(ev) => setE({ authorName: ev.target.value })} placeholder="Администрация" /></label>
-                  <label className="block"><span className="label">Аватар автора (ссылка)</span><input className="input" value={e.authorIcon} onChange={(ev) => setE({ authorIcon: ev.target.value.trim() })} placeholder="https://…" /></label>
+                  <label className="block"><span className="label">{t('ne.authorName')}</span><input id="news-author" className="input" value={e.authorName} onChange={(ev) => setE({ authorName: ev.target.value })} placeholder={t('ne.authorHolder')} /></label>
+                  <label className="block"><span className="label">{t('ne.authorIcon')}</span><input className="input" value={e.authorIcon} onChange={(ev) => setE({ authorIcon: ev.target.value.trim() })} placeholder="https://…" /></label>
                 </div>
-                <ImageDrop id="news-thumb" label="Миниатюра справа сверху" url={e.thumbnail} upload="" onUrl={(v) => setE({ thumbnail: v })} onUpload={() => undefined} minWidth={80} />
-                <ImageDrop id="news-image" label="Большая картинка внизу" url={e.imageUrl} upload={e.imageUpload} onUrl={(v) => setE({ imageUrl: v })} onUpload={(n) => setE({ imageUpload: n, imageUrl: n ? '' : e.imageUrl })} allowUpload minWidth={400} />
+                <ImageDrop id="news-thumb" label={t('ne.thumb')} url={e.thumbnail} upload="" onUrl={(v) => setE({ thumbnail: v })} onUpload={() => undefined} minWidth={80} />
+                <ImageDrop id="news-image" label={t('ne.bigImg')} url={e.imageUrl} upload={e.imageUpload} onUrl={(v) => setE({ imageUrl: v })} onUpload={(n) => setE({ imageUpload: n, imageUrl: n ? '' : e.imageUrl })} allowUpload minWidth={400} />
               </div>
             </details>
           </Section>
 
-          <Section title="Поля" hint="Блоки «название и значение». Перетаскивайте за ручку или используйте стрелки; короткие поля можно ставить в ряд по три.">
+          <Section title={t('ne.sFields')} hint={t('ne.fieldsHint')}>
             <FieldsBuilder fields={e.fields} onChange={(f) => setE({ fields: f })} variables={variables} />
           </Section>
 
-          <Section title="Подпись">
+          <Section title={t('ne.sFooter')}>
             <div>
-              <div className="mb-1.5 flex items-center justify-between"><label htmlFor="news-footer" className="label mb-0!">Текст внизу</label><Counter value={e.footer.length} max={LIMITS.footer} /></div>
-              <input id="news-footer" className="input" value={e.footer} onChange={(ev) => setE({ footer: ev.target.value })} placeholder="Например: Администрация сервера" />
+              <div className="mb-1.5 flex items-center justify-between"><label htmlFor="news-footer" className="label mb-0!">{t('ne.footerText')}</label><Counter value={e.footer.length} max={LIMITS.footer} /></div>
+              <input id="news-footer" className="input" value={e.footer} onChange={(ev) => setE({ footer: ev.target.value })} placeholder={t('ne.footerHolder')} />
             </div>
             <label className="flex items-center gap-3 text-sm font-bold text-mute">
-              <Switch checked={e.timestamp} onChange={(on) => setE({ timestamp: on })} /> Показывать время публикации
-            </label>
+              <Switch checked={e.timestamp} onChange={(on) => setE({ timestamp: on })} />{t('ne.showTs')}</label>
           </Section>
 
           {servers && servers.length > 0 && (
-            <Section title="Статус серверов" hint="Живой блок: бот добавит карточки выбранных серверов (онлайн, игроки) и будет обновлять их.">
+            <Section title={t('ne.sStatus')} hint={t('ne.statusHint')}>
               <StatusServers servers={servers} value={d.statusServerIds} onChange={(ids) => set({ statusServerIds: ids })} />
             </Section>
           )}
 
-          <Section title="На сайте" hint="Эти поля видны только на странице новостей панели; в Discord они не попадают.">
+          <Section title={t('ne.sSite')} hint={t('ne.siteHint')}>
             <div className="grid gap-3 sm:grid-cols-2">
-              <Field label="Рубрика">
+              <Field label={t('ne.category')}>
                 <select id="news-category" className="input" value={d.category} onChange={(ev) => set({ category: ev.target.value as Draft['category'] })}>
                   {NEWS_CATEGORIES.map((c) => <option key={c} value={c}>{CATEGORY_LABEL_RU[c]}</option>)}
                 </select>
               </Field>
-              <Field label="Игра (для обложки по умолчанию)">
+              <Field label={t('ne.game')}>
                 <select id="news-game" className="input" value={d.game} onChange={(ev) => set({ game: ev.target.value })}>
-                  <option value="">нет</option>
+                  <option value="">{t('ne.none')}</option>
                   {GAMES.map((g) => <option key={g.id} value={g.id}>{g.label}</option>)}
                 </select>
               </Field>
             </div>
             <label className="flex items-center gap-3 text-sm font-bold text-mute">
-              <Switch checked={d.pinned} onChange={(on) => set({ pinned: on })} /> Закрепить вверху ленты
-            </label>
+              <Switch checked={d.pinned} onChange={(on) => set({ pinned: on })} />{t('ne.pin')}</label>
 
             <div className="space-y-2">
-              <span className="label mb-0!">Отсчёт времени</span>
+              <span className="label mb-0!">{t('ne.countdown')}</span>
               <div className="grid gap-2 sm:grid-cols-2">
-                <input id="news-cd-at" type="datetime-local" className="input" aria-label="Когда" value={d.countdownAt} onChange={(ev) => set({ countdownAt: ev.target.value })} />
-                <input id="news-cd-label" className="input" aria-label="Подпись отсчёта" maxLength={LIMITS.countdownLabel} placeholder="Вайп" value={d.countdownLabel} onChange={(ev) => set({ countdownLabel: ev.target.value })} />
+                <input id="news-cd-at" type="datetime-local" className="input" aria-label={t('ne.when')} value={d.countdownAt} onChange={(ev) => set({ countdownAt: ev.target.value })} />
+                <input id="news-cd-label" className="input" aria-label={t('ne.cdLabel')} maxLength={LIMITS.countdownLabel} placeholder={t('ne.cdHolder')} value={d.countdownLabel} onChange={(ev) => set({ countdownLabel: ev.target.value })} />
               </div>
-              <p className="text-xs font-semibold text-mute">На сайте: «Вайп через 2 д 4 ч 10 мин», после времени «Началось». {d.countdownAt && <button type="button" className="btn-link" onClick={() => set({ countdownAt: '', countdownLabel: '' })}>Убрать отсчёт</button>}</p>
+              <p className="text-xs font-semibold text-mute">{t('ne.cdNote')} {d.countdownAt && <button type="button" className="btn-link" onClick={() => set({ countdownAt: '', countdownLabel: '' })}>{t('ne.cdRemove')}</button>}</p>
             </div>
 
             <div className="space-y-2">
-              <span className="label mb-0!">Галерея ({d.gallery.length} из {LIMITS.gallery})</span>
+              <span className="label mb-0!">{t('ne.gallery', { n: d.gallery.length, m: LIMITS.gallery })}</span>
               {d.gallery.map((g, i) => (
                 <ImageDrop
                   key={g.k}
                   id={'news-gal-' + i}
-                  label={'Картинка ' + (i + 1)}
+                  label={t('ne.image', { n: i + 1 })}
                   url={g.url}
                   upload={g.upload}
                   allowUpload
@@ -74841,39 +76081,39 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
                   onUpload={(n) => set({ gallery: n ? d.gallery.map((x) => (x.k === g.k ? { ...x, upload: n, url: '' } : x)) : d.gallery.filter((x) => x.k !== g.k) })}
                 />
               ))}
-              <button type="button" className="btn btn-soft btn-sm" disabled={d.gallery.length >= LIMITS.gallery} onClick={() => set({ gallery: [...d.gallery, { k: newKey(), url: '', upload: '' }] })}>+ Добавить картинку</button>
+              <button type="button" className="btn btn-soft btn-sm" disabled={d.gallery.length >= LIMITS.gallery} onClick={() => set({ gallery: [...d.gallery, { k: newKey(), url: '', upload: '' }] })}>{t('ne.addImg')}</button>
             </div>
 
             <div className="space-y-2">
-              <span className="label mb-0!">Что изменилось ({d.changes.length} из {LIMITS.changes})</span>
+              <span className="label mb-0!">{t('ne.changes', { n: d.changes.length, m: LIMITS.changes })}</span>
               {d.changes.map((c, i) => (
                 <div key={c.k} className="nw-edit-row">
-                  <select aria-label={'Тип изменения ' + (i + 1)} className="input" value={c.kind} onChange={(ev) => { const v = ev.target.value; if (isChangeKind(v)) set({ changes: d.changes.map((x) => (x.k === c.k ? { ...x, kind: v } : x)) }); }}>
+                  <select aria-label={t('ne.changeType', { n: i + 1 })} className="input" value={c.kind} onChange={(ev) => { const v = ev.target.value; if (isChangeKind(v)) set({ changes: d.changes.map((x) => (x.k === c.k ? { ...x, kind: v } : x)) }); }}>
                     {CHANGE_ORDER.map((k) => <option key={k} value={k}>{CHANGE_LABEL_RU[k]}</option>)}
                   </select>
-                  <input aria-label={'Текст изменения ' + (i + 1)} className="input" maxLength={LIMITS.changeText} value={c.text} placeholder="Что именно" onChange={(ev) => set({ changes: d.changes.map((x) => (x.k === c.k ? { ...x, text: ev.target.value } : x)) })} />
-                  <button type="button" className="btn btn-danger btn-sm" onClick={() => set({ changes: d.changes.filter((x) => x.k !== c.k) })}>Убрать</button>
+                  <input aria-label={t('ne.changeText', { n: i + 1 })} className="input" maxLength={LIMITS.changeText} value={c.text} placeholder={t('ne.whatHolder')} onChange={(ev) => set({ changes: d.changes.map((x) => (x.k === c.k ? { ...x, text: ev.target.value } : x)) })} />
+                  <button type="button" className="btn btn-danger btn-sm" onClick={() => set({ changes: d.changes.filter((x) => x.k !== c.k) })}>{t('ne.remove')}</button>
                 </div>
               ))}
-              <button type="button" className="btn btn-soft btn-sm" disabled={d.changes.length >= LIMITS.changes} onClick={() => set({ changes: [...d.changes, { k: newKey(), kind: 'add', text: '' }] })}>+ Добавить пункт</button>
+              <button type="button" className="btn btn-soft btn-sm" disabled={d.changes.length >= LIMITS.changes} onClick={() => set({ changes: [...d.changes, { k: newKey(), kind: 'add', text: '' }] })}>{t('ne.addItem')}</button>
             </div>
 
             <div className="space-y-2">
-              <span className="label mb-0!">Кнопки ({d.actions.length} из {LIMITS.actions})</span>
+              <span className="label mb-0!">{t('ne.buttons', { n: d.actions.length, m: LIMITS.actions })}</span>
               {d.actions.map((a, i) => {
                 const bad = !!a.url.trim() && !isHttpsUrl(a.url);
                 return (
                   <div key={a.k} className="space-y-1">
                     <div className="nw-edit-row">
-                      <input aria-label={'Подпись кнопки ' + (i + 1)} className="input" maxLength={LIMITS.actionLabel} value={a.label} placeholder="Подробнее" onChange={(ev) => set({ actions: d.actions.map((x) => (x.k === a.k ? { ...x, label: ev.target.value } : x)) })} />
-                      <input aria-label={'Ссылка кнопки ' + (i + 1)} aria-invalid={bad} className="input" value={a.url} placeholder="https://…" onChange={(ev) => set({ actions: d.actions.map((x) => (x.k === a.k ? { ...x, url: ev.target.value.trim() } : x)) })} />
-                      <button type="button" className="btn btn-danger btn-sm" onClick={() => set({ actions: d.actions.filter((x) => x.k !== a.k) })}>Убрать</button>
+                      <input aria-label={t('ne.btnLabel', { n: i + 1 })} className="input" maxLength={LIMITS.actionLabel} value={a.label} placeholder={t('ne.moreHolder')} onChange={(ev) => set({ actions: d.actions.map((x) => (x.k === a.k ? { ...x, label: ev.target.value } : x)) })} />
+                      <input aria-label={t('ne.btnUrl', { n: i + 1 })} aria-invalid={bad} className="input" value={a.url} placeholder="https://…" onChange={(ev) => set({ actions: d.actions.map((x) => (x.k === a.k ? { ...x, url: ev.target.value.trim() } : x)) })} />
+                      <button type="button" className="btn btn-danger btn-sm" onClick={() => set({ actions: d.actions.filter((x) => x.k !== a.k) })}>{t('ne.remove')}</button>
                     </div>
-                    {bad && <p className="text-sm font-bold text-bad" role="alert">Ссылка должна начинаться с https://</p>}
+                    {bad && <p className="text-sm font-bold text-bad" role="alert">{t('ne.https')}</p>}
                   </div>
                 );
               })}
-              <button type="button" className="btn btn-soft btn-sm" disabled={d.actions.length >= LIMITS.actions} onClick={() => set({ actions: [...d.actions, { k: newKey(), label: '', url: '' }] })}>+ Добавить кнопку</button>
+              <button type="button" className="btn btn-soft btn-sm" disabled={d.actions.length >= LIMITS.actions} onClick={() => set({ actions: [...d.actions, { k: newKey(), label: '', url: '' }] })}>{t('ne.addBtn')}</button>
             </div>
           </Section>
 
@@ -74882,9 +76122,9 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
 
         <aside className="space-y-4 lg:sticky lg:top-4 lg:max-h-[calc(100dvh-2rem)] lg:space-y-4 lg:overflow-y-auto lg:overscroll-contain">
           <div className={mobileTab === 'editor' ? 'hidden space-y-4 lg:block' : 'space-y-4'}>
-            <div className="seg" role="group" aria-label="Вид предпросмотра">
-              <button type="button" className="seg-item" aria-pressed={pvTab === 'discord'} onClick={() => setPvTab('discord')}>В Discord</button>
-              <button type="button" className="seg-item" aria-pressed={pvTab === 'site'} onClick={() => setPvTab('site')}>Как будет на сайте</button>
+            <div className="seg" role="group" aria-label={t('ne.pvView')}>
+              <button type="button" className="seg-item" aria-pressed={pvTab === 'discord'} onClick={() => setPvTab('discord')}>{t('ne.pvDiscord')}</button>
+              <button type="button" className="seg-item" aria-pressed={pvTab === 'site'} onClick={() => setPvTab('site')}>{t('ne.pvSite')}</button>
             </div>
             {pvTab === 'discord' ? (
               <Preview draft={d} vars={vars} servers={servers} channelNames={channelNames} onPick={focusPart} total={total} />
@@ -74895,10 +76135,10 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
                   servers={servers}
                   items={[{ id: id ?? 0, status: 'draft', title: d.embeds[0]?.title ?? '', payload: toPayload(d), sentAt: item?.sentAt ?? Date.now(), category: d.category, pinned: d.pinned, authorRole: null, reactions: [] }]}
                 />
-                {!embedHasContent(d.embeds[0] ?? blankEmbed()) && !d.content && <p className="py-6 text-center font-semibold text-mute">Начните писать: здесь появится карточка новости.</p>}
+                {!embedHasContent(d.embeds[0] ?? blankEmbed()) && !d.content && <p className="py-6 text-center font-semibold text-mute">{t('ne.pvEmpty')}</p>}
               </div>
             )}
-            {hasLive && <p className="px-1 text-xs font-semibold text-mute">Карточки серверов показаны образцом: настоящие данные появятся при отправке.</p>}
+            {hasLive && <p className="px-1 text-xs font-semibold text-mute">{t('ne.pvLive')}</p>}
             <LimitsPanel d={d} active={cur} />
           </div>
           {actions}
@@ -77748,24 +78988,28 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/Status.tsx" << '__COREGSM_EOF__'
 import { useAuth } from '../auth';
+import { getPrefs, t, useI18n } from '../i18n';
 import { Icon } from '../icons';
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react';
 import { api, type StatusDay, type StatusIncident, type StatusInfo, type StatusServer } from '../api';
-import { Empty, ErrorLine, GameAvatar, LoadError, PageHead, SmoothArea, StatusPill, ago, fmtDateTime, fmtTime, plural, usePoll } from '../ui';
+import { Empty, ErrorLine, GameAvatar, LoadError, PageHead, SmoothArea, StatusPill, ago, fmtDateTime, fmtTime, usePoll } from '../ui';
 import '../styles/status.css';
 
+const loc = () => (getPrefs().lang === 'en' ? 'en-US' : 'ru-RU');
 const fmtDay = (day: string) => {
   const d = new Date(`${day}T12:00:00`);
-  return Number.isNaN(d.getTime()) ? day : d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
+  return Number.isNaN(d.getTime()) ? day : d.toLocaleDateString(loc(), { day: 'numeric', month: 'long' });
 };
-const fmtPct = (p: number) => `${(Math.round(p * 10) / 10).toLocaleString('ru-RU')}%`;
-const dur = (min: number) => (min < 60 ? `${min} мин` : `${Math.floor(min / 60)} ч${min % 60 ? ` ${min % 60} мин` : ''}`);
+const fmtPct = (p: number) => `${(Math.round(p * 10) / 10).toLocaleString(loc())}%`;
+const dur = (min: number) => (min < 60 ? t('st.dur.m', { m: min }) : min % 60 ? t('st.dur.hm', { h: Math.floor(min / 60), m: min % 60 }) : t('st.dur.h', { h: Math.floor(min / 60) }));
+/** «, 3 сбоя» after a duration when a day had several outages */
+const incSuffix = (n?: number) => (n && n > 1 ? `, ${t('st.outages', { n })}` : '');
 
 const POLL_MS = 60_000;
 
 const fmtShort = (day: string) => {
   const d = new Date(`${day}T12:00:00`);
-  return Number.isNaN(d.getTime()) ? day : d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' }).replace('.', '');
+  return Number.isNaN(d.getTime()) ? day : d.toLocaleDateString(loc(), { day: 'numeric', month: 'short' }).replace('.', '');
 };
 
 const reducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches || document.documentElement.dataset.motion === 'reduce';
@@ -77824,11 +79068,11 @@ function dayTone(d: StatusDay): 'none' | 'ok' | 'blip' | 'warn' | 'bad' | 'plann
 }
 
 function dayText(d: StatusDay): string {
-  if (d.pct == null) return `${fmtDay(d.day)}: нет данных`;
-  const parts = [`${fmtDay(d.day)}: доступен ${fmtPct(d.pct)}`];
-  if (d.down) parts.push(`простой ${dur(d.down)}${d.incidents && d.incidents > 1 ? `, ${d.incidents} ${plural(d.incidents, ['сбой', 'сбоя', 'сбоев'])}` : ''}`);
-  else parts.push('без сбоев');
-  if (d.planned) parts.push(`плановые работы ${dur(d.planned)}`);
+  if (d.pct == null) return t('st.day.none', { d: fmtDay(d.day) });
+  const parts = [t('st.day.up', { d: fmtDay(d.day), p: fmtPct(d.pct) })];
+  if (d.down) parts.push(t('st.day.down', { dur: dur(d.down), inc: incSuffix(d.incidents) }));
+  else parts.push(t('st.noOutages'));
+  if (d.planned) parts.push(t('st.day.planned', { dur: dur(d.planned) }));
   return parts.join(' · ');
 }
 
@@ -77836,7 +79080,7 @@ function UptimeBar({ s }: { s: StatusServer }) {
   const [active, setActive] = useState<number | null>(null);
   const ref = useRef<HTMLDivElement>(null);
   const n = s.days.length;
-  const summary = s.uptime30 == null ? 'Нет данных об аптайме за 30 дней' : `Аптайм за 30 дней: ${fmtPct(s.uptime30)}`;
+  const summary = s.uptime30 == null ? t('st.up.none') : t('st.up.sum', { p: fmtPct(s.uptime30) });
   const at = (e: PointerEvent) => {
     const r = ref.current?.getBoundingClientRect();
     if (!r || r.width === 0) return null;
@@ -77860,7 +79104,7 @@ function UptimeBar({ s }: { s: StatusServer }) {
         className="st-bars"
         role="img"
         tabIndex={0}
-        aria-label={`${summary}. Стрелками можно просмотреть дни`}
+        aria-label={t('st.up.aria', { s: summary })}
         onPointerMove={(e) => { if (e.pointerType === 'mouse') setActive(at(e)); }}
         onPointerDown={(e) => { const i = at(e); setActive((cur) => (e.pointerType !== 'mouse' && cur === i ? null : i)); }}
         onPointerLeave={(e) => { if (e.pointerType === 'mouse') setActive(null); }}
@@ -77874,15 +79118,15 @@ function UptimeBar({ s }: { s: StatusServer }) {
       {d && active != null && (
         <div className={`st-tip ${active < 4 ? 'is-l' : active > n - 5 ? 'is-r' : ''}`} style={{ left: `${((active + 0.5) / n) * 100}%` }} aria-hidden>
           <div className="st-tip-day"><span className={`st-day st-legend is-${dayTone(d)}`} />{fmtDay(d.day)}</div>
-          <div className="st-tip-main">{d.pct == null ? 'Нет данных' : `Доступен ${fmtPct(d.pct)}`}</div>
-          {d.pct != null && <div className="st-tip-sub">{d.down ? `Простой ${dur(d.down)}${d.incidents && d.incidents > 1 ? `, ${d.incidents} ${plural(d.incidents, ['сбой', 'сбоя', 'сбоев'])}` : ''}` : 'Без сбоев'}</div>}
-          {!!d.planned && <div className="st-tip-sub">Плановые работы {dur(d.planned)}</div>}
+          <div className="st-tip-main">{d.pct == null ? t('st.nodata') : t('st.tip.up', { p: fmtPct(d.pct) })}</div>
+          {d.pct != null && <div className="st-tip-sub">{d.down ? t('st.tip.down', { dur: dur(d.down), inc: incSuffix(d.incidents) }) : t('st.tip.none')}</div>}
+          {!!d.planned && <div className="st-tip-sub">{t('st.tip.planned', { dur: dur(d.planned) })}</div>}
         </div>
       )}
       <div className="st-ticks" aria-hidden>
         {s.days.map((x, i) => (
           <span key={x.day} className="st-tick">
-            {(n - 1 - i) % 7 === 0 && <em className={i === n - 1 ? 'is-last' : ''}>{i === n - 1 ? 'сегодня' : fmtShort(x.day)}</em>}
+            {(n - 1 - i) % 7 === 0 && <em className={i === n - 1 ? 'is-last' : ''}>{i === n - 1 ? t('st.today') : fmtShort(x.day)}</em>}
           </span>
         ))}
       </div>
@@ -77907,15 +79151,15 @@ function Latency({ s }: { s: StatusServer }) {
   const tone = (s.avgPing ?? 0) > 100 ? 'rgb(var(--warn))' : 'rgb(var(--link))';
   return (
     <div className="st-lat">
-      <div className="st-lat-k">Отклик за 24 ч</div>
+      <div className="st-lat-k">{t('st.lat.k')}</div>
       <div className="st-lat-chart">
-        <SmoothArea values={filled} color={tone} w={W} h={H} fill={0.2} strokeWidth={1.8} className="h-9" max={top} label={`Пинг за 24 часа: от ${lo} до ${hi} мс`} />
+        <SmoothArea values={filled} color={tone} w={W} h={H} fill={0.2} strokeWidth={1.8} className="h-9" max={top} label={t('st.lat.label', { lo, hi })} />
         <span className="st-lat-limit" style={{ top: `${yOf(100)}%` }} aria-hidden><i>100</i></span>
         {showPeak && (
-          <span className={`st-lat-peak ${hi > 100 ? 'is-high' : ''}`} style={{ left: `${((PAD + (peak / Math.max(1, filled.length - 1)) * (W - PAD * 2)) / W) * 100}%`, top: `${yOf(filled[peak])}%` }} title={`Максимум ${hi} мс`} aria-hidden />
+          <span className={`st-lat-peak ${hi > 100 ? 'is-high' : ''}`} style={{ left: `${((PAD + (peak / Math.max(1, filled.length - 1)) * (W - PAD * 2)) / W) * 100}%`, top: `${yOf(filled[peak])}%` }} title={t('st.lat.max', { hi })} aria-hidden />
         )}
       </div>
-      <div className="st-lat-v">{s.avgPing != null ? `мин ${lo} · ср ${s.avgPing} · макс ${hi} мс` : '–'}</div>
+      <div className="st-lat-v">{s.avgPing != null ? t('st.lat.v', { lo, avg: s.avgPing, hi }) : '–'}</div>
     </div>
   );
 }
@@ -77934,8 +79178,8 @@ function ServerRow({ s, index }: { s: StatusServer; index: number }) {
           <div className="truncate font-mono text-sm font-semibold text-mute">{s.address}</div>
         </div>
         {s.online && (
-          <span className="st-players" title={`${s.players} из ${s.maxPlayers} игроков`}>
-            <b>{s.players}/{s.maxPlayers} <span>игроков</span></b>
+          <span className="st-players" title={t('st.players.title', { p: s.players, m: s.maxPlayers })}>
+            <b>{s.players}/{s.maxPlayers} <span>{t('st.players.word')}</span></b>
             <i className="st-meter" aria-hidden><i style={{ width: `${fill}%` }} /></i>
           </span>
         )}
@@ -77948,9 +79192,9 @@ function ServerRow({ s, index }: { s: StatusServer; index: number }) {
         <div className="st-server-side">
           <div className="st-up">
             <div className={`st-up-v is-${upTone}`}>{s.uptime30 == null ? '–' : fmtPct(s.uptime30)}</div>
-            <div className="st-up-k">{incidents30 ? `${incidents30} ${plural(incidents30, ['сбой', 'сбоя', 'сбоев'])} за 30 дней` : 'без сбоев за 30 дней'}</div>
+            <div className="st-up-k">{incidents30 ? t('st.inc30', { n: incidents30 }) : t('st.noInc30')}</div>
           </div>
-          {s.avgPing != null && <div className="st-ping-inline">пинг {s.avgPing} мс</div>}
+          {s.avgPing != null && <div className="st-ping-inline">{t('st.ping', { n: s.avgPing })}</div>}
           <Latency s={s} />
         </div>
       </div>
@@ -77971,20 +79215,20 @@ function Banner({ data, fetchedAt }: { data: StatusInfo; fetchedAt: number }) {
   const playersN = Math.round(useCountUp(players));
   const avgN = useCountUp(avg ?? 0);
   const [tone, title, text] = up === total
-    ? ['ok', 'Все серверы работают', 'Игроки могут заходить на любой сервер.']
+    ? ['ok', t('st.hero.ok'), t('st.hero.okText')]
     : up === 0
-      ? ['bad', 'Все серверы недоступны', 'Мы уже видим проблему: страница обновится сама, когда серверы вернутся.']
-      : ['warn', `${total - up} ${plural(total - up, ['сервер недоступен', 'сервера недоступны', 'серверов недоступны'])}`, 'Остальные работают в обычном режиме.'];
-  const last = ongoing > 0 ? 'Сбой продолжается прямо сейчас' : lastBad ? `Последний сбой: ${ago(lastBad.start)}` : 'За 30 дней сбоев не было';
+      ? ['bad', t('st.hero.bad'), t('st.hero.badText')]
+      : ['warn', t('st.hero.some', { n: total - up }), t('st.hero.someText')];
+  const last = ongoing > 0 ? t('st.last.now') : lastBad ? t('st.last.ago', { when: ago(lastBad.start) }) : t('st.last.none');
   return (
     <section className={`st-banner is-${tone}`} role="status">
       <span className="st-banner-ico" aria-hidden>{tone === 'ok' ? <IconCheck /> : tone === 'warn' ? <IconWarn /> : <IconCross />}</span>
       <div className="min-w-0 flex-1 basis-60">
         <h2 className="text-2xl font-black leading-tight sm:text-3xl">{title}</h2>
         <p className="mt-1 font-semibold opacity-85">{text}</p>
-        <div className="st-segs" role="img" aria-label={`Онлайн ${up} из ${total}`}>
+        <div className="st-segs" role="img" aria-label={t('st.seg.aria', { up, total })}>
           {servers.map((s) => (
-            <span key={s.id} className={`st-seg ${!s.online ? 'is-down' : s.avgPing != null && s.avgPing > 100 ? 'is-lag' : 'is-up'}`} title={`${s.name}: ${s.online ? 'онлайн' : 'недоступен'}`} />
+            <span key={s.id} className={`st-seg ${!s.online ? 'is-down' : s.avgPing != null && s.avgPing > 100 ? 'is-lag' : 'is-up'}`} title={t(s.online ? 'st.seg.on' : 'st.seg.off', { name: s.name })} />
           ))}
         </div>
         <div className="st-banner-meta">
@@ -77993,10 +79237,10 @@ function Banner({ data, fetchedAt }: { data: StatusInfo; fetchedAt: number }) {
         </div>
       </div>
       <dl className="st-banner-stats">
-        <div><dt><IconServer />Онлайн</dt><dd>{upN} из {total}</dd></div>
-        <div><dt><IconUsers />Игроков</dt><dd>{playersN}</dd></div>
-        <div><dt><IconAct />Аптайм 30 дн</dt><dd>{avg == null ? '–' : fmtPct(avgN)}</dd></div>
-        {ongoing > 0 && <div className="is-alert"><dt><IconAlert />Сбоев сейчас</dt><dd>{ongoing}</dd></div>}
+        <div><dt><IconServer />{t('st.stat.online')}</dt><dd>{t('st.stat.of', { a: upN, b: total })}</dd></div>
+        <div><dt><IconUsers />{t('st.stat.players')}</dt><dd>{playersN}</dd></div>
+        <div><dt><IconAct />{t('st.stat.uptime')}</dt><dd>{avg == null ? '–' : fmtPct(avgN)}</dd></div>
+        {ongoing > 0 && <div className="is-alert"><dt><IconAlert />{t('st.stat.now')}</dt><dd>{ongoing}</dd></div>}
       </dl>
     </section>
   );
@@ -78013,7 +79257,7 @@ function Refresh({ fetchedAt }: { fetchedAt: number }) {
         <circle cx="9" cy="9" r="7" className="st-ring-bg" />
         <circle cx="9" cy="9" r="7" className="st-ring" strokeDasharray={C} strokeDashoffset={C * (1 - p)} />
       </svg>
-      обновлено {ago(fetchedAt)}
+      {t('st.updated', { ago: ago(fetchedAt) })}
     </span>
   );
 }
@@ -78027,11 +79271,11 @@ function IncidentItem({ i }: { i: StatusIncident }) {
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
           <span className="font-extrabold">{i.serverName}</span>
-          <span className={`st-inc-badge is-${kind}`}>{i.planned ? 'Плановые работы' : live ? 'Продолжается' : 'Решено'}</span>
+          <span className={`st-inc-badge is-${kind}`}>{i.planned ? t('st.inc.planned') : live ? t('st.inc.live') : t('st.inc.done')}</span>
         </div>
         <p className="text-sm font-semibold text-mute">
-          {live ? `Не отвечает ${dur(i.minutes)}, с ${fmtTime(i.start)}` : `Недоступен ${dur(i.minutes)}: ${fmtTime(i.start)} – ${fmtTime(i.end!)}`}
-          {i.playersBefore > 0 && ` · в игре было ${i.playersBefore} ${plural(i.playersBefore, ['игрок', 'игрока', 'игроков'])}`}
+          {live ? t('st.inc.liveText', { dur: dur(i.minutes), from: fmtTime(i.start) }) : t('st.inc.pastText', { dur: dur(i.minutes), from: fmtTime(i.start), to: fmtTime(i.end!) })}
+          {i.playersBefore > 0 && t('st.inc.players', { n: i.playersBefore })}
         </p>
       </div>
       <time className="shrink-0 text-xs font-bold text-mute" dateTime={new Date(i.start).toISOString()} title={fmtDateTime(i.start)}>{ago(i.start)}</time>
@@ -78047,20 +79291,20 @@ function Incidents({ list }: { list: StatusIncident[] }) {
   const groups = useMemo(() => {
     const m = new Map<string, StatusIncident[]>();
     for (const i of list.slice(0, shown)) {
-      const key = new Date(i.start).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', weekday: 'long' });
+      const key = new Date(i.start).toLocaleDateString(loc(), { day: 'numeric', month: 'long', weekday: 'long' });
       m.set(key, [...(m.get(key) ?? []), i]);
     }
     return [...m];
   }, [list, shown]);
   return (
     <section className="tile tile-in p-4 sm:p-5">
-      <h2 className="mb-3 text-lg font-extrabold">История сбоев</h2>
+      <h2 className="mb-3 text-lg font-extrabold">{t('st.hist')}</h2>
       {list.length === 0 ? (
         <div className="st-calm">
           <span aria-hidden>✨</span>
           <div>
-            <p className="font-extrabold">За 30 дней ни одного сбоя</p>
-            <p className="text-sm font-semibold text-mute">Все серверы отвечали на каждый опрос.</p>
+            <p className="font-extrabold">{t('st.hist.none')}</p>
+            <p className="text-sm font-semibold text-mute">{t('st.hist.noneText')}</p>
           </div>
         </div>
       ) : (
@@ -78072,7 +79316,7 @@ function Incidents({ list }: { list: StatusIncident[] }) {
             </div>
           ))}
           {list.length > shown && (
-            <button type="button" className="btn btn-soft" onClick={() => setShown((n) => n + PAGE)}>Показать ещё ({list.length - shown})</button>
+            <button type="button" className="btn btn-soft" onClick={() => setShown((n) => n + PAGE)}>{t('st.hist.more', { n: list.length - shown })}</button>
           )}
         </div>
       )}
@@ -78080,19 +79324,13 @@ function Incidents({ list }: { list: StatusIncident[] }) {
   );
 }
 
-const LEGEND: [string, string][] = [
-  ['ok', 'без сбоев'],
-  ['blip', 'до 15 мин'],
-  ['warn', '15–60 мин'],
-  ['bad', 'больше часа'],
-  ['planned', 'плановые работы'],
-  ['none', 'нет данных'],
-];
+const LEGEND = ['ok', 'blip', 'warn', 'bad', 'planned', 'none'] as const;
 
 /** Public status page: the state now, 30 days of availability per server and the incidents behind it. */
 const IconPulse = () => <Icon size={22}><path d="M22 12h-4l-3 9L9 3l-3 9H2" /></Icon>;
 
 export default function StatusPage() {
+  useI18n();
   const { isAdmin } = useAuth();
   const [data, setData] = useState<StatusInfo | null>(null);
   const [error, setError] = useState('');
@@ -78105,16 +79343,16 @@ export default function StatusPage() {
   usePoll(load, POLL_MS);
   const month = data ? (data.incidents ?? []).filter((i) => !i.planned).length : 0;
   const subtitle = data && data.servers.length > 0
-    ? `${data.servers.length} ${plural(data.servers.length, ['сервер', 'сервера', 'серверов'])} · ${month ? `${month} ${plural(month, ['сбой', 'сбоя', 'сбоев'])} за 30 дней` : 'без сбоев за 30 дней'}`
-    : 'Доступность серверов и история сбоев за 30 дней';
+    ? t('st.sub', { servers: t('st.servers', { n: data.servers.length }), outages: month ? t('st.inc30', { n: month }) : t('st.noInc30') })
+    : t('st.sub.none');
 
   return (
     <div className="space-y-5">
-      <PageHead icon={<IconPulse />} title="Статус" subtitle={subtitle} />
+      <PageHead icon={<IconPulse />} title={t('st.title')} subtitle={subtitle} />
       {error && !data ? <LoadError error={error} onRetry={() => void load()} /> : <ErrorLine text={error} />}
 
       {!data && !error && (
-        <div className="space-y-3" aria-busy="true" aria-label="Загрузка">
+        <div className="space-y-3" aria-busy="true" aria-label={t('st.loading')}>
           <div className="skeleton panel h-28" />
           <div className="skeleton panel h-36" />
           <div className="skeleton panel h-36" />
@@ -78122,7 +79360,7 @@ export default function StatusPage() {
       )}
 
       {data && data.servers.length === 0 && (
-        <Empty title="Серверов пока нет" text="Когда серверы будут добавлены, здесь появится их доступность.">{isAdmin && <a href="/admin/servers/new" className="btn mt-2">Добавить сервер</a>}</Empty>
+        <Empty title={t('st.empty')} text={t('st.emptyText')}>{isAdmin && <a href="/admin/servers/new" className="btn mt-2">{t('st.add')}</a>}</Empty>
       )}
 
       {data && data.servers.length > 0 && (
@@ -78132,8 +79370,8 @@ export default function StatusPage() {
             {data.servers.map((s, i) => <ServerRow key={s.id} s={s} index={i} />)}
           </ul>
           <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm font-semibold text-mute">
-            {LEGEND.map(([c, t]) => (
-              <span key={t} className="inline-flex items-center gap-1.5"><span className={`st-day st-legend is-${c}`} aria-hidden />{t}</span>
+            {LEGEND.map((c) => (
+              <span key={c} className="inline-flex items-center gap-1.5"><span className={`st-day st-legend is-${c}`} aria-hidden />{t(`st.leg.${c}` as const)}</span>
             ))}
           </div>
           <Incidents list={data.incidents ?? []} />
@@ -79866,6 +81104,7 @@ import '../../styles/admin.css';
 import { useAuth } from '../../auth';
 import { Switch as ToggleSwitch } from '../../components/Switch';
 import { promptDialog } from '../../confirm';
+import { getPrefs, t, useI18n, type TKey } from '../../i18n';
 import { AdminPage, DiscordBadge, ErrorLine, GoLink, IconKey, IconTrash, IconUsers, PageHead, SaveBadge, Section, TextField, UserAvatar, ago, toast, undoable, useAutosave } from '../../ui';
 import { SaveBarProvider, useSaveBar, useSaveBarActive } from '../../saveBar';
 
@@ -79882,22 +81121,22 @@ function Switch({ on, onChange, label, hint }: { on: boolean; onChange: (v: bool
 }
 
 /** ready sets of moderator permissions */
-const PERM_PRESETS: { label: string; perms: Perm[] }[] = [
-  { label: 'Редактор новостей', perms: ['news'] },
-  { label: 'Модератор сообщества', perms: ['news', 'moderation', 'journal'] },
-  { label: 'Админ серверов', perms: ['servers', 'maintenance'] },
-  { label: 'Снять все', perms: [] },
+const PERM_PRESETS: { label: TKey; perms: Perm[] }[] = [
+  { label: 'us.preset.news', perms: ['news'] },
+  { label: 'us.preset.comm', perms: ['news', 'moderation', 'journal'] },
+  { label: 'us.preset.srv', perms: ['servers', 'maintenance'] },
+  { label: 'us.preset.none', perms: [] },
 ];
 
 const ONLINE_MS = 5 * 60_000;
 /** «в сети» / «был 3 ч назад» / «ещё не заходил» */
 function seenText(u: UserRow, now = Date.now()): { online: boolean; text: string } {
-  if (!u.lastSeen) return { online: false, text: 'ещё не заходил' };
-  if (now - u.lastSeen < ONLINE_MS) return { online: true, text: 'в сети' };
-  return { online: false, text: `был ${ago(u.lastSeen)}` };
+  if (!u.lastSeen) return { online: false, text: t('us.seen.never') };
+  if (now - u.lastSeen < ONLINE_MS) return { online: true, text: t('us.seen.online') };
+  return { online: false, text: t('us.seen.was', { ago: ago(u.lastSeen) }) };
 }
 
-const ROLE_LABEL: Record<UserRow['role'], string> = { player: 'Игрок', moderator: 'Модератор', admin: 'Администратор' };
+const ROLE_LABEL = (r: UserRow['role']): string => t(`us.role.${r}` as const);
 
 /** The users page: the rules text joins the common save bar. */
 export function UsersTab() {
@@ -79905,6 +81144,7 @@ export function UsersTab() {
 }
 
 function UsersTabInner() {
+  useI18n();
   const { me, reload } = useAuth();
   const [access, setAccess] = useState<Access | null>(null);
   const [users, setUsers] = useState<UserRow[]>([]);
@@ -79928,10 +81168,10 @@ function UsersTabInner() {
   useEffect(load, []);
 
   const save = async (patch: Partial<Access>) => {
-    await api<Access>('/access', 'PUT', patch).then((a) => { setAccess(a); void reload(); toast('Сохранено'); }).catch((e) => setError(e.message));
+    await api<Access>('/access', 'PUT', patch).then((a) => { setAccess(a); void reload(); toast(t('us.saved')); }).catch((e) => setError(e.message));
   };
   const approve = async (u: UserRow) => {
-    await api(`/users/${u.id}/approve`, 'POST').then(() => toast(`«${u.username}» одобрен`)).catch((e) => setError(e.message));
+    await api(`/users/${u.id}/approve`, 'POST').then(() => toast(t('us.approved', { name: u.username }))).catch((e) => setError(e.message));
     load();
   };
   // an account that is deleted goes out of the list at once and can be taken back for 6 s; the request is sent after that
@@ -79944,17 +81184,17 @@ function UsersTabInner() {
       restore: () => setHidden((h) => h.filter((x) => !ids.includes(x))),
       commit: async () => {
         const res = await Promise.allSettled(ids.map((id) => api(`/users/${id}`, 'DELETE')));
-        if (res.some((r) => r.status === 'rejected')) setError('Не всех удалось удалить');
+        if (res.some((r) => r.status === 'rejected')) setError(t('us.delFail'));
         setHidden((h) => h.filter((x) => !ids.includes(x)));
         load();
       },
     });
   };
-  const reject = (u: UserRow) => dropUsers([u], 'Заявка отклонена');
+  const reject = (u: UserRow) => dropUsers([u], t('us.rejected'));
   const approveMany = async (list: UserRow[]) => {
     const res = await Promise.allSettled(list.map((u) => api(`/users/${u.id}/approve`, 'POST')));
     const bad = res.filter((r) => r.status === 'rejected').length;
-    toast(bad ? `Одобрено: ${list.length - bad}, не удалось: ${bad}` : `Одобрено заявок: ${list.length}`, bad ? 'err' : undefined);
+    toast(bad ? t('us.approvedMany', { a: list.length - bad, b: bad }) : t('us.approvedAll', { n: list.length }), bad ? 'err' : undefined);
     setPicked([]);
     load();
   };
@@ -79967,33 +81207,33 @@ function UsersTabInner() {
     enabled: !!access,
     delay: 1200,
     equal: (a, b) => a.trim() === b.trim(),
-    validate: (v) => (v.length > 5000 ? 'Не больше 5000 символов' : null),
+    validate: (v) => (v.length > 5000 ? t('us.rulesMax') : null),
     save: async (v) => {
       const a = await api<Access>('/access', 'PUT', { rules: v.trim() });
       setAccess(a);
       void reload();
     },
   });
-  useSaveBar('rules', 'правила сообщества', rulesAuto.status, rulesAuto.saveNow, () => setRules(access?.rules ?? ''));
+  useSaveBar('rules', t('us.rulesBar'), rulesAuto.status, rulesAuto.saveNow, () => setRules(access?.rules ?? ''));
   const setPerms = async (u: UserRow, perms: Perm[]) => {
-    await api(`/users/${u.id}`, 'PUT', { role: u.role, perms }).then(() => { toast('Права модератора сохранены'); void load(); }).catch((e) => setError(e.message));
+    await api(`/users/${u.id}`, 'PUT', { role: u.role, perms }).then(() => { toast(t('us.permsSaved')); void load(); }).catch((e) => setError(e.message));
   };
   const setRole = async (u: UserRow, role: UserRow['role']) => {
-    await api(`/users/${u.id}`, 'PUT', { role }).then(() => toast('Роль изменена')).catch((e) => setError(e.message));
+    await api(`/users/${u.id}`, 'PUT', { role }).then(() => toast(t('us.roleChanged'))).catch((e) => setError(e.message));
     load();
   };
   const resetPassword = async (u: UserRow) => {
     const pw = await promptDialog({
-      title: `Новый пароль для «${u.username}»`,
-      label: 'Новый пароль (от 8 символов)',
+      title: t('us.pwTitle', { name: u.username }),
+      label: t('us.pwLabel'),
       password: true,
-      confirmLabel: 'Сменить пароль',
-      validate: (v) => (v.length < 8 ? 'Минимум 8 символов' : null),
+      confirmLabel: t('us.pwBtn'),
+      validate: (v) => (v.length < 8 ? t('us.pwMin') : null),
     });
     if (!pw) return;
-    await api(`/users/${u.id}/password`, 'PUT', { password: pw }).then(() => toast('Пароль изменён')).catch((e) => setError(e.message));
+    await api(`/users/${u.id}/password`, 'PUT', { password: pw }).then(() => toast(t('us.pwDone'))).catch((e) => setError(e.message));
   };
-  const remove = (u: UserRow) => dropUsers([u], 'Пользователь удалён');
+  const remove = (u: UserRow) => dropUsers([u], t('us.userDeleted'));
 
   const visible = users.filter((u) => !hidden.includes(u.id));
   const pendingUsers = visible.filter((u) => u.status === 'pending');
@@ -80007,45 +81247,45 @@ function UsersTabInner() {
       head={(
         <PageHead
           icon={<IconUsers />}
-          title="Пользователи"
-          subtitle="Аккаунты, роли, регистрация и правила"
-          hint="Здесь решается, кто может открывать панель, регистрироваться и что кому разрешено. Роль определяет права человека."
-          help={<p>Игрок только смотрит серверы и новости. Модератор ещё и пишет новости. Администратор управляет всем. Все действия администраторов попадают в журнал.</p>}
+          title={t('us.title')}
+          subtitle={t('us.sub')}
+          hint={t('us.hint')}
+          help={<p>{t('us.help')}</p>}
         >
-          <a className="btn btn-soft" href="/admin/journal">Журнал: кто что менял</a>
+          <a className="btn btn-soft" href="/admin/journal">{t('us.journal')}</a>
         </PageHead>
       )}
     >
-      <Section title="Кто видит панель">
+      <Section title={t('us.who')}>
         {access && (
           <>
-            <Switch on={access.publicPanel} onChange={(v) => void save({ publicPanel: v })} label="Открыта для всех" hint="Серверы и новости видны без входа. Выключите, чтобы панель открывалась только после авторизации." />
-            <Switch on={access.registration} onChange={(v) => void save({ registration: v })} label="Регистрация игроков" hint="Любой желающий может создать аккаунт игрока (без прав администратора)." />
+            <Switch on={access.publicPanel} onChange={(v) => void save({ publicPanel: v })} label={t('us.public')} hint={t('us.publicHint')} />
+            <Switch on={access.registration} onChange={(v) => void save({ registration: v })} label={t('us.reg')} hint={t('us.regHint')} />
             <div className="pl-8">
-              <label htmlFor="reg-mode" className="label">Режим регистрации</label>
+              <label htmlFor="reg-mode" className="label">{t('us.regMode')}</label>
               <select id="reg-mode" className="input w-auto! max-w-full" value={access.registrationMode} disabled={!access.registration} onChange={(e) => void save({ registrationMode: e.target.value as Access['registrationMode'] })}>
-                <option value="open">Открытая: сразу</option>
-                <option value="approval">По заявке: после одобрения администратором</option>
+                <option value="open">{t('us.regOpen')}</option>
+                <option value="approval">{t('us.regApproval')}</option>
               </select>
             </div>
           </>
         )}
-        <p className="text-sm font-semibold text-mute">Игроки и гости только смотрят серверы и новости. Добавлять серверы и менять настройки могут администраторы.</p>
+        <p className="text-sm font-semibold text-mute">{t('us.guestNote')}</p>
         <div className="rounded-ui-lg bg-soft px-4 py-3 text-sm font-semibold text-mute">
-          <p><b className="text-ink">Игрок</b>: смотрит серверы и новости, ведёт свой профиль.</p>
-          <p><b className="text-ink">Модератор</b>: пишет, публикует и удаляет новости, меняет канал новостей по умолчанию. Серверы, настройки, пользователи и система ему недоступны.</p>
-          <p><b className="text-ink">Администратор</b>: полный доступ ко всему.</p>
+          <p><b className="text-ink">{t('us.r.player')}</b>{t('us.r.playerText')}</p>
+          <p><b className="text-ink">{t('us.r.mod')}</b>{t('us.r.modText')}</p>
+          <p><b className="text-ink">{t('us.r.admin')}</b>{t('us.r.adminText')}</p>
         </div>
       </Section>
 
       <Section
-        title="Правила сообщества"
-        description="Если текст задан, при регистрации нужно подтвердить согласие с ним. Оставьте пустым, чтобы правил не было. Текст сохраняется сам."
+        title={t('us.rules')}
+        description={t('us.rulesText')}
         actions={<SaveBadge status={rulesAuto.status} error={rulesAuto.error} retry={rulesAuto.retry} />}
       >
         <TextField
           id="rules"
-          label="Текст правил"
+          label={t('us.rulesLabel')}
           multiline
           rows={6}
           maxLength={5000}
@@ -80053,7 +81293,7 @@ function UsersTabInner() {
           onChange={setRules}
           onBlur={rulesAuto.flush}
           error={rulesAuto.invalid ? rulesAuto.error : undefined}
-          placeholder="1. Уважайте других игроков…"
+          placeholder={t('us.rulesHolder')}
           hint={`${rules.length} / 5000`}
           className="min-h-32"
         />
@@ -80061,16 +81301,16 @@ function UsersTabInner() {
 
       {pendingUsers.length > 0 && (
         <Section
-          title="Заявки на регистрацию"
+          title={t('us.req')}
           actions={(
             <>
               <button type="button" className="btn btn-soft btn-sm" onClick={() => setPicked(pickedPending.length === pendingUsers.length ? [] : pendingUsers.map((u) => u.id))}>
-                {pickedPending.length === pendingUsers.length ? 'Снять выбор' : 'Выбрать все'}
+                {pickedPending.length === pendingUsers.length ? t('us.unselect') : t('us.selectAll')}
               </button>
               {pickedPending.length > 0 && (
                 <>
-                  <button type="button" className="btn btn-sm" onClick={() => void approveMany(pickedPending)}>Одобрить ({pickedPending.length})</button>
-                  <button type="button" className="btn btn-danger btn-sm" onClick={() => dropUsers(pickedPending, `Отклонено заявок: ${pickedPending.length}`)}>Отклонить ({pickedPending.length})</button>
+                  <button type="button" className="btn btn-sm" onClick={() => void approveMany(pickedPending)}>{t('us.approveN', { n: pickedPending.length })}</button>
+                  <button type="button" className="btn btn-danger btn-sm" onClick={() => dropUsers(pickedPending, t('us.rejectedN', { n: pickedPending.length }))}>{t('us.rejectN', { n: pickedPending.length })}</button>
                 </>
               )}
             </>
@@ -80079,74 +81319,74 @@ function UsersTabInner() {
           <ul className="divide-y divide-line">
             {pendingUsers.map((u) => (
               <li key={u.id} className="us-req flex flex-wrap items-center gap-2 py-2.5">
-                <input type="checkbox" className="srv-check" checked={picked.includes(u.id)} onChange={() => togglePick(u.id)} aria-label={`Выбрать: ${u.username}`} />
+                <input type="checkbox" className="srv-check" checked={picked.includes(u.id)} onChange={() => togglePick(u.id)} aria-label={t('us.pick', { name: u.username })} />
                 <UserAvatar name={u.username} url={u.avatarUrl} size={40} tone="brand" />
                 <span className="min-w-0 flex-1">
                   <span className="flex min-w-0 items-center gap-2 font-extrabold">
                     <span className="truncate">{u.username}</span>
                     {u.discordName && <DiscordBadge name={u.discordName} />}
                   </span>
-                  <span className="block text-xs font-semibold text-mute">{u.createdAt ? `Заявка подана ${ago(u.createdAt)}` : 'Ждёт одобрения'}{access?.rules ? ' · принял правила' : ''}</span>
+                  <span className="block text-xs font-semibold text-mute">{u.createdAt ? t('us.reqAt', { ago: ago(u.createdAt) }) : t('us.reqWait')}{access?.rules ? t('us.reqRules') : ''}</span>
                 </span>
-                <button className="btn btn-sm" onClick={() => void approve(u)}>Одобрить</button>
-                <button className="btn btn-danger btn-sm" onClick={() => void reject(u)}>Отклонить</button>
+                <button className="btn btn-sm" onClick={() => void approve(u)}>{t('us.approve')}</button>
+                <button className="btn btn-danger btn-sm" onClick={() => void reject(u)}>{t('us.reject')}</button>
               </li>
             ))}
           </ul>
         </Section>
       )}
 
-      <Section title="Пользователи">
+      <Section title={t('us.users')}>
         <ErrorLine text={error} />
         <div className="flex flex-wrap items-center gap-2">
-          <input className="input max-w-xs" type="search" placeholder="Поиск по имени…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Поиск пользователя" />
-          <div className="seg" role="group" aria-label="Роль">
-            {([['all', 'Все'], ['admin', 'Админы'], ['moderator', 'Модераторы'], ['player', 'Игроки']] as const).map(([id, label]) => (
+          <input className="input max-w-xs" type="search" placeholder={t('us.search')} value={q} onChange={(e) => setQ(e.target.value)} aria-label={t('us.searchAria')} />
+          <div className="seg" role="group" aria-label={t('us.roleAria')}>
+            {([['all', t('us.f.all')], ['admin', t('us.f.admin')], ['moderator', t('us.f.mod')], ['player', t('us.f.player')]] as const).map(([id, label]) => (
               <button key={id} type="button" className="seg-item" aria-pressed={roleFilter === id} onClick={() => setRoleFilter(id)}>{label}</button>
             ))}
           </div>
         </div>
-        {!loaded && <div className="space-y-2" aria-busy="true" aria-label="Загрузка">{[0, 1, 2].map((i) => <div key={i} className="skeleton h-12 rounded-2xl" />)}</div>}
-        {loaded && listed.length === 0 && <p className="font-semibold text-mute">Никого не найдено.</p>}
+        {!loaded && <div className="space-y-2" aria-busy="true" aria-label={t('us.loading')}>{[0, 1, 2].map((i) => <div key={i} className="skeleton h-12 rounded-2xl" />)}</div>}
+        {loaded && listed.length === 0 && <p className="font-semibold text-mute">{t('us.none')}</p>}
         <ul className="divide-y divide-line">
           {listed.map((u) => (
             <li key={u.id} className="us-row flex flex-wrap items-center gap-2 py-2.5">
               <span className="us-av">
                 <UserAvatar name={u.username} url={u.avatarUrl} size={40} tone="brand" />
-                {seenText(u).online && <i className="us-online" title="В сети" />}
+                {seenText(u).online && <i className="us-online" title={t('us.onlineTip')} />}
               </span>
               <span className="min-w-0 flex-1">
                 <span className="block truncate font-extrabold">
-                  {u.username}{u.username === me?.username ? ' (вы)' : ''}
+                  {u.username}{u.username === me?.username ? t('us.you') : ''}
                   {u.discordName && <span className="ml-2 align-middle"><DiscordBadge name={u.discordName} /></span>}
                 </span>
-                <span className={`block text-xs font-semibold ${seenText(u).online ? 'text-ok' : 'text-mute'}`}>{seenText(u).text}{u.createdAt ? ` · с нами с ${new Date(u.createdAt).toLocaleDateString('ru-RU')}` : ''}</span>
+                <span className={`block text-xs font-semibold ${seenText(u).online ? 'text-ok' : 'text-mute'}`}>{seenText(u).text}{u.createdAt ? t('us.since', { d: new Date(u.createdAt).toLocaleDateString(getPrefs().lang === 'en' ? 'en-US' : 'ru-RU') }) : ''}</span>
               </span>
-              {u.status === 'pending' && <span className="pill pill-warn">ЗАЯВКА</span>}
-              <span className={`pill ${u.role === 'admin' ? 'pill-bad' : u.role === 'moderator' ? 'pill-warn' : 'pill-mute'}`}>{ROLE_LABEL[u.role].toUpperCase()}</span>
-              <select className="input w-auto! py-1.5!" value={u.role} onChange={(e) => void setRole(u, e.target.value as UserRow['role'])} aria-label={`Роль ${u.username}`}>
-                <option value="player">Игрок</option>
-                <option value="moderator">Модератор</option>
-                <option value="admin">Администратор</option>
+              {u.status === 'pending' && <span className="pill pill-warn">{t('us.pending')}</span>}
+              <span className={`pill ${u.role === 'admin' ? 'pill-bad' : u.role === 'moderator' ? 'pill-warn' : 'pill-mute'}`}>{ROLE_LABEL(u.role).toUpperCase()}</span>
+              <select className="input w-auto! py-1.5!" value={u.role} onChange={(e) => void setRole(u, e.target.value as UserRow['role'])} aria-label={t('us.roleOf', { name: u.username })}>
+                <option value="player">{t('us.role.player')}</option>
+                <option value="moderator">{t('us.role.moderator')}</option>
+                <option value="admin">{t('us.role.admin')}</option>
               </select>
-              <button type="button" className="row-act" title="Сменить пароль" aria-label={`Сменить пароль: ${u.username}`} onClick={() => void resetPassword(u)}><IconKey /></button>
-              <button type="button" className="row-act row-act-danger" title="Удалить" aria-label={`Удалить: ${u.username}`} onClick={() => void remove(u)} disabled={u.username === me?.username}><IconTrash /></button>
+              <button type="button" className="row-act" title={t('us.pwTip')} aria-label={t('us.pwOf', { name: u.username })} onClick={() => void resetPassword(u)}><IconKey /></button>
+              <button type="button" className="row-act row-act-danger" title={t('us.delTip')} aria-label={t('us.delOf', { name: u.username })} onClick={() => void remove(u)} disabled={u.username === me?.username}><IconTrash /></button>
               {u.role === 'moderator' && (
                 <fieldset className="us-perms basis-full">
-                  <legend className="sr-only">Права модератора {u.username}</legend>
+                  <legend className="sr-only">{t('us.permsOf', { name: u.username })}</legend>
                   <span className="basis-full flex flex-wrap items-center gap-1.5 pb-1">
-                    <span className="text-xs font-extrabold uppercase tracking-wide text-mute">Набор:</span>
-                    <span className="text-xs font-extrabold text-mute" aria-live="polite">· выдано {(u.perms ?? []).length} из {PERM_LABELS.length}</span>
+                    <span className="text-xs font-extrabold uppercase tracking-wide text-mute">{t('us.set')}</span>
+                    <span className="text-xs font-extrabold text-mute" aria-live="polite">{t('us.given', { n: (u.perms ?? []).length, m: PERM_LABELS.length })}</span>
                     {PERM_PRESETS.map((p) => (
-                      <button key={p.label} type="button" className="us-preset" aria-pressed={p.perms.length > 0 && p.perms.length === (u.perms ?? []).length && p.perms.every((x) => (u.perms ?? []).includes(x))} onClick={() => void setPerms(u, p.perms)}>{p.label}</button>
+                      <button key={p.label} type="button" className="us-preset" aria-pressed={p.perms.length > 0 && p.perms.length === (u.perms ?? []).length && p.perms.every((x) => (u.perms ?? []).includes(x))} onClick={() => void setPerms(u, p.perms)}>{t(p.label)}</button>
                     ))}
                   </span>
                   {PERM_LABELS.map((p) => {
                     const on = (u.perms ?? []).includes(p.id);
                     return (
-                      <label key={p.id} className={`us-perm ${on ? 'is-on' : ''}`} title={p.hint}>
+                      <label key={p.id} className={`us-perm ${on ? 'is-on' : ''}`} title={t(`us.perm.${p.id}.hint` as const)}>
                         <input type="checkbox" checked={on} onChange={(e) => void setPerms(u, e.target.checked ? [...(u.perms ?? []), p.id] : (u.perms ?? []).filter((x) => x !== p.id))} />
-                        <span><b>{p.label}</b> <span className="text-mute">· {p.hint}</span></span>
+                        <span><b>{t(`us.perm.${p.id}` as const)}</b> <span className="text-mute">· {t(`us.perm.${p.id}.hint` as const)}</span></span>
                       </label>
                     );
                   })}
@@ -80155,7 +81395,7 @@ function UsersTabInner() {
             </li>
           ))}
         </ul>
-        <p className="text-sm font-semibold text-mute">Пароль самого администратора меняется в <GoLink href="/admin/settings/security">Настройки: Безопасность</GoLink>.</p>
+        <p className="text-sm font-semibold text-mute">{t('us.pwNote')} <GoLink href="/admin/settings/security">{t('us.pwLink')}</GoLink>.</p>
       </Section>
     </AdminPage>
   );
