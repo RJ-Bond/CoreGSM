@@ -235,8 +235,28 @@ export default function AdminStart() {
             </div>
           )}
 
+          {/* finished steps are one folded line: they need no attention */}
+          {s.doneCount > 0 && !allDone && (
+            <details className="tile start-done group px-4 py-2.5 sm:px-5">
+              <summary className="flex min-h-11 cursor-pointer list-none items-center gap-3 font-extrabold [&::-webkit-details-marker]:hidden">
+                <span className="grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-okbg text-ok"><Check size={18} /></span>
+                <span className="min-w-0 flex-1">{t('start.doneGroup', { a: s.doneCount, b: s.total })}</span>
+                <svg aria-hidden width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" className="shrink-0 text-mute transition-transform group-open:rotate-180"><path d="M6 9l6 6 6-6" /></svg>
+              </summary>
+              <ul className="mt-1 divide-y divide-line">
+                {s.steps.filter((x) => x.state === 'done').map((st) => (
+                  <li key={st.id} className="flex min-h-11 items-center justify-between gap-3 py-1.5">
+                    <span className="min-w-0 truncate font-semibold text-mute">{st.title}</span>
+                    <a className="btn btn-ghost btn-sm shrink-0" href={st.href}>{t('adm.open')}</a>
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
+
           <ol className="space-y-3" aria-label={t('start.stepsLabel')}>
             {s.steps.map((st, i) => {
+              if (st.state === 'done' && !allDone) return null;
               const skipped = s.skipped.includes(st.id) && st.state !== 'done';
               const current = firstTodo?.id === st.id;
               return (
@@ -260,9 +280,12 @@ export default function AdminStart() {
                     {st.note && st.state !== 'done' && <p className="mt-1 text-sm font-bold text-warn">{st.note}</p>}
                   </div>
                   <div className="flex flex-wrap items-center gap-2 max-sm:w-full">
-                    <a className={`btn ${current || st.state === 'unknown' ? '' : 'btn-soft'} ${st.state === 'done' ? 'btn-sm' : ''}`} href={st.href}>
-                      {st.state === 'done' ? t('adm.open') : st.cta}
-                    </a>
+                    {/* the current step's action is the one big button above: no twin here */}
+                    {!current && (
+                      <a className={`btn ${st.state === 'unknown' ? '' : 'btn-soft'} ${st.state === 'done' ? 'btn-sm' : ''}`} href={st.href}>
+                        {st.state === 'done' ? t('adm.open') : st.cta}
+                      </a>
+                    )}
                     {st.state !== 'done' && !skipped && (
                       <button type="button" className="btn btn-ghost btn-sm" onClick={() => s.skip(st.id)}>
                         {t('start.skip')}
@@ -281,8 +304,12 @@ export default function AdminStart() {
         </>
       )}
 
-      <section aria-labelledby="start-quick">
-        <h2 id="start-quick" className="mb-3 text-lg font-black">{t('start.quick')}</h2>
+      {/* quick actions: open once everything is set up, folded while the checklist is still the main thing */}
+      <details className="start-quick group" open={allDone || undefined}>
+        <summary className="mb-3 flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 [&::-webkit-details-marker]:hidden">
+          <h2 id="start-quick" className="text-lg font-black">{t('start.quick')}</h2>
+          <svg aria-hidden width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" className="shrink-0 text-mute transition-transform group-open:rotate-180"><path d="M6 9l6 6 6-6" /></svg>
+        </summary>
         <div className="grid grid-cols-1 gap-3 min-[480px]:grid-cols-2 lg:grid-cols-3">
           {quick.map((q) => {
             const inner = (
@@ -302,7 +329,7 @@ export default function AdminStart() {
             );
           })}
         </div>
-      </section>
+      </details>
 
       <details className="tile start-map group p-5 sm:p-6">
         <summary className="flex cursor-pointer list-none items-center justify-between gap-3 [&::-webkit-details-marker]:hidden">
