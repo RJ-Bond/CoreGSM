@@ -25,7 +25,7 @@ import { installAudit, registerOps } from './ops.js';
 import { registerOverview } from './overview.js';
 import { logAccount, registerProfile } from './profile.js';
 import { csrfGuard, registerSecurity, securityHeaders, windowLimiter } from './security.js';
-import { embedFor, SELECT_SERVERS, serialize, type ServerJoin } from './serverData.js';
+import { embedFor, SELECT_SERVERS, SERVER_ORDER, serialize, type ServerJoin } from './serverData.js';
 import { installShutdown, onShutdown, registerShutdownServer, shutdownNow } from './shutdown.js';
 import { baseOf, brand, needsSetup, publicBase, registrationMode, rulesText } from './site.js';
 import { registerSubscriptions } from './subscriptions.js';
@@ -135,7 +135,7 @@ registerNews({
   channelInfo,
   isStaff,
   servers: () =>
-    (db.prepare(`${SELECT_SERVERS} ORDER BY s.id`).all() as ServerJoin[]).map(serialize).map((s) => ({
+    (db.prepare(`${SELECT_SERVERS} ORDER BY ${SERVER_ORDER}`).all() as ServerJoin[]).map(serialize).map((s) => ({
       id: s.id,
       name: s.name,
       players: s.players,

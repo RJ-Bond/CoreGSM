@@ -13,7 +13,8 @@ import { param, wrap } from '../http.js';
 import { occurrencesBetween, type WindowRow } from '../maintenance.js';
 import { vrRankIdFor } from '../profile.js';
 import { downtimeByDay, incidentsSince } from '../incidents.js';
-import { getServer, publicServer, SELECT_SERVERS, serialize, type ServerJoin } from '../serverData.js';
+import { completeOrder } from '../serverOrderLogic.js';
+import { getServer, publicServer, SELECT_SERVERS, SERVER_ORDER, serialize, type ServerJoin } from '../serverData.js';
 import { baseOf, brand, publicBase } from '../site.js';
 
 export const router = express.Router();
@@ -49,7 +50,7 @@ const serverSchema = z.object({
 });
 
 router.get('/api/servers', viewer, (req, res) => {
-  const rows = db.prepare(`${SELECT_SERVERS} ORDER BY s.id`).all() as ServerJoin[];
+  const rows = db.prepare(`${SELECT_SERVERS} ORDER BY ${SERVER_ORDER}`).all() as ServerJoin[];
   const list = rows.map(serialize);
   res.json(isAdmin(req) ? list : list.map(publicServer));
 });
@@ -94,6 +95,17 @@ router.post(
     res.status(201).json(getServer(row.id));
   }),
 );
+
+// the manual order of the servers (up/down in the admin table); registered before /api/servers/:id
+router.put('/api/servers/order', allow('servers'), (req, res) => {
+  const b = z.object({ ids: z.array(z.number().int().positive()).max(1000) }).safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: 'Проверьте поля формы' });
+  const all = (db.prepare(`SELECT s.id FROM servers s ORDER BY ${SERVER_ORDER}`).all() as { id: number }[]).map((r) => r.id);
+  const order = completeOrder(b.data.ids, all);
+  const set = db.prepare('UPDATE servers SET sort_order = ? WHERE id = ?');
+  db.transaction(() => order.forEach((id, i) => set.run(i + 1, id)))();
+  res.json({ ok: true });
+});
 
 router.put(
   '/api/servers/:id',
@@ -357,7 +369,7 @@ router.get('/s/:id', param('id'), (req, res) => {
 
 // ---------- status page data ----------
 router.get('/api/status', viewer, (req, res) => {
-  const rows = db.prepare(`${SELECT_SERVERS} ORDER BY s.id`).all() as ServerJoin[];
+  const rows = db.prepare(`${SELECT_SERVERS} ORDER BY ${SERVER_ORDER}`).all() as ServerJoin[];
   const list = rows.map(serialize);
   const servers = isAdmin(req) ? list : list.map(publicServer);
   const now = Date.now();

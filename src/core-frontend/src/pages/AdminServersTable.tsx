@@ -1,12 +1,12 @@
 // The «Серверы» table of the admin area: search, filters, a checkbox per row for bulk actions, the figures of every
 // server (status, players, ping, uptime, a 24 h curve) and the row actions as icons. On a phone it is a list of cards.
-import { Fragment, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import type { Server } from '../api';
 import { confirmDialog } from '../confirm';
 import { t, useI18n, type TKey } from '../i18n';
 import { gameColor, gameLabel } from '../games';
 import { GameAvatar, IconEdit, IconRefresh, IconTrash, IconWrench, MiniSpark, StatusPill, ago, isLag, toast } from '../ui';
-import { countServers, filterServers, type ServerFilter } from './adminServersLogic';
+import { countServers, filterServers, loadTableState, saveTableState, type ServerFilter } from './adminServersLogic';
 
 export interface TableActions {
   isAdmin: boolean;
@@ -21,6 +21,8 @@ export interface TableActions {
   /** refresh / delete several at once; resolve when done */
   onRefreshMany: (list: Server[]) => Promise<void>;
   onRemoveMany: (list: Server[]) => Promise<void>;
+  /** move a server one step up/down in the manual order (the ids on screen, in order) */
+  onMove: (s: Server, dir: -1 | 1, shown: number[]) => void;
 }
 
 const FILTERS: [ServerFilter, TKey][] = [['all', 'adm.tbl.all'], ['online', 'adm.tbl.online'], ['problems', 'adm.tbl.problems']];
@@ -41,8 +43,10 @@ const pct = (v: number | undefined) => (v == null ? '–' : `${(Math.round(v * 1
 
 export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableActions }) {
   useI18n();
-  const [filter, setFilter] = useState<ServerFilter>('all');
-  const [query, setQuery] = useState('');
+  const [saved] = useState(loadTableState);
+  const [filter, setFilter] = useState<ServerFilter>(saved.filter);
+  const [query, setQuery] = useState(saved.query);
+  useEffect(() => { saveTableState(filter, query); }, [filter, query]);
   const [sel, setSel] = useState<number[]>([]);
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState<number[]>([]);
@@ -51,6 +55,7 @@ export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableA
   const counts = useMemo(() => countServers(servers), [servers]);
   const rows = useMemo(() => filterServers(servers, filter, query), [servers, filter, query]);
   const shownIds = rows.map((s) => s.id);
+  const canMove = filter === 'all' && !query.trim() && rows.length > 1;
   const picked = servers.filter((s) => sel.includes(s.id));
   const allOn = rows.length > 0 && shownIds.every((id) => sel.includes(id));
   const toggle = (id: number) => setSel((l) => (l.includes(id) ? l.filter((x) => x !== id) : [...l, id]));
@@ -147,6 +152,12 @@ export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableA
                     <td className="hidden lg:table-cell"><MiniSpark serverId={s.id} color={gameColor(s.game)} /></td>
                     <td>
                       <div className="flex items-center justify-end gap-1" role="group" aria-label={`${t('adm.tbl.actions')}: ${s.name}`}>
+                        {canMove && (
+                          <>
+                            <button type="button" className="row-act" title={t('adm.tbl.up')} aria-label={`${t('adm.tbl.up')}: ${s.name}`} disabled={s.id === shownIds[0]} onClick={() => a.onMove(s, -1, shownIds)}><span aria-hidden>↑</span></button>
+                            <button type="button" className="row-act" title={t('adm.tbl.down')} aria-label={`${t('adm.tbl.down')}: ${s.name}`} disabled={s.id === shownIds[shownIds.length - 1]} onClick={() => a.onMove(s, 1, shownIds)}><span aria-hidden>↓</span></button>
+                          </>
+                        )}
                         <a className="row-act" href={`/admin/discord/new/${s.id}`} title={t('adm.tbl.bind')} aria-label={`${t('adm.tbl.bind')}: ${s.name}`}>
                           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M21 12a8 8 0 0 1-11.5 7.2L4 20l1-4.2A8 8 0 1 1 21 12z" /></svg>
                         </a>
