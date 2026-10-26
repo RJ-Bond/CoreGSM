@@ -8,7 +8,7 @@ import { removeCover } from '../covers.js';
 import { type BindingRow, db, type ServerRow } from '../db.js';
 import { gameLabel } from '../games.js';
 import { countryOf } from '../geo.js';
-import { queryServer, refreshServer } from '../gsm.js';
+import { queryServer, refreshServer, retentionDays } from '../gsm.js';
 import { param, wrap } from '../http.js';
 import { occurrencesBetween, type WindowRow } from '../maintenance.js';
 import { vrRankIdFor } from '../profile.js';
@@ -16,6 +16,7 @@ import { downtimeByDay, incidentsSince } from '../incidents.js';
 import { completeOrder } from '../serverOrderLogic.js';
 import { getServer, publicServer, SELECT_SERVERS, SERVER_ORDER, serialize, type ServerJoin } from '../serverData.js';
 import { baseOf, brand, publicBase } from '../site.js';
+import { publicNotes } from '../statusNotes.js';
 
 export const router = express.Router();
 
@@ -375,8 +376,10 @@ router.get('/api/status', viewer, (req, res) => {
   const list = rows.map(serialize);
   const servers = isAdmin(req) ? list : list.map(publicServer);
   const now = Date.now();
+  // 30 days by default; ?days=90 shows three months (as far as the uptime history is kept)
+  const range = req.query.days === '90' ? Math.min(90, retentionDays().uptime) : 30;
   const days: string[] = [];
-  for (let i = 29; i >= 0; i--) days.push(new Date(now - i * 86400_000).toISOString().slice(0, 10));
+  for (let i = range - 1; i >= 0; i--) days.push(new Date(now - i * 86400_000).toISOString().slice(0, 10));
   const daily = new Map<string, { up: number; total: number }>();
   for (const r of db.prepare('SELECT server_id, day, up, total FROM uptime_daily WHERE day >= ?').all(days[0]) as { server_id: number; day: string; up: number; total: number }[]) {
     daily.set(`${r.server_id}|${r.day}`, r);
@@ -388,7 +391,7 @@ router.get('/api/status', viewer, (req, res) => {
   const pct = (up: number, total: number) => (total > 0 ? Math.round((up / total) * 1000) / 10 : null);
   const last = (db.prepare('SELECT MAX(updated_at) AS t FROM status').get() as { t: number | null }).t;
   // outages of the 30 days: minutes per day for the bars, and the list of incidents under them
-  const incidents = incidentsSince(now - 30 * 86400_000, undefined, now);
+  const incidents = incidentsSince(now - range * 86400_000, undefined, now);
   const downtime = downtimeByDay(incidents, now);
   const shown = new Map(servers.map((sv) => [sv.id, sv]));
   // response time: hourly average ping of the last 24 hours
@@ -404,6 +407,9 @@ router.get('/api/status', viewer, (req, res) => {
   }
   res.json({
     updatedAt: last ?? now,
+    range,
+    // notes of the administrators; a note about a server that is not shown here stays general
+    notes: publicNotes(now).map((n) => (n.serverId != null && !shown.has(n.serverId) ? { ...n, serverId: null, serverName: null } : { ...n, serverName: n.serverId != null ? shown.get(n.serverId)!.name : null })),
     incidents: incidents
       .filter((i) => shown.has(i.serverId))
       .reverse()
