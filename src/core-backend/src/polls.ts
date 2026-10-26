@@ -13,7 +13,7 @@ import { enqueueAlert } from './alerts.js';
 import { type AuthedRequest } from './auth.js';
 import { db } from './db.js';
 import { log } from './logger.js';
-import { pollIsOpen, resultsText, tally, validatePoll, type TallyRow } from './pollLogic.js';
+import { pollIsOpen, resultsText, tally, validatePoll, type TallyRow } from './communityPollLogic.js';
 import { publicBase } from './site.js';
 
 db.exec(`
