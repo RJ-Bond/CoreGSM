@@ -28,6 +28,7 @@ interface language; the GitHub release text is built from the section of the ver
 
 ### 🐛 Исправлено | Fixed
 - 🔁 Бот в Discord больше не дублирует сообщения: новое сообщение статуса публикуется, только если старое действительно удалено, а оповещения и новости при повторной отправке не создают копий | The Discord bot no longer duplicates messages: a new status message is posted only when the old one is really gone, and alerts and news cannot be posted twice on a retry
+- 🖼️ Картинка «Неделя на …»: названия серверов целиком видно — общее начало («[RU] Just-Skill.Ru | …») убирается, длинное имя переносится на две строки, заголовок «Серверы» не слипается с подписью | The weekly picture: server names are readable — the shared start («[RU] Just-Skill.Ru | …») is dropped, long names wrap onto two lines, and the «Servers» heading no longer touches its caption
 
 ## 1.0.0.3 · 26.10.2026
 

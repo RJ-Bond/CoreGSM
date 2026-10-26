@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="6bb9bbcc1b2d"
+COREGSM_BUILD="4a06ec71acad"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.0.0.9"
+COREGSM_VERSION="1.0.0.10"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -6712,7 +6712,7 @@ import { JWT_SECRET } from './config.js';
 import { db, EFFECTIVE_NAME, getSetting, setSetting } from './db.js';
 import { SERVER_ORDER } from './serverData.js';
 import { incidentsSince } from './incidents.js';
-import { changePct, dailyPeaks, sparkPoints } from './digestLogic.js';
+import { changePct, dailyPeaks, sparkPoints, stripCommonPrefix, wrapName } from './digestLogic.js';
 import { localParts } from './localTime.js';
 import { brand, publicBase } from './site.js';
 import { param } from './http.js';
@@ -6916,20 +6916,28 @@ export async function renderDigest(d: Digest): Promise<Buffer> {
   ctx.fillStyle = 'rgba(255,255,255,.7)';
   ctx.font = `bold 18px ${SANS}`;
   ctx.fillText('Серверы', sx, by);
+  const headW = ctx.measureText('Серверы').width;
   ctx.fillStyle = 'rgba(255,255,255,.45)';
   ctx.font = `600 14px ${SANS}`;
-  ctx.fillText('линия: пик онлайна по дням · %: к прошлой неделе', sx + 90, by);
-  d.servers.slice(0, 5).forEach((s, i) => {
+  ctx.fillText('линия: пик онлайна по дням · %: к прошлой неделе', sx + headW + 16, by);
+  const shown = d.servers.slice(0, 5);
+  // servers of one project start with the same words: show the part that tells them apart
+  const names = stripCommonPrefix(shown.map((s) => s.name));
+  shown.forEach((s, i) => {
     const y = by + 22 + i * 50;
     ctx.fillStyle = 'rgba(255,255,255,.06)';
     ctx.beginPath();
     ctx.roundRect(sx, y, 504, 42, 12);
     ctx.fill();
     ctx.fillStyle = '#ffffff';
-    ctx.font = `bold 18px ${SANS}`;
-    let name = s.name;
-    while (name.length > 3 && ctx.measureText(name).width > 170) name = name.slice(0, -1);
-    ctx.fillText(name === s.name ? name : `${name}…`, sx + 14, y + 28);
+    // up to two lines; a line that is still too wide is cut by pixels
+    ctx.font = `bold 16px ${SANS}`;
+    const lines = wrapName(names[i] ?? s.name, 17, 2).map((ln) => {
+      let l = ln;
+      while (l.length > 3 && ctx.measureText(l).width > 176) l = `${l.slice(0, -2)}…`;
+      return l;
+    });
+    lines.forEach((ln, k) => ctx.fillText(ln, sx + 14, lines.length === 1 ? y + 27 : y + 19 + k * 18));
     // the week in one line: the highest online of each day
     const pts = sparkPoints(s.daily, 70, 20);
     const px = sx + 200;
@@ -7098,6 +7106,40 @@ export function sparkPoints(values: number[], w: number, h: number): [number, nu
   const max = Math.max(1, ...values);
   const n = values.length;
   return values.map((v, i) => [n <= 1 ? w / 2 : (i / (n - 1)) * w, h - (v / max) * h]);
+}
+
+/**
+ * Names of servers of one project usually start the same («[RU] Just-Skill.Ru | Standard», «[RU] Just-Skill.Ru | Hardcore»):
+ * on the picture the shared start is cut so the part that tells them apart is visible. The cut is made at a word boundary
+ * and only when every name keeps at least 3 characters; a single name is left as it is.
+ */
+export function stripCommonPrefix(names: string[]): string[] {
+  if (names.length < 2) return names;
+  let n = 0;
+  const first = names[0]!;
+  while (n < first.length && names.every((x) => x[n]?.toLowerCase() === first[n]!.toLowerCase())) n++;
+  // back to the end of the last whole word/separator inside the shared start
+  const cut = first.slice(0, n).search(/[\s|\-–—:·/\]]\S*$/);
+  if (cut < 0) return names;
+  let end = cut;
+  while (end < n && /[\s|\-–—:·/\]]/.test(first[end]!)) end++;
+  const out = names.map((x) => x.slice(end).trim());
+  return out.every((x) => x.length >= 3) ? out : names;
+}
+
+/** a name split over at most `lines` lines of `max` characters by words; the end is cut with «…» when it does not fit */
+export function wrapName(name: string, max: number, lines = 2): string[] {
+  const out: string[] = [];
+  let rest = name.trim();
+  while (rest && out.length < lines) {
+    if (rest.length <= max) { out.push(rest); rest = ''; break; }
+    let at = rest.lastIndexOf(' ', max);
+    if (at < Math.floor(max / 2)) at = max;
+    out.push(rest.slice(0, at).trim());
+    rest = rest.slice(at).trim();
+  }
+  if (rest) out[out.length - 1] = `${out[out.length - 1]!.slice(0, Math.max(1, max - 1))}…`;
+  return out;
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
