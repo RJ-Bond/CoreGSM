@@ -84,3 +84,29 @@ export function uptimeBar(uptime: number | null, full: number): number {
   const w = Math.round((Math.min(100, Math.max(0, uptime)) / 100) * full);
   return uptime > 0 ? Math.max(3, w) : 0;
 }
+
+export interface WeekEvent {
+  tone: 'ok' | 'warn' | 'bad' | 'info';
+  text: string;
+}
+
+/** «2 ч 10 мин», «45 мин» */
+export function minutesText(m: number): string {
+  if (m < 60) return `${m} мин`;
+  const h = Math.floor(m / 60);
+  const r = m % 60;
+  return r ? `${h} ч ${r} мин` : `${h} ч`;
+}
+
+/**
+ * The few things worth a line under the picture: the online record of the week, the longest outage (or its absence)
+ * and the new players. At most three, in that order.
+ */
+export function weekEvents(i: { peak: number; peakWhen: string; worst: { minutes: number; server: string } | null; newPlayers: number }): WeekEvent[] {
+  const out: WeekEvent[] = [];
+  if (i.peak > 0) out.push({ tone: 'info', text: `пик ${i.peak}${i.peakWhen ? ` · ${i.peakWhen}` : ''}` });
+  if (i.worst) out.push({ tone: i.worst.minutes >= 60 ? 'bad' : 'warn', text: `самый долгий сбой ${minutesText(i.worst.minutes)} · ${i.worst.server}` });
+  else out.push({ tone: 'ok', text: 'сбоев не было' });
+  if (i.newPlayers > 0) out.push({ tone: 'ok', text: `${i.newPlayers} ${i.newPlayers === 1 ? 'новый игрок' : i.newPlayers < 5 ? 'новых игрока' : 'новых игроков'}` });
+  return out.slice(0, 3);
+}
