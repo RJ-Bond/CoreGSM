@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="25fb5bcf12ef"
+COREGSM_BUILD="f0d7658cff95"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.0.0.40"
+COREGSM_VERSION="1.0.0.41"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -24908,7 +24908,7 @@ __COREGSM_EOF__
 #  - img-src: own images, data:/blob: (previews) and Discord avatars.
 #  - connect-src 'self': the panel only talks to its own /api. worker-src 'self': /sw.js. manifest-src 'self': /api/manifest.json.
 #  - frame-ancestors 'none' also forbids embedding the panel in a frame (X-Frame-Options DENY for old browsers).
-add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'sha256-4dLr//wuJPoOsUg4vYqdcY2hS+cilhnqpX3riHGKbJg='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://cdn.discordapp.com; font-src 'self' data:; connect-src 'self'; worker-src 'self'; manifest-src 'self'; object-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'self'" always;
+add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'sha256-QuOcY6kvE99fCve8ULZR7eQ3QpPUfVmI2fPJGAw25FI='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://cdn.discordapp.com; font-src 'self' data:; connect-src 'self'; worker-src 'self'; manifest-src 'self'; object-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'self'" always;
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend"
   cat > "$APP_DIR/core-frontend/index.html" << '__COREGSM_EOF__'
