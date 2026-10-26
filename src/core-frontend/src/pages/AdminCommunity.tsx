@@ -4,6 +4,7 @@ import { api } from '../api';
 import { t, useI18n } from '../i18n';
 import { confirmDialog, promptDialog } from '../confirm';
 import { AdminPage, Button, Empty, ErrorLine, Field, IconEdit, IconEye, IconEyeOff, IconTrash, IconTrophy, PageHead, Section, ago, fmtDate, toast, num, SkeletonRows } from '../ui';
+import PollsAdmin from '../components/PollsAdmin';
 import type { Seasons } from './Community';
 import { useAuth } from '../auth';
 import { Stars, type Review } from '../components/server/Reviews';
@@ -12,6 +13,7 @@ import '../styles/gallery.css';
 
 export const COMMUNITY_TABS = [
   { id: 'seasons', get label() { return t('adm.com.seasons'); }, admin: true },
+  { id: 'polls', get label() { return t('adm.com.polls'); }, admin: true },
   { id: 'reviews', get label() { return t('adm.com.reviews'); }, admin: false },
   { id: 'gallery', get label() { return t('adm.com.gallery'); }, admin: false },
   { id: 'reports', get label() { return t('adm.com.reports'); }, admin: false },
@@ -31,6 +33,7 @@ export default function AdminCommunity({ sub = '' }: { sub?: string }) {
         </nav>
       )}
       {tab === 'seasons' && <SeasonsAdmin />}
+      {tab === 'polls' && <PollsAdmin />}
       {tab === 'reviews' && <ReviewsAdmin />}
       {tab === 'gallery' && <GalleryAdmin />}
       {tab === 'reports' && <ReportsAdmin />}

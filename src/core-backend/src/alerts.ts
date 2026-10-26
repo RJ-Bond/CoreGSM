@@ -59,9 +59,11 @@ export interface Payload {
   embed: Record<string, unknown>;
   /** link buttons under the message (the bot adds them as Discord link buttons) */
   actions?: { label: string; url: string }[];
+  /** buttons that the bot answers itself (a poll vote): customId «poll:<poll>:<option>» */
+  buttons?: { customId: string; label: string }[];
 }
 
-export type AlertKind = 'down' | 'up' | 'test' | 'low' | 'ping' | 'full' | 'digest' | 'restart' | 'update' | 'disk';
+export type AlertKind = 'down' | 'up' | 'test' | 'low' | 'ping' | 'full' | 'digest' | 'restart' | 'update' | 'disk' | 'poll';
 
 export function enqueueAlert(kind: AlertKind, serverName: string, payload0: Payload, channelId?: string) {
   const s = alertSettings();
