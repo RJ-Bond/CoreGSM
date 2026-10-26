@@ -65,7 +65,7 @@ describe('announcements and channel', () => {
   });
 });
 
-import { buildNotice, cmpVersion, daysAgoText, noticeFields, noticeWarnings, notesBetween, notesText, parseChangelog, parseNoticeLang, parseNoticeTarget, parseRemindDays, parseVersion, releaseAgeDays, shouldRemind } from '../src/updateLogic.js';
+import { buildNotice, cmpVersion, daysAgoText, noticeFields, noticeWarnings, notesBetween, notesText, parseChangelog, parseNoticeLang, parseRemindDays, parseVersion, releaseAgeDays, shouldRemind } from '../src/updateLogic.js';
 
 describe('readable versions', () => {
   it('compares number by number, not as text', () => {
@@ -148,8 +148,6 @@ describe('update notices', () => {
   it('settings are read safely', () => {
     assert.equal(parseNoticeLang('en'), 'en');
     assert.equal(parseNoticeLang('de'), 'ru');
-    assert.equal(parseNoticeTarget('both'), 'both');
-    assert.equal(parseNoticeTarget('x'), 'channel');
     assert.equal(parseRemindDays(null), 7);
     assert.equal(parseRemindDays('0'), 0);
     assert.equal(parseRemindDays('99'), 7);
@@ -194,14 +192,14 @@ describe('update notices', () => {
   });
   it('a notice: title with the versions, skipped count, warning, footer with the age', () => {
     const now = Date.UTC(2026, 9, 28, 12);
-    const n = buildNotice({ kind: 'available', lang: 'ru', from: '1.0.0.3', to: '1.0.0.20', releases: all, line: 'Версия `1.0.0.20`.', now, withButtons: false });
+    const n = buildNotice({ kind: 'available', lang: 'ru', from: '1.0.0.3', to: '1.0.0.20', releases: all, line: 'Версия `1.0.0.20`.', now });
     assert.equal(n.title, 'Доступно обновление панели: 1.0.0.3 → 1.0.0.20');
     assert.match(n.description, /Пропущено версий между ними: 1/);
     assert.match(n.description, /База данных будет обновлена/);
     assert.match(n.description, /Установить: Настройки/);
     assert.equal(n.footer, 'Вышла 26.10.2026 · 2 дня назад');
-    const withBtn = buildNotice({ kind: 'done', lang: 'en', from: null, to: '1.0.0.20', releases: all, line: 'Version 1.0.0.20 installed', now, withButtons: true });
-    assert.equal(withBtn.title, 'Panel updated: 1.0.0.20');
-    assert.doesNotMatch(withBtn.description, /Install/);
+    const done = buildNotice({ kind: 'done', lang: 'en', from: null, to: '1.0.0.20', releases: all, line: 'Version 1.0.0.20 installed', now });
+    assert.equal(done.title, 'Panel updated: 1.0.0.20');
+    assert.doesNotMatch(done.description, /Install:/);
   });
 });
