@@ -25,6 +25,7 @@ import MaintenancePage from './Maintenance';
 import SettingsPage, { UsersTab } from './Settings';
 
 export { ADMIN_SECTIONS };
+import HealthPage from './Health';
 import SystemPage from './System';
 
 /** n = 0 draws a bare dot (a state, not a count) */
@@ -289,6 +290,7 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
         {!home && current === 'community' && <AdminCommunity sub={tail} />}
         {!home && current === 'users' && <UsersTab />}
         {!home && current === 'journal' && <JournalPage />}
+        {!home && current === 'health' && <HealthPage />}
         {!home && current === 'system' && <SystemPage />}
         {!home && current === 'settings' && <SettingsPage sub={tail} updateAvailable={updateAvailable} />}
       </div>
