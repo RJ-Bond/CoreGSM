@@ -151,6 +151,14 @@ function labelOf(build: string | null | undefined): string | null {
   return (db.prepare('SELECT label FROM build_labels WHERE build = ?').get(build) as { label: string } | undefined)?.label ?? null;
 }
 
+/**
+ * The version of the running panel exactly as the update screens show it: the readable name of the running build
+ * (the same lookup as «currentLabel»), else the name the container was started with, else the short build id (older installs).
+ */
+export function installedVersion(): string | null {
+  return labelOf(APP_VERSION) ?? (APP_VERSION_NAME || null) ?? (APP_VERSION ? APP_VERSION.slice(0, 7) : null);
+}
+
 // ---- history of the host jobs, and the notices about them
 db.exec(`
 CREATE TABLE IF NOT EXISTS update_history (

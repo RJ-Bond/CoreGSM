@@ -565,3 +565,20 @@ html[data-motion='reduce'] .srv-new-chev, html[data-motion='reduce'] .srv-check,
   .srv-hero .sh-chart, .srv-hero .sh-foot { display: none; }
   .srv-hero [class*='text-[64px]'] { font-size: 44px; }
 }
+
+/* ---------- the big card, third pass: one soft scrim instead of patches, a label instead of a badge, one row of names, a calm chart panel ---------- */
+.srv-hero::before { content: ''; position: absolute; inset: 0; z-index: 0; pointer-events: none; border-radius: inherit;
+  background: linear-gradient(90deg, rgb(6 8 18 / .72) 0%, rgb(6 8 18 / .4) 55%, rgb(6 8 18 / .1) 100%), linear-gradient(0deg, rgb(6 8 18 / .45), transparent 42%); }
+.srv-hero.is-split .depth-l1, .srv-hero.is-split .depth-l2 { display: none; }
+/* «most loaded» is a small caption above the name, not a pill under it */
+.srv-hero .sh-head > .min-w-0 { display: flex; flex-direction: column; }
+.srv-hero .hero-reason { order: -1; align-self: flex-start; margin: 0 0 4px; padding: 0; background: none; box-shadow: none; color: rgb(255 255 255 / .78);
+  font-size: var(--fs-xs); font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+.srv-hero .hero-reason.attn { background: none; color: #fecaca; }
+.srv-hero .hero-reason::before { width: 6px; height: 6px; box-shadow: none; }
+.srv-hero .srv-names { flex-wrap: nowrap; overflow: hidden; gap: 6px; }
+.srv-hero .srv-names.on-dark > li { flex: none; padding: 1px 9px; font-size: var(--fs-xs); background: rgb(255 255 255 / .13); }
+@media (min-width: 900px) {
+  .srv-hero.is-split > .sh-chart { padding: 14px 14px 6px 6px; border-radius: var(--r-xl); background: rgb(6 8 18 / .34); box-shadow: inset 0 0 0 1px rgb(255 255 255 / .07);
+    -webkit-backdrop-filter: none; backdrop-filter: none; }
+}

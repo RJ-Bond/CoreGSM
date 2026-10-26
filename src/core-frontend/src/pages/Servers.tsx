@@ -513,7 +513,7 @@ function HeroTile({ s, idx, uptime, downSince, fav, onFav, onOpen, rx, reason, s
             {s.ping != null && <span className="ml-auto inline-flex items-center gap-1.5 font-bold text-white/90"><PingBars ping={s.ping} tone={pingTone(s.ping).tone} />пинг {s.ping} мс</span>}
           </div>
           <CapacityBar className="sh-bar relative" players={s.players} max={s.maxPlayers} color="#fff" onDark />
-          <PlayerNames className="relative" names={s.playerNames ?? []} onDark />
+          <PlayerNames className="relative" names={s.playerNames ?? []} max={4} onDark />
           <div className="sh-chart relative mt-auto pt-2">
             <Spark serverId={s.id} color="#ffffff" variant="hero" />
           </div>
