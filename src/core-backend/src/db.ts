@@ -141,6 +141,10 @@ for (const [column, ddl] of [
   ['discord_avatar', 'TEXT'],
   ['no_password', 'INTEGER NOT NULL DEFAULT 0'],
   ['email', 'TEXT'],
+  // a block with a reason; banned_until NULL = for good, an ended ban is simply ignored
+  ['banned_at', 'INTEGER'],
+  ['banned_until', 'INTEGER'],
+  ['ban_reason', 'TEXT'],
 ]) {
   addColumn(db, 'users', column, ddl);
 }

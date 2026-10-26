@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="bdec2c8d05f0"
+COREGSM_BUILD="6bb9bbcc1b2d"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.0.0.8"
+COREGSM_VERSION="1.0.0.9"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -4122,6 +4122,7 @@ import jwt from 'jsonwebtoken';
 import crypto from 'node:crypto';
 import type { NextFunction, Request, Response } from 'express';
 import { INTERNAL_TOKEN, JWT_SECRET } from './config.js';
+import { type BanRow, activeBan } from './banLogic.js';
 import { db, getSetting } from './db.js';
 import { safeEqual } from './http.js';
 import { guardDelete, guardGet, guardSet } from './loginGuard.js';
@@ -4144,8 +4145,9 @@ export function userFromToken(token: string): { id: number; username: string; ro
     const p = jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] }) as { sub: string; sid?: string };
     // a token without a session id predates sessions: sign in again
     if (!p.sid) return null;
-    const u = db.prepare("SELECT id, username, role FROM users WHERE id = ? AND status = 'active'").get(Number(p.sub)) as { id: number; username: string; role: Role } | undefined;
+    const u = db.prepare("SELECT id, username, role, banned_at, banned_until, ban_reason FROM users WHERE id = ? AND status = 'active'").get(Number(p.sub)) as ({ id: number; username: string; role: Role } & BanRow) | undefined;
     if (!u) return null;
+    if (activeBan(u, Date.now())) return null;
     // an ended session (revoked from the profile) stops working at once
     if (!db.prepare('SELECT 1 FROM sessions WHERE id = ? AND user_id = ?').get(p.sid, u.id)) return null;
     const now = Date.now();
@@ -4153,7 +4155,7 @@ export function userFromToken(token: string): { id: number; username: string; ro
       lastSeen.set(p.sid, now);
       db.prepare('UPDATE sessions SET last_seen = ? WHERE id = ?').run(now, p.sid);
     }
-    return { ...u, sid: p.sid };
+    return { id: u.id, username: u.username, role: u.role, sid: p.sid };
   } catch {
     return null;
   }
@@ -5089,6 +5091,36 @@ export function registerBackups({ app, admin }: { app: Express; admin: RequestHa
       restartSoon();
     }),
   );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/banLogic.ts" << '__COREGSM_EOF__'
+/** Blocking an account for a while (or for good) with a reason: the pure part. */
+
+export interface BanRow {
+  banned_at: number | null;
+  banned_until: number | null;
+  ban_reason: string | null;
+}
+
+export interface BanState {
+  /** until when (ms); null = permanent */
+  until: number | null;
+  reason: string;
+  at: number;
+}
+
+/** the active ban of an account, or null (a ban that has run out is no ban — nothing has to clean it up) */
+export function activeBan(r: BanRow, now: number): BanState | null {
+  if (!r.banned_at) return null;
+  if (r.banned_until && r.banned_until <= now) return null;
+  return { until: r.banned_until || null, reason: r.ban_reason ?? '', at: r.banned_at };
+}
+
+/** hours → the end of the ban; null/0 = permanent; the longest finite ban is a year */
+export function banUntil(hours: number | null | undefined, now: number): number | null {
+  if (!hours) return null;
+  return now + Math.min(Math.max(Math.round(hours), 1), 8760) * 3_600_000;
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
@@ -6113,6 +6145,10 @@ for (const [column, ddl] of [
   ['discord_avatar', 'TEXT'],
   ['no_password', 'INTEGER NOT NULL DEFAULT 0'],
   ['email', 'TEXT'],
+  // a block with a reason; banned_until NULL = for good, an ended ban is simply ignored
+  ['banned_at', 'INTEGER'],
+  ['banned_until', 'INTEGER'],
+  ['ban_reason', 'TEXT'],
 ]) {
   addColumn(db, 'users', column, ddl);
 }
@@ -7614,6 +7650,10 @@ export const ERRORS = {
   last_admin_demote: 'Нельзя снять права с последнего администратора',
   last_admin_delete: 'Нельзя удалить последнего администратора',
   delete_self: 'Нельзя удалить собственную учётную запись',
+  account_banned: 'Учётная запись заблокирована администратором',
+  ban_self: 'Нельзя заблокировать собственную учётную запись',
+  ban_admin: 'Администратора нельзя заблокировать: сначала смените ему роль',
+  ban_not_found: 'Блокировка не найдена',
 
   // ---- settings, branding, updates ----
   proxy_format: 'Прокси: host:port:логин:пароль, socks5://логин:пароль@host:port или http://host:port',
@@ -14900,6 +14940,7 @@ import { newRecoveryCodes, newSecret, otpauthUri, useRecoveryCode, verifyCode } 
 import { accountLockRemaining, accountLoginFailed, accountLoginOk, auth, type AuthedRequest, avatarUrl, DUMMY_HASH, issueToken, loginLimiter, permsOf, rateLimit, registrationOpen, resetAttempts, type Role, type UserFull } from '../auth.js';
 import { customAvatarUrl } from '../avatars.js';
 import { SETUP_TOKEN } from '../config.js';
+import { activeBan } from '../banLogic.js';
 import { db, setSetting } from '../db.js';
 import { safeEqual, wrap } from '../http.js';
 import { bannerPresetOf, bannerUrlOf, logAccount, prefsOf } from '../profile.js';
@@ -14930,7 +14971,7 @@ router.post(
       return res.status(429).json({ error: `Слишком много неверных попыток. Повторите через ${retryAfter} с.`, retryAfter });
     }
     const u = db.prepare('SELECT * FROM users WHERE ulower(username) = ?').get(body.data.username.toLowerCase()) as
-      | { id: number; username: string; password_hash: string; role: Role; status: string; totp_enabled: number; totp_secret: string | null; totp_recovery: string | null; totp_step: number }
+      | { id: number; username: string; password_hash: string; role: Role; status: string; banned_at: number | null; banned_until: number | null; ban_reason: string | null; totp_enabled: number; totp_secret: string | null; totp_recovery: string | null; totp_step: number }
       | undefined;
     const ok = await bcrypt.compare(body.data.password, u?.password_hash ?? DUMMY_HASH);
     if (!u || !ok) {
@@ -14942,6 +14983,11 @@ router.post(
     if (u.status !== 'active') {
       accountLoginOk(req.ip, body.data.username);
       return res.status(403).json({ error: 'Заявка на регистрацию ещё не одобрена администратором', pending: true });
+    }
+    const ban = activeBan(u, Date.now());
+    if (ban) {
+      accountLoginOk(req.ip, body.data.username);
+      return res.status(403).json({ error: 'Учётная запись заблокирована администратором', banned: true, reason: ban.reason, until: ban.until });
     }
     // second factor: without a code the panel is told to ask for one (no token yet); a wrong code counts like a wrong password
     if (u.totp_enabled && u.totp_secret) {
@@ -16064,6 +16110,7 @@ import crypto from 'node:crypto';
 import type { Request, Response } from 'express';
 import { issueToken, loadUser, rateLimit, registrationOpen, userFromToken } from '../auth.js';
 import { bot, clientIdFromToken } from '../botState.js';
+import { type BanRow, activeBan } from '../banLogic.js';
 import { db, getSetting } from '../db.js';
 import { wrap } from '../http.js';
 import { logAccount } from '../profile.js';
@@ -16129,7 +16176,7 @@ router.get(
       return failTo(res, getSetting('proxy_url') ? 'Не удалось связаться с Discord через прокси. Проверьте прокси в настройках бота' : 'Не удалось связаться с Discord. Если он недоступен напрямую, задайте прокси в настройках бота');
     }
     const dname = me.global_name || me.username;
-    const owner = db.prepare('SELECT id, username, status FROM users WHERE discord_id = ?').get(me.id) as { id: number; username: string; status: string } | undefined;
+    const owner = db.prepare('SELECT id, username, status, banned_at, banned_until, ban_reason FROM users WHERE discord_id = ?').get(me.id) as ({ id: number; username: string; status: string } & BanRow) | undefined;
 
     if (st.mode === 'link') {
       if (owner && owner.id !== st.userId) return toPanel(res, 'profile/' + encodeURIComponent('Этот Discord уже привязан к другому аккаунту'));
@@ -16141,6 +16188,7 @@ router.get(
     if (owner) {
       db.prepare('UPDATE users SET discord_name = ?, discord_avatar = ? WHERE id = ?').run(dname, me.avatar ?? null, owner.id);
       if (owner.status !== 'active') return failTo(res, 'Заявка на регистрацию ещё не одобрена администратором');
+      if (activeBan(owner, Date.now())) return failTo(res, 'Учётная запись заблокирована администратором');
       logAccount(req, owner.id, 'login', 'Discord');
       noteLogin(req, owner.id, brand().name);
       const tok = issueToken(owner, req);
@@ -17281,6 +17329,7 @@ import bcrypt from 'bcryptjs';
 import { z } from 'zod';
 import { admin, type AuthedRequest, parsePerms, PERMS, type Role } from '../auth.js';
 import { avatarFor, removeAvatar } from '../avatars.js';
+import { activeBan, banUntil } from '../banLogic.js';
 import { db } from '../db.js';
 import { wrap } from '../http.js';
 import { logAccount, removeBanner } from '../profile.js';
@@ -17291,7 +17340,7 @@ export const router = express.Router();
 const adminCount = () => (db.prepare("SELECT COUNT(*) AS n FROM users WHERE role = 'admin' AND status = 'active'").get() as { n: number }).n;
 
 router.get('/api/users', admin, (_req, res) => {
-  const rows = db.prepare('SELECT id, username, role, perms, created_at, status, discord_name, discord_id, discord_avatar, (SELECT MAX(last_seen) FROM sessions WHERE user_id = users.id) AS last_seen FROM users ORDER BY (status = \'pending\') DESC, id').all() as {
+  const rows = db.prepare('SELECT id, username, role, perms, created_at, status, banned_at, banned_until, ban_reason, discord_name, discord_id, discord_avatar, (SELECT MAX(last_seen) FROM sessions WHERE user_id = users.id) AS last_seen FROM users ORDER BY (status = \'pending\') DESC, id').all() as {
     last_seen: number | null;
     id: number;
     username: string;
@@ -17299,11 +17348,14 @@ router.get('/api/users', admin, (_req, res) => {
     perms: string | null;
     created_at: number | null;
     status: string;
+    banned_at: number | null;
+    banned_until: number | null;
+    ban_reason: string | null;
     discord_name: string | null;
     discord_id: string | null;
     discord_avatar: string | null;
   }[];
-  res.json(rows.map((u) => ({ id: u.id, username: u.username, role: u.role, perms: u.role === 'moderator' ? parsePerms(u.perms) : u.role === 'admin' ? [...PERMS] : [], createdAt: u.created_at, status: u.status, discordName: u.discord_name, avatarUrl: avatarFor(u), lastSeen: u.last_seen ?? null })));
+  res.json(rows.map((u) => ({ id: u.id, username: u.username, role: u.role, perms: u.role === 'moderator' ? parsePerms(u.perms) : u.role === 'admin' ? [...PERMS] : [], createdAt: u.created_at, status: u.status, ban: activeBan(u, Date.now()), discordName: u.discord_name, avatarUrl: avatarFor(u), lastSeen: u.last_seen ?? null })));
 });
 
 router.post('/api/users/:id/approve', admin, (req, res) => {
@@ -17339,6 +17391,27 @@ router.put(
     res.json({ ok: true });
   }),
 );
+
+router.post('/api/users/:id/ban', admin, (req: AuthedRequest, res) => {
+  const id = Number(req.params.id);
+  const b = z.object({ reason: z.string().trim().max(300).optional(), hours: z.number().min(0).max(100000).nullable().optional() }).safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: 'Проверьте поля формы' });
+  if (id === req.user!.id) return res.status(409).json({ error: 'Нельзя заблокировать собственную учётную запись' });
+  const u = db.prepare('SELECT role FROM users WHERE id = ?').get(id) as { role: Role } | undefined;
+  if (!u) return res.status(404).json({ error: 'Пользователь не найден' });
+  if (u.role === 'admin') return res.status(409).json({ error: 'Администратора нельзя заблокировать: сначала смените ему роль' });
+  const now = Date.now();
+  db.prepare('UPDATE users SET banned_at = ?, banned_until = ?, ban_reason = ? WHERE id = ?').run(now, banUntil(b.data.hours, now), b.data.reason ?? '', id);
+  // the person is signed out everywhere at once
+  db.prepare('DELETE FROM sessions WHERE user_id = ?').run(id);
+  res.json({ ok: true });
+});
+
+router.post('/api/users/:id/unban', admin, (req, res) => {
+  const r = db.prepare('UPDATE users SET banned_at = NULL, banned_until = NULL, ban_reason = NULL WHERE id = ? AND banned_at IS NOT NULL').run(Number(req.params.id));
+  if (!r.changes) return res.status(404).json({ error: 'Блокировка не найдена' });
+  res.json({ ok: true });
+});
 
 router.delete('/api/users/:id', admin, (req: AuthedRequest, res) => {
   const id = Number(req.params.id);
@@ -49209,6 +49282,8 @@ export interface UserRow {
   perms?: Perm[];
   createdAt: number | null;
   status: 'active' | 'pending';
+  /** the block in force (until: null = forever) */
+  ban?: { until: number | null; reason: string; at: number } | null;
   discordName: string | null;
   avatarUrl?: string | null;
   /** the last request with any of the account's sessions (null: never signed in) */
@@ -68966,6 +69041,31 @@ const en: Record<keyof typeof ru, string> = {
   'upd.o.locked': 'The channel is pinned by the server environment and cannot be changed here.',
   'upd.o.notify': 'Tell Discord about new versions and update results',
   'upd.o.notifyHint': 'Messages go to the alerts channel (Settings → Discord). Nothing is sent when it is not set up.',
+  'us.ban': 'Block',
+  'us.banOf': 'Block {name}',
+  'us.unban': 'Unblock',
+  'us.unbanOf': 'Unblock {name}',
+  'us.banReason': 'Reason (visible to administrators)',
+  'us.banFor': 'Duration',
+  'us.ban.1': '1 hour',
+  'us.ban.24': '1 day',
+  'us.ban.168': '7 days',
+  'us.ban.720': '30 days',
+  'us.ban.0': 'Forever',
+  'us.banGo': 'Block',
+  'us.banned': 'Blocked',
+  'us.bannedUntil': 'until {d}',
+  'us.bannedForever': 'forever',
+  'us.banDone': '{name} blocked',
+  'us.unbanDone': '{name} unblocked',
+  'us.matrix': 'Roles and permissions',
+  'us.matrix.hint': 'What each role can do. Moderator permissions can be toggled right in the table.',
+  'us.matrix.admin': 'Administrator',
+  'us.matrix.player': 'Player',
+  'us.matrix.role': 'Role / user',
+  'us.matrix.noMods': 'No moderators yet',
+  'login.banReason': ' Reason: {r}.',
+  'login.banUntil': ' Blocked until {d}.',
   'adm.tbl.up': 'Move up',
   'adm.tbl.down': 'Move down',
   'adm.tbl.moved': 'Server order saved',
@@ -69071,6 +69171,10 @@ const errorsEn: Record<string, string> = {
   last_admin_demote: 'The last administrator cannot be demoted',
   last_admin_delete: 'The last administrator cannot be deleted',
   delete_self: 'You cannot delete your own account',
+  account_banned: 'This account has been blocked by an administrator',
+  ban_self: 'You cannot block your own account',
+  ban_admin: 'An administrator cannot be blocked: change their role first',
+  ban_not_found: 'The block was not found',
 
   // ---- settings, branding, updates ----
   proxy_format: 'Proxy: host:port:login:password, socks5://login:password@host:port or http://host:port',
@@ -71067,6 +71171,31 @@ const ru = {
   'upd.o.locked': 'Канал задан переменными окружения сервера и отсюда не меняется.',
   'upd.o.notify': 'Сообщать в Discord о новых версиях и результате обновления',
   'upd.o.notifyHint': 'Сообщения уходят в канал оповещений (Настройки → Discord). Если он не настроен, ничего не отправляется.',
+  'us.ban': 'Заблокировать',
+  'us.banOf': 'Заблокировать {name}',
+  'us.unban': 'Разблокировать',
+  'us.unbanOf': 'Разблокировать {name}',
+  'us.banReason': 'Причина (её увидит администратор)',
+  'us.banFor': 'Срок',
+  'us.ban.1': '1 час',
+  'us.ban.24': '1 день',
+  'us.ban.168': '7 дней',
+  'us.ban.720': '30 дней',
+  'us.ban.0': 'Навсегда',
+  'us.banGo': 'Заблокировать',
+  'us.banned': 'Заблокирован',
+  'us.bannedUntil': 'до {d}',
+  'us.bannedForever': 'навсегда',
+  'us.banDone': '{name} заблокирован',
+  'us.unbanDone': '{name} разблокирован',
+  'us.matrix': 'Роли и права',
+  'us.matrix.hint': 'Что может каждая роль. Права модераторов можно переключать прямо в таблице.',
+  'us.matrix.admin': 'Администратор',
+  'us.matrix.player': 'Игрок',
+  'us.matrix.role': 'Роль / пользователь',
+  'us.matrix.noMods': 'Модераторов пока нет',
+  'login.banReason': ' Причина: {r}.',
+  'login.banUntil': ' Блокировка до {d}.',
   'adm.tbl.up': 'Выше',
   'adm.tbl.down': 'Ниже',
   'adm.tbl.moved': 'Порядок серверов сохранён',
@@ -75827,7 +75956,7 @@ __COREGSM_EOF__
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { api, ApiError, setToken } from '../api';
 import { useAuth } from '../auth';
-import { t } from '../i18n';
+import { getPrefs, t } from '../i18n';
 import { Button, DiscordButton, ErrorLine, FieldError, OrDivider, PasswordField, useShake, errText } from '../ui';
 
 const NAME_KEY = 'coregsm_login_name';
@@ -75927,6 +76056,9 @@ export default function Login({ onDone, notice }: { onDone: () => void; notice?:
         setPassErr(`${(err as Error).message}${n !== null ? t('login.attempts', { n }) : ''}`);
         passRef.current?.focus();
         passRef.current?.select();
+      } else if (status === 403 && data.banned) {
+        const lang = getPrefs().lang === 'en' ? 'en-US' : 'ru-RU';
+        setError(`${errText(err)}${data.reason ? t('login.banReason', { r: String(data.reason) }) : ''}${typeof data.until === 'number' ? t('login.banUntil', { d: new Date(data.until).toLocaleString(lang) }) : ''}`);
       } else {
         setError(errText(err));
       }
@@ -82282,6 +82414,9 @@ function UsersTabInner() {
   const [picked, setPicked] = useState<number[]>([]);
   const [hidden, setHidden] = useState<number[]>([]);
   const [rules, setRules] = useState('');
+  const [banFor, setBanFor] = useState<number | null>(null);
+  const [banReason, setBanReason] = useState('');
+  const [banHours, setBanHours] = useState(24);
   const rulesInit = useRef(false);
 
   const load = () => {
@@ -82348,6 +82483,16 @@ function UsersTabInner() {
   const setRole = async (u: UserRow, role: UserRow['role']) => {
     await api(`/users/${u.id}`, 'PUT', { role }).then(() => toast(t('us.roleChanged'))).catch((e) => setError(e.message));
     load();
+  };
+  const ban = async (u: UserRow) => {
+    await api(`/users/${u.id}/ban`, 'POST', { reason: banReason.trim(), hours: banHours || null })
+      .then(() => { toast(t('us.banDone', { name: u.username })); setBanFor(null); setBanReason(''); })
+      .catch((e) => setError(e.message));
+    void load();
+  };
+  const unban = async (u: UserRow) => {
+    await api(`/users/${u.id}/unban`, 'POST').then(() => toast(t('us.unbanDone', { name: u.username }))).catch((e) => setError(e.message));
+    void load();
   };
   const resetPassword = async (u: UserRow) => {
     const pw = await promptDialog({
@@ -82463,6 +82608,42 @@ function UsersTabInner() {
         </Section>
       )}
 
+      <Section title={t('us.matrix')}>
+        <details>
+          <summary className="cursor-pointer font-extrabold">{t('us.matrix')}</summary>
+          <p className="mt-2 text-sm font-semibold text-mute">{t('us.matrix.hint')}</p>
+          <div className="mt-2 overflow-x-auto">
+            <table className="adm-table">
+              <thead>
+                <tr>
+                  <th>{t('us.matrix.role')}</th>
+                  {PERM_LABELS.map((p) => <th key={p.id} title={t(`us.perm.${p.id}.hint` as const)}>{t(`us.perm.${p.id}` as const)}</th>)}
+                </tr>
+              </thead>
+              <tbody>
+                <tr><td className="font-extrabold">{t('us.matrix.admin')}</td>{PERM_LABELS.map((p) => <td key={p.id} className="text-ok" aria-label="✓">✓</td>)}</tr>
+                {users.filter((u) => u.role === 'moderator').map((u) => (
+                  <tr key={u.id}>
+                    <td>{u.username}</td>
+                    {PERM_LABELS.map((p) => {
+                      const on = (u.perms ?? []).includes(p.id);
+                      return (
+                        <td key={p.id}>
+                          <input type="checkbox" className="srv-check" checked={on} aria-label={`${u.username}: ${t(`us.perm.${p.id}` as const)}`}
+                            onChange={(e) => void setPerms(u, e.target.checked ? [...(u.perms ?? []), p.id] : (u.perms ?? []).filter((x) => x !== p.id))} />
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+                {users.every((u) => u.role !== 'moderator') && <tr><td colSpan={PERM_LABELS.length + 1} className="text-mute">{t('us.matrix.noMods')}</td></tr>}
+                <tr><td className="font-extrabold">{t('us.matrix.player')}</td>{PERM_LABELS.map((p) => <td key={p.id} className="text-mute" aria-label="—">—</td>)}</tr>
+              </tbody>
+            </table>
+          </div>
+        </details>
+      </Section>
+
       <Section title={t('us.users')}>
         <ErrorLine text={error} />
         <div className="flex flex-wrap items-center gap-2">
@@ -82490,6 +82671,11 @@ function UsersTabInner() {
                 <span className={`block text-xs font-semibold ${seenText(u).online ? 'text-ok' : 'text-mute'}`}>{seenText(u).text}{u.createdAt ? t('us.since', { d: new Date(u.createdAt).toLocaleDateString(getPrefs().lang === 'en' ? 'en-US' : 'ru-RU') }) : ''}</span>
               </span>
               {u.status === 'pending' && <span className="pill pill-warn">{t('us.pending')}</span>}
+              {u.ban && (
+                <span className="pill pill-bad" title={u.ban.reason || undefined}>
+                  {t('us.banned')} · {u.ban.until ? t('us.bannedUntil', { d: new Date(u.ban.until).toLocaleString(getPrefs().lang === 'en' ? 'en-US' : 'ru-RU') }) : t('us.bannedForever')}
+                </span>
+              )}
               <span className={`pill ${u.role === 'admin' ? 'pill-bad' : u.role === 'moderator' ? 'pill-warn' : 'pill-mute'}`}>{ROLE_LABEL(u.role).toUpperCase()}</span>
               <select className="input w-auto! py-1.5!" value={u.role} onChange={(e) => void setRole(u, e.target.value as UserRow['role'])} aria-label={t('us.roleOf', { name: u.username })}>
                 <option value="player">{t('us.role.player')}</option>
@@ -82497,7 +82683,24 @@ function UsersTabInner() {
                 <option value="admin">{t('us.role.admin')}</option>
               </select>
               <button type="button" className="row-act" title={t('us.pwTip')} aria-label={t('us.pwOf', { name: u.username })} onClick={() => void resetPassword(u)}><IconKey /></button>
+              {u.role !== 'admin' && (u.ban
+                ? <button type="button" className="btn btn-soft btn-sm" aria-label={t('us.unbanOf', { name: u.username })} onClick={() => void unban(u)}>{t('us.unban')}</button>
+                : <button type="button" className="btn btn-ghost btn-sm" aria-label={t('us.banOf', { name: u.username })} aria-expanded={banFor === u.id} onClick={() => setBanFor(banFor === u.id ? null : u.id)}>{t('us.ban')}</button>)}
               <button type="button" className="row-act row-act-danger" title={t('us.delTip')} aria-label={t('us.delOf', { name: u.username })} onClick={() => void remove(u)} disabled={u.username === me?.username}><IconTrash /></button>
+              {banFor === u.id && !u.ban && (
+                <form className="basis-full flex flex-wrap items-end gap-2 rounded-2xl bg-soft p-3" onSubmit={(e) => { e.preventDefault(); void ban(u); }}>
+                  <label className="min-w-48 flex-1 text-sm font-extrabold">{t('us.banReason')}
+                    <input className="input mt-1" value={banReason} maxLength={300} onChange={(e) => setBanReason(e.target.value)} />
+                  </label>
+                  <label className="text-sm font-extrabold">{t('us.banFor')}
+                    <select className="input mt-1" value={banHours} onChange={(e) => setBanHours(Number(e.target.value))}>
+                      {[1, 24, 168, 720, 0].map((h) => <option key={h} value={h}>{t(`us.ban.${h}` as TKey)}</option>)}
+                    </select>
+                  </label>
+                  <button type="submit" className="btn btn-danger btn-sm">{t('us.banGo')}</button>
+                </form>
+              )}
+              {u.ban?.reason && <span className="basis-full text-xs font-semibold text-mute">{u.ban.reason}</span>}
               {u.role === 'moderator' && (
                 <fieldset className="us-perms basis-full">
                   <legend className="sr-only">{t('us.permsOf', { name: u.username })}</legend>

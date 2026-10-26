@@ -711,6 +711,8 @@ export interface UserRow {
   perms?: Perm[];
   createdAt: number | null;
   status: 'active' | 'pending';
+  /** the block in force (until: null = forever) */
+  ban?: { until: number | null; reason: string; at: number } | null;
   discordName: string | null;
   avatarUrl?: string | null;
   /** the last request with any of the account's sessions (null: never signed in) */
