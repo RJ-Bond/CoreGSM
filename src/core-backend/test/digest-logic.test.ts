@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { changePct, dailyPeaks, sparkPoints, stripCommonPrefix, wrapName } from '../src/digestLogic.ts';
+import { busiestDay, changePct, dailyPeaks, sparkPoints, splitServers, stripCommonPrefix, trendText, uptimeBar, wrapName } from '../src/digestLogic.ts';
 
 describe('digest logic', () => {
   it('takes the highest online of each day', () => {
@@ -35,5 +35,28 @@ describe('digest names', () => {
     assert.deepEqual(wrapName('Standard PvE Europe', 12), ['Standard PvE', 'Europe']);
     assert.deepEqual(wrapName('Very long server name that never ends here', 12), ['Very long', 'server name…']);
     assert.deepEqual(wrapName('Short', 12), ['Short']);
+  });
+});
+
+describe('digest picture helpers', () => {
+  it('trend text with an arrow', () => {
+    assert.deepEqual(trendText(18), { text: '▲ 18%', kind: 'up' });
+    assert.deepEqual(trendText(-5), { text: '▼ 5%', kind: 'down' });
+    assert.deepEqual(trendText(0), { text: '=', kind: 'same' });
+    assert.equal(trendText(null), null);
+  });
+  it('busiest day: the first on a tie, -1 for an empty week', () => {
+    assert.equal(busiestDay([3, 9, 9, 1]), 1);
+    assert.equal(busiestDay([0, 0]), -1);
+  });
+  it('keeps one row for «more» when there are too many servers', () => {
+    assert.deepEqual(splitServers([1, 2, 3], 5), { shown: [1, 2, 3], hidden: [] });
+    assert.deepEqual(splitServers([1, 2, 3, 4, 5, 6, 7], 5), { shown: [1, 2, 3, 4], hidden: [5, 6, 7] });
+  });
+  it('uptime bar width', () => {
+    assert.equal(uptimeBar(100, 200), 200);
+    assert.equal(uptimeBar(50, 200), 100);
+    assert.equal(uptimeBar(0.1, 200), 3);
+    assert.equal(uptimeBar(null, 200), 0);
   });
 });
