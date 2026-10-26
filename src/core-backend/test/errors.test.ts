@@ -28,7 +28,8 @@ const CONTEXT = [
 // validators that return the text of the error (null when the input is fine)
 const VALIDATORS = new Set(['news.ts', 'maintenance.ts', 'backup.ts']);
 // `error` fields of normal answers (not errors): the bot's state and the update check
-const NOT_ERRORS = [/^Бот не отвечает/, /^Не удалось проверить обновления/];
+// discordGallery.ts: sample data of the message gallery («server is down» example), not an answer of the API
+const NOT_ERRORS = [/^Бот не отвечает/, /^Не удалось проверить обновления/, /^Нет ответа$/];
 
 function russianTexts(): { text: string; where: string }[] {
   const out: { text: string; where: string }[] = [];
