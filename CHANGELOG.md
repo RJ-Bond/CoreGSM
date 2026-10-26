@@ -17,6 +17,7 @@ interface language; the GitHub release text is built from the section of the ver
 ## Не выпущено | Unreleased
 
 ### 🐛 Исправлено | Fixed
+- 🧪 Тест каталога ошибок больше не принимает пример «Нет ответа» из галереи сообщений за ответ API | The error catalogue test no longer takes the «No answer» sample of the message gallery for an API answer
 - 🔘 В окне «Что нового» кнопки «Далее» и «Назад» снова оформлены как остальные кнопки панели | In the «What's new» window the «Next» and «Back» buttons are styled like the other buttons of the panel again
 - 🔒 Тема без мигания: хэш встроенного скрипта темы в политике безопасности снова совпадает с `index.html`, браузер не блокирует скрипт | No theme flash: the hash of the inline theme script in the content security policy matches `index.html` again, so the browser does not block the script
 - 🛠️ Сборка: вернул файл логики опроса серверов, который по ошибке был перезаписан логикой голосований (панель не собиралась), поправил тип в боте и перевод в «Новостях» | Build: restored the server polling logic file that had been overwritten by the community polls logic by mistake (the panel did not compile), fixed a type in the bot and a translation in News
