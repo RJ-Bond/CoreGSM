@@ -17,6 +17,7 @@ interface language; the GitHub release text is built from the section of the ver
 ## Не выпущено | Unreleased
 
 ### ✨ Новое | New
+- 🔖 Читаемая версия (например, 1.0.0.4) в подписи сообщений бота в Discord, на странице «Система» и на обзоре админки | The readable version (like 1.0.0.4) in the footer of the bot's Discord messages, on the System page and on the admin overview
 - 🌐 Описания версий на двух языках: панель показывает русский или английский текст, релиз на GitHub — оба | Release notes in two languages: the panel shows Russian or English, the GitHub release shows both
 
 ## 1.0.0.3 · 26.10.2026

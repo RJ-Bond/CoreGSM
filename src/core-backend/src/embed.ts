@@ -47,7 +47,7 @@ export interface EmbedExtra {
   thumbUrl?: string | null;
   /** public base URL (https://domain): used for the footer logo */
   baseUrl?: string | null;
-  /** panel build id, shown in the footer */
+  /** panel version («1.0.0.7») or, on an install that has no name yet, the build id; shown in the footer */
   version?: string | null;
   /** community name and custom logo from the branding settings */
   brandName?: string | null;
@@ -100,7 +100,8 @@ export function buildEmbed(s: EmbedServer, uptimePct: number | null, intervalSec
   void uptimePct;
   void intervalSec;
   const brand = extra.brandName || 'CoreGSM';
-  const version = extra.version ? ` · v${extra.version.slice(0, 7)}` : '';
+  // a readable version («1.0.0.7») is shown whole, a bare build hash is shortened
+  const version = extra.version ? ` · v${/^\d+(\.\d+){1,4}$/.test(extra.version) ? extra.version : extra.version.slice(0, 7)}` : '';
   // the footer is only the brand and the build; the update time is the embed timestamp, which Discord shows in the
   // viewer's own time zone ("Сегодня, в 09:49"). The brand line with the link to the panel sits above the title.
   const footer: { text: string; icon_url?: string } = { text: `${brand}${version}` };

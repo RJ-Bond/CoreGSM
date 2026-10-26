@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="90868df98c57"
+COREGSM_BUILD="292d4a06384a"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.0.0.4"
+COREGSM_VERSION="1.0.0.5"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -7357,7 +7357,7 @@ export interface EmbedExtra {
   thumbUrl?: string | null;
   /** public base URL (https://domain): used for the footer logo */
   baseUrl?: string | null;
-  /** panel build id, shown in the footer */
+  /** panel version («1.0.0.7») or, on an install that has no name yet, the build id; shown in the footer */
   version?: string | null;
   /** community name and custom logo from the branding settings */
   brandName?: string | null;
@@ -7410,7 +7410,8 @@ export function buildEmbed(s: EmbedServer, uptimePct: number | null, intervalSec
   void uptimePct;
   void intervalSec;
   const brand = extra.brandName || 'CoreGSM';
-  const version = extra.version ? ` · v${extra.version.slice(0, 7)}` : '';
+  // a readable version («1.0.0.7») is shown whole, a bare build hash is shortened
+  const version = extra.version ? ` · v${/^\d+(\.\d+){1,4}$/.test(extra.version) ? extra.version : extra.version.slice(0, 7)}` : '';
   // the footer is only the brand and the build; the update time is the embed timestamp, which Discord shows in the
   // viewer's own time zone ("Сегодня, в 09:49"). The brand line with the link to the panel sits above the title.
   const footer: { text: string; icon_url?: string } = { text: `${brand}${version}` };
@@ -8976,7 +8977,7 @@ import { admin, allow, auth, type AuthedRequest, avatarUrl, internal, isStaff, p
 import { customAvatarUrl, registerAvatars } from './avatars.js';
 import { registerBackups, startBackupTimer, stopBackups } from './backup.js';
 import { bot, channelInfo } from './botState.js';
-import { APP_VERSION, POLL_MS, PORT, SETUP_TOKEN } from './config.js';
+import { APP_VERSION, APP_VERSION_NAME, POLL_MS, PORT, SETUP_TOKEN } from './config.js';
 import { registerCovers } from './covers.js';
 import { db, getSetting, setSetting } from './db.js';
 import { registerDeliveries } from './deliveries.js';
@@ -9148,7 +9149,7 @@ registerProfile({
 registerDiscordRegistration({ app, internal, wrap, publicBase, registrationOpen, registrationMode, rulesText });
 registerNickStatus({ app, auth, userId: (req) => (req as AuthedRequest).user!.id });
 registerCovers({ app, admin: allow('servers') });
-registerOps({ app, admin, getBot: () => bot.status, guildCount: () => bot.guilds.length, version: APP_VERSION, pollMs: POLL_MS, publicBase });
+registerOps({ app, admin, getBot: () => bot.status, guildCount: () => bot.guilds.length, version: APP_VERSION, versionName: APP_VERSION_NAME, pollMs: POLL_MS, publicBase });
 registerBackups({ app, admin });
 registerMaintenance({ app, admin: allow('maintenance'), viewer });
 registerHealth({ app, admin, bot: () => bot.status });
@@ -12119,6 +12120,8 @@ interface Ctx {
   getBot: () => { state: string; tag: string | null; error: string | null; updatedAt: number };
   guildCount: () => number;
   version: string;
+  /** readable version of the build, empty on an install that has no name yet */
+  versionName?: string;
   pollMs: number;
   /** trusted public base URL (https://domain) or null */
   publicBase: () => string | null;
@@ -12180,7 +12183,7 @@ export function checkCert(force = false): Promise<CertInfo> {
   });
 }
 
-export function registerOps({ app, admin, getBot, guildCount, version, pollMs, publicBase }: Ctx): void {
+export function registerOps({ app, admin, getBot, guildCount, version, versionName, pollMs, publicBase }: Ctx): void {
   // ----- log -----
   app.get('/api/audit', allow('journal'), (req, res) => {
     const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 200));
@@ -12224,6 +12227,7 @@ export function registerOps({ app, admin, getBot, guildCount, version, pollMs, p
     })();
     res.json({
       version: version || null,
+      versionName: versionName || null,
       uptimeSec: Math.round((Date.now() - startedAt) / 1000),
       node: process.version,
       dbBytes,
@@ -18070,7 +18074,7 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-backend/src/serverData.ts" << '__COREGSM_EOF__'
 /** Servers as the API returns them, and the Discord embed built from a server and its history. */
 import { channelInfo } from './botState.js';
-import { APP_VERSION } from './config.js';
+import { APP_VERSION, APP_VERSION_NAME } from './config.js';
 import { coverUrl } from './covers.js';
 import { type BindingRow, db, getSetting, type ServerRow, type StatusRow } from './db.js';
 import { buildEmbed } from './embed.js';
@@ -18193,7 +18197,7 @@ export function embedFor(serverId: number, intervalSec: number) {
     .get(serverId, Date.now() - 24 * 3600 * 1000) as { u: number | null };
   const last = db.prepare('SELECT MAX(ts) AS t FROM history WHERE server_id = ? AND online = 1').get(serverId) as { t: number | null };
   const base = publicBase();
-  return buildEmbed(server, up.u, intervalSec, { serverId, playersShown: playersShown(), lastOnlineAt: last.t, thumbUrl: base ? `${base}/api/game-icon/${server.game}.png?v=${GAME_ICON_VERSION}` : null, baseUrl: base, version: APP_VERSION || null, brandName: brand().name, country: (() => { const c = server.country || countryOf(serverId, server.host); return c ? countryLabel(c) : null; })(), timeZone: getSetting('timezone') || process.env.TZ || 'Europe/Moscow', logoUrl: base && logoFile() ? `${base}/api/branding/logo?v=${brand().logoV}` : null });
+  return buildEmbed(server, up.u, intervalSec, { serverId, playersShown: playersShown(), lastOnlineAt: last.t, thumbUrl: base ? `${base}/api/game-icon/${server.game}.png?v=${GAME_ICON_VERSION}` : null, baseUrl: base, version: APP_VERSION_NAME || APP_VERSION || null, brandName: brand().name, country: (() => { const c = server.country || countryOf(serverId, server.host); return c ? countryLabel(c) : null; })(), timeZone: getSetting('timezone') || process.env.TZ || 'Europe/Moscow', logoUrl: base && logoFile() ? `${base}/api/branding/logo?v=${brand().logoV}` : null });
 }
 
 export const intervalParam = (v: unknown) => Math.min(3600, Math.max(30, Number(v) || 60));
@@ -72421,7 +72425,7 @@ export default function AdminOverview() {
             <Tile label={t('adm.ov.players')} value={String(players)} change={delta(players, series[0])} spark={series} href="/admin/servers" />
             <Tile label={t('adm.ov.pending')} value={raw.users ? String(pending) : '–'} tone={pending > 0 ? 'warn' : undefined} href="/admin/users" />
             <Tile label={t('adm.ov.backup')} value={raw.backups ? (lastBackup ? ago(lastBackup) : t('adm.ov.noBackup')) : '–'} tone={raw.backups && (!lastBackup || Date.now() - lastBackup > WEEK) ? 'warn' : undefined} href="/admin/settings/updates" />
-            <Tile label={t('adm.ov.version')} value={raw.update?.current ? raw.update.current.slice(0, 7) : '–'} sub={raw.update?.available ? t('adm.ov.upd') : undefined} tone={raw.update?.available ? 'warn' : undefined} href="/admin/settings/updates" />
+            <Tile label={t('adm.ov.version')} value={raw.update?.currentLabel || (raw.update?.current ? raw.update.current.slice(0, 7) : '–')} sub={raw.update?.available ? t('adm.ov.upd') : undefined} tone={raw.update?.available ? 'warn' : undefined} href="/admin/settings/updates" />
           </div>
 
           {servers.length > 0 && (
@@ -80309,6 +80313,7 @@ import { AdminPage, ErrorLine, GoLink, LoadError, IconDatabase, IconDisk, IconMe
 
 interface Health {
   version: string | null;
+  versionName?: string | null;
   uptimeSec: number;
   node: string;
   dbBytes: number | null;
@@ -80375,7 +80380,7 @@ export default function SystemPage() {
   const botTone: GaugeTone = !h ? 'mute' : h.bot.state === 'online' ? 'ok' : h.bot.state === 'connecting' ? 'warn' : h.bot.state === 'error' ? 'bad' : 'mute';
   const status: { k: string; v: string; sub?: string; tone: GaugeTone }[] = h
     ? [
-        { k: 'Версия', v: h.version ? h.version.slice(0, 7) : 'сборка из исходников', sub: `Node ${h.node}`, tone: 'mute' },
+        { k: 'Версия', v: h.versionName || (h.version ? h.version.slice(0, 7) : 'сборка из исходников'), sub: `Node ${h.node}`, tone: 'mute' },
         { k: 'Работает', v: dur(h.uptimeSec), tone: 'ok' },
         { k: 'Серверы', v: `${h.counts.online} из ${h.counts.servers} онлайн`, tone: h.counts.servers === 0 ? 'mute' : h.counts.online === h.counts.servers ? 'ok' : h.counts.online === 0 ? 'bad' : 'warn' },
         { k: 'Привязки Discord', v: String(h.counts.bindings), sub: `${h.guilds} ${plural(h.guilds, ['сервер', 'сервера', 'серверов'])} с ботом`, tone: 'mute' },
