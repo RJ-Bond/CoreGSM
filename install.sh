@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="8818397d1685"
+COREGSM_BUILD="da6b0dba03a6"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.0.0.28"
+COREGSM_VERSION="1.0.0.29"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -3921,7 +3921,7 @@ export interface Payload {
   actions?: { label: string; url: string }[];
 }
 
-export type AlertKind = 'down' | 'up' | 'test' | 'low' | 'ping' | 'full' | 'digest' | 'restart' | 'update';
+export type AlertKind = 'down' | 'up' | 'test' | 'low' | 'ping' | 'full' | 'digest' | 'restart' | 'update' | 'disk';
 
 export function enqueueAlert(kind: AlertKind, serverName: string, payload0: Payload, channelId?: string) {
   const s = alertSettings();
@@ -4112,6 +4112,188 @@ export function registerAlerts(deps: {
     reportResult(Number(req.params.id), b.data.status === 'sent' ? { ok: true } : { ok: false, error: b.data.error ?? 'Ошибка отправки' });
     res.json({ ok: true });
   });
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/attention.ts" << '__COREGSM_EOF__'
+/**
+ * «Needs attention» for administrators:
+ *   GET /api/admin/attention   the list (servers down, dead deliveries, backups, certificate, update, bot, disk, queues)
+ * and a check of the free disk space every 30 minutes that sends a Discord alert (once per level per day).
+ */
+import fs from 'node:fs';
+import type { Express, RequestHandler } from 'express';
+import { DATA_DIR, db, getSetting, setSetting } from './db.js';
+import { alertSettings, enqueueAlert } from './alerts.js';
+import { backupSettings, listBackups } from './backup.js';
+import { botStateNow } from './health.js';
+import { log } from './logger.js';
+import { inMaintenance } from './maintenance.js';
+import { checkCert } from './ops.js';
+import { updateWaitingLabel } from './routes/updates.js';
+import { buildAttention, diskFreePct, diskLevel, shouldAlertDisk, type DiskLevel } from './attentionLogic.js';
+
+const NAME_SQL = `COALESCE(NULLIF(s.name, ''), NULLIF(st.name, ''), NULLIF(s.display_address, ''), s.host || ':' || s.port)`;
+const n = (sql: string): number => {
+  try {
+    return (db.prepare(sql).get() as { c: number }).c;
+  } catch {
+    return 0;
+  }
+};
+
+function diskNow(): { free: number; total: number } | null {
+  try {
+    const st = fs.statfsSync(DATA_DIR);
+    return { free: Number(st.bavail) * Number(st.bsize), total: Number(st.blocks) * Number(st.bsize) };
+  } catch {
+    return null;
+  }
+}
+
+const gb = (b: number) => (b / 1024 ** 3).toFixed(1);
+
+/** sends the low-disk alert when the level got worse or the trouble lasts for a day; returns whether it was sent */
+export function checkDisk(now = Date.now()): boolean {
+  const d = diskNow();
+  const level = diskLevel(d?.free ?? null, d?.total ?? null);
+  const last = (getSetting('disk_alert_level') as DiskLevel | null) ?? 'ok';
+  const lastAt = Number(getSetting('disk_alert_at')) || 0;
+  if (level === 'ok') {
+    if (last !== 'ok') setSetting('disk_alert_level', 'ok');
+    return false;
+  }
+  if (!d || !shouldAlertDisk(level, last === 'warn' || last === 'bad' ? last : 'ok', lastAt, now)) return false;
+  setSetting('disk_alert_level', level);
+  setSetting('disk_alert_at', String(now));
+  const s = alertSettings();
+  if (!s.enabled || !s.channelId) return false;
+  const pct = diskFreePct(d.free, d.total);
+  enqueueAlert('disk', 'CoreGSM', {
+    content: level === 'bad' ? (s.mention === 'everyone' ? '@everyone' : s.mention === 'here' ? '@here' : '') : '',
+    mention: level === 'bad' ? s.mention : 'none',
+    embed: {
+      title: level === 'bad' ? '💾 Заканчивается место на диске' : '💾 Остаётся мало места на диске',
+      description: `Свободно **${gb(d.free)} ГБ** из ${gb(d.total)} ГБ (**${pct}%**).\nБэкапы, база и картинки хранятся на этом диске — освободите место, пока панель не начала сбоить.`,
+      color: level === 'bad' ? 0xf23f42 : 0xf0b232,
+    },
+  });
+  return true;
+}
+
+export function registerAttention({ app, admin }: { app: Express; admin: RequestHandler }): void {
+  app.get('/api/admin/attention', admin, async (_req, res) => {
+    const now = Date.now();
+    const down = (
+      db.prepare(`SELECT s.id, ${NAME_SQL} AS name FROM servers s JOIN status st ON st.server_id = s.id WHERE st.online = 0 ORDER BY name`).all() as { id: number; name: string }[]
+    ).filter((r) => !inMaintenance(r.id, now)).map((r) => r.name);
+    const cert = await checkCert().catch(() => null);
+    const bk = backupSettings();
+    const last = listBackups().reduce<number | null>((m, b) => (m == null || b.createdAt > m ? b.createdAt : m), null);
+    const items = buildAttention({
+      now,
+      serversDown: down,
+      deadDeliveries: n(`SELECT COUNT(*) AS c FROM deliveries WHERE status = 'dead' AND created_at > ${now - 7 * 86_400_000}`),
+      backup: { schedule: bk.schedule, lastAt: last },
+      certDays: cert?.daysLeft ?? null,
+      updateLabel: updateWaitingLabel(),
+      botState: botStateNow(now) === 'none' ? 'online' : botStateNow(now),
+      disk: diskNow(),
+      pendingUsers: n("SELECT COUNT(*) AS c FROM users WHERE status = 'pending'"),
+      openReports: n("SELECT COUNT(*) AS c FROM player_reports WHERE status = 'open'"),
+      flaggedComments: n("SELECT COUNT(*) AS c FROM news_comments c WHERE c.status = 'visible' AND EXISTS (SELECT 1 FROM news_comment_flags f WHERE f.comment_id = c.id)"),
+    });
+    res.json({ at: now, items });
+  });
+
+  const tick = () => {
+    try {
+      checkDisk();
+    } catch (e) {
+      log.error('disk check failed', (e as Error).message);
+    }
+  };
+  setTimeout(tick, 60_000).unref();
+  setInterval(tick, 30 * 60_000).unref();
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/attentionLogic.ts" << '__COREGSM_EOF__'
+/** The admin «needs attention» list: pure rules (what is shown and in which order), no I/O. */
+export type AttentionTone = 'bad' | 'warn' | 'info';
+export type AttentionKind =
+  | 'servers_down' | 'deliveries_dead' | 'backup_none' | 'backup_old' | 'cert' | 'update' | 'bot' | 'disk' | 'users_pending' | 'reports' | 'comments';
+
+export interface AttentionItem {
+  id: AttentionKind;
+  tone: AttentionTone;
+  /** the number or text the sentence is built from (days, count, percent, names, ...) */
+  n?: number;
+  text?: string;
+  /** panel section the item leads to */
+  href: string;
+}
+
+export interface AttentionInput {
+  now: number;
+  serversDown: string[];
+  deadDeliveries: number;
+  backup: { schedule: 'off' | 'daily' | 'weekly'; lastAt: number | null };
+  certDays: number | null;
+  updateLabel: string | null;
+  botState: string;
+  disk: { free: number; total: number } | null;
+  pendingUsers: number;
+  openReports: number;
+  flaggedComments: number;
+}
+
+const DAY = 86_400_000;
+const GB = 1024 ** 3;
+
+export type DiskLevel = 'ok' | 'warn' | 'bad';
+/** less than 15 % free is a warning, less than 7 % (or under 1 GB) is an alarm */
+export function diskLevel(free: number | null, total: number | null): DiskLevel {
+  if (free == null || total == null || total <= 0) return 'ok';
+  const pct = (free / total) * 100;
+  if (free < GB || pct < 7) return 'bad';
+  if (pct < 15) return 'warn';
+  return 'ok';
+}
+export const diskFreePct = (free: number, total: number): number => (total > 0 ? Math.round((free / total) * 100) : 0);
+
+/** a backup older than this is "old" for the schedule */
+export const backupMaxAgeDays = (s: 'daily' | 'weekly' | 'off'): number => (s === 'daily' ? 3 : s === 'weekly' ? 10 : 14);
+
+const RANK: Record<AttentionTone, number> = { bad: 0, warn: 1, info: 2 };
+
+export function buildAttention(i: AttentionInput): AttentionItem[] {
+  const out: AttentionItem[] = [];
+  if (i.serversDown.length) out.push({ id: 'servers_down', tone: 'bad', n: i.serversDown.length, text: i.serversDown.slice(0, 3).join(', '), href: '/admin/servers' });
+  if (i.botState === 'error' || i.botState === 'offline') out.push({ id: 'bot', tone: 'bad', text: i.botState, href: '/admin/discord' });
+  const lvl = diskLevel(i.disk?.free ?? null, i.disk?.total ?? null);
+  if (i.disk && lvl !== 'ok') out.push({ id: 'disk', tone: lvl, n: diskFreePct(i.disk.free, i.disk.total), href: '/admin/system' });
+  if (i.deadDeliveries > 0) out.push({ id: 'deliveries_dead', tone: 'warn', n: i.deadDeliveries, href: '/admin/alerts' });
+  if (i.certDays != null && i.certDays <= 14) out.push({ id: 'cert', tone: i.certDays <= 3 ? 'bad' : 'warn', n: i.certDays, href: '/admin/system' });
+  if (i.backup.lastAt == null) {
+    out.push({ id: 'backup_none', tone: 'warn', href: '/admin/settings/backups' });
+  } else {
+    const days = Math.floor((i.now - i.backup.lastAt) / DAY);
+    if (days > backupMaxAgeDays(i.backup.schedule)) out.push({ id: 'backup_old', tone: 'warn', n: days, href: '/admin/settings/backups' });
+  }
+  if (i.pendingUsers > 0) out.push({ id: 'users_pending', tone: 'info', n: i.pendingUsers, href: '/admin/users' });
+  if (i.openReports > 0) out.push({ id: 'reports', tone: 'info', n: i.openReports, href: '/admin/community' });
+  if (i.flaggedComments > 0) out.push({ id: 'comments', tone: 'info', n: i.flaggedComments, href: '/admin/community' });
+  if (i.updateLabel) out.push({ id: 'update', tone: 'info', text: i.updateLabel, href: '/admin/settings/updates' });
+  return out.map((x, k) => ({ x, k })).sort((a, b) => RANK[a.x.tone] - RANK[b.x.tone] || a.k - b.k).map((e) => e.x);
+}
+
+/** whether the disk alert must be sent now: the level got worse, or the same trouble lasts for a day */
+export function shouldAlertDisk(level: DiskLevel, lastLevel: DiskLevel, lastAt: number, now: number): boolean {
+  if (level === 'ok') return false;
+  if (lastLevel === 'ok') return true;
+  if (level === 'bad' && lastLevel === 'warn') return true;
+  return now - lastAt >= DAY;
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
@@ -9540,6 +9722,7 @@ import { registerNews } from './news.js';
 import { registerNickStatus } from './nickOnboarding.js';
 import { installAudit, registerOps } from './ops.js';
 import { registerOverview } from './overview.js';
+import { registerAttention } from './attention.js';
 import { logAccount, registerProfile } from './profile.js';
 import { csrfGuard, registerSecurity, securityHeaders, windowLimiter } from './security.js';
 import { embedFor, SELECT_SERVERS, SERVER_ORDER, serialize, type ServerJoin } from './serverData.js';
@@ -9703,6 +9886,7 @@ registerStatusNotes({ app, admin: allow('maintenance') });
 registerHealth({ app, admin, bot: () => bot.status });
 startDbMaintenance();
 registerOverview({ app, viewer });
+registerAttention({ app, admin });
 
 // ---------- errors ----------
 app.use((err: Error & { type?: string; status?: number }, _req: Request, res: Response, _next: NextFunction) => {
@@ -17713,6 +17897,11 @@ async function checkRemote(force = false): Promise<void> {
 
 function updateFile(name: string): string {
   return path.join(UPDATE_DIR, name);
+}
+
+/** the label of a newer version when one is waiting, otherwise null (the «needs attention» list) */
+export function updateWaitingLabel(): string | null {
+  return APP_VERSION && remote.build && APP_VERSION !== remote.build ? (remote.label ?? remote.build.slice(0, 12)) : null;
 }
 
 function updatePayload() {
@@ -48974,6 +49163,7 @@ import { api, ApiError, getToken, setToken, type Access, type Me, type UpdateInf
 import { AuthContext } from './auth';
 import { onAccentChange, paintBrand, useAutoAccent } from './accent';
 import NotificationBell from './components/NotificationBell';
+import AttentionBell from './components/AttentionBell';
 import { AppFooter, BotPill, ProfileMenu, RouteProgress, Tooltips, restoreScroll, useHideOnScroll, usePanelPulse, useScrollMemory } from './components/ShellExtras';
 import NotFound from './components/NotFound';
 import { ConfirmHost } from './confirm';
@@ -49412,6 +49602,7 @@ export default function App() {
               <kbd className="hidden rounded-md bg-card px-1.5 py-0.5 font-sans text-xs font-bold text-mute lg:inline">Ctrl K</kbd>
             </button>
             {isAdmin && <BotPill />}
+            {isAdmin && <AttentionBell />}
             {me && <NotificationBell initialUnread={me.unreadNotifications ?? 0} />}
             <ThemeToggle />
             {me ? (
@@ -50884,6 +51075,124 @@ export default function AdminStatusBar() {
       <span className="font-extrabold">{text}</span>
       {last > 0 && <span className="text-mute" title="Время последнего опроса">· {ago(last)}</span>}
       <Button type="button" size="sm" variant="soft" className="ml-auto" loading={busy} onClick={() => void pollAll()}>Опросить всё</Button>
+    </div>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/AttentionBell.tsx" << '__COREGSM_EOF__'
+import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent } from 'react';
+import { api } from '../api';
+import { Icon } from '../icons';
+import { t, type TKey } from '../i18n';
+
+type Tone = 'bad' | 'warn' | 'info';
+interface Item { id: string; tone: Tone; n?: number; text?: string; href: string }
+
+const POLL_MS = 60_000;
+const TITLE: Record<string, TKey> = {
+  servers_down: 'att.servers_down', deliveries_dead: 'att.deliveries_dead', backup_none: 'att.backup_none', backup_old: 'att.backup_old',
+  cert: 'att.cert', update: 'att.update', bot: 'att.bot', disk: 'att.disk', users_pending: 'att.users_pending', reports: 'att.reports', comments: 'att.comments',
+};
+const DOT: Record<Tone, string> = { bad: 'bg-bad', warn: 'bg-warn', info: 'bg-brand' };
+
+/** «Needs attention» for administrators: a header button with a count and a list of what to look at, each line leads to its section */
+export default function AttentionBell() {
+  const [items, setItems] = useState<Item[] | null>(null);
+  const [failed, setFailed] = useState(false);
+  const [open, setOpen] = useState(false);
+  const root = useRef<HTMLDivElement>(null);
+  const btn = useRef<HTMLButtonElement>(null);
+  const popId = useId();
+
+  const load = useCallback(async () => {
+    try {
+      const r = await api<{ items: Item[] }>('/api/admin/attention');
+      setItems(Array.isArray(r.items) ? r.items : []);
+      setFailed(false);
+    } catch {
+      setFailed(true);
+      setItems((cur) => cur ?? []);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+    const tick = () => { if (!document.hidden) void load(); };
+    const id = window.setInterval(tick, POLL_MS);
+    document.addEventListener('visibilitychange', tick);
+    return () => { window.clearInterval(id); document.removeEventListener('visibilitychange', tick); };
+  }, [load]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: PointerEvent) => { if (!root.current?.contains(e.target as Node)) setOpen(false); };
+    document.addEventListener('pointerdown', onDown);
+    return () => document.removeEventListener('pointerdown', onDown);
+  }, [open]);
+
+  const onKey = (e: KeyboardEvent) => {
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setOpen(false); btn.current?.focus(); }
+  };
+
+  const list = items ?? [];
+  const worst: Tone | null = list.some((i) => i.tone === 'bad') ? 'bad' : list.some((i) => i.tone === 'warn') ? 'warn' : list.length ? 'info' : null;
+  const count = list.length;
+  const line = (i: Item) => {
+    const key = TITLE[i.id];
+    return key ? t(key, { n: i.n ?? 0, text: i.text ?? '' }) : i.id;
+  };
+
+  return (
+    <div ref={root} onKeyDown={onKey}>
+      <button
+        ref={btn}
+        type="button"
+        className="btn-icon relative"
+        aria-label={count > 0 ? t('att.ariaCount', { n: count }) : t('att.aria')}
+        title={t('att.title')}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        aria-controls={open ? popId : undefined}
+        onClick={() => { setOpen((o) => !o); if (!open) void load(); }}
+      >
+        <Icon size={20}>
+          <path d="M12 3 2.5 20h19L12 3Z" />
+          <path d="M12 10v4.5" />
+          <path d="M12 17.5h.01" />
+        </Icon>
+        {worst && (
+          <span className={`absolute -right-1 -top-1 min-w-[18px] rounded-full px-1 text-center text-xs font-extrabold leading-[18px] text-white shadow-[0_0_0_2px_rgb(var(--card))] ${DOT[worst]}`} aria-hidden>
+            {count > 9 ? '9+' : count}
+          </span>
+        )}
+      </button>
+
+      {open && (
+        <div id={popId} role="dialog" aria-label={t('att.title')} className="panel panel-raised absolute right-0 top-full z-40 mt-2 w-[min(24rem,100%)] overflow-hidden">
+          <div className="flex items-center justify-between gap-3 border-b border-line px-4 py-2.5">
+            <h2 className="text-base font-black">{t('att.title')}</h2>
+            <button type="button" className="btn-link" onClick={() => void load()}>{t('att.refresh')}</button>
+          </div>
+          <div className="max-h-[min(26rem,70dvh)] overflow-y-auto overscroll-contain">
+            {items === null && <div className="skeleton m-3 h-16 rounded-2xl bg-soft" aria-hidden />}
+            {failed && <p className="px-4 py-3 text-sm font-bold text-bad" role="alert">{t('att.loadError')}</p>}
+            {items && list.length === 0 && !failed && <p className="px-4 py-8 text-center font-semibold text-mute">{t('att.empty')}</p>}
+            {list.length > 0 && (
+              <ul className="divide-y divide-line">
+                {list.map((i) => (
+                  <li key={i.id}>
+                    <a href={i.href} className="flex items-start gap-3 px-4 py-3 text-left transition hover:bg-soft max-sm:min-h-[44px]" onClick={() => setOpen(false)}>
+                      <span aria-hidden className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${DOT[i.tone]}`} />
+                      <span className="min-w-0 flex-1 wrap-break-word text-sm font-extrabold leading-snug">{line(i)}</span>
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -69887,6 +70196,24 @@ const en: Record<keyof typeof ru, string> = {
   'al.k.digest': 'Weekly digest',
   'al.k.restart': 'Restart',
   'al.k.update': 'Panel update',
+  'att.title': 'Needs attention',
+  'att.aria': 'Needs attention: all clear',
+  'att.ariaCount': 'Needs attention: {n}',
+  'att.refresh': 'Refresh',
+  'att.loadError': 'Could not load the list',
+  'att.empty': 'All good — nothing needs attention',
+  'att.servers_down': 'Servers not responding: {n} ({text})',
+  'att.deliveries_dead': 'Not delivered to Discord this week: {n}',
+  'att.backup_none': 'There are no backups yet',
+  'att.backup_old': 'The last backup is {n} days old — time for a new one',
+  'att.cert': 'The HTTPS certificate expires in {n} days',
+  'att.update': 'A panel update is available: {text}',
+  'att.bot': 'The Discord bot is not working ({text})',
+  'att.disk': 'Low disk space: {n}% free',
+  'att.users_pending': 'Registration requests wait for a decision: {n}',
+  'att.reports': 'Player reports wait for review: {n}',
+  'att.comments': 'Flagged comments wait for moderation: {n}',
+  'al.k.disk': 'Disk space',
   'al.s.low': 'Unusually few players',
   'al.s.lowText': 'Online has been below a third of the usual for this weekday and hour for 20 minutes (last four weeks).',
   'al.s.ping': 'Ping went up',
@@ -72070,6 +72397,24 @@ const ru = {
   'al.k.digest': 'Итоги недели',
   'al.k.restart': 'Перезапуск',
   'al.k.update': 'Обновление панели',
+  'att.title': 'Требует внимания',
+  'att.aria': 'Требует внимания: всё в порядке',
+  'att.ariaCount': 'Требует внимания: {n}',
+  'att.refresh': 'Обновить',
+  'att.loadError': 'Не удалось загрузить список',
+  'att.empty': 'Всё в порядке — ничего не требует внимания',
+  'att.servers_down': 'Серверы не отвечают: {n} ({text})',
+  'att.deliveries_dead': 'Не доставлено в Discord за неделю: {n}',
+  'att.backup_none': 'Резервных копий ещё нет',
+  'att.backup_old': 'Последней копии {n} дн. — пора обновить',
+  'att.cert': 'Сертификат HTTPS истекает через {n} дн.',
+  'att.update': 'Доступно обновление панели: {text}',
+  'att.bot': 'Бот Discord не работает ({text})',
+  'att.disk': 'Мало места на диске: свободно {n}%',
+  'att.users_pending': 'Заявки на регистрацию ждут решения: {n}',
+  'att.reports': 'Жалобы игроков ждут разбора: {n}',
+  'att.comments': 'Комментарии с жалобами ждут модерации: {n}',
+  'al.k.disk': 'Место на диске',
   'al.s.low': 'Необычно мало игроков',
   'al.s.lowText': 'Онлайн 20 минут ниже трети обычного для этого дня недели и часа (по последним четырём неделям).',
   'al.s.ping': 'Вырос пинг',
@@ -74878,6 +75223,7 @@ const KIND = {
   digest: { label: 'al.k.digest', cls: 'pill-ok' },
   restart: { label: 'al.k.restart', cls: 'pill-mute' },
   update: { label: 'al.k.update', cls: 'pill-ok' },
+  disk: { label: 'al.k.disk', cls: 'pill-warn' },
 } as const satisfies Record<string, { label: TKey; cls: string }>;
 /** a kind the panel does not know (a newer server, an old row) must not break the page */
 const kindOf = (k: string): { label: TKey; cls: string } => (KIND as Record<string, { label: TKey; cls: string }>)[k] ?? KIND.test;
