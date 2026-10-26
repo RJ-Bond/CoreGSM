@@ -17,6 +17,8 @@ interface language; the GitHub release text is built from the section of the ver
 ## Не выпущено | Unreleased
 
 ### ✨ Новое | New
+- 🖥️ Команда `/servers`: список серверов с кнопками, нажатие открывает карточку сервера, «К списку» возвращает назад; ответ видит только спросивший | The `/servers` command: a list of servers with buttons, a click opens the server card and «Back» returns to the list; only the person who asked sees the answer
+- 📖 Команда `/help`: что умеет бот по разделам (игроку, серверы, статистика), разделы переключаются кнопками | The `/help` command: what the bot can do by section (player, servers, statistics), the sections are switched with buttons
 - 💾 Свои шаблоны новостей: «Сохранить как шаблон» в редакторе, применение и удаление в одно нажатие (до 12 штук), плюс готовый шаблон «Турнир» | Own news templates: «Save as a template» in the editor, apply and delete in one click (up to 12), plus a ready «Tournament» template
 - 🖼️ Картинка новости из карточки сервера: в редакторе можно подставить живую карточку (онлайн, игроки, карта); нужен публичный адрес панели | A news picture from the server card: the editor can insert the live card (online, players, map); the panel needs a public address
 - 📣 Публикация для подписчиков: если новость уходит в канал-объявления, бот сам нажимает «Опубликовать» (переключатель в «Новостях»; у бота должно быть право управлять сообщениями) | Crossposting: when a news item goes to an announcement channel the bot publishes it to followers itself (a switch in News; the bot needs the Manage Messages permission)
