@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="f2fb84f653d2"
+COREGSM_BUILD="8818397d1685"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.0.0.27"
+COREGSM_VERSION="1.0.0.28"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -17809,6 +17809,7 @@ function sendNotice(n: Notice): void {
   if (getSetting('update_notify') === '0') return;
   const embed: Record<string, unknown> = {
     title: n.title,
+    ...(n.url ? { url: n.url } : {}),
     description: n.description,
     color: n.color,
     ...(n.fields.length ? { fields: n.fields } : {}),
@@ -17828,11 +17829,21 @@ function sendNotice(n: Notice): void {
 
 type UpdateNoticeKind = 'available' | 'reminder' | 'done';
 /** builds a notice from the version, CHANGELOG.md and the settings, and sends it */
-async function sendUpdateNotice(kind: UpdateNoticeKind, from: string | null, to: string | null, line: (lang: 'ru' | 'en') => string): Promise<void> {
+/** the GitHub page of the repository the panel updates from (null for a fork on another host) */
+function repoWeb(): string | null {
+  const m = /^https:\/\/raw\.githubusercontent\.com\/([^/]+)\/([^/]+)\//.exec(`${UPDATE_BASE}/`);
+  return m ? `https://github.com/${m[1]}/${m[2]}` : null;
+}
+
+async function sendUpdateNotice(kind: UpdateNoticeKind, from: string | null, to: string | null, line: (lang: 'ru' | 'en') => string, builds: { from: string | null; to: string | null } = { from: null, to: null }): Promise<void> {
   let releases: ReturnType<typeof parseChangelog> = [];
   try { releases = (await loadNotes()).releases; } catch { /* the plain notice */ }
   const lang = parseNoticeLang(getSetting('update_notify_lang'));
-  sendNotice(buildNotice({ kind, lang, from, to, releases, line: line(lang), now: Date.now() }));
+  // links: the release page of each version (its tag is «build-<hash>») and the whole CHANGELOG.md
+  const web = repoWeb();
+  const release = (b: string | null) => (web && b && /^[a-f0-9]{6,64}$/.test(b) ? `${web}/releases/tag/build-${b}` : null);
+  const links = { from: release(builds.from), to: release(builds.to), more: web ? `${web}/blob/main/CHANGELOG.md` : null };
+  sendNotice(buildNotice({ kind, lang, from, to, releases, line: line(lang), now: Date.now(), links }));
 }
 
 function announceVersion(): void {
@@ -17845,14 +17856,14 @@ function announceVersion(): void {
     if (isQuietNow()) return;
     setSetting('update_announced', remote.build);
     setSetting('update_announced_at', String(Date.now()));
-    void sendUpdateNotice('available', labelOf(APP_VERSION), remote.label, (l) => (l === 'en' ? `Version \`${label}\` is ready to install.` : `Версия \`${label}\` готова к установке.`));
+    void sendUpdateNotice('available', labelOf(APP_VERSION), remote.label, (l) => (l === 'en' ? `Version \`${label}\` is ready to install.` : `Версия \`${label}\` готова к установке.`), { from: APP_VERSION || null, to: remote.build });
     return;
   }
   const announcedAt = Number(getSetting('update_announced_at')) || null;
   if (shouldRemind({ notify, remindDays: parseRemindDays(getSetting('update_remind_days')), available, latest: remote.build, announced: getSetting('update_announced'), announcedAt, reminded: getSetting('update_reminded'), skipped, now: Date.now() }) && !isQuietNow()) {
     setSetting('update_reminded', remote.build);
     const cur = labelOf(APP_VERSION) ?? 'current';
-    void sendUpdateNotice('reminder', labelOf(APP_VERSION), remote.label, (l) => (l === 'en' ? `Version \`${label}\` is still waiting; this panel runs \`${cur}\`.` : `Версия \`${label}\` всё ещё ждёт установки: у вас \`${cur}\`.`));
+    void sendUpdateNotice('reminder', labelOf(APP_VERSION), remote.label, (l) => (l === 'en' ? `Version \`${label}\` is still waiting; this panel runs \`${cur}\`.` : `Версия \`${label}\` всё ещё ждёт установки: у вас \`${cur}\`.`), { from: APP_VERSION || null, to: remote.build });
   }
 }
 
@@ -17880,7 +17891,7 @@ export function recordJob(): void {
     void sendUpdateNotice('done', labelOf(before), now, (l) => {
       const keep = rb ? (l === 'en' ? '\n↩️ A rollback is possible: the previous version is kept together with the database.' : '\n↩️ Откат возможен: предыдущая версия сохранена вместе с базой.') : '';
       return `${l === 'en' ? (now ? `Version \`${now}\` is installed.` : 'The update is installed.') : job.message}${keep}`;
-    });
+    }, { from: before, to: APP_VERSION || null });
   }
 }
 
@@ -20056,7 +20067,7 @@ export function noticeWarnings(releases: NotesRelease[], lang: NoticeLang): stri
 }
 
 /** the groups of the releases as embed fields: «name» is the group (with the version when there are several releases) */
-export function noticeFields(releases: NotesRelease[], lang: NoticeLang, limits = { field: 1000, count: 10, total: 4200 }): { name: string; value: string }[] {
+export function noticeFields(releases: NotesRelease[], lang: NoticeLang, limits = { field: 1000, count: 10, total: 4200 }, moreUrl: string | null = null): { name: string; value: string }[] {
   const out: { name: string; value: string }[] = [];
   const multi = releases.length > 1;
   let total = 0;
@@ -20080,7 +20091,8 @@ export function noticeFields(releases: NotesRelease[], lang: NoticeLang, limits 
   }
   if (left > 0 && out.length > 0) {
     const last = out[out.length - 1]!;
-    const more = lang === 'en' ? `… and ${left} more` : `… и ещё ${left}`;
+    const word = lang === 'en' ? `… and ${left} more` : `… и ещё ${left}`;
+    const more = moreUrl ? `[${word}](${moreUrl})` : word;
     if (last.value.length + more.length + 1 <= 1024) last.value += `\n${more}`;
   }
   return out;
@@ -20093,17 +20105,19 @@ export function shouldRemind(o: { notify: boolean; remindDays: number; available
   return o.announcedAt != null && o.now - o.announcedAt >= o.remindDays * 86_400_000;
 }
 
-export interface Notice { title: string; description: string; fields: { name: string; value: string }[]; footer: string; color: number }
+export interface Notice { title: string; /** the title is a link to the release of the new version */ url?: string; description: string; fields: { name: string; value: string }[]; footer: string; color: number }
 
 /** the text of a notice: «available» (a new version), «reminder» (nobody installed it) and «done» (the panel was updated) */
-export function buildNotice(o: { kind: 'available' | 'reminder' | 'done'; lang: NoticeLang; from: string | null; to: string | null; releases: NotesRelease[]; line: string; now: number }): Notice {
+export function buildNotice(o: { kind: 'available' | 'reminder' | 'done'; lang: NoticeLang; from: string | null; to: string | null; releases: NotesRelease[]; line: string; now: number; links?: { from?: string | null; to?: string | null; more?: string | null } }): Notice {
   const en = o.lang === 'en';
   const between = notesBetween(o.releases, o.from, o.to);
   const target = o.releases.find((r) => r.version === o.to);
   const age = releaseAgeDays(target?.date, o.now);
-  const arrow = o.from && o.to && o.from !== o.to ? `${o.from} → ${o.to}` : o.to ?? '';
+  const lk = o.links ?? {};
+  const ver = (v: string, url?: string | null) => (url ? `[${v}](${url})` : v);
+  const arrow = o.from && o.to && o.from !== o.to ? `${ver(o.from, lk.from)} → ${ver(o.to, lk.to)}` : o.to ? ver(o.to, lk.to) : '';
   const skipped = Math.max(0, between.length - 1);
-  const lines: string[] = [o.line];
+  const lines: string[] = [...(arrow ? [`**${arrow}**`] : []), o.line];
   if (skipped > 0) lines.push(en ? `Versions in between: ${skipped}` : `Пропущено версий между ними: ${skipped}`);
   lines.push(...noticeWarnings(between, o.lang));
   if (o.kind !== 'done') lines.push(en ? 'Install: Settings → Updates and backups.' : 'Установить: Настройки → Обновления и копии.');
@@ -20112,7 +20126,7 @@ export function buildNotice(o: { kind: 'available' | 'reminder' | 'done'; lang: 
     : (en ? 'Panel updated' : 'Панель обновлена');
   let footer = '';
   if (target?.date) footer = en ? `Released ${target.date}${age != null ? ` · ${daysAgoText(age, 'en')}` : ''}` : `Вышла ${target.date}${age != null ? ` · ${daysAgoText(age, 'ru')}` : ''}`;
-  return { title: arrow ? `${title}: ${arrow}` : title, description: lines.join('\n'), fields: noticeFields(between, o.lang), footer, color: o.kind === 'done' ? 0x23a55a : o.kind === 'reminder' ? 0xf0b232 : 0x5865f2 };
+  return { title, ...(lk.to ? { url: lk.to } : {}), description: lines.join('\n'), fields: noticeFields(between, o.lang, undefined, lk.more ?? null), footer, color: o.kind === 'done' ? 0x23a55a : o.kind === 'reminder' ? 0xf0b232 : 0x5865f2 };
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
