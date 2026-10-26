@@ -524,15 +524,15 @@ export default function HistoryChart({
         {hp && (
           <div
             aria-hidden
-            className="pointer-events-none absolute top-1 z-10 -translate-x-1/2 rounded-xl bg-ink px-3 py-2 text-[13px] font-bold leading-snug text-page shadow-pop"
+            className="pointer-events-none absolute top-1 z-10 -translate-x-1/2 rounded-xl bg-ink px-3 py-2 text-fs-sm font-bold leading-snug text-page shadow-pop"
             style={{ left: tx, width: TW }}
           >
-            <div className="whitespace-nowrap text-[12px] font-semibold opacity-80">{fullTime(hp.ts)}</div>
+            <div className="whitespace-nowrap text-fs-xs font-semibold opacity-80">{fullTime(hp.ts)}</div>
             {hp.online ? (
               <>
                 <div className="whitespace-nowrap">
                   <span className="opacity-80">Игроки </span>
-                  <span className="text-[15px] font-extrabold">{hp.players}</span>
+                  <span className="text-fs-base font-extrabold">{hp.players}</span>
                   {max > 0 && <span className="opacity-80"> / {max}</span>}
                 </div>
                 {usualOn && baseline && usualAt(baseline, hp.ts) != null && (
@@ -540,7 +540,7 @@ export default function HistoryChart({
                 )}
                 <div className="whitespace-nowrap">
                   <span className="opacity-80">Пинг </span>
-                  {hp.ping != null ? <span className="text-[15px] font-extrabold">{hp.ping} мс</span> : <span className="opacity-70">нет данных</span>}
+                  {hp.ping != null ? <span className="text-fs-base font-extrabold">{hp.ping} мс</span> : <span className="opacity-70">нет данных</span>}
                 </div>
               </>
             ) : (

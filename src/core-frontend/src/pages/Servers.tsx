@@ -454,7 +454,7 @@ function HeroTile({ s, idx, uptime, downSince, fav, onFav, onOpen, rx, reason, s
   const emb = emblemStyle(s.coverUrl, s.game);
   return (
     <article
-      className={`${emb.className ? 'emblem-host' : ''} ${s.online ? 'is-split' : ''} srv-hero depth tile-in tile-hover relative flex cursor-pointer flex-col gap-3 overflow-hidden rounded-[26px] p-5 text-white shadow-soft lg:p-6 ${reason === 'attention' ? 'hero-attn' : ''} ${s.online ? '' : 'is-down'}`}
+      className={`${emb.className ? 'emblem-host' : ''} ${s.online ? 'is-split' : ''} srv-hero depth tile-in tile-hover relative flex cursor-pointer flex-col gap-3 overflow-hidden rounded-ui-xl p-5 text-white shadow-soft lg:p-6 ${reason === 'attention' ? 'hero-attn' : ''} ${s.online ? '' : 'is-down'}`}
       style={{
         ...stagger(idx),
         ...emb.style,
@@ -476,7 +476,7 @@ function HeroTile({ s, idx, uptime, downSince, fav, onFav, onOpen, rx, reason, s
           <h2 className="line-clamp-2 wrap-break-word text-lg font-extrabold leading-tight sm:text-xl" title={s.name}>
             <a href={`/servers/${s.id}`} onClick={linkClick(s, select)} className="hover:underline">{s.name}</a>
           </h2>
-          <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[13px] font-bold text-white/90">
+          <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-fs-sm font-bold text-white/90">
             <span>{gameLabel(s.game)}</span>
             <span aria-hidden>·</span>
             <AddrCopy address={s.address} className="truncate font-mono text-xs font-semibold" />
@@ -520,7 +520,7 @@ function HeroTile({ s, idx, uptime, downSince, fav, onFav, onOpen, rx, reason, s
         </div>
       )}
 
-      <div className="sh-foot relative mt-auto flex flex-wrap items-center gap-1.5 text-[13px] font-bold text-white/90">
+      <div className="sh-foot relative mt-auto flex flex-wrap items-center gap-1.5 text-fs-sm font-bold text-white/90">
         <span className="sh-chip">{spanCaption(sparkSpan)}</span>
         {uptime != null && <span className="sh-chip">аптайм {(Math.round(uptime * 10) / 10).toLocaleString('ru-RU')}%</span>}
         {s.online && s.map && <span className="sh-chip">карта {s.map}</span>}
@@ -547,7 +547,7 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince }
       onClick={select?.on ? () => select.toggle(s.id) : onOpen}
     >
       {select?.on && <CardCheck s={s} select={select} className="left-1 top-1" />}
-      <div className={`${emb.className} relative flex h-[124px] items-start justify-between rounded-[18px] p-3 ${s.online ? '' : 'offline-cover'}`} style={{ ...emb.style, background: coverBackground(s.coverUrl, gameBackdrop(c1, 135), { small: true, game: s.game }), boxShadow: `inset 0 -3px 0 ${accent}` }}>
+      <div className={`${emb.className} relative flex h-[124px] items-start justify-between rounded-ui-lg p-3 ${s.online ? '' : 'offline-cover'}`} style={{ ...emb.style, background: coverBackground(s.coverUrl, gameBackdrop(c1, 135), { small: true, game: s.game }), boxShadow: `inset 0 -3px 0 ${accent}` }}>
         <span aria-hidden className="cover-scrim" />
         <GameAvatar game={s.game} size={46} glass vtId={s.id} />
         <div className="flex items-center gap-0.5">
@@ -558,7 +558,7 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince }
       </div>
 
       <div className="px-1.5">
-        <h3 className="line-clamp-2 wrap-break-word text-[16.5px] font-extrabold leading-tight" title={s.name}>
+        <h3 className="line-clamp-2 wrap-break-word text-fs-lg font-extrabold leading-tight" title={s.name}>
           <a href={`/servers/${s.id}`} onClick={linkClick(s, select)} className="hover:text-link">{s.name}</a>
         </h3>
         <div className="srv-chips"><span className="truncate">{gameLabel(s.game)}</span>{s.online && s.map && <span className="srv-chip" title={`Карта: ${s.map}`}>{s.map}</span>}{s.version && <span className="srv-chip" title="Версия">v{s.version}</span>}</div>
@@ -569,10 +569,10 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince }
         <>
           <div className={`flex items-baseline gap-1.5 px-1.5 ${s.players === 0 ? 'srv-zero' : ''}`}>
             <CountReact r={r}><AnimatedNumber value={s.players} className="text-[38px] font-extrabold leading-none tracking-[-0.03em]" /></CountReact>
-            <span className="text-[17px] font-bold text-mute">/ {s.maxPlayers}</span>
+            <span className="text-fs-xl font-bold text-mute">/ {s.maxPlayers}</span>
             <TrendChip serverId={s.id} />
             {(s.playerNames?.length ?? 0) > 0 && <button type="button" className="srv-who" aria-expanded={who} onClick={(e) => { e.stopPropagation(); setWho((v) => !v); }}>{t('srv.who')}</button>}
-            <span className={`ml-auto inline-flex items-center gap-1.5 text-[13px] font-bold ${s.ping != null ? TONE_TEXT[pingTone(s.ping).tone] : 'text-mute'}`}>{s.ping != null && <><PingBars ping={s.ping} tone={pingTone(s.ping).tone} />{`${s.ping} мс`}</>}</span>
+            <span className={`ml-auto inline-flex items-center gap-1.5 text-fs-sm font-bold ${s.ping != null ? TONE_TEXT[pingTone(s.ping).tone] : 'text-mute'}`}>{s.ping != null && <><PingBars ping={s.ping} tone={pingTone(s.ping).tone} />{`${s.ping} мс`}</>}</span>
           </div>
           <CapacityBar className="px-1.5" players={s.players} max={s.maxPlayers} color={accent} />
           {who && <PlayerNames className="px-1.5" names={s.playerNames ?? []} max={12} />}
@@ -584,10 +584,10 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince }
         s.hasStatus ? (
           <div className="mx-1.5 flex items-center gap-2 rounded-xl bg-badbg px-3 py-2" title={s.error ?? undefined}>
             <span className="h-2 w-2 shrink-0 rounded-full bg-bad" aria-hidden />
-            <p className="truncate text-[13px] font-bold leading-snug text-bad">{downSince ? t('srv.down.for', { d: durText(Date.now() - downSince) }) : `Не отвечает · ${ago(s.updatedAt)}`}</p>
+            <p className="truncate text-fs-sm font-bold leading-snug text-bad">{downSince ? t('srv.down.for', { d: durText(Date.now() - downSince) }) : `Не отвечает · ${ago(s.updatedAt)}`}</p>
           </div>
         ) : (
-          <div className="mx-1.5 rounded-xl bg-soft px-3 py-2.5 text-[13px] font-bold text-mute">Ожидаем первый ответ</div>
+          <div className="mx-1.5 rounded-xl bg-soft px-3 py-2.5 text-fs-sm font-bold text-mute">Ожидаем первый ответ</div>
         )
       )}
 

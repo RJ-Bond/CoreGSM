@@ -113,7 +113,7 @@ function ListRow({ s, uptime, onOpen, rx, favButton, select }: RowProps) {
         <GameAvatar game={s.game} size={36} />
         <div className="min-w-0">
           <a href={`/servers/${s.id}`} onClick={(e) => e.stopPropagation()} className="block truncate font-extrabold hover:text-link" title={s.name}>{s.name}</a>
-          <div className="truncate text-[13px] font-bold text-mute">{gameLabel(s.game)}{s.online && s.map ? ` · ${s.map}` : ''}</div>
+          <div className="truncate text-fs-sm font-bold text-mute">{gameLabel(s.game)}{s.online && s.map ? ` · ${s.map}` : ''}</div>
           {s.maintenance && <MaintenanceChip m={s.maintenance} className="mt-0.5" />}
         </div>
       </div>
@@ -128,7 +128,7 @@ function ListRow({ s, uptime, onOpen, rx, favButton, select }: RowProps) {
             <span className="srv-rowspark max-lg:hidden"><MiniSpark serverId={s.id} color={gameColor(s.game)} /></span>
           </>
         ) : (
-          <span className="truncate text-[13px] font-bold text-mute" title={s.error ?? undefined}>{s.hasStatus ? `Не отвечает · ${ago(s.updatedAt)}` : 'Ожидаем ответ'}</span>
+          <span className="truncate text-fs-sm font-bold text-mute" title={s.error ?? undefined}>{s.hasStatus ? `Не отвечает · ${ago(s.updatedAt)}` : 'Ожидаем ответ'}</span>
         )}
       </div>
       <div className="srv-c-ping" data-label="Пинг">{s.online && s.ping != null ? <span className={lag ? 'text-warn' : ''}>{s.ping} мс</span> : '–'}</div>

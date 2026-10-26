@@ -78,7 +78,7 @@ export function AuthCard({ mode, children }: { mode: 'login' | 'register'; child
     { id: 'register', label: t('auth.register') },
   ] as const;
   return (
-    <div className="auth-card w-full max-w-sm rounded-[28px] border bg-card/90 p-6 backdrop-blur-sm sm:p-7">
+    <div className="auth-card w-full max-w-sm rounded-ui-xl border bg-card/90 p-6 backdrop-blur-sm sm:p-7">
       <AuthBrand subtitle={mode === 'login' ? t('auth.subLogin') : t('auth.subRegister')} />
       {access.registration && (
         <nav className="seg mb-5 flex w-full" aria-label={t('auth.switchAria')}>
