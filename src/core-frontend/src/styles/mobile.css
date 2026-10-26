@@ -109,3 +109,13 @@ html.has-kb .save-bar { bottom: calc(.75rem + var(--kb, 0px)); }
 /* 12. login: the form sits at the top while the keyboard is open, not glued to the bottom */
 html.has-kb :is(.auth-shell, .auth-card) { align-self: start; }
 @media (max-width: 639px) { html.has-kb .auth-showcase { display: none; } }
+
+/* 13. no network: a thin strip under the safe area */
+.net-bar { position: fixed; inset: 0 0 auto 0; z-index: 95; padding: calc(6px + env(safe-area-inset-top, 0px)) 12px 6px; text-align: center; font-size: 13px; font-weight: 800; background: rgb(var(--warn)); color: #1b1300; box-shadow: var(--shadow-2); }
+.net-bar.is-back { background: rgb(var(--ok)); color: #fff; }
+
+/* 14. data saver: no decorations, no animations, no blur (the data itself is requested half as often, see usePoll) */
+html[data-lite] :is(.nw-glow, .nw-backdrop, .auth-glow, .auth-float, .art-float, .art-float-2, .art-twinkle) { display: none !important; }
+html[data-lite] *, html[data-lite] *::before, html[data-lite] *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+html[data-lite] .glass, html[data-lite] [class*='backdrop-blur'] { -webkit-backdrop-filter: none; backdrop-filter: none; }
+html[data-lite] img[loading='lazy'] { content-visibility: auto; }

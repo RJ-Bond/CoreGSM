@@ -18,6 +18,35 @@ export function BotPill({ status, tokenSet }: { status: BotStatus | null; tokenS
   }
 }
 
+/** Gateway latency of the bot: the last hours as a line, and a warning when commands are likely to time out (Discord waits 3 s). */
+function BotLatency({ status }: { status: BotStatus }) {
+  const pts = status.latency ?? [];
+  if (status.state !== 'online' || status.ping == null) return null;
+  const verdict = status.pingVerdict ?? 'ok';
+  const max = Math.max(500, ...pts.map((p) => p.ms));
+  const w = 240, h = 40;
+  const d = pts.length > 1 ? pts.map((p, i) => `${i ? 'L' : 'M'}${((i / (pts.length - 1)) * w).toFixed(1)} ${(h - (p.ms / max) * (h - 4) - 2).toFixed(1)}`).join(' ') : '';
+  const tone = verdict === 'bad' ? 'text-bad' : verdict === 'slow' ? 'text-warn' : 'text-ok';
+  return (
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-2xl bg-soft px-4 py-2.5">
+      <div>
+        <div className="text-xs font-bold text-mute">Задержка бота</div>
+        <div className={`text-lg font-extrabold tabular-nums ${tone}`}>{status.ping} мс</div>
+      </div>
+      {d && (
+        <svg viewBox={`0 0 ${w} ${h}`} className={`h-10 min-w-0 flex-1 basis-40 ${tone}`} role="img" aria-label={`Задержка бота за последние часы, сейчас ${status.ping} мс`} preserveAspectRatio="none">
+          <path d={d} fill="none" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
+        </svg>
+      )}
+      {verdict !== 'ok' && verdict !== 'unknown' && (
+        <p className={`basis-full text-sm font-bold ${tone}`}>
+          {verdict === 'bad' ? 'Бот отвечает очень медленно: команды в Discord могут не успевать. Проверьте сеть и прокси.' : 'Бот отвечает медленнее обычного. Если так долго, проверьте сеть и прокси.'}
+        </p>
+      )}
+    </div>
+  );
+}
+
 export function BotCard() {
   const [info, setInfo] = useState<SettingsInfo | null>(null);
   const [status, setStatus] = useState<BotStatus | null>(null);
@@ -91,6 +120,8 @@ export function BotCard() {
       {tokenSet && status?.state === 'error' && status.error && (
         <p className="rounded-2xl bg-badbg px-4 py-2.5 text-sm font-bold text-bad">{status.error}</p>
       )}
+
+      {tokenSet && status && <BotLatency status={status} />}
 
       <div data-tour="bot-token">
       <Field label="Токен бота">

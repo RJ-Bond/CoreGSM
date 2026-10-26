@@ -14,6 +14,37 @@ const supported = () => typeof window !== 'undefined' && 'serviceWorker' in navi
 interface InstallPrompt extends Event { prompt: () => Promise<void>; userChoice: Promise<{ outcome: string }> }
 const installPrompt = () => (window as unknown as { __installPrompt?: InstallPrompt }).__installPrompt;
 
+interface Quiet { enabled: boolean; fromMin: number; toMin: number; tz: number }
+const hhmm = (m: number) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+const toMin = (v: string) => { const [h, m] = v.split(':').map(Number); return Number.isFinite(h) && Number.isFinite(m) ? h * 60 + m : null; };
+
+/** quiet hours: no pushes to the devices in this window of the user's own day (the inbox still collects them) */
+function QuietHours() {
+  const [q, setQ] = useState<Quiet | null>(null);
+  useEffect(() => { api<Quiet>('/push/quiet').then(setQ).catch(() => undefined); }, []);
+  if (!q) return null;
+  const save = (next: Quiet) => {
+    const body = { ...next, tz: -new Date().getTimezoneOffset() };
+    setQ(body);
+    api<Quiet>('/push/quiet', 'PUT', body).then(() => toast('Сохранено')).catch((e: Error) => toast(e.message));
+  };
+  return (
+    <div className="mt-4 space-y-2 border-t border-line pt-4">
+      <label className="flex cursor-pointer items-center gap-3 font-extrabold">
+        <Switch checked={q.enabled} onChange={(v) => save({ ...q, enabled: v })} />
+        Тихие часы
+      </label>
+      <p className="text-sm font-semibold text-mute">В это время уведомления на устройства не приходят. Они остаются в колокольчике в шапке сайта.</p>
+      {q.enabled && (
+        <div className="flex flex-wrap items-center gap-3">
+          <label className="flex items-center gap-2 text-sm font-bold">с <input type="time" className="input w-auto" value={hhmm(q.fromMin)} onChange={(e) => { const m = toMin(e.target.value); if (m != null) save({ ...q, fromMin: m }); }} /></label>
+          <label className="flex items-center gap-2 text-sm font-bold">до <input type="time" className="input w-auto" value={hhmm(q.toMin)} onChange={(e) => { const m = toMin(e.target.value); if (m != null) save({ ...q, toMin: m }); }} /></label>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function PushCard() {
   const [state, setState] = useState<State>('loading');
   const [installable, setInstallable] = useState(() => !!installPrompt());
@@ -95,6 +126,7 @@ export function PushCard() {
           <button type="button" className="btn btn-sm" onClick={() => void install()}>Установить</button>
         </div>
       )}
+      {state === 'on' && <QuietHours />}
       <ErrorLine text={error} />
     </Section>
   );
