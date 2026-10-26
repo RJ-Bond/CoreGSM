@@ -56,6 +56,9 @@ function UsersTabInner() {
   const [picked, setPicked] = useState<number[]>([]);
   const [hidden, setHidden] = useState<number[]>([]);
   const [rules, setRules] = useState('');
+  const [banFor, setBanFor] = useState<number | null>(null);
+  const [banReason, setBanReason] = useState('');
+  const [banHours, setBanHours] = useState(24);
   const rulesInit = useRef(false);
 
   const load = () => {
@@ -122,6 +125,16 @@ function UsersTabInner() {
   const setRole = async (u: UserRow, role: UserRow['role']) => {
     await api(`/users/${u.id}`, 'PUT', { role }).then(() => toast(t('us.roleChanged'))).catch((e) => setError(e.message));
     load();
+  };
+  const ban = async (u: UserRow) => {
+    await api(`/users/${u.id}/ban`, 'POST', { reason: banReason.trim(), hours: banHours || null })
+      .then(() => { toast(t('us.banDone', { name: u.username })); setBanFor(null); setBanReason(''); })
+      .catch((e) => setError(e.message));
+    void load();
+  };
+  const unban = async (u: UserRow) => {
+    await api(`/users/${u.id}/unban`, 'POST').then(() => toast(t('us.unbanDone', { name: u.username }))).catch((e) => setError(e.message));
+    void load();
   };
   const resetPassword = async (u: UserRow) => {
     const pw = await promptDialog({
@@ -237,6 +250,42 @@ function UsersTabInner() {
         </Section>
       )}
 
+      <Section title={t('us.matrix')}>
+        <details>
+          <summary className="cursor-pointer font-extrabold">{t('us.matrix')}</summary>
+          <p className="mt-2 text-sm font-semibold text-mute">{t('us.matrix.hint')}</p>
+          <div className="mt-2 overflow-x-auto">
+            <table className="adm-table">
+              <thead>
+                <tr>
+                  <th>{t('us.matrix.role')}</th>
+                  {PERM_LABELS.map((p) => <th key={p.id} title={t(`us.perm.${p.id}.hint` as const)}>{t(`us.perm.${p.id}` as const)}</th>)}
+                </tr>
+              </thead>
+              <tbody>
+                <tr><td className="font-extrabold">{t('us.matrix.admin')}</td>{PERM_LABELS.map((p) => <td key={p.id} className="text-ok" aria-label="✓">✓</td>)}</tr>
+                {users.filter((u) => u.role === 'moderator').map((u) => (
+                  <tr key={u.id}>
+                    <td>{u.username}</td>
+                    {PERM_LABELS.map((p) => {
+                      const on = (u.perms ?? []).includes(p.id);
+                      return (
+                        <td key={p.id}>
+                          <input type="checkbox" className="srv-check" checked={on} aria-label={`${u.username}: ${t(`us.perm.${p.id}` as const)}`}
+                            onChange={(e) => void setPerms(u, e.target.checked ? [...(u.perms ?? []), p.id] : (u.perms ?? []).filter((x) => x !== p.id))} />
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+                {users.every((u) => u.role !== 'moderator') && <tr><td colSpan={PERM_LABELS.length + 1} className="text-mute">{t('us.matrix.noMods')}</td></tr>}
+                <tr><td className="font-extrabold">{t('us.matrix.player')}</td>{PERM_LABELS.map((p) => <td key={p.id} className="text-mute" aria-label="—">—</td>)}</tr>
+              </tbody>
+            </table>
+          </div>
+        </details>
+      </Section>
+
       <Section title={t('us.users')}>
         <ErrorLine text={error} />
         <div className="flex flex-wrap items-center gap-2">
@@ -264,6 +313,11 @@ function UsersTabInner() {
                 <span className={`block text-xs font-semibold ${seenText(u).online ? 'text-ok' : 'text-mute'}`}>{seenText(u).text}{u.createdAt ? t('us.since', { d: new Date(u.createdAt).toLocaleDateString(getPrefs().lang === 'en' ? 'en-US' : 'ru-RU') }) : ''}</span>
               </span>
               {u.status === 'pending' && <span className="pill pill-warn">{t('us.pending')}</span>}
+              {u.ban && (
+                <span className="pill pill-bad" title={u.ban.reason || undefined}>
+                  {t('us.banned')} · {u.ban.until ? t('us.bannedUntil', { d: new Date(u.ban.until).toLocaleString(getPrefs().lang === 'en' ? 'en-US' : 'ru-RU') }) : t('us.bannedForever')}
+                </span>
+              )}
               <span className={`pill ${u.role === 'admin' ? 'pill-bad' : u.role === 'moderator' ? 'pill-warn' : 'pill-mute'}`}>{ROLE_LABEL(u.role).toUpperCase()}</span>
               <select className="input w-auto! py-1.5!" value={u.role} onChange={(e) => void setRole(u, e.target.value as UserRow['role'])} aria-label={t('us.roleOf', { name: u.username })}>
                 <option value="player">{t('us.role.player')}</option>
@@ -271,7 +325,24 @@ function UsersTabInner() {
                 <option value="admin">{t('us.role.admin')}</option>
               </select>
               <button type="button" className="row-act" title={t('us.pwTip')} aria-label={t('us.pwOf', { name: u.username })} onClick={() => void resetPassword(u)}><IconKey /></button>
+              {u.role !== 'admin' && (u.ban
+                ? <button type="button" className="btn btn-soft btn-sm" aria-label={t('us.unbanOf', { name: u.username })} onClick={() => void unban(u)}>{t('us.unban')}</button>
+                : <button type="button" className="btn btn-ghost btn-sm" aria-label={t('us.banOf', { name: u.username })} aria-expanded={banFor === u.id} onClick={() => setBanFor(banFor === u.id ? null : u.id)}>{t('us.ban')}</button>)}
               <button type="button" className="row-act row-act-danger" title={t('us.delTip')} aria-label={t('us.delOf', { name: u.username })} onClick={() => void remove(u)} disabled={u.username === me?.username}><IconTrash /></button>
+              {banFor === u.id && !u.ban && (
+                <form className="basis-full flex flex-wrap items-end gap-2 rounded-2xl bg-soft p-3" onSubmit={(e) => { e.preventDefault(); void ban(u); }}>
+                  <label className="min-w-48 flex-1 text-sm font-extrabold">{t('us.banReason')}
+                    <input className="input mt-1" value={banReason} maxLength={300} onChange={(e) => setBanReason(e.target.value)} />
+                  </label>
+                  <label className="text-sm font-extrabold">{t('us.banFor')}
+                    <select className="input mt-1" value={banHours} onChange={(e) => setBanHours(Number(e.target.value))}>
+                      {[1, 24, 168, 720, 0].map((h) => <option key={h} value={h}>{t(`us.ban.${h}` as TKey)}</option>)}
+                    </select>
+                  </label>
+                  <button type="submit" className="btn btn-danger btn-sm">{t('us.banGo')}</button>
+                </form>
+              )}
+              {u.ban?.reason && <span className="basis-full text-xs font-semibold text-mute">{u.ban.reason}</span>}
               {u.role === 'moderator' && (
                 <fieldset className="us-perms basis-full">
                   <legend className="sr-only">{t('us.permsOf', { name: u.username })}</legend>
