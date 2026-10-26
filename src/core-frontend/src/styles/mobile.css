@@ -1,0 +1,111 @@
+/* ==========================================================================
+   Phones. Everything here is about a 360–430 px wide screen: nothing may stick out past the edge, controls stay
+   reachable with a thumb, and a row that cannot fit scrolls instead of widening the page.
+   Loaded after the other sheets (see main.tsx).
+   ========================================================================== */
+
+/* 1. a page never wider than the screen: the root clips what sticks out sideways (the sticky bars and tooltips are inside it) */
+html, body { overflow-x: clip; }
+#main-content { min-width: 0; max-width: 100%; }
+/* grid and flex children may shrink below their content */
+:is(.tile, .panel, .cm-bento, .cm-hero, .cm-hero-main, .nw-page, .srv-page) { min-width: 0; }
+.nw-page { overflow-x: clip; }
+
+/* 2. a segmented control wider than its row scrolls inside itself (hidden scroll bar), and the active pill stays in sight */
+.seg { max-width: 100%; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+.seg::-webkit-scrollbar { display: none; }
+.seg > .seg-item { flex: none; }
+/* the sliding pill is positioned in the scroller's own space: it must be able to move with it */
+.seg[data-ind] { position: relative; }
+
+/* 3. weekday chips and other chip rows: one line, scrolling, not a ragged wrap */
+@media (max-width: 639px) {
+  .cm-days { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; margin-inline: -2px; padding: 2px; }
+  .cm-days::-webkit-scrollbar { display: none; }
+  .cm-days > * { flex: none; }
+  .rp-day { min-width: 2.5rem; padding: 8px 10px; }
+}
+
+/* 4. «Сообщество»: the strip of section chips keeps its edge, fades at both sides and does not push the page */
+.cm-nav { margin: 0; padding-inline: 0; max-width: 100%; scroll-snap-type: x proximity; overscroll-behavior-x: contain; }
+.cm-nav-i { scroll-snap-align: center; min-height: 36px; }
+@media (max-width: 639px) {
+  .cm-nav { -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 28px), transparent); mask-image: linear-gradient(90deg, #000 calc(100% - 28px), transparent); padding-right: 28px; }
+  .cm-hero { padding: 16px; gap: 12px; }
+  .cm-hero-stats > div { min-width: 0; }
+  .cm-heat { grid-template-columns: 1.3rem repeat(24, minmax(0, 1fr)); gap: 1px; }
+  .cm-heat.is-big { grid-template-columns: 1.6rem repeat(24, minmax(0, 1fr)); gap: 2px; }
+  .cm-heat-h { font-size: 9px; letter-spacing: -.04em; }
+  .cm-search { flex-wrap: wrap; }
+  .cm-podium { gap: 6px; }
+  .cm-pod { padding-inline: 4px; }
+  .pl-hero { padding: 16px; }
+  .pl-stats > div { min-width: 0; }
+}
+
+/* 5. servers: tab strip, metrics and the featured card */
+@media (max-width: 639px) {
+  .srv-tabs { overflow-x: auto; scrollbar-width: none; margin-inline: -12px; padding-inline: 12px; width: auto; max-width: none; }
+  .srv-tabs::-webkit-scrollbar { display: none; }
+  .srv-hero { padding: 16px; border-radius: var(--r-xl); }
+  /* the metric cards: a two-column grid again instead of a sideways scroller that a screen reader cannot reach */
+  .srv-metrics { display: grid !important; grid-template-columns: repeat(2, minmax(0, 1fr)); overflow: visible; margin-inline: 0; padding: 0; scroll-snap-type: none; }
+  .srv-metrics > .srv-metric, .srv-metrics > .srv-metric:last-child:nth-child(odd) { flex: none; min-width: 0; }
+  .srv-metrics > .srv-metric:last-child:nth-child(odd) { grid-column: 1 / -1; }
+}
+
+/* 6. long names and values break instead of widening the row */
+:is(.tile, .panel) :is(h1, h2, h3, h4, .truncate-safe, .adm-tile-v, .cm-srv, .pl-hero) { overflow-wrap: anywhere; }
+.truncate { min-width: 0; }
+
+/* 7. the chart: the mouse hint is useless on a touch screen; a row of quick windows replaces it. The tooltip stays inside the chart */
+.hc-quick { display: none; gap: 6px; }
+@media (pointer: coarse) {
+  .hc-tip { display: none; }
+  .hc-quick { display: inline-flex; flex-wrap: wrap; }
+}
+.cm-chart-tip { max-width: 60vw; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 639px) {
+  .cm-chart-ticks { font-size: 10px; }
+  .hc-tools { flex-wrap: wrap; gap: 6px; }
+}
+
+/* 8. admin: lists and the horizontal section row */
+.adm-tablewrap { overflow-x: auto; overscroll-behavior-x: contain; }
+.adm-nav { scrollbar-width: none; scroll-snap-type: x proximity; }
+.adm-nav::-webkit-scrollbar { display: none; }
+.adm-nav .adm-link { scroll-snap-align: center; flex: none; }
+.adm-tiles { grid-template-columns: repeat(auto-fit, minmax(min(100%, 9rem), 1fr)); }
+@media (max-width: 639px) { .adm-bulk { padding: 8px; } }
+
+/* 9. dialogs as bottom sheets: a grip to drag, the sheet lifts above the on-screen keyboard */
+.sheet-grip { display: none; }
+@media (max-width: 639px) {
+  .sheet-grip { display: flex; justify-content: center; margin: -8px 0 6px; padding: 6px 0 8px; touch-action: none; }
+  .sheet-grip > i { width: 40px; height: 4px; border-radius: var(--r-pill); background: rgb(var(--field)); opacity: .6; }
+  .modal-ov { padding-bottom: var(--kb, 0px); }
+  .modal-ov > [role='dialog'] { max-height: calc(92dvh - var(--kb, 0px)); }
+}
+/* the floating bottom bar steps aside while the keyboard is open, so it does not sit on top of the field */
+html.has-kb .nav-bottom { display: none; }
+html.has-kb .save-bar { bottom: calc(.75rem + var(--kb, 0px)); }
+
+/* 10. the page does not end under the floating bottom bar */
+@media (max-width: 767px) {
+  #main-content { padding-bottom: calc(5.5rem + env(safe-area-inset-bottom, 0px)); }
+  .save-bar { bottom: calc(5.5rem + env(safe-area-inset-bottom, 0px)); }
+}
+
+/* 11. touch targets: at least 44 × 44 px of hit area, the picture itself stays as it was */
+@media (pointer: coarse) {
+  :is(.btn-icon, .hint-close, .cm-react, .cm-chip, .hc-chip, .nw-chip, .nw-rubric, .cm-move, .us-perm, .cm-nav-i, .rp-day) { position: relative; }
+  :is(.btn-icon, .hint-close, .cm-react, .cm-chip, .hc-chip, .nw-chip, .nw-rubric, .us-perm, .cm-nav-i, .rp-day)::after {
+    content: ''; position: absolute; left: 50%; top: 50%; width: max(100%, 44px); height: max(100%, 44px); transform: translate(-50%, -50%);
+  }
+  .cm-react { min-height: 36px; }
+  .nw-rubrics, .cm-chips { gap: 8px; }
+}
+
+/* 12. login: the form sits at the top while the keyboard is open, not glued to the bottom */
+html.has-kb :is(.auth-shell, .auth-card) { align-self: start; }
+@media (max-width: 639px) { html.has-kb .auth-showcase { display: none; } }
