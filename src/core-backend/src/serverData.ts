@@ -63,7 +63,7 @@ export function getServer(id: number) {
 }
 
 /** bump when the game icon artwork changes: Discord caches embed images by URL */
-export const GAME_ICON_VERSION = 3;
+export const GAME_ICON_VERSION = 4;
 
 /** the extra servers of a binding (ids that still exist, without the main one and without duplicates) */
 export function extraIds(b: BindingRow): number[] {
@@ -127,7 +127,7 @@ export function embedFor(serverId: number, intervalSec: number) {
     .get(serverId, Date.now() - 24 * 3600 * 1000) as { u: number | null };
   const last = db.prepare('SELECT MAX(ts) AS t FROM history WHERE server_id = ? AND online = 1').get(serverId) as { t: number | null };
   const base = publicBase();
-  return buildEmbed(server, up.u, intervalSec, { serverId, playersShown: playersShown(), lastOnlineAt: last.t, thumbUrl: base ? `${base}/api/game-icon/${server.game}.png?v=${GAME_ICON_VERSION}` : null, baseUrl: base, version: APP_VERSION_NAME || APP_VERSION || null, brandName: brand().name, country: (() => { const c = server.country || countryOf(serverId, server.host); return c ? countryLabel(c) : null; })(), timeZone: getSetting('timezone') || process.env.TZ || 'Europe/Moscow', logoUrl: base && logoFile() ? `${base}/api/branding/logo?v=${brand().logoV}` : null, chartUrl: base && getSetting('embed_chart') !== '0' ? `${base}/api/server-chart/${serverId}-${chartSign(serverId)}.png?v=${Math.floor(Date.now() / 600_000)}` : null });
+  return buildEmbed(server, up.u, intervalSec, { serverId, playersShown: playersShown(), lastOnlineAt: last.t, thumbUrl: base ? `${base}/api/game-icon/${server.game}.png?v=${GAME_ICON_VERSION}${getSetting('embed_icon_tile') === '1' ? '&tile=1' : ''}` : null, baseUrl: base, version: APP_VERSION_NAME || APP_VERSION || null, brandName: brand().name, country: (() => { const c = server.country || countryOf(serverId, server.host); return c ? countryLabel(c) : null; })(), timeZone: getSetting('timezone') || process.env.TZ || 'Europe/Moscow', logoUrl: base && logoFile() ? `${base}/api/branding/logo?v=${brand().logoV}` : null, chartUrl: base && getSetting('embed_chart') !== '0' ? `${base}/api/server-chart/${serverId}-${chartSign(serverId)}.png?v=${Math.floor(Date.now() / 600_000)}` : null });
 }
 
 export const intervalParam = (v: unknown) => Math.min(3600, Math.max(30, Number(v) || 60));

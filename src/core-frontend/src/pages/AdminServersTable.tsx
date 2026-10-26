@@ -5,7 +5,7 @@ import type { Server } from '../api';
 import { confirmDialog } from '../confirm';
 import { t, useI18n, type TKey } from '../i18n';
 import { gameColor, gameLabel } from '../games';
-import { GameAvatar, IconEdit, IconRefresh, IconTrash, IconWrench, MiniSpark, StatusPill, ago, isLag, toast } from '../ui';
+import { AnimatedNumber, GameAvatar, IconEdit, IconRefresh, IconTrash, IconWrench, MiniSpark, StatusPill, ago, isLag, toast } from '../ui';
 import { countServers, filterServers, loadTableState, saveTableState, type ServerFilter } from './adminServersLogic';
 
 export interface TableActions {
@@ -146,7 +146,7 @@ export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableA
                       <StatusPill online={s.online} known={s.hasStatus} lag={isLag(s)} maintenance={!!s.maintenance} />
                       {stateLine(s) && <div className="mt-0.5 text-xs font-semibold text-mute">{stateLine(s)}</div>}
                     </td>
-                    <td className="tabular-nums text-mute">{s.online ? <><b className="text-ink">{s.players}</b>/{s.maxPlayers}</> : '—'}</td>
+                    <td className="tabular-nums text-mute">{s.online ? <><b className="text-ink"><AnimatedNumber value={s.players} /></b>/{s.maxPlayers}</> : '—'}</td>
                     <td className="tabular-nums text-mute">{s.online && s.ping != null ? t('adm.tbl.ms', { n: s.ping }) : '—'}</td>
                     <td className="hidden tabular-nums 2xl:table-cell">{pct(a.uptime.get(s.id))}</td>
                     <td className="hidden lg:table-cell"><MiniSpark serverId={s.id} color={gameColor(s.game)} /></td>
