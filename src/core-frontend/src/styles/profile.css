@@ -99,6 +99,11 @@
 }
 .pf-ach.is-on { background: rgb(var(--brand) / .1); box-shadow: inset 0 0 0 1px rgb(var(--brand) / .25); }
 .pf-ach.is-on .pf-ach-ico { background: transparent; color: rgb(var(--link)); }
+.pf-ach.is-fresh .pf-ach-ico { position: relative; overflow: hidden; animation: pf-ach-pop .7s cubic-bezier(.2, .9, .3, 1.4) both; }
+.pf-ach.is-fresh .pf-ach-ico::after { content: ''; position: absolute; inset: -20% auto -20% -60%; width: 45%; background: linear-gradient(100deg, transparent, rgb(255 255 255 / .75), transparent); transform: skewX(-18deg); animation: pf-ach-shine 1.4s .4s ease-out 2 both; pointer-events: none; }
+@keyframes pf-ach-pop { 0% { transform: scale(.6) rotate(-8deg); opacity: 0; } 100% { transform: none; opacity: 1; } }
+@keyframes pf-ach-shine { to { left: 130%; } }
+@media (prefers-reduced-motion: reduce) { .pf-ach.is-fresh .pf-ach-ico, .pf-ach.is-fresh .pf-ach-ico::after { animation: none; } }
 .pf-ach.is-off .pf-ach-title, .pf-ach.is-off .pf-ach-ico { opacity: .75; }
 .pf-ach-mini { display: inline-flex; align-items: center; gap: .4rem; max-width: 100%; min-width: 0; padding: .3rem .7rem .3rem .35rem; border-radius: var(--r-pill); background: rgb(var(--brand) / .12); font-weight: 650; font-size: .875rem; }
 .pf-ach-mini > span:first-child {
