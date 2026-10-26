@@ -17,6 +17,8 @@ interface language; the GitHub release text is built from the section of the ver
 ## Не выпущено | Unreleased
 
 ### ✨ Новое | New
+- 🚫 Блокировка пользователя с причиной и сроком (час, день, неделя, месяц или навсегда): человек сразу выходит отовсюду, при входе видит причину и срок [migration] | Blocking a user with a reason and a duration (an hour, a day, a week, a month or forever): the person is signed out everywhere at once and sees the reason and the end date when signing in
+- 🧩 Матрица «роли × права» в настройках пользователей: права модераторов видны и переключаются в одной таблице | A «roles × permissions» matrix in the user settings: moderator permissions are shown and toggled in one table
 - 🌐 Описания версий на двух языках: панель показывает русский или английский текст, релиз на GitHub — оба | Release notes in two languages: the panel shows Russian or English, the GitHub release shows both
 
 ### 🐛 Исправлено | Fixed

@@ -88,6 +88,10 @@ const errorsEn: Record<string, string> = {
   last_admin_demote: 'The last administrator cannot be demoted',
   last_admin_delete: 'The last administrator cannot be deleted',
   delete_self: 'You cannot delete your own account',
+  account_banned: 'This account has been blocked by an administrator',
+  ban_self: 'You cannot block your own account',
+  ban_admin: 'An administrator cannot be blocked: change their role first',
+  ban_not_found: 'The block was not found',
 
   // ---- settings, branding, updates ----
   proxy_format: 'Proxy: host:port:login:password, socks5://login:password@host:port or http://host:port',

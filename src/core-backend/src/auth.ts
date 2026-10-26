@@ -4,6 +4,7 @@ import jwt from 'jsonwebtoken';
 import crypto from 'node:crypto';
 import type { NextFunction, Request, Response } from 'express';
 import { INTERNAL_TOKEN, JWT_SECRET } from './config.js';
+import { type BanRow, activeBan } from './banLogic.js';
 import { db, getSetting } from './db.js';
 import { safeEqual } from './http.js';
 import { guardDelete, guardGet, guardSet } from './loginGuard.js';
@@ -26,8 +27,9 @@ export function userFromToken(token: string): { id: number; username: string; ro
     const p = jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] }) as { sub: string; sid?: string };
     // a token without a session id predates sessions: sign in again
     if (!p.sid) return null;
-    const u = db.prepare("SELECT id, username, role FROM users WHERE id = ? AND status = 'active'").get(Number(p.sub)) as { id: number; username: string; role: Role } | undefined;
+    const u = db.prepare("SELECT id, username, role, banned_at, banned_until, ban_reason FROM users WHERE id = ? AND status = 'active'").get(Number(p.sub)) as ({ id: number; username: string; role: Role } & BanRow) | undefined;
     if (!u) return null;
+    if (activeBan(u, Date.now())) return null;
     // an ended session (revoked from the profile) stops working at once
     if (!db.prepare('SELECT 1 FROM sessions WHERE id = ? AND user_id = ?').get(p.sid, u.id)) return null;
     const now = Date.now();
@@ -35,7 +37,7 @@ export function userFromToken(token: string): { id: number; username: string; ro
       lastSeen.set(p.sid, now);
       db.prepare('UPDATE sessions SET last_seen = ? WHERE id = ?').run(now, p.sid);
     }
-    return { ...u, sid: p.sid };
+    return { id: u.id, username: u.username, role: u.role, sid: p.sid };
   } catch {
     return null;
   }
