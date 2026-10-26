@@ -277,7 +277,7 @@ a.adm-tile:hover { box-shadow: var(--shadow-2); border-color: rgb(var(--brand) /
   .adm-rail .adm-link.md\:w-full { padding-right: 0; }
   .adm-rail .adm-link { position: relative; }
   .adm-rail .adm-badge, .adm-rail .adm-dot, .adm-rail .update-dot { position: absolute; top: 2px; right: 4px; margin: 0; }
-  .adm-rail .adm-badge { min-width: 1rem; height: 1rem; padding: 0 3px; font-size: 10px; line-height: 1rem; }
+  .adm-rail .adm-badge { min-width: 1rem; height: 1rem; padding: 0 3px; font-size: var(--fs-2xs); line-height: 1rem; }
 }
 
 /* column chooser of the servers table */
