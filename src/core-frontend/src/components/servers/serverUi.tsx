@@ -192,7 +192,7 @@ function SkeletonPulse() {
 function SkeletonSmall() {
   return (
     <div className="tile flex min-h-[270px] flex-col gap-2 p-3 pb-4">
-      <div className="skeleton h-[88px] rounded-[18px]" />
+      <div className="skeleton h-[88px] rounded-ui-lg" />
       <div className="space-y-2 px-1.5 pt-1"><Bar w="75%" h={15} /><Bar w="40%" /></div>
       <div className="flex items-end gap-2 px-1.5 pt-1"><Bar w={54} h={30} className="rounded-lg!" /><Bar w={34} /></div>
       <div className="px-1.5"><Bar w="100%" h={6} /></div>

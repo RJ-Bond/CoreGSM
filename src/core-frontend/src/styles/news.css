@@ -95,9 +95,9 @@
 .nb-tools { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; }
 .nb-tool { display: inline-grid; place-items: center; width: 30px; height: 30px; border-radius: 8px; color: var(--muted, #6b7280); background: transparent; border: 0; cursor: pointer; }
 .nb-tool:hover { background: color-mix(in srgb, currentColor 12%, transparent); color: inherit; }
-.nw-read { font-size: 12px; opacity: .7; white-space: nowrap; }
+.nw-read { font-size: var(--fs-xs); opacity: .7; white-space: nowrap; }
 .nw-code { position: relative; }
-.nw-code-copy { position: absolute; top: 8px; right: 8px; font-size: 11px; padding: 2px 8px; border-radius: 6px; border: 1px solid currentColor; background: transparent; opacity: 0; cursor: pointer; }
+.nw-code-copy { position: absolute; top: 8px; right: 8px; font-size: var(--fs-2xs); padding: 2px 8px; border-radius: 6px; border: 1px solid currentColor; background: transparent; opacity: 0; cursor: pointer; }
 .nw-code:hover .nw-code-copy, .nw-code-copy:focus-visible { opacity: .75; }
 @media (hover: none) { .nw-code-copy { opacity: .6; } }
 @media (max-width: 560px) {

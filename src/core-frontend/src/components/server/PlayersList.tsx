@@ -12,9 +12,9 @@ import { NEWBIE_MS, VETERAN_MS, nickHue, nickInitial, playedFor, useNow, useStic
 
 function Avatar({ name, size = 36 }: { name: string; size?: number }) {
   return (
-    <NickPic name={name} size={size} className="rounded-[12px]">
+    <NickPic name={name} size={size} className="rounded-ui-md">
       <span
-        className="avatar-hue grid shrink-0 place-items-center rounded-[12px] font-extrabold"
+        className="avatar-hue grid shrink-0 place-items-center rounded-ui-md font-extrabold"
         style={{ ['--h' as string]: nickHue(name), width: size, height: size, fontSize: size * 0.42 }}
         aria-hidden
       >

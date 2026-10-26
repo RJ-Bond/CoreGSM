@@ -88,7 +88,7 @@ export default function GamePicker({
         onClick={() => setOpen((o) => !o)}
         onKeyDown={(e) => { if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && !open) { e.preventDefault(); setOpen(true); } }}
       >
-        {current ? <GameAvatar game={current.id} size={30} /> : <span aria-hidden className="grid h-[30px] w-[30px] place-items-center rounded-[9px] bg-soft text-sm font-black text-mute">?</span>}
+        {current ? <GameAvatar game={current.id} size={30} /> : <span aria-hidden className="grid h-[30px] w-[30px] place-items-center rounded-ui-md bg-soft text-sm font-black text-mute">?</span>}
         <span className="min-w-0 flex-1 truncate font-bold">{current ? current.label : 'Другая игра (GameDig ID)'}</span>
         <svg aria-hidden width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" className={`shrink-0 text-mute transition ${open ? 'rotate-180' : ''}`}><path d="m6 9 6 6 6-6" /></svg>
       </button>
@@ -127,7 +127,7 @@ export default function GamePicker({
                   className={`flex cursor-pointer items-center gap-3 rounded-xl px-2.5 py-2 font-bold transition-colors max-sm:min-h-[48px] ${i === active ? 'bg-soft' : ''} ${selected ? 'text-link' : ''}`}
                 >
                   {it.id === CUSTOM ? (
-                    <span aria-hidden className="grid h-[34px] w-[34px] shrink-0 place-items-center rounded-[10px] bg-soft text-lg font-black text-mute">+</span>
+                    <span aria-hidden className="grid h-[34px] w-[34px] shrink-0 place-items-center rounded-ui-md bg-soft text-lg font-black text-mute">+</span>
                   ) : (
                     <GameAvatar game={it.id} size={34} />
                   )}
