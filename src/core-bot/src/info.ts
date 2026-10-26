@@ -1,4 +1,5 @@
 /** Public slash commands: /online, /status, /player and /top. The answers are seen by everybody in the channel. */
+import { footerOf, getStyle } from './style.js';
 import { AttachmentBuilder, EmbedBuilder, type AutocompleteInteraction, type ChatInputCommandInteraction } from 'discord.js';
 import { backend, backendJson } from './backend.js';
 import { log } from './log.js';
@@ -64,7 +65,7 @@ export function onlineEmbed(d: OnlineData): EmbedBuilder {
     .setTitle(`🎮 Сейчас играют: ${d.players} ${plural(d.players, ['игрок', 'игрока', 'игроков'])}`)
     .setDescription((lines.join('\n') || 'Серверов пока нет.').slice(0, 3900))
     .setColor(up.length ? COLORS.ok : COLORS.bad)
-    .setFooter({ text: `Серверов в сети: ${up.length} из ${d.servers.length} · CoreGSM` });
+    .setFooter(footerOf(`Серверов в сети: ${up.length} из ${d.servers.length}`));
   if (d.url && /^https?:\/\//.test(d.url)) e.setURL(d.url);
   return e;
 }
@@ -76,13 +77,13 @@ export function playerEmbed(p: PlayerData): EmbedBuilder {
   const e = new EmbedBuilder()
     .setTitle(`👤 ${p.name}`.slice(0, 250))
     .setDescription([status, p.usualHour != null ? `Обычно играет ${partOfDay(p.usualHour)}, около ${String(p.usualHour).padStart(2, '0')}:00` : ''].filter(Boolean).join('\n') || ' ')
-    .setColor(p.online ? COLORS.ok : COLORS.info)
+    .setColor(p.online ? COLORS.ok : getStyle().accent)
     .addFields(
       { name: 'Часов', value: hoursText(p.hours), inline: true },
       { name: 'Визитов', value: String(p.visits), inline: true },
       { name: 'Подряд', value: `${p.streak >= 3 ? '🔥 ' : ''}${p.streak} ${plural(p.streak, ['день', 'дня', 'дней'])}`, inline: true },
     )
-    .setFooter({ text: 'За последние 90 дней · CoreGSM' });
+    .setFooter(footerOf('За последние 90 дней'));
   if (p.servers.length) e.addFields({ name: 'Где играет', value: p.servers.slice(0, 5).map((s) => `${s.name} — ${hoursText(s.hours)} ч`).join('\n').slice(0, 1000) });
   if (p.url && /^https?:\/\//.test(p.url)) e.setURL(p.url);
   return e;
@@ -95,7 +96,7 @@ export function topEmbed(d: TopData): EmbedBuilder {
     .setTitle(d.period === 'month' ? '🏆 Самые активные за месяц' : '🏆 Самые активные за неделю')
     .setDescription((lines.join('\n') || 'Пока никто не играл.').slice(0, 3900))
     .setColor(COLORS.warn)
-    .setFooter({ text: 'CoreGSM' });
+    .setFooter(footerOf());
   if (d.url && /^https?:\/\//.test(d.url)) e.setURL(d.url);
   return e;
 }

@@ -12,6 +12,7 @@ import { BotPill } from './Settings';
 import { MissingNote } from '../components/ChannelPicker';
 import EmbedPreview from './EmbedPreview';
 import WelcomeCard from '../components/WelcomeCard';
+import DiscordStyleCard from '../components/DiscordStyleCard';
 
 type Style = 'embed' | 'card' | 'both';
 interface Draft { id?: number; serverId: number; /** more servers shown in the same message (the main one is serverId) */ extraServerIds?: number[]; channelId: string; intervalSec: number; enabled: boolean; style: Style; layout?: 'detailed' | 'compact' | 'minimal' }
@@ -301,6 +302,7 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
 
       <PlayersShownCard />
       <WelcomeCard />
+      <DiscordStyleCard />
       {loaded && <DiscordExtras servers={servers} />}
       <DeliveryList />
 
