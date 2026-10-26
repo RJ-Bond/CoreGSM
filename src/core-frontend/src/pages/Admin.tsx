@@ -98,6 +98,9 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
   };
   const badges = useNavBadges(isAdmin, me?.perms ?? []);
   const [dense, setDense] = useState(() => { try { return localStorage.getItem('coregsm_admin_density') === 'compact'; } catch { return false; } });
+  // the menu can shrink to a column of icons: more room for the page itself
+  const [rail, setRail] = useState(() => { try { return localStorage.getItem('coregsm_admin_rail') === '1'; } catch { return false; } });
+  const flipRail = () => setRail((v) => { try { localStorage.setItem('coregsm_admin_rail', v ? '0' : '1'); } catch { /* not remembered */ } return !v; });
   const flipDense = () => setDense((v) => { try { localStorage.setItem('coregsm_admin_density', v ? 'cozy' : 'compact'); } catch { /* not remembered */ } return !v; });
   // the sidebar scrolls sideways on a phone: keep the current section in view
   useEffect(() => {
@@ -155,10 +158,11 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
       key={s.id}
       href={`/admin/${s.id}`}
       aria-current={current === s.id ? 'page' : undefined}
+      title={rail ? s.label : undefined}
       className={`adm-link flex min-w-0 shrink-0 items-center gap-2.5 whitespace-nowrap rounded-ui-md py-1.5 pl-1.5 pr-3.5 text-sm font-bold transition max-md:rounded-full ${pinnable ? 'md:w-full md:pr-9' : ''} ${current === s.id ? 'is-on bg-linear-to-br from-brand to-brand-2 text-white shadow-pop' : 'text-mute hover:bg-soft hover:text-ink'}`}
     >
       <span className="adm-ic" aria-hidden>{s.icon()}</span>
-      {s.label}
+      <span className="adm-lbl min-w-0 truncate">{s.label}</span>
       {badges[s.id] && (badges[s.id].n === 0
         ? <span className={`adm-dot is-${badges[s.id].tone}`} title={badges[s.id].label} role="img" aria-label={badges[s.id].label} />
         : <span className={`adm-badge is-${badges[s.id].tone}`} title={badges[s.id].label} aria-label={badges[s.id].label}>{badges[s.id].n}</span>)}
@@ -180,7 +184,7 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
     measure();
     window.addEventListener('resize', measure);
     return () => window.removeEventListener('resize', measure);
-  }, [current, home, pins, recent, badges, isAdmin]);
+  }, [current, home, pins, recent, badges, isAdmin, rail]);
   // «g» then a letter: go to a section (not while typing)
   useEffect(() => {
     if (!isAdmin) return;
@@ -200,8 +204,8 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
   const divider = <span aria-hidden className="mx-1 w-px shrink-0 self-stretch bg-line md:hidden" />;
 
   return (
-    <div className="grid gap-4 md:grid-cols-[14rem_minmax(0,1fr)]" data-density={dense ? 'compact' : undefined}>
-      <nav ref={navRef} className={`adm-nav ${ind ? 'has-ind' : ''} tile fade-x fade-x-m flex items-stretch gap-1 overflow-x-auto p-1.5 md:sticky md:top-24 md:max-h-[calc(100dvh-7rem)] md:flex-col md:items-stretch md:self-start md:overflow-y-auto md:p-2.5`} aria-label={t('adm.navLabel')}>
+    <div className={`grid gap-4 ${rail ? 'md:grid-cols-[4.25rem_minmax(0,1fr)]' : 'md:grid-cols-[14rem_minmax(0,1fr)]'}`} data-density={dense ? 'compact' : undefined}>
+      <nav ref={navRef} className={`adm-nav ${rail ? 'adm-rail' : ''} ${ind ? 'has-ind' : ''} tile fade-x fade-x-m flex items-stretch gap-1 overflow-x-auto p-1.5 md:sticky md:top-24 md:max-h-[calc(100dvh-7rem)] md:flex-col md:items-stretch md:self-start md:overflow-y-auto md:p-2.5`} aria-label={t('adm.navLabel')}>
         {ind && <span className="adm-ind" aria-hidden style={{ transform: `translate(${ind.x}px, ${ind.y}px)`, width: ind.w, height: ind.h }} />}
         {isAdmin ? (
           <>
@@ -247,7 +251,10 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
           </>
         )}
         <button type="button" className="adm-density max-md:hidden" aria-pressed={dense} onClick={flipDense}>
-          <span aria-hidden>{dense ? '▤' : '▦'}</span>{t('adm.density')}
+          <span aria-hidden>{dense ? '▤' : '▦'}</span><span className="adm-lbl">{t('adm.density')}</span>
+        </button>
+        <button type="button" className="adm-density max-md:hidden" aria-pressed={rail} onClick={flipRail} title={rail ? t('adm.rail.open') : t('adm.rail.close')}>
+          <span aria-hidden>{rail ? '»' : '«'}</span><span className="adm-lbl">{t('adm.rail.close')}</span>
         </button>
       </nav>
       <div className="min-w-0 space-y-5">

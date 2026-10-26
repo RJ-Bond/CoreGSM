@@ -1894,6 +1894,15 @@ const en: Record<keyof typeof ru, string> = {
   'embed.chart.hint': 'A picture under the server message. It is not shown in a message with several servers.',
   'embed.tile': 'Game icon on a coloured tile',
   'embed.tile.hint': 'The icon reads on both the light and the dark Discord theme. Without the tile it is a transparent game picture.',
+  'adm.rail.close': 'Collapse the menu',
+  'adm.rail.open': 'Show the full menu',
+  'adm.cols': 'Columns',
+  'adm.col.uptime': 'Uptime',
+  'adm.col.h24': '24 h chart',
+  'adm.col.map': 'Map',
+  'adm.col.version': 'Version',
+  'adm.col.channels': 'Discord channels',
+  'adm.col.updated': 'Updated',
 };
 
 export default en;

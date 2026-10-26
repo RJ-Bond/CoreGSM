@@ -49,3 +49,25 @@ export function saveTableState(filter: ServerFilter, query: string): void {
     else sessionStorage.setItem(FILTER_KEY, JSON.stringify({ filter, query }));
   } catch { /* not remembered */ }
 }
+
+/** the columns of the wide table that can be switched on and off (the server, status, players, ping and actions are always there) */
+export const TABLE_COLUMNS = ['uptime', 'h24', 'map', 'version', 'channels', 'updated'] as const;
+export type TableColumn = (typeof TABLE_COLUMNS)[number];
+export const DEFAULT_COLUMNS: TableColumn[] = ['uptime', 'h24'];
+const COLUMNS_KEY = 'coregsm_admin_srv_cols';
+
+/** a saved list of columns (anything unknown is dropped, the order is always the table's own) */
+export function parseColumns(raw: string | null): TableColumn[] {
+  if (raw == null) return [...DEFAULT_COLUMNS];
+  try {
+    const v: unknown = JSON.parse(raw);
+    if (!Array.isArray(v)) return [...DEFAULT_COLUMNS];
+    return TABLE_COLUMNS.filter((c) => v.includes(c));
+  } catch { return [...DEFAULT_COLUMNS]; }
+}
+export function loadColumns(): TableColumn[] {
+  try { return parseColumns(localStorage.getItem(COLUMNS_KEY)); } catch { return [...DEFAULT_COLUMNS]; }
+}
+export function saveColumns(cols: TableColumn[]): void {
+  try { localStorage.setItem(COLUMNS_KEY, JSON.stringify(cols)); } catch { /* not remembered */ }
+}

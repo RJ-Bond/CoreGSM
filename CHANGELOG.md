@@ -14,6 +14,13 @@ interface language; the GitHub release text is built from the section of the ver
 - Пометки в конце русской части: `[migration]` — меняется база данных, `[env]` — нужны новые настройки сервера, `⚠` в начале — несовместимое изменение.
 - Новые пункты идут в раздел «Не выпущено». Релиз выпускается только по команде владельца: тогда раздел переименовывается в `## <версия> · <дата>` (версия из `version.txt`).
 
+## Не выпущено | Unreleased
+
+### ✨ Новое | New
+- 🖥️ Админка шире: на больших экранах контент занимает до 1600 px, а меню можно свернуть в узкую полосу иконок (запоминается в браузере) | The admin area is wider: content takes up to 1600 px on large screens, and the menu can shrink to a narrow icon strip (remembered in the browser)
+- 📋 Таблица серверов: колонки «Карта», «Версия», «Каналы Discord» и «Обновлён», меню «Колонки» для выбора нужных (запоминается) | Servers table: Map, Version, Discord channels and Updated columns, and a «Columns» menu to pick the ones you need (remembered)
+- 🖼️ Итоги недели: предпросмотр картинки справа от настроек и остаётся на виду при прокрутке; страница «Карточки» на очень широких экранах показывает три колонки | Weekly digest: the picture preview sits next to the settings and stays in view while scrolling; the Cards page shows three columns on very wide screens
+
 ## 1.0.0.20 · 26.10.2026
 
 ### ✨ Новое | New
