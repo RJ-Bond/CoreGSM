@@ -60,6 +60,16 @@ export function isNewerRelease(rel: UpdateNotesRelease, current: string | null |
   return c !== null && c > 0;
 }
 
+/** what changed after `seen` up to and including `current` (newest first); nothing when either is not a readable version */
+export function releasesSince(releases: UpdateNotesRelease[], seen: string | null | undefined, current: string | null | undefined): UpdateNotesRelease[] {
+  return releases.filter((r) => {
+    if (!r.version) return false;
+    const up = cmpVersion(r.version, current);
+    const after = cmpVersion(r.version, seen);
+    return up !== null && up <= 0 && after !== null && after > 0;
+  });
+}
+
 /** the text of a note without its markers */
 export const cleanNote = (s: string): string => s.replace(/\s*\[(migration|db|env)\]/gi, '').replace(/^⚠️?\s*/, '');
 

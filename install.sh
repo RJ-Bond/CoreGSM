@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="da6b0dba03a6"
+COREGSM_BUILD="3936519e5f41"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.0.0.29"
+COREGSM_VERSION="1.0.0.30"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -23718,6 +23718,8 @@ __COREGSM_EOF__
       // apply the visitor's theme (or the community's default) before first paint to avoid a flash
       try {
         var t = localStorage.getItem('coregsm_theme') || localStorage.getItem('coregsm_theme_default') || 'dark';
+        // the admin area has its own theme when one was chosen there
+        if (location.pathname.indexOf('/admin') === 0) t = localStorage.getItem('coregsm_admin_theme') || t;
         if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
       } catch (e) {}
     </script>
@@ -49173,7 +49175,7 @@ import ServersPage from './pages/Servers';
 import { applyServerPrefs, t, useI18n, type TKey } from './i18n';
 import { lazyPage, PageFrame } from './lazyPage';
 import { OfflineBar } from './components/OfflineBar';
-import { AuthCard, AuthShell, IconNews, IconServers, IconSettings, Logo, ThemeToggle, Toaster, UserAvatar, Wordmark, applyDefaultTheme, navigate, parseRoute, toast, useRoute } from './ui';
+import { AuthCard, AuthShell, IconNews, IconServers, IconSettings, Logo, ThemeToggle, Toaster, UserAvatar, Wordmark, applyDefaultTheme, setThemeScope, navigate, parseRoute, toast, useRoute } from './ui';
 
 // loaded on demand: the server list (the first screen) does not wait for these
 const NewsFeed = lazyPage(() => import('./pages/NewsFeed'));
@@ -49191,6 +49193,7 @@ const ForgotPassword = lazyPage(() => import('./pages/ForgotPassword'));
 const ResetPassword = lazyPage(() => import('./pages/ResetPassword'));
 const VerifyEmail = lazyPage(() => import('./pages/VerifyEmail'));
 const Tour = lazyPage(() => import('./components/Tour'));
+const WhatsNew = lazyPage(() => import('./components/WhatsNew'));
 const CommandPalette = lazyPage(() => import('./components/CommandPalette'));
 
 const IconCommunity = () => (
@@ -49275,6 +49278,8 @@ export default function App() {
   const { page: rawPage, sub } = useRoute();
   // re-renders the whole shell when the language or a regional setting changes
   useI18n();
+  // the admin area keeps a theme of its own (the header button then changes only that one)
+  useEffect(() => { setThemeScope(rawPage === 'admin'); }, [rawPage]);
   const [boot, setBoot] = useState<Boot>({ ready: false, offline: false, needsSetup: false, me: null, access: DEFAULT_ACCESS });
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const [authing, setAuthing] = useState(false);
@@ -49638,6 +49643,7 @@ export default function App() {
         <ConfirmHost />
         <Suspense fallback={null}>
           {isAdmin && <Tour />}
+          {isAdmin && <WhatsNew />}
           {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} isStaff={isStaff} isAdmin={!!isAdmin} />}
         </Suspense>
 
@@ -51459,7 +51465,8 @@ import { useBackdropClose, useDialogFocus } from '../confirm';
 import { gameLabel } from '../games';
 import { ADMIN_LINKS, ADMIN_SECTIONS, SECTION_PERM } from '../pages/adminNav';
 import { confirmDialog } from '../confirm';
-import { GameAvatar, IconCards, IconCopy, IconMoon, IconNews, IconRefresh, IconServers, IconSun, IconTrophy, IconWrench, currentTheme, setThemeChoice, toast, useDensity, navigate } from '../ui';
+import { currentPath } from '../ui/route';
+import { GameAvatar, IconCards, IconCopy, IconMoon, IconNews, IconRefresh, IconServers, IconSun, IconTrophy, IconWrench, adminThemeIsOwn, currentTheme, resetAdminTheme, setThemeChoice, toast, useDensity, navigate } from '../ui';
 
 type Group = 'Серверы' | 'Разделы' | 'Действия';
 
@@ -51597,6 +51604,7 @@ export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose:
       if (t === theme) continue;
       out.push({ key: `theme-${t}`, group: 'Действия', label, hint: 'Оформление панели', href: '', run: () => setThemeChoice(t), icon, hay: norm(`${label} тема оформление цвет ночь день dark light`) });
     }
+    if (adminThemeIsOwn() && /^\/admin(\/|$)/.test(currentPath())) out.push({ key: 'theme-site', group: 'Действия', label: 'Тема админки как на сайте', hint: 'Оформление панели', href: '', run: () => resetAdminTheme(), icon: <IconSun key="x" />, hay: norm('тема админки как на сайте сбросить оформление') });
     if (me) act('act-logout', 'Выйти', me.username, 'выход logout', <IconUser />, () => logout());
     const compact = density === 'compact';
     out.push({
@@ -54759,6 +54767,122 @@ function TourOverlay({ onClose }: { onClose: () => void }) {
             <button type="button" data-next className="btn" onClick={() => (last ? onClose() : setI(i + 1))}>
               {last ? 'Готово' : 'Далее'}
             </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/WhatsNew.tsx" << '__COREGSM_EOF__'
+import { useEffect, useRef, useState } from 'react';
+import { api, type UpdateInfo, type UpdateNotes, type UpdateNotesRelease } from '../api';
+import { useAuth } from '../auth';
+import { useDialogFocus } from '../confirm';
+import { getLang, t, type TKey } from '../i18n';
+import { cleanNote, releasesSince } from '../pages/settings/updateLogic';
+
+/**
+ * «What's new» after a panel update: administrators see the release notes of the versions installed since they last looked,
+ * one version per step. The version they have seen is remembered per user in localStorage; the very first visit only
+ * remembers the current version (an offer about a fresh install would be noise).
+ */
+const key = (username: string) => `coregsm_whatsnew_${username}`;
+const read = (username: string): string | null => {
+  try { return localStorage.getItem(key(username)); } catch { return null; }
+};
+const write = (username: string, v: string) => {
+  try { localStorage.setItem(key(username), v); } catch { /* private mode: it may be offered again */ }
+};
+
+export default function WhatsNew() {
+  const { me, isAdmin } = useAuth();
+  const username = me?.username ?? '';
+  const [current, setCurrent] = useState<string | null>(null);
+  const [rels, setRels] = useState<UpdateNotesRelease[]>([]);
+  const [offer, setOffer] = useState(false);
+  const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    if (!isAdmin || !username) return;
+    let alive = true;
+    api<UpdateInfo>('/update/status')
+      .then(async (info) => {
+        const cur = info.currentLabel ?? null;
+        if (!alive || !cur) return;
+        setCurrent(cur);
+        const seen = read(username);
+        if (!seen) { write(username, cur); return; }
+        if (seen === cur) return;
+        const n = await api<UpdateNotes>('/update/notes');
+        if (!alive) return;
+        const list = releasesSince(n.releases, seen, cur);
+        // nothing readable to show (an old install, a downgrade): just remember where we are
+        if (list.length === 0) { write(username, cur); return; }
+        setRels(list);
+        window.setTimeout(() => { if (alive) setOffer(true); }, 2500);
+      })
+      .catch(() => undefined);
+    return () => { alive = false; };
+  }, [isAdmin, username]);
+
+  const done = () => {
+    if (username && current) write(username, current);
+    setOffer(false);
+    setOpen(false);
+  };
+
+  if (!isAdmin || rels.length === 0) return null;
+  if (open) return <Steps rels={rels} onClose={done} />;
+  if (!offer) return null;
+  return (
+    <div role="dialog" aria-label={t('wn.title')} className="pop panel panel-raised fixed bottom-24 right-4 z-60 flex w-[min(22rem,calc(100vw-2rem))] items-center gap-3 p-3 md:left-4 md:right-auto">
+      <div className="min-w-0 flex-1">
+        <div className="text-sm font-black">{t('wn.offer', { v: current ?? '' })}</div>
+        <button type="button" className="text-sm font-extrabold text-link underline" onClick={() => { setOffer(false); setOpen(true); }}>{t('wn.show')}</button>
+      </div>
+      <button type="button" className="btn-icon-ghost btn-icon-sm" aria-label={t('wn.dismiss')} title={t('wn.dismiss')} onClick={done}>×</button>
+    </div>
+  );
+}
+
+function Steps({ rels, onClose }: { rels: UpdateNotesRelease[]; onClose: () => void }) {
+  // oldest first: the story of what changed reads in order
+  const ordered = [...rels].reverse();
+  const [i, setI] = useState(0);
+  const box = useRef<HTMLDivElement>(null);
+  useDialogFocus(box, onClose, () => box.current?.querySelector<HTMLElement>('[data-next]'));
+  const r = ordered[i]!;
+  const last = i === ordered.length - 1;
+  const en = getLang() === 'en';
+  return (
+    <div className="fixed inset-0 z-85 flex items-center justify-center bg-black/50 p-4">
+      <div ref={box} role="dialog" aria-modal="true" aria-label={t('wn.title')} className="panel panel-raised flex max-h-[85dvh] w-[min(34rem,100%)] flex-col overflow-hidden">
+        <div className="flex items-center justify-between gap-3 border-b border-line px-5 py-3">
+          <h2 className="text-lg font-black">{t('wn.version', { v: r.version ?? '' })}{r.date ? <span className="ml-2 text-sm font-semibold text-mute">{r.date}</span> : null}</h2>
+          <span className="text-sm font-bold text-mute">{i + 1} / {ordered.length}</span>
+        </div>
+        <div className="overflow-y-auto px-5 py-4">
+          {r.groups.map((g, gi) => (
+            <section key={gi} className="mb-3 last:mb-0">
+              <h3 className="mb-1 text-sm font-black text-mute">{en && g.titleEn ? g.titleEn : g.title}</h3>
+              <ul className="space-y-1.5">
+                {g.items.map((it, k) => (
+                  <li key={k} className="text-sm font-semibold leading-snug">
+                    {cleanNote(en && it.textEn ? it.textEn : it.text)}
+                    {it.flags.map((f) => <span key={f} className="pill pill-warn ml-2">{t(`upd.fl.${f}` as TKey)}</span>)}
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ))}
+        </div>
+        <div className="flex items-center justify-between gap-2 border-t border-line px-5 py-3">
+          <button type="button" className="btn-link" onClick={onClose}>{t('wn.skip')}</button>
+          <div className="flex gap-2">
+            {i > 0 && <button type="button" className="btn-soft" onClick={() => setI(i - 1)}>{t('wn.back')}</button>}
+            <button type="button" data-next className="btn-primary" onClick={() => (last ? onClose() : setI(i + 1))}>{last ? t('wn.done') : t('wn.next')}</button>
           </div>
         </div>
       </div>
@@ -68883,6 +69007,16 @@ const en: Record<keyof typeof ru, string> = {
   'theme.light': 'light',
   'theme.dark': 'dark',
   'theme.title': 'Theme: {name}. Click to switch',
+  'theme.titleAdmin': 'Admin theme: {name}. Click to switch (the site keeps its own)',
+  'wn.title': "What's new",
+  'wn.offer': 'The panel was updated to {v}',
+  'wn.show': "What's new?",
+  'wn.dismiss': 'Close',
+  'wn.version': 'Version {v}',
+  'wn.skip': 'Skip',
+  'wn.back': 'Back',
+  'wn.next': 'Next',
+  'wn.done': 'Done',
   'theme.aria': 'Theme: {name}. Switch',
   'pw.show': 'Show password',
   'pw.hide': 'Hide password',
@@ -71084,6 +71218,16 @@ const ru = {
   'theme.light': 'светлая',
   'theme.dark': 'тёмная',
   'theme.title': 'Тема: {name}. Нажмите, чтобы переключить',
+  'theme.titleAdmin': 'Тема админки: {name}. Нажмите, чтобы переключить (на сайте тема своя)',
+  'wn.title': 'Что нового',
+  'wn.offer': 'Панель обновлена до {v}',
+  'wn.show': 'Что нового?',
+  'wn.dismiss': 'Закрыть',
+  'wn.version': 'Версия {v}',
+  'wn.skip': 'Пропустить',
+  'wn.back': 'Назад',
+  'wn.next': 'Дальше',
+  'wn.done': 'Готово',
   'theme.aria': 'Тема: {name}. Переключить',
   'pw.show': 'Показать пароль',
   'pw.hide': 'Скрыть пароль',
@@ -84641,7 +84785,7 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages/settings"
   cat > "$APP_DIR/core-frontend/src/pages/settings/updateLogic.test.ts" << '__COREGSM_EOF__'
 import { describe, expect, it } from 'vitest';
-import { cmpVersion, groupCommits, isNewerRelease, preflightWarnings, stepStates, upcomingFlags, versionText } from './updateLogic';
+import { cmpVersion, groupCommits, isNewerRelease, preflightWarnings, releasesSince, stepStates, upcomingFlags, versionText } from './updateLogic';
 import type { ChangelogItem, UpdateNotesRelease } from '../../api';
 
 describe('update versions', () => {
@@ -84707,6 +84851,19 @@ describe('release notes', () => {
     expect(g[1]!.items[0]!.isNew).toBe(false);
   });
 });
+
+describe('releasesSince', () => {
+  const r = (version: string | null) => ({ version, date: null, groups: [] });
+  const list = [r(null), r('1.0.0.12'), r('1.0.0.11'), r('1.0.0.10'), r('1.0.0.9')];
+  it('takes versions after the seen one up to the running one', () => {
+    expect(releasesSince(list, '1.0.0.9', '1.0.0.11').map((x) => x.version)).toEqual(['1.0.0.11', '1.0.0.10']);
+  });
+  it('is empty when nothing is new or a version is unreadable', () => {
+    expect(releasesSince(list, '1.0.0.11', '1.0.0.11')).toEqual([]);
+    expect(releasesSince(list, null, '1.0.0.11')).toEqual([]);
+    expect(releasesSince(list, '1.0.0.9', null)).toEqual([]);
+  });
+});
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages/settings"
   cat > "$APP_DIR/core-frontend/src/pages/settings/updateLogic.ts" << '__COREGSM_EOF__'
@@ -84770,6 +84927,16 @@ export function isNewerRelease(rel: UpdateNotesRelease, current: string | null |
   if (!rel.version) return false;
   const c = cmpVersion(rel.version, current);
   return c !== null && c > 0;
+}
+
+/** what changed after `seen` up to and including `current` (newest first); nothing when either is not a readable version */
+export function releasesSince(releases: UpdateNotesRelease[], seen: string | null | undefined, current: string | null | undefined): UpdateNotesRelease[] {
+  return releases.filter((r) => {
+    if (!r.version) return false;
+    const up = cmpVersion(r.version, current);
+    const after = cmpVersion(r.version, seen);
+    return up !== null && up <= 0 && after !== null && after > 0;
+  });
 }
 
 /** the text of a note without its markers */
@@ -88399,7 +88566,7 @@ export { useTween, AnimatedNumber, Burst } from './ui/motion';
 export { currentPath, navigate, parseRoute, routeQuery, useRoute } from './ui/route';
 export type { Route } from './ui/route';
 export { ago, fmtDate, fmtTime, fmtDateTime, fmtDay, num, plural } from './ui/format';
-export { ThemeToggle, applyDefaultTheme, currentTheme, setThemeChoice } from './ui/theme';
+export { ThemeToggle, adminThemeIsOwn, applyDefaultTheme, currentTheme, resetAdminTheme, setThemeChoice, setThemeScope } from './ui/theme';
 export { Modal, Field, StatusPill, GameAvatar, FillBar, PageHead, GoLink, Notice, ErrorLine, Empty, CopyButton, Logo, ProxyField, InviteButton, SkeletonRows, Wordmark } from './ui/blocks';
 export type { ProxyType } from './ui/blocks';
 export { Spark, MiniSpark, smoothPath, smoothValues, SmoothArea, FleetBar, useSparkSpanMin, useHourTrend, spanCaption } from './ui/charts';
@@ -89981,6 +90148,13 @@ const read = (key: string): Theme | null => {
 };
 /** the visitor's own choice, else the community's default */
 const readTheme = (): Theme => read(THEME_KEY) ?? read(DEFAULT_KEY) ?? 'dark';
+// the admin area may have a theme of its own (e.g. a dark admin next to a light public site); without a choice it follows the site
+const ADMIN_KEY = 'coregsm_admin_theme';
+let adminScope = false;
+/** the theme the visitor sees in the current area */
+const readScoped = (): Theme => (adminScope ? read(ADMIN_KEY) ?? readTheme() : readTheme());
+/** does the admin area have its own theme right now */
+export const adminThemeIsOwn = (): boolean => read(ADMIN_KEY) !== null;
 const paint = (t: Theme) => {
   const root = document.documentElement;
   if (t === 'auto') root.removeAttribute('data-theme');
@@ -89990,7 +90164,7 @@ function applyTheme(t: Theme) {
   paint(t);
   try {
     // 'auto' is stored too: it is a choice, and the community default must not override it
-    localStorage.setItem(THEME_KEY, t);
+    localStorage.setItem(adminScope ? ADMIN_KEY : THEME_KEY, t);
   } catch {
     /* private mode: the theme just is not remembered */
   }
@@ -90004,7 +90178,7 @@ export function applyDefaultTheme(def: Theme) {
   } catch {
     /* not remembered: applied for this visit only */
   }
-  if (read(THEME_KEY)) return;
+  if (read(THEME_KEY) || (adminScope && read(ADMIN_KEY))) return;
   paint(def);
   subs.forEach((f) => f(def));
 }
@@ -90014,10 +90188,31 @@ export function setThemeChoice(t: Theme) {
   applyTheme(t);
   subs.forEach((f) => f(t));
 }
-export const currentTheme = (): Theme => readTheme();
+export const currentTheme = (): Theme => readScoped();
+
+/** the admin area was entered / left: paint its own theme (or the site's) and tell the buttons */
+export function setThemeScope(admin: boolean) {
+  if (adminScope === admin) return;
+  adminScope = admin;
+  const t = readScoped();
+  paint(t);
+  subs.forEach((f) => f(t));
+}
+
+/** «as on the site» for the admin area: forget its own theme */
+export function resetAdminTheme() {
+  try {
+    localStorage.removeItem(ADMIN_KEY);
+  } catch {
+    /* nothing to forget */
+  }
+  const t = readScoped();
+  paint(t);
+  subs.forEach((f) => f(t));
+}
 
 export function ThemeToggle() {
-  const [theme, setTheme] = useState<Theme>(readTheme);
+  const [theme, setTheme] = useState<Theme>(readScoped);
   useEffect(() => {
     subs.add(setTheme);
     return () => { subs.delete(setTheme); };
@@ -90028,7 +90223,7 @@ export function ThemeToggle() {
     <button
       type="button"
       className="btn-icon"
-      title={t('theme.title', { name: label[theme] })}
+      title={adminScope ? t('theme.titleAdmin', { name: label[theme] }) : t('theme.title', { name: label[theme] })}
       aria-label={t('theme.aria', { name: label[theme] })}
       onClick={(e) => {
         const t = next[theme];
