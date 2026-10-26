@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, Client, EmbedBuilder, GatewayIntentBits } from 'discord.js';
 import { backend, report } from './backend.js';
 import { handleInteraction, registerCommands } from './commands.js';
-import { deliveryFailure, humanDiscordError, newNonce, retryAfterOf, retrySocket } from './errors.js';
+import { deliveryFailure, humanDiscordError, isMessageGone, newNonce, retryAfterOf, retrySocket, stableNonce } from './errors.js';
 import { setGatewayAgent } from './gateway.js';
 import { log } from './log.js';
 import { buildNews, buildPayload, type Binding, type NewsPayload } from './messages.js';
@@ -217,25 +217,38 @@ async function applyConfig(): Promise<void> {
   }
 }
 
+/**
+ * Messages posted but not yet confirmed by the panel (its answer was lost): without this the next round would not know
+ * the message id and would post a second copy.
+ */
+const posted = new Map<number, string>();
+
 async function update(c: Client, b: Binding): Promise<void> {
   const built = await buildPayload(b);
+  if (b.messageId) posted.delete(b.id);
 
   const channel = await retrySocket(() => c.channels.fetch(b.channelId));
   if (!channel || !channel.isTextBased() || !('send' in channel)) throw new Error('Канал не найден или не текстовый');
 
-  if (b.messageId) {
+  const known = b.messageId ?? posted.get(b.id) ?? null;
+  if (known) {
     try {
-      const msg = await retrySocket(() => channel.messages.fetch(b.messageId!));
+      const msg = await retrySocket(() => channel.messages.fetch(known));
       // attachments: [] drops a picture left over from a previous style
       await retrySocket(() => msg.edit({ ...built, attachments: [] }));
-      return await report(b.id, { error: null });
+      await report(b.id, { ...(b.messageId ? {} : { messageId: known }), error: null });
+      return;
     } catch (e) {
-      log(`binding ${b.id}: cannot edit message, posting a new one`, (e as Error).message);
+      // a new post only when the message is really gone; any other failure is tried again next round
+      if (!isMessageGone(e)) throw e;
+      posted.delete(b.id);
+      log(`binding ${b.id}: the message was deleted, posting a new one`);
     }
   }
   const nonce = newNonce();
   const sent = await retrySocket<{ id: string }>(() => channel.send({ ...built, nonce, enforceNonce: true }));
-  await report(b.id, { messageId: sent.id, error: null });
+  posted.set(b.id, sent.id);
+  if (await report(b.id, { messageId: sent.id, error: null })) posted.delete(b.id);
 }
 
 interface NewsItem {
@@ -288,7 +301,7 @@ async function processNews(): Promise<void> {
         await reportNews(it.id, { status: 'sent', messageId: it.messageId });
         log(`news ${it.id}: message edited`);
       } else {
-        const nonce = newNonce();
+        const nonce = stableNonce('nw', it.id);
         const sent = await retrySocket<{ id: string }>(() => channel.send({ ...msg, nonce, enforceNonce: true }));
         await reportNews(it.id, { status: 'sent', messageId: sent.id });
         log(`news ${it.id}: posted`);
@@ -338,7 +351,11 @@ async function processDeliveries(): Promise<void> {
       } else {
         const channel = await c.channels.fetch(it.target);
         if (!channel || !channel.isTextBased() || !('send' in channel)) throw Object.assign(new Error('Канал не найден или не текстовый'), { code: 10003 });
+        // the same delivery always carries the same nonce: when the answer to a send is lost (a timeout) and the alert
+        // is retried, Discord drops the second copy
         await channel.send({
+          nonce: stableNonce('al', it.id),
+          enforceNonce: true,
           content: it.payload.content || undefined,
           embeds: it.payload.embed ? [new EmbedBuilder(it.payload.embed)] : [],
           components: linkRows(it.payload.actions),

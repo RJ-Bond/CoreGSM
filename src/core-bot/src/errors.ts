@@ -47,6 +47,15 @@ export function deliveryFailure(e: unknown): { text: string; final: boolean; ret
 /** Discord drops a second create-message with the same nonce (within a few minutes): retries are safe */
 export const newNonce = () => `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`.slice(0, 25);
 
+/** the same id always gives the same nonce: a retry of one alert or one news item cannot post a second copy */
+export const stableNonce = (kind: string, id: number | string): string => `${kind}${id}`.slice(0, 25);
+
+/**
+ * Discord says that the message itself is gone (10008 «Unknown Message»). Only then is a new post right: a timeout, a
+ * 5xx or a rate limit while editing says nothing about the old message, and posting then leaves two of them.
+ */
+export const isMessageGone = (e: unknown): boolean => (e as { code?: unknown } | null)?.code === 10008;
+
 /** a pooled connection that the proxy closed under us: the request never reached Discord, so one more try is safe */
 export const SOCKET_ERR = /other side closed|UND_ERR_SOCKET|ECONNRESET|socket hang up|EPIPE|terminated|operation was aborted|AbortError|timed out|ETIMEDOUT/i;
 
