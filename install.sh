@@ -29,7 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="77434b537cdc"
+COREGSM_BUILD="dc5f10e76a1d"
+# the readable version of this build (VERSION + counter), shown in the panel
+COREGSM_VERSION="1.0.0.1"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -3919,7 +3921,7 @@ export interface Payload {
   actions?: { label: string; url: string }[];
 }
 
-export type AlertKind = 'down' | 'up' | 'test' | 'low' | 'ping' | 'full' | 'digest' | 'restart';
+export type AlertKind = 'down' | 'up' | 'test' | 'low' | 'ping' | 'full' | 'digest' | 'restart' | 'update';
 
 export function enqueueAlert(kind: AlertKind, serverName: string, payload0: Payload, channelId?: string) {
   const s = alertSettings();
@@ -16896,6 +16898,10 @@ import { admin } from '../auth.js';
 import { APP_VERSION } from '../config.js';
 import { wrap } from '../http.js';
 import { log } from '../logger.js';
+import { db, getSetting, setSetting } from '../db.js';
+import { alertSettings, enqueueAlert } from '../alerts.js';
+import { listBackups } from '../backup.js';
+import { classifyCommit, isNoopJob, jobKind, parseChannel, shouldAnnounce, stageOf, type Channel, type CommitFlag, type CommitKind } from '../updateLogic.js';
 
 export const router = express.Router();
 
@@ -16906,9 +16912,13 @@ const UPDATE_DIR = process.env.UPDATE_DIR ?? '';
 const UPDATE_BASE = process.env.UPDATE_BASE_URL ?? 'https://raw.githubusercontent.com/RJ-Bond/CoreGSM/refs/heads/main';
 // The same channel as the host updater (tools/coregsm.sh): the newest GitHub Release first, the tip of the branch when
 // there is no release yet. A custom UPDATE_BASE_URL (a fork, a test branch) or UPDATE_CHANNEL=main skips the release.
-const RELEASE_BASE = process.env.UPDATE_RELEASE_BASE_URL ?? (process.env.UPDATE_BASE_URL || process.env.UPDATE_CHANNEL === 'main' ? '' : 'https://github.com/RJ-Bond/CoreGSM/releases/latest/download');
+const RELEASE_DEFAULT = process.env.UPDATE_RELEASE_BASE_URL ?? 'https://github.com/RJ-Bond/CoreGSM/releases/latest/download';
+// the channel can be chosen in the panel unless the server pins it through the environment
+const CHANNEL_LOCKED = process.env.UPDATE_RELEASE_BASE_URL !== undefined || !!process.env.UPDATE_BASE_URL || !!process.env.UPDATE_CHANNEL;
+const channel = (): Channel => (process.env.UPDATE_CHANNEL === 'main' || process.env.UPDATE_BASE_URL ? 'main' : parseChannel(getSetting('update_channel')));
+const releaseBase = (): string => (process.env.UPDATE_RELEASE_BASE_URL !== undefined ? process.env.UPDATE_RELEASE_BASE_URL : channel() === 'main' ? '' : RELEASE_DEFAULT);
 
-let remote: { build: string | null; error: string | null; at: number } = { build: null, error: null, at: 0 };
+let remote: { build: string | null; error: string | null; at: number; builtAt: number | null } = { build: null, error: null, at: 0, builtAt: null };
 
 /** raw.githubusercontent.com is cached for minutes after a push; the GitHub API returns the file as it is now. */
 function repoApiUrl(file: string): string | null {
@@ -16933,12 +16943,28 @@ async function fetchRepoText(file: string): Promise<string> {
 
 /** version.txt of the newest release, or null when there is none (or it does not look right) */
 async function fetchReleaseVersion(): Promise<string | null> {
-  if (!RELEASE_BASE) return null;
+  const base = releaseBase();
+  if (!base) return null;
   try {
-    const r = await fetch(`${RELEASE_BASE}/version.txt`, { signal: AbortSignal.timeout(8000), headers: { 'User-Agent': 'CoreGSM' } });
+    const r = await fetch(`${base}/version.txt`, { signal: AbortSignal.timeout(8000), headers: { 'User-Agent': 'CoreGSM' } });
     if (!r.ok) return null;
     const text = await r.text();
     return /^build=[a-f0-9]{6,64}$/m.test(text) && /^sha256=[a-f0-9]{64}$/m.test(text) ? text : null;
+  } catch {
+    return null;
+  }
+}
+
+/** when version.txt last changed in the repository (best effort: the GitHub API may be out of reach) */
+async function fetchBuiltAt(): Promise<number | null> {
+  const m = /^https:\/\/raw\.githubusercontent\.com\/([^/]+)\/([^/]+)\/(?:refs\/heads\/)?([^/]+)\/?$/.exec(UPDATE_BASE);
+  if (!m) return null;
+  try {
+    const r = await fetch(`${GITHUB_API}/repos/${m[1]}/${m[2]}/commits?path=version.txt&per_page=1&sha=${encodeURIComponent(m[3])}`, { signal: AbortSignal.timeout(8000), headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'CoreGSM' } });
+    if (!r.ok) return null;
+    const list = (await r.json()) as { commit?: { committer?: { date?: string } } }[];
+    const d = Date.parse(list[0]?.commit?.committer?.date ?? '');
+    return Number.isNaN(d) ? null : d;
   } catch {
     return null;
   }
@@ -16949,9 +16975,11 @@ async function checkRemote(force = false): Promise<void> {
   try {
     const m = /^build=([a-f0-9]{6,64})$/m.exec((await fetchReleaseVersion()) ?? (await fetchRepoText('version.txt')));
     if (!m) throw new Error('некорректный version.txt');
-    remote = { build: m[1], error: null, at: Date.now() };
+    const builtAt = m[1] === remote.build && remote.builtAt ? remote.builtAt : await fetchBuiltAt();
+    remote = { build: m[1], error: null, at: Date.now(), builtAt };
+    announceVersion();
   } catch (e) {
-    remote = { build: remote.build, error: `Не удалось проверить обновления: ${(e as Error).message}`, at: Date.now() };
+    remote = { build: remote.build, error: `Не удалось проверить обновления: ${(e as Error).message}`, at: Date.now(), builtAt: remote.builtAt };
   }
 }
 
@@ -16979,17 +17007,122 @@ function updatePayload() {
     // the host manager keeps the previous version and says so in status.json
     canRollback: dirOk && job?.rollback_available === true,
     job,
+    stage: stageOf(job),
+    latestAt: remote.builtAt,
+    installedAt: installedAt(),
+    channel: channel(),
+    channelLocked: CHANNEL_LOCKED,
+    skipped: !!remote.build && getSetting('update_skip') === remote.build,
+    notify: getSetting('update_notify') !== '0',
   };
 }
 
+// ---- history of the host jobs, and the notices about them
+db.exec(`
+CREATE TABLE IF NOT EXISTS update_history (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  job_time INTEGER NOT NULL UNIQUE,
+  state TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  message TEXT NOT NULL,
+  version TEXT,
+  at INTEGER NOT NULL
+);
+`);
+
+interface HistoryRow { id: number; job_time: number; state: string; kind: string; message: string; version: string | null; at: number }
+
+/** when the running build was installed by the panel (null: not known, e.g. installed by hand) */
+function installedAt(): number | null {
+  if (!APP_VERSION) return null;
+  const r = db.prepare("SELECT job_time FROM update_history WHERE state = 'done' AND kind = 'update' AND version = ? ORDER BY job_time DESC LIMIT 1").get(APP_VERSION) as { job_time: number } | undefined;
+  return r?.job_time ?? null;
+}
+
+function readJob(): { state: string; message: string; time: number; progress?: number } | null {
+  try {
+    return JSON.parse(fs.readFileSync(updateFile('status.json'), 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+/** the alerts channel of the administrators gets the notice, when it is set up */
+function announce(title: string, description: string, color: number): void {
+  if (getSetting('update_notify') === '0') return;
+  const s = alertSettings();
+  if (!s.enabled || !s.channelId) return;
+  try {
+    enqueueAlert('update', '', { content: '', mention: 'none', embed: { title, description, color, timestamp: new Date().toISOString() } });
+  } catch (e) {
+    log.warn('update notice failed:', (e as Error).message);
+  }
+}
+
+function announceVersion(): void {
+  if (!shouldAnnounce({ notify: getSetting('update_notify') !== '0', available: !!(APP_VERSION && remote.build && APP_VERSION !== remote.build), latest: remote.build, announced: getSetting('update_announced'), skipped: getSetting('update_skip') })) return;
+  setSetting('update_announced', remote.build);
+  announce('Доступно обновление панели', `Версия \`${(remote.build ?? '').slice(0, 7)}\`. Установить: Настройки → Обновления и копии.`, 0x5865f2);
+}
+
+/** writes a finished job into the history once; the first run on an old database only fills it in silently */
+export function recordJob(): void {
+  const job = readJob();
+  if (!job || (job.state !== 'done' && job.state !== 'error') || isNoopJob(job.message)) return;
+  if (db.prepare('SELECT 1 FROM update_history WHERE job_time = ?').get(job.time)) return;
+  const first = (db.prepare('SELECT COUNT(*) AS n FROM update_history').get() as { n: number }).n === 0;
+  const kind = jobKind(job.message);
+  const now = Date.now();
+  db.prepare('INSERT INTO update_history (job_time, state, kind, message, version, at) VALUES (?, ?, ?, ?, ?, ?)').run(job.time, job.state, kind, job.message.slice(0, 500), APP_VERSION || null, now);
+  db.prepare('DELETE FROM update_history WHERE id NOT IN (SELECT id FROM update_history ORDER BY job_time DESC LIMIT 100)').run();
+  if (first || now - job.time > 6 * 3600_000) return;
+  if (job.state === 'error') announce('Обновление панели не удалось', job.message, 0xf23f42);
+  else if (kind === 'rollback') announce('Откат панели выполнен', job.message, 0xf0b232);
+  else announce('Панель обновлена', job.message, 0x23a55a);
+}
+
+setTimeout(() => { try { recordJob(); } catch { /* the table is not ready yet */ } }, 3000).unref();
+setInterval(() => { try { recordJob(); } catch (e) { log.warn('update history failed:', (e as Error).message); } }, 30_000).unref();
+
+router.get('/api/update/history', admin, (_req, res) => {
+  recordJob();
+  const rows = db.prepare('SELECT * FROM update_history ORDER BY job_time DESC LIMIT 30').all() as HistoryRow[];
+  res.json(rows.map((r) => ({ id: r.id, time: r.job_time, state: r.state, kind: r.kind, message: r.message, version: r.version })));
+});
+
+// what an update would interrupt: players online now and the age of the last backup
+router.get('/api/update/preflight', admin, (_req, res) => {
+  const r = db.prepare('SELECT COUNT(*) AS servers, COALESCE(SUM(players), 0) AS players FROM status WHERE online = 1').get() as { servers: number; players: number };
+  const last = listBackups().reduce((m, b) => Math.max(m, b.createdAt), 0);
+  res.json({ onlineServers: r.servers, players: r.players, lastBackupAt: last || null });
+});
+
+router.put('/api/update/settings', admin, (req, res) => {
+  const b = (req.body ?? {}) as { channel?: unknown; skip?: unknown; notify?: unknown };
+  if (b.channel !== undefined) {
+    if (CHANNEL_LOCKED) return res.status(409).json({ error: 'Канал задан переменными окружения сервера' });
+    if (b.channel !== 'release' && b.channel !== 'main') return res.status(400).json({ error: 'Канал: release или main' });
+    setSetting('update_channel', b.channel);
+    // the host updater reads the same choice from the shared folder
+    if (UPDATE_DIR && fs.existsSync(UPDATE_DIR)) { try { fs.writeFileSync(updateFile('channel'), b.channel); } catch { /* the folder is read-only */ } }
+    remote = { ...remote, at: 0 };
+  }
+  if (b.skip !== undefined) {
+    if (b.skip !== null && (typeof b.skip !== 'string' || !/^[a-f0-9]{6,64}$/.test(b.skip))) return res.status(400).json({ error: 'Некорректная версия' });
+    setSetting('update_skip', b.skip);
+  }
+  if (b.notify !== undefined) setSetting('update_notify', b.notify === false ? '0' : '1');
+  res.json(updatePayload());
+});
+
 // ---- changelog: the last commits of the repository the panel updates from
 const GITHUB_API = (process.env.GITHUB_API_URL ?? 'https://api.github.com').replace(/\/+$/, '');
-interface ChangelogItem { sha: string; title: string; date: number | null; url: string }
+interface ChangelogItem { sha: string; title: string; date: number | null; url: string; kind: CommitKind; flags: CommitFlag[] }
 let changelog: { at: number; items: ChangelogItem[]; error: string | null } | null = null;
 
 function commitsUrl(): string | null {
   const m = /^https:\/\/raw\.githubusercontent\.com\/([^/]+)\/([^/]+)\/(?:refs\/heads\/)?([^/]+)\/?$/.exec(UPDATE_BASE);
-  return m ? `${GITHUB_API}/repos/${m[1]}/${m[2]}/commits?per_page=15&sha=${encodeURIComponent(m[3])}` : null;
+  return m ? `${GITHUB_API}/repos/${m[1]}/${m[2]}/commits?per_page=30&sha=${encodeURIComponent(m[3])}` : null;
 }
 
 /** first line of the message without "Co-Authored-By" trailers */
@@ -17011,9 +17144,10 @@ async function loadChangelog(): Promise<{ items: ChangelogItem[]; error?: string
     if (!r.ok) throw new Error(`GitHub ответил HTTP ${r.status}`);
     const list = (await r.json()) as { sha?: string; html_url?: string; commit?: { message?: string; committer?: { date?: string }; author?: { date?: string } } }[];
     if (!Array.isArray(list)) throw new Error('неожиданный ответ GitHub');
-    const items = list.slice(0, 15).map((c) => {
+    const items = list.slice(0, 30).map((c) => {
       const d = Date.parse(c.commit?.committer?.date ?? c.commit?.author?.date ?? '');
-      return { sha: String(c.sha ?? ''), title: commitTitle(String(c.commit?.message ?? '')), date: Number.isNaN(d) ? null : d, url: String(c.html_url ?? '') };
+      const msg = String(c.commit?.message ?? '');
+      return { sha: String(c.sha ?? ''), title: commitTitle(msg), date: Number.isNaN(d) ? null : d, url: String(c.html_url ?? ''), ...classifyCommit(msg) };
     });
     changelog = { at: Date.now(), items, error: null };
     return { items };
@@ -18612,6 +18746,62 @@ export function useRecoveryCode(hashes: string[], code: string): string[] | null
   if (i < 0) return null;
   return hashes.filter((_, j) => j !== i);
 }
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/updateLogic.ts" << '__COREGSM_EOF__'
+/** Pure parts of the updates tab: what stage a host job is in, how a commit is classified, what to announce. */
+
+export type JobLike = { state: string; message: string; time: number; progress?: number } | null;
+
+export type Stage = 'download' | 'snapshot' | 'install' | 'health' | 'rollback';
+export const STAGES: Stage[] = ['download', 'snapshot', 'install', 'health'];
+
+/**
+ * The host manager (tools/coregsm.sh) reports a percent and a message: 6 download, 12 copy of data and images,
+ * 20..96 installer, 97 health check; a rollback says so in the message. The stage is derived from that, so an old
+ * manager works too. null: nothing is running.
+ */
+export function stageOf(job: JobLike): Stage | null {
+  if (!job || job.state !== 'running') return null;
+  if (/откат/i.test(job.message)) return 'rollback';
+  const p = job.progress;
+  if (typeof p !== 'number') return 'download';
+  if (p < 12) return 'download';
+  if (p < 20) return 'snapshot';
+  if (p < 97) return 'install';
+  return 'health';
+}
+
+/** 'rollback' for a job that restored the previous version, else 'update' */
+export const jobKind = (message: string): 'update' | 'rollback' => (/^\s*откат/i.test(message) || /выполнен откат/i.test(message) ? 'rollback' : 'update');
+
+/** «Уже установлена последняя версия»: nothing happened, not worth a history row */
+export const isNoopJob = (message: string): boolean => /^\s*уже установлена/i.test(message);
+
+export type CommitKind = 'feat' | 'fix' | 'other' | 'merge';
+export type CommitFlag = 'breaking' | 'migration' | 'env';
+
+/** «feat(ui): …» → feat; «Merge pull request…» and «merge main into …» → merge; the flags come from the whole message */
+export function classifyCommit(message: string): { kind: CommitKind; flags: CommitFlag[] } {
+  const title = (message.split(/\r?\n/)[0] ?? '').trim();
+  let kind: CommitKind = 'other';
+  if (/^merge\b/i.test(title)) kind = 'merge';
+  else if (/^feat(\(.+?\))?!?:/i.test(title)) kind = 'feat';
+  else if (/^fix(\(.+?\))?!?:/i.test(title)) kind = 'fix';
+  const flags: CommitFlag[] = [];
+  if (/^\w+(\(.+?\))?!:/.test(title) || /BREAKING[ -]CHANGE/.test(message)) flags.push('breaking');
+  if (/\[(migration|db)\]/i.test(message) || /миграци/i.test(message)) flags.push('migration');
+  if (/\[env\]/i.test(message)) flags.push('env');
+  return { kind, flags };
+}
+
+/** a new version is announced once per build, and never when it was skipped or the notices are off */
+export function shouldAnnounce(o: { notify: boolean; available: boolean; latest: string | null; announced: string | null; skipped: string | null }): boolean {
+  return o.notify && o.available && !!o.latest && o.latest !== o.announced && o.latest !== o.skipped;
+}
+
+export type Channel = 'release' | 'main';
+export const parseChannel = (v: string | null | undefined): Channel => (v === 'main' ? 'main' : 'release');
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/webpush.ts" << '__COREGSM_EOF__'
@@ -87436,6 +87626,7 @@ services:
       # the installer passes the new build id here while it starts the containers; .env gets it only
       # after the health check, so a failed update never looks like a finished one
       APP_VERSION: ${APP_VERSION:-}
+      APP_VERSION_NAME: ${APP_VERSION_NAME:-}
     volumes:
       - coregsm-data:/data
       # update requests/status exchanged with the host updater (no Docker socket is exposed)
@@ -87696,9 +87887,9 @@ write_env() {
   # a key of its own for the secrets in the database: JWT_SECRET can then be changed without losing them. An older
   # installation gets one on its next update; the backend writes its stored secrets again with it at start.
   secrets_key="$(env_get SECRETS_KEY)"; [ -n "$secrets_key" ] || secrets_key="$(gen_secret 64)"
-  local poll lm cert_mode extra="" known='DOMAIN|LE_EMAIL|DISCORD_TOKEN|PROXY_URL|BUILD_PROXY|APP_VERSION|SETUP_TOKEN|JWT_SECRET|INTERNAL_TOKEN|SECRETS_KEY|POLL_INTERVAL_SEC|LOCAL_MODE|CERT_MODE'
+  local poll lm cert_mode extra="" known='DOMAIN|LE_EMAIL|DISCORD_TOKEN|PROXY_URL|BUILD_PROXY|APP_VERSION|APP_VERSION_NAME|SETUP_TOKEN|JWT_SECRET|INTERNAL_TOKEN|SECRETS_KEY|POLL_INTERVAL_SEC|LOCAL_MODE|CERT_MODE'
   # the .env is truncated by the redirection below, so everything is read from it first
-  local appver; appver="$(env_get APP_VERSION)"
+  local appver appname; appver="$(env_get APP_VERSION)"; appname="$(env_get APP_VERSION_NAME)"
   poll="$(env_get POLL_INTERVAL_SEC)"; [ -n "$poll" ] || poll=30
   lm=0; [ "${LOCAL_MODE:-}" = "1" ] && lm=1
   cert_mode="$(env_get CERT_MODE)"; [ "$lm" = 1 ] && [ -z "$cert_mode" ] && cert_mode=local
@@ -87720,6 +87911,7 @@ BUILD_PROXY=${BUILD_PROXY:-}
 # installed build, compared with version.txt in the repository. The new value is written only after
 # the panel has answered (see promote_version), so a failed update does not look like a finished one.
 APP_VERSION=${appver}
+APP_VERSION_NAME=${appname}
 # local mode (self-signed certificate, no Let's Encrypt) and the kind of the current certificate
 LOCAL_MODE=${lm}
 CERT_MODE=${cert_mode}
@@ -87851,7 +88043,7 @@ build_images() {
 launch() {
   step "Запуск контейнеров"
   cd "$APP_DIR"
-  run "Запуск контейнеров" env APP_VERSION="$COREGSM_BUILD" docker compose up -d --remove-orphans
+  run "Запуск контейнеров" env APP_VERSION="$COREGSM_BUILD" APP_VERSION_NAME="$COREGSM_VERSION" docker compose up -d --remove-orphans
   if [ "$CERT_CHANGED" = 1 ] && service_running nginx-proxy; then
     docker compose exec -T nginx-proxy nginx -s reload >/dev/null 2>&1 || true
   fi
@@ -88050,7 +88242,10 @@ fetch_repo() { # fetch_repo FILE -> the file's content
 
 # version.txt of the release channel: prints it when the release exists and the file looks right, else fails
 release_meta() {
-  [ "$CHANNEL" = main ] && return 1
+  # the channel chosen in the panel (Settings → Updates) lies in the shared folder; the environment still wins
+  local ch="$CHANNEL"
+  if [ -z "${COREGSM_CHANNEL:-}" ] && [ -z "${COREGSM_BASE:-}" ] && [ -f "$UPD/channel" ]; then ch="$(tr -d '[:space:]' < "$UPD/channel" 2>/dev/null)"; fi
+  [ "$ch" = main ] && return 1
   local meta
   meta="$(fetch "$RELEASE_BASE/version.txt" 2>/dev/null)" || return 1
   printf '%s\n' "$meta" | grep -qE '^build=[0-9a-f]{6,64}$' || return 1
@@ -88062,6 +88257,7 @@ fetch_version_txt() { release_meta || fetch_repo version.txt; }
 # ---------- state ----------
 panel_url() { printf 'https://%s' "$(envget DOMAIN)"; }
 cur_build() { envget APP_VERSION; }
+cur_name() { envget APP_VERSION_NAME; }
 
 remote_build() { # cached for 10 minutes so the menu opens instantly
   local f="$UPD/.remote" b=""
@@ -88330,6 +88526,7 @@ remote_meta() { # sets R_BUILD R_SHA R_SOURCE (release | main)
   if meta="$(release_meta)"; then R_SOURCE=release; else R_SOURCE=main; meta="$(fetch_repo version.txt)" || return 1; fi
   R_BUILD="$(printf '%s\n' "$meta" | sed -n 's/^build=//p' | head -n1)"
   R_SHA="$(printf '%s\n' "$meta" | sed -n 's/^sha256=//p' | head -n1)"
+  R_VERSION="$(printf '%s\n' "$meta" | sed -n 's/^version=//p' | head -n1 | tr -cd '0-9.')"
   [ -n "$R_BUILD" ] && [ -n "$R_SHA" ]
 }
 
@@ -88531,6 +88728,7 @@ snapshot_create() {
   # drop the :prev tags of an older snapshot, so old and new images never mix
   prev_images | xargs -r docker rmi >/dev/null 2>&1
   cur_build > "$PREV/version"
+  cur_name > "$PREV/version_name"
   cp -f "$APP_DIR/.env" "$PREV/env"
   tar czf "$PREV/src.tgz" -C "$APP_DIR" docker-compose.yml core-backend core-frontend core-bot nginx 2>/dev/null
   local img f
@@ -88552,6 +88750,7 @@ rollback_apply() {
   [ -f "$PREV/src.tgz" ] || { RB_ERR="нет снимка предыдущей версии"; return 1; }
   tar xzf "$PREV/src.tgz" -C "$APP_DIR" || { RB_ERR="не удалось распаковать снимок файлов"; return 1; }
   env_set APP_VERSION "$(cat "$PREV/version" 2>/dev/null)"
+  env_set APP_VERSION_NAME "$(cat "$PREV/version_name" 2>/dev/null)"
   local img
   for img in $(prev_images); do
     docker tag "$img" "${img%:prev}:latest"
@@ -88651,7 +88850,7 @@ cmd_update() {
   fail() { bad "$1"; [ "$check" = 1 ] || status_file error "$1"; return 1; }
 
   remote_meta || { fail "Не удалось получить version.txt из репозитория"; return 1; }
-  local current latest; current="$(cur_build)"; latest="$R_BUILD"; : > "$UPD/.remote"; printf '%s' "$latest" > "$UPD/.remote"
+  local current latest cur_nm; current="$(cur_build)"; cur_nm="$(cur_name)"; latest="$R_BUILD"; : > "$UPD/.remote"; printf '%s' "$latest" > "$UPD/.remote"
 
   if [ "$check" = 1 ]; then
     kv "Установлено" "${current:-?}"; kv "В репозитории" "$latest"
@@ -88690,8 +88889,9 @@ cmd_update() {
   if [ "$rc" -eq 0 ] && healthy 120; then
     # the new build id is stamped only now, after the health check
     env_set APP_VERSION "$latest"
+    [ -n "${R_VERSION:-}" ] && env_set APP_VERSION_NAME "$R_VERSION"
     docker image prune -f >/dev/null 2>&1
-    status_file done "Обновлено до версии ${latest:0:7}"; echo; ok "Обновлено до ${latest:0:7}"; return 0
+    status_file done "Обновлено до версии ${R_VERSION:-${latest:0:7}}"; echo; ok "Обновлено до ${R_VERSION:-${latest:0:7}}"; return 0
   fi
   if [ "$rc" -ne 0 ] && healthy 6; then
     # pull the actual cause out of the installer output so it is visible in the panel and on screen
@@ -88699,6 +88899,7 @@ cmd_update() {
     reason="$(sed 's/\x1b\[[0-9;]*m//g' "$LOG" 2>/dev/null | grep -E '✖|FATAL|Не удалось|Недостаточно|Мало места|ERROR' | grep -v 'Подробности' | sed 's/\. Полный журнал:.*//' | tail -n 2 | tr -s ' \n' ' ' | cut -c1-220)"
     # still the old version: it keeps its build id, and if the build failed the new sources go back as well
     [ -n "$current" ] && env_set APP_VERSION "$current"
+    env_set APP_VERSION_NAME "$cur_nm"
     grep -q 'Запуск контейнеров' "$LOG" 2>/dev/null || restore_sources
     status_file error "Обновление не удалось (код $rc): ${reason:-причина в журнале}. Прежняя версия продолжает работать. Журнал: /var/log/coregsm-install.log"
     bad "Обновление не удалось (код $rc), прежняя версия работает."
@@ -89047,6 +89248,7 @@ rollback_available() {
 promote_version() {
   [ "$PANEL_OK" = 1 ] || return 0
   env_set APP_VERSION "$COREGSM_BUILD"
+  env_set APP_VERSION_NAME "$COREGSM_VERSION"
 }
 
 # A finished install is a successful update: tell the panel, so an old failure is not shown any more.

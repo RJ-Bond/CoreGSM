@@ -47,14 +47,27 @@ trap 'rm -f "$GEN" "$FILES" "$MANAGER"' EXIT
 tr -d '\r' < tools/coregsm.sh > "$MANAGER"
 if grep -q '^MANAGER$' "$MANAGER"; then echo "Delimiter MANAGER found inside coregsm.sh" >&2; exit 1; fi
 
-awk -v gen="$GEN" -v mgr="$MANAGER" -v build="$BUILD_ID" '
+# The pretty version "1.0.0.7": the base from VERSION plus a counter that grows whenever the build id changes.
+# Unchanged sources keep their label, so the CI check "install.sh is up to date" stays stable.
+BASE_VERSION="$(tr -d ' \r\n' < VERSION 2>/dev/null)"; [ -n "$BASE_VERSION" ] || BASE_VERSION=1.0.0
+PREV_BUILD="$(sed -n 's/^build=//p' version.txt 2>/dev/null | head -n1)"
+PREV_VER="$(sed -n 's/^version=//p' version.txt 2>/dev/null | head -n1)"
+if [ "$PREV_BUILD" = "$BUILD_ID" ] && [ -n "$PREV_VER" ] && [ "${PREV_VER%.*}" = "$BASE_VERSION" ]; then
+  VERSION_LABEL="$PREV_VER"
+else
+  n=0; [ "${PREV_VER%.*}" = "$BASE_VERSION" ] && n="${PREV_VER##*.}"
+  case "$n" in ''|*[!0-9]*) n=0 ;; esac
+  VERSION_LABEL="$BASE_VERSION.$((n + 1))"
+fi
+
+awk -v gen="$GEN" -v mgr="$MANAGER" -v build="$BUILD_ID" -v ver="$VERSION_LABEL" '
   $0 == "@@GENERATE_FUNCTION@@" { while ((getline l < gen) > 0) print l; next }
   $0 == "@@MANAGER_SCRIPT@@"    { while ((getline l < mgr) > 0) print l; next }
-  { gsub(/@@BUILD_ID@@/, build); print }
+  { gsub(/@@BUILD_ID@@/, build); gsub(/@@VERSION@@/, ver); print }
 ' tools/installer-head.sh | tr -d '\r' > install.sh
 chmod +x install.sh
 bash -n install.sh
 bash -n tools/coregsm.sh
 
-printf 'build=%s\nsha256=%s\n' "$BUILD_ID" "$(sha256sum install.sh | cut -d' ' -f1)" > version.txt
-echo "install.sh built: $(wc -l < install.sh) lines, $(wc -c < install.sh) bytes, build $BUILD_ID"
+printf 'build=%s\nsha256=%s\nversion=%s\n' "$BUILD_ID" "$(sha256sum install.sh | cut -d' ' -f1)" "$VERSION_LABEL" > version.txt
+echo "install.sh built: $(wc -l < install.sh) lines, $(wc -c < install.sh) bytes, build $BUILD_ID, version $VERSION_LABEL"

@@ -61,7 +61,7 @@ export interface Payload {
   actions?: { label: string; url: string }[];
 }
 
-export type AlertKind = 'down' | 'up' | 'test' | 'low' | 'ping' | 'full' | 'digest' | 'restart';
+export type AlertKind = 'down' | 'up' | 'test' | 'low' | 'ping' | 'full' | 'digest' | 'restart' | 'update';
 
 export function enqueueAlert(kind: AlertKind, serverName: string, payload0: Payload, channelId?: string) {
   const s = alertSettings();

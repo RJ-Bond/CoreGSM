@@ -45,6 +45,7 @@ services:
       # the installer passes the new build id here while it starts the containers; .env gets it only
       # after the health check, so a failed update never looks like a finished one
       APP_VERSION: ${APP_VERSION:-}
+      APP_VERSION_NAME: ${APP_VERSION_NAME:-}
     volumes:
       - coregsm-data:/data
       # update requests/status exchanged with the host updater (no Docker socket is exposed)
