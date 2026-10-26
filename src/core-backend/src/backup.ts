@@ -33,6 +33,7 @@ import { z } from 'zod';
 import { DATA_DIR, db, getSetting, setSetting } from './db.js';
 import { canDecrypt, isEncrypted, isSecretKey } from './secrets.js';
 import { log } from './logger.js';
+import { s3ObjectUrl, s3Problem, signV4, UNSIGNED_PAYLOAD, type S3Target } from './s3.js';
 
 export const BACKUP_DIR = path.join(DATA_DIR, 'backups');
 const PENDING_DIR = path.join(DATA_DIR, 'restore-pending');
@@ -61,8 +62,22 @@ export const backupSettings = () => {
     keep: Number.isInteger(keep) && keep >= 1 && keep <= 30 ? keep : 7,
     remoteUrl: getSetting('backup_remote_url') || null,
     passphrase: getSetting('backup_passphrase') || null,
+    s3: s3Settings(),
   };
 };
+
+/** S3-compatible storage: null until the endpoint, bucket and both keys are set */
+export function s3Settings(): S3Target | null {
+  const t: S3Target = {
+    endpoint: getSetting('backup_s3_endpoint') || '',
+    bucket: getSetting('backup_s3_bucket') || '',
+    region: getSetting('backup_s3_region') || 'us-east-1',
+    prefix: getSetting('backup_s3_prefix') || '',
+    accessKey: getSetting('backup_s3_key') || '',
+    secretKey: getSetting('backup_s3_secret') || '',
+  };
+  return t.endpoint && t.bucket && t.accessKey && t.secretKey ? t : null;
+}
 
 /** https://user:pass@host/path?token -> https://host/…  (nothing secret is returned to the panel) */
 export function maskUrl(u: string | null): string | null {
@@ -275,6 +290,7 @@ export async function createStoredBackup(kind: 'auto' | 'manual'): Promise<Backu
     await buildArchive(file, s.passphrase);
     pruneBackups(s.keep);
     if (s.remoteUrl) void uploadRemote(file, name, s.remoteUrl);
+    if (s.s3) void uploadS3(file, name, s.s3);
     const item = listBackups().find((i) => i.name === name);
     return item ?? { name, size: fs.statSync(file).size, createdAt: t, kind };
   } finally {
@@ -329,6 +345,55 @@ export async function uploadRemote(file: string, name: string, url: string): Pro
     setSetting('backup_last_remote', JSON.stringify(result));
   } catch (err) {
     log.warn('backup: could not store the upload result:', (err as Error).message);
+  }
+  return result;
+}
+
+export const lastS3 = (): RemoteResult | null => {
+  try {
+    const v = JSON.parse(getSetting('backup_last_s3') ?? 'null');
+    return v && typeof v.at === 'number' ? (v as RemoteResult) : null;
+  } catch {
+    return null;
+  }
+};
+
+/** PUT of the archive (or of a small file) to an S3-compatible storage, signed with SigV4. Never throws. */
+export async function uploadS3(file: string, name: string, t: S3Target, opts: { remember?: boolean } = {}): Promise<RemoteResult> {
+  let result: RemoteResult;
+  try {
+    const bad = s3Problem(t);
+    if (bad) throw new Error(bad);
+    const size = fs.statSync(file).size;
+    const url = s3ObjectUrl(t, name);
+    const headers = signV4({
+      method: 'PUT', url, headers: { 'content-type': 'application/octet-stream', 'content-length': String(size) },
+      payloadHash: UNSIGNED_PAYLOAD, region: t.region, accessKey: t.accessKey, secretKey: t.secretKey,
+    });
+    delete headers.host;
+    const r = await fetch(url, {
+      method: 'PUT',
+      headers: { ...headers, 'user-agent': 'CoreGSM' },
+      body: Readable.toWeb(fs.createReadStream(file)) as unknown as BodyInit,
+      ...({ duplex: 'half' } as object),
+      signal: AbortSignal.timeout(15 * 60_000),
+    });
+    if (!r.ok) {
+      const body = (await r.text().catch(() => '')).match(/<Message>([^<]{1,150})<\/Message>/)?.[1];
+      throw new Error(`хранилище ответило HTTP ${r.status}${body ? `: ${body}` : ''}`);
+    }
+    result = { at: Date.now(), ok: true, error: null };
+  } catch (e) {
+    const err = e as Error & { cause?: { message?: string } };
+    result = { at: Date.now(), ok: false, error: `${err.message}${err.cause?.message ? ` (${err.cause.message})` : ''}`.slice(0, 300) };
+    log.error('backup S3 upload failed:', result.error);
+  }
+  if (opts.remember !== false) {
+    try {
+      setSetting('backup_last_s3', JSON.stringify(result));
+    } catch (err) {
+      log.warn('backup: could not store the S3 result:', (err as Error).message);
+    }
   }
   return result;
 }
@@ -551,7 +616,10 @@ export function registerBackups({ app, admin }: { app: Express; admin: RequestHa
 
   const payload = () => {
     const s = backupSettings();
-    return { schedule: s.schedule, keep: s.keep, remoteUrl: maskUrl(s.remoteUrl), encrypted: !!s.passphrase, items: listBackups(), lastRemote: lastRemote() };
+    return { schedule: s.schedule, keep: s.keep, remoteUrl: maskUrl(s.remoteUrl), encrypted: !!s.passphrase, items: listBackups(), lastRemote: lastRemote(),
+      s3: { endpoint: getSetting('backup_s3_endpoint') || '', bucket: getSetting('backup_s3_bucket') || '', region: getSetting('backup_s3_region') || 'us-east-1', prefix: getSetting('backup_s3_prefix') || '', configured: !!s.s3 },
+      lastS3: lastS3(),
+    };
   };
 
   // one-off archive for downloading (not stored)
@@ -604,6 +672,17 @@ export function registerBackups({ app, admin }: { app: Express; admin: RequestHa
           keep: z.number().int().min(1).max(30).optional(),
           remoteUrl: z.string().trim().max(500).optional(),
           passphrase: z.string().max(200).optional(),
+          s3: z
+            .object({
+              endpoint: z.string().trim().max(300),
+              bucket: z.string().trim().max(80),
+              region: z.string().trim().max(40).optional(),
+              prefix: z.string().trim().max(120).optional(),
+              accessKey: z.string().trim().max(200).optional(),
+              secretKey: z.string().max(300).optional(),
+            })
+            .optional(),
+          s3Clear: z.boolean().optional(),
         })
         .safeParse(req.body);
       if (!b.success) return res.status(400).json({ error: 'Проверьте поля: расписание off/daily/weekly, хранить от 1 до 30 копий' });
@@ -616,12 +695,46 @@ export function registerBackups({ app, admin }: { app: Express; admin: RequestHa
         }
         if (!ok) return res.status(400).json({ error: 'Адрес для копии должен начинаться с https://' });
       }
+      if (b.data.s3) {
+        const cur = s3Settings();
+        const next: S3Target = {
+          endpoint: b.data.s3.endpoint, bucket: b.data.s3.bucket, region: b.data.s3.region || 'us-east-1', prefix: b.data.s3.prefix ?? '',
+          accessKey: b.data.s3.accessKey || cur?.accessKey || getSetting('backup_s3_key') || '',
+          secretKey: b.data.s3.secretKey || cur?.secretKey || getSetting('backup_s3_secret') || '',
+        };
+        const bad = s3Problem(next);
+        if (bad) return res.status(400).json({ error: bad });
+        setSetting('backup_s3_endpoint', next.endpoint);
+        setSetting('backup_s3_bucket', next.bucket);
+        setSetting('backup_s3_region', next.region);
+        setSetting('backup_s3_prefix', next.prefix);
+        setSetting('backup_s3_key', next.accessKey);
+        setSetting('backup_s3_secret', next.secretKey);
+      }
+      if (b.data.s3Clear) for (const k of ['endpoint', 'bucket', 'region', 'prefix', 'key', 'secret']) setSetting(`backup_s3_${k}`, '');
       if (b.data.passphrase && b.data.passphrase.length < 8) return res.status(400).json({ error: 'Пароль шифрования: не короче 8 символов' });
       if (b.data.schedule !== undefined) setSetting('backup_schedule', b.data.schedule);
       if (b.data.keep !== undefined) setSetting('backup_keep', String(b.data.keep));
       if (b.data.remoteUrl !== undefined) setSetting('backup_remote_url', b.data.remoteUrl);
       if (b.data.passphrase !== undefined) setSetting('backup_passphrase', b.data.passphrase);
       res.json(payload());
+    }),
+  );
+
+  // a small file to the S3 storage: shows at once whether the address and the keys are right
+  app.post(
+    '/api/backups/test-s3',
+    admin,
+    guard(async (_req, res) => {
+      const t = s3Settings();
+      if (!t) return res.status(400).json({ error: 'Хранилище S3 не настроено' });
+      const tmp = path.join(os.tmpdir(), `coregsm-s3-test-${crypto.randomBytes(4).toString('hex')}.txt`);
+      fs.writeFileSync(tmp, `CoreGSM backup test ${new Date().toISOString()}\n`);
+      try {
+        res.json(await uploadS3(tmp, 'coregsm-test.txt', t, { remember: false }));
+      } finally {
+        fs.rmSync(tmp, { force: true });
+      }
     }),
   );
 

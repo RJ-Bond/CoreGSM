@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="60a76c420f82"
+COREGSM_BUILD="aa3a718de03d"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.0.0.38"
+COREGSM_VERSION="1.0.0.39"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -4647,6 +4647,7 @@ import { z } from 'zod';
 import { DATA_DIR, db, getSetting, setSetting } from './db.js';
 import { canDecrypt, isEncrypted, isSecretKey } from './secrets.js';
 import { log } from './logger.js';
+import { s3ObjectUrl, s3Problem, signV4, UNSIGNED_PAYLOAD, type S3Target } from './s3.js';
 
 export const BACKUP_DIR = path.join(DATA_DIR, 'backups');
 const PENDING_DIR = path.join(DATA_DIR, 'restore-pending');
@@ -4675,8 +4676,22 @@ export const backupSettings = () => {
     keep: Number.isInteger(keep) && keep >= 1 && keep <= 30 ? keep : 7,
     remoteUrl: getSetting('backup_remote_url') || null,
     passphrase: getSetting('backup_passphrase') || null,
+    s3: s3Settings(),
   };
 };
+
+/** S3-compatible storage: null until the endpoint, bucket and both keys are set */
+export function s3Settings(): S3Target | null {
+  const t: S3Target = {
+    endpoint: getSetting('backup_s3_endpoint') || '',
+    bucket: getSetting('backup_s3_bucket') || '',
+    region: getSetting('backup_s3_region') || 'us-east-1',
+    prefix: getSetting('backup_s3_prefix') || '',
+    accessKey: getSetting('backup_s3_key') || '',
+    secretKey: getSetting('backup_s3_secret') || '',
+  };
+  return t.endpoint && t.bucket && t.accessKey && t.secretKey ? t : null;
+}
 
 /** https://user:pass@host/path?token -> https://host/…  (nothing secret is returned to the panel) */
 export function maskUrl(u: string | null): string | null {
@@ -4889,6 +4904,7 @@ export async function createStoredBackup(kind: 'auto' | 'manual'): Promise<Backu
     await buildArchive(file, s.passphrase);
     pruneBackups(s.keep);
     if (s.remoteUrl) void uploadRemote(file, name, s.remoteUrl);
+    if (s.s3) void uploadS3(file, name, s.s3);
     const item = listBackups().find((i) => i.name === name);
     return item ?? { name, size: fs.statSync(file).size, createdAt: t, kind };
   } finally {
@@ -4943,6 +4959,55 @@ export async function uploadRemote(file: string, name: string, url: string): Pro
     setSetting('backup_last_remote', JSON.stringify(result));
   } catch (err) {
     log.warn('backup: could not store the upload result:', (err as Error).message);
+  }
+  return result;
+}
+
+export const lastS3 = (): RemoteResult | null => {
+  try {
+    const v = JSON.parse(getSetting('backup_last_s3') ?? 'null');
+    return v && typeof v.at === 'number' ? (v as RemoteResult) : null;
+  } catch {
+    return null;
+  }
+};
+
+/** PUT of the archive (or of a small file) to an S3-compatible storage, signed with SigV4. Never throws. */
+export async function uploadS3(file: string, name: string, t: S3Target, opts: { remember?: boolean } = {}): Promise<RemoteResult> {
+  let result: RemoteResult;
+  try {
+    const bad = s3Problem(t);
+    if (bad) throw new Error(bad);
+    const size = fs.statSync(file).size;
+    const url = s3ObjectUrl(t, name);
+    const headers = signV4({
+      method: 'PUT', url, headers: { 'content-type': 'application/octet-stream', 'content-length': String(size) },
+      payloadHash: UNSIGNED_PAYLOAD, region: t.region, accessKey: t.accessKey, secretKey: t.secretKey,
+    });
+    delete headers.host;
+    const r = await fetch(url, {
+      method: 'PUT',
+      headers: { ...headers, 'user-agent': 'CoreGSM' },
+      body: Readable.toWeb(fs.createReadStream(file)) as unknown as BodyInit,
+      ...({ duplex: 'half' } as object),
+      signal: AbortSignal.timeout(15 * 60_000),
+    });
+    if (!r.ok) {
+      const body = (await r.text().catch(() => '')).match(/<Message>([^<]{1,150})<\/Message>/)?.[1];
+      throw new Error(`хранилище ответило HTTP ${r.status}${body ? `: ${body}` : ''}`);
+    }
+    result = { at: Date.now(), ok: true, error: null };
+  } catch (e) {
+    const err = e as Error & { cause?: { message?: string } };
+    result = { at: Date.now(), ok: false, error: `${err.message}${err.cause?.message ? ` (${err.cause.message})` : ''}`.slice(0, 300) };
+    log.error('backup S3 upload failed:', result.error);
+  }
+  if (opts.remember !== false) {
+    try {
+      setSetting('backup_last_s3', JSON.stringify(result));
+    } catch (err) {
+      log.warn('backup: could not store the S3 result:', (err as Error).message);
+    }
   }
   return result;
 }
@@ -5165,7 +5230,10 @@ export function registerBackups({ app, admin }: { app: Express; admin: RequestHa
 
   const payload = () => {
     const s = backupSettings();
-    return { schedule: s.schedule, keep: s.keep, remoteUrl: maskUrl(s.remoteUrl), encrypted: !!s.passphrase, items: listBackups(), lastRemote: lastRemote() };
+    return { schedule: s.schedule, keep: s.keep, remoteUrl: maskUrl(s.remoteUrl), encrypted: !!s.passphrase, items: listBackups(), lastRemote: lastRemote(),
+      s3: { endpoint: getSetting('backup_s3_endpoint') || '', bucket: getSetting('backup_s3_bucket') || '', region: getSetting('backup_s3_region') || 'us-east-1', prefix: getSetting('backup_s3_prefix') || '', configured: !!s.s3 },
+      lastS3: lastS3(),
+    };
   };
 
   // one-off archive for downloading (not stored)
@@ -5218,6 +5286,17 @@ export function registerBackups({ app, admin }: { app: Express; admin: RequestHa
           keep: z.number().int().min(1).max(30).optional(),
           remoteUrl: z.string().trim().max(500).optional(),
           passphrase: z.string().max(200).optional(),
+          s3: z
+            .object({
+              endpoint: z.string().trim().max(300),
+              bucket: z.string().trim().max(80),
+              region: z.string().trim().max(40).optional(),
+              prefix: z.string().trim().max(120).optional(),
+              accessKey: z.string().trim().max(200).optional(),
+              secretKey: z.string().max(300).optional(),
+            })
+            .optional(),
+          s3Clear: z.boolean().optional(),
         })
         .safeParse(req.body);
       if (!b.success) return res.status(400).json({ error: 'Проверьте поля: расписание off/daily/weekly, хранить от 1 до 30 копий' });
@@ -5230,12 +5309,46 @@ export function registerBackups({ app, admin }: { app: Express; admin: RequestHa
         }
         if (!ok) return res.status(400).json({ error: 'Адрес для копии должен начинаться с https://' });
       }
+      if (b.data.s3) {
+        const cur = s3Settings();
+        const next: S3Target = {
+          endpoint: b.data.s3.endpoint, bucket: b.data.s3.bucket, region: b.data.s3.region || 'us-east-1', prefix: b.data.s3.prefix ?? '',
+          accessKey: b.data.s3.accessKey || cur?.accessKey || getSetting('backup_s3_key') || '',
+          secretKey: b.data.s3.secretKey || cur?.secretKey || getSetting('backup_s3_secret') || '',
+        };
+        const bad = s3Problem(next);
+        if (bad) return res.status(400).json({ error: bad });
+        setSetting('backup_s3_endpoint', next.endpoint);
+        setSetting('backup_s3_bucket', next.bucket);
+        setSetting('backup_s3_region', next.region);
+        setSetting('backup_s3_prefix', next.prefix);
+        setSetting('backup_s3_key', next.accessKey);
+        setSetting('backup_s3_secret', next.secretKey);
+      }
+      if (b.data.s3Clear) for (const k of ['endpoint', 'bucket', 'region', 'prefix', 'key', 'secret']) setSetting(`backup_s3_${k}`, '');
       if (b.data.passphrase && b.data.passphrase.length < 8) return res.status(400).json({ error: 'Пароль шифрования: не короче 8 символов' });
       if (b.data.schedule !== undefined) setSetting('backup_schedule', b.data.schedule);
       if (b.data.keep !== undefined) setSetting('backup_keep', String(b.data.keep));
       if (b.data.remoteUrl !== undefined) setSetting('backup_remote_url', b.data.remoteUrl);
       if (b.data.passphrase !== undefined) setSetting('backup_passphrase', b.data.passphrase);
       res.json(payload());
+    }),
+  );
+
+  // a small file to the S3 storage: shows at once whether the address and the keys are right
+  app.post(
+    '/api/backups/test-s3',
+    admin,
+    guard(async (_req, res) => {
+      const t = s3Settings();
+      if (!t) return res.status(400).json({ error: 'Хранилище S3 не настроено' });
+      const tmp = path.join(os.tmpdir(), `coregsm-s3-test-${crypto.randomBytes(4).toString('hex')}.txt`);
+      fs.writeFileSync(tmp, `CoreGSM backup test ${new Date().toISOString()}\n`);
+      try {
+        res.json(await uploadS3(tmp, 'coregsm-test.txt', t, { remember: false }));
+      } finally {
+        fs.rmSync(tmp, { force: true });
+      }
     }),
   );
 
@@ -8646,6 +8759,11 @@ export const ERRORS = {
   backup_op_failed: 'Не удалось выполнить операцию: {reason}',
   backup_not_found: 'Копия не найдена',
   backup_remote_https: 'Адрес для копии должен начинаться с https://',
+  backup_s3_https: 'Адрес хранилища должен начинаться с https://',
+  backup_s3_endpoint: 'Адрес хранилища: например https://s3.eu-central-1.amazonaws.com',
+  backup_s3_bucket: 'Имя бакета: 2–63 символа, буквы, цифры, точка, дефис',
+  backup_s3_keys: 'Нужны ключ доступа и секретный ключ',
+  backup_s3_none: 'Хранилище S3 не настроено',
   backup_passphrase_min: 'Пароль шифрования: не короче 8 символов',
   backup_settings_range: 'Проверьте поля: расписание off/daily/weekly, хранить от 1 до 30 копий',
   backup_busy: 'Резервная копия уже создаётся, подождите',
@@ -18996,6 +19114,79 @@ export function nextRulesVersion(latest: RulesVersion | null, text: string): num
 export const needsAgreement = (current: number | null, agreed: number | null): boolean => current !== null && agreed !== current;
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/s3.ts" << '__COREGSM_EOF__'
+/** AWS Signature V4 for an S3-compatible PUT (AWS, Backblaze B2, Cloudflare R2, Wasabi, MinIO, Yandex Object Storage…). No SDK: just node:crypto. */
+import crypto from 'node:crypto';
+
+const hmac = (key: crypto.BinaryLike, data: string) => crypto.createHmac('sha256', key).update(data).digest();
+const sha256 = (data: string) => crypto.createHash('sha256').update(data).digest('hex');
+/** RFC 3986 encoding as SigV4 wants it */
+const enc = (s: string) => encodeURIComponent(s).replace(/[!'()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
+
+export interface SignInput {
+  method: string;
+  url: URL;
+  /** extra headers to sign (host, x-amz-date and x-amz-content-sha256 are added) */
+  headers?: Record<string, string>;
+  /** hex sha256 of the body, or UNSIGNED_PAYLOAD */
+  payloadHash: string;
+  region: string;
+  accessKey: string;
+  secretKey: string;
+  now?: Date;
+}
+export const UNSIGNED_PAYLOAD = 'UNSIGNED-PAYLOAD';
+
+/** headers to send (lower-case names), including Authorization */
+export function signV4(i: SignInput): Record<string, string> {
+  const now = i.now ?? new Date();
+  const amzDate = now.toISOString().replace(/[-:]|\.\d{3}/g, '');
+  const day = amzDate.slice(0, 8);
+  const h: Record<string, string> = {};
+  for (const [k, v] of Object.entries(i.headers ?? {})) h[k.toLowerCase()] = v.trim().replace(/\s+/g, ' ');
+  h.host = i.url.host;
+  h['x-amz-date'] = amzDate;
+  h['x-amz-content-sha256'] = i.payloadHash;
+  const names = Object.keys(h).sort();
+  const canonicalHeaders = names.map((n) => `${n}:${h[n]}\n`).join('');
+  const signed = names.join(';');
+  const path = i.url.pathname.split('/').map((p) => enc(decodeURIComponent(p))).join('/') || '/';
+  const query = [...i.url.searchParams.entries()].map(([k, v]) => [enc(k), enc(v)] as const).sort((a, b) => (a[0] === b[0] ? (a[1] < b[1] ? -1 : 1) : a[0] < b[0] ? -1 : 1)).map(([k, v]) => `${k}=${v}`).join('&');
+  const canonical = [i.method.toUpperCase(), path, query, canonicalHeaders, signed, i.payloadHash].join('\n');
+  const scope = `${day}/${i.region}/s3/aws4_request`;
+  const toSign = ['AWS4-HMAC-SHA256', amzDate, scope, sha256(canonical)].join('\n');
+  const key = hmac(hmac(hmac(hmac(`AWS4${i.secretKey}`, day), i.region), 's3'), 'aws4_request');
+  const signature = crypto.createHmac('sha256', key).update(toSign).digest('hex');
+  h.authorization = `AWS4-HMAC-SHA256 Credential=${i.accessKey}/${scope}, SignedHeaders=${signed}, Signature=${signature}`;
+  return h;
+}
+
+export interface S3Target { endpoint: string; bucket: string; region: string; accessKey: string; secretKey: string; prefix: string }
+
+/** path-style address https://endpoint/bucket/prefix/name */
+export function s3ObjectUrl(t: S3Target, name: string): URL {
+  const u = new URL(t.endpoint);
+  const prefix = t.prefix.replace(/^\/+|\/+$/g, '');
+  u.pathname = `/${[t.bucket, prefix, name].filter(Boolean).map(enc).join('/')}`;
+  u.search = '';
+  u.username = '';
+  u.password = '';
+  return u;
+}
+
+/** validates the pieces entered in the panel; returns an error text or null */
+export function s3Problem(t: Partial<S3Target>): string | null {
+  try {
+    if (new URL(t.endpoint ?? '').protocol !== 'https:') return 'Адрес хранилища должен начинаться с https://';
+  } catch {
+    return 'Адрес хранилища: например https://s3.eu-central-1.amazonaws.com';
+  }
+  if (!t.bucket || !/^[a-zA-Z0-9][a-zA-Z0-9._-]{1,62}$/.test(t.bucket)) return 'Имя бакета: 2–63 символа, буквы, цифры, точка, дефис';
+  if (!t.accessKey || !t.secretKey) return 'Нужны ключ доступа и секретный ключ';
+  return null;
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/schema.ts" << '__COREGSM_EOF__'
 /** Schema helpers shared by db.ts, the modules that own a table, and migrations.ts. */
 import type Database from 'better-sqlite3';
@@ -19177,6 +19368,8 @@ export const SECRET_SETTING_KEYS: ReadonlySet<string> = new Set([
   'smtp_password',
   // may carry credentials (https://user:pass@host/...)
   'backup_remote_url',
+  // the S3 access key (the secret key ends in _secret and is covered by the pattern)
+  'backup_s3_key',
 ]);
 
 export const isSecretKey = (key: string): boolean => SECRET_SETTING_KEYS.has(key) || /_(secret|token)$/.test(key);
@@ -51177,6 +51370,8 @@ export interface BackupInfo {
   encrypted: boolean;
   items: BackupItem[];
   lastRemote: { at: number; ok: boolean; error: string | null } | null;
+  s3?: { endpoint: string; bucket: string; region: string; prefix: string; configured: boolean };
+  lastS3?: { at: number; ok: boolean; error: string | null } | null;
 }
 
 export interface CertInfo {
@@ -52256,6 +52451,114 @@ export default function AuthShowcase({ side }: { side: 'left' | 'right' }) {
         <div className="text-sm font-bold leading-snug">Карточки и новости прямо в Discord</div>
       </div>
     </div>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/BackupS3.tsx" << '__COREGSM_EOF__'
+import { useState, type FormEvent } from 'react';
+import { api, type BackupInfo } from '../api';
+import { t } from '../i18n';
+import { Button, ErrorLine, Field, Switch, fmtDateTime, toast, errText } from '../ui';
+
+/** copies to an S3-compatible storage (AWS, Backblaze B2, Cloudflare R2, Wasabi, MinIO…): the keys are never shown again */
+export function BackupS3({ info, reload }: { info: BackupInfo | null; reload: () => Promise<void> }) {
+  const cur = info?.s3;
+  const [endpoint, setEndpoint] = useState('');
+  const [bucket, setBucket] = useState('');
+  const [region, setRegion] = useState('');
+  const [prefix, setPrefix] = useState('');
+  const [accessKey, setAccessKey] = useState('');
+  const [secretKey, setSecretKey] = useState('');
+  const [clear, setClear] = useState(false);
+  const [busy, setBusy] = useState<'save' | 'test' | null>(null);
+  const [error, setError] = useState('');
+  const [test, setTest] = useState<{ ok: boolean; error: string | null } | null>(null);
+
+  const save = async (e: FormEvent) => {
+    e.preventDefault();
+    setError('');
+    setBusy('save');
+    try {
+      if (clear) await api('/backups/settings', 'PUT', { s3Clear: true });
+      else {
+        await api('/backups/settings', 'PUT', {
+          s3: { endpoint: endpoint.trim() || cur?.endpoint || '', bucket: bucket.trim() || cur?.bucket || '', region: region.trim() || cur?.region || '', prefix: prefix.trim() || cur?.prefix || '', accessKey, secretKey },
+        });
+      }
+      setAccessKey('');
+      setSecretKey('');
+      setClear(false);
+      setTest(null);
+      toast(t('bk3.saved'));
+      await reload();
+    } catch (err) {
+      setError(errText(err));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const check = async () => {
+    setError('');
+    setBusy('test');
+    try {
+      setTest(await api<{ ok: boolean; error: string | null }>('/backups/test-s3', 'POST'));
+    } catch (err) {
+      setError(errText(err));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <form onSubmit={(e) => void save(e)} className="space-y-3 rounded-2xl border border-line p-4" aria-labelledby="bk3-title">
+      <div>
+        <h3 id="bk3-title" className="font-black">{t('bk3.title')}</h3>
+        <p className="mt-1 text-sm font-semibold text-mute">{t('bk3.hint')}</p>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Field label={t('bk3.endpoint')}>
+          <input className="input font-mono" type="url" autoComplete="off" value={endpoint} onChange={(e) => setEndpoint(e.target.value)} placeholder={cur?.endpoint || 'https://s3.eu-central-1.amazonaws.com'} />
+        </Field>
+        <Field label={t('bk3.bucket')}>
+          <input className="input font-mono" autoComplete="off" value={bucket} onChange={(e) => setBucket(e.target.value)} placeholder={cur?.bucket || 'my-backups'} />
+        </Field>
+        <Field label={t('bk3.region')}>
+          <input className="input font-mono" autoComplete="off" value={region} onChange={(e) => setRegion(e.target.value)} placeholder={cur?.region || 'us-east-1'} />
+        </Field>
+        <Field label={t('bk3.prefix')}>
+          <input className="input font-mono" autoComplete="off" value={prefix} onChange={(e) => setPrefix(e.target.value)} placeholder={cur?.prefix || 'coregsm/'} />
+        </Field>
+        <Field label={t('bk3.accessKey')}>
+          <input className="input font-mono" autoComplete="off" value={accessKey} onChange={(e) => setAccessKey(e.target.value)} placeholder={cur?.configured ? t('bk3.kept') : ''} />
+        </Field>
+        <Field label={t('bk3.secretKey')}>
+          <input className="input font-mono" type="password" autoComplete="new-password" value={secretKey} onChange={(e) => setSecretKey(e.target.value)} placeholder={cur?.configured ? t('bk3.kept') : ''} />
+        </Field>
+      </div>
+      {cur?.configured && (
+        <label className="flex items-center gap-3 text-sm font-bold text-mute">
+          <Switch checked={clear} onChange={setClear} />
+          {t('bk3.off')}
+        </label>
+      )}
+      {info?.lastS3 && (
+        <p className={`rounded-2xl px-4 py-2 text-sm font-bold ${info.lastS3.ok ? 'bg-okbg text-ok' : 'bg-badbg text-bad'}`} role="status">
+          {t('bk3.last', { at: fmtDateTime(info.lastS3.at) })} {info.lastS3.ok ? t('bk3.ok') : `${t('bk3.fail')}${info.lastS3.error ? `: ${info.lastS3.error}` : ''}`}
+        </p>
+      )}
+      {test && (
+        <p className={`rounded-2xl px-4 py-2 text-sm font-bold ${test.ok ? 'bg-okbg text-ok' : 'bg-badbg text-bad'}`} role="status">
+          {test.ok ? t('bk3.testOk') : `${t('bk3.testFail')}${test.error ? `: ${test.error}` : ''}`}
+        </p>
+      )}
+      <ErrorLine text={error} />
+      <div className="flex flex-wrap gap-2">
+        <Button loading={busy === 'save'}>{t('common.save')}</Button>
+        {cur?.configured && <button type="button" className="btn btn-soft" onClick={() => void check()} disabled={busy != null}>{busy === 'test' ? t('bk3.testing') : t('bk3.test')}</button>}
+      </div>
+    </form>
   );
 }
 __COREGSM_EOF__
@@ -72353,6 +72656,24 @@ const en: Record<keyof typeof ru, string> = {
   'ne.testGoes': 'The test goes to {where}.',
   'ne.channelN': 'channel {id}',
   'ne.saveTpl': 'Save as a template',
+  'bk3.title': 'S3 storage',
+  'bk3.hint': 'After it is created a copy is sent to an S3-compatible storage (AWS, Backblaze B2, Cloudflare R2, Wasabi, MinIO, Yandex Object Storage). The keys are stored encrypted and are never shown again. For WebDAV and Nextcloud use the address above.',
+  'bk3.endpoint': 'Storage address',
+  'bk3.bucket': 'Bucket',
+  'bk3.region': 'Region',
+  'bk3.prefix': 'Folder in the bucket (optional)',
+  'bk3.accessKey': 'Access key',
+  'bk3.secretKey': 'Secret key',
+  'bk3.kept': 'saved, enter a new one to replace',
+  'bk3.off': 'Turn off sending to S3',
+  'bk3.saved': 'S3 settings saved',
+  'bk3.last': 'Last upload to S3: {at},',
+  'bk3.ok': 'success',
+  'bk3.fail': 'error',
+  'bk3.test': 'Test the connection',
+  'bk3.testing': 'Testing…',
+  'bk3.testOk': 'The connection works: a test file was uploaded.',
+  'bk3.testFail': 'It did not work',
   'ne.tplName': 'Template name',
   'ne.tplSaved': 'Template saved',
   'ne.tplDelete': 'Delete the template “{name}”',
@@ -72807,6 +73128,11 @@ const errorsEn: Record<string, string> = {
   backup_op_failed: 'The operation failed: {reason}',
   backup_not_found: 'Backup not found',
   backup_remote_https: 'The backup address must start with https://',
+  backup_s3_https: 'The storage address must start with https://',
+  backup_s3_endpoint: 'Storage address, for example https://s3.eu-central-1.amazonaws.com',
+  backup_s3_bucket: 'Bucket name: 2–63 characters, letters, digits, dot, hyphen',
+  backup_s3_keys: 'The access key and the secret key are required',
+  backup_s3_none: 'The S3 storage is not configured',
   backup_passphrase_min: 'Encryption password: at least 8 characters',
   backup_settings_range: 'Check the fields: schedule off/daily/weekly, keep 1 to 30 backups',
   backup_busy: 'A backup is already being created, wait',
@@ -74663,6 +74989,24 @@ const ru = {
   'ne.testGoes': 'Тест уйдёт в {where}.',
   'ne.channelN': 'канал {id}',
   'ne.saveTpl': 'Сохранить как шаблон',
+  'bk3.title': 'Хранилище S3',
+  'bk3.hint': 'Копия после создания уходит в S3-совместимое хранилище (AWS, Backblaze B2, Cloudflare R2, Wasabi, MinIO, Яндекс Object Storage). Ключи хранятся зашифрованными и больше не показываются. Для WebDAV и Nextcloud подходит адрес выше.',
+  'bk3.endpoint': 'Адрес хранилища',
+  'bk3.bucket': 'Бакет',
+  'bk3.region': 'Регион',
+  'bk3.prefix': 'Папка в бакете (необязательно)',
+  'bk3.accessKey': 'Ключ доступа',
+  'bk3.secretKey': 'Секретный ключ',
+  'bk3.kept': 'сохранён, введите новый для замены',
+  'bk3.off': 'Отключить отправку в S3',
+  'bk3.saved': 'Настройки S3 сохранены',
+  'bk3.last': 'Последняя отправка в S3: {at},',
+  'bk3.ok': 'успешно',
+  'bk3.fail': 'ошибка',
+  'bk3.test': 'Проверить подключение',
+  'bk3.testing': 'Проверяю…',
+  'bk3.testOk': 'Подключение работает: тестовый файл загружен.',
+  'bk3.testFail': 'Не получилось',
   'ne.tplName': 'Название шаблона',
   'ne.tplSaved': 'Шаблон сохранён',
   'ne.tplDelete': 'Удалить шаблон «{name}»',
@@ -77351,6 +77695,7 @@ import { t } from '../i18n';
 import { loadUnreadableSecrets, saveUnreadableSecrets, unreadableSecrets } from '../security';
 import { Button, ErrorLine, Field, IconDownload, LoadError, StateView, IconRestore, IconTrash, Section, Switch, fmtDateTime, ago, toast, errText } from '../ui';
 import { errorText } from '../apiErrors';
+import { BackupS3 } from '../components/BackupS3';
 
 /** the copies on a time line: a bar per copy (the height is its size, the colour is auto / manual), and how old the last one is */
 function BackupTimeline({ items, schedule }: { items: BackupInfo['items']; schedule: BackupInfo['schedule'] }) {
@@ -77660,6 +78005,8 @@ export default function BackupsCard() {
 
         <Button loading={saving}>{saving ? 'Сохраняю…' : 'Сохранить'}</Button>
       </form>
+
+      <BackupS3 info={info} reload={load} />
 
       <div>
         <h3 className="mb-2 font-black">Копии на сервере</h3>
