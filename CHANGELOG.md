@@ -14,7 +14,7 @@ interface language; the GitHub release text is built from the section of the ver
 - Пометки в конце русской части: `[migration]` — меняется база данных, `[env]` — нужны новые настройки сервера, `⚠` в начале — несовместимое изменение.
 - Новые пункты идут в раздел «Не выпущено». Релиз выпускается только по команде владельца: тогда раздел переименовывается в `## <версия> · <дата>` (версия из `version.txt`).
 
-## Не выпущено | Unreleased
+## 1.0.0.49 · 26.10.2026
 
 ### ✨ Новое | New
 - 🔗 Оповещения без Discord: вебхуки (JSON с подписью HMAC-SHA256, защита от обращений во внутреннюю сеть, повторы) и e-mail о падении и возвращении сервера, новости, вайпе, окне обслуживания и о том, что бот не на связи; раздел «Вебхуки и почта» на странице «Оповещения» [migration] | Alerts without Discord: webhooks (JSON signed with HMAC-SHA256, protection against calls into the internal network, retries) and e-mail for a server going down or back, news, a wipe, a maintenance window and the bot being offline; a «Webhooks and e-mail» section on the Alerts page
