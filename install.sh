@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="01f0d0aae5d5"
+COREGSM_BUILD="26e3ea1726f8"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -47831,7 +47831,7 @@ export default function App() {
       <Tooltips />
       <div className="mx-auto min-h-full max-w-6xl px-3 pb-[calc(6.5rem+env(safe-area-inset-bottom,0px))] pt-3 sm:px-6 sm:pt-4 md:pb-16">
         <header className="glass sticky top-2 z-30 mb-5 flex items-center gap-x-2 rounded-[22px] py-2 pl-3 pr-2 sm:top-3 md:mb-7 md:gap-x-3 md:pl-4">
-          <a href="/servers" className="flex min-w-0 items-center gap-2.5 text-xl font-black tracking-tight max-md:flex-1 sm:text-[22px] md:max-w-60 md:shrink-0">
+          <a href="/servers" aria-label={access.brand.name} className="flex min-w-0 items-center gap-2.5 text-xl font-black tracking-tight max-md:flex-1 sm:text-[22px] md:max-w-60 md:shrink-0">
             <Logo size={34} alt="" />
             <Wordmark className="hdr-word min-w-0 truncate" />
           </a>
@@ -79562,7 +79562,9 @@ function Latency({ s }: { s: StatusServer }) {
   const filled = (s.latency ?? []).map((v) => (v == null ? prev : (prev = v)));
   const lo = Math.min(...vals);
   const hi = Math.max(...vals);
-  const top = Math.max(110, hi);
+  // the 100 ms line only matters when the ping is near it; with a quiet ping the chart zooms in on the data instead
+  const showLimit = hi >= 60;
+  const top = showLimit ? Math.max(110, hi) : Math.max(10, hi * 1.5);
   const W = 200, H = 36, PAD = 3, scale = top * 1.12;
   const yOf = (v: number) => ((H - PAD - (v / scale) * (H - PAD * 2)) / H) * 100;
   const peak = filled.indexOf(Math.max(...filled));
@@ -79573,7 +79575,7 @@ function Latency({ s }: { s: StatusServer }) {
       <div className="st-lat-k">{t('st.lat.k')}</div>
       <div className="st-lat-chart">
         <SmoothArea values={filled} color={tone} w={W} h={H} fill={0.2} strokeWidth={1.8} className="h-9" max={top} label={t('st.lat.label', { lo, hi })} />
-        <span className="st-lat-limit" style={{ top: `${yOf(100)}%` }} aria-hidden><i>100</i></span>
+        {showLimit && <span className="st-lat-limit" style={{ top: `${yOf(100)}%` }} aria-hidden><i>100</i></span>}
         {showPeak && (
           <span className={`st-lat-peak ${hi > 100 ? 'is-high' : ''}`} style={{ left: `${((PAD + (peak / Math.max(1, filled.length - 1)) * (W - PAD * 2)) / W) * 100}%`, top: `${yOf(filled[peak])}%` }} title={t('st.lat.max', { hi })} aria-hidden />
         )}
@@ -84566,7 +84568,7 @@ __COREGSM_EOF__
 .pulse-plot { position: relative; height: 72px; }
 .pulse-plot svg { display: block; width: 100%; height: 100%; overflow: visible; }
 .pulse-peak { position: absolute; width: 10px; height: 10px; margin: -5px 0 0 -5px; border-radius: var(--r-pill); background: rgb(var(--card)); box-shadow: 0 0 0 2.5px currentColor; pointer-events: none; }
-.pulse-chart figcaption { display: flex; justify-content: space-between; gap: 8px; margin-top: 4px; font-size: 12.5px; font-weight: 650; color: rgb(var(--mute)); }
+.pulse-chart figcaption { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: baseline; gap: 2px 10px; margin-top: 4px; font-size: 12.5px; font-weight: 650; color: rgb(var(--mute)); }
 .pulse-peak-text { color: rgb(var(--ink)); }
 .pulse-chart-empty { display: grid; place-items: center; min-height: 72px; padding: 0 8px; text-align: center; font-size: 12.5px; font-weight: 600; color: rgb(var(--mute)); }
 @media (max-width: 1023px) {
@@ -84888,6 +84890,11 @@ html[data-motion='reduce'] .srv-new-chev, html[data-motion='reduce'] .srv-check,
 }
 :root[data-theme='dark'] .srv-hero::before { background: linear-gradient(180deg, rgb(0 0 0 / .42) 0%, rgb(0 0 0 / .16) 35%, rgb(0 0 0 / .62) 100%); }
 :root[data-theme='dark'] .sh-chip { background: rgb(0 0 0 / .35); }
+
+/* the caption of the pulse chart: the time ticks on their own row, the span and the peak under them (they used to run into each other) */
+.pulse-chart .pulse-ticks { grid-column: 1 / -1; grid-row: 1; display: flex; justify-content: space-between; gap: 6px; font-size: 11.5px; white-space: nowrap; }
+.pulse-chart figcaption > span:first-child { grid-row: 2; white-space: nowrap; }
+.pulse-chart .pulse-peak-text, .pulse-chart figcaption > span:last-child:not(.pulse-ticks) { grid-row: 2; justify-self: end; text-align: right; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/shell.css" << '__COREGSM_EOF__'
@@ -85010,7 +85017,7 @@ __COREGSM_EOF__
   .st-banner-stats > div { flex: 1 1 40%; }
 }
 .st-up-v { font-size: 26px; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; text-align: right; }
-.st-up-v.is-great { color: rgb(var(--ok)); }
+.st-up-v.is-great { font-size: 20px; color: rgb(var(--ok)); }
 .st-up-v.is-meh { color: rgb(var(--warn)); }
 .st-up-v.is-poor { color: rgb(var(--bad)); }
 .st-up-k { margin-top: 4px; font-size: 12px; font-weight: 600; color: rgb(var(--mute)); text-align: right; white-space: nowrap; }
@@ -85045,8 +85052,10 @@ __COREGSM_EOF__
 .st-day.is-ok { background: rgb(var(--ok)); }
 .st-day.is-blip { background: linear-gradient(180deg, rgb(var(--warn)) 0 30%, rgb(var(--ok)) 30%); }
 .st-legend.is-blip { background: linear-gradient(180deg, rgb(var(--warn)) 0 45%, rgb(var(--ok)) 45%); }
-.st-day.is-warn { background: rgb(var(--warn)); }
-.st-day.is-bad { background: rgb(var(--bad)); }
+.st-day.is-warn { background: repeating-linear-gradient(0deg, rgb(var(--warn)) 0 4px, rgb(var(--warn) / .5) 4px 7px); }
+.st-day.is-bad { position: relative; overflow: hidden; background: rgb(var(--bad)); }
+/* a cross on a bad day: the state does not rest on the colour alone */
+.st-day.is-bad::after { content: ''; position: absolute; inset: 0; opacity: .85; background: linear-gradient(45deg, transparent 43%, #fff 43% 57%, transparent 57%), linear-gradient(-45deg, transparent 43%, #fff 43% 57%, transparent 57%); }
 .st-day.is-planned { background: repeating-linear-gradient(135deg, rgb(var(--link)) 0 4px, rgb(var(--link) / .55) 4px 8px); }
 .st-day.is-hover { transform: scaleY(1.12); filter: brightness(1.08); }
 .st-legend { display: inline-block; width: 12px; height: 12px; flex: none; }

@@ -154,7 +154,9 @@ function Latency({ s }: { s: StatusServer }) {
   const filled = (s.latency ?? []).map((v) => (v == null ? prev : (prev = v)));
   const lo = Math.min(...vals);
   const hi = Math.max(...vals);
-  const top = Math.max(110, hi);
+  // the 100 ms line only matters when the ping is near it; with a quiet ping the chart zooms in on the data instead
+  const showLimit = hi >= 60;
+  const top = showLimit ? Math.max(110, hi) : Math.max(10, hi * 1.5);
   const W = 200, H = 36, PAD = 3, scale = top * 1.12;
   const yOf = (v: number) => ((H - PAD - (v / scale) * (H - PAD * 2)) / H) * 100;
   const peak = filled.indexOf(Math.max(...filled));
@@ -165,7 +167,7 @@ function Latency({ s }: { s: StatusServer }) {
       <div className="st-lat-k">{t('st.lat.k')}</div>
       <div className="st-lat-chart">
         <SmoothArea values={filled} color={tone} w={W} h={H} fill={0.2} strokeWidth={1.8} className="h-9" max={top} label={t('st.lat.label', { lo, hi })} />
-        <span className="st-lat-limit" style={{ top: `${yOf(100)}%` }} aria-hidden><i>100</i></span>
+        {showLimit && <span className="st-lat-limit" style={{ top: `${yOf(100)}%` }} aria-hidden><i>100</i></span>}
         {showPeak && (
           <span className={`st-lat-peak ${hi > 100 ? 'is-high' : ''}`} style={{ left: `${((PAD + (peak / Math.max(1, filled.length - 1)) * (W - PAD * 2)) / W) * 100}%`, top: `${yOf(filled[peak])}%` }} title={t('st.lat.max', { hi })} aria-hidden />
         )}
