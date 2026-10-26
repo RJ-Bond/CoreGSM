@@ -64,7 +64,7 @@ async function startStack() {
   const fp = await freePort();
   const be = spawn(process.execPath, ['--import', 'tsx', 'src/index.ts'], {
     cwd: path.join(root, 'src/core-backend'), stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env, NODE_ENV: 'test', PORT: String(bp), DB_PATH: dbPath, JWT_SECRET: 'j'.repeat(40), INTERNAL_TOKEN: 'i'.repeat(48), SETUP_TOKEN: 'seed-code', POLL_INTERVAL_SEC: '86400' },
+    env: { ...process.env, NODE_ENV: 'test', PORT: String(bp), DB_PATH: dbPath, JWT_SECRET: 'j'.repeat(40), INTERNAL_TOKEN: 'i'.repeat(48), SETUP_TOKEN: 'seed-code', POLL_INTERVAL_SEC: '86400', APP_VERSION_NAME: process.env.APP_VERSION_NAME ?? '1.0.0.0' },
   });
   children.push(be);
   let beLog = '';

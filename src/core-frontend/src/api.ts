@@ -722,6 +722,8 @@ export interface Access {
   rules: string;
   /** "Войти через Discord" is configured */
   discordLogin: boolean;
+  /** readable version of the running panel («1.0.0.50»); null for a development run */
+  version?: string | null;
 }
 
 export type Perm = 'news' | 'moderation' | 'servers' | 'maintenance' | 'journal';

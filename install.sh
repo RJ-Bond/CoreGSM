@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="55fb41c51b2b"
+COREGSM_BUILD="2ea11598e779"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.0.0.50"
+COREGSM_VERSION="1.0.0.52"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -19872,6 +19872,7 @@ import { bot, BOT_COMMANDS, clientIdFromToken, discordLoginReady, invitePayload 
 import { getSetting, setSetting } from '../db.js';
 import { BOT_TOKEN_RE, maskProxy, normalizeProxy, PROXY_HELP, PROXY_RE, TOKEN_HELP } from '../proxyInput.js';
 import { currentRules } from '../rules.js';
+import { installedVersion } from './updates.js';
 import { baseOf, brand, LOGO_PATH, LOGO_TYPES, logoFile, publicBase, registrationMode, rulesText } from '../site.js';
 
 export const router = express.Router();
@@ -19929,6 +19930,8 @@ const accessPayload = () => ({
   rules: rulesText(),
   discordLogin: discordLoginReady(),
   brand: brand(),
+  /** the installed version, as the update screens show it («1.0.0.50», or the short build id on an older install); null in a development run */
+  version: installedVersion(),
 });
 
 router.get('/api/access', (_req, res) => {
@@ -20186,6 +20189,14 @@ function labelOf(build: string | null | undefined): string | null {
   if (!build) return null;
   if (build === APP_VERSION && APP_VERSION_NAME) return APP_VERSION_NAME;
   return (db.prepare('SELECT label FROM build_labels WHERE build = ?').get(build) as { label: string } | undefined)?.label ?? null;
+}
+
+/**
+ * The version of the running panel exactly as the update screens show it: the readable name of the running build
+ * (the same lookup as «currentLabel»), else the name the container was started with, else the short build id (older installs).
+ */
+export function installedVersion(): string | null {
+  return labelOf(APP_VERSION) ?? (APP_VERSION_NAME || null) ?? (APP_VERSION ? APP_VERSION.slice(0, 7) : null);
 }
 
 // ---- history of the host jobs, and the notices about them
@@ -52987,7 +52998,7 @@ export default function App() {
       <RouteProgress routeKey={routeKey} />
       <Tooltips />
       <div className={`mx-auto min-h-full ${page === 'admin' ? 'max-w-[100rem]' : 'max-w-6xl'} px-3 pb-[calc(6.5rem+env(safe-area-inset-bottom,0px))] pt-3 sm:px-6 sm:pt-4 md:pb-16`}>
-        <header className="glass sticky top-2 z-30 mb-5 flex items-center gap-x-2 rounded-ui-xl py-2 pl-3 pr-2 sm:top-3 md:mb-7 md:gap-x-3 md:pl-4">
+        <header className="hdr glass sticky top-2 z-30 mb-5 flex items-center gap-x-2 rounded-ui-xl py-2 pl-3 pr-2 sm:top-3 md:mb-7 md:gap-x-3 md:pl-4">
           <a href="/servers" aria-label={access.brand.name} className="flex min-w-0 items-center gap-2.5 text-xl font-black tracking-tight max-md:flex-1 sm:text-[22px] md:max-w-60 md:shrink-0">
             <Logo size={34} alt="" />
             <Wordmark className="hdr-word min-w-0 truncate" />
@@ -53012,8 +53023,8 @@ export default function App() {
               title={t('hdr.searchTitle')}
             >
               <IconSearch />
-              <span className="hidden 2xl:inline">{t('hdr.search')}</span>
-              <kbd className="hidden rounded-md bg-card px-1.5 py-0.5 font-sans text-xs font-bold text-mute 2xl:inline">Ctrl K</kbd>
+              <span className="hdr-lbl">{t('hdr.search')}</span>
+              <kbd className="hdr-lbl rounded-md bg-card px-1.5 py-0.5 font-sans text-xs font-bold text-mute">Ctrl K</kbd>
             </button>
             {isAdmin && <BotPill />}
             {isAdmin && <AttentionBell />}
@@ -53057,7 +53068,7 @@ export default function App() {
           {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} isStaff={isStaff} isAdmin={!!isAdmin} />}
         </Suspense>
 
-        <AppFooter brand={access.brand.name} />
+        <AppFooter brand={access.brand.name} version={access.version} />
 
         <nav
           className={`nav-bottom glass fixed inset-x-3 z-40 mx-auto max-w-md rounded-ui-xl md:hidden ${navHidden ? 'is-hidden' : ''}`}
@@ -53997,6 +54008,8 @@ export interface Access {
   rules: string;
   /** "Войти через Discord" is configured */
   discordLogin: boolean;
+  /** readable version of the running panel («1.0.0.50»); null for a development run */
+  version?: string | null;
 }
 
 export type Perm = 'news' | 'moderation' | 'servers' | 'maintenance' | 'journal';
@@ -54714,6 +54727,43 @@ function ChannelForm({ channel, kind, events, smtpReady, onClose, onSaved }: {
     </Modal>
   );
 }
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/AppFooter.test.tsx" << '__COREGSM_EOF__'
+import { renderToStaticMarkup } from 'react-dom/server';
+import { describe, expect, it } from 'vitest';
+import { AppFooter, footVersionText } from './ShellExtras';
+
+describe('footVersionText', () => {
+  it('writes a readable version as «v1.0.0.50»', () => expect(footVersionText('1.0.0.50')).toBe('v1.0.0.50'));
+  it('leaves a short build id of an older install as it is', () => expect(footVersionText('0123456')).toBe('0123456'));
+});
+
+describe('AppFooter', () => {
+  it('shows the version of the panel with a tooltip', () => {
+    const html = renderToStaticMarkup(<AppFooter brand="CoreGSM" version="1.0.0.50" />);
+    expect(html).toContain('v1.0.0.50');
+    expect(html).toContain('app-foot-ver');
+    expect(html).toMatch(/title="[^"]*1\.0\.0\.50[^"]*"/);
+  });
+
+  it('shows no version mark when the build has no name', () => {
+    expect(renderToStaticMarkup(<AppFooter brand="CoreGSM" version={null} />)).not.toContain('app-foot-ver');
+    expect(renderToStaticMarkup(<AppFooter brand="CoreGSM" />)).not.toContain('app-foot-ver');
+  });
+
+  it('has an svg icon for every link and for the version, all hidden from screen readers', () => {
+    const html = renderToStaticMarkup(<AppFooter brand="CoreGSM" version="1.0.0.50" />);
+    expect((html.match(/<svg/g) ?? []).length).toBe(6);
+    expect((html.match(/aria-hidden="true"/g) ?? []).length).toBeGreaterThanOrEqual(6);
+  });
+
+  it('keeps the brand and the section links', () => {
+    const html = renderToStaticMarkup(<AppFooter brand="Моя панель" version="1.0.0.50" />);
+    expect(html).toContain('Моя панель');
+    expect(html).toContain('href="/servers"');
+  });
+});
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components"
   cat > "$APP_DIR/core-frontend/src/components/AttentionBell.tsx" << '__COREGSM_EOF__'
@@ -56416,6 +56466,24 @@ export default function EmailVerifyState() {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/FooterIcons.tsx" << '__COREGSM_EOF__'
+import type { ReactNode } from 'react';
+
+/** small outline icons for the footer links (currentColor, decorative: the text next to them is the name) */
+const svg = (d: ReactNode) => (
+  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+    {d}
+  </svg>
+);
+
+export const FootServers = () => svg(<><rect x="3" y="4" width="18" height="6.5" rx="2" /><rect x="3" y="13.5" width="18" height="6.5" rx="2" /><path d="M7 7.25h.01M7 16.75h.01" /></>);
+export const FootNews = () => svg(<><path d="M4 5h13a2 2 0 0 1 2 2v12H6a2 2 0 0 1-2-2V5Z" /><path d="M19 9h2v8a2 2 0 0 1-2 2M8 9h7M8 13h7" /></>);
+export const FootStatus = () => svg(<path d="M3 12h4l2.5 7 5-14L17 12h4" />);
+export const FootCommunity = () => svg(<><circle cx="9" cy="8" r="3.2" /><path d="M3 20c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5" /><circle cx="17" cy="9" r="2.4" /><path d="M16.5 14.6c2.6.2 4.5 2 4.5 4.9" /></>);
+export const FootGallery = () => svg(<><rect x="3" y="4" width="18" height="16" rx="2.5" /><circle cx="9" cy="10" r="1.8" /><path d="m21 16-5-5-8 8" /></>);
+export const FootTag = () => svg(<><path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8Z" /><path d="M7.5 7.5h.01" /></>);
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
   cat > "$APP_DIR/core-frontend/src/components/GamePicker.tsx" << '__COREGSM_EOF__'
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { GAMES } from '../games';
@@ -58104,6 +58172,7 @@ import { api, onBusy, type Me } from '../api';
 import { useAppearance } from '../appearance';
 import { t, useI18n, type TKey } from '../i18n';
 import { UserAvatar } from '../ui';
+import { FootCommunity, FootGallery, FootNews, FootServers, FootStatus, FootTag } from './FooterIcons';
 import '../styles/shell.css';
 
 // ---------- progress strip ----------
@@ -58182,7 +58251,7 @@ export function BotPill() {
   return (
     <a href="/admin/discord" className="btn-soft hdr-search" title={t('hdr.bot.tip', { s: label })} aria-label={t('hdr.bot.tip', { s: label })}>
       <span className={`inline-block size-2.5 rounded-full ${color}`} aria-hidden />
-      <span className="hidden 2xl:inline">{label}</span>
+      <span className="hdr-lbl">{label}</span>
     </a>
   );
 }
@@ -58210,17 +58279,22 @@ export function usePanelPulse(enabled: boolean): number {
 }
 
 // ---------- footer ----------
-export function AppFooter({ brand }: { brand: string }) {
+/** «1.0.0.50» is shown as «v1.0.0.50»; a short build id (an older install) as it is */
+export const footVersionText = (v: string): string => (/^\d+(\.\d+)+$/.test(v) ? `v${v}` : v);
+
+export function AppFooter({ brand, version }: { brand: string; version?: string | null }) {
+  useI18n();
   return (
     <footer className="app-foot">
       <span className="font-extrabold">{brand}</span>
       <nav aria-label={t('nav.sections')}>
-        <a href="/servers">{t('nav.servers')}</a>
-        <a href="/news">{t('nav.news')}</a>
-        <a href="/status">{t('nav.status')}</a>
-        <a href="/community">{t('nav.community')}</a>
-        <a href="/gallery">Галерея</a>
+        <a href="/servers"><FootServers />{t('nav.servers')}</a>
+        <a href="/news"><FootNews />{t('nav.news')}</a>
+        <a href="/status"><FootStatus />{t('nav.status')}</a>
+        <a href="/community"><FootCommunity />{t('nav.community')}</a>
+        <a href="/gallery"><FootGallery />Галерея</a>
       </nav>
+      {version && <span className="app-foot-ver" title={t('foot.version', { v: version })}><FootTag />{footVersionText(version)}</span>}
     </footer>
   );
 }
@@ -58266,7 +58340,7 @@ export function ProfileMenu({ me, isStaff, logout, active }: { me: Me; isStaff: 
         onClick={() => setOpen((v) => !v)}
       >
         <UserAvatar name={me.username} url={me.avatarUrl} size={32} tone="grad" className="rounded-full!" />
-        <span className="hidden truncate 2xl:inline">{me.username}</span>
+        <span className="hdr-lbl truncate">{me.username}</span>
       </button>
       {open && (
         <div className="pm-menu panel panel-raised" role="menu" onClick={() => setOpen(false)}>
@@ -73656,6 +73730,7 @@ const en: Record<keyof typeof ru, string> = {
   'net.offline': 'You are offline. Showing the last data received.',
   'net.back': 'Back online. Refreshing the data.',
   'nav.skip': 'Skip to content',
+  'foot.version': 'Panel version {v}',
   'hdr.search': 'Search',
   'hdr.searchAria': 'Search the panel (Ctrl K)',
   'hdr.searchTitle': 'Search (Ctrl K)',
@@ -76138,6 +76213,7 @@ const ru = {
   'net.offline': 'Нет сети. Показаны последние полученные данные.',
   'net.back': 'Сеть вернулась. Данные обновляются.',
   'nav.skip': 'Перейти к содержимому',
+  'foot.version': 'Версия панели {v}',
   'hdr.search': 'Поиск',
   'hdr.searchAria': 'Поиск по панели (Ctrl K)',
   'hdr.searchTitle': 'Поиск (Ctrl K)',
@@ -87348,7 +87424,7 @@ function HeroTile({ s, idx, uptime, downSince, fav, onFav, onOpen, rx, reason, s
             {s.ping != null && <span className="ml-auto inline-flex items-center gap-1.5 font-bold text-white/90"><PingBars ping={s.ping} tone={pingTone(s.ping).tone} />пинг {s.ping} мс</span>}
           </div>
           <CapacityBar className="sh-bar relative" players={s.players} max={s.maxPlayers} color="#fff" onDark />
-          <PlayerNames className="relative" names={s.playerNames ?? []} onDark />
+          <PlayerNames className="relative" names={s.playerNames ?? []} max={4} onDark />
           <div className="sh-chart relative mt-auto pt-2">
             <Spark serverId={s.id} color="#ffffff" variant="hero" />
           </div>
@@ -91884,7 +91960,7 @@ html[data-motion='reduce'] :is(.btn, .btn-soft, .btn-outline, .btn-ghost, .btn-d
 .hdr-search { --b-px: .9rem; --b-fg: rgb(var(--mute)); --b-fg-h: rgb(var(--link)); height: 2.5rem; min-height: 2.5rem; white-space: nowrap; }
 .hdr-search > svg { flex: none; }
 /* the header: round icon buttons of one size; the labels («Поиск Ctrl K», «Бот в сети») only where there is room for them */
-@media (max-width: 1535px) { .hdr-search { width: max(2.5rem, var(--tap, 0px)); height: max(2.5rem, var(--tap, 0px)); padding: 0; justify-content: center; } }
+@container hdr (max-width: 1319px) { .hdr-search { width: max(2.5rem, var(--tap, 0px)); height: max(2.5rem, var(--tap, 0px)); padding: 0; justify-content: center; } }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/community.css" << '__COREGSM_EOF__'
@@ -94111,6 +94187,23 @@ html[data-motion='reduce'] .srv-new-chev, html[data-motion='reduce'] .srv-check,
   .srv-hero .sh-chart, .srv-hero .sh-foot { display: none; }
   .srv-hero [class*='text-[64px]'] { font-size: 44px; }
 }
+
+/* ---------- the big card, third pass: one soft scrim instead of patches, a label instead of a badge, one row of names, a calm chart panel ---------- */
+.srv-hero::before { content: ''; position: absolute; inset: 0; z-index: 0; pointer-events: none; border-radius: inherit;
+  background: linear-gradient(90deg, rgb(6 8 18 / .72) 0%, rgb(6 8 18 / .4) 55%, rgb(6 8 18 / .1) 100%), linear-gradient(0deg, rgb(6 8 18 / .45), transparent 42%); }
+.srv-hero.is-split .depth-l1, .srv-hero.is-split .depth-l2 { display: none; }
+/* «most loaded» is a small caption above the name, not a pill under it */
+.srv-hero .sh-head > .min-w-0 { display: flex; flex-direction: column; }
+.srv-hero .hero-reason { order: -1; align-self: flex-start; margin: 0 0 4px; padding: 0; background: none; box-shadow: none; color: rgb(255 255 255 / .78);
+  font-size: var(--fs-xs); font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+.srv-hero .hero-reason.attn { background: none; color: #fecaca; }
+.srv-hero .hero-reason::before { width: 6px; height: 6px; box-shadow: none; }
+.srv-hero .srv-names { flex-wrap: nowrap; overflow: hidden; gap: 6px; }
+.srv-hero .srv-names.on-dark > li { flex: none; padding: 1px 9px; font-size: var(--fs-xs); background: rgb(255 255 255 / .13); }
+@media (min-width: 900px) {
+  .srv-hero.is-split > .sh-chart { padding: 14px 14px 6px 6px; border-radius: var(--r-xl); background: rgb(6 8 18 / .34); box-shadow: inset 0 0 0 1px rgb(255 255 255 / .07);
+    -webkit-backdrop-filter: none; backdrop-filter: none; }
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/shell.css" << '__COREGSM_EOF__'
@@ -94123,6 +94216,10 @@ __COREGSM_EOF__
 .app-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 6px 18px; margin-top: 36px; padding: 18px 0 4px; border-top: 1px solid rgb(var(--line)); font-size: var(--fs-sm); font-weight: 700; color: rgb(var(--mute)); }
 .app-foot nav { display: flex; flex-wrap: wrap; gap: 4px 16px; }
 .app-foot a:hover { color: rgb(var(--link)); }
+.app-foot nav a { display: inline-flex; align-items: center; gap: 6px; }
+.app-foot svg { flex: none; opacity: .8; }
+/* the version of the panel: a quiet mark at the end of the footer, not a link */
+.app-foot-ver { display: inline-flex; align-items: center; gap: 5px; font-variant-numeric: tabular-nums; font-weight: 650; opacity: .75; }
 
 .crumbs { margin-left: 4px; font-size: var(--fs-md); font-weight: 800; }
 .crumbs ol { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 0; }
@@ -94136,7 +94233,15 @@ __COREGSM_EOF__
 .pm-btn { display: flex; align-items: center; justify-content: center; gap: 8px; border-radius: var(--r-pill); font-weight: 800; transition: background-color .15s ease; height: 44px; width: 44px; }
 @media (min-width: 640px) { .pm-btn { height: 2.5rem; width: 2.5rem; } }
 /* the name next to the avatar only on wide screens, otherwise the avatar is a round button like its neighbours */
-@media (min-width: 1536px) { .pm-btn { height: auto; width: auto; max-width: 11rem; padding: 4px 14px 4px 4px; } }
+/* the labels of the header (search, bot, name) appear only when the HEADER itself is wide enough for all of them: the page is at most 72rem wide on most screens, so the width of the window says nothing */
+.hdr { container: hdr / inline-size; }
+.hdr-lbl { display: none; }
+@container hdr (min-width: 1320px) {
+  .hdr-lbl { display: inline; }
+  .pm-btn { height: auto; width: auto; max-width: 11rem; padding: 4px 14px 4px 4px; }
+}
+/* one capsule, not a capsule inside a capsule: the sections are plain, only the current one has a pill */
+.hdr .seg.hdr-nav { background: transparent; box-shadow: none; }
 /* the sections of the header never shrink or fade out: the buttons on the right give way first */
 @media (min-width: 1100px) { .seg.hdr-nav { overflow: visible; max-width: none; flex-shrink: 0; } }
 @media (max-width: 1099px) { .hdr-word { display: none; } }
@@ -95475,7 +95580,7 @@ export function Spark({ serverId, color, variant = 'tile' }: { serverId: number;
   return hero
     ? (
       <div className="relative">
-        <SmoothArea values={pts} down={downs24} color={color} w={560} h={130} grid fill={0.3} strokeWidth={2.3} className="h-[130px]" label={label} />
+        <SmoothArea values={pts} down={downs24} color={color} w={560} h={130} grid fill={0.3} strokeWidth={2} className="h-[130px]" label={label} />
         {/* the scale: the top of the day and the zero line (the curve starts at zero) */}
         <span aria-hidden className="spark-axis" style={{ top: `${(1 - 1 / 1.12) * 100 + 1}%` }}>пик {Math.round(top)}</span>
         <span aria-hidden className="spark-axis" style={{ bottom: '3%' }}>0</span>

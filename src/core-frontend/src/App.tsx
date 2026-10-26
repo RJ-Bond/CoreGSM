@@ -419,7 +419,7 @@ export default function App() {
       <RouteProgress routeKey={routeKey} />
       <Tooltips />
       <div className={`mx-auto min-h-full ${page === 'admin' ? 'max-w-[100rem]' : 'max-w-6xl'} px-3 pb-[calc(6.5rem+env(safe-area-inset-bottom,0px))] pt-3 sm:px-6 sm:pt-4 md:pb-16`}>
-        <header className="glass sticky top-2 z-30 mb-5 flex items-center gap-x-2 rounded-ui-xl py-2 pl-3 pr-2 sm:top-3 md:mb-7 md:gap-x-3 md:pl-4">
+        <header className="hdr glass sticky top-2 z-30 mb-5 flex items-center gap-x-2 rounded-ui-xl py-2 pl-3 pr-2 sm:top-3 md:mb-7 md:gap-x-3 md:pl-4">
           <a href="/servers" aria-label={access.brand.name} className="flex min-w-0 items-center gap-2.5 text-xl font-black tracking-tight max-md:flex-1 sm:text-[22px] md:max-w-60 md:shrink-0">
             <Logo size={34} alt="" />
             <Wordmark className="hdr-word min-w-0 truncate" />
@@ -444,8 +444,8 @@ export default function App() {
               title={t('hdr.searchTitle')}
             >
               <IconSearch />
-              <span className="hidden 2xl:inline">{t('hdr.search')}</span>
-              <kbd className="hidden rounded-md bg-card px-1.5 py-0.5 font-sans text-xs font-bold text-mute 2xl:inline">Ctrl K</kbd>
+              <span className="hdr-lbl">{t('hdr.search')}</span>
+              <kbd className="hdr-lbl rounded-md bg-card px-1.5 py-0.5 font-sans text-xs font-bold text-mute">Ctrl K</kbd>
             </button>
             {isAdmin && <BotPill />}
             {isAdmin && <AttentionBell />}
@@ -489,7 +489,7 @@ export default function App() {
           {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} isStaff={isStaff} isAdmin={!!isAdmin} />}
         </Suspense>
 
-        <AppFooter brand={access.brand.name} />
+        <AppFooter brand={access.brand.name} version={access.version} />
 
         <nav
           className={`nav-bottom glass fixed inset-x-3 z-40 mx-auto max-w-md rounded-ui-xl md:hidden ${navHidden ? 'is-hidden' : ''}`}

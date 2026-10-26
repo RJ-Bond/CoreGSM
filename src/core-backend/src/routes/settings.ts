@@ -10,6 +10,7 @@ import { bot, BOT_COMMANDS, clientIdFromToken, discordLoginReady, invitePayload 
 import { getSetting, setSetting } from '../db.js';
 import { BOT_TOKEN_RE, maskProxy, normalizeProxy, PROXY_HELP, PROXY_RE, TOKEN_HELP } from '../proxyInput.js';
 import { currentRules } from '../rules.js';
+import { installedVersion } from './updates.js';
 import { baseOf, brand, LOGO_PATH, LOGO_TYPES, logoFile, publicBase, registrationMode, rulesText } from '../site.js';
 
 export const router = express.Router();
@@ -67,6 +68,8 @@ const accessPayload = () => ({
   rules: rulesText(),
   discordLogin: discordLoginReady(),
   brand: brand(),
+  /** the installed version, as the update screens show it («1.0.0.50», or the short build id on an older install); null in a development run */
+  version: installedVersion(),
 });
 
 router.get('/api/access', (_req, res) => {

@@ -14,6 +14,15 @@ interface language; the GitHub release text is built from the section of the ver
 - Пометки в конце русской части: `[migration]` — меняется база данных, `[env]` — нужны новые настройки сервера, `⚠` в начале — несовместимое изменение.
 - Новые пункты идут в раздел «Не выпущено». Релиз выпускается только по команде владельца: тогда раздел переименовывается в `## <версия> · <дата>` (версия из `version.txt`).
 
+## Не выпущено | Unreleased
+
+### ✨ Новое | New
+- 🃏 Большая карточка сервера ещё спокойнее: единое мягкое затемнение вместо тёмных «пятен» поверх картинки, «Самый загруженный» тонкой надписью над названием, ники игроков в один ряд, панель графика без рамок и размытия | The big server card is calmer still: one soft scrim instead of dark patches over the picture, «Most loaded» as a thin caption above the name, the player names in one row, a chart panel without borders and blur
+- 🏷 В футере сайта версия панели («v1.0.0.50») и SVG-значки у ссылок; версия берётся оттуда же, откуда её показывают экраны обновлений (у старых установок это короткий номер сборки) и приходит в публичном ответе `/api/access` | The site footer shows the version of the panel («v1.0.0.50») and SVG icons next to its links; the version comes from the same place as on the update screens (a short build id on older installs) and is part of the public `/api/access` answer
+
+### 🐛 Исправлено | Fixed
+- 🧭 Шапка сайта: на широком окне подписи «Поиск Ctrl K», «Бот в сети» и имя пользователя не помещались в рамку шапки, и профиль вылезал за её край; теперь подписи показываются только когда в самой шапке хватает места, а вкладки разделов без вложенной тёмной капсулы | The site header: on a wide window the «Search Ctrl K», «Bot online» labels and the user name did not fit the header and the profile stuck out of it; the labels now show only when the header itself has room, and the section tabs have no capsule inside the capsule
+
 ## 1.0.0.50 · 26.10.2026
 
 ### ✨ Новое | New

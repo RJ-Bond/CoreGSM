@@ -8,6 +8,7 @@ import { api, onBusy, type Me } from '../api';
 import { useAppearance } from '../appearance';
 import { t, useI18n, type TKey } from '../i18n';
 import { UserAvatar } from '../ui';
+import { FootCommunity, FootGallery, FootNews, FootServers, FootStatus, FootTag } from './FooterIcons';
 import '../styles/shell.css';
 
 // ---------- progress strip ----------
@@ -86,7 +87,7 @@ export function BotPill() {
   return (
     <a href="/admin/discord" className="btn-soft hdr-search" title={t('hdr.bot.tip', { s: label })} aria-label={t('hdr.bot.tip', { s: label })}>
       <span className={`inline-block size-2.5 rounded-full ${color}`} aria-hidden />
-      <span className="hidden 2xl:inline">{label}</span>
+      <span className="hdr-lbl">{label}</span>
     </a>
   );
 }
@@ -114,17 +115,22 @@ export function usePanelPulse(enabled: boolean): number {
 }
 
 // ---------- footer ----------
-export function AppFooter({ brand }: { brand: string }) {
+/** «1.0.0.50» is shown as «v1.0.0.50»; a short build id (an older install) as it is */
+export const footVersionText = (v: string): string => (/^\d+(\.\d+)+$/.test(v) ? `v${v}` : v);
+
+export function AppFooter({ brand, version }: { brand: string; version?: string | null }) {
+  useI18n();
   return (
     <footer className="app-foot">
       <span className="font-extrabold">{brand}</span>
       <nav aria-label={t('nav.sections')}>
-        <a href="/servers">{t('nav.servers')}</a>
-        <a href="/news">{t('nav.news')}</a>
-        <a href="/status">{t('nav.status')}</a>
-        <a href="/community">{t('nav.community')}</a>
-        <a href="/gallery">Галерея</a>
+        <a href="/servers"><FootServers />{t('nav.servers')}</a>
+        <a href="/news"><FootNews />{t('nav.news')}</a>
+        <a href="/status"><FootStatus />{t('nav.status')}</a>
+        <a href="/community"><FootCommunity />{t('nav.community')}</a>
+        <a href="/gallery"><FootGallery />Галерея</a>
       </nav>
+      {version && <span className="app-foot-ver" title={t('foot.version', { v: version })}><FootTag />{footVersionText(version)}</span>}
     </footer>
   );
 }
@@ -170,7 +176,7 @@ export function ProfileMenu({ me, isStaff, logout, active }: { me: Me; isStaff: 
         onClick={() => setOpen((v) => !v)}
       >
         <UserAvatar name={me.username} url={me.avatarUrl} size={32} tone="grad" className="rounded-full!" />
-        <span className="hidden truncate 2xl:inline">{me.username}</span>
+        <span className="hdr-lbl truncate">{me.username}</span>
       </button>
       {open && (
         <div className="pm-menu panel panel-raised" role="menu" onClick={() => setOpen(false)}>

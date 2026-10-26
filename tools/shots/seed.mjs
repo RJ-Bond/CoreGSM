@@ -28,6 +28,7 @@ const DEFS = [
 const HERO = Number(process.env.SHOTS_HERO || 0);
 if (HERO && DEFS[HERO - 1]) { DEFS[HERO - 1][3] = Math.max(DEFS[HERO - 1][3], 80); DEFS[HERO - 1][4] = 64; }
 
+const NICKS = ['MarelenX', 'Malina', 'Percefona', 'Megacrazy', 'Ren', 'Drake', 'Vikram', 'Nord', 'Kira', 'Toxic', 'Lynx', 'Bravo', 'Sage', 'Orion', 'Fenix', 'Zed', 'Mira', 'Rook'];
 export async function seed({ base, dbPath }) {
   const H = { 'content-type': 'application/json', 'x-coregsm': '1' };
   const call = async (method, url, body, token, extra = {}) => {
@@ -51,7 +52,7 @@ export async function seed({ base, dbPath }) {
   const ins = db.prepare('INSERT INTO history (server_id, ts, online, players, ping, unconfirmed, maint) VALUES (?,?,?,?,?,0,0)');
   DEFS.forEach(([name, , port, max, pl, ping, map, online], i) => {
     db.prepare('UPDATE servers SET name=?, host=?, port=? WHERE id=?').run(name, `203.0.113.${i + 10}`, port, ids[i]);
-    db.prepare('UPDATE status SET online=?, name=?, players=?, max_players=?, map=?, version=?, ping=?, updated_at=? WHERE server_id=?').run(online, name, pl, max, map, '1.6.0', online ? ping : null, now, ids[i]);
+    db.prepare('UPDATE status SET online=?, name=?, players=?, max_players=?, map=?, version=?, ping=?, updated_at=?, player_names=? WHERE server_id=?').run(online, name, pl, max, map, '1.6.0', online ? ping : null, now, JSON.stringify(NICKS.slice(0, Math.min(pl, 18))), ids[i]);
     for (let m = 24 * 60; m >= 0; m -= 5) {
       const ts = now - m * 60_000;
       const hour = new Date(ts).getHours() + new Date(ts).getMinutes() / 60;

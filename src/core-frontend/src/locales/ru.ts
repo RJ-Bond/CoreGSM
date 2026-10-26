@@ -58,6 +58,7 @@ const ru = {
   'net.offline': 'Нет сети. Показаны последние полученные данные.',
   'net.back': 'Сеть вернулась. Данные обновляются.',
   'nav.skip': 'Перейти к содержимому',
+  'foot.version': 'Версия панели {v}',
   'hdr.search': 'Поиск',
   'hdr.searchAria': 'Поиск по панели (Ctrl K)',
   'hdr.searchTitle': 'Поиск (Ctrl K)',
