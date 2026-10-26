@@ -28,6 +28,7 @@ import SettingsPage, { UsersTab } from './Settings';
 export { ADMIN_SECTIONS };
 import HealthPage from './Health';
 import SystemPage from './System';
+import AdminIntegrations from './AdminIntegrations';
 
 /** n = 0 draws a bare dot (a state, not a count) */
 interface NavBadge { n: number; tone: 'bad' | 'warn'; label: string }
@@ -311,6 +312,7 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
         {!home && current === 'journal' && <JournalPage />}
         {!home && current === 'health' && <HealthPage />}
         {!home && current === 'system' && <SystemPage />}
+        {!home && current === 'integrations' && <AdminIntegrations />}
         {!home && current === 'settings' && <SettingsPage sub={tail} updateAvailable={updateAvailable} />}
       </div>
     </div>
