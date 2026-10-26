@@ -107,6 +107,9 @@ export const ERRORS = {
   update_or_rollback_running: 'Сейчас выполняется обновление или откат',
   rollback_unavailable: 'Откат недоступен: предыдущая версия не сохранена',
   request_pending: 'Запрос уже ожидает выполнения',
+  update_channel_locked: 'Канал задан переменными окружения сервера',
+  update_channel_invalid: 'Канал: release или main',
+  update_version_invalid: 'Некорректная версия',
   rollback_request_failed: 'Не удалось создать запрос на откат (нет прав на папку /app/update)',
 
   // ---- servers, Discord bindings, alerts, deliveries ----
