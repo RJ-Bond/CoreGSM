@@ -118,6 +118,9 @@ async function launchChrome() {
 
 // ---------------------------------------------------------------- one page
 const checksSource = fs.readFileSync(path.join(here, 'checks.js'), 'utf8');
+const axePath = path.join(root, 'src/core-frontend/node_modules/axe-core/axe.min.js');
+const axeSource = fs.existsSync(axePath) ? fs.readFileSync(axePath, 'utf8') : '';
+const RUN_AXE = `axe.run(document,{runOnly:['wcag2a','wcag2aa'],resultTypes:['violations']}).then(r=>r.violations.filter(v=>v.impact==='serious'||v.impact==='critical').map(v=>({id:v.id,impact:v.impact,n:v.nodes.length,help:v.help,first:(v.nodes[0]?.target||[]).join(' ').slice(0,90)})))`;
 const KILL_MOTION = `(()=>{const s=document.createElement('style');s.textContent='*,*::before,*::after{animation:none!important;transition:none!important;caret-color:transparent!important} main{opacity:1!important}';document.head.appendChild(s)})()`;
 const HIDE_BARS = `(()=>{for(const el of document.querySelectorAll('body *')){const cs=getComputedStyle(el);if(cs.position!=='fixed')continue;const r=el.getBoundingClientRect();if(r.top>innerHeight*0.6&&r.height<150&&!el.closest('[role=dialog]'))el.style.visibility='hidden'}})()`;
 
@@ -170,6 +173,12 @@ async function shoot(cdp, base, row, outDir) {
   if (c.busy) warnings.push(`${c.busy} loading placeholders still on screen`);
   if (c.height > MAX_H) warnings.push(`the picture is cut at ${MAX_H}px of ${c.height}px`);
 
+  if (axeSource && !opts['no-axe']) {
+    try {
+      await cdp.evaluate(axeSource);
+      for (const v of await cdp.evaluate(RUN_AXE)) warnings.push(`a11y ${v.id} (${v.impact}, ${v.n}): ${v.help}; e.g. ${v.first}`);
+    } catch (e) { warnings.push(`axe did not run: ${e.message.slice(0, 80)}`); }
+  }
   await cdp.evaluate(HIDE_BARS);
   const shot = await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true, clip: { x: 0, y: 0, width: vp.width, height: Math.min(c.height, MAX_H), scale: 1 } });
   const dir = path.join(outDir, `${theme}-${viewport}`);

@@ -45,6 +45,7 @@ export const HELP = `Screenshots and automatic UI checks of the panel (Chrome on
   --login=user:pass  sign in on --base before the admin pages
   --out=DIR        where pictures and the report go              (default: shots-out)
   --full           full-page pictures (default: the first screen plus a full-page one)
+  --no-axe         skip the accessibility scan (axe-core, WCAG A/AA, serious and critical only)
   --strict         warnings fail the run too
   --list           print the page ids and stop
   --keep           leave the demo stack running (prints its address)
