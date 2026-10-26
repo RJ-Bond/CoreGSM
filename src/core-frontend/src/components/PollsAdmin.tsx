@@ -3,7 +3,7 @@ import { api } from '../api';
 import { confirmDialog } from '../confirm';
 import { t, useI18n } from '../i18n';
 import { Button, ErrorLine, Section, fail, toast } from '../ui';
-import { ChannelPicker } from './ChannelPicker';
+import { ChannelName, ChannelPicker } from './ChannelPicker';
 import { PollBlock, type PollView } from './PollsCard';
 
 /** Admin → Сообщество → Голосования: create a poll (optionally posted to a Discord channel with vote buttons), close it, delete it. */
@@ -75,7 +75,7 @@ export default function PollsAdmin() {
           </div>
           <div>
             <div className="flex flex-wrap items-center gap-3">
-              <span className="font-black">{channelId ? t('pl.channel', { id: channelId }) : t('pl.noChannel')}</span>
+              <span className="font-black">{channelId ? <ChannelName id={channelId} /> : t('pl.noChannel')}</span>
               <button type="button" className="btn btn-soft btn-sm" onClick={() => setPicking((v) => !v)} aria-expanded={picking}>{t('pl.pick')}</button>
               {channelId && <button type="button" className="btn-link text-sm" onClick={() => setChannelId('')}>{t('pl.noPost')}</button>}
             </div>

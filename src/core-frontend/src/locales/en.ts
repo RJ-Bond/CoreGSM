@@ -1563,6 +1563,7 @@ const en: Record<keyof typeof ru, string> = {
   'wl.help': 'When someone joins the Discord server the bot posts a greeting in the chosen channel and reminds them to sign up with /register.',
   'wl.on': 'Greet new members',
   'wl.channel': 'Channel: {id}',
+  'ch.n': 'Channel {id}',
   'wl.noChannel': 'No channel chosen — nothing will be posted',
   'wl.pick': 'Choose channel',
   'wl.text': 'Greeting text',

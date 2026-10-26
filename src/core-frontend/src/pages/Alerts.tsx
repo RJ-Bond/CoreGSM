@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { t, useI18n, type TKey } from '../i18n';
 import DigestSection from '../components/DigestSection';
 import { api, type SettingsInfo } from '../api';
-import { ChannelPicker } from '../components/ChannelPicker';
+import { ChannelName, ChannelPicker } from '../components/ChannelPicker';
 import { AlertsArt } from '../components/Illustrations';
 import { AdminPage, ErrorLine, GoLink, IconBell, LoadError, Notice, PageHead, Section, Switch, ago, toast, usePoll } from '../ui';
 
@@ -186,7 +186,7 @@ export default function AlertsPage() {
           <div>
             <span className="label">{t('al.channel')}</span>
             <div className="flex flex-wrap items-center gap-3">
-              <span className="font-black">{info.channelId ? (info.channelName ? `# ${info.channelName}${info.guildName ? ` · ${info.guildName}` : ''}` : t('al.channel.n', { id: info.channelId })) : t('al.channel.none')}</span>
+              <span className="font-black">{info.channelId ? (info.channelName ? `# ${info.channelName}${info.guildName ? ` · ${info.guildName}` : ''}` : <ChannelName id={info.channelId} />) : t('al.channel.none')}</span>
               <button className="btn btn-soft btn-sm" onClick={() => setChanging((v) => !v)} aria-expanded={changing}>{info.channelId ? t('al.change') : t('al.pick')}</button>
             </div>
             {changing && (

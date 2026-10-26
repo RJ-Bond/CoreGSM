@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { api } from '../api';
 import { t, useI18n } from '../i18n';
 import { Button, Section, Switch, fail, toast } from '../ui';
-import { ChannelPicker } from './ChannelPicker';
+import { ChannelName, ChannelPicker } from './ChannelPicker';
 
 interface Welcome { enabled: boolean; channelId: string; text: string; defaultText: string; maxLength: number }
 
@@ -44,7 +44,7 @@ export default function WelcomeCard() {
       {w.enabled && (
         <div className="space-y-3">
           <div className="flex flex-wrap items-center gap-3">
-            <span className="font-black">{w.channelId ? t('wl.channel', { id: w.channelId }) : t('wl.noChannel')}</span>
+            <span className="font-black">{w.channelId ? <ChannelName id={w.channelId} /> : t('wl.noChannel')}</span>
             <button type="button" className="btn btn-soft btn-sm" onClick={() => setPicking((v) => !v)} aria-expanded={picking}>{t('wl.pick')}</button>
           </div>
           {picking && <ChannelPicker id="welcome-channel" value={w.channelId} onChange={(v) => { if (/^\d{15,25}$/.test(v)) { void save({ channelId: v }); setPicking(false); } }} />}

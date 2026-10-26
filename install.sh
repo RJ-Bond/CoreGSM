@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="4dae2a46d754"
+COREGSM_BUILD="8e320441fbde"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.0.0.34"
+COREGSM_VERSION="1.0.0.35"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -51958,6 +51958,39 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/components/ChannelPicker.tsx" << '__COREGSM_EOF__'
 import { useEffect, useState } from 'react';
 import { api, type DiscordGuild } from '../api';
+import { t } from '../i18n';
+
+// the list of the bot's servers and channels, asked once a minute at most and shared by every label on the page
+let listAt = 0;
+let listP: Promise<DiscordGuild[]> | null = null;
+function guildList(force = false): Promise<DiscordGuild[]> {
+  if (force || !listP || Date.now() - listAt > 60_000) {
+    listAt = Date.now();
+    listP = api<DiscordGuild[]>('/discord/channels').catch(() => { listP = null; return [] as DiscordGuild[]; });
+  }
+  return listP;
+}
+
+/** «# general · My server» for a channel the bot can see, null when it does not know the channel */
+export function channelLabelOf(guilds: DiscordGuild[], id: string, withGuild = true): string | null {
+  for (const g of guilds) {
+    const c = g.channels.find((x) => x.id === id);
+    if (c) return `# ${c.name}${withGuild && guilds.length > 1 ? ` · ${g.name}` : ''}`;
+  }
+  return null;
+}
+
+/** a Discord channel written by its name, not by its number (the number only when the bot does not know the channel) */
+export function ChannelName({ id, known }: { id: string; /** a name the panel already has (it wins over the list) */ known?: string | null }) {
+  const [label, setLabel] = useState<string | null>(known ? `# ${known}` : null);
+  useEffect(() => {
+    if (known) { setLabel(`# ${known}`); return; }
+    let alive = true;
+    void guildList().then((g) => { if (alive) setLabel(channelLabelOf(g, id)); });
+    return () => { alive = false; };
+  }, [id, known]);
+  return <>{label ?? t('ch.n', { id })}</>;
+}
 
 /** A warning under the select when the chosen channel lacks soft permissions (embeds/images). */
 export function MissingNote({ guild, channelId }: { guild?: DiscordGuild; channelId: string }) {
@@ -52641,7 +52674,7 @@ __COREGSM_EOF__
 import { useEffect, useState } from 'react';
 import { t as tr, useI18n } from '../i18n';
 import { api } from '../api';
-import { ChannelPicker } from './ChannelPicker';
+import { ChannelName, ChannelPicker } from './ChannelPicker';
 import { ErrorLine, Section, Switch, ago, plural, toast } from '../ui';
 
 interface DigestInfo {
@@ -52728,7 +52761,7 @@ export default function DigestSection({ alertsChannel }: { alertsChannel: string
       <div>
         <span className="label">Канал</span>
         <div className="flex flex-wrap items-center gap-3">
-          <span className="font-black">{info.channelId ? `Канал ${info.channelId}` : alertsChannel ? 'тот же, что для оповещений' : 'не выбран'}</span>
+          <span className="font-black">{info.channelId ? <ChannelName id={info.channelId} /> : alertsChannel ? 'тот же, что для оповещений' : 'не выбран'}</span>
           <button className="btn btn-soft btn-sm" onClick={() => setPicking((v) => !v)} aria-expanded={picking}>Выбрать другой</button>
           {info.channelId && <button className="btn-link text-sm" onClick={() => void save({ channelId: '' }, 'Итоги пойдут в канал оповещений')}>Как у оповещений</button>}
         </div>
@@ -54071,7 +54104,7 @@ import { api } from '../api';
 import { confirmDialog } from '../confirm';
 import { t, useI18n } from '../i18n';
 import { Button, ErrorLine, Section, fail, toast } from '../ui';
-import { ChannelPicker } from './ChannelPicker';
+import { ChannelName, ChannelPicker } from './ChannelPicker';
 import { PollBlock, type PollView } from './PollsCard';
 
 /** Admin → Сообщество → Голосования: create a poll (optionally posted to a Discord channel with vote buttons), close it, delete it. */
@@ -54143,7 +54176,7 @@ export default function PollsAdmin() {
           </div>
           <div>
             <div className="flex flex-wrap items-center gap-3">
-              <span className="font-black">{channelId ? t('pl.channel', { id: channelId }) : t('pl.noChannel')}</span>
+              <span className="font-black">{channelId ? <ChannelName id={channelId} /> : t('pl.noChannel')}</span>
               <button type="button" className="btn btn-soft btn-sm" onClick={() => setPicking((v) => !v)} aria-expanded={picking}>{t('pl.pick')}</button>
               {channelId && <button type="button" className="btn-link text-sm" onClick={() => setChannelId('')}>{t('pl.noPost')}</button>}
             </div>
@@ -55747,7 +55780,7 @@ import { useEffect, useState } from 'react';
 import { api } from '../api';
 import { t, useI18n } from '../i18n';
 import { Button, Section, Switch, fail, toast } from '../ui';
-import { ChannelPicker } from './ChannelPicker';
+import { ChannelName, ChannelPicker } from './ChannelPicker';
 
 interface Welcome { enabled: boolean; channelId: string; text: string; defaultText: string; maxLength: number }
 
@@ -55789,7 +55822,7 @@ export default function WelcomeCard() {
       {w.enabled && (
         <div className="space-y-3">
           <div className="flex flex-wrap items-center gap-3">
-            <span className="font-black">{w.channelId ? t('wl.channel', { id: w.channelId }) : t('wl.noChannel')}</span>
+            <span className="font-black">{w.channelId ? <ChannelName id={w.channelId} /> : t('wl.noChannel')}</span>
             <button type="button" className="btn btn-soft btn-sm" onClick={() => setPicking((v) => !v)} aria-expanded={picking}>{t('wl.pick')}</button>
           </div>
           {picking && <ChannelPicker id="welcome-channel" value={w.channelId} onChange={(v) => { if (/^\d{15,25}$/.test(v)) { void save({ channelId: v }); setPicking(false); } }} />}
@@ -71587,6 +71620,7 @@ const en: Record<keyof typeof ru, string> = {
   'wl.help': 'When someone joins the Discord server the bot posts a greeting in the chosen channel and reminds them to sign up with /register.',
   'wl.on': 'Greet new members',
   'wl.channel': 'Channel: {id}',
+  'ch.n': 'Channel {id}',
   'wl.noChannel': 'No channel chosen — nothing will be posted',
   'wl.pick': 'Choose channel',
   'wl.text': 'Greeting text',
@@ -73868,6 +73902,7 @@ const ru = {
   'wl.help': 'Когда кто-то заходит на Discord-сервер, бот пишет в выбранный канал приветствие и напоминает зарегистрироваться командой /register.',
   'wl.on': 'Приветствовать новых участников',
   'wl.channel': 'Канал: {id}',
+  'ch.n': 'Канал {id}',
   'wl.noChannel': 'Канал не выбран — приветствий не будет',
   'wl.pick': 'Выбрать канал',
   'wl.text': 'Текст приветствия',
@@ -76523,7 +76558,7 @@ import { useState } from 'react';
 import { t, useI18n, type TKey } from '../i18n';
 import DigestSection from '../components/DigestSection';
 import { api, type SettingsInfo } from '../api';
-import { ChannelPicker } from '../components/ChannelPicker';
+import { ChannelName, ChannelPicker } from '../components/ChannelPicker';
 import { AlertsArt } from '../components/Illustrations';
 import { AdminPage, ErrorLine, GoLink, IconBell, LoadError, Notice, PageHead, Section, Switch, ago, toast, usePoll } from '../ui';
 
@@ -76707,7 +76742,7 @@ export default function AlertsPage() {
           <div>
             <span className="label">{t('al.channel')}</span>
             <div className="flex flex-wrap items-center gap-3">
-              <span className="font-black">{info.channelId ? (info.channelName ? `# ${info.channelName}${info.guildName ? ` · ${info.guildName}` : ''}` : t('al.channel.n', { id: info.channelId })) : t('al.channel.none')}</span>
+              <span className="font-black">{info.channelId ? (info.channelName ? `# ${info.channelName}${info.guildName ? ` · ${info.guildName}` : ''}` : <ChannelName id={info.channelId} />) : t('al.channel.none')}</span>
               <button className="btn btn-soft btn-sm" onClick={() => setChanging((v) => !v)} aria-expanded={changing}>{info.channelId ? t('al.change') : t('al.pick')}</button>
             </div>
             {changing && (
@@ -79549,7 +79584,7 @@ import { confirmDialog } from '../confirm';
 import { api, ApiError, type NewsItem, type NewsSettings, type PublicNews } from '../api';
 import { useAuth } from '../auth';
 import { EmbedView, type DiscordEmbed } from './EmbedPreview';
-import { ChannelPicker } from '../components/ChannelPicker';
+import { ChannelName, ChannelPicker } from '../components/ChannelPicker';
 import { NewsArt } from '../components/Illustrations';
 import { AdminPage, Empty, ErrorLine, GoLink, LoadError, IconCopyPlus, IconNews, IconTrash, PageHead, Strip, fmtDateTime, toast, undoable, usePoll, navigate, errText } from '../ui';
 import NewsEditor, { TEMPLATES } from './NewsEditor';
@@ -79727,7 +79762,7 @@ function NewsList() {
         <div className="min-w-0">
           <div className="text-sm font-extrabold text-mute">Канал новостей по умолчанию</div>
           <div className="font-black">
-            {settings?.channelId ? (settings.channelName ? `# ${settings.channelName}${settings.guildName ? ` · ${settings.guildName}` : ''}` : `Канал ${settings.channelId}`) : 'не выбран'}
+            {settings?.channelId ? (settings.channelName ? `# ${settings.channelName}${settings.guildName ? ` · ${settings.guildName}` : ''}`   : <ChannelName id={settings.channelId} />) : 'не выбран'}
           </div>
         </div>
         <button className="btn btn-soft btn-sm" onClick={() => setChanging((v) => !v)} aria-expanded={changing}>{settings?.channelId ? 'Изменить' : 'Выбрать канал'}</button>
@@ -79805,7 +79840,7 @@ function NewsList() {
                   {n.pinned && <span className="pill pill-ok">ЗАКРЕПЛЕНО</span>}
                   {n.repeat && n.repeat !== 'none' && <span className="pill pill-mute">⟳ {n.repeat === 'daily' ? 'КАЖДЫЙ ДЕНЬ' : n.repeat === 'weekly' ? 'КАЖДУЮ НЕДЕЛЮ' : 'КАЖДЫЙ МЕСЯЦ'}</span>}
                 </div>
-                <span className="truncate text-sm font-bold text-mute" title={n.channelId}>{n.channelName ? `# ${n.channelName}` : `Канал ${n.channelId}`}</span>
+                <span className="truncate text-sm font-bold text-mute" title={n.channelId}>{<ChannelName id={n.channelId} known={n.channelName} />}</span>
               </div>
               <div className="flex items-start gap-3">
                 {newsImage(n.payload) && <img src={newsImage(n.payload) ?? ''} alt="" loading="lazy" className="nl-thumb" onError={(e) => { e.currentTarget.style.display = 'none'; }} />}
@@ -86162,7 +86197,7 @@ __COREGSM_EOF__
 import { useEffect, useState } from 'react';
 import { api, type Changelog, type UpdateHistoryItem, type UpdateInfo, type UpdateNotes, type UpdatePreflight } from '../../api';
 import { t, useI18n, type TKey } from '../../i18n';
-import { ChannelPicker } from '../../components/ChannelPicker';
+import { ChannelName, ChannelPicker } from '../../components/ChannelPicker';
 import { ErrorLine, fmtDateTime, Section, errText, toast } from '../../ui';
 import { cleanNote, groupCommits, isNewerRelease, preflightWarnings, stepStates, upcomingFlags, versionText, type PreflightWarning } from './updateLogic';
 
@@ -86337,7 +86372,7 @@ export function OptionsCard({ info, onChange }: { info: UpdateInfo; onChange: (i
         <div>
           <span className="label">{t('upd.o.chan')}</span>
           <div className="flex flex-wrap items-center gap-3">
-            <span className="font-black">{info.notifyChannel ? t('upd.o.chan.id', { id: info.notifyChannel }) : t('upd.o.chan.alerts')}</span>
+            <span className="font-black">{info.notifyChannel ? <ChannelName id={info.notifyChannel} /> : t('upd.o.chan.alerts')}</span>
             <button type="button" className="btn btn-soft btn-sm" onClick={() => setPicking((v) => !v)} aria-expanded={picking}>{t('upd.o.chan.pick')}</button>
             {info.notifyChannel && <button type="button" className="btn-link text-sm" onClick={() => void save({ notifyChannel: '' })}>{t('upd.o.chan.reset')}</button>}
           </div>

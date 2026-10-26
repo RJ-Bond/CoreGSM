@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react';
 import { t as tr, useI18n } from '../i18n';
 import { api } from '../api';
-import { ChannelPicker } from './ChannelPicker';
+import { ChannelName, ChannelPicker } from './ChannelPicker';
 import { ErrorLine, Section, Switch, ago, plural, toast } from '../ui';
 
 interface DigestInfo {
@@ -89,7 +89,7 @@ export default function DigestSection({ alertsChannel }: { alertsChannel: string
       <div>
         <span className="label">Канал</span>
         <div className="flex flex-wrap items-center gap-3">
-          <span className="font-black">{info.channelId ? `Канал ${info.channelId}` : alertsChannel ? 'тот же, что для оповещений' : 'не выбран'}</span>
+          <span className="font-black">{info.channelId ? <ChannelName id={info.channelId} /> : alertsChannel ? 'тот же, что для оповещений' : 'не выбран'}</span>
           <button className="btn btn-soft btn-sm" onClick={() => setPicking((v) => !v)} aria-expanded={picking}>Выбрать другой</button>
           {info.channelId && <button className="btn-link text-sm" onClick={() => void save({ channelId: '' }, 'Итоги пойдут в канал оповещений')}>Как у оповещений</button>}
         </div>
