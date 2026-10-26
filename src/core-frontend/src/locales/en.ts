@@ -1887,6 +1887,13 @@ const en: Record<keyof typeof ru, string> = {
   'hdr.bot.error': 'Bot error',
   'hdr.bot.idle': 'Bot off',
   'hdr.bot.tip': 'Discord bot status: {s}. Open the bot settings',
+  'digest.theme': 'Picture style',
+  'digest.theme.dark': 'Dark',
+  'digest.theme.light': 'Light',
+  'embed.chart': 'Online chart for 24 hours',
+  'embed.chart.hint': 'A picture under the server message. It is not shown in a message with several servers.',
+  'embed.tile': 'Game icon on a coloured tile',
+  'embed.tile.hint': 'The icon reads on both the light and the dark Discord theme. Without the tile it is a transparent game picture.',
 };
 
 export default en;

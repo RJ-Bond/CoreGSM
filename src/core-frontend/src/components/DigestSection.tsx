@@ -1,5 +1,6 @@
 /** Admin → Оповещения: the weekly digest (settings, the numbers of the coming digest and its picture). */
 import { useEffect, useState } from 'react';
+import { t as tr, useI18n } from '../i18n';
 import { api } from '../api';
 import { ChannelPicker } from './ChannelPicker';
 import { ErrorLine, Section, Switch, ago, plural, toast } from '../ui';
@@ -20,6 +21,7 @@ interface DigestInfo {
 const WEEKDAYS = ['понедельник', 'вторник', 'среду', 'четверг', 'пятницу', 'субботу', 'воскресенье'];
 
 export default function DigestSection({ alertsChannel }: { alertsChannel: string }) {
+  useI18n();
   const [info, setInfo] = useState<DigestInfo | null>(null);
   const [error, setError] = useState('');
   const [picking, setPicking] = useState(false);
@@ -74,10 +76,10 @@ export default function DigestSection({ alertsChannel }: { alertsChannel: string
           </select>
         </div>
         <div>
-          <label htmlFor="digest-theme" className="label">Оформление картинки</label>
+          <label htmlFor="digest-theme" className="label">{tr('digest.theme')}</label>
           <select id="digest-theme" className="input" value={info.theme} onChange={(e) => void save({ theme: e.target.value as 'dark' | 'light' }, 'Сохранено')}>
-            <option value="dark">Тёмное</option>
-            <option value="light">Светлое</option>
+            <option value="dark">{tr('digest.theme.dark')}</option>
+            <option value="light">{tr('digest.theme.light')}</option>
           </select>
         </div>
       </div>
