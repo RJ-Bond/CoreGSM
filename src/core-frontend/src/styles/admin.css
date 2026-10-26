@@ -169,7 +169,7 @@ a.adm-tile:hover { box-shadow: var(--shadow-2); border-color: rgb(var(--brand) /
 .adm-dot { margin-left: auto; width: 8px; height: 8px; flex: none; border-radius: 50%; background: rgb(var(--warn)); }
 .adm-dot.is-bad { background: rgb(var(--bad)); }
 .adm-crumb-menu { position: relative; }
-.adm-crumb-pop { position: absolute; left: 0; top: calc(100% + 6px); z-index: 40; min-width: 15rem; max-height: 22rem; overflow-y: auto; padding: 6px; border-radius: var(--r-lg); background: rgb(var(--raised)); box-shadow: var(--shadow-3), inset 0 0 0 1px rgb(var(--line)); }
+.adm-crumb-pop { position: absolute; left: 0; top: calc(100% + 6px); z-index: 40; min-width: 15rem; max-height: 22rem; overflow-y: auto; padding: 6px; border-radius: var(--r-lg); background: rgb(var(--overlay)); box-shadow: var(--shadow-3), inset 0 0 0 1px rgb(var(--line)); }
 .adm-crumb-pop a { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: var(--r-md); color: rgb(var(--ink)); }
 .adm-crumb-pop a:hover { background: rgb(var(--soft)); text-decoration: none; }
 .adm-crumb-pop kbd { margin-left: auto; font: inherit; font-size: var(--fs-2xs); font-weight: 650; padding: 1px 6px; border-radius: 6px; background: rgb(var(--card)); box-shadow: inset 0 0 0 1px rgb(var(--line)); color: rgb(var(--mute)); }

@@ -32,11 +32,30 @@ export const GAMES: Game[] = [
   { id: 'teamspeak3', label: 'TeamSpeak 3', port: 9987, abbr: 'TS', color: '#3a7ad9' },
 ];
 
-const FALLBACK = '#5a4bd1';
+/** a game the panel has no colour for gets one made from its name (the same name, the same colour; the backend does the same) */
+export function monogramColor(name: string): string {
+  let h = 7;
+  for (const c of name.toLowerCase()) h = (h * 33 + c.charCodeAt(0)) >>> 0;
+  const hue = h % 360;
+  const a = 0.55 * Math.min(0.5, 0.5);
+  const f = (n: number) => {
+    const k = (n + hue / 30) % 12;
+    const c = 0.5 - a * Math.max(-1, Math.min(k - 3, 9 - k, 1));
+    return Math.round(c * 255).toString(16).padStart(2, '0');
+  };
+  return `#${f(0)}${f(8)}${f(4)}`;
+}
+/** one or two letters: the capitals of the first two words, else the first two letters */
+export function monogramOf(label: string): string {
+  const words = label.split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+  if (words.length >= 2) return (words[0]![0]! + words[1]![0]!).toUpperCase();
+  return (words[0] ?? '?').slice(0, 2).toUpperCase();
+}
+
 export const findGame = (id: string) => GAMES.find((g) => g.id === id);
 export const gameLabel = (id: string) => findGame(id)?.label ?? id;
-export const gameColor = (id: string) => findGame(id)?.color ?? FALLBACK;
-export const gameAbbr = (id: string) => findGame(id)?.abbr ?? id.slice(0, 2).toUpperCase();
+export const gameColor = (id: string) => findGame(id)?.color ?? monogramColor(id);
+export const gameAbbr = (id: string) => findGame(id)?.abbr ?? monogramOf(id);
 
 /** artwork used instead of the line pictogram (files in public/games) */
 /** games with their own artwork: PNG logos, and the emblems drawn by tools/gen-game-emblems.cjs (public/games/<id>.svg) */

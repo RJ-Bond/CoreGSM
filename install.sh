@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="adc37db27b82"
+COREGSM_BUILD="8830ab15b7c3"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.0.0.15"
+COREGSM_VERSION="1.0.0.18"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -5262,6 +5262,7 @@ import { gameIconPath } from './gameIcons.js';
 import { GAME_IMAGES } from './gameImages.js';
 import { chartTop, drawOnlineChart } from './chartDraw.js';
 import { avatarColor, initialOf, stateBand, whoInGame } from './cardLogic.js';
+import { monogramColor, monogramOf } from './ogLogic.js';
 import { coverFile } from './covers.js';
 import { getSetting } from './db.js';
 import { maintenanceFor } from './maintenance.js';
@@ -5386,7 +5387,8 @@ async function renderCardNow(serverId: number): Promise<Buffer | null> {
   const players = st?.players ?? 0;
   const max = st?.max_players ?? 0;
   const names: string[] = st ? JSON.parse(st.player_names) : [];
-  const [abbr, accent] = GAME_COLORS[s.game] ?? [s.game.slice(0, 2).toUpperCase(), C.brand];
+  // a game without a colour of its own gets a monogram and a colour made from its name
+  const [abbr, accent] = GAME_COLORS[s.game] ?? [monogramOf(gameLabel(s.game)), monogramColor(s.game)];
   const laggy = online && st?.ping != null && st.ping > 100;
   const maint = maintenanceFor(serverId, now);
   const status = maint ? '#7b8cff' : !st ? C.mute : !online ? C.bad : laggy ? C.warn : C.ok;
@@ -5680,37 +5682,51 @@ async function renderCardNow(serverId: number): Promise<Buffer | null> {
 const iconCache = new Map<string, Buffer>();
 
 /** 256px game pictogram (white on the game colour), used as the embed thumbnail */
-export async function renderGameIcon(game: string): Promise<Buffer> {
-  const hit = iconCache.get(game);
+export async function renderGameIcon(game: string, tile = false): Promise<Buffer> {
+  const cacheKey = tile ? `${game}:tile` : game;
+  const hit = iconCache.get(cacheKey);
   if (hit) return hit;
-  // transparent PNG without a background tile: the game artwork itself, or its pictogram in the game colour
-  const color = GAME_COLORS[game]?.[1] ?? C.brand;
+  // transparent PNG without a background tile: the game artwork itself, or its pictogram in the game colour.
+  // `tile`: the same on a rounded tile of the game colour, so the icon reads on a light Discord theme as well as on a dark one
+  const color = GAME_COLORS[game]?.[1] ?? monogramColor(game);
   const canvas = new Canvas(256, 256);
   const ctx = canvas.getContext('2d') as any;
   const p = gameIconPath(game);
   const art = await gameImage(game);
+  if (tile) {
+    const g = ctx.createLinearGradient(0, 0, 256, 256);
+    g.addColorStop(0, mixToBlack(color, art ? 0.45 : 0.05));
+    g.addColorStop(1, mixToBlack(color, art ? 0.75 : 0.35));
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.roundRect(8, 8, 240, 240, 56);
+    ctx.fill();
+  }
+  const pad = tile ? 150 : 240;
   if (art) {
-    const k = Math.min(240 / art.width, 240 / art.height);
+    const k = Math.min(pad / art.width, pad / art.height);
     const w = art.width * k, h = art.height * k;
     ctx.drawImage(art, (256 - w) / 2, (256 - h) / 2, w, h);
   } else if (p) {
-    ctx.translate(128 - 12 * 9, 128 - 12 * 9);
-    ctx.scale(9, 9);
-    ctx.strokeStyle = color;
+    const sc = tile ? 6.2 : 9;
+    ctx.translate(128 - 12 * sc, 128 - 12 * sc);
+    ctx.scale(sc, sc);
+    ctx.strokeStyle = tile ? '#ffffff' : color;
     ctx.lineWidth = 1.9;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
     ctx.stroke(new Path2D(p));
   } else {
-    ctx.fillStyle = color;
+    // a game with neither artwork nor pictogram: a monogram
+    ctx.fillStyle = tile ? '#ffffff' : color;
     ctx.font = `700 96px ${SANS}`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(GAME_COLORS[game]?.[0] ?? (game.slice(0, 2).toUpperCase() || '?'), 128, 134);
+    ctx.fillText(GAME_COLORS[game]?.[0] ?? monogramOf(gameLabel(game)), 128, 134);
   }
   const buf = await canvas.toBuffer('png');
   if (iconCache.size >= 100) iconCache.delete(iconCache.keys().next().value as string);
-  iconCache.set(game, buf);
+  iconCache.set(cacheKey, buf);
   return buf;
 }
 __COREGSM_EOF__
@@ -6882,7 +6898,8 @@ import { JWT_SECRET } from './config.js';
 import { db, EFFECTIVE_NAME, getSetting, setSetting } from './db.js';
 import { SERVER_ORDER } from './serverData.js';
 import { incidentsSince } from './incidents.js';
-import { busiestDay, changePct, dailyPeaks, sparkPoints, splitServers, stripCommonPrefix, trendText, uptimeBar, wrapName } from './digestLogic.js';
+import { avatarColor, initialOf } from './cardLogic.js';
+import { busiestDay, changePct, dailyPeaks, sparkPoints, splitServers, stripCommonPrefix, trendText, uptimeBar, weekEvents, type WeekEvent, wrapName } from './digestLogic.js';
 import { localParts } from './localTime.js';
 import { brand, publicBase } from './site.js';
 import { param } from './http.js';
@@ -6915,6 +6932,8 @@ export interface Digest {
   days: { day: string; players: number }[];
   servers: DigestServer[];
   top: { name: string; hours: number }[];
+  /** up to three lines under the picture: the record, the longest outage, new players */
+  events: WeekEvent[];
 }
 
 /** the summary of the seven days that end at `to` */
@@ -6985,6 +7004,15 @@ export function buildDigest(to = Date.now()): Digest {
     },
     days: days.map((day) => ({ day, players: byDay.get(day)?.size ?? 0 })),
     servers: perServer,
+    events: weekEvents({
+      peak: best?.peak ?? 0,
+      peakWhen: best?.peakAt ? new Date(best.peakAt).toLocaleString('ru-RU', { weekday: 'short', hour: '2-digit', minute: '2-digit', timeZone: tzName }).replace(',', '') : '',
+      worst: (() => {
+        const w = [...incidents].sort((a, b) => b.minutes - a.minutes)[0];
+        return w ? { minutes: w.minutes, server: servers.find((x) => x.id === w.serverId)?.name ?? '' } : null;
+      })(),
+      newPlayers: new Set(cur.filter((v) => (firstSeen.get(v.k) ?? 0) > from).map((v) => v.k)).size,
+    }),
     top: [...per.values()].sort((a, b) => b.hours - a.hours).slice(0, 5).map((p) => ({ name: p.name, hours: Math.round(p.hours * 10) / 10 })),
   };
 }
@@ -7004,6 +7032,13 @@ const PALETTES: Record<DigestTheme, { bgA: string; bgB: string; ink: string; ink
 const SANS = '"DejaVu Sans", "Liberation Sans", sans-serif';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
+/** the text cut with «…» so that it fits `max` pixels */
+function fitText(ctx: any, text: string, max: number): string {
+  let t = text;
+  while (t.length > 3 && ctx.measureText(t).width > max) t = `${t.slice(0, -2)}…`;
+  return t;
+}
+
 export async function renderDigest(d: Digest, theme: DigestTheme = digestSettings().theme): Promise<Buffer> {
   const P = PALETTES[theme];
   const W = 1200;
@@ -7109,7 +7144,7 @@ export async function renderDigest(d: Digest, theme: DigestTheme = digestSetting
   ctx.fillStyle = P.ink4;
   ctx.font = `600 14px ${SANS}`;
   ctx.fillText('линия: пик онлайна по дням · %: к прошлой неделе', sx + headW + 16, by);
-  const { shown, hidden } = splitServers(d.servers, 5);
+  const { shown, hidden } = splitServers(d.servers, 4);
   // servers of one project start with the same words: show the part that tells them apart
   const names = stripCommonPrefix(shown.map((s) => s.name));
   shown.forEach((s, i) => {
@@ -7178,13 +7213,65 @@ export async function renderDigest(d: Digest, theme: DigestTheme = digestSetting
     ctx.fillStyle = P.ink3;
     ctx.fillText(`${hidden.reduce((n, x) => n + x.players, 0)} игр.`, sx + 290, y + 28);
   }
-  if (d.top.length) {
-    ctx.fillStyle = P.ink3;
-    ctx.font = `600 16px ${SANS}`;
-    const line = `Больше всех играли: ${d.top.slice(0, 3).map((p) => `${p.name} (${Math.round(p.hours)} ч)`).join(', ')}`;
-    let t = line;
-    while (t.length > 10 && ctx.measureText(t).width > 504) t = t.slice(0, -1);
-    ctx.fillText(t === line ? t : `${t}…`, sx, by + 22 + (shown.length + (hidden.length ? 1 : 0)) * 50 + 22);
+  // the hero of the week: the player with the most hours, the two after them in small print
+  const rowsEnd = by + 22 + (shown.length + (hidden.length ? 1 : 0)) * 50;
+  const hero = d.top[0];
+  if (hero) {
+    const hy = rowsEnd + 4;
+    ctx.fillStyle = P.card;
+    ctx.beginPath();
+    ctx.roundRect(sx, hy, 504, 52, 14);
+    ctx.fill();
+    ctx.fillStyle = avatarColor(hero.name);
+    ctx.beginPath();
+    ctx.arc(sx + 32, hy + 26, 18, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#0e0c1b';
+    ctx.font = `800 20px ${SANS}`;
+    ctx.textAlign = 'center';
+    ctx.fillText(initialOf(hero.name), sx + 32, hy + 33);
+    ctx.textAlign = 'left';
+    ctx.fillStyle = P.ink4;
+    ctx.font = `700 12px ${SANS}`;
+    ctx.fillText('ГЕРОЙ НЕДЕЛИ', sx + 62, hy + 20);
+    const others = d.top.slice(1, 3).map((p) => `${p.name} ${Math.round(p.hours)} ч`).join(' · ');
+    if (others) {
+      ctx.font = `600 13px ${SANS}`;
+      ctx.fillStyle = P.ink3;
+      ctx.textAlign = 'right';
+      let o = others;
+      while (o.length > 4 && ctx.measureText(o).width > 250) o = `${o.slice(0, -2)}…`;
+      ctx.fillText(o, sx + 490, hy + 20);
+      ctx.textAlign = 'left';
+    }
+    ctx.fillStyle = P.ink;
+    ctx.font = `bold 19px ${SANS}`;
+    ctx.fillText(fitText(ctx, hero.name, 250), sx + 62, hy + 42);
+    ctx.fillStyle = accent;
+    ctx.font = `bold 20px ${SANS}`;
+    ctx.textAlign = 'right';
+    ctx.fillText(`${Math.round(hero.hours)} ч`, sx + 490, hy + 42);
+    ctx.textAlign = 'left';
+  }
+
+  // under everything: what happened this week, in up to three small pills
+  let ex = 56;
+  const tone = { ok: P.ok, warn: P.warn, bad: P.bad, info: accent } as const;
+  for (const e of d.events) {
+    ctx.font = `600 15px ${SANS}`;
+    const text = fitText(ctx, e.text, 330);
+    const w = ctx.measureText(text).width + 40;
+    ctx.fillStyle = P.card;
+    ctx.beginPath();
+    ctx.roundRect(ex, 628, w, 32, 16);
+    ctx.fill();
+    ctx.fillStyle = tone[e.tone];
+    ctx.beginPath();
+    ctx.arc(ex + 16, 644, 5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = P.ink2;
+    ctx.fillText(text, ex + 28, 649);
+    ex += w + 10;
   }
   return canvas.toBuffer('png');
 }
@@ -7385,6 +7472,32 @@ export function uptimeBar(uptime: number | null, full: number): number {
   if (uptime == null) return 0;
   const w = Math.round((Math.min(100, Math.max(0, uptime)) / 100) * full);
   return uptime > 0 ? Math.max(3, w) : 0;
+}
+
+export interface WeekEvent {
+  tone: 'ok' | 'warn' | 'bad' | 'info';
+  text: string;
+}
+
+/** «2 ч 10 мин», «45 мин» */
+export function minutesText(m: number): string {
+  if (m < 60) return `${m} мин`;
+  const h = Math.floor(m / 60);
+  const r = m % 60;
+  return r ? `${h} ч ${r} мин` : `${h} ч`;
+}
+
+/**
+ * The few things worth a line under the picture: the online record of the week, the longest outage (or its absence)
+ * and the new players. At most three, in that order.
+ */
+export function weekEvents(i: { peak: number; peakWhen: string; worst: { minutes: number; server: string } | null; newPlayers: number }): WeekEvent[] {
+  const out: WeekEvent[] = [];
+  if (i.peak > 0) out.push({ tone: 'info', text: `пик ${i.peak}${i.peakWhen ? ` · ${i.peakWhen}` : ''}` });
+  if (i.worst) out.push({ tone: i.worst.minutes >= 60 ? 'bad' : 'warn', text: `самый долгий сбой ${minutesText(i.worst.minutes)} · ${i.worst.server}` });
+  else out.push({ tone: 'ok', text: 'сбоев не было' });
+  if (i.newPlayers > 0) out.push({ tone: 'ok', text: `${i.newPlayers} ${i.newPlayers === 1 ? 'новый игрок' : i.newPlayers < 5 ? 'новых игрока' : 'новых игроков'}` });
+  return out.slice(0, 3);
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
@@ -9313,6 +9426,7 @@ import { registerDeliveries } from './deliveries.js';
 import { registerDiscordRegistration } from './discordRegister.js';
 import { errorCodes } from './errors.js';
 import { registerDigest, startDigestTimer } from './digest.js';
+import { registerOg } from './ogImage.js';
 import { registerServerChart } from './serverChart.js';
 import { registerGames } from './games.js';
 import { startPoller, stopPoller } from './gsm.js';
@@ -9452,6 +9566,7 @@ registerNews({
 registerAlerts({ app, admin, internal, channelInfo });
 registerDigest({ app, admin });
 registerServerChart(app);
+registerOg(app);
 registerSecurity({
   app,
   admin,
@@ -10897,7 +11012,7 @@ export function registerNews(deps: {
     const g = p.gallery?.find((x) => x.upload || (x.url && /^https:\/\//i.test(x.url)));
     if (g?.upload) return `${base}/api/news/images/${g.upload}`;
     if (g?.url) return g.url;
-    return `${base}/og-default.png`;
+    return `${base}/api/og/default.png`;
   };
   app.get('/n/:id', param('id'), (req, res) => {
     res.set({ 'Cache-Control': 'no-cache', 'X-Robots-Tag': 'noindex' });
@@ -12306,6 +12421,141 @@ export function nickStatusOf(userId: number): { nick: string; seen: boolean; las
 
 export function registerNickStatus(deps: { app: Express; auth: RequestHandler; userId: (req: Request) => number }): void {
   deps.app.get('/api/me/nick-status', deps.auth, (req, res) => res.json(nickStatusOf(deps.userId(req))));
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/ogImage.ts" << '__COREGSM_EOF__'
+/** The picture a pasted link to the panel gets when nothing more specific exists: the brand and the numbers right now. */
+import type { Express } from 'express';
+import skia from 'skia-canvas';
+import { db } from './db.js';
+import { monogramColor, ogLine } from './ogLogic.js';
+import { brand, logoFile } from './site.js';
+
+const { Canvas, loadImage } = skia;
+const SANS = '"DejaVu Sans", "Liberation Sans", sans-serif';
+
+let cache: { at: number; key: string; buf: Buffer } | null = null;
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+export async function renderOgDefault(): Promise<Buffer> {
+  const b = brand();
+  const row = db
+    .prepare('SELECT COUNT(*) AS servers, COALESCE(SUM(st.online), 0) AS online, COALESCE(SUM(CASE WHEN st.online = 1 THEN st.players ELSE 0 END), 0) AS players FROM servers s LEFT JOIN status st ON st.server_id = s.id')
+    .get() as { servers: number; online: number; players: number };
+  const line = ogLine(row);
+  const key = `${b.name}|${b.color}|${b.logoV}|${line}`;
+  if (cache && cache.key === key && Date.now() - cache.at < 10 * 60_000) return cache.buf;
+
+  const W = 1200;
+  const H = 630;
+  const accent = /^#[0-9a-f]{6}$/i.test(b.color) ? b.color : monogramColor(b.name);
+  const canvas = new Canvas(W, H);
+  const ctx: any = canvas.getContext('2d');
+  const bg = ctx.createLinearGradient(0, 0, W, H);
+  bg.addColorStop(0, '#15122b');
+  bg.addColorStop(1, '#0b0a16');
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, W, H);
+  const glow = ctx.createRadialGradient(240, 80, 10, 240, 80, 820);
+  glow.addColorStop(0, `${accent}99`);
+  glow.addColorStop(1, `${accent}00`);
+  ctx.fillStyle = glow;
+  ctx.fillRect(0, 0, W, H);
+
+  // the logo (custom, when set) or a tile with the first letter of the name
+  const lx = 90, ly = 150, ls = 150;
+  let logo: any = null;
+  const file = logoFile();
+  if (file) {
+    try { logo = await loadImage(file); } catch { /* a broken file: the monogram */ }
+  }
+  if (logo) {
+    const k = Math.min(ls / logo.width, ls / logo.height);
+    ctx.drawImage(logo, lx + (ls - logo.width * k) / 2, ly + (ls - logo.height * k) / 2, logo.width * k, logo.height * k);
+  } else {
+    const g = ctx.createLinearGradient(lx, ly, lx + ls, ly + ls);
+    g.addColorStop(0, accent);
+    g.addColorStop(1, `${accent}99`);
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.roundRect(lx, ly, ls, ls, 40);
+    ctx.fill();
+    ctx.fillStyle = '#ffffff';
+    ctx.font = `800 88px ${SANS}`;
+    ctx.textAlign = 'center';
+    ctx.fillText((Array.from(b.name.trim())[0] ?? '?').toUpperCase(), lx + ls / 2, ly + ls / 2 + 31);
+    ctx.textAlign = 'left';
+  }
+
+  // the name (shrunk to fit), a line of what it is, and the live numbers
+  let size = 84;
+  ctx.fillStyle = '#ffffff';
+  ctx.font = `800 ${size}px ${SANS}`;
+  while (size > 44 && ctx.measureText(b.name).width > W - lx - 90) {
+    size -= 4;
+    ctx.font = `800 ${size}px ${SANS}`;
+  }
+  ctx.fillText(b.name, lx, 400);
+  ctx.fillStyle = 'rgba(255,255,255,.72)';
+  ctx.font = `600 34px ${SANS}`;
+  let shown = line;
+  while (shown.length > 8 && ctx.measureText(shown).width > W - lx - 90) shown = `${shown.slice(0, -2)}…`;
+  ctx.fillText(shown, lx, 462);
+  ctx.fillStyle = accent;
+  ctx.fillRect(lx, 500, 120, 6);
+  const buf = (await canvas.toBuffer('png')) as Buffer;
+  cache = { at: Date.now(), key, buf };
+  return buf;
+}
+
+export function registerOg(app: Express): void {
+  app.get('/api/og/default.png', async (_req, res, next) => {
+    try {
+      res.set({ 'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=600' }).send(await renderOgDefault());
+    } catch (e) {
+      next(e);
+    }
+  });
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/ogLogic.ts" << '__COREGSM_EOF__'
+/** The default link-preview picture and monogram icons: the pure part. */
+
+/** «12 игроков онлайн · 3 сервера из 4» for the preview; an empty panel says only what it is */
+export function ogLine(i: { online: number; servers: number; players: number }): string {
+  if (i.servers === 0) return 'Мониторинг игровых серверов';
+  const word = (n: number, f: [string, string, string]) => (n % 10 === 1 && n % 100 !== 11 ? f[0] : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 >= 20) ? f[1] : f[2]);
+  return `${i.players} ${word(i.players, ['игрок', 'игрока', 'игроков'])} онлайн · ${i.online} из ${i.servers} ${word(i.servers, ['сервера', 'серверов', 'серверов'])} в сети`;
+}
+
+/** hue 0..359 from a name: the same game always gets the same colour */
+export function hueOf(name: string): number {
+  let h = 7;
+  for (const c of name.toLowerCase()) h = (h * 33 + c.charCodeAt(0)) >>> 0;
+  return h % 360;
+}
+
+/** "#rrggbb" from hue (0..359), saturation and lightness (0..1) */
+export function hslHex(h: number, s: number, l: number): string {
+  const a = s * Math.min(l, 1 - l);
+  const f = (n: number) => {
+    const k = (n + h / 30) % 12;
+    const c = l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1));
+    return Math.round(c * 255).toString(16).padStart(2, '0');
+  };
+  return `#${f(0)}${f(8)}${f(4)}`;
+}
+
+/** the colour of the monogram of a game that has no colour of its own */
+export const monogramColor = (name: string): string => hslHex(hueOf(name), 0.55, 0.5);
+
+/** one or two letters for a game name: the capitals of its words («Space Engineers» → «SE»), else its first two letters */
+export function monogramOf(label: string): string {
+  const words = label.split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+  if (words.length >= 2) return (words[0]![0]! + words[1]![0]!).toUpperCase();
+  return (words[0] ?? '?').slice(0, 2).toUpperCase();
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
@@ -15814,7 +16064,7 @@ import express from 'express';
 import { z } from 'zod';
 import { admin, staff } from '../auth.js';
 import { bot } from '../botState.js';
-import { type BindingRow, db, setSetting } from '../db.js';
+import { type BindingRow, db, getSetting, setSetting } from '../db.js';
 import { cleanExtra, embedFor, extraIds, intervalParam, playersShown, serializeBinding } from '../serverData.js';
 
 export const router = express.Router();
@@ -15835,14 +16085,17 @@ router.get('/api/discord/channels', staff, (_req, res) => {
   res.json(bot.guilds);
 });
 
+const embedSettings = () => ({ playersShown: playersShown(), chart: getSetting('embed_chart') !== '0', iconTile: getSetting('embed_icon_tile') === '1' });
 router.get('/api/settings/embed', admin, (_req, res) => {
-  res.json({ playersShown: playersShown() });
+  res.json(embedSettings());
 });
 router.put('/api/settings/embed', admin, (req, res) => {
-  const b = z.object({ playersShown: z.number().int().min(0).max(20) }).safeParse(req.body);
+  const b = z.object({ playersShown: z.number().int().min(0).max(20).optional(), chart: z.boolean().optional(), iconTile: z.boolean().optional() }).safeParse(req.body);
   if (!b.success) return res.status(400).json({ error: 'Число ников: от 0 до 20' });
-  setSetting('embed_players_shown', String(b.data.playersShown));
-  res.json({ playersShown: b.data.playersShown });
+  if (b.data.playersShown !== undefined) setSetting('embed_players_shown', String(b.data.playersShown));
+  if (b.data.chart !== undefined) setSetting('embed_chart', b.data.chart ? '1' : '0');
+  if (b.data.iconTile !== undefined) setSetting('embed_icon_tile', b.data.iconTile ? '1' : '0');
+  res.json(embedSettings());
 });
 
 router.get('/api/servers/:id/embed', admin, (req, res) => {
@@ -16939,7 +17192,9 @@ router.get(
   '/api/game-icon/:game.png',
   wrap(async (req, res) => {
     const game = String(req.params.game).replace(/[^a-z0-9_]/gi, '');
-    res.set({ 'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=86400' }).send(await renderGameIcon(isKnownGame(game) ? game : ''));
+    // a game the panel does not know still gets its monogram when one of the servers uses it
+    const shown = isKnownGame(game) || db.prepare('SELECT 1 FROM servers WHERE game = ?').get(game) ? game : '';
+    res.set({ 'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=86400' }).send(await renderGameIcon(shown, req.query.tile === '1'));
   }),
 );
 
@@ -18596,7 +18851,7 @@ export function getServer(id: number) {
 }
 
 /** bump when the game icon artwork changes: Discord caches embed images by URL */
-export const GAME_ICON_VERSION = 3;
+export const GAME_ICON_VERSION = 4;
 
 /** the extra servers of a binding (ids that still exist, without the main one and without duplicates) */
 export function extraIds(b: BindingRow): number[] {
@@ -18660,7 +18915,7 @@ export function embedFor(serverId: number, intervalSec: number) {
     .get(serverId, Date.now() - 24 * 3600 * 1000) as { u: number | null };
   const last = db.prepare('SELECT MAX(ts) AS t FROM history WHERE server_id = ? AND online = 1').get(serverId) as { t: number | null };
   const base = publicBase();
-  return buildEmbed(server, up.u, intervalSec, { serverId, playersShown: playersShown(), lastOnlineAt: last.t, thumbUrl: base ? `${base}/api/game-icon/${server.game}.png?v=${GAME_ICON_VERSION}` : null, baseUrl: base, version: APP_VERSION_NAME || APP_VERSION || null, brandName: brand().name, country: (() => { const c = server.country || countryOf(serverId, server.host); return c ? countryLabel(c) : null; })(), timeZone: getSetting('timezone') || process.env.TZ || 'Europe/Moscow', logoUrl: base && logoFile() ? `${base}/api/branding/logo?v=${brand().logoV}` : null, chartUrl: base && getSetting('embed_chart') !== '0' ? `${base}/api/server-chart/${serverId}-${chartSign(serverId)}.png?v=${Math.floor(Date.now() / 600_000)}` : null });
+  return buildEmbed(server, up.u, intervalSec, { serverId, playersShown: playersShown(), lastOnlineAt: last.t, thumbUrl: base ? `${base}/api/game-icon/${server.game}.png?v=${GAME_ICON_VERSION}${getSetting('embed_icon_tile') === '1' ? '&tile=1' : ''}` : null, baseUrl: base, version: APP_VERSION_NAME || APP_VERSION || null, brandName: brand().name, country: (() => { const c = server.country || countryOf(serverId, server.host); return c ? countryLabel(c) : null; })(), timeZone: getSetting('timezone') || process.env.TZ || 'Europe/Moscow', logoUrl: base && logoFile() ? `${base}/api/branding/logo?v=${brand().logoV}` : null, chartUrl: base && getSetting('embed_chart') !== '0' ? `${base}/api/server-chart/${serverId}-${chartSign(serverId)}.png?v=${Math.floor(Date.now() / 600_000)}` : null });
 }
 
 export const intervalParam = (v: unknown) => Math.min(3600, Math.max(30, Number(v) || 60));
@@ -52141,20 +52396,22 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/components/PlayersShownCard.tsx" << '__COREGSM_EOF__'
 import { useEffect, useState } from 'react';
 import { api } from '../api';
-import { Section, toast, fail } from '../ui';
+import { Section, Switch, toast, fail } from '../ui';
 
 const OPTIONS = [0, 3, 5, 8, 10, 15, 20];
 
 /** «Ники в сообщении»: how many player names the Discord message lists; the rest is a link to the site. */
 export default function PlayersShownCard() {
   const [value, setValue] = useState<number | null>(null);
+  const [chart, setChart] = useState(true);
+  const [tile, setTile] = useState(false);
   const [gone, setGone] = useState(false);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     let alive = true;
-    api<{ playersShown: number }>('/settings/embed')
-      .then((r) => { if (alive) setValue(r.playersShown); })
+    api<{ playersShown: number; chart: boolean; iconTile: boolean }>('/settings/embed')
+      .then((r) => { if (alive) { setValue(r.playersShown); setChart(r.chart); setTile(r.iconTile); } })
       .catch(() => { if (alive) setGone(true); });
     return () => { alive = false; };
   }, []);
@@ -52176,6 +52433,20 @@ export default function PlayersShownCard() {
     }
   };
 
+  const flag = async (patch: { chart?: boolean; iconTile?: boolean }) => {
+    setBusy(true);
+    try {
+      const r = await api<{ chart: boolean; iconTile: boolean }>('/settings/embed', 'PUT', patch);
+      setChart(r.chart);
+      setTile(r.iconTile);
+      toast('Сохранено. Сообщения обновятся при следующем опросе');
+    } catch (e) {
+      fail(e);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const options = OPTIONS.includes(value) ? OPTIONS : [...OPTIONS, value].sort((a, b) => a - b);
 
   return (
@@ -52184,6 +52455,20 @@ export default function PlayersShownCard() {
       <select id="players-shown" className="input max-w-[16rem]" value={value} disabled={busy} onChange={(e) => void change(Number(e.target.value))}>
         {options.map((n) => <option key={n} value={n}>{n === 0 ? '0: только счётчик' : String(n)}</option>)}
       </select>
+      <label className="mt-4 flex cursor-pointer items-start gap-3">
+        <Switch className="mt-0.5" checked={chart} disabled={busy} onChange={(on) => void flag({ chart: on })} />
+        <span>
+          <span className="block font-extrabold">График онлайна за 24 часа</span>
+          <span className="block text-sm font-semibold text-mute">Картинка под сообщением сервера. В сообщении с несколькими серверами она не показывается.</span>
+        </span>
+      </label>
+      <label className="mt-3 flex cursor-pointer items-start gap-3">
+        <Switch className="mt-0.5" checked={tile} disabled={busy} onChange={(on) => void flag({ iconTile: on })} />
+        <span>
+          <span className="block font-extrabold">Значок игры на цветной плашке</span>
+          <span className="block text-sm font-semibold text-mute">Значок виден и в светлой, и в тёмной теме Discord. Без плашки это прозрачная картинка игры.</span>
+        </span>
+      </label>
     </Section>
   );
 }
@@ -65443,6 +65728,27 @@ export function paintGameTheme(id: string | undefined | null): void {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
+  cat > "$APP_DIR/core-frontend/src/games.monogram.test.ts" << '__COREGSM_EOF__'
+import { describe, expect, it } from 'vitest';
+import { gameAbbr, gameColor, monogramColor, monogramOf } from './games';
+
+describe('monogram of an unknown game', () => {
+  it('letters from the words', () => {
+    expect(monogramOf('space_engineers')).toBe('SE');
+    expect(monogramOf('barotrauma')).toBe('BA');
+  });
+  it('a stable valid colour per name, case-insensitive', () => {
+    expect(monogramColor('Barotrauma')).toBe(monogramColor('barotrauma'));
+    expect(monogramColor('x')).toMatch(/^#[0-9a-f]{6}$/);
+  });
+  it('known games keep their own', () => {
+    expect(gameColor('minecraft')).toBe('#62b543');
+    expect(gameAbbr('minecraft')).toBe('MC');
+    expect(gameAbbr('somegame')).toBe('SO');
+  });
+});
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/games.ts" << '__COREGSM_EOF__'
 import { gradientFor } from './colors';
 // GameDig type ids (https://github.com/gamedig/node-gamedig/blob/master/GAMES_LIST.md)
@@ -65478,11 +65784,30 @@ export const GAMES: Game[] = [
   { id: 'teamspeak3', label: 'TeamSpeak 3', port: 9987, abbr: 'TS', color: '#3a7ad9' },
 ];
 
-const FALLBACK = '#5a4bd1';
+/** a game the panel has no colour for gets one made from its name (the same name, the same colour; the backend does the same) */
+export function monogramColor(name: string): string {
+  let h = 7;
+  for (const c of name.toLowerCase()) h = (h * 33 + c.charCodeAt(0)) >>> 0;
+  const hue = h % 360;
+  const a = 0.55 * Math.min(0.5, 0.5);
+  const f = (n: number) => {
+    const k = (n + hue / 30) % 12;
+    const c = 0.5 - a * Math.max(-1, Math.min(k - 3, 9 - k, 1));
+    return Math.round(c * 255).toString(16).padStart(2, '0');
+  };
+  return `#${f(0)}${f(8)}${f(4)}`;
+}
+/** one or two letters: the capitals of the first two words, else the first two letters */
+export function monogramOf(label: string): string {
+  const words = label.split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+  if (words.length >= 2) return (words[0]![0]! + words[1]![0]!).toUpperCase();
+  return (words[0] ?? '?').slice(0, 2).toUpperCase();
+}
+
 export const findGame = (id: string) => GAMES.find((g) => g.id === id);
 export const gameLabel = (id: string) => findGame(id)?.label ?? id;
-export const gameColor = (id: string) => findGame(id)?.color ?? FALLBACK;
-export const gameAbbr = (id: string) => findGame(id)?.abbr ?? id.slice(0, 2).toUpperCase();
+export const gameColor = (id: string) => findGame(id)?.color ?? monogramColor(id);
+export const gameAbbr = (id: string) => findGame(id)?.abbr ?? monogramOf(id);
 
 /** artwork used instead of the line pictogram (files in public/games) */
 /** games with their own artwork: PNG logos, and the emblems drawn by tools/gen-game-emblems.cjs (public/games/<id>.svg) */
@@ -65848,6 +66173,7 @@ __COREGSM_EOF__
   --color-page: rgb(var(--page));
   --color-card: rgb(var(--card));
   --color-raised: rgb(var(--raised));
+  --color-overlay: rgb(var(--overlay));
   --color-ink: rgb(var(--ink));
   --color-mute: rgb(var(--mute));
   --color-line: rgb(var(--line));
@@ -66126,6 +66452,7 @@ __COREGSM_EOF__
     --page: 243 244 248;
     --card: 255 255 255;
     --raised: 255 255 255;
+    --overlay: 255 255 255;
     --ink: 18 20 26;
     --mute: 92 99 114;
     --line: 231 233 240;
@@ -66197,6 +66524,7 @@ __COREGSM_EOF__
       --page: 9 10 14;
       --card: 18 20 27;
       --raised: 27 30 40;
+      --overlay: 37 41 56;
       --ink: 226 228 236;
       --mute: 160 166 182;
       --line: 38 41 53;
@@ -66252,6 +66580,7 @@ __COREGSM_EOF__
     --page: 9 10 14;
     --card: 18 20 27;
     --raised: 27 30 40;
+    --overlay: 37 41 56;
     --ink: 226 228 236;
     --mute: 160 166 182;
     --line: 38 41 53;
@@ -67032,6 +67361,10 @@ body header.glass, body nav.glass.fixed { view-transition-name: none; }
 @keyframes edge-spin { to { --edge-a: 360deg; } }
 
 /* ---------- status that breathes ---------- */
+/* a state change: the badge pops in and its colour settles */
+.pill-swap.pill-swap.pill-swap { animation: pill-swap .45s cubic-bezier(.2, .9, .3, 1.3); }
+@keyframes pill-swap { 0% { transform: scale(.82); opacity: .35; } 100% { transform: scale(1); opacity: 1; } }
+.pill, .pill-glass { transition: background-color .35s ease, color .35s ease, box-shadow .35s ease; }
 .pill-ok.live { animation: breathe-ok 3.4s ease-in-out infinite; }
 @keyframes breathe-ok {
   0%, 100% { box-shadow: 0 0 0 0 rgb(var(--ok) / 0); }
@@ -67145,7 +67478,7 @@ html[data-motion='reduce'] .view-swap { animation: none; }
   .depth::before, .depth::after { display: none !important; }
   [data-magnetic] { translate: none !important; }
   .depth-l1, .depth-l2 { translate: none !important; }
-  .roll-col, .switch::before, .seg[data-ind]::before, .split-menu, .star-pop, .toast-in, .toast-out, .delta-chip, .flash-ring,
+  .pill-swap, .pill, .pill-glass, .roll-col, .switch::before, .seg[data-ind]::before, .split-menu, .star-pop, .toast-in, .toast-out, .delta-chip, .flash-ring,
   .burst i, .art-float, .art-float-2, .art-twinkle, .art-blink, .art-wobble, .art-spin, .fade-in, .pill-ok.live, .pill-warn.lag, .pill-warn.lag::before,
   .ico-refresh, .ico-nudge, .ico-share, input[type='checkbox']:not(.switch)::after {
     animation: none !important; transition: none !important;
@@ -73224,7 +73557,7 @@ import type { Server } from '../api';
 import { confirmDialog } from '../confirm';
 import { t, useI18n, type TKey } from '../i18n';
 import { gameColor, gameLabel } from '../games';
-import { GameAvatar, IconEdit, IconRefresh, IconTrash, IconWrench, MiniSpark, StatusPill, ago, isLag, toast } from '../ui';
+import { AnimatedNumber, GameAvatar, IconEdit, IconRefresh, IconTrash, IconWrench, MiniSpark, StatusPill, ago, isLag, toast } from '../ui';
 import { countServers, filterServers, loadTableState, saveTableState, type ServerFilter } from './adminServersLogic';
 
 export interface TableActions {
@@ -73365,7 +73698,7 @@ export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableA
                       <StatusPill online={s.online} known={s.hasStatus} lag={isLag(s)} maintenance={!!s.maintenance} />
                       {stateLine(s) && <div className="mt-0.5 text-xs font-semibold text-mute">{stateLine(s)}</div>}
                     </td>
-                    <td className="tabular-nums text-mute">{s.online ? <><b className="text-ink">{s.players}</b>/{s.maxPlayers}</> : '—'}</td>
+                    <td className="tabular-nums text-mute">{s.online ? <><b className="text-ink"><AnimatedNumber value={s.players} /></b>/{s.maxPlayers}</> : '—'}</td>
                     <td className="tabular-nums text-mute">{s.online && s.ping != null ? t('adm.tbl.ms', { n: s.ping }) : '—'}</td>
                     <td className="hidden tabular-nums 2xl:table-cell">{pct(a.uptime.get(s.id))}</td>
                     <td className="hidden lg:table-cell"><MiniSpark serverId={s.id} color={gameColor(s.game)} /></td>
@@ -83920,7 +84253,7 @@ a.adm-tile:hover { box-shadow: var(--shadow-2); border-color: rgb(var(--brand) /
 .adm-dot { margin-left: auto; width: 8px; height: 8px; flex: none; border-radius: 50%; background: rgb(var(--warn)); }
 .adm-dot.is-bad { background: rgb(var(--bad)); }
 .adm-crumb-menu { position: relative; }
-.adm-crumb-pop { position: absolute; left: 0; top: calc(100% + 6px); z-index: 40; min-width: 15rem; max-height: 22rem; overflow-y: auto; padding: 6px; border-radius: var(--r-lg); background: rgb(var(--raised)); box-shadow: var(--shadow-3), inset 0 0 0 1px rgb(var(--line)); }
+.adm-crumb-pop { position: absolute; left: 0; top: calc(100% + 6px); z-index: 40; min-width: 15rem; max-height: 22rem; overflow-y: auto; padding: 6px; border-radius: var(--r-lg); background: rgb(var(--overlay)); box-shadow: var(--shadow-3), inset 0 0 0 1px rgb(var(--line)); }
 .adm-crumb-pop a { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: var(--r-md); color: rgb(var(--ink)); }
 .adm-crumb-pop a:hover { background: rgb(var(--soft)); text-decoration: none; }
 .adm-crumb-pop kbd { margin-left: auto; font: inherit; font-size: var(--fs-2xs); font-weight: 650; padding: 1px 6px; border-radius: 6px; background: rgb(var(--card)); box-shadow: inset 0 0 0 1px rgb(var(--line)); color: rgb(var(--mute)); }
@@ -84337,7 +84670,7 @@ __COREGSM_EOF__
 .split > .split-caret[aria-expanded='true'] svg { transform: rotate(180deg); }
 .split-menu {
   position: absolute; right: 0; z-index: 40; min-width: 100%; width: max-content; max-width: min(22rem, 86vw);
-  padding: .35rem; border-radius: var(--r-lg); background: rgb(var(--raised)); border: 1px solid var(--tile-border);
+  padding: .35rem; border-radius: var(--r-lg); background: rgb(var(--overlay)); border: 1px solid var(--tile-border);
   box-shadow: var(--shadow-3);
   transform-origin: top right; animation: split-in .18s cubic-bezier(.2, .9, .3, 1.2) backwards;
 }
@@ -84581,7 +84914,7 @@ html[data-motion='reduce'] .cm-feed-i { animation: none; }
 .cm-chart-day { height: 88px; margin-top: 10px; }
 .cm-chart-mark { position: absolute; top: 0; bottom: 0; width: 0; border-left: 2px dashed currentColor; opacity: .5; pointer-events: none; }
 .cm-chart-cur { position: absolute; top: 0; bottom: 0; width: 1px; background: currentColor; opacity: .5; pointer-events: none; }
-.cm-chart-tip { position: absolute; top: -4px; transform: translate(-50%, -100%); padding: 2px 8px; border-radius: var(--r-md); background: rgb(var(--raised)); color: rgb(var(--ink)); font-size: var(--fs-xs); font-weight: 700; white-space: nowrap; box-shadow: var(--shadow-2), inset 0 0 0 1px rgb(var(--line)); pointer-events: none; z-index: 2; }
+.cm-chart-tip { position: absolute; top: -4px; transform: translate(-50%, -100%); padding: 2px 8px; border-radius: var(--r-md); background: rgb(var(--overlay)); color: rgb(var(--ink)); font-size: var(--fs-xs); font-weight: 700; white-space: nowrap; box-shadow: var(--shadow-2), inset 0 0 0 1px rgb(var(--line)); pointer-events: none; z-index: 2; }
 .cm-chart-ticks { display: flex; justify-content: space-between; margin-top: 4px; font-size: var(--fs-2xs); font-weight: 700; color: rgb(var(--mute)); }
 .cm-days { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 16px; }
 .cm-heat-c.is-now { outline: 2px solid rgb(var(--ink)); outline-offset: 1px; }
@@ -86544,7 +86877,7 @@ html[data-motion='reduce'] .srv-new-chev, html[data-motion='reduce'] .srv-check,
 /* pulse chart: cursor, tooltip, time labels, trend */
 .pulse-plot { touch-action: pan-y; }
 .pulse-cursor { position: absolute; top: 0; bottom: 0; width: 1px; background: currentColor; opacity: .45; pointer-events: none; }
-.pulse-tip { position: absolute; top: -4px; transform: translate(-50%, -100%); padding: 2px 8px; border-radius: var(--r-md); background: rgb(var(--raised)); color: rgb(var(--ink)); font-size: var(--fs-xs); font-weight: 700; white-space: nowrap; box-shadow: var(--shadow-2), inset 0 0 0 1px rgb(var(--line)); pointer-events: none; z-index: 2; }
+.pulse-tip { position: absolute; top: -4px; transform: translate(-50%, -100%); padding: 2px 8px; border-radius: var(--r-md); background: rgb(var(--overlay)); color: rgb(var(--ink)); font-size: var(--fs-xs); font-weight: 700; white-space: nowrap; box-shadow: var(--shadow-2), inset 0 0 0 1px rgb(var(--line)); pointer-events: none; z-index: 2; }
 .pulse-ticks { display: flex; flex: 1; justify-content: space-between; margin: 0 8px; font-size: var(--fs-2xs); opacity: .75; }
 .pulse-trend { margin-left: 6px; font-size: var(--fs-xs); font-weight: 800; }
 .pulse-trend.up { color: rgb(var(--ok)); }
@@ -87503,16 +87836,21 @@ export function Field({ label, children }: { label: string; children: ReactNode 
 
 /** `glass`: for use on top of a cover or a gradient (dark translucent capsule, white text, coloured dot) */
 export function StatusPill({ online, known, lag, glass = false, maintenance = false }: { online: boolean; known: boolean; lag?: boolean; glass?: boolean; maintenance?: boolean }) {
+  const kind = maintenance ? 'maint' : !known ? 'mute' : !online ? 'bad' : lag ? 'lag' : 'ok';
+  // a change of state (not the first paint) plays a short swap animation on the badge
+  const prev = useRef(kind);
+  const changed = prev.current !== kind;
+  useEffect(() => { prev.current = kind; }, [kind]);
+  const swap = changed ? ' pill-swap' : '';
   // a window of maintenance explains the silence: neither «Офлайн» nor «Лаги»
-  if (maintenance) return glass ? <span className="pill-glass pill-glass-maint">Обслуживание</span> : <span className="pill pill-maint">ОБСЛУЖИВАНИЕ</span>;
+  if (maintenance) return glass ? <span className={`pill-glass pill-glass-maint${swap}`}>Обслуживание</span> : <span className={`pill pill-maint${swap}`}>ОБСЛУЖИВАНИЕ</span>;
   if (glass) {
-    const kind = !known ? 'mute' : !online ? 'bad' : lag ? 'lag' : 'ok';
     const text = !known ? 'Ожидание' : !online ? 'Офлайн' : lag ? 'Лаги' : 'Онлайн';
-    return <span className={`pill-glass pill-glass-${kind}`}>{text}</span>;
+    return <span className={`pill-glass pill-glass-${kind}${swap}`}>{text}</span>;
   }
-  if (!known) return <span className="pill pill-mute">ОЖИДАНИЕ</span>;
-  if (!online) return <span className="pill pill-bad">ОФЛАЙН</span>;
-  return lag ? <span className="pill pill-warn lag">ЛАГИ</span> : <span className="pill pill-ok live">ОНЛАЙН</span>;
+  if (!known) return <span className={`pill pill-mute${swap}`}>ОЖИДАНИЕ</span>;
+  if (!online) return <span className={`pill pill-bad${swap}`}>ОФЛАЙН</span>;
+  return lag ? <span className={`pill pill-warn lag${swap}`}>ЛАГИ</span> : <span className={`pill pill-ok live${swap}`}>ОНЛАЙН</span>;
 }
 
 /**
