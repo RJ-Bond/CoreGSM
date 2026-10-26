@@ -113,7 +113,7 @@ describe('news link preview page', () => {
     assert.match(r.text, /<meta property="og:title" content="Вайп &lt;script&gt;x&lt;\/script&gt; в субботу">/);
     assert.match(r.text, /<meta property="og:description" content="Карта 4000, x2\. Правила">/);
     assert.match(r.text, /<meta property="og:url" content="https:\/\/panel\.example\.com\/n\/\d+">/);
-    assert.match(r.text, /<meta property="og:image" content="https:\/\/panel\.example\.com\/og-default\.png">/);
+    assert.match(r.text, /<meta property="og:image" content="https:\/\/panel\.example\.com\/api\/og\/default\.png">/);
     assert.match(r.text, new RegExp(`url=/news/${id}`));
     assert.ok(!r.text.includes('<script>x</script>'), 'the title cannot inject markup');
   });
