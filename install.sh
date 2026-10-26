@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="600c36b9815a"
+COREGSM_BUILD="2b141bcc41c6"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -55666,6 +55666,8 @@ function Entry({ c, servers, seen }: { c: Card; servers: Server[] | null | undef
 export function Row({ c, servers }: { c: Card; servers: Server[] | null | undefined }) {
   const href = `/news/${c.id}`;
   const gen = hasGeneratedCover(c, servers);
+  const minutes = readingMinutes(c.text);
+  const likes = c.reactions.reduce((a, r) => a + r.count, 0);
   return (
     <article className="nf-item nw-item" style={{ ['--nf-accent' as string]: c.accent }}>
       <a className={`nf-thumb nw-thumb ${gen ? 'nw-gen' : ''}`} data-v={gen ? c.id % 4 : undefined} href={href} style={gen ? genVars(c) : coverStyle(c, servers, true)} aria-label={c.title} tabIndex={-1}>
@@ -55681,6 +55683,8 @@ export function Row({ c, servers }: { c: Card; servers: Server[] | null | undefi
         {c.text && <div className="nf-text is-clamped-2"><NewsText text={plainExcerpt(c.text, 240)} /></div>}
         <div className="nf-actions">
           {c.countdownAt && <Countdown at={c.countdownAt} label={c.countdownLabel} compact />}
+          {minutes > 0 && <span className="nw-read">{t('nw.readTime', { n: minutes })}</span>}
+          {likes > 0 && <span className="nw-cmcount" title={c.reactions.filter((r) => r.count > 0).map((r) => `${r.emoji} ${r.count}`).join('  ')}>♥ {likes}</span>}
           {c.views > 0 && <span className="nw-cmcount" title={t('nw.views', { n: c.views })}>👁 {c.views}</span>}
           {c.comments > 0 && <a className="nw-cmcount" href={`${href}#comments`} aria-label={t('nw.cm.count', { n: c.comments })}>💬 {c.comments}</a>}
           <a className="nw-more" href={href}>{t('nw.readShort')}<span aria-hidden> →</span></a>
@@ -83685,6 +83689,7 @@ html.has-kb :is(.auth-shell, .auth-card) { align-self: start; }
 .net-bar.is-back { background: rgb(var(--ok)); color: #fff; }
 
 /* 14. data saver: no decorations, no animations, no blur (the data itself is requested half as often, see usePoll) */
+@media (max-width: 639px) { .auth-float { display: none !important; } }
 html[data-lite] :is(.nw-glow, .nw-backdrop, .auth-glow, .auth-float, .art-float, .art-float-2, .art-twinkle) { display: none !important; }
 html[data-lite] *, html[data-lite] *::before, html[data-lite] *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 html[data-lite] .glass, html[data-lite] [class*='backdrop-blur'] { -webkit-backdrop-filter: none; backdrop-filter: none; }
