@@ -13,6 +13,7 @@ import Register from './pages/Register';
 import ServersPage from './pages/Servers';
 import { applyServerPrefs, t, useI18n, type TKey } from './i18n';
 import { lazyPage, PageFrame } from './lazyPage';
+import { OfflineBar } from './components/OfflineBar';
 import { AuthCard, AuthShell, IconNews, IconServers, IconSettings, Logo, ThemeToggle, Toaster, UserAvatar, Wordmark, applyDefaultTheme, navigate, parseRoute, toast, useRoute } from './ui';
 
 // loaded on demand: the server list (the first screen) does not wait for these
@@ -338,6 +339,7 @@ export default function App() {
           <p className="font-semibold text-mute">{t('hdr.offlineText')}</p>
           <button className="btn btn-block" onClick={() => void load()}>{t('common.retry')}</button>
         </div>
+        <OfflineBar />
         <Toaster />
       </div>
     );
