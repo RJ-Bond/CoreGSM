@@ -88,6 +88,8 @@ export async function buildPayload(b: Binding) {
         throw new Error(`embed HTTP ${r.status}`);
       }
       raw = (await r.json()) as RawEmbed;
+      // the 24 h chart would stretch a message that already holds several servers
+      if (multi) delete (raw as { image?: unknown }).image;
     }
     if (style !== 'embed') {
       const img = await backend(`/internal/card/${id}.png`);
