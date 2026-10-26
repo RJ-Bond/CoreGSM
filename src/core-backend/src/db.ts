@@ -230,6 +230,8 @@ if (restoredNow) {
 
 // older databases: new columns are added once
 addColumn(db, 'bindings', 'style', "TEXT NOT NULL DEFAULT 'embed'");
+// how much the embed shows: detailed (default) / compact / minimal
+addColumn(db, 'bindings', 'layout', "TEXT NOT NULL DEFAULT 'detailed'");
 
 // one Discord message may show several servers (up to 10 embeds): the extra server ids
 addColumn(db, 'bindings', 'extra_ids', "TEXT NOT NULL DEFAULT '[]'");
@@ -351,6 +353,8 @@ export interface BindingRow {
   last_error: string | null;
   /** how the message looks in Discord: embed (default), card (PNG) or both */
   style: string;
+  /** how much the embed shows: detailed, compact or minimal */
+  layout?: string;
   /** more servers shown in the same message (JSON array of server ids; the main one is server_id) */
   extra_ids: string;
 }

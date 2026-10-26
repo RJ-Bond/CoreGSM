@@ -115,6 +115,7 @@ export const ERRORS = {
   update_channel_invalid: 'Канал: release или main',
   update_version_invalid: 'Некорректная версия',
   update_notify_channel_invalid: 'Некорректный канал',
+  welcome_invalid: 'Приветствие: проверьте канал и длину текста (до 1000 символов)',
   rollback_request_failed: 'Не удалось создать запрос на откат (нет прав на папку /app/update)',
 
   // ---- servers, Discord bindings, alerts, deliveries ----

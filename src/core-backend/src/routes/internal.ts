@@ -9,6 +9,8 @@ import { refreshServer } from '../gsm.js';
 import { param, wrap } from '../http.js';
 import { addPing } from '../botLatencyLogic.js';
 import { buildPresence } from '../presence.js';
+import { welcomeSettings } from '../welcome.js';
+import { parseLayout } from '../embedLayout.js';
 import { embedFor, intervalParam, serializeBinding, SELECT_SERVERS, SERVER_ORDER, serialize, type ServerJoin } from '../serverData.js';
 
 export const router = express.Router();
@@ -20,7 +22,7 @@ router.get('/internal/presence', internal, (_req, res) => {
 });
 
 router.get('/internal/servers/:id/embed', internal, (req, res) => {
-  const e = embedFor(Number(req.params.id), intervalParam(req.query.interval));
+  const e = embedFor(Number(req.params.id), intervalParam(req.query.interval), parseLayout(req.query.layout));
   if (!e) return res.status(404).json({ error: 'not found' });
   res.json(e);
 });
@@ -49,7 +51,7 @@ router.post(
 );
 
 router.get('/internal/config', internal, (_req, res) => {
-  res.json({ discordToken: getSetting('discord_token') ?? '', proxyUrl: getSetting('proxy_url') ?? '' });
+  res.json({ discordToken: getSetting('discord_token') ?? '', proxyUrl: getSetting('proxy_url') ?? '', welcome: welcomeSettings().enabled });
 });
 
 router.post('/internal/bot-guilds', internal, (req, res) => {
