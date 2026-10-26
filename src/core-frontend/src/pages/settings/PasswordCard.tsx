@@ -1,7 +1,7 @@
 /** Settings → Security: the administrator's own password. */
 import { type FormEvent, useState } from 'react';
 import { api } from '../../api';
-import { ErrorLine, plural, Section, TextField, toast } from '../../ui';
+import { ErrorLine, plural, Section, TextField, toast, errText } from '../../ui';
 
 export function PasswordCard() {
   const [current, setCurrent] = useState('');
@@ -28,7 +28,7 @@ export function PasswordCard() {
       setNext('');
     } catch (err) {
       // the typed values stay in the form: nothing is lost, only the message appears
-      setError((err as Error).message);
+      setError(errText(err));
     } finally {
       setBusy(false);
     }

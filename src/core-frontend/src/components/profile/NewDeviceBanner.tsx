@@ -4,7 +4,7 @@ import { useAuth } from '../../auth';
 import { confirmDialog } from '../../confirm';
 import { t } from '../../i18n';
 import { dismissNewDevice, isNewDeviceDismissed } from '../../security';
-import { ErrorLine, toast } from '../../ui';
+import { ErrorLine, toast, errText } from '../../ui';
 
 /**
  * «Вход с нового устройства: … Это были вы?» on the Overview and Security tabs of the profile.
@@ -36,7 +36,7 @@ export function NewDeviceBanner({ onRevoked }: { onRevoked?: () => void }) {
       setRevoked(true);
       onRevoked?.();
     } catch (e) {
-      setError((e as Error).message);
+      setError(errText(e));
     } finally {
       setBusy(false);
     }

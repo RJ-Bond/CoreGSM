@@ -10,7 +10,7 @@ import { gameGradient, gameLabel } from '../games';
 import { coverBackground, coverUrlOf, emblemStyle, gameBackdrop } from '../cover';
 import { applyConnectTemplates, connectGuide } from '../connectGuides';
 import { useGameProfiles } from '../gameProfiles';
-import { Burst, CopyButton, ErrorLine, GameAvatar, IconBell, LoadError, IconCheckMark, IconRefresh, IconShare, StatusPill, ago, isLag, toast, useDepth, useFlashOnChange, usePoll, navigate } from '../ui';
+import { Burst, CopyButton, ErrorLine, GameAvatar, IconBell, LoadError, IconCheckMark, IconRefresh, IconShare, StatusPill, ago, isLag, toast, useDepth, useFlashOnChange, usePoll, navigate, errText } from '../ui';
 import NotFound from '../components/NotFound';
 import { confirmDialog } from '../confirm';
 import ServerForm from './ServerForm';
@@ -391,7 +391,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
       toast('Сервер удалён');
       navigate('/servers');
     } catch (e) {
-      setError((e as Error).message);
+      setError(errText(e));
     }
   };
   const copyAddress = async () => {

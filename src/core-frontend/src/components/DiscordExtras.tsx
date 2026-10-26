@@ -4,7 +4,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { api, type Server } from '../api';
 import { confirmDialog } from '../confirm';
-import { Button, ErrorLine, Field, IconTrash, Modal, Section, plural, toast, SkeletonRows } from '../ui';
+import { Button, ErrorLine, Field, IconTrash, Modal, Section, plural, toast, SkeletonRows, errText } from '../ui';
 
 interface Extras {
   autoroles: { id: number; guildId: string; roleId: string; roleName: string | null; roleColor: number; kind: Kind; threshold: number; serverId: number | null; members: number; error: string | null }[];
@@ -110,7 +110,7 @@ function ExtraForm({ kind, extras, servers, onClose, onSaved }: { kind: 'role' |
       else await api('/discord/counters', 'POST', { channelId: target, template, serverId });
       onSaved();
     } catch (err) {
-      setError((err as Error).message);
+      setError(errText(err));
     } finally {
       setBusy(false);
     }

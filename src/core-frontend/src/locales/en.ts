@@ -1734,6 +1734,7 @@ const en: Record<keyof typeof ru, string> = {
   'ne.btnLabel': 'Button label {n}',
   'ne.btnUrl': 'Button link {n}',
   'ne.mainText': 'Main text',
+  'common.error': 'Something went wrong',
 };
 
 export default en;

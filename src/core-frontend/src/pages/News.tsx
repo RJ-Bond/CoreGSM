@@ -6,7 +6,7 @@ import { useAuth } from '../auth';
 import { EmbedView, type DiscordEmbed } from './EmbedPreview';
 import { ChannelPicker } from '../components/ChannelPicker';
 import { NewsArt } from '../components/Illustrations';
-import { AdminPage, Empty, ErrorLine, GoLink, LoadError, IconCopyPlus, IconNews, IconTrash, PageHead, Strip, fmtDateTime, toast, undoable, usePoll, navigate } from '../ui';
+import { AdminPage, Empty, ErrorLine, GoLink, LoadError, IconCopyPlus, IconNews, IconTrash, PageHead, Strip, fmtDateTime, toast, undoable, usePoll, navigate, errText } from '../ui';
 import NewsEditor, { TEMPLATES } from './NewsEditor';
 import { newsImage } from '../components/news/newsLogic';
 import { NewsStatsModal } from '../components/news/NewsStats';
@@ -93,7 +93,7 @@ function NewsList() {
       return;
     } catch (e) {
       // an older backend has no duplicate route: make the copy by hand
-      if (!(e instanceof ApiError && (e.status === 404 || e.status === 405))) { setError((e as Error).message); return; }
+      if (!(e instanceof ApiError && (e.status === 404 || e.status === 405))) { setError(errText(e)); return; }
     }
     await api('/news', 'POST', { channelId: n.channelId, payload: n.payload, action: 'draft' }).then(() => toast('Копия сохранена как черновик')).catch((e) => setError(e.message));
     void load();
@@ -148,7 +148,7 @@ function NewsList() {
         try {
           await api(`/news/${n.id}`, 'DELETE');
         } catch (e) {
-          setError((e as Error).message);
+          setError(errText(e));
           toast('Не удалось удалить новость', 'err');
         }
         setHidden((h) => h.filter((x) => x !== n.id));

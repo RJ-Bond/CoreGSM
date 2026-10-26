@@ -21,7 +21,7 @@ import { GAMES } from '../games';
 import { t, useI18n } from '../i18n';
 import { StatusServers } from '../components/news/StatusServers';
 import type { PreviewPart } from './EmbedPreview';
-import { Button, ErrorLine, Field, GoLink, IconNews, Notice, PageHead, SplitButton, StateView, Switch, errorKind, fmtDateTime, toast, navigate } from '../ui';
+import { Button, ErrorLine, Field, GoLink, IconNews, Notice, PageHead, SplitButton, StateView, Switch, errorKind, fmtDateTime, toast, navigate, errText } from '../ui';
 
 export { TEMPLATES };
 
@@ -144,7 +144,7 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
           })
           .catch((e) => { if (e instanceof ApiError && e.status === 404) autosaveOff.current = true; });
       } catch (e) {
-        if (!dead) setError((e as Error).message);
+        if (!dead) setError(errText(e));
       }
     })();
     api<Server[]>('/servers').then((s) => !dead && Array.isArray(s) && setServers(s)).catch(() => undefined);
@@ -225,7 +225,7 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
       setAuthor(a);
       setE({ authorName: a.name, authorIcon: a.iconUrl ?? '' });
     } catch (err) {
-      setError((err as Error).message);
+      setError(errText(err));
     }
   };
   const setE = (patch: Partial<EmbedDraft>) => setD((c) => (c ? { ...c, embeds: c.embeds.map((x, i) => (i === cur ? { ...x, ...patch } : x)) } : c));
@@ -260,7 +260,7 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
       setMoreOpen(true);
       toast(t('ne.pasted'));
     } catch (err) {
-      setError((err as Error).message);
+      setError(errText(err));
     }
   };
 
@@ -302,7 +302,7 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
       toast(action === 'now' ? t('ne.sending') : action === 'schedule' ? t('ne.scheduled') : isSent ? t('ne.edited') : t('ne.draftSaved'));
       navigate('/admin/news');
     } catch (err) {
-      setError((err as Error).message);
+      setError(errText(err));
       setBusy(false);
       setCheck(null);
     }

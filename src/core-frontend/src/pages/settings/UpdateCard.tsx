@@ -2,7 +2,7 @@
 import { type CSSProperties, useEffect, useRef, useState } from 'react';
 import { api, type Changelog, type UpdateInfo } from '../../api';
 import { confirmDialog } from '../../confirm';
-import { ago, ErrorLine, IconArrowUp, IconCheck, Section, Spinner, usePoll } from '../../ui';
+import { ago, ErrorLine, IconArrowUp, IconCheck, Section, Spinner, usePoll, errText } from '../../ui';
 
 const short = (v: string | null) => (v ? v.slice(0, 7) : '–');
 
@@ -71,7 +71,7 @@ export function UpdateCard() {
     try {
       setInfo(await api<UpdateInfo>('/update/check', 'POST'));
     } catch (e) {
-      setError((e as Error).message);
+      setError(errText(e));
     } finally {
       setBusy(false);
     }
@@ -88,7 +88,7 @@ export function UpdateCard() {
       setFinished(null);
       setWaiting({ since: Date.now(), baseTime: r.job?.time ?? null, kind: 'update' });
     } catch (e) {
-      setError((e as Error).message);
+      setError(errText(e));
     } finally {
       setBusy(false);
     }
@@ -111,7 +111,7 @@ export function UpdateCard() {
       setFinished(null);
       setWaiting({ since: Date.now(), baseTime: r.job?.time ?? null, kind: 'rollback' });
     } catch (e) {
-      setError((e as Error).message);
+      setError(errText(e));
     } finally {
       setBusy(false);
     }

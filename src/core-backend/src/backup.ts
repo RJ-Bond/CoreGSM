@@ -327,8 +327,8 @@ export async function uploadRemote(file: string, name: string, url: string): Pro
   }
   try {
     setSetting('backup_last_remote', JSON.stringify(result));
-  } catch {
-    /* ignore */
+  } catch (err) {
+    log.warn('backup: could not store the upload result:', (err as Error).message);
   }
   return result;
 }
@@ -394,7 +394,7 @@ function validateDb(file: string): string | null {
     try {
       t?.close();
     } catch {
-      /* ignore */
+      /* a failed close of a temporary copy changes nothing: the files are removed right below */
     }
     for (const ext of ['-wal', '-shm']) rmrf(`${file}${ext}`);
   }
@@ -444,7 +444,7 @@ function unreadableSecrets(file: string): string[] {
     try {
       t?.close();
     } catch {
-      /* ignore */
+      /* a failed close of a temporary copy changes nothing: the files are removed right below */
     }
     for (const ext of ['-wal', '-shm']) rmrf(`${file}${ext}`);
   }
@@ -528,7 +528,7 @@ function restartSoon(): void {
     try {
       db.close();
     } catch {
-      /* ignore */
+      /* closing is best effort: the process is killed right after */
     }
     process.kill(process.pid, 'SIGKILL');
   }, 800);
