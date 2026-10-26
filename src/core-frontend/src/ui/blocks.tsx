@@ -79,16 +79,21 @@ export function Field({ label, children }: { label: string; children: ReactNode 
 
 /** `glass`: for use on top of a cover or a gradient (dark translucent capsule, white text, coloured dot) */
 export function StatusPill({ online, known, lag, glass = false, maintenance = false }: { online: boolean; known: boolean; lag?: boolean; glass?: boolean; maintenance?: boolean }) {
+  const kind = maintenance ? 'maint' : !known ? 'mute' : !online ? 'bad' : lag ? 'lag' : 'ok';
+  // a change of state (not the first paint) plays a short swap animation on the badge
+  const prev = useRef(kind);
+  const changed = prev.current !== kind;
+  useEffect(() => { prev.current = kind; }, [kind]);
+  const swap = changed ? ' pill-swap' : '';
   // a window of maintenance explains the silence: neither «Офлайн» nor «Лаги»
-  if (maintenance) return glass ? <span className="pill-glass pill-glass-maint">Обслуживание</span> : <span className="pill pill-maint">ОБСЛУЖИВАНИЕ</span>;
+  if (maintenance) return glass ? <span className={`pill-glass pill-glass-maint${swap}`}>Обслуживание</span> : <span className={`pill pill-maint${swap}`}>ОБСЛУЖИВАНИЕ</span>;
   if (glass) {
-    const kind = !known ? 'mute' : !online ? 'bad' : lag ? 'lag' : 'ok';
     const text = !known ? 'Ожидание' : !online ? 'Офлайн' : lag ? 'Лаги' : 'Онлайн';
-    return <span className={`pill-glass pill-glass-${kind}`}>{text}</span>;
+    return <span className={`pill-glass pill-glass-${kind}${swap}`}>{text}</span>;
   }
-  if (!known) return <span className="pill pill-mute">ОЖИДАНИЕ</span>;
-  if (!online) return <span className="pill pill-bad">ОФЛАЙН</span>;
-  return lag ? <span className="pill pill-warn lag">ЛАГИ</span> : <span className="pill pill-ok live">ОНЛАЙН</span>;
+  if (!known) return <span className={`pill pill-mute${swap}`}>ОЖИДАНИЕ</span>;
+  if (!online) return <span className={`pill pill-bad${swap}`}>ОФЛАЙН</span>;
+  return lag ? <span className={`pill pill-warn lag${swap}`}>ЛАГИ</span> : <span className={`pill pill-ok live${swap}`}>ОНЛАЙН</span>;
 }
 
 /**

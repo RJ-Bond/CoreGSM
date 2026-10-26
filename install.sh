@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="51b59efd646e"
+COREGSM_BUILD="ebe2712efe88"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.0.0.16"
+COREGSM_VERSION="1.0.0.17"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -66126,6 +66126,7 @@ __COREGSM_EOF__
   --color-page: rgb(var(--page));
   --color-card: rgb(var(--card));
   --color-raised: rgb(var(--raised));
+  --color-overlay: rgb(var(--overlay));
   --color-ink: rgb(var(--ink));
   --color-mute: rgb(var(--mute));
   --color-line: rgb(var(--line));
@@ -66404,6 +66405,7 @@ __COREGSM_EOF__
     --page: 243 244 248;
     --card: 255 255 255;
     --raised: 255 255 255;
+    --overlay: 255 255 255;
     --ink: 18 20 26;
     --mute: 92 99 114;
     --line: 231 233 240;
@@ -66475,6 +66477,7 @@ __COREGSM_EOF__
       --page: 9 10 14;
       --card: 18 20 27;
       --raised: 27 30 40;
+      --overlay: 37 41 56;
       --ink: 226 228 236;
       --mute: 160 166 182;
       --line: 38 41 53;
@@ -66530,6 +66533,7 @@ __COREGSM_EOF__
     --page: 9 10 14;
     --card: 18 20 27;
     --raised: 27 30 40;
+    --overlay: 37 41 56;
     --ink: 226 228 236;
     --mute: 160 166 182;
     --line: 38 41 53;
@@ -67310,6 +67314,10 @@ body header.glass, body nav.glass.fixed { view-transition-name: none; }
 @keyframes edge-spin { to { --edge-a: 360deg; } }
 
 /* ---------- status that breathes ---------- */
+/* a state change: the badge pops in and its colour settles */
+.pill-swap.pill-swap.pill-swap { animation: pill-swap .45s cubic-bezier(.2, .9, .3, 1.3); }
+@keyframes pill-swap { 0% { transform: scale(.82); opacity: .35; } 100% { transform: scale(1); opacity: 1; } }
+.pill, .pill-glass { transition: background-color .35s ease, color .35s ease, box-shadow .35s ease; }
 .pill-ok.live { animation: breathe-ok 3.4s ease-in-out infinite; }
 @keyframes breathe-ok {
   0%, 100% { box-shadow: 0 0 0 0 rgb(var(--ok) / 0); }
@@ -67423,7 +67431,7 @@ html[data-motion='reduce'] .view-swap { animation: none; }
   .depth::before, .depth::after { display: none !important; }
   [data-magnetic] { translate: none !important; }
   .depth-l1, .depth-l2 { translate: none !important; }
-  .roll-col, .switch::before, .seg[data-ind]::before, .split-menu, .star-pop, .toast-in, .toast-out, .delta-chip, .flash-ring,
+  .pill-swap, .pill, .pill-glass, .roll-col, .switch::before, .seg[data-ind]::before, .split-menu, .star-pop, .toast-in, .toast-out, .delta-chip, .flash-ring,
   .burst i, .art-float, .art-float-2, .art-twinkle, .art-blink, .art-wobble, .art-spin, .fade-in, .pill-ok.live, .pill-warn.lag, .pill-warn.lag::before,
   .ico-refresh, .ico-nudge, .ico-share, input[type='checkbox']:not(.switch)::after {
     animation: none !important; transition: none !important;
@@ -73502,7 +73510,7 @@ import type { Server } from '../api';
 import { confirmDialog } from '../confirm';
 import { t, useI18n, type TKey } from '../i18n';
 import { gameColor, gameLabel } from '../games';
-import { GameAvatar, IconEdit, IconRefresh, IconTrash, IconWrench, MiniSpark, StatusPill, ago, isLag, toast } from '../ui';
+import { AnimatedNumber, GameAvatar, IconEdit, IconRefresh, IconTrash, IconWrench, MiniSpark, StatusPill, ago, isLag, toast } from '../ui';
 import { countServers, filterServers, loadTableState, saveTableState, type ServerFilter } from './adminServersLogic';
 
 export interface TableActions {
@@ -73643,7 +73651,7 @@ export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableA
                       <StatusPill online={s.online} known={s.hasStatus} lag={isLag(s)} maintenance={!!s.maintenance} />
                       {stateLine(s) && <div className="mt-0.5 text-xs font-semibold text-mute">{stateLine(s)}</div>}
                     </td>
-                    <td className="tabular-nums text-mute">{s.online ? <><b className="text-ink">{s.players}</b>/{s.maxPlayers}</> : '—'}</td>
+                    <td className="tabular-nums text-mute">{s.online ? <><b className="text-ink"><AnimatedNumber value={s.players} /></b>/{s.maxPlayers}</> : '—'}</td>
                     <td className="tabular-nums text-mute">{s.online && s.ping != null ? t('adm.tbl.ms', { n: s.ping }) : '—'}</td>
                     <td className="hidden tabular-nums 2xl:table-cell">{pct(a.uptime.get(s.id))}</td>
                     <td className="hidden lg:table-cell"><MiniSpark serverId={s.id} color={gameColor(s.game)} /></td>
@@ -84198,7 +84206,7 @@ a.adm-tile:hover { box-shadow: var(--shadow-2); border-color: rgb(var(--brand) /
 .adm-dot { margin-left: auto; width: 8px; height: 8px; flex: none; border-radius: 50%; background: rgb(var(--warn)); }
 .adm-dot.is-bad { background: rgb(var(--bad)); }
 .adm-crumb-menu { position: relative; }
-.adm-crumb-pop { position: absolute; left: 0; top: calc(100% + 6px); z-index: 40; min-width: 15rem; max-height: 22rem; overflow-y: auto; padding: 6px; border-radius: var(--r-lg); background: rgb(var(--raised)); box-shadow: var(--shadow-3), inset 0 0 0 1px rgb(var(--line)); }
+.adm-crumb-pop { position: absolute; left: 0; top: calc(100% + 6px); z-index: 40; min-width: 15rem; max-height: 22rem; overflow-y: auto; padding: 6px; border-radius: var(--r-lg); background: rgb(var(--overlay)); box-shadow: var(--shadow-3), inset 0 0 0 1px rgb(var(--line)); }
 .adm-crumb-pop a { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: var(--r-md); color: rgb(var(--ink)); }
 .adm-crumb-pop a:hover { background: rgb(var(--soft)); text-decoration: none; }
 .adm-crumb-pop kbd { margin-left: auto; font: inherit; font-size: var(--fs-2xs); font-weight: 650; padding: 1px 6px; border-radius: 6px; background: rgb(var(--card)); box-shadow: inset 0 0 0 1px rgb(var(--line)); color: rgb(var(--mute)); }
@@ -84615,7 +84623,7 @@ __COREGSM_EOF__
 .split > .split-caret[aria-expanded='true'] svg { transform: rotate(180deg); }
 .split-menu {
   position: absolute; right: 0; z-index: 40; min-width: 100%; width: max-content; max-width: min(22rem, 86vw);
-  padding: .35rem; border-radius: var(--r-lg); background: rgb(var(--raised)); border: 1px solid var(--tile-border);
+  padding: .35rem; border-radius: var(--r-lg); background: rgb(var(--overlay)); border: 1px solid var(--tile-border);
   box-shadow: var(--shadow-3);
   transform-origin: top right; animation: split-in .18s cubic-bezier(.2, .9, .3, 1.2) backwards;
 }
@@ -84859,7 +84867,7 @@ html[data-motion='reduce'] .cm-feed-i { animation: none; }
 .cm-chart-day { height: 88px; margin-top: 10px; }
 .cm-chart-mark { position: absolute; top: 0; bottom: 0; width: 0; border-left: 2px dashed currentColor; opacity: .5; pointer-events: none; }
 .cm-chart-cur { position: absolute; top: 0; bottom: 0; width: 1px; background: currentColor; opacity: .5; pointer-events: none; }
-.cm-chart-tip { position: absolute; top: -4px; transform: translate(-50%, -100%); padding: 2px 8px; border-radius: var(--r-md); background: rgb(var(--raised)); color: rgb(var(--ink)); font-size: var(--fs-xs); font-weight: 700; white-space: nowrap; box-shadow: var(--shadow-2), inset 0 0 0 1px rgb(var(--line)); pointer-events: none; z-index: 2; }
+.cm-chart-tip { position: absolute; top: -4px; transform: translate(-50%, -100%); padding: 2px 8px; border-radius: var(--r-md); background: rgb(var(--overlay)); color: rgb(var(--ink)); font-size: var(--fs-xs); font-weight: 700; white-space: nowrap; box-shadow: var(--shadow-2), inset 0 0 0 1px rgb(var(--line)); pointer-events: none; z-index: 2; }
 .cm-chart-ticks { display: flex; justify-content: space-between; margin-top: 4px; font-size: var(--fs-2xs); font-weight: 700; color: rgb(var(--mute)); }
 .cm-days { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 16px; }
 .cm-heat-c.is-now { outline: 2px solid rgb(var(--ink)); outline-offset: 1px; }
@@ -86817,7 +86825,7 @@ html[data-motion='reduce'] .srv-new-chev, html[data-motion='reduce'] .srv-check,
 /* pulse chart: cursor, tooltip, time labels, trend */
 .pulse-plot { touch-action: pan-y; }
 .pulse-cursor { position: absolute; top: 0; bottom: 0; width: 1px; background: currentColor; opacity: .45; pointer-events: none; }
-.pulse-tip { position: absolute; top: -4px; transform: translate(-50%, -100%); padding: 2px 8px; border-radius: var(--r-md); background: rgb(var(--raised)); color: rgb(var(--ink)); font-size: var(--fs-xs); font-weight: 700; white-space: nowrap; box-shadow: var(--shadow-2), inset 0 0 0 1px rgb(var(--line)); pointer-events: none; z-index: 2; }
+.pulse-tip { position: absolute; top: -4px; transform: translate(-50%, -100%); padding: 2px 8px; border-radius: var(--r-md); background: rgb(var(--overlay)); color: rgb(var(--ink)); font-size: var(--fs-xs); font-weight: 700; white-space: nowrap; box-shadow: var(--shadow-2), inset 0 0 0 1px rgb(var(--line)); pointer-events: none; z-index: 2; }
 .pulse-ticks { display: flex; flex: 1; justify-content: space-between; margin: 0 8px; font-size: var(--fs-2xs); opacity: .75; }
 .pulse-trend { margin-left: 6px; font-size: var(--fs-xs); font-weight: 800; }
 .pulse-trend.up { color: rgb(var(--ok)); }
@@ -87776,16 +87784,21 @@ export function Field({ label, children }: { label: string; children: ReactNode 
 
 /** `glass`: for use on top of a cover or a gradient (dark translucent capsule, white text, coloured dot) */
 export function StatusPill({ online, known, lag, glass = false, maintenance = false }: { online: boolean; known: boolean; lag?: boolean; glass?: boolean; maintenance?: boolean }) {
+  const kind = maintenance ? 'maint' : !known ? 'mute' : !online ? 'bad' : lag ? 'lag' : 'ok';
+  // a change of state (not the first paint) plays a short swap animation on the badge
+  const prev = useRef(kind);
+  const changed = prev.current !== kind;
+  useEffect(() => { prev.current = kind; }, [kind]);
+  const swap = changed ? ' pill-swap' : '';
   // a window of maintenance explains the silence: neither «Офлайн» nor «Лаги»
-  if (maintenance) return glass ? <span className="pill-glass pill-glass-maint">Обслуживание</span> : <span className="pill pill-maint">ОБСЛУЖИВАНИЕ</span>;
+  if (maintenance) return glass ? <span className={`pill-glass pill-glass-maint${swap}`}>Обслуживание</span> : <span className={`pill pill-maint${swap}`}>ОБСЛУЖИВАНИЕ</span>;
   if (glass) {
-    const kind = !known ? 'mute' : !online ? 'bad' : lag ? 'lag' : 'ok';
     const text = !known ? 'Ожидание' : !online ? 'Офлайн' : lag ? 'Лаги' : 'Онлайн';
-    return <span className={`pill-glass pill-glass-${kind}`}>{text}</span>;
+    return <span className={`pill-glass pill-glass-${kind}${swap}`}>{text}</span>;
   }
-  if (!known) return <span className="pill pill-mute">ОЖИДАНИЕ</span>;
-  if (!online) return <span className="pill pill-bad">ОФЛАЙН</span>;
-  return lag ? <span className="pill pill-warn lag">ЛАГИ</span> : <span className="pill pill-ok live">ОНЛАЙН</span>;
+  if (!known) return <span className={`pill pill-mute${swap}`}>ОЖИДАНИЕ</span>;
+  if (!online) return <span className={`pill pill-bad${swap}`}>ОФЛАЙН</span>;
+  return lag ? <span className={`pill pill-warn lag${swap}`}>ЛАГИ</span> : <span className={`pill pill-ok live${swap}`}>ОНЛАЙН</span>;
 }
 
 /**
