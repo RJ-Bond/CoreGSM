@@ -130,3 +130,40 @@ export function parseChangelog(text: string): NotesRelease[] {
   }
   return out;
 }
+
+/** the releases (newest first, as in CHANGELOG.md) after `from` up to and including `to`; without a known `from` only `to` itself */
+export function notesBetween(releases: NotesRelease[], from: string | null | undefined, to: string | null | undefined): NotesRelease[] {
+  if (!parseVersion(to)) return [];
+  return releases.filter((r) => {
+    if (!r.version) return false;
+    const upTo = cmpVersion(r.version, to);
+    if (upTo === null || upTo > 0) return false;
+    if (!parseVersion(from)) return upTo === 0;
+    const after = cmpVersion(r.version, from);
+    return after !== null && after > 0;
+  });
+}
+
+/** the notes as Discord text: a bold group title and a bullet per item; several releases get their version as a heading; cut at `max` characters */
+export function notesText(releases: NotesRelease[], max = 1500): string {
+  const lines: string[] = [];
+  const multi = releases.length > 1;
+  let total = 0;
+  let left = 0;
+  for (const r of releases) {
+    const block: string[] = [];
+    if (multi && r.version) block.push(`**${r.version}**`);
+    for (const g of r.groups) {
+      if (g.items.length === 0) continue;
+      block.push(`__${g.title.replace(/^[^\p{L}\p{N}]+/u, '').trim() || g.title}__`);
+      for (const it of g.items) block.push(`• ${it.text.trim()}`);
+    }
+    for (const l of block) {
+      if (total + l.length + 1 > max) { if (l.startsWith('• ')) left++; continue; }
+      lines.push(l);
+      total += l.length + 1;
+    }
+  }
+  if (left > 0) lines.push(`… и ещё ${left}`);
+  return lines.join('\n');
+}
