@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="cea90119c0f2"
+COREGSM_BUILD="f2fb84f653d2"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.0.0.26"
+COREGSM_VERSION="1.0.0.27"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -85182,7 +85182,7 @@ a.adm-tile:hover { box-shadow: var(--shadow-2); border-color: rgb(var(--brand) /
   .adm-rail .adm-link.md\:w-full { padding-right: 0; }
   .adm-rail .adm-link { position: relative; }
   .adm-rail .adm-badge, .adm-rail .adm-dot, .adm-rail .update-dot { position: absolute; top: 2px; right: 4px; margin: 0; }
-  .adm-rail .adm-badge { min-width: 1rem; height: 1rem; padding: 0 3px; font-size: 10px; line-height: 1rem; }
+  .adm-rail .adm-badge { min-width: 1rem; height: 1rem; padding: 0 3px; font-size: var(--fs-2xs); line-height: 1rem; }
 }
 
 /* column chooser of the servers table */
