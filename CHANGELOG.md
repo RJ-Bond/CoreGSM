@@ -17,6 +17,7 @@ interface language; the GitHub release text is built from the section of the ver
 ## Не выпущено | Unreleased
 
 ### ✨ Новое | New
+- 📣 Сообщения об обновлении в Discord с описанием: «Доступно обновление» показывает, что изменилось в версиях от вашей до новой, а «Панель обновлена» — что вошло в установленную версию | Discord update notices now say what changed: «Update available» lists the changes between your version and the new one, and «Panel updated» lists what the installed version brought
 - 🖥️ Админка шире: на больших экранах контент занимает до 1600 px, а меню можно свернуть в узкую полосу иконок (запоминается в браузере) | The admin area is wider: content takes up to 1600 px on large screens, and the menu can shrink to a narrow icon strip (remembered in the browser)
 - 📋 Таблица серверов: колонки «Карта», «Версия», «Каналы Discord» и «Обновлён», меню «Колонки» для выбора нужных (запоминается) | Servers table: Map, Version, Discord channels and Updated columns, and a «Columns» menu to pick the ones you need (remembered)
 - 🖼️ Итоги недели: предпросмотр картинки справа от настроек и остаётся на виду при прокрутке; страница «Карточки» на очень широких экранах показывает три колонки | Weekly digest: the picture preview sits next to the settings and stays in view while scrolling; the Cards page shows three columns on very wide screens
