@@ -20,7 +20,7 @@ export { useTween, AnimatedNumber, Burst } from './ui/motion';
 export { currentPath, navigate, parseRoute, routeQuery, useRoute } from './ui/route';
 export type { Route } from './ui/route';
 export { ago, fmtDate, fmtTime, fmtDateTime, fmtDay, num, plural } from './ui/format';
-export { ThemeToggle, applyDefaultTheme, currentTheme, setThemeChoice } from './ui/theme';
+export { ThemeToggle, adminThemeIsOwn, applyDefaultTheme, currentTheme, resetAdminTheme, setThemeChoice, setThemeScope } from './ui/theme';
 export { Modal, Field, StatusPill, GameAvatar, FillBar, PageHead, GoLink, Notice, ErrorLine, Empty, CopyButton, Logo, ProxyField, InviteButton, SkeletonRows, Wordmark } from './ui/blocks';
 export type { ProxyType } from './ui/blocks';
 export { Spark, MiniSpark, smoothPath, smoothValues, SmoothArea, FleetBar, useSparkSpanMin, useHourTrend, spanCaption } from './ui/charts';
