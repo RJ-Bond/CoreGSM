@@ -262,7 +262,7 @@ export type UpdateStage = 'download' | 'snapshot' | 'install' | 'health' | 'roll
 export interface UpdateHistoryItem { id: number; time: number; state: 'done' | 'error'; kind: 'update' | 'rollback'; message: string; version: string | null; label: string | null }
 export interface UpdatePreflight { onlineServers: number; players: number; lastBackupAt: number | null }
 export type NoteFlag = 'breaking' | 'migration' | 'env';
-export interface UpdateNotesRelease { version: string | null; date: string | null; groups: { title: string; items: { text: string; flags: NoteFlag[] }[] }[] }
+export interface UpdateNotesRelease { version: string | null; date: string | null; groups: { title: string; titleEn?: string | null; items: { text: string; textEn?: string | null; flags: NoteFlag[] }[] }[] }
 export interface UpdateNotes { releases: UpdateNotesRelease[]; error: string | null }
 
 export interface ChangelogItem {

@@ -74,15 +74,28 @@ export function flagsOf(text: string): CommitFlag[] {
   return classifyCommit(text.replace(/^[-*]\s*/, '')).flags.concat(/^[-*]?\s*⚠/.test(text) ? ['breaking' as const] : []).filter((f, i, a) => a.indexOf(f) === i);
 }
 
-export interface NotesGroup { title: string; items: { text: string; flags: CommitFlag[] }[] }
+export interface NotesItem { text: string; textEn: string | null; flags: CommitFlag[] }
+export interface NotesGroup { title: string; titleEn: string | null; items: NotesItem[] }
 export interface NotesRelease { version: string | null; date: string | null; groups: NotesGroup[] }
 
+/** «Русский | English» → both parts; a line without « | » has no English part */
+export function splitLang(text: string): { ru: string; en: string | null } {
+  const i = text.indexOf(' | ');
+  if (i < 0) return { ru: text.trim(), en: null };
+  const ru = text.slice(0, i).trim();
+  let en = text.slice(i + 3).trim();
+  // the emoji is written once, in front of the Russian part; the English one carries it too
+  const e = /^(\p{Extended_Pictographic}[\uFE0F\u200D\p{Extended_Pictographic}]*)\s+/u.exec(ru);
+  if (e && en && !/^\p{Extended_Pictographic}/u.test(en)) en = `${e[1]} ${en}`;
+  return { ru, en: en || null };
+}
+
 /**
- * CHANGELOG.md of the repository:
- *   ## Не выпущено                      (version null)
+ * CHANGELOG.md of the repository, in Russian and English on one line (« | »), emoji first:
+ *   ## Не выпущено | Unreleased          (version null)
  *   ## 1.0.0.7 · 26.10.2026
- *   ### Новое
- *   - what changed [migration]
+ *   ### ✨ Новое | New
+ *   - 🧩 что изменилось [migration] | what changed
  * Sections come newest first, as written.
  */
 export function parseChangelog(text: string): NotesRelease[] {
@@ -94,21 +107,25 @@ export function parseChangelog(text: string): NotesRelease[] {
     const h2 = /^##\s+(.+)$/.exec(line);
     if (h2 && !line.startsWith('###')) {
       const m = /^(\d+(?:\.\d+){1,4})(?:\s*[·—–-]\s*(.+))?$/.exec(h2[1]!.trim());
-      rel = { version: m ? m[1]! : null, date: m?.[2]?.trim() ?? null, groups: [] };
       group = null;
+      // only «1.2.3.4 · date» and «Не выпущено | Unreleased» are releases; any other heading (the rules at the top) is skipped
+      if (!m && !/^(не выпущено|unreleased)/i.test(h2[1]!.trim())) { rel = null; continue; }
+      rel = { version: m ? m[1]! : null, date: m?.[2]?.trim() ?? null, groups: [] };
       out.push(rel);
       continue;
     }
     const h3 = /^###\s+(.+)$/.exec(line);
     if (h3 && rel) {
-      group = { title: h3[1]!.trim(), items: [] };
+      const l = splitLang(h3[1]!);
+      group = { title: l.ru, titleEn: l.en, items: [] };
       rel.groups.push(group);
       continue;
     }
     const li = /^[-*]\s+(.+)$/.exec(line);
     if (li && rel) {
-      if (!group) { group = { title: 'Изменения', items: [] }; rel.groups.push(group); }
-      group.items.push({ text: li[1]!.trim(), flags: flagsOf(li[1]!) });
+      if (!group) { group = { title: 'Изменения', titleEn: 'Changes', items: [] }; rel.groups.push(group); }
+      const l = splitLang(li[1]!);
+      group.items.push({ text: l.ru, textEn: l.en, flags: flagsOf(li[1]!) });
     }
   }
   return out;

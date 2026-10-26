@@ -1,9 +1,9 @@
 /** Pieces of Settings → Updates: steps, warnings, release notes, the log and the options. */
 import { useEffect, useState } from 'react';
 import { api, type Changelog, type UpdateHistoryItem, type UpdateInfo, type UpdateNotes, type UpdatePreflight } from '../../api';
-import { t, type TKey } from '../../i18n';
+import { t, useI18n, type TKey } from '../../i18n';
 import { ErrorLine, fmtDateTime, Section, errText, toast } from '../../ui';
-import { groupCommits, isNewerRelease, preflightWarnings, stepStates, upcomingFlags, versionText, type PreflightWarning } from './updateLogic';
+import { cleanNote, groupCommits, isNewerRelease, preflightWarnings, stepStates, upcomingFlags, versionText, type PreflightWarning } from './updateLogic';
 
 /** the four steps of an update; the active one pulses, finished ones carry a tick */
 export function StepList({ stage, finished }: { stage: UpdateInfo['stage']; finished: boolean }) {
@@ -24,8 +24,9 @@ const warnText = (w: PreflightWarning): string =>
 
 /** what the update would interrupt, and the warnings from the notes of the newer versions */
 export function PreflightNote({ pf, current, notes }: { pf: UpdatePreflight | null; current: string | null | undefined; notes: UpdateNotes | null }) {
+  const { lang } = useI18n();
   const warns = preflightWarnings(pf, Date.now());
-  const flags = notes ? upcomingFlags(notes.releases, current) : [];
+  const flags = notes ? upcomingFlags(notes.releases, current, lang) : [];
   if (warns.length === 0 && flags.length === 0) return null;
   return (
     <div className="relative mt-4 space-y-2 rounded-2xl bg-black/20 px-4 py-3 text-sm font-bold" role="note">
@@ -49,6 +50,7 @@ export function NotesCard({ notes, log, logError, current, installedAt }: {
   notes: UpdateNotes | null; log: Changelog | null; logError: string; current: string | null | undefined; installedAt: number | null | undefined;
 }) {
   const [older, setOlder] = useState(false);
+  const { lang } = useI18n();
   const releases = notes?.releases ?? [];
   const released = releases.filter((r) => r.version);
   const unreleased = releases.find((r) => !r.version);
@@ -72,11 +74,11 @@ export function NotesCard({ notes, log, logError, current, installedAt }: {
               </h3>
               {r.groups.map((g) => (
                 <div key={g.title} className="mt-2">
-                  <h4 className="text-sm font-black text-mute">{g.title}</h4>
+                  <h4 className="text-sm font-black text-mute">{lang === 'en' && g.titleEn ? g.titleEn : g.title}</h4>
                   <ul className="mt-1 list-disc space-y-1 pl-5 font-semibold">
                     {g.items.map((it, i) => (
                       <li key={i}>
-                        {it.text.replace(/\s*\[(migration|db|env)\]/gi, '').replace(/^⚠\s*/, '')}
+                        {cleanNote(lang === 'en' && it.textEn ? it.textEn : it.text)}
                         {it.flags.map((f) => <span key={f} className={`pill ${FLAG_PILL[f]} ml-2`}>{t(`upd.fl.${f}` as TKey)}</span>)}
                       </li>
                     ))}
