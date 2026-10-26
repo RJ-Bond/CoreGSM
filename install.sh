@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="5af04a3b1bc9"
+COREGSM_BUILD="66b47a3c1ae3"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.0.0.36"
+COREGSM_VERSION="1.0.0.37"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -8526,6 +8526,7 @@ export const ERRORS = {
   update_version_invalid: 'Некорректная версия',
   update_notify_channel_invalid: 'Некорректный канал',
   game_file_invalid: 'Файл игры не прошёл проверку',
+  news_templates_invalid: 'Шаблоны: не больше 12, у каждого название и текст',
   discord_style_invalid: 'Стиль сообщений: цвет вида #5a4bd1, подпись до 40 символов',
   poll_invalid: 'Проверьте голосование: вопрос от 3 символов, от 2 до 10 разных вариантов, время окончания в будущем',
   poll_not_found: 'Голосование не найдено',
@@ -11462,6 +11463,7 @@ export function registerNews(deps: {
       testChannelId,
       testChannelName: tc?.channelName ?? null,
       testGuildName: tc?.guildName ?? null,
+      crosspost: getSetting('news_crosspost') === '1',
     });
   });
   app.put('/api/news/settings', staff, (req, res) => {
@@ -11469,12 +11471,44 @@ export function registerNews(deps: {
       .object({
         channelId: z.string().regex(/^\d{15,25}$/).nullable().optional(),
         testChannelId: z.union([z.string().regex(/^\d{15,25}$/), z.literal('')]).optional(),
+        crosspost: z.boolean().optional(),
       })
       .safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Неверный канал' });
     if (b.data.channelId !== undefined) setSetting('news_channel_id', b.data.channelId);
     if (b.data.testChannelId !== undefined) setSetting('news_test_channel_id', b.data.testChannelId || null);
-    res.json({ channelId: getSetting('news_channel_id'), testChannelId: getSetting('news_test_channel_id') ?? '' });
+    if (b.data.crosspost !== undefined) setSetting('news_crosspost', b.data.crosspost ? '1' : '0');
+    res.json({ channelId: getSetting('news_channel_id'), testChannelId: getSetting('news_test_channel_id') ?? '', crosspost: getSetting('news_crosspost') === '1' });
+  });
+
+  // ---------- own templates: «save as a template» in the editor ----------
+  const templateSchema = z.array(
+    z.object({
+      id: z.string().regex(/^[a-z0-9-]{1,24}$/),
+      label: z.string().trim().min(1).max(40),
+      apply: z.object({
+        title: z.string().max(256).optional(),
+        description: z.string().max(4000).optional(),
+        color: z.number().int().min(0).max(0xffffff).optional(),
+        footer: z.string().max(2048).optional(),
+        mention: z.enum(['none', 'here', 'everyone']).optional(),
+        fields: z.array(z.object({ name: z.string().max(256), value: z.string().max(1024), inline: z.boolean() })).max(10).optional(),
+      }),
+    }),
+  ).max(12);
+  app.get('/api/news/templates', staff, (_req, res) => {
+    try {
+      const v = templateSchema.safeParse(JSON.parse(getSetting('news_templates') || '[]'));
+      res.json({ items: v.success ? v.data : [] });
+    } catch {
+      res.json({ items: [] });
+    }
+  });
+  app.put('/api/news/templates', staff, (req, res) => {
+    const b = z.object({ items: templateSchema }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'Шаблоны: не больше 12, у каждого название и текст' });
+    setSetting('news_templates', JSON.stringify(b.data.items));
+    res.json({ items: b.data.items });
   });
 
   // ---------- variables, test send, autosave (fixed paths: must come before /api/news/:id) ----------
@@ -11979,7 +12013,7 @@ ${r.sent_at ? `<meta property="article:published_time" content="${new Date(r.sen
       if (action === 'delete') return { id: r.id, action, channelId: r.channel_id, messageId: r.message_id, payload: stored, statusEmbeds: [], test: false };
       // variables are substituted and status cards built right now, at send time
       const { payload, statusEmbeds } = resolvePayload(stored, !!r.test, r.id);
-      return { id: r.id, action, channelId: r.channel_id, messageId: r.message_id, payload, statusEmbeds, test: !!r.test };
+      return { id: r.id, action, channelId: r.channel_id, messageId: r.message_id, payload, statusEmbeds, test: !!r.test, crosspost: !r.test && getSetting('news_crosspost') === '1' };
     });
     res.json(out);
   });
@@ -23137,6 +23171,8 @@ interface NewsItem {
   payload: NewsPayload;
   /** ready Discord embeds (server status cards) appended after the written ones */
   statusEmbeds?: Record<string, unknown>[];
+  /** the channel is an announcement channel and «publish to followers» is on */
+  crosspost?: boolean;
   test?: boolean;
 }
 
@@ -23180,8 +23216,12 @@ async function processNews(): Promise<void> {
         log(`news ${it.id}: message edited`);
       } else {
         const nonce = stableNonce('nw', it.id);
-        const sent = await retrySocket<{ id: string }>(() => channel.send({ ...msg, nonce, enforceNonce: true }));
+        const sent = await retrySocket(() => channel.send({ ...msg, nonce, enforceNonce: true }));
         await reportNews(it.id, { status: 'sent', messageId: sent.id });
+        // an announcement channel: publish to the servers that follow it (a failure here must not undo the post)
+        if (it.crosspost && channel.type === ChannelType.GuildAnnouncement) {
+          await sent.crosspost().then(() => log(`news ${it.id}: published to followers`)).catch((e) => log(`news ${it.id}: crosspost failed:`, (e as Error).message));
+        }
         log(`news ${it.id}: posted`);
       }
     } catch (e) {
@@ -51168,6 +51208,8 @@ export interface NewsSettings {
   testChannelId?: string | null;
   testChannelName?: string | null;
   testGuildName?: string | null;
+  /** publish posts from an announcement channel to the servers that follow it */
+  crosspost?: boolean;
 }
 
 // ---------- accounts and access ----------
@@ -59633,6 +59675,7 @@ export const TEMPLATES: { id: string; label: string; apply: TemplateApply }[] = 
   { id: 'maint', label: '🛠️ Тех. работы', apply: { title: '🛠️ Технические работы', description: 'Сервер временно недоступен: мы проводим плановые работы.', color: 0xf0b232, mention: 'none', fields: [{ name: '🕒 Начало', value: 'ДАТА, ВРЕМЯ', inline: true }, { name: '⏳ Длительность', value: 'около 30 минут', inline: true }], footer: '', timestamp: true } },
   { id: 'update', label: '🚀 Обновление', apply: { title: '🚀 Обновление сервера', description: '**Что нового:**\n- ✨ Новая функция\n- 🐛 Исправлены ошибки\n- ⚡ Улучшена производительность', color: 0x23a55a, mention: 'none', fields: [], footer: '', timestamp: true } },
   { id: 'event', label: '🎉 Ивент', apply: { title: '🎉 Ивент: НАЗВАНИЕ', description: 'Приглашаем всех на ивент! Будет весело.', color: 0xeb459e, mention: 'here', fields: [{ name: '📅 Когда', value: 'ДАТА, ВРЕМЯ', inline: true }, { name: '📍 Где', value: 'Сервер / локация', inline: true }, { name: '🏆 Награда', value: 'Призы победителям', inline: true }], footer: '', timestamp: false } },
+  { id: 'tournament', label: '🏆 Турнир', apply: { title: '🏆 Турнир: НАЗВАНИЕ', description: 'Открываем регистрацию на турнир! Собирайте команды.', color: 0xf0b232, mention: 'here', fields: [{ name: '📅 Старт', value: 'ДАТА, ВРЕМЯ', inline: true }, { name: '👥 Формат', value: 'Команды по N человек', inline: true }, { name: '🏅 Призы', value: 'Места и награды', inline: false }, { name: '📝 Как записаться', value: 'Где и до какого числа', inline: false }], footer: '', timestamp: true } },
   { id: 'giveaway', label: '🎁 Розыгрыш', apply: { title: '🎁 Розыгрыш', description: 'Разыгрываем **ПРИЗ**! Условия ниже.', color: 0xf0b232, mention: 'everyone', fields: [{ name: '📝 Как участвовать', value: 'Поставьте реакцию 🎉 под этим сообщением', inline: false }, { name: '⏰ Итоги', value: 'ДАТА, ВРЕМЯ', inline: false }], footer: 'Удачи!', timestamp: false } },
 ];
 
@@ -72165,6 +72208,13 @@ const en: Record<keyof typeof ru, string> = {
   'ne.delEmbedBtn': 'Delete embed {n}',
   'ne.testGoes': 'The test goes to {where}.',
   'ne.channelN': 'channel {id}',
+  'ne.saveTpl': 'Save as a template',
+  'ne.tplName': 'Template name',
+  'ne.tplSaved': 'Template saved',
+  'ne.tplDelete': 'Delete the template “{name}”',
+  'ne.cover': 'Or a server card picture',
+  'ne.coverPick': 'Choose a server…',
+  'ne.coverNote': 'Inserts the live card of the server (online, players, map). Needs the public address of the panel: Discord cannot see it behind a private panel.',
   'ne.autoSavedAt': 'Draft autosaved at {t}',
   'ne.willPub': 'Will be published {t}.',
   'ne.foundDraft': 'An unsaved draft was found',
@@ -72499,6 +72549,7 @@ const errorsEn: Record<string, string> = {
   update_version_invalid: 'Invalid version',
   update_notify_channel_invalid: 'Invalid channel',
   game_file_invalid: 'The game file did not pass the check',
+  news_templates_invalid: 'Templates: at most 12, each with a name and a text',
   discord_style_invalid: 'Message style: a colour like #5a4bd1, a signature up to 40 characters',
   poll_invalid: 'Check the poll: a question of 3+ characters, 2 to 10 different options, a closing time in the future',
   poll_not_found: 'Poll not found',
@@ -74467,6 +74518,13 @@ const ru = {
   'ne.delEmbedBtn': 'Удалить Embed {n}',
   'ne.testGoes': 'Тест уйдёт в {where}.',
   'ne.channelN': 'канал {id}',
+  'ne.saveTpl': 'Сохранить как шаблон',
+  'ne.tplName': 'Название шаблона',
+  'ne.tplSaved': 'Шаблон сохранён',
+  'ne.tplDelete': 'Удалить шаблон «{name}»',
+  'ne.cover': 'Или картинка-карточка сервера',
+  'ne.coverPick': 'Выбрать сервер…',
+  'ne.coverNote': 'Подставляет живую карточку сервера (онлайн, игроки, карта). Нужен публичный адрес панели: за закрытой панелью Discord её не увидит.',
   'ne.autoSavedAt': 'Черновик автоматически сохранён в {t}',
   'ne.willPub': 'Будет опубликовано {t}.',
   'ne.foundDraft': 'Найден несохранённый черновик',
@@ -79897,6 +79955,7 @@ function WindowModal({ draft, servers, onClose, onSaved }: { draft: Draft; serve
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/News.tsx" << '__COREGSM_EOF__'
+import { Switch } from '../components/Switch';
 import { useState } from 'react';
 import { NewsCalendar } from '../components/news/Calendar';
 import { confirmDialog } from '../confirm';
@@ -79971,6 +80030,11 @@ function NewsList() {
     if (!/^\d{15,25}$/.test(channelId)) return;
     await api('/news/settings', 'PUT', { channelId }).catch((e) => setError(e.message));
     setChanging(false);
+    void load();
+  };
+
+  const setCrosspost = async (crosspost: boolean) => {
+    await api('/news/settings', 'PUT', { crosspost }).catch((e) => setError(e.message));
     void load();
   };
 
@@ -80111,6 +80175,16 @@ function NewsList() {
         )}
       </Strip>
 
+      <Strip>
+        <label className="flex min-w-0 items-center gap-3 font-bold">
+          <Switch id="news-crosspost" checked={!!settings?.crosspost} onChange={(on) => void setCrosspost(on)} />
+          <span className="min-w-0">
+            Публиковать для подписчиков канала-объявлений
+            <span className="block text-xs font-semibold text-mute">Если новости идут в канал типа «Объявления», бот сразу рассылает их серверам, которые подписаны на этот канал.</span>
+          </span>
+        </label>
+      </Strip>
+
       <div className="seg" role="group" aria-label="Вид списка">
         <button type="button" className="seg-item" aria-pressed={view === 'list'} onClick={() => pickView('list')}>Список</button>
         <button type="button" className="seg-item" aria-pressed={view === 'calendar'} onClick={() => pickView('calendar')}>Календарь</button>
@@ -80208,7 +80282,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   api, ApiError, type DiscordGuild, type NewsAuthor, type NewsAutosave, type NewsItem, type NewsPayload, type NewsSettings, type NewsTestResult, type NewsTestStatus, type NewsVariable, type Server,
 } from '../api';
-import { confirmDialog } from '../confirm';
+import { confirmDialog, promptDialog } from '../confirm';
 import { ChannelPicker } from '../components/ChannelPicker';
 import { ChecklistModal } from '../components/news/Checklist';
 import { FieldsBuilder } from '../components/news/FieldsBuilder';
@@ -80218,7 +80292,7 @@ import { LimitsPanel } from '../components/news/LimitsPanel';
 import { Counter, MarkdownField } from '../components/news/MarkdownField';
 import {
   LIMITS, PALETTE, PRESETS, TEMPLATES, applyPreset, applyTemplate as applyTpl, blank, blankEmbed, embedHasContent, fromPayload, gameColors, hex, parseHex, payloadKey, presetOf,
-  newKey, sampleVars, toLocalInput, toPayload, totalLength, uploadImage, type Draft, type EmbedDraft, type VarServer,
+  newKey, sampleVars, toLocalInput, toPayload, totalLength, uploadImage, type Draft, type EmbedDraft, type TemplateApply, type VarServer,
 } from '../components/news/model';
 import { Preview } from '../components/news/Preview';
 import { PublicFeed } from '../components/news/PublicFeed';
@@ -80286,6 +80360,14 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
   const [settings, setSettings] = useState<NewsSettings | null>(null);
   const [servers, setServers] = useState<Server[] | null>(null);
   const [variables, setVariables] = useState<NewsVariable[] | undefined>(undefined);
+  // own templates (saved from a draft) next to the built-in ones
+  type OwnTpl = { id: string; label: string; apply: TemplateApply };
+  const [myTpl, setMyTpl] = useState<OwnTpl[]>([]);
+  useEffect(() => {
+    let dead = false;
+    api<{ items: OwnTpl[] }>('/news/templates').then((r) => { if (!dead && Array.isArray(r.items)) setMyTpl(r.items); }).catch(() => undefined);
+    return () => { dead = true; };
+  }, []);
   const [channelNames, setChannelNames] = useState<Record<string, string>>({});
   const [active, setActive] = useState(0);
   const [mobileTab, setMobileTab] = useState<'editor' | 'preview'>('editor');
@@ -80470,7 +80552,27 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
     }
   };
 
-  const applyTemplate = async (tp: (typeof TEMPLATES)[number]) => {
+  const saveTemplates = async (items: OwnTpl[]) => {
+    try {
+      const r = await api<{ items: OwnTpl[] }>('/news/templates', 'PUT', { items });
+      setMyTpl(r.items);
+    } catch (err) {
+      setError(errText(err));
+    }
+  };
+  const saveAsTemplate = async () => {
+    const name = await promptDialog({ title: t('ne.saveTpl'), label: t('ne.tplName'), confirmLabel: t('common.save') });
+    if (!name?.trim()) return;
+    const src = d.embeds[0] ?? blankEmbed();
+    const apply: TemplateApply = {
+      title: src.title, description: src.description, color: src.color, footer: src.footer, mention: d.mention,
+      fields: src.fields.map((f) => ({ name: f.name, value: f.value, inline: f.inline })).slice(0, 10),
+    };
+    await saveTemplates([...myTpl, { id: `t${Date.now().toString(36)}`, label: name.trim().slice(0, 40), apply }].slice(-12));
+    toast(t('ne.tplSaved'));
+  };
+
+  const applyTemplate = async (tp: { id: string; label: string; apply: TemplateApply }) => {
     if (dirtyText && !(await confirmDialog({ title: t('ne.tplTitle'), text: t('ne.tplText'), confirmLabel: t('ne.replace') }))) return;
     setD((c) => (c ? { ...applyTpl(c, tp.apply), statusServerIds: c.statusServerIds } : c));
     setActive(0);
@@ -80685,6 +80787,13 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
             <Section title={t('ne.sTpl')} hint={t('ne.tplHint')}>
               <div className="flex flex-wrap gap-2">
                 {TEMPLATES.map((tp) => <button key={tp.id} type="button" className="btn btn-soft btn-sm" onClick={() => void applyTemplate(tp)}>{tp.label}</button>)}
+                {myTpl.map((tp) => (
+                  <span key={tp.id} className="inline-flex items-center overflow-hidden rounded-full border border-line">
+                    <button type="button" className="btn btn-soft btn-sm rounded-none!" onClick={() => void applyTemplate(tp)}>{tp.label}</button>
+                    <button type="button" className="btn-icon-ghost btn-icon-sm" aria-label={t('ne.tplDelete', { name: tp.label })} title={t('ne.tplDelete', { name: tp.label })} onClick={() => void saveTemplates(myTpl.filter((x) => x.id !== tp.id))}>×</button>
+                  </span>
+                ))}
+                {embedHasContent(d.embeds[0] ?? blankEmbed()) && <button type="button" className="btn-link text-sm" onClick={() => void saveAsTemplate()}>{t('ne.saveTpl')}</button>}
                 <button type="button" className="btn btn-soft btn-sm" onClick={() => { set({ ...blank(d.channelId), statusServerIds: d.statusServerIds }); setActive(0); }}>{t('ne.clear')}</button>
               </div>
             </Section>
@@ -80744,6 +80853,16 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
                 </div>
                 <ImageDrop id="news-thumb" label={t('ne.thumb')} url={e.thumbnail} upload="" onUrl={(v) => setE({ thumbnail: v })} onUpload={() => undefined} minWidth={80} />
                 <ImageDrop id="news-image" label={t('ne.bigImg')} url={e.imageUrl} upload={e.imageUpload} onUrl={(v) => setE({ imageUrl: v })} onUpload={(n) => setE({ imageUpload: n, imageUrl: n ? '' : e.imageUrl })} allowUpload minWidth={400} />
+                {servers && servers.length > 0 && (
+                  <label className="block">
+                    <span className="label">{t('ne.cover')}</span>
+                    <select className="input" value="" onChange={(ev) => { if (ev.target.value) setE({ imageUrl: `${location.origin}/api/card/${ev.target.value}.png`, imageUpload: '' }); }}>
+                      <option value="">{t('ne.coverPick')}</option>
+                      {servers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                    </select>
+                    <span className="mt-1 block text-sm font-semibold text-mute">{t('ne.coverNote')}</span>
+                  </label>
+                )}
               </div>
             </details>
           </Section>

@@ -251,6 +251,7 @@ export function registerNews(deps: {
       testChannelId,
       testChannelName: tc?.channelName ?? null,
       testGuildName: tc?.guildName ?? null,
+      crosspost: getSetting('news_crosspost') === '1',
     });
   });
   app.put('/api/news/settings', staff, (req, res) => {
@@ -258,12 +259,44 @@ export function registerNews(deps: {
       .object({
         channelId: z.string().regex(/^\d{15,25}$/).nullable().optional(),
         testChannelId: z.union([z.string().regex(/^\d{15,25}$/), z.literal('')]).optional(),
+        crosspost: z.boolean().optional(),
       })
       .safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Неверный канал' });
     if (b.data.channelId !== undefined) setSetting('news_channel_id', b.data.channelId);
     if (b.data.testChannelId !== undefined) setSetting('news_test_channel_id', b.data.testChannelId || null);
-    res.json({ channelId: getSetting('news_channel_id'), testChannelId: getSetting('news_test_channel_id') ?? '' });
+    if (b.data.crosspost !== undefined) setSetting('news_crosspost', b.data.crosspost ? '1' : '0');
+    res.json({ channelId: getSetting('news_channel_id'), testChannelId: getSetting('news_test_channel_id') ?? '', crosspost: getSetting('news_crosspost') === '1' });
+  });
+
+  // ---------- own templates: «save as a template» in the editor ----------
+  const templateSchema = z.array(
+    z.object({
+      id: z.string().regex(/^[a-z0-9-]{1,24}$/),
+      label: z.string().trim().min(1).max(40),
+      apply: z.object({
+        title: z.string().max(256).optional(),
+        description: z.string().max(4000).optional(),
+        color: z.number().int().min(0).max(0xffffff).optional(),
+        footer: z.string().max(2048).optional(),
+        mention: z.enum(['none', 'here', 'everyone']).optional(),
+        fields: z.array(z.object({ name: z.string().max(256), value: z.string().max(1024), inline: z.boolean() })).max(10).optional(),
+      }),
+    }),
+  ).max(12);
+  app.get('/api/news/templates', staff, (_req, res) => {
+    try {
+      const v = templateSchema.safeParse(JSON.parse(getSetting('news_templates') || '[]'));
+      res.json({ items: v.success ? v.data : [] });
+    } catch {
+      res.json({ items: [] });
+    }
+  });
+  app.put('/api/news/templates', staff, (req, res) => {
+    const b = z.object({ items: templateSchema }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'Шаблоны: не больше 12, у каждого название и текст' });
+    setSetting('news_templates', JSON.stringify(b.data.items));
+    res.json({ items: b.data.items });
   });
 
   // ---------- variables, test send, autosave (fixed paths: must come before /api/news/:id) ----------
@@ -768,7 +801,7 @@ ${r.sent_at ? `<meta property="article:published_time" content="${new Date(r.sen
       if (action === 'delete') return { id: r.id, action, channelId: r.channel_id, messageId: r.message_id, payload: stored, statusEmbeds: [], test: false };
       // variables are substituted and status cards built right now, at send time
       const { payload, statusEmbeds } = resolvePayload(stored, !!r.test, r.id);
-      return { id: r.id, action, channelId: r.channel_id, messageId: r.message_id, payload, statusEmbeds, test: !!r.test };
+      return { id: r.id, action, channelId: r.channel_id, messageId: r.message_id, payload, statusEmbeds, test: !!r.test, crosspost: !r.test && getSetting('news_crosspost') === '1' };
     });
     res.json(out);
   });

@@ -544,6 +544,8 @@ export interface NewsSettings {
   testChannelId?: string | null;
   testChannelName?: string | null;
   testGuildName?: string | null;
+  /** publish posts from an announcement channel to the servers that follow it */
+  crosspost?: boolean;
 }
 
 // ---------- accounts and access ----------
