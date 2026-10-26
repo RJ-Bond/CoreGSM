@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="f0d7658cff95"
+COREGSM_BUILD="b434c8284f32"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.0.0.41"
+COREGSM_VERSION="1.0.0.42"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -56799,8 +56799,8 @@ function Steps({ rels, onClose }: { rels: UpdateNotesRelease[]; onClose: () => v
         <div className="flex items-center justify-between gap-2 border-t border-line px-5 py-3">
           <button type="button" className="btn-link" onClick={onClose}>{t('wn.skip')}</button>
           <div className="flex gap-2">
-            {i > 0 && <button type="button" className="btn-soft" onClick={() => setI(i - 1)}>{t('wn.back')}</button>}
-            <button type="button" data-next className="btn-primary" onClick={() => (last ? onClose() : setI(i + 1))}>{last ? t('wn.done') : t('wn.next')}</button>
+            {i > 0 && <button type="button" className="btn btn-soft" onClick={() => setI(i - 1)}>{t('wn.back')}</button>}
+            <button type="button" data-next className="btn" onClick={() => (last ? onClose() : setI(i + 1))}>{last ? t('wn.done') : t('wn.next')}</button>
           </div>
         </div>
       </div>
