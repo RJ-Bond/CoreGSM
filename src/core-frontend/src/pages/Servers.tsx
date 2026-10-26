@@ -12,7 +12,6 @@ import { AddrCopy, CapacityBar, CountReact, ListSkeleton, NoFavsState, NoMatchSt
 import { ServersList, readView, saveView, type ListSort, type SelectProps, type ServersView } from '../components/servers/ServerViews';
 import CompareChart from '../components/servers/CompareChart';
 import { QuickMenu } from '../components/servers/QuickMenu';
-import { AttentionStrip } from '../components/servers/AttentionStrip';
 import { PulseStrip } from '../components/servers/PulseStrip';
 import { WhatsNew, useWhatsNewOpen } from '../components/servers/WhatsNew';
 import { BulkBar } from '../components/servers/BulkBar';
@@ -151,7 +150,22 @@ function LiveBadge({ at, onRefresh, busy }: { at: number; onRefresh: () => void;
   );
 }
 
+/** a phone (under the Tailwind `sm` width): the tiles become compact rows */
+function useIsPhone(): boolean {
+  const q = '(max-width: 639px)';
+  const [on, setOn] = useState(() => typeof window !== 'undefined' && !!window.matchMedia?.(q).matches);
+  useEffect(() => {
+    const m = window.matchMedia?.(q);
+    if (!m) return;
+    const f = () => setOn(m.matches);
+    m.addEventListener('change', f);
+    return () => m.removeEventListener('change', f);
+  }, []);
+  return on;
+}
+
 function ServerList() {
+  const phone = useIsPhone();
   const { me, isAdmin } = useAuth();
   const [favs, setFavs] = useState<number[]>([]);
   useEffect(() => {
@@ -245,9 +259,8 @@ function ServerList() {
   const hero = picked?.server ?? null;
   const heroReason: HeroReason = picked?.reason ?? null;
   // servers with a problem sit in a compact strip above the tiles (unless the hero is itself the problem: then every server is)
-  const attention = heroReason === 'attention' ? [] : sorted.filter(needsAttention);
-  const attentionIds = new Set(attention.map((s) => s.id));
-  const rest = sorted.filter((s) => s.id !== hero?.id && !attentionIds.has(s.id));
+  // (the problem servers are named in the alert row of the pulse strip and sit first among the tiles)
+  const rest = sorted.filter((s) => s.id !== hero?.id).sort((a, b) => Number(needsAttention(b)) - Number(needsAttention(a)));
   const offlineCount = servers.filter((s) => !s.online).length;
   const liveLine = servers.length ? t('srv.sub.live', { n: online.reduce((a, s) => a + s.players, 0), s: online.length, total: servers.length }) : t('srv.sub.empty');
   const favCount = servers.filter((s) => favs.includes(s.id)).length;
@@ -282,6 +295,7 @@ function ServerList() {
 
   const open = (s: Server) => { navigate(`/servers/${s.id}`); };
 
+  const Tile = phone ? PhoneRow : SmallTile;
   const tileProps = (s: Server, idx: number) => ({
     rx,
     s,
@@ -308,14 +322,12 @@ function ServerList() {
       </PageHead>
 
       {loaded && servers.length > 0 && (
-        <PulseStrip servers={servers} overview={overview} uptime={upAvg} now={overviewAt || updatedAt} />
+        <PulseStrip servers={servers} overview={overview} uptime={upAvg} now={overviewAt || updatedAt} onOpen={open} />
       )}
 
 
-      {effView === 'tiles' && effFilter === 'all' && attention.length > 0 && !selOn && <AttentionStrip servers={attention} onOpen={open} />}
-
       {servers.length > 0 && (
-        <div className="srv-bar">
+        <div className="srv-bar" id="srv-list">
           {servers.length > 1 ? (
             <nav className="seg fade-x no-scrollbar flex w-fit max-w-full overflow-x-auto" aria-label="Фильтр серверов">
               {([
@@ -387,14 +399,14 @@ function ServerList() {
 
             {effView === 'tiles' && effFilter !== 'all' && visible.length > 0 && (
               <div className="fade-in srv-grid" data-size={size}>
-                {filtered.map((s, i) => <SmallTile key={s.id} {...tileProps(s, i)} />)}
+                {filtered.map((s, i) => <Tile key={s.id} {...tileProps(s, i)} />)}
               </div>
             )}
 
             {effView === 'tiles' && effFilter === 'all' && (
               <div className="fade-in srv-grid" data-size={size}>
                 {hero && <HeroTile key={hero.id} {...tileProps(hero, 0)} reason={heroReason} />}
-                {rest.map((s, i) => <SmallTile key={s.id} {...tileProps(s, i + 1)} />)}
+                {rest.map((s, i) => <Tile key={s.id} {...tileProps(s, i + 1)} />)}
               </div>
             )}
           </div>
@@ -532,6 +544,38 @@ function HeroTile({ s, idx, uptime, downSince, fav, onFav, onOpen, rx, reason, s
   );
 }
 
+/** the phone version of a tile: one row (emblem, name with a thin bar, players, status dot) at least 56 px high */
+function PhoneRow({ s, idx, fav, onFav, onOpen, select }: { rx: Reactions; s: Server; idx: number; fav: boolean | null; onFav: () => void; onOpen: () => void; select?: SelectProps; uptime?: number; downSince?: number }) {
+  useI18n();
+  const lag = isLag(s);
+  const tone = !s.hasStatus ? 'bg-mute' : !s.online ? 'bg-bad' : lag || s.maintenance ? 'bg-warn' : 'bg-ok';
+  return (
+    <article
+      className={`srv-row tile-in relative ${select?.has(s.id) ? 'srv-selected' : ''} ${s.online ? '' : 'is-down'}`}
+      style={stagger(idx)}
+      onClick={select?.on ? () => select.toggle(s.id) : onOpen}
+    >
+      {select?.on && <CardCheck s={s} select={select} className="left-1 top-1" />}
+      <GameAvatar game={s.game} size={40} vtId={s.id} />
+      <div className="srv-row-main">
+        <h3 className="truncate text-fs-base font-extrabold leading-tight" title={s.name}>
+          <a href={`/servers/${s.id}`} onClick={linkClick(s, select)}>{s.name}</a>
+        </h3>
+        {s.online ? (
+          <CapacityBar className="srv-row-bar" players={s.players} max={s.maxPlayers} color="rgb(var(--ink) / .5)" showPct={false} slots={false} />
+        ) : (
+          <p className="truncate text-fs-sm font-semibold text-mute">{s.hasStatus ? `Не отвечает · ${ago(s.updatedAt)}` : 'Ожидаем первый ответ'}</p>
+        )}
+      </div>
+      <div className="srv-row-count">
+        {s.online ? <><b>{s.players}</b><span>/{s.maxPlayers}</span></> : <span>–</span>}
+      </div>
+      <span className={`srv-row-dot ${tone}`} aria-hidden />
+      {fav != null && <FavButton on={fav} name={s.name} onClick={onFav} className={fav ? 'text-warn' : 'text-mute'} />}
+    </article>
+  );
+}
+
 function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince }: { rx: Reactions; s: Server; idx: number; fav: boolean | null; onFav: () => void; onOpen: () => void; select?: SelectProps; uptime?: number; downSince?: number }) {
   const [who, setWho] = useState(false);
   const [c1, c2] = gameGradient(s.game);
@@ -540,15 +584,16 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince }
   const lag = isLag(s);
   const r = reactionOf(rx, s.id);
   const emb = emblemStyle(s.coverUrl, s.game);
+  const nearFull = s.online && s.maxPlayers > 0 && s.players / s.maxPlayers >= 0.8;
   return (
     <article
-      className={`srv-tile tile tile-in tile-hover relative flex cursor-pointer flex-col gap-2 p-3 pb-4 ${select?.has(s.id) ? 'srv-selected' : ''} ${s.online ? '' : 'is-down'} ${s.online && s.maxPlayers > 0 && s.players / s.maxPlayers >= 0.8 ? 'is-busy' : ''}`}
+      className={`srv-tile tile tile-in tile-hover relative flex cursor-pointer flex-col gap-2 p-3 pb-4 ${select?.has(s.id) ? 'srv-selected' : ''} ${s.online ? '' : 'is-down'} ${nearFull ? 'is-busy' : ''} ${s.online && lag ? 'is-lag' : ''}`}
       // the fuller the server, the stronger its glow in the game's colour
       style={{ ...stagger(idx), ['--gc' as string]: accent, ['--fill' as string]: s.online && s.maxPlayers > 0 ? Math.min(1, s.players / s.maxPlayers).toFixed(2) : '0' }}
       onClick={select?.on ? () => select.toggle(s.id) : onOpen}
     >
       {select?.on && <CardCheck s={s} select={select} className="left-1 top-1" />}
-      <div className={`${emb.className} relative flex h-[124px] items-start justify-between rounded-ui-lg p-3 ${s.online ? '' : 'offline-cover'}`} style={{ ...emb.style, background: coverBackground(s.coverUrl, gameBackdrop(c1, 135), { small: true, game: s.game }), boxShadow: `inset 0 -3px 0 ${accent}` }}>
+      <div className={`${emb.className} relative flex h-[124px] items-start justify-between rounded-ui-lg p-3 ${s.online ? '' : 'offline-cover'}`} style={{ ...emb.style, background: coverBackground(s.coverUrl, gameBackdrop(c1, 135), { small: true, game: s.game }) }}>
         <span aria-hidden className="cover-scrim" />
         <GameAvatar game={s.game} size={46} glass vtId={s.id} />
         <div className="flex items-center gap-0.5">
@@ -559,23 +604,23 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince }
       </div>
 
       <div className="px-1.5">
-        <h3 className="line-clamp-2 wrap-break-word text-fs-lg font-extrabold leading-tight" title={s.name}>
+        <h3 className="srv-name truncate text-fs-lg font-extrabold leading-tight" title={s.name}>
           <a href={`/servers/${s.id}`} onClick={linkClick(s, select)} className="hover:text-link">{s.name}</a>
         </h3>
-        <div className="srv-chips"><span className="truncate">{gameLabel(s.game)}</span>{s.online && s.map && <span className="srv-chip" title={`Карта: ${s.map}`}>{s.map}</span>}{s.version && <span className="srv-chip" title="Версия">v{s.version}</span>}</div>
+        <div className="srv-chips">{nearFull && <span className="srv-badge-full" title={t('srv.cap.nearFull', { pct: Math.round((s.players / s.maxPlayers) * 100) })}>{t('srv.tile.full')}</span>}<span className="truncate">{gameLabel(s.game)}</span>{s.online && s.map && <span className="srv-chip" title={`Карта: ${s.map}`}>{s.map}</span>}{s.version && <span className="srv-chip" title="Версия">v{s.version}</span>}</div>
         {s.maintenance && <MaintenanceChip m={s.maintenance} className="mt-1" />}
       </div>
 
       {s.online ? (
         <>
-          <div className={`flex items-baseline gap-1.5 px-1.5 ${s.players === 0 ? 'srv-zero' : ''}`}>
+          <div className={`srv-count flex items-baseline gap-1.5 px-1.5 ${s.players === 0 ? 'srv-zero' : ''}`}>
             <CountReact r={r}><AnimatedNumber value={s.players} className="text-[38px] font-extrabold leading-none tracking-[-0.03em]" /></CountReact>
             <span className="text-fs-xl font-bold text-mute">/ {s.maxPlayers}</span>
             <TrendChip serverId={s.id} />
             {(s.playerNames?.length ?? 0) > 0 && <button type="button" className="srv-who" aria-expanded={who} onClick={(e) => { e.stopPropagation(); setWho((v) => !v); }}>{t('srv.who')}</button>}
             <span className={`ml-auto inline-flex items-center gap-1.5 text-fs-sm font-bold ${s.ping != null ? TONE_TEXT[pingTone(s.ping).tone] : 'text-mute'}`}>{s.ping != null && <><PingBars ping={s.ping} tone={pingTone(s.ping).tone} />{`${s.ping} мс`}</>}</span>
           </div>
-          <CapacityBar className="px-1.5" players={s.players} max={s.maxPlayers} color={accent} />
+          <CapacityBar className="px-1.5" players={s.players} max={s.maxPlayers} color="rgb(var(--ink) / .5)" />
           {who && <PlayerNames className="px-1.5" names={s.playerNames ?? []} max={12} />}
           {s.players === 0
             ? <p className="srv-empty-now"><i aria-hidden />{t('srv.empty.now')}</p>

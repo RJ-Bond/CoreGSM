@@ -7,11 +7,11 @@ import type { Server } from '../../api';
 import { chartPoints, chartStart, hasEnoughHistory, pulseOf, type OverviewData, type PulseState } from './overviewLogic';
 
 const ICON: Record<PulseState, JSX.Element> = {
-  ok: <IconOk size={24} />,
-  warn: <IconWarn size={24} />,
-  bad: <IconError size={24} />,
-  maint: <IconWrench size={24} />,
-  wait: <IconClock size={24} />,
+  ok: <IconOk size={20} />,
+  warn: <IconWarn size={20} />,
+  bad: <IconError size={20} />,
+  maint: <IconWrench size={20} />,
+  wait: <IconClock size={20} />,
 };
 
 function PlayersChart({ data, now }: { data: OverviewData | null; now: number }) {
@@ -82,7 +82,7 @@ function PlayersChart({ data, now }: { data: OverviewData | null; now: number })
   );
 }
 
-export function PulseStrip({ servers, overview, uptime, now }: { servers: Server[]; overview: OverviewData | null; uptime: number | null; now: number }) {
+export function PulseStrip({ servers, overview, uptime, now, onOpen }: { servers: Server[]; overview: OverviewData | null; uptime: number | null; now: number; onOpen?: (s: Server) => void }) {
   useI18n();
   const { state, problems } = pulseOf(servers);
   const online = servers.filter((s) => s.online);
@@ -90,11 +90,12 @@ export function PulseStrip({ servers, overview, uptime, now }: { servers: Server
   const pings = online.filter((s) => s.ping != null).map((s) => s.ping as number);
   const avg = pings.length ? Math.round(pings.reduce((a, b) => a + b, 0) / pings.length) : null;
 
-  let title: string;
+  // problems are one slim alert row (icon, count, names, arrow); the strip below stays neutral
+  const alert = state === 'bad' || state === 'warn';
+  let title = '';
   let sub = '';
-  if (state === 'bad' || state === 'warn') {
-    // the count here, the servers and the reasons in the «Needs attention» strip below (no second copy of them)
-    title = t('srv.pulse.problemsN', { n: problems.length, total: servers.length });
+  if (alert) {
+    title = t(state === 'bad' ? 'srv.pulse.downN' : 'srv.pulse.slowN', { n: problems.length, total: servers.length });
     const names = problems.slice(0, 2).map((s) => s.name).join(', ');
     sub = problems.length > 2 ? `${names} ${t('srv.pulse.more', { n: problems.length - 2 })}` : names;
   } else if (state === 'maint') {
@@ -115,15 +116,34 @@ export function PulseStrip({ servers, overview, uptime, now }: { servers: Server
     const per = Math.max(1, Math.round(3_600_000 / overview.bucketMs));
     if (pts.length > per) trend = pts[pts.length - 1].players - pts[pts.length - 1 - per].players;
   }
+  const first = problems[0];
   return (
+    <div className="pulse-wrap">
+      {alert && first && (
+        <a
+          className={`pulse-alert pulse-alert-${state}`}
+          href={problems.length === 1 ? `/servers/${first.id}` : '#srv-list'}
+          onClick={(e) => {
+            if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+            e.preventDefault();
+            if (problems.length === 1) onOpen?.(first);
+            else document.getElementById('srv-list')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          }}
+        >
+          <span className="pulse-alert-icon" aria-hidden>{ICON[state]}</span>
+          <span className="pulse-alert-title">{title}</span>
+          <span className="pulse-alert-names">{sub}</span>
+          <span className="pulse-alert-go" aria-hidden>→</span>
+        </a>
+      )}
     <section className={`pulse pulse-${state}`} aria-label={t('srv.pulse.label')}>
-      <div className="pulse-state" role="status">
-        <span className="pulse-icon" aria-hidden>{ICON[state]}</span>
-        <div className="min-w-0">
-          <div className="pulse-title">{title}</div>
-          {sub && <div className="pulse-sub">{sub}</div>}
+      {!alert && (
+        <div className="pulse-state" role="status">
+          <span className="pulse-icon" aria-hidden>{ICON[state]}</span>
+          <span className="pulse-title">{title}</span>
+          {sub && <span className="pulse-sub">{sub}</span>}
         </div>
-      </div>
+      )}
       <dl className="pulse-nums">
         <div>
           <dt>{t('srv.pulse.players')}</dt>
@@ -144,5 +164,6 @@ export function PulseStrip({ servers, overview, uptime, now }: { servers: Server
       </dl>
       <PlayersChart data={overview} now={now} />
     </section>
+    </div>
   );
 }
