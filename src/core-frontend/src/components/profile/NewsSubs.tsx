@@ -1,7 +1,7 @@
 /** Profile: which rubrics of the news the account wants to hear about (the bell, the devices and Discord). */
 import { useEffect, useState } from 'react';
 import { api, type NewsCategory } from '../../api';
-import { ErrorLine, Section, toast } from '../../ui';
+import { ErrorLine, Section, toast, errText } from '../../ui';
 import { categoryLabel } from '../news/NewsParts';
 
 const RUBRICS: NewsCategory[] = ['announcement', 'wipe', 'update', 'event', 'maintenance', 'other'];
@@ -22,7 +22,7 @@ export function NewsSubsCard() {
       toast(r.categories.length ? 'Подписка на новости сохранена' : 'Подписка на новости выключена');
     } catch (e) {
       setPicked(before);
-      setError((e as Error).message);
+      setError(errText(e));
     }
   };
   const flip = (c: NewsCategory) => void save(picked?.includes(c) ? picked.filter((x) => x !== c) : [...(picked ?? []), c]);

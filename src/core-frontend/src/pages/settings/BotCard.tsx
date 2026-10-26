@@ -2,7 +2,7 @@
 import { type FormEvent, useState } from 'react';
 import { api, type BotStatus, type SettingsInfo } from '../../api';
 import { confirmDialog } from '../../confirm';
-import { CopyButton, ErrorLine, Field, FieldError, InviteButton, noAutofill, ProxyField, type ProxyType, Section, toast, usePoll } from '../../ui';
+import { CopyButton, ErrorLine, Field, FieldError, InviteButton, noAutofill, ProxyField, type ProxyType, Section, toast, usePoll, errText } from '../../ui';
 
 export function BotPill({ status, tokenSet }: { status: BotStatus | null; tokenSet: boolean }) {
   if (!tokenSet) return <span className="pill pill-mute">ТОКЕН НЕ ЗАДАН</span>;
@@ -84,7 +84,7 @@ export function BotCard() {
       setSaved(true);
       toast('Настройки сохранены');
     } catch (err) {
-      setError((err as Error).message);
+      setError(errText(err));
     } finally {
       setBusy(false);
     }
@@ -95,7 +95,7 @@ export function BotCard() {
     try {
       setInfo(await api<SettingsInfo>('/settings', 'PUT', { discordToken: '' }));
     } catch (err) {
-      setError((err as Error).message);
+      setError(errText(err));
     }
   };
 
@@ -104,7 +104,7 @@ export function BotCard() {
     try {
       setInfo(await api<SettingsInfo>('/settings', 'PUT', { discordClientSecret: '' }));
     } catch (err) {
-      setError((err as Error).message);
+      setError(errText(err));
     }
   };
 

@@ -5,7 +5,7 @@ import { useAuth } from '../../auth';
 import { confirmDialog, promptDialog } from '../../confirm';
 import { t } from '../../i18n';
 import { useDraft } from '../../ui/useDraft';
-import { ago, Button, ErrorLine, fmtDateTime, toast } from '../../ui';
+import { ago, Button, ErrorLine, fmtDateTime, toast, errText } from '../../ui';
 import { buildThread, parseComment, visibleCount, type CommentItem, type CommentSort } from './commentMd';
 
 interface Thread { enabled: boolean; locked: boolean; canPost: boolean; staff: boolean; items: CommentItem[] }
@@ -85,7 +85,7 @@ function Compose({ initial = '', placeholder, submit, cancel, autoFocus, label, 
       await submit(text.trim());
       clearText();
     } catch (e) {
-      setError((e as Error).message);
+      setError(errText(e));
     }
     setBusy(false);
   };

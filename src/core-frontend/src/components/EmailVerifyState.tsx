@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { api } from '../api';
 import { useAuth } from '../auth';
 import { t } from '../i18n';
-import { toast } from '../ui';
+import { toast, errText } from '../ui';
 
 /** Under the e-mail field of the profile: whether the saved address is confirmed, and a button to send the letter. */
 export default function EmailVerifyState() {
@@ -19,7 +19,7 @@ export default function EmailVerifyState() {
       await api('/me/email/verify-request', 'POST');
       toast(t('pf.emailv.sent', { email: me.email ?? '' }));
     } catch (err) {
-      setError((err as Error).message);
+      setError(errText(err));
     } finally {
       setBusy(false);
     }

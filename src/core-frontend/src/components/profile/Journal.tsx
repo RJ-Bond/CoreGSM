@@ -3,7 +3,7 @@ import { api, type JournalItem } from '../../api';
 import { confirmDialog } from '../../confirm';
 import type { TKey } from '../../i18n';
 import { t } from '../../i18n';
-import { ago, fmtDateTime, IconLogout, Section, toast } from '../../ui';
+import { ago, fmtDateTime, IconLogout, Section, toast, fail } from '../../ui';
 import { deviceName } from './format';
 import { JournalIcon } from './icons';
 import { isArray, useFetched } from './useFetched';
@@ -56,7 +56,7 @@ export function JournalCard({ onRevoked }: { onRevoked?: () => void }) {
       onRevoked?.();
       reload();
     } catch (e) {
-      toast((e as Error).message, 'err');
+      fail(e);
     } finally {
       setBusy(false);
     }

@@ -24,7 +24,7 @@ import { deviceName } from '../components/profile/format';
 import { IconUser } from '../icons';
 import { IcoDiscord, IcoGamepad, IcoHome, IcoLogout, IcoShield, IcoSliders } from '../components/profile/bits';
 import { isNewDeviceDismissed } from '../security';
-import { ago, Button, ErrorLine, isLag, FieldError, GameAvatar, PageHead, PasswordField, PasswordStrength, Section, StatusPill, UserAvatar, toast, useRoute } from '../ui';
+import { ago, Button, ErrorLine, isLag, FieldError, GameAvatar, PageHead, PasswordField, PasswordStrength, Section, StatusPill, UserAvatar, toast, useRoute, errText } from '../ui';
 
 type Tab = 'overview' | 'player' | 'look' | 'security';
 const TABS: { id: Tab; label: TKey; icon: ReactNode }[] = [
@@ -225,7 +225,7 @@ function PasswordCard({ hasPassword, discordLinked, onChanged }: { hasPassword: 
       setAgain('');
       await onChanged();
     } catch (err) {
-      setError((err as Error).message);
+      setError(errText(err));
     } finally {
       setBusy(false);
     }
@@ -275,7 +275,7 @@ function EmailCard({ onChanged }: { onChanged: () => Promise<void> }) {
       setCurrent('');
       await onChanged();
     } catch (err) {
-      setError((err as Error).message);
+      setError(errText(err));
     } finally {
       setBusy(false);
     }
@@ -316,7 +316,7 @@ function DiscordCard({ onChanged }: { onChanged: () => Promise<void> }) {
       toast(t('pf.discord.unlinked'));
       await onChanged();
     } catch (err) {
-      setError((err as Error).message);
+      setError(errText(err));
     } finally {
       setBusy(false);
     }

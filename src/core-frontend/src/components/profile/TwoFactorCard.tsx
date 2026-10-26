@@ -2,7 +2,7 @@
 import { type FormEvent, useCallback, useEffect, useState } from 'react';
 import { api } from '../../api';
 import { t } from '../../i18n';
-import { Button, ErrorLine, PasswordField, toast } from '../../ui';
+import { Button, ErrorLine, PasswordField, toast, errText } from '../../ui';
 import QrCode from '../server/QrCode';
 
 interface Status { enabled: boolean; recoveryLeft: number; hasPassword: boolean }
@@ -21,7 +21,7 @@ export function TwoFactorCard() {
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
-    try { setSt(await api<Status>('/auth/2fa')); } catch (e) { setError((e as Error).message); }
+    try { setSt(await api<Status>('/auth/2fa')); } catch (e) { setError(errText(e)); }
   }, []);
   useEffect(() => { void load(); }, [load]);
 
@@ -29,7 +29,7 @@ export function TwoFactorCard() {
 
   const start = async () => {
     setError(''); setBusy(true);
-    try { setSetup(await api<Setup>('/auth/2fa/setup', 'POST')); } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
+    try { setSetup(await api<Setup>('/auth/2fa/setup', 'POST')); } catch (e) { setError(errText(e)); } finally { setBusy(false); }
   };
 
   const enable = async (e: FormEvent) => {
@@ -41,7 +41,7 @@ export function TwoFactorCard() {
       reset();
       setCodes(r.recoveryCodes);
       await load();
-    } catch (err) { setError((err as Error).message); } finally { setBusy(false); }
+    } catch (err) { setError(errText(err)); } finally { setBusy(false); }
   };
 
   const disable = async (e: FormEvent) => {
@@ -52,7 +52,7 @@ export function TwoFactorCard() {
       toast(t('pf.2fa.done'));
       reset();
       await load();
-    } catch (err) { setError((err as Error).message); } finally { setBusy(false); }
+    } catch (err) { setError(errText(err)); } finally { setBusy(false); }
   };
 
   const copy = async () => {

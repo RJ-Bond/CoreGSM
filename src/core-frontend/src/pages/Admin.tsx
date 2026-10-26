@@ -4,7 +4,7 @@ import { useAuth } from '../auth';
 import { t, useI18n } from '../i18n';
 import type { MaintenanceWindow } from '../maintenance';
 import { gameLabel } from '../games';
-import { AdminPage as PageStack, Empty, ErrorLine, GameAvatar, IconArrowUp, LoadError, IconClose, IconEdit, IconRefresh, IconServers, IconTrash, PageHead, StatusPill, ago, toast, undoable, usePoll, navigate } from '../ui';
+import { AdminPage as PageStack, Empty, ErrorLine, GameAvatar, IconArrowUp, LoadError, IconClose, IconEdit, IconRefresh, IconServers, IconTrash, PageHead, StatusPill, ago, toast, undoable, usePoll, navigate, fail } from '../ui';
 import { ADMIN_GROUPS, ADMIN_SECTIONS, OVERVIEW_SECTION, SECTION_PERM, START_SECTION, type AdminSection } from './adminNav';
 import { PINS_KEY, PINS_MAX, RECENT_KEY, RECENT_MAX, movePin, pushRecent, readIds, togglePin, writeIds } from './adminShortcuts';
 import AdminOverview from './AdminOverview';
@@ -480,7 +480,7 @@ function ServersManage({ sub }: { sub: string }) {
         toast(t('adm.tbl.maintStarted'));
       }
     } catch (e) {
-      toast((e as Error).message, 'err');
+      fail(e);
     }
     await load();
     api<MaintenanceWindow[]>('/maintenance').then(setWindows).catch(() => undefined);

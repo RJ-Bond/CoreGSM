@@ -4,7 +4,7 @@ import { delta, dayKey, healthScore } from './adminLogic';
 import { api, type BackupInfo, type BotStatus, type CertInfo, type Server, type UpdateInfo, type UserRow } from '../api';
 import type { OverviewData } from '../components/servers/overviewLogic';
 import { t, useI18n } from '../i18n';
-import { AdminPage, Button, PageHead, Section, SmoothArea, ago, fmtDateTime, toast, usePoll } from '../ui';
+import { AdminPage, Button, PageHead, Section, SmoothArea, ago, fmtDateTime, toast, usePoll, fail } from '../ui';
 import { Icon } from '../icons';
 import { downloadFile } from './Backups';
 
@@ -190,7 +190,7 @@ export default function AdminOverview() {
       await downloadFile('/backup', 'coregsm-backup.tar.gz');
       toast(t('adm.ov.backupDone'));
     } catch (e) {
-      toast((e as Error).message, 'err');
+      fail(e);
     }
     setBusy(null);
   };

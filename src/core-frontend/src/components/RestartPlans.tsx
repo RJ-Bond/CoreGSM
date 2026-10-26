@@ -6,7 +6,7 @@ import { useEffect, useState } from 'react';
 import { api, type Server } from '../api';
 import { useAuth } from '../auth';
 import { confirmDialog } from '../confirm';
-import { Button, ErrorLine, Field, GameAvatar, Modal, Section, Switch, fmtDateTime, toast } from '../ui';
+import { Button, ErrorLine, Field, GameAvatar, Modal, Section, Switch, fmtDateTime, toast, errText } from '../ui';
 import { ChannelPicker } from './ChannelPicker';
 import '../styles/admin.css';
 
@@ -97,7 +97,7 @@ function PlanModal({ server, plan, onClose, onSaved }: { server: Server; plan: P
       toast('Перезапуски сохранены');
       onClose();
     } catch (e) {
-      setError((e as Error).message);
+      setError(errText(e));
     } finally {
       setBusy('');
     }
