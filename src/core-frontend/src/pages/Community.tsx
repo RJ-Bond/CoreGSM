@@ -14,6 +14,7 @@ import { AnimatedNumber, CopyButton, Empty, GameAvatar, MiniSpark, PageHead, ago
 import '../styles/analytics.css';
 import '../styles/community.css';
 import '../styles/gallery.css';
+import PollsCard from '../components/PollsCard';
 import { Lightbox, type Shot } from './Gallery';
 
 const IconPeople = () => (
@@ -563,6 +564,8 @@ export default function CommunityPage() {
       <SectionNav items={nav} />
 
       <Greeting />
+
+      <PollsCard />
 
       <section id="cm-now" className="tile cm-hero fade-in">
         <div className="cm-hero-main">

@@ -345,7 +345,18 @@ interface DeliveryItem {
     embed?: ConstructorParameters<typeof EmbedBuilder>[0];
     /** link buttons under the message (e.g. «Подробности на сайте» in the weekly digest) */
     actions?: { label: string; url: string }[];
+    /** buttons the bot answers itself (poll votes) */
+    buttons?: { customId: string; label: string }[];
   };
+}
+/** buttons answered by the bot (a poll): five to a row */
+function actionRows(buttons: { customId: string; label: string }[] | undefined) {
+  const list = (buttons ?? []).filter((b) => /^poll:\d+:\d+$/.test(b.customId) && b.label).slice(0, 10);
+  const rows: ActionRowBuilder<ButtonBuilder>[] = [];
+  for (let i = 0; i < list.length; i += 5) {
+    rows.push(new ActionRowBuilder<ButtonBuilder>().addComponents(list.slice(i, i + 5).map((b) => new ButtonBuilder().setStyle(ButtonStyle.Secondary).setCustomId(b.customId).setLabel(b.label.slice(0, 80)))));
+  }
+  return rows;
 }
 /** one row of link buttons (Discord allows 5 per row; https links only) */
 function linkRows(actions: { label: string; url: string }[] | undefined) {
@@ -383,7 +394,7 @@ async function processDeliveries(): Promise<void> {
           enforceNonce: true,
           content: it.payload.content || undefined,
           embeds: it.payload.embed ? [new EmbedBuilder(it.payload.embed)] : [],
-          components: linkRows(it.payload.actions),
+          components: [...actionRows(it.payload.buttons), ...linkRows(it.payload.actions)],
           allowedMentions: { parse: ((it.payload.mention ?? 'none') === 'none' ? [] : ['everyone']) as 'everyone'[] },
         });
       }
