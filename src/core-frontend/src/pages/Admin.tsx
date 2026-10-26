@@ -173,17 +173,28 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
   const navRef = useRef<HTMLElement>(null);
   const [ind, setInd] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
   useLayoutEffect(() => {
-    const measure = () => {
+    const measure = (center = true) => {
       const nav = navRef.current;
       const el = nav?.querySelector<HTMLElement>('.adm-link[aria-current="page"]');
       if (!nav || !el || home) { setInd(null); return; }
-      setInd({ x: el.offsetLeft, y: el.offsetTop, w: el.offsetWidth, h: el.offsetHeight });
+      // measured against the nav itself: a link inside a positioned wrapper (.adm-item) has an offsetLeft of its own wrapper
+      const nb = nav.getBoundingClientRect();
+      const eb = el.getBoundingClientRect();
+      const x = eb.left - nb.left + nav.scrollLeft - nav.clientLeft;
+      const y = eb.top - nb.top + nav.scrollTop - nav.clientTop;
+      setInd({ x, y, w: eb.width, h: eb.height });
       // a phone shows the sections as a row that scrolls: keep the current one in the middle of it
-      if (nav.scrollWidth > nav.clientWidth + 2 && nav.scrollHeight <= nav.clientHeight + 2) nav.scrollTo({ left: Math.max(0, el.offsetLeft - (nav.clientWidth - el.offsetWidth) / 2), behavior: 'auto' });
+      if (center && nav.scrollWidth > nav.clientWidth + 2 && nav.scrollHeight <= nav.clientHeight + 2) nav.scrollTo({ left: Math.max(0, x - (nav.clientWidth - eb.width) / 2), behavior: 'auto' });
     };
     measure();
-    window.addEventListener('resize', measure);
-    return () => window.removeEventListener('resize', measure);
+    const onResize = () => measure();
+    window.addEventListener('resize', onResize);
+    // the links change width after the first measure (the font arrives, a badge appears): the pill and the scroll follow
+    let alive = true;
+    void document.fonts?.ready.then(() => { if (alive) measure(); });
+    const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(() => measure(false));
+    navRef.current?.querySelectorAll('.adm-link').forEach((l) => ro?.observe(l));
+    return () => { alive = false; ro?.disconnect(); window.removeEventListener('resize', onResize); };
   }, [current, home, pins, recent, badges, isAdmin, rail]);
   // «g» then a letter: go to a section (not while typing)
   useEffect(() => {

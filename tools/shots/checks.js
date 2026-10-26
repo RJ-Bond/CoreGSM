@@ -26,13 +26,24 @@
     const cs = getComputedStyle(el);
     const r = el.getBoundingClientRect();
     if (!shown(el, cs, r) || cs.position === 'fixed') continue;
+    // inside a closed <details> the browser hides the content (it still has a box, but no text)
+    const det = el.closest('details:not([open])');
+    if (det && !el.closest('summary')) continue;
     if (r.right > vw + 1 && !inScroller(el)) wide.push(`${name(el)} right=${Math.round(r.right)}`);
     // text cut off by its box with no ellipsis: it just disappears
     if (r.width > 4 && (cs.overflowX === 'hidden' || cs.overflowX === 'clip') && el.scrollWidth > el.clientWidth + 2 && cs.textOverflow !== 'ellipsis' && el.children.length === 0 && (el.textContent || '').trim()) {
       clipped.push(`${name(el)} ${el.scrollWidth}>${el.clientWidth}`);
     }
     if (phone && el.matches('button, [role=tab], select, input:not([type=hidden]):not([type=checkbox]):not([type=radio])') && (r.width < 28 || r.height < 28)) tiny.push(`${name(el)} ${Math.round(r.width)}x${Math.round(r.height)}`);
-    if (el.matches('button, a[href]') && !(el.innerText || '').trim() && !el.getAttribute('aria-label') && !el.getAttribute('title') && !el.querySelector('img[alt]:not([alt=""])')) noName.push(name(el));
+    if (el.matches('button, a[href]') && !(el.innerText || '').trim() && !el.getAttribute('aria-label') && !el.getAttribute('title') && !el.querySelector('img[alt]:not([alt=""])')) noName.push(`${name(el)} ${el.outerHTML.slice(0, 110).replace(/s+/g, ' ')}`);
+  }
+  // the sliding pill under the current tab must sit exactly on it (it drifted when a link sat in a positioned wrapper)
+  const pill = document.querySelector('.adm-ind');
+  const cur = document.querySelector('.adm-nav .adm-link[aria-current="page"]');
+  out.pillOff = '';
+  if (pill && cur) {
+    const p = pill.getBoundingClientRect(), c = cur.getBoundingClientRect();
+    if (Math.abs(p.left - c.left) > 3 || Math.abs(p.top - c.top) > 3 || Math.abs(p.width - c.width) > 3) out.pillOff = `pill at ${Math.round(p.left)},${Math.round(p.top)} ${Math.round(p.width)}px, current tab at ${Math.round(c.left)},${Math.round(c.top)} ${Math.round(c.width)}px`;
   }
   out.wide = wide.slice(0, 8);
   out.clipped = clipped.slice(0, 8);

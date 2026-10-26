@@ -76,6 +76,9 @@ describe('api: games, subscriptions, notifications, deliveries', () => {
     assert.equal((await api.call('PUT', '/api/alerts', { token, body: { quiet: { enabled: true, from: 25, to: 1 } } })).status, 400);
     await api.call('PUT', '/api/alerts', { token, body: { quiet: { enabled: false, from: 23, to: 8 } } });
     const list = await api.call('GET', '/api/deliveries?kind=alert&status=pending', { token });
+    // empty filters (the panel sent ?status=&kind=) mean «no filter», not a 400
+    assert.equal((await api.call('GET', '/api/deliveries?status=&kind=&limit=30', { token })).status, 200);
+    assert.equal((await api.call('GET', '/api/deliveries?status=nonsense', { token })).status, 400);
     assert.equal(list.body.items.length, 1);
     const id = list.body.items[0].id as number;
 

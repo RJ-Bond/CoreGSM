@@ -283,7 +283,7 @@ function IncidentItem({ i }: { i: StatusIncident }) {
       <GameAvatar game={i.game} size={36} />
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-          <span className="font-extrabold">{i.serverName}</span>
+          <span className="min-w-0 font-extrabold [overflow-wrap:anywhere]">{i.serverName}</span>
           <span className={`st-inc-badge is-${kind}`}>{i.planned ? t('st.inc.planned') : live ? t('st.inc.live') : t('st.inc.done')}</span>
         </div>
         <p className="text-sm font-semibold text-mute">

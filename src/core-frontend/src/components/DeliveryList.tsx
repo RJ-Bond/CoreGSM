@@ -41,7 +41,7 @@ export default function DeliveryList() {
   const [fetchedAt, setFetchedAt] = useState(0);
 
   const load = () =>
-    api<DeliveryResponse>(`/deliveries?status=${status}&kind=${kind}&limit=30`)
+    api<DeliveryResponse>(`/deliveries?${new URLSearchParams({ ...(status ? { status } : {}), ...(kind ? { kind } : {}), limit: '30' })}`)
       .then((r) => {
         setData({ counts: r.counts ?? { pending: 0, sending: 0, sent: 0, error: 0, dead: 0 }, items: Array.isArray(r.items) ? r.items : [] });
         setFetchedAt(Date.now());

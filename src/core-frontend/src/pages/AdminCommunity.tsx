@@ -92,7 +92,7 @@ function SeasonsAdmin() {
       <Section title={t('adm.com.seasons')} description={!s ? undefined : rows.length ? t('adm.com.count', { n: rows.length }) : t('adm.com.none')}>
         {!s && !error && <SkeletonRows n={2} />}
         {rows.length > 1 && <SeasonLine rows={rows} />}
-        <ul className="grid gap-2">
+        <ul className="grid grid-cols-[minmax(0,1fr)] gap-2">
           {rows.map((r) => (
             <li key={r.id} className="flex flex-wrap items-center gap-3 rounded-2xl bg-soft px-3 py-2.5">
               <span className="min-w-0 flex-1">
@@ -143,7 +143,7 @@ function ReviewsAdmin() {
     <Section title={t('adm.com.revTitle')} description={t('adm.com.revDesc')}>
       <ErrorLine text={error} />
       {list === null ? <div className="skeleton h-24 rounded-2xl" /> : list.length === 0 ? <p className="text-sm font-semibold text-mute">{t('adm.com.revNone')}</p> : (
-        <ul className="grid gap-2">
+        <ul className="grid grid-cols-[minmax(0,1fr)] gap-2">
           {list.map((r) => (
             <li key={r.id} className={`flex flex-wrap items-start gap-3 rounded-2xl bg-soft px-3 py-2.5 ${r.hidden ? 'opacity-60' : ''}`}>
               <span className="min-w-0 flex-1">
