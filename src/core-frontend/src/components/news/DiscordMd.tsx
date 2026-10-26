@@ -266,7 +266,7 @@ function CodeBlock({ text, background, border }: { text: string; background: str
   };
   return (
     <div className="nw-code">
-      <pre className="my-1 overflow-x-auto whitespace-pre-wrap rounded-md border p-2 font-mono text-[13px]" style={{ background, borderColor: border }}>{text}</pre>
+      <pre className="my-1 overflow-x-auto whitespace-pre-wrap rounded-md border p-2 font-mono text-fs-sm" style={{ background, borderColor: border }}>{text}</pre>
       <button type="button" className="nw-code-copy" onClick={() => void copy()} aria-label={t('nw.codeCopy')} title={t('nw.codeCopy')}>{t('nw.codeCopy')}</button>
     </div>
   );

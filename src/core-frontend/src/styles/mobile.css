@@ -35,7 +35,7 @@ html, body { overflow-x: clip; }
   .cm-hero-stats > div { min-width: 0; }
   .cm-heat { grid-template-columns: 1.3rem repeat(24, minmax(0, 1fr)); gap: 1px; }
   .cm-heat.is-big { grid-template-columns: 1.6rem repeat(24, minmax(0, 1fr)); gap: 2px; }
-  .cm-heat-h { font-size: 9px; letter-spacing: -.04em; }
+  .cm-heat-h { font-size: var(--fs-2xs); letter-spacing: -.04em; }
   .cm-search { flex-wrap: wrap; }
   .cm-podium { gap: 6px; }
   .cm-pod { padding-inline: 4px; }
@@ -66,7 +66,7 @@ html, body { overflow-x: clip; }
 }
 .cm-chart-tip { max-width: 60vw; overflow: hidden; text-overflow: ellipsis; }
 @media (max-width: 639px) {
-  .cm-chart-ticks { font-size: 10px; }
+  .cm-chart-ticks { font-size: var(--fs-2xs); }
   .hc-tools { flex-wrap: wrap; gap: 6px; }
 }
 
@@ -111,7 +111,7 @@ html.has-kb :is(.auth-shell, .auth-card) { align-self: start; }
 @media (max-width: 639px) { html.has-kb .auth-showcase { display: none; } }
 
 /* 13. no network: a thin strip under the safe area */
-.net-bar { position: fixed; inset: 0 0 auto 0; z-index: 95; padding: calc(6px + env(safe-area-inset-top, 0px)) 12px 6px; text-align: center; font-size: 13px; font-weight: 800; background: rgb(var(--warn)); color: #1b1300; box-shadow: var(--shadow-2); }
+.net-bar { position: fixed; inset: 0 0 auto 0; z-index: 95; padding: calc(6px + env(safe-area-inset-top, 0px)) 12px 6px; text-align: center; font-size: var(--fs-sm); font-weight: 800; background: rgb(var(--warn)); color: #1b1300; box-shadow: var(--shadow-2); }
 .net-bar.is-back { background: rgb(var(--ok)); color: #fff; }
 
 /* 14. data saver: no decorations, no animations, no blur (the data itself is requested half as often, see usePoll) */
@@ -127,7 +127,7 @@ html[data-lite] img[loading='lazy'] { content-visibility: auto; }
   .srv-hero .sh-actions { flex-basis: 100%; }
 }
 @media (max-width: 400px) {
-  .bn-item { font-size: 10.5px; letter-spacing: -0.01em; padding-inline: 0; }
+  .bn-item { font-size: var(--fs-2xs); letter-spacing: -0.01em; padding-inline: 0; }
 }
 /* a phone on its side and a small tablet: the menu has no room for the brand name and the user name next to the sections */
 @media (min-width: 768px) and (max-width: 1023px) {

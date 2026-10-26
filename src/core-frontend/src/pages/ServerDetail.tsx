@@ -537,20 +537,20 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
       {back}
 
       <article
-        className={`${emblemStyle(s.coverUrl, s.game).className ? 'emblem-host' : ''} srv-banner srv-glow srv-${kind} depth relative rounded-[26px] p-4 text-white sm:p-6`}
+        className={`${emblemStyle(s.coverUrl, s.game).className ? 'emblem-host' : ''} srv-banner srv-glow srv-${kind} depth relative rounded-ui-xl p-4 text-white sm:p-6`}
         style={emblemStyle(s.coverUrl, s.game).style}
         {...depth}
       >
         {emblemStyle(s.coverUrl, s.game).className && <span aria-hidden className="emblem-layer" />}
         {/* decoration is clipped by its own box, so the «Ещё» popover below is free to leave the banner */}
-        <span aria-hidden className="pointer-events-none absolute inset-0 overflow-hidden rounded-[26px]">
+        <span aria-hidden className="pointer-events-none absolute inset-0 overflow-hidden rounded-ui-xl">
           <span className="srv-cover" style={{ background: coverBg }} />
           <span className="srv-tod" data-tod={tod} />
           <span className="depth-l1 absolute -right-14 -top-20 h-64 w-64 rounded-full bg-white/15" />
           <span className="depth-l2 absolute -bottom-20 left-1/3 h-40 w-40 rounded-full bg-black/10" />
         </span>
         {/* a soft dark scrim: the text stays readable over any cover picture */}
-        <span aria-hidden className="srv-scrim pointer-events-none absolute inset-0 rounded-[26px]" />
+        <span aria-hidden className="srv-scrim pointer-events-none absolute inset-0 rounded-ui-xl" />
         {wentOffline && <span className="flash-ring" aria-hidden />}
 
         {/* title row: name, status, game */}
