@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="ebe2712efe88"
+COREGSM_BUILD="31ac3268640f"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.0.0.17"
+COREGSM_VERSION="1.0.0.18"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -4336,6 +4336,7 @@ __COREGSM_EOF__
  * User avatars uploaded in the profile. The picture is cropped to a square and stored as a 256 px PNG
  * (<data dir>/avatars/<user id>.png); it takes priority over the Discord avatar.
  */
+import { sendImage } from './imageSend.js';
 import express, { type Express, type RequestHandler } from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -4402,12 +4403,12 @@ export function registerAvatars(deps: { app: Express; auth: RequestHandler; user
     res.json({ ok: true });
   });
 
-  app.get('/api/avatars/:file', (req, res) => {
+  app.get('/api/avatars/:file', (req, res, next) => {
     const m = /^(\d{1,9})\.png$/.exec(String(req.params.file));
     if (!m) return res.status(404).end();
     const f = fileOf(Number(m[1]));
     if (!fs.existsSync(f)) return res.status(404).end();
-    res.set({ 'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=86400', 'X-Content-Type-Options': 'nosniff' }).send(fs.readFileSync(f));
+    sendImage(req, res, f, 'image/png', 'public, max-age=86400').catch(next);
   });
 }
 __COREGSM_EOF__
@@ -6094,6 +6095,7 @@ __COREGSM_EOF__
  * Cover pictures of servers. The uploaded picture is centre-cropped to 16:9 and stored as a 1280x720 JPEG
  * (<data dir>/covers/<server id>.jpg) plus a 640x360 variant (<server id>@s.jpg) for small tiles.
  */
+import { sendImage } from './imageSend.js';
 import express, { type Express, type RequestHandler } from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -6176,13 +6178,13 @@ export function registerCovers(deps: { app: Express; admin: RequestHandler }): v
     res.json({ ok: true, coverUrl: null });
   });
 
-  app.get('/api/covers/:file', (req, res) => {
+  app.get('/api/covers/:file', (req, res, next) => {
     const m = /^(\d{1,9})\.jpg$/.exec(String(req.params.file));
     if (!m) return res.status(404).end();
     let f = fileOf(Number(m[1]), req.query.s === '1');
     if (!fs.existsSync(f)) f = fileOf(Number(m[1]));
     if (!fs.existsSync(f)) return res.status(404).end();
-    res.set({ 'Content-Type': 'image/jpeg', 'Cache-Control': 'public, max-age=86400', 'X-Content-Type-Options': 'nosniff' }).send(fs.readFileSync(f));
+    sendImage(req, res, f, 'image/jpeg', 'public, max-age=86400').catch(next);
   });
 }
 __COREGSM_EOF__
@@ -8255,6 +8257,7 @@ __COREGSM_EOF__
  *   DELETE /api/gallery/:id              delete (the author or the staff)
  *   GET    /api/gallery/img/:id.jpg      the picture (?s=1 the small one); waiting ones only for the author and staff
  */
+import { sendImage } from './imageSend.js';
 import express from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -8402,7 +8405,7 @@ router.delete('/api/gallery/:id', param('id'), auth, (req: AuthedRequest, res) =
   res.json({ ok: true });
 });
 
-router.get('/api/gallery/img/:file', (req, res) => {
+router.get('/api/gallery/img/:file', (req, res, next) => {
   const m = /^(\d{1,9})\.jpg$/.exec(String(req.params.file));
   if (!m) return res.status(404).end();
   const id = Number(m[1]);
@@ -8415,7 +8418,7 @@ router.get('/api/gallery/img/:file', (req, res) => {
   }
   const f = fileOf(id, req.query.s === '1');
   if (!fs.existsSync(f)) return res.status(404).end();
-  res.set({ 'Content-Type': 'image/jpeg', 'Cache-Control': row.status === 'approved' ? 'public, max-age=86400' : 'private, no-store', 'X-Content-Type-Options': 'nosniff' }).send(fs.readFileSync(f));
+  sendImage(req, res, f, 'image/jpeg', row.status === 'approved' ? 'public, max-age=86400' : 'private, no-store').catch(next);
 });
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
@@ -9325,6 +9328,98 @@ export const param =
     if (re.test(String(req.params[name]))) next();
     else next('route');
   };
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/imageLogic.ts" << '__COREGSM_EOF__'
+/** WebP delivery of stored pictures: the pure part (negotiation and a small byte-bounded cache). */
+
+/** does the Accept header of the request take WebP (with a quality above zero)? */
+export function wantsWebp(accept: string | undefined): boolean {
+  if (!accept) return false;
+  return accept.split(',').some((part) => {
+    const [type, ...params] = part.trim().split(';');
+    if (type?.trim().toLowerCase() !== 'image/webp') return false;
+    const q = params.map((p) => p.trim()).find((p) => p.startsWith('q='));
+    return !q || Number(q.slice(2)) > 0;
+  });
+}
+
+/** a cache that forgets the oldest entries when the bytes exceed the limit */
+export class ByteLru<V extends { length: number }> {
+  private map = new Map<string, V>();
+  private bytes = 0;
+  private readonly limit: number;
+  constructor(limit: number) {
+    this.limit = limit;
+  }
+  get(key: string): V | undefined {
+    const v = this.map.get(key);
+    if (v !== undefined) {
+      this.map.delete(key);
+      this.map.set(key, v);
+    }
+    return v;
+  }
+  set(key: string, value: V): void {
+    if (value.length > this.limit) return;
+    const old = this.map.get(key);
+    if (old) this.bytes -= old.length;
+    this.map.delete(key);
+    this.map.set(key, value);
+    this.bytes += value.length;
+    for (const [k, v] of this.map) {
+      if (this.bytes <= this.limit) break;
+      if (k === key) continue;
+      this.map.delete(k);
+      this.bytes -= v.length;
+    }
+  }
+  get size(): number {
+    return this.map.size;
+  }
+  get totalBytes(): number {
+    return this.bytes;
+  }
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/imageSend.ts" << '__COREGSM_EOF__'
+/** Sends a stored JPEG/PNG; as WebP (usually a third lighter) to browsers that ask for it. */
+import fs from 'node:fs';
+import type { Request, Response } from 'express';
+import skia from 'skia-canvas';
+import { ByteLru, wantsWebp } from './imageLogic.js';
+import { log } from './logger.js';
+
+const { Canvas, loadImage } = skia;
+const webpCache = new ByteLru<Buffer>(48 * 1024 * 1024);
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+async function toWebp(file: string, mtime: number): Promise<Buffer> {
+  const key = `${file}:${mtime}`;
+  const hit = webpCache.get(key);
+  if (hit) return hit;
+  const img: any = await loadImage(file);
+  const canvas = new Canvas(img.width, img.height);
+  canvas.getContext('2d').drawImage(img, 0, 0);
+  const buf = (await canvas.toBuffer('webp', { quality: 0.82 })) as Buffer;
+  webpCache.set(key, buf);
+  return buf;
+}
+
+export async function sendImage(req: Request, res: Response, file: string, type: 'image/jpeg' | 'image/png', cacheControl: string): Promise<void> {
+  const headers = { 'Cache-Control': cacheControl, 'X-Content-Type-Options': 'nosniff', Vary: 'Accept' };
+  if (wantsWebp(req.headers.accept)) {
+    try {
+      const buf = await toWebp(file, fs.statSync(file).mtimeMs);
+      res.set({ ...headers, 'Content-Type': 'image/webp' }).send(buf);
+      return;
+    } catch (e) {
+      log.warn('webp conversion failed, sending the original:', (e as Error).message);
+    }
+  }
+  res.set({ ...headers, 'Content-Type': type }).send(fs.readFileSync(file));
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/incidents.ts" << '__COREGSM_EOF__'
@@ -13556,6 +13651,7 @@ __COREGSM_EOF__
  *   prefs_changed    language, time zone or date/time format changed
  *   profile_changed  game nick, bio or profile visibility changed
  */
+import { sendImage } from './imageSend.js';
 import express, { type Express, type NextFunction, type Request, type RequestHandler, type Response } from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -13809,12 +13905,12 @@ export function registerProfile(deps: {
     logAccount(req, userId(req), 'banner_changed', 'картинка убрана');
     res.json({ ok: true });
   });
-  app.get('/api/users/:id/banner', (req, res) => {
+  app.get('/api/users/:id/banner', (req, res, next) => {
     const m = /^\d{1,9}$/.exec(String(req.params.id));
     if (!m) return res.status(404).end();
     const f = bannerFile(Number(m[0]));
     if (!fs.existsSync(f)) return res.status(404).end();
-    res.set({ 'Content-Type': 'image/jpeg', 'Cache-Control': 'public, max-age=86400', 'X-Content-Type-Options': 'nosniff' }).send(fs.readFileSync(f));
+    sendImage(req, res, f, 'image/jpeg', 'public, max-age=86400').catch(next);
   });
   app.put('/api/me/banner-preset', auth, (req, res) => {
     const b = z.object({ preset: z.enum(PRESETS) }).safeParse(req.body);
