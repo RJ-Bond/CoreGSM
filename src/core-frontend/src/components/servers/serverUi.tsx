@@ -6,6 +6,7 @@ import { t, useI18n } from '../../i18n';
 import { capLevel, capacityPct, slotsInfo } from './capacity';
 import { toast, useHourTrend } from '../../ui';
 import { EmptyRackArt, NoFavsArt, NoMatchArt } from './ServersArt';
+import { CardSeat, CardUsers } from './CardIcons';
 
 // ---------- reactions to changes (item 29) ----------
 export interface Reaction {
@@ -92,7 +93,7 @@ export function SlotsText({ players, max, onDark = false, big = false, className
   const text = info.kind === 'full' ? t('srv.slots.full') : info.kind === 'almost' ? t('srv.slots.almost') : t('srv.slots.free', { n: info.free });
   return (
     <span className={`srv-slots ${info.kind} ${onDark ? 'on-dark' : ''} ${big ? 'big' : ''} ${className}`} title={info.kind === 'almost' ? t('srv.slots.freeOf', { n: info.free }) : undefined}>
-      {text}
+      <CardSeat />{text}
     </span>
   );
 }
@@ -270,6 +271,7 @@ export function PlayerNames({ names, max = 6, onDark = false, className = '' }: 
   if (names.length === 0) return null;
   return (
     <ul className={`srv-names ${onDark ? 'on-dark' : ''} ${className}`} aria-label={t('srv.who')}>
+      <li className="srv-names-ico" aria-hidden="true"><CardUsers /></li>
       {names.slice(0, max).map((n, i) => <li key={`${n}-${i}`} title={n}>{n}</li>)}
       {names.length > max && <li className="more">+{names.length - max}</li>}
     </ul>

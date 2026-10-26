@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="2ea11598e779"
+COREGSM_BUILD="43eef2031acb"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.0.0.52"
+COREGSM_VERSION="1.0.0.53"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -69130,6 +69130,25 @@ export function BulkBar({ selected, visible, favs, onSelectAll, onClear, onExit,
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/servers"
+  cat > "$APP_DIR/core-frontend/src/components/servers/CardIcons.tsx" << '__COREGSM_EOF__'
+import type { ReactNode } from 'react';
+
+/** small outline icons of the server cards (currentColor; decorative: the text next to them says the same) */
+const ico = (d: ReactNode) => (
+  <svg className="card-ico" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+    {d}
+  </svg>
+);
+
+export const CardClock = () => ico(<><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></>);
+export const CardUptime = () => ico(<><path d="M12 3 4 6v6c0 4.5 3.2 7.6 8 9 4.8-1.4 8-4.5 8-9V6l-8-3Z" /><path d="m9 12 2 2 4-4" /></>);
+export const CardMap = () => ico(<><path d="M12 21s-7-6.2-7-11a7 7 0 0 1 14 0c0 4.8-7 11-7 11Z" /><circle cx="12" cy="10" r="2.5" /></>);
+export const CardTag = () => ico(<><path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8Z" /><path d="M7.5 7.5h.01" /></>);
+export const CardUsers = () => ico(<><circle cx="9" cy="8" r="3.2" /><path d="M3 20c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5" /><circle cx="17" cy="9" r="2.4" /><path d="M16.5 14.6c2.6.2 4.5 2 4.5 4.9" /></>);
+export const CardSeat = () => ico(<><path d="M6 11V6a3 3 0 0 1 3-3h6a3 3 0 0 1 3 3v5" /><path d="M4 11h16v5a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-5Z" /><path d="M7 18v3M17 18v3" /></>);
+export const CardRefresh = () => ico(<><path d="M20 11a8 8 0 0 0-14.9-3M4 5v4h4" /><path d="M4 13a8 8 0 0 0 14.9 3M20 19v-4h-4" /></>);
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/servers"
   cat > "$APP_DIR/core-frontend/src/components/servers/CommunityBento.tsx" << '__COREGSM_EOF__'
 /**
  * The top of the main page: the community at a glance. Players online now against the 30-day record (a new record
@@ -70299,6 +70318,7 @@ import { t, useI18n } from '../../i18n';
 import { capLevel, capacityPct, slotsInfo } from './capacity';
 import { toast, useHourTrend } from '../../ui';
 import { EmptyRackArt, NoFavsArt, NoMatchArt } from './ServersArt';
+import { CardSeat, CardUsers } from './CardIcons';
 
 // ---------- reactions to changes (item 29) ----------
 export interface Reaction {
@@ -70385,7 +70405,7 @@ export function SlotsText({ players, max, onDark = false, big = false, className
   const text = info.kind === 'full' ? t('srv.slots.full') : info.kind === 'almost' ? t('srv.slots.almost') : t('srv.slots.free', { n: info.free });
   return (
     <span className={`srv-slots ${info.kind} ${onDark ? 'on-dark' : ''} ${big ? 'big' : ''} ${className}`} title={info.kind === 'almost' ? t('srv.slots.freeOf', { n: info.free }) : undefined}>
-      {text}
+      <CardSeat />{text}
     </span>
   );
 }
@@ -70563,6 +70583,7 @@ export function PlayerNames({ names, max = 6, onDark = false, className = '' }: 
   if (names.length === 0) return null;
   return (
     <ul className={`srv-names ${onDark ? 'on-dark' : ''} ${className}`} aria-label={t('srv.who')}>
+      <li className="srv-names-ico" aria-hidden="true"><CardUsers /></li>
       {names.slice(0, max).map((n, i) => <li key={`${n}-${i}`} title={n}>{n}</li>)}
       {names.length > max && <li className="more">+{names.length - max}</li>}
     </ul>
@@ -86929,6 +86950,7 @@ import { BulkBar } from '../components/servers/BulkBar';
 import { needsAttention, pickHero, type HeroReason, type OverviewData } from '../components/servers/overviewLogic';
 import NotFound from '../components/NotFound';
 import ServerDetail, { SERVER_TABS } from './ServerDetail';
+import { CardClock, CardMap, CardRefresh, CardTag, CardUptime } from '../components/servers/CardIcons';
 
 export default function ServersPage({ sub }: { sub: string }) {
   // "12/players" -> server 12, tab "players"
@@ -87445,11 +87467,11 @@ function HeroTile({ s, idx, uptime, downSince, fav, onFav, onOpen, rx, reason, s
       )}
 
       <div className="sh-foot relative mt-auto flex flex-wrap items-center gap-1.5 text-fs-sm font-bold text-white/90">
-        <span className="sh-chip">{spanCaption(sparkSpan)}</span>
-        {uptime != null && <span className="sh-chip">аптайм {(Math.round(uptime * 10) / 10).toLocaleString('ru-RU')}%</span>}
-        {s.online && s.map && <span className="sh-chip">карта {s.map}</span>}
-        {s.version && <span className="sh-chip">v{s.version}</span>}
-        {!s.online && <span className="sh-chip">обновлено {ago(s.updatedAt)}</span>}
+        <span className="sh-chip"><CardClock />{spanCaption(sparkSpan)}</span>
+        {uptime != null && <span className="sh-chip"><CardUptime />аптайм {(Math.round(uptime * 10) / 10).toLocaleString('ru-RU')}%</span>}
+        {s.online && s.map && <span className="sh-chip"><CardMap />карта {s.map}</span>}
+        {s.version && <span className="sh-chip"><CardTag />v{s.version}</span>}
+        {!s.online && <span className="sh-chip"><CardRefresh />обновлено {ago(s.updatedAt)}</span>}
       </div>
     </article>
   );
@@ -87518,7 +87540,7 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince }
         <h3 className="srv-name truncate text-fs-lg font-extrabold leading-tight" title={s.name}>
           <a href={`/servers/${s.id}`} onClick={linkClick(s, select)} className="hover:text-link">{s.name}</a>
         </h3>
-        <div className="srv-chips">{nearFull && <span className="srv-badge-full" title={t('srv.cap.nearFull', { pct: Math.round((s.players / s.maxPlayers) * 100) })}>{t('srv.tile.full')}</span>}<span className="truncate">{gameLabel(s.game)}</span>{s.online && s.map && <span className="srv-chip" title={`Карта: ${s.map}`}>{s.map}</span>}{s.version && <span className="srv-chip" title="Версия">v{s.version}</span>}</div>
+        <div className="srv-chips">{nearFull && <span className="srv-badge-full" title={t('srv.cap.nearFull', { pct: Math.round((s.players / s.maxPlayers) * 100) })}>{t('srv.tile.full')}</span>}<span className="truncate">{gameLabel(s.game)}</span>{s.online && s.map && <span className="srv-chip" title={`Карта: ${s.map}`}><CardMap />{s.map}</span>}{s.version && <span className="srv-chip" title="Версия"><CardTag />v{s.version}</span>}</div>
         {s.maintenance && <MaintenanceChip m={s.maintenance} className="mt-1" />}
       </div>
 
@@ -94204,6 +94226,16 @@ html[data-motion='reduce'] .srv-new-chev, html[data-motion='reduce'] .srv-check,
   .srv-hero.is-split > .sh-chart { padding: 14px 14px 6px 6px; border-radius: var(--r-xl); background: rgb(6 8 18 / .34); box-shadow: inset 0 0 0 1px rgb(255 255 255 / .07);
     -webkit-backdrop-filter: none; backdrop-filter: none; }
 }
+
+/* ---------- svg icons of the server cards ---------- */
+.card-ico { flex: none; width: 14px; height: 14px; margin-right: 5px; vertical-align: -2px; opacity: .85; }
+.srv-hero .sh-foot .sh-chip { display: inline-flex; align-items: center; }
+.srv-hero .sh-foot .sh-chip + .sh-chip::before { align-self: center; }
+.srv-slots { display: inline-flex; align-items: center; }
+.srv-chip .card-ico { width: 12px; height: 12px; margin-right: 4px; vertical-align: -1.5px; }
+/* a person icon leads the row of names; it is not a chip */
+.srv-names > li.srv-names-ico { display: inline-flex; align-items: center; padding: 0; background: none !important; color: inherit; opacity: .8; }
+.srv-names > li.srv-names-ico .card-ico { margin-right: 0; width: 15px; height: 15px; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/shell.css" << '__COREGSM_EOF__'

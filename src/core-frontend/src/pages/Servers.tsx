@@ -18,6 +18,7 @@ import { BulkBar } from '../components/servers/BulkBar';
 import { needsAttention, pickHero, type HeroReason, type OverviewData } from '../components/servers/overviewLogic';
 import NotFound from '../components/NotFound';
 import ServerDetail, { SERVER_TABS } from './ServerDetail';
+import { CardClock, CardMap, CardRefresh, CardTag, CardUptime } from '../components/servers/CardIcons';
 
 export default function ServersPage({ sub }: { sub: string }) {
   // "12/players" -> server 12, tab "players"
@@ -534,11 +535,11 @@ function HeroTile({ s, idx, uptime, downSince, fav, onFav, onOpen, rx, reason, s
       )}
 
       <div className="sh-foot relative mt-auto flex flex-wrap items-center gap-1.5 text-fs-sm font-bold text-white/90">
-        <span className="sh-chip">{spanCaption(sparkSpan)}</span>
-        {uptime != null && <span className="sh-chip">аптайм {(Math.round(uptime * 10) / 10).toLocaleString('ru-RU')}%</span>}
-        {s.online && s.map && <span className="sh-chip">карта {s.map}</span>}
-        {s.version && <span className="sh-chip">v{s.version}</span>}
-        {!s.online && <span className="sh-chip">обновлено {ago(s.updatedAt)}</span>}
+        <span className="sh-chip"><CardClock />{spanCaption(sparkSpan)}</span>
+        {uptime != null && <span className="sh-chip"><CardUptime />аптайм {(Math.round(uptime * 10) / 10).toLocaleString('ru-RU')}%</span>}
+        {s.online && s.map && <span className="sh-chip"><CardMap />карта {s.map}</span>}
+        {s.version && <span className="sh-chip"><CardTag />v{s.version}</span>}
+        {!s.online && <span className="sh-chip"><CardRefresh />обновлено {ago(s.updatedAt)}</span>}
       </div>
     </article>
   );
@@ -607,7 +608,7 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince }
         <h3 className="srv-name truncate text-fs-lg font-extrabold leading-tight" title={s.name}>
           <a href={`/servers/${s.id}`} onClick={linkClick(s, select)} className="hover:text-link">{s.name}</a>
         </h3>
-        <div className="srv-chips">{nearFull && <span className="srv-badge-full" title={t('srv.cap.nearFull', { pct: Math.round((s.players / s.maxPlayers) * 100) })}>{t('srv.tile.full')}</span>}<span className="truncate">{gameLabel(s.game)}</span>{s.online && s.map && <span className="srv-chip" title={`Карта: ${s.map}`}>{s.map}</span>}{s.version && <span className="srv-chip" title="Версия">v{s.version}</span>}</div>
+        <div className="srv-chips">{nearFull && <span className="srv-badge-full" title={t('srv.cap.nearFull', { pct: Math.round((s.players / s.maxPlayers) * 100) })}>{t('srv.tile.full')}</span>}<span className="truncate">{gameLabel(s.game)}</span>{s.online && s.map && <span className="srv-chip" title={`Карта: ${s.map}`}><CardMap />{s.map}</span>}{s.version && <span className="srv-chip" title="Версия"><CardTag />v{s.version}</span>}</div>
         {s.maintenance && <MaintenanceChip m={s.maintenance} className="mt-1" />}
       </div>
 
