@@ -321,27 +321,6 @@ html[data-motion='reduce'] .srv-new-chev, html[data-motion='reduce'] .srv-check,
 .cmp-change.is-up { background: rgb(var(--okbg)); color: rgb(var(--ok)); }
 .cmp-change.is-down { background: rgb(var(--badbg)); color: rgb(var(--bad)); }
 
-/* ---------- attention strip: servers with a problem, one line each (the working servers keep the first screen) ---------- */
-.attn { display: grid; gap: .4rem; padding: .7rem .75rem .75rem; border-radius: var(--r-lg); background: rgb(var(--card)); border: 1px solid rgb(var(--line)); box-shadow: var(--shadow-1); }
-.attn-h { margin: 0 0 .1rem .35rem; font-size: .9375rem; font-weight: 800; letter-spacing: -.01em; }
-.attn-list { list-style: none; margin: 0; padding: 0; display: grid; gap: .3rem; }
-.attn-row { display: flex; align-items: center; gap: .65rem; min-height: 44px; padding: .4rem .7rem; border-radius: var(--r-md); color: inherit; text-decoration: none; background: rgb(var(--badbg)); transition: box-shadow .15s; }
-.attn-row.is-warn { background: rgb(var(--warnbg)); }
-.attn-row:hover { box-shadow: var(--shadow-1); }
-.attn-dot { flex: none; width: .6rem; height: .6rem; border-radius: var(--r-pill); background: rgb(var(--bad)); }
-.attn-row.is-warn .attn-dot { background: rgb(var(--warn)); }
-.attn-name { min-width: 0; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 650; }
-.attn-why { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .875rem; font-weight: 600; color: rgb(var(--mute)); }
-.attn-go { flex: none; font-weight: 650; color: rgb(var(--link)); }
-.attn-more { margin: 0 0 0 .35rem; font-size: .875rem; font-weight: 600; color: rgb(var(--mute)); }
-/* a phone: the name and the arrow on the first line, the reason under them */
-@media (max-width: 560px) {
-  .attn-row { flex-wrap: wrap; row-gap: .1rem; }
-  .attn-name { order: 1; flex: 1 1 0; }
-  .attn-go { order: 2; }
-  .attn-why { order: 3; flex-basis: 100%; padding-left: 1.25rem; white-space: normal; }
-}
-
 /* ---------- a server without a cover picture: the emblem of its game as a faint watermark on the gradient ----------
    (the pseudo-element sits at z-index -1 inside an isolated box: above the box's own background, below its content) */
 .emblem-bg { position: relative; isolation: isolate; }
@@ -522,3 +501,67 @@ html[data-motion='reduce'] .srv-new-chev, html[data-motion='reduce'] .srv-check,
 .srv-hero .sh-foot .sh-chip { padding: 0; background: none; box-shadow: none; -webkit-backdrop-filter: none; backdrop-filter: none; line-height: 1.5; }
 .srv-hero .sh-foot .sh-chip + .sh-chip::before { content: '·'; margin: 0 .55em; opacity: .55; }
 .srv-hero .spark-axis { background: none; padding: 0 2px; color: rgb(255 255 255 / .7); }
+
+/* ---------- calmer main page: one alert row, a neutral strip, quiet tiles ---------- */
+.pulse-wrap { display: grid; gap: 8px; }
+.pulse-alert { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 6px 14px 6px 8px; border-radius: var(--r-lg); color: inherit; text-decoration: none; background: rgb(var(--card)); box-shadow: inset 0 0 0 1px rgb(var(--bad) / .4); transition: box-shadow .15s ease; }
+.pulse-alert-warn { box-shadow: inset 0 0 0 1px rgb(var(--warn) / .45); }
+.pulse-alert:hover { box-shadow: inset 0 0 0 1px rgb(var(--bad) / .7); }
+.pulse-alert-warn:hover { box-shadow: inset 0 0 0 1px rgb(var(--warn) / .8); }
+.pulse-alert-icon { display: grid; place-items: center; flex: none; width: 32px; height: 32px; border-radius: var(--r-md); color: rgb(var(--bad)); background: rgb(var(--badbg)); }
+.pulse-alert-warn .pulse-alert-icon { color: rgb(var(--warn)); background: rgb(var(--warnbg)); }
+.pulse-alert-title { flex: none; font-size: var(--fs-base); font-weight: 650; letter-spacing: -.01em; }
+.pulse-alert-names { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-sm); font-weight: 600; color: rgb(var(--mute)); }
+.pulse-alert-go { flex: none; font-weight: 650; color: rgb(var(--link)); }
+@media (max-width: 560px) {
+  .pulse-alert { flex-wrap: wrap; row-gap: 0; padding-right: 12px; }
+  .pulse-alert-title { flex: 1 1 0; min-width: 0; }
+  .pulse-alert-names { order: 3; flex-basis: 100%; padding-left: 42px; margin-top: -4px; padding-bottom: 2px; }
+}
+/* the strip itself is neutral in every state: no coloured fill, a hairline border */
+.pulse { --pulse: var(--mute); --pulse-bg: var(--card); background: rgb(var(--card)); box-shadow: inset 0 0 0 1px rgb(var(--line)); padding: 12px 18px; gap: 8px 24px; grid-template-columns: auto minmax(0, 1fr); }
+.pulse-ok { --pulse: var(--brand); }
+.pulse-state { grid-column: 1 / -1; gap: 8px; flex-wrap: wrap; }
+.pulse-state .pulse-icon { width: 24px; height: 24px; border-radius: var(--r-sm); background: transparent; box-shadow: none; }
+.pulse-ok .pulse-icon { color: rgb(var(--ok)); }
+.pulse-warn .pulse-icon, .pulse-maint .pulse-icon { color: rgb(var(--warn)); }
+.pulse-state .pulse-title { font-size: var(--fs-base); }
+.pulse-state .pulse-sub { margin-top: 0; }
+.pulse-nums { grid-column: 1; grid-row: auto; grid-template-columns: repeat(4, auto); gap: 4px 0; }
+.pulse-nums dd { font-size: 22px; }
+.pulse-plot { height: 52px; }
+.pulse-chart-empty { min-height: 52px; }
+@media (max-width: 899px) { .pulse { grid-template-columns: minmax(0, 1fr); } .pulse-nums { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+@media (max-width: 560px) { .pulse { padding: 10px 14px; } .pulse-state .pulse-icon svg { width: 18px; height: 18px; } .pulse-nums dd { font-size: var(--fs-xl); } }
+
+/* tiles: no coloured frame or glow; the accent is kept for a server that is down or slow, "almost full" is a small badge */
+.srv-tile, .srv-tile.is-busy { box-shadow: var(--shadow-1); }
+.srv-tile.is-down { box-shadow: var(--shadow-1), 0 0 0 1px rgb(var(--bad) / .45); }
+.srv-tile.is-lag { box-shadow: var(--shadow-1), 0 0 0 1px rgb(var(--warn) / .5); }
+.tile.srv-tile.srv-selected { box-shadow: 0 0 0 3px rgb(var(--brand)); }
+.srv-name { min-width: 0; }
+.srv-name a, .srv-row-main h3 a { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.srv-chips { height: 24px; overflow: hidden; }
+.srv-badge-full { flex: none; padding: 0 8px; border-radius: var(--r-pill); font-size: var(--fs-xs); font-weight: 700; line-height: 20px; color: rgb(var(--warn)); background: rgb(var(--warnbg)); white-space: nowrap; }
+.srv-count { min-height: 44px; flex-wrap: nowrap; min-width: 0; }
+.srv-count > * { flex: none; }
+.srv-tile .srv-cap > i { background: var(--cap); }
+
+/* phone rows (the compact tile) */
+.srv-row { position: relative; display: flex; align-items: center; gap: 12px; min-height: 60px; padding: 8px 6px 8px 12px; border-radius: var(--r-lg); background: rgb(var(--card)); box-shadow: var(--shadow-1), inset 0 0 0 1px rgb(var(--line) / .6); cursor: pointer; }
+.srv-row.is-down { box-shadow: var(--shadow-1), inset 0 0 0 1px rgb(var(--bad) / .45); }
+.srv-row.srv-selected { box-shadow: 0 0 0 3px rgb(var(--brand)); }
+.srv-row-main { flex: 1 1 auto; min-width: 0; display: grid; gap: 6px; }
+.srv-row-main h3 a { color: inherit; text-decoration: none; }
+.srv-row-bar .srv-cap { height: 4px; }
+.srv-row-count { flex: none; display: flex; align-items: baseline; font-variant-numeric: tabular-nums; color: rgb(var(--mute)); font-weight: 700; }
+.srv-row-count b { font-size: var(--fs-xl); font-weight: 800; color: rgb(var(--ink)); letter-spacing: -.02em; }
+.srv-row-dot { flex: none; width: 10px; height: 10px; border-radius: var(--r-pill); }
+.srv-row .btn-icon-sm { width: 44px; height: 44px; }
+@media (max-width: 639px) {
+  .srv-grid { gap: 8px; }
+  /* the leader card is compacter: no curve, no chips, a smaller number */
+  .srv-hero { padding: 14px; gap: 8px; }
+  .srv-hero .sh-chart, .srv-hero .sh-foot { display: none; }
+  .srv-hero [class*='text-[64px]'] { font-size: 44px; }
+}
