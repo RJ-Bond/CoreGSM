@@ -14,6 +14,11 @@ interface language; the GitHub release text is built from the section of the ver
 - Пометки в конце русской части: `[migration]` — меняется база данных, `[env]` — нужны новые настройки сервера, `⚠` в начале — несовместимое изменение.
 - Новые пункты идут в раздел «Не выпущено». Релиз выпускается только по команде владельца: тогда раздел переименовывается в `## <версия> · <дата>` (версия из `version.txt`).
 
+## Не выпущено | Unreleased
+
+### 🐛 Исправлено | Fixed
+- 🛠️ Сборка: вернул файл логики опроса серверов, который по ошибке был перезаписан логикой голосований (панель не собиралась), поправил тип в боте и перевод в «Новостях» | Build: restored the server polling logic file that had been overwritten by the community polls logic by mistake (the panel did not compile), fixed a type in the bot and a translation in News
+
 ## 1.0.0.39 · 26.10.2026
 
 ### ✨ Новое | New

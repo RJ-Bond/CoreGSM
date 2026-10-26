@@ -15,7 +15,7 @@ import { styleAlertEmbed } from './discordStyleLogic.js';
 import { pollEmbed } from './polls.js';
 import { buildNotice } from './updateLogic.js';
 import { renderWelcome } from './welcomeLogic.js';
-import { tally } from './pollLogic.js';
+import { tally } from './communityPollLogic.js';
 import { brand, publicBase } from './site.js';
 
 interface Sample { id: string; group: 'servers' | 'alerts' | 'community' | 'updates'; title: string; content?: string; embed: Record<string, unknown>; buttons?: string[] }

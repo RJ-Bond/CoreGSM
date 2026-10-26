@@ -1,5 +1,6 @@
 import { Switch } from '../components/Switch';
 import { useState } from 'react';
+import { t } from '../i18n';
 import { NewsCalendar } from '../components/news/Calendar';
 import { confirmDialog } from '../confirm';
 import { api, ApiError, type NewsItem, type NewsSettings, type PublicNews } from '../api';
@@ -222,8 +223,8 @@ function NewsList() {
         <label className="flex min-w-0 items-center gap-3 font-bold">
           <Switch id="news-crosspost" checked={!!settings?.crosspost} onChange={(on) => void setCrosspost(on)} />
           <span className="min-w-0">
-            Публиковать для подписчиков канала-объявлений
-            <span className="block text-xs font-semibold text-mute">Если новости идут в канал типа «Объявления», бот сразу рассылает их серверам, которые подписаны на этот канал.</span>
+            {t('news.crosspost')}
+            <span className="block text-xs font-semibold text-mute">{t('news.crosspostHint')}</span>
           </span>
         </label>
       </Strip>
