@@ -1,32 +1,81 @@
-/** Community polls: validation, counting and text. Pure, covered by tests. */
-export const MAX_OPTIONS = 10;
-export const MIN_OPTIONS = 2;
+/** Pure helpers of the poller (no database, no network): unit-tested directly. */
 
-export interface PollInput { question: string; options: string[]; closesAt?: number | null }
+export const DEFAULT_FAIL_THRESHOLD = 2;
+export const DEFAULT_CONCURRENCY = 8;
 
-export function validatePoll(i: PollInput, now: number): { ok: true; question: string; options: string[]; closesAt: number | null } | { ok: false; error: 'poll_invalid' } {
-  const question = i.question.trim();
-  const options = i.options.map((o) => o.trim()).filter(Boolean);
-  const unique = new Set(options.map((o) => o.toLowerCase()));
-  if (question.length < 3 || question.length > 200) return { ok: false, error: 'poll_invalid' };
-  if (options.length < MIN_OPTIONS || options.length > MAX_OPTIONS || unique.size !== options.length || options.some((o) => o.length > 80)) return { ok: false, error: 'poll_invalid' };
-  const closesAt = i.closesAt ?? null;
-  if (closesAt !== null && (!Number.isFinite(closesAt) || closesAt <= now)) return { ok: false, error: 'poll_invalid' };
-  return { ok: true, question, options, closesAt };
+const toInt = (v: unknown): number | null => {
+  if (v === null || v === undefined || v === '') return null;
+  const n = Math.floor(Number(v));
+  return Number.isFinite(n) ? n : null;
+};
+
+/** consecutive failed polls needed before a server is shown as offline: 1..5, default 2 */
+export function clampThreshold(v: unknown): number {
+  const n = toInt(v);
+  return n === null ? DEFAULT_FAIL_THRESHOLD : Math.min(5, Math.max(1, n));
 }
 
-export const pollIsOpen = (p: { closed: boolean; closesAt: number | null }, now: number): boolean => !p.closed && (p.closesAt === null || p.closesAt > now);
-
-export interface TallyRow { id: number; text: string; votes: number; pct: number }
-export function tally(options: { id: number; text: string }[], counts: Map<number, number>): { rows: TallyRow[]; total: number } {
-  const total = options.reduce((n, o) => n + (counts.get(o.id) ?? 0), 0);
-  return { total, rows: options.map((o) => ({ id: o.id, text: o.text, votes: counts.get(o.id) ?? 0, pct: total ? Math.round(((counts.get(o.id) ?? 0) / total) * 100) : 0 })) };
+/** number of servers polled at the same time: 1..32, default 8 */
+export function clampConcurrency(v: unknown): number {
+  const n = toInt(v);
+  return n === null ? DEFAULT_CONCURRENCY : Math.min(32, Math.max(1, n));
 }
 
-const bar = (pct: number) => '▰'.repeat(Math.round(pct / 10)) + '▱'.repeat(10 - Math.round(pct / 10));
+/** how long old rows are kept, in days (the defaults of the settings HISTORY_DAYS, PLAYER_SESSIONS_DAYS, ...) */
+export const RETENTION_DEFAULTS = { history: 30, playerSessions: 90, accountEvents: 180, uptime: 90 } as const;
 
-/** «▰▰▰▰▱▱▱▱▱▱ 40% · Вариант (4)» for every option */
-export function resultsText(rows: TallyRow[], total: number): string {
-  const lines = rows.map((r) => `${bar(r.pct)} **${r.pct}%** · ${r.text.replace(/[*_~`|>]/g, '')} (${r.votes})`);
-  return `${lines.join('\n')}\n\nВсего голосов: **${total}**`;
+/** days to keep a kind of old rows: 1..3650, `fallback` when unset or not a number */
+export function clampDays(v: unknown, fallback: number): number {
+  const n = toInt(v);
+  return n === null ? fallback : Math.min(3650, Math.max(1, n));
+}
+
+export const PRUNE_EVERY_MS = 3600_000;
+/** the cleanup of old rows runs on the first cycle and then at most once an hour (not on every 30-second poll) */
+export function pruneDue(now: number, last: number, every = PRUNE_EVERY_MS): boolean {
+  return last === 0 || now - last >= every;
+}
+
+export interface Decision {
+  /** the state to store in `status` */
+  online: boolean;
+  /** false: the failed poll is not believed yet, the last good state is kept */
+  confirmed: boolean;
+  /** consecutive failed polls including this one (0 after a successful poll) */
+  failures: number;
+  /** this very poll turned an online server offline */
+  becameOffline: boolean;
+}
+
+/**
+ * Whether a poll result changes what the panel shows.
+ *  - a successful poll always counts and resets the counter;
+ *  - a failed poll counts at once when there is no state to hold (new server) or the server is already offline;
+ *  - otherwise the last good state is kept until `threshold` consecutive polls have failed.
+ */
+export function decideStatus(i: { prevOnline: boolean | null; prevFailures: number; polledOnline: boolean; threshold: number }): Decision {
+  if (i.polledOnline) return { online: true, confirmed: true, failures: 0, becameOffline: false };
+  const failures = Math.min(1_000_000, Math.max(0, Math.floor(i.prevFailures)) + 1);
+  const threshold = clampThreshold(i.threshold);
+  if (i.prevOnline === null || i.prevOnline === false) return { online: false, confirmed: true, failures, becameOffline: false };
+  if (failures >= threshold) return { online: false, confirmed: true, failures, becameOffline: true };
+  return { online: true, confirmed: false, failures, becameOffline: false };
+}
+
+/** runs `worker` over `items`, at most `limit` at a time; a failing worker never stops the others */
+export async function runPool<T>(items: T[], limit: number, worker: (item: T, index: number) => Promise<void>): Promise<void> {
+  const n = Math.max(1, Math.floor(limit));
+  let next = 0;
+  const lane = async () => {
+    for (;;) {
+      const i = next++;
+      if (i >= items.length) return;
+      try {
+        await worker(items[i], i);
+      } catch {
+        /* the worker reports its own failures */
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(n, items.length) }, lane));
 }
