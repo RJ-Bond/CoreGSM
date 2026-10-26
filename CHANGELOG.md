@@ -17,6 +17,7 @@ interface language; the GitHub release text is built from the section of the ver
 ## Не выпущено | Unreleased
 
 ### ✨ Новое | New
+- ✨ SVG-значки на карточках серверов: часы, щит аптайма, метка карты, ярлык версии, кресло у «Свободно N мест» и силуэты у ников игроков | SVG icons on the server cards: a clock, an uptime shield, a map pin, a version tag, a seat next to «N slots free» and person silhouettes next to the player names
 - 🃏 Большая карточка сервера ещё спокойнее: единое мягкое затемнение вместо тёмных «пятен» поверх картинки, «Самый загруженный» тонкой надписью над названием, ники игроков в один ряд, панель графика без рамок и размытия | The big server card is calmer still: one soft scrim instead of dark patches over the picture, «Most loaded» as a thin caption above the name, the player names in one row, a chart panel without borders and blur
 - 🏷 В футере сайта версия панели («v1.0.0.50») и SVG-значки у ссылок; версия берётся оттуда же, откуда её показывают экраны обновлений (у старых установок это короткий номер сборки) и приходит в публичном ответе `/api/access` | The site footer shows the version of the panel («v1.0.0.50») and SVG icons next to its links; the version comes from the same place as on the update screens (a short build id on older installs) and is part of the public `/api/access` answer
 

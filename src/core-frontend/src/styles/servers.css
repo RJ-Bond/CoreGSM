@@ -582,3 +582,13 @@ html[data-motion='reduce'] .srv-new-chev, html[data-motion='reduce'] .srv-check,
   .srv-hero.is-split > .sh-chart { padding: 14px 14px 6px 6px; border-radius: var(--r-xl); background: rgb(6 8 18 / .34); box-shadow: inset 0 0 0 1px rgb(255 255 255 / .07);
     -webkit-backdrop-filter: none; backdrop-filter: none; }
 }
+
+/* ---------- svg icons of the server cards ---------- */
+.card-ico { flex: none; width: 14px; height: 14px; margin-right: 5px; vertical-align: -2px; opacity: .85; }
+.srv-hero .sh-foot .sh-chip { display: inline-flex; align-items: center; }
+.srv-hero .sh-foot .sh-chip + .sh-chip::before { align-self: center; }
+.srv-slots { display: inline-flex; align-items: center; }
+.srv-chip .card-ico { width: 12px; height: 12px; margin-right: 4px; vertical-align: -1.5px; }
+/* a person icon leads the row of names; it is not a chip */
+.srv-names > li.srv-names-ico { display: inline-flex; align-items: center; padding: 0; background: none !important; color: inherit; opacity: .8; }
+.srv-names > li.srv-names-ico .card-ico { margin-right: 0; width: 15px; height: 15px; }
