@@ -176,8 +176,8 @@ export default function CompareChart({ servers }: { servers: Server[] }) {
           </svg>
         )}
         {hover != null && data && (
-          <div className="pointer-events-none absolute top-1 z-10 min-w-44 -translate-x-1/2 rounded-xl bg-ink px-3 py-2 text-[13px] font-bold text-page shadow-pop" style={{ left: Math.min(W - 100, Math.max(100, x(hover))) }}>
-            <div className="mb-1 text-[12px] font-semibold opacity-80">{new Date(tsOf(hover)).toLocaleString('ru-RU', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</div>
+          <div className="pointer-events-none absolute top-1 z-10 min-w-44 -translate-x-1/2 rounded-xl bg-ink px-3 py-2 text-fs-sm font-bold text-page shadow-pop" style={{ left: Math.min(W - 100, Math.max(100, x(hover))) }}>
+            <div className="mb-1 text-fs-xs font-semibold opacity-80">{new Date(tsOf(hover)).toLocaleString('ru-RU', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</div>
             {[...shown].sort((a, b) => (b.values[hover] ?? -1) - (a.values[hover] ?? -1)).map((s) => (
               <div key={s.s.id} className="flex items-center gap-2 whitespace-nowrap">
                 <span className="h-2.5 w-2.5 rounded-full" style={{ background: s.color }} />

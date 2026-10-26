@@ -155,7 +155,7 @@ export function PageHead({ title, subtitle, icon, hint, help, children }: { titl
     <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-3.5">
-          {icon && <span className="grid h-12 w-12 shrink-0 place-items-center rounded-[18px] bg-linear-to-br from-brand to-brand-2 text-white shadow-pop">{icon}</span>}
+          {icon && <span className="grid h-12 w-12 shrink-0 place-items-center rounded-ui-lg bg-linear-to-br from-brand to-brand-2 text-white shadow-pop">{icon}</span>}
           <div className="min-w-0">
             <h1 className="text-2xl font-extrabold tracking-tight sm:text-[30px]">{title}</h1>
             {subtitle && <p className="mt-0.5 font-semibold text-mute">{subtitle}</p>}

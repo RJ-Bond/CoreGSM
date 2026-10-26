@@ -27,11 +27,11 @@ export default function AuthShowcase({ side }: { side: 'left' | 'right' }) {
     return (
       <div aria-hidden className="hidden flex-col items-end gap-4 xl:flex">
         {top ? (
-          <div className="showcase-tile w-72 -rotate-2 rounded-[26px] p-5 text-white shadow-soft" style={{ background: `linear-gradient(135deg, ${gameGradient(top.game)[0]}, ${gameGradient(top.game)[1]})`, animationDelay: '.15s' }}>
+          <div className="showcase-tile w-72 -rotate-2 rounded-ui-xl p-5 text-white shadow-soft" style={{ background: `linear-gradient(135deg, ${gameGradient(top.game)[0]}, ${gameGradient(top.game)[1]})`, animationDelay: '.15s' }}>
             <div className="flex items-center gap-3">
               <GameAvatar game={top.game} size={40} glass />
               <div className="min-w-0">
-                <div className="truncate text-[15px] font-extrabold leading-tight">{top.name}</div>
+                <div className="truncate text-fs-base font-extrabold leading-tight">{top.name}</div>
                 <div className="truncate text-xs font-bold opacity-85">{gameLabel(top.game)}</div>
               </div>
             </div>

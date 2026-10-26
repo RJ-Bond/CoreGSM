@@ -171,7 +171,7 @@ export function WhatsNew({ open, onToggle, overview }: { open: boolean; onToggle
                     <span className={`srv-new-dot ${m.active ? 'bg-warn' : 'bg-mute'}`} aria-hidden />
                     <div className="min-w-0">
                       <div className="truncate font-extrabold">{m.name}{m.serverName ? ` · ${m.serverName}` : ''}</div>
-                      <div className="text-[13px] font-bold text-mute">
+                      <div className="text-fs-sm font-bold text-mute">
                         {m.active ? t('srv.new.until', { time: fmtDateTime(m.endTs) }) : t('srv.new.from', { from: fmtDateTime(m.startTs), to: fmtTime(m.endTs) })}
                       </div>
                     </div>

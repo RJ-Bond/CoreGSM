@@ -130,7 +130,7 @@ export function UpdateCard() {
     <div className="space-y-5">
       <section
         aria-live="polite"
-        className={`relative overflow-hidden rounded-[26px] p-6 sm:p-7 ${
+        className={`relative overflow-hidden rounded-ui-xl p-6 sm:p-7 ${
           state === 'available'
             ? 'update-hero text-white'
             : state === 'running'
