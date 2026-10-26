@@ -77,10 +77,12 @@ a.adm-tile:hover { box-shadow: var(--shadow-2); border-color: rgb(var(--brand) /
 .adm-table thead th { position: sticky; top: 4.75rem; z-index: 2; background: rgb(var(--card)); box-shadow: 0 1px 0 rgb(var(--line)); }
 .adm-st:has(.adm-bulk) .adm-table thead th { top: 8.25rem; }
 .adm-bulk { position: sticky; top: 4.75rem; z-index: 25; box-shadow: var(--shadow-2); backdrop-filter: blur(8px); }
-.adm-table tbody tr[data-state] td:first-child { box-shadow: inset 3px 0 0 rgb(var(--ok)); }
-.adm-table tbody tr[data-state='lag'] td:first-child { box-shadow: inset 3px 0 0 rgb(var(--warn)); }
-.adm-table tbody tr[data-state='off'] td:first-child { box-shadow: inset 3px 0 0 rgb(var(--bad)); }
-.adm-table tbody tr[data-state='maint'] td:first-child { box-shadow: inset 3px 0 0 rgb(var(--link)); }
+.adm-table tbody tr[data-state] td:first-child { box-shadow: inset 4px 0 0 rgb(var(--ok)); }
+.adm-table tbody tr[data-state='lag'] td:first-child { box-shadow: inset 4px 0 0 rgb(var(--warn)); }
+.adm-table tbody tr[data-state='lag'] { background: rgb(var(--warn) / .06); }
+.adm-table tbody tr[data-state='off'] td:first-child { box-shadow: inset 4px 0 0 rgb(var(--bad)); }
+.adm-table tbody tr[data-state='off'] { background: rgb(var(--bad) / .06); }
+.adm-table tbody tr[data-state='maint'] td:first-child { box-shadow: inset 4px 0 0 rgb(var(--link)); }
 .adm-expand { display: inline-grid; place-items: center; width: 22px; height: 22px; flex: none; border-radius: 6px; color: rgb(var(--mute)); font-size: var(--fs-xs); }
 .adm-expand:hover { background: rgb(var(--soft)); color: rgb(var(--ink)); }
 .adm-copy { padding: 0; background: none; color: inherit; }

@@ -16,6 +16,9 @@ interface language; the GitHub release text is built from the section of the ver
 
 ## Не выпущено | Unreleased
 
+### ✨ Новое | New
+- 🧭 Админка компактнее: подсказка страницы показывается при первом визите и дальше сворачивается (кнопка «i» возвращает её), заголовки ниже, на телефоне без подзаголовка; проблемные строки таблицы серверов подсвечены цветом, в пустом журнале есть «Сбросить поиск» | The admin area is more compact: a page hint shows on the first visit and then folds (the «i» button brings it back), smaller headings, no subtitle on a phone; problem rows of the servers table are tinted, and the empty journal has a «Reset search» button
+
 ### 🐛 Исправлено | Fixed
 - 🖼️ Картинка «Неделя на …»: названия серверов целиком видно — общее начало («[RU] Just-Skill.Ru | …») убирается, длинное имя переносится на две строки, заголовок «Серверы» не слипается с подписью | The weekly picture: server names are readable — the shared start («[RU] Just-Skill.Ru | …») is dropped, long names wrap onto two lines, and the «Servers» heading no longer touches its caption
 
