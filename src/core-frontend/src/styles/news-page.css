@@ -274,11 +274,11 @@
 .nw-soon:hover b { text-decoration: underline; }
 
 .nw-hints { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; list-style: none; padding: 0; margin: 18px 0 0; }
-.nw-hint { display: grid; gap: 4px; padding: 14px; border-radius: 14px; border: 1px dashed rgb(var(--line)); font-size: 13px; }
-.nw-hint b { font-size: 14px; }
+.nw-hint { display: grid; gap: 4px; padding: 14px; border-radius: var(--r-md); border: 1px dashed rgb(var(--line)); font-size: var(--fs-sm); }
+.nw-hint b { font-size: var(--fs-md); }
 .nw-hint > span:last-child { opacity: .7; }
-.nw-hint-ico { display: inline-grid; place-items: center; width: 34px; height: 34px; border-radius: 10px; background: color-mix(in srgb, currentColor 10%, transparent); }
-.nw-side-hint { margin-left: auto; margin-right: 8px; font-size: 12px; font-weight: 500; opacity: .65; }
+.nw-hint-ico { display: inline-grid; place-items: center; width: 34px; height: 34px; border-radius: var(--r-md); background: color-mix(in srgb, currentColor 10%, transparent); }
+.nw-side-hint { margin-left: auto; margin-right: 8px; font-size: var(--fs-xs); font-weight: 500; opacity: .65; }
 .nw-gallery-3 > li:first-child, .nw-gallery-5 > li:first-child { grid-column: span 2; grid-row: span 2; }
 .nw-gallery-6 > li:first-child { grid-column: span 2; grid-row: span 2; }
 .nw-react-btn { position: relative; }

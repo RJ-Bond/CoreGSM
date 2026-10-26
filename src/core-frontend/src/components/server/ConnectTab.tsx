@@ -24,7 +24,7 @@ function BigCopy({ label, value, id }: { label: string; value: string; id: strin
   };
   return (
     <div className="min-w-0">
-      <div id={id} className="mb-1 text-[13px] font-extrabold text-mute">{label}</div>
+      <div id={id} className="mb-1 text-fs-sm font-extrabold text-mute">{label}</div>
       <div className="cn-big">
         <code title={value} aria-labelledby={id}>{value}</code>
         <button type="button" className="btn btn-lg" onClick={() => void copy()} aria-describedby={id}>

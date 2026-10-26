@@ -5,7 +5,7 @@ import { AuthBrand } from '../ui';
 /** the card of the e-mail flows (forgot / reset / verify): brand, a title and a way back to sign in */
 export default function AuthFlow({ title, subtitle, children }: { title: string; subtitle?: string; children: ReactNode }) {
   return (
-    <div className="auth-card w-full max-w-sm rounded-[28px] border bg-card p-6 sm:p-7">
+    <div className="auth-card w-full max-w-sm rounded-ui-xl border bg-card p-6 sm:p-7">
       <AuthBrand subtitle={subtitle} />
       <h1 className="mb-4 text-center text-xl font-black">{title}</h1>
       <div className="space-y-4">{children}</div>
