@@ -2,6 +2,7 @@
  * Registration and profile from Discord slash commands (the bot calls these internal routes).
  * A Discord-registered account is a normal `player` without a password: the Discord identity is the login.
  */
+import { recordConsent } from './rules.js';
 import crypto from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import type { Express, NextFunction, Request, RequestHandler, Response } from 'express';
@@ -119,6 +120,7 @@ export function registerDiscordRegistration(deps: DiscordRegisterDeps): void {
             .run(login, bcrypt.hashSync(crypto.randomBytes(24).toString('hex'), 4), Date.now(), status, discordId, displayName, avatar).lastInsertRowid,
         );
         setNick(id, nick);
+        if (rules) recordConsent(id, 'discord');
       })();
       logAccount(req, id, 'register_discord', pending ? 'ожидает одобрения' : '');
       res.json({

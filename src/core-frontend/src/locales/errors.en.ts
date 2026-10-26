@@ -108,6 +108,7 @@ const errorsEn: Record<string, string> = {
   update_channel_invalid: 'Channel: release or main',
   update_version_invalid: 'Invalid version',
   update_notify_channel_invalid: 'Invalid channel',
+  game_file_invalid: 'The game file did not pass the check',
   welcome_invalid: 'Welcome message: check the channel and the text length (up to 1000 characters)',
   rollback_unavailable: 'Rollback is not available: the previous version was not kept',
   request_pending: 'A request is already waiting to be carried out',
