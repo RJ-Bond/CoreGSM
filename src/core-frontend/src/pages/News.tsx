@@ -1,3 +1,4 @@
+import { Switch } from '../components/Switch';
 import { useState } from 'react';
 import { NewsCalendar } from '../components/news/Calendar';
 import { confirmDialog } from '../confirm';
@@ -72,6 +73,11 @@ function NewsList() {
     if (!/^\d{15,25}$/.test(channelId)) return;
     await api('/news/settings', 'PUT', { channelId }).catch((e) => setError(e.message));
     setChanging(false);
+    void load();
+  };
+
+  const setCrosspost = async (crosspost: boolean) => {
+    await api('/news/settings', 'PUT', { crosspost }).catch((e) => setError(e.message));
     void load();
   };
 
@@ -210,6 +216,16 @@ function NewsList() {
             <ChannelPicker id="news-test-channel-setting" value={settings?.testChannelId ?? ''} onChange={(v) => { if (v) void setTestChannel(v); }} />
           </div>
         )}
+      </Strip>
+
+      <Strip>
+        <label className="flex min-w-0 items-center gap-3 font-bold">
+          <Switch id="news-crosspost" checked={!!settings?.crosspost} onChange={(on) => void setCrosspost(on)} />
+          <span className="min-w-0">
+            Публиковать для подписчиков канала-объявлений
+            <span className="block text-xs font-semibold text-mute">Если новости идут в канал типа «Объявления», бот сразу рассылает их серверам, которые подписаны на этот канал.</span>
+          </span>
+        </label>
       </Strip>
 
       <div className="seg" role="group" aria-label="Вид списка">

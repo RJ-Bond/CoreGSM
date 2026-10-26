@@ -109,6 +109,7 @@ const errorsEn: Record<string, string> = {
   update_version_invalid: 'Invalid version',
   update_notify_channel_invalid: 'Invalid channel',
   game_file_invalid: 'The game file did not pass the check',
+  news_templates_invalid: 'Templates: at most 12, each with a name and a text',
   discord_style_invalid: 'Message style: a colour like #5a4bd1, a signature up to 40 characters',
   poll_invalid: 'Check the poll: a question of 3+ characters, 2 to 10 different options, a closing time in the future',
   poll_not_found: 'Poll not found',
