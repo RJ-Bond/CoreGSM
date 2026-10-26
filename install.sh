@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="2294306b42a0"
+COREGSM_BUILD="4a5f0f710e68"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.0.0.48"
+COREGSM_VERSION="1.0.0.49"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -3857,6 +3857,505 @@ __COREGSM_EOF__
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/alertChannels.ts" << '__COREGSM_EOF__'
+/**
+ * Alert channels that do not depend on Discord: outgoing webhooks and e-mail to administrators.
+ *
+ *   GET    /api/alert-channels            channels, the events and whether SMTP is ready (administrators)
+ *   POST   /api/alert-channels            add one
+ *   PUT    /api/alert-channels/:id        change one (a secret that is not sent stays as it is)
+ *   DELETE /api/alert-channels/:id        remove
+ *   POST   /api/alert-channels/:id/test   send a test message at once and show the result
+ *
+ * A message is put into the common delivery queue (deliveries.ts, kinds 'webhook' and 'email': the table is the queue,
+ * the retries and the backoff are the same as for Discord) and a worker in this process sends it. The result of the
+ * last attempt is kept on the channel. The signing secret is stored encrypted and is never sent back to the browser.
+ */
+import http from 'node:http';
+import https from 'node:https';
+import type { Express, RequestHandler } from 'express';
+import { z } from 'zod';
+import {
+  botIsDown, CHANNEL_EVENTS, EVENT_LABELS, isEvent, mailSubject, MAX_RESPONSE_BYTES, parseRecipients, WEBHOOK_TIMEOUT_MS, webhookBody, webhookHeaders,
+  type ChannelEvent, type ChannelKind, type EventData,
+} from './alertChannelsLogic.js';
+import { bot } from './botState.js';
+import { db, getSetting } from './db.js';
+import { claimDue, enqueueDelivery, registerKind, reportResult, type DeliveryStatus } from './deliveries.js';
+import { log } from './logger.js';
+import { layout, mailReady, sendMail } from './mail.js';
+import { decryptSecret, encryptSecret } from './secrets.js';
+import { brand } from './site.js';
+import { checkWebhookUrl, safeLookup } from './urlGuard.js';
+
+export const MAX_CHANNELS = 20;
+export const SMTP_MISSING = 'SMTP не настроен: укажите почтовый сервер в настройках, и канал заработает';
+
+interface ChannelRow {
+  id: number;
+  kind: ChannelKind;
+  name: string;
+  url: string;
+  secret: string;
+  recipients: string;
+  events: string;
+  enabled: number;
+  allow_private: number;
+  last_status: string | null;
+  last_error: string | null;
+  last_at: number | null;
+  created_at: number;
+}
+
+const eventsOf = (r: Pick<ChannelRow, 'events'>): ChannelEvent[] => {
+  try {
+    const v = JSON.parse(r.events) as unknown;
+    return Array.isArray(v) ? v.filter(isEvent) : [];
+  } catch {
+    return [];
+  }
+};
+const recipientsOf = (r: Pick<ChannelRow, 'recipients'>): string[] => {
+  try {
+    const v = JSON.parse(r.recipients) as unknown;
+    return Array.isArray(v) ? v.map(String) : [];
+  } catch {
+    return [];
+  }
+};
+const secretOf = (r: Pick<ChannelRow, 'secret'>): string => {
+  if (!r.secret) return '';
+  try {
+    return decryptSecret(r.secret);
+  } catch {
+    return '';
+  }
+};
+
+/** the address without its path and query: they often carry a token (Slack, Discord and similar) */
+export function maskUrl(raw: string): string {
+  try {
+    const u = new URL(raw);
+    return `${u.protocol}//${u.host}/…`;
+  } catch {
+    return '';
+  }
+}
+
+function present(r: ChannelRow) {
+  return {
+    id: r.id,
+    kind: r.kind,
+    name: r.name,
+    urlPreview: r.kind === 'webhook' ? maskUrl(r.url) : '',
+    hasSecret: !!r.secret,
+    recipients: recipientsOf(r),
+    events: eventsOf(r),
+    enabled: !!r.enabled,
+    allowPrivate: !!r.allow_private,
+    lastStatus: r.last_status,
+    lastError: r.last_error,
+    lastAt: r.last_at,
+    createdAt: r.created_at,
+  };
+}
+
+const channels = () => db.prepare('SELECT * FROM alert_channels ORDER BY id').all() as ChannelRow[];
+
+/** true when at least one enabled channel listens to the event (the alert machinery must run for it) */
+export function channelsWant(event: ChannelEvent): boolean {
+  try {
+    return channels().some((c) => c.enabled && eventsOf(c).includes(event));
+  } catch {
+    return false;
+  }
+}
+
+/** Puts a message into the queue of every enabled channel that listens to the event. Never throws. */
+export function dispatchEvent(e: EventData & { event: ChannelEvent }): number {
+  let n = 0;
+  try {
+    for (const c of channels()) {
+      if (!c.enabled || !eventsOf(c).includes(e.event)) continue;
+      enqueueDelivery({ kind: c.kind, refId: c.id, target: String(c.id), payload: e });
+      n++;
+    }
+    if (n) setImmediate(() => void processQueue());
+  } catch (err) {
+    log.error('alert channels dispatch failed', (err as Error).message);
+  }
+  return n;
+}
+
+// ---------- sending ----------
+export interface SendResult {
+  ok: boolean;
+  error?: string;
+  /** do not retry (the address is forbidden, the channel is gone) */
+  final?: boolean;
+  retryAfterMs?: number;
+  /** HTTP status of the receiver */
+  status?: number;
+}
+
+/** One POST with a timeout, a limit on the answer and no redirects. */
+export function postJson(url: URL, headers: Record<string, string>, body: string, allowPrivate: boolean): Promise<{ status: number; text: string; retryAfter: number | null }> {
+  return new Promise((resolve, reject) => {
+    const lib = url.protocol === 'https:' ? https : http;
+    const req = lib.request(
+      {
+        protocol: url.protocol,
+        hostname: url.hostname.replace(/^\[|\]$/g, ''),
+        port: url.port || undefined,
+        path: `${url.pathname}${url.search}`,
+        method: 'POST',
+        headers: { ...headers, 'Content-Length': String(Buffer.byteLength(body)) },
+        lookup: safeLookup(allowPrivate) as never,
+        agent: false,
+      },
+      (res) => {
+        const chunks: Buffer[] = [];
+        let size = 0;
+        res.on('data', (c: Buffer) => {
+          size += c.length;
+          if (size <= MAX_RESPONSE_BYTES) chunks.push(c);
+          else res.destroy(); // enough: the rest is not read
+        });
+        const done = () => {
+          clearTimeout(timer);
+          const ra = Number(res.headers['retry-after']);
+          resolve({ status: res.statusCode ?? 0, text: Buffer.concat(chunks).toString('utf8'), retryAfter: Number.isFinite(ra) && ra > 0 ? ra * 1000 : null });
+        };
+        res.on('end', done);
+        res.on('close', done);
+        res.on('error', () => done());
+      },
+    );
+    const timer = setTimeout(() => req.destroy(Object.assign(new Error('timeout'), { code: 'ETIMEDOUT' })), WEBHOOK_TIMEOUT_MS);
+    req.on('error', (e) => {
+      clearTimeout(timer);
+      reject(e);
+    });
+    req.end(body);
+  });
+}
+
+const netError = (e: unknown): string => {
+  const err = e as Error & { code?: string };
+  if (err.code === 'EBLOCKED') return 'Адрес запрещён: он указывает на локальную сеть. Разрешить такие адреса можно в настройках канала';
+  if (err.code === 'ENOTFOUND' || err.code === 'EAI_AGAIN') return 'Имя сервера не найдено';
+  if (err.code === 'ECONNREFUSED') return 'Соединение отклонено';
+  if (err.code === 'ETIMEDOUT' || err.code === 'ECONNRESET') return 'Сервер не ответил за отведённое время';
+  if (err.code && /CERT|SELF_SIGNED|TLS|SSL|UNABLE_TO/i.test(err.code)) return 'Ошибка сертификата получателя';
+  return `Сбой отправки: ${String(err.message ?? err).slice(0, 120)}`;
+};
+
+export async function sendWebhook(c: Pick<ChannelRow, 'url' | 'secret' | 'allow_private'>, e: EventData, deliveryId: number | string): Promise<SendResult> {
+  const chk = checkWebhookUrl(c.url, !!c.allow_private);
+  if (!chk.ok) return { ok: false, error: chk.error, final: true };
+  const ts = Math.floor(Date.now() / 1000);
+  const body = webhookBody(e, ts, deliveryId);
+  try {
+    const r = await postJson(chk.url, webhookHeaders(secretOf(c), ts, body, e.event, deliveryId), body, !!c.allow_private);
+    if (r.status >= 200 && r.status < 300) return { ok: true, status: r.status };
+    if (r.status >= 300 && r.status < 400) return { ok: false, status: r.status, error: `Получатель ответил перенаправлением (${r.status}): укажите конечный адрес`, final: true };
+    return { ok: false, status: r.status, error: `Получатель ответил ошибкой ${r.status}`, retryAfterMs: r.status === 429 ? (r.retryAfter ?? undefined) : undefined };
+  } catch (err) {
+    const code = (err as { code?: string }).code;
+    return { ok: false, error: netError(err), final: code === 'EBLOCKED' };
+  }
+}
+
+export async function sendEmail(c: Pick<ChannelRow, 'recipients'>, e: EventData): Promise<SendResult> {
+  if (!mailReady()) return { ok: false, error: SMTP_MISSING };
+  const to = recipientsOf(c);
+  if (!to.length) return { ok: false, error: 'Не указан ни один получатель', final: true };
+  const b = brand().name;
+  const lines = [e.title, ...(e.text ? [e.text] : [])];
+  const l = layout(b, lines);
+  try {
+    await sendMail({ to: to.join(', '), subject: mailSubject(b, e), text: l.text, html: l.html });
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: (err as Error).message.slice(0, 200) };
+  }
+}
+
+function send(c: ChannelRow, e: EventData, deliveryId: number | string): Promise<SendResult> {
+  return c.kind === 'webhook' ? sendWebhook(c, e, deliveryId) : sendEmail(c, e);
+}
+
+function remember(id: number, r: SendResult, now = Date.now()): void {
+  db.prepare('UPDATE alert_channels SET last_status = ?, last_error = ?, last_at = ? WHERE id = ?').run(r.ok ? 'ok' : 'error', r.ok ? null : (r.error ?? 'Ошибка').slice(0, 300), now, id);
+}
+
+// the queue reports progress back to the channel: sent -> ok, a failure (retry or dead) -> error with the reason
+function onState(refId: number, status: DeliveryStatus, error: string | null, now: number): void {
+  if (status === 'sending' || status === 'pending') return;
+  db.prepare('UPDATE alert_channels SET last_status = ?, last_error = ?, last_at = ? WHERE id = ?').run(status === 'sent' ? 'ok' : 'error', status === 'sent' ? null : error, now, refId);
+}
+registerKind('webhook', { onState });
+registerKind('email', { onState });
+
+let working = false;
+/** sends the due messages of the channels; exported for tests */
+export async function processQueue(): Promise<number> {
+  if (working) return 0;
+  working = true;
+  let n = 0;
+  try {
+    for (const d of claimDue(['webhook', 'email'], Date.now(), 20)) {
+      n++;
+      const c = db.prepare('SELECT * FROM alert_channels WHERE id = ?').get(d.refId) as ChannelRow | undefined;
+      if (!c || !c.enabled) {
+        reportResult(d.id, { ok: false, error: 'Канал удалён или выключен', final: true });
+        continue;
+      }
+      let r: SendResult;
+      try {
+        r = await send(c, d.payload as EventData, d.id);
+      } catch (e) {
+        r = { ok: false, error: (e as Error).message.slice(0, 200) };
+      }
+      reportResult(d.id, r.ok ? { ok: true } : { ok: false, error: r.error ?? 'Ошибка отправки', final: r.final, retryAfterMs: r.retryAfterMs });
+    }
+  } catch (e) {
+    log.error('alert channels queue failed', (e as Error).message);
+  } finally {
+    working = false;
+  }
+  return n;
+}
+
+// ---------- the bot itself ----------
+/** How long the bot may be out of reach before the administrators are told (it reconnects on its own after a blip). */
+export const BOT_DOWN_AFTER_MS = 2 * 60_000;
+const startedAt = Date.now();
+let botBadSince: number | null = null;
+let botNotified = false;
+
+/** called by a timer; exported for tests (`now` and the status can be passed) */
+export function watchBot(now = Date.now(), status = bot.status, token = !!getSetting('discord_token')): void {
+  const down = botIsDown(status, token, now);
+  if (!down) {
+    botBadSince = null;
+    if (botNotified) {
+      botNotified = false;
+      dispatchEvent({ event: 'bot_up', title: 'Discord-бот снова на связи', text: status.tag ? `Бот ${status.tag} подключён.` : '', data: { state: status.state } });
+    }
+    return;
+  }
+  botBadSince ??= Math.max(now, startedAt);
+  if (!botNotified && now - botBadSince >= BOT_DOWN_AFTER_MS) {
+    botNotified = true;
+    const why = status.error ? `Причина: ${status.error.slice(0, 200)}` : status.state === 'online' ? 'Бот давно не присылал отчёт о состоянии.' : `Состояние бота: ${status.state}.`;
+    dispatchEvent({ event: 'bot_down', title: 'Discord-бот не на связи', text: `${why} Оповещения в Discord и новости не доставляются, пока бот не вернётся.`, data: { state: status.state, error: status.error } });
+  }
+}
+
+// ---------- routes ----------
+const eventList = z.array(z.enum(CHANNEL_EVENTS)).max(20);
+
+const bodySchema = z.object({
+  kind: z.enum(['webhook', 'email']),
+  name: z.string().trim().min(1, 'Дайте каналу название').max(60, 'Название не длиннее 60 символов'),
+  url: z.string().max(500).optional(),
+  /** null clears the secret; absent keeps it */
+  secret: z.string().max(200).nullable().optional(),
+  recipients: z.union([z.string().max(2000), z.array(z.string().max(200)).max(20)]).optional(),
+  events: eventList,
+  enabled: z.boolean().optional(),
+  allowPrivate: z.boolean().optional(),
+});
+
+export function registerAlertChannels(deps: { app: Express; admin: RequestHandler }): void {
+  const { app, admin } = deps;
+  const timer = setInterval(() => {
+    try {
+      watchBot();
+    } catch (e) {
+      log.error('bot watch failed', (e as Error).message);
+    }
+    void processQueue();
+  }, 5_000);
+  timer.unref();
+
+  const view = () => ({
+    smtpReady: mailReady(),
+    events: CHANNEL_EVENTS.map((id) => ({ id, label: EVENT_LABELS[id] })),
+    items: channels().map(present),
+  });
+
+  app.get('/api/alert-channels', admin, (_req, res) => res.json(view()));
+
+  /** validates the body against the stored row (for a change) and returns the values to write */
+  function prepare(b: z.infer<typeof bodySchema>, old: ChannelRow | null): { error: string; status?: number } | { row: Omit<ChannelRow, 'id' | 'last_status' | 'last_error' | 'last_at' | 'created_at'> } {
+    const enabled = b.enabled ?? (old ? !!old.enabled : true);
+    const allowPrivate = b.allowPrivate ?? (old ? !!old.allow_private : false);
+    let url = '';
+    let recipients: string[] = [];
+    if (b.kind === 'webhook') {
+      url = (b.url ?? old?.url ?? '').trim();
+      const chk = checkWebhookUrl(url, allowPrivate);
+      if (!chk.ok) return { error: chk.error };
+    } else {
+      const p = parseRecipients(b.recipients ?? (old ? recipientsOf(old) : []));
+      if (p.bad.length) return { error: `Неверный адрес почты: ${p.bad.slice(0, 3).join(', ')}` };
+      if (!p.ok.length) return { error: 'Укажите хотя бы одного получателя' };
+      if (p.ok.length > 20) return { error: 'Получателей не больше 20' };
+      recipients = p.ok;
+      if (enabled && !mailReady()) return { error: SMTP_MISSING, status: 409 };
+    }
+    const secret = b.kind !== 'webhook' || b.secret === null ? '' : b.secret === undefined ? (old?.secret ?? '') : b.secret.trim() ? encryptSecret(b.secret.trim()) : (old?.secret ?? '');
+    return {
+      row: { kind: b.kind, name: b.name, url, secret, recipients: JSON.stringify(recipients), events: JSON.stringify([...new Set(b.events)]), enabled: enabled ? 1 : 0, allow_private: allowPrivate ? 1 : 0 },
+    };
+  }
+
+  app.post('/api/alert-channels', admin, (req, res) => {
+    const b = bodySchema.safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: b.error.issues[0]?.message ?? 'Проверьте поля' });
+    if ((db.prepare('SELECT COUNT(*) AS n FROM alert_channels').get() as { n: number }).n >= MAX_CHANNELS) return res.status(400).json({ error: `Каналов не больше ${MAX_CHANNELS}` });
+    const p = prepare(b.data, null);
+    if ('error' in p) return res.status(p.status ?? 400).json({ error: p.error });
+    const r = p.row;
+    const id = Number(
+      db
+        .prepare('INSERT INTO alert_channels (kind, name, url, secret, recipients, events, enabled, allow_private, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+        .run(r.kind, r.name, r.url, r.secret, r.recipients, r.events, r.enabled, r.allow_private, Date.now()).lastInsertRowid,
+    );
+    res.status(201).json({ ...view(), id });
+  });
+
+  app.put('/api/alert-channels/:id', admin, (req, res) => {
+    const id = Number(req.params.id);
+    const old = db.prepare('SELECT * FROM alert_channels WHERE id = ?').get(id) as ChannelRow | undefined;
+    if (!old) return res.status(404).json({ error: 'Канал не найден' });
+    const b = bodySchema.safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: b.error.issues[0]?.message ?? 'Проверьте поля' });
+    if (b.data.kind !== old.kind) return res.status(400).json({ error: 'Тип канала изменить нельзя: создайте новый' });
+    const p = prepare(b.data, old);
+    if ('error' in p) return res.status(p.status ?? 400).json({ error: p.error });
+    const r = p.row;
+    db.prepare('UPDATE alert_channels SET name = ?, url = ?, secret = ?, recipients = ?, events = ?, enabled = ?, allow_private = ? WHERE id = ?').run(r.name, r.url, r.secret, r.recipients, r.events, r.enabled, r.allow_private, id);
+    res.json(view());
+  });
+
+  app.delete('/api/alert-channels/:id', admin, (req, res) => {
+    const id = Number(req.params.id);
+    const r = db.prepare('DELETE FROM alert_channels WHERE id = ?').run(id);
+    if (!r.changes) return res.status(404).json({ error: 'Канал не найден' });
+    db.prepare("DELETE FROM deliveries WHERE kind IN ('webhook','email') AND ref_id = ? AND status IN ('pending','error','sending')").run(id);
+    res.json(view());
+  });
+
+  app.post('/api/alert-channels/:id/test', admin, async (req, res) => {
+    const id = Number(req.params.id);
+    const c = db.prepare('SELECT * FROM alert_channels WHERE id = ?').get(id) as ChannelRow | undefined;
+    if (!c) return res.status(404).json({ error: 'Канал не найден' });
+    const e: EventData = { event: 'test', title: 'Проверка оповещений', text: 'Если вы видите это сообщение, канал оповещений настроен верно.', data: { channel: c.name } };
+    const r = await send(c, e, `test-${Date.now()}`);
+    remember(id, r);
+    res.json({ ok: r.ok, error: r.error ?? null, httpStatus: r.status ?? null, ...view() });
+  });
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/alertChannelsLogic.ts" << '__COREGSM_EOF__'
+/** Pure helpers of the extra alert channels (webhooks, e-mail): events, signature, message texts. No database, no network. */
+import crypto from 'node:crypto';
+
+export const CHANNEL_EVENTS = ['server_down', 'server_up', 'news_published', 'wipe', 'maintenance', 'bot_down', 'bot_up'] as const;
+export type ChannelEvent = (typeof CHANNEL_EVENTS)[number];
+export type ChannelKind = 'webhook' | 'email';
+
+export const EVENT_LABELS: Record<ChannelEvent, string> = {
+  server_down: 'Сервер недоступен',
+  server_up: 'Сервер снова в сети',
+  news_published: 'Опубликована новость',
+  wipe: 'Запущен вайп',
+  maintenance: 'Запланировано обслуживание',
+  bot_down: 'Discord-бот не на связи',
+  bot_up: 'Discord-бот снова на связи',
+};
+
+export const isEvent = (v: unknown): v is ChannelEvent => typeof v === 'string' && (CHANNEL_EVENTS as readonly string[]).includes(v);
+
+/** a webhook body larger than this is cut (the receiver is not ours) */
+export const MAX_BODY_BYTES = 16 * 1024;
+/** the answer of the receiver is read up to this size, the rest is dropped */
+export const MAX_RESPONSE_BYTES = 8 * 1024;
+export const WEBHOOK_TIMEOUT_MS = 10_000;
+
+export interface EventData {
+  event: ChannelEvent | 'test';
+  /** one line in plain Russian */
+  title: string;
+  /** more detail, may be empty */
+  text: string;
+  /** machine readable details (server id and name, news id, ...) */
+  data: Record<string, unknown>;
+}
+
+/** HMAC-SHA256 of `<timestamp>.<body>`, hex; sent as X-CoreGSM-Signature: sha256=<hex> */
+export function signBody(secret: string, timestamp: number, body: string): string {
+  return crypto.createHmac('sha256', secret).update(`${timestamp}.${body}`).digest('hex');
+}
+
+/** what a receiver does to check a delivery (documented in the panel); constant time, tolerance in seconds */
+export function verifySignature(secret: string, timestamp: number, body: string, header: string, now = Date.now(), toleranceSec = 300): boolean {
+  if (!Number.isFinite(timestamp) || Math.abs(now / 1000 - timestamp) > toleranceSec) return false;
+  const want = Buffer.from(`sha256=${signBody(secret, timestamp, body)}`);
+  const got = Buffer.from(header);
+  return want.length === got.length && crypto.timingSafeEqual(want, got);
+}
+
+/** the JSON body of a webhook call; `ts` is in seconds (the same value goes into the X-CoreGSM-Timestamp header) */
+export function webhookBody(e: EventData, ts: number, deliveryId: number | string): string {
+  const body = JSON.stringify({ id: String(deliveryId), event: e.event, timestamp: ts, title: e.title, text: e.text, data: e.data });
+  if (Buffer.byteLength(body) <= MAX_BODY_BYTES) return body;
+  // too large: the details are dropped, the message stays
+  return JSON.stringify({ id: String(deliveryId), event: e.event, timestamp: ts, title: e.title.slice(0, 300), text: e.text.slice(0, 2000), data: {}, truncated: true });
+}
+
+export function webhookHeaders(secret: string, ts: number, body: string, event: string, deliveryId: number | string): Record<string, string> {
+  const h: Record<string, string> = {
+    'Content-Type': 'application/json; charset=utf-8',
+    'User-Agent': 'CoreGSM-Webhook/1',
+    'X-CoreGSM-Event': event,
+    'X-CoreGSM-Delivery': String(deliveryId),
+    'X-CoreGSM-Timestamp': String(ts),
+  };
+  if (secret) h['X-CoreGSM-Signature'] = `sha256=${signBody(secret, ts, body)}`;
+  return h;
+}
+
+/** the subject of the letter */
+export const mailSubject = (brand: string, e: EventData): string => `[${brand}] ${e.title}`.slice(0, 200);
+
+/** recipients typed as a list, a comma or semicolon separated text; invalid ones are reported */
+export function parseRecipients(input: string | string[]): { ok: string[]; bad: string[] } {
+  const parts = (Array.isArray(input) ? input : input.split(/[,;\s]+/)).map((x) => x.trim()).filter(Boolean);
+  const ok: string[] = [];
+  const bad: string[] = [];
+  for (const p of parts) {
+    if (/^[^\s@<>,;]+@[^\s@<>,;]+\.[^\s@<>,;]{2,}$/.test(p) && p.length <= 200) {
+      if (!ok.some((x) => x.toLowerCase() === p.toLowerCase())) ok.push(p);
+    } else bad.push(p);
+  }
+  return { ok, bad };
+}
+
+/** a report from the bot older than this means the bot is not running */
+export const BOT_STALE_MS = 90_000;
+
+/** Is the bot unreachable? `token`: a bot token is configured (a panel without a bot has no problem to report). */
+export function botIsDown(s: { state: string; updatedAt: number }, token: boolean, now: number): boolean {
+  if (!token) return false;
+  return s.state !== 'online' || now - s.updatedAt > BOT_STALE_MS;
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/alerts.ts" << '__COREGSM_EOF__'
 /**
  * Alerts: a message to an administrators' Discord channel when a game server stops answering
@@ -3872,6 +4371,7 @@ import { gameLabel } from './games.js';
 import { inMaintenance } from './maintenance.js';
 import { claimDue, enqueueDelivery, registerKind, reportResult } from './deliveries.js';
 import { SMART_KINDS, smartEnabled } from './smartAlerts.js';
+import { channelsWant, dispatchEvent } from './alertChannels.js';
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS alert_state (
@@ -3991,7 +4491,9 @@ const human = (min: number) => (min < 60 ? `${min} мин` : `${Math.floor(min /
 /** Called after every poll of a server. */
 export function trackAlerts(serverId: number, online: boolean, error: string | null): void {
   const s = alertSettings();
-  if (!s.enabled || !s.channelId) {
+  // Discord is one channel among others: webhooks and e-mail keep working when the bot or its token is gone
+  const discordOn = s.enabled && !!s.channelId;
+  if (!discordOn && !channelsWant('server_down') && !channelsWant('server_up')) {
     db.prepare('DELETE FROM alert_state WHERE server_id = ?').run(serverId);
     return;
   }
@@ -4015,11 +4517,11 @@ export function trackAlerts(serverId: number, online: boolean, error: string | n
       if (st.alerted) {
         const i = info();
         if (i) {
-          enqueueAlert('up', i.n, {
-            content: '',
-            mention: 'none',
-            embed: upEmbed({ name: i.n, address: i.display_address || `${i.host}:${i.port}`, game: i.game, downMs: now - st.down_since, now }),
-          });
+          const address = i.display_address || `${i.host}:${i.port}`;
+          if (discordOn) {
+            enqueueAlert('up', i.n, { content: '', mention: 'none', embed: upEmbed({ name: i.n, address, game: i.game, downMs: now - st.down_since, now }) });
+          }
+          dispatchEvent({ event: 'server_up', title: `${i.n} снова в сети`, text: `${address}. Простой: ${human(minutes(now - st.down_since))}`, data: { serverId, server: i.n, address, game: i.game, downMs: now - st.down_since } });
         }
       }
     }
@@ -4034,11 +4536,15 @@ export function trackAlerts(serverId: number, online: boolean, error: string | n
     const i = info();
     db.prepare('UPDATE alert_state SET alerted = 1 WHERE server_id = ?').run(serverId);
     if (!i) return;
-    enqueueAlert('down', i.n, {
-      content: s.mention === 'everyone' ? '@everyone' : s.mention === 'here' ? '@here' : '',
-      mention: s.mention,
-      embed: downEmbed({ name: i.n, address: i.display_address || `${i.host}:${i.port}`, game: i.game, downMs: now - st.down_since, error, now }),
-    });
+    const address = i.display_address || `${i.host}:${i.port}`;
+    if (discordOn) {
+      enqueueAlert('down', i.n, {
+        content: s.mention === 'everyone' ? '@everyone' : s.mention === 'here' ? '@here' : '',
+        mention: s.mention,
+        embed: downEmbed({ name: i.n, address, game: i.game, downMs: now - st.down_since, error, now }),
+      });
+    }
+    dispatchEvent({ event: 'server_down', title: `${i.n} недоступен`, text: `${address}. Сервер не отвечает уже ${human(minutes(now - st.down_since))}${error ? `. ${error.slice(0, 300)}` : ''}`, data: { serverId, server: i.n, address, game: i.game, downMs: now - st.down_since, error } });
   }
 }
 
@@ -4123,6 +4629,223 @@ export function registerAlerts(deps: {
     if (!b.success) return res.status(400).json({ error: 'bad body' });
     reportResult(Number(req.params.id), b.data.status === 'sent' ? { ok: true } : { ok: false, error: b.data.error ?? 'Ошибка отправки' });
     res.json({ ok: true });
+  });
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/apiKeyLogic.ts" << '__COREGSM_EOF__'
+/**
+ * API keys: generation, hashing, reading a key from a request and the per-key sliding-window limiter.
+ * Pure functions (no database, no Express) so they are easy to test; apiKeys.ts stores and checks the keys.
+ */
+import crypto from 'node:crypto';
+
+export const KEY_PREFIX = 'cgsm_';
+/** how many characters of a key are kept in the clear, to recognise it in the list */
+export const SHOWN_PREFIX_LEN = 10;
+export const DEFAULT_RATE_LIMIT = 60;
+export const MIN_RATE_LIMIT = 1;
+export const MAX_RATE_LIMIT = 6000;
+
+/** a new key: `cgsm_` + 32 random bytes in base64url */
+export const generateKey = (): string => KEY_PREFIX + crypto.randomBytes(32).toString('base64url');
+
+/** the SHA-256 of a key in hex: the only thing the database keeps */
+export const hashKey = (key: string): string => crypto.createHash('sha256').update(key, 'utf8').digest('hex');
+
+/** the start of a key shown in the list (never enough to use it) */
+export const keyPrefix = (key: string): string => key.slice(0, SHOWN_PREFIX_LEN);
+
+/** does the text look like one of our keys (cheap check before touching the database) */
+export const looksLikeKey = (s: string): boolean => /^cgsm_[A-Za-z0-9_-]{43}$/.test(s);
+
+/** the key of a request: `Authorization: Bearer <key>` or `X-API-Key: <key>`; '' when there is none */
+export function extractKey(headers: Record<string, string | string[] | undefined>): string {
+  const auth = headers.authorization;
+  const a = Array.isArray(auth) ? auth[0] : auth;
+  if (a) {
+    const m = /^Bearer\s+(\S+)\s*$/i.exec(a);
+    if (m) return m[1];
+  }
+  const x = headers['x-api-key'];
+  const v = Array.isArray(x) ? x[0] : x;
+  return v ? v.trim() : '';
+}
+
+export const clampRateLimit = (n: number): number => Math.min(MAX_RATE_LIMIT, Math.max(MIN_RATE_LIMIT, Math.round(n)));
+
+export interface LimitResult {
+  ok: boolean;
+  limit: number;
+  remaining: number;
+  /** seconds until the next request is allowed (0 when ok) */
+  retryAfter: number;
+}
+
+/** sliding window of `windowMs`: at most `limit` requests inside any window; the timestamps are kept per key */
+export class SlidingWindow {
+  private hits = new Map<string, number[]>();
+  constructor(private windowMs = 60_000) {}
+
+  hit(key: string, limit: number, now = Date.now()): LimitResult {
+    const arr = (this.hits.get(key) ?? []).filter((t) => t > now - this.windowMs);
+    if (arr.length >= limit) {
+      this.hits.set(key, arr);
+      return { ok: false, limit, remaining: 0, retryAfter: Math.max(1, Math.ceil((arr[0] + this.windowMs - now) / 1000)) };
+    }
+    arr.push(now);
+    this.hits.set(key, arr);
+    return { ok: true, limit, remaining: limit - arr.length, retryAfter: 0 };
+  }
+
+  /** forgets keys that have been quiet for a whole window */
+  prune(now = Date.now()): void {
+    for (const [k, arr] of this.hits) if (!arr.length || arr[arr.length - 1] <= now - this.windowMs) this.hits.delete(k);
+  }
+
+  get size(): number {
+    return this.hits.size;
+  }
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/apiKeys.ts" << '__COREGSM_EOF__'
+/**
+ * API keys for the public API (publicApi.ts). Only the SHA-256 of a key is stored; the key itself is shown once, in
+ * the answer that creates it.
+ *
+ *   GET    /api/integrations/keys       the keys (name, start of the key, dates, limit, revoked or not)      administrator
+ *   POST   /api/integrations/keys       { name, rateLimit? } -> the new key, shown this once                  administrator
+ *   DELETE /api/integrations/keys/:id   revoke a key (it stops working at once)                               administrator
+ */
+import type { Express, NextFunction, Request, RequestHandler, Response } from 'express';
+import { z } from 'zod';
+import { db } from './db.js';
+import { param, safeEqual } from './http.js';
+import { clampRateLimit, DEFAULT_RATE_LIMIT, extractKey, generateKey, hashKey, keyPrefix, looksLikeKey, SlidingWindow } from './apiKeyLogic.js';
+
+export const MAX_ACTIVE_KEYS = 20;
+
+interface KeyRow {
+  id: number;
+  name: string;
+  prefix: string;
+  key_hash: string;
+  created_at: number;
+  created_by: string;
+  last_used_at: number | null;
+  revoked_at: number | null;
+  rate_limit: number;
+}
+
+const view = (r: KeyRow) => ({
+  id: r.id,
+  name: r.name,
+  prefix: r.prefix,
+  createdAt: r.created_at,
+  createdBy: r.created_by,
+  lastUsedAt: r.last_used_at,
+  revokedAt: r.revoked_at,
+  rateLimit: r.rate_limit,
+});
+
+/** creates a key; returns the plain key (the only moment it exists) and the stored row */
+export function createApiKey(name: string, createdBy: string, rateLimit = DEFAULT_RATE_LIMIT, now = Date.now()) {
+  const key = generateKey();
+  const info = db
+    .prepare('INSERT INTO api_keys (name, prefix, key_hash, created_at, created_by, rate_limit) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(name, keyPrefix(key), hashKey(key), now, createdBy, clampRateLimit(rateLimit));
+  const row = db.prepare('SELECT * FROM api_keys WHERE id = ?').get(Number(info.lastInsertRowid)) as KeyRow;
+  return { key, row };
+}
+
+/** the live (not revoked) key with this plain value, or null; the hash is compared in constant time */
+export function findActiveKey(plain: string): KeyRow | null {
+  if (!looksLikeKey(plain)) return null;
+  const h = hashKey(plain);
+  const row = db.prepare('SELECT * FROM api_keys WHERE key_hash = ?').get(h) as KeyRow | undefined;
+  if (!row || row.revoked_at !== null || !safeEqual(row.key_hash, h)) return null;
+  return row;
+}
+
+export interface ApiKeyInfo {
+  id: number;
+  name: string;
+  rateLimit: number;
+}
+export type KeyedRequest = Request & { apiKey?: ApiKeyInfo };
+
+const windows = new SlidingWindow(60_000);
+setInterval(() => windows.prune(), 60_000).unref();
+/** a wrong key is slowed down per address, so keys cannot be guessed by trying */
+const failWindows = new SlidingWindow(60_000);
+setInterval(() => failWindows.prune(), 60_000).unref();
+const FAIL_LIMIT = 30;
+const lastTouch = new Map<number, number>();
+
+/** the error body of the public API: the same shape everywhere */
+export const apiError = (res: Response, status: number, code: string, message: string): void => {
+  res.status(status).json({ error: { code, message } });
+};
+
+/** `Authorization: Bearer <key>` or `X-API-Key`; checks the key and the limit of the key (429 with Retry-After) */
+export const apiKeyAuth: RequestHandler = (req: KeyedRequest, res: Response, next: NextFunction) => {
+  const ip = req.ip ?? 'x';
+  const plain = extractKey(req.headers);
+  if (!plain) return void apiError(res, 401, 'unauthorized', 'An API key is required: send it as "Authorization: Bearer <key>" or in X-API-Key.');
+  const row = findActiveKey(plain);
+  if (!row) {
+    const f = failWindows.hit(ip, FAIL_LIMIT);
+    if (!f.ok) {
+      res.setHeader('Retry-After', String(f.retryAfter));
+      return void apiError(res, 429, 'rate_limited', 'Too many requests with a wrong key. Try again later.');
+    }
+    return void apiError(res, 401, 'invalid_key', 'The API key is wrong or has been revoked.');
+  }
+  const r = windows.hit(`k${row.id}`, row.rate_limit);
+  res.setHeader('X-RateLimit-Limit', String(r.limit));
+  res.setHeader('X-RateLimit-Remaining', String(r.remaining));
+  if (!r.ok) {
+    res.setHeader('Retry-After', String(r.retryAfter));
+    return void apiError(res, 429, 'rate_limited', `Rate limit of ${row.rate_limit} requests per minute exceeded.`);
+  }
+  // "last used" is written at most once a minute per key
+  const now = Date.now();
+  if (now - (lastTouch.get(row.id) ?? 0) >= 60_000) {
+    lastTouch.set(row.id, now);
+    try {
+      db.prepare('UPDATE api_keys SET last_used_at = ? WHERE id = ?').run(now, row.id);
+    } catch {
+      /* a bookkeeping failure must not fail the request */
+    }
+  }
+  req.apiKey = { id: row.id, name: row.name, rateLimit: row.rate_limit };
+  next();
+};
+
+export function registerApiKeys({ app, admin }: { app: Express; admin: RequestHandler }): void {
+  app.get('/api/integrations/keys', admin, (_req, res) => {
+    res.json((db.prepare('SELECT * FROM api_keys ORDER BY id DESC').all() as KeyRow[]).map(view));
+  });
+
+  app.post('/api/integrations/keys', admin, (req, res) => {
+    const b = z
+      .object({ name: z.string().trim().min(1).max(60), rateLimit: z.number().int().min(1).max(6000).optional() })
+      .safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'Неверные данные' });
+    const active = (db.prepare('SELECT COUNT(*) AS n FROM api_keys WHERE revoked_at IS NULL').get() as { n: number }).n;
+    if (active >= MAX_ACTIVE_KEYS) return res.status(400).json({ error: `Можно держать не больше ${MAX_ACTIVE_KEYS} действующих ключей: отзовите ненужные` });
+    const actor = (req as Request & { user?: { username: string } }).user?.username ?? '';
+    const { key, row } = createApiKey(b.data.name, actor, b.data.rateLimit ?? DEFAULT_RATE_LIMIT);
+    res.status(201).json({ ...view(row), key });
+  });
+
+  app.delete('/api/integrations/keys/:id', admin, param('id'), (req, res) => {
+    const id = Number(req.params.id);
+    const row = db.prepare('SELECT * FROM api_keys WHERE id = ?').get(id) as KeyRow | undefined;
+    if (!row) return res.status(404).json({ error: 'Не найдено' });
+    if (row.revoked_at === null) db.prepare('UPDATE api_keys SET revoked_at = ? WHERE id = ?').run(Date.now(), id);
+    res.json(view(db.prepare('SELECT * FROM api_keys WHERE id = ?').get(id) as KeyRow));
   });
 }
 __COREGSM_EOF__
@@ -5406,6 +6129,134 @@ export function registerBackups({ app, admin }: { app: Express; admin: RequestHa
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/badgeLogic.ts" << '__COREGSM_EOF__'
+/**
+ * The SVG badge and the HTML of the embeddable widget of one server. Pure string building: the text is escaped here,
+ * nothing needs skia-canvas or a database.
+ */
+
+export interface BadgeServer {
+  name: string;
+  hasStatus: boolean;
+  online: boolean;
+  players: number;
+  maxPlayers: number;
+}
+
+export type BadgeState = 'online' | 'full' | 'offline' | 'unknown';
+
+export const BADGE_COLORS: Record<BadgeState, string> = {
+  online: '#2ea043',
+  full: '#bf8700',
+  offline: '#d1242f',
+  unknown: '#6e7781',
+};
+
+export const escapeXml = (s: string): string =>
+  s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] as string);
+
+export const stateOf = (s: BadgeServer): BadgeState => {
+  if (!s.hasStatus) return 'unknown';
+  if (!s.online) return 'offline';
+  return s.maxPlayers > 0 && s.players >= s.maxPlayers ? 'full' : 'online';
+};
+
+/** the right half of the badge: "12/32", "12" (no limit known), "офлайн" or "нет данных" */
+export const valueText = (s: BadgeServer): string => {
+  const st = stateOf(s);
+  if (st === 'unknown') return 'нет данных';
+  if (st === 'offline') return 'офлайн';
+  return s.maxPlayers > 0 ? `${s.players}/${s.maxPlayers}` : String(s.players);
+};
+
+/** a name shortened to `max` characters with an ellipsis (counts code points, so no half an emoji) */
+export const clip = (text: string, max: number): string => {
+  const chars = Array.from(text.replace(/[\u0000-\u001f\u007f]+/g, ' ').trim());
+  return chars.length > max ? `${chars.slice(0, max - 1).join('')}…` : chars.join('');
+};
+
+/** a rough text width for Verdana 11 px: narrow, normal and wide characters */
+export const textWidth = (text: string): number => {
+  let w = 0;
+  for (const ch of Array.from(text)) {
+    if (/[ilI.,:;'|!]/.test(ch)) w += 3.6;
+    else if (/[mwMW@%]/.test(ch) || /[А-ЯЁЖШЩЮЫ]/.test(ch)) w += 9.2;
+    else if (ch.charCodeAt(0) > 0x2e80) w += 12;
+    else w += 6.9;
+  }
+  return Math.ceil(w);
+};
+
+/** the badge in the flat style: name on grey, the number of players on a colour that tells the state */
+export function badgeSvg(s: BadgeServer): string {
+  const label = clip(s.name, 28) || 'Сервер';
+  const value = valueText(s);
+  const color = BADGE_COLORS[stateOf(s)];
+  const lw = textWidth(label) + 20;
+  const vw = textWidth(value) + 20;
+  const w = lw + vw;
+  const title = escapeXml(`${label}: ${value}`);
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="20" role="img" aria-label="${title}"><title>${title}</title>`
+    + '<linearGradient id="s" x2="0" y2="100%"><stop offset="0" stop-color="#bbb" stop-opacity=".1"/><stop offset="1" stop-opacity=".1"/></linearGradient>'
+    + `<clipPath id="r"><rect width="${w}" height="20" rx="3" fill="#fff"/></clipPath>`
+    + `<g clip-path="url(#r)"><rect width="${lw}" height="20" fill="#555"/><rect x="${lw}" width="${vw}" height="20" fill="${color}"/><rect width="${w}" height="20" fill="url(#s)"/></g>`
+    + '<g fill="#fff" text-anchor="middle" font-family="Verdana,DejaVu Sans,Geneva,sans-serif" font-size="11">'
+    + `<text x="${lw / 2}" y="15" fill="#010101" fill-opacity=".3">${escapeXml(label)}</text><text x="${lw / 2}" y="14">${escapeXml(label)}</text>`
+    + `<text x="${lw + vw / 2}" y="15" fill="#010101" fill-opacity=".3">${escapeXml(value)}</text><text x="${lw + vw / 2}" y="14">${escapeXml(value)}</text>`
+    + '</g></svg>';
+}
+
+/** the badge for a server that does not exist or is hidden */
+export const notFoundBadge = (): string => badgeSvg({ name: 'CoreGSM', hasStatus: false, online: false, players: 0, maxPlayers: 0 });
+
+export interface WidgetData extends BadgeServer {
+  game: string;
+  map: string | null;
+  ping: number | null;
+  /** where the link of the widget leads (absolute address of the server page) */
+  url: string;
+  brand: string;
+}
+
+const STATE_LABEL: Record<BadgeState, string> = { online: 'В сети', full: 'Сервер полон', offline: 'Не в сети', unknown: 'Нет данных' };
+
+/** a small self-contained page for an <iframe>: no scripts, no external resources, light and dark */
+export function widgetHtml(d: WidgetData): string {
+  const st = stateOf(d);
+  const color = BADGE_COLORS[st];
+  const pct = d.maxPlayers > 0 ? Math.min(100, Math.round((d.players / d.maxPlayers) * 100)) : 0;
+  const rows: string[] = [];
+  if (st === 'online' || st === 'full') {
+    rows.push(`<div class="n">${escapeXml(d.maxPlayers > 0 ? `${d.players} / ${d.maxPlayers}` : String(d.players))}<span> игроков</span></div>`);
+    if (d.maxPlayers > 0) rows.push(`<div class="bar"><i style="width:${pct}%"></i></div>`);
+    const facts = [d.map ? `Карта: ${d.map}` : '', d.ping != null ? `Пинг: ${d.ping} мс` : ''].filter(Boolean);
+    if (facts.length) rows.push(`<div class="f">${escapeXml(facts.join(' · '))}</div>`);
+  }
+  return `<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex">
+<title>${escapeXml(d.name)}</title>
+<style>
+:root{--bg:#fff;--fg:#1f2328;--mut:#656d76;--line:#d0d7de;--st:${color}}
+@media (prefers-color-scheme:dark){:root{--bg:#161b22;--fg:#e6edf3;--mut:#8b949e;--line:#30363d}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+a{display:block;color:inherit;text-decoration:none;padding:12px 14px;border:1px solid var(--line);border-left:4px solid var(--st);border-radius:8px}
+.h{display:flex;align-items:center;gap:8px;font-weight:600}
+.h b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+.s{font-size:12px;font-weight:600;color:var(--st);white-space:nowrap}
+.n{font-size:22px;font-weight:700;margin-top:6px}.n span{font-size:13px;font-weight:400;color:var(--mut)}
+.bar{height:6px;border-radius:3px;background:var(--line);margin-top:6px;overflow:hidden}.bar i{display:block;height:100%;background:var(--st)}
+.f{margin-top:6px;font-size:12px;color:var(--mut)}
+.b{margin-top:8px;font-size:11px;color:var(--mut)}
+</style></head><body>
+<a href="${escapeXml(d.url)}" target="_blank" rel="noopener">
+<div class="h"><b>${escapeXml(clip(d.name, 60))}</b><span class="s">${STATE_LABEL[st]}</span></div>
+${rows.join('\n')}
+<div class="b">${escapeXml(d.brand)}</div>
+</a></body></html>`;
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/banLogic.ts" << '__COREGSM_EOF__'
 /** Blocking an account for a while (or for good) with a reason: the pure part. */
 
@@ -6291,7 +7142,7 @@ export const PORTABLE_SETTINGS = [
   'digest_enabled', 'digest_channel', 'digest_weekday', 'digest_hour', 'digest_theme',
   'brand_name', 'brand_color', 'brand_preset', 'default_theme', 'game_theme',
   'news_channel_id', 'news_test_channel_id', 'embed_players_shown',
-  'poll_concurrency', 'poll_fail_threshold', 'timezone',
+  'poll_concurrency', 'poll_fail_threshold', 'poll_fail_n', 'poll_fail_m', 'poll_probe_veto', 'timezone',
   'public_panel', 'registration_open', 'registration_mode', 'rules_text',
   'backup_schedule', 'backup_keep',
   'smtp_host', 'smtp_port', 'smtp_secure', 'smtp_user', 'smtp_from',
@@ -7046,7 +7897,7 @@ import type { Express, RequestHandler } from 'express';
 import { z } from 'zod';
 import { db } from './db.js';
 
-export type DeliveryKind = 'news' | 'alert' | 'dm' | 'status';
+export type DeliveryKind = 'news' | 'alert' | 'dm' | 'status' | 'webhook' | 'email';
 export type DeliveryStatus = 'pending' | 'sending' | 'sent' | 'error' | 'dead';
 
 export const BACKOFF_MS = [30_000, 60_000, 120_000, 300_000, 900_000] as const;
@@ -7231,7 +8082,7 @@ function summary(r: Row): string {
 
 export function registerDeliveries(deps: { app: Express; admin: RequestHandler; internal: RequestHandler }): void {
   const { app, admin, internal } = deps;
-  const KINDS = ['news', 'alert', 'dm', 'status'] as const;
+  const KINDS = ['news', 'alert', 'dm', 'status', 'webhook', 'email'] as const;
   const STATUSES = ['pending', 'sending', 'sent', 'error', 'dead'] as const;
 
   app.get('/api/deliveries', admin, (req, res) => {
@@ -8316,6 +9167,84 @@ export function currentStyle(): DiscordStyle {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/downVerdict.ts" << '__COREGSM_EOF__'
+/**
+ * The rule «the server is down»: at least N of the last M checks did not get an answer.
+ * Pure (no database, no network); unit-tested directly.
+ *
+ * Without own N and M the old behaviour stays: the setting poll_fail_threshold (consecutive failed polls) decides,
+ * which is the same as N = M = threshold. `custom` tells the caller whether the rule was set by the administrator.
+ * Optionally the checks from other places (probes) can veto the verdict: when more of the fresh probes see the server
+ * than do not, the trouble is on the way between the panel and the server, not in the server.
+ */
+
+/** the longest window of checks that is kept in view */
+export const MAX_WINDOW = 20;
+
+export interface DownRule {
+  /** failed checks needed */
+  n: number;
+  /** size of the window of last checks */
+  m: number;
+  /** the probes may overrule the panel */
+  probeVeto: boolean;
+  /** n or m was set by the administrator (otherwise the consecutive-failure threshold is used as it always was) */
+  custom: boolean;
+}
+
+const toInt = (v: unknown): number | null => {
+  if (v === null || v === undefined || v === '') return null;
+  const n = Math.floor(Number(v));
+  return Number.isFinite(n) ? n : null;
+};
+
+/**
+ * Turns the stored settings into a rule. `threshold` is the consecutive-failure threshold (1..5).
+ * Unset n and m follow the threshold; n larger than m is cut down to m; both are limited to 1..MAX_WINDOW.
+ */
+export function resolveRule(raw: { n?: unknown; m?: unknown; probeVeto?: unknown }, threshold: number): DownRule {
+  const t = Math.min(MAX_WINDOW, Math.max(1, toInt(threshold) ?? 2));
+  const rn = toInt(raw.n);
+  const rm = toInt(raw.m);
+  const clamp = (v: number) => Math.min(MAX_WINDOW, Math.max(1, v));
+  let m = rm === null ? (rn === null ? t : Math.max(t, clamp(rn))) : clamp(rm);
+  let n = rn === null ? Math.min(t, m) : clamp(rn);
+  if (n > m) n = m;
+  if (m < 1) m = 1;
+  return { n, m, probeVeto: raw.probeVeto === true || raw.probeVeto === '1' || raw.probeVeto === 1, custom: rn !== null || rm !== null };
+}
+
+export interface Verdict {
+  down: boolean;
+  /** failed checks inside the window */
+  failed: number;
+  /** checks inside the window (less than m while the history is short) */
+  seen: number;
+  /** the panel's rule was met, but the probes see the server */
+  vetoed: boolean;
+}
+
+/**
+ * `recent`: the answers of the panel's own checks, oldest first, the newest one last (true = the server answered).
+ * `probes`: the latest fresh answer of every probe (true = sees the server); empty or missing = no opinion.
+ */
+export function judgeDown(i: { recent: boolean[]; rule: Pick<DownRule, 'n' | 'm' | 'probeVeto'>; probes?: boolean[] }): Verdict {
+  const m = Math.max(1, Math.floor(i.rule.m));
+  const n = Math.min(m, Math.max(1, Math.floor(i.rule.n)));
+  const win = i.recent.slice(-m);
+  const failed = win.filter((ok) => !ok).length;
+  const panelDown = failed >= n;
+  if (!panelDown) return { down: false, failed, seen: win.length, vetoed: false };
+  const probes = i.probes ?? [];
+  if (i.rule.probeVeto && probes.length) {
+    const up = probes.filter(Boolean).length;
+    // a tie is not a veto: an outage must not be hidden because the opinions are split
+    if (up > probes.length - up) return { down: false, failed, seen: win.length, vetoed: true };
+  }
+  return { down: true, failed, seen: win.length, vetoed: false };
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/embed.ts" << '__COREGSM_EOF__'
 /**
  * The Discord embed for a server: one definition used by the bot (what is posted in the channel)
@@ -8587,6 +9516,7 @@ export const ERRORS = {
   check_form: 'Проверьте поля формы',
   check_fields: 'Проверьте поля',
   not_found: 'Не найдено',
+  api_key_limit: 'Можно держать не больше {n} действующих ключей: отзовите ненужные',
 
   // ---- sign-in, setup, registration ----
   login_locked: 'Слишком много неверных попыток. Повторите через {sec} с.',
@@ -8664,7 +9594,26 @@ export const ERRORS = {
   bad_bot_token: 'Это не похоже на токен бота: он состоит из трёх частей через точки. Скопируйте его целиком в Discord Developer Portal (Bot → Reset Token).',
   branding_format: 'Название до 32 символов, цвет в виде #RRGGBB',
   players_shown_range: 'Число ников: от 0 до 20',
-  poll_settings_range: 'Подтверждение недоступности: от 1 до 5 опросов, параллельность: от 1 до 32',
+  poll_settings_range: 'Подтверждение недоступности: от 1 до 5 опросов, параллельность: от 1 до 32, правило «N из M»: числа от 1 до 20',
+  ch_redirect: 'Получатель ответил перенаправлением ({status}): укажите конечный адрес',
+  ch_http_error: 'Получатель ответил ошибкой {status}',
+  ch_no_recipient_set: 'Не указан ни один получатель',
+  ch_gone: 'Канал удалён или выключен',
+  ch_name_required: 'Дайте каналу название',
+  ch_name_long: 'Название не длиннее 60 символов',
+  ch_bad_email: 'Неверный адрес почты: {list}',
+  ch_recipient_required: 'Укажите хотя бы одного получателя',
+  ch_recipients_many: 'Получателей не больше 20',
+  ch_limit: 'Каналов не больше {n}',
+  ch_not_found: 'Канал не найден',
+  ch_kind_fixed: 'Тип канала изменить нельзя: создайте новый',
+  url_required: 'Укажите адрес вебхука (не длиннее 500 символов)',
+  url_invalid: 'Адрес вебхука указан неверно: нужен вид https://example.com/hook',
+  url_scheme: 'Разрешены только адреса http:// и https://',
+  url_credentials: 'Логин и пароль в адресе не поддерживаются: используйте секрет подписи',
+  url_host_missing: 'В адресе нет имени сервера',
+  url_private: 'Адрес из локальной сети или служебный: он запрещён. Разрешить такие адреса можно отдельной настройкой канала',
+  url_local_name: 'Локальные имена запрещены. Разрешить такие адреса можно отдельной настройкой канала',
   update_not_configured: 'Обновление из панели не настроено на сервере. Выполните: sudo coregsm update',
   update_running: 'Обновление уже выполняется',
   update_request_failed: 'Не удалось создать запрос на обновление (нет прав на папку /app/update)',
@@ -8861,6 +9810,197 @@ export const errorCodes: RequestHandler = (_req, res, next) => {
   };
   next();
 };
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/favoritePush.ts" << '__COREGSM_EOF__'
+/**
+ * Push to the devices of a player about the servers in their favourites ("the server is back", "a slot is free",
+ * and, if asked, "the server is down"). The poller calls onFavoritePoll() after every confirmed result; the work is
+ * synchronous bookkeeping plus pushLater() (fire and forget), so the poll is never held up.
+ *
+ *   GET /api/me/favorite-push   my choices and how many devices receive pushes
+ *   PUT /api/me/favorite-push   { online?, freeSlot?, down? }
+ *
+ * A player who already subscribed to the same event of the same server (subscriptions.ts) is skipped there: the
+ * subscription delivers it, so nobody gets two pushes.
+ */
+import type { Express, Request, RequestHandler } from 'express';
+import { z } from 'zod';
+import { db, EFFECTIVE_NAME } from './db.js';
+import { log } from './logger.js';
+import { pushToUser } from './subscriptions.js';
+import { DEFAULT_FAV_PREFS, type FavEvent, type FavObs, type FavPrefs, type FavTrack, favText, mayPushFav, nextFavTrack, SUBSCRIPTION_KIND } from './favoritePushLogic.js';
+
+const tracks = new Map<number, FavTrack>();
+const lastPush = new Map<string, number>();
+
+interface Recipient {
+  user_id: number;
+}
+
+/** players who have the server in favourites, a device with push, the event switched on and no subscription of their own for it */
+function recipients(serverId: number, kind: FavEvent): Recipient[] {
+  const col = kind === 'online' ? 'on_online' : kind === 'free_slot' ? 'on_free_slot' : 'on_down';
+  const dflt = kind === 'down' ? 0 : 1;
+  return db
+    .prepare(
+      `SELECT f.user_id FROM favorites f
+         JOIN users u ON u.id = f.user_id AND u.status = 'active'
+         LEFT JOIN favorite_push_prefs p ON p.user_id = f.user_id
+       WHERE f.server_id = ? AND COALESCE(p.${col}, ${dflt}) = 1
+         AND EXISTS (SELECT 1 FROM push_subscriptions ps WHERE ps.user_id = f.user_id)
+         AND NOT EXISTS (SELECT 1 FROM server_subscriptions ss WHERE ss.user_id = f.user_id AND ss.server_id = f.server_id AND ss.kind = ?)`,
+    )
+    .all(serverId, SUBSCRIPTION_KIND[kind]) as Recipient[];
+}
+
+/** sends one event to the players that want it; returns how many were notified */
+export function notifyFavorites(serverId: number, kind: FavEvent, obs: FavObs, now = Date.now()): number {
+  const list = recipients(serverId, kind);
+  if (!list.length) return 0;
+  const info = db.prepare(`SELECT ${EFFECTIVE_NAME} AS n FROM servers s LEFT JOIN status st ON st.server_id = s.id WHERE s.id = ?`).get(serverId) as { n: string } | undefined;
+  if (!info) return 0;
+  const body = favText(kind, info.n, obs.players, obs.maxPlayers);
+  let n = 0;
+  for (const r of list) {
+    const key = `${r.user_id}:${serverId}:${kind}`;
+    if (!mayPushFav(kind, lastPush.get(key), now)) continue;
+    lastPush.set(key, now);
+    pushToUser(r.user_id, { title: info.n, body, url: `/servers/${serverId}`, tag: `fav-${serverId}-${kind}` });
+    n++;
+  }
+  if (lastPush.size > 20_000) for (const [k, t] of lastPush) if (now - t > 3_600_000) lastPush.delete(k);
+  return n;
+}
+
+/** Poller hook. `muteDown`: the server is in a maintenance window, nobody is told it went down. Never throws. */
+export function onFavoritePoll(serverId: number, obs: FavObs, opts: { muteDown?: boolean; now?: number } = {}): void {
+  try {
+    const { next, events } = nextFavTrack(tracks.get(serverId) ?? null, obs);
+    tracks.set(serverId, next);
+    for (const kind of events) {
+      if (kind === 'down' && opts.muteDown) continue;
+      notifyFavorites(serverId, kind, obs, opts.now);
+    }
+  } catch (e) {
+    log.error('favourite push failed', (e as Error).message);
+  }
+}
+
+export function favPrefsOf(userId: number): FavPrefs {
+  const r = db.prepare('SELECT on_online, on_free_slot, on_down FROM favorite_push_prefs WHERE user_id = ?').get(userId) as { on_online: number; on_free_slot: number; on_down: number } | undefined;
+  return r ? { online: !!r.on_online, freeSlot: !!r.on_free_slot, down: !!r.on_down } : { ...DEFAULT_FAV_PREFS };
+}
+
+export function registerFavoritePush({ app, auth, userId }: { app: Express; auth: RequestHandler; userId: (req: Request) => number }): void {
+  const view = (uid: number) => ({
+    ...favPrefsOf(uid),
+    devices: (db.prepare('SELECT COUNT(*) AS n FROM push_subscriptions WHERE user_id = ?').get(uid) as { n: number }).n,
+    favorites: (db.prepare('SELECT COUNT(*) AS n FROM favorites WHERE user_id = ?').get(uid) as { n: number }).n,
+  });
+
+  app.get('/api/me/favorite-push', auth, (req, res) => res.json(view(userId(req))));
+
+  app.put('/api/me/favorite-push', auth, (req, res) => {
+    const b = z.object({ online: z.boolean().optional(), freeSlot: z.boolean().optional(), down: z.boolean().optional() }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'Неверные данные' });
+    const uid = userId(req);
+    const p = { ...favPrefsOf(uid), ...Object.fromEntries(Object.entries(b.data).filter(([, v]) => v !== undefined)) } as FavPrefs;
+    db.prepare(
+      `INSERT INTO favorite_push_prefs (user_id, on_online, on_free_slot, on_down) VALUES (?, ?, ?, ?)
+       ON CONFLICT(user_id) DO UPDATE SET on_online = excluded.on_online, on_free_slot = excluded.on_free_slot, on_down = excluded.on_down`,
+    ).run(uid, p.online ? 1 : 0, p.freeSlot ? 1 : 0, p.down ? 1 : 0);
+    res.json(view(uid));
+  });
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/favoritePushLogic.ts" << '__COREGSM_EOF__'
+/**
+ * Push for favourite servers: which events a poll result brings and how often one player may be told about the same
+ * server. Pure functions; favoritePush.ts does the sending.
+ *
+ *   online     the server was down and answers again
+ *   free_slot  the server was full (players >= the threshold) and now has room; hysteresis: once full it stays
+ *              "full" until the count has dropped by 1 + releaseGap below the threshold, and the per-pair gap
+ *              (FAV_GAP_MS) keeps a server that flaps around the limit from spamming
+ *   down       the server was up and is now down (the poller has already confirmed it with its N-of-M check)
+ */
+
+export type FavEvent = 'online' | 'free_slot' | 'down';
+export const FAV_EVENTS: readonly FavEvent[] = ['online', 'free_slot', 'down'];
+
+export interface FavTrack {
+  online: boolean;
+  full: boolean;
+}
+export interface FavObs {
+  online: boolean;
+  players: number;
+  maxPlayers: number;
+}
+export interface FavOptions {
+  /** share of maxPlayers from which the server counts as full (1 = exactly full) */
+  fullRatio?: number;
+  /** extra slots that must free up below the threshold before it counts as "free" again */
+  releaseGap?: number;
+}
+
+/** players from which a server is full; 0 = no limit known (never full) */
+export function fullAt(maxPlayers: number, fullRatio = 1): number {
+  if (!(maxPlayers > 0)) return 0;
+  const ratio = Math.min(1, Math.max(0.5, fullRatio));
+  return Math.max(1, Math.ceil(maxPlayers * ratio));
+}
+
+/** the next state and the events of one poll result; the first observation of a server brings no event */
+export function nextFavTrack(prev: FavTrack | null, obs: FavObs, opts: FavOptions = {}): { next: FavTrack; events: FavEvent[] } {
+  if (!obs.online) {
+    return { next: { online: false, full: false }, events: prev && prev.online ? ['down'] : [] };
+  }
+  const at = fullAt(obs.maxPlayers, opts.fullRatio);
+  const gap = Math.max(0, opts.releaseGap ?? 0);
+  const reachedFull = at > 0 && obs.players >= at;
+  const released = at > 0 && obs.players <= at - 1 - gap;
+  if (!prev) return { next: { online: true, full: reachedFull }, events: [] };
+  if (!prev.online) return { next: { online: true, full: reachedFull }, events: ['online'] };
+  if (prev.full) {
+    // stays full until the count has really dropped (hysteresis)
+    return released ? { next: { online: true, full: false }, events: ['free_slot'] } : { next: { online: true, full: true }, events: [] };
+  }
+  return { next: { online: true, full: reachedFull }, events: [] };
+}
+
+/** minimum gap between two pushes of the same kind for one (player, server) pair */
+export const FAV_GAP_MS: Record<FavEvent, number> = {
+  online: 10 * 60_000,
+  free_slot: 15 * 60_000,
+  down: 10 * 60_000,
+};
+
+export const mayPushFav = (kind: FavEvent, last: number | undefined, now: number): boolean => last === undefined || now - last >= FAV_GAP_MS[kind];
+
+/** the kind of the explicit subscription (subscriptions.ts) that already covers the same event */
+export const SUBSCRIPTION_KIND: Record<FavEvent, 'back_online' | 'free_slot' | 'went_down'> = {
+  online: 'back_online',
+  free_slot: 'free_slot',
+  down: 'went_down',
+};
+
+export function favText(kind: FavEvent, name: string, players: number, maxPlayers: number): string {
+  if (kind === 'online') return `✅ Избранный сервер «${name}» снова в сети.`;
+  if (kind === 'free_slot') return `🟢 На избранном сервере «${name}» освободилось место (${players}/${maxPlayers}).`;
+  return `🔴 Избранный сервер «${name}» недоступен.`;
+}
+
+export interface FavPrefs {
+  online: boolean;
+  freeSlot: boolean;
+  down: boolean;
+}
+export const DEFAULT_FAV_PREFS: FavPrefs = { online: true, freeSlot: true, down: false };
+
+export const wantsFav = (p: FavPrefs, kind: FavEvent): boolean => (kind === 'online' ? p.online : kind === 'free_slot' ? p.freeSlot : p.down);
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/gallery.ts" << '__COREGSM_EOF__'
@@ -9480,6 +10620,7 @@ __COREGSM_EOF__
 import { trackAlerts } from './alerts.js';
 import { trackSmart } from './smartAlerts.js';
 import { onPollResult } from './subscriptions.js';
+import { onFavoritePoll } from './favoritePush.js';
 import { onSessionsOpened } from './nickOnboarding.js';
 import { notifyFollowers } from './playerFollows.js';
 import { maintenanceFor as maintenanceNow } from './maintenance.js';
@@ -9490,6 +10631,7 @@ import { clampConcurrency, clampDays, clampThreshold, decideStatus, DEFAULT_CONC
 export { humanizeQueryError, queryServer, type QueryResult } from './query.js';
 import { queryServer, type QueryResult } from './query.js';
 import { log } from './logger.js';
+import { judgeDown, MAX_WINDOW, resolveRule, type DownRule } from './downVerdict.js';
 
 const upsert = db.prepare(`
 INSERT INTO status (server_id, online, name, players, max_players, map, version, ping, player_names, error, updated_at, consecutive_failures, state_since)
@@ -9577,6 +10719,10 @@ export function recordUptime(serverId: number, online: boolean, players: number,
 // ---------- settings ----------
 /** consecutive failed polls before a server is shown as offline (setting poll_fail_threshold, 1..5, default 2) */
 export const failThreshold = (): number => clampThreshold(getSetting('poll_fail_threshold'));
+/** the «N of M» rule of a confirmed outage (settings poll_fail_n, poll_fail_m, poll_probe_veto; unset = the threshold above) */
+export const downRule = (): DownRule => resolveRule({ n: getSetting('poll_fail_n'), m: getSetting('poll_fail_m'), probeVeto: getSetting('poll_probe_veto') === '1' }, failThreshold());
+/** a probe report older than this counts as «no opinion» (as in probes.ts) */
+const PROBE_FRESH_MS = 5 * 60_000;
 /** servers polled at the same time (setting poll_concurrency, else env POLL_CONCURRENCY, 1..32, default 8) */
 export const pollConcurrency = (): number => {
   const s = getSetting('poll_concurrency');
@@ -9602,11 +10748,30 @@ export function applyPollResult(s: ServerRow, r: QueryResult, ts: number, opts: 
   const prev = db.prepare('SELECT online, players, consecutive_failures AS f FROM status WHERE server_id = ?').get(s.id) as
     | { online: number; players: number; f: number }
     | undefined;
+  // own «N of M» rule: only a failed scheduled poll of an online server needs the history of the last polls
+  let confirmDown: boolean | undefined;
+  if (opts.debounce && !r.online && prev && prev.online) {
+    const rule = downRule();
+    if (rule.custom) {
+      try {
+        const rows = db.prepare('SELECT online, unconfirmed FROM history WHERE server_id = ? ORDER BY ts DESC, rowid DESC LIMIT ?').all(s.id, MAX_WINDOW) as { online: number; unconfirmed: number }[];
+        // a held-back sample is a failed poll that was not believed yet
+        const recent = [...rows.reverse().map((h) => !!h.online && !h.unconfirmed), false];
+        const probes = rule.probeVeto
+          ? (db.prepare('SELECT online FROM probe_status WHERE server_id = ? AND updated_at > ?').all(s.id, ts - PROBE_FRESH_MS) as { online: number }[]).map((p) => !!p.online)
+          : [];
+        confirmDown = judgeDown({ recent, rule, probes }).down;
+      } catch (e) {
+        log.error('down verdict failed', (e as Error).message);
+      }
+    }
+  }
   const d = decideStatus({
     prevOnline: prev ? !!prev.online : null,
     prevFailures: prev?.f ?? 0,
     polledOnline: r.online,
     threshold: opts.debounce ? failThreshold() : 1,
+    confirmDown,
   });
   const maint = inMaintenance(s.id, ts) ? 1 : 0;
   const outcome: PollOutcome = { polledOnline: r.online, online: d.online, confirmed: d.confirmed, failures: d.failures };
@@ -9660,6 +10825,8 @@ export function applyPollResult(s: ServerRow, r: QueryResult, ts: number, opts: 
   } catch (e) {
     log.error('subscriptions failed', (e as Error).message);
   }
+  // push to the players who have this server in favourites (fire and forget, never throws)
+  onFavoritePoll(s.id, { online: d.online, players: r.players, maxPlayers: r.maxPlayers }, { muteDown: !d.online && !!maintenanceNow(s.id), now: ts });
   return outcome;
 }
 
@@ -9780,7 +10947,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import { z } from 'zod';
 import { DATA_DIR, db, getSetting, setSetting } from './db.js';
-import { failThreshold, lastPollStats, pollConcurrency } from './gsm.js';
+import { downRule, failThreshold, lastPollStats, pollConcurrency } from './gsm.js';
 import { log } from './logger.js';
 
 const DB_PATH = process.env.DB_PATH ?? './data/coregsm.db';
@@ -9983,15 +11150,37 @@ export function currentFlags(now = Date.now()): Flag[] {
 export function registerHealth({ app, admin, bot }: { app: Express; admin: RequestHandler; bot: () => BotInfo }): void {
   getBot = bot;
 
-  const pollPayload = () => ({ failThreshold: failThreshold(), concurrency: pollConcurrency(), last: lastPollStats() });
+  const ruleSetting = (k: string) => {
+    const n = Number(getSetting(k));
+    return Number.isInteger(n) && n > 0 ? n : null;
+  };
+  const pollPayload = () => ({
+    failThreshold: failThreshold(),
+    concurrency: pollConcurrency(),
+    // «N of M»: null = not set (the consecutive-failure threshold decides); rule = what is really in force
+    failN: ruleSetting('poll_fail_n'),
+    failM: ruleSetting('poll_fail_m'),
+    probeVeto: getSetting('poll_probe_veto') === '1',
+    rule: (({ n, m, probeVeto, custom }) => ({ n, m, probeVeto, custom }))(downRule()),
+    last: lastPollStats(),
+  });
   app.get('/api/settings/poll', admin, (_req, res) => res.json(pollPayload()));
   app.put('/api/settings/poll', admin, (req, res) => {
     const b = z
-      .object({ failThreshold: z.number().int().min(1).max(5).optional(), concurrency: z.number().int().min(1).max(32).optional() })
+      .object({
+        failThreshold: z.number().int().min(1).max(5).optional(),
+        concurrency: z.number().int().min(1).max(32).optional(),
+        failN: z.number().int().min(1).max(20).nullable().optional(),
+        failM: z.number().int().min(1).max(20).nullable().optional(),
+        probeVeto: z.boolean().optional(),
+      })
       .safeParse(req.body);
-    if (!b.success) return res.status(400).json({ error: 'Подтверждение недоступности: от 1 до 5 опросов, параллельность: от 1 до 32' });
+    if (!b.success) return res.status(400).json({ error: 'Подтверждение недоступности: от 1 до 5 опросов, параллельность: от 1 до 32, правило «N из M»: числа от 1 до 20' });
     if (b.data.failThreshold !== undefined) setSetting('poll_fail_threshold', String(b.data.failThreshold));
     if (b.data.concurrency !== undefined) setSetting('poll_concurrency', String(b.data.concurrency));
+    if (b.data.failN !== undefined) setSetting('poll_fail_n', b.data.failN === null ? '' : String(b.data.failN));
+    if (b.data.failM !== undefined) setSetting('poll_fail_m', b.data.failM === null ? '' : String(b.data.failM));
+    if (b.data.probeVeto !== undefined) setSetting('poll_probe_veto', b.data.probeVeto ? '1' : '0');
     res.json(pollPayload());
   });
   app.get('/api/system/health-history', admin, (req, res) => {
@@ -10231,6 +11420,7 @@ __COREGSM_EOF__
 import express from 'express';
 import type { NextFunction, Request, Response } from 'express';
 import { registerAlerts } from './alerts.js';
+import { registerAlertChannels } from './alertChannels.js';
 import { admin, allow, auth, type AuthedRequest, avatarUrl, internal, isStaff, publicPanel, rateLimit, registrationOpen, staff, userFromToken, type UserFull, viewer } from './auth.js';
 import { customAvatarUrl, registerAvatars } from './avatars.js';
 import { registerBackups, startBackupTimer, stopBackups } from './backup.js';
@@ -10269,6 +11459,10 @@ import { installShutdown, onShutdown, registerShutdownServer, shutdownNow } from
 import { baseOf, brand, needsSetup, publicBase, registrationMode, rulesText } from './site.js';
 import { registerSubscriptions } from './subscriptions.js';
 import { registerPlayerFollows } from './playerFollows.js';
+import { registerApiKeys } from './apiKeys.js';
+import { registerPublicApi } from './publicApi.js';
+import { registerWidgets } from './widgets.js';
+import { registerFavoritePush } from './favoritePush.js';
 import { router as accountRouter } from './routes/account.js';
 import { router as settingsRouter } from './routes/settings.js';
 import { router as updatesRouter } from './routes/updates.js';
@@ -10387,6 +11581,7 @@ registerNews({
   statusEmbed: (id) => embedFor(id, 60),
 });
 registerAlerts({ app, admin, internal, channelInfo });
+registerAlertChannels({ app, admin });
 registerDigest({ app, admin });
 registerServerChart(app);
 registerOg(app);
@@ -10404,6 +11599,10 @@ registerDeliveries({ app, admin, internal });
 registerSubscriptions({ app, auth, userId: (req) => (req as AuthedRequest).user!.id, canDm: () => bot.status.state === 'online' });
 registerPlayerFollows({ app, auth, userId: (req) => (req as AuthedRequest).user!.id });
 registerGames(app);
+registerApiKeys({ app, admin });
+registerPublicApi(app);
+registerWidgets(app);
+registerFavoritePush({ app, auth, userId: (req) => (req as AuthedRequest).user!.id });
 registerCustomGames({ app, admin });
 registerAvatars({ app, auth, userId: (req) => (req as AuthedRequest).user!.id, onChange: (req, id, what) => logAccount(req, id, 'avatar_changed', what) });
 registerProfile({
@@ -10885,6 +12084,7 @@ __COREGSM_EOF__
 import type { Express, Request, RequestHandler } from 'express';
 import { z } from 'zod';
 import { db } from './db.js';
+import { dispatchEvent } from './alertChannels.js';
 
 export type Repeat = 'none' | 'daily' | 'weekly';
 
@@ -11058,6 +12258,12 @@ export function registerMaintenance({ app, admin, viewer }: { app: Express; admi
       .run(b.data.serverId ?? null, b.data.name, b.data.startTs, b.data.endTs, b.data.repeat, actor(req), Date.now());
     resetMaintenanceCache();
     const row = db.prepare('SELECT * FROM maintenance_windows WHERE id = ?').get(info.lastInsertRowid) as WindowRow;
+    dispatchEvent({
+      event: 'maintenance',
+      title: `Запланировано обслуживание${row.name ? `: ${row.name}` : ''}`,
+      text: `С ${new Date(row.start_ts).toISOString()} по ${new Date(row.end_ts).toISOString()} (UTC), повтор: ${row.repeat}.`,
+      data: { windowId: row.id, serverId: row.server_id, name: row.name, startTs: row.start_ts, endTs: row.end_ts, repeat: row.repeat },
+    });
     res.status(201).json(serialize(row));
   });
 
@@ -11289,6 +12495,52 @@ CREATE TABLE IF NOT EXISTS smart_state (
     // the load of the processor (1-minute load average per core, in percent); NULL = not measured (older samples, Windows)
     up: (db) => addColumn(db, 'health_samples', 'load_pct', 'REAL'),
   },
+  {
+    version: 12,
+    name: 'alert_channels',
+    // outgoing webhooks and e-mail for alerts; the signing secret is stored encrypted (secrets.ts)
+    up: (db) =>
+      db.exec(`
+CREATE TABLE IF NOT EXISTS alert_channels (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind TEXT NOT NULL,
+  name TEXT NOT NULL,
+  url TEXT NOT NULL DEFAULT '',
+  secret TEXT NOT NULL DEFAULT '',
+  recipients TEXT NOT NULL DEFAULT '[]',
+  events TEXT NOT NULL DEFAULT '[]',
+  enabled INTEGER NOT NULL DEFAULT 1,
+  allow_private INTEGER NOT NULL DEFAULT 0,
+  last_status TEXT,
+  last_error TEXT,
+  last_at INTEGER,
+  created_at INTEGER NOT NULL
+);`),
+  },
+  {
+    version: 13,
+    name: 'api_keys+favorite_push_prefs',
+    // api_keys: only the SHA-256 of a key is kept (the key itself is shown once); favorite_push_prefs: what a player wants pushed for favourite servers
+    up: (db) =>
+      db.exec(`
+CREATE TABLE IF NOT EXISTS api_keys (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  prefix TEXT NOT NULL,
+  key_hash TEXT NOT NULL UNIQUE,
+  created_at INTEGER NOT NULL,
+  created_by TEXT NOT NULL DEFAULT '',
+  last_used_at INTEGER,
+  revoked_at INTEGER,
+  rate_limit INTEGER NOT NULL DEFAULT 60
+);
+CREATE TABLE IF NOT EXISTS favorite_push_prefs (
+  user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  on_online INTEGER NOT NULL DEFAULT 1,
+  on_free_slot INTEGER NOT NULL DEFAULT 1,
+  on_down INTEGER NOT NULL DEFAULT 0
+);`),
+  },
 ];
 
 export const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;
@@ -11381,6 +12633,7 @@ import { z } from 'zod';
 import { commentCount } from './newsComments.js';
 import { viewsOf } from './newsViews.js';
 import { notifyNewsPublished } from './newsSubs.js';
+import { dispatchEvent } from './alertChannels.js';
 import { db, getSetting, setSetting } from './db.js';
 import { ledgerRecord, MAX_ATTEMPTS, planFailure } from './deliveries.js';
 import { param } from './http.js';
@@ -12232,6 +13485,7 @@ ${r.sent_at ? `<meta property="article:published_time" content="${new Date(r.sen
         try {
           const p = JSON.parse(prev.payload) as NewsPayload;
           notifyNewsPublished({ id, title: titleOf(p), category: p.category ?? 'announcement', authorId: prev.created_by ?? null }, deps.publicBase() ?? '');
+          dispatchEvent({ event: 'news_published', title: `Новость: ${titleOf(p)}`, text: '', data: { newsId: id, title: titleOf(p), category: p.category ?? 'announcement', url: deps.publicBase() ? `${deps.publicBase()}/news/${id}` : null } });
         } catch { /* the post itself is done */ }
       }
     } else {
@@ -13422,6 +14676,121 @@ export function monogramOf(label: string): string {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/openapi.ts" << '__COREGSM_EOF__'
+/** The OpenAPI 3 description of the public API (GET /api/v1/openapi.json), built as a plain object. */
+
+const errorResponse = (description: string) => ({
+  description,
+  content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } },
+});
+
+export function openApiSpec(opts: { version: string; baseUrl: string; title: string }) {
+  const keyed = [{ bearerAuth: [] }, { apiKeyHeader: [] }];
+  const common = {
+    '401': errorResponse('The key is missing, wrong or revoked'),
+    '429': {
+      ...errorResponse('The request limit of the key is used up'),
+      headers: { 'Retry-After': { description: 'Seconds until the next request is allowed', schema: { type: 'integer' } } },
+    },
+  };
+  return {
+    openapi: '3.0.3',
+    info: {
+      title: `${opts.title} public API`,
+      version: opts.version,
+      description: 'Read-only data of the game servers. Every request needs an API key (created by the administrator in Admin > Integrations).',
+    },
+    servers: [{ url: opts.baseUrl }],
+    security: keyed,
+    paths: {
+      '/api/v1/status': {
+        get: {
+          summary: 'Summary of the panel',
+          operationId: 'getStatus',
+          responses: { '200': { description: 'Totals', content: { 'application/json': { schema: { $ref: '#/components/schemas/Status' } } } }, ...common },
+        },
+      },
+      '/api/v1/servers': {
+        get: {
+          summary: 'List of servers',
+          operationId: 'listServers',
+          parameters: [
+            { name: 'game', in: 'query', required: false, schema: { type: 'string' }, description: 'Only servers of this game (for example minecraft)' },
+            { name: 'online', in: 'query', required: false, schema: { type: 'boolean' }, description: 'true: only servers that are up; false: only those that are down' },
+          ],
+          responses: {
+            '200': {
+              description: 'Servers',
+              content: { 'application/json': { schema: { type: 'object', properties: { servers: { type: 'array', items: { $ref: '#/components/schemas/Server' } } } } } },
+            },
+            ...common,
+          },
+        },
+      },
+      '/api/v1/servers/{id}': {
+        get: {
+          summary: 'One server',
+          operationId: 'getServer',
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'integer' } }],
+          responses: {
+            '200': { description: 'The server', content: { 'application/json': { schema: { $ref: '#/components/schemas/Server' } } } },
+            '404': errorResponse('No such server'),
+            ...common,
+          },
+        },
+      },
+      '/api/v1/openapi.json': {
+        get: { summary: 'This description', operationId: 'getOpenApi', security: [], responses: { '200': { description: 'OpenAPI 3 document' } } },
+      },
+    },
+    components: {
+      securitySchemes: {
+        bearerAuth: { type: 'http', scheme: 'bearer', description: 'Authorization: Bearer <key>' },
+        apiKeyHeader: { type: 'apiKey', in: 'header', name: 'X-API-Key' },
+      },
+      schemas: {
+        Error: {
+          type: 'object',
+          required: ['error'],
+          properties: { error: { type: 'object', required: ['code', 'message'], properties: { code: { type: 'string' }, message: { type: 'string' } } } },
+        },
+        Server: {
+          type: 'object',
+          properties: {
+            id: { type: 'integer' },
+            name: { type: 'string' },
+            game: { type: 'string' },
+            online: { type: 'boolean' },
+            status: { type: 'string', enum: ['online', 'offline', 'unknown'] },
+            players: { type: 'integer' },
+            maxPlayers: { type: 'integer' },
+            ping: { type: 'integer', nullable: true, description: 'milliseconds' },
+            map: { type: 'string', nullable: true },
+            version: { type: 'string', nullable: true },
+            address: { type: 'string', nullable: true, description: 'null when the panel is closed to guests' },
+            uptime24h: { type: 'number', nullable: true, description: 'share of confirmed polls that found the server up in the last 24 hours, percent' },
+            stateSince: { type: 'integer', nullable: true, description: 'unix time in ms since the server is in its current state' },
+            updatedAt: { type: 'integer', nullable: true, description: 'unix time in ms of the last poll' },
+            maintenance: { type: 'boolean', description: 'a maintenance window is running' },
+          },
+        },
+        Status: {
+          type: 'object',
+          properties: {
+            name: { type: 'string' },
+            servers: { type: 'integer' },
+            online: { type: 'integer' },
+            offline: { type: 'integer' },
+            players: { type: 'integer', description: 'players on the servers that are up' },
+            generatedAt: { type: 'integer' },
+          },
+        },
+      },
+    },
+  };
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/ops.ts" << '__COREGSM_EOF__'
 /**
  * Operations for administrators: action log, bulk actions on Discord bindings,
@@ -13503,7 +14872,7 @@ const RULES: Rule[] = [
   { m: 'POST', re: /^\/api\/maintenance$/, label: 'Создано окно обслуживания', detail: (r) => s(r.body?.name) },
   { m: 'PUT', re: /^\/api\/maintenance\/(\d+)$/, label: 'Изменено окно обслуживания', pre: (id) => `#${id}`, detail: (r, p) => `${p ?? ''} ${s(r.body?.name)}`.trim() },
   { m: 'DELETE', re: /^\/api\/maintenance\/(\d+)$/, label: 'Удалено окно обслуживания', pre: (id) => `#${id}` },
-  { m: 'PUT', re: /^\/api\/settings\/poll$/, label: 'Изменены настройки опроса серверов', detail: (r) => [r.body?.failThreshold !== undefined ? `подтверждение: ${Number(r.body.failThreshold)}` : '', r.body?.concurrency !== undefined ? `параллельно: ${Number(r.body.concurrency)}` : ''].filter(Boolean).join(', ') },
+  { m: 'PUT', re: /^\/api\/settings\/poll$/, label: 'Изменены настройки опроса серверов', detail: (r) => [r.body?.failThreshold !== undefined ? `подтверждение: ${Number(r.body.failThreshold)}` : '', r.body?.concurrency !== undefined ? `параллельно: ${Number(r.body.concurrency)}` : '', r.body?.failN !== undefined || r.body?.failM !== undefined ? `правило: ${r.body.failN ?? '—'} из ${r.body.failM ?? '—'}` : '', r.body?.probeVeto !== undefined ? `слово проб: ${r.body.probeVeto ? 'да' : 'нет'}` : ''].filter(Boolean).join(', ') },
   { m: 'DELETE', re: /^\/api\/backups\/([^/]+)$/, label: 'Удалена резервная копия', pre: (id) => s(id, 80) },
   { m: 'POST', re: /^\/api\/backups\/([^/]+)\/restore$/, label: 'Восстановлена копия из архива', pre: (id) => s(id, 80) },
   { m: 'POST', re: /^\/api\/auth\/login$/, label: 'Вход', anon: true },
@@ -13513,6 +14882,12 @@ const RULES: Rule[] = [
   { m: 'POST', re: /^\/api\/sessions\/revoke-others$/, label: 'Завершены остальные сеансы' },
   { m: 'PUT', re: /^\/api\/alerts$/, label: 'Изменены оповещения о недоступности серверов' },
   { m: 'POST', re: /^\/api\/alerts\/test$/, label: 'Тестовое оповещение' },
+  { m: 'POST', re: /^\/api\/integrations\/keys$/, label: 'Создан API-ключ', detail: (r) => s(r.body?.name, 60) },
+  { m: 'DELETE', re: /^\/api\/integrations\/keys\/(\d+)$/, label: 'Отозван API-ключ', pre: nameOf('SELECT name AS n FROM api_keys WHERE id = ?') },
+  { m: 'POST', re: /^\/api\/alert-channels$/, label: 'Добавлен канал оповещений', detail: (r) => `${r.body?.kind === 'email' ? 'почта' : 'вебхук'}: ${s(r.body?.name, 40)}` },
+  { m: 'PUT', re: /^\/api\/alert-channels\/(\d+)$/, label: 'Изменён канал оповещений', pre: (id) => `#${id}`, detail: (r, p) => `${p ?? ''} ${s(r.body?.name, 40)}`.trim() },
+  { m: 'DELETE', re: /^\/api\/alert-channels\/(\d+)$/, label: 'Удалён канал оповещений', pre: (id) => `#${id}` },
+  { m: 'POST', re: /^\/api\/alert-channels\/(\d+)\/test$/, label: 'Тест канала оповещений', pre: (id) => `#${id}` },
 ];
 
 /** records every successful change made through the panel; must be installed before the routes */
@@ -14088,12 +15463,12 @@ export interface Decision {
  *  - a failed poll counts at once when there is no state to hold (new server) or the server is already offline;
  *  - otherwise the last good state is kept until `threshold` consecutive polls have failed.
  */
-export function decideStatus(i: { prevOnline: boolean | null; prevFailures: number; polledOnline: boolean; threshold: number }): Decision {
+export function decideStatus(i: { prevOnline: boolean | null; prevFailures: number; polledOnline: boolean; threshold: number; /** the verdict of the «N of M» rule (downVerdict.ts); when given it replaces the consecutive-failure threshold */ confirmDown?: boolean }): Decision {
   if (i.polledOnline) return { online: true, confirmed: true, failures: 0, becameOffline: false };
   const failures = Math.min(1_000_000, Math.max(0, Math.floor(i.prevFailures)) + 1);
   const threshold = clampThreshold(i.threshold);
   if (i.prevOnline === null || i.prevOnline === false) return { online: false, confirmed: true, failures, becameOffline: false };
-  if (failures >= threshold) return { online: false, confirmed: true, failures, becameOffline: true };
+  if (i.confirmDown ?? failures >= threshold) return { online: false, confirmed: true, failures, becameOffline: true };
   return { online: true, confirmed: false, failures, becameOffline: false };
 }
 
@@ -15511,6 +16886,109 @@ export const PROXY_HELP = 'Прокси: host:port:логин:пароль, sock
 export const BOT_TOKEN_RE = /^[\w-]{20,}\.[\w-]{4,}\.[\w-]{20,}$/;
 // a browser that autofills the panel's own password into the token field must not overwrite a working token
 export const TOKEN_HELP = 'Это не похоже на токен бота: он состоит из трёх частей через точки. Скопируйте его целиком в Discord Developer Portal (Bot → Reset Token).';
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/publicApi.ts" << '__COREGSM_EOF__'
+/**
+ * The public read-only API, version 1. Every call (except the description) needs an API key (apiKeys.ts):
+ *
+ *   GET /api/v1/status         totals: servers, how many are up, players
+ *   GET /api/v1/servers        the servers (?game=, ?online=true|false)
+ *   GET /api/v1/servers/:id    one server
+ *   GET /api/v1/openapi.json   the OpenAPI 3 description (no key needed)
+ *
+ * Only public data: never the host and port used for polling. The display address is given only while the panel is
+ * open to guests. Errors are always { error: { code, message } }.
+ */
+import type { Express, Request, Response } from 'express';
+import { APP_VERSION } from './config.js';
+import { db } from './db.js';
+import { publicPanel } from './auth.js';
+import { apiError, apiKeyAuth } from './apiKeys.js';
+import { openApiSpec } from './openapi.js';
+import { type ServerJoin, SELECT_SERVERS, SERVER_ORDER, serialize } from './serverData.js';
+import { baseOf, brand, publicBase } from './site.js';
+import { publicName } from './widgets.js';
+
+type Serialized = ReturnType<typeof serialize>;
+
+/** one server the way the API shows it */
+export function apiServer(sv: Serialized, uptime24h: number | null, showAddress: boolean) {
+  return {
+    id: sv.id,
+    name: publicName(sv),
+    game: sv.game,
+    online: sv.online,
+    status: !sv.hasStatus ? 'unknown' : sv.online ? 'online' : 'offline',
+    players: sv.online ? sv.players : 0,
+    maxPlayers: sv.maxPlayers,
+    ping: sv.online ? sv.ping : null,
+    map: sv.online ? sv.map : null,
+    version: sv.online ? sv.version : null,
+    address: showAddress ? sv.displayAddress || sv.address : null,
+    uptime24h,
+    stateSince: sv.stateSince,
+    updatedAt: sv.updatedAt,
+    maintenance: !!sv.maintenance,
+  };
+}
+
+function uptimes(since: number): Map<number, number> {
+  const out = new Map<number, number>();
+  const rows = db
+    .prepare('SELECT server_id, AVG(CASE WHEN unconfirmed = 0 AND maint = 0 THEN online END) * 100 AS u FROM history WHERE ts > ? GROUP BY server_id')
+    .all(since) as { server_id: number; u: number | null }[];
+  for (const r of rows) if (r.u != null) out.set(r.server_id, Math.round(r.u * 10) / 10);
+  return out;
+}
+
+const list = (): Serialized[] => (db.prepare(`${SELECT_SERVERS} ORDER BY ${SERVER_ORDER}`).all() as ServerJoin[]).map(serialize);
+
+export function registerPublicApi(app: Express): void {
+  // not matched by anything: a wrong path under /api/v1 gets the same error format
+  app.get('/api/v1/openapi.json', (req: Request, res: Response) => {
+    res.set('Cache-Control', 'public, max-age=300');
+    res.json(openApiSpec({ version: APP_VERSION, baseUrl: publicBase() ?? baseOf(req), title: brand().name }));
+  });
+
+  app.get('/api/v1/status', apiKeyAuth, (_req, res) => {
+    const all = list();
+    const online = all.filter((s) => s.online).length;
+    res.set('Cache-Control', 'private, max-age=10');
+    res.json({
+      name: brand().name,
+      servers: all.length,
+      online,
+      offline: all.length - online,
+      players: all.reduce((n, s) => n + (s.online ? s.players : 0), 0),
+      generatedAt: Date.now(),
+    });
+  });
+
+  app.get('/api/v1/servers', apiKeyAuth, (req, res) => {
+    const up = uptimes(Date.now() - 86_400_000);
+    const show = publicPanel();
+    let all = list();
+    const game = typeof req.query.game === 'string' ? req.query.game : '';
+    if (game) all = all.filter((s) => s.game === game);
+    if (req.query.online === 'true') all = all.filter((s) => s.online);
+    else if (req.query.online === 'false') all = all.filter((s) => !s.online);
+    res.set('Cache-Control', 'private, max-age=10');
+    res.json({ servers: all.map((s) => apiServer(s, up.get(s.id) ?? null, show)) });
+  });
+
+  app.get('/api/v1/servers/:id', apiKeyAuth, (req, res) => {
+    const id = /^\d+$/.test(String(req.params.id)) ? Number(req.params.id) : 0;
+    const row = id ? (db.prepare(`${SELECT_SERVERS} WHERE s.id = ?`).get(id) as ServerJoin | undefined) : undefined;
+    if (!row) return void apiError(res, 404, 'not_found', 'No such server.');
+    const up = uptimes(Date.now() - 86_400_000);
+    res.set('Cache-Control', 'private, max-age=10');
+    res.json(apiServer(serialize(row), up.get(id) ?? null, publicPanel()));
+  });
+
+  // everything else under /api/v1: one error format instead of the panel's 404
+  app.use('/api/v1', (_req, res) => apiError(res, 404, 'not_found', 'No such endpoint. See /api/v1/openapi.json.'));
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/push.ts" << '__COREGSM_EOF__'
@@ -21277,6 +22755,137 @@ export function buildNotice(o: { kind: 'available' | 'reminder' | 'done'; mode?:
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/urlGuard.ts" << '__COREGSM_EOF__'
+/**
+ * Protection against SSRF for requests the panel makes to an address typed by an administrator (outgoing webhooks):
+ *  - only http and https, no credentials in the address, a sane length;
+ *  - loopback, private, link-local, carrier-grade NAT, multicast and reserved addresses are refused, for IPv4, IPv6 and
+ *    IPv4-mapped IPv6 alike; a host name is checked after it is resolved, and the connection is made to the checked
+ *    address (see safeLookup), so a name that changes its answer between the check and the connection gets nothing;
+ *  - `allowPrivate` is an explicit decision of the owner for one channel (a webhook inside the own network).
+ * Pure functions are tested directly (test/url-guard.test.ts).
+ */
+import dns from 'node:dns';
+import net from 'node:net';
+
+/** true for an address that must not be reached from the panel unless the owner allowed it */
+export function isBlockedAddress(ip: string): boolean {
+  let a = ip.trim().toLowerCase();
+  if (a.startsWith('[') && a.endsWith(']')) a = a.slice(1, -1);
+  const zone = a.indexOf('%');
+  if (zone >= 0) a = a.slice(0, zone);
+  const v = net.isIP(a);
+  if (v === 4) return blockedV4(a);
+  if (v === 6) return blockedV6(a);
+  return true; // not an address at all
+}
+
+function blockedV4(a: string): boolean {
+  const [p, q] = a.split('.').map(Number);
+  if (p === 0 || p === 10 || p === 127) return true;
+  if (p === 100 && q >= 64 && q <= 127) return true; // carrier-grade NAT
+  if (p === 169 && q === 254) return true; // link-local, cloud metadata
+  if (p === 172 && q >= 16 && q <= 31) return true;
+  if (p === 192 && q === 168) return true;
+  if (p === 192 && q === 0) return true; // IETF protocol assignments, documentation
+  if (p === 198 && (q === 18 || q === 19)) return true; // benchmarking
+  if (p >= 224) return true; // multicast, reserved, broadcast
+  return false;
+}
+
+/** the 16 bytes of an IPv6 address, or null */
+function bytesV6(a: string): number[] | null {
+  let s = a;
+  // an embedded IPv4 tail (::ffff:1.2.3.4) becomes two groups
+  const tail = /(\d+\.\d+\.\d+\.\d+)$/.exec(s);
+  if (tail) {
+    const o = tail[1]!.split('.').map(Number);
+    if (o.some((x) => x > 255)) return null;
+    s = s.slice(0, s.length - tail[1]!.length) + ((o[0]! << 8) | o[1]!).toString(16) + ':' + ((o[2]! << 8) | o[3]!).toString(16);
+  }
+  const halves = s.split('::');
+  if (halves.length > 2) return null;
+  const head = halves[0] ? halves[0].split(':') : [];
+  const rest = halves.length === 2 && halves[1] ? halves[1].split(':') : [];
+  const fill = halves.length === 2 ? 8 - head.length - rest.length : 0;
+  if (fill < 0 || (halves.length === 1 && head.length !== 8)) return null;
+  const groups = [...head, ...Array(fill).fill('0'), ...rest];
+  if (groups.length !== 8) return null;
+  const out: number[] = [];
+  for (const g of groups) {
+    const n = parseInt(g, 16);
+    if (!/^[0-9a-f]{1,4}$/.test(g) || Number.isNaN(n)) return null;
+    out.push(n >> 8, n & 255);
+  }
+  return out;
+}
+
+function blockedV6(a: string): boolean {
+  const b = bytesV6(a);
+  if (!b) return true;
+  const zeros = (from: number, to: number) => b.slice(from, to).every((x) => x === 0);
+  if (zeros(0, 15) && (b[15] === 0 || b[15] === 1)) return true; // :: and ::1
+  // IPv4-mapped (::ffff:a.b.c.d) and the deprecated IPv4-compatible (::a.b.c.d): judged by the IPv4 address inside
+  if (zeros(0, 10) && b[10] === 0xff && b[11] === 0xff) return blockedV4(b.slice(12).join('.'));
+  if (zeros(0, 12)) return blockedV4(b.slice(12).join('.'));
+  // NAT64 64:ff9b::/96 carries an IPv4 address too
+  if (b[0] === 0 && b[1] === 0x64 && b[2] === 0xff && b[3] === 0x9b && zeros(4, 12)) return blockedV4(b.slice(12).join('.'));
+  if ((b[0]! & 0xfe) === 0xfc) return true; // unique local fc00::/7
+  if (b[0] === 0xfe && (b[1]! & 0xc0) === 0x80) return true; // link-local fe80::/10
+  if (b[0] === 0xfe && (b[1]! & 0xc0) === 0xc0) return true; // site-local fec0::/10
+  if (b[0] === 0xff) return true; // multicast
+  if (b[0] === 0x20 && b[1] === 0x01 && b[2] === 0x0d && b[3] === 0xb8) return true; // documentation
+  return false;
+}
+
+export type UrlCheck = { ok: true; url: URL } | { ok: false; error: string };
+
+/** Syntax and scheme of a webhook address. Names are checked later, after resolving (safeLookup). */
+export function checkWebhookUrl(raw: string, allowPrivate = false): UrlCheck {
+  const text = raw.trim();
+  if (!text || text.length > 500) return { ok: false, error: 'Укажите адрес вебхука (не длиннее 500 символов)' };
+  let url: URL;
+  try {
+    url = new URL(text);
+  } catch {
+    return { ok: false, error: 'Адрес вебхука указан неверно: нужен вид https://example.com/hook' };
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return { ok: false, error: 'Разрешены только адреса http:// и https://' };
+  if (url.username || url.password) return { ok: false, error: 'Логин и пароль в адресе не поддерживаются: используйте секрет подписи' };
+  const host = url.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+  if (!host) return { ok: false, error: 'В адресе нет имени сервера' };
+  if (!allowPrivate) {
+    if (net.isIP(host)) {
+      if (isBlockedAddress(host)) return { ok: false, error: 'Адрес из локальной сети или служебный: он запрещён. Разрешить такие адреса можно отдельной настройкой канала' };
+    } else if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local') || host.endsWith('.internal') || !host.includes('.')) {
+      return { ok: false, error: 'Локальные имена запрещены. Разрешить такие адреса можно отдельной настройкой канала' };
+    }
+  }
+  return { ok: true, url };
+}
+
+type LookupCb = (err: NodeJS.ErrnoException | null, address: string | { address: string; family: number }[], family?: number) => void;
+
+/**
+ * A `lookup` for node:http / node:https: resolves the name and refuses the connection when any of the answers is a
+ * forbidden address (unless allowPrivate). The socket then connects to the very address that was checked.
+ */
+export function safeLookup(allowPrivate: boolean) {
+  return (hostname: string, options: dns.LookupOptions, cb: LookupCb): void => {
+    dns.lookup(hostname, { ...options, all: true }, (err, addrs) => {
+      if (err) return cb(err, '', 4);
+      const list = (addrs as dns.LookupAddress[]) ?? [];
+      if (!list.length) return cb(Object.assign(new Error('имя не найдено'), { code: 'ENOTFOUND' }), '', 4);
+      if (!allowPrivate && list.some((a) => isBlockedAddress(a.address))) {
+        return cb(Object.assign(new Error('адрес запрещён: он указывает на локальную сеть'), { code: 'EBLOCKED' }), '', 4);
+      }
+      if (options.all) return cb(null, list.map((a) => ({ address: a.address, family: a.family })));
+      cb(null, list[0]!.address, list[0]!.family);
+    });
+  };
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/webpush.ts" << '__COREGSM_EOF__'
 /**
  * Web Push without a library: the panel's VAPID keys (RFC 8292), the encryption of a message for one browser
@@ -21424,6 +23033,66 @@ export function renderWelcome(text: string, v: { userId: string; server: string 
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/widgets.ts" << '__COREGSM_EOF__'
+/**
+ * Badges and widgets that need no key, for sites and forums (only while the panel is public):
+ *
+ *   GET /badge/servers/:id.svg   an SVG badge: server name and players / maximum, coloured by the state
+ *   GET /widget/servers/:id      a small page for an <iframe> (the only path that may be framed)
+ *
+ * Both are cached for a minute and carry no addresses.
+ */
+import type { Express, Request, Response } from 'express';
+import { publicPanel } from './auth.js';
+import { badgeSvg, notFoundBadge, widgetHtml } from './badgeLogic.js';
+import { getServer } from './serverData.js';
+import { baseOf, brand, publicBase } from './site.js';
+import { param } from './http.js';
+import { gameLabel } from './games.js';
+
+export const WIDGET_CACHE = 'public, max-age=60';
+
+/** the shown name; when the server has no title (the name would be host:port) the game name stands in, never the internal address */
+export const publicName = (sv: { name: string; host: string; port: number; game: string }): string => (sv.name === `${sv.host}:${sv.port}` ? gameLabel(sv.game) : sv.name);
+
+export function registerWidgets(app: Express): void {
+  app.get('/badge/servers/:file', (req: Request, res: Response) => {
+    const m = /^(\d+)\.svg$/.exec(String(req.params.file));
+    res.set({
+      'Content-Type': 'image/svg+xml; charset=utf-8',
+      'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'",
+      'Cross-Origin-Resource-Policy': 'cross-origin',
+      'X-Robots-Tag': 'noindex',
+    });
+    const sv = m && publicPanel() ? getServer(Number(m[1])) : null;
+    if (!sv) {
+      res.set('Cache-Control', 'public, max-age=30');
+      return void res.status(404).send(notFoundBadge());
+    }
+    res.set('Cache-Control', WIDGET_CACHE);
+    res.send(badgeSvg({ ...sv, name: publicName(sv) }));
+  });
+
+  app.get('/widget/servers/:id', param('id'), (req: Request, res: Response) => {
+    // the one place where framing is allowed (securityHeaders denies it everywhere else)
+    res.removeHeader('X-Frame-Options');
+    res.set({
+      'Content-Type': 'text/html; charset=utf-8',
+      'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors *",
+      'X-Robots-Tag': 'noindex',
+    });
+    const sv = publicPanel() ? getServer(Number(req.params.id)) : null;
+    if (!sv) {
+      res.set('Cache-Control', 'public, max-age=30');
+      return void res.status(404).send('<!doctype html><meta charset="utf-8"><title>Не найдено</title><body style="font:14px system-ui;padding:12px">Сервер недоступен</body>');
+    }
+    const base = publicBase() ?? baseOf(req);
+    res.set('Cache-Control', WIDGET_CACHE);
+    res.send(widgetHtml({ ...sv, name: publicName(sv), url: `${base}/servers/${sv.id}`, brand: brand().name }));
+  });
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/wipeLogic.ts" << '__COREGSM_EOF__'
 /** Texts of the wipe scenario (pure, no database). */
 
@@ -21462,6 +23131,7 @@ import crypto from 'node:crypto';
 import express from 'express';
 import { z } from 'zod';
 import { allow, type AuthedRequest } from './auth.js';
+import { dispatchEvent } from './alertChannels.js';
 import { enqueueAlert } from './alerts.js';
 import { db, EFFECTIVE_NAME, getSetting } from './db.js';
 import { param } from './http.js';
@@ -21615,6 +23285,7 @@ async function runWipe(r: Row, done: Set<string>, steps: StepLog[]): Promise<voi
     discord(r.server_id, r.channel_id, '🧹 Вайп', `Сервер **${server}** вайпается. Обычно это занимает до ${r.duration_min} мин.${seed ? `\nСид: \`${seed}\`` : ''}`, 0x5865f2);
     return 'Сообщение в Discord поставлено в очередь';
   });
+  dispatchEvent({ event: 'wipe', title: `Вайп: ${server}`, text: `Сервер ${server} вайпается. Обычно это занимает до ${r.duration_min} мин.`, data: { serverId: r.server_id, server, scenarioId: r.id, durationMin: r.duration_min } });
   save(r.id, done, steps, 'done');
 }
 
@@ -103756,6 +105427,220 @@ export default function AdminStatusBar() {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/AlertChannels.tsx" << '__COREGSM_EOF__'
+/**
+ * Admin → Оповещения: channels that do not depend on Discord (an outgoing webhook, e-mail to administrators).
+ * If the bot or its token is gone, these still tell the administrator that a server is down.
+ */
+import { useEffect, useState, type FormEvent } from 'react';
+import { api } from '../api';
+import { confirmDialog } from '../confirm';
+import { t, useI18n } from '../i18n';
+import { Button, ErrorLine, Field, IconTrash, Modal, Section, Switch, ago, toast } from '../ui';
+
+export interface AlertChannel {
+  id: number;
+  kind: 'webhook' | 'email';
+  name: string;
+  urlPreview: string;
+  hasSecret: boolean;
+  recipients: string[];
+  events: string[];
+  enabled: boolean;
+  allowPrivate: boolean;
+  lastStatus: 'ok' | 'error' | null;
+  lastError: string | null;
+  lastAt: number | null;
+}
+interface ChannelsInfo { smtpReady: boolean; events: { id: string; label: string }[]; items: AlertChannel[] }
+
+/** the sentence under a channel: where it goes */
+export function channelTarget(c: Pick<AlertChannel, 'kind' | 'urlPreview' | 'recipients'>): string {
+  return c.kind === 'webhook' ? c.urlPreview : c.recipients.join(', ');
+}
+
+/** the state of the last delivery in words */
+export function channelState(c: Pick<AlertChannel, 'enabled' | 'lastStatus' | 'lastError' | 'lastAt'>): { text: string; tone: 'ok' | 'bad' | 'mute' } {
+  if (!c.enabled) return { text: t('ach.stOff'), tone: 'mute' };
+  if (c.lastStatus === 'ok') return { text: t('ach.stOk', { ago: ago(c.lastAt) }), tone: 'ok' };
+  if (c.lastStatus === 'error') return { text: t('ach.stErr', { ago: ago(c.lastAt), e: c.lastError ?? t('ach.stUnknown') }), tone: 'bad' };
+  return { text: t('ach.stNever'), tone: 'mute' };
+}
+
+export default function AlertChannels() {
+  useI18n();
+  const [info, setInfo] = useState<ChannelsInfo | null>(null);
+  const [gone, setGone] = useState(false);
+  const [error, setError] = useState('');
+  const [edit, setEdit] = useState<AlertChannel | 'new-webhook' | 'new-email' | null>(null);
+  const [testing, setTesting] = useState<number | null>(null);
+
+  const load = () => api<ChannelsInfo>('/alert-channels').then((r) => { setInfo(r); setError(''); }).catch((e: Error) => { if (/404/.test(e.message) || /не найден/i.test(e.message)) setGone(true); else setError(e.message); });
+  useEffect(() => { void load(); }, []);
+
+  const test = async (c: AlertChannel) => {
+    setTesting(c.id);
+    await api<ChannelsInfo & { ok: boolean; error: string | null }>(`/alert-channels/${c.id}/test`, 'POST')
+      .then((r) => { setInfo(r); if (r.ok) toast(t('ach.testDone')); else setError(r.error ?? t('ach.testFail')); if (r.ok) setError(''); })
+      .catch((e: Error) => setError(e.message))
+      .finally(() => setTesting(null));
+  };
+  const toggle = async (c: AlertChannel, enabled: boolean) => {
+    await api<ChannelsInfo>(`/alert-channels/${c.id}`, 'PUT', { kind: c.kind, name: c.name, events: c.events, enabled })
+      .then((r) => { setInfo(r); setError(''); })
+      .catch((e: Error) => setError(e.message));
+  };
+  const remove = async (c: AlertChannel) => {
+    if (!(await confirmDialog({ title: t('ach.deleteTitle', { name: c.name }), text: t('ach.deleteText'), confirmLabel: t('ach.delete'), danger: true }))) return;
+    await api<ChannelsInfo>(`/alert-channels/${c.id}`, 'DELETE').then((r) => { setInfo(r); setError(''); }).catch((e: Error) => setError(e.message));
+  };
+
+  if (gone) return null;
+  const labels = new Map(info?.events.map((e) => [e.id, e.label]));
+
+  return (
+    <Section
+      title={t('ach.title')}
+      description={t('ach.desc')}
+      actions={(
+        <>
+          <button type="button" className="btn btn-soft btn-sm" onClick={() => setEdit('new-webhook')}>{t('ach.addHook')}</button>
+          <button type="button" className="btn btn-soft btn-sm" onClick={() => setEdit('new-email')}>{t('ach.addMail')}</button>
+        </>
+      )}
+    >
+      <ErrorLine text={error} />
+      {!info && !error && <div className="skeleton h-14 rounded-ui-lg" aria-busy="true" aria-label={t('ach.loading')} />}
+      {info && !info.smtpReady && <p className="text-sm font-semibold text-mute">{t('ach.smtpOff')}</p>}
+      {info && info.items.length === 0 && <p className="text-sm font-semibold text-mute">{t('ach.none')}</p>}
+      <ul className="grid grid-cols-[minmax(0,1fr)] gap-2">
+        {info?.items.map((c) => {
+          const st = channelState(c);
+          return (
+            <li key={c.id} className="flex flex-wrap items-start gap-3 rounded-2xl bg-soft px-3 py-2.5">
+              <Switch className="mt-1" checked={c.enabled} aria-label={t('ach.on', { name: c.name })} onChange={(on) => void toggle(c, on)} />
+              <div className="min-w-0 flex-1">
+                <div className="font-extrabold">{c.kind === 'webhook' ? t('ach.kindHook') : t('ach.kindMail')}: {c.name}</div>
+                <div className="truncate text-sm font-semibold text-mute" title={channelTarget(c)}>{channelTarget(c)}{c.kind === 'webhook' && t(c.hasSecret ? 'ach.secretSet' : 'ach.secretNone')}</div>
+                <div className="mt-1 flex flex-wrap gap-1.5">
+                  {c.events.length === 0 && <span className="pill pill-mute">{t('ach.noEvents')}</span>}
+                  {c.events.map((e) => <span key={e} className="pill pill-mute">{labels.get(e) ?? e}</span>)}
+                </div>
+                <div className={`mt-1 text-sm font-bold ${st.tone === 'ok' ? 'text-ok' : st.tone === 'bad' ? 'text-bad' : 'text-mute'}`}>{st.text}</div>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <Button className="btn-soft btn-sm" loading={testing === c.id} onClick={() => void test(c)}>{t('ach.test')}</Button>
+                <button type="button" className="btn btn-ghost btn-sm" onClick={() => setEdit(c)}>{t('ach.change')}</button>
+                <button type="button" className="row-act row-act-danger" aria-label={t('ach.deleteAria', { name: c.name })} title={t('ach.delete')} onClick={() => void remove(c)}><IconTrash /></button>
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+      {edit && info && (
+        <ChannelForm
+          events={info.events}
+          smtpReady={info.smtpReady}
+          channel={typeof edit === 'object' ? edit : null}
+          kind={typeof edit === 'object' ? edit.kind : edit === 'new-email' ? 'email' : 'webhook'}
+          onClose={() => setEdit(null)}
+          onSaved={(r) => { setInfo(r); setEdit(null); setError(''); toast(t('ach.saved')); }}
+        />
+      )}
+    </Section>
+  );
+}
+
+function ChannelForm({ channel, kind, events, smtpReady, onClose, onSaved }: {
+  channel: AlertChannel | null;
+  kind: 'webhook' | 'email';
+  events: { id: string; label: string }[];
+  smtpReady: boolean;
+  onClose: () => void;
+  onSaved: (r: ChannelsInfo) => void;
+}) {
+  useI18n();
+  const [name, setName] = useState(channel?.name ?? '');
+  const [url, setUrl] = useState('');
+  const [secret, setSecret] = useState('');
+  const [clearSecret, setClearSecret] = useState(false);
+  const [rcpt, setRcpt] = useState(channel?.recipients.join(', ') ?? '');
+  const [on, setOn] = useState<string[]>(channel?.events ?? (kind === 'webhook' ? ['server_down', 'server_up'] : ['server_down', 'bot_down']));
+  const [allowPrivate, setAllowPrivate] = useState(channel?.allowPrivate ?? false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    setError('');
+    const body: Record<string, unknown> = { kind, name: name.trim(), events: on };
+    if (kind === 'webhook') {
+      if (url.trim()) body.url = url.trim();
+      if (clearSecret) body.secret = null;
+      else if (secret.trim()) body.secret = secret.trim();
+      body.allowPrivate = allowPrivate;
+    } else body.recipients = rcpt;
+    await (channel ? api<ChannelsInfo>(`/alert-channels/${channel.id}`, 'PUT', body) : api<ChannelsInfo>('/alert-channels', 'POST', body))
+      .then(onSaved)
+      .catch((err: Error) => setError(err.message))
+      .finally(() => setBusy(false));
+  };
+
+  return (
+    <Modal title={t(channel ? (kind === 'webhook' ? 'ach.formHook' : 'ach.formMail') : (kind === 'webhook' ? 'ach.formNewHook' : 'ach.formNewMail'))} onClose={onClose}>
+      <form onSubmit={submit} className="space-y-3.5">
+        <Field label={t('ach.name')}><input className="input" value={name} onChange={(e) => setName(e.target.value)} maxLength={60} required placeholder={t(kind === 'webhook' ? 'ach.nameHookPh' : 'ach.nameMailPh')} /></Field>
+        {kind === 'webhook' ? (
+          <>
+            <Field label={channel ? t('ach.urlKeep', { now: channel.urlPreview }) : t('ach.url')}>
+              <input className="input" type="url" value={url} onChange={(e) => setUrl(e.target.value)} maxLength={500} required={!channel} placeholder="https://example.com/hooks/coregsm" autoComplete="off" />
+            </Field>
+            <Field label={t(channel?.hasSecret ? 'ach.secretHave' : 'ach.secretNew')}>
+              <input className="input" type="password" value={secret} onChange={(e) => { setSecret(e.target.value); setClearSecret(false); }} maxLength={200} autoComplete="new-password" disabled={clearSecret} />
+            </Field>
+            {channel?.hasSecret && (
+              <label className="flex items-center gap-2 text-sm font-bold"><input type="checkbox" checked={clearSecret} onChange={(e) => setClearSecret(e.target.checked)} /> {t('ach.secretClear')}</label>
+            )}
+            <p className="text-sm font-semibold text-mute">
+              {t('ach.sigHelp')}
+            </p>
+            <label className="flex items-start gap-3 font-bold">
+              <Switch className="mt-0.5" checked={allowPrivate} onChange={setAllowPrivate} />
+              <span>
+                {t('ach.private')}
+                <span className="block text-sm font-semibold text-mute">{t('ach.privateText')}</span>
+              </span>
+            </label>
+          </>
+        ) : (
+          <>
+            <Field label={t('ach.rcpt')}><input className="input" value={rcpt} onChange={(e) => setRcpt(e.target.value)} required placeholder="admin@example.com, ops@example.com" /></Field>
+            {!smtpReady && <p className="text-sm font-semibold text-warn">{t('ach.smtpWarn')}</p>}
+          </>
+        )}
+        <fieldset>
+          <legend className="label">{t('ach.events')}</legend>
+          <div className="grid gap-1.5 min-[480px]:grid-cols-2">
+            {events.map((ev) => (
+              <label key={ev.id} className="flex items-center gap-2 font-bold">
+                <input type="checkbox" checked={on.includes(ev.id)} onChange={(e) => setOn((cur) => (e.target.checked ? [...cur, ev.id] : cur.filter((x) => x !== ev.id)))} />
+                {ev.label}
+              </label>
+            ))}
+          </div>
+        </fieldset>
+        <ErrorLine text={error} />
+        <div className="flex justify-end gap-2">
+          <button type="button" className="btn btn-ghost" onClick={onClose}>{t('ach.cancel')}</button>
+          <Button loading={busy}>{t('ach.save')}</Button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
   cat > "$APP_DIR/core-frontend/src/components/AttentionBell.tsx" << '__COREGSM_EOF__'
 import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent } from 'react';
 import { api } from '../api';
@@ -106289,8 +108174,9 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/components/PollSettingsCard.tsx" << '__COREGSM_EOF__'
 import { useEffect, useState } from 'react';
 import { api } from '../api';
-import { CONC_MAX, CONC_MIN, FAIL_MAX, FAIL_MIN, confirmDelayText, durationText, validatePoll, type PollSettings } from '../pollSettings';
-import { FieldError, SaveBadge, Section, ago, plural, useAutosave } from '../ui';
+import { t } from '../i18n';
+import { CONC_MAX, CONC_MIN, FAIL_MAX, FAIL_MIN, WINDOW_MAX, confirmDelayText, durationText, ruleText, validatePoll, type PollSettings } from '../pollSettings';
+import { FieldError, SaveBadge, Section, Switch, ago, plural, useAutosave } from '../ui';
 import { useSaveBar, useSaveBarActive } from '../saveBar';
 
 /** «Опрос серверов»: when a failure is confirmed, how many servers are asked at once, and the numbers of the last poll. */
@@ -106299,6 +108185,9 @@ export default function PollSettingsCard() {
   const [gone, setGone] = useState(false);
   const [fail, setFail] = useState('3');
   const [conc, setConc] = useState('8');
+  const [failN, setFailN] = useState('');
+  const [failM, setFailM] = useState('');
+  const [veto, setVeto] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -106308,28 +108197,38 @@ export default function PollSettingsCard() {
         setSrv(r);
         setFail(String(r.failThreshold));
         setConc(String(r.concurrency));
+        setFailN(r.failN ? String(r.failN) : '');
+        setFailM(r.failM ? String(r.failM) : '');
+        setVeto(!!r.probeVeto);
       })
       .catch(() => { if (alive) setGone(true); });
     return () => { alive = false; };
   }, []);
 
-  const value = { failThreshold: Number(fail), concurrency: Number(conc) };
+  const value = {
+    failThreshold: Number(fail),
+    concurrency: Number(conc),
+    failN: failN.trim() === '' ? null : Number(failN),
+    failM: failM.trim() === '' ? null : Number(failM),
+    probeVeto: veto,
+  };
+  const savedOf = (r: PollSettings) => ({ failThreshold: r.failThreshold, concurrency: r.concurrency, failN: r.failN ?? null, failM: r.failM ?? null, probeVeto: !!r.probeVeto });
   const err = validatePoll(value);
   const bar = useSaveBarActive();
   const auto = useAutosave({
     manual: bar,
     value,
-    saved: srv ? { failThreshold: srv.failThreshold, concurrency: srv.concurrency } : value,
+    saved: srv ? savedOf(srv) : value,
     enabled: !!srv,
     delay: 700,
     validate: (v) => validatePoll(v),
     save: async (v) => {
-      const r = await api<PollSettings>('/settings/poll', 'PUT', { failThreshold: v.failThreshold, concurrency: v.concurrency });
-      setSrv((s) => (s ? { ...s, last: r.last ?? s.last } : s));
+      const r = await api<PollSettings>('/settings/poll', 'PUT', { failThreshold: v.failThreshold, concurrency: v.concurrency, failN: v.failN, failM: v.failM, probeVeto: v.probeVeto });
+      setSrv((s) => (s ? { ...s, ...savedOf(r), last: r.last ?? s.last } : s));
     },
   });
 
-  useSaveBar('poll', 'опрос серверов', auto.status, auto.saveNow, () => { if (srv) { setFail(String(srv.failThreshold)); setConc(String(srv.concurrency)); } });
+  useSaveBar('poll', 'опрос серверов', auto.status, auto.saveNow, () => { if (srv) { setFail(String(srv.failThreshold)); setConc(String(srv.concurrency)); setFailN(srv.failN ? String(srv.failN) : ''); setFailM(srv.failM ? String(srv.failM) : ''); setVeto(!!srv.probeVeto); } });
 
   // the backend is older than the panel (or the poll settings are not available): the card is simply not shown
   if (gone) return null;
@@ -106374,7 +108273,28 @@ export default function PollSettingsCard() {
           </p>
         </div>
       </div>
-      <FieldError id="poll-err" text={err && (value.failThreshold !== srv.failThreshold || value.concurrency !== srv.concurrency) ? err : undefined} />
+      <div>
+        <div className="label">{t('poll.rule.title')}</div>
+        <div className="flex flex-wrap items-center gap-2 font-bold">
+          <label htmlFor="poll-n" className="sr-only">{t('poll.rule.nAria')}</label>
+          <input id="poll-n" className="input w-24" type="number" inputMode="numeric" min={1} max={WINDOW_MAX} placeholder="N" value={failN} onChange={(e) => setFailN(e.target.value)} onBlur={auto.flush} aria-describedby="poll-rule-hint" />
+          <span>{t('poll.rule.of')}</span>
+          <label htmlFor="poll-m" className="sr-only">{t('poll.rule.mAria')}</label>
+          <input id="poll-m" className="input w-24" type="number" inputMode="numeric" min={1} max={WINDOW_MAX} placeholder="M" value={failM} onChange={(e) => setFailM(e.target.value)} onBlur={auto.flush} aria-describedby="poll-rule-hint" />
+          <span className="text-mute">{t('poll.rule.last')}</span>
+        </div>
+        <p id="poll-rule-hint" className="mt-1.5 text-sm font-semibold text-mute">
+          {t('poll.rule.hint', { rule: ruleText(value.failN, value.failM, value.failThreshold || 1) })}
+        </p>
+        <label className="mt-3 flex items-start gap-3 font-bold">
+          <Switch checked={veto} onChange={setVeto} className="mt-0.5" />
+          <span>
+            {t('poll.rule.veto')}
+            <span className="block text-sm font-semibold text-mute">{t('poll.rule.vetoText')}</span>
+          </span>
+        </label>
+      </div>
+      <FieldError id="poll-err" text={err && (value.failThreshold !== srv.failThreshold || value.concurrency !== srv.concurrency || value.failN !== (srv.failN ?? null) || value.failM !== (srv.failM ?? null)) ? err : undefined} />
 
       <div className="rounded-ui-lg bg-soft px-4 py-3">
         <div className="text-sm font-extrabold text-mute">Последний обход</div>
@@ -106889,6 +108809,105 @@ function PlanModal({ server, plan, onClose, onSaved }: { server: Server; plan: P
         </div>
       </div>
     </Modal>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/RowMenu.tsx" << '__COREGSM_EOF__'
+// A «⋯» button that opens a small menu of text actions. The popup is drawn on the page body (a scrolling table would clip it)
+// and is operated from the keyboard: ↑/↓, Home/End, Esc closes and returns the focus, Tab closes.
+import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { createPortal } from 'react-dom';
+
+export interface RowMenuItem {
+  key: string;
+  label: string;
+  onSelect?: () => void;
+  href?: string;
+  danger?: boolean;
+  disabled?: boolean;
+  /** a divider is drawn above the item */
+  sep?: boolean;
+}
+
+export default function RowMenu({ label, items, className = '' }: { label: string; items: RowMenuItem[]; className?: string }) {
+  const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState<{ top?: number; bottom?: number; right: number } | null>(null);
+  const btn = useRef<HTMLButtonElement>(null);
+  const pop = useRef<HTMLDivElement>(null);
+  const id = useId();
+
+  const close = (focus = false) => { setOpen(false); if (focus) btn.current?.focus(); };
+
+  useLayoutEffect(() => {
+    if (!open || !btn.current) return;
+    const r = btn.current.getBoundingClientRect();
+    const right = Math.max(8, window.innerWidth - r.right);
+    // opens upwards when there is no room under the button
+    setPos(r.bottom + 260 > window.innerHeight && r.top > 260 ? { bottom: window.innerHeight - r.top + 4, right } : { top: r.bottom + 4, right });
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    pop.current?.querySelector<HTMLElement>('[role="menuitem"]:not([aria-disabled="true"])')?.focus();
+    const onDown = (e: Event) => {
+      const n = e.target as Node;
+      if (!pop.current?.contains(n) && !btn.current?.contains(n)) setOpen(false);
+    };
+    const away = () => setOpen(false);
+    document.addEventListener('pointerdown', onDown);
+    window.addEventListener('scroll', away, true);
+    window.addEventListener('resize', away);
+    return () => { document.removeEventListener('pointerdown', onDown); window.removeEventListener('scroll', away, true); window.removeEventListener('resize', away); };
+  }, [open, pos]);
+
+  const onKey = (e: KeyboardEvent) => {
+    const els = [...(pop.current?.querySelectorAll<HTMLElement>('[role="menuitem"]:not([aria-disabled="true"])') ?? [])];
+    const i = els.indexOf(document.activeElement as HTMLElement);
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(true); }
+    else if (e.key === 'Tab') close();
+    else if (e.key === 'ArrowDown') { e.preventDefault(); els[(i + 1) % els.length]?.focus(); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); els[(i - 1 + els.length) % els.length]?.focus(); }
+    else if (e.key === 'Home') { e.preventDefault(); els[0]?.focus(); }
+    else if (e.key === 'End') { e.preventDefault(); els[els.length - 1]?.focus(); }
+  };
+
+  return (
+    <>
+      <button
+        ref={btn}
+        type="button"
+        className={`row-act ${className}`}
+        aria-label={label}
+        title={label}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-controls={open ? id : undefined}
+        onClick={() => setOpen((v) => !v)}
+        onKeyDown={(e) => { if (e.key === 'ArrowDown' && !open) { e.preventDefault(); setOpen(true); } }}
+      >
+        <span aria-hidden className="text-lg font-black leading-none">⋯</span>
+      </button>
+      {open && pos && createPortal(
+        <div ref={pop} id={id} role="menu" aria-label={label} className="row-menu" style={pos} onKeyDown={onKey}>
+          {items.map((it) => {
+            const common = {
+              role: 'menuitem',
+              'aria-disabled': it.disabled || undefined,
+              tabIndex: -1,
+              className: `row-menu-item ${it.danger ? 'is-danger' : ''}`,
+              'data-sep': it.sep ? 'true' : undefined,
+            } as const;
+            return it.href && !it.disabled ? (
+              <a key={it.key} {...common} href={it.href} onClick={() => close()}>{it.label}</a>
+            ) : (
+              <button key={it.key} type="button" {...common} onClick={() => { if (it.disabled) return; close(); it.onSelect?.(); }}>{it.label}</button>
+            );
+          })}
+        </div>,
+        document.body,
+      )}
+    </>
   );
 }
 __COREGSM_EOF__
@@ -107920,7 +109939,7 @@ export default function Tour() {
   if (open) return <TourOverlay onClose={close} />;
   if (!offer) return null;
   return (
-    <div role="dialog" aria-label="Подсказки по панели" className="pop panel panel-raised fixed bottom-24 right-4 z-60 flex md:left-4 md:right-auto w-[min(20rem,calc(100vw-2rem))] items-center gap-3 py-2.5 pl-4 pr-2 shadow-soft md:bottom-5">
+    <div role="dialog" aria-label="Подсказки по панели" className="pop panel panel-raised fixed bottom-24 right-4 z-60 flex w-[min(20rem,calc(100vw-2rem))] items-center gap-3 py-2.5 pl-4 pr-2 shadow-soft md:bottom-5">
       <div className="min-w-0 flex-1">
         <div className="text-sm font-black">Впервые в Админке?</div>
         <button className="text-sm font-extrabold text-link underline" onClick={() => { setOffer(false); setOpen(true); }}>Показать за минуту</button>
@@ -110475,6 +112494,7 @@ export function Reactions({
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/news"
   cat > "$APP_DIR/core-frontend/src/components/news/NewsPublicPages.tsx" << '__COREGSM_EOF__'
+import * as Popover from '@radix-ui/react-popover';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { api, ApiError, type NewsReaction, type PublicNews, type PublicNewsFull, type Server } from '../../api';
 import { useAuth } from '../../auth';
@@ -110521,6 +112541,34 @@ const loadRubric = (): RubricFilter => {
     return 'all';
   }
 };
+
+/** sort and view of the feed in one small menu (they used to be two more rows of pills) */
+function FeedMenu({ sort, dense, onSort, onDense }: { sort: FeedSort; dense: boolean; onSort: (s: FeedSort) => void; onDense: (v: boolean) => void }) {
+  const [open, setOpen] = useState(false);
+  const item = (on: boolean, label: string, pick: () => void) => (
+    <button key={label} type="button" role="menuitemradio" aria-checked={on} className="srv-more-item nw-menu-item" onClick={() => { pick(); setOpen(false); }}>
+      <span className="srv-more-ico" aria-hidden>{on ? '✓' : ''}</span>
+      <span className="min-w-0 flex-1 text-left">{label}</span>
+    </button>
+  );
+  return (
+    <Popover.Root open={open} onOpenChange={setOpen}>
+      <Popover.Trigger asChild>
+        <button type="button" className="nw-menu-btn" aria-haspopup="menu" aria-label={`${t('nw.sort')}, ${t('nw.view')}`}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M4 6h16M7 12h10M10 18h4" /></svg>
+          <span className="max-sm:sr-only">{t(`nw.sort.${sort}` as const)}</span>
+        </button>
+      </Popover.Trigger>
+      <Popover.Content role="menu" side="bottom" align="end" sideOffset={8} collisionPadding={8} className="srv-more-pop">
+        <p className="nw-menu-h">{t('nw.sort')}</p>
+        {SORTS.map((s) => item(sort === s, t(`nw.sort.${s}` as const), () => onSort(s)))}
+        <p className="nw-menu-h">{t('nw.view')}</p>
+        {item(!dense, t('nw.view.cards'), () => onDense(false))}
+        {item(dense, t('nw.view.dense'), () => onDense(true))}
+      </Popover.Content>
+    </Popover.Root>
+  );
+}
 
 function useMedia(q: string): boolean {
   const [on, setOn] = useState(() => typeof window !== 'undefined' && !!window.matchMedia?.(q).matches);
@@ -110694,22 +112742,20 @@ export function NewsListPage() {
       <div className={`nw-grid ${hasSide ? 'has-side' : ''}`}>
         <div className="nw-main">
           <PageHead icon={<IconNews />} title={t('nav.news')} subtitle={t('nw.subtitle')} />
-          {counts.all > 0 && rubrics.length > 0 && (
-            <div className="nw-rubrics" role="group" aria-label={t('nw.rubrics')}>
-              {chip('all')}
-              {rubrics.map((r) => chip(r))}
+          {(counts.all > 0 && rubrics.length > 0) || (loaded && counts.all > 1) ? (
+            <div className="nw-bar">
+              {counts.all > 0 && rubrics.length > 0 ? (
+                <div className="nw-rubrics" role="group" aria-label={t('nw.rubrics')}>
+                  {chip('all')}
+                  {rubrics.map((r) => chip(r))}
+                </div>
+              ) : <span className="flex-1" />}
+              {loaded && counts.all > 1 && <FeedMenu sort={sort} dense={dense} onSort={setSort} onDense={setDense} />}
             </div>
-          )}
-          {loaded && counts.all > 1 && (
+          ) : null}
+          {loaded && author && (
             <div className="nw-tools">
-              <div className="seg" role="group" aria-label={t('nw.sort')}>
-                {SORTS.map((s) => <button key={s} type="button" className="seg-item" aria-current={sort === s ? 'true' : undefined} onClick={() => setSort(s)}>{t(`nw.sort.${s}` as const)}</button>)}
-              </div>
-              <div className="seg" role="group" aria-label={t('nw.view')}>
-                <button type="button" className="seg-item" aria-current={!dense ? 'true' : undefined} onClick={() => setDense(false)}>{t('nw.view.cards')}</button>
-                <button type="button" className="seg-item" aria-current={dense ? 'true' : undefined} onClick={() => setDense(true)}>{t('nw.view.dense')}</button>
-              </div>
-              {author && <button type="button" className="nw-rub" onClick={clearAuthor}>{t('nw.author.filter')} <span aria-hidden>✕</span></button>}
+              <button type="button" className="nw-rub" onClick={clearAuthor}>{t('nw.author.filter')} <span aria-hidden>✕</span></button>
             </div>
           )}
           {error && items.length === 0 ? <LoadError error={error} onRetry={() => void load()} /> : null}
@@ -111207,6 +113253,8 @@ function Entry({ c, servers, seen }: { c: Card; servers: Server[] | null | undef
   };
   return (
     <article className={`nb ${c.pinned ? 'is-pinned' : ''}`} style={{ ['--nf-accent' as string]: c.accent }}>
+      {/* the whole card is the link; the buttons and links inside the text stay clickable above it */}
+      <a className="nb-stretch" href={href} tabIndex={-1} aria-label={c.title} />
       <a className={`nb-banner ${gen ? 'nw-gen' : ''}`} data-v={gen ? c.id % 4 : undefined} href={href} style={gen ? genVars(c) : coverStyle(c, servers)} aria-label={c.title}>
         {gen && <span className="nw-gen-ico"><CategoryIcon category={c.category} size={96} /></span>}
         <span className="nb-banner-in">
@@ -111230,7 +113278,6 @@ function Entry({ c, servers, seen }: { c: Card; servers: Server[] | null | undef
             {c.comments > 0 && <a className="nw-cmcount" href={`${href}#comments`} aria-label={t('nw.cm.count', { n: c.comments })}>💬 {c.comments}</a>}
             <button type="button" className="nb-tool" onClick={() => void copy()} title={t('nw.copyLink')} aria-label={t('nw.copyLink')}><IconCopyLink /></button>
             {canEdit && <a className="nb-tool" href={`/admin/news/${c.id}`} title={t('nw.edit')} aria-label={t('nw.edit')}><IconEditPen /></a>}
-            <a className="nw-more" href={href}>{t('nw.readShort')}<span aria-hidden> →</span></a>
           </span>
         </div>
       </div>
@@ -112618,6 +114665,56 @@ export function BannerEditor({ onChanged }: { onChanged: () => Promise<void> }) 
       {hasBanner && (
         <button type="button" className="btn btn-danger btn-sm" onClick={() => void remove()} disabled={busy}>{t('pf.banner.remove')}</button>
       )}
+    </Section>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/profile"
+  cat > "$APP_DIR/core-frontend/src/components/profile/FavoritePush.tsx" << '__COREGSM_EOF__'
+/** Profile → push for favourite servers: which events of the starred servers reach the devices. */
+import { useEffect, useState } from 'react';
+import { api } from '../../api';
+import { t, useI18n, type TKey } from '../../i18n';
+import { ErrorLine, Section, Switch } from '../../ui';
+
+interface Prefs { online: boolean; freeSlot: boolean; down: boolean; devices: number; favorites: number }
+type Key = 'online' | 'freeSlot' | 'down';
+
+const ROWS: { key: Key; title: TKey; hint: TKey }[] = [
+  { key: 'online', title: 'favpush.online', hint: 'favpush.online.h' },
+  { key: 'freeSlot', title: 'favpush.freeSlot', hint: 'favpush.freeSlot.h' },
+  { key: 'down', title: 'favpush.down', hint: 'favpush.down.h' },
+];
+
+export function FavoritePushCard() {
+  useI18n();
+  const [p, setP] = useState<Prefs | null>(null);
+  const [error, setError] = useState('');
+  useEffect(() => { api<Prefs>('/me/favorite-push').then(setP).catch((e: Error) => setError(e.message)); }, []);
+  const set = (key: Key, v: boolean) => {
+    if (!p) return;
+    setP({ ...p, [key]: v });
+    api<Prefs>('/me/favorite-push', 'PUT', { [key]: v }).then(setP).catch((e: Error) => { setP(p); setError(e.message); });
+  };
+  return (
+    <Section title={t('favpush.title')} description={t('favpush.desc')}>
+      {p && (
+        <>
+          {p.devices === 0 && <p className="text-sm font-semibold text-warn">{t('favpush.noDevices')}</p>}
+          {p.favorites === 0 && <p className="text-sm font-semibold text-mute">{t('favpush.noFavs')}</p>}
+          <ul className="space-y-3">
+            {ROWS.map((r) => (
+              <li key={r.key}>
+                <label className="flex cursor-pointer items-start gap-3">
+                  <Switch checked={p[r.key]} onChange={(v) => set(r.key, v)} />
+                  <span><span className="block font-extrabold">{t(r.title)}</span><span className="block text-sm font-semibold text-mute">{t(r.hint)}</span></span>
+                </label>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+      <ErrorLine text={error} />
     </Section>
   );
 }
@@ -114758,7 +116855,7 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/components/server/Hero.tsx" << '__COREGSM_EOF__'
 import { useEffect, useRef, useState } from 'react';
 import { t, useI18n } from '../../i18n';
-import { AnimatedNumber, Burst, IconBell, plural } from '../../ui';
+import { AnimatedNumber, Burst, IconBell, ago, plural } from '../../ui';
 import MaintenanceChip from '../MaintenanceChip';
 import NickPic from '../NickPic';
 import { capLevel, capacityPct, slotsInfo } from '../servers/capacity';
@@ -114874,7 +116971,7 @@ function WhoStack({ who, players, href, now }: { who: Who[]; players: number; hr
  * the maintenance chip, who is playing, and, when the server is full, «Сообщить, когда будет место».
  */
 export default function Hero({
-  online, hasStatus, players, max, maintenance, freeSlot, onNotify, who = [], whoHref, peak = null, recent = [], now,
+  online, hasStatus, players, max, maintenance, freeSlot, onNotify, who = [], whoHref, peak = null, recent = [], now, lastSeen = null,
 }: {
   online: boolean;
   hasStatus: boolean;
@@ -114890,6 +116987,8 @@ export default function Hero({
   /** players over the last two hours */
   recent?: number[];
   now: number;
+  /** ms of the last answer (shown in the one status line of a server that is down) */
+  lastSeen?: number | null;
 }) {
   useI18n();
   // a new record while the page is open
@@ -114904,6 +117003,19 @@ export default function Hero({
       if (players >= 3) setBoom((k) => k + 1);
     }
   }, [players, peak, online]);
+
+  // a server that is down: one status line instead of a big dash over an empty band
+  if (!online && hasStatus) {
+    return (
+      <section className="srv-hero srv-hero-off relative" aria-label={t('srv.hero.label')}>
+        <p className="srv-off-line" role="status">
+          <b>{t('srv.hero.offline')}</b>
+          <span>{lastSeen ? t('srv.hero.lastAnswer', { ago: ago(lastSeen) }) : t('srv.hero.noAnswer')}</span>
+        </p>
+        {maintenance && <MaintenanceChip m={maintenance} glass />}
+      </section>
+    );
+  }
 
   return (
     <section className="srv-hero relative" aria-label={t('srv.hero.label')}>
@@ -115840,6 +117952,64 @@ export default function PinnedNotice({ serverId, notice, canEdit, onChange }: { 
       </div>
       {canEdit && <button type="button" className="btn-link btn-xs shrink-0" onClick={open}>Изменить</button>}
     </aside>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/server"
+  cat > "$APP_DIR/core-frontend/src/components/server/OfflineState.tsx" << '__COREGSM_EOF__'
+// What the «Игроки» card shows while the server is down: since when, for how long and why, and a strip of the period's availability
+// (a chart of «0 players» in red stripes says nothing); the chart itself can still be opened.
+import { useState, type ReactNode } from 'react';
+import { t, useI18n } from '../../i18n';
+import { fmtTime, fmtDateTime, num } from '../../ui';
+import { durText } from '../servers/serverUi';
+import { uptimeCells, type UptimeCell } from './serverLogic';
+
+const CELL_LABEL: Record<UptimeCell, string> = { up: 'работал', down: 'не отвечал', part: 'были сбои', none: 'нет данных' };
+
+export default function OfflineState({ since, atLeast, error, points, hours, now, uptimePct, windowLabel, children }: {
+  since: number | null;
+  atLeast: boolean;
+  error: string | null;
+  points: { ts: number; online: number }[];
+  hours: number;
+  now: number;
+  uptimePct: number | null;
+  windowLabel: string;
+  /** the chart, shown on demand */
+  children: ReactNode;
+}) {
+  useI18n();
+  const [chart, setChart] = useState(false);
+  const start = now - hours * 3_600_000;
+  const cells = uptimeCells(points, start, now, hours <= 24 ? 48 : 60);
+  const long = since != null && now - since >= 20 * 3_600_000;
+  return (
+    <div className="off-state">
+      <div className="off-plaque" role="status">
+        <span className="off-dot" aria-hidden />
+        <div className="min-w-0">
+          <p className="off-title">
+            {since == null ? t('srv.off.noTime') : atLeast ? t('srv.off.moreThan', { d: durText(now - since) }) : t('srv.off.since', { time: long ? fmtDateTime(since) : fmtTime(since), d: durText(now - since) })}
+          </p>
+          {error && <p className="off-why" title={error}>{error}</p>}
+        </div>
+      </div>
+      <div className="off-up">
+        <div className="off-up-head">
+          <span>{t('srv.off.uptime', { w: windowLabel })}</span>
+          <b>{uptimePct == null ? '–' : `${num(uptimePct)}%`}</b>
+        </div>
+        <div className="off-bars" role="img" aria-label={t('srv.off.uptime', { w: windowLabel })}>
+          {cells.map((c, i) => <i key={i} className={`off-cell ${c.kind}`} title={`${fmtDateTime(c.from)}: ${CELL_LABEL[c.kind]}`} />)}
+        </div>
+        <div className="off-ticks" aria-hidden><span>{hours <= 24 ? fmtTime(start) : fmtDateTime(start)}</span><span>{t('spark.now')}</span></div>
+      </div>
+      <button type="button" className="btn btn-ghost btn-sm off-toggle" aria-expanded={chart} onClick={() => setChart((v) => !v)}>
+        {chart ? t('srv.off.hideChart') : t('srv.off.showChart')}
+      </button>
+      {chart && children}
+    </div>
   );
 }
 __COREGSM_EOF__
@@ -117598,6 +119768,32 @@ export function downsample(values: number[], n: number): number[] {
   for (let i = 0; i < n; i += 1) out.push(values[Math.round((i * (values.length - 1)) / (n - 1))]);
   return out;
 }
+
+// ---------- an outage in progress ----------
+/** when the running outage began: the newest 'down' event, else the first offline sample of the tail; `atLeast` when it began before the window */
+export function offlineSince(events: { ts: number; type: EventKind }[], points: { ts: number; online: number }[]): { ts: number; atLeast: boolean } | null {
+  const last = events.find((e) => e.type === 'up' || e.type === 'down');
+  if (last?.type === 'down') return { ts: last.ts, atLeast: false };
+  if (points.length === 0) return null;
+  let i = points.length;
+  while (i > 0 && !points[i - 1].online) i -= 1;
+  if (i === points.length) return null;
+  return { ts: points[i].ts, atLeast: i === 0 };
+}
+
+export type UptimeCell = 'up' | 'down' | 'part' | 'none';
+/** the window cut into `n` equal cells: all samples answered / none answered / mixed / no samples */
+export function uptimeCells(points: { ts: number; online: number }[], start: number, end: number, n: number): { from: number; to: number; kind: UptimeCell }[] {
+  const step = Math.max(1, (end - start) / n);
+  const ok = new Array<number>(n).fill(0);
+  const bad = new Array<number>(n).fill(0);
+  for (const p of points) {
+    const k = Math.min(n - 1, Math.floor((p.ts - start) / step));
+    if (k < 0) continue;
+    if (p.online) ok[k] += 1; else bad[k] += 1;
+  }
+  return ok.map((o, k) => ({ from: start + k * step, to: start + (k + 1) * step, kind: o && bad[k] ? 'part' : o ? 'up' : bad[k] ? 'down' : 'none' }));
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/server"
   cat > "$APP_DIR/core-frontend/src/components/server/trend.test.ts" << '__COREGSM_EOF__'
@@ -117640,52 +119836,6 @@ export function useKnownNicks(): Map<string, number> {
     for (const k of ['month', 'all', 'day'] as const) community.top[k].forEach((p) => { if (!m.has(p.name.toLowerCase())) m.set(p.name.toLowerCase(), 0); });
     return m;
   }, [community]);
-}
-__COREGSM_EOF__
-  mkdir -p "$APP_DIR/core-frontend/src/components/servers"
-  cat > "$APP_DIR/core-frontend/src/components/servers/AttentionStrip.tsx" << '__COREGSM_EOF__'
-// A compact strip for servers that need a look (not answering, or a high ping): one line each, above the tiles.
-import type { Server } from '../../api';
-import { t } from '../../i18n';
-import { LAG_PING, ago } from '../../ui';
-
-const MAX_ROWS = 4;
-
-function reasonOf(s: Server): string {
-  if (!s.online) return `${t('srv.pulse.noAnswer')}${s.updatedAt ? ` · ${t('srv.attn.last', { ago: ago(s.updatedAt) })}` : ''}`;
-  return `${t('srv.pulse.slow')} · ${s.ping ?? LAG_PING} ${t('srv.unit.ms')}`;
-}
-
-export function AttentionStrip({ servers, onOpen }: { servers: Server[]; onOpen: (s: Server) => void }) {
-  if (servers.length === 0) return null;
-  const shown = servers.slice(0, MAX_ROWS);
-  const more = servers.length - shown.length;
-  return (
-    <section className="attn" aria-label={t('srv.attn.title')}>
-      <h2 className="attn-h">{t('srv.attn.title')}</h2>
-      <ul className="attn-list">
-        {shown.map((s) => (
-          <li key={s.id}>
-            <a
-              className={`attn-row ${s.online ? 'is-warn' : 'is-bad'}`}
-              href={`/servers/${s.id}`}
-              onClick={(e) => {
-                if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
-                e.preventDefault();
-                onOpen(s);
-              }}
-            >
-              <span className="attn-dot" aria-hidden />
-              <span className="attn-name">{s.name}</span>
-              <span className="attn-why">{reasonOf(s)}</span>
-              <span className="attn-go" aria-hidden>→</span>
-            </a>
-          </li>
-        ))}
-      </ul>
-      {more > 0 && <p className="attn-more">{t('srv.attn.more', { n: more })}</p>}
-    </section>
-  );
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/servers"
@@ -118237,11 +120387,11 @@ import type { Server } from '../../api';
 import { chartPoints, chartStart, hasEnoughHistory, pulseOf, type OverviewData, type PulseState } from './overviewLogic';
 
 const ICON: Record<PulseState, JSX.Element> = {
-  ok: <IconOk size={24} />,
-  warn: <IconWarn size={24} />,
-  bad: <IconError size={24} />,
-  maint: <IconWrench size={24} />,
-  wait: <IconClock size={24} />,
+  ok: <IconOk size={20} />,
+  warn: <IconWarn size={20} />,
+  bad: <IconError size={20} />,
+  maint: <IconWrench size={20} />,
+  wait: <IconClock size={20} />,
 };
 
 function PlayersChart({ data, now }: { data: OverviewData | null; now: number }) {
@@ -118312,7 +120462,7 @@ function PlayersChart({ data, now }: { data: OverviewData | null; now: number })
   );
 }
 
-export function PulseStrip({ servers, overview, uptime, now }: { servers: Server[]; overview: OverviewData | null; uptime: number | null; now: number }) {
+export function PulseStrip({ servers, overview, uptime, now, onOpen }: { servers: Server[]; overview: OverviewData | null; uptime: number | null; now: number; onOpen?: (s: Server) => void }) {
   useI18n();
   const { state, problems } = pulseOf(servers);
   const online = servers.filter((s) => s.online);
@@ -118320,11 +120470,12 @@ export function PulseStrip({ servers, overview, uptime, now }: { servers: Server
   const pings = online.filter((s) => s.ping != null).map((s) => s.ping as number);
   const avg = pings.length ? Math.round(pings.reduce((a, b) => a + b, 0) / pings.length) : null;
 
-  let title: string;
+  // problems are one slim alert row (icon, count, names, arrow); the strip below stays neutral
+  const alert = state === 'bad' || state === 'warn';
+  let title = '';
   let sub = '';
-  if (state === 'bad' || state === 'warn') {
-    // the count here, the servers and the reasons in the «Needs attention» strip below (no second copy of them)
-    title = t('srv.pulse.problemsN', { n: problems.length, total: servers.length });
+  if (alert) {
+    title = t(state === 'bad' ? 'srv.pulse.downN' : 'srv.pulse.slowN', { n: problems.length, total: servers.length });
     const names = problems.slice(0, 2).map((s) => s.name).join(', ');
     sub = problems.length > 2 ? `${names} ${t('srv.pulse.more', { n: problems.length - 2 })}` : names;
   } else if (state === 'maint') {
@@ -118345,15 +120496,34 @@ export function PulseStrip({ servers, overview, uptime, now }: { servers: Server
     const per = Math.max(1, Math.round(3_600_000 / overview.bucketMs));
     if (pts.length > per) trend = pts[pts.length - 1].players - pts[pts.length - 1 - per].players;
   }
+  const first = problems[0];
   return (
+    <div className="pulse-wrap">
+      {alert && first && (
+        <a
+          className={`pulse-alert pulse-alert-${state}`}
+          href={problems.length === 1 ? `/servers/${first.id}` : '#srv-list'}
+          onClick={(e) => {
+            if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+            e.preventDefault();
+            if (problems.length === 1) onOpen?.(first);
+            else document.getElementById('srv-list')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          }}
+        >
+          <span className="pulse-alert-icon" aria-hidden>{ICON[state]}</span>
+          <span className="pulse-alert-title">{title}</span>
+          <span className="pulse-alert-names">{sub}</span>
+          <span className="pulse-alert-go" aria-hidden>→</span>
+        </a>
+      )}
     <section className={`pulse pulse-${state}`} aria-label={t('srv.pulse.label')}>
-      <div className="pulse-state" role="status">
-        <span className="pulse-icon" aria-hidden>{ICON[state]}</span>
-        <div className="min-w-0">
-          <div className="pulse-title">{title}</div>
-          {sub && <div className="pulse-sub">{sub}</div>}
+      {!alert && (
+        <div className="pulse-state" role="status">
+          <span className="pulse-icon" aria-hidden>{ICON[state]}</span>
+          <span className="pulse-title">{title}</span>
+          {sub && <span className="pulse-sub">{sub}</span>}
         </div>
-      </div>
+      )}
       <dl className="pulse-nums">
         <div>
           <dt>{t('srv.pulse.players')}</dt>
@@ -118374,6 +120544,7 @@ export function PulseStrip({ servers, overview, uptime, now }: { servers: Server
       </dl>
       <PlayersChart data={overview} now={now} />
     </section>
+    </div>
   );
 }
 __COREGSM_EOF__
@@ -122833,11 +125004,14 @@ const en: Record<keyof typeof ru, string> = {
   'srv.cap.nearFull': 'Almost full: {pct}%',
   'srv.cap.taken': '{pct}% of slots taken',
   'srv.unit.ms': 'ms',
+  'srv.tile.full': 'Almost full',
   'srv.pulse.label': 'Servers at a glance',
   'srv.pulse.ok': 'All systems running',
   'srv.pulse.okSub': '{n} server online|{n} servers online',
   'srv.pulse.problems': 'Problems: {name}',
   'srv.pulse.problemsN': 'Problems: {n} of {total}',
+  'srv.pulse.downN': 'Unavailable: {n} of {total}',
+  'srv.pulse.slowN': 'Slow to respond: {n} of {total}',
   'srv.pulse.more': 'and {n} more',
   'srv.pulse.slow': 'High ping',
   'srv.pulse.noAnswer': 'Not responding',
@@ -122892,6 +125066,14 @@ const en: Record<keyof typeof ru, string> = {
   'srv.act.share': 'Share',
   'srv.act.linkCopied': 'Link copied',
   'srv.bar.label': 'Quick actions',
+  'srv.hero.lastAnswer': 'last answer {ago}',
+  'srv.hero.noAnswer': 'no answer yet',
+  'srv.off.since': 'Unavailable since {time} · for {d}',
+  'srv.off.moreThan': 'Unavailable for over {d}',
+  'srv.off.noTime': 'The server is unavailable',
+  'srv.off.uptime': 'Availability {w}',
+  'srv.off.showChart': 'Show the chart',
+  'srv.off.hideChart': 'Hide the chart',
   'srv.hero.label': 'Server state',
   'srv.hero.players': 'players',
   'srv.hero.offline': 'server is unavailable',
@@ -123116,6 +125298,53 @@ const en: Record<keyof typeof ru, string> = {
   'adm.d.users': 'Accounts, roles, registration and community rules.',
   'adm.s.journal': 'Journal',
   'adm.d.journal': 'Who changed what in the panel, with date and time.',
+  'adm.s.integrations': 'Integrations',
+  'adm.d.integrations': 'API keys, badges and server widgets for sites and forums.',
+  'intg.title': 'Integrations',
+  'intg.sub': 'Keys for the public API, badges and server widgets for sites and forums.',
+  'intg.keys.title': 'API keys',
+  'intg.keys.desc': 'A key is read-only: the server list, players online, ping, map. It is shown once when created; afterwards only its beginning is kept.',
+  'intg.created': 'Key "{name}" created. Copy it now: it cannot be shown again.',
+  'intg.saved': 'I saved it',
+  'intg.example': 'Example:',
+  'intg.f.name': 'Name (who the key is for)',
+  'intg.f.namePh': 'Clan website',
+  'intg.f.limit': 'Requests per minute',
+  'intg.create': 'Create key',
+  'intg.empty.t': 'No keys yet',
+  'intg.empty.x': 'Create the first one so a site or a bot can read server data.',
+  'intg.revoke': 'Revoke',
+  'intg.revoke.t': 'Revoke the key "{name}"?',
+  'intg.revoke.x': 'Every site and script using this key stops receiving data at once. A key cannot be restored; you will have to create a new one.',
+  'intg.revoked': 'Key revoked',
+  'intg.revokedList': 'Revoked keys ({n})',
+  'intg.revokedAt': 'revoked {when}',
+  'intg.createdAt': 'created {when}',
+  'intg.createdBy': 'created {when}, {who}',
+  'intg.usedAt': 'last used {when}',
+  'intg.unused': 'never used yet',
+  'intg.rate': '{n} request per minute|{n} requests per minute',
+  'intg.openapi': 'API description in OpenAPI format:',
+  'intg.hdr': 'Send the key in the Authorization: Bearer ... or X-API-Key header. Do not put a key into the code of pages that visitors can see.',
+  'intg.snip.title': 'Server badge and widget',
+  'intg.snip.desc': 'They work without a key while the panel is open to guests. The data refreshes once a minute.',
+  'intg.snip.server': 'Server',
+  'intg.snip.badgeAlt': 'Server badge',
+  'intg.snip.md': 'Markdown (forums, GitHub, Discord sites)',
+  'intg.snip.widget': 'Widget (iframe)',
+  'intg.snip.widgetTitle': 'Server widget',
+  'intg.snip.none.t': 'No servers yet',
+  'intg.snip.none.x': 'Add a server and ready-to-paste snippets will appear here.',
+  'favpush.title': 'Notifications about favourite servers',
+  'favpush.desc': 'A server becomes a favourite with its star. Choose what is sent to the devices where notifications are on.',
+  'favpush.noDevices': 'Notifications are off on your devices: turn them on in the card next to this one, or nothing will arrive.',
+  'favpush.noFavs': 'No favourite servers yet.',
+  'favpush.online': 'Server is back online',
+  'favpush.online.h': 'The server was down and answers again.',
+  'favpush.freeSlot': 'A slot is free',
+  'favpush.freeSlot.h': 'The server was full and now has a free slot. At most once per 15 minutes.',
+  'favpush.down': 'Server is down',
+  'favpush.down.h': 'The server stopped answering (after several checks confirmed it).',
   'adm.s.system': 'System',
   'adm.d.system': 'Panel health: version, disk, bot, certificate, diagnostics.',
   'adm.s.settings': 'Settings',
@@ -123136,6 +125365,8 @@ const en: Record<keyof typeof ru, string> = {
   'adm.navLabel': 'Admin sections',
   'adm.pinned': 'Pinned',
   'adm.recent': 'Recent',
+  'adm.mnav.all': 'All sections',
+  'adm.mnav.attention': 'Needs attention',
   'adm.upd.restarting': 'The panel is restarting…',
   'adm.upd.running': 'Updating the panel',
   'adm.upd.takes': 'This takes 1–3 minutes, the page will refresh by itself.',
@@ -123186,7 +125417,8 @@ const en: Record<keyof typeof ru, string> = {
   'adm.tbl.ping': 'Ping',
   'adm.tbl.uptime': 'Uptime 30 d',
   'adm.tbl.h24': '24 h',
-  'adm.tbl.actions': 'Actions',
+  'adm.tbl.more': 'More actions',
+  'adm.tbl.actions':'Actions',
   'adm.tbl.select': 'Select',
   'adm.tbl.shownAs': 'Shown as {a}',
   'adm.tbl.ms': '{n} ms',
@@ -123247,7 +125479,8 @@ const en: Record<keyof typeof ru, string> = {
   'start.skip': 'Skip',
   'start.unskip': 'Bring the step back',
   'start.quick': 'Quick actions',
-  'start.map': 'Where things are',
+  'start.doneGroup': 'Done: {a} of {b}',
+  'start.map':'Where things are',
   'start.mapText': 'The menu on the left is split into four groups. Expand for a description of each section.',
   'adm.com.reports': 'Reports',
   'adm.com.comments': 'Comments',
@@ -123822,6 +126055,61 @@ const en: Record<keyof typeof ru, string> = {
   'al.sent': 'sent {ago}',
   'al.waits': 'waiting for the bot…',
   'al.failed': 'not sent: {e}',
+  'ach.title': 'Webhooks and e-mail',
+  'ach.desc': 'Backup channels without Discord: if the bot stopped or its token was reset, the administrator still learns that a server is down. Messages are delivered with retries.',
+  'ach.addHook': 'Add a webhook',
+  'ach.addMail': 'Add e-mail',
+  'ach.smtpOff': 'The mail server (SMTP) is not set up: e-mail channels will work after you set it up in Settings.',
+  'ach.none': 'No channels yet. Alerts go to Discord only.',
+  'ach.loading': 'Loading',
+  'ach.kindHook': 'Webhook',
+  'ach.kindMail': 'E-mail',
+  'ach.secretSet': ' · signature set',
+  'ach.secretNone': ' · no signature',
+  'ach.noEvents': 'no events selected',
+  'ach.stOff': 'switched off',
+  'ach.stOk': 'delivered {ago}',
+  'ach.stErr': 'error {ago}: {e}',
+  'ach.stUnknown': 'unknown',
+  'ach.stNever': 'nothing sent yet',
+  'ach.on': 'Channel "{name}" is on',
+  'ach.test': 'Send a test',
+  'ach.testDone': 'The test message was delivered',
+  'ach.testFail': 'Could not send',
+  'ach.change': 'Edit',
+  'ach.delete': 'Delete',
+  'ach.deleteAria': 'Delete channel "{name}"',
+  'ach.deleteTitle': 'Delete channel "{name}"?',
+  'ach.deleteText': 'Messages still waiting to be sent will be lost.',
+  'ach.saved': 'Channel saved',
+  'ach.formNewHook': 'New webhook',
+  'ach.formNewMail': 'New channel: e-mail',
+  'ach.formHook': 'Channel: webhook',
+  'ach.formMail': 'Channel: e-mail',
+  'ach.name': 'Name',
+  'ach.nameHookPh': 'For example: Monitoring',
+  'ach.nameMailPh': 'For example: On-call admins',
+  'ach.url': 'Address (URL)',
+  'ach.urlKeep': 'Address (now {now}; leave empty to keep)',
+  'ach.secretNew': 'Signing secret (optional)',
+  'ach.secretHave': 'Signing secret (set; enter a new one to replace)',
+  'ach.secretClear': 'Remove the secret (messages will be unsigned)',
+  'ach.sigHelp': 'The panel sends a POST with JSON. The signature is the header X-CoreGSM-Signature: sha256=…, the HMAC-SHA256 of "X-CoreGSM-Timestamp + dot + body" with your secret. Check the time too, to reject replays.',
+  'ach.private': 'Allow local-network addresses',
+  'ach.privateText': 'Forbidden by default: 127.0.0.1, 192.168.x.x, 10.x.x.x and other internal addresses, so the panel cannot be used to reach your internal network. Turn on only if the receiver really is inside your network.',
+  'ach.rcpt': 'Recipients (comma separated)',
+  'ach.smtpWarn': 'The mail server (SMTP) is not set up: an enabled channel cannot be saved. Set up mail in Settings.',
+  'ach.events': 'What to report',
+  'ach.cancel': 'Cancel',
+  'ach.save': 'Save',
+  'poll.rule.title': '"N of M" rule (optional)',
+  'poll.rule.nAria': 'How many polls must fail',
+  'poll.rule.mAria': 'Out of how many recent polls',
+  'poll.rule.of': 'of',
+  'poll.rule.last': 'recent polls',
+  'poll.rule.hint': '{rule} Empty fields: the old behaviour (in a row). Good for flapping servers, for example 3 of 5.',
+  'poll.rule.veto': 'If most probes see the server, do not treat it as down',
+  'poll.rule.vetoText': 'Checks whether the break is between the panel and the server. On a tie the alarm stays.',
   'dc.delFail': 'Could not delete the binding',
   'dc.deleted': 'Binding deleted',
   'dc.deletedN': 'Bindings deleted: {n}',
@@ -123991,6 +126279,11 @@ const en: Record<keyof typeof ru, string> = {
   'us.pwDone': 'Password changed',
   'us.userDeleted': 'User deleted',
   'us.title': 'Users',
+  'us.tabs': 'Page sections',
+  'us.tab.users': 'Users',
+  'us.tab.access': 'Access',
+  'us.tab.rules': 'Rules',
+  'us.tab.roles': 'Roles and permissions',
   'us.sub': 'Accounts, roles, registration and rules',
   'us.hint': 'This decides who can open the panel, who can register and what each person may do. The role defines the rights.',
   'us.help': 'A player only views servers and news. A moderator also writes news. An administrator manages everything. All administrator actions go to the journal.',
@@ -124461,6 +126754,7 @@ const errorsEn: Record<string, string> = {
   check_form: 'Check the form fields',
   check_fields: 'Check the fields',
   not_found: 'Not found',
+  api_key_limit: 'At most {n} active keys are allowed: revoke the ones you do not need',
 
   // ---- sign-in, setup, registration ----
   login_locked: 'Too many wrong attempts. Try again in {sec} s.',
@@ -124538,7 +126832,26 @@ const errorsEn: Record<string, string> = {
   bad_bot_token: 'This does not look like a bot token: it has three parts joined by dots. Copy the whole token in the Discord Developer Portal (Bot → Reset Token).',
   branding_format: 'Name up to 32 characters, colour as #RRGGBB',
   players_shown_range: 'Number of nicknames: 0 to 20',
-  poll_settings_range: 'Outage confirmation: 1 to 5 polls, concurrency: 1 to 32',
+  poll_settings_range: 'Outage confirmation: 1 to 5 polls, concurrency: 1 to 32, "N of M" rule: numbers from 1 to 20',
+  ch_redirect: 'The receiver answered with a redirect ({status}): use the final address',
+  ch_http_error: 'The receiver answered with error {status}',
+  ch_no_recipient_set: 'No recipient is set',
+  ch_gone: 'The channel was deleted or switched off',
+  ch_name_required: 'Give the channel a name',
+  ch_name_long: 'The name is at most 60 characters',
+  ch_bad_email: 'Invalid e-mail address: {list}',
+  ch_recipient_required: 'Enter at least one recipient',
+  ch_recipients_many: 'At most 20 recipients',
+  ch_limit: 'At most {n} channels',
+  ch_not_found: 'Channel not found',
+  ch_kind_fixed: 'The channel type cannot be changed: create a new one',
+  url_required: 'Enter the webhook address (at most 500 characters)',
+  url_invalid: 'The webhook address is invalid: use the form https://example.com/hook',
+  url_scheme: 'Only http:// and https:// addresses are allowed',
+  url_credentials: 'A login and password in the address are not supported: use the signing secret',
+  url_host_missing: 'The address has no host name',
+  url_private: 'A local-network or reserved address is forbidden. It can be allowed by a separate channel setting',
+  url_local_name: 'Local names are forbidden. They can be allowed by a separate channel setting',
   update_not_configured: 'Updating from the panel is not set up on the server. Run: sudo coregsm update',
   update_running: 'An update is already running',
   update_request_failed: 'Could not create the update request (no write access to /app/update)',
@@ -125173,11 +127486,14 @@ const ru = {
   'srv.cap.nearFull': 'Почти полный: {pct}%',
   'srv.cap.taken': '{pct}% мест занято',
   'srv.unit.ms': 'мс',
+  'srv.tile.full': 'Почти полон',
   'srv.pulse.label': 'Сводка по серверам',
   'srv.pulse.ok': 'Всё работает',
   'srv.pulse.okSub': '{n} сервер онлайн|{n} сервера онлайн|{n} серверов онлайн',
   'srv.pulse.problems': 'Есть проблемы: {name}',
   'srv.pulse.problemsN': 'Есть проблемы: {n} из {total}',
+  'srv.pulse.downN': 'Недоступно: {n} из {total}',
+  'srv.pulse.slowN': 'Медленно отвечают: {n} из {total}',
   'srv.pulse.more': 'и ещё {n}',
   'srv.pulse.slow': 'Высокий пинг',
   'srv.pulse.noAnswer': 'Сервер не отвечает',
@@ -125232,6 +127548,14 @@ const ru = {
   'srv.act.share': 'Поделиться',
   'srv.act.linkCopied': 'Ссылка скопирована',
   'srv.bar.label': 'Быстрые действия',
+  'srv.hero.lastAnswer': 'последний ответ {ago}',
+  'srv.hero.noAnswer': 'ответов ещё не было',
+  'srv.off.since': 'Недоступен с {time} · уже {d}',
+  'srv.off.moreThan': 'Недоступен более {d}',
+  'srv.off.noTime': 'Сервер недоступен',
+  'srv.off.uptime': 'Доступность {w}',
+  'srv.off.showChart': 'Показать график',
+  'srv.off.hideChart': 'Скрыть график',
   'srv.hero.label': 'Состояние сервера',
   'srv.hero.players': 'игроков',
   'srv.hero.offline': 'сервер недоступен',
@@ -125456,6 +127780,53 @@ const ru = {
   'adm.d.users': 'Аккаунты, роли, регистрация и правила сообщества.',
   'adm.s.journal': 'Журнал',
   'adm.d.journal': 'Кто и что менял в панели, с датой и временем.',
+  'adm.s.integrations': 'Интеграции',
+  'adm.d.integrations': 'API-ключи, бейджи и виджеты серверов для сайтов и форумов.',
+  'intg.title': 'Интеграции',
+  'intg.sub': 'Ключи для публичного API, бейджи и виджеты серверов для сайтов и форумов.',
+  'intg.keys.title': 'API-ключи',
+  'intg.keys.desc': 'Ключ открывает только чтение: список серверов, онлайн, игроки, пинг, карта. Он показывается один раз при создании, потом остаётся только его начало.',
+  'intg.created': 'Ключ «{name}» создан. Скопируйте его сейчас: потом его не показать.',
+  'intg.saved': 'Я сохранил',
+  'intg.example': 'Пример:',
+  'intg.f.name': 'Название (для кого ключ)',
+  'intg.f.namePh': 'Сайт клана',
+  'intg.f.limit': 'Запросов в минуту',
+  'intg.create': 'Создать ключ',
+  'intg.empty.t': 'Ключей пока нет',
+  'intg.empty.x': 'Создайте первый, чтобы сайт или бот мог читать данные серверов.',
+  'intg.revoke': 'Отозвать',
+  'intg.revoke.t': 'Отозвать ключ «{name}»?',
+  'intg.revoke.x': 'Все сайты и скрипты с этим ключом сразу перестанут получать данные. Вернуть ключ нельзя, придётся создать новый.',
+  'intg.revoked': 'Ключ отозван',
+  'intg.revokedList': 'Отозванные ключи ({n})',
+  'intg.revokedAt': 'отозван {when}',
+  'intg.createdAt': 'создан {when}',
+  'intg.createdBy': 'создан {when}, {who}',
+  'intg.usedAt': 'использован {when}',
+  'intg.unused': 'ещё не использовался',
+  'intg.rate': '{n} запрос в минуту|{n} запроса в минуту|{n} запросов в минуту',
+  'intg.openapi': 'Описание API в формате OpenAPI:',
+  'intg.hdr': 'Ключ передаётся заголовком Authorization: Bearer … или X-API-Key. Не вставляйте ключ в код страниц, которые видят посетители.',
+  'intg.snip.title': 'Бейдж и виджет сервера',
+  'intg.snip.desc': 'Работают без ключа, пока панель открыта для гостей. Данные обновляются раз в минуту.',
+  'intg.snip.server': 'Сервер',
+  'intg.snip.badgeAlt': 'Бейдж сервера',
+  'intg.snip.md': 'Markdown (форумы, GitHub, Discord-сайты)',
+  'intg.snip.widget': 'Виджет (iframe)',
+  'intg.snip.widgetTitle': 'Виджет сервера',
+  'intg.snip.none.t': 'Серверов пока нет',
+  'intg.snip.none.x': 'Добавьте сервер, и здесь появятся готовые фрагменты для вставки.',
+  'favpush.title': 'Уведомления об избранных серверах',
+  'favpush.desc': 'Сервер попадает в избранное по звёздочке. О чём сообщать на устройства, где включены уведомления.',
+  'favpush.noDevices': 'Уведомления на устройствах выключены: включите их в соседней карточке, иначе ничего не придёт.',
+  'favpush.noFavs': 'В избранном пока нет серверов.',
+  'favpush.online': 'Сервер снова в сети',
+  'favpush.online.h': 'Сервер был недоступен и ответил снова.',
+  'favpush.freeSlot': 'Освободилось место',
+  'favpush.freeSlot.h': 'Сервер был заполнен, и теперь на нём есть свободный слот. Не чаще раза в 15 минут.',
+  'favpush.down': 'Сервер недоступен',
+  'favpush.down.h': 'Сервер перестал отвечать (после подтверждения несколькими проверками).',
   'adm.s.system': 'Система',
   'adm.d.system': 'Здоровье панели: версия, диск, бот, сертификат, диагностика.',
   'adm.s.settings': 'Настройки',
@@ -125476,6 +127847,8 @@ const ru = {
   'adm.navLabel': 'Разделы админки',
   'adm.pinned': 'Закреплённые',
   'adm.recent': 'Недавние',
+  'adm.mnav.all': 'Все разделы',
+  'adm.mnav.attention': 'Есть что проверить',
   'adm.upd.restarting': 'Панель перезапускается…',
   'adm.upd.running': 'Идёт обновление панели',
   'adm.upd.takes': 'Это занимает 1-3 минуты, страница обновится сама.',
@@ -125527,6 +127900,7 @@ const ru = {
   'adm.tbl.uptime': 'Аптайм 30 д',
   'adm.tbl.h24': '24 ч',
   'adm.tbl.actions': 'Действия',
+  'adm.tbl.more': 'Другие действия',
   'adm.tbl.select': 'Выбрать',
   'adm.tbl.shownAs': 'Показывается как {a}',
   'adm.tbl.ms': '{n} мс',
@@ -125587,7 +127961,8 @@ const ru = {
   'start.skip': 'Пропустить',
   'start.unskip': 'Вернуть шаг',
   'start.quick': 'Быстрые действия',
-  'start.map': 'Где что находится',
+  'start.doneGroup': 'Готово: {a} из {b}',
+  'start.map':'Где что находится',
   'start.mapText': 'Меню слева разделено на четыре группы. Развернуть описание разделов.',
   'adm.com.seasons': 'Сезоны',
   'adm.com.reports': 'Жалобы',
@@ -126162,6 +128537,61 @@ const ru = {
   'al.sent': 'отправлено {ago}',
   'al.waits': 'ждёт бота…',
   'al.failed': 'не отправлено: {e}',
+  'ach.title': 'Вебхуки и почта',
+  'ach.desc': 'Резервные каналы без Discord: если бот остановился или токен сброшен, администратор всё равно узнает, что сервер упал. Сообщения доставляются с повторами.',
+  'ach.addHook': 'Добавить вебхук',
+  'ach.addMail': 'Добавить почту',
+  'ach.smtpOff': 'Почтовый сервер (SMTP) не настроен: каналы-почта заработают после настройки в разделе «Настройки».',
+  'ach.none': 'Каналов пока нет. Оповещения идут только в Discord.',
+  'ach.loading': 'Загрузка',
+  'ach.kindHook': 'Вебхук',
+  'ach.kindMail': 'Почта',
+  'ach.secretSet': ' · подпись задана',
+  'ach.secretNone': ' · подпись не задана',
+  'ach.noEvents': 'события не выбраны',
+  'ach.stOff': 'выключен',
+  'ach.stOk': 'доставлено {ago}',
+  'ach.stErr': 'ошибка {ago}: {e}',
+  'ach.stUnknown': 'неизвестная',
+  'ach.stNever': 'ещё не отправлялось',
+  'ach.on': 'Канал «{name}» включён',
+  'ach.test': 'Отправить тест',
+  'ach.testDone': 'Проверочное сообщение доставлено',
+  'ach.testFail': 'Не удалось отправить',
+  'ach.change': 'Изменить',
+  'ach.delete': 'Удалить',
+  'ach.deleteAria': 'Удалить канал «{name}»',
+  'ach.deleteTitle': 'Удалить канал «{name}»?',
+  'ach.deleteText': 'Сообщения, которые ещё ждут отправки, пропадут.',
+  'ach.saved': 'Канал сохранён',
+  'ach.formNewHook': 'Новый вебхук',
+  'ach.formNewMail': 'Новый канал: почта',
+  'ach.formHook': 'Канал: вебхук',
+  'ach.formMail': 'Канал: почта',
+  'ach.name': 'Название',
+  'ach.nameHookPh': 'Например: Мониторинг',
+  'ach.nameMailPh': 'Например: Дежурные админы',
+  'ach.url': 'Адрес (URL)',
+  'ach.urlKeep': 'Адрес (сейчас {now}; оставьте пустым, чтобы не менять)',
+  'ach.secretNew': 'Секрет подписи (необязательно)',
+  'ach.secretHave': 'Секрет подписи (задан; введите новый, чтобы заменить)',
+  'ach.secretClear': 'Убрать секрет (сообщения будут без подписи)',
+  'ach.sigHelp': 'Панель шлёт POST с JSON. Подпись: заголовок X-CoreGSM-Signature: sha256=… это HMAC-SHA256 от «X-CoreGSM-Timestamp + точка + тело» с вашим секретом. Проверяйте и время, чтобы отсекать повторы.',
+  'ach.private': 'Разрешить адреса из локальной сети',
+  'ach.privateText': 'По умолчанию запрещены 127.0.0.1, 192.168.x.x, 10.x.x.x и другие внутренние адреса: так панель нельзя использовать для обращений во внутреннюю сеть. Включайте, только если получатель действительно внутри вашей сети.',
+  'ach.rcpt': 'Получатели (через запятую)',
+  'ach.smtpWarn': 'Почтовый сервер (SMTP) не настроен: сохранить включённый канал нельзя. Настройте почту в разделе «Настройки».',
+  'ach.events': 'О чём сообщать',
+  'ach.cancel': 'Отмена',
+  'ach.save': 'Сохранить',
+  'poll.rule.title': 'Правило «N из M» (необязательно)',
+  'poll.rule.nAria': 'Сколько опросов должны не ответить',
+  'poll.rule.mAria': 'Из скольких последних опросов',
+  'poll.rule.of': 'из',
+  'poll.rule.last': 'последних опросов',
+  'poll.rule.hint': '{rule} Пустые поля: прежнее поведение (подряд). Подходит для «мигающих» серверов: например, 3 из 5.',
+  'poll.rule.veto': 'Если большинство проб видит сервер, не считать его упавшим',
+  'poll.rule.vetoText': 'Проверяет, не обрыв ли это между панелью и сервером. При равенстве голосов тревога остаётся.',
   'dc.delFail': 'Не удалось удалить привязку',
   'dc.deleted': 'Привязка удалена',
   'dc.deletedN': 'Удалено привязок: {n}',
@@ -126331,6 +128761,11 @@ const ru = {
   'us.pwDone': 'Пароль изменён',
   'us.userDeleted': 'Пользователь удалён',
   'us.title': 'Пользователи',
+  'us.tabs': 'Разделы страницы',
+  'us.tab.users': 'Пользователи',
+  'us.tab.access': 'Доступ',
+  'us.tab.rules': 'Правила',
+  'us.tab.roles': 'Роли и права',
   'us.sub': 'Аккаунты, роли, регистрация и правила',
   'us.hint': 'Здесь решается, кто может открывать панель, регистрироваться и что кому разрешено. Роль определяет права человека.',
   'us.help': 'Игрок только смотрит серверы и новости. Модератор ещё и пишет новости. Администратор управляет всем. Все действия администраторов попадают в журнал.',
@@ -127114,7 +129549,8 @@ import type { MaintenanceWindow } from '../maintenance';
 import { gameLabel } from '../games';
 import { AdminPage as PageStack, Empty, ErrorLine, GameAvatar, IconArrowUp, LoadError, IconClose, IconEdit, IconRefresh, IconServers, IconTrash, PageHead, StatusPill, ago, toast, undoable, usePoll, navigate, fail } from '../ui';
 import { ADMIN_GROUPS, ADMIN_SECTIONS, OVERVIEW_SECTION, SECTION_PERM, START_SECTION, type AdminSection } from './adminNav';
-import { PINS_KEY, PINS_MAX, RECENT_KEY, RECENT_MAX, movePin, pushRecent, readIds, togglePin, writeIds } from './adminShortcuts';
+import { PINS_KEY, PINS_MAX, movePin, readIds, togglePin, writeIds } from './adminShortcuts';
+import AdminMobileNav, { type MobileNavGroup } from './AdminMobileNav';
 import AdminOverview from './AdminOverview';
 import AdminStatusBar from '../components/AdminStatusBar';
 import { CHORDS, chordOf } from './adminLogic';
@@ -127136,6 +129572,7 @@ import SettingsPage, { UsersTab } from './Settings';
 export { ADMIN_SECTIONS };
 import HealthPage from './Health';
 import SystemPage from './System';
+import AdminIntegrations from './AdminIntegrations';
 
 /** n = 0 draws a bare dot (a state, not a count) */
 interface NavBadge { n: number; tone: 'bad' | 'warn'; label: string }
@@ -127188,16 +129625,7 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
   // «Недавние» (the last visited sections) and «Закреплённые» (stars): this browser only
   const validIds = useMemo(() => ADMIN_SECTIONS.map((x) => x.id), []);
   const [pins, setPins] = useState<string[]>(() => readIds(PINS_KEY, validIds, PINS_MAX));
-  const [recent, setRecent] = useState<string[]>(() => readIds(RECENT_KEY, validIds, RECENT_MAX));
-  useEffect(() => {
-    if (!isAdmin || home || current === 'start') return;
-    setRecent((r) => {
-      if (r[0] === current) return r;
-      const n = pushRecent(r, current);
-      writeIds(RECENT_KEY, n);
-      return n;
-    });
-  }, [current, home, isAdmin]);
+  // (the «Недавние» block is gone from the menu: it repeated sections that are already listed in the groups)
   const pin = (s: AdminSection) => {
     const r = togglePin(pins, s.id);
     if (r.full) { toast(t('adm.pinMax',{n:PINS_MAX}), 'info'); return; }
@@ -127210,11 +129638,6 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
   const [rail, setRail] = useState(() => { try { return localStorage.getItem('coregsm_admin_rail') === '1'; } catch { return false; } });
   const flipRail = () => setRail((v) => { try { localStorage.setItem('coregsm_admin_rail', v ? '0' : '1'); } catch { /* not remembered */ } return !v; });
   const flipDense = () => setDense((v) => { try { localStorage.setItem('coregsm_admin_density', v ? 'cozy' : 'compact'); } catch { /* not remembered */ } return !v; });
-  // the sidebar scrolls sideways on a phone: keep the current section in view
-  useEffect(() => {
-    if (!window.matchMedia('(max-width: 767px)').matches) return;
-    document.querySelector('.adm-link[aria-current="page"]')?.scrollIntoView({ inline: 'center', block: 'nearest' });
-  }, [current]);
   // pinned sections can be dragged (or moved with Alt+↑/↓) to change their order
   const dragId = useRef<string | null>(null);
   const reorder = (id: string, to: number) => {
@@ -127224,7 +129647,6 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
   };
   const byId = (id: string) => ADMIN_SECTIONS.find((x) => x.id === id);
   const pinned = pins.map(byId).filter((x): x is AdminSection => !!x);
-  const recents = recent.filter((id) => id !== current && !pins.includes(id)).map(byId).filter((x): x is AdminSection => !!x);
 
   /** a link, and (for admins) the star that pins it: a sibling button, never a button inside the link */
   const item = (s: AdminSection, scope = '') => {
@@ -127303,7 +129725,7 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
     const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(() => measure(false));
     navRef.current?.querySelectorAll('.adm-link').forEach((l) => ro?.observe(l));
     return () => { alive = false; ro?.disconnect(); window.removeEventListener('resize', onResize); };
-  }, [current, home, pins, recent, badges, isAdmin, rail]);
+  }, [current, home, pins, badges, isAdmin, rail]);
   // «g» then a letter: go to a section (not while typing)
   useEffect(() => {
     if (!isAdmin) return;
@@ -127322,9 +129744,15 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
   const crumb = !['servers', 'discord', 'news'].includes(current) || !first ? '' : first === 'new' ? t('adm.crumb.new') : /^\d+$/.test(first) ? t('adm.crumb.edit') : '';
   const divider = <span aria-hidden className="mx-1 w-px shrink-0 self-stretch bg-line md:hidden" />;
 
+  // a phone: one button with the current section instead of the sideways strip
+  const mobileGroups: MobileNavGroup[] = isAdmin
+    ? [{ key: 'top', sections: [START_SECTION, OVERVIEW_SECTION] }, ...ADMIN_GROUPS.map((g, i) => ({ key: `g${i}`, title: g.title, sections: g.sections }))]
+    : [{ key: 'all', sections }];
+
   return (
     <div className={`grid gap-4 ${rail ? 'md:grid-cols-[4.25rem_minmax(0,1fr)]' : 'md:grid-cols-[14rem_minmax(0,1fr)]'}`} data-density={dense ? 'compact' : undefined}>
-      <nav ref={navRef} className={`adm-nav ${rail ? 'adm-rail' : ''} ${ind ? 'has-ind' : ''} tile fade-x fade-x-m flex items-stretch gap-1 overflow-x-auto p-1.5 md:sticky md:top-24 md:max-h-[calc(100dvh-7rem)] md:flex-col md:items-stretch md:self-start md:overflow-y-auto md:p-2.5`} aria-label={t('adm.navLabel')}>
+      <AdminMobileNav groups={mobileGroups} current={home ? '' : current} badges={badges} fallbackLabel={t('nav.admin')} />
+      <nav ref={navRef} className={`adm-nav ${rail ? 'adm-rail' : ''} ${ind ? 'has-ind' : ''} tile fade-x fade-x-m flex max-md:hidden items-stretch gap-1 overflow-x-auto p-1.5 md:sticky md:top-24 md:max-h-[calc(100dvh-7rem)] md:flex-col md:items-stretch md:self-start md:overflow-y-auto md:p-2.5`} aria-label={t('adm.navLabel')}>
         {ind && <span className="adm-ind" aria-hidden style={{ transform: `translate(${ind.x}px, ${ind.y}px)`, width: ind.w, height: ind.h }} />}
         {isAdmin ? (
           <>
@@ -127342,14 +129770,6 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
                 <div id="adm-g-pins" className="adm-group-title hidden md:block">{t('adm.pinned')}</div>
                 <div role="group" aria-labelledby="adm-g-pins" aria-label={t('adm.pinned')} className="flex gap-1 md:flex-col">
                   {pinned.map((s) => item(s, 'p-'))}
-                </div>
-              </div>
-            )}
-            {recents.length > 0 && (
-              <div className="hidden md:block">
-                <div id="adm-g-recent" className="adm-group-title">{t('adm.recent')}</div>
-                <div role="group" aria-labelledby="adm-g-recent" className="flex flex-col gap-1">
-                  {recents.map((s) => item(s, 'r-'))}
                 </div>
               </div>
             )}
@@ -127419,6 +129839,7 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
         {!home && current === 'journal' && <JournalPage />}
         {!home && current === 'health' && <HealthPage />}
         {!home && current === 'system' && <SystemPage />}
+        {!home && current === 'integrations' && <AdminIntegrations />}
         {!home && current === 'settings' && <SettingsPage sub={tail} updateAvailable={updateAvailable} />}
       </div>
     </div>
@@ -128065,6 +130486,264 @@ function GalleryAdmin() {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
+  cat > "$APP_DIR/core-frontend/src/pages/AdminIntegrations.tsx" << '__COREGSM_EOF__'
+import { useState } from 'react';
+import { api, type Server } from '../api';
+import { confirmDialog } from '../confirm';
+import { t, useI18n } from '../i18n';
+import { AdminPage, CopyButton, Empty, ErrorLine, Field, LoadError, PageHead, Section, IconServers, fmtDateTime, toast, usePoll } from '../ui';
+import { IconKey } from '../icons';
+import { badgeSnippets } from './integrationsLogic';
+
+interface ApiKey {
+  id: number;
+  name: string;
+  prefix: string;
+  createdAt: number;
+  createdBy: string;
+  lastUsedAt: number | null;
+  revokedAt: number | null;
+  rateLimit: number;
+}
+type Created = ApiKey & { key: string };
+
+/** Admin → Интеграции: keys for the public API, snippets for badges and widgets. */
+export default function AdminIntegrations() {
+  useI18n();
+  const [keys, setKeys] = useState<ApiKey[] | null>(null);
+  const [servers, setServers] = useState<Server[]>([]);
+  const [error, setError] = useState('');
+  const load = () =>
+    Promise.all([api<ApiKey[]>('/integrations/keys'), api<Server[]>('/servers')])
+      .then(([k, s]) => { setKeys(k); setServers(s); setError(''); })
+      .catch((e: Error) => setError(e.message));
+  usePoll(load, 30_000);
+
+  return (
+    <AdminPage
+      head={<PageHead icon={<IconKey />} title={t('intg.title')} subtitle={t('intg.sub')} />}
+    >
+      {error && <LoadError error={error} onRetry={() => void load()} />}
+      <KeysSection keys={keys} onChanged={() => void load()} />
+      <SnippetsSection servers={servers} />
+    </AdminPage>
+  );
+}
+
+function KeysSection({ keys, onChanged }: { keys: ApiKey[] | null; onChanged: () => void }) {
+  const [name, setName] = useState('');
+  const [limit, setLimit] = useState('60');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [created, setCreated] = useState<Created | null>(null);
+
+  const create = async () => {
+    setBusy(true);
+    setError('');
+    try {
+      const c = await api<Created>('/integrations/keys', 'POST', { name: name.trim(), rateLimit: Number(limit) || 60 });
+      setCreated(c);
+      setName('');
+      onChanged();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const revoke = async (k: ApiKey) => {
+    if (!(await confirmDialog({ title: t('intg.revoke.t', { name: k.name }), text: t('intg.revoke.x'), confirmLabel: t('intg.revoke'), danger: true }))) return;
+    try {
+      await api(`/integrations/keys/${k.id}`, 'DELETE');
+      toast(t('intg.revoked'));
+      if (created?.id === k.id) setCreated(null);
+      onChanged();
+    } catch (e) {
+      toast((e as Error).message);
+    }
+  };
+
+  const active = (keys ?? []).filter((k) => !k.revokedAt);
+  const revoked = (keys ?? []).filter((k) => k.revokedAt);
+  const origin = window.location.origin;
+
+  return (
+    <Section title={t('intg.keys.title')} description={t('intg.keys.desc')}>
+      {created && (
+        <div className="space-y-2 rounded-2xl border border-line bg-soft p-4" role="status">
+          <p className="font-extrabold">{t('intg.created', { name: created.name })}</p>
+          <div className="flex flex-wrap items-center gap-2">
+            <code className="min-w-0 flex-1 break-all rounded-xl bg-bg px-3 py-2 font-mono text-sm font-bold">{created.key}</code>
+            <CopyButton text={created.key} />
+            <button type="button" className="btn btn-soft btn-sm" onClick={() => setCreated(null)}>{t('intg.saved')}</button>
+          </div>
+          <p className="text-sm font-semibold text-mute">{t('intg.example')} <code className="break-all">curl -H &quot;Authorization: Bearer {created.key}&quot; {origin}/api/v1/servers</code></p>
+        </div>
+      )}
+      <form className="grid items-end gap-3 sm:grid-cols-[1fr_9rem_auto]" onSubmit={(e) => { e.preventDefault(); void create(); }}>
+        <Field label={t('intg.f.name')}>
+          <input className="input" value={name} maxLength={60} placeholder={t('intg.f.namePh')} onChange={(e) => setName(e.target.value)} />
+        </Field>
+        <Field label={t('intg.f.limit')}>
+          <input className="input" type="number" min={1} max={6000} value={limit} onChange={(e) => setLimit(e.target.value)} />
+        </Field>
+        <button type="submit" className="btn" disabled={busy || !name.trim()}>{t('intg.create')}</button>
+      </form>
+      <ErrorLine text={error} />
+
+      {keys && !keys.length && <Empty title={t('intg.empty.t')} text={t('intg.empty.x')} art={<IconKey />} />}
+      {active.length > 0 && (
+        <ul className="divide-y divide-line overflow-hidden rounded-2xl border border-line">
+          {active.map((k) => (
+            <li key={k.id} className="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-3">
+              <div className="min-w-0 flex-1 basis-48">
+                <div className="truncate font-extrabold">{k.name}</div>
+                <div className="text-sm font-semibold text-mute"><code>{k.prefix}…</code> · {t('intg.rate', { n: k.rateLimit })}</div>
+              </div>
+              <div className="text-sm font-semibold text-mute">
+                {k.createdBy ? t('intg.createdBy', { when: fmtDateTime(k.createdAt), who: k.createdBy }) : t('intg.createdAt', { when: fmtDateTime(k.createdAt) })}<br />
+                {k.lastUsedAt ? t('intg.usedAt', { when: fmtDateTime(k.lastUsedAt) }) : t('intg.unused')}
+              </div>
+              <button type="button" className="btn btn-soft btn-sm" onClick={() => void revoke(k)}>{t('intg.revoke')}</button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {revoked.length > 0 && (
+        <details className="text-sm font-semibold text-mute">
+          <summary className="cursor-pointer">{t('intg.revokedList', { n: revoked.length })}</summary>
+          <ul className="mt-2 space-y-1">
+            {revoked.map((k) => <li key={k.id}>{k.name} · <code>{k.prefix}…</code> · {t('intg.revokedAt', { when: fmtDateTime(k.revokedAt!) })}</li>)}
+          </ul>
+        </details>
+      )}
+      <p className="text-sm font-semibold text-mute">
+        {t('intg.openapi')} <a className="text-link underline" href="/api/v1/openapi.json" target="_blank" rel="noreferrer">/api/v1/openapi.json</a>. {t('intg.hdr')}
+      </p>
+    </Section>
+  );
+}
+
+function SnippetsSection({ servers }: { servers: Server[] }) {
+  const [sel, setSel] = useState<number | null>(null);
+  const id = sel ?? servers[0]?.id ?? null;
+  const s = servers.find((x) => x.id === id);
+  const sn = s ? badgeSnippets(window.location.origin, s.id, s.customName || s.name) : null;
+  return (
+    <Section title={t('intg.snip.title')} description={t('intg.snip.desc')}>
+      {!servers.length ? (
+        <Empty art={<IconServers />} title={t('intg.snip.none.t')} text={t('intg.snip.none.x')} />
+      ) : (
+        <>
+          <Field label={t('intg.snip.server')}>
+            <select className="input" value={id ?? ''} onChange={(e) => setSel(Number(e.target.value))}>
+              {servers.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
+            </select>
+          </Field>
+          {sn && (
+            <div className="grid items-start gap-4 md:grid-cols-2">
+              <div className="space-y-3">
+                <div className="flex min-h-12 items-center rounded-2xl bg-soft px-4"><img src={sn.badge} alt={t('intg.snip.badgeAlt')} height={20} /></div>
+                <Snippet label={t('intg.snip.md')} text={sn.markdown} />
+                <Snippet label="HTML" text={sn.html} />
+                <Snippet label="BBCode" text={sn.bbcode} />
+              </div>
+              <div className="space-y-3">
+                <iframe title={t('intg.snip.widgetTitle')} src={sn.widget} className="block h-36 w-full max-w-xs rounded-2xl border-0" loading="lazy" />
+                <Snippet label={t('intg.snip.widget')} text={sn.iframe} />
+              </div>
+            </div>
+          )}
+        </>
+      )}
+    </Section>
+  );
+}
+
+function Snippet({ label, text }: { label: string; text: string }) {
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center justify-between gap-2">
+        <span className="label">{label}</span>
+        <CopyButton text={text} />
+      </div>
+      <textarea aria-label={label} className="input font-mono text-xs" readOnly rows={3} value={text} onFocus={(e) => e.currentTarget.select()} />
+    </div>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/pages"
+  cat > "$APP_DIR/core-frontend/src/pages/AdminMobileNav.tsx" << '__COREGSM_EOF__'
+// A phone shows the admin sections as one button (the current section) that opens the list of all of them,
+// instead of a strip of tabs with clipped labels.
+import { useEffect, useId, useRef, useState } from 'react';
+import { t } from '../i18n';
+import type { AdminSection } from './adminNav';
+
+export interface MobileNavGroup { key: string; title?: string; sections: AdminSection[] }
+export interface MobileNavBadge { n: number; tone: 'bad' | 'warn'; label: string }
+
+export default function AdminMobileNav({ groups, current, badges, fallbackLabel }: {
+  groups: MobileNavGroup[];
+  current: string;
+  badges: Record<string, MobileNavBadge>;
+  fallbackLabel: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const root = useRef<HTMLDivElement>(null);
+  const btn = useRef<HTMLButtonElement>(null);
+  const panelId = useId();
+  const all = groups.flatMap((g) => g.sections);
+  const cur = all.find((s) => s.id === current);
+  // the list closes on navigation, on Esc and on a tap outside of it
+  useEffect(() => { setOpen(false); }, [current]);
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { setOpen(false); btn.current?.focus(); }
+    };
+    const onDown = (e: Event) => { if (!root.current?.contains(e.target as Node)) setOpen(false); };
+    document.addEventListener('keydown', onKey);
+    document.addEventListener('pointerdown', onDown);
+    root.current?.querySelector<HTMLElement>('a[aria-current="page"], a')?.focus();
+    return () => { document.removeEventListener('keydown', onKey); document.removeEventListener('pointerdown', onDown); };
+  }, [open]);
+  const total = Object.values(badges).reduce((n, b) => n + (b.n || 1), 0);
+  return (
+    <div ref={root} className="adm-mnav md:hidden">
+      <button ref={btn} type="button" className="adm-mnav-btn" aria-expanded={open} aria-controls={panelId} aria-haspopup="true" onClick={() => setOpen((v) => !v)}>
+        <span className="adm-ic" aria-hidden>{cur?.icon()}</span>
+        <span className="min-w-0 flex-1 truncate text-left">{cur?.label ?? fallbackLabel}</span>
+        {!open && total > 0 && <span className="adm-badge is-warn" aria-label={t('adm.mnav.attention')}>{total}</span>}
+        <span aria-hidden className="adm-mnav-chev" data-open={open ? 'true' : undefined}>▾</span>
+        <span className="sr-only">{t('adm.mnav.all')}</span>
+      </button>
+      {open && (
+        <div id={panelId} className="adm-mnav-pop" role="group" aria-label={t('adm.navLabel')}>
+          {groups.map((g) => (
+            <div key={g.key}>
+              {g.title && <div className="adm-group-title">{g.title}</div>}
+              {g.sections.map((s) => {
+                const b = badges[s.id];
+                return (
+                  <a key={s.id} href={`/admin/${s.id}`} className="adm-mnav-link" aria-current={current === s.id ? 'page' : undefined}>
+                    <span className="adm-ic" aria-hidden>{s.icon()}</span>
+                    <span className="min-w-0 flex-1 truncate">{s.label}</span>
+                    {b && (b.n === 0
+                      ? <span className={`adm-dot is-${b.tone}`} role="img" aria-label={b.label} />
+                      : <span className={`adm-badge is-${b.tone}`} aria-label={b.label}>{b.n}</span>)}
+                  </a>
+                );
+              })}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/AdminOverview.tsx" << '__COREGSM_EOF__'
 import { useState } from 'react';
 import { useAuth } from '../auth';
@@ -128387,7 +131066,8 @@ import type { Server } from '../api';
 import { confirmDialog } from '../confirm';
 import { t, useI18n, type TKey } from '../i18n';
 import { gameColor, gameLabel } from '../games';
-import { AnimatedNumber, GameAvatar, IconEdit, IconRefresh, IconTrash, IconWrench, MiniSpark, StatusPill, ago, isLag, toast } from '../ui';
+import RowMenu, { type RowMenuItem } from '../components/RowMenu';
+import { AnimatedNumber, GameAvatar, IconEdit, IconRefresh, MiniSpark, StatusPill, ago, isLag, toast } from '../ui';
 import { countServers, filterServers, loadColumns, loadTableState, saveColumns, saveTableState, TABLE_COLUMNS, type ServerFilter, type TableColumn } from './adminServersLogic';
 
 export interface TableActions {
@@ -128450,6 +131130,17 @@ export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableA
   const copy = async (s: Server) => {
     try { await navigator.clipboard.writeText(`${s.host}:${s.port}`); toast(t('adm.tbl.copied')); } catch { toast(t('nw.copyFail'), 'err'); }
   };
+
+  /** the rest of a row's actions: a text menu behind «⋯» */
+  const menuItems = (s: Server): RowMenuItem[] => [
+    ...(canMove ? [
+      { key: 'up', label: t('adm.tbl.up'), disabled: s.id === shownIds[0], onSelect: () => a.onMove(s, -1, shownIds) },
+      { key: 'down', label: t('adm.tbl.down'), disabled: s.id === shownIds[shownIds.length - 1], onSelect: () => a.onMove(s, 1, shownIds) },
+    ] : []),
+    { key: 'bind', label: t('adm.tbl.bind'), href: `/admin/discord/new/${s.id}`, sep: canMove },
+    { key: 'maint', label: s.maintenance ? t('adm.tbl.maintOff') : t('adm.tbl.maintOn'), onSelect: () => a.onMaintenance(s) },
+    ...(a.isAdmin ? [{ key: 'del', label: t('adm.srv.delete'), danger: true, sep: true, onSelect: () => a.onRemove(s) }] : []),
+  ];
 
   const many = async (fn: (list: Server[]) => Promise<void>) => {
     setBusy(true);
@@ -128555,21 +131246,11 @@ export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableA
                     {has('updated') && <td className="text-mute">{ago(s.updatedAt)}</td>}
                     <td>
                       <div className="flex items-center justify-end gap-1" role="group" aria-label={`${t('adm.tbl.actions')}: ${s.name}`}>
-                        {canMove && (
-                          <>
-                            <button type="button" className="row-act" title={t('adm.tbl.up')} aria-label={`${t('adm.tbl.up')}: ${s.name}`} disabled={s.id === shownIds[0]} onClick={() => a.onMove(s, -1, shownIds)}><span aria-hidden>↑</span></button>
-                            <button type="button" className="row-act" title={t('adm.tbl.down')} aria-label={`${t('adm.tbl.down')}: ${s.name}`} disabled={s.id === shownIds[shownIds.length - 1]} onClick={() => a.onMove(s, 1, shownIds)}><span aria-hidden>↓</span></button>
-                          </>
-                        )}
-                        <a className="row-act" href={`/admin/discord/new/${s.id}`} title={t('adm.tbl.bind')} aria-label={`${t('adm.tbl.bind')}: ${s.name}`}>
-                          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M21 12a8 8 0 0 1-11.5 7.2L4 20l1-4.2A8 8 0 1 1 21 12z" /></svg>
-                        </a>
+                        <button type="button" className="btn btn-soft btn-sm" aria-label={`${t('adm.tbl.edit')}: ${s.name}`} onClick={() => a.onEdit(s)}><IconEdit /><span>{t('adm.tbl.edit')}</span></button>
                         <button type="button" className="row-act" title={t('adm.tbl.poll')} aria-label={`${t('adm.tbl.poll')}: ${s.name}`} onClick={() => a.onRefresh(s)} disabled={a.busyId === s.id} aria-busy={a.busyId === s.id || undefined}>
                           <IconRefresh spinning={a.busyId === s.id} />
                         </button>
-                        <button type="button" className={`row-act ${s.maintenance ? 'is-on' : ''}`} title={s.maintenance ? t('adm.tbl.maintOff') : t('adm.tbl.maintOn')} aria-label={`${s.maintenance ? t('adm.tbl.maintOff') : t('adm.tbl.maintOn')}: ${s.name}`} aria-pressed={!!s.maintenance} onClick={() => a.onMaintenance(s)}><IconWrench /></button>
-                        <button type="button" className="row-act" title={t('adm.tbl.edit')} aria-label={`${t('adm.tbl.edit')}: ${s.name}`} onClick={() => a.onEdit(s)}><IconEdit /></button>
-                        {a.isAdmin && <button type="button" className="row-act row-act-danger" title={t('adm.srv.delete')} aria-label={`${t('adm.srv.delete')}: ${s.name}`} onClick={() => a.onRemove(s)}><IconTrash /></button>}
+                        <RowMenu label={`${t('adm.tbl.more')}: ${s.name}`} items={menuItems(s)} />
                       </div>
                     </td>
                   </tr>
@@ -128610,10 +131291,9 @@ export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableA
                   <span className="tabular-nums">{s.online ? <><b className="text-ink">{s.players}</b>/{s.maxPlayers}</> : '—'}</span>
                   <span>· {ago(s.updatedAt)}</span>
                   <div className="ml-auto flex items-center gap-1">
-                    <a className="row-act" href={`/admin/discord/new/${s.id}`} aria-label={`${t('adm.tbl.bind')}: ${s.name}`}>◔</a>
                     <button type="button" className="row-act" aria-label={`${t('adm.tbl.poll')}: ${s.name}`} onClick={() => a.onRefresh(s)} disabled={a.busyId === s.id}><IconRefresh spinning={a.busyId === s.id} /></button>
-                    <button type="button" className="row-act" aria-label={`${t('adm.tbl.edit')}: ${s.name}`} onClick={() => a.onEdit(s)}><IconEdit /></button>
-                    {a.isAdmin && <button type="button" className="row-act row-act-danger" aria-label={`${t('adm.srv.delete')}: ${s.name}`} onClick={() => a.onRemove(s)}><IconTrash /></button>}
+                    <button type="button" className="btn btn-soft btn-sm" aria-label={`${t('adm.tbl.edit')}: ${s.name}`} onClick={() => a.onEdit(s)}><IconEdit /><span>{t('adm.tbl.edit')}</span></button>
+                    <RowMenu label={`${t('adm.tbl.more')}: ${s.name}`} items={menuItems(s)} />
                   </div>
                 </div>
               </div>
@@ -128864,8 +131544,28 @@ export default function AdminStart() {
             </div>
           )}
 
+          {/* finished steps are one folded line: they need no attention */}
+          {s.doneCount > 0 && !allDone && (
+            <details className="tile start-done group px-4 py-2.5 sm:px-5">
+              <summary className="flex min-h-11 cursor-pointer list-none items-center gap-3 font-extrabold [&::-webkit-details-marker]:hidden">
+                <span className="grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-okbg text-ok"><Check size={18} /></span>
+                <span className="min-w-0 flex-1">{t('start.doneGroup', { a: s.doneCount, b: s.total })}</span>
+                <svg aria-hidden width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" className="shrink-0 text-mute transition-transform group-open:rotate-180"><path d="M6 9l6 6 6-6" /></svg>
+              </summary>
+              <ul className="mt-1 divide-y divide-line">
+                {s.steps.filter((x) => x.state === 'done').map((st) => (
+                  <li key={st.id} className="flex min-h-11 items-center justify-between gap-3 py-1.5">
+                    <span className="min-w-0 truncate font-semibold text-mute">{st.title}</span>
+                    <a className="btn btn-ghost btn-sm shrink-0" href={st.href}>{t('adm.open')}</a>
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
+
           <ol className="space-y-3" aria-label={t('start.stepsLabel')}>
             {s.steps.map((st, i) => {
+              if (st.state === 'done' && !allDone) return null;
               const skipped = s.skipped.includes(st.id) && st.state !== 'done';
               const current = firstTodo?.id === st.id;
               return (
@@ -128889,9 +131589,12 @@ export default function AdminStart() {
                     {st.note && st.state !== 'done' && <p className="mt-1 text-sm font-bold text-warn">{st.note}</p>}
                   </div>
                   <div className="flex flex-wrap items-center gap-2 max-sm:w-full">
-                    <a className={`btn ${current || st.state === 'unknown' ? '' : 'btn-soft'} ${st.state === 'done' ? 'btn-sm' : ''}`} href={st.href}>
-                      {st.state === 'done' ? t('adm.open') : st.cta}
-                    </a>
+                    {/* the current step's action is the one big button above: no twin here */}
+                    {!current && (
+                      <a className={`btn ${st.state === 'unknown' ? '' : 'btn-soft'} ${st.state === 'done' ? 'btn-sm' : ''}`} href={st.href}>
+                        {st.state === 'done' ? t('adm.open') : st.cta}
+                      </a>
+                    )}
                     {st.state !== 'done' && !skipped && (
                       <button type="button" className="btn btn-ghost btn-sm" onClick={() => s.skip(st.id)}>
                         {t('start.skip')}
@@ -128910,8 +131613,12 @@ export default function AdminStart() {
         </>
       )}
 
-      <section aria-labelledby="start-quick">
-        <h2 id="start-quick" className="mb-3 text-lg font-black">{t('start.quick')}</h2>
+      {/* quick actions: open once everything is set up, folded while the checklist is still the main thing */}
+      <details className="start-quick group" open={allDone || undefined}>
+        <summary className="mb-3 flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 [&::-webkit-details-marker]:hidden">
+          <h2 id="start-quick" className="text-lg font-black">{t('start.quick')}</h2>
+          <svg aria-hidden width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" className="shrink-0 text-mute transition-transform group-open:rotate-180"><path d="M6 9l6 6 6-6" /></svg>
+        </summary>
         <div className="grid grid-cols-1 gap-3 min-[480px]:grid-cols-2 lg:grid-cols-3">
           {quick.map((q) => {
             const inner = (
@@ -128931,7 +131638,7 @@ export default function AdminStart() {
             );
           })}
         </div>
-      </section>
+      </details>
 
       <details className="tile start-map group p-5 sm:p-6">
         <summary className="flex cursor-pointer list-none items-center justify-between gap-3 [&::-webkit-details-marker]:hidden">
@@ -128975,6 +131682,7 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/pages/Alerts.tsx" << '__COREGSM_EOF__'
 import { useState } from 'react';
 import { t, useI18n, type TKey } from '../i18n';
+import AlertChannels from '../components/AlertChannels';
 import DigestSection from '../components/DigestSection';
 import { api, type SettingsInfo } from '../api';
 import { ChannelName, ChannelPicker } from '../components/ChannelPicker';
@@ -129210,6 +131918,8 @@ export default function AlertsPage() {
       {info && <KindCards info={info} />}
 
       {info && <QuietHours info={info} save={save} />}
+
+      <AlertChannels />
 
       <DigestSection alertsChannel={info?.channelId ?? ''} />
 
@@ -133259,6 +135969,7 @@ import { RankCard, RankHeaderBadge, VrAchievementsGrid, useMyRank } from '../com
 import { JournalCard } from '../components/profile/Journal';
 import { NewDeviceBanner } from '../components/profile/NewDeviceBanner';
 import { PushCard } from '../components/profile/PushCard';
+import { FavoritePushCard } from '../components/profile/FavoritePush';
 import { FollowsCard } from '../components/profile/Follows';
 import { NewsSubsCard } from '../components/profile/NewsSubs';
 import { TwoFactorCard } from '../components/profile/TwoFactorCard';
@@ -133433,6 +136144,7 @@ function SecurityTab() {
         <TwoFactorCard />
         <DiscordCard onChanged={reload} />
         <PushCard />
+        <FavoritePushCard />
         <FollowsCard />
         <NewsSubsCard />
         <SessionsCard key={rev} />
@@ -134129,9 +136841,10 @@ import SubscribeMenu from '../components/server/SubscribeMenu';
 import Passport from '../components/server/Passport';
 import Hero, { type FreeSlotState } from '../components/server/Hero';
 import Metrics from '../components/server/Metrics';
+import OfflineState from '../components/server/OfflineState';
 import PinnedNotice, { type ServerNotice } from '../components/server/Notice';
 import MoreMenu, { type MoreItem } from '../components/server/MoreMenu';
-import { gameAccent, isFullNow } from '../components/server/serverLogic';
+import { gameAccent, isFullNow, offlineSince } from '../components/server/serverLogic';
 import { calmSeriesColor, useCoverAccent } from '../components/server/coverAccent';
 import ServerTabs, { TAB_LIST, panelDomId, tabDomId } from '../components/server/ServerTabs';
 import { AddrCopy } from '../components/servers/serverUi';
@@ -134510,6 +137223,12 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
     }
   };
 
+  // a server that is down: instead of a chart of zeros, since when and why plus the availability strip
+  const down = !s.online && s.hasStatus;
+  const outage = down ? offlineSince(events, points) : null;
+  const chartEl = (withSeries: boolean) => (
+    <HistoryChart points={points} hours={data.hours} events={events} title={s.name} game={gameLabel(s.game)} max={s.maxPlayers} color={series === 'ping' ? 'rgb(var(--link))' : calmSeriesColor(accent)} series={withSeries ? series : 'players'} loading={chartLoading} baseline={data.baseline ?? null} />
+  );
   const chartTile = (i: number, withSeries: boolean) => (
     <SectionCard
       id={withSeries ? 'hi-chart' : 'ov-chart'}
@@ -134530,10 +137249,12 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
       </div>
       {stats.samples < 2 ? (
         <p className="py-10 text-center font-semibold text-mute">Данных пока мало: график появится через несколько минут после добавления сервера.</p>
-      ) : (
-        <HistoryChart points={points} hours={data.hours} events={events} title={s.name} game={gameLabel(s.game)} max={s.maxPlayers} color={series === 'ping' ? 'rgb(var(--link))' : calmSeriesColor(accent)} series={withSeries ? series : 'players'} loading={chartLoading} baseline={data.baseline ?? null} />
-      )}
-      {points.some((p) => !p.online) && stats.samples >= 2 && (
+      ) : down ? (
+        <OfflineState since={outage?.ts ?? null} atLeast={outage?.atLeast ?? false} error={s.error ?? null} points={points} hours={data.hours} now={nowTs} uptimePct={stats.uptimePct ?? null} windowLabel={windowLabel}>
+          {chartEl(withSeries)}
+        </OfflineState>
+      ) : chartEl(withSeries)}
+      {!down && points.some((p) => !p.online) && stats.samples >= 2 && (
         <p className="mt-2 flex items-center gap-2 text-sm font-semibold text-mute"><span className="inline-block h-3 w-3 rounded-sm bg-bad/30" /> Красным отмечены периоды, когда сервер не отвечал.</p>
       )}
     </SectionCard>
@@ -134688,6 +137409,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
           peak={stats.peakPlayers ?? null}
           recent={recent}
           now={nowTs}
+          lastSeen={s.updatedAt}
         />
 
         <Passport
@@ -134707,7 +137429,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
           }}
         />
 
-        {!s.online && s.error && (
+        {!s.online && s.error && !s.hasStatus && (
           <p className="relative mt-3.5 rounded-2xl bg-black/25 px-4 py-2.5 text-sm font-bold">{s.error}</p>
         )}
 
@@ -135050,7 +137772,6 @@ import { AddrCopy, CapacityBar, CountReact, ListSkeleton, NoFavsState, NoMatchSt
 import { ServersList, readView, saveView, type ListSort, type SelectProps, type ServersView } from '../components/servers/ServerViews';
 import CompareChart from '../components/servers/CompareChart';
 import { QuickMenu } from '../components/servers/QuickMenu';
-import { AttentionStrip } from '../components/servers/AttentionStrip';
 import { PulseStrip } from '../components/servers/PulseStrip';
 import { WhatsNew, useWhatsNewOpen } from '../components/servers/WhatsNew';
 import { BulkBar } from '../components/servers/BulkBar';
@@ -135189,7 +137910,22 @@ function LiveBadge({ at, onRefresh, busy }: { at: number; onRefresh: () => void;
   );
 }
 
+/** a phone (under the Tailwind `sm` width): the tiles become compact rows */
+function useIsPhone(): boolean {
+  const q = '(max-width: 639px)';
+  const [on, setOn] = useState(() => typeof window !== 'undefined' && !!window.matchMedia?.(q).matches);
+  useEffect(() => {
+    const m = window.matchMedia?.(q);
+    if (!m) return;
+    const f = () => setOn(m.matches);
+    m.addEventListener('change', f);
+    return () => m.removeEventListener('change', f);
+  }, []);
+  return on;
+}
+
 function ServerList() {
+  const phone = useIsPhone();
   const { me, isAdmin } = useAuth();
   const [favs, setFavs] = useState<number[]>([]);
   useEffect(() => {
@@ -135283,9 +138019,8 @@ function ServerList() {
   const hero = picked?.server ?? null;
   const heroReason: HeroReason = picked?.reason ?? null;
   // servers with a problem sit in a compact strip above the tiles (unless the hero is itself the problem: then every server is)
-  const attention = heroReason === 'attention' ? [] : sorted.filter(needsAttention);
-  const attentionIds = new Set(attention.map((s) => s.id));
-  const rest = sorted.filter((s) => s.id !== hero?.id && !attentionIds.has(s.id));
+  // (the problem servers are named in the alert row of the pulse strip and sit first among the tiles)
+  const rest = sorted.filter((s) => s.id !== hero?.id).sort((a, b) => Number(needsAttention(b)) - Number(needsAttention(a)));
   const offlineCount = servers.filter((s) => !s.online).length;
   const liveLine = servers.length ? t('srv.sub.live', { n: online.reduce((a, s) => a + s.players, 0), s: online.length, total: servers.length }) : t('srv.sub.empty');
   const favCount = servers.filter((s) => favs.includes(s.id)).length;
@@ -135320,6 +138055,7 @@ function ServerList() {
 
   const open = (s: Server) => { navigate(`/servers/${s.id}`); };
 
+  const Tile = phone ? PhoneRow : SmallTile;
   const tileProps = (s: Server, idx: number) => ({
     rx,
     s,
@@ -135346,14 +138082,12 @@ function ServerList() {
       </PageHead>
 
       {loaded && servers.length > 0 && (
-        <PulseStrip servers={servers} overview={overview} uptime={upAvg} now={overviewAt || updatedAt} />
+        <PulseStrip servers={servers} overview={overview} uptime={upAvg} now={overviewAt || updatedAt} onOpen={open} />
       )}
 
 
-      {effView === 'tiles' && effFilter === 'all' && attention.length > 0 && !selOn && <AttentionStrip servers={attention} onOpen={open} />}
-
       {servers.length > 0 && (
-        <div className="srv-bar">
+        <div className="srv-bar" id="srv-list">
           {servers.length > 1 ? (
             <nav className="seg fade-x no-scrollbar flex w-fit max-w-full overflow-x-auto" aria-label="Фильтр серверов">
               {([
@@ -135425,14 +138159,14 @@ function ServerList() {
 
             {effView === 'tiles' && effFilter !== 'all' && visible.length > 0 && (
               <div className="fade-in srv-grid" data-size={size}>
-                {filtered.map((s, i) => <SmallTile key={s.id} {...tileProps(s, i)} />)}
+                {filtered.map((s, i) => <Tile key={s.id} {...tileProps(s, i)} />)}
               </div>
             )}
 
             {effView === 'tiles' && effFilter === 'all' && (
               <div className="fade-in srv-grid" data-size={size}>
                 {hero && <HeroTile key={hero.id} {...tileProps(hero, 0)} reason={heroReason} />}
-                {rest.map((s, i) => <SmallTile key={s.id} {...tileProps(s, i + 1)} />)}
+                {rest.map((s, i) => <Tile key={s.id} {...tileProps(s, i + 1)} />)}
               </div>
             )}
           </div>
@@ -135570,6 +138304,38 @@ function HeroTile({ s, idx, uptime, downSince, fav, onFav, onOpen, rx, reason, s
   );
 }
 
+/** the phone version of a tile: one row (emblem, name with a thin bar, players, status dot) at least 56 px high */
+function PhoneRow({ s, idx, fav, onFav, onOpen, select }: { rx: Reactions; s: Server; idx: number; fav: boolean | null; onFav: () => void; onOpen: () => void; select?: SelectProps; uptime?: number; downSince?: number }) {
+  useI18n();
+  const lag = isLag(s);
+  const tone = !s.hasStatus ? 'bg-mute' : !s.online ? 'bg-bad' : lag || s.maintenance ? 'bg-warn' : 'bg-ok';
+  return (
+    <article
+      className={`srv-row tile-in relative ${select?.has(s.id) ? 'srv-selected' : ''} ${s.online ? '' : 'is-down'}`}
+      style={stagger(idx)}
+      onClick={select?.on ? () => select.toggle(s.id) : onOpen}
+    >
+      {select?.on && <CardCheck s={s} select={select} className="left-1 top-1" />}
+      <GameAvatar game={s.game} size={40} vtId={s.id} />
+      <div className="srv-row-main">
+        <h3 className="truncate text-fs-base font-extrabold leading-tight" title={s.name}>
+          <a href={`/servers/${s.id}`} onClick={linkClick(s, select)}>{s.name}</a>
+        </h3>
+        {s.online ? (
+          <CapacityBar className="srv-row-bar" players={s.players} max={s.maxPlayers} color="rgb(var(--ink) / .5)" showPct={false} slots={false} />
+        ) : (
+          <p className="truncate text-fs-sm font-semibold text-mute">{s.hasStatus ? `Не отвечает · ${ago(s.updatedAt)}` : 'Ожидаем первый ответ'}</p>
+        )}
+      </div>
+      <div className="srv-row-count">
+        {s.online ? <><b>{s.players}</b><span>/{s.maxPlayers}</span></> : <span>–</span>}
+      </div>
+      <span className={`srv-row-dot ${tone}`} aria-hidden />
+      {fav != null && <FavButton on={fav} name={s.name} onClick={onFav} className={fav ? 'text-warn' : 'text-mute'} />}
+    </article>
+  );
+}
+
 function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince }: { rx: Reactions; s: Server; idx: number; fav: boolean | null; onFav: () => void; onOpen: () => void; select?: SelectProps; uptime?: number; downSince?: number }) {
   const [who, setWho] = useState(false);
   const [c1, c2] = gameGradient(s.game);
@@ -135578,15 +138344,16 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince }
   const lag = isLag(s);
   const r = reactionOf(rx, s.id);
   const emb = emblemStyle(s.coverUrl, s.game);
+  const nearFull = s.online && s.maxPlayers > 0 && s.players / s.maxPlayers >= 0.8;
   return (
     <article
-      className={`srv-tile tile tile-in tile-hover relative flex cursor-pointer flex-col gap-2 p-3 pb-4 ${select?.has(s.id) ? 'srv-selected' : ''} ${s.online ? '' : 'is-down'} ${s.online && s.maxPlayers > 0 && s.players / s.maxPlayers >= 0.8 ? 'is-busy' : ''}`}
+      className={`srv-tile tile tile-in tile-hover relative flex cursor-pointer flex-col gap-2 p-3 pb-4 ${select?.has(s.id) ? 'srv-selected' : ''} ${s.online ? '' : 'is-down'} ${nearFull ? 'is-busy' : ''} ${s.online && lag ? 'is-lag' : ''}`}
       // the fuller the server, the stronger its glow in the game's colour
       style={{ ...stagger(idx), ['--gc' as string]: accent, ['--fill' as string]: s.online && s.maxPlayers > 0 ? Math.min(1, s.players / s.maxPlayers).toFixed(2) : '0' }}
       onClick={select?.on ? () => select.toggle(s.id) : onOpen}
     >
       {select?.on && <CardCheck s={s} select={select} className="left-1 top-1" />}
-      <div className={`${emb.className} relative flex h-[124px] items-start justify-between rounded-ui-lg p-3 ${s.online ? '' : 'offline-cover'}`} style={{ ...emb.style, background: coverBackground(s.coverUrl, gameBackdrop(c1, 135), { small: true, game: s.game }), boxShadow: `inset 0 -3px 0 ${accent}` }}>
+      <div className={`${emb.className} relative flex h-[124px] items-start justify-between rounded-ui-lg p-3 ${s.online ? '' : 'offline-cover'}`} style={{ ...emb.style, background: coverBackground(s.coverUrl, gameBackdrop(c1, 135), { small: true, game: s.game }) }}>
         <span aria-hidden className="cover-scrim" />
         <GameAvatar game={s.game} size={46} glass vtId={s.id} />
         <div className="flex items-center gap-0.5">
@@ -135597,23 +138364,23 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince }
       </div>
 
       <div className="px-1.5">
-        <h3 className="line-clamp-2 wrap-break-word text-fs-lg font-extrabold leading-tight" title={s.name}>
+        <h3 className="srv-name truncate text-fs-lg font-extrabold leading-tight" title={s.name}>
           <a href={`/servers/${s.id}`} onClick={linkClick(s, select)} className="hover:text-link">{s.name}</a>
         </h3>
-        <div className="srv-chips"><span className="truncate">{gameLabel(s.game)}</span>{s.online && s.map && <span className="srv-chip" title={`Карта: ${s.map}`}>{s.map}</span>}{s.version && <span className="srv-chip" title="Версия">v{s.version}</span>}</div>
+        <div className="srv-chips">{nearFull && <span className="srv-badge-full" title={t('srv.cap.nearFull', { pct: Math.round((s.players / s.maxPlayers) * 100) })}>{t('srv.tile.full')}</span>}<span className="truncate">{gameLabel(s.game)}</span>{s.online && s.map && <span className="srv-chip" title={`Карта: ${s.map}`}>{s.map}</span>}{s.version && <span className="srv-chip" title="Версия">v{s.version}</span>}</div>
         {s.maintenance && <MaintenanceChip m={s.maintenance} className="mt-1" />}
       </div>
 
       {s.online ? (
         <>
-          <div className={`flex items-baseline gap-1.5 px-1.5 ${s.players === 0 ? 'srv-zero' : ''}`}>
+          <div className={`srv-count flex items-baseline gap-1.5 px-1.5 ${s.players === 0 ? 'srv-zero' : ''}`}>
             <CountReact r={r}><AnimatedNumber value={s.players} className="text-[38px] font-extrabold leading-none tracking-[-0.03em]" /></CountReact>
             <span className="text-fs-xl font-bold text-mute">/ {s.maxPlayers}</span>
             <TrendChip serverId={s.id} />
             {(s.playerNames?.length ?? 0) > 0 && <button type="button" className="srv-who" aria-expanded={who} onClick={(e) => { e.stopPropagation(); setWho((v) => !v); }}>{t('srv.who')}</button>}
             <span className={`ml-auto inline-flex items-center gap-1.5 text-fs-sm font-bold ${s.ping != null ? TONE_TEXT[pingTone(s.ping).tone] : 'text-mute'}`}>{s.ping != null && <><PingBars ping={s.ping} tone={pingTone(s.ping).tone} />{`${s.ping} мс`}</>}</span>
           </div>
-          <CapacityBar className="px-1.5" players={s.players} max={s.maxPlayers} color={accent} />
+          <CapacityBar className="px-1.5" players={s.players} max={s.maxPlayers} color="rgb(var(--ink) / .5)" />
           {who && <PlayerNames className="px-1.5" names={s.playerNames ?? []} max={12} />}
           {s.players === 0
             ? <p className="srv-empty-now"><i aria-hidden />{t('srv.empty.now')}</p>
@@ -137157,6 +139924,7 @@ import type { ReactNode } from 'react';
 import type { Perm } from '../api';
 import { t } from '../i18n';
 import { Icon } from '../icons';
+import { IconKey } from '../icons';
 import { IconBell, IconCards, IconWrench, IconDiscord, IconJournal, IconNews, IconHealth, IconServers, IconSettings, IconStart, IconSystem, IconTrophy, IconUsers } from '../ui';
 
 /** One place that knows every admin section: the sidebar, the start page and Ctrl+K all read it. */
@@ -137197,6 +139965,7 @@ const S = {
   community: { id: 'community', get label() { return t('adm.s.community'); }, icon: IconTrophy, get desc() { return t('adm.d.community'); }, keywords: 'сезон вайп зал славы рейтинг отзывы звёзды модерация галерея скриншоты' },
   users: { id: 'users', get label() { return t('adm.s.users'); }, icon: IconUsers, get desc() { return t('adm.d.users'); }, keywords: 'роли модератор администратор игрок регистрация заявки правила пароль доступ аккаунт' },
   journal: { id: 'journal', get label() { return t('adm.s.journal'); }, icon: IconJournal, get desc() { return t('adm.d.journal'); }, keywords: 'аудит история действия изменения кто менял лог' },
+  integrations: { id: 'integrations', get label() { return t('adm.s.integrations'); }, icon: IconKey, get desc() { return t('adm.d.integrations'); }, keywords: 'api ключ ключи токен бейдж виджет iframe сайт форум openapi интеграция встроить' },
   system: { id: 'system', get label() { return t('adm.s.system'); }, icon: IconSystem, get desc() { return t('adm.d.system'); }, keywords: 'сертификат https ssl диагностика проверка диск память версия uptime состояние' },
   settings: { id: 'settings', get label() { return t('adm.s.settings'); }, icon: IconSettings, get desc() { return t('adm.d.settings'); }, keywords: 'токен прокси пароль оформление цвет логотип обновление копия бэкап безопасность' },
 } satisfies Record<string, AdminSection>;
@@ -137210,7 +139979,7 @@ export const ADMIN_GROUPS: AdminGroup[] = [
   { get title() { return t('adm.g.main'); }, sections: [S.servers, S.discord, S.news] },
   { get title() { return t('adm.g.mon'); }, sections: [S.alerts, S.health, S.maintenance, S.cards] },
   { get title() { return t('adm.g.people'); }, sections: [S.community, S.users, S.journal] },
-  { get title() { return t('adm.g.sys'); }, sections: [S.system, S.settings] },
+  { get title() { return t('adm.g.sys'); }, sections: [S.integrations, S.system, S.settings] },
 ];
 
 /** every section in the order of the sidebar, «Начало работы» first */
@@ -137372,6 +140141,57 @@ export function writeIds(key: string, ids: string[]) {
   } catch {
     /* private mode: not remembered */
   }
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/pages"
+  cat > "$APP_DIR/core-frontend/src/pages/integrationsLogic.test.ts" << '__COREGSM_EOF__'
+import { describe, expect, it } from 'vitest';
+import { badgeSnippets } from './integrationsLogic';
+
+describe('badgeSnippets', () => {
+  it('builds the links and escapes the name', () => {
+    const s = badgeSnippets('https://e.x/', 7, 'A "b" [c] <d>');
+    expect(s.badge).toBe('https://e.x/badge/servers/7.svg');
+    expect(s.widget).toBe('https://e.x/widget/servers/7');
+    expect(s.markdown).toBe('[![A "b" \\[c\\] <d>](https://e.x/badge/servers/7.svg)](https://e.x/servers/7)');
+    expect(s.html).toContain('alt="A &quot;b&quot; [c] &lt;d&gt;"');
+    expect(s.iframe).toContain('src="https://e.x/widget/servers/7"');
+    expect(s.bbcode).toBe('[url=https://e.x/servers/7][img]https://e.x/badge/servers/7.svg[/img][/url]');
+  });
+});
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/pages"
+  cat > "$APP_DIR/core-frontend/src/pages/integrationsLogic.ts" << '__COREGSM_EOF__'
+/** Admin → Интеграции: ready-to-paste snippets for the badge and the widget of one server. */
+
+export interface Snippets {
+  badge: string;
+  page: string;
+  widget: string;
+  markdown: string;
+  html: string;
+  bbcode: string;
+  iframe: string;
+}
+
+const attr = (s: string) => s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+/** brackets would break a Markdown image text */
+const mdText = (s: string) => s.replace(/[[\]\\]/g, '\\$&').replace(/[\r\n]+/g, ' ');
+
+export function badgeSnippets(origin: string, id: number, name: string): Snippets {
+  const base = origin.replace(/\/+$/, '');
+  const badge = `${base}/badge/servers/${id}.svg`;
+  const page = `${base}/servers/${id}`;
+  const widget = `${base}/widget/servers/${id}`;
+  return {
+    badge,
+    page,
+    widget,
+    markdown: `[![${mdText(name)}](${badge})](${page})`,
+    html: `<a href="${page}"><img src="${badge}" alt="${attr(name)}"></a>`,
+    bbcode: `[url=${page}][img]${badge}[/img][/url]`,
+    iframe: `<iframe src="${widget}" width="320" height="140" style="border:0" loading="lazy" title="${attr(name)}"></iframe>`,
+  };
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages/settings"
@@ -138129,7 +140949,7 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/pages/settings/UsersTab.tsx" << '__COREGSM_EOF__'
 /** Users: registration and access settings, pending requests, roles and passwords. */
 import RulesHistoryCard from '../../components/RulesHistoryCard';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { type Access, api, type Perm, PERM_LABELS, type UserRow } from '../../api';
 import '../../styles/admin.css';
 import { useAuth } from '../../auth';
@@ -138167,7 +140987,11 @@ function seenText(u: UserRow, now = Date.now()): { online: boolean; text: string
   return { online: false, text: t('us.seen.was', { ago: ago(u.lastSeen) }) };
 }
 
-const ROLE_LABEL = (r: UserRow['role']): string => t(`us.role.${r}` as const);
+type UserTab = 'users' | 'access' | 'rules' | 'roles';
+const USER_TABS: [UserTab, TKey][] = [['users', 'us.tab.users'], ['access', 'us.tab.access'], ['rules', 'us.tab.rules'], ['roles', 'us.tab.roles']];
+const TAB_KEY = 'coregsm_admin_users_tab';
+
+const ROLE_LABEL =(r: UserRow['role']): string => t(`us.role.${r}` as const);
 
 /** The users page: the rules text joins the common save bar. */
 export function UsersTab() {
@@ -138190,6 +141014,20 @@ function UsersTabInner() {
   const [banReason, setBanReason] = useState('');
   const [banHours, setBanHours] = useState(24);
   const rulesInit = useRef(false);
+  // the section of the page: the list of people first; the choice is remembered in this browser
+  const [tab, setTab] = useState<UserTab>(() => {
+    try { const v = localStorage.getItem(TAB_KEY); return USER_TABS.some(([id]) => id === v) ? (v as UserTab) : 'users'; } catch { return 'users'; }
+  });
+  const pickTab = (id: UserTab) => { setTab(id); try { localStorage.setItem(TAB_KEY, id); } catch { /* not remembered */ } };
+  const onTabKey = (e: KeyboardEvent<HTMLElement>) => {
+    const d = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
+    if (!d && e.key !== 'Home' && e.key !== 'End') return;
+    e.preventDefault();
+    const i = USER_TABS.findIndex(([id]) => id === tab);
+    const n = e.key === 'Home' ? 0 : e.key === 'End' ? USER_TABS.length - 1 : (i + d + USER_TABS.length) % USER_TABS.length;
+    pickTab(USER_TABS[n][0]);
+    document.getElementById(`us-tab-${USER_TABS[n][0]}`)?.focus();
+  };
 
   const load = () => {
     api<Access>('/access').then((a) => {
@@ -138300,6 +141138,28 @@ function UsersTabInner() {
         </PageHead>
       )}
     >
+      <div className="no-scrollbar -mx-1 overflow-x-auto px-1" role="tablist" aria-label={t('us.tabs')} onKeyDown={onTabKey}>
+        <div className="seg flex w-max min-w-full">
+          {USER_TABS.map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              role="tab"
+              id={`us-tab-${id}`}
+              aria-selected={tab === id}
+              aria-controls={`us-panel-${id}`}
+              tabIndex={tab === id ? 0 : -1}
+              className={`seg-item min-h-11 whitespace-nowrap ${tab === id ? 'on' : ''}`}
+              onClick={() => pickTab(id)}
+            >
+              {t(label)}{id === 'users' && pendingUsers.length > 0 ? ` · ${pendingUsers.length}` : ''}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {tab === 'access' && (
+      <div role="tabpanel" id="us-panel-access" aria-labelledby="us-tab-access" className="space-y-5">
       <Section title={t('us.who')}>
         {access && (
           <>
@@ -138321,7 +141181,11 @@ function UsersTabInner() {
           <p><b className="text-ink">{t('us.r.admin')}</b>{t('us.r.adminText')}</p>
         </div>
       </Section>
+      </div>
+      )}
 
+      {tab === 'rules' && (
+      <div role="tabpanel" id="us-panel-rules" aria-labelledby="us-tab-rules" className="space-y-5">
       <Section
         title={t('us.rules')}
         description={t('us.rulesText')}
@@ -138344,7 +141208,11 @@ function UsersTabInner() {
       </Section>
 
       <RulesHistoryCard rulesKey={rules} onRestore={setRules} />
+      </div>
+      )}
 
+      {tab === 'users' && (
+      <div role="tabpanel" id="us-panel-users" aria-labelledby="us-tab-users" className="space-y-5">
       {pendingUsers.length > 0 && (
         <Section
           title={t('us.req')}
@@ -138382,47 +141250,11 @@ function UsersTabInner() {
         </Section>
       )}
 
-      <Section title={t('us.matrix')}>
-        <details>
-          <summary className="cursor-pointer font-extrabold">{t('us.matrix')}</summary>
-          <p className="mt-2 text-sm font-semibold text-mute">{t('us.matrix.hint')}</p>
-          <div className="mt-2 overflow-x-auto">
-            <table className="adm-table">
-              <thead>
-                <tr>
-                  <th>{t('us.matrix.role')}</th>
-                  {PERM_LABELS.map((p) => <th key={p.id} title={t(`us.perm.${p.id}.hint` as const)}>{t(`us.perm.${p.id}` as const)}</th>)}
-                </tr>
-              </thead>
-              <tbody>
-                <tr><td className="font-extrabold">{t('us.matrix.admin')}</td>{PERM_LABELS.map((p) => <td key={p.id} className="text-ok" aria-label="✓">✓</td>)}</tr>
-                {users.filter((u) => u.role === 'moderator').map((u) => (
-                  <tr key={u.id}>
-                    <td>{u.username}</td>
-                    {PERM_LABELS.map((p) => {
-                      const on = (u.perms ?? []).includes(p.id);
-                      return (
-                        <td key={p.id}>
-                          <input type="checkbox" className="srv-check" checked={on} aria-label={`${u.username}: ${t(`us.perm.${p.id}` as const)}`}
-                            onChange={(e) => void setPerms(u, e.target.checked ? [...(u.perms ?? []), p.id] : (u.perms ?? []).filter((x) => x !== p.id))} />
-                        </td>
-                      );
-                    })}
-                  </tr>
-                ))}
-                {users.every((u) => u.role !== 'moderator') && <tr><td colSpan={PERM_LABELS.length + 1} className="text-mute">{t('us.matrix.noMods')}</td></tr>}
-                <tr><td className="font-extrabold">{t('us.matrix.player')}</td>{PERM_LABELS.map((p) => <td key={p.id} className="text-mute" aria-label="—">—</td>)}</tr>
-              </tbody>
-            </table>
-          </div>
-        </details>
-      </Section>
-
       <Section title={t('us.users')}>
         <ErrorLine text={error} />
         <div className="flex flex-wrap items-center gap-2">
           <input className="input max-w-xs" type="search" placeholder={t('us.search')} value={q} onChange={(e) => setQ(e.target.value)} aria-label={t('us.searchAria')} />
-          <div className="seg" role="group" aria-label={t('us.roleAria')}>
+          <div className="seg max-w-full overflow-x-auto" role="group" aria-label={t('us.roleAria')}>
             {([['all', t('us.f.all')], ['admin', t('us.f.admin')], ['moderator', t('us.f.mod')], ['player', t('us.f.player')]] as const).map(([id, label]) => (
               <button key={id} type="button" className="seg-item" aria-pressed={roleFilter === id} onClick={() => setRoleFilter(id)}>{label}</button>
             ))}
@@ -138501,6 +141333,48 @@ function UsersTabInner() {
         </ul>
         <p className="text-sm font-semibold text-mute">{t('us.pwNote')} <GoLink href="/admin/settings/security">{t('us.pwLink')}</GoLink>.</p>
       </Section>
+      </div>
+      )}
+
+      {tab === 'roles' && (
+      <div role="tabpanel" id="us-panel-roles" aria-labelledby="us-tab-roles" className="space-y-5">
+      <Section title={t('us.matrix')}>
+        <div>
+          <p className="text-sm font-semibold text-mute">{t('us.matrix.hint')}</p>
+          <div className="mt-2 overflow-x-auto">
+            <table className="adm-table">
+              <thead>
+                <tr>
+                  <th>{t('us.matrix.role')}</th>
+                  {PERM_LABELS.map((p) => <th key={p.id} title={t(`us.perm.${p.id}.hint` as const)}>{t(`us.perm.${p.id}` as const)}</th>)}
+                </tr>
+              </thead>
+              <tbody>
+                <tr><td className="font-extrabold">{t('us.matrix.admin')}</td>{PERM_LABELS.map((p) => <td key={p.id} className="text-ok" aria-label="✓">✓</td>)}</tr>
+                {users.filter((u) => u.role === 'moderator').map((u) => (
+                  <tr key={u.id}>
+                    <td>{u.username}</td>
+                    {PERM_LABELS.map((p) => {
+                      const on = (u.perms ?? []).includes(p.id);
+                      return (
+                        <td key={p.id}>
+                          <input type="checkbox" className="srv-check" checked={on} aria-label={`${u.username}: ${t(`us.perm.${p.id}` as const)}`}
+                            onChange={(e) => void setPerms(u, e.target.checked ? [...(u.perms ?? []), p.id] : (u.perms ?? []).filter((x) => x !== p.id))} />
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+                {users.every((u) => u.role !== 'moderator') && <tr><td colSpan={PERM_LABELS.length + 1} className="text-mute">{t('us.matrix.noMods')}</td></tr>}
+                <tr><td className="font-extrabold">{t('us.matrix.player')}</td>{PERM_LABELS.map((p) => <td key={p.id} className="text-mute" aria-label="—">—</td>)}</tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </Section>
+
+      </div>
+      )}
     </AdminPage>
   );
 }
@@ -138907,18 +141781,40 @@ __COREGSM_EOF__
 /** Poll settings («Опрос серверов»): types and pure helpers. */
 
 export interface PollLast { at: number; durationMs: number; servers: number; failures: number; concurrency: number }
-export interface PollSettings { failThreshold: number; concurrency: number; last: PollLast | null }
+export interface PollRule { n: number; m: number; probeVeto: boolean; custom: boolean }
+export interface PollSettings {
+  failThreshold: number;
+  concurrency: number;
+  /** rule «N of M»: null = not set, the consecutive-failure threshold decides */
+  failN?: number | null;
+  failM?: number | null;
+  probeVeto?: boolean;
+  rule?: PollRule;
+  last: PollLast | null;
+}
 
 export const FAIL_MIN = 1;
 export const FAIL_MAX = 5;
 export const CONC_MIN = 1;
 export const CONC_MAX = 32;
+export const WINDOW_MAX = 20;
 
 /** the first problem with the two numbers, or null */
-export function validatePoll(v: { failThreshold: number; concurrency: number }): string | null {
+export function validatePoll(v: { failThreshold: number; concurrency: number; failN?: number | null; failM?: number | null }): string | null {
   if (!Number.isInteger(v.failThreshold) || v.failThreshold < FAIL_MIN || v.failThreshold > FAIL_MAX) return `Число неудачных опросов: от ${FAIL_MIN} до ${FAIL_MAX}`;
   if (!Number.isInteger(v.concurrency) || v.concurrency < CONC_MIN || v.concurrency > CONC_MAX) return `Параллельных опросов: от ${CONC_MIN} до ${CONC_MAX}`;
+  for (const x of [v.failN, v.failM]) {
+    if (x !== null && x !== undefined && (!Number.isInteger(x) || x < 1 || x > WINDOW_MAX)) return `Правило «N из M»: числа от 1 до ${WINDOW_MAX} (или оставьте поля пустыми)`;
+  }
   return null;
+}
+
+/** the sentence under the «N of M» fields */
+export function ruleText(n: number | null, m: number | null, threshold: number): string {
+  if (n === null && m === null) return `Правило не задано: сбой подтверждается ${confirmDelayText(threshold)}.`;
+  const mm = m ?? Math.max(threshold, n ?? threshold);
+  const nn = Math.min(n ?? Math.min(threshold, mm), mm);
+  return `Сервер считается упавшим, если не ответил ${nn} из последних ${mm} опросов (необязательно подряд).`;
 }
 
 /** 850 -> «0,9 с», 12400 -> «12 с», 95000 -> «1 мин 35 с» */
@@ -139333,6 +142229,31 @@ a.adm-tile:hover { box-shadow: var(--shadow-2); border-color: rgb(var(--brand) /
 @media (max-width: 767px) { .adm-ind { border-radius: var(--r-pill); } }
 .adm-dot { margin-left: auto; width: 8px; height: 8px; flex: none; border-radius: 50%; background: rgb(var(--warn)); }
 .adm-dot.is-bad { background: rgb(var(--bad)); }
+/* the «⋯» menu of a table row (drawn on the body: components/RowMenu.tsx) */
+.row-menu { position: fixed; z-index: 60; min-width: 13rem; max-width: calc(100vw - 16px); padding: 6px; border-radius: var(--r-lg); background: rgb(var(--overlay)); box-shadow: var(--shadow-3), inset 0 0 0 1px rgb(var(--line)); }
+.row-menu-item { display: flex; align-items: center; width: 100%; min-height: 40px; padding: 6px 12px; border-radius: var(--r-md); text-align: left; font-weight: 700; color: rgb(var(--ink)); cursor: pointer; }
+.row-menu-item[data-sep='true'] { margin-top: 5px; position: relative; }
+.row-menu-item[data-sep='true']::before { content: ''; position: absolute; left: 6px; right: 6px; top: -3px; height: 1px; background: rgb(var(--line)); }
+.row-menu-item:hover, .row-menu-item:focus-visible { background: rgb(var(--soft)); text-decoration: none; outline: none; }
+.row-menu-item:focus-visible { box-shadow: inset 0 0 0 2px rgb(var(--brand) / .6); }
+.row-menu-item.is-danger { color: rgb(var(--bad)); }
+.row-menu-item.is-danger:hover, .row-menu-item.is-danger:focus-visible { background: rgb(var(--badbg)); }
+.row-menu-item[aria-disabled='true'] { opacity: .45; cursor: default; }
+.row-menu-item[aria-disabled='true']:hover { background: transparent; }
+.adm-table td .btn-sm { gap: 6px; }
+@media (max-width: 767px) { .adm-crumbs button { min-height: 44px; } }
+/* phone: one button with the current section, the list of all sections opens under it */
+.adm-mnav { position: relative; z-index: 30; }
+.adm-mnav-btn { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 48px; padding: 6px 14px 6px 8px; border-radius: var(--r-lg); background: rgb(var(--card)); box-shadow: inset 0 0 0 1px rgb(var(--line)); font-weight: 800; color: rgb(var(--ink)); }
+.adm-mnav-btn[aria-expanded='true'] { box-shadow: inset 0 0 0 2px rgb(var(--brand) / .6); }
+.adm-mnav-chev { color: rgb(var(--mute)); transition: transform .2s ease; }
+.adm-mnav-chev[data-open='true'] { transform: rotate(180deg); }
+.adm-mnav-pop { position: absolute; left: 0; right: 0; top: calc(100% + 6px); max-height: min(70dvh, 32rem); overflow-y: auto; overscroll-behavior: contain; padding: 6px; border-radius: var(--r-lg); background: rgb(var(--overlay)); box-shadow: var(--shadow-3), inset 0 0 0 1px rgb(var(--line)); }
+.adm-mnav-link { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 4px 10px 4px 6px; border-radius: var(--r-md); font-weight: 700; color: rgb(var(--ink)); }
+.adm-mnav-link:hover { background: rgb(var(--soft)); text-decoration: none; }
+.adm-mnav-link[aria-current='page'] { background: rgb(var(--brand) / .14); color: rgb(var(--link)); }
+.adm-mnav-pop .adm-group-title { padding: 8px 10px 2px; }
+@media (prefers-reduced-motion: reduce) { .adm-mnav-chev { transition: none; } }
 .adm-crumb-menu { position: relative; }
 .adm-crumb-pop { position: absolute; left: 0; top: calc(100% + 6px); z-index: 40; min-width: 15rem; max-height: 22rem; overflow-y: auto; padding: 6px; border-radius: var(--r-lg); background: rgb(var(--overlay)); box-shadow: var(--shadow-3), inset 0 0 0 1px rgb(var(--line)); }
 .adm-crumb-pop a { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: var(--r-md); color: rgb(var(--ink)); }
@@ -140636,6 +143557,25 @@ html[data-motion='reduce'] :is(.srv-record, .srv-swipe-hint, .srv-slots-bar > i.
 .srv-notice-form { display: grid; gap: 10px; padding: 14px; border-radius: var(--r-lg); box-shadow: inset 0 0 0 1px rgb(var(--line)); }
 
 @media (prefers-reduced-motion: reduce) { .rv-pick button.is-pop { animation: none; } }
+
+/* ---------- a server that is down: one status line in the banner, a plaque and an availability strip instead of the chart ---------- */
+.srv-hero-off { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin-top: 14px; }
+.srv-off-line { margin: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 12px; font-size: var(--fs-base); color: rgba(255, 255, 255, 0.82); }
+.srv-off-line b { font-size: var(--fs-lg); font-weight: 750; color: #fff; }
+.off-state { display: grid; gap: 14px; }
+.off-plaque { display: flex; align-items: flex-start; gap: 12px; padding: 12px 14px; border-radius: var(--r-lg); background: rgb(var(--badbg)); box-shadow: inset 0 0 0 1px rgb(var(--bad) / .3); }
+.off-dot { flex: none; width: 10px; height: 10px; margin-top: 7px; border-radius: var(--r-pill); background: rgb(var(--bad)); }
+.off-title { margin: 0; font-size: var(--fs-lg); font-weight: 700; color: rgb(var(--ink)); }
+.off-why { margin: 2px 0 0; font-size: var(--fs-sm); font-weight: 600; color: rgb(var(--mute)); overflow-wrap: anywhere; }
+.off-up-head { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 6px; font-size: var(--fs-sm); font-weight: 650; color: rgb(var(--mute)); }
+.off-up-head b { color: rgb(var(--ink)); font-variant-numeric: tabular-nums; }
+.off-bars { display: flex; gap: 2px; height: 28px; }
+.off-cell { flex: 1 1 0; min-width: 0; border-radius: 3px; background: rgb(var(--line)); }
+.off-cell.up { background: rgb(var(--ok) / .75); }
+.off-cell.down { background: rgb(var(--bad) / .8); }
+.off-cell.part { background: rgb(var(--warn) / .8); }
+.off-ticks { display: flex; justify-content: space-between; margin-top: 4px; font-size: var(--fs-xs); font-weight: 600; color: rgb(var(--mute)); }
+.off-toggle { justify-self: start; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/gallery.css" << '__COREGSM_EOF__'
@@ -141317,6 +144257,29 @@ __COREGSM_EOF__
   .nb-banner, .nb-body { padding-inline: 16px; }
   .nb-read { display: none; }
 }
+
+/* ---------- calmer feed: a smaller headline, one banner height, the whole card is a link, one row of rubrics + a small menu ---------- */
+.nb { position: relative; transition: box-shadow .15s ease, border-color .15s ease; }
+.nb:hover { border-color: rgb(var(--brand) / .4); box-shadow: var(--shadow-3, var(--shadow-2)); }
+.nb-stretch { position: absolute; inset: 0; z-index: 1; border-radius: inherit; }
+.nb-banner { height: 11rem; min-height: 0; overflow: hidden; }
+.nb-title { font-size: clamp(1.5rem, 2.4vw, 1.75rem); line-height: 1.15; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.nb-banner:hover .nb-title { text-decoration: none; }
+.nb:hover .nb-title { text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: .18em; }
+.nb-text { pointer-events: none; }
+.nb-text a, .nb-text button, .nb-text summary, .nb-text input, .nb-text [role='button'] { position: relative; z-index: 2; pointer-events: auto; }
+.nb-foot a, .nb-foot button { position: relative; z-index: 2; }
+.nb-foot { pointer-events: none; }
+.nb-foot a, .nb-foot button { pointer-events: auto; }
+.nb:focus-within { outline: 2px solid rgb(var(--brand)); outline-offset: 2px; }
+@media (max-width: 560px) { .nb-banner { height: 10rem; min-height: 0; } .nb-title { font-size: 1.5rem; } }
+
+.nw-bar { display: flex; align-items: center; gap: .5rem; min-width: 0; }
+.nw-bar .nw-rubrics { flex: 1 1 auto; min-width: 0; }
+.nw-menu-btn { flex: none; display: inline-flex; align-items: center; gap: .45rem; min-height: 44px; padding: 0 .9rem; border-radius: var(--r-pill); border: 1px solid rgb(var(--line)); background: rgb(var(--card)); color: rgb(var(--ink)); font-size: var(--fs-sm); font-weight: 650; cursor: pointer; }
+.nw-menu-btn:hover { background: rgb(var(--soft)); }
+.nw-menu-h { margin: 6px 12px 2px; font-size: var(--fs-xs); font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: rgb(var(--mute)); }
+.nw-menu-h:not(:first-child) { margin-top: 10px; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/profile.css" << '__COREGSM_EOF__'
@@ -141829,27 +144792,6 @@ html[data-motion='reduce'] .srv-new-chev, html[data-motion='reduce'] .srv-check,
 .cmp-change.is-up { background: rgb(var(--okbg)); color: rgb(var(--ok)); }
 .cmp-change.is-down { background: rgb(var(--badbg)); color: rgb(var(--bad)); }
 
-/* ---------- attention strip: servers with a problem, one line each (the working servers keep the first screen) ---------- */
-.attn { display: grid; gap: .4rem; padding: .7rem .75rem .75rem; border-radius: var(--r-lg); background: rgb(var(--card)); border: 1px solid rgb(var(--line)); box-shadow: var(--shadow-1); }
-.attn-h { margin: 0 0 .1rem .35rem; font-size: .9375rem; font-weight: 800; letter-spacing: -.01em; }
-.attn-list { list-style: none; margin: 0; padding: 0; display: grid; gap: .3rem; }
-.attn-row { display: flex; align-items: center; gap: .65rem; min-height: 44px; padding: .4rem .7rem; border-radius: var(--r-md); color: inherit; text-decoration: none; background: rgb(var(--badbg)); transition: box-shadow .15s; }
-.attn-row.is-warn { background: rgb(var(--warnbg)); }
-.attn-row:hover { box-shadow: var(--shadow-1); }
-.attn-dot { flex: none; width: .6rem; height: .6rem; border-radius: var(--r-pill); background: rgb(var(--bad)); }
-.attn-row.is-warn .attn-dot { background: rgb(var(--warn)); }
-.attn-name { min-width: 0; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 650; }
-.attn-why { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .875rem; font-weight: 600; color: rgb(var(--mute)); }
-.attn-go { flex: none; font-weight: 650; color: rgb(var(--link)); }
-.attn-more { margin: 0 0 0 .35rem; font-size: .875rem; font-weight: 600; color: rgb(var(--mute)); }
-/* a phone: the name and the arrow on the first line, the reason under them */
-@media (max-width: 560px) {
-  .attn-row { flex-wrap: wrap; row-gap: .1rem; }
-  .attn-name { order: 1; flex: 1 1 0; }
-  .attn-go { order: 2; }
-  .attn-why { order: 3; flex-basis: 100%; padding-left: 1.25rem; white-space: normal; }
-}
-
 /* ---------- a server without a cover picture: the emblem of its game as a faint watermark on the gradient ----------
    (the pseudo-element sits at z-index -1 inside an isolated box: above the box's own background, below its content) */
 .emblem-bg { position: relative; isolation: isolate; }
@@ -142030,6 +144972,70 @@ html[data-motion='reduce'] .srv-new-chev, html[data-motion='reduce'] .srv-check,
 .srv-hero .sh-foot .sh-chip { padding: 0; background: none; box-shadow: none; -webkit-backdrop-filter: none; backdrop-filter: none; line-height: 1.5; }
 .srv-hero .sh-foot .sh-chip + .sh-chip::before { content: '·'; margin: 0 .55em; opacity: .55; }
 .srv-hero .spark-axis { background: none; padding: 0 2px; color: rgb(255 255 255 / .7); }
+
+/* ---------- calmer main page: one alert row, a neutral strip, quiet tiles ---------- */
+.pulse-wrap { display: grid; gap: 8px; }
+.pulse-alert { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 6px 14px 6px 8px; border-radius: var(--r-lg); color: inherit; text-decoration: none; background: rgb(var(--card)); box-shadow: inset 0 0 0 1px rgb(var(--bad) / .4); transition: box-shadow .15s ease; }
+.pulse-alert-warn { box-shadow: inset 0 0 0 1px rgb(var(--warn) / .45); }
+.pulse-alert:hover { box-shadow: inset 0 0 0 1px rgb(var(--bad) / .7); }
+.pulse-alert-warn:hover { box-shadow: inset 0 0 0 1px rgb(var(--warn) / .8); }
+.pulse-alert-icon { display: grid; place-items: center; flex: none; width: 32px; height: 32px; border-radius: var(--r-md); color: rgb(var(--bad)); background: rgb(var(--badbg)); }
+.pulse-alert-warn .pulse-alert-icon { color: rgb(var(--warn)); background: rgb(var(--warnbg)); }
+.pulse-alert-title { flex: none; font-size: var(--fs-base); font-weight: 650; letter-spacing: -.01em; }
+.pulse-alert-names { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-sm); font-weight: 600; color: rgb(var(--mute)); }
+.pulse-alert-go { flex: none; font-weight: 650; color: rgb(var(--link)); }
+@media (max-width: 560px) {
+  .pulse-alert { flex-wrap: wrap; row-gap: 0; padding-right: 12px; }
+  .pulse-alert-title { flex: 1 1 0; min-width: 0; }
+  .pulse-alert-names { order: 3; flex-basis: 100%; padding-left: 42px; margin-top: -4px; padding-bottom: 2px; }
+}
+/* the strip itself is neutral in every state: no coloured fill, a hairline border */
+.pulse { --pulse: var(--mute); --pulse-bg: var(--card); background: rgb(var(--card)); box-shadow: inset 0 0 0 1px rgb(var(--line)); padding: 12px 18px; gap: 8px 24px; grid-template-columns: auto minmax(0, 1fr); }
+.pulse-ok { --pulse: var(--brand); }
+.pulse-state { grid-column: 1 / -1; gap: 8px; flex-wrap: wrap; }
+.pulse-state .pulse-icon { width: 24px; height: 24px; border-radius: var(--r-sm); background: transparent; box-shadow: none; }
+.pulse-ok .pulse-icon { color: rgb(var(--ok)); }
+.pulse-warn .pulse-icon, .pulse-maint .pulse-icon { color: rgb(var(--warn)); }
+.pulse-state .pulse-title { font-size: var(--fs-base); }
+.pulse-state .pulse-sub { margin-top: 0; }
+.pulse-nums { grid-column: 1; grid-row: auto; grid-template-columns: repeat(4, auto); gap: 4px 0; }
+.pulse-nums dd { font-size: 22px; }
+.pulse-plot { height: 52px; }
+.pulse-chart-empty { min-height: 52px; }
+@media (max-width: 899px) { .pulse { grid-template-columns: minmax(0, 1fr); } .pulse-nums { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+@media (max-width: 560px) { .pulse { padding: 10px 14px; } .pulse-state .pulse-icon svg { width: 18px; height: 18px; } .pulse-nums dd { font-size: var(--fs-xl); } }
+
+/* tiles: no coloured frame or glow; the accent is kept for a server that is down or slow, "almost full" is a small badge */
+.srv-tile, .srv-tile.is-busy { box-shadow: var(--shadow-1); }
+.srv-tile.is-down { box-shadow: var(--shadow-1), 0 0 0 1px rgb(var(--bad) / .45); }
+.srv-tile.is-lag { box-shadow: var(--shadow-1), 0 0 0 1px rgb(var(--warn) / .5); }
+.tile.srv-tile.srv-selected { box-shadow: 0 0 0 3px rgb(var(--brand)); }
+.srv-name { min-width: 0; }
+.srv-name a, .srv-row-main h3 a { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.srv-chips { height: 24px; overflow: hidden; }
+.srv-badge-full { flex: none; padding: 0 8px; border-radius: var(--r-pill); font-size: var(--fs-xs); font-weight: 700; line-height: 20px; color: rgb(var(--warn)); background: rgb(var(--warnbg)); white-space: nowrap; }
+.srv-count { min-height: 44px; flex-wrap: nowrap; min-width: 0; }
+.srv-count > * { flex: none; }
+.srv-tile .srv-cap > i { background: var(--cap); }
+
+/* phone rows (the compact tile) */
+.srv-row { position: relative; display: flex; align-items: center; gap: 12px; min-height: 60px; padding: 8px 6px 8px 12px; border-radius: var(--r-lg); background: rgb(var(--card)); box-shadow: var(--shadow-1), inset 0 0 0 1px rgb(var(--line) / .6); cursor: pointer; }
+.srv-row.is-down { box-shadow: var(--shadow-1), inset 0 0 0 1px rgb(var(--bad) / .45); }
+.srv-row.srv-selected { box-shadow: 0 0 0 3px rgb(var(--brand)); }
+.srv-row-main { flex: 1 1 auto; min-width: 0; display: grid; gap: 6px; }
+.srv-row-main h3 a { color: inherit; text-decoration: none; }
+.srv-row-bar .srv-cap { height: 4px; }
+.srv-row-count { flex: none; display: flex; align-items: baseline; font-variant-numeric: tabular-nums; color: rgb(var(--mute)); font-weight: 700; }
+.srv-row-count b { font-size: var(--fs-xl); font-weight: 800; color: rgb(var(--ink)); letter-spacing: -.02em; }
+.srv-row-dot { flex: none; width: 10px; height: 10px; border-radius: var(--r-pill); }
+.srv-row .btn-icon-sm { width: 44px; height: 44px; }
+@media (max-width: 639px) {
+  .srv-grid { gap: 8px; }
+  /* the leader card is compacter: no curve, no chips, a smaller number */
+  .srv-hero { padding: 14px; gap: 8px; }
+  .srv-hero .sh-chart, .srv-hero .sh-foot { display: none; }
+  .srv-hero [class*='text-[64px]'] { font-size: 44px; }
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/shell.css" << '__COREGSM_EOF__'
@@ -144614,7 +147620,7 @@ import react from '@vitejs/plugin-react';
 
 export default defineConfig({
   plugins: [react()],
-  server: { proxy: { '/api': process.env.COREGSM_API ?? 'http://localhost:3000' } },
+  server: { proxy: { '/api': process.env.COREGSM_API ?? 'http://localhost:3000', '/badge': process.env.COREGSM_API ?? 'http://localhost:3000', '/widget': process.env.COREGSM_API ?? 'http://localhost:3000' } },
   build: {
     rollupOptions: {
       output: {
@@ -144897,6 +147903,36 @@ server {
 
     # shareable server (/s/) and news (/n/) pages with link-preview meta tags (redirect to the SPA)
     location ~ ^/(s|n)/\d+$ {
+        set $backend http://backend:3000;
+        proxy_pass $backend;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 30s;
+    }
+
+    # badges (SVG) and widgets for other sites: no key, cached by the backend headers.
+    # /widget/ may be put in an iframe: it has its own header set without X-Frame-Options (a location with add_header
+    # does not inherit the server-level ones, the same goes for proxy_hide_header).
+    location ~ ^/badge/servers/\d+\.svg$ {
+        set $backend http://backend:3000;
+        proxy_pass $backend;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 30s;
+    }
+
+    location ~ ^/widget/servers/\d+$ {
+        add_header Strict-Transport-Security "max-age=31536000" always;
+        add_header X-Content-Type-Options nosniff always;
+        add_header Referrer-Policy strict-origin-when-cross-origin always;
+        proxy_hide_header Strict-Transport-Security;
+        proxy_hide_header X-Content-Type-Options;
+        proxy_hide_header X-Frame-Options;
+        proxy_hide_header Referrer-Policy;
         set $backend http://backend:3000;
         proxy_pass $backend;
         proxy_set_header Host $host;
