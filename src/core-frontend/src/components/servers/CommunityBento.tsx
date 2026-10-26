@@ -3,7 +3,7 @@
  * gets a small celebration), when the community usually plays, and the latest arrivals.
  */
 import NickPic from '../NickPic';
-import { t, useI18n } from '../../i18n';
+import { t, useI18n, type TKey } from '../../i18n';
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../../api';
 import { AnimatedNumber, Burst, GameAvatar, ago, fmtDateTime, usePoll, num } from '../../ui';
@@ -24,7 +24,7 @@ export interface Community {
 }
 
 /** weekday names in the panel's language, Monday first */
-export const dowShort = (): string[] => Array.from({ length: 7 }, (_, i) => t(`cm.dow.${i}` as const));
+export const dowShort = (): string[] => Array.from({ length: 7 }, (_, i) => t(`cm.dow.${i}` as TKey));
 const RECORD_KEY = 'coregsm_record_seen';
 
 /** the community data with the time of the last answer and a way to ask again at once */
@@ -83,7 +83,7 @@ export function HeatLegend() {
 }
 
 export function busiestText(b: Community['heatmap']['busiest']) {
-  return b ? t('cm.busiest', { when: t(`cm.dowIn.${b.dow}` as const), time: `${String(b.hour).padStart(2, '0')}:00` }) : t('cm.busiest.none');
+  return b ? t('cm.busiest', { when: t(`cm.dowIn.${b.dow}` as TKey), time: `${String(b.hour).padStart(2, '0')}:00` }) : t('cm.busiest.none');
 }
 
 export function FeedItem({ f }: { f: Community['feed'][number] }) {
