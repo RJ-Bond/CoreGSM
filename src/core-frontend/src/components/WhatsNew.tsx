@@ -103,8 +103,8 @@ function Steps({ rels, onClose }: { rels: UpdateNotesRelease[]; onClose: () => v
         <div className="flex items-center justify-between gap-2 border-t border-line px-5 py-3">
           <button type="button" className="btn-link" onClick={onClose}>{t('wn.skip')}</button>
           <div className="flex gap-2">
-            {i > 0 && <button type="button" className="btn-soft" onClick={() => setI(i - 1)}>{t('wn.back')}</button>}
-            <button type="button" data-next className="btn-primary" onClick={() => (last ? onClose() : setI(i + 1))}>{last ? t('wn.done') : t('wn.next')}</button>
+            {i > 0 && <button type="button" className="btn btn-soft" onClick={() => setI(i - 1)}>{t('wn.back')}</button>}
+            <button type="button" data-next className="btn" onClick={() => (last ? onClose() : setI(i + 1))}>{last ? t('wn.done') : t('wn.next')}</button>
           </div>
         </div>
       </div>
