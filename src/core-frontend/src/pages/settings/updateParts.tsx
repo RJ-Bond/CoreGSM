@@ -146,7 +146,7 @@ export function HistoryCard({ refreshKey }: { refreshKey: unknown }) {
 /** channel and Discord notices */
 export function OptionsCard({ info, onChange }: { info: UpdateInfo; onChange: (i: UpdateInfo) => void }) {
   const [error, setError] = useState('');
-  const save = async (body: { channel?: 'release' | 'main'; notify?: boolean; notifyTo?: 'channel' | 'dm' | 'both'; notifyLang?: 'ru' | 'en'; remindDays?: number }) => {
+  const save = async (body: { channel?: 'release' | 'main'; notify?: boolean; notifyLang?: 'ru' | 'en'; remindDays?: number }) => {
     setError('');
     try {
       onChange(await api<UpdateInfo>('/update/settings', 'PUT', body));
@@ -172,16 +172,7 @@ export function OptionsCard({ info, onChange }: { info: UpdateInfo; onChange: (i
         <span>{t('upd.o.notify')}<span id="upd-notify-hint" className="mt-0.5 block text-sm font-semibold text-mute">{t('upd.o.notifyHint')}</span></span>
       </label>
       {info.notify !== false && (
-        <div className="grid gap-3 sm:grid-cols-3">
-          <div className="sm:col-span-3">
-            <label htmlFor="upd-to" className="label">{t('upd.o.to')}</label>
-            <select id="upd-to" className="input" value={info.notifyTo ?? 'channel'} onChange={(e) => void save({ notifyTo: e.target.value as 'channel' | 'dm' | 'both' })} aria-describedby="upd-to-hint">
-              <option value="channel">{t('upd.o.to.channel')}</option>
-              <option value="dm">{t('upd.o.to.dm')}</option>
-              <option value="both">{t('upd.o.to.both')}</option>
-            </select>
-            <p id="upd-to-hint" className="mt-1 text-sm font-semibold text-mute">{t('upd.o.toHint')}</p>
-          </div>
+        <div className="grid gap-3 sm:grid-cols-2">
           <div>
             <label htmlFor="upd-lang" className="label">{t('upd.o.lang')}</label>
             <select id="upd-lang" className="input" value={info.notifyLang ?? 'ru'} onChange={(e) => void save({ notifyLang: e.target.value as 'ru' | 'en' })}>
