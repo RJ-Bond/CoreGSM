@@ -122,3 +122,9 @@
 
 @media (prefers-reduced-motion: reduce) { .st-banner-ico::after, .st-inc.is-live::before { animation: none; } .st-day, .st-ring, .st-meter > i { transition: none; } }
 html[data-motion='reduce'] .st-banner-ico::after, html[data-motion='reduce'] .st-inc.is-live::before { animation: none; }
+
+/* notes of the administrators */
+.st-note { padding: 12px 16px; border-radius: var(--r-lg); background: rgb(var(--card)); border: 1px solid rgb(var(--line)); box-shadow: inset 4px 0 0 rgb(var(--link)); }
+.st-note.is-warn { box-shadow: inset 4px 0 0 rgb(var(--warn)); background: rgb(var(--warnbg)); }
+.st-note.is-bad { box-shadow: inset 4px 0 0 rgb(var(--bad)); background: rgb(var(--badbg)); }
+.st-note.is-ok { box-shadow: inset 4px 0 0 rgb(var(--ok)); }

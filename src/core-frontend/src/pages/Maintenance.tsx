@@ -1,6 +1,7 @@
 import { useMemo, useState, type FormEvent } from 'react';
 import { api, type Server } from '../api';
 import RestartPlans from '../components/RestartPlans';
+import StatusNotesCard from '../components/StatusNotesCard';
 import WipeScenarios from '../components/WipeScenarios';
 import { StateView } from '../components/StateView';
 import {
@@ -124,6 +125,7 @@ export default function MaintenancePage() {
         </ul>
       )}
 
+      <StatusNotesCard servers={servers} />
       <RestartPlans servers={servers} />
       <WipeScenarios servers={servers} />
 
