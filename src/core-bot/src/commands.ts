@@ -4,6 +4,7 @@ import { backend, backendJson } from './backend.js';
 import { humanDiscordError } from './errors.js';
 import { log } from './log.js';
 import { handleInfo, INFO_COMMANDS, INFO_NAMES, infoAutocomplete } from './info.js';
+import { HELP_COMMANDS, HELP_NAMES, handleHelp, handleHelpButton } from './help.js';
 import { COLORS, cardReply, replyEmbed, type ProfileData } from './replies.js';
 
 export const COMMANDS = [
@@ -22,6 +23,7 @@ export const COMMANDS = [
   },
   { name: 'profile', description: 'Моя карточка: ник, ранг V Rising, часы в игре и достижения' },
   ...INFO_COMMANDS,
+  ...HELP_COMMANDS,
 ];
 
 /** registers the commands and returns how many Discord accepted (0 on failure) */
@@ -92,10 +94,11 @@ async function handlePollButton(i: ButtonInteraction): Promise<void> {
 }
 
 export async function handleInteraction(i: Interaction): Promise<void> {
-  if (i.isButton()) return handlePollButton(i);
+  if (i.isButton()) return /^(help|srv):/.test(i.customId) ? handleHelpButton(i) : handlePollButton(i);
   if (i.isAutocomplete()) return INFO_NAMES.has(i.commandName) ? infoAutocomplete(i) : handleAutocomplete(i);
   if (!i.isChatInputCommand()) return;
   if (INFO_NAMES.has(i.commandName)) return handleInfo(i);
+  if (HELP_NAMES.has(i.commandName)) return handleHelp(i);
   const name = i.commandName;
   if (name !== 'register' && name !== 'nick' && name !== 'profile') return;
   // Discord wants an answer within 3 seconds: acknowledge first, do the work after, and log how long it took
