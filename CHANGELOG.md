@@ -14,7 +14,7 @@ interface language; the GitHub release text is built from the section of the ver
 - Пометки в конце русской части: `[migration]` — меняется база данных, `[env]` — нужны новые настройки сервера, `⚠` в начале — несовместимое изменение.
 - Новые пункты идут в раздел «Не выпущено». Релиз выпускается только по команде владельца: тогда раздел переименовывается в `## <версия> · <дата>` (версия из `version.txt`).
 
-## Не выпущено | Unreleased
+## 1.0.0.42 · 26.10.2026
 
 ### 🐛 Исправлено | Fixed
 - 🧪 Тест каталога ошибок больше не принимает пример «Нет ответа» из галереи сообщений за ответ API | The error catalogue test no longer takes the «No answer» sample of the message gallery for an API answer
