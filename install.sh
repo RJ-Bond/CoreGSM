@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="9fe4f45bcb65"
+COREGSM_BUILD="a05a5b845b7b"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.0.0.43"
+COREGSM_VERSION="1.0.0.44"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -18860,7 +18860,7 @@ router.get('/api/update/preflight', admin, (_req, res) => {
 });
 
 router.put('/api/update/settings', admin, (req, res) => {
-  const b = (req.body ?? {}) as { channel?: unknown; skip?: unknown; notify?: unknown; notifyLang?: unknown; remindDays?: unknown; notifyChannel?: unknown };
+  const b = (req.body ?? {}) as { channel?: unknown; skip?: unknown; notify?: unknown; notifyLang?: unknown; notifyMode?: unknown; remindDays?: unknown; notifyChannel?: unknown };
   if (b.channel !== undefined) {
     if (CHANNEL_LOCKED) return res.status(409).json({ error: 'Канал задан переменными окружения сервера' });
     if (b.channel !== 'release' && b.channel !== 'main') return res.status(400).json({ error: 'Канал: release или main' });
@@ -25064,6 +25064,7 @@ __COREGSM_EOF__
         "@types/react-dom": "^19.3.0",
         "@vitejs/plugin-react": "^6.1.2",
         "autoprefixer": "^10.4.20",
+        "axe-core": "^4.14.0",
         "happy-dom": "^21.0.4",
         "oxlint": "^1.89.0",
         "postcss": "^8.5.31",
@@ -27245,6 +27246,16 @@ __COREGSM_EOF__
         "postcss": "^8.1.0"
       }
     },
+    "node_modules/axe-core": {
+      "version": "4.14.0",
+      "resolved": "https://registry.npmjs.org/axe-core/-/axe-core-4.14.0.tgz",
+      "integrity": "sha512-9WTZxEjsZ7b13TH8JPmbV2z8CHbl80/2hm3XPEG4JgNdQLK81IBRXmSxHfMAOkSqQeRxT/0dwNDz2GOm3zzpcQ==",
+      "dev": true,
+      "license": "MPL-2.0",
+      "engines": {
+        "node": ">=4"
+      }
+    },
     "node_modules/baseline-browser-mapping": {
       "version": "2.11.29",
       "resolved": "https://registry.npmjs.org/baseline-browser-mapping/-/baseline-browser-mapping-2.11.29.tgz",
@@ -28873,6 +28884,7 @@ __COREGSM_EOF__
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.2",
     "autoprefixer": "^10.4.20",
+    "axe-core": "^4.14.0",
     "happy-dom": "^21.0.4",
     "oxlint": "^1.89.0",
     "postcss": "^8.5.31",

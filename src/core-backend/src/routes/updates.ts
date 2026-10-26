@@ -302,7 +302,7 @@ router.get('/api/update/preflight', admin, (_req, res) => {
 });
 
 router.put('/api/update/settings', admin, (req, res) => {
-  const b = (req.body ?? {}) as { channel?: unknown; skip?: unknown; notify?: unknown; notifyLang?: unknown; remindDays?: unknown; notifyChannel?: unknown };
+  const b = (req.body ?? {}) as { channel?: unknown; skip?: unknown; notify?: unknown; notifyLang?: unknown; notifyMode?: unknown; remindDays?: unknown; notifyChannel?: unknown };
   if (b.channel !== undefined) {
     if (CHANNEL_LOCKED) return res.status(409).json({ error: 'Канал задан переменными окружения сервера' });
     if (b.channel !== 'release' && b.channel !== 'main') return res.status(400).json({ error: 'Канал: release или main' });
