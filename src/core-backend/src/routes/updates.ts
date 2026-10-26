@@ -192,6 +192,7 @@ function sendNotice(n: Notice): void {
   if (getSetting('update_notify') === '0') return;
   const embed: Record<string, unknown> = {
     title: n.title,
+    ...(n.url ? { url: n.url } : {}),
     description: n.description,
     color: n.color,
     ...(n.fields.length ? { fields: n.fields } : {}),
@@ -211,11 +212,21 @@ function sendNotice(n: Notice): void {
 
 type UpdateNoticeKind = 'available' | 'reminder' | 'done';
 /** builds a notice from the version, CHANGELOG.md and the settings, and sends it */
-async function sendUpdateNotice(kind: UpdateNoticeKind, from: string | null, to: string | null, line: (lang: 'ru' | 'en') => string): Promise<void> {
+/** the GitHub page of the repository the panel updates from (null for a fork on another host) */
+function repoWeb(): string | null {
+  const m = /^https:\/\/raw\.githubusercontent\.com\/([^/]+)\/([^/]+)\//.exec(`${UPDATE_BASE}/`);
+  return m ? `https://github.com/${m[1]}/${m[2]}` : null;
+}
+
+async function sendUpdateNotice(kind: UpdateNoticeKind, from: string | null, to: string | null, line: (lang: 'ru' | 'en') => string, builds: { from: string | null; to: string | null } = { from: null, to: null }): Promise<void> {
   let releases: ReturnType<typeof parseChangelog> = [];
   try { releases = (await loadNotes()).releases; } catch { /* the plain notice */ }
   const lang = parseNoticeLang(getSetting('update_notify_lang'));
-  sendNotice(buildNotice({ kind, lang, from, to, releases, line: line(lang), now: Date.now() }));
+  // links: the release page of each version (its tag is «build-<hash>») and the whole CHANGELOG.md
+  const web = repoWeb();
+  const release = (b: string | null) => (web && b && /^[a-f0-9]{6,64}$/.test(b) ? `${web}/releases/tag/build-${b}` : null);
+  const links = { from: release(builds.from), to: release(builds.to), more: web ? `${web}/blob/main/CHANGELOG.md` : null };
+  sendNotice(buildNotice({ kind, lang, from, to, releases, line: line(lang), now: Date.now(), links }));
 }
 
 function announceVersion(): void {
@@ -228,14 +239,14 @@ function announceVersion(): void {
     if (isQuietNow()) return;
     setSetting('update_announced', remote.build);
     setSetting('update_announced_at', String(Date.now()));
-    void sendUpdateNotice('available', labelOf(APP_VERSION), remote.label, (l) => (l === 'en' ? `Version \`${label}\` is ready to install.` : `Версия \`${label}\` готова к установке.`));
+    void sendUpdateNotice('available', labelOf(APP_VERSION), remote.label, (l) => (l === 'en' ? `Version \`${label}\` is ready to install.` : `Версия \`${label}\` готова к установке.`), { from: APP_VERSION || null, to: remote.build });
     return;
   }
   const announcedAt = Number(getSetting('update_announced_at')) || null;
   if (shouldRemind({ notify, remindDays: parseRemindDays(getSetting('update_remind_days')), available, latest: remote.build, announced: getSetting('update_announced'), announcedAt, reminded: getSetting('update_reminded'), skipped, now: Date.now() }) && !isQuietNow()) {
     setSetting('update_reminded', remote.build);
     const cur = labelOf(APP_VERSION) ?? 'current';
-    void sendUpdateNotice('reminder', labelOf(APP_VERSION), remote.label, (l) => (l === 'en' ? `Version \`${label}\` is still waiting; this panel runs \`${cur}\`.` : `Версия \`${label}\` всё ещё ждёт установки: у вас \`${cur}\`.`));
+    void sendUpdateNotice('reminder', labelOf(APP_VERSION), remote.label, (l) => (l === 'en' ? `Version \`${label}\` is still waiting; this panel runs \`${cur}\`.` : `Версия \`${label}\` всё ещё ждёт установки: у вас \`${cur}\`.`), { from: APP_VERSION || null, to: remote.build });
   }
 }
 
@@ -263,7 +274,7 @@ export function recordJob(): void {
     void sendUpdateNotice('done', labelOf(before), now, (l) => {
       const keep = rb ? (l === 'en' ? '\n↩️ A rollback is possible: the previous version is kept together with the database.' : '\n↩️ Откат возможен: предыдущая версия сохранена вместе с базой.') : '';
       return `${l === 'en' ? (now ? `Version \`${now}\` is installed.` : 'The update is installed.') : job.message}${keep}`;
-    });
+    }, { from: before, to: APP_VERSION || null });
   }
 }
 

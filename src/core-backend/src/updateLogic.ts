@@ -207,7 +207,7 @@ export function noticeWarnings(releases: NotesRelease[], lang: NoticeLang): stri
 }
 
 /** the groups of the releases as embed fields: «name» is the group (with the version when there are several releases) */
-export function noticeFields(releases: NotesRelease[], lang: NoticeLang, limits = { field: 1000, count: 10, total: 4200 }): { name: string; value: string }[] {
+export function noticeFields(releases: NotesRelease[], lang: NoticeLang, limits = { field: 1000, count: 10, total: 4200 }, moreUrl: string | null = null): { name: string; value: string }[] {
   const out: { name: string; value: string }[] = [];
   const multi = releases.length > 1;
   let total = 0;
@@ -231,7 +231,8 @@ export function noticeFields(releases: NotesRelease[], lang: NoticeLang, limits 
   }
   if (left > 0 && out.length > 0) {
     const last = out[out.length - 1]!;
-    const more = lang === 'en' ? `… and ${left} more` : `… и ещё ${left}`;
+    const word = lang === 'en' ? `… and ${left} more` : `… и ещё ${left}`;
+    const more = moreUrl ? `[${word}](${moreUrl})` : word;
     if (last.value.length + more.length + 1 <= 1024) last.value += `\n${more}`;
   }
   return out;
@@ -244,17 +245,19 @@ export function shouldRemind(o: { notify: boolean; remindDays: number; available
   return o.announcedAt != null && o.now - o.announcedAt >= o.remindDays * 86_400_000;
 }
 
-export interface Notice { title: string; description: string; fields: { name: string; value: string }[]; footer: string; color: number }
+export interface Notice { title: string; /** the title is a link to the release of the new version */ url?: string; description: string; fields: { name: string; value: string }[]; footer: string; color: number }
 
 /** the text of a notice: «available» (a new version), «reminder» (nobody installed it) and «done» (the panel was updated) */
-export function buildNotice(o: { kind: 'available' | 'reminder' | 'done'; lang: NoticeLang; from: string | null; to: string | null; releases: NotesRelease[]; line: string; now: number }): Notice {
+export function buildNotice(o: { kind: 'available' | 'reminder' | 'done'; lang: NoticeLang; from: string | null; to: string | null; releases: NotesRelease[]; line: string; now: number; links?: { from?: string | null; to?: string | null; more?: string | null } }): Notice {
   const en = o.lang === 'en';
   const between = notesBetween(o.releases, o.from, o.to);
   const target = o.releases.find((r) => r.version === o.to);
   const age = releaseAgeDays(target?.date, o.now);
-  const arrow = o.from && o.to && o.from !== o.to ? `${o.from} → ${o.to}` : o.to ?? '';
+  const lk = o.links ?? {};
+  const ver = (v: string, url?: string | null) => (url ? `[${v}](${url})` : v);
+  const arrow = o.from && o.to && o.from !== o.to ? `${ver(o.from, lk.from)} → ${ver(o.to, lk.to)}` : o.to ? ver(o.to, lk.to) : '';
   const skipped = Math.max(0, between.length - 1);
-  const lines: string[] = [o.line];
+  const lines: string[] = [...(arrow ? [`**${arrow}**`] : []), o.line];
   if (skipped > 0) lines.push(en ? `Versions in between: ${skipped}` : `Пропущено версий между ними: ${skipped}`);
   lines.push(...noticeWarnings(between, o.lang));
   if (o.kind !== 'done') lines.push(en ? 'Install: Settings → Updates and backups.' : 'Установить: Настройки → Обновления и копии.');
@@ -263,5 +266,5 @@ export function buildNotice(o: { kind: 'available' | 'reminder' | 'done'; lang: 
     : (en ? 'Panel updated' : 'Панель обновлена');
   let footer = '';
   if (target?.date) footer = en ? `Released ${target.date}${age != null ? ` · ${daysAgoText(age, 'en')}` : ''}` : `Вышла ${target.date}${age != null ? ` · ${daysAgoText(age, 'ru')}` : ''}`;
-  return { title: arrow ? `${title}: ${arrow}` : title, description: lines.join('\n'), fields: noticeFields(between, o.lang), footer, color: o.kind === 'done' ? 0x23a55a : o.kind === 'reminder' ? 0xf0b232 : 0x5865f2 };
+  return { title, ...(lk.to ? { url: lk.to } : {}), description: lines.join('\n'), fields: noticeFields(between, o.lang, undefined, lk.more ?? null), footer, color: o.kind === 'done' ? 0x23a55a : o.kind === 'reminder' ? 0xf0b232 : 0x5865f2 };
 }
