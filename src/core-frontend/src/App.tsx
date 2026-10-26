@@ -6,6 +6,7 @@ import { AuthContext } from './auth';
 import { onAccentChange, paintBrand, useAutoAccent } from './accent';
 import NotificationBell from './components/NotificationBell';
 import AttentionBell from './components/AttentionBell';
+import RulesBanner from './components/RulesBanner';
 import { AppFooter, BotPill, ProfileMenu, RouteProgress, Tooltips, restoreScroll, useHideOnScroll, usePanelPulse, useScrollMemory } from './components/ShellExtras';
 import NotFound from './components/NotFound';
 import { ConfirmHost } from './confirm';
@@ -464,6 +465,7 @@ export default function App() {
         </header>
 
         <main id="main-content" ref={mainRef} tabIndex={-1} key={page} className="pop min-w-0 outline-hidden">
+          {me && !isStaff && <RulesBanner />}
           <PageFrame>
             {page === 'servers' && <ServersPage sub={sub} />}
             {page === 'news' && <NewsFeed sub={sub} />}

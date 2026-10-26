@@ -7,6 +7,7 @@ import { AdminPage, GoLink, IconSettings, PageHead, Section } from '../ui';
 import { SETTINGS_TABS } from './adminNav';
 import { BotCard } from './settings/BotCard';
 import { BrandCard } from './settings/BrandCard';
+import CustomGamesCard from '../components/CustomGamesCard';
 import { PasswordCard } from './settings/PasswordCard';
 import { UpdateCard } from './settings/UpdateCard';
 import { SaveBarProvider } from '../saveBar';
@@ -66,7 +67,7 @@ export default function SettingsPage({ sub, updateAvailable }: { sub: string; up
           </a>
         ))}
       </nav>
-      {tab === 'bot' && <><BotCard /><PollSettingsCard /></>}
+      {tab === 'bot' && <><BotCard /><PollSettingsCard /><CustomGamesCard /></>}
       {tab === 'brand' && <BrandCard />}
       {tab === 'security' && (
         <>

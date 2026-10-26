@@ -1,4 +1,5 @@
 /** Users: registration and access settings, pending requests, roles and passwords. */
+import RulesHistoryCard from '../../components/RulesHistoryCard';
 import { useEffect, useRef, useState } from 'react';
 import { type Access, api, type Perm, PERM_LABELS, type UserRow } from '../../api';
 import '../../styles/admin.css';
@@ -212,6 +213,8 @@ function UsersTabInner() {
           className="min-h-32"
         />
       </Section>
+
+      <RulesHistoryCard rulesKey={rules} onRestore={setRules} />
 
       {pendingUsers.length > 0 && (
         <Section

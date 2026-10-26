@@ -9,6 +9,7 @@ import { pingVerdict, thin } from '../botLatencyLogic.js';
 import { bot, BOT_COMMANDS, clientIdFromToken, discordLoginReady, invitePayload } from '../botState.js';
 import { getSetting, setSetting } from '../db.js';
 import { BOT_TOKEN_RE, maskProxy, normalizeProxy, PROXY_HELP, PROXY_RE, TOKEN_HELP } from '../proxyInput.js';
+import { currentRules } from '../rules.js';
 import { baseOf, brand, LOGO_PATH, LOGO_TYPES, logoFile, publicBase, registrationMode, rulesText } from '../site.js';
 
 export const router = express.Router();
@@ -84,7 +85,11 @@ router.put('/api/access', admin, (req, res) => {
   if (b.data.publicPanel !== undefined) setSetting('public_panel', b.data.publicPanel ? '1' : '0');
   if (b.data.registration !== undefined) setSetting('registration_open', b.data.registration ? '1' : '0');
   if (b.data.registrationMode !== undefined) setSetting('registration_mode', b.data.registrationMode);
-  if (b.data.rules !== undefined) setSetting('rules_text', b.data.rules.trim());
+  if (b.data.rules !== undefined) {
+    setSetting('rules_text', b.data.rules.trim());
+    // the change becomes a new version, so old consents do not count for it
+    currentRules();
+  }
   res.json(accessPayload());
 });
 
