@@ -14,6 +14,11 @@ interface language; the GitHub release text is built from the section of the ver
 - Пометки в конце русской части: `[migration]` — меняется база данных, `[env]` — нужны новые настройки сервера, `⚠` в начале — несовместимое изменение.
 - Новые пункты идут в раздел «Не выпущено». Релиз выпускается только по команде владельца: тогда раздел переименовывается в `## <версия> · <дата>` (версия из `version.txt`).
 
+## Не выпущено | Unreleased
+
+### ✨ Новое | New
+- 🔗 В сообщениях об обновлении в Discord версии в первой строке («1.0.0.20 → 1.0.0.27»), заголовок и «… и ещё N» стали ссылками на релиз версии и на CHANGELOG в GitHub | In the Discord update notices the versions in the first line («1.0.0.20 → 1.0.0.27»), the title and the «… and N more» note are now links to the release of the version and to CHANGELOG on GitHub
+
 ## 1.0.0.27 · 26.10.2026
 
 ### ✨ Новое | New
