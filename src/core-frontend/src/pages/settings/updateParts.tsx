@@ -146,7 +146,7 @@ export function HistoryCard({ refreshKey }: { refreshKey: unknown }) {
 /** channel and Discord notices */
 export function OptionsCard({ info, onChange }: { info: UpdateInfo; onChange: (i: UpdateInfo) => void }) {
   const [error, setError] = useState('');
-  const save = async (body: { channel?: 'release' | 'main'; notify?: boolean }) => {
+  const save = async (body: { channel?: 'release' | 'main'; notify?: boolean; notifyTo?: 'channel' | 'dm' | 'both'; notifyLang?: 'ru' | 'en'; remindDays?: number }) => {
     setError('');
     try {
       onChange(await api<UpdateInfo>('/update/settings', 'PUT', body));
@@ -171,6 +171,33 @@ export function OptionsCard({ info, onChange }: { info: UpdateInfo; onChange: (i
         <input type="checkbox" className="mt-1 h-4 w-4 accent-brand" checked={info.notify !== false} onChange={(e) => void save({ notify: e.target.checked })} aria-describedby="upd-notify-hint" />
         <span>{t('upd.o.notify')}<span id="upd-notify-hint" className="mt-0.5 block text-sm font-semibold text-mute">{t('upd.o.notifyHint')}</span></span>
       </label>
+      {info.notify !== false && (
+        <div className="grid gap-3 sm:grid-cols-3">
+          <div className="sm:col-span-3">
+            <label htmlFor="upd-to" className="label">{t('upd.o.to')}</label>
+            <select id="upd-to" className="input" value={info.notifyTo ?? 'channel'} onChange={(e) => void save({ notifyTo: e.target.value as 'channel' | 'dm' | 'both' })} aria-describedby="upd-to-hint">
+              <option value="channel">{t('upd.o.to.channel')}</option>
+              <option value="dm">{t('upd.o.to.dm')}</option>
+              <option value="both">{t('upd.o.to.both')}</option>
+            </select>
+            <p id="upd-to-hint" className="mt-1 text-sm font-semibold text-mute">{t('upd.o.toHint')}</p>
+          </div>
+          <div>
+            <label htmlFor="upd-lang" className="label">{t('upd.o.lang')}</label>
+            <select id="upd-lang" className="input" value={info.notifyLang ?? 'ru'} onChange={(e) => void save({ notifyLang: e.target.value as 'ru' | 'en' })}>
+              <option value="ru">{'Русский'}</option>
+              <option value="en">English</option>
+            </select>
+          </div>
+          <div>
+            <label htmlFor="upd-remind" className="label">{t('upd.o.remind')}</label>
+            <select id="upd-remind" className="input" value={info.remindDays ?? 7} onChange={(e) => void save({ remindDays: Number(e.target.value) })}>
+              <option value={0}>{t('upd.o.remind.off')}</option>
+              {[3, 7, 14, 30].map((d) => <option key={d} value={d}>{t('upd.o.remind.n', { n: d })}</option>)}
+            </select>
+          </div>
+        </div>
+      )}
       <ErrorLine text={error} />
     </Section>
   );

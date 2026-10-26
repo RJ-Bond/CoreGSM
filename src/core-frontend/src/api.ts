@@ -255,6 +255,11 @@ export interface UpdateInfo {
   /** the offered version was skipped by an administrator */
   skipped?: boolean;
   notify?: boolean;
+  /** where the notices go: the alerts channel, the direct messages of the administrators, or both */
+  notifyTo?: 'channel' | 'dm' | 'both';
+  notifyLang?: 'ru' | 'en';
+  /** days before the reminder about a version nobody installed (0 = none) */
+  remindDays?: number;
 }
 
 export type UpdateStage = 'download' | 'snapshot' | 'install' | 'health' | 'rollback';
