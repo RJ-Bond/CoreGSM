@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 import type { Express } from 'express';
 import skia from 'skia-canvas';
 import { JWT_SECRET } from './config.js';
+import { drawOnlineChart, type ChartStep } from './chartDraw.js';
 import { chartScale } from './chartLogic.js';
 import { db } from './db.js';
 import { gameProfile } from './games.js';
@@ -45,28 +46,8 @@ export async function renderChart(series: { players: (number | null)[]; down: bo
   const right = W - 16;
   const top = 34;
   const bottom = H - 30;
-  const x = (i: number) => left + ((right - left) * i) / (POINTS - 1);
-  const y = (v: number) => bottom - ((bottom - top) * v) / max;
-  // outages: a red band behind the half hours the server did not answer
-  ctx.fillStyle = 'rgba(242,63,66,.25)';
-  series.down.forEach((d, i) => { if (d) ctx.fillRect(x(i) - (right - left) / POINTS / 2, top - 6, (right - left) / POINTS, bottom - top + 12); });
-  // the area under the line
-  const area = ctx.createLinearGradient(0, top, 0, bottom);
-  area.addColorStop(0, `${color}88`);
-  area.addColorStop(1, `${color}08`);
-  ctx.fillStyle = area;
-  ctx.beginPath();
-  ctx.moveTo(x(0), bottom);
-  values.forEach((v, i) => ctx.lineTo(x(i), y(v)));
-  ctx.lineTo(x(POINTS - 1), bottom);
-  ctx.closePath();
-  ctx.fill();
-  ctx.strokeStyle = color;
-  ctx.lineWidth = 3;
-  ctx.lineJoin = 'round';
-  ctx.beginPath();
-  values.forEach((v, i) => (i ? ctx.lineTo(x(i), y(v)) : ctx.moveTo(x(i), y(v))));
-  ctx.stroke();
+  const steps: ChartStep[] = series.players.map((p, i) => ({ players: p ?? 0, down: series.down[i] ?? false, empty: p == null }));
+  drawOnlineChart(ctx, { x: left, y: top, w: right - left, h: bottom - top }, steps, max, { accent: color, bad: '#f23f42', warn: '#f6b73c', ink: '#ffffff' });
   ctx.fillStyle = 'rgba(255,255,255,.75)';
   ctx.font = `600 15px ${SANS}`;
   ctx.fillText('Онлайн за 24 часа', left, 22);

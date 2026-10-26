@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="54cba97ffcb2"
+COREGSM_BUILD="f66b641e58e9"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.0.0.14"
+COREGSM_VERSION="1.0.0.15"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -5260,7 +5260,11 @@ import { db, type ServerRow, type StatusRow } from './db.js';
 import { gameLabel } from './games.js';
 import { gameIconPath } from './gameIcons.js';
 import { GAME_IMAGES } from './gameImages.js';
+import { chartTop, drawOnlineChart } from './chartDraw.js';
+import { avatarColor, initialOf, stateBand, whoInGame } from './cardLogic.js';
 import { coverFile } from './covers.js';
+import { getSetting } from './db.js';
+import { maintenanceFor } from './maintenance.js';
 
 const { Canvas, Path2D, loadImage } = skia;
 
@@ -5384,7 +5388,8 @@ async function renderCardNow(serverId: number): Promise<Buffer | null> {
   const names: string[] = st ? JSON.parse(st.player_names) : [];
   const [abbr, accent] = GAME_COLORS[s.game] ?? [s.game.slice(0, 2).toUpperCase(), C.brand];
   const laggy = online && st?.ping != null && st.ping > 100;
-  const status = !st ? C.mute : !online ? C.bad : laggy ? C.warn : C.ok;
+  const maint = maintenanceFor(serverId, now);
+  const status = maint ? '#7b8cff' : !st ? C.mute : !online ? C.bad : laggy ? C.warn : C.ok;
 
   const canvas = new Canvas(W, H);
   const ctx: any = canvas.getContext('2d');
@@ -5405,8 +5410,11 @@ async function renderCardNow(serverId: number): Promise<Buffer | null> {
     try { cover = await loadImage(file); } catch { /* a broken file: no cover */ }
   }
   if (cover) {
-    const k = Math.max(W / cover.width, H / cover.height);
+    // the cover is blurred and a little larger than the card, so the text on top stays calm and the edges are not soft
+    const k = Math.max(W / cover.width, H / cover.height) * 1.08;
+    ctx.filter = 'blur(7px)';
     ctx.drawImage(cover, (W - cover.width * k) / 2, (H - cover.height * k) / 2, cover.width * k, cover.height * k);
+    ctx.filter = 'none';
     const veil = ctx.createLinearGradient(0, 0, W, 0);
     veil.addColorStop(0, 'rgba(12, 10, 24, 0.95)');
     veil.addColorStop(0.5, 'rgba(12, 10, 24, 0.84)');
@@ -5464,7 +5472,7 @@ async function renderCardNow(serverId: number): Promise<Buffer | null> {
   }
 
   // status pill (top right)
-  const label = !st ? 'ОЖИДАНИЕ' : !online ? 'OFFLINE' : laggy ? 'LAG' : 'ONLINE';
+  const label = maint ? 'ОБСЛУЖИВАНИЕ' : !st ? 'ОЖИДАНИЕ' : !online ? 'OFFLINE' : laggy ? 'LAG' : 'ONLINE';
   ctx.font = `700 21px ${SANS}`;
   const pw = ctx.measureText(label).width + 60;
   const px = W - 48 - pw;
@@ -5547,11 +5555,46 @@ async function renderCardNow(serverId: number): Promise<Buffer | null> {
     ctx.fill();
     ctx.restore();
   }
-  ctx.fillStyle = C.mute;
-  ctx.font = `700 18px ${SANS}`;
-  const inGame = online && names.length ? names.slice(0, 4).join(', ') + (names.length > 4 ? ` +${names.length - 4}` : '') : '';
-  if (inGame) ctx.fillText(fit(ctx, 'В игре: ' + inGame, barW), 48, 362);
-  else if (!online && st) ctx.fillText('Сервер сейчас недоступен', 48, 362);
+  // who is in the game: round avatars with the first letter and the nick; the rest as «+N»
+  if (online && names.length) {
+    const who = whoInGame(names, 4);
+    const list = who.rest > 0 ? who.shown.slice(0, 3) : who.shown;
+    const more = who.rest > 0 ? who.rest + 1 : 0;
+    const slotW = barW / 4;
+    const r = 15;
+    const cy0 = 354;
+    list.forEach((nick, i) => {
+      const x0 = 48 + i * slotW;
+      ctx.fillStyle = avatarColor(nick);
+      ctx.beginPath();
+      ctx.arc(x0 + r, cy0, r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#0e0c1b';
+      ctx.font = `800 17px ${SANS}`;
+      ctx.textAlign = 'center';
+      ctx.fillText(initialOf(nick), x0 + r, cy0 + 6);
+      ctx.textAlign = 'left';
+      ctx.fillStyle = C.mute;
+      ctx.font = `700 16px ${SANS}`;
+      ctx.fillText(fit(ctx, nick, slotW - r * 2 - 18), x0 + r * 2 + 8, cy0 + 6);
+    });
+    if (more) {
+      const x0 = 48 + list.length * slotW;
+      ctx.fillStyle = C.soft;
+      ctx.beginPath();
+      ctx.arc(x0 + r, cy0, r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = C.ink;
+      ctx.font = `800 14px ${SANS}`;
+      ctx.textAlign = 'center';
+      ctx.fillText(`+${more}`, x0 + r, cy0 + 5);
+      ctx.textAlign = 'left';
+    }
+  } else if (!online && st) {
+    ctx.fillStyle = C.mute;
+    ctx.font = `700 18px ${SANS}`;
+    ctx.fillText('Сервер сейчас недоступен', 48, 362);
+  }
 
   // the last 24 hours: players, outages in red, the 30-day record as a dashed line
   const gx = 592, gy = 160, gw = W - 48 - gx, gh = 206;
@@ -5569,64 +5612,7 @@ async function renderCardNow(serverId: number): Promise<Buffer | null> {
   ctx.fillText(known.length ? `пик ${peak}` : 'нет данных', gx + gw - 22, gy + 34);
   ctx.textAlign = 'left';
   const cx = gx + 22, cy = gy + 52, cw = gw - 44, ch = gh - 74;
-  const top = Math.max(1, max, peak, record ?? 0);
-  const xAt = (i: number) => cx + (i / (steps.length - 1)) * cw;
-  const yAt = (v: number) => cy + ch - (v / top) * ch;
-  // outages
-  ctx.fillStyle = alpha(C.bad, 0.2);
-  steps.forEach((b, i) => { if (!b.empty && b.down) ctx.fillRect(xAt(i) - cw / steps.length / 2, cy, cw / steps.length + 0.5, ch); });
-  // the record
-  if (record) {
-    ctx.save();
-    ctx.setLineDash([6, 6]);
-    ctx.strokeStyle = alpha(C.warn, 0.55);
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    ctx.moveTo(cx, yAt(record));
-    ctx.lineTo(cx + cw, yAt(record));
-    ctx.stroke();
-    ctx.restore();
-  }
-  // the players line, smooth, with a soft area under it
-  if (known.length > 1) {
-    const pts = steps.map((b, i) => [xAt(i), yAt(b.players)] as [number, number]);
-    const line = () => {
-      ctx.moveTo(pts[0][0], pts[0][1]);
-      for (let i = 1; i < pts.length; i++) {
-        const [x0, y0] = pts[i - 1], [x1, y1] = pts[i];
-        ctx.bezierCurveTo((x0 + x1) / 2, y0, (x0 + x1) / 2, y1, x1, y1);
-      }
-    };
-    const area = ctx.createLinearGradient(0, cy, 0, cy + ch);
-    area.addColorStop(0, alpha(accent, 0.42));
-    area.addColorStop(1, alpha(accent, 0));
-    ctx.beginPath();
-    line();
-    ctx.lineTo(cx + cw, cy + ch);
-    ctx.lineTo(cx, cy + ch);
-    ctx.closePath();
-    ctx.fillStyle = area;
-    ctx.fill();
-    ctx.beginPath();
-    line();
-    ctx.save();
-    ctx.shadowColor = alpha(accent, 0.7);
-    ctx.shadowBlur = 10;
-    ctx.strokeStyle = accent;
-    ctx.lineWidth = 3;
-    ctx.lineJoin = 'round';
-    ctx.stroke();
-    ctx.restore();
-    // now
-    const [nx, ny] = pts[pts.length - 1];
-    ctx.fillStyle = C.ink;
-    ctx.beginPath();
-    ctx.arc(nx, ny, 6, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = accent;
-    ctx.lineWidth = 3;
-    ctx.stroke();
-  }
+  drawOnlineChart(ctx, { x: cx, y: cy, w: cw, h: ch }, steps, chartTop(steps, max, record), { accent, bad: C.bad, warn: C.warn, ink: C.ink }, record);
   ctx.fillStyle = C.dim;
   ctx.font = `700 14px ${SANS}`;
   ctx.fillText('−24 ч', cx, gy + gh - 8);
@@ -5662,6 +5648,29 @@ async function renderCardNow(serverId: number): Promise<Buffer | null> {
   ctx.fillStyle = C.brand;
   ctx.fillText('CoreGSM', W - 48, H - 12);
   ctx.textAlign = 'left';
+
+  // a server that is down or under maintenance: the card dims and a banner crosses it, so the preview in a chat says it at once
+  const band = stateBand({ known: !!st, online, since: st?.state_since ?? null, maintenanceUntil: maint?.until ?? null }, getSetting('timezone') || process.env.TZ || 'Europe/Moscow');
+  if (band) {
+    ctx.save();
+    rr(ctx, 0, 0, W, H, 32);
+    ctx.clip();
+    ctx.fillStyle = 'rgba(10, 8, 20, 0.5)';
+    ctx.fillRect(0, 0, W, H);
+    ctx.translate(W / 2, H / 2);
+    ctx.rotate(-0.16);
+    const color = band.kind === 'maint' ? '#7b8cff' : C.bad;
+    ctx.fillStyle = alpha(color, 0.92);
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.45)';
+    ctx.shadowBlur = 24;
+    ctx.fillRect(-W, -46, W * 2, 92);
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = '#ffffff';
+    ctx.font = `800 46px ${SANS}`;
+    ctx.textAlign = 'center';
+    ctx.fillText(band.text, 0, 16);
+    ctx.restore();
+  }
 
   const buf = (await canvas.toBuffer('png')) as Buffer;
   cache.set(serverId, { at: Date.now(), buf });
@@ -5703,6 +5712,140 @@ export async function renderGameIcon(game: string): Promise<Buffer> {
   if (iconCache.size >= 100) iconCache.delete(iconCache.keys().next().value as string);
   iconCache.set(game, buf);
   return buf;
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/cardLogic.ts" << '__COREGSM_EOF__'
+/** The server card picture: pure helpers (names, colours, state banner). */
+
+/** the first letter or digit of a name, upper case; «?» for names made of symbols */
+export function initialOf(name: string): string {
+  const m = Array.from(name.trim()).find((c) => /[\p{L}\p{N}]/u.test(c));
+  return m ? m.toUpperCase() : '?';
+}
+
+const AVATAR_COLORS = ['#7b6cf6', '#3ddc84', '#f6b73c', '#ff7a59', '#38bdf8', '#e879f9', '#2dd4bf', '#a3e635'];
+/** a stable colour per name, so the same player always looks the same */
+export function avatarColor(name: string): string {
+  let h = 0;
+  for (const c of name.toLowerCase()) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  return AVATAR_COLORS[h % AVATAR_COLORS.length]!;
+}
+
+/** who to show on the card: up to `max` names, and how many more there are */
+export function whoInGame(names: string[], max = 4): { shown: string[]; rest: number } {
+  const clean = names.map((n) => n.trim()).filter(Boolean);
+  return { shown: clean.slice(0, max), rest: Math.max(0, clean.length - max) };
+}
+
+/** «14:20» in the given time zone (the panel's) */
+export function clock(ts: number, timeZone: string): string {
+  try {
+    return new Date(ts).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', timeZone });
+  } catch {
+    return new Date(ts).toISOString().slice(11, 16);
+  }
+}
+
+export interface StateBand {
+  kind: 'offline' | 'maint';
+  text: string;
+}
+
+/** the diagonal banner of a card: none while the server is up; «ОФЛАЙН · с 14:20» or «ОБСЛУЖИВАНИЕ · до 16:00» */
+export function stateBand(s: { known: boolean; online: boolean; since: number | null; maintenanceUntil: number | null }, timeZone: string): StateBand | null {
+  if (s.maintenanceUntil) return { kind: 'maint', text: `ОБСЛУЖИВАНИЕ · до ${clock(s.maintenanceUntil, timeZone)}` };
+  if (!s.known || s.online) return null;
+  return { kind: 'offline', text: s.since ? `ОФЛАЙН · с ${clock(s.since, timeZone)}` : 'ОФЛАЙН' };
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/chartDraw.ts" << '__COREGSM_EOF__'
+/** One way to draw the online chart: the card of a server and the picture under its Discord message share it. */
+/* eslint-disable @typescript-eslint/no-explicit-any */
+
+export interface ChartStep {
+  players: number;
+  /** the server did not answer during this step */
+  down: boolean;
+  /** no poll fell into this step */
+  empty: boolean;
+}
+
+export interface ChartColors {
+  accent: string;
+  bad: string;
+  warn: string;
+  ink: string;
+}
+
+const alphaOf = (hex: string, a: number): string => {
+  const n = parseInt(hex.slice(1), 16);
+  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})`;
+};
+
+/** the busiest value on the chart (never below 1) so the line always has a scale */
+export const chartTop = (steps: ChartStep[], ...extra: (number | null | undefined)[]): number => Math.max(1, ...steps.map((b) => b.players), ...extra.map((v) => v ?? 0));
+
+/**
+ * Outages as red bands, the record as a dashed line, the players as a smooth line over a soft area, and a ring at «now».
+ * `top` is the value at the upper edge of the box.
+ */
+export function drawOnlineChart(ctx: any, box: { x: number; y: number; w: number; h: number }, steps: ChartStep[], top: number, colors: ChartColors, record?: number | null): void {
+  const { x: cx, y: cy, w: cw, h: ch } = box;
+  const known = steps.filter((b) => !b.empty);
+  const xAt = (i: number) => cx + (i / (steps.length - 1)) * cw;
+  const yAt = (v: number) => cy + ch - (v / top) * ch;
+  ctx.fillStyle = alphaOf(colors.bad, 0.2);
+  steps.forEach((b, i) => { if (!b.empty && b.down) ctx.fillRect(xAt(i) - cw / steps.length / 2, cy, cw / steps.length + 0.5, ch); });
+  if (record) {
+    ctx.save();
+    ctx.setLineDash([6, 6]);
+    ctx.strokeStyle = alphaOf(colors.warn, 0.55);
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(cx, yAt(record));
+    ctx.lineTo(cx + cw, yAt(record));
+    ctx.stroke();
+    ctx.restore();
+  }
+  if (known.length < 2) return;
+  const pts = steps.map((b, i) => [xAt(i), yAt(b.players)] as [number, number]);
+  const line = () => {
+    ctx.moveTo(pts[0]![0], pts[0]![1]);
+    for (let i = 1; i < pts.length; i++) {
+      const [x0, y0] = pts[i - 1]!, [x1, y1] = pts[i]!;
+      ctx.bezierCurveTo((x0 + x1) / 2, y0, (x0 + x1) / 2, y1, x1, y1);
+    }
+  };
+  const area = ctx.createLinearGradient(0, cy, 0, cy + ch);
+  area.addColorStop(0, alphaOf(colors.accent, 0.42));
+  area.addColorStop(1, alphaOf(colors.accent, 0));
+  ctx.beginPath();
+  line();
+  ctx.lineTo(cx + cw, cy + ch);
+  ctx.lineTo(cx, cy + ch);
+  ctx.closePath();
+  ctx.fillStyle = area;
+  ctx.fill();
+  ctx.beginPath();
+  line();
+  ctx.save();
+  ctx.shadowColor = alphaOf(colors.accent, 0.7);
+  ctx.shadowBlur = 10;
+  ctx.strokeStyle = colors.accent;
+  ctx.lineWidth = 3;
+  ctx.lineJoin = 'round';
+  ctx.stroke();
+  ctx.restore();
+  const [nx, ny] = pts[pts.length - 1]!;
+  ctx.fillStyle = colors.ink;
+  ctx.beginPath();
+  ctx.arc(nx, ny, 6, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = colors.accent;
+  ctx.lineWidth = 3;
+  ctx.stroke();
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
@@ -18311,6 +18454,7 @@ import crypto from 'node:crypto';
 import type { Express } from 'express';
 import skia from 'skia-canvas';
 import { JWT_SECRET } from './config.js';
+import { drawOnlineChart, type ChartStep } from './chartDraw.js';
 import { chartScale } from './chartLogic.js';
 import { db } from './db.js';
 import { gameProfile } from './games.js';
@@ -18353,28 +18497,8 @@ export async function renderChart(series: { players: (number | null)[]; down: bo
   const right = W - 16;
   const top = 34;
   const bottom = H - 30;
-  const x = (i: number) => left + ((right - left) * i) / (POINTS - 1);
-  const y = (v: number) => bottom - ((bottom - top) * v) / max;
-  // outages: a red band behind the half hours the server did not answer
-  ctx.fillStyle = 'rgba(242,63,66,.25)';
-  series.down.forEach((d, i) => { if (d) ctx.fillRect(x(i) - (right - left) / POINTS / 2, top - 6, (right - left) / POINTS, bottom - top + 12); });
-  // the area under the line
-  const area = ctx.createLinearGradient(0, top, 0, bottom);
-  area.addColorStop(0, `${color}88`);
-  area.addColorStop(1, `${color}08`);
-  ctx.fillStyle = area;
-  ctx.beginPath();
-  ctx.moveTo(x(0), bottom);
-  values.forEach((v, i) => ctx.lineTo(x(i), y(v)));
-  ctx.lineTo(x(POINTS - 1), bottom);
-  ctx.closePath();
-  ctx.fill();
-  ctx.strokeStyle = color;
-  ctx.lineWidth = 3;
-  ctx.lineJoin = 'round';
-  ctx.beginPath();
-  values.forEach((v, i) => (i ? ctx.lineTo(x(i), y(v)) : ctx.moveTo(x(i), y(v))));
-  ctx.stroke();
+  const steps: ChartStep[] = series.players.map((p, i) => ({ players: p ?? 0, down: series.down[i] ?? false, empty: p == null }));
+  drawOnlineChart(ctx, { x: left, y: top, w: right - left, h: bottom - top }, steps, max, { accent: color, bad: '#f23f42', warn: '#f6b73c', ink: '#ffffff' });
   ctx.fillStyle = 'rgba(255,255,255,.75)';
   ctx.font = `600 15px ${SANS}`;
   ctx.fillText('Онлайн за 24 часа', left, 22);

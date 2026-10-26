@@ -3,7 +3,11 @@ import { db, type ServerRow, type StatusRow } from './db.js';
 import { gameLabel } from './games.js';
 import { gameIconPath } from './gameIcons.js';
 import { GAME_IMAGES } from './gameImages.js';
+import { chartTop, drawOnlineChart } from './chartDraw.js';
+import { avatarColor, initialOf, stateBand, whoInGame } from './cardLogic.js';
 import { coverFile } from './covers.js';
+import { getSetting } from './db.js';
+import { maintenanceFor } from './maintenance.js';
 
 const { Canvas, Path2D, loadImage } = skia;
 
@@ -127,7 +131,8 @@ async function renderCardNow(serverId: number): Promise<Buffer | null> {
   const names: string[] = st ? JSON.parse(st.player_names) : [];
   const [abbr, accent] = GAME_COLORS[s.game] ?? [s.game.slice(0, 2).toUpperCase(), C.brand];
   const laggy = online && st?.ping != null && st.ping > 100;
-  const status = !st ? C.mute : !online ? C.bad : laggy ? C.warn : C.ok;
+  const maint = maintenanceFor(serverId, now);
+  const status = maint ? '#7b8cff' : !st ? C.mute : !online ? C.bad : laggy ? C.warn : C.ok;
 
   const canvas = new Canvas(W, H);
   const ctx: any = canvas.getContext('2d');
@@ -148,8 +153,11 @@ async function renderCardNow(serverId: number): Promise<Buffer | null> {
     try { cover = await loadImage(file); } catch { /* a broken file: no cover */ }
   }
   if (cover) {
-    const k = Math.max(W / cover.width, H / cover.height);
+    // the cover is blurred and a little larger than the card, so the text on top stays calm and the edges are not soft
+    const k = Math.max(W / cover.width, H / cover.height) * 1.08;
+    ctx.filter = 'blur(7px)';
     ctx.drawImage(cover, (W - cover.width * k) / 2, (H - cover.height * k) / 2, cover.width * k, cover.height * k);
+    ctx.filter = 'none';
     const veil = ctx.createLinearGradient(0, 0, W, 0);
     veil.addColorStop(0, 'rgba(12, 10, 24, 0.95)');
     veil.addColorStop(0.5, 'rgba(12, 10, 24, 0.84)');
@@ -207,7 +215,7 @@ async function renderCardNow(serverId: number): Promise<Buffer | null> {
   }
 
   // status pill (top right)
-  const label = !st ? 'ОЖИДАНИЕ' : !online ? 'OFFLINE' : laggy ? 'LAG' : 'ONLINE';
+  const label = maint ? 'ОБСЛУЖИВАНИЕ' : !st ? 'ОЖИДАНИЕ' : !online ? 'OFFLINE' : laggy ? 'LAG' : 'ONLINE';
   ctx.font = `700 21px ${SANS}`;
   const pw = ctx.measureText(label).width + 60;
   const px = W - 48 - pw;
@@ -290,11 +298,46 @@ async function renderCardNow(serverId: number): Promise<Buffer | null> {
     ctx.fill();
     ctx.restore();
   }
-  ctx.fillStyle = C.mute;
-  ctx.font = `700 18px ${SANS}`;
-  const inGame = online && names.length ? names.slice(0, 4).join(', ') + (names.length > 4 ? ` +${names.length - 4}` : '') : '';
-  if (inGame) ctx.fillText(fit(ctx, 'В игре: ' + inGame, barW), 48, 362);
-  else if (!online && st) ctx.fillText('Сервер сейчас недоступен', 48, 362);
+  // who is in the game: round avatars with the first letter and the nick; the rest as «+N»
+  if (online && names.length) {
+    const who = whoInGame(names, 4);
+    const list = who.rest > 0 ? who.shown.slice(0, 3) : who.shown;
+    const more = who.rest > 0 ? who.rest + 1 : 0;
+    const slotW = barW / 4;
+    const r = 15;
+    const cy0 = 354;
+    list.forEach((nick, i) => {
+      const x0 = 48 + i * slotW;
+      ctx.fillStyle = avatarColor(nick);
+      ctx.beginPath();
+      ctx.arc(x0 + r, cy0, r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#0e0c1b';
+      ctx.font = `800 17px ${SANS}`;
+      ctx.textAlign = 'center';
+      ctx.fillText(initialOf(nick), x0 + r, cy0 + 6);
+      ctx.textAlign = 'left';
+      ctx.fillStyle = C.mute;
+      ctx.font = `700 16px ${SANS}`;
+      ctx.fillText(fit(ctx, nick, slotW - r * 2 - 18), x0 + r * 2 + 8, cy0 + 6);
+    });
+    if (more) {
+      const x0 = 48 + list.length * slotW;
+      ctx.fillStyle = C.soft;
+      ctx.beginPath();
+      ctx.arc(x0 + r, cy0, r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = C.ink;
+      ctx.font = `800 14px ${SANS}`;
+      ctx.textAlign = 'center';
+      ctx.fillText(`+${more}`, x0 + r, cy0 + 5);
+      ctx.textAlign = 'left';
+    }
+  } else if (!online && st) {
+    ctx.fillStyle = C.mute;
+    ctx.font = `700 18px ${SANS}`;
+    ctx.fillText('Сервер сейчас недоступен', 48, 362);
+  }
 
   // the last 24 hours: players, outages in red, the 30-day record as a dashed line
   const gx = 592, gy = 160, gw = W - 48 - gx, gh = 206;
@@ -312,64 +355,7 @@ async function renderCardNow(serverId: number): Promise<Buffer | null> {
   ctx.fillText(known.length ? `пик ${peak}` : 'нет данных', gx + gw - 22, gy + 34);
   ctx.textAlign = 'left';
   const cx = gx + 22, cy = gy + 52, cw = gw - 44, ch = gh - 74;
-  const top = Math.max(1, max, peak, record ?? 0);
-  const xAt = (i: number) => cx + (i / (steps.length - 1)) * cw;
-  const yAt = (v: number) => cy + ch - (v / top) * ch;
-  // outages
-  ctx.fillStyle = alpha(C.bad, 0.2);
-  steps.forEach((b, i) => { if (!b.empty && b.down) ctx.fillRect(xAt(i) - cw / steps.length / 2, cy, cw / steps.length + 0.5, ch); });
-  // the record
-  if (record) {
-    ctx.save();
-    ctx.setLineDash([6, 6]);
-    ctx.strokeStyle = alpha(C.warn, 0.55);
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    ctx.moveTo(cx, yAt(record));
-    ctx.lineTo(cx + cw, yAt(record));
-    ctx.stroke();
-    ctx.restore();
-  }
-  // the players line, smooth, with a soft area under it
-  if (known.length > 1) {
-    const pts = steps.map((b, i) => [xAt(i), yAt(b.players)] as [number, number]);
-    const line = () => {
-      ctx.moveTo(pts[0][0], pts[0][1]);
-      for (let i = 1; i < pts.length; i++) {
-        const [x0, y0] = pts[i - 1], [x1, y1] = pts[i];
-        ctx.bezierCurveTo((x0 + x1) / 2, y0, (x0 + x1) / 2, y1, x1, y1);
-      }
-    };
-    const area = ctx.createLinearGradient(0, cy, 0, cy + ch);
-    area.addColorStop(0, alpha(accent, 0.42));
-    area.addColorStop(1, alpha(accent, 0));
-    ctx.beginPath();
-    line();
-    ctx.lineTo(cx + cw, cy + ch);
-    ctx.lineTo(cx, cy + ch);
-    ctx.closePath();
-    ctx.fillStyle = area;
-    ctx.fill();
-    ctx.beginPath();
-    line();
-    ctx.save();
-    ctx.shadowColor = alpha(accent, 0.7);
-    ctx.shadowBlur = 10;
-    ctx.strokeStyle = accent;
-    ctx.lineWidth = 3;
-    ctx.lineJoin = 'round';
-    ctx.stroke();
-    ctx.restore();
-    // now
-    const [nx, ny] = pts[pts.length - 1];
-    ctx.fillStyle = C.ink;
-    ctx.beginPath();
-    ctx.arc(nx, ny, 6, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = accent;
-    ctx.lineWidth = 3;
-    ctx.stroke();
-  }
+  drawOnlineChart(ctx, { x: cx, y: cy, w: cw, h: ch }, steps, chartTop(steps, max, record), { accent, bad: C.bad, warn: C.warn, ink: C.ink }, record);
   ctx.fillStyle = C.dim;
   ctx.font = `700 14px ${SANS}`;
   ctx.fillText('−24 ч', cx, gy + gh - 8);
@@ -405,6 +391,29 @@ async function renderCardNow(serverId: number): Promise<Buffer | null> {
   ctx.fillStyle = C.brand;
   ctx.fillText('CoreGSM', W - 48, H - 12);
   ctx.textAlign = 'left';
+
+  // a server that is down or under maintenance: the card dims and a banner crosses it, so the preview in a chat says it at once
+  const band = stateBand({ known: !!st, online, since: st?.state_since ?? null, maintenanceUntil: maint?.until ?? null }, getSetting('timezone') || process.env.TZ || 'Europe/Moscow');
+  if (band) {
+    ctx.save();
+    rr(ctx, 0, 0, W, H, 32);
+    ctx.clip();
+    ctx.fillStyle = 'rgba(10, 8, 20, 0.5)';
+    ctx.fillRect(0, 0, W, H);
+    ctx.translate(W / 2, H / 2);
+    ctx.rotate(-0.16);
+    const color = band.kind === 'maint' ? '#7b8cff' : C.bad;
+    ctx.fillStyle = alpha(color, 0.92);
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.45)';
+    ctx.shadowBlur = 24;
+    ctx.fillRect(-W, -46, W * 2, 92);
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = '#ffffff';
+    ctx.font = `800 46px ${SANS}`;
+    ctx.textAlign = 'center';
+    ctx.fillText(band.text, 0, 16);
+    ctx.restore();
+  }
 
   const buf = (await canvas.toBuffer('png')) as Buffer;
   cache.set(serverId, { at: Date.now(), buf });
