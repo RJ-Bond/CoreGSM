@@ -16,6 +16,9 @@ interface language; the GitHub release text is built from the section of the ver
 
 ## Не выпущено | Unreleased
 
+### 🐛 Исправлено | Fixed
+- 🖼️ Картинка «Неделя на …»: названия серверов целиком видно — общее начало («[RU] Just-Skill.Ru | …») убирается, длинное имя переносится на две строки, заголовок «Серверы» не слипается с подписью | The weekly picture: server names are readable — the shared start («[RU] Just-Skill.Ru | …») is dropped, long names wrap onto two lines, and the «Servers» heading no longer touches its caption
+
 ## 1.0.0.9 · 26.10.2026
 
 ### ✨ Новое | New
