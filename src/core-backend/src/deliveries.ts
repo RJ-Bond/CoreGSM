@@ -205,8 +205,9 @@ export function registerDeliveries(deps: { app: Express; admin: RequestHandler; 
   app.get('/api/deliveries', admin, (req, res) => {
     const q = z
       .object({
-        status: z.enum(STATUSES).optional(),
-        kind: z.enum(KINDS).optional(),
+        // an empty value means «no filter»: the panel used to send ?status=&kind=
+        status: z.preprocess((v) => (v === '' ? undefined : v), z.enum(STATUSES).optional()),
+        kind: z.preprocess((v) => (v === '' ? undefined : v), z.enum(KINDS).optional()),
         limit: z.coerce.number().int().min(1).max(500).optional(),
       })
       .safeParse(req.query);

@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="9fa5ee3206a9"
+COREGSM_BUILD="18237f379ae9"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.0.0.45"
+COREGSM_VERSION="1.0.0.46"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -7237,8 +7237,9 @@ export function registerDeliveries(deps: { app: Express; admin: RequestHandler; 
   app.get('/api/deliveries', admin, (req, res) => {
     const q = z
       .object({
-        status: z.enum(STATUSES).optional(),
-        kind: z.enum(KINDS).optional(),
+        // an empty value means «no filter»: the panel used to send ?status=&kind=
+        status: z.preprocess((v) => (v === '' ? undefined : v), z.enum(STATUSES).optional()),
+        kind: z.preprocess((v) => (v === '' ? undefined : v), z.enum(KINDS).optional()),
         limit: z.coerce.number().int().min(1).max(500).optional(),
       })
       .safeParse(req.query);
@@ -104779,7 +104780,7 @@ export default function DeliveryList() {
   const [fetchedAt, setFetchedAt] = useState(0);
 
   const load = () =>
-    api<DeliveryResponse>(`/deliveries?status=${status}&kind=${kind}&limit=30`)
+    api<DeliveryResponse>(`/deliveries?${new URLSearchParams({ ...(status ? { status } : {}), ...(kind ? { kind } : {}), limit: '30' })}`)
       .then((r) => {
         setData({ counts: r.counts ?? { pending: 0, sending: 0, sent: 0, error: 0, dead: 0 }, items: Array.isArray(r.items) ? r.items : [] });
         setFetchedAt(Date.now());
@@ -105046,7 +105047,7 @@ export default function DiscordExtras({ servers }: { servers: Server[] }) {
         {noRoles && <p className="rounded-xl bg-warnbg px-3 py-2 text-sm font-bold text-warn">Бот не видит ролей, которые может выдавать. Дайте боту право «Управлять ролями» и поднимите его роль выше тех, что он будет выдавать.</p>}
         {!x && !error && <SkeletonRows n={2} />}
         {x && x.autoroles.length === 0 && !noRoles && <p className="text-sm font-semibold text-mute">Пока нет ни одной автороли.</p>}
-        <ul className="grid gap-2">
+        <ul className="grid grid-cols-[minmax(0,1fr)] gap-2">
           {x?.autoroles.map((r) => (
             <li key={r.id} className="flex flex-wrap items-center gap-3 rounded-2xl bg-soft px-3 py-2.5">
               <span className="h-3 w-3 shrink-0 rounded-full" style={{ background: roleDot(r.roleColor) }} aria-hidden />
@@ -105068,7 +105069,7 @@ export default function DiscordExtras({ servers }: { servers: Server[] }) {
       >
         {!x && !error && <SkeletonRows n={1} />}
         {noVoice && <p className="rounded-xl bg-warnbg px-3 py-2 text-sm font-bold text-warn">Бот не видит голосовых каналов, которые может переименовать. Дайте ему право «Управлять каналами» на нужном канале.</p>}
-        <ul className="grid gap-2">
+        <ul className="grid grid-cols-[minmax(0,1fr)] gap-2">
           {x?.counters.map((c) => (
             <li key={c.id} className="flex flex-wrap items-center gap-3 rounded-2xl bg-soft px-3 py-2.5">
               <span className="min-w-0 flex-1">
@@ -106645,7 +106646,7 @@ export default function ProbesSection() {
       <ErrorLine text={error} />
       {!list && !error && <SkeletonRows n={2} />}
       {list && list.length === 0 && <p className="text-sm font-semibold text-mute">Точек пока нет: серверы проверяет только сама панель.</p>}
-      <ul className="grid gap-2">
+      <ul className="grid grid-cols-[minmax(0,1fr)] gap-2">
         {list?.map((p) => (
           <li key={p.id} className="flex flex-wrap items-center gap-3 rounded-2xl bg-soft px-3 py-2.5">
             <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${p.alive ? 'bg-ok' : 'bg-mute'}`} aria-label={p.alive ? 'на связи' : 'не на связи'} role="img" />
@@ -106749,7 +106750,7 @@ export default function RestartPlans({ servers }: { servers: Server[] }) {
       title="Плановые перезапуски"
       description="Панель заранее предупредит игроков в Discord и в игровом чате, на время перезапуска откроет окно обслуживания (это не будет считаться сбоем) и, если настроен RCON, сама отправит серверу команду перезапуска."
     >
-      <ul className="grid gap-2">
+      <ul className="grid grid-cols-[minmax(0,1fr)] gap-2">
         {servers.map((s) => {
           const p = plans[s.id];
           return (
@@ -108348,7 +108349,7 @@ export default function WipeScenarios({ servers }: { servers: Server[] }) {
       title="Сценарий вайпа"
       description="Один сценарий на весь вайп: предупреждения в Discord и игровом чате, окно обслуживания, команды вайпа с новым сидом, новый сезон и новость «вайп прошёл». Каждый шаг выполняется один раз."
     >
-      <ul className="grid gap-2">
+      <ul className="grid grid-cols-[minmax(0,1fr)] gap-2">
         {servers.map((s) => {
           const w = next[s.id];
           return (
@@ -108389,7 +108390,7 @@ function WipeModal({ server, onClose }: { server: Server; onClose: () => void })
       <div className="space-y-3">
         <ErrorLine text={error} />
         {list === null ? <div className="skeleton h-20 rounded-2xl" /> : list.length === 0 ? <p className="text-sm font-semibold text-mute">Сценариев пока нет.</p> : (
-          <ul className="grid gap-2">
+          <ul className="grid grid-cols-[minmax(0,1fr)] gap-2">
             {list.map((w) => (
               <li key={w.id} className="rounded-2xl bg-soft px-3.5 py-3">
                 <div className="flex flex-wrap items-center gap-2">
@@ -127288,17 +127289,28 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
   const navRef = useRef<HTMLElement>(null);
   const [ind, setInd] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
   useLayoutEffect(() => {
-    const measure = () => {
+    const measure = (center = true) => {
       const nav = navRef.current;
       const el = nav?.querySelector<HTMLElement>('.adm-link[aria-current="page"]');
       if (!nav || !el || home) { setInd(null); return; }
-      setInd({ x: el.offsetLeft, y: el.offsetTop, w: el.offsetWidth, h: el.offsetHeight });
+      // measured against the nav itself: a link inside a positioned wrapper (.adm-item) has an offsetLeft of its own wrapper
+      const nb = nav.getBoundingClientRect();
+      const eb = el.getBoundingClientRect();
+      const x = eb.left - nb.left + nav.scrollLeft - nav.clientLeft;
+      const y = eb.top - nb.top + nav.scrollTop - nav.clientTop;
+      setInd({ x, y, w: eb.width, h: eb.height });
       // a phone shows the sections as a row that scrolls: keep the current one in the middle of it
-      if (nav.scrollWidth > nav.clientWidth + 2 && nav.scrollHeight <= nav.clientHeight + 2) nav.scrollTo({ left: Math.max(0, el.offsetLeft - (nav.clientWidth - el.offsetWidth) / 2), behavior: 'auto' });
+      if (center && nav.scrollWidth > nav.clientWidth + 2 && nav.scrollHeight <= nav.clientHeight + 2) nav.scrollTo({ left: Math.max(0, x - (nav.clientWidth - eb.width) / 2), behavior: 'auto' });
     };
     measure();
-    window.addEventListener('resize', measure);
-    return () => window.removeEventListener('resize', measure);
+    const onResize = () => measure();
+    window.addEventListener('resize', onResize);
+    // the links change width after the first measure (the font arrives, a badge appears): the pill and the scroll follow
+    let alive = true;
+    void document.fonts?.ready.then(() => { if (alive) measure(); });
+    const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(() => measure(false));
+    navRef.current?.querySelectorAll('.adm-link').forEach((l) => ro?.observe(l));
+    return () => { alive = false; ro?.disconnect(); window.removeEventListener('resize', onResize); };
   }, [current, home, pins, recent, badges, isAdmin, rail]);
   // «g» then a letter: go to a section (not while typing)
   useEffect(() => {
@@ -127795,7 +127807,7 @@ function SeasonsAdmin() {
       <Section title={t('adm.com.seasons')} description={!s ? undefined : rows.length ? t('adm.com.count', { n: rows.length }) : t('adm.com.none')}>
         {!s && !error && <SkeletonRows n={2} />}
         {rows.length > 1 && <SeasonLine rows={rows} />}
-        <ul className="grid gap-2">
+        <ul className="grid grid-cols-[minmax(0,1fr)] gap-2">
           {rows.map((r) => (
             <li key={r.id} className="flex flex-wrap items-center gap-3 rounded-2xl bg-soft px-3 py-2.5">
               <span className="min-w-0 flex-1">
@@ -127846,7 +127858,7 @@ function ReviewsAdmin() {
     <Section title={t('adm.com.revTitle')} description={t('adm.com.revDesc')}>
       <ErrorLine text={error} />
       {list === null ? <div className="skeleton h-24 rounded-2xl" /> : list.length === 0 ? <p className="text-sm font-semibold text-mute">{t('adm.com.revNone')}</p> : (
-        <ul className="grid gap-2">
+        <ul className="grid grid-cols-[minmax(0,1fr)] gap-2">
           {list.map((r) => (
             <li key={r.id} className={`flex flex-wrap items-start gap-3 rounded-2xl bg-soft px-3 py-2.5 ${r.hidden ? 'opacity-60' : ''}`}>
               <span className="min-w-0 flex-1">
@@ -130146,7 +130158,7 @@ function ServersBlock({ servers }: { servers: Community['servers'] }) {
         </div>
       )}
       {list.length === 0 ? <Empty art={<PeopleArt />} title={t('cm.srv.none')} text={t('cm.srv.noneText')} /> : (
-        <ul className="grid gap-2.5">
+        <ul className="grid grid-cols-[minmax(0,1fr)] gap-2.5">
           {list.map((s) => (
             <li key={s.id}>
               <a href={`/servers/${s.id}`} className={`cm-srv ${s.online ? '' : 'is-off'}`}>
@@ -136165,7 +136177,7 @@ function IncidentItem({ i }: { i: StatusIncident }) {
       <GameAvatar game={i.game} size={36} />
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-          <span className="font-extrabold">{i.serverName}</span>
+          <span className="min-w-0 font-extrabold [overflow-wrap:anywhere]">{i.serverName}</span>
           <span className={`st-inc-badge is-${kind}`}>{i.planned ? t('st.inc.planned') : live ? t('st.inc.live') : t('st.inc.done')}</span>
         </div>
         <p className="text-sm font-semibold text-mute">

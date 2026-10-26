@@ -456,7 +456,7 @@ function ServersBlock({ servers }: { servers: Community['servers'] }) {
         </div>
       )}
       {list.length === 0 ? <Empty art={<PeopleArt />} title={t('cm.srv.none')} text={t('cm.srv.noneText')} /> : (
-        <ul className="grid gap-2.5">
+        <ul className="grid grid-cols-[minmax(0,1fr)] gap-2.5">
           {list.map((s) => (
             <li key={s.id}>
               <a href={`/servers/${s.id}`} className={`cm-srv ${s.online ? '' : 'is-off'}`}>

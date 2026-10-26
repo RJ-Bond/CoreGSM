@@ -164,6 +164,7 @@ async function shoot(cdp, base, row, outDir) {
 
   if (c.scrollW > c.vw + 1) errors.push(`horizontal scroll: page is ${c.scrollW}px wide in a ${c.vw}px window${c.wide.length ? `; widest: ${c.wide.slice(0, 3).join(' | ')}` : ''}`);
   else if (c.wide.length) warnings.push(`sticks out of the window: ${c.wide.slice(0, 3).join(' | ')}`);
+  if (c.pillOff) errors.push(`the current-tab pill is in the wrong place: ${c.pillOff}`);
   if (c.badText) errors.push(`leaked value in the text: "${c.badText}"`);
   if (c.brokenImg.length) errors.push(`broken picture: ${c.brokenImg.join(', ')}`);
   if (c.mainEmpty && page.id !== 'not-found') errors.push('the page is empty');

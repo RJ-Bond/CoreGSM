@@ -48,7 +48,7 @@ export default function DiscordExtras({ servers }: { servers: Server[] }) {
         {noRoles && <p className="rounded-xl bg-warnbg px-3 py-2 text-sm font-bold text-warn">Бот не видит ролей, которые может выдавать. Дайте боту право «Управлять ролями» и поднимите его роль выше тех, что он будет выдавать.</p>}
         {!x && !error && <SkeletonRows n={2} />}
         {x && x.autoroles.length === 0 && !noRoles && <p className="text-sm font-semibold text-mute">Пока нет ни одной автороли.</p>}
-        <ul className="grid gap-2">
+        <ul className="grid grid-cols-[minmax(0,1fr)] gap-2">
           {x?.autoroles.map((r) => (
             <li key={r.id} className="flex flex-wrap items-center gap-3 rounded-2xl bg-soft px-3 py-2.5">
               <span className="h-3 w-3 shrink-0 rounded-full" style={{ background: roleDot(r.roleColor) }} aria-hidden />
@@ -70,7 +70,7 @@ export default function DiscordExtras({ servers }: { servers: Server[] }) {
       >
         {!x && !error && <SkeletonRows n={1} />}
         {noVoice && <p className="rounded-xl bg-warnbg px-3 py-2 text-sm font-bold text-warn">Бот не видит голосовых каналов, которые может переименовать. Дайте ему право «Управлять каналами» на нужном канале.</p>}
-        <ul className="grid gap-2">
+        <ul className="grid grid-cols-[minmax(0,1fr)] gap-2">
           {x?.counters.map((c) => (
             <li key={c.id} className="flex flex-wrap items-center gap-3 rounded-2xl bg-soft px-3 py-2.5">
               <span className="min-w-0 flex-1">

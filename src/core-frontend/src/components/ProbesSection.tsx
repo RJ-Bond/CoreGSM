@@ -48,7 +48,7 @@ export default function ProbesSection() {
       <ErrorLine text={error} />
       {!list && !error && <SkeletonRows n={2} />}
       {list && list.length === 0 && <p className="text-sm font-semibold text-mute">Точек пока нет: серверы проверяет только сама панель.</p>}
-      <ul className="grid gap-2">
+      <ul className="grid grid-cols-[minmax(0,1fr)] gap-2">
         {list?.map((p) => (
           <li key={p.id} className="flex flex-wrap items-center gap-3 rounded-2xl bg-soft px-3 py-2.5">
             <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${p.alive ? 'bg-ok' : 'bg-mute'}`} aria-label={p.alive ? 'на связи' : 'не на связи'} role="img" />

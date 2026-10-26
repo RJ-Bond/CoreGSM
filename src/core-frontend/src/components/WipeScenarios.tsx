@@ -85,7 +85,7 @@ export default function WipeScenarios({ servers }: { servers: Server[] }) {
       title="Сценарий вайпа"
       description="Один сценарий на весь вайп: предупреждения в Discord и игровом чате, окно обслуживания, команды вайпа с новым сидом, новый сезон и новость «вайп прошёл». Каждый шаг выполняется один раз."
     >
-      <ul className="grid gap-2">
+      <ul className="grid grid-cols-[minmax(0,1fr)] gap-2">
         {servers.map((s) => {
           const w = next[s.id];
           return (
@@ -126,7 +126,7 @@ function WipeModal({ server, onClose }: { server: Server; onClose: () => void })
       <div className="space-y-3">
         <ErrorLine text={error} />
         {list === null ? <div className="skeleton h-20 rounded-2xl" /> : list.length === 0 ? <p className="text-sm font-semibold text-mute">Сценариев пока нет.</p> : (
-          <ul className="grid gap-2">
+          <ul className="grid grid-cols-[minmax(0,1fr)] gap-2">
             {list.map((w) => (
               <li key={w.id} className="rounded-2xl bg-soft px-3.5 py-3">
                 <div className="flex flex-wrap items-center gap-2">

@@ -43,7 +43,7 @@ export default function RestartPlans({ servers }: { servers: Server[] }) {
       title="Плановые перезапуски"
       description="Панель заранее предупредит игроков в Discord и в игровом чате, на время перезапуска откроет окно обслуживания (это не будет считаться сбоем) и, если настроен RCON, сама отправит серверу команду перезапуска."
     >
-      <ul className="grid gap-2">
+      <ul className="grid grid-cols-[minmax(0,1fr)] gap-2">
         {servers.map((s) => {
           const p = plans[s.id];
           return (
