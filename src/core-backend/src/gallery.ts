@@ -13,6 +13,7 @@
  *   DELETE /api/gallery/:id              delete (the author or the staff)
  *   GET    /api/gallery/img/:id.jpg      the picture (?s=1 the small one); waiting ones only for the author and staff
  */
+import { sendImage } from './imageSend.js';
 import express from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -160,7 +161,7 @@ router.delete('/api/gallery/:id', param('id'), auth, (req: AuthedRequest, res) =
   res.json({ ok: true });
 });
 
-router.get('/api/gallery/img/:file', (req, res) => {
+router.get('/api/gallery/img/:file', (req, res, next) => {
   const m = /^(\d{1,9})\.jpg$/.exec(String(req.params.file));
   if (!m) return res.status(404).end();
   const id = Number(m[1]);
@@ -173,5 +174,5 @@ router.get('/api/gallery/img/:file', (req, res) => {
   }
   const f = fileOf(id, req.query.s === '1');
   if (!fs.existsSync(f)) return res.status(404).end();
-  res.set({ 'Content-Type': 'image/jpeg', 'Cache-Control': row.status === 'approved' ? 'public, max-age=86400' : 'private, no-store', 'X-Content-Type-Options': 'nosniff' }).send(fs.readFileSync(f));
+  sendImage(req, res, f, 'image/jpeg', row.status === 'approved' ? 'public, max-age=86400' : 'private, no-store').catch(next);
 });
