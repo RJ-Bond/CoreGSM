@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="18f634b99c66"
+COREGSM_BUILD="b6908f5840ae"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.0.0.20"
+COREGSM_VERSION="1.0.0.21"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -49008,7 +49008,7 @@ export default function App() {
       </a>
       <RouteProgress routeKey={routeKey} />
       <Tooltips />
-      <div className="mx-auto min-h-full max-w-6xl px-3 pb-[calc(6.5rem+env(safe-area-inset-bottom,0px))] pt-3 sm:px-6 sm:pt-4 md:pb-16">
+      <div className={`mx-auto min-h-full ${page === 'admin' ? 'max-w-[100rem]' : 'max-w-6xl'} px-3 pb-[calc(6.5rem+env(safe-area-inset-bottom,0px))] pt-3 sm:px-6 sm:pt-4 md:pb-16`}>
         <header className="glass sticky top-2 z-30 mb-5 flex items-center gap-x-2 rounded-ui-xl py-2 pl-3 pr-2 sm:top-3 md:mb-7 md:gap-x-3 md:pl-4">
           <a href="/servers" aria-label={access.brand.name} className="flex min-w-0 items-center gap-2.5 text-xl font-black tracking-tight max-md:flex-1 sm:text-[22px] md:max-w-60 md:shrink-0">
             <Logo size={34} alt="" />
@@ -51310,6 +51310,8 @@ export default function DigestSection({ alertsChannel }: { alertsChannel: string
   return (
     <Section title="Итоги недели" description="Раз в неделю бот публикует картинку с итогами: игроки, пик, часы в игре, доступность серверов и самые активные игроки.">
       <ErrorLine text={error} />
+      <div className="adm-split">
+      <div className="min-w-0 space-y-4">
       <label className="flex cursor-pointer items-start gap-3">
         <Switch className="mt-0.5" checked={info.enabled} onChange={(on) => void save({ enabled: on }, on ? 'Итоги недели включены' : 'Итоги недели выключены')} />
         <span>
@@ -51357,7 +51359,8 @@ export default function DigestSection({ alertsChannel }: { alertsChannel: string
         )}
       </div>
 
-      <div className="rounded-ui-lg bg-soft p-3">
+      </div>
+      <div className="adm-split-side rounded-ui-lg bg-soft p-3">
         <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
           <span className="text-sm font-extrabold text-mute">Так будут выглядеть итоги последних 7 дней</span>
           <span className="flex flex-wrap gap-2">
@@ -51366,6 +51369,7 @@ export default function DigestSection({ alertsChannel }: { alertsChannel: string
           </span>
         </div>
         <img key={imgKey} src={`/api/digest/preview.png?k=${imgKey}`} alt={`Итоги недели: ${t.players} ${plural(t.players, ['игрок', 'игрока', 'игроков'])}, пик ${t.peak}, ${t.hours} часов в игре`} className="w-full rounded-ui-lg" loading="lazy" />
+      </div>
       </div>
     </Section>
   );
@@ -69943,6 +69947,15 @@ const en: Record<keyof typeof ru, string> = {
   'embed.chart.hint': 'A picture under the server message. It is not shown in a message with several servers.',
   'embed.tile': 'Game icon on a coloured tile',
   'embed.tile.hint': 'The icon reads on both the light and the dark Discord theme. Without the tile it is a transparent game picture.',
+  'adm.rail.close': 'Collapse the menu',
+  'adm.rail.open': 'Show the full menu',
+  'adm.cols': 'Columns',
+  'adm.col.uptime': 'Uptime',
+  'adm.col.h24': '24 h chart',
+  'adm.col.map': 'Map',
+  'adm.col.version': 'Version',
+  'adm.col.channels': 'Discord channels',
+  'adm.col.updated': 'Updated',
 };
 
 export default en;
@@ -72080,6 +72093,15 @@ const ru = {
   'embed.chart.hint': 'Картинка под сообщением сервера. В сообщении с несколькими серверами она не показывается.',
   'embed.tile': 'Значок игры на цветной плашке',
   'embed.tile.hint': 'Значок виден и в светлой, и в тёмной теме Discord. Без плашки это прозрачная картинка игры.',
+  'adm.rail.close': 'Свернуть меню',
+  'adm.rail.open': 'Показать меню целиком',
+  'adm.cols': 'Колонки',
+  'adm.col.uptime': 'Доступность',
+  'adm.col.h24': 'График за 24 ч',
+  'adm.col.map': 'Карта',
+  'adm.col.version': 'Версия',
+  'adm.col.channels': 'Каналы Discord',
+  'adm.col.updated': 'Обновлён',
 };
 
 export default ru;
@@ -72511,6 +72533,9 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
   };
   const badges = useNavBadges(isAdmin, me?.perms ?? []);
   const [dense, setDense] = useState(() => { try { return localStorage.getItem('coregsm_admin_density') === 'compact'; } catch { return false; } });
+  // the menu can shrink to a column of icons: more room for the page itself
+  const [rail, setRail] = useState(() => { try { return localStorage.getItem('coregsm_admin_rail') === '1'; } catch { return false; } });
+  const flipRail = () => setRail((v) => { try { localStorage.setItem('coregsm_admin_rail', v ? '0' : '1'); } catch { /* not remembered */ } return !v; });
   const flipDense = () => setDense((v) => { try { localStorage.setItem('coregsm_admin_density', v ? 'cozy' : 'compact'); } catch { /* not remembered */ } return !v; });
   // the sidebar scrolls sideways on a phone: keep the current section in view
   useEffect(() => {
@@ -72568,10 +72593,11 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
       key={s.id}
       href={`/admin/${s.id}`}
       aria-current={current === s.id ? 'page' : undefined}
+      title={rail ? s.label : undefined}
       className={`adm-link flex min-w-0 shrink-0 items-center gap-2.5 whitespace-nowrap rounded-ui-md py-1.5 pl-1.5 pr-3.5 text-sm font-bold transition max-md:rounded-full ${pinnable ? 'md:w-full md:pr-9' : ''} ${current === s.id ? 'is-on bg-linear-to-br from-brand to-brand-2 text-white shadow-pop' : 'text-mute hover:bg-soft hover:text-ink'}`}
     >
       <span className="adm-ic" aria-hidden>{s.icon()}</span>
-      {s.label}
+      <span className="adm-lbl min-w-0 truncate">{s.label}</span>
       {badges[s.id] && (badges[s.id].n === 0
         ? <span className={`adm-dot is-${badges[s.id].tone}`} title={badges[s.id].label} role="img" aria-label={badges[s.id].label} />
         : <span className={`adm-badge is-${badges[s.id].tone}`} title={badges[s.id].label} aria-label={badges[s.id].label}>{badges[s.id].n}</span>)}
@@ -72593,7 +72619,7 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
     measure();
     window.addEventListener('resize', measure);
     return () => window.removeEventListener('resize', measure);
-  }, [current, home, pins, recent, badges, isAdmin]);
+  }, [current, home, pins, recent, badges, isAdmin, rail]);
   // «g» then a letter: go to a section (not while typing)
   useEffect(() => {
     if (!isAdmin) return;
@@ -72613,8 +72639,8 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
   const divider = <span aria-hidden className="mx-1 w-px shrink-0 self-stretch bg-line md:hidden" />;
 
   return (
-    <div className="grid gap-4 md:grid-cols-[14rem_minmax(0,1fr)]" data-density={dense ? 'compact' : undefined}>
-      <nav ref={navRef} className={`adm-nav ${ind ? 'has-ind' : ''} tile fade-x fade-x-m flex items-stretch gap-1 overflow-x-auto p-1.5 md:sticky md:top-24 md:max-h-[calc(100dvh-7rem)] md:flex-col md:items-stretch md:self-start md:overflow-y-auto md:p-2.5`} aria-label={t('adm.navLabel')}>
+    <div className={`grid gap-4 ${rail ? 'md:grid-cols-[4.25rem_minmax(0,1fr)]' : 'md:grid-cols-[14rem_minmax(0,1fr)]'}`} data-density={dense ? 'compact' : undefined}>
+      <nav ref={navRef} className={`adm-nav ${rail ? 'adm-rail' : ''} ${ind ? 'has-ind' : ''} tile fade-x fade-x-m flex items-stretch gap-1 overflow-x-auto p-1.5 md:sticky md:top-24 md:max-h-[calc(100dvh-7rem)] md:flex-col md:items-stretch md:self-start md:overflow-y-auto md:p-2.5`} aria-label={t('adm.navLabel')}>
         {ind && <span className="adm-ind" aria-hidden style={{ transform: `translate(${ind.x}px, ${ind.y}px)`, width: ind.w, height: ind.h }} />}
         {isAdmin ? (
           <>
@@ -72660,7 +72686,10 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
           </>
         )}
         <button type="button" className="adm-density max-md:hidden" aria-pressed={dense} onClick={flipDense}>
-          <span aria-hidden>{dense ? '▤' : '▦'}</span>{t('adm.density')}
+          <span aria-hidden>{dense ? '▤' : '▦'}</span><span className="adm-lbl">{t('adm.density')}</span>
+        </button>
+        <button type="button" className="adm-density max-md:hidden" aria-pressed={rail} onClick={flipRail} title={rail ? t('adm.rail.open') : t('adm.rail.close')}>
+          <span aria-hidden>{rail ? '»' : '«'}</span><span className="adm-lbl">{t('adm.rail.close')}</span>
         </button>
       </nav>
       <div className="min-w-0 space-y-5">
@@ -73672,7 +73701,7 @@ import { confirmDialog } from '../confirm';
 import { t, useI18n, type TKey } from '../i18n';
 import { gameColor, gameLabel } from '../games';
 import { AnimatedNumber, GameAvatar, IconEdit, IconRefresh, IconTrash, IconWrench, MiniSpark, StatusPill, ago, isLag, toast } from '../ui';
-import { countServers, filterServers, loadTableState, saveTableState, type ServerFilter } from './adminServersLogic';
+import { countServers, filterServers, loadColumns, loadTableState, saveColumns, saveTableState, TABLE_COLUMNS, type ServerFilter, type TableColumn } from './adminServersLogic';
 
 export interface TableActions {
   isAdmin: boolean;
@@ -73713,6 +73742,9 @@ export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableA
   const [filter, setFilter] = useState<ServerFilter>(saved.filter);
   const [query, setQuery] = useState(saved.query);
   useEffect(() => { saveTableState(filter, query); }, [filter, query]);
+  const [cols, setCols] = useState<TableColumn[]>(loadColumns);
+  const toggleCol = (c: TableColumn) => setCols((l) => { const n = l.includes(c) ? l.filter((x) => x !== c) : TABLE_COLUMNS.filter((x) => x === c || l.includes(x)); saveColumns(n); return n; });
+  const has = (c: TableColumn) => cols.includes(c);
   const [sel, setSel] = useState<number[]>([]);
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState<number[]>([]);
@@ -73755,6 +73787,16 @@ export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableA
           <button type="button" className="seg-item" aria-pressed={view === 'table'} onClick={() => pickView('table')}>Таблица</button>
           <button type="button" className="seg-item" aria-pressed={view === 'cards'} onClick={() => pickView('cards')}>Карточки</button>
         </div>
+        <details className="adm-cols hidden md:block">
+          <summary className="seg-item cursor-pointer select-none">{t('adm.cols')}</summary>
+          <div className="adm-cols-pop" role="group" aria-label={t('adm.cols')}>
+            {TABLE_COLUMNS.map((c) => (
+              <label key={c} className="flex cursor-pointer items-center gap-2 px-2 py-1 font-semibold">
+                <input type="checkbox" className="srv-check" checked={has(c)} onChange={() => toggleCol(c)} />{t(`adm.col.${c}` as TKey)}
+              </label>
+            ))}
+          </div>
+        </details>
         <label className="adm-search ml-auto">
           <span aria-hidden>⌕</span>
           <input type="search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t('adm.tbl.search')} aria-label={t('adm.tbl.search')} />
@@ -73786,8 +73828,12 @@ export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableA
                   <th>{t('adm.tbl.status')}</th>
                   <th>{t('adm.tbl.players')}</th>
                   <th>{t('adm.tbl.ping')}</th>
-                  <th className="hidden 2xl:table-cell">{t('adm.tbl.uptime')}</th>
-                  <th className="hidden lg:table-cell">{t('adm.tbl.h24')}</th>
+                  {has('map') && <th>{t('adm.col.map')}</th>}
+                  {has('version') && <th>{t('adm.col.version')}</th>}
+                  {has('channels') && <th>{t('adm.col.channels')}</th>}
+                  {has('uptime') && <th>{t('adm.tbl.uptime')}</th>}
+                  {has('h24') && <th>{t('adm.tbl.h24')}</th>}
+                  {has('updated') && <th>{t('adm.col.updated')}</th>}
                   <th aria-label={t('adm.tbl.actions')} />
                 </tr>
               </thead>
@@ -73814,8 +73860,12 @@ export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableA
                     </td>
                     <td className="tabular-nums text-mute">{s.online ? <><b className="text-ink"><AnimatedNumber value={s.players} /></b>/{s.maxPlayers}</> : '—'}</td>
                     <td className="tabular-nums text-mute">{s.online && s.ping != null ? t('adm.tbl.ms', { n: s.ping }) : '—'}</td>
-                    <td className="hidden tabular-nums 2xl:table-cell">{pct(a.uptime.get(s.id))}</td>
-                    <td className="hidden lg:table-cell"><MiniSpark serverId={s.id} color={gameColor(s.game)} /></td>
+                    {has('map') && <td className="max-w-40 truncate text-mute" title={s.map ?? undefined}>{s.online && s.map ? s.map : '—'}</td>}
+                    {has('version') && <td className="max-w-32 truncate font-mono text-xs text-mute" title={s.version ?? undefined}>{s.version || '—'}</td>}
+                    {has('channels') && <td className="tabular-nums"><a href="/admin/discord" className="text-link hover:underline">{a.bindings.get(s.id) ?? 0}</a></td>}
+                    {has('uptime') && <td className="tabular-nums">{pct(a.uptime.get(s.id))}</td>}
+                    {has('h24') && <td><MiniSpark serverId={s.id} color={gameColor(s.game)} /></td>}
+                    {has('updated') && <td className="text-mute">{ago(s.updatedAt)}</td>}
                     <td>
                       <div className="flex items-center justify-end gap-1" role="group" aria-label={`${t('adm.tbl.actions')}: ${s.name}`}>
                         {canMove && (
@@ -73838,7 +73888,7 @@ export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableA
                   </tr>
                   {open.includes(s.id) && (
                     <tr className="adm-detail">
-                      <td colSpan={8}>
+                      <td colSpan={14}>
                         <dl className="adm-detail-grid">
                           <div><dt>{t('adm.tbl.d.addr')}</dt><dd className="font-mono">{s.host}:{s.port}</dd></div>
                           <div><dt>{t('adm.tbl.d.query')}</dt><dd className="font-mono">{s.queryPort ?? '—'}</dd></div>
@@ -74920,7 +74970,7 @@ export default function CardsPage() {
           <a className="btn mt-3" href="/admin/servers/new">Добавить сервер</a>
         </Empty>
       )}
-      <div className="fade-in grid gap-5 xl:grid-cols-2">
+      <div className="fade-in grid gap-5 xl:grid-cols-2 2xl:grid-cols-3">
         {servers.map((s) => (
           <div key={s.id} className="panel space-y-3 p-5">
             <img src={`/api/card/${s.id}.png?v=${s.updatedAt ?? 0}&r=${forced}`} alt={`Карточка ${s.name}`} loading="lazy" className="w-full rounded-ui-lg bg-soft" />
@@ -82163,7 +82213,7 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/pages/adminLogic.test.ts" << '__COREGSM_EOF__'
 import { describe, expect, it } from 'vitest';
 import { delta, dayKey, healthScore, type HealthInput } from './adminLogic';
-import { moveId } from './adminServersLogic';
+import { moveId, parseColumns } from './adminServersLogic';
 
 const fine: HealthInput = { servers: 4, down: 0, botError: false, certDays: 60, pending: 0, updateAvailable: false, backupAgeMs: 1000, backupsKnown: true };
 
@@ -82224,6 +82274,16 @@ describe('moveId', () => {
   });
   it('works among a subset of the list', () => {
     expect(moveId([1, 2, 3, 4], [2, 4], 4, -1)).toEqual([1, 4, 3, 2]);
+  });
+});
+
+describe('parseColumns', () => {
+  it('nothing saved: the default columns', () => expect(parseColumns(null)).toEqual(['uptime', 'h24']));
+  it('keeps the table order and drops unknown ones', () => expect(parseColumns('["updated","map","zzz"]')).toEqual(['map', 'updated']));
+  it('an empty choice stays empty', () => expect(parseColumns('[]')).toEqual([]));
+  it('broken data: the default columns', () => {
+    expect(parseColumns('{')).toEqual(['uptime', 'h24']);
+    expect(parseColumns('5')).toEqual(['uptime', 'h24']);
   });
 });
 __COREGSM_EOF__
@@ -82418,6 +82478,28 @@ export function saveTableState(filter: ServerFilter, query: string): void {
     if (filter === 'all' && !query) sessionStorage.removeItem(FILTER_KEY);
     else sessionStorage.setItem(FILTER_KEY, JSON.stringify({ filter, query }));
   } catch { /* not remembered */ }
+}
+
+/** the columns of the wide table that can be switched on and off (the server, status, players, ping and actions are always there) */
+export const TABLE_COLUMNS = ['uptime', 'h24', 'map', 'version', 'channels', 'updated'] as const;
+export type TableColumn = (typeof TABLE_COLUMNS)[number];
+export const DEFAULT_COLUMNS: TableColumn[] = ['uptime', 'h24'];
+const COLUMNS_KEY = 'coregsm_admin_srv_cols';
+
+/** a saved list of columns (anything unknown is dropped, the order is always the table's own) */
+export function parseColumns(raw: string | null): TableColumn[] {
+  if (raw == null) return [...DEFAULT_COLUMNS];
+  try {
+    const v: unknown = JSON.parse(raw);
+    if (!Array.isArray(v)) return [...DEFAULT_COLUMNS];
+    return TABLE_COLUMNS.filter((c) => v.includes(c));
+  } catch { return [...DEFAULT_COLUMNS]; }
+}
+export function loadColumns(): TableColumn[] {
+  try { return parseColumns(localStorage.getItem(COLUMNS_KEY)); } catch { return [...DEFAULT_COLUMNS]; }
+}
+export function saveColumns(cols: TableColumn[]): void {
+  try { localStorage.setItem(COLUMNS_KEY, JSON.stringify(cols)); } catch { /* not remembered */ }
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
@@ -84466,6 +84548,31 @@ a.adm-tile:hover { box-shadow: var(--shadow-2); border-color: rgb(var(--brand) /
 .lc-plot:focus-visible { outline: 2px solid rgb(var(--link)); }
 .lc-cursor { position: absolute; top: 0; bottom: 0; width: 1px; background: rgb(var(--mute) / .7); pointer-events: none; }
 .lc-tip { position: absolute; top: 4px; transform: translateX(-50%); padding: 3px 8px; border-radius: var(--r-sm); background: rgb(var(--card)); box-shadow: var(--shadow-1); font-size: var(--fs-xs); font-weight: 700; white-space: nowrap; pointer-events: none; }
+
+/* the menu shrunk to icons (desktop only) */
+@media (min-width: 768px) {
+  .adm-rail { padding-inline: 6px; }
+  .adm-rail .adm-lbl, .adm-rail .adm-group-title, .adm-rail .adm-pin, .adm-rail .adm-progress, .adm-rail .adm-find > :not(:first-child) { display: none; }
+  .adm-rail .adm-link, .adm-rail .adm-density, .adm-rail .adm-find { justify-content: center; padding-inline: 0; }
+  .adm-rail .adm-link.md\:w-full { padding-right: 0; }
+  .adm-rail .adm-link { position: relative; }
+  .adm-rail .adm-badge, .adm-rail .adm-dot, .adm-rail .update-dot { position: absolute; top: 2px; right: 4px; margin: 0; }
+  .adm-rail .adm-badge { min-width: 1rem; height: 1rem; padding: 0 3px; font-size: 10px; line-height: 1rem; }
+}
+
+/* column chooser of the servers table */
+.adm-cols { position: relative; }
+.adm-cols > summary { list-style: none; padding: 6px 12px; border-radius: var(--r-md); background: rgb(var(--soft)); box-shadow: inset 0 0 0 1px rgb(var(--line)); font-weight: 650; }
+.adm-cols > summary::-webkit-details-marker { display: none; }
+.adm-cols[open] > summary { box-shadow: inset 0 0 0 1px rgb(var(--brand) / .5); }
+.adm-cols-pop { position: absolute; left: 0; top: calc(100% + 6px); z-index: 40; min-width: 13rem; padding: 6px; border-radius: var(--r-lg); background: rgb(var(--overlay)); box-shadow: var(--shadow-3), inset 0 0 0 1px rgb(var(--line)); }
+
+/* settings on the left, the live preview on the right (it stays in view while the settings scroll) */
+.adm-split { display: grid; gap: 16px; }
+@media (min-width: 1280px) {
+  .adm-split { grid-template-columns: minmax(0, 1fr) minmax(0, 26rem); align-items: start; gap: 24px; }
+  .adm-split-side { position: sticky; top: 6.5rem; }
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/analytics.css" << '__COREGSM_EOF__'

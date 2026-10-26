@@ -51,6 +51,8 @@ export default function DigestSection({ alertsChannel }: { alertsChannel: string
   return (
     <Section title="Итоги недели" description="Раз в неделю бот публикует картинку с итогами: игроки, пик, часы в игре, доступность серверов и самые активные игроки.">
       <ErrorLine text={error} />
+      <div className="adm-split">
+      <div className="min-w-0 space-y-4">
       <label className="flex cursor-pointer items-start gap-3">
         <Switch className="mt-0.5" checked={info.enabled} onChange={(on) => void save({ enabled: on }, on ? 'Итоги недели включены' : 'Итоги недели выключены')} />
         <span>
@@ -98,7 +100,8 @@ export default function DigestSection({ alertsChannel }: { alertsChannel: string
         )}
       </div>
 
-      <div className="rounded-ui-lg bg-soft p-3">
+      </div>
+      <div className="adm-split-side rounded-ui-lg bg-soft p-3">
         <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
           <span className="text-sm font-extrabold text-mute">Так будут выглядеть итоги последних 7 дней</span>
           <span className="flex flex-wrap gap-2">
@@ -107,6 +110,7 @@ export default function DigestSection({ alertsChannel }: { alertsChannel: string
           </span>
         </div>
         <img key={imgKey} src={`/api/digest/preview.png?k=${imgKey}`} alt={`Итоги недели: ${t.players} ${plural(t.players, ['игрок', 'игрока', 'игроков'])}, пик ${t.peak}, ${t.hours} часов в игре`} className="w-full rounded-ui-lg" loading="lazy" />
+      </div>
       </div>
     </Section>
   );
