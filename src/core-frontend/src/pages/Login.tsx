@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { api, ApiError, setToken } from '../api';
 import { useAuth } from '../auth';
-import { t } from '../i18n';
+import { getPrefs, t } from '../i18n';
 import { Button, DiscordButton, ErrorLine, FieldError, OrDivider, PasswordField, useShake, errText } from '../ui';
 
 const NAME_KEY = 'coregsm_login_name';
@@ -101,6 +101,9 @@ export default function Login({ onDone, notice }: { onDone: () => void; notice?:
         setPassErr(`${(err as Error).message}${n !== null ? t('login.attempts', { n }) : ''}`);
         passRef.current?.focus();
         passRef.current?.select();
+      } else if (status === 403 && data.banned) {
+        const lang = getPrefs().lang === 'en' ? 'en-US' : 'ru-RU';
+        setError(`${errText(err)}${data.reason ? t('login.banReason', { r: String(data.reason) }) : ''}${typeof data.until === 'number' ? t('login.banUntil', { d: new Date(data.until).toLocaleString(lang) }) : ''}`);
       } else {
         setError(errText(err));
       }

@@ -7,6 +7,7 @@ import { newRecoveryCodes, newSecret, otpauthUri, useRecoveryCode, verifyCode } 
 import { accountLockRemaining, accountLoginFailed, accountLoginOk, auth, type AuthedRequest, avatarUrl, DUMMY_HASH, issueToken, loginLimiter, permsOf, rateLimit, registrationOpen, resetAttempts, type Role, type UserFull } from '../auth.js';
 import { customAvatarUrl } from '../avatars.js';
 import { SETUP_TOKEN } from '../config.js';
+import { activeBan } from '../banLogic.js';
 import { db, setSetting } from '../db.js';
 import { safeEqual, wrap } from '../http.js';
 import { bannerPresetOf, bannerUrlOf, logAccount, prefsOf } from '../profile.js';
@@ -37,7 +38,7 @@ router.post(
       return res.status(429).json({ error: `Слишком много неверных попыток. Повторите через ${retryAfter} с.`, retryAfter });
     }
     const u = db.prepare('SELECT * FROM users WHERE ulower(username) = ?').get(body.data.username.toLowerCase()) as
-      | { id: number; username: string; password_hash: string; role: Role; status: string; totp_enabled: number; totp_secret: string | null; totp_recovery: string | null; totp_step: number }
+      | { id: number; username: string; password_hash: string; role: Role; status: string; banned_at: number | null; banned_until: number | null; ban_reason: string | null; totp_enabled: number; totp_secret: string | null; totp_recovery: string | null; totp_step: number }
       | undefined;
     const ok = await bcrypt.compare(body.data.password, u?.password_hash ?? DUMMY_HASH);
     if (!u || !ok) {
@@ -49,6 +50,11 @@ router.post(
     if (u.status !== 'active') {
       accountLoginOk(req.ip, body.data.username);
       return res.status(403).json({ error: 'Заявка на регистрацию ещё не одобрена администратором', pending: true });
+    }
+    const ban = activeBan(u, Date.now());
+    if (ban) {
+      accountLoginOk(req.ip, body.data.username);
+      return res.status(403).json({ error: 'Учётная запись заблокирована администратором', banned: true, reason: ban.reason, until: ban.until });
     }
     // second factor: without a code the panel is told to ask for one (no token yet); a wrong code counts like a wrong password
     if (u.totp_enabled && u.totp_secret) {
