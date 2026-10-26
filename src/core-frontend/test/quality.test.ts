@@ -78,7 +78,7 @@ describe('admin shortcuts', () => {
 
 describe('appearance', () => {
   it('normalises stored values', () => {
-    expect(normalizeAppearance(null)).toEqual({ reduceMotion: false, largeText: false, highContrast: false });
-    expect(normalizeAppearance({ reduceMotion: true, largeText: 'yes' })).toEqual({ reduceMotion: true, largeText: false, highContrast: false });
+    expect(normalizeAppearance(null)).toEqual({ reduceMotion: false, largeText: false, highContrast: false, liteData: false });
+    expect(normalizeAppearance({ reduceMotion: true, largeText: 'yes' })).toEqual({ reduceMotion: true, largeText: false, highContrast: false, liteData: false });
   });
 });
