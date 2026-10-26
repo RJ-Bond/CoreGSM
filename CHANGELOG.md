@@ -14,7 +14,7 @@ interface language; the GitHub release text is built from the section of the ver
 - Пометки в конце русской части: `[migration]` — меняется база данных, `[env]` — нужны новые настройки сервера, `⚠` в начале — несовместимое изменение.
 - Новые пункты идут в раздел «Не выпущено». Релиз выпускается только по команде владельца: тогда раздел переименовывается в `## <версия> · <дата>` (версия из `version.txt`).
 
-## Не выпущено | Unreleased
+## 1.0.0.26 · 26.10.2026
 
 ### ✨ Новое | New
 - 📣 Страница статуса: администратор публикует короткие заметки наверху («Идут работы», «Причина найдена», «Починено») с важностью и привязкой к серверу; закрытые остаются две недели; форма — «Обслуживание → Сообщения на странице статуса» | Status page: administrators publish short notes at the top («Work in progress», «Cause found», «Fixed») with an importance level and an optional server; closed notes stay for two weeks; the form is in Maintenance → Messages on the status page
