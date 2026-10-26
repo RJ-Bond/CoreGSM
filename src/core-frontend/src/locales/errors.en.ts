@@ -21,6 +21,7 @@ const errorsEn: Record<string, string> = {
   check_form: 'Check the form fields',
   check_fields: 'Check the fields',
   not_found: 'Not found',
+  api_key_limit: 'At most {n} active keys are allowed: revoke the ones you do not need',
 
   // ---- sign-in, setup, registration ----
   login_locked: 'Too many wrong attempts. Try again in {sec} s.',

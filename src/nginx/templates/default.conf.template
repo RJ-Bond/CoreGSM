@@ -92,6 +92,36 @@ server {
         proxy_read_timeout 30s;
     }
 
+    # badges (SVG) and widgets for other sites: no key, cached by the backend headers.
+    # /widget/ may be put in an iframe: it has its own header set without X-Frame-Options (a location with add_header
+    # does not inherit the server-level ones, the same goes for proxy_hide_header).
+    location ~ ^/badge/servers/\d+\.svg$ {
+        set $backend http://backend:3000;
+        proxy_pass $backend;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 30s;
+    }
+
+    location ~ ^/widget/servers/\d+$ {
+        add_header Strict-Transport-Security "max-age=31536000" always;
+        add_header X-Content-Type-Options nosniff always;
+        add_header Referrer-Policy strict-origin-when-cross-origin always;
+        proxy_hide_header Strict-Transport-Security;
+        proxy_hide_header X-Content-Type-Options;
+        proxy_hide_header X-Frame-Options;
+        proxy_hide_header Referrer-Policy;
+        set $backend http://backend:3000;
+        proxy_pass $backend;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 30s;
+    }
+
     location /api/ {
         set $backend http://backend:3000;
         proxy_pass $backend;
