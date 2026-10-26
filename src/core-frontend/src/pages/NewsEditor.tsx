@@ -18,6 +18,7 @@ import { Preview } from '../components/news/Preview';
 import { PublicFeed } from '../components/news/PublicFeed';
 import { CATEGORY_LABEL_RU, CHANGE_LABEL_RU, CHANGE_ORDER, NEWS_CATEGORIES, isChangeKind, isHttpsUrl } from '../components/news/newsLogic';
 import { GAMES } from '../games';
+import { t, useI18n } from '../i18n';
 import { StatusServers } from '../components/news/StatusServers';
 import type { PreviewPart } from './EmbedPreview';
 import { Button, ErrorLine, Field, GoLink, IconNews, Notice, PageHead, SplitButton, StateView, Switch, errorKind, fmtDateTime, toast, navigate } from '../ui';
@@ -54,13 +55,11 @@ function ColorPicker({ value, onChange, games }: { value: number; onChange: (n: 
       <div className="flex flex-wrap items-center gap-2">
         {PALETTE.map(([n, c]) => dot(n, c))}
         <label className="ml-1 flex cursor-pointer items-center gap-2 text-sm font-extrabold text-mute">
-          <input type="color" value={hex(value)} onChange={(e) => onChange(parseHex(e.target.value))} className="h-8 w-10 cursor-pointer rounded-sm border-2 border-line bg-card" aria-label="Свой цвет" />
-          свой
-        </label>
+          <input type="color" value={hex(value)} onChange={(e) => onChange(parseHex(e.target.value))} className="h-8 w-10 cursor-pointer rounded-sm border-2 border-line bg-card" aria-label={t('ne.ownColor')} />{t('ne.own')}</label>
       </div>
       {games.length > 0 && (
         <div className="flex flex-wrap items-center gap-2">
-          <span className="text-xs font-extrabold uppercase tracking-wide text-mute">Игры</span>
+          <span className="text-xs font-extrabold uppercase tracking-wide text-mute">{t('ne.games')}</span>
           {games.map(([n, c]) => dot(n, c))}
         </div>
       )}
@@ -74,6 +73,7 @@ const PART_ID: Record<PreviewPart['part'], string> = {
 
 // ---------- the editor ----------
 export default function NewsEditor({ id, template }: { id: number | null; template?: string }) {
+  useI18n();
   const [d, setD] = useState<Draft | null>(null);
   const [author, setAuthor] = useState<NewsAuthor | null>(null);
   const [item, setItem] = useState<NewsItem | null>(null);
@@ -169,12 +169,12 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
     if (!d || restore || autosaveOff.current) return;
     const payload = toPayload(d);
     if (payloadKey(payload) === baseline.current) return;
-    const t = setTimeout(() => {
+    const timer = setTimeout(() => {
       api(`/news/autosave`, 'PUT', { key: akey, payload: { ...payload, channelId: d.channelId } })
         .then(() => setSavedAt(Date.now()))
         .catch((e) => { if (e instanceof ApiError && (e.status === 404 || e.status === 405)) autosaveOff.current = true; });
     }, 1500);
-    return () => clearTimeout(t);
+    return () => clearTimeout(timer);
   }, [d, restore, akey]);
 
   // ----- Ctrl+Enter publishes -----
@@ -196,10 +196,10 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
   if (!d) {
     return error ? (
       <StateView kind={errorKind(error)} text={errorKind(error) === 'error' ? error : undefined} onRetry={() => window.location.reload()}>
-        <a className="btn btn-soft" href="/admin/news">К новостям</a>
+        <a className="btn btn-soft" href="/admin/news">{t('ne.toNews')}</a>
       </StateView>
     ) : (
-      <div className="space-y-5" aria-busy="true" aria-label="Загрузка">
+      <div className="space-y-5" aria-busy="true" aria-label={t('ne.loading')}>
         <div className="skeleton h-9 w-56 rounded-full" />
         <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,460px)]">
           <div className="space-y-5">
@@ -258,15 +258,15 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
       const name = await uploadImage(file);
       setE({ imageUpload: name, imageUrl: '' });
       setMoreOpen(true);
-      toast('Картинка загружена из буфера');
+      toast(t('ne.pasted'));
     } catch (err) {
       setError((err as Error).message);
     }
   };
 
-  const applyTemplate = async (t: (typeof TEMPLATES)[number]) => {
-    if (dirtyText && !(await confirmDialog({ title: 'Заменить текущий текст шаблоном?', text: 'Введённый текст будет потерян.', confirmLabel: 'Заменить' }))) return;
-    setD((c) => (c ? { ...applyTpl(c, t.apply), statusServerIds: c.statusServerIds } : c));
+  const applyTemplate = async (tp: (typeof TEMPLATES)[number]) => {
+    if (dirtyText && !(await confirmDialog({ title: t('ne.tplTitle'), text: t('ne.tplText'), confirmLabel: t('ne.replace') }))) return;
+    setD((c) => (c ? { ...applyTpl(c, tp.apply), statusServerIds: c.statusServerIds } : c));
     setActive(0);
   };
 
@@ -277,7 +277,7 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
   };
   const removeEmbed = async () => {
     if (d.embeds.length <= 1) return;
-    if (embedHasContent(e) && !(await confirmDialog({ title: `Удалить embed ${cur + 1}?`, confirmLabel: 'Удалить', danger: true }))) return;
+    if (embedHasContent(e) && !(await confirmDialog({ title: t('ne.delEmbed', { n: cur + 1 }), confirmLabel: t('ne.del'), danger: true }))) return;
     set({ embeds: d.embeds.filter((_, i) => i !== cur) });
     setActive(Math.max(0, cur - 1));
   };
@@ -294,12 +294,12 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
         scheduledAt: action === 'schedule' ? new Date(when).getTime() : undefined,
         repeat: action === 'schedule' ? repeat : undefined,
       };
-      if (action === 'schedule' && !(new Date(when).getTime() > Date.now())) throw new Error('Выберите время в будущем');
+      if (action === 'schedule' && !(new Date(when).getTime() > Date.now())) throw new Error(t('ne.future'));
       await api(id ? `/news/${id}` : '/news', id ? 'PUT' : 'POST', body);
       if (makeDefault && d.channelId) await api('/news/settings', 'PUT', { channelId: d.channelId });
       await api(`/news/autosave?key=${encodeURIComponent(akey)}`, 'DELETE').catch(() => undefined);
       baseline.current = payloadKey(toPayload(d));
-      toast(action === 'now' ? 'Новость отправляется в Discord' : action === 'schedule' ? 'Новость запланирована' : isSent ? 'Изменения отправлены в Discord' : 'Черновик сохранён');
+      toast(action === 'now' ? t('ne.sending') : action === 'schedule' ? t('ne.scheduled') : isSent ? t('ne.edited') : t('ne.draftSaved'));
       navigate('/admin/news');
     } catch (err) {
       setError((err as Error).message);
@@ -310,7 +310,7 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
 
   const request = (mode: 'now' | 'schedule' | 'edit') => {
     setError('');
-    if (mode === 'schedule' && !(new Date(when).getTime() > Date.now())) { setError('Выберите время в будущем'); return; }
+    if (mode === 'schedule' && !(new Date(when).getTime() > Date.now())) { setError(t('ne.future')); return; }
     setCheck(mode);
   };
   primary.current = () => {
@@ -330,11 +330,11 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
         await new Promise((res) => setTimeout(res, 1000));
         st = await api<NewsTestStatus>(`/news/test/${r.testId}`);
       }
-      if (st.status === 'sent') toast('Тестовое сообщение отправлено');
-      else if (st.status === 'error') setError(st.error || 'Не удалось отправить тест');
-      else toast('Тест поставлен в очередь', 'ok');
+      if (st.status === 'sent') toast(t('ne.testSent'));
+      else if (st.status === 'error') setError(st.error || t('ne.testFail'));
+      else toast(t('ne.testQueued'), 'ok');
     } catch (err) {
-      setError(err instanceof ApiError && err.status === 404 ? 'Тестовая отправка недоступна на этом сервере.' : (err as Error).message);
+      setError(err instanceof ApiError && err.status === 404 ? t('ne.testNA') : (err as Error).message);
     } finally {
       setTesting(false);
     }
@@ -354,7 +354,7 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
     setD(nd);
     setActive(0);
     setRestore(null);
-    toast('Черновик восстановлен');
+    toast(t('ne.restored'));
   };
   const dropRestore = () => {
     setRestore(null);
@@ -366,9 +366,9 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
   const actions = (
     <div className="panel fixed inset-x-0 bottom-0 z-30 max-h-[75dvh] space-y-3 overflow-auto rounded-b-none p-4 pb-[max(1rem,env(safe-area-inset-bottom))] lg:static lg:max-h-none lg:overflow-visible lg:rounded-b-3xl lg:pb-4">
       <ErrorLine text={error} />
-      {noChannel && !isSent && <p className="text-sm font-bold text-mute">Выберите канал, чтобы опубликовать или запланировать.</p>}
+      {noChannel && !isSent && <p className="text-sm font-bold text-mute">{t('ne.needChannel')}</p>}
       {isSent ? (
-        <Button className="w-full" loading={busy} onClick={() => request('edit')}>{busy ? 'Сохраняю…' : 'Сохранить изменения в Discord'}</Button>
+        <Button className="w-full" loading={busy} onClick={() => request('edit')}>{busy ? t('ne.saving') : t('ne.saveEdit')}</Button>
       ) : (
         <>
           <SplitButton
@@ -376,58 +376,58 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
             magnetic
             loading={busy}
             disabled={noChannel}
-            label={busy ? 'Отправляю…' : 'Опубликовать сейчас'}
+            label={busy ? t('ne.sendingBtn') : t('ne.pubNow')}
             onClick={() => request('now')}
-            menuLabel="Другие способы публикации"
+            menuLabel={t('ne.moreWays')}
             items={[
-              { key: 'schedule', label: 'Запланировать…', hint: 'Выбрать дату и время', onSelect: () => setScheduling(true) },
-              { key: 'draft', label: 'Сохранить как черновик', hint: 'Ничего не отправляется в Discord', onSelect: () => void save('draft') },
+              { key: 'schedule', label: t('ne.scheduleDots'), hint: t('ne.pickDate'), onSelect: () => setScheduling(true) },
+              { key: 'draft', label: t('ne.asDraft'), hint: t('ne.asDraftHint'), onSelect: () => void save('draft') },
             ]}
           />
           {scheduling && (
             <div className="space-y-2 rounded-2xl bg-soft p-3">
-              <label htmlFor="news-when" className="label">Когда опубликовать</label>
+              <label htmlFor="news-when" className="label">{t('ne.whenPub')}</label>
               <input id="news-when" type="datetime-local" className="input" value={when} min={toLocalInput(Date.now())} onChange={(ev) => setWhen(ev.target.value)} />
-              <label htmlFor="news-repeat" className="label">Повторять</label>
+              <label htmlFor="news-repeat" className="label">{t('ne.repeat')}</label>
               <select id="news-repeat" className="input" value={repeat} onChange={(ev) => setRepeat(ev.target.value as typeof repeat)}>
-                <option value="none">Не повторять</option>
-                <option value="daily">Каждый день</option>
-                <option value="weekly">Каждую неделю</option>
-                <option value="monthly">Каждый месяц</option>
+                <option value="none">{t('ne.rep.none')}</option>
+                <option value="daily">{t('ne.rep.daily')}</option>
+                <option value="weekly">{t('ne.rep.weekly')}</option>
+                <option value="monthly">{t('ne.rep.monthly')}</option>
               </select>
               <div className="flex gap-2">
-                <Button variant="ghost" onClick={() => setScheduling(false)}>Отмена</Button>
-                <Button className="flex-1" loading={busy} disabled={noChannel} onClick={() => request('schedule')}>Запланировать</Button>
+                <Button variant="ghost" onClick={() => setScheduling(false)}>{t('ne.cancel')}</Button>
+                <Button className="flex-1" loading={busy} disabled={noChannel} onClick={() => request('schedule')}>{t('ne.schedule')}</Button>
               </div>
             </div>
           )}
         </>
       )}
       <div className="flex flex-wrap items-center gap-2 border-t-2 border-line pt-3">
-        <Button variant="soft" loading={testing} disabled={!settings?.testChannelId && noChannel} onClick={() => void sendTest()}>Отправить тест</Button>
+        <Button variant="soft" loading={testing} disabled={!settings?.testChannelId && noChannel} onClick={() => void sendTest()}>{t('ne.sendTest')}</Button>
         <span className="min-w-0 flex-1 text-xs font-semibold text-mute">
           {settings?.testChannelId
-            ? <>Тест уйдёт в {settings.testChannelName ? `# ${settings.testChannelName}` : `канал ${settings.testChannelId}`}{settings.testGuildName ? ` · ${settings.testGuildName}` : ''}. </>
-            : 'Тестовый канал не задан: тест уйдёт в канал новости. '}
-          <button type="button" className="btn-link" onClick={() => setPickTest((v) => !v)} aria-expanded={pickTest}>{settings?.testChannelId ? 'Изменить' : 'Выбрать'}</button>
+            ? <>{t('ne.testGoes', { where: (settings.testChannelName ? `# ${settings.testChannelName}` : t('ne.channelN', { id: settings.testChannelId })) + (settings.testGuildName ? ` · ${settings.testGuildName}` : '') })} </>
+            : t('ne.noTestCh')}
+          <button type="button" className="btn-link" onClick={() => setPickTest((v) => !v)} aria-expanded={pickTest}>{settings?.testChannelId ? t('ne.change') : t('ne.choose')}</button>
         </span>
         {pickTest && <div className="w-full"><ChannelPicker id="news-test-channel" value={settings?.testChannelId ?? ''} onChange={(v) => void setTestChannel(v)} /></div>}
       </div>
-      {savedAt && <p className="text-xs font-semibold text-mute">Черновик автоматически сохранён в {fmtDateTime(savedAt)}</p>}
+      {savedAt && <p className="text-xs font-semibold text-mute">{t('ne.autoSavedAt', { t: fmtDateTime(savedAt) })}</p>}
     </div>
   );
 
-  const scheduleText = check === 'schedule' ? `Будет опубликовано ${fmtDateTime(new Date(when).getTime())}.` : undefined;
+  const scheduleText = check === 'schedule' ? t('ne.willPub', { t: fmtDateTime(new Date(when).getTime()) }) : undefined;
 
   return (
     <div className="space-y-5 pb-40 lg:pb-0">
-      <a href="/admin/news" className="inline-flex items-center gap-1 font-extrabold text-link hover:underline">← Все новости</a>
+      <a href="/admin/news" className="inline-flex items-center gap-1 font-extrabold text-link hover:underline">{t('ne.allNews')}</a>
       <PageHead
         icon={<IconNews />}
-        title={id ? (isSent ? 'Правка опубликованной новости' : 'Редактирование новости') : 'Новая новость'}
-        subtitle={isSent ? 'Сообщение в Discord будет отредактировано, новое отправлено не будет.' : undefined}
-        hint="Заполните канал и текст, проверьте предпросмотр справа и нажмите «Опубликовать сейчас». Можно запланировать или сохранить как черновик."
-        help={<p>Нажмите на часть сообщения в предпросмотре, чтобы перейти к её полю. Ctrl+Enter публикует. Слова ДАТА и ВРЕМЯ в шаблонах замените на свои. Перед отправкой панель проверяет лимиты Discord и типичные ошибки. Изменения сохраняются в черновик автоматически.</p>}
+        title={id ? (isSent ? t('ne.tEdit') : t('ne.tEdit2')) : t('ne.tNew')}
+        subtitle={isSent ? t('ne.subSent') : undefined}
+        hint={t('ne.head')}
+        help={<p>{t('ne.help')}</p>}
       />
 
       {restore && (
@@ -435,76 +435,75 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
           tone="info"
           action={
             <span className="flex gap-3">
-              <button type="button" className="btn-link btn-link-tone" onClick={doRestore}>Восстановить</button>
-              <button type="button" className="btn-link btn-link-tone" onClick={dropRestore}>Отбросить</button>
+              <button type="button" className="btn-link btn-link-tone" onClick={doRestore}>{t('ne.restore')}</button>
+              <button type="button" className="btn-link btn-link-tone" onClick={dropRestore}>{t('ne.discard')}</button>
             </span>
           }
         >
-          Найден несохранённый черновик{restore.ts ? ` от ${fmtDateTime(restore.ts)}` : ''}.
+          {restore.ts ? t('ne.foundDraftTs', { t: fmtDateTime(restore.ts) }) : t('ne.foundDraft') + '.'}
         </Notice>
       )}
 
-      <div className="seg lg:hidden" role="group" aria-label="Режим">
-        <button type="button" className="seg-item" aria-pressed={mobileTab === 'editor'} onClick={() => setMobileTab('editor')}>Редактор</button>
-        <button type="button" className="seg-item" aria-pressed={mobileTab === 'preview'} onClick={() => setMobileTab('preview')}>Превью</button>
+      <div className="seg lg:hidden" role="group" aria-label={t('ne.mode')}>
+        <button type="button" className="seg-item" aria-pressed={mobileTab === 'editor'} onClick={() => setMobileTab('editor')}>{t('ne.tabEditor')}</button>
+        <button type="button" className="seg-item" aria-pressed={mobileTab === 'preview'} onClick={() => setMobileTab('preview')}>{t('ne.tabPreview')}</button>
       </div>
 
       <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,460px)]">
         <div className={`space-y-5 ${mobileTab === 'preview' ? 'hidden lg:block lg:space-y-5' : ''}`}>
-          <Section title="Куда отправить">
-            <Field label="Канал">
+          <Section title={t('ne.sWhere')}>
+            <Field label={t('ne.channel')}>
               {isSent ? <p className="font-bold">{item?.channelName ? `# ${item.channelName}` : item?.channelId}{item?.guildName ? ` · ${item.guildName}` : ''}</p> : <ChannelPicker id="news-channel" value={d.channelId} onChange={(v) => set({ channelId: v })} />}
             </Field>
             {!isSent && noChannel && (
               <p className="-mt-1 text-sm font-semibold text-mute">
-                Канал не выбран. Задайте канал по умолчанию, и он будет подставляться в каждую новую новость:{' '}
-                <GoLink href="/admin/news">Выбрать канал по умолчанию</GoLink>
+                {t('ne.noCh')}{' '}
+                <GoLink href="/admin/news">{t('ne.pickDefault')}</GoLink>
               </p>
             )}
             {!isSent && (
               <label className="flex items-center gap-3 text-sm font-bold text-mute">
-                <Switch checked={makeDefault} onChange={setMakeDefault} /> Сделать каналом новостей по умолчанию
-              </label>
+                <Switch checked={makeDefault} onChange={setMakeDefault} />{t('ne.makeDefault')}</label>
             )}
-            <Field label="Упоминание">
+            <Field label={t('ne.mention')}>
               <select id="news-mention" className="input" value={d.mention} onChange={(ev) => set({ mention: ev.target.value as Draft['mention'] })}>
-                <option value="none">Без упоминания</option>
-                <option value="here">@here: онлайн-участникам</option>
-                <option value="everyone">@everyone: всем</option>
+                <option value="none">{t('ne.m.none')}</option>
+                <option value="here">{t('ne.m.here')}</option>
+                <option value="everyone">{t('ne.m.everyone')}</option>
               </select>
             </Field>
-            {d.mention !== 'none' && <p className="-mt-2 text-sm font-semibold text-mute">Чтобы упоминание сработало, у бота должно быть право «Упоминать @everyone, @here и все роли» в этом канале.</p>}
+            {d.mention !== 'none' && <p className="-mt-2 text-sm font-semibold text-mute">{t('ne.mentionPerm')}</p>}
           </Section>
 
           {!id && (
-            <Section title="Шаблон" hint="Готовая заготовка, которую можно изменить. Слова ДАТА, ВРЕМЯ и т. п. замените на свои.">
+            <Section title={t('ne.sTpl')} hint={t('ne.tplHint')}>
               <div className="flex flex-wrap gap-2">
-                {TEMPLATES.map((t) => <button key={t.id} type="button" className="btn btn-soft btn-sm" onClick={() => void applyTemplate(t)}>{t.label}</button>)}
-                <button type="button" className="btn btn-soft btn-sm" onClick={() => { set({ ...blank(d.channelId), statusServerIds: d.statusServerIds }); setActive(0); }}>Очистить</button>
+                {TEMPLATES.map((tp) => <button key={tp.id} type="button" className="btn btn-soft btn-sm" onClick={() => void applyTemplate(tp)}>{tp.label}</button>)}
+                <button type="button" className="btn btn-soft btn-sm" onClick={() => { set({ ...blank(d.channelId), statusServerIds: d.statusServerIds }); setActive(0); }}>{t('ne.clear')}</button>
               </div>
             </Section>
           )}
 
-          <Section title="Текст" hint="Обычный текст над рамкой. Можно оставить пустым.">
-            <MarkdownField id="news-content" label="Сообщение" value={d.content} onChange={(v) => set({ content: v })} max={LIMITS.content} rows={3} placeholder="Например: Друзья, у нас новости!" variables={variables} onImage={(f) => void pasteImage(f)} />
+          <Section title={t('ne.sText')} hint={t('ne.textHint')}>
+            <MarkdownField id="news-content" label={t('ne.message')} value={d.content} onChange={(v) => set({ content: v })} max={LIMITS.content} rows={3} placeholder={t('ne.msgHolder')} variables={variables} onImage={(f) => void pasteImage(f)} />
           </Section>
 
-          <Section title="Оформление (embed)" hint="Цветная карточка с заголовком, текстом, полями и картинкой. В одном сообщении можно несколько блоков.">
-            <div className="no-scrollbar flex items-center gap-2 overflow-x-auto" role="tablist" aria-label="Embed-блоки">
+          <Section title={t('ne.sEmbed')} hint={t('ne.embedHint')}>
+            <div className="no-scrollbar flex items-center gap-2 overflow-x-auto" role="tablist" aria-label={t('ne.embedTabs')}>
               <div className="seg flex w-fit shrink-0">
                 {d.embeds.map((x, i) => (
                   <button key={i} type="button" role="tab" aria-selected={i === cur} aria-pressed={i === cur} className="seg-item whitespace-nowrap" onClick={() => setActive(i)}>
-                    Embed {i + 1}{!embedHasContent(x) && <span className="ml-1 text-mute" aria-label="пустой">·</span>}
+                    Embed {i + 1}{!embedHasContent(x) && <span className="ml-1 text-mute" aria-label={t('ne.emptyAria')}>·</span>}
                   </button>
                 ))}
               </div>
-              <button type="button" className="btn btn-soft btn-sm shrink-0" disabled={d.embeds.length >= LIMITS.embeds} onClick={addEmbed}>+ Добавить embed</button>
-              {d.embeds.length > 1 && <button type="button" className="btn btn-danger btn-sm shrink-0" onClick={() => void removeEmbed()}>Удалить Embed {cur + 1}</button>}
+              <button type="button" className="btn btn-soft btn-sm shrink-0" disabled={d.embeds.length >= LIMITS.embeds} onClick={addEmbed}>{t('ne.addEmbed')}</button>
+              {d.embeds.length > 1 && <button type="button" className="btn btn-danger btn-sm shrink-0" onClick={() => void removeEmbed()}>{t('ne.delEmbedBtn', { n: cur + 1 })}</button>}
             </div>
 
             <div>
-              <span className="label">Тип сообщения</span>
-              <div className="flex flex-wrap gap-2" role="group" aria-label="Тип сообщения">
+              <span className="label">{t('ne.msgType')}</span>
+              <div className="flex flex-wrap gap-2" role="group" aria-label={t('ne.msgType')}>
                 {PRESETS.map((p) => {
                   const on = presetOf(e)?.id === p.id;
                   return (
@@ -516,87 +515,85 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
               </div>
             </div>
 
-            <Field label="Цвет полосы"><ColorPicker value={e.color} onChange={(c) => setE({ color: c })} games={games} /></Field>
+            <Field label={t('ne.barColor')}><ColorPicker value={e.color} onChange={(c) => setE({ color: c })} games={games} /></Field>
             <div>
-              <div className="mb-1.5 flex items-center justify-between"><label htmlFor="news-title" className="label mb-0!">Заголовок</label><Counter value={e.title.length} max={LIMITS.title} /></div>
-              <input id="news-title" className="input" value={e.title} onChange={(ev) => setE({ title: ev.target.value })} placeholder="📢 Заголовок новости" />
+              <div className="mb-1.5 flex items-center justify-between"><label htmlFor="news-title" className="label mb-0!">{t('ne.title')}</label><Counter value={e.title.length} max={LIMITS.title} /></div>
+              <input id="news-title" className="input" value={e.title} onChange={(ev) => setE({ title: ev.target.value })} placeholder={t('ne.titleHolder')} />
             </div>
-            <Field label="Ссылка заголовка (необязательно)">
+            <Field label={t('ne.titleUrl')}>
               <input id="news-url" className="input" value={e.url} onChange={(ev) => setE({ url: ev.target.value.trim() })} placeholder="https://…" />
             </Field>
-            <MarkdownField id="news-desc" label="Основной текст" value={e.description} onChange={(v) => setE({ description: v })} max={LIMITS.description} rows={8} placeholder="Расскажите, что произошло. Поддерживается оформление Discord." variables={variables} onImage={(f) => void pasteImage(f)} />
+            <MarkdownField id="news-desc" label={t('ne.mainText')} value={e.description} onChange={(v) => setE({ description: v })} max={LIMITS.description} rows={8} placeholder={t('ne.descHolder')} variables={variables} onImage={(f) => void pasteImage(f)} />
 
             <details className="rounded-2xl border-2 border-line px-4 py-2.5" open={moreOpen || !!(e.authorName || e.thumbnail || e.imageUrl || e.imageUpload)} onToggle={(ev) => setMoreOpen(ev.currentTarget.open)}>
-              <summary className="cursor-pointer select-none font-extrabold text-link">Автор, миниатюра и большая картинка</summary>
+              <summary className="cursor-pointer select-none font-extrabold text-link">{t('ne.moreSum')}</summary>
               <div className="mt-3 space-y-3.5">
                 <div className="flex flex-wrap items-center gap-2">
-                  <button type="button" className="btn btn-soft btn-sm" onClick={() => void useProfileAuthor()}>Из профиля{author?.source === 'discord' ? ' (Discord)' : ''}</button>
-                  <span className="text-sm font-semibold text-mute">Ник и фото берутся из Discord, если он привязан, иначе из профиля на сайте; регистр ника как в Discord.</span>
+                  <button type="button" className="btn btn-soft btn-sm" onClick={() => void useProfileAuthor()}>{author?.source === 'discord' ? t('ne.fromProfileDc') : t('ne.fromProfile')}</button>
+                  <span className="text-sm font-semibold text-mute">{t('ne.authorNote')}</span>
                 </div>
                 <div className="grid gap-3 sm:grid-cols-2">
-                  <label className="block"><span className="label">Автор (имя)</span><input id="news-author" className="input" value={e.authorName} onChange={(ev) => setE({ authorName: ev.target.value })} placeholder="Администрация" /></label>
-                  <label className="block"><span className="label">Аватар автора (ссылка)</span><input className="input" value={e.authorIcon} onChange={(ev) => setE({ authorIcon: ev.target.value.trim() })} placeholder="https://…" /></label>
+                  <label className="block"><span className="label">{t('ne.authorName')}</span><input id="news-author" className="input" value={e.authorName} onChange={(ev) => setE({ authorName: ev.target.value })} placeholder={t('ne.authorHolder')} /></label>
+                  <label className="block"><span className="label">{t('ne.authorIcon')}</span><input className="input" value={e.authorIcon} onChange={(ev) => setE({ authorIcon: ev.target.value.trim() })} placeholder="https://…" /></label>
                 </div>
-                <ImageDrop id="news-thumb" label="Миниатюра справа сверху" url={e.thumbnail} upload="" onUrl={(v) => setE({ thumbnail: v })} onUpload={() => undefined} minWidth={80} />
-                <ImageDrop id="news-image" label="Большая картинка внизу" url={e.imageUrl} upload={e.imageUpload} onUrl={(v) => setE({ imageUrl: v })} onUpload={(n) => setE({ imageUpload: n, imageUrl: n ? '' : e.imageUrl })} allowUpload minWidth={400} />
+                <ImageDrop id="news-thumb" label={t('ne.thumb')} url={e.thumbnail} upload="" onUrl={(v) => setE({ thumbnail: v })} onUpload={() => undefined} minWidth={80} />
+                <ImageDrop id="news-image" label={t('ne.bigImg')} url={e.imageUrl} upload={e.imageUpload} onUrl={(v) => setE({ imageUrl: v })} onUpload={(n) => setE({ imageUpload: n, imageUrl: n ? '' : e.imageUrl })} allowUpload minWidth={400} />
               </div>
             </details>
           </Section>
 
-          <Section title="Поля" hint="Блоки «название и значение». Перетаскивайте за ручку или используйте стрелки; короткие поля можно ставить в ряд по три.">
+          <Section title={t('ne.sFields')} hint={t('ne.fieldsHint')}>
             <FieldsBuilder fields={e.fields} onChange={(f) => setE({ fields: f })} variables={variables} />
           </Section>
 
-          <Section title="Подпись">
+          <Section title={t('ne.sFooter')}>
             <div>
-              <div className="mb-1.5 flex items-center justify-between"><label htmlFor="news-footer" className="label mb-0!">Текст внизу</label><Counter value={e.footer.length} max={LIMITS.footer} /></div>
-              <input id="news-footer" className="input" value={e.footer} onChange={(ev) => setE({ footer: ev.target.value })} placeholder="Например: Администрация сервера" />
+              <div className="mb-1.5 flex items-center justify-between"><label htmlFor="news-footer" className="label mb-0!">{t('ne.footerText')}</label><Counter value={e.footer.length} max={LIMITS.footer} /></div>
+              <input id="news-footer" className="input" value={e.footer} onChange={(ev) => setE({ footer: ev.target.value })} placeholder={t('ne.footerHolder')} />
             </div>
             <label className="flex items-center gap-3 text-sm font-bold text-mute">
-              <Switch checked={e.timestamp} onChange={(on) => setE({ timestamp: on })} /> Показывать время публикации
-            </label>
+              <Switch checked={e.timestamp} onChange={(on) => setE({ timestamp: on })} />{t('ne.showTs')}</label>
           </Section>
 
           {servers && servers.length > 0 && (
-            <Section title="Статус серверов" hint="Живой блок: бот добавит карточки выбранных серверов (онлайн, игроки) и будет обновлять их.">
+            <Section title={t('ne.sStatus')} hint={t('ne.statusHint')}>
               <StatusServers servers={servers} value={d.statusServerIds} onChange={(ids) => set({ statusServerIds: ids })} />
             </Section>
           )}
 
-          <Section title="На сайте" hint="Эти поля видны только на странице новостей панели; в Discord они не попадают.">
+          <Section title={t('ne.sSite')} hint={t('ne.siteHint')}>
             <div className="grid gap-3 sm:grid-cols-2">
-              <Field label="Рубрика">
+              <Field label={t('ne.category')}>
                 <select id="news-category" className="input" value={d.category} onChange={(ev) => set({ category: ev.target.value as Draft['category'] })}>
                   {NEWS_CATEGORIES.map((c) => <option key={c} value={c}>{CATEGORY_LABEL_RU[c]}</option>)}
                 </select>
               </Field>
-              <Field label="Игра (для обложки по умолчанию)">
+              <Field label={t('ne.game')}>
                 <select id="news-game" className="input" value={d.game} onChange={(ev) => set({ game: ev.target.value })}>
-                  <option value="">нет</option>
+                  <option value="">{t('ne.none')}</option>
                   {GAMES.map((g) => <option key={g.id} value={g.id}>{g.label}</option>)}
                 </select>
               </Field>
             </div>
             <label className="flex items-center gap-3 text-sm font-bold text-mute">
-              <Switch checked={d.pinned} onChange={(on) => set({ pinned: on })} /> Закрепить вверху ленты
-            </label>
+              <Switch checked={d.pinned} onChange={(on) => set({ pinned: on })} />{t('ne.pin')}</label>
 
             <div className="space-y-2">
-              <span className="label mb-0!">Отсчёт времени</span>
+              <span className="label mb-0!">{t('ne.countdown')}</span>
               <div className="grid gap-2 sm:grid-cols-2">
-                <input id="news-cd-at" type="datetime-local" className="input" aria-label="Когда" value={d.countdownAt} onChange={(ev) => set({ countdownAt: ev.target.value })} />
-                <input id="news-cd-label" className="input" aria-label="Подпись отсчёта" maxLength={LIMITS.countdownLabel} placeholder="Вайп" value={d.countdownLabel} onChange={(ev) => set({ countdownLabel: ev.target.value })} />
+                <input id="news-cd-at" type="datetime-local" className="input" aria-label={t('ne.when')} value={d.countdownAt} onChange={(ev) => set({ countdownAt: ev.target.value })} />
+                <input id="news-cd-label" className="input" aria-label={t('ne.cdLabel')} maxLength={LIMITS.countdownLabel} placeholder={t('ne.cdHolder')} value={d.countdownLabel} onChange={(ev) => set({ countdownLabel: ev.target.value })} />
               </div>
-              <p className="text-xs font-semibold text-mute">На сайте: «Вайп через 2 д 4 ч 10 мин», после времени «Началось». {d.countdownAt && <button type="button" className="btn-link" onClick={() => set({ countdownAt: '', countdownLabel: '' })}>Убрать отсчёт</button>}</p>
+              <p className="text-xs font-semibold text-mute">{t('ne.cdNote')} {d.countdownAt && <button type="button" className="btn-link" onClick={() => set({ countdownAt: '', countdownLabel: '' })}>{t('ne.cdRemove')}</button>}</p>
             </div>
 
             <div className="space-y-2">
-              <span className="label mb-0!">Галерея ({d.gallery.length} из {LIMITS.gallery})</span>
+              <span className="label mb-0!">{t('ne.gallery', { n: d.gallery.length, m: LIMITS.gallery })}</span>
               {d.gallery.map((g, i) => (
                 <ImageDrop
                   key={g.k}
                   id={'news-gal-' + i}
-                  label={'Картинка ' + (i + 1)}
+                  label={t('ne.image', { n: i + 1 })}
                   url={g.url}
                   upload={g.upload}
                   allowUpload
@@ -605,39 +602,39 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
                   onUpload={(n) => set({ gallery: n ? d.gallery.map((x) => (x.k === g.k ? { ...x, upload: n, url: '' } : x)) : d.gallery.filter((x) => x.k !== g.k) })}
                 />
               ))}
-              <button type="button" className="btn btn-soft btn-sm" disabled={d.gallery.length >= LIMITS.gallery} onClick={() => set({ gallery: [...d.gallery, { k: newKey(), url: '', upload: '' }] })}>+ Добавить картинку</button>
+              <button type="button" className="btn btn-soft btn-sm" disabled={d.gallery.length >= LIMITS.gallery} onClick={() => set({ gallery: [...d.gallery, { k: newKey(), url: '', upload: '' }] })}>{t('ne.addImg')}</button>
             </div>
 
             <div className="space-y-2">
-              <span className="label mb-0!">Что изменилось ({d.changes.length} из {LIMITS.changes})</span>
+              <span className="label mb-0!">{t('ne.changes', { n: d.changes.length, m: LIMITS.changes })}</span>
               {d.changes.map((c, i) => (
                 <div key={c.k} className="nw-edit-row">
-                  <select aria-label={'Тип изменения ' + (i + 1)} className="input" value={c.kind} onChange={(ev) => { const v = ev.target.value; if (isChangeKind(v)) set({ changes: d.changes.map((x) => (x.k === c.k ? { ...x, kind: v } : x)) }); }}>
+                  <select aria-label={t('ne.changeType', { n: i + 1 })} className="input" value={c.kind} onChange={(ev) => { const v = ev.target.value; if (isChangeKind(v)) set({ changes: d.changes.map((x) => (x.k === c.k ? { ...x, kind: v } : x)) }); }}>
                     {CHANGE_ORDER.map((k) => <option key={k} value={k}>{CHANGE_LABEL_RU[k]}</option>)}
                   </select>
-                  <input aria-label={'Текст изменения ' + (i + 1)} className="input" maxLength={LIMITS.changeText} value={c.text} placeholder="Что именно" onChange={(ev) => set({ changes: d.changes.map((x) => (x.k === c.k ? { ...x, text: ev.target.value } : x)) })} />
-                  <button type="button" className="btn btn-danger btn-sm" onClick={() => set({ changes: d.changes.filter((x) => x.k !== c.k) })}>Убрать</button>
+                  <input aria-label={t('ne.changeText', { n: i + 1 })} className="input" maxLength={LIMITS.changeText} value={c.text} placeholder={t('ne.whatHolder')} onChange={(ev) => set({ changes: d.changes.map((x) => (x.k === c.k ? { ...x, text: ev.target.value } : x)) })} />
+                  <button type="button" className="btn btn-danger btn-sm" onClick={() => set({ changes: d.changes.filter((x) => x.k !== c.k) })}>{t('ne.remove')}</button>
                 </div>
               ))}
-              <button type="button" className="btn btn-soft btn-sm" disabled={d.changes.length >= LIMITS.changes} onClick={() => set({ changes: [...d.changes, { k: newKey(), kind: 'add', text: '' }] })}>+ Добавить пункт</button>
+              <button type="button" className="btn btn-soft btn-sm" disabled={d.changes.length >= LIMITS.changes} onClick={() => set({ changes: [...d.changes, { k: newKey(), kind: 'add', text: '' }] })}>{t('ne.addItem')}</button>
             </div>
 
             <div className="space-y-2">
-              <span className="label mb-0!">Кнопки ({d.actions.length} из {LIMITS.actions})</span>
+              <span className="label mb-0!">{t('ne.buttons', { n: d.actions.length, m: LIMITS.actions })}</span>
               {d.actions.map((a, i) => {
                 const bad = !!a.url.trim() && !isHttpsUrl(a.url);
                 return (
                   <div key={a.k} className="space-y-1">
                     <div className="nw-edit-row">
-                      <input aria-label={'Подпись кнопки ' + (i + 1)} className="input" maxLength={LIMITS.actionLabel} value={a.label} placeholder="Подробнее" onChange={(ev) => set({ actions: d.actions.map((x) => (x.k === a.k ? { ...x, label: ev.target.value } : x)) })} />
-                      <input aria-label={'Ссылка кнопки ' + (i + 1)} aria-invalid={bad} className="input" value={a.url} placeholder="https://…" onChange={(ev) => set({ actions: d.actions.map((x) => (x.k === a.k ? { ...x, url: ev.target.value.trim() } : x)) })} />
-                      <button type="button" className="btn btn-danger btn-sm" onClick={() => set({ actions: d.actions.filter((x) => x.k !== a.k) })}>Убрать</button>
+                      <input aria-label={t('ne.btnLabel', { n: i + 1 })} className="input" maxLength={LIMITS.actionLabel} value={a.label} placeholder={t('ne.moreHolder')} onChange={(ev) => set({ actions: d.actions.map((x) => (x.k === a.k ? { ...x, label: ev.target.value } : x)) })} />
+                      <input aria-label={t('ne.btnUrl', { n: i + 1 })} aria-invalid={bad} className="input" value={a.url} placeholder="https://…" onChange={(ev) => set({ actions: d.actions.map((x) => (x.k === a.k ? { ...x, url: ev.target.value.trim() } : x)) })} />
+                      <button type="button" className="btn btn-danger btn-sm" onClick={() => set({ actions: d.actions.filter((x) => x.k !== a.k) })}>{t('ne.remove')}</button>
                     </div>
-                    {bad && <p className="text-sm font-bold text-bad" role="alert">Ссылка должна начинаться с https://</p>}
+                    {bad && <p className="text-sm font-bold text-bad" role="alert">{t('ne.https')}</p>}
                   </div>
                 );
               })}
-              <button type="button" className="btn btn-soft btn-sm" disabled={d.actions.length >= LIMITS.actions} onClick={() => set({ actions: [...d.actions, { k: newKey(), label: '', url: '' }] })}>+ Добавить кнопку</button>
+              <button type="button" className="btn btn-soft btn-sm" disabled={d.actions.length >= LIMITS.actions} onClick={() => set({ actions: [...d.actions, { k: newKey(), label: '', url: '' }] })}>{t('ne.addBtn')}</button>
             </div>
           </Section>
 
@@ -646,9 +643,9 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
 
         <aside className="space-y-4 lg:sticky lg:top-4 lg:max-h-[calc(100dvh-2rem)] lg:space-y-4 lg:overflow-y-auto lg:overscroll-contain">
           <div className={mobileTab === 'editor' ? 'hidden space-y-4 lg:block' : 'space-y-4'}>
-            <div className="seg" role="group" aria-label="Вид предпросмотра">
-              <button type="button" className="seg-item" aria-pressed={pvTab === 'discord'} onClick={() => setPvTab('discord')}>В Discord</button>
-              <button type="button" className="seg-item" aria-pressed={pvTab === 'site'} onClick={() => setPvTab('site')}>Как будет на сайте</button>
+            <div className="seg" role="group" aria-label={t('ne.pvView')}>
+              <button type="button" className="seg-item" aria-pressed={pvTab === 'discord'} onClick={() => setPvTab('discord')}>{t('ne.pvDiscord')}</button>
+              <button type="button" className="seg-item" aria-pressed={pvTab === 'site'} onClick={() => setPvTab('site')}>{t('ne.pvSite')}</button>
             </div>
             {pvTab === 'discord' ? (
               <Preview draft={d} vars={vars} servers={servers} channelNames={channelNames} onPick={focusPart} total={total} />
@@ -659,10 +656,10 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
                   servers={servers}
                   items={[{ id: id ?? 0, status: 'draft', title: d.embeds[0]?.title ?? '', payload: toPayload(d), sentAt: item?.sentAt ?? Date.now(), category: d.category, pinned: d.pinned, authorRole: null, reactions: [] }]}
                 />
-                {!embedHasContent(d.embeds[0] ?? blankEmbed()) && !d.content && <p className="py-6 text-center font-semibold text-mute">Начните писать: здесь появится карточка новости.</p>}
+                {!embedHasContent(d.embeds[0] ?? blankEmbed()) && !d.content && <p className="py-6 text-center font-semibold text-mute">{t('ne.pvEmpty')}</p>}
               </div>
             )}
-            {hasLive && <p className="px-1 text-xs font-semibold text-mute">Карточки серверов показаны образцом: настоящие данные появятся при отправке.</p>}
+            {hasLive && <p className="px-1 text-xs font-semibold text-mute">{t('ne.pvLive')}</p>}
             <LimitsPanel d={d} active={cur} />
           </div>
           {actions}

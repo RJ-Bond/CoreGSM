@@ -1,22 +1,26 @@
 import { useAuth } from '../auth';
+import { getPrefs, t, useI18n } from '../i18n';
 import { Icon } from '../icons';
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react';
 import { api, type StatusDay, type StatusIncident, type StatusInfo, type StatusServer } from '../api';
-import { Empty, ErrorLine, GameAvatar, LoadError, PageHead, SmoothArea, StatusPill, ago, fmtDateTime, fmtTime, plural, usePoll } from '../ui';
+import { Empty, ErrorLine, GameAvatar, LoadError, PageHead, SmoothArea, StatusPill, ago, fmtDateTime, fmtTime, usePoll } from '../ui';
 import '../styles/status.css';
 
+const loc = () => (getPrefs().lang === 'en' ? 'en-US' : 'ru-RU');
 const fmtDay = (day: string) => {
   const d = new Date(`${day}T12:00:00`);
-  return Number.isNaN(d.getTime()) ? day : d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
+  return Number.isNaN(d.getTime()) ? day : d.toLocaleDateString(loc(), { day: 'numeric', month: 'long' });
 };
-const fmtPct = (p: number) => `${(Math.round(p * 10) / 10).toLocaleString('ru-RU')}%`;
-const dur = (min: number) => (min < 60 ? `${min} мин` : `${Math.floor(min / 60)} ч${min % 60 ? ` ${min % 60} мин` : ''}`);
+const fmtPct = (p: number) => `${(Math.round(p * 10) / 10).toLocaleString(loc())}%`;
+const dur = (min: number) => (min < 60 ? t('st.dur.m', { m: min }) : min % 60 ? t('st.dur.hm', { h: Math.floor(min / 60), m: min % 60 }) : t('st.dur.h', { h: Math.floor(min / 60) }));
+/** «, 3 сбоя» after a duration when a day had several outages */
+const incSuffix = (n?: number) => (n && n > 1 ? `, ${t('st.outages', { n })}` : '');
 
 const POLL_MS = 60_000;
 
 const fmtShort = (day: string) => {
   const d = new Date(`${day}T12:00:00`);
-  return Number.isNaN(d.getTime()) ? day : d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' }).replace('.', '');
+  return Number.isNaN(d.getTime()) ? day : d.toLocaleDateString(loc(), { day: 'numeric', month: 'short' }).replace('.', '');
 };
 
 const reducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches || document.documentElement.dataset.motion === 'reduce';
@@ -75,11 +79,11 @@ function dayTone(d: StatusDay): 'none' | 'ok' | 'blip' | 'warn' | 'bad' | 'plann
 }
 
 function dayText(d: StatusDay): string {
-  if (d.pct == null) return `${fmtDay(d.day)}: нет данных`;
-  const parts = [`${fmtDay(d.day)}: доступен ${fmtPct(d.pct)}`];
-  if (d.down) parts.push(`простой ${dur(d.down)}${d.incidents && d.incidents > 1 ? `, ${d.incidents} ${plural(d.incidents, ['сбой', 'сбоя', 'сбоев'])}` : ''}`);
-  else parts.push('без сбоев');
-  if (d.planned) parts.push(`плановые работы ${dur(d.planned)}`);
+  if (d.pct == null) return t('st.day.none', { d: fmtDay(d.day) });
+  const parts = [t('st.day.up', { d: fmtDay(d.day), p: fmtPct(d.pct) })];
+  if (d.down) parts.push(t('st.day.down', { dur: dur(d.down), inc: incSuffix(d.incidents) }));
+  else parts.push(t('st.noOutages'));
+  if (d.planned) parts.push(t('st.day.planned', { dur: dur(d.planned) }));
   return parts.join(' · ');
 }
 
@@ -87,7 +91,7 @@ function UptimeBar({ s }: { s: StatusServer }) {
   const [active, setActive] = useState<number | null>(null);
   const ref = useRef<HTMLDivElement>(null);
   const n = s.days.length;
-  const summary = s.uptime30 == null ? 'Нет данных об аптайме за 30 дней' : `Аптайм за 30 дней: ${fmtPct(s.uptime30)}`;
+  const summary = s.uptime30 == null ? t('st.up.none') : t('st.up.sum', { p: fmtPct(s.uptime30) });
   const at = (e: PointerEvent) => {
     const r = ref.current?.getBoundingClientRect();
     if (!r || r.width === 0) return null;
@@ -111,7 +115,7 @@ function UptimeBar({ s }: { s: StatusServer }) {
         className="st-bars"
         role="img"
         tabIndex={0}
-        aria-label={`${summary}. Стрелками можно просмотреть дни`}
+        aria-label={t('st.up.aria', { s: summary })}
         onPointerMove={(e) => { if (e.pointerType === 'mouse') setActive(at(e)); }}
         onPointerDown={(e) => { const i = at(e); setActive((cur) => (e.pointerType !== 'mouse' && cur === i ? null : i)); }}
         onPointerLeave={(e) => { if (e.pointerType === 'mouse') setActive(null); }}
@@ -125,15 +129,15 @@ function UptimeBar({ s }: { s: StatusServer }) {
       {d && active != null && (
         <div className={`st-tip ${active < 4 ? 'is-l' : active > n - 5 ? 'is-r' : ''}`} style={{ left: `${((active + 0.5) / n) * 100}%` }} aria-hidden>
           <div className="st-tip-day"><span className={`st-day st-legend is-${dayTone(d)}`} />{fmtDay(d.day)}</div>
-          <div className="st-tip-main">{d.pct == null ? 'Нет данных' : `Доступен ${fmtPct(d.pct)}`}</div>
-          {d.pct != null && <div className="st-tip-sub">{d.down ? `Простой ${dur(d.down)}${d.incidents && d.incidents > 1 ? `, ${d.incidents} ${plural(d.incidents, ['сбой', 'сбоя', 'сбоев'])}` : ''}` : 'Без сбоев'}</div>}
-          {!!d.planned && <div className="st-tip-sub">Плановые работы {dur(d.planned)}</div>}
+          <div className="st-tip-main">{d.pct == null ? t('st.nodata') : t('st.tip.up', { p: fmtPct(d.pct) })}</div>
+          {d.pct != null && <div className="st-tip-sub">{d.down ? t('st.tip.down', { dur: dur(d.down), inc: incSuffix(d.incidents) }) : t('st.tip.none')}</div>}
+          {!!d.planned && <div className="st-tip-sub">{t('st.tip.planned', { dur: dur(d.planned) })}</div>}
         </div>
       )}
       <div className="st-ticks" aria-hidden>
         {s.days.map((x, i) => (
           <span key={x.day} className="st-tick">
-            {(n - 1 - i) % 7 === 0 && <em className={i === n - 1 ? 'is-last' : ''}>{i === n - 1 ? 'сегодня' : fmtShort(x.day)}</em>}
+            {(n - 1 - i) % 7 === 0 && <em className={i === n - 1 ? 'is-last' : ''}>{i === n - 1 ? t('st.today') : fmtShort(x.day)}</em>}
           </span>
         ))}
       </div>
@@ -158,15 +162,15 @@ function Latency({ s }: { s: StatusServer }) {
   const tone = (s.avgPing ?? 0) > 100 ? 'rgb(var(--warn))' : 'rgb(var(--link))';
   return (
     <div className="st-lat">
-      <div className="st-lat-k">Отклик за 24 ч</div>
+      <div className="st-lat-k">{t('st.lat.k')}</div>
       <div className="st-lat-chart">
-        <SmoothArea values={filled} color={tone} w={W} h={H} fill={0.2} strokeWidth={1.8} className="h-9" max={top} label={`Пинг за 24 часа: от ${lo} до ${hi} мс`} />
+        <SmoothArea values={filled} color={tone} w={W} h={H} fill={0.2} strokeWidth={1.8} className="h-9" max={top} label={t('st.lat.label', { lo, hi })} />
         <span className="st-lat-limit" style={{ top: `${yOf(100)}%` }} aria-hidden><i>100</i></span>
         {showPeak && (
-          <span className={`st-lat-peak ${hi > 100 ? 'is-high' : ''}`} style={{ left: `${((PAD + (peak / Math.max(1, filled.length - 1)) * (W - PAD * 2)) / W) * 100}%`, top: `${yOf(filled[peak])}%` }} title={`Максимум ${hi} мс`} aria-hidden />
+          <span className={`st-lat-peak ${hi > 100 ? 'is-high' : ''}`} style={{ left: `${((PAD + (peak / Math.max(1, filled.length - 1)) * (W - PAD * 2)) / W) * 100}%`, top: `${yOf(filled[peak])}%` }} title={t('st.lat.max', { hi })} aria-hidden />
         )}
       </div>
-      <div className="st-lat-v">{s.avgPing != null ? `мин ${lo} · ср ${s.avgPing} · макс ${hi} мс` : '–'}</div>
+      <div className="st-lat-v">{s.avgPing != null ? t('st.lat.v', { lo, avg: s.avgPing, hi }) : '–'}</div>
     </div>
   );
 }
@@ -185,8 +189,8 @@ function ServerRow({ s, index }: { s: StatusServer; index: number }) {
           <div className="truncate font-mono text-sm font-semibold text-mute">{s.address}</div>
         </div>
         {s.online && (
-          <span className="st-players" title={`${s.players} из ${s.maxPlayers} игроков`}>
-            <b>{s.players}/{s.maxPlayers} <span>игроков</span></b>
+          <span className="st-players" title={t('st.players.title', { p: s.players, m: s.maxPlayers })}>
+            <b>{s.players}/{s.maxPlayers} <span>{t('st.players.word')}</span></b>
             <i className="st-meter" aria-hidden><i style={{ width: `${fill}%` }} /></i>
           </span>
         )}
@@ -199,9 +203,9 @@ function ServerRow({ s, index }: { s: StatusServer; index: number }) {
         <div className="st-server-side">
           <div className="st-up">
             <div className={`st-up-v is-${upTone}`}>{s.uptime30 == null ? '–' : fmtPct(s.uptime30)}</div>
-            <div className="st-up-k">{incidents30 ? `${incidents30} ${plural(incidents30, ['сбой', 'сбоя', 'сбоев'])} за 30 дней` : 'без сбоев за 30 дней'}</div>
+            <div className="st-up-k">{incidents30 ? t('st.inc30', { n: incidents30 }) : t('st.noInc30')}</div>
           </div>
-          {s.avgPing != null && <div className="st-ping-inline">пинг {s.avgPing} мс</div>}
+          {s.avgPing != null && <div className="st-ping-inline">{t('st.ping', { n: s.avgPing })}</div>}
           <Latency s={s} />
         </div>
       </div>
@@ -222,20 +226,20 @@ function Banner({ data, fetchedAt }: { data: StatusInfo; fetchedAt: number }) {
   const playersN = Math.round(useCountUp(players));
   const avgN = useCountUp(avg ?? 0);
   const [tone, title, text] = up === total
-    ? ['ok', 'Все серверы работают', 'Игроки могут заходить на любой сервер.']
+    ? ['ok', t('st.hero.ok'), t('st.hero.okText')]
     : up === 0
-      ? ['bad', 'Все серверы недоступны', 'Мы уже видим проблему: страница обновится сама, когда серверы вернутся.']
-      : ['warn', `${total - up} ${plural(total - up, ['сервер недоступен', 'сервера недоступны', 'серверов недоступны'])}`, 'Остальные работают в обычном режиме.'];
-  const last = ongoing > 0 ? 'Сбой продолжается прямо сейчас' : lastBad ? `Последний сбой: ${ago(lastBad.start)}` : 'За 30 дней сбоев не было';
+      ? ['bad', t('st.hero.bad'), t('st.hero.badText')]
+      : ['warn', t('st.hero.some', { n: total - up }), t('st.hero.someText')];
+  const last = ongoing > 0 ? t('st.last.now') : lastBad ? t('st.last.ago', { when: ago(lastBad.start) }) : t('st.last.none');
   return (
     <section className={`st-banner is-${tone}`} role="status">
       <span className="st-banner-ico" aria-hidden>{tone === 'ok' ? <IconCheck /> : tone === 'warn' ? <IconWarn /> : <IconCross />}</span>
       <div className="min-w-0 flex-1 basis-60">
         <h2 className="text-2xl font-black leading-tight sm:text-3xl">{title}</h2>
         <p className="mt-1 font-semibold opacity-85">{text}</p>
-        <div className="st-segs" role="img" aria-label={`Онлайн ${up} из ${total}`}>
+        <div className="st-segs" role="img" aria-label={t('st.seg.aria', { up, total })}>
           {servers.map((s) => (
-            <span key={s.id} className={`st-seg ${!s.online ? 'is-down' : s.avgPing != null && s.avgPing > 100 ? 'is-lag' : 'is-up'}`} title={`${s.name}: ${s.online ? 'онлайн' : 'недоступен'}`} />
+            <span key={s.id} className={`st-seg ${!s.online ? 'is-down' : s.avgPing != null && s.avgPing > 100 ? 'is-lag' : 'is-up'}`} title={t(s.online ? 'st.seg.on' : 'st.seg.off', { name: s.name })} />
           ))}
         </div>
         <div className="st-banner-meta">
@@ -244,10 +248,10 @@ function Banner({ data, fetchedAt }: { data: StatusInfo; fetchedAt: number }) {
         </div>
       </div>
       <dl className="st-banner-stats">
-        <div><dt><IconServer />Онлайн</dt><dd>{upN} из {total}</dd></div>
-        <div><dt><IconUsers />Игроков</dt><dd>{playersN}</dd></div>
-        <div><dt><IconAct />Аптайм 30 дн</dt><dd>{avg == null ? '–' : fmtPct(avgN)}</dd></div>
-        {ongoing > 0 && <div className="is-alert"><dt><IconAlert />Сбоев сейчас</dt><dd>{ongoing}</dd></div>}
+        <div><dt><IconServer />{t('st.stat.online')}</dt><dd>{t('st.stat.of', { a: upN, b: total })}</dd></div>
+        <div><dt><IconUsers />{t('st.stat.players')}</dt><dd>{playersN}</dd></div>
+        <div><dt><IconAct />{t('st.stat.uptime')}</dt><dd>{avg == null ? '–' : fmtPct(avgN)}</dd></div>
+        {ongoing > 0 && <div className="is-alert"><dt><IconAlert />{t('st.stat.now')}</dt><dd>{ongoing}</dd></div>}
       </dl>
     </section>
   );
@@ -264,7 +268,7 @@ function Refresh({ fetchedAt }: { fetchedAt: number }) {
         <circle cx="9" cy="9" r="7" className="st-ring-bg" />
         <circle cx="9" cy="9" r="7" className="st-ring" strokeDasharray={C} strokeDashoffset={C * (1 - p)} />
       </svg>
-      обновлено {ago(fetchedAt)}
+      {t('st.updated', { ago: ago(fetchedAt) })}
     </span>
   );
 }
@@ -278,11 +282,11 @@ function IncidentItem({ i }: { i: StatusIncident }) {
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
           <span className="font-extrabold">{i.serverName}</span>
-          <span className={`st-inc-badge is-${kind}`}>{i.planned ? 'Плановые работы' : live ? 'Продолжается' : 'Решено'}</span>
+          <span className={`st-inc-badge is-${kind}`}>{i.planned ? t('st.inc.planned') : live ? t('st.inc.live') : t('st.inc.done')}</span>
         </div>
         <p className="text-sm font-semibold text-mute">
-          {live ? `Не отвечает ${dur(i.minutes)}, с ${fmtTime(i.start)}` : `Недоступен ${dur(i.minutes)}: ${fmtTime(i.start)} – ${fmtTime(i.end!)}`}
-          {i.playersBefore > 0 && ` · в игре было ${i.playersBefore} ${plural(i.playersBefore, ['игрок', 'игрока', 'игроков'])}`}
+          {live ? t('st.inc.liveText', { dur: dur(i.minutes), from: fmtTime(i.start) }) : t('st.inc.pastText', { dur: dur(i.minutes), from: fmtTime(i.start), to: fmtTime(i.end!) })}
+          {i.playersBefore > 0 && t('st.inc.players', { n: i.playersBefore })}
         </p>
       </div>
       <time className="shrink-0 text-xs font-bold text-mute" dateTime={new Date(i.start).toISOString()} title={fmtDateTime(i.start)}>{ago(i.start)}</time>
@@ -298,20 +302,20 @@ function Incidents({ list }: { list: StatusIncident[] }) {
   const groups = useMemo(() => {
     const m = new Map<string, StatusIncident[]>();
     for (const i of list.slice(0, shown)) {
-      const key = new Date(i.start).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', weekday: 'long' });
+      const key = new Date(i.start).toLocaleDateString(loc(), { day: 'numeric', month: 'long', weekday: 'long' });
       m.set(key, [...(m.get(key) ?? []), i]);
     }
     return [...m];
   }, [list, shown]);
   return (
     <section className="tile tile-in p-4 sm:p-5">
-      <h2 className="mb-3 text-lg font-extrabold">История сбоев</h2>
+      <h2 className="mb-3 text-lg font-extrabold">{t('st.hist')}</h2>
       {list.length === 0 ? (
         <div className="st-calm">
           <span aria-hidden>✨</span>
           <div>
-            <p className="font-extrabold">За 30 дней ни одного сбоя</p>
-            <p className="text-sm font-semibold text-mute">Все серверы отвечали на каждый опрос.</p>
+            <p className="font-extrabold">{t('st.hist.none')}</p>
+            <p className="text-sm font-semibold text-mute">{t('st.hist.noneText')}</p>
           </div>
         </div>
       ) : (
@@ -323,7 +327,7 @@ function Incidents({ list }: { list: StatusIncident[] }) {
             </div>
           ))}
           {list.length > shown && (
-            <button type="button" className="btn btn-soft" onClick={() => setShown((n) => n + PAGE)}>Показать ещё ({list.length - shown})</button>
+            <button type="button" className="btn btn-soft" onClick={() => setShown((n) => n + PAGE)}>{t('st.hist.more', { n: list.length - shown })}</button>
           )}
         </div>
       )}
@@ -331,19 +335,13 @@ function Incidents({ list }: { list: StatusIncident[] }) {
   );
 }
 
-const LEGEND: [string, string][] = [
-  ['ok', 'без сбоев'],
-  ['blip', 'до 15 мин'],
-  ['warn', '15–60 мин'],
-  ['bad', 'больше часа'],
-  ['planned', 'плановые работы'],
-  ['none', 'нет данных'],
-];
+const LEGEND = ['ok', 'blip', 'warn', 'bad', 'planned', 'none'] as const;
 
 /** Public status page: the state now, 30 days of availability per server and the incidents behind it. */
 const IconPulse = () => <Icon size={22}><path d="M22 12h-4l-3 9L9 3l-3 9H2" /></Icon>;
 
 export default function StatusPage() {
+  useI18n();
   const { isAdmin } = useAuth();
   const [data, setData] = useState<StatusInfo | null>(null);
   const [error, setError] = useState('');
@@ -356,16 +354,16 @@ export default function StatusPage() {
   usePoll(load, POLL_MS);
   const month = data ? (data.incidents ?? []).filter((i) => !i.planned).length : 0;
   const subtitle = data && data.servers.length > 0
-    ? `${data.servers.length} ${plural(data.servers.length, ['сервер', 'сервера', 'серверов'])} · ${month ? `${month} ${plural(month, ['сбой', 'сбоя', 'сбоев'])} за 30 дней` : 'без сбоев за 30 дней'}`
-    : 'Доступность серверов и история сбоев за 30 дней';
+    ? t('st.sub', { servers: t('st.servers', { n: data.servers.length }), outages: month ? t('st.inc30', { n: month }) : t('st.noInc30') })
+    : t('st.sub.none');
 
   return (
     <div className="space-y-5">
-      <PageHead icon={<IconPulse />} title="Статус" subtitle={subtitle} />
+      <PageHead icon={<IconPulse />} title={t('st.title')} subtitle={subtitle} />
       {error && !data ? <LoadError error={error} onRetry={() => void load()} /> : <ErrorLine text={error} />}
 
       {!data && !error && (
-        <div className="space-y-3" aria-busy="true" aria-label="Загрузка">
+        <div className="space-y-3" aria-busy="true" aria-label={t('st.loading')}>
           <div className="skeleton panel h-28" />
           <div className="skeleton panel h-36" />
           <div className="skeleton panel h-36" />
@@ -373,7 +371,7 @@ export default function StatusPage() {
       )}
 
       {data && data.servers.length === 0 && (
-        <Empty title="Серверов пока нет" text="Когда серверы будут добавлены, здесь появится их доступность.">{isAdmin && <a href="/admin/servers/new" className="btn mt-2">Добавить сервер</a>}</Empty>
+        <Empty title={t('st.empty')} text={t('st.emptyText')}>{isAdmin && <a href="/admin/servers/new" className="btn mt-2">{t('st.add')}</a>}</Empty>
       )}
 
       {data && data.servers.length > 0 && (
@@ -383,8 +381,8 @@ export default function StatusPage() {
             {data.servers.map((s, i) => <ServerRow key={s.id} s={s} index={i} />)}
           </ul>
           <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm font-semibold text-mute">
-            {LEGEND.map(([c, t]) => (
-              <span key={t} className="inline-flex items-center gap-1.5"><span className={`st-day st-legend is-${c}`} aria-hidden />{t}</span>
+            {LEGEND.map((c) => (
+              <span key={c} className="inline-flex items-center gap-1.5"><span className={`st-day st-legend is-${c}`} aria-hidden />{t(`st.leg.${c}` as const)}</span>
             ))}
           </div>
           <Incidents list={data.incidents ?? []} />
