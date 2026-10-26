@@ -5,7 +5,8 @@ import type { Server } from '../api';
 import { confirmDialog } from '../confirm';
 import { t, useI18n, type TKey } from '../i18n';
 import { gameColor, gameLabel } from '../games';
-import { AnimatedNumber, GameAvatar, IconEdit, IconRefresh, IconTrash, IconWrench, MiniSpark, StatusPill, ago, isLag, toast } from '../ui';
+import RowMenu, { type RowMenuItem } from '../components/RowMenu';
+import { AnimatedNumber, GameAvatar, IconEdit, IconRefresh, MiniSpark, StatusPill, ago, isLag, toast } from '../ui';
 import { countServers, filterServers, loadColumns, loadTableState, saveColumns, saveTableState, TABLE_COLUMNS, type ServerFilter, type TableColumn } from './adminServersLogic';
 
 export interface TableActions {
@@ -68,6 +69,17 @@ export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableA
   const copy = async (s: Server) => {
     try { await navigator.clipboard.writeText(`${s.host}:${s.port}`); toast(t('adm.tbl.copied')); } catch { toast(t('nw.copyFail'), 'err'); }
   };
+
+  /** the rest of a row's actions: a text menu behind «⋯» */
+  const menuItems = (s: Server): RowMenuItem[] => [
+    ...(canMove ? [
+      { key: 'up', label: t('adm.tbl.up'), disabled: s.id === shownIds[0], onSelect: () => a.onMove(s, -1, shownIds) },
+      { key: 'down', label: t('adm.tbl.down'), disabled: s.id === shownIds[shownIds.length - 1], onSelect: () => a.onMove(s, 1, shownIds) },
+    ] : []),
+    { key: 'bind', label: t('adm.tbl.bind'), href: `/admin/discord/new/${s.id}`, sep: canMove },
+    { key: 'maint', label: s.maintenance ? t('adm.tbl.maintOff') : t('adm.tbl.maintOn'), onSelect: () => a.onMaintenance(s) },
+    ...(a.isAdmin ? [{ key: 'del', label: t('adm.srv.delete'), danger: true, sep: true, onSelect: () => a.onRemove(s) }] : []),
+  ];
 
   const many = async (fn: (list: Server[]) => Promise<void>) => {
     setBusy(true);
@@ -173,21 +185,11 @@ export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableA
                     {has('updated') && <td className="text-mute">{ago(s.updatedAt)}</td>}
                     <td>
                       <div className="flex items-center justify-end gap-1" role="group" aria-label={`${t('adm.tbl.actions')}: ${s.name}`}>
-                        {canMove && (
-                          <>
-                            <button type="button" className="row-act" title={t('adm.tbl.up')} aria-label={`${t('adm.tbl.up')}: ${s.name}`} disabled={s.id === shownIds[0]} onClick={() => a.onMove(s, -1, shownIds)}><span aria-hidden>↑</span></button>
-                            <button type="button" className="row-act" title={t('adm.tbl.down')} aria-label={`${t('adm.tbl.down')}: ${s.name}`} disabled={s.id === shownIds[shownIds.length - 1]} onClick={() => a.onMove(s, 1, shownIds)}><span aria-hidden>↓</span></button>
-                          </>
-                        )}
-                        <a className="row-act" href={`/admin/discord/new/${s.id}`} title={t('adm.tbl.bind')} aria-label={`${t('adm.tbl.bind')}: ${s.name}`}>
-                          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M21 12a8 8 0 0 1-11.5 7.2L4 20l1-4.2A8 8 0 1 1 21 12z" /></svg>
-                        </a>
+                        <button type="button" className="btn btn-soft btn-sm" aria-label={`${t('adm.tbl.edit')}: ${s.name}`} onClick={() => a.onEdit(s)}><IconEdit /><span>{t('adm.tbl.edit')}</span></button>
                         <button type="button" className="row-act" title={t('adm.tbl.poll')} aria-label={`${t('adm.tbl.poll')}: ${s.name}`} onClick={() => a.onRefresh(s)} disabled={a.busyId === s.id} aria-busy={a.busyId === s.id || undefined}>
                           <IconRefresh spinning={a.busyId === s.id} />
                         </button>
-                        <button type="button" className={`row-act ${s.maintenance ? 'is-on' : ''}`} title={s.maintenance ? t('adm.tbl.maintOff') : t('adm.tbl.maintOn')} aria-label={`${s.maintenance ? t('adm.tbl.maintOff') : t('adm.tbl.maintOn')}: ${s.name}`} aria-pressed={!!s.maintenance} onClick={() => a.onMaintenance(s)}><IconWrench /></button>
-                        <button type="button" className="row-act" title={t('adm.tbl.edit')} aria-label={`${t('adm.tbl.edit')}: ${s.name}`} onClick={() => a.onEdit(s)}><IconEdit /></button>
-                        {a.isAdmin && <button type="button" className="row-act row-act-danger" title={t('adm.srv.delete')} aria-label={`${t('adm.srv.delete')}: ${s.name}`} onClick={() => a.onRemove(s)}><IconTrash /></button>}
+                        <RowMenu label={`${t('adm.tbl.more')}: ${s.name}`} items={menuItems(s)} />
                       </div>
                     </td>
                   </tr>
@@ -228,10 +230,9 @@ export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableA
                   <span className="tabular-nums">{s.online ? <><b className="text-ink">{s.players}</b>/{s.maxPlayers}</> : '—'}</span>
                   <span>· {ago(s.updatedAt)}</span>
                   <div className="ml-auto flex items-center gap-1">
-                    <a className="row-act" href={`/admin/discord/new/${s.id}`} aria-label={`${t('adm.tbl.bind')}: ${s.name}`}>◔</a>
                     <button type="button" className="row-act" aria-label={`${t('adm.tbl.poll')}: ${s.name}`} onClick={() => a.onRefresh(s)} disabled={a.busyId === s.id}><IconRefresh spinning={a.busyId === s.id} /></button>
-                    <button type="button" className="row-act" aria-label={`${t('adm.tbl.edit')}: ${s.name}`} onClick={() => a.onEdit(s)}><IconEdit /></button>
-                    {a.isAdmin && <button type="button" className="row-act row-act-danger" aria-label={`${t('adm.srv.delete')}: ${s.name}`} onClick={() => a.onRemove(s)}><IconTrash /></button>}
+                    <button type="button" className="btn btn-soft btn-sm" aria-label={`${t('adm.tbl.edit')}: ${s.name}`} onClick={() => a.onEdit(s)}><IconEdit /><span>{t('adm.tbl.edit')}</span></button>
+                    <RowMenu label={`${t('adm.tbl.more')}: ${s.name}`} items={menuItems(s)} />
                   </div>
                 </div>
               </div>
