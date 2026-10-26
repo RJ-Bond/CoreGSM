@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="5b7bbca92a24"
+COREGSM_BUILD="18f634b99c66"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.0.0.19"
+COREGSM_VERSION="1.0.0.20"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -57931,10 +57931,11 @@ export function NewsUnreadDot({ className = '' }: { className?: string }) {
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/profile"
   cat > "$APP_DIR/core-frontend/src/components/profile/Achievements.tsx" << '__COREGSM_EOF__'
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import type { Achievement } from '../../api';
 import { t } from '../../i18n';
 import { fmtDate, Section } from '../../ui';
+import { isFresh, loadSeen, markSeen } from './achievementsLogic';
 import { AchievementArt } from './icons';
 import { IcoCheck, IcoLock } from './bits';
 import { isArray, useFetched } from './useFetched';
@@ -57980,8 +57981,11 @@ export function AchBrowser<T extends AchLike>({ list, render }: { list: T[]; ren
 }
 
 export function AchievementCard({ a }: { a: Achievement }) {
+  // an achievement earned in the last day plays a short shine once; it is marked as seen right after
+  const [fresh] = useState(() => isFresh(a, loadSeen()));
+  useEffect(() => { if (fresh) markSeen(a.id); }, [fresh, a.id]);
   return (
-    <li className={`pf-ach ${a.earned ? 'is-on' : 'is-off'}`}>
+    <li className={`pf-ach ${a.earned ? 'is-on' : 'is-off'} ${fresh ? 'is-fresh' : ''}`}>
       <span className="pf-ach-ico"><AchievementArt id={a.id} slug={a.icon} earned={a.earned} size={44} /><AchFlag earned={a.earned} /></span>
       <div className="min-w-0 flex-1">
         <div className="pf-ach-title wrap-break-word font-extrabold leading-tight">{a.title}</div>
@@ -59667,6 +59671,49 @@ export function VrAchievementsGrid() {
 }
 
 export { rankById };
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/profile"
+  cat > "$APP_DIR/core-frontend/src/components/profile/achievementsLogic.test.ts" << '__COREGSM_EOF__'
+import { describe, expect, it } from 'vitest';
+import { isFresh } from './achievementsLogic';
+
+const NOW = 1_000_000_000_000;
+const a = (over = {}) => ({ id: 'x', earned: true, earnedAt: NOW - 3600_000, ...over });
+
+describe('isFresh', () => {
+  it('earned an hour ago and not seen', () => expect(isFresh(a(), [], NOW)).toBe(true));
+  it('already seen', () => expect(isFresh(a(), ['x'], NOW)).toBe(false));
+  it('earned two days ago', () => expect(isFresh(a({ earnedAt: NOW - 2 * 86_400_000 }), [], NOW)).toBe(false));
+  it('not earned or without a date', () => {
+    expect(isFresh(a({ earned: false }), [], NOW)).toBe(false);
+    expect(isFresh(a({ earnedAt: null }), [], NOW)).toBe(false);
+  });
+});
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/profile"
+  cat > "$APP_DIR/core-frontend/src/components/profile/achievementsLogic.ts" << '__COREGSM_EOF__'
+// Which achievements play the «just earned» animation: earned in the last day and not yet seen in this browser.
+const KEY = 'coregsm_ach_seen';
+const FRESH_MS = 24 * 3600_000;
+
+export function loadSeen(): string[] {
+  try {
+    const v: unknown = JSON.parse(localStorage.getItem(KEY) ?? '[]');
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string').slice(-200) : [];
+  } catch { return []; }
+}
+
+export function markSeen(id: string): void {
+  try {
+    const seen = loadSeen();
+    if (!seen.includes(id)) localStorage.setItem(KEY, JSON.stringify([...seen, id].slice(-200)));
+  } catch { /* not remembered */ }
+}
+
+/** earned within the last day and not marked as seen */
+export function isFresh(a: { id: string; earned: boolean; earnedAt: number | null }, seen: string[], now = Date.now()): boolean {
+  return a.earned && a.earnedAt != null && now - a.earnedAt < FRESH_MS && now - a.earnedAt >= 0 && !seen.includes(a.id);
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/profile"
   cat > "$APP_DIR/core-frontend/src/components/profile/banner.ts" << '__COREGSM_EOF__'
@@ -86380,6 +86427,11 @@ __COREGSM_EOF__
 }
 .pf-ach.is-on { background: rgb(var(--brand) / .1); box-shadow: inset 0 0 0 1px rgb(var(--brand) / .25); }
 .pf-ach.is-on .pf-ach-ico { background: transparent; color: rgb(var(--link)); }
+.pf-ach.is-fresh .pf-ach-ico { position: relative; overflow: hidden; animation: pf-ach-pop .7s cubic-bezier(.2, .9, .3, 1.4) both; }
+.pf-ach.is-fresh .pf-ach-ico::after { content: ''; position: absolute; inset: -20% auto -20% -60%; width: 45%; background: linear-gradient(100deg, transparent, rgb(255 255 255 / .75), transparent); transform: skewX(-18deg); animation: pf-ach-shine 1.4s .4s ease-out 2 both; pointer-events: none; }
+@keyframes pf-ach-pop { 0% { transform: scale(.6) rotate(-8deg); opacity: 0; } 100% { transform: none; opacity: 1; } }
+@keyframes pf-ach-shine { to { left: 130%; } }
+@media (prefers-reduced-motion: reduce) { .pf-ach.is-fresh .pf-ach-ico, .pf-ach.is-fresh .pf-ach-ico::after { animation: none; } }
 .pf-ach.is-off .pf-ach-title, .pf-ach.is-off .pf-ach-ico { opacity: .75; }
 .pf-ach-mini { display: inline-flex; align-items: center; gap: .4rem; max-width: 100%; min-width: 0; padding: .3rem .7rem .3rem .35rem; border-radius: var(--r-pill); background: rgb(var(--brand) / .12); font-weight: 650; font-size: .875rem; }
 .pf-ach-mini > span:first-child {
