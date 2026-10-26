@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cmpVersion, groupCommits, isNewerRelease, preflightWarnings, stepStates, upcomingFlags, versionText } from './updateLogic';
+import { cmpVersion, groupCommits, isNewerRelease, preflightWarnings, releasesSince, stepStates, upcomingFlags, versionText } from './updateLogic';
 import type { ChangelogItem, UpdateNotesRelease } from '../../api';
 
 describe('update versions', () => {
@@ -63,5 +63,18 @@ describe('release notes', () => {
     expect(g.map((x) => x.id)).toEqual(['feat', 'fix']);
     expect(g[0]!.items[0]!.isNew).toBe(true);
     expect(g[1]!.items[0]!.isNew).toBe(false);
+  });
+});
+
+describe('releasesSince', () => {
+  const r = (version: string | null) => ({ version, date: null, groups: [] });
+  const list = [r(null), r('1.0.0.12'), r('1.0.0.11'), r('1.0.0.10'), r('1.0.0.9')];
+  it('takes versions after the seen one up to the running one', () => {
+    expect(releasesSince(list, '1.0.0.9', '1.0.0.11').map((x) => x.version)).toEqual(['1.0.0.11', '1.0.0.10']);
+  });
+  it('is empty when nothing is new or a version is unreadable', () => {
+    expect(releasesSince(list, '1.0.0.11', '1.0.0.11')).toEqual([]);
+    expect(releasesSince(list, null, '1.0.0.11')).toEqual([]);
+    expect(releasesSince(list, '1.0.0.9', null)).toEqual([]);
   });
 });

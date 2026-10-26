@@ -15,7 +15,7 @@ import ServersPage from './pages/Servers';
 import { applyServerPrefs, t, useI18n, type TKey } from './i18n';
 import { lazyPage, PageFrame } from './lazyPage';
 import { OfflineBar } from './components/OfflineBar';
-import { AuthCard, AuthShell, IconNews, IconServers, IconSettings, Logo, ThemeToggle, Toaster, UserAvatar, Wordmark, applyDefaultTheme, navigate, parseRoute, toast, useRoute } from './ui';
+import { AuthCard, AuthShell, IconNews, IconServers, IconSettings, Logo, ThemeToggle, Toaster, UserAvatar, Wordmark, applyDefaultTheme, setThemeScope, navigate, parseRoute, toast, useRoute } from './ui';
 
 // loaded on demand: the server list (the first screen) does not wait for these
 const NewsFeed = lazyPage(() => import('./pages/NewsFeed'));
@@ -33,6 +33,7 @@ const ForgotPassword = lazyPage(() => import('./pages/ForgotPassword'));
 const ResetPassword = lazyPage(() => import('./pages/ResetPassword'));
 const VerifyEmail = lazyPage(() => import('./pages/VerifyEmail'));
 const Tour = lazyPage(() => import('./components/Tour'));
+const WhatsNew = lazyPage(() => import('./components/WhatsNew'));
 const CommandPalette = lazyPage(() => import('./components/CommandPalette'));
 
 const IconCommunity = () => (
@@ -117,6 +118,8 @@ export default function App() {
   const { page: rawPage, sub } = useRoute();
   // re-renders the whole shell when the language or a regional setting changes
   useI18n();
+  // the admin area keeps a theme of its own (the header button then changes only that one)
+  useEffect(() => { setThemeScope(rawPage === 'admin'); }, [rawPage]);
   const [boot, setBoot] = useState<Boot>({ ready: false, offline: false, needsSetup: false, me: null, access: DEFAULT_ACCESS });
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const [authing, setAuthing] = useState(false);
@@ -480,6 +483,7 @@ export default function App() {
         <ConfirmHost />
         <Suspense fallback={null}>
           {isAdmin && <Tour />}
+          {isAdmin && <WhatsNew />}
           {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} isStaff={isStaff} isAdmin={!!isAdmin} />}
         </Suspense>
 

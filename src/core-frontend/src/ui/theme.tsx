@@ -20,6 +20,13 @@ const read = (key: string): Theme | null => {
 };
 /** the visitor's own choice, else the community's default */
 const readTheme = (): Theme => read(THEME_KEY) ?? read(DEFAULT_KEY) ?? 'dark';
+// the admin area may have a theme of its own (e.g. a dark admin next to a light public site); without a choice it follows the site
+const ADMIN_KEY = 'coregsm_admin_theme';
+let adminScope = false;
+/** the theme the visitor sees in the current area */
+const readScoped = (): Theme => (adminScope ? read(ADMIN_KEY) ?? readTheme() : readTheme());
+/** does the admin area have its own theme right now */
+export const adminThemeIsOwn = (): boolean => read(ADMIN_KEY) !== null;
 const paint = (t: Theme) => {
   const root = document.documentElement;
   if (t === 'auto') root.removeAttribute('data-theme');
@@ -29,7 +36,7 @@ function applyTheme(t: Theme) {
   paint(t);
   try {
     // 'auto' is stored too: it is a choice, and the community default must not override it
-    localStorage.setItem(THEME_KEY, t);
+    localStorage.setItem(adminScope ? ADMIN_KEY : THEME_KEY, t);
   } catch {
     /* private mode: the theme just is not remembered */
   }
@@ -43,7 +50,7 @@ export function applyDefaultTheme(def: Theme) {
   } catch {
     /* not remembered: applied for this visit only */
   }
-  if (read(THEME_KEY)) return;
+  if (read(THEME_KEY) || (adminScope && read(ADMIN_KEY))) return;
   paint(def);
   subs.forEach((f) => f(def));
 }
@@ -53,10 +60,31 @@ export function setThemeChoice(t: Theme) {
   applyTheme(t);
   subs.forEach((f) => f(t));
 }
-export const currentTheme = (): Theme => readTheme();
+export const currentTheme = (): Theme => readScoped();
+
+/** the admin area was entered / left: paint its own theme (or the site's) and tell the buttons */
+export function setThemeScope(admin: boolean) {
+  if (adminScope === admin) return;
+  adminScope = admin;
+  const t = readScoped();
+  paint(t);
+  subs.forEach((f) => f(t));
+}
+
+/** «as on the site» for the admin area: forget its own theme */
+export function resetAdminTheme() {
+  try {
+    localStorage.removeItem(ADMIN_KEY);
+  } catch {
+    /* nothing to forget */
+  }
+  const t = readScoped();
+  paint(t);
+  subs.forEach((f) => f(t));
+}
 
 export function ThemeToggle() {
-  const [theme, setTheme] = useState<Theme>(readTheme);
+  const [theme, setTheme] = useState<Theme>(readScoped);
   useEffect(() => {
     subs.add(setTheme);
     return () => { subs.delete(setTheme); };
@@ -67,7 +95,7 @@ export function ThemeToggle() {
     <button
       type="button"
       className="btn-icon"
-      title={t('theme.title', { name: label[theme] })}
+      title={adminScope ? t('theme.titleAdmin', { name: label[theme] }) : t('theme.title', { name: label[theme] })}
       aria-label={t('theme.aria', { name: label[theme] })}
       onClick={(e) => {
         const t = next[theme];

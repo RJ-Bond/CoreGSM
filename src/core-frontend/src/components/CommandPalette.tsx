@@ -5,7 +5,8 @@ import { useBackdropClose, useDialogFocus } from '../confirm';
 import { gameLabel } from '../games';
 import { ADMIN_LINKS, ADMIN_SECTIONS, SECTION_PERM } from '../pages/adminNav';
 import { confirmDialog } from '../confirm';
-import { GameAvatar, IconCards, IconCopy, IconMoon, IconNews, IconRefresh, IconServers, IconSun, IconTrophy, IconWrench, currentTheme, setThemeChoice, toast, useDensity, navigate } from '../ui';
+import { currentPath } from '../ui/route';
+import { GameAvatar, IconCards, IconCopy, IconMoon, IconNews, IconRefresh, IconServers, IconSun, IconTrophy, IconWrench, adminThemeIsOwn, currentTheme, resetAdminTheme, setThemeChoice, toast, useDensity, navigate } from '../ui';
 
 type Group = 'Серверы' | 'Разделы' | 'Действия';
 
@@ -143,6 +144,7 @@ export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose:
       if (t === theme) continue;
       out.push({ key: `theme-${t}`, group: 'Действия', label, hint: 'Оформление панели', href: '', run: () => setThemeChoice(t), icon, hay: norm(`${label} тема оформление цвет ночь день dark light`) });
     }
+    if (adminThemeIsOwn() && /^\/admin(\/|$)/.test(currentPath())) out.push({ key: 'theme-site', group: 'Действия', label: 'Тема админки как на сайте', hint: 'Оформление панели', href: '', run: () => resetAdminTheme(), icon: <IconSun key="x" />, hay: norm('тема админки как на сайте сбросить оформление') });
     if (me) act('act-logout', 'Выйти', me.username, 'выход logout', <IconUser />, () => logout());
     const compact = density === 'compact';
     out.push({
