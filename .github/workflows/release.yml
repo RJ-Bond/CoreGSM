@@ -3,7 +3,8 @@ name: release
 # Publishes the installer as a GitHub Release, ONLY when started by hand (Actions → release → Run workflow, or
 # `gh workflow run release.yml`). Servers update from the newest release (tools/coregsm.sh and the panel's own check),
 # not from the tip of main, so nothing reaches them until a release is cut. The text of the release is the section of
-# CHANGELOG.md for the version in version.txt: the workflow stops when that section is missing.
+# CHANGELOG.md for the version in version.txt (Russian, then English; tools/release-notes.mjs): the workflow stops when
+# that section is missing.
 #
 # Assets of a release:
 #   install.sh         the generated installer (the same file as in the repository)
@@ -42,7 +43,7 @@ jobs:
           build="$(sed -n 's/^build=//p' version.txt)"
           version="$(sed -n 's/^version=//p' version.txt)"
           if [ -z "$build" ] || [ -z "$version" ]; then echo "version.txt has no build id or version"; exit 1; fi
-          awk -v v="$version" '$0 ~ "^## " v "([^0-9.]|$)" {f=1; next} /^## / {f=0} f' CHANGELOG.md > notes.md
+          node tools/release-notes.mjs "$version" CHANGELOG.md > notes.md
           if ! grep -q '[^[:space:]]' notes.md; then echo "CHANGELOG.md has no section '## $version'. Move «Не выпущено» under that heading first."; exit 1; fi
           if gh release view "build-$build" >/dev/null 2>&1; then echo "release build-$build exists"; publish=false; fi
           echo "build=$build" >> "$GITHUB_OUTPUT"
