@@ -170,10 +170,7 @@ export function notesText(releases: NotesRelease[], max = 1500): string {
 
 // ---- the notices about updates in Discord ----
 export type NoticeLang = 'ru' | 'en';
-export type NoticeTarget = 'channel' | 'dm' | 'both';
 export const parseNoticeLang = (v: string | null | undefined): NoticeLang => (v === 'en' ? 'en' : 'ru');
-/** where the notices go: the alerts channel (default), the direct messages of the administrators, or both */
-export const parseNoticeTarget = (v: string | null | undefined): NoticeTarget => (v === 'dm' || v === 'both' ? v : 'channel');
 /** days before the reminder about a version nobody installed; 0 = no reminder, 7 when not set */
 export function parseRemindDays(v: string | null | undefined): number {
   if (v == null || v === '') return 7;
@@ -250,7 +247,7 @@ export function shouldRemind(o: { notify: boolean; remindDays: number; available
 export interface Notice { title: string; description: string; fields: { name: string; value: string }[]; footer: string; color: number }
 
 /** the text of a notice: «available» (a new version), «reminder» (nobody installed it) and «done» (the panel was updated) */
-export function buildNotice(o: { kind: 'available' | 'reminder' | 'done'; lang: NoticeLang; from: string | null; to: string | null; releases: NotesRelease[]; line: string; now: number; withButtons: boolean }): Notice {
+export function buildNotice(o: { kind: 'available' | 'reminder' | 'done'; lang: NoticeLang; from: string | null; to: string | null; releases: NotesRelease[]; line: string; now: number }): Notice {
   const en = o.lang === 'en';
   const between = notesBetween(o.releases, o.from, o.to);
   const target = o.releases.find((r) => r.version === o.to);
@@ -260,7 +257,7 @@ export function buildNotice(o: { kind: 'available' | 'reminder' | 'done'; lang: 
   const lines: string[] = [o.line];
   if (skipped > 0) lines.push(en ? `Versions in between: ${skipped}` : `Пропущено версий между ними: ${skipped}`);
   lines.push(...noticeWarnings(between, o.lang));
-  if (o.kind !== 'done' && !o.withButtons) lines.push(en ? 'Install: Settings → Updates and backups.' : 'Установить: Настройки → Обновления и копии.');
+  if (o.kind !== 'done') lines.push(en ? 'Install: Settings → Updates and backups.' : 'Установить: Настройки → Обновления и копии.');
   const title = o.kind === 'available' ? (en ? 'Panel update available' : 'Доступно обновление панели')
     : o.kind === 'reminder' ? (en ? 'Reminder: panel update is waiting' : 'Напоминание: обновление панели ждёт')
     : (en ? 'Panel updated' : 'Панель обновлена');
