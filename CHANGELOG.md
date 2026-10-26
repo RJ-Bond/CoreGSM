@@ -14,6 +14,11 @@ interface language; the GitHub release text is built from the section of the ver
 - Пометки в конце русской части: `[migration]` — меняется база данных, `[env]` — нужны новые настройки сервера, `⚠` в начале — несовместимое изменение.
 - Новые пункты идут в раздел «Не выпущено». Релиз выпускается только по команде владельца: тогда раздел переименовывается в `## <версия> · <дата>` (версия из `version.txt`).
 
+## Не выпущено | Unreleased
+
+### ✨ Новое | New
+- 📣 Сообщение «Панель обновлена» стало коротким: заметки только новой версии, из них полностью «Новое», а «Исправлено» и «Прочее» числами; под сообщением кнопка «Что нового» со ссылкой на выпуск. Режим выбирается в «Настройки → Обновления»: кратко, подробно или всё с установленной версии | The «Panel updated» message is now short: the notes of the new version only, «New» in full and «Fixed» and «Other» as numbers; a «What's new» button under the message opens the release. The mode is chosen in Settings → Updates: brief, detailed or everything since the installed version
+
 ## 1.0.0.42 · 26.10.2026
 
 ### 🐛 Исправлено | Fixed

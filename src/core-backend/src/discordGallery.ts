@@ -45,8 +45,8 @@ export function buildGallery(now = Date.now()): Sample[] {
   out.push({ id: 'poll-result', group: 'community', title: 'Итоги голосования', embed: styled('poll', pollEmbed({ question: 'Нужна новая карта?', closesAt: null, rows: t.rows, total: t.total, isNew: false, site: !!base })) });
   out.push({ id: 'welcome', group: 'community', title: 'Приветствие новичка', content: renderWelcome('', { userId: '123456789012345678', server: brand().name }), embed: {} });
 
-  const n = buildNotice({ kind: 'available', lang: 'ru', from: '1.0.0.20', to: '1.0.0.27', line: 'Доступна новая версия панели.', now, releases: [{ version: '1.0.0.27', date: '26.10.2026', groups: [{ title: 'Новое', titleEn: 'New', items: [{ text: 'Заметки о выпуске в сообщении', textEn: 'Release notes in the message', flags: [] }] }] }] });
-  out.push({ id: 'update', group: 'updates', title: 'Доступно обновление панели', embed: styled('update', { title: n.title, description: n.description, color: n.color, ...(n.fields.length ? { fields: n.fields } : {}), ...(n.footer ? { footer: { text: n.footer } } : {}) }) });
+  const n = buildNotice({ kind: 'available', mode: 'brief', lang: 'ru', links: { to: base ? `${base}/` : 'https://example.com/releases', more: null }, from: '1.0.0.20', to: '1.0.0.27', line: 'Доступна новая версия панели.', now, releases: [{ version: '1.0.0.27', date: '26.10.2026', groups: [{ title: 'Новое', titleEn: 'New', items: [{ text: 'Заметки о выпуске в сообщении', textEn: 'Release notes in the message', flags: [] }] }, { title: '🐛 Исправлено', titleEn: '🐛 Fixed', items: [{ text: 'Мелкая правка', textEn: 'A small fix', flags: [] }, { text: 'Ещё одна правка', textEn: 'Another fix', flags: [] }] }] }] });
+  out.push({ id: 'update', group: 'updates', title: 'Доступно обновление панели', embed: styled('update', { title: n.title, description: n.description, color: n.color, ...(n.fields.length ? { fields: n.fields } : {}), ...(n.footer ? { footer: { text: n.footer } } : {}) }), buttons: (n.actions ?? []).map((a) => a.label) });
   return out;
 }
 
