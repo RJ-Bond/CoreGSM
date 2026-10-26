@@ -22,7 +22,7 @@ export const PORTABLE_SETTINGS = [
   'digest_enabled', 'digest_channel', 'digest_weekday', 'digest_hour', 'digest_theme',
   'brand_name', 'brand_color', 'brand_preset', 'default_theme', 'game_theme',
   'news_channel_id', 'news_test_channel_id', 'embed_players_shown',
-  'poll_concurrency', 'poll_fail_threshold', 'timezone',
+  'poll_concurrency', 'poll_fail_threshold', 'poll_fail_n', 'poll_fail_m', 'poll_probe_veto', 'timezone',
   'public_panel', 'registration_open', 'registration_mode', 'rules_text',
   'backup_schedule', 'backup_keep',
   'smtp_host', 'smtp_port', 'smtp_secure', 'smtp_user', 'smtp_from',

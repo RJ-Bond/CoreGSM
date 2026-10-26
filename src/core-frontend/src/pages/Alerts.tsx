@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { t, useI18n, type TKey } from '../i18n';
+import AlertChannels from '../components/AlertChannels';
 import DigestSection from '../components/DigestSection';
 import { api, type SettingsInfo } from '../api';
 import { ChannelName, ChannelPicker } from '../components/ChannelPicker';
@@ -235,6 +236,8 @@ export default function AlertsPage() {
       {info && <KindCards info={info} />}
 
       {info && <QuietHours info={info} save={save} />}
+
+      <AlertChannels />
 
       <DigestSection alertsChannel={info?.channelId ?? ''} />
 

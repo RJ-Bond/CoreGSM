@@ -18,6 +18,7 @@ import crypto from 'node:crypto';
 import express from 'express';
 import { z } from 'zod';
 import { allow, type AuthedRequest } from './auth.js';
+import { dispatchEvent } from './alertChannels.js';
 import { enqueueAlert } from './alerts.js';
 import { db, EFFECTIVE_NAME, getSetting } from './db.js';
 import { param } from './http.js';
@@ -171,6 +172,7 @@ async function runWipe(r: Row, done: Set<string>, steps: StepLog[]): Promise<voi
     discord(r.server_id, r.channel_id, '🧹 Вайп', `Сервер **${server}** вайпается. Обычно это занимает до ${r.duration_min} мин.${seed ? `\nСид: \`${seed}\`` : ''}`, 0x5865f2);
     return 'Сообщение в Discord поставлено в очередь';
   });
+  dispatchEvent({ event: 'wipe', title: `Вайп: ${server}`, text: `Сервер ${server} вайпается. Обычно это занимает до ${r.duration_min} мин.`, data: { serverId: r.server_id, server, scenarioId: r.id, durationMin: r.duration_min } });
   save(r.id, done, steps, 'done');
 }
 
