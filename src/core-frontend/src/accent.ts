@@ -75,9 +75,11 @@ export function paintBrand(color: string, color2?: string) {
   const card = surf('card', dark ? [18, 20, 27] : WHITE);
   const soft = surf('soft', dark ? [30, 33, 44] : [236, 238, 246]);
   const raised = surf('raised', card);
-  // brand text must read on the lightest of the surfaces it can sit on
+  // brand text must read on the worst of the surfaces it can sit on: the lightest one in the dark theme
+  // (light text), the darkest one in the light theme (dark text)
   const lum = (c: RGB) => c[0] + c[1] + c[2];
-  const lightest = lum(raised) > lum(soft) ? raised : soft;
+  const worse = (a: RGB, b: RGB) => ((lum(a) > lum(b)) === dark ? a : b);
+  const lightest = worse(raised, soft);
   const accent = accentColor();
   const v = brandVars(accent ?? color, accent ? undefined : color2, dark, card, lightest);
   root.style.setProperty('--brand', triplet(v.fill));
