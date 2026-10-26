@@ -15,6 +15,7 @@
  *   prefs_changed    language, time zone or date/time format changed
  *   profile_changed  game nick, bio or profile visibility changed
  */
+import { sendImage } from './imageSend.js';
 import express, { type Express, type NextFunction, type Request, type RequestHandler, type Response } from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -268,12 +269,12 @@ export function registerProfile(deps: {
     logAccount(req, userId(req), 'banner_changed', 'картинка убрана');
     res.json({ ok: true });
   });
-  app.get('/api/users/:id/banner', (req, res) => {
+  app.get('/api/users/:id/banner', (req, res, next) => {
     const m = /^\d{1,9}$/.exec(String(req.params.id));
     if (!m) return res.status(404).end();
     const f = bannerFile(Number(m[0]));
     if (!fs.existsSync(f)) return res.status(404).end();
-    res.set({ 'Content-Type': 'image/jpeg', 'Cache-Control': 'public, max-age=86400', 'X-Content-Type-Options': 'nosniff' }).send(fs.readFileSync(f));
+    sendImage(req, res, f, 'image/jpeg', 'public, max-age=86400').catch(next);
   });
   app.put('/api/me/banner-preset', auth, (req, res) => {
     const b = z.object({ preset: z.enum(PRESETS) }).safeParse(req.body);
