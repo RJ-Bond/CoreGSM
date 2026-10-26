@@ -130,6 +130,12 @@ export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose:
       act('act-digest', 'Отправить итоги недели сейчас', 'Картинка с итогами в канал Discord', 'дайджест итоги неделя отчёт', <IconNews />, () => {
         void api('/digest/send', 'POST').then(() => toast('Итоги недели поставлены в очередь')).catch((e: Error) => toast(e.message, 'err'));
       });
+      act('act-backup', 'Создать резервную копию', 'Настройки · Обновления и копии', 'бэкап копия резервная backup', <IconCopy />, () => {
+        void api('/backups/run', 'POST').then(() => toast('Резервная копия создаётся')).catch((e: Error) => toast(e.message, 'err'));
+      });
+      act('act-update', 'Проверить обновления', 'Настройки · Обновления и копии', 'обновление версия апдейт update', <IconRefresh />, () => {
+        void api<{ available: boolean }>('/update/check', 'POST').then((r) => toast(r.available ? 'Есть новая версия' : 'Установлена последняя версия')).catch((e: Error) => toast(e.message, 'err'));
+      });
       act('act-season', 'Начать новый сезон', 'Сообщество · Сезоны', 'сезон вайп wipe рейтинг', <IconTrophy />, () => navigate('/admin/community/seasons'));
     }
     const theme = currentTheme();

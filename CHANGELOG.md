@@ -17,6 +17,8 @@ interface language; the GitHub release text is built from the section of the ver
 ## Не выпущено | Unreleased
 
 ### ✨ Новое | New
+- 🤖 Состояние Discord-бота в шапке панели для администратора (в сети, подключается, ошибка) — клик открывает настройки бота | The Discord bot state in the panel header for administrators (online, connecting, error) — a click opens the bot settings
+- ⌨️ В палитре команд (Ctrl K) появились действия «Создать резервную копию» и «Проверить обновления» | The command palette (Ctrl K) got «Create a backup» and «Check for updates» actions
 - 🚫 Блокировка пользователя с причиной и сроком (час, день, неделя, месяц или навсегда): человек сразу выходит отовсюду, при входе видит причину и срок [migration] | Blocking a user with a reason and a duration (an hour, a day, a week, a month or forever): the person is signed out everywhere at once and sees the reason and the end date when signing in
 - 🧩 Матрица «роли × права» в настройках пользователей: права модераторов видны и переключаются в одной таблице | A «roles × permissions» matrix in the user settings: moderator permissions are shown and toggled in one table
 - 🔖 Читаемая версия (например, 1.0.0.4) в подписи сообщений бота в Discord, на странице «Система» и на обзоре админки | The readable version (like 1.0.0.4) in the footer of the bot's Discord messages, on the System page and on the admin overview
