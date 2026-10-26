@@ -75,7 +75,6 @@ await scenario('2 add a server in the admin form', async () => {
   await page.locator('#srv-host').fill('203.0.113.7');
   const port = page.locator('#srv-port');
   if (!(await port.inputValue())) await port.fill('9876');
-  await page.locator('#srv-name').fill('E2E Server');
   await page.locator('.adm-sticky-foot button:not([type="button"])').click();
   await page.waitForFunction(async () => (await (await fetch('/api/servers')).text()).includes('203.0.113.7'), null, { timeout: 15000 }).catch(() => undefined);
   const list = ok(await call('/api/servers', { token: state.adminToken }), 'servers');
