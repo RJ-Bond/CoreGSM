@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="68796528060d"
+COREGSM_BUILD="d54e2b8b1377"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.0.0.12"
+COREGSM_VERSION="1.0.0.13"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -76183,7 +76183,7 @@ export default function JournalPage() {
       {error && !rows ? <LoadError error={error} onRetry={() => void load()} /> : <ErrorLine text={error} />}
       <input className="input max-w-sm" type="search" placeholder="Поиск по журналу…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Поиск по журналу" />
       {!rows && !error && <SkeletonRows n={6} h="h-12" />}
-      {rows && shown.length === 0 && <Empty art={<JournalArt />} title="Записей нет" text={needle ? 'Ничего не найдено.' : 'Действия администраторов будут появляться здесь.'} />}
+      {rows && shown.length === 0 && <Empty art={<JournalArt />} title="Записей нет" text={needle ? 'Ничего не найдено.' : 'Действия администраторов будут появляться здесь.'}>{needle && <button type="button" className="btn btn-soft mt-3" onClick={() => setQ('')}>Сбросить поиск</button>}</Empty>}
       {groups.map(([day, list]) => (
         <section key={day} className="space-y-2">
           <h2 className="text-xs font-extrabold uppercase tracking-wide text-mute">{day}</h2>
@@ -83657,10 +83657,12 @@ a.adm-tile:hover { box-shadow: var(--shadow-2); border-color: rgb(var(--brand) /
 .adm-table thead th { position: sticky; top: 4.75rem; z-index: 2; background: rgb(var(--card)); box-shadow: 0 1px 0 rgb(var(--line)); }
 .adm-st:has(.adm-bulk) .adm-table thead th { top: 8.25rem; }
 .adm-bulk { position: sticky; top: 4.75rem; z-index: 25; box-shadow: var(--shadow-2); backdrop-filter: blur(8px); }
-.adm-table tbody tr[data-state] td:first-child { box-shadow: inset 3px 0 0 rgb(var(--ok)); }
-.adm-table tbody tr[data-state='lag'] td:first-child { box-shadow: inset 3px 0 0 rgb(var(--warn)); }
-.adm-table tbody tr[data-state='off'] td:first-child { box-shadow: inset 3px 0 0 rgb(var(--bad)); }
-.adm-table tbody tr[data-state='maint'] td:first-child { box-shadow: inset 3px 0 0 rgb(var(--link)); }
+.adm-table tbody tr[data-state] td:first-child { box-shadow: inset 4px 0 0 rgb(var(--ok)); }
+.adm-table tbody tr[data-state='lag'] td:first-child { box-shadow: inset 4px 0 0 rgb(var(--warn)); }
+.adm-table tbody tr[data-state='lag'] { background: rgb(var(--warn) / .06); }
+.adm-table tbody tr[data-state='off'] td:first-child { box-shadow: inset 4px 0 0 rgb(var(--bad)); }
+.adm-table tbody tr[data-state='off'] { background: rgb(var(--bad) / .06); }
+.adm-table tbody tr[data-state='maint'] td:first-child { box-shadow: inset 4px 0 0 rgb(var(--link)); }
 .adm-expand { display: inline-grid; place-items: center; width: 22px; height: 22px; flex: none; border-radius: 6px; color: rgb(var(--mute)); font-size: var(--fs-xs); }
 .adm-expand:hover { background: rgb(var(--soft)); color: rgb(var(--ink)); }
 .adm-copy { padding: 0; background: none; color: inherit; }
@@ -87394,17 +87396,20 @@ export function PageHead({ title, subtitle, icon, hint, help, children }: { titl
   const helpId = useId();
   // a hint is read once: the cross hides it (remembered per page in this browser), the «i» button next to the actions brings it back
   const hintKey = `coregsm_hint_${title}`;
-  const [hidden, setHidden] = useState(() => { try { return localStorage.getItem(hintKey) === '1'; } catch { return false; } });
+  // a page's hint is shown on the first visit only; later visits start with it folded (the «i» button brings it back)
+  const seenKey = `coregsm_hintseen_${title}`;
+  const [hidden, setHidden] = useState(() => { try { return localStorage.getItem(hintKey) === '1' || localStorage.getItem(seenKey) === '1'; } catch { return false; } });
+  useEffect(() => { try { localStorage.setItem(seenKey, '1'); } catch { /* not remembered */ } }, [seenKey]);
   const setHint = (off: boolean) => { setHidden(off); try { if (off) localStorage.setItem(hintKey, '1'); else localStorage.removeItem(hintKey); } catch { /* not remembered */ } };
   const hasHint = !!(hint || help);
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-3.5">
-          {icon && <span className="grid h-12 w-12 shrink-0 place-items-center rounded-ui-lg bg-linear-to-br from-brand to-brand-2 text-white shadow-pop">{icon}</span>}
+          {icon && <span className="grid h-11 w-11 shrink-0 place-items-center rounded-ui-lg bg-linear-to-br from-brand to-brand-2 text-white shadow-pop sm:h-12 sm:w-12">{icon}</span>}
           <div className="min-w-0">
-            <h1 className="text-2xl font-extrabold tracking-tight sm:text-[30px]">{title}</h1>
-            {subtitle && <p className="mt-0.5 font-semibold text-mute">{subtitle}</p>}
+            <h1 className="text-xl font-extrabold tracking-tight sm:text-[30px]">{title}</h1>
+            {subtitle && <p className="mt-0.5 hidden font-semibold text-mute sm:block">{subtitle}</p>}
           </div>
         </div>
         {(children || (hasHint && hidden)) && (
