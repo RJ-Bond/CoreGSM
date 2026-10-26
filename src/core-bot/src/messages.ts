@@ -13,6 +13,8 @@ export interface Binding {
   intervalSec: number;
   /** embed (default), card (PNG) or both */
   style?: 'embed' | 'card' | 'both';
+  /** how much the embed shows (the panel builds it): detailed (default), compact or minimal */
+  layout?: 'detailed' | 'compact' | 'minimal';
 }
 
 export type RawEmbed = ConstructorParameters<typeof EmbedBuilder>[0] & {
@@ -81,7 +83,7 @@ export async function buildPayload(b: Binding) {
     if (style === 'card') {
       raw = { color: 0x5a4bd1, timestamp: new Date().toISOString() };
     } else {
-      const r = await backend(`/internal/servers/${id}/embed?interval=${b.intervalSec}`);
+      const r = await backend(`/internal/servers/${id}/embed?interval=${b.intervalSec}&layout=${b.layout ?? 'detailed'}`);
       if (!r.ok) {
         // a deleted server must not break the whole message
         if (multi && r.status === 404) continue;

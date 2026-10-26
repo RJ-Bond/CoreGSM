@@ -20,6 +20,8 @@ const LOGIN_RETRY_MS = 60_000;
 interface BotConfig {
   discordToken: string;
   proxyUrl: string;
+  /** the welcome message is on: needs the «Server Members» intent */
+  welcome?: boolean;
 }
 
 type BotState = 'idle' | 'connecting' | 'online' | 'error';
@@ -144,7 +146,7 @@ async function applyConfig(): Promise<void> {
   const res = await backend('/internal/config');
   if (!res.ok) throw new Error(`config HTTP ${res.status}`);
   const cfg = (await res.json()) as BotConfig;
-  const key = `${cfg.discordToken}|${cfg.proxyUrl}`;
+  const key = `${cfg.discordToken}|${cfg.proxyUrl}|${cfg.welcome ? 'w' : ''}`;
   if (key === appliedKey) return;
   // after a failure wait before retrying the SAME config; a changed config is applied immediately
   if (key === failedKey && Date.now() < retryAt) return;
@@ -180,7 +182,7 @@ async function applyConfig(): Promise<void> {
   if (proxy) log('Using proxy for Discord:', proxy.label);
 
   const c = new Client({
-    intents: [GatewayIntentBits.Guilds],
+    intents: cfg.welcome ? [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers] : [GatewayIntentBits.Guilds],
     rest: { timeout: 10_000, ...(proxy ? { agent: proxy.rest } : {}) },
   });
   c.on('error', (e) => log('client error', e));
@@ -190,6 +192,12 @@ async function applyConfig(): Promise<void> {
     lastGuildsJson = '';
     void publishGuilds().catch(() => undefined);
   };
+  if (cfg.welcome) {
+    c.on('guildMemberAdd', (m) => {
+      if (stopping || m.user.bot) return;
+      void welcomeMember(c, m.id, m.guild.name).catch((e) => log('welcome failed:', (e as Error).message));
+    });
+  }
   c.on('guildCreate', guildsChanged);
   c.on('guildDelete', guildsChanged);
   c.on('interactionCreate', (i) => {
@@ -215,6 +223,17 @@ async function applyConfig(): Promise<void> {
     failedKey = key;
     retryAt = Date.now() + LOGIN_RETRY_MS;
   }
+}
+
+/** greets a new member in the channel chosen in the panel (the text is rendered there) */
+async function welcomeMember(c: Client, userId: string, server: string): Promise<void> {
+  const res = await backend(`/internal/welcome?user=${encodeURIComponent(userId)}&server=${encodeURIComponent(server)}`);
+  if (!res.ok) return;
+  const w = (await res.json()) as { channelId: string; content: string };
+  const channel = await c.channels.fetch(w.channelId);
+  if (!channel || !channel.isTextBased() || !('send' in channel)) return;
+  // only the new member is pinged: no @everyone / @here from the text
+  await channel.send({ content: w.content, allowedMentions: { users: [userId] } });
 }
 
 /**
