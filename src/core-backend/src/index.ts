@@ -27,6 +27,7 @@ import { registerNickStatus } from './nickOnboarding.js';
 import { installAudit, registerOps } from './ops.js';
 import { registerOverview } from './overview.js';
 import { registerAttention } from './attention.js';
+import { registerWelcome } from './welcome.js';
 import { logAccount, registerProfile } from './profile.js';
 import { csrfGuard, registerSecurity, securityHeaders, windowLimiter } from './security.js';
 import { embedFor, SELECT_SERVERS, SERVER_ORDER, serialize, type ServerJoin } from './serverData.js';
@@ -191,6 +192,7 @@ registerHealth({ app, admin, bot: () => bot.status });
 startDbMaintenance();
 registerOverview({ app, viewer });
 registerAttention({ app, admin });
+registerWelcome({ app, admin, internal });
 
 // ---------- errors ----------
 app.use((err: Error & { type?: string; status?: number }, _req: Request, res: Response, _next: NextFunction) => {

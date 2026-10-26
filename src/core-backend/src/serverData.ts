@@ -4,6 +4,7 @@ import { APP_VERSION, APP_VERSION_NAME } from './config.js';
 import { coverUrl } from './covers.js';
 import { type BindingRow, db, getSetting, type ServerRow, type StatusRow } from './db.js';
 import { buildEmbed } from './embed.js';
+import { applyLayout, type EmbedLayout, parseLayout } from './embedLayout.js';
 import { chartSign } from './serverChart.js';
 import { countryLabel, countryOf } from './geo.js';
 import { maintenanceFor } from './maintenance.js';
@@ -102,6 +103,7 @@ export const serializeBinding = (b: BindingRow) => ({
   lastUpdate: b.last_update,
   lastError: b.last_error,
   style: b.style,
+  layout: parseLayout(b.layout),
 });
 
 // The Discord embed for a server. One builder serves the bot (what is posted) and the panel (the preview).
@@ -110,7 +112,7 @@ export const playersShown = () => {
   return Number.isFinite(n) && getSetting('embed_players_shown') !== '' ? Math.min(20, Math.max(0, Math.round(n))) : 5;
 };
 
-export function embedFor(serverId: number, intervalSec: number) {
+export function embedFor(serverId: number, intervalSec: number, layout: EmbedLayout = 'detailed') {
   const server = getServer(serverId);
   if (!server) return null;
   // longest in the game first: the list shows who has been there the longest
@@ -127,7 +129,7 @@ export function embedFor(serverId: number, intervalSec: number) {
     .get(serverId, Date.now() - 24 * 3600 * 1000) as { u: number | null };
   const last = db.prepare('SELECT MAX(ts) AS t FROM history WHERE server_id = ? AND online = 1').get(serverId) as { t: number | null };
   const base = publicBase();
-  return buildEmbed(server, up.u, intervalSec, { serverId, playersShown: playersShown(), lastOnlineAt: last.t, thumbUrl: base ? `${base}/api/game-icon/${server.game}.png?v=${GAME_ICON_VERSION}${getSetting('embed_icon_tile') === '1' ? '&tile=1' : ''}` : null, baseUrl: base, version: APP_VERSION_NAME || APP_VERSION || null, brandName: brand().name, country: (() => { const c = server.country || countryOf(serverId, server.host); return c ? countryLabel(c) : null; })(), timeZone: getSetting('timezone') || process.env.TZ || 'Europe/Moscow', logoUrl: base && logoFile() ? `${base}/api/branding/logo?v=${brand().logoV}` : null, chartUrl: base && getSetting('embed_chart') !== '0' ? `${base}/api/server-chart/${serverId}-${chartSign(serverId)}.png?v=${Math.floor(Date.now() / 600_000)}` : null });
+  return applyLayout(buildEmbed(server, up.u, intervalSec, { serverId, playersShown: playersShown(), lastOnlineAt: last.t, thumbUrl: base ? `${base}/api/game-icon/${server.game}.png?v=${GAME_ICON_VERSION}${getSetting('embed_icon_tile') === '1' ? '&tile=1' : ''}` : null, baseUrl: base, version: APP_VERSION_NAME || APP_VERSION || null, brandName: brand().name, country: (() => { const c = server.country || countryOf(serverId, server.host); return c ? countryLabel(c) : null; })(), timeZone: getSetting('timezone') || process.env.TZ || 'Europe/Moscow', logoUrl: base && logoFile() ? `${base}/api/branding/logo?v=${brand().logoV}` : null, chartUrl: base && getSetting('embed_chart') !== '0' ? `${base}/api/server-chart/${serverId}-${chartSign(serverId)}.png?v=${Math.floor(Date.now() / 600_000)}` : null }), layout);
 }
 
 export const intervalParam = (v: unknown) => Math.min(3600, Math.max(30, Number(v) || 60));

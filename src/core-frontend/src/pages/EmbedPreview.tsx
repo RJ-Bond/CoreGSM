@@ -208,10 +208,10 @@ export function EmbedView({
 }
 
 /** Live preview of exactly what the bot posts for a server (the same builder runs in the backend). */
-export default function EmbedPreview({ serverId, intervalSec }: { serverId: number; intervalSec: number }) {
+export default function EmbedPreview({ serverId, intervalSec, layout = 'detailed' }: { serverId: number; intervalSec: number; layout?: string }) {
   const [embed, setEmbed] = useState<DiscordEmbed | null>(null);
   usePoll(() => {
-    api<DiscordEmbed>(`/servers/${serverId}/embed?interval=${intervalSec}`).then(setEmbed).catch(() => undefined);
+    api<DiscordEmbed>(`/servers/${serverId}/embed?interval=${intervalSec}&layout=${layout}`).then(setEmbed).catch(() => undefined);
   }, 30_000);
   if (!embed) return <div className="skeleton h-48 rounded-2xl bg-soft" />;
   return <EmbedView embed={embed} />;
