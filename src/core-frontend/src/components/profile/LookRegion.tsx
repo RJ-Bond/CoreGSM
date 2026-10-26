@@ -23,6 +23,7 @@ export function AppearanceCard() {
     ['reduceMotion', 'pf.a11y.motion', 'pf.a11y.motionHint'],
     ['largeText', 'pf.a11y.text', 'pf.a11y.textHint'],
     ['highContrast', 'pf.a11y.contrast', 'pf.a11y.contrastHint'],
+    ['liteData', 'pf.a11y.lite', 'pf.a11y.liteHint'],
   ];
   const options: [Density, TKey, TKey][] = [
     ['normal', 'pf.density.normal', 'pf.density.normalHint'],

@@ -222,6 +222,10 @@ export interface BotStatus {
   /** slash commands the bot registered in Discord (null: not reported yet) */
   commands?: number | null;
   commandList?: { name: string; description: string }[];
+  /** gateway latency of the bot, ms (null: unknown) and the verdict by the last samples */
+  ping?: number | null;
+  pingVerdict?: 'ok' | 'slow' | 'bad' | 'unknown';
+  latency?: { ts: number; ms: number }[];
   error: string | null;
   updatedAt: number;
 }

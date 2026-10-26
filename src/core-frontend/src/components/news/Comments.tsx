@@ -4,6 +4,7 @@ import { api } from '../../api';
 import { useAuth } from '../../auth';
 import { confirmDialog, promptDialog } from '../../confirm';
 import { t } from '../../i18n';
+import { useDraft } from '../../ui/useDraft';
 import { ago, Button, ErrorLine, fmtDateTime, toast } from '../../ui';
 import { buildThread, parseComment, visibleCount, type CommentItem, type CommentSort } from './commentMd';
 
@@ -40,10 +41,12 @@ function Body({ text }: { text: string }) {
 }
 
 /** the text box: counter, Ctrl+Enter, a hint of nicks after «@» */
-function Compose({ initial = '', placeholder, submit, cancel, autoFocus, label }: {
+function Compose({ initial = '', placeholder, submit, cancel, autoFocus, label, draftKey }: {
   initial?: string; placeholder: string; submit: (text: string) => Promise<void>; cancel?: () => void; autoFocus?: boolean; label: string;
+  /** where the unsent text is kept (this browser): a reply or a new comment survives a reload */
+  draftKey?: string;
 }) {
-  const [text, setText] = useState(initial);
+  const [text, setText, clearText, restored] = useDraft(draftKey ?? null, initial);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [hint, setHint] = useState<string[]>([]);
@@ -80,7 +83,7 @@ function Compose({ initial = '', placeholder, submit, cancel, autoFocus, label }
     setError('');
     try {
       await submit(text.trim());
-      setText('');
+      clearText();
     } catch (e) {
       setError((e as Error).message);
     }
@@ -99,6 +102,7 @@ function Compose({ initial = '', placeholder, submit, cancel, autoFocus, label }
         </ul>
       )}
       <ErrorLine text={error} />
+      {restored && text && <p className="cm-note">{t('nw.cm.draft')} <button type="button" className="underline" onClick={clearText}>{t('nw.cm.draftDrop')}</button></p>}
       <div className="cm-compose-foot">
         <span className={`cm-counter ${text.length > MAX - 100 ? 'is-near' : ''}`}>{text.length}/{MAX}</span>
         <span className="cm-md-hint">{t('nw.cm.mdHint')}</span>
@@ -212,7 +216,7 @@ export function Comments({ newsId }: { newsId: number }) {
         )}
         {c.hidden && canModerate && <footer className="cm-foot"><button type="button" className="cm-act" onClick={() => void hide(c)}>{t('nw.cm.show')}</button></footer>}
         {replyTo === c.id && (
-          <Compose autoFocus label={t('nw.cm.replyLabel', { name: c.author })} placeholder={t('nw.cm.replyHolder', { name: c.author })} submit={(text) => write(text, c.id)} cancel={() => setReplyTo(null)} />
+          <Compose autoFocus label={t('nw.cm.replyLabel', { name: c.author })} placeholder={t('nw.cm.replyHolder', { name: c.author })} draftKey={`reply-${c.id}`} submit={(text) => write(text, c.id)} cancel={() => setReplyTo(null)} />
         )}
       </article>
     );
@@ -231,7 +235,7 @@ export function Comments({ newsId }: { newsId: number }) {
       </div>
       <ErrorLine text={error} />
       {data?.locked && <p className="cm-note">{t('nw.cm.locked')}</p>}
-      {data?.canPost && <Compose label={t('nw.cm.write')} placeholder={t('nw.cm.holder')} submit={(text) => write(text)} />}
+      {data?.canPost && <Compose draftKey={`news-${newsId}`} label={t('nw.cm.write')} placeholder={t('nw.cm.holder')} submit={(text) => write(text)} />}
       {data && !data.canPost && !data.locked && !me && <p className="cm-note"><a href="/login">{t('nw.cm.login')}</a></p>}
       {data && tree.length === 0 && <p className="cm-empty">{t('nw.cm.empty')}</p>}
       <div className="cm-list">

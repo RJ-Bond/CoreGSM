@@ -5,6 +5,7 @@ import path from 'node:path';
 import type { Request } from 'express';
 import { z } from 'zod';
 import { admin, publicPanel, registrationOpen } from '../auth.js';
+import { pingVerdict, thin } from '../botLatencyLogic.js';
 import { bot, BOT_COMMANDS, clientIdFromToken, discordLoginReady, invitePayload } from '../botState.js';
 import { getSetting, setSetting } from '../db.js';
 import { BOT_TOKEN_RE, maskProxy, normalizeProxy, PROXY_HELP, PROXY_RE, TOKEN_HELP } from '../proxyInput.js';
@@ -54,7 +55,8 @@ router.get('/api/bot/status', admin, (_req, res) => {
   // a bot that stopped reporting is considered offline
   const stale = Date.now() - bot.status.updatedAt > 45_000;
   const base = stale ? { ...bot.status, state: 'error', error: 'Бот не отвечает (возможно, перезапускается). Если состояние не меняется больше минуты, на сервере выполните: sudo coregsm logs bot' } : bot.status;
-  res.json({ ...base, ...invitePayload(), commandList: BOT_COMMANDS, guildCount: bot.guilds.length, channelCount: bot.guilds.reduce((n, g) => n + g.channels.length, 0) });
+  const latency = thin(bot.latency, 80);
+  res.json({ ...base, ping: stale || base.state !== 'online' ? null : (bot.latency[bot.latency.length - 1]?.ms ?? null), pingVerdict: pingVerdict(bot.latency), latency, ...invitePayload(), commandList: BOT_COMMANDS, guildCount: bot.guilds.length, channelCount: bot.guilds.reduce((n, g) => n + g.channels.length, 0) });
 });
 
 const accessPayload = () => ({

@@ -38,7 +38,7 @@ const lastRun = new Map<number, number>();
 
 async function publishStatus(): Promise<void> {
   try {
-    await backend('/internal/bot-status', { method: 'POST', body: JSON.stringify({ state, tag, clientId, error: lastError, commands: commandsCount }) });
+    await backend('/internal/bot-status', { method: 'POST', body: JSON.stringify({ state, tag, clientId, error: lastError, commands: commandsCount, ping: client && state === 'online' && client.ws.ping >= 0 ? Math.round(client.ws.ping) : null }) });
   } catch {
     /* backend is restarting: the next tick will retry */
   }

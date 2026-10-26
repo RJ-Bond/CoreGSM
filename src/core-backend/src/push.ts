@@ -14,6 +14,7 @@ import { db } from './db.js';
 import { wrap } from './http.js';
 import { publicBase } from './site.js';
 import { setPushHook } from './subscriptions.js';
+import { DEFAULT_QUIET, inQuiet, type Quiet } from './quietLogic.js';
 import { sendPush, vapidKeys } from './webpush.js';
 
 export const router = express.Router();
@@ -30,7 +31,20 @@ CREATE TABLE IF NOT EXISTS push_subscriptions (
   fails INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_push_user ON push_subscriptions(user_id);
+CREATE TABLE IF NOT EXISTS push_quiet (
+  user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  enabled INTEGER NOT NULL DEFAULT 0,
+  from_min INTEGER NOT NULL,
+  to_min INTEGER NOT NULL,
+  tz INTEGER NOT NULL DEFAULT 0
+);
 `);
+
+/** quiet hours of a user: in the window pushes are not sent (the inbox and Discord still get the notice) */
+export function quietOf(userId: number): Quiet {
+  const r = db.prepare('SELECT enabled, from_min, to_min, tz FROM push_quiet WHERE user_id = ?').get(userId) as { enabled: number; from_min: number; to_min: number; tz: number } | undefined;
+  return r ? { enabled: !!r.enabled, fromMin: r.from_min, toMin: r.to_min, tz: r.tz } : DEFAULT_QUIET;
+}
 
 /** devices are removed after this many failed sends in a row */
 const MAX_FAILS = 10;
@@ -40,6 +54,7 @@ export interface PushMessage { title: string; body: string; url?: string; tag?: 
 
 /** sends to every device of a user; never throws (the poller calls it) */
 export async function pushToUser(userId: number, m: PushMessage): Promise<number> {
+  if (m.tag !== 'test' && inQuiet(quietOf(userId), Date.now())) return 0;
   const subs = db.prepare('SELECT id, endpoint, p256dh, auth FROM push_subscriptions WHERE user_id = ?').all(userId) as { id: number; endpoint: string; p256dh: string; auth: string }[];
   let sent = 0;
   for (const s of subs) {
@@ -88,3 +103,15 @@ router.post('/api/push/test', auth, rateLimit(10), wrap(async (req: AuthedReques
   const sent = await pushToUser(req.user!.id, { title: 'CoreGSM', body: 'Уведомления работают: сюда придут вести о ваших серверах.', url: '/profile', tag: 'test' });
   res.json({ sent });
 }));
+
+router.get('/api/push/quiet', auth, (req: AuthedRequest, res) => res.json(quietOf(req.user!.id)));
+
+router.put('/api/push/quiet', auth, rateLimit(30), (req: AuthedRequest, res) => {
+  const b = z.object({ enabled: z.boolean(), fromMin: z.number().int().min(0).max(1439), toMin: z.number().int().min(0).max(1439), tz: z.number().int().min(-840).max(840) }).safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: 'Неверные данные' });
+  db.prepare(
+    `INSERT INTO push_quiet (user_id, enabled, from_min, to_min, tz) VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(user_id) DO UPDATE SET enabled = excluded.enabled, from_min = excluded.from_min, to_min = excluded.to_min, tz = excluded.tz`,
+  ).run(req.user!.id, b.data.enabled ? 1 : 0, b.data.fromMin, b.data.toMin, b.data.tz);
+  res.json(quietOf(req.user!.id));
+});

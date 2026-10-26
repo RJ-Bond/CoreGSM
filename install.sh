@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="1b43afc8b4b0"
+COREGSM_BUILD="01b133e62a0a"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -5090,9 +5090,49 @@ export function registerBackups({ app, admin }: { app: Express; admin: RequestHa
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/botLatencyLogic.ts" << '__COREGSM_EOF__'
+/** Bot gateway latency: how the samples are kept and judged. Pure, so the tests can import it without opening the database. */
+export interface PingSample { ts: number; ms: number }
+
+/** at most one sample per this many ms, and this many samples (a bit over 5 hours) */
+export const PING_GAP_MS = 60_000;
+export const PING_KEEP = 320;
+/** above this the bot answers commands slowly (Discord shows «приложение не отвечает» after 3 s) */
+export const PING_SLOW_MS = 800;
+export const PING_BAD_MS = 2_000;
+
+/** adds a sample unless the last one is too fresh; returns the same array */
+export function addPing(list: PingSample[], ms: number, now: number): PingSample[] {
+  if (!Number.isFinite(ms) || ms < 0) return list;
+  const last = list[list.length - 1];
+  if (last && now - last.ts < PING_GAP_MS) return list;
+  list.push({ ts: now, ms: Math.round(ms) });
+  if (list.length > PING_KEEP) list.splice(0, list.length - PING_KEEP);
+  return list;
+}
+
+/** the verdict by the last samples: «bad» and «slow» need three in a row, so one spike does not raise the alarm */
+export function pingVerdict(list: PingSample[]): 'ok' | 'slow' | 'bad' | 'unknown' {
+  if (!list.length) return 'unknown';
+  const tail = list.slice(-3);
+  if (tail.length === 3 && tail.every((s) => s.ms >= PING_BAD_MS)) return 'bad';
+  if (tail.length === 3 && tail.every((s) => s.ms >= PING_SLOW_MS)) return 'slow';
+  return 'ok';
+}
+
+/** at most `n` points, evenly picked (the chart does not need more) */
+export function thin(list: PingSample[], n: number): PingSample[] {
+  if (list.length <= n) return list.slice();
+  const out: PingSample[] = [];
+  for (let i = 0; i < n; i++) out.push(list[Math.round((i * (list.length - 1)) / (n - 1))]);
+  return out;
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/botState.ts" << '__COREGSM_EOF__'
 /** What the bot reports about itself: connection state and the Discord servers and channels it can post in. */
 import { getSetting } from './db.js';
+import type { PingSample } from './botLatencyLogic.js';
 
 export interface BotStatus {
   state: 'idle' | 'connecting' | 'online' | 'error';
@@ -5127,7 +5167,8 @@ function loadGuilds(): BotGuild[] {
 }
 
 /** replaced as a whole by the bot's reports (POST /internal/bot-status, /internal/bot-guilds) */
-export const bot: { status: BotStatus; guilds: BotGuild[] } = {
+export const bot: { status: BotStatus; guilds: BotGuild[]; latency: PingSample[] } = {
+  latency: [],
   status: { state: 'idle', tag: null, clientId: null, error: null, commands: null, updatedAt: 0 },
   guilds: loadGuilds(),
 };
@@ -13751,6 +13792,7 @@ import { db } from './db.js';
 import { wrap } from './http.js';
 import { publicBase } from './site.js';
 import { setPushHook } from './subscriptions.js';
+import { DEFAULT_QUIET, inQuiet, type Quiet } from './quietLogic.js';
 import { sendPush, vapidKeys } from './webpush.js';
 
 export const router = express.Router();
@@ -13767,7 +13809,20 @@ CREATE TABLE IF NOT EXISTS push_subscriptions (
   fails INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_push_user ON push_subscriptions(user_id);
+CREATE TABLE IF NOT EXISTS push_quiet (
+  user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  enabled INTEGER NOT NULL DEFAULT 0,
+  from_min INTEGER NOT NULL,
+  to_min INTEGER NOT NULL,
+  tz INTEGER NOT NULL DEFAULT 0
+);
 `);
+
+/** quiet hours of a user: in the window pushes are not sent (the inbox and Discord still get the notice) */
+export function quietOf(userId: number): Quiet {
+  const r = db.prepare('SELECT enabled, from_min, to_min, tz FROM push_quiet WHERE user_id = ?').get(userId) as { enabled: number; from_min: number; to_min: number; tz: number } | undefined;
+  return r ? { enabled: !!r.enabled, fromMin: r.from_min, toMin: r.to_min, tz: r.tz } : DEFAULT_QUIET;
+}
 
 /** devices are removed after this many failed sends in a row */
 const MAX_FAILS = 10;
@@ -13777,6 +13832,7 @@ export interface PushMessage { title: string; body: string; url?: string; tag?: 
 
 /** sends to every device of a user; never throws (the poller calls it) */
 export async function pushToUser(userId: number, m: PushMessage): Promise<number> {
+  if (m.tag !== 'test' && inQuiet(quietOf(userId), Date.now())) return 0;
   const subs = db.prepare('SELECT id, endpoint, p256dh, auth FROM push_subscriptions WHERE user_id = ?').all(userId) as { id: number; endpoint: string; p256dh: string; auth: string }[];
   let sent = 0;
   for (const s of subs) {
@@ -13825,6 +13881,18 @@ router.post('/api/push/test', auth, rateLimit(10), wrap(async (req: AuthedReques
   const sent = await pushToUser(req.user!.id, { title: 'CoreGSM', body: 'Уведомления работают: сюда придут вести о ваших серверах.', url: '/profile', tag: 'test' });
   res.json({ sent });
 }));
+
+router.get('/api/push/quiet', auth, (req: AuthedRequest, res) => res.json(quietOf(req.user!.id)));
+
+router.put('/api/push/quiet', auth, rateLimit(30), (req: AuthedRequest, res) => {
+  const b = z.object({ enabled: z.boolean(), fromMin: z.number().int().min(0).max(1439), toMin: z.number().int().min(0).max(1439), tz: z.number().int().min(-840).max(840) }).safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: 'Неверные данные' });
+  db.prepare(
+    `INSERT INTO push_quiet (user_id, enabled, from_min, to_min, tz) VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(user_id) DO UPDATE SET enabled = excluded.enabled, from_min = excluded.from_min, to_min = excluded.to_min, tz = excluded.tz`,
+  ).run(req.user!.id, b.data.enabled ? 1 : 0, b.data.fromMin, b.data.toMin, b.data.tz);
+  res.json(quietOf(req.user!.id));
+});
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/query.ts" << '__COREGSM_EOF__'
@@ -13934,6 +14002,30 @@ export async function queryServer(s: Pick<ServerRow, 'game' | 'host' | 'port' | 
   }
 }
 
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/quietLogic.ts" << '__COREGSM_EOF__'
+/** Quiet hours of the push notifications: a daily window in the user's own time (it may cross midnight). Pure. */
+export interface Quiet { enabled: boolean; fromMin: number; toMin: number; tz: number }
+
+export const DEFAULT_QUIET: Quiet = { enabled: false, fromMin: 23 * 60, toMin: 8 * 60, tz: 0 };
+
+/** minutes since local midnight for a UTC instant and the user's offset east of UTC, in minutes */
+export const localMinutes = (utcMs: number, tz: number): number => (((Math.floor(utcMs / 60_000) + tz) % 1440) + 1440) % 1440;
+
+export function inQuiet(q: Quiet, utcMs: number): boolean {
+  if (!q.enabled || q.fromMin === q.toMin) return false;
+  const m = localMinutes(utcMs, q.tz);
+  return q.fromMin < q.toMin ? m >= q.fromMin && m < q.toMin : m >= q.fromMin || m < q.toMin;
+}
+
+export const hhmm = (min: number): string => `${String(Math.floor(min / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`;
+export function parseHhmm(v: string): number | null {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(v);
+  if (!m) return null;
+  const h = Number(m[1]), mi = Number(m[2]);
+  return h < 24 && mi < 60 ? h * 60 + mi : null;
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/ranks.ts" << '__COREGSM_EOF__'
@@ -15958,6 +16050,7 @@ import { renderCard } from '../card.js';
 import { type BindingRow, db, EFFECTIVE_NAME, getSetting, type ServerRow, setSetting } from '../db.js';
 import { refreshServer } from '../gsm.js';
 import { param, wrap } from '../http.js';
+import { addPing } from '../botLatencyLogic.js';
 import { buildPresence } from '../presence.js';
 import { embedFor, intervalParam, serializeBinding, SELECT_SERVERS, serialize, type ServerJoin } from '../serverData.js';
 
@@ -16030,10 +16123,12 @@ router.post('/internal/bot-status', internal, (req, res) => {
       clientId: z.string().regex(/^\d{15,25}$/).nullable().optional(),
       error: z.string().max(300).nullable().optional(),
       commands: z.number().int().min(0).max(200).nullable().optional(),
+      ping: z.number().min(0).max(120_000).nullable().optional(),
     })
     .safeParse(req.body);
   if (!b.success) return res.status(400).json({ error: 'bad body' });
   bot.status = { state: b.data.state, tag: b.data.tag ?? null, clientId: b.data.clientId ?? null, error: b.data.error ?? null, commands: b.data.commands ?? null, updatedAt: Date.now() };
+  if (b.data.state === 'online' && b.data.ping != null) addPing(bot.latency, b.data.ping, Date.now());
   res.json({ ok: true });
 });
 
@@ -16517,6 +16612,7 @@ import path from 'node:path';
 import type { Request } from 'express';
 import { z } from 'zod';
 import { admin, publicPanel, registrationOpen } from '../auth.js';
+import { pingVerdict, thin } from '../botLatencyLogic.js';
 import { bot, BOT_COMMANDS, clientIdFromToken, discordLoginReady, invitePayload } from '../botState.js';
 import { getSetting, setSetting } from '../db.js';
 import { BOT_TOKEN_RE, maskProxy, normalizeProxy, PROXY_HELP, PROXY_RE, TOKEN_HELP } from '../proxyInput.js';
@@ -16566,7 +16662,8 @@ router.get('/api/bot/status', admin, (_req, res) => {
   // a bot that stopped reporting is considered offline
   const stale = Date.now() - bot.status.updatedAt > 45_000;
   const base = stale ? { ...bot.status, state: 'error', error: 'Бот не отвечает (возможно, перезапускается). Если состояние не меняется больше минуты, на сервере выполните: sudo coregsm logs bot' } : bot.status;
-  res.json({ ...base, ...invitePayload(), commandList: BOT_COMMANDS, guildCount: bot.guilds.length, channelCount: bot.guilds.reduce((n, g) => n + g.channels.length, 0) });
+  const latency = thin(bot.latency, 80);
+  res.json({ ...base, ping: stale || base.state !== 'online' ? null : (bot.latency[bot.latency.length - 1]?.ms ?? null), pingVerdict: pingVerdict(bot.latency), latency, ...invitePayload(), commandList: BOT_COMMANDS, guildCount: bot.guilds.length, channelCount: bot.guilds.reduce((n, g) => n + g.channels.length, 0) });
 });
 
 const accessPayload = () => ({
@@ -20304,7 +20401,7 @@ const lastRun = new Map<number, number>();
 
 async function publishStatus(): Promise<void> {
   try {
-    await backend('/internal/bot-status', { method: 'POST', body: JSON.stringify({ state, tag, clientId, error: lastError, commands: commandsCount }) });
+    await backend('/internal/bot-status', { method: 'POST', body: JSON.stringify({ state, tag, clientId, error: lastError, commands: commandsCount, ping: client && state === 'online' && client.ws.ping >= 0 ? Math.round(client.ws.ping) : null }) });
   } catch {
     /* backend is restarting: the next tick will retry */
   }
@@ -47219,6 +47316,7 @@ import Register from './pages/Register';
 import ServersPage from './pages/Servers';
 import { applyServerPrefs, t, useI18n, type TKey } from './i18n';
 import { lazyPage, PageFrame } from './lazyPage';
+import { OfflineBar } from './components/OfflineBar';
 import { AuthCard, AuthShell, IconNews, IconServers, IconSettings, Logo, ThemeToggle, Toaster, UserAvatar, Wordmark, applyDefaultTheme, navigate, parseRoute, toast, useRoute } from './ui';
 
 // loaded on demand: the server list (the first screen) does not wait for these
@@ -47544,6 +47642,7 @@ export default function App() {
           <p className="font-semibold text-mute">{t('hdr.offlineText')}</p>
           <button className="btn btn-block" onClick={() => void load()}>{t('common.retry')}</button>
         </div>
+        <OfflineBar />
         <Toaster />
       </div>
     );
@@ -48121,6 +48220,10 @@ export interface BotStatus {
   /** slash commands the bot registered in Discord (null: not reported yet) */
   commands?: number | null;
   commandList?: { name: string; description: string }[];
+  /** gateway latency of the bot, ms (null: unknown) and the verdict by the last samples */
+  ping?: number | null;
+  pingVerdict?: 'ok' | 'slow' | 'bad' | 'unknown';
+  latency?: { ts: number; ms: number }[];
   error: string | null;
   updatedAt: number;
 }
@@ -48659,20 +48762,23 @@ import { useSyncExternalStore } from 'react';
  *   reduceMotion  -> data-motion="reduce"   (CSS switches animations and transitions off; without it the OS setting rules)
  *   largeText     -> data-text="large"      (root font scale 112.5 %)
  *   highContrast  -> data-contrast="high"   (stronger ink and borders)
+ *   liteData      -> data-lite="1"          (data saving: no decorations or animations, polling twice as rare);
+ *                    also on by itself when the browser asks for it (Save-Data, a 2G connection)
  */
 export interface Appearance {
   reduceMotion: boolean;
   largeText: boolean;
   highContrast: boolean;
+  liteData: boolean;
 }
 
 export const APPEARANCE_KEY = 'coregsm_appearance';
-export const DEFAULT_APPEARANCE: Appearance = { reduceMotion: false, largeText: false, highContrast: false };
+export const DEFAULT_APPEARANCE: Appearance = { reduceMotion: false, largeText: false, highContrast: false, liteData: false };
 
 /** anything (a stored string, a broken value) -> a complete Appearance */
 export function normalizeAppearance(raw: unknown): Appearance {
   const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
-  return { reduceMotion: r.reduceMotion === true, largeText: r.largeText === true, highContrast: r.highContrast === true };
+  return { reduceMotion: r.reduceMotion === true, largeText: r.largeText === true, highContrast: r.highContrast === true, liteData: r.liteData === true };
 }
 
 function read(): Appearance {
@@ -48684,7 +48790,13 @@ function read(): Appearance {
   }
 }
 
-/** writes the three attributes: an option that is off removes its attribute, so the CSS defaults apply */
+/** the browser or the network asks to spare the traffic */
+export function networkWantsLite(): boolean {
+  const c = (typeof navigator !== 'undefined' ? (navigator as unknown as { connection?: { saveData?: boolean; effectiveType?: string } }).connection : undefined);
+  return !!c && (c.saveData === true || c.effectiveType === 'slow-2g' || c.effectiveType === '2g');
+}
+
+/** writes the attributes: an option that is off removes its attribute, so the CSS defaults apply */
 export function applyAppearance(a: Appearance, root: HTMLElement = document.documentElement) {
   const set = (name: string, value: string | null) => {
     if (value === null) root.removeAttribute(name);
@@ -48693,6 +48805,7 @@ export function applyAppearance(a: Appearance, root: HTMLElement = document.docu
   set('data-motion', a.reduceMotion ? 'reduce' : null);
   set('data-text', a.largeText ? 'large' : null);
   set('data-contrast', a.highContrast ? 'high' : null);
+  set('data-lite', a.liteData || networkWantsLite() ? '1' : null);
 }
 
 let current: Appearance = typeof window === 'undefined' ? DEFAULT_APPEARANCE : read();
@@ -48702,7 +48815,7 @@ export const getAppearance = () => current;
 
 export function setAppearance(patch: Partial<Appearance>) {
   const next = normalizeAppearance({ ...current, ...patch });
-  if (next.reduceMotion === current.reduceMotion && next.largeText === current.largeText && next.highContrast === current.highContrast) return;
+  if (next.reduceMotion === current.reduceMotion && next.largeText === current.largeText && next.highContrast === current.highContrast && next.liteData === current.liteData) return;
   current = next;
   try {
     localStorage.setItem(APPEARANCE_KEY, JSON.stringify(next));
@@ -51034,6 +51147,34 @@ export default function NotificationBell({ initialUnread = 0 }: { initialUnread?
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/OfflineBar.tsx" << '__COREGSM_EOF__'
+/** A strip at the top while the device has no network: the data on screen is the last that arrived. It says so when the network is back. */
+import { useEffect, useState } from 'react';
+import { t } from '../i18n';
+
+export function OfflineBar() {
+  const [state, setState] = useState<'on' | 'off' | 'back'>(() => (typeof navigator !== 'undefined' && navigator.onLine === false ? 'off' : 'on'));
+  useEffect(() => {
+    let timer = 0;
+    const off = () => { window.clearTimeout(timer); setState('off'); };
+    const on = () => {
+      setState((s) => (s === 'off' ? 'back' : s));
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => setState('on'), 2500);
+    };
+    window.addEventListener('offline', off);
+    window.addEventListener('online', on);
+    return () => { window.clearTimeout(timer); window.removeEventListener('offline', off); window.removeEventListener('online', on); };
+  }, []);
+  if (state === 'on') return null;
+  return (
+    <div role="status" aria-live="polite" className={`net-bar ${state === 'back' ? 'is-back' : ''}`}>
+      {state === 'off' ? t('net.offline') : t('net.back')}
+    </div>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
   cat > "$APP_DIR/core-frontend/src/components/PlayersShownCard.tsx" << '__COREGSM_EOF__'
 import { useEffect, useState } from 'react';
 import { api } from '../api';
@@ -52861,6 +53002,7 @@ import { api } from '../../api';
 import { useAuth } from '../../auth';
 import { confirmDialog, promptDialog } from '../../confirm';
 import { t } from '../../i18n';
+import { useDraft } from '../../ui/useDraft';
 import { ago, Button, ErrorLine, fmtDateTime, toast } from '../../ui';
 import { buildThread, parseComment, visibleCount, type CommentItem, type CommentSort } from './commentMd';
 
@@ -52897,10 +53039,12 @@ function Body({ text }: { text: string }) {
 }
 
 /** the text box: counter, Ctrl+Enter, a hint of nicks after «@» */
-function Compose({ initial = '', placeholder, submit, cancel, autoFocus, label }: {
+function Compose({ initial = '', placeholder, submit, cancel, autoFocus, label, draftKey }: {
   initial?: string; placeholder: string; submit: (text: string) => Promise<void>; cancel?: () => void; autoFocus?: boolean; label: string;
+  /** where the unsent text is kept (this browser): a reply or a new comment survives a reload */
+  draftKey?: string;
 }) {
-  const [text, setText] = useState(initial);
+  const [text, setText, clearText, restored] = useDraft(draftKey ?? null, initial);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [hint, setHint] = useState<string[]>([]);
@@ -52937,7 +53081,7 @@ function Compose({ initial = '', placeholder, submit, cancel, autoFocus, label }
     setError('');
     try {
       await submit(text.trim());
-      setText('');
+      clearText();
     } catch (e) {
       setError((e as Error).message);
     }
@@ -52956,6 +53100,7 @@ function Compose({ initial = '', placeholder, submit, cancel, autoFocus, label }
         </ul>
       )}
       <ErrorLine text={error} />
+      {restored && text && <p className="cm-note">{t('nw.cm.draft')} <button type="button" className="underline" onClick={clearText}>{t('nw.cm.draftDrop')}</button></p>}
       <div className="cm-compose-foot">
         <span className={`cm-counter ${text.length > MAX - 100 ? 'is-near' : ''}`}>{text.length}/{MAX}</span>
         <span className="cm-md-hint">{t('nw.cm.mdHint')}</span>
@@ -53069,7 +53214,7 @@ export function Comments({ newsId }: { newsId: number }) {
         )}
         {c.hidden && canModerate && <footer className="cm-foot"><button type="button" className="cm-act" onClick={() => void hide(c)}>{t('nw.cm.show')}</button></footer>}
         {replyTo === c.id && (
-          <Compose autoFocus label={t('nw.cm.replyLabel', { name: c.author })} placeholder={t('nw.cm.replyHolder', { name: c.author })} submit={(text) => write(text, c.id)} cancel={() => setReplyTo(null)} />
+          <Compose autoFocus label={t('nw.cm.replyLabel', { name: c.author })} placeholder={t('nw.cm.replyHolder', { name: c.author })} draftKey={`reply-${c.id}`} submit={(text) => write(text, c.id)} cancel={() => setReplyTo(null)} />
         )}
       </article>
     );
@@ -53088,7 +53233,7 @@ export function Comments({ newsId }: { newsId: number }) {
       </div>
       <ErrorLine text={error} />
       {data?.locked && <p className="cm-note">{t('nw.cm.locked')}</p>}
-      {data?.canPost && <Compose label={t('nw.cm.write')} placeholder={t('nw.cm.holder')} submit={(text) => write(text)} />}
+      {data?.canPost && <Compose draftKey={`news-${newsId}`} label={t('nw.cm.write')} placeholder={t('nw.cm.holder')} submit={(text) => write(text)} />}
       {data && !data.canPost && !data.locked && !me && <p className="cm-note"><a href="/login">{t('nw.cm.login')}</a></p>}
       {data && tree.length === 0 && <p className="cm-empty">{t('nw.cm.empty')}</p>}
       <div className="cm-list">
@@ -57014,6 +57159,7 @@ export function AppearanceCard() {
     ['reduceMotion', 'pf.a11y.motion', 'pf.a11y.motionHint'],
     ['largeText', 'pf.a11y.text', 'pf.a11y.textHint'],
     ['highContrast', 'pf.a11y.contrast', 'pf.a11y.contrastHint'],
+    ['liteData', 'pf.a11y.lite', 'pf.a11y.liteHint'],
   ];
   const options: [Density, TKey, TKey][] = [
     ['normal', 'pf.density.normal', 'pf.density.normalHint'],
@@ -57396,6 +57542,37 @@ const supported = () => typeof window !== 'undefined' && 'serviceWorker' in navi
 interface InstallPrompt extends Event { prompt: () => Promise<void>; userChoice: Promise<{ outcome: string }> }
 const installPrompt = () => (window as unknown as { __installPrompt?: InstallPrompt }).__installPrompt;
 
+interface Quiet { enabled: boolean; fromMin: number; toMin: number; tz: number }
+const hhmm = (m: number) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+const toMin = (v: string) => { const [h, m] = v.split(':').map(Number); return Number.isFinite(h) && Number.isFinite(m) ? h * 60 + m : null; };
+
+/** quiet hours: no pushes to the devices in this window of the user's own day (the inbox still collects them) */
+function QuietHours() {
+  const [q, setQ] = useState<Quiet | null>(null);
+  useEffect(() => { api<Quiet>('/push/quiet').then(setQ).catch(() => undefined); }, []);
+  if (!q) return null;
+  const save = (next: Quiet) => {
+    const body = { ...next, tz: -new Date().getTimezoneOffset() };
+    setQ(body);
+    api<Quiet>('/push/quiet', 'PUT', body).then(() => toast('Сохранено')).catch((e: Error) => toast(e.message));
+  };
+  return (
+    <div className="mt-4 space-y-2 border-t border-line pt-4">
+      <label className="flex cursor-pointer items-center gap-3 font-extrabold">
+        <Switch checked={q.enabled} onChange={(v) => save({ ...q, enabled: v })} />
+        Тихие часы
+      </label>
+      <p className="text-sm font-semibold text-mute">В это время уведомления на устройства не приходят. Они остаются в колокольчике в шапке сайта.</p>
+      {q.enabled && (
+        <div className="flex flex-wrap items-center gap-3">
+          <label className="flex items-center gap-2 text-sm font-bold">с <input type="time" className="input w-auto" value={hhmm(q.fromMin)} onChange={(e) => { const m = toMin(e.target.value); if (m != null) save({ ...q, fromMin: m }); }} /></label>
+          <label className="flex items-center gap-2 text-sm font-bold">до <input type="time" className="input w-auto" value={hhmm(q.toMin)} onChange={(e) => { const m = toMin(e.target.value); if (m != null) save({ ...q, toMin: m }); }} /></label>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function PushCard() {
   const [state, setState] = useState<State>('loading');
   const [installable, setInstallable] = useState(() => !!installPrompt());
@@ -57477,6 +57654,7 @@ export function PushCard() {
           <button type="button" className="btn btn-sm" onClick={() => void install()}>Установить</button>
         </div>
       )}
+      {state === 'on' && <QuietHours />}
       <ErrorLine text={error} />
     </Section>
   );
@@ -59795,7 +59973,7 @@ export interface MoreItem {
  * Keyboard: Enter / Space / ArrowDown open it, arrows / Home / End move between the items. The popover stays inside the
  * page (no portal) and is aligned to the right edge of the button.
  */
-export default function MoreMenu({ items, className = 'btn-glass' }: { items: MoreItem[]; className?: string }) {
+export default function MoreMenu({ items, className = 'btn-glass', iconOnly = false, label }: { items: MoreItem[]; className?: string; /** only the dots, the name goes to aria-label */ iconOnly?: boolean; label?: string }) {
   useI18n();
   const [open, setOpen] = useState(false);
   const pop = useRef<HTMLDivElement>(null);
@@ -59816,6 +59994,8 @@ export default function MoreMenu({ items, className = 'btn-glass' }: { items: Mo
     else if (e.key === 'Tab') setOpen(false);
   };
 
+  // on a card (overflow hidden) the list goes to the body, or it would be cut off
+  const wrap = (node: ReactNode) => (iconOnly ? <Popover.Portal>{node}</Popover.Portal> : node);
   if (!items.length) return null;
   return (
     <Popover.Root open={open} onOpenChange={setOpen}>
@@ -59825,12 +60005,15 @@ export default function MoreMenu({ items, className = 'btn-glass' }: { items: Mo
             type="button"
             className={className}
             aria-haspopup="menu"
+            aria-label={iconOnly ? (label ?? t('srv.more')) : undefined}
+            onClick={(e) => e.stopPropagation()}
             onKeyDown={(e) => { if (e.key === 'ArrowDown' && !open) { e.preventDefault(); setOpen(true); } }}
           >
             <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden><circle cx="5" cy="12" r="2" /><circle cx="12" cy="12" r="2" /><circle cx="19" cy="12" r="2" /></svg>
-            {t('srv.more')}
+            {!iconOnly && t('srv.more')}
           </button>
         </Popover.Trigger>
+        {wrap(
         <Popover.Content
           ref={pop}
           role="menu"
@@ -59840,6 +60023,7 @@ export default function MoreMenu({ items, className = 'btn-glass' }: { items: Mo
           sideOffset={8}
           collisionPadding={8}
           className="srv-more-pop"
+          onClick={(e) => e.stopPropagation()}
           onKeyDown={onMenuKey}
           onOpenAutoFocus={(e) => { e.preventDefault(); focusItem(0); }}
         >
@@ -59857,7 +60041,8 @@ export default function MoreMenu({ items, className = 'btn-glass' }: { items: Mo
               <span className="min-w-0 flex-1 text-left">{it.label}</span>
             </button>
           ))}
-        </Popover.Content>
+        </Popover.Content>,
+        )}
       </div>
     </Popover.Root>
   );
@@ -62463,6 +62648,35 @@ export function PulseStrip({ servers, overview, uptime, now }: { servers: Server
       <PlayersChart data={overview} now={now} />
     </section>
   );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/servers"
+  cat > "$APP_DIR/core-frontend/src/components/servers/QuickMenu.tsx" << '__COREGSM_EOF__'
+/** «⋯» on a server card: copy the address, start the game, share the link: without opening the server first. */
+import { connectGuide } from '../../connectGuides';
+import type { Server } from '../../api';
+import { t, useI18n } from '../../i18n';
+import { toast } from '../../ui';
+import MoreMenu, { type MoreItem } from '../server/MoreMenu';
+
+export function QuickMenu({ s, glass = false }: { s: Server; glass?: boolean }) {
+  useI18n();
+  const link = connectGuide(s.game, s.address).link;
+  const url = `${window.location.origin}/servers/${s.id}`;
+  const copy = async (text: string, done: string) => {
+    try { await navigator.clipboard.writeText(text); toast(done); } catch { /* nothing to show: the text stays on the page */ }
+  };
+  const share = async () => {
+    if (typeof navigator.share === 'function') {
+      try { await navigator.share({ title: s.name, url }); } catch { /* closed by the user */ }
+    } else await copy(url, t('srv.quick.linkCopied'));
+  };
+  const items: MoreItem[] = [
+    { key: 'copy', label: t('srv.quick.copy'), onSelect: () => void copy(s.address, t('srv.addr.copied')) },
+    ...(link ? [{ key: 'play', label: link.label, onSelect: () => { window.location.href = link.href; } }] : []),
+    { key: 'share', label: t('srv.quick.share'), onSelect: () => void share() },
+  ];
+  return <MoreMenu items={items} iconOnly label={t('srv.quick.label', { name: s.name })} className={`${glass ? 'btn-icon-glass' : 'btn-icon-ghost'} btn-icon-sm`} />;
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/servers"
@@ -66277,6 +66491,8 @@ const en: Record<keyof typeof ru, string> = {
   'nav.community': 'Community',
   'nav.admin': 'Admin',
   'nav.sections': 'Sections',
+  'net.offline': 'You are offline. Showing the last data received.',
+  'net.back': 'Back online. Refreshing the data.',
   'nav.skip': 'Skip to content',
   'hdr.search': 'Search',
   'hdr.searchAria': 'Search the panel (Ctrl K)',
@@ -66614,6 +66830,8 @@ const en: Record<keyof typeof ru, string> = {
   'pf.a11y.textHint': 'Makes the text 12.5 % bigger across the whole interface.',
   'pf.a11y.contrast': 'High contrast',
   'pf.a11y.contrastHint': 'Black text and firmer borders around elements.',
+  'pf.a11y.lite': 'Data saver',
+  'pf.a11y.liteHint': 'No background pictures or animations, data refreshes half as often. Turns on by itself when the browser asks to save data.',
 
   // ---- e-mail: password reset, address confirmation ----
   'forgot.link': 'Forgot your password?',
@@ -67176,6 +67394,10 @@ const en: Record<keyof typeof ru, string> = {
   'srv.empty.now': 'Nobody online right now',
   'srv.addr.copy': 'Copy the address',
   'srv.addr.copied': 'Address copied',
+  'srv.quick.copy': 'Copy address',
+  'srv.quick.share': 'Share',
+  'srv.quick.linkCopied': 'Link copied',
+  'srv.quick.label': 'Actions: {name}',
   'spark.now': 'now',
   'spark.h': 'h',
   'spark.min': 'min',
@@ -67212,6 +67434,8 @@ const en: Record<keyof typeof ru, string> = {
   'nw.cm.write': 'Your comment',
   'nw.cm.holder': 'What do you think?',
   'nw.cm.send': 'Send',
+  'nw.cm.draft': 'Draft restored.',
+  'nw.cm.draftDrop': 'Discard',
   'nw.cm.cancel': 'Cancel',
   'nw.cm.mdHint': '**bold**, *italic*, `code`, > quote, @nick · Ctrl+Enter to send',
   'nw.cm.mentions': 'Who to mention',
@@ -67620,6 +67844,8 @@ const ru = {
   'nav.community': 'Сообщество',
   'nav.admin': 'Админка',
   'nav.sections': 'Разделы',
+  'net.offline': 'Нет сети. Показаны последние полученные данные.',
+  'net.back': 'Сеть вернулась. Данные обновляются.',
   'nav.skip': 'Перейти к содержимому',
   'hdr.search': 'Поиск',
   'hdr.searchAria': 'Поиск по панели (Ctrl K)',
@@ -67957,6 +68183,8 @@ const ru = {
   'pf.a11y.textHint': 'Увеличивает шрифт во всём интерфейсе на 12,5 %.',
   'pf.a11y.contrast': 'Высокий контраст',
   'pf.a11y.contrastHint': 'Чёрный текст и более чёткие границы элементов.',
+  'pf.a11y.lite': 'Экономия трафика',
+  'pf.a11y.liteHint': 'Без фоновых картинок и анимаций, данные обновляются вдвое реже. Включается само, если браузер просит экономить трафик.',
 
   // ---- e-mail: password reset, address confirmation ----
   'forgot.link': 'Забыли пароль?',
@@ -68519,6 +68747,10 @@ const ru = {
   'srv.empty.now': 'Сейчас никого',
   'srv.addr.copy': 'Скопировать адрес',
   'srv.addr.copied': 'Адрес скопирован',
+  'srv.quick.copy': 'Скопировать адрес',
+  'srv.quick.share': 'Поделиться',
+  'srv.quick.linkCopied': 'Ссылка скопирована',
+  'srv.quick.label': 'Действия: {name}',
   'spark.now': 'сейчас',
   'spark.h': 'ч',
   'spark.min': 'мин',
@@ -68555,6 +68787,8 @@ const ru = {
   'nw.cm.write': 'Ваш комментарий',
   'nw.cm.holder': 'Что вы об этом думаете?',
   'nw.cm.send': 'Отправить',
+  'nw.cm.draft': 'Черновик восстановлен.',
+  'nw.cm.draftDrop': 'Удалить',
   'nw.cm.cancel': 'Отмена',
   'nw.cm.mdHint': '**жирный**, *курсив*, `код`, > цитата, @ник · Ctrl+Enter — отправить',
   'nw.cm.mentions': 'Кого упомянуть',
@@ -76679,6 +76913,7 @@ import { pingTone, TONE_TEXT } from '../components/server/helpers';
 import { AddrCopy, CapacityBar, CountReact, ListSkeleton, NoFavsState, NoMatchState, NoServersState, PingBars, PlayerNames, StatusFlash, TilesSkeleton, TrendChip, durText, reactionOf, useServerReactions, type Reactions } from '../components/servers/serverUi';
 import { ServersList, readView, saveView, type ListSort, type SelectProps, type ServersView } from '../components/servers/ServerViews';
 import CompareChart from '../components/servers/CompareChart';
+import { QuickMenu } from '../components/servers/QuickMenu';
 import { AttentionStrip } from '../components/servers/AttentionStrip';
 import { PulseStrip } from '../components/servers/PulseStrip';
 import { WhatsNew, useWhatsNewOpen } from '../components/servers/WhatsNew';
@@ -77046,7 +77281,7 @@ function ServerList() {
                 favOf={(id) => (me ? favs.includes(id) : null)}
                 onOpen={open}
                 select={select}
-                renderFav={(sv, on) => <FavButton on={on} name={sv.name} onClick={() => void toggleFav(sv.id)} className={on ? 'text-warn' : 'text-mute'} />}
+                renderFav={(sv, on) => <><FavButton on={on} name={sv.name} onClick={() => void toggleFav(sv.id)} className={on ? 'text-warn' : 'text-mute'} /><QuickMenu s={sv} /></>}
               />
             )}
 
@@ -77154,6 +77389,7 @@ function HeroTile({ s, idx, uptime, downSince, fav, onFav, onOpen, rx, reason, s
         <div className="sh-actions flex shrink-0 items-center gap-1">
           <StatusFlash r={r}><StatusPill glass online={s.online} known={s.hasStatus} lag={lag} maintenance={!!s.maintenance} /></StatusFlash>
           {fav != null && <FavButton on={fav} name={s.name} onClick={onFav} className={fav ? 'text-white' : 'text-white/80'} glass />}
+          <QuickMenu s={s} glass />
         </div>
       </div>
 
@@ -77219,6 +77455,7 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince }
         <div className="flex items-center gap-0.5">
           <StatusFlash r={r}><StatusPill glass online={s.online} known={s.hasStatus} lag={lag} maintenance={!!s.maintenance} /></StatusFlash>
           {fav != null && <FavButton on={fav} name={s.name} onClick={onFav} className={fav ? 'text-white' : 'text-white/85'} glass />}
+          <QuickMenu s={s} glass />
         </div>
       </div>
 
@@ -78906,6 +79143,35 @@ export function BotPill({ status, tokenSet }: { status: BotStatus | null; tokenS
   }
 }
 
+/** Gateway latency of the bot: the last hours as a line, and a warning when commands are likely to time out (Discord waits 3 s). */
+function BotLatency({ status }: { status: BotStatus }) {
+  const pts = status.latency ?? [];
+  if (status.state !== 'online' || status.ping == null) return null;
+  const verdict = status.pingVerdict ?? 'ok';
+  const max = Math.max(500, ...pts.map((p) => p.ms));
+  const w = 240, h = 40;
+  const d = pts.length > 1 ? pts.map((p, i) => `${i ? 'L' : 'M'}${((i / (pts.length - 1)) * w).toFixed(1)} ${(h - (p.ms / max) * (h - 4) - 2).toFixed(1)}`).join(' ') : '';
+  const tone = verdict === 'bad' ? 'text-bad' : verdict === 'slow' ? 'text-warn' : 'text-ok';
+  return (
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-2xl bg-soft px-4 py-2.5">
+      <div>
+        <div className="text-xs font-bold text-mute">Задержка бота</div>
+        <div className={`text-lg font-extrabold tabular-nums ${tone}`}>{status.ping} мс</div>
+      </div>
+      {d && (
+        <svg viewBox={`0 0 ${w} ${h}`} className={`h-10 min-w-0 flex-1 basis-40 ${tone}`} role="img" aria-label={`Задержка бота за последние часы, сейчас ${status.ping} мс`} preserveAspectRatio="none">
+          <path d={d} fill="none" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
+        </svg>
+      )}
+      {verdict !== 'ok' && verdict !== 'unknown' && (
+        <p className={`basis-full text-sm font-bold ${tone}`}>
+          {verdict === 'bad' ? 'Бот отвечает очень медленно: команды в Discord могут не успевать. Проверьте сеть и прокси.' : 'Бот отвечает медленнее обычного. Если так долго, проверьте сеть и прокси.'}
+        </p>
+      )}
+    </div>
+  );
+}
+
 export function BotCard() {
   const [info, setInfo] = useState<SettingsInfo | null>(null);
   const [status, setStatus] = useState<BotStatus | null>(null);
@@ -78979,6 +79245,8 @@ export function BotCard() {
       {tokenSet && status?.state === 'error' && status.error && (
         <p className="rounded-2xl bg-badbg px-4 py-2.5 text-sm font-bold text-bad">{status.error}</p>
       )}
+
+      {tokenSet && status && <BotLatency status={status} />}
 
       <div data-tour="bot-token">
       <Field label="Токен бота">
@@ -81771,6 +82039,16 @@ html.has-kb .save-bar { bottom: calc(.75rem + var(--kb, 0px)); }
 /* 12. login: the form sits at the top while the keyboard is open, not glued to the bottom */
 html.has-kb :is(.auth-shell, .auth-card) { align-self: start; }
 @media (max-width: 639px) { html.has-kb .auth-showcase { display: none; } }
+
+/* 13. no network: a thin strip under the safe area */
+.net-bar { position: fixed; inset: 0 0 auto 0; z-index: 95; padding: calc(6px + env(safe-area-inset-top, 0px)) 12px 6px; text-align: center; font-size: 13px; font-weight: 800; background: rgb(var(--warn)); color: #1b1300; box-shadow: var(--shadow-2); }
+.net-bar.is-back { background: rgb(var(--ok)); color: #fff; }
+
+/* 14. data saver: no decorations, no animations, no blur (the data itself is requested half as often, see usePoll) */
+html[data-lite] :is(.nw-glow, .nw-backdrop, .auth-glow, .auth-float, .art-float, .art-float-2, .art-twinkle) { display: none !important; }
+html[data-lite] *, html[data-lite] *::before, html[data-lite] *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+html[data-lite] .glass, html[data-lite] [class*='backdrop-blur'] { -webkit-backdrop-filter: none; backdrop-filter: none; }
+html[data-lite] img[loading='lazy'] { content-visibility: auto; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/news-page.css" << '__COREGSM_EOF__'
@@ -84467,6 +84745,8 @@ import type { Server } from '../api';
  * - nothing runs while the tab is hidden; coming back to the tab refreshes at once
  * - a tick is skipped while the previous call (if it returns a promise) is still pending
  * - nothing is scheduled after unmount
+ * - without a network nothing is requested; the network coming back refreshes at once
+ * - in the data-saving mode (html[data-lite]) the pause between calls is twice as long
  */
 export function usePoll(fn: () => unknown, ms: number) {
   const ref = useRef(fn);
@@ -84475,7 +84755,7 @@ export function usePoll(fn: () => unknown, ms: number) {
     let alive = true;
     let pending = false;
     const run = async () => {
-      if (!alive || pending || document.hidden) return;
+      if (!alive || pending || document.hidden || navigator.onLine === false) return;
       pending = true;
       try {
         await ref.current();
@@ -84486,13 +84766,15 @@ export function usePoll(fn: () => unknown, ms: number) {
       }
     };
     void run();
-    const t = setInterval(() => void run(), ms);
+    const t = setInterval(() => void run(), document.documentElement.hasAttribute('data-lite') ? ms * 2 : ms);
     const onVisible = () => { if (!document.hidden) void run(); };
     document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('online', onVisible);
     return () => {
       alive = false;
       clearInterval(t);
       document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('online', onVisible);
     };
   }, [ms]);
 }
@@ -84834,6 +85116,55 @@ export function Toaster() {
       <div role="alert" className="flex w-full flex-col items-center gap-2 md:items-end">{list.filter((t) => t.kind === 'err').map(item)}</div>
     </div>
   );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/ui"
+  cat > "$APP_DIR/core-frontend/src/ui/useDraft.ts" << '__COREGSM_EOF__'
+import { useCallback, useEffect, useRef, useState } from 'react';
+
+const PREFIX = 'coregsm_draft:';
+/** a draft older than this is not worth restoring */
+const KEEP_MS = 14 * 86_400_000;
+
+function load(key: string): string {
+  try {
+    const raw = localStorage.getItem(PREFIX + key);
+    if (!raw) return '';
+    const v = JSON.parse(raw) as { t?: unknown; at?: unknown };
+    if (typeof v.t !== 'string' || typeof v.at !== 'number' || Date.now() - v.at > KEEP_MS) { localStorage.removeItem(PREFIX + key); return ''; }
+    return v.t;
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * A text that survives a reload, a closed tab or a lost connection: kept in this browser a moment after the last key,
+ * dropped by `clear()` (after sending) and when it becomes empty. `key` names the place it belongs to (one comment box).
+ * Without a key it is a plain state.
+ */
+export function useDraft(key: string | null, initial = ''): [string, (v: string) => void, () => void, boolean] {
+  const [text, setText] = useState(() => initial || (key ? load(key) : ''));
+  const restored = useRef(!initial && !!key && text !== '');
+  const timer = useRef(0);
+  const set = useCallback((v: string) => {
+    setText(v);
+    if (!key) return;
+    window.clearTimeout(timer.current);
+    timer.current = window.setTimeout(() => {
+      try {
+        if (v.trim()) localStorage.setItem(PREFIX + key, JSON.stringify({ t: v, at: Date.now() }));
+        else localStorage.removeItem(PREFIX + key);
+      } catch { /* private mode: the draft lives until the page is closed */ }
+    }, 400);
+  }, [key]);
+  const clear = useCallback(() => {
+    window.clearTimeout(timer.current);
+    setText('');
+    if (key) { try { localStorage.removeItem(PREFIX + key); } catch { /* ignore */ } }
+  }, [key]);
+  useEffect(() => () => window.clearTimeout(timer.current), []);
+  return [text, set, clear, restored.current];
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/ui"
