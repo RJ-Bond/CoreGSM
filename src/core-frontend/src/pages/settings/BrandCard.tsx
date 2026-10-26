@@ -7,7 +7,7 @@ import { api, getToken } from '../../api';
 import { useAuth } from '../../auth';
 import { parseHex } from '../../colors';
 import { AccentPicker } from '../../components/AccentPicker';
-import { ErrorLine, FieldError, GameAvatar, IconCheck, Logo, SaveBadge, Section, TextField, toast, useAutosave } from '../../ui';
+import { ErrorLine, FieldError, GameAvatar, IconCheck, Logo, SaveBadge, Section, TextField, toast, useAutosave, errText } from '../../ui';
 import { useSaveBar, useSaveBarActive } from '../../saveBar';
 import { errorText } from '../../apiErrors';
 
@@ -73,7 +73,7 @@ export function BrandCard() {
       toast('Логотип обновлён');
       await reload();
     } catch (x) {
-      setError((x as Error).message);
+      setError(errText(x));
     } finally {
       setBusy(false);
     }

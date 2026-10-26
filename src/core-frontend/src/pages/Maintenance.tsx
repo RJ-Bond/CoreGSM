@@ -7,7 +7,7 @@ import {
   REPEAT_LABEL, fromLocalInput, presetNow, presetTonight, rangeLabel, toLocalInput, untilLabel, validateWindow, windowState,
   type MaintenanceInput, type MaintenanceRepeat, type MaintenanceWindow, type WindowState,
 } from '../maintenance';
-import { AdminPage, ErrorLine, Field, FieldError, IconEdit, IconPlus, IconTrash, IconWrench, LoadError, Modal, PageHead, Spinner, undoable, toast, usePoll } from '../ui';
+import { AdminPage, ErrorLine, Field, FieldError, IconEdit, IconPlus, IconTrash, IconWrench, LoadError, Modal, PageHead, Spinner, undoable, toast, usePoll, errText } from '../ui';
 
 interface Draft { id: number | null; serverId: string; name: string; start: string; end: string; repeat: MaintenanceRepeat }
 
@@ -153,7 +153,7 @@ function WindowModal({ draft, servers, onClose, onSaved }: { draft: Draft; serve
       toast(f.id == null ? 'Окно добавлено' : 'Окно сохранено');
       onSaved();
     } catch (err) {
-      setError((err as Error).message);
+      setError(errText(err));
       setBusy(false);
     }
   };

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { api } from '../../api';
 import { useAuth } from '../../auth';
 import { t } from '../../i18n';
-import { Button, ErrorLine, IconUpload, Section, toast } from '../../ui';
+import { Button, ErrorLine, IconUpload, Section, toast, errText } from '../../ui';
 import { IMAGE_TYPES, uploadImage, useDropTarget } from './AvatarEditor';
 import { BANNER_PRESETS, bannerStyle } from './banner';
 
@@ -47,7 +47,7 @@ export function BannerEditor({ onChanged }: { onChanged: () => Promise<void> }) 
       setPending(null);
       await onChanged();
     } catch (e) {
-      setError((e as Error).message);
+      setError(errText(e));
     } finally {
       setBusy(false);
     }
@@ -60,7 +60,7 @@ export function BannerEditor({ onChanged }: { onChanged: () => Promise<void> }) 
       await api('/me/banner-preset', 'PUT', { preset });
       await onChanged();
     } catch (e) {
-      setError((e as Error).message);
+      setError(errText(e));
     } finally {
       setBusy(false);
     }
@@ -75,7 +75,7 @@ export function BannerEditor({ onChanged }: { onChanged: () => Promise<void> }) 
       toast(t('pf.banner.removed'));
       await onChanged();
     } catch (e) {
-      setError((e as Error).message);
+      setError(errText(e));
     } finally {
       setBusy(false);
     }

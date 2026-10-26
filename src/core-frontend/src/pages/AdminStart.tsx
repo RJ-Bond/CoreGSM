@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { api, type BotStatus, type SettingsInfo } from '../api';
 import { useAuth } from '../auth';
 import { t, useI18n } from '../i18n';
-import { AdminPage, Burst, PageHead, IconStart, IconServers, IconNews, IconDownload, IconSystem, navigate, toast, usePoll } from '../ui';
+import { AdminPage, Burst, PageHead, IconStart, IconServers, IconNews, IconDownload, IconSystem, navigate, toast, usePoll, fail } from '../ui';
 import { ADMIN_GROUPS, START_SECTION } from './adminNav';
 import { downloadFile } from './Backups';
 
@@ -182,7 +182,7 @@ export default function AdminStart() {
       await downloadFile('/backup', 'coregsm-backup.tar.gz');
       toast(t('start.backupDone'));
     } catch (e) {
-      toast((e as Error).message, 'err');
+      fail(e);
     } finally {
       setBusy(false);
     }

@@ -6,7 +6,7 @@ import { useRef, useState } from 'react';
 import { api } from '../api';
 import { confirmDialog } from '../confirm';
 import { downloadFile } from '../pages/Backups';
-import { Button, ErrorLine, Section, toast } from '../ui';
+import { Button, ErrorLine, Section, toast, errText } from '../ui';
 
 interface Summary { dry: boolean; serversAdded: number; serversUpdated: number; bindings: number; maintenance: number; restarts: number; autoroles: number; counters: number; settings: number }
 
@@ -49,7 +49,7 @@ export default function ConfigTransfer() {
       const done = await api<Summary>('/config/import', 'POST', data);
       toast(`Импортировано: ${summaryText(done)}`);
     } catch (e) {
-      setError((e as Error).message);
+      setError(errText(e));
     } finally {
       setBusy('');
       if (file.current) file.current.value = '';

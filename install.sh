@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="68d951707271"
+COREGSM_BUILD="0552328fad53"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -4738,8 +4738,8 @@ export async function uploadRemote(file: string, name: string, url: string): Pro
   }
   try {
     setSetting('backup_last_remote', JSON.stringify(result));
-  } catch {
-    /* ignore */
+  } catch (err) {
+    log.warn('backup: could not store the upload result:', (err as Error).message);
   }
   return result;
 }
@@ -4805,7 +4805,7 @@ function validateDb(file: string): string | null {
     try {
       t?.close();
     } catch {
-      /* ignore */
+      /* a failed close of a temporary copy changes nothing: the files are removed right below */
     }
     for (const ext of ['-wal', '-shm']) rmrf(`${file}${ext}`);
   }
@@ -4855,7 +4855,7 @@ function unreadableSecrets(file: string): string[] {
     try {
       t?.close();
     } catch {
-      /* ignore */
+      /* a failed close of a temporary copy changes nothing: the files are removed right below */
     }
     for (const ext of ['-wal', '-shm']) rmrf(`${file}${ext}`);
   }
@@ -4939,7 +4939,7 @@ function restartSoon(): void {
     try {
       db.close();
     } catch {
-      /* ignore */
+      /* closing is best effort: the process is killed right after */
     }
     process.kill(process.pid, 'SIGKILL');
   }, 800);
@@ -10038,286 +10038,16 @@ import { commentCount } from './newsComments.js';
 import { viewsOf } from './newsViews.js';
 import { notifyNewsPublished } from './newsSubs.js';
 import { db, getSetting, setSetting } from './db.js';
-import { ledgerRecord, MAX_ATTEMPTS, planFailure, registerKind } from './deliveries.js';
-import { gameProfile } from './games.js';
-import { addColumn } from './schema.js';
+import { ledgerRecord, MAX_ATTEMPTS, planFailure } from './deliveries.js';
 import { param } from './http.js';
+import { IMG_DIR, type NewsRow } from './newsStore.js';
+import {
+  allEmbeds, bodySchema, check, cut, embedLength, nextOccurrence, payloadSchema, tidy, titleOf, NEWS_CATEGORIES, NEWS_REACTIONS,
+  type EmbedIn, type NewsPayload, type NewsServerInfo, type StatusEmbed,
+} from './newsPayload.js';
 
-const IMG_DIR = path.join(path.dirname(process.env.DB_PATH ?? './data/coregsm.db'), 'news');
-fs.mkdirSync(IMG_DIR, { recursive: true });
-
-db.exec(`
-CREATE TABLE IF NOT EXISTS news (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  status TEXT NOT NULL,
-  channel_id TEXT NOT NULL,
-  payload TEXT NOT NULL,
-  scheduled_at INTEGER,
-  sent_at INTEGER,
-  message_id TEXT,
-  error TEXT,
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL
-);
-`);
-
-addColumn(db, 'news', 'repeat', "TEXT NOT NULL DEFAULT 'none'");
-// delivery retries: failed attempts so far and the earliest time of the next one (see deliveries.ts)
-addColumn(db, 'news', 'attempts', 'INTEGER NOT NULL DEFAULT 0');
-addColumn(db, 'news', 'next_try_at', 'INTEGER');
-// a manual retry from the deliveries list puts the item back into the queue it came from
-registerKind('news', {
-  retry(refId, payload) {
-    const q = payload.action === 'edit' ? 'edit_queued' : payload.action === 'delete' ? 'delete_queued' : 'queued';
-    db.prepare("UPDATE news SET status = ?, attempts = 0, next_try_at = NULL, error = NULL, updated_at = ? WHERE id = ? AND test = 0").run(q, Date.now(), refId);
-  },
-});
-
-// 1 = a test send (never shown in lists, cleaned up after an hour)
-addColumn(db, 'news', 'test', 'INTEGER NOT NULL DEFAULT 0');
-
-// the user who created the item (its role is resolved at read time, see authorRole)
-addColumn(db, 'news', 'created_by', 'INTEGER');
-
-db.exec(`
-CREATE TABLE IF NOT EXISTS news_reactions (
-  news_id INTEGER NOT NULL,
-  user_id INTEGER NOT NULL,
-  emoji TEXT NOT NULL,
-  ts INTEGER NOT NULL,
-  PRIMARY KEY (news_id, user_id)
-);
-CREATE INDEX IF NOT EXISTS idx_news_reactions_news ON news_reactions (news_id);
-CREATE TABLE IF NOT EXISTS news_versions (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  news_id INTEGER NOT NULL,
-  ts INTEGER NOT NULL,
-  actor TEXT NOT NULL,
-  payload TEXT NOT NULL,
-  note TEXT NOT NULL DEFAULT ''
-);
-CREATE INDEX IF NOT EXISTS idx_news_versions_news ON news_versions (news_id, id);
-CREATE TABLE IF NOT EXISTS news_autosave (
-  user_key TEXT NOT NULL,
-  key TEXT NOT NULL,
-  payload TEXT NOT NULL,
-  updated_at INTEGER NOT NULL,
-  PRIMARY KEY (user_key, key)
-);
-`);
-
-interface NewsRow {
-  repeat: string;
-  id: number;
-  test?: number;
-  status: string;
-  channel_id: string;
-  payload: string;
-  scheduled_at: number | null;
-  sent_at: number | null;
-  message_id: string | null;
-  error: string | null;
-  created_at: number;
-  updated_at: number;
-  created_by?: number | null;
-}
-
-// ---------- validation (Discord limits) ----------
-const link = z
-  .string()
-  .trim()
-  .max(2000)
-  .refine((v) => v === '' || /^https?:\/\/\S+$/i.test(v), 'Ссылка должна начинаться с http:// или https://');
-
-/** links of the site-only fields: https only (an empty string means "none") */
-const httpsLink = z
-  .string()
-  .trim()
-  .max(2000)
-  .refine((v) => v === '' || /^https:\/\/\S+$/i.test(v), 'Ссылка должна начинаться с https://');
-const UPLOAD_RE = /^[a-f0-9]{24}\.(png|jpg|gif|webp)$/;
-export const NEWS_CATEGORIES = ['announcement', 'wipe', 'update', 'event', 'maintenance', 'other'] as const;
-/** reactions players can leave on a published item (the heart carries the emoji variation selector) */
-export const NEWS_REACTIONS = ['👍', '🔥', '\u2764\uFE0F', '😮'] as const;
-
-const embedSchema = z.object({
-  title: z.string().max(256, 'Заголовок: не более 256 символов').optional(),
-  url: link.optional(),
-  description: z.string().max(4096, 'Текст: не более 4096 символов').optional(),
-  color: z.number().int().min(0).max(0xffffff).optional(),
-  author: z.object({ name: z.string().max(256), iconUrl: link.optional() }).optional(),
-  thumbnailUrl: link.optional(),
-  image: z.object({ url: link.optional(), upload: z.string().regex(/^[a-f0-9]{24}\.(png|jpg|gif|webp)$/).optional() }).optional(),
-  fields: z
-    .array(
-      z.object({
-        name: z.string().min(1, 'У каждого поля должно быть название').max(256),
-        value: z.string().min(1, 'У каждого поля должен быть текст').max(1024, 'Текст поля: не более 1024 символов'),
-        inline: z.boolean().optional(),
-      }),
-    )
-    .max(25, 'Полей не больше 25')
-    .optional(),
-  footer: z.object({ text: z.string().max(2048) }).optional(),
-  timestamp: z.boolean().optional(),
-});
-
-const payloadSchema = z.object({
-  content: z.string().max(2000, 'Сообщение над embed: не более 2000 символов').default(''),
-  mention: z.enum(['none', 'here', 'everyone']).default('none'),
-  embed: embedSchema.optional(),
-  // more embeds in the same message (Discord: 10 embeds in total)
-  extraEmbeds: z.array(embedSchema).max(9, 'Дополнительных embed не больше 9').optional(),
-  // live status cards of these servers are appended to the message at send time
-  statusServerIds: z.array(z.number().int().positive()).max(5, 'Статусов серверов не больше 5').optional(),
-  // ---- site-only fields (ignored by Discord, except `actions` which become link buttons) ----
-  category: z.enum(NEWS_CATEGORIES).optional(),
-  pinned: z.boolean().optional(),
-  game: z
-    .string()
-    .trim()
-    .max(40)
-    .refine((v) => v === '' || !!gameProfile(v), 'Неизвестная игра')
-    .optional(),
-  gallery: z
-    .array(z.object({ url: httpsLink.optional(), upload: z.string().regex(UPLOAD_RE).optional() }))
-    .max(6, 'В галерее не больше 6 картинок')
-    .optional(),
-  changes: z
-    .array(
-      z.object({
-        kind: z.enum(['add', 'fix', 'remove', 'change']),
-        text: z.string().trim().min(1, 'Текст изменения не может быть пустым').max(200, 'Изменение: не более 200 символов'),
-      }),
-    )
-    .max(20, 'Изменений не больше 20')
-    .optional(),
-  countdownAt: z.number().int().min(0).optional(),
-  countdownLabel: z.string().trim().max(60, 'Подпись таймера: не более 60 символов').optional(),
-  actions: z
-    .array(
-      z.object({
-        label: z.string().trim().min(1, 'У кнопки должна быть подпись').max(40, 'Подпись кнопки: не более 40 символов'),
-        url: httpsLink.refine((v) => v !== '', 'У кнопки должна быть ссылка'),
-      }),
-    )
-    .max(3, 'Кнопок не больше 3')
-    .optional(),
-});
-
-type EmbedIn = z.infer<typeof embedSchema>;
-export type NewsPayload = z.infer<typeof payloadSchema>;
-
-const bodySchema = z.object({
-  channelId: z.string().regex(/^\d{15,25}$/, 'Выберите канал для новости'),
-  payload: payloadSchema,
-  action: z.enum(['draft', 'now', 'schedule']),
-  scheduledAt: z.number().int().optional(),
-  // a scheduled item can repeat: after it is posted the next one is scheduled
-  repeat: z.enum(['none', 'daily', 'weekly', 'monthly']).optional(),
-});
-
-/** Drops empty strings, so "no title" is really absent. */
-function tidyEmbed(e: EmbedIn | undefined): EmbedIn | undefined {
-  if (!e) return undefined;
-  const out = { ...e };
-  for (const k of ['title', 'url', 'description', 'thumbnailUrl'] as const) if (!out[k]?.trim()) delete out[k];
-  if (out.author && !out.author.name.trim()) delete out.author;
-  else if (out.author && !out.author.iconUrl) out.author = { name: out.author.name };
-  if (out.footer && !out.footer.text.trim()) delete out.footer;
-  if (out.image && !out.image.url && !out.image.upload) delete out.image;
-  else if (out.image && !out.image.url) out.image = { upload: out.image.upload };
-  if (!out.fields?.length) delete out.fields;
-  const hasEmbed = Object.keys(out).some((k) => k !== 'color' && k !== 'timestamp') || (out.timestamp && Object.keys(out).length > 1);
-  return hasEmbed ? out : undefined;
-}
-
-function tidy(p: NewsPayload): NewsPayload {
-  const extra = (p.extraEmbeds ?? []).map(tidyEmbed).filter((e): e is EmbedIn => !!e);
-  const ids = [...new Set(p.statusServerIds ?? [])];
-  const gallery = (p.gallery ?? []).filter((g) => g.url || g.upload).map((g) => (g.upload ? { upload: g.upload } : { url: g.url }));
-  const out: NewsPayload = {
-    ...p,
-    embed: tidyEmbed(p.embed),
-    extraEmbeds: extra.length ? extra : undefined,
-    statusServerIds: ids.length ? ids : undefined,
-    gallery: gallery.length ? gallery : undefined,
-    changes: p.changes?.length ? p.changes : undefined,
-    actions: p.actions?.length ? p.actions : undefined,
-    game: p.game || undefined,
-    countdownLabel: p.countdownLabel || undefined,
-  };
-  if (!out.pinned) delete out.pinned;
-  if (!out.countdownAt) {
-    delete out.countdownAt;
-    delete out.countdownLabel;
-  }
-  for (const k of Object.keys(out) as (keyof NewsPayload)[]) if (out[k] === undefined) delete out[k];
-  return out;
-}
-
-const allEmbeds = (p: NewsPayload): EmbedIn[] => [...(p.embed ? [p.embed] : []), ...(p.extraEmbeds ?? [])];
-
-interface PlainEmbed {
-  title?: string;
-  description?: string;
-  author?: { name: string };
-  footer?: { text: string };
-  fields?: { name: string; value: string }[];
-}
-function embedLength(e: PlainEmbed): number {
-  return (
-    (e.title?.length ?? 0) +
-    (e.description?.length ?? 0) +
-    (e.author?.name.length ?? 0) +
-    (e.footer?.text.length ?? 0) +
-    (e.fields ?? []).reduce((n, f) => n + f.name.length + f.value.length, 0)
-  );
-}
-
-/** Returns an error message when the payload cannot be posted, otherwise null. */
-function check(p: NewsPayload): string | null {
-  const embeds = allEmbeds(p);
-  if (!p.content.trim() && !embeds.length && !p.statusServerIds?.length) return 'Напишите текст или заполните embed: пустое сообщение отправить нельзя';
-  if (embeds.length > 10) return 'В сообщении не больше 10 embed';
-  for (const e of embeds) if (embedLength(e) > 6000) return 'Embed длиннее 6000 символов (лимит Discord): сократите текст';
-  if (embeds.reduce((n, e) => n + embedLength(e), 0) > 6000) return 'Все embed вместе длиннее 6000 символов (лимит Discord): сократите текст';
-  return null;
-}
-
-const titleOf = (p: NewsPayload) => p.embed?.title?.trim() || p.content.trim().slice(0, 70) || p.embed?.description?.trim().slice(0, 70) || 'Без названия';
-
-/** the next time a repeating item should go out, always in the future */
-function nextOccurrence(from: number, repeat: string, now: number): number {
-  const d = new Date(from);
-  let guard = 0;
-  do {
-    if (repeat === 'daily') d.setUTCDate(d.getUTCDate() + 1);
-    else if (repeat === 'weekly') d.setUTCDate(d.getUTCDate() + 7);
-    else d.setUTCMonth(d.getUTCMonth() + 1);
-  } while (d.getTime() <= now && ++guard < 1000);
-  return d.getTime();
-}
-
-export interface NewsServerInfo {
-  id: number;
-  name: string;
-  players: number;
-  maxPlayers: number;
-  online: boolean;
-  address: string;
-  map: string | null;
-  ping: number | null;
-}
-export interface StatusEmbed {
-  title?: string;
-  description?: string;
-  author?: { name: string };
-  fields?: { name: string; value: string; inline?: boolean }[];
-  footer?: { text: string; icon_url?: string };
-}
-
-const cut = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
+export { NEWS_CATEGORIES, NEWS_REACTIONS };
+export type { NewsPayload, NewsServerInfo, StatusEmbed };
 
 type ChannelInfo = (id: string) => { channelName: string | null; guildName: string | null; guildId: string | null };
 
@@ -11507,6 +11237,297 @@ router.post('/api/news/comments/:cid/pin', param('cid'), moderator, (req: Authed
 });
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/newsPayload.ts" << '__COREGSM_EOF__'
+/** News payload: validation (Discord limits), tidying and the helpers that read a payload. */
+import { z } from 'zod';
+import { gameProfile } from './games.js';
+
+// ---------- validation (Discord limits) ----------
+const link = z
+  .string()
+  .trim()
+  .max(2000)
+  .refine((v) => v === '' || /^https?:\/\/\S+$/i.test(v), 'Ссылка должна начинаться с http:// или https://');
+
+/** links of the site-only fields: https only (an empty string means "none") */
+const httpsLink = z
+  .string()
+  .trim()
+  .max(2000)
+  .refine((v) => v === '' || /^https:\/\/\S+$/i.test(v), 'Ссылка должна начинаться с https://');
+const UPLOAD_RE = /^[a-f0-9]{24}\.(png|jpg|gif|webp)$/;
+export const NEWS_CATEGORIES = ['announcement', 'wipe', 'update', 'event', 'maintenance', 'other'] as const;
+/** reactions players can leave on a published item (the heart carries the emoji variation selector) */
+export const NEWS_REACTIONS = ['👍', '🔥', '\u2764\uFE0F', '😮'] as const;
+
+const embedSchema = z.object({
+  title: z.string().max(256, 'Заголовок: не более 256 символов').optional(),
+  url: link.optional(),
+  description: z.string().max(4096, 'Текст: не более 4096 символов').optional(),
+  color: z.number().int().min(0).max(0xffffff).optional(),
+  author: z.object({ name: z.string().max(256), iconUrl: link.optional() }).optional(),
+  thumbnailUrl: link.optional(),
+  image: z.object({ url: link.optional(), upload: z.string().regex(/^[a-f0-9]{24}\.(png|jpg|gif|webp)$/).optional() }).optional(),
+  fields: z
+    .array(
+      z.object({
+        name: z.string().min(1, 'У каждого поля должно быть название').max(256),
+        value: z.string().min(1, 'У каждого поля должен быть текст').max(1024, 'Текст поля: не более 1024 символов'),
+        inline: z.boolean().optional(),
+      }),
+    )
+    .max(25, 'Полей не больше 25')
+    .optional(),
+  footer: z.object({ text: z.string().max(2048) }).optional(),
+  timestamp: z.boolean().optional(),
+});
+
+export const payloadSchema = z.object({
+  content: z.string().max(2000, 'Сообщение над embed: не более 2000 символов').default(''),
+  mention: z.enum(['none', 'here', 'everyone']).default('none'),
+  embed: embedSchema.optional(),
+  // more embeds in the same message (Discord: 10 embeds in total)
+  extraEmbeds: z.array(embedSchema).max(9, 'Дополнительных embed не больше 9').optional(),
+  // live status cards of these servers are appended to the message at send time
+  statusServerIds: z.array(z.number().int().positive()).max(5, 'Статусов серверов не больше 5').optional(),
+  // ---- site-only fields (ignored by Discord, except `actions` which become link buttons) ----
+  category: z.enum(NEWS_CATEGORIES).optional(),
+  pinned: z.boolean().optional(),
+  game: z
+    .string()
+    .trim()
+    .max(40)
+    .refine((v) => v === '' || !!gameProfile(v), 'Неизвестная игра')
+    .optional(),
+  gallery: z
+    .array(z.object({ url: httpsLink.optional(), upload: z.string().regex(UPLOAD_RE).optional() }))
+    .max(6, 'В галерее не больше 6 картинок')
+    .optional(),
+  changes: z
+    .array(
+      z.object({
+        kind: z.enum(['add', 'fix', 'remove', 'change']),
+        text: z.string().trim().min(1, 'Текст изменения не может быть пустым').max(200, 'Изменение: не более 200 символов'),
+      }),
+    )
+    .max(20, 'Изменений не больше 20')
+    .optional(),
+  countdownAt: z.number().int().min(0).optional(),
+  countdownLabel: z.string().trim().max(60, 'Подпись таймера: не более 60 символов').optional(),
+  actions: z
+    .array(
+      z.object({
+        label: z.string().trim().min(1, 'У кнопки должна быть подпись').max(40, 'Подпись кнопки: не более 40 символов'),
+        url: httpsLink.refine((v) => v !== '', 'У кнопки должна быть ссылка'),
+      }),
+    )
+    .max(3, 'Кнопок не больше 3')
+    .optional(),
+});
+
+export type EmbedIn = z.infer<typeof embedSchema>;
+export type NewsPayload = z.infer<typeof payloadSchema>;
+
+export const bodySchema = z.object({
+  channelId: z.string().regex(/^\d{15,25}$/, 'Выберите канал для новости'),
+  payload: payloadSchema,
+  action: z.enum(['draft', 'now', 'schedule']),
+  scheduledAt: z.number().int().optional(),
+  // a scheduled item can repeat: after it is posted the next one is scheduled
+  repeat: z.enum(['none', 'daily', 'weekly', 'monthly']).optional(),
+});
+
+/** Drops empty strings, so "no title" is really absent. */
+function tidyEmbed(e: EmbedIn | undefined): EmbedIn | undefined {
+  if (!e) return undefined;
+  const out = { ...e };
+  for (const k of ['title', 'url', 'description', 'thumbnailUrl'] as const) if (!out[k]?.trim()) delete out[k];
+  if (out.author && !out.author.name.trim()) delete out.author;
+  else if (out.author && !out.author.iconUrl) out.author = { name: out.author.name };
+  if (out.footer && !out.footer.text.trim()) delete out.footer;
+  if (out.image && !out.image.url && !out.image.upload) delete out.image;
+  else if (out.image && !out.image.url) out.image = { upload: out.image.upload };
+  if (!out.fields?.length) delete out.fields;
+  const hasEmbed = Object.keys(out).some((k) => k !== 'color' && k !== 'timestamp') || (out.timestamp && Object.keys(out).length > 1);
+  return hasEmbed ? out : undefined;
+}
+
+export function tidy(p: NewsPayload): NewsPayload {
+  const extra = (p.extraEmbeds ?? []).map(tidyEmbed).filter((e): e is EmbedIn => !!e);
+  const ids = [...new Set(p.statusServerIds ?? [])];
+  const gallery = (p.gallery ?? []).filter((g) => g.url || g.upload).map((g) => (g.upload ? { upload: g.upload } : { url: g.url }));
+  const out: NewsPayload = {
+    ...p,
+    embed: tidyEmbed(p.embed),
+    extraEmbeds: extra.length ? extra : undefined,
+    statusServerIds: ids.length ? ids : undefined,
+    gallery: gallery.length ? gallery : undefined,
+    changes: p.changes?.length ? p.changes : undefined,
+    actions: p.actions?.length ? p.actions : undefined,
+    game: p.game || undefined,
+    countdownLabel: p.countdownLabel || undefined,
+  };
+  if (!out.pinned) delete out.pinned;
+  if (!out.countdownAt) {
+    delete out.countdownAt;
+    delete out.countdownLabel;
+  }
+  for (const k of Object.keys(out) as (keyof NewsPayload)[]) if (out[k] === undefined) delete out[k];
+  return out;
+}
+
+export const allEmbeds = (p: NewsPayload): EmbedIn[] => [...(p.embed ? [p.embed] : []), ...(p.extraEmbeds ?? [])];
+
+interface PlainEmbed {
+  title?: string;
+  description?: string;
+  author?: { name: string };
+  footer?: { text: string };
+  fields?: { name: string; value: string }[];
+}
+export function embedLength(e: PlainEmbed): number {
+  return (
+    (e.title?.length ?? 0) +
+    (e.description?.length ?? 0) +
+    (e.author?.name.length ?? 0) +
+    (e.footer?.text.length ?? 0) +
+    (e.fields ?? []).reduce((n, f) => n + f.name.length + f.value.length, 0)
+  );
+}
+
+/** Returns an error message when the payload cannot be posted, otherwise null. */
+export function check(p: NewsPayload): string | null {
+  const embeds = allEmbeds(p);
+  if (!p.content.trim() && !embeds.length && !p.statusServerIds?.length) return 'Напишите текст или заполните embed: пустое сообщение отправить нельзя';
+  if (embeds.length > 10) return 'В сообщении не больше 10 embed';
+  for (const e of embeds) if (embedLength(e) > 6000) return 'Embed длиннее 6000 символов (лимит Discord): сократите текст';
+  if (embeds.reduce((n, e) => n + embedLength(e), 0) > 6000) return 'Все embed вместе длиннее 6000 символов (лимит Discord): сократите текст';
+  return null;
+}
+
+export const titleOf = (p: NewsPayload) => p.embed?.title?.trim() || p.content.trim().slice(0, 70) || p.embed?.description?.trim().slice(0, 70) || 'Без названия';
+
+/** the next time a repeating item should go out, always in the future */
+export function nextOccurrence(from: number, repeat: string, now: number): number {
+  const d = new Date(from);
+  let guard = 0;
+  do {
+    if (repeat === 'daily') d.setUTCDate(d.getUTCDate() + 1);
+    else if (repeat === 'weekly') d.setUTCDate(d.getUTCDate() + 7);
+    else d.setUTCMonth(d.getUTCMonth() + 1);
+  } while (d.getTime() <= now && ++guard < 1000);
+  return d.getTime();
+}
+
+export interface NewsServerInfo {
+  id: number;
+  name: string;
+  players: number;
+  maxPlayers: number;
+  online: boolean;
+  address: string;
+  map: string | null;
+  ping: number | null;
+}
+export interface StatusEmbed {
+  title?: string;
+  description?: string;
+  author?: { name: string };
+  fields?: { name: string; value: string; inline?: boolean }[];
+  footer?: { text: string; icon_url?: string };
+}
+
+export const cut = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/newsStore.ts" << '__COREGSM_EOF__'
+/** News storage: tables, columns and the delivery-retry hook. Importing this module creates them. */
+import fs from 'node:fs';
+import path from 'node:path';
+import { db } from './db.js';
+import { registerKind } from './deliveries.js';
+import { addColumn } from './schema.js';
+
+export const IMG_DIR = path.join(path.dirname(process.env.DB_PATH ?? './data/coregsm.db'), 'news');
+fs.mkdirSync(IMG_DIR, { recursive: true });
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS news (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  status TEXT NOT NULL,
+  channel_id TEXT NOT NULL,
+  payload TEXT NOT NULL,
+  scheduled_at INTEGER,
+  sent_at INTEGER,
+  message_id TEXT,
+  error TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+`);
+
+addColumn(db, 'news', 'repeat', "TEXT NOT NULL DEFAULT 'none'");
+// delivery retries: failed attempts so far and the earliest time of the next one (see deliveries.ts)
+addColumn(db, 'news', 'attempts', 'INTEGER NOT NULL DEFAULT 0');
+addColumn(db, 'news', 'next_try_at', 'INTEGER');
+// a manual retry from the deliveries list puts the item back into the queue it came from
+registerKind('news', {
+  retry(refId, payload) {
+    const q = payload.action === 'edit' ? 'edit_queued' : payload.action === 'delete' ? 'delete_queued' : 'queued';
+    db.prepare("UPDATE news SET status = ?, attempts = 0, next_try_at = NULL, error = NULL, updated_at = ? WHERE id = ? AND test = 0").run(q, Date.now(), refId);
+  },
+});
+
+// 1 = a test send (never shown in lists, cleaned up after an hour)
+addColumn(db, 'news', 'test', 'INTEGER NOT NULL DEFAULT 0');
+
+// the user who created the item (its role is resolved at read time, see authorRole)
+addColumn(db, 'news', 'created_by', 'INTEGER');
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS news_reactions (
+  news_id INTEGER NOT NULL,
+  user_id INTEGER NOT NULL,
+  emoji TEXT NOT NULL,
+  ts INTEGER NOT NULL,
+  PRIMARY KEY (news_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_news_reactions_news ON news_reactions (news_id);
+CREATE TABLE IF NOT EXISTS news_versions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  news_id INTEGER NOT NULL,
+  ts INTEGER NOT NULL,
+  actor TEXT NOT NULL,
+  payload TEXT NOT NULL,
+  note TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_news_versions_news ON news_versions (news_id, id);
+CREATE TABLE IF NOT EXISTS news_autosave (
+  user_key TEXT NOT NULL,
+  key TEXT NOT NULL,
+  payload TEXT NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (user_key, key)
+);
+`);
+
+export interface NewsRow {
+  repeat: string;
+  id: number;
+  test?: number;
+  status: string;
+  channel_id: string;
+  payload: string;
+  scheduled_at: number | null;
+  sent_at: number | null;
+  message_id: string | null;
+  error: string | null;
+  created_at: number;
+  updated_at: number;
+  created_by?: number | null;
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/newsSubs.ts" << '__COREGSM_EOF__'
 /**
  * Subscriptions to the rubrics of the news: a signed-in user picks the rubrics he wants to hear about; when an item
@@ -12066,7 +12087,7 @@ export function checkCert(force = false): Promise<CertInfo> {
       try {
         sock.destroy();
       } catch {
-        /* ignore */
+        /* the socket is already gone */
       }
       resolve(info);
     };
@@ -12889,7 +12910,17 @@ import path from 'node:path';
 import skia from 'skia-canvas';
 import { z } from 'zod';
 import { DATA_DIR, db, EFFECTIVE_NAME } from './db.js';
-import { nextRank, rankForHours, rankProgress, VR_RANKS } from './ranks.js';
+import { nextRank, rankForHours, rankProgress } from './ranks.js';
+import { checkNickNow } from './nickOnboarding.js';
+import { log } from './logger.js';
+import { validTz, prefsOf, playerOf, RETAIN_DAYS, computeStats, type Prefs, type PlayerProfile } from './profileCore.js';
+import { achievementsOf } from './profileAchievements.js';
+import { vrAchievementsOf, vrHoursOf } from './profileVr.js';
+
+// the public surface of the profile stays here: other modules import from './profile.js'
+export { prefsOf, type Prefs } from './profileCore.js';
+export { mk, playAchievements, achievementsOf, type Achievement } from './profileAchievements.js';
+export { vrAchievementsOf, vrHoursOf, vrHoursByName, vrRankIdFor, type VrAchievement } from './profileVr.js';
 
 const { Canvas, loadImage } = skia;
 
@@ -12902,8 +12933,6 @@ export function uaLabel(ua: string | undefined): string {
   return os ? `${browser} · ${os}` : browser;
 }
 
-import { checkNickNow } from './nickOnboarding.js';
-import { log } from './logger.js';
 
 export type AccountEventKind =
   | 'login'
@@ -12937,36 +12966,6 @@ export function logAccount(req: Request, userId: number, kind: AccountEventKind,
   }
 }
 
-// ---------- preferences ----------
-export interface Prefs {
-  lang: 'ru' | 'en';
-  timezone: string;
-  timeFormat: '24' | '12';
-  dateFormat: 'dmy' | 'mdy' | 'iso';
-}
-
-const validTz = (tz: string): boolean => {
-  if (!tz) return true;
-  try {
-    new Intl.DateTimeFormat('en', { timeZone: tz });
-    return true;
-  } catch {
-    return false;
-  }
-};
-
-export function prefsOf(userId: number): Prefs {
-  const r = db.prepare('SELECT lang, timezone, time_format, date_format FROM user_prefs WHERE user_id = ?').get(userId) as
-    | { lang: string; timezone: string; time_format: string; date_format: string }
-    | undefined;
-  return {
-    lang: r?.lang === 'en' ? 'en' : 'ru',
-    timezone: r && validTz(r.timezone) ? r.timezone : '',
-    timeFormat: r?.time_format === '12' ? '12' : '24',
-    dateFormat: r?.date_format === 'mdy' ? 'mdy' : r?.date_format === 'iso' ? 'iso' : 'dmy',
-  };
-}
-
 // ---------- banner ----------
 const BANNER_DIR = path.join(DATA_DIR, 'banners');
 fs.mkdirSync(BANNER_DIR, { recursive: true });
@@ -12986,464 +12985,6 @@ export function removeBanner(userId: number): void {
 export function bannerPresetOf(userId: number): string {
   const r = db.prepare('SELECT banner_preset FROM user_prefs WHERE user_id = ?').get(userId) as { banner_preset: string } | undefined;
   return r && (PRESETS as readonly string[]).includes(r.banner_preset) ? r.banner_preset : '';
-}
-
-// ---------- player profile ----------
-interface PlayerProfile {
-  gameNick: string;
-  bio: string;
-  publicProfile: boolean;
-}
-function playerOf(userId: number): PlayerProfile {
-  const r = db.prepare('SELECT game_nick, bio, public_profile FROM user_player WHERE user_id = ?').get(userId) as { game_nick: string; bio: string; public_profile: number } | undefined;
-  return { gameNick: r?.game_nick ?? '', bio: r?.bio ?? '', publicProfile: !!r?.public_profile };
-}
-
-// ---------- time zones ----------
-const offsetCache = new Map<string, Map<number, number>>();
-/** offset of the zone from UTC in ms at instant t ('' = the server's own zone) */
-function tzOffset(tz: string, t: number): number {
-  if (!tz) return -new Date(t).getTimezoneOffset() * 60000;
-  let c = offsetCache.get(tz);
-  if (!c) offsetCache.set(tz, (c = new Map()));
-  const k = Math.floor(t / 3600000);
-  const hit = c.get(k);
-  if (hit !== undefined) return hit;
-  let off = 0;
-  try {
-    const parts = new Intl.DateTimeFormat('en-US', { timeZone: tz, hourCycle: 'h23', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', second: 'numeric' }).formatToParts(new Date(k * 3600000));
-    const g = (type: string) => Number(parts.find((p) => p.type === type)?.value ?? 0);
-    off = Date.UTC(g('year'), g('month') - 1, g('day'), g('hour') % 24, g('minute'), g('second')) - k * 3600000;
-  } catch {
-    off = -new Date(t).getTimezoneOffset() * 60000;
-  }
-  if (c.size > 5000) c.clear();
-  c.set(k, off);
-  return off;
-}
-
-const dayKey = (localMs: number) => new Date(localMs).toISOString().slice(0, 10);
-const addDays = (key: string, n: number) => new Date(Date.parse(`${key}T00:00:00Z`) + n * 86400000).toISOString().slice(0, 10);
-
-// ---------- statistics ----------
-interface SessRow {
-  server_id: number;
-  name: string;
-  game: string;
-  sname: string;
-  joined_at: number;
-  left_at: number | null;
-}
-
-const HOUR = 3600000;
-const RETAIN_DAYS = 90;
-
-function sessionsOf(userId: number, nick: string, since: number): SessRow[] {
-  if (!nick) return [];
-  return db
-    .prepare(
-      `SELECT ps.server_id, ps.name, s.game, ${EFFECTIVE_NAME} AS sname, ps.joined_at, ps.left_at
-       FROM player_sessions ps JOIN servers s ON s.id = ps.server_id LEFT JOIN status st ON st.server_id = s.id
-       WHERE ulower(ps.name) = ulower(?) AND (ps.left_at IS NULL OR ps.left_at >= ?)
-       ORDER BY ps.joined_at`,
-    )
-    .all(nick, since) as SessRow[];
-}
-
-/** walks [a, b) in pieces that do not cross a local hour boundary */
-function walk(a: number, b: number, tz: string, fn: (localStart: number, ms: number, t: number) => void): void {
-  let t = a;
-  let guard = 0;
-  while (t < b && guard++ < 24 * 100) {
-    const off = tzOffset(tz, t);
-    const local = t + off;
-    const next = Math.min(b, (Math.floor(local / HOUR) + 1) * HOUR - off);
-    if (next <= t) break;
-    fn(local, next - t, t);
-    t = next;
-  }
-}
-
-interface Stats {
-  days: number;
-  nick: string;
-  totalSeconds: number;
-  sessions: number;
-  longestSessionSec: number;
-  streakDays: number;
-  lastSeenAt: number | null;
-  favouriteServerId: number | null;
-  byServer: { serverId: number; name: string; game: string; seconds: number; sessions: number }[];
-  byDay: { date: string; seconds: number }[];
-  hourly: number[];
-}
-
-function computeStats(userId: number, days: number): { stats: Stats; all: SessRow[]; tz: string; now: number } {
-  const now = Date.now();
-  const tz = prefsOf(userId).timezone;
-  const nick = playerOf(userId).gameNick;
-  const today = dayKey(now + tzOffset(tz, now));
-  const startKey = addDays(today, -(days - 1));
-  const winStart = Date.parse(`${startKey}T00:00:00Z`) - tzOffset(tz, now); // local midnight as UTC instant (DST jitter is irrelevant here)
-
-  const all = sessionsOf(userId, nick, now - RETAIN_DAYS * 86400000);
-  const byDayMap = new Map<string, number>();
-  for (let i = 0; i < days; i++) byDayMap.set(addDays(startKey, i), 0);
-  const hourly = new Array<number>(24).fill(0);
-  const allDays = new Set<string>();
-  const srv = new Map<number, { serverId: number; name: string; game: string; ms: number; sessions: number }>();
-  let totalMs = 0;
-  let sessions = 0;
-  let longest = 0;
-  let lastSeen: number | null = null;
-
-  for (const s of all) {
-    const end = s.left_at ?? now;
-    if (end <= s.joined_at) continue;
-    const a = s.joined_at;
-    lastSeen = Math.max(lastSeen ?? 0, end);
-    walk(a, end, tz, (local, ms, t) => {
-      const k = dayKey(local);
-      allDays.add(k);
-      if (t >= winStart) {
-        if (byDayMap.has(k)) byDayMap.set(k, (byDayMap.get(k) ?? 0) + ms);
-        hourly[new Date(local).getUTCHours()] += ms;
-      }
-    });
-    if (end <= winStart) continue;
-    const from = Math.max(a, winStart);
-    const ms = end - from;
-    totalMs += ms;
-    sessions++;
-    longest = Math.max(longest, end - a);
-    const cur = srv.get(s.server_id) ?? { serverId: s.server_id, name: s.sname, game: s.game, ms: 0, sessions: 0 };
-    cur.ms += ms;
-    cur.sessions++;
-    srv.set(s.server_id, cur);
-  }
-
-  let streak = 0;
-  let k = allDays.has(today) ? today : addDays(today, -1);
-  while (allDays.has(k)) {
-    streak++;
-    k = addDays(k, -1);
-  }
-  const byServer = [...srv.values()]
-    .sort((x, y) => y.ms - x.ms)
-    .map((x) => ({ serverId: x.serverId, name: x.name, game: x.game, seconds: Math.round(x.ms / 1000), sessions: x.sessions }));
-
-  return {
-    all,
-    tz,
-    now,
-    stats: {
-      days,
-      nick,
-      totalSeconds: Math.round(totalMs / 1000),
-      sessions,
-      longestSessionSec: Math.round(longest / 1000),
-      streakDays: streak,
-      lastSeenAt: lastSeen,
-      favouriteServerId: byServer[0]?.serverId ?? null,
-      byServer,
-      byDay: [...byDayMap].map(([date, ms]) => ({ date, seconds: Math.round(ms / 1000) })),
-      hourly: hourly.map((ms) => Math.round(ms / 1000)),
-    },
-  };
-}
-
-// ---------- achievements ----------
-interface Achievement {
-  id: string;
-  title: string;
-  description: string;
-  icon: string;
-  earned: boolean;
-  progress: number;
-  target: number;
-  earnedAt: number | null;
-}
-
-export type { Achievement };
-
-/**
- * The achievements earned by playing (hours, streaks, night and morning sessions, servers), from the visits of one
- * player. Shared by the account's profile and the public card of any nick.
- */
-export function playAchievements(visits: { server_id: number; joined_at: number; left_at: number | null }[], tz: string, now = Date.now()): Achievement[] {
-  const sess = visits.filter((s) => (s.left_at ?? now) > s.joined_at).sort((x, y) => x.joined_at - y.joined_at);
-
-  let totalMs = 0;
-  let longestMs = 0;
-  let firstAt: number | null = null;
-  let nightAt: number | null = null;
-  let earlyAt: number | null = null;
-  let marathonAt: number | null = null;
-  let h10At: number | null = null;
-  let h100At: number | null = null;
-  const perServer = new Map<number, number>();
-  const dayEnd = new Map<string, number>(); // local day -> last instant played on it
-  for (const s of sess) {
-    const end = s.left_at ?? now;
-    const dur = end - s.joined_at;
-    const before = totalMs;
-    totalMs += dur;
-    if (h10At === null && totalMs >= 10 * HOUR) h10At = s.joined_at + Math.max(0, 10 * HOUR - before);
-    if (h100At === null && totalMs >= 100 * HOUR) h100At = s.joined_at + Math.max(0, 100 * HOUR - before);
-    longestMs = Math.max(longestMs, dur);
-    if (marathonAt === null && dur >= 4 * HOUR) marathonAt = s.joined_at + 4 * HOUR;
-    firstAt ??= s.joined_at;
-    perServer.set(s.server_id, (perServer.get(s.server_id) ?? 0) + dur);
-    // local 03:00 inside the session, and a start between 05:00 and 08:00
-    const off = tzOffset(tz, s.joined_at);
-    const startLocal = s.joined_at + off;
-    const startHour = new Date(startLocal).getUTCHours();
-    if (earlyAt === null && startHour >= 5 && startHour < 8) earlyAt = s.joined_at;
-    if (nightAt === null) {
-      const dayStart = Math.floor(startLocal / 86400000) * 86400000;
-      let three = dayStart + 3 * HOUR;
-      if (three <= startLocal) three += 86400000;
-      if (three - off < end) nightAt = s.joined_at;
-    }
-    walk(s.joined_at, end, tz, (local, _ms, t) => {
-      const k = dayKey(local);
-      dayEnd.set(k, Math.max(dayEnd.get(k) ?? 0, t + _ms));
-    });
-  }
-  const hours = totalMs / HOUR;
-  const topMs = Math.max(0, ...perServer.values());
-  const share = totalMs > 0 ? topMs / totalMs : 0;
-
-  // best run of consecutive days with play
-  const keys = [...dayEnd.keys()].sort();
-  let best = 0;
-  let run = 0;
-  let prev = '';
-  let at3: number | null = null;
-  let at7: number | null = null;
-  for (const k of keys) {
-    run = prev && addDays(prev, 1) === k ? run + 1 : 1;
-    prev = k;
-    best = Math.max(best, run);
-    if (run === 3 && at3 === null) at3 = dayEnd.get(k) ?? null;
-    if (run === 7 && at7 === null) at7 = dayEnd.get(k) ?? null;
-  }
-
-  const r1 = (n: number) => Math.round(n * 10) / 10;
-  const domosedEarned = share >= 0.8 && hours >= 10;
-
-  return [
-    mk('first-step', 'Первый шаг', 'Проведите первую игровую сессию на отслеживаемом сервере', 'star', Math.min(sess.length, 1), 1, firstAt),
-    mk('hours-10', '10 часов', 'Наиграйте 10 часов суммарно', 'clock', r1(hours), 10, h10At),
-    mk('hours-100', '100 часов', 'Наиграйте 100 часов суммарно', 'clock', r1(hours), 100, h100At),
-    mk('night-shift', 'Ночная смена', 'Играйте так, чтобы сессия пересекла 03:00', 'moon', nightAt ? 1 : 0, 1, nightAt),
-    mk('early-bird', 'Ранняя пташка', 'Зайдите в игру между 05:00 и 08:00', 'sun', earlyAt ? 1 : 0, 1, earlyAt),
-    mk('streak-3', 'Серия 3 дня', 'Играйте 3 дня подряд', 'flame', Math.min(best, 3), 3, at3),
-    mk('streak-7', 'Серия 7 дней', 'Играйте 7 дней подряд', 'flame', Math.min(best, 7), 7, at7),
-    mk('homebody', 'Домосед', 'Проведите 80% времени на одном сервере (не менее 10 часов всего)', 'heart', domosedEarned ? 100 : Math.min(99, Math.round(share * 100)), 100, domosedEarned ? now : null),
-    mk('traveller', 'Путешественник', 'Поиграйте на 3 разных серверах', 'server', perServer.size, 3, perServer.size >= 3 ? now : null),
-    mk('marathon', 'Марафонец', 'Одна сессия длиннее 4 часов', 'crown', r1(longestMs / HOUR), 4, marathonAt),
-  ];
-}
-
-export const mk = (id: string, title: string, description: string, icon: string, progress: number, target: number, earnedAt: number | null = null): Achievement => {
-  const earned = progress >= target;
-  return { id, title, description, icon, earned, progress: Math.min(progress, target), target, earnedAt: earned ? earnedAt : null };
-};
-
-export function achievementsOf(userId: number): Achievement[] {
-  const nick = playerOf(userId).gameNick;
-  const now = Date.now();
-  const tz = prefsOf(userId).timezone;
-  const play = playAchievements(sessionsOf(userId, nick, now - RETAIN_DAYS * 86400000), tz, now);
-  const u = db.prepare('SELECT email, no_password, discord_id FROM users WHERE id = ?').get(userId) as { email: string | null; no_password: number; discord_id: string | null } | undefined;
-  const hasAvatar = fs.existsSync(path.join(DATA_DIR, 'avatars', `${userId}.png`)) || !!db.prepare('SELECT 1 FROM users WHERE id = ? AND discord_avatar IS NOT NULL').get(userId);
-  const profileParts = [hasAvatar, !!u?.email, !!nick].filter(Boolean).length;
-  const protectedParts = [!u?.no_password, !!u?.email, !!u?.discord_id].filter(Boolean).length;
-  return [
-    ...play,
-    mk('profile-complete', 'Профиль заполнен', 'Аватар, электронная почта и игровой ник', 'calendar', profileParts, 3),
-    mk('secured', 'Защищён', 'Пароль, электронная почта и привязанный Discord', 'shield', protectedParts, 3),
-  ];
-}
-
-// ---------- V Rising: rank ladder and achievements ----------
-db.exec('CREATE TABLE IF NOT EXISTS vr_rank_max (user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE, hours REAL NOT NULL DEFAULT 0)');
-
-interface VrSess { server_id: number; joined_at: number; left_at: number | null }
-
-/** sessions of a nick on servers whose game id is vrising (the log keeps 90 days) */
-function vrSessionsOf(nick: string): VrSess[] {
-  if (!nick) return [];
-  return db
-    .prepare(
-      `SELECT ps.server_id, ps.joined_at, ps.left_at FROM player_sessions ps JOIN servers s ON s.id = ps.server_id
-       WHERE s.game = 'vrising' AND ulower(ps.name) = ulower(?) ORDER BY ps.joined_at`,
-    )
-    .all(nick) as VrSess[];
-}
-
-/** hours of play on vrising servers; never goes down (the best value seen is remembered, the log is pruned after 90 days) */
-export function vrHoursOf(userId: number, nick: string): { hours: number; sessions: number } {
-  if (!nick) return { hours: 0, sessions: 0 };
-  const now = Date.now();
-  const sess = vrSessionsOf(nick).filter((s) => (s.left_at ?? now) > s.joined_at);
-  const cur = sess.reduce((a, s) => a + ((s.left_at ?? now) - s.joined_at), 0) / HOUR;
-  const row = db.prepare('SELECT hours FROM vr_rank_max WHERE user_id = ?').get(userId) as { hours: number } | undefined;
-  const hours = Math.max(cur, row?.hours ?? 0);
-  if (hours > (row?.hours ?? 0) + 0.01) {
-    db.prepare('INSERT INTO vr_rank_max (user_id, hours) VALUES (?, ?) ON CONFLICT(user_id) DO UPDATE SET hours = excluded.hours').run(userId, hours);
-  }
-  return { hours, sessions: sess.length };
-}
-
-export interface VrAchievement extends Achievement {
-  game: 'vrising';
-  image: string;
-}
-
-export function vrAchievementsOf(userId: number): VrAchievement[] {
-  const nick = playerOf(userId).gameNick;
-  const now = Date.now();
-  const tz = prefsOf(userId).timezone;
-  const sess = vrSessionsOf(nick).filter((s) => (s.left_at ?? now) > s.joined_at);
-  const rankHours = vrHoursOf(userId, nick).hours;
-
-  let totalMs = 0;
-  let longestMs = 0;
-  let firstAt: number | null = null;
-  let nightAt: number | null = null;
-  let sunAt: number | null = null;
-  let sleeplessAt: number | null = null;
-  let dawnAt: number | null = null;
-  let crowdAt: number | null = null;
-  let h100At: number | null = null;
-  let h400At: number | null = null;
-  let n50At: number | null = null;
-  let count = 0;
-  const perServer = new Map<number, number>();
-  const dayEnd = new Map<string, number>();
-  const dayMs = new Map<string, number>();
-  const maxOf = new Map<number, number>();
-  const crossing = (s: VrSess, end: number, hour: number): boolean => {
-    const off = tzOffset(tz, s.joined_at);
-    const startLocal = s.joined_at + off;
-    let at = Math.floor(startLocal / 86400000) * 86400000 + hour * HOUR;
-    if (at < startLocal) at += 86400000;
-    return at - off < end;
-  };
-  for (const s of sess) {
-    const end = s.left_at ?? now;
-    const dur = end - s.joined_at;
-    const before = totalMs;
-    totalMs += dur;
-    count++;
-    if (h100At === null && totalMs >= 100 * HOUR) h100At = s.joined_at + Math.max(0, 100 * HOUR - before);
-    if (h400At === null && totalMs >= 400 * HOUR) h400At = s.joined_at + Math.max(0, 400 * HOUR - before);
-    if (n50At === null && count >= 50) n50At = s.joined_at;
-    longestMs = Math.max(longestMs, dur);
-    if (sleeplessAt === null && dur >= 6 * HOUR) sleeplessAt = s.joined_at + 6 * HOUR;
-    firstAt ??= s.joined_at;
-    perServer.set(s.server_id, (perServer.get(s.server_id) ?? 0) + dur);
-    if (nightAt === null && crossing(s, end, 3)) nightAt = s.joined_at;
-    if (sunAt === null && crossing(s, end, 12)) sunAt = s.joined_at;
-    if (dawnAt === null && s.left_at !== null) {
-      const h = new Date(end + tzOffset(tz, end)).getUTCHours();
-      if (h === 5) dawnAt = end;
-    }
-    if (crowdAt === null) {
-      let max = maxOf.get(s.server_id);
-      if (max === undefined) {
-        max = (db.prepare('SELECT max_players FROM status WHERE server_id = ?').get(s.server_id) as { max_players: number } | undefined)?.max_players ?? 0;
-        maxOf.set(s.server_id, max);
-      }
-      if (max > 0) {
-        const h = db
-          .prepare('SELECT players FROM history WHERE server_id = ? AND ts BETWEEN ? AND ? ORDER BY ABS(ts - ?) LIMIT 1')
-          .get(s.server_id, s.joined_at - 10 * 60000, s.joined_at + 10 * 60000, s.joined_at) as { players: number } | undefined;
-        if (h && h.players / max >= 0.9) crowdAt = s.joined_at;
-      }
-    }
-    walk(s.joined_at, end, tz, (local, ms, t) => {
-      const k = dayKey(local);
-      dayEnd.set(k, Math.max(dayEnd.get(k) ?? 0, t + ms));
-      dayMs.set(k, (dayMs.get(k) ?? 0) + ms);
-    });
-  }
-  const hours = totalMs / HOUR;
-  const share = totalMs > 0 ? Math.max(0, ...perServer.values()) / totalMs : 0;
-  const bestDayMs = Math.max(0, ...dayMs.values());
-  let longDayAt: number | null = null;
-  if (bestDayMs >= 12 * HOUR) {
-    const k = [...dayMs].find(([, v]) => v >= 12 * HOUR)?.[0];
-    longDayAt = k ? (dayEnd.get(k) ?? null) : null;
-  }
-
-  const keys = [...dayEnd.keys()].sort();
-  let best = 0;
-  let run = 0;
-  let prev = '';
-  let at7: number | null = null;
-  let at30: number | null = null;
-  for (const k of keys) {
-    run = prev && addDays(prev, 1) === k ? run + 1 : 1;
-    prev = k;
-    best = Math.max(best, run);
-    if (run === 7 && at7 === null) at7 = dayEnd.get(k) ?? null;
-    if (run === 30 && at30 === null) at30 = dayEnd.get(k) ?? null;
-  }
-
-  const u = db.prepare('SELECT created_at FROM users WHERE id = ?').get(userId) as { created_at: number | null } | undefined;
-  const first = (db.prepare('SELECT MIN(created_at) AS m FROM users WHERE created_at IS NOT NULL').get() as { m: number | null }).m;
-  const founder = !!u?.created_at && first !== null && u.created_at - first <= 30 * 86400000;
-  const r1 = (n: number) => Math.round(n * 10) / 10;
-  const mk = (id: string, title: string, description: string, icon: string, progress: number, target: number, earnedAt: number | null = null): VrAchievement => {
-    const earned = progress >= target;
-    return { id, title, description, icon, earned, progress: Math.min(progress, target), target, earnedAt: earned ? earnedAt : null, game: 'vrising', image: `/vrising/achievements/${id}.png` };
-  };
-  const loyal = share >= 0.8 && hours >= 20;
-  const crowned = rankHours >= VR_RANKS[VR_RANKS.length - 1]!.minHours;
-
-  return [
-    mk('vr-first-bite', 'Первый укус', 'Проведите первую сессию на сервере V Rising', 'star', Math.min(count, 1), 1, firstAt),
-    mk('vr-night-hunter', 'Ночной охотник', 'Играйте так, чтобы сессия пересекла 03:00', 'moon', nightAt ? 1 : 0, 1, nightAt),
-    mk('vr-sun-defier', 'Не боюсь солнца', 'Сессия, охватывающая полдень (12:00)', 'sun', sunAt ? 1 : 0, 1, sunAt),
-    mk('vr-sleepless', 'Бессонная ночь', 'Одна сессия длиннее 6 часов', 'clock', r1(longestMs / HOUR), 6, sleeplessAt),
-    mk('vr-blood-bond', 'Кровная связь', 'Играйте 7 дней подряд', 'flame', Math.min(best, 7), 7, at7),
-    mk('vr-eternal', 'Вечный', 'Играйте 30 дней подряд', 'flame', Math.min(best, 30), 30, at30),
-    mk('vr-castle-warden', 'Хранитель замка', 'Наиграйте 100 часов в V Rising', 'shield', r1(hours), 100, h100At),
-    mk('vr-elder', 'Древний вампир', 'Наиграйте 400 часов в V Rising', 'crown', r1(hours), 400, h400At),
-    mk('vr-two-realms', 'Владыка двух миров', 'Поиграйте минимум на 2 разных серверах V Rising', 'server', perServer.size, 2, perServer.size >= 2 ? now : null),
-    mk('vr-loyal', 'Верный сервер', 'Проведите 80% времени на одном сервере (не менее 20 часов)', 'heart', loyal ? 100 : Math.min(99, Math.round(share * 100)), 100, loyal ? now : null),
-    mk('vr-veteran-nights', '50 ночей', 'Проведите 50 игровых сессий', 'calendar', Math.min(count, 50), 50, n50At),
-    mk('vr-long-haul', 'Бессмертный марафон', 'Играйте 12 часов за один календарный день', 'clock', r1(Math.min(bestDayMs, 12 * HOUR) / HOUR), 12, longDayAt),
-    mk('vr-dawn-escape', 'Бегущий от рассвета', 'Закончите сессию между 05:00 и 06:00', 'sun', dawnAt ? 1 : 0, 1, dawnAt),
-    mk('vr-crowd-lord', 'Лорд толпы', 'Зайдите на сервер, когда он заполнен на 90% и больше', 'server', crowdAt ? 1 : 0, 1, crowdAt),
-    mk('vr-founder', 'Основатель', 'Аккаунт создан в первые 30 дней работы панели', 'star', founder ? 1 : 0, 1, founder ? (u?.created_at ?? null) : null),
-    mk('vr-crowned', 'Коронованный', 'Достигните ранга «Первородный»', 'crown', crowned ? 1 : 0, 1, crowned ? now : null),
-  ];
-}
-
-// ---------- public ranks of the players currently on a server ----------
-let rankCache: { at: number; map: Map<string, number> } | null = null;
-/** lower(name) -> hours of play on vrising servers, cached for 60 s */
-export function vrHoursByName(): Map<string, number> {
-  const now = Date.now();
-  if (rankCache && now - rankCache.at < 60_000) return rankCache.map;
-  const rows = db
-    .prepare(
-      `SELECT ulower(ps.name) AS n, SUM(COALESCE(ps.left_at, ?) - ps.joined_at) AS ms
-       FROM player_sessions ps JOIN servers s ON s.id = ps.server_id
-       WHERE s.game = 'vrising' AND COALESCE(ps.left_at, ?) > ps.joined_at GROUP BY ulower(ps.name)`,
-    )
-    .all(now, now) as { n: string; ms: number }[];
-  const map = new Map<string, number>();
-  for (const r of rows) map.set(r.n, r.ms / HOUR);
-  rankCache = { at: now, map };
-  return map;
-}
-export function vrRankIdFor(name: string): string {
-  return rankForHours(vrHoursByName().get(name.toLowerCase()) ?? 0).id;
 }
 
 // ---------- activity text ----------
@@ -13671,6 +13212,518 @@ export function registerProfile(deps: {
     });
   });
 }
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/profileAchievements.ts" << '__COREGSM_EOF__'
+/** Achievements derived from the player sessions log. */
+import fs from 'node:fs';
+import path from 'node:path';
+import { DATA_DIR, db } from './db.js';
+import { prefsOf, playerOf, tzOffset, dayKey, addDays, HOUR, RETAIN_DAYS, sessionsOf, walk } from './profileCore.js';
+
+// ---------- achievements ----------
+export interface Achievement {
+  id: string;
+  title: string;
+  description: string;
+  icon: string;
+  earned: boolean;
+  progress: number;
+  target: number;
+  earnedAt: number | null;
+}
+
+
+
+/**
+ * The achievements earned by playing (hours, streaks, night and morning sessions, servers), from the visits of one
+ * player. Shared by the account's profile and the public card of any nick.
+ */
+export function playAchievements(visits: { server_id: number; joined_at: number; left_at: number | null }[], tz: string, now = Date.now()): Achievement[] {
+  const sess = visits.filter((s) => (s.left_at ?? now) > s.joined_at).sort((x, y) => x.joined_at - y.joined_at);
+
+  let totalMs = 0;
+  let longestMs = 0;
+  let firstAt: number | null = null;
+  let nightAt: number | null = null;
+  let earlyAt: number | null = null;
+  let marathonAt: number | null = null;
+  let h10At: number | null = null;
+  let h100At: number | null = null;
+  const perServer = new Map<number, number>();
+  const dayEnd = new Map<string, number>(); // local day -> last instant played on it
+  for (const s of sess) {
+    const end = s.left_at ?? now;
+    const dur = end - s.joined_at;
+    const before = totalMs;
+    totalMs += dur;
+    if (h10At === null && totalMs >= 10 * HOUR) h10At = s.joined_at + Math.max(0, 10 * HOUR - before);
+    if (h100At === null && totalMs >= 100 * HOUR) h100At = s.joined_at + Math.max(0, 100 * HOUR - before);
+    longestMs = Math.max(longestMs, dur);
+    if (marathonAt === null && dur >= 4 * HOUR) marathonAt = s.joined_at + 4 * HOUR;
+    firstAt ??= s.joined_at;
+    perServer.set(s.server_id, (perServer.get(s.server_id) ?? 0) + dur);
+    // local 03:00 inside the session, and a start between 05:00 and 08:00
+    const off = tzOffset(tz, s.joined_at);
+    const startLocal = s.joined_at + off;
+    const startHour = new Date(startLocal).getUTCHours();
+    if (earlyAt === null && startHour >= 5 && startHour < 8) earlyAt = s.joined_at;
+    if (nightAt === null) {
+      const dayStart = Math.floor(startLocal / 86400000) * 86400000;
+      let three = dayStart + 3 * HOUR;
+      if (three <= startLocal) three += 86400000;
+      if (three - off < end) nightAt = s.joined_at;
+    }
+    walk(s.joined_at, end, tz, (local, _ms, t) => {
+      const k = dayKey(local);
+      dayEnd.set(k, Math.max(dayEnd.get(k) ?? 0, t + _ms));
+    });
+  }
+  const hours = totalMs / HOUR;
+  const topMs = Math.max(0, ...perServer.values());
+  const share = totalMs > 0 ? topMs / totalMs : 0;
+
+  // best run of consecutive days with play
+  const keys = [...dayEnd.keys()].sort();
+  let best = 0;
+  let run = 0;
+  let prev = '';
+  let at3: number | null = null;
+  let at7: number | null = null;
+  for (const k of keys) {
+    run = prev && addDays(prev, 1) === k ? run + 1 : 1;
+    prev = k;
+    best = Math.max(best, run);
+    if (run === 3 && at3 === null) at3 = dayEnd.get(k) ?? null;
+    if (run === 7 && at7 === null) at7 = dayEnd.get(k) ?? null;
+  }
+
+  const r1 = (n: number) => Math.round(n * 10) / 10;
+  const domosedEarned = share >= 0.8 && hours >= 10;
+
+  return [
+    mk('first-step', 'Первый шаг', 'Проведите первую игровую сессию на отслеживаемом сервере', 'star', Math.min(sess.length, 1), 1, firstAt),
+    mk('hours-10', '10 часов', 'Наиграйте 10 часов суммарно', 'clock', r1(hours), 10, h10At),
+    mk('hours-100', '100 часов', 'Наиграйте 100 часов суммарно', 'clock', r1(hours), 100, h100At),
+    mk('night-shift', 'Ночная смена', 'Играйте так, чтобы сессия пересекла 03:00', 'moon', nightAt ? 1 : 0, 1, nightAt),
+    mk('early-bird', 'Ранняя пташка', 'Зайдите в игру между 05:00 и 08:00', 'sun', earlyAt ? 1 : 0, 1, earlyAt),
+    mk('streak-3', 'Серия 3 дня', 'Играйте 3 дня подряд', 'flame', Math.min(best, 3), 3, at3),
+    mk('streak-7', 'Серия 7 дней', 'Играйте 7 дней подряд', 'flame', Math.min(best, 7), 7, at7),
+    mk('homebody', 'Домосед', 'Проведите 80% времени на одном сервере (не менее 10 часов всего)', 'heart', domosedEarned ? 100 : Math.min(99, Math.round(share * 100)), 100, domosedEarned ? now : null),
+    mk('traveller', 'Путешественник', 'Поиграйте на 3 разных серверах', 'server', perServer.size, 3, perServer.size >= 3 ? now : null),
+    mk('marathon', 'Марафонец', 'Одна сессия длиннее 4 часов', 'crown', r1(longestMs / HOUR), 4, marathonAt),
+  ];
+}
+
+export const mk = (id: string, title: string, description: string, icon: string, progress: number, target: number, earnedAt: number | null = null): Achievement => {
+  const earned = progress >= target;
+  return { id, title, description, icon, earned, progress: Math.min(progress, target), target, earnedAt: earned ? earnedAt : null };
+};
+
+export function achievementsOf(userId: number): Achievement[] {
+  const nick = playerOf(userId).gameNick;
+  const now = Date.now();
+  const tz = prefsOf(userId).timezone;
+  const play = playAchievements(sessionsOf(userId, nick, now - RETAIN_DAYS * 86400000), tz, now);
+  const u = db.prepare('SELECT email, no_password, discord_id FROM users WHERE id = ?').get(userId) as { email: string | null; no_password: number; discord_id: string | null } | undefined;
+  const hasAvatar = fs.existsSync(path.join(DATA_DIR, 'avatars', `${userId}.png`)) || !!db.prepare('SELECT 1 FROM users WHERE id = ? AND discord_avatar IS NOT NULL').get(userId);
+  const profileParts = [hasAvatar, !!u?.email, !!nick].filter(Boolean).length;
+  const protectedParts = [!u?.no_password, !!u?.email, !!u?.discord_id].filter(Boolean).length;
+  return [
+    ...play,
+    mk('profile-complete', 'Профиль заполнен', 'Аватар, электронная почта и игровой ник', 'calendar', profileParts, 3),
+    mk('secured', 'Защищён', 'Пароль, электронная почта и привязанный Discord', 'shield', protectedParts, 3),
+  ];
+}
+
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/profileCore.ts" << '__COREGSM_EOF__'
+/** Profile core: preferences, the player profile, time zones and play statistics. */
+import { db, EFFECTIVE_NAME } from './db.js';
+
+// ---------- preferences ----------
+export interface Prefs {
+  lang: 'ru' | 'en';
+  timezone: string;
+  timeFormat: '24' | '12';
+  dateFormat: 'dmy' | 'mdy' | 'iso';
+}
+
+export const validTz = (tz: string): boolean => {
+  if (!tz) return true;
+  try {
+    new Intl.DateTimeFormat('en', { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+export function prefsOf(userId: number): Prefs {
+  const r = db.prepare('SELECT lang, timezone, time_format, date_format FROM user_prefs WHERE user_id = ?').get(userId) as
+    | { lang: string; timezone: string; time_format: string; date_format: string }
+    | undefined;
+  return {
+    lang: r?.lang === 'en' ? 'en' : 'ru',
+    timezone: r && validTz(r.timezone) ? r.timezone : '',
+    timeFormat: r?.time_format === '12' ? '12' : '24',
+    dateFormat: r?.date_format === 'mdy' ? 'mdy' : r?.date_format === 'iso' ? 'iso' : 'dmy',
+  };
+}
+
+// ---------- player profile ----------
+export interface PlayerProfile {
+  gameNick: string;
+  bio: string;
+  publicProfile: boolean;
+}
+export function playerOf(userId: number): PlayerProfile {
+  const r = db.prepare('SELECT game_nick, bio, public_profile FROM user_player WHERE user_id = ?').get(userId) as { game_nick: string; bio: string; public_profile: number } | undefined;
+  return { gameNick: r?.game_nick ?? '', bio: r?.bio ?? '', publicProfile: !!r?.public_profile };
+}
+
+// ---------- time zones ----------
+const offsetCache = new Map<string, Map<number, number>>();
+/** offset of the zone from UTC in ms at instant t ('' = the server's own zone) */
+export function tzOffset(tz: string, t: number): number {
+  if (!tz) return -new Date(t).getTimezoneOffset() * 60000;
+  let c = offsetCache.get(tz);
+  if (!c) offsetCache.set(tz, (c = new Map()));
+  const k = Math.floor(t / 3600000);
+  const hit = c.get(k);
+  if (hit !== undefined) return hit;
+  let off = 0;
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', { timeZone: tz, hourCycle: 'h23', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', second: 'numeric' }).formatToParts(new Date(k * 3600000));
+    const g = (type: string) => Number(parts.find((p) => p.type === type)?.value ?? 0);
+    off = Date.UTC(g('year'), g('month') - 1, g('day'), g('hour') % 24, g('minute'), g('second')) - k * 3600000;
+  } catch {
+    off = -new Date(t).getTimezoneOffset() * 60000;
+  }
+  if (c.size > 5000) c.clear();
+  c.set(k, off);
+  return off;
+}
+
+export const dayKey = (localMs: number) => new Date(localMs).toISOString().slice(0, 10);
+export const addDays = (key: string, n: number) => new Date(Date.parse(`${key}T00:00:00Z`) + n * 86400000).toISOString().slice(0, 10);
+
+// ---------- statistics ----------
+export interface SessRow {
+  server_id: number;
+  name: string;
+  game: string;
+  sname: string;
+  joined_at: number;
+  left_at: number | null;
+}
+
+export const HOUR = 3600000;
+export const RETAIN_DAYS = 90;
+
+export function sessionsOf(userId: number, nick: string, since: number): SessRow[] {
+  if (!nick) return [];
+  return db
+    .prepare(
+      `SELECT ps.server_id, ps.name, s.game, ${EFFECTIVE_NAME} AS sname, ps.joined_at, ps.left_at
+       FROM player_sessions ps JOIN servers s ON s.id = ps.server_id LEFT JOIN status st ON st.server_id = s.id
+       WHERE ulower(ps.name) = ulower(?) AND (ps.left_at IS NULL OR ps.left_at >= ?)
+       ORDER BY ps.joined_at`,
+    )
+    .all(nick, since) as SessRow[];
+}
+
+/** walks [a, b) in pieces that do not cross a local hour boundary */
+export function walk(a: number, b: number, tz: string, fn: (localStart: number, ms: number, t: number) => void): void {
+  let t = a;
+  let guard = 0;
+  while (t < b && guard++ < 24 * 100) {
+    const off = tzOffset(tz, t);
+    const local = t + off;
+    const next = Math.min(b, (Math.floor(local / HOUR) + 1) * HOUR - off);
+    if (next <= t) break;
+    fn(local, next - t, t);
+    t = next;
+  }
+}
+
+export interface Stats {
+  days: number;
+  nick: string;
+  totalSeconds: number;
+  sessions: number;
+  longestSessionSec: number;
+  streakDays: number;
+  lastSeenAt: number | null;
+  favouriteServerId: number | null;
+  byServer: { serverId: number; name: string; game: string; seconds: number; sessions: number }[];
+  byDay: { date: string; seconds: number }[];
+  hourly: number[];
+}
+
+export function computeStats(userId: number, days: number): { stats: Stats; all: SessRow[]; tz: string; now: number } {
+  const now = Date.now();
+  const tz = prefsOf(userId).timezone;
+  const nick = playerOf(userId).gameNick;
+  const today = dayKey(now + tzOffset(tz, now));
+  const startKey = addDays(today, -(days - 1));
+  const winStart = Date.parse(`${startKey}T00:00:00Z`) - tzOffset(tz, now); // local midnight as UTC instant (DST jitter is irrelevant here)
+
+  const all = sessionsOf(userId, nick, now - RETAIN_DAYS * 86400000);
+  const byDayMap = new Map<string, number>();
+  for (let i = 0; i < days; i++) byDayMap.set(addDays(startKey, i), 0);
+  const hourly = new Array<number>(24).fill(0);
+  const allDays = new Set<string>();
+  const srv = new Map<number, { serverId: number; name: string; game: string; ms: number; sessions: number }>();
+  let totalMs = 0;
+  let sessions = 0;
+  let longest = 0;
+  let lastSeen: number | null = null;
+
+  for (const s of all) {
+    const end = s.left_at ?? now;
+    if (end <= s.joined_at) continue;
+    const a = s.joined_at;
+    lastSeen = Math.max(lastSeen ?? 0, end);
+    walk(a, end, tz, (local, ms, t) => {
+      const k = dayKey(local);
+      allDays.add(k);
+      if (t >= winStart) {
+        if (byDayMap.has(k)) byDayMap.set(k, (byDayMap.get(k) ?? 0) + ms);
+        hourly[new Date(local).getUTCHours()] += ms;
+      }
+    });
+    if (end <= winStart) continue;
+    const from = Math.max(a, winStart);
+    const ms = end - from;
+    totalMs += ms;
+    sessions++;
+    longest = Math.max(longest, end - a);
+    const cur = srv.get(s.server_id) ?? { serverId: s.server_id, name: s.sname, game: s.game, ms: 0, sessions: 0 };
+    cur.ms += ms;
+    cur.sessions++;
+    srv.set(s.server_id, cur);
+  }
+
+  let streak = 0;
+  let k = allDays.has(today) ? today : addDays(today, -1);
+  while (allDays.has(k)) {
+    streak++;
+    k = addDays(k, -1);
+  }
+  const byServer = [...srv.values()]
+    .sort((x, y) => y.ms - x.ms)
+    .map((x) => ({ serverId: x.serverId, name: x.name, game: x.game, seconds: Math.round(x.ms / 1000), sessions: x.sessions }));
+
+  return {
+    all,
+    tz,
+    now,
+    stats: {
+      days,
+      nick,
+      totalSeconds: Math.round(totalMs / 1000),
+      sessions,
+      longestSessionSec: Math.round(longest / 1000),
+      streakDays: streak,
+      lastSeenAt: lastSeen,
+      favouriteServerId: byServer[0]?.serverId ?? null,
+      byServer,
+      byDay: [...byDayMap].map(([date, ms]) => ({ date, seconds: Math.round(ms / 1000) })),
+      hourly: hourly.map((ms) => Math.round(ms / 1000)),
+    },
+  };
+}
+
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/profileVr.ts" << '__COREGSM_EOF__'
+/** V Rising: rank ladder, hours and achievements. */
+import { db } from './db.js';
+import { rankForHours, VR_RANKS } from './ranks.js';
+import { prefsOf, playerOf, tzOffset, dayKey, addDays, HOUR, walk } from './profileCore.js';
+import { mk, type Achievement } from './profileAchievements.js';
+
+// ---------- V Rising: rank ladder and achievements ----------
+db.exec('CREATE TABLE IF NOT EXISTS vr_rank_max (user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE, hours REAL NOT NULL DEFAULT 0)');
+
+interface VrSess { server_id: number; joined_at: number; left_at: number | null }
+
+/** sessions of a nick on servers whose game id is vrising (the log keeps 90 days) */
+function vrSessionsOf(nick: string): VrSess[] {
+  if (!nick) return [];
+  return db
+    .prepare(
+      `SELECT ps.server_id, ps.joined_at, ps.left_at FROM player_sessions ps JOIN servers s ON s.id = ps.server_id
+       WHERE s.game = 'vrising' AND ulower(ps.name) = ulower(?) ORDER BY ps.joined_at`,
+    )
+    .all(nick) as VrSess[];
+}
+
+/** hours of play on vrising servers; never goes down (the best value seen is remembered, the log is pruned after 90 days) */
+export function vrHoursOf(userId: number, nick: string): { hours: number; sessions: number } {
+  if (!nick) return { hours: 0, sessions: 0 };
+  const now = Date.now();
+  const sess = vrSessionsOf(nick).filter((s) => (s.left_at ?? now) > s.joined_at);
+  const cur = sess.reduce((a, s) => a + ((s.left_at ?? now) - s.joined_at), 0) / HOUR;
+  const row = db.prepare('SELECT hours FROM vr_rank_max WHERE user_id = ?').get(userId) as { hours: number } | undefined;
+  const hours = Math.max(cur, row?.hours ?? 0);
+  if (hours > (row?.hours ?? 0) + 0.01) {
+    db.prepare('INSERT INTO vr_rank_max (user_id, hours) VALUES (?, ?) ON CONFLICT(user_id) DO UPDATE SET hours = excluded.hours').run(userId, hours);
+  }
+  return { hours, sessions: sess.length };
+}
+
+export interface VrAchievement extends Achievement {
+  game: 'vrising';
+  image: string;
+}
+
+export function vrAchievementsOf(userId: number): VrAchievement[] {
+  const nick = playerOf(userId).gameNick;
+  const now = Date.now();
+  const tz = prefsOf(userId).timezone;
+  const sess = vrSessionsOf(nick).filter((s) => (s.left_at ?? now) > s.joined_at);
+  const rankHours = vrHoursOf(userId, nick).hours;
+
+  let totalMs = 0;
+  let longestMs = 0;
+  let firstAt: number | null = null;
+  let nightAt: number | null = null;
+  let sunAt: number | null = null;
+  let sleeplessAt: number | null = null;
+  let dawnAt: number | null = null;
+  let crowdAt: number | null = null;
+  let h100At: number | null = null;
+  let h400At: number | null = null;
+  let n50At: number | null = null;
+  let count = 0;
+  const perServer = new Map<number, number>();
+  const dayEnd = new Map<string, number>();
+  const dayMs = new Map<string, number>();
+  const maxOf = new Map<number, number>();
+  const crossing = (s: VrSess, end: number, hour: number): boolean => {
+    const off = tzOffset(tz, s.joined_at);
+    const startLocal = s.joined_at + off;
+    let at = Math.floor(startLocal / 86400000) * 86400000 + hour * HOUR;
+    if (at < startLocal) at += 86400000;
+    return at - off < end;
+  };
+  for (const s of sess) {
+    const end = s.left_at ?? now;
+    const dur = end - s.joined_at;
+    const before = totalMs;
+    totalMs += dur;
+    count++;
+    if (h100At === null && totalMs >= 100 * HOUR) h100At = s.joined_at + Math.max(0, 100 * HOUR - before);
+    if (h400At === null && totalMs >= 400 * HOUR) h400At = s.joined_at + Math.max(0, 400 * HOUR - before);
+    if (n50At === null && count >= 50) n50At = s.joined_at;
+    longestMs = Math.max(longestMs, dur);
+    if (sleeplessAt === null && dur >= 6 * HOUR) sleeplessAt = s.joined_at + 6 * HOUR;
+    firstAt ??= s.joined_at;
+    perServer.set(s.server_id, (perServer.get(s.server_id) ?? 0) + dur);
+    if (nightAt === null && crossing(s, end, 3)) nightAt = s.joined_at;
+    if (sunAt === null && crossing(s, end, 12)) sunAt = s.joined_at;
+    if (dawnAt === null && s.left_at !== null) {
+      const h = new Date(end + tzOffset(tz, end)).getUTCHours();
+      if (h === 5) dawnAt = end;
+    }
+    if (crowdAt === null) {
+      let max = maxOf.get(s.server_id);
+      if (max === undefined) {
+        max = (db.prepare('SELECT max_players FROM status WHERE server_id = ?').get(s.server_id) as { max_players: number } | undefined)?.max_players ?? 0;
+        maxOf.set(s.server_id, max);
+      }
+      if (max > 0) {
+        const h = db
+          .prepare('SELECT players FROM history WHERE server_id = ? AND ts BETWEEN ? AND ? ORDER BY ABS(ts - ?) LIMIT 1')
+          .get(s.server_id, s.joined_at - 10 * 60000, s.joined_at + 10 * 60000, s.joined_at) as { players: number } | undefined;
+        if (h && h.players / max >= 0.9) crowdAt = s.joined_at;
+      }
+    }
+    walk(s.joined_at, end, tz, (local, ms, t) => {
+      const k = dayKey(local);
+      dayEnd.set(k, Math.max(dayEnd.get(k) ?? 0, t + ms));
+      dayMs.set(k, (dayMs.get(k) ?? 0) + ms);
+    });
+  }
+  const hours = totalMs / HOUR;
+  const share = totalMs > 0 ? Math.max(0, ...perServer.values()) / totalMs : 0;
+  const bestDayMs = Math.max(0, ...dayMs.values());
+  let longDayAt: number | null = null;
+  if (bestDayMs >= 12 * HOUR) {
+    const k = [...dayMs].find(([, v]) => v >= 12 * HOUR)?.[0];
+    longDayAt = k ? (dayEnd.get(k) ?? null) : null;
+  }
+
+  const keys = [...dayEnd.keys()].sort();
+  let best = 0;
+  let run = 0;
+  let prev = '';
+  let at7: number | null = null;
+  let at30: number | null = null;
+  for (const k of keys) {
+    run = prev && addDays(prev, 1) === k ? run + 1 : 1;
+    prev = k;
+    best = Math.max(best, run);
+    if (run === 7 && at7 === null) at7 = dayEnd.get(k) ?? null;
+    if (run === 30 && at30 === null) at30 = dayEnd.get(k) ?? null;
+  }
+
+  const u = db.prepare('SELECT created_at FROM users WHERE id = ?').get(userId) as { created_at: number | null } | undefined;
+  const first = (db.prepare('SELECT MIN(created_at) AS m FROM users WHERE created_at IS NOT NULL').get() as { m: number | null }).m;
+  const founder = !!u?.created_at && first !== null && u.created_at - first <= 30 * 86400000;
+  const r1 = (n: number) => Math.round(n * 10) / 10;
+  const mk = (id: string, title: string, description: string, icon: string, progress: number, target: number, earnedAt: number | null = null): VrAchievement => {
+    const earned = progress >= target;
+    return { id, title, description, icon, earned, progress: Math.min(progress, target), target, earnedAt: earned ? earnedAt : null, game: 'vrising', image: `/vrising/achievements/${id}.png` };
+  };
+  const loyal = share >= 0.8 && hours >= 20;
+  const crowned = rankHours >= VR_RANKS[VR_RANKS.length - 1]!.minHours;
+
+  return [
+    mk('vr-first-bite', 'Первый укус', 'Проведите первую сессию на сервере V Rising', 'star', Math.min(count, 1), 1, firstAt),
+    mk('vr-night-hunter', 'Ночной охотник', 'Играйте так, чтобы сессия пересекла 03:00', 'moon', nightAt ? 1 : 0, 1, nightAt),
+    mk('vr-sun-defier', 'Не боюсь солнца', 'Сессия, охватывающая полдень (12:00)', 'sun', sunAt ? 1 : 0, 1, sunAt),
+    mk('vr-sleepless', 'Бессонная ночь', 'Одна сессия длиннее 6 часов', 'clock', r1(longestMs / HOUR), 6, sleeplessAt),
+    mk('vr-blood-bond', 'Кровная связь', 'Играйте 7 дней подряд', 'flame', Math.min(best, 7), 7, at7),
+    mk('vr-eternal', 'Вечный', 'Играйте 30 дней подряд', 'flame', Math.min(best, 30), 30, at30),
+    mk('vr-castle-warden', 'Хранитель замка', 'Наиграйте 100 часов в V Rising', 'shield', r1(hours), 100, h100At),
+    mk('vr-elder', 'Древний вампир', 'Наиграйте 400 часов в V Rising', 'crown', r1(hours), 400, h400At),
+    mk('vr-two-realms', 'Владыка двух миров', 'Поиграйте минимум на 2 разных серверах V Rising', 'server', perServer.size, 2, perServer.size >= 2 ? now : null),
+    mk('vr-loyal', 'Верный сервер', 'Проведите 80% времени на одном сервере (не менее 20 часов)', 'heart', loyal ? 100 : Math.min(99, Math.round(share * 100)), 100, loyal ? now : null),
+    mk('vr-veteran-nights', '50 ночей', 'Проведите 50 игровых сессий', 'calendar', Math.min(count, 50), 50, n50At),
+    mk('vr-long-haul', 'Бессмертный марафон', 'Играйте 12 часов за один календарный день', 'clock', r1(Math.min(bestDayMs, 12 * HOUR) / HOUR), 12, longDayAt),
+    mk('vr-dawn-escape', 'Бегущий от рассвета', 'Закончите сессию между 05:00 и 06:00', 'sun', dawnAt ? 1 : 0, 1, dawnAt),
+    mk('vr-crowd-lord', 'Лорд толпы', 'Зайдите на сервер, когда он заполнен на 90% и больше', 'server', crowdAt ? 1 : 0, 1, crowdAt),
+    mk('vr-founder', 'Основатель', 'Аккаунт создан в первые 30 дней работы панели', 'star', founder ? 1 : 0, 1, founder ? (u?.created_at ?? null) : null),
+    mk('vr-crowned', 'Коронованный', 'Достигните ранга «Первородный»', 'crown', crowned ? 1 : 0, 1, crowned ? now : null),
+  ];
+}
+
+// ---------- public ranks of the players currently on a server ----------
+let rankCache: { at: number; map: Map<string, number> } | null = null;
+/** lower(name) -> hours of play on vrising servers, cached for 60 s */
+export function vrHoursByName(): Map<string, number> {
+  const now = Date.now();
+  if (rankCache && now - rankCache.at < 60_000) return rankCache.map;
+  const rows = db
+    .prepare(
+      `SELECT ulower(ps.name) AS n, SUM(COALESCE(ps.left_at, ?) - ps.joined_at) AS ms
+       FROM player_sessions ps JOIN servers s ON s.id = ps.server_id
+       WHERE s.game = 'vrising' AND COALESCE(ps.left_at, ?) > ps.joined_at GROUP BY ulower(ps.name)`,
+    )
+    .all(now, now) as { n: string; ms: number }[];
+  const map = new Map<string, number>();
+  for (const r of rows) map.set(r.n, r.ms / HOUR);
+  rankCache = { at: now, map };
+  return map;
+}
+export function vrRankIdFor(name: string): string {
+  return rankForHours(vrHoursByName().get(name.toLowerCase()) ?? 0).id;
+}
+
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/proxyFetch.ts" << '__COREGSM_EOF__'
@@ -49721,7 +49774,7 @@ import { useRef, useState } from 'react';
 import { api } from '../api';
 import { confirmDialog } from '../confirm';
 import { downloadFile } from '../pages/Backups';
-import { Button, ErrorLine, Section, toast } from '../ui';
+import { Button, ErrorLine, Section, toast, errText } from '../ui';
 
 interface Summary { dry: boolean; serversAdded: number; serversUpdated: number; bindings: number; maintenance: number; restarts: number; autoroles: number; counters: number; settings: number }
 
@@ -49764,7 +49817,7 @@ export default function ConfigTransfer() {
       const done = await api<Summary>('/config/import', 'POST', data);
       toast(`Импортировано: ${summaryText(done)}`);
     } catch (e) {
-      setError((e as Error).message);
+      setError(errText(e));
     } finally {
       setBusy('');
       if (file.current) file.current.value = '';
@@ -50039,7 +50092,7 @@ __COREGSM_EOF__
 import { useEffect, useState, type FormEvent } from 'react';
 import { api, type Server } from '../api';
 import { confirmDialog } from '../confirm';
-import { Button, ErrorLine, Field, IconTrash, Modal, Section, plural, toast, SkeletonRows } from '../ui';
+import { Button, ErrorLine, Field, IconTrash, Modal, Section, plural, toast, SkeletonRows, errText } from '../ui';
 
 interface Extras {
   autoroles: { id: number; guildId: string; roleId: string; roleName: string | null; roleColor: number; kind: Kind; threshold: number; serverId: number | null; members: number; error: string | null }[];
@@ -50145,7 +50198,7 @@ function ExtraForm({ kind, extras, servers, onClose, onSaved }: { kind: 'role' |
       else await api('/discord/counters', 'POST', { channelId: target, template, serverId });
       onSaved();
     } catch (err) {
-      setError((err as Error).message);
+      setError(errText(err));
     } finally {
       setBusy(false);
     }
@@ -50371,7 +50424,7 @@ import { useState } from 'react';
 import { api } from '../api';
 import { useAuth } from '../auth';
 import { t } from '../i18n';
-import { toast } from '../ui';
+import { toast, errText } from '../ui';
 
 /** Under the e-mail field of the profile: whether the saved address is confirmed, and a button to send the letter. */
 export default function EmailVerifyState() {
@@ -50388,7 +50441,7 @@ export default function EmailVerifyState() {
       await api('/me/email/verify-request', 'POST');
       toast(t('pf.emailv.sent', { email: me.email ?? '' }));
     } catch (err) {
-      setError((err as Error).message);
+      setError(errText(err));
     } finally {
       setBusy(false);
     }
@@ -51178,7 +51231,7 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/components/PlayersShownCard.tsx" << '__COREGSM_EOF__'
 import { useEffect, useState } from 'react';
 import { api } from '../api';
-import { Section, toast } from '../ui';
+import { Section, toast, fail } from '../ui';
 
 const OPTIONS = [0, 3, 5, 8, 10, 15, 20];
 
@@ -51207,7 +51260,7 @@ export default function PlayersShownCard() {
       toast('Сохранено. Сообщения обновятся при следующем опросе');
     } catch (e) {
       setValue(prev);
-      toast((e as Error).message, 'err');
+      fail(e);
     } finally {
       setBusy(false);
     }
@@ -51451,7 +51504,7 @@ import { useEffect, useState } from 'react';
 import { api, type Server } from '../api';
 import { useAuth } from '../auth';
 import { confirmDialog } from '../confirm';
-import { Button, ErrorLine, Field, GameAvatar, Modal, Section, Switch, fmtDateTime, toast } from '../ui';
+import { Button, ErrorLine, Field, GameAvatar, Modal, Section, Switch, fmtDateTime, toast, errText } from '../ui';
 import { ChannelPicker } from './ChannelPicker';
 import '../styles/admin.css';
 
@@ -51542,7 +51595,7 @@ function PlanModal({ server, plan, onClose, onSaved }: { server: Server; plan: P
       toast('Перезапуски сохранены');
       onClose();
     } catch (e) {
-      setError((e as Error).message);
+      setError(errText(e));
     } finally {
       setBusy('');
     }
@@ -51939,7 +51992,7 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/components/SmtpCard.tsx" << '__COREGSM_EOF__'
 import { useEffect, useState, type FormEvent } from 'react';
 import { api, type SmtpInfo } from '../api';
-import { ErrorLine, Section, TextField, toast } from '../ui';
+import { ErrorLine, Section, TextField, toast, errText } from '../ui';
 
 /** Settings → security: outgoing e-mail (password reset, address confirmation, new-device letters). Administrators only. */
 export default function SmtpCard() {
@@ -51967,7 +52020,7 @@ export default function SmtpCard() {
   };
 
   useEffect(() => {
-    api<SmtpInfo>('/settings/smtp').then(apply).catch((e) => setError((e as Error).message));
+    api<SmtpInfo>('/settings/smtp').then(apply).catch((e) => setError(errText(e)));
   }, []);
 
   const portNum = Number(port);
@@ -51986,7 +52039,7 @@ export default function SmtpCard() {
       apply(await api<SmtpInfo>('/settings/smtp', 'PUT', body));
       toast('Настройки почты сохранены');
     } catch (err) {
-      setError((err as Error).message);
+      setError(errText(err));
     } finally {
       setBusy(false);
     }
@@ -51997,7 +52050,7 @@ export default function SmtpCard() {
     try {
       apply(await api<SmtpInfo>('/settings/smtp', 'PUT', { password: '' }));
     } catch (err) {
-      setError((err as Error).message);
+      setError(errText(err));
     }
   };
 
@@ -52009,7 +52062,7 @@ export default function SmtpCard() {
       await api('/settings/smtp/test', 'POST', { to: to.trim() });
       setNote(`Пробное письмо отправлено на ${to.trim()}`);
     } catch (err) {
-      setError((err as Error).message);
+      setError(errText(err));
     } finally {
       setTesting(false);
     }
@@ -52588,7 +52641,7 @@ __COREGSM_EOF__
 import { useEffect, useState } from 'react';
 import { api, type Server } from '../api';
 import { confirmDialog } from '../confirm';
-import { Button, ErrorLine, Field, GameAvatar, Modal, Section, fmtDateTime, toast } from '../ui';
+import { Button, ErrorLine, Field, GameAvatar, Modal, Section, fmtDateTime, toast, errText } from '../ui';
 import { ChannelPicker } from './ChannelPicker';
 import '../styles/admin.css';
 
@@ -52764,7 +52817,7 @@ function WipeForm({ server, wipe, onClose, onSaved }: { server: Server; wipe: Wi
       toast('Сценарий сохранён');
       onSaved();
     } catch (e) {
-      setError((e as Error).message);
+      setError(errText(e));
     }
     setBusy(false);
   };
@@ -53003,7 +53056,7 @@ import { useAuth } from '../../auth';
 import { confirmDialog, promptDialog } from '../../confirm';
 import { t } from '../../i18n';
 import { useDraft } from '../../ui/useDraft';
-import { ago, Button, ErrorLine, fmtDateTime, toast } from '../../ui';
+import { ago, Button, ErrorLine, fmtDateTime, toast, errText } from '../../ui';
 import { buildThread, parseComment, visibleCount, type CommentItem, type CommentSort } from './commentMd';
 
 interface Thread { enabled: boolean; locked: boolean; canPost: boolean; staff: boolean; items: CommentItem[] }
@@ -53083,7 +53136,7 @@ function Compose({ initial = '', placeholder, submit, cancel, autoFocus, label, 
       await submit(text.trim());
       clearText();
     } catch (e) {
-      setError((e as Error).message);
+      setError(errText(e));
     }
     setBusy(false);
   };
@@ -56708,7 +56761,7 @@ import { useRef, useState, type DragEvent } from 'react';
 import { api, getToken } from '../../api';
 import { useAuth } from '../../auth';
 import { t } from '../../i18n';
-import { toast, UserAvatar } from '../../ui';
+import { toast, UserAvatar, errText } from '../../ui';
 import { errorText } from '../../apiErrors';
 
 export const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp'];
@@ -56760,7 +56813,7 @@ export function AvatarEditor({ onChanged, size = 80, ring }: { onChanged: () => 
       toast(t('pf.avatar.updated'));
       await onChanged();
     } catch (e) {
-      setError((e as Error).message);
+      setError(errText(e));
     } finally {
       setBusy(false);
     }
@@ -56811,7 +56864,7 @@ import { useEffect, useRef, useState } from 'react';
 import { api } from '../../api';
 import { useAuth } from '../../auth';
 import { t } from '../../i18n';
-import { Button, ErrorLine, IconUpload, Section, toast } from '../../ui';
+import { Button, ErrorLine, IconUpload, Section, toast, errText } from '../../ui';
 import { IMAGE_TYPES, uploadImage, useDropTarget } from './AvatarEditor';
 import { BANNER_PRESETS, bannerStyle } from './banner';
 
@@ -56856,7 +56909,7 @@ export function BannerEditor({ onChanged }: { onChanged: () => Promise<void> }) 
       setPending(null);
       await onChanged();
     } catch (e) {
-      setError((e as Error).message);
+      setError(errText(e));
     } finally {
       setBusy(false);
     }
@@ -56869,7 +56922,7 @@ export function BannerEditor({ onChanged }: { onChanged: () => Promise<void> }) 
       await api('/me/banner-preset', 'PUT', { preset });
       await onChanged();
     } catch (e) {
-      setError((e as Error).message);
+      setError(errText(e));
     } finally {
       setBusy(false);
     }
@@ -56884,7 +56937,7 @@ export function BannerEditor({ onChanged }: { onChanged: () => Promise<void> }) 
       toast(t('pf.banner.removed'));
       await onChanged();
     } catch (e) {
-      setError((e as Error).message);
+      setError(errText(e));
     } finally {
       setBusy(false);
     }
@@ -56946,7 +56999,7 @@ __COREGSM_EOF__
 import { useEffect, useState } from 'react';
 import { api } from '../../api';
 import { useAuth } from '../../auth';
-import { Button, ErrorLine, Section, ago, toast } from '../../ui';
+import { Button, ErrorLine, Section, ago, toast, fail } from '../../ui';
 
 interface Follow { nick: string; createdAt: number }
 
@@ -56971,7 +57024,7 @@ export function FollowButton({ nick }: { nick: string }) {
       setOn(!on);
       toast(on ? `Больше не следим за ${nick}` : `Сообщим, когда ${nick} зайдёт на сервер`);
     } catch (e) {
-      toast((e as Error).message, 'err');
+      fail(e);
     }
     setBusy(false);
   };
@@ -57019,7 +57072,7 @@ import { api, type JournalItem } from '../../api';
 import { confirmDialog } from '../../confirm';
 import type { TKey } from '../../i18n';
 import { t } from '../../i18n';
-import { ago, fmtDateTime, IconLogout, Section, toast } from '../../ui';
+import { ago, fmtDateTime, IconLogout, Section, toast, fail } from '../../ui';
 import { deviceName } from './format';
 import { JournalIcon } from './icons';
 import { isArray, useFetched } from './useFetched';
@@ -57072,7 +57125,7 @@ export function JournalCard({ onRevoked }: { onRevoked?: () => void }) {
       onRevoked?.();
       reload();
     } catch (e) {
-      toast((e as Error).message, 'err');
+      fail(e);
     } finally {
       setBusy(false);
     }
@@ -57291,7 +57344,7 @@ import { useAuth } from '../../auth';
 import { confirmDialog } from '../../confirm';
 import { t } from '../../i18n';
 import { dismissNewDevice, isNewDeviceDismissed } from '../../security';
-import { ErrorLine, toast } from '../../ui';
+import { ErrorLine, toast, errText } from '../../ui';
 
 /**
  * «Вход с нового устройства: … Это были вы?» on the Overview and Security tabs of the profile.
@@ -57323,7 +57376,7 @@ export function NewDeviceBanner({ onRevoked }: { onRevoked?: () => void }) {
       setRevoked(true);
       onRevoked?.();
     } catch (e) {
-      setError((e as Error).message);
+      setError(errText(e));
     } finally {
       setBusy(false);
     }
@@ -57360,7 +57413,7 @@ __COREGSM_EOF__
 /** Profile: which rubrics of the news the account wants to hear about (the bell, the devices and Discord). */
 import { useEffect, useState } from 'react';
 import { api, type NewsCategory } from '../../api';
-import { ErrorLine, Section, toast } from '../../ui';
+import { ErrorLine, Section, toast, errText } from '../../ui';
 import { categoryLabel } from '../news/NewsParts';
 
 const RUBRICS: NewsCategory[] = ['announcement', 'wipe', 'update', 'event', 'maintenance', 'other'];
@@ -57381,7 +57434,7 @@ export function NewsSubsCard() {
       toast(r.categories.length ? 'Подписка на новости сохранена' : 'Подписка на новости выключена');
     } catch (e) {
       setPicked(before);
-      setError((e as Error).message);
+      setError(errText(e));
     }
   };
   const flip = (c: NewsCategory) => void save(picked?.includes(c) ? picked.filter((x) => x !== c) : [...(picked ?? []), c]);
@@ -57415,7 +57468,7 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { api, type NickStatus, type PlayerProfile } from '../../api';
 import { useAuth } from '../../auth';
 import { t } from '../../i18n';
-import { ago, Button, CopyButton, ErrorLine, Section, Switch, TextField, toast } from '../../ui';
+import { ago, Button, CopyButton, ErrorLine, Section, Switch, TextField, toast, errText } from '../../ui';
 import { isObject, useFetched } from './useFetched';
 
 const NICK_MAX = 32;
@@ -57456,7 +57509,7 @@ export function PlayerCard() {
       reload();
       status.reload();
     } catch (err) {
-      setError((err as Error).message);
+      setError(errText(err));
     } finally {
       setBusy(false);
     }
@@ -57666,7 +57719,7 @@ __COREGSM_EOF__
 import { useState, type FormEvent } from 'react';
 import { api } from '../../api';
 import { useAuth } from '../../auth';
-import { Button, ErrorLine, Field, Modal, toast } from '../../ui';
+import { Button, ErrorLine, Field, Modal, toast, errText } from '../../ui';
 
 export const REASONS = [
   { id: 'cheating', label: 'Читы или нечестная игра' },
@@ -57694,7 +57747,7 @@ export function ReportButton({ nick }: { nick: string }) {
       setOpen(false);
       setText('');
     } catch (err) {
-      setError((err as Error).message);
+      setError(errText(err));
     }
     setBusy(false);
   };
@@ -57976,7 +58029,7 @@ __COREGSM_EOF__
 import { type FormEvent, useCallback, useEffect, useState } from 'react';
 import { api } from '../../api';
 import { t } from '../../i18n';
-import { Button, ErrorLine, PasswordField, toast } from '../../ui';
+import { Button, ErrorLine, PasswordField, toast, errText } from '../../ui';
 import QrCode from '../server/QrCode';
 
 interface Status { enabled: boolean; recoveryLeft: number; hasPassword: boolean }
@@ -57995,7 +58048,7 @@ export function TwoFactorCard() {
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
-    try { setSt(await api<Status>('/auth/2fa')); } catch (e) { setError((e as Error).message); }
+    try { setSt(await api<Status>('/auth/2fa')); } catch (e) { setError(errText(e)); }
   }, []);
   useEffect(() => { void load(); }, [load]);
 
@@ -58003,7 +58056,7 @@ export function TwoFactorCard() {
 
   const start = async () => {
     setError(''); setBusy(true);
-    try { setSetup(await api<Setup>('/auth/2fa/setup', 'POST')); } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
+    try { setSetup(await api<Setup>('/auth/2fa/setup', 'POST')); } catch (e) { setError(errText(e)); } finally { setBusy(false); }
   };
 
   const enable = async (e: FormEvent) => {
@@ -58015,7 +58068,7 @@ export function TwoFactorCard() {
       reset();
       setCodes(r.recoveryCodes);
       await load();
-    } catch (err) { setError((err as Error).message); } finally { setBusy(false); }
+    } catch (err) { setError(errText(err)); } finally { setBusy(false); }
   };
 
   const disable = async (e: FormEvent) => {
@@ -58026,7 +58079,7 @@ export function TwoFactorCard() {
       toast(t('pf.2fa.done'));
       reset();
       await load();
-    } catch (err) { setError((err as Error).message); } finally { setBusy(false); }
+    } catch (err) { setError(errText(err)); } finally { setBusy(false); }
   };
 
   const copy = async () => {
@@ -60052,7 +60105,7 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/components/server/Notice.tsx" << '__COREGSM_EOF__'
 import { useState } from 'react';
 import { api } from '../../api';
-import { ago, toast } from '../../ui';
+import { ago, toast, fail } from '../../ui';
 
 export interface ServerNotice { text: string; tone: string; updatedAt: number }
 
@@ -60078,7 +60131,7 @@ export default function PinnedNotice({ serverId, notice, canEdit, onChange }: { 
       setEditing(false);
       toast(r.notice ? 'Объявление закреплено' : 'Объявление снято');
     } catch (e) {
-      toast((e as Error).message, 'err');
+      fail(e);
     } finally {
       setBusy(false);
     }
@@ -61315,7 +61368,7 @@ import { useEffect, useRef, useState } from 'react';
 import { api } from '../../api';
 import { useAuth } from '../../auth';
 import { t, type TKey } from '../../i18n';
-import { Button, ErrorLine, IconBell, Modal, toast } from '../../ui';
+import { Button, ErrorLine, IconBell, Modal, toast, fail, errText } from '../../ui';
 import { SUB_KINDS, normalizeKinds, toggleKind, useSubscriptions, type SubKind, type Subscription } from '../../notifications';
 
 const KIND_KEY: Record<SubKind, TKey> = { free_slot: 'sub.free_slot', back_online: 'sub.back_online', went_down: 'sub.went_down' };
@@ -61399,7 +61452,7 @@ export default function SubscribeMenu({
       const r = await api<{ dm: boolean; discordLinked: boolean }>(`/servers/${serverId}/subscription/test`, 'POST');
       toast(r.dm ? 'Тест отправлен: смотрите колокольчик и личные сообщения Discord' : r.discordLinked ? 'Тест в колокольчике. Бот сейчас не в сети, в Discord не отправлено' : 'Тест в колокольчике. Привяжите Discord, чтобы получать и в личные сообщения');
     } catch (e) {
-      toast((e as Error).message, 'err');
+      fail(e);
     } finally {
       setTesting(false);
     }
@@ -61415,7 +61468,7 @@ export default function SubscribeMenu({
       toast(kinds.length ? t('sub.saved') : t('sub.off'));
       setOpen(false);
     } catch (e) {
-      setError((e as Error).message);
+      setError(errText(e));
     } finally {
       setBusy(false);
     }
@@ -68183,6 +68236,7 @@ const en: Record<keyof typeof ru, string> = {
   'ne.btnLabel': 'Button label {n}',
   'ne.btnUrl': 'Button link {n}',
   'ne.mainText': 'Main text',
+  'common.error': 'Something went wrong',
 };
 
 export default en;
@@ -70153,6 +70207,7 @@ const ru = {
   'ne.btnLabel': 'Подпись кнопки {n}',
   'ne.btnUrl': 'Ссылка кнопки {n}',
   'ne.mainText': 'Основной текст',
+  'common.error': 'Что-то пошло не так',
 };
 
 export default ru;
@@ -70490,7 +70545,7 @@ import { useAuth } from '../auth';
 import { t, useI18n } from '../i18n';
 import type { MaintenanceWindow } from '../maintenance';
 import { gameLabel } from '../games';
-import { AdminPage as PageStack, Empty, ErrorLine, GameAvatar, IconArrowUp, LoadError, IconClose, IconEdit, IconRefresh, IconServers, IconTrash, PageHead, StatusPill, ago, toast, undoable, usePoll, navigate } from '../ui';
+import { AdminPage as PageStack, Empty, ErrorLine, GameAvatar, IconArrowUp, LoadError, IconClose, IconEdit, IconRefresh, IconServers, IconTrash, PageHead, StatusPill, ago, toast, undoable, usePoll, navigate, fail } from '../ui';
 import { ADMIN_GROUPS, ADMIN_SECTIONS, OVERVIEW_SECTION, SECTION_PERM, START_SECTION, type AdminSection } from './adminNav';
 import { PINS_KEY, PINS_MAX, RECENT_KEY, RECENT_MAX, movePin, pushRecent, readIds, togglePin, writeIds } from './adminShortcuts';
 import AdminOverview from './AdminOverview';
@@ -70966,7 +71021,7 @@ function ServersManage({ sub }: { sub: string }) {
         toast(t('adm.tbl.maintStarted'));
       }
     } catch (e) {
-      toast((e as Error).message, 'err');
+      fail(e);
     }
     await load();
     api<MaintenanceWindow[]>('/maintenance').then(setWindows).catch(() => undefined);
@@ -71414,7 +71469,7 @@ import { delta, dayKey, healthScore } from './adminLogic';
 import { api, type BackupInfo, type BotStatus, type CertInfo, type Server, type UpdateInfo, type UserRow } from '../api';
 import type { OverviewData } from '../components/servers/overviewLogic';
 import { t, useI18n } from '../i18n';
-import { AdminPage, Button, PageHead, Section, SmoothArea, ago, fmtDateTime, toast, usePoll } from '../ui';
+import { AdminPage, Button, PageHead, Section, SmoothArea, ago, fmtDateTime, toast, usePoll, fail } from '../ui';
 import { Icon } from '../icons';
 import { downloadFile } from './Backups';
 
@@ -71600,7 +71655,7 @@ export default function AdminOverview() {
       await downloadFile('/backup', 'coregsm-backup.tar.gz');
       toast(t('adm.ov.backupDone'));
     } catch (e) {
-      toast((e as Error).message, 'err');
+      fail(e);
     }
     setBusy(null);
   };
@@ -71941,7 +71996,7 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { api, type BotStatus, type SettingsInfo } from '../api';
 import { useAuth } from '../auth';
 import { t, useI18n } from '../i18n';
-import { AdminPage, Burst, PageHead, IconStart, IconServers, IconNews, IconDownload, IconSystem, navigate, toast, usePoll } from '../ui';
+import { AdminPage, Burst, PageHead, IconStart, IconServers, IconNews, IconDownload, IconSystem, navigate, toast, usePoll, fail } from '../ui';
 import { ADMIN_GROUPS, START_SECTION } from './adminNav';
 import { downloadFile } from './Backups';
 
@@ -72121,7 +72176,7 @@ export default function AdminStart() {
       await downloadFile('/backup', 'coregsm-backup.tar.gz');
       toast(t('start.backupDone'));
     } catch (e) {
-      toast((e as Error).message, 'err');
+      fail(e);
     } finally {
       setBusy(false);
     }
@@ -72554,7 +72609,7 @@ import { api, getToken, type BackupInfo, type BackupItem } from '../api';
 import { confirmDialog, promptDialog } from '../confirm';
 import { t } from '../i18n';
 import { loadUnreadableSecrets, saveUnreadableSecrets, unreadableSecrets } from '../security';
-import { Button, ErrorLine, Field, IconDownload, LoadError, StateView, IconRestore, IconTrash, Section, Switch, fmtDateTime, ago, toast } from '../ui';
+import { Button, ErrorLine, Field, IconDownload, LoadError, StateView, IconRestore, IconTrash, Section, Switch, fmtDateTime, ago, toast, errText } from '../ui';
 import { errorText } from '../apiErrors';
 
 /** the copies on a time line: a bar per copy (the height is its size, the colour is auto / manual), and how old the last one is */
@@ -72646,7 +72701,7 @@ export default function BackupsCard() {
   const guard = async (key: string, fn: () => Promise<void>) => {
     setBusy(key);
     setError('');
-    try { await fn(); } catch (e) { setError((e as Error).message); } finally { setBusy(null); }
+    try { await fn(); } catch (e) { setError(errText(e)); } finally { setBusy(null); }
   };
 
   const downloadFull = () => guard('full', async () => {
@@ -72700,7 +72755,7 @@ export default function BackupsCard() {
       const r = await api<{ unreadableSecrets?: string[] }>('/backups/' + encodeURIComponent(b.name) + '/restore', 'POST', pass ? { passphrase: pass } : {});
       await afterRestore(r?.unreadableSecrets);
     } catch (e) {
-      setError((e as Error).message);
+      setError(errText(e));
       setRestoring(false);
     }
   };
@@ -72727,7 +72782,7 @@ export default function BackupsCard() {
       if (!r.ok) throw new Error(errorText(j, 'Не удалось восстановить копию'));
       await afterRestore(j?.unreadableSecrets);
     } catch (e) {
-      setError((e as Error).message);
+      setError(errText(e));
       setRestoring(false);
     }
   };
@@ -72753,7 +72808,7 @@ export default function BackupsCard() {
       toast('Настройки копий сохранены');
       await load();
     } catch (err) {
-      setError((err as Error).message);
+      setError(errText(err));
     } finally {
       setSaving(false);
     }
@@ -73622,7 +73677,7 @@ import PlayersShownCard from '../components/PlayersShownCard';
 import { DiscordArt } from '../components/Illustrations';
 import { confirmDialog } from '../confirm';
 import { t, useI18n } from '../i18n';
-import { Button, Empty, ErrorLine, Field, LoadError, GameAvatar, GoLink, IconDiscord, IconEdit, IconPause, IconPlay, IconTrash, InviteButton, Modal, Notice, PageHead, Strip, Switch, AdminPage, ago, toast, undoable, usePoll, navigate } from '../ui';
+import { Button, Empty, ErrorLine, Field, LoadError, GameAvatar, GoLink, IconDiscord, IconEdit, IconPause, IconPlay, IconTrash, InviteButton, Modal, Notice, PageHead, Strip, Switch, AdminPage, ago, toast, undoable, usePoll, navigate, errText } from '../ui';
 import { BotPill } from './Settings';
 import { MissingNote } from '../components/ChannelPicker';
 import EmbedPreview from './EmbedPreview';
@@ -73691,7 +73746,7 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
           if (ids.length === 1) await api(`/bindings/${ids[0]}`, 'DELETE');
           else await api('/bindings/bulk', 'POST', { ids, action: 'delete' });
         } catch (e) {
-          setError((e as Error).message);
+          setError(errText(e));
           toast(t('dc.delFail'), 'err');
         }
         setHidden((h) => h.filter((x) => !ids.includes(x)));
@@ -73983,7 +74038,7 @@ function BindingForm({ servers, initial, onClose, onSaved }: { servers: Server[]
       const picked = !manual && guild?.channels.some((c) => c.id === f.channelId);
       onSaved(picked && guild ? `https://discord.com/channels/${guild.id}/${f.channelId}` : undefined);
     } catch (err) {
-      setError((err as Error).message);
+      setError(errText(err));
       setBusy(false);
     }
   };
@@ -74389,7 +74444,7 @@ import { api, getToken, type Server } from '../api';
 import { errorText } from '../apiErrors';
 import { useAuth } from '../auth';
 import { IMAGE_TYPES, useDropTarget } from '../components/profile/AvatarEditor';
-import { Button, Empty, ErrorLine, Field, Modal, PageHead, ago, toast } from '../ui';
+import { Button, Empty, ErrorLine, Field, Modal, PageHead, ago, toast, errText } from '../ui';
 import '../styles/gallery.css';
 
 export interface Shot {
@@ -74542,7 +74597,7 @@ function UploadForm({ servers, onClose, onDone, initial }: { servers: Server[]; 
       if (!r.ok || !j) throw new Error(errorText(j, 'Не удалось загрузить картинку (PNG, JPG или WebP до 8 МБ)'));
       onDone(j);
     } catch (e) {
-      setError((e as Error).message);
+      setError(errText(e));
     } finally {
       setBusy(false);
     }
@@ -74766,7 +74821,7 @@ import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { api, ApiError, setToken } from '../api';
 import { useAuth } from '../auth';
 import { t } from '../i18n';
-import { Button, DiscordButton, ErrorLine, FieldError, OrDivider, PasswordField, useShake } from '../ui';
+import { Button, DiscordButton, ErrorLine, FieldError, OrDivider, PasswordField, useShake, errText } from '../ui';
 
 const NAME_KEY = 'coregsm_login_name';
 const readName = () => {
@@ -74866,7 +74921,7 @@ export default function Login({ onDone, notice }: { onDone: () => void; notice?:
         passRef.current?.focus();
         passRef.current?.select();
       } else {
-        setError((err as Error).message);
+        setError(errText(err));
       }
       shake();
     } finally {
@@ -74978,7 +75033,7 @@ import {
   REPEAT_LABEL, fromLocalInput, presetNow, presetTonight, rangeLabel, toLocalInput, untilLabel, validateWindow, windowState,
   type MaintenanceInput, type MaintenanceRepeat, type MaintenanceWindow, type WindowState,
 } from '../maintenance';
-import { AdminPage, ErrorLine, Field, FieldError, IconEdit, IconPlus, IconTrash, IconWrench, LoadError, Modal, PageHead, Spinner, undoable, toast, usePoll } from '../ui';
+import { AdminPage, ErrorLine, Field, FieldError, IconEdit, IconPlus, IconTrash, IconWrench, LoadError, Modal, PageHead, Spinner, undoable, toast, usePoll, errText } from '../ui';
 
 interface Draft { id: number | null; serverId: string; name: string; start: string; end: string; repeat: MaintenanceRepeat }
 
@@ -75124,7 +75179,7 @@ function WindowModal({ draft, servers, onClose, onSaved }: { draft: Draft; serve
       toast(f.id == null ? 'Окно добавлено' : 'Окно сохранено');
       onSaved();
     } catch (err) {
-      setError((err as Error).message);
+      setError(errText(err));
       setBusy(false);
     }
   };
@@ -75178,7 +75233,7 @@ import { useAuth } from '../auth';
 import { EmbedView, type DiscordEmbed } from './EmbedPreview';
 import { ChannelPicker } from '../components/ChannelPicker';
 import { NewsArt } from '../components/Illustrations';
-import { AdminPage, Empty, ErrorLine, GoLink, LoadError, IconCopyPlus, IconNews, IconTrash, PageHead, Strip, fmtDateTime, toast, undoable, usePoll, navigate } from '../ui';
+import { AdminPage, Empty, ErrorLine, GoLink, LoadError, IconCopyPlus, IconNews, IconTrash, PageHead, Strip, fmtDateTime, toast, undoable, usePoll, navigate, errText } from '../ui';
 import NewsEditor, { TEMPLATES } from './NewsEditor';
 import { newsImage } from '../components/news/newsLogic';
 import { NewsStatsModal } from '../components/news/NewsStats';
@@ -75265,7 +75320,7 @@ function NewsList() {
       return;
     } catch (e) {
       // an older backend has no duplicate route: make the copy by hand
-      if (!(e instanceof ApiError && (e.status === 404 || e.status === 405))) { setError((e as Error).message); return; }
+      if (!(e instanceof ApiError && (e.status === 404 || e.status === 405))) { setError(errText(e)); return; }
     }
     await api('/news', 'POST', { channelId: n.channelId, payload: n.payload, action: 'draft' }).then(() => toast('Копия сохранена как черновик')).catch((e) => setError(e.message));
     void load();
@@ -75320,7 +75375,7 @@ function NewsList() {
         try {
           await api(`/news/${n.id}`, 'DELETE');
         } catch (e) {
-          setError((e as Error).message);
+          setError(errText(e));
           toast('Не удалось удалить новость', 'err');
         }
         setHidden((h) => h.filter((x) => x !== n.id));
@@ -75500,7 +75555,7 @@ import { GAMES } from '../games';
 import { t, useI18n } from '../i18n';
 import { StatusServers } from '../components/news/StatusServers';
 import type { PreviewPart } from './EmbedPreview';
-import { Button, ErrorLine, Field, GoLink, IconNews, Notice, PageHead, SplitButton, StateView, Switch, errorKind, fmtDateTime, toast, navigate } from '../ui';
+import { Button, ErrorLine, Field, GoLink, IconNews, Notice, PageHead, SplitButton, StateView, Switch, errorKind, fmtDateTime, toast, navigate, errText } from '../ui';
 
 export { TEMPLATES };
 
@@ -75623,7 +75678,7 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
           })
           .catch((e) => { if (e instanceof ApiError && e.status === 404) autosaveOff.current = true; });
       } catch (e) {
-        if (!dead) setError((e as Error).message);
+        if (!dead) setError(errText(e));
       }
     })();
     api<Server[]>('/servers').then((s) => !dead && Array.isArray(s) && setServers(s)).catch(() => undefined);
@@ -75704,7 +75759,7 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
       setAuthor(a);
       setE({ authorName: a.name, authorIcon: a.iconUrl ?? '' });
     } catch (err) {
-      setError((err as Error).message);
+      setError(errText(err));
     }
   };
   const setE = (patch: Partial<EmbedDraft>) => setD((c) => (c ? { ...c, embeds: c.embeds.map((x, i) => (i === cur ? { ...x, ...patch } : x)) } : c));
@@ -75739,7 +75794,7 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
       setMoreOpen(true);
       toast(t('ne.pasted'));
     } catch (err) {
-      setError((err as Error).message);
+      setError(errText(err));
     }
   };
 
@@ -75781,7 +75836,7 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
       toast(action === 'now' ? t('ne.sending') : action === 'schedule' ? t('ne.scheduled') : isSent ? t('ne.edited') : t('ne.draftSaved'));
       navigate('/admin/news');
     } catch (err) {
-      setError((err as Error).message);
+      setError(errText(err));
       setBusy(false);
       setCheck(null);
     }
@@ -76375,7 +76430,7 @@ import { deviceName } from '../components/profile/format';
 import { IconUser } from '../icons';
 import { IcoDiscord, IcoGamepad, IcoHome, IcoLogout, IcoShield, IcoSliders } from '../components/profile/bits';
 import { isNewDeviceDismissed } from '../security';
-import { ago, Button, ErrorLine, isLag, FieldError, GameAvatar, PageHead, PasswordField, PasswordStrength, Section, StatusPill, UserAvatar, toast, useRoute } from '../ui';
+import { ago, Button, ErrorLine, isLag, FieldError, GameAvatar, PageHead, PasswordField, PasswordStrength, Section, StatusPill, UserAvatar, toast, useRoute, errText } from '../ui';
 
 type Tab = 'overview' | 'player' | 'look' | 'security';
 const TABS: { id: Tab; label: TKey; icon: ReactNode }[] = [
@@ -76576,7 +76631,7 @@ function PasswordCard({ hasPassword, discordLinked, onChanged }: { hasPassword: 
       setAgain('');
       await onChanged();
     } catch (err) {
-      setError((err as Error).message);
+      setError(errText(err));
     } finally {
       setBusy(false);
     }
@@ -76626,7 +76681,7 @@ function EmailCard({ onChanged }: { onChanged: () => Promise<void> }) {
       setCurrent('');
       await onChanged();
     } catch (err) {
-      setError((err as Error).message);
+      setError(errText(err));
     } finally {
       setBusy(false);
     }
@@ -76667,7 +76722,7 @@ function DiscordCard({ onChanged }: { onChanged: () => Promise<void> }) {
       toast(t('pf.discord.unlinked'));
       await onChanged();
     } catch (err) {
-      setError((err as Error).message);
+      setError(errText(err));
     } finally {
       setBusy(false);
     }
@@ -76919,7 +76974,7 @@ import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { api, ApiError, setToken } from '../api';
 import { useAuth } from '../auth';
 import { t } from '../i18n';
-import { Button, DiscordButton, ErrorLine, FieldError, OrDivider, PasswordField, PasswordStrength, toast, useShake } from '../ui';
+import { Button, DiscordButton, ErrorLine, FieldError, OrDivider, PasswordField, PasswordStrength, toast, useShake, errText } from '../ui';
 
 // same rule as on the server: letters of any alphabet, digits, _ . - and single spaces between words
 const LOGIN_RE = /^(?=.{3,32}$)[\p{L}\p{N}_.-]+(?: [\p{L}\p{N}_.-]+)*$/u;
@@ -77001,7 +77056,7 @@ export default function Register({ onDone }: { onDone: () => void }) {
         setAvail('taken');
         userRef.current?.focus();
       } else {
-        setError((err as Error).message);
+        setError(errText(err));
       }
       shake();
       setBusy(false);
@@ -77140,7 +77195,7 @@ import { useEffect, useRef, useState, type FormEvent } from 'react';
 import AuthFlow from '../components/AuthFlow';
 import { api, ApiError } from '../api';
 import { t } from '../i18n';
-import { Button, ErrorLine, PasswordField, PasswordStrength, useShake } from '../ui';
+import { Button, ErrorLine, PasswordField, PasswordStrength, useShake, errText } from '../ui';
 
 /** /reset/<token>: the link from the letter; sets a new password (valid 30 minutes, once) */
 export default function ResetPassword({ token }: { token: string }) {
@@ -77170,7 +77225,7 @@ export default function ResetPassword({ token }: { token: string }) {
     } catch (err) {
       // 400 with a password message is a form problem; any other 400 means the link is dead
       if (err instanceof ApiError && err.status === 400 && !/парол/i.test(err.message)) setBad(true);
-      else setError((err as Error).message);
+      else setError(errText(err));
       shake();
     } finally {
       setBusy(false);
@@ -77223,7 +77278,7 @@ import { gameGradient, gameLabel } from '../games';
 import { coverBackground, coverUrlOf, emblemStyle, gameBackdrop } from '../cover';
 import { applyConnectTemplates, connectGuide } from '../connectGuides';
 import { useGameProfiles } from '../gameProfiles';
-import { Burst, CopyButton, ErrorLine, GameAvatar, IconBell, LoadError, IconCheckMark, IconRefresh, IconShare, StatusPill, ago, isLag, toast, useDepth, useFlashOnChange, usePoll, navigate } from '../ui';
+import { Burst, CopyButton, ErrorLine, GameAvatar, IconBell, LoadError, IconCheckMark, IconRefresh, IconShare, StatusPill, ago, isLag, toast, useDepth, useFlashOnChange, usePoll, navigate, errText } from '../ui';
 import NotFound from '../components/NotFound';
 import { confirmDialog } from '../confirm';
 import ServerForm from './ServerForm';
@@ -77604,7 +77659,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
       toast('Сервер удалён');
       navigate('/servers');
     } catch (e) {
-      setError((e as Error).message);
+      setError(errText(e));
     }
   };
   const copyAddress = async () => {
@@ -77895,7 +77950,7 @@ import { confirmDialog } from '../confirm';
 import { api, getToken, type ServerInput, type TestResult } from '../api';
 import { GAMES, gameLabel } from '../games';
 import GamePicker from '../components/GamePicker';
-import { ErrorLine, Field, GameAvatar, Modal } from '../ui';
+import { ErrorLine, Field, GameAvatar, Modal, errText } from '../ui';
 import { COUNTRIES } from '../countries';
 import { nextPort, shownFields, useGameProfiles } from '../gameProfiles';
 import { t } from '../i18n';
@@ -77930,7 +77985,7 @@ export default function ServerForm({ initial, id, coverUrl, onCoverChanged, onCl
       setCover(j?.coverUrl ?? null);
       onCoverChanged?.();
     } catch (e) {
-      setError((e as Error).message);
+      setError(errText(e));
     } finally {
       setCoverBusy(false);
     }
@@ -77943,7 +77998,7 @@ export default function ServerForm({ initial, id, coverUrl, onCoverChanged, onCl
       setCover(null);
       onCoverChanged?.();
     } catch (e) {
-      setError((e as Error).message);
+      setError(errText(e));
     } finally {
       setCoverBusy(false);
     }
@@ -78011,7 +78066,7 @@ export default function ServerForm({ initial, id, coverUrl, onCoverChanged, onCl
     try {
       setTest(await api<TestResult>('/servers/test', 'POST', { game: f.game, host: f.host, port: f.port, queryPort: f.queryPort }));
     } catch (e) {
-      setError((e as Error).message);
+      setError(errText(e));
     } finally {
       setTesting(false);
     }
@@ -78025,7 +78080,7 @@ export default function ServerForm({ initial, id, coverUrl, onCoverChanged, onCl
       await api(id ? `/servers/${id}` : '/servers', id ? 'PUT' : 'POST', f);
       onSaved();
     } catch (err) {
-      setError((err as Error).message);
+      setError(errText(err));
       setBusy(false);
     }
   };
@@ -80365,7 +80420,7 @@ __COREGSM_EOF__
 import { type FormEvent, useState } from 'react';
 import { api, type BotStatus, type SettingsInfo } from '../../api';
 import { confirmDialog } from '../../confirm';
-import { CopyButton, ErrorLine, Field, FieldError, InviteButton, noAutofill, ProxyField, type ProxyType, Section, toast, usePoll } from '../../ui';
+import { CopyButton, ErrorLine, Field, FieldError, InviteButton, noAutofill, ProxyField, type ProxyType, Section, toast, usePoll, errText } from '../../ui';
 
 export function BotPill({ status, tokenSet }: { status: BotStatus | null; tokenSet: boolean }) {
   if (!tokenSet) return <span className="pill pill-mute">ТОКЕН НЕ ЗАДАН</span>;
@@ -80447,7 +80502,7 @@ export function BotCard() {
       setSaved(true);
       toast('Настройки сохранены');
     } catch (err) {
-      setError((err as Error).message);
+      setError(errText(err));
     } finally {
       setBusy(false);
     }
@@ -80458,7 +80513,7 @@ export function BotCard() {
     try {
       setInfo(await api<SettingsInfo>('/settings', 'PUT', { discordToken: '' }));
     } catch (err) {
-      setError((err as Error).message);
+      setError(errText(err));
     }
   };
 
@@ -80467,7 +80522,7 @@ export function BotCard() {
     try {
       setInfo(await api<SettingsInfo>('/settings', 'PUT', { discordClientSecret: '' }));
     } catch (err) {
-      setError((err as Error).message);
+      setError(errText(err));
     }
   };
 
@@ -80585,7 +80640,7 @@ import { api, getToken } from '../../api';
 import { useAuth } from '../../auth';
 import { parseHex } from '../../colors';
 import { AccentPicker } from '../../components/AccentPicker';
-import { ErrorLine, FieldError, GameAvatar, IconCheck, Logo, SaveBadge, Section, TextField, toast, useAutosave } from '../../ui';
+import { ErrorLine, FieldError, GameAvatar, IconCheck, Logo, SaveBadge, Section, TextField, toast, useAutosave, errText } from '../../ui';
 import { useSaveBar, useSaveBarActive } from '../../saveBar';
 import { errorText } from '../../apiErrors';
 
@@ -80651,7 +80706,7 @@ export function BrandCard() {
       toast('Логотип обновлён');
       await reload();
     } catch (x) {
-      setError((x as Error).message);
+      setError(errText(x));
     } finally {
       setBusy(false);
     }
@@ -80775,7 +80830,7 @@ __COREGSM_EOF__
 /** Settings → Security: the administrator's own password. */
 import { type FormEvent, useState } from 'react';
 import { api } from '../../api';
-import { ErrorLine, plural, Section, TextField, toast } from '../../ui';
+import { ErrorLine, plural, Section, TextField, toast, errText } from '../../ui';
 
 export function PasswordCard() {
   const [current, setCurrent] = useState('');
@@ -80802,7 +80857,7 @@ export function PasswordCard() {
       setNext('');
     } catch (err) {
       // the typed values stay in the form: nothing is lost, only the message appears
-      setError((err as Error).message);
+      setError(errText(err));
     } finally {
       setBusy(false);
     }
@@ -80827,7 +80882,7 @@ __COREGSM_EOF__
 import { type CSSProperties, useEffect, useRef, useState } from 'react';
 import { api, type Changelog, type UpdateInfo } from '../../api';
 import { confirmDialog } from '../../confirm';
-import { ago, ErrorLine, IconArrowUp, IconCheck, Section, Spinner, usePoll } from '../../ui';
+import { ago, ErrorLine, IconArrowUp, IconCheck, Section, Spinner, usePoll, errText } from '../../ui';
 
 const short = (v: string | null) => (v ? v.slice(0, 7) : '–');
 
@@ -80896,7 +80951,7 @@ export function UpdateCard() {
     try {
       setInfo(await api<UpdateInfo>('/update/check', 'POST'));
     } catch (e) {
-      setError((e as Error).message);
+      setError(errText(e));
     } finally {
       setBusy(false);
     }
@@ -80913,7 +80968,7 @@ export function UpdateCard() {
       setFinished(null);
       setWaiting({ since: Date.now(), baseTime: r.job?.time ?? null, kind: 'update' });
     } catch (e) {
-      setError((e as Error).message);
+      setError(errText(e));
     } finally {
       setBusy(false);
     }
@@ -80936,7 +80991,7 @@ export function UpdateCard() {
       setFinished(null);
       setWaiting({ since: Date.now(), baseTime: r.job?.time ?? null, kind: 'rollback' });
     } catch (e) {
-      setError((e as Error).message);
+      setError(errText(e));
     } finally {
       setBusy(false);
     }
@@ -84733,9 +84788,57 @@ export type { ProxyType } from './ui/blocks';
 export { Spark, MiniSpark, smoothPath, smoothValues, SmoothArea, FleetBar, useSparkSpanMin, useHourTrend, spanCaption } from './ui/charts';
 export { toast, dismissToast, undoable, Toaster } from './ui/toast';
 export type { ToastAction, ToastOptions } from './ui/toast';
+export { errText, fail, useAction } from './ui/action';
 export { AuthShell, AuthBrand, AuthCard, useShake, Spinner, FieldError, PasswordField, passwordScore, PasswordStrength, UserAvatar, DiscordButton, DiscordBadge, OrDivider } from './ui/authParts';
 export { AdminPage, Section, Strip, SaveBadge, TextField } from './ui/admin';
 export { noAutofill } from './ui/noAutofill';
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/ui"
+  cat > "$APP_DIR/core-frontend/src/ui/action.ts" << '__COREGSM_EOF__'
+import { useCallback, useRef, useState } from 'react';
+import { t } from '../i18n';
+import { toast } from './toast';
+
+/** The text of an error for people: the message of an Error (the server's own wording for ApiError), otherwise a generic line. */
+export function errText(e: unknown, fallback?: string): string {
+  const m = e instanceof Error ? e.message.trim() : typeof e === 'string' ? e.trim() : '';
+  return m || fallback || t('common.error');
+}
+
+/** Shows a failure as a toast. The one place that decides how a failed action is announced outside a form. */
+export function fail(e: unknown, prefix?: string): void {
+  const m = errText(e);
+  toast(prefix ? `${prefix} ${m}` : m, 'err');
+}
+
+/**
+ * Runs an async action with a busy flag and an error line, so a screen does not repeat try/catch/finally:
+ *   const { run, busy, error } = useAction();
+ *   <Button loading={busy} onClick={() => run(save, { ok: t('common.saved') })}>…</Button>  <ErrorLine text={error} />
+ * `toastError` shows the failure as a toast instead of the error line. Returns true when the action succeeded.
+ */
+export function useAction() {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const live = useRef(0);
+  const run = useCallback(async (fn: () => Promise<unknown>, o: { ok?: string; toastError?: boolean } = {}): Promise<boolean> => {
+    const id = ++live.current;
+    setBusy(true);
+    setError('');
+    try {
+      await fn();
+      if (o.ok) toast(o.ok, 'ok');
+      return true;
+    } catch (e) {
+      if (o.toastError) fail(e);
+      else if (id === live.current) setError(errText(e));
+      return false;
+    } finally {
+      if (id === live.current) setBusy(false);
+    }
+  }, []);
+  return { run, busy, error, clear: () => setError('') };
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/ui"
   cat > "$APP_DIR/core-frontend/src/ui/admin.tsx" << '__COREGSM_EOF__'

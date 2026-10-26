@@ -1735,6 +1735,7 @@ const ru = {
   'ne.btnLabel': 'Подпись кнопки {n}',
   'ne.btnUrl': 'Ссылка кнопки {n}',
   'ne.mainText': 'Основной текст',
+  'common.error': 'Что-то пошло не так',
 };
 
 export default ru;
