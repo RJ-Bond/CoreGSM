@@ -148,7 +148,7 @@ export function HistoryCard({ refreshKey }: { refreshKey: unknown }) {
 export function OptionsCard({ info, onChange }: { info: UpdateInfo; onChange: (i: UpdateInfo) => void }) {
   const [error, setError] = useState('');
   const [picking, setPicking] = useState(false);
-  const save = async (body: { channel?: 'release' | 'main'; notify?: boolean; notifyLang?: 'ru' | 'en'; remindDays?: number; notifyChannel?: string }) => {
+  const save = async (body: { channel?: 'release' | 'main'; notify?: boolean; notifyLang?: 'ru' | 'en'; notifyMode?: 'brief' | 'detailed' | 'all'; remindDays?: number; notifyChannel?: string }) => {
     setError('');
     try {
       onChange(await api<UpdateInfo>('/update/settings', 'PUT', body));
@@ -196,6 +196,15 @@ export function OptionsCard({ info, onChange }: { info: UpdateInfo; onChange: (i
               <option value="ru">{'Русский'}</option>
               <option value="en">English</option>
             </select>
+          </div>
+          <div className="sm:col-span-2">
+            <label htmlFor="upd-mode" className="label">{t('upd.o.mode')}</label>
+            <select id="upd-mode" className="input" value={info.notifyMode ?? 'brief'} onChange={(e) => void save({ notifyMode: e.target.value as 'brief' | 'detailed' | 'all' })}>
+              <option value="brief">{t('upd.o.modeBrief')}</option>
+              <option value="detailed">{t('upd.o.modeDetailed')}</option>
+              <option value="all">{t('upd.o.modeAll')}</option>
+            </select>
+            <p className="mt-1 text-sm font-semibold text-mute">{t('upd.o.modeHint')}</p>
           </div>
           <div>
             <label htmlFor="upd-remind" className="label">{t('upd.o.remind')}</label>

@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="b434c8284f32"
+COREGSM_BUILD="9fe4f45bcb65"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.0.0.42"
+COREGSM_VERSION="1.0.0.43"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -7986,8 +7986,8 @@ export function buildGallery(now = Date.now()): Sample[] {
   out.push({ id: 'poll-result', group: 'community', title: 'Итоги голосования', embed: styled('poll', pollEmbed({ question: 'Нужна новая карта?', closesAt: null, rows: t.rows, total: t.total, isNew: false, site: !!base })) });
   out.push({ id: 'welcome', group: 'community', title: 'Приветствие новичка', content: renderWelcome('', { userId: '123456789012345678', server: brand().name }), embed: {} });
 
-  const n = buildNotice({ kind: 'available', lang: 'ru', from: '1.0.0.20', to: '1.0.0.27', line: 'Доступна новая версия панели.', now, releases: [{ version: '1.0.0.27', date: '26.10.2026', groups: [{ title: 'Новое', titleEn: 'New', items: [{ text: 'Заметки о выпуске в сообщении', textEn: 'Release notes in the message', flags: [] }] }] }] });
-  out.push({ id: 'update', group: 'updates', title: 'Доступно обновление панели', embed: styled('update', { title: n.title, description: n.description, color: n.color, ...(n.fields.length ? { fields: n.fields } : {}), ...(n.footer ? { footer: { text: n.footer } } : {}) }) });
+  const n = buildNotice({ kind: 'available', mode: 'brief', lang: 'ru', links: { to: base ? `${base}/` : 'https://example.com/releases', more: null }, from: '1.0.0.20', to: '1.0.0.27', line: 'Доступна новая версия панели.', now, releases: [{ version: '1.0.0.27', date: '26.10.2026', groups: [{ title: 'Новое', titleEn: 'New', items: [{ text: 'Заметки о выпуске в сообщении', textEn: 'Release notes in the message', flags: [] }] }, { title: '🐛 Исправлено', titleEn: '🐛 Fixed', items: [{ text: 'Мелкая правка', textEn: 'A small fix', flags: [] }, { text: 'Ещё одна правка', textEn: 'Another fix', flags: [] }] }] }] });
+  out.push({ id: 'update', group: 'updates', title: 'Доступно обновление панели', embed: styled('update', { title: n.title, description: n.description, color: n.color, ...(n.fields.length ? { fields: n.fields } : {}), ...(n.footer ? { footer: { text: n.footer } } : {}) }), buttons: (n.actions ?? []).map((a) => a.label) });
   return out;
 }
 
@@ -18567,7 +18567,7 @@ import { log } from '../logger.js';
 import { db, getSetting, setSetting } from '../db.js';
 import { alertSettings, enqueueAlert, isQuietNow } from '../alerts.js';
 import { listBackups } from '../backup.js';
-import { buildNotice, classifyCommit, isNoopJob, parseChangelog, parseNoticeLang, parseRemindDays, shouldRemind, type Notice, parseVersion, jobKind, parseChannel, shouldAnnounce, stageOf, type Channel, type CommitFlag, type CommitKind } from '../updateLogic.js';
+import { buildNotice, classifyCommit, isNoopJob, parseChangelog, parseNoticeLang, parseNoticeMode, parseRemindDays, shouldRemind, type Notice, parseVersion, jobKind, parseChannel, shouldAnnounce, stageOf, type Channel, type CommitFlag, type CommitKind } from '../updateLogic.js';
 
 export const router = express.Router();
 
@@ -18691,6 +18691,7 @@ function updatePayload() {
     skipped: !!remote.build && getSetting('update_skip') === remote.build,
     notify: getSetting('update_notify') !== '0',
     notifyLang: parseNoticeLang(getSetting('update_notify_lang')),
+    notifyMode: parseNoticeMode(getSetting('update_notify_mode')),
     notifyChannel: /^\d{15,25}$/.test(getSetting('update_notify_channel') ?? '') ? (getSetting('update_notify_channel') as string) : '',
     remindDays: parseRemindDays(getSetting('update_remind_days')),
   };
@@ -18762,12 +18763,13 @@ function sendNotice(n: Notice): void {
     ...(n.footer ? { footer: { text: n.footer } } : {}),
     timestamp: new Date().toISOString(),
   };
+  const payload = { content: '', mention: 'none' as const, embed, ...(n.actions?.length ? { actions: n.actions } : {}) };
   try {
     const s = alertSettings();
     // the channel chosen for these notices; without one — the alerts channel (when the alerts are on)
     const own = getSetting('update_notify_channel') ?? '';
-    if (/^\d{15,25}$/.test(own)) enqueueAlert('update', '', { content: '', mention: 'none', embed }, own);
-    else if (s.enabled && s.channelId) enqueueAlert('update', '', { content: '', mention: 'none', embed });
+    if (/^\d{15,25}$/.test(own)) enqueueAlert('update', '', payload, own);
+    else if (s.enabled && s.channelId) enqueueAlert('update', '', payload);
   } catch (e) {
     log.warn('update notice failed:', (e as Error).message);
   }
@@ -18789,7 +18791,7 @@ async function sendUpdateNotice(kind: UpdateNoticeKind, from: string | null, to:
   const web = repoWeb();
   const release = (b: string | null) => (web && b && /^[a-f0-9]{6,64}$/.test(b) ? `${web}/releases/tag/build-${b}` : null);
   const links = { from: release(builds.from), to: release(builds.to), more: web ? `${web}/blob/main/CHANGELOG.md` : null };
-  sendNotice(buildNotice({ kind, lang, from, to, releases, line: line(lang), now: Date.now(), links }));
+  sendNotice(buildNotice({ kind, mode: parseNoticeMode(getSetting('update_notify_mode')), lang, from, to, releases, line: line(lang), now: Date.now(), links }));
 }
 
 function announceVersion(): void {
@@ -18877,6 +18879,7 @@ router.put('/api/update/settings', admin, (req, res) => {
     setSetting('update_notify_channel', b.notifyChannel);
   }
   if (b.notifyLang !== undefined) setSetting('update_notify_lang', parseNoticeLang(String(b.notifyLang)));
+  if (b.notifyMode !== undefined) setSetting('update_notify_mode', parseNoticeMode(String(b.notifyMode)));
   if (b.remindDays !== undefined) setSetting('update_remind_days', String(parseRemindDays(String(b.remindDays))));
   res.json(updatePayload());
 });
@@ -21222,13 +21225,34 @@ export function shouldRemind(o: { notify: boolean; remindDays: number; available
   return o.announcedAt != null && o.now - o.announcedAt >= o.remindDays * 86_400_000;
 }
 
-export interface Notice { title: string; /** the title is a link to the release of the new version */ url?: string; description: string; fields: { name: string; value: string }[]; footer: string; color: number }
+/** how much of the notes a notice carries: «brief» (the new version, only «New» in full, the rest as counters), «detailed» (the new version in full), «all» (every version since the installed one) */
+export type NoticeMode = 'brief' | 'detailed' | 'all';
+export const parseNoticeMode = (v: string | null | undefined): NoticeMode => (v === 'detailed' || v === 'all' ? v : 'brief');
+
+const isNewGroup = (g: NotesGroup) => /(^|[^\p{L}])(новое|new)([^\p{L}]|$)/iu.test(`${g.title} ${g.titleEn ?? ''}`);
+
+/** «🐛 Fixed: 4 · 🔧 Other: 2» — the groups that a brief notice does not list */
+export function groupCounters(releases: NotesRelease[], lang: NoticeLang): string {
+  const out: string[] = [];
+  for (const r of releases) {
+    for (const g of r.groups) {
+      if (isNewGroup(g) || g.items.length === 0) continue;
+      out.push(`${lang === 'en' ? g.titleEn ?? g.title : g.title}: ${g.items.length}`);
+    }
+  }
+  return out.join(' · ');
+}
+
+export interface Notice { actions?: { label: string; url: string }[]; title: string; /** the title is a link to the release of the new version */ url?: string; description: string; fields: { name: string; value: string }[]; footer: string; color: number }
 
 /** the text of a notice: «available» (a new version), «reminder» (nobody installed it) and «done» (the panel was updated) */
-export function buildNotice(o: { kind: 'available' | 'reminder' | 'done'; lang: NoticeLang; from: string | null; to: string | null; releases: NotesRelease[]; line: string; now: number; links?: { from?: string | null; to?: string | null; more?: string | null } }): Notice {
+export function buildNotice(o: { kind: 'available' | 'reminder' | 'done'; mode?: NoticeMode; lang: NoticeLang; from: string | null; to: string | null; releases: NotesRelease[]; line: string; now: number; links?: { from?: string | null; to?: string | null; more?: string | null } }): Notice {
   const en = o.lang === 'en';
   const between = notesBetween(o.releases, o.from, o.to);
   const target = o.releases.find((r) => r.version === o.to);
+  const mode = o.mode ?? 'all';
+  // brief and detailed show the notes of the new version only; the versions in between are a line with a count
+  const shown = mode === 'all' ? between : between.filter((r) => r.version === o.to);
   const age = releaseAgeDays(target?.date, o.now);
   const lk = o.links ?? {};
   const ver = (v: string, url?: string | null) => (url ? `[${v}](${url})` : v);
@@ -21237,13 +21261,18 @@ export function buildNotice(o: { kind: 'available' | 'reminder' | 'done'; lang: 
   const lines: string[] = [...(arrow ? [`**${arrow}**`] : []), o.line];
   if (skipped > 0) lines.push(en ? `Versions in between: ${skipped}` : `Пропущено версий между ними: ${skipped}`);
   lines.push(...noticeWarnings(between, o.lang));
+  if (mode === 'brief') {
+    const c = groupCounters(shown, o.lang);
+    if (c) lines.push(c);
+  }
   if (o.kind !== 'done') lines.push(en ? 'Install: Settings → Updates and backups.' : 'Установить: Настройки → Обновления и копии.');
   const title = o.kind === 'available' ? (en ? 'Panel update available' : 'Доступно обновление панели')
     : o.kind === 'reminder' ? (en ? 'Reminder: panel update is waiting' : 'Напоминание: обновление панели ждёт')
     : (en ? 'Panel updated' : 'Панель обновлена');
   let footer = '';
   if (target?.date) footer = en ? `Released ${target.date}${age != null ? ` · ${daysAgoText(age, 'en')}` : ''}` : `Вышла ${target.date}${age != null ? ` · ${daysAgoText(age, 'ru')}` : ''}`;
-  return { title, ...(lk.to ? { url: lk.to } : {}), description: lines.join('\n'), fields: noticeFields(between, o.lang, undefined, lk.more ?? null), footer, color: o.kind === 'done' ? 0x23a55a : o.kind === 'reminder' ? 0xf0b232 : 0x5865f2 };
+  const whatsNew = lk.to ?? lk.more ?? null;
+  return { title, ...(whatsNew ? { actions: [{ label: en ? "What's new" : 'Что нового', url: whatsNew }] } : {}), ...(lk.to ? { url: lk.to } : {}), description: lines.join('\n'), fields: noticeFields(mode === 'brief' ? shown.map((r) => ({ ...r, groups: r.groups.filter(isNewGroup) })) : shown, o.lang, undefined, lk.more ?? null), footer, color: o.kind === 'done' ? 0x23a55a : o.kind === 'reminder' ? 0xf0b232 : 0x5865f2 };
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
@@ -51343,6 +51372,7 @@ export interface UpdateInfo {
   skipped?: boolean;
   notify?: boolean;
   notifyLang?: 'ru' | 'en';
+  notifyMode?: 'brief' | 'detailed' | 'all';
   /** the Discord channel for the update notices ('' = the alerts channel) */
   notifyChannel?: string;
   /** days before the reminder about a version nobody installed (0 = none) */
@@ -72953,6 +72983,11 @@ const en: Record<keyof typeof ru, string> = {
   'adm.col.channels': 'Discord channels',
   'adm.col.updated': 'Updated',
   'upd.o.lang': 'Message language',
+  'upd.o.mode': 'What the message says',
+  'upd.o.modeBrief': 'Brief: only what is new, the rest as numbers',
+  'upd.o.modeDetailed': 'Detailed: everything about the new version',
+  'upd.o.modeAll': 'Everything since the installed version',
+  'upd.o.modeHint': 'The message always has a «What\'s new» button that opens the release.',
   'upd.o.remind': 'Remind me if not installed',
   'upd.o.remind.off': 'Do not remind',
   'upd.o.remind.n': 'After {n} d',
@@ -75288,6 +75323,11 @@ const ru = {
   'adm.col.channels': 'Каналы Discord',
   'adm.col.updated': 'Обновлён',
   'upd.o.lang': 'Язык сообщений',
+  'upd.o.mode': 'Что писать в сообщении',
+  'upd.o.modeBrief': 'Кратко: только новое, остальное числами',
+  'upd.o.modeDetailed': 'Подробно: всё о новой версии',
+  'upd.o.modeAll': 'Всё с установленной версии',
+  'upd.o.modeHint': 'Под сообщением всегда кнопка «Что нового» со ссылкой на выпуск.',
   'upd.o.remind': 'Напомнить, если не установили',
   'upd.o.remind.off': 'Не напоминать',
   'upd.o.remind.n': 'Через {n} дн.',
@@ -87361,7 +87401,7 @@ export function HistoryCard({ refreshKey }: { refreshKey: unknown }) {
 export function OptionsCard({ info, onChange }: { info: UpdateInfo; onChange: (i: UpdateInfo) => void }) {
   const [error, setError] = useState('');
   const [picking, setPicking] = useState(false);
-  const save = async (body: { channel?: 'release' | 'main'; notify?: boolean; notifyLang?: 'ru' | 'en'; remindDays?: number; notifyChannel?: string }) => {
+  const save = async (body: { channel?: 'release' | 'main'; notify?: boolean; notifyLang?: 'ru' | 'en'; notifyMode?: 'brief' | 'detailed' | 'all'; remindDays?: number; notifyChannel?: string }) => {
     setError('');
     try {
       onChange(await api<UpdateInfo>('/update/settings', 'PUT', body));
@@ -87409,6 +87449,15 @@ export function OptionsCard({ info, onChange }: { info: UpdateInfo; onChange: (i
               <option value="ru">{'Русский'}</option>
               <option value="en">English</option>
             </select>
+          </div>
+          <div className="sm:col-span-2">
+            <label htmlFor="upd-mode" className="label">{t('upd.o.mode')}</label>
+            <select id="upd-mode" className="input" value={info.notifyMode ?? 'brief'} onChange={(e) => void save({ notifyMode: e.target.value as 'brief' | 'detailed' | 'all' })}>
+              <option value="brief">{t('upd.o.modeBrief')}</option>
+              <option value="detailed">{t('upd.o.modeDetailed')}</option>
+              <option value="all">{t('upd.o.modeAll')}</option>
+            </select>
+            <p className="mt-1 text-sm font-semibold text-mute">{t('upd.o.modeHint')}</p>
           </div>
           <div>
             <label htmlFor="upd-remind" className="label">{t('upd.o.remind')}</label>

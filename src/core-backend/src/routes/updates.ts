@@ -9,7 +9,7 @@ import { log } from '../logger.js';
 import { db, getSetting, setSetting } from '../db.js';
 import { alertSettings, enqueueAlert, isQuietNow } from '../alerts.js';
 import { listBackups } from '../backup.js';
-import { buildNotice, classifyCommit, isNoopJob, parseChangelog, parseNoticeLang, parseRemindDays, shouldRemind, type Notice, parseVersion, jobKind, parseChannel, shouldAnnounce, stageOf, type Channel, type CommitFlag, type CommitKind } from '../updateLogic.js';
+import { buildNotice, classifyCommit, isNoopJob, parseChangelog, parseNoticeLang, parseNoticeMode, parseRemindDays, shouldRemind, type Notice, parseVersion, jobKind, parseChannel, shouldAnnounce, stageOf, type Channel, type CommitFlag, type CommitKind } from '../updateLogic.js';
 
 export const router = express.Router();
 
@@ -133,6 +133,7 @@ function updatePayload() {
     skipped: !!remote.build && getSetting('update_skip') === remote.build,
     notify: getSetting('update_notify') !== '0',
     notifyLang: parseNoticeLang(getSetting('update_notify_lang')),
+    notifyMode: parseNoticeMode(getSetting('update_notify_mode')),
     notifyChannel: /^\d{15,25}$/.test(getSetting('update_notify_channel') ?? '') ? (getSetting('update_notify_channel') as string) : '',
     remindDays: parseRemindDays(getSetting('update_remind_days')),
   };
@@ -204,12 +205,13 @@ function sendNotice(n: Notice): void {
     ...(n.footer ? { footer: { text: n.footer } } : {}),
     timestamp: new Date().toISOString(),
   };
+  const payload = { content: '', mention: 'none' as const, embed, ...(n.actions?.length ? { actions: n.actions } : {}) };
   try {
     const s = alertSettings();
     // the channel chosen for these notices; without one — the alerts channel (when the alerts are on)
     const own = getSetting('update_notify_channel') ?? '';
-    if (/^\d{15,25}$/.test(own)) enqueueAlert('update', '', { content: '', mention: 'none', embed }, own);
-    else if (s.enabled && s.channelId) enqueueAlert('update', '', { content: '', mention: 'none', embed });
+    if (/^\d{15,25}$/.test(own)) enqueueAlert('update', '', payload, own);
+    else if (s.enabled && s.channelId) enqueueAlert('update', '', payload);
   } catch (e) {
     log.warn('update notice failed:', (e as Error).message);
   }
@@ -231,7 +233,7 @@ async function sendUpdateNotice(kind: UpdateNoticeKind, from: string | null, to:
   const web = repoWeb();
   const release = (b: string | null) => (web && b && /^[a-f0-9]{6,64}$/.test(b) ? `${web}/releases/tag/build-${b}` : null);
   const links = { from: release(builds.from), to: release(builds.to), more: web ? `${web}/blob/main/CHANGELOG.md` : null };
-  sendNotice(buildNotice({ kind, lang, from, to, releases, line: line(lang), now: Date.now(), links }));
+  sendNotice(buildNotice({ kind, mode: parseNoticeMode(getSetting('update_notify_mode')), lang, from, to, releases, line: line(lang), now: Date.now(), links }));
 }
 
 function announceVersion(): void {
@@ -319,6 +321,7 @@ router.put('/api/update/settings', admin, (req, res) => {
     setSetting('update_notify_channel', b.notifyChannel);
   }
   if (b.notifyLang !== undefined) setSetting('update_notify_lang', parseNoticeLang(String(b.notifyLang)));
+  if (b.notifyMode !== undefined) setSetting('update_notify_mode', parseNoticeMode(String(b.notifyMode)));
   if (b.remindDays !== undefined) setSetting('update_remind_days', String(parseRemindDays(String(b.remindDays))));
   res.json(updatePayload());
 });
