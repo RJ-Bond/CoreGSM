@@ -245,13 +245,34 @@ export function shouldRemind(o: { notify: boolean; remindDays: number; available
   return o.announcedAt != null && o.now - o.announcedAt >= o.remindDays * 86_400_000;
 }
 
-export interface Notice { title: string; /** the title is a link to the release of the new version */ url?: string; description: string; fields: { name: string; value: string }[]; footer: string; color: number }
+/** how much of the notes a notice carries: «brief» (the new version, only «New» in full, the rest as counters), «detailed» (the new version in full), «all» (every version since the installed one) */
+export type NoticeMode = 'brief' | 'detailed' | 'all';
+export const parseNoticeMode = (v: string | null | undefined): NoticeMode => (v === 'detailed' || v === 'all' ? v : 'brief');
+
+const isNewGroup = (g: NotesGroup) => /(^|[^\p{L}])(новое|new)([^\p{L}]|$)/iu.test(`${g.title} ${g.titleEn ?? ''}`);
+
+/** «🐛 Fixed: 4 · 🔧 Other: 2» — the groups that a brief notice does not list */
+export function groupCounters(releases: NotesRelease[], lang: NoticeLang): string {
+  const out: string[] = [];
+  for (const r of releases) {
+    for (const g of r.groups) {
+      if (isNewGroup(g) || g.items.length === 0) continue;
+      out.push(`${lang === 'en' ? g.titleEn ?? g.title : g.title}: ${g.items.length}`);
+    }
+  }
+  return out.join(' · ');
+}
+
+export interface Notice { actions?: { label: string; url: string }[]; title: string; /** the title is a link to the release of the new version */ url?: string; description: string; fields: { name: string; value: string }[]; footer: string; color: number }
 
 /** the text of a notice: «available» (a new version), «reminder» (nobody installed it) and «done» (the panel was updated) */
-export function buildNotice(o: { kind: 'available' | 'reminder' | 'done'; lang: NoticeLang; from: string | null; to: string | null; releases: NotesRelease[]; line: string; now: number; links?: { from?: string | null; to?: string | null; more?: string | null } }): Notice {
+export function buildNotice(o: { kind: 'available' | 'reminder' | 'done'; mode?: NoticeMode; lang: NoticeLang; from: string | null; to: string | null; releases: NotesRelease[]; line: string; now: number; links?: { from?: string | null; to?: string | null; more?: string | null } }): Notice {
   const en = o.lang === 'en';
   const between = notesBetween(o.releases, o.from, o.to);
   const target = o.releases.find((r) => r.version === o.to);
+  const mode = o.mode ?? 'all';
+  // brief and detailed show the notes of the new version only; the versions in between are a line with a count
+  const shown = mode === 'all' ? between : between.filter((r) => r.version === o.to);
   const age = releaseAgeDays(target?.date, o.now);
   const lk = o.links ?? {};
   const ver = (v: string, url?: string | null) => (url ? `[${v}](${url})` : v);
@@ -260,11 +281,16 @@ export function buildNotice(o: { kind: 'available' | 'reminder' | 'done'; lang: 
   const lines: string[] = [...(arrow ? [`**${arrow}**`] : []), o.line];
   if (skipped > 0) lines.push(en ? `Versions in between: ${skipped}` : `Пропущено версий между ними: ${skipped}`);
   lines.push(...noticeWarnings(between, o.lang));
+  if (mode === 'brief') {
+    const c = groupCounters(shown, o.lang);
+    if (c) lines.push(c);
+  }
   if (o.kind !== 'done') lines.push(en ? 'Install: Settings → Updates and backups.' : 'Установить: Настройки → Обновления и копии.');
   const title = o.kind === 'available' ? (en ? 'Panel update available' : 'Доступно обновление панели')
     : o.kind === 'reminder' ? (en ? 'Reminder: panel update is waiting' : 'Напоминание: обновление панели ждёт')
     : (en ? 'Panel updated' : 'Панель обновлена');
   let footer = '';
   if (target?.date) footer = en ? `Released ${target.date}${age != null ? ` · ${daysAgoText(age, 'en')}` : ''}` : `Вышла ${target.date}${age != null ? ` · ${daysAgoText(age, 'ru')}` : ''}`;
-  return { title, ...(lk.to ? { url: lk.to } : {}), description: lines.join('\n'), fields: noticeFields(between, o.lang, undefined, lk.more ?? null), footer, color: o.kind === 'done' ? 0x23a55a : o.kind === 'reminder' ? 0xf0b232 : 0x5865f2 };
+  const whatsNew = lk.to ?? lk.more ?? null;
+  return { title, ...(whatsNew ? { actions: [{ label: en ? "What's new" : 'Что нового', url: whatsNew }] } : {}), ...(lk.to ? { url: lk.to } : {}), description: lines.join('\n'), fields: noticeFields(mode === 'brief' ? shown.map((r) => ({ ...r, groups: r.groups.filter(isNewGroup) })) : shown, o.lang, undefined, lk.more ?? null), footer, color: o.kind === 'done' ? 0x23a55a : o.kind === 'reminder' ? 0xf0b232 : 0x5865f2 };
 }

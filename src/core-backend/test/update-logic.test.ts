@@ -65,7 +65,7 @@ describe('announcements and channel', () => {
   });
 });
 
-import { buildNotice, cmpVersion, daysAgoText, noticeFields, noticeWarnings, notesBetween, notesText, parseChangelog, parseNoticeLang, parseRemindDays, parseVersion, releaseAgeDays, shouldRemind } from '../src/updateLogic.js';
+import { buildNotice, cmpVersion, daysAgoText, noticeFields, noticeWarnings, notesBetween, notesText, parseChangelog, parseNoticeLang, parseNoticeMode, parseRemindDays, parseVersion, releaseAgeDays, shouldRemind } from '../src/updateLogic.js';
 
 describe('readable versions', () => {
   it('compares number by number, not as text', () => {
@@ -215,5 +215,32 @@ describe('update notices', () => {
     const plain = buildNotice({ kind: 'done', lang: 'ru', from: '1.0.0.3', to: '1.0.0.20', releases: many, line: 'ok', now });
     assert.equal(plain.url, undefined);
     assert.doesNotMatch(plain.description, /\]\(/);
+  });
+  it('notice modes: brief lists only «New» of the new version and counts the rest, a button opens the release', () => {
+    const now = Date.UTC(2026, 9, 28, 12);
+    const newer = { version: '1.0.0.20', date: '26.10.2026', groups: [
+      { title: '✨ Новое', titleEn: '✨ New', items: [item('новая штука')] },
+      { title: '🐛 Исправлено', titleEn: '🐛 Fixed', items: [item('правка 1'), item('правка 2'), item('правка 3')] },
+      { title: '🔧 Прочее', titleEn: '🔧 Other', items: [item('мелочь')] },
+    ] };
+    const older = rel('1.0.0.9', '25.10.2026', [item('старое')]);
+    const links = { to: 'https://gh/r/build-bbb', more: 'https://gh/CHANGELOG.md' };
+    const base = { kind: 'done' as const, lang: 'ru' as const, from: '1.0.0.3', to: '1.0.0.20', releases: [newer, older], line: 'ok', now, links };
+    const brief = buildNotice({ ...base, mode: 'brief' });
+    assert.equal(brief.fields.length, 1);
+    assert.match(brief.fields[0]!.value, /новая штука/);
+    assert.match(brief.description, /🐛 Исправлено: 3 · 🔧 Прочее: 1/);
+    assert.match(brief.description, /Пропущено версий между ними: 1/);
+    assert.doesNotMatch(JSON.stringify(brief.fields), /старое|правка/);
+    assert.deepEqual(brief.actions, [{ label: 'Что нового', url: 'https://gh/r/build-bbb' }]);
+    const detailed = buildNotice({ ...base, mode: 'detailed' });
+    assert.equal(detailed.fields.length, 3);
+    assert.doesNotMatch(JSON.stringify(detailed.fields), /старое/);
+    const everything = buildNotice({ ...base, mode: 'all' });
+    assert.match(JSON.stringify(everything.fields), /старое/);
+    assert.equal(buildNotice({ ...base, mode: 'brief', links: {}, lang: 'en' }).actions, undefined);
+    assert.equal(parseNoticeMode(undefined), 'brief');
+    assert.equal(parseNoticeMode('all'), 'all');
+    assert.equal(parseNoticeMode('x'), 'brief');
   });
 });
