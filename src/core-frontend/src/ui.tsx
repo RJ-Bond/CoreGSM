@@ -27,6 +27,7 @@ export { Spark, MiniSpark, smoothPath, smoothValues, SmoothArea, FleetBar, useSp
 export { toast, dismissToast, undoable, Toaster } from './ui/toast';
 export type { ToastAction, ToastOptions } from './ui/toast';
 export { errText, fail, useAction } from './ui/action';
+export { LineChart } from './ui/LineChart';
 export { AuthShell, AuthBrand, AuthCard, useShake, Spinner, FieldError, PasswordField, passwordScore, PasswordStrength, UserAvatar, DiscordButton, DiscordBadge, OrDivider } from './ui/authParts';
 export { AdminPage, Section, Strip, SaveBadge, TextField } from './ui/admin';
 export { noAutofill } from './ui/noAutofill';
