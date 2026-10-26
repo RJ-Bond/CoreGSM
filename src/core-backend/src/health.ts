@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import { z } from 'zod';
 import { DATA_DIR, db, getSetting, setSetting } from './db.js';
-import { failThreshold, lastPollStats, pollConcurrency } from './gsm.js';
+import { downRule, failThreshold, lastPollStats, pollConcurrency } from './gsm.js';
 import { log } from './logger.js';
 
 const DB_PATH = process.env.DB_PATH ?? './data/coregsm.db';
@@ -210,15 +210,37 @@ export function currentFlags(now = Date.now()): Flag[] {
 export function registerHealth({ app, admin, bot }: { app: Express; admin: RequestHandler; bot: () => BotInfo }): void {
   getBot = bot;
 
-  const pollPayload = () => ({ failThreshold: failThreshold(), concurrency: pollConcurrency(), last: lastPollStats() });
+  const ruleSetting = (k: string) => {
+    const n = Number(getSetting(k));
+    return Number.isInteger(n) && n > 0 ? n : null;
+  };
+  const pollPayload = () => ({
+    failThreshold: failThreshold(),
+    concurrency: pollConcurrency(),
+    // «N of M»: null = not set (the consecutive-failure threshold decides); rule = what is really in force
+    failN: ruleSetting('poll_fail_n'),
+    failM: ruleSetting('poll_fail_m'),
+    probeVeto: getSetting('poll_probe_veto') === '1',
+    rule: (({ n, m, probeVeto, custom }) => ({ n, m, probeVeto, custom }))(downRule()),
+    last: lastPollStats(),
+  });
   app.get('/api/settings/poll', admin, (_req, res) => res.json(pollPayload()));
   app.put('/api/settings/poll', admin, (req, res) => {
     const b = z
-      .object({ failThreshold: z.number().int().min(1).max(5).optional(), concurrency: z.number().int().min(1).max(32).optional() })
+      .object({
+        failThreshold: z.number().int().min(1).max(5).optional(),
+        concurrency: z.number().int().min(1).max(32).optional(),
+        failN: z.number().int().min(1).max(20).nullable().optional(),
+        failM: z.number().int().min(1).max(20).nullable().optional(),
+        probeVeto: z.boolean().optional(),
+      })
       .safeParse(req.body);
-    if (!b.success) return res.status(400).json({ error: 'Подтверждение недоступности: от 1 до 5 опросов, параллельность: от 1 до 32' });
+    if (!b.success) return res.status(400).json({ error: 'Подтверждение недоступности: от 1 до 5 опросов, параллельность: от 1 до 32, правило «N из M»: числа от 1 до 20' });
     if (b.data.failThreshold !== undefined) setSetting('poll_fail_threshold', String(b.data.failThreshold));
     if (b.data.concurrency !== undefined) setSetting('poll_concurrency', String(b.data.concurrency));
+    if (b.data.failN !== undefined) setSetting('poll_fail_n', b.data.failN === null ? '' : String(b.data.failN));
+    if (b.data.failM !== undefined) setSetting('poll_fail_m', b.data.failM === null ? '' : String(b.data.failM));
+    if (b.data.probeVeto !== undefined) setSetting('poll_probe_veto', b.data.probeVeto ? '1' : '0');
     res.json(pollPayload());
   });
   app.get('/api/system/health-history', admin, (req, res) => {

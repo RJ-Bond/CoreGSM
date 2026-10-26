@@ -130,6 +130,28 @@ CREATE TABLE IF NOT EXISTS smart_state (
     // the load of the processor (1-minute load average per core, in percent); NULL = not measured (older samples, Windows)
     up: (db) => addColumn(db, 'health_samples', 'load_pct', 'REAL'),
   },
+  {
+    version: 12,
+    name: 'alert_channels',
+    // outgoing webhooks and e-mail for alerts; the signing secret is stored encrypted (secrets.ts)
+    up: (db) =>
+      db.exec(`
+CREATE TABLE IF NOT EXISTS alert_channels (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind TEXT NOT NULL,
+  name TEXT NOT NULL,
+  url TEXT NOT NULL DEFAULT '',
+  secret TEXT NOT NULL DEFAULT '',
+  recipients TEXT NOT NULL DEFAULT '[]',
+  events TEXT NOT NULL DEFAULT '[]',
+  enabled INTEGER NOT NULL DEFAULT 1,
+  allow_private INTEGER NOT NULL DEFAULT 0,
+  last_status TEXT,
+  last_error TEXT,
+  last_at INTEGER,
+  created_at INTEGER NOT NULL
+);`),
+  },
 ];
 
 export const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;

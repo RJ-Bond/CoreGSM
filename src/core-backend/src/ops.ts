@@ -78,7 +78,7 @@ const RULES: Rule[] = [
   { m: 'POST', re: /^\/api\/maintenance$/, label: 'Создано окно обслуживания', detail: (r) => s(r.body?.name) },
   { m: 'PUT', re: /^\/api\/maintenance\/(\d+)$/, label: 'Изменено окно обслуживания', pre: (id) => `#${id}`, detail: (r, p) => `${p ?? ''} ${s(r.body?.name)}`.trim() },
   { m: 'DELETE', re: /^\/api\/maintenance\/(\d+)$/, label: 'Удалено окно обслуживания', pre: (id) => `#${id}` },
-  { m: 'PUT', re: /^\/api\/settings\/poll$/, label: 'Изменены настройки опроса серверов', detail: (r) => [r.body?.failThreshold !== undefined ? `подтверждение: ${Number(r.body.failThreshold)}` : '', r.body?.concurrency !== undefined ? `параллельно: ${Number(r.body.concurrency)}` : ''].filter(Boolean).join(', ') },
+  { m: 'PUT', re: /^\/api\/settings\/poll$/, label: 'Изменены настройки опроса серверов', detail: (r) => [r.body?.failThreshold !== undefined ? `подтверждение: ${Number(r.body.failThreshold)}` : '', r.body?.concurrency !== undefined ? `параллельно: ${Number(r.body.concurrency)}` : '', r.body?.failN !== undefined || r.body?.failM !== undefined ? `правило: ${r.body.failN ?? '—'} из ${r.body.failM ?? '—'}` : '', r.body?.probeVeto !== undefined ? `слово проб: ${r.body.probeVeto ? 'да' : 'нет'}` : ''].filter(Boolean).join(', ') },
   { m: 'DELETE', re: /^\/api\/backups\/([^/]+)$/, label: 'Удалена резервная копия', pre: (id) => s(id, 80) },
   { m: 'POST', re: /^\/api\/backups\/([^/]+)\/restore$/, label: 'Восстановлена копия из архива', pre: (id) => s(id, 80) },
   { m: 'POST', re: /^\/api\/auth\/login$/, label: 'Вход', anon: true },
@@ -88,6 +88,10 @@ const RULES: Rule[] = [
   { m: 'POST', re: /^\/api\/sessions\/revoke-others$/, label: 'Завершены остальные сеансы' },
   { m: 'PUT', re: /^\/api\/alerts$/, label: 'Изменены оповещения о недоступности серверов' },
   { m: 'POST', re: /^\/api\/alerts\/test$/, label: 'Тестовое оповещение' },
+  { m: 'POST', re: /^\/api\/alert-channels$/, label: 'Добавлен канал оповещений', detail: (r) => `${r.body?.kind === 'email' ? 'почта' : 'вебхук'}: ${s(r.body?.name, 40)}` },
+  { m: 'PUT', re: /^\/api\/alert-channels\/(\d+)$/, label: 'Изменён канал оповещений', pre: (id) => `#${id}`, detail: (r, p) => `${p ?? ''} ${s(r.body?.name, 40)}`.trim() },
+  { m: 'DELETE', re: /^\/api\/alert-channels\/(\d+)$/, label: 'Удалён канал оповещений', pre: (id) => `#${id}` },
+  { m: 'POST', re: /^\/api\/alert-channels\/(\d+)\/test$/, label: 'Тест канала оповещений', pre: (id) => `#${id}` },
 ];
 
 /** records every successful change made through the panel; must be installed before the routes */

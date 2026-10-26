@@ -14,7 +14,7 @@ import type { Express, RequestHandler } from 'express';
 import { z } from 'zod';
 import { db } from './db.js';
 
-export type DeliveryKind = 'news' | 'alert' | 'dm' | 'status';
+export type DeliveryKind = 'news' | 'alert' | 'dm' | 'status' | 'webhook' | 'email';
 export type DeliveryStatus = 'pending' | 'sending' | 'sent' | 'error' | 'dead';
 
 export const BACKOFF_MS = [30_000, 60_000, 120_000, 300_000, 900_000] as const;
@@ -199,7 +199,7 @@ function summary(r: Row): string {
 
 export function registerDeliveries(deps: { app: Express; admin: RequestHandler; internal: RequestHandler }): void {
   const { app, admin, internal } = deps;
-  const KINDS = ['news', 'alert', 'dm', 'status'] as const;
+  const KINDS = ['news', 'alert', 'dm', 'status', 'webhook', 'email'] as const;
   const STATUSES = ['pending', 'sending', 'sent', 'error', 'dead'] as const;
 
   app.get('/api/deliveries', admin, (req, res) => {
