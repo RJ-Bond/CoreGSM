@@ -17,12 +17,16 @@ interface language; the GitHub release text is built from the section of the ver
 ## Не выпущено | Unreleased
 
 ### ✨ Новое | New
+- 📢 Канал для сообщений об обновлении панели выбирается отдельно в «Настройки → Обновления» (по умолчанию — канал оповещений) | The channel for the panel update notices is chosen separately in Settings → Updates (the alerts channel by default)
 - 📣 Сообщения об обновлении в Discord стали подробнее: заголовок «версия → версия», сколько версий пропущено, список изменений по группам, предупреждения о миграции базы и новых настройках, дата выхода и «сколько дней назад» | Discord update notices are richer: a «version → version» title, how many versions were skipped, the changes by group, warnings about a database migration or new settings, the release date and its age
 - 🌐 Язык сообщений об обновлении в Discord (русский или английский) выбирается в «Настройки → Обновления»; сообщения идут только в канал оповещений, без кнопок | The language of the Discord update notices (Russian or English) is chosen in Settings → Updates; the notices go to the alerts channel only, without buttons
 - ⏰ Одно напоминание, если обновление не установили за 3–30 дней (по умолчанию 7, можно выключить); объявление о новой версии не приходит в тихие часы, а ждёт их конца; после обновления сообщение говорит, возможен ли откат | One reminder when an update is not installed within 3–30 days (7 by default, can be turned off); the new-version notice waits for the end of quiet hours; after an update the message says whether a rollback is possible
 - 🖥️ Админка шире: на больших экранах контент занимает до 1600 px, а меню можно свернуть в узкую полосу иконок (запоминается в браузере) | The admin area is wider: content takes up to 1600 px on large screens, and the menu can shrink to a narrow icon strip (remembered in the browser)
 - 📋 Таблица серверов: колонки «Карта», «Версия», «Каналы Discord» и «Обновлён», меню «Колонки» для выбора нужных (запоминается) | Servers table: Map, Version, Discord channels and Updated columns, and a «Columns» menu to pick the ones you need (remembered)
 - 🖼️ Итоги недели: предпросмотр картинки справа от настроек и остаётся на виду при прокрутке; страница «Карточки» на очень широких экранах показывает три колонки | Weekly digest: the picture preview sits next to the settings and stays in view while scrolling; the Cards page shows three columns on very wide screens
+
+### 🐛 Исправлено | Fixed
+- ⚠️ Раздел «Оповещения» не открывался («Не удалось загрузить страницу»), если в истории было сообщение об обновлении панели; такие сообщения теперь показываются с меткой «Обновление панели», а неизвестный тип не ломает страницу | The Alerts section did not open («Could not load the page») when the history held a panel update notice; such messages now show with a «Panel update» label, and an unknown kind no longer breaks the page
 
 ## 1.0.0.20 · 26.10.2026
 
