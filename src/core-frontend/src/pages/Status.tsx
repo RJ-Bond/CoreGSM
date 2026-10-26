@@ -2,7 +2,7 @@ import { useAuth } from '../auth';
 import { getPrefs, t, useI18n } from '../i18n';
 import { Icon } from '../icons';
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react';
-import { api, type StatusDay, type StatusIncident, type StatusInfo, type StatusServer } from '../api';
+import { api, type StatusDay, type StatusIncident, type StatusInfo, type StatusNote, type StatusServer } from '../api';
 import { Empty, ErrorLine, GameAvatar, LoadError, PageHead, SmoothArea, StatusPill, ago, fmtDateTime, fmtTime, usePoll } from '../ui';
 import '../styles/status.css';
 
@@ -91,7 +91,7 @@ function UptimeBar({ s }: { s: StatusServer }) {
   const [active, setActive] = useState<number | null>(null);
   const ref = useRef<HTMLDivElement>(null);
   const n = s.days.length;
-  const summary = s.uptime30 == null ? t('st.up.none') : t('st.up.sum', { p: fmtPct(s.uptime30) });
+  const summary = s.uptime30 == null ? t('st.up.none', { d: n }) : t('st.up.sum', { p: fmtPct(s.uptime30), d: n });
   const at = (e: PointerEvent) => {
     const r = ref.current?.getBoundingClientRect();
     if (!r || r.width === 0) return null;
@@ -205,7 +205,7 @@ function ServerRow({ s, index }: { s: StatusServer; index: number }) {
         <div className="st-server-side">
           <div className="st-up">
             <div className={`st-up-v is-${upTone}`}>{s.uptime30 == null ? '–' : fmtPct(s.uptime30)}</div>
-            <div className="st-up-k">{incidents30 ? t('st.inc30', { n: incidents30 }) : t('st.noInc30')}</div>
+            <div className="st-up-k">{incidents30 ? t('st.inc30', { n: incidents30, d: s.days.length }) : t('st.noInc30', { d: s.days.length })}</div>
           </div>
           {s.avgPing != null && <div className="st-ping-inline">{t('st.ping', { n: s.avgPing })}</div>}
           <Latency s={s} />
@@ -232,7 +232,7 @@ function Banner({ data, fetchedAt }: { data: StatusInfo; fetchedAt: number }) {
     : up === 0
       ? ['bad', t('st.hero.bad'), t('st.hero.badText')]
       : ['warn', t('st.hero.some', { n: total - up }), t('st.hero.someText')];
-  const last = ongoing > 0 ? t('st.last.now') : lastBad ? t('st.last.ago', { when: ago(lastBad.start) }) : t('st.last.none');
+  const last = ongoing > 0 ? t('st.last.now') : lastBad ? t('st.last.ago', { when: ago(lastBad.start) }) : t('st.last.none', { d: data.range ?? 30 });
   return (
     <section className={`st-banner is-${tone}`} role="status">
       <span className="st-banner-ico" aria-hidden>{tone === 'ok' ? <IconCheck /> : tone === 'warn' ? <IconWarn /> : <IconCross />}</span>
@@ -252,7 +252,7 @@ function Banner({ data, fetchedAt }: { data: StatusInfo; fetchedAt: number }) {
       <dl className="st-banner-stats">
         <div><dt><IconServer />{t('st.stat.online')}</dt><dd>{t('st.stat.of', { a: upN, b: total })}</dd></div>
         <div><dt><IconUsers />{t('st.stat.players')}</dt><dd>{playersN}</dd></div>
-        <div><dt><IconAct />{t('st.stat.uptime')}</dt><dd>{avg == null ? '–' : fmtPct(avgN)}</dd></div>
+        <div><dt><IconAct />{t('st.stat.uptime', { d: data.range ?? 30 })}</dt><dd>{avg == null ? '–' : fmtPct(avgN)}</dd></div>
         {ongoing > 0 && <div className="is-alert"><dt><IconAlert />{t('st.stat.now')}</dt><dd>{ongoing}</dd></div>}
       </dl>
     </section>
@@ -296,10 +296,35 @@ function IncidentItem({ i }: { i: StatusIncident }) {
   );
 }
 
+/** notes of the administrators: «Идут работы», «Причина найдена», «Починено»; closed ones are calm and stay for two weeks */
+function NotesBoard({ notes }: { notes: StatusNote[] }) {
+  if (notes.length === 0) return null;
+  return (
+    <section className="space-y-2" aria-label={t('st.notes')}>
+      {notes.map((n) => {
+        const done = n.resolvedAt != null;
+        const tone = done ? 'ok' : n.level;
+        return (
+          <article key={n.id} className={`st-note is-${tone}`} role={done || n.level === 'info' ? undefined : 'alert'}>
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+              <h2 className="font-extrabold">{n.title}</h2>
+              <span className={`st-inc-badge is-${done ? 'past' : n.level === 'bad' ? 'live' : n.level === 'warn' ? 'planned' : 'past'}`}>{done ? t('st.note.done') : t(`st.note.${n.level}` as const)}</span>
+              {n.serverName && <span className="text-sm font-bold text-mute">{n.serverName}</span>}
+              <time className="ml-auto text-xs font-bold text-mute" dateTime={new Date(n.createdAt).toISOString()} title={fmtDateTime(n.createdAt)}>{ago(n.createdAt)}</time>
+            </div>
+            {n.body && <p className="mt-1 whitespace-pre-line text-sm font-semibold">{n.body}</p>}
+            {done && <p className="mt-1 text-xs font-bold text-mute">{t('st.note.closed', { when: ago(n.resolvedAt as number) })}</p>}
+          </article>
+        );
+      })}
+    </section>
+  );
+}
+
 const PAGE = 10;
 
 /** incidents of the 30 days grouped by day, newest first; ten at first, then «Показать ещё» */
-function Incidents({ list }: { list: StatusIncident[] }) {
+function Incidents({ list, days }: { list: StatusIncident[]; days: number }) {
   const [shown, setShown] = useState(PAGE);
   const groups = useMemo(() => {
     const m = new Map<string, StatusIncident[]>();
@@ -316,7 +341,7 @@ function Incidents({ list }: { list: StatusIncident[] }) {
         <div className="st-calm">
           <span aria-hidden>✨</span>
           <div>
-            <p className="font-extrabold">{t('st.hist.none')}</p>
+            <p className="font-extrabold">{t('st.hist.none', { d: days })}</p>
             <p className="text-sm font-semibold text-mute">{t('st.hist.noneText')}</p>
           </div>
         </div>
@@ -349,15 +374,21 @@ export default function StatusPage() {
   const [error, setError] = useState('');
   const [fetchedAt, setFetchedAt] = useState(() => Date.now());
 
+  // 30 days or three months of bars: the choice is remembered in this browser
+  const [range, setRange] = useState<30 | 90>(() => { try { return localStorage.getItem('coregsm_status_range') === '90' ? 90 : 30; } catch { return 30; } });
+  const rangeRef = useRef(range);
+  rangeRef.current = range;
+  const pickRange = (r: 30 | 90) => { setRange(r); try { localStorage.setItem('coregsm_status_range', String(r)); } catch { /* not remembered */ } };
+  useEffect(() => { void load(); }, [range]);
   const load = () =>
-    api<StatusInfo>('/status')
+    api<StatusInfo>(`/status${rangeRef.current === 90 ? '?days=90' : ''}`)
       .then((r) => { setData(r); setFetchedAt(Date.now()); setError(''); })
       .catch((e: Error) => setError(e.message));
   usePoll(load, POLL_MS);
   const month = data ? (data.incidents ?? []).filter((i) => !i.planned).length : 0;
   const subtitle = data && data.servers.length > 0
-    ? t('st.sub', { servers: t('st.servers', { n: data.servers.length }), outages: month ? t('st.inc30', { n: month }) : t('st.noInc30') })
-    : t('st.sub.none');
+    ? t('st.sub', { servers: t('st.servers', { n: data.servers.length }), outages: month ? t('st.inc30', { n: month, d: range }) : t('st.noInc30', { d: range }) })
+    : t('st.sub.none', { d: range });
 
   return (
     <div className="space-y-5">
@@ -378,16 +409,22 @@ export default function StatusPage() {
 
       {data && data.servers.length > 0 && (
         <div className="fade-in space-y-5">
+          <NotesBoard notes={data.notes ?? []} />
           <Banner data={data} fetchedAt={fetchedAt} />
           <ul className="space-y-3">
             {data.servers.map((s, i) => <ServerRow key={s.id} s={s} index={i} />)}
           </ul>
+          <div className="seg w-fit" role="group" aria-label={t('st.range')}>
+            {([30, 90] as const).map((r) => (
+              <button key={r} type="button" className="seg-item" aria-pressed={range === r} onClick={() => pickRange(r)}>{t('st.range.n', { d: r })}</button>
+            ))}
+          </div>
           <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm font-semibold text-mute">
             {LEGEND.map((c) => (
               <span key={c} className="inline-flex items-center gap-1.5"><span className={`st-day st-legend is-${c}`} aria-hidden />{t(`st.leg.${c}` as const)}</span>
             ))}
           </div>
-          <Incidents list={data.incidents ?? []} />
+          <Incidents list={data.incidents ?? []} days={data.range ?? range} />
         </div>
       )}
     </div>
