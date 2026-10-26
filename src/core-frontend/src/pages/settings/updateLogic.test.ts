@@ -48,6 +48,11 @@ describe('release notes', () => {
   it('lists the flags of the newer releases without the markers', () => {
     expect(upcomingFlags(rels, '1.0.0.6')).toEqual([{ flag: 'migration', text: 'Таблица' }, { flag: 'breaking', text: 'Старый API убран' }]);
   });
+  it('warns in the language of the interface and drops the markers', () => {
+    const r: UpdateNotesRelease[] = [{ version: '1.0.0.8', date: null, groups: [{ title: 'x', items: [{ text: '⚠️ Старый API убран', textEn: '⚠️ The old API is gone', flags: ['breaking'] }] }] }];
+    expect(upcomingFlags(r, '1.0.0.6', 'en')).toEqual([{ flag: 'breaking', text: 'The old API is gone' }]);
+    expect(upcomingFlags(r, '1.0.0.6')).toEqual([{ flag: 'breaking', text: 'Старый API убран' }]);
+  });
   it('groups commits without merges and marks the ones after the installation', () => {
     const items: ChangelogItem[] = [
       { sha: '1', title: 'feat: a', date: 2000, url: '', kind: 'feat' },
