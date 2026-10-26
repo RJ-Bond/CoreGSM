@@ -14,7 +14,7 @@ interface language; the GitHub release text is built from the section of the ver
 - Пометки в конце русской части: `[migration]` — меняется база данных, `[env]` — нужны новые настройки сервера, `⚠` в начале — несовместимое изменение.
 - Новые пункты идут в раздел «Не выпущено». Релиз выпускается только по команде владельца: тогда раздел переименовывается в `## <версия> · <дата>` (версия из `version.txt`).
 
-## Не выпущено | Unreleased
+## 1.0.0.39 · 26.10.2026
 
 ### ✨ Новое | New
 - 🖥️ Команда `/servers`: список серверов с кнопками, нажатие открывает карточку сервера, «К списку» возвращает назад; ответ видит только спросивший | The `/servers` command: a list of servers with buttons, a click opens the server card and «Back» returns to the list; only the person who asked sees the answer
