@@ -86,7 +86,7 @@ export function BotPill() {
   return (
     <a href="/admin/discord" className="btn-soft hdr-search" title={t('hdr.bot.tip', { s: label })} aria-label={t('hdr.bot.tip', { s: label })}>
       <span className={`inline-block size-2.5 rounded-full ${color}`} aria-hidden />
-      <span className="hidden xl:inline">{label}</span>
+      <span className="hidden 2xl:inline">{label}</span>
     </a>
   );
 }
@@ -170,7 +170,7 @@ export function ProfileMenu({ me, isStaff, logout, active }: { me: Me; isStaff: 
         onClick={() => setOpen((v) => !v)}
       >
         <UserAvatar name={me.username} url={me.avatarUrl} size={32} tone="grad" className="rounded-full!" />
-        <span className="hidden truncate sm:inline">{me.username}</span>
+        <span className="hidden truncate 2xl:inline">{me.username}</span>
       </button>
       {open && (
         <div className="pm-menu panel panel-raised" role="menu" onClick={() => setOpen(false)}>

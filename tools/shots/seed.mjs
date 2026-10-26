@@ -24,6 +24,10 @@ const DEFS = [
   ['Terraria Hardcore', 'terraria', 7777, 16, 0, 0, '', 0],
 ];
 
+// SHOTS_HERO=1 makes the server with that id the busiest one, so that the big card of the servers page shows its cover
+const HERO = Number(process.env.SHOTS_HERO || 0);
+if (HERO && DEFS[HERO - 1]) { DEFS[HERO - 1][3] = Math.max(DEFS[HERO - 1][3], 80); DEFS[HERO - 1][4] = 64; }
+
 export async function seed({ base, dbPath }) {
   const H = { 'content-type': 'application/json', 'x-coregsm': '1' };
   const call = async (method, url, body, token, extra = {}) => {

@@ -425,7 +425,7 @@ export default function App() {
             <Wordmark className="hdr-word min-w-0 truncate" />
           </a>
           {/* desktop navigation; on phones the same sections live in the bottom bar */}
-          <nav className="seg ml-2 hidden md:inline-flex" aria-label={t('nav.sections')}>
+          <nav className="seg hdr-nav ml-2 hidden md:inline-flex" aria-label={t('nav.sections')}>
             {visible.map((p) => (
               <a key={p.id} href={`/${p.id}`} aria-current={page === p.id ? 'page' : undefined} className="seg-item py-1.5!">
                 {t(p.label)}
@@ -444,8 +444,8 @@ export default function App() {
               title={t('hdr.searchTitle')}
             >
               <IconSearch />
-              <span className="hidden lg:inline">{t('hdr.search')}</span>
-              <kbd className="hidden rounded-md bg-card px-1.5 py-0.5 font-sans text-xs font-bold text-mute lg:inline">Ctrl K</kbd>
+              <span className="hidden 2xl:inline">{t('hdr.search')}</span>
+              <kbd className="hidden rounded-md bg-card px-1.5 py-0.5 font-sans text-xs font-bold text-mute 2xl:inline">Ctrl K</kbd>
             </button>
             {isAdmin && <BotPill />}
             {isAdmin && <AttentionBell />}

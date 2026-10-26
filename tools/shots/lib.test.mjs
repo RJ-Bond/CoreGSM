@@ -20,6 +20,7 @@ test('buildMatrix: groups, prefixes, viewports and themes', () => {
 test('buildMatrix: a typo is an error, not an empty run', () => {
   assert.throws(() => buildMatrix({ pages: 'sevrers' }), /Unknown page/);
   assert.throws(() => buildMatrix({ viewports: 'watch' }), /Unknown viewport/);
+  assert.equal(buildMatrix({ pages: 'servers', viewports: 'w900' })[0].viewport, 'w900');
   assert.throws(() => buildMatrix({ themes: 'blue' }), /Unknown theme/);
 });
 

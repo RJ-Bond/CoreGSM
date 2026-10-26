@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="18237f379ae9"
+COREGSM_BUILD="f5b3a19129e6"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.0.0.46"
+COREGSM_VERSION="1.0.0.47"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -102255,7 +102255,7 @@ export default function App() {
             <Wordmark className="hdr-word min-w-0 truncate" />
           </a>
           {/* desktop navigation; on phones the same sections live in the bottom bar */}
-          <nav className="seg ml-2 hidden md:inline-flex" aria-label={t('nav.sections')}>
+          <nav className="seg hdr-nav ml-2 hidden md:inline-flex" aria-label={t('nav.sections')}>
             {visible.map((p) => (
               <a key={p.id} href={`/${p.id}`} aria-current={page === p.id ? 'page' : undefined} className="seg-item py-1.5!">
                 {t(p.label)}
@@ -102274,8 +102274,8 @@ export default function App() {
               title={t('hdr.searchTitle')}
             >
               <IconSearch />
-              <span className="hidden lg:inline">{t('hdr.search')}</span>
-              <kbd className="hidden rounded-md bg-card px-1.5 py-0.5 font-sans text-xs font-bold text-mute lg:inline">Ctrl K</kbd>
+              <span className="hidden 2xl:inline">{t('hdr.search')}</span>
+              <kbd className="hidden rounded-md bg-card px-1.5 py-0.5 font-sans text-xs font-bold text-mute 2xl:inline">Ctrl K</kbd>
             </button>
             {isAdmin && <BotPill />}
             {isAdmin && <AttentionBell />}
@@ -107096,7 +107096,7 @@ export function BotPill() {
   return (
     <a href="/admin/discord" className="btn-soft hdr-search" title={t('hdr.bot.tip', { s: label })} aria-label={t('hdr.bot.tip', { s: label })}>
       <span className={`inline-block size-2.5 rounded-full ${color}`} aria-hidden />
-      <span className="hidden xl:inline">{label}</span>
+      <span className="hidden 2xl:inline">{label}</span>
     </a>
   );
 }
@@ -107180,7 +107180,7 @@ export function ProfileMenu({ me, isStaff, logout, active }: { me: Me; isStaff: 
         onClick={() => setOpen((v) => !v)}
       >
         <UserAvatar name={me.username} url={me.avatarUrl} size={32} tone="grad" className="rounded-full!" />
-        <span className="hidden truncate sm:inline">{me.username}</span>
+        <span className="hidden truncate 2xl:inline">{me.username}</span>
       </button>
       {open && (
         <div className="pm-menu panel panel-raised" role="menu" onClick={() => setOpen(false)}>
@@ -135542,6 +135542,7 @@ function HeroTile({ s, idx, uptime, downSince, fav, onFav, onOpen, rx, reason, s
           <div className="sh-count relative flex flex-wrap items-baseline gap-x-2.5 gap-y-1 pt-1">
             <CountReact r={r} onDark><AnimatedNumber value={s.players} className="text-[64px] font-extrabold leading-none tracking-[-0.045em] sm:text-[78px]" /></CountReact>
             <span className="text-lg font-bold text-white/90">/ {s.maxPlayers} {plural(s.maxPlayers, ['игрок', 'игрока', 'игроков'])}</span>
+            <span aria-hidden className="sh-br" />
             <TrendChip serverId={s.id} onDark />
             {s.ping != null && <span className="ml-auto inline-flex items-center gap-1.5 font-bold text-white/90"><PingBars ping={s.ping} tone={pingTone(s.ping).tone} />пинг {s.ping} мс</span>}
           </div>
@@ -139893,7 +139894,8 @@ html[data-motion='reduce'] :is(.btn, .btn-soft, .btn-outline, .btn-ghost, .btn-d
 /* header search: a round icon button on phones, a pill with the label and the shortcut from md up */
 .hdr-search { --b-px: .9rem; --b-fg: rgb(var(--mute)); --b-fg-h: rgb(var(--link)); height: 2.5rem; min-height: 2.5rem; white-space: nowrap; }
 .hdr-search > svg { flex: none; }
-@media (max-width: 767px) { .hdr-search { width: max(2.5rem, var(--tap, 0px)); height: max(2.5rem, var(--tap, 0px)); padding: 0; } }
+/* the header: round icon buttons of one size; the labels («Поиск Ctrl K», «Бот в сети») only where there is room for them */
+@media (max-width: 1535px) { .hdr-search { width: max(2.5rem, var(--tap, 0px)); height: max(2.5rem, var(--tap, 0px)); padding: 0; justify-content: center; } }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/community.css" << '__COREGSM_EOF__'
@@ -142020,6 +142022,21 @@ html[data-motion='reduce'] .srv-new-chev, html[data-motion='reduce'] .srv-check,
 .pulse-chart .pulse-ticks { grid-column: 1 / -1; grid-row: 1; display: flex; justify-content: space-between; gap: 6px; font-size: var(--fs-xs); white-space: nowrap; }
 .pulse-chart figcaption > span:first-child { grid-row: 2; white-space: nowrap; }
 .pulse-chart .pulse-peak-text, .pulse-chart figcaption > span:last-child:not(.pulse-ticks) { grid-row: 2; justify-self: end; text-align: right; }
+
+/* ---------- the big card of the servers page, calmer: the figures in two tidy lines, the facts as a quiet line, a softer chart panel ---------- */
+.sh-br { display: none; }
+@media (min-width: 900px) {
+  /* the count, then (on its own line) the trend and the ping side by side, not a ping stuck to the far edge */
+  .srv-hero.is-split .sh-br { display: block; flex-basis: 100%; height: 0; }
+  .srv-hero.is-split .sh-count { column-gap: 12px; row-gap: 8px; }
+  .srv-hero.is-split .sh-count > .ml-auto { margin-left: 0; }
+  .srv-hero.is-split > .sh-chart { padding: 12px 12px 4px 4px; border-radius: var(--r-xl); background: linear-gradient(180deg, rgb(8 10 20 / .2), rgb(8 10 20 / .4)); box-shadow: inset 0 1px 0 rgb(255 255 255 / .1); -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px); }
+}
+/* the facts under the figures are text, not a second row of buttons that looks like the player names above it */
+.srv-hero .sh-foot { column-gap: 0; row-gap: 2px; color: rgb(255 255 255 / .8); font-weight: 650; }
+.srv-hero .sh-foot .sh-chip { padding: 0; background: none; box-shadow: none; -webkit-backdrop-filter: none; backdrop-filter: none; line-height: 1.5; }
+.srv-hero .sh-foot .sh-chip + .sh-chip::before { content: '·'; margin: 0 .55em; opacity: .55; }
+.srv-hero .spark-axis { background: none; padding: 0 2px; color: rgb(255 255 255 / .7); }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/shell.css" << '__COREGSM_EOF__'
@@ -142043,7 +142060,12 @@ __COREGSM_EOF__
 
 .pm { position: relative; }
 .pm-btn { display: flex; align-items: center; justify-content: center; gap: 8px; border-radius: var(--r-pill); font-weight: 800; transition: background-color .15s ease; height: 44px; width: 44px; }
-@media (min-width: 640px) { .pm-btn { height: auto; width: auto; max-width: 11rem; padding: 4px 14px 4px 4px; } }
+@media (min-width: 640px) { .pm-btn { height: 2.5rem; width: 2.5rem; } }
+/* the name next to the avatar only on wide screens, otherwise the avatar is a round button like its neighbours */
+@media (min-width: 1536px) { .pm-btn { height: auto; width: auto; max-width: 11rem; padding: 4px 14px 4px 4px; } }
+/* the sections of the header never shrink or fade out: the buttons on the right give way first */
+@media (min-width: 1100px) { .seg.hdr-nav { overflow: visible; max-width: none; flex-shrink: 0; } }
+@media (max-width: 1099px) { .hdr-word { display: none; } }
 .pm-btn:hover, .pm-btn[aria-expanded='true'] { background: rgb(var(--soft)); }
 .pm-btn.is-active { background: rgb(var(--brand) / .14); color: rgb(var(--link)); }
 .pm-menu { position: absolute; right: 0; top: calc(100% + 8px); z-index: 50; width: 14rem; padding: 6px; display: grid; gap: 2px; }

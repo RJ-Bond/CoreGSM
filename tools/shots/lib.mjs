@@ -1,5 +1,12 @@
 // Pure helpers of the screenshot harness (no browser, no network): arguments, the page matrix, the report.
 
+/** a named viewport, or a custom width: w900 -> 900 px wide */
+export const viewportOf = (name) => {
+  if (VIEWPORTS[name]) return VIEWPORTS[name];
+  const m = /^w(\d{3,4})$/.exec(name);
+  return m ? { width: Number(m[1]), height: 900, mobile: Number(m[1]) < 600 } : null;
+};
+
 export const VIEWPORTS = {
   desktop: { width: 1440, height: 900, mobile: false },
   tablet: { width: 820, height: 1100, mobile: false },
@@ -39,7 +46,7 @@ export const HELP = `Screenshots and automatic UI checks of the panel (Chrome on
   node tools/shots/run.mjs [options]
 
   --pages=a,b      page ids or "guest" / "admin" / "all"        (default: all)
-  --viewports=a,b  desktop,tablet,phone                          (default: desktop,phone)
+  --viewports=a,b  desktop,tablet,phone or a width, w900                         (default: desktop,phone)
   --themes=a,b     dark,light                                    (default: dark)
   --base=URL       shoot a running panel instead of starting a demo stack (guest pages only unless --login is given)
   --login=user:pass  sign in on --base before the admin pages
@@ -79,7 +86,7 @@ export function buildMatrix(opts, hasAdmin = true) {
   }
   const pages = [...new Map(picked.map((p) => [p.id, p])).values()].filter((p) => hasAdmin || !p.admin);
   const vps = String(opts.viewports ?? 'desktop,phone').split(',').filter(Boolean);
-  for (const v of vps) if (!VIEWPORTS[v]) throw new Error(`Unknown viewport "${v}" (desktop, tablet, phone)`);
+  for (const v of vps) if (!viewportOf(v)) throw new Error(`Unknown viewport "${v}" (desktop, tablet, phone or a width such as w900)`);
   const themes = String(opts.themes ?? 'dark').split(',').filter(Boolean);
   for (const t of themes) if (t !== 'dark' && t !== 'light') throw new Error(`Unknown theme "${t}" (dark, light)`);
   const rows = [];
