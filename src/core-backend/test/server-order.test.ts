@@ -18,10 +18,11 @@ describe('completeOrder', () => {
 
 describe('api: server order', () => {
   let api: Api;
+  let token = '';
   const ids: number[] = [];
   before(async () => {
     api = await startBackend();
-    await setupAdmin(api);
+    token = await setupAdmin(api);
     const db = new Database(api.dbPath);
     for (const n of ['A', 'B', 'C']) ids.push(Number(db.prepare("INSERT INTO servers (name, game, host, port, created_at) VALUES (?, 'minecraft', '127.0.0.1', 25565, ?)").run(n, Date.now()).lastInsertRowid));
     db.close();
@@ -29,15 +30,15 @@ describe('api: server order', () => {
   after(async () => { await api.stop(); });
 
   it('lists by id until the order is saved, then by the saved order', async () => {
-    const names = async () => ((await api.call('GET', '/api/servers')).body as { name: string }[]).map((s) => s.name);
+    const names = async () => ((await api.call('GET', '/api/servers', { token })).body as { name: string }[]).map((s) => s.name);
     assert.deepEqual(await names(), ['A', 'B', 'C']);
-    const r = await api.call('PUT', '/api/servers/order', { ids: [ids[2], ids[0]] });
+    const r = await api.call('PUT', '/api/servers/order', { token, body: { ids: [ids[2], ids[0]] } });
     assert.equal(r.status, 200);
     assert.deepEqual(await names(), ['C', 'A', 'B']);
   });
 
   it('rejects a body without ids', async () => {
-    const r = await api.call('PUT', '/api/servers/order', { ids: 'x' });
+    const r = await api.call('PUT', '/api/servers/order', { token, body: { ids: 'x' } });
     assert.equal(r.status, 400);
   });
 });
