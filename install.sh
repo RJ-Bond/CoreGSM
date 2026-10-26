@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="31ac3268640f"
+COREGSM_BUILD="5b7bbca92a24"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.0.0.18"
+COREGSM_VERSION="1.0.0.19"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -51259,6 +51259,7 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/components/DigestSection.tsx" << '__COREGSM_EOF__'
 /** Admin → Оповещения: the weekly digest (settings, the numbers of the coming digest and its picture). */
 import { useEffect, useState } from 'react';
+import { t as tr, useI18n } from '../i18n';
 import { api } from '../api';
 import { ChannelPicker } from './ChannelPicker';
 import { ErrorLine, Section, Switch, ago, plural, toast } from '../ui';
@@ -51279,6 +51280,7 @@ interface DigestInfo {
 const WEEKDAYS = ['понедельник', 'вторник', 'среду', 'четверг', 'пятницу', 'субботу', 'воскресенье'];
 
 export default function DigestSection({ alertsChannel }: { alertsChannel: string }) {
+  useI18n();
   const [info, setInfo] = useState<DigestInfo | null>(null);
   const [error, setError] = useState('');
   const [picking, setPicking] = useState(false);
@@ -51333,10 +51335,10 @@ export default function DigestSection({ alertsChannel }: { alertsChannel: string
           </select>
         </div>
         <div>
-          <label htmlFor="digest-theme" className="label">Оформление картинки</label>
+          <label htmlFor="digest-theme" className="label">{tr('digest.theme')}</label>
           <select id="digest-theme" className="input" value={info.theme} onChange={(e) => void save({ theme: e.target.value as 'dark' | 'light' }, 'Сохранено')}>
-            <option value="dark">Тёмное</option>
-            <option value="light">Светлое</option>
+            <option value="dark">{tr('digest.theme.dark')}</option>
+            <option value="light">{tr('digest.theme.light')}</option>
           </select>
         </div>
       </div>
@@ -52492,12 +52494,14 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/components/PlayersShownCard.tsx" << '__COREGSM_EOF__'
 import { useEffect, useState } from 'react';
 import { api } from '../api';
+import { t, useI18n } from '../i18n';
 import { Section, Switch, toast, fail } from '../ui';
 
 const OPTIONS = [0, 3, 5, 8, 10, 15, 20];
 
 /** «Ники в сообщении»: how many player names the Discord message lists; the rest is a link to the site. */
 export default function PlayersShownCard() {
+  useI18n();
   const [value, setValue] = useState<number | null>(null);
   const [chart, setChart] = useState(true);
   const [tile, setTile] = useState(false);
@@ -52554,15 +52558,15 @@ export default function PlayersShownCard() {
       <label className="mt-4 flex cursor-pointer items-start gap-3">
         <Switch className="mt-0.5" checked={chart} disabled={busy} onChange={(on) => void flag({ chart: on })} />
         <span>
-          <span className="block font-extrabold">График онлайна за 24 часа</span>
-          <span className="block text-sm font-semibold text-mute">Картинка под сообщением сервера. В сообщении с несколькими серверами она не показывается.</span>
+          <span className="block font-extrabold">{t('embed.chart')}</span>
+          <span className="block text-sm font-semibold text-mute">{t('embed.chart.hint')}</span>
         </span>
       </label>
       <label className="mt-3 flex cursor-pointer items-start gap-3">
         <Switch className="mt-0.5" checked={tile} disabled={busy} onChange={(on) => void flag({ iconTile: on })} />
         <span>
-          <span className="block font-extrabold">Значок игры на цветной плашке</span>
-          <span className="block text-sm font-semibold text-mute">Значок виден и в светлой, и в тёмной теме Discord. Без плашки это прозрачная картинка игры.</span>
+          <span className="block font-extrabold">{t('embed.tile')}</span>
+          <span className="block text-sm font-semibold text-mute">{t('embed.tile.hint')}</span>
         </span>
       </label>
     </Section>
@@ -69885,6 +69889,13 @@ const en: Record<keyof typeof ru, string> = {
   'hdr.bot.error': 'Bot error',
   'hdr.bot.idle': 'Bot off',
   'hdr.bot.tip': 'Discord bot status: {s}. Open the bot settings',
+  'digest.theme': 'Picture style',
+  'digest.theme.dark': 'Dark',
+  'digest.theme.light': 'Light',
+  'embed.chart': 'Online chart for 24 hours',
+  'embed.chart.hint': 'A picture under the server message. It is not shown in a message with several servers.',
+  'embed.tile': 'Game icon on a coloured tile',
+  'embed.tile.hint': 'The icon reads on both the light and the dark Discord theme. Without the tile it is a transparent game picture.',
 };
 
 export default en;
@@ -72015,6 +72026,13 @@ const ru = {
   'hdr.bot.error': 'Ошибка бота',
   'hdr.bot.idle': 'Бот выключен',
   'hdr.bot.tip': 'Статус Discord-бота: {s}. Открыть настройки бота',
+  'digest.theme': 'Оформление картинки',
+  'digest.theme.dark': 'Тёмное',
+  'digest.theme.light': 'Светлое',
+  'embed.chart': 'График онлайна за 24 часа',
+  'embed.chart.hint': 'Картинка под сообщением сервера. В сообщении с несколькими серверами она не показывается.',
+  'embed.tile': 'Значок игры на цветной плашке',
+  'embed.tile.hint': 'Значок виден и в светлой, и в тёмной теме Discord. Без плашки это прозрачная картинка игры.',
 };
 
 export default ru;
