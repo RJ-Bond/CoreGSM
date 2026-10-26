@@ -1,3 +1,4 @@
+import * as Popover from '@radix-ui/react-popover';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { api, ApiError, type NewsReaction, type PublicNews, type PublicNewsFull, type Server } from '../../api';
 import { useAuth } from '../../auth';
@@ -44,6 +45,34 @@ const loadRubric = (): RubricFilter => {
     return 'all';
   }
 };
+
+/** sort and view of the feed in one small menu (they used to be two more rows of pills) */
+function FeedMenu({ sort, dense, onSort, onDense }: { sort: FeedSort; dense: boolean; onSort: (s: FeedSort) => void; onDense: (v: boolean) => void }) {
+  const [open, setOpen] = useState(false);
+  const item = (on: boolean, label: string, pick: () => void) => (
+    <button key={label} type="button" role="menuitemradio" aria-checked={on} className="srv-more-item nw-menu-item" onClick={() => { pick(); setOpen(false); }}>
+      <span className="srv-more-ico" aria-hidden>{on ? '✓' : ''}</span>
+      <span className="min-w-0 flex-1 text-left">{label}</span>
+    </button>
+  );
+  return (
+    <Popover.Root open={open} onOpenChange={setOpen}>
+      <Popover.Trigger asChild>
+        <button type="button" className="nw-menu-btn" aria-haspopup="menu" aria-label={`${t('nw.sort')}, ${t('nw.view')}`}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M4 6h16M7 12h10M10 18h4" /></svg>
+          <span className="max-sm:sr-only">{t(`nw.sort.${sort}` as const)}</span>
+        </button>
+      </Popover.Trigger>
+      <Popover.Content role="menu" side="bottom" align="end" sideOffset={8} collisionPadding={8} className="srv-more-pop">
+        <p className="nw-menu-h">{t('nw.sort')}</p>
+        {SORTS.map((s) => item(sort === s, t(`nw.sort.${s}` as const), () => onSort(s)))}
+        <p className="nw-menu-h">{t('nw.view')}</p>
+        {item(!dense, t('nw.view.cards'), () => onDense(false))}
+        {item(dense, t('nw.view.dense'), () => onDense(true))}
+      </Popover.Content>
+    </Popover.Root>
+  );
+}
 
 function useMedia(q: string): boolean {
   const [on, setOn] = useState(() => typeof window !== 'undefined' && !!window.matchMedia?.(q).matches);
@@ -217,22 +246,20 @@ export function NewsListPage() {
       <div className={`nw-grid ${hasSide ? 'has-side' : ''}`}>
         <div className="nw-main">
           <PageHead icon={<IconNews />} title={t('nav.news')} subtitle={t('nw.subtitle')} />
-          {counts.all > 0 && rubrics.length > 0 && (
-            <div className="nw-rubrics" role="group" aria-label={t('nw.rubrics')}>
-              {chip('all')}
-              {rubrics.map((r) => chip(r))}
+          {(counts.all > 0 && rubrics.length > 0) || (loaded && counts.all > 1) ? (
+            <div className="nw-bar">
+              {counts.all > 0 && rubrics.length > 0 ? (
+                <div className="nw-rubrics" role="group" aria-label={t('nw.rubrics')}>
+                  {chip('all')}
+                  {rubrics.map((r) => chip(r))}
+                </div>
+              ) : <span className="flex-1" />}
+              {loaded && counts.all > 1 && <FeedMenu sort={sort} dense={dense} onSort={setSort} onDense={setDense} />}
             </div>
-          )}
-          {loaded && counts.all > 1 && (
+          ) : null}
+          {loaded && author && (
             <div className="nw-tools">
-              <div className="seg" role="group" aria-label={t('nw.sort')}>
-                {SORTS.map((s) => <button key={s} type="button" className="seg-item" aria-current={sort === s ? 'true' : undefined} onClick={() => setSort(s)}>{t(`nw.sort.${s}` as const)}</button>)}
-              </div>
-              <div className="seg" role="group" aria-label={t('nw.view')}>
-                <button type="button" className="seg-item" aria-current={!dense ? 'true' : undefined} onClick={() => setDense(false)}>{t('nw.view.cards')}</button>
-                <button type="button" className="seg-item" aria-current={dense ? 'true' : undefined} onClick={() => setDense(true)}>{t('nw.view.dense')}</button>
-              </div>
-              {author && <button type="button" className="nw-rub" onClick={clearAuthor}>{t('nw.author.filter')} <span aria-hidden>✕</span></button>}
+              <button type="button" className="nw-rub" onClick={clearAuthor}>{t('nw.author.filter')} <span aria-hidden>✕</span></button>
             </div>
           )}
           {error && items.length === 0 ? <LoadError error={error} onRetry={() => void load()} /> : null}
