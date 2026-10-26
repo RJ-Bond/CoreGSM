@@ -7,6 +7,7 @@ import { renderCard } from '../card.js';
 import { type BindingRow, db, EFFECTIVE_NAME, getSetting, type ServerRow, setSetting } from '../db.js';
 import { refreshServer } from '../gsm.js';
 import { param, wrap } from '../http.js';
+import { addPing } from '../botLatencyLogic.js';
 import { buildPresence } from '../presence.js';
 import { embedFor, intervalParam, serializeBinding, SELECT_SERVERS, serialize, type ServerJoin } from '../serverData.js';
 
@@ -79,10 +80,12 @@ router.post('/internal/bot-status', internal, (req, res) => {
       clientId: z.string().regex(/^\d{15,25}$/).nullable().optional(),
       error: z.string().max(300).nullable().optional(),
       commands: z.number().int().min(0).max(200).nullable().optional(),
+      ping: z.number().min(0).max(120_000).nullable().optional(),
     })
     .safeParse(req.body);
   if (!b.success) return res.status(400).json({ error: 'bad body' });
   bot.status = { state: b.data.state, tag: b.data.tag ?? null, clientId: b.data.clientId ?? null, error: b.data.error ?? null, commands: b.data.commands ?? null, updatedAt: Date.now() };
+  if (b.data.state === 'online' && b.data.ping != null) addPing(bot.latency, b.data.ping, Date.now());
   res.json({ ok: true });
 });
 

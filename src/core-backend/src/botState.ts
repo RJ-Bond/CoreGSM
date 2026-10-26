@@ -1,5 +1,6 @@
 /** What the bot reports about itself: connection state and the Discord servers and channels it can post in. */
 import { getSetting } from './db.js';
+import type { PingSample } from './botLatencyLogic.js';
 
 export interface BotStatus {
   state: 'idle' | 'connecting' | 'online' | 'error';
@@ -34,7 +35,8 @@ function loadGuilds(): BotGuild[] {
 }
 
 /** replaced as a whole by the bot's reports (POST /internal/bot-status, /internal/bot-guilds) */
-export const bot: { status: BotStatus; guilds: BotGuild[] } = {
+export const bot: { status: BotStatus; guilds: BotGuild[]; latency: PingSample[] } = {
+  latency: [],
   status: { state: 'idle', tag: null, clientId: null, error: null, commands: null, updatedAt: 0 },
   guilds: loadGuilds(),
 };

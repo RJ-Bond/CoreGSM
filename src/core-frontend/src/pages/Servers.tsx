@@ -11,6 +11,7 @@ import { pingTone, TONE_TEXT } from '../components/server/helpers';
 import { AddrCopy, CapacityBar, CountReact, ListSkeleton, NoFavsState, NoMatchState, NoServersState, PingBars, PlayerNames, StatusFlash, TilesSkeleton, TrendChip, durText, reactionOf, useServerReactions, type Reactions } from '../components/servers/serverUi';
 import { ServersList, readView, saveView, type ListSort, type SelectProps, type ServersView } from '../components/servers/ServerViews';
 import CompareChart from '../components/servers/CompareChart';
+import { QuickMenu } from '../components/servers/QuickMenu';
 import { AttentionStrip } from '../components/servers/AttentionStrip';
 import { PulseStrip } from '../components/servers/PulseStrip';
 import { WhatsNew, useWhatsNewOpen } from '../components/servers/WhatsNew';
@@ -378,7 +379,7 @@ function ServerList() {
                 favOf={(id) => (me ? favs.includes(id) : null)}
                 onOpen={open}
                 select={select}
-                renderFav={(sv, on) => <FavButton on={on} name={sv.name} onClick={() => void toggleFav(sv.id)} className={on ? 'text-warn' : 'text-mute'} />}
+                renderFav={(sv, on) => <><FavButton on={on} name={sv.name} onClick={() => void toggleFav(sv.id)} className={on ? 'text-warn' : 'text-mute'} /><QuickMenu s={sv} /></>}
               />
             )}
 
@@ -486,6 +487,7 @@ function HeroTile({ s, idx, uptime, downSince, fav, onFav, onOpen, rx, reason, s
         <div className="sh-actions flex shrink-0 items-center gap-1">
           <StatusFlash r={r}><StatusPill glass online={s.online} known={s.hasStatus} lag={lag} maintenance={!!s.maintenance} /></StatusFlash>
           {fav != null && <FavButton on={fav} name={s.name} onClick={onFav} className={fav ? 'text-white' : 'text-white/80'} glass />}
+          <QuickMenu s={s} glass />
         </div>
       </div>
 
@@ -551,6 +553,7 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince }
         <div className="flex items-center gap-0.5">
           <StatusFlash r={r}><StatusPill glass online={s.online} known={s.hasStatus} lag={lag} maintenance={!!s.maintenance} /></StatusFlash>
           {fav != null && <FavButton on={fav} name={s.name} onClick={onFav} className={fav ? 'text-white' : 'text-white/85'} glass />}
+          <QuickMenu s={s} glass />
         </div>
       </div>
 

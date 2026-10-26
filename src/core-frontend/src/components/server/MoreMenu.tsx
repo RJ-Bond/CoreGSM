@@ -18,7 +18,7 @@ export interface MoreItem {
  * Keyboard: Enter / Space / ArrowDown open it, arrows / Home / End move between the items. The popover stays inside the
  * page (no portal) and is aligned to the right edge of the button.
  */
-export default function MoreMenu({ items, className = 'btn-glass' }: { items: MoreItem[]; className?: string }) {
+export default function MoreMenu({ items, className = 'btn-glass', iconOnly = false, label }: { items: MoreItem[]; className?: string; /** only the dots, the name goes to aria-label */ iconOnly?: boolean; label?: string }) {
   useI18n();
   const [open, setOpen] = useState(false);
   const pop = useRef<HTMLDivElement>(null);
@@ -39,6 +39,8 @@ export default function MoreMenu({ items, className = 'btn-glass' }: { items: Mo
     else if (e.key === 'Tab') setOpen(false);
   };
 
+  // on a card (overflow hidden) the list goes to the body, or it would be cut off
+  const wrap = (node: ReactNode) => (iconOnly ? <Popover.Portal>{node}</Popover.Portal> : node);
   if (!items.length) return null;
   return (
     <Popover.Root open={open} onOpenChange={setOpen}>
@@ -48,12 +50,15 @@ export default function MoreMenu({ items, className = 'btn-glass' }: { items: Mo
             type="button"
             className={className}
             aria-haspopup="menu"
+            aria-label={iconOnly ? (label ?? t('srv.more')) : undefined}
+            onClick={(e) => e.stopPropagation()}
             onKeyDown={(e) => { if (e.key === 'ArrowDown' && !open) { e.preventDefault(); setOpen(true); } }}
           >
             <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden><circle cx="5" cy="12" r="2" /><circle cx="12" cy="12" r="2" /><circle cx="19" cy="12" r="2" /></svg>
-            {t('srv.more')}
+            {!iconOnly && t('srv.more')}
           </button>
         </Popover.Trigger>
+        {wrap(
         <Popover.Content
           ref={pop}
           role="menu"
@@ -63,6 +68,7 @@ export default function MoreMenu({ items, className = 'btn-glass' }: { items: Mo
           sideOffset={8}
           collisionPadding={8}
           className="srv-more-pop"
+          onClick={(e) => e.stopPropagation()}
           onKeyDown={onMenuKey}
           onOpenAutoFocus={(e) => { e.preventDefault(); focusItem(0); }}
         >
@@ -80,7 +86,8 @@ export default function MoreMenu({ items, className = 'btn-glass' }: { items: Mo
               <span className="min-w-0 flex-1 text-left">{it.label}</span>
             </button>
           ))}
-        </Popover.Content>
+        </Popover.Content>,
+        )}
       </div>
     </Popover.Root>
   );
