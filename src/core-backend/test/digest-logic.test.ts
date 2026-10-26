@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { busiestDay, changePct, dailyPeaks, sparkPoints, splitServers, stripCommonPrefix, trendText, uptimeBar, wrapName } from '../src/digestLogic.ts';
+import { busiestDay, changePct, dailyPeaks, minutesText, sparkPoints, splitServers, stripCommonPrefix, trendText, uptimeBar, weekEvents, wrapName } from '../src/digestLogic.ts';
 
 describe('digest logic', () => {
   it('takes the highest online of each day', () => {
@@ -58,5 +58,20 @@ describe('digest picture helpers', () => {
     assert.equal(uptimeBar(50, 200), 100);
     assert.equal(uptimeBar(0.1, 200), 3);
     assert.equal(uptimeBar(null, 200), 0);
+  });
+});
+
+describe('week events', () => {
+  it('record, the longest outage and new players, in that order', () => {
+    const e = weekEvents({ peak: 34, peakWhen: 'пт 18:30', worst: { minutes: 130, server: 'Test' }, newPlayers: 3 });
+    assert.deepEqual(e.map((x) => x.text), ['пик 34 · пт 18:30', 'самый долгий сбой 2 ч 10 мин · Test', '3 новых игрока']);
+    assert.equal(e[1]!.tone, 'bad');
+  });
+  it('says so when there were no outages, and skips an empty week', () => {
+    assert.deepEqual(weekEvents({ peak: 0, peakWhen: '', worst: null, newPlayers: 0 }), [{ tone: 'ok', text: 'сбоев не было' }]);
+  });
+  it('minutes as text', () => {
+    assert.equal(minutesText(45), '45 мин');
+    assert.equal(minutesText(120), '2 ч');
   });
 });
