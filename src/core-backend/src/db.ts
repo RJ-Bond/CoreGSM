@@ -174,6 +174,8 @@ CREATE TABLE IF NOT EXISTS uptime_daily (
 );
 `);
 addColumn(db, 'history', 'ping', 'INTEGER');
+// manual order of the servers in lists (NULL = by id, after the ordered ones)
+addColumn(db, 'servers', 'sort_order', 'INTEGER');
 // profile: preferences, player profile, game sessions, account journal
 db.exec(`
 CREATE TABLE IF NOT EXISTS user_prefs (
@@ -305,6 +307,7 @@ if (restoredNow) {
 
 export interface ServerRow {
   id: number;
+  sort_order?: number | null;
   /** address shown to people (public IP or domain); '' = show host:port */
   display_address: string;
   /** country shown in Discord (ISO 3166-1 alpha-2); '' = detected from the IP */

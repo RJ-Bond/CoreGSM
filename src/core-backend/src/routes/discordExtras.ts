@@ -14,6 +14,7 @@ import { z } from 'zod';
 import { admin, internal } from '../auth.js';
 import { bot } from '../botState.js';
 import { db, EFFECTIVE_NAME } from '../db.js';
+import { SERVER_ORDER } from '../serverData.js';
 import { publicBase } from '../site.js';
 import { playerCard, topPlayers } from './community.js';
 import { param } from '../http.js';
@@ -145,7 +146,7 @@ router.post('/internal/discord/counters/:id', param('id'), internal, (req, res) 
 /** /online: every server, online first */
 router.get('/internal/discord/online', internal, (_req, res) => {
   const rows = db
-    .prepare(`SELECT s.id, ${EFFECTIVE_NAME} AS name, s.game, st.online, st.players, st.max_players, st.map FROM servers s LEFT JOIN status st ON st.server_id = s.id ORDER BY s.id`)
+    .prepare(`SELECT s.id, ${EFFECTIVE_NAME} AS name, s.game, st.online, st.players, st.max_players, st.map FROM servers s LEFT JOIN status st ON st.server_id = s.id ORDER BY ${SERVER_ORDER}`)
     .all() as { id: number; name: string; game: string; online: number | null; players: number | null; max_players: number | null; map: string | null }[];
   const servers = rows
     .map((r) => ({ id: r.id, name: r.name, game: r.game, online: !!r.online, players: r.online ? r.players ?? 0 : 0, maxPlayers: r.max_players ?? 0, map: r.online ? r.map : null }))
@@ -158,7 +159,7 @@ router.get('/internal/discord/suggest', internal, (req, res) => {
   const what = String(req.query.what ?? '');
   const q = String(req.query.q ?? '').slice(0, 60).toLowerCase();
   if (what === 'server') {
-    const rows = db.prepare(`SELECT s.id, ${EFFECTIVE_NAME} AS name FROM servers s LEFT JOIN status st ON st.server_id = s.id ORDER BY s.id`).all() as { id: number; name: string }[];
+    const rows = db.prepare(`SELECT s.id, ${EFFECTIVE_NAME} AS name FROM servers s LEFT JOIN status st ON st.server_id = s.id ORDER BY ${SERVER_ORDER}`).all() as { id: number; name: string }[];
     return res.json({ items: rows.filter((r) => r.name.toLowerCase().includes(q)).slice(0, 25).map((r) => ({ name: r.name.slice(0, 100), value: String(r.id) })) });
   }
   const rows = db

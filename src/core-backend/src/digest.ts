@@ -12,6 +12,7 @@ import { z } from 'zod';
 import { alertSettings, enqueueAlert } from './alerts.js';
 import { JWT_SECRET } from './config.js';
 import { db, EFFECTIVE_NAME, getSetting, setSetting } from './db.js';
+import { SERVER_ORDER } from './serverData.js';
 import { incidentsSince } from './incidents.js';
 import { changePct, dailyPeaks, sparkPoints } from './digestLogic.js';
 import { localParts } from './localTime.js';
@@ -51,7 +52,7 @@ export interface Digest {
 export function buildDigest(to = Date.now()): Digest {
   const from = to - WEEK;
   const prevFrom = from - WEEK;
-  const servers = db.prepare(`SELECT s.id, ${EFFECTIVE_NAME} AS name, s.game FROM servers s LEFT JOIN status st ON st.server_id = s.id ORDER BY s.id`).all() as { id: number; name: string; game: string }[];
+  const servers = db.prepare(`SELECT s.id, ${EFFECTIVE_NAME} AS name, s.game FROM servers s LEFT JOIN status st ON st.server_id = s.id ORDER BY ${SERVER_ORDER}`).all() as { id: number; name: string; game: string }[];
   const visits = db
     .prepare('SELECT server_id AS s, ulower(name) AS k, name, joined_at AS j, COALESCE(left_at, ?) AS l FROM player_sessions WHERE COALESCE(left_at, ?) > ? AND joined_at < ?')
     .all(to, to, prevFrom, to) as { s: number; k: string; name: string; j: number; l: number }[];

@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="292d4a06384a"
+COREGSM_BUILD="368bd8a86efe"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.0.0.5"
+COREGSM_VERSION="1.0.0.7"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -6146,6 +6146,8 @@ CREATE TABLE IF NOT EXISTS uptime_daily (
 );
 `);
 addColumn(db, 'history', 'ping', 'INTEGER');
+// manual order of the servers in lists (NULL = by id, after the ordered ones)
+addColumn(db, 'servers', 'sort_order', 'INTEGER');
 // profile: preferences, player profile, game sessions, account journal
 db.exec(`
 CREATE TABLE IF NOT EXISTS user_prefs (
@@ -6277,6 +6279,7 @@ if (restoredNow) {
 
 export interface ServerRow {
   id: number;
+  sort_order?: number | null;
   /** address shown to people (public IP or domain); '' = show host:port */
   display_address: string;
   /** country shown in Discord (ISO 3166-1 alpha-2); '' = detected from the IP */
@@ -6671,6 +6674,7 @@ import { z } from 'zod';
 import { alertSettings, enqueueAlert } from './alerts.js';
 import { JWT_SECRET } from './config.js';
 import { db, EFFECTIVE_NAME, getSetting, setSetting } from './db.js';
+import { SERVER_ORDER } from './serverData.js';
 import { incidentsSince } from './incidents.js';
 import { changePct, dailyPeaks, sparkPoints } from './digestLogic.js';
 import { localParts } from './localTime.js';
@@ -6710,7 +6714,7 @@ export interface Digest {
 export function buildDigest(to = Date.now()): Digest {
   const from = to - WEEK;
   const prevFrom = from - WEEK;
-  const servers = db.prepare(`SELECT s.id, ${EFFECTIVE_NAME} AS name, s.game FROM servers s LEFT JOIN status st ON st.server_id = s.id ORDER BY s.id`).all() as { id: number; name: string; game: string }[];
+  const servers = db.prepare(`SELECT s.id, ${EFFECTIVE_NAME} AS name, s.game FROM servers s LEFT JOIN status st ON st.server_id = s.id ORDER BY ${SERVER_ORDER}`).all() as { id: number; name: string; game: string }[];
   const visits = db
     .prepare('SELECT server_id AS s, ulower(name) AS k, name, joined_at AS j, COALESCE(left_at, ?) AS l FROM player_sessions WHERE COALESCE(left_at, ?) > ? AND joined_at < ?')
     .all(to, to, prevFrom, to) as { s: number; k: string; name: string; j: number; l: number }[];
@@ -8997,7 +9001,7 @@ import { installAudit, registerOps } from './ops.js';
 import { registerOverview } from './overview.js';
 import { logAccount, registerProfile } from './profile.js';
 import { csrfGuard, registerSecurity, securityHeaders, windowLimiter } from './security.js';
-import { embedFor, SELECT_SERVERS, serialize, type ServerJoin } from './serverData.js';
+import { embedFor, SELECT_SERVERS, SERVER_ORDER, serialize, type ServerJoin } from './serverData.js';
 import { installShutdown, onShutdown, registerShutdownServer, shutdownNow } from './shutdown.js';
 import { baseOf, brand, needsSetup, publicBase, registrationMode, rulesText } from './site.js';
 import { registerSubscriptions } from './subscriptions.js';
@@ -9107,7 +9111,7 @@ registerNews({
   channelInfo,
   isStaff,
   servers: () =>
-    (db.prepare(`${SELECT_SERVERS} ORDER BY s.id`).all() as ServerJoin[]).map(serialize).map((s) => ({
+    (db.prepare(`${SELECT_SERVERS} ORDER BY ${SERVER_ORDER}`).all() as ServerJoin[]).map(serialize).map((s) => ({
       id: s.id,
       name: s.name,
       players: s.players,
@@ -15809,6 +15813,7 @@ import { z } from 'zod';
 import { admin, internal } from '../auth.js';
 import { bot } from '../botState.js';
 import { db, EFFECTIVE_NAME } from '../db.js';
+import { SERVER_ORDER } from '../serverData.js';
 import { publicBase } from '../site.js';
 import { playerCard, topPlayers } from './community.js';
 import { param } from '../http.js';
@@ -15940,7 +15945,7 @@ router.post('/internal/discord/counters/:id', param('id'), internal, (req, res) 
 /** /online: every server, online first */
 router.get('/internal/discord/online', internal, (_req, res) => {
   const rows = db
-    .prepare(`SELECT s.id, ${EFFECTIVE_NAME} AS name, s.game, st.online, st.players, st.max_players, st.map FROM servers s LEFT JOIN status st ON st.server_id = s.id ORDER BY s.id`)
+    .prepare(`SELECT s.id, ${EFFECTIVE_NAME} AS name, s.game, st.online, st.players, st.max_players, st.map FROM servers s LEFT JOIN status st ON st.server_id = s.id ORDER BY ${SERVER_ORDER}`)
     .all() as { id: number; name: string; game: string; online: number | null; players: number | null; max_players: number | null; map: string | null }[];
   const servers = rows
     .map((r) => ({ id: r.id, name: r.name, game: r.game, online: !!r.online, players: r.online ? r.players ?? 0 : 0, maxPlayers: r.max_players ?? 0, map: r.online ? r.map : null }))
@@ -15953,7 +15958,7 @@ router.get('/internal/discord/suggest', internal, (req, res) => {
   const what = String(req.query.what ?? '');
   const q = String(req.query.q ?? '').slice(0, 60).toLowerCase();
   if (what === 'server') {
-    const rows = db.prepare(`SELECT s.id, ${EFFECTIVE_NAME} AS name FROM servers s LEFT JOIN status st ON st.server_id = s.id ORDER BY s.id`).all() as { id: number; name: string }[];
+    const rows = db.prepare(`SELECT s.id, ${EFFECTIVE_NAME} AS name FROM servers s LEFT JOIN status st ON st.server_id = s.id ORDER BY ${SERVER_ORDER}`).all() as { id: number; name: string }[];
     return res.json({ items: rows.filter((r) => r.name.toLowerCase().includes(q)).slice(0, 25).map((r) => ({ name: r.name.slice(0, 100), value: String(r.id) })) });
   }
   const rows = db
@@ -16176,13 +16181,13 @@ import { refreshServer } from '../gsm.js';
 import { param, wrap } from '../http.js';
 import { addPing } from '../botLatencyLogic.js';
 import { buildPresence } from '../presence.js';
-import { embedFor, intervalParam, serializeBinding, SELECT_SERVERS, serialize, type ServerJoin } from '../serverData.js';
+import { embedFor, intervalParam, serializeBinding, SELECT_SERVERS, SERVER_ORDER, serialize, type ServerJoin } from '../serverData.js';
 
 export const router = express.Router();
 
 // the status line of the bot in the member list: the dot colour and the lines it rotates through
 router.get('/internal/presence', internal, (_req, res) => {
-  const rows = db.prepare(`${SELECT_SERVERS} ORDER BY s.id`).all() as ServerJoin[];
+  const rows = db.prepare(`${SELECT_SERVERS} ORDER BY ${SERVER_ORDER}`).all() as ServerJoin[];
   res.json(buildPresence(rows.map(serialize).map((s) => ({ name: s.name, online: s.online, players: s.players, maxPlayers: s.maxPlayers, hasStatus: s.hasStatus }))));
 });
 
@@ -16315,7 +16320,8 @@ import { param, wrap } from '../http.js';
 import { occurrencesBetween, type WindowRow } from '../maintenance.js';
 import { vrRankIdFor } from '../profile.js';
 import { downtimeByDay, incidentsSince } from '../incidents.js';
-import { getServer, publicServer, SELECT_SERVERS, serialize, type ServerJoin } from '../serverData.js';
+import { completeOrder } from '../serverOrderLogic.js';
+import { getServer, publicServer, SELECT_SERVERS, SERVER_ORDER, serialize, type ServerJoin } from '../serverData.js';
 import { baseOf, brand, publicBase } from '../site.js';
 
 export const router = express.Router();
@@ -16351,7 +16357,7 @@ const serverSchema = z.object({
 });
 
 router.get('/api/servers', viewer, (req, res) => {
-  const rows = db.prepare(`${SELECT_SERVERS} ORDER BY s.id`).all() as ServerJoin[];
+  const rows = db.prepare(`${SELECT_SERVERS} ORDER BY ${SERVER_ORDER}`).all() as ServerJoin[];
   const list = rows.map(serialize);
   res.json(isAdmin(req) ? list : list.map(publicServer));
 });
@@ -16396,6 +16402,17 @@ router.post(
     res.status(201).json(getServer(row.id));
   }),
 );
+
+// the manual order of the servers (up/down in the admin table); registered before /api/servers/:id
+router.put('/api/servers/order', allow('servers'), (req, res) => {
+  const b = z.object({ ids: z.array(z.number().int().positive()).max(1000) }).safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: 'Проверьте поля формы' });
+  const all = (db.prepare(`SELECT s.id FROM servers s ORDER BY ${SERVER_ORDER}`).all() as { id: number }[]).map((r) => r.id);
+  const order = completeOrder(b.data.ids, all);
+  const set = db.prepare('UPDATE servers SET sort_order = ? WHERE id = ?');
+  db.transaction(() => order.forEach((id, i) => set.run(i + 1, id)))();
+  res.json({ ok: true });
+});
 
 router.put(
   '/api/servers/:id',
@@ -16659,7 +16676,7 @@ router.get('/s/:id', param('id'), (req, res) => {
 
 // ---------- status page data ----------
 router.get('/api/status', viewer, (req, res) => {
-  const rows = db.prepare(`${SELECT_SERVERS} ORDER BY s.id`).all() as ServerJoin[];
+  const rows = db.prepare(`${SELECT_SERVERS} ORDER BY ${SERVER_ORDER}`).all() as ServerJoin[];
   const list = rows.map(serialize);
   const servers = isAdmin(req) ? list : list.map(publicServer);
   const now = Date.now();
@@ -18127,6 +18144,9 @@ SELECT s.*, st.online, st.players, st.max_players, st.map, st.version, st.ping, 
        st.updated_at, st.state_since, st.server_id AS has_status, st.name AS query_name
 FROM servers s LEFT JOIN status st ON st.server_id = s.id`;
 
+/** the manual order first (pinned servers), the rest by id */
+export const SERVER_ORDER = 's.sort_order IS NULL, s.sort_order, s.id';
+
 export function getServer(id: number) {
   const row = db.prepare(`${SELECT_SERVERS} WHERE s.id = ?`).get(id) as ServerJoin | undefined;
   return row ? serialize(row) : null;
@@ -18201,6 +18221,28 @@ export function embedFor(serverId: number, intervalSec: number) {
 }
 
 export const intervalParam = (v: unknown) => Math.min(3600, Math.max(30, Number(v) || 60));
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/serverOrderLogic.ts" << '__COREGSM_EOF__'
+/** Manual order of servers: the pure part (the route only saves the result). */
+
+/**
+ * The full order after the person arranged some servers: `ids` are the ones they placed (in that order),
+ * `all` is every server id in the current display order. Unknown ids are dropped, duplicates ignored,
+ * and servers that were not mentioned keep their relative order after the placed ones.
+ */
+export function completeOrder(ids: number[], all: number[]): number[] {
+  const known = new Set(all);
+  const seen = new Set<number>();
+  const out: number[] = [];
+  for (const id of ids) {
+    if (!known.has(id) || seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+  }
+  for (const id of all) if (!seen.has(id)) out.push(id);
+  return out;
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/shutdown.ts" << '__COREGSM_EOF__'
@@ -20776,11 +20818,14 @@ export async function backendJson<T>(path: string, init?: RequestInit): Promise<
 }
 
 /** result of a status message update, shown on the binding in the panel */
-export async function report(id: number, body: { messageId?: string | null; error?: string | null }) {
+export async function report(id: number, body: { messageId?: string | null; error?: string | null }): Promise<boolean> {
   try {
-    await backend(`/internal/bindings/${id}`, { method: 'PATCH', body: JSON.stringify(body) });
+    const r = await backend(`/internal/bindings/${id}`, { method: 'PATCH', body: JSON.stringify(body) });
+    if (!r.ok) log(`report failed: HTTP ${r.status}`);
+    return r.ok;
   } catch (e) {
     log('report failed', e);
+    return false;
   }
 }
 __COREGSM_EOF__
@@ -20791,7 +20836,7 @@ import fs from 'node:fs';
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, Client, EmbedBuilder, GatewayIntentBits } from 'discord.js';
 import { backend, report } from './backend.js';
 import { handleInteraction, registerCommands } from './commands.js';
-import { deliveryFailure, humanDiscordError, newNonce, retryAfterOf, retrySocket } from './errors.js';
+import { deliveryFailure, humanDiscordError, isMessageGone, newNonce, retryAfterOf, retrySocket, stableNonce } from './errors.js';
 import { setGatewayAgent } from './gateway.js';
 import { log } from './log.js';
 import { buildNews, buildPayload, type Binding, type NewsPayload } from './messages.js';
@@ -21005,25 +21050,38 @@ async function applyConfig(): Promise<void> {
   }
 }
 
+/**
+ * Messages posted but not yet confirmed by the panel (its answer was lost): without this the next round would not know
+ * the message id and would post a second copy.
+ */
+const posted = new Map<number, string>();
+
 async function update(c: Client, b: Binding): Promise<void> {
   const built = await buildPayload(b);
+  if (b.messageId) posted.delete(b.id);
 
   const channel = await retrySocket(() => c.channels.fetch(b.channelId));
   if (!channel || !channel.isTextBased() || !('send' in channel)) throw new Error('Канал не найден или не текстовый');
 
-  if (b.messageId) {
+  const known = b.messageId ?? posted.get(b.id) ?? null;
+  if (known) {
     try {
-      const msg = await retrySocket(() => channel.messages.fetch(b.messageId!));
+      const msg = await retrySocket(() => channel.messages.fetch(known));
       // attachments: [] drops a picture left over from a previous style
       await retrySocket(() => msg.edit({ ...built, attachments: [] }));
-      return await report(b.id, { error: null });
+      await report(b.id, { ...(b.messageId ? {} : { messageId: known }), error: null });
+      return;
     } catch (e) {
-      log(`binding ${b.id}: cannot edit message, posting a new one`, (e as Error).message);
+      // a new post only when the message is really gone; any other failure is tried again next round
+      if (!isMessageGone(e)) throw e;
+      posted.delete(b.id);
+      log(`binding ${b.id}: the message was deleted, posting a new one`);
     }
   }
   const nonce = newNonce();
   const sent = await retrySocket<{ id: string }>(() => channel.send({ ...built, nonce, enforceNonce: true }));
-  await report(b.id, { messageId: sent.id, error: null });
+  posted.set(b.id, sent.id);
+  if (await report(b.id, { messageId: sent.id, error: null })) posted.delete(b.id);
 }
 
 interface NewsItem {
@@ -21076,7 +21134,7 @@ async function processNews(): Promise<void> {
         await reportNews(it.id, { status: 'sent', messageId: it.messageId });
         log(`news ${it.id}: message edited`);
       } else {
-        const nonce = newNonce();
+        const nonce = stableNonce('nw', it.id);
         const sent = await retrySocket<{ id: string }>(() => channel.send({ ...msg, nonce, enforceNonce: true }));
         await reportNews(it.id, { status: 'sent', messageId: sent.id });
         log(`news ${it.id}: posted`);
@@ -21126,7 +21184,11 @@ async function processDeliveries(): Promise<void> {
       } else {
         const channel = await c.channels.fetch(it.target);
         if (!channel || !channel.isTextBased() || !('send' in channel)) throw Object.assign(new Error('Канал не найден или не текстовый'), { code: 10003 });
+        // the same delivery always carries the same nonce: when the answer to a send is lost (a timeout) and the alert
+        // is retried, Discord drops the second copy
         await channel.send({
+          nonce: stableNonce('al', it.id),
+          enforceNonce: true,
           content: it.payload.content || undefined,
           embeds: it.payload.embed ? [new EmbedBuilder(it.payload.embed)] : [],
           components: linkRows(it.payload.actions),
@@ -21464,6 +21526,15 @@ export function deliveryFailure(e: unknown): { text: string; final: boolean; ret
 
 /** Discord drops a second create-message with the same nonce (within a few minutes): retries are safe */
 export const newNonce = () => `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`.slice(0, 25);
+
+/** the same id always gives the same nonce: a retry of one alert or one news item cannot post a second copy */
+export const stableNonce = (kind: string, id: number | string): string => `${kind}${id}`.slice(0, 25);
+
+/**
+ * Discord says that the message itself is gone (10008 «Unknown Message»). Only then is a new post right: a timeout, a
+ * 5xx or a rate limit while editing says nothing about the old message, and posting then leaves two of them.
+ */
+export const isMessageGone = (e: unknown): boolean => (e as { code?: unknown } | null)?.code === 10008;
 
 /** a pooled connection that the proxy closed under us: the request never reached Discord, so one more try is safe */
 export const SOCKET_ERR = /other side closed|UND_ERR_SOCKET|ECONNRESET|socket hang up|EPIPE|terminated|operation was aborted|AbortError|timed out|ETIMEDOUT/i;
@@ -68863,6 +68934,10 @@ const en: Record<keyof typeof ru, string> = {
   'upd.o.locked': 'The channel is pinned by the server environment and cannot be changed here.',
   'upd.o.notify': 'Tell Discord about new versions and update results',
   'upd.o.notifyHint': 'Messages go to the alerts channel (Settings → Discord). Nothing is sent when it is not set up.',
+  'adm.tbl.up': 'Move up',
+  'adm.tbl.down': 'Move down',
+  'adm.tbl.moved': 'Server order saved',
+  'adm.tbl.orderHint': 'Reorder works when the filter and search are cleared',
 };
 
 export default en;
@@ -70955,6 +71030,10 @@ const ru = {
   'upd.o.locked': 'Канал задан переменными окружения сервера и отсюда не меняется.',
   'upd.o.notify': 'Сообщать в Discord о новых версиях и результате обновления',
   'upd.o.notifyHint': 'Сообщения уходят в канал оповещений (Настройки → Discord). Если он не настроен, ничего не отправляется.',
+  'adm.tbl.up': 'Выше',
+  'adm.tbl.down': 'Ниже',
+  'adm.tbl.moved': 'Порядок серверов сохранён',
+  'adm.tbl.orderHint': 'Порядок можно менять, когда фильтр и поиск сброшены',
 };
 
 export default ru;
@@ -71307,6 +71386,7 @@ import DiscordPage from './Discord';
 import NewsPage from './News';
 import ServerForm, { emptyServer } from './ServerForm';
 import { AdminServersTable } from './AdminServersTable';
+import { moveId } from './adminServersLogic';
 import { SetupProgress } from './AdminStart';
 import JournalPage from './Journal';
 import MaintenancePage from './Maintenance';
@@ -71783,6 +71863,17 @@ function ServersManage({ sub }: { sub: string }) {
   const removeMany = async (list: Server[]) => {
     removeSome(list, t('adm.srv.delMany', { n: list.length }));
   };
+  const move = async (s: Server, dir: -1 | 1, shown: number[]) => {
+    const next = moveId(servers.map((x) => x.id), shown, s.id, dir);
+    if (!next) return;
+    try {
+      await api('/servers/order', 'PUT', { ids: next });
+      toast(t('adm.tbl.moved'));
+    } catch (e) {
+      fail(e);
+    }
+    await load();
+  };
   const refresh = async (s: Server) => {
     setBusyId(s.id);
     await api(`/servers/${s.id}/refresh`, 'POST').catch((e: Error) => setError(e.message));
@@ -71833,6 +71924,7 @@ function ServersManage({ sub }: { sub: string }) {
               onRemove: (sv) => void remove(sv),
               onRefreshMany: refreshMany,
               onRemoveMany: removeMany,
+              onMove: (sv, dir, shown) => void move(sv, dir, shown),
             }}
           />
         </div>
@@ -72528,13 +72620,13 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/pages/AdminServersTable.tsx" << '__COREGSM_EOF__'
 // The «Серверы» table of the admin area: search, filters, a checkbox per row for bulk actions, the figures of every
 // server (status, players, ping, uptime, a 24 h curve) and the row actions as icons. On a phone it is a list of cards.
-import { Fragment, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import type { Server } from '../api';
 import { confirmDialog } from '../confirm';
 import { t, useI18n, type TKey } from '../i18n';
 import { gameColor, gameLabel } from '../games';
 import { GameAvatar, IconEdit, IconRefresh, IconTrash, IconWrench, MiniSpark, StatusPill, ago, isLag, toast } from '../ui';
-import { countServers, filterServers, type ServerFilter } from './adminServersLogic';
+import { countServers, filterServers, loadTableState, saveTableState, type ServerFilter } from './adminServersLogic';
 
 export interface TableActions {
   isAdmin: boolean;
@@ -72549,6 +72641,8 @@ export interface TableActions {
   /** refresh / delete several at once; resolve when done */
   onRefreshMany: (list: Server[]) => Promise<void>;
   onRemoveMany: (list: Server[]) => Promise<void>;
+  /** move a server one step up/down in the manual order (the ids on screen, in order) */
+  onMove: (s: Server, dir: -1 | 1, shown: number[]) => void;
 }
 
 const FILTERS: [ServerFilter, TKey][] = [['all', 'adm.tbl.all'], ['online', 'adm.tbl.online'], ['problems', 'adm.tbl.problems']];
@@ -72569,8 +72663,10 @@ const pct = (v: number | undefined) => (v == null ? '–' : `${(Math.round(v * 1
 
 export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableActions }) {
   useI18n();
-  const [filter, setFilter] = useState<ServerFilter>('all');
-  const [query, setQuery] = useState('');
+  const [saved] = useState(loadTableState);
+  const [filter, setFilter] = useState<ServerFilter>(saved.filter);
+  const [query, setQuery] = useState(saved.query);
+  useEffect(() => { saveTableState(filter, query); }, [filter, query]);
   const [sel, setSel] = useState<number[]>([]);
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState<number[]>([]);
@@ -72579,6 +72675,7 @@ export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableA
   const counts = useMemo(() => countServers(servers), [servers]);
   const rows = useMemo(() => filterServers(servers, filter, query), [servers, filter, query]);
   const shownIds = rows.map((s) => s.id);
+  const canMove = filter === 'all' && !query.trim() && rows.length > 1;
   const picked = servers.filter((s) => sel.includes(s.id));
   const allOn = rows.length > 0 && shownIds.every((id) => sel.includes(id));
   const toggle = (id: number) => setSel((l) => (l.includes(id) ? l.filter((x) => x !== id) : [...l, id]));
@@ -72675,6 +72772,12 @@ export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableA
                     <td className="hidden lg:table-cell"><MiniSpark serverId={s.id} color={gameColor(s.game)} /></td>
                     <td>
                       <div className="flex items-center justify-end gap-1" role="group" aria-label={`${t('adm.tbl.actions')}: ${s.name}`}>
+                        {canMove && (
+                          <>
+                            <button type="button" className="row-act" title={t('adm.tbl.up')} aria-label={`${t('adm.tbl.up')}: ${s.name}`} disabled={s.id === shownIds[0]} onClick={() => a.onMove(s, -1, shownIds)}><span aria-hidden>↑</span></button>
+                            <button type="button" className="row-act" title={t('adm.tbl.down')} aria-label={`${t('adm.tbl.down')}: ${s.name}`} disabled={s.id === shownIds[shownIds.length - 1]} onClick={() => a.onMove(s, 1, shownIds)}><span aria-hidden>↓</span></button>
+                          </>
+                        )}
                         <a className="row-act" href={`/admin/discord/new/${s.id}`} title={t('adm.tbl.bind')} aria-label={`${t('adm.tbl.bind')}: ${s.name}`}>
                           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M21 12a8 8 0 0 1-11.5 7.2L4 20l1-4.2A8 8 0 1 1 21 12z" /></svg>
                         </a>
@@ -81011,6 +81114,7 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/pages/adminLogic.test.ts" << '__COREGSM_EOF__'
 import { describe, expect, it } from 'vitest';
 import { delta, dayKey, healthScore, type HealthInput } from './adminLogic';
+import { moveId } from './adminServersLogic';
 
 const fine: HealthInput = { servers: 4, down: 0, botError: false, certDays: 60, pending: 0, updateAvailable: false, backupAgeMs: 1000, backupsKnown: true };
 
@@ -81057,6 +81161,20 @@ describe('chords', () => {
     expect(CHORDS.s).toBe('servers');
     expect(chordOf('servers')).toBe('s');
     expect(chordOf('cards')).toBeNull();
+  });
+});
+
+describe('moveId', () => {
+  it('swaps with the neighbour on screen', () => {
+    expect(moveId([1, 2, 3], [1, 2, 3], 2, -1)).toEqual([2, 1, 3]);
+    expect(moveId([1, 2, 3], [1, 2, 3], 2, 1)).toEqual([1, 3, 2]);
+  });
+  it('cannot move past the ends', () => {
+    expect(moveId([1, 2], [1, 2], 1, -1)).toBeNull();
+    expect(moveId([1, 2], [1, 2], 2, 1)).toBeNull();
+  });
+  it('works among a subset of the list', () => {
+    expect(moveId([1, 2, 3, 4], [2, 4], 4, -1)).toEqual([1, 4, 3, 2]);
   });
 });
 __COREGSM_EOF__
@@ -81222,6 +81340,35 @@ export function filterServers(list: Server[], filter: ServerFilter, query: strin
 
 export function countServers(list: Server[]): Record<ServerFilter, number> {
   return { all: list.length, online: list.filter((s) => s.online).length, problems: list.filter(isProblem).length };
+}
+
+/** the order of ids after moving `id` one step up/down among `shown` (the servers on screen); null when it cannot move */
+export function moveId(all: number[], shown: number[], id: number, dir: -1 | 1): number[] | null {
+  const i = shown.indexOf(id);
+  const j = i + dir;
+  if (i < 0 || j < 0 || j >= shown.length) return null;
+  const a = all.indexOf(id);
+  const b = all.indexOf(shown[j]!);
+  if (a < 0 || b < 0) return null;
+  const out = [...all];
+  [out[a], out[b]] = [out[b]!, out[a]!];
+  return out;
+}
+
+const FILTER_KEY = 'coregsm_admin_srv_filter';
+/** filter and search of the table survive leaving the page and coming back (per tab) */
+export function loadTableState(): { filter: ServerFilter; query: string } {
+  try {
+    const v = JSON.parse(sessionStorage.getItem(FILTER_KEY) ?? '{}') as { filter?: string; query?: string };
+    const filter: ServerFilter = v.filter === 'online' || v.filter === 'problems' ? v.filter : 'all';
+    return { filter, query: typeof v.query === 'string' ? v.query.slice(0, 100) : '' };
+  } catch { return { filter: 'all', query: '' }; }
+}
+export function saveTableState(filter: ServerFilter, query: string): void {
+  try {
+    if (filter === 'all' && !query) sessionStorage.removeItem(FILTER_KEY);
+    else sessionStorage.setItem(FILTER_KEY, JSON.stringify({ filter, query }));
+  } catch { /* not remembered */ }
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
