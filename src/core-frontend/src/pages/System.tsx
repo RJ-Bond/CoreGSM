@@ -7,6 +7,7 @@ import { AdminPage, ErrorLine, GoLink, LoadError, IconDatabase, IconDisk, IconMe
 
 interface Health {
   version: string | null;
+  versionName?: string | null;
   uptimeSec: number;
   node: string;
   dbBytes: number | null;
@@ -73,7 +74,7 @@ export default function SystemPage() {
   const botTone: GaugeTone = !h ? 'mute' : h.bot.state === 'online' ? 'ok' : h.bot.state === 'connecting' ? 'warn' : h.bot.state === 'error' ? 'bad' : 'mute';
   const status: { k: string; v: string; sub?: string; tone: GaugeTone }[] = h
     ? [
-        { k: 'Версия', v: h.version ? h.version.slice(0, 7) : 'сборка из исходников', sub: `Node ${h.node}`, tone: 'mute' },
+        { k: 'Версия', v: h.versionName || (h.version ? h.version.slice(0, 7) : 'сборка из исходников'), sub: `Node ${h.node}`, tone: 'mute' },
         { k: 'Работает', v: dur(h.uptimeSec), tone: 'ok' },
         { k: 'Серверы', v: `${h.counts.online} из ${h.counts.servers} онлайн`, tone: h.counts.servers === 0 ? 'mute' : h.counts.online === h.counts.servers ? 'ok' : h.counts.online === 0 ? 'bad' : 'warn' },
         { k: 'Привязки Discord', v: String(h.counts.bindings), sub: `${h.guilds} ${plural(h.guilds, ['сервер', 'сервера', 'серверов'])} с ботом`, tone: 'mute' },

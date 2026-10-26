@@ -5,7 +5,7 @@ import { admin, allow, auth, type AuthedRequest, avatarUrl, internal, isStaff, p
 import { customAvatarUrl, registerAvatars } from './avatars.js';
 import { registerBackups, startBackupTimer, stopBackups } from './backup.js';
 import { bot, channelInfo } from './botState.js';
-import { APP_VERSION, POLL_MS, PORT, SETUP_TOKEN } from './config.js';
+import { APP_VERSION, APP_VERSION_NAME, POLL_MS, PORT, SETUP_TOKEN } from './config.js';
 import { registerCovers } from './covers.js';
 import { db, getSetting, setSetting } from './db.js';
 import { registerDeliveries } from './deliveries.js';
@@ -25,7 +25,7 @@ import { installAudit, registerOps } from './ops.js';
 import { registerOverview } from './overview.js';
 import { logAccount, registerProfile } from './profile.js';
 import { csrfGuard, registerSecurity, securityHeaders, windowLimiter } from './security.js';
-import { embedFor, SELECT_SERVERS, serialize, type ServerJoin } from './serverData.js';
+import { embedFor, SELECT_SERVERS, SERVER_ORDER, serialize, type ServerJoin } from './serverData.js';
 import { installShutdown, onShutdown, registerShutdownServer, shutdownNow } from './shutdown.js';
 import { baseOf, brand, needsSetup, publicBase, registrationMode, rulesText } from './site.js';
 import { registerSubscriptions } from './subscriptions.js';
@@ -135,7 +135,7 @@ registerNews({
   channelInfo,
   isStaff,
   servers: () =>
-    (db.prepare(`${SELECT_SERVERS} ORDER BY s.id`).all() as ServerJoin[]).map(serialize).map((s) => ({
+    (db.prepare(`${SELECT_SERVERS} ORDER BY ${SERVER_ORDER}`).all() as ServerJoin[]).map(serialize).map((s) => ({
       id: s.id,
       name: s.name,
       players: s.players,
@@ -177,7 +177,7 @@ registerProfile({
 registerDiscordRegistration({ app, internal, wrap, publicBase, registrationOpen, registrationMode, rulesText });
 registerNickStatus({ app, auth, userId: (req) => (req as AuthedRequest).user!.id });
 registerCovers({ app, admin: allow('servers') });
-registerOps({ app, admin, getBot: () => bot.status, guildCount: () => bot.guilds.length, version: APP_VERSION, pollMs: POLL_MS, publicBase });
+registerOps({ app, admin, getBot: () => bot.status, guildCount: () => bot.guilds.length, version: APP_VERSION, versionName: APP_VERSION_NAME, pollMs: POLL_MS, publicBase });
 registerBackups({ app, admin });
 registerMaintenance({ app, admin: allow('maintenance'), viewer });
 registerHealth({ app, admin, bot: () => bot.status });

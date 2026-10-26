@@ -9,13 +9,13 @@ import { refreshServer } from '../gsm.js';
 import { param, wrap } from '../http.js';
 import { addPing } from '../botLatencyLogic.js';
 import { buildPresence } from '../presence.js';
-import { embedFor, intervalParam, serializeBinding, SELECT_SERVERS, serialize, type ServerJoin } from '../serverData.js';
+import { embedFor, intervalParam, serializeBinding, SELECT_SERVERS, SERVER_ORDER, serialize, type ServerJoin } from '../serverData.js';
 
 export const router = express.Router();
 
 // the status line of the bot in the member list: the dot colour and the lines it rotates through
 router.get('/internal/presence', internal, (_req, res) => {
-  const rows = db.prepare(`${SELECT_SERVERS} ORDER BY s.id`).all() as ServerJoin[];
+  const rows = db.prepare(`${SELECT_SERVERS} ORDER BY ${SERVER_ORDER}`).all() as ServerJoin[];
   res.json(buildPresence(rows.map(serialize).map((s) => ({ name: s.name, online: s.online, players: s.players, maxPlayers: s.maxPlayers, hasStatus: s.hasStatus }))));
 });
 
