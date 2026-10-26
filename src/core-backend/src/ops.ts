@@ -88,6 +88,8 @@ const RULES: Rule[] = [
   { m: 'POST', re: /^\/api\/sessions\/revoke-others$/, label: 'Завершены остальные сеансы' },
   { m: 'PUT', re: /^\/api\/alerts$/, label: 'Изменены оповещения о недоступности серверов' },
   { m: 'POST', re: /^\/api\/alerts\/test$/, label: 'Тестовое оповещение' },
+  { m: 'POST', re: /^\/api\/integrations\/keys$/, label: 'Создан API-ключ', detail: (r) => s(r.body?.name, 60) },
+  { m: 'DELETE', re: /^\/api\/integrations\/keys\/(\d+)$/, label: 'Отозван API-ключ', pre: nameOf('SELECT name AS n FROM api_keys WHERE id = ?') },
 ];
 
 /** records every successful change made through the panel; must be installed before the routes */
