@@ -75,6 +75,8 @@ export const BOT_COMMANDS = [
   { name: '/status', description: 'Карточка сервера с графиком за сутки. Параметр: server' },
   { name: '/player', description: 'Карточка игрока: часы, серия дней, где и когда играет. Параметр: nick' },
   { name: '/top', description: 'Самые активные игроки недели или месяца' },
+  { name: '/servers', description: 'Список серверов: кнопки открывают карточку выбранного сервера (видно только вам)' },
+  { name: '/help', description: 'Что умеет бот: команды по разделам, кнопки переключают разделы (видно только вам)' },
 ];
 
 export function invitePayload() {
