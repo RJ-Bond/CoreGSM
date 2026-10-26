@@ -2,6 +2,7 @@
  * User avatars uploaded in the profile. The picture is cropped to a square and stored as a 256 px PNG
  * (<data dir>/avatars/<user id>.png); it takes priority over the Discord avatar.
  */
+import { sendImage } from './imageSend.js';
 import express, { type Express, type RequestHandler } from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -68,11 +69,11 @@ export function registerAvatars(deps: { app: Express; auth: RequestHandler; user
     res.json({ ok: true });
   });
 
-  app.get('/api/avatars/:file', (req, res) => {
+  app.get('/api/avatars/:file', (req, res, next) => {
     const m = /^(\d{1,9})\.png$/.exec(String(req.params.file));
     if (!m) return res.status(404).end();
     const f = fileOf(Number(m[1]));
     if (!fs.existsSync(f)) return res.status(404).end();
-    res.set({ 'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=86400', 'X-Content-Type-Options': 'nosniff' }).send(fs.readFileSync(f));
+    sendImage(req, res, f, 'image/png', 'public, max-age=86400').catch(next);
   });
 }
