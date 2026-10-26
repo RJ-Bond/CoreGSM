@@ -474,7 +474,7 @@ export function registerNews(deps: {
     const g = p.gallery?.find((x) => x.upload || (x.url && /^https:\/\//i.test(x.url)));
     if (g?.upload) return `${base}/api/news/images/${g.upload}`;
     if (g?.url) return g.url;
-    return `${base}/og-default.png`;
+    return `${base}/api/og/default.png`;
   };
   app.get('/n/:id', param('id'), (req, res) => {
     res.set({ 'Cache-Control': 'no-cache', 'X-Robots-Tag': 'noindex' });
