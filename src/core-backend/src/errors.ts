@@ -116,6 +116,7 @@ export const ERRORS = {
   update_version_invalid: 'Некорректная версия',
   update_notify_channel_invalid: 'Некорректный канал',
   game_file_invalid: 'Файл игры не прошёл проверку',
+  discord_style_invalid: 'Стиль сообщений: цвет вида #5a4bd1, подпись до 40 символов',
   poll_invalid: 'Проверьте голосование: вопрос от 3 символов, от 2 до 10 разных вариантов, время окончания в будущем',
   poll_not_found: 'Голосование не найдено',
   poll_option_invalid: 'Такого варианта нет',

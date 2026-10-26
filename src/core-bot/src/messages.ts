@@ -1,4 +1,5 @@
 /** What the bot posts: status messages of bindings and news written in the panel. */
+import { getStyle } from './style.js';
 import { ActionRowBuilder, AttachmentBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } from 'discord.js';
 import { backend } from './backend.js';
 
@@ -81,7 +82,7 @@ export async function buildPayload(b: Binding) {
     // the embed layout (emojis, fields, colours) is defined once in the backend and shared with the panel preview
     let raw: RawEmbed;
     if (style === 'card') {
-      raw = { color: 0x5a4bd1, timestamp: new Date().toISOString() };
+      raw = { color: getStyle().accent, timestamp: new Date().toISOString() };
     } else {
       const r = await backend(`/internal/servers/${id}/embed?interval=${b.intervalSec}&layout=${b.layout ?? 'detailed'}`);
       if (!r.ok) {

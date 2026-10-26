@@ -35,6 +35,15 @@ function diskNow(): { free: number; total: number } | null {
 
 const gb = (b: number) => (b / 1024 ** 3).toFixed(1);
 
+/** the low-disk message: also used by the message gallery in the admin */
+export function diskEmbed(level: 'warn' | 'bad', free: number, total: number) {
+  return {
+    title: level === 'bad' ? '💾 Заканчивается место на диске' : '💾 Остаётся мало места на диске',
+    description: `Свободно **${gb(free)} ГБ** из ${gb(total)} ГБ (**${diskFreePct(free, total)}%**).\nБэкапы, база и картинки хранятся на этом диске — освободите место, пока панель не начала сбоить.`,
+    color: level === 'bad' ? 0xf23f42 : 0xf0b232,
+  };
+}
+
 /** sends the low-disk alert when the level got worse or the trouble lasts for a day; returns whether it was sent */
 export function checkDisk(now = Date.now()): boolean {
   const d = diskNow();
@@ -50,15 +59,10 @@ export function checkDisk(now = Date.now()): boolean {
   setSetting('disk_alert_at', String(now));
   const s = alertSettings();
   if (!s.enabled || !s.channelId) return false;
-  const pct = diskFreePct(d.free, d.total);
   enqueueAlert('disk', 'CoreGSM', {
     content: level === 'bad' ? (s.mention === 'everyone' ? '@everyone' : s.mention === 'here' ? '@here' : '') : '',
     mention: level === 'bad' ? s.mention : 'none',
-    embed: {
-      title: level === 'bad' ? '💾 Заканчивается место на диске' : '💾 Остаётся мало места на диске',
-      description: `Свободно **${gb(d.free)} ГБ** из ${gb(d.total)} ГБ (**${pct}%**).\nБэкапы, база и картинки хранятся на этом диске — освободите место, пока панель не начала сбоить.`,
-      color: level === 'bad' ? 0xf23f42 : 0xf0b232,
-    },
+    embed: diskEmbed(level, d.free, d.total),
   });
   return true;
 }

@@ -2,6 +2,8 @@
  * Alerts: a message to an administrators' Discord channel when a game server stops answering
  * (after a grace period) and another one when it is back. The bot delivers the queued messages.
  */
+import { currentStyle } from './discordStyleState.js';
+import { styleAlertEmbed } from './discordStyleLogic.js';
 import type { Express, RequestHandler } from 'express';
 import { z } from 'zod';
 import { db, EFFECTIVE_NAME, getSetting, setSetting } from './db.js';
@@ -53,6 +55,32 @@ export function isQuietNow(now = Date.now()): boolean {
 
 const COLOR = { down: 0xf23f42, up: 0x23a55a, test: 0x5865f2 };
 
+interface ServerAlert { name: string; address: string; game: string; downMs: number; now: number }
+/** «server is back»: also used by the message gallery in the admin */
+export const upEmbed = (a: ServerAlert) => ({
+  title: `🟢 ${a.name} снова в сети`,
+  description: `📍 \`${a.address}\`\nПростой: **${human(minutes(a.downMs))}**`,
+  color: COLOR.up,
+  author: { name: `🎮 ${gameLabel(a.game)}` },
+  footer: { text: 'CoreGSM · оповещение' },
+  timestamp: new Date(a.now).toISOString(),
+});
+export const downEmbed = (a: ServerAlert & { error?: string | null }) => ({
+  title: `🔴 ${a.name} недоступен`,
+  description: `📍 \`${a.address}\`\nСервер не отвечает уже **${human(minutes(a.downMs))}**${a.error ? `\n⚠️ ${a.error.slice(0, 300)}` : ''}`,
+  color: COLOR.down,
+  author: { name: `🎮 ${gameLabel(a.game)}` },
+  footer: { text: 'CoreGSM · оповещение' },
+  timestamp: new Date(a.now).toISOString(),
+});
+export const testEmbed = () => ({
+  title: '🔔 Проверка оповещений',
+  description: 'Если вы видите это сообщение, оповещения о недоступности серверов настроены верно.',
+  color: COLOR.test,
+  footer: { text: 'CoreGSM · оповещение' },
+  timestamp: new Date().toISOString(),
+});
+
 export interface Payload {
   content: string;
   mention: 'none' | 'here' | 'everyone';
@@ -73,9 +101,11 @@ export function enqueueAlert(kind: AlertKind, serverName: string, payload0: Payl
     : payload0;
   const target = channelId || s.channelId;
   const now = Date.now();
+  // one look for everything: the footer with the brand, the accent colour
+  const styled: Payload = { ...payload, embed: styleAlertEmbed(payload.embed, kind, currentStyle()) };
   // the alerts table is the history shown in the panel; the delivery (attempts, backoff) lives in `deliveries`
-  const r = db.prepare('INSERT INTO alerts (kind, server_name, channel_id, payload, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)').run(kind, serverName, target, JSON.stringify(payload), now, now);
-  enqueueDelivery({ kind: 'alert', refId: Number(r.lastInsertRowid), target, payload });
+  const r = db.prepare('INSERT INTO alerts (kind, server_name, channel_id, payload, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)').run(kind, serverName, target, JSON.stringify(styled), now, now);
+  enqueueDelivery({ kind: 'alert', refId: Number(r.lastInsertRowid), target, payload: styled });
   db.prepare('DELETE FROM alerts WHERE created_at < ?').run(now - 14 * 24 * 3600 * 1000);
 }
 
@@ -128,14 +158,7 @@ export function trackAlerts(serverId: number, online: boolean, error: string | n
           enqueueAlert('up', i.n, {
             content: '',
             mention: 'none',
-            embed: {
-              title: `🟢 ${i.n} снова в сети`,
-              description: `📍 \`${i.display_address || `${i.host}:${i.port}`}\`\nПростой: **${human(minutes(now - st.down_since))}**`,
-              color: COLOR.up,
-              author: { name: `🎮 ${gameLabel(i.game)}` },
-              footer: { text: 'CoreGSM · оповещение' },
-              timestamp: new Date(now).toISOString(),
-            },
+            embed: upEmbed({ name: i.n, address: i.display_address || `${i.host}:${i.port}`, game: i.game, downMs: now - st.down_since, now }),
           });
         }
       }
@@ -154,14 +177,7 @@ export function trackAlerts(serverId: number, online: boolean, error: string | n
     enqueueAlert('down', i.n, {
       content: s.mention === 'everyone' ? '@everyone' : s.mention === 'here' ? '@here' : '',
       mention: s.mention,
-      embed: {
-        title: `🔴 ${i.n} недоступен`,
-        description: `📍 \`${i.display_address || `${i.host}:${i.port}`}\`\nСервер не отвечает уже **${human(minutes(now - st.down_since))}**${error ? `\n⚠️ ${error.slice(0, 300)}` : ''}`,
-        color: COLOR.down,
-        author: { name: `🎮 ${gameLabel(i.game)}` },
-        footer: { text: 'CoreGSM · оповещение' },
-        timestamp: new Date(now).toISOString(),
-      },
+      embed: downEmbed({ name: i.n, address: i.display_address || `${i.host}:${i.port}`, game: i.game, downMs: now - st.down_since, error, now }),
     });
   }
 }
@@ -232,13 +248,7 @@ export function registerAlerts(deps: {
     enqueueAlert('test', 'Проверка', {
       content: '',
       mention: 'none',
-      embed: {
-        title: '🔔 Проверка оповещений',
-        description: 'Если вы видите это сообщение, оповещения о недоступности серверов настроены верно.',
-        color: COLOR.test,
-        footer: { text: 'CoreGSM · оповещение' },
-        timestamp: new Date().toISOString(),
-      },
+      embed: testEmbed(),
     });
     res.json(payload());
   });
