@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildChart, shareOf, stateSegments } from '../src/healthChart';
+import { buildChart, nearestIndex, shareOf, stateSegments, thin } from '../src/healthChart';
 
 describe('buildChart', () => {
   it('is empty without data', () => {
@@ -37,5 +37,35 @@ describe('stateSegments', () => {
   });
   it('is 1 without samples', () => {
     expect(shareOf([], () => true)).toBe(1);
+  });
+});
+
+describe('thin', () => {
+  it('keeps short series as they are', () => {
+    const p = [{ ts: 1, v: 1 }, { ts: 2, v: 2 }];
+    expect(thin(p, 10)).toBe(p);
+  });
+  it('averages buckets and keeps the middle time', () => {
+    const p = Array.from({ length: 100 }, (_, i) => ({ ts: i * 10, v: i }));
+    const t = thin(p, 10);
+    expect(t).toHaveLength(10);
+    expect(t[0].v).toBeCloseTo(4.5);
+    expect(t[0].ts).toBe(50);
+  });
+  it('turns an all-gap bucket into a gap', () => {
+    const p = [...Array.from({ length: 10 }, (_, i) => ({ ts: i, v: null as number | null })), ...Array.from({ length: 10 }, (_, i) => ({ ts: 10 + i, v: 5 }))];
+    const t = thin(p, 2);
+    expect(t[0].v).toBeNull();
+    expect(t[1].v).toBe(5);
+  });
+});
+
+describe('nearestIndex', () => {
+  it('maps a share of the width to a point', () => {
+    expect(nearestIndex(0, 11)).toBe(0);
+    expect(nearestIndex(0.5, 11)).toBe(5);
+    expect(nearestIndex(1, 11)).toBe(10);
+    expect(nearestIndex(2, 11)).toBe(10);
+    expect(nearestIndex(0.3, 1)).toBe(0);
   });
 });
