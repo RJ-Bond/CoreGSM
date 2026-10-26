@@ -1,6 +1,6 @@
 import { gradientFor } from './colors';
 // GameDig type ids (https://github.com/gamedig/node-gamedig/blob/master/GAMES_LIST.md)
-export interface Game { id: string; label: string; port: number; abbr: string; color: string }
+export interface Game { id: string; label: string; port: number; abbr: string; color: string; /** added by a game file, not built in */ custom?: boolean }
 
 export const GAMES: Game[] = [
   { id: 'minecraft', label: 'Minecraft: Java', port: 25565, abbr: 'MC', color: '#62b543' },
