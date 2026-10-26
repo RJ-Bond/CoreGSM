@@ -19,6 +19,7 @@ import DiscordPage from './Discord';
 import NewsPage from './News';
 import ServerForm, { emptyServer } from './ServerForm';
 import { AdminServersTable } from './AdminServersTable';
+import { moveId } from './adminServersLogic';
 import { SetupProgress } from './AdminStart';
 import JournalPage from './Journal';
 import MaintenancePage from './Maintenance';
@@ -495,6 +496,17 @@ function ServersManage({ sub }: { sub: string }) {
   const removeMany = async (list: Server[]) => {
     removeSome(list, t('adm.srv.delMany', { n: list.length }));
   };
+  const move = async (s: Server, dir: -1 | 1, shown: number[]) => {
+    const next = moveId(servers.map((x) => x.id), shown, s.id, dir);
+    if (!next) return;
+    try {
+      await api('/servers/order', 'PUT', { ids: next });
+      toast(t('adm.tbl.moved'));
+    } catch (e) {
+      fail(e);
+    }
+    await load();
+  };
   const refresh = async (s: Server) => {
     setBusyId(s.id);
     await api(`/servers/${s.id}/refresh`, 'POST').catch((e: Error) => setError(e.message));
@@ -545,6 +557,7 @@ function ServersManage({ sub }: { sub: string }) {
               onRemove: (sv) => void remove(sv),
               onRefreshMany: refreshMany,
               onRemoveMany: removeMany,
+              onMove: (sv, dir, shown) => void move(sv, dir, shown),
             }}
           />
         </div>
