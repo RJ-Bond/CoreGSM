@@ -68,3 +68,26 @@ export function shareOf(segs: Segment[], good: (state: string) => boolean): numb
   if (!total) return 1;
   return segs.filter((s) => good(s.state)).reduce((n, s) => n + (s.to - s.from), 0) / total;
 }
+
+export interface Pt { ts: number; v: number | null }
+
+/** Keeps at most `max` points: neighbours are averaged, the time of a bucket is its middle. Gaps stay gaps. */
+export function thin(points: Pt[], max: number): Pt[] {
+  if (points.length <= max || max < 2) return points;
+  const step = points.length / max;
+  const out: Pt[] = [];
+  for (let i = 0; i < max; i++) {
+    const a = Math.floor(i * step);
+    const b = Math.max(a + 1, Math.floor((i + 1) * step));
+    const part = points.slice(a, b);
+    const vals = part.map((p) => p.v).filter((v): v is number => v != null && Number.isFinite(v));
+    out.push({ ts: part[Math.floor(part.length / 2)].ts, v: vals.length ? vals.reduce((s, v) => s + v, 0) / vals.length : null });
+  }
+  return out;
+}
+
+/** The index of the point nearest to a horizontal position given as a share of the width (0..1). */
+export function nearestIndex(share: number, n: number): number {
+  if (n <= 1) return 0;
+  return Math.max(0, Math.min(n - 1, Math.round(share * (n - 1))));
+}

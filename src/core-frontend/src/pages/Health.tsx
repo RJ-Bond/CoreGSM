@@ -1,9 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api';
-import { buildChart, shareOf, stateSegments } from '../healthChart';
-import { downsample } from '../sparkline';
+import { shareOf, stateSegments } from '../healthChart';
 import { t, useI18n } from '../i18n';
-import { AdminPage, IconHealth, PageHead, Section, StateView, errorKind, fmtDateTime, fmtTime } from '../ui';
+import { AdminPage, IconHealth, LineChart, PageHead, Section, StateView, errorKind, fmtDateTime, fmtTime } from '../ui';
 
 interface Sample { ts: number; dbBytes: number | null; rssMb: number | null; pollMs: number | null; pollFailures: number | null; botState: string | null; queueLen: number | null; diskFree: number | null; loadPct?: number | null }
 interface Flag { kind: string; since: number; text: string }
@@ -17,32 +16,6 @@ const num = (n: number, d = 1) => n.toFixed(d).replace(/\.0+$/, '').replace('.',
 const ms = (n: number) => (n >= 1000 ? `${num(n / 1000)} ${t('hl.u.s')}` : `${Math.round(n)} ${t('hl.u.ms')}`);
 const mb = (n: number) => (n >= 1024 * MB ? `${num(n / GB, 2)} ${t('hl.u.gb')}` : `${num(n / MB, n < 10 * MB ? 1 : 0)} ${t('hl.u.mb')}`);
 const botBad = (s: string) => s === 'offline' || s === 'error';
-
-const W = 640;
-const H = 150;
-
-function Chart({ title, hint, values, fmt, limit, lowIsBad, floor }: { title: string; hint?: string; values: (number | null)[]; fmt: (n: number) => string; limit?: number; lowIsBad?: boolean; floor?: boolean }) {
-  const c = useMemo(() => buildChart(downsample(values, 160), W, H, { limit, floor }), [values, limit, floor]);
-  const breach = c.last != null && limit != null && (lowIsBad ? c.last < limit : c.last > limit);
-  return (
-    <div className={`rounded-ui-lg bg-soft p-4 ${breach ? 'ring-2 ring-bad' : ''}`}>
-      <div className="flex flex-wrap items-baseline justify-between gap-x-3">
-        <h3 className="font-extrabold">{title}</h3>
-        <span className={`text-xl font-black tabular-nums ${breach ? 'text-bad' : ''}`}>{c.last == null ? '–' : fmt(c.last)}</span>
-      </div>
-      {hint && <p className="text-sm font-semibold text-mute">{hint}</p>}
-      <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" className="mt-2 block h-36 w-full" role="img" aria-label={c.empty ? t('hl.noData') : t('hl.chartAria', { title, now: fmt(c.last ?? 0), min: fmt(c.min), max: fmt(c.max) })}>
-        {!c.empty && <path d={c.area} className="fill-link" opacity="0.14" />}
-        {!c.empty && <path d={c.path} fill="none" className="stroke-link" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />}
-        {c.limitY != null && <line x1="0" x2={W} y1={c.limitY} y2={c.limitY} className="stroke-bad" strokeWidth="1.5" strokeDasharray="6 5" vectorEffect="non-scaling-stroke" />}
-      </svg>
-      <div className="mt-1 flex flex-wrap justify-between gap-x-3 text-xs font-bold text-mute">
-        <span>{c.empty ? t('hl.noData') : `${t('hl.min')} ${fmt(c.min)} · ${t('hl.max')} ${fmt(c.max)}`}</span>
-        {limit != null && <span className="text-bad">{t(lowIsBad ? 'hl.limitLow' : 'hl.limit', { v: fmt(limit) })}</span>}
-      </div>
-    </div>
-  );
-}
 
 const STATE_TONE = (s: string) => (botBad(s) ? 'bg-bad' : s === 'none' || s === 'unknown' ? 'bg-line' : 'bg-ok');
 
@@ -86,7 +59,7 @@ export default function HealthPage() {
 
   const samples = data?.samples ?? [];
   const th = data?.thresholds;
-  const col = <K extends keyof Sample>(k: K) => samples.map((s) => (s[k] as number | null) ?? null);
+  const col = <K extends keyof Sample>(k: K) => samples.map((s) => ({ ts: s.ts, v: (s[k] as number | null) ?? null }));
   const end = samples.length ? samples[samples.length - 1].ts : 0;
 
   return (
@@ -120,12 +93,12 @@ export default function HealthPage() {
             <>
               <BotStrip samples={samples} end={end} />
               <div className="grid gap-4 lg:grid-cols-2">
-                <Chart title={t('hl.poll')} hint={t('hl.pollHint')} values={col('pollMs')} fmt={ms} limit={th?.pollSlowMs} />
-                <Chart title={t('hl.disk')} hint={t('hl.diskHint')} values={col('diskFree')} fmt={mb} limit={th?.diskLowBytes} lowIsBad floor />
-                <Chart title={t('hl.db')} hint={t('hl.dbHint')} values={col('dbBytes')} fmt={mb} floor />
-                <Chart title={t('hl.mem')} values={col('rssMb')} fmt={(n) => `${Math.round(n)} ${t('hl.u.mb')}`} floor />
-                <Chart title={t('hl.cpu')} hint={t('hl.cpuHint')} values={col('loadPct')} fmt={(n) => `${Math.round(n)} %`} />
-                <Chart title={t('hl.queue')} hint={t('hl.queueHint')} values={col('queueLen')} fmt={(n) => String(Math.round(n))} />
+                <LineChart title={t('hl.poll')} hint={t('hl.pollHint')} points={col('pollMs')} fmt={ms} limit={th?.pollSlowMs} />
+                <LineChart title={t('hl.disk')} hint={t('hl.diskHint')} points={col('diskFree')} fmt={mb} limit={th?.diskLowBytes} lowIsBad floor />
+                <LineChart title={t('hl.db')} hint={t('hl.dbHint')} points={col('dbBytes')} fmt={mb} floor />
+                <LineChart title={t('hl.mem')} points={col('rssMb')} fmt={(n) => `${Math.round(n)} ${t('hl.u.mb')}`} floor />
+                <LineChart title={t('hl.cpu')} hint={t('hl.cpuHint')} points={col('loadPct')} fmt={(n) => `${Math.round(n)} %`} />
+                <LineChart title={t('hl.queue')} hint={t('hl.queueHint')} points={col('queueLen')} fmt={(n) => String(Math.round(n))} />
               </div>
               <p className="text-sm font-semibold text-mute">{t('hl.foot', { n: samples.length, t: fmtDateTime(samples[0].ts) })}</p>
             </>
