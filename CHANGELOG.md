@@ -18,6 +18,7 @@ interface language; the GitHub release text is built from the section of the ver
 
 ### ✨ Новое | New
 - 📈 Под сообщением сервера в Discord — мини-график онлайна за 24 часа (отключается настройкой `embed_chart` = 0), а шкала игроков по мере заполнения меняет цвет: последние клетки жёлтеют и краснеют | A 24-hour online chart under the server message in Discord (turn off with the `embed_chart` setting = 0), and the players bar changes colour as it fills: the last squares turn amber and red
+- 🎨 Картинка недели стала нагляднее: стрелки тренда ▲▼, время пика онлайна, подсвеченный самый людный день, полоса аптайма у каждого сервера, строка «ещё N серверов» и светлое оформление на выбор | The weekly picture is easier to read: ▲▼ trend arrows, the time of the online peak, the busiest day highlighted, an uptime bar on every server, a «N more servers» row and a light look to choose from
 
 ### 🐛 Исправлено | Fixed
 - 🖼️ Картинка «Неделя на …»: названия серверов целиком видно — общее начало («[RU] Just-Skill.Ru | …») убирается, длинное имя переносится на две строки, заголовок «Серверы» не слипается с подписью | The weekly picture: server names are readable — the shared start («[RU] Just-Skill.Ru | …») is dropped, long names wrap onto two lines, and the «Servers» heading no longer touches its caption
