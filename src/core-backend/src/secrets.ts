@@ -28,6 +28,8 @@ export const SECRET_SETTING_KEYS: ReadonlySet<string> = new Set([
   'smtp_password',
   // may carry credentials (https://user:pass@host/...)
   'backup_remote_url',
+  // the S3 access key (the secret key ends in _secret and is covered by the pattern)
+  'backup_s3_key',
 ]);
 
 export const isSecretKey = (key: string): boolean => SECRET_SETTING_KEYS.has(key) || /_(secret|token)$/.test(key);
