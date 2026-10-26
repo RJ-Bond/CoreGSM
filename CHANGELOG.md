@@ -20,9 +20,13 @@ interface language; the GitHub release text is built from the section of the ver
 - 📣 Сообщение «Панель обновлена» стало коротким: заметки только новой версии, из них полностью «Новое», а «Исправлено» и «Прочее» числами; под сообщением кнопка «Что нового» со ссылкой на выпуск. Режим выбирается в «Настройки → Обновления»: кратко, подробно или всё с установленной версии | The «Panel updated» message is now short: the notes of the new version only, «New» in full and «Fixed» and «Other» as numbers; a «What's new» button under the message opens the release. The mode is chosen in Settings → Updates: brief, detailed or everything since the installed version
 - 🖥 Страница сервера стала компактнее: счётчик игроков и шкала в одной строке, адрес на кнопке копирования, один уровень навигации, пустые отзывы в одну строку, подпись «показать пинг» на графике, нейтральные цвета рангов | The server page is more compact: the player counter and the fill bar share a row, the address is on the copy button, one level of navigation, empty reviews take one line, a «show ping» label on the chart, neutral rank colours
 
+### 🐛 Исправлено | Fixed
+- 🔔 Колокольчик «Требует внимания» в админке снова получает список: запрос уходил на неверный адрес `/api/api/admin/attention` и отвечал 404 | The «Needs attention» bell in the admin area gets its list again: the request went to a wrong address, `/api/api/admin/attention`, and answered 404
+
 ### 🔧 Прочее | Other
 - 🧪 Скрипт `tools/shots/run.mjs`: снимки страниц и автоматическая проверка интерфейса (горизонтальная прокрутка, обрезанный текст, ошибки запросов, доступность axe-core) | `tools/shots/run.mjs` script: page screenshots and automatic UI checks (horizontal scroll, clipped text, failed requests, axe-core accessibility)
 - 🐛 Тип настройки «режим сообщения об обновлении» в маршруте обновлений: сборка бэкенда снова проходит проверку типов | Fixed the type of the update-notice mode setting: the backend typecheck passes again
+- 📦 Зависимости: `@tanstack/react-query` (общий кэш запросов, строка «Опрос идёт» в админке уже на нём), Radix: подсказки, меню, вкладки и выбор; `@vitest/coverage-v8` и команда `npm run coverage` | Dependencies: `@tanstack/react-query` (a shared request cache; the poll status strip in the admin area already uses it), Radix tooltip, dropdown menu, tabs and select; `@vitest/coverage-v8` and the `npm run coverage` command
 
 ## 1.0.0.42 · 26.10.2026
 

@@ -22,6 +22,7 @@ import { RootBoundary } from './RootBoundary';
 import { api, getToken } from './api';
 import { toast } from './ui/toast';
 import { initAppearance } from './appearance';
+import { QueryProvider } from './ui/query';
 import { installViewport } from './ui/viewport';
 import { initDensity, installMagnetic, installSegIndicator } from './useMotion';
 
@@ -35,7 +36,9 @@ installViewport();
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <RootBoundary>
-      <App />
+      <QueryProvider>
+        <App />
+      </QueryProvider>
     </RootBoundary>
   </React.StrictMode>,
 );
