@@ -5,6 +5,7 @@ import crypto from 'node:crypto';
 import type { Request, Response } from 'express';
 import { issueToken, loadUser, rateLimit, registrationOpen, userFromToken } from '../auth.js';
 import { bot, clientIdFromToken } from '../botState.js';
+import { type BanRow, activeBan } from '../banLogic.js';
 import { db, getSetting } from '../db.js';
 import { wrap } from '../http.js';
 import { logAccount } from '../profile.js';
@@ -70,7 +71,7 @@ router.get(
       return failTo(res, getSetting('proxy_url') ? 'Не удалось связаться с Discord через прокси. Проверьте прокси в настройках бота' : 'Не удалось связаться с Discord. Если он недоступен напрямую, задайте прокси в настройках бота');
     }
     const dname = me.global_name || me.username;
-    const owner = db.prepare('SELECT id, username, status FROM users WHERE discord_id = ?').get(me.id) as { id: number; username: string; status: string } | undefined;
+    const owner = db.prepare('SELECT id, username, status, banned_at, banned_until, ban_reason FROM users WHERE discord_id = ?').get(me.id) as ({ id: number; username: string; status: string } & BanRow) | undefined;
 
     if (st.mode === 'link') {
       if (owner && owner.id !== st.userId) return toPanel(res, 'profile/' + encodeURIComponent('Этот Discord уже привязан к другому аккаунту'));
@@ -82,6 +83,7 @@ router.get(
     if (owner) {
       db.prepare('UPDATE users SET discord_name = ?, discord_avatar = ? WHERE id = ?').run(dname, me.avatar ?? null, owner.id);
       if (owner.status !== 'active') return failTo(res, 'Заявка на регистрацию ещё не одобрена администратором');
+      if (activeBan(owner, Date.now())) return failTo(res, 'Учётная запись заблокирована администратором');
       logAccount(req, owner.id, 'login', 'Discord');
       noteLogin(req, owner.id, brand().name);
       const tok = issueToken(owner, req);

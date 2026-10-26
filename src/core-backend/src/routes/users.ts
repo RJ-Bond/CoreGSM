@@ -4,6 +4,7 @@ import bcrypt from 'bcryptjs';
 import { z } from 'zod';
 import { admin, type AuthedRequest, parsePerms, PERMS, type Role } from '../auth.js';
 import { avatarFor, removeAvatar } from '../avatars.js';
+import { activeBan, banUntil } from '../banLogic.js';
 import { db } from '../db.js';
 import { wrap } from '../http.js';
 import { logAccount, removeBanner } from '../profile.js';
@@ -14,7 +15,7 @@ export const router = express.Router();
 const adminCount = () => (db.prepare("SELECT COUNT(*) AS n FROM users WHERE role = 'admin' AND status = 'active'").get() as { n: number }).n;
 
 router.get('/api/users', admin, (_req, res) => {
-  const rows = db.prepare('SELECT id, username, role, perms, created_at, status, discord_name, discord_id, discord_avatar, (SELECT MAX(last_seen) FROM sessions WHERE user_id = users.id) AS last_seen FROM users ORDER BY (status = \'pending\') DESC, id').all() as {
+  const rows = db.prepare('SELECT id, username, role, perms, created_at, status, banned_at, banned_until, ban_reason, discord_name, discord_id, discord_avatar, (SELECT MAX(last_seen) FROM sessions WHERE user_id = users.id) AS last_seen FROM users ORDER BY (status = \'pending\') DESC, id').all() as {
     last_seen: number | null;
     id: number;
     username: string;
@@ -22,11 +23,14 @@ router.get('/api/users', admin, (_req, res) => {
     perms: string | null;
     created_at: number | null;
     status: string;
+    banned_at: number | null;
+    banned_until: number | null;
+    ban_reason: string | null;
     discord_name: string | null;
     discord_id: string | null;
     discord_avatar: string | null;
   }[];
-  res.json(rows.map((u) => ({ id: u.id, username: u.username, role: u.role, perms: u.role === 'moderator' ? parsePerms(u.perms) : u.role === 'admin' ? [...PERMS] : [], createdAt: u.created_at, status: u.status, discordName: u.discord_name, avatarUrl: avatarFor(u), lastSeen: u.last_seen ?? null })));
+  res.json(rows.map((u) => ({ id: u.id, username: u.username, role: u.role, perms: u.role === 'moderator' ? parsePerms(u.perms) : u.role === 'admin' ? [...PERMS] : [], createdAt: u.created_at, status: u.status, ban: activeBan(u, Date.now()), discordName: u.discord_name, avatarUrl: avatarFor(u), lastSeen: u.last_seen ?? null })));
 });
 
 router.post('/api/users/:id/approve', admin, (req, res) => {
@@ -62,6 +66,27 @@ router.put(
     res.json({ ok: true });
   }),
 );
+
+router.post('/api/users/:id/ban', admin, (req: AuthedRequest, res) => {
+  const id = Number(req.params.id);
+  const b = z.object({ reason: z.string().trim().max(300).optional(), hours: z.number().min(0).max(100000).nullable().optional() }).safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: 'Проверьте поля формы' });
+  if (id === req.user!.id) return res.status(409).json({ error: 'Нельзя заблокировать собственную учётную запись' });
+  const u = db.prepare('SELECT role FROM users WHERE id = ?').get(id) as { role: Role } | undefined;
+  if (!u) return res.status(404).json({ error: 'Пользователь не найден' });
+  if (u.role === 'admin') return res.status(409).json({ error: 'Администратора нельзя заблокировать: сначала смените ему роль' });
+  const now = Date.now();
+  db.prepare('UPDATE users SET banned_at = ?, banned_until = ?, ban_reason = ? WHERE id = ?').run(now, banUntil(b.data.hours, now), b.data.reason ?? '', id);
+  // the person is signed out everywhere at once
+  db.prepare('DELETE FROM sessions WHERE user_id = ?').run(id);
+  res.json({ ok: true });
+});
+
+router.post('/api/users/:id/unban', admin, (req, res) => {
+  const r = db.prepare('UPDATE users SET banned_at = NULL, banned_until = NULL, ban_reason = NULL WHERE id = ? AND banned_at IS NOT NULL').run(Number(req.params.id));
+  if (!r.changes) return res.status(404).json({ error: 'Блокировка не найдена' });
+  res.json({ ok: true });
+});
 
 router.delete('/api/users/:id', admin, (req: AuthedRequest, res) => {
   const id = Number(req.params.id);
