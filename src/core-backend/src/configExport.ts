@@ -19,7 +19,7 @@ export const router = express.Router();
 /** settings that travel with the file: never a secret, never a counter or a timestamp of this panel */
 export const PORTABLE_SETTINGS = [
   'alerts_enabled', 'alerts_channel', 'alerts_after_min', 'alerts_mention', 'alerts_smart_low', 'alerts_smart_ping', 'alerts_smart_full',
-  'digest_enabled', 'digest_channel', 'digest_weekday', 'digest_hour',
+  'digest_enabled', 'digest_channel', 'digest_weekday', 'digest_hour', 'digest_theme',
   'brand_name', 'brand_color', 'brand_preset', 'default_theme', 'game_theme',
   'news_channel_id', 'news_test_channel_id', 'embed_players_shown',
   'poll_concurrency', 'poll_fail_threshold', 'timezone',
