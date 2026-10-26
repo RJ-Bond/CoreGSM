@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api';
+import { t, useI18n } from '../i18n';
 import { Section, Switch, toast, fail } from '../ui';
 
 const OPTIONS = [0, 3, 5, 8, 10, 15, 20];
 
 /** «Ники в сообщении»: how many player names the Discord message lists; the rest is a link to the site. */
 export default function PlayersShownCard() {
+  useI18n();
   const [value, setValue] = useState<number | null>(null);
   const [chart, setChart] = useState(true);
   const [tile, setTile] = useState(false);
@@ -62,15 +64,15 @@ export default function PlayersShownCard() {
       <label className="mt-4 flex cursor-pointer items-start gap-3">
         <Switch className="mt-0.5" checked={chart} disabled={busy} onChange={(on) => void flag({ chart: on })} />
         <span>
-          <span className="block font-extrabold">График онлайна за 24 часа</span>
-          <span className="block text-sm font-semibold text-mute">Картинка под сообщением сервера. В сообщении с несколькими серверами она не показывается.</span>
+          <span className="block font-extrabold">{t('embed.chart')}</span>
+          <span className="block text-sm font-semibold text-mute">{t('embed.chart.hint')}</span>
         </span>
       </label>
       <label className="mt-3 flex cursor-pointer items-start gap-3">
         <Switch className="mt-0.5" checked={tile} disabled={busy} onChange={(on) => void flag({ iconTile: on })} />
         <span>
-          <span className="block font-extrabold">Значок игры на цветной плашке</span>
-          <span className="block text-sm font-semibold text-mute">Значок виден и в светлой, и в тёмной теме Discord. Без плашки это прозрачная картинка игры.</span>
+          <span className="block font-extrabold">{t('embed.tile')}</span>
+          <span className="block text-sm font-semibold text-mute">{t('embed.tile.hint')}</span>
         </span>
       </label>
     </Section>
