@@ -54,7 +54,7 @@
   .st-banner-stats > div { flex: 1 1 40%; }
 }
 .st-up-v { font-size: 26px; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; text-align: right; }
-.st-up-v.is-great { color: rgb(var(--ok)); }
+.st-up-v.is-great { font-size: 20px; color: rgb(var(--ok)); }
 .st-up-v.is-meh { color: rgb(var(--warn)); }
 .st-up-v.is-poor { color: rgb(var(--bad)); }
 .st-up-k { margin-top: 4px; font-size: var(--fs-xs); font-weight: 600; color: rgb(var(--mute)); text-align: right; white-space: nowrap; }
@@ -89,8 +89,10 @@
 .st-day.is-ok { background: rgb(var(--ok)); }
 .st-day.is-blip { background: linear-gradient(180deg, rgb(var(--warn)) 0 30%, rgb(var(--ok)) 30%); }
 .st-legend.is-blip { background: linear-gradient(180deg, rgb(var(--warn)) 0 45%, rgb(var(--ok)) 45%); }
-.st-day.is-warn { background: rgb(var(--warn)); }
-.st-day.is-bad { background: rgb(var(--bad)); }
+.st-day.is-warn { background: repeating-linear-gradient(0deg, rgb(var(--warn)) 0 4px, rgb(var(--warn) / .5) 4px 7px); }
+.st-day.is-bad { position: relative; overflow: hidden; background: rgb(var(--bad)); }
+/* a cross on a bad day: the state does not rest on the colour alone */
+.st-day.is-bad::after { content: ''; position: absolute; inset: 0; opacity: .85; background: linear-gradient(45deg, transparent 43%, #fff 43% 57%, transparent 57%), linear-gradient(-45deg, transparent 43%, #fff 43% 57%, transparent 57%); }
 .st-day.is-planned { background: repeating-linear-gradient(135deg, rgb(var(--link)) 0 4px, rgb(var(--link) / .55) 4px 8px); }
 .st-day.is-hover { transform: scaleY(1.12); filter: brightness(1.08); }
 .st-legend { display: inline-block; width: 12px; height: 12px; flex: none; }
