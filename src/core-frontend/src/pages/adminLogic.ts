@@ -41,7 +41,7 @@ export function dayKey(d = new Date()): string {
 }
 
 /** «g» then a letter jumps to a section of the admin area */
-export const CHORDS: Record<string, string> = { o: 'overview', s: 'servers', d: 'discord', n: 'news', a: 'alerts', u: 'users', j: 'journal', y: 'system', c: 'community', t: 'settings' };
+export const CHORDS: Record<string, string> = { o: 'overview', s: 'servers', d: 'discord', n: 'news', a: 'alerts', u: 'users', j: 'journal', y: 'system', h: 'health', c: 'community', t: 'settings' };
 
 /** the letter of a section's chord, if it has one */
 export const chordOf = (section: string): string | null => Object.entries(CHORDS).find(([, id]) => id === section)?.[0] ?? null;

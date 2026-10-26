@@ -67,6 +67,7 @@ const ADMIN_TITLES: Record<string, string> = {
   community: 'Сообщество',
   users: 'Пользователи',
   journal: 'Журнал',
+  health: 'Здоровье',
   system: 'Система',
   settings: 'Настройки',
 };
@@ -416,7 +417,7 @@ export default function App() {
         <header className="glass sticky top-2 z-30 mb-5 flex items-center gap-x-2 rounded-[22px] py-2 pl-3 pr-2 sm:top-3 md:mb-7 md:gap-x-3 md:pl-4">
           <a href="/servers" className="flex min-w-0 items-center gap-2.5 text-xl font-black tracking-tight max-md:flex-1 sm:text-[22px] md:max-w-60 md:shrink-0">
             <Logo size={34} alt="" />
-            <Wordmark className="min-w-0 truncate" />
+            <Wordmark className="hdr-word min-w-0 truncate" />
           </a>
           {/* desktop navigation; on phones the same sections live in the bottom bar */}
           <nav className="seg ml-2 hidden md:inline-flex" aria-label={t('nav.sections')}>
@@ -494,7 +495,7 @@ export default function App() {
                   <a
                     href={`/${p.id}`}
                     aria-current={active ? 'page' : undefined}
-                    className={`relative flex min-h-[58px] flex-col items-center gap-0.5 px-1 pb-1.5 pt-2 text-xs font-extrabold ${active ? 'text-link' : 'text-mute'}`}
+                    className={`bn-item relative flex min-h-[58px] flex-col items-center gap-0.5 px-1 pb-1.5 pt-2 text-xs font-extrabold ${active ? 'text-link' : 'text-mute'}`}
                   >
                     <span className={`grid h-7 w-14 place-items-center rounded-full transition ${active ? 'bg-linear-to-br from-brand to-brand-2 text-white shadow-pop' : ''}`}>{p.icon()}</span>
                     {t(p.label)}

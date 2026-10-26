@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="0552328fad53"
+COREGSM_BUILD="01f0d0aae5d5"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -6668,6 +6668,7 @@ import { alertSettings, enqueueAlert } from './alerts.js';
 import { JWT_SECRET } from './config.js';
 import { db, EFFECTIVE_NAME, getSetting, setSetting } from './db.js';
 import { incidentsSince } from './incidents.js';
+import { changePct, dailyPeaks, sparkPoints } from './digestLogic.js';
 import { localParts } from './localTime.js';
 import { brand, publicBase } from './site.js';
 import { param } from './http.js';
@@ -6690,6 +6691,8 @@ const tz = () => getSetting('timezone') || process.env.TZ || 'Europe/Moscow';
 export interface DigestServer {
   id: number; name: string; game: string; players: number; prevPlayers: number; peak: number; peakAt: number | null;
   hours: number; uptime: number | null; incidents: number; downMinutes: number;
+  /** the highest online of each of the seven days (oldest first), for the small chart in the picture */
+  daily: number[];
 }
 export interface Digest {
   from: number; to: number;
@@ -6711,6 +6714,9 @@ export function buildDigest(to = Date.now()): Digest {
   const clip = (j: number, l: number, a: number, b: number) => Math.max(0, Math.min(l, b) - Math.max(j, a)) / 3600_000;
   const incidents = incidentsSince(from, undefined, to).filter((i) => !i.planned);
   const tzName = tz();
+  const days = Array.from({ length: 7 }, (_, i) => localParts(from + (i + 0.5) * DAY, tzName).day);
+  const dayOf = (ts: number) => localParts(ts, tzName).day;
+  const hist = db.prepare('SELECT ts, players FROM history WHERE server_id = ? AND ts > ? AND ts <= ?');
 
   const perServer: DigestServer[] = servers.map((sv) => {
     const mine = visits.filter((v) => v.s === sv.id);
@@ -6730,13 +6736,13 @@ export function buildDigest(to = Date.now()): Digest {
       hours: Math.round(cur.reduce((n, v) => n + clip(v.j, v.l, from, to), 0)),
       uptime: up.t ? Math.round((up.u! / up.t) * 1000) / 10 : null,
       incidents: inc.length,
+      daily: dailyPeaks(hist.all(sv.id, from, to) as { ts: number; players: number }[], days, dayOf),
       downMinutes: inc.reduce((n, i) => n + Math.round((Math.min(i.end ?? to, to) - Math.max(i.start, from)) / 60_000), 0),
     };
   });
 
   const cur = visits.filter((v) => v.l > from);
   const prev = visits.filter((v) => v.j < from);
-  const days = Array.from({ length: 7 }, (_, i) => localParts(from + (i + 0.5) * DAY, tzName).day);
   const byDay = new Map(days.map((d) => [d, new Set<string>()]));
   for (const v of cur) byDay.get(localParts(Math.max(v.j, from), tzName).day)?.add(v.k);
   const per = new Map<string, { name: string; hours: number }>();
@@ -6768,7 +6774,7 @@ export function buildDigest(to = Date.now()): Digest {
   };
 }
 
-const delta = (cur: number, prev: number) => (prev > 0 ? Math.round(((cur - prev) / prev) * 100) : null);
+const delta = changePct;
 const deltaText = (d: number | null) => (d == null ? '' : d === 0 ? ' (как неделей раньше)' : ` (${d > 0 ? '+' : '−'}${Math.abs(d)}% к прошлой неделе)`);
 const dateRu = (t: number) => new Date(t).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', timeZone: tz() });
 
@@ -6866,6 +6872,9 @@ export async function renderDigest(d: Digest): Promise<Buffer> {
   ctx.fillStyle = 'rgba(255,255,255,.7)';
   ctx.font = `bold 18px ${SANS}`;
   ctx.fillText('Серверы', sx, by);
+  ctx.fillStyle = 'rgba(255,255,255,.45)';
+  ctx.font = `600 14px ${SANS}`;
+  ctx.fillText('линия: пик онлайна по дням · %: к прошлой неделе', sx + 90, by);
   d.servers.slice(0, 5).forEach((s, i) => {
     const y = by + 22 + i * 50;
     ctx.fillStyle = 'rgba(255,255,255,.06)';
@@ -6875,14 +6884,32 @@ export async function renderDigest(d: Digest): Promise<Buffer> {
     ctx.fillStyle = '#ffffff';
     ctx.font = `bold 18px ${SANS}`;
     let name = s.name;
-    while (name.length > 3 && ctx.measureText(name).width > 250) name = name.slice(0, -1);
+    while (name.length > 3 && ctx.measureText(name).width > 170) name = name.slice(0, -1);
     ctx.fillText(name === s.name ? name : `${name}…`, sx + 14, y + 28);
+    // the week in one line: the highest online of each day
+    const pts = sparkPoints(s.daily, 70, 20);
+    const px = sx + 200;
+    const py = y + 11;
+    ctx.strokeStyle = accent;
+    ctx.lineWidth = 2.5;
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    pts.forEach(([x, yy], k) => (k ? ctx.lineTo(px + x, py + yy) : ctx.moveTo(px + x, py + yy)));
+    ctx.stroke();
+    // players, and how that compares with the week before
     ctx.font = `600 16px ${SANS}`;
     ctx.fillStyle = 'rgba(255,255,255,.75)';
-    ctx.fillText(`${s.players} игр.`, sx + 290, y + 28);
+    ctx.fillText(`${s.players} игр.`, sx + 290, y + 20);
+    const ch = changePct(s.players, s.prevPlayers);
+    if (ch != null) {
+      ctx.font = `600 13px ${SANS}`;
+      ctx.fillStyle = ch < 0 ? '#ff8a8a' : ch > 0 ? '#7ee2a8' : 'rgba(255,255,255,.55)';
+      ctx.fillText(ch === 0 ? '=' : `${ch > 0 ? '+' : '−'}${Math.abs(ch)}%`, sx + 290, y + 36);
+    }
+    ctx.font = `600 16px ${SANS}`;
     const ok = s.incidents === 0;
     ctx.fillStyle = ok ? '#7ee2a8' : s.downMinutes >= 60 ? '#ff8a8a' : '#ffd27a';
-    ctx.fillText(s.uptime == null ? '–' : `${String(s.uptime).replace('.', ',')}%`, sx + 390, y + 28);
+    ctx.fillText(s.uptime == null ? '–' : `${String(s.uptime).replace('.', ',')}%`, sx + 410, y + 28);
   });
   if (d.top.length) {
     ctx.fillStyle = 'rgba(255,255,255,.6)';
@@ -7000,6 +7027,33 @@ export function registerDigest({ app, admin }: { app: Express; admin: RequestHan
       next(e);
     }
   });
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/digestLogic.ts" << '__COREGSM_EOF__'
+/** Pure helpers of the weekly digest picture (no database, so tests can import them). */
+
+/** The highest online of every listed day: `days` are local day keys, `dayOf` maps a timestamp to its key. */
+export function dailyPeaks(rows: { ts: number; players: number }[], days: string[], dayOf: (ts: number) => string): number[] {
+  const peak = new Map(days.map((d) => [d, 0]));
+  for (const r of rows) {
+    const k = dayOf(r.ts);
+    const cur = peak.get(k);
+    if (cur !== undefined && r.players > cur) peak.set(k, r.players);
+  }
+  return days.map((d) => peak.get(d) ?? 0);
+}
+
+/** Change against the week before as a rounded percent; null when there was nothing to compare with. */
+export function changePct(cur: number, prev: number): number | null {
+  return prev > 0 ? Math.round(((cur - prev) / prev) * 100) : null;
+}
+
+/** Points of a small line chart inside a box: x from 0 to w, y from h (zero) up to 0 (the highest value). */
+export function sparkPoints(values: number[], w: number, h: number): [number, number][] {
+  const max = Math.max(1, ...values);
+  const n = values.length;
+  return values.map((v, i) => [n <= 1 ? w / 2 : (i / (n - 1)) * w, h - (v / max) * h]);
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
@@ -8734,6 +8788,12 @@ export function computeFlags(samples: Sample[], cur: Sample, pollMs: number, now
   return flags;
 }
 
+/** the limits the flags use, so a chart can draw them */
+export function thresholds(): { pollIntervalMs: number; pollSlowMs: number; diskLowBytes: number } {
+  const iv = pollIntervalMs();
+  return { pollIntervalMs: iv, pollSlowMs: Math.max(5000, iv * 0.8), diskLowBytes: GB };
+}
+
 const pollIntervalMs = () => Number(process.env.POLL_INTERVAL_SEC ?? 30) * 1000 || 30_000;
 
 /** flags right now (added to GET /api/system) */
@@ -8765,7 +8825,7 @@ export function registerHealth({ app, admin, bot }: { app: Express; admin: Reque
     const now = Date.now();
     // first look before the first scheduled sample: take one now so the chart is never empty
     if (!(db.prepare('SELECT 1 FROM health_samples LIMIT 1').get())) recordSample(now);
-    res.json({ samples: samplesSince(now - hours * 3600_000), flags: currentFlags(now) });
+    res.json({ samples: samplesSince(now - hours * 3600_000), flags: currentFlags(now), thresholds: thresholds() });
   });
   const tick = () => {
     try {
@@ -47423,6 +47483,7 @@ const ADMIN_TITLES: Record<string, string> = {
   community: 'Сообщество',
   users: 'Пользователи',
   journal: 'Журнал',
+  health: 'Здоровье',
   system: 'Система',
   settings: 'Настройки',
 };
@@ -47772,7 +47833,7 @@ export default function App() {
         <header className="glass sticky top-2 z-30 mb-5 flex items-center gap-x-2 rounded-[22px] py-2 pl-3 pr-2 sm:top-3 md:mb-7 md:gap-x-3 md:pl-4">
           <a href="/servers" className="flex min-w-0 items-center gap-2.5 text-xl font-black tracking-tight max-md:flex-1 sm:text-[22px] md:max-w-60 md:shrink-0">
             <Logo size={34} alt="" />
-            <Wordmark className="min-w-0 truncate" />
+            <Wordmark className="hdr-word min-w-0 truncate" />
           </a>
           {/* desktop navigation; on phones the same sections live in the bottom bar */}
           <nav className="seg ml-2 hidden md:inline-flex" aria-label={t('nav.sections')}>
@@ -47850,7 +47911,7 @@ export default function App() {
                   <a
                     href={`/${p.id}`}
                     aria-current={active ? 'page' : undefined}
-                    className={`relative flex min-h-[58px] flex-col items-center gap-0.5 px-1 pb-1.5 pt-2 text-xs font-extrabold ${active ? 'text-link' : 'text-mute'}`}
+                    className={`bn-item relative flex min-h-[58px] flex-col items-center gap-0.5 px-1 pb-1.5 pt-2 text-xs font-extrabold ${active ? 'text-link' : 'text-mute'}`}
                   >
                     <span className={`grid h-7 w-14 place-items-center rounded-full transition ${active ? 'bg-linear-to-br from-brand to-brand-2 text-white shadow-pop' : ''}`}>{p.icon()}</span>
                     {t(p.label)}
@@ -51700,7 +51761,8 @@ __COREGSM_EOF__
  */
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { api, onBusy, type Me } from '../api';
-import { t } from '../i18n';
+import { useAppearance } from '../appearance';
+import { t, useI18n } from '../i18n';
 import { UserAvatar } from '../ui';
 import '../styles/shell.css';
 
@@ -51815,7 +51877,9 @@ export function Crumbs({ items }: { items: [href: string, label: ReactNode][] })
 
 // ---------- profile menu ----------
 export function ProfileMenu({ me, isStaff, logout, active }: { me: Me; isStaff: boolean; logout: () => void; active: boolean }) {
+  useI18n();
   const [open, setOpen] = useState(false);
+  const [look, setLook] = useAppearance();
   const box = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!open) return;
@@ -51851,6 +51915,11 @@ export function ProfileMenu({ me, isStaff, logout, active }: { me: Me; isStaff: 
           <a role="menuitem" className={link} href="/profile">{t('hdr.profile')}</a>
           <a role="menuitem" className={link} href="/gallery">Моя галерея</a>
           {isStaff && <a role="menuitem" className={link} href="/admin">{t('nav.admin')}</a>}
+          <div className="pm-sep" role="separator" />
+          {/* one tap, and the menu stays open so both can be set at once */}
+          <button type="button" role="menuitemcheckbox" aria-checked={look.largeText} className={`${link} pm-toggle`} onClick={(e) => { e.stopPropagation(); setLook({ largeText: !look.largeText }); }}>{t('pf.a11y.text')}</button>
+          <button type="button" role="menuitemcheckbox" aria-checked={look.liteData} className={`${link} pm-toggle`} onClick={(e) => { e.stopPropagation(); setLook({ liteData: !look.liteData }); }}>{t('pf.a11y.lite')}</button>
+          <div className="pm-sep" role="separator" />
           <button type="button" role="menuitem" className={`${link} is-danger`} onClick={logout}>{t('hdr.logout')}</button>
         </div>
       )}
@@ -64507,6 +64576,79 @@ export const GAME_IMAGE: Record<string, string> = {
 export const gameGradient = (id: string): [string, string] => gradientFor(gameColor(id));
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
+  cat > "$APP_DIR/core-frontend/src/healthChart.ts" << '__COREGSM_EOF__'
+/** Geometry of the health charts: pure functions, no drawing code. */
+
+export interface Chart {
+  path: string;
+  area: string;
+  /** y of the threshold line (undefined when there is none or it is off the chart) */
+  limitY?: number;
+  min: number;
+  max: number;
+  last: number | null;
+  empty: boolean;
+}
+
+/**
+ * `values` oldest first (null = no sample; the line breaks there). The vertical range is 0..max of the data and the
+ * threshold, so a threshold line is always inside the chart and «how close to the limit» can be read at a glance.
+ * `floor` keeps the bottom at the data minimum instead of zero (for values that never get near zero, like a database size).
+ */
+export function buildChart(values: (number | null)[], w: number, h: number, o: { limit?: number; floor?: boolean; pad?: number } = {}): Chart {
+  const pad = o.pad ?? 3;
+  const real = values.filter((v): v is number => v != null && Number.isFinite(v));
+  if (!real.length) return { path: '', area: '', min: 0, max: 0, last: null, empty: true };
+  const min = Math.min(...real);
+  const max = Math.max(...real);
+  const hi = Math.max(max, o.limit ?? -Infinity);
+  const lo = o.floor ? Math.min(min, o.limit ?? Infinity) : Math.min(0, min);
+  const span = hi - lo || 1;
+  const n = values.length;
+  const x = (i: number) => (n <= 1 ? w / 2 : pad + (i / (n - 1)) * (w - pad * 2));
+  const y = (v: number) => pad + (1 - (v - lo) / span) * (h - pad * 2);
+  const f = (v: number) => Math.round(v * 10) / 10;
+  let path = '';
+  let area = '';
+  let seg: [number, number][] = [];
+  const flush = () => {
+    if (seg.length === 1) path += `M${f(seg[0][0] - 1)},${f(seg[0][1])}L${f(seg[0][0] + 1)},${f(seg[0][1])}`;
+    else if (seg.length > 1) {
+      const line = seg.map(([px, py], i) => `${i ? 'L' : 'M'}${f(px)},${f(py)}`).join('');
+      path += line;
+      area += `${line}L${f(seg[seg.length - 1][0])},${h}L${f(seg[0][0])},${h}Z`;
+    }
+    seg = [];
+  };
+  values.forEach((v, i) => { if (v == null || !Number.isFinite(v)) flush(); else seg.push([x(i), y(v)]); });
+  flush();
+  const last = [...values].reverse().find((v) => v != null && Number.isFinite(v)) ?? null;
+  return { path, area, limitY: o.limit != null && o.limit >= lo && o.limit <= hi ? f(y(o.limit)) : undefined, min, max, last, empty: false };
+}
+
+export interface Segment { from: number; to: number; state: string }
+
+/** Runs of the same bot state over time: each segment lasts until the next sample (the last one until `end`). */
+export function stateSegments(samples: { ts: number; botState: string | null }[], end: number): Segment[] {
+  const out: Segment[] = [];
+  samples.forEach((s, i) => {
+    const state = s.botState ?? 'unknown';
+    const to = i + 1 < samples.length ? samples[i + 1].ts : Math.max(end, s.ts);
+    const prev = out[out.length - 1];
+    if (prev && prev.state === state) prev.to = to;
+    else out.push({ from: s.ts, to, state });
+  });
+  return out;
+}
+
+/** Share of the time (0..1) the samples spent in a state for which `good` holds. */
+export function shareOf(segs: Segment[], good: (state: string) => boolean): number {
+  const total = segs.reduce((n, s) => n + (s.to - s.from), 0);
+  if (!total) return 1;
+  return segs.filter((s) => good(s.state)).reduce((n, s) => n + (s.to - s.from), 0) / total;
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/i18n.ts" << '__COREGSM_EOF__'
 import { useSyncExternalStore } from 'react';
 import { api, getToken, type Prefs } from './api';
@@ -64658,6 +64800,8 @@ export const IconUsers = make(<><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4
 export const IconJournal = make(<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" />, 22);
 /** heartbeat line: the System and Status pages */
 export const IconSystem = make(<path d="M22 12h-4l-3 9L9 3l-3 9H2" />, 22);
+/** a chart with a rising line: the Health page */
+export const IconHealth = make(<><path d="M3 3v18h18" /><path d="M7 15l4-5 3 3 5-7" /></>, 22);
 export const IconStart = make(<path d="M5 21V4M5 4h11l-2 4 2 4H5" />, 22);
 export const IconBell = make(<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.94 1.94 0 0 0 3.4 0" />, 22);
 
@@ -64732,7 +64876,7 @@ export const IconCopy = make(<><rect x="9" y="9" width="11" height="11" rx="2" /
 /** the catalogue the UI kit page shows (name, component); keep new icons in this list */
 export const ICON_SET: [string, (p: IconProps) => ReactNode][] = [
   ['Servers', IconServers], ['Cards', IconCards], ['Discord', IconDiscord], ['Settings', IconSettings], ['News', IconNews],
-  ['Users', IconUsers], ['Journal', IconJournal], ['System', IconSystem], ['Start', IconStart], ['Bell', IconBell],
+  ['Users', IconUsers], ['Journal', IconJournal], ['System', IconSystem], ['Health', IconHealth], ['Start', IconStart], ['Bell', IconBell],
   ['Sun', IconSun], ['Moon', IconMoon], ['Auto', IconAuto], ['Palette', IconPalette],
   ['Edit', IconEdit], ['Trash', IconTrash], ['Pause', IconPause], ['Play', IconPlay], ['Key', IconKey],
   ['Download', IconDownload], ['Upload', IconUpload], ['Restore', IconRestore], ['Undo', IconUndo], ['Copy', IconCopy],
@@ -68237,6 +68381,45 @@ const en: Record<keyof typeof ru, string> = {
   'ne.btnUrl': 'Button link {n}',
   'ne.mainText': 'Main text',
   'common.error': 'Something went wrong',
+  'adm.s.health': 'Health',
+  'adm.d.health': 'Charts of polling, disk, memory, database and queue, thresholds and the bot state.',
+  'hl.title': 'Panel health',
+  'hl.sub': 'Charts for the period and the limits that raise a warning',
+  'hl.hint': 'Samples are taken every 5 minutes and kept for 14 days. The red dashed line is the limit after which the panel shows a warning.',
+  'hl.period': 'Period',
+  'hl.p24': '24 h',
+  'hl.p7': '7 d',
+  'hl.p14': '14 d',
+  'hl.loading': 'Loading',
+  'hl.flags': 'Right now',
+  'hl.allGood': 'All good: no limit is exceeded.',
+  'hl.since': 'since {t}',
+  'hl.few': 'Not enough samples yet: charts appear after a few minutes of running.',
+  'hl.bot': 'Discord bot online',
+  'hl.botHint': 'Share of the time the bot answered. Red: the bot did not answer or reported an error.',
+  'hl.botAria': 'The bot was online {p}% of the time',
+  'hl.poll': 'Server poll duration',
+  'hl.pollHint': 'How long one polling round takes. If it is long, servers refresh less often.',
+  'hl.disk': 'Free disk space',
+  'hl.diskHint': 'When space runs out, the database and backups stop being written.',
+  'hl.db': 'Database size',
+  'hl.dbHint': 'Fast growth over a week raises a warning.',
+  'hl.mem': 'Panel memory',
+  'hl.cpu': 'CPU load',
+  'hl.cpuHint': 'One-minute average per core.',
+  'hl.queue': 'Delivery queue',
+  'hl.queueHint': 'Messages not yet sent to Discord.',
+  'hl.min': 'min',
+  'hl.max': 'max',
+  'hl.noData': 'no data',
+  'hl.limit': 'limit {v}',
+  'hl.limitLow': 'minimum {v}',
+  'hl.chartAria': '{title}: now {now}, from {min} to {max}',
+  'hl.foot': 'Samples: {n}, the first from {t}.',
+  'hl.u.s': 's',
+  'hl.u.ms': 'ms',
+  'hl.u.mb': 'MB',
+  'hl.u.gb': 'GB',
 };
 
 export default en;
@@ -70208,6 +70391,45 @@ const ru = {
   'ne.btnUrl': 'Ссылка кнопки {n}',
   'ne.mainText': 'Основной текст',
   'common.error': 'Что-то пошло не так',
+  'adm.s.health': 'Здоровье',
+  'adm.d.health': 'Графики опроса, диска, памяти, базы и очереди, пороги и состояние бота.',
+  'hl.title': 'Здоровье панели',
+  'hl.sub': 'Графики за период и пороги, после которых появляется предупреждение',
+  'hl.hint': 'Замеры берутся раз в 5 минут и хранятся 14 дней. Красная пунктирная линия: порог, после которого панель покажет предупреждение.',
+  'hl.period': 'Период',
+  'hl.p24': '24 ч',
+  'hl.p7': '7 д',
+  'hl.p14': '14 д',
+  'hl.loading': 'Загрузка',
+  'hl.flags': 'Сейчас',
+  'hl.allGood': 'Всё в порядке: порогов никто не превысил.',
+  'hl.since': 'с {t}',
+  'hl.few': 'Замеров пока мало: графики появятся через несколько минут работы панели.',
+  'hl.bot': 'Discord-бот на связи',
+  'hl.botHint': 'Доля времени, когда бот отвечал. Красное: бот не отвечал или сообщал об ошибке.',
+  'hl.botAria': 'Бот был на связи {p}% времени',
+  'hl.poll': 'Длительность опроса серверов',
+  'hl.pollHint': 'Сколько занимает один круг опроса. Если он долгий, серверы обновляются реже.',
+  'hl.disk': 'Свободно на диске',
+  'hl.diskHint': 'Когда места мало, база и копии перестают записываться.',
+  'hl.db': 'Размер базы',
+  'hl.dbHint': 'Быстрый рост за неделю панель отметит предупреждением.',
+  'hl.mem': 'Память панели',
+  'hl.cpu': 'Нагрузка процессора',
+  'hl.cpuHint': 'Средняя за минуту на одно ядро.',
+  'hl.queue': 'Очередь доставки',
+  'hl.queueHint': 'Сообщения, которые ещё не ушли в Discord.',
+  'hl.min': 'мин',
+  'hl.max': 'макс',
+  'hl.noData': 'нет данных',
+  'hl.limit': 'порог {v}',
+  'hl.limitLow': 'минимум {v}',
+  'hl.chartAria': '{title}: сейчас {now}, от {min} до {max}',
+  'hl.foot': 'Замеров: {n}, первый от {t}.',
+  'hl.u.s': 'с',
+  'hl.u.ms': 'мс',
+  'hl.u.mb': 'МБ',
+  'hl.u.gb': 'ГБ',
 };
 
 export default ru;
@@ -70566,6 +70788,7 @@ import MaintenancePage from './Maintenance';
 import SettingsPage, { UsersTab } from './Settings';
 
 export { ADMIN_SECTIONS };
+import HealthPage from './Health';
 import SystemPage from './System';
 
 /** n = 0 draws a bare dot (a state, not a count) */
@@ -70830,6 +71053,7 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
         {!home && current === 'community' && <AdminCommunity sub={tail} />}
         {!home && current === 'users' && <UsersTab />}
         {!home && current === 'journal' && <JournalPage />}
+        {!home && current === 'health' && <HealthPage />}
         {!home && current === 'system' && <SystemPage />}
         {!home && current === 'settings' && <SettingsPage sub={tail} updateAvailable={updateAvailable} />}
       </div>
@@ -74693,6 +74917,146 @@ export default function GalleryPage() {
         />
       )}
     </div>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/pages"
+  cat > "$APP_DIR/core-frontend/src/pages/Health.tsx" << '__COREGSM_EOF__'
+import { useEffect, useMemo, useState } from 'react';
+import { api } from '../api';
+import { buildChart, shareOf, stateSegments } from '../healthChart';
+import { downsample } from '../sparkline';
+import { t, useI18n } from '../i18n';
+import { AdminPage, IconHealth, PageHead, Section, StateView, errorKind, fmtDateTime, fmtTime } from '../ui';
+
+interface Sample { ts: number; dbBytes: number | null; rssMb: number | null; pollMs: number | null; pollFailures: number | null; botState: string | null; queueLen: number | null; diskFree: number | null; loadPct?: number | null }
+interface Flag { kind: string; since: number; text: string }
+interface Thresholds { pollIntervalMs: number; pollSlowMs: number; diskLowBytes: number }
+interface Resp { samples: Sample[]; flags: Flag[]; thresholds?: Thresholds }
+
+const PERIODS = [24, 168, 336] as const;
+const MB = 1048576;
+const GB = 1073741824;
+const num = (n: number, d = 1) => n.toFixed(d).replace(/\.0+$/, '').replace('.', ',');
+const ms = (n: number) => (n >= 1000 ? `${num(n / 1000)} ${t('hl.u.s')}` : `${Math.round(n)} ${t('hl.u.ms')}`);
+const mb = (n: number) => (n >= 1024 * MB ? `${num(n / GB, 2)} ${t('hl.u.gb')}` : `${num(n / MB, n < 10 * MB ? 1 : 0)} ${t('hl.u.mb')}`);
+const botBad = (s: string) => s === 'offline' || s === 'error';
+
+const W = 640;
+const H = 150;
+
+function Chart({ title, hint, values, fmt, limit, lowIsBad, floor }: { title: string; hint?: string; values: (number | null)[]; fmt: (n: number) => string; limit?: number; lowIsBad?: boolean; floor?: boolean }) {
+  const c = useMemo(() => buildChart(downsample(values, 160), W, H, { limit, floor }), [values, limit, floor]);
+  const breach = c.last != null && limit != null && (lowIsBad ? c.last < limit : c.last > limit);
+  return (
+    <div className={`rounded-ui-lg bg-soft p-4 ${breach ? 'ring-2 ring-bad' : ''}`}>
+      <div className="flex flex-wrap items-baseline justify-between gap-x-3">
+        <h3 className="font-extrabold">{title}</h3>
+        <span className={`text-xl font-black tabular-nums ${breach ? 'text-bad' : ''}`}>{c.last == null ? '–' : fmt(c.last)}</span>
+      </div>
+      {hint && <p className="text-sm font-semibold text-mute">{hint}</p>}
+      <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" className="mt-2 block h-36 w-full" role="img" aria-label={c.empty ? t('hl.noData') : t('hl.chartAria', { title, now: fmt(c.last ?? 0), min: fmt(c.min), max: fmt(c.max) })}>
+        {!c.empty && <path d={c.area} className="fill-link" opacity="0.14" />}
+        {!c.empty && <path d={c.path} fill="none" className="stroke-link" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />}
+        {c.limitY != null && <line x1="0" x2={W} y1={c.limitY} y2={c.limitY} className="stroke-bad" strokeWidth="1.5" strokeDasharray="6 5" vectorEffect="non-scaling-stroke" />}
+      </svg>
+      <div className="mt-1 flex flex-wrap justify-between gap-x-3 text-xs font-bold text-mute">
+        <span>{c.empty ? t('hl.noData') : `${t('hl.min')} ${fmt(c.min)} · ${t('hl.max')} ${fmt(c.max)}`}</span>
+        {limit != null && <span className="text-bad">{t(lowIsBad ? 'hl.limitLow' : 'hl.limit', { v: fmt(limit) })}</span>}
+      </div>
+    </div>
+  );
+}
+
+const STATE_TONE = (s: string) => (botBad(s) ? 'bg-bad' : s === 'none' || s === 'unknown' ? 'bg-line' : 'bg-ok');
+
+function BotStrip({ samples, end }: { samples: Sample[]; end: number }) {
+  const segs = useMemo(() => stateSegments(samples, end), [samples, end]);
+  if (!segs.length) return null;
+  const from = segs[0].from;
+  const total = Math.max(1, end - from);
+  const up = shareOf(segs, (s) => !botBad(s));
+  return (
+    <div className="rounded-ui-lg bg-soft p-4">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-3">
+        <h3 className="font-extrabold">{t('hl.bot')}</h3>
+        <span className="text-xl font-black tabular-nums">{Math.round(up * 1000) / 10}%</span>
+      </div>
+      <p className="text-sm font-semibold text-mute">{t('hl.botHint')}</p>
+      <div className="mt-2 flex h-5 overflow-hidden rounded-full" role="img" aria-label={t('hl.botAria', { p: Math.round(up * 1000) / 10 })}>
+        {segs.map((s) => <span key={s.from} className={STATE_TONE(s.state)} style={{ width: `${((s.to - s.from) / total) * 100}%` }} title={`${s.state}: ${fmtTime(s.from)} – ${fmtTime(s.to)}`} />)}
+      </div>
+      <div className="mt-1 flex justify-between text-xs font-bold text-mute"><span>{fmtDateTime(from)}</span><span>{fmtDateTime(end)}</span></div>
+    </div>
+  );
+}
+
+export default function HealthPage() {
+  useI18n();
+  const [hours, setHours] = useState<number>(24);
+  const [data, setData] = useState<Resp | null>(null);
+  const [error, setError] = useState('');
+  const [nonce, setNonce] = useState(0);
+
+  useEffect(() => {
+    let alive = true;
+    const load = () => api<Resp>(`/system/health-history?hours=${hours}`)
+      .then((r) => { if (alive) { setData(r); setError(''); } })
+      .catch((e: Error) => { if (alive) setError(e.message || t('common.error')); });
+    void load();
+    const timer = setInterval(() => { if (!document.hidden) void load(); }, 60_000);
+    return () => { alive = false; clearInterval(timer); };
+  }, [hours, nonce]);
+
+  const samples = data?.samples ?? [];
+  const th = data?.thresholds;
+  const col = <K extends keyof Sample>(k: K) => samples.map((s) => (s[k] as number | null) ?? null);
+  const end = samples.length ? samples[samples.length - 1].ts : 0;
+
+  return (
+    <AdminPage
+      head={(
+        <PageHead icon={<IconHealth />} title={t('hl.title')} subtitle={t('hl.sub')} hint={t('hl.hint')}>
+          <div className="seg" role="group" aria-label={t('hl.period')}>
+            {PERIODS.map((p) => <button key={p} type="button" className="seg-item" aria-pressed={hours === p} onClick={() => setHours(p)}>{p === 24 ? t('hl.p24') : p === 168 ? t('hl.p7') : t('hl.p14')}</button>)}
+          </div>
+        </PageHead>
+      )}
+    >
+      {error && !data ? <StateView kind={errorKind(error)} text={errorKind(error) === 'error' ? error : undefined} onRetry={() => setNonce((n) => n + 1)} /> : !data ? (
+        <div className="skeleton panel h-64" aria-busy="true" aria-label={t('hl.loading')} />
+      ) : (
+        <>
+          <Section title={t('hl.flags')}>
+            {data.flags.length === 0 ? (
+              <p className="flex items-center gap-2 font-bold"><span aria-hidden className="h-2.5 w-2.5 rounded-full bg-ok" />{t('hl.allGood')}</p>
+            ) : (
+              <ul className="space-y-2">
+                {data.flags.map((f) => (
+                  <li key={f.kind} className="rounded-2xl bg-badbg px-4 py-2.5 font-bold text-bad" role="alert">{f.text}<span className="ml-2 text-sm font-semibold opacity-80">{t('hl.since', { t: fmtDateTime(f.since) })}</span></li>
+                ))}
+              </ul>
+            )}
+          </Section>
+          {samples.length < 2 ? (
+            <p className="panel p-5 font-semibold text-mute">{t('hl.few')}</p>
+          ) : (
+            <>
+              <BotStrip samples={samples} end={end} />
+              <div className="grid gap-4 lg:grid-cols-2">
+                <Chart title={t('hl.poll')} hint={t('hl.pollHint')} values={col('pollMs')} fmt={ms} limit={th?.pollSlowMs} />
+                <Chart title={t('hl.disk')} hint={t('hl.diskHint')} values={col('diskFree')} fmt={mb} limit={th?.diskLowBytes} lowIsBad floor />
+                <Chart title={t('hl.db')} hint={t('hl.dbHint')} values={col('dbBytes')} fmt={mb} floor />
+                <Chart title={t('hl.mem')} values={col('rssMb')} fmt={(n) => `${Math.round(n)} ${t('hl.u.mb')}`} floor />
+                <Chart title={t('hl.cpu')} hint={t('hl.cpuHint')} values={col('loadPct')} fmt={(n) => `${Math.round(n)} %`} />
+                <Chart title={t('hl.queue')} hint={t('hl.queueHint')} values={col('queueLen')} fmt={(n) => String(Math.round(n))} />
+              </div>
+              <p className="text-sm font-semibold text-mute">{t('hl.foot', { n: samples.length, t: fmtDateTime(samples[0].ts) })}</p>
+            </>
+          )}
+        </>
+      )}
+    </AdminPage>
   );
 }
 __COREGSM_EOF__
@@ -80238,7 +80602,7 @@ export function dayKey(d = new Date()): string {
 }
 
 /** «g» then a letter jumps to a section of the admin area */
-export const CHORDS: Record<string, string> = { o: 'overview', s: 'servers', d: 'discord', n: 'news', a: 'alerts', u: 'users', j: 'journal', y: 'system', c: 'community', t: 'settings' };
+export const CHORDS: Record<string, string> = { o: 'overview', s: 'servers', d: 'discord', n: 'news', a: 'alerts', u: 'users', j: 'journal', y: 'system', h: 'health', c: 'community', t: 'settings' };
 
 /** the letter of a section's chord, if it has one */
 export const chordOf = (section: string): string | null => Object.entries(CHORDS).find(([, id]) => id === section)?.[0] ?? null;
@@ -80249,7 +80613,7 @@ import type { ReactNode } from 'react';
 import type { Perm } from '../api';
 import { t } from '../i18n';
 import { Icon } from '../icons';
-import { IconBell, IconCards, IconWrench, IconDiscord, IconJournal, IconNews, IconServers, IconSettings, IconStart, IconSystem, IconTrophy, IconUsers } from '../ui';
+import { IconBell, IconCards, IconWrench, IconDiscord, IconJournal, IconNews, IconHealth, IconServers, IconSettings, IconStart, IconSystem, IconTrophy, IconUsers } from '../ui';
 
 /** One place that knows every admin section: the sidebar, the start page and Ctrl+K all read it. */
 export interface AdminSection {
@@ -80284,6 +80648,7 @@ const S = {
   news: { id: 'news', get label() { return t('adm.s.news'); }, icon: IconNews, get desc() { return t('adm.d.news'); }, keywords: 'новость объявление публикация вайп шаблон запланировать' },
   alerts: { id: 'alerts', get label() { return t('adm.s.alerts'); }, icon: IconBell, get desc() { return t('adm.d.alerts'); }, keywords: 'упал недоступен уведомление падение упоминание here everyone' },
   maintenance: { id: 'maintenance', get label() { return t('adm.s.maintenance'); }, icon: IconWrench, get desc() { return t('adm.d.maintenance'); }, keywords: 'тех работы обслуживание окно перезагрузка обновление простой плановые расписание' },
+  health: { id: 'health', get label() { return t('adm.s.health'); }, icon: IconHealth, get desc() { return t('adm.d.health'); }, keywords: 'здоровье графики опрос диск память база очередь бот нагрузка порог мониторинг health' },
   cards: { id: 'cards', get label() { return t('adm.s.cards'); }, icon: IconCards, get desc() { return t('adm.d.cards'); }, keywords: 'картинка баннер ссылка png' },
   community: { id: 'community', get label() { return t('adm.s.community'); }, icon: IconTrophy, get desc() { return t('adm.d.community'); }, keywords: 'сезон вайп зал славы рейтинг отзывы звёзды модерация галерея скриншоты' },
   users: { id: 'users', get label() { return t('adm.s.users'); }, icon: IconUsers, get desc() { return t('adm.d.users'); }, keywords: 'роли модератор администратор игрок регистрация заявки правила пароль доступ аккаунт' },
@@ -80299,7 +80664,7 @@ export interface AdminGroup { title: string; sections: AdminSection[] }
 
 export const ADMIN_GROUPS: AdminGroup[] = [
   { get title() { return t('adm.g.main'); }, sections: [S.servers, S.discord, S.news] },
-  { get title() { return t('adm.g.mon'); }, sections: [S.alerts, S.maintenance, S.cards] },
+  { get title() { return t('adm.g.mon'); }, sections: [S.alerts, S.health, S.maintenance, S.cards] },
   { get title() { return t('adm.g.people'); }, sections: [S.community, S.users, S.journal] },
   { get title() { return t('adm.g.sys'); }, sections: [S.system, S.settings] },
 ];
@@ -83344,6 +83709,20 @@ html[data-lite] :is(.nw-glow, .nw-backdrop, .auth-glow, .auth-float, .art-float,
 html[data-lite] *, html[data-lite] *::before, html[data-lite] *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 html[data-lite] .glass, html[data-lite] [class*='backdrop-blur'] { -webkit-backdrop-filter: none; backdrop-filter: none; }
 html[data-lite] img[loading='lazy'] { content-visibility: auto; }
+
+/* 15. what the 360 px and landscape pictures showed: a clipped brand, a squeezed server name, a crowded bottom bar */
+@media (max-width: 420px) {
+  .hdr-word { display: none; }
+  .srv-hero .sh-head { flex-wrap: wrap; }
+  .srv-hero .sh-actions { flex-basis: 100%; }
+}
+@media (max-width: 400px) {
+  .bn-item { font-size: 10.5px; letter-spacing: -0.01em; padding-inline: 0; }
+}
+/* a phone on its side and a small tablet: the menu has no room for the brand name and the user name next to the sections */
+@media (min-width: 768px) and (max-width: 1023px) {
+  .hdr-word, .pm-btn > .truncate { display: none; }
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/news-page.css" << '__COREGSM_EOF__'
@@ -84540,6 +84919,10 @@ __COREGSM_EOF__
 .pm-item { display: block; width: 100%; padding: 9px 12px; border-radius: var(--r-md); text-align: left; font-size: 14px; font-weight: 700; }
 .pm-item:hover, .pm-item:focus-visible { background: rgb(var(--soft)); }
 .pm-item.is-danger { color: rgb(var(--bad)); }
+.pm-sep { height: 1px; margin: 4px 6px; background: rgb(var(--line)); }
+.pm-toggle { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.pm-toggle::after { content: ''; flex: none; width: 34px; height: 20px; border-radius: 999px; background: rgb(var(--line)); background-image: radial-gradient(circle at 10px 10px, #fff 7px, transparent 7.5px); transition: background-color .15s, background-position .15s; }
+.pm-toggle[aria-checked='true']::after { background-color: rgb(var(--link)); background-image: radial-gradient(circle at 24px 10px, #fff 7px, transparent 7.5px); }
 
 .nav-bottom { transition: transform .25s cubic-bezier(.2, .8, .2, 1), opacity .2s ease; }
 .nav-bottom.is-hidden { transform: translateY(160%); opacity: 0; pointer-events: none; }

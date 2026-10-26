@@ -5,7 +5,8 @@
  */
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { api, onBusy, type Me } from '../api';
-import { t } from '../i18n';
+import { useAppearance } from '../appearance';
+import { t, useI18n } from '../i18n';
 import { UserAvatar } from '../ui';
 import '../styles/shell.css';
 
@@ -120,7 +121,9 @@ export function Crumbs({ items }: { items: [href: string, label: ReactNode][] })
 
 // ---------- profile menu ----------
 export function ProfileMenu({ me, isStaff, logout, active }: { me: Me; isStaff: boolean; logout: () => void; active: boolean }) {
+  useI18n();
   const [open, setOpen] = useState(false);
+  const [look, setLook] = useAppearance();
   const box = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!open) return;
@@ -156,6 +159,11 @@ export function ProfileMenu({ me, isStaff, logout, active }: { me: Me; isStaff: 
           <a role="menuitem" className={link} href="/profile">{t('hdr.profile')}</a>
           <a role="menuitem" className={link} href="/gallery">Моя галерея</a>
           {isStaff && <a role="menuitem" className={link} href="/admin">{t('nav.admin')}</a>}
+          <div className="pm-sep" role="separator" />
+          {/* one tap, and the menu stays open so both can be set at once */}
+          <button type="button" role="menuitemcheckbox" aria-checked={look.largeText} className={`${link} pm-toggle`} onClick={(e) => { e.stopPropagation(); setLook({ largeText: !look.largeText }); }}>{t('pf.a11y.text')}</button>
+          <button type="button" role="menuitemcheckbox" aria-checked={look.liteData} className={`${link} pm-toggle`} onClick={(e) => { e.stopPropagation(); setLook({ liteData: !look.liteData }); }}>{t('pf.a11y.lite')}</button>
+          <div className="pm-sep" role="separator" />
           <button type="button" role="menuitem" className={`${link} is-danger`} onClick={logout}>{t('hdr.logout')}</button>
         </div>
       )}

@@ -13,6 +13,7 @@ import { alertSettings, enqueueAlert } from './alerts.js';
 import { JWT_SECRET } from './config.js';
 import { db, EFFECTIVE_NAME, getSetting, setSetting } from './db.js';
 import { incidentsSince } from './incidents.js';
+import { changePct, dailyPeaks, sparkPoints } from './digestLogic.js';
 import { localParts } from './localTime.js';
 import { brand, publicBase } from './site.js';
 import { param } from './http.js';
@@ -35,6 +36,8 @@ const tz = () => getSetting('timezone') || process.env.TZ || 'Europe/Moscow';
 export interface DigestServer {
   id: number; name: string; game: string; players: number; prevPlayers: number; peak: number; peakAt: number | null;
   hours: number; uptime: number | null; incidents: number; downMinutes: number;
+  /** the highest online of each of the seven days (oldest first), for the small chart in the picture */
+  daily: number[];
 }
 export interface Digest {
   from: number; to: number;
@@ -56,6 +59,9 @@ export function buildDigest(to = Date.now()): Digest {
   const clip = (j: number, l: number, a: number, b: number) => Math.max(0, Math.min(l, b) - Math.max(j, a)) / 3600_000;
   const incidents = incidentsSince(from, undefined, to).filter((i) => !i.planned);
   const tzName = tz();
+  const days = Array.from({ length: 7 }, (_, i) => localParts(from + (i + 0.5) * DAY, tzName).day);
+  const dayOf = (ts: number) => localParts(ts, tzName).day;
+  const hist = db.prepare('SELECT ts, players FROM history WHERE server_id = ? AND ts > ? AND ts <= ?');
 
   const perServer: DigestServer[] = servers.map((sv) => {
     const mine = visits.filter((v) => v.s === sv.id);
@@ -75,13 +81,13 @@ export function buildDigest(to = Date.now()): Digest {
       hours: Math.round(cur.reduce((n, v) => n + clip(v.j, v.l, from, to), 0)),
       uptime: up.t ? Math.round((up.u! / up.t) * 1000) / 10 : null,
       incidents: inc.length,
+      daily: dailyPeaks(hist.all(sv.id, from, to) as { ts: number; players: number }[], days, dayOf),
       downMinutes: inc.reduce((n, i) => n + Math.round((Math.min(i.end ?? to, to) - Math.max(i.start, from)) / 60_000), 0),
     };
   });
 
   const cur = visits.filter((v) => v.l > from);
   const prev = visits.filter((v) => v.j < from);
-  const days = Array.from({ length: 7 }, (_, i) => localParts(from + (i + 0.5) * DAY, tzName).day);
   const byDay = new Map(days.map((d) => [d, new Set<string>()]));
   for (const v of cur) byDay.get(localParts(Math.max(v.j, from), tzName).day)?.add(v.k);
   const per = new Map<string, { name: string; hours: number }>();
@@ -113,7 +119,7 @@ export function buildDigest(to = Date.now()): Digest {
   };
 }
 
-const delta = (cur: number, prev: number) => (prev > 0 ? Math.round(((cur - prev) / prev) * 100) : null);
+const delta = changePct;
 const deltaText = (d: number | null) => (d == null ? '' : d === 0 ? ' (как неделей раньше)' : ` (${d > 0 ? '+' : '−'}${Math.abs(d)}% к прошлой неделе)`);
 const dateRu = (t: number) => new Date(t).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', timeZone: tz() });
 
@@ -211,6 +217,9 @@ export async function renderDigest(d: Digest): Promise<Buffer> {
   ctx.fillStyle = 'rgba(255,255,255,.7)';
   ctx.font = `bold 18px ${SANS}`;
   ctx.fillText('Серверы', sx, by);
+  ctx.fillStyle = 'rgba(255,255,255,.45)';
+  ctx.font = `600 14px ${SANS}`;
+  ctx.fillText('линия: пик онлайна по дням · %: к прошлой неделе', sx + 90, by);
   d.servers.slice(0, 5).forEach((s, i) => {
     const y = by + 22 + i * 50;
     ctx.fillStyle = 'rgba(255,255,255,.06)';
@@ -220,14 +229,32 @@ export async function renderDigest(d: Digest): Promise<Buffer> {
     ctx.fillStyle = '#ffffff';
     ctx.font = `bold 18px ${SANS}`;
     let name = s.name;
-    while (name.length > 3 && ctx.measureText(name).width > 250) name = name.slice(0, -1);
+    while (name.length > 3 && ctx.measureText(name).width > 170) name = name.slice(0, -1);
     ctx.fillText(name === s.name ? name : `${name}…`, sx + 14, y + 28);
+    // the week in one line: the highest online of each day
+    const pts = sparkPoints(s.daily, 70, 20);
+    const px = sx + 200;
+    const py = y + 11;
+    ctx.strokeStyle = accent;
+    ctx.lineWidth = 2.5;
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    pts.forEach(([x, yy], k) => (k ? ctx.lineTo(px + x, py + yy) : ctx.moveTo(px + x, py + yy)));
+    ctx.stroke();
+    // players, and how that compares with the week before
     ctx.font = `600 16px ${SANS}`;
     ctx.fillStyle = 'rgba(255,255,255,.75)';
-    ctx.fillText(`${s.players} игр.`, sx + 290, y + 28);
+    ctx.fillText(`${s.players} игр.`, sx + 290, y + 20);
+    const ch = changePct(s.players, s.prevPlayers);
+    if (ch != null) {
+      ctx.font = `600 13px ${SANS}`;
+      ctx.fillStyle = ch < 0 ? '#ff8a8a' : ch > 0 ? '#7ee2a8' : 'rgba(255,255,255,.55)';
+      ctx.fillText(ch === 0 ? '=' : `${ch > 0 ? '+' : '−'}${Math.abs(ch)}%`, sx + 290, y + 36);
+    }
+    ctx.font = `600 16px ${SANS}`;
     const ok = s.incidents === 0;
     ctx.fillStyle = ok ? '#7ee2a8' : s.downMinutes >= 60 ? '#ff8a8a' : '#ffd27a';
-    ctx.fillText(s.uptime == null ? '–' : `${String(s.uptime).replace('.', ',')}%`, sx + 390, y + 28);
+    ctx.fillText(s.uptime == null ? '–' : `${String(s.uptime).replace('.', ',')}%`, sx + 410, y + 28);
   });
   if (d.top.length) {
     ctx.fillStyle = 'rgba(255,255,255,.6)';
