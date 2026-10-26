@@ -115,6 +115,7 @@ html.has-kb :is(.auth-shell, .auth-card) { align-self: start; }
 .net-bar.is-back { background: rgb(var(--ok)); color: #fff; }
 
 /* 14. data saver: no decorations, no animations, no blur (the data itself is requested half as often, see usePoll) */
+@media (max-width: 639px) { .auth-float { display: none !important; } }
 html[data-lite] :is(.nw-glow, .nw-backdrop, .auth-glow, .auth-float, .art-float, .art-float-2, .art-twinkle) { display: none !important; }
 html[data-lite] *, html[data-lite] *::before, html[data-lite] *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 html[data-lite] .glass, html[data-lite] [class*='backdrop-blur'] { -webkit-backdrop-filter: none; backdrop-filter: none; }

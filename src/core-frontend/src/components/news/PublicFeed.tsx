@@ -172,6 +172,8 @@ function Entry({ c, servers, seen }: { c: Card; servers: Server[] | null | undef
 export function Row({ c, servers }: { c: Card; servers: Server[] | null | undefined }) {
   const href = `/news/${c.id}`;
   const gen = hasGeneratedCover(c, servers);
+  const minutes = readingMinutes(c.text);
+  const likes = c.reactions.reduce((a, r) => a + r.count, 0);
   return (
     <article className="nf-item nw-item" style={{ ['--nf-accent' as string]: c.accent }}>
       <a className={`nf-thumb nw-thumb ${gen ? 'nw-gen' : ''}`} data-v={gen ? c.id % 4 : undefined} href={href} style={gen ? genVars(c) : coverStyle(c, servers, true)} aria-label={c.title} tabIndex={-1}>
@@ -187,6 +189,8 @@ export function Row({ c, servers }: { c: Card; servers: Server[] | null | undefi
         {c.text && <div className="nf-text is-clamped-2"><NewsText text={plainExcerpt(c.text, 240)} /></div>}
         <div className="nf-actions">
           {c.countdownAt && <Countdown at={c.countdownAt} label={c.countdownLabel} compact />}
+          {minutes > 0 && <span className="nw-read">{t('nw.readTime', { n: minutes })}</span>}
+          {likes > 0 && <span className="nw-cmcount" title={c.reactions.filter((r) => r.count > 0).map((r) => `${r.emoji} ${r.count}`).join('  ')}>♥ {likes}</span>}
           {c.views > 0 && <span className="nw-cmcount" title={t('nw.views', { n: c.views })}>👁 {c.views}</span>}
           {c.comments > 0 && <a className="nw-cmcount" href={`${href}#comments`} aria-label={t('nw.cm.count', { n: c.comments })}>💬 {c.comments}</a>}
           <a className="nw-more" href={href}>{t('nw.readShort')}<span aria-hidden> →</span></a>
