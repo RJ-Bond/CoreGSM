@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import type { Perm } from '../api';
 import { t } from '../i18n';
 import { Icon } from '../icons';
+import { IconKey } from '../icons';
 import { IconBell, IconCards, IconWrench, IconDiscord, IconJournal, IconNews, IconHealth, IconServers, IconSettings, IconStart, IconSystem, IconTrophy, IconUsers } from '../ui';
 
 /** One place that knows every admin section: the sidebar, the start page and Ctrl+K all read it. */
@@ -42,6 +43,7 @@ const S = {
   community: { id: 'community', get label() { return t('adm.s.community'); }, icon: IconTrophy, get desc() { return t('adm.d.community'); }, keywords: 'сезон вайп зал славы рейтинг отзывы звёзды модерация галерея скриншоты' },
   users: { id: 'users', get label() { return t('adm.s.users'); }, icon: IconUsers, get desc() { return t('adm.d.users'); }, keywords: 'роли модератор администратор игрок регистрация заявки правила пароль доступ аккаунт' },
   journal: { id: 'journal', get label() { return t('adm.s.journal'); }, icon: IconJournal, get desc() { return t('adm.d.journal'); }, keywords: 'аудит история действия изменения кто менял лог' },
+  integrations: { id: 'integrations', get label() { return t('adm.s.integrations'); }, icon: IconKey, get desc() { return t('adm.d.integrations'); }, keywords: 'api ключ ключи токен бейдж виджет iframe сайт форум openapi интеграция встроить' },
   system: { id: 'system', get label() { return t('adm.s.system'); }, icon: IconSystem, get desc() { return t('adm.d.system'); }, keywords: 'сертификат https ssl диагностика проверка диск память версия uptime состояние' },
   settings: { id: 'settings', get label() { return t('adm.s.settings'); }, icon: IconSettings, get desc() { return t('adm.d.settings'); }, keywords: 'токен прокси пароль оформление цвет логотип обновление копия бэкап безопасность' },
 } satisfies Record<string, AdminSection>;
@@ -55,7 +57,7 @@ export const ADMIN_GROUPS: AdminGroup[] = [
   { get title() { return t('adm.g.main'); }, sections: [S.servers, S.discord, S.news] },
   { get title() { return t('adm.g.mon'); }, sections: [S.alerts, S.health, S.maintenance, S.cards] },
   { get title() { return t('adm.g.people'); }, sections: [S.community, S.users, S.journal] },
-  { get title() { return t('adm.g.sys'); }, sections: [S.system, S.settings] },
+  { get title() { return t('adm.g.sys'); }, sections: [S.integrations, S.system, S.settings] },
 ];
 
 /** every section in the order of the sidebar, «Начало работы» first */

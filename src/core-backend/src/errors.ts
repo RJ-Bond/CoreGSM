@@ -26,6 +26,7 @@ export const ERRORS = {
   check_form: 'Проверьте поля формы',
   check_fields: 'Проверьте поля',
   not_found: 'Не найдено',
+  api_key_limit: 'Можно держать не больше {n} действующих ключей: отзовите ненужные',
 
   // ---- sign-in, setup, registration ----
   login_locked: 'Слишком много неверных попыток. Повторите через {sec} с.',

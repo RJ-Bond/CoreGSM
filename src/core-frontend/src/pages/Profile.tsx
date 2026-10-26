@@ -14,6 +14,7 @@ import { RankCard, RankHeaderBadge, VrAchievementsGrid, useMyRank } from '../com
 import { JournalCard } from '../components/profile/Journal';
 import { NewDeviceBanner } from '../components/profile/NewDeviceBanner';
 import { PushCard } from '../components/profile/PushCard';
+import { FavoritePushCard } from '../components/profile/FavoritePush';
 import { FollowsCard } from '../components/profile/Follows';
 import { NewsSubsCard } from '../components/profile/NewsSubs';
 import { TwoFactorCard } from '../components/profile/TwoFactorCard';
@@ -188,6 +189,7 @@ function SecurityTab() {
         <TwoFactorCard />
         <DiscordCard onChanged={reload} />
         <PushCard />
+        <FavoritePushCard />
         <FollowsCard />
         <NewsSubsCard />
         <SessionsCard key={rev} />

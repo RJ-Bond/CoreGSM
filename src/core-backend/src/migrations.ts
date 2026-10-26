@@ -130,6 +130,31 @@ CREATE TABLE IF NOT EXISTS smart_state (
     // the load of the processor (1-minute load average per core, in percent); NULL = not measured (older samples, Windows)
     up: (db) => addColumn(db, 'health_samples', 'load_pct', 'REAL'),
   },
+  // v12 is left for the other branch (webhooks / e-mail)
+  {
+    version: 13,
+    name: 'api_keys+favorite_push_prefs',
+    // api_keys: only the SHA-256 of a key is kept (the key itself is shown once); favorite_push_prefs: what a player wants pushed for favourite servers
+    up: (db) =>
+      db.exec(`
+CREATE TABLE IF NOT EXISTS api_keys (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  prefix TEXT NOT NULL,
+  key_hash TEXT NOT NULL UNIQUE,
+  created_at INTEGER NOT NULL,
+  created_by TEXT NOT NULL DEFAULT '',
+  last_used_at INTEGER,
+  revoked_at INTEGER,
+  rate_limit INTEGER NOT NULL DEFAULT 60
+);
+CREATE TABLE IF NOT EXISTS favorite_push_prefs (
+  user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  on_online INTEGER NOT NULL DEFAULT 1,
+  on_free_slot INTEGER NOT NULL DEFAULT 1,
+  on_down INTEGER NOT NULL DEFAULT 0
+);`),
+  },
 ];
 
 export const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;
