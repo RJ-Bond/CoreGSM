@@ -60,12 +60,15 @@ export function isNewerRelease(rel: UpdateNotesRelease, current: string | null |
   return c !== null && c > 0;
 }
 
+/** the text of a note without its markers */
+export const cleanNote = (s: string): string => s.replace(/\s*\[(migration|db|env)\]/gi, '').replace(/^⚠️?\s*/, '');
+
 /** flags to warn about in the releases newer than the running one */
-export function upcomingFlags(releases: UpdateNotesRelease[], current: string | null | undefined): { flag: 'breaking' | 'migration' | 'env'; text: string }[] {
+export function upcomingFlags(releases: UpdateNotesRelease[], current: string | null | undefined, lang: 'ru' | 'en' = 'ru'): { flag: 'breaking' | 'migration' | 'env'; text: string }[] {
   const out: { flag: 'breaking' | 'migration' | 'env'; text: string }[] = [];
   for (const r of releases) {
     if (!isNewerRelease(r, current)) continue;
-    for (const g of r.groups) for (const it of g.items) for (const flag of it.flags) out.push({ flag, text: it.text.replace(/\s*\[(migration|db|env)\]/gi, '').replace(/^⚠\s*/, '') });
+    for (const g of r.groups) for (const it of g.items) for (const flag of it.flags) out.push({ flag, text: cleanNote(lang === 'en' && it.textEn ? it.textEn : it.text) });
   }
   return out;
 }

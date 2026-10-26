@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="dd8d62b5e1ef"
+COREGSM_BUILD="90868df98c57"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.0.0.3"
+COREGSM_VERSION="1.0.0.4"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -18864,15 +18864,28 @@ export function flagsOf(text: string): CommitFlag[] {
   return classifyCommit(text.replace(/^[-*]\s*/, '')).flags.concat(/^[-*]?\s*⚠/.test(text) ? ['breaking' as const] : []).filter((f, i, a) => a.indexOf(f) === i);
 }
 
-export interface NotesGroup { title: string; items: { text: string; flags: CommitFlag[] }[] }
+export interface NotesItem { text: string; textEn: string | null; flags: CommitFlag[] }
+export interface NotesGroup { title: string; titleEn: string | null; items: NotesItem[] }
 export interface NotesRelease { version: string | null; date: string | null; groups: NotesGroup[] }
 
+/** «Русский | English» → both parts; a line without « | » has no English part */
+export function splitLang(text: string): { ru: string; en: string | null } {
+  const i = text.indexOf(' | ');
+  if (i < 0) return { ru: text.trim(), en: null };
+  const ru = text.slice(0, i).trim();
+  let en = text.slice(i + 3).trim();
+  // the emoji is written once, in front of the Russian part; the English one carries it too
+  const e = /^(\p{Extended_Pictographic}[\uFE0F\u200D\p{Extended_Pictographic}]*)\s+/u.exec(ru);
+  if (e && en && !/^\p{Extended_Pictographic}/u.test(en)) en = `${e[1]} ${en}`;
+  return { ru, en: en || null };
+}
+
 /**
- * CHANGELOG.md of the repository:
- *   ## Не выпущено                      (version null)
+ * CHANGELOG.md of the repository, in Russian and English on one line (« | »), emoji first:
+ *   ## Не выпущено | Unreleased          (version null)
  *   ## 1.0.0.7 · 26.10.2026
- *   ### Новое
- *   - what changed [migration]
+ *   ### ✨ Новое | New
+ *   - 🧩 что изменилось [migration] | what changed
  * Sections come newest first, as written.
  */
 export function parseChangelog(text: string): NotesRelease[] {
@@ -18884,21 +18897,25 @@ export function parseChangelog(text: string): NotesRelease[] {
     const h2 = /^##\s+(.+)$/.exec(line);
     if (h2 && !line.startsWith('###')) {
       const m = /^(\d+(?:\.\d+){1,4})(?:\s*[·—–-]\s*(.+))?$/.exec(h2[1]!.trim());
-      rel = { version: m ? m[1]! : null, date: m?.[2]?.trim() ?? null, groups: [] };
       group = null;
+      // only «1.2.3.4 · date» and «Не выпущено | Unreleased» are releases; any other heading (the rules at the top) is skipped
+      if (!m && !/^(не выпущено|unreleased)/i.test(h2[1]!.trim())) { rel = null; continue; }
+      rel = { version: m ? m[1]! : null, date: m?.[2]?.trim() ?? null, groups: [] };
       out.push(rel);
       continue;
     }
     const h3 = /^###\s+(.+)$/.exec(line);
     if (h3 && rel) {
-      group = { title: h3[1]!.trim(), items: [] };
+      const l = splitLang(h3[1]!);
+      group = { title: l.ru, titleEn: l.en, items: [] };
       rel.groups.push(group);
       continue;
     }
     const li = /^[-*]\s+(.+)$/.exec(line);
     if (li && rel) {
-      if (!group) { group = { title: 'Изменения', items: [] }; rel.groups.push(group); }
-      group.items.push({ text: li[1]!.trim(), flags: flagsOf(li[1]!) });
+      if (!group) { group = { title: 'Изменения', titleEn: 'Changes', items: [] }; rel.groups.push(group); }
+      const l = splitLang(li[1]!);
+      group.items.push({ text: l.ru, textEn: l.en, flags: flagsOf(li[1]!) });
     }
   }
   return out;
@@ -48667,7 +48684,7 @@ export type UpdateStage = 'download' | 'snapshot' | 'install' | 'health' | 'roll
 export interface UpdateHistoryItem { id: number; time: number; state: 'done' | 'error'; kind: 'update' | 'rollback'; message: string; version: string | null; label: string | null }
 export interface UpdatePreflight { onlineServers: number; players: number; lastBackupAt: number | null }
 export type NoteFlag = 'breaking' | 'migration' | 'env';
-export interface UpdateNotesRelease { version: string | null; date: string | null; groups: { title: string; items: { text: string; flags: NoteFlag[] }[] }[] }
+export interface UpdateNotesRelease { version: string | null; date: string | null; groups: { title: string; titleEn?: string | null; items: { text: string; textEn?: string | null; flags: NoteFlag[] }[] }[] }
 export interface UpdateNotes { releases: UpdateNotesRelease[]; error: string | null }
 
 export interface ChangelogItem {
@@ -82369,6 +82386,11 @@ describe('release notes', () => {
   it('lists the flags of the newer releases without the markers', () => {
     expect(upcomingFlags(rels, '1.0.0.6')).toEqual([{ flag: 'migration', text: 'Таблица' }, { flag: 'breaking', text: 'Старый API убран' }]);
   });
+  it('warns in the language of the interface and drops the markers', () => {
+    const r: UpdateNotesRelease[] = [{ version: '1.0.0.8', date: null, groups: [{ title: 'x', items: [{ text: '⚠️ Старый API убран', textEn: '⚠️ The old API is gone', flags: ['breaking'] }] }] }];
+    expect(upcomingFlags(r, '1.0.0.6', 'en')).toEqual([{ flag: 'breaking', text: 'The old API is gone' }]);
+    expect(upcomingFlags(r, '1.0.0.6')).toEqual([{ flag: 'breaking', text: 'Старый API убран' }]);
+  });
   it('groups commits without merges and marks the ones after the installation', () => {
     const items: ChangelogItem[] = [
       { sha: '1', title: 'feat: a', date: 2000, url: '', kind: 'feat' },
@@ -82446,12 +82468,15 @@ export function isNewerRelease(rel: UpdateNotesRelease, current: string | null |
   return c !== null && c > 0;
 }
 
+/** the text of a note without its markers */
+export const cleanNote = (s: string): string => s.replace(/\s*\[(migration|db|env)\]/gi, '').replace(/^⚠️?\s*/, '');
+
 /** flags to warn about in the releases newer than the running one */
-export function upcomingFlags(releases: UpdateNotesRelease[], current: string | null | undefined): { flag: 'breaking' | 'migration' | 'env'; text: string }[] {
+export function upcomingFlags(releases: UpdateNotesRelease[], current: string | null | undefined, lang: 'ru' | 'en' = 'ru'): { flag: 'breaking' | 'migration' | 'env'; text: string }[] {
   const out: { flag: 'breaking' | 'migration' | 'env'; text: string }[] = [];
   for (const r of releases) {
     if (!isNewerRelease(r, current)) continue;
-    for (const g of r.groups) for (const it of g.items) for (const flag of it.flags) out.push({ flag, text: it.text.replace(/\s*\[(migration|db|env)\]/gi, '').replace(/^⚠\s*/, '') });
+    for (const g of r.groups) for (const it of g.items) for (const flag of it.flags) out.push({ flag, text: cleanNote(lang === 'en' && it.textEn ? it.textEn : it.text) });
   }
   return out;
 }
@@ -82464,9 +82489,9 @@ __COREGSM_EOF__
 /** Pieces of Settings → Updates: steps, warnings, release notes, the log and the options. */
 import { useEffect, useState } from 'react';
 import { api, type Changelog, type UpdateHistoryItem, type UpdateInfo, type UpdateNotes, type UpdatePreflight } from '../../api';
-import { t, type TKey } from '../../i18n';
+import { t, useI18n, type TKey } from '../../i18n';
 import { ErrorLine, fmtDateTime, Section, errText, toast } from '../../ui';
-import { groupCommits, isNewerRelease, preflightWarnings, stepStates, upcomingFlags, versionText, type PreflightWarning } from './updateLogic';
+import { cleanNote, groupCommits, isNewerRelease, preflightWarnings, stepStates, upcomingFlags, versionText, type PreflightWarning } from './updateLogic';
 
 /** the four steps of an update; the active one pulses, finished ones carry a tick */
 export function StepList({ stage, finished }: { stage: UpdateInfo['stage']; finished: boolean }) {
@@ -82487,8 +82512,9 @@ const warnText = (w: PreflightWarning): string =>
 
 /** what the update would interrupt, and the warnings from the notes of the newer versions */
 export function PreflightNote({ pf, current, notes }: { pf: UpdatePreflight | null; current: string | null | undefined; notes: UpdateNotes | null }) {
+  const { lang } = useI18n();
   const warns = preflightWarnings(pf, Date.now());
-  const flags = notes ? upcomingFlags(notes.releases, current) : [];
+  const flags = notes ? upcomingFlags(notes.releases, current, lang) : [];
   if (warns.length === 0 && flags.length === 0) return null;
   return (
     <div className="relative mt-4 space-y-2 rounded-2xl bg-black/20 px-4 py-3 text-sm font-bold" role="note">
@@ -82512,6 +82538,7 @@ export function NotesCard({ notes, log, logError, current, installedAt }: {
   notes: UpdateNotes | null; log: Changelog | null; logError: string; current: string | null | undefined; installedAt: number | null | undefined;
 }) {
   const [older, setOlder] = useState(false);
+  const { lang } = useI18n();
   const releases = notes?.releases ?? [];
   const released = releases.filter((r) => r.version);
   const unreleased = releases.find((r) => !r.version);
@@ -82535,11 +82562,11 @@ export function NotesCard({ notes, log, logError, current, installedAt }: {
               </h3>
               {r.groups.map((g) => (
                 <div key={g.title} className="mt-2">
-                  <h4 className="text-sm font-black text-mute">{g.title}</h4>
+                  <h4 className="text-sm font-black text-mute">{lang === 'en' && g.titleEn ? g.titleEn : g.title}</h4>
                   <ul className="mt-1 list-disc space-y-1 pl-5 font-semibold">
                     {g.items.map((it, i) => (
                       <li key={i}>
-                        {it.text.replace(/\s*\[(migration|db|env)\]/gi, '').replace(/^⚠\s*/, '')}
+                        {cleanNote(lang === 'en' && it.textEn ? it.textEn : it.text)}
                         {it.flags.map((f) => <span key={f} className={`pill ${FLAG_PILL[f]} ml-2`}>{t(`upd.fl.${f}` as TKey)}</span>)}
                       </li>
                     ))}

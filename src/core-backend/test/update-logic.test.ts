@@ -80,29 +80,37 @@ describe('readable versions', () => {
 describe('CHANGELOG.md', () => {
   const md = `# История изменений
 
-## Не выпущено
-### Новое
-- Вкладка обновлений показывает этапы [migration]
+## Правила | Rules
+- 🙈 не должно попасть в список | must not be listed
+
+## Не выпущено | Unreleased
+### ✨ Новое | New
+- 🧩 Вкладка обновлений показывает этапы [migration] | The updates tab shows the steps
 
 ## 1.0.0.2 · 26.10.2026
-### Новое
-- Графики здоровья
-- ⚠ Старый API убран
-### Исправлено
-- Контраст акцентов
+### ✨ Новое | New
+- 📈 Графики здоровья | Health charts
+- ⚠ Старый API убран | The old API is gone
+### 🐛 Исправлено | Fixed
+- 🎨 Контраст акцентов
 
 ## 1.0.0.1 — 25.10.2026
-- Первая версия
+- Первая версия | First version
 `;
-  it('reads sections, groups and flags', () => {
+  it('reads sections, groups, both languages and flags', () => {
     const r = parseChangelog(md);
     assert.equal(r.length, 3);
     assert.equal(r[0]!.version, null);
+    assert.equal(r[0]!.groups[0]!.title, '✨ Новое');
+    assert.equal(r[0]!.groups[0]!.titleEn, '✨ New');
     assert.deepEqual(r[0]!.groups[0]!.items[0]!.flags, ['migration']);
+    assert.equal(r[0]!.groups[0]!.items[0]!.textEn, '🧩 The updates tab shows the steps');
     assert.equal(r[1]!.version, '1.0.0.2');
     assert.equal(r[1]!.date, '26.10.2026');
-    assert.deepEqual(r[1]!.groups.map((g) => g.title), ['Новое', 'Исправлено']);
+    assert.deepEqual(r[1]!.groups.map((g) => g.title), ['✨ Новое', '🐛 Исправлено']);
     assert.deepEqual(r[1]!.groups[0]!.items[1]!.flags, ['breaking']);
+    assert.equal(r[1]!.groups[1]!.items[0]!.textEn, null);
     assert.equal(r[2]!.groups[0]!.title, 'Изменения');
+    assert.equal(r[2]!.groups[0]!.items[0]!.textEn, 'First version');
   });
 });
