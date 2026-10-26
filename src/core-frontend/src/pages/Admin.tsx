@@ -6,7 +6,8 @@ import type { MaintenanceWindow } from '../maintenance';
 import { gameLabel } from '../games';
 import { AdminPage as PageStack, Empty, ErrorLine, GameAvatar, IconArrowUp, LoadError, IconClose, IconEdit, IconRefresh, IconServers, IconTrash, PageHead, StatusPill, ago, toast, undoable, usePoll, navigate, fail } from '../ui';
 import { ADMIN_GROUPS, ADMIN_SECTIONS, OVERVIEW_SECTION, SECTION_PERM, START_SECTION, type AdminSection } from './adminNav';
-import { PINS_KEY, PINS_MAX, RECENT_KEY, RECENT_MAX, movePin, pushRecent, readIds, togglePin, writeIds } from './adminShortcuts';
+import { PINS_KEY, PINS_MAX, movePin, readIds, togglePin, writeIds } from './adminShortcuts';
+import AdminMobileNav, { type MobileNavGroup } from './AdminMobileNav';
 import AdminOverview from './AdminOverview';
 import AdminStatusBar from '../components/AdminStatusBar';
 import { CHORDS, chordOf } from './adminLogic';
@@ -80,16 +81,7 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
   // «Недавние» (the last visited sections) and «Закреплённые» (stars): this browser only
   const validIds = useMemo(() => ADMIN_SECTIONS.map((x) => x.id), []);
   const [pins, setPins] = useState<string[]>(() => readIds(PINS_KEY, validIds, PINS_MAX));
-  const [recent, setRecent] = useState<string[]>(() => readIds(RECENT_KEY, validIds, RECENT_MAX));
-  useEffect(() => {
-    if (!isAdmin || home || current === 'start') return;
-    setRecent((r) => {
-      if (r[0] === current) return r;
-      const n = pushRecent(r, current);
-      writeIds(RECENT_KEY, n);
-      return n;
-    });
-  }, [current, home, isAdmin]);
+  // (the «Недавние» block is gone from the menu: it repeated sections that are already listed in the groups)
   const pin = (s: AdminSection) => {
     const r = togglePin(pins, s.id);
     if (r.full) { toast(t('adm.pinMax',{n:PINS_MAX}), 'info'); return; }
@@ -102,11 +94,6 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
   const [rail, setRail] = useState(() => { try { return localStorage.getItem('coregsm_admin_rail') === '1'; } catch { return false; } });
   const flipRail = () => setRail((v) => { try { localStorage.setItem('coregsm_admin_rail', v ? '0' : '1'); } catch { /* not remembered */ } return !v; });
   const flipDense = () => setDense((v) => { try { localStorage.setItem('coregsm_admin_density', v ? 'cozy' : 'compact'); } catch { /* not remembered */ } return !v; });
-  // the sidebar scrolls sideways on a phone: keep the current section in view
-  useEffect(() => {
-    if (!window.matchMedia('(max-width: 767px)').matches) return;
-    document.querySelector('.adm-link[aria-current="page"]')?.scrollIntoView({ inline: 'center', block: 'nearest' });
-  }, [current]);
   // pinned sections can be dragged (or moved with Alt+↑/↓) to change their order
   const dragId = useRef<string | null>(null);
   const reorder = (id: string, to: number) => {
@@ -116,7 +103,6 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
   };
   const byId = (id: string) => ADMIN_SECTIONS.find((x) => x.id === id);
   const pinned = pins.map(byId).filter((x): x is AdminSection => !!x);
-  const recents = recent.filter((id) => id !== current && !pins.includes(id)).map(byId).filter((x): x is AdminSection => !!x);
 
   /** a link, and (for admins) the star that pins it: a sibling button, never a button inside the link */
   const item = (s: AdminSection, scope = '') => {
@@ -195,7 +181,7 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
     const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(() => measure(false));
     navRef.current?.querySelectorAll('.adm-link').forEach((l) => ro?.observe(l));
     return () => { alive = false; ro?.disconnect(); window.removeEventListener('resize', onResize); };
-  }, [current, home, pins, recent, badges, isAdmin, rail]);
+  }, [current, home, pins, badges, isAdmin, rail]);
   // «g» then a letter: go to a section (not while typing)
   useEffect(() => {
     if (!isAdmin) return;
@@ -214,9 +200,15 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
   const crumb = !['servers', 'discord', 'news'].includes(current) || !first ? '' : first === 'new' ? t('adm.crumb.new') : /^\d+$/.test(first) ? t('adm.crumb.edit') : '';
   const divider = <span aria-hidden className="mx-1 w-px shrink-0 self-stretch bg-line md:hidden" />;
 
+  // a phone: one button with the current section instead of the sideways strip
+  const mobileGroups: MobileNavGroup[] = isAdmin
+    ? [{ key: 'top', sections: [START_SECTION, OVERVIEW_SECTION] }, ...ADMIN_GROUPS.map((g, i) => ({ key: `g${i}`, title: g.title, sections: g.sections }))]
+    : [{ key: 'all', sections }];
+
   return (
     <div className={`grid gap-4 ${rail ? 'md:grid-cols-[4.25rem_minmax(0,1fr)]' : 'md:grid-cols-[14rem_minmax(0,1fr)]'}`} data-density={dense ? 'compact' : undefined}>
-      <nav ref={navRef} className={`adm-nav ${rail ? 'adm-rail' : ''} ${ind ? 'has-ind' : ''} tile fade-x fade-x-m flex items-stretch gap-1 overflow-x-auto p-1.5 md:sticky md:top-24 md:max-h-[calc(100dvh-7rem)] md:flex-col md:items-stretch md:self-start md:overflow-y-auto md:p-2.5`} aria-label={t('adm.navLabel')}>
+      <AdminMobileNav groups={mobileGroups} current={home ? '' : current} badges={badges} fallbackLabel={t('nav.admin')} />
+      <nav ref={navRef} className={`adm-nav ${rail ? 'adm-rail' : ''} ${ind ? 'has-ind' : ''} tile fade-x fade-x-m flex max-md:hidden items-stretch gap-1 overflow-x-auto p-1.5 md:sticky md:top-24 md:max-h-[calc(100dvh-7rem)] md:flex-col md:items-stretch md:self-start md:overflow-y-auto md:p-2.5`} aria-label={t('adm.navLabel')}>
         {ind && <span className="adm-ind" aria-hidden style={{ transform: `translate(${ind.x}px, ${ind.y}px)`, width: ind.w, height: ind.h }} />}
         {isAdmin ? (
           <>
@@ -234,14 +226,6 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
                 <div id="adm-g-pins" className="adm-group-title hidden md:block">{t('adm.pinned')}</div>
                 <div role="group" aria-labelledby="adm-g-pins" aria-label={t('adm.pinned')} className="flex gap-1 md:flex-col">
                   {pinned.map((s) => item(s, 'p-'))}
-                </div>
-              </div>
-            )}
-            {recents.length > 0 && (
-              <div className="hidden md:block">
-                <div id="adm-g-recent" className="adm-group-title">{t('adm.recent')}</div>
-                <div role="group" aria-labelledby="adm-g-recent" className="flex flex-col gap-1">
-                  {recents.map((s) => item(s, 'r-'))}
                 </div>
               </div>
             )}

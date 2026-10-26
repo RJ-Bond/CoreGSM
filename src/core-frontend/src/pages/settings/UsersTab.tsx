@@ -1,6 +1,6 @@
 /** Users: registration and access settings, pending requests, roles and passwords. */
 import RulesHistoryCard from '../../components/RulesHistoryCard';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { type Access, api, type Perm, PERM_LABELS, type UserRow } from '../../api';
 import '../../styles/admin.css';
 import { useAuth } from '../../auth';
@@ -38,7 +38,11 @@ function seenText(u: UserRow, now = Date.now()): { online: boolean; text: string
   return { online: false, text: t('us.seen.was', { ago: ago(u.lastSeen) }) };
 }
 
-const ROLE_LABEL = (r: UserRow['role']): string => t(`us.role.${r}` as const);
+type UserTab = 'users' | 'access' | 'rules' | 'roles';
+const USER_TABS: [UserTab, TKey][] = [['users', 'us.tab.users'], ['access', 'us.tab.access'], ['rules', 'us.tab.rules'], ['roles', 'us.tab.roles']];
+const TAB_KEY = 'coregsm_admin_users_tab';
+
+const ROLE_LABEL =(r: UserRow['role']): string => t(`us.role.${r}` as const);
 
 /** The users page: the rules text joins the common save bar. */
 export function UsersTab() {
@@ -61,6 +65,20 @@ function UsersTabInner() {
   const [banReason, setBanReason] = useState('');
   const [banHours, setBanHours] = useState(24);
   const rulesInit = useRef(false);
+  // the section of the page: the list of people first; the choice is remembered in this browser
+  const [tab, setTab] = useState<UserTab>(() => {
+    try { const v = localStorage.getItem(TAB_KEY); return USER_TABS.some(([id]) => id === v) ? (v as UserTab) : 'users'; } catch { return 'users'; }
+  });
+  const pickTab = (id: UserTab) => { setTab(id); try { localStorage.setItem(TAB_KEY, id); } catch { /* not remembered */ } };
+  const onTabKey = (e: KeyboardEvent<HTMLElement>) => {
+    const d = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
+    if (!d && e.key !== 'Home' && e.key !== 'End') return;
+    e.preventDefault();
+    const i = USER_TABS.findIndex(([id]) => id === tab);
+    const n = e.key === 'Home' ? 0 : e.key === 'End' ? USER_TABS.length - 1 : (i + d + USER_TABS.length) % USER_TABS.length;
+    pickTab(USER_TABS[n][0]);
+    document.getElementById(`us-tab-${USER_TABS[n][0]}`)?.focus();
+  };
 
   const load = () => {
     api<Access>('/access').then((a) => {
@@ -171,6 +189,28 @@ function UsersTabInner() {
         </PageHead>
       )}
     >
+      <div className="no-scrollbar -mx-1 overflow-x-auto px-1" role="tablist" aria-label={t('us.tabs')} onKeyDown={onTabKey}>
+        <div className="seg flex w-max min-w-full">
+          {USER_TABS.map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              role="tab"
+              id={`us-tab-${id}`}
+              aria-selected={tab === id}
+              aria-controls={`us-panel-${id}`}
+              tabIndex={tab === id ? 0 : -1}
+              className={`seg-item min-h-11 whitespace-nowrap ${tab === id ? 'on' : ''}`}
+              onClick={() => pickTab(id)}
+            >
+              {t(label)}{id === 'users' && pendingUsers.length > 0 ? ` · ${pendingUsers.length}` : ''}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {tab === 'access' && (
+      <div role="tabpanel" id="us-panel-access" aria-labelledby="us-tab-access" className="space-y-5">
       <Section title={t('us.who')}>
         {access && (
           <>
@@ -192,7 +232,11 @@ function UsersTabInner() {
           <p><b className="text-ink">{t('us.r.admin')}</b>{t('us.r.adminText')}</p>
         </div>
       </Section>
+      </div>
+      )}
 
+      {tab === 'rules' && (
+      <div role="tabpanel" id="us-panel-rules" aria-labelledby="us-tab-rules" className="space-y-5">
       <Section
         title={t('us.rules')}
         description={t('us.rulesText')}
@@ -215,7 +259,11 @@ function UsersTabInner() {
       </Section>
 
       <RulesHistoryCard rulesKey={rules} onRestore={setRules} />
+      </div>
+      )}
 
+      {tab === 'users' && (
+      <div role="tabpanel" id="us-panel-users" aria-labelledby="us-tab-users" className="space-y-5">
       {pendingUsers.length > 0 && (
         <Section
           title={t('us.req')}
@@ -253,47 +301,11 @@ function UsersTabInner() {
         </Section>
       )}
 
-      <Section title={t('us.matrix')}>
-        <details>
-          <summary className="cursor-pointer font-extrabold">{t('us.matrix')}</summary>
-          <p className="mt-2 text-sm font-semibold text-mute">{t('us.matrix.hint')}</p>
-          <div className="mt-2 overflow-x-auto">
-            <table className="adm-table">
-              <thead>
-                <tr>
-                  <th>{t('us.matrix.role')}</th>
-                  {PERM_LABELS.map((p) => <th key={p.id} title={t(`us.perm.${p.id}.hint` as const)}>{t(`us.perm.${p.id}` as const)}</th>)}
-                </tr>
-              </thead>
-              <tbody>
-                <tr><td className="font-extrabold">{t('us.matrix.admin')}</td>{PERM_LABELS.map((p) => <td key={p.id} className="text-ok" aria-label="✓">✓</td>)}</tr>
-                {users.filter((u) => u.role === 'moderator').map((u) => (
-                  <tr key={u.id}>
-                    <td>{u.username}</td>
-                    {PERM_LABELS.map((p) => {
-                      const on = (u.perms ?? []).includes(p.id);
-                      return (
-                        <td key={p.id}>
-                          <input type="checkbox" className="srv-check" checked={on} aria-label={`${u.username}: ${t(`us.perm.${p.id}` as const)}`}
-                            onChange={(e) => void setPerms(u, e.target.checked ? [...(u.perms ?? []), p.id] : (u.perms ?? []).filter((x) => x !== p.id))} />
-                        </td>
-                      );
-                    })}
-                  </tr>
-                ))}
-                {users.every((u) => u.role !== 'moderator') && <tr><td colSpan={PERM_LABELS.length + 1} className="text-mute">{t('us.matrix.noMods')}</td></tr>}
-                <tr><td className="font-extrabold">{t('us.matrix.player')}</td>{PERM_LABELS.map((p) => <td key={p.id} className="text-mute" aria-label="—">—</td>)}</tr>
-              </tbody>
-            </table>
-          </div>
-        </details>
-      </Section>
-
       <Section title={t('us.users')}>
         <ErrorLine text={error} />
         <div className="flex flex-wrap items-center gap-2">
           <input className="input max-w-xs" type="search" placeholder={t('us.search')} value={q} onChange={(e) => setQ(e.target.value)} aria-label={t('us.searchAria')} />
-          <div className="seg" role="group" aria-label={t('us.roleAria')}>
+          <div className="seg max-w-full overflow-x-auto" role="group" aria-label={t('us.roleAria')}>
             {([['all', t('us.f.all')], ['admin', t('us.f.admin')], ['moderator', t('us.f.mod')], ['player', t('us.f.player')]] as const).map(([id, label]) => (
               <button key={id} type="button" className="seg-item" aria-pressed={roleFilter === id} onClick={() => setRoleFilter(id)}>{label}</button>
             ))}
@@ -372,6 +384,48 @@ function UsersTabInner() {
         </ul>
         <p className="text-sm font-semibold text-mute">{t('us.pwNote')} <GoLink href="/admin/settings/security">{t('us.pwLink')}</GoLink>.</p>
       </Section>
+      </div>
+      )}
+
+      {tab === 'roles' && (
+      <div role="tabpanel" id="us-panel-roles" aria-labelledby="us-tab-roles" className="space-y-5">
+      <Section title={t('us.matrix')}>
+        <div>
+          <p className="text-sm font-semibold text-mute">{t('us.matrix.hint')}</p>
+          <div className="mt-2 overflow-x-auto">
+            <table className="adm-table">
+              <thead>
+                <tr>
+                  <th>{t('us.matrix.role')}</th>
+                  {PERM_LABELS.map((p) => <th key={p.id} title={t(`us.perm.${p.id}.hint` as const)}>{t(`us.perm.${p.id}` as const)}</th>)}
+                </tr>
+              </thead>
+              <tbody>
+                <tr><td className="font-extrabold">{t('us.matrix.admin')}</td>{PERM_LABELS.map((p) => <td key={p.id} className="text-ok" aria-label="✓">✓</td>)}</tr>
+                {users.filter((u) => u.role === 'moderator').map((u) => (
+                  <tr key={u.id}>
+                    <td>{u.username}</td>
+                    {PERM_LABELS.map((p) => {
+                      const on = (u.perms ?? []).includes(p.id);
+                      return (
+                        <td key={p.id}>
+                          <input type="checkbox" className="srv-check" checked={on} aria-label={`${u.username}: ${t(`us.perm.${p.id}` as const)}`}
+                            onChange={(e) => void setPerms(u, e.target.checked ? [...(u.perms ?? []), p.id] : (u.perms ?? []).filter((x) => x !== p.id))} />
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+                {users.every((u) => u.role !== 'moderator') && <tr><td colSpan={PERM_LABELS.length + 1} className="text-mute">{t('us.matrix.noMods')}</td></tr>}
+                <tr><td className="font-extrabold">{t('us.matrix.player')}</td>{PERM_LABELS.map((p) => <td key={p.id} className="text-mute" aria-label="—">—</td>)}</tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </Section>
+
+      </div>
+      )}
     </AdminPage>
   );
 }
