@@ -4,6 +4,7 @@
  *
  * Layout (three columns): status · address · country / game · map · players / player list.
  */
+import { playersBar } from './chartLogic.js';
 import { gameLabel, gameProfile, gameShowsMap } from './games.js';
 
 export interface EmbedServer {
@@ -33,6 +34,7 @@ export interface DiscordEmbed {
   fields?: { name: string; value: string; inline?: boolean }[];
   footer?: { text: string; icon_url?: string };
   thumbnail?: { url: string };
+  image?: { url: string };
   timestamp?: string;
 }
 
@@ -45,6 +47,8 @@ export interface EmbedExtra {
   lastOnlineAt?: number | null;
   /** public URL of the game icon (needs a public domain; omitted otherwise) */
   thumbUrl?: string | null;
+  /** the 24-hour online chart shown under the embed (a public signed PNG) */
+  chartUrl?: string | null;
   /** public base URL (https://domain): used for the footer logo */
   baseUrl?: string | null;
   /** panel version («1.0.0.7») or, on an install that has no name yet, the build id; shown in the footer */
@@ -140,15 +144,8 @@ export function buildEmbed(s: EmbedServer, uptimePct: number | null, intervalSec
       ? { name: '🔖 Версия', value: cut(realVersion, 100), inline: true }
       : null;
 
-  // players with a fill bar of 6 coloured squares: the colour of the game, amber from 75 %, red from 90 %
-  const bar = (() => {
-    if (!s.online || !s.maxPlayers) return '';
-    const ratio = Math.min(s.players, s.maxPlayers) / s.maxPlayers;
-    let n = Math.round(ratio * 6);
-    if (s.players > 0 && n === 0) n = 1;
-    const fill = ratio >= 0.9 ? '🟥' : ratio >= 0.75 ? '🟧' : s.game === 'vrising' ? '🟪' : s.game === 'icarus' ? '🟨' : '🟩';
-    return '\n' + fill.repeat(n) + '⬛'.repeat(6 - n);
-  })();
+  // players with a fill bar of 6 squares: the colour of the game, the last two squares turn amber and red as it fills up
+  const bar = s.online && s.maxPlayers ? '\n' + playersBar(s.players, s.maxPlayers, s.game === 'vrising' ? '🟪' : s.game === 'icarus' ? '🟨' : '🟩') : '';
   const uptime = uptimePct == null ? '—' : `${Math.round(uptimePct * 10) / 10}%`;
 
   const fields: NonNullable<DiscordEmbed['fields']> = [
@@ -196,6 +193,7 @@ ${tail}` : tail;
     description: lines.length ? lines.join('\n') : undefined,
     color: !s.online ? COLOR.offline : lag ? COLOR.lag : (accentOf(s.game) ?? COLOR.online),
     thumbnail,
+    ...(extra.chartUrl ? { image: { url: extra.chartUrl } } : {}),
     fields,
     author,
     timestamp,
