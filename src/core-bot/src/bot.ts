@@ -281,6 +281,8 @@ interface NewsItem {
   payload: NewsPayload;
   /** ready Discord embeds (server status cards) appended after the written ones */
   statusEmbeds?: Record<string, unknown>[];
+  /** the channel is an announcement channel and «publish to followers» is on */
+  crosspost?: boolean;
   test?: boolean;
 }
 
@@ -324,8 +326,12 @@ async function processNews(): Promise<void> {
         log(`news ${it.id}: message edited`);
       } else {
         const nonce = stableNonce('nw', it.id);
-        const sent = await retrySocket<{ id: string }>(() => channel.send({ ...msg, nonce, enforceNonce: true }));
+        const sent = await retrySocket(() => channel.send({ ...msg, nonce, enforceNonce: true }));
         await reportNews(it.id, { status: 'sent', messageId: sent.id });
+        // an announcement channel: publish to the servers that follow it (a failure here must not undo the post)
+        if (it.crosspost && channel.type === ChannelType.GuildAnnouncement) {
+          await sent.crosspost().then(() => log(`news ${it.id}: published to followers`)).catch((e) => log(`news ${it.id}: crosspost failed:`, (e as Error).message));
+        }
         log(`news ${it.id}: posted`);
       }
     } catch (e) {
