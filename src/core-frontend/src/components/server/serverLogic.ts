@@ -107,3 +107,29 @@ export function downsample(values: number[], n: number): number[] {
   for (let i = 0; i < n; i += 1) out.push(values[Math.round((i * (values.length - 1)) / (n - 1))]);
   return out;
 }
+
+// ---------- an outage in progress ----------
+/** when the running outage began: the newest 'down' event, else the first offline sample of the tail; `atLeast` when it began before the window */
+export function offlineSince(events: { ts: number; type: EventKind }[], points: { ts: number; online: number }[]): { ts: number; atLeast: boolean } | null {
+  const last = events.find((e) => e.type === 'up' || e.type === 'down');
+  if (last?.type === 'down') return { ts: last.ts, atLeast: false };
+  if (points.length === 0) return null;
+  let i = points.length;
+  while (i > 0 && !points[i - 1].online) i -= 1;
+  if (i === points.length) return null;
+  return { ts: points[i].ts, atLeast: i === 0 };
+}
+
+export type UptimeCell = 'up' | 'down' | 'part' | 'none';
+/** the window cut into `n` equal cells: all samples answered / none answered / mixed / no samples */
+export function uptimeCells(points: { ts: number; online: number }[], start: number, end: number, n: number): { from: number; to: number; kind: UptimeCell }[] {
+  const step = Math.max(1, (end - start) / n);
+  const ok = new Array<number>(n).fill(0);
+  const bad = new Array<number>(n).fill(0);
+  for (const p of points) {
+    const k = Math.min(n - 1, Math.floor((p.ts - start) / step));
+    if (k < 0) continue;
+    if (p.online) ok[k] += 1; else bad[k] += 1;
+  }
+  return ok.map((o, k) => ({ from: start + k * step, to: start + (k + 1) * step, kind: o && bad[k] ? 'part' : o ? 'up' : bad[k] ? 'down' : 'none' }));
+}

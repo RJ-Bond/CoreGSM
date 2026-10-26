@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { t, useI18n } from '../../i18n';
-import { AnimatedNumber, Burst, IconBell, plural } from '../../ui';
+import { AnimatedNumber, Burst, IconBell, ago, plural } from '../../ui';
 import MaintenanceChip from '../MaintenanceChip';
 import NickPic from '../NickPic';
 import { capLevel, capacityPct, slotsInfo } from '../servers/capacity';
@@ -116,7 +116,7 @@ function WhoStack({ who, players, href, now }: { who: Who[]; players: number; hr
  * the maintenance chip, who is playing, and, when the server is full, «Сообщить, когда будет место».
  */
 export default function Hero({
-  online, hasStatus, players, max, maintenance, freeSlot, onNotify, who = [], whoHref, peak = null, recent = [], now,
+  online, hasStatus, players, max, maintenance, freeSlot, onNotify, who = [], whoHref, peak = null, recent = [], now, lastSeen = null,
 }: {
   online: boolean;
   hasStatus: boolean;
@@ -132,6 +132,8 @@ export default function Hero({
   /** players over the last two hours */
   recent?: number[];
   now: number;
+  /** ms of the last answer (shown in the one status line of a server that is down) */
+  lastSeen?: number | null;
 }) {
   useI18n();
   // a new record while the page is open
@@ -146,6 +148,19 @@ export default function Hero({
       if (players >= 3) setBoom((k) => k + 1);
     }
   }, [players, peak, online]);
+
+  // a server that is down: one status line instead of a big dash over an empty band
+  if (!online && hasStatus) {
+    return (
+      <section className="srv-hero srv-hero-off relative" aria-label={t('srv.hero.label')}>
+        <p className="srv-off-line" role="status">
+          <b>{t('srv.hero.offline')}</b>
+          <span>{lastSeen ? t('srv.hero.lastAnswer', { ago: ago(lastSeen) }) : t('srv.hero.noAnswer')}</span>
+        </p>
+        {maintenance && <MaintenanceChip m={maintenance} glass />}
+      </section>
+    );
+  }
 
   return (
     <section className="srv-hero relative" aria-label={t('srv.hero.label')}>

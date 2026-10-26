@@ -22,9 +22,10 @@ import SubscribeMenu from '../components/server/SubscribeMenu';
 import Passport from '../components/server/Passport';
 import Hero, { type FreeSlotState } from '../components/server/Hero';
 import Metrics from '../components/server/Metrics';
+import OfflineState from '../components/server/OfflineState';
 import PinnedNotice, { type ServerNotice } from '../components/server/Notice';
 import MoreMenu, { type MoreItem } from '../components/server/MoreMenu';
-import { gameAccent, isFullNow } from '../components/server/serverLogic';
+import { gameAccent, isFullNow, offlineSince } from '../components/server/serverLogic';
 import { calmSeriesColor, useCoverAccent } from '../components/server/coverAccent';
 import ServerTabs, { TAB_LIST, panelDomId, tabDomId } from '../components/server/ServerTabs';
 import { AddrCopy } from '../components/servers/serverUi';
@@ -403,6 +404,12 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
     }
   };
 
+  // a server that is down: instead of a chart of zeros, since when and why plus the availability strip
+  const down = !s.online && s.hasStatus;
+  const outage = down ? offlineSince(events, points) : null;
+  const chartEl = (withSeries: boolean) => (
+    <HistoryChart points={points} hours={data.hours} events={events} title={s.name} game={gameLabel(s.game)} max={s.maxPlayers} color={series === 'ping' ? 'rgb(var(--link))' : calmSeriesColor(accent)} series={withSeries ? series : 'players'} loading={chartLoading} baseline={data.baseline ?? null} />
+  );
   const chartTile = (i: number, withSeries: boolean) => (
     <SectionCard
       id={withSeries ? 'hi-chart' : 'ov-chart'}
@@ -423,10 +430,12 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
       </div>
       {stats.samples < 2 ? (
         <p className="py-10 text-center font-semibold text-mute">Данных пока мало: график появится через несколько минут после добавления сервера.</p>
-      ) : (
-        <HistoryChart points={points} hours={data.hours} events={events} title={s.name} game={gameLabel(s.game)} max={s.maxPlayers} color={series === 'ping' ? 'rgb(var(--link))' : calmSeriesColor(accent)} series={withSeries ? series : 'players'} loading={chartLoading} baseline={data.baseline ?? null} />
-      )}
-      {points.some((p) => !p.online) && stats.samples >= 2 && (
+      ) : down ? (
+        <OfflineState since={outage?.ts ?? null} atLeast={outage?.atLeast ?? false} error={s.error ?? null} points={points} hours={data.hours} now={nowTs} uptimePct={stats.uptimePct ?? null} windowLabel={windowLabel}>
+          {chartEl(withSeries)}
+        </OfflineState>
+      ) : chartEl(withSeries)}
+      {!down && points.some((p) => !p.online) && stats.samples >= 2 && (
         <p className="mt-2 flex items-center gap-2 text-sm font-semibold text-mute"><span className="inline-block h-3 w-3 rounded-sm bg-bad/30" /> Красным отмечены периоды, когда сервер не отвечал.</p>
       )}
     </SectionCard>
@@ -581,6 +590,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
           peak={stats.peakPlayers ?? null}
           recent={recent}
           now={nowTs}
+          lastSeen={s.updatedAt}
         />
 
         <Passport
@@ -600,7 +610,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
           }}
         />
 
-        {!s.online && s.error && (
+        {!s.online && s.error && !s.hasStatus && (
           <p className="relative mt-3.5 rounded-2xl bg-black/25 px-4 py-2.5 text-sm font-bold">{s.error}</p>
         )}
 

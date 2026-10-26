@@ -559,3 +559,22 @@ html[data-motion='reduce'] :is(.srv-record, .srv-swipe-hint, .srv-slots-bar > i.
 .srv-notice-form { display: grid; gap: 10px; padding: 14px; border-radius: var(--r-lg); box-shadow: inset 0 0 0 1px rgb(var(--line)); }
 
 @media (prefers-reduced-motion: reduce) { .rv-pick button.is-pop { animation: none; } }
+
+/* ---------- a server that is down: one status line in the banner, a plaque and an availability strip instead of the chart ---------- */
+.srv-hero-off { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin-top: 14px; }
+.srv-off-line { margin: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 12px; font-size: var(--fs-base); color: rgba(255, 255, 255, 0.82); }
+.srv-off-line b { font-size: var(--fs-lg); font-weight: 750; color: #fff; }
+.off-state { display: grid; gap: 14px; }
+.off-plaque { display: flex; align-items: flex-start; gap: 12px; padding: 12px 14px; border-radius: var(--r-lg); background: rgb(var(--badbg)); box-shadow: inset 0 0 0 1px rgb(var(--bad) / .3); }
+.off-dot { flex: none; width: 10px; height: 10px; margin-top: 7px; border-radius: var(--r-pill); background: rgb(var(--bad)); }
+.off-title { margin: 0; font-size: var(--fs-lg); font-weight: 700; color: rgb(var(--ink)); }
+.off-why { margin: 2px 0 0; font-size: var(--fs-sm); font-weight: 600; color: rgb(var(--mute)); overflow-wrap: anywhere; }
+.off-up-head { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 6px; font-size: var(--fs-sm); font-weight: 650; color: rgb(var(--mute)); }
+.off-up-head b { color: rgb(var(--ink)); font-variant-numeric: tabular-nums; }
+.off-bars { display: flex; gap: 2px; height: 28px; }
+.off-cell { flex: 1 1 0; min-width: 0; border-radius: 3px; background: rgb(var(--line)); }
+.off-cell.up { background: rgb(var(--ok) / .75); }
+.off-cell.down { background: rgb(var(--bad) / .8); }
+.off-cell.part { background: rgb(var(--warn) / .8); }
+.off-ticks { display: flex; justify-content: space-between; margin-top: 4px; font-size: var(--fs-xs); font-weight: 600; color: rgb(var(--mute)); }
+.off-toggle { justify-self: start; }
