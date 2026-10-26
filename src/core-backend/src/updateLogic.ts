@@ -167,3 +167,104 @@ export function notesText(releases: NotesRelease[], max = 1500): string {
   if (left > 0) lines.push(`… и ещё ${left}`);
   return lines.join('\n');
 }
+
+// ---- the notices about updates in Discord ----
+export type NoticeLang = 'ru' | 'en';
+export type NoticeTarget = 'channel' | 'dm' | 'both';
+export const parseNoticeLang = (v: string | null | undefined): NoticeLang => (v === 'en' ? 'en' : 'ru');
+/** where the notices go: the alerts channel (default), the direct messages of the administrators, or both */
+export const parseNoticeTarget = (v: string | null | undefined): NoticeTarget => (v === 'dm' || v === 'both' ? v : 'channel');
+/** days before the reminder about a version nobody installed; 0 = no reminder, 7 when not set */
+export function parseRemindDays(v: string | null | undefined): number {
+  if (v == null || v === '') return 7;
+  const n = Number(v);
+  return Number.isInteger(n) && n >= 0 && n <= 60 ? n : 7;
+}
+
+/** «26.10.2026» → whole days since that date (null when the date is not readable or in the future) */
+export function releaseAgeDays(date: string | null | undefined, now: number): number | null {
+  const m = /^(\d{2})\.(\d{2})\.(\d{4})/.exec((date ?? '').trim());
+  if (!m) return null;
+  const t = Date.UTC(Number(m[3]), Number(m[2]) - 1, Number(m[1]));
+  if (!Number.isFinite(t) || t > now) return null;
+  return Math.floor((now - t) / 86_400_000);
+}
+
+export function daysAgoText(days: number, lang: NoticeLang): string {
+  if (lang === 'en') return days === 0 ? 'today' : days === 1 ? 'yesterday' : `${days} days ago`;
+  if (days === 0) return 'сегодня';
+  if (days === 1) return 'вчера';
+  const d = days % 100 >= 11 && days % 100 <= 14 ? 'дней' : days % 10 === 1 ? 'день' : days % 10 >= 2 && days % 10 <= 4 ? 'дня' : 'дней';
+  return `${days} ${d} назад`;
+}
+
+/** warnings from the flags of the items: a migration, new settings, a breaking change (each shown once) */
+export function noticeWarnings(releases: NotesRelease[], lang: NoticeLang): string[] {
+  const flags = new Set<CommitFlag>();
+  for (const r of releases) for (const g of r.groups) for (const it of g.items) it.flags.forEach((f) => flags.add(f));
+  const out: string[] = [];
+  if (flags.has('breaking')) out.push(lang === 'en' ? '⚠️ Contains incompatible changes' : '⚠️ Есть несовместимые изменения');
+  if (flags.has('migration')) out.push(lang === 'en' ? '🗄️ The database will be upgraded' : '🗄️ База данных будет обновлена');
+  if (flags.has('env')) out.push(lang === 'en' ? '⚙️ New settings are needed (.env)' : '⚙️ Нужны новые настройки (.env)');
+  return out;
+}
+
+/** the groups of the releases as embed fields: «name» is the group (with the version when there are several releases) */
+export function noticeFields(releases: NotesRelease[], lang: NoticeLang, limits = { field: 1000, count: 10, total: 4200 }): { name: string; value: string }[] {
+  const out: { name: string; value: string }[] = [];
+  const multi = releases.length > 1;
+  let total = 0;
+  let left = 0;
+  for (const r of releases) {
+    for (const g of r.groups) {
+      const items = g.items.map((it) => `• ${(lang === 'en' ? it.textEn ?? it.text : it.text).trim()}`);
+      if (items.length === 0) continue;
+      const name = `${multi && r.version ? `${r.version} · ` : ''}${(lang === 'en' ? g.titleEn ?? g.title : g.title)}`.slice(0, 250);
+      const lines: string[] = [];
+      let len = 0;
+      for (const l of items) {
+        if (len + l.length + 1 > limits.field || total + len + l.length + name.length > limits.total) { left++; continue; }
+        lines.push(l);
+        len += l.length + 1;
+      }
+      if (lines.length === 0 || out.length >= limits.count) { left += lines.length; continue; }
+      out.push({ name, value: lines.join('\n') });
+      total += len + name.length;
+    }
+  }
+  if (left > 0 && out.length > 0) {
+    const last = out[out.length - 1]!;
+    const more = lang === 'en' ? `… and ${left} more` : `… и ещё ${left}`;
+    if (last.value.length + more.length + 1 <= 1024) last.value += `\n${more}`;
+  }
+  return out;
+}
+
+/** a reminder is sent once per version: the notices are on, a version is waiting for `remindDays` days since the first notice, and no reminder was sent for it yet */
+export function shouldRemind(o: { notify: boolean; remindDays: number; available: boolean; latest: string | null; announced: string | null; announcedAt: number | null; reminded: string | null; skipped: string | null; now: number }): boolean {
+  if (!o.notify || o.remindDays <= 0 || !o.available || !o.latest) return false;
+  if (o.latest !== o.announced || o.latest === o.skipped || o.latest === o.reminded) return false;
+  return o.announcedAt != null && o.now - o.announcedAt >= o.remindDays * 86_400_000;
+}
+
+export interface Notice { title: string; description: string; fields: { name: string; value: string }[]; footer: string; color: number }
+
+/** the text of a notice: «available» (a new version), «reminder» (nobody installed it) and «done» (the panel was updated) */
+export function buildNotice(o: { kind: 'available' | 'reminder' | 'done'; lang: NoticeLang; from: string | null; to: string | null; releases: NotesRelease[]; line: string; now: number; withButtons: boolean }): Notice {
+  const en = o.lang === 'en';
+  const between = notesBetween(o.releases, o.from, o.to);
+  const target = o.releases.find((r) => r.version === o.to);
+  const age = releaseAgeDays(target?.date, o.now);
+  const arrow = o.from && o.to && o.from !== o.to ? `${o.from} → ${o.to}` : o.to ?? '';
+  const skipped = Math.max(0, between.length - 1);
+  const lines: string[] = [o.line];
+  if (skipped > 0) lines.push(en ? `Versions in between: ${skipped}` : `Пропущено версий между ними: ${skipped}`);
+  lines.push(...noticeWarnings(between, o.lang));
+  if (o.kind !== 'done' && !o.withButtons) lines.push(en ? 'Install: Settings → Updates and backups.' : 'Установить: Настройки → Обновления и копии.');
+  const title = o.kind === 'available' ? (en ? 'Panel update available' : 'Доступно обновление панели')
+    : o.kind === 'reminder' ? (en ? 'Reminder: panel update is waiting' : 'Напоминание: обновление панели ждёт')
+    : (en ? 'Panel updated' : 'Панель обновлена');
+  let footer = '';
+  if (target?.date) footer = en ? `Released ${target.date}${age != null ? ` · ${daysAgoText(age, 'en')}` : ''}` : `Вышла ${target.date}${age != null ? ` · ${daysAgoText(age, 'ru')}` : ''}`;
+  return { title: arrow ? `${title}: ${arrow}` : title, description: lines.join('\n'), fields: noticeFields(between, o.lang), footer, color: o.kind === 'done' ? 0x23a55a : o.kind === 'reminder' ? 0xf0b232 : 0x5865f2 };
+}

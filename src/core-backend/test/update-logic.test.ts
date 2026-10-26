@@ -65,7 +65,7 @@ describe('announcements and channel', () => {
   });
 });
 
-import { cmpVersion, notesBetween, notesText, parseChangelog, parseVersion } from '../src/updateLogic.js';
+import { buildNotice, cmpVersion, daysAgoText, noticeFields, noticeWarnings, notesBetween, notesText, parseChangelog, parseNoticeLang, parseNoticeTarget, parseRemindDays, parseVersion, releaseAgeDays, shouldRemind } from '../src/updateLogic.js';
 
 describe('readable versions', () => {
   it('compares number by number, not as text', () => {
@@ -137,5 +137,71 @@ describe('notesBetween / notesText', () => {
     const out = notesText([rel('1.0.0.5', Array.from({ length: 40 }, (_, i) => `пункт ${i} ${'x'.repeat(30)}`))], 300);
     assert.ok(out.length <= 330);
     assert.match(out, /… и ещё \d+$/);
+  });
+});
+
+describe('update notices', () => {
+  const item = (text: string, flags: ('breaking' | 'migration' | 'env')[] = [], textEn: string | null = null) => ({ text, textEn, flags });
+  const rel = (version: string, date: string | null, items: ReturnType<typeof item>[]) => ({ version, date, groups: [{ title: '✨ Новое', titleEn: '✨ New', items }] });
+  const all = [rel('1.0.0.20', '26.10.2026', [item('🏅 Анимация', [], '🏅 Animation')]), rel('1.0.0.9', '25.10.2026', [item('🗄️ Таблица [migration]', ['migration'])])];
+
+  it('settings are read safely', () => {
+    assert.equal(parseNoticeLang('en'), 'en');
+    assert.equal(parseNoticeLang('de'), 'ru');
+    assert.equal(parseNoticeTarget('both'), 'both');
+    assert.equal(parseNoticeTarget('x'), 'channel');
+    assert.equal(parseRemindDays(null), 7);
+    assert.equal(parseRemindDays('0'), 0);
+    assert.equal(parseRemindDays('99'), 7);
+    assert.equal(parseRemindDays('3.5'), 7);
+  });
+  it('age of a release', () => {
+    const now = Date.UTC(2026, 9, 28, 12);
+    assert.equal(releaseAgeDays('26.10.2026', now), 2);
+    assert.equal(releaseAgeDays('30.10.2026', now), null);
+    assert.equal(releaseAgeDays('вчера', now), null);
+    assert.equal(daysAgoText(0, 'ru'), 'сегодня');
+    assert.equal(daysAgoText(2, 'ru'), '2 дня назад');
+    assert.equal(daysAgoText(5, 'ru'), '5 дней назад');
+    assert.equal(daysAgoText(21, 'ru'), '21 день назад');
+    assert.equal(daysAgoText(12, 'ru'), '12 дней назад');
+    assert.equal(daysAgoText(3, 'en'), '3 days ago');
+  });
+  it('warnings come from the flags, once each', () => {
+    assert.deepEqual(noticeWarnings(all, 'ru'), ['🗄️ База данных будет обновлена']);
+    assert.deepEqual(noticeWarnings([rel('1', null, [item('x', ['env', 'breaking'])])], 'en'), ['⚠️ Contains incompatible changes', '⚙️ New settings are needed (.env)']);
+  });
+  it('fields: the language, the version in the name when there are several releases', () => {
+    assert.deepEqual(noticeFields([all[0]!], 'en'), [{ name: '✨ New', value: '• 🏅 Animation' }]);
+    assert.equal(noticeFields(all, 'ru')[1]!.name, '1.0.0.9 · ✨ Новое');
+  });
+  it('a long list stays inside the embed limits', () => {
+    const many = rel('1.0.0.5', null, Array.from({ length: 60 }, (_, i) => item(`пункт ${i} ${'x'.repeat(60)}`)));
+    const f = noticeFields([many], 'ru');
+    assert.ok(f.every((x) => x.value.length <= 1024 && x.name.length <= 256));
+    assert.ok(f.reduce((n, x) => n + x.name.length + x.value.length, 0) <= 5000);
+    assert.match(f[f.length - 1]!.value, /… и ещё \d+$/);
+  });
+  it('a reminder: once per version, after the wait, not when skipped or switched off', () => {
+    const base = { notify: true, remindDays: 7, available: true, latest: 'b', announced: 'b', announcedAt: 0, reminded: null, skipped: null, now: 8 * 86_400_000 };
+    assert.equal(shouldRemind(base), true);
+    assert.equal(shouldRemind({ ...base, now: 6 * 86_400_000 }), false);
+    assert.equal(shouldRemind({ ...base, reminded: 'b' }), false);
+    assert.equal(shouldRemind({ ...base, skipped: 'b' }), false);
+    assert.equal(shouldRemind({ ...base, remindDays: 0 }), false);
+    assert.equal(shouldRemind({ ...base, notify: false }), false);
+    assert.equal(shouldRemind({ ...base, announced: 'a' }), false);
+  });
+  it('a notice: title with the versions, skipped count, warning, footer with the age', () => {
+    const now = Date.UTC(2026, 9, 28, 12);
+    const n = buildNotice({ kind: 'available', lang: 'ru', from: '1.0.0.3', to: '1.0.0.20', releases: all, line: 'Версия `1.0.0.20`.', now, withButtons: false });
+    assert.equal(n.title, 'Доступно обновление панели: 1.0.0.3 → 1.0.0.20');
+    assert.match(n.description, /Пропущено версий между ними: 1/);
+    assert.match(n.description, /База данных будет обновлена/);
+    assert.match(n.description, /Установить: Настройки/);
+    assert.equal(n.footer, 'Вышла 26.10.2026 · 2 дня назад');
+    const withBtn = buildNotice({ kind: 'done', lang: 'en', from: null, to: '1.0.0.20', releases: all, line: 'Version 1.0.0.20 installed', now, withButtons: true });
+    assert.equal(withBtn.title, 'Panel updated: 1.0.0.20');
+    assert.doesNotMatch(withBtn.description, /Install/);
   });
 });
