@@ -1,7 +1,9 @@
 name: release
 
-# Publishes the installer as a GitHub Release once CI has passed on main. Servers update from the newest release
-# (tools/coregsm.sh and the panel's own check), not from the tip of main, so a commit that breaks CI never reaches them.
+# Publishes the installer as a GitHub Release, ONLY when started by hand (Actions → release → Run workflow, or
+# `gh workflow run release.yml`). Servers update from the newest release (tools/coregsm.sh and the panel's own check),
+# not from the tip of main, so nothing reaches them until a release is cut. The text of the release is the section of
+# CHANGELOG.md for the version in version.txt: the workflow stops when that section is missing.
 #
 # Assets of a release:
 #   install.sh         the generated installer (the same file as in the repository)
@@ -9,10 +11,6 @@ name: release
 #   install.sh.bundle  keyless Sigstore signature of install.sh, made here; `coregsm update` checks it with cosign when
 #                      cosign is installed on the server (identity: this workflow on main, issuer: GitHub Actions)
 on:
-  workflow_run:
-    workflows: [ci]
-    types: [completed]
-    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -25,29 +23,30 @@ concurrency:
 
 jobs:
   publish:
-    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ github.token }}
-      SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+      SHA: ${{ github.sha }}
     steps:
       - uses: actions/checkout@v7
         with:
           ref: ${{ env.SHA }}
 
-      - name: Is this still the tip of main, and is there no release for it yet?
+      - name: Plan (CI green for this commit, CHANGELOG section present, no release yet)
         id: plan
         run: |
           set -e
           publish=true
-          if [ "${{ github.event_name }}" = workflow_run ]; then
-            tip="$(gh api "repos/${{ github.repository }}/commits/main" --jq .sha)"
-            if [ "$tip" != "$SHA" ]; then echo "main has moved on; the newer commit publishes itself"; publish=false; fi
-          fi
+          bad="$(gh api "repos/${{ github.repository }}/commits/$SHA/check-runs" --jq '[.check_runs[] | select(.name != "publish") | select(.status != "completed" or (.conclusion != "success" and .conclusion != "skipped"))] | length')"
+          if [ "$bad" != "0" ]; then echo "CI is not green for $SHA ($bad checks not finished or failed)"; exit 1; fi
           build="$(sed -n 's/^build=//p' version.txt)"
-          if [ -z "$build" ]; then echo "version.txt has no build id"; exit 1; fi
+          version="$(sed -n 's/^version=//p' version.txt)"
+          if [ -z "$build" ] || [ -z "$version" ]; then echo "version.txt has no build id or version"; exit 1; fi
+          awk -v v="$version" '$0 ~ "^## " v "([^0-9.]|$)" {f=1; next} /^## / {f=0} f' CHANGELOG.md > notes.md
+          if ! grep -q '[^[:space:]]' notes.md; then echo "CHANGELOG.md has no section '## $version'. Move «Не выпущено» under that heading first."; exit 1; fi
           if gh release view "build-$build" >/dev/null 2>&1; then echo "release build-$build exists"; publish=false; fi
           echo "build=$build" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "publish=$publish" >> "$GITHUB_OUTPUT"
 
       - name: install.sh and version.txt must match what the sources build
@@ -68,6 +67,5 @@ jobs:
         if: steps.plan.outputs.publish == 'true'
         run: |
           set -e
-          git log -1 --format=%B "$SHA" > notes.md
           gh release create "build-${{ steps.plan.outputs.build }}" install.sh version.txt install.sh.bundle \
-            --target "$SHA" --title "Build ${{ steps.plan.outputs.build }}" --notes-file notes.md --latest
+            --target "$SHA" --title "Версия ${{ steps.plan.outputs.version }}" --notes-file notes.md --latest

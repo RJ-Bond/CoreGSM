@@ -30,6 +30,8 @@ else
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
 COREGSM_BUILD="@@BUILD_ID@@"
+# the readable version of this build (VERSION + counter), shown in the panel
+COREGSM_VERSION="@@VERSION@@"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -569,9 +571,9 @@ write_env() {
   # a key of its own for the secrets in the database: JWT_SECRET can then be changed without losing them. An older
   # installation gets one on its next update; the backend writes its stored secrets again with it at start.
   secrets_key="$(env_get SECRETS_KEY)"; [ -n "$secrets_key" ] || secrets_key="$(gen_secret 64)"
-  local poll lm cert_mode extra="" known='DOMAIN|LE_EMAIL|DISCORD_TOKEN|PROXY_URL|BUILD_PROXY|APP_VERSION|SETUP_TOKEN|JWT_SECRET|INTERNAL_TOKEN|SECRETS_KEY|POLL_INTERVAL_SEC|LOCAL_MODE|CERT_MODE'
+  local poll lm cert_mode extra="" known='DOMAIN|LE_EMAIL|DISCORD_TOKEN|PROXY_URL|BUILD_PROXY|APP_VERSION|APP_VERSION_NAME|SETUP_TOKEN|JWT_SECRET|INTERNAL_TOKEN|SECRETS_KEY|POLL_INTERVAL_SEC|LOCAL_MODE|CERT_MODE'
   # the .env is truncated by the redirection below, so everything is read from it first
-  local appver; appver="$(env_get APP_VERSION)"
+  local appver appname; appver="$(env_get APP_VERSION)"; appname="$(env_get APP_VERSION_NAME)"
   poll="$(env_get POLL_INTERVAL_SEC)"; [ -n "$poll" ] || poll=30
   lm=0; [ "${LOCAL_MODE:-}" = "1" ] && lm=1
   cert_mode="$(env_get CERT_MODE)"; [ "$lm" = 1 ] && [ -z "$cert_mode" ] && cert_mode=local
@@ -593,6 +595,7 @@ BUILD_PROXY=${BUILD_PROXY:-}
 # installed build, compared with version.txt in the repository. The new value is written only after
 # the panel has answered (see promote_version), so a failed update does not look like a finished one.
 APP_VERSION=${appver}
+APP_VERSION_NAME=${appname}
 # local mode (self-signed certificate, no Let's Encrypt) and the kind of the current certificate
 LOCAL_MODE=${lm}
 CERT_MODE=${cert_mode}
@@ -724,7 +727,7 @@ build_images() {
 launch() {
   step "Запуск контейнеров"
   cd "$APP_DIR"
-  run "Запуск контейнеров" env APP_VERSION="$COREGSM_BUILD" docker compose up -d --remove-orphans
+  run "Запуск контейнеров" env APP_VERSION="$COREGSM_BUILD" APP_VERSION_NAME="$COREGSM_VERSION" docker compose up -d --remove-orphans
   if [ "$CERT_CHANGED" = 1 ] && service_running nginx-proxy; then
     docker compose exec -T nginx-proxy nginx -s reload >/dev/null 2>&1 || true
   fi
@@ -897,6 +900,7 @@ rollback_available() {
 promote_version() {
   [ "$PANEL_OK" = 1 ] || return 0
   env_set APP_VERSION "$COREGSM_BUILD"
+  env_set APP_VERSION_NAME "$COREGSM_VERSION"
 }
 
 # A finished install is a successful update: tell the panel, so an old failure is not shown any more.
