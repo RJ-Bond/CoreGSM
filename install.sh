@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="9c4e7b90d571"
+COREGSM_BUILD="fe77ed5b9671"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -84892,7 +84892,7 @@ html[data-motion='reduce'] .srv-new-chev, html[data-motion='reduce'] .srv-check,
 :root[data-theme='dark'] .sh-chip { background: rgb(0 0 0 / .35); }
 
 /* the caption of the pulse chart: the time ticks on their own row, the span and the peak under them (they used to run into each other) */
-.pulse-chart .pulse-ticks { grid-column: 1 / -1; grid-row: 1; display: flex; justify-content: space-between; gap: 6px; font-size: 11.5px; white-space: nowrap; }
+.pulse-chart .pulse-ticks { grid-column: 1 / -1; grid-row: 1; display: flex; justify-content: space-between; gap: 6px; font-size: var(--fs-xs); white-space: nowrap; }
 .pulse-chart figcaption > span:first-child { grid-row: 2; white-space: nowrap; }
 .pulse-chart .pulse-peak-text, .pulse-chart figcaption > span:last-child:not(.pulse-ticks) { grid-row: 2; justify-self: end; text-align: right; }
 __COREGSM_EOF__
