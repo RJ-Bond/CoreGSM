@@ -113,7 +113,6 @@ const DEBT: Record<string, number> = {
   'pages/settings/BotCard.tsx': 19,
   'pages/settings/BrandCard.tsx': 18,
   'pages/settings/PasswordCard.tsx': 5,
-  'pages/settings/UpdateCard.tsx': 10,
   'saveBar.tsx': 4,
   'ui/admin.tsx': 4,
   'ui/blocks.tsx': 10,
