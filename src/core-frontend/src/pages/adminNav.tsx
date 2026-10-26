@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import type { Perm } from '../api';
 import { t } from '../i18n';
 import { Icon } from '../icons';
-import { IconBell, IconCards, IconWrench, IconDiscord, IconJournal, IconNews, IconServers, IconSettings, IconStart, IconSystem, IconTrophy, IconUsers } from '../ui';
+import { IconBell, IconCards, IconWrench, IconDiscord, IconJournal, IconNews, IconHealth, IconServers, IconSettings, IconStart, IconSystem, IconTrophy, IconUsers } from '../ui';
 
 /** One place that knows every admin section: the sidebar, the start page and Ctrl+K all read it. */
 export interface AdminSection {
@@ -37,6 +37,7 @@ const S = {
   news: { id: 'news', get label() { return t('adm.s.news'); }, icon: IconNews, get desc() { return t('adm.d.news'); }, keywords: 'новость объявление публикация вайп шаблон запланировать' },
   alerts: { id: 'alerts', get label() { return t('adm.s.alerts'); }, icon: IconBell, get desc() { return t('adm.d.alerts'); }, keywords: 'упал недоступен уведомление падение упоминание here everyone' },
   maintenance: { id: 'maintenance', get label() { return t('adm.s.maintenance'); }, icon: IconWrench, get desc() { return t('adm.d.maintenance'); }, keywords: 'тех работы обслуживание окно перезагрузка обновление простой плановые расписание' },
+  health: { id: 'health', get label() { return t('adm.s.health'); }, icon: IconHealth, get desc() { return t('adm.d.health'); }, keywords: 'здоровье графики опрос диск память база очередь бот нагрузка порог мониторинг health' },
   cards: { id: 'cards', get label() { return t('adm.s.cards'); }, icon: IconCards, get desc() { return t('adm.d.cards'); }, keywords: 'картинка баннер ссылка png' },
   community: { id: 'community', get label() { return t('adm.s.community'); }, icon: IconTrophy, get desc() { return t('adm.d.community'); }, keywords: 'сезон вайп зал славы рейтинг отзывы звёзды модерация галерея скриншоты' },
   users: { id: 'users', get label() { return t('adm.s.users'); }, icon: IconUsers, get desc() { return t('adm.d.users'); }, keywords: 'роли модератор администратор игрок регистрация заявки правила пароль доступ аккаунт' },
@@ -52,7 +53,7 @@ export interface AdminGroup { title: string; sections: AdminSection[] }
 
 export const ADMIN_GROUPS: AdminGroup[] = [
   { get title() { return t('adm.g.main'); }, sections: [S.servers, S.discord, S.news] },
-  { get title() { return t('adm.g.mon'); }, sections: [S.alerts, S.maintenance, S.cards] },
+  { get title() { return t('adm.g.mon'); }, sections: [S.alerts, S.health, S.maintenance, S.cards] },
   { get title() { return t('adm.g.people'); }, sections: [S.community, S.users, S.journal] },
   { get title() { return t('adm.g.sys'); }, sections: [S.system, S.settings] },
 ];
