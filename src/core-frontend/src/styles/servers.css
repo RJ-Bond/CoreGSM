@@ -184,10 +184,9 @@
 .pulse-chart figcaption { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: baseline; gap: 2px 10px; margin-top: 4px; font-size: var(--fs-sm); font-weight: 650; color: rgb(var(--mute)); }
 .pulse-peak-text { color: rgb(var(--ink)); }
 .pulse-chart-empty { display: grid; place-items: center; min-height: 72px; padding: 0 8px; text-align: center; font-size: var(--fs-sm); font-weight: 600; color: rgb(var(--mute)); }
-@media (max-width: 1023px) {
-  .pulse { grid-template-columns: minmax(0, 1fr) minmax(200px, 1fr); }
-  .pulse-nums { grid-column: 1 / -1; grid-row: 2; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px 12px; }
-}
+/* the page is at most 72rem wide, so three columns (state, four numbers, chart) never fit: the state and the chart share the first row, the numbers have the second */
+.pulse { grid-template-columns: minmax(0, 1fr) minmax(220px, 1fr); }
+.pulse-nums { grid-column: 1 / -1; grid-row: 2; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px 12px; }
 /* phones: the state in one row and the four numbers in one compact line; the day's curve is left out (the servers
    below are what a visitor came for) */
 @media (max-width: 560px) {

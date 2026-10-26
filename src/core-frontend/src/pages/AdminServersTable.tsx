@@ -213,7 +213,7 @@ export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableA
           </div>
 
           {/* a phone: a card per server */}
-          <div className={`adm-cards ${view === 'table' ? 'md:hidden' : ''}`}>
+          <div className="adm-cards" data-hide-md={view === 'table' ? 'true' : undefined}>
             {rows.map((s) => (
               <div key={s.id} className="tile adm-card flex flex-wrap items-center gap-x-3 gap-y-2 p-3.5" data-state={s.maintenance ? 'maint' : !s.online && s.hasStatus ? 'off' : isLag(s) ? 'lag' : 'on'} data-selected={sel.includes(s.id) ? 'true' : undefined}>
                 <input type="checkbox" className="srv-check" checked={sel.includes(s.id)} onChange={() => toggle(s.id)} aria-label={`${t('adm.tbl.select')}: ${s.name}`} />

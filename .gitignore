@@ -5,3 +5,4 @@ data/
 *.log
 .t*/
 shots-out/
+coverage/

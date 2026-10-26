@@ -70,12 +70,12 @@
 
 /* ---------- the news as a small article: a banner with the headline on it, the whole text below ---------- */
 .ne-list { gap: 1.1rem; }
-.ne-list .nw-group { display: grid; gap: 1.1rem; }
+.ne-list .nw-group { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1.1rem; }
 .nb { overflow: hidden; border-radius: var(--r-xl); background: rgb(var(--card)); border: 1px solid rgb(var(--line)); box-shadow: var(--shadow-2); }
 .nb-banner { position: relative; display: flex; align-items: flex-end; min-height: 9.5rem; padding: 1.25rem 1.5rem; color: #fff; text-decoration: none; background-size: cover; background-position: center; background-color: rgb(var(--soft)); isolation: isolate; }
 .nb-banner:not(.nw-gen)::before { content: ''; position: absolute; inset: 0; z-index: -1; background: linear-gradient(180deg, rgb(8 10 20 / .15), rgb(8 10 20 / .78)); }
 .nb-banner.nw-gen .nw-gen-ico { height: 70%; right: 6%; }
-.nb-banner-in { position: relative; z-index: 2; display: grid; gap: .5rem; max-width: 46rem; }
+.nb-banner-in { position: relative; z-index: 2; display: grid; grid-template-columns: minmax(0, 1fr); gap: .5rem; max-width: 46rem; min-width: 0; }
 .nb-chips { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem .5rem; }
 .nb-date { padding: .2rem .65rem; border-radius: var(--r-pill); background: rgb(0 0 0 / .45); font-size: .8125rem; font-weight: 650; }
 .nb-title { margin: 0; font-size: clamp(1.45rem, 3vw, 2rem); font-weight: 800; line-height: 1.12; letter-spacing: -.015em; overflow-wrap: anywhere; text-shadow: 0 2px 18px rgb(0 0 0 / .35); }
@@ -101,7 +101,8 @@
 .nw-code:hover .nw-code-copy, .nw-code-copy:focus-visible { opacity: .75; }
 @media (hover: none) { .nw-code-copy { opacity: .6; } }
 @media (max-width: 560px) {
-  .nb { border-radius: 0; margin-inline: -16px; }
+  /* the page has a 12px gutter on a phone: the card reaches the screen edges exactly, not 4px past them */
+  .nb { border-radius: 0; margin-inline: -12px; }
   .nb-banner, .nb-body { padding-inline: 16px; }
   .nb-read { display: none; }
 }
