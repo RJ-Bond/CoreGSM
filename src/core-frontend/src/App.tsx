@@ -414,7 +414,7 @@ export default function App() {
       <RouteProgress routeKey={routeKey} />
       <Tooltips />
       <div className="mx-auto min-h-full max-w-6xl px-3 pb-[calc(6.5rem+env(safe-area-inset-bottom,0px))] pt-3 sm:px-6 sm:pt-4 md:pb-16">
-        <header className="glass sticky top-2 z-30 mb-5 flex items-center gap-x-2 rounded-[22px] py-2 pl-3 pr-2 sm:top-3 md:mb-7 md:gap-x-3 md:pl-4">
+        <header className="glass sticky top-2 z-30 mb-5 flex items-center gap-x-2 rounded-ui-xl py-2 pl-3 pr-2 sm:top-3 md:mb-7 md:gap-x-3 md:pl-4">
           <a href="/servers" aria-label={access.brand.name} className="flex min-w-0 items-center gap-2.5 text-xl font-black tracking-tight max-md:flex-1 sm:text-[22px] md:max-w-60 md:shrink-0">
             <Logo size={34} alt="" />
             <Wordmark className="hdr-word min-w-0 truncate" />
@@ -483,7 +483,7 @@ export default function App() {
         <AppFooter brand={access.brand.name} />
 
         <nav
-          className={`nav-bottom glass fixed inset-x-3 z-40 mx-auto max-w-md rounded-[26px] md:hidden ${navHidden ? 'is-hidden' : ''}`}
+          className={`nav-bottom glass fixed inset-x-3 z-40 mx-auto max-w-md rounded-ui-xl md:hidden ${navHidden ? 'is-hidden' : ''}`}
           style={{ bottom: 'max(0.75rem, env(safe-area-inset-bottom, 0px))' }}
           aria-label={t('nav.sections')}
         >

@@ -187,7 +187,7 @@ function ServerRow({ s, index }: { s: StatusServer; index: number }) {
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
         <GameAvatar game={s.game} size={44} />
         <div className="min-w-0 flex-1 basis-40">
-          <a href={`/servers/${s.id}`} className="block wrap-break-word text-[17px] font-extrabold leading-tight hover:text-link">{s.name}</a>
+          <a href={`/servers/${s.id}`} className="block wrap-break-word text-fs-xl font-extrabold leading-tight hover:text-link">{s.name}</a>
           <div className="truncate font-mono text-sm font-semibold text-mute">{s.address}</div>
         </div>
         {s.online && (

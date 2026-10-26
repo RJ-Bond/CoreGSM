@@ -97,7 +97,7 @@ function EmbedCard({ e, index, theme, onPick, invalid, fill }: { e: DiscordEmbed
       <div className="flex items-start gap-3">
         <div className="min-w-0 flex-1">
           {e.author && (
-            <Part part="author" embed={index} onPick={onPick} bad={bad('author')} className="mb-1 flex items-center gap-2 text-[13px] font-bold">
+            <Part part="author" embed={index} onPick={onPick} bad={bad('author')} className="mb-1 flex items-center gap-2 text-fs-sm font-bold">
               <span className="flex items-center gap-2" style={{ color: theme.title }}>
                 {authorIcon && <img src={authorIcon} alt="" className="h-6 w-6 rounded-full object-cover" />}
                 {e.author.name}
@@ -125,7 +125,7 @@ function EmbedCard({ e, index, theme, onPick, invalid, fill }: { e: DiscordEmbed
         <div key={ri} className="mb-2 grid gap-x-3 gap-y-2" style={{ gridTemplateColumns: `repeat(${row.length}, minmax(0, 1fr))` }}>
           {row.map((f, i) => (
             <Part key={`${f.idx ?? ri}-${i}`} part="field" embed={index} field={f.idx} onPick={onPick} bad={f.idx != null && bad(`field:${f.idx}`)} className="min-w-0 text-sm">
-              <div className="text-[13px] font-bold" style={{ color: theme.title }}>{f.name}</div>
+              <div className="text-fs-sm font-bold" style={{ color: theme.title }}>{f.name}</div>
               <DiscordMd text={f.value} />
             </Part>
           ))}
@@ -181,12 +181,12 @@ export function EmbedView({
         <div className={phone ? 'mx-auto w-full max-w-[380px]' : 'w-full'}>
           <div
             style={{ background: t.outer, color: t.text, ...(phone ? { border: '6px solid #1e1f22', borderRadius: 28 } : {}) }}
-            className={`${phone ? '' : 'rounded-2xl'} p-3 ${phone ? 'text-[14px]' : 'text-[15px]'}`}
+            className={`${phone ? '' : 'rounded-2xl'} p-3 ${phone ? 'text-fs-md' : 'text-fs-base'}`}
           >
             <div className="flex items-start gap-3">
               <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full font-black text-white" style={{ background: '#5865f2' }} aria-hidden>{botName.slice(0, 1).toUpperCase()}</span>
               <div className="min-w-0 flex-1">
-                <div className="flex flex-wrap items-center gap-x-2 text-[15px] leading-tight">
+                <div className="flex flex-wrap items-center gap-x-2 text-fs-base leading-tight">
                   <span className="font-bold" style={{ color: t.title }}>{botName}</span>
                   <span className="rounded-sm px-1 text-xs font-bold uppercase text-white" style={{ background: '#5865f2' }}>БОТ</span>
                   <span className="text-xs" style={{ color: t.muted }}>Сегодня, в {pad2(now.getHours())}:{pad2(now.getMinutes())}</span>

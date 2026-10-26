@@ -216,7 +216,7 @@ export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose:
             placeholder="Найти сервер или раздел…"
             autoComplete="off"
             spellCheck={false}
-            className="min-h-[44px] min-w-0 flex-1 bg-transparent text-[16px] focus-visible:ring-0 font-bold text-ink outline-hidden placeholder:font-semibold placeholder:text-mute"
+            className="min-h-[44px] min-w-0 flex-1 bg-transparent text-fs-lg focus-visible:ring-0 font-bold text-ink outline-hidden placeholder:font-semibold placeholder:text-mute"
           />
           <button
             type="button"
