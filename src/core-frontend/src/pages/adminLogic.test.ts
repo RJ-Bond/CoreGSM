@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { delta, dayKey, healthScore, type HealthInput } from './adminLogic';
-import { moveId } from './adminServersLogic';
+import { moveId, parseColumns } from './adminServersLogic';
 
 const fine: HealthInput = { servers: 4, down: 0, botError: false, certDays: 60, pending: 0, updateAvailable: false, backupAgeMs: 1000, backupsKnown: true };
 
@@ -61,5 +61,15 @@ describe('moveId', () => {
   });
   it('works among a subset of the list', () => {
     expect(moveId([1, 2, 3, 4], [2, 4], 4, -1)).toEqual([1, 4, 3, 2]);
+  });
+});
+
+describe('parseColumns', () => {
+  it('nothing saved: the default columns', () => expect(parseColumns(null)).toEqual(['uptime', 'h24']));
+  it('keeps the table order and drops unknown ones', () => expect(parseColumns('["updated","map","zzz"]')).toEqual(['map', 'updated']));
+  it('an empty choice stays empty', () => expect(parseColumns('[]')).toEqual([]));
+  it('broken data: the default columns', () => {
+    expect(parseColumns('{')).toEqual(['uptime', 'h24']);
+    expect(parseColumns('5')).toEqual(['uptime', 'h24']);
   });
 });
