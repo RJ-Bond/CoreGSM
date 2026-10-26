@@ -24,10 +24,13 @@ export async function backendJson<T>(path: string, init?: RequestInit): Promise<
 }
 
 /** result of a status message update, shown on the binding in the panel */
-export async function report(id: number, body: { messageId?: string | null; error?: string | null }) {
+export async function report(id: number, body: { messageId?: string | null; error?: string | null }): Promise<boolean> {
   try {
-    await backend(`/internal/bindings/${id}`, { method: 'PATCH', body: JSON.stringify(body) });
+    const r = await backend(`/internal/bindings/${id}`, { method: 'PATCH', body: JSON.stringify(body) });
+    if (!r.ok) log(`report failed: HTTP ${r.status}`);
+    return r.ok;
   } catch (e) {
     log('report failed', e);
+    return false;
   }
 }

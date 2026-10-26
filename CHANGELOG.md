@@ -19,6 +19,9 @@ interface language; the GitHub release text is built from the section of the ver
 ### ✨ Новое | New
 - 🌐 Описания версий на двух языках: панель показывает русский или английский текст, релиз на GitHub — оба | Release notes in two languages: the panel shows Russian or English, the GitHub release shows both
 
+### 🐛 Исправлено | Fixed
+- 🔁 Бот в Discord больше не дублирует сообщения: новое сообщение статуса публикуется, только если старое действительно удалено, а оповещения и новости при повторной отправке не создают копий | The Discord bot no longer duplicates messages: a new status message is posted only when the old one is really gone, and alerts and news cannot be posted twice on a retry
+
 ## 1.0.0.3 · 26.10.2026
 
 ### ✨ Новое | New
