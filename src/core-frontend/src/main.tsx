@@ -15,11 +15,14 @@ import './styles/news-page.css';
 import './styles/profile.css';
 // the button system last: one source of truth for every .btn* class
 import './styles/buttons.css';
+// phone layout fixes: loaded after the others, so it wins at equal specificity
+import './styles/mobile.css';
 import App from './App';
 import { RootBoundary } from './RootBoundary';
 import { api, getToken } from './api';
 import { toast } from './ui/toast';
 import { initAppearance } from './appearance';
+import { installViewport } from './ui/viewport';
 import { initDensity, installMagnetic, installSegIndicator } from './useMotion';
 
 // before the first paint: the accessibility options (less motion, large text, high contrast), the saved density, the magnetic call-to-action buttons and the sliding tab pill
@@ -27,6 +30,7 @@ initAppearance();
 initDensity();
 installMagnetic();
 installSegIndicator();
+installViewport();
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

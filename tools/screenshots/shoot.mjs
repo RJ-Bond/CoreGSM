@@ -53,11 +53,34 @@ db.close();
 
 fs.mkdirSync(outDir, { recursive: true });
 const browser = await chromium.launch();
-const sizes = { phone: { width: 390, height: 844, deviceScaleFactor: 2, isMobile: true, hasTouch: true }, desktop: { width: 1366, height: 900, deviceScaleFactor: 1 } };
+const sizes = {
+  phone: { width: 390, height: 844, deviceScaleFactor: 2, isMobile: true, hasTouch: true },
+  desktop: { width: 1366, height: 900, deviceScaleFactor: 1 },
+  // the narrowest common phone and a phone on its side: where layouts usually break first (dark theme only)
+  narrow: { width: 360, height: 740, deviceScaleFactor: 2, isMobile: true, hasTouch: true, only: 'dark' },
+  landscape: { width: 844, height: 390, deviceScaleFactor: 2, isMobile: true, hasTouch: true, only: 'dark' },
+};
+// pages wider than the screen: page -> [document width, elements that stick out past the right edge]
+const overflow = [];
+const findOverflow = () => {
+  const w = document.documentElement.clientWidth;
+  const out = [];
+  for (const el of document.body.querySelectorAll('*')) {
+    const r = el.getBoundingClientRect();
+    if (r.width === 0 || r.right <= w + 1) continue;
+    // an element inside a scroller that is meant to scroll does not widen the page
+    let p = el.parentElement, clipped = false;
+    while (p && p !== document.body) { const o = getComputedStyle(p).overflowX; if (o !== 'visible') { clipped = true; break; } p = p.parentElement; }
+    if (clipped || getComputedStyle(el).position === 'fixed') continue;
+    out.push((el.tagName.toLowerCase() + (el.className && typeof el.className === 'string' ? '.' + el.className.trim().split(/\s+/).slice(0, 2).join('.') : '')) + ' ' + Math.round(r.right));
+  }
+  return { width: document.documentElement.scrollWidth, client: w, out: out.slice(0, 6) };
+};
 const pages = [['servers', '/servers'], ['server', '/servers/1'], ['status', '/status'], ['community', '/community'], ['news', '/news'], ['admin', '/admin']];
 
 for (const theme of ['dark', 'light']) {
   for (const [sizeName, size] of Object.entries(sizes)) {
+    if (size.only && size.only !== theme) continue;
     const ctx = await browser.newContext({ viewport: { width: size.width, height: size.height }, deviceScaleFactor: size.deviceScaleFactor, isMobile: size.isMobile, hasTouch: size.hasTouch, locale: 'ru-RU', timezoneId: 'Europe/Moscow' });
     await ctx.addInitScript((t) => { try { localStorage.setItem('coregsm_theme', t); localStorage.setItem('coregsm_tour_done', '1'); } catch { /* ignore */ } }, theme);
     const page = await ctx.newPage();
@@ -74,6 +97,10 @@ for (const theme of ['dark', 'light']) {
       // the first screen as the visitor sees it (a full-page picture moves fixed bars into the middle of the page)
       await page.screenshot({ path: path.join(outDir, `${theme}-${sizeName}-${name}-top.png`) }).catch((e) => console.log('skip', name, e.message));
       await page.screenshot({ path: path.join(outDir, `${theme}-${sizeName}-${name}.png`), fullPage: true }).catch((e) => console.log('skip', name, e.message));
+      if (size.isMobile) {
+        const o = await page.evaluate(findOverflow).catch(() => null);
+        if (o && o.width > o.client + 1) overflow.push(`${sizeName}/${name}: ${o.width} > ${o.client}; ${o.out.join(', ')}`);
+      }
       if (AxeBuilder) {
         try {
           const r = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21aa']).analyze();
@@ -90,6 +117,8 @@ for (const theme of ['dark', 'light']) {
   }
 }
 await browser.close();
+fs.writeFileSync(path.join(outDir, 'OVERFLOW.md'), '# Pages wider than the screen\n\n' + (overflow.length ? [...new Set(overflow)].map((l) => '- ' + l).join('\n') : 'None.') + '\n');
+for (const l of new Set(overflow)) console.log('::warning title=Horizontal overflow::' + l);
 if (AxeBuilder) {
   const order = { critical: 0, serious: 1, moderate: 2, minor: 3 };
   const rows = [...a11y.entries()].sort((a, b) => (order[a[1].impact] ?? 9) - (order[b[1].impact] ?? 9) || b[1].nodes - a[1].nodes);

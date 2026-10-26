@@ -134,6 +134,7 @@ export default function Login({ onDone, notice }: { onDone: () => void; notice?:
           onChange={(e) => setUsername(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter' && !password) { e.preventDefault(); passRef.current?.focus(); } }}
           autoComplete="username"
+          enterKeyHint="next"
           autoCapitalize="none"
           spellCheck={false}
           disabled={locked}
