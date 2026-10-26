@@ -138,6 +138,8 @@ function Entry({ c, servers, seen }: { c: Card; servers: Server[] | null | undef
   };
   return (
     <article className={`nb ${c.pinned ? 'is-pinned' : ''}`} style={{ ['--nf-accent' as string]: c.accent }}>
+      {/* the whole card is the link; the buttons and links inside the text stay clickable above it */}
+      <a className="nb-stretch" href={href} tabIndex={-1} aria-label={c.title} />
       <a className={`nb-banner ${gen ? 'nw-gen' : ''}`} data-v={gen ? c.id % 4 : undefined} href={href} style={gen ? genVars(c) : coverStyle(c, servers)} aria-label={c.title}>
         {gen && <span className="nw-gen-ico"><CategoryIcon category={c.category} size={96} /></span>}
         <span className="nb-banner-in">
@@ -161,7 +163,6 @@ function Entry({ c, servers, seen }: { c: Card; servers: Server[] | null | undef
             {c.comments > 0 && <a className="nw-cmcount" href={`${href}#comments`} aria-label={t('nw.cm.count', { n: c.comments })}>💬 {c.comments}</a>}
             <button type="button" className="nb-tool" onClick={() => void copy()} title={t('nw.copyLink')} aria-label={t('nw.copyLink')}><IconCopyLink /></button>
             {canEdit && <a className="nb-tool" href={`/admin/news/${c.id}`} title={t('nw.edit')} aria-label={t('nw.edit')}><IconEditPen /></a>}
-            <a className="nw-more" href={href}>{t('nw.readShort')}<span aria-hidden> →</span></a>
           </span>
         </div>
       </div>

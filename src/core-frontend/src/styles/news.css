@@ -106,3 +106,26 @@
   .nb-banner, .nb-body { padding-inline: 16px; }
   .nb-read { display: none; }
 }
+
+/* ---------- calmer feed: a smaller headline, one banner height, the whole card is a link, one row of rubrics + a small menu ---------- */
+.nb { position: relative; transition: box-shadow .15s ease, border-color .15s ease; }
+.nb:hover { border-color: rgb(var(--brand) / .4); box-shadow: var(--shadow-3, var(--shadow-2)); }
+.nb-stretch { position: absolute; inset: 0; z-index: 1; border-radius: inherit; }
+.nb-banner { height: 11rem; min-height: 0; overflow: hidden; }
+.nb-title { font-size: clamp(1.5rem, 2.4vw, 1.75rem); line-height: 1.15; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.nb-banner:hover .nb-title { text-decoration: none; }
+.nb:hover .nb-title { text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: .18em; }
+.nb-text { pointer-events: none; }
+.nb-text a, .nb-text button, .nb-text summary, .nb-text input, .nb-text [role='button'] { position: relative; z-index: 2; pointer-events: auto; }
+.nb-foot a, .nb-foot button { position: relative; z-index: 2; }
+.nb-foot { pointer-events: none; }
+.nb-foot a, .nb-foot button { pointer-events: auto; }
+.nb:focus-within { outline: 2px solid rgb(var(--brand)); outline-offset: 2px; }
+@media (max-width: 560px) { .nb-banner { height: 10rem; min-height: 0; } .nb-title { font-size: 1.5rem; } }
+
+.nw-bar { display: flex; align-items: center; gap: .5rem; min-width: 0; }
+.nw-bar .nw-rubrics { flex: 1 1 auto; min-width: 0; }
+.nw-menu-btn { flex: none; display: inline-flex; align-items: center; gap: .45rem; min-height: 44px; padding: 0 .9rem; border-radius: var(--r-pill); border: 1px solid rgb(var(--line)); background: rgb(var(--card)); color: rgb(var(--ink)); font-size: var(--fs-sm); font-weight: 650; cursor: pointer; }
+.nw-menu-btn:hover { background: rgb(var(--soft)); }
+.nw-menu-h { margin: 6px 12px 2px; font-size: var(--fs-xs); font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: rgb(var(--mute)); }
+.nw-menu-h:not(:first-child) { margin-top: 10px; }
