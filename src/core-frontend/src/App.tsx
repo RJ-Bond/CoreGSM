@@ -229,7 +229,7 @@ export default function App() {
     if (!isAdmin) return;
     const check = () => {
       if (document.hidden) return;
-      api<UpdateInfo>('/update/status').then((r) => setUpdateAvailable(r.available)).catch(() => undefined);
+      api<UpdateInfo>('/update/status').then((r) => setUpdateAvailable(r.available && !r.skipped)).catch(() => undefined);
     };
     check();
     const t = setInterval(check, 60_000);

@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="dc5f10e76a1d"
+COREGSM_BUILD="6ec5ce677c98"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.0.0.1"
+COREGSM_VERSION="1.0.0.2"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -5695,6 +5695,8 @@ if (INTERNAL_TOKEN.length < 16) {
   process.exit(1);
 }
 export const APP_VERSION = process.env.APP_VERSION ?? '';
+/** the readable version of the running build («1.0.0.7»); empty on installs made before versions had names */
+export const APP_VERSION_NAME = process.env.APP_VERSION_NAME ?? '';
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/configExport.ts" << '__COREGSM_EOF__'
@@ -16895,13 +16897,13 @@ import express from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
 import { admin } from '../auth.js';
-import { APP_VERSION } from '../config.js';
+import { APP_VERSION, APP_VERSION_NAME } from '../config.js';
 import { wrap } from '../http.js';
 import { log } from '../logger.js';
 import { db, getSetting, setSetting } from '../db.js';
 import { alertSettings, enqueueAlert } from '../alerts.js';
 import { listBackups } from '../backup.js';
-import { classifyCommit, isNoopJob, jobKind, parseChannel, shouldAnnounce, stageOf, type Channel, type CommitFlag, type CommitKind } from '../updateLogic.js';
+import { classifyCommit, isNoopJob, parseChangelog, parseVersion, jobKind, parseChannel, shouldAnnounce, stageOf, type Channel, type CommitFlag, type CommitKind } from '../updateLogic.js';
 
 export const router = express.Router();
 
@@ -16918,7 +16920,7 @@ const CHANNEL_LOCKED = process.env.UPDATE_RELEASE_BASE_URL !== undefined || !!pr
 const channel = (): Channel => (process.env.UPDATE_CHANNEL === 'main' || process.env.UPDATE_BASE_URL ? 'main' : parseChannel(getSetting('update_channel')));
 const releaseBase = (): string => (process.env.UPDATE_RELEASE_BASE_URL !== undefined ? process.env.UPDATE_RELEASE_BASE_URL : channel() === 'main' ? '' : RELEASE_DEFAULT);
 
-let remote: { build: string | null; error: string | null; at: number; builtAt: number | null } = { build: null, error: null, at: 0, builtAt: null };
+let remote: { build: string | null; label: string | null; error: string | null; at: number; builtAt: number | null } = { build: null, label: null, error: null, at: 0, builtAt: null };
 
 /** raw.githubusercontent.com is cached for minutes after a push; the GitHub API returns the file as it is now. */
 function repoApiUrl(file: string): string | null {
@@ -16973,13 +16975,16 @@ async function fetchBuiltAt(): Promise<number | null> {
 async function checkRemote(force = false): Promise<void> {
   if (!force && Date.now() - remote.at < 5 * 60_000) return;
   try {
-    const m = /^build=([a-f0-9]{6,64})$/m.exec((await fetchReleaseVersion()) ?? (await fetchRepoText('version.txt')));
+    const text = (await fetchReleaseVersion()) ?? (await fetchRepoText('version.txt'));
+    const m = /^build=([a-f0-9]{6,64})$/m.exec(text);
     if (!m) throw new Error('некорректный version.txt');
+    const label = /^version=(\d+(?:\.\d+){1,4})$/m.exec(text)?.[1] ?? null;
+    if (label) rememberLabel(m[1]!, label);
     const builtAt = m[1] === remote.build && remote.builtAt ? remote.builtAt : await fetchBuiltAt();
-    remote = { build: m[1], error: null, at: Date.now(), builtAt };
+    remote = { build: m[1]!, label, error: null, at: Date.now(), builtAt };
     announceVersion();
   } catch (e) {
-    remote = { build: remote.build, error: `Не удалось проверить обновления: ${(e as Error).message}`, at: Date.now(), builtAt: remote.builtAt };
+    remote = { build: remote.build, label: remote.label, error: `Не удалось проверить обновления: ${(e as Error).message}`, at: Date.now(), builtAt: remote.builtAt };
   }
 }
 
@@ -16999,6 +17004,8 @@ function updatePayload() {
   return {
     current: APP_VERSION || null,
     latest: remote.build,
+    currentLabel: labelOf(APP_VERSION),
+    latestLabel: remote.label,
     available: !!(APP_VERSION && remote.build && APP_VERSION !== remote.build),
     checkedAt: remote.at || null,
     error: remote.error,
@@ -17015,6 +17022,18 @@ function updatePayload() {
     skipped: !!remote.build && getSetting('update_skip') === remote.build,
     notify: getSetting('update_notify') !== '0',
   };
+}
+
+// ---- readable versions: the running build knows its own name (APP_VERSION_NAME); the others are learned from version.txt
+db.exec('CREATE TABLE IF NOT EXISTS build_labels (build TEXT PRIMARY KEY, label TEXT NOT NULL)');
+function rememberLabel(build: string, label: string): void {
+  if (parseVersion(label)) db.prepare('INSERT OR REPLACE INTO build_labels (build, label) VALUES (?, ?)').run(build, label);
+}
+if (APP_VERSION && APP_VERSION_NAME) rememberLabel(APP_VERSION, APP_VERSION_NAME);
+function labelOf(build: string | null | undefined): string | null {
+  if (!build) return null;
+  if (build === APP_VERSION && APP_VERSION_NAME) return APP_VERSION_NAME;
+  return (db.prepare('SELECT label FROM build_labels WHERE build = ?').get(build) as { label: string } | undefined)?.label ?? null;
 }
 
 // ---- history of the host jobs, and the notices about them
@@ -17062,7 +17081,7 @@ function announce(title: string, description: string, color: number): void {
 function announceVersion(): void {
   if (!shouldAnnounce({ notify: getSetting('update_notify') !== '0', available: !!(APP_VERSION && remote.build && APP_VERSION !== remote.build), latest: remote.build, announced: getSetting('update_announced'), skipped: getSetting('update_skip') })) return;
   setSetting('update_announced', remote.build);
-  announce('Доступно обновление панели', `Версия \`${(remote.build ?? '').slice(0, 7)}\`. Установить: Настройки → Обновления и копии.`, 0x5865f2);
+  announce('Доступно обновление панели', `Версия \`${remote.label ?? (remote.build ?? '').slice(0, 7)}\`. Установить: Настройки → Обновления и копии.`, 0x5865f2);
 }
 
 /** writes a finished job into the history once; the first run on an old database only fills it in silently */
@@ -17087,7 +17106,7 @@ setInterval(() => { try { recordJob(); } catch (e) { log.warn('update history fa
 router.get('/api/update/history', admin, (_req, res) => {
   recordJob();
   const rows = db.prepare('SELECT * FROM update_history ORDER BY job_time DESC LIMIT 30').all() as HistoryRow[];
-  res.json(rows.map((r) => ({ id: r.id, time: r.job_time, state: r.state, kind: r.kind, message: r.message, version: r.version })));
+  res.json(rows.map((r) => ({ id: r.id, time: r.job_time, state: r.state, kind: r.kind, message: r.message, version: r.version, label: labelOf(r.version) })));
 });
 
 // what an update would interrupt: players online now and the age of the last backup
@@ -17212,6 +17231,23 @@ router.post('/api/update/rollback', admin, (_req, res) => {
   log.info('rollback requested from the panel');
   res.status(202).json(updatePayload());
 });
+
+// ---- release notes: CHANGELOG.md of the repository (Russian, written by hand); the commits are the fallback
+let notes: { at: number; releases: ReturnType<typeof parseChangelog>; error: string | null } | null = null;
+router.get(
+  '/api/update/notes',
+  admin,
+  wrap(async (_req, res) => {
+    if (!notes || Date.now() - notes.at > (notes.error ? 60_000 : 10 * 60_000)) {
+      try {
+        notes = { at: Date.now(), releases: parseChangelog(await fetchRepoText('CHANGELOG.md')).slice(0, 12), error: null };
+      } catch (e) {
+        notes = { at: Date.now(), releases: notes?.releases ?? [], error: (e as Error).message };
+      }
+    }
+    res.json({ releases: notes.releases, error: notes.error });
+  }),
+);
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/routes"
   cat > "$APP_DIR/core-backend/src/routes/users.ts" << '__COREGSM_EOF__'
@@ -18802,6 +18838,68 @@ export function shouldAnnounce(o: { notify: boolean; available: boolean; latest:
 
 export type Channel = 'release' | 'main';
 export const parseChannel = (v: string | null | undefined): Channel => (v === 'main' ? 'main' : 'release');
+
+/** «1.0.0.12» → [1,0,0,12]; anything else (a bare hash) → null */
+export function parseVersion(v: string | null | undefined): number[] | null {
+  if (!v || !/^\d+(\.\d+){1,4}$/.test(v)) return null;
+  return v.split('.').map(Number);
+}
+
+/** negative when a < b; null when either is not a readable version */
+export function cmpVersion(a: string | null | undefined, b: string | null | undefined): number | null {
+  const x = parseVersion(a);
+  const y = parseVersion(b);
+  if (!x || !y) return null;
+  for (let i = 0; i < Math.max(x.length, y.length); i++) {
+    const d = (x[i] ?? 0) - (y[i] ?? 0);
+    if (d !== 0) return d;
+  }
+  return 0;
+}
+
+export function flagsOf(text: string): CommitFlag[] {
+  return classifyCommit(text.replace(/^[-*]\s*/, '')).flags.concat(/^[-*]?\s*⚠/.test(text) ? ['breaking' as const] : []).filter((f, i, a) => a.indexOf(f) === i);
+}
+
+export interface NotesGroup { title: string; items: { text: string; flags: CommitFlag[] }[] }
+export interface NotesRelease { version: string | null; date: string | null; groups: NotesGroup[] }
+
+/**
+ * CHANGELOG.md of the repository:
+ *   ## Не выпущено                      (version null)
+ *   ## 1.0.0.7 · 26.10.2026
+ *   ### Новое
+ *   - what changed [migration]
+ * Sections come newest first, as written.
+ */
+export function parseChangelog(text: string): NotesRelease[] {
+  const out: NotesRelease[] = [];
+  let rel: NotesRelease | null = null;
+  let group: NotesGroup | null = null;
+  for (const raw of text.replace(/\r/g, '').split('\n')) {
+    const line = raw.trimEnd();
+    const h2 = /^##\s+(.+)$/.exec(line);
+    if (h2 && !line.startsWith('###')) {
+      const m = /^(\d+(?:\.\d+){1,4})(?:\s*[·—–-]\s*(.+))?$/.exec(h2[1]!.trim());
+      rel = { version: m ? m[1]! : null, date: m?.[2]?.trim() ?? null, groups: [] };
+      group = null;
+      out.push(rel);
+      continue;
+    }
+    const h3 = /^###\s+(.+)$/.exec(line);
+    if (h3 && rel) {
+      group = { title: h3[1]!.trim(), items: [] };
+      rel.groups.push(group);
+      continue;
+    }
+    const li = /^[-*]\s+(.+)$/.exec(line);
+    if (li && rel) {
+      if (!group) { group = { title: 'Изменения', items: [] }; rel.groups.push(group); }
+      group.items.push({ text: li[1]!.trim(), flags: flagsOf(li[1]!) });
+    }
+  }
+  return out;
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/webpush.ts" << '__COREGSM_EOF__'
@@ -47835,7 +47933,7 @@ export default function App() {
     if (!isAdmin) return;
     const check = () => {
       if (document.hidden) return;
-      api<UpdateInfo>('/update/status').then((r) => setUpdateAvailable(r.available)).catch(() => undefined);
+      api<UpdateInfo>('/update/status').then((r) => setUpdateAvailable(r.available && !r.skipped)).catch(() => undefined);
     };
     check();
     const t = setInterval(check, 60_000);
@@ -48545,7 +48643,29 @@ export interface UpdateInfo {
   canRollback: boolean;
   pending: boolean;
   job: { state: 'running' | 'done' | 'error'; message: string; time: number; /** 0..100, absent on older managers */ progress?: number } | null;
+  /** readable versions («1.0.0.7»); null for a build that has no name yet (older installs show the short hash) */
+  currentLabel?: string | null;
+  latestLabel?: string | null;
+  /** what the host updater is doing now (derived from the percent); absent on an older backend */
+  stage?: UpdateStage | null;
+  /** when the newest version.txt was committed, and when the panel installed the running build (ms) */
+  latestAt?: number | null;
+  installedAt?: number | null;
+  channel?: 'release' | 'main';
+  /** the server pins the channel in its environment */
+  channelLocked?: boolean;
+  /** the offered version was skipped by an administrator */
+  skipped?: boolean;
+  notify?: boolean;
 }
+
+export type UpdateStage = 'download' | 'snapshot' | 'install' | 'health' | 'rollback';
+
+export interface UpdateHistoryItem { id: number; time: number; state: 'done' | 'error'; kind: 'update' | 'rollback'; message: string; version: string | null; label: string | null }
+export interface UpdatePreflight { onlineServers: number; players: number; lastBackupAt: number | null }
+export type NoteFlag = 'breaking' | 'migration' | 'env';
+export interface UpdateNotesRelease { version: string | null; date: string | null; groups: { title: string; items: { text: string; flags: NoteFlag[] }[] }[] }
+export interface UpdateNotes { releases: UpdateNotesRelease[]; error: string | null }
 
 export interface ChangelogItem {
   sha: string;
@@ -48553,6 +48673,9 @@ export interface ChangelogItem {
   /** commit time, ms (older servers may send an ISO string) */
   date: number | string | null;
   url: string;
+  /** from the commit prefix; merges are not worth showing */
+  kind?: 'feat' | 'fix' | 'other' | 'merge';
+  flags?: NoteFlag[];
 }
 
 export interface Changelog {
@@ -66403,6 +66526,13 @@ html[data-motion='reduce'] .view-swap { animation: none; }
 
 /* ---------- updates tab ---------- */
 .update-hero { background: linear-gradient(135deg, #f59e0b 0%, #ea580c 55%, #be185d 120%); box-shadow: 0 1px 2px rgba(20, 24, 40, .06), 0 22px 44px -18px rgba(234, 88, 12, .55); }
+.upd-steps { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 0; padding: 0; list-style: none; font-size: var(--fs-sm); font-weight: 700; }
+.upd-step { display: inline-flex; align-items: center; gap: 7px; opacity: .65; }
+.upd-step.is-done, .upd-step.is-active { opacity: 1; }
+.upd-step-dot { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 999px; font-size: var(--fs-2xs); line-height: 1; box-shadow: inset 0 0 0 2px rgb(255 255 255 / .6); }
+.upd-step.is-done .upd-step-dot { background: #fff; color: rgb(var(--brand)); box-shadow: none; }
+.upd-step.is-active .upd-step-dot { background: rgb(255 255 255 / .3); animation: live-ring 1.6s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .upd-step.is-active .upd-step-dot { animation: none; } }
 .update-hero-run { background: linear-gradient(135deg, rgb(var(--brand)), rgb(var(--brand-2, var(--brand)))); box-shadow: 0 1px 2px rgba(20, 24, 40, .06), 0 22px 44px -18px rgb(var(--brand) / .55); }
 .update-bob { animation: update-bob 1.6s ease-in-out infinite; }
 @keyframes update-bob { 0%, 100% { transform: translateY(2px); } 50% { transform: translateY(-3px); } }
@@ -68630,6 +68760,85 @@ const en: Record<keyof typeof ru, string> = {
   'hl.u.ms': 'ms',
   'hl.u.mb': 'MB',
   'hl.u.gb': 'GB',
+  'upd.t.running': 'Updating',
+  'upd.t.rolling': 'Rolling back to the previous version',
+  'upd.t.available': 'Update available',
+  'upd.t.latest': 'You are up to date',
+  'upd.t.skipped': 'New version skipped',
+  'upd.t.checking': 'Checking for updates',
+  'upd.s.done': 'Done! The panel reloads itself',
+  'upd.s.restarting': 'The panel is restarting…',
+  'upd.s.available': 'A new version is out. Your data and settings are kept; the panel is unavailable for 1–3 minutes.',
+  'upd.s.latest': 'Everything is up to date.',
+  'upd.s.latestChecked': 'Everything is up to date, checked {when}.',
+  'upd.s.skipped': 'Version {v} is skipped: no notices about it. You can still install it at any time.',
+  'upd.s.checking': 'Looking for a new version…',
+  'upd.installed': 'Installed',
+  'upd.inRepo': 'Available',
+  'upd.since': 'since {date}',
+  'upd.from': 'from {date}',
+  'upd.btn.now': 'Update now',
+  'upd.btn.sending': 'Sending…',
+  'upd.btn.notes': 'What is new',
+  'upd.btn.check': 'Check for updates',
+  'upd.btn.checking': 'Checking…',
+  'upd.btn.recheck': 'Check again',
+  'upd.btn.rollback': 'Roll back to the previous',
+  'upd.btn.skip': 'Skip this version',
+  'upd.btn.unskip': 'Stop skipping',
+  'upd.btn.anyway': 'Install anyway',
+  'upd.noApply': 'The update button is not available on this server. Update with',
+  'upd.stuck': 'The server did not pick up the request. Check on the server:',
+  'upd.stuckUp': 'or update with',
+  'upd.stuckRb': 'or roll back by hand',
+  'upd.oldFail': 'The last update attempt failed. {msg}',
+  'upd.hide': 'Hide',
+  'upd.c.title': 'Update the panel?',
+  'upd.c.text': 'It will be unavailable for 1–3 minutes; data and settings are kept. A copy of the database is made first, and a failed update is rolled back.',
+  'upd.c.players': 'Players online now: {n}. Game servers are not affected, but the panel and the bot will be unavailable.',
+  'upd.c.ok': 'Update',
+  'upd.rb.title': 'Roll back to the previous version?',
+  'upd.rb.text': 'The previous version of the panel and the database copy made before the last update will be restored. Everything changed since (new servers, news, users) will be lost. The panel is unavailable for 1–3 minutes.',
+  'upd.rb.ok': 'Roll back',
+  'upd.aria.update': 'Update progress',
+  'upd.aria.rollback': 'Rollback progress',
+  'upd.steps': 'Update steps',
+  'upd.step.download': 'Download',
+  'upd.step.snapshot': 'Data copy',
+  'upd.step.install': 'Install',
+  'upd.step.health': 'Start check',
+  'upd.pf.players': 'Players online now: {n}. Game servers are not affected, but the panel and the bot are unavailable for 1–3 minutes.',
+  'upd.pf.noBackup': 'There are no backups on the server. A database copy for the rollback is made before the update anyway.',
+  'upd.pf.old': 'The last backup is {h} h old. A fresh database copy is made automatically before the update.',
+  'upd.fl.title': 'Before you update',
+  'upd.fl.breaking': 'Breaking change',
+  'upd.fl.migration': 'Database change',
+  'upd.fl.env': 'New server settings needed',
+  'upd.n.title': 'What is new',
+  'upd.n.error': 'Could not load the changes: {e}',
+  'upd.n.empty': 'The list of changes is empty.',
+  'upd.n.unreleased': 'Unreleased',
+  'upd.n.new': 'new',
+  'upd.n.current': 'yours',
+  'upd.n.older': 'Show older versions',
+  'upd.n.fewer': 'Hide older versions',
+  'upd.n.fallback': 'There are no release notes yet; the latest changes of the repository are shown.',
+  'upd.g.feat': 'New',
+  'upd.g.fix': 'Fixed',
+  'upd.g.other': 'Other',
+  'upd.h.title': 'Update log',
+  'upd.h.empty': 'Nothing has run from the panel yet.',
+  'upd.h.update': 'Update',
+  'upd.h.rollback': 'Rollback',
+  'upd.h.ok': 'done',
+  'upd.h.fail': 'failed',
+  'upd.o.title': 'Update options',
+  'upd.o.channel': 'Update channel',
+  'upd.o.release': 'Stable: released versions only',
+  'upd.o.main': 'Latest: the newest changes, before a release',
+  'upd.o.locked': 'The channel is pinned by the server environment and cannot be changed here.',
+  'upd.o.notify': 'Tell Discord about new versions and update results',
+  'upd.o.notifyHint': 'Messages go to the alerts channel (Settings → Discord). Nothing is sent when it is not set up.',
 };
 
 export default en;
@@ -70640,6 +70849,85 @@ const ru = {
   'hl.u.ms': 'мс',
   'hl.u.mb': 'МБ',
   'hl.u.gb': 'ГБ',
+  'upd.t.running': 'Идёт обновление',
+  'upd.t.rolling': 'Откат к предыдущей версии',
+  'upd.t.available': 'Доступно обновление',
+  'upd.t.latest': 'Установлена последняя версия',
+  'upd.t.skipped': 'Новая версия пропущена',
+  'upd.t.checking': 'Проверка обновлений',
+  'upd.s.done': 'Готово! Панель обновится сама',
+  'upd.s.restarting': 'Панель перезапускается…',
+  'upd.s.available': 'Новая версия уже вышла. Данные и настройки сохранятся, панель будет недоступна 1–3 минуты.',
+  'upd.s.latest': 'Всё свежее.',
+  'upd.s.latestChecked': 'Всё свежее, проверено {when}.',
+  'upd.s.skipped': 'Версия {v} пропущена: уведомлений о ней не будет. Её можно установить в любой момент.',
+  'upd.s.checking': 'Узнаём, есть ли новая версия…',
+  'upd.installed': 'Установлена',
+  'upd.inRepo': 'Доступна',
+  'upd.since': 'с {date}',
+  'upd.from': 'от {date}',
+  'upd.btn.now': 'Обновить сейчас',
+  'upd.btn.sending': 'Отправляю…',
+  'upd.btn.notes': 'Что нового',
+  'upd.btn.check': 'Проверить обновления',
+  'upd.btn.checking': 'Проверяю…',
+  'upd.btn.recheck': 'Проверить ещё раз',
+  'upd.btn.rollback': 'Откатить к предыдущей',
+  'upd.btn.skip': 'Пропустить эту версию',
+  'upd.btn.unskip': 'Не пропускать',
+  'upd.btn.anyway': 'Установить всё равно',
+  'upd.noApply': 'Кнопка обновления недоступна на этом сервере. Обновляйте командой',
+  'upd.stuck': 'Сервер не взял запрос в работу. Проверьте на сервере:',
+  'upd.stuckUp': 'или обновите командой',
+  'upd.stuckRb': 'или выполните откат вручную',
+  'upd.oldFail': 'Прошлая попытка обновления не удалась. {msg}',
+  'upd.hide': 'Скрыть',
+  'upd.c.title': 'Обновить панель?',
+  'upd.c.text': 'Она будет недоступна 1–3 минуты, данные и настройки сохранятся. Перед обновлением автоматически создаётся копия базы данных, при сбое выполнится откат.',
+  'upd.c.players': 'Сейчас на серверах играют: {n}. Игровым серверам обновление не мешает, но панель и бот будут недоступны.',
+  'upd.c.ok': 'Обновить',
+  'upd.rb.title': 'Откатить к предыдущей версии?',
+  'upd.rb.text': 'Будут восстановлены предыдущая версия панели и копия базы данных, сделанная перед последним обновлением. Всё, что изменилось после обновления (новые серверы, новости, пользователи), будет потеряно. Панель будет недоступна 1–3 минуты.',
+  'upd.rb.ok': 'Откатить',
+  'upd.aria.update': 'Ход обновления',
+  'upd.aria.rollback': 'Ход отката',
+  'upd.steps': 'Этапы обновления',
+  'upd.step.download': 'Скачивание',
+  'upd.step.snapshot': 'Копия данных',
+  'upd.step.install': 'Установка',
+  'upd.step.health': 'Проверка запуска',
+  'upd.pf.players': 'Сейчас на серверах играют: {n}. Игровым серверам обновление не мешает, но панель и бот будут недоступны 1–3 минуты.',
+  'upd.pf.noBackup': 'Резервных копий на сервере нет. Перед обновлением всё равно создаётся копия базы данных для отката.',
+  'upd.pf.old': 'Последняя копия сделана {h} ч назад. Перед обновлением автоматически создаётся свежая копия базы данных.',
+  'upd.fl.title': 'Перед обновлением обратите внимание',
+  'upd.fl.breaking': 'Несовместимое изменение',
+  'upd.fl.migration': 'Изменение базы данных',
+  'upd.fl.env': 'Нужны новые настройки сервера',
+  'upd.n.title': 'Что нового',
+  'upd.n.error': 'Не удалось получить список изменений: {e}',
+  'upd.n.empty': 'Список изменений пуст.',
+  'upd.n.unreleased': 'Не выпущено',
+  'upd.n.new': 'новое',
+  'upd.n.current': 'у вас',
+  'upd.n.older': 'Показать прошлые версии',
+  'upd.n.fewer': 'Скрыть прошлые версии',
+  'upd.n.fallback': 'Описания версий пока нет, показаны последние изменения из репозитория.',
+  'upd.g.feat': 'Новое',
+  'upd.g.fix': 'Исправлено',
+  'upd.g.other': 'Прочее',
+  'upd.h.title': 'Журнал обновлений',
+  'upd.h.empty': 'Из панели пока ничего не запускалось.',
+  'upd.h.update': 'Обновление',
+  'upd.h.rollback': 'Откат',
+  'upd.h.ok': 'успешно',
+  'upd.h.fail': 'не удалось',
+  'upd.o.title': 'Параметры обновлений',
+  'upd.o.channel': 'Канал обновлений',
+  'upd.o.release': 'Стабильный: только выпущенные версии',
+  'upd.o.main': 'Свежий: последние изменения без выпуска',
+  'upd.o.locked': 'Канал задан переменными окружения сервера и отсюда не меняется.',
+  'upd.o.notify': 'Сообщать в Discord о новых версиях и результате обновления',
+  'upd.o.notifyHint': 'Сообщения уходят в канал оповещений (Настройки → Discord). Если он не настроен, ничего не отправляется.',
 };
 
 export default ru;
@@ -81432,11 +81720,12 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/pages/settings/UpdateCard.tsx" << '__COREGSM_EOF__'
 /** Settings → Updates: version check, changelog, update and rollback through the host updater. */
 import { type CSSProperties, useEffect, useRef, useState } from 'react';
-import { api, type Changelog, type UpdateInfo } from '../../api';
+import { api, type Changelog, type UpdateInfo, type UpdateNotes, type UpdatePreflight } from '../../api';
 import { confirmDialog } from '../../confirm';
-import { ago, ErrorLine, IconArrowUp, IconCheck, Section, Spinner, usePoll, errText } from '../../ui';
-
-const short = (v: string | null) => (v ? v.slice(0, 7) : '–');
+import { t } from '../../i18n';
+import { ago, ErrorLine, fmtDate, IconArrowUp, IconCheck, Spinner, usePoll, errText } from '../../ui';
+import { HistoryCard, NotesCard, OptionsCard, PreflightNote, StepList } from './updateParts';
+import { offered, versionText } from './updateLogic';
 
 const DISMISS_KEY = 'coregsm_dismissed_update_error';
 const readDismissed = (): number => {
@@ -81455,11 +81744,15 @@ export function UpdateCard() {
   const [offline, setOffline] = useState(false);
   const [log, setLog] = useState<Changelog | null>(null);
   const [logError, setLogError] = useState('');
+  const [notes, setNotes] = useState<UpdateNotes | null>(null);
+  const [pf, setPf] = useState<UpdatePreflight | null>(null);
 
   useEffect(() => {
     api<Changelog>('/update/changelog')
       .then((r) => { setLog(r); setLogError(r.error ?? ''); })
       .catch((e: Error) => setLogError(e.message));
+    api<UpdateNotes>('/update/notes').then(setNotes).catch(() => setNotes({ releases: [], error: null }));
+    api<UpdatePreflight>('/update/preflight').then(setPf).catch(() => undefined);
   }, []);
 
   // percent of the running job: only grows while the same job runs (never goes backwards between polls)
@@ -81510,7 +81803,9 @@ export function UpdateCard() {
   };
 
   const apply = async () => {
-    if (!(await confirmDialog({ title: 'Обновить панель?', text: 'Она будет недоступна 1-3 минуты, данные и настройки сохранятся.', confirmLabel: 'Обновить' }))) return;
+    const players = pf?.players ?? 0;
+    const text = players > 0 ? `${t('upd.c.text')}\n\n${t('upd.c.players', { n: players })}` : t('upd.c.text');
+    if (!(await confirmDialog({ title: t('upd.c.title'), text, confirmLabel: t('upd.c.ok') }))) return;
     setBusy(true);
     setError('');
     try {
@@ -81528,9 +81823,9 @@ export function UpdateCard() {
 
   const rollback = async () => {
     const ok = await confirmDialog({
-      title: 'Откатить к предыдущей версии?',
-      text: 'Будут восстановлены предыдущая версия панели и копия базы данных, сделанная перед последним обновлением. Всё, что изменилось после обновления (новые серверы, новости, пользователи), будет потеряно. Панель будет недоступна 1-3 минуты.',
-      confirmLabel: 'Откатить',
+      title: t('upd.rb.title'),
+      text: t('upd.rb.text'),
+      confirmLabel: t('upd.rb.ok'),
       danger: true,
     });
     if (!ok) return;
@@ -81549,33 +81844,59 @@ export function UpdateCard() {
     }
   };
 
-  const rollingBack = (waiting?.kind ?? finished) === 'rollback';
+  const rollingBack = (waiting?.kind ?? finished) === 'rollback' || (info?.stage === 'rollback' && running);
   // an old failure matters only while an update is still pending; a manual install that succeeded makes it moot
   const [dismissed, setDismissed] = useState<number>(readDismissed);
   const showOldFailure = !running && !error && info?.job?.state === 'error' && !!info.available && info.job.time !== dismissed;
   const stuck = !!waiting && Date.now() - waiting.since > 60_000 && !!info?.pending;
 
-  const state: 'running' | 'available' | 'latest' | 'unknown' = running || finished ? 'running' : info?.available ? 'available' : info?.latest ? 'latest' : 'unknown';
+  const skipped = !!info?.available && !!info.skipped;
+  const state: 'running' | 'available' | 'latest' | 'skipped' | 'unknown' = running || finished ? 'running' : offered(info) ? 'available' : skipped ? 'skipped' : info?.latest ? 'latest' : 'unknown';
   const lastChecked = info?.checkedAt ?? null;
+  const onGrad = state === 'available' || state === 'running';
+  const curText = versionText(info?.currentLabel, info?.current);
+  const newText = versionText(info?.latestLabel, info?.latest);
+
+  const setSkip = async (build: string | null) => {
+    setBusy(true);
+    setError('');
+    try {
+      setInfo(await api<UpdateInfo>('/update/settings', 'PUT', { skip: build }));
+    } catch (e) {
+      setError(errText(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const title =
+    state === 'running' ? (rollingBack ? t('upd.t.rolling') : t('upd.t.running'))
+    : state === 'available' ? t('upd.t.available')
+    : state === 'latest' ? t('upd.t.latest')
+    : state === 'skipped' ? t('upd.t.skipped')
+    : t('upd.t.checking');
+  const subtitle =
+    state === 'running'
+      ? finished ? t('upd.s.done') : offline ? t('upd.s.restarting') : info?.job?.state === 'running' && info.job.message ? info.job.message : ''
+      : state === 'available' ? t('upd.s.available')
+      : state === 'latest' ? (lastChecked ? t('upd.s.latestChecked', { when: ago(lastChecked) }) : t('upd.s.latest'))
+      : state === 'skipped' ? t('upd.s.skipped', { v: newText })
+      : t('upd.s.checking');
 
   return (
     <div className="space-y-5">
       <section
         aria-live="polite"
         className={`relative overflow-hidden rounded-ui-xl p-6 sm:p-7 ${
-          state === 'available'
-            ? 'update-hero text-white'
-            : state === 'running'
-              ? 'update-hero update-hero-run text-white'
-              : 'panel'
+          state === 'available' ? 'update-hero text-white' : state === 'running' ? 'update-hero update-hero-run text-white' : 'panel'
         }`}
       >
-        {(state === 'available' || state === 'running') && <span aria-hidden className="pointer-events-none absolute -right-14 -top-14 h-56 w-56 rounded-full bg-white/15" />}
+        {onGrad && <span aria-hidden className="pointer-events-none absolute -right-14 -top-14 h-56 w-56 rounded-full bg-white/15" />}
         <div className="relative flex flex-wrap items-start gap-4">
           <span
             aria-hidden
             className={`grid h-14 w-14 shrink-0 place-items-center rounded-2xl ${
-              state === 'available' || state === 'running' ? 'bg-white/20 text-white' : state === 'latest' ? 'bg-okbg text-ok' : 'bg-soft text-mute'
+              onGrad ? 'bg-white/20 text-white' : state === 'latest' ? 'bg-okbg text-ok' : 'bg-soft text-mute'
             }`}
           >
             {state === 'latest' ? (
@@ -81587,117 +81908,99 @@ export function UpdateCard() {
             )}
           </span>
           <div className="min-w-0 flex-1">
-            <h2 className="text-2xl font-extrabold leading-tight" style={{ letterSpacing: '-0.02em' }}>
-              {state === 'running' ? (rollingBack ? 'Откат к предыдущей версии' : 'Идёт обновление')
-                : state === 'available' ? 'Доступно обновление'
-                : state === 'latest' ? 'Установлена последняя версия'
-                : 'Проверка обновлений'}
-            </h2>
-            <p className={`mt-1 font-semibold ${state === 'available' || state === 'running' ? 'text-white/90' : 'text-mute'}`}>
-              {state === 'running'
-                ? (finished ? 'Готово! Панель обновится сама' : offline ? 'Панель перезапускается…' : info?.job?.state === 'running' && info.job.message ? info.job.message : rollingBack ? 'Откат к предыдущей версии…' : 'Запрос отправлен серверу…')
-                : state === 'available'
-                  ? 'Новая сборка уже в репозитории. Данные и настройки сохранятся, панель будет недоступна 1-3 минуты.'
-                  : state === 'latest'
-                    ? `Всё свежее${lastChecked ? `, проверено ${ago(lastChecked)}` : ''}.`
-                    : 'Узнаём, есть ли новая версия…'}
-            </p>
+            <h2 className="text-2xl font-extrabold leading-tight" style={{ letterSpacing: '-0.02em' }}>{title}</h2>
+            <p className={`mt-1 font-semibold ${onGrad ? 'text-white/90' : 'text-mute'}`}>{subtitle}</p>
 
             <dl className="mt-4 flex flex-wrap items-center gap-2 text-sm font-bold">
-              <div className={`flex items-center gap-2 rounded-full px-3.5 py-1.5 ${state === 'available' || state === 'running' ? 'bg-white/20' : 'bg-soft'}`}>
-                <dt className={state === 'available' || state === 'running' ? 'text-white/85' : 'text-mute'}>Установлена</dt>
-                <dd className="font-mono">{short(info?.current ?? null)}</dd>
+              <div className={`flex flex-wrap items-center gap-x-2 rounded-full px-3.5 py-1.5 ${onGrad ? 'bg-white/20' : 'bg-soft'}`}>
+                <dt className={onGrad ? 'text-white/85' : 'text-mute'}>{t('upd.installed')}</dt>
+                <dd className="font-mono">{curText}</dd>
+                {info?.installedAt ? <dd className={`font-sans font-semibold ${onGrad ? 'text-white/80' : 'text-mute'}`}>{t('upd.since', { date: fmtDate(info.installedAt) })}</dd> : null}
               </div>
               {state === 'available' && <span aria-hidden className="text-lg font-black text-white/90">→</span>}
-              <div className={`flex items-center gap-2 rounded-full px-3.5 py-1.5 ${state === 'available' ? 'bg-white text-ink' : state === 'running' ? 'bg-white/20' : 'bg-soft'}`}>
-                <dt className={state === 'available' ? 'text-mute' : state === 'running' ? 'text-white/85' : 'text-mute'}>В репозитории</dt>
-                <dd className="font-mono">{short(info?.latest ?? null)}</dd>
+              <div className={`flex flex-wrap items-center gap-x-2 rounded-full px-3.5 py-1.5 ${state === 'available' ? 'bg-white text-ink' : state === 'running' ? 'bg-white/20' : 'bg-soft'}`}>
+                <dt className={state === 'running' ? 'text-white/85' : 'text-mute'}>{t('upd.inRepo')}</dt>
+                <dd className="font-mono">{newText}</dd>
+                {info?.latestAt ? <dd className="font-sans font-semibold text-mute">{t('upd.from', { date: fmtDate(info.latestAt) })}</dd> : null}
               </div>
             </dl>
           </div>
         </div>
 
         {state === 'running' && (
-          <div className="relative mt-5 flex items-center gap-3">
-            <div
-              className={`update-progress min-w-0 flex-1 ${pct != null ? 'det' : ''}`}
-              role="progressbar"
-              aria-label={rollingBack ? 'Ход отката' : 'Ход обновления'}
-              aria-valuemin={0}
-              aria-valuemax={100}
-              aria-valuenow={pct ?? undefined}
-            >
-              <i style={pct != null ? ({ '--p': `${pct}%` } as CSSProperties) : undefined} />
+          <div className="relative mt-5 space-y-3">
+            {!rollingBack && <StepList stage={info?.stage} finished={!!finished} />}
+            <div className="flex items-center gap-3">
+              <div
+                className={`update-progress min-w-0 flex-1 ${pct != null ? 'det' : ''}`}
+                role="progressbar"
+                aria-label={rollingBack ? t('upd.aria.rollback') : t('upd.aria.update')}
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={pct ?? undefined}
+              >
+                <i style={pct != null ? ({ '--p': `${pct}%` } as CSSProperties) : undefined} />
+              </div>
+              {pct != null && <span className="w-14 shrink-0 text-right text-lg font-black tabular-nums" aria-hidden>{pct} %</span>}
+              {finished && (
+                <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-okbg text-ok" aria-hidden>
+                  <IconCheck size={16} />
+                </span>
+              )}
             </div>
-            {pct != null && <span className="w-14 shrink-0 text-right text-lg font-black tabular-nums" aria-hidden>{pct} %</span>}
-            {finished && (
-              <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-okbg text-ok" aria-hidden>
-                <IconCheck size={16} />
-              </span>
-            )}
           </div>
         )}
+
+        {state === 'available' && <PreflightNote pf={pf} current={info?.currentLabel} notes={notes} />}
 
         <div className="relative mt-5 flex flex-wrap items-center gap-2.5">
           {state === 'available' && (
             <>
               <button className="btn-on-grad btn-lg" onClick={apply} disabled={busy || running || !info?.canApply}>
-                {busy ? 'Отправляю…' : 'Обновить сейчас'}
+                {busy ? t('upd.btn.sending') : t('upd.btn.now')}
               </button>
-              <a className="btn-ghost-on-grad" href="#update-changes" onClick={(e) => { e.preventDefault(); document.getElementById('update-changes')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}>Что нового</a>
+              <a className="btn-ghost-on-grad" href="#update-changes" onClick={(e) => { e.preventDefault(); document.getElementById('update-changes')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}>{t('upd.btn.notes')}</a>
+              <button className="btn-ghost-on-grad" onClick={check} disabled={busy || running}>{t('upd.btn.recheck')}</button>
+              {info?.latest && <button className="btn-ghost-on-grad" onClick={() => void setSkip(info.latest)} disabled={busy || running}>{t('upd.btn.skip')}</button>}
+            </>
+          )}
+          {state === 'skipped' && (
+            <>
+              <button className="btn" onClick={apply} disabled={busy || running || !info?.canApply}>{t('upd.btn.anyway')}</button>
+              <button className="btn btn-soft" onClick={() => void setSkip(null)} disabled={busy || running}>{t('upd.btn.unskip')}</button>
             </>
           )}
           {(state === 'latest' || state === 'unknown') && (
-            <button className="btn" onClick={check} disabled={busy || running}>{busy ? 'Проверяю…' : 'Проверить обновления'}</button>
-          )}
-          {state === 'available' && (
-            <button className="btn-ghost-on-grad" onClick={check} disabled={busy || running}>Проверить ещё раз</button>
+            <button className="btn" onClick={check} disabled={busy || running}>{busy ? t('upd.btn.checking') : t('upd.btn.check')}</button>
           )}
           {info?.canRollback && state !== 'running' && (
-            <button className={`${state === 'available' ? 'btn-ghost-on-grad' : 'btn btn-soft'} sm:ml-auto`} onClick={() => void rollback()} disabled={busy || running}>Откатить к предыдущей</button>
+            <button className={`${state === 'available' ? 'btn-ghost-on-grad' : 'btn btn-soft'} sm:ml-auto`} onClick={() => void rollback()} disabled={busy || running}>{t('upd.btn.rollback')}</button>
           )}
         </div>
 
-        {state === 'available' && info && !info.canApply && (
-          <p className="relative mt-3 rounded-2xl bg-black/15 px-4 py-2.5 text-sm font-bold">
-            Кнопка недоступна на этом сервере. Обновляйте командой <span className="font-mono">sudo coregsm update</span>.
+        {info && !info.canApply && state !== 'running' && (
+          <p className={`relative mt-3 text-sm font-semibold ${state === 'available' ? 'rounded-2xl bg-black/15 px-4 py-2.5 font-bold' : 'text-mute'}`}>
+            {t('upd.noApply')} <span className="font-mono">sudo coregsm update</span>.
           </p>
-        )}
-        {state !== 'available' && info && !info.canApply && state !== 'running' && (
-          <p className="relative mt-3 text-sm font-semibold text-mute">Кнопка обновления недоступна на этом сервере. Обновляйте командой <span className="font-mono">sudo coregsm update</span>.</p>
         )}
         {stuck && (
           <p className="relative mt-3 rounded-2xl bg-badbg px-4 py-2.5 text-sm font-bold text-bad">
-            Сервер не взял запрос в работу. Проверьте на сервере: <span className="font-mono">systemctl status coregsm-update.path</span> или {rollingBack ? 'выполните откат вручную' : <>обновите командой <span className="font-mono">sudo coregsm update</span></>}.
+            {t('upd.stuck')} <span className="font-mono">systemctl status coregsm-update.path</span> {rollingBack ? t('upd.stuckRb') : <>{t('upd.stuckUp')} <span className="font-mono">sudo coregsm update</span></>}.
           </p>
         )}
         {info?.error && !running && <p className="relative mt-3 text-sm font-semibold text-mute">{info.error}</p>}
         {showOldFailure && info?.job && (
           <div className="relative mt-3 flex flex-wrap items-start justify-between gap-3 rounded-2xl bg-badbg px-4 py-2.5 text-sm font-bold text-bad">
-            <span>Прошлая попытка обновления не удалась. {info.job.message}</span>
-            <button type="button" className="btn-link btn-link-tone" onClick={() => { rememberDismissed(info.job!.time); setDismissed(info.job!.time); }}>Скрыть</button>
+            <span>{t('upd.oldFail', { msg: info.job.message })}</span>
+            <button type="button" className="btn-link btn-link-tone" onClick={() => { rememberDismissed(info.job!.time); setDismissed(info.job!.time); }}>{t('upd.hide')}</button>
           </div>
         )}
         <div className="relative"><ErrorLine text={error} /></div>
       </section>
 
-      <Section id="update-changes" title="Что нового" className="scroll-mt-24">
-
-        {!log && !logError && <div className="skeleton h-24 rounded-2xl" />}
-        {logError && <p className="text-sm font-semibold text-mute">Не удалось получить список изменений: {logError}</p>}
-        {log && log.items.length === 0 && !logError && <p className="font-semibold text-mute">Список изменений пуст.</p>}
-        {log && log.items.length > 0 && (
-          <ul className="divide-y divide-line">
-            {log.items.map((c) => (
-              <li key={c.sha} className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 py-2.5">
-                <a href={/^https?:\/\//i.test(c.url) ? c.url : undefined} target="_blank" rel="noopener noreferrer" className="min-w-0 flex-1 basis-60 wrap-break-word font-bold hover:text-link">{c.title}</a>
-                <span className="font-mono text-sm font-semibold text-mute">{c.sha.slice(0, 7)}</span>
-                <span className="text-sm font-semibold text-mute">{ago(typeof c.date === 'number' ? c.date : Date.parse(String(c.date)) || null)}</span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </Section>
+      <NotesCard notes={notes} log={log} logError={logError} current={info?.currentLabel} installedAt={info?.installedAt} />
+      <HistoryCard refreshKey={info?.job?.time ?? 0} />
+      {info && <OptionsCard info={info} onChange={setInfo} />}
     </div>
   );
 }
@@ -82005,6 +82308,326 @@ function UsersTabInner() {
         <p className="text-sm font-semibold text-mute">{t('us.pwNote')} <GoLink href="/admin/settings/security">{t('us.pwLink')}</GoLink>.</p>
       </Section>
     </AdminPage>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/pages/settings"
+  cat > "$APP_DIR/core-frontend/src/pages/settings/updateLogic.test.ts" << '__COREGSM_EOF__'
+import { describe, expect, it } from 'vitest';
+import { cmpVersion, groupCommits, isNewerRelease, preflightWarnings, stepStates, upcomingFlags, versionText } from './updateLogic';
+import type { ChangelogItem, UpdateNotesRelease } from '../../api';
+
+describe('update versions', () => {
+  it('prefers the readable version over the hash', () => {
+    expect(versionText('1.0.0.7', 'abcdef123456')).toBe('1.0.0.7');
+    expect(versionText(null, 'abcdef123456')).toBe('abcdef1');
+    expect(versionText(null, null)).toBe('–');
+  });
+  it('compares numerically', () => {
+    expect(cmpVersion('1.0.0.9', '1.0.0.10')!).toBeLessThan(0);
+    expect(cmpVersion('abc', '1.0.0.1')).toBeNull();
+  });
+});
+
+describe('update steps', () => {
+  it('marks done, active and todo around the current stage', () => {
+    expect(stepStates('install', false).map((s) => s.state)).toEqual(['done', 'done', 'active', 'todo']);
+    expect(stepStates('download', false).map((s) => s.state)).toEqual(['active', 'todo', 'todo', 'todo']);
+    expect(stepStates(null, true).map((s) => s.state)).toEqual(['done', 'done', 'done', 'done']);
+    expect(stepStates('rollback', false).map((s) => s.state)).toEqual(['todo', 'todo', 'todo', 'todo']);
+  });
+});
+
+describe('preflight warnings', () => {
+  const now = Date.UTC(2026, 9, 26, 12);
+  it('warns about players and about a missing or old backup', () => {
+    expect(preflightWarnings({ onlineServers: 2, players: 5, lastBackupAt: now - 3_600_000 }, now)).toEqual([{ kind: 'players', n: 5 }]);
+    expect(preflightWarnings({ onlineServers: 0, players: 0, lastBackupAt: null }, now)).toEqual([{ kind: 'noBackup' }]);
+    expect(preflightWarnings({ onlineServers: 0, players: 0, lastBackupAt: now - 50 * 3_600_000 }, now)).toEqual([{ kind: 'oldBackup', hours: 50 }]);
+    expect(preflightWarnings(null, now)).toEqual([]);
+  });
+});
+
+describe('release notes', () => {
+  const rels: UpdateNotesRelease[] = [
+    { version: null, date: null, groups: [{ title: 'Новое', items: [{ text: 'x', flags: [] }] }] },
+    { version: '1.0.0.8', date: null, groups: [{ title: 'Новое', items: [{ text: 'Таблица [migration]', flags: ['migration'] }, { text: '⚠ Старый API убран', flags: ['breaking'] }] }] },
+    { version: '1.0.0.5', date: null, groups: [{ title: 'Новое', items: [{ text: 'Старое [env]', flags: ['env'] }] }] },
+  ];
+  it('takes only releases newer than the running one', () => {
+    expect(isNewerRelease(rels[0]!, '1.0.0.6')).toBe(false);
+    expect(isNewerRelease(rels[1]!, '1.0.0.6')).toBe(true);
+    expect(isNewerRelease(rels[2]!, '1.0.0.6')).toBe(false);
+    expect(isNewerRelease(rels[1]!, null)).toBe(false);
+  });
+  it('lists the flags of the newer releases without the markers', () => {
+    expect(upcomingFlags(rels, '1.0.0.6')).toEqual([{ flag: 'migration', text: 'Таблица' }, { flag: 'breaking', text: 'Старый API убран' }]);
+  });
+  it('groups commits without merges and marks the ones after the installation', () => {
+    const items: ChangelogItem[] = [
+      { sha: '1', title: 'feat: a', date: 2000, url: '', kind: 'feat' },
+      { sha: '2', title: 'Merge pull request', date: 2000, url: '', kind: 'merge' },
+      { sha: '3', title: 'fix: b', date: 500, url: '', kind: 'fix' },
+    ];
+    const g = groupCommits(items, 1000);
+    expect(g.map((x) => x.id)).toEqual(['feat', 'fix']);
+    expect(g[0]!.items[0]!.isNew).toBe(true);
+    expect(g[1]!.items[0]!.isNew).toBe(false);
+  });
+});
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/pages/settings"
+  cat > "$APP_DIR/core-frontend/src/pages/settings/updateLogic.ts" << '__COREGSM_EOF__'
+/** Pure parts of Settings → Updates (covered by tests). */
+import type { ChangelogItem, UpdateInfo, UpdateNotesRelease, UpdatePreflight, UpdateStage } from '../../api';
+
+/** the readable version when there is one, else the short build hash */
+export const versionText = (label: string | null | undefined, build: string | null | undefined): string => label || (build ? build.slice(0, 7) : '–');
+
+/** «1.0.0.9» < «1.0.0.10»; null when either is not a readable version */
+export function cmpVersion(a: string | null | undefined, b: string | null | undefined): number | null {
+  const parse = (v: string | null | undefined) => (v && /^\d+(\.\d+){1,4}$/.test(v) ? v.split('.').map(Number) : null);
+  const x = parse(a);
+  const y = parse(b);
+  if (!x || !y) return null;
+  for (let i = 0; i < Math.max(x.length, y.length); i++) {
+    const d = (x[i] ?? 0) - (y[i] ?? 0);
+    if (d !== 0) return d;
+  }
+  return 0;
+}
+
+export const STEPS: Exclude<UpdateStage, 'rollback'>[] = ['download', 'snapshot', 'install', 'health'];
+export type StepState = 'done' | 'active' | 'todo';
+
+/** the four steps of an update with their state; a rollback has no steps, a finished job has them all done */
+export function stepStates(stage: UpdateStage | null | undefined, finished: boolean): { id: (typeof STEPS)[number]; state: StepState }[] {
+  const at = stage && stage !== 'rollback' ? STEPS.indexOf(stage) : -1;
+  return STEPS.map((id, i) => ({ id, state: finished || i < at ? 'done' : i === at ? 'active' : 'todo' }));
+}
+
+export type PreflightWarning = { kind: 'players'; n: number } | { kind: 'noBackup' } | { kind: 'oldBackup'; hours: number };
+
+/** what is worth saying before the button is pressed: players online and the age of the last backup */
+export function preflightWarnings(pf: UpdatePreflight | null, now: number): PreflightWarning[] {
+  if (!pf) return [];
+  const out: PreflightWarning[] = [];
+  if (pf.players > 0) out.push({ kind: 'players', n: pf.players });
+  if (pf.lastBackupAt === null) out.push({ kind: 'noBackup' });
+  else if (now - pf.lastBackupAt > 36 * 3_600_000) out.push({ kind: 'oldBackup', hours: Math.floor((now - pf.lastBackupAt) / 3_600_000) });
+  return out;
+}
+
+const when = (d: number | string | null): number | null => (typeof d === 'number' ? d : d ? Date.parse(String(d)) || null : null);
+
+export type CommitGroupId = 'feat' | 'fix' | 'other';
+
+/** the fallback when the repository has no CHANGELOG.md: commits without merges, grouped; «new» = after the installation */
+export function groupCommits(items: ChangelogItem[], installedAt: number | null): { id: CommitGroupId; items: (ChangelogItem & { isNew: boolean })[] }[] {
+  const groups: Record<CommitGroupId, (ChangelogItem & { isNew: boolean })[]> = { feat: [], fix: [], other: [] };
+  for (const c of items) {
+    if (c.kind === 'merge') continue;
+    const d = when(c.date);
+    groups[c.kind === 'feat' || c.kind === 'fix' ? c.kind : 'other'].push({ ...c, isNew: installedAt !== null && d !== null && d > installedAt });
+  }
+  return (['feat', 'fix', 'other'] as const).filter((id) => groups[id].length > 0).map((id) => ({ id, items: groups[id] }));
+}
+
+/** releases newer than the running version, when both are readable versions; the unreleased section is not new */
+export function isNewerRelease(rel: UpdateNotesRelease, current: string | null | undefined): boolean {
+  if (!rel.version) return false;
+  const c = cmpVersion(rel.version, current);
+  return c !== null && c > 0;
+}
+
+/** flags to warn about in the releases newer than the running one */
+export function upcomingFlags(releases: UpdateNotesRelease[], current: string | null | undefined): { flag: 'breaking' | 'migration' | 'env'; text: string }[] {
+  const out: { flag: 'breaking' | 'migration' | 'env'; text: string }[] = [];
+  for (const r of releases) {
+    if (!isNewerRelease(r, current)) continue;
+    for (const g of r.groups) for (const it of g.items) for (const flag of it.flags) out.push({ flag, text: it.text.replace(/\s*\[(migration|db|env)\]/gi, '').replace(/^⚠\s*/, '') });
+  }
+  return out;
+}
+
+/** the offered version can be installed unless it was skipped */
+export const offered = (info: UpdateInfo | null): boolean => !!info?.available && !info.skipped;
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/pages/settings"
+  cat > "$APP_DIR/core-frontend/src/pages/settings/updateParts.tsx" << '__COREGSM_EOF__'
+/** Pieces of Settings → Updates: steps, warnings, release notes, the log and the options. */
+import { useEffect, useState } from 'react';
+import { api, type Changelog, type UpdateHistoryItem, type UpdateInfo, type UpdateNotes, type UpdatePreflight } from '../../api';
+import { t, type TKey } from '../../i18n';
+import { ErrorLine, fmtDateTime, Section, errText, toast } from '../../ui';
+import { groupCommits, isNewerRelease, preflightWarnings, stepStates, upcomingFlags, versionText, type PreflightWarning } from './updateLogic';
+
+/** the four steps of an update; the active one pulses, finished ones carry a tick */
+export function StepList({ stage, finished }: { stage: UpdateInfo['stage']; finished: boolean }) {
+  return (
+    <ol className="upd-steps" aria-label={t('upd.steps')}>
+      {stepStates(stage, finished).map((s) => (
+        <li key={s.id} className={`upd-step is-${s.state}`} aria-current={s.state === 'active' ? 'step' : undefined}>
+          <span className="upd-step-dot" aria-hidden>{s.state === 'done' ? '✓' : ''}</span>
+          <span>{t(`upd.step.${s.id}` as TKey)}</span>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+const warnText = (w: PreflightWarning): string =>
+  w.kind === 'players' ? t('upd.pf.players', { n: w.n }) : w.kind === 'noBackup' ? t('upd.pf.noBackup') : t('upd.pf.old', { h: w.hours });
+
+/** what the update would interrupt, and the warnings from the notes of the newer versions */
+export function PreflightNote({ pf, current, notes }: { pf: UpdatePreflight | null; current: string | null | undefined; notes: UpdateNotes | null }) {
+  const warns = preflightWarnings(pf, Date.now());
+  const flags = notes ? upcomingFlags(notes.releases, current) : [];
+  if (warns.length === 0 && flags.length === 0) return null;
+  return (
+    <div className="relative mt-4 space-y-2 rounded-2xl bg-black/20 px-4 py-3 text-sm font-bold" role="note">
+      {warns.map((w) => <p key={w.kind}>{warnText(w)}</p>)}
+      {flags.length > 0 && (
+        <div>
+          <p className="font-black">{t('upd.fl.title')}</p>
+          <ul className="mt-1 list-disc space-y-0.5 pl-5">
+            {flags.map((f, i) => <li key={i}><b>{t(`upd.fl.${f.flag}` as TKey)}:</b> {f.text}</li>)}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
+const FLAG_PILL: Record<string, string> = { breaking: 'pill-bad', migration: 'pill-warn', env: 'pill-warn' };
+
+/** «Что нового»: CHANGELOG.md grouped by version, the commits of the repository when there is none */
+export function NotesCard({ notes, log, logError, current, installedAt }: {
+  notes: UpdateNotes | null; log: Changelog | null; logError: string; current: string | null | undefined; installedAt: number | null | undefined;
+}) {
+  const [older, setOlder] = useState(false);
+  const releases = notes?.releases ?? [];
+  const released = releases.filter((r) => r.version);
+  const unreleased = releases.find((r) => !r.version);
+  const hasNotes = releases.length > 0;
+  // versions up to the running one are «older»; without a readable current version only the newest three are shown
+  const fresh = released.filter((r) => isNewerRelease(r, current));
+  const rest = released.filter((r) => !isNewerRelease(r, current));
+  const shown = [...(unreleased && unreleased.groups.length > 0 ? [unreleased] : []), ...fresh, ...(older ? rest : rest.slice(0, 1))];
+  return (
+    <Section id="update-changes" title={t('upd.n.title')} className="scroll-mt-24">
+      {!notes && !log && !logError && <div className="skeleton h-24 rounded-2xl" />}
+      {hasNotes ? (
+        <div className="space-y-5">
+          {shown.map((r) => (
+            <article key={r.version ?? 'unreleased'}>
+              <h3 className="flex flex-wrap items-center gap-2 font-black">
+                <span>{r.version ?? t('upd.n.unreleased')}</span>
+                {r.date && <span className="text-sm font-semibold text-mute">{r.date}</span>}
+                {isNewerRelease(r, current) && <span className="pill pill-ok">{t('upd.n.new')}</span>}
+                {r.version && r.version === current && <span className="pill pill-mute">{t('upd.n.current')}</span>}
+              </h3>
+              {r.groups.map((g) => (
+                <div key={g.title} className="mt-2">
+                  <h4 className="text-sm font-black text-mute">{g.title}</h4>
+                  <ul className="mt-1 list-disc space-y-1 pl-5 font-semibold">
+                    {g.items.map((it, i) => (
+                      <li key={i}>
+                        {it.text.replace(/\s*\[(migration|db|env)\]/gi, '').replace(/^⚠\s*/, '')}
+                        {it.flags.map((f) => <span key={f} className={`pill ${FLAG_PILL[f]} ml-2`}>{t(`upd.fl.${f}` as TKey)}</span>)}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
+            </article>
+          ))}
+          {rest.length > 1 && (
+            <button type="button" className="btn-link" onClick={() => setOlder((v) => !v)}>{older ? t('upd.n.fewer') : t('upd.n.older')}</button>
+          )}
+        </div>
+      ) : (
+        <>
+          {notes && <p className="text-sm font-semibold text-mute">{t('upd.n.fallback')}</p>}
+          {logError && <p className="text-sm font-semibold text-mute">{t('upd.n.error', { e: logError })}</p>}
+          {log && log.items.length === 0 && !logError && <p className="font-semibold text-mute">{t('upd.n.empty')}</p>}
+          {log && groupCommits(log.items, installedAt ?? null).map((g) => (
+            <div key={g.id} className="mt-2">
+              <h4 className="text-sm font-black text-mute">{t(`upd.g.${g.id}` as TKey)}</h4>
+              <ul className="divide-y divide-line">
+                {g.items.map((c) => (
+                  <li key={c.sha} className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 py-2">
+                    <a href={/^https?:\/\//i.test(c.url) ? c.url : undefined} target="_blank" rel="noopener noreferrer" className="min-w-0 flex-1 basis-60 wrap-break-word font-bold hover:text-link">{c.title}</a>
+                    {c.isNew && <span className="pill pill-ok">{t('upd.n.new')}</span>}
+                    <span className="font-mono text-sm font-semibold text-mute">{c.sha.slice(0, 7)}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </>
+      )}
+    </Section>
+  );
+}
+
+/** what the panel started: updates and rollbacks, newest first */
+export function HistoryCard({ refreshKey }: { refreshKey: unknown }) {
+  const [rows, setRows] = useState<UpdateHistoryItem[] | null>(null);
+  useEffect(() => {
+    api<UpdateHistoryItem[]>('/update/history').then(setRows).catch(() => setRows([]));
+  }, [refreshKey]);
+  return (
+    <Section title={t('upd.h.title')}>
+      {!rows && <div className="skeleton h-16 rounded-2xl" />}
+      {rows && rows.length === 0 && <p className="font-semibold text-mute">{t('upd.h.empty')}</p>}
+      {rows && rows.length > 0 && (
+        <ul className="divide-y divide-line rounded-2xl border border-line">
+          {rows.map((r) => (
+            <li key={r.id} className="flex flex-wrap items-baseline gap-x-3 gap-y-1 px-4 py-2.5">
+              <span className={`pill ${r.state === 'done' ? 'pill-ok' : 'pill-bad'}`}>{r.state === 'done' ? t('upd.h.ok') : t('upd.h.fail')}</span>
+              <span className="font-bold">{r.kind === 'rollback' ? t('upd.h.rollback') : t('upd.h.update')}</span>
+              <span className="font-mono text-sm font-semibold text-mute">{versionText(r.label, r.version)}</span>
+              <span className="text-sm font-semibold text-mute">{fmtDateTime(r.time)}</span>
+              <span className="basis-full text-sm font-semibold text-mute">{r.message}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Section>
+  );
+}
+
+/** channel and Discord notices */
+export function OptionsCard({ info, onChange }: { info: UpdateInfo; onChange: (i: UpdateInfo) => void }) {
+  const [error, setError] = useState('');
+  const save = async (body: { channel?: 'release' | 'main'; notify?: boolean }) => {
+    setError('');
+    try {
+      onChange(await api<UpdateInfo>('/update/settings', 'PUT', body));
+      toast(t('al.saved'));
+    } catch (e) {
+      setError(errText(e));
+    }
+  };
+  return (
+    <Section title={t('upd.o.title')}>
+      <fieldset className="space-y-2" disabled={!!info.channelLocked}>
+        <legend className="label">{t('upd.o.channel')}</legend>
+        {(['release', 'main'] as const).map((c) => (
+          <label key={c} className="flex cursor-pointer items-center gap-2.5 font-bold">
+            <input type="radio" name="upd-channel" className="h-4 w-4 accent-brand" checked={(info.channel ?? 'release') === c} onChange={() => void save({ channel: c })} />
+            <span>{t(`upd.o.${c}` as TKey)}</span>
+          </label>
+        ))}
+        {info.channelLocked && <p className="text-sm font-semibold text-mute">{t('upd.o.locked')}</p>}
+      </fieldset>
+      <label className="flex cursor-pointer items-start gap-2.5 font-bold">
+        <input type="checkbox" className="mt-1 h-4 w-4 accent-brand" checked={info.notify !== false} onChange={(e) => void save({ notify: e.target.checked })} aria-describedby="upd-notify-hint" />
+        <span>{t('upd.o.notify')}<span id="upd-notify-hint" className="mt-0.5 block text-sm font-semibold text-mute">{t('upd.o.notifyHint')}</span></span>
+      </label>
+      <ErrorLine text={error} />
+    </Section>
   );
 }
 __COREGSM_EOF__
