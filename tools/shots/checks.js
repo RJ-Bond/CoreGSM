@@ -21,7 +21,7 @@
   };
 
   const out = { scrollW: doc.scrollWidth, vw, height: doc.scrollHeight, title: document.title, h1: (document.querySelector('h1')?.innerText || '').trim().slice(0, 60) };
-  const wide = [], clipped = [], tiny = [], noName = [];
+  const wide = [], clipped = [], tiny = [], noName = [], cut = [];
   for (const el of document.querySelectorAll('body *')) {
     const cs = getComputedStyle(el);
     const r = el.getBoundingClientRect();
@@ -33,6 +33,14 @@
     // text cut off by its box with no ellipsis: it just disappears
     if (r.width > 4 && (cs.overflowX === 'hidden' || cs.overflowX === 'clip') && el.scrollWidth > el.clientWidth + 2 && cs.textOverflow !== 'ellipsis' && el.children.length === 0 && (el.textContent || '').trim()) {
       clipped.push(`${name(el)} ${el.scrollWidth}>${el.clientWidth}`);
+    }
+    // a word that sticks out of the box that clips it (a column wider than its parent): the end of the text is simply gone
+    if (el.children.length === 0 && (el.textContent || '').trim() && cs.textOverflow !== 'ellipsis') {
+      for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) {
+        const o = getComputedStyle(p).overflowX;
+        if (o === 'auto' || o === 'scroll') break; // a scroller: the rest is reached by scrolling
+        if (o === 'hidden' || o === 'clip') { if (r.right > p.getBoundingClientRect().right + 2 && p.getBoundingClientRect().width > 40) cut.push(`${name(el)} ends ${Math.round(r.right - p.getBoundingClientRect().right)}px past ${name(p).split(' "')[0]}`); break; }
+      }
     }
     if (phone && el.matches('button, [role=tab], select, input:not([type=hidden]):not([type=checkbox]):not([type=radio])') && (r.width < 28 || r.height < 28)) tiny.push(`${name(el)} ${Math.round(r.width)}x${Math.round(r.height)}`);
     if (el.matches('button, a[href]') && !(el.innerText || '').trim() && !el.getAttribute('aria-label') && !el.getAttribute('title') && !el.querySelector('img[alt]:not([alt=""])')) noName.push(`${name(el)} ${el.outerHTML.slice(0, 110).replace(/s+/g, ' ')}`);
@@ -47,6 +55,7 @@
   }
   out.wide = wide.slice(0, 8);
   out.clipped = clipped.slice(0, 8);
+  out.cut = cut.slice(0, 6);
   out.tiny = tiny.slice(0, 6);
   out.noName = noName.slice(0, 6);
   out.brokenImg = [...document.images].filter((i) => i.complete && i.naturalWidth === 0 && i.currentSrc).map((i) => i.currentSrc.slice(-60)).slice(0, 5);

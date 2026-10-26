@@ -2,9 +2,9 @@
    The page sits on the same grid as every other page: the title on the left edge, no panel of its own behind it. */
 .nw-page { position: relative; padding: 0 0 3rem; }
 .nw-grid { display: grid; gap: 1.5rem; }
-.nw-main { display: grid; gap: 1.25rem; min-width: 0; align-content: start; }
+.nw-main { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1.25rem; min-width: 0; align-content: start; }
 .nw-feed { max-width: none; margin: 0; }
-.nw-group { display: grid; gap: .75rem; }
+.nw-group { display: grid; grid-template-columns: minmax(0, 1fr); gap: .75rem; }
 .nw-article-wrap { max-width: 52rem; margin: 0 auto; display: grid; gap: 1.25rem; }
 @media (min-width: 1100px) {
   .nw-grid.has-side { grid-template-columns: minmax(0, 1fr) 19rem; align-items: start; }
@@ -130,12 +130,12 @@
 .nw-read { display: inline-flex; align-items: center; padding: .15rem .65rem; border-radius: var(--r-pill); background: rgb(var(--soft)); color: rgb(var(--mute)); font-size: .8125rem; font-weight: 650; }
 .nw-article-in { display: grid; gap: 1.5rem; padding: 1.5rem 2rem 2rem; }
 
-.nw-aside { display: grid; gap: .75rem; }
+.nw-aside { display: grid; grid-template-columns: minmax(0, 1fr); gap: .75rem; }
 .nw-side-sec { padding: .5rem 1rem; border-radius: var(--r-lg); background: rgb(var(--card)); border: 1px solid rgb(var(--line)); }
 .nw-side-h { margin: .6rem 0 .3rem; font-size: .8125rem; font-weight: 650; letter-spacing: .06em; text-transform: uppercase; color: rgb(var(--mute)); }
 .nw-side-toggle { display: flex; align-items: center; justify-content: space-between; width: 100%; min-height: 44px; padding: 0; border: 0; background: none; color: rgb(var(--ink)); font-weight: 650; font-size: 1rem; cursor: pointer; }
 .nw-side-body { padding-bottom: .5rem; }
-.nw-side-list { list-style: none; margin: 0; padding: 0; display: grid; }
+.nw-side-list { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: minmax(0, 1fr); }
 .nw-side-list a, .nw-side-rub { display: flex; align-items: center; gap: .5rem; width: 100%; min-height: 44px; padding: 0; border: 0; background: none; color: rgb(var(--ink)); font-weight: 600; text-align: left; text-decoration: none; cursor: pointer; }
 .nw-side-list a span { overflow: hidden; text-overflow: ellipsis; }
 .nw-side-list a:hover, .nw-side-rub:hover, .nw-side-rub[aria-pressed='true'] { color: rgb(var(--link)); }

@@ -73,7 +73,8 @@ a.adm-tile:hover { box-shadow: var(--shadow-2); border-color: rgb(var(--brand) /
 .adm-item[draggable='true'] { cursor: grab; }
 
 /* ---------- servers table: sticky head, state stripe, details; journal; presets; density ---------- */
-.tile.adm-tablewrap { overflow: clip; }
+/* clipped at the rounded corners, but a wide table scrolls sideways instead of losing its last column */
+.tile.adm-tablewrap { overflow-x: auto; overflow-y: clip; }
 .adm-table thead th { position: sticky; top: 4.75rem; z-index: 2; background: rgb(var(--card)); box-shadow: 0 1px 0 rgb(var(--line)); }
 .adm-st:has(.adm-bulk) .adm-table thead th { top: 8.25rem; }
 .adm-bulk { position: sticky; top: 4.75rem; z-index: 25; box-shadow: var(--shadow-2); backdrop-filter: blur(8px); }
@@ -177,7 +178,7 @@ a.adm-tile:hover { box-shadow: var(--shadow-2); border-color: rgb(var(--brand) /
 
 /* ---------- servers: cards view, the floating bulk bar ---------- */
 .adm-cards { display: grid; gap: 10px; grid-template-columns: 1fr; }
-@media (min-width: 768px) { .adm-cards { grid-template-columns: repeat(auto-fill, minmax(18rem, 1fr)); } }
+@media (min-width: 768px) { .adm-cards { grid-template-columns: repeat(auto-fill, minmax(18rem, 1fr)); } .adm-cards[data-hide-md] { display: none; } }
 .adm-card { position: relative; box-shadow: inset 4px 0 0 rgb(var(--ok)), var(--shadow-1); transition: box-shadow .15s ease, transform .15s ease; }
 .adm-card:hover { transform: translateY(-1px); }
 .adm-card[data-state='off'] { box-shadow: inset 4px 0 0 rgb(var(--bad)), var(--shadow-1); }

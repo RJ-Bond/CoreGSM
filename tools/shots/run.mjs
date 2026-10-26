@@ -168,6 +168,7 @@ async function shoot(cdp, base, row, outDir) {
   if (c.badText) errors.push(`leaked value in the text: "${c.badText}"`);
   if (c.brokenImg.length) errors.push(`broken picture: ${c.brokenImg.join(', ')}`);
   if (c.mainEmpty && page.id !== 'not-found') errors.push('the page is empty');
+  if (c.cut.length) warnings.push(`text cut off by its container: ${c.cut.slice(0, 3).join(' | ')}`);
   if (c.clipped.length) warnings.push(`text cut off without an ellipsis: ${c.clipped.slice(0, 3).join(' | ')}`);
   if (c.tiny.length) warnings.push(`small tap targets: ${c.tiny.slice(0, 3).join(' | ')}`);
   if (c.noName.length) warnings.push(`controls without a name: ${c.noName.slice(0, 3).join(' | ')}`);
