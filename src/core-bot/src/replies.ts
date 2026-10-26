@@ -1,4 +1,5 @@
 /** Ephemeral replies to the slash commands: plain notices and the player's card. */
+import { footerOf, getStyle } from './style.js';
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } from 'discord.js';
 
 export const COLORS = { ok: 0x2ecc71, warn: 0xf5b01e, bad: 0xe74c3c, info: 0x9b1c31 };
@@ -21,7 +22,7 @@ export const markOf = (color: number) => (color === COLORS.ok ? '✅' : color ==
 
 export function replyEmbed(title: string, description: string, color: number, url?: string) {
   const lead = /^\p{Extended_Pictographic}/u.test(title) ? '' : `${markOf(color)} `;
-  const e = new EmbedBuilder().setTitle(`${lead}${title}`.slice(0, 250)).setDescription(description.slice(0, 3900)).setColor(color).setFooter({ text: 'CoreGSM' });
+  const e = new EmbedBuilder().setTitle(`${lead}${title}`.slice(0, 250)).setDescription(description.slice(0, 3900)).setColor(color === COLORS.info ? getStyle().accent : color).setFooter(footerOf());
   if (url && /^https?:\/\//.test(url)) e.setURL(url);
   return { embeds: [e] };
 }
@@ -46,7 +47,7 @@ export function cardReply(
   const base = panelBase(p.profileUrl);
   const color = opts.color ?? (p.rank ? hexToInt(p.rank.color) : COLORS.info);
   const e = new EmbedBuilder()
-    .setColor(color)
+    .setColor(color === COLORS.info ? getStyle().accent : color)
     .setAuthor({ name: displayName.slice(0, 120), iconURL: user.displayAvatarURL({ size: 64 }) })
     .setTitle(opts.title.slice(0, 250));
   if (opts.description) e.setDescription(opts.description.slice(0, 3000));
@@ -80,7 +81,7 @@ export function cardReply(
     }
   }
   e.addFields(fields);
-  e.setFooter({ text: 'CoreGSM · статистика копится с первого входа на сервер' });
+  e.setFooter(footerOf('статистика копится с первого входа на сервер'));
 
   const components = [];
   if (base) {

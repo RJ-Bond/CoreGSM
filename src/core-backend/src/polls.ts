@@ -13,7 +13,7 @@ import { enqueueAlert } from './alerts.js';
 import { type AuthedRequest } from './auth.js';
 import { db } from './db.js';
 import { log } from './logger.js';
-import { pollIsOpen, resultsText, tally, validatePoll } from './pollLogic.js';
+import { pollIsOpen, resultsText, tally, validatePoll, type TallyRow } from './pollLogic.js';
 import { publicBase } from './site.js';
 
 db.exec(`
@@ -54,6 +54,17 @@ function view(p: PollRow, userId: number | null) {
 
 const COLOR = { open: 0x5865f2, closed: 0x23a55a };
 
+/** the message of a poll (new / results): also used by the message gallery in the admin */
+export function pollEmbed(o: { question: string; closesAt: number | null; rows: TallyRow[]; total: number; isNew: boolean; site: boolean }) {
+  return {
+    title: o.isNew ? `🗳️ Голосование: ${o.question}` : `📊 Итоги голосования: ${o.question}`,
+    description: o.isNew
+      ? `Выберите вариант кнопкой ниже${o.site ? ' или на сайте' : ''}. Нужен аккаунт, привязанный к Discord (команда /register).${o.closesAt ? `\nЗавершится <t:${Math.floor(o.closesAt / 1000)}:R>.` : ''}`
+      : resultsText(o.rows, o.total),
+    color: o.isNew ? COLOR.open : COLOR.closed,
+  };
+}
+
 function announce(p: PollRow, kind: 'new' | 'result'): void {
   if (!/^\d{15,25}$/.test(p.channel_id)) return;
   const t = tally(optionsOf(p.id), countsOf(p.id));
@@ -65,13 +76,7 @@ function announce(p: PollRow, kind: 'new' | 'result'): void {
     {
       content: '',
       mention: 'none',
-      embed: {
-        title: isNew ? `🗳️ Голосование: ${p.question}` : `📊 Итоги голосования: ${p.question}`,
-        description: isNew
-          ? `Выберите вариант кнопкой ниже${base ? ` или на сайте` : ''}. Нужен аккаунт, привязанный к Discord (команда /register).${p.closes_at ? `\nЗавершится <t:${Math.floor(p.closes_at / 1000)}:R>.` : ''}`
-          : resultsText(t.rows, t.total),
-        color: isNew ? COLOR.open : COLOR.closed,
-      },
+      embed: pollEmbed({ question: p.question, closesAt: p.closes_at, rows: t.rows, total: t.total, isNew, site: !!base }),
       ...(isNew ? { buttons: t.rows.map((r) => ({ customId: `poll:${p.id}:${r.id}`, label: r.text.slice(0, 80) })) } : {}),
       ...(base ? { actions: [{ label: isNew ? 'Голосовать на сайте' : 'Подробнее на сайте', url: `${base}/community` }] } : {}),
     },
