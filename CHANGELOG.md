@@ -17,6 +17,8 @@ interface language; the GitHub release text is built from the section of the ver
 ## Не выпущено | Unreleased
 
 ### ✨ Новое | New
+- 🤖 Состояние Discord-бота в шапке панели для администратора (в сети, подключается, ошибка) — клик открывает настройки бота | The Discord bot state in the panel header for administrators (online, connecting, error) — a click opens the bot settings
+- ⌨️ В палитре команд (Ctrl K) появились действия «Создать резервную копию» и «Проверить обновления» | The command palette (Ctrl K) got «Create a backup» and «Check for updates» actions
 - ↕️ Порядок серверов задаётся вручную: кнопки «выше/ниже» в админской таблице, тот же порядок в списке, на странице статуса и в Discord | Servers can be ordered by hand: up/down buttons in the admin table, the same order in the list, the status page and Discord [migration]
 - 🔎 Фильтр и поиск в таблице серверов запоминаются: после перехода на другую страницу и возврата они на месте | The servers table remembers its filter and search when you leave the page and come back
 - 🌐 Описания версий на двух языках: панель показывает русский или английский текст, релиз на GitHub — оба | Release notes in two languages: the panel shows Russian or English, the GitHub release shows both

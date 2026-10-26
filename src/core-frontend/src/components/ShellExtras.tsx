@@ -6,7 +6,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { api, onBusy, type Me } from '../api';
 import { useAppearance } from '../appearance';
-import { t, useI18n } from '../i18n';
+import { t, useI18n, type TKey } from '../i18n';
 import { UserAvatar } from '../ui';
 import '../styles/shell.css';
 
@@ -66,6 +66,31 @@ function paintFavicon(state: 'ok' | 'bad' | null) {
 interface Pulse { now: { players: number; online: number; servers: number } }
 
 /** players now (for «(12) Серверы · CoreGSM») and a dot on the favicon: green when everything is up, red when something is down */
+/** administrators: the state of the Discord bot in the header, a link to its settings */
+export function BotPill() {
+  useI18n();
+  const [state, setState] = useState<'idle' | 'connecting' | 'online' | 'error' | null>(null);
+  useEffect(() => {
+    let stop = false;
+    const load = () => {
+      if (document.hidden) return;
+      api<{ state: 'idle' | 'connecting' | 'online' | 'error' }>('/bot/status').then((r) => { if (!stop) setState(r.state); }).catch(() => { if (!stop) setState(null); });
+    };
+    load();
+    const timer = setInterval(load, 60_000);
+    return () => { stop = true; clearInterval(timer); };
+  }, []);
+  if (!state) return null;
+  const label = t(`hdr.bot.${state}` as TKey);
+  const color = state === 'online' ? 'bg-ok' : state === 'error' ? 'bg-bad' : state === 'connecting' ? 'bg-warn' : 'bg-mute';
+  return (
+    <a href="/admin/discord" className="btn-soft hdr-search" title={t('hdr.bot.tip', { s: label })} aria-label={t('hdr.bot.tip', { s: label })}>
+      <span className={`inline-block size-2.5 rounded-full ${color}`} aria-hidden />
+      <span className="hidden xl:inline">{label}</span>
+    </a>
+  );
+}
+
 export function usePanelPulse(enabled: boolean): number {
   const [players, setPlayers] = useState(0);
   useEffect(() => {

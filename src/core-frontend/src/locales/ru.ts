@@ -1858,6 +1858,11 @@ const ru = {
   'adm.tbl.down': 'Ниже',
   'adm.tbl.moved': 'Порядок серверов сохранён',
   'adm.tbl.orderHint': 'Порядок можно менять, когда фильтр и поиск сброшены',
+  'hdr.bot.online': 'Бот в сети',
+  'hdr.bot.connecting': 'Бот подключается',
+  'hdr.bot.error': 'Ошибка бота',
+  'hdr.bot.idle': 'Бот выключен',
+  'hdr.bot.tip': 'Статус Discord-бота: {s}. Открыть настройки бота',
 };
 
 export default ru;
