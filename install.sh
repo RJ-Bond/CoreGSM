@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="25d8a86cff99"
+COREGSM_BUILD="cea90119c0f2"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.0.0.25"
+COREGSM_VERSION="1.0.0.26"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -8127,6 +8127,10 @@ export const ERRORS = {
 
   // ---- maintenance windows ----
   maintenance_not_found: 'Окно обслуживания не найдено',
+  note_title_required: 'Укажите заголовок',
+  note_title_long: 'Заголовок не длиннее 120 символов',
+  note_body_long: 'Текст не длиннее 1000 символов',
+  note_not_found: 'Заметка не найдена',
   bad_date: 'Неверная дата',
   title_required: 'Укажите название',
   end_after_start: 'Окончание должно быть позже начала',
@@ -9531,6 +9535,7 @@ import { startDbMaintenance } from './dbMaintenance.js';
 import { registerMetrics } from './metrics.js';
 import { wrap } from './http.js';
 import { registerMaintenance } from './maintenance.js';
+import { registerStatusNotes } from './statusNotes.js';
 import { registerNews } from './news.js';
 import { registerNickStatus } from './nickOnboarding.js';
 import { installAudit, registerOps } from './ops.js';
@@ -9694,6 +9699,7 @@ registerCovers({ app, admin: allow('servers') });
 registerOps({ app, admin, getBot: () => bot.status, guildCount: () => bot.guilds.length, version: APP_VERSION, versionName: APP_VERSION_NAME, pollMs: POLL_MS, publicBase });
 registerBackups({ app, admin });
 registerMaintenance({ app, admin: allow('maintenance'), viewer });
+registerStatusNotes({ app, admin: allow('maintenance') });
 registerHealth({ app, admin, bot: () => bot.status });
 startDbMaintenance();
 registerOverview({ app, viewer });
@@ -17000,7 +17006,7 @@ import { removeCover } from '../covers.js';
 import { type BindingRow, db, type ServerRow } from '../db.js';
 import { gameLabel } from '../games.js';
 import { countryOf } from '../geo.js';
-import { queryServer, refreshServer } from '../gsm.js';
+import { queryServer, refreshServer, retentionDays } from '../gsm.js';
 import { param, wrap } from '../http.js';
 import { occurrencesBetween, type WindowRow } from '../maintenance.js';
 import { vrRankIdFor } from '../profile.js';
@@ -17008,6 +17014,7 @@ import { downtimeByDay, incidentsSince } from '../incidents.js';
 import { completeOrder } from '../serverOrderLogic.js';
 import { getServer, publicServer, SELECT_SERVERS, SERVER_ORDER, serialize, type ServerJoin } from '../serverData.js';
 import { baseOf, brand, publicBase } from '../site.js';
+import { publicNotes } from '../statusNotes.js';
 
 export const router = express.Router();
 
@@ -17367,8 +17374,10 @@ router.get('/api/status', viewer, (req, res) => {
   const list = rows.map(serialize);
   const servers = isAdmin(req) ? list : list.map(publicServer);
   const now = Date.now();
+  // 30 days by default; ?days=90 shows three months (as far as the uptime history is kept)
+  const range = req.query.days === '90' ? Math.min(90, retentionDays().uptime) : 30;
   const days: string[] = [];
-  for (let i = 29; i >= 0; i--) days.push(new Date(now - i * 86400_000).toISOString().slice(0, 10));
+  for (let i = range - 1; i >= 0; i--) days.push(new Date(now - i * 86400_000).toISOString().slice(0, 10));
   const daily = new Map<string, { up: number; total: number }>();
   for (const r of db.prepare('SELECT server_id, day, up, total FROM uptime_daily WHERE day >= ?').all(days[0]) as { server_id: number; day: string; up: number; total: number }[]) {
     daily.set(`${r.server_id}|${r.day}`, r);
@@ -17380,7 +17389,7 @@ router.get('/api/status', viewer, (req, res) => {
   const pct = (up: number, total: number) => (total > 0 ? Math.round((up / total) * 1000) / 10 : null);
   const last = (db.prepare('SELECT MAX(updated_at) AS t FROM status').get() as { t: number | null }).t;
   // outages of the 30 days: minutes per day for the bars, and the list of incidents under them
-  const incidents = incidentsSince(now - 30 * 86400_000, undefined, now);
+  const incidents = incidentsSince(now - range * 86400_000, undefined, now);
   const downtime = downtimeByDay(incidents, now);
   const shown = new Map(servers.map((sv) => [sv.id, sv]));
   // response time: hourly average ping of the last 24 hours
@@ -17396,6 +17405,9 @@ router.get('/api/status', viewer, (req, res) => {
   }
   res.json({
     updatedAt: last ?? now,
+    range,
+    // notes of the administrators; a note about a server that is not shown here stays general
+    notes: publicNotes(now).map((n) => (n.serverId != null && !shown.has(n.serverId) ? { ...n, serverId: null, serverName: null } : { ...n, serverName: n.serverId != null ? shown.get(n.serverId)!.name : null })),
     incidents: incidents
       .filter((i) => shown.has(i.serverId))
       .reverse()
@@ -19361,6 +19373,141 @@ export function trackSmart(serverId: number, s: { online: boolean; players: numb
     }
   }
 }
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/statusNotes.ts" << '__COREGSM_EOF__'
+/**
+ * Notes of the administrators on the public status page: «Идут работы на сервере», «Причина найдена», «Всё починено».
+ *
+ *   GET    /api/status/notes        every note (administrators with the «maintenance» right)
+ *   POST   /api/status/notes        a new note
+ *   PATCH  /api/status/notes/:id    edit a note, or close / reopen it ({ resolved })
+ *   DELETE /api/status/notes/:id    delete a note
+ * The open notes and the ones closed within two weeks go to everybody inside GET /api/status.
+ */
+import type { Express, Request, RequestHandler } from 'express';
+import { z } from 'zod';
+import { db } from './db.js';
+import { NOTE_LEVELS, visibleNotes, type NoteRow } from './statusNotesLogic.js';
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS status_notes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  title TEXT NOT NULL,
+  body TEXT NOT NULL DEFAULT '',
+  level TEXT NOT NULL DEFAULT 'info',
+  server_id INTEGER REFERENCES servers(id) ON DELETE SET NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  resolved_at INTEGER,
+  created_by TEXT NOT NULL DEFAULT ''
+);
+`);
+
+const NAME = "SELECT COALESCE(NULLIF(name, ''), host || ':' || port) AS n FROM servers WHERE id = ?";
+const serialize = (r: NoteRow) => ({
+  id: r.id,
+  title: r.title,
+  body: r.body,
+  level: r.level,
+  serverId: r.server_id,
+  serverName: r.server_id == null ? null : ((db.prepare(NAME).get(r.server_id) as { n: string } | undefined)?.n ?? null),
+  createdAt: r.created_at,
+  updatedAt: r.updated_at,
+  resolvedAt: r.resolved_at,
+});
+
+/** what the public status page shows */
+export function publicNotes(now = Date.now()) {
+  const rows = db.prepare('SELECT * FROM status_notes ORDER BY created_at DESC LIMIT 200').all() as NoteRow[];
+  return visibleNotes(rows, now).map(serialize);
+}
+
+const create = z.object({
+  title: z.string().trim().min(1, 'Укажите заголовок').max(120, 'Заголовок не длиннее 120 символов'),
+  body: z.string().trim().max(1000, 'Текст не длиннее 1000 символов').default(''),
+  level: z.enum(NOTE_LEVELS).default('info'),
+  serverId: z.number().int().positive().nullable().optional(),
+});
+const patch = create.partial().extend({ resolved: z.boolean().optional() });
+
+export function registerStatusNotes({ app, admin }: { app: Express; admin: RequestHandler }): void {
+  const actor = (req: Request) => (req as Request & { user?: { username?: string } }).user?.username ?? '';
+  const serverOk = (id: number | null | undefined) => id == null || !!db.prepare('SELECT 1 FROM servers WHERE id = ?').get(id);
+
+  app.get('/api/status/notes', admin, (_req, res) => {
+    res.json((db.prepare('SELECT * FROM status_notes ORDER BY resolved_at IS NOT NULL, created_at DESC LIMIT 100').all() as NoteRow[]).map(serialize));
+  });
+
+  app.post('/api/status/notes', admin, (req, res) => {
+    const b = create.safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: b.error.issues[0]?.message ?? 'Проверьте поля' });
+    if (!serverOk(b.data.serverId)) return res.status(404).json({ error: 'Сервер не найден' });
+    const now = Date.now();
+    const r = db
+      .prepare('INSERT INTO status_notes (title, body, level, server_id, created_at, updated_at, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(b.data.title, b.data.body, b.data.level, b.data.serverId ?? null, now, now, actor(req));
+    res.status(201).json(serialize(db.prepare('SELECT * FROM status_notes WHERE id = ?').get(r.lastInsertRowid) as NoteRow));
+  });
+
+  app.patch('/api/status/notes/:id', admin, (req, res) => {
+    const id = Number(req.params.id);
+    const cur = db.prepare('SELECT * FROM status_notes WHERE id = ?').get(id) as NoteRow | undefined;
+    if (!cur) return res.status(404).json({ error: 'Заметка не найдена' });
+    const b = patch.safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: b.error.issues[0]?.message ?? 'Проверьте поля' });
+    if (b.data.serverId !== undefined && !serverOk(b.data.serverId)) return res.status(404).json({ error: 'Сервер не найден' });
+    const now = Date.now();
+    const next = {
+      title: b.data.title ?? cur.title,
+      body: b.data.body ?? cur.body,
+      level: b.data.level ?? cur.level,
+      server_id: b.data.serverId === undefined ? cur.server_id : b.data.serverId,
+      resolved_at: b.data.resolved === undefined ? cur.resolved_at : b.data.resolved ? (cur.resolved_at ?? now) : null,
+    };
+    db.prepare('UPDATE status_notes SET title = ?, body = ?, level = ?, server_id = ?, resolved_at = ?, updated_at = ? WHERE id = ?').run(next.title, next.body, next.level, next.server_id, next.resolved_at, now, id);
+    res.json(serialize(db.prepare('SELECT * FROM status_notes WHERE id = ?').get(id) as NoteRow));
+  });
+
+  app.delete('/api/status/notes/:id', admin, (req, res) => {
+    const r = db.prepare('DELETE FROM status_notes WHERE id = ?').run(Number(req.params.id));
+    if (!r.changes) return res.status(404).json({ error: 'Заметка не найдена' });
+    res.json({ ok: true });
+  });
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/statusNotesLogic.ts" << '__COREGSM_EOF__'
+// Notes on the public status page («Идут работы», «Причина сбоя найдена»): pure rules, covered by tests.
+export const NOTE_LEVELS = ['info', 'warn', 'bad', 'ok'] as const;
+export type NoteLevel = (typeof NOTE_LEVELS)[number];
+
+export interface NoteRow { id: number; title: string; body: string; level: NoteLevel; server_id: number | null; created_at: number; updated_at: number; resolved_at: number | null }
+
+/** how long a closed note stays on the page, and how many notes the page shows at most */
+export const RESOLVED_KEEP_MS = 14 * 86_400_000;
+export const NOTES_SHOWN = 20;
+
+/**
+ * The notes the public page shows: the open ones first (the most serious, then the newest), then the notes closed within
+ * the last two weeks (the newest first). Older closed notes stay only in the administrators' list.
+ */
+export function visibleNotes<T extends Pick<NoteRow, 'level' | 'created_at' | 'resolved_at'>>(rows: T[], now: number): T[] {
+  const open = rows
+    .filter((r) => r.resolved_at == null)
+    .sort((a, b) => {
+      // «bad» and «warn» before «info» and «ok»
+      const rank = (l: NoteLevel) => (l === 'bad' ? 0 : l === 'warn' ? 1 : l === 'info' ? 2 : 3);
+      return rank(a.level) - rank(b.level) || b.created_at - a.created_at;
+    });
+  const closed = rows
+    .filter((r) => r.resolved_at != null && now - (r.resolved_at as number) <= RESOLVED_KEEP_MS)
+    .sort((a, b) => (b.resolved_at as number) - (a.resolved_at as number));
+  return [...open, ...closed].slice(0, NOTES_SHOWN);
+}
+
+/** the colour of a note on the page: a resolved one is always calm */
+export const noteTone = (level: NoteLevel, resolved: boolean): NoteLevel => (resolved ? 'ok' : level);
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/subscriptions.ts" << '__COREGSM_EOF__'
@@ -49834,11 +49981,28 @@ export interface StatusServer {
   latency?: (number | null)[];
 }
 
+/** a note of the administrators on the status page */
+export interface StatusNote {
+  id: number;
+  title: string;
+  body: string;
+  level: 'info' | 'warn' | 'bad' | 'ok';
+  serverId: number | null;
+  serverName: string | null;
+  createdAt: number;
+  updatedAt: number;
+  /** null = still open */
+  resolvedAt: number | null;
+}
+
 export interface StatusInfo {
   updatedAt: number;
+  /** days shown in the bars (30 or 90) */
+  range?: number;
   servers: StatusServer[];
-  /** newest first, 30 days */
+  /** newest first, within the range */
   incidents?: StatusIncident[];
+  notes?: StatusNote[];
 }
 
 // ---------- backups ----------
@@ -53897,6 +54061,103 @@ export function LoadError({ error, onRetry, compact, bare, title }: { error: unk
   const msg = error instanceof Error ? error.message : typeof error === 'string' ? error : '';
   const own = kind === 'error' && msg ? msg : undefined;
   return <StateView kind={kind} title={title} text={own} onRetry={kind === 'forbidden' ? undefined : onRetry} compact={compact} bare={bare} />;
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/StatusNotesCard.tsx" << '__COREGSM_EOF__'
+// Admin → Обслуживание: notes shown on the public status page («Идут работы», «Причина найдена», «Починено»).
+import { useEffect, useState, type FormEvent } from 'react';
+import { api, type Server, type StatusNote } from '../api';
+import { confirmDialog } from '../confirm';
+import { t, useI18n } from '../i18n';
+import { ago, ErrorLine, Section, errText, toast } from '../ui';
+
+type Level = StatusNote['level'];
+const LEVELS: Level[] = ['info', 'warn', 'bad', 'ok'];
+
+export default function StatusNotesCard({ servers }: { servers: Server[] }) {
+  useI18n();
+  const [list, setList] = useState<StatusNote[] | null>(null);
+  const [error, setError] = useState('');
+  const [title, setTitle] = useState('');
+  const [body, setBody] = useState('');
+  const [level, setLevel] = useState<Level>('info');
+  const [serverId, setServerId] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const load = () => api<StatusNote[]>('/status/notes').then((l) => { setList(Array.isArray(l) ? l : []); setError(''); }).catch((e: unknown) => setError(errText(e)));
+  useEffect(() => { void load(); }, []);
+
+  const add = async (e: FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    try {
+      await api<StatusNote>('/status/notes', 'POST', { title, body, level, serverId: serverId ? Number(serverId) : null });
+      setTitle(''); setBody(''); setLevel('info'); setServerId('');
+      toast(t('sn.added'));
+      await load();
+    } catch (err) {
+      setError(errText(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const toggle = async (n: StatusNote) => {
+    try { await api<StatusNote>(`/status/notes/${n.id}`, 'PATCH', { resolved: n.resolvedAt == null }); await load(); } catch (err) { setError(errText(err)); }
+  };
+  const remove = async (n: StatusNote) => {
+    if (!(await confirmDialog({ title: t('sn.deleteQ'), text: n.title, confirmLabel: t('sn.delete'), danger: true }))) return;
+    try { await api(`/status/notes/${n.id}`, 'DELETE'); await load(); } catch (err) { setError(errText(err)); }
+  };
+
+  return (
+    <Section title={t('sn.title')} description={t('sn.text')}>
+      <ErrorLine text={error} />
+      <form onSubmit={(e) => void add(e)} className="grid gap-3 sm:grid-cols-2">
+        <div className="sm:col-span-2">
+          <label htmlFor="sn-title" className="label">{t('sn.f.title')}</label>
+          <input id="sn-title" className="input" value={title} maxLength={120} required onChange={(e) => setTitle(e.target.value)} />
+        </div>
+        <div className="sm:col-span-2">
+          <label htmlFor="sn-body" className="label">{t('sn.f.body')}</label>
+          <textarea id="sn-body" className="input min-h-20" value={body} maxLength={1000} onChange={(e) => setBody(e.target.value)} />
+        </div>
+        <div>
+          <label htmlFor="sn-level" className="label">{t('sn.f.level')}</label>
+          <select id="sn-level" className="input" value={level} onChange={(e) => setLevel(e.target.value as Level)}>
+            {LEVELS.map((l) => <option key={l} value={l}>{t(`st.note.${l}` as const)}</option>)}
+          </select>
+        </div>
+        <div>
+          <label htmlFor="sn-server" className="label">{t('sn.f.server')}</label>
+          <select id="sn-server" className="input" value={serverId} onChange={(e) => setServerId(e.target.value)}>
+            <option value="">{t('sn.f.all')}</option>
+            {servers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>
+        </div>
+        <div className="sm:col-span-2">
+          <button className="btn" disabled={busy || !title.trim()}>{t('sn.add')}</button>
+        </div>
+      </form>
+      {list && list.length > 0 && (
+        <ul className="divide-y divide-line">
+          {list.map((n) => (
+            <li key={n.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2.5">
+              <div className="min-w-0 flex-1 basis-56">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-extrabold wrap-break-word">{n.title}</span>
+                  <span className={`pill ${n.resolvedAt != null ? 'pill-ok' : n.level === 'bad' ? 'pill-bad' : n.level === 'warn' ? 'pill-warn' : 'pill-mute'}`}>{n.resolvedAt != null ? t('st.note.done') : t(`st.note.${n.level}` as const)}</span>
+                </div>
+                <div className="text-sm font-semibold text-mute">{n.serverName ?? t('sn.f.all')} · {ago(n.createdAt)}</div>
+              </div>
+              <button type="button" className="btn btn-soft btn-sm" onClick={() => void toggle(n)}>{n.resolvedAt != null ? t('sn.reopen') : t('sn.resolve')}</button>
+              <button type="button" className="btn btn-ghost btn-sm" onClick={() => void remove(n)}>{t('sn.delete')}</button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Section>
+  );
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components"
@@ -69397,8 +69658,8 @@ const en: Record<keyof typeof ru, string> = {
   'st.day.up': '{d}: available {p}',
   'st.day.down': 'downtime {dur}{inc}',
   'st.day.planned': 'planned maintenance {dur}',
-  'st.up.none': 'No uptime data for 30 days',
-  'st.up.sum': '30-day uptime: {p}',
+  'st.up.none': 'No uptime data for {d} days',
+  'st.up.sum': '{d}-day uptime: {p}',
   'st.up.aria': '{s}. Use the arrow keys to browse the days',
   'st.nodata': 'No data',
   'st.tip.up': 'Available {p}',
@@ -69412,8 +69673,8 @@ const en: Record<keyof typeof ru, string> = {
   'st.lat.v': 'min {lo} · avg {avg} · max {hi} ms',
   'st.players.title': '{p} of {m} players',
   'st.players.word': 'players',
-  'st.inc30': '{n} outage in 30 days|{n} outages in 30 days',
-  'st.noInc30': 'no outages in 30 days',
+  'st.inc30': '{n} outage in {d} days|{n} outages in {d} days',
+  'st.noInc30': 'no outages in {d} days',
   'st.ping': 'ping {n} ms',
   'st.hero.ok': 'All servers are up',
   'st.hero.okText': 'Players can join any server.',
@@ -69423,14 +69684,14 @@ const en: Record<keyof typeof ru, string> = {
   'st.hero.someText': 'The others work as usual.',
   'st.last.now': 'An outage is going on right now',
   'st.last.ago': 'Last outage: {when}',
-  'st.last.none': 'No outages in 30 days',
+  'st.last.none': 'No outages in {d} days',
   'st.seg.aria': '{up} of {total} online',
   'st.seg.on': '{name}: online',
   'st.seg.off': '{name}: down',
   'st.stat.online': 'Online',
   'st.stat.of': '{a} of {b}',
   'st.stat.players': 'Players',
-  'st.stat.uptime': '30-day uptime',
+  'st.stat.uptime': '{d}-day uptime',
   'st.stat.now': 'Outages now',
   'st.updated': 'updated {ago}',
   'st.inc.planned': 'Planned maintenance',
@@ -69440,7 +69701,7 @@ const en: Record<keyof typeof ru, string> = {
   'st.inc.pastText': 'Down for {dur}: {from} – {to}',
   'st.inc.players': ' · {n} player was online| · {n} players were online',
   'st.hist': 'Outage history',
-  'st.hist.none': 'No outages in 30 days',
+  'st.hist.none': 'No outages in {d} days',
   'st.hist.noneText': 'Every server answered every poll.',
   'st.hist.more': 'Show more ({n})',
   'st.leg.ok': 'no outages',
@@ -69451,7 +69712,7 @@ const en: Record<keyof typeof ru, string> = {
   'st.leg.none': 'no data',
   'st.sub': '{servers} · {outages}',
   'st.servers': '{n} server|{n} servers',
-  'st.sub.none': 'Server availability and outage history for 30 days',
+  'st.sub.none': 'Server availability and outage history for {d} days',
   'st.title': 'Status',
   'st.loading': 'Loading',
   'st.empty': 'No servers yet',
@@ -70184,6 +70445,28 @@ const en: Record<keyof typeof ru, string> = {
   'upd.o.chan.id': 'Channel {id}',
   'upd.o.chan.pick': 'Choose a channel',
   'upd.o.chan.reset': 'Same as alerts',
+  'st.range': 'Period',
+  'st.range.n': '{d} days',
+  'st.notes': 'Messages from the administrators',
+  'st.note.info': 'Info',
+  'st.note.warn': 'Notice',
+  'st.note.bad': 'Outage',
+  'st.note.ok': 'All good',
+  'st.note.done': 'Resolved',
+  'st.note.closed': 'Closed {when}',
+  'sn.title': 'Messages on the status page',
+  'sn.text': 'Short notes at the top of the public status page: «Work in progress», «Cause found», «All fixed». Closed notes stay on the page for two weeks.',
+  'sn.f.title': 'Title',
+  'sn.f.body': 'Text (optional)',
+  'sn.f.level': 'Importance',
+  'sn.f.server': 'Server',
+  'sn.f.all': 'All servers',
+  'sn.add': 'Publish',
+  'sn.added': 'Note published',
+  'sn.resolve': 'Close',
+  'sn.reopen': 'Reopen',
+  'sn.delete': 'Delete',
+  'sn.deleteQ': 'Delete the note?',
 };
 
 export default en;
@@ -70351,6 +70634,10 @@ const errorsEn: Record<string, string> = {
   follow_nick_missing: 'Enter the player\'s nick',
   follow_limit: 'You can follow at most {n} players',
   maintenance_not_found: 'Maintenance window not found',
+  note_title_required: 'Enter a title',
+  note_title_long: 'The title is at most 120 characters',
+  note_body_long: 'The text is at most 1000 characters',
+  note_not_found: 'Note not found',
   bad_date: 'Invalid date',
   title_required: 'Enter a title',
   end_after_start: 'The end must be later than the start',
@@ -71554,8 +71841,8 @@ const ru = {
   'st.day.up': '{d}: доступен {p}',
   'st.day.down': 'простой {dur}{inc}',
   'st.day.planned': 'плановые работы {dur}',
-  'st.up.none': 'Нет данных об аптайме за 30 дней',
-  'st.up.sum': 'Аптайм за 30 дней: {p}',
+  'st.up.none': 'Нет данных об аптайме за {d} дн.',
+  'st.up.sum': 'Аптайм за {d} дн.: {p}',
   'st.up.aria': '{s}. Стрелками можно просмотреть дни',
   'st.nodata': 'Нет данных',
   'st.tip.up': 'Доступен {p}',
@@ -71569,8 +71856,8 @@ const ru = {
   'st.lat.v': 'мин {lo} · ср {avg} · макс {hi} мс',
   'st.players.title': '{p} из {m} игроков',
   'st.players.word': 'игроков',
-  'st.inc30': '{n} сбой за 30 дней|{n} сбоя за 30 дней|{n} сбоев за 30 дней',
-  'st.noInc30': 'без сбоев за 30 дней',
+  'st.inc30': '{n} сбой за {d} дн.|{n} сбоя за {d} дн.|{n} сбоев за {d} дн.',
+  'st.noInc30': 'без сбоев за {d} дн.',
   'st.ping': 'пинг {n} мс',
   'st.hero.ok': 'Все серверы работают',
   'st.hero.okText': 'Игроки могут заходить на любой сервер.',
@@ -71580,14 +71867,14 @@ const ru = {
   'st.hero.someText': 'Остальные работают в обычном режиме.',
   'st.last.now': 'Сбой продолжается прямо сейчас',
   'st.last.ago': 'Последний сбой: {when}',
-  'st.last.none': 'За 30 дней сбоев не было',
+  'st.last.none': 'За {d} дн. сбоев не было',
   'st.seg.aria': 'Онлайн {up} из {total}',
   'st.seg.on': '{name}: онлайн',
   'st.seg.off': '{name}: недоступен',
   'st.stat.online': 'Онлайн',
   'st.stat.of': '{a} из {b}',
   'st.stat.players': 'Игроков',
-  'st.stat.uptime': 'Аптайм 30 дн',
+  'st.stat.uptime': 'Аптайм {d} дн',
   'st.stat.now': 'Сбоев сейчас',
   'st.updated': 'обновлено {ago}',
   'st.inc.planned': 'Плановые работы',
@@ -71597,7 +71884,7 @@ const ru = {
   'st.inc.pastText': 'Недоступен {dur}: {from} – {to}',
   'st.inc.players': ' · в игре было {n} игрок| · в игре было {n} игрока| · в игре было {n} игроков',
   'st.hist': 'История сбоев',
-  'st.hist.none': 'За 30 дней ни одного сбоя',
+  'st.hist.none': 'За {d} дн. ни одного сбоя',
   'st.hist.noneText': 'Все серверы отвечали на каждый опрос.',
   'st.hist.more': 'Показать ещё ({n})',
   'st.leg.ok': 'без сбоев',
@@ -71608,7 +71895,7 @@ const ru = {
   'st.leg.none': 'нет данных',
   'st.sub': '{servers} · {outages}',
   'st.servers': '{n} сервер|{n} сервера|{n} серверов',
-  'st.sub.none': 'Доступность серверов и история сбоев за 30 дней',
+  'st.sub.none': 'Доступность серверов и история сбоев за {d} дн.',
   'st.title': 'Статус',
   'st.loading': 'Загрузка',
   'st.empty': 'Серверов пока нет',
@@ -72341,6 +72628,28 @@ const ru = {
   'upd.o.chan.id': 'Канал {id}',
   'upd.o.chan.pick': 'Выбрать канал',
   'upd.o.chan.reset': 'Как у оповещений',
+  'st.range': 'Период',
+  'st.range.n': '{d} дней',
+  'st.notes': 'Сообщения администрации',
+  'st.note.info': 'Информация',
+  'st.note.warn': 'Внимание',
+  'st.note.bad': 'Сбой',
+  'st.note.ok': 'Всё в порядке',
+  'st.note.done': 'Решено',
+  'st.note.closed': 'Закрыто {when}',
+  'sn.title': 'Сообщения на странице статуса',
+  'sn.text': 'Короткие заметки наверху публичной страницы статуса: «Идут работы», «Причина найдена», «Всё починено». Закрытые заметки остаются на странице две недели.',
+  'sn.f.title': 'Заголовок',
+  'sn.f.body': 'Текст (необязательно)',
+  'sn.f.level': 'Важность',
+  'sn.f.server': 'Сервер',
+  'sn.f.all': 'Все серверы',
+  'sn.add': 'Опубликовать',
+  'sn.added': 'Заметка опубликована',
+  'sn.resolve': 'Закрыть',
+  'sn.reopen': 'Открыть снова',
+  'sn.delete': 'Удалить',
+  'sn.deleteQ': 'Удалить заметку?',
 };
 
 export default ru;
@@ -77333,6 +77642,7 @@ __COREGSM_EOF__
 import { useMemo, useState, type FormEvent } from 'react';
 import { api, type Server } from '../api';
 import RestartPlans from '../components/RestartPlans';
+import StatusNotesCard from '../components/StatusNotesCard';
 import WipeScenarios from '../components/WipeScenarios';
 import { StateView } from '../components/StateView';
 import {
@@ -77456,6 +77766,7 @@ export default function MaintenancePage() {
         </ul>
       )}
 
+      <StatusNotesCard servers={servers} />
       <RestartPlans servers={servers} />
       <WipeScenarios servers={servers} />
 
@@ -81354,7 +81665,7 @@ import { useAuth } from '../auth';
 import { getPrefs, t, useI18n } from '../i18n';
 import { Icon } from '../icons';
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react';
-import { api, type StatusDay, type StatusIncident, type StatusInfo, type StatusServer } from '../api';
+import { api, type StatusDay, type StatusIncident, type StatusInfo, type StatusNote, type StatusServer } from '../api';
 import { Empty, ErrorLine, GameAvatar, LoadError, PageHead, SmoothArea, StatusPill, ago, fmtDateTime, fmtTime, usePoll } from '../ui';
 import '../styles/status.css';
 
@@ -81443,7 +81754,7 @@ function UptimeBar({ s }: { s: StatusServer }) {
   const [active, setActive] = useState<number | null>(null);
   const ref = useRef<HTMLDivElement>(null);
   const n = s.days.length;
-  const summary = s.uptime30 == null ? t('st.up.none') : t('st.up.sum', { p: fmtPct(s.uptime30) });
+  const summary = s.uptime30 == null ? t('st.up.none', { d: n }) : t('st.up.sum', { p: fmtPct(s.uptime30), d: n });
   const at = (e: PointerEvent) => {
     const r = ref.current?.getBoundingClientRect();
     if (!r || r.width === 0) return null;
@@ -81557,7 +81868,7 @@ function ServerRow({ s, index }: { s: StatusServer; index: number }) {
         <div className="st-server-side">
           <div className="st-up">
             <div className={`st-up-v is-${upTone}`}>{s.uptime30 == null ? '–' : fmtPct(s.uptime30)}</div>
-            <div className="st-up-k">{incidents30 ? t('st.inc30', { n: incidents30 }) : t('st.noInc30')}</div>
+            <div className="st-up-k">{incidents30 ? t('st.inc30', { n: incidents30, d: s.days.length }) : t('st.noInc30', { d: s.days.length })}</div>
           </div>
           {s.avgPing != null && <div className="st-ping-inline">{t('st.ping', { n: s.avgPing })}</div>}
           <Latency s={s} />
@@ -81584,7 +81895,7 @@ function Banner({ data, fetchedAt }: { data: StatusInfo; fetchedAt: number }) {
     : up === 0
       ? ['bad', t('st.hero.bad'), t('st.hero.badText')]
       : ['warn', t('st.hero.some', { n: total - up }), t('st.hero.someText')];
-  const last = ongoing > 0 ? t('st.last.now') : lastBad ? t('st.last.ago', { when: ago(lastBad.start) }) : t('st.last.none');
+  const last = ongoing > 0 ? t('st.last.now') : lastBad ? t('st.last.ago', { when: ago(lastBad.start) }) : t('st.last.none', { d: data.range ?? 30 });
   return (
     <section className={`st-banner is-${tone}`} role="status">
       <span className="st-banner-ico" aria-hidden>{tone === 'ok' ? <IconCheck /> : tone === 'warn' ? <IconWarn /> : <IconCross />}</span>
@@ -81604,7 +81915,7 @@ function Banner({ data, fetchedAt }: { data: StatusInfo; fetchedAt: number }) {
       <dl className="st-banner-stats">
         <div><dt><IconServer />{t('st.stat.online')}</dt><dd>{t('st.stat.of', { a: upN, b: total })}</dd></div>
         <div><dt><IconUsers />{t('st.stat.players')}</dt><dd>{playersN}</dd></div>
-        <div><dt><IconAct />{t('st.stat.uptime')}</dt><dd>{avg == null ? '–' : fmtPct(avgN)}</dd></div>
+        <div><dt><IconAct />{t('st.stat.uptime', { d: data.range ?? 30 })}</dt><dd>{avg == null ? '–' : fmtPct(avgN)}</dd></div>
         {ongoing > 0 && <div className="is-alert"><dt><IconAlert />{t('st.stat.now')}</dt><dd>{ongoing}</dd></div>}
       </dl>
     </section>
@@ -81648,10 +81959,35 @@ function IncidentItem({ i }: { i: StatusIncident }) {
   );
 }
 
+/** notes of the administrators: «Идут работы», «Причина найдена», «Починено»; closed ones are calm and stay for two weeks */
+function NotesBoard({ notes }: { notes: StatusNote[] }) {
+  if (notes.length === 0) return null;
+  return (
+    <section className="space-y-2" aria-label={t('st.notes')}>
+      {notes.map((n) => {
+        const done = n.resolvedAt != null;
+        const tone = done ? 'ok' : n.level;
+        return (
+          <article key={n.id} className={`st-note is-${tone}`} role={done || n.level === 'info' ? undefined : 'alert'}>
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+              <h2 className="font-extrabold">{n.title}</h2>
+              <span className={`st-inc-badge is-${done ? 'past' : n.level === 'bad' ? 'live' : n.level === 'warn' ? 'planned' : 'past'}`}>{done ? t('st.note.done') : t(`st.note.${n.level}` as const)}</span>
+              {n.serverName && <span className="text-sm font-bold text-mute">{n.serverName}</span>}
+              <time className="ml-auto text-xs font-bold text-mute" dateTime={new Date(n.createdAt).toISOString()} title={fmtDateTime(n.createdAt)}>{ago(n.createdAt)}</time>
+            </div>
+            {n.body && <p className="mt-1 whitespace-pre-line text-sm font-semibold">{n.body}</p>}
+            {done && <p className="mt-1 text-xs font-bold text-mute">{t('st.note.closed', { when: ago(n.resolvedAt as number) })}</p>}
+          </article>
+        );
+      })}
+    </section>
+  );
+}
+
 const PAGE = 10;
 
 /** incidents of the 30 days grouped by day, newest first; ten at first, then «Показать ещё» */
-function Incidents({ list }: { list: StatusIncident[] }) {
+function Incidents({ list, days }: { list: StatusIncident[]; days: number }) {
   const [shown, setShown] = useState(PAGE);
   const groups = useMemo(() => {
     const m = new Map<string, StatusIncident[]>();
@@ -81668,7 +82004,7 @@ function Incidents({ list }: { list: StatusIncident[] }) {
         <div className="st-calm">
           <span aria-hidden>✨</span>
           <div>
-            <p className="font-extrabold">{t('st.hist.none')}</p>
+            <p className="font-extrabold">{t('st.hist.none', { d: days })}</p>
             <p className="text-sm font-semibold text-mute">{t('st.hist.noneText')}</p>
           </div>
         </div>
@@ -81701,15 +82037,21 @@ export default function StatusPage() {
   const [error, setError] = useState('');
   const [fetchedAt, setFetchedAt] = useState(() => Date.now());
 
+  // 30 days or three months of bars: the choice is remembered in this browser
+  const [range, setRange] = useState<30 | 90>(() => { try { return localStorage.getItem('coregsm_status_range') === '90' ? 90 : 30; } catch { return 30; } });
+  const rangeRef = useRef(range);
+  rangeRef.current = range;
+  const pickRange = (r: 30 | 90) => { setRange(r); try { localStorage.setItem('coregsm_status_range', String(r)); } catch { /* not remembered */ } };
+  useEffect(() => { void load(); }, [range]);
   const load = () =>
-    api<StatusInfo>('/status')
+    api<StatusInfo>(`/status${rangeRef.current === 90 ? '?days=90' : ''}`)
       .then((r) => { setData(r); setFetchedAt(Date.now()); setError(''); })
       .catch((e: Error) => setError(e.message));
   usePoll(load, POLL_MS);
   const month = data ? (data.incidents ?? []).filter((i) => !i.planned).length : 0;
   const subtitle = data && data.servers.length > 0
-    ? t('st.sub', { servers: t('st.servers', { n: data.servers.length }), outages: month ? t('st.inc30', { n: month }) : t('st.noInc30') })
-    : t('st.sub.none');
+    ? t('st.sub', { servers: t('st.servers', { n: data.servers.length }), outages: month ? t('st.inc30', { n: month, d: range }) : t('st.noInc30', { d: range }) })
+    : t('st.sub.none', { d: range });
 
   return (
     <div className="space-y-5">
@@ -81730,16 +82072,22 @@ export default function StatusPage() {
 
       {data && data.servers.length > 0 && (
         <div className="fade-in space-y-5">
+          <NotesBoard notes={data.notes ?? []} />
           <Banner data={data} fetchedAt={fetchedAt} />
           <ul className="space-y-3">
             {data.servers.map((s, i) => <ServerRow key={s.id} s={s} index={i} />)}
           </ul>
+          <div className="seg w-fit" role="group" aria-label={t('st.range')}>
+            {([30, 90] as const).map((r) => (
+              <button key={r} type="button" className="seg-item" aria-pressed={range === r} onClick={() => pickRange(r)}>{t('st.range.n', { d: r })}</button>
+            ))}
+          </div>
           <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm font-semibold text-mute">
             {LEGEND.map((c) => (
               <span key={c} className="inline-flex items-center gap-1.5"><span className={`st-day st-legend is-${c}`} aria-hidden />{t(`st.leg.${c}` as const)}</span>
             ))}
           </div>
-          <Incidents list={data.incidents ?? []} />
+          <Incidents list={data.incidents ?? []} days={data.range ?? range} />
         </div>
       )}
     </div>
@@ -87596,6 +87944,12 @@ __COREGSM_EOF__
 
 @media (prefers-reduced-motion: reduce) { .st-banner-ico::after, .st-inc.is-live::before { animation: none; } .st-day, .st-ring, .st-meter > i { transition: none; } }
 html[data-motion='reduce'] .st-banner-ico::after, html[data-motion='reduce'] .st-inc.is-live::before { animation: none; }
+
+/* notes of the administrators */
+.st-note { padding: 12px 16px; border-radius: var(--r-lg); background: rgb(var(--card)); border: 1px solid rgb(var(--line)); box-shadow: inset 4px 0 0 rgb(var(--link)); }
+.st-note.is-warn { box-shadow: inset 4px 0 0 rgb(var(--warn)); background: rgb(var(--warnbg)); }
+.st-note.is-bad { box-shadow: inset 4px 0 0 rgb(var(--bad)); background: rgb(var(--badbg)); }
+.st-note.is-ok { box-shadow: inset 4px 0 0 rgb(var(--ok)); }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/system.css" << '__COREGSM_EOF__'

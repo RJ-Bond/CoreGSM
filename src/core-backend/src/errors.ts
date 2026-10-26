@@ -170,6 +170,10 @@ export const ERRORS = {
 
   // ---- maintenance windows ----
   maintenance_not_found: 'Окно обслуживания не найдено',
+  note_title_required: 'Укажите заголовок',
+  note_title_long: 'Заголовок не длиннее 120 символов',
+  note_body_long: 'Текст не длиннее 1000 символов',
+  note_not_found: 'Заметка не найдена',
   bad_date: 'Неверная дата',
   title_required: 'Укажите название',
   end_after_start: 'Окончание должно быть позже начала',

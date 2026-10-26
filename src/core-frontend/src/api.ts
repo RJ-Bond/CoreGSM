@@ -327,11 +327,28 @@ export interface StatusServer {
   latency?: (number | null)[];
 }
 
+/** a note of the administrators on the status page */
+export interface StatusNote {
+  id: number;
+  title: string;
+  body: string;
+  level: 'info' | 'warn' | 'bad' | 'ok';
+  serverId: number | null;
+  serverName: string | null;
+  createdAt: number;
+  updatedAt: number;
+  /** null = still open */
+  resolvedAt: number | null;
+}
+
 export interface StatusInfo {
   updatedAt: number;
+  /** days shown in the bars (30 or 90) */
+  range?: number;
   servers: StatusServer[];
-  /** newest first, 30 days */
+  /** newest first, within the range */
   incidents?: StatusIncident[];
+  notes?: StatusNote[];
 }
 
 // ---------- backups ----------

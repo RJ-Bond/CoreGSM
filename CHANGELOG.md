@@ -17,6 +17,8 @@ interface language; the GitHub release text is built from the section of the ver
 ## Не выпущено | Unreleased
 
 ### ✨ Новое | New
+- 📣 Страница статуса: администратор публикует короткие заметки наверху («Идут работы», «Причина найдена», «Починено») с важностью и привязкой к серверу; закрытые остаются две недели; форма — «Обслуживание → Сообщения на странице статуса» | Status page: administrators publish short notes at the top («Work in progress», «Cause found», «Fixed») with an importance level and an optional server; closed notes stay for two weeks; the form is in Maintenance → Messages on the status page
+- 📆 Страница статуса: переключатель «30 / 90 дней» для полосок доступности (выбор запоминается) | Status page: a «30 / 90 days» switch for the availability bars (remembered)
 - 📢 Канал для сообщений об обновлении панели выбирается отдельно в «Настройки → Обновления» (по умолчанию — канал оповещений) | The channel for the panel update notices is chosen separately in Settings → Updates (the alerts channel by default)
 - 📣 Сообщения об обновлении в Discord стали подробнее: заголовок «версия → версия», сколько версий пропущено, список изменений по группам, предупреждения о миграции базы и новых настройках, дата выхода и «сколько дней назад» | Discord update notices are richer: a «version → version» title, how many versions were skipped, the changes by group, warnings about a database migration or new settings, the release date and its age
 - 🌐 Язык сообщений об обновлении в Discord (русский или английский) выбирается в «Настройки → Обновления»; сообщения идут только в канал оповещений, без кнопок | The language of the Discord update notices (Russian or English) is chosen in Settings → Updates; the notices go to the alerts channel only, without buttons
