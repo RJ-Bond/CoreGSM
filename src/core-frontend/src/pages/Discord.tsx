@@ -11,9 +11,10 @@ import { Button, Empty, ErrorLine, Field, LoadError, GameAvatar, GoLink, IconDis
 import { BotPill } from './Settings';
 import { MissingNote } from '../components/ChannelPicker';
 import EmbedPreview from './EmbedPreview';
+import WelcomeCard from '../components/WelcomeCard';
 
 type Style = 'embed' | 'card' | 'both';
-interface Draft { id?: number; serverId: number; /** more servers shown in the same message (the main one is serverId) */ extraServerIds?: number[]; channelId: string; intervalSec: number; enabled: boolean; style: Style }
+interface Draft { id?: number; serverId: number; /** more servers shown in the same message (the main one is serverId) */ extraServerIds?: number[]; channelId: string; intervalSec: number; enabled: boolean; style: Style; layout?: 'detailed' | 'compact' | 'minimal' }
 
 /** the sub-route: «new» opens an empty binding form, «new/<serverId>» opens it with that server chosen */
 export default function DiscordPage({ sub = '' }: { sub?: string }) {
@@ -100,7 +101,7 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
   const pick = (id: number) => setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
 
   const toggle = async (b: Binding) => {
-    await api(`/bindings/${b.id}`, 'PUT', { serverId: b.serverId, extraServerIds: (b.serverIds ?? []).slice(1), channelId: b.channelId, intervalSec: b.intervalSec, enabled: !b.enabled, style: b.style }).catch((e) => setError(e.message));
+    await api(`/bindings/${b.id}`, 'PUT', { serverId: b.serverId, extraServerIds: (b.serverIds ?? []).slice(1), channelId: b.channelId, intervalSec: b.intervalSec, enabled: !b.enabled, style: b.style, layout: b.layout }).catch((e) => setError(e.message));
     load();
   };
 
@@ -264,7 +265,7 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
                   </span>
                 </div>
               )}
-              {b.style !== 'card' && <EmbedPreview serverId={b.serverId} intervalSec={b.intervalSec} />}
+              {b.style !== 'card' && <EmbedPreview serverId={b.serverId} intervalSec={b.intervalSec} layout={b.layout} />}
               {b.style !== 'card' && (b.serverIds ?? []).length > 1 && (
                 <p className="-mt-1 text-sm font-semibold text-mute">{t('dc.previewFirst')}</p>
               )}
@@ -286,7 +287,7 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
                 <button type="button" className="row-act" title={b.enabled ? t('dc.doPause') : t('dc.doResume')} aria-label={b.enabled ? t('dc.doPause') : t('dc.doResume')} onClick={() => void toggle(b)}>
                   {b.enabled ? <IconPause /> : <IconPlay />}
                 </button>
-                <button type="button" className="row-act" title={t('dc.edit')} aria-label={t('dc.edit')} onClick={() => setDraft({ id: b.id, serverId: b.serverId, extraServerIds: (b.serverIds ?? []).slice(1), channelId: b.channelId, intervalSec: b.intervalSec, enabled: b.enabled, style: b.style })}>
+                <button type="button" className="row-act" title={t('dc.edit')} aria-label={t('dc.edit')} onClick={() => setDraft({ id: b.id, serverId: b.serverId, extraServerIds: (b.serverIds ?? []).slice(1), channelId: b.channelId, intervalSec: b.intervalSec, enabled: b.enabled, style: b.style, layout: b.layout })}>
                   <IconEdit />
                 </button>
                 <button type="button" className="row-act row-act-danger" title={t('dc.delete')} aria-label={t('dc.delete')} onClick={() => void remove(b)}>
@@ -299,6 +300,7 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
       </div>
 
       <PlayersShownCard />
+      <WelcomeCard />
       {loaded && <DiscordExtras servers={servers} />}
       <DeliveryList />
 
@@ -454,6 +456,15 @@ function BindingForm({ servers, initial, onClose, onSaved }: { servers: Server[]
             <option value="both">{t('dc.f.both')}</option>
           </select>
         </Field>
+        {f.style !== 'card' && (
+          <Field label={t('dc.f.layout')}>
+            <select id="bind-layout" className="input" value={f.layout ?? 'detailed'} onChange={(e) => setF({ ...f, layout: e.target.value as 'detailed' | 'compact' | 'minimal' })}>
+              <option value="detailed">{t('dc.f.layoutDetailed')}</option>
+              <option value="compact">{t('dc.f.layoutCompact')}</option>
+              <option value="minimal">{t('dc.f.layoutMinimal')}</option>
+            </select>
+          </Field>
+        )}
         <Field label={t('dc.f.interval')}>
           <input id="bind-interval" className="input" type="number" min={30} max={3600} value={f.intervalSec} onChange={(e) => setF({ ...f, intervalSec: Number(e.target.value) })} required />
         </Field>

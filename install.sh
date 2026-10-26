@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="3936519e5f41"
+COREGSM_BUILD="826b710f9b77"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.0.0.30"
+COREGSM_VERSION="1.0.0.31"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -6604,6 +6604,8 @@ if (restoredNow) {
 
 // older databases: new columns are added once
 addColumn(db, 'bindings', 'style', "TEXT NOT NULL DEFAULT 'embed'");
+// how much the embed shows: detailed (default) / compact / minimal
+addColumn(db, 'bindings', 'layout', "TEXT NOT NULL DEFAULT 'detailed'");
 
 // one Discord message may show several servers (up to 10 embeds): the extra server ids
 addColumn(db, 'bindings', 'extra_ids', "TEXT NOT NULL DEFAULT '[]'");
@@ -6725,6 +6727,8 @@ export interface BindingRow {
   last_error: string | null;
   /** how the message looks in Discord: embed (default), card (PNG) or both */
   style: string;
+  /** how much the embed shows: detailed, compact or minimal */
+  layout?: string;
   /** more servers shown in the same message (JSON array of server ids; the main one is server_id) */
   extra_ids: string;
 }
@@ -8136,6 +8140,41 @@ ${tail}` : tail;
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/embedLayout.ts" << '__COREGSM_EOF__'
+/** How much a status embed shows: «detailed» is the full card, «compact» keeps the essentials, «minimal» is one line. */
+import type { DiscordEmbed } from './embed.js';
+
+export type EmbedLayout = 'detailed' | 'compact' | 'minimal';
+export const LAYOUTS: readonly EmbedLayout[] = ['detailed', 'compact', 'minimal'];
+export const parseLayout = (v: unknown): EmbedLayout => (LAYOUTS as readonly string[]).includes(String(v)) ? (String(v) as EmbedLayout) : 'detailed';
+
+type Field = NonNullable<DiscordEmbed['fields']>[number];
+const starts = (f: Field, ...marks: string[]) => marks.some((m) => f.name.startsWith(m));
+
+/** the first line of the «Игроки» value (the counter without the fill bar) */
+const firstLine = (s: string) => s.split('\n')[0] ?? s;
+
+export function applyLayout(e: DiscordEmbed, layout: EmbedLayout): DiscordEmbed {
+  if (layout === 'detailed') return e;
+  const fields = e.fields ?? [];
+  const status = fields.find((f) => starts(f, '📶'));
+  const players = fields.find((f) => starts(f, '👥'));
+  const who = fields.find((f) => starts(f, '🧑‍🤝‍🧑'));
+  const last = fields.find((f) => starts(f, '⏱️ Последний'));
+  const map = fields.find((f) => starts(f, '🗺️'));
+  if (layout === 'compact') {
+    const keep = [status, players, who, last].filter((f): f is Field => !!f);
+    const { author: _a, image: _i, ...rest } = e;
+    return { ...rest, fields: keep.length ? keep : e.fields };
+  }
+  // minimal: «🟢 Онлайн · 12 мс · 3/20 · de_dust2», the title, the colour and the time of the update
+  const parts = [status && status.value, players && players.value !== '—' ? `👥 ${firstLine(players.value)}` : null, map && map.value !== '—' ? `🗺️ ${map.value}` : null].filter(Boolean) as string[];
+  const description = [parts.join(' · '), e.description].filter(Boolean).join('\n');
+  const { author: _a, image: _i, thumbnail: _t, fields: _f, ...rest } = e;
+  return { ...rest, description: description || e.description };
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/errors.ts" << '__COREGSM_EOF__'
 /**
  * Error codes of the API. An error answer (status 400 and above) keeps its Russian text in `error` (the source
@@ -8254,6 +8293,7 @@ export const ERRORS = {
   update_channel_invalid: 'Канал: release или main',
   update_version_invalid: 'Некорректная версия',
   update_notify_channel_invalid: 'Некорректный канал',
+  welcome_invalid: 'Приветствие: проверьте канал и длину текста (до 1000 символов)',
   rollback_request_failed: 'Не удалось создать запрос на откат (нет прав на папку /app/update)',
 
   // ---- servers, Discord bindings, alerts, deliveries ----
@@ -9723,6 +9763,7 @@ import { registerNickStatus } from './nickOnboarding.js';
 import { installAudit, registerOps } from './ops.js';
 import { registerOverview } from './overview.js';
 import { registerAttention } from './attention.js';
+import { registerWelcome } from './welcome.js';
 import { logAccount, registerProfile } from './profile.js';
 import { csrfGuard, registerSecurity, securityHeaders, windowLimiter } from './security.js';
 import { embedFor, SELECT_SERVERS, SERVER_ORDER, serialize, type ServerJoin } from './serverData.js';
@@ -9887,6 +9928,7 @@ registerHealth({ app, admin, bot: () => bot.status });
 startDbMaintenance();
 registerOverview({ app, viewer });
 registerAttention({ app, admin });
+registerWelcome({ app, admin, internal });
 
 // ---------- errors ----------
 app.use((err: Error & { type?: string; status?: number }, _req: Request, res: Response, _next: NextFunction) => {
@@ -16352,6 +16394,7 @@ import { z } from 'zod';
 import { admin, staff } from '../auth.js';
 import { bot } from '../botState.js';
 import { type BindingRow, db, getSetting, setSetting } from '../db.js';
+import { parseLayout } from '../embedLayout.js';
 import { cleanExtra, embedFor, extraIds, intervalParam, playersShown, serializeBinding } from '../serverData.js';
 
 export const router = express.Router();
@@ -16366,6 +16409,7 @@ const bindingSchema = z.object({
   enabled: z.boolean().default(true),
   // omitted on update = keep the current style
   style: z.enum(['embed', 'card', 'both']).optional(),
+  layout: z.enum(['detailed', 'compact', 'minimal']).optional(),
 });
 
 router.get('/api/discord/channels', staff, (_req, res) => {
@@ -16386,7 +16430,7 @@ router.put('/api/settings/embed', admin, (req, res) => {
 });
 
 router.get('/api/servers/:id/embed', admin, (req, res) => {
-  const e = embedFor(Number(req.params.id), intervalParam(req.query.interval));
+  const e = embedFor(Number(req.params.id), intervalParam(req.query.interval), parseLayout(req.query.layout));
   if (!e) return res.status(404).json({ error: 'Сервер не найден' });
   res.json(e);
 });
@@ -16402,8 +16446,8 @@ router.post('/api/bindings', admin, (req, res) => {
     return res.status(400).json({ error: 'Сервер не найден' });
   }
   const info = db
-    .prepare('INSERT INTO bindings (server_id, channel_id, interval_sec, enabled, style, extra_ids) VALUES (?, ?, ?, ?, ?, ?)')
-    .run(b.data.serverId, b.data.channelId, b.data.intervalSec, b.data.enabled ? 1 : 0, b.data.style ?? 'embed', JSON.stringify(cleanExtra(b.data.serverId, b.data.extraServerIds)));
+    .prepare('INSERT INTO bindings (server_id, channel_id, interval_sec, enabled, style, layout, extra_ids) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    .run(b.data.serverId, b.data.channelId, b.data.intervalSec, b.data.enabled ? 1 : 0, b.data.style ?? 'embed', b.data.layout ?? 'detailed', JSON.stringify(cleanExtra(b.data.serverId, b.data.extraServerIds)));
   res.status(201).json(serializeBinding(db.prepare('SELECT * FROM bindings WHERE id = ?').get(info.lastInsertRowid) as BindingRow));
 });
 
@@ -16418,8 +16462,8 @@ router.put('/api/bindings/:id', admin, (req, res) => {
   // omitted = keep the current extra servers (a pause/resume from the list does not send them)
   const extra = b.data.extraServerIds === undefined ? extraIds(old) : cleanExtra(b.data.serverId, b.data.extraServerIds);
   db.prepare(
-    'UPDATE bindings SET server_id=?, channel_id=?, interval_sec=?, enabled=?, style=?, extra_ids=?, message_id=CASE WHEN ? THEN NULL ELSE message_id END WHERE id=?',
-  ).run(b.data.serverId, b.data.channelId, b.data.intervalSec, b.data.enabled ? 1 : 0, b.data.style ?? old.style, JSON.stringify(extra), resetMsg ? 1 : 0, id);
+    'UPDATE bindings SET server_id=?, channel_id=?, interval_sec=?, enabled=?, style=?, layout=?, extra_ids=?, message_id=CASE WHEN ? THEN NULL ELSE message_id END WHERE id=?',
+  ).run(b.data.serverId, b.data.channelId, b.data.intervalSec, b.data.enabled ? 1 : 0, b.data.style ?? old.style, b.data.layout ?? parseLayout(old.layout), JSON.stringify(extra), resetMsg ? 1 : 0, id);
   res.json(serializeBinding(db.prepare('SELECT * FROM bindings WHERE id = ?').get(id) as BindingRow));
 });
 
@@ -17056,6 +17100,8 @@ import { refreshServer } from '../gsm.js';
 import { param, wrap } from '../http.js';
 import { addPing } from '../botLatencyLogic.js';
 import { buildPresence } from '../presence.js';
+import { welcomeSettings } from '../welcome.js';
+import { parseLayout } from '../embedLayout.js';
 import { embedFor, intervalParam, serializeBinding, SELECT_SERVERS, SERVER_ORDER, serialize, type ServerJoin } from '../serverData.js';
 
 export const router = express.Router();
@@ -17067,7 +17113,7 @@ router.get('/internal/presence', internal, (_req, res) => {
 });
 
 router.get('/internal/servers/:id/embed', internal, (req, res) => {
-  const e = embedFor(Number(req.params.id), intervalParam(req.query.interval));
+  const e = embedFor(Number(req.params.id), intervalParam(req.query.interval), parseLayout(req.query.layout));
   if (!e) return res.status(404).json({ error: 'not found' });
   res.json(e);
 });
@@ -17096,7 +17142,7 @@ router.post(
 );
 
 router.get('/internal/config', internal, (_req, res) => {
-  res.json({ discordToken: getSetting('discord_token') ?? '', proxyUrl: getSetting('proxy_url') ?? '' });
+  res.json({ discordToken: getSetting('discord_token') ?? '', proxyUrl: getSetting('proxy_url') ?? '', welcome: welcomeSettings().enabled });
 });
 
 router.post('/internal/bot-guilds', internal, (req, res) => {
@@ -19172,6 +19218,7 @@ import { APP_VERSION, APP_VERSION_NAME } from './config.js';
 import { coverUrl } from './covers.js';
 import { type BindingRow, db, getSetting, type ServerRow, type StatusRow } from './db.js';
 import { buildEmbed } from './embed.js';
+import { applyLayout, type EmbedLayout, parseLayout } from './embedLayout.js';
 import { chartSign } from './serverChart.js';
 import { countryLabel, countryOf } from './geo.js';
 import { maintenanceFor } from './maintenance.js';
@@ -19270,6 +19317,7 @@ export const serializeBinding = (b: BindingRow) => ({
   lastUpdate: b.last_update,
   lastError: b.last_error,
   style: b.style,
+  layout: parseLayout(b.layout),
 });
 
 // The Discord embed for a server. One builder serves the bot (what is posted) and the panel (the preview).
@@ -19278,7 +19326,7 @@ export const playersShown = () => {
   return Number.isFinite(n) && getSetting('embed_players_shown') !== '' ? Math.min(20, Math.max(0, Math.round(n))) : 5;
 };
 
-export function embedFor(serverId: number, intervalSec: number) {
+export function embedFor(serverId: number, intervalSec: number, layout: EmbedLayout = 'detailed') {
   const server = getServer(serverId);
   if (!server) return null;
   // longest in the game first: the list shows who has been there the longest
@@ -19295,7 +19343,7 @@ export function embedFor(serverId: number, intervalSec: number) {
     .get(serverId, Date.now() - 24 * 3600 * 1000) as { u: number | null };
   const last = db.prepare('SELECT MAX(ts) AS t FROM history WHERE server_id = ? AND online = 1').get(serverId) as { t: number | null };
   const base = publicBase();
-  return buildEmbed(server, up.u, intervalSec, { serverId, playersShown: playersShown(), lastOnlineAt: last.t, thumbUrl: base ? `${base}/api/game-icon/${server.game}.png?v=${GAME_ICON_VERSION}${getSetting('embed_icon_tile') === '1' ? '&tile=1' : ''}` : null, baseUrl: base, version: APP_VERSION_NAME || APP_VERSION || null, brandName: brand().name, country: (() => { const c = server.country || countryOf(serverId, server.host); return c ? countryLabel(c) : null; })(), timeZone: getSetting('timezone') || process.env.TZ || 'Europe/Moscow', logoUrl: base && logoFile() ? `${base}/api/branding/logo?v=${brand().logoV}` : null, chartUrl: base && getSetting('embed_chart') !== '0' ? `${base}/api/server-chart/${serverId}-${chartSign(serverId)}.png?v=${Math.floor(Date.now() / 600_000)}` : null });
+  return applyLayout(buildEmbed(server, up.u, intervalSec, { serverId, playersShown: playersShown(), lastOnlineAt: last.t, thumbUrl: base ? `${base}/api/game-icon/${server.game}.png?v=${GAME_ICON_VERSION}${getSetting('embed_icon_tile') === '1' ? '&tile=1' : ''}` : null, baseUrl: base, version: APP_VERSION_NAME || APP_VERSION || null, brandName: brand().name, country: (() => { const c = server.country || countryOf(serverId, server.host); return c ? countryLabel(c) : null; })(), timeZone: getSetting('timezone') || process.env.TZ || 'Europe/Moscow', logoUrl: base && logoFile() ? `${base}/api/branding/logo?v=${brand().logoV}` : null, chartUrl: base && getSetting('embed_chart') !== '0' ? `${base}/api/server-chart/${serverId}-${chartSign(serverId)}.png?v=${Math.floor(Date.now() / 600_000)}` : null }), layout);
 }
 
 export const intervalParam = (v: unknown) => Math.min(3600, Math.max(30, Number(v) || 60));
@@ -20406,6 +20454,63 @@ export async function sendPush(t: PushTarget, message: Record<string, unknown>, 
   } catch {
     return 'failed';
   }
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/welcome.ts" << '__COREGSM_EOF__'
+/**
+ * Welcome message for new members of the Discord server:
+ *   GET|PUT /api/settings/welcome   { enabled, channelId, text }   (admin)
+ *   GET /internal/welcome?user=&server=   the ready message for the bot, 404 while the feature is off
+ * The bot needs the privileged «Server Members» intent only while the feature is on.
+ */
+import type { Express, RequestHandler } from 'express';
+import { z } from 'zod';
+import { getSetting, setSetting } from './db.js';
+import { DEFAULT_WELCOME, MAX_WELCOME, renderWelcome } from './welcomeLogic.js';
+
+export const welcomeSettings = () => ({
+  enabled: getSetting('welcome_enabled') === '1' && /^\d{15,25}$/.test(getSetting('welcome_channel') ?? ''),
+  channelId: getSetting('welcome_channel') ?? '',
+  text: getSetting('welcome_text') ?? '',
+});
+
+export function registerWelcome({ app, admin, internal }: { app: Express; admin: RequestHandler; internal: RequestHandler }): void {
+  const payload = () => {
+    const s = welcomeSettings();
+    return { enabled: getSetting('welcome_enabled') === '1', channelId: s.channelId, text: s.text, defaultText: DEFAULT_WELCOME, maxLength: MAX_WELCOME };
+  };
+  app.get('/api/settings/welcome', admin, (_req, res) => res.json(payload()));
+  app.put('/api/settings/welcome', admin, (req, res) => {
+    const b = z
+      .object({ enabled: z.boolean().optional(), channelId: z.string().regex(/^(\d{15,25})?$/).optional(), text: z.string().max(MAX_WELCOME).optional() })
+      .safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'Приветствие: проверьте канал и длину текста (до 1000 символов)' });
+    if (b.data.channelId !== undefined) setSetting('welcome_channel', b.data.channelId);
+    if (b.data.text !== undefined) setSetting('welcome_text', b.data.text.trim());
+    if (b.data.enabled !== undefined) setSetting('welcome_enabled', b.data.enabled ? '1' : '0');
+    res.json(payload());
+  });
+  app.get('/internal/welcome', internal, (req, res) => {
+    const s = welcomeSettings();
+    if (!s.enabled) return res.status(404).json({ error: 'off' });
+    res.json({ channelId: s.channelId, content: renderWelcome(s.text, { userId: String(req.query.user ?? ''), server: String(req.query.server ?? '') }) });
+  });
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/welcomeLogic.ts" << '__COREGSM_EOF__'
+/** The welcome message for new members of the Discord server: the default text and the placeholders. */
+export const DEFAULT_WELCOME = 'Добро пожаловать, {user}! 👋 Чтобы связать игровой ник с Discord и попасть в рейтинг, зарегистрируйтесь командой /register.';
+export const MAX_WELCOME = 1000;
+
+/** {user} → a mention, {server} → the name of the Discord server; unknown placeholders stay as they are */
+export function renderWelcome(text: string, v: { userId: string; server: string }): string {
+  const src = text.trim() || DEFAULT_WELCOME;
+  return src
+    .replace(/\{user\}/g, `<@${v.userId.replace(/\D/g, '')}>`)
+    .replace(/\{server\}/g, v.server.replace(/[*_~`|>@]/g, ''))
+    .slice(0, 1900);
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
@@ -22204,6 +22309,8 @@ const LOGIN_RETRY_MS = 60_000;
 interface BotConfig {
   discordToken: string;
   proxyUrl: string;
+  /** the welcome message is on: needs the «Server Members» intent */
+  welcome?: boolean;
 }
 
 type BotState = 'idle' | 'connecting' | 'online' | 'error';
@@ -22328,7 +22435,7 @@ async function applyConfig(): Promise<void> {
   const res = await backend('/internal/config');
   if (!res.ok) throw new Error(`config HTTP ${res.status}`);
   const cfg = (await res.json()) as BotConfig;
-  const key = `${cfg.discordToken}|${cfg.proxyUrl}`;
+  const key = `${cfg.discordToken}|${cfg.proxyUrl}|${cfg.welcome ? 'w' : ''}`;
   if (key === appliedKey) return;
   // after a failure wait before retrying the SAME config; a changed config is applied immediately
   if (key === failedKey && Date.now() < retryAt) return;
@@ -22364,7 +22471,7 @@ async function applyConfig(): Promise<void> {
   if (proxy) log('Using proxy for Discord:', proxy.label);
 
   const c = new Client({
-    intents: [GatewayIntentBits.Guilds],
+    intents: cfg.welcome ? [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers] : [GatewayIntentBits.Guilds],
     rest: { timeout: 10_000, ...(proxy ? { agent: proxy.rest } : {}) },
   });
   c.on('error', (e) => log('client error', e));
@@ -22374,6 +22481,12 @@ async function applyConfig(): Promise<void> {
     lastGuildsJson = '';
     void publishGuilds().catch(() => undefined);
   };
+  if (cfg.welcome) {
+    c.on('guildMemberAdd', (m) => {
+      if (stopping || m.user.bot) return;
+      void welcomeMember(c, m.id, m.guild.name).catch((e) => log('welcome failed:', (e as Error).message));
+    });
+  }
   c.on('guildCreate', guildsChanged);
   c.on('guildDelete', guildsChanged);
   c.on('interactionCreate', (i) => {
@@ -22399,6 +22512,17 @@ async function applyConfig(): Promise<void> {
     failedKey = key;
     retryAt = Date.now() + LOGIN_RETRY_MS;
   }
+}
+
+/** greets a new member in the channel chosen in the panel (the text is rendered there) */
+async function welcomeMember(c: Client, userId: string, server: string): Promise<void> {
+  const res = await backend(`/internal/welcome?user=${encodeURIComponent(userId)}&server=${encodeURIComponent(server)}`);
+  if (!res.ok) return;
+  const w = (await res.json()) as { channelId: string; content: string };
+  const channel = await c.channels.fetch(w.channelId);
+  if (!channel || !channel.isTextBased() || !('send' in channel)) return;
+  // only the new member is pinged: no @everyone / @here from the text
+  await channel.send({ content: w.content, allowedMentions: { users: [userId] } });
 }
 
 /**
@@ -22850,6 +22974,7 @@ export function humanDiscordError(e: unknown): string {
     case 10008: return 'Сообщение уже удалено в Discord.';
     case 'TokenInvalid': return 'Токен неверный или сброшен. Получите новый: Developer Portal → Bot → Reset Token.';
   }
+  if (/disallowed intents/i.test(m)) return 'Для приветствия новичков включите «Server Members Intent»: Developer Portal → Bot → Privileged Gateway Intents. Либо отключите приветствие в разделе «Discord».';
   if (/invalid token|token.*invalid/i.test(m)) return 'Токен неверный или сброшен. Получите новый: Developer Portal → Bot → Reset Token.';
   if (/ENOTFOUND|ECONNREFUSED|ETIMEDOUT|ECONNRESET|EAI_AGAIN|fetch failed|timeout|socks|proxy/i.test(m)) {
     return 'Нет связи с Discord. Проверьте интернет сервера или настройте прокси в разделе «Настройки».';
@@ -23127,6 +23252,8 @@ export interface Binding {
   intervalSec: number;
   /** embed (default), card (PNG) or both */
   style?: 'embed' | 'card' | 'both';
+  /** how much the embed shows (the panel builds it): detailed (default), compact or minimal */
+  layout?: 'detailed' | 'compact' | 'minimal';
 }
 
 export type RawEmbed = ConstructorParameters<typeof EmbedBuilder>[0] & {
@@ -23195,7 +23322,7 @@ export async function buildPayload(b: Binding) {
     if (style === 'card') {
       raw = { color: 0x5a4bd1, timestamp: new Date().toISOString() };
     } else {
-      const r = await backend(`/internal/servers/${id}/embed?interval=${b.intervalSec}`);
+      const r = await backend(`/internal/servers/${id}/embed?interval=${b.intervalSec}&layout=${b.layout ?? 'detailed'}`);
       if (!r.ok) {
         // a deleted server must not break the whole message
         if (multi && r.status === 404) continue;
@@ -49991,6 +50118,8 @@ export interface Binding {
   enabled: boolean;
   /** how the message looks in Discord */
   style: 'embed' | 'card' | 'both';
+  /** how much the embed shows */
+  layout?: 'detailed' | 'compact' | 'minimal';
   lastUpdate: number | null;
   lastError: string | null;
 }
@@ -54771,6 +54900,73 @@ function TourOverlay({ onClose }: { onClose: () => void }) {
         </div>
       </div>
     </div>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/WelcomeCard.tsx" << '__COREGSM_EOF__'
+import { useEffect, useState } from 'react';
+import { api } from '../api';
+import { t, useI18n } from '../i18n';
+import { Button, Section, Switch, fail, toast } from '../ui';
+import { ChannelPicker } from './ChannelPicker';
+
+interface Welcome { enabled: boolean; channelId: string; text: string; defaultText: string; maxLength: number }
+
+/** «Приветствие новичков»: the bot greets a new member of the Discord server and points to /register. */
+export default function WelcomeCard() {
+  useI18n();
+  const [w, setW] = useState<Welcome | null>(null);
+  const [text, setText] = useState('');
+  const [picking, setPicking] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    api<Welcome>('/settings/welcome').then((r) => { if (alive) { setW(r); setText(r.text); } }).catch(() => undefined);
+    return () => { alive = false; };
+  }, []);
+  if (!w) return null;
+
+  const save = async (patch: Partial<Pick<Welcome, 'enabled' | 'channelId' | 'text'>>) => {
+    setBusy(true);
+    try {
+      const r = await api<Welcome>('/settings/welcome', 'PUT', patch);
+      setW(r);
+      setText(r.text);
+      toast(t('wl.saved'));
+    } catch (e) {
+      fail(e);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Section title={t('wl.title')}>
+      <p className="mb-3 text-sm font-semibold text-mute">{t('wl.help')}</p>
+      <label className="mb-3 flex items-center gap-3 font-bold">
+        <Switch id="welcome-on" checked={w.enabled} onChange={(on) => void save({ enabled: on })} /> {t('wl.on')}
+      </label>
+      {w.enabled && (
+        <div className="space-y-3">
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="font-black">{w.channelId ? t('wl.channel', { id: w.channelId }) : t('wl.noChannel')}</span>
+            <button type="button" className="btn btn-soft btn-sm" onClick={() => setPicking((v) => !v)} aria-expanded={picking}>{t('wl.pick')}</button>
+          </div>
+          {picking && <ChannelPicker id="welcome-channel" value={w.channelId} onChange={(v) => { if (/^\d{15,25}$/.test(v)) { void save({ channelId: v }); setPicking(false); } }} />}
+          <div>
+            <label htmlFor="welcome-text" className="label">{t('wl.text')}</label>
+            <textarea id="welcome-text" className="input min-h-24" maxLength={w.maxLength} value={text} placeholder={w.defaultText} onChange={(e) => setText(e.target.value)} />
+            <p className="mt-1 text-sm font-semibold text-mute">{t('wl.vars')}</p>
+          </div>
+          <div className="flex items-center gap-3">
+            <Button type="button" loading={busy} onClick={() => void save({ text })} disabled={text.trim() === w.text}>{t('common.save')}</Button>
+            <span className="text-sm font-semibold text-mute">{t('wl.intent')}</span>
+          </div>
+        </div>
+      )}
+    </Section>
   );
 }
 __COREGSM_EOF__
@@ -70504,6 +70700,20 @@ const en: Record<keyof typeof ru, string> = {
   'dc.f.embed': 'Embed: colour, emoji, fields (recommended)',
   'dc.f.cardOpt': 'Card picture',
   'dc.f.both': 'Embed and picture',
+  'dc.f.layout': 'Message layout',
+  'dc.f.layoutDetailed': 'Detailed — the whole card',
+  'dc.f.layoutCompact': 'Compact — status, players, list',
+  'dc.f.layoutMinimal': 'Minimal — one line',
+  'wl.title': 'Welcome new members',
+  'wl.help': 'When someone joins the Discord server the bot posts a greeting in the chosen channel and reminds them to sign up with /register.',
+  'wl.on': 'Greet new members',
+  'wl.channel': 'Channel: {id}',
+  'wl.noChannel': 'No channel chosen — nothing will be posted',
+  'wl.pick': 'Choose channel',
+  'wl.text': 'Greeting text',
+  'wl.vars': 'You can use {user} — a mention of the newcomer — and {server} — the server name. Empty — the default text.',
+  'wl.saved': 'Saved',
+  'wl.intent': 'Needs the «Server Members Intent» in Developer Portal → Bot.',
   'dc.f.interval': 'Update every, seconds (30–3600)',
   'dc.f.enabled': 'Enabled',
   'us.preset.news': 'News editor',
@@ -71058,6 +71268,7 @@ const errorsEn: Record<string, string> = {
   update_channel_invalid: 'Channel: release or main',
   update_version_invalid: 'Invalid version',
   update_notify_channel_invalid: 'Invalid channel',
+  welcome_invalid: 'Welcome message: check the channel and the text length (up to 1000 characters)',
   rollback_unavailable: 'Rollback is not available: the previous version was not kept',
   request_pending: 'A request is already waiting to be carried out',
   rollback_request_failed: 'Could not create the rollback request (no write access to /app/update)',
@@ -72715,6 +72926,20 @@ const ru = {
   'dc.f.embed': 'Embed: цвет, эмодзи, поля (рекомендуется)',
   'dc.f.cardOpt': 'Картинка-карточка',
   'dc.f.both': 'Embed и картинка',
+  'dc.f.layout': 'Вид сообщения',
+  'dc.f.layoutDetailed': 'Подробный — вся карточка',
+  'dc.f.layoutCompact': 'Компактный — статус, игроки, список',
+  'dc.f.layoutMinimal': 'Минимальный — одна строка',
+  'wl.title': 'Приветствие новичков',
+  'wl.help': 'Когда кто-то заходит на Discord-сервер, бот пишет в выбранный канал приветствие и напоминает зарегистрироваться командой /register.',
+  'wl.on': 'Приветствовать новых участников',
+  'wl.channel': 'Канал: {id}',
+  'wl.noChannel': 'Канал не выбран — приветствий не будет',
+  'wl.pick': 'Выбрать канал',
+  'wl.text': 'Текст приветствия',
+  'wl.vars': 'Можно использовать {user} — упоминание новичка и {server} — название сервера. Пусто — стандартный текст.',
+  'wl.saved': 'Сохранено',
+  'wl.intent': 'Нужен «Server Members Intent» в Developer Portal → Bot.',
   'dc.f.interval': 'Обновлять каждые, секунд (30–3600)',
   'dc.f.enabled': 'Включена',
   'us.preset.news': 'Редактор новостей',
@@ -76684,9 +76909,10 @@ import { Button, Empty, ErrorLine, Field, LoadError, GameAvatar, GoLink, IconDis
 import { BotPill } from './Settings';
 import { MissingNote } from '../components/ChannelPicker';
 import EmbedPreview from './EmbedPreview';
+import WelcomeCard from '../components/WelcomeCard';
 
 type Style = 'embed' | 'card' | 'both';
-interface Draft { id?: number; serverId: number; /** more servers shown in the same message (the main one is serverId) */ extraServerIds?: number[]; channelId: string; intervalSec: number; enabled: boolean; style: Style }
+interface Draft { id?: number; serverId: number; /** more servers shown in the same message (the main one is serverId) */ extraServerIds?: number[]; channelId: string; intervalSec: number; enabled: boolean; style: Style; layout?: 'detailed' | 'compact' | 'minimal' }
 
 /** the sub-route: «new» opens an empty binding form, «new/<serverId>» opens it with that server chosen */
 export default function DiscordPage({ sub = '' }: { sub?: string }) {
@@ -76773,7 +76999,7 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
   const pick = (id: number) => setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
 
   const toggle = async (b: Binding) => {
-    await api(`/bindings/${b.id}`, 'PUT', { serverId: b.serverId, extraServerIds: (b.serverIds ?? []).slice(1), channelId: b.channelId, intervalSec: b.intervalSec, enabled: !b.enabled, style: b.style }).catch((e) => setError(e.message));
+    await api(`/bindings/${b.id}`, 'PUT', { serverId: b.serverId, extraServerIds: (b.serverIds ?? []).slice(1), channelId: b.channelId, intervalSec: b.intervalSec, enabled: !b.enabled, style: b.style, layout: b.layout }).catch((e) => setError(e.message));
     load();
   };
 
@@ -76937,7 +77163,7 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
                   </span>
                 </div>
               )}
-              {b.style !== 'card' && <EmbedPreview serverId={b.serverId} intervalSec={b.intervalSec} />}
+              {b.style !== 'card' && <EmbedPreview serverId={b.serverId} intervalSec={b.intervalSec} layout={b.layout} />}
               {b.style !== 'card' && (b.serverIds ?? []).length > 1 && (
                 <p className="-mt-1 text-sm font-semibold text-mute">{t('dc.previewFirst')}</p>
               )}
@@ -76959,7 +77185,7 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
                 <button type="button" className="row-act" title={b.enabled ? t('dc.doPause') : t('dc.doResume')} aria-label={b.enabled ? t('dc.doPause') : t('dc.doResume')} onClick={() => void toggle(b)}>
                   {b.enabled ? <IconPause /> : <IconPlay />}
                 </button>
-                <button type="button" className="row-act" title={t('dc.edit')} aria-label={t('dc.edit')} onClick={() => setDraft({ id: b.id, serverId: b.serverId, extraServerIds: (b.serverIds ?? []).slice(1), channelId: b.channelId, intervalSec: b.intervalSec, enabled: b.enabled, style: b.style })}>
+                <button type="button" className="row-act" title={t('dc.edit')} aria-label={t('dc.edit')} onClick={() => setDraft({ id: b.id, serverId: b.serverId, extraServerIds: (b.serverIds ?? []).slice(1), channelId: b.channelId, intervalSec: b.intervalSec, enabled: b.enabled, style: b.style, layout: b.layout })}>
                   <IconEdit />
                 </button>
                 <button type="button" className="row-act row-act-danger" title={t('dc.delete')} aria-label={t('dc.delete')} onClick={() => void remove(b)}>
@@ -76972,6 +77198,7 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
       </div>
 
       <PlayersShownCard />
+      <WelcomeCard />
       {loaded && <DiscordExtras servers={servers} />}
       <DeliveryList />
 
@@ -77127,6 +77354,15 @@ function BindingForm({ servers, initial, onClose, onSaved }: { servers: Server[]
             <option value="both">{t('dc.f.both')}</option>
           </select>
         </Field>
+        {f.style !== 'card' && (
+          <Field label={t('dc.f.layout')}>
+            <select id="bind-layout" className="input" value={f.layout ?? 'detailed'} onChange={(e) => setF({ ...f, layout: e.target.value as 'detailed' | 'compact' | 'minimal' })}>
+              <option value="detailed">{t('dc.f.layoutDetailed')}</option>
+              <option value="compact">{t('dc.f.layoutCompact')}</option>
+              <option value="minimal">{t('dc.f.layoutMinimal')}</option>
+            </select>
+          </Field>
+        )}
         <Field label={t('dc.f.interval')}>
           <input id="bind-interval" className="input" type="number" min={30} max={3600} value={f.intervalSec} onChange={(e) => setF({ ...f, intervalSec: Number(e.target.value) })} required />
         </Field>
@@ -77355,10 +77591,10 @@ export function EmbedView({
 }
 
 /** Live preview of exactly what the bot posts for a server (the same builder runs in the backend). */
-export default function EmbedPreview({ serverId, intervalSec }: { serverId: number; intervalSec: number }) {
+export default function EmbedPreview({ serverId, intervalSec, layout = 'detailed' }: { serverId: number; intervalSec: number; layout?: string }) {
   const [embed, setEmbed] = useState<DiscordEmbed | null>(null);
   usePoll(() => {
-    api<DiscordEmbed>(`/servers/${serverId}/embed?interval=${intervalSec}`).then(setEmbed).catch(() => undefined);
+    api<DiscordEmbed>(`/servers/${serverId}/embed?interval=${intervalSec}&layout=${layout}`).then(setEmbed).catch(() => undefined);
   }, 30_000);
   if (!embed) return <div className="skeleton h-48 rounded-2xl bg-soft" />;
   return <EmbedView embed={embed} />;

@@ -126,6 +126,8 @@ export interface Binding {
   enabled: boolean;
   /** how the message looks in Discord */
   style: 'embed' | 'card' | 'both';
+  /** how much the embed shows */
+  layout?: 'detailed' | 'compact' | 'minimal';
   lastUpdate: number | null;
   lastError: string | null;
 }
