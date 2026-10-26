@@ -1853,7 +1853,6 @@ const en: Record<keyof typeof ru, string> = {
   'upd.o.locked': 'The channel is pinned by the server environment and cannot be changed here.',
   'upd.o.notify': 'Tell Discord about new versions and update results',
   'upd.o.notifyHint': 'Messages go to the alerts channel (Settings → Discord). Nothing is sent when it is not set up.',
-<<<<<<< HEAD
   'us.ban': 'Block',
   'us.banOf': 'Block {name}',
   'us.unban': 'Unblock',
@@ -1879,12 +1878,10 @@ const en: Record<keyof typeof ru, string> = {
   'us.matrix.noMods': 'No moderators yet',
   'login.banReason': ' Reason: {r}.',
   'login.banUntil': ' Blocked until {d}.',
-=======
   'adm.tbl.up': 'Move up',
   'adm.tbl.down': 'Move down',
   'adm.tbl.moved': 'Server order saved',
   'adm.tbl.orderHint': 'Reorder works when the filter and search are cleared',
->>>>>>> origin/main
 };
 
 export default en;
