@@ -53,6 +53,9 @@ SELECT s.*, st.online, st.players, st.max_players, st.map, st.version, st.ping, 
        st.updated_at, st.state_since, st.server_id AS has_status, st.name AS query_name
 FROM servers s LEFT JOIN status st ON st.server_id = s.id`;
 
+/** the manual order first (pinned servers), the rest by id */
+export const SERVER_ORDER = 's.sort_order IS NULL, s.sort_order, s.id';
+
 export function getServer(id: number) {
   const row = db.prepare(`${SELECT_SERVERS} WHERE s.id = ?`).get(id) as ServerJoin | undefined;
   return row ? serialize(row) : null;

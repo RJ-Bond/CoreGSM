@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { deliveryFailure, humanDiscordError, newNonce, retryAfterOf, retrySocket } from '../src/errors.js';
+import { deliveryFailure, humanDiscordError, isMessageGone, newNonce, retryAfterOf, retrySocket, stableNonce } from '../src/errors.js';
 
 test('Discord error codes become texts a person can act on', () => {
   assert.match(humanDiscordError({ code: 50001, message: 'Missing Access' }), /нет доступа к каналу/);
@@ -80,4 +80,18 @@ test('retrySocket gives up after the last try', async () => {
   let calls = 0;
   await assert.rejects(retrySocket(async () => { calls++; throw new Error('socket hang up'); }, 3, 1), /socket hang up/);
   assert.equal(calls, 3);
+});
+
+test('a status message is posted anew only when Discord says the old one is gone', () => {
+  assert.equal(isMessageGone(Object.assign(new Error('Unknown Message'), { code: 10008 })), true);
+  assert.equal(isMessageGone(Object.assign(new Error('Unknown Channel'), { code: 10003 })), false);
+  assert.equal(isMessageGone(new Error('The operation was aborted due to timeout')), false);
+  assert.equal(isMessageGone(Object.assign(new Error('Service unavailable'), { status: 503 })), false);
+  assert.equal(isMessageGone(null), false);
+});
+
+test('every retry of one delivery carries the same nonce, short enough for Discord', () => {
+  assert.equal(stableNonce('al', 42), stableNonce('al', 42));
+  assert.notEqual(stableNonce('al', 42), stableNonce('nw', 42));
+  assert.ok(stableNonce('al', 12345678901234567890123).length <= 25);
 });

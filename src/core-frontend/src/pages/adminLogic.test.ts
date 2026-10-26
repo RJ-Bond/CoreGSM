@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { delta, dayKey, healthScore, type HealthInput } from './adminLogic';
+import { moveId } from './adminServersLogic';
 
 const fine: HealthInput = { servers: 4, down: 0, botError: false, certDays: 60, pending: 0, updateAvailable: false, backupAgeMs: 1000, backupsKnown: true };
 
@@ -46,5 +47,19 @@ describe('chords', () => {
     expect(CHORDS.s).toBe('servers');
     expect(chordOf('servers')).toBe('s');
     expect(chordOf('cards')).toBeNull();
+  });
+});
+
+describe('moveId', () => {
+  it('swaps with the neighbour on screen', () => {
+    expect(moveId([1, 2, 3], [1, 2, 3], 2, -1)).toEqual([2, 1, 3]);
+    expect(moveId([1, 2, 3], [1, 2, 3], 2, 1)).toEqual([1, 3, 2]);
+  });
+  it('cannot move past the ends', () => {
+    expect(moveId([1, 2], [1, 2], 1, -1)).toBeNull();
+    expect(moveId([1, 2], [1, 2], 2, 1)).toBeNull();
+  });
+  it('works among a subset of the list', () => {
+    expect(moveId([1, 2, 3, 4], [2, 4], 4, -1)).toEqual([1, 4, 3, 2]);
   });
 });
