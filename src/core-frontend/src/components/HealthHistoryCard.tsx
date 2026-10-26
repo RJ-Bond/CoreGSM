@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api';
-import { buildSparkline, downsample } from '../sparkline';
-import { Section, fmtTime } from '../ui';
+import { LineChart, Section, fmtTime } from '../ui';
 
 export interface HealthSample { ts: number; dbBytes: number | null; rssMb: number | null; pollMs: number | null; pollFailures: number | null; botState: string | null; queueLen: number | null; diskFree: number | null; loadPct?: number | null }
 export interface HealthFlag { kind: 'bot_offline' | 'poll_slow' | 'disk_low' | 'db_growing' | string; since: number; text: string }
@@ -23,29 +22,6 @@ const METRICS: { id: string; title: string; pick: (s: HealthSample) => number | 
   { id: 'db', title: 'Размер базы', pick: (s) => s.dbBytes, fmt: mbText },
   { id: 'queue', title: 'Очередь доставки', pick: (s) => s.queueLen, fmt: (n) => String(Math.round(n)) },
 ];
-
-const W = 220;
-const H = 48;
-
-function Sparkline({ title, values, fmt }: { title: string; values: (number | null)[]; fmt: (n: number) => string }) {
-  const sp = buildSparkline(downsample(values, 120), W, H);
-  return (
-    <div className="rounded-ui-lg bg-soft p-3.5">
-      <div className="flex items-baseline justify-between gap-2">
-        <span className="text-sm font-extrabold text-mute">{title}</span>
-        <span className="font-black tabular-nums">{sp.last == null ? '–' : fmt(sp.last)}</span>
-      </div>
-      <svg viewBox={`0 0 ${W} ${H}`} className="mt-2 block h-12 w-full" role="img" aria-label={sp.empty ? `${title}: данных нет` : `${title}: сейчас ${fmt(sp.last ?? 0)}, от ${fmt(sp.min)} до ${fmt(sp.max)}`} preserveAspectRatio="none">
-        {!sp.empty && <path d={sp.area} className="fill-link" opacity="0.12" />}
-        {!sp.empty && <path d={sp.path} fill="none" className="stroke-link" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />}
-      </svg>
-      <div className="mt-1 flex justify-between text-xs font-bold text-mute">
-        <span>{sp.empty ? 'нет данных' : `мин ${fmt(sp.min)}`}</span>
-        <span>{sp.empty ? '' : `макс ${fmt(sp.max)}`}</span>
-      </div>
-    </div>
-  );
-}
 
 /** «Состояние за период»: four static sparklines of the panel's own health. Hidden when the backend has no history. */
 export default function HealthHistoryCard({ onFlags }: { onFlags?: (f: HealthFlag[]) => void }) {
@@ -88,7 +64,7 @@ export default function HealthHistoryCard({ onFlags }: { onFlags?: (f: HealthFla
         <p className="text-sm font-semibold text-mute">Замеров пока мало: график появится через несколько минут работы панели.</p>
       ) : (
         <div className="grid gap-3 min-[520px]:grid-cols-2">
-          {METRICS.map((m) => <Sparkline key={m.id} title={m.title} values={samples.map(m.pick)} fmt={m.fmt} />)}
+          {METRICS.map((m) => <LineChart key={m.id} title={m.title} points={samples.map((x) => ({ ts: x.ts, v: m.pick(x) }))} fmt={m.fmt} height={96} floor={m.id === 'db' || m.id === 'mem'} />)}
         </div>
       )}
     </Section>

@@ -489,15 +489,17 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
         </SectionCard>
         <div className="grid gap-3.5 lg:grid-cols-12">
           {chartTile(1, false)}
-          <SectionCard id="ov-events" state={sections} className="lg:col-span-5 lg:col-start-1 lg:self-start" style={stagger(2)} title="Последние события">
+          <div className="space-y-3.5 lg:col-span-5 lg:col-start-1 lg:self-start max-lg:contents">
+          <SectionCard id="ov-events" state={sections} className="max-lg:order-1" style={stagger(2)} title="Последние события">
             <EventsFeed events={events} online={s.online} limit={6} moreHref={tabHref(id, 'events')} />
           </SectionCard>
-          <SectionCard id="ov-players" state={sections} className="lg:col-span-7 lg:col-start-6 lg:row-span-2" style={stagger(3)} title={<span className="inline-flex items-center whitespace-nowrap">Сейчас в игре{playerCountBadge}</span>}>
-            <PlayersList {...playersProps} limit={6} moreHref={tabHref(id, 'players')} />
-          </SectionCard>
           {/* the reviews sit under the events: the left column fills the height of the player list */}
-          <SectionCard id="ov-reviews" state={sections} className="lg:col-span-5 lg:col-start-1 lg:self-start" style={stagger(4)} title="Отзывы игроков">
+          <SectionCard id="ov-reviews" state={sections} className="max-lg:order-3" style={stagger(4)} title="Отзывы игроков">
             <ServerReviews serverId={id} />
+          </SectionCard>
+          </div>
+          <SectionCard id="ov-players" state={sections} className="lg:col-span-7 lg:col-start-6 lg:row-span-2 max-lg:order-2" style={stagger(3)} title={<span className="inline-flex items-center whitespace-nowrap">Сейчас в игре{playerCountBadge}</span>}>
+            <PlayersList {...playersProps} limit={6} moreHref={tabHref(id, 'players')} />
           </SectionCard>
         </div>
         {probes && probes.probes.length > 0 && (
