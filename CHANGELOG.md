@@ -14,7 +14,7 @@ interface language; the GitHub release text is built from the section of the ver
 - Пометки в конце русской части: `[migration]` — меняется база данных, `[env]` — нужны новые настройки сервера, `⚠` в начале — несовместимое изменение.
 - Новые пункты идут в раздел «Не выпущено». Релиз выпускается только по команде владельца: тогда раздел переименовывается в `## <версия> · <дата>` (версия из `version.txt`).
 
-## Не выпущено | Unreleased
+## 1.0.0.20 · 26.10.2026
 
 ### ✨ Новое | New
 - 🏅 Новое достижение в профиле появляется с анимацией: значок «выскакивает» и блестит, один раз в этом браузере (учитывает «уменьшить анимацию») | A newly earned achievement in the profile appears with an animation: the badge pops in and shines, once per browser (respects reduced motion)
