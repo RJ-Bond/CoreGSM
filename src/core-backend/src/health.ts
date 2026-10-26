@@ -189,6 +189,12 @@ export function computeFlags(samples: Sample[], cur: Sample, pollMs: number, now
   return flags;
 }
 
+/** the limits the flags use, so a chart can draw them */
+export function thresholds(): { pollIntervalMs: number; pollSlowMs: number; diskLowBytes: number } {
+  const iv = pollIntervalMs();
+  return { pollIntervalMs: iv, pollSlowMs: Math.max(5000, iv * 0.8), diskLowBytes: GB };
+}
+
 const pollIntervalMs = () => Number(process.env.POLL_INTERVAL_SEC ?? 30) * 1000 || 30_000;
 
 /** flags right now (added to GET /api/system) */
@@ -220,7 +226,7 @@ export function registerHealth({ app, admin, bot }: { app: Express; admin: Reque
     const now = Date.now();
     // first look before the first scheduled sample: take one now so the chart is never empty
     if (!(db.prepare('SELECT 1 FROM health_samples LIMIT 1').get())) recordSample(now);
-    res.json({ samples: samplesSince(now - hours * 3600_000), flags: currentFlags(now) });
+    res.json({ samples: samplesSince(now - hours * 3600_000), flags: currentFlags(now), thresholds: thresholds() });
   });
   const tick = () => {
     try {

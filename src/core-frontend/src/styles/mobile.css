@@ -119,3 +119,17 @@ html[data-lite] :is(.nw-glow, .nw-backdrop, .auth-glow, .auth-float, .art-float,
 html[data-lite] *, html[data-lite] *::before, html[data-lite] *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 html[data-lite] .glass, html[data-lite] [class*='backdrop-blur'] { -webkit-backdrop-filter: none; backdrop-filter: none; }
 html[data-lite] img[loading='lazy'] { content-visibility: auto; }
+
+/* 15. what the 360 px and landscape pictures showed: a clipped brand, a squeezed server name, a crowded bottom bar */
+@media (max-width: 420px) {
+  .hdr-word { display: none; }
+  .srv-hero .sh-head { flex-wrap: wrap; }
+  .srv-hero .sh-actions { flex-basis: 100%; }
+}
+@media (max-width: 400px) {
+  .bn-item { font-size: 10.5px; letter-spacing: -0.01em; padding-inline: 0; }
+}
+/* a phone on its side and a small tablet: the menu has no room for the brand name and the user name next to the sections */
+@media (min-width: 768px) and (max-width: 1023px) {
+  .hdr-word, .pm-btn > .truncate { display: none; }
+}

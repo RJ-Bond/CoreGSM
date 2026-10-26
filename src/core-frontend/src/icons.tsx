@@ -33,6 +33,8 @@ export const IconUsers = make(<><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4
 export const IconJournal = make(<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" />, 22);
 /** heartbeat line: the System and Status pages */
 export const IconSystem = make(<path d="M22 12h-4l-3 9L9 3l-3 9H2" />, 22);
+/** a chart with a rising line: the Health page */
+export const IconHealth = make(<><path d="M3 3v18h18" /><path d="M7 15l4-5 3 3 5-7" /></>, 22);
 export const IconStart = make(<path d="M5 21V4M5 4h11l-2 4 2 4H5" />, 22);
 export const IconBell = make(<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.94 1.94 0 0 0 3.4 0" />, 22);
 
@@ -107,7 +109,7 @@ export const IconCopy = make(<><rect x="9" y="9" width="11" height="11" rx="2" /
 /** the catalogue the UI kit page shows (name, component); keep new icons in this list */
 export const ICON_SET: [string, (p: IconProps) => ReactNode][] = [
   ['Servers', IconServers], ['Cards', IconCards], ['Discord', IconDiscord], ['Settings', IconSettings], ['News', IconNews],
-  ['Users', IconUsers], ['Journal', IconJournal], ['System', IconSystem], ['Start', IconStart], ['Bell', IconBell],
+  ['Users', IconUsers], ['Journal', IconJournal], ['System', IconSystem], ['Health', IconHealth], ['Start', IconStart], ['Bell', IconBell],
   ['Sun', IconSun], ['Moon', IconMoon], ['Auto', IconAuto], ['Palette', IconPalette],
   ['Edit', IconEdit], ['Trash', IconTrash], ['Pause', IconPause], ['Play', IconPlay], ['Key', IconKey],
   ['Download', IconDownload], ['Upload', IconUpload], ['Restore', IconRestore], ['Undo', IconUndo], ['Copy', IconCopy],

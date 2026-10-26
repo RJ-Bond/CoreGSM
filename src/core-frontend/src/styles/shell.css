@@ -26,6 +26,10 @@
 .pm-item { display: block; width: 100%; padding: 9px 12px; border-radius: var(--r-md); text-align: left; font-size: 14px; font-weight: 700; }
 .pm-item:hover, .pm-item:focus-visible { background: rgb(var(--soft)); }
 .pm-item.is-danger { color: rgb(var(--bad)); }
+.pm-sep { height: 1px; margin: 4px 6px; background: rgb(var(--line)); }
+.pm-toggle { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.pm-toggle::after { content: ''; flex: none; width: 34px; height: 20px; border-radius: 999px; background: rgb(var(--line)); background-image: radial-gradient(circle at 10px 10px, #fff 7px, transparent 7.5px); transition: background-color .15s, background-position .15s; }
+.pm-toggle[aria-checked='true']::after { background-color: rgb(var(--link)); background-image: radial-gradient(circle at 24px 10px, #fff 7px, transparent 7.5px); }
 
 .nav-bottom { transition: transform .25s cubic-bezier(.2, .8, .2, 1), opacity .2s ease; }
 .nav-bottom.is-hidden { transform: translateY(160%); opacity: 0; pointer-events: none; }

@@ -449,6 +449,7 @@ describe('maintenance and health over the API', () => {
     assert.equal(h.status, 200);
     assert.ok(Array.isArray(h.body.samples) && h.body.samples.length >= 1);
     assert.ok(Array.isArray(h.body.flags));
+    assert.ok(h.body.thresholds.pollSlowMs >= 5000 && h.body.thresholds.diskLowBytes > 0, 'thresholds for the charts');
     const sample = h.body.samples[0];
     for (const k of ['ts', 'dbBytes', 'rssMb', 'pollMs', 'pollFailures', 'botState', 'queueLen']) assert.ok(k in sample, k);
     const sys = await api.call('GET', '/api/system', { token });
