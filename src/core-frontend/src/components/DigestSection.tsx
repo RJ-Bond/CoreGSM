@@ -9,6 +9,8 @@ interface DigestInfo {
   channelId: string;
   weekday: number;
   hour: number;
+  /** the picture: dark or light */
+  theme: 'dark' | 'light';
   lastSent: number;
   preview: {
     totals: { players: number; prevPlayers: number; peak: number; peakServer: string | null; hours: number; prevHours: number; uptime: number | null; incidents: number; newPlayers: number };
@@ -28,9 +30,9 @@ export default function DigestSection({ alertsChannel }: { alertsChannel: string
     api<DigestInfo>('/digest').then(setInfo).catch((e: Error) => setError(e.message));
   }, []);
 
-  const save = async (patch: Partial<Pick<DigestInfo, 'enabled' | 'channelId' | 'weekday' | 'hour'>>, done?: string) => {
+  const save = async (patch: Partial<Pick<DigestInfo, 'enabled' | 'channelId' | 'weekday' | 'hour' | 'theme'>>, done?: string) => {
     await api<DigestInfo>('/digest', 'PUT', patch)
-      .then((d) => { setInfo(d); setError(''); if (done) toast(done); })
+      .then((d) => { setInfo(d); setImgKey((k) => k + 1); setError(''); if (done) toast(done); })
       .catch((e: Error) => setError(e.message));
   };
   const sendNow = async () => {
@@ -58,7 +60,7 @@ export default function DigestSection({ alertsChannel }: { alertsChannel: string
         </span>
       </label>
 
-      <div className="grid gap-4 sm:grid-cols-2">
+      <div className="grid gap-4 sm:grid-cols-3">
         <div>
           <label htmlFor="digest-day" className="label">День</label>
           <select id="digest-day" className="input" value={info.weekday} onChange={(e) => void save({ weekday: Number(e.target.value) }, 'Сохранено')}>
@@ -69,6 +71,13 @@ export default function DigestSection({ alertsChannel }: { alertsChannel: string
           <label htmlFor="digest-hour" className="label">Время</label>
           <select id="digest-hour" className="input" value={info.hour} onChange={(e) => void save({ hour: Number(e.target.value) }, 'Сохранено')}>
             {Array.from({ length: 24 }, (_, h) => <option key={h} value={h}>{String(h).padStart(2, '0')}:00</option>)}
+          </select>
+        </div>
+        <div>
+          <label htmlFor="digest-theme" className="label">Оформление картинки</label>
+          <select id="digest-theme" className="input" value={info.theme} onChange={(e) => void save({ theme: e.target.value as 'dark' | 'light' }, 'Сохранено')}>
+            <option value="dark">Тёмное</option>
+            <option value="light">Светлое</option>
           </select>
         </div>
       </div>
