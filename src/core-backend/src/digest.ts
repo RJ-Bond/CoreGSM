@@ -14,7 +14,8 @@ import { JWT_SECRET } from './config.js';
 import { db, EFFECTIVE_NAME, getSetting, setSetting } from './db.js';
 import { SERVER_ORDER } from './serverData.js';
 import { incidentsSince } from './incidents.js';
-import { busiestDay, changePct, dailyPeaks, sparkPoints, splitServers, stripCommonPrefix, trendText, uptimeBar, wrapName } from './digestLogic.js';
+import { avatarColor, initialOf } from './cardLogic.js';
+import { busiestDay, changePct, dailyPeaks, sparkPoints, splitServers, stripCommonPrefix, trendText, uptimeBar, weekEvents, type WeekEvent, wrapName } from './digestLogic.js';
 import { localParts } from './localTime.js';
 import { brand, publicBase } from './site.js';
 import { param } from './http.js';
@@ -47,6 +48,8 @@ export interface Digest {
   days: { day: string; players: number }[];
   servers: DigestServer[];
   top: { name: string; hours: number }[];
+  /** up to three lines under the picture: the record, the longest outage, new players */
+  events: WeekEvent[];
 }
 
 /** the summary of the seven days that end at `to` */
@@ -117,6 +120,15 @@ export function buildDigest(to = Date.now()): Digest {
     },
     days: days.map((day) => ({ day, players: byDay.get(day)?.size ?? 0 })),
     servers: perServer,
+    events: weekEvents({
+      peak: best?.peak ?? 0,
+      peakWhen: best?.peakAt ? new Date(best.peakAt).toLocaleString('ru-RU', { weekday: 'short', hour: '2-digit', minute: '2-digit', timeZone: tzName }).replace(',', '') : '',
+      worst: (() => {
+        const w = [...incidents].sort((a, b) => b.minutes - a.minutes)[0];
+        return w ? { minutes: w.minutes, server: servers.find((x) => x.id === w.serverId)?.name ?? '' } : null;
+      })(),
+      newPlayers: new Set(cur.filter((v) => (firstSeen.get(v.k) ?? 0) > from).map((v) => v.k)).size,
+    }),
     top: [...per.values()].sort((a, b) => b.hours - a.hours).slice(0, 5).map((p) => ({ name: p.name, hours: Math.round(p.hours * 10) / 10 })),
   };
 }
@@ -136,6 +148,13 @@ const PALETTES: Record<DigestTheme, { bgA: string; bgB: string; ink: string; ink
 const SANS = '"DejaVu Sans", "Liberation Sans", sans-serif';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
+/** the text cut with «…» so that it fits `max` pixels */
+function fitText(ctx: any, text: string, max: number): string {
+  let t = text;
+  while (t.length > 3 && ctx.measureText(t).width > max) t = `${t.slice(0, -2)}…`;
+  return t;
+}
+
 export async function renderDigest(d: Digest, theme: DigestTheme = digestSettings().theme): Promise<Buffer> {
   const P = PALETTES[theme];
   const W = 1200;
@@ -241,7 +260,7 @@ export async function renderDigest(d: Digest, theme: DigestTheme = digestSetting
   ctx.fillStyle = P.ink4;
   ctx.font = `600 14px ${SANS}`;
   ctx.fillText('линия: пик онлайна по дням · %: к прошлой неделе', sx + headW + 16, by);
-  const { shown, hidden } = splitServers(d.servers, 5);
+  const { shown, hidden } = splitServers(d.servers, 4);
   // servers of one project start with the same words: show the part that tells them apart
   const names = stripCommonPrefix(shown.map((s) => s.name));
   shown.forEach((s, i) => {
@@ -310,13 +329,65 @@ export async function renderDigest(d: Digest, theme: DigestTheme = digestSetting
     ctx.fillStyle = P.ink3;
     ctx.fillText(`${hidden.reduce((n, x) => n + x.players, 0)} игр.`, sx + 290, y + 28);
   }
-  if (d.top.length) {
-    ctx.fillStyle = P.ink3;
-    ctx.font = `600 16px ${SANS}`;
-    const line = `Больше всех играли: ${d.top.slice(0, 3).map((p) => `${p.name} (${Math.round(p.hours)} ч)`).join(', ')}`;
-    let t = line;
-    while (t.length > 10 && ctx.measureText(t).width > 504) t = t.slice(0, -1);
-    ctx.fillText(t === line ? t : `${t}…`, sx, by + 22 + (shown.length + (hidden.length ? 1 : 0)) * 50 + 22);
+  // the hero of the week: the player with the most hours, the two after them in small print
+  const rowsEnd = by + 22 + (shown.length + (hidden.length ? 1 : 0)) * 50;
+  const hero = d.top[0];
+  if (hero) {
+    const hy = rowsEnd + 4;
+    ctx.fillStyle = P.card;
+    ctx.beginPath();
+    ctx.roundRect(sx, hy, 504, 52, 14);
+    ctx.fill();
+    ctx.fillStyle = avatarColor(hero.name);
+    ctx.beginPath();
+    ctx.arc(sx + 32, hy + 26, 18, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#0e0c1b';
+    ctx.font = `800 20px ${SANS}`;
+    ctx.textAlign = 'center';
+    ctx.fillText(initialOf(hero.name), sx + 32, hy + 33);
+    ctx.textAlign = 'left';
+    ctx.fillStyle = P.ink4;
+    ctx.font = `700 12px ${SANS}`;
+    ctx.fillText('ГЕРОЙ НЕДЕЛИ', sx + 62, hy + 20);
+    const others = d.top.slice(1, 3).map((p) => `${p.name} ${Math.round(p.hours)} ч`).join(' · ');
+    if (others) {
+      ctx.font = `600 13px ${SANS}`;
+      ctx.fillStyle = P.ink3;
+      ctx.textAlign = 'right';
+      let o = others;
+      while (o.length > 4 && ctx.measureText(o).width > 250) o = `${o.slice(0, -2)}…`;
+      ctx.fillText(o, sx + 490, hy + 20);
+      ctx.textAlign = 'left';
+    }
+    ctx.fillStyle = P.ink;
+    ctx.font = `bold 19px ${SANS}`;
+    ctx.fillText(fitText(ctx, hero.name, 250), sx + 62, hy + 42);
+    ctx.fillStyle = accent;
+    ctx.font = `bold 20px ${SANS}`;
+    ctx.textAlign = 'right';
+    ctx.fillText(`${Math.round(hero.hours)} ч`, sx + 490, hy + 42);
+    ctx.textAlign = 'left';
+  }
+
+  // under everything: what happened this week, in up to three small pills
+  let ex = 56;
+  const tone = { ok: P.ok, warn: P.warn, bad: P.bad, info: accent } as const;
+  for (const e of d.events) {
+    ctx.font = `600 15px ${SANS}`;
+    const text = fitText(ctx, e.text, 330);
+    const w = ctx.measureText(text).width + 40;
+    ctx.fillStyle = P.card;
+    ctx.beginPath();
+    ctx.roundRect(ex, 628, w, 32, 16);
+    ctx.fill();
+    ctx.fillStyle = tone[e.tone];
+    ctx.beginPath();
+    ctx.arc(ex + 16, 644, 5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = P.ink2;
+    ctx.fillText(text, ex + 28, 649);
+    ex += w + 10;
   }
   return canvas.toBuffer('png');
 }
