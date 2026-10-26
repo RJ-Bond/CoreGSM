@@ -56,3 +56,31 @@ export function wrapName(name: string, max: number, lines = 2): string[] {
   if (rest) out[out.length - 1] = `${out[out.length - 1]!.slice(0, Math.max(1, max - 1))}…`;
   return out;
 }
+
+/** «▲ 18%», «▼ 5%», «= как раньше»; null when there is nothing to compare with */
+export function trendText(pct: number | null): { text: string; kind: 'up' | 'down' | 'same' } | null {
+  if (pct == null) return null;
+  if (pct === 0) return { text: '=', kind: 'same' };
+  return pct > 0 ? { text: `▲ ${pct}%`, kind: 'up' } : { text: `▼ ${Math.abs(pct)}%`, kind: 'down' };
+}
+
+/** index of the busiest day (the first one on a tie); -1 when nobody played */
+export function busiestDay(values: number[]): number {
+  let at = -1;
+  let best = 0;
+  values.forEach((v, i) => { if (v > best) { best = v; at = i; } });
+  return at;
+}
+
+/** the rows of the picture: up to `max`; when there are more, the last row stands for «ещё N» */
+export function splitServers<T>(list: T[], max = 5): { shown: T[]; hidden: T[] } {
+  if (list.length <= max) return { shown: list, hidden: [] };
+  return { shown: list.slice(0, max - 1), hidden: list.slice(max - 1) };
+}
+
+/** width of the uptime bar in px: 0..full, a visible sliver for anything above zero */
+export function uptimeBar(uptime: number | null, full: number): number {
+  if (uptime == null) return 0;
+  const w = Math.round((Math.min(100, Math.max(0, uptime)) / 100) * full);
+  return uptime > 0 ? Math.max(3, w) : 0;
+}
