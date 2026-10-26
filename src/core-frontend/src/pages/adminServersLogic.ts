@@ -20,3 +20,32 @@ export function filterServers(list: Server[], filter: ServerFilter, query: strin
 export function countServers(list: Server[]): Record<ServerFilter, number> {
   return { all: list.length, online: list.filter((s) => s.online).length, problems: list.filter(isProblem).length };
 }
+
+/** the order of ids after moving `id` one step up/down among `shown` (the servers on screen); null when it cannot move */
+export function moveId(all: number[], shown: number[], id: number, dir: -1 | 1): number[] | null {
+  const i = shown.indexOf(id);
+  const j = i + dir;
+  if (i < 0 || j < 0 || j >= shown.length) return null;
+  const a = all.indexOf(id);
+  const b = all.indexOf(shown[j]!);
+  if (a < 0 || b < 0) return null;
+  const out = [...all];
+  [out[a], out[b]] = [out[b]!, out[a]!];
+  return out;
+}
+
+const FILTER_KEY = 'coregsm_admin_srv_filter';
+/** filter and search of the table survive leaving the page and coming back (per tab) */
+export function loadTableState(): { filter: ServerFilter; query: string } {
+  try {
+    const v = JSON.parse(sessionStorage.getItem(FILTER_KEY) ?? '{}') as { filter?: string; query?: string };
+    const filter: ServerFilter = v.filter === 'online' || v.filter === 'problems' ? v.filter : 'all';
+    return { filter, query: typeof v.query === 'string' ? v.query.slice(0, 100) : '' };
+  } catch { return { filter: 'all', query: '' }; }
+}
+export function saveTableState(filter: ServerFilter, query: string): void {
+  try {
+    if (filter === 'all' && !query) sessionStorage.removeItem(FILTER_KEY);
+    else sessionStorage.setItem(FILTER_KEY, JSON.stringify({ filter, query }));
+  } catch { /* not remembered */ }
+}
