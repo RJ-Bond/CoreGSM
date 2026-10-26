@@ -3,9 +3,10 @@
  * gets a small celebration), when the community usually plays, and the latest arrivals.
  */
 import NickPic from '../NickPic';
+import { t, useI18n, type TKey } from '../../i18n';
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../../api';
-import { AnimatedNumber, Burst, GameAvatar, ago, fmtDateTime, plural, usePoll, num } from '../../ui';
+import { AnimatedNumber, Burst, GameAvatar, ago, fmtDateTime, usePoll, num } from '../../ui';
 import '../../styles/community.css';
 
 export interface TopPlayer { name: string; hours: number; servers: number; online: boolean; prev: number | null }
@@ -22,8 +23,8 @@ export interface Community {
   servers: { id: number; name: string; game: string; online: boolean; players: number; maxPlayers: number }[];
 }
 
-export const DOW_SHORT = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
-const DOW_IN = ['по понедельникам', 'по вторникам', 'по средам', 'по четвергам', 'по пятницам', 'по субботам', 'по воскресеньям'];
+/** weekday names in the panel's language, Monday first */
+export const dowShort = (): string[] => Array.from({ length: 7 }, (_, i) => t(`cm.dow.${i}` as TKey));
 const RECORD_KEY = 'coregsm_record_seen';
 
 /** the community data with the time of the last answer and a way to ask again at once */
@@ -57,12 +58,12 @@ export function PlayerAvatar({ name, size = 30, online = false }: { name: string
 export function MiniHeat({ cells, big = false, now }: { cells: (number | null)[][]; big?: boolean; now?: { dow: number; hour: number } }) {
   const max = Math.max(1, ...cells.flat().map((v) => v ?? 0));
   return (
-    <div className={`cm-heat ${big ? 'is-big' : ''}`} role="img" aria-label="Когда играет сообщество: по дням недели и часам">
+    <div className={`cm-heat ${big ? 'is-big' : ''}`} role="img" aria-label={t('cm.heat.aria')}>
       {cells.map((row, d) => (
         <div key={d} className="contents">
-          <span className="cm-heat-d">{DOW_SHORT[d]}</span>
+          <span className="cm-heat-d">{dowShort()[d]}</span>
           {row.map((v, h) => (
-            <span key={h} className={`cm-heat-c ${now && now.dow === d && now.hour === h ? 'is-now' : ''}`} style={v == null ? undefined : { ['--a' as string]: (0.12 + 0.88 * (v / max)).toFixed(3) }} title={v == null ? undefined : `${DOW_SHORT[d]} ${String(h).padStart(2, '0')}:00 — в среднем ${num(v)}`} />
+            <span key={h} className={`cm-heat-c ${now && now.dow === d && now.hour === h ? 'is-now' : ''}`} style={v == null ? undefined : { ['--a' as string]: (0.12 + 0.88 * (v / max)).toFixed(3) }} title={v == null ? undefined : t('cm.heat.cell', { d: dowShort()[d], time: `${String(h).padStart(2, '0')}:00`, n: num(v) })} />
           ))}
         </div>
       ))}
@@ -76,13 +77,13 @@ export function MiniHeat({ cells, big = false, now }: { cells: (number | null)[]
 export function HeatLegend() {
   return (
     <p className="cm-heat-scale" aria-hidden>
-      меньше {[0.15, 0.4, 0.7, 1].map((a) => <i key={a} style={{ ['--a' as string]: a }} />)} больше
+      {t('cm.heat.less')} {[0.15, 0.4, 0.7, 1].map((a) => <i key={a} style={{ ['--a' as string]: a }} />)} {t('cm.heat.more')}
     </p>
   );
 }
 
 export function busiestText(b: Community['heatmap']['busiest']) {
-  return b ? `Больше всего игроков ${DOW_IN[b.dow]} около ${String(b.hour).padStart(2, '0')}:00` : 'Данных пока мало';
+  return b ? t('cm.busiest', { when: t(`cm.dowIn.${b.dow}` as TKey), time: `${String(b.hour).padStart(2, '0')}:00` }) : t('cm.busiest.none');
 }
 
 export function FeedItem({ f }: { f: Community['feed'][number] }) {
@@ -95,13 +96,13 @@ export function FeedItem({ f }: { f: Community['feed'][number] }) {
       <span className="min-w-0 flex-1">
         <span className="block truncate text-sm">
           <a href={`/player/${encodeURIComponent(f.name)}`} className="font-extrabold hover:text-link">{f.name}</a>
-          <span className="text-mute"> зашёл на </span>
+          <span className="text-mute">{t('cm.joined')}</span>
           <a href={`/servers/${f.serverId}`} className="font-bold hover:text-link">{f.serverName}</a>
         </span>
         <span className="flex items-center gap-2 text-xs font-bold text-mute">
           {ago(f.at)}
-          {f.online && <span className="cm-live">в игре</span>}
-          {f.newcomer && <span className="cm-new">новичок</span>}
+          {f.online && <span className="cm-live">{t('cm.live')}</span>}
+          {f.newcomer && <span className="cm-new">{t('cm.new')}</span>}
         </span>
       </span>
     </li>
@@ -109,6 +110,7 @@ export function FeedItem({ f }: { f: Community['feed'][number] }) {
 }
 
 export default function CommunityBento() {
+  useI18n();
   const c = useCommunity();
   const [celebrate, setCelebrate] = useState(false);
   const shown = useRef(false);
@@ -134,37 +136,37 @@ export default function CommunityBento() {
   const isRecord = !!rec && c.now.players > 0 && c.now.players >= rec.players;
   return (
     <div className="cm-bento fade-in">
-      <section className={`tile cm-now ${isRecord ? 'is-record' : ''}`} aria-label="Сейчас играют">
-        <div className="cm-k">Сейчас играют</div>
+      <section className={`tile cm-now ${isRecord ? 'is-record' : ''}`} aria-label={t('cm.b.now')}>
+        <div className="cm-k">{t('cm.b.now')}</div>
         <div className="relative inline-flex items-baseline gap-2">
           <AnimatedNumber value={c.now.players} className="cm-big" pulse />
-          <span className="font-extrabold text-mute">{plural(c.now.players, ['игрок', 'игрока', 'игроков'])}</span>
+          <span className="font-extrabold text-mute">{t('cm.word.players', { n: c.now.players })}</span>
           {celebrate && <Burst count={14} radius={46} />}
         </div>
         <div className="cm-meter" aria-hidden><span style={{ width: `${toRecord * 100}%` }} /></div>
         <p className="cm-sub">
-          {isRecord ? '🎉 Это рекорд за 30 дней!' : rec ? `Рекорд за 30 дней: ${rec.players} (${fmtDateTime(rec.at)})` : 'Рекорд появится, когда накопится история'}
+          {isRecord ? t('cm.rec.now') : rec ? t('cm.b.rec', { n: rec.players, when: fmtDateTime(rec.at) }) : t('cm.b.recNone')}
         </p>
-        <a href="/community" className="cm-more">Сообщество: кто и когда играет →</a>
+        <a href="/community" className="cm-more">{t('cm.b.more')}</a>
         <dl className="cm-mini">
-          <div><dt>Серверов в сети</dt><dd>{c.now.online} из {c.now.servers}</dd></div>
-          <div><dt>Игроков за неделю</dt><dd>{c.players.week}</dd></div>
-          <div><dt>Новых за неделю</dt><dd>{c.players.newWeek}</dd></div>
+          <div><dt>{t('cm.b.online')}</dt><dd>{t('cm.b.of', { a: c.now.online, b: c.now.servers })}</dd></div>
+          <div><dt>{t('cm.b.week')}</dt><dd>{c.players.week}</dd></div>
+          <div><dt>{t('cm.st.new')}</dt><dd>{c.players.newWeek}</dd></div>
         </dl>
       </section>
 
-      <section className="tile cm-when" aria-label="Когда играет сообщество">
-        <div className="cm-k">Когда играет сообщество</div>
+      <section className="tile cm-when" aria-label={t('cm.when')}>
+        <div className="cm-k">{t('cm.when')}</div>
         <MiniHeat cells={c.heatmap.cells} />
         <p className="cm-sub">{busiestText(c.heatmap.busiest)}</p>
       </section>
 
-      <section className="tile cm-feed" aria-label="Живая лента">
+      <section className="tile cm-feed" aria-label={t('cm.feed')}>
         <div className="flex items-center justify-between gap-2">
-          <div className="cm-k">Живая лента</div>
-          <a href="/community" className="text-xs font-extrabold text-link hover:underline">Сообщество →</a>
+          <div className="cm-k">{t('cm.feed')}</div>
+          <a href="/community" className="text-xs font-extrabold text-link hover:underline">{t('cm.b.comm')}</a>
         </div>
-        {c.feed.length ? <ul className="cm-feed-list">{c.feed.slice(0, 5).map((f) => <FeedItem key={`${f.name}-${f.at}`} f={f} />)}</ul> : <p className="cm-sub">Пока никто не заходил.</p>}
+        {c.feed.length ? <ul className="cm-feed-list">{c.feed.slice(0, 5).map((f) => <FeedItem key={`${f.name}-${f.at}`} f={f} />)}</ul> : <p className="cm-sub">{t('cm.b.noFeed')}</p>}
       </section>
     </div>
   );
