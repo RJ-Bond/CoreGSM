@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react';
 import { api, type Changelog, type UpdateHistoryItem, type UpdateInfo, type UpdateNotes, type UpdatePreflight } from '../../api';
 import { t, useI18n, type TKey } from '../../i18n';
-import { ChannelPicker } from '../../components/ChannelPicker';
+import { ChannelName, ChannelPicker } from '../../components/ChannelPicker';
 import { ErrorLine, fmtDateTime, Section, errText, toast } from '../../ui';
 import { cleanNote, groupCommits, isNewerRelease, preflightWarnings, stepStates, upcomingFlags, versionText, type PreflightWarning } from './updateLogic';
 
@@ -177,7 +177,7 @@ export function OptionsCard({ info, onChange }: { info: UpdateInfo; onChange: (i
         <div>
           <span className="label">{t('upd.o.chan')}</span>
           <div className="flex flex-wrap items-center gap-3">
-            <span className="font-black">{info.notifyChannel ? t('upd.o.chan.id', { id: info.notifyChannel }) : t('upd.o.chan.alerts')}</span>
+            <span className="font-black">{info.notifyChannel ? <ChannelName id={info.notifyChannel} /> : t('upd.o.chan.alerts')}</span>
             <button type="button" className="btn btn-soft btn-sm" onClick={() => setPicking((v) => !v)} aria-expanded={picking}>{t('upd.o.chan.pick')}</button>
             {info.notifyChannel && <button type="button" className="btn-link text-sm" onClick={() => void save({ notifyChannel: '' })}>{t('upd.o.chan.reset')}</button>}
           </div>

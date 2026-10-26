@@ -1,5 +1,38 @@
 import { useEffect, useState } from 'react';
 import { api, type DiscordGuild } from '../api';
+import { t } from '../i18n';
+
+// the list of the bot's servers and channels, asked once a minute at most and shared by every label on the page
+let listAt = 0;
+let listP: Promise<DiscordGuild[]> | null = null;
+function guildList(force = false): Promise<DiscordGuild[]> {
+  if (force || !listP || Date.now() - listAt > 60_000) {
+    listAt = Date.now();
+    listP = api<DiscordGuild[]>('/discord/channels').catch(() => { listP = null; return [] as DiscordGuild[]; });
+  }
+  return listP;
+}
+
+/** «# general · My server» for a channel the bot can see, null when it does not know the channel */
+export function channelLabelOf(guilds: DiscordGuild[], id: string, withGuild = true): string | null {
+  for (const g of guilds) {
+    const c = g.channels.find((x) => x.id === id);
+    if (c) return `# ${c.name}${withGuild && guilds.length > 1 ? ` · ${g.name}` : ''}`;
+  }
+  return null;
+}
+
+/** a Discord channel written by its name, not by its number (the number only when the bot does not know the channel) */
+export function ChannelName({ id, known }: { id: string; /** a name the panel already has (it wins over the list) */ known?: string | null }) {
+  const [label, setLabel] = useState<string | null>(known ? `# ${known}` : null);
+  useEffect(() => {
+    if (known) { setLabel(`# ${known}`); return; }
+    let alive = true;
+    void guildList().then((g) => { if (alive) setLabel(channelLabelOf(g, id)); });
+    return () => { alive = false; };
+  }, [id, known]);
+  return <>{label ?? t('ch.n', { id })}</>;
+}
 
 /** A warning under the select when the chosen channel lacks soft permissions (embeds/images). */
 export function MissingNote({ guild, channelId }: { guild?: DiscordGuild; channelId: string }) {
