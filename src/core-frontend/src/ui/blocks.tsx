@@ -148,17 +148,20 @@ export function PageHead({ title, subtitle, icon, hint, help, children }: { titl
   const helpId = useId();
   // a hint is read once: the cross hides it (remembered per page in this browser), the «i» button next to the actions brings it back
   const hintKey = `coregsm_hint_${title}`;
-  const [hidden, setHidden] = useState(() => { try { return localStorage.getItem(hintKey) === '1'; } catch { return false; } });
+  // a page's hint is shown on the first visit only; later visits start with it folded (the «i» button brings it back)
+  const seenKey = `coregsm_hintseen_${title}`;
+  const [hidden, setHidden] = useState(() => { try { return localStorage.getItem(hintKey) === '1' || localStorage.getItem(seenKey) === '1'; } catch { return false; } });
+  useEffect(() => { try { localStorage.setItem(seenKey, '1'); } catch { /* not remembered */ } }, [seenKey]);
   const setHint = (off: boolean) => { setHidden(off); try { if (off) localStorage.setItem(hintKey, '1'); else localStorage.removeItem(hintKey); } catch { /* not remembered */ } };
   const hasHint = !!(hint || help);
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-3.5">
-          {icon && <span className="grid h-12 w-12 shrink-0 place-items-center rounded-ui-lg bg-linear-to-br from-brand to-brand-2 text-white shadow-pop">{icon}</span>}
+          {icon && <span className="grid h-11 w-11 shrink-0 place-items-center rounded-ui-lg bg-linear-to-br from-brand to-brand-2 text-white shadow-pop sm:h-12 sm:w-12">{icon}</span>}
           <div className="min-w-0">
-            <h1 className="text-2xl font-extrabold tracking-tight sm:text-[30px]">{title}</h1>
-            {subtitle && <p className="mt-0.5 font-semibold text-mute">{subtitle}</p>}
+            <h1 className="text-xl font-extrabold tracking-tight sm:text-[30px]">{title}</h1>
+            {subtitle && <p className="mt-0.5 hidden font-semibold text-mute sm:block">{subtitle}</p>}
           </div>
         </div>
         {(children || (hasHint && hidden)) && (
