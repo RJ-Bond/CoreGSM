@@ -4,7 +4,7 @@ import { confirmDialog } from '../confirm';
 import { api, ApiError, type NewsItem, type NewsSettings, type PublicNews } from '../api';
 import { useAuth } from '../auth';
 import { EmbedView, type DiscordEmbed } from './EmbedPreview';
-import { ChannelPicker } from '../components/ChannelPicker';
+import { ChannelName, ChannelPicker } from '../components/ChannelPicker';
 import { NewsArt } from '../components/Illustrations';
 import { AdminPage, Empty, ErrorLine, GoLink, LoadError, IconCopyPlus, IconNews, IconTrash, PageHead, Strip, fmtDateTime, toast, undoable, usePoll, navigate, errText } from '../ui';
 import NewsEditor, { TEMPLATES } from './NewsEditor';
@@ -182,7 +182,7 @@ function NewsList() {
         <div className="min-w-0">
           <div className="text-sm font-extrabold text-mute">Канал новостей по умолчанию</div>
           <div className="font-black">
-            {settings?.channelId ? (settings.channelName ? `# ${settings.channelName}${settings.guildName ? ` · ${settings.guildName}` : ''}` : `Канал ${settings.channelId}`) : 'не выбран'}
+            {settings?.channelId ? (settings.channelName ? `# ${settings.channelName}${settings.guildName ? ` · ${settings.guildName}` : ''}`   : <ChannelName id={settings.channelId} />) : 'не выбран'}
           </div>
         </div>
         <button className="btn btn-soft btn-sm" onClick={() => setChanging((v) => !v)} aria-expanded={changing}>{settings?.channelId ? 'Изменить' : 'Выбрать канал'}</button>
@@ -260,7 +260,7 @@ function NewsList() {
                   {n.pinned && <span className="pill pill-ok">ЗАКРЕПЛЕНО</span>}
                   {n.repeat && n.repeat !== 'none' && <span className="pill pill-mute">⟳ {n.repeat === 'daily' ? 'КАЖДЫЙ ДЕНЬ' : n.repeat === 'weekly' ? 'КАЖДУЮ НЕДЕЛЮ' : 'КАЖДЫЙ МЕСЯЦ'}</span>}
                 </div>
-                <span className="truncate text-sm font-bold text-mute" title={n.channelId}>{n.channelName ? `# ${n.channelName}` : `Канал ${n.channelId}`}</span>
+                <span className="truncate text-sm font-bold text-mute" title={n.channelId}>{<ChannelName id={n.channelId} known={n.channelName} />}</span>
               </div>
               <div className="flex items-start gap-3">
                 {newsImage(n.payload) && <img src={newsImage(n.payload) ?? ''} alt="" loading="lazy" className="nl-thumb" onError={(e) => { e.currentTarget.style.display = 'none'; }} />}
