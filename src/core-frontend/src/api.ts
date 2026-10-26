@@ -241,7 +241,29 @@ export interface UpdateInfo {
   canRollback: boolean;
   pending: boolean;
   job: { state: 'running' | 'done' | 'error'; message: string; time: number; /** 0..100, absent on older managers */ progress?: number } | null;
+  /** readable versions («1.0.0.7»); null for a build that has no name yet (older installs show the short hash) */
+  currentLabel?: string | null;
+  latestLabel?: string | null;
+  /** what the host updater is doing now (derived from the percent); absent on an older backend */
+  stage?: UpdateStage | null;
+  /** when the newest version.txt was committed, and when the panel installed the running build (ms) */
+  latestAt?: number | null;
+  installedAt?: number | null;
+  channel?: 'release' | 'main';
+  /** the server pins the channel in its environment */
+  channelLocked?: boolean;
+  /** the offered version was skipped by an administrator */
+  skipped?: boolean;
+  notify?: boolean;
 }
+
+export type UpdateStage = 'download' | 'snapshot' | 'install' | 'health' | 'rollback';
+
+export interface UpdateHistoryItem { id: number; time: number; state: 'done' | 'error'; kind: 'update' | 'rollback'; message: string; version: string | null; label: string | null }
+export interface UpdatePreflight { onlineServers: number; players: number; lastBackupAt: number | null }
+export type NoteFlag = 'breaking' | 'migration' | 'env';
+export interface UpdateNotesRelease { version: string | null; date: string | null; groups: { title: string; items: { text: string; flags: NoteFlag[] }[] }[] }
+export interface UpdateNotes { releases: UpdateNotesRelease[]; error: string | null }
 
 export interface ChangelogItem {
   sha: string;
@@ -249,6 +271,9 @@ export interface ChangelogItem {
   /** commit time, ms (older servers may send an ISO string) */
   date: number | string | null;
   url: string;
+  /** from the commit prefix; merges are not worth showing */
+  kind?: 'feat' | 'fix' | 'other' | 'merge';
+  flags?: NoteFlag[];
 }
 
 export interface Changelog {
