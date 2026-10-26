@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="8c66ac5debf1"
+COREGSM_BUILD="d54e2b8b1377"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.0.0.11"
+COREGSM_VERSION="1.0.0.13"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -5706,6 +5706,33 @@ export async function renderGameIcon(game: string): Promise<Buffer> {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/chartLogic.ts" << '__COREGSM_EOF__'
+/** The 24-hour chart under a server's Discord message: the pure part. */
+
+/** the colour of one square of the players bar: the game's colour, amber near the top, red at the very top */
+export function barSquare(index: number, total: number, base: string): string {
+  // the last square is red, the one before amber: a nearly full server reads as «hot» at a glance
+  if (index === total - 1) return '🟥';
+  if (index === total - 2) return '🟧';
+  return base;
+}
+
+/** «🟩🟩🟩🟧⬛⬛»: filled squares coloured by position; a server with players always shows at least one square */
+export function playersBar(players: number, max: number, base: string, total = 6): string {
+  if (!max) return '';
+  const ratio = Math.min(players, max) / max;
+  let n = Math.round(ratio * total);
+  if (players > 0 && n === 0) n = 1;
+  return Array.from({ length: total }, (_, i) => (i < n ? barSquare(i, total, base) : '⬛')).join('');
+}
+
+/** chart points: empty buckets count as 0, the scale is at least 1 player */
+export function chartScale(players: (number | null)[]): { values: number[]; max: number } {
+  const values = players.map((v) => v ?? 0);
+  return { values, max: Math.max(1, ...values) };
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/config.ts" << '__COREGSM_EOF__'
 /** Settings from the environment, checked at start: the process stops when a required secret is missing. */
 import crypto from 'node:crypto';
@@ -5753,7 +5780,7 @@ export const router = express.Router();
 /** settings that travel with the file: never a secret, never a counter or a timestamp of this panel */
 export const PORTABLE_SETTINGS = [
   'alerts_enabled', 'alerts_channel', 'alerts_after_min', 'alerts_mention', 'alerts_smart_low', 'alerts_smart_ping', 'alerts_smart_full',
-  'digest_enabled', 'digest_channel', 'digest_weekday', 'digest_hour',
+  'digest_enabled', 'digest_channel', 'digest_weekday', 'digest_hour', 'digest_theme',
   'brand_name', 'brand_color', 'brand_preset', 'default_theme', 'game_theme',
   'news_channel_id', 'news_test_channel_id', 'embed_players_shown',
   'poll_concurrency', 'poll_fail_threshold', 'timezone',
@@ -6712,7 +6739,7 @@ import { JWT_SECRET } from './config.js';
 import { db, EFFECTIVE_NAME, getSetting, setSetting } from './db.js';
 import { SERVER_ORDER } from './serverData.js';
 import { incidentsSince } from './incidents.js';
-import { changePct, dailyPeaks, sparkPoints, stripCommonPrefix, wrapName } from './digestLogic.js';
+import { busiestDay, changePct, dailyPeaks, sparkPoints, splitServers, stripCommonPrefix, trendText, uptimeBar, wrapName } from './digestLogic.js';
 import { localParts } from './localTime.js';
 import { brand, publicBase } from './site.js';
 import { param } from './http.js';
@@ -6728,6 +6755,7 @@ export const digestSettings = () => ({
   weekday: Math.min(6, Math.max(0, Number(getSetting('digest_weekday') ?? 0) || 0)), // 0 = Monday
   hour: Math.min(23, Math.max(0, Number(getSetting('digest_hour') ?? 10) || 0)),
   lastSent: Number(getSetting('digest_last_sent')) || 0,
+  theme: (getSetting('digest_theme') === 'light' ? 'light' : 'dark') as DigestTheme,
 });
 
 const tz = () => getSetting('timezone') || process.env.TZ || 'Europe/Moscow';
@@ -6823,10 +6851,18 @@ const deltaText = (d: number | null) => (d == null ? '' : d === 0 ? ' (как н
 const dateRu = (t: number) => new Date(t).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', timeZone: tz() });
 
 // ---------- the picture ----------
+
+export type DigestTheme = 'dark' | 'light';
+const PALETTES: Record<DigestTheme, { bgA: string; bgB: string; ink: string; ink2: string; ink3: string; ink4: string; card: string; ok: string; bad: string; warn: string; glow: string }> = {
+  dark: { bgA: '#15122b', bgB: '#0b0a16', ink: '#ffffff', ink2: 'rgba(255,255,255,.75)', ink3: 'rgba(255,255,255,.6)', ink4: 'rgba(255,255,255,.45)', card: 'rgba(255,255,255,.07)', ok: '#7ee2a8', bad: '#ff8a8a', warn: '#ffd27a', glow: '88' },
+  light: { bgA: '#f7f5ff', bgB: '#e6e3f6', ink: '#17142b', ink2: 'rgba(23,20,43,.78)', ink3: 'rgba(23,20,43,.62)', ink4: 'rgba(23,20,43,.5)', card: 'rgba(23,20,43,.06)', ok: '#0f7a52', bad: '#c0392b', warn: '#946200', glow: '33' },
+};
+
 const SANS = '"DejaVu Sans", "Liberation Sans", sans-serif';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
-export async function renderDigest(d: Digest): Promise<Buffer> {
+export async function renderDigest(d: Digest, theme: DigestTheme = digestSettings().theme): Promise<Buffer> {
+  const P = PALETTES[theme];
   const W = 1200;
   const H = 675;
   const canvas = new Canvas(W, H);
@@ -6836,43 +6872,49 @@ export async function renderDigest(d: Digest): Promise<Buffer> {
 
   // background: deep night with the brand colour glowing from the top left
   const bg = ctx.createLinearGradient(0, 0, W, H);
-  bg.addColorStop(0, '#15122b');
-  bg.addColorStop(1, '#0b0a16');
+  bg.addColorStop(0, P.bgA);
+  bg.addColorStop(1, P.bgB);
   ctx.fillStyle = bg;
   ctx.fillRect(0, 0, W, H);
   const glow = ctx.createRadialGradient(160, 40, 10, 160, 40, 700);
-  glow.addColorStop(0, `${accent}88`);
+  glow.addColorStop(0, `${accent}${P.glow}`);
   glow.addColorStop(1, `${accent}00`);
   ctx.fillStyle = glow;
   ctx.fillRect(0, 0, W, H);
 
-  ctx.fillStyle = '#ffffff';
+  ctx.fillStyle = P.ink;
   ctx.font = `bold 44px ${SANS}`;
   ctx.fillText(`Неделя на ${b.name}`, 56, 92);
-  ctx.fillStyle = 'rgba(255,255,255,.7)';
+  ctx.fillStyle = P.ink2;
   ctx.font = `600 22px ${SANS}`;
   ctx.fillText(`${dateRu(d.from)} – ${dateRu(d.to)}`, 56, 128);
 
   // four numbers
-  const stats: [string, string, string][] = [
-    [String(d.totals.players), 'игроков', deltaText(delta(d.totals.players, d.totals.prevPlayers)).replace(/[()]/g, '').trim()],
-    [String(d.totals.peak), 'пик онлайна', d.totals.peakServer ?? ''],
-    [d.totals.hours.toLocaleString('ru-RU'), 'часов в игре', deltaText(delta(d.totals.hours, d.totals.prevHours)).replace(/[()]/g, '').trim()],
-    [d.totals.uptime == null ? '–' : `${String(d.totals.uptime).replace('.', ',')}%`, 'доступность', d.totals.incidents ? `${d.totals.incidents} сбоев` : 'без сбоев'],
+  type Tone = 'up' | 'down' | 'same';
+  const arrow = (pct: number | null, suffix: string): [string, Tone] => {
+    const tr = trendText(pct);
+    return tr ? [`${tr.text} ${suffix}`.trim(), tr.kind] : ['', 'same'];
+  };
+  const peakWhen = d.totals.peakAt ? new Date(d.totals.peakAt).toLocaleString('ru-RU', { weekday: 'short', hour: '2-digit', minute: '2-digit', timeZone: tz() }).replace(',', '') : '';
+  const stats: [string, string, string, Tone][] = [
+    [String(d.totals.players), 'игроков', ...arrow(delta(d.totals.players, d.totals.prevPlayers), 'к прошлой неделе')],
+    [String(d.totals.peak), 'пик онлайна', [peakWhen, d.totals.peakServer ?? ''].filter(Boolean).join(' · '), 'same'],
+    [d.totals.hours.toLocaleString('ru-RU'), 'часов в игре', ...arrow(delta(d.totals.hours, d.totals.prevHours), 'к прошлой неделе')],
+    [d.totals.uptime == null ? '–' : `${String(d.totals.uptime).replace('.', ',')}%`, 'доступность', d.totals.incidents ? `${d.totals.incidents} сбоев` : 'без сбоев', d.totals.incidents ? 'down' : 'up'],
   ];
-  stats.forEach(([v, k, hint], i) => {
+  stats.forEach(([v, k, hint, tone], i) => {
     const x = 56 + i * 276;
-    ctx.fillStyle = 'rgba(255,255,255,.07)';
+    ctx.fillStyle = P.card;
     ctx.beginPath();
     ctx.roundRect(x, 160, 256, 140, 22);
     ctx.fill();
-    ctx.fillStyle = '#ffffff';
+    ctx.fillStyle = P.ink;
     ctx.font = `bold 52px ${SANS}`;
     ctx.fillText(v, x + 22, 228);
-    ctx.fillStyle = 'rgba(255,255,255,.75)';
+    ctx.fillStyle = P.ink2;
     ctx.font = `bold 20px ${SANS}`;
     ctx.fillText(k, x + 22, 260);
-    ctx.fillStyle = hint.startsWith('−') ? '#ff8a8a' : hint.startsWith('+') ? '#7ee2a8' : 'rgba(255,255,255,.55)';
+    ctx.fillStyle = tone === 'down' ? P.bad : tone === 'up' ? P.ok : P.ink3;
     ctx.font = `600 15px ${SANS}`;
     let short = hint;
     while (short.length > 3 && ctx.measureText(short).width > 220) short = short.slice(0, -1);
@@ -6885,10 +6927,11 @@ export async function renderDigest(d: Digest): Promise<Buffer> {
   const by = 340;
   const bw = 520;
   const bh = 270;
-  ctx.fillStyle = 'rgba(255,255,255,.7)';
+  ctx.fillStyle = P.ink2;
   ctx.font = `bold 18px ${SANS}`;
   ctx.fillText('Игроков в день', bx, by);
   const slot = bw / 7;
+  const top = busiestDay(d.days.map((x) => x.players));
   d.days.forEach((x, i) => {
     const h = Math.max(4, ((bh - 70) * x.players) / max);
     const gx = bx + i * slot + 10;
@@ -6897,14 +6940,17 @@ export async function renderDigest(d: Digest): Promise<Buffer> {
     g.addColorStop(0, accent);
     g.addColorStop(1, `${accent}66`);
     ctx.fillStyle = g;
+    // the busiest day keeps the full colour, the rest are toned down
+    ctx.globalAlpha = top < 0 || i === top ? 1 : 0.55;
     ctx.beginPath();
     ctx.roundRect(gx, gy, slot - 20, h, 10);
     ctx.fill();
-    ctx.fillStyle = '#ffffff';
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = P.ink;
     ctx.font = `bold 17px ${SANS}`;
     ctx.textAlign = 'center';
     ctx.fillText(String(x.players), gx + (slot - 20) / 2, gy - 8);
-    ctx.fillStyle = 'rgba(255,255,255,.6)';
+    ctx.fillStyle = P.ink3;
     ctx.font = `600 15px ${SANS}`;
     const [, m, day] = x.day.split('-');
     ctx.fillText(`${Number(day)}.${m}`, gx + (slot - 20) / 2, by + bh - 12);
@@ -6913,23 +6959,23 @@ export async function renderDigest(d: Digest): Promise<Buffer> {
 
   // servers
   const sx = 640;
-  ctx.fillStyle = 'rgba(255,255,255,.7)';
+  ctx.fillStyle = P.ink2;
   ctx.font = `bold 18px ${SANS}`;
   ctx.fillText('Серверы', sx, by);
   const headW = ctx.measureText('Серверы').width;
-  ctx.fillStyle = 'rgba(255,255,255,.45)';
+  ctx.fillStyle = P.ink4;
   ctx.font = `600 14px ${SANS}`;
   ctx.fillText('линия: пик онлайна по дням · %: к прошлой неделе', sx + headW + 16, by);
-  const shown = d.servers.slice(0, 5);
+  const { shown, hidden } = splitServers(d.servers, 5);
   // servers of one project start with the same words: show the part that tells them apart
   const names = stripCommonPrefix(shown.map((s) => s.name));
   shown.forEach((s, i) => {
     const y = by + 22 + i * 50;
-    ctx.fillStyle = 'rgba(255,255,255,.06)';
+    ctx.fillStyle = P.card;
     ctx.beginPath();
-    ctx.roundRect(sx, y, 504, 42, 12);
+    ctx.roundRect(sx, y, 504, 46, 12);
     ctx.fill();
-    ctx.fillStyle = '#ffffff';
+    ctx.fillStyle = P.ink;
     // up to two lines; a line that is still too wide is cut by pixels
     ctx.font = `bold 16px ${SANS}`;
     const lines = wrapName(names[i] ?? s.name, 17, 2).map((ln) => {
@@ -6937,7 +6983,7 @@ export async function renderDigest(d: Digest): Promise<Buffer> {
       while (l.length > 3 && ctx.measureText(l).width > 176) l = `${l.slice(0, -2)}…`;
       return l;
     });
-    lines.forEach((ln, k) => ctx.fillText(ln, sx + 14, lines.length === 1 ? y + 27 : y + 19 + k * 18));
+    lines.forEach((ln, k) => ctx.fillText(ln, sx + 14, lines.length === 1 ? y + 27 : y + 19 + k * 16));
     // the week in one line: the highest online of each day
     const pts = sparkPoints(s.daily, 70, 20);
     const px = sx + 200;
@@ -6950,26 +6996,52 @@ export async function renderDigest(d: Digest): Promise<Buffer> {
     ctx.stroke();
     // players, and how that compares with the week before
     ctx.font = `600 16px ${SANS}`;
-    ctx.fillStyle = 'rgba(255,255,255,.75)';
+    ctx.fillStyle = P.ink2;
     ctx.fillText(`${s.players} игр.`, sx + 290, y + 20);
-    const ch = changePct(s.players, s.prevPlayers);
-    if (ch != null) {
+    const tr = trendText(changePct(s.players, s.prevPlayers));
+    if (tr) {
       ctx.font = `600 13px ${SANS}`;
-      ctx.fillStyle = ch < 0 ? '#ff8a8a' : ch > 0 ? '#7ee2a8' : 'rgba(255,255,255,.55)';
-      ctx.fillText(ch === 0 ? '=' : `${ch > 0 ? '+' : '−'}${Math.abs(ch)}%`, sx + 290, y + 36);
+      ctx.fillStyle = tr.kind === 'down' ? P.bad : tr.kind === 'up' ? P.ok : P.ink3;
+      ctx.fillText(tr.text, sx + 290, y + 36);
     }
     ctx.font = `600 16px ${SANS}`;
     const ok = s.incidents === 0;
-    ctx.fillStyle = ok ? '#7ee2a8' : s.downMinutes >= 60 ? '#ff8a8a' : '#ffd27a';
+    ctx.fillStyle = ok ? P.ok : s.downMinutes >= 60 ? P.bad : P.warn;
     ctx.fillText(s.uptime == null ? '–' : `${String(s.uptime).replace('.', ',')}%`, sx + 410, y + 28);
+    // the uptime as a thin bar along the bottom edge of the row
+    ctx.fillStyle = P.card;
+    ctx.beginPath();
+    ctx.roundRect(sx + 14, y + 40, 476, 3, 1.5);
+    ctx.fill();
+    const bar = uptimeBar(s.uptime, 476);
+    if (bar > 0) {
+      ctx.fillStyle = ok ? P.ok : s.downMinutes >= 60 ? P.bad : P.warn;
+      ctx.beginPath();
+      ctx.roundRect(sx + 14, y + 40, bar, 3, 1.5);
+      ctx.fill();
+    }
   });
+  // too many servers for the picture: one row says how many more there are
+  if (hidden.length) {
+    const y = by + 22 + shown.length * 50;
+    ctx.fillStyle = P.card;
+    ctx.beginPath();
+    ctx.roundRect(sx, y, 504, 46, 12);
+    ctx.fill();
+    ctx.fillStyle = P.ink2;
+    ctx.font = `bold 16px ${SANS}`;
+    ctx.fillText(`ещё ${hidden.length} ${hidden.length === 1 ? 'сервер' : hidden.length < 5 ? 'сервера' : 'серверов'}`, sx + 14, y + 28);
+    ctx.font = `600 16px ${SANS}`;
+    ctx.fillStyle = P.ink3;
+    ctx.fillText(`${hidden.reduce((n, x) => n + x.players, 0)} игр.`, sx + 290, y + 28);
+  }
   if (d.top.length) {
-    ctx.fillStyle = 'rgba(255,255,255,.6)';
+    ctx.fillStyle = P.ink3;
     ctx.font = `600 16px ${SANS}`;
     const line = `Больше всех играли: ${d.top.slice(0, 3).map((p) => `${p.name} (${Math.round(p.hours)} ч)`).join(', ')}`;
     let t = line;
     while (t.length > 10 && ctx.measureText(t).width > 504) t = t.slice(0, -1);
-    ctx.fillText(t === line ? t : `${t}…`, sx, by + 22 + Math.min(5, d.servers.length) * 50 + 22);
+    ctx.fillText(t === line ? t : `${t}…`, sx, by + 22 + (shown.length + (hidden.length ? 1 : 0)) * 50 + 22);
   }
   return canvas.toBuffer('png');
 }
@@ -7044,6 +7116,7 @@ export function registerDigest({ app, admin }: { app: Express; admin: RequestHan
         channelId: z.string().regex(/^(\d{15,25})?$/).optional(),
         weekday: z.number().int().min(0).max(6).optional(),
         hour: z.number().int().min(0).max(23).optional(),
+        theme: z.enum(['dark', 'light']).optional(),
       })
       .safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Проверьте поля' });
@@ -7054,6 +7127,7 @@ export function registerDigest({ app, admin }: { app: Express; admin: RequestHan
     if (b.data.channelId !== undefined) setSetting('digest_channel', b.data.channelId);
     if (b.data.weekday !== undefined) setSetting('digest_weekday', String(b.data.weekday));
     if (b.data.hour !== undefined) setSetting('digest_hour', String(b.data.hour));
+    if (b.data.theme !== undefined) setSetting('digest_theme', b.data.theme);
     res.json(payload());
   });
 
@@ -7140,6 +7214,34 @@ export function wrapName(name: string, max: number, lines = 2): string[] {
   }
   if (rest) out[out.length - 1] = `${out[out.length - 1]!.slice(0, Math.max(1, max - 1))}…`;
   return out;
+}
+
+/** «▲ 18%», «▼ 5%», «= как раньше»; null when there is nothing to compare with */
+export function trendText(pct: number | null): { text: string; kind: 'up' | 'down' | 'same' } | null {
+  if (pct == null) return null;
+  if (pct === 0) return { text: '=', kind: 'same' };
+  return pct > 0 ? { text: `▲ ${pct}%`, kind: 'up' } : { text: `▼ ${Math.abs(pct)}%`, kind: 'down' };
+}
+
+/** index of the busiest day (the first one on a tie); -1 when nobody played */
+export function busiestDay(values: number[]): number {
+  let at = -1;
+  let best = 0;
+  values.forEach((v, i) => { if (v > best) { best = v; at = i; } });
+  return at;
+}
+
+/** the rows of the picture: up to `max`; when there are more, the last row stands for «ещё N» */
+export function splitServers<T>(list: T[], max = 5): { shown: T[]; hidden: T[] } {
+  if (list.length <= max) return { shown: list, hidden: [] };
+  return { shown: list.slice(0, max - 1), hidden: list.slice(max - 1) };
+}
+
+/** width of the uptime bar in px: 0..full, a visible sliver for anything above zero */
+export function uptimeBar(uptime: number | null, full: number): number {
+  if (uptime == null) return 0;
+  const w = Math.round((Math.min(100, Math.max(0, uptime)) / 100) * full);
+  return uptime > 0 ? Math.max(3, w) : 0;
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
@@ -7396,6 +7498,7 @@ __COREGSM_EOF__
  *
  * Layout (three columns): status · address · country / game · map · players / player list.
  */
+import { playersBar } from './chartLogic.js';
 import { gameLabel, gameProfile, gameShowsMap } from './games.js';
 
 export interface EmbedServer {
@@ -7425,6 +7528,7 @@ export interface DiscordEmbed {
   fields?: { name: string; value: string; inline?: boolean }[];
   footer?: { text: string; icon_url?: string };
   thumbnail?: { url: string };
+  image?: { url: string };
   timestamp?: string;
 }
 
@@ -7437,6 +7541,8 @@ export interface EmbedExtra {
   lastOnlineAt?: number | null;
   /** public URL of the game icon (needs a public domain; omitted otherwise) */
   thumbUrl?: string | null;
+  /** the 24-hour online chart shown under the embed (a public signed PNG) */
+  chartUrl?: string | null;
   /** public base URL (https://domain): used for the footer logo */
   baseUrl?: string | null;
   /** panel version («1.0.0.7») or, on an install that has no name yet, the build id; shown in the footer */
@@ -7532,15 +7638,8 @@ export function buildEmbed(s: EmbedServer, uptimePct: number | null, intervalSec
       ? { name: '🔖 Версия', value: cut(realVersion, 100), inline: true }
       : null;
 
-  // players with a fill bar of 6 coloured squares: the colour of the game, amber from 75 %, red from 90 %
-  const bar = (() => {
-    if (!s.online || !s.maxPlayers) return '';
-    const ratio = Math.min(s.players, s.maxPlayers) / s.maxPlayers;
-    let n = Math.round(ratio * 6);
-    if (s.players > 0 && n === 0) n = 1;
-    const fill = ratio >= 0.9 ? '🟥' : ratio >= 0.75 ? '🟧' : s.game === 'vrising' ? '🟪' : s.game === 'icarus' ? '🟨' : '🟩';
-    return '\n' + fill.repeat(n) + '⬛'.repeat(6 - n);
-  })();
+  // players with a fill bar of 6 squares: the colour of the game, the last two squares turn amber and red as it fills up
+  const bar = s.online && s.maxPlayers ? '\n' + playersBar(s.players, s.maxPlayers, s.game === 'vrising' ? '🟪' : s.game === 'icarus' ? '🟨' : '🟩') : '';
   const uptime = uptimePct == null ? '—' : `${Math.round(uptimePct * 10) / 10}%`;
 
   const fields: NonNullable<DiscordEmbed['fields']> = [
@@ -7588,6 +7687,7 @@ ${tail}` : tail;
     description: lines.length ? lines.join('\n') : undefined,
     color: !s.online ? COLOR.offline : lag ? COLOR.lag : (accentOf(s.game) ?? COLOR.online),
     thumbnail,
+    ...(extra.chartUrl ? { image: { url: extra.chartUrl } } : {}),
     fields,
     author,
     timestamp,
@@ -9070,6 +9170,7 @@ import { registerDeliveries } from './deliveries.js';
 import { registerDiscordRegistration } from './discordRegister.js';
 import { errorCodes } from './errors.js';
 import { registerDigest, startDigestTimer } from './digest.js';
+import { registerServerChart } from './serverChart.js';
 import { registerGames } from './games.js';
 import { startPoller, stopPoller } from './gsm.js';
 import { registerHealth } from './health.js';
@@ -9207,6 +9308,7 @@ registerNews({
 });
 registerAlerts({ app, admin, internal, channelInfo });
 registerDigest({ app, admin });
+registerServerChart(app);
 registerSecurity({
   app,
   admin,
@@ -18203,6 +18305,107 @@ export function registerSecurity(d: SecurityDeps): void {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/serverChart.ts" << '__COREGSM_EOF__'
+/** The small 24-hour online chart under a server's Discord message: a signed public PNG. */
+import crypto from 'node:crypto';
+import type { Express } from 'express';
+import skia from 'skia-canvas';
+import { JWT_SECRET } from './config.js';
+import { chartScale } from './chartLogic.js';
+import { db } from './db.js';
+import { gameProfile } from './games.js';
+import { param } from './http.js';
+
+const { Canvas } = skia;
+const POINTS = 48;
+const SANS = '"DejaVu Sans", "Liberation Sans", sans-serif';
+
+export const chartSign = (id: number) => crypto.createHmac('sha256', JWT_SECRET).update(`chart:${id}`).digest('hex').slice(0, 20);
+
+/** the busiest moment of each half hour of the last 24 h, and which half hours had the server down */
+export function chartSeries(serverId: number, now = Date.now()): { players: (number | null)[]; down: boolean[] } {
+  const since = now - 24 * 3600_000;
+  const bucket = (24 * 3600_000) / POINTS;
+  const rows = db
+    .prepare(`SELECT MIN(CAST((ts - ?) / ? AS INTEGER), ${POINTS - 1}) AS b, MAX(players) AS p, MIN(online) AS o FROM history WHERE server_id = ? AND ts > ? GROUP BY b`)
+    .all(since, bucket, serverId, since) as { b: number; p: number; o: number }[];
+  const players: (number | null)[] = Array(POINTS).fill(null);
+  const down: boolean[] = Array(POINTS).fill(false);
+  for (const r of rows) {
+    players[r.b] = r.p;
+    if (!r.o) down[r.b] = true;
+  }
+  return { players, down };
+}
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+export async function renderChart(series: { players: (number | null)[]; down: boolean[] }, color: string): Promise<Buffer> {
+  const W = 720;
+  const H = 160;
+  const canvas = new Canvas(W, H);
+  const ctx: any = canvas.getContext('2d');
+  ctx.fillStyle = '#2b2d31';
+  ctx.beginPath();
+  ctx.roundRect(0, 0, W, H, 14);
+  ctx.fill();
+  const { values, max } = chartScale(series.players);
+  const left = 16;
+  const right = W - 16;
+  const top = 34;
+  const bottom = H - 30;
+  const x = (i: number) => left + ((right - left) * i) / (POINTS - 1);
+  const y = (v: number) => bottom - ((bottom - top) * v) / max;
+  // outages: a red band behind the half hours the server did not answer
+  ctx.fillStyle = 'rgba(242,63,66,.25)';
+  series.down.forEach((d, i) => { if (d) ctx.fillRect(x(i) - (right - left) / POINTS / 2, top - 6, (right - left) / POINTS, bottom - top + 12); });
+  // the area under the line
+  const area = ctx.createLinearGradient(0, top, 0, bottom);
+  area.addColorStop(0, `${color}88`);
+  area.addColorStop(1, `${color}08`);
+  ctx.fillStyle = area;
+  ctx.beginPath();
+  ctx.moveTo(x(0), bottom);
+  values.forEach((v, i) => ctx.lineTo(x(i), y(v)));
+  ctx.lineTo(x(POINTS - 1), bottom);
+  ctx.closePath();
+  ctx.fill();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 3;
+  ctx.lineJoin = 'round';
+  ctx.beginPath();
+  values.forEach((v, i) => (i ? ctx.lineTo(x(i), y(v)) : ctx.moveTo(x(i), y(v))));
+  ctx.stroke();
+  ctx.fillStyle = 'rgba(255,255,255,.75)';
+  ctx.font = `600 15px ${SANS}`;
+  ctx.fillText('Онлайн за 24 часа', left, 22);
+  ctx.textAlign = 'right';
+  ctx.fillText(`пик ${Math.max(...values)}`, right, 22);
+  ctx.textAlign = 'left';
+  ctx.fillStyle = 'rgba(255,255,255,.5)';
+  ctx.font = `600 13px ${SANS}`;
+  ctx.fillText('24 ч назад', left, H - 10);
+  ctx.textAlign = 'right';
+  ctx.fillText('сейчас', right, H - 10);
+  return canvas.toBuffer('png');
+}
+
+export function registerServerChart(app: Express): void {
+  app.get('/api/server-chart/:id-:sig.png', param('id'), param('sig', /^[0-9a-f]{20}$/), async (req, res, next) => {
+    const id = Number(req.params.id);
+    if (req.params.sig !== chartSign(id)) return res.status(404).json({ error: 'Не найдено' });
+    const row = db.prepare('SELECT game FROM servers WHERE id = ?').get(id) as { game: string } | undefined;
+    if (!row) return res.status(404).json({ error: 'Не найдено' });
+    try {
+      const accent = gameProfile(row.game)?.accent;
+      const color = accent == null ? '#5865f2' : `#${accent.toString(16).padStart(6, '0')}`;
+      res.set({ 'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=300' }).send(await renderChart(chartSeries(id), color));
+    } catch (e) {
+      next(e);
+    }
+  });
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/serverData.ts" << '__COREGSM_EOF__'
 /** Servers as the API returns them, and the Discord embed built from a server and its history. */
 import { channelInfo } from './botState.js';
@@ -18210,6 +18413,7 @@ import { APP_VERSION, APP_VERSION_NAME } from './config.js';
 import { coverUrl } from './covers.js';
 import { type BindingRow, db, getSetting, type ServerRow, type StatusRow } from './db.js';
 import { buildEmbed } from './embed.js';
+import { chartSign } from './serverChart.js';
 import { countryLabel, countryOf } from './geo.js';
 import { maintenanceFor } from './maintenance.js';
 import { brand, logoFile, publicBase } from './site.js';
@@ -18332,7 +18536,7 @@ export function embedFor(serverId: number, intervalSec: number) {
     .get(serverId, Date.now() - 24 * 3600 * 1000) as { u: number | null };
   const last = db.prepare('SELECT MAX(ts) AS t FROM history WHERE server_id = ? AND online = 1').get(serverId) as { t: number | null };
   const base = publicBase();
-  return buildEmbed(server, up.u, intervalSec, { serverId, playersShown: playersShown(), lastOnlineAt: last.t, thumbUrl: base ? `${base}/api/game-icon/${server.game}.png?v=${GAME_ICON_VERSION}` : null, baseUrl: base, version: APP_VERSION_NAME || APP_VERSION || null, brandName: brand().name, country: (() => { const c = server.country || countryOf(serverId, server.host); return c ? countryLabel(c) : null; })(), timeZone: getSetting('timezone') || process.env.TZ || 'Europe/Moscow', logoUrl: base && logoFile() ? `${base}/api/branding/logo?v=${brand().logoV}` : null });
+  return buildEmbed(server, up.u, intervalSec, { serverId, playersShown: playersShown(), lastOnlineAt: last.t, thumbUrl: base ? `${base}/api/game-icon/${server.game}.png?v=${GAME_ICON_VERSION}` : null, baseUrl: base, version: APP_VERSION_NAME || APP_VERSION || null, brandName: brand().name, country: (() => { const c = server.country || countryOf(serverId, server.host); return c ? countryLabel(c) : null; })(), timeZone: getSetting('timezone') || process.env.TZ || 'Europe/Moscow', logoUrl: base && logoFile() ? `${base}/api/branding/logo?v=${brand().logoV}` : null, chartUrl: base && getSetting('embed_chart') !== '0' ? `${base}/api/server-chart/${serverId}-${chartSign(serverId)}.png?v=${Math.floor(Date.now() / 600_000)}` : null });
 }
 
 export const intervalParam = (v: unknown) => Math.min(3600, Math.max(30, Number(v) || 60));
@@ -21960,6 +22164,8 @@ export async function buildPayload(b: Binding) {
         throw new Error(`embed HTTP ${r.status}`);
       }
       raw = (await r.json()) as RawEmbed;
+      // the 24 h chart would stretch a message that already holds several servers
+      if (multi) delete (raw as { image?: unknown }).image;
     }
     if (style !== 'embed') {
       const img = await backend(`/internal/card/${id}.png`);
@@ -50587,6 +50793,8 @@ interface DigestInfo {
   channelId: string;
   weekday: number;
   hour: number;
+  /** the picture: dark or light */
+  theme: 'dark' | 'light';
   lastSent: number;
   preview: {
     totals: { players: number; prevPlayers: number; peak: number; peakServer: string | null; hours: number; prevHours: number; uptime: number | null; incidents: number; newPlayers: number };
@@ -50606,9 +50814,9 @@ export default function DigestSection({ alertsChannel }: { alertsChannel: string
     api<DigestInfo>('/digest').then(setInfo).catch((e: Error) => setError(e.message));
   }, []);
 
-  const save = async (patch: Partial<Pick<DigestInfo, 'enabled' | 'channelId' | 'weekday' | 'hour'>>, done?: string) => {
+  const save = async (patch: Partial<Pick<DigestInfo, 'enabled' | 'channelId' | 'weekday' | 'hour' | 'theme'>>, done?: string) => {
     await api<DigestInfo>('/digest', 'PUT', patch)
-      .then((d) => { setInfo(d); setError(''); if (done) toast(done); })
+      .then((d) => { setInfo(d); setImgKey((k) => k + 1); setError(''); if (done) toast(done); })
       .catch((e: Error) => setError(e.message));
   };
   const sendNow = async () => {
@@ -50636,7 +50844,7 @@ export default function DigestSection({ alertsChannel }: { alertsChannel: string
         </span>
       </label>
 
-      <div className="grid gap-4 sm:grid-cols-2">
+      <div className="grid gap-4 sm:grid-cols-3">
         <div>
           <label htmlFor="digest-day" className="label">День</label>
           <select id="digest-day" className="input" value={info.weekday} onChange={(e) => void save({ weekday: Number(e.target.value) }, 'Сохранено')}>
@@ -50647,6 +50855,13 @@ export default function DigestSection({ alertsChannel }: { alertsChannel: string
           <label htmlFor="digest-hour" className="label">Время</label>
           <select id="digest-hour" className="input" value={info.hour} onChange={(e) => void save({ hour: Number(e.target.value) }, 'Сохранено')}>
             {Array.from({ length: 24 }, (_, h) => <option key={h} value={h}>{String(h).padStart(2, '0')}:00</option>)}
+          </select>
+        </div>
+        <div>
+          <label htmlFor="digest-theme" className="label">Оформление картинки</label>
+          <select id="digest-theme" className="input" value={info.theme} onChange={(e) => void save({ theme: e.target.value as 'dark' | 'light' }, 'Сохранено')}>
+            <option value="dark">Тёмное</option>
+            <option value="light">Светлое</option>
           </select>
         </div>
       </div>
