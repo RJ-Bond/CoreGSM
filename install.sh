@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="90868df98c57"
+COREGSM_BUILD="18c9c13503cf"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.0.0.4"
+COREGSM_VERSION="1.0.0.5"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -52074,7 +52074,8 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { api, onBusy, type Me } from '../api';
 import { useAppearance } from '../appearance';
 import { t, useI18n } from '../i18n';
-import { UserAvatar } from '../ui';
+import { canCapture, captureTab, copyImage, downloadBlob, shotFileName, wasCancelled } from '../screenshot';
+import { toast, UserAvatar } from '../ui';
 import '../styles/shell.css';
 
 // ---------- progress strip ----------
@@ -52187,6 +52188,25 @@ export function Crumbs({ items }: { items: [href: string, label: ReactNode][] })
 }
 
 // ---------- profile menu ----------
+/** the menu is closed first (the short wait), then the browser asks to share the tab; the picture is saved and can be copied */
+async function takeScreenshot(): Promise<void> {
+  const root = document.documentElement;
+  try {
+    root.dataset.capturing = '1';
+    const blob = await captureTab();
+    delete root.dataset.capturing;
+    downloadBlob(blob, shotFileName(window.location.pathname, new Date()));
+    toast(t('shot.saved'), {
+      action: { label: t('shot.copy'), onClick: () => void copyImage(blob).then((ok) => toast(ok ? t('shot.copied') : t('shot.copyFailed'), ok ? 'ok' : 'err')) },
+      duration: 8000,
+    });
+  } catch (e) {
+    if (!wasCancelled(e)) toast(t('shot.failed'), 'err');
+  } finally {
+    delete root.dataset.capturing;
+  }
+}
+
 export function ProfileMenu({ me, isStaff, logout, active }: { me: Me; isStaff: boolean; logout: () => void; active: boolean }) {
   useI18n();
   const [open, setOpen] = useState(false);
@@ -52225,6 +52245,7 @@ export function ProfileMenu({ me, isStaff, logout, active }: { me: Me; isStaff: 
           </div>
           <a role="menuitem" className={link} href="/profile">{t('hdr.profile')}</a>
           <a role="menuitem" className={link} href="/gallery">Моя галерея</a>
+          {me.role === 'admin' && canCapture() && <button type="button" role="menuitem" className={link} onClick={() => window.setTimeout(() => void takeScreenshot(), 350)}>{t('shot.item')}</button>}
           {isStaff && <a role="menuitem" className={link} href="/admin">{t('nav.admin')}</a>}
           <div className="pm-sep" role="separator" />
           {/* one tap, and the menu stays open so both can be set at once */}
@@ -68859,6 +68880,12 @@ const en: Record<keyof typeof ru, string> = {
   'upd.o.locked': 'The channel is pinned by the server environment and cannot be changed here.',
   'upd.o.notify': 'Tell Discord about new versions and update results',
   'upd.o.notifyHint': 'Messages go to the alerts channel (Settings → Discord). Nothing is sent when it is not set up.',
+  'shot.item': 'Page screenshot',
+  'shot.saved': 'Screenshot saved',
+  'shot.copy': 'Copy',
+  'shot.copied': 'Copied to the clipboard',
+  'shot.copyFailed': 'The browser did not allow copying the image',
+  'shot.failed': 'Could not take the screenshot',
 };
 
 export default en;
@@ -70951,6 +70978,12 @@ const ru = {
   'upd.o.locked': 'Канал задан переменными окружения сервера и отсюда не меняется.',
   'upd.o.notify': 'Сообщать в Discord о новых версиях и результате обновления',
   'upd.o.notifyHint': 'Сообщения уходят в канал оповещений (Настройки → Discord). Если он не настроен, ничего не отправляется.',
+  'shot.item': 'Скриншот страницы',
+  'shot.saved': 'Скриншот сохранён',
+  'shot.copy': 'Копировать',
+  'shot.copied': 'Скопировано в буфер обмена',
+  'shot.copyFailed': 'Браузер не дал скопировать картинку',
+  'shot.failed': 'Не удалось сделать скриншот',
 };
 
 export default ru;
@@ -82815,6 +82848,78 @@ export function summarize(entries: Record<string, BarEntry>): BarState {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
+  cat > "$APP_DIR/core-frontend/src/screenshot.ts" << '__COREGSM_EOF__'
+/**
+ * «Скриншот страницы» for administrators: the browser's own screen capture of the current tab (getDisplayMedia), one
+ * frame turned into a PNG. No library and nothing leaves the browser; the browser asks for permission each time.
+ * Not available where the browser has no screen capture (phones).
+ */
+
+export const canCapture = (): boolean => typeof navigator !== 'undefined' && typeof navigator.mediaDevices?.getDisplayMedia === 'function';
+
+const two = (n: number) => String(n).padStart(2, '0');
+
+/** coregsm-admin-settings-updates-20261026-103500.png */
+export function shotFileName(path: string, d: Date): string {
+  const slug = path.replace(/[?#].*$/, '').replace(/^\/+|\/+$/g, '').replace(/[^a-zA-Z0-9]+/g, '-').replace(/^-+|-+$/g, '').toLowerCase().slice(0, 60) || 'home';
+  return `coregsm-${slug}-${d.getFullYear()}${two(d.getMonth() + 1)}${two(d.getDate())}-${two(d.getHours())}${two(d.getMinutes())}${two(d.getSeconds())}.png`;
+}
+
+/** an aborted permission prompt is not an error worth showing */
+export const wasCancelled = (e: unknown): boolean => e instanceof DOMException && (e.name === 'NotAllowedError' || e.name === 'AbortError');
+
+/** asks the browser to share this tab, takes one frame, stops the sharing */
+export async function captureTab(): Promise<Blob> {
+  const stream = await navigator.mediaDevices.getDisplayMedia({
+    video: { displayMaxFrameRate: 1 },
+    audio: false,
+    // Chrome / Edge: offer this tab first and skip the picker
+    preferCurrentTab: true,
+    selfBrowserSurface: 'include',
+    surfaceSwitching: 'exclude',
+  } as DisplayMediaStreamOptions);
+  try {
+    const video = document.createElement('video');
+    video.muted = true;
+    video.srcObject = stream;
+    await video.play();
+    // the first frame of a fresh capture may be empty: wait until a real one is there
+    await new Promise<void>((resolve) => {
+      if ('requestVideoFrameCallback' in video) (video as HTMLVideoElement & { requestVideoFrameCallback: (cb: () => void) => void }).requestVideoFrameCallback(() => resolve());
+      else window.setTimeout(resolve, 300);
+    });
+    await new Promise((r) => window.setTimeout(r, 120));
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    canvas.getContext('2d')?.drawImage(video, 0, 0);
+    return await new Promise<Blob>((resolve, reject) => canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('empty frame'))), 'image/png'));
+  } finally {
+    stream.getTracks().forEach((t) => t.stop());
+  }
+}
+
+export function downloadBlob(blob: Blob, name: string): void {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
+export async function copyImage(blob: Blob): Promise<boolean> {
+  try {
+    await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/security.ts" << '__COREGSM_EOF__'
 import { t, type TKey } from './i18n';
 
@@ -85806,6 +85911,9 @@ html[data-motion='reduce'] .bell-ring svg { animation: none; }
   a { color: inherit; text-decoration: none; }
   * { animation: none !important; transition: none !important; }
 }
+
+/* an administrator's screenshot: the notices do not get into the picture */
+html[data-capturing] .toaster { visibility: hidden !important; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/status.css" << '__COREGSM_EOF__'

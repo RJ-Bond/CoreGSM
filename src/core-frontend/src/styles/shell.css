@@ -58,3 +58,6 @@ html[data-motion='reduce'] .bell-ring svg { animation: none; }
   a { color: inherit; text-decoration: none; }
   * { animation: none !important; transition: none !important; }
 }
+
+/* an administrator's screenshot: the notices do not get into the picture */
+html[data-capturing] .toaster { visibility: hidden !important; }

@@ -17,6 +17,7 @@ interface language; the GitHub release text is built from the section of the ver
 ## Не выпущено | Unreleased
 
 ### ✨ Новое | New
+- 📸 Администратор может сделать скриншот текущей страницы: меню профиля → «Скриншот страницы» (скачивается PNG, можно скопировать в буфер); только на компьютере | An administrator can take a screenshot of the current page: profile menu → “Page screenshot” (a PNG is downloaded and can be copied to the clipboard); desktop browsers only
 - 🌐 Описания версий на двух языках: панель показывает русский или английский текст, релиз на GitHub — оба | Release notes in two languages: the panel shows Russian or English, the GitHub release shows both
 
 ## 1.0.0.3 · 26.10.2026

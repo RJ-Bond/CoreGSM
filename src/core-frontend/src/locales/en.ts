@@ -1853,6 +1853,12 @@ const en: Record<keyof typeof ru, string> = {
   'upd.o.locked': 'The channel is pinned by the server environment and cannot be changed here.',
   'upd.o.notify': 'Tell Discord about new versions and update results',
   'upd.o.notifyHint': 'Messages go to the alerts channel (Settings → Discord). Nothing is sent when it is not set up.',
+  'shot.item': 'Page screenshot',
+  'shot.saved': 'Screenshot saved',
+  'shot.copy': 'Copy',
+  'shot.copied': 'Copied to the clipboard',
+  'shot.copyFailed': 'The browser did not allow copying the image',
+  'shot.failed': 'Could not take the screenshot',
 };
 
 export default en;

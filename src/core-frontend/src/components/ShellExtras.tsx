@@ -7,7 +7,8 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { api, onBusy, type Me } from '../api';
 import { useAppearance } from '../appearance';
 import { t, useI18n } from '../i18n';
-import { UserAvatar } from '../ui';
+import { canCapture, captureTab, copyImage, downloadBlob, shotFileName, wasCancelled } from '../screenshot';
+import { toast, UserAvatar } from '../ui';
 import '../styles/shell.css';
 
 // ---------- progress strip ----------
@@ -120,6 +121,25 @@ export function Crumbs({ items }: { items: [href: string, label: ReactNode][] })
 }
 
 // ---------- profile menu ----------
+/** the menu is closed first (the short wait), then the browser asks to share the tab; the picture is saved and can be copied */
+async function takeScreenshot(): Promise<void> {
+  const root = document.documentElement;
+  try {
+    root.dataset.capturing = '1';
+    const blob = await captureTab();
+    delete root.dataset.capturing;
+    downloadBlob(blob, shotFileName(window.location.pathname, new Date()));
+    toast(t('shot.saved'), {
+      action: { label: t('shot.copy'), onClick: () => void copyImage(blob).then((ok) => toast(ok ? t('shot.copied') : t('shot.copyFailed'), ok ? 'ok' : 'err')) },
+      duration: 8000,
+    });
+  } catch (e) {
+    if (!wasCancelled(e)) toast(t('shot.failed'), 'err');
+  } finally {
+    delete root.dataset.capturing;
+  }
+}
+
 export function ProfileMenu({ me, isStaff, logout, active }: { me: Me; isStaff: boolean; logout: () => void; active: boolean }) {
   useI18n();
   const [open, setOpen] = useState(false);
@@ -158,6 +178,7 @@ export function ProfileMenu({ me, isStaff, logout, active }: { me: Me; isStaff: 
           </div>
           <a role="menuitem" className={link} href="/profile">{t('hdr.profile')}</a>
           <a role="menuitem" className={link} href="/gallery">Моя галерея</a>
+          {me.role === 'admin' && canCapture() && <button type="button" role="menuitem" className={link} onClick={() => window.setTimeout(() => void takeScreenshot(), 350)}>{t('shot.item')}</button>}
           {isStaff && <a role="menuitem" className={link} href="/admin">{t('nav.admin')}</a>}
           <div className="pm-sep" role="separator" />
           {/* one tap, and the menu stays open so both can be set at once */}
