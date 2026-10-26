@@ -9,7 +9,7 @@ import { log } from '../logger.js';
 import { db, getSetting, setSetting } from '../db.js';
 import { alertSettings, enqueueAlert } from '../alerts.js';
 import { listBackups } from '../backup.js';
-import { classifyCommit, isNoopJob, parseChangelog, parseVersion, jobKind, parseChannel, shouldAnnounce, stageOf, type Channel, type CommitFlag, type CommitKind } from '../updateLogic.js';
+import { classifyCommit, isNoopJob, notesBetween, notesText, parseChangelog, parseVersion, jobKind, parseChannel, shouldAnnounce, stageOf, type Channel, type CommitFlag, type CommitKind } from '../updateLogic.js';
 
 export const router = express.Router();
 
@@ -184,10 +184,21 @@ function announce(title: string, description: string, color: number): void {
   }
 }
 
+/** the text of a notice plus what the versions from `from` to `to` brought (from CHANGELOG.md); the plain text when there are no notes */
+async function withNotes(base: string, from: string | null, to: string | null): Promise<string> {
+  try {
+    const text = notesText(notesBetween((await loadNotes()).releases, from, to), 1800);
+    return text ? `${base}\n\n${text}` : base;
+  } catch {
+    return base;
+  }
+}
+
 function announceVersion(): void {
   if (!shouldAnnounce({ notify: getSetting('update_notify') !== '0', available: !!(APP_VERSION && remote.build && APP_VERSION !== remote.build), latest: remote.build, announced: getSetting('update_announced'), skipped: getSetting('update_skip') })) return;
   setSetting('update_announced', remote.build);
-  announce('Доступно обновление панели', `Версия \`${remote.label ?? (remote.build ?? '').slice(0, 7)}\`. Установить: Настройки → Обновления и копии.`, 0x5865f2);
+  const label = remote.label ?? (remote.build ?? '').slice(0, 7);
+  void withNotes(`Версия \`${label}\`. Установить: Настройки → Обновления и копии.`, labelOf(APP_VERSION), remote.label).then((d) => announce('Доступно обновление панели', d, 0x5865f2));
 }
 
 /** writes a finished job into the history once; the first run on an old database only fills it in silently */
@@ -198,12 +209,14 @@ export function recordJob(): void {
   const first = (db.prepare('SELECT COUNT(*) AS n FROM update_history').get() as { n: number }).n === 0;
   const kind = jobKind(job.message);
   const now = Date.now();
+  // the version that was running before this job: the last one in the history
+  const before = (db.prepare('SELECT version FROM update_history WHERE version IS NOT NULL ORDER BY job_time DESC LIMIT 1').get() as { version: string } | undefined)?.version ?? null;
   db.prepare('INSERT INTO update_history (job_time, state, kind, message, version, at) VALUES (?, ?, ?, ?, ?, ?)').run(job.time, job.state, kind, job.message.slice(0, 500), APP_VERSION || null, now);
   db.prepare('DELETE FROM update_history WHERE id NOT IN (SELECT id FROM update_history ORDER BY job_time DESC LIMIT 100)').run();
   if (first || now - job.time > 6 * 3600_000) return;
   if (job.state === 'error') announce('Обновление панели не удалось', job.message, 0xf23f42);
   else if (kind === 'rollback') announce('Откат панели выполнен', job.message, 0xf0b232);
-  else announce('Панель обновлена', job.message, 0x23a55a);
+  else void withNotes(job.message, labelOf(before), labelOf(APP_VERSION)).then((d) => announce('Панель обновлена', d, 0x23a55a));
 }
 
 setTimeout(() => { try { recordJob(); } catch { /* the table is not ready yet */ } }, 3000).unref();
@@ -340,17 +353,21 @@ router.post('/api/update/rollback', admin, (_req, res) => {
 
 // ---- release notes: CHANGELOG.md of the repository (Russian, written by hand); the commits are the fallback
 let notes: { at: number; releases: ReturnType<typeof parseChangelog>; error: string | null } | null = null;
+async function loadNotes() {
+  if (!notes || Date.now() - notes.at > (notes.error ? 60_000 : 10 * 60_000)) {
+    try {
+      notes = { at: Date.now(), releases: parseChangelog(await fetchRepoText('CHANGELOG.md')).slice(0, 12), error: null };
+    } catch (e) {
+      notes = { at: Date.now(), releases: notes?.releases ?? [], error: (e as Error).message };
+    }
+  }
+  return notes;
+}
 router.get(
   '/api/update/notes',
   admin,
   wrap(async (_req, res) => {
-    if (!notes || Date.now() - notes.at > (notes.error ? 60_000 : 10 * 60_000)) {
-      try {
-        notes = { at: Date.now(), releases: parseChangelog(await fetchRepoText('CHANGELOG.md')).slice(0, 12), error: null };
-      } catch (e) {
-        notes = { at: Date.now(), releases: notes?.releases ?? [], error: (e as Error).message };
-      }
-    }
-    res.json({ releases: notes.releases, error: notes.error });
+    const n = await loadNotes();
+    res.json({ releases: n.releases, error: n.error });
   }),
 );

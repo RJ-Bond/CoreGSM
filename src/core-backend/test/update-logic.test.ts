@@ -65,7 +65,7 @@ describe('announcements and channel', () => {
   });
 });
 
-import { cmpVersion, parseChangelog, parseVersion } from '../src/updateLogic.js';
+import { cmpVersion, notesBetween, notesText, parseChangelog, parseVersion } from '../src/updateLogic.js';
 
 describe('readable versions', () => {
   it('compares number by number, not as text', () => {
@@ -112,5 +112,30 @@ describe('CHANGELOG.md', () => {
     assert.equal(r[1]!.groups[1]!.items[0]!.textEn, null);
     assert.equal(r[2]!.groups[0]!.title, 'Изменения');
     assert.equal(r[2]!.groups[0]!.items[0]!.textEn, 'First version');
+  });
+});
+
+describe('notesBetween / notesText', () => {
+  const rel = (version: string, items: string[]) => ({ version, date: null, groups: [{ title: '✨ Новое', titleEn: 'New', items: items.map((text) => ({ text, textEn: null, flags: [] })) }] });
+  const all = [rel('1.0.0.20', ['🏅 Анимация']), rel('1.0.0.9', ['🤖 Бот в шапке']), rel('1.0.0.3', ['Старое'])];
+
+  it('everything after the installed version up to the new one', () => {
+    assert.deepEqual(notesBetween(all, '1.0.0.3', '1.0.0.20').map((r) => r.version), ['1.0.0.20', '1.0.0.9']);
+  });
+  it('without a known previous version only the release itself', () => {
+    assert.deepEqual(notesBetween(all, null, '1.0.0.9').map((r) => r.version), ['1.0.0.9']);
+  });
+  it('an unreadable target or the same version gives nothing', () => {
+    assert.deepEqual(notesBetween(all, '1.0.0.3', 'abc1234'), []);
+    assert.deepEqual(notesBetween(all, '1.0.0.9', '1.0.0.9'), []);
+  });
+  it('one release: group title and bullets, several: version headings', () => {
+    assert.equal(notesText([all[0]!]), '__Новое__\n• 🏅 Анимация');
+    assert.match(notesText(all.slice(0, 2)), /^\*\*1\.0\.0\.20\*\*\n__Новое__\n• 🏅 Анимация\n\*\*1\.0\.0\.9\*\*/);
+  });
+  it('a long list is cut with a count of what is left', () => {
+    const out = notesText([rel('1.0.0.5', Array.from({ length: 40 }, (_, i) => `пункт ${i} ${'x'.repeat(30)}`))], 300);
+    assert.ok(out.length <= 330);
+    assert.match(out, /… и ещё \d+$/);
   });
 });
