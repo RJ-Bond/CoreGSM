@@ -139,6 +139,8 @@ interface Ctx {
   getBot: () => { state: string; tag: string | null; error: string | null; updatedAt: number };
   guildCount: () => number;
   version: string;
+  /** readable version of the build, empty on an install that has no name yet */
+  versionName?: string;
   pollMs: number;
   /** trusted public base URL (https://domain) or null */
   publicBase: () => string | null;
@@ -200,7 +202,7 @@ export function checkCert(force = false): Promise<CertInfo> {
   });
 }
 
-export function registerOps({ app, admin, getBot, guildCount, version, pollMs, publicBase }: Ctx): void {
+export function registerOps({ app, admin, getBot, guildCount, version, versionName, pollMs, publicBase }: Ctx): void {
   // ----- log -----
   app.get('/api/audit', allow('journal'), (req, res) => {
     const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 200));
@@ -244,6 +246,7 @@ export function registerOps({ app, admin, getBot, guildCount, version, pollMs, p
     })();
     res.json({
       version: version || null,
+      versionName: versionName || null,
       uptimeSec: Math.round((Date.now() - startedAt) / 1000),
       node: process.version,
       dbBytes,

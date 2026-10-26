@@ -211,7 +211,7 @@ export default function AdminOverview() {
             <Tile label={t('adm.ov.players')} value={String(players)} change={delta(players, series[0])} spark={series} href="/admin/servers" />
             <Tile label={t('adm.ov.pending')} value={raw.users ? String(pending) : '–'} tone={pending > 0 ? 'warn' : undefined} href="/admin/users" />
             <Tile label={t('adm.ov.backup')} value={raw.backups ? (lastBackup ? ago(lastBackup) : t('adm.ov.noBackup')) : '–'} tone={raw.backups && (!lastBackup || Date.now() - lastBackup > WEEK) ? 'warn' : undefined} href="/admin/settings/updates" />
-            <Tile label={t('adm.ov.version')} value={raw.update?.current ? raw.update.current.slice(0, 7) : '–'} sub={raw.update?.available ? t('adm.ov.upd') : undefined} tone={raw.update?.available ? 'warn' : undefined} href="/admin/settings/updates" />
+            <Tile label={t('adm.ov.version')} value={raw.update?.currentLabel || (raw.update?.current ? raw.update.current.slice(0, 7) : '–')} sub={raw.update?.available ? t('adm.ov.upd') : undefined} tone={raw.update?.available ? 'warn' : undefined} href="/admin/settings/updates" />
           </div>
 
           {servers.length > 0 && (

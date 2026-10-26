@@ -5,7 +5,7 @@ import { admin, allow, auth, type AuthedRequest, avatarUrl, internal, isStaff, p
 import { customAvatarUrl, registerAvatars } from './avatars.js';
 import { registerBackups, startBackupTimer, stopBackups } from './backup.js';
 import { bot, channelInfo } from './botState.js';
-import { APP_VERSION, POLL_MS, PORT, SETUP_TOKEN } from './config.js';
+import { APP_VERSION, APP_VERSION_NAME, POLL_MS, PORT, SETUP_TOKEN } from './config.js';
 import { registerCovers } from './covers.js';
 import { db, getSetting, setSetting } from './db.js';
 import { registerDeliveries } from './deliveries.js';
@@ -177,7 +177,7 @@ registerProfile({
 registerDiscordRegistration({ app, internal, wrap, publicBase, registrationOpen, registrationMode, rulesText });
 registerNickStatus({ app, auth, userId: (req) => (req as AuthedRequest).user!.id });
 registerCovers({ app, admin: allow('servers') });
-registerOps({ app, admin, getBot: () => bot.status, guildCount: () => bot.guilds.length, version: APP_VERSION, pollMs: POLL_MS, publicBase });
+registerOps({ app, admin, getBot: () => bot.status, guildCount: () => bot.guilds.length, version: APP_VERSION, versionName: APP_VERSION_NAME, pollMs: POLL_MS, publicBase });
 registerBackups({ app, admin });
 registerMaintenance({ app, admin: allow('maintenance'), viewer });
 registerHealth({ app, admin, bot: () => bot.status });
