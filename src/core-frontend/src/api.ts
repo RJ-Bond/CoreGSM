@@ -256,6 +256,8 @@ export interface UpdateInfo {
   skipped?: boolean;
   notify?: boolean;
   notifyLang?: 'ru' | 'en';
+  /** the Discord channel for the update notices ('' = the alerts channel) */
+  notifyChannel?: string;
   /** days before the reminder about a version nobody installed (0 = none) */
   remindDays?: number;
 }

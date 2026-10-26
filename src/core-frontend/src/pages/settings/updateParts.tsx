@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react';
 import { api, type Changelog, type UpdateHistoryItem, type UpdateInfo, type UpdateNotes, type UpdatePreflight } from '../../api';
 import { t, useI18n, type TKey } from '../../i18n';
+import { ChannelPicker } from '../../components/ChannelPicker';
 import { ErrorLine, fmtDateTime, Section, errText, toast } from '../../ui';
 import { cleanNote, groupCommits, isNewerRelease, preflightWarnings, stepStates, upcomingFlags, versionText, type PreflightWarning } from './updateLogic';
 
@@ -146,7 +147,8 @@ export function HistoryCard({ refreshKey }: { refreshKey: unknown }) {
 /** channel and Discord notices */
 export function OptionsCard({ info, onChange }: { info: UpdateInfo; onChange: (i: UpdateInfo) => void }) {
   const [error, setError] = useState('');
-  const save = async (body: { channel?: 'release' | 'main'; notify?: boolean; notifyLang?: 'ru' | 'en'; remindDays?: number }) => {
+  const [picking, setPicking] = useState(false);
+  const save = async (body: { channel?: 'release' | 'main'; notify?: boolean; notifyLang?: 'ru' | 'en'; remindDays?: number; notifyChannel?: string }) => {
     setError('');
     try {
       onChange(await api<UpdateInfo>('/update/settings', 'PUT', body));
@@ -171,6 +173,21 @@ export function OptionsCard({ info, onChange }: { info: UpdateInfo; onChange: (i
         <input type="checkbox" className="mt-1 h-4 w-4 accent-brand" checked={info.notify !== false} onChange={(e) => void save({ notify: e.target.checked })} aria-describedby="upd-notify-hint" />
         <span>{t('upd.o.notify')}<span id="upd-notify-hint" className="mt-0.5 block text-sm font-semibold text-mute">{t('upd.o.notifyHint')}</span></span>
       </label>
+      {info.notify !== false && (
+        <div>
+          <span className="label">{t('upd.o.chan')}</span>
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="font-black">{info.notifyChannel ? t('upd.o.chan.id', { id: info.notifyChannel }) : t('upd.o.chan.alerts')}</span>
+            <button type="button" className="btn btn-soft btn-sm" onClick={() => setPicking((v) => !v)} aria-expanded={picking}>{t('upd.o.chan.pick')}</button>
+            {info.notifyChannel && <button type="button" className="btn-link text-sm" onClick={() => void save({ notifyChannel: '' })}>{t('upd.o.chan.reset')}</button>}
+          </div>
+          {picking && (
+            <div className="mt-3">
+              <ChannelPicker id="upd-channel" value={info.notifyChannel ?? ''} onChange={(v) => { if (/^\d{15,25}$/.test(v)) { void save({ notifyChannel: v }); setPicking(false); } }} />
+            </div>
+          )}
+        </div>
+      )}
       {info.notify !== false && (
         <div className="grid gap-3 sm:grid-cols-2">
           <div>

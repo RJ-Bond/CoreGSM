@@ -1340,6 +1340,7 @@ const en: Record<keyof typeof ru, string> = {
   'al.k.full': 'Almost full',
   'al.k.digest': 'Weekly digest',
   'al.k.restart': 'Restart',
+  'al.k.update': 'Panel update',
   'al.s.low': 'Unusually few players',
   'al.s.lowText': 'Online has been below a third of the usual for this weekday and hour for 20 minutes (last four weeks).',
   'al.s.ping': 'Ping went up',
@@ -1907,6 +1908,11 @@ const en: Record<keyof typeof ru, string> = {
   'upd.o.remind': 'Remind me if not installed',
   'upd.o.remind.off': 'Do not remind',
   'upd.o.remind.n': 'After {n} d',
+  'upd.o.chan': 'Channel for the update notices',
+  'upd.o.chan.alerts': 'The alerts channel (like the other messages)',
+  'upd.o.chan.id': 'Channel {id}',
+  'upd.o.chan.pick': 'Choose a channel',
+  'upd.o.chan.reset': 'Same as alerts',
 };
 
 export default en;
