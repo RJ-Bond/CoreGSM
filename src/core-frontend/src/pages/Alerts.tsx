@@ -29,6 +29,7 @@ const KIND = {
   restart: { label: 'al.k.restart', cls: 'pill-mute' },
   update: { label: 'al.k.update', cls: 'pill-ok' },
   disk: { label: 'al.k.disk', cls: 'pill-warn' },
+  poll: { label: 'al.k.poll', cls: 'pill-ok' },
 } as const satisfies Record<string, { label: TKey; cls: string }>;
 /** a kind the panel does not know (a newer server, an old row) must not break the page */
 const kindOf = (k: string): { label: TKey; cls: string } => (KIND as Record<string, { label: TKey; cls: string }>)[k] ?? KIND.test;
