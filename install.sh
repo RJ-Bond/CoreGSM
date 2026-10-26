@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="6d731152c7cc"
+COREGSM_BUILD="ce8492e2759d"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.0.0.6"
+COREGSM_VERSION="1.0.0.7"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -47800,7 +47800,7 @@ import { api, ApiError, getToken, setToken, type Access, type Me, type UpdateInf
 import { AuthContext } from './auth';
 import { onAccentChange, paintBrand, useAutoAccent } from './accent';
 import NotificationBell from './components/NotificationBell';
-import { AppFooter, ProfileMenu, RouteProgress, Tooltips, restoreScroll, useHideOnScroll, usePanelPulse, useScrollMemory } from './components/ShellExtras';
+import { AppFooter, BotPill, ProfileMenu, RouteProgress, Tooltips, restoreScroll, useHideOnScroll, usePanelPulse, useScrollMemory } from './components/ShellExtras';
 import NotFound from './components/NotFound';
 import { ConfirmHost } from './confirm';
 import Login from './pages/Login';
@@ -48237,6 +48237,7 @@ export default function App() {
               <span className="hidden lg:inline">{t('hdr.search')}</span>
               <kbd className="hidden rounded-md bg-card px-1.5 py-0.5 font-sans text-xs font-bold text-mute lg:inline">Ctrl K</kbd>
             </button>
+            {isAdmin && <BotPill />}
             {me && <NotificationBell initialUnread={me.unreadNotifications ?? 0} />}
             <ThemeToggle />
             {me ? (
@@ -50075,6 +50076,12 @@ export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose:
     if (isAdmin) {
       act('act-digest', 'Отправить итоги недели сейчас', 'Картинка с итогами в канал Discord', 'дайджест итоги неделя отчёт', <IconNews />, () => {
         void api('/digest/send', 'POST').then(() => toast('Итоги недели поставлены в очередь')).catch((e: Error) => toast(e.message, 'err'));
+      });
+      act('act-backup', 'Создать резервную копию', 'Настройки · Обновления и копии', 'бэкап копия резервная backup', <IconCopy />, () => {
+        void api('/backups/run', 'POST').then(() => toast('Резервная копия создаётся')).catch((e: Error) => toast(e.message, 'err'));
+      });
+      act('act-update', 'Проверить обновления', 'Настройки · Обновления и копии', 'обновление версия апдейт update', <IconRefresh />, () => {
+        void api<{ available: boolean }>('/update/check', 'POST').then((r) => toast(r.available ? 'Есть новая версия' : 'Установлена последняя версия')).catch((e: Error) => toast(e.message, 'err'));
       });
       act('act-season', 'Начать новый сезон', 'Сообщество · Сезоны', 'сезон вайп wipe рейтинг', <IconTrophy />, () => navigate('/admin/community/seasons'));
     }
@@ -52144,7 +52151,7 @@ __COREGSM_EOF__
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { api, onBusy, type Me } from '../api';
 import { useAppearance } from '../appearance';
-import { t, useI18n } from '../i18n';
+import { t, useI18n, type TKey } from '../i18n';
 import { UserAvatar } from '../ui';
 import '../styles/shell.css';
 
@@ -52204,6 +52211,31 @@ function paintFavicon(state: 'ok' | 'bad' | null) {
 interface Pulse { now: { players: number; online: number; servers: number } }
 
 /** players now (for «(12) Серверы · CoreGSM») and a dot on the favicon: green when everything is up, red when something is down */
+/** administrators: the state of the Discord bot in the header, a link to its settings */
+export function BotPill() {
+  useI18n();
+  const [state, setState] = useState<'idle' | 'connecting' | 'online' | 'error' | null>(null);
+  useEffect(() => {
+    let stop = false;
+    const load = () => {
+      if (document.hidden) return;
+      api<{ state: 'idle' | 'connecting' | 'online' | 'error' }>('/bot/status').then((r) => { if (!stop) setState(r.state); }).catch(() => { if (!stop) setState(null); });
+    };
+    load();
+    const timer = setInterval(load, 60_000);
+    return () => { stop = true; clearInterval(timer); };
+  }, []);
+  if (!state) return null;
+  const label = t(`hdr.bot.${state}` as TKey);
+  const color = state === 'online' ? 'bg-ok' : state === 'error' ? 'bg-bad' : state === 'connecting' ? 'bg-warn' : 'bg-mute';
+  return (
+    <a href="/admin/discord" className="btn-soft hdr-search" title={t('hdr.bot.tip', { s: label })} aria-label={t('hdr.bot.tip', { s: label })}>
+      <span className={`inline-block size-2.5 rounded-full ${color}`} aria-hidden />
+      <span className="hidden xl:inline">{label}</span>
+    </a>
+  );
+}
+
 export function usePanelPulse(enabled: boolean): number {
   const [players, setPlayers] = useState(0);
   useEffect(() => {
@@ -68934,6 +68966,11 @@ const en: Record<keyof typeof ru, string> = {
   'adm.tbl.down': 'Move down',
   'adm.tbl.moved': 'Server order saved',
   'adm.tbl.orderHint': 'Reorder works when the filter and search are cleared',
+  'hdr.bot.online': 'Bot online',
+  'hdr.bot.connecting': 'Bot connecting',
+  'hdr.bot.error': 'Bot error',
+  'hdr.bot.idle': 'Bot off',
+  'hdr.bot.tip': 'Discord bot status: {s}. Open the bot settings',
 };
 
 export default en;
@@ -71030,6 +71067,11 @@ const ru = {
   'adm.tbl.down': 'Ниже',
   'adm.tbl.moved': 'Порядок серверов сохранён',
   'adm.tbl.orderHint': 'Порядок можно менять, когда фильтр и поиск сброшены',
+  'hdr.bot.online': 'Бот в сети',
+  'hdr.bot.connecting': 'Бот подключается',
+  'hdr.bot.error': 'Ошибка бота',
+  'hdr.bot.idle': 'Бот выключен',
+  'hdr.bot.tip': 'Статус Discord-бота: {s}. Открыть настройки бота',
 };
 
 export default ru;

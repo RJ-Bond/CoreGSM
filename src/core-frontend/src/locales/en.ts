@@ -1857,6 +1857,11 @@ const en: Record<keyof typeof ru, string> = {
   'adm.tbl.down': 'Move down',
   'adm.tbl.moved': 'Server order saved',
   'adm.tbl.orderHint': 'Reorder works when the filter and search are cleared',
+  'hdr.bot.online': 'Bot online',
+  'hdr.bot.connecting': 'Bot connecting',
+  'hdr.bot.error': 'Bot error',
+  'hdr.bot.idle': 'Bot off',
+  'hdr.bot.tip': 'Discord bot status: {s}. Open the bot settings',
 };
 
 export default en;
