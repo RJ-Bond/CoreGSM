@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="ac97238d85e1"
+COREGSM_BUILD="900586e750ba"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.0.0.23"
+COREGSM_VERSION="1.0.0.24"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -17612,11 +17612,8 @@ import { wrap } from '../http.js';
 import { log } from '../logger.js';
 import { db, getSetting, setSetting } from '../db.js';
 import { alertSettings, enqueueAlert, isQuietNow } from '../alerts.js';
-import { enqueueDelivery } from '../deliveries.js';
-import { publicBase } from '../site.js';
-import { dmAvailable } from '../subscriptions.js';
 import { listBackups } from '../backup.js';
-import { buildNotice, classifyCommit, isNoopJob, parseChangelog, parseNoticeLang, parseNoticeTarget, parseRemindDays, shouldRemind, type Notice, parseVersion, jobKind, parseChannel, shouldAnnounce, stageOf, type Channel, type CommitFlag, type CommitKind } from '../updateLogic.js';
+import { buildNotice, classifyCommit, isNoopJob, parseChangelog, parseNoticeLang, parseRemindDays, shouldRemind, type Notice, parseVersion, jobKind, parseChannel, shouldAnnounce, stageOf, type Channel, type CommitFlag, type CommitKind } from '../updateLogic.js';
 
 export const router = express.Router();
 
@@ -17734,7 +17731,6 @@ function updatePayload() {
     channelLocked: CHANNEL_LOCKED,
     skipped: !!remote.build && getSetting('update_skip') === remote.build,
     notify: getSetting('update_notify') !== '0',
-    notifyTo: parseNoticeTarget(getSetting('update_notify_to')),
     notifyLang: parseNoticeLang(getSetting('update_notify_lang')),
     remindDays: parseRemindDays(getSetting('update_remind_days')),
   };
@@ -17794,25 +17790,9 @@ function announce(title: string, description: string, color: number): void {
   }
 }
 
-/** the Discord accounts of the administrators (the panel account has to be linked to Discord) */
-function adminDiscordIds(): string[] {
-  return (db.prepare("SELECT discord_id FROM users WHERE role = 'admin' AND status = 'active' AND discord_id IS NOT NULL AND discord_id != ''").all() as { discord_id: string }[]).map((r) => r.discord_id);
-}
-
-/** the page with the releases on GitHub (a fork or a custom source: no such page) */
-function releasesPage(): string | null {
-  const m = /^(https:\/\/github\.com\/[^/]+\/[^/]+)\/releases\//.exec(releaseBase());
-  return m ? `${m[1]}/releases` : null;
-}
-
-/**
- * Sends a notice about the panel update. The channel message has no buttons (Discord cannot hide a button from part of
- * a channel); the buttons go only to the administrators' direct messages, and every one of them opens the panel,
- * which asks for an administrator's login anyway.
- */
-function sendNotice(n: Notice, buttons: { label: string; url: string }[]): void {
+/** sends a notice about the panel update to the alerts channel (it has to be set up and switched on there) */
+function sendNotice(n: Notice): void {
   if (getSetting('update_notify') === '0') return;
-  const to = parseNoticeTarget(getSetting('update_notify_to'));
   const embed: Record<string, unknown> = {
     title: n.title,
     description: n.description,
@@ -17823,10 +17803,7 @@ function sendNotice(n: Notice, buttons: { label: string; url: string }[]): void 
   };
   try {
     const s = alertSettings();
-    if (to !== 'dm' && s.enabled && s.channelId) enqueueAlert('update', '', { content: '', mention: 'none', embed });
-    if (to !== 'channel' && dmAvailable()) {
-      for (const id of adminDiscordIds()) enqueueDelivery({ kind: 'dm', refId: null, target: id, payload: { content: '', embed, ...(buttons.length ? { actions: buttons } : {}), summary: n.title } });
-    }
+    if (s.enabled && s.channelId) enqueueAlert('update', '', { content: '', mention: 'none', embed });
   } catch (e) {
     log.warn('update notice failed:', (e as Error).message);
   }
@@ -17834,22 +17811,11 @@ function sendNotice(n: Notice, buttons: { label: string; url: string }[]): void 
 
 type UpdateNoticeKind = 'available' | 'reminder' | 'done';
 /** builds a notice from the version, CHANGELOG.md and the settings, and sends it */
-async function sendUpdateNotice(kind: UpdateNoticeKind, from: string | null, to: string | null, line: (lang: 'ru' | 'en') => string, rollback = false): Promise<void> {
+async function sendUpdateNotice(kind: UpdateNoticeKind, from: string | null, to: string | null, line: (lang: 'ru' | 'en') => string): Promise<void> {
   let releases: ReturnType<typeof parseChangelog> = [];
   try { releases = (await loadNotes()).releases; } catch { /* the plain notice */ }
   const lang = parseNoticeLang(getSetting('update_notify_lang'));
-  const target = parseNoticeTarget(getSetting('update_notify_to'));
-  const n = buildNotice({ kind, lang, from, to, releases, line: line(lang), now: Date.now(), withButtons: target === 'dm' });
-  const base = publicBase();
-  const buttons: { label: string; url: string }[] = [];
-  if (base) {
-    const page = `${base}/admin/settings/updates`;
-    const en = lang === 'en';
-    if (kind !== 'done') buttons.push({ label: en ? '⬇️ Install' : '⬇️ Установить', url: page });
-    buttons.push({ label: en ? '📋 What is new' : '📋 Что нового', url: releasesPage() ?? page });
-    if (kind === 'done' && rollback) buttons.push({ label: en ? '↩️ Roll back' : '↩️ Откатить', url: page });
-  }
-  sendNotice(n, buttons);
+  sendNotice(buildNotice({ kind, lang, from, to, releases, line: line(lang), now: Date.now() }));
 }
 
 function announceVersion(): void {
@@ -17897,7 +17863,7 @@ export function recordJob(): void {
     void sendUpdateNotice('done', labelOf(before), now, (l) => {
       const keep = rb ? (l === 'en' ? '\n↩️ A rollback is possible: the previous version is kept together with the database.' : '\n↩️ Откат возможен: предыдущая версия сохранена вместе с базой.') : '';
       return `${l === 'en' ? (now ? `Version \`${now}\` is installed.` : 'The update is installed.') : job.message}${keep}`;
-    }, rb);
+    });
   }
 }
 
@@ -17918,7 +17884,7 @@ router.get('/api/update/preflight', admin, (_req, res) => {
 });
 
 router.put('/api/update/settings', admin, (req, res) => {
-  const b = (req.body ?? {}) as { channel?: unknown; skip?: unknown; notify?: unknown; notifyTo?: unknown; notifyLang?: unknown; remindDays?: unknown };
+  const b = (req.body ?? {}) as { channel?: unknown; skip?: unknown; notify?: unknown; notifyLang?: unknown; remindDays?: unknown };
   if (b.channel !== undefined) {
     if (CHANNEL_LOCKED) return res.status(409).json({ error: 'Канал задан переменными окружения сервера' });
     if (b.channel !== 'release' && b.channel !== 'main') return res.status(400).json({ error: 'Канал: release или main' });
@@ -17932,7 +17898,6 @@ router.put('/api/update/settings', admin, (req, res) => {
     setSetting('update_skip', b.skip);
   }
   if (b.notify !== undefined) setSetting('update_notify', b.notify === false ? '0' : '1');
-  if (b.notifyTo !== undefined) setSetting('update_notify_to', parseNoticeTarget(String(b.notifyTo)));
   if (b.notifyLang !== undefined) setSetting('update_notify_lang', parseNoticeLang(String(b.notifyLang)));
   if (b.remindDays !== undefined) setSetting('update_remind_days', String(parseRemindDays(String(b.remindDays))));
   res.json(updatePayload());
@@ -19898,10 +19863,7 @@ export function notesText(releases: NotesRelease[], max = 1500): string {
 
 // ---- the notices about updates in Discord ----
 export type NoticeLang = 'ru' | 'en';
-export type NoticeTarget = 'channel' | 'dm' | 'both';
 export const parseNoticeLang = (v: string | null | undefined): NoticeLang => (v === 'en' ? 'en' : 'ru');
-/** where the notices go: the alerts channel (default), the direct messages of the administrators, or both */
-export const parseNoticeTarget = (v: string | null | undefined): NoticeTarget => (v === 'dm' || v === 'both' ? v : 'channel');
 /** days before the reminder about a version nobody installed; 0 = no reminder, 7 when not set */
 export function parseRemindDays(v: string | null | undefined): number {
   if (v == null || v === '') return 7;
@@ -19978,7 +19940,7 @@ export function shouldRemind(o: { notify: boolean; remindDays: number; available
 export interface Notice { title: string; description: string; fields: { name: string; value: string }[]; footer: string; color: number }
 
 /** the text of a notice: «available» (a new version), «reminder» (nobody installed it) and «done» (the panel was updated) */
-export function buildNotice(o: { kind: 'available' | 'reminder' | 'done'; lang: NoticeLang; from: string | null; to: string | null; releases: NotesRelease[]; line: string; now: number; withButtons: boolean }): Notice {
+export function buildNotice(o: { kind: 'available' | 'reminder' | 'done'; lang: NoticeLang; from: string | null; to: string | null; releases: NotesRelease[]; line: string; now: number }): Notice {
   const en = o.lang === 'en';
   const between = notesBetween(o.releases, o.from, o.to);
   const target = o.releases.find((r) => r.version === o.to);
@@ -19988,7 +19950,7 @@ export function buildNotice(o: { kind: 'available' | 'reminder' | 'done'; lang: 
   const lines: string[] = [o.line];
   if (skipped > 0) lines.push(en ? `Versions in between: ${skipped}` : `Пропущено версий между ними: ${skipped}`);
   lines.push(...noticeWarnings(between, o.lang));
-  if (o.kind !== 'done' && !o.withButtons) lines.push(en ? 'Install: Settings → Updates and backups.' : 'Установить: Настройки → Обновления и копии.');
+  if (o.kind !== 'done') lines.push(en ? 'Install: Settings → Updates and backups.' : 'Установить: Настройки → Обновления и копии.');
   const title = o.kind === 'available' ? (en ? 'Panel update available' : 'Доступно обновление панели')
     : o.kind === 'reminder' ? (en ? 'Reminder: panel update is waiting' : 'Напоминание: обновление панели ждёт')
     : (en ? 'Panel updated' : 'Панель обновлена');
@@ -49791,8 +49753,6 @@ export interface UpdateInfo {
   /** the offered version was skipped by an administrator */
   skipped?: boolean;
   notify?: boolean;
-  /** where the notices go: the alerts channel, the direct messages of the administrators, or both */
-  notifyTo?: 'channel' | 'dm' | 'both';
   notifyLang?: 'ru' | 'en';
   /** days before the reminder about a version nobody installed (0 = none) */
   remindDays?: number;
@@ -70203,11 +70163,6 @@ const en: Record<keyof typeof ru, string> = {
   'adm.col.version': 'Version',
   'adm.col.channels': 'Discord channels',
   'adm.col.updated': 'Updated',
-  'upd.o.to': 'Send to',
-  'upd.o.to.channel': 'The alerts channel (no buttons)',
-  'upd.o.to.dm': 'Administrators, in direct messages (with buttons)',
-  'upd.o.to.both': 'The channel and direct messages',
-  'upd.o.toHint': 'The Install, What is new and Roll back buttons arrive only in direct messages to administrators with a linked Discord account: Discord cannot hide buttons from the rest of a channel. Every button opens the panel, which asks for an administrator login.',
   'upd.o.lang': 'Message language',
   'upd.o.remind': 'Remind me if not installed',
   'upd.o.remind.off': 'Do not remind',
@@ -72358,11 +72313,6 @@ const ru = {
   'adm.col.version': 'Версия',
   'adm.col.channels': 'Каналы Discord',
   'adm.col.updated': 'Обновлён',
-  'upd.o.to': 'Куда присылать',
-  'upd.o.to.channel': 'В канал оповещений (без кнопок)',
-  'upd.o.to.dm': 'Администраторам в личные сообщения (с кнопками)',
-  'upd.o.to.both': 'В канал и в личные сообщения',
-  'upd.o.toHint': 'Кнопки «Установить», «Что нового» и «Откатить» приходят только в личные сообщения администраторам с привязанным Discord: в канале Discord не умеет скрывать кнопки от остальных. Каждая кнопка открывает панель, а там нужен вход администратора.',
   'upd.o.lang': 'Язык сообщений',
   'upd.o.remind': 'Напомнить, если не установили',
   'upd.o.remind.off': 'Не напоминать',
@@ -84253,7 +84203,7 @@ export function HistoryCard({ refreshKey }: { refreshKey: unknown }) {
 /** channel and Discord notices */
 export function OptionsCard({ info, onChange }: { info: UpdateInfo; onChange: (i: UpdateInfo) => void }) {
   const [error, setError] = useState('');
-  const save = async (body: { channel?: 'release' | 'main'; notify?: boolean; notifyTo?: 'channel' | 'dm' | 'both'; notifyLang?: 'ru' | 'en'; remindDays?: number }) => {
+  const save = async (body: { channel?: 'release' | 'main'; notify?: boolean; notifyLang?: 'ru' | 'en'; remindDays?: number }) => {
     setError('');
     try {
       onChange(await api<UpdateInfo>('/update/settings', 'PUT', body));
@@ -84279,16 +84229,7 @@ export function OptionsCard({ info, onChange }: { info: UpdateInfo; onChange: (i
         <span>{t('upd.o.notify')}<span id="upd-notify-hint" className="mt-0.5 block text-sm font-semibold text-mute">{t('upd.o.notifyHint')}</span></span>
       </label>
       {info.notify !== false && (
-        <div className="grid gap-3 sm:grid-cols-3">
-          <div className="sm:col-span-3">
-            <label htmlFor="upd-to" className="label">{t('upd.o.to')}</label>
-            <select id="upd-to" className="input" value={info.notifyTo ?? 'channel'} onChange={(e) => void save({ notifyTo: e.target.value as 'channel' | 'dm' | 'both' })} aria-describedby="upd-to-hint">
-              <option value="channel">{t('upd.o.to.channel')}</option>
-              <option value="dm">{t('upd.o.to.dm')}</option>
-              <option value="both">{t('upd.o.to.both')}</option>
-            </select>
-            <p id="upd-to-hint" className="mt-1 text-sm font-semibold text-mute">{t('upd.o.toHint')}</p>
-          </div>
+        <div className="grid gap-3 sm:grid-cols-2">
           <div>
             <label htmlFor="upd-lang" className="label">{t('upd.o.lang')}</label>
             <select id="upd-lang" className="input" value={info.notifyLang ?? 'ru'} onChange={(e) => void save({ notifyLang: e.target.value as 'ru' | 'en' })}>
