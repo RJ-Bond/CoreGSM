@@ -22,6 +22,8 @@
       // apply the visitor's theme (or the community's default) before first paint to avoid a flash
       try {
         var t = localStorage.getItem('coregsm_theme') || localStorage.getItem('coregsm_theme_default') || 'dark';
+        // the admin area has its own theme when one was chosen there
+        if (location.pathname.indexOf('/admin') === 0) t = localStorage.getItem('coregsm_admin_theme') || t;
         if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
       } catch (e) {}
     </script>
