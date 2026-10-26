@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="87e371aeec33"
+COREGSM_BUILD="4dae2a46d754"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.0.0.33"
+COREGSM_VERSION="1.0.0.34"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -3919,9 +3919,11 @@ export interface Payload {
   embed: Record<string, unknown>;
   /** link buttons under the message (the bot adds them as Discord link buttons) */
   actions?: { label: string; url: string }[];
+  /** buttons that the bot answers itself (a poll vote): customId «poll:<poll>:<option>» */
+  buttons?: { customId: string; label: string }[];
 }
 
-export type AlertKind = 'down' | 'up' | 'test' | 'low' | 'ping' | 'full' | 'digest' | 'restart' | 'update' | 'disk';
+export type AlertKind = 'down' | 'up' | 'test' | 'low' | 'ping' | 'full' | 'digest' | 'restart' | 'update' | 'disk' | 'poll';
 
 export function enqueueAlert(kind: AlertKind, serverName: string, payload0: Payload, channelId?: string) {
   const s = alertSettings();
@@ -8379,6 +8381,10 @@ export const ERRORS = {
   update_version_invalid: 'Некорректная версия',
   update_notify_channel_invalid: 'Некорректный канал',
   game_file_invalid: 'Файл игры не прошёл проверку',
+  poll_invalid: 'Проверьте голосование: вопрос от 3 символов, от 2 до 10 разных вариантов, время окончания в будущем',
+  poll_not_found: 'Голосование не найдено',
+  poll_option_invalid: 'Такого варианта нет',
+  poll_closed: 'Голосование завершено',
   welcome_invalid: 'Приветствие: проверьте канал и длину текста (до 1000 символов)',
   rollback_request_failed: 'Не удалось создать запрос на откат (нет прав на папку /app/update)',
 
@@ -9951,6 +9957,7 @@ import { registerOverview } from './overview.js';
 import { registerAttention } from './attention.js';
 import { registerWelcome } from './welcome.js';
 import { registerRules } from './rules.js';
+import { registerPolls } from './polls.js';
 import { logAccount, registerProfile } from './profile.js';
 import { csrfGuard, registerSecurity, securityHeaders, windowLimiter } from './security.js';
 import { embedFor, SELECT_SERVERS, SERVER_ORDER, serialize, type ServerJoin } from './serverData.js';
@@ -10118,6 +10125,7 @@ registerOverview({ app, viewer });
 registerAttention({ app, admin });
 registerWelcome({ app, admin, internal });
 registerRules({ app, auth, admin });
+registerPolls({ app, auth, admin, internal });
 
 // ---------- errors ----------
 app.use((err: Error & { type?: string; status?: number }, _req: Request, res: Response, _next: NextFunction) => {
@@ -13687,86 +13695,201 @@ export function registerPlayerFollows(deps: { app: Express; auth: RequestHandler
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/pollLogic.ts" << '__COREGSM_EOF__'
-/** Pure helpers of the poller (no database, no network): unit-tested directly. */
+/** Community polls: validation, counting and text. Pure, covered by tests. */
+export const MAX_OPTIONS = 10;
+export const MIN_OPTIONS = 2;
 
-export const DEFAULT_FAIL_THRESHOLD = 2;
-export const DEFAULT_CONCURRENCY = 8;
+export interface PollInput { question: string; options: string[]; closesAt?: number | null }
 
-const toInt = (v: unknown): number | null => {
-  if (v === null || v === undefined || v === '') return null;
-  const n = Math.floor(Number(v));
-  return Number.isFinite(n) ? n : null;
-};
-
-/** consecutive failed polls needed before a server is shown as offline: 1..5, default 2 */
-export function clampThreshold(v: unknown): number {
-  const n = toInt(v);
-  return n === null ? DEFAULT_FAIL_THRESHOLD : Math.min(5, Math.max(1, n));
+export function validatePoll(i: PollInput, now: number): { ok: true; question: string; options: string[]; closesAt: number | null } | { ok: false; error: 'poll_invalid' } {
+  const question = i.question.trim();
+  const options = i.options.map((o) => o.trim()).filter(Boolean);
+  const unique = new Set(options.map((o) => o.toLowerCase()));
+  if (question.length < 3 || question.length > 200) return { ok: false, error: 'poll_invalid' };
+  if (options.length < MIN_OPTIONS || options.length > MAX_OPTIONS || unique.size !== options.length || options.some((o) => o.length > 80)) return { ok: false, error: 'poll_invalid' };
+  const closesAt = i.closesAt ?? null;
+  if (closesAt !== null && (!Number.isFinite(closesAt) || closesAt <= now)) return { ok: false, error: 'poll_invalid' };
+  return { ok: true, question, options, closesAt };
 }
 
-/** number of servers polled at the same time: 1..32, default 8 */
-export function clampConcurrency(v: unknown): number {
-  const n = toInt(v);
-  return n === null ? DEFAULT_CONCURRENCY : Math.min(32, Math.max(1, n));
+export const pollIsOpen = (p: { closed: boolean; closesAt: number | null }, now: number): boolean => !p.closed && (p.closesAt === null || p.closesAt > now);
+
+export interface TallyRow { id: number; text: string; votes: number; pct: number }
+export function tally(options: { id: number; text: string }[], counts: Map<number, number>): { rows: TallyRow[]; total: number } {
+  const total = options.reduce((n, o) => n + (counts.get(o.id) ?? 0), 0);
+  return { total, rows: options.map((o) => ({ id: o.id, text: o.text, votes: counts.get(o.id) ?? 0, pct: total ? Math.round(((counts.get(o.id) ?? 0) / total) * 100) : 0 })) };
 }
 
-/** how long old rows are kept, in days (the defaults of the settings HISTORY_DAYS, PLAYER_SESSIONS_DAYS, ...) */
-export const RETENTION_DEFAULTS = { history: 30, playerSessions: 90, accountEvents: 180, uptime: 90 } as const;
+const bar = (pct: number) => '▰'.repeat(Math.round(pct / 10)) + '▱'.repeat(10 - Math.round(pct / 10));
 
-/** days to keep a kind of old rows: 1..3650, `fallback` when unset or not a number */
-export function clampDays(v: unknown, fallback: number): number {
-  const n = toInt(v);
-  return n === null ? fallback : Math.min(3650, Math.max(1, n));
+/** «▰▰▰▰▱▱▱▱▱▱ 40% · Вариант (4)» for every option */
+export function resultsText(rows: TallyRow[], total: number): string {
+  const lines = rows.map((r) => `${bar(r.pct)} **${r.pct}%** · ${r.text.replace(/[*_~`|>]/g, '')} (${r.votes})`);
+  return `${lines.join('\n')}\n\nВсего голосов: **${total}**`;
 }
-
-export const PRUNE_EVERY_MS = 3600_000;
-/** the cleanup of old rows runs on the first cycle and then at most once an hour (not on every 30-second poll) */
-export function pruneDue(now: number, last: number, every = PRUNE_EVERY_MS): boolean {
-  return last === 0 || now - last >= every;
-}
-
-export interface Decision {
-  /** the state to store in `status` */
-  online: boolean;
-  /** false: the failed poll is not believed yet, the last good state is kept */
-  confirmed: boolean;
-  /** consecutive failed polls including this one (0 after a successful poll) */
-  failures: number;
-  /** this very poll turned an online server offline */
-  becameOffline: boolean;
-}
-
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/polls.ts" << '__COREGSM_EOF__'
 /**
- * Whether a poll result changes what the panel shows.
- *  - a successful poll always counts and resets the counter;
- *  - a failed poll counts at once when there is no state to hold (new server) or the server is already offline;
- *  - otherwise the last good state is kept until `threshold` consecutive polls have failed.
+ * Community polls: created in the panel, voted on the site or with buttons in Discord.
+ *   GET    /api/polls               (signed in) the latest polls with results and the user's own vote
+ *   POST   /api/polls/:id/vote      { optionId } — one vote per user, changeable until the poll closes
+ *   POST   /api/polls               (admin) { question, options[2..10], closesAt?, channelId? } — posts it to the channel
+ *   POST   /api/polls/:id/close     (admin) closes it and posts the results
+ *   DELETE /api/polls/:id           (admin)
+ *   POST   /internal/polls/vote     the bot: a button press { pollId, optionId, discordId }
  */
-export function decideStatus(i: { prevOnline: boolean | null; prevFailures: number; polledOnline: boolean; threshold: number }): Decision {
-  if (i.polledOnline) return { online: true, confirmed: true, failures: 0, becameOffline: false };
-  const failures = Math.min(1_000_000, Math.max(0, Math.floor(i.prevFailures)) + 1);
-  const threshold = clampThreshold(i.threshold);
-  if (i.prevOnline === null || i.prevOnline === false) return { online: false, confirmed: true, failures, becameOffline: false };
-  if (failures >= threshold) return { online: false, confirmed: true, failures, becameOffline: true };
-  return { online: true, confirmed: false, failures, becameOffline: false };
+import type { Express, RequestHandler } from 'express';
+import { z } from 'zod';
+import { enqueueAlert } from './alerts.js';
+import { type AuthedRequest } from './auth.js';
+import { db } from './db.js';
+import { log } from './logger.js';
+import { pollIsOpen, resultsText, tally, validatePoll } from './pollLogic.js';
+import { publicBase } from './site.js';
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS polls (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  question TEXT NOT NULL,
+  closes_at INTEGER,
+  closed INTEGER NOT NULL DEFAULT 0,
+  channel_id TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS poll_options (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  poll_id INTEGER NOT NULL REFERENCES polls(id) ON DELETE CASCADE,
+  text TEXT NOT NULL,
+  pos INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS poll_votes (
+  poll_id INTEGER NOT NULL REFERENCES polls(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  option_id INTEGER NOT NULL REFERENCES poll_options(id) ON DELETE CASCADE,
+  voted_at INTEGER NOT NULL,
+  PRIMARY KEY (poll_id, user_id)
+);
+`);
+
+interface PollRow { id: number; question: string; closes_at: number | null; closed: number; channel_id: string; created_at: number }
+const getPoll = (id: number) => db.prepare('SELECT * FROM polls WHERE id = ?').get(id) as PollRow | undefined;
+const optionsOf = (id: number) => db.prepare('SELECT id, text FROM poll_options WHERE poll_id = ? ORDER BY pos').all(id) as { id: number; text: string }[];
+const countsOf = (id: number) => new Map((db.prepare('SELECT option_id, COUNT(*) AS n FROM poll_votes WHERE poll_id = ? GROUP BY option_id').all(id) as { option_id: number; n: number }[]).map((r) => [r.option_id, r.n]));
+const open = (p: PollRow, now = Date.now()) => pollIsOpen({ closed: !!p.closed, closesAt: p.closes_at }, now);
+
+function view(p: PollRow, userId: number | null) {
+  const t = tally(optionsOf(p.id), countsOf(p.id));
+  const mine = userId ? (db.prepare('SELECT option_id FROM poll_votes WHERE poll_id = ? AND user_id = ?').get(p.id, userId) as { option_id: number } | undefined)?.option_id ?? null : null;
+  return { id: p.id, question: p.question, closesAt: p.closes_at, closed: !open(p), createdAt: p.created_at, total: t.total, options: t.rows, myVote: mine };
 }
 
-/** runs `worker` over `items`, at most `limit` at a time; a failing worker never stops the others */
-export async function runPool<T>(items: T[], limit: number, worker: (item: T, index: number) => Promise<void>): Promise<void> {
-  const n = Math.max(1, Math.floor(limit));
-  let next = 0;
-  const lane = async () => {
-    for (;;) {
-      const i = next++;
-      if (i >= items.length) return;
-      try {
-        await worker(items[i], i);
-      } catch {
-        /* the worker reports its own failures */
-      }
+const COLOR = { open: 0x5865f2, closed: 0x23a55a };
+
+function announce(p: PollRow, kind: 'new' | 'result'): void {
+  if (!/^\d{15,25}$/.test(p.channel_id)) return;
+  const t = tally(optionsOf(p.id), countsOf(p.id));
+  const base = publicBase();
+  const isNew = kind === 'new';
+  enqueueAlert(
+    'poll',
+    'CoreGSM',
+    {
+      content: '',
+      mention: 'none',
+      embed: {
+        title: isNew ? `🗳️ Голосование: ${p.question}` : `📊 Итоги голосования: ${p.question}`,
+        description: isNew
+          ? `Выберите вариант кнопкой ниже${base ? ` или на сайте` : ''}. Нужен аккаунт, привязанный к Discord (команда /register).${p.closes_at ? `\nЗавершится <t:${Math.floor(p.closes_at / 1000)}:R>.` : ''}`
+          : resultsText(t.rows, t.total),
+        color: isNew ? COLOR.open : COLOR.closed,
+      },
+      ...(isNew ? { buttons: t.rows.map((r) => ({ customId: `poll:${p.id}:${r.id}`, label: r.text.slice(0, 80) })) } : {}),
+      ...(base ? { actions: [{ label: isNew ? 'Голосовать на сайте' : 'Подробнее на сайте', url: `${base}/community` }] } : {}),
+    },
+    p.channel_id,
+  );
+}
+
+function closePoll(p: PollRow): void {
+  db.prepare('UPDATE polls SET closed = 1 WHERE id = ?').run(p.id);
+  announce(p, 'result');
+}
+
+/** polls whose time has come are closed (and their results posted) */
+export function closeDuePolls(now = Date.now()): number {
+  const due = db.prepare('SELECT * FROM polls WHERE closed = 0 AND closes_at IS NOT NULL AND closes_at <= ?').all(now) as PollRow[];
+  for (const p of due) closePoll(p);
+  return due.length;
+}
+
+export function registerPolls({ app, auth, admin, internal }: { app: Express; auth: RequestHandler; admin: RequestHandler; internal: RequestHandler }): void {
+  app.get('/api/polls', auth, (req: AuthedRequest, res) => {
+    const rows = db.prepare('SELECT * FROM polls ORDER BY closed ASC, id DESC LIMIT 20').all() as PollRow[];
+    res.json(rows.map((p) => view(p, req.user!.id)));
+  });
+
+  app.post('/api/polls/:id/vote', auth, (req: AuthedRequest, res) => {
+    const b = z.object({ optionId: z.number().int() }).safeParse(req.body);
+    const p = getPoll(Number(req.params.id));
+    if (!p) return res.status(404).json({ error: 'Голосование не найдено' });
+    if (!b.success || !optionsOf(p.id).some((o) => o.id === b.data.optionId)) return res.status(400).json({ error: 'Такого варианта нет' });
+    if (!open(p)) return res.status(409).json({ error: 'Голосование завершено' });
+    db.prepare('INSERT INTO poll_votes (poll_id, user_id, option_id, voted_at) VALUES (?, ?, ?, ?) ON CONFLICT(poll_id, user_id) DO UPDATE SET option_id = excluded.option_id, voted_at = excluded.voted_at').run(p.id, req.user!.id, b.data.optionId, Date.now());
+    res.json(view(p, req.user!.id));
+  });
+
+  app.post('/api/polls', admin, (req, res) => {
+    const b = z
+      .object({ question: z.string().max(300), options: z.array(z.string().max(200)).max(20), closesAt: z.number().int().nullable().optional(), channelId: z.string().regex(/^(\d{15,25})?$/).optional() })
+      .safeParse(req.body);
+    const v = b.success ? validatePoll({ question: b.data.question, options: b.data.options, closesAt: b.data.closesAt ?? null }, Date.now()) : null;
+    if (!b.success || !v || !v.ok) return res.status(400).json({ error: 'Проверьте голосование: вопрос от 3 символов, от 2 до 10 разных вариантов, время окончания в будущем' });
+    let id = 0;
+    db.transaction(() => {
+      id = Number(db.prepare('INSERT INTO polls (question, closes_at, channel_id, created_at) VALUES (?, ?, ?, ?)').run(v.question, v.closesAt, b.data.channelId ?? '', Date.now()).lastInsertRowid);
+      v.options.forEach((o, i) => db.prepare('INSERT INTO poll_options (poll_id, text, pos) VALUES (?, ?, ?)').run(id, o, i));
+    })();
+    const p = getPoll(id)!;
+    announce(p, 'new');
+    res.status(201).json(view(p, null));
+  });
+
+  app.post('/api/polls/:id/close', admin, (req, res) => {
+    const p = getPoll(Number(req.params.id));
+    if (!p) return res.status(404).json({ error: 'Голосование не найдено' });
+    if (!p.closed) closePoll(p);
+    res.json(view({ ...p, closed: 1 }, null));
+  });
+
+  app.delete('/api/polls/:id', admin, (req, res) => {
+    db.prepare('DELETE FROM polls WHERE id = ?').run(Number(req.params.id));
+    res.json({ ok: true });
+  });
+
+  // a button under the message in Discord
+  app.post('/internal/polls/vote', internal, (req, res) => {
+    const b = z.object({ pollId: z.number().int(), optionId: z.number().int(), discordId: z.string().regex(/^\d{15,25}$/) }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'bad body' });
+    const p = getPoll(b.data.pollId);
+    if (!p || !optionsOf(p.id).some((o) => o.id === b.data.optionId)) return res.json({ status: 'notfound' });
+    if (!open(p)) return res.json({ status: 'closed', text: resultsText(...(() => { const t = tally(optionsOf(p.id), countsOf(p.id)); return [t.rows, t.total] as const; })()) });
+    const u = db.prepare("SELECT id FROM users WHERE discord_id = ? AND status = 'active'").get(b.data.discordId) as { id: number } | undefined;
+    if (!u) return res.json({ status: 'unlinked' });
+    db.prepare('INSERT INTO poll_votes (poll_id, user_id, option_id, voted_at) VALUES (?, ?, ?, ?) ON CONFLICT(poll_id, user_id) DO UPDATE SET option_id = excluded.option_id, voted_at = excluded.voted_at').run(p.id, u.id, b.data.optionId, Date.now());
+    const t = tally(optionsOf(p.id), countsOf(p.id));
+    res.json({ status: 'ok', text: resultsText(t.rows, t.total) });
+  });
+
+  const tick = () => {
+    try {
+      closeDuePolls();
+    } catch (e) {
+      log.error('closing polls failed', (e as Error).message);
     }
   };
-  await Promise.all(Array.from({ length: Math.min(n, items.length) }, lane));
+  setTimeout(tick, 45_000).unref();
+  setInterval(tick, 60_000).unref();
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
@@ -22923,7 +23046,18 @@ interface DeliveryItem {
     embed?: ConstructorParameters<typeof EmbedBuilder>[0];
     /** link buttons under the message (e.g. «Подробности на сайте» in the weekly digest) */
     actions?: { label: string; url: string }[];
+    /** buttons the bot answers itself (poll votes) */
+    buttons?: { customId: string; label: string }[];
   };
+}
+/** buttons answered by the bot (a poll): five to a row */
+function actionRows(buttons: { customId: string; label: string }[] | undefined) {
+  const list = (buttons ?? []).filter((b) => /^poll:\d+:\d+$/.test(b.customId) && b.label).slice(0, 10);
+  const rows: ActionRowBuilder<ButtonBuilder>[] = [];
+  for (let i = 0; i < list.length; i += 5) {
+    rows.push(new ActionRowBuilder<ButtonBuilder>().addComponents(list.slice(i, i + 5).map((b) => new ButtonBuilder().setStyle(ButtonStyle.Secondary).setCustomId(b.customId).setLabel(b.label.slice(0, 80)))));
+  }
+  return rows;
 }
 /** one row of link buttons (Discord allows 5 per row; https links only) */
 function linkRows(actions: { label: string; url: string }[] | undefined) {
@@ -22961,7 +23095,7 @@ async function processDeliveries(): Promise<void> {
           enforceNonce: true,
           content: it.payload.content || undefined,
           embeds: it.payload.embed ? [new EmbedBuilder(it.payload.embed)] : [],
-          components: linkRows(it.payload.actions),
+          components: [...actionRows(it.payload.buttons), ...linkRows(it.payload.actions)],
           allowedMentions: { parse: ((it.payload.mention ?? 'none') === 'none' ? [] : ['everyone']) as 'everyone'[] },
         });
       }
@@ -23073,7 +23207,7 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-bot/src"
   cat > "$APP_DIR/core-bot/src/commands.ts" << '__COREGSM_EOF__'
 /** Slash commands: registration of players from Discord (/register, /nick, /profile) and the nick autocomplete. */
-import type { AutocompleteInteraction, Client, Interaction } from 'discord.js';
+import type { AutocompleteInteraction, ButtonInteraction, Client, Interaction } from 'discord.js';
 import { backend, backendJson } from './backend.js';
 import { humanDiscordError } from './errors.js';
 import { log } from './log.js';
@@ -23141,7 +23275,32 @@ async function handleAutocomplete(i: AutocompleteInteraction): Promise<void> {
   }
 }
 
+/** a button under a poll message: «poll:<poll id>:<option id>» */
+async function handlePollButton(i: ButtonInteraction): Promise<void> {
+  const m = /^poll:(\d+):(\d+)$/.exec(i.customId);
+  if (!m) return;
+  try {
+    await i.deferReply({ flags: EPHEMERAL });
+  } catch (e) {
+    log(`poll button from ${i.user.id}: could not acknowledge:`, (e as Error).message);
+    return;
+  }
+  const r = await backendJson<{ status: 'ok' | 'closed' | 'unlinked' | 'notfound'; text?: string }>('/internal/polls/vote', {
+    method: 'POST',
+    body: JSON.stringify({ pollId: Number(m[1]), optionId: Number(m[2]), discordId: i.user.id }),
+  }).catch(() => null);
+  const s = r?.data?.status;
+  const out =
+    s === 'ok' ? replyEmbed('Голос принят', `${r?.data?.text ?? ''}\n\nМожно передумать: нажмите другой вариант.`, COLORS.ok)
+    : s === 'closed' ? replyEmbed('Голосование завершено', r?.data?.text ?? '', COLORS.warn)
+    : s === 'unlinked' ? replyEmbed('Нужен аккаунт', 'Голосовать могут участники с аккаунтом, привязанным к Discord. Зарегистрируйтесь командой /register.', COLORS.warn)
+    : s === 'notfound' ? replyEmbed('Голосование не найдено', 'Возможно, его удалили.', COLORS.bad)
+    : replyEmbed('Не получилось', 'Панель сейчас не отвечает, попробуйте ещё раз чуть позже.', COLORS.bad);
+  await i.editReply(out).catch((e) => log('poll reply failed:', (e as Error).message));
+}
+
 export async function handleInteraction(i: Interaction): Promise<void> {
+  if (i.isButton()) return handlePollButton(i);
   if (i.isAutocomplete()) return INFO_NAMES.has(i.commandName) ? infoAutocomplete(i) : handleAutocomplete(i);
   if (!i.isChatInputCommand()) return;
   if (INFO_NAMES.has(i.commandName)) return handleInfo(i);
@@ -53906,6 +54065,200 @@ export default function PollSettingsCard() {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/PollsAdmin.tsx" << '__COREGSM_EOF__'
+import { useEffect, useState, type FormEvent } from 'react';
+import { api } from '../api';
+import { confirmDialog } from '../confirm';
+import { t, useI18n } from '../i18n';
+import { Button, ErrorLine, Section, fail, toast } from '../ui';
+import { ChannelPicker } from './ChannelPicker';
+import { PollBlock, type PollView } from './PollsCard';
+
+/** Admin → Сообщество → Голосования: create a poll (optionally posted to a Discord channel with vote buttons), close it, delete it. */
+export default function PollsAdmin() {
+  useI18n();
+  const [polls, setPolls] = useState<PollView[] | null>(null);
+  const [question, setQuestion] = useState('');
+  const [options, setOptions] = useState(['', '']);
+  const [until, setUntil] = useState('');
+  const [channelId, setChannelId] = useState('');
+  const [picking, setPicking] = useState(false);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const load = () => api<PollView[]>('/polls').then(setPolls).catch((e: Error) => setError(e.message));
+  useEffect(() => { void load(); }, []);
+
+  const create = async (e: FormEvent) => {
+    e.preventDefault();
+    setError('');
+    setBusy(true);
+    try {
+      await api('/polls', 'POST', {
+        question,
+        options: options.filter((o) => o.trim()),
+        closesAt: until ? new Date(until).getTime() : null,
+        channelId,
+      });
+      setQuestion('');
+      setOptions(['', '']);
+      setUntil('');
+      toast(channelId ? t('pl.createdPosted') : t('pl.created'));
+      await load();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const close = async (p: PollView) => {
+    if (!(await confirmDialog({ title: t('pl.closeQ'), text: t('pl.closeText'), confirmLabel: t('pl.close') }))) return;
+    try { await api(`/polls/${p.id}/close`, 'POST'); await load(); } catch (err) { fail(err); }
+  };
+  const remove = async (p: PollView) => {
+    if (!(await confirmDialog({ title: t('pl.deleteQ'), text: t('pl.deleteText'), confirmLabel: t('pl.delete') }))) return;
+    try { await api(`/polls/${p.id}`, 'DELETE'); await load(); } catch (err) { fail(err); }
+  };
+
+  return (
+    <>
+      <Section title={t('pl.new')} description={t('pl.newHelp')}>
+        <form onSubmit={(e) => void create(e)} className="space-y-3">
+          <div>
+            <label htmlFor="poll-q" className="label">{t('pl.question')}</label>
+            <input id="poll-q" className="input" value={question} maxLength={200} onChange={(e) => setQuestion(e.target.value)} required />
+          </div>
+          <div>
+            <span className="label">{t('pl.options')}</span>
+            <div className="space-y-2">
+              {options.map((o, i) => (
+                <input key={i} className="input" aria-label={t('pl.optionN', { n: i + 1 })} value={o} maxLength={80} onChange={(e) => setOptions(options.map((x, k) => (k === i ? e.target.value : x)))} />
+              ))}
+            </div>
+            {options.length < 10 && <button type="button" className="btn-link mt-2" onClick={() => setOptions([...options, ''])}>{t('pl.addOption')}</button>}
+          </div>
+          <div>
+            <label htmlFor="poll-until" className="label">{t('pl.until2')}</label>
+            <input id="poll-until" className="input" type="datetime-local" value={until} onChange={(e) => setUntil(e.target.value)} />
+          </div>
+          <div>
+            <div className="flex flex-wrap items-center gap-3">
+              <span className="font-black">{channelId ? t('pl.channel', { id: channelId }) : t('pl.noChannel')}</span>
+              <button type="button" className="btn btn-soft btn-sm" onClick={() => setPicking((v) => !v)} aria-expanded={picking}>{t('pl.pick')}</button>
+              {channelId && <button type="button" className="btn-link text-sm" onClick={() => setChannelId('')}>{t('pl.noPost')}</button>}
+            </div>
+            {picking && <div className="mt-3"><ChannelPicker id="poll-channel" value={channelId} onChange={(v) => { if (/^\d{15,25}$/.test(v)) { setChannelId(v); setPicking(false); } }} /></div>}
+          </div>
+          <ErrorLine text={error} />
+          <Button loading={busy}>{t('pl.create')}</Button>
+        </form>
+      </Section>
+      <Section title={t('pl.list')}>
+        {polls && polls.length === 0 && <p className="font-semibold text-mute">{t('pl.none')}</p>}
+        <div className="divide-y divide-line">
+          {polls?.map((p) => (
+            <div key={p.id}>
+              <PollBlock poll={p} onChange={(x) => setPolls((cur) => cur?.map((y) => (y.id === x.id ? x : y)) ?? cur)} />
+              <div className="flex gap-4 pb-3">
+                {!p.closed && <button type="button" className="btn-link" onClick={() => void close(p)}>{t('pl.close')}</button>}
+                <button type="button" className="btn-link text-bad" onClick={() => void remove(p)}>{t('pl.delete')}</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      </Section>
+    </>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/PollsCard.tsx" << '__COREGSM_EOF__'
+import { useCallback, useEffect, useState } from 'react';
+import { api } from '../api';
+import { useAuth } from '../auth';
+import { t, useI18n } from '../i18n';
+import { fail, toast } from '../ui';
+
+export interface PollView {
+  id: number;
+  question: string;
+  closesAt: number | null;
+  closed: boolean;
+  total: number;
+  options: { id: number; text: string; votes: number; pct: number }[];
+  myVote: number | null;
+}
+
+/** one poll: buttons while it is open (a vote can be changed), bars with the results */
+export function PollBlock({ poll, onChange }: { poll: PollView; onChange: (p: PollView) => void }) {
+  useI18n();
+  const [busy, setBusy] = useState(false);
+  const vote = async (optionId: number) => {
+    if (busy || poll.closed) return;
+    setBusy(true);
+    try {
+      onChange(await api<PollView>(`/polls/${poll.id}/vote`, 'POST', { optionId }));
+      toast(t('pl.voted'));
+    } catch (e) {
+      fail(e);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="py-3">
+      <div className="mb-2 font-black">{poll.question}</div>
+      <ul className="space-y-2">
+        {poll.options.map((o) => (
+          <li key={o.id}>
+            <button
+              type="button"
+              disabled={poll.closed || busy}
+              onClick={() => void vote(o.id)}
+              aria-pressed={poll.myVote === o.id}
+              className={`relative w-full overflow-hidden rounded-ui-lg border px-3 py-2 text-left font-bold transition ${poll.myVote === o.id ? 'border-brand' : 'border-line'} ${poll.closed ? 'cursor-default' : 'hover:bg-soft'}`}
+            >
+              <span aria-hidden className="absolute inset-y-0 left-0 bg-brand/15" style={{ width: `${o.pct}%` }} />
+              <span className="relative flex items-center justify-between gap-3">
+                <span className="min-w-0 break-words">{poll.myVote === o.id ? '✓ ' : ''}{o.text}</span>
+                <span className="shrink-0 text-sm text-mute">{o.pct}% · {o.votes}</span>
+              </span>
+            </button>
+          </li>
+        ))}
+      </ul>
+      <p className="mt-2 text-sm font-semibold text-mute">
+        {t('pl.total', { n: poll.total })} · {poll.closed ? t('pl.closed') : poll.closesAt ? t('pl.until', { when: new Date(poll.closesAt).toLocaleString() }) : t('pl.open')}
+      </p>
+    </div>
+  );
+}
+
+/** the open polls (and the latest finished ones) on the community page; only for signed-in users */
+export default function PollsCard() {
+  useI18n();
+  const { me } = useAuth();
+  const [polls, setPolls] = useState<PollView[] | null>(null);
+  useEffect(() => {
+    if (!me) { setPolls(null); return; }
+    let alive = true;
+    api<PollView[]>('/polls').then((r) => { if (alive) setPolls(r); }).catch(() => undefined);
+    return () => { alive = false; };
+  }, [me?.username]);
+  const replace = useCallback((p: PollView) => setPolls((cur) => cur?.map((x) => (x.id === p.id ? p : x)) ?? cur), []);
+  if (!me || !polls || polls.length === 0) return null;
+  const shown = polls.filter((p) => !p.closed).concat(polls.filter((p) => p.closed).slice(0, 2));
+  return (
+    <section id="cm-polls" className="tile fade-in" aria-label={t('pl.title')}>
+      <h2 className="mb-1 text-lg font-black">{t('pl.title')}</h2>
+      <div className="divide-y divide-line">
+        {shown.map((p) => <PollBlock key={p.id} poll={p} onChange={replace} />)}
+      </div>
+    </section>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
   cat > "$APP_DIR/core-frontend/src/components/ProbesSection.tsx" << '__COREGSM_EOF__'
 /**
  * Admin → Система: probes, small programs on other machines that check the game servers from there. A server the
@@ -71040,6 +71393,36 @@ const en: Record<keyof typeof ru, string> = {
   'att.reports': 'Player reports wait for review: {n}',
   'att.comments': 'Flagged comments wait for moderation: {n}',
   'al.k.disk': 'Disk space',
+  'adm.com.polls': 'Polls',
+  'al.k.poll': 'Poll',
+  'pl.title': 'Polls',
+  'pl.voted': 'Vote counted',
+  'pl.total': 'Votes: {n}',
+  'pl.closed': 'closed',
+  'pl.open': 'no deadline',
+  'pl.until': 'until {when}',
+  'pl.new': 'New poll',
+  'pl.newHelp': 'Players vote on the site or with buttons in Discord (an account linked to Discord is needed). A vote can be changed while the poll is open.',
+  'pl.question': 'Question',
+  'pl.options': 'Options (2 to 10)',
+  'pl.optionN': 'Option {n}',
+  'pl.addOption': 'Add an option',
+  'pl.until2': 'Close automatically (optional)',
+  'pl.channel': 'Channel: {id}',
+  'pl.noChannel': 'On the site only',
+  'pl.pick': 'Post to Discord',
+  'pl.noPost': 'Do not post',
+  'pl.create': 'Create poll',
+  'pl.created': 'Poll created',
+  'pl.createdPosted': 'Poll created and sent to Discord',
+  'pl.list': 'All polls',
+  'pl.none': 'No polls yet',
+  'pl.close': 'Close',
+  'pl.closeQ': 'Close the poll?',
+  'pl.closeText': 'The results are posted to the channel if the poll was posted to Discord.',
+  'pl.delete': 'Delete',
+  'pl.deleteQ': 'Delete the poll?',
+  'pl.deleteText': 'With its votes. This cannot be undone.',
   'al.s.low': 'Unusually few players',
   'al.s.lowText': 'Online has been below a third of the usual for this weekday and hour for 20 minutes (last four weeks).',
   'al.s.ping': 'Ping went up',
@@ -71785,6 +72168,10 @@ const errorsEn: Record<string, string> = {
   update_version_invalid: 'Invalid version',
   update_notify_channel_invalid: 'Invalid channel',
   game_file_invalid: 'The game file did not pass the check',
+  poll_invalid: 'Check the poll: a question of 3+ characters, 2 to 10 different options, a closing time in the future',
+  poll_not_found: 'Poll not found',
+  poll_option_invalid: 'There is no such option',
+  poll_closed: 'The poll is closed',
   welcome_invalid: 'Welcome message: check the channel and the text length (up to 1000 characters)',
   rollback_unavailable: 'Rollback is not available: the previous version was not kept',
   request_pending: 'A request is already waiting to be carried out',
@@ -73287,6 +73674,36 @@ const ru = {
   'att.reports': 'Жалобы игроков ждут разбора: {n}',
   'att.comments': 'Комментарии с жалобами ждут модерации: {n}',
   'al.k.disk': 'Место на диске',
+  'adm.com.polls': 'Голосования',
+  'al.k.poll': 'Голосование',
+  'pl.title': 'Голосования',
+  'pl.voted': 'Голос учтён',
+  'pl.total': 'Голосов: {n}',
+  'pl.closed': 'завершено',
+  'pl.open': 'без срока',
+  'pl.until': 'до {when}',
+  'pl.new': 'Новое голосование',
+  'pl.newHelp': 'Игроки голосуют на сайте или кнопками в Discord (нужен аккаунт, привязанный к Discord). Свой голос можно менять, пока голосование идёт.',
+  'pl.question': 'Вопрос',
+  'pl.options': 'Варианты (от 2 до 10)',
+  'pl.optionN': 'Вариант {n}',
+  'pl.addOption': 'Добавить вариант',
+  'pl.until2': 'Завершить автоматически (необязательно)',
+  'pl.channel': 'Канал: {id}',
+  'pl.noChannel': 'Только на сайте',
+  'pl.pick': 'Опубликовать в Discord',
+  'pl.noPost': 'Не публиковать',
+  'pl.create': 'Создать голосование',
+  'pl.created': 'Голосование создано',
+  'pl.createdPosted': 'Голосование создано и отправлено в Discord',
+  'pl.list': 'Все голосования',
+  'pl.none': 'Голосований пока нет',
+  'pl.close': 'Завершить',
+  'pl.closeQ': 'Завершить голосование?',
+  'pl.closeText': 'Итоги будут отправлены в канал, если голосование публиковалось в Discord.',
+  'pl.delete': 'Удалить',
+  'pl.deleteQ': 'Удалить голосование?',
+  'pl.deleteText': 'Вместе с голосами. Это нельзя отменить.',
   'al.s.low': 'Необычно мало игроков',
   'al.s.lowText': 'Онлайн 20 минут ниже трети обычного для этого дня недели и часа (по последним четырём неделям).',
   'al.s.ping': 'Вырос пинг',
@@ -74840,6 +75257,7 @@ import { api } from '../api';
 import { t, useI18n } from '../i18n';
 import { confirmDialog, promptDialog } from '../confirm';
 import { AdminPage, Button, Empty, ErrorLine, Field, IconEdit, IconEye, IconEyeOff, IconTrash, IconTrophy, PageHead, Section, ago, fmtDate, toast, num, SkeletonRows } from '../ui';
+import PollsAdmin from '../components/PollsAdmin';
 import type { Seasons } from './Community';
 import { useAuth } from '../auth';
 import { Stars, type Review } from '../components/server/Reviews';
@@ -74848,6 +75266,7 @@ import '../styles/gallery.css';
 
 export const COMMUNITY_TABS = [
   { id: 'seasons', get label() { return t('adm.com.seasons'); }, admin: true },
+  { id: 'polls', get label() { return t('adm.com.polls'); }, admin: true },
   { id: 'reviews', get label() { return t('adm.com.reviews'); }, admin: false },
   { id: 'gallery', get label() { return t('adm.com.gallery'); }, admin: false },
   { id: 'reports', get label() { return t('adm.com.reports'); }, admin: false },
@@ -74867,6 +75286,7 @@ export default function AdminCommunity({ sub = '' }: { sub?: string }) {
         </nav>
       )}
       {tab === 'seasons' && <SeasonsAdmin />}
+      {tab === 'polls' && <PollsAdmin />}
       {tab === 'reviews' && <ReviewsAdmin />}
       {tab === 'gallery' && <GalleryAdmin />}
       {tab === 'reports' && <ReportsAdmin />}
@@ -76130,6 +76550,7 @@ const KIND = {
   restart: { label: 'al.k.restart', cls: 'pill-mute' },
   update: { label: 'al.k.update', cls: 'pill-ok' },
   disk: { label: 'al.k.disk', cls: 'pill-warn' },
+  poll: { label: 'al.k.poll', cls: 'pill-ok' },
 } as const satisfies Record<string, { label: TKey; cls: string }>;
 /** a kind the panel does not know (a newer server, an old row) must not break the page */
 const kindOf = (k: string): { label: TKey; cls: string } => (KIND as Record<string, { label: TKey; cls: string }>)[k] ?? KIND.test;
@@ -76830,6 +77251,7 @@ import { AnimatedNumber, CopyButton, Empty, GameAvatar, MiniSpark, PageHead, ago
 import '../styles/analytics.css';
 import '../styles/community.css';
 import '../styles/gallery.css';
+import PollsCard from '../components/PollsCard';
 import { Lightbox, type Shot } from './Gallery';
 
 const IconPeople = () => (
@@ -77379,6 +77801,8 @@ export default function CommunityPage() {
       <SectionNav items={nav} />
 
       <Greeting />
+
+      <PollsCard />
 
       <section id="cm-now" className="tile cm-hero fade-in">
         <div className="cm-hero-main">

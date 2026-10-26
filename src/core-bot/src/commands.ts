@@ -1,5 +1,5 @@
 /** Slash commands: registration of players from Discord (/register, /nick, /profile) and the nick autocomplete. */
-import type { AutocompleteInteraction, Client, Interaction } from 'discord.js';
+import type { AutocompleteInteraction, ButtonInteraction, Client, Interaction } from 'discord.js';
 import { backend, backendJson } from './backend.js';
 import { humanDiscordError } from './errors.js';
 import { log } from './log.js';
@@ -67,7 +67,32 @@ async function handleAutocomplete(i: AutocompleteInteraction): Promise<void> {
   }
 }
 
+/** a button under a poll message: «poll:<poll id>:<option id>» */
+async function handlePollButton(i: ButtonInteraction): Promise<void> {
+  const m = /^poll:(\d+):(\d+)$/.exec(i.customId);
+  if (!m) return;
+  try {
+    await i.deferReply({ flags: EPHEMERAL });
+  } catch (e) {
+    log(`poll button from ${i.user.id}: could not acknowledge:`, (e as Error).message);
+    return;
+  }
+  const r = await backendJson<{ status: 'ok' | 'closed' | 'unlinked' | 'notfound'; text?: string }>('/internal/polls/vote', {
+    method: 'POST',
+    body: JSON.stringify({ pollId: Number(m[1]), optionId: Number(m[2]), discordId: i.user.id }),
+  }).catch(() => null);
+  const s = r?.data?.status;
+  const out =
+    s === 'ok' ? replyEmbed('Голос принят', `${r?.data?.text ?? ''}\n\nМожно передумать: нажмите другой вариант.`, COLORS.ok)
+    : s === 'closed' ? replyEmbed('Голосование завершено', r?.data?.text ?? '', COLORS.warn)
+    : s === 'unlinked' ? replyEmbed('Нужен аккаунт', 'Голосовать могут участники с аккаунтом, привязанным к Discord. Зарегистрируйтесь командой /register.', COLORS.warn)
+    : s === 'notfound' ? replyEmbed('Голосование не найдено', 'Возможно, его удалили.', COLORS.bad)
+    : replyEmbed('Не получилось', 'Панель сейчас не отвечает, попробуйте ещё раз чуть позже.', COLORS.bad);
+  await i.editReply(out).catch((e) => log('poll reply failed:', (e as Error).message));
+}
+
 export async function handleInteraction(i: Interaction): Promise<void> {
+  if (i.isButton()) return handlePollButton(i);
   if (i.isAutocomplete()) return INFO_NAMES.has(i.commandName) ? infoAutocomplete(i) : handleAutocomplete(i);
   if (!i.isChatInputCommand()) return;
   if (INFO_NAMES.has(i.commandName)) return handleInfo(i);

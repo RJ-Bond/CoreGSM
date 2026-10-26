@@ -116,6 +116,10 @@ export const ERRORS = {
   update_version_invalid: 'Некорректная версия',
   update_notify_channel_invalid: 'Некорректный канал',
   game_file_invalid: 'Файл игры не прошёл проверку',
+  poll_invalid: 'Проверьте голосование: вопрос от 3 символов, от 2 до 10 разных вариантов, время окончания в будущем',
+  poll_not_found: 'Голосование не найдено',
+  poll_option_invalid: 'Такого варианта нет',
+  poll_closed: 'Голосование завершено',
   welcome_invalid: 'Приветствие: проверьте канал и длину текста (до 1000 символов)',
   rollback_request_failed: 'Не удалось создать запрос на откат (нет прав на папку /app/update)',
 
