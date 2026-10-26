@@ -347,7 +347,13 @@ async function processDeliveries(): Promise<void> {
     try {
       if (it.kind === 'dm') {
         const user = await c.users.fetch(it.target);
-        await user.send({ content: (it.payload.content ?? '').slice(0, 2000), allowedMentions: { parse: [] } });
+        // a DM can carry an embed with link buttons (the update notices for the administrators)
+        await user.send({
+          content: (it.payload.content ?? '').slice(0, 2000) || undefined,
+          embeds: it.payload.embed ? [new EmbedBuilder(it.payload.embed)] : [],
+          components: linkRows(it.payload.actions),
+          allowedMentions: { parse: [] },
+        });
       } else {
         const channel = await c.channels.fetch(it.target);
         if (!channel || !channel.isTextBased() || !('send' in channel)) throw Object.assign(new Error('Канал не найден или не текстовый'), { code: 10003 });
