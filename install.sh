@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="900586e750ba"
+COREGSM_BUILD="25d8a86cff99"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.0.0.24"
+COREGSM_VERSION="1.0.0.25"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -8071,6 +8071,7 @@ export const ERRORS = {
   update_channel_locked: 'Канал задан переменными окружения сервера',
   update_channel_invalid: 'Канал: release или main',
   update_version_invalid: 'Некорректная версия',
+  update_notify_channel_invalid: 'Некорректный канал',
   rollback_request_failed: 'Не удалось создать запрос на откат (нет прав на папку /app/update)',
 
   // ---- servers, Discord bindings, alerts, deliveries ----
@@ -17732,6 +17733,7 @@ function updatePayload() {
     skipped: !!remote.build && getSetting('update_skip') === remote.build,
     notify: getSetting('update_notify') !== '0',
     notifyLang: parseNoticeLang(getSetting('update_notify_lang')),
+    notifyChannel: /^\d{15,25}$/.test(getSetting('update_notify_channel') ?? '') ? (getSetting('update_notify_channel') as string) : '',
     remindDays: parseRemindDays(getSetting('update_remind_days')),
   };
 }
@@ -17803,7 +17805,10 @@ function sendNotice(n: Notice): void {
   };
   try {
     const s = alertSettings();
-    if (s.enabled && s.channelId) enqueueAlert('update', '', { content: '', mention: 'none', embed });
+    // the channel chosen for these notices; without one — the alerts channel (when the alerts are on)
+    const own = getSetting('update_notify_channel') ?? '';
+    if (/^\d{15,25}$/.test(own)) enqueueAlert('update', '', { content: '', mention: 'none', embed }, own);
+    else if (s.enabled && s.channelId) enqueueAlert('update', '', { content: '', mention: 'none', embed });
   } catch (e) {
     log.warn('update notice failed:', (e as Error).message);
   }
@@ -17884,7 +17889,7 @@ router.get('/api/update/preflight', admin, (_req, res) => {
 });
 
 router.put('/api/update/settings', admin, (req, res) => {
-  const b = (req.body ?? {}) as { channel?: unknown; skip?: unknown; notify?: unknown; notifyLang?: unknown; remindDays?: unknown };
+  const b = (req.body ?? {}) as { channel?: unknown; skip?: unknown; notify?: unknown; notifyLang?: unknown; remindDays?: unknown; notifyChannel?: unknown };
   if (b.channel !== undefined) {
     if (CHANNEL_LOCKED) return res.status(409).json({ error: 'Канал задан переменными окружения сервера' });
     if (b.channel !== 'release' && b.channel !== 'main') return res.status(400).json({ error: 'Канал: release или main' });
@@ -17898,6 +17903,10 @@ router.put('/api/update/settings', admin, (req, res) => {
     setSetting('update_skip', b.skip);
   }
   if (b.notify !== undefined) setSetting('update_notify', b.notify === false ? '0' : '1');
+  if (b.notifyChannel !== undefined) {
+    if (typeof b.notifyChannel !== 'string' || !/^(\d{15,25})?$/.test(b.notifyChannel)) return res.status(400).json({ error: 'Некорректный канал' });
+    setSetting('update_notify_channel', b.notifyChannel);
+  }
   if (b.notifyLang !== undefined) setSetting('update_notify_lang', parseNoticeLang(String(b.notifyLang)));
   if (b.remindDays !== undefined) setSetting('update_remind_days', String(parseRemindDays(String(b.remindDays))));
   res.json(updatePayload());
@@ -49754,6 +49763,8 @@ export interface UpdateInfo {
   skipped?: boolean;
   notify?: boolean;
   notifyLang?: 'ru' | 'en';
+  /** the Discord channel for the update notices ('' = the alerts channel) */
+  notifyChannel?: string;
   /** days before the reminder about a version nobody installed (0 = none) */
   remindDays?: number;
 }
@@ -69600,6 +69611,7 @@ const en: Record<keyof typeof ru, string> = {
   'al.k.full': 'Almost full',
   'al.k.digest': 'Weekly digest',
   'al.k.restart': 'Restart',
+  'al.k.update': 'Panel update',
   'al.s.low': 'Unusually few players',
   'al.s.lowText': 'Online has been below a third of the usual for this weekday and hour for 20 minutes (last four weeks).',
   'al.s.ping': 'Ping went up',
@@ -70167,6 +70179,11 @@ const en: Record<keyof typeof ru, string> = {
   'upd.o.remind': 'Remind me if not installed',
   'upd.o.remind.off': 'Do not remind',
   'upd.o.remind.n': 'After {n} d',
+  'upd.o.chan': 'Channel for the update notices',
+  'upd.o.chan.alerts': 'The alerts channel (like the other messages)',
+  'upd.o.chan.id': 'Channel {id}',
+  'upd.o.chan.pick': 'Choose a channel',
+  'upd.o.chan.reset': 'Same as alerts',
 };
 
 export default en;
@@ -70282,6 +70299,7 @@ const errorsEn: Record<string, string> = {
   update_channel_locked: 'The channel is pinned by the server environment',
   update_channel_invalid: 'Channel: release or main',
   update_version_invalid: 'Invalid version',
+  update_notify_channel_invalid: 'Invalid channel',
   rollback_unavailable: 'Rollback is not available: the previous version was not kept',
   request_pending: 'A request is already waiting to be carried out',
   rollback_request_failed: 'Could not create the rollback request (no write access to /app/update)',
@@ -71750,6 +71768,7 @@ const ru = {
   'al.k.full': 'Почти заполнен',
   'al.k.digest': 'Итоги недели',
   'al.k.restart': 'Перезапуск',
+  'al.k.update': 'Обновление панели',
   'al.s.low': 'Необычно мало игроков',
   'al.s.lowText': 'Онлайн 20 минут ниже трети обычного для этого дня недели и часа (по последним четырём неделям).',
   'al.s.ping': 'Вырос пинг',
@@ -72317,6 +72336,11 @@ const ru = {
   'upd.o.remind': 'Напомнить, если не установили',
   'upd.o.remind.off': 'Не напоминать',
   'upd.o.remind.n': 'Через {n} дн.',
+  'upd.o.chan': 'Канал для сообщений об обновлении',
+  'upd.o.chan.alerts': 'Канал оповещений (как для остальных сообщений)',
+  'upd.o.chan.id': 'Канал {id}',
+  'upd.o.chan.pick': 'Выбрать канал',
+  'upd.o.chan.reset': 'Как у оповещений',
 };
 
 export default ru;
@@ -74530,7 +74554,10 @@ const KIND = {
   full: { label: 'al.k.full', cls: 'pill-mute' },
   digest: { label: 'al.k.digest', cls: 'pill-ok' },
   restart: { label: 'al.k.restart', cls: 'pill-mute' },
+  update: { label: 'al.k.update', cls: 'pill-ok' },
 } as const satisfies Record<string, { label: TKey; cls: string }>;
+/** a kind the panel does not know (a newer server, an old row) must not break the page */
+const kindOf = (k: string): { label: TKey; cls: string } => (KIND as Record<string, { label: TKey; cls: string }>)[k] ?? KIND.test;
 
 const SMART: { key: 'low' | 'ping' | 'full'; title: TKey; text: TKey }[] = [
   { key: 'low', title: 'al.s.low', text: 'al.s.lowText' },
@@ -74752,7 +74779,7 @@ export default function AlertsPage() {
         <ul className="divide-y divide-line">
           {info && [...info.recent].sort((a, b) => Number(b.status === 'error') - Number(a.status === 'error')).map((r) => (
             <li key={r.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2.5">
-              <span className={`pill ${KIND[r.kind].cls}`}>{t(KIND[r.kind].label)}</span>
+              <span className={`pill ${kindOf(r.kind).cls}`}>{t(kindOf(r.kind).label)}</span>
               <span className="min-w-0 flex-1 truncate font-bold">{r.serverName}</span>
               {r.status === 'sent' && <span className="text-sm font-semibold text-mute">{t('al.sent', { ago: ago(r.sentAt) })}</span>}
               {(r.status === 'queued' || r.status === 'sending') && <span className="text-sm font-semibold text-warn">{t('al.waits')}</span>}
@@ -84059,6 +84086,7 @@ __COREGSM_EOF__
 import { useEffect, useState } from 'react';
 import { api, type Changelog, type UpdateHistoryItem, type UpdateInfo, type UpdateNotes, type UpdatePreflight } from '../../api';
 import { t, useI18n, type TKey } from '../../i18n';
+import { ChannelPicker } from '../../components/ChannelPicker';
 import { ErrorLine, fmtDateTime, Section, errText, toast } from '../../ui';
 import { cleanNote, groupCommits, isNewerRelease, preflightWarnings, stepStates, upcomingFlags, versionText, type PreflightWarning } from './updateLogic';
 
@@ -84203,7 +84231,8 @@ export function HistoryCard({ refreshKey }: { refreshKey: unknown }) {
 /** channel and Discord notices */
 export function OptionsCard({ info, onChange }: { info: UpdateInfo; onChange: (i: UpdateInfo) => void }) {
   const [error, setError] = useState('');
-  const save = async (body: { channel?: 'release' | 'main'; notify?: boolean; notifyLang?: 'ru' | 'en'; remindDays?: number }) => {
+  const [picking, setPicking] = useState(false);
+  const save = async (body: { channel?: 'release' | 'main'; notify?: boolean; notifyLang?: 'ru' | 'en'; remindDays?: number; notifyChannel?: string }) => {
     setError('');
     try {
       onChange(await api<UpdateInfo>('/update/settings', 'PUT', body));
@@ -84228,6 +84257,21 @@ export function OptionsCard({ info, onChange }: { info: UpdateInfo; onChange: (i
         <input type="checkbox" className="mt-1 h-4 w-4 accent-brand" checked={info.notify !== false} onChange={(e) => void save({ notify: e.target.checked })} aria-describedby="upd-notify-hint" />
         <span>{t('upd.o.notify')}<span id="upd-notify-hint" className="mt-0.5 block text-sm font-semibold text-mute">{t('upd.o.notifyHint')}</span></span>
       </label>
+      {info.notify !== false && (
+        <div>
+          <span className="label">{t('upd.o.chan')}</span>
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="font-black">{info.notifyChannel ? t('upd.o.chan.id', { id: info.notifyChannel }) : t('upd.o.chan.alerts')}</span>
+            <button type="button" className="btn btn-soft btn-sm" onClick={() => setPicking((v) => !v)} aria-expanded={picking}>{t('upd.o.chan.pick')}</button>
+            {info.notifyChannel && <button type="button" className="btn-link text-sm" onClick={() => void save({ notifyChannel: '' })}>{t('upd.o.chan.reset')}</button>}
+          </div>
+          {picking && (
+            <div className="mt-3">
+              <ChannelPicker id="upd-channel" value={info.notifyChannel ?? ''} onChange={(v) => { if (/^\d{15,25}$/.test(v)) { void save({ notifyChannel: v }); setPicking(false); } }} />
+            </div>
+          )}
+        </div>
+      )}
       {info.notify !== false && (
         <div className="grid gap-3 sm:grid-cols-2">
           <div>

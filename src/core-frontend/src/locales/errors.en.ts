@@ -107,6 +107,7 @@ const errorsEn: Record<string, string> = {
   update_channel_locked: 'The channel is pinned by the server environment',
   update_channel_invalid: 'Channel: release or main',
   update_version_invalid: 'Invalid version',
+  update_notify_channel_invalid: 'Invalid channel',
   rollback_unavailable: 'Rollback is not available: the previous version was not kept',
   request_pending: 'A request is already waiting to be carried out',
   rollback_request_failed: 'Could not create the rollback request (no write access to /app/update)',

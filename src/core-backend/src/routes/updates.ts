@@ -128,6 +128,7 @@ function updatePayload() {
     skipped: !!remote.build && getSetting('update_skip') === remote.build,
     notify: getSetting('update_notify') !== '0',
     notifyLang: parseNoticeLang(getSetting('update_notify_lang')),
+    notifyChannel: /^\d{15,25}$/.test(getSetting('update_notify_channel') ?? '') ? (getSetting('update_notify_channel') as string) : '',
     remindDays: parseRemindDays(getSetting('update_remind_days')),
   };
 }
@@ -199,7 +200,10 @@ function sendNotice(n: Notice): void {
   };
   try {
     const s = alertSettings();
-    if (s.enabled && s.channelId) enqueueAlert('update', '', { content: '', mention: 'none', embed });
+    // the channel chosen for these notices; without one — the alerts channel (when the alerts are on)
+    const own = getSetting('update_notify_channel') ?? '';
+    if (/^\d{15,25}$/.test(own)) enqueueAlert('update', '', { content: '', mention: 'none', embed }, own);
+    else if (s.enabled && s.channelId) enqueueAlert('update', '', { content: '', mention: 'none', embed });
   } catch (e) {
     log.warn('update notice failed:', (e as Error).message);
   }
@@ -280,7 +284,7 @@ router.get('/api/update/preflight', admin, (_req, res) => {
 });
 
 router.put('/api/update/settings', admin, (req, res) => {
-  const b = (req.body ?? {}) as { channel?: unknown; skip?: unknown; notify?: unknown; notifyLang?: unknown; remindDays?: unknown };
+  const b = (req.body ?? {}) as { channel?: unknown; skip?: unknown; notify?: unknown; notifyLang?: unknown; remindDays?: unknown; notifyChannel?: unknown };
   if (b.channel !== undefined) {
     if (CHANNEL_LOCKED) return res.status(409).json({ error: 'Канал задан переменными окружения сервера' });
     if (b.channel !== 'release' && b.channel !== 'main') return res.status(400).json({ error: 'Канал: release или main' });
@@ -294,6 +298,10 @@ router.put('/api/update/settings', admin, (req, res) => {
     setSetting('update_skip', b.skip);
   }
   if (b.notify !== undefined) setSetting('update_notify', b.notify === false ? '0' : '1');
+  if (b.notifyChannel !== undefined) {
+    if (typeof b.notifyChannel !== 'string' || !/^(\d{15,25})?$/.test(b.notifyChannel)) return res.status(400).json({ error: 'Некорректный канал' });
+    setSetting('update_notify_channel', b.notifyChannel);
+  }
   if (b.notifyLang !== undefined) setSetting('update_notify_lang', parseNoticeLang(String(b.notifyLang)));
   if (b.remindDays !== undefined) setSetting('update_remind_days', String(parseRemindDays(String(b.remindDays))));
   res.json(updatePayload());

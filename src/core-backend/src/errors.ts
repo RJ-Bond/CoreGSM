@@ -114,6 +114,7 @@ export const ERRORS = {
   update_channel_locked: 'Канал задан переменными окружения сервера',
   update_channel_invalid: 'Канал: release или main',
   update_version_invalid: 'Некорректная версия',
+  update_notify_channel_invalid: 'Некорректный канал',
   rollback_request_failed: 'Не удалось создать запрос на откат (нет прав на папку /app/update)',
 
   // ---- servers, Discord bindings, alerts, deliveries ----

@@ -27,7 +27,10 @@ const KIND = {
   full: { label: 'al.k.full', cls: 'pill-mute' },
   digest: { label: 'al.k.digest', cls: 'pill-ok' },
   restart: { label: 'al.k.restart', cls: 'pill-mute' },
+  update: { label: 'al.k.update', cls: 'pill-ok' },
 } as const satisfies Record<string, { label: TKey; cls: string }>;
+/** a kind the panel does not know (a newer server, an old row) must not break the page */
+const kindOf = (k: string): { label: TKey; cls: string } => (KIND as Record<string, { label: TKey; cls: string }>)[k] ?? KIND.test;
 
 const SMART: { key: 'low' | 'ping' | 'full'; title: TKey; text: TKey }[] = [
   { key: 'low', title: 'al.s.low', text: 'al.s.lowText' },
@@ -249,7 +252,7 @@ export default function AlertsPage() {
         <ul className="divide-y divide-line">
           {info && [...info.recent].sort((a, b) => Number(b.status === 'error') - Number(a.status === 'error')).map((r) => (
             <li key={r.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2.5">
-              <span className={`pill ${KIND[r.kind].cls}`}>{t(KIND[r.kind].label)}</span>
+              <span className={`pill ${kindOf(r.kind).cls}`}>{t(kindOf(r.kind).label)}</span>
               <span className="min-w-0 flex-1 truncate font-bold">{r.serverName}</span>
               {r.status === 'sent' && <span className="text-sm font-semibold text-mute">{t('al.sent', { ago: ago(r.sentAt) })}</span>}
               {(r.status === 'queued' || r.status === 'sending') && <span className="text-sm font-semibold text-warn">{t('al.waits')}</span>}
