@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from './api';
+import { GAMES, monogramColor, monogramOf } from './games';
 import type { ConnectTemplates } from './connectGuides';
 
 /** GET /games (public): what the panel knows about a game besides its name */
@@ -27,6 +28,11 @@ export function loadGameProfiles(): Promise<GameProfiles> {
       .then((list) => {
         const out: GameProfiles = {};
         for (const g of Array.isArray(list) ? list : []) if (g && typeof g.id === 'string') out[g.id] = g;
+        // a game described by a file (not built in) joins the list of games of the pickers
+        for (const g of Object.values(out)) {
+          if (!GAMES.some((x) => x.id === g.id)) GAMES.push({ id: g.id, label: g.label, port: g.defaultPort ?? 0, abbr: monogramOf(g.label), color: monogramColor(g.label), custom: true });
+        }
+        for (let i = GAMES.length - 1; i >= 0; i--) if (GAMES[i]!.custom && !out[GAMES[i]!.id]) GAMES.splice(i, 1);
         cache = out;
         return out;
       })
@@ -34,6 +40,11 @@ export function loadGameProfiles(): Promise<GameProfiles> {
       .finally(() => { inflight = null; });
   }
   return inflight;
+}
+
+/** the list is asked again at the next load (a game file was added or removed) */
+export function resetGameProfiles(): void {
+  cache = null;
 }
 
 /** null until the list is known; {} when the backend has no /games */

@@ -13,6 +13,7 @@ import { safeEqual, wrap } from '../http.js';
 import { bannerPresetOf, bannerUrlOf, logAccount, prefsOf } from '../profile.js';
 import { BOT_TOKEN_RE, normalizeProxy, PROXY_HELP, PROXY_RE, TOKEN_HELP } from '../proxyInput.js';
 import { clearSessionCookie, emailChanged, ipLockRemaining, ipLoginFailed, noteLogin, recentNewDevice, setSessionCookie, windowLimiter } from '../security.js';
+import { recordConsent } from '../rules.js';
 import { brand, needsSetup, publicBase, registrationMode, rememberAdminBase, rulesText } from '../site.js';
 import { unreadNotifications } from '../subscriptions.js';
 import { log } from '../logger.js';
@@ -180,6 +181,7 @@ router.post(
       const id = Number(
         db.prepare("INSERT INTO users (username, password_hash, role, created_at, status) VALUES (?, ?, 'player', ?, ?)").run(b.data.username, hash, Date.now(), pending ? 'pending' : 'active').lastInsertRowid,
       );
+      if (rulesText()) recordConsent(id, 'web');
       if (pending) return res.status(202).json({ pending: true });
       const token = issueToken({ id, username: b.data.username }, req);
       setSessionCookie(req, res, token);

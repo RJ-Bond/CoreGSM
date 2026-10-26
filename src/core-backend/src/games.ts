@@ -157,16 +157,26 @@ const BY_ID = new Map(GAME_PROFILES.map((p) => [p.id, p]));
 /** Display names for GameDig ids (kept in sync with core-frontend/src/games.ts) */
 export const GAME_LABELS: Record<string, string> = Object.fromEntries(GAME_PROFILES.map((p) => [p.id, p.label]));
 
-export const gameLabel = (id: string): string => GAME_LABELS[id] ?? id;
+/** games added with a JSON file in <data>/games (see customGames.ts); the built-in ones always win */
+let CUSTOM: GameProfile[] = [];
+const CUSTOM_BY_ID = new Map<string, GameProfile>();
+export function setCustomGames(list: GameProfile[]): void {
+  CUSTOM = list.filter((p) => !BY_ID.has(p.id));
+  CUSTOM_BY_ID.clear();
+  for (const p of CUSTOM) CUSTOM_BY_ID.set(p.id, p);
+}
+export const builtinGameIds = (): Set<string> => new Set(BY_ID.keys());
 
-export const gameProfile = (id: string): GameProfile | undefined => BY_ID.get(id);
+export const gameLabel = (id: string): string => GAME_LABELS[id] ?? CUSTOM_BY_ID.get(id)?.label ?? id;
+
+export const gameProfile = (id: string): GameProfile | undefined => BY_ID.get(id) ?? CUSTOM_BY_ID.get(id);
 
 /** Does the game report a map worth showing? Unknown games (custom GameDig ids) are shown in full. */
-export const gameShowsMap = (id: string): boolean => BY_ID.get(id)?.fields.map ?? true;
+export const gameShowsMap = (id: string): boolean => gameProfile(id)?.fields.map ?? true;
 
 export function registerGames(app: Express): void {
   app.get('/api/games', (_req, res) => {
     res.set('Cache-Control', 'public, max-age=300');
-    res.json(GAME_PROFILES);
+    res.json([...GAME_PROFILES, ...CUSTOM]);
   });
 }

@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="826b710f9b77"
+COREGSM_BUILD="87e371aeec33"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.0.0.31"
+COREGSM_VERSION="1.0.0.33"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -6371,6 +6371,89 @@ export function registerCovers(deps: { app: Express; admin: RequestHandler }): v
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/customGames.ts" << '__COREGSM_EOF__'
+/**
+ * Games without code changes: a JSON file per game in <data>/games/.
+ *   GET    /api/admin/games/custom        the template, the loaded games and the files that did not pass the check
+ *   PUT    /api/admin/games/custom        { text } — a game file; checked, saved as <id>.json and applied at once
+ *   DELETE /api/admin/games/custom/:id    removes the file
+ * The files are read at start and after every change; a broken file is reported, never breaks the others.
+ */
+import fs from 'node:fs';
+import path from 'node:path';
+import type { Express, RequestHandler } from 'express';
+import { z } from 'zod';
+import { DATA_DIR } from './db.js';
+import { GAME_TEMPLATE, GAME_ID, parseGameFile } from './gameFileLogic.js';
+import { builtinGameIds, setCustomGames, type GameProfile } from './games.js';
+import { log } from './logger.js';
+
+const DIR = path.join(DATA_DIR, 'games');
+const MAX_FILE = 16 * 1024;
+
+export interface LoadedFile { file: string; profile: GameProfile | null; errors: string[] }
+
+export function loadCustomGames(): LoadedFile[] {
+  const out: LoadedFile[] = [];
+  let names: string[] = [];
+  try {
+    names = fs.readdirSync(DIR).filter((n) => n.endsWith('.json')).sort();
+  } catch {
+    /* no folder yet: no custom games */
+  }
+  const builtin = builtinGameIds();
+  const seen = new Set<string>();
+  for (const file of names) {
+    try {
+      const text = fs.readFileSync(path.join(DIR, file), 'utf8');
+      if (text.length > MAX_FILE) throw new Error('файл больше 16 КБ');
+      const r = parseGameFile(JSON.parse(text));
+      if (!r.ok) { out.push({ file, profile: null, errors: r.errors }); continue; }
+      if (builtin.has(r.profile.id)) { out.push({ file, profile: null, errors: [`id «${r.profile.id}» уже есть среди встроенных игр`] }); continue; }
+      if (seen.has(r.profile.id)) { out.push({ file, profile: null, errors: [`id «${r.profile.id}» уже описан в другом файле`] }); continue; }
+      seen.add(r.profile.id);
+      out.push({ file, profile: r.profile, errors: [] });
+    } catch (e) {
+      out.push({ file, profile: null, errors: [`Не удалось прочитать: ${(e as Error).message}`.slice(0, 200)] });
+    }
+  }
+  setCustomGames(out.flatMap((f) => (f.profile ? [f.profile] : [])));
+  return out;
+}
+
+export function registerCustomGames({ app, admin }: { app: Express; admin: RequestHandler }): void {
+  try {
+    const n = loadCustomGames().filter((f) => f.profile).length;
+    if (n) log.info(`custom games loaded: ${n}`);
+  } catch (e) {
+    log.error('custom games failed', (e as Error).message);
+  }
+  app.get('/api/admin/games/custom', admin, (_req, res) => res.json({ template: GAME_TEMPLATE, dir: 'games', items: loadCustomGames() }));
+  app.put('/api/admin/games/custom', admin, (req, res) => {
+    const b = z.object({ text: z.string().max(MAX_FILE) }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'Файл игры не прошёл проверку', errors: ['Текст файла — до 16 КБ'] });
+    let json: unknown;
+    try {
+      json = JSON.parse(b.data.text);
+    } catch (e) {
+      return res.status(400).json({ error: 'Файл игры не прошёл проверку', errors: [`Это не JSON: ${(e as Error).message}`.slice(0, 200)] });
+    }
+    const r = parseGameFile(json);
+    if (!r.ok) return res.status(400).json({ error: 'Файл игры не прошёл проверку', errors: r.errors });
+    if (builtinGameIds().has(r.profile.id)) return res.status(400).json({ error: 'Файл игры не прошёл проверку', errors: [`id «${r.profile.id}» уже есть среди встроенных игр`] });
+    fs.mkdirSync(DIR, { recursive: true });
+    fs.writeFileSync(path.join(DIR, `${r.profile.id}.json`), `${JSON.stringify(json, null, 2)}\n`);
+    res.json({ items: loadCustomGames() });
+  });
+  app.delete('/api/admin/games/custom/:id', admin, (req, res) => {
+    const id = String(req.params.id);
+    if (!GAME_ID.test(id)) return res.status(400).json({ error: 'Файл игры не прошёл проверку', errors: ['Некорректный id'] });
+    fs.rmSync(path.join(DIR, `${id}.json`), { force: true });
+    res.json({ items: loadCustomGames() });
+  });
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/db.ts" << '__COREGSM_EOF__'
 import Database from 'better-sqlite3';
 import fs from 'node:fs';
@@ -7733,6 +7816,7 @@ __COREGSM_EOF__
  * Registration and profile from Discord slash commands (the bot calls these internal routes).
  * A Discord-registered account is a normal `player` without a password: the Discord identity is the login.
  */
+import { recordConsent } from './rules.js';
 import crypto from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import type { Express, NextFunction, Request, RequestHandler, Response } from 'express';
@@ -7850,6 +7934,7 @@ export function registerDiscordRegistration(deps: DiscordRegisterDeps): void {
             .run(login, bcrypt.hashSync(crypto.randomBytes(24).toString('hex'), 4), Date.now(), status, discordId, displayName, avatar).lastInsertRowid,
         );
         setNick(id, nick);
+        if (rules) recordConsent(id, 'discord');
       })();
       logAccount(req, id, 'register_discord', pending ? 'ожидает одобрения' : '');
       res.json({
@@ -8293,6 +8378,7 @@ export const ERRORS = {
   update_channel_invalid: 'Канал: release или main',
   update_version_invalid: 'Некорректная версия',
   update_notify_channel_invalid: 'Некорректный канал',
+  game_file_invalid: 'Файл игры не прошёл проверку',
   welcome_invalid: 'Приветствие: проверьте канал и длину текста (до 1000 символов)',
   rollback_request_failed: 'Не удалось создать запрос на откат (нет прав на папку /app/update)',
 
@@ -8649,6 +8735,95 @@ router.get('/api/gallery/img/:file', (req, res, next) => {
 });
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/gameFileLogic.ts" << '__COREGSM_EOF__'
+/** A game described in a JSON file (no code changes): validation and the template. Pure, covered by tests. */
+export interface CustomGame {
+  id: string;
+  label: string;
+  defaultPort: number;
+  queryPortHint?: string;
+  fields: { map: boolean; mode: boolean; version: boolean; players: boolean };
+  connect: { steam?: string; command?: string; note?: string };
+  accent?: number;
+}
+
+export const GAME_TEMPLATE = {
+  id: 'mygame',
+  label: 'My Game',
+  defaultPort: 27015,
+  queryPortHint: 'Порт запроса по умолчанию совпадает с игровым.',
+  fields: { map: true, mode: false, version: true, players: true },
+  connect: { steam: 'steam://connect/{address}', command: 'connect {address}', note: 'В игре: Multiplayer → Direct Connect → {address}.' },
+  accent: '#5a4bd1',
+};
+
+const KEYS = new Set(['id', 'label', 'defaultPort', 'queryPortHint', 'fields', 'connect', 'accent']);
+const FIELD_KEYS = ['map', 'mode', 'version', 'players'] as const;
+const CONNECT_KEYS = ['steam', 'command', 'note'] as const;
+/** GameDig ids are lower-case words with digits, «_» and «-» */
+export const GAME_ID = /^[a-z0-9][a-z0-9_-]{1,39}$/;
+
+const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+
+export function parseGameFile(raw: unknown): { ok: true; profile: CustomGame } | { ok: false; errors: string[] } {
+  const errors: string[] = [];
+  if (!isObj(raw)) return { ok: false, errors: ['Файл должен содержать JSON-объект'] };
+  for (const k of Object.keys(raw)) if (!KEYS.has(k)) errors.push(`Неизвестное поле «${k}» (допустимы: ${[...KEYS].join(', ')})`);
+
+  const id = raw.id;
+  if (typeof id !== 'string' || !GAME_ID.test(id)) errors.push('id: строчные латинские буквы, цифры, «_» и «-», 2–40 символов — это тип игры в GameDig');
+  const label = typeof raw.label === 'string' ? raw.label.trim() : '';
+  if (label.length < 1 || label.length > 60) errors.push('label: название игры, 1–60 символов');
+  const port = raw.defaultPort ?? 0;
+  if (typeof port !== 'number' || !Number.isInteger(port) || port < 0 || port > 65535) errors.push('defaultPort: целое число 0–65535 (0 — нет порта по умолчанию)');
+
+  let hint: string | undefined;
+  if (raw.queryPortHint !== undefined) {
+    if (typeof raw.queryPortHint !== 'string' || raw.queryPortHint.length > 300) errors.push('queryPortHint: текст до 300 символов');
+    else hint = raw.queryPortHint.trim() || undefined;
+  }
+
+  const fields = { map: true, mode: false, version: true, players: true };
+  if (raw.fields !== undefined) {
+    if (!isObj(raw.fields)) errors.push('fields: объект вида {"map": true, "mode": false, "version": true, "players": true}');
+    else {
+      for (const k of Object.keys(raw.fields)) if (!(FIELD_KEYS as readonly string[]).includes(k)) errors.push(`fields.${k}: неизвестное поле (map, mode, version, players)`);
+      for (const k of FIELD_KEYS) {
+        const v = raw.fields[k];
+        if (v === undefined) continue;
+        if (typeof v !== 'boolean') errors.push(`fields.${k}: true или false`);
+        else fields[k] = v;
+      }
+    }
+  }
+
+  const connect: CustomGame['connect'] = {};
+  if (raw.connect !== undefined) {
+    if (!isObj(raw.connect)) errors.push('connect: объект с полями steam, command, note');
+    else {
+      for (const k of Object.keys(raw.connect)) if (!(CONNECT_KEYS as readonly string[]).includes(k)) errors.push(`connect.${k}: неизвестное поле (steam, command, note)`);
+      for (const k of CONNECT_KEYS) {
+        const v = raw.connect[k];
+        if (v === undefined) continue;
+        if (typeof v !== 'string' || v.length > 200) errors.push(`connect.${k}: текст до 200 символов`);
+        else if (k === 'steam' && !/^steam:\/\//.test(v)) errors.push('connect.steam: ссылка должна начинаться с steam://');
+        else if (v.trim()) connect[k] = v.trim();
+      }
+    }
+  }
+
+  let accent: number | undefined;
+  if (raw.accent !== undefined) {
+    if (typeof raw.accent === 'string' && /^#[0-9a-fA-F]{6}$/.test(raw.accent)) accent = parseInt(raw.accent.slice(1), 16);
+    else if (typeof raw.accent === 'number' && Number.isInteger(raw.accent) && raw.accent >= 0 && raw.accent <= 0xffffff) accent = raw.accent;
+    else errors.push('accent: цвет вида "#5a4bd1"');
+  }
+
+  if (errors.length) return { ok: false, errors };
+  return { ok: true, profile: { id: id as string, label, defaultPort: port as number, ...(hint ? { queryPortHint: hint } : {}), fields, connect, ...(accent !== undefined ? { accent } : {}) } };
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/gameIcons.ts" << '__COREGSM_EOF__'
 // Pictograms for the games, drawn on the PNG card. Same data as core-frontend/src/gameIcons.ts: keep both in sync.
 export const ICON_PATHS: Record<string, string> = {
@@ -8896,17 +9071,27 @@ const BY_ID = new Map(GAME_PROFILES.map((p) => [p.id, p]));
 /** Display names for GameDig ids (kept in sync with core-frontend/src/games.ts) */
 export const GAME_LABELS: Record<string, string> = Object.fromEntries(GAME_PROFILES.map((p) => [p.id, p.label]));
 
-export const gameLabel = (id: string): string => GAME_LABELS[id] ?? id;
+/** games added with a JSON file in <data>/games (see customGames.ts); the built-in ones always win */
+let CUSTOM: GameProfile[] = [];
+const CUSTOM_BY_ID = new Map<string, GameProfile>();
+export function setCustomGames(list: GameProfile[]): void {
+  CUSTOM = list.filter((p) => !BY_ID.has(p.id));
+  CUSTOM_BY_ID.clear();
+  for (const p of CUSTOM) CUSTOM_BY_ID.set(p.id, p);
+}
+export const builtinGameIds = (): Set<string> => new Set(BY_ID.keys());
 
-export const gameProfile = (id: string): GameProfile | undefined => BY_ID.get(id);
+export const gameLabel = (id: string): string => GAME_LABELS[id] ?? CUSTOM_BY_ID.get(id)?.label ?? id;
+
+export const gameProfile = (id: string): GameProfile | undefined => BY_ID.get(id) ?? CUSTOM_BY_ID.get(id);
 
 /** Does the game report a map worth showing? Unknown games (custom GameDig ids) are shown in full. */
-export const gameShowsMap = (id: string): boolean => BY_ID.get(id)?.fields.map ?? true;
+export const gameShowsMap = (id: string): boolean => gameProfile(id)?.fields.map ?? true;
 
 export function registerGames(app: Express): void {
   app.get('/api/games', (_req, res) => {
     res.set('Cache-Control', 'public, max-age=300');
-    res.json(GAME_PROFILES);
+    res.json([...GAME_PROFILES, ...CUSTOM]);
   });
 }
 __COREGSM_EOF__
@@ -9751,6 +9936,7 @@ import { registerDigest, startDigestTimer } from './digest.js';
 import { registerOg } from './ogImage.js';
 import { registerServerChart } from './serverChart.js';
 import { registerGames } from './games.js';
+import { registerCustomGames } from './customGames.js';
 import { startPoller, stopPoller } from './gsm.js';
 import { registerHealth } from './health.js';
 import { startDbMaintenance } from './dbMaintenance.js';
@@ -9764,6 +9950,7 @@ import { installAudit, registerOps } from './ops.js';
 import { registerOverview } from './overview.js';
 import { registerAttention } from './attention.js';
 import { registerWelcome } from './welcome.js';
+import { registerRules } from './rules.js';
 import { logAccount, registerProfile } from './profile.js';
 import { csrfGuard, registerSecurity, securityHeaders, windowLimiter } from './security.js';
 import { embedFor, SELECT_SERVERS, SERVER_ORDER, serialize, type ServerJoin } from './serverData.js';
@@ -9906,6 +10093,7 @@ registerDeliveries({ app, admin, internal });
 registerSubscriptions({ app, auth, userId: (req) => (req as AuthedRequest).user!.id, canDm: () => bot.status.state === 'online' });
 registerPlayerFollows({ app, auth, userId: (req) => (req as AuthedRequest).user!.id });
 registerGames(app);
+registerCustomGames({ app, admin });
 registerAvatars({ app, auth, userId: (req) => (req as AuthedRequest).user!.id, onChange: (req, id, what) => logAccount(req, id, 'avatar_changed', what) });
 registerProfile({
   app,
@@ -9929,6 +10117,7 @@ startDbMaintenance();
 registerOverview({ app, viewer });
 registerAttention({ app, admin });
 registerWelcome({ app, admin, internal });
+registerRules({ app, auth, admin });
 
 // ---------- errors ----------
 app.use((err: Error & { type?: string; status?: number }, _req: Request, res: Response, _next: NextFunction) => {
@@ -15812,6 +16001,7 @@ import { safeEqual, wrap } from '../http.js';
 import { bannerPresetOf, bannerUrlOf, logAccount, prefsOf } from '../profile.js';
 import { BOT_TOKEN_RE, normalizeProxy, PROXY_HELP, PROXY_RE, TOKEN_HELP } from '../proxyInput.js';
 import { clearSessionCookie, emailChanged, ipLockRemaining, ipLoginFailed, noteLogin, recentNewDevice, setSessionCookie, windowLimiter } from '../security.js';
+import { recordConsent } from '../rules.js';
 import { brand, needsSetup, publicBase, registrationMode, rememberAdminBase, rulesText } from '../site.js';
 import { unreadNotifications } from '../subscriptions.js';
 import { log } from '../logger.js';
@@ -15979,6 +16169,7 @@ router.post(
       const id = Number(
         db.prepare("INSERT INTO users (username, password_hash, role, created_at, status) VALUES (?, ?, 'player', ?, ?)").run(b.data.username, hash, Date.now(), pending ? 'pending' : 'active').lastInsertRowid,
       );
+      if (rulesText()) recordConsent(id, 'web');
       if (pending) return res.status(202).json({ pending: true });
       const token = issueToken({ id, username: b.data.username }, req);
       setSessionCookie(req, res, token);
@@ -17686,6 +17877,7 @@ import { pingVerdict, thin } from '../botLatencyLogic.js';
 import { bot, BOT_COMMANDS, clientIdFromToken, discordLoginReady, invitePayload } from '../botState.js';
 import { getSetting, setSetting } from '../db.js';
 import { BOT_TOKEN_RE, maskProxy, normalizeProxy, PROXY_HELP, PROXY_RE, TOKEN_HELP } from '../proxyInput.js';
+import { currentRules } from '../rules.js';
 import { baseOf, brand, LOGO_PATH, LOGO_TYPES, logoFile, publicBase, registrationMode, rulesText } from '../site.js';
 
 export const router = express.Router();
@@ -17761,7 +17953,11 @@ router.put('/api/access', admin, (req, res) => {
   if (b.data.publicPanel !== undefined) setSetting('public_panel', b.data.publicPanel ? '1' : '0');
   if (b.data.registration !== undefined) setSetting('registration_open', b.data.registration ? '1' : '0');
   if (b.data.registrationMode !== undefined) setSetting('registration_mode', b.data.registrationMode);
-  if (b.data.rules !== undefined) setSetting('rules_text', b.data.rules.trim());
+  if (b.data.rules !== undefined) {
+    setSetting('rules_text', b.data.rules.trim());
+    // the change becomes a new version, so old consents do not count for it
+    currentRules();
+  }
   res.json(accessPayload());
 });
 
@@ -18392,6 +18588,99 @@ router.delete('/api/users/:id', admin, (req: AuthedRequest, res) => {
   removeBanner(id);
   res.json({ ok: true });
 });
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/rules.ts" << '__COREGSM_EOF__'
+/**
+ * Community rules with a history and the players' consent.
+ *   GET  /api/rules/me        the current rules and whether the signed-in user has agreed to this version
+ *   POST /api/rules/agree     the signed-in user agrees to the current version
+ *   GET  /api/rules/history   (admin) every version, how many agreed, how many players there are
+ * The text itself stays in the setting `rules_text` (the panel, the Discord command and the export read it); every change
+ * of it becomes a new version here, so older consents are not mistaken for consent to the new text.
+ */
+import type { Express, RequestHandler } from 'express';
+import { type AuthedRequest } from './auth.js';
+import { db, getSetting } from './db.js';
+import { needsAgreement, nextRulesVersion, type RulesVersion } from './rulesLogic.js';
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS rules_versions (
+  version INTEGER PRIMARY KEY,
+  text TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS rules_consent (
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  version INTEGER NOT NULL,
+  agreed_at INTEGER NOT NULL,
+  via TEXT NOT NULL DEFAULT 'web',
+  PRIMARY KEY (user_id, version)
+);
+`);
+
+const latest = (): RulesVersion | null => (db.prepare('SELECT version, text FROM rules_versions ORDER BY version DESC LIMIT 1').get() as RulesVersion | undefined) ?? null;
+
+/** the current rules: a text set anywhere (the panel, an import, an older version) becomes a version here at once */
+export function currentRules(): RulesVersion | null {
+  const text = (getSetting('rules_text') ?? '').trim();
+  if (!text) return null;
+  const l = latest();
+  const n = nextRulesVersion(l, text);
+  if (n === null) return l;
+  db.prepare('INSERT INTO rules_versions (version, text, created_at) VALUES (?, ?, ?)').run(n, text, Date.now());
+  return { version: n, text };
+}
+
+export function recordConsent(userId: number, via: 'web' | 'discord' | 'panel'): void {
+  const c = currentRules();
+  if (!c) return;
+  db.prepare('INSERT OR IGNORE INTO rules_consent (user_id, version, agreed_at, via) VALUES (?, ?, ?, ?)').run(userId, c.version, Date.now(), via);
+}
+
+const agreedVersion = (userId: number): number | null =>
+  ((db.prepare('SELECT MAX(version) AS v FROM rules_consent WHERE user_id = ?').get(userId) as { v: number | null }).v) ?? null;
+
+export function registerRules({ app, auth, admin }: { app: Express; auth: RequestHandler; admin: RequestHandler }): void {
+  app.get('/api/rules/me', auth, (req: AuthedRequest, res) => {
+    const c = currentRules();
+    if (!c) return res.json({ version: null, text: '', agreed: true });
+    res.json({ version: c.version, text: c.text, agreed: !needsAgreement(c.version, agreedVersion(req.user!.id)) });
+  });
+  app.post('/api/rules/agree', auth, (req: AuthedRequest, res) => {
+    recordConsent(req.user!.id, 'panel');
+    const c = currentRules();
+    res.json({ version: c?.version ?? null, agreed: true });
+  });
+  app.get('/api/rules/history', admin, (_req, res) => {
+    const c = currentRules();
+    const agreedBy = new Map((db.prepare('SELECT version, COUNT(*) AS n FROM rules_consent GROUP BY version').all() as { version: number; n: number }[]).map((r) => [r.version, r.n]));
+    const versions = (db.prepare('SELECT version, text, created_at FROM rules_versions ORDER BY version DESC').all() as { version: number; text: string; created_at: number }[]).map((v) => ({
+      version: v.version,
+      text: v.text,
+      createdAt: v.created_at,
+      agreed: agreedBy.get(v.version) ?? 0,
+    }));
+    const players = (db.prepare("SELECT COUNT(*) AS n FROM users WHERE role = 'player' AND status = 'active'").get() as { n: number }).n;
+    res.json({ current: c?.version ?? null, versions, players });
+  });
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/rulesLogic.ts" << '__COREGSM_EOF__'
+/** Versions of the community rules and consent: pure rules. */
+export interface RulesVersion { version: number; text: string }
+
+/** the number of a new version when `text` differs from the latest one; null when nothing is to be recorded */
+export function nextRulesVersion(latest: RulesVersion | null, text: string): number | null {
+  const t = text.trim();
+  if (!t) return null;
+  if (latest && latest.text.trim() === t) return null;
+  return (latest?.version ?? 0) + 1;
+}
+
+/** a player has to agree (again) when there are rules and the agreed version is not the current one */
+export const needsAgreement = (current: number | null, agreed: number | null): boolean => current !== null && agreed !== current;
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/schema.ts" << '__COREGSM_EOF__'
@@ -49293,6 +49582,7 @@ import { AuthContext } from './auth';
 import { onAccentChange, paintBrand, useAutoAccent } from './accent';
 import NotificationBell from './components/NotificationBell';
 import AttentionBell from './components/AttentionBell';
+import RulesBanner from './components/RulesBanner';
 import { AppFooter, BotPill, ProfileMenu, RouteProgress, Tooltips, restoreScroll, useHideOnScroll, usePanelPulse, useScrollMemory } from './components/ShellExtras';
 import NotFound from './components/NotFound';
 import { ConfirmHost } from './confirm';
@@ -49751,6 +50041,7 @@ export default function App() {
         </header>
 
         <main id="main-content" ref={mainRef} tabIndex={-1} key={page} className="pop min-w-0 outline-hidden">
+          {me && !isStaff && <RulesBanner />}
           <PageFrame>
             {page === 'servers' && <ServersPage sub={sub} />}
             {page === 'news' && <NewsFeed sub={sub} />}
@@ -51958,6 +52249,94 @@ export default function ConfigTransfer() {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/CustomGamesCard.tsx" << '__COREGSM_EOF__'
+import { useEffect, useState } from 'react';
+import { api } from '../api';
+import { loadGameProfiles, resetGameProfiles } from '../gameProfiles';
+import { t, useI18n } from '../i18n';
+import { Button, Section, fail, toast } from '../ui';
+
+interface Item { file: string; profile: { id: string; label: string; defaultPort: number } | null; errors: string[] }
+interface Data { template: unknown; items: Item[] }
+
+/** «Свои игры»: a game described in a JSON file appears in the list of games without changing the panel's code. */
+export default function CustomGamesCard() {
+  useI18n();
+  const [data, setData] = useState<Data | null>(null);
+  const [text, setText] = useState('');
+  const [errors, setErrors] = useState<string[]>([]);
+  const [busy, setBusy] = useState(false);
+
+  const reload = (items?: Item[]) => {
+    resetGameProfiles();
+    void loadGameProfiles();
+    if (items) setData((d) => (d ? { ...d, items } : d));
+  };
+  useEffect(() => {
+    let alive = true;
+    api<Data>('/admin/games/custom').then((r) => { if (alive) setData(r); }).catch(() => undefined);
+    return () => { alive = false; };
+  }, []);
+  if (!data) return null;
+
+  const save = async () => {
+    setBusy(true);
+    setErrors([]);
+    try {
+      const r = await api<{ items: Item[] }>('/admin/games/custom', 'PUT', { text });
+      reload(r.items);
+      setText('');
+      toast(t('cg.saved'));
+    } catch (e) {
+      const list = (e as { data?: { errors?: unknown } }).data?.errors;
+      if (Array.isArray(list) && list.length) setErrors(list.map(String));
+      else fail(e);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const remove = async (id: string) => {
+    try {
+      const r = await api<{ items: Item[] }>(`/admin/games/custom/${encodeURIComponent(id)}`, 'DELETE');
+      reload(r.items);
+    } catch (e) {
+      fail(e);
+    }
+  };
+
+  return (
+    <Section title={t('cg.title')}>
+      <p className="mb-3 text-sm font-semibold text-mute">{t('cg.help')}</p>
+      {data.items.length > 0 && (
+        <ul className="mb-3 divide-y divide-line">
+          {data.items.map((it) => (
+            <li key={it.file} className="flex items-start justify-between gap-3 py-2">
+              <div className="min-w-0">
+                <div className="font-black">{it.profile ? `${it.profile.label} · ${it.profile.id}` : it.file}</div>
+                {it.errors.map((m, i) => <p key={i} className="text-sm font-semibold text-bad">{m}</p>)}
+              </div>
+              {it.profile && <button type="button" className="btn-link text-bad" onClick={() => void remove(it.profile!.id)}>{t('cg.remove')}</button>}
+            </li>
+          ))}
+        </ul>
+      )}
+      <label htmlFor="cg-text" className="label">{t('cg.file')}</label>
+      <textarea id="cg-text" className="input min-h-40 font-mono text-sm" spellCheck={false} value={text} onChange={(e) => setText(e.target.value)} placeholder={JSON.stringify(data.template, null, 2)} />
+      {errors.length > 0 && (
+        <ul className="mt-2 space-y-1" role="alert">
+          {errors.map((m, i) => <li key={i} className="text-sm font-bold text-bad">{m}</li>)}
+        </ul>
+      )}
+      <div className="mt-3 flex flex-wrap items-center gap-3">
+        <Button type="button" loading={busy} disabled={!text.trim()} onClick={() => void save()}>{t('cg.add')}</Button>
+        <button type="button" className="btn-link" onClick={() => setText(JSON.stringify(data.template, null, 2))}>{t('cg.template')}</button>
+      </div>
+      <p className="mt-2 text-sm font-semibold text-mute">{t('cg.note')}</p>
+    </Section>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
   cat > "$APP_DIR/core-frontend/src/components/DeliveryList.tsx" << '__COREGSM_EOF__'
 import { useEffect, useState, type JSX } from 'react';
 import { api, ApiError } from '../api';
@@ -53829,6 +54208,112 @@ function PlanModal({ server, plan, onClose, onSaved }: { server: Server; plan: P
         </div>
       </div>
     </Modal>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/RulesBanner.tsx" << '__COREGSM_EOF__'
+import { useEffect, useState } from 'react';
+import { api } from '../api';
+import { useAuth } from '../auth';
+import { t, useI18n } from '../i18n';
+import { Button, fail, toast } from '../ui';
+
+interface Mine { version: number | null; text: string; agreed: boolean }
+
+/** A player who has not agreed to the current version of the community rules sees them here and agrees with one button. */
+export default function RulesBanner() {
+  useI18n();
+  const { me } = useAuth();
+  const [r, setR] = useState<Mine | null>(null);
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const player = me?.role === 'player';
+
+  useEffect(() => {
+    if (!player) { setR(null); return; }
+    let alive = true;
+    api<Mine>('/rules/me').then((x) => { if (alive) setR(x); }).catch(() => undefined);
+    return () => { alive = false; };
+  }, [player, me?.username]);
+
+  if (!player || !r || r.agreed || r.version === null) return null;
+
+  const agree = async () => {
+    setBusy(true);
+    try {
+      await api('/rules/agree', 'POST');
+      setR({ ...r, agreed: true });
+      toast(t('rl.thanks'));
+    } catch (e) {
+      fail(e);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div role="region" aria-label={t('rl.title')} className="panel mb-4 border-l-4 border-brand p-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="min-w-0">
+          <div className="font-black">{t('rl.title')}</div>
+          <p className="text-sm font-semibold text-mute">{t('rl.text', { v: r.version })}</p>
+        </div>
+        <div className="flex flex-wrap items-center gap-3">
+          <button type="button" className="btn-link" aria-expanded={open} onClick={() => setOpen((v) => !v)}>{open ? t('rl.hide') : t('rl.read')}</button>
+          <Button type="button" loading={busy} onClick={() => void agree()}>{t('rl.agree')}</Button>
+        </div>
+      </div>
+      {open && <p className="mt-3 max-h-64 overflow-y-auto whitespace-pre-wrap rounded-ui-lg bg-soft p-3 text-sm font-semibold">{r.text}</p>}
+    </div>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/RulesHistoryCard.tsx" << '__COREGSM_EOF__'
+import { useEffect, useState } from 'react';
+import { api } from '../api';
+import { t, useI18n } from '../i18n';
+import { Section, ago } from '../ui';
+
+interface History { current: number | null; players: number; versions: { version: number; text: string; createdAt: number; agreed: number }[] }
+
+/** «История правил»: every version of the rules and how many players agreed to it; an old version can be put back. */
+export default function RulesHistoryCard({ rulesKey, onRestore }: { rulesKey: string; onRestore: (text: string) => void }) {
+  useI18n();
+  const [h, setH] = useState<History | null>(null);
+  const [open, setOpen] = useState<number | null>(null);
+
+  // the text is saved by itself: look again a moment after it changes
+  useEffect(() => {
+    let alive = true;
+    const id = window.setTimeout(() => { api<History>('/rules/history').then((x) => { if (alive) setH(x); }).catch(() => undefined); }, 1200);
+    return () => { alive = false; window.clearTimeout(id); };
+  }, [rulesKey]);
+
+  if (!h || h.versions.length === 0) return null;
+  return (
+    <Section title={t('rl.history')} description={t('rl.historyHelp')}>
+      <ul className="divide-y divide-line">
+        {h.versions.map((v) => (
+          <li key={v.version} className="py-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="min-w-0">
+                <span className="font-black">{t('rl.version', { v: v.version })}</span>
+                {v.version === h.current && <span className="pill pill-ok ml-2">{t('rl.currentMark')}</span>}
+                <span className="ml-2 text-sm font-semibold text-mute">{ago(v.createdAt)}</span>
+                <span className="ml-2 text-sm font-semibold text-mute">{t('rl.agreed', { n: v.agreed, total: h.players })}</span>
+              </div>
+              <div className="flex gap-3">
+                <button type="button" className="btn-link" aria-expanded={open === v.version} onClick={() => setOpen(open === v.version ? null : v.version)}>{open === v.version ? t('rl.hide') : t('rl.read')}</button>
+                {v.version !== h.current && <button type="button" className="btn-link" onClick={() => onRestore(v.text)}>{t('rl.restore')}</button>}
+              </div>
+            </div>
+            {open === v.version && <p className="mt-2 max-h-56 overflow-y-auto whitespace-pre-wrap rounded-ui-lg bg-soft p-3 text-sm font-semibold">{v.text}</p>}
+          </li>
+        ))}
+      </ul>
+    </Section>
   );
 }
 __COREGSM_EOF__
@@ -66841,6 +67326,7 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/gameProfiles.ts" << '__COREGSM_EOF__'
 import { useEffect, useState } from 'react';
 import { api } from './api';
+import { GAMES, monogramColor, monogramOf } from './games';
 import type { ConnectTemplates } from './connectGuides';
 
 /** GET /games (public): what the panel knows about a game besides its name */
@@ -66868,6 +67354,11 @@ export function loadGameProfiles(): Promise<GameProfiles> {
       .then((list) => {
         const out: GameProfiles = {};
         for (const g of Array.isArray(list) ? list : []) if (g && typeof g.id === 'string') out[g.id] = g;
+        // a game described by a file (not built in) joins the list of games of the pickers
+        for (const g of Object.values(out)) {
+          if (!GAMES.some((x) => x.id === g.id)) GAMES.push({ id: g.id, label: g.label, port: g.defaultPort ?? 0, abbr: monogramOf(g.label), color: monogramColor(g.label), custom: true });
+        }
+        for (let i = GAMES.length - 1; i >= 0; i--) if (GAMES[i]!.custom && !out[GAMES[i]!.id]) GAMES.splice(i, 1);
         cache = out;
         return out;
       })
@@ -66875,6 +67366,11 @@ export function loadGameProfiles(): Promise<GameProfiles> {
       .finally(() => { inflight = null; });
   }
   return inflight;
+}
+
+/** the list is asked again at the next load (a game file was added or removed) */
+export function resetGameProfiles(): void {
+  cache = null;
 }
 
 /** null until the list is known; {} when the backend has no /games */
@@ -66978,7 +67474,7 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/games.ts" << '__COREGSM_EOF__'
 import { gradientFor } from './colors';
 // GameDig type ids (https://github.com/gamedig/node-gamedig/blob/master/GAMES_LIST.md)
-export interface Game { id: string; label: string; port: number; abbr: string; color: string }
+export interface Game { id: string; label: string; port: number; abbr: string; color: string; /** added by a game file, not built in */ custom?: boolean }
 
 export const GAMES: Game[] = [
   { id: 'minecraft', label: 'Minecraft: Java', port: 25565, abbr: 'MC', color: '#62b543' },
@@ -70714,6 +71210,26 @@ const en: Record<keyof typeof ru, string> = {
   'wl.vars': 'You can use {user} — a mention of the newcomer — and {server} — the server name. Empty — the default text.',
   'wl.saved': 'Saved',
   'wl.intent': 'Needs the «Server Members Intent» in Developer Portal → Bot.',
+  'cg.title': 'Custom games',
+  'cg.help': 'A game that is not in the list can be added with a file: its name, default port, a hint about the query port and how to connect. The game type (id) is the GameDig identifier.',
+  'cg.file': 'Game file (JSON)',
+  'cg.add': 'Check and add',
+  'cg.template': 'Insert the template',
+  'cg.remove': 'Remove',
+  'cg.saved': 'Game added',
+  'cg.note': 'The files are kept in the games folder next to the database; you can also drop them there by hand — they are picked up at start.',
+  'rl.title': 'The community rules were updated',
+  'rl.text': 'Version {v}. Please confirm that you agree.',
+  'rl.read': 'Read',
+  'rl.hide': 'Hide',
+  'rl.agree': 'I agree',
+  'rl.thanks': 'Thanks, your consent is recorded',
+  'rl.history': 'Rules history',
+  'rl.historyHelp': 'Every change of the text is a new version. A player’s consent belongs to the version they saw.',
+  'rl.version': 'Version {v}',
+  'rl.currentMark': 'current',
+  'rl.agreed': 'agreed: {n} of {total}',
+  'rl.restore': 'Put this text back',
   'dc.f.interval': 'Update every, seconds (30–3600)',
   'dc.f.enabled': 'Enabled',
   'us.preset.news': 'News editor',
@@ -71268,6 +71784,7 @@ const errorsEn: Record<string, string> = {
   update_channel_invalid: 'Channel: release or main',
   update_version_invalid: 'Invalid version',
   update_notify_channel_invalid: 'Invalid channel',
+  game_file_invalid: 'The game file did not pass the check',
   welcome_invalid: 'Welcome message: check the channel and the text length (up to 1000 characters)',
   rollback_unavailable: 'Rollback is not available: the previous version was not kept',
   request_pending: 'A request is already waiting to be carried out',
@@ -72940,6 +73457,26 @@ const ru = {
   'wl.vars': 'Можно использовать {user} — упоминание новичка и {server} — название сервера. Пусто — стандартный текст.',
   'wl.saved': 'Сохранено',
   'wl.intent': 'Нужен «Server Members Intent» в Developer Portal → Bot.',
+  'cg.title': 'Свои игры',
+  'cg.help': 'Игры, которых нет в списке, можно добавить файлом: название, порт по умолчанию, подсказка про порт запроса и как подключиться. Тип игры (id) — это идентификатор GameDig.',
+  'cg.file': 'Файл игры (JSON)',
+  'cg.add': 'Проверить и добавить',
+  'cg.template': 'Вставить шаблон',
+  'cg.remove': 'Убрать',
+  'cg.saved': 'Игра добавлена',
+  'cg.note': 'Файлы хранятся в папке games рядом с базой данных; их можно класть туда и вручную — они подхватываются при запуске.',
+  'rl.title': 'Правила сообщества обновились',
+  'rl.text': 'Версия {v}. Подтвердите, что вы с ними согласны.',
+  'rl.read': 'Прочитать',
+  'rl.hide': 'Скрыть',
+  'rl.agree': 'Согласен',
+  'rl.thanks': 'Спасибо, согласие записано',
+  'rl.history': 'История правил',
+  'rl.historyHelp': 'Каждое изменение текста — новая версия. Согласие игрока относится к той версии, которую он видел.',
+  'rl.version': 'Версия {v}',
+  'rl.currentMark': 'действует',
+  'rl.agreed': 'согласились: {n} из {total}',
+  'rl.restore': 'Вернуть этот текст',
   'dc.f.interval': 'Обновлять каждые, секунд (30–3600)',
   'dc.f.enabled': 'Включена',
   'us.preset.news': 'Редактор новостей',
@@ -82169,6 +82706,7 @@ import { AdminPage, GoLink, IconSettings, PageHead, Section } from '../ui';
 import { SETTINGS_TABS } from './adminNav';
 import { BotCard } from './settings/BotCard';
 import { BrandCard } from './settings/BrandCard';
+import CustomGamesCard from '../components/CustomGamesCard';
 import { PasswordCard } from './settings/PasswordCard';
 import { UpdateCard } from './settings/UpdateCard';
 import { SaveBarProvider } from '../saveBar';
@@ -82228,7 +82766,7 @@ export default function SettingsPage({ sub, updateAvailable }: { sub: string; up
           </a>
         ))}
       </nav>
-      {tab === 'bot' && <><BotCard /><PollSettingsCard /></>}
+      {tab === 'bot' && <><BotCard /><PollSettingsCard /><CustomGamesCard /></>}
       {tab === 'brand' && <BrandCard />}
       {tab === 'security' && (
         <>
@@ -84644,6 +85182,7 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages/settings"
   cat > "$APP_DIR/core-frontend/src/pages/settings/UsersTab.tsx" << '__COREGSM_EOF__'
 /** Users: registration and access settings, pending requests, roles and passwords. */
+import RulesHistoryCard from '../../components/RulesHistoryCard';
 import { useEffect, useRef, useState } from 'react';
 import { type Access, api, type Perm, PERM_LABELS, type UserRow } from '../../api';
 import '../../styles/admin.css';
@@ -84857,6 +85396,8 @@ function UsersTabInner() {
           className="min-h-32"
         />
       </Section>
+
+      <RulesHistoryCard rulesKey={rules} onRestore={setRules} />
 
       {pendingUsers.length > 0 && (
         <Section

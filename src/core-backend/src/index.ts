@@ -15,6 +15,7 @@ import { registerDigest, startDigestTimer } from './digest.js';
 import { registerOg } from './ogImage.js';
 import { registerServerChart } from './serverChart.js';
 import { registerGames } from './games.js';
+import { registerCustomGames } from './customGames.js';
 import { startPoller, stopPoller } from './gsm.js';
 import { registerHealth } from './health.js';
 import { startDbMaintenance } from './dbMaintenance.js';
@@ -28,6 +29,7 @@ import { installAudit, registerOps } from './ops.js';
 import { registerOverview } from './overview.js';
 import { registerAttention } from './attention.js';
 import { registerWelcome } from './welcome.js';
+import { registerRules } from './rules.js';
 import { logAccount, registerProfile } from './profile.js';
 import { csrfGuard, registerSecurity, securityHeaders, windowLimiter } from './security.js';
 import { embedFor, SELECT_SERVERS, SERVER_ORDER, serialize, type ServerJoin } from './serverData.js';
@@ -170,6 +172,7 @@ registerDeliveries({ app, admin, internal });
 registerSubscriptions({ app, auth, userId: (req) => (req as AuthedRequest).user!.id, canDm: () => bot.status.state === 'online' });
 registerPlayerFollows({ app, auth, userId: (req) => (req as AuthedRequest).user!.id });
 registerGames(app);
+registerCustomGames({ app, admin });
 registerAvatars({ app, auth, userId: (req) => (req as AuthedRequest).user!.id, onChange: (req, id, what) => logAccount(req, id, 'avatar_changed', what) });
 registerProfile({
   app,
@@ -193,6 +196,7 @@ startDbMaintenance();
 registerOverview({ app, viewer });
 registerAttention({ app, admin });
 registerWelcome({ app, admin, internal });
+registerRules({ app, auth, admin });
 
 // ---------- errors ----------
 app.use((err: Error & { type?: string; status?: number }, _req: Request, res: Response, _next: NextFunction) => {
