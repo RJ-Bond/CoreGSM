@@ -14,7 +14,7 @@ import { JWT_SECRET } from './config.js';
 import { db, EFFECTIVE_NAME, getSetting, setSetting } from './db.js';
 import { SERVER_ORDER } from './serverData.js';
 import { incidentsSince } from './incidents.js';
-import { changePct, dailyPeaks, sparkPoints, stripCommonPrefix, wrapName } from './digestLogic.js';
+import { busiestDay, changePct, dailyPeaks, sparkPoints, splitServers, stripCommonPrefix, trendText, uptimeBar, wrapName } from './digestLogic.js';
 import { localParts } from './localTime.js';
 import { brand, publicBase } from './site.js';
 import { param } from './http.js';
@@ -30,6 +30,7 @@ export const digestSettings = () => ({
   weekday: Math.min(6, Math.max(0, Number(getSetting('digest_weekday') ?? 0) || 0)), // 0 = Monday
   hour: Math.min(23, Math.max(0, Number(getSetting('digest_hour') ?? 10) || 0)),
   lastSent: Number(getSetting('digest_last_sent')) || 0,
+  theme: (getSetting('digest_theme') === 'light' ? 'light' : 'dark') as DigestTheme,
 });
 
 const tz = () => getSetting('timezone') || process.env.TZ || 'Europe/Moscow';
@@ -125,10 +126,18 @@ const deltaText = (d: number | null) => (d == null ? '' : d === 0 ? ' (как н
 const dateRu = (t: number) => new Date(t).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', timeZone: tz() });
 
 // ---------- the picture ----------
+
+export type DigestTheme = 'dark' | 'light';
+const PALETTES: Record<DigestTheme, { bgA: string; bgB: string; ink: string; ink2: string; ink3: string; ink4: string; card: string; ok: string; bad: string; warn: string; glow: string }> = {
+  dark: { bgA: '#15122b', bgB: '#0b0a16', ink: '#ffffff', ink2: 'rgba(255,255,255,.75)', ink3: 'rgba(255,255,255,.6)', ink4: 'rgba(255,255,255,.45)', card: 'rgba(255,255,255,.07)', ok: '#7ee2a8', bad: '#ff8a8a', warn: '#ffd27a', glow: '88' },
+  light: { bgA: '#f7f5ff', bgB: '#e6e3f6', ink: '#17142b', ink2: 'rgba(23,20,43,.78)', ink3: 'rgba(23,20,43,.62)', ink4: 'rgba(23,20,43,.5)', card: 'rgba(23,20,43,.06)', ok: '#0f7a52', bad: '#c0392b', warn: '#946200', glow: '33' },
+};
+
 const SANS = '"DejaVu Sans", "Liberation Sans", sans-serif';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
-export async function renderDigest(d: Digest): Promise<Buffer> {
+export async function renderDigest(d: Digest, theme: DigestTheme = digestSettings().theme): Promise<Buffer> {
+  const P = PALETTES[theme];
   const W = 1200;
   const H = 675;
   const canvas = new Canvas(W, H);
@@ -138,43 +147,49 @@ export async function renderDigest(d: Digest): Promise<Buffer> {
 
   // background: deep night with the brand colour glowing from the top left
   const bg = ctx.createLinearGradient(0, 0, W, H);
-  bg.addColorStop(0, '#15122b');
-  bg.addColorStop(1, '#0b0a16');
+  bg.addColorStop(0, P.bgA);
+  bg.addColorStop(1, P.bgB);
   ctx.fillStyle = bg;
   ctx.fillRect(0, 0, W, H);
   const glow = ctx.createRadialGradient(160, 40, 10, 160, 40, 700);
-  glow.addColorStop(0, `${accent}88`);
+  glow.addColorStop(0, `${accent}${P.glow}`);
   glow.addColorStop(1, `${accent}00`);
   ctx.fillStyle = glow;
   ctx.fillRect(0, 0, W, H);
 
-  ctx.fillStyle = '#ffffff';
+  ctx.fillStyle = P.ink;
   ctx.font = `bold 44px ${SANS}`;
   ctx.fillText(`Неделя на ${b.name}`, 56, 92);
-  ctx.fillStyle = 'rgba(255,255,255,.7)';
+  ctx.fillStyle = P.ink2;
   ctx.font = `600 22px ${SANS}`;
   ctx.fillText(`${dateRu(d.from)} – ${dateRu(d.to)}`, 56, 128);
 
   // four numbers
-  const stats: [string, string, string][] = [
-    [String(d.totals.players), 'игроков', deltaText(delta(d.totals.players, d.totals.prevPlayers)).replace(/[()]/g, '').trim()],
-    [String(d.totals.peak), 'пик онлайна', d.totals.peakServer ?? ''],
-    [d.totals.hours.toLocaleString('ru-RU'), 'часов в игре', deltaText(delta(d.totals.hours, d.totals.prevHours)).replace(/[()]/g, '').trim()],
-    [d.totals.uptime == null ? '–' : `${String(d.totals.uptime).replace('.', ',')}%`, 'доступность', d.totals.incidents ? `${d.totals.incidents} сбоев` : 'без сбоев'],
+  type Tone = 'up' | 'down' | 'same';
+  const arrow = (pct: number | null, suffix: string): [string, Tone] => {
+    const tr = trendText(pct);
+    return tr ? [`${tr.text} ${suffix}`.trim(), tr.kind] : ['', 'same'];
+  };
+  const peakWhen = d.totals.peakAt ? new Date(d.totals.peakAt).toLocaleString('ru-RU', { weekday: 'short', hour: '2-digit', minute: '2-digit', timeZone: tz() }).replace(',', '') : '';
+  const stats: [string, string, string, Tone][] = [
+    [String(d.totals.players), 'игроков', ...arrow(delta(d.totals.players, d.totals.prevPlayers), 'к прошлой неделе')],
+    [String(d.totals.peak), 'пик онлайна', [peakWhen, d.totals.peakServer ?? ''].filter(Boolean).join(' · '), 'same'],
+    [d.totals.hours.toLocaleString('ru-RU'), 'часов в игре', ...arrow(delta(d.totals.hours, d.totals.prevHours), 'к прошлой неделе')],
+    [d.totals.uptime == null ? '–' : `${String(d.totals.uptime).replace('.', ',')}%`, 'доступность', d.totals.incidents ? `${d.totals.incidents} сбоев` : 'без сбоев', d.totals.incidents ? 'down' : 'up'],
   ];
-  stats.forEach(([v, k, hint], i) => {
+  stats.forEach(([v, k, hint, tone], i) => {
     const x = 56 + i * 276;
-    ctx.fillStyle = 'rgba(255,255,255,.07)';
+    ctx.fillStyle = P.card;
     ctx.beginPath();
     ctx.roundRect(x, 160, 256, 140, 22);
     ctx.fill();
-    ctx.fillStyle = '#ffffff';
+    ctx.fillStyle = P.ink;
     ctx.font = `bold 52px ${SANS}`;
     ctx.fillText(v, x + 22, 228);
-    ctx.fillStyle = 'rgba(255,255,255,.75)';
+    ctx.fillStyle = P.ink2;
     ctx.font = `bold 20px ${SANS}`;
     ctx.fillText(k, x + 22, 260);
-    ctx.fillStyle = hint.startsWith('−') ? '#ff8a8a' : hint.startsWith('+') ? '#7ee2a8' : 'rgba(255,255,255,.55)';
+    ctx.fillStyle = tone === 'down' ? P.bad : tone === 'up' ? P.ok : P.ink3;
     ctx.font = `600 15px ${SANS}`;
     let short = hint;
     while (short.length > 3 && ctx.measureText(short).width > 220) short = short.slice(0, -1);
@@ -187,10 +202,11 @@ export async function renderDigest(d: Digest): Promise<Buffer> {
   const by = 340;
   const bw = 520;
   const bh = 270;
-  ctx.fillStyle = 'rgba(255,255,255,.7)';
+  ctx.fillStyle = P.ink2;
   ctx.font = `bold 18px ${SANS}`;
   ctx.fillText('Игроков в день', bx, by);
   const slot = bw / 7;
+  const top = busiestDay(d.days.map((x) => x.players));
   d.days.forEach((x, i) => {
     const h = Math.max(4, ((bh - 70) * x.players) / max);
     const gx = bx + i * slot + 10;
@@ -199,14 +215,17 @@ export async function renderDigest(d: Digest): Promise<Buffer> {
     g.addColorStop(0, accent);
     g.addColorStop(1, `${accent}66`);
     ctx.fillStyle = g;
+    // the busiest day keeps the full colour, the rest are toned down
+    ctx.globalAlpha = top < 0 || i === top ? 1 : 0.55;
     ctx.beginPath();
     ctx.roundRect(gx, gy, slot - 20, h, 10);
     ctx.fill();
-    ctx.fillStyle = '#ffffff';
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = P.ink;
     ctx.font = `bold 17px ${SANS}`;
     ctx.textAlign = 'center';
     ctx.fillText(String(x.players), gx + (slot - 20) / 2, gy - 8);
-    ctx.fillStyle = 'rgba(255,255,255,.6)';
+    ctx.fillStyle = P.ink3;
     ctx.font = `600 15px ${SANS}`;
     const [, m, day] = x.day.split('-');
     ctx.fillText(`${Number(day)}.${m}`, gx + (slot - 20) / 2, by + bh - 12);
@@ -215,23 +234,23 @@ export async function renderDigest(d: Digest): Promise<Buffer> {
 
   // servers
   const sx = 640;
-  ctx.fillStyle = 'rgba(255,255,255,.7)';
+  ctx.fillStyle = P.ink2;
   ctx.font = `bold 18px ${SANS}`;
   ctx.fillText('Серверы', sx, by);
   const headW = ctx.measureText('Серверы').width;
-  ctx.fillStyle = 'rgba(255,255,255,.45)';
+  ctx.fillStyle = P.ink4;
   ctx.font = `600 14px ${SANS}`;
   ctx.fillText('линия: пик онлайна по дням · %: к прошлой неделе', sx + headW + 16, by);
-  const shown = d.servers.slice(0, 5);
+  const { shown, hidden } = splitServers(d.servers, 5);
   // servers of one project start with the same words: show the part that tells them apart
   const names = stripCommonPrefix(shown.map((s) => s.name));
   shown.forEach((s, i) => {
     const y = by + 22 + i * 50;
-    ctx.fillStyle = 'rgba(255,255,255,.06)';
+    ctx.fillStyle = P.card;
     ctx.beginPath();
-    ctx.roundRect(sx, y, 504, 42, 12);
+    ctx.roundRect(sx, y, 504, 46, 12);
     ctx.fill();
-    ctx.fillStyle = '#ffffff';
+    ctx.fillStyle = P.ink;
     // up to two lines; a line that is still too wide is cut by pixels
     ctx.font = `bold 16px ${SANS}`;
     const lines = wrapName(names[i] ?? s.name, 17, 2).map((ln) => {
@@ -239,7 +258,7 @@ export async function renderDigest(d: Digest): Promise<Buffer> {
       while (l.length > 3 && ctx.measureText(l).width > 176) l = `${l.slice(0, -2)}…`;
       return l;
     });
-    lines.forEach((ln, k) => ctx.fillText(ln, sx + 14, lines.length === 1 ? y + 27 : y + 19 + k * 18));
+    lines.forEach((ln, k) => ctx.fillText(ln, sx + 14, lines.length === 1 ? y + 27 : y + 19 + k * 16));
     // the week in one line: the highest online of each day
     const pts = sparkPoints(s.daily, 70, 20);
     const px = sx + 200;
@@ -252,26 +271,52 @@ export async function renderDigest(d: Digest): Promise<Buffer> {
     ctx.stroke();
     // players, and how that compares with the week before
     ctx.font = `600 16px ${SANS}`;
-    ctx.fillStyle = 'rgba(255,255,255,.75)';
+    ctx.fillStyle = P.ink2;
     ctx.fillText(`${s.players} игр.`, sx + 290, y + 20);
-    const ch = changePct(s.players, s.prevPlayers);
-    if (ch != null) {
+    const tr = trendText(changePct(s.players, s.prevPlayers));
+    if (tr) {
       ctx.font = `600 13px ${SANS}`;
-      ctx.fillStyle = ch < 0 ? '#ff8a8a' : ch > 0 ? '#7ee2a8' : 'rgba(255,255,255,.55)';
-      ctx.fillText(ch === 0 ? '=' : `${ch > 0 ? '+' : '−'}${Math.abs(ch)}%`, sx + 290, y + 36);
+      ctx.fillStyle = tr.kind === 'down' ? P.bad : tr.kind === 'up' ? P.ok : P.ink3;
+      ctx.fillText(tr.text, sx + 290, y + 36);
     }
     ctx.font = `600 16px ${SANS}`;
     const ok = s.incidents === 0;
-    ctx.fillStyle = ok ? '#7ee2a8' : s.downMinutes >= 60 ? '#ff8a8a' : '#ffd27a';
+    ctx.fillStyle = ok ? P.ok : s.downMinutes >= 60 ? P.bad : P.warn;
     ctx.fillText(s.uptime == null ? '–' : `${String(s.uptime).replace('.', ',')}%`, sx + 410, y + 28);
+    // the uptime as a thin bar along the bottom edge of the row
+    ctx.fillStyle = P.card;
+    ctx.beginPath();
+    ctx.roundRect(sx + 14, y + 40, 476, 3, 1.5);
+    ctx.fill();
+    const bar = uptimeBar(s.uptime, 476);
+    if (bar > 0) {
+      ctx.fillStyle = ok ? P.ok : s.downMinutes >= 60 ? P.bad : P.warn;
+      ctx.beginPath();
+      ctx.roundRect(sx + 14, y + 40, bar, 3, 1.5);
+      ctx.fill();
+    }
   });
+  // too many servers for the picture: one row says how many more there are
+  if (hidden.length) {
+    const y = by + 22 + shown.length * 50;
+    ctx.fillStyle = P.card;
+    ctx.beginPath();
+    ctx.roundRect(sx, y, 504, 46, 12);
+    ctx.fill();
+    ctx.fillStyle = P.ink2;
+    ctx.font = `bold 16px ${SANS}`;
+    ctx.fillText(`ещё ${hidden.length} ${hidden.length === 1 ? 'сервер' : hidden.length < 5 ? 'сервера' : 'серверов'}`, sx + 14, y + 28);
+    ctx.font = `600 16px ${SANS}`;
+    ctx.fillStyle = P.ink3;
+    ctx.fillText(`${hidden.reduce((n, x) => n + x.players, 0)} игр.`, sx + 290, y + 28);
+  }
   if (d.top.length) {
-    ctx.fillStyle = 'rgba(255,255,255,.6)';
+    ctx.fillStyle = P.ink3;
     ctx.font = `600 16px ${SANS}`;
     const line = `Больше всех играли: ${d.top.slice(0, 3).map((p) => `${p.name} (${Math.round(p.hours)} ч)`).join(', ')}`;
     let t = line;
     while (t.length > 10 && ctx.measureText(t).width > 504) t = t.slice(0, -1);
-    ctx.fillText(t === line ? t : `${t}…`, sx, by + 22 + Math.min(5, d.servers.length) * 50 + 22);
+    ctx.fillText(t === line ? t : `${t}…`, sx, by + 22 + (shown.length + (hidden.length ? 1 : 0)) * 50 + 22);
   }
   return canvas.toBuffer('png');
 }
@@ -346,6 +391,7 @@ export function registerDigest({ app, admin }: { app: Express; admin: RequestHan
         channelId: z.string().regex(/^(\d{15,25})?$/).optional(),
         weekday: z.number().int().min(0).max(6).optional(),
         hour: z.number().int().min(0).max(23).optional(),
+        theme: z.enum(['dark', 'light']).optional(),
       })
       .safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Проверьте поля' });
@@ -356,6 +402,7 @@ export function registerDigest({ app, admin }: { app: Express; admin: RequestHan
     if (b.data.channelId !== undefined) setSetting('digest_channel', b.data.channelId);
     if (b.data.weekday !== undefined) setSetting('digest_weekday', String(b.data.weekday));
     if (b.data.hour !== undefined) setSetting('digest_hour', String(b.data.hour));
+    if (b.data.theme !== undefined) setSetting('digest_theme', b.data.theme);
     res.json(payload());
   });
 
