@@ -1,0 +1,358 @@
+
+<!doctype html>
+<html lang="en">
+
+<head>
+    <title>Code coverage report for src/ui/motion.tsx</title>
+    <meta charset="utf-8" />
+    <link rel="stylesheet" href="../../prettify.css" />
+    <link rel="stylesheet" href="../../base.css" />
+    <link rel="shortcut icon" type="image/x-icon" href="../../favicon.png" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style type='text/css'>
+        .coverage-summary .sorter {
+            background-image: url(../../sort-arrow-sprite.png);
+        }
+    </style>
+</head>
+    
+<body>
+<div class='wrapper'>
+    <div class='pad1'>
+        <h1><a href="../../index.html">All files</a> / <a href="index.html">src/ui</a> motion.tsx</h1>
+        <div class='clearfix'>
+            
+            <div class='fl pad1y space-right2'>
+                <span class="strong">3.44% </span>
+                <span class="quiet">Statements</span>
+                <span class='fraction'>2/58</span>
+            </div>
+        
+            
+            <div class='fl pad1y space-right2'>
+                <span class="strong">0% </span>
+                <span class="quiet">Branches</span>
+                <span class='fraction'>0/35</span>
+            </div>
+        
+            
+            <div class='fl pad1y space-right2'>
+                <span class="strong">0% </span>
+                <span class="quiet">Functions</span>
+                <span class='fraction'>0/15</span>
+            </div>
+        
+            
+            <div class='fl pad1y space-right2'>
+                <span class="strong">4.54% </span>
+                <span class="quiet">Lines</span>
+                <span class='fraction'>2/44</span>
+            </div>
+        
+            
+        </div>
+        <p class="quiet">
+            Press <em>n</em> or <em>j</em> to go to the next uncovered block, <em>b</em>, <em>p</em> or <em>k</em> for the previous block.
+        </p>
+        <template id="filterTemplate">
+            <div class="quiet">
+                Filter:
+                <input type="search" id="fileSearch">
+            </div>
+        </template>
+    </div>
+    <div class='status-line low'></div>
+    <pre><table class="coverage">
+<tr><td class="line-count quiet"><a name='L1'></a><a href='#L1'>1</a>
+<a name='L2'></a><a href='#L2'>2</a>
+<a name='L3'></a><a href='#L3'>3</a>
+<a name='L4'></a><a href='#L4'>4</a>
+<a name='L5'></a><a href='#L5'>5</a>
+<a name='L6'></a><a href='#L6'>6</a>
+<a name='L7'></a><a href='#L7'>7</a>
+<a name='L8'></a><a href='#L8'>8</a>
+<a name='L9'></a><a href='#L9'>9</a>
+<a name='L10'></a><a href='#L10'>10</a>
+<a name='L11'></a><a href='#L11'>11</a>
+<a name='L12'></a><a href='#L12'>12</a>
+<a name='L13'></a><a href='#L13'>13</a>
+<a name='L14'></a><a href='#L14'>14</a>
+<a name='L15'></a><a href='#L15'>15</a>
+<a name='L16'></a><a href='#L16'>16</a>
+<a name='L17'></a><a href='#L17'>17</a>
+<a name='L18'></a><a href='#L18'>18</a>
+<a name='L19'></a><a href='#L19'>19</a>
+<a name='L20'></a><a href='#L20'>20</a>
+<a name='L21'></a><a href='#L21'>21</a>
+<a name='L22'></a><a href='#L22'>22</a>
+<a name='L23'></a><a href='#L23'>23</a>
+<a name='L24'></a><a href='#L24'>24</a>
+<a name='L25'></a><a href='#L25'>25</a>
+<a name='L26'></a><a href='#L26'>26</a>
+<a name='L27'></a><a href='#L27'>27</a>
+<a name='L28'></a><a href='#L28'>28</a>
+<a name='L29'></a><a href='#L29'>29</a>
+<a name='L30'></a><a href='#L30'>30</a>
+<a name='L31'></a><a href='#L31'>31</a>
+<a name='L32'></a><a href='#L32'>32</a>
+<a name='L33'></a><a href='#L33'>33</a>
+<a name='L34'></a><a href='#L34'>34</a>
+<a name='L35'></a><a href='#L35'>35</a>
+<a name='L36'></a><a href='#L36'>36</a>
+<a name='L37'></a><a href='#L37'>37</a>
+<a name='L38'></a><a href='#L38'>38</a>
+<a name='L39'></a><a href='#L39'>39</a>
+<a name='L40'></a><a href='#L40'>40</a>
+<a name='L41'></a><a href='#L41'>41</a>
+<a name='L42'></a><a href='#L42'>42</a>
+<a name='L43'></a><a href='#L43'>43</a>
+<a name='L44'></a><a href='#L44'>44</a>
+<a name='L45'></a><a href='#L45'>45</a>
+<a name='L46'></a><a href='#L46'>46</a>
+<a name='L47'></a><a href='#L47'>47</a>
+<a name='L48'></a><a href='#L48'>48</a>
+<a name='L49'></a><a href='#L49'>49</a>
+<a name='L50'></a><a href='#L50'>50</a>
+<a name='L51'></a><a href='#L51'>51</a>
+<a name='L52'></a><a href='#L52'>52</a>
+<a name='L53'></a><a href='#L53'>53</a>
+<a name='L54'></a><a href='#L54'>54</a>
+<a name='L55'></a><a href='#L55'>55</a>
+<a name='L56'></a><a href='#L56'>56</a>
+<a name='L57'></a><a href='#L57'>57</a>
+<a name='L58'></a><a href='#L58'>58</a>
+<a name='L59'></a><a href='#L59'>59</a>
+<a name='L60'></a><a href='#L60'>60</a>
+<a name='L61'></a><a href='#L61'>61</a>
+<a name='L62'></a><a href='#L62'>62</a>
+<a name='L63'></a><a href='#L63'>63</a>
+<a name='L64'></a><a href='#L64'>64</a>
+<a name='L65'></a><a href='#L65'>65</a>
+<a name='L66'></a><a href='#L66'>66</a>
+<a name='L67'></a><a href='#L67'>67</a>
+<a name='L68'></a><a href='#L68'>68</a>
+<a name='L69'></a><a href='#L69'>69</a>
+<a name='L70'></a><a href='#L70'>70</a>
+<a name='L71'></a><a href='#L71'>71</a>
+<a name='L72'></a><a href='#L72'>72</a>
+<a name='L73'></a><a href='#L73'>73</a>
+<a name='L74'></a><a href='#L74'>74</a>
+<a name='L75'></a><a href='#L75'>75</a>
+<a name='L76'></a><a href='#L76'>76</a>
+<a name='L77'></a><a href='#L77'>77</a>
+<a name='L78'></a><a href='#L78'>78</a>
+<a name='L79'></a><a href='#L79'>79</a>
+<a name='L80'></a><a href='#L80'>80</a>
+<a name='L81'></a><a href='#L81'>81</a>
+<a name='L82'></a><a href='#L82'>82</a>
+<a name='L83'></a><a href='#L83'>83</a>
+<a name='L84'></a><a href='#L84'>84</a>
+<a name='L85'></a><a href='#L85'>85</a>
+<a name='L86'></a><a href='#L86'>86</a>
+<a name='L87'></a><a href='#L87'>87</a>
+<a name='L88'></a><a href='#L88'>88</a>
+<a name='L89'></a><a href='#L89'>89</a>
+<a name='L90'></a><a href='#L90'>90</a>
+<a name='L91'></a><a href='#L91'>91</a>
+<a name='L92'></a><a href='#L92'>92</a></td><td class="line-coverage quiet"><span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span></td><td class="text"><pre class="prettyprint lang-js">/** Animated numbers and small CSS-only flourishes; all respect reduced motion. */
+import { type CSSProperties, useEffect, useRef, useState } from 'react';
+&nbsp;
+const <span class="fstat-no" title="function not covered" >reducedMotion = () =&gt; <span class="cstat-no" title="statement not covered" >t</span>ypeof window !== 'undefined' &amp;&amp; (document.documentElement.dataset.motion === 'reduce' || !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches);</span>
+&nbsp;
+/** the number counts to its new value instead of jumping (about 600 ms; instant with reduced motion) */
+export function <span class="fstat-no" title="function not covered" >useTween(v</span>alue: number, ms = <span class="branch-0 cbranch-no" title="branch not covered" >600): number {</span>
+  const [shown, setShown] = <span class="cstat-no" title="statement not covered" >useState(value);</span>
+  const cur = <span class="cstat-no" title="statement not covered" >useRef(value);</span>
+<span class="cstat-no" title="statement not covered" ><span class="fstat-no" title="function not covered" >  useEffect(() =&gt; {</span></span>
+<span class="cstat-no" title="statement not covered" >    if (cur.current === value) <span class="cstat-no" title="statement not covered" >return;</span></span>
+<span class="cstat-no" title="statement not covered" >    if (reducedMotion()) { <span class="cstat-no" title="statement not covered" >cur.current = value; <span class="cstat-no" title="statement not covered" >s</span>etShown(value); <span class="cstat-no" title="statement not covered" >r</span>eturn; }</span></span>
+    const from = <span class="cstat-no" title="statement not covered" >cur.current;</span>
+    const start = <span class="cstat-no" title="statement not covered" >performance.now();</span>
+    let raf = <span class="cstat-no" title="statement not covered" >0;</span>
+    const <span class="cstat-no" title="statement not covered" ><span class="fstat-no" title="function not covered" >step = (n</span>ow: number) =&gt; {</span>
+      const k = <span class="cstat-no" title="statement not covered" >Math.min(1, (now - start) / ms);</span>
+      const eased = <span class="cstat-no" title="statement not covered" >1 - Math.pow(1 - k, 3);</span>
+<span class="cstat-no" title="statement not covered" >      cur.current = k &gt;= 1 ? value : Math.round(from + (value - from) * eased);</span>
+<span class="cstat-no" title="statement not covered" >      setShown(cur.current);</span>
+<span class="cstat-no" title="statement not covered" >      if (k &lt; 1) <span class="cstat-no" title="statement not covered" >raf = requestAnimationFrame(step);</span></span>
+    };
+<span class="cstat-no" title="statement not covered" >    raf = requestAnimationFrame(step);</span>
+<span class="cstat-no" title="statement not covered" ><span class="fstat-no" title="function not covered" >    return () =&gt; <span class="cstat-no" title="statement not covered" >c</span>ancelAnimationFrame(raf);</span></span>
+  }, [value, ms]);
+<span class="cstat-no" title="statement not covered" >  return shown;</span>
+}
+&nbsp;
+const DIGITS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+&nbsp;
+/**
+ * Tabular number whose digits roll vertically (slot-machine style) when the value changes.
+ * `pulse`: the number glows briefly; `delta`: a «+3» / «−2» chip floats above it for about two seconds.
+ * The real number is in a visually hidden node, the rolling digits are decoration (aria-hidden); no layout shift.
+ */
+export function <span class="fstat-no" title="function not covered" >AnimatedNumber({</span> value, className = <span class="branch-0 cbranch-no" title="branch not covered" >'', p</span>ulse = <span class="branch-0 cbranch-no" title="branch not covered" >false, d</span>elta = <span class="branch-0 cbranch-no" title="branch not covered" >false }: { value: number; className?: string; pulse?: boolean; delta?: boolean }) {</span>
+  const [bump, setBump] = <span class="cstat-no" title="statement not covered" >useState(false);</span>
+  const [chip, setChip] = <span class="cstat-no" title="statement not covered" >useState&lt;{ n: number; k: number } | null&gt;(null);</span>
+  const prev = <span class="cstat-no" title="statement not covered" >useRef(value);</span>
+  const born = <span class="cstat-no" title="statement not covered" >useRef(true);</span>
+<span class="cstat-no" title="statement not covered" ><span class="fstat-no" title="function not covered" >  useEffect(() =&gt; {</span></span>
+    const diff = <span class="cstat-no" title="statement not covered" >value - prev.current;</span>
+<span class="cstat-no" title="statement not covered" >    prev.current = value;</span>
+<span class="cstat-no" title="statement not covered" >    if (born.current) { <span class="cstat-no" title="statement not covered" >born.current = false; <span class="cstat-no" title="statement not covered" >r</span>eturn; }</span></span>
+<span class="cstat-no" title="statement not covered" >    if (diff === 0) <span class="cstat-no" title="statement not covered" >return;</span></span>
+    const timers: number[] = <span class="cstat-no" title="statement not covered" >[];</span>
+<span class="cstat-no" title="statement not covered" >    if (pulse) {</span>
+<span class="cstat-no" title="statement not covered" >      setBump(true);</span>
+<span class="cstat-no" title="statement not covered" >      timers.push(window.<span class="fstat-no" title="function not covered" >setTimeout(() =&gt; <span class="cstat-no" title="statement not covered" >s</span>etBump(false), 9</span>50));</span>
+    }
+<span class="cstat-no" title="statement not covered" >    if (delta) {</span>
+<span class="cstat-no" title="statement not covered" >      setChip({ n: diff, k: Date.now() });</span>
+<span class="cstat-no" title="statement not covered" >      timers.push(window.<span class="fstat-no" title="function not covered" >setTimeout(() =&gt; <span class="cstat-no" title="statement not covered" >s</span>etChip(null), 2</span>100));</span>
+    }
+<span class="cstat-no" title="statement not covered" ><span class="fstat-no" title="function not covered" >    return () =&gt; <span class="cstat-no" title="statement not covered" >t</span>imers.<span class="fstat-no" title="function not covered" >forEach((t</span>) =&gt; <span class="cstat-no" title="statement not covered" >window.clearTimeout(t))</span>;</span></span>
+  }, [value, pulse, delta]);
+&nbsp;
+  const text = <span class="cstat-no" title="statement not covered" >String(Math.round(value));</span>
+  const chars = <span class="cstat-no" title="statement not covered" >[...text];</span>
+<span class="cstat-no" title="statement not covered" >  return (</span>
+    &lt;span className={`roll ${bump ? 'num-bump' : ''} ${className}`}&gt;
+      &lt;span className="sr-only"&gt;{text}&lt;/span&gt;
+      &lt;span aria-hidden&gt;
+        {chars.<span class="fstat-no" title="function not covered" >map((c</span>, i) =&gt; {
+          // keyed from the right, so a column keeps its identity when the number grows by a digit
+          const key = <span class="cstat-no" title="statement not covered" >chars.length - i;</span>
+<span class="cstat-no" title="statement not covered" >          return /\d/.test(c)</span>
+            ? (
+              &lt;span key={key} className="roll-d"&gt;
+                &lt;span className="roll-g"&gt;0&lt;/span&gt;
+                &lt;span className="roll-col" style={{ transform: `translateY(${-Number(c)}em)` }}&gt;
+                  {DIGITS.<span class="fstat-no" title="function not covered" >map((d</span>) =&gt; <span class="cstat-no" title="statement not covered" >&lt;span key={d}&gt;{d}&lt;/span&gt;)</span>}
+                &lt;/span&gt;
+              &lt;/span&gt;
+            )
+            : &lt;span key={key}&gt;{c}&lt;/span&gt;;
+        })}
+      &lt;/span&gt;
+      {chip &amp;&amp; &lt;span key={chip.k} aria-hidden className={`delta-chip ${chip.n &gt; 0 ? 'up' : 'down'}`}&gt;{chip.n &gt; 0 ? `+${chip.n}` : `−${Math.abs(chip.n)}`}&lt;/span&gt;}
+    &lt;/span&gt;
+  );
+}
+&nbsp;
+/** a few dots flying out of the centre of the parent (the parent must be `relative`); CSS only */
+export function <span class="fstat-no" title="function not covered" >Burst({</span> count = <span class="branch-0 cbranch-no" title="branch not covered" >8, r</span>adius = <span class="branch-0 cbranch-no" title="branch not covered" >17 }: { count?: number; radius?: number }) {</span>
+<span class="cstat-no" title="statement not covered" >  return (</span>
+    &lt;span className="burst" aria-hidden style={{ '--r': `${radius}px` } as CSSProperties}&gt;
+      {Array.from({ length: count <span class="fstat-no" title="function not covered" >}, (_</span>, i) =&gt; <span class="cstat-no" title="statement not covered" >&lt;i key={i} style={{ '--a': `${Math.round((360 / count) * i + 15)}deg` } as CSSProperties} /&gt;)</span>}
+    &lt;/span&gt;
+  );
+}
+&nbsp;</pre></td></tr></table></pre>
+
+                <div class='push'></div><!-- for sticky footer -->
+            </div><!-- /wrapper -->
+            <div class='footer quiet pad2 space-top1 center small'>
+                Code coverage generated by
+                <a href="https://istanbul.js.org/" target="_blank" rel="noopener noreferrer">istanbul</a>
+                at 2026-10-26T18:04:41.553Z
+            </div>
+        <script src="../../prettify.js"></script>
+        <script>
+            window.onload = function () {
+                prettyPrint();
+            };
+        </script>
+        <script src="../../sorter.js"></script>
+        <script src="../../block-navigation.js"></script>
+    </body>
+</html>
+    

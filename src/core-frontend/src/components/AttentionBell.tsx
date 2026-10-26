@@ -24,7 +24,7 @@ export default function AttentionBell() {
 
   const load = useCallback(async () => {
     try {
-      const r = await api<{ items: Item[] }>('/api/admin/attention');
+      const r = await api<{ items: Item[] }>('/admin/attention');
       setItems(Array.isArray(r.items) ? r.items : []);
       setFailed(false);
     } catch {
