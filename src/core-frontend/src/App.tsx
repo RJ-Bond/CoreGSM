@@ -5,6 +5,7 @@ import { api, ApiError, getToken, setToken, type Access, type Me, type UpdateInf
 import { AuthContext } from './auth';
 import { onAccentChange, paintBrand, useAutoAccent } from './accent';
 import NotificationBell from './components/NotificationBell';
+import AttentionBell from './components/AttentionBell';
 import { AppFooter, BotPill, ProfileMenu, RouteProgress, Tooltips, restoreScroll, useHideOnScroll, usePanelPulse, useScrollMemory } from './components/ShellExtras';
 import NotFound from './components/NotFound';
 import { ConfirmHost } from './confirm';
@@ -443,6 +444,7 @@ export default function App() {
               <kbd className="hidden rounded-md bg-card px-1.5 py-0.5 font-sans text-xs font-bold text-mute lg:inline">Ctrl K</kbd>
             </button>
             {isAdmin && <BotPill />}
+            {isAdmin && <AttentionBell />}
             {me && <NotificationBell initialUnread={me.unreadNotifications ?? 0} />}
             <ThemeToggle />
             {me ? (
