@@ -6,6 +6,7 @@
 import type { Express, Request, RequestHandler } from 'express';
 import { z } from 'zod';
 import { db } from './db.js';
+import { dispatchEvent } from './alertChannels.js';
 
 export type Repeat = 'none' | 'daily' | 'weekly';
 
@@ -179,6 +180,12 @@ export function registerMaintenance({ app, admin, viewer }: { app: Express; admi
       .run(b.data.serverId ?? null, b.data.name, b.data.startTs, b.data.endTs, b.data.repeat, actor(req), Date.now());
     resetMaintenanceCache();
     const row = db.prepare('SELECT * FROM maintenance_windows WHERE id = ?').get(info.lastInsertRowid) as WindowRow;
+    dispatchEvent({
+      event: 'maintenance',
+      title: `Запланировано обслуживание${row.name ? `: ${row.name}` : ''}`,
+      text: `С ${new Date(row.start_ts).toISOString()} по ${new Date(row.end_ts).toISOString()} (UTC), повтор: ${row.repeat}.`,
+      data: { windowId: row.id, serverId: row.server_id, name: row.name, startTs: row.start_ts, endTs: row.end_ts, repeat: row.repeat },
+    });
     res.status(201).json(serialize(row));
   });
 

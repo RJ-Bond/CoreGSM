@@ -12,6 +12,7 @@ import { gameLabel } from './games.js';
 import { inMaintenance } from './maintenance.js';
 import { claimDue, enqueueDelivery, registerKind, reportResult } from './deliveries.js';
 import { SMART_KINDS, smartEnabled } from './smartAlerts.js';
+import { channelsWant, dispatchEvent } from './alertChannels.js';
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS alert_state (
@@ -131,7 +132,9 @@ const human = (min: number) => (min < 60 ? `${min} мин` : `${Math.floor(min /
 /** Called after every poll of a server. */
 export function trackAlerts(serverId: number, online: boolean, error: string | null): void {
   const s = alertSettings();
-  if (!s.enabled || !s.channelId) {
+  // Discord is one channel among others: webhooks and e-mail keep working when the bot or its token is gone
+  const discordOn = s.enabled && !!s.channelId;
+  if (!discordOn && !channelsWant('server_down') && !channelsWant('server_up')) {
     db.prepare('DELETE FROM alert_state WHERE server_id = ?').run(serverId);
     return;
   }
@@ -155,11 +158,11 @@ export function trackAlerts(serverId: number, online: boolean, error: string | n
       if (st.alerted) {
         const i = info();
         if (i) {
-          enqueueAlert('up', i.n, {
-            content: '',
-            mention: 'none',
-            embed: upEmbed({ name: i.n, address: i.display_address || `${i.host}:${i.port}`, game: i.game, downMs: now - st.down_since, now }),
-          });
+          const address = i.display_address || `${i.host}:${i.port}`;
+          if (discordOn) {
+            enqueueAlert('up', i.n, { content: '', mention: 'none', embed: upEmbed({ name: i.n, address, game: i.game, downMs: now - st.down_since, now }) });
+          }
+          dispatchEvent({ event: 'server_up', title: `${i.n} снова в сети`, text: `${address}. Простой: ${human(minutes(now - st.down_since))}`, data: { serverId, server: i.n, address, game: i.game, downMs: now - st.down_since } });
         }
       }
     }
@@ -174,11 +177,15 @@ export function trackAlerts(serverId: number, online: boolean, error: string | n
     const i = info();
     db.prepare('UPDATE alert_state SET alerted = 1 WHERE server_id = ?').run(serverId);
     if (!i) return;
-    enqueueAlert('down', i.n, {
-      content: s.mention === 'everyone' ? '@everyone' : s.mention === 'here' ? '@here' : '',
-      mention: s.mention,
-      embed: downEmbed({ name: i.n, address: i.display_address || `${i.host}:${i.port}`, game: i.game, downMs: now - st.down_since, error, now }),
-    });
+    const address = i.display_address || `${i.host}:${i.port}`;
+    if (discordOn) {
+      enqueueAlert('down', i.n, {
+        content: s.mention === 'everyone' ? '@everyone' : s.mention === 'here' ? '@here' : '',
+        mention: s.mention,
+        embed: downEmbed({ name: i.n, address, game: i.game, downMs: now - st.down_since, error, now }),
+      });
+    }
+    dispatchEvent({ event: 'server_down', title: `${i.n} недоступен`, text: `${address}. Сервер не отвечает уже ${human(minutes(now - st.down_since))}${error ? `. ${error.slice(0, 300)}` : ''}`, data: { serverId, server: i.n, address, game: i.game, downMs: now - st.down_since, error } });
   }
 }
 

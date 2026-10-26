@@ -53,12 +53,12 @@ export interface Decision {
  *  - a failed poll counts at once when there is no state to hold (new server) or the server is already offline;
  *  - otherwise the last good state is kept until `threshold` consecutive polls have failed.
  */
-export function decideStatus(i: { prevOnline: boolean | null; prevFailures: number; polledOnline: boolean; threshold: number }): Decision {
+export function decideStatus(i: { prevOnline: boolean | null; prevFailures: number; polledOnline: boolean; threshold: number; /** the verdict of the «N of M» rule (downVerdict.ts); when given it replaces the consecutive-failure threshold */ confirmDown?: boolean }): Decision {
   if (i.polledOnline) return { online: true, confirmed: true, failures: 0, becameOffline: false };
   const failures = Math.min(1_000_000, Math.max(0, Math.floor(i.prevFailures)) + 1);
   const threshold = clampThreshold(i.threshold);
   if (i.prevOnline === null || i.prevOnline === false) return { online: false, confirmed: true, failures, becameOffline: false };
-  if (failures >= threshold) return { online: false, confirmed: true, failures, becameOffline: true };
+  if (i.confirmDown ?? failures >= threshold) return { online: false, confirmed: true, failures, becameOffline: true };
   return { online: true, confirmed: false, failures, becameOffline: false };
 }
 

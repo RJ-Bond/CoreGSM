@@ -11,6 +11,7 @@ import { clampConcurrency, clampDays, clampThreshold, decideStatus, DEFAULT_CONC
 export { humanizeQueryError, queryServer, type QueryResult } from './query.js';
 import { queryServer, type QueryResult } from './query.js';
 import { log } from './logger.js';
+import { judgeDown, MAX_WINDOW, resolveRule, type DownRule } from './downVerdict.js';
 
 const upsert = db.prepare(`
 INSERT INTO status (server_id, online, name, players, max_players, map, version, ping, player_names, error, updated_at, consecutive_failures, state_since)
@@ -98,6 +99,10 @@ export function recordUptime(serverId: number, online: boolean, players: number,
 // ---------- settings ----------
 /** consecutive failed polls before a server is shown as offline (setting poll_fail_threshold, 1..5, default 2) */
 export const failThreshold = (): number => clampThreshold(getSetting('poll_fail_threshold'));
+/** the «N of M» rule of a confirmed outage (settings poll_fail_n, poll_fail_m, poll_probe_veto; unset = the threshold above) */
+export const downRule = (): DownRule => resolveRule({ n: getSetting('poll_fail_n'), m: getSetting('poll_fail_m'), probeVeto: getSetting('poll_probe_veto') === '1' }, failThreshold());
+/** a probe report older than this counts as «no opinion» (as in probes.ts) */
+const PROBE_FRESH_MS = 5 * 60_000;
 /** servers polled at the same time (setting poll_concurrency, else env POLL_CONCURRENCY, 1..32, default 8) */
 export const pollConcurrency = (): number => {
   const s = getSetting('poll_concurrency');
@@ -123,11 +128,30 @@ export function applyPollResult(s: ServerRow, r: QueryResult, ts: number, opts: 
   const prev = db.prepare('SELECT online, players, consecutive_failures AS f FROM status WHERE server_id = ?').get(s.id) as
     | { online: number; players: number; f: number }
     | undefined;
+  // own «N of M» rule: only a failed scheduled poll of an online server needs the history of the last polls
+  let confirmDown: boolean | undefined;
+  if (opts.debounce && !r.online && prev && prev.online) {
+    const rule = downRule();
+    if (rule.custom) {
+      try {
+        const rows = db.prepare('SELECT online, unconfirmed FROM history WHERE server_id = ? ORDER BY ts DESC, rowid DESC LIMIT ?').all(s.id, MAX_WINDOW) as { online: number; unconfirmed: number }[];
+        // a held-back sample is a failed poll that was not believed yet
+        const recent = [...rows.reverse().map((h) => !!h.online && !h.unconfirmed), false];
+        const probes = rule.probeVeto
+          ? (db.prepare('SELECT online FROM probe_status WHERE server_id = ? AND updated_at > ?').all(s.id, ts - PROBE_FRESH_MS) as { online: number }[]).map((p) => !!p.online)
+          : [];
+        confirmDown = judgeDown({ recent, rule, probes }).down;
+      } catch (e) {
+        log.error('down verdict failed', (e as Error).message);
+      }
+    }
+  }
   const d = decideStatus({
     prevOnline: prev ? !!prev.online : null,
     prevFailures: prev?.f ?? 0,
     polledOnline: r.online,
     threshold: opts.debounce ? failThreshold() : 1,
+    confirmDown,
   });
   const maint = inMaintenance(s.id, ts) ? 1 : 0;
   const outcome: PollOutcome = { polledOnline: r.online, online: d.online, confirmed: d.confirmed, failures: d.failures };
