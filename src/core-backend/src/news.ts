@@ -13,6 +13,7 @@ import { z } from 'zod';
 import { commentCount } from './newsComments.js';
 import { viewsOf } from './newsViews.js';
 import { notifyNewsPublished } from './newsSubs.js';
+import { dispatchEvent } from './alertChannels.js';
 import { db, getSetting, setSetting } from './db.js';
 import { ledgerRecord, MAX_ATTEMPTS, planFailure } from './deliveries.js';
 import { param } from './http.js';
@@ -864,6 +865,7 @@ ${r.sent_at ? `<meta property="article:published_time" content="${new Date(r.sen
         try {
           const p = JSON.parse(prev.payload) as NewsPayload;
           notifyNewsPublished({ id, title: titleOf(p), category: p.category ?? 'announcement', authorId: prev.created_by ?? null }, deps.publicBase() ?? '');
+          dispatchEvent({ event: 'news_published', title: `Новость: ${titleOf(p)}`, text: '', data: { newsId: id, title: titleOf(p), category: p.category ?? 'announcement', url: deps.publicBase() ? `${deps.publicBase()}/news/${id}` : null } });
         } catch { /* the post itself is done */ }
       }
     } else {
