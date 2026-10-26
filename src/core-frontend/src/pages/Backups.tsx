@@ -5,6 +5,7 @@ import { t } from '../i18n';
 import { loadUnreadableSecrets, saveUnreadableSecrets, unreadableSecrets } from '../security';
 import { Button, ErrorLine, Field, IconDownload, LoadError, StateView, IconRestore, IconTrash, Section, Switch, fmtDateTime, ago, toast, errText } from '../ui';
 import { errorText } from '../apiErrors';
+import { BackupS3 } from '../components/BackupS3';
 
 /** the copies on a time line: a bar per copy (the height is its size, the colour is auto / manual), and how old the last one is */
 function BackupTimeline({ items, schedule }: { items: BackupInfo['items']; schedule: BackupInfo['schedule'] }) {
@@ -314,6 +315,8 @@ export default function BackupsCard() {
 
         <Button loading={saving}>{saving ? 'Сохраняю…' : 'Сохранить'}</Button>
       </form>
+
+      <BackupS3 info={info} reload={load} />
 
       <div>
         <h3 className="mb-2 font-black">Копии на сервере</h3>

@@ -369,6 +369,8 @@ export interface BackupInfo {
   encrypted: boolean;
   items: BackupItem[];
   lastRemote: { at: number; ok: boolean; error: string | null } | null;
+  s3?: { endpoint: string; bucket: string; region: string; prefix: string; configured: boolean };
+  lastS3?: { at: number; ok: boolean; error: string | null } | null;
 }
 
 export interface CertInfo {
