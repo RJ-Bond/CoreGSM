@@ -64,3 +64,45 @@ describe('announcements and channel', () => {
     assert.equal(parseChannel(null), 'release');
   });
 });
+
+import { cmpVersion, parseChangelog, parseVersion } from '../src/updateLogic.js';
+
+describe('readable versions', () => {
+  it('compares number by number, not as text', () => {
+    assert.ok(cmpVersion('1.0.0.9', '1.0.0.10')! < 0);
+    assert.ok(cmpVersion('1.1.0.1', '1.0.9.99')! > 0);
+    assert.equal(cmpVersion('1.0.0.1', '1.0.0.1'), 0);
+    assert.equal(cmpVersion('abcdef123456', '1.0.0.1'), null);
+    assert.equal(parseVersion(null), null);
+  });
+});
+
+describe('CHANGELOG.md', () => {
+  const md = `# История изменений
+
+## Не выпущено
+### Новое
+- Вкладка обновлений показывает этапы [migration]
+
+## 1.0.0.2 · 26.10.2026
+### Новое
+- Графики здоровья
+- ⚠ Старый API убран
+### Исправлено
+- Контраст акцентов
+
+## 1.0.0.1 — 25.10.2026
+- Первая версия
+`;
+  it('reads sections, groups and flags', () => {
+    const r = parseChangelog(md);
+    assert.equal(r.length, 3);
+    assert.equal(r[0]!.version, null);
+    assert.deepEqual(r[0]!.groups[0]!.items[0]!.flags, ['migration']);
+    assert.equal(r[1]!.version, '1.0.0.2');
+    assert.equal(r[1]!.date, '26.10.2026');
+    assert.deepEqual(r[1]!.groups.map((g) => g.title), ['Новое', 'Исправлено']);
+    assert.deepEqual(r[1]!.groups[0]!.items[1]!.flags, ['breaking']);
+    assert.equal(r[2]!.groups[0]!.title, 'Изменения');
+  });
+});

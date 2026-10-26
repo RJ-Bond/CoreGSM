@@ -51,3 +51,65 @@ export function shouldAnnounce(o: { notify: boolean; available: boolean; latest:
 
 export type Channel = 'release' | 'main';
 export const parseChannel = (v: string | null | undefined): Channel => (v === 'main' ? 'main' : 'release');
+
+/** «1.0.0.12» → [1,0,0,12]; anything else (a bare hash) → null */
+export function parseVersion(v: string | null | undefined): number[] | null {
+  if (!v || !/^\d+(\.\d+){1,4}$/.test(v)) return null;
+  return v.split('.').map(Number);
+}
+
+/** negative when a < b; null when either is not a readable version */
+export function cmpVersion(a: string | null | undefined, b: string | null | undefined): number | null {
+  const x = parseVersion(a);
+  const y = parseVersion(b);
+  if (!x || !y) return null;
+  for (let i = 0; i < Math.max(x.length, y.length); i++) {
+    const d = (x[i] ?? 0) - (y[i] ?? 0);
+    if (d !== 0) return d;
+  }
+  return 0;
+}
+
+export function flagsOf(text: string): CommitFlag[] {
+  return classifyCommit(text.replace(/^[-*]\s*/, '')).flags.concat(/^[-*]?\s*⚠/.test(text) ? ['breaking' as const] : []).filter((f, i, a) => a.indexOf(f) === i);
+}
+
+export interface NotesGroup { title: string; items: { text: string; flags: CommitFlag[] }[] }
+export interface NotesRelease { version: string | null; date: string | null; groups: NotesGroup[] }
+
+/**
+ * CHANGELOG.md of the repository:
+ *   ## Не выпущено                      (version null)
+ *   ## 1.0.0.7 · 26.10.2026
+ *   ### Новое
+ *   - what changed [migration]
+ * Sections come newest first, as written.
+ */
+export function parseChangelog(text: string): NotesRelease[] {
+  const out: NotesRelease[] = [];
+  let rel: NotesRelease | null = null;
+  let group: NotesGroup | null = null;
+  for (const raw of text.replace(/\r/g, '').split('\n')) {
+    const line = raw.trimEnd();
+    const h2 = /^##\s+(.+)$/.exec(line);
+    if (h2 && !line.startsWith('###')) {
+      const m = /^(\d+(?:\.\d+){1,4})(?:\s*[·—–-]\s*(.+))?$/.exec(h2[1]!.trim());
+      rel = { version: m ? m[1]! : null, date: m?.[2]?.trim() ?? null, groups: [] };
+      group = null;
+      out.push(rel);
+      continue;
+    }
+    const h3 = /^###\s+(.+)$/.exec(line);
+    if (h3 && rel) {
+      group = { title: h3[1]!.trim(), items: [] };
+      rel.groups.push(group);
+      continue;
+    }
+    const li = /^[-*]\s+(.+)$/.exec(line);
+    if (li && rel) {
+      if (!group) { group = { title: 'Изменения', items: [] }; rel.groups.push(group); }
+      group.items.push({ text: li[1]!.trim(), flags: flagsOf(li[1]!) });
+    }
+  }
+  return out;
+}

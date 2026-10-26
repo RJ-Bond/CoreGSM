@@ -3,13 +3,13 @@ import express from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
 import { admin } from '../auth.js';
-import { APP_VERSION } from '../config.js';
+import { APP_VERSION, APP_VERSION_NAME } from '../config.js';
 import { wrap } from '../http.js';
 import { log } from '../logger.js';
 import { db, getSetting, setSetting } from '../db.js';
 import { alertSettings, enqueueAlert } from '../alerts.js';
 import { listBackups } from '../backup.js';
-import { classifyCommit, isNoopJob, jobKind, parseChannel, shouldAnnounce, stageOf, type Channel, type CommitFlag, type CommitKind } from '../updateLogic.js';
+import { classifyCommit, isNoopJob, parseChangelog, parseVersion, jobKind, parseChannel, shouldAnnounce, stageOf, type Channel, type CommitFlag, type CommitKind } from '../updateLogic.js';
 
 export const router = express.Router();
 
@@ -26,7 +26,7 @@ const CHANNEL_LOCKED = process.env.UPDATE_RELEASE_BASE_URL !== undefined || !!pr
 const channel = (): Channel => (process.env.UPDATE_CHANNEL === 'main' || process.env.UPDATE_BASE_URL ? 'main' : parseChannel(getSetting('update_channel')));
 const releaseBase = (): string => (process.env.UPDATE_RELEASE_BASE_URL !== undefined ? process.env.UPDATE_RELEASE_BASE_URL : channel() === 'main' ? '' : RELEASE_DEFAULT);
 
-let remote: { build: string | null; error: string | null; at: number; builtAt: number | null } = { build: null, error: null, at: 0, builtAt: null };
+let remote: { build: string | null; label: string | null; error: string | null; at: number; builtAt: number | null } = { build: null, label: null, error: null, at: 0, builtAt: null };
 
 /** raw.githubusercontent.com is cached for minutes after a push; the GitHub API returns the file as it is now. */
 function repoApiUrl(file: string): string | null {
@@ -81,13 +81,16 @@ async function fetchBuiltAt(): Promise<number | null> {
 async function checkRemote(force = false): Promise<void> {
   if (!force && Date.now() - remote.at < 5 * 60_000) return;
   try {
-    const m = /^build=([a-f0-9]{6,64})$/m.exec((await fetchReleaseVersion()) ?? (await fetchRepoText('version.txt')));
+    const text = (await fetchReleaseVersion()) ?? (await fetchRepoText('version.txt'));
+    const m = /^build=([a-f0-9]{6,64})$/m.exec(text);
     if (!m) throw new Error('некорректный version.txt');
+    const label = /^version=(\d+(?:\.\d+){1,4})$/m.exec(text)?.[1] ?? null;
+    if (label) rememberLabel(m[1]!, label);
     const builtAt = m[1] === remote.build && remote.builtAt ? remote.builtAt : await fetchBuiltAt();
-    remote = { build: m[1], error: null, at: Date.now(), builtAt };
+    remote = { build: m[1]!, label, error: null, at: Date.now(), builtAt };
     announceVersion();
   } catch (e) {
-    remote = { build: remote.build, error: `Не удалось проверить обновления: ${(e as Error).message}`, at: Date.now(), builtAt: remote.builtAt };
+    remote = { build: remote.build, label: remote.label, error: `Не удалось проверить обновления: ${(e as Error).message}`, at: Date.now(), builtAt: remote.builtAt };
   }
 }
 
@@ -107,6 +110,8 @@ function updatePayload() {
   return {
     current: APP_VERSION || null,
     latest: remote.build,
+    currentLabel: labelOf(APP_VERSION),
+    latestLabel: remote.label,
     available: !!(APP_VERSION && remote.build && APP_VERSION !== remote.build),
     checkedAt: remote.at || null,
     error: remote.error,
@@ -123,6 +128,18 @@ function updatePayload() {
     skipped: !!remote.build && getSetting('update_skip') === remote.build,
     notify: getSetting('update_notify') !== '0',
   };
+}
+
+// ---- readable versions: the running build knows its own name (APP_VERSION_NAME); the others are learned from version.txt
+db.exec('CREATE TABLE IF NOT EXISTS build_labels (build TEXT PRIMARY KEY, label TEXT NOT NULL)');
+function rememberLabel(build: string, label: string): void {
+  if (parseVersion(label)) db.prepare('INSERT OR REPLACE INTO build_labels (build, label) VALUES (?, ?)').run(build, label);
+}
+if (APP_VERSION && APP_VERSION_NAME) rememberLabel(APP_VERSION, APP_VERSION_NAME);
+function labelOf(build: string | null | undefined): string | null {
+  if (!build) return null;
+  if (build === APP_VERSION && APP_VERSION_NAME) return APP_VERSION_NAME;
+  return (db.prepare('SELECT label FROM build_labels WHERE build = ?').get(build) as { label: string } | undefined)?.label ?? null;
 }
 
 // ---- history of the host jobs, and the notices about them
@@ -170,7 +187,7 @@ function announce(title: string, description: string, color: number): void {
 function announceVersion(): void {
   if (!shouldAnnounce({ notify: getSetting('update_notify') !== '0', available: !!(APP_VERSION && remote.build && APP_VERSION !== remote.build), latest: remote.build, announced: getSetting('update_announced'), skipped: getSetting('update_skip') })) return;
   setSetting('update_announced', remote.build);
-  announce('Доступно обновление панели', `Версия \`${(remote.build ?? '').slice(0, 7)}\`. Установить: Настройки → Обновления и копии.`, 0x5865f2);
+  announce('Доступно обновление панели', `Версия \`${remote.label ?? (remote.build ?? '').slice(0, 7)}\`. Установить: Настройки → Обновления и копии.`, 0x5865f2);
 }
 
 /** writes a finished job into the history once; the first run on an old database only fills it in silently */
@@ -195,7 +212,7 @@ setInterval(() => { try { recordJob(); } catch (e) { log.warn('update history fa
 router.get('/api/update/history', admin, (_req, res) => {
   recordJob();
   const rows = db.prepare('SELECT * FROM update_history ORDER BY job_time DESC LIMIT 30').all() as HistoryRow[];
-  res.json(rows.map((r) => ({ id: r.id, time: r.job_time, state: r.state, kind: r.kind, message: r.message, version: r.version })));
+  res.json(rows.map((r) => ({ id: r.id, time: r.job_time, state: r.state, kind: r.kind, message: r.message, version: r.version, label: labelOf(r.version) })));
 });
 
 // what an update would interrupt: players online now and the age of the last backup
@@ -320,3 +337,20 @@ router.post('/api/update/rollback', admin, (_req, res) => {
   log.info('rollback requested from the panel');
   res.status(202).json(updatePayload());
 });
+
+// ---- release notes: CHANGELOG.md of the repository (Russian, written by hand); the commits are the fallback
+let notes: { at: number; releases: ReturnType<typeof parseChangelog>; error: string | null } | null = null;
+router.get(
+  '/api/update/notes',
+  admin,
+  wrap(async (_req, res) => {
+    if (!notes || Date.now() - notes.at > (notes.error ? 60_000 : 10 * 60_000)) {
+      try {
+        notes = { at: Date.now(), releases: parseChangelog(await fetchRepoText('CHANGELOG.md')).slice(0, 12), error: null };
+      } catch (e) {
+        notes = { at: Date.now(), releases: notes?.releases ?? [], error: (e as Error).message };
+      }
+    }
+    res.json({ releases: notes.releases, error: notes.error });
+  }),
+);

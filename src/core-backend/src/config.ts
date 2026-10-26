@@ -18,3 +18,5 @@ if (INTERNAL_TOKEN.length < 16) {
   process.exit(1);
 }
 export const APP_VERSION = process.env.APP_VERSION ?? '';
+/** the readable version of the running build («1.0.0.7»); empty on installs made before versions had names */
+export const APP_VERSION_NAME = process.env.APP_VERSION_NAME ?? '';
