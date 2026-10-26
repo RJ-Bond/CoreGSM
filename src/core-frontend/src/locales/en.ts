@@ -1853,6 +1853,10 @@ const en: Record<keyof typeof ru, string> = {
   'upd.o.locked': 'The channel is pinned by the server environment and cannot be changed here.',
   'upd.o.notify': 'Tell Discord about new versions and update results',
   'upd.o.notifyHint': 'Messages go to the alerts channel (Settings → Discord). Nothing is sent when it is not set up.',
+  'adm.tbl.up': 'Move up',
+  'adm.tbl.down': 'Move down',
+  'adm.tbl.moved': 'Server order saved',
+  'adm.tbl.orderHint': 'Reorder works when the filter and search are cleared',
 };
 
 export default en;
