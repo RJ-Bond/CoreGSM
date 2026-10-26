@@ -243,7 +243,7 @@
 .split > .split-caret[aria-expanded='true'] svg { transform: rotate(180deg); }
 .split-menu {
   position: absolute; right: 0; z-index: 40; min-width: 100%; width: max-content; max-width: min(22rem, 86vw);
-  padding: .35rem; border-radius: var(--r-lg); background: rgb(var(--raised)); border: 1px solid var(--tile-border);
+  padding: .35rem; border-radius: var(--r-lg); background: rgb(var(--overlay)); border: 1px solid var(--tile-border);
   box-shadow: var(--shadow-3);
   transform-origin: top right; animation: split-in .18s cubic-bezier(.2, .9, .3, 1.2) backwards;
 }
