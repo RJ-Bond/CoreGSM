@@ -7,10 +7,18 @@ name: screenshots
 on:
   push:
     branches: ['ui/**', main]
+  # a pull request that touches the interface gets a comment with before / after pictures
+  pull_request:
+    paths: ['src/core-frontend/**', 'tools/screenshots/**']
   workflow_dispatch:
+
+concurrency:
+  group: screenshots-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: write
+  pull-requests: write
 
 jobs:
   shoot:
@@ -53,7 +61,8 @@ jobs:
         run: |
           if git ls-remote --exit-code --heads origin ci-screenshots-main >/dev/null 2>&1; then
             rm -rf /tmp/base && mkdir /tmp/base && cd /tmp/base && git init -q && git fetch -q --depth 1 "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" ci-screenshots-main && git checkout -q FETCH_HEAD
-            cd "$GITHUB_WORKSPACE" && node tools/screenshots/compare.mjs /tmp/pw /tmp/shots /tmp/base /tmp/shots-diff/diff && cp /tmp/shots-diff/DIFF.md /tmp/shots/ && cp -r /tmp/shots-diff/diff /tmp/shots/diff
+            git -C /tmp/base rev-parse HEAD > /tmp/base-sha
+            cd "$GITHUB_WORKSPACE" && node tools/screenshots/compare.mjs /tmp/pw /tmp/shots /tmp/base /tmp/shots-diff/diff && cp /tmp/shots-diff/DIFF.md /tmp/shots-diff/changed.json /tmp/shots/ && cp -r /tmp/shots-diff/diff /tmp/shots/diff
           else
             echo 'no baseline yet (ci-screenshots-main)'
           fi
@@ -61,6 +70,7 @@ jobs:
         run: |
           set -e
           target=ci-screenshots; [ "$GITHUB_REF_NAME" = main ] && target=ci-screenshots-main
+          [ "${{ github.event_name }}" = pull_request ] && target=ci-screenshots-pr-${{ github.event.pull_request.number }}
           rm -rf /tmp/out && mkdir /tmp/out && cp /tmp/shots/*.png /tmp/shots/*.md /tmp/out/ 2>/dev/null || cp /tmp/shots/*.png /tmp/out/
           [ -d /tmp/shots/diff ] && cp -r /tmp/shots/diff /tmp/out/diff
           cd /tmp/out
@@ -71,3 +81,16 @@ jobs:
           git add -A
           git commit -q -m "Screenshots of $GITHUB_REF_NAME $GITHUB_SHA"
           git push --force "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" HEAD:refs/heads/$target
+          git rev-parse HEAD > /tmp/pushed-sha
+      - name: Comment on the pull request
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [ -f /tmp/base-sha ] || { echo 'no baseline, no comment'; exit 0; }
+          node tools/screenshots/pr-comment.mjs "${{ github.repository }}" "$(cat /tmp/base-sha)" "$(cat /tmp/pushed-sha)" /tmp/shots/changed.json /tmp/comment.md
+          pr=${{ github.event.pull_request.number }}
+          id=$(gh api "repos/${{ github.repository }}/issues/$pr/comments" --paginate --jq '.[] | select(.body | contains("<!-- screenshots-diff -->")) | .id' | head -n1)
+          if [ -n "$id" ]; then gh api -X PATCH "repos/${{ github.repository }}/issues/comments/$id" -F body=@/tmp/comment.md >/dev/null
+          else gh api -X POST "repos/${{ github.repository }}/issues/$pr/comments" -F body=@/tmp/comment.md >/dev/null; fi
