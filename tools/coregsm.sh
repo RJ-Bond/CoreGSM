@@ -125,7 +125,10 @@ fetch_repo() { # fetch_repo FILE -> the file's content
 
 # version.txt of the release channel: prints it when the release exists and the file looks right, else fails
 release_meta() {
-  [ "$CHANNEL" = main ] && return 1
+  # the channel chosen in the panel (Settings → Updates) lies in the shared folder; the environment still wins
+  local ch="$CHANNEL"
+  if [ -z "${COREGSM_CHANNEL:-}" ] && [ -z "${COREGSM_BASE:-}" ] && [ -f "$UPD/channel" ]; then ch="$(tr -d '[:space:]' < "$UPD/channel" 2>/dev/null)"; fi
+  [ "$ch" = main ] && return 1
   local meta
   meta="$(fetch "$RELEASE_BASE/version.txt" 2>/dev/null)" || return 1
   printf '%s\n' "$meta" | grep -qE '^build=[0-9a-f]{6,64}$' || return 1
@@ -137,6 +140,7 @@ fetch_version_txt() { release_meta || fetch_repo version.txt; }
 # ---------- state ----------
 panel_url() { printf 'https://%s' "$(envget DOMAIN)"; }
 cur_build() { envget APP_VERSION; }
+cur_name() { envget APP_VERSION_NAME; }
 
 remote_build() { # cached for 10 minutes so the menu opens instantly
   local f="$UPD/.remote" b=""
@@ -405,6 +409,7 @@ remote_meta() { # sets R_BUILD R_SHA R_SOURCE (release | main)
   if meta="$(release_meta)"; then R_SOURCE=release; else R_SOURCE=main; meta="$(fetch_repo version.txt)" || return 1; fi
   R_BUILD="$(printf '%s\n' "$meta" | sed -n 's/^build=//p' | head -n1)"
   R_SHA="$(printf '%s\n' "$meta" | sed -n 's/^sha256=//p' | head -n1)"
+  R_VERSION="$(printf '%s\n' "$meta" | sed -n 's/^version=//p' | head -n1 | tr -cd '0-9.')"
   [ -n "$R_BUILD" ] && [ -n "$R_SHA" ]
 }
 
@@ -606,6 +611,7 @@ snapshot_create() {
   # drop the :prev tags of an older snapshot, so old and new images never mix
   prev_images | xargs -r docker rmi >/dev/null 2>&1
   cur_build > "$PREV/version"
+  cur_name > "$PREV/version_name"
   cp -f "$APP_DIR/.env" "$PREV/env"
   tar czf "$PREV/src.tgz" -C "$APP_DIR" docker-compose.yml core-backend core-frontend core-bot nginx 2>/dev/null
   local img f
@@ -627,6 +633,7 @@ rollback_apply() {
   [ -f "$PREV/src.tgz" ] || { RB_ERR="нет снимка предыдущей версии"; return 1; }
   tar xzf "$PREV/src.tgz" -C "$APP_DIR" || { RB_ERR="не удалось распаковать снимок файлов"; return 1; }
   env_set APP_VERSION "$(cat "$PREV/version" 2>/dev/null)"
+  env_set APP_VERSION_NAME "$(cat "$PREV/version_name" 2>/dev/null)"
   local img
   for img in $(prev_images); do
     docker tag "$img" "${img%:prev}:latest"
@@ -726,7 +733,7 @@ cmd_update() {
   fail() { bad "$1"; [ "$check" = 1 ] || status_file error "$1"; return 1; }
 
   remote_meta || { fail "Не удалось получить version.txt из репозитория"; return 1; }
-  local current latest; current="$(cur_build)"; latest="$R_BUILD"; : > "$UPD/.remote"; printf '%s' "$latest" > "$UPD/.remote"
+  local current latest cur_nm; current="$(cur_build)"; cur_nm="$(cur_name)"; latest="$R_BUILD"; : > "$UPD/.remote"; printf '%s' "$latest" > "$UPD/.remote"
 
   if [ "$check" = 1 ]; then
     kv "Установлено" "${current:-?}"; kv "В репозитории" "$latest"
@@ -765,8 +772,9 @@ cmd_update() {
   if [ "$rc" -eq 0 ] && healthy 120; then
     # the new build id is stamped only now, after the health check
     env_set APP_VERSION "$latest"
+    [ -n "${R_VERSION:-}" ] && env_set APP_VERSION_NAME "$R_VERSION"
     docker image prune -f >/dev/null 2>&1
-    status_file done "Обновлено до версии ${latest:0:7}"; echo; ok "Обновлено до ${latest:0:7}"; return 0
+    status_file done "Обновлено до версии ${R_VERSION:-${latest:0:7}}"; echo; ok "Обновлено до ${R_VERSION:-${latest:0:7}}"; return 0
   fi
   if [ "$rc" -ne 0 ] && healthy 6; then
     # pull the actual cause out of the installer output so it is visible in the panel and on screen
@@ -774,6 +782,7 @@ cmd_update() {
     reason="$(sed 's/\x1b\[[0-9;]*m//g' "$LOG" 2>/dev/null | grep -E '✖|FATAL|Не удалось|Недостаточно|Мало места|ERROR' | grep -v 'Подробности' | sed 's/\. Полный журнал:.*//' | tail -n 2 | tr -s ' \n' ' ' | cut -c1-220)"
     # still the old version: it keeps its build id, and if the build failed the new sources go back as well
     [ -n "$current" ] && env_set APP_VERSION "$current"
+    env_set APP_VERSION_NAME "$cur_nm"
     grep -q 'Запуск контейнеров' "$LOG" 2>/dev/null || restore_sources
     status_file error "Обновление не удалось (код $rc): ${reason:-причина в журнале}. Прежняя версия продолжает работать. Журнал: /var/log/coregsm-install.log"
     bad "Обновление не удалось (код $rc), прежняя версия работает."
