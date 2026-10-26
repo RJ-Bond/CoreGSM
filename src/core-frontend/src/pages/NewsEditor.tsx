@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   api, ApiError, type DiscordGuild, type NewsAuthor, type NewsAutosave, type NewsItem, type NewsPayload, type NewsSettings, type NewsTestResult, type NewsTestStatus, type NewsVariable, type Server,
 } from '../api';
-import { confirmDialog } from '../confirm';
+import { confirmDialog, promptDialog } from '../confirm';
 import { ChannelPicker } from '../components/ChannelPicker';
 import { ChecklistModal } from '../components/news/Checklist';
 import { FieldsBuilder } from '../components/news/FieldsBuilder';
@@ -12,7 +12,7 @@ import { LimitsPanel } from '../components/news/LimitsPanel';
 import { Counter, MarkdownField } from '../components/news/MarkdownField';
 import {
   LIMITS, PALETTE, PRESETS, TEMPLATES, applyPreset, applyTemplate as applyTpl, blank, blankEmbed, embedHasContent, fromPayload, gameColors, hex, parseHex, payloadKey, presetOf,
-  newKey, sampleVars, toLocalInput, toPayload, totalLength, uploadImage, type Draft, type EmbedDraft, type VarServer,
+  newKey, sampleVars, toLocalInput, toPayload, totalLength, uploadImage, type Draft, type EmbedDraft, type TemplateApply, type VarServer,
 } from '../components/news/model';
 import { Preview } from '../components/news/Preview';
 import { PublicFeed } from '../components/news/PublicFeed';
@@ -80,6 +80,14 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
   const [settings, setSettings] = useState<NewsSettings | null>(null);
   const [servers, setServers] = useState<Server[] | null>(null);
   const [variables, setVariables] = useState<NewsVariable[] | undefined>(undefined);
+  // own templates (saved from a draft) next to the built-in ones
+  type OwnTpl = { id: string; label: string; apply: TemplateApply };
+  const [myTpl, setMyTpl] = useState<OwnTpl[]>([]);
+  useEffect(() => {
+    let dead = false;
+    api<{ items: OwnTpl[] }>('/news/templates').then((r) => { if (!dead && Array.isArray(r.items)) setMyTpl(r.items); }).catch(() => undefined);
+    return () => { dead = true; };
+  }, []);
   const [channelNames, setChannelNames] = useState<Record<string, string>>({});
   const [active, setActive] = useState(0);
   const [mobileTab, setMobileTab] = useState<'editor' | 'preview'>('editor');
@@ -264,7 +272,27 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
     }
   };
 
-  const applyTemplate = async (tp: (typeof TEMPLATES)[number]) => {
+  const saveTemplates = async (items: OwnTpl[]) => {
+    try {
+      const r = await api<{ items: OwnTpl[] }>('/news/templates', 'PUT', { items });
+      setMyTpl(r.items);
+    } catch (err) {
+      setError(errText(err));
+    }
+  };
+  const saveAsTemplate = async () => {
+    const name = await promptDialog({ title: t('ne.saveTpl'), label: t('ne.tplName'), confirmLabel: t('common.save') });
+    if (!name?.trim()) return;
+    const src = d.embeds[0] ?? blankEmbed();
+    const apply: TemplateApply = {
+      title: src.title, description: src.description, color: src.color, footer: src.footer, mention: d.mention,
+      fields: src.fields.map((f) => ({ name: f.name, value: f.value, inline: f.inline })).slice(0, 10),
+    };
+    await saveTemplates([...myTpl, { id: `t${Date.now().toString(36)}`, label: name.trim().slice(0, 40), apply }].slice(-12));
+    toast(t('ne.tplSaved'));
+  };
+
+  const applyTemplate = async (tp: { id: string; label: string; apply: TemplateApply }) => {
     if (dirtyText && !(await confirmDialog({ title: t('ne.tplTitle'), text: t('ne.tplText'), confirmLabel: t('ne.replace') }))) return;
     setD((c) => (c ? { ...applyTpl(c, tp.apply), statusServerIds: c.statusServerIds } : c));
     setActive(0);
@@ -479,6 +507,13 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
             <Section title={t('ne.sTpl')} hint={t('ne.tplHint')}>
               <div className="flex flex-wrap gap-2">
                 {TEMPLATES.map((tp) => <button key={tp.id} type="button" className="btn btn-soft btn-sm" onClick={() => void applyTemplate(tp)}>{tp.label}</button>)}
+                {myTpl.map((tp) => (
+                  <span key={tp.id} className="inline-flex items-center overflow-hidden rounded-full border border-line">
+                    <button type="button" className="btn btn-soft btn-sm rounded-none!" onClick={() => void applyTemplate(tp)}>{tp.label}</button>
+                    <button type="button" className="btn-icon-ghost btn-icon-sm" aria-label={t('ne.tplDelete', { name: tp.label })} title={t('ne.tplDelete', { name: tp.label })} onClick={() => void saveTemplates(myTpl.filter((x) => x.id !== tp.id))}>×</button>
+                  </span>
+                ))}
+                {embedHasContent(d.embeds[0] ?? blankEmbed()) && <button type="button" className="btn-link text-sm" onClick={() => void saveAsTemplate()}>{t('ne.saveTpl')}</button>}
                 <button type="button" className="btn btn-soft btn-sm" onClick={() => { set({ ...blank(d.channelId), statusServerIds: d.statusServerIds }); setActive(0); }}>{t('ne.clear')}</button>
               </div>
             </Section>
@@ -538,6 +573,16 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
                 </div>
                 <ImageDrop id="news-thumb" label={t('ne.thumb')} url={e.thumbnail} upload="" onUrl={(v) => setE({ thumbnail: v })} onUpload={() => undefined} minWidth={80} />
                 <ImageDrop id="news-image" label={t('ne.bigImg')} url={e.imageUrl} upload={e.imageUpload} onUrl={(v) => setE({ imageUrl: v })} onUpload={(n) => setE({ imageUpload: n, imageUrl: n ? '' : e.imageUrl })} allowUpload minWidth={400} />
+                {servers && servers.length > 0 && (
+                  <label className="block">
+                    <span className="label">{t('ne.cover')}</span>
+                    <select className="input" value="" onChange={(ev) => { if (ev.target.value) setE({ imageUrl: `${location.origin}/api/card/${ev.target.value}.png`, imageUpload: '' }); }}>
+                      <option value="">{t('ne.coverPick')}</option>
+                      {servers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                    </select>
+                    <span className="mt-1 block text-sm font-semibold text-mute">{t('ne.coverNote')}</span>
+                  </label>
+                )}
               </div>
             </details>
           </Section>
