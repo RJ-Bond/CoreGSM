@@ -17,6 +17,7 @@ interface language; the GitHub release text is built from the section of the ver
 ## Не выпущено | Unreleased
 
 ### ✨ Новое | New
+- 🏅 Новое достижение в профиле появляется с анимацией: значок «выскакивает» и блестит, один раз в этом браузере (учитывает «уменьшить анимацию») | A newly earned achievement in the profile appears with an animation: the badge pops in and shines, once per browser (respects reduced motion)
 - 🖼️ Обложки серверов, баннеры, аватары и скриншоты галереи отдаются в формате WebP браузерам, которые его поддерживают: страницы грузятся быстрее, файлы на диске не меняются | Server covers, banners, avatars and gallery screenshots are sent as WebP to browsers that support it: pages load faster, the files on disk are unchanged
 - 🎮 Игры без своей иконки получают монограмму (две буквы названия) и свой цвет вместо серой заглушки; в настройках сообщения Discord можно поставить значок игры на цветную плашку (виден в светлой и тёмной теме) и включить или выключить график онлайна | A game without its own icon gets a monogram (two letters of its name) and its own colour instead of a grey placeholder; the Discord message settings can put the game icon on a coloured tile (readable in the light and the dark theme) and turn the online chart on or off
 - 🔗 Картинка по умолчанию при вставке ссылки на панель теперь живая: название, логотип и «21 игрок онлайн · 3 из 4 серверов в сети» | The default link-preview picture is now live: the name, the logo and «21 players online · 3 of 4 servers up»
