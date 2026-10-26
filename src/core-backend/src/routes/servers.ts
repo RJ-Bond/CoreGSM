@@ -297,7 +297,9 @@ router.get(
   '/api/game-icon/:game.png',
   wrap(async (req, res) => {
     const game = String(req.params.game).replace(/[^a-z0-9_]/gi, '');
-    res.set({ 'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=86400' }).send(await renderGameIcon(isKnownGame(game) ? game : ''));
+    // a game the panel does not know still gets its monogram when one of the servers uses it
+    const shown = isKnownGame(game) || db.prepare('SELECT 1 FROM servers WHERE game = ?').get(game) ? game : '';
+    res.set({ 'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=86400' }).send(await renderGameIcon(shown, req.query.tile === '1'));
   }),
 );
 
