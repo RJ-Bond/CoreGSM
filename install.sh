@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="6ec5ce677c98"
+COREGSM_BUILD="dd8d62b5e1ef"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.0.0.2"
+COREGSM_VERSION="1.0.0.3"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -7623,6 +7623,9 @@ export const ERRORS = {
   update_or_rollback_running: 'Сейчас выполняется обновление или откат',
   rollback_unavailable: 'Откат недоступен: предыдущая версия не сохранена',
   request_pending: 'Запрос уже ожидает выполнения',
+  update_channel_locked: 'Канал задан переменными окружения сервера',
+  update_channel_invalid: 'Канал: release или main',
+  update_version_invalid: 'Некорректная версия',
   rollback_request_failed: 'Не удалось создать запрос на откат (нет прав на папку /app/update)',
 
   // ---- servers, Discord bindings, alerts, deliveries ----
@@ -68947,6 +68950,9 @@ const errorsEn: Record<string, string> = {
   update_request_failed: 'Could not create the update request (no write access to /app/update)',
   rollback_not_configured: 'Rollback from the panel is not set up on the server. Run: sudo coregsm rollback',
   update_or_rollback_running: 'An update or a rollback is running right now',
+  update_channel_locked: 'The channel is pinned by the server environment',
+  update_channel_invalid: 'Channel: release or main',
+  update_version_invalid: 'Invalid version',
   rollback_unavailable: 'Rollback is not available: the previous version was not kept',
   request_pending: 'A request is already waiting to be carried out',
   rollback_request_failed: 'Could not create the rollback request (no write access to /app/update)',
