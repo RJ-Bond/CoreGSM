@@ -1895,6 +1895,15 @@ const ru = {
   'embed.chart.hint': 'Картинка под сообщением сервера. В сообщении с несколькими серверами она не показывается.',
   'embed.tile': 'Значок игры на цветной плашке',
   'embed.tile.hint': 'Значок виден и в светлой, и в тёмной теме Discord. Без плашки это прозрачная картинка игры.',
+  'adm.rail.close': 'Свернуть меню',
+  'adm.rail.open': 'Показать меню целиком',
+  'adm.cols': 'Колонки',
+  'adm.col.uptime': 'Доступность',
+  'adm.col.h24': 'График за 24 ч',
+  'adm.col.map': 'Карта',
+  'adm.col.version': 'Версия',
+  'adm.col.channels': 'Каналы Discord',
+  'adm.col.updated': 'Обновлён',
 };
 
 export default ru;

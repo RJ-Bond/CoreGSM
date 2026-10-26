@@ -66,7 +66,7 @@ export default function CardsPage() {
           <a className="btn mt-3" href="/admin/servers/new">Добавить сервер</a>
         </Empty>
       )}
-      <div className="fade-in grid gap-5 xl:grid-cols-2">
+      <div className="fade-in grid gap-5 xl:grid-cols-2 2xl:grid-cols-3">
         {servers.map((s) => (
           <div key={s.id} className="panel space-y-3 p-5">
             <img src={`/api/card/${s.id}.png?v=${s.updatedAt ?? 0}&r=${forced}`} alt={`Карточка ${s.name}`} loading="lazy" className="w-full rounded-ui-lg bg-soft" />

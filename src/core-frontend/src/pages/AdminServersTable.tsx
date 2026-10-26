@@ -6,7 +6,7 @@ import { confirmDialog } from '../confirm';
 import { t, useI18n, type TKey } from '../i18n';
 import { gameColor, gameLabel } from '../games';
 import { AnimatedNumber, GameAvatar, IconEdit, IconRefresh, IconTrash, IconWrench, MiniSpark, StatusPill, ago, isLag, toast } from '../ui';
-import { countServers, filterServers, loadTableState, saveTableState, type ServerFilter } from './adminServersLogic';
+import { countServers, filterServers, loadColumns, loadTableState, saveColumns, saveTableState, TABLE_COLUMNS, type ServerFilter, type TableColumn } from './adminServersLogic';
 
 export interface TableActions {
   isAdmin: boolean;
@@ -47,6 +47,9 @@ export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableA
   const [filter, setFilter] = useState<ServerFilter>(saved.filter);
   const [query, setQuery] = useState(saved.query);
   useEffect(() => { saveTableState(filter, query); }, [filter, query]);
+  const [cols, setCols] = useState<TableColumn[]>(loadColumns);
+  const toggleCol = (c: TableColumn) => setCols((l) => { const n = l.includes(c) ? l.filter((x) => x !== c) : TABLE_COLUMNS.filter((x) => x === c || l.includes(x)); saveColumns(n); return n; });
+  const has = (c: TableColumn) => cols.includes(c);
   const [sel, setSel] = useState<number[]>([]);
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState<number[]>([]);
@@ -89,6 +92,16 @@ export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableA
           <button type="button" className="seg-item" aria-pressed={view === 'table'} onClick={() => pickView('table')}>Таблица</button>
           <button type="button" className="seg-item" aria-pressed={view === 'cards'} onClick={() => pickView('cards')}>Карточки</button>
         </div>
+        <details className="adm-cols hidden md:block">
+          <summary className="seg-item cursor-pointer select-none">{t('adm.cols')}</summary>
+          <div className="adm-cols-pop" role="group" aria-label={t('adm.cols')}>
+            {TABLE_COLUMNS.map((c) => (
+              <label key={c} className="flex cursor-pointer items-center gap-2 px-2 py-1 font-semibold">
+                <input type="checkbox" className="srv-check" checked={has(c)} onChange={() => toggleCol(c)} />{t(`adm.col.${c}` as TKey)}
+              </label>
+            ))}
+          </div>
+        </details>
         <label className="adm-search ml-auto">
           <span aria-hidden>⌕</span>
           <input type="search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t('adm.tbl.search')} aria-label={t('adm.tbl.search')} />
@@ -120,8 +133,12 @@ export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableA
                   <th>{t('adm.tbl.status')}</th>
                   <th>{t('adm.tbl.players')}</th>
                   <th>{t('adm.tbl.ping')}</th>
-                  <th className="hidden 2xl:table-cell">{t('adm.tbl.uptime')}</th>
-                  <th className="hidden lg:table-cell">{t('adm.tbl.h24')}</th>
+                  {has('map') && <th>{t('adm.col.map')}</th>}
+                  {has('version') && <th>{t('adm.col.version')}</th>}
+                  {has('channels') && <th>{t('adm.col.channels')}</th>}
+                  {has('uptime') && <th>{t('adm.tbl.uptime')}</th>}
+                  {has('h24') && <th>{t('adm.tbl.h24')}</th>}
+                  {has('updated') && <th>{t('adm.col.updated')}</th>}
                   <th aria-label={t('adm.tbl.actions')} />
                 </tr>
               </thead>
@@ -148,8 +165,12 @@ export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableA
                     </td>
                     <td className="tabular-nums text-mute">{s.online ? <><b className="text-ink"><AnimatedNumber value={s.players} /></b>/{s.maxPlayers}</> : '—'}</td>
                     <td className="tabular-nums text-mute">{s.online && s.ping != null ? t('adm.tbl.ms', { n: s.ping }) : '—'}</td>
-                    <td className="hidden tabular-nums 2xl:table-cell">{pct(a.uptime.get(s.id))}</td>
-                    <td className="hidden lg:table-cell"><MiniSpark serverId={s.id} color={gameColor(s.game)} /></td>
+                    {has('map') && <td className="max-w-40 truncate text-mute" title={s.map ?? undefined}>{s.online && s.map ? s.map : '—'}</td>}
+                    {has('version') && <td className="max-w-32 truncate font-mono text-xs text-mute" title={s.version ?? undefined}>{s.version || '—'}</td>}
+                    {has('channels') && <td className="tabular-nums"><a href="/admin/discord" className="text-link hover:underline">{a.bindings.get(s.id) ?? 0}</a></td>}
+                    {has('uptime') && <td className="tabular-nums">{pct(a.uptime.get(s.id))}</td>}
+                    {has('h24') && <td><MiniSpark serverId={s.id} color={gameColor(s.game)} /></td>}
+                    {has('updated') && <td className="text-mute">{ago(s.updatedAt)}</td>}
                     <td>
                       <div className="flex items-center justify-end gap-1" role="group" aria-label={`${t('adm.tbl.actions')}: ${s.name}`}>
                         {canMove && (
@@ -172,7 +193,7 @@ export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableA
                   </tr>
                   {open.includes(s.id) && (
                     <tr className="adm-detail">
-                      <td colSpan={8}>
+                      <td colSpan={14}>
                         <dl className="adm-detail-grid">
                           <div><dt>{t('adm.tbl.d.addr')}</dt><dd className="font-mono">{s.host}:{s.port}</dd></div>
                           <div><dt>{t('adm.tbl.d.query')}</dt><dd className="font-mono">{s.queryPort ?? '—'}</dd></div>
