@@ -96,7 +96,7 @@ export default function HistoryChart({
     measure();
     return () => ro.disconnect();
   }, []);
-  const H = W < 520 ? 230 : 320;
+  const H = W < 520 ? 230 : 270;
 
   const now = zoom ? zoom[1] : Date.now();
   const winStart = zoom ? zoom[0] : now - hours * 3600_000;
