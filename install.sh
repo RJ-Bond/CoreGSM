@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="47af7ab0abc5"
+COREGSM_BUILD="fd066f94e960"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.0.0.63"
+COREGSM_VERSION="1.0.0.64"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -22757,21 +22757,27 @@ export function buildNotice(o: { kind: 'available' | 'reminder' | 'done'; mode?:
   const ver = (v: string, url?: string | null) => (url ? `[${v}](${url})` : v);
   const arrow = o.from && o.to && o.from !== o.to ? `${ver(o.from, lk.from)} ➜ ${ver(o.to, lk.to)}` : o.to ? ver(o.to, lk.to) : '';
   const skipped = Math.max(0, between.length - 1);
-  const lines: string[] = [...(arrow ? [`🔖 **${arrow}**`] : []), o.line];
-  if (skipped > 0) lines.push(en ? `⏭️ Versions in between: ${skipped}` : `⏭️ Пропущено версий между ними: ${skipped}`);
-  lines.push(...noticeWarnings(between, o.lang));
+  // blocks separated by an empty line (Discord keeps it): the versions, what happened, the warnings, where to install
+  const blocks: string[][] = [];
+  if (arrow) blocks.push([`🔖 **${arrow}**`]);
+  const what: string[] = [o.line];
+  if (skipped > 0) what.push(en ? `⏭️ Versions in between: ${skipped}` : `⏭️ Пропущено версий между ними: ${skipped}`);
+  blocks.push(what);
+  const warn: string[] = [...noticeWarnings(between, o.lang)];
   if (mode === 'brief') {
     const c = groupCounters(shown, o.lang);
-    if (c) lines.push(c);
+    if (c) warn.push(c);
   }
-  if (o.kind !== 'done') lines.push(en ? '⚙️ Install: Settings → Updates and backups.' : '⚙️ Установить: Настройки → Обновления и копии.');
+  if (warn.length) blocks.push(warn);
+  if (o.kind !== 'done') blocks.push([en ? '⚙️ Install: Settings → Updates and backups.' : '⚙️ Установить: Настройки → Обновления и копии.']);
+  const lines: string[] = blocks.map((x) => x.join('\n'));
   const title = o.kind === 'available' ? (en ? '🚀 Panel update available' : '🚀 Доступно обновление панели')
     : o.kind === 'reminder' ? (en ? '⏰ Reminder: panel update is waiting' : '⏰ Напоминание: обновление панели ждёт')
     : (en ? '✅ Panel updated' : '✅ Панель обновлена');
   let footer = '';
   if (target?.date) footer = en ? `📅 Released ${target.date}${age != null ? ` · ${daysAgoText(age, 'en')}` : ''}` : `📅 Вышла ${target.date}${age != null ? ` · ${daysAgoText(age, 'ru')}` : ''}`;
   const whatsNew = lk.to ?? lk.more ?? null;
-  return { title, ...(whatsNew ? { actions: [{ label: en ? "📖 What's new" : '📖 Что нового', url: whatsNew }] } : {}), ...(lk.to ? { url: lk.to } : {}), description: lines.join('\n'), fields: noticeFields(mode === 'brief' ? shown.map((r) => ({ ...r, groups: r.groups.filter(isNewGroup) })) : shown, o.lang, undefined, lk.more ?? null), footer, color: o.kind === 'done' ? 0x23a55a : o.kind === 'reminder' ? 0xf0b232 : 0x5865f2 };
+  return { title, ...(whatsNew ? { actions: [{ label: en ? "📖 What's new" : '📖 Что нового', url: whatsNew }] } : {}), ...(lk.to ? { url: lk.to } : {}), description: lines.join('\n\n'), fields: noticeFields(mode === 'brief' ? shown.map((r) => ({ ...r, groups: r.groups.filter(isNewGroup) })) : shown, o.lang, undefined, lk.more ?? null), footer, color: o.kind === 'done' ? 0x23a55a : o.kind === 'reminder' ? 0xf0b232 : 0x5865f2 };
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
@@ -69868,12 +69874,14 @@ export interface SelectProps {
 function ListRow({ s, uptime, onOpen, rx, favButton, select }: RowProps) {
   const r = reactionOf(rx, s.id);
   const lag = isLag(s);
+  const kind = s.maintenance ? 'maint' : !s.hasStatus ? 'mute' : !s.online ? 'bad' : lag ? 'warn' : 'ok';
+  const label = s.maintenance ? 'Обслуживание' : !s.hasStatus ? 'Ожидание ответа' : !s.online ? 'Офлайн' : lag ? 'Лаги' : 'Онлайн';
   return (
     <div
-      className={`srv-row ${s.online ? '' : 'off'} ${select?.on && select.has(s.id) ? 'selected' : ''}`}
+      className={`srv-tr ${s.online ? '' : 'off'} ${select?.on && select.has(s.id) ? 'selected' : ''}`}
       onClick={select?.on ? () => select.toggle(s.id) : onOpen}
     >
-      <div className="srv-c-status">
+      <div className="srv-td-dot">
         {select?.on && (
           <input
             type="checkbox"
@@ -69884,35 +69892,30 @@ function ListRow({ s, uptime, onOpen, rx, favButton, select }: RowProps) {
             aria-label={`Выбрать: ${s.name}`}
           />
         )}
-        <StatusFlash r={r}><StatusPill online={s.online} known={s.hasStatus} lag={lag} maintenance={!!s.maintenance} /></StatusFlash>
+        <StatusFlash r={r}><span className={`srv-dot ${kind}`} role="img" aria-label={label} title={label} /></StatusFlash>
       </div>
-      <div className="srv-c-name">
-        <span className="srv-stripe" aria-hidden />
-        <GameAvatar game={s.game} size={36} />
+      <div className="srv-td-name">
+        <GameAvatar game={s.game} size={28} />
         <div className="min-w-0">
-          <a href={`/servers/${s.id}`} onClick={(e) => e.stopPropagation()} className="block truncate font-extrabold hover:text-link" title={s.name}>{s.name}</a>
-          <div className="truncate text-fs-sm font-bold text-mute">{gameLabel(s.game)}{s.online && s.map ? ` · ${s.map}` : ''}</div>
+          <a href={`/servers/${s.id}`} onClick={(e) => e.stopPropagation()} className="srv-tr-title" title={s.name}>{s.name}</a>
+          <span className="srv-tr-sub">{gameLabel(s.game)}{s.online && s.map ? ` · ${s.map}` : ''}</span>
           {s.maintenance && <MaintenanceChip m={s.maintenance} className="mt-0.5" />}
         </div>
       </div>
-      <div className="srv-c-players">
+      <div className="srv-td-addr"><CopyAddress text={s.address} /></div>
+      <div className="srv-td-pl">
         {s.online ? (
           <>
-            <div className="flex items-baseline gap-1 font-extrabold tabular-nums">
-              <CountReact r={r}><AnimatedNumber value={s.players} /></CountReact>
-              <span className="text-mute">/ {s.maxPlayers}</span>
-            </div>
-            <CapacityBar players={s.players} max={s.maxPlayers} color={gameColor(s.game)} />
-            <span className="srv-rowspark max-lg:hidden"><MiniSpark serverId={s.id} color={gameColor(s.game)} /></span>
+            <b className="srv-tr-count tabular-nums"><CountReact r={r}><AnimatedNumber value={s.players} /></CountReact><span>/{s.maxPlayers}</span></b>
+            <CapacityBar players={s.players} max={s.maxPlayers} color={gameColor(s.game)} showPct={false} slots={false} />
           </>
         ) : (
-          <span className="truncate text-fs-sm font-bold text-mute" title={s.error ?? undefined}>{s.hasStatus ? `Не отвечает · ${ago(s.updatedAt)}` : 'Ожидаем ответ'}</span>
+          <span className="srv-tr-off" title={s.error ?? undefined}>{s.hasStatus ? `не отвечает · ${ago(s.updatedAt)}` : 'ожидаем ответ'}</span>
         )}
       </div>
-      <div className="srv-c-ping" data-label="Пинг">{s.online && s.ping != null ? <span className={lag ? 'text-warn' : ''}>{s.ping} мс</span> : '–'}</div>
-      <div className="srv-c-up" data-label="Аптайм">{uptime != null ? fmtUp(uptime) : '–'}</div>
-      <div className="srv-c-addr"><CopyAddress text={s.address} /></div>
-      <div className="srv-c-fav">{favButton}</div>
+      <div className="srv-td-ping" data-label="Пинг">{s.online && s.ping != null ? <span className={lag ? 'text-warn' : ''}>{s.ping}<small> мс</small></span> : '–'}</div>
+      <div className="srv-td-up" data-label="Аптайм">{uptime != null ? fmtUp(uptime) : '–'}</div>
+      <div className="srv-td-fav">{favButton}</div>
     </div>
   );
 }
@@ -69929,18 +69932,25 @@ export function ServersList({ servers, uptime, rx, favOf, onOpen, renderFav, sel
   renderFav: (s: Server, on: boolean) => React.ReactNode;
 }) {
   return (
-    <div className={`panel srv-list fade-in ${select?.on ? "selecting" : ""}`} aria-label="Серверы">
-      <div className="srv-row srv-head">
-        <div className="srv-c-status">Статус</div>
-        {([['name', 'srv-c-name', 'Сервер'], ['players', 'srv-c-players', 'Игроки'], ['ping', 'srv-c-ping', 'Пинг'], ['up', 'srv-c-up', 'Аптайм 30 дн']] as const).map(([k, cls, label]) => (
+    <div className={`panel srv-tbl fade-in ${select?.on ? 'selecting' : ''}`} aria-label="Серверы">
+      <div className="srv-tr srv-th">
+        <div className="srv-td-dot" />
+        {([['name', 'srv-td-name', 'Сервер'], ['players', 'srv-td-pl', 'Игроки'], ['ping', 'srv-td-ping', 'Пинг'], ['up', 'srv-td-up', 'Аптайм']] as const).filter(([k]) => k === 'name').map(([k, cls, label]) => (
           <div key={k} className={cls} aria-sort={sort?.key === k ? (sort.dir === 'asc' ? 'ascending' : 'descending') : undefined}>
             <button type="button" className="srv-sort" onClick={() => onSort?.(k)} title="Сортировать">
               {label}<span aria-hidden>{sort?.key === k ? (sort.dir === 'asc' ? ' ↑' : ' ↓') : ''}</span>
             </button>
           </div>
         ))}
-        <div className="srv-c-addr">Адрес</div>
-        <div className="srv-c-fav" />
+        <div className="srv-td-addr">Адрес</div>
+        {([['name', 'srv-td-name', 'Сервер'], ['players', 'srv-td-pl', 'Игроки'], ['ping', 'srv-td-ping', 'Пинг'], ['up', 'srv-td-up', 'Аптайм']] as const).filter(([k]) => k !== 'name').map(([k, cls, label]) => (
+          <div key={k} className={cls} aria-sort={sort?.key === k ? (sort.dir === 'asc' ? 'ascending' : 'descending') : undefined}>
+            <button type="button" className="srv-sort" onClick={() => onSort?.(k)} title="Сортировать">
+              {label}<span aria-hidden>{sort?.key === k ? (sort.dir === 'asc' ? ' ↑' : ' ↓') : ''}</span>
+            </button>
+          </div>
+        ))}
+        <div className="srv-td-fav" />
       </div>
       {servers.map((s) => {
         const fav = favOf(s.id);
@@ -92123,9 +92133,9 @@ html[data-motion='reduce'] .cm-feed-i { animation: none; }
 @keyframes cm-beat { 50% { transform: scale(1.6); opacity: .5; } }
 
 /* strip of chips under the title */
-.cm-nav { position: sticky; top: 0; z-index: 20; display: flex; gap: 6px; margin: 0 -4px; padding: 8px 4px; overflow-x: auto; scrollbar-width: none; background: linear-gradient(rgb(var(--page)) 70%, transparent); }
+.cm-nav { position: sticky; top: 4.75rem; z-index: 20; display: flex; gap: 4px; width: max-content; max-width: 100%; margin: 0; padding: 5px; overflow-x: auto; scrollbar-width: none; border-radius: var(--r-pill); background: rgb(var(--card) / .86); box-shadow: inset 0 0 0 1px rgb(var(--line)), var(--shadow-1); }
 .cm-nav::-webkit-scrollbar { display: none; }
-.cm-nav-i { flex: none; padding: 6px 14px; border-radius: var(--r-pill); background: rgb(var(--soft)); font-size: var(--fs-sm); font-weight: 800; color: rgb(var(--mute)); transition: background-color .15s ease, color .15s ease; }
+.cm-nav-i { flex: none; padding: 6px 14px; border-radius: var(--r-pill); background: transparent; font-size: var(--fs-sm); font-weight: 800; color: rgb(var(--mute)); transition: background-color .15s ease, color .15s ease; }
 .cm-nav-i:hover { color: rgb(var(--ink)); }
 .cm-nav-i[aria-current='true'] { background: rgb(var(--brand)); color: #fff; }
 [id^='cm-'] { scroll-margin-top: 64px; }
@@ -93848,39 +93858,6 @@ __COREGSM_EOF__
 }
 
 /* ---------- list view ---------- */
-.srv-list { overflow: hidden; padding: 4px 0; }
-.srv-row {
-  display: grid; align-items: center; gap: 4px 16px; padding: 10px 18px;
-  grid-template-columns: 112px minmax(0, 2.2fr) minmax(0, 1.5fr) 72px 88px minmax(0, 1.3fr) 44px;
-  border-bottom: 1px solid rgb(var(--line) / .7);
-  cursor: pointer; transition: background-color .15s ease;
-}
-.srv-row:last-child { border-bottom: 0; }
-.srv-row:hover { background: rgb(var(--soft) / .7); }
-.srv-row.off .srv-c-name { opacity: .8; }
-.srv-head { cursor: default; padding-top: 8px; padding-bottom: 8px; font-size: var(--fs-xs); font-weight: 650; letter-spacing: .04em; text-transform: uppercase; color: rgb(var(--mute)); }
-.srv-head:hover { background: transparent; }
-.srv-c-name { display: flex; align-items: center; gap: 12px; min-width: 0; }
-.srv-c-players { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
-.srv-c-ping, .srv-c-up { font-weight: 650; font-size: var(--fs-md); font-variant-numeric: tabular-nums; }
-.srv-c-fav { display: flex; justify-content: flex-end; }
-@media (max-width: 860px) {
-  .srv-head { display: none; }
-  .srv-row {
-    grid-template-columns: auto minmax(0, 1fr) auto;
-    grid-template-areas: 'name name fav' 'status players players' 'ping up up' 'addr addr addr';
-    padding: 12px 14px; gap: 8px 12px;
-  }
-  .srv-c-name { grid-area: name; }
-  .srv-c-fav { grid-area: fav; }
-  .srv-c-status { grid-area: status; }
-  .srv-c-players { grid-area: players; }
-  .srv-c-ping { grid-area: ping; }
-  .srv-c-up { grid-area: up; }
-  .srv-c-addr { grid-area: addr; min-width: 0; }
-  .srv-c-ping::before, .srv-c-up::before { content: attr(data-label) ' '; font-size: var(--fs-xs); font-weight: 650; text-transform: uppercase; letter-spacing: .04em; color: rgb(var(--mute)); }
-}
-
 /* ---------- TV mode ---------- */
 .srv-tv {
   position: fixed; inset: 0; z-index: 90; overflow: auto; display: flex; flex-direction: column; gap: clamp(14px, 1.6vw, 28px);
@@ -93985,12 +93962,6 @@ __COREGSM_EOF__
 .srv-check:focus-visible { box-shadow: 0 0 0 3px rgb(var(--brand) / .45); }
 .srv-check-card { position: absolute; z-index: 5; }
 .tile.srv-selected { box-shadow: 0 0 0 3px rgb(var(--brand)); }
-.srv-c-status { display: flex; align-items: center; gap: 10px; }
-.srv-list.selecting .srv-row { grid-template-columns: 150px minmax(0, 2.2fr) minmax(0, 1.5fr) 72px 88px minmax(0, 1.3fr) 44px; }
-.srv-row.selected { background: rgb(var(--brand) / .09); }
-@media (max-width: 860px) {
-  .srv-list.selecting .srv-row { grid-template-columns: auto minmax(0, 1fr) auto; }
-}
 
 .srv-bulk {
   position: sticky; bottom: 14px; z-index: 30; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 16px;
@@ -94230,11 +94201,6 @@ html[data-motion='reduce'] .srv-new-chev, html[data-motion='reduce'] .srv-check,
 /* list: sortable head, state stripe, sparkline */
 .srv-sort { font: inherit; letter-spacing: inherit; text-transform: inherit; color: inherit; text-align: left; }
 .srv-sort:hover { color: rgb(var(--ink)); }
-.srv-stripe { align-self: stretch; width: 3px; margin-left: -8px; border-radius: 2px; background: rgb(var(--ok)); flex: none; }
-.srv-row.off .srv-stripe { background: rgb(var(--bad)); }
-.srv-head .srv-stripe { display: none; }
-.srv-rowspark { margin-left: 8px; flex: none; }
-.srv-c-players { display: flex; align-items: center; }
 
 /* what's new: unread dot, thumbnail, category bar */
 .srv-new-badge { margin-right: auto; margin-left: 8px; padding: 0 8px; border-radius: var(--r-pill); background: rgb(var(--brand)); color: #fff; font-size: var(--fs-2xs); font-weight: 800; line-height: 18px; }
@@ -94402,6 +94368,63 @@ html[data-motion='reduce'] .srv-new-chev, html[data-motion='reduce'] .srv-check,
 @media (max-width: 639px) { .h3-chart { display: none; } .h3-r { min-height: 120px; } .h3-foot { display: none; } }
 @media (max-width: 639px) { .hero3 .srv-names > li:nth-child(n+5):not(:last-child) { display: none; } }
 .hero3 .srv-names { flex-wrap: wrap; }
+
+/* ---------- the list «Dense table»: one thin row per server, the name has all the room it needs ---------- */
+.srv-tbl { overflow: hidden; padding: 0; }
+.srv-tr {
+  display: grid; align-items: center; gap: 4px 14px; padding: 0 16px; min-height: 48px; border-bottom: 1px solid rgb(var(--line) / .7);
+  grid-template-columns: minmax(20px, auto) minmax(0, 2fr) minmax(9.5rem, 1.1fr) minmax(8.5rem, .9fr) 4.2rem 4.4rem 2.75rem;
+  cursor: pointer; transition: background-color .15s ease; font-variant-numeric: tabular-nums;
+}
+.srv-tr:last-child { border-bottom: 0; }
+.srv-tr:hover { background: rgb(var(--soft) / .7); }
+.srv-tr.selected { background: rgb(var(--brand) / .09); }
+.srv-th { min-height: 38px; cursor: default; background: rgb(var(--card)); border-bottom: 1px solid rgb(var(--line)); font-size: var(--fs-xs); font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: rgb(var(--mute)); }
+.srv-th:hover { background: rgb(var(--card)); }
+.srv-sort { font: inherit; letter-spacing: inherit; text-transform: inherit; color: inherit; text-align: left; }
+.srv-sort:hover { color: rgb(var(--ink)); }
+.srv-td-dot { display: flex; align-items: center; justify-content: center; gap: 10px; }
+.srv-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; flex: none; background: rgb(var(--mute)); }
+.srv-dot.ok { background: rgb(var(--ok)); box-shadow: 0 0 0 4px rgb(var(--ok) / .16); }
+.srv-dot.warn, .srv-dot.maint { background: rgb(var(--warn)); box-shadow: 0 0 0 4px rgb(var(--warn) / .16); }
+.srv-dot.bad { background: rgb(var(--bad)); box-shadow: 0 0 0 4px rgb(var(--bad) / .16); }
+.srv-td-name { display: flex; align-items: center; gap: 10px; min-width: 0; padding-block: 7px; }
+.srv-td-name > div { display: flex; align-items: baseline; flex-wrap: wrap; gap: 0 10px; min-width: 0; }
+.srv-tr-title { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 700; font-size: var(--fs-md); }
+.srv-tr-title:hover { color: rgb(var(--link)); }
+.srv-tr-sub { font-size: var(--fs-sm); font-weight: 600; color: rgb(var(--mute)); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.srv-td-addr { min-width: 0; }
+.srv-td-pl { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.srv-td-pl > .srv-cap, .srv-td-pl > div { flex: 1; min-width: 40px; }
+.srv-tr-count { font-weight: 800; white-space: nowrap; }
+.srv-tr-count span { color: rgb(var(--mute)); font-weight: 600; }
+.srv-tr-off { font-size: var(--fs-sm); font-weight: 650; color: rgb(var(--mute)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.srv-td-ping, .srv-td-up { font-weight: 650; font-size: var(--fs-md); white-space: nowrap; }
+.srv-td-ping small { color: rgb(var(--mute)); font-weight: 600; }
+.srv-td-fav { display: flex; justify-content: flex-end; }
+.srv-tr.off .srv-td-name { opacity: .85; }
+.srv-tbl.selecting .srv-tr { grid-template-columns: minmax(64px, auto) minmax(0, 2fr) minmax(9.5rem, 1.1fr) minmax(8.5rem, .9fr) 4.2rem 4.4rem 2.75rem; }
+/* narrower than a desktop: the address column goes under the name, the figures in one row below */
+@media (max-width: 1099px) {
+  .srv-tr { grid-template-columns: minmax(20px, auto) minmax(0, 2fr) minmax(7.5rem, 1fr) 3.8rem 4rem 2.75rem; }
+  .srv-td-addr { display: none; }
+  .srv-tbl.selecting .srv-tr { grid-template-columns: minmax(64px, auto) minmax(0, 2fr) minmax(7.5rem, 1fr) 3.8rem 4rem 2.75rem; }
+}
+@media (max-width: 760px) {
+  .srv-th { display: none; }
+  .srv-tr, .srv-tbl.selecting .srv-tr {
+    grid-template-columns: minmax(20px, auto) minmax(0, 1fr) auto auto; padding: 10px 14px; row-gap: 6px;
+    grid-template-areas: 'dot name name fav' 'dot pl pl pl' 'dot addr ping up';
+  }
+  .srv-td-addr { display: block; grid-area: addr; }
+  .srv-td-dot { grid-area: dot; align-self: start; padding-top: 12px; }
+  .srv-td-name { grid-area: name; }
+  .srv-td-pl { grid-area: pl; }
+  .srv-td-ping { grid-area: ping; }
+  .srv-td-up { grid-area: up; }
+  .srv-td-fav { grid-area: fav; }
+  .srv-td-ping::before, .srv-td-up::before { content: attr(data-label) ' '; font-size: var(--fs-xs); font-weight: 650; text-transform: uppercase; letter-spacing: .04em; color: rgb(var(--mute)); margin-right: 4px; }
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/shell.css" << '__COREGSM_EOF__'

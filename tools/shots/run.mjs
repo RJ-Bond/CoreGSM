@@ -129,7 +129,7 @@ async function shoot(cdp, base, row, outDir) {
   const vp = viewportOf(viewport);
   await cdp.send('Emulation.setDeviceMetricsOverride', { width: vp.width, height: vp.height, deviceScaleFactor: 1, mobile: vp.mobile });
   await cdp.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: theme }, { name: 'prefers-reduced-motion', value: 'reduce' }] });
-  const script = await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: `try{localStorage.setItem('coregsm_theme','${theme}')}catch{}` });
+  const script = await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: `try{localStorage.setItem('coregsm_theme','${theme}');${page.view ? `localStorage.setItem('coregsm_servers_view','${page.view}')` : `localStorage.removeItem('coregsm_servers_view')`}}catch{}` });
 
   const errors = [];
   const warnings = [];
