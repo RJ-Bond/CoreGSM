@@ -6,3 +6,4 @@ data/
 .t*/
 shots-out/
 coverage/
+tools/dev/.data/
