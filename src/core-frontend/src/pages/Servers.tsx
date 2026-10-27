@@ -2,9 +2,9 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEve
 import { api, type Server, type StatusInfo } from '../api';
 import { useAuth } from '../auth';
 import { gameColor, gameGradient, gameLabel } from '../games';
-import { coverBackground, emblemStyle, gameBackdrop } from '../cover';
+import { coverBackground, emblemStyle, gameBackdrop, coverUrlOf } from '../cover';
 import MaintenanceChip from '../components/MaintenanceChip';
-import { AnimatedNumber, Burst, ErrorLine, GameAvatar, LoadError, IconServers, PageHead, Spark, StatusPill, ago, isLag, plural, spanCaption, useDepth, useSparkSpanMin, usePoll, navigate, routeQuery } from '../ui';
+import { AnimatedNumber, Burst, ErrorLine, GameAvatar, LoadError, IconServers, PageHead, Spark, StatusPill, ago, isLag, plural, spanCaption, useSparkSpanMin, usePoll, navigate, routeQuery } from '../ui';
 import { t, useI18n } from '../i18n';
 import { calmSeriesColor, useCoverAccent } from '../components/server/coverAccent';
 import { pingTone, TONE_TEXT } from '../components/server/helpers';
@@ -460,86 +460,89 @@ const linkClick = (s: Server, select?: SelectProps) => (e: MouseEvent<HTMLElemen
 function HeroTile({ s, idx, uptime, downSince, fav, onFav, onOpen, rx, reason, select }: { rx: Reactions; s: Server; idx: number; uptime?: number; downSince?: number; fav: boolean | null; onFav: () => void; onOpen: () => void; reason: HeroReason; select?: SelectProps }) {
   const sparkSpan = useSparkSpanMin(s.id);
   useI18n();
-  const [c1, c2] = gameGradient(s.game);
+  const [c1] = gameGradient(s.game);
   const lag = isLag(s);
-  const depth = useDepth<HTMLElement>();
   const r = reactionOf(rx, s.id);
   const emb = emblemStyle(s.coverUrl, s.game);
+  const cover = coverUrlOf(s.coverUrl, s.game, false);
   return (
     <article
-      className={`${emb.className ? 'emblem-host' : ''} ${s.online ? 'is-split' : ''} srv-hero depth tile-in tile-hover relative flex cursor-pointer flex-col gap-3 overflow-hidden rounded-ui-xl p-5 text-white shadow-soft lg:p-6 ${reason === 'attention' ? 'hero-attn' : ''} ${s.online ? '' : 'is-down'}`}
+      className={`hero3 tile-in tile-hover relative cursor-pointer overflow-hidden rounded-ui-xl text-white shadow-soft ${s.online ? '' : 'is-down'} ${reason === 'attention' ? 'hero-attn' : ''}`}
       style={{
         ...stagger(idx),
-        ...emb.style,
         ['--gc' as string]: gameColor(s.game),
-        background: coverBackground(s.coverUrl, gameBackdrop(c1), { strong: true, game: s.game }),
-        boxShadow: `${select?.has(s.id) ? '0 0 0 3px rgb(var(--brand)), ' : reason === 'attention' ? `0 0 0 3px rgb(var(${s.online ? '--warn' : '--bad'}) / .85), ` : ''}0 1px 2px rgba(20,24,40,.06), 0 18px 40px -12px ${c1}88`,
+        boxShadow: `${select?.has(s.id) ? '0 0 0 3px rgb(var(--brand)), ' : reason === 'attention' ? `0 0 0 3px rgb(var(${s.online ? '--warn' : '--bad'}) / .85), ` : ''}0 1px 2px rgba(20,24,40,.06), 0 18px 40px -16px ${c1}66`,
       }}
       onClick={select?.on ? () => select.toggle(s.id) : onOpen}
-      {...depth}
     >
-      {emb.className && <span aria-hidden className="emblem-layer" />}
-      <span aria-hidden className="depth-l1 pointer-events-none absolute -right-16 -top-16 h-64 w-64 rounded-full bg-white/15" />
-      <span aria-hidden className="depth-l2 pointer-events-none absolute -bottom-24 -left-10 h-52 w-52 rounded-full bg-black/10" />
       {select?.on && <CardCheck s={s} select={select} className="left-2 top-2" />}
 
-      <div className="sh-head relative flex items-start gap-3">
-        <GameAvatar game={s.game} size={48} glass vtId={s.id} />
-        <div className="min-w-0 flex-1">
-          <h2 className="line-clamp-2 wrap-break-word text-lg font-extrabold leading-tight sm:text-xl" title={s.name}>
-            <a href={`/servers/${s.id}`} onClick={linkClick(s, select)} className="hover:underline">{s.name}</a>
-          </h2>
-          <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-fs-sm font-bold text-white/90">
-            <span>{gameLabel(s.game)}</span>
-            <span aria-hidden>·</span>
-            <AddrCopy address={s.address} className="truncate font-mono text-xs font-semibold" />
+      <div className="h3-l">
+        <div className="h3-head flex items-start gap-3">
+          <GameAvatar game={s.game} size={46} glass vtId={s.id} />
+          <div className="min-w-0 flex-1">
+            {reason && reason !== 'attention' && <span className="hero-reason">{t(`srv.hero.${reason}` as const)}</span>}
+            <h2 className="line-clamp-2 wrap-break-word text-xl font-extrabold leading-tight" title={s.name}>
+              <a href={`/servers/${s.id}`} onClick={linkClick(s, select)} className="hover:underline">{s.name}</a>
+            </h2>
+            <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-fs-sm font-bold text-white/85">
+              <span>{gameLabel(s.game)}</span>
+              <span aria-hidden>·</span>
+              <AddrCopy address={s.address} className="truncate font-mono text-xs font-semibold" />
+            </div>
+            {s.maintenance && <MaintenanceChip m={s.maintenance} glass className="mt-1.5" />}
           </div>
-          {s.maintenance && <MaintenanceChip m={s.maintenance} glass className="mt-1.5" />}
-          {reason && reason !== 'attention' && <span className="hero-reason">{t(`srv.hero.${reason}` as const)}</span>}
         </div>
-        <div className="sh-actions flex shrink-0 items-center gap-1">
+
+        {s.online ? (
+          <>
+            <div className="h3-count flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
+              <CountReact r={r} onDark><AnimatedNumber value={s.players} className="text-[72px] font-extrabold leading-none tracking-[-0.05em] sm:text-[88px]" /></CountReact>
+              <span className="text-lg font-bold text-white/85">/ {s.maxPlayers} {plural(s.maxPlayers, ['игрок', 'игрока', 'игроков'])}</span>
+            </div>
+            <div className="h3-sub flex flex-wrap items-center gap-x-4 gap-y-1">
+              <TrendChip serverId={s.id} onDark />
+              {s.ping != null && <span className="inline-flex items-center gap-1.5 font-bold text-white/90"><PingBars ping={s.ping} tone={pingTone(s.ping).tone} />пинг {s.ping} мс</span>}
+            </div>
+            <CapacityBar className="h3-bar" players={s.players} max={s.maxPlayers} color="#fff" onDark />
+            <PlayerNames names={s.playerNames ?? []} max={4} onDark />
+          </>
+        ) : (
+          // a server that is down: what is wrong and since when, instead of the figures
+          <div className="h3-down rounded-2xl bg-white/10 px-4 py-3" title={s.error ?? undefined}>
+            {s.hasStatus ? (
+              <>
+                <p className="line-clamp-3 text-base font-extrabold leading-snug">{s.error ?? 'Сервер не отвечает'}</p>
+                <p className="mt-1 text-sm font-semibold text-white/80">{downSince ? t('srv.down.for', { d: durText(Date.now() - downSince) }) + ' · ' : ''}Последний ответ: {ago(s.updatedAt)}</p>
+              </>
+            ) : (
+              <p className="text-base font-extrabold">Ожидаем первый ответ</p>
+            )}
+          </div>
+        )}
+
+        <div className="h3-foot flex flex-wrap items-center text-fs-sm font-bold text-white/80">
+          <span className="h3-fact"><CardClock />{spanCaption(sparkSpan)}</span>
+          {uptime != null && <span className="h3-fact"><CardUptime />аптайм {(Math.round(uptime * 10) / 10).toLocaleString('ru-RU')}%</span>}
+          {s.online && s.map && <span className="h3-fact"><CardMap />карта {s.map}</span>}
+          {s.version && <span className="h3-fact"><CardTag />v{s.version}</span>}
+          {!s.online && <span className="h3-fact"><CardRefresh />обновлено {ago(s.updatedAt)}</span>}
+        </div>
+      </div>
+
+      <div
+        className={`h3-r ${emb.className ? 'emblem-host' : ''}`}
+        style={{ ...emb.style, ['--h3-cover' as string]: cover ? `url("${cover}")` : 'none', ['--h3-fallback' as string]: gameBackdrop(c1) }}
+      >
+        {emb.className && <span aria-hidden className="emblem-layer" />}
+        <div className="h3-actions flex items-center gap-1">
           <StatusFlash r={r}><StatusPill glass online={s.online} known={s.hasStatus} lag={lag} maintenance={!!s.maintenance} /></StatusFlash>
           {fav != null && <FavButton on={fav} name={s.name} onClick={onFav} className={fav ? 'text-white' : 'text-white/80'} glass />}
           <QuickMenu s={s} glass />
         </div>
-      </div>
-
-      {s.online ? (
-        <>
-          <div className="sh-count relative flex flex-wrap items-baseline gap-x-2.5 gap-y-1 pt-1">
-            <CountReact r={r} onDark><AnimatedNumber value={s.players} className="text-[64px] font-extrabold leading-none tracking-[-0.045em] sm:text-[78px]" /></CountReact>
-            <span className="text-lg font-bold text-white/90">/ {s.maxPlayers} {plural(s.maxPlayers, ['игрок', 'игрока', 'игроков'])}</span>
-            <span aria-hidden className="sh-br" />
-            <TrendChip serverId={s.id} onDark />
-            {s.ping != null && <span className="ml-auto inline-flex items-center gap-1.5 font-bold text-white/90"><PingBars ping={s.ping} tone={pingTone(s.ping).tone} />пинг {s.ping} мс</span>}
-          </div>
-          <CapacityBar className="sh-bar relative" players={s.players} max={s.maxPlayers} color="#fff" onDark />
-          <PlayerNames className="relative" names={s.playerNames ?? []} max={4} onDark />
-          <div className="sh-chart relative mt-auto pt-2">
-            <Spark serverId={s.id} color="#ffffff" variant="hero" />
-          </div>
-        </>
-      ) : (
-        // a server that is down: one compact row (what is wrong, since when) and the day's curve with the outage in red
-        <div className="relative grid items-center gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)]">
-          {s.hasStatus ? (
-            <div className="rounded-2xl bg-white/20 px-4 py-3" title={s.error ?? undefined}>
-              <p className="line-clamp-3 text-base font-extrabold leading-snug">{s.error ?? 'Сервер не отвечает'}</p>
-              <p className="mt-1 text-sm font-semibold text-white/85">{downSince ? t('srv.down.for', { d: durText(Date.now() - downSince) }) + ' · ' : ''}Последний ответ: {ago(s.updatedAt)}</p>
-            </div>
-          ) : (
-            <div className="rounded-2xl bg-white/20 px-4 py-3 text-base font-extrabold">Ожидаем первый ответ</div>
-          )}
+        <div className="h3-chart">
           <Spark serverId={s.id} color="#ffffff" variant="hero" />
         </div>
-      )}
-
-      <div className="sh-foot relative mt-auto flex flex-wrap items-center gap-1.5 text-fs-sm font-bold text-white/90">
-        <span className="sh-chip"><CardClock />{spanCaption(sparkSpan)}</span>
-        {uptime != null && <span className="sh-chip"><CardUptime />аптайм {(Math.round(uptime * 10) / 10).toLocaleString('ru-RU')}%</span>}
-        {s.online && s.map && <span className="sh-chip"><CardMap />карта {s.map}</span>}
-        {s.version && <span className="sh-chip"><CardTag />v{s.version}</span>}
-        {!s.online && <span className="sh-chip"><CardRefresh />обновлено {ago(s.updatedAt)}</span>}
       </div>
     </article>
   );
