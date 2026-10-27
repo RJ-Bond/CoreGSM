@@ -90,12 +90,14 @@ export interface SelectProps {
 function ListRow({ s, uptime, onOpen, rx, favButton, select }: RowProps) {
   const r = reactionOf(rx, s.id);
   const lag = isLag(s);
+  const kind = s.maintenance ? 'maint' : !s.hasStatus ? 'mute' : !s.online ? 'bad' : lag ? 'warn' : 'ok';
+  const label = s.maintenance ? 'Обслуживание' : !s.hasStatus ? 'Ожидание ответа' : !s.online ? 'Офлайн' : lag ? 'Лаги' : 'Онлайн';
   return (
     <div
-      className={`srv-row ${s.online ? '' : 'off'} ${select?.on && select.has(s.id) ? 'selected' : ''}`}
+      className={`srv-tr ${s.online ? '' : 'off'} ${select?.on && select.has(s.id) ? 'selected' : ''}`}
       onClick={select?.on ? () => select.toggle(s.id) : onOpen}
     >
-      <div className="srv-c-status">
+      <div className="srv-td-dot">
         {select?.on && (
           <input
             type="checkbox"
@@ -106,35 +108,30 @@ function ListRow({ s, uptime, onOpen, rx, favButton, select }: RowProps) {
             aria-label={`Выбрать: ${s.name}`}
           />
         )}
-        <StatusFlash r={r}><StatusPill online={s.online} known={s.hasStatus} lag={lag} maintenance={!!s.maintenance} /></StatusFlash>
+        <StatusFlash r={r}><span className={`srv-dot ${kind}`} role="img" aria-label={label} title={label} /></StatusFlash>
       </div>
-      <div className="srv-c-name">
-        <span className="srv-stripe" aria-hidden />
-        <GameAvatar game={s.game} size={36} />
+      <div className="srv-td-name">
+        <GameAvatar game={s.game} size={28} />
         <div className="min-w-0">
-          <a href={`/servers/${s.id}`} onClick={(e) => e.stopPropagation()} className="block truncate font-extrabold hover:text-link" title={s.name}>{s.name}</a>
-          <div className="truncate text-fs-sm font-bold text-mute">{gameLabel(s.game)}{s.online && s.map ? ` · ${s.map}` : ''}</div>
+          <a href={`/servers/${s.id}`} onClick={(e) => e.stopPropagation()} className="srv-tr-title" title={s.name}>{s.name}</a>
+          <span className="srv-tr-sub">{gameLabel(s.game)}{s.online && s.map ? ` · ${s.map}` : ''}</span>
           {s.maintenance && <MaintenanceChip m={s.maintenance} className="mt-0.5" />}
         </div>
       </div>
-      <div className="srv-c-players">
+      <div className="srv-td-addr"><CopyAddress text={s.address} /></div>
+      <div className="srv-td-pl">
         {s.online ? (
           <>
-            <div className="flex items-baseline gap-1 font-extrabold tabular-nums">
-              <CountReact r={r}><AnimatedNumber value={s.players} /></CountReact>
-              <span className="text-mute">/ {s.maxPlayers}</span>
-            </div>
-            <CapacityBar players={s.players} max={s.maxPlayers} color={gameColor(s.game)} />
-            <span className="srv-rowspark max-lg:hidden"><MiniSpark serverId={s.id} color={gameColor(s.game)} /></span>
+            <b className="srv-tr-count tabular-nums"><CountReact r={r}><AnimatedNumber value={s.players} /></CountReact><span>/{s.maxPlayers}</span></b>
+            <CapacityBar players={s.players} max={s.maxPlayers} color={gameColor(s.game)} showPct={false} slots={false} />
           </>
         ) : (
-          <span className="truncate text-fs-sm font-bold text-mute" title={s.error ?? undefined}>{s.hasStatus ? `Не отвечает · ${ago(s.updatedAt)}` : 'Ожидаем ответ'}</span>
+          <span className="srv-tr-off" title={s.error ?? undefined}>{s.hasStatus ? `не отвечает · ${ago(s.updatedAt)}` : 'ожидаем ответ'}</span>
         )}
       </div>
-      <div className="srv-c-ping" data-label="Пинг">{s.online && s.ping != null ? <span className={lag ? 'text-warn' : ''}>{s.ping} мс</span> : '–'}</div>
-      <div className="srv-c-up" data-label="Аптайм">{uptime != null ? fmtUp(uptime) : '–'}</div>
-      <div className="srv-c-addr"><CopyAddress text={s.address} /></div>
-      <div className="srv-c-fav">{favButton}</div>
+      <div className="srv-td-ping" data-label="Пинг">{s.online && s.ping != null ? <span className={lag ? 'text-warn' : ''}>{s.ping}<small> мс</small></span> : '–'}</div>
+      <div className="srv-td-up" data-label="Аптайм">{uptime != null ? fmtUp(uptime) : '–'}</div>
+      <div className="srv-td-fav">{favButton}</div>
     </div>
   );
 }
@@ -151,18 +148,25 @@ export function ServersList({ servers, uptime, rx, favOf, onOpen, renderFav, sel
   renderFav: (s: Server, on: boolean) => React.ReactNode;
 }) {
   return (
-    <div className={`panel srv-list fade-in ${select?.on ? "selecting" : ""}`} aria-label="Серверы">
-      <div className="srv-row srv-head">
-        <div className="srv-c-status">Статус</div>
-        {([['name', 'srv-c-name', 'Сервер'], ['players', 'srv-c-players', 'Игроки'], ['ping', 'srv-c-ping', 'Пинг'], ['up', 'srv-c-up', 'Аптайм 30 дн']] as const).map(([k, cls, label]) => (
+    <div className={`panel srv-tbl fade-in ${select?.on ? 'selecting' : ''}`} aria-label="Серверы">
+      <div className="srv-tr srv-th">
+        <div className="srv-td-dot" />
+        {([['name', 'srv-td-name', 'Сервер'], ['players', 'srv-td-pl', 'Игроки'], ['ping', 'srv-td-ping', 'Пинг'], ['up', 'srv-td-up', 'Аптайм']] as const).filter(([k]) => k === 'name').map(([k, cls, label]) => (
           <div key={k} className={cls} aria-sort={sort?.key === k ? (sort.dir === 'asc' ? 'ascending' : 'descending') : undefined}>
             <button type="button" className="srv-sort" onClick={() => onSort?.(k)} title="Сортировать">
               {label}<span aria-hidden>{sort?.key === k ? (sort.dir === 'asc' ? ' ↑' : ' ↓') : ''}</span>
             </button>
           </div>
         ))}
-        <div className="srv-c-addr">Адрес</div>
-        <div className="srv-c-fav" />
+        <div className="srv-td-addr">Адрес</div>
+        {([['name', 'srv-td-name', 'Сервер'], ['players', 'srv-td-pl', 'Игроки'], ['ping', 'srv-td-ping', 'Пинг'], ['up', 'srv-td-up', 'Аптайм']] as const).filter(([k]) => k !== 'name').map(([k, cls, label]) => (
+          <div key={k} className={cls} aria-sort={sort?.key === k ? (sort.dir === 'asc' ? 'ascending' : 'descending') : undefined}>
+            <button type="button" className="srv-sort" onClick={() => onSort?.(k)} title="Сортировать">
+              {label}<span aria-hidden>{sort?.key === k ? (sort.dir === 'asc' ? ' ↑' : ' ↓') : ''}</span>
+            </button>
+          </div>
+        ))}
+        <div className="srv-td-fav" />
       </div>
       {servers.map((s) => {
         const fav = favOf(s.id);

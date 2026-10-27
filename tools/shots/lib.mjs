@@ -16,6 +16,7 @@ export const VIEWPORTS = {
 /** pages a guest can open (the panel is made public by the seed) */
 export const GUEST_PAGES = [
   { id: 'servers', path: '/servers' },
+  { id: 'servers-list', path: '/servers', view: 'list' },
   { id: 'server', path: '/servers/1' },
   { id: 'server-players', path: '/servers/1/players' },
   { id: 'server-history', path: '/servers/1/history' },
