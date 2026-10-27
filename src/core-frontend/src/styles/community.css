@@ -201,3 +201,8 @@ html[data-motion='reduce'] .cm-feed-i { animation: none; }
 .cm-bento > .b-top > .tile { background: linear-gradient(160deg, rgb(250 204 21 / .11), transparent 70%), rgb(var(--card)); }
 .cm-bento > .b-feed > .tile { background: linear-gradient(160deg, rgb(244 114 182 / .1), transparent 70%), rgb(var(--card)); }
 .cm-bento > .b-gal > .tile, .cm-bento > .b-gal > section { background: linear-gradient(160deg, rgb(249 115 22 / .11), transparent 70%), rgb(var(--card)); }
+
+/* the strip of sections: a gap under it (the sticky capsule has no margin of its own), the icons in front of the labels */
+.cm-nav { margin-bottom: 1.25rem; }
+.cm-nav-i { display: inline-flex; align-items: center; gap: 7px; }
+.cm-nav-i > svg { flex: none; opacity: .85; }
