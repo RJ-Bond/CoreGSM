@@ -578,3 +578,25 @@ html[data-motion='reduce'] :is(.srv-record, .srv-swipe-hint, .srv-slots-bar > i.
 .off-cell.part { background: rgb(var(--warn) / .8); }
 .off-ticks { display: flex; justify-content: space-between; margin-top: 4px; font-size: var(--fs-xs); font-weight: 600; color: rgb(var(--mute)); }
 .off-toggle { justify-self: start; }
+
+/* ---------- the server page «Sidebar»: from lg up the banner is a column on the left, the tabs and the content on the right ---------- */
+@media (min-width: 1024px) {
+  .srv-shell { display: grid; grid-template-columns: 19.5rem minmax(0, 1fr); gap: 1.25rem; align-items: start; }
+  /* the column stays in view while the content scrolls (only when the window is tall enough to show all of it) */
+  @media (min-height: 860px) { .srv-shell > .srv-banner { position: sticky; top: 5.25rem; } }
+  .srv-shell > .srv-banner { padding: 1.25rem; }
+  .srv-shell .srv-title { flex-direction: column; align-items: flex-start; gap: .85rem; }
+  .srv-shell .srv-title h1 { font-size: 1.3rem; }
+  .srv-shell .srv-title > div { width: 100%; }
+  /* the counter, the bar and the names stack: the two-column grid of the wide banner does not fit a column */
+  .srv-shell .srv-hero { display: block; padding-inline: 0; }
+  .srv-shell .srv-hero > * { grid-column: auto; }
+  .srv-shell .srv-hero .srv-hero-bar { margin-top: .85rem; }
+  .srv-shell .pp-ribbon { flex-direction: column; align-items: stretch; gap: 6px; }
+  .srv-shell .pp-chip { max-width: 100%; border-radius: var(--r-md); }
+  .srv-shell .srv-actions { display: grid; grid-template-columns: minmax(0, 1fr); }
+  .srv-shell .srv-actions .srv-cta, .srv-shell .srv-actions .srv-addr-btn { width: 100%; justify-content: center; }
+  .srv-shell .srv-act-group { display: flex; gap: .5rem; }
+  .srv-shell .srv-act-group > * { flex: 1; }
+}
+@media (min-width: 1024px) { .srv-shell .srv-tabs > .seg-item { padding: .5rem .7rem .5rem .6rem; } .srv-shell .srv-tabs { max-width: 100%; } }
