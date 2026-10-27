@@ -60,6 +60,12 @@ describe('api: updates', () => {
     assert.equal(fs.readFileSync(path.join(upd, 'channel'), 'utf8'), 'main');
     r = await api.call('PUT', '/api/update/settings', { token, body: { skip: null, notify: true } });
     assert.equal(r.body.notify, true);
+    // the notices about changes without a release (the «Fresh» channel) are off until the administrator asks for them
+    assert.equal(r.body.notifyMain, false);
+    r = await api.call('PUT', '/api/update/settings', { token, body: { notifyMain: true } });
+    assert.equal(r.body.notifyMain, true);
+    r = await api.call('PUT', '/api/update/settings', { token, body: { notifyMain: false } });
+    assert.equal(r.body.notifyMain, false);
     assert.equal((await api.call('PUT', '/api/update/settings', { token, body: { channel: 'nightly' } })).status, 400);
     assert.equal((await api.call('PUT', '/api/update/settings', { token, body: { skip: 'not a build' } })).status, 400);
   });

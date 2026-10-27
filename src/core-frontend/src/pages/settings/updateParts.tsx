@@ -148,7 +148,7 @@ export function HistoryCard({ refreshKey }: { refreshKey: unknown }) {
 export function OptionsCard({ info, onChange }: { info: UpdateInfo; onChange: (i: UpdateInfo) => void }) {
   const [error, setError] = useState('');
   const [picking, setPicking] = useState(false);
-  const save = async (body: { channel?: 'release' | 'main'; notify?: boolean; notifyLang?: 'ru' | 'en'; notifyMode?: 'brief' | 'detailed' | 'all'; remindDays?: number; notifyChannel?: string }) => {
+  const save = async (body: { channel?: 'release' | 'main'; notify?: boolean; notifyMain?: boolean; notifyLang?: 'ru' | 'en'; notifyMode?: 'brief' | 'detailed' | 'all'; remindDays?: number; notifyChannel?: string }) => {
     setError('');
     try {
       onChange(await api<UpdateInfo>('/update/settings', 'PUT', body));
@@ -173,6 +173,12 @@ export function OptionsCard({ info, onChange }: { info: UpdateInfo; onChange: (i
         <input type="checkbox" className="mt-1 h-4 w-4 accent-brand" checked={info.notify !== false} onChange={(e) => void save({ notify: e.target.checked })} aria-describedby="upd-notify-hint" />
         <span>{t('upd.o.notify')}<span id="upd-notify-hint" className="mt-0.5 block text-sm font-semibold text-mute">{t('upd.o.notifyHint')}</span></span>
       </label>
+      {info.notify !== false && (info.channel ?? 'release') === 'main' && (
+        <label className="flex cursor-pointer items-start gap-2.5 font-bold">
+          <input type="checkbox" className="mt-1 h-4 w-4 accent-brand" checked={info.notifyMain === true} onChange={(e) => void save({ notifyMain: e.target.checked })} aria-describedby="upd-main-hint" />
+          <span>{t('upd.o.notifyMain')}<span id="upd-main-hint" className="mt-0.5 block text-sm font-semibold text-mute">{t('upd.o.notifyMainHint')}</span></span>
+        </label>
+      )}
       {info.notify !== false && (
         <div>
           <span className="label">{t('upd.o.chan')}</span>

@@ -24,6 +24,12 @@ const RELEASE_DEFAULT = process.env.UPDATE_RELEASE_BASE_URL ?? 'https://github.c
 // the channel can be chosen in the panel unless the server pins it through the environment
 const CHANNEL_LOCKED = process.env.UPDATE_RELEASE_BASE_URL !== undefined || !!process.env.UPDATE_BASE_URL || !!process.env.UPDATE_CHANNEL;
 const channel = (): Channel => (process.env.UPDATE_CHANNEL === 'main' || process.env.UPDATE_BASE_URL ? 'main' : parseChannel(getSetting('update_channel')));
+
+/**
+ * The notices «update available», «reminder» and «panel updated» go to Discord when they are on, and on the «Fresh»
+ * channel (the latest changes without a release) only when the administrator asked for it: every commit there is an «update».
+ */
+export const noticesAllowed = (): boolean => getSetting('update_notify') !== '0' && (channel() !== 'main' || getSetting('update_notify_main') === '1');
 const releaseBase = (): string => (process.env.UPDATE_RELEASE_BASE_URL !== undefined ? process.env.UPDATE_RELEASE_BASE_URL : channel() === 'main' ? '' : RELEASE_DEFAULT);
 
 let remote: { build: string | null; label: string | null; error: string | null; at: number; builtAt: number | null } = { build: null, label: null, error: null, at: 0, builtAt: null };
@@ -132,6 +138,7 @@ function updatePayload() {
     channelLocked: CHANNEL_LOCKED,
     skipped: !!remote.build && getSetting('update_skip') === remote.build,
     notify: getSetting('update_notify') !== '0',
+    notifyMain: getSetting('update_notify_main') === '1',
     notifyLang: parseNoticeLang(getSetting('update_notify_lang')),
     notifyMode: parseNoticeMode(getSetting('update_notify_mode')),
     notifyChannel: /^\d{15,25}$/.test(getSetting('update_notify_channel') ?? '') ? (getSetting('update_notify_channel') as string) : '',
@@ -203,7 +210,7 @@ function announce(title: string, description: string, color: number): void {
 
 /** sends a notice about the panel update to the alerts channel (it has to be set up and switched on there) */
 function sendNotice(n: Notice): void {
-  if (getSetting('update_notify') === '0') return;
+  if (!noticesAllowed()) return;
   const embed: Record<string, unknown> = {
     title: n.title,
     ...(n.url ? { url: n.url } : {}),
@@ -246,7 +253,8 @@ async function sendUpdateNotice(kind: UpdateNoticeKind, from: string | null, to:
 
 function announceVersion(): void {
   const available = !!(APP_VERSION && remote.build && APP_VERSION !== remote.build);
-  const notify = getSetting('update_notify') !== '0';
+  // on the «Fresh» channel nothing is announced unless it is switched on: the version stays «not announced» and is announced once when it is
+  const notify = noticesAllowed();
   const skipped = getSetting('update_skip');
   const label = remote.label ?? (remote.build ?? '').slice(0, 7);
   if (shouldAnnounce({ notify, available, latest: remote.build, announced: getSetting('update_announced'), skipped })) {
@@ -310,7 +318,7 @@ router.get('/api/update/preflight', admin, (_req, res) => {
 });
 
 router.put('/api/update/settings', admin, (req, res) => {
-  const b = (req.body ?? {}) as { channel?: unknown; skip?: unknown; notify?: unknown; notifyLang?: unknown; notifyMode?: unknown; remindDays?: unknown; notifyChannel?: unknown };
+  const b = (req.body ?? {}) as { channel?: unknown; skip?: unknown; notify?: unknown; notifyLang?: unknown; notifyMode?: unknown; notifyMain?: unknown; remindDays?: unknown; notifyChannel?: unknown };
   if (b.channel !== undefined) {
     if (CHANNEL_LOCKED) return res.status(409).json({ error: 'Канал задан переменными окружения сервера' });
     if (b.channel !== 'release' && b.channel !== 'main') return res.status(400).json({ error: 'Канал: release или main' });
@@ -324,6 +332,7 @@ router.put('/api/update/settings', admin, (req, res) => {
     setSetting('update_skip', b.skip);
   }
   if (b.notify !== undefined) setSetting('update_notify', b.notify === false ? '0' : '1');
+  if (b.notifyMain !== undefined) setSetting('update_notify_main', b.notifyMain === true ? '1' : '0');
   if (b.notifyChannel !== undefined) {
     if (typeof b.notifyChannel !== 'string' || !/^(\d{15,25})?$/.test(b.notifyChannel)) return res.status(400).json({ error: 'Некорректный канал' });
     setSetting('update_notify_channel', b.notifyChannel);
