@@ -1,0 +1,8 @@
+# The image of the local development stand (both services use it). The full node image already has the compilers that
+# better-sqlite3 needs; the fonts are for the picture cards (skia-canvas), as in the production image.
+FROM node:24-bookworm
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends fontconfig fonts-dejavu-core fonts-liberation \
+    && rm -rf /var/lib/apt/lists/* \
+    && fc-cache -f
+WORKDIR /app

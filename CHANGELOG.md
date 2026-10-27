@@ -25,6 +25,9 @@ interface language; the GitHub release text is built from the section of the ver
 ### 🐛 Исправлено | Fixed
 - 🧭 Шапка сайта: на широком окне подписи «Поиск Ctrl K», «Бот в сети» и имя пользователя не помещались в рамку шапки, и профиль вылезал за её край; теперь подписи показываются только когда в самой шапке хватает места, а вкладки разделов без вложенной тёмной капсулы | The site header: on a wide window the «Search Ctrl K», «Bot online» labels and the user name did not fit the header and the profile stuck out of it; the labels now show only when the header itself has room, and the section tabs have no capsule inside the capsule
 
+### 🔧 Прочее | Other
+- 🐳 Локальный стенд для разработки в Docker: `node tools/dev/dev.mjs` поднимает панель с демо-данными, изменения фронтенда видны в браузере сразу, бэкенд перезапускается сам; описание в `tools/dev/README.md` | A local development stand in Docker: `node tools/dev/dev.mjs` starts the panel with demo data, frontend changes show in the browser at once, the backend restarts itself; see `tools/dev/README.md`
+
 ## 1.0.0.50 · 26.10.2026
 
 ### ✨ Новое | New

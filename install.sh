@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="ccf9cc525f73"
+COREGSM_BUILD="a53416ebb760"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.0.0.54"
+COREGSM_VERSION="1.0.0.55"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -96825,7 +96825,8 @@ import react from '@vitejs/plugin-react';
 
 export default defineConfig({
   plugins: [react()],
-  server: { proxy: { '/api': process.env.COREGSM_API ?? 'http://localhost:3000', '/badge': process.env.COREGSM_API ?? 'http://localhost:3000', '/widget': process.env.COREGSM_API ?? 'http://localhost:3000' } },
+  // COREGSM_POLL=1: the local Docker stand, where files changed in Windows send no events into the container
+  server: { watch: process.env.COREGSM_POLL ? { usePolling: true, interval: 300 } : undefined, proxy: { '/api': process.env.COREGSM_API ?? 'http://localhost:3000', '/badge': process.env.COREGSM_API ?? 'http://localhost:3000', '/widget': process.env.COREGSM_API ?? 'http://localhost:3000' } },
   build: {
     rollupOptions: {
       output: {
