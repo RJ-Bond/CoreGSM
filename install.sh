@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="b7af4e759efa"
+COREGSM_BUILD="4b6a5ffa4690"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.0.0.69"
+COREGSM_VERSION="1.0.0.70"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -101394,6 +101394,28 @@ export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose:
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/CommunityIcons.tsx" << '__COREGSM_EOF__'
+import type { ReactNode } from 'react';
+
+/** small outline icons of the sections of the «Community» page (currentColor, decorative: the label next to them says the same) */
+const ico = (d: ReactNode) => (
+  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+    {d}
+  </svg>
+);
+
+const NOW = ico(<path d="M3 12h4l2.5 7 5-14L17 12h4" />);
+const SEASON = ico(<><path d="M5 21V4" /><path d="M5 5h12l-2.5 4L17 13H5" /></>);
+const WHEN = ico(<><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></>);
+const TOP = ico(<><path d="M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0V4Z" /><path d="M17 5h3v2a3 3 0 0 1-3 3M7 5H4v2a3 3 0 0 0 3 3" /></>);
+const FEED = ico(<><path d="M4 6h16M4 12h16M4 18h10" /></>);
+const GALLERY = ico(<><rect x="3" y="4" width="18" height="16" rx="2.5" /><circle cx="9" cy="10" r="1.8" /><path d="m21 16-5-5-8 8" /></>);
+const SERVERS = ico(<><rect x="3" y="4" width="18" height="6.5" rx="2" /><rect x="3" y="13.5" width="18" height="6.5" rx="2" /><path d="M7 7.25h.01M7 16.75h.01" /></>);
+
+/** the icon of a section of the page by the id of its block */
+export const communityNavIcon = (id: string): ReactNode => (({ 'cm-now': NOW, 'cm-season': SEASON, 'cm-when': WHEN, 'cm-top': TOP, 'cm-feed': FEED, 'cm-gallery': GALLERY, 'cm-servers': SERVERS }) as Record<string, ReactNode>)[id] ?? null;
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
   cat > "$APP_DIR/core-frontend/src/components/ConfigTransfer.tsx" << '__COREGSM_EOF__'
 /**
  * Settings → Обновления и копии: the panel's setup as a JSON file (servers, Discord messages, alerts, appearance,
@@ -127431,6 +127453,7 @@ import '../styles/analytics.css';
 import '../styles/community.css';
 import '../styles/gallery.css';
 import PollsCard from '../components/PollsCard';
+import { communityNavIcon } from '../components/CommunityIcons';
 import { Lightbox, type Shot } from './Gallery';
 
 const IconPeople = () => (
@@ -127918,7 +127941,7 @@ function SectionNav({ items }: { items: [string, string][] }) {
   };
   return (
     <nav className="cm-nav" aria-label={t('cm.nav')}>
-      {items.map(([id, label]) => <button key={id} type="button" className="cm-nav-i" aria-current={cur === id ? 'true' : undefined} onClick={() => go(id)}>{label}</button>)}
+      {items.map(([id, label]) => <button key={id} type="button" className="cm-nav-i" aria-current={cur === id ? 'true' : undefined} onClick={() => go(id)}>{communityNavIcon(id)}<span>{label}</span></button>)}
     </nav>
   );
 }
@@ -138041,6 +138064,11 @@ html[data-motion='reduce'] .cm-feed-i { animation: none; }
 .cm-bento > .b-top > .tile { background: linear-gradient(160deg, rgb(250 204 21 / .11), transparent 70%), rgb(var(--card)); }
 .cm-bento > .b-feed > .tile { background: linear-gradient(160deg, rgb(244 114 182 / .1), transparent 70%), rgb(var(--card)); }
 .cm-bento > .b-gal > .tile, .cm-bento > .b-gal > section { background: linear-gradient(160deg, rgb(249 115 22 / .11), transparent 70%), rgb(var(--card)); }
+
+/* the strip of sections: a gap under it (the sticky capsule has no margin of its own), the icons in front of the labels */
+.cm-nav { margin-bottom: 1.25rem; }
+.cm-nav-i { display: inline-flex; align-items: center; gap: 7px; }
+.cm-nav-i > svg { flex: none; opacity: .85; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/detail.css" << '__COREGSM_EOF__'

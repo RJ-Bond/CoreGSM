@@ -15,6 +15,7 @@ import '../styles/analytics.css';
 import '../styles/community.css';
 import '../styles/gallery.css';
 import PollsCard from '../components/PollsCard';
+import { communityNavIcon } from '../components/CommunityIcons';
 import { Lightbox, type Shot } from './Gallery';
 
 const IconPeople = () => (
@@ -502,7 +503,7 @@ function SectionNav({ items }: { items: [string, string][] }) {
   };
   return (
     <nav className="cm-nav" aria-label={t('cm.nav')}>
-      {items.map(([id, label]) => <button key={id} type="button" className="cm-nav-i" aria-current={cur === id ? 'true' : undefined} onClick={() => go(id)}>{label}</button>)}
+      {items.map(([id, label]) => <button key={id} type="button" className="cm-nav-i" aria-current={cur === id ? 'true' : undefined} onClick={() => go(id)}>{communityNavIcon(id)}<span>{label}</span></button>)}
     </nav>
   );
 }
