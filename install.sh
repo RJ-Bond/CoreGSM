@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="e60fe4b42e7f"
+COREGSM_BUILD="3f31c3823a58"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.0.0.59"
+COREGSM_VERSION="1.0.0.60"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -62262,7 +62262,7 @@ export function Preview({
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/news"
   cat > "$APP_DIR/core-frontend/src/components/news/PublicFeed.tsx" << '__COREGSM_EOF__'
-import type { CSSProperties } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
 import type { NewsAction, NewsCategory, NewsChange, NewsReaction, PublicNews, Server } from '../../api';
 import { useI18n, t } from '../../i18n';
 import { fmtDate, fmtTime, toast } from '../../ui';
@@ -62384,6 +62384,34 @@ function monthFormatter(lang: 'ru' | 'en') {
     const s = f.format(new Date(y, m, 1)).replace(/\s*г\.$/, '');
     return s.charAt(0).toUpperCase() + s.slice(1);
   };
+}
+
+
+/**
+ * The same news card for a narrow place (the «What's new» block of the servers page): the banner with the rubric, the
+ * date and the headline, a short text under it, and whatever links the place wants to add.
+ */
+export function NewsBanner({ c, children }: { c: Card; children?: ReactNode }) {
+  const href = `/news/${c.id}`;
+  const gen = hasGeneratedCover(c, null);
+  return (
+    <article className="nb nb-compact" style={{ ['--nf-accent' as string]: c.accent }}>
+      <a className={`nb-banner ${gen ? 'nw-gen' : ''}`} data-v={gen ? c.id % 4 : undefined} href={href} style={gen ? genVars(c) : coverStyle(c, null)} aria-label={c.title}>
+        {gen && <span className="nw-gen-ico"><CategoryIcon category={c.category} size={72} /></span>}
+        <span className="nb-banner-in">
+          <span className="nb-chips">
+            <CategoryChip category={c.category} />
+            {c.at && <time className="nb-date" dateTime={new Date(c.at).toISOString()} title={fmtDate(c.at)}>{newsWhen(c.at)}</time>}
+          </span>
+          <h3 className="nb-title">{c.title}</h3>
+        </span>
+      </a>
+      <div className="nb-body">
+        {(c.text || c.fields.length > 0) && <div className="nb-text"><NewsText text={c.text} fields={c.fields} /></div>}
+        {children}
+      </div>
+    </article>
+  );
 }
 
 /**
@@ -70018,8 +70046,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { api, type PublicNews } from '../../api';
 import { t, useI18n } from '../../i18n';
 import { ago, fmtDateTime, fmtTime, usePoll } from '../../ui';
-import { cardOf } from '../news/PublicFeed';
-import { CATEGORY_HEX } from '../news/newsLogic';
+import { NewsBanner, cardOf } from '../news/PublicFeed';
 import { IconChevronDown } from '../../icons';
 import { StateView } from '../StateView';
 import type { OverviewData, RecentEvent } from './overviewLogic';
@@ -70156,20 +70183,14 @@ export function WhatsNew({ open, onToggle, overview }: { open: boolean; onToggle
             {news === undefined ? (
               <div className="skeleton h-16 rounded-2xl" aria-busy="true" />
             ) : news ? (
-              <div className="srv-new-news" style={{ ['--cat' as string]: card ? CATEGORY_HEX[card.category] : undefined }}>
-                {card?.image && <img className="srv-new-thumb" src={card.image} alt="" loading="lazy" />}
-                <a href="/news" className="srv-new-news-title">{news.title || t('srv.new.untitled')}</a>
-                {teaserNodes(news).length > 0 && <span className="srv-new-news-text">{teaserNodes(news)}</span>}
-                <span className="srv-new-news-foot">
-                  {news.sentAt && <span className="srv-new-date">{fmtDateTime(news.sentAt)}</span>}
-                  {newsLink(news) && (
-                    <a href={newsLink(news)!} target="_blank" rel="noopener noreferrer" className="btn-link btn-xs">
-                      {t('srv.new.openLink')}
-                    </a>
-                  )}
-                  <a href="/news" className="btn-link btn-xs">{t('srv.new.allNews')}</a>
-                </span>
-              </div>
+              card && (
+                <NewsBanner c={card}>
+                  <div className="nb-foot">
+                    {newsLink(news) && <a href={newsLink(news)!} target="_blank" rel="noopener noreferrer" className="btn-link btn-xs">{t('srv.new.openLink')}</a>}
+                    <a href="/news" className="btn-link btn-xs ml-auto">{t('srv.new.allNews')}</a>
+                  </div>
+                </NewsBanner>
+              )
             ) : (
               <StateView bare compact title={t('srv.new.noNews')} text="" />
             )}
@@ -93464,6 +93485,13 @@ __COREGSM_EOF__
 .nw-menu-btn:hover { background: rgb(var(--soft)); }
 .nw-menu-h { margin: 6px 12px 2px; font-size: var(--fs-xs); font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: rgb(var(--mute)); }
 .nw-menu-h:not(:first-child) { margin-top: 10px; }
+
+/* the news card in a narrow place («What's new» of the servers page): the same banner, a little smaller, no bleeding to the screen edges */
+.nb.nb-compact { margin-inline: 0; border-radius: var(--r-lg); box-shadow: none; }
+.nb.nb-compact .nb-banner { min-height: 7.5rem; padding: .9rem 1rem; }
+.nb.nb-compact .nb-title { font-size: 1.1rem; line-height: 1.2; }
+.nb.nb-compact .nb-body { padding: .8rem 1rem 1rem; gap: .6rem; }
+.nb.nb-compact .nb-text { font-size: .9375rem; line-height: 1.5; -webkit-line-clamp: 4; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/profile.css" << '__COREGSM_EOF__'

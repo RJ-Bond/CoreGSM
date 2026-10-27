@@ -3,8 +3,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { api, type PublicNews } from '../../api';
 import { t, useI18n } from '../../i18n';
 import { ago, fmtDateTime, fmtTime, usePoll } from '../../ui';
-import { cardOf } from '../news/PublicFeed';
-import { CATEGORY_HEX } from '../news/newsLogic';
+import { NewsBanner, cardOf } from '../news/PublicFeed';
 import { IconChevronDown } from '../../icons';
 import { StateView } from '../StateView';
 import type { OverviewData, RecentEvent } from './overviewLogic';
@@ -141,20 +140,14 @@ export function WhatsNew({ open, onToggle, overview }: { open: boolean; onToggle
             {news === undefined ? (
               <div className="skeleton h-16 rounded-2xl" aria-busy="true" />
             ) : news ? (
-              <div className="srv-new-news" style={{ ['--cat' as string]: card ? CATEGORY_HEX[card.category] : undefined }}>
-                {card?.image && <img className="srv-new-thumb" src={card.image} alt="" loading="lazy" />}
-                <a href="/news" className="srv-new-news-title">{news.title || t('srv.new.untitled')}</a>
-                {teaserNodes(news).length > 0 && <span className="srv-new-news-text">{teaserNodes(news)}</span>}
-                <span className="srv-new-news-foot">
-                  {news.sentAt && <span className="srv-new-date">{fmtDateTime(news.sentAt)}</span>}
-                  {newsLink(news) && (
-                    <a href={newsLink(news)!} target="_blank" rel="noopener noreferrer" className="btn-link btn-xs">
-                      {t('srv.new.openLink')}
-                    </a>
-                  )}
-                  <a href="/news" className="btn-link btn-xs">{t('srv.new.allNews')}</a>
-                </span>
-              </div>
+              card && (
+                <NewsBanner c={card}>
+                  <div className="nb-foot">
+                    {newsLink(news) && <a href={newsLink(news)!} target="_blank" rel="noopener noreferrer" className="btn-link btn-xs">{t('srv.new.openLink')}</a>}
+                    <a href="/news" className="btn-link btn-xs ml-auto">{t('srv.new.allNews')}</a>
+                  </div>
+                </NewsBanner>
+              )
             ) : (
               <StateView bare compact title={t('srv.new.noNews')} text="" />
             )}
