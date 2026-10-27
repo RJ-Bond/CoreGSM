@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="9dd2e3771bed"
+COREGSM_BUILD="69329f426b53"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.0.0.61"
+COREGSM_VERSION="1.0.0.62"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -65782,7 +65782,7 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/server"
   cat > "$APP_DIR/core-frontend/src/components/server/ConnectTab.tsx" << '__COREGSM_EOF__'
 import { useEffect, useId, useRef, useState } from 'react';
-import { applyConnectTemplates, connectGuide } from '../../connectGuides';
+import { applyConnectTemplates, connectGuide, fillConnectTemplate } from '../../connectGuides';
 import { useGameProfiles } from '../../gameProfiles';
 import { t, useI18n } from '../../i18n';
 import { IconCheckMark, IconCopy, Notice, toast } from '../../ui';
@@ -65825,7 +65825,8 @@ export default function ConnectTab({ game, address, sections }: { game: string; 
   const uid = useId();
   const profile = useGameProfiles()?.[game];
   const guide = applyConnectTemplates(connectGuide(game, address), profile?.connect, address, profile?.defaultPort);
-  const note = typeof profile?.connect?.note === 'string' ? profile.connect.note.trim() : '';
+  // the note may use {address}, {host} and {port} like the other templates of the game
+  const note = typeof profile?.connect?.note === 'string' ? fillConnectTemplate(profile.connect.note.trim(), address, profile?.defaultPort) : '';
   const addr = guide.copy.find((c) => c.label === 'Адрес') ?? { label: 'Адрес', value: address.trim() };
   const command = guide.copy.find((c) => /команд/i.test(c.label));
   const steam = guide.link && guide.link.href.startsWith('steam://') ? guide.link : null;
@@ -66337,7 +66338,7 @@ export default function HistoryChart({
     measure();
     return () => ro.disconnect();
   }, []);
-  const H = W < 520 ? 230 : 320;
+  const H = W < 520 ? 230 : 270;
 
   const now = zoom ? zoom[1] : Date.now();
   const winStart = zoom ? zoom[0] : now - hours * 3600_000;
@@ -92809,6 +92810,38 @@ html[data-motion='reduce'] :is(.srv-record, .srv-swipe-hint, .srv-slots-bar > i.
   .srv-shell .srv-act-group > * { flex: 1; }
 }
 @media (min-width: 1024px) { .srv-shell .srv-tabs > .seg-item { padding: .5rem .7rem .5rem .6rem; } .srv-shell .srv-tabs { max-width: 100%; } }
+
+/* ---------- the server page «Sidebar», polish: a quiet column, a calm content area ---------- */
+@media (min-width: 1024px) {
+  /* the column: one soft card instead of cards inside a card */
+  .srv-shell > .srv-banner { border-radius: var(--r-xl); }
+  .srv-shell .srv-hero { background: none !important; box-shadow: none !important; padding: 0; margin-top: 1rem; }
+  .srv-shell .srv-hero-trend { display: none; }
+  .srv-shell .srv-hero-n { font-size: 4.25rem; }
+  .srv-shell .srv-peaknote { display: none; }
+  /* the facts: a plain list (the name on the left, the value on the right), not a stack of bordered pills */
+  .srv-shell .pp-ribbon { gap: 0; margin-top: .5rem; }
+  .srv-shell .pp-chip { background: none !important; box-shadow: none !important; border-radius: 0; padding: .55rem .1rem; border-bottom: 1px solid rgb(255 255 255 / .12); font-weight: 650; }
+  .srv-shell .pp-chip:last-child { border-bottom: 0; }
+  .srv-shell .pp-more-btn { margin-top: .25rem; }
+  /* the buttons: «Connect» takes the row, «Copy» and «More» share the next one */
+  .srv-shell .srv-actions { grid-template-columns: minmax(0, 1fr) auto; margin-top: 1.1rem; }
+  .srv-shell .srv-actions .srv-cta { grid-column: 1 / -1; }
+  .srv-shell .srv-actions .srv-addr-btn { width: auto; }
+  .srv-shell .srv-act-group { display: contents; }
+  .srv-shell .srv-act-group > * { flex: none; }
+}
+/* the sections: the arrow of folding appears when the pointer is on the title (it stays for keyboard and touch) */
+@media (hover: hover) {
+  .srv-sec .srv-sec-chev { opacity: 0; transition: opacity .15s ease; }
+  .srv-sec:hover .srv-sec-chev, .srv-sec-btn:focus-visible .srv-sec-chev { opacity: .7; }
+}
+.srv-sec-head { margin-bottom: .6rem; }
+/* the chart: the hints that repeat what the chart does are quiet */
+.hc-tip { display: none; }
+.hc-legend { opacity: .8; }
+@media (min-width: 1024px) { .srv-shell .srv-page .h-\[320px\], .srv-shell .hc-svg { max-height: 300px; } }
+@media (min-width: 1024px) { .srv-shell .srv-who { background: none; padding-left: 0; } .srv-shell .srv-who:hover { background: none; } }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/gallery.css" << '__COREGSM_EOF__'

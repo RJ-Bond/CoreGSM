@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react';
-import { applyConnectTemplates, connectGuide } from '../../connectGuides';
+import { applyConnectTemplates, connectGuide, fillConnectTemplate } from '../../connectGuides';
 import { useGameProfiles } from '../../gameProfiles';
 import { t, useI18n } from '../../i18n';
 import { IconCheckMark, IconCopy, Notice, toast } from '../../ui';
@@ -42,7 +42,8 @@ export default function ConnectTab({ game, address, sections }: { game: string; 
   const uid = useId();
   const profile = useGameProfiles()?.[game];
   const guide = applyConnectTemplates(connectGuide(game, address), profile?.connect, address, profile?.defaultPort);
-  const note = typeof profile?.connect?.note === 'string' ? profile.connect.note.trim() : '';
+  // the note may use {address}, {host} and {port} like the other templates of the game
+  const note = typeof profile?.connect?.note === 'string' ? fillConnectTemplate(profile.connect.note.trim(), address, profile?.defaultPort) : '';
   const addr = guide.copy.find((c) => c.label === 'Адрес') ?? { label: 'Адрес', value: address.trim() };
   const command = guide.copy.find((c) => /команд/i.test(c.label));
   const steam = guide.link && guide.link.href.startsWith('steam://') ? guide.link : null;
