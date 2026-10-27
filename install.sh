@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="43eef2031acb"
+COREGSM_BUILD="ccf9cc525f73"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.0.0.53"
+COREGSM_VERSION="1.0.0.54"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -52586,7 +52586,7 @@ import { onAccentChange, paintBrand, useAutoAccent } from './accent';
 import NotificationBell from './components/NotificationBell';
 import AttentionBell from './components/AttentionBell';
 import RulesBanner from './components/RulesBanner';
-import { AppFooter, BotPill, ProfileMenu, RouteProgress, Tooltips, restoreScroll, useHideOnScroll, usePanelPulse, useScrollMemory } from './components/ShellExtras';
+import { AppFooter, ProfileMenu, RouteProgress, Tooltips, restoreScroll, useHideOnScroll, usePanelPulse, useScrollMemory } from './components/ShellExtras';
 import NotFound from './components/NotFound';
 import { ConfirmHost } from './confirm';
 import Login from './pages/Login';
@@ -53004,16 +53004,16 @@ export default function App() {
             <Wordmark className="hdr-word min-w-0 truncate" />
           </a>
           {/* desktop navigation; on phones the same sections live in the bottom bar */}
-          <nav className="seg hdr-nav ml-2 hidden md:inline-flex" aria-label={t('nav.sections')}>
+          <nav className="seg hdr-nav hidden md:inline-flex" aria-label={t('nav.sections')}>
             {visible.map((p) => (
               <a key={p.id} href={`/${p.id}`} aria-current={page === p.id ? 'page' : undefined} className="seg-item py-1.5!">
-                {t(p.label)}
+                {p.icon()}<span>{t(p.label)}</span>
                 {p.id === 'news' && page !== 'news' && <NewsUnreadDot />}
                 {p.id === 'admin' && updateAvailable && dot}
               </a>
             ))}
           </nav>
-          <div className="flex shrink-0 items-center gap-1.5 sm:gap-2 md:ml-auto">
+          <div className="hdr-actions flex shrink-0 items-center gap-1 sm:gap-1.5">
             <button
               type="button"
               onClick={() => setPaletteOpen(true)}
@@ -53023,13 +53023,11 @@ export default function App() {
               title={t('hdr.searchTitle')}
             >
               <IconSearch />
-              <span className="hdr-lbl">{t('hdr.search')}</span>
-              <kbd className="hdr-lbl rounded-md bg-card px-1.5 py-0.5 font-sans text-xs font-bold text-mute">Ctrl K</kbd>
             </button>
-            {isAdmin && <BotPill />}
             {isAdmin && <AttentionBell />}
             {me && <NotificationBell initialUnread={me.unreadNotifications ?? 0} />}
             <ThemeToggle />
+            <i className="hdr-sep" aria-hidden />
             {me ? (
               <>
                 <ProfileMenu me={me} isStaff={isStaff} logout={() => void logout()} active={page === 'profile'} />
@@ -56673,6 +56671,22 @@ export function Gauge({ value, tone, label, display, caption, icon }: {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/HeaderIcons.tsx" << '__COREGSM_EOF__'
+import type { ReactNode } from 'react';
+
+/** small outline icons of the header menus (currentColor, decorative: the text next to them is the name) */
+const ico = (d: ReactNode) => (
+  <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+    {d}
+  </svg>
+);
+
+export const MenuUser = () => ico(<><circle cx="12" cy="8" r="4" /><path d="M4 21c0-4 3.6-6.5 8-6.5s8 2.5 8 6.5" /></>);
+export const MenuGallery = () => ico(<><rect x="3" y="4" width="18" height="16" rx="2.5" /><circle cx="9" cy="10" r="1.8" /><path d="m21 16-5-5-8 8" /></>);
+export const MenuAdmin = () => ico(<><path d="M12 3 4 6v6c0 4.5 3.2 7.6 8 9 4.8-1.4 8-4.5 8-9V6l-8-3Z" /><path d="m9 12 2 2 4-4" /></>);
+export const MenuLogout = () => ico(<><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><path d="m16 17 5-5-5-5M21 12H9" /></>);
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
   cat > "$APP_DIR/core-frontend/src/components/HealthHistoryCard.tsx" << '__COREGSM_EOF__'
 import { useEffect, useState } from 'react';
 import { api } from '../api';
@@ -58173,6 +58187,7 @@ import { useAppearance } from '../appearance';
 import { t, useI18n, type TKey } from '../i18n';
 import { UserAvatar } from '../ui';
 import { FootCommunity, FootGallery, FootNews, FootServers, FootStatus, FootTag } from './FooterIcons';
+import { MenuAdmin, MenuGallery, MenuLogout, MenuUser } from './HeaderIcons';
 import '../styles/shell.css';
 
 // ---------- progress strip ----------
@@ -58231,31 +58246,6 @@ function paintFavicon(state: 'ok' | 'bad' | null) {
 interface Pulse { now: { players: number; online: number; servers: number } }
 
 /** players now (for «(12) Серверы · CoreGSM») and a dot on the favicon: green when everything is up, red when something is down */
-/** administrators: the state of the Discord bot in the header, a link to its settings */
-export function BotPill() {
-  useI18n();
-  const [state, setState] = useState<'idle' | 'connecting' | 'online' | 'error' | null>(null);
-  useEffect(() => {
-    let stop = false;
-    const load = () => {
-      if (document.hidden) return;
-      api<{ state: 'idle' | 'connecting' | 'online' | 'error' }>('/bot/status').then((r) => { if (!stop) setState(r.state); }).catch(() => { if (!stop) setState(null); });
-    };
-    load();
-    const timer = setInterval(load, 60_000);
-    return () => { stop = true; clearInterval(timer); };
-  }, []);
-  if (!state) return null;
-  const label = t(`hdr.bot.${state}` as TKey);
-  const color = state === 'online' ? 'bg-ok' : state === 'error' ? 'bg-bad' : state === 'connecting' ? 'bg-warn' : 'bg-mute';
-  return (
-    <a href="/admin/discord" className="btn-soft hdr-search" title={t('hdr.bot.tip', { s: label })} aria-label={t('hdr.bot.tip', { s: label })}>
-      <span className={`inline-block size-2.5 rounded-full ${color}`} aria-hidden />
-      <span className="hdr-lbl">{label}</span>
-    </a>
-  );
-}
-
 export function usePanelPulse(enabled: boolean): number {
   const [players, setPlayers] = useState(0);
   useEffect(() => {
@@ -58340,7 +58330,6 @@ export function ProfileMenu({ me, isStaff, logout, active }: { me: Me; isStaff: 
         onClick={() => setOpen((v) => !v)}
       >
         <UserAvatar name={me.username} url={me.avatarUrl} size={32} tone="grad" className="rounded-full!" />
-        <span className="hdr-lbl truncate">{me.username}</span>
       </button>
       {open && (
         <div className="pm-menu panel panel-raised" role="menu" onClick={() => setOpen(false)}>
@@ -58351,15 +58340,15 @@ export function ProfileMenu({ me, isStaff, logout, active }: { me: Me; isStaff: 
               <div className="text-xs font-bold text-mute">{me.role === 'admin' ? 'Администратор' : me.role === 'moderator' ? 'Модератор' : 'Игрок'}</div>
             </div>
           </div>
-          <a role="menuitem" className={link} href="/profile">{t('hdr.profile')}</a>
-          <a role="menuitem" className={link} href="/gallery">Моя галерея</a>
-          {isStaff && <a role="menuitem" className={link} href="/admin">{t('nav.admin')}</a>}
+          <a role="menuitem" className={`${link} pm-ico`} href="/profile"><MenuUser />{t('hdr.profile')}</a>
+          <a role="menuitem" className={`${link} pm-ico`} href="/gallery"><MenuGallery />Моя галерея</a>
+          {isStaff && <a role="menuitem" className={`${link} pm-ico`} href="/admin"><MenuAdmin />{t('nav.admin')}</a>}
           <div className="pm-sep" role="separator" />
           {/* one tap, and the menu stays open so both can be set at once */}
           <button type="button" role="menuitemcheckbox" aria-checked={look.largeText} className={`${link} pm-toggle`} onClick={(e) => { e.stopPropagation(); setLook({ largeText: !look.largeText }); }}>{t('pf.a11y.text')}</button>
           <button type="button" role="menuitemcheckbox" aria-checked={look.liteData} className={`${link} pm-toggle`} onClick={(e) => { e.stopPropagation(); setLook({ liteData: !look.liteData }); }}>{t('pf.a11y.lite')}</button>
           <div className="pm-sep" role="separator" />
-          <button type="button" role="menuitem" className={`${link} is-danger`} onClick={logout}>{t('hdr.logout')}</button>
+          <button type="button" role="menuitem" className={`${link} pm-ico is-danger`} onClick={logout}><MenuLogout />{t('hdr.logout')}</button>
         </div>
       )}
     </div>
@@ -91979,10 +91968,8 @@ html[data-contrast='high'] :is(.btn-link, .btn-link-danger) { text-decoration-co
 html[data-motion='reduce'] :is(.btn, .btn-soft, .btn-outline, .btn-ghost, .btn-danger, .btn-danger-solid, .btn-solid-danger, .btn-success, .btn-success-solid, .btn-warn, .btn-link, .btn-icon, .btn-icon-sm, .btn-icon-ghost, .btn-icon-danger, .row-act, .btn-on-grad, .btn-ghost-on-grad, .btn-cta, .btn-glass, .btn-glass-quiet, .btn-icon-glass, .pp-copy) { transition: none !important; }
 
 /* header search: a round icon button on phones, a pill with the label and the shortcut from md up */
-.hdr-search { --b-px: .9rem; --b-fg: rgb(var(--mute)); --b-fg-h: rgb(var(--link)); height: 2.5rem; min-height: 2.5rem; white-space: nowrap; }
+.hdr-search { --b-px: 0; --b-fg: rgb(var(--mute)); --b-fg-h: rgb(var(--ink)); width: max(2.5rem, var(--tap, 0px)); height: max(2.5rem, var(--tap, 0px)); min-height: 2.5rem; padding: 0; justify-content: center; white-space: nowrap; }
 .hdr-search > svg { flex: none; }
-/* the header: round icon buttons of one size; the labels («Поиск Ctrl K», «Бот в сети») only where there is room for them */
-@container hdr (max-width: 1319px) { .hdr-search { width: max(2.5rem, var(--tap, 0px)); height: max(2.5rem, var(--tap, 0px)); padding: 0; justify-content: center; } }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/community.css" << '__COREGSM_EOF__'
@@ -94264,16 +94251,22 @@ __COREGSM_EOF__
 .pm { position: relative; }
 .pm-btn { display: flex; align-items: center; justify-content: center; gap: 8px; border-radius: var(--r-pill); font-weight: 800; transition: background-color .15s ease; height: 44px; width: 44px; }
 @media (min-width: 640px) { .pm-btn { height: 2.5rem; width: 2.5rem; } }
-/* the name next to the avatar only on wide screens, otherwise the avatar is a round button like its neighbours */
-/* the labels of the header (search, bot, name) appear only when the HEADER itself is wide enough for all of them: the page is at most 72rem wide on most screens, so the width of the window says nothing */
-.hdr { container: hdr / inline-size; }
-.hdr-lbl { display: none; }
-@container hdr (min-width: 1320px) {
-  .hdr-lbl { display: inline; }
-  .pm-btn { height: auto; width: auto; max-width: 11rem; padding: 4px 14px 4px 4px; }
-}
-/* one capsule, not a capsule inside a capsule: the sections are plain, only the current one has a pill */
+/* the header «Calm»: three zones (the logo, the sections in the middle, quiet actions on the right behind a thin divider); the actions are ghost icon buttons of one size, the current section is the only pill */
 .hdr .seg.hdr-nav { background: transparent; box-shadow: none; }
+@media (min-width: 768px) {
+  .hdr { display: grid; grid-template-columns: 1fr auto 1fr; }
+  .hdr > .hdr-nav { justify-self: center; }
+  .hdr > .hdr-actions { justify-self: end; }
+}
+.hdr-nav .seg-item { gap: 7px; padding-inline: 14px; }
+.hdr-nav .seg-item > svg { flex: none; width: 16px; height: 16px; opacity: .85; }
+.hdr-nav[data-ind]::before { background: rgb(var(--brand) / .2); box-shadow: inset 0 0 0 1px rgb(var(--brand) / .42); }
+.hdr-nav:not([data-ind]) .seg-item[aria-current='page'] { background: rgb(var(--brand) / .2); box-shadow: inset 0 0 0 1px rgb(var(--brand) / .42); }
+.hdr .hdr-search, .hdr .btn-icon { --b-bg: transparent; --b-bg-h: rgb(var(--ink) / .07); --b-ring-h: inset 0 0 0 0 transparent; }
+.hdr-sep { display: none; width: 1px; height: 22px; margin: 0 6px; flex: none; background: rgb(var(--line)); }
+@media (min-width: 768px) { .hdr-sep { display: block; } }
+.pm-item.pm-ico { display: flex; align-items: center; gap: 10px; }
+.pm-item.pm-ico > svg { flex: none; opacity: .8; }
 /* the sections of the header never shrink or fade out: the buttons on the right give way first */
 @media (min-width: 1100px) { .seg.hdr-nav { overflow: visible; max-width: none; flex-shrink: 0; } }
 @media (max-width: 1099px) { .hdr-word { display: none; } }

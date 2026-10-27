@@ -9,6 +9,7 @@ import { useAppearance } from '../appearance';
 import { t, useI18n, type TKey } from '../i18n';
 import { UserAvatar } from '../ui';
 import { FootCommunity, FootGallery, FootNews, FootServers, FootStatus, FootTag } from './FooterIcons';
+import { MenuAdmin, MenuGallery, MenuLogout, MenuUser } from './HeaderIcons';
 import '../styles/shell.css';
 
 // ---------- progress strip ----------
@@ -67,31 +68,6 @@ function paintFavicon(state: 'ok' | 'bad' | null) {
 interface Pulse { now: { players: number; online: number; servers: number } }
 
 /** players now (for «(12) Серверы · CoreGSM») and a dot on the favicon: green when everything is up, red when something is down */
-/** administrators: the state of the Discord bot in the header, a link to its settings */
-export function BotPill() {
-  useI18n();
-  const [state, setState] = useState<'idle' | 'connecting' | 'online' | 'error' | null>(null);
-  useEffect(() => {
-    let stop = false;
-    const load = () => {
-      if (document.hidden) return;
-      api<{ state: 'idle' | 'connecting' | 'online' | 'error' }>('/bot/status').then((r) => { if (!stop) setState(r.state); }).catch(() => { if (!stop) setState(null); });
-    };
-    load();
-    const timer = setInterval(load, 60_000);
-    return () => { stop = true; clearInterval(timer); };
-  }, []);
-  if (!state) return null;
-  const label = t(`hdr.bot.${state}` as TKey);
-  const color = state === 'online' ? 'bg-ok' : state === 'error' ? 'bg-bad' : state === 'connecting' ? 'bg-warn' : 'bg-mute';
-  return (
-    <a href="/admin/discord" className="btn-soft hdr-search" title={t('hdr.bot.tip', { s: label })} aria-label={t('hdr.bot.tip', { s: label })}>
-      <span className={`inline-block size-2.5 rounded-full ${color}`} aria-hidden />
-      <span className="hdr-lbl">{label}</span>
-    </a>
-  );
-}
-
 export function usePanelPulse(enabled: boolean): number {
   const [players, setPlayers] = useState(0);
   useEffect(() => {
@@ -176,7 +152,6 @@ export function ProfileMenu({ me, isStaff, logout, active }: { me: Me; isStaff: 
         onClick={() => setOpen((v) => !v)}
       >
         <UserAvatar name={me.username} url={me.avatarUrl} size={32} tone="grad" className="rounded-full!" />
-        <span className="hdr-lbl truncate">{me.username}</span>
       </button>
       {open && (
         <div className="pm-menu panel panel-raised" role="menu" onClick={() => setOpen(false)}>
@@ -187,15 +162,15 @@ export function ProfileMenu({ me, isStaff, logout, active }: { me: Me; isStaff: 
               <div className="text-xs font-bold text-mute">{me.role === 'admin' ? 'Администратор' : me.role === 'moderator' ? 'Модератор' : 'Игрок'}</div>
             </div>
           </div>
-          <a role="menuitem" className={link} href="/profile">{t('hdr.profile')}</a>
-          <a role="menuitem" className={link} href="/gallery">Моя галерея</a>
-          {isStaff && <a role="menuitem" className={link} href="/admin">{t('nav.admin')}</a>}
+          <a role="menuitem" className={`${link} pm-ico`} href="/profile"><MenuUser />{t('hdr.profile')}</a>
+          <a role="menuitem" className={`${link} pm-ico`} href="/gallery"><MenuGallery />Моя галерея</a>
+          {isStaff && <a role="menuitem" className={`${link} pm-ico`} href="/admin"><MenuAdmin />{t('nav.admin')}</a>}
           <div className="pm-sep" role="separator" />
           {/* one tap, and the menu stays open so both can be set at once */}
           <button type="button" role="menuitemcheckbox" aria-checked={look.largeText} className={`${link} pm-toggle`} onClick={(e) => { e.stopPropagation(); setLook({ largeText: !look.largeText }); }}>{t('pf.a11y.text')}</button>
           <button type="button" role="menuitemcheckbox" aria-checked={look.liteData} className={`${link} pm-toggle`} onClick={(e) => { e.stopPropagation(); setLook({ liteData: !look.liteData }); }}>{t('pf.a11y.lite')}</button>
           <div className="pm-sep" role="separator" />
-          <button type="button" role="menuitem" className={`${link} is-danger`} onClick={logout}>{t('hdr.logout')}</button>
+          <button type="button" role="menuitem" className={`${link} pm-ico is-danger`} onClick={logout}><MenuLogout />{t('hdr.logout')}</button>
         </div>
       )}
     </div>
