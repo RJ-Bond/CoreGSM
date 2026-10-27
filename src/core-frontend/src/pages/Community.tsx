@@ -567,6 +567,8 @@ export default function CommunityPage() {
 
       <PollsCard />
 
+      {/* from lg up the blocks form a mosaic of tiles of different sizes; below that they are one column, as before */}
+      <div className="cm-bento">
       <section id="cm-now" className="tile cm-hero fade-in">
         <div className="cm-hero-main">
           <div className="cm-k">{t('cm.now.k')}</div>
@@ -598,22 +600,19 @@ export default function CommunityPage() {
         </dl>
       </section>
 
-      <div className="grid gap-5 lg:grid-cols-2">
-        <HotServer servers={c.servers} />
-        <GamesShare servers={c.servers} />
+      <div className="b-hot"><HotServer servers={c.servers} /></div>
+      <div className="b-games"><GamesShare servers={c.servers} /></div>
+
+      {seasons && hasSeason && <div className="b-wide"><SeasonBlocks s={seasons} mine={mine} /></div>}
+
+      <div className="b-when"><WhenBlock c={c} /></div>
+      <div className="b-top"><TopBlock c={c} mine={mine} /></div>
+
+      <div className="b-feed"><FeedBlock c={c} filter={feedFilter} setFilter={setFeedFilter} /></div>
+      <div className="b-gal"><GalleryStrip /></div>
+
+      <div className="b-wide"><ServersBlock servers={c.servers} /></div>
       </div>
-
-      {seasons && hasSeason && <SeasonBlocks s={seasons} mine={mine} />}
-
-      <WhenBlock c={c} />
-
-      <TopBlock c={c} mine={mine} />
-
-      <FeedBlock c={c} filter={feedFilter} setFilter={setFeedFilter} />
-
-      <GalleryStrip />
-
-      <ServersBlock servers={c.servers} />
     </div>
   );
 }
