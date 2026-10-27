@@ -3,8 +3,7 @@ import react from '@vitejs/plugin-react';
 
 export default defineConfig({
   plugins: [react()],
-  // COREGSM_POLL=1: the local Docker stand, where files changed in Windows send no events into the container
-  server: { watch: process.env.COREGSM_POLL ? { usePolling: true, interval: 300 } : undefined, proxy: { '/api': process.env.COREGSM_API ?? 'http://localhost:3000', '/badge': process.env.COREGSM_API ?? 'http://localhost:3000', '/widget': process.env.COREGSM_API ?? 'http://localhost:3000' } },
+  server: { proxy: { '/api': process.env.COREGSM_API ?? 'http://localhost:3000', '/badge': process.env.COREGSM_API ?? 'http://localhost:3000', '/widget': process.env.COREGSM_API ?? 'http://localhost:3000' } },
   build: {
     rollupOptions: {
       output: {
