@@ -178,3 +178,26 @@ html[data-motion='reduce'] .cm-feed-i { animation: none; }
 }
 .pl-ava { overflow: hidden; }
 .pl-ava-img { width: 100% !important; height: 100% !important; border-radius: inherit; }
+
+/* ---------- the community page «Bento»: a mosaic of tiles of different sizes (one column below lg) ---------- */
+.cm-bento { display: grid; gap: 1.25rem; grid-template-columns: minmax(0, 1fr); }
+.cm-bento > * { min-width: 0; }
+.cm-bento > div > .tile, .cm-bento > div > section.tile { height: 100%; }
+@media (min-width: 1024px) {
+  .cm-bento { grid-template-columns: repeat(12, minmax(0, 1fr)); }
+  .cm-bento > .cm-hero, .cm-bento > .b-wide { grid-column: 1 / -1; }
+  .cm-bento > .b-hot { grid-column: span 5; }
+  .cm-bento > .b-games { grid-column: span 7; }
+  .cm-bento > .b-when { grid-column: span 7; }
+  .cm-bento > .b-top { grid-column: span 5; }
+  .cm-bento > .b-feed { grid-column: span 7; }
+  .cm-bento > .b-gal { grid-column: span 5; }
+}
+/* every tile has its own quiet tint, like the tiles of a dashboard (the colours are soft, so both themes read well) */
+.cm-bento > .cm-hero { background: linear-gradient(160deg, rgb(var(--brand) / .2), rgb(var(--brand) / .05) 70%), rgb(var(--card)); }
+.cm-bento > .b-hot > .tile { background: linear-gradient(160deg, rgb(45 212 191 / .13), transparent 70%), rgb(var(--card)); }
+.cm-bento > .b-games > .tile { background: linear-gradient(160deg, rgb(139 92 246 / .12), transparent 70%), rgb(var(--card)); }
+.cm-bento > .b-when > .tile { background: linear-gradient(160deg, rgb(34 197 94 / .1), transparent 70%), rgb(var(--card)); }
+.cm-bento > .b-top > .tile { background: linear-gradient(160deg, rgb(250 204 21 / .11), transparent 70%), rgb(var(--card)); }
+.cm-bento > .b-feed > .tile { background: linear-gradient(160deg, rgb(244 114 182 / .1), transparent 70%), rgb(var(--card)); }
+.cm-bento > .b-gal > .tile, .cm-bento > .b-gal > section { background: linear-gradient(160deg, rgb(249 115 22 / .11), transparent 70%), rgb(var(--card)); }

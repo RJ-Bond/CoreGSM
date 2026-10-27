@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="69329f426b53"
+COREGSM_BUILD="47af7ab0abc5"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.0.0.62"
+COREGSM_VERSION="1.0.0.63"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -82169,6 +82169,8 @@ export default function CommunityPage() {
 
       <PollsCard />
 
+      {/* from lg up the blocks form a mosaic of tiles of different sizes; below that they are one column, as before */}
+      <div className="cm-bento">
       <section id="cm-now" className="tile cm-hero fade-in">
         <div className="cm-hero-main">
           <div className="cm-k">{t('cm.now.k')}</div>
@@ -82200,22 +82202,19 @@ export default function CommunityPage() {
         </dl>
       </section>
 
-      <div className="grid gap-5 lg:grid-cols-2">
-        <HotServer servers={c.servers} />
-        <GamesShare servers={c.servers} />
+      <div className="b-hot"><HotServer servers={c.servers} /></div>
+      <div className="b-games"><GamesShare servers={c.servers} /></div>
+
+      {seasons && hasSeason && <div className="b-wide"><SeasonBlocks s={seasons} mine={mine} /></div>}
+
+      <div className="b-when"><WhenBlock c={c} /></div>
+      <div className="b-top"><TopBlock c={c} mine={mine} /></div>
+
+      <div className="b-feed"><FeedBlock c={c} filter={feedFilter} setFilter={setFeedFilter} /></div>
+      <div className="b-gal"><GalleryStrip /></div>
+
+      <div className="b-wide"><ServersBlock servers={c.servers} /></div>
       </div>
-
-      {seasons && hasSeason && <SeasonBlocks s={seasons} mine={mine} />}
-
-      <WhenBlock c={c} />
-
-      <TopBlock c={c} mine={mine} />
-
-      <FeedBlock c={c} filter={feedFilter} setFilter={setFeedFilter} />
-
-      <GalleryStrip />
-
-      <ServersBlock servers={c.servers} />
     </div>
   );
 }
@@ -92205,6 +92204,29 @@ html[data-motion='reduce'] .cm-feed-i { animation: none; }
 }
 .pl-ava { overflow: hidden; }
 .pl-ava-img { width: 100% !important; height: 100% !important; border-radius: inherit; }
+
+/* ---------- the community page «Bento»: a mosaic of tiles of different sizes (one column below lg) ---------- */
+.cm-bento { display: grid; gap: 1.25rem; grid-template-columns: minmax(0, 1fr); }
+.cm-bento > * { min-width: 0; }
+.cm-bento > div > .tile, .cm-bento > div > section.tile { height: 100%; }
+@media (min-width: 1024px) {
+  .cm-bento { grid-template-columns: repeat(12, minmax(0, 1fr)); }
+  .cm-bento > .cm-hero, .cm-bento > .b-wide { grid-column: 1 / -1; }
+  .cm-bento > .b-hot { grid-column: span 5; }
+  .cm-bento > .b-games { grid-column: span 7; }
+  .cm-bento > .b-when { grid-column: span 7; }
+  .cm-bento > .b-top { grid-column: span 5; }
+  .cm-bento > .b-feed { grid-column: span 7; }
+  .cm-bento > .b-gal { grid-column: span 5; }
+}
+/* every tile has its own quiet tint, like the tiles of a dashboard (the colours are soft, so both themes read well) */
+.cm-bento > .cm-hero { background: linear-gradient(160deg, rgb(var(--brand) / .2), rgb(var(--brand) / .05) 70%), rgb(var(--card)); }
+.cm-bento > .b-hot > .tile { background: linear-gradient(160deg, rgb(45 212 191 / .13), transparent 70%), rgb(var(--card)); }
+.cm-bento > .b-games > .tile { background: linear-gradient(160deg, rgb(139 92 246 / .12), transparent 70%), rgb(var(--card)); }
+.cm-bento > .b-when > .tile { background: linear-gradient(160deg, rgb(34 197 94 / .1), transparent 70%), rgb(var(--card)); }
+.cm-bento > .b-top > .tile { background: linear-gradient(160deg, rgb(250 204 21 / .11), transparent 70%), rgb(var(--card)); }
+.cm-bento > .b-feed > .tile { background: linear-gradient(160deg, rgb(244 114 182 / .1), transparent 70%), rgb(var(--card)); }
+.cm-bento > .b-gal > .tile, .cm-bento > .b-gal > section { background: linear-gradient(160deg, rgb(249 115 22 / .11), transparent 70%), rgb(var(--card)); }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/detail.css" << '__COREGSM_EOF__'
