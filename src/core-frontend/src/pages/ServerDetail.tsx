@@ -545,6 +545,8 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
     <div className="srv-page space-y-3.5" style={{ ['--srv-accent' as string]: accent }}>
       {back}
 
+      {/* from lg up: the banner is a column on the left (it stays in view), the tabs and the content are on the right */}
+      <div className="srv-shell">
       <article
         className={`${emblemStyle(s.coverUrl, s.game).className ? 'emblem-host' : ''} srv-banner srv-glow srv-${kind} depth relative rounded-ui-xl p-4 text-white sm:p-6`}
         style={emblemStyle(s.coverUrl, s.game).style}
@@ -563,7 +565,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
         {wentOffline && <span className="flash-ring" aria-hidden />}
 
         {/* title row: name, status, game */}
-        <div className="relative flex items-start gap-3.5 sm:gap-4">
+        <div className="srv-title relative flex items-start gap-3.5 sm:gap-4">
           <span className="srv-ico"><GameAvatar game={s.game} size={72} glass vtId={s.id} /></span>
           <div className="min-w-0 flex-1">
             <h1 className="wrap-break-word text-[22px] font-extrabold leading-tight tracking-[-0.02em] sm:text-[28px]">{s.name}</h1>
@@ -617,7 +619,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
         {/* one main button; copy and subscribe are equal glass ones; the rest lives in «Ещё».
             On phones «Подключиться» takes the whole first row; once these buttons scroll away a small bar with it
             (and «Подписаться») floats above the bottom navigation. */}
-        <div ref={actionsRef} className="relative mt-4 grid grid-cols-[minmax(0,1fr)_auto] gap-2 sm:flex sm:flex-wrap sm:items-center">
+        <div ref={actionsRef} className="srv-actions relative mt-4 grid grid-cols-[minmax(0,1fr)_auto] gap-2 sm:flex sm:flex-wrap sm:items-center">
           <a className="btn-cta srv-cta max-sm:col-span-2" href={connectHref} onClick={onConnect}>
             <span>{connectLabel}</span>
             <small className="srv-cta-addr">{s.address}</small>
@@ -637,6 +639,8 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
           </div>
         </div>
       </article>
+
+      <div className="srv-main min-w-0 space-y-3.5">
       <ErrorLine text={error} />
 
       <ServerTabs
@@ -657,6 +661,8 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
 
       <div key={tab || 'overview'} className={slide.dir ? `tab-slide-${slide.dir}` : undefined} role="tabpanel" id={panelDomId(tab)} aria-labelledby={tabDomId(tab)} {...swipe}>
         <BlockBoundary label={tab || 'overview'}>{panel}</BlockBoundary>
+      </div>
+      </div>
       </div>
 
       {me && (

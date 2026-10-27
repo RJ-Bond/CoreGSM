@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="3f31c3823a58"
+COREGSM_BUILD="9dd2e3771bed"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.0.0.60"
+COREGSM_VERSION="1.0.0.61"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -86561,6 +86561,8 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
     <div className="srv-page space-y-3.5" style={{ ['--srv-accent' as string]: accent }}>
       {back}
 
+      {/* from lg up: the banner is a column on the left (it stays in view), the tabs and the content are on the right */}
+      <div className="srv-shell">
       <article
         className={`${emblemStyle(s.coverUrl, s.game).className ? 'emblem-host' : ''} srv-banner srv-glow srv-${kind} depth relative rounded-ui-xl p-4 text-white sm:p-6`}
         style={emblemStyle(s.coverUrl, s.game).style}
@@ -86579,7 +86581,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
         {wentOffline && <span className="flash-ring" aria-hidden />}
 
         {/* title row: name, status, game */}
-        <div className="relative flex items-start gap-3.5 sm:gap-4">
+        <div className="srv-title relative flex items-start gap-3.5 sm:gap-4">
           <span className="srv-ico"><GameAvatar game={s.game} size={72} glass vtId={s.id} /></span>
           <div className="min-w-0 flex-1">
             <h1 className="wrap-break-word text-[22px] font-extrabold leading-tight tracking-[-0.02em] sm:text-[28px]">{s.name}</h1>
@@ -86633,7 +86635,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
         {/* one main button; copy and subscribe are equal glass ones; the rest lives in «Ещё».
             On phones «Подключиться» takes the whole first row; once these buttons scroll away a small bar with it
             (and «Подписаться») floats above the bottom navigation. */}
-        <div ref={actionsRef} className="relative mt-4 grid grid-cols-[minmax(0,1fr)_auto] gap-2 sm:flex sm:flex-wrap sm:items-center">
+        <div ref={actionsRef} className="srv-actions relative mt-4 grid grid-cols-[minmax(0,1fr)_auto] gap-2 sm:flex sm:flex-wrap sm:items-center">
           <a className="btn-cta srv-cta max-sm:col-span-2" href={connectHref} onClick={onConnect}>
             <span>{connectLabel}</span>
             <small className="srv-cta-addr">{s.address}</small>
@@ -86653,6 +86655,8 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
           </div>
         </div>
       </article>
+
+      <div className="srv-main min-w-0 space-y-3.5">
       <ErrorLine text={error} />
 
       <ServerTabs
@@ -86673,6 +86677,8 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
 
       <div key={tab || 'overview'} className={slide.dir ? `tab-slide-${slide.dir}` : undefined} role="tabpanel" id={panelDomId(tab)} aria-labelledby={tabDomId(tab)} {...swipe}>
         <BlockBoundary label={tab || 'overview'}>{panel}</BlockBoundary>
+      </div>
+      </div>
       </div>
 
       {me && (
@@ -92781,6 +92787,28 @@ html[data-motion='reduce'] :is(.srv-record, .srv-swipe-hint, .srv-slots-bar > i.
 .off-cell.part { background: rgb(var(--warn) / .8); }
 .off-ticks { display: flex; justify-content: space-between; margin-top: 4px; font-size: var(--fs-xs); font-weight: 600; color: rgb(var(--mute)); }
 .off-toggle { justify-self: start; }
+
+/* ---------- the server page «Sidebar»: from lg up the banner is a column on the left, the tabs and the content on the right ---------- */
+@media (min-width: 1024px) {
+  .srv-shell { display: grid; grid-template-columns: 19.5rem minmax(0, 1fr); gap: 1.25rem; align-items: start; }
+  /* the column stays in view while the content scrolls (only when the window is tall enough to show all of it) */
+  @media (min-height: 860px) { .srv-shell > .srv-banner { position: sticky; top: 5.25rem; } }
+  .srv-shell > .srv-banner { padding: 1.25rem; }
+  .srv-shell .srv-title { flex-direction: column; align-items: flex-start; gap: .85rem; }
+  .srv-shell .srv-title h1 { font-size: 1.3rem; }
+  .srv-shell .srv-title > div { width: 100%; }
+  /* the counter, the bar and the names stack: the two-column grid of the wide banner does not fit a column */
+  .srv-shell .srv-hero { display: block; padding-inline: 0; }
+  .srv-shell .srv-hero > * { grid-column: auto; }
+  .srv-shell .srv-hero .srv-hero-bar { margin-top: .85rem; }
+  .srv-shell .pp-ribbon { flex-direction: column; align-items: stretch; gap: 6px; }
+  .srv-shell .pp-chip { max-width: 100%; border-radius: var(--r-md); }
+  .srv-shell .srv-actions { display: grid; grid-template-columns: minmax(0, 1fr); }
+  .srv-shell .srv-actions .srv-cta, .srv-shell .srv-actions .srv-addr-btn { width: 100%; justify-content: center; }
+  .srv-shell .srv-act-group { display: flex; gap: .5rem; }
+  .srv-shell .srv-act-group > * { flex: 1; }
+}
+@media (min-width: 1024px) { .srv-shell .srv-tabs > .seg-item { padding: .5rem .7rem .5rem .6rem; } .srv-shell .srv-tabs { max-width: 100%; } }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/gallery.css" << '__COREGSM_EOF__'
