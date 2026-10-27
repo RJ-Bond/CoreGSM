@@ -43,7 +43,7 @@
       }
     }
     if (phone && el.matches('button, [role=tab], select, input:not([type=hidden]):not([type=checkbox]):not([type=radio])') && (r.width < 28 || r.height < 28)) tiny.push(`${name(el)} ${Math.round(r.width)}x${Math.round(r.height)}`);
-    if (el.matches('button, a[href]') && !(el.innerText || '').trim() && !el.getAttribute('aria-label') && !el.getAttribute('title') && !el.querySelector('img[alt]:not([alt=""])')) noName.push(`${name(el)} ${el.outerHTML.slice(0, 110).replace(/s+/g, ' ')}`);
+    if (el.matches('button, a[href]') && !(el.innerText || '').trim() && !el.getAttribute('aria-label') && !el.getAttribute('title') && !el.querySelector('img[alt]:not([alt=""])')) noName.push(`${name(el)} ${el.outerHTML.slice(0, 110).replace(/\s+/g, ' ')}`);
   }
   // the sliding pill under the current tab must sit exactly on it (it drifted when a link sat in a positioned wrapper)
   const pill = document.querySelector('.adm-ind');

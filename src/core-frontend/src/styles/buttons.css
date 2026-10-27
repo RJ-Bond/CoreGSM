@@ -352,7 +352,5 @@ html[data-contrast='high'] :is(.btn-link, .btn-link-danger) { text-decoration-co
 html[data-motion='reduce'] :is(.btn, .btn-soft, .btn-outline, .btn-ghost, .btn-danger, .btn-danger-solid, .btn-solid-danger, .btn-success, .btn-success-solid, .btn-warn, .btn-link, .btn-icon, .btn-icon-sm, .btn-icon-ghost, .btn-icon-danger, .row-act, .btn-on-grad, .btn-ghost-on-grad, .btn-cta, .btn-glass, .btn-glass-quiet, .btn-icon-glass, .pp-copy) { transition: none !important; }
 
 /* header search: a round icon button on phones, a pill with the label and the shortcut from md up */
-.hdr-search { --b-px: .9rem; --b-fg: rgb(var(--mute)); --b-fg-h: rgb(var(--link)); height: 2.5rem; min-height: 2.5rem; white-space: nowrap; }
+.hdr-search { --b-px: 0; --b-fg: rgb(var(--mute)); --b-fg-h: rgb(var(--ink)); width: max(2.5rem, var(--tap, 0px)); height: max(2.5rem, var(--tap, 0px)); min-height: 2.5rem; padding: 0; justify-content: center; white-space: nowrap; }
 .hdr-search > svg { flex: none; }
-/* the header: round icon buttons of one size; the labels («Поиск Ctrl K», «Бот в сети») only where there is room for them */
-@container hdr (max-width: 1319px) { .hdr-search { width: max(2.5rem, var(--tap, 0px)); height: max(2.5rem, var(--tap, 0px)); padding: 0; justify-content: center; } }

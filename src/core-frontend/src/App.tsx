@@ -7,7 +7,7 @@ import { onAccentChange, paintBrand, useAutoAccent } from './accent';
 import NotificationBell from './components/NotificationBell';
 import AttentionBell from './components/AttentionBell';
 import RulesBanner from './components/RulesBanner';
-import { AppFooter, BotPill, ProfileMenu, RouteProgress, Tooltips, restoreScroll, useHideOnScroll, usePanelPulse, useScrollMemory } from './components/ShellExtras';
+import { AppFooter, ProfileMenu, RouteProgress, Tooltips, restoreScroll, useHideOnScroll, usePanelPulse, useScrollMemory } from './components/ShellExtras';
 import NotFound from './components/NotFound';
 import { ConfirmHost } from './confirm';
 import Login from './pages/Login';
@@ -425,16 +425,16 @@ export default function App() {
             <Wordmark className="hdr-word min-w-0 truncate" />
           </a>
           {/* desktop navigation; on phones the same sections live in the bottom bar */}
-          <nav className="seg hdr-nav ml-2 hidden md:inline-flex" aria-label={t('nav.sections')}>
+          <nav className="seg hdr-nav hidden md:inline-flex" aria-label={t('nav.sections')}>
             {visible.map((p) => (
               <a key={p.id} href={`/${p.id}`} aria-current={page === p.id ? 'page' : undefined} className="seg-item py-1.5!">
-                {t(p.label)}
+                {p.icon()}<span>{t(p.label)}</span>
                 {p.id === 'news' && page !== 'news' && <NewsUnreadDot />}
                 {p.id === 'admin' && updateAvailable && dot}
               </a>
             ))}
           </nav>
-          <div className="flex shrink-0 items-center gap-1.5 sm:gap-2 md:ml-auto">
+          <div className="hdr-actions flex shrink-0 items-center gap-1 sm:gap-1.5">
             <button
               type="button"
               onClick={() => setPaletteOpen(true)}
@@ -444,13 +444,11 @@ export default function App() {
               title={t('hdr.searchTitle')}
             >
               <IconSearch />
-              <span className="hdr-lbl">{t('hdr.search')}</span>
-              <kbd className="hdr-lbl rounded-md bg-card px-1.5 py-0.5 font-sans text-xs font-bold text-mute">Ctrl K</kbd>
             </button>
-            {isAdmin && <BotPill />}
             {isAdmin && <AttentionBell />}
             {me && <NotificationBell initialUnread={me.unreadNotifications ?? 0} />}
             <ThemeToggle />
+            <i className="hdr-sep" aria-hidden />
             {me ? (
               <>
                 <ProfileMenu me={me} isStaff={isStaff} logout={() => void logout()} active={page === 'profile'} />
