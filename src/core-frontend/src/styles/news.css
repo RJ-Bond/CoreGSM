@@ -129,3 +129,10 @@
 .nw-menu-btn:hover { background: rgb(var(--soft)); }
 .nw-menu-h { margin: 6px 12px 2px; font-size: var(--fs-xs); font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: rgb(var(--mute)); }
 .nw-menu-h:not(:first-child) { margin-top: 10px; }
+
+/* the news card in a narrow place («What's new» of the servers page): the same banner, a little smaller, no bleeding to the screen edges */
+.nb.nb-compact { margin-inline: 0; border-radius: var(--r-lg); box-shadow: none; }
+.nb.nb-compact .nb-banner { min-height: 7.5rem; padding: .9rem 1rem; }
+.nb.nb-compact .nb-title { font-size: 1.1rem; line-height: 1.2; }
+.nb.nb-compact .nb-body { padding: .8rem 1rem 1rem; gap: .6rem; }
+.nb.nb-compact .nb-text { font-size: .9375rem; line-height: 1.5; -webkit-line-clamp: 4; }

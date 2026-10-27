@@ -1,4 +1,4 @@
-import type { CSSProperties } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
 import type { NewsAction, NewsCategory, NewsChange, NewsReaction, PublicNews, Server } from '../../api';
 import { useI18n, t } from '../../i18n';
 import { fmtDate, fmtTime, toast } from '../../ui';
@@ -120,6 +120,34 @@ function monthFormatter(lang: 'ru' | 'en') {
     const s = f.format(new Date(y, m, 1)).replace(/\s*г\.$/, '');
     return s.charAt(0).toUpperCase() + s.slice(1);
   };
+}
+
+
+/**
+ * The same news card for a narrow place (the «What's new» block of the servers page): the banner with the rubric, the
+ * date and the headline, a short text under it, and whatever links the place wants to add.
+ */
+export function NewsBanner({ c, children }: { c: Card; children?: ReactNode }) {
+  const href = `/news/${c.id}`;
+  const gen = hasGeneratedCover(c, null);
+  return (
+    <article className="nb nb-compact" style={{ ['--nf-accent' as string]: c.accent }}>
+      <a className={`nb-banner ${gen ? 'nw-gen' : ''}`} data-v={gen ? c.id % 4 : undefined} href={href} style={gen ? genVars(c) : coverStyle(c, null)} aria-label={c.title}>
+        {gen && <span className="nw-gen-ico"><CategoryIcon category={c.category} size={72} /></span>}
+        <span className="nb-banner-in">
+          <span className="nb-chips">
+            <CategoryChip category={c.category} />
+            {c.at && <time className="nb-date" dateTime={new Date(c.at).toISOString()} title={fmtDate(c.at)}>{newsWhen(c.at)}</time>}
+          </span>
+          <h3 className="nb-title">{c.title}</h3>
+        </span>
+      </a>
+      <div className="nb-body">
+        {(c.text || c.fields.length > 0) && <div className="nb-text"><NewsText text={c.text} fields={c.fields} /></div>}
+        {children}
+      </div>
+    </article>
+  );
 }
 
 /**
