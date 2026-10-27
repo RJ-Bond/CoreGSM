@@ -571,7 +571,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
             <h1 className="wrap-break-word text-[22px] font-extrabold leading-tight tracking-[-0.02em] sm:text-[28px]">{s.name}</h1>
             <div className="mt-1.5 flex flex-wrap items-center gap-2">
               <StatusPill glass online={s.online} known={s.hasStatus} lag={lag} maintenance={!!s.maintenance} />
-              <span className="chip-glass">{gameLabel(s.game)}</span>
+              <span className="chip-glass srv-game-chip">{gameLabel(s.game)}</span>
               <LiveBadge at={s.updatedAt} />
               {isFav && <span className="chip-glass"><span aria-hidden>★</span> В избранном</span>}
             </div>

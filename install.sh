@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="6d521d322763"
+COREGSM_BUILD="b7af4e759efa"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.0.0.68"
+COREGSM_VERSION="1.0.0.69"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -132401,7 +132401,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
             <h1 className="wrap-break-word text-[22px] font-extrabold leading-tight tracking-[-0.02em] sm:text-[28px]">{s.name}</h1>
             <div className="mt-1.5 flex flex-wrap items-center gap-2">
               <StatusPill glass online={s.online} known={s.hasStatus} lag={lag} maintenance={!!s.maintenance} />
-              <span className="chip-glass">{gameLabel(s.game)}</span>
+              <span className="chip-glass srv-game-chip">{gameLabel(s.game)}</span>
               <LiveBadge at={s.updatedAt} />
               {isFav && <span className="chip-glass"><span aria-hidden>★</span> В избранном</span>}
             </div>
@@ -138678,6 +138678,24 @@ html[data-motion='reduce'] :is(.srv-record, .srv-swipe-hint, .srv-slots-bar > i.
 .hc-legend { opacity: .8; }
 @media (min-width: 1024px) { .srv-shell .srv-page .h-\[320px\], .srv-shell .hc-svg { max-height: 300px; } }
 @media (min-width: 1024px) { .srv-shell .srv-who { background: none; padding-left: 0; } .srv-shell .srv-who:hover { background: none; } }
+
+/* ---------- the server page «Sidebar», polish 2 ---------- */
+/* the dark scrim of the big card of the list leaked into this banner as a dark box around the figures: gone */
+.srv-page .srv-hero::before { content: none; }
+@media (min-width: 1024px) {
+  /* the decorative circles of the wide banner do not fit a column */
+  .srv-shell > .srv-banner .depth-l1, .srv-shell > .srv-banner .depth-l2 { display: none; }
+  /* the game is in the list of facts: the chip would say it twice */
+  .srv-shell .srv-game-chip { display: none; }
+  /* the star sits in the corner of the column, not on a row of its own */
+  .srv-shell .srv-title { position: relative; }
+  .srv-shell .srv-title > .btn-icon-glass { position: absolute; top: 0; right: 0; }
+  /* the name and the players are already in the column: the mini bar in the tabs would only be in the way */
+  .srv-shell .srv-mini-wrap { display: none; }
+  /* the tab bar: no full-width dark band; while stuck it fades from the colour of the page */
+  .srv-shell .srv-tabbar { margin-inline: 0; padding-inline: 0; }
+  .srv-shell .srv-tabbar.is-stuck { background: linear-gradient(rgb(var(--page) / .94) 65%, transparent); box-shadow: none; -webkit-backdrop-filter: none; backdrop-filter: none; }
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/gallery.css" << '__COREGSM_EOF__'
