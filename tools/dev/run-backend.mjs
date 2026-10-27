@@ -32,9 +32,15 @@ let stopping = false;
 function start() {
   console.log('[dev] starting the backend');
   child = spawn(process.execPath, ['--import', 'tsx', 'src/index.ts'], { cwd: ROOT, stdio: 'inherit', env: process.env });
+  const startedAt = Date.now();
   child.on('exit', (code, signal) => {
     child = null;
-    if (!stopping && !restarting) console.log(`[dev] the backend stopped (${signal ?? code}); waiting for a change of the code`);
+    if (stopping || restarting) return;
+    // the panel ends itself after «restore a copy» so that the new database is picked up at the start: start it again.
+    // A process that dies at once, again and again, is a bug of the code: wait for a change instead of looping.
+    if (Date.now() - startedAt < 4000) { console.log(`[dev] the backend stopped at once (${signal ?? code}); waiting for a change of the code`); return; }
+    console.log(`[dev] the backend ended (${signal ?? code}), e.g. after a restore of a copy: starting it again`);
+    setTimeout(() => { if (!child && !stopping && !restarting) start(); }, 800);
   });
 }
 let restarting = false;
