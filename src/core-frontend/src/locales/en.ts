@@ -2167,6 +2167,8 @@ const en: Record<keyof typeof ru, string> = {
   'adm.col.channels': 'Discord channels',
   'adm.col.updated': 'Updated',
   'upd.o.lang': 'Message language',
+  'upd.o.notifyMain': 'Also notify about changes without a release',
+  'upd.o.notifyMainHint': 'The «Fresh» channel updates after every change. When this is off, the «Update available» and «Panel updated» messages are not sent for it; failures and rollbacks are always reported.',
   'upd.o.mode': 'What the message says',
   'upd.o.modeBrief': 'Brief: only what is new, the rest as numbers',
   'upd.o.modeDetailed': 'Detailed: everything about the new version',

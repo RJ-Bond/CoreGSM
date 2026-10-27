@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="a6928f11437e"
+COREGSM_BUILD="e60fe4b42e7f"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.0.0.58"
+COREGSM_VERSION="1.0.0.59"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -20064,6 +20064,12 @@ const RELEASE_DEFAULT = process.env.UPDATE_RELEASE_BASE_URL ?? 'https://github.c
 // the channel can be chosen in the panel unless the server pins it through the environment
 const CHANNEL_LOCKED = process.env.UPDATE_RELEASE_BASE_URL !== undefined || !!process.env.UPDATE_BASE_URL || !!process.env.UPDATE_CHANNEL;
 const channel = (): Channel => (process.env.UPDATE_CHANNEL === 'main' || process.env.UPDATE_BASE_URL ? 'main' : parseChannel(getSetting('update_channel')));
+
+/**
+ * The notices «update available», «reminder» and «panel updated» go to Discord when they are on, and on the «Fresh»
+ * channel (the latest changes without a release) only when the administrator asked for it: every commit there is an «update».
+ */
+export const noticesAllowed = (): boolean => getSetting('update_notify') !== '0' && (channel() !== 'main' || getSetting('update_notify_main') === '1');
 const releaseBase = (): string => (process.env.UPDATE_RELEASE_BASE_URL !== undefined ? process.env.UPDATE_RELEASE_BASE_URL : channel() === 'main' ? '' : RELEASE_DEFAULT);
 
 let remote: { build: string | null; label: string | null; error: string | null; at: number; builtAt: number | null } = { build: null, label: null, error: null, at: 0, builtAt: null };
@@ -20172,6 +20178,7 @@ function updatePayload() {
     channelLocked: CHANNEL_LOCKED,
     skipped: !!remote.build && getSetting('update_skip') === remote.build,
     notify: getSetting('update_notify') !== '0',
+    notifyMain: getSetting('update_notify_main') === '1',
     notifyLang: parseNoticeLang(getSetting('update_notify_lang')),
     notifyMode: parseNoticeMode(getSetting('update_notify_mode')),
     notifyChannel: /^\d{15,25}$/.test(getSetting('update_notify_channel') ?? '') ? (getSetting('update_notify_channel') as string) : '',
@@ -20243,7 +20250,7 @@ function announce(title: string, description: string, color: number): void {
 
 /** sends a notice about the panel update to the alerts channel (it has to be set up and switched on there) */
 function sendNotice(n: Notice): void {
-  if (getSetting('update_notify') === '0') return;
+  if (!noticesAllowed()) return;
   const embed: Record<string, unknown> = {
     title: n.title,
     ...(n.url ? { url: n.url } : {}),
@@ -20286,7 +20293,8 @@ async function sendUpdateNotice(kind: UpdateNoticeKind, from: string | null, to:
 
 function announceVersion(): void {
   const available = !!(APP_VERSION && remote.build && APP_VERSION !== remote.build);
-  const notify = getSetting('update_notify') !== '0';
+  // on the «Fresh» channel nothing is announced unless it is switched on: the version stays «not announced» and is announced once when it is
+  const notify = noticesAllowed();
   const skipped = getSetting('update_skip');
   const label = remote.label ?? (remote.build ?? '').slice(0, 7);
   if (shouldAnnounce({ notify, available, latest: remote.build, announced: getSetting('update_announced'), skipped })) {
@@ -20350,7 +20358,7 @@ router.get('/api/update/preflight', admin, (_req, res) => {
 });
 
 router.put('/api/update/settings', admin, (req, res) => {
-  const b = (req.body ?? {}) as { channel?: unknown; skip?: unknown; notify?: unknown; notifyLang?: unknown; notifyMode?: unknown; remindDays?: unknown; notifyChannel?: unknown };
+  const b = (req.body ?? {}) as { channel?: unknown; skip?: unknown; notify?: unknown; notifyLang?: unknown; notifyMode?: unknown; notifyMain?: unknown; remindDays?: unknown; notifyChannel?: unknown };
   if (b.channel !== undefined) {
     if (CHANNEL_LOCKED) return res.status(409).json({ error: 'Канал задан переменными окружения сервера' });
     if (b.channel !== 'release' && b.channel !== 'main') return res.status(400).json({ error: 'Канал: release или main' });
@@ -20364,6 +20372,7 @@ router.put('/api/update/settings', admin, (req, res) => {
     setSetting('update_skip', b.skip);
   }
   if (b.notify !== undefined) setSetting('update_notify', b.notify === false ? '0' : '1');
+  if (b.notifyMain !== undefined) setSetting('update_notify_main', b.notifyMain === true ? '1' : '0');
   if (b.notifyChannel !== undefined) {
     if (typeof b.notifyChannel !== 'string' || !/^(\d{15,25})?$/.test(b.notifyChannel)) return res.status(400).json({ error: 'Некорректный канал' });
     setSetting('update_notify_channel', b.notifyChannel);
@@ -53541,6 +53550,8 @@ export interface UpdateInfo {
   /** the offered version was skipped by an administrator */
   skipped?: boolean;
   notify?: boolean;
+  /** on the «Fresh» channel the notices about changes without a release are sent only when this is on */
+  notifyMain?: boolean;
   notifyLang?: 'ru' | 'en';
   notifyMode?: 'brief' | 'detailed' | 'all';
   /** the Discord channel for the update notices ('' = the alerts channel) */
@@ -75850,6 +75861,8 @@ const en: Record<keyof typeof ru, string> = {
   'adm.col.channels': 'Discord channels',
   'adm.col.updated': 'Updated',
   'upd.o.lang': 'Message language',
+  'upd.o.notifyMain': 'Also notify about changes without a release',
+  'upd.o.notifyMainHint': 'The «Fresh» channel updates after every change. When this is off, the «Update available» and «Panel updated» messages are not sent for it; failures and rollbacks are always reported.',
   'upd.o.mode': 'What the message says',
   'upd.o.modeBrief': 'Brief: only what is new, the rest as numbers',
   'upd.o.modeDetailed': 'Detailed: everything about the new version',
@@ -78333,6 +78346,8 @@ const ru = {
   'adm.col.channels': 'Каналы Discord',
   'adm.col.updated': 'Обновлён',
   'upd.o.lang': 'Язык сообщений',
+  'upd.o.notifyMain': 'Писать и об изменениях без выпуска',
+  'upd.o.notifyMainHint': 'Канал «Свежий» обновляется после каждого изменения. Если не отмечено, сообщения «Доступно обновление» и «Панель обновлена» для него не отправляются; об ошибках и откате сообщения придут всегда.',
   'upd.o.mode': 'Что писать в сообщении',
   'upd.o.modeBrief': 'Кратко: только новое, остальное числами',
   'upd.o.modeDetailed': 'Подробно: всё о новой версии',
@@ -90869,7 +90884,7 @@ export function HistoryCard({ refreshKey }: { refreshKey: unknown }) {
 export function OptionsCard({ info, onChange }: { info: UpdateInfo; onChange: (i: UpdateInfo) => void }) {
   const [error, setError] = useState('');
   const [picking, setPicking] = useState(false);
-  const save = async (body: { channel?: 'release' | 'main'; notify?: boolean; notifyLang?: 'ru' | 'en'; notifyMode?: 'brief' | 'detailed' | 'all'; remindDays?: number; notifyChannel?: string }) => {
+  const save = async (body: { channel?: 'release' | 'main'; notify?: boolean; notifyMain?: boolean; notifyLang?: 'ru' | 'en'; notifyMode?: 'brief' | 'detailed' | 'all'; remindDays?: number; notifyChannel?: string }) => {
     setError('');
     try {
       onChange(await api<UpdateInfo>('/update/settings', 'PUT', body));
@@ -90894,6 +90909,12 @@ export function OptionsCard({ info, onChange }: { info: UpdateInfo; onChange: (i
         <input type="checkbox" className="mt-1 h-4 w-4 accent-brand" checked={info.notify !== false} onChange={(e) => void save({ notify: e.target.checked })} aria-describedby="upd-notify-hint" />
         <span>{t('upd.o.notify')}<span id="upd-notify-hint" className="mt-0.5 block text-sm font-semibold text-mute">{t('upd.o.notifyHint')}</span></span>
       </label>
+      {info.notify !== false && (info.channel ?? 'release') === 'main' && (
+        <label className="flex cursor-pointer items-start gap-2.5 font-bold">
+          <input type="checkbox" className="mt-1 h-4 w-4 accent-brand" checked={info.notifyMain === true} onChange={(e) => void save({ notifyMain: e.target.checked })} aria-describedby="upd-main-hint" />
+          <span>{t('upd.o.notifyMain')}<span id="upd-main-hint" className="mt-0.5 block text-sm font-semibold text-mute">{t('upd.o.notifyMainHint')}</span></span>
+        </label>
+      )}
       {info.notify !== false && (
         <div>
           <span className="label">{t('upd.o.chan')}</span>

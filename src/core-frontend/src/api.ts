@@ -257,6 +257,8 @@ export interface UpdateInfo {
   /** the offered version was skipped by an administrator */
   skipped?: boolean;
   notify?: boolean;
+  /** on the «Fresh» channel the notices about changes without a release are sent only when this is on */
+  notifyMain?: boolean;
   notifyLang?: 'ru' | 'en';
   notifyMode?: 'brief' | 'detailed' | 'all';
   /** the Discord channel for the update notices ('' = the alerts channel) */
