@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="b7e55a148314"
+COREGSM_BUILD="2e402a885a9a"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.0.0.56"
+COREGSM_VERSION="1.0.0.57"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -20294,14 +20294,14 @@ function announceVersion(): void {
     if (isQuietNow()) return;
     setSetting('update_announced', remote.build);
     setSetting('update_announced_at', String(Date.now()));
-    void sendUpdateNotice('available', labelOf(APP_VERSION), remote.label, (l) => (l === 'en' ? `Version \`${label}\` is ready to install.` : `Версия \`${label}\` готова к установке.`), { from: APP_VERSION || null, to: remote.build });
+    void sendUpdateNotice('available', labelOf(APP_VERSION), remote.label, (l) => (l === 'en' ? `📦 Version \`${label}\` is ready to install.` : `📦 Версия \`${label}\` готова к установке.`), { from: APP_VERSION || null, to: remote.build });
     return;
   }
   const announcedAt = Number(getSetting('update_announced_at')) || null;
   if (shouldRemind({ notify, remindDays: parseRemindDays(getSetting('update_remind_days')), available, latest: remote.build, announced: getSetting('update_announced'), announcedAt, reminded: getSetting('update_reminded'), skipped, now: Date.now() }) && !isQuietNow()) {
     setSetting('update_reminded', remote.build);
     const cur = labelOf(APP_VERSION) ?? 'current';
-    void sendUpdateNotice('reminder', labelOf(APP_VERSION), remote.label, (l) => (l === 'en' ? `Version \`${label}\` is still waiting; this panel runs \`${cur}\`.` : `Версия \`${label}\` всё ещё ждёт установки: у вас \`${cur}\`.`), { from: APP_VERSION || null, to: remote.build });
+    void sendUpdateNotice('reminder', labelOf(APP_VERSION), remote.label, (l) => (l === 'en' ? `⏳ Version \`${label}\` is still waiting; this panel runs \`${cur}\`.` : `⏳ Версия \`${label}\` всё ещё ждёт установки: у вас \`${cur}\`.`), { from: APP_VERSION || null, to: remote.build });
   }
 }
 
@@ -20328,7 +20328,7 @@ export function recordJob(): void {
     const now = labelOf(APP_VERSION);
     void sendUpdateNotice('done', labelOf(before), now, (l) => {
       const keep = rb ? (l === 'en' ? '\n↩️ A rollback is possible: the previous version is kept together with the database.' : '\n↩️ Откат возможен: предыдущая версия сохранена вместе с базой.') : '';
-      return `${l === 'en' ? (now ? `Version \`${now}\` is installed.` : 'The update is installed.') : job.message}${keep}`;
+      return `${l === 'en' ? (now ? `🎉 Version \`${now}\` is installed.` : '🎉 The update is installed.') : `🎉 ${job.message}`}${keep}`;
     }, { from: before, to: APP_VERSION || null });
   }
 }
@@ -22746,23 +22746,23 @@ export function buildNotice(o: { kind: 'available' | 'reminder' | 'done'; mode?:
   const age = releaseAgeDays(target?.date, o.now);
   const lk = o.links ?? {};
   const ver = (v: string, url?: string | null) => (url ? `[${v}](${url})` : v);
-  const arrow = o.from && o.to && o.from !== o.to ? `${ver(o.from, lk.from)} → ${ver(o.to, lk.to)}` : o.to ? ver(o.to, lk.to) : '';
+  const arrow = o.from && o.to && o.from !== o.to ? `${ver(o.from, lk.from)} ➜ ${ver(o.to, lk.to)}` : o.to ? ver(o.to, lk.to) : '';
   const skipped = Math.max(0, between.length - 1);
-  const lines: string[] = [...(arrow ? [`**${arrow}**`] : []), o.line];
-  if (skipped > 0) lines.push(en ? `Versions in between: ${skipped}` : `Пропущено версий между ними: ${skipped}`);
+  const lines: string[] = [...(arrow ? [`🔖 **${arrow}**`] : []), o.line];
+  if (skipped > 0) lines.push(en ? `⏭️ Versions in between: ${skipped}` : `⏭️ Пропущено версий между ними: ${skipped}`);
   lines.push(...noticeWarnings(between, o.lang));
   if (mode === 'brief') {
     const c = groupCounters(shown, o.lang);
     if (c) lines.push(c);
   }
-  if (o.kind !== 'done') lines.push(en ? 'Install: Settings → Updates and backups.' : 'Установить: Настройки → Обновления и копии.');
-  const title = o.kind === 'available' ? (en ? 'Panel update available' : 'Доступно обновление панели')
-    : o.kind === 'reminder' ? (en ? 'Reminder: panel update is waiting' : 'Напоминание: обновление панели ждёт')
-    : (en ? 'Panel updated' : 'Панель обновлена');
+  if (o.kind !== 'done') lines.push(en ? '⚙️ Install: Settings → Updates and backups.' : '⚙️ Установить: Настройки → Обновления и копии.');
+  const title = o.kind === 'available' ? (en ? '🚀 Panel update available' : '🚀 Доступно обновление панели')
+    : o.kind === 'reminder' ? (en ? '⏰ Reminder: panel update is waiting' : '⏰ Напоминание: обновление панели ждёт')
+    : (en ? '✅ Panel updated' : '✅ Панель обновлена');
   let footer = '';
-  if (target?.date) footer = en ? `Released ${target.date}${age != null ? ` · ${daysAgoText(age, 'en')}` : ''}` : `Вышла ${target.date}${age != null ? ` · ${daysAgoText(age, 'ru')}` : ''}`;
+  if (target?.date) footer = en ? `📅 Released ${target.date}${age != null ? ` · ${daysAgoText(age, 'en')}` : ''}` : `📅 Вышла ${target.date}${age != null ? ` · ${daysAgoText(age, 'ru')}` : ''}`;
   const whatsNew = lk.to ?? lk.more ?? null;
-  return { title, ...(whatsNew ? { actions: [{ label: en ? "What's new" : 'Что нового', url: whatsNew }] } : {}), ...(lk.to ? { url: lk.to } : {}), description: lines.join('\n'), fields: noticeFields(mode === 'brief' ? shown.map((r) => ({ ...r, groups: r.groups.filter(isNewGroup) })) : shown, o.lang, undefined, lk.more ?? null), footer, color: o.kind === 'done' ? 0x23a55a : o.kind === 'reminder' ? 0xf0b232 : 0x5865f2 };
+  return { title, ...(whatsNew ? { actions: [{ label: en ? "📖 What's new" : '📖 Что нового', url: whatsNew }] } : {}), ...(lk.to ? { url: lk.to } : {}), description: lines.join('\n'), fields: noticeFields(mode === 'brief' ? shown.map((r) => ({ ...r, groups: r.groups.filter(isNewGroup) })) : shown, o.lang, undefined, lk.more ?? null), footer, color: o.kind === 'done' ? 0x23a55a : o.kind === 'reminder' ? 0xf0b232 : 0x5865f2 };
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"

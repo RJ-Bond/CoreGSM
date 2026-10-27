@@ -254,14 +254,14 @@ function announceVersion(): void {
     if (isQuietNow()) return;
     setSetting('update_announced', remote.build);
     setSetting('update_announced_at', String(Date.now()));
-    void sendUpdateNotice('available', labelOf(APP_VERSION), remote.label, (l) => (l === 'en' ? `Version \`${label}\` is ready to install.` : `Версия \`${label}\` готова к установке.`), { from: APP_VERSION || null, to: remote.build });
+    void sendUpdateNotice('available', labelOf(APP_VERSION), remote.label, (l) => (l === 'en' ? `📦 Version \`${label}\` is ready to install.` : `📦 Версия \`${label}\` готова к установке.`), { from: APP_VERSION || null, to: remote.build });
     return;
   }
   const announcedAt = Number(getSetting('update_announced_at')) || null;
   if (shouldRemind({ notify, remindDays: parseRemindDays(getSetting('update_remind_days')), available, latest: remote.build, announced: getSetting('update_announced'), announcedAt, reminded: getSetting('update_reminded'), skipped, now: Date.now() }) && !isQuietNow()) {
     setSetting('update_reminded', remote.build);
     const cur = labelOf(APP_VERSION) ?? 'current';
-    void sendUpdateNotice('reminder', labelOf(APP_VERSION), remote.label, (l) => (l === 'en' ? `Version \`${label}\` is still waiting; this panel runs \`${cur}\`.` : `Версия \`${label}\` всё ещё ждёт установки: у вас \`${cur}\`.`), { from: APP_VERSION || null, to: remote.build });
+    void sendUpdateNotice('reminder', labelOf(APP_VERSION), remote.label, (l) => (l === 'en' ? `⏳ Version \`${label}\` is still waiting; this panel runs \`${cur}\`.` : `⏳ Версия \`${label}\` всё ещё ждёт установки: у вас \`${cur}\`.`), { from: APP_VERSION || null, to: remote.build });
   }
 }
 
@@ -288,7 +288,7 @@ export function recordJob(): void {
     const now = labelOf(APP_VERSION);
     void sendUpdateNotice('done', labelOf(before), now, (l) => {
       const keep = rb ? (l === 'en' ? '\n↩️ A rollback is possible: the previous version is kept together with the database.' : '\n↩️ Откат возможен: предыдущая версия сохранена вместе с базой.') : '';
-      return `${l === 'en' ? (now ? `Version \`${now}\` is installed.` : 'The update is installed.') : job.message}${keep}`;
+      return `${l === 'en' ? (now ? `🎉 Version \`${now}\` is installed.` : '🎉 The update is installed.') : `🎉 ${job.message}`}${keep}`;
     }, { from: before, to: APP_VERSION || null });
   }
 }

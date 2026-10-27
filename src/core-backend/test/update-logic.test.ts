@@ -193,15 +193,15 @@ describe('update notices', () => {
   it('a notice: title with the versions, skipped count, warning, footer with the age', () => {
     const now = Date.UTC(2026, 9, 28, 12);
     const n = buildNotice({ kind: 'available', lang: 'ru', from: '1.0.0.3', to: '1.0.0.20', releases: all, line: 'Версия `1.0.0.20`.', now });
-    assert.equal(n.title, 'Доступно обновление панели');
-    assert.match(n.description, /^\*\*1\.0\.0\.3 → 1\.0\.0\.20\*\*\n/);
-    assert.match(n.description, /Пропущено версий между ними: 1/);
+    assert.equal(n.title, '🚀 Доступно обновление панели');
+    assert.match(n.description, /^🔖 \*\*1\.0\.0\.3 ➜ 1\.0\.0\.20\*\*\n/);
+    assert.match(n.description, /⏭️ Пропущено версий между ними: 1/);
     assert.match(n.description, /База данных будет обновлена/);
-    assert.match(n.description, /Установить: Настройки/);
-    assert.equal(n.footer, 'Вышла 26.10.2026 · 2 дня назад');
+    assert.match(n.description, /⚙️ Установить: Настройки/);
+    assert.equal(n.footer, '📅 Вышла 26.10.2026 · 2 дня назад');
     const done = buildNotice({ kind: 'done', lang: 'en', from: null, to: '1.0.0.20', releases: all, line: 'Version 1.0.0.20 installed', now });
-    assert.equal(done.title, 'Panel updated');
-    assert.match(done.description, /^\*\*1\.0\.0\.20\*\*\n/);
+    assert.equal(done.title, '✅ Panel updated');
+    assert.match(done.description, /^🔖 \*\*1\.0\.0\.20\*\*\n/);
     assert.doesNotMatch(done.description, /Install:/);
   });
   it('links: the versions in the first line, the title opens the new release, «… и ещё N» opens the CHANGELOG', () => {
@@ -210,7 +210,7 @@ describe('update notices', () => {
     const links = { from: 'https://gh/r/build-aaa', to: 'https://gh/r/build-bbb', more: 'https://gh/CHANGELOG.md' };
     const n = buildNotice({ kind: 'done', lang: 'ru', from: '1.0.0.3', to: '1.0.0.20', releases: many, line: 'ok', now, links });
     assert.equal(n.url, 'https://gh/r/build-bbb');
-    assert.match(n.description, /^\*\*\[1\.0\.0\.3\]\(https:\/\/gh\/r\/build-aaa\) → \[1\.0\.0\.20\]\(https:\/\/gh\/r\/build-bbb\)\*\*\n/);
+    assert.match(n.description, /^🔖 \*\*\[1\.0\.0\.3\]\(https:\/\/gh\/r\/build-aaa\) ➜ \[1\.0\.0\.20\]\(https:\/\/gh\/r\/build-bbb\)\*\*\n/);
     assert.match(n.fields[n.fields.length - 1]!.value, /\[… и ещё \d+\]\(https:\/\/gh\/CHANGELOG\.md\)$/);
     const plain = buildNotice({ kind: 'done', lang: 'ru', from: '1.0.0.3', to: '1.0.0.20', releases: many, line: 'ok', now });
     assert.equal(plain.url, undefined);
@@ -232,7 +232,7 @@ describe('update notices', () => {
     assert.match(brief.description, /🐛 Исправлено: 3 · 🔧 Прочее: 1/);
     assert.match(brief.description, /Пропущено версий между ними: 1/);
     assert.doesNotMatch(JSON.stringify(brief.fields), /старое|правка/);
-    assert.deepEqual(brief.actions, [{ label: 'Что нового', url: 'https://gh/r/build-bbb' }]);
+    assert.deepEqual(brief.actions, [{ label: '📖 Что нового', url: 'https://gh/r/build-bbb' }]);
     const detailed = buildNotice({ ...base, mode: 'detailed' });
     assert.equal(detailed.fields.length, 3);
     assert.doesNotMatch(JSON.stringify(detailed.fields), /старое/);
