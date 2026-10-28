@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="ed4b213c5612"
+COREGSM_BUILD="a8f6707c5c6e"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.0.0.77"
+COREGSM_VERSION="1.0.0.78"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -124650,10 +124650,14 @@ export default function PlayersList({
         <ul className="pl-tiles">
           {shown.map((p) => {
             const dur = p.since != null ? now - p.since : null;
+            const tileRank = rankById(p.rankId);
             return (
               <li key={p.key} className={`min-w-0 ${fresh.has(p.name) ? 'player-new' : ''}`}>
                 <NickButton name={p.name} className="pl-tile" onClick={() => copyNick(p.name)}>
-                  <Avatar name={p.name} size={44} />
+                  <span className="pl-avb">
+                    <Avatar name={p.name} size={44} />
+                    {tileRank && <i className="pl-badge" title={rankName(tileRank)}><RankEmblem rank={tileRank} size={20} /></i>}
+                  </span>
                   <b className="pl-tile-n" title={p.name}>{p.name}</b>
                   <span className="pl-tile-t">{p.since != null ? playedFor(p.since, now) : 'в сети'}</span>
                   {dur != null && <i className="pl-bar" aria-hidden><u style={{ width: `${Math.max(4, Math.round((dur / maxDur) * 100))}%` }} /></i>}
@@ -124679,18 +124683,18 @@ export default function PlayersList({
                 <span className="min-w-0 flex-1">
                   <span className="flex min-w-0 items-center gap-1.5">
                     <span className="truncate font-bold" title={p.name}>{p.name}</span>
+                    {rank && (
+                      <span className="pl-rk" title={t('vr.rank.tip', { name: rankName(rank), hours: rank.minHours })}>
+                        <RankEmblem rank={rank} size={22} />
+                        <span className="pl-rk-n">{rankName(rank)}</span>
+                      </span>
+                    )}
                     {dur != null && dur < NEWBIE_MS && <span className="pill pill-ok px-2! py-0! text-xs">новичок</span>}
                     {expandable && (known.get(p.name.toLowerCase()) ?? 0) > 0 && <span className="pl-place-chip" title="Место в рейтинге недели">#{known.get(p.name.toLowerCase())}</span>}
                   </span>
-                  {(dur != null || rank) && (
+                  {dur != null && (
                     <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
                       {expandable && p.since != null && <span className="text-xs font-semibold text-mute">{t('srv.pl.joined', { time: joinedAt(p.since, now) })}</span>}
-                      {rank && (
-                        <span className="pl-rank inline-flex items-center gap-1 text-xs font-extrabold text-mute" title={t('vr.rank.tip', { name: rankName(rank), hours: rank.minHours })}>
-                          <RankEmblem rank={rank} size={26} />
-                          {rankName(rank)}
-                        </span>
-                      )}
                       {!rank && dur != null && dur >= VETERAN_MS && <span className="pill pill-warn px-2! py-0! text-xs">ветеран</span>}
                     </span>
                   )}
@@ -124711,9 +124715,9 @@ export default function PlayersList({
               {heading && <li className="pl-group" aria-hidden>{heading}</li>}
               <li className={`min-w-0 ${top ? 'pl-top' : ''} ${fresh.has(p.name) ? 'player-new' : ''}`}>
                 {expandable ? (
-                  <NickButton name={p.name} className={`pl-row ${rank ? 'has-rank' : ''}`} style={rank ? { ['--rk' as string]: rank.color } : undefined} expanded={isOpen} onClick={() => setOpen(isOpen ? null : p.key)}>{inner}</NickButton>
+                  <NickButton name={p.name} className="pl-row" expanded={isOpen} onClick={() => setOpen(isOpen ? null : p.key)}>{inner}</NickButton>
                 ) : (
-                  <div className={`flex min-w-0 items-center gap-3 rounded-xl py-2 ${rank ? 'has-rank' : ''}`} style={rank ? { ['--rk' as string]: rank.color } : undefined}>{inner}</div>
+                  <div className="flex min-w-0 items-center gap-3 rounded-xl py-2">{inner}</div>
                 )}
                 {isOpen && (
                   <dl className="pl-more">
@@ -150880,11 +150884,17 @@ html[data-motion='reduce'] :is(.srv-record, .srv-swipe-hint, .srv-slots-bar > i.
   .srv-shell .srv-tabbar.is-stuck { background: linear-gradient(rgb(var(--page) / .94) 65%, transparent); box-shadow: none; -webkit-backdrop-filter: none; backdrop-filter: none; }
 }
 
-/* the players list: the rank as a ring round the avatar and a coloured name, the time with its bar in one column, the leaders, the groups */
-.pl-row.has-rank > :first-child, div.has-rank > :first-child { box-shadow: 0 0 0 2px rgb(var(--card)), 0 0 0 3.5px var(--rk); }
-.has-rank .pl-rank { color: color-mix(in srgb, var(--rk) 62%, rgb(var(--ink))); }
-.pl-time { display: grid; justify-items: end; gap: 5px; min-width: 4.75rem; }
-.pl-time .pl-bar { width: 4.75rem; margin-top: 0; }
+/* the players list: one row per player (avatar, nick, the rank emblem, the time on the right), a thin bar along the bottom edge, the leaders, the groups */
+.pl-row { position: relative; }
+.pl-rk { display: inline-flex; flex: none; align-items: center; gap: 2px; font-size: var(--fs-xs); font-weight: 800; color: rgb(var(--mute)); }
+.pl-rk-n { max-width: 0; overflow: hidden; white-space: nowrap; opacity: 0; transition: max-width .25s ease, opacity .2s ease; }
+.pl-row:hover .pl-rk-n, .pl-row:focus-visible .pl-rk-n { max-width: 9rem; opacity: 1; padding-right: 4px; }
+.pl-time { min-width: 4.5rem; font-variant-numeric: tabular-nums; }
+.pl-time .pl-bar { position: absolute; inset: auto 8px 0 8px; width: auto; height: 2px; margin: 0; }
+.pl-top .pl-time { color: rgb(var(--ink)); }
+.pl-avb { position: relative; display: inline-flex; }
+.pl-badge { position: absolute; right: -6px; bottom: -6px; display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; background: rgb(var(--card)); box-shadow: 0 0 0 1.5px rgb(var(--line)); }
+@media (hover: none) { .pl-rk-n { display: none; } }
 .pl-top { background: linear-gradient(90deg, rgb(var(--brand) / .09), transparent 70%); border-radius: var(--r-md); }
 .pl-group { padding: 12px 4px 4px; font-size: var(--fs-xs); font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: rgb(var(--mute)); }
 ul > .pl-group:first-child { padding-top: 2px; }

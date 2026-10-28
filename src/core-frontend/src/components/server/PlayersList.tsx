@@ -214,10 +214,14 @@ export default function PlayersList({
         <ul className="pl-tiles">
           {shown.map((p) => {
             const dur = p.since != null ? now - p.since : null;
+            const tileRank = rankById(p.rankId);
             return (
               <li key={p.key} className={`min-w-0 ${fresh.has(p.name) ? 'player-new' : ''}`}>
                 <NickButton name={p.name} className="pl-tile" onClick={() => copyNick(p.name)}>
-                  <Avatar name={p.name} size={44} />
+                  <span className="pl-avb">
+                    <Avatar name={p.name} size={44} />
+                    {tileRank && <i className="pl-badge" title={rankName(tileRank)}><RankEmblem rank={tileRank} size={20} /></i>}
+                  </span>
                   <b className="pl-tile-n" title={p.name}>{p.name}</b>
                   <span className="pl-tile-t">{p.since != null ? playedFor(p.since, now) : 'в сети'}</span>
                   {dur != null && <i className="pl-bar" aria-hidden><u style={{ width: `${Math.max(4, Math.round((dur / maxDur) * 100))}%` }} /></i>}
@@ -243,18 +247,18 @@ export default function PlayersList({
                 <span className="min-w-0 flex-1">
                   <span className="flex min-w-0 items-center gap-1.5">
                     <span className="truncate font-bold" title={p.name}>{p.name}</span>
+                    {rank && (
+                      <span className="pl-rk" title={t('vr.rank.tip', { name: rankName(rank), hours: rank.minHours })}>
+                        <RankEmblem rank={rank} size={22} />
+                        <span className="pl-rk-n">{rankName(rank)}</span>
+                      </span>
+                    )}
                     {dur != null && dur < NEWBIE_MS && <span className="pill pill-ok px-2! py-0! text-xs">новичок</span>}
                     {expandable && (known.get(p.name.toLowerCase()) ?? 0) > 0 && <span className="pl-place-chip" title="Место в рейтинге недели">#{known.get(p.name.toLowerCase())}</span>}
                   </span>
-                  {(dur != null || rank) && (
+                  {dur != null && (
                     <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
                       {expandable && p.since != null && <span className="text-xs font-semibold text-mute">{t('srv.pl.joined', { time: joinedAt(p.since, now) })}</span>}
-                      {rank && (
-                        <span className="pl-rank inline-flex items-center gap-1 text-xs font-extrabold text-mute" title={t('vr.rank.tip', { name: rankName(rank), hours: rank.minHours })}>
-                          <RankEmblem rank={rank} size={26} />
-                          {rankName(rank)}
-                        </span>
-                      )}
                       {!rank && dur != null && dur >= VETERAN_MS && <span className="pill pill-warn px-2! py-0! text-xs">ветеран</span>}
                     </span>
                   )}
@@ -275,9 +279,9 @@ export default function PlayersList({
               {heading && <li className="pl-group" aria-hidden>{heading}</li>}
               <li className={`min-w-0 ${top ? 'pl-top' : ''} ${fresh.has(p.name) ? 'player-new' : ''}`}>
                 {expandable ? (
-                  <NickButton name={p.name} className={`pl-row ${rank ? 'has-rank' : ''}`} style={rank ? { ['--rk' as string]: rank.color } : undefined} expanded={isOpen} onClick={() => setOpen(isOpen ? null : p.key)}>{inner}</NickButton>
+                  <NickButton name={p.name} className="pl-row" expanded={isOpen} onClick={() => setOpen(isOpen ? null : p.key)}>{inner}</NickButton>
                 ) : (
-                  <div className={`flex min-w-0 items-center gap-3 rounded-xl py-2 ${rank ? 'has-rank' : ''}`} style={rank ? { ['--rk' as string]: rank.color } : undefined}>{inner}</div>
+                  <div className="flex min-w-0 items-center gap-3 rounded-xl py-2">{inner}</div>
                 )}
                 {isOpen && (
                   <dl className="pl-more">

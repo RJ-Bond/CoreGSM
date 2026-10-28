@@ -651,11 +651,17 @@ html[data-motion='reduce'] :is(.srv-record, .srv-swipe-hint, .srv-slots-bar > i.
   .srv-shell .srv-tabbar.is-stuck { background: linear-gradient(rgb(var(--page) / .94) 65%, transparent); box-shadow: none; -webkit-backdrop-filter: none; backdrop-filter: none; }
 }
 
-/* the players list: the rank as a ring round the avatar and a coloured name, the time with its bar in one column, the leaders, the groups */
-.pl-row.has-rank > :first-child, div.has-rank > :first-child { box-shadow: 0 0 0 2px rgb(var(--card)), 0 0 0 3.5px var(--rk); }
-.has-rank .pl-rank { color: color-mix(in srgb, var(--rk) 62%, rgb(var(--ink))); }
-.pl-time { display: grid; justify-items: end; gap: 5px; min-width: 4.75rem; }
-.pl-time .pl-bar { width: 4.75rem; margin-top: 0; }
+/* the players list: one row per player (avatar, nick, the rank emblem, the time on the right), a thin bar along the bottom edge, the leaders, the groups */
+.pl-row { position: relative; }
+.pl-rk { display: inline-flex; flex: none; align-items: center; gap: 2px; font-size: var(--fs-xs); font-weight: 800; color: rgb(var(--mute)); }
+.pl-rk-n { max-width: 0; overflow: hidden; white-space: nowrap; opacity: 0; transition: max-width .25s ease, opacity .2s ease; }
+.pl-row:hover .pl-rk-n, .pl-row:focus-visible .pl-rk-n { max-width: 9rem; opacity: 1; padding-right: 4px; }
+.pl-time { min-width: 4.5rem; font-variant-numeric: tabular-nums; }
+.pl-time .pl-bar { position: absolute; inset: auto 8px 0 8px; width: auto; height: 2px; margin: 0; }
+.pl-top .pl-time { color: rgb(var(--ink)); }
+.pl-avb { position: relative; display: inline-flex; }
+.pl-badge { position: absolute; right: -6px; bottom: -6px; display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; background: rgb(var(--card)); box-shadow: 0 0 0 1.5px rgb(var(--line)); }
+@media (hover: none) { .pl-rk-n { display: none; } }
 .pl-top { background: linear-gradient(90deg, rgb(var(--brand) / .09), transparent 70%); border-radius: var(--r-md); }
 .pl-group { padding: 12px 4px 4px; font-size: var(--fs-xs); font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: rgb(var(--mute)); }
 ul > .pl-group:first-child { padding-top: 2px; }
