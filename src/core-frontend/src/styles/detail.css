@@ -650,3 +650,12 @@ html[data-motion='reduce'] :is(.srv-record, .srv-swipe-hint, .srv-slots-bar > i.
   .srv-shell .srv-tabbar { margin-inline: 0; padding-inline: 0; }
   .srv-shell .srv-tabbar.is-stuck { background: linear-gradient(rgb(var(--page) / .94) 65%, transparent); box-shadow: none; -webkit-backdrop-filter: none; backdrop-filter: none; }
 }
+
+/* the players list: the rank as a ring round the avatar and a coloured name, the time with its bar in one column, the leaders, the groups */
+.pl-row.has-rank > :first-child, div.has-rank > :first-child { box-shadow: 0 0 0 2px rgb(var(--card)), 0 0 0 3.5px var(--rk); }
+.has-rank .pl-rank { color: color-mix(in srgb, var(--rk) 62%, rgb(var(--ink))); }
+.pl-time { display: grid; justify-items: end; gap: 5px; min-width: 4.75rem; }
+.pl-time .pl-bar { width: 4.75rem; margin-top: 0; }
+.pl-top { background: linear-gradient(90deg, rgb(var(--brand) / .09), transparent 70%); border-radius: var(--r-md); }
+.pl-group { padding: 12px 4px 4px; font-size: var(--fs-xs); font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: rgb(var(--mute)); }
+ul > .pl-group:first-child { padding-top: 2px; }
