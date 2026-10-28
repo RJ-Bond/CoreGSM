@@ -16,6 +16,8 @@ interface language; the GitHub release text is built from the section of the ver
 
 ## Не выпущено | Unreleased
 
+## 1.0.0.77 · 28.10.2026
+
 ### ✨ Новое | New
 - 🖼 Иллюстрации пустых состояний (серверы, новости, галерея, игроки) и значки наград на подиуме топа игроков вместо смайликов | Illustrations of the empty states (servers, news, gallery, players) and badge pictures on the podium of the top players instead of emoji
 - 🔔 Новое событие каналов оповещений «Проблема с панелью»: администратору приходит сообщение (webhook или почта), когда на странице «Система» появляется предупреждение — мало места на диске, быстрый рост базы, медленный опрос | A new alert-channel event «Panel issue»: the administrators get a message (webhook or e-mail) when the System page shows a warning — low disk space, a fast-growing database, a slow poll
