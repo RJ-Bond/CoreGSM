@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api';
-import { t } from '../i18n';
+import { t, useI18n } from '../i18n';
 import { CONC_MAX, CONC_MIN, FAIL_MAX, FAIL_MIN, WINDOW_MAX, confirmDelayText, durationText, ruleText, validatePoll, type PollSettings } from '../pollSettings';
-import { FieldError, SaveBadge, Section, Switch, ago, plural, useAutosave } from '../ui';
+import { FieldError, SaveBadge, Section, Switch, ago, useAutosave } from '../ui';
 import { useSaveBar, useSaveBarActive } from '../saveBar';
 
 /** «Опрос серверов»: when a failure is confirmed, how many servers are asked at once, and the numbers of the last poll. */
 export default function PollSettingsCard() {
+  useI18n();
   const [srv, setSrv] = useState<PollSettings | null>(null);
   const [gone, setGone] = useState(false);
   const [fail, setFail] = useState('3');
@@ -54,33 +55,33 @@ export default function PollSettingsCard() {
     },
   });
 
-  useSaveBar('poll', 'опрос серверов', auto.status, auto.saveNow, () => { if (srv) { setFail(String(srv.failThreshold)); setConc(String(srv.concurrency)); setFailN(srv.failN ? String(srv.failN) : ''); setFailM(srv.failM ? String(srv.failM) : ''); setVeto(!!srv.probeVeto); } });
+  useSaveBar('poll', t('d2.poll.bar'), auto.status, auto.saveNow, () => { if (srv) { setFail(String(srv.failThreshold)); setConc(String(srv.concurrency)); setFailN(srv.failN ? String(srv.failN) : ''); setFailM(srv.failM ? String(srv.failM) : ''); setVeto(!!srv.probeVeto); } });
 
   // the backend is older than the panel (or the poll settings are not available): the card is simply not shown
   if (gone) return null;
-  if (!srv) return <div className="skeleton panel h-40" aria-busy="true" aria-label="Загрузка" />;
+  if (!srv) return <div className="skeleton panel h-40" aria-busy="true" aria-label={t('d2.news.loading')} />;
   const last = srv.last;
 
   return (
     <Section
-      title="Опрос серверов"
-      description="Как панель проверяет игровые серверы и когда считает, что сервер действительно недоступен. Изменения сохраняются сами."
+      title={t('d2.poll.title')}
+      description={t('d2.poll.desc')}
       actions={<SaveBadge status={auto.status} error={auto.error} retry={auto.retry} />}
     >
       <div className="grid gap-4 min-[520px]:grid-cols-2">
         <div>
-          <label htmlFor="poll-fail" className="label">Неудачных опросов подряд до сбоя</label>
+          <label htmlFor="poll-fail" className="label">{t('d2.poll.failLabel')}</label>
           <select id="poll-fail" className="input" value={fail} onChange={(e) => setFail(e.target.value)} onBlur={auto.flush} aria-describedby="poll-fail-hint">
             {Array.from({ length: FAIL_MAX - FAIL_MIN + 1 }, (_, i) => FAIL_MIN + i).map((n) => (
               <option key={n} value={n}>{n}</option>
             ))}
           </select>
           <p id="poll-fail-hint" className="mt-1.5 text-sm font-semibold text-mute">
-            Сбой подтверждается {confirmDelayText(Number(fail) || 1)}. Так одиночная потеря пакета не вызывает тревогу, но настоящее падение заметно позже.
+            {t('d2.poll.failHint', { when: confirmDelayText(Number(fail) || 1) })}
           </p>
         </div>
         <div>
-          <label htmlFor="poll-conc" className="label">Серверов опрашивается одновременно</label>
+          <label htmlFor="poll-conc" className="label">{t('d2.poll.concLabel')}</label>
           <input
             id="poll-conc"
             className="input"
@@ -95,7 +96,7 @@ export default function PollSettingsCard() {
             aria-describedby="poll-conc-hint"
           />
           <p id="poll-conc-hint" className="mt-1.5 text-sm font-semibold text-mute">
-            От {CONC_MIN} до {CONC_MAX}. Больше значение, быстрее обход, но выше нагрузка на панель и сеть.
+            {t('d2.poll.concHint', { a: CONC_MIN, b: CONC_MAX })}
           </p>
         </div>
       </div>
@@ -123,15 +124,15 @@ export default function PollSettingsCard() {
       <FieldError id="poll-err" text={err && (value.failThreshold !== srv.failThreshold || value.concurrency !== srv.concurrency || value.failN !== (srv.failN ?? null) || value.failM !== (srv.failM ?? null)) ? err : undefined} />
 
       <div className="rounded-ui-lg bg-soft px-4 py-3">
-        <div className="text-sm font-extrabold text-mute">Последний обход</div>
+        <div className="text-sm font-extrabold text-mute">{t('d2.poll.last')}</div>
         {last ? (
           <p className="mt-0.5 font-bold">
-            {ago(last.at)}: {last.servers} {plural(last.servers, ['сервер', 'сервера', 'серверов'])} за {durationText(last.durationMs)}
-            {' · '}{last.failures === 0 ? 'без ошибок' : <span className="text-warn">{last.failures} {plural(last.failures, ['ошибка', 'ошибки', 'ошибок'])}</span>}
-            {' · '}по {last.concurrency} одновременно
+            {ago(last.at)}: {t('d2.poll.servers', { n: last.servers, d: durationText(last.durationMs) })}
+            {' · '}{last.failures === 0 ? t('d2.poll.noErrors') : <span className="text-warn">{t('d2.poll.errors', { n: last.failures })}</span>}
+            {' · '}{t('d2.poll.parallel', { n: last.concurrency })}
           </p>
         ) : (
-          <p className="mt-0.5 font-semibold text-mute">Обход ещё не выполнялся.</p>
+          <p className="mt-0.5 font-semibold text-mute">{t('d2.poll.never')}</p>
         )}
       </div>
     </Section>

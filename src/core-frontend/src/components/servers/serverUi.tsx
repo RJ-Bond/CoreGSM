@@ -129,33 +129,36 @@ function EmptyState({ art, title, text, children }: { art: ReactNode; title: str
 }
 
 export function NoServersState({ isAdmin }: { isAdmin: boolean }) {
+  useI18n();
   return (
     <EmptyState
       art={<EmptyRackArt />}
-      title={isAdmin ? 'Добавьте первый сервер' : 'Серверов пока нет'}
-      text={isAdmin ? 'Укажите игру и адрес, и панель начнёт показывать онлайн, карту и пинг. Потом привяжите Discord-канал.' : 'Администратор ещё не добавил ни одного сервера. Загляните позже: список появится здесь.'}
+      title={isAdmin ? t('d2.su.addFirst') : t('d2.su.noServers')}
+      text={isAdmin ? t('d2.su.addFirstText') : t('d2.su.noServersText')}
     >
-      {isAdmin && <a className="btn" href="/admin/servers" data-magnetic>Добавить сервер</a>}
+      {isAdmin && <a className="btn" href="/admin/servers" data-magnetic>{t('d2.dw.a.addServer')}</a>}
     </EmptyState>
   );
 }
 
 export function NoFavsState({ onReset }: { onReset: () => void }) {
+  useI18n();
   return (
-    <EmptyState art={<NoFavsArt />} title="В избранном пока пусто" text="Нажмите ☆ на карточке сервера, и он появится здесь и будет закреплён первым в общем списке.">
-      <button type="button" className="btn btn-soft" onClick={onReset}>Показать все серверы</button>
+    <EmptyState art={<NoFavsArt />} title={t('d2.su.noFavs')} text={t('d2.su.noFavsText')}>
+      <button type="button" className="btn btn-soft" onClick={onReset}>{t('d2.su.showAll')}</button>
     </EmptyState>
   );
 }
 
 export function NoMatchState({ what, onReset }: { what: 'online' | 'offline'; onReset: () => void }) {
+  useI18n();
   return (
     <EmptyState
       art={<NoMatchArt />}
-      title={what === 'online' ? 'Сейчас нет серверов онлайн' : 'Недоступных серверов нет'}
-      text={what === 'online' ? 'Ни один сервер не отвечает на запросы. Сбросьте фильтр, чтобы увидеть все.' : 'Все серверы отвечают. Сбросьте фильтр, чтобы увидеть полный список.'}
+      title={what === 'online' ? t('d2.su.noOnline') : t('d2.su.noOffline')}
+      text={what === 'online' ? t('d2.su.noOnlineText') : t('d2.su.noOfflineText')}
     >
-      <button type="button" className="btn btn-soft" onClick={onReset}>Сбросить фильтр</button>
+      <button type="button" className="btn btn-soft" onClick={onReset}>{t('d2.su.resetFilter')}</button>
     </EmptyState>
   );
 }
@@ -203,8 +206,9 @@ function SkeletonSmall() {
 }
 
 export function TilesSkeleton() {
+  useI18n();
   return (
-    <div className="srv-grid" aria-busy="true" aria-label="Загрузка">
+    <div className="srv-grid" aria-busy="true" aria-label={t('d2.news.loading')}>
       <SkeletonPulse />
       <SkeletonHero />
       {[0, 1, 2, 3].map((i) => <SkeletonSmall key={i} />)}
@@ -213,8 +217,9 @@ export function TilesSkeleton() {
 }
 
 export function ListSkeleton() {
+  useI18n();
   return (
-    <div className="panel space-y-0 overflow-hidden p-0" aria-busy="true" aria-label="Загрузка">
+    <div className="panel space-y-0 overflow-hidden p-0" aria-busy="true" aria-label={t('d2.news.loading')}>
       {[0, 1, 2, 3, 4].map((i) => (
         <div key={i} className="flex items-center gap-3 border-b border-line px-4 py-3.5 last:border-0">
           <Bar w={84} h={24} />
@@ -281,8 +286,8 @@ export function PlayerNames({ names, max = 6, onDark = false, className = '' }: 
 /** «2 ч 10 мин» for a length of time in ms */
 export function durText(ms: number): string {
   const m = Math.max(1, Math.round(ms / 60_000));
-  if (m < 60) return `${m} мин`;
+  if (m < 60) return t('dur.m', { n: m });
   const h = Math.floor(m / 60);
-  if (h < 48) return m % 60 ? `${h} ч ${m % 60} мин` : `${h} ч`;
-  return `${Math.floor(h / 24)} дн`;
+  if (h < 48) return m % 60 ? t('dur.hm', { h, m: m % 60 }) : t('dur.h', { n: h });
+  return t('d2.an.dShort', { n: Math.floor(h / 24) });
 }
