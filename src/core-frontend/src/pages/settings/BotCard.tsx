@@ -2,24 +2,27 @@
 import { type FormEvent, useState } from 'react';
 import { api, type BotStatus, type SettingsInfo } from '../../api';
 import { confirmDialog } from '../../confirm';
+import { t, useI18n } from '../../i18n';
 import { CopyButton, ErrorLine, Field, FieldError, InviteButton, noAutofill, ProxyField, type ProxyType, Section, toast, usePoll, errText } from '../../ui';
 
 export function BotPill({ status, tokenSet }: { status: BotStatus | null; tokenSet: boolean }) {
-  if (!tokenSet) return <span className="pill pill-mute">ТОКЕН НЕ ЗАДАН</span>;
-  if (!status) return <span className="pill pill-mute">ПРОВЕРКА</span>;
+  useI18n();
+  if (!tokenSet) return <span className="pill pill-mute">{t('d2.bot.p.noToken')}</span>;
+  if (!status) return <span className="pill pill-mute">{t('d2.bot.p.checking')}</span>;
   switch (status.state) {
     case 'online':
       // logged in to Discord, but it is on no server (kicked or never invited): nothing can be posted
-      if (typeof status.guildCount === 'number' && status.guildCount === 0) return <span className="pill pill-warn">НЕТ НА СЕРВЕРАХ{status.tag ? ` · ${status.tag}` : ''}</span>;
-      return <span className="pill pill-ok">ПОДКЛЮЧЁН{status.tag ? ` · ${status.tag}` : ''}</span>;
-    case 'connecting': return <span className="pill pill-warn">ПОДКЛЮЧАЕТСЯ</span>;
-    case 'error': return <span className="pill pill-bad">ОШИБКА</span>;
-    default: return <span className="pill pill-mute">ОЖИДАНИЕ</span>;
+      if (typeof status.guildCount === 'number' && status.guildCount === 0) return <span className="pill pill-warn">{t('d2.bot.p.noGuilds')}{status.tag ? ` · ${status.tag}` : ''}</span>;
+      return <span className="pill pill-ok">{t('d2.bot.p.connected')}{status.tag ? ` · ${status.tag}` : ''}</span>;
+    case 'connecting': return <span className="pill pill-warn">{t('d2.bot.p.connecting')}</span>;
+    case 'error': return <span className="pill pill-bad">{t('d2.bot.p.error')}</span>;
+    default: return <span className="pill pill-mute">{t('d2.bot.p.idle')}</span>;
   }
 }
 
 /** Gateway latency of the bot: the last hours as a line, and a warning when commands are likely to time out (Discord waits 3 s). */
 function BotLatency({ status }: { status: BotStatus }) {
+  useI18n();
   const pts = status.latency ?? [];
   if (status.state !== 'online' || status.ping == null) return null;
   const verdict = status.pingVerdict ?? 'ok';
@@ -30,17 +33,17 @@ function BotLatency({ status }: { status: BotStatus }) {
   return (
     <div className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-2xl bg-soft px-4 py-2.5">
       <div>
-        <div className="text-xs font-bold text-mute">Задержка бота</div>
-        <div className={`text-lg font-extrabold tabular-nums ${tone}`}>{status.ping} мс</div>
+        <div className="text-xs font-bold text-mute">{t('d2.bot.lat')}</div>
+        <div className={`text-lg font-extrabold tabular-nums ${tone}`}>{t('d2.bot.ms', { n: status.ping })}</div>
       </div>
       {d && (
-        <svg viewBox={`0 0 ${w} ${h}`} className={`h-10 min-w-0 flex-1 basis-40 ${tone}`} role="img" aria-label={`Задержка бота за последние часы, сейчас ${status.ping} мс`} preserveAspectRatio="none">
+        <svg viewBox={`0 0 ${w} ${h}`} className={`h-10 min-w-0 flex-1 basis-40 ${tone}`} role="img" aria-label={t('d2.bot.latLabel', { n: status.ping })} preserveAspectRatio="none">
           <path d={d} fill="none" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
         </svg>
       )}
       {verdict !== 'ok' && verdict !== 'unknown' && (
         <p className={`basis-full text-sm font-bold ${tone}`}>
-          {verdict === 'bad' ? 'Бот отвечает очень медленно: команды в Discord могут не успевать. Проверьте сеть и прокси.' : 'Бот отвечает медленнее обычного. Если так долго, проверьте сеть и прокси.'}
+          {verdict === 'bad' ? t('d2.bot.slowBad') : t('d2.bot.slow')}
         </p>
       )}
     </div>
@@ -48,6 +51,7 @@ function BotLatency({ status }: { status: BotStatus }) {
 }
 
 export function BotCard() {
+  useI18n();
   const [info, setInfo] = useState<SettingsInfo | null>(null);
   const [status, setStatus] = useState<BotStatus | null>(null);
   const [token, setTokenValue] = useState('');
@@ -82,7 +86,7 @@ export function BotCard() {
       setProxy('');
       setClearProxy(false);
       setSaved(true);
-      toast('Настройки сохранены');
+      toast(t('d2.bot.t.saved'));
     } catch (err) {
       setError(errText(err));
     } finally {
@@ -91,7 +95,7 @@ export function BotCard() {
   };
 
   const removeToken = async () => {
-    if (!(await confirmDialog({ title: 'Удалить токен?', text: 'Бот перестанет обновлять карточки.', confirmLabel: 'Удалить', danger: true }))) return;
+    if (!(await confirmDialog({ title: t('d2.bot.c.tokenTitle'), text: t('d2.bot.c.tokenText'), confirmLabel: t('d2.news.delete'), danger: true }))) return;
     try {
       setInfo(await api<SettingsInfo>('/settings', 'PUT', { discordToken: '' }));
     } catch (err) {
@@ -100,7 +104,7 @@ export function BotCard() {
   };
 
   const removeSecret = async () => {
-    if (!(await confirmDialog({ title: 'Удалить Client Secret?', text: 'Вход через Discord перестанет работать.', confirmLabel: 'Удалить', danger: true }))) return;
+    if (!(await confirmDialog({ title: t('d2.bot.c.secretTitle'), text: t('d2.bot.c.secretText'), confirmLabel: t('d2.news.delete'), danger: true }))) return;
     try {
       setInfo(await api<SettingsInfo>('/settings', 'PUT', { discordClientSecret: '' }));
     } catch (err) {
@@ -111,11 +115,11 @@ export function BotCard() {
   const tokenSet = !!info?.discordTokenSet;
   const secretSet = !!info?.discordSecretSet;
   // checked while typing; the message appears under the field, the button waits until it is fixed
-  const tokenWarn = token.trim() && !/^[\w-]{20,}\.[\w-]{4,}\.[\w-]{20,}$/.test(token.trim()) ? 'Похоже, это не токен бота: он состоит из трёх частей через точки. Скопируйте его целиком в Developer Portal (Bot → Reset Token).' : '';
-  const proxyWarn = proxy.trim() && !clearProxy && !/^([a-z0-9]+:\/\/)?[^\s:@/]+(:[^\s@/]+)*(@[^\s:@/]+(:\d{1,5})?)?$/i.test(proxy.trim()) ? 'Формат: адрес:порт:логин:пароль или socks5://логин:пароль@адрес:порт' : '';
+  const tokenWarn = token.trim() && !/^[\w-]{20,}\.[\w-]{4,}\.[\w-]{20,}$/.test(token.trim()) ? t('d2.bot.tokenWarn') : '';
+  const proxyWarn = proxy.trim() && !clearProxy && !/^([a-z0-9]+:\/\/)?[^\s:@/]+(:[^\s@/]+)*(@[^\s:@/]+(:\d{1,5})?)?$/i.test(proxy.trim()) ? t('d2.bot.proxyWarn') : '';
 
   return (
-    <Section title="Бот и вход через Discord" actions={<BotPill status={status} tokenSet={tokenSet} />}>
+    <Section title={t('d2.bot.title')} actions={<BotPill status={status} tokenSet={tokenSet} />}>
     <form onSubmit={save} className="space-y-3.5">
       {tokenSet && status?.state === 'error' && status.error && (
         <p className="rounded-2xl bg-badbg px-4 py-2.5 text-sm font-bold text-bad">{status.error}</p>
@@ -124,7 +128,7 @@ export function BotCard() {
       {tokenSet && status && <BotLatency status={status} />}
 
       <div data-tour="bot-token">
-      <Field label="Токен бота">
+      <Field label={t('d2.bot.token')}>
         <input
           id="set-token"
           className="input font-mono"
@@ -132,7 +136,7 @@ export function BotCard() {
           value={token}
           onChange={(e) => setTokenValue(e.target.value)}
           {...noAutofill(true)}
-          placeholder={tokenSet ? `сохранён (${info?.discordTokenHint}), введите новый для замены` : 'вставьте токен из Developer Portal'}
+          placeholder={tokenSet ? t('d2.bot.tokenSaved', { hint: info?.discordTokenHint ?? '' }) : t('d2.bot.tokenPaste')}
           aria-invalid={tokenWarn ? true : undefined}
           aria-describedby={tokenWarn ? 'set-token-err' : undefined}
         />
@@ -140,10 +144,10 @@ export function BotCard() {
       <FieldError id="set-token-err" text={tokenWarn} />
       </div>
       {tokenSet && (
-        <button type="button" className="btn-link-danger text-sm" onClick={removeToken}>Удалить сохранённый токен</button>
+        <button type="button" className="btn-link-danger text-sm" onClick={removeToken}>{t('d2.bot.removeToken')}</button>
       )}
 
-      <Field label="Прокси (необязательно)">
+      <Field label={t('d2.bot.proxy')}>
         <ProxyField
           id="set-proxy"
           value={clearProxy ? '' : proxy}
@@ -151,22 +155,22 @@ export function BotCard() {
           onChange={setProxy}
           onType={setProxyType}
           disabled={clearProxy}
-          placeholder={info?.proxyUrl ? `сейчас: ${info.proxyUrl}` : undefined}
+          placeholder={info?.proxyUrl ? t('d2.bot.proxyNow', { url: info.proxyUrl }) : undefined}
         />
       </Field>
       <FieldError id="set-proxy-err" text={proxyWarn} />
       {info?.proxyUrl && (
         <label className="flex items-center gap-2 text-sm font-bold text-mute">
           <input type="checkbox" className="h-4 w-4 accent-brand" checked={clearProxy} onChange={(e) => setClearProxy(e.target.checked)} />
-          Отключить прокси
+          {t('d2.bot.proxyOff')}
         </label>
       )}
-      <p className="text-sm font-semibold text-mute">Через прокси идёт только связь бота с Discord. Опрос игровых серверов всегда идёт напрямую.</p>
+      <p className="text-sm font-semibold text-mute">{t('d2.bot.proxyNote')}</p>
 
       <div className="space-y-3 rounded-ui-lg bg-soft p-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <h3 className="font-black">Вход через Discord</h3>
-          <span className={`pill ${secretSet ? 'pill-ok' : 'pill-mute'}`}>{secretSet ? 'ВКЛЮЧЁН' : 'НЕ НАСТРОЕН'}</span>
+          <h3 className="font-black">{t('d2.bot.login')}</h3>
+          <span className={`pill ${secretSet ? 'pill-ok' : 'pill-mute'}`}>{secretSet ? t('d2.bot.on') : t('d2.bot.notSet')}</span>
         </div>
         <Field label="Client Secret">
           <input
@@ -176,11 +180,11 @@ export function BotCard() {
             value={secret}
             onChange={(e) => setSecret(e.target.value)}
             {...noAutofill(true)}
-            placeholder={secretSet ? 'сохранён, введите новый для замены' : 'не задан'}
+            placeholder={secretSet ? t('d2.bot.secretSaved') : t('d2.bot.secretNone')}
           />
         </Field>
         {secretSet && (
-          <button type="button" className="btn-link-danger text-sm" onClick={() => void removeSecret()}>Удалить Client Secret</button>
+          <button type="button" className="btn-link-danger text-sm" onClick={() => void removeSecret()}>{t('d2.bot.removeSecret')}</button>
         )}
         {info?.discordRedirect && (
           <div>
@@ -192,7 +196,7 @@ export function BotCard() {
           </div>
         )}
         <p className="text-sm font-semibold text-mute">
-          Добавьте этот адрес в Developer Portal: OAuth2 → Redirects. Client Secret скопируйте на той же странице OAuth2.
+          {t('d2.bot.redirectNote')}
         </p>
       </div>
 
@@ -200,12 +204,12 @@ export function BotCard() {
       {tokenSet && status?.inviteUrl && (
         <div className="flex flex-wrap items-center gap-3 rounded-2xl bg-soft px-4 py-3">
           <InviteButton url={status.inviteUrl} />
-          <span className="text-sm font-semibold text-mute">Откроется Discord: выберите сервер и подтвердите права.</span>
+          <span className="text-sm font-semibold text-mute">{t('d2.bot.inviteNote')}</span>
         </div>
       )}
-      {saved && <p className="rounded-2xl bg-okbg px-4 py-2.5 font-bold text-ok" role="status">Сохранено. Бот переподключится в течение 10 секунд.</p>}
-      <p className="text-sm font-semibold text-mute">Токен, Client Secret и прокси сохраняются только кнопкой: это секреты, их не отправляем «на лету».</p>
-      <button className="btn" disabled={busy || !!tokenWarn || !!proxyWarn || (!token.trim() && !secret.trim() && !proxy.trim() && !clearProxy)}>Сохранить</button>
+      {saved && <p className="rounded-2xl bg-okbg px-4 py-2.5 font-bold text-ok" role="status">{t('d2.bot.savedNote')}</p>}
+      <p className="text-sm font-semibold text-mute">{t('d2.bot.secretsNote')}</p>
+      <button className="btn" disabled={busy || !!tokenWarn || !!proxyWarn || (!token.trim() && !secret.trim() && !proxy.trim() && !clearProxy)}>{t('common.save')}</button>
     </form>
     </Section>
   );
