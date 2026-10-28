@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { api, getToken, type BackupInfo, type BackupItem } from '../api';
 import { confirmDialog, promptDialog } from '../confirm';
-import { t } from '../i18n';
+import { t, useI18n } from '../i18n';
 import { loadUnreadableSecrets, saveUnreadableSecrets, unreadableSecrets } from '../security';
 import { Button, ErrorLine, Field, IconDownload, LoadError, StateView, IconRestore, IconTrash, Section, Switch, fmtDateTime, ago, toast, errText } from '../ui';
 import { errorText } from '../apiErrors';
@@ -9,6 +9,7 @@ import { BackupS3 } from '../components/BackupS3';
 
 /** the copies on a time line: a bar per copy (the height is its size, the colour is auto / manual), and how old the last one is */
 function BackupTimeline({ items, schedule }: { items: BackupInfo['items']; schedule: BackupInfo['schedule'] }) {
+  useI18n();
   const list = [...items].sort((a, b) => a.createdAt - b.createdAt).slice(-30);
   const max = Math.max(1, ...list.map((b) => b.size));
   const total = items.reduce((n, b) => n + b.size, 0);
@@ -19,12 +20,12 @@ function BackupTimeline({ items, schedule }: { items: BackupInfo['items']; sched
   return (
     <div className="mb-3 space-y-2 rounded-ui-lg bg-soft p-3.5">
       <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 text-sm font-bold text-mute">
-        <span><b className="text-ink">{items.length}</b> {items.length === 1 ? 'копия' : items.length < 5 ? 'копии' : 'копий'}, всего {fmtSize(total)}</span>
-        <span className={late ? 'text-warn' : ''}>последняя: {ago(last.createdAt)}{late ? '. Расписание давно не срабатывало' : ''}</span>
+        <span><b className="text-ink">{items.length}</b> {t('d2.bk.copies', { n: items.length })}, {t('d2.bk.total', { size: fmtSize(total) })}</span>
+        <span className={late ? 'text-warn' : ''}>{t('d2.bk.last', { ago: ago(last.createdAt) })}{late ? `. ${t('d2.bk.late')}` : ''}</span>
       </div>
-      <div className="bk-line" role="img" aria-label={`Копий: ${items.length}`}>
+      <div className="bk-line" role="img" aria-label={t('d2.bk.countLabel', { n: items.length })}>
         {list.map((b) => (
-          <span key={b.name} className={b.kind === 'auto' ? '' : 'is-manual'} style={{ height: `${Math.max(12, (b.size / max) * 100)}%` }} title={`${fmtDateTime(b.createdAt)} · ${fmtSize(b.size)} · ${b.kind === 'auto' ? 'авто' : 'вручную'}`} />
+          <span key={b.name} className={b.kind === 'auto' ? '' : 'is-manual'} style={{ height: `${Math.max(12, (b.size / max) * 100)}%` }} title={`${fmtDateTime(b.createdAt)} · ${fmtSize(b.size)} · ${b.kind === 'auto' ? t('d2.bk.auto') : t('d2.bk.manual')}`} />
         ))}
       </div>
       <div className="flex justify-between text-xs font-bold text-mute"><span>{fmtDateTime(list[0].createdAt)}</span><span>{fmtDateTime(last.createdAt)}</span></div>
@@ -33,14 +34,14 @@ function BackupTimeline({ items, schedule }: { items: BackupInfo['items']; sched
 }
 
 export const fmtSize = (n: number) =>
-  n >= 1073741824 ? `${(n / 1073741824).toFixed(1)} ГБ` : n >= 1048576 ? `${(n / 1048576).toFixed(1)} МБ` : n >= 1024 ? `${Math.round(n / 1024)} КБ` : `${n} Б`;
+  n >= 1073741824 ? t('d2.sys.gb', { v: (n / 1073741824).toFixed(1) }) : n >= 1048576 ? t('d2.sys.mb', { v: (n / 1048576).toFixed(1) }) : n >= 1024 ? t('d2.bk.kb', { v: Math.round(n / 1024) }) : t('d2.bk.b', { v: n });
 
 const isEncrypted = (name: string) => name.endsWith('.enc');
 
 /** save an authenticated GET as a file */
 export async function downloadFile(path: string, fallbackName: string) {
   const r = await fetch(`/api${path}`, { headers: { Authorization: `Bearer ${getToken() ?? ''}` } });
-  if (!r.ok) throw new Error(errorText(await r.json().catch(() => null), 'Не удалось получить копию'));
+  if (!r.ok) throw new Error(errorText(await r.json().catch(() => null), t('d2.bk.getFail')));
   const name = /filename="?([^"]+)"?/.exec(r.headers.get('content-disposition') ?? '')?.[1] ?? fallbackName;
   const url = URL.createObjectURL(await r.blob());
   const a = document.createElement('a');
@@ -62,16 +63,17 @@ async function waitAndReload() {
 
 const askPassphrase = (what: string) =>
   promptDialog({
-    title: 'Архив зашифрован',
-    label: 'Парольная фраза',
-    text: `Введите парольную фразу, с которой был создан архив «${what}».`,
+    title: t('d2.bk.encTitle'),
+    label: t('d2.bk.pass'),
+    text: t('d2.bk.encText', { what }),
     password: true,
-    confirmLabel: 'Продолжить',
-    validate: (v) => (v ? null : 'Введите парольную фразу'),
+    confirmLabel: t('d2.bk.continue'),
+    validate: (v) => (v ? null : t('d2.bk.passEnter')),
   });
 
 /** Stored archives, schedule, off-site upload and restore. */
 export default function BackupsCard() {
+  useI18n();
   const [info, setInfo] = useState<BackupInfo | null>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
@@ -101,28 +103,28 @@ export default function BackupsCard() {
 
   const downloadFull = () => guard('full', async () => {
     await downloadFile('/backup', 'coregsm-backup.tar.gz');
-    toast('Копия скачана');
+    toast(t('d2.bk.t.downloaded'));
   });
   const createCopy = () => guard('run', async () => {
     await api<BackupItem>('/backups/run', 'POST');
-    toast('Копия создана');
+    toast(t('d2.bk.t.created'));
     await load();
   });
   const download = (b: BackupItem) => guard(`dl:${b.name}`, async () => {
     await downloadFile(`/backups/${encodeURIComponent(b.name)}`, b.name);
   });
   const remove = async (b: BackupItem) => {
-    if (!(await confirmDialog({ title: 'Удалить копию?', text: `Файл «${b.name}» будет удалён с сервера без возможности восстановления.`, confirmLabel: 'Удалить', danger: true }))) return;
+    if (!(await confirmDialog({ title: t('d2.bk.c.delTitle'), text: t('d2.bk.c.delText', { name: b.name }), confirmLabel: t('d2.news.delete'), danger: true }))) return;
     await guard(`rm:${b.name}`, async () => {
       await api(`/backups/${encodeURIComponent(b.name)}`, 'DELETE');
-      toast('Копия удалена');
+      toast(t('d2.bk.t.deleted'));
       await load();
     });
   };
   /** after a restore: with unreadable secrets the page stays (and warns), otherwise it waits for the restart and reloads */
   const afterRestore = async (raw: unknown) => {
     const un = unreadableSecrets(raw).map((x) => x.id);
-    toast('Копия принята, панель перезапускается…');
+    toast(t('d2.bk.t.accepted'));
     if (un.length) {
       saveUnreadableSecrets(un);
       setUnreadable(un);
@@ -133,9 +135,9 @@ export default function BackupsCard() {
   };
   const restoreStored = async (b: BackupItem) => {
     if (!(await confirmDialog({
-      title: 'Восстановить из этой копии?',
-      text: `Все текущие данные панели будут заменены копией «${b.name}» от ${fmtDateTime(b.createdAt)}. Текущая база будет сохранена на сервере как coregsm.db.before-restore. Панель перезапустится.`,
-      confirmLabel: 'Восстановить',
+      title: t('d2.bk.c.restoreTitle'),
+      text: t('d2.bk.c.restoreText', { name: b.name, when: fmtDateTime(b.createdAt) }),
+      confirmLabel: t('d2.bk.restore'),
       danger: true,
     }))) return;
     let pass: string | undefined;
@@ -156,9 +158,9 @@ export default function BackupsCard() {
   };
   const restoreFile = async (file: File) => {
     if (!(await confirmDialog({
-      title: 'Восстановить из файла?',
-      text: `Все данные панели будут заменены копией «${file.name}». Текущая база будет сохранена на сервере как coregsm.db.before-restore. Панель перезапустится.`,
-      confirmLabel: 'Восстановить',
+      title: t('d2.bk.c.fileTitle'),
+      text: t('d2.bk.c.fileText', { name: file.name }),
+      confirmLabel: t('d2.bk.restore'),
       danger: true,
     }))) return;
     const headers: Record<string, string> = { 'Content-Type': 'application/octet-stream', Authorization: `Bearer ${getToken() ?? ''}` };
@@ -174,7 +176,7 @@ export default function BackupsCard() {
     try {
       const r = await fetch('/api/backup/restore', { method: 'POST', headers, body: file });
       const j = (await r.json().catch(() => null)) as { error?: string; unreadableSecrets?: string[] } | null;
-      if (!r.ok) throw new Error(errorText(j, 'Не удалось восстановить копию'));
+      if (!r.ok) throw new Error(errorText(j, t('d2.bk.restoreFail')));
       await afterRestore(j?.unreadableSecrets);
     } catch (e) {
       setError(errText(e));
@@ -186,8 +188,8 @@ export default function BackupsCard() {
     e.preventDefault();
     setError('');
     const url = remoteUrl.trim();
-    if (url && !/^https:\/\//i.test(url)) { setError('Адрес для отправки должен начинаться с https://'); return; }
-    if (!Number.isInteger(keep) || keep < 1 || keep > 30) { setError('Хранить можно от 1 до 30 копий'); return; }
+    if (url && !/^https:\/\//i.test(url)) { setError(t('d2.bk.e.https')); return; }
+    if (!Number.isInteger(keep) || keep < 1 || keep > 30) { setError(t('d2.bk.e.keep')); return; }
     const body: { schedule: string; keep: number; remoteUrl?: string; passphrase?: string } = { schedule, keep };
     if (clearRemote) body.remoteUrl = '';
     else if (url) body.remoteUrl = url;
@@ -200,7 +202,7 @@ export default function BackupsCard() {
       setClearRemote(false);
       setPassphrase('');
       setClearPass(false);
-      toast('Настройки копий сохранены');
+      toast(t('d2.bk.t.settings'));
       await load();
     } catch (err) {
       setError(errText(err));
@@ -213,8 +215,8 @@ export default function BackupsCard() {
 
   return (
     <Section
-      title="Резервные копии"
-      description="В копию входят база (серверы, привязки, пользователи, новости, настройки), картинки новостей и логотип. Внутри хранятся секреты: токен бота и хэши паролей. Храните файлы так же бережно, как пароль, лучше зашифрованными."
+      title={t('d2.sys.backups')}
+      description={t('d2.bk.desc')}
     >
       {error && !info ? <LoadError error={error} onRetry={() => void load()} compact bare /> : <ErrorLine text={error} />}
 
@@ -234,10 +236,10 @@ export default function BackupsCard() {
       )}
 
       <div className="flex flex-wrap items-center gap-3">
-        <button className="btn" onClick={() => void downloadFull()} disabled={disabled}>{busy === 'full' ? 'Готовлю…' : 'Скачать полную копию'}</button>
-        <button className="btn btn-soft" onClick={() => void createCopy()} disabled={disabled}>{busy === 'run' ? 'Создаю…' : 'Создать копию на сервере'}</button>
+        <button className="btn" onClick={() => void downloadFull()} disabled={disabled}>{busy === 'full' ? t('d2.bk.preparing') : t('d2.bk.full')}</button>
+        <button className="btn btn-soft" onClick={() => void createCopy()} disabled={disabled}>{busy === 'run' ? t('d2.bk.creating') : t('d2.bk.create')}</button>
         <label className={`btn btn-soft cursor-pointer ${disabled ? 'pointer-events-none opacity-50' : ''}`}>
-          {restoring ? 'Восстанавливаю…' : 'Восстановить из файла'}
+          {restoring ? t('d2.bk.restoring') : t('d2.bk.fromFile')}
           <input
             type="file"
             accept=".db,.gz,.enc,.tar.gz,application/octet-stream"
@@ -249,22 +251,22 @@ export default function BackupsCard() {
       </div>
 
       <form onSubmit={saveSettings} className="space-y-4 rounded-ui-lg bg-soft p-4">
-        <h3 className="font-black">Расписание и хранение</h3>
+        <h3 className="font-black">{t('d2.bk.schedule')}</h3>
         <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Автоматические копии">
+          <Field label={t('d2.bk.auto2')}>
             <select id="bk-schedule" className="input" value={schedule} onChange={(e) => setSchedule(e.target.value as BackupInfo['schedule'])}>
-              <option value="off">Выключено</option>
-              <option value="daily">Каждый день</option>
-              <option value="weekly">Каждую неделю</option>
+              <option value="off">{t('al.smart.off')}</option>
+              <option value="daily">{t('d2.bk.everyDay')}</option>
+              <option value="weekly">{t('d2.mt.weekly')}</option>
             </select>
           </Field>
-          <Field label="Сколько копий хранить (1-30)">
+          <Field label={t('d2.bk.keep')}>
             <input id="bk-keep" className="input" type="number" min={1} max={30} value={keep} onChange={(e) => setKeep(Number(e.target.value))} />
           </Field>
         </div>
 
         <div>
-          <label htmlFor="bk-remote" className="label">Отправлять копию по адресу (необязательно)</label>
+          <label htmlFor="bk-remote" className="label">{t('d2.bk.remote')}</label>
           <input
             id="bk-remote"
             className="input font-mono"
@@ -274,25 +276,25 @@ export default function BackupsCard() {
             value={clearRemote ? '' : remoteUrl}
             disabled={clearRemote}
             onChange={(e) => setRemoteUrl(e.target.value)}
-            placeholder={info?.remoteUrl ? `сейчас: ${info.remoteUrl}` : 'https://…'}
+            placeholder={info?.remoteUrl ? t('d2.bot.proxyNow', { url: info.remoteUrl }) : 'https://…'}
             aria-describedby="bk-remote-hint"
           />
-          <p id="bk-remote-hint" className="mt-1.5 text-sm font-semibold text-mute">Адрес должен начинаться с https://. Копия отправляется методом PUT, подходит для WebDAV/Nextcloud и подписанных ссылок S3.</p>
+          <p id="bk-remote-hint" className="mt-1.5 text-sm font-semibold text-mute">{t('d2.bk.remoteHint')}</p>
           {info?.remoteUrl && (
             <label className="mt-2 flex items-center gap-3 text-sm font-bold text-mute">
               <Switch checked={clearRemote} onChange={setClearRemote} />
-              Отключить отправку
+              {t('d2.bk.remoteOff')}
             </label>
           )}
           {info?.lastRemote && (
             <p className={`mt-2 rounded-2xl px-4 py-2 text-sm font-bold ${info.lastRemote.ok ? 'bg-okbg text-ok' : 'bg-badbg text-bad'}`} role="status">
-              Последняя отправка: {fmtDateTime(info.lastRemote.at)}, {info.lastRemote.ok ? 'успешно' : `ошибка${info.lastRemote.error ? `: ${info.lastRemote.error}` : ''}`}
+              {t('d2.bk.lastSend')} {fmtDateTime(info.lastRemote.at)}, {info.lastRemote.ok ? t('d2.bk.ok') : `${t('d2.sys.bot.error')}${info.lastRemote.error ? `: ${info.lastRemote.error}` : ''}`}
             </p>
           )}
         </div>
 
         <div>
-          <label htmlFor="bk-pass" className="label">Парольная фраза для шифрования (необязательно)</label>
+          <label htmlFor="bk-pass" className="label">{t('d2.bk.passLabel')}</label>
           <input
             id="bk-pass"
             className="input"
@@ -301,30 +303,30 @@ export default function BackupsCard() {
             value={clearPass ? '' : passphrase}
             disabled={clearPass}
             onChange={(e) => setPassphrase(e.target.value)}
-            placeholder={info?.encrypted ? 'шифрование включено, введите новую фразу для замены' : 'не задана: копии не шифруются'}
+            placeholder={info?.encrypted ? t('d2.bk.passOn') : t('d2.bk.passOff')}
             aria-describedby="bk-pass-hint"
           />
-          <p id="bk-pass-hint" className="mt-1.5 text-sm font-bold text-warn">Если потерять парольную фразу, зашифрованные архивы нельзя будет прочитать. Восстановить её невозможно.</p>
+          <p id="bk-pass-hint" className="mt-1.5 text-sm font-bold text-warn">{t('d2.bk.passWarn')}</p>
           {info?.encrypted && (
             <label className="mt-2 flex items-center gap-3 text-sm font-bold text-mute">
               <Switch checked={clearPass} onChange={setClearPass} />
-              Отключить шифрование новых копий
+              {t('d2.bk.encOff')}
             </label>
           )}
         </div>
 
-        <Button loading={saving}>{saving ? 'Сохраняю…' : 'Сохранить'}</Button>
+        <Button loading={saving}>{saving ? t('d2.sf.saving') : t('common.save')}</Button>
       </form>
 
       <BackupS3 info={info} reload={load} />
 
       <div>
-        <h3 className="mb-2 font-black">Копии на сервере</h3>
+        <h3 className="mb-2 font-black">{t('d2.bk.onServer')}</h3>
         {info && info.items.length > 0 && <BackupTimeline items={info.items} schedule={info.schedule} />}
         {!info ? (
           <div className="skeleton h-20 rounded-2xl" />
         ) : info.items.length === 0 ? (
-          <StateView kind="empty" compact bare title="Копий пока нет" text="Нажмите «Создать копию на сервере» или включите расписание." className="rounded-2xl bg-soft" />
+          <StateView kind="empty" compact bare title={t('d2.bk.empty')} text={t('d2.bk.emptyText')} className="rounded-2xl bg-soft" />
         ) : (
           <ul className="divide-y divide-line rounded-2xl border border-line">
             {info.items.map((b) => (
@@ -333,12 +335,12 @@ export default function BackupsCard() {
                   <div className="break-all font-mono text-sm font-bold">{b.name}</div>
                   <div className="text-sm font-semibold text-mute">{fmtDateTime(b.createdAt)} · {fmtSize(b.size)}</div>
                 </div>
-                <span className={`pill ${b.kind === 'auto' ? 'pill-mute' : 'pill-ok'}`}>{b.kind === 'auto' ? 'АВТО' : 'ВРУЧНУЮ'}</span>
-                {isEncrypted(b.name) && <span className="pill pill-warn">ЗАШИФРОВАНА</span>}
-                <div className="flex items-center gap-1.5" role="group" aria-label={`Действия: ${b.name}`}>
-                  <button type="button" className="row-act" title="Скачать" aria-label="Скачать" onClick={() => void download(b)} disabled={disabled}><IconDownload /></button>
-                  <button type="button" className="row-act" title="Восстановить из этой копии" aria-label="Восстановить из этой копии" onClick={() => void restoreStored(b)} disabled={disabled}><IconRestore /></button>
-                  <button type="button" className="row-act row-act-danger" title="Удалить" aria-label="Удалить" onClick={() => void remove(b)} disabled={disabled}><IconTrash /></button>
+                <span className={`pill ${b.kind === 'auto' ? 'pill-mute' : 'pill-ok'}`}>{b.kind === 'auto' ? t('d2.bk.autoU') : t('d2.bk.manualU')}</span>
+                {isEncrypted(b.name) && <span className="pill pill-warn">{t('d2.bk.encrypted')}</span>}
+                <div className="flex items-center gap-1.5" role="group" aria-label={t('d2.bk.actions', { name: b.name })}>
+                  <button type="button" className="row-act" title={t('cards.download')} aria-label={t('cards.download')} onClick={() => void download(b)} disabled={disabled}><IconDownload /></button>
+                  <button type="button" className="row-act" title={t('d2.bk.c.restoreTitle')} aria-label={t('d2.bk.c.restoreTitle')} onClick={() => void restoreStored(b)} disabled={disabled}><IconRestore /></button>
+                  <button type="button" className="row-act row-act-danger" title={t('d2.news.delete')} aria-label={t('d2.news.delete')} onClick={() => void remove(b)} disabled={disabled}><IconTrash /></button>
                 </div>
               </li>
             ))}
