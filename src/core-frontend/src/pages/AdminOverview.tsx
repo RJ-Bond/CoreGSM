@@ -3,7 +3,7 @@ import { useAuth } from '../auth';
 import { delta, dayKey, healthScore } from './adminLogic';
 import { api, type BackupInfo, type BotStatus, type CertInfo, type Server, type UpdateInfo, type UserRow } from '../api';
 import type { OverviewData } from '../components/servers/overviewLogic';
-import { t, useI18n } from '../i18n';
+import { t, useI18n, type TKey } from '../i18n';
 import { AdminPage, Button, PageHead, Section, SmoothArea, ago, fmtDateTime, toast, usePoll, fail } from '../ui';
 import { Icon } from '../icons';
 import { downloadFile } from './Backups';
@@ -27,12 +27,13 @@ const ok = <T,>(r: PromiseSettledResult<T>): T | null => (r.status === 'fulfille
 const WEEK = 7 * 86_400_000;
 
 function Tile({ label, value, sub, tone, href, change, spark }: { label: string; value: string; sub?: string; tone?: 'ok' | 'warn' | 'bad'; href?: string; change?: { text: string; tone: 'up' | 'down' } | null; spark?: number[] }) {
+  useI18n();
   const body = (
     <>
       <span className="adm-tile-k">{label}</span>
       <span className="adm-tile-row">
         <span className={`adm-tile-v ${tone ? `is-${tone}` : ''}`}>{value}</span>
-        {change && <span className={`adm-delta is-${change.tone}`} title="за 24 часа">{change.text}</span>}
+        {change && <span className={`adm-delta is-${change.tone}`} title={t('d2.ao.24h')}>{change.text}</span>}
       </span>
       {spark && spark.length >= 3 && <SmoothArea values={spark} color="rgb(var(--link))" w={160} h={28} fill={0.18} strokeWidth={1.5} className="adm-tile-spark" label={label} />}
       {sub && <span className="adm-tile-s">{sub}</span>}
@@ -41,34 +42,35 @@ function Tile({ label, value, sub, tone, href, change, spark }: { label: string;
   return href ? <a href={href} className="adm-tile">{body}</a> : <div className="adm-tile">{body}</div>;
 }
 
-const REASON_TEXT: Record<string, string> = {
-  down: 'Есть недоступные серверы',
-  bot: 'Бот Discord в ошибке',
-  cert: 'Сертификат скоро истечёт',
-  backup: 'Давно нет резервной копии',
-  pending: 'Ждут заявки игроков',
-  update: 'Доступно обновление',
+const REASON_TEXT: Record<string, TKey> = {
+  down: 'd2.ao.r.down',
+  bot: 'd2.ao.r.bot',
+  cert: 'd2.ao.r.cert',
+  backup: 'd2.ao.r.backup',
+  pending: 'd2.ao.r.pending',
+  update: 'd2.ao.r.update',
 };
 
 /** The ring of the panel's health: the number in the middle, the reasons under it */
 function HealthRing({ score, reasons }: { score: number; reasons: { id: string; cost: number; tone: string }[] }) {
+  useI18n();
   const R = 38;
   const C = 2 * Math.PI * R;
   const tone = score >= 90 ? 'ok' : score >= 65 ? 'warn' : 'bad';
   return (
-    <section className="panel adm-health" aria-label="Здоровье панели">
-      <svg viewBox="0 0 100 100" className="adm-ring" role="img" aria-label={`Здоровье панели: ${score} из 100`}>
+    <section className="panel adm-health" aria-label={t('d2.ao.health')}>
+      <svg viewBox="0 0 100 100" className="adm-ring" role="img" aria-label={t('d2.ao.healthScore', { n: score })}>
         <circle cx="50" cy="50" r={R} className="adm-ring-bg" />
         <circle cx="50" cy="50" r={R} className={`adm-ring-fg is-${tone}`} strokeDasharray={C} strokeDashoffset={C * (1 - score / 100)} transform="rotate(-90 50 50)" />
         <text x="50" y="56" textAnchor="middle" className="adm-ring-n">{score}</text>
       </svg>
       <div className="min-w-0">
-        <p className="font-extrabold">{score >= 90 ? 'Панель в порядке' : score >= 65 ? 'Есть, на что взглянуть' : 'Нужно вмешательство'}</p>
+        <p className="font-extrabold">{score >= 90 ? t('d2.ao.h.ok') : score >= 65 ? t('d2.ao.h.look') : t('d2.ao.h.act')}</p>
         {reasons.length === 0 ? (
-          <p className="text-sm font-semibold text-mute">Серверы, бот, сертификат и копии — всё в норме.</p>
+          <p className="text-sm font-semibold text-mute">{t('d2.ao.h.allOk')}</p>
         ) : (
           <ul className="mt-1 flex flex-wrap gap-1.5">
-            {reasons.map((r) => <li key={r.id} className={`adm-reason is-${r.tone}`}>{REASON_TEXT[r.id]} <b>−{r.cost}</b></li>)}
+            {reasons.map((r) => <li key={r.id} className={`adm-reason is-${r.tone}`}>{REASON_TEXT[r.id] ? t(REASON_TEXT[r.id]) : r.id} <b>−{r.cost}</b></li>)}
           </ul>
         )}
       </div>
@@ -76,15 +78,16 @@ function HealthRing({ score, reasons }: { score: number; reasons: { id: string; 
   );
 }
 
-const DUTY = [
-  { id: 'servers', text: 'Просмотреть серверы', href: '/admin/servers' },
-  { id: 'users', text: 'Разобрать заявки игроков', href: '/admin/users' },
-  { id: 'backup', text: 'Проверить резервную копию', href: '/admin/settings/updates' },
-  { id: 'journal', text: 'Заглянуть в журнал', href: '/admin/journal' },
+const DUTY: { id: string; text: TKey; href: string }[] = [
+  { id: 'servers', text: 'd2.ao.duty.servers', href: '/admin/servers' },
+  { id: 'users', text: 'd2.ao.duty.users', href: '/admin/users' },
+  { id: 'backup', text: 'd2.ao.duty.backup', href: '/admin/settings/updates' },
+  { id: 'journal', text: 'd2.ao.duty.journal', href: '/admin/journal' },
 ];
 
 /** The checks of the day: kept in this browser, start anew each day */
 function Duty() {
+  useI18n();
   const key = `adm-duty-${dayKey()}`;
   const [done, setDone] = useState<string[]>(() => {
     try { return JSON.parse(localStorage.getItem(key) ?? '[]') as string[]; } catch { return []; }
@@ -96,15 +99,15 @@ function Duty() {
   };
   const left = DUTY.filter((d) => !done.includes(d.id)).length;
   return (
-    <Section title="Обход на сегодня" description={left === 0 ? 'Всё обойдено — можно отдыхать' : `Осталось: ${left} из ${DUTY.length}`}>
+    <Section title={t('d2.ao.duty')} description={left === 0 ? t('d2.ao.duty.allDone') : t('d2.ao.duty.left', { a: left, b: DUTY.length })}>
       <ul className="space-y-1.5">
         {DUTY.map((d) => (
           <li key={d.id} className="adm-duty">
             <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-2.5">
               <input type="checkbox" checked={done.includes(d.id)} onChange={() => toggle(d.id)} />
-              <span className={`font-bold ${done.includes(d.id) ? 'text-mute line-through' : ''}`}>{d.text}</span>
+              <span className={`font-bold ${done.includes(d.id) ? 'text-mute line-through' : ''}`}>{t(d.text)}</span>
             </label>
-            <a href={d.href} className="text-sm font-extrabold text-link hover:underline">Открыть</a>
+            <a href={d.href} className="text-sm font-extrabold text-link hover:underline">{t('d2.ao.open')}</a>
           </li>
         ))}
       </ul>
@@ -215,13 +218,13 @@ export default function AdminOverview() {
           </div>
 
           {servers.length > 0 && (
-            <div className="adm-now" role="list" aria-label="Серверы сейчас">
+            <div className="adm-now" role="list" aria-label={t('d2.ao.now')}>
               {servers.map((s) => (
                 <a key={s.id} role="listitem" href={`/servers/${s.id}`} className={`adm-now-card ${s.maintenance ? 'is-maint' : s.online ? 'is-on' : 'is-off'}`}>
                   <span className="adm-now-dot" aria-hidden />
                   <span className="min-w-0">
                     <span className="block truncate text-sm font-extrabold">{s.name}</span>
-                    <span className="block text-xs font-semibold tabular-nums text-mute">{s.maintenance ? 'обслуживание' : s.online ? `${s.players} / ${s.maxPlayers}` : 'недоступен'}</span>
+                    <span className="block text-xs font-semibold tabular-nums text-mute">{s.maintenance ? t('d2.ao.maint') : s.online ? `${s.players} / ${s.maxPlayers}` : t('d2.ao.down')}</span>
                   </span>
                 </a>
               ))}
@@ -274,7 +277,7 @@ export default function AdminOverview() {
               title={t('adm.ov.recent')}
               actions={
                 <span className="flex items-center gap-3">
-                  <button type="button" className="adm-chip" aria-pressed={mine} onClick={() => setMine((v) => !v)}>Только мои</button>
+                  <button type="button" className="adm-chip" aria-pressed={mine} onClick={() => setMine((v) => !v)}>{t('d2.ao.mine')}</button>
                   <a href="/admin/journal" className="text-sm font-extrabold text-link hover:underline">{t('adm.ov.journal')}</a>
                 </span>
               }
@@ -299,7 +302,7 @@ export default function AdminOverview() {
                   })}
                 </ul>
               ) : (
-                <p className="font-semibold text-mute">{mine ? 'Ваших действий пока нет' : t('adm.ov.noEvents')}</p>
+                <p className="font-semibold text-mute">{mine ? t('d2.ao.noMine') : t('adm.ov.noEvents')}</p>
               )}
             </Section>
             <Duty />
