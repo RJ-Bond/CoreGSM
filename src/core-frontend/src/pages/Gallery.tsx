@@ -7,6 +7,7 @@ import { useCallback, useEffect, useRef, useState, type TouchEvent } from 'react
 import { api, getToken, type Server } from '../api';
 import { errorText } from '../apiErrors';
 import { useAuth } from '../auth';
+import { t, useI18n, type TKey } from '../i18n';
 import { IMAGE_TYPES, useDropTarget } from '../components/profile/AvatarEditor';
 import { Button, Empty, ErrorLine, Field, Modal, PageHead, ago, toast, errText } from '../ui';
 import '../styles/gallery.css';
@@ -34,6 +35,7 @@ const IconImage = () => (
 
 /** the full-size viewer over the page */
 export function Lightbox({ list, index, onClose, onIndex }: { list: Shot[]; index: number; onClose: () => void; onIndex: (i: number) => void }) {
+  useI18n();
   const s = list[index];
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
@@ -64,9 +66,9 @@ export function Lightbox({ list, index, onClose, onIndex }: { list: Shot[]; inde
   };
   if (!s) return null;
   return (
-    <div className="gl-box" role="dialog" aria-modal="true" aria-label={s.caption || 'Скриншот'} onClick={onClose} onTouchStart={onStart} onTouchEnd={onEnd}>
+    <div className="gl-box" role="dialog" aria-modal="true" aria-label={s.caption || t('d2.gal.shot')} onClick={onClose} onTouchStart={onStart} onTouchEnd={onEnd}>
       <figure className="gl-box-fig" onClick={(e) => e.stopPropagation()}>
-        <img key={s.id} src={s.url} alt={s.caption || 'Скриншот'} width={s.width} height={s.height} style={{ backgroundImage: `url(${s.thumb})`, backgroundSize: 'cover' }} />
+        <img key={s.id} src={s.url} alt={s.caption || t('d2.gal.shot')} width={s.width} height={s.height} style={{ backgroundImage: `url(${s.thumb})`, backgroundSize: 'cover' }} />
         <figcaption>
           <span className="min-w-0 flex-1">
             {s.caption && <span className="block font-extrabold">{s.caption}</span>}
@@ -76,9 +78,9 @@ export function Lightbox({ list, index, onClose, onIndex }: { list: Shot[]; inde
         </figcaption>
       </figure>
       {list.length > 1 && (
-        <div className="gl-box-strip" onClick={(e) => e.stopPropagation()} role="tablist" aria-label="Все скриншоты">
+        <div className="gl-box-strip" onClick={(e) => e.stopPropagation()} role="tablist" aria-label={t('d2.gal.all')}>
           {list.map((x, i) => (
-            <button key={x.id} type="button" role="tab" aria-selected={i === index} className={i === index ? 'is-on' : ''} onClick={() => onIndex(i)} aria-label={x.caption || `Скриншот ${i + 1}`}>
+            <button key={x.id} type="button" role="tab" aria-selected={i === index} className={i === index ? 'is-on' : ''} onClick={() => onIndex(i)} aria-label={x.caption || t('d2.gal.shotN', { n: i + 1 })}>
               <img src={x.thumb} alt="" loading="lazy" />
             </button>
           ))}
@@ -86,11 +88,11 @@ export function Lightbox({ list, index, onClose, onIndex }: { list: Shot[]; inde
       )}
       {list.length > 1 && (
         <>
-          <button type="button" className="gl-box-nav is-prev" aria-label="Предыдущий" onClick={(e) => { e.stopPropagation(); onIndex((index - 1 + list.length) % list.length); }}>‹</button>
-          <button type="button" className="gl-box-nav is-next" aria-label="Следующий" onClick={(e) => { e.stopPropagation(); onIndex((index + 1) % list.length); }}>›</button>
+          <button type="button" className="gl-box-nav is-prev" aria-label={t('d2.gal.prev')} onClick={(e) => { e.stopPropagation(); onIndex((index - 1 + list.length) % list.length); }}>‹</button>
+          <button type="button" className="gl-box-nav is-next" aria-label={t('d2.gal.next')} onClick={(e) => { e.stopPropagation(); onIndex((index + 1) % list.length); }}>›</button>
         </>
       )}
-      <button type="button" className="gl-box-close" aria-label="Закрыть" onClick={onClose}>✕</button>
+      <button type="button" className="gl-box-close" aria-label={t('common.close')} onClick={onClose}>✕</button>
     </div>
   );
 }
@@ -115,13 +117,14 @@ function ShotImg({ shot }: { shot: Shot }) {
 }
 
 export function ShotGrid({ list, onOpen, badge }: { list: Shot[]; onOpen: (i: number) => void; badge?: (s: Shot) => string | null }) {
+  useI18n();
   return (
     <ul className="gl-grid">
       {list.map((s, i) => (
         <li key={s.id} className="gl-cell">
           <button type="button" className="gl-shot" onClick={() => onOpen(i)} aria-label={s.caption || `Скриншот ${i + 1}`}>
             <ShotImg shot={s} />
-            {s.featured && <span className="gl-star" title="Лучшее">★</span>}
+            {s.featured && <span className="gl-star" title={t('d2.gal.best')}>★</span>}
             {badge?.(s) && <span className="gl-badge">{badge(s)}</span>}
             {(s.caption || s.author) && (
               <span className="gl-cap">
@@ -137,6 +140,7 @@ export function ShotGrid({ list, onOpen, badge }: { list: Shot[]; onOpen: (i: nu
 }
 
 function UploadForm({ servers, onClose, onDone, initial }: { servers: Server[]; onClose: () => void; onDone: (s: Shot) => void; initial?: File | null }) {
+  useI18n();
   const [file, setFile] = useState<File | null>(initial ?? null);
   const [preview, setPreview] = useState('');
   const [caption, setCaption] = useState('');
@@ -158,7 +162,7 @@ function UploadForm({ servers, onClose, onDone, initial }: { servers: Server[]; 
       if (serverId) q.set('serverId', String(serverId));
       const r = await fetch(`/api/gallery?${q.toString()}`, { method: 'POST', headers: { 'Content-Type': file.type, Authorization: `Bearer ${getToken() ?? ''}` }, body: file });
       const j = (await r.json().catch(() => null)) as (Shot & { error?: string }) | null;
-      if (!r.ok || !j) throw new Error(errorText(j, 'Не удалось загрузить картинку (PNG, JPG или WebP до 8 МБ)'));
+      if (!r.ok || !j) throw new Error(errorText(j, t('d2.gal.uploadFail')));
       onDone(j);
     } catch (e) {
       setError(errText(e));
@@ -167,33 +171,34 @@ function UploadForm({ servers, onClose, onDone, initial }: { servers: Server[]; 
     }
   };
   return (
-    <Modal title="Новый скриншот" onClose={onClose}>
+    <Modal title={t('d2.gal.new')} onClose={onClose}>
       <div className="space-y-3.5">
         <label className={`gl-drop ${preview ? 'has-file' : ''}`}>
           <input type="file" accept="image/png,image/jpeg,image/webp" className="sr-only" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
-          {preview ? <img src={preview} alt="" /> : <span className="font-extrabold text-mute">Выберите картинку: PNG, JPG или WebP до 8 МБ</span>}
+          {preview ? <img src={preview} alt="" /> : <span className="font-extrabold text-mute">{t('d2.gal.choose')}</span>}
         </label>
-        <Field label="Подпись (необязательно)"><input className="input" value={caption} onChange={(e) => setCaption(e.target.value)} maxLength={140} placeholder="Например: закат над замком" /></Field>
-        <Field label="Сервер">
+        <Field label={t('d2.gal.caption')}><input className="input" value={caption} onChange={(e) => setCaption(e.target.value)} maxLength={140} placeholder={t('d2.gal.captionEx')} /></Field>
+        <Field label={t('d2.gal.server')}>
           <select className="input" value={serverId} onChange={(e) => setServerId(e.target.value ? Number(e.target.value) : '')}>
-            <option value="">Не указывать</option>
+            <option value="">{t('d2.gal.noServer')}</option>
             {servers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
           </select>
         </Field>
-        <p className="text-sm font-semibold text-mute">Скриншот появится в галерее после проверки модератором.</p>
+        <p className="text-sm font-semibold text-mute">{t('d2.gal.moderated')}</p>
         <ErrorLine text={error} />
         <div className="flex justify-end gap-2">
-          <button type="button" className="btn btn-ghost" onClick={onClose}>Отмена</button>
-          <Button loading={busy} disabled={!file} onClick={() => void send()} type="button">Отправить</Button>
+          <button type="button" className="btn btn-ghost" onClick={onClose}>{t('common.cancel')}</button>
+          <Button loading={busy} disabled={!file} onClick={() => void send()} type="button">{t('d2.gal.send')}</Button>
         </div>
       </div>
     </Modal>
   );
 }
 
-const STATUS: Record<Shot['status'], string | null> = { pending: 'на проверке', rejected: 'отклонён', approved: null };
+const STATUS: Record<Shot['status'], TKey | null> = { pending: 'd2.gal.st.pending', rejected: 'd2.gal.st.rejected', approved: null };
 
 export default function GalleryPage() {
+  useI18n();
   const { me } = useAuth();
   const [list, setList] = useState<Shot[] | null>(null);
   const [mine, setMine] = useState<Shot[]>([]);
@@ -213,32 +218,32 @@ export default function GalleryPage() {
 
   // a picture dropped anywhere on the page opens the upload form with it
   const drop = useDropTarget((f) => {
-    if (!me) return toast('Войдите, чтобы загрузить скриншот', 'err');
-    if (!IMAGE_TYPES.includes(f.type)) return toast('Нужна картинка: PNG, JPG или WebP', 'err');
+    if (!me) return toast(t('d2.gal.t.login'), 'err');
+    if (!IMAGE_TYPES.includes(f.type)) return toast(t('d2.gal.t.type'), 'err');
     setDropped(f);
     setUploading(true);
   }, uploading);
   return (
     <div className="space-y-5" ref={topRef} {...drop.props}>
-      {drop.over && <div className="gl-dropzone" aria-hidden><span>Отпустите, чтобы загрузить скриншот</span></div>}
+      {drop.over && <div className="gl-dropzone" aria-hidden><span>{t('d2.gal.drop')}</span></div>}
       <PageHead
         icon={<IconImage />}
-        title="Галерея"
-        subtitle="Скриншоты игроков с наших серверов"
+        title={t('d2.gal.title')}
+        subtitle={t('d2.gal.subtitle')}
       >
-        {me ? <button type="button" className="btn" onClick={() => setUploading(true)}>Загрузить скриншот</button> : <a href="/login" className="btn btn-soft">Войдите, чтобы загрузить</a>}
+        {me ? <button type="button" className="btn" onClick={() => setUploading(true)}>{t('d2.gal.upload')}</button> : <a href="/login" className="btn btn-soft">{t('d2.gal.loginUpload')}</a>}
       </PageHead>
       <ErrorLine text={error} />
       {mine.length > 0 && (
         <section className="tile p-4 sm:p-5">
-          <h2 className="mb-3 text-lg font-extrabold">Мои скриншоты на проверке</h2>
-          <ShotGrid list={mine} onOpen={(i) => setOpen({ list: mine, i })} badge={(s) => STATUS[s.status]} />
+          <h2 className="mb-3 text-lg font-extrabold">{t('d2.gal.mine')}</h2>
+          <ShotGrid list={mine} onOpen={(i) => setOpen({ list: mine, i })} badge={(s) => { const k = STATUS[s.status]; return k ? t(k) : null; }} />
         </section>
       )}
       {list === null ? (
         <div className="gl-grid" aria-busy="true">{[0, 1, 2, 3, 4, 5].map((i) => <div key={i} className="skeleton h-48 rounded-2xl" />)}</div>
       ) : list.length === 0 ? (
-        <Empty title="Скриншотов пока нет" text="Поделитесь красивым кадром из игры: он появится здесь после проверки.">{me ? <button type="button" className="btn mt-2" onClick={() => setUploading(true)}>Загрузить первый скриншот</button> : <a href="/login" className="btn btn-soft mt-2">Войти и загрузить</a>}</Empty>
+        <Empty title={t('d2.gal.empty')} text={t('d2.gal.emptyText')}>{me ? <button type="button" className="btn mt-2" onClick={() => setUploading(true)}>{t('d2.gal.uploadFirst')}</button> : <a href="/login" className="btn btn-soft mt-2">{t('d2.gal.signInUpload')}</a>}</Empty>
       ) : (
         <ShotGrid list={list} onOpen={(i) => setOpen({ list, i })} />
       )}
@@ -251,7 +256,7 @@ export default function GalleryPage() {
           onDone={(s) => {
             setUploading(false);
             setDropped(null);
-            toast(s.status === 'approved' ? 'Скриншот опубликован' : 'Скриншот отправлен на проверку');
+            toast(s.status === 'approved' ? t('d2.gal.t.published') : t('d2.gal.t.sent'));
             load();
           }}
         />

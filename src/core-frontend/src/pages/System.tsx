@@ -1,9 +1,10 @@
 import { useMemo, useState } from 'react';
 import { api, type CertInfo } from '../api';
+import { t, useI18n } from '../i18n';
 import { Gauge, usageTone, type GaugeTone } from '../components/Gauge';
 import HealthHistoryCard, { type HealthFlag } from '../components/HealthHistoryCard';
 import ProbesSection from '../components/ProbesSection';
-import { AdminPage, ErrorLine, GoLink, LoadError, IconDatabase, IconDisk, IconMemory, IconSystem, Notice, PageHead, Section, Strip, ago, fmtDateTime, fmtTime, plural, usePoll } from '../ui';
+import { AdminPage, ErrorLine, GoLink, LoadError, IconDatabase, IconDisk, IconMemory, IconSystem, Notice, PageHead, Section, Strip, ago, fmtDateTime, fmtTime, usePoll } from '../ui';
 
 interface Health {
   version: string | null;
@@ -25,8 +26,8 @@ interface Health {
 }
 interface Check { id: string; label: string; status: 'ok' | 'warn' | 'fail'; detail: string }
 
-const mb = (n: number | null) => (n == null ? '–' : n > 1073741824 ? `${(n / 1073741824).toFixed(1)} ГБ` : `${(n / 1048576).toFixed(1)} МБ`);
-const dur = (s: number) => (s < 3600 ? `${Math.floor(s / 60)} мин` : s < 86400 ? `${Math.floor(s / 3600)} ч ${Math.floor((s % 3600) / 60)} мин` : `${Math.floor(s / 86400)} д ${Math.floor((s % 86400) / 3600)} ч`);
+const mb = (n: number | null) => (n == null ? '–' : n > 1073741824 ? t('d2.sys.gb', { v: (n / 1073741824).toFixed(1) }) : t('d2.sys.mb', { v: (n / 1048576).toFixed(1) }));
+const dur = (s: number) => (s < 3600 ? t('dur.m', { n: Math.floor(s / 60) }) : s < 86400 ? t('dur.hm', { h: Math.floor(s / 3600), m: Math.floor((s % 3600) / 60) }) : t('d2.sys.dur.dh', { d: Math.floor(s / 86400), h: Math.floor((s % 86400) / 3600) }));
 
 // the backend reports the process memory and the database file only, so they are drawn against a fixed reference size
 const MEM_REF_MB = 512;
@@ -34,13 +35,14 @@ const DB_REF_BYTES = 1024 * 1048576;
 
 const certTone = (c: CertInfo): GaugeTone => (c.daysLeft == null ? 'mute' : c.daysLeft <= 0 ? 'bad' : c.daysLeft <= 14 ? 'warn' : 'ok');
 const certText = (c: CertInfo) => {
-  if (c.daysLeft == null) return 'нет (панель работает по HTTP)';
+  if (c.daysLeft == null) return t('d2.sys.cert.none');
   const d = c.daysLeft;
-  return d <= 0 ? 'истёк' : `${d} ${plural(d, ['день', 'дня', 'дней'])}`;
+  return d <= 0 ? t('d2.sys.cert.expired') : t('pf.stats.days', { n: d });
 };
 
 /** Health, diagnostics and the certificate; the backups live under Settings → «Обновления и копии». */
 export default function SystemPage() {
+  useI18n();
   const [h, setH] = useState<Health | null>(null);
   const [checks, setChecks] = useState<{ at: number; list: Check[] } | null>(null);
   const [running, setRunning] = useState(false);
@@ -74,13 +76,13 @@ export default function SystemPage() {
   const botTone: GaugeTone = !h ? 'mute' : h.bot.state === 'online' ? 'ok' : h.bot.state === 'connecting' ? 'warn' : h.bot.state === 'error' ? 'bad' : 'mute';
   const status: { k: string; v: string; sub?: string; tone: GaugeTone }[] = h
     ? [
-        { k: 'Версия', v: h.versionName || (h.version ? h.version.slice(0, 7) : 'сборка из исходников'), sub: `Node ${h.node}`, tone: 'mute' },
-        { k: 'Работает', v: dur(h.uptimeSec), tone: 'ok' },
-        { k: 'Серверы', v: `${h.counts.online} из ${h.counts.servers} онлайн`, tone: h.counts.servers === 0 ? 'mute' : h.counts.online === h.counts.servers ? 'ok' : h.counts.online === 0 ? 'bad' : 'warn' },
-        { k: 'Привязки Discord', v: String(h.counts.bindings), sub: `${h.guilds} ${plural(h.guilds, ['сервер', 'сервера', 'серверов'])} с ботом`, tone: 'mute' },
-        { k: 'Бот', v: h.bot.state === 'online' ? 'в сети' : h.bot.state === 'idle' ? 'ожидание' : h.bot.state === 'connecting' ? 'подключается' : 'ошибка', sub: h.bot.tag ?? (h.bot.updatedAt ? ago(h.bot.updatedAt) : undefined), tone: botTone },
-        ...(h.cert ? [{ k: 'Сертификат HTTPS', v: certText(h.cert), sub: [h.cert.issuer, h.cert.selfSigned ? 'самоподписанный' : null].filter(Boolean).join(' · ') || undefined, tone: certTone(h.cert) }] : []),
-        { k: 'Пользователи', v: String(h.counts.users), tone: 'mute' as GaugeTone },
+        { k: t('d2.sys.s.version'), v: h.versionName || (h.version ? h.version.slice(0, 7) : t('d2.sys.s.fromSource')), sub: `Node ${h.node}`, tone: 'mute' },
+        { k: t('d2.sys.s.uptime'), v: dur(h.uptimeSec), tone: 'ok' },
+        { k: t('d2.sys.s.servers'), v: t('d2.sys.s.serversOnline', { a: h.counts.online, b: h.counts.servers }), tone: h.counts.servers === 0 ? 'mute' : h.counts.online === h.counts.servers ? 'ok' : h.counts.online === 0 ? 'bad' : 'warn' },
+        { k: t('d2.sys.s.bindings'), v: String(h.counts.bindings), sub: t('d2.sys.s.guilds', { n: h.guilds }), tone: 'mute' },
+        { k: t('d2.sys.s.bot'), v: h.bot.state === 'online' ? t('d2.sys.bot.online') : h.bot.state === 'idle' ? t('d2.sys.bot.idle') : h.bot.state === 'connecting' ? t('d2.sys.bot.connecting') : t('d2.sys.bot.error'), sub: h.bot.tag ?? (h.bot.updatedAt ? ago(h.bot.updatedAt) : undefined), tone: botTone },
+        ...(h.cert ? [{ k: t('d2.sys.cert.title'), v: certText(h.cert), sub: [h.cert.issuer, h.cert.selfSigned ? t('d2.sys.cert.self') : null].filter(Boolean).join(' · ') || undefined, tone: certTone(h.cert) }] : []),
+        { k: t('d2.sys.s.users'), v: String(h.counts.users), tone: 'mute' as GaugeTone },
       ]
     : [];
   const dot = { ok: 'dot-ok', warn: 'dot-warn', fail: 'dot-bad' } as const;
@@ -90,22 +92,22 @@ export default function SystemPage() {
       head={(
         <PageHead
           icon={<IconSystem />}
-          title="Система"
-          subtitle="Состояние панели и диагностика"
-          hint="Здоровье панели: версия, место на диске, бот, сертификат HTTPS. Если что-то не работает, начните с проверки."
-          help={<p>Проверка занимает несколько секунд: она смотрит базу, диск, подключение бота, опрос серверов и доступ к Discord и GitHub. Зелёная точка значит, что всё в порядке, жёлтая — стоит присмотреться, красная — нужно исправить.</p>}
+          title={t('d2.sys.title')}
+          subtitle={t('d2.sys.subtitle')}
+          hint={t('d2.sys.hint')}
+          help={<p>{t('d2.sys.help')}</p>}
         >
-          <button className="btn" onClick={run} disabled={running}>{running ? 'Проверяю…' : 'Запустить проверку'}</button>
+          <button className="btn" onClick={run} disabled={running}>{running ? t('d2.sys.running') : t('d2.sys.run')}</button>
         </PageHead>
       )}
     >
       {error && !h ? <LoadError error={error} onRetry={() => void load()} /> : <ErrorLine text={error} />}
 
       {flags.length > 0 && (
-        <div className="space-y-2" role="group" aria-label="Предупреждения">
+        <div className="space-y-2" role="group" aria-label={t('d2.sys.warnings')}>
           {flags.map((f) => (
             <Notice key={f.kind} tone="warn">
-              {f.text}<span className="font-semibold opacity-80"> · с {new Date(f.since).toDateString() === new Date().toDateString() ? fmtTime(f.since) : fmtDateTime(f.since)}</span>
+              {f.text}<span className="font-semibold opacity-80"> · {t('d2.sys.since')} {new Date(f.since).toDateString() === new Date().toDateString() ? fmtTime(f.since) : fmtDateTime(f.since)}</span>
             </Notice>
           ))}
         </div>
@@ -113,48 +115,48 @@ export default function SystemPage() {
 
       {h ? (
         <>
-          <div className="grid grid-cols-1 gap-4 min-[460px]:grid-cols-2 xl:grid-cols-4" role="group" aria-label="Ресурсы">
+          <div className="grid grid-cols-1 gap-4 min-[460px]:grid-cols-2 xl:grid-cols-4" role="group" aria-label={t('d2.sys.resources')}>
             <div className="panel p-5 text-center">
               <Gauge
                 value={diskUsed}
-                label="Диск: занято"
+                label={t('d2.sys.disk.used')}
                 display={diskUsed == null ? '–' : `${Math.round(diskUsed * 100)} %`}
-                caption={h.diskFree != null ? `свободно ${mb(h.diskFree)}` : undefined}
+                caption={h.diskFree != null ? t('d2.sys.disk.free', { v: mb(h.diskFree) }) : undefined}
                 icon={<IconDisk size={18} />}
               />
-              <div className="mt-2 font-extrabold">Диск</div>
-              <div className="text-sm font-semibold text-mute">{h.diskTotal ? `всего ${mb(h.diskTotal)}` : 'размер неизвестен'}</div>
+              <div className="mt-2 font-extrabold">{t('d2.sys.disk')}</div>
+              <div className="text-sm font-semibold text-mute">{h.diskTotal ? t('d2.sys.disk.total', { v: mb(h.diskTotal) }) : t('d2.sys.disk.unknown')}</div>
             </div>
             <div className="panel p-5 text-center">
-              <Gauge value={cpuFrac} tone={usageTone(cpuFrac)} label="Нагрузка процессора" display={cpuFrac == null ? '–' : `${Math.round(cpuFrac * 100)} %`} caption={h.load1 != null ? `load ${h.load1}` : undefined} icon={<IconSystem size={18} />} />
-              <div className="mt-2 font-extrabold">Процессор</div>
-              <div className="text-sm font-semibold text-mute">{h.cpuCount ? `ядер: ${h.cpuCount}, средняя за минуту` : 'нет данных'}</div>
+              <Gauge value={cpuFrac} tone={usageTone(cpuFrac)} label={t('d2.sys.cpu.load')} display={cpuFrac == null ? '–' : `${Math.round(cpuFrac * 100)} %`} caption={h.load1 != null ? `load ${h.load1}` : undefined} icon={<IconSystem size={18} />} />
+              <div className="mt-2 font-extrabold">{t('d2.sys.cpu')}</div>
+              <div className="text-sm font-semibold text-mute">{h.cpuCount ? t('d2.sys.cpu.cores', { n: h.cpuCount }) : t('d2.sys.noData')}</div>
             </div>
             <div className="panel p-5 text-center">
-              <Gauge value={memFrac} tone={usageTone(memFrac)} label="Память панели" display={`${h.memoryMb} МБ`} caption={`из ${MEM_REF_MB} МБ`} icon={<IconMemory size={18} />} />
-              <div className="mt-2 font-extrabold">Память</div>
-              <div className="text-sm font-semibold text-mute">процесс панели, ориентир {MEM_REF_MB} МБ</div>
+              <Gauge value={memFrac} tone={usageTone(memFrac)} label={t('d2.sys.mem.label')} display={t('d2.sys.mb', { v: h.memoryMb })} caption={t('d2.sys.mem.of', { v: MEM_REF_MB })} icon={<IconMemory size={18} />} />
+              <div className="mt-2 font-extrabold">{t('d2.sys.mem')}</div>
+              <div className="text-sm font-semibold text-mute">{t('d2.sys.mem.hint', { v: MEM_REF_MB })}</div>
             </div>
             <div className="panel p-5 text-center">
-              <Gauge value={dbFrac} tone={usageTone(dbFrac)} label="База данных" display={mb(h.dbBytes)} caption="ориентир 1 ГБ" icon={<IconDatabase size={18} />} />
-              <div className="mt-2 font-extrabold">База данных</div>
-              <div className="text-sm font-semibold text-mute">{h.counts.history.toLocaleString('ru-RU')} точек истории</div>
+              <Gauge value={dbFrac} tone={usageTone(dbFrac)} label={t('d2.sys.db')} display={mb(h.dbBytes)} caption={t('d2.sys.db.ref')} icon={<IconDatabase size={18} />} />
+              <div className="mt-2 font-extrabold">{t('d2.sys.db')}</div>
+              <div className="text-sm font-semibold text-mute">{t('d2.sys.db.points', { n: h.counts.history.toLocaleString('ru-RU') })}</div>
             </div>
           </div>
 
           {h.cert && h.cert.daysLeft != null && (
-            <Section title="Сертификат HTTPS" description={h.cert.notAfter ? `Действует до ${fmtDateTime(h.cert.notAfter)}` : undefined}>
-              <div className="cert-bar" role="img" aria-label={`Осталось дней: ${h.cert.daysLeft}`}>
+            <Section title={t('d2.sys.cert.title')} description={h.cert.notAfter ? t('d2.sys.cert.until', { when: fmtDateTime(h.cert.notAfter) }) : undefined}>
+              <div className="cert-bar" role="img" aria-label={t('d2.sys.cert.daysLeft', { n: h.cert.daysLeft })}>
                 <i className={`is-${certTone(h.cert)}`} style={{ width: `${Math.max(2, Math.min(100, (h.cert.daysLeft / 90) * 100))}%` }} />
               </div>
               <p className="text-sm font-semibold text-mute">
-                {certText(h.cert)} из 90{h.cert.selfSigned ? ' · самоподписанный: браузеры покажут предупреждение' : h.cert.issuer ? ` · выдал ${h.cert.issuer}` : ''}.
-                {h.cert.daysLeft <= 14 ? ' Пора продлевать: обычно это делает ваш обратный прокси (Caddy, Nginx Proxy Manager, certbot).' : ''}
+                {t('d2.sys.cert.of90', { left: certText(h.cert) })}{h.cert.selfSigned ? ` · ${t('d2.sys.cert.selfWarn')}` : h.cert.issuer ? ` · ${t('d2.sys.cert.issuer', { name: h.cert.issuer })}` : ''}.
+                {h.cert.daysLeft <= 14 ? ` ${t('d2.sys.cert.renew')}` : ''}
               </p>
             </Section>
           )}
 
-          <Section title="Состояние">
+          <Section title={t('d2.sys.state')}>
             <ul className="divide-y divide-line">
               {status.map((r) => (
                 <li key={r.k} className="flex flex-wrap items-center gap-x-3 gap-y-0.5 py-2.5">
@@ -168,19 +170,19 @@ export default function SystemPage() {
           </Section>
         </>
       ) : (
-        <div className="skeleton panel h-40" aria-busy="true" aria-label="Загрузка" />
+        <div className="skeleton panel h-40" aria-busy="true" aria-label={t('d2.news.loading')} />
       )}
 
       <HealthHistoryCard onFlags={setHistFlags} />
 
-      <Section title="Диагностика" description="Проверяет базу, диск, бота, опрос серверов и доступ к Discord и GitHub.">
-        {!checks && <p className="text-sm font-semibold text-mute">Нажмите «Запустить проверку» вверху страницы: результат появится здесь.</p>}
+      <Section title={t('d2.sys.diag')} description={t('d2.sys.diag.desc')}>
+        {!checks && <p className="text-sm font-semibold text-mute">{t('d2.sys.diag.empty')}</p>}
         {checks && (
           <>
             <ul className="divide-y divide-line rounded-ui-lg border border-line">
               {checks.list.map((c) => (
                 <li key={c.id} className="flex items-start gap-3 px-4 py-2.5">
-                  <span className={`mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full ${dot[c.status]}`} role="img" aria-label={c.status === 'ok' ? 'в порядке' : c.status === 'warn' ? 'внимание' : 'ошибка'} />
+                  <span className={`mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full ${dot[c.status]}`} role="img" aria-label={c.status === 'ok' ? t('d2.sys.c.ok') : c.status === 'warn' ? t('d2.sys.c.warn') : t('d2.sys.c.fail')} />
                   <div className="min-w-0">
                     <div className="font-extrabold">{c.label}</div>
                     <div className="wrap-break-word text-sm font-semibold text-mute">{c.detail}</div>
@@ -188,7 +190,7 @@ export default function SystemPage() {
                 </li>
               ))}
             </ul>
-            <p className="text-sm font-semibold text-mute">Проверено {fmtDateTime(checks.at)}</p>
+            <p className="text-sm font-semibold text-mute">{t('d2.sys.checked', { when: fmtDateTime(checks.at) })}</p>
           </>
         )}
       </Section>
@@ -197,10 +199,10 @@ export default function SystemPage() {
 
       <Strip>
         <div className="min-w-0">
-          <h2 className="text-lg font-black">Резервные копии</h2>
-          <p className="font-semibold text-mute">Скачать копию данных, настроить расписание или восстановить панель из файла.</p>
+          <h2 className="text-lg font-black">{t('d2.sys.backups')}</h2>
+          <p className="font-semibold text-mute">{t('d2.sys.backups.text')}</p>
         </div>
-        <GoLink href="/admin/settings/updates">Обновления и копии</GoLink>
+        <GoLink href="/admin/settings/updates">{t('d2.sys.backups.link')}</GoLink>
       </Strip>
     </AdminPage>
   );
