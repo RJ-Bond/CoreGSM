@@ -1,13 +1,15 @@
 import { memo, useRef, useState, type ChangeEvent, type ClipboardEvent, type KeyboardEvent, type ReactNode } from 'react';
 import type { NewsVariable } from '../../api';
+import { t, useI18n } from '../../i18n';
 import { searchEmoji } from './emoji';
 
 const EMOJIS = ['📢', '📣', '🔔', '🎉', '🎊', '🎁', '🏆', '🥇', '⭐', '🌟', '✨', '🔥', '💥', '⚡', '🚀', '🆕', '✅', '❌', '⚠️', '❗', '❓', '🛠️', '🔧', '⚙️', '🧹', '🗑️', '📅', '🗓️', '⏰', '🕒', '⏳', '📍', '🌍', '🗺️', '🎮', '🕹️', '👑', '⚔️', '🛡️', '🏹', '💎', '💰', '🪙', '❤️', '💜', '💙', '💚', '👍', '👏', '🙌', '🤝', '💬', '📝', '📌', '🔗', '🖼️', '🎤', '🎧', '📈', '🟢', '🟡', '🔴', '🔵'];
 
 export function Counter({ value, max }: { value: number; max: number }) {
+  useI18n();
   const over = value > max;
   const near = !over && value > max * 0.9;
-  return <span className={`text-xs font-bold tabular-nums ${over ? 'text-bad' : near ? 'text-warn' : 'text-mute'}`} aria-label={`${value} из ${max} символов`}>{value}/{max}</span>;
+  return <span className={`text-xs font-bold tabular-nums ${over ? 'text-bad' : near ? 'text-warn' : 'text-mute'}`} aria-label={t('mf.chars', { value, max })}>{value}/{max}</span>;
 }
 
 const Btn = ({ onClick, title, children, on }: { onClick: () => void; title: string; children: ReactNode; on?: boolean }) => (
@@ -42,6 +44,7 @@ interface Props {
 
 /** Text area with a Discord-markdown toolbar, shortcuts (Ctrl+B/I/U/K), `:name` emoji autocomplete and smart paste. */
 function MarkdownFieldImpl({ id, label, value, onChange, max, rows = 6, placeholder, compact, variables, onImage, hideLabel }: Props) {
+  useI18n();
   const ref = useRef<HTMLTextAreaElement>(null);
   const [panel, setPanel] = useState<'' | 'emoji' | 'vars'>('');
   const [sug, setSug] = useState<{ start: number; end: number; items: [string, string][]; idx: number } | null>(null);
@@ -52,7 +55,7 @@ function MarkdownFieldImpl({ id, label, value, onChange, max, rows = 6, placehol
     requestAnimationFrame(() => { ta?.focus(); ta?.setSelectionRange(selStart, selEnd); });
   };
 
-  const wrap = (mark: string, ph = 'текст') => {
+  const wrap = (mark: string, ph = t('mf.ph.text')) => {
     const ta = ref.current;
     if (!ta) return;
     const s = ta.selectionStart, e = ta.selectionEnd;
@@ -68,7 +71,7 @@ function MarkdownFieldImpl({ id, label, value, onChange, max, rows = 6, placehol
   };
 
   /** line-based formats: the selection grows to whole lines */
-  const prefixLines = (prefix: string, ph = 'текст') => {
+  const prefixLines = (prefix: string, ph = t('mf.ph.text')) => {
     const ta = ref.current;
     if (!ta) return;
     const s = ta.selectionStart, e = ta.selectionEnd;
@@ -89,7 +92,7 @@ function MarkdownFieldImpl({ id, label, value, onChange, max, rows = 6, placehol
     const ls = value.lastIndexOf('\n', s - 1) + 1;
     let le = value.indexOf('\n', e);
     if (le === -1) le = value.length;
-    const lines = (value.slice(ls, le) || 'пункт').split('\n');
+    const lines = (value.slice(ls, le) || t('mf.ph.item')).split('\n');
     const out = lines.map((l, i) => `${i + 1}. ${l.replace(/^\d+\.\s+/, '')}`).join('\n');
     apply(value.slice(0, ls) + out + value.slice(le), ls, ls + out.length);
   };
@@ -98,7 +101,7 @@ function MarkdownFieldImpl({ id, label, value, onChange, max, rows = 6, placehol
     const ta = ref.current;
     if (!ta) return;
     const s = ta.selectionStart, e = ta.selectionEnd;
-    const inner = value.slice(s, e) || 'код';
+    const inner = value.slice(s, e) || t('mf.ph.code');
     const pre = s > 0 && value[s - 1] !== '\n' ? '\n' : '';
     const text = `${value.slice(0, s)}${pre}\`\`\`\n${inner}\n\`\`\`${value.slice(e)}`;
     const a = s + pre.length + 4;
@@ -111,21 +114,21 @@ function MarkdownFieldImpl({ id, label, value, onChange, max, rows = 6, placehol
     const s = ta.selectionStart, e = ta.selectionEnd;
     const sel = value.slice(s, e);
     if (/^https?:\/\/\S+$/.test(sel)) {
-      const text = `${value.slice(0, s)}[ссылка](${sel})${value.slice(e)}`;
+      const text = `${value.slice(0, s)}[${t('mf.ph.link')}](${sel})${value.slice(e)}`;
       apply(text, s + 1, s + 7);
       return;
     }
-    const lbl = sel || 'текст ссылки';
+    const lbl = sel || t('mf.ph.linkText');
     const text = `${value.slice(0, s)}[${lbl}](https://)${value.slice(e)}`;
     const st = s + lbl.length + 3;
     apply(text, st, st + 8);
   };
 
-  const insert = (t: string) => {
+  const insert = (tok: string) => {
     const ta = ref.current;
     const s = ta?.selectionStart ?? value.length;
     const e = ta?.selectionEnd ?? value.length;
-    apply(value.slice(0, s) + t + value.slice(e), s + t.length, s + t.length);
+    apply(value.slice(0, s) + tok + value.slice(e), s + tok.length, s + tok.length);
   };
 
   const detect = (text: string, caret: number) => {
@@ -186,41 +189,41 @@ function MarkdownFieldImpl({ id, label, value, onChange, max, rows = 6, placehol
         <Counter value={value.length} max={max} />
       </div>
       <div className="flash-host relative rounded-2xl border-2 border-line focus-within:border-brand">
-        <div className="flex flex-wrap items-center gap-0.5 border-b-2 border-line px-1.5 py-1" role="toolbar" aria-label={`Форматирование: ${label}`}>
-          <Btn onClick={() => wrap('**')} title="Жирный (Ctrl+B)"><b>Ж</b></Btn>
-          <Btn onClick={() => wrap('*')} title="Курсив (Ctrl+I)"><i>К</i></Btn>
-          <Btn onClick={() => wrap('__')} title="Подчёркнутый (Ctrl+U)"><u>Ч</u></Btn>
-          <Btn onClick={() => wrap('~~')} title="Зачёркнутый"><s>З</s></Btn>
-          <Btn onClick={() => wrap('||')} title="Спойлер">▒</Btn>
-          <Btn onClick={() => wrap('`', 'код')} title="Код в строке"><span className="font-mono">{'<>'}</span></Btn>
-          {!compact && <Btn onClick={codeBlock} title="Блок кода"><span className="font-mono text-xs">{'```'}</span></Btn>}
+        <div className="flex flex-wrap items-center gap-0.5 border-b-2 border-line px-1.5 py-1" role="toolbar" aria-label={t('mf.formatting', { label })}>
+          <Btn onClick={() => wrap('**')} title={t('mf.bold')}><b>{t('mf.boldCh')}</b></Btn>
+          <Btn onClick={() => wrap('*')} title={t('mf.italic')}><i>{t('mf.italicCh')}</i></Btn>
+          <Btn onClick={() => wrap('__')} title={t('mf.underline')}><u>{t('mf.underlineCh')}</u></Btn>
+          <Btn onClick={() => wrap('~~')} title={t('mf.strike')}><s>{t('mf.strikeCh')}</s></Btn>
+          <Btn onClick={() => wrap('||')} title={t('mf.spoiler')}>▒</Btn>
+          <Btn onClick={() => wrap('`', t('mf.ph.code'))} title={t('mf.inlineCode')}><span className="font-mono">{'<>'}</span></Btn>
+          {!compact && <Btn onClick={codeBlock} title={t('mf.codeBlock')}><span className="font-mono text-xs">{'```'}</span></Btn>}
           <span className="mx-1 h-5 w-px bg-line" aria-hidden />
           {!compact && (
             <>
-              <Btn onClick={() => prefixLines('# ', 'Заголовок')} title="Заголовок 1"><span className="text-xs">H1</span></Btn>
-              <Btn onClick={() => prefixLines('## ', 'Заголовок')} title="Заголовок 2"><span className="text-xs">H2</span></Btn>
-              <Btn onClick={() => prefixLines('### ', 'Заголовок')} title="Заголовок 3"><span className="text-xs">H3</span></Btn>
-              <Btn onClick={() => prefixLines('-# ')} title="Мелкий текст"><span className="text-xs">-#</span></Btn>
+              <Btn onClick={() => prefixLines('# ', t('mf.ph.heading'))} title={t('mf.h1')}><span className="text-xs">H1</span></Btn>
+              <Btn onClick={() => prefixLines('## ', t('mf.ph.heading'))} title={t('mf.h2')}><span className="text-xs">H2</span></Btn>
+              <Btn onClick={() => prefixLines('### ', t('mf.ph.heading'))} title={t('mf.h3')}><span className="text-xs">H3</span></Btn>
+              <Btn onClick={() => prefixLines('-# ')} title={t('mf.small')}><span className="text-xs">-#</span></Btn>
             </>
           )}
-          <Btn onClick={() => prefixLines('> ')} title="Цитата">❝</Btn>
-          <Btn onClick={() => prefixLines('- ')} title="Маркированный список">•≡</Btn>
-          {!compact && <Btn onClick={numbered} title="Нумерованный список"><span className="text-xs">1.</span></Btn>}
-          <Btn onClick={link} title="Ссылка (Ctrl+K)">🔗</Btn>
-          <Btn onClick={() => setPanel((v) => (v === 'emoji' ? '' : 'emoji'))} title="Эмодзи" on={panel === 'emoji'}>😀</Btn>
+          <Btn onClick={() => prefixLines('> ')} title={t('mf.quote')}>❝</Btn>
+          <Btn onClick={() => prefixLines('- ')} title={t('mf.bullets')}>•≡</Btn>
+          {!compact && <Btn onClick={numbered} title={t('mf.numbers')}><span className="text-xs">1.</span></Btn>}
+          <Btn onClick={link} title={t('mf.link')}>🔗</Btn>
+          <Btn onClick={() => setPanel((v) => (v === 'emoji' ? '' : 'emoji'))} title={t('mf.emoji')} on={panel === 'emoji'}>😀</Btn>
           {variables && variables.length > 0 && (
-            <Btn onClick={() => setPanel((v) => (v === 'vars' ? '' : 'vars'))} title="Вставить переменную" on={panel === 'vars'}><span className="font-mono text-xs">{'{ }'}</span></Btn>
+            <Btn onClick={() => setPanel((v) => (v === 'vars' ? '' : 'vars'))} title={t('mf.variable')} on={panel === 'vars'}><span className="font-mono text-xs">{'{ }'}</span></Btn>
           )}
         </div>
         {panel === 'emoji' && (
           <div className="absolute right-0 top-11 z-20 grid w-72 max-w-[85vw] grid-cols-8 gap-0.5 rounded-2xl bg-card p-2 shadow-soft ring-2 ring-line">
             {EMOJIS.map((e) => (
-              <button key={e} type="button" aria-label={`Эмодзи ${e}`} className="grid h-8 w-8 place-items-center rounded-lg text-lg hover:bg-soft" onClick={() => { insert(e); setPanel(''); }}>{e}</button>
+              <button key={e} type="button" aria-label={t('mf.emojiOne', { e })} className="grid h-8 w-8 place-items-center rounded-lg text-lg hover:bg-soft" onClick={() => { insert(e); setPanel(''); }}>{e}</button>
             ))}
           </div>
         )}
         {panel === 'vars' && variables && (
-          <div className="absolute right-0 top-11 z-20 max-h-72 w-80 max-w-[85vw] overflow-auto rounded-2xl bg-card p-1.5 shadow-soft ring-2 ring-line" role="menu" aria-label="Переменные">
+          <div className="absolute right-0 top-11 z-20 max-h-72 w-80 max-w-[85vw] overflow-auto rounded-2xl bg-card p-1.5 shadow-soft ring-2 ring-line" role="menu" aria-label={t('mf.variables')}>
             {variables.map((v) => (
               <button key={v.token} type="button" role="menuitem" className="block w-full rounded-xl px-3 py-2 text-left hover:bg-soft" onClick={() => { insert(v.token); setPanel(''); }}>
                 <span className="block font-mono text-sm font-bold">{v.token}</span>
@@ -245,7 +248,7 @@ function MarkdownFieldImpl({ id, label, value, onChange, max, rows = 6, placehol
           className="w-full resize-y rounded-b-2xl bg-card px-3.5 py-2.5 font-semibold text-ink placeholder:font-normal placeholder:text-mute/80 focus:outline-hidden"
         />
         {sug && (
-          <ul id={`${id}-sug`} role="listbox" aria-label="Подсказки эмодзи" className="absolute left-2 top-full z-30 mt-1 w-64 max-w-[85vw] overflow-hidden rounded-2xl bg-card p-1 shadow-soft ring-2 ring-line">
+          <ul id={`${id}-sug`} role="listbox" aria-label={t('mf.emojiHints')} className="absolute left-2 top-full z-30 mt-1 w-64 max-w-[85vw] overflow-hidden rounded-2xl bg-card p-1 shadow-soft ring-2 ring-line">
             {sug.items.map(([em, names], i) => (
               <li key={`${em}-${i}`} role="option" aria-selected={i === sug.idx}>
                 <button
