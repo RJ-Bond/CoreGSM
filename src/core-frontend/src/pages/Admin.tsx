@@ -263,7 +263,7 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
         {!home && isAdmin && <AdminStatusBar />}
         {!home && current !== 'start' && current !== 'overview' && (
           <nav className="adm-crumbs" aria-label={t('adm.crumb.aria')}>
-            <a href="/admin/overview">Админка</a>
+            <a href="/admin/overview">{t('nav.admin')}</a>
             <span aria-hidden>›</span>
             <span className="adm-crumb-menu">
               <button type="button" className="font-extrabold text-ink hover:text-link" aria-expanded={menu} onClick={() => setMenu((v) => !v)} onBlur={(e) => { if (!e.currentTarget.parentElement?.contains(e.relatedTarget as Node)) setMenu(false); }}>
