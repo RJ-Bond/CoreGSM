@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { MAX_UPLOAD, uploadImage } from './model';
+import { t, useI18n } from '../../i18n';
 
 export interface ImageDropApi { upload: (file: File) => Promise<void> }
 
@@ -19,6 +20,7 @@ export function ImageDrop({
   /** gives the parent a way to upload a file (paste from the clipboard) */
   bind?: (api: ImageDropApi | null) => void;
 }) {
+  useI18n();
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   const [hot, setHot] = useState(false);
@@ -52,9 +54,9 @@ export function ImageDrop({
   useEffect(() => { setDims(null); }, [src]);
 
   const warns: string[] = [];
-  if (size && size > MAX_UPLOAD * 0.6) warns.push(`Файл тяжёлый (${(size / 1048576).toFixed(1)} МБ): Discord может грузить его медленно.`);
-  if (dims && minWidth && dims.w < minWidth) warns.push(`Картинка маленькая (${dims.w}×${dims.h}): в Discord она будет выглядеть размыто, лучше от ${minWidth} px по ширине.`);
-  if (url && !upload && !/^https:\/\//i.test(url)) warns.push('Ссылка должна начинаться с https://.');
+  if (size && size > MAX_UPLOAD * 0.6) warns.push(t('d2.idr.heavy', { mb: (size / 1048576).toFixed(1) }));
+  if (dims && minWidth && dims.w < minWidth) warns.push(t('d2.idr.small', { w: dims.w, h: dims.h, min: minWidth }));
+  if (url && !upload && !/^https:\/\//i.test(url)) warns.push(t('d2.idr.https'));
 
   return (
     <div className="flash-host space-y-2">
@@ -63,10 +65,10 @@ export function ImageDrop({
         <div className="flex items-center gap-3 rounded-2xl bg-soft p-2">
           <img src={src} alt="" className="h-16 w-16 shrink-0 rounded-xl object-cover" onLoad={(e) => setDims({ w: e.currentTarget.naturalWidth, h: e.currentTarget.naturalHeight })} />
           <div className="min-w-0 flex-1">
-            <div className="truncate text-sm font-bold">{upload ? 'Загруженная картинка' : url}</div>
-            {dims && <div className="text-xs font-semibold text-mute">{dims.w}×{dims.h}{size && upload ? ` · ${(size / 1024).toFixed(0)} КБ` : ''}</div>}
+            <div className="truncate text-sm font-bold">{upload ? t('d2.idr.uploaded') : url}</div>
+            {dims && <div className="text-xs font-semibold text-mute">{dims.w}×{dims.h}{size && upload ? ` · ${t('d2.bk.kb', { v: (size / 1024).toFixed(0) })}` : ''}</div>}
           </div>
-          <button type="button" className="btn btn-danger btn-sm" onClick={() => { onUpload(''); onUrl(''); setSize(null); }}>Убрать</button>
+          <button type="button" className="btn btn-danger btn-sm" onClick={() => { onUpload(''); onUrl(''); setSize(null); }}>{t('common.remove')}</button>
         </div>
       ) : (
         <div
@@ -77,15 +79,15 @@ export function ImageDrop({
         >
           {allowUpload && (
             <button type="button" disabled={busy} onClick={() => input.current?.click()} className="btn btn-ghost btn-sm btn-block">
-              {busy ? 'Загрузка…' : 'Перетащите картинку сюда или нажмите, чтобы выбрать файл'}
-              <span className="block text-xs font-semibold">PNG, JPEG, GIF, WebP до 8 МБ. Можно вставить из буфера (Ctrl+V) в текст.</span>
+              {busy ? t('nw.loadingMore') : t('d2.idr.drop')}
+              <span className="block text-xs font-semibold">{t('d2.idr.formats')}</span>
             </button>
           )}
-          <input ref={input} type="file" accept="image/png,image/jpeg,image/gif,image/webp" className="hidden" aria-label={`${label}: выбрать файл`} onChange={(e) => { void doUpload(e.target.files?.[0]); e.target.value = ''; }} />
-          <input id={id} aria-label={`${label}: ссылка`} className="input mt-1" value={url} onChange={(e) => onUrl(e.target.value.trim())} placeholder="https://… или ссылка на картинку" />
+          <input ref={input} type="file" accept="image/png,image/jpeg,image/gif,image/webp" className="hidden" aria-label={t('d2.idr.pickFile', { label })} onChange={(e) => { void doUpload(e.target.files?.[0]); e.target.value = ''; }} />
+          <input id={id} aria-label={t('d2.idr.link', { label })} className="input mt-1" value={url} onChange={(e) => onUrl(e.target.value.trim())} placeholder={t('d2.idr.ph')} />
         </div>
       )}
-      {src && !upload && <input id={id} aria-label={`${label}: ссылка`} className="sr-only" value={url} onChange={(e) => onUrl(e.target.value.trim())} />}
+      {src && !upload && <input id={id} aria-label={t('d2.idr.link', { label })} className="sr-only" value={url} onChange={(e) => onUrl(e.target.value.trim())} />}
       {err && <p className="text-sm font-bold text-bad" role="alert">{err}</p>}
       {warns.map((w) => <p key={w} className="rounded-xl bg-warnbg px-3 py-1.5 text-sm font-bold text-warn">⚠ {w}</p>)}
     </div>

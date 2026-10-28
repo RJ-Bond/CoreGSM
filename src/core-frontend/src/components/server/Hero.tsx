@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { t, useI18n } from '../../i18n';
-import { AnimatedNumber, Burst, IconBell, ago, plural } from '../../ui';
+import { AnimatedNumber, Burst, IconBell, ago } from '../../ui';
 import MaintenanceChip from '../MaintenanceChip';
 import NickPic from '../NickPic';
 import { capLevel, capacityPct, slotsInfo } from '../servers/capacity';
@@ -32,14 +32,14 @@ function SlotBar({ players, max, peak }: { players: number; max: number; peak: n
           title={level === 'hot' ? t('srv.cap.nearFull', { pct }) : t('srv.cap.taken', { pct })}
         >
           {Array.from({ length: segs }, (_, i) => (
-            <i key={i} className={`${i < filled ? 'on' : ''} ${i === peakAt ? 'is-peak' : ''}`} style={{ ['--d' as string]: `${i * 16}ms` }} title={i === peakAt ? `Пик за период: ${peak}` : undefined} />
+            <i key={i} className={`${i < filled ? 'on' : ''} ${i === peakAt ? 'is-peak' : ''}`} style={{ ['--d' as string]: `${i * 16}ms` }} title={i === peakAt ? t('d2.hero.peakTitle', { n: peak ?? '' }) : undefined} />
           ))}
         </div>
         <span className={`srv-pct on-dark big ${level}`}>{pct}%</span>
       </div>
       <div className="mt-2 flex flex-wrap items-center gap-2">
         {info && <span className={`srv-slotpill ${info.kind}`}>{text}</span>}
-        {peak != null && peak > 0 && <span className="srv-peaknote">пик за период: {peak}</span>}
+        {peak != null && peak > 0 && <span className="srv-peaknote">{t('d2.hero.peakNote', { n: peak })}</span>}
       </div>
     </div>
   );
@@ -52,11 +52,11 @@ function HeroSpark({ values }: { values: number[] }) {
   const pts = values.map((y, i) => `${((i / (values.length - 1)) * 100).toFixed(1)},${(20 - (y / hi) * 18).toFixed(1)}`).join(' ');
   const d = values[values.length - 1] - values[0];
   return (
-    <div className="srv-hero-trend" title="Игроки за последние 2 часа">
+    <div className="srv-hero-trend" title={t('d2.hero.last2h')}>
       <svg viewBox="0 0 100 22" preserveAspectRatio="none" aria-hidden>
         <polyline points={pts} fill="none" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
       </svg>
-      <span>{d === 0 ? 'за 2 ч без изменений' : `за 2 ч ${d > 0 ? '+' : '−'}${Math.abs(d)}`}</span>
+      <span>{d === 0 ? t('d2.hero.noChange') : t('d2.hero.change', { sign: d > 0 ? '+' : '−', n: Math.abs(d) })}</span>
     </div>
   );
 }
@@ -95,15 +95,15 @@ function WhoStack({ who, players, href, now }: { who: Who[]; players: number; hr
           })}
           {rest > 0 && <span className="srv-who-more-n">+{rest}</span>}
         </span>
-        <a className="srv-who-link" href={href}>{plural(players, ['игрок', 'игрока', 'игроков'])} в игре →</a>
+        <a className="srv-who-link" href={href}>{t('d2.hero.inGame', { n: players })}</a>
       </div>
       {cur && (
         <div className="srv-who-pop" role="dialog" aria-label={cur.name}>
           <b className="block truncate text-base">{cur.name}</b>
-          <span className="text-sm font-semibold opacity-85">{cur.since != null ? `в игре ${playedFor(cur.since, now)}` : 'в сети сейчас'}</span>
+          <span className="text-sm font-semibold opacity-85">{cur.since != null ? t('d2.hero.playing', { v: playedFor(cur.since, now) }) : t('d2.hero.onlineNow')}</span>
           <span className="mt-1 flex flex-wrap items-center gap-2">
-            {place != null && place > 0 && <span className="pl-place-chip" title="Место в рейтинге недели">#{place}</span>}
-            {place != null && <a className="srv-who-prof" href={`/player/${encodeURIComponent(cur.name)}`}>Профиль →</a>}
+            {place != null && place > 0 && <span className="pl-place-chip" title={t('d2.hero.rankTitle')}>#{place}</span>}
+            {place != null && <a className="srv-who-prof" href={`/player/${encodeURIComponent(cur.name)}`}>{t('d2.hero.profile')}</a>}
           </span>
         </div>
       )}
@@ -169,7 +169,7 @@ export default function Hero({
           {online ? (
             <>
               <span className="srv-hero-n"><AnimatedNumber value={players} delta /></span>
-              {max > 0 && <span className="srv-hero-max"><small>из</small> {max}</span>}
+              {max > 0 && <span className="srv-hero-max"><small>{t('d2.as.of', { n: '' }).trim()}</small> {max}</span>}
               <span className="srv-hero-unit">{t('srv.hero.players')}</span>
             </>
           ) : (
@@ -181,7 +181,7 @@ export default function Hero({
           {boom > 0 && (
             <span key={boom} className="srv-record" role="status">
               <Burst count={10} radius={30} />
-              🏆 Новый рекорд
+              🏆 {t('d2.hero.record')}
             </span>
           )}
         </div>

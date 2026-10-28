@@ -6,7 +6,7 @@ import * as Dialog from '@radix-ui/react-dialog';
 import { promptDialog } from '../confirm';
 import { gameIconPath } from '../gameIcons';
 import { GAME_IMAGE, gameAbbr, gameGradient } from '../games';
-import { t } from '../i18n';
+import { t, useI18n } from '../i18n';
 import { IconClose, IconCopy } from '../icons';
 import { Burst } from './motion';
 import { noAutofill } from './noAutofill';
@@ -79,6 +79,7 @@ export function Field({ label, children }: { label: string; children: ReactNode 
 
 /** `glass`: for use on top of a cover or a gradient (dark translucent capsule, white text, coloured dot) */
 export function StatusPill({ online, known, lag, glass = false, maintenance = false }: { online: boolean; known: boolean; lag?: boolean; glass?: boolean; maintenance?: boolean }) {
+  useI18n();
   const kind = maintenance ? 'maint' : !known ? 'mute' : !online ? 'bad' : lag ? 'lag' : 'ok';
   // a change of state (not the first paint) plays a short swap animation on the badge
   const prev = useRef(kind);
@@ -86,14 +87,14 @@ export function StatusPill({ online, known, lag, glass = false, maintenance = fa
   useEffect(() => { prev.current = kind; }, [kind]);
   const swap = changed ? ' pill-swap' : '';
   // a window of maintenance explains the silence: neither «Офлайн» nor «Лаги»
-  if (maintenance) return glass ? <span className={`pill-glass pill-glass-maint${swap}`}>Обслуживание</span> : <span className={`pill pill-maint${swap}`}>ОБСЛУЖИВАНИЕ</span>;
+  if (maintenance) return glass ? <span className={`pill-glass pill-glass-maint${swap}`}>{t('d2.mt.title')}</span> : <span className={`pill pill-maint${swap}`}>{t('d2.mt.title').toUpperCase()}</span>;
   if (glass) {
-    const text = !known ? 'Ожидание' : !online ? 'Офлайн' : lag ? 'Лаги' : 'Онлайн';
+    const text = !known ? t('d2.bl.wait') : !online ? t('d2.bl.offline') : lag ? t('d2.bl.lag') : t('d2.srv.f.online');
     return <span className={`pill-glass pill-glass-${kind}${swap}`}>{text}</span>;
   }
-  if (!known) return <span className={`pill pill-mute${swap}`}>ОЖИДАНИЕ</span>;
-  if (!online) return <span className={`pill pill-bad${swap}`}>ОФЛАЙН</span>;
-  return lag ? <span className={`pill pill-warn lag${swap}`}>ЛАГИ</span> : <span className={`pill pill-ok live${swap}`}>ОНЛАЙН</span>;
+  if (!known) return <span className={`pill pill-mute${swap}`}>{t('d2.bl.wait').toUpperCase()}</span>;
+  if (!online) return <span className={`pill pill-bad${swap}`}>{t('d2.bl.offline').toUpperCase()}</span>;
+  return lag ? <span className={`pill pill-warn lag${swap}`}>{t('d2.bl.lag').toUpperCase()}</span> : <span className={`pill pill-ok live${swap}`}>{t('d2.srv.f.online').toUpperCase()}</span>;
 }
 
 /**
@@ -149,6 +150,7 @@ export function FillBar({ value, max, color }: { value: number; max: number; col
  * `hint`: one sentence under the title (what this page is and why); `help`: longer text behind a «Подробнее» disclosure.
  */
 export function PageHead({ title, subtitle, icon, hint, help, children }: { title: string; subtitle?: string; icon?: ReactNode; hint?: ReactNode; help?: ReactNode; children?: ReactNode }) {
+  useI18n();
   const [open, setOpen] = useState(false);
   const helpId = useId();
   // a hint is read once: the cross hides it (remembered per page in this browser), the «i» button next to the actions brings it back
@@ -171,7 +173,7 @@ export function PageHead({ title, subtitle, icon, hint, help, children }: { titl
         </div>
         {(children || (hasHint && hidden)) && (
           <div className="flex flex-wrap items-center gap-2">
-            {hasHint && hidden && <button type="button" className="btn-icon-ghost btn-icon-sm" title="Показать подсказку" aria-label="Показать подсказку" onClick={() => setHint(false)}><span aria-hidden className="hint-ico">i</span></button>}
+            {hasHint && hidden && <button type="button" className="btn-icon-ghost btn-icon-sm" title={t('d2.bl.showHint')} aria-label={t('d2.bl.showHint')} onClick={() => setHint(false)}><span aria-hidden className="hint-ico">i</span></button>}
             {children}
           </div>
         )}
@@ -186,14 +188,14 @@ export function PageHead({ title, subtitle, icon, hint, help, children }: { titl
                 <>
                   {hint ? ' ' : ''}
                   <button type="button" className="hint-more" aria-expanded={open} aria-controls={helpId} onClick={() => setOpen((v) => !v)}>
-                    {open ? 'Скрыть' : 'Подробнее'}
+                    {open ? t('d2.ac.cm.hide') : t('d2.lim.more')}
                   </button>
                 </>
               )}
             </p>
             {help && open && <div id={helpId} className="hint-help">{help}</div>}
           </div>
-          <button type="button" className="hint-close" aria-label="Скрыть подсказку" title="Скрыть подсказку" onClick={() => setHint(true)}>✕</button>
+          <button type="button" className="hint-close" aria-label={t('d2.bl.hideHint')} title={t('d2.bl.hideHint')} onClick={() => setHint(true)}>✕</button>
         </div>
       )}
     </div>
@@ -231,7 +233,9 @@ export function Empty({ title, text, art, children }: { title: string; text: str
 }
 
 /** Copies text to the clipboard; falls back to a dialog with the text selected where the Clipboard API is blocked. */
-export function CopyButton({ text, label = 'Копировать', className = '', tone = 'soft' }: { text: string; label?: string; className?: string; tone?: 'soft' | 'grad' | 'glass' }) {
+export function CopyButton({ text, label: labelProp, className = '', tone = 'soft' }: { text: string; label?: string; className?: string; tone?: 'soft' | 'grad' | 'glass' }) {
+  useI18n();
+  const label = labelProp ?? t('common.copy');
   const [done, setDone] = useState(false);
   const timer = useRef<number | undefined>(undefined);
   useEffect(() => () => window.clearTimeout(timer.current), []);
@@ -242,7 +246,7 @@ export function CopyButton({ text, label = 'Копировать', className = '
       window.clearTimeout(timer.current);
       timer.current = window.setTimeout(() => setDone(false), 1500);
     } catch {
-      await promptDialog({ title: 'Скопируйте вручную', label: 'Текст', value: text, readOnly: true });
+      await promptDialog({ title: t('d2.bl.copyManual'), label: t('d2.ws.newsText'), value: text, readOnly: true });
     }
   };
   return (
@@ -254,7 +258,7 @@ export function CopyButton({ text, label = 'Копировать', className = '
         </svg>
         {done && <Burst />}
       </span>
-      <span className="min-w-0 truncate" aria-live="polite">{done ? 'Скопировано' : label}</span>
+      <span className="min-w-0 truncate" aria-live="polite">{done ? t('d2.pr.copied') : label}</span>
     </button>
   );
 }
@@ -299,7 +303,7 @@ export function ProxyField({
     <div>
       <div className="flex gap-2">
         <select
-          aria-label="Тип прокси"
+          aria-label={t('d2.bl.proxyType')}
           className="input w-auto! shrink-0"
           value={type}
           disabled={disabled}
@@ -315,11 +319,11 @@ export function ProxyField({
           disabled={disabled}
           onChange={(e) => onChange(e.target.value)}
           {...noAutofill()}
-          placeholder={placeholder ?? '45.91.9.172:1080:логин:пароль'}
+          placeholder={placeholder ?? t('d2.bl.proxyEx')}
         />
       </div>
       <p className="mt-1.5 text-sm font-semibold text-mute">
-        Подойдёт формат <span className="font-mono">адрес:порт:логин:пароль</span> или готовая ссылка с <span className="font-mono">socks5://</span> / <span className="font-mono">http://</span>. Если бот не подключается, смените тип.
+        {t('d2.bl.fmtA')} <span className="font-mono">{t('d2.bl.fmt')}</span> {t('d2.bl.fmtB')} <span className="font-mono">socks5://</span> / <span className="font-mono">http://</span>{t('d2.bl.fmtC')}
       </p>
     </div>
   );
@@ -327,10 +331,11 @@ export function ProxyField({
 
 /** Opens Discord's own "add bot to a server" screen: the user picks the server there and confirms the permissions. */
 export function InviteButton({ url, className = '' }: { url: string | null; className?: string }) {
+  useI18n();
   if (!url) return null;
   return (
     <a className={`btn ${className}`} href={url} target="_blank" rel="noreferrer">
-      Пригласить бота на сервер
+      {t('d2.bl.invite')}
       <span aria-hidden>↗</span>
     </a>
   );
@@ -350,7 +355,7 @@ export function Wordmark({ className = '' }: { className?: string }) {
 /** a few grey rows while a list loads: the page keeps its shape instead of jumping when the data comes */
 export function SkeletonRows({ n = 3, h = 'h-14' }: { n?: number; h?: string }) {
   return (
-    <div className="grid gap-2" aria-busy="true" role="status" aria-label="Загрузка">
+    <div className="grid gap-2" aria-busy="true" role="status" aria-label={t('d2.news.loading')}>
       {Array.from({ length: n }, (_, i) => <div key={i} className={`skeleton ${h} rounded-2xl`} style={{ opacity: 1 - i * 0.18 }} />)}
     </div>
   );

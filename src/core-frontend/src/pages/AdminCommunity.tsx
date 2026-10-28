@@ -1,7 +1,7 @@
 /** Admin → Сообщество: seasons (and the hall of fame they make), reviews of the servers, the screenshot gallery. */
 import { useEffect, useState, type FormEvent } from 'react';
 import { api } from '../api';
-import { t, useI18n } from '../i18n';
+import { t, useI18n, type TKey } from '../i18n';
 import { confirmDialog, promptDialog } from '../confirm';
 import { AdminPage, Button, Empty, ErrorLine, Field, IconEdit, IconEye, IconEyeOff, IconTrash, IconTrophy, PageHead, Section, ago, fmtDate, toast, num, SkeletonRows } from '../ui';
 import PollsAdmin from '../components/PollsAdmin';
@@ -114,13 +114,14 @@ function SeasonsAdmin() {
 
 /** the seasons on one line, the width of a piece = how long the season lasted (oldest at the left) */
 function SeasonLine({ rows }: { rows: { id: number; name: string; startsAt: number; endsAt: number | null; isCurrent: boolean }[] }) {
+  useI18n();
   const list = [...rows].sort((a, b) => a.startsAt - b.startsAt);
   const now = Date.now();
   const span = (r: (typeof list)[number]) => Math.max(86_400_000, (r.endsAt ?? now) - r.startsAt);
   return (
-    <ol className="se-line" aria-label="Сезоны по порядку">
+    <ol className="se-line" aria-label={t('d2.ac.seasonsOrder')}>
       {list.map((r) => (
-        <li key={r.id} className={r.isCurrent ? 'is-now' : ''} style={{ flexGrow: span(r) }} title={`${r.name}: ${fmtDate(r.startsAt)}${r.endsAt ? ` – ${fmtDate(r.endsAt)}` : ' – сейчас'}`}>
+        <li key={r.id} className={r.isCurrent ? 'is-now' : ''} style={{ flexGrow: span(r) }} title={`${r.name}: ${fmtDate(r.startsAt)}${r.endsAt ? ` – ${fmtDate(r.endsAt)}` : ` – ${t('adm.com.now')}`}`}>
           <span className="truncate">{r.name}</span>
         </li>
       ))}
@@ -166,11 +167,12 @@ function ReviewsAdmin() {
   );
 }
 
-const REASON_LABEL: Record<string, string> = { cheating: 'Читы', abuse: 'Оскорбления', griefing: 'Грифинг', other: 'Другое' };
+const REASON_LABEL: Record<string, TKey> = { cheating: 'd2.ac.r.cheating', abuse: 'd2.ac.r.abuse', griefing: 'd2.ac.r.griefing', other: 'd2.ac.r.other' };
 interface ReportRow { id: number; nick: string; reason: string; text: string; reporter: string; serverId: number | null; serverName: string | null; status: string; createdAt: number; handledBy: string | null; handledAt: number | null; note: string; others: number }
 
 /** the queue of reports on players: the oldest first; a closed one tells who handled it */
 function ReportsAdmin() {
+  useI18n();
   const [closed, setClosed] = useState(false);
   const [list, setList] = useState<ReportRow[] | null>(null);
   const [error, setError] = useState('');
@@ -179,35 +181,35 @@ function ReportsAdmin() {
   useEffect(() => { setList(null); void load(); }, [closed]);
   const close = (id: number, status: 'resolved' | 'dismissed') =>
     api(`/reports/${id}`, 'PATCH', { status, note: (notes[id] ?? '').trim() })
-      .then(() => { toast(status === 'resolved' ? 'Жалоба закрыта: меры приняты' : 'Жалоба отклонена'); void load(); })
+      .then(() => { toast(status === 'resolved' ? t('d2.ac.rep.resolved') : t('d2.ac.rep.dismissed')); void load(); })
       .catch((e: Error) => setError(e.message));
   return (
     <Section
-      title="Жалобы на игроков"
-      description={closed ? 'Рассмотренные жалобы, новые сверху' : list ? (list.length ? `Ждут решения: ${list.length}. Старые сверху` : 'Новых жалоб нет') : undefined}
-      actions={<div className="seg" role="group" aria-label="Какие жалобы"><button type="button" className="seg-item" aria-current={!closed ? "true" : undefined} onClick={() => setClosed(false)}>Открытые</button><button type="button" className="seg-item" aria-current={closed ? "true" : undefined} onClick={() => setClosed(true)}>Рассмотренные</button></div>}
+      title={t('d2.ac.rep.title')}
+      description={closed ? t('d2.ac.rep.descClosed') : list ? (list.length ? t('d2.ac.rep.descWait', { n: list.length }) : t('d2.ac.rep.descNone')) : undefined}
+      actions={<div className="seg" role="group" aria-label={t('d2.ac.rep.which')}><button type="button" className="seg-item" aria-current={!closed ? "true" : undefined} onClick={() => setClosed(false)}>{t('d2.ac.rep.open')}</button><button type="button" className="seg-item" aria-current={closed ? "true" : undefined} onClick={() => setClosed(true)}>{t('d2.ac.rep.handled')}</button></div>}
     >
       <ErrorLine text={error} />
-      {list === null ? <div className="skeleton h-24 rounded-2xl" /> : list.length === 0 ? <p className="text-sm font-semibold text-mute">{closed ? 'Пока ничего не рассматривали.' : 'Очередь пуста.'}</p> : (
+      {list === null ? <div className="skeleton h-24 rounded-2xl" /> : list.length === 0 ? <p className="text-sm font-semibold text-mute">{closed ? t('d2.ac.rep.nothingHandled') : t('d2.ac.queueEmpty')}</p> : (
         <ul className="grid gap-2.5">
           {list.map((r) => (
             <li key={r.id} className="rounded-2xl bg-soft px-4 py-3">
               <div className="flex flex-wrap items-center gap-2">
                 <a href={`/player/${encodeURIComponent(r.nick)}`} className="font-extrabold hover:text-link">{r.nick}</a>
-                <span className="pill pill-warn">{REASON_LABEL[r.reason] ?? r.reason}</span>
-                {r.others > 0 && <span className="pill pill-bad" title="Других открытых жалоб на этого игрока">ещё жалоб: {r.others}</span>}
+                <span className="pill pill-warn">{REASON_LABEL[r.reason] ? t(REASON_LABEL[r.reason]) : r.reason}</span>
+                {r.others > 0 && <span className="pill pill-bad" title={t('d2.ac.rep.othersTitle')}>{t('d2.ac.rep.others', { n: r.others })}</span>}
                 <span className="ml-auto text-xs font-bold text-mute">{r.reporter} · {ago(r.createdAt)}</span>
               </div>
               {r.text && <p className="mt-1.5 whitespace-pre-line text-sm font-semibold">{r.text}</p>}
-              {r.serverName && <p className="mt-1 text-xs font-bold text-mute">Сервер: <a href={`/servers/${r.serverId}`} className="hover:text-link">{r.serverName}</a></p>}
+              {r.serverName && <p className="mt-1 text-xs font-bold text-mute">{t('d2.ac.rep.server')} <a href={`/servers/${r.serverId}`} className="hover:text-link">{r.serverName}</a></p>}
               {r.status === 'open' ? (
                 <div className="mt-2.5 flex flex-wrap items-center gap-2">
-                  <input className="input min-w-48 flex-1" maxLength={300} placeholder="Комментарий для автора жалобы (необязательно)" aria-label="Комментарий" value={notes[r.id] ?? ''} onChange={(e) => setNotes((n) => ({ ...n, [r.id]: e.target.value }))} />
-                  <button type="button" className="btn btn-success btn-sm" onClick={() => void close(r.id, 'resolved')}>Меры приняты</button>
-                  <button type="button" className="btn btn-soft btn-sm" onClick={() => void close(r.id, 'dismissed')}>Отклонить</button>
+                  <input className="input min-w-48 flex-1" maxLength={300} placeholder={t('d2.ac.rep.notePh')} aria-label={t('d2.ac.rep.note')} value={notes[r.id] ?? ''} onChange={(e) => setNotes((n) => ({ ...n, [r.id]: e.target.value }))} />
+                  <button type="button" className="btn btn-success btn-sm" onClick={() => void close(r.id, 'resolved')}>{t('d2.ac.rep.actionTaken')}</button>
+                  <button type="button" className="btn btn-soft btn-sm" onClick={() => void close(r.id, 'dismissed')}>{t('d2.ac.dismiss')}</button>
                 </div>
               ) : (
-                <p className="mt-2 text-sm font-bold text-mute">{r.status === 'resolved' ? '✅ Меры приняты' : 'ℹ️ Отклонена'} · {r.handledBy}{r.handledAt ? `, ${ago(r.handledAt)}` : ''}{r.note ? ` · ${r.note}` : ''}</p>
+                <p className="mt-2 text-sm font-bold text-mute">{r.status === 'resolved' ? t('d2.ac.rep.doneMark') : t('d2.ac.rep.dismissedMark')} · {r.handledBy}{r.handledAt ? `, ${ago(r.handledAt)}` : ''}{r.note ? ` · ${r.note}` : ''}</p>
               )}
             </li>
           ))}
@@ -221,6 +223,7 @@ interface QueueRow { id: number; newsId: number; title: string; author: string; 
 
 /** complained-about and hidden comments under the news; the switch of the comments for the whole site */
 function CommentsAdmin() {
+  useI18n();
   const { me } = useAuth();
   const canSwitch = me?.role === 'admin' || !!me?.perms?.includes('news');
   const [rows, setRows] = useState<QueueRow[] | null>(null);
@@ -234,46 +237,46 @@ function CommentsAdmin() {
   }, []);
   const flip = (id: number) => setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
   const run = (ids: number[], action: 'approve' | 'hide' | 'delete', reason?: string) =>
-    api('/news/comments/bulk', 'POST', { ids, action, ...(reason ? { reason } : {}) }).then(() => { toast('Готово'); void load(); }).catch((e: Error) => setError(e.message));
+    api('/news/comments/bulk', 'POST', { ids, action, ...(reason ? { reason } : {}) }).then(() => { toast(t('wn.done')); void load(); }).catch((e: Error) => setError(e.message));
   const hideMany = async (ids: number[]) => {
-    const reason = await promptDialog({ title: 'Скрыть комментарии', label: 'Причина (её увидит автор)', confirmLabel: 'Скрыть', placeholder: 'Например: оскорбления' });
+    const reason = await promptDialog({ title: t('d2.ac.cm.hideTitle'), label: t('d2.ac.cm.reason'), confirmLabel: t('d2.ac.cm.hide'), placeholder: t('d2.ac.cm.reasonEx') });
     if (reason !== null) void run(ids, 'hide', reason);
   };
   const delMany = async (ids: number[]) => {
-    if (await confirmDialog({ title: `Удалить комментариев: ${ids.length}?`, text: 'Это нельзя отменить.', confirmLabel: 'Удалить', danger: true })) void run(ids, 'delete');
+    if (await confirmDialog({ title: t('d2.ac.cm.delTitle', { n: ids.length }), text: t('d2.ac.cm.delText'), confirmLabel: t('d2.ac.cm.delete'), danger: true })) void run(ids, 'delete');
   };
-  const switchSite = (v: boolean) => api<{ enabled: boolean }>('/news/comments/settings', 'PUT', { enabled: v }).then((s) => { setOn(s.enabled); toast(s.enabled ? 'Комментарии включены' : 'Комментарии выключены'); }).catch((e: Error) => setError(e.message));
+  const switchSite = (v: boolean) => api<{ enabled: boolean }>('/news/comments/settings', 'PUT', { enabled: v }).then((s) => { setOn(s.enabled); toast(s.enabled ? t('d2.ac.cm.on') : t('d2.ac.cm.off')); }).catch((e: Error) => setError(e.message));
   return (
     <Section
-      title="Комментарии к новостям"
-      description={rows ? (rows.length ? `В очереди: ${rows.length}. Сначала те, на кого пожаловались` : 'Жалоб и скрытых комментариев нет') : undefined}
-      actions={canSwitch && on !== null ? <label className="flex cursor-pointer items-center gap-2 font-bold"><input type="checkbox" className="h-4 w-4 accent-brand" checked={on} onChange={(e) => void switchSite(e.target.checked)} />Комментарии включены</label> : undefined}
+      title={t('d2.ac.cm.title')}
+      description={rows ? (rows.length ? t('d2.ac.cm.descQueue', { n: rows.length }) : t('d2.ac.cm.descNone')) : undefined}
+      actions={canSwitch && on !== null ? <label className="flex cursor-pointer items-center gap-2 font-bold"><input type="checkbox" className="h-4 w-4 accent-brand" checked={on} onChange={(e) => void switchSite(e.target.checked)} />{t('d2.ac.cm.on')}</label> : undefined}
     >
       <ErrorLine text={error} />
       {picked.length > 0 && (
         <div className="flex flex-wrap items-center gap-2 rounded-2xl bg-soft px-3 py-2">
-          <b>Выбрано: {picked.length}</b>
-          <button type="button" className="btn btn-success btn-sm" onClick={() => void run(picked, 'approve')}>Оставить</button>
-          <button type="button" className="btn btn-soft btn-sm" onClick={() => void hideMany(picked)}>Скрыть</button>
-          <button type="button" className="btn btn-danger btn-sm" onClick={() => void delMany(picked)}>Удалить</button>
+          <b>{t('d2.ac.cm.picked', { n: picked.length })}</b>
+          <button type="button" className="btn btn-success btn-sm" onClick={() => void run(picked, 'approve')}>{t('d2.ac.cm.keep')}</button>
+          <button type="button" className="btn btn-soft btn-sm" onClick={() => void hideMany(picked)}>{t('d2.ac.cm.hide')}</button>
+          <button type="button" className="btn btn-danger btn-sm" onClick={() => void delMany(picked)}>{t('d2.ac.cm.delete')}</button>
         </div>
       )}
-      {rows === null ? <div className="skeleton h-24 rounded-2xl" /> : rows.length === 0 ? <p className="text-sm font-semibold text-mute">Очередь пуста.</p> : (
+      {rows === null ? <div className="skeleton h-24 rounded-2xl" /> : rows.length === 0 ? <p className="text-sm font-semibold text-mute">{t('d2.ac.queueEmpty')}</p> : (
         <ul className="grid gap-2.5">
           {rows.map((r) => (
             <li key={r.id} className="rounded-2xl bg-soft px-4 py-3">
               <div className="flex flex-wrap items-center gap-2">
-                <input type="checkbox" className="h-4 w-4 accent-brand" checked={picked.includes(r.id)} onChange={() => flip(r.id)} aria-label={`Выбрать комментарий ${r.author}`} />
+                <input type="checkbox" className="h-4 w-4 accent-brand" checked={picked.includes(r.id)} onChange={() => flip(r.id)} aria-label={t('d2.ac.cm.pickOne', { name: r.author })} />
                 <b>{r.author}</b>
-                {r.status === 'hidden' ? <span className="pill pill-mute">скрыт{r.hideReason ? `: ${r.hideReason}` : ''}</span> : <span className="pill pill-bad">жалоб: {r.flags}</span>}
+                {r.status === 'hidden' ? <span className="pill pill-mute">{t('d2.ac.cm.hidden')}{r.hideReason ? `: ${r.hideReason}` : ''}</span> : <span className="pill pill-bad">{t('d2.ac.cm.flags', { n: r.flags })}</span>}
                 <a href={`/news/${r.newsId}#c-${r.id}`} className="min-w-0 truncate text-sm font-bold text-mute hover:text-link">{r.title}</a>
                 <span className="ml-auto text-xs font-bold text-mute">{ago(r.createdAt)}</span>
               </div>
               <p className="mt-1.5 whitespace-pre-line wrap-break-word text-sm font-semibold">{r.text}</p>
               <div className="mt-2 flex flex-wrap gap-2">
-                <button type="button" className="btn btn-success btn-xs" onClick={() => void run([r.id], 'approve')}>{r.status === 'hidden' ? 'Показать' : 'Оставить'}</button>
-                {r.status !== 'hidden' && <button type="button" className="btn btn-soft btn-xs" onClick={() => void hideMany([r.id])}>Скрыть</button>}
-                <button type="button" className="btn btn-danger btn-xs" onClick={() => void delMany([r.id])}>Удалить</button>
+                <button type="button" className="btn btn-success btn-xs" onClick={() => void run([r.id], 'approve')}>{r.status === 'hidden' ? t('d2.ac.cm.show') : t('d2.ac.cm.keep')}</button>
+                {r.status !== 'hidden' && <button type="button" className="btn btn-soft btn-xs" onClick={() => void hideMany([r.id])}>{t('d2.ac.cm.hide')}</button>}
+                <button type="button" className="btn btn-danger btn-xs" onClick={() => void delMany([r.id])}>{t('d2.ac.cm.delete')}</button>
               </div>
             </li>
           ))}
@@ -321,13 +324,13 @@ function GalleryAdmin() {
         <div className="mq">
           <img src={next.thumb} alt="" className="mq-img" />
           <div className="mq-body">
-            <p className="text-xs font-extrabold uppercase tracking-wide text-mute">На проверке · {waiting}</p>
+            <p className="text-xs font-extrabold uppercase tracking-wide text-mute">{t('d2.ac.g.pending')} · {waiting}</p>
             <p className="font-extrabold">{next.caption || t('adm.com.noCaption')}</p>
             <p className="text-sm font-semibold text-mute">{[next.author, next.serverName, ago(next.createdAt)].filter(Boolean).join(' · ')}</p>
             <div className="mt-2 flex flex-wrap gap-2">
-              <button type="button" className="btn btn-success btn-sm" onClick={() => void patch(next.id, { status: 'approved' }, t('adm.com.published'))}>Опубликовать <kbd>A</kbd></button>
-              <button type="button" className="btn btn-danger btn-sm" onClick={() => void patch(next.id, { status: 'rejected' }, t('adm.com.rejected'))}>Отклонить <kbd>X</kbd></button>
-              {waiting > 1 && <button type="button" className="btn btn-soft btn-sm" onClick={() => setSkipped((l) => [...l, next.id])}>Позже <kbd>→</kbd></button>}
+              <button type="button" className="btn btn-success btn-sm" onClick={() => void patch(next.id, { status: 'approved' }, t('adm.com.published'))}>{t('d2.news.publish')} <kbd>A</kbd></button>
+              <button type="button" className="btn btn-danger btn-sm" onClick={() => void patch(next.id, { status: 'rejected' }, t('adm.com.rejected'))}>{t('d2.ac.dismiss')} <kbd>X</kbd></button>
+              {waiting > 1 && <button type="button" className="btn btn-soft btn-sm" onClick={() => setSkipped((l) => [...l, next.id])}>{t('d2.ac.g.later')} <kbd>→</kbd></button>}
             </div>
           </div>
         </div>

@@ -15,14 +15,14 @@ interface Draft { id: number | null; serverId: string; name: string; start: stri
 
 const emptyDraft = (): Draft => {
   const p = presetNow(Date.now());
-  return { id: null, serverId: '', name: t('mt.defName'), start: toLocalInput(p.startTs), end: toLocalInput(p.endTs), repeat: 'none' };
+  return { id: null, serverId: '', name: t('d2.mt.defName'), start: toLocalInput(p.startTs), end: toLocalInput(p.endTs), repeat: 'none' };
 };
 
 const CHIP: Record<WindowState, { text: TKey; cls: string }> = {
-  active: { text: 'mt.st.active', cls: 'pill pill-warn' },
-  planned: { text: 'mt.st.planned', cls: 'pill pill-mute' },
-  repeat: { text: 'mt.st.repeat', cls: 'pill pill-mute' },
-  past: { text: 'mt.st.past', cls: 'pill pill-mute' },
+  active: { text: 'd2.mt.st.active', cls: 'pill pill-warn' },
+  planned: { text: 'd2.mt.st.planned', cls: 'pill pill-mute' },
+  repeat: { text: 'd2.mt.st.repeat', cls: 'pill pill-mute' },
+  past: { text: 'd2.mt.st.past', cls: 'pill pill-mute' },
 };
 
 /** «Обслуживание»: windows during which a server is shown as «Обслуживание» and does not raise alerts. */
@@ -62,7 +62,7 @@ export default function MaintenancePage() {
   const remove = (w: MaintenanceWindow) => {
     setHidden((h) => [...h, w.id]);
     undoable({
-      text: t('mt.deleted', { name: w.name }),
+      text: t('d2.mt.deleted', { name: w.name }),
       restore: () => setHidden((h) => h.filter((x) => x !== w.id)),
       commit: () => api(`/maintenance/${w.id}`, 'DELETE')
         .catch((e: Error) => toast(e.message, 'err'))
@@ -75,30 +75,30 @@ export default function MaintenancePage() {
       head={(
         <PageHead
           icon={<IconWrench size={22} />}
-          title={t('mt.title')}
-          subtitle={t('mt.subtitle')}
-          hint={t('mt.hint')}
-          help={<p>{t('mt.help')}</p>}
+          title={t('d2.mt.title')}
+          subtitle={t('d2.mt.subtitle')}
+          hint={t('d2.mt.hint')}
+          help={<p>{t('d2.mt.help')}</p>}
         >
-          <button type="button" className="btn" onClick={() => open()}><IconPlus size={16} />{t('mt.add')}</button>
+          <button type="button" className="btn" onClick={() => open()}><IconPlus size={16} />{t('d2.mt.add')}</button>
         </PageHead>
       )}
     >
       {error && !list ? <LoadError error={error} onRetry={() => void load()} /> : <ErrorLine text={error} />}
 
-      <div className="flex flex-wrap gap-2" role="group" aria-label={t('mt.quick')}>
-        <button type="button" className="chip-filter" onClick={() => open(presetNow(Date.now()))}>{t('mt.now30')}</button>
-        <button type="button" className="chip-filter" onClick={() => open(presetTonight(Date.now()))}>{t('mt.tonight')}</button>
+      <div className="flex flex-wrap gap-2" role="group" aria-label={t('d2.mt.quickWin')}>
+        <button type="button" className="chip-filter" onClick={() => open(presetNow(Date.now()))}>{t('d2.mt.now30')}</button>
+        <button type="button" className="chip-filter" onClick={() => open(presetTonight(Date.now()))}>{t('d2.mt.tonight')}</button>
       </div>
 
       {list && rows.length === 0 && (
         <StateView
-          title={t('mt.empty')}
-          text={t('mt.emptyText')}
-          action={<button type="button" className="btn" onClick={() => open()}>{t('mt.add')}</button>}
+          title={t('d2.mt.empty')}
+          text={t('d2.mt.emptyText')}
+          action={<button type="button" className="btn" onClick={() => open()}>{t('d2.mt.add')}</button>}
         />
       )}
-      {!list && !error && <div className="skeleton panel h-40" aria-busy="true" aria-label={t('mt.loading')} />}
+      {!list && !error && <div className="skeleton panel h-40" aria-busy="true" aria-label={t('d2.news.loading')} />}
 
       {rows.length > 0 && (
         <ul className="panel divide-y divide-line overflow-hidden">
@@ -111,16 +111,16 @@ export default function MaintenancePage() {
                   {w.repeat !== 'none' && st !== 'repeat' && <span className="pill pill-mute">{REPEAT_LABEL[w.repeat]}</span>}
                 </div>
                 <div className="mt-0.5 wrap-break-word text-sm font-semibold text-mute">
-                  {w.serverId == null ? t('mt.allServers') : w.serverName ?? t('mt.serverNo', { id: w.serverId })}
+                  {w.serverId == null ? t('sn.f.all') : w.serverName ?? t('d2.mt.serverNo', { id: w.serverId })}
                   {' · '}
                   {rangeLabel(w.startTs, w.endTs)}
                   {st === 'active' && w.until ? ` · ${untilLabel(w.until)}` : ''}
-                  {st !== 'active' && w.repeat !== 'none' && w.nextStart ? ` · ${t('mt.next', { range: rangeLabel(w.nextStart, w.nextStart + (w.endTs - w.startTs)) })}` : ''}
+                  {st !== 'active' && w.repeat !== 'none' && w.nextStart ? ` · ${t('d2.mt.next', { range: rangeLabel(w.nextStart, w.nextStart + (w.endTs - w.startTs)) })}` : ''}
                 </div>
               </div>
               <div className="flex items-center gap-2">
-                <button type="button" className="btn btn-soft btn-sm" onClick={() => edit(w)} aria-label={t('mt.editAria', { name: w.name })}><IconEdit size={16} />{t('mt.edit')}</button>
-                <button type="button" className="row-act row-act-danger" onClick={() => remove(w)} aria-label={t('mt.delAria', { name: w.name })}><IconTrash size={16} /></button>
+                <button type="button" className="btn btn-soft btn-sm" onClick={() => edit(w)} aria-label={t('d2.mt.editWin', { name: w.name })}><IconEdit size={16} />{t('d2.news.change')}</button>
+                <button type="button" className="row-act row-act-danger" onClick={() => remove(w)} aria-label={t('d2.mt.delWin', { name: w.name })}><IconTrash size={16} /></button>
               </div>
             </li>
           ))}
@@ -155,7 +155,7 @@ function WindowModal({ draft, servers, onClose, onSaved }: { draft: Draft; serve
     setError('');
     try {
       await (f.id == null ? api('/maintenance', 'POST', body) : api(`/maintenance/${f.id}`, 'PUT', body));
-      toast(f.id == null ? t('mt.added') : t('mt.saved'));
+      toast(f.id == null ? t('d2.mt.t.added') : t('d2.mt.t.saved'));
       onSaved();
     } catch (err) {
       setError(errText(err));
@@ -164,33 +164,33 @@ function WindowModal({ draft, servers, onClose, onSaved }: { draft: Draft; serve
   };
 
   return (
-    <Modal title={f.id == null ? t('mt.newTitle') : t('mt.editTitle')} onClose={onClose}>
+    <Modal title={f.id == null ? t('d2.mt.newWin') : t('d2.mt.editTitle')} onClose={onClose}>
       <form className="space-y-4" onSubmit={(e) => void submit(e)} noValidate>
-        <Field label={t('mt.f.server')}>
+        <Field label={t('sn.f.server')}>
           <select className="input" value={f.serverId} onChange={(e) => set('serverId', e.target.value)}>
-            <option value="">{t('mt.allServers')}</option>
+            <option value="">{t('sn.f.all')}</option>
             {servers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
           </select>
         </Field>
-        <Field label={t('mt.f.name')}>
-          <input className="input" value={f.name} maxLength={80} onChange={(e) => set('name', e.target.value)} placeholder={t('mt.f.namePh')} />
+        <Field label={t('d2.sf.name')}>
+          <input className="input" value={f.name} maxLength={80} onChange={(e) => set('name', e.target.value)} placeholder={t('d2.mt.nameEx')} />
         </Field>
-        <div className="flex flex-wrap gap-2" role="group" aria-label={t('mt.quickTime')}>
-          <button type="button" className="chip-filter" onClick={() => apply(presetNow(Date.now()))}>{t('mt.now30')}</button>
-          <button type="button" className="chip-filter" onClick={() => apply(presetTonight(Date.now()))}>{t('mt.tonight')}</button>
+        <div className="flex flex-wrap gap-2" role="group" aria-label={t('d2.mt.quickTime')}>
+          <button type="button" className="chip-filter" onClick={() => apply(presetNow(Date.now()))}>{t('d2.mt.now30')}</button>
+          <button type="button" className="chip-filter" onClick={() => apply(presetTonight(Date.now()))}>{t('d2.mt.tonight')}</button>
         </div>
         <div className="grid gap-4 min-[460px]:grid-cols-2">
-          <Field label={t('mt.f.start')}><input className="input" type="datetime-local" value={f.start} onChange={(e) => set('start', e.target.value)} /></Field>
-          <Field label={t('mt.f.end')}><input className="input" type="datetime-local" value={f.end} onChange={(e) => set('end', e.target.value)} /></Field>
+          <Field label={t('d2.mt.start')}><input className="input" type="datetime-local" value={f.start} onChange={(e) => set('start', e.target.value)} /></Field>
+          <Field label={t('d2.mt.end')}><input className="input" type="datetime-local" value={f.end} onChange={(e) => set('end', e.target.value)} /></Field>
         </div>
-        <Field label={t('mt.f.repeat')}>
+        <Field label={t('d2.mt.repeat')}>
           <select className="input" value={f.repeat} onChange={(e) => set('repeat', e.target.value as MaintenanceRepeat)}>
-            <option value="none">{t('mt.r.none')}</option>
-            <option value="daily">{t('mt.r.daily')}</option>
-            <option value="weekly">{t('mt.r.weekly')}</option>
+            <option value="none">{t('d2.mt.once')}</option>
+            <option value="daily">{t('d2.mt.daily')}</option>
+            <option value="weekly">{t('d2.mt.weekly')}</option>
           </select>
         </Field>
-        <p className="text-sm font-semibold text-mute">{t('mt.tzNote')}</p>
+        <p className="text-sm font-semibold text-mute">{t('d2.mt.tzNote')}</p>
         <FieldError id="maint-problem" text={f.name.trim() && f.start && f.end ? problem ?? undefined : undefined} />
         <ErrorLine text={error} />
         <div className="flex flex-wrap justify-end gap-2">

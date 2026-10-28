@@ -1,6 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
 import { api, type Server } from '../api';
 import { useAuth } from '../auth';
+import { t, useI18n, type TKey } from '../i18n';
 import { useBackdropClose, useDialogFocus } from '../confirm';
 import { gameLabel } from '../games';
 import { ADMIN_LINKS, ADMIN_SECTIONS, SECTION_PERM } from '../pages/adminNav';
@@ -55,6 +56,7 @@ const sectionItem = (key: string, label: string, hint: string, href: string, ico
  * the arrow keys (aria-activedescendant), Enter opens, Escape closes. Focus returns to whatever opened it.
  */
 export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose: () => void; isStaff: boolean; isAdmin: boolean }) {
+  const { lang } = useI18n();
   const { me, logout } = useAuth();
   const perms = me?.perms ?? (isAdmin ? ['news', 'moderation', 'servers', 'maintenance', 'journal'] : []);
   const box = useRef<HTMLDivElement>(null);
@@ -140,9 +142,9 @@ export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose:
       act('act-season', 'Начать новый сезон', 'Сообщество · Сезоны', 'сезон вайп wipe рейтинг', <IconTrophy />, () => navigate('/admin/community/seasons'));
     }
     const theme = currentTheme();
-    for (const [t, label, icon] of [['dark', 'Тёмная тема', <IconMoon key="m" />], ['light', 'Светлая тема', <IconSun key="s" />], ['auto', 'Тема как в системе', <IconSun key="a" />]] as const) {
-      if (t === theme) continue;
-      out.push({ key: `theme-${t}`, group: 'Действия', label, hint: 'Оформление панели', href: '', run: () => setThemeChoice(t), icon, hay: norm(`${label} тема оформление цвет ночь день dark light`) });
+    for (const [mode, label, icon] of [['dark', t('d2.cp.theme.dark'), <IconMoon key="m" />], ['light', t('d2.cp.theme.light'), <IconSun key="s" />], ['auto', t('d2.cp.theme.auto'), <IconSun key="a" />]] as const) {
+      if (mode === theme) continue;
+      out.push({ key: `theme-${mode}`, group: 'Действия', label, hint: 'Оформление панели', href: '', run: () => setThemeChoice(mode), icon, hay: norm(`${label} тема оформление цвет ночь день dark light`) });
     }
     if (adminThemeIsOwn() && /^\/admin(\/|$)/.test(currentPath())) out.push({ key: 'theme-site', group: 'Действия', label: 'Тема админки как на сайте', hint: 'Оформление панели', href: '', run: () => resetAdminTheme(), icon: <IconSun key="x" />, hay: norm('тема админки как на сайте сбросить оформление') });
     if (me) act('act-logout', 'Выйти', me.username, 'выход logout', <IconUser />, () => logout());
@@ -158,7 +160,7 @@ export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose:
       hay: norm('сменить плотность компактная обычная вид отступы density'),
     });
     return out;
-  }, [servers, isStaff, isAdmin, me, density, perms, logout]);
+  }, [servers, isStaff, isAdmin, me, density, perms, logout, lang]);
 
   const results = useMemo(() => {
     const words = norm(q).split(/\s+/).filter(Boolean);
@@ -193,6 +195,7 @@ export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose:
   };
 
   const groups: Group[] = ['Серверы', 'Разделы', 'Действия'];
+  const groupName: Record<Group, TKey> = { 'Серверы': 'nav.servers', 'Разделы': 'd2.cp.g.sections', 'Действия': 'd2.cp.g.actions' };
   const optId = (i: number) => `${uid}-opt-${i}`;
 
   return (
@@ -201,7 +204,7 @@ export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose:
         ref={box}
         role="dialog"
         aria-modal="true"
-        aria-label="Поиск по панели"
+        aria-label={t('d2.cp.search')}
         tabIndex={-1}
         className="pop panel w-full max-w-xl overflow-hidden outline-hidden"
       >
@@ -220,8 +223,8 @@ export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose:
             aria-controls={listId}
             aria-autocomplete="list"
             aria-activedescendant={results.length ? optId(safeActive) : undefined}
-            aria-label="Поиск серверов и разделов"
-            placeholder="Найти сервер или раздел…"
+            aria-label={t('d2.cp.searchLabel')}
+            placeholder={t('d2.cp.placeholder')}
             autoComplete="off"
             spellCheck={false}
             className="min-h-[44px] min-w-0 flex-1 bg-transparent text-fs-lg focus-visible:ring-0 font-bold text-ink outline-hidden placeholder:font-semibold placeholder:text-mute"
@@ -230,7 +233,7 @@ export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose:
             type="button"
             onClick={onClose}
             className="btn-soft btn-xs max-sm:hidden"
-            aria-label="Закрыть поиск"
+            aria-label={t('d2.cp.close')}
           >
             Esc
           </button>
@@ -238,20 +241,20 @@ export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose:
             type="button"
             onClick={onClose}
             className="btn-icon shrink-0 sm:hidden"
-            aria-label="Закрыть поиск"
+            aria-label={t('d2.cp.close')}
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" aria-hidden><path d="M6 6l12 12M18 6L6 18" /></svg>
           </button>
         </div>
 
-        <div ref={list} id={listId} role="listbox" aria-label="Результаты" className="max-h-[min(60dvh,26rem)] overflow-y-auto overscroll-contain p-2">
+        <div ref={list} id={listId} role="listbox" aria-label={t('d2.cp.results')} className="max-h-[min(60dvh,26rem)] overflow-y-auto overscroll-contain p-2">
           {groups.map((g) => {
             const rows = results.map((it, idx) => ({ it, idx })).filter((r) => r.it.group === g);
             if (!rows.length) return null;
             const gid = `${uid}-g-${g}`;
             return (
               <div key={g} role="group" aria-labelledby={gid}>
-                <div id={gid} className="px-3 pb-1 pt-2 text-xs font-extrabold uppercase tracking-wider text-mute">{g}</div>
+                <div id={gid} className="px-3 pb-1 pt-2 text-xs font-extrabold uppercase tracking-wider text-mute">{t(groupName[g])}</div>
                 {rows.map(({ it, idx }) => (
                   <div
                     key={it.key}
@@ -276,18 +279,18 @@ export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose:
           })}
           {results.length === 0 && (
             <p className="px-4 py-8 text-center font-semibold text-mute">
-              {servers === null ? 'Загрузка…' : 'Ничего не найдено. Попробуйте другое слово.'}
+              {servers === null ? t('nw.loadingMore') : t('d2.cp.nothing')}
             </p>
           )}
         </div>
 
         <div className="hidden items-center gap-4 border-t border-line px-4 py-2 text-xs font-bold text-mute sm:flex">
-          <span>↑ ↓ выбрать</span>
-          <span>Enter открыть</span>
-          <span>Esc закрыть</span>
+          <span>{t('d2.cp.hintSelect')}</span>
+          <span>{t('d2.cp.hintOpen')}</span>
+          <span>{t('d2.cp.hintClose')}</span>
           <span className="ml-auto">Ctrl K</span>
         </div>
-        <p className="sr-only" role="status">{results.length ? `Найдено: ${results.length}` : 'Ничего не найдено'}</p>
+        <p className="sr-only" role="status">{results.length ? t('d2.cp.found', { n: results.length }) : t('d2.cp.none')}</p>
       </div>
     </div>
   );

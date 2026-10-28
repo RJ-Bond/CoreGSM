@@ -10,9 +10,9 @@ const KIND_KEY: Record<SubKind, TKey> = { free_slot: 'sub.free_slot', back_onlin
 /** the choice of kinds: checkboxes and, when there is no linked Discord, a note about where the messages go */
 /** what the message will look like (the address is an example) */
 const PREVIEW: Record<SubKind, (n: string) => string> = {
-  free_slot: (n) => `🟢 На сервере «${n}» освободилось место (39/40). Адрес: play.example.com:27015`,
-  back_online: (n) => `✅ Сервер «${n}» снова в сети. Адрес: play.example.com:27015`,
-  went_down: (n) => `🔴 Сервер «${n}» недоступен. Адрес: play.example.com:27015`,
+  free_slot: (n) => t('d2.sm.p.free', { name: n }),
+  back_online: (n) => t('d2.sm.p.back', { name: n }),
+  went_down: (n) => t('d2.sm.p.down', { name: n }),
 };
 
 export function SubscribeForm({ kinds, onChange, discordLinked, idPrefix = 'sub', serverName }: { kinds: SubKind[]; onChange: (k: SubKind[]) => void; discordLinked: boolean; idPrefix?: string; serverName?: string }) {
@@ -26,7 +26,7 @@ export function SubscribeForm({ kinds, onChange, discordLinked, idPrefix = 'sub'
               <input id={`${idPrefix}-${k}`} type="checkbox" checked={kinds.includes(k)} onChange={() => onChange(toggleKind(kinds, k))} />
               {t(KIND_KEY[k])}
             </label>
-            {serverName && kinds.includes(k) && <p className="sub-preview" aria-label="Так будет выглядеть сообщение">{PREVIEW[k](serverName)}</p>}
+            {serverName && kinds.includes(k) && <p className="sub-preview" aria-label={t('d2.sm.preview')}>{PREVIEW[k](serverName)}</p>}
           </li>
         ))}
       </ul>
@@ -84,7 +84,7 @@ export default function SubscribeMenu({
     setTesting(true);
     try {
       const r = await api<{ dm: boolean; discordLinked: boolean }>(`/servers/${serverId}/subscription/test`, 'POST');
-      toast(r.dm ? 'Тест отправлен: смотрите колокольчик и личные сообщения Discord' : r.discordLinked ? 'Тест в колокольчике. Бот сейчас не в сети, в Discord не отправлено' : 'Тест в колокольчике. Привяжите Discord, чтобы получать и в личные сообщения');
+      toast(r.dm ? t('d2.sm.t.dm') : r.discordLinked ? t('d2.sm.t.botOff') : t('d2.sm.t.noDiscord'));
     } catch (e) {
       fail(e);
     } finally {
@@ -122,8 +122,8 @@ export default function SubscribeMenu({
             <SubscribeForm kinds={draft} onChange={setDraft} discordLinked={!!me.discordName} serverName={serverName} />
             <ErrorLine text={error} />
             <div className="flex flex-wrap items-center justify-end gap-2">
-              <button type="button" className="btn btn-soft mr-auto" disabled={testing} onClick={() => void sendTest()} title="Пришлёт в панель, в Discord и на устройства сообщение-образец">
-                {testing ? 'Отправляю…' : 'Тестовое сообщение'}
+              <button type="button" className="btn btn-soft mr-auto" disabled={testing} onClick={() => void sendTest()} title={t('d2.sm.testTitle')}>
+                {testing ? t('d2.smtp.sending') : t('d2.sm.test')}
               </button>
               <button type="button" className="btn btn-ghost" onClick={() => setOpen(false)}>{t('common.cancel')}</button>
               <Button loading={busy}>{t('sub.save')}</Button>

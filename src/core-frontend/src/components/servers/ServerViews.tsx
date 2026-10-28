@@ -5,6 +5,7 @@ import type { Server } from '../../api';
 import { gameColor, gameLabel } from '../../games';
 import { AnimatedNumber, GameAvatar, MiniSpark, StatusPill, ago, isLag, plural, num } from '../../ui';
 import MaintenanceChip from '../MaintenanceChip';
+import { t, useI18n, type TKey } from '../../i18n';
 import { CapacityBar, CountReact, StatusFlash, reactionOf, type Reactions } from './serverUi';
 
 export interface ListSort { key: 'name' | 'players' | 'ping' | 'up'; dir: 'asc' | 'desc' }
@@ -31,6 +32,7 @@ const fmtUp = (v: number) => `${num(v)}%`;
 
 /** copies the address; the button shows a check mark for a moment */
 function CopyAddress({ text, className = '' }: { text: string; className?: string }) {
+  useI18n();
   const [done, setDone] = useState(false);
   const timer = useRef<number | undefined>(undefined);
   useEffect(() => () => window.clearTimeout(timer.current), []);
@@ -60,7 +62,7 @@ function CopyAddress({ text, className = '' }: { text: string; className?: strin
     timer.current = window.setTimeout(() => setDone(false), 1500);
   };
   return (
-    <button type="button" onClick={(e) => void copy(e)} className={`${done ? 'btn-success' : 'btn-soft'} btn-xs max-w-full ${className}`} title="Скопировать адрес" aria-label={`Скопировать адрес ${text}`}>
+    <button type="button" onClick={(e) => void copy(e)} className={`${done ? 'btn-success' : 'btn-soft'} btn-xs max-w-full ${className}`} title={t('d2.sv.copyAddr')} aria-label={t('d2.sv.copyAddrOf', { addr: text })}>
       <span className="truncate font-mono">{text}</span>
       <span aria-hidden className="shrink-0">{done ? '✓' : '⧉'}</span>
     </button>
@@ -88,10 +90,11 @@ export interface SelectProps {
 }
 
 function ListRow({ s, uptime, onOpen, rx, favButton, select }: RowProps) {
+  useI18n();
   const r = reactionOf(rx, s.id);
   const lag = isLag(s);
   const kind = s.maintenance ? 'maint' : !s.hasStatus ? 'mute' : !s.online ? 'bad' : lag ? 'warn' : 'ok';
-  const label = s.maintenance ? 'Обслуживание' : !s.hasStatus ? 'Ожидание ответа' : !s.online ? 'Офлайн' : lag ? 'Лаги' : 'Онлайн';
+  const label = s.maintenance ? t('d2.mt.title') : !s.hasStatus ? t('d2.sv.waitReply') : !s.online ? t('d2.bl.offline') : lag ? t('d2.bl.lag') : t('d2.srv.f.online');
   return (
     <div
       className={`srv-tr ${s.online ? '' : 'off'} ${select?.on && select.has(s.id) ? 'selected' : ''}`}
@@ -105,7 +108,7 @@ function ListRow({ s, uptime, onOpen, rx, favButton, select }: RowProps) {
             checked={select.has(s.id)}
             onChange={() => select.toggle(s.id)}
             onClick={(e) => e.stopPropagation()}
-            aria-label={`Выбрать: ${s.name}`}
+            aria-label={t('d2.news.pickOne', { title: s.name })}
           />
         )}
         <StatusFlash r={r}><span className={`srv-dot ${kind}`} role="img" aria-label={label} title={label} /></StatusFlash>
@@ -126,15 +129,17 @@ function ListRow({ s, uptime, onOpen, rx, favButton, select }: RowProps) {
             <CapacityBar players={s.players} max={s.maxPlayers} color={gameColor(s.game)} showPct={false} slots={false} />
           </>
         ) : (
-          <span className="srv-tr-off" title={s.error ?? undefined}>{s.hasStatus ? `не отвечает · ${ago(s.updatedAt)}` : 'ожидаем ответ'}</span>
+          <span className="srv-tr-off" title={s.error ?? undefined}>{s.hasStatus ? `${t('d2.sv.noReply')} · ${ago(s.updatedAt)}` : t('d2.sv.waiting')}</span>
         )}
       </div>
-      <div className="srv-td-ping" data-label="Пинг">{s.online && s.ping != null ? <span className={lag ? 'text-warn' : ''}>{s.ping}<small> мс</small></span> : '–'}</div>
-      <div className="srv-td-up" data-label="Аптайм">{uptime != null ? fmtUp(uptime) : '–'}</div>
+      <div className="srv-td-ping" data-label={t('d2.sd.ping')}>{s.online && s.ping != null ? <span className={lag ? 'text-warn' : ''}>{s.ping}<small> {t('d2.sv.ms')}</small></span> : '–'}</div>
+      <div className="srv-td-up" data-label={t('d2.sv.up')}>{uptime != null ? fmtUp(uptime) : '–'}</div>
       <div className="srv-td-fav">{favButton}</div>
     </div>
   );
 }
+
+const COLS = [['name', 'srv-td-name', 'nav.servers'], ['players', 'srv-td-pl', 'd2.pl.players'], ['ping', 'srv-td-ping', 'd2.sd.ping'], ['up', 'srv-td-up', 'd2.sv.up']] as [ListSort['key'], string, TKey][];
 
 export function ServersList({ servers, uptime, rx, favOf, onOpen, renderFav, select, sort, onSort }: {
   select?: SelectProps;
@@ -148,21 +153,21 @@ export function ServersList({ servers, uptime, rx, favOf, onOpen, renderFav, sel
   renderFav: (s: Server, on: boolean) => React.ReactNode;
 }) {
   return (
-    <div className={`panel srv-tbl fade-in ${select?.on ? 'selecting' : ''}`} aria-label="Серверы">
+    <div className={`panel srv-tbl fade-in ${select?.on ? 'selecting' : ''}`} aria-label={t('nav.servers')}>
       <div className="srv-tr srv-th">
         <div className="srv-td-dot" />
-        {([['name', 'srv-td-name', 'Сервер'], ['players', 'srv-td-pl', 'Игроки'], ['ping', 'srv-td-ping', 'Пинг'], ['up', 'srv-td-up', 'Аптайм']] as const).filter(([k]) => k === 'name').map(([k, cls, label]) => (
+        {COLS.filter(([k]) => k === 'name').map(([k, cls, label]) => (
           <div key={k} className={cls} aria-sort={sort?.key === k ? (sort.dir === 'asc' ? 'ascending' : 'descending') : undefined}>
-            <button type="button" className="srv-sort" onClick={() => onSort?.(k)} title="Сортировать">
-              {label}<span aria-hidden>{sort?.key === k ? (sort.dir === 'asc' ? ' ↑' : ' ↓') : ''}</span>
+            <button type="button" className="srv-sort" onClick={() => onSort?.(k)} title={t('d2.sv.sort')}>
+              {t(label)}<span aria-hidden>{sort?.key === k ? (sort.dir === 'asc' ? ' ↑' : ' ↓') : ''}</span>
             </button>
           </div>
         ))}
-        <div className="srv-td-addr">Адрес</div>
-        {([['name', 'srv-td-name', 'Сервер'], ['players', 'srv-td-pl', 'Игроки'], ['ping', 'srv-td-ping', 'Пинг'], ['up', 'srv-td-up', 'Аптайм']] as const).filter(([k]) => k !== 'name').map(([k, cls, label]) => (
+        <div className="srv-td-addr">{t('d2.sv.address')}</div>
+        {COLS.filter(([k]) => k !== 'name').map(([k, cls, label]) => (
           <div key={k} className={cls} aria-sort={sort?.key === k ? (sort.dir === 'asc' ? 'ascending' : 'descending') : undefined}>
-            <button type="button" className="srv-sort" onClick={() => onSort?.(k)} title="Сортировать">
-              {label}<span aria-hidden>{sort?.key === k ? (sort.dir === 'asc' ? ' ↑' : ' ↓') : ''}</span>
+            <button type="button" className="srv-sort" onClick={() => onSort?.(k)} title={t('d2.sv.sort')}>
+              {t(label)}<span aria-hidden>{sort?.key === k ? (sort.dir === 'asc' ? ' ↑' : ' ↓') : ''}</span>
             </button>
           </div>
         ))}

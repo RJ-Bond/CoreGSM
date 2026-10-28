@@ -2,9 +2,11 @@ import { useRef, useState } from 'react';
 import type { NewsVariable } from '../../api';
 import { LIMITS, newKey, type FieldRow } from './model';
 import { MarkdownField } from './MarkdownField';
+import { t, useI18n } from '../../i18n';
 
 /** schematic of how the fields sit in Discord: up to three inline ones in a row */
 function MiniLayout({ fields }: { fields: FieldRow[] }) {
+  useI18n();
   const rows: FieldRow[][] = [];
   let cur: FieldRow[] = [];
   for (const f of fields) {
@@ -14,8 +16,8 @@ function MiniLayout({ fields }: { fields: FieldRow[] }) {
   if (cur.length) rows.push(cur);
   if (!rows.length) return null;
   return (
-    <div className="rounded-2xl bg-soft p-3" aria-label="Схема расположения полей" role="img">
-      <div className="mb-1.5 text-xs font-extrabold uppercase tracking-wide text-mute">Как расположены поля</div>
+    <div className="rounded-2xl bg-soft p-3" aria-label={t('d2.fb.layoutLabel')} role="img">
+      <div className="mb-1.5 text-xs font-extrabold uppercase tracking-wide text-mute">{t('d2.fb.layout')}</div>
       <div className="space-y-1">
         {rows.map((row, i) => (
           <div key={i} className="grid gap-1" style={{ gridTemplateColumns: `repeat(${row.length}, minmax(0, 1fr))` }}>
@@ -35,6 +37,7 @@ const Down = () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" s
 const iconBtn = 'btn-icon-sm shrink-0';
 
 export function FieldsBuilder({ fields, onChange, variables }: { fields: FieldRow[]; onChange: (f: FieldRow[]) => void; variables?: NewsVariable[] }) {
+  useI18n();
   const [drag, setDrag] = useState<number | null>(null);
   const [over, setOver] = useState<number | null>(null);
   const cards = useRef<Record<string, HTMLDivElement | null>>({});
@@ -63,8 +66,8 @@ export function FieldsBuilder({ fields, onChange, variables }: { fields: FieldRo
             <span
               draggable
               role="img"
-              aria-label="Перетащить поле"
-              title="Перетащите, чтобы поменять порядок"
+              aria-label={t('d2.fb.drag')}
+              title={t('d2.fb.dragTitle')}
               onDragStart={(e) => {
                 setDrag(i);
                 e.dataTransfer.effectAllowed = 'move';
@@ -79,39 +82,39 @@ export function FieldsBuilder({ fields, onChange, variables }: { fields: FieldRo
             </span>
             <input
               id={`news-f${i}-name`}
-              aria-label={`Название поля ${i + 1}`}
+              aria-label={t('d2.fb.fieldName', { n: i + 1 })}
               className={`input ${f.name.length > LIMITS.fieldName ? 'border-bad!' : ''}`}
               value={f.name}
-              placeholder="Название"
+              placeholder={t('d2.sf.name')}
               onChange={(e) => patch(i, { name: e.target.value })}
             />
-            <button type="button" className={iconBtn} aria-label={`Поднять поле ${i + 1}`} disabled={i === 0} onClick={() => move(i, i - 1)}><Up /></button>
-            <button type="button" className={iconBtn} aria-label={`Опустить поле ${i + 1}`} disabled={i === fields.length - 1} onClick={() => move(i, i + 1)}><Down /></button>
+            <button type="button" className={iconBtn} aria-label={t('d2.fb.up', { n: i + 1 })} disabled={i === 0} onClick={() => move(i, i - 1)}><Up /></button>
+            <button type="button" className={iconBtn} aria-label={t('d2.fb.down', { n: i + 1 })} disabled={i === fields.length - 1} onClick={() => move(i, i + 1)}><Down /></button>
           </div>
           <MarkdownField
             id={`news-f${i}-value`}
-            label={`Текст поля ${i + 1}`}
+            label={t('d2.fb.fieldText', { n: i + 1 })}
             hideLabel
             compact
             rows={2}
             max={LIMITS.fieldValue}
             value={f.value}
-            placeholder="Текст"
+            placeholder={t('d2.ws.newsText')}
             variables={variables}
             onChange={(v) => patch(i, { value: v })}
           />
           <div className="flex flex-wrap items-center gap-2">
-            <div className="seg" role="group" aria-label={`Расположение поля ${i + 1}`}>
-              <button type="button" className="seg-item" aria-pressed={!f.inline} onClick={() => patch(i, { inline: false })} title="Во всю ширину">
-                <span aria-hidden className="mr-1 inline-block h-2.5 w-6 rounded-xs bg-current opacity-60" />Широкое
+            <div className="seg" role="group" aria-label={t('d2.fb.placement', { n: i + 1 })}>
+              <button type="button" className="seg-item" aria-pressed={!f.inline} onClick={() => patch(i, { inline: false })} title={t('d2.fb.fullTitle')}>
+                <span aria-hidden className="mr-1 inline-block h-2.5 w-6 rounded-xs bg-current opacity-60" />{t('d2.fb.full')}
               </button>
-              <button type="button" className="seg-item" aria-pressed={f.inline} onClick={() => patch(i, { inline: true })} title="В ряд с соседними">
-                <span aria-hidden className="mr-1 inline-flex gap-0.5 align-middle"><span className="inline-block h-2.5 w-2 rounded-xs bg-current opacity-60" /><span className="inline-block h-2.5 w-2 rounded-xs bg-current opacity-60" /><span className="inline-block h-2.5 w-2 rounded-xs bg-current opacity-60" /></span>В ряд
+              <button type="button" className="seg-item" aria-pressed={f.inline} onClick={() => patch(i, { inline: true })} title={t('d2.fb.inlineTitle')}>
+                <span aria-hidden className="mr-1 inline-flex gap-0.5 align-middle"><span className="inline-block h-2.5 w-2 rounded-xs bg-current opacity-60" /><span className="inline-block h-2.5 w-2 rounded-xs bg-current opacity-60" /><span className="inline-block h-2.5 w-2 rounded-xs bg-current opacity-60" /></span>{t('d2.fb.inline')}
               </button>
             </div>
             <span className="ml-auto flex items-center gap-1.5">
-              <button type="button" className="btn btn-soft btn-sm" disabled={fields.length >= LIMITS.fields} onClick={() => { const c = fields.slice(); c.splice(i + 1, 0, { ...f, k: newKey() }); onChange(c); }}>Дублировать</button>
-              <button type="button" className="btn btn-danger btn-sm" aria-label={`Удалить поле ${i + 1}`} onClick={() => onChange(fields.filter((_, j) => j !== i))}>Удалить</button>
+              <button type="button" className="btn btn-soft btn-sm" disabled={fields.length >= LIMITS.fields} onClick={() => { const c = fields.slice(); c.splice(i + 1, 0, { ...f, k: newKey() }); onChange(c); }}>{t('d2.news.dup')}</button>
+              <button type="button" className="btn btn-danger btn-sm" aria-label={t('d2.fb.delete', { n: i + 1 })} onClick={() => onChange(fields.filter((_, j) => j !== i))}>{t('d2.news.delete')}</button>
             </span>
           </div>
         </div>
@@ -122,7 +125,7 @@ export function FieldsBuilder({ fields, onChange, variables }: { fields: FieldRo
         disabled={fields.length >= LIMITS.fields}
         onClick={() => onChange([...fields, { k: newKey(), name: '', value: '', inline: fields.length > 0 && fields.length < 3 }])}
       >
-        + Добавить поле {fields.length > 0 && <span className="ml-1 text-mute">({fields.length}/{LIMITS.fields})</span>}
+        {t('d2.fb.add')} {fields.length > 0 && <span className="ml-1 text-mute">({fields.length}/{LIMITS.fields})</span>}
       </button>
     </div>
   );

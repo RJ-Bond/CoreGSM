@@ -1,5 +1,6 @@
 import { useState, type CSSProperties, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react';
 import { api } from '../api';
+import { t as tr } from '../i18n';
 import { DiscordMd, EnvCtx, THEMES, ThemeCtx, type DTheme, type MdEnv } from '../components/news/DiscordMd';
 import { usePoll } from '../ui';
 
@@ -188,8 +189,8 @@ export function EmbedView({
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-x-2 text-fs-base leading-tight">
                   <span className="font-bold" style={{ color: t.title }}>{botName}</span>
-                  <span className="rounded-sm px-1 text-xs font-bold uppercase text-white" style={{ background: '#5865f2' }}>БОТ</span>
-                  <span className="text-xs" style={{ color: t.muted }}>Сегодня, в {pad2(now.getHours())}:{pad2(now.getMinutes())}</span>
+                  <span className="rounded-sm px-1 text-xs font-bold uppercase text-white" style={{ background: '#5865f2' }}>{tr('d2.ep.bot')}</span>
+                  <span className="text-xs" style={{ color: t.muted }}>{tr('d2.ep.today', { time: `${pad2(now.getHours())}:${pad2(now.getMinutes())}` })}</span>
                 </div>
                 {content && (
                   <Part part="content" embed={0} onPick={onPick} bad={invalid?.has('content')} className="mt-0.5">
