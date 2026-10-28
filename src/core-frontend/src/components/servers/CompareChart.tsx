@@ -7,6 +7,7 @@ import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointer
 import type { Server } from '../../api';
 import { getToken } from '../../api';
 import { gameColor } from '../../games';
+import { t, useI18n, type TKey } from '../../i18n';
 import { GameAvatar, smoothPath } from '../../ui';
 
 interface Sparks { hours: number; points: number; from: number; to: number; servers: Record<number, { players: (number | null)[]; down: boolean[] }> }
@@ -14,7 +15,7 @@ interface Sparks { hours: number; points: number; from: number; to: number; serv
 // distinct colours when two servers run the same game
 const SPARE = ['#2563eb', '#db2777', '#059669', '#d97706', '#7c3aed', '#0891b2', '#dc2626', '#65a30d', '#c026d3', '#0d9488'];
 
-const PERIODS: [number, string][] = [[24, 'Сутки'], [168, 'Неделя']];
+const PERIODS: [number, TKey][] = [[24, 'd2.cc.day'], [168, 'd2.cc.week']];
 
 /** distance between the hues of two '#rrggbb' colours, in degrees */
 function hueGap(a: string, b: string): number {
@@ -32,6 +33,7 @@ function hueGap(a: string, b: string): number {
 }
 
 export default function CompareChart({ servers }: { servers: Server[] }) {
+  useI18n();
   const [hours, setHours] = useState(24);
   const [pct, setPct] = useState(false);
   const [hidden, setHidden] = useState<Set<number>>(new Set());
@@ -126,19 +128,19 @@ export default function CompareChart({ servers }: { servers: Server[] }) {
   return (
     <section className="tile tile-in p-4 sm:p-5">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-        <h2 className="text-lg font-extrabold">Сравнение серверов</h2>
+        <h2 className="text-lg font-extrabold">{t('d2.cc.title')}</h2>
         <div className="flex flex-wrap gap-2">
-          <div className="seg" role="group" aria-label="Что показывать">
-            <button type="button" className="seg-item" aria-pressed={!pct} onClick={() => setPct(false)}>Игроки</button>
-            <button type="button" className="seg-item" aria-pressed={pct} onClick={() => setPct(true)}>% мест</button>
+          <div className="seg" role="group" aria-label={t('d2.cc.what')}>
+            <button type="button" className="seg-item" aria-pressed={!pct} onClick={() => setPct(false)}>{t('d2.an.players')}</button>
+            <button type="button" className="seg-item" aria-pressed={pct} onClick={() => setPct(true)}>{t('d2.cc.slots')}</button>
           </div>
-          <div className="seg" role="group" aria-label="Период">
-            {PERIODS.map(([h, l]) => <button key={h} type="button" className="seg-item" aria-pressed={hours === h} onClick={() => setHours(h)}>{l}</button>)}
+          <div className="seg" role="group" aria-label={t('st.range')}>
+            {PERIODS.map(([h, l]) => <button key={h} type="button" className="seg-item" aria-pressed={hours === h} onClick={() => setHours(h)}>{t(l)}</button>)}
           </div>
         </div>
       </div>
 
-      <div className="mb-3 flex flex-wrap gap-2" aria-label="Показать или скрыть сервер">
+      <div className="mb-3 flex flex-wrap gap-2" aria-label={t('d2.cc.toggle')}>
         {series.map((x) => (
           <button key={x.s.id} type="button" className="cmp-chip" aria-pressed={!hidden.has(x.s.id)} onClick={() => toggle(x.s.id)} style={{ ['--c' as string]: x.color }}>
             <i aria-hidden />{x.s.name}
@@ -148,9 +150,9 @@ export default function CompareChart({ servers }: { servers: Server[] }) {
 
       <div ref={wrap} className="relative">
         {!data ? (
-          <div className="skeleton rounded-2xl bg-soft" style={{ height: H }} aria-label="Загрузка" role="status" />
+          <div className="skeleton rounded-2xl bg-soft" style={{ height: H }} aria-label={t('d2.news.loading')} role="status" />
         ) : (
-          <svg ref={svg} viewBox={`0 0 ${W} ${H}`} className="block h-auto w-full touch-pan-y select-none" role="img" aria-label={`Игроки на серверах за ${hours <= 24 ? 'сутки' : 'неделю'}`} onPointerMove={onMove} onPointerDown={onMove} onPointerLeave={() => setHover(null)}>
+          <svg ref={svg} viewBox={`0 0 ${W} ${H}`} className="block h-auto w-full touch-pan-y select-none" role="img" aria-label={hours <= 24 ? t('d2.cc.labelDay') : t('d2.cc.labelWeek')} onPointerMove={onMove} onPointerDown={onMove} onPointerLeave={() => setHover(null)}>
             {Array.from({ length: Math.floor(yMax / (pct ? 25 : step)) + 1 }, (_, i) => i * (pct ? 25 : step)).map((v) => (
               <g key={v}>
                 <line x1={L} x2={W - R} y1={y(v)} y2={y(v)} className="stroke-line" strokeDasharray={v ? '3 5' : undefined} />
@@ -192,7 +194,7 @@ export default function CompareChart({ servers }: { servers: Server[] }) {
       <div className="mt-4 overflow-x-auto">
         <table className="cmp-rank">
           <thead>
-            <tr><th scope="col">#</th><th scope="col">Сервер</th><th scope="col">В среднем</th><th scope="col">Пик</th><th scope="col">К прошлому периоду</th></tr>
+            <tr><th scope="col">#</th><th scope="col">{t('sn.f.server')}</th><th scope="col">{t('d2.cc.avg')}</th><th scope="col">{t('d2.an.peak')}</th><th scope="col">{t('d2.cc.vsPrev')}</th></tr>
           </thead>
           <tbody>
             {ranked.map((r, i) => (
