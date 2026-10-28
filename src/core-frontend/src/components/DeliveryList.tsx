@@ -4,6 +4,7 @@ import {
   KIND_LABEL, STATUS_LABEL, attemptsText, canRetry, countdownText,
   type DeliveryKind, type DeliveryResponse, type DeliveryStatus,
 } from '../deliveries';
+import { t, useI18n, type TKey } from '../i18n';
 import { IconBell, IconDiscord, IconNews, IconRefresh, IconUsers, Section, ago, toast, usePoll } from '../ui';
 
 const KIND_ICON: Record<DeliveryKind, () => JSX.Element> = {
@@ -21,17 +22,18 @@ const STATUS_PILL: Record<DeliveryStatus, string> = {
   dead: 'pill pill-bad',
 };
 
-const FILTERS: { id: DeliveryStatus | ''; label: string }[] = [
-  { id: '', label: 'Все' },
-  { id: 'pending', label: 'В очереди' },
-  { id: 'sending', label: 'Отправляются' },
-  { id: 'sent', label: 'Доставлено' },
-  { id: 'error', label: 'С ошибкой' },
-  { id: 'dead', label: 'Не доставлено' },
+const FILTERS: { id: DeliveryStatus | ''; label: TKey }[] = [
+  { id: '', label: 'd2.srv.f.all' },
+  { id: 'pending', label: 'd2.dl.f.pending' },
+  { id: 'sending', label: 'd2.dl.f.sending' },
+  { id: 'sent', label: 'd2.dl.f.sent' },
+  { id: 'error', label: 'd2.dl.f.error' },
+  { id: 'dead', label: 'd2.dl.f.dead' },
 ];
 
 /** «Доставка»: the queue of messages the bot sends to Discord, with retries. Hidden when the backend has no queue. */
 export default function DeliveryList() {
+  useI18n();
   const [data, setData] = useState<DeliveryResponse | null>(null);
   const [gone, setGone] = useState(false);
   const [status, setStatus] = useState<DeliveryStatus | ''>('');
@@ -64,10 +66,10 @@ export default function DeliveryList() {
     setBusy((b) => [...b, id]);
     try {
       await api(`/deliveries/${id}/retry`, 'POST');
-      toast('Сообщение поставлено в очередь снова');
+      toast(t('d2.dl.t.requeued'));
       await load();
     } catch (e) {
-      toast(e instanceof ApiError && e.status === 409 ? 'Эту доставку уже нельзя повторить' : (e as Error).message, 'err');
+      toast(e instanceof ApiError && e.status === 409 ? t('d2.dl.t.noRetry') : (e as Error).message, 'err');
       void load();
     } finally {
       setBusy((b) => b.filter((x) => x !== id));
@@ -80,31 +82,31 @@ export default function DeliveryList() {
 
   return (
     <Section
-      title="Доставка"
-      description="Очередь сообщений в Discord: новости, оповещения и карточки статуса. Неудачные попытки повторяются сами, до 8 раз."
+      title={t('d2.dl.title')}
+      description={t('d2.dl.desc')}
       actions={(
-        <select className="input w-auto!" value={kind} onChange={(e) => setKind(e.target.value as DeliveryKind | '')} aria-label="Тип сообщений">
-          <option value="">Все типы</option>
+        <select className="input w-auto!" value={kind} onChange={(e) => setKind(e.target.value as DeliveryKind | '')} aria-label={t('d2.dl.type')}>
+          <option value="">{t('d2.dl.allTypes')}</option>
           {(Object.keys(KIND_LABEL) as DeliveryKind[]).map((k) => <option key={k} value={k}>{KIND_LABEL[k]}</option>)}
         </select>
       )}
     >
-      <div className="flex flex-wrap gap-2" role="group" aria-label="Фильтр по состоянию">
+      <div className="flex flex-wrap gap-2" role="group" aria-label={t('d2.dl.filter')}>
         {FILTERS.map((f) => {
           const n = f.id === '' ? total : counts?.[f.id] ?? 0;
           return (
             <button key={f.id || 'all'} type="button" className={`chip-filter ${status === f.id ? 'on' : ''}`} aria-pressed={status === f.id} onClick={() => setStatus(f.id)}>
-              {f.label}<span className="opacity-70">&nbsp;{n}</span>
+              {t(f.label)}<span className="opacity-70">&nbsp;{n}</span>
             </button>
           );
         })}
       </div>
 
       {!data ? (
-        <div className="skeleton h-24 rounded-ui-lg" aria-busy="true" aria-label="Загрузка" />
+        <div className="skeleton h-24 rounded-ui-lg" aria-busy="true" aria-label={t('d2.news.loading')} />
       ) : data.items.length === 0 ? (
         <p className="rounded-ui-lg bg-soft px-4 py-3 font-semibold text-mute">
-          {status || kind ? 'Под этот фильтр ничего не попало.' : 'Очередь пуста: сообщения уходят сразу.'}
+          {status || kind ? t('d2.dl.noMatch') : t('d2.dl.empty')}
         </p>
       ) : (
         <ul className="divide-y divide-line rounded-ui-lg border border-line">
@@ -117,15 +119,15 @@ export default function DeliveryList() {
                 <div className="wrap-break-word font-extrabold">{it.summary || KIND_LABEL[it.kind]}</div>
                 <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm font-semibold text-mute">
                   <span className={STATUS_PILL[it.status]}>{STATUS_LABEL[it.status]}</span>
-                  <span>попытки {attemptsText(it.attempts)}</span>
-                  {it.status === 'sent' && it.sentAt ? <span>{ago(it.sentAt)}</span> : <span>создано {ago(it.createdAt)}</span>}
-                  {it.nextTryAt != null && it.status !== 'sent' && it.status !== 'dead' && <span>следующая попытка {countdownText(it.nextTryAt, now)}</span>}
+                  <span>{t('d2.dl.attempts', { v: attemptsText(it.attempts) })}</span>
+                  {it.status === 'sent' && it.sentAt ? <span>{ago(it.sentAt)}</span> : <span>{t('d2.dl.created', { ago: ago(it.createdAt) })}</span>}
+                  {it.nextTryAt != null && it.status !== 'sent' && it.status !== 'dead' && <span>{t('d2.dl.next', { v: countdownText(it.nextTryAt, now) })}</span>}
                 </div>
                 {it.lastError && it.status !== 'sent' && <p className="mt-1 wrap-break-word rounded-xl bg-badbg px-3 py-1.5 text-sm font-bold text-bad">{it.lastError}</p>}
               </div>
               {canRetry(it.status) && (
                 <button type="button" className="btn btn-soft btn-sm" disabled={busy.includes(it.id)} onClick={() => void retry(it.id)}>
-                  <IconRefresh size={14} />Повторить
+                  <IconRefresh size={14} />{t('common.retry')}
                 </button>
               )}
             </li>
