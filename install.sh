@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="523c236cdb66"
+COREGSM_BUILD="b80070f7205f"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.0.0.75"
+COREGSM_VERSION="1.0.0.76"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -30427,6 +30427,7 @@ import { z } from 'zod';
 import { internal } from '../auth.js';
 import { bot } from '../botState.js';
 import { renderCard } from '../card.js';
+import { parseCardOpts } from '../cardLogic.js';
 import { type BindingRow, db, EFFECTIVE_NAME, getSetting, type ServerRow, setSetting } from '../db.js';
 import { refreshServer } from '../gsm.js';
 import { param, wrap } from '../http.js';
@@ -30456,7 +30457,9 @@ router.get(
   '/internal/card/:id.png', param('id'),
   internal,
   wrap(async (req, res) => {
-    const buf = await renderCard(Number(req.params.id));
+    // the look of the cards in Discord is a setting of the panel (Cards page), a query can still override it
+    const opts = parseCardOpts({ style: req.query.style ?? getSetting('bot_card_style'), theme: req.query.theme ?? getSetting('bot_card_theme') });
+    const buf = await renderCard(Number(req.params.id), opts);
     if (!buf) return res.status(404).json({ error: 'not found' });
     res.set({ 'Content-Type': 'image/png', 'Cache-Control': 'no-cache' }).send(buf);
   }),
@@ -31043,6 +31046,8 @@ function settingsPayload(req?: Request) {
     proxyUrl: proxy ? maskProxy(proxy) : null,
     discordSecretSet: !!getSetting('discord_client_secret'),
     discordClientId: bot.status.clientId ?? clientIdFromToken(tok),
+    botCardStyle: getSetting('bot_card_style') === 'strip' ? 'strip' : 'split',
+    botCardTheme: getSetting('bot_card_theme') === 'light' ? 'light' : 'dark',
     discordRedirect: req ? `${publicBase() ?? baseOf(req)}/api/auth/discord/callback` : '',
   };
 }
@@ -31057,6 +31062,8 @@ const settingsSchema = z.object({
   proxyUrl: z.string().trim().max(300).optional(),
   proxyType: z.enum(['socks5', 'http']).optional(),
   discordClientSecret: z.string().trim().max(200).optional(),
+  botCardStyle: z.enum(['split', 'strip']).optional(),
+  botCardTheme: z.enum(['dark', 'light']).optional(),
 });
 
 router.put('/api/settings', admin, (req, res) => {
@@ -31068,6 +31075,8 @@ router.put('/api/settings', admin, (req, res) => {
   if (b.data.discordToken !== undefined) setSetting('discord_token', b.data.discordToken);
   if (proxyUrl !== undefined) setSetting('proxy_url', proxyUrl);
   if (b.data.discordClientSecret !== undefined) setSetting('discord_client_secret', b.data.discordClientSecret);
+  if (b.data.botCardStyle !== undefined) setSetting('bot_card_style', b.data.botCardStyle);
+  if (b.data.botCardTheme !== undefined) setSetting('bot_card_theme', b.data.botCardTheme);
   res.json(settingsPayload(req));
 });
 
@@ -110456,6 +110465,9 @@ export interface SettingsInfo {
   discordSecretSet?: boolean;
   discordClientId?: string | null;
   discordRedirect?: string;
+  /** the look of the cards the bot posts to Discord */
+  botCardStyle?: 'split' | 'strip';
+  botCardTheme?: 'dark' | 'light';
 }
 
 /** SMTP settings (administrator); the password is never returned */
@@ -132110,6 +132122,9 @@ const en: Record<keyof typeof ru, string> = {
   'cards.copyCode': 'Copy the code',
   'cards.copyLink': 'Copy the link',
   'cards.download': 'Download',
+  'cards.bot': 'Cards in Discord',
+  'cards.botText': 'The look of the pictures the bot sends in messages and commands.',
+  'cards.botSaved': 'The look of the bot cards is saved',
   'cards.copyLinkBtn': 'Copy the link',
   'cards.style': 'Card style',
   'cards.split': 'Split',
@@ -134612,6 +134627,9 @@ const ru = {
   'cards.copyCode': 'Скопируйте код',
   'cards.copyLink': 'Скопируйте ссылку',
   'cards.download': 'Скачать',
+  'cards.bot': 'Карточки в Discord',
+  'cards.botText': 'Какой вид у картинок, которые бот присылает в сообщениях и командах.',
+  'cards.botSaved': 'Вид карточек для бота сохранён',
   'cards.copyLinkBtn': 'Копировать ссылку',
   'cards.style': 'Стиль карточки',
   'cards.split': 'Разделённая',
@@ -138547,7 +138565,7 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/Cards.tsx" << '__COREGSM_EOF__'
 import { useRef, useState, useEffect } from 'react';
-import { api, type Server } from '../api';
+import { api, type Server, type SettingsInfo } from '../api';
 import { t, useI18n } from '../i18n';
 import { CardsArt } from '../components/Illustrations';
 import { promptDialog } from '../confirm';
@@ -138566,6 +138584,14 @@ export default function CardsPage() {
   const setStyle = (v: 'split' | 'strip') => { setStyleS(v); try { localStorage.setItem('coregsm_card_style', v); } catch { /* private mode */ } };
   const setTheme = (v: 'dark' | 'light') => { setThemeS(v); try { localStorage.setItem('coregsm_card_theme', v); } catch { /* private mode */ } };
   // the pictures refresh themselves every 30 seconds, so the page works as a live preview
+  const [bot, setBot] = useState<{ style: 'split' | 'strip'; theme: 'dark' | 'light' } | null>(null);
+  useEffect(() => { api<SettingsInfo>('/settings').then((r) => setBot({ style: r.botCardStyle ?? 'split', theme: r.botCardTheme ?? 'dark' })).catch(() => undefined); }, []);
+  const saveBot = (patch: Partial<{ style: 'split' | 'strip'; theme: 'dark' | 'light' }>) => {
+    if (!bot) return;
+    const next = { ...bot, ...patch };
+    setBot(next);
+    api('/settings', 'PUT', { botCardStyle: next.style, botCardTheme: next.theme }).then(() => toast(t('cards.botSaved'))).catch((e: Error) => setError(e.message));
+  };
   const [tick, setTick] = useState(0);
   useEffect(() => { const id = window.setInterval(() => setTick((n) => n + 1), 30_000); return () => window.clearInterval(id); }, []);
   const q = (extra = '') => `${style === 'strip' ? 'style=strip&' : ''}${theme === 'light' ? 'theme=light&' : ''}${extra}`.replace(/&$/, '');
@@ -138634,6 +138660,19 @@ export default function CardsPage() {
           <div className="seg" role="group" aria-label={t('cards.theme')}>
             <button type="button" className="seg-item" aria-pressed={theme === 'dark'} onClick={() => setTheme('dark')}>{t('cards.dark')}</button>
             <button type="button" className="seg-item" aria-pressed={theme === 'light'} onClick={() => setTheme('light')}>{t('cards.light')}</button>
+          </div>
+        </div>
+      )}
+      {bot && (
+        <div className="panel flex flex-wrap items-center gap-3 p-4">
+          <div className="min-w-0 flex-1"><b>{t('cards.bot')}</b><p className="text-sm text-mute">{t('cards.botText')}</p></div>
+          <div className="seg" role="group" aria-label={t('cards.style')}>
+            <button type="button" className="seg-item" aria-pressed={bot.style === 'split'} onClick={() => saveBot({ style: 'split' })}>{t('cards.split')}</button>
+            <button type="button" className="seg-item" aria-pressed={bot.style === 'strip'} onClick={() => saveBot({ style: 'strip' })}>{t('cards.strip')}</button>
+          </div>
+          <div className="seg" role="group" aria-label={t('cards.theme')}>
+            <button type="button" className="seg-item" aria-pressed={bot.theme === 'dark'} onClick={() => saveBot({ theme: 'dark' })}>{t('cards.dark')}</button>
+            <button type="button" className="seg-item" aria-pressed={bot.theme === 'light'} onClick={() => saveBot({ theme: 'light' })}>{t('cards.light')}</button>
           </div>
         </div>
       )}
