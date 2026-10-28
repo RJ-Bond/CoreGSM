@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { api } from '../api';
+import { t, useI18n } from '../i18n';
 import { Icon } from '../icons';
 import { JournalArt } from '../components/Illustrations';
 import { AdminPage, Empty, ErrorLine, IconJournal, LoadError, PageHead, fmtDateTime, fmtTime, usePoll, SkeletonRows } from '../ui';
@@ -31,8 +32,8 @@ const dayLabel = (ts: number) => {
   const d = new Date(ts);
   const day = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
   const diff = Math.round((day(new Date()) - day(d)) / 86_400_000);
-  if (diff === 0) return 'Сегодня';
-  if (diff === 1) return 'Вчера';
+  if (diff === 0) return t('d2.jr.today');
+  if (diff === 1) return t('d2.jr.yesterday');
   return d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', weekday: 'long' });
 };
 
@@ -40,6 +41,7 @@ const csvCell = (v: string | number) => `"${String(v).replace(/"/g, '""')}"`;
 
 /** Who changed what and when (the last 2000 actions). */
 export default function JournalPage() {
+  useI18n();
   const [rows, setRows] = useState<Row[] | null>(null);
   const [q, setQ] = useState('');
   const [error, setError] = useState('');
@@ -62,7 +64,7 @@ export default function JournalPage() {
   }, [shown]);
 
   const exportCsv = () => {
-    const lines = ['время,кто,действие,подробности', ...shown.map((r) => [new Date(r.ts).toISOString(), r.actor, r.action, r.detail].map(csvCell).join(','))];
+    const lines = [t('d2.jr.csv'), ...shown.map((r) => [new Date(r.ts).toISOString(), r.actor, r.action, r.detail].map(csvCell).join(','))];
     const url = URL.createObjectURL(new Blob(['﻿' + lines.join('\n')], { type: 'text/csv;charset=utf-8' }));
     const a = document.createElement('a');
     a.href = url;
@@ -78,19 +80,19 @@ export default function JournalPage() {
       head={(
         <PageHead
           icon={<IconJournal />}
-          title="Журнал"
-          subtitle="Кто и что менял в панели"
-          hint="Здесь записано, кто из администраторов что и когда менял. Это помогает понять, откуда взялось изменение."
-          help={<p>Хранятся последние 2000 действий. Поиск работает по имени, действию и подробностям.</p>}
+          title={t('d2.jr.title')}
+          subtitle={t('d2.jr.subtitle')}
+          hint={t('d2.jr.hint')}
+          help={<p>{t('d2.jr.help')}</p>}
         >
-          <button type="button" className="btn btn-soft" onClick={exportCsv} disabled={shown.length === 0}>Скачать CSV</button>
+          <button type="button" className="btn btn-soft" onClick={exportCsv} disabled={shown.length === 0}>{t('d2.jr.csvBtn')}</button>
         </PageHead>
       )}
     >
       {error && !rows ? <LoadError error={error} onRetry={() => void load()} /> : <ErrorLine text={error} />}
-      <input className="input max-w-sm" type="search" placeholder="Поиск по журналу…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Поиск по журналу" />
+      <input className="input max-w-sm" type="search" placeholder={t('d2.jr.search')} value={q} onChange={(e) => setQ(e.target.value)} aria-label={t('d2.jr.searchLabel')} />
       {!rows && !error && <SkeletonRows n={6} h="h-12" />}
-      {rows && shown.length === 0 && <Empty art={<JournalArt />} title="Записей нет" text={needle ? 'Ничего не найдено.' : 'Действия администраторов будут появляться здесь.'}>{needle && <button type="button" className="btn btn-soft mt-3" onClick={() => setQ('')}>Сбросить поиск</button>}</Empty>}
+      {rows && shown.length === 0 && <Empty art={<JournalArt />} title={t('d2.jr.empty')} text={needle ? t('d2.jr.notFound') : t('d2.jr.emptyText')}>{needle && <button type="button" className="btn btn-soft mt-3" onClick={() => setQ('')}>{t('d2.jr.resetSearch')}</button>}</Empty>}
       {groups.map(([day, list]) => (
         <section key={day} className="space-y-2">
           <h2 className="text-xs font-extrabold uppercase tracking-wide text-mute">{day}</h2>
@@ -110,7 +112,7 @@ export default function JournalPage() {
           </ul>
         </section>
       ))}
-      {more && <button type="button" className="btn btn-soft" onClick={() => setLimit((l) => Math.min(MAX, l + STEP))}>Показать ещё</button>}
+      {more && <button type="button" className="btn btn-soft" onClick={() => setLimit((l) => Math.min(MAX, l + STEP))}>{t('d2.jr.more')}</button>}
     </AdminPage>
   );
 }

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api, type StatusInfo, type StatusServer } from '../api';
 import { gameGradient, gameLabel } from '../games';
+import { t, useI18n } from '../i18n';
 // straight from the modules, not through ../ui (that one re-exports authParts, which imports this file: a cycle)
 import { AnimatedNumber } from '../ui/motion';
 import { GameAvatar, Logo } from '../ui/blocks';
@@ -10,6 +11,7 @@ import { GameAvatar, Logo } from '../ui/blocks';
  * is public (GET /status) and quiet generic tiles otherwise. Purely decorative: hidden from assistive tech.
  */
 export default function AuthShowcase({ side }: { side: 'left' | 'right' }) {
+  useI18n();
   const [info, setInfo] = useState<StatusInfo | null>(null);
 
   useEffect(() => {
@@ -38,20 +40,20 @@ export default function AuthShowcase({ side }: { side: 'left' | 'right' }) {
             <div className="mt-4 flex items-baseline gap-2">
               <span className="text-5xl font-extrabold leading-none tabular-nums" style={{ letterSpacing: '-0.04em' }}><AnimatedNumber value={top.players} /></span>
               <span className="font-bold opacity-90">/ {top.maxPlayers}</span>
-              <span className="ml-auto rounded-full bg-white/25 px-2.5 py-0.5 text-xs font-extrabold">ОНЛАЙН</span>
+              <span className="ml-auto rounded-full bg-white/25 px-2.5 py-0.5 text-xs font-extrabold">{t('d2.srv.f.online').toUpperCase()}</span>
             </div>
           </div>
         ) : (
           <div className="showcase-tile panel w-72 -rotate-2 p-5" style={{ animationDelay: '.15s' }}>
             <Logo size={44} alt="" />
-            <div className="mt-3 text-lg font-extrabold leading-tight">Серверы под присмотром</div>
-            <p className="mt-1 text-sm font-semibold text-mute">Онлайн, пинг и история игроков в одном месте.</p>
+            <div className="mt-3 text-lg font-extrabold leading-tight">{t('d2.as.watched')}</div>
+            <p className="mt-1 text-sm font-semibold text-mute">{t('d2.as.watchedText')}</p>
           </div>
         )}
         <div className="showcase-tile panel w-56 rotate-1 p-4" style={{ animationDelay: '.3s' }}>
-          <div className="stat-k">Серверов онлайн</div>
+          <div className="stat-k">{t('d2.as.serversOnline')}</div>
           <div className="stat-v">
-            {servers.length ? <><AnimatedNumber value={online.length} /><small> из {servers.length}</small></> : '·'}
+            {servers.length ? <><AnimatedNumber value={online.length} /><small> {t('d2.as.of', { n: servers.length })}</small></> : '·'}
           </div>
         </div>
       </div>
@@ -61,11 +63,11 @@ export default function AuthShowcase({ side }: { side: 'left' | 'right' }) {
   return (
     <div aria-hidden className="hidden flex-col items-start gap-4 xl:flex">
       <div className="showcase-tile panel w-60 rotate-2 p-4" style={{ animationDelay: '.25s' }}>
-        <div className="stat-k">Игроков сейчас</div>
+        <div className="stat-k">{t('d2.as.playersNow')}</div>
         <div className="stat-v">{servers.length ? <AnimatedNumber value={players} /> : '·'}</div>
       </div>
       <div className="showcase-tile panel w-72 -rotate-1 space-y-2.5 p-4" style={{ animationDelay: '.4s' }}>
-        <div className="stat-k">Состояние серверов</div>
+        <div className="stat-k">{t('d2.as.state')}</div>
         {(servers.length ? servers.slice(0, 4) : []).map((s) => (
           <div key={s.id} className="flex items-center gap-2.5">
             <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${s.online ? 'bg-ok' : 'bg-bad'}`} />
@@ -74,12 +76,12 @@ export default function AuthShowcase({ side }: { side: 'left' | 'right' }) {
           </div>
         ))}
         {!servers.length && (
-          <p className="text-sm font-semibold text-mute">Сообщения в Discord обновляются сами, новости публикуются от имени бота.</p>
+          <p className="text-sm font-semibold text-mute">{t('d2.as.note')}</p>
         )}
       </div>
       <div className="showcase-tile panel flex w-56 rotate-1 items-center gap-3 p-4" style={{ animationDelay: '.55s' }}>
         <span className="grid h-10 w-10 shrink-0 place-items-center rounded-2xl bg-soft text-xl">💬</span>
-        <div className="text-sm font-bold leading-snug">Карточки и новости прямо в Discord</div>
+        <div className="text-sm font-bold leading-snug">{t('d2.as.cards')}</div>
       </div>
     </div>
   );

@@ -1,15 +1,17 @@
 import type { CSSProperties } from 'react';
 import { ACCENT_MODES, useAccentMode } from '../accent';
 import { gameColor } from '../games';
+import { t, useI18n } from '../i18n';
 
 const swatch: Record<string, string | undefined> = { vrising: gameColor('vrising'), icarus: gameColor('icarus') };
 
 /** «Акцент по игре»: a segmented choice kept in this browser only (see accent.ts) */
 export function AccentPicker() {
+  useI18n();
   const [mode, setMode] = useAccentMode();
   return (
     <div>
-      <span id="accent-label" className="label">Акцент по игре</span>
+      <span id="accent-label" className="label">{t('d2.acc.label')}</span>
       <div className="seg flex-wrap" role="group" aria-labelledby="accent-label">
         {ACCENT_MODES.map((o) => (
           <button key={o.id} type="button" className="seg-item" aria-pressed={mode === o.id} onClick={() => setMode(o.id)}>
@@ -18,7 +20,7 @@ export function AccentPicker() {
           </button>
         ))}
       </div>
-      <p className="mt-2 text-sm font-semibold text-mute">{ACCENT_MODES.find((o) => o.id === mode)?.hint}. Запоминается в этом браузере.</p>
+      <p className="mt-2 text-sm font-semibold text-mute">{ACCENT_MODES.find((o) => o.id === mode)?.hint}. {t('d2.acc.remembered')}</p>
     </div>
   );
 }

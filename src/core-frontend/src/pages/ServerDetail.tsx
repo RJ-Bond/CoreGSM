@@ -1,7 +1,7 @@
 import ServerReviews from '../components/server/Reviews';
 import ProbesView, { useProbes } from '../components/server/ProbesView';
 import { useEffect, useRef, useState, type ReactNode, type TouchEvent } from 'react';
-import { t, useI18n } from '../i18n';
+import { t, useI18n, type TKey } from '../i18n';
 import { Crumbs } from '../components/ShellExtras';
 import { normalizeKinds, useSubscriptions, type SubKind } from '../notifications';
 import { api, ApiError, type ServerDetails as BaseDetails } from '../api';
@@ -50,20 +50,20 @@ type ServerDetails = BaseDetails & {
 
 // foldable blocks of the long tabs (ids are shared with the fold memory in localStorage, so keep them stable)
 const OVERVIEW_SECTIONS: SectionDef[] = [
-  { id: 'ov-stats', label: 'Показатели' },
-  { id: 'ov-chart', label: 'График' },
-  { id: 'ov-events', label: 'События', secondary: true },
-  { id: 'ov-players', label: 'Игроки' },
-  { id: 'ov-probes', label: 'Доступность', secondary: true },
-  { id: 'ov-reviews', label: 'Отзывы', secondary: true },
+  { id: 'ov-stats', label: 'd2.sd.sec.stats' },
+  { id: 'ov-chart', label: 'd2.srv.v.chart' },
+  { id: 'ov-events', label: 'd2.sd.sec.events', secondary: true },
+  { id: 'ov-players', label: 'd2.pl.players' },
+  { id: 'ov-probes', label: 'd2.sd.sec.avail', secondary: true },
+  { id: 'ov-reviews', label: 'd2.sd.sec.reviews', secondary: true },
 ];
 const HISTORY_SECTIONS: SectionDef[] = [
-  { id: 'hi-chart', label: 'График' },
-  { id: 'hi-stats', label: 'Показатели', secondary: true },
+  { id: 'hi-chart', label: 'd2.srv.v.chart' },
+  { id: 'hi-stats', label: 'd2.sd.sec.stats', secondary: true },
 ];
 export const CONNECT_SECTIONS: SectionDef[] = [
-  { id: 'cn-steps', label: 'Как подключиться' },
-  { id: 'cn-qr', label: 'QR-код' },
+  { id: 'cn-steps', label: 'd2.sd.sec.howto' },
+  { id: 'cn-qr', label: 'd2.sd.sec.qr' },
 ];
 const ALL_SECTIONS = [...OVERVIEW_SECTIONS, ...HISTORY_SECTIONS, ...CONNECT_SECTIONS];
 
@@ -74,17 +74,19 @@ export default function ServerDetail({ id, tab = '' }: { id: number; tab?: strin
 
 /** a small "live" indicator: pulsing dot and how fresh the data is */
 function LiveBadge({ at }: { at: number | null }) {
+  useI18n();
   useNow(5000);
   if (!at) return null;
   return (
-    <span className="chip-glass srv-live" title={`Страница обновляется сама · обновлено ${ago(at)}`}>
+    <span className="chip-glass srv-live" title={`${t('d2.sd.autoRefresh')} · ${t('d2.srv.updated', { ago: ago(at) })}`}>
       <span className="live-dot" aria-hidden />
-      <span className="srv-live-t">обновлено {ago(at)}</span>
+      <span className="srv-live-t">{t('d2.srv.updated', { ago: ago(at) })}</span>
     </span>
   );
 }
 
 function FavStar({ on, name, onClick }: { on: boolean; name: string; onClick: () => void }) {
+  useI18n();
   // pops only after the user's own click
   const [pops, setPops] = useState(0);
   return (
@@ -92,8 +94,8 @@ function FavStar({ on, name, onClick }: { on: boolean; name: string; onClick: ()
       type="button"
       onClick={() => { if (!on) { setPops((n) => n + 1); try { navigator.vibrate?.(14); } catch { /* no vibration */ } } onClick(); }}
       className={`btn-icon-glass shrink-0 ${on ? 'is-fav' : ''}`}
-      title={on ? 'Убрать из избранного' : 'В избранное'}
-      aria-label={`${on ? 'Убрать из избранного' : 'В избранное'}: ${name}`}
+      title={on ? t('d2.srv.favRemove') : t('d2.srv.fav')}
+      aria-label={`${on ? t('d2.srv.favRemove') : t('d2.srv.fav')}: ${name}`}
       aria-pressed={on}
     >
       <span className="star-wrap text-xl leading-none">
@@ -105,9 +107,10 @@ function FavStar({ on, name, onClick }: { on: boolean; name: string; onClick: ()
 }
 
 function PeriodSeg({ hours, onChange }: { hours: number; onChange: (h: number) => void }) {
+  useI18n();
   return (
     <div className="seg" role="group" aria-label={t('srv.chart.period')}>
-      {([[24, '24 ч'], [168, '7 дн'], [720, '30 дн']] as [number, string][]).map(([h, label]) => (
+      {([[24, t('dur.h', { n: 24 })], [168, t('d2.an.dShort', { n: 7 })], [720, t('d2.an.dShort', { n: 30 })]] as [number, string][]).map(([h, label]) => (
         <button key={h} type="button" onClick={() => onChange(h)} aria-pressed={hours === h} className="seg-item">{label}</button>
       ))}
     </div>
@@ -328,7 +331,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
 
   if (!data) {
     return (
-      <div className="space-y-3.5" aria-busy={error ? undefined : true} aria-label={error ? undefined : 'Загрузка'}>
+      <div className="space-y-3.5" aria-busy={error ? undefined : true} aria-label={error ? undefined : t('d2.news.loading')}>
         {back}
         {error ? <LoadError error={error} onRetry={() => void load()} /> : (
           <>
@@ -354,7 +357,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
   const cName = countryName(code);
   const flag = flagEmoji(code);
   const kind = !s.hasStatus ? 'mute' : !s.online ? 'bad' : lag ? 'warn' : 'ok';
-  const windowLabel = data.hours <= 24 ? 'за 24 часа' : data.hours <= 168 ? 'за 7 дней' : 'за 30 дней';
+  const windowLabel = data.hours <= 24 ? t('d2.sd.w24') : data.hours <= 168 ? t('d2.sd.w7') : t('d2.sd.w30');
   const chartLoading = data.hours !== hours;
   const recent = points.filter((p) => p.online && p.ts >= nowTs - 2 * 3600_000).map((p) => p.players);
   const hourNow = new Date(nowTs).getHours();
@@ -362,7 +365,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
   const coverBg = coverBackground(s.coverUrl, gameBackdrop(c1, 120), { strong: true, game: s.game });
 
   const discordLinks = (data.discord ?? []).map((b) => {
-    const text = `${b.guildName ? `${b.guildName} · ` : ''}${b.channelName ? `#${b.channelName}` : 'канал'}${b.messageId ? ' · сообщение' : ''}`;
+    const text = `${b.guildName ? `${b.guildName} · ` : ''}${b.channelName ? `#${b.channelName}` : t('d2.sd.channel')}${b.messageId ? ` · ${t('d2.sd.message')}` : ''}`;
     const href = b.guildId ? `https://discord.com/channels/${b.guildId}/${b.channelId}${b.messageId ? `/${b.messageId}` : ''}` : null;
     return { text, href };
   });
@@ -377,19 +380,19 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
     const url = `${window.location.origin}/s/${id}`;
     try {
       await navigator.clipboard.writeText(url);
-      toast('Ссылка скопирована');
+      toast(t('d2.sd.t.linkCopied'));
       setShared(true);
       window.setTimeout(() => setShared(false), 1500);
     } catch {
-      toast(`Не удалось скопировать. Ссылка: ${url}`, 'err', 8000);
+      toast(t('d2.sd.t.copyFail', { url }), 'err', 8000);
     }
   };
   const remove = async () => {
-    const ok = await confirmDialog({ title: `Удалить сервер «${s.name}»?`, text: 'Сервер будет удалён вместе с привязками к Discord.', confirmLabel: 'Удалить', danger: true });
+    const ok = await confirmDialog({ title: t('d2.sd.c.title', { name: s.name }), text: t('d2.sd.c.text'), confirmLabel: t('d2.news.delete'), danger: true });
     if (!ok) return;
     try {
       await api(`/servers/${id}`, 'DELETE');
-      toast('Сервер удалён');
+      toast(t('d2.sd.t.deleted'));
       navigate('/servers');
     } catch (e) {
       setError(errText(e));
@@ -398,9 +401,9 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
   const copyAddress = async () => {
     try {
       await navigator.clipboard.writeText(s.address);
-      toast('Адрес скопирован');
+      toast(t('d2.sd.t.addrCopied'));
     } catch {
-      toast(`Адрес: ${s.address}`, 'info', 8000);
+      toast(t('d2.sd.t.addr', { addr: s.address }), 'info', 8000);
     }
   };
 
@@ -421,22 +424,22 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
       <div className="srv-chart-bar">
         {withSeries && (
           <div className="seg" role="group" aria-label={t('srv.chart.series')}>
-            {([['players', 'Игроки'], ['ping', 'Пинг']] as [Series, string][]).map(([k, label]) => (
-              <button key={k} type="button" className="seg-item" aria-pressed={series === k} onClick={() => setSeries(k)}>{label}</button>
+            {([['players', 'd2.pl.players'], ['ping', 'd2.sd.ping']] as [Series, TKey][]).map(([k, label]) => (
+              <button key={k} type="button" className="seg-item" aria-pressed={series === k} onClick={() => setSeries(k)}>{t(label)}</button>
             ))}
           </div>
         )}
         <PeriodSeg hours={hours} onChange={setHours} />
       </div>
       {stats.samples < 2 ? (
-        <p className="py-10 text-center font-semibold text-mute">Данных пока мало: график появится через несколько минут после добавления сервера.</p>
+        <p className="py-10 text-center font-semibold text-mute">{t('d2.sd.fewData')}</p>
       ) : down ? (
         <OfflineState since={outage?.ts ?? null} atLeast={outage?.atLeast ?? false} error={s.error ?? null} points={points} hours={data.hours} now={nowTs} uptimePct={stats.uptimePct ?? null} windowLabel={windowLabel}>
           {chartEl(withSeries)}
         </OfflineState>
       ) : chartEl(withSeries)}
       {!down && points.some((p) => !p.online) && stats.samples >= 2 && (
-        <p className="mt-2 flex items-center gap-2 text-sm font-semibold text-mute"><span className="inline-block h-3 w-3 rounded-sm bg-bad/30" /> Красным отмечены периоды, когда сервер не отвечал.</p>
+        <p className="mt-2 flex items-center gap-2 text-sm font-semibold text-mute"><span className="inline-block h-3 w-3 rounded-sm bg-bad/30" /> {t('d2.sd.redNote')}</p>
       )}
     </SectionCard>
   );
@@ -461,7 +464,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
   if (tab === 'players') {
     panel = (
       <section className="tile tile-in p-4 sm:p-5">
-        <h2 className="mb-3 flex items-center whitespace-nowrap text-base font-extrabold">Сейчас в игре{playerCountBadge}</h2>
+        <h2 className="mb-3 flex items-center whitespace-nowrap text-base font-extrabold">{t('d2.pl.inGame2')}{playerCountBadge}</h2>
         {s.online && <PlayerFacts peak={stats.peakPlayers ?? null} peakAt={stats.peakAt ?? null} avg={stats.avgPlayers ?? null} windowLabel={windowLabel} list={data.playersNow ?? []} />}
         {s.online && <SessionSpread list={data.playersNow ?? []} now={nowTs} />}
         <PlayersList {...playersProps} onSubscribe={canSubNow ? () => openSub(null) : undefined} />
@@ -473,7 +476,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
         <div className="grid gap-3.5 lg:grid-cols-12">
           {chartTile(0, true)}
         </div>
-        <SectionCard id="hi-stats" state={sections} title="Показатели">
+        <SectionCard id="hi-stats" state={sections} title={t('d2.sd.sec.stats')}>
           {metrics(true)}
         </SectionCard>
       </div>
@@ -483,7 +486,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
   } else if (tab === 'events') {
     panel = (
       <section className="tile tile-in p-4 sm:p-5">
-        <h2 className="mb-3 text-base font-extrabold">Журнал событий</h2>
+        <h2 className="mb-3 text-base font-extrabold">{t('d2.sd.journal')}</h2>
         <EventsFeed events={events} online={s.online} uptimePct={stats.uptimePct ?? null} windowLabel={windowLabel} />
       </section>
     );
@@ -493,26 +496,26 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
     panel = (
       <div className="space-y-3.5">
         <PinnedNotice serverId={id} notice={data.notice ?? null} canEdit={canEdit} onChange={(n) => setData((d) => (d ? { ...d, notice: n } : d))} />
-        <SectionCard id="ov-stats" state={sections} style={stagger(0)} title="Показатели">
+        <SectionCard id="ov-stats" state={sections} style={stagger(0)} title={t('d2.sd.sec.stats')}>
           {metrics(false)}
         </SectionCard>
         <div className="grid gap-3.5 lg:grid-cols-12">
           {chartTile(1, false)}
           <div className="space-y-3.5 lg:col-span-5 lg:col-start-1 lg:self-start max-lg:contents">
-          <SectionCard id="ov-events" state={sections} className="max-lg:order-1" style={stagger(2)} title="Последние события">
+          <SectionCard id="ov-events" state={sections} className="max-lg:order-1" style={stagger(2)} title={t('d2.sd.recent')}>
             <EventsFeed events={events} online={s.online} limit={6} moreHref={tabHref(id, 'events')} />
           </SectionCard>
           {/* the reviews sit under the events: the left column fills the height of the player list */}
-          <SectionCard id="ov-reviews" state={sections} className="max-lg:order-3" style={stagger(4)} title="Отзывы игроков">
+          <SectionCard id="ov-reviews" state={sections} className="max-lg:order-3" style={stagger(4)} title={t('d2.sd.playerReviews')}>
             <ServerReviews serverId={id} />
           </SectionCard>
           </div>
-          <SectionCard id="ov-players" state={sections} className="lg:col-span-7 lg:col-start-6 lg:row-span-2 max-lg:order-2" style={stagger(3)} title={<span className="inline-flex items-center whitespace-nowrap">Сейчас в игре{playerCountBadge}</span>}>
+          <SectionCard id="ov-players" state={sections} className="lg:col-span-7 lg:col-start-6 lg:row-span-2 max-lg:order-2" style={stagger(3)} title={<span className="inline-flex items-center whitespace-nowrap">{t('d2.pl.inGame2')}{playerCountBadge}</span>}>
             <PlayersList {...playersProps} limit={6} moreHref={tabHref(id, 'players')} />
           </SectionCard>
         </div>
         {probes && probes.probes.length > 0 && (
-          <SectionCard id="ov-probes" state={sections} style={stagger(4)} title="Доступность из разных мест">
+          <SectionCard id="ov-probes" state={sections} style={stagger(4)} title={t('d2.sd.availFrom')}>
             <ProbesView v={probes} />
           </SectionCard>
         )}
@@ -535,10 +538,10 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
   const moreItems: MoreItem[] = [
     { key: 'share', label: shared ? t('srv.act.linkCopied') : t('srv.act.share'), icon: shared ? <IconCheckMark /> : <IconShare />, onSelect: () => void share() },
     ...(canEdit ? [
-      { key: 'poll', label: busy ? 'Опрос…' : 'Опросить', icon: <IconRefresh />, onSelect: () => void refresh(), disabled: busy, divider: true },
-      { key: 'edit', label: 'Изменить', onSelect: () => setEditing(true) },
+      { key: 'poll', label: busy ? t('d2.sd.polling') : t('d2.sd.poll'), icon: <IconRefresh />, onSelect: () => void refresh(), disabled: busy, divider: true },
+      { key: 'edit', label: t('d2.news.change'), onSelect: () => setEditing(true) },
     ] : []),
-    ...(isAdmin ? [{ key: 'del', label: 'Удалить', onSelect: () => void remove(), danger: true }] : []),
+    ...(isAdmin ? [{ key: 'del', label: t('d2.news.delete'), onSelect: () => void remove(), danger: true }] : []),
   ];
 
   return (
@@ -573,7 +576,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
               <StatusPill glass online={s.online} known={s.hasStatus} lag={lag} maintenance={!!s.maintenance} />
               <span className="chip-glass srv-game-chip">{gameLabel(s.game)}</span>
               <LiveBadge at={s.updatedAt} />
-              {isFav && <span className="chip-glass"><span aria-hidden>★</span> В избранном</span>}
+              {isFav && <span className="chip-glass"><span aria-hidden>★</span> {t('d2.sd.inFav')}</span>}
             </div>
           </div>
           {me && <FavStar on={isFav} name={s.name} onClick={() => void toggleFav()} />}
@@ -651,13 +654,13 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
           <span className="srv-mini">
             <i className={`srv-mini-dot ${s.online ? 'on' : 'off'}`} aria-hidden />
             <b className="truncate">{s.name}</b>
-            <span className="tabular-nums">{s.online ? `${s.players}${s.maxPlayers ? ` / ${s.maxPlayers}` : ''}` : 'не в сети'}</span>
+            <span className="tabular-nums">{s.online ? `${s.players}${s.maxPlayers ? ` / ${s.maxPlayers}` : ''}` : t('d2.sd.offline')}</span>
             <AddrCopy address={s.address} className="truncate font-mono text-xs font-semibold" />
           </span>
         )}
       />
 
-      {swipeHint && <p className="srv-swipe-hint" role="status">← Смахните вбок, чтобы переключить вкладку →</p>}
+      {swipeHint && <p className="srv-swipe-hint" role="status">{t('d2.sd.swipe')}</p>}
 
       <div key={tab || 'overview'} className={slide.dir ? `tab-slide-${slide.dir}` : undefined} role="tabpanel" id={panelDomId(tab)} aria-labelledby={tabDomId(tab)} {...swipe}>
         <BlockBoundary label={tab || 'overview'}>{panel}</BlockBoundary>

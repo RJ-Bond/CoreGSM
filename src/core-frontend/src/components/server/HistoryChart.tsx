@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import type { ServerDetails } from '../../api';
-import { t, useI18n } from '../../i18n';
+import { t, useI18n, type TKey } from '../../i18n';
 import { fmtDateTime, smoothPath, smoothValues, toast } from '../../ui';
 import { exportFileName, pingTone, TONE_TEXT } from './helpers';
 import { findPeak, peakWhen } from './serverLogic';
@@ -29,7 +29,8 @@ const MARK: Record<Ev['type'], { fill: string; path: string }> = {
   maintenance: { fill: 'rgb(var(--warn))', path: 'M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z' },
 };
 const MARK_ORDER = ['down', 'up', 'peak', 'maintenance'] as const;
-const MARK_LABEL: Record<Ev['type'], string> = { down: 'сбой', up: 'возврат', peak: 'пик', maintenance: 'тех. работы' };
+const MARK_KEY: Record<Ev['type'], TKey> = { down: 'd2.ef.m.down', up: 'd2.ef.m.up', peak: 'd2.ef.m.peak', maintenance: 'd2.ef.m.maint' };
+const markLabel = (type: Ev['type']) => t(MARK_KEY[type]);
 
 const tickLabel = (ts: number, spanMs: number) =>
   spanMs <= 36 * 3600_000
@@ -226,7 +227,7 @@ export default function HistoryChart({
   const lastSeg = segments[segments.length - 1];
   // «now» only on the live chart: a zoomed stretch ends in the past
   const endPt = !zoom && lastSeg && now - lastSeg[lastSeg.length - 1].ts < gap ? lastSeg[lastSeg.length - 1] : null;
-  const unit = series === 'ping' ? 'мс' : '';
+  const unit = series === 'ping' ? t('d2.sv.ms') : '';
   const peak = findPeak(points.filter((p) => p.ts >= t0), series);
   const longRange = hours > 36;
   const peakText = peak
@@ -237,19 +238,19 @@ export default function HistoryChart({
   const capLine = series === 'players' && max > 0 && max <= yMax;
 
   const describe = (p: Point) => {
-    if (!p.online) return `${fullTime(p.ts)}: сервер не отвечал`;
-    const parts = [fullTime(p.ts), `игроков ${p.players}${max ? ` из ${max}` : ''}`];
-    if (p.ping != null) parts.push(`пинг ${p.ping} мс`);
+    if (!p.online) return `${fullTime(p.ts)}: ${t('d2.hch.down')}`;
+    const parts = [fullTime(p.ts), `${t('d2.hch.players', { n: p.players })}${max ? ` ${t('d2.as.of', { n: max })}` : ''}`];
+    if (p.ping != null) parts.push(t('d2.srv.ping', { ms: p.ping }));
     return parts.join(', ');
   };
   const summary = vals.length
-    ? `График ${series === 'ping' ? 'пинга' : 'игроков'} за ${hours <= 24 ? 'сутки' : 'неделю'}: от ${Math.min(...vals)} до ${Math.max(...vals)}${series === 'ping' ? ' мс' : ''}. Стрелки влево и вправо перемещают курсор.`
-    : 'График пока пуст.';
+    ? t(series === 'ping' ? (hours <= 24 ? 'd2.hch.sumPingDay' : 'd2.hch.sumPingWeek') : (hours <= 24 ? 'd2.hch.sumPlDay' : 'd2.hch.sumPlWeek'), { a: Math.min(...vals), b: Math.max(...vals), unit: series === 'ping' ? ` ${t('d2.sv.ms')}` : '' })
+    : t('d2.hch.empty');
 
   // tooltip: keep it inside the chart
   const TW = 188;
   const tx = hp ? Math.min(W - TW / 2 - 2, Math.max(TW / 2 + 2, x(hp.ts))) : 0;
-  const seriesName = series === 'ping' ? 'Пинг' : 'Игроки';
+  const seriesName = series === 'ping' ? t('d2.sd.ping') : t('d2.pl.players');
 
   /**
    * the chart as a PNG: computed styles are copied into a clone of the SVG, which is then drawn on a canvas.
@@ -300,17 +301,17 @@ export default function HistoryChart({
         return t.length > n ? `${t.slice(0, n - 1)}…` : t;
       };
       const font = esc(bs.fontFamily);
-      const periodName = hours <= 24 ? '24 часа' : hours <= 168 ? '7 дней' : '30 дней';
+      const periodName = hours <= 24 ? t('d2.hch.p24') : hours <= 168 ? t('d2.hch.p7') : t('d2.hch.p30');
       const stamp = Date.now();
       const range = `${fmtDateTime(stamp - hours * 3600_000)} - ${fmtDateTime(stamp)}`;
-      const head = title || 'Сервер';
+      const head = title || t('sn.f.server');
       const sub1 = `${game ? `${game} · ` : ''}${seriesName} · ${periodName} · ${range}`;
-      const sub2 = `CoreGSM · ${window.location.host} · создано ${fmtDateTime(stamp)}`;
+      const sub2 = `CoreGSM · ${window.location.host} · ${t('d2.hch.created', { when: fmtDateTime(stamp) })}`;
       // legend: the curve, the outage band and the markers that are on the chart
       const items: { kind: 'curve' | 'band' | 'dot'; label: string; fill?: string }[] = [
         { kind: 'curve', label: seriesName },
-        ...(points.some((p) => !p.online) ? [{ kind: 'band' as const, label: 'сервер не отвечал' }] : []),
-        ...MARK_ORDER.filter((t) => marks.some((m) => m.type === t)).map((t) => ({ kind: 'dot' as const, label: MARK_LABEL[t], fill: MARK[t].fill })),
+        ...(points.some((p) => !p.online) ? [{ kind: 'band' as const, label: t('d2.hch.down') }] : []),
+        ...MARK_ORDER.filter((t) => marks.some((m) => m.type === t)).map((t) => ({ kind: 'dot' as const, label: markLabel(t), fill: MARK[t].fill })),
       ];
       let lx = 12;
       const ly = CAP + H + 20;
@@ -356,7 +357,7 @@ export default function HistoryChart({
       a.remove();
       window.setTimeout(() => URL.revokeObjectURL(dl), 4000);
     } catch {
-      toast('Не удалось сохранить картинку', 'err');
+      toast(t('d2.hch.saveFail'), 'err');
     } finally {
       setSaving(false);
     }
@@ -367,31 +368,31 @@ export default function HistoryChart({
       {(sparse || late) && points.length > 0 && (
         <p className="mb-2 flex items-center gap-2 rounded-xl bg-soft px-3 py-1.5 text-sm font-bold text-mute">
           <span aria-hidden className="live-dot bg-warn!" />
-          {late && hours > 168 ? `История есть с ${fmtDateTime(first)}: измерения хранятся 7 дней` : `Данные накапливаются с ${fmtDateTime(first)}`}
+          {late && hours > 168 ? t('d2.hch.historyFrom', { when: fmtDateTime(first) }) : t('d2.hch.accumulating', { when: fmtDateTime(first) })}
         </p>
       )}
       {(hasUsual || series === 'players' || zoom) && (
         <div className="hc-tools">
           {hasUsual && (
             <button type="button" className="hc-chip" aria-pressed={showUsual} onClick={() => setShowUsual((v) => !v)}>
-              <i className="hc-chip-usual" aria-hidden />обычный уровень
+              <i className="hc-chip-usual" aria-hidden />{t('d2.hch.usual')}
             </button>
           )}
           {series === 'players' && allPoints.some((p) => p.ping != null) && (
             <button type="button" className="hc-chip" aria-pressed={showPing} onClick={() => setShowPing((v) => !v)}>
-              <i className="hc-chip-ping" aria-hidden />{showPing ? 'пинг, мс (справа)' : 'показать пинг'}
+              <i className="hc-chip-ping" aria-hidden />{showPing ? t('d2.hch.pingRight') : t('d2.hch.showPing')}
             </button>
           )}
           {zoom ? (
             <button type="button" className="hc-chip is-zoom" onClick={() => setZoom(null)}>
-              {fmtDateTime(zoom[0])} – {fmtDateTime(zoom[1])} · показать весь период
+              {fmtDateTime(zoom[0])} – {fmtDateTime(zoom[1])} · {t('d2.hch.showAll')}
             </button>
           ) : (
             <>
-              <span className="hc-tip">выделите участок мышью, чтобы приблизить</span>
+              <span className="hc-tip">{t('d2.hch.tip')}</span>
               {/* touch screens cannot drag a selection: the last hour / 6 hours / day / week in one tap */}
-              <span className="hc-quick" role="group" aria-label="Приблизить">
-                {([[1, '1 ч'], [6, '6 ч'], [24, '24 ч'], [168, '7 д']] as [number, string][]).filter(([h]) => h < hours).map(([h, label]) => (
+              <span className="hc-quick" role="group" aria-label={t('d2.hch.zoom')}>
+                {([[1, t('dur.h', { n: 1 })], [6, t('dur.h', { n: 6 })], [24, t('dur.h', { n: 24 })], [168, t('d2.hhc.d', { n: 7 })]] as [number, string][]).filter(([h]) => h < hours).map(([h, label]) => (
                   <button key={h} type="button" className="hc-chip" onClick={() => { const n = Date.now(); setZoom([n - h * 3600_000, n]); setHover(null); }}>{label}</button>
                 ))}
               </span>
@@ -507,7 +508,7 @@ export default function HistoryChart({
           {marks.map((m) => {
             const mx = Math.min(W - R - 9, Math.max(L + 9, x(m.ts)));
             const kind = MARK[m.type];
-            const label = m.type === 'peak' ? `Пик игроков: ${m.players ?? '–'}` : m.type === 'up' ? 'Сервер вернулся' : m.type === 'maintenance' ? 'Начались технические работы' : 'Сервер упал';
+            const label = m.type === 'peak' ? t('d2.ef.peak', { n: m.players ?? '–' }) : m.type === 'up' ? t('d2.ef.up') : m.type === 'maintenance' ? t('d2.ef.maint') : t('d2.ef.down');
             return (
               <g key={`${m.type}-${m.ts}`}>
                 <title>{`${label} · ${fullTime(m.ts)}`}</title>
@@ -531,22 +532,22 @@ export default function HistoryChart({
             {hp.online ? (
               <>
                 <div className="whitespace-nowrap">
-                  <span className="opacity-80">Игроки </span>
+                  <span className="opacity-80">{t('d2.pl.players')} </span>
                   <span className="text-fs-base font-extrabold">{hp.players}</span>
                   {max > 0 && <span className="opacity-80"> / {max}</span>}
                 </div>
                 {usualOn && baseline && usualAt(baseline, hp.ts) != null && (
-                  <div className="whitespace-nowrap"><span className="opacity-80">Обычно </span><span className="font-extrabold">~{Math.round(usualAt(baseline, hp.ts)!)}</span></div>
+                  <div className="whitespace-nowrap"><span className="opacity-80">{t('d2.hch.usually')} </span><span className="font-extrabold">~{Math.round(usualAt(baseline, hp.ts)!)}</span></div>
                 )}
                 <div className="whitespace-nowrap">
-                  <span className="opacity-80">Пинг </span>
-                  {hp.ping != null ? <span className="text-fs-base font-extrabold">{hp.ping} мс</span> : <span className="opacity-70">нет данных</span>}
+                  <span className="opacity-80">{t('d2.sd.ping')} </span>
+                  {hp.ping != null ? <span className="text-fs-base font-extrabold">{t('d2.bot.ms', { n: hp.ping })}</span> : <span className="opacity-70">{t('d2.sys.noData')}</span>}
                 </div>
               </>
             ) : (
               <div className="mt-0.5 flex items-center gap-1.5 whitespace-nowrap text-[#fca5a5]">
                 <span className="h-2 w-2 rounded-full bg-[#f87171]" />
-                сервер не отвечал
+                {t('d2.hch.down')}
               </div>
             )}
           </div>
@@ -563,19 +564,19 @@ export default function HistoryChart({
           <span className={`ml-2 ${TONE_TEXT[pingTone(hv).tone]}`}>{pingTone(hv).label}</span>
         )}
       </p>
-      <button type="button" className="btn btn-soft btn-sm" onClick={() => void exportPng()} disabled={saving || points.length === 0} title="Сохранить график как картинку PNG">
+      <button type="button" className="btn btn-soft btn-sm" onClick={() => void exportPng()} disabled={saving || points.length === 0} title={t('d2.hch.savePng')}>
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M12 4v11M7 11l5 5 5-5M5 20h14" /></svg>
-        {saving ? 'Готовим…' : 'Скачать PNG'}
+        {saving ? t('d2.hch.preparing') : t('d2.hch.png')}
       </button>
       </div>
       {marks.length > 0 && (
-        <ul className="hc-legend" aria-label="Обозначения на графике">
+        <ul className="hc-legend" aria-label={t('d2.hch.legend')}>
           {MARK_ORDER.filter((t) => marks.some((m) => m.type === t)).map((t) => (
             <li key={t}>
               <span className="hc-dot" style={{ background: MARK[t].fill }} aria-hidden>
                 <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3.4" strokeLinecap="round" strokeLinejoin="round"><path d={MARK[t].path} /></svg>
               </span>
-              {MARK_LABEL[t]}
+              {markLabel(t)}
             </li>
           ))}
         </ul>
@@ -609,7 +610,7 @@ function Overview({ points, hours, color, zoom, onZoom }: { points: Point[]; hou
         preserveAspectRatio="none"
         className="block h-11 w-full cursor-crosshair touch-none select-none"
         role="img"
-        aria-label="Весь период: потяните, чтобы выбрать участок"
+        aria-label={t('d2.hch.overview')}
         onPointerDown={(e) => { (e.target as Element).setPointerCapture?.(e.pointerId); const f = at(e.clientX); setSel({ a: f, b: f }); }}
         onPointerMove={(e) => { if (sel) setSel({ ...sel, b: at(e.clientX) }); }}
         onPointerUp={() => {

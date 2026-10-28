@@ -20,12 +20,12 @@ function BackupTimeline({ items, schedule }: { items: BackupInfo['items']; sched
   return (
     <div className="mb-3 space-y-2 rounded-ui-lg bg-soft p-3.5">
       <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 text-sm font-bold text-mute">
-        <span><b className="text-ink">{items.length}</b> {items.length === 1 ? t('bk2.copy1') : items.length < 5 ? t('bk2.copy2') : t('bk2.copy5')}, {t('bk2.total', { size: fmtSize(total) })}</span>
-        <span className={late ? 'text-warn' : ''}>{t('bk2.last', { ago: ago(last.createdAt) })}{late ? `. ${t('bk2.late')}` : ''}</span>
+        <span><b className="text-ink">{items.length}</b> {t('d2.bk.copies', { n: items.length })}, {t('d2.bk.total', { size: fmtSize(total) })}</span>
+        <span className={late ? 'text-warn' : ''}>{t('d2.bk.last', { ago: ago(last.createdAt) })}{late ? `. ${t('d2.bk.late')}` : ''}</span>
       </div>
-      <div className="bk-line" role="img" aria-label={t('bk2.count', { n: items.length })}>
+      <div className="bk-line" role="img" aria-label={t('d2.bk.countLabel', { n: items.length })}>
         {list.map((b) => (
-          <span key={b.name} className={b.kind === 'auto' ? '' : 'is-manual'} style={{ height: `${Math.max(12, (b.size / max) * 100)}%` }} title={`${fmtDateTime(b.createdAt)} · ${fmtSize(b.size)} · ${b.kind === 'auto' ? t('bk2.auto') : t('bk2.manual')}`} />
+          <span key={b.name} className={b.kind === 'auto' ? '' : 'is-manual'} style={{ height: `${Math.max(12, (b.size / max) * 100)}%` }} title={`${fmtDateTime(b.createdAt)} · ${fmtSize(b.size)} · ${b.kind === 'auto' ? t('d2.bk.auto') : t('d2.bk.manual')}`} />
         ))}
       </div>
       <div className="flex justify-between text-xs font-bold text-mute"><span>{fmtDateTime(list[0].createdAt)}</span><span>{fmtDateTime(last.createdAt)}</span></div>
@@ -34,14 +34,14 @@ function BackupTimeline({ items, schedule }: { items: BackupInfo['items']; sched
 }
 
 export const fmtSize = (n: number) =>
-  n >= 1073741824 ? `${(n / 1073741824).toFixed(1)} ${t('bk2.gb')}` : n >= 1048576 ? `${(n / 1048576).toFixed(1)} ${t('bk2.mb')}` : n >= 1024 ? `${Math.round(n / 1024)} ${t('bk2.kb')}` : `${n} ${t('bk2.b')}`;
+  n >= 1073741824 ? t('d2.sys.gb', { v: (n / 1073741824).toFixed(1) }) : n >= 1048576 ? t('d2.sys.mb', { v: (n / 1048576).toFixed(1) }) : n >= 1024 ? t('d2.bk.kb', { v: Math.round(n / 1024) }) : t('d2.bk.b', { v: n });
 
 const isEncrypted = (name: string) => name.endsWith('.enc');
 
 /** save an authenticated GET as a file */
 export async function downloadFile(path: string, fallbackName: string) {
   const r = await fetch(`/api${path}`, { headers: { Authorization: `Bearer ${getToken() ?? ''}` } });
-  if (!r.ok) throw new Error(errorText(await r.json().catch(() => null), t('bk2.fetchFail')));
+  if (!r.ok) throw new Error(errorText(await r.json().catch(() => null), t('d2.bk.getFail')));
   const name = /filename="?([^"]+)"?/.exec(r.headers.get('content-disposition') ?? '')?.[1] ?? fallbackName;
   const url = URL.createObjectURL(await r.blob());
   const a = document.createElement('a');
@@ -63,12 +63,12 @@ async function waitAndReload() {
 
 const askPassphrase = (what: string) =>
   promptDialog({
-    title: t('bk2.encTitle'),
-    label: t('bk2.passLabel'),
-    text: t('bk2.encText', { what }),
+    title: t('d2.bk.encTitle'),
+    label: t('d2.bk.pass'),
+    text: t('d2.bk.encText', { what }),
     password: true,
-    confirmLabel: t('bk2.continue'),
-    validate: (v) => (v ? null : t('bk2.needPass')),
+    confirmLabel: t('d2.bk.continue'),
+    validate: (v) => (v ? null : t('d2.bk.passEnter')),
   });
 
 /** Stored archives, schedule, off-site upload and restore. */
@@ -103,28 +103,28 @@ export default function BackupsCard() {
 
   const downloadFull = () => guard('full', async () => {
     await downloadFile('/backup', 'coregsm-backup.tar.gz');
-    toast(t('bk2.downloaded'));
+    toast(t('d2.bk.t.downloaded'));
   });
   const createCopy = () => guard('run', async () => {
     await api<BackupItem>('/backups/run', 'POST');
-    toast(t('bk2.created'));
+    toast(t('d2.bk.t.created'));
     await load();
   });
   const download = (b: BackupItem) => guard(`dl:${b.name}`, async () => {
     await downloadFile(`/backups/${encodeURIComponent(b.name)}`, b.name);
   });
   const remove = async (b: BackupItem) => {
-    if (!(await confirmDialog({ title: t('bk2.delQ'), text: t('bk2.delText', { name: b.name }), confirmLabel: t('bk2.delete'), danger: true }))) return;
+    if (!(await confirmDialog({ title: t('d2.bk.c.delTitle'), text: t('d2.bk.c.delText', { name: b.name }), confirmLabel: t('d2.news.delete'), danger: true }))) return;
     await guard(`rm:${b.name}`, async () => {
       await api(`/backups/${encodeURIComponent(b.name)}`, 'DELETE');
-      toast(t('bk2.deleted'));
+      toast(t('d2.bk.t.deleted'));
       await load();
     });
   };
   /** after a restore: with unreadable secrets the page stays (and warns), otherwise it waits for the restart and reloads */
   const afterRestore = async (raw: unknown) => {
     const un = unreadableSecrets(raw).map((x) => x.id);
-    toast(t('bk2.accepted'));
+    toast(t('d2.bk.t.accepted'));
     if (un.length) {
       saveUnreadableSecrets(un);
       setUnreadable(un);
@@ -135,9 +135,9 @@ export default function BackupsCard() {
   };
   const restoreStored = async (b: BackupItem) => {
     if (!(await confirmDialog({
-      title: t('bk2.restoreQ'),
-      text: t('bk2.restoreText', { name: b.name, date: fmtDateTime(b.createdAt) }),
-      confirmLabel: t('bk2.restore'),
+      title: t('d2.bk.c.restoreTitle'),
+      text: t('d2.bk.c.restoreText', { name: b.name, when: fmtDateTime(b.createdAt) }),
+      confirmLabel: t('d2.bk.restore'),
       danger: true,
     }))) return;
     let pass: string | undefined;
@@ -158,9 +158,9 @@ export default function BackupsCard() {
   };
   const restoreFile = async (file: File) => {
     if (!(await confirmDialog({
-      title: t('bk2.restoreFileQ'),
-      text: t('bk2.restoreFileText', { name: file.name }),
-      confirmLabel: t('bk2.restore'),
+      title: t('d2.bk.c.fileTitle'),
+      text: t('d2.bk.c.fileText', { name: file.name }),
+      confirmLabel: t('d2.bk.restore'),
       danger: true,
     }))) return;
     const headers: Record<string, string> = { 'Content-Type': 'application/octet-stream', Authorization: `Bearer ${getToken() ?? ''}` };
@@ -176,7 +176,7 @@ export default function BackupsCard() {
     try {
       const r = await fetch('/api/backup/restore', { method: 'POST', headers, body: file });
       const j = (await r.json().catch(() => null)) as { error?: string; unreadableSecrets?: string[] } | null;
-      if (!r.ok) throw new Error(errorText(j, t('bk2.restoreFail')));
+      if (!r.ok) throw new Error(errorText(j, t('d2.bk.restoreFail')));
       await afterRestore(j?.unreadableSecrets);
     } catch (e) {
       setError(errText(e));
@@ -188,8 +188,8 @@ export default function BackupsCard() {
     e.preventDefault();
     setError('');
     const url = remoteUrl.trim();
-    if (url && !/^https:\/\//i.test(url)) { setError(t('bk2.httpsOnly')); return; }
-    if (!Number.isInteger(keep) || keep < 1 || keep > 30) { setError(t('bk2.keepRange')); return; }
+    if (url && !/^https:\/\//i.test(url)) { setError(t('d2.bk.e.https')); return; }
+    if (!Number.isInteger(keep) || keep < 1 || keep > 30) { setError(t('d2.bk.e.keep')); return; }
     const body: { schedule: string; keep: number; remoteUrl?: string; passphrase?: string } = { schedule, keep };
     if (clearRemote) body.remoteUrl = '';
     else if (url) body.remoteUrl = url;
@@ -202,7 +202,7 @@ export default function BackupsCard() {
       setClearRemote(false);
       setPassphrase('');
       setClearPass(false);
-      toast(t('bk2.settingsSaved'));
+      toast(t('d2.bk.t.settings'));
       await load();
     } catch (err) {
       setError(errText(err));
@@ -215,8 +215,8 @@ export default function BackupsCard() {
 
   return (
     <Section
-      title={t('bk2.title')}
-      description={t('bk2.desc')}
+      title={t('d2.sys.backups')}
+      description={t('d2.bk.desc')}
     >
       {error && !info ? <LoadError error={error} onRetry={() => void load()} compact bare /> : <ErrorLine text={error} />}
 
@@ -236,10 +236,10 @@ export default function BackupsCard() {
       )}
 
       <div className="flex flex-wrap items-center gap-3">
-        <button className="btn" onClick={() => void downloadFull()} disabled={disabled}>{busy === 'full' ? t('bk2.preparing') : t('bk2.dlFull')}</button>
-        <button className="btn btn-soft" onClick={() => void createCopy()} disabled={disabled}>{busy === 'run' ? t('bk2.creating') : t('bk2.createOnServer')}</button>
+        <button className="btn" onClick={() => void downloadFull()} disabled={disabled}>{busy === 'full' ? t('d2.bk.preparing') : t('d2.bk.full')}</button>
+        <button className="btn btn-soft" onClick={() => void createCopy()} disabled={disabled}>{busy === 'run' ? t('d2.bk.creating') : t('d2.bk.create')}</button>
         <label className={`btn btn-soft cursor-pointer ${disabled ? 'pointer-events-none opacity-50' : ''}`}>
-          {restoring ? t('bk2.restoring') : t('bk2.restoreFile')}
+          {restoring ? t('d2.bk.restoring') : t('d2.bk.fromFile')}
           <input
             type="file"
             accept=".db,.gz,.enc,.tar.gz,application/octet-stream"
@@ -251,22 +251,22 @@ export default function BackupsCard() {
       </div>
 
       <form onSubmit={saveSettings} className="space-y-4 rounded-ui-lg bg-soft p-4">
-        <h3 className="font-black">{t('bk2.schedTitle')}</h3>
+        <h3 className="font-black">{t('d2.bk.schedule')}</h3>
         <div className="grid gap-4 sm:grid-cols-2">
-          <Field label={t('bk2.f.auto')}>
+          <Field label={t('d2.bk.auto2')}>
             <select id="bk-schedule" className="input" value={schedule} onChange={(e) => setSchedule(e.target.value as BackupInfo['schedule'])}>
-              <option value="off">{t('bk2.s.off')}</option>
-              <option value="daily">{t('bk2.s.daily')}</option>
-              <option value="weekly">{t('bk2.s.weekly')}</option>
+              <option value="off">{t('al.smart.off')}</option>
+              <option value="daily">{t('d2.bk.everyDay')}</option>
+              <option value="weekly">{t('d2.mt.weekly')}</option>
             </select>
           </Field>
-          <Field label={t('bk2.f.keep')}>
+          <Field label={t('d2.bk.keep')}>
             <input id="bk-keep" className="input" type="number" min={1} max={30} value={keep} onChange={(e) => setKeep(Number(e.target.value))} />
           </Field>
         </div>
 
         <div>
-          <label htmlFor="bk-remote" className="label">{t('bk2.f.remote')}</label>
+          <label htmlFor="bk-remote" className="label">{t('d2.bk.remote')}</label>
           <input
             id="bk-remote"
             className="input font-mono"
@@ -276,25 +276,25 @@ export default function BackupsCard() {
             value={clearRemote ? '' : remoteUrl}
             disabled={clearRemote}
             onChange={(e) => setRemoteUrl(e.target.value)}
-            placeholder={info?.remoteUrl ? t('bk2.now', { url: info.remoteUrl }) : 'https://…'}
+            placeholder={info?.remoteUrl ? t('d2.bot.proxyNow', { url: info.remoteUrl }) : 'https://…'}
             aria-describedby="bk-remote-hint"
           />
-          <p id="bk-remote-hint" className="mt-1.5 text-sm font-semibold text-mute">{t('bk2.remoteHint')}</p>
+          <p id="bk-remote-hint" className="mt-1.5 text-sm font-semibold text-mute">{t('d2.bk.remoteHint')}</p>
           {info?.remoteUrl && (
             <label className="mt-2 flex items-center gap-3 text-sm font-bold text-mute">
               <Switch checked={clearRemote} onChange={setClearRemote} />
-              {t('bk2.remoteOff')}
+              {t('d2.bk.remoteOff')}
             </label>
           )}
           {info?.lastRemote && (
             <p className={`mt-2 rounded-2xl px-4 py-2 text-sm font-bold ${info.lastRemote.ok ? 'bg-okbg text-ok' : 'bg-badbg text-bad'}`} role="status">
-              {t('bk2.lastSend', { at: fmtDateTime(info.lastRemote.at) })}, {info.lastRemote.ok ? t('bk2.ok') : `${t('bk2.error')}${info.lastRemote.error ? `: ${info.lastRemote.error}` : ''}`}
+              {t('d2.bk.lastSend')} {fmtDateTime(info.lastRemote.at)}, {info.lastRemote.ok ? t('d2.bk.ok') : `${t('d2.sys.bot.error')}${info.lastRemote.error ? `: ${info.lastRemote.error}` : ''}`}
             </p>
           )}
         </div>
 
         <div>
-          <label htmlFor="bk-pass" className="label">{t('bk2.f.pass')}</label>
+          <label htmlFor="bk-pass" className="label">{t('d2.bk.passLabel')}</label>
           <input
             id="bk-pass"
             className="input"
@@ -303,30 +303,30 @@ export default function BackupsCard() {
             value={clearPass ? '' : passphrase}
             disabled={clearPass}
             onChange={(e) => setPassphrase(e.target.value)}
-            placeholder={info?.encrypted ? t('bk2.passOn') : t('bk2.passOff')}
+            placeholder={info?.encrypted ? t('d2.bk.passOn') : t('d2.bk.passOff')}
             aria-describedby="bk-pass-hint"
           />
-          <p id="bk-pass-hint" className="mt-1.5 text-sm font-bold text-warn">{t('bk2.passWarn')}</p>
+          <p id="bk-pass-hint" className="mt-1.5 text-sm font-bold text-warn">{t('d2.bk.passWarn')}</p>
           {info?.encrypted && (
             <label className="mt-2 flex items-center gap-3 text-sm font-bold text-mute">
               <Switch checked={clearPass} onChange={setClearPass} />
-              {t('bk2.encOff')}
+              {t('d2.bk.encOff')}
             </label>
           )}
         </div>
 
-        <Button loading={saving}>{saving ? t('bk2.saving') : t('common.save')}</Button>
+        <Button loading={saving}>{saving ? t('d2.sf.saving') : t('common.save')}</Button>
       </form>
 
       <BackupS3 info={info} reload={load} />
 
       <div>
-        <h3 className="mb-2 font-black">{t('bk2.onServer')}</h3>
+        <h3 className="mb-2 font-black">{t('d2.bk.onServer')}</h3>
         {info && info.items.length > 0 && <BackupTimeline items={info.items} schedule={info.schedule} />}
         {!info ? (
           <div className="skeleton h-20 rounded-2xl" />
         ) : info.items.length === 0 ? (
-          <StateView kind="empty" compact bare title={t('bk2.empty')} text={t('bk2.emptyText')} className="rounded-2xl bg-soft" />
+          <StateView kind="empty" compact bare title={t('d2.bk.empty')} text={t('d2.bk.emptyText')} className="rounded-2xl bg-soft" />
         ) : (
           <ul className="divide-y divide-line rounded-2xl border border-line">
             {info.items.map((b) => (
@@ -335,12 +335,12 @@ export default function BackupsCard() {
                   <div className="break-all font-mono text-sm font-bold">{b.name}</div>
                   <div className="text-sm font-semibold text-mute">{fmtDateTime(b.createdAt)} · {fmtSize(b.size)}</div>
                 </div>
-                <span className={`pill ${b.kind === 'auto' ? 'pill-mute' : 'pill-ok'}`}>{b.kind === 'auto' ? t('bk2.tagAuto') : t('bk2.tagManual')}</span>
-                {isEncrypted(b.name) && <span className="pill pill-warn">{t('bk2.tagEnc')}</span>}
-                <div className="flex items-center gap-1.5" role="group" aria-label={t('bk2.actions', { name: b.name })}>
-                  <button type="button" className="row-act" title={t('bk2.download')} aria-label={t('bk2.download')} onClick={() => void download(b)} disabled={disabled}><IconDownload /></button>
-                  <button type="button" className="row-act" title={t('bk2.restoreHere')} aria-label={t('bk2.restoreHere')} onClick={() => void restoreStored(b)} disabled={disabled}><IconRestore /></button>
-                  <button type="button" className="row-act row-act-danger" title={t('bk2.delete')} aria-label={t('bk2.delete')} onClick={() => void remove(b)} disabled={disabled}><IconTrash /></button>
+                <span className={`pill ${b.kind === 'auto' ? 'pill-mute' : 'pill-ok'}`}>{b.kind === 'auto' ? t('d2.bk.autoU') : t('d2.bk.manualU')}</span>
+                {isEncrypted(b.name) && <span className="pill pill-warn">{t('d2.bk.encrypted')}</span>}
+                <div className="flex items-center gap-1.5" role="group" aria-label={t('d2.bk.actions', { name: b.name })}>
+                  <button type="button" className="row-act" title={t('cards.download')} aria-label={t('cards.download')} onClick={() => void download(b)} disabled={disabled}><IconDownload /></button>
+                  <button type="button" className="row-act" title={t('d2.bk.c.restoreTitle')} aria-label={t('d2.bk.c.restoreTitle')} onClick={() => void restoreStored(b)} disabled={disabled}><IconRestore /></button>
+                  <button type="button" className="row-act row-act-danger" title={t('d2.news.delete')} aria-label={t('d2.news.delete')} onClick={() => void remove(b)} disabled={disabled}><IconTrash /></button>
                 </div>
               </li>
             ))}

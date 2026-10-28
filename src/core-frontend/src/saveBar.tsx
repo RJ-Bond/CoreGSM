@@ -4,6 +4,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import type { SaveStatus } from './autosave';
 import { needsBar, summarize } from './saveBarLogic';
 import { Spinner } from './ui';
+import { t, useI18n } from './i18n';
 
 interface Entry { label: string; status: SaveStatus; save: () => Promise<unknown>; discard: () => void }
 interface Ctx { set: (id: string, e: Entry | null) => void }
@@ -24,6 +25,7 @@ export function useSaveBar(id: string, label: string, status: SaveStatus, save: 
 }
 
 export function SaveBarProvider({ children }: { children: ReactNode }) {
+  useI18n();
   const [entries, setEntries] = useState<Record<string, Entry>>({});
   const set = useCallback((id: string, e: Entry | null) => {
     setEntries((cur) => {
@@ -55,13 +57,13 @@ export function SaveBarProvider({ children }: { children: ReactNode }) {
       <div className="space-y-5">
         {children}
         {state.show && (
-          <div className="save-bar" role="region" aria-label="Несохранённые изменения">
+          <div className="save-bar" role="region" aria-label={t('d2.sb.unsaved')}>
             <i aria-hidden className={`save-bar-dot ${state.failed ? 'is-bad' : ''}`} />
             <b className="min-w-0 flex-1 truncate" title={state.text}>{state.text}</b>
-            {state.blocked && <span className="hidden text-sm font-semibold text-bad sm:inline">Исправьте поля с ошибкой</span>}
-            <button type="button" className="btn btn-ghost btn-sm" disabled={state.saving} onClick={discard}>Отмена</button>
+            {state.blocked && <span className="hidden text-sm font-semibold text-bad sm:inline">{t('d2.sb.fix')}</span>}
+            <button type="button" className="btn btn-ghost btn-sm" disabled={state.saving} onClick={discard}>{t('common.cancel')}</button>
             <button type="button" className="btn btn-sm" disabled={state.saving || state.blocked || state.saveIds.length === 0} onClick={save}>
-              {state.saving ? <><Spinner className="h-3.5 w-3.5" />Сохраняется…</> : 'Сохранить'}
+              {state.saving ? <><Spinner className="h-3.5 w-3.5" />{t('d2.adm.saving')}</> : t('common.save')}
             </button>
           </div>
         )}

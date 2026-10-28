@@ -1,6 +1,7 @@
 // Small static (no looping motion) SVG illustrations for the empty states of the servers page.
 // They use the theme tokens through Tailwind classes, so they work in the light and the dark theme.
 import type { ReactNode } from 'react';
+import { t } from '../../i18n';
 
 function Frame({ children, label }: { children: ReactNode; label: string }) {
   return (
@@ -13,7 +14,7 @@ function Frame({ children, label }: { children: ReactNode; label: string }) {
 /** an empty rack: dashed slots and a plus */
 export function EmptyRackArt() {
   return (
-    <Frame label="Серверов пока нет">
+    <Frame label={t('d2.su.noServers')}>
       <ellipse cx="110" cy="134" rx="78" ry="8" className="fill-soft" />
       <circle cx="110" cy="72" r="62" className="fill-soft" />
       {[32, 64, 96].map((y) => (
@@ -32,7 +33,7 @@ export function EmptyRackArt() {
 /** a card with an empty star */
 export function NoFavsArt() {
   return (
-    <Frame label="Избранных серверов нет">
+    <Frame label={t('d2.sa.noFavs')}>
       <ellipse cx="110" cy="134" rx="70" ry="8" className="fill-soft" />
       <circle cx="110" cy="72" r="60" className="fill-soft" />
       <rect x="58" y="38" width="104" height="70" rx="14" className="fill-card stroke-line" strokeWidth="2" />
@@ -54,7 +55,7 @@ export function NoFavsArt() {
 /** a magnifier over a few cards: nothing matched the filter */
 export function NoMatchArt() {
   return (
-    <Frame label="Ничего не найдено">
+    <Frame label={t('d2.cp.none')}>
       <ellipse cx="110" cy="134" rx="74" ry="8" className="fill-soft" />
       <circle cx="110" cy="72" r="60" className="fill-soft" />
       {[0, 1].map((i) => (

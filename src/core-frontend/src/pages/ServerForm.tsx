@@ -6,16 +6,16 @@ import GamePicker from '../components/GamePicker';
 import { ErrorLine, Field, GameAvatar, Modal, errText } from '../ui';
 import { COUNTRIES } from '../countries';
 import { nextPort, shownFields, useGameProfiles } from '../gameProfiles';
-import { t } from '../i18n';
+import { t, useI18n } from '../i18n';
 import { errorText } from '../apiErrors';
 
 /** the first problem with the address field, or '' (an address only: no scheme, path, spaces or a port glued to it) */
 export function hostError(v: string): string {
   const h = v.trim();
   if (!h) return '';
-  if (/\s/.test(h)) return 'В адресе не должно быть пробелов';
-  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(h) || h.includes('/')) return 'Укажите только адрес, без http:// и пути';
-  if ((h.match(/:/g) ?? []).length === 1) return 'Порт вводится в отдельном поле, уберите «:порт» из адреса';
+  if (/\s/.test(h)) return t('d2.sf.h.spaces');
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(h) || h.includes('/')) return t('d2.sf.h.noScheme');
+  if ((h.match(/:/g) ?? []).length === 1) return t('d2.sf.h.port');
   return '';
 }
 
@@ -23,6 +23,7 @@ export const emptyServer: ServerInput = { name: '', game: 'minecraft', host: '',
 
 /** Add / edit a server. The first screen asks only what is needed; the rest is under "Дополнительно". */
 export default function ServerForm({ initial, id, coverUrl, onCoverChanged, onClose, onSaved }: { initial: ServerInput; id?: number; coverUrl?: string | null; onCoverChanged?: () => void; onClose: () => void; onSaved: () => void }) {
+  useI18n();
   const [f, setF] = useState(initial);
   const [cover, setCover] = useState<string | null>(coverUrl ?? null);
   const [coverBusy, setCoverBusy] = useState(false);
@@ -34,7 +35,7 @@ export default function ServerForm({ initial, id, coverUrl, onCoverChanged, onCl
     try {
       const r = await fetch(`/api/servers/${id}/cover`, { method: 'PUT', headers: { 'Content-Type': file.type, Authorization: `Bearer ${getToken() ?? ''}` }, body: file });
       const j = (await r.json().catch(() => null)) as { coverUrl?: string; error?: string } | null;
-      if (!r.ok) throw new Error(errorText(j, 'Не удалось загрузить картинку (PNG, JPG или WebP до 5 МБ)'));
+      if (!r.ok) throw new Error(errorText(j, t('d2.sf.coverFail')));
       setCover(j?.coverUrl ?? null);
       onCoverChanged?.();
     } catch (e) {
@@ -97,7 +98,7 @@ export default function ServerForm({ initial, id, coverUrl, onCoverChanged, onCl
   const fieldList = shownFields(gameProfile?.fields);
 
   const hostProblem = hostError(f.host);
-  const portProblem = f.port && (f.port < 1 || f.port > 65535 || !Number.isInteger(f.port)) ? 'Порт — число от 1 до 65535' : '';
+  const portProblem = f.port && (f.port < 1 || f.port > 65535 || !Number.isInteger(f.port)) ? t('d2.sf.portRange') : '';
   const canTest = f.host.trim().length > 0 && f.game.length > 0 && f.port > 0 && !hostProblem && !portProblem;
   // closing with unsaved edits asks first; a reload or closing the tab is warned about by the browser
   const dirty = JSON.stringify(f) !== JSON.stringify(initial);
@@ -108,7 +109,7 @@ export default function ServerForm({ initial, id, coverUrl, onCoverChanged, onCl
     return () => window.removeEventListener('beforeunload', warn);
   }, [dirty]);
   const close = async () => {
-    if (dirty && !(await confirmDialog({ title: 'Закрыть без сохранения?', text: 'Изменения в форме будут потеряны.', confirmLabel: 'Закрыть', cancelLabel: 'Продолжить правку', danger: true }))) return;
+    if (dirty && !(await confirmDialog({ title: t('d2.sf.discardTitle'), text: t('d2.sf.discardText'), confirmLabel: t('common.close'), cancelLabel: t('d2.sf.keepEditing'), danger: true }))) return;
     onClose();
   };
 
@@ -139,35 +140,35 @@ export default function ServerForm({ initial, id, coverUrl, onCoverChanged, onCl
   };
 
   return (
-    <Modal side title={id ? 'Изменить сервер' : 'Новый сервер'} onClose={() => void close()}>
+    <Modal side title={id ? t('d2.sf.editTitle') : t('d2.sf.newTitle')} onClose={() => void close()}>
       <form onSubmit={submit} className="space-y-3.5">
-        <div className="sf-preview" aria-label="Так сервер увидят в списке" style={cover ? { backgroundImage: `linear-gradient(rgb(0 0 0 / .45), rgb(0 0 0 / .65)), url(${cover})` } : undefined} data-cover={cover ? 'true' : undefined}>
+        <div className="sf-preview" aria-label={t('d2.sf.previewLabel')} style={cover ? { backgroundImage: `linear-gradient(rgb(0 0 0 / .45), rgb(0 0 0 / .65)), url(${cover})` } : undefined} data-cover={cover ? 'true' : undefined}>
           <GameAvatar game={f.game} size={44} />
           <div className="min-w-0 flex-1">
-            <p className="truncate font-extrabold">{f.name || (test?.online && test.name) || (f.host ? `${f.host}:${f.port}` : 'Название сервера')}</p>
-            <p className="truncate text-xs font-semibold opacity-80">{gameLabel(f.game)} · <span className="font-mono">{f.displayAddress || (f.host ? `${f.host}:${f.port}` : 'адрес')}</span></p>
+            <p className="truncate font-extrabold">{f.name || (test?.online && test.name) || (f.host ? `${f.host}:${f.port}` : t('d2.sf.serverName'))}</p>
+            <p className="truncate text-xs font-semibold opacity-80">{gameLabel(f.game)} · <span className="font-mono">{f.displayAddress || (f.host ? `${f.host}:${f.port}` : t('d2.sf.address'))}</span></p>
           </div>
           <span className={`sf-preview-st ${test ? (test.online ? 'is-on' : 'is-off') : ''}`}>
-            {test ? (test.online ? `${test.players}/${test.maxPlayers}` : 'не отвечает') : 'не проверен'}
+            {test ? (test.online ? `${test.players}/${test.maxPlayers}` : t('d2.sf.noAnswer')) : t('d2.sf.notChecked')}
           </span>
         </div>
         <div>
-          <span className="label">Игра</span>
+          <span className="label">{t('d2.sf.game')}</span>
           <GamePicker id="srv-game" value={f.game} custom={custom} onPick={pickGame} autoFocus />
         </div>
         {custom && (
           <Field label="GameDig ID">
-            <input id="srv-gameid" className="input" value={f.game} onChange={(e) => change({ game: e.target.value.trim() })} placeholder="например, arma3" required pattern="[A-Za-z0-9_]+" />
+            <input id="srv-gameid" className="input" value={f.game} onChange={(e) => change({ game: e.target.value.trim() })} placeholder={t('d2.sf.gameIdEx')} required pattern="[A-Za-z0-9_]+" />
           </Field>
         )}
         <div className="grid grid-cols-3 gap-3">
           <div className="col-span-2">
-            <Field label="Адрес для опроса (IP или домен)">
+            <Field label={t('d2.sf.host')}>
               <input id="srv-host" className="input" value={f.host} onChange={(e) => change({ host: e.target.value.trim() })} required placeholder="192.168.1.10" aria-invalid={hostProblem ? true : undefined} aria-describedby={hostProblem ? 'srv-host-err' : undefined} />
             {hostProblem && <p id="srv-host-err" className="mt-1 text-sm font-bold text-bad" role="alert">{hostProblem}</p>}
             </Field>
           </div>
-          <Field label="Порт">
+          <Field label={t('d2.sf.port')}>
             <input id="srv-port" className="input" type="number" min={1} max={65535} value={f.port} onChange={(e) => { portTouched.current = true; change({ port: Number(e.target.value) }); }} required />
           </Field>
         </div>
@@ -176,60 +177,60 @@ export default function ServerForm({ initial, id, coverUrl, onCoverChanged, onCl
 
         <div className="space-y-2">
           <button type="button" className="btn btn-soft" onClick={runTest} disabled={!canTest || testing}>
-            {testing ? 'Опрашиваю…' : 'Проверить сервер'}
+            {testing ? t('d2.sf.testing') : t('d2.sf.test')}
           </button>
           {test && test.online && (
             <div className="rounded-2xl bg-okbg px-4 py-3 text-sm font-bold text-ok" role="status">
-              ✔ Сервер ответил{test.name ? `: «${test.name}»` : ''}
+              ✔ {t('d2.sf.answered')}{test.name ? `: «${test.name}»` : ''}
               <div className="mt-0.5 font-semibold">
-                Игроков {test.players}/{test.maxPlayers}
-                {test.map ? ` · карта ${test.map}` : ''}
-                {test.ping != null ? ` · пинг ${test.ping} мс` : ''}
+                {t('d2.sf.players')} {test.players}/{test.maxPlayers}
+                {test.map ? ` ${t('d2.sf.map', { map: test.map })}` : ''}
+                {test.ping != null ? ` ${t('d2.sf.ping', { ms: test.ping })}` : ''}
               </div>
             </div>
           )}
           {test && !test.online && (
             <div className="rounded-2xl bg-badbg px-4 py-3 text-sm font-bold text-bad" role="alert">
-              ✖ {test.error ?? 'Сервер не ответил'}
+              ✖ {test.error ?? t('d2.sf.noReply')}
             </div>
           )}
         </div>
 
         <details className="group rounded-2xl border-2 border-line px-4 py-2.5" open={advancedUsed}>
-          <summary className="cursor-pointer select-none font-extrabold text-link">Дополнительно</summary>
+          <summary className="cursor-pointer select-none font-extrabold text-link">{t('d2.sf.advanced')}</summary>
           <div className="mt-3 space-y-3.5">
-            <Field label="Название">
-              <input id="srv-name" className="input" value={f.name} onChange={(e) => change({ name: e.target.value })} maxLength={64} placeholder="возьмётся из ответа сервера" />
+            <Field label={t('d2.sf.name')}>
+              <input id="srv-name" className="input" value={f.name} onChange={(e) => change({ name: e.target.value })} maxLength={64} placeholder={t('d2.sf.nameEx')} />
             </Field>
-            <p className="-mt-2 text-sm font-semibold text-mute">Оставьте пустым: панель использует название, которое сервер сообщает сам. Своё название переопределяет его.</p>
-            <Field label="Query-порт (если отличается от порта игры)">
-              <input id="srv-qport" className="input" type="number" min={1} max={65535} value={f.queryPort ?? ''} onChange={(e) => change({ queryPort: e.target.value ? Number(e.target.value) : null })} placeholder="не указан" />
+            <p className="-mt-2 text-sm font-semibold text-mute">{t('d2.sf.nameHint')}</p>
+            <Field label={t('d2.sf.qport')}>
+              <input id="srv-qport" className="input" type="number" min={1} max={65535} value={f.queryPort ?? ''} onChange={(e) => change({ queryPort: e.target.value ? Number(e.target.value) : null })} placeholder={t('d2.sf.notSet')} />
             </Field>
-            <Field label="Адрес для отображения">
-              <input id="srv-display" className="input font-mono" value={f.displayAddress} onChange={(e) => change({ displayAddress: e.target.value.trim() })} maxLength={100} placeholder="play.example.com:25565 или внешний IP" />
+            <Field label={t('d2.sf.display')}>
+              <input id="srv-display" className="input font-mono" value={f.displayAddress} onChange={(e) => change({ displayAddress: e.target.value.trim() })} maxLength={100} placeholder={t('d2.sf.displayEx')} />
             </Field>
-            <Field label="Страна (для сообщения в Discord)">
+            <Field label={t('d2.sf.country')}>
               <select id="srv-country" className="input" value={f.country} onChange={(e) => change({ country: e.target.value })}>
-                <option value="">Определить автоматически по адресу</option>
+                <option value="">{t('d2.sf.countryAuto')}</option>
                 {COUNTRIES.map(([code, name]) => <option key={code} value={code}>{name}</option>)}
               </select>
             </Field>
-            <p className="-mt-2 text-sm font-semibold text-mute">Автоопределение не работает для адресов в локальной сети: выберите страну вручную, и флаг появится в сообщении.</p>
-            <p className="-mt-2 text-sm font-semibold text-mute">Опрос идёт по адресу выше, а людям на странице и в карточке Discord показывается этот адрес. Нужен, если сервер в локальной сети, а снаружи доступен по другому IP или домену.</p>
+            <p className="-mt-2 text-sm font-semibold text-mute">{t('d2.sf.countryHint')}</p>
+            <p className="-mt-2 text-sm font-semibold text-mute">{t('d2.sf.displayHint')}</p>
             <div>
-              <span className="label">Обложка</span>
+              <span className="label">{t('d2.sf.cover')}</span>
               {id ? (
                 <div className="flex flex-wrap items-center gap-3">
                   <div className="h-[72px] w-32 shrink-0 overflow-hidden rounded-xl border border-line bg-soft" style={cover ? { backgroundImage: `url(${cover})`, backgroundSize: 'cover', backgroundPosition: 'center' } : undefined} aria-hidden />
                   <label className="btn btn-soft btn-sm cursor-pointer">
-                    {coverBusy ? 'Загружаю…' : 'Загрузить картинку'}
+                    {coverBusy ? t('d2.sf.uploading') : t('d2.sf.upload')}
                     <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" disabled={coverBusy} onChange={(e) => { const file = e.target.files?.[0]; if (file) void uploadCover(file); e.target.value = ''; }} />
                   </label>
-                  {cover && <button type="button" className="btn btn-soft btn-sm" onClick={() => void removeCover()} disabled={coverBusy}>Убрать</button>}
-                  <span className="basis-full text-sm font-semibold text-mute">PNG, JPG или WebP до 5 МБ; обрезается до 16:9. Заменяет цветную обложку карточки и шапку страницы сервера.</span>
+                  {cover && <button type="button" className="btn btn-soft btn-sm" onClick={() => void removeCover()} disabled={coverBusy}>{t('common.remove')}</button>}
+                  <span className="basis-full text-sm font-semibold text-mute">{t('d2.sf.coverHint')}</span>
                 </div>
               ) : (
-                <p className="text-sm font-semibold text-mute">Картинку можно загрузить после создания сервера: откройте «Изменить».</p>
+                <p className="text-sm font-semibold text-mute">{t('d2.sf.coverLater')}</p>
               )}
             </div>
           </div>
@@ -238,8 +239,8 @@ export default function ServerForm({ initial, id, coverUrl, onCoverChanged, onCl
         <ErrorLine text={error} />
         {portProblem && <p className="text-sm font-bold text-bad" role="alert">{portProblem}</p>}
         <div className="adm-sticky-foot flex justify-end gap-2 pt-1">
-          <button type="button" className="btn btn-ghost" onClick={() => void close()}>Отмена</button>
-          <button className="btn" disabled={busy || !canTest}>{busy ? 'Сохраняю…' : 'Сохранить'}</button>
+          <button type="button" className="btn btn-ghost" onClick={() => void close()}>{t('common.cancel')}</button>
+          <button className="btn" disabled={busy || !canTest}>{busy ? t('d2.sf.saving') : t('common.save')}</button>
         </div>
       </form>
     </Modal>

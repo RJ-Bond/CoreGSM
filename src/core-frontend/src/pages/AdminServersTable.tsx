@@ -100,9 +100,9 @@ export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableA
             </button>
           ))}
         </nav>
-        <div className="seg hidden w-fit md:flex" role="group" aria-label="Вид списка">
-          <button type="button" className="seg-item" aria-pressed={view === 'table'} onClick={() => pickView('table')}>Таблица</button>
-          <button type="button" className="seg-item" aria-pressed={view === 'cards'} onClick={() => pickView('cards')}>Карточки</button>
+        <div className="seg hidden w-fit md:flex" role="group" aria-label={t('d2.news.viewLabel')}>
+          <button type="button" className="seg-item" aria-pressed={view === 'table'} onClick={() => pickView('table')}>{t('d2.ast.table')}</button>
+          <button type="button" className="seg-item" aria-pressed={view === 'cards'} onClick={() => pickView('cards')}>{t('d2.ast.cards')}</button>
         </div>
         <details className="adm-cols hidden md:block">
           <summary className="seg-item cursor-pointer select-none">{t('adm.cols')}</summary>

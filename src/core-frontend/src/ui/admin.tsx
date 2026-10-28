@@ -2,6 +2,7 @@
 import { type ReactNode, useId } from 'react';
 import type { SaveStatus } from '../autosave';
 import { IconCheck } from '../icons';
+import { t, useI18n } from '../i18n';
 import { FieldError, Spinner } from './authParts';
 import { noAutofill } from './noAutofill';
 
@@ -52,15 +53,16 @@ export function Strip({ children, className = '' }: { children: ReactNode; class
 
 /** «Сохраняется… / Сохранено / Не сохранено»: the state of an autosaved field; `retry` shows «Повторить» after a failure */
 export function SaveBadge({ status, error, retry }: { status: SaveStatus; error?: string; retry?: () => void }) {
+  useI18n();
   let body: ReactNode = null;
-  if (status === 'dirty') body = <span className="text-mute">Изменено…</span>;
-  else if (status === 'saving') body = <span className="inline-flex items-center gap-1.5 text-mute"><Spinner className="h-3.5 w-3.5" />Сохраняется…</span>;
-  else if (status === 'saved') body = <span className="inline-flex items-center gap-1.5 text-ok"><IconCheck size={14} />Сохранено</span>;
+  if (status === 'dirty') body = <span className="text-mute">{t('d2.adm.dirty')}</span>;
+  else if (status === 'saving') body = <span className="inline-flex items-center gap-1.5 text-mute"><Spinner className="h-3.5 w-3.5" />{t('d2.adm.saving')}</span>;
+  else if (status === 'saved') body = <span className="inline-flex items-center gap-1.5 text-ok"><IconCheck size={14} />{t('d2.dg.saved')}</span>;
   else if (status === 'error') {
     body = (
       <span className="inline-flex flex-wrap items-center gap-x-2 text-bad">
-        Не сохранено{error ? `: ${error}` : ''}
-        {retry && <button type="button" className="btn-link btn-link-tone" onClick={retry}>Повторить</button>}
+        {t('d2.adm.notSaved')}{error ? `: ${error}` : ''}
+        {retry && <button type="button" className="btn-link btn-link-tone" onClick={retry}>{t('common.retry')}</button>}
       </span>
     );
   }

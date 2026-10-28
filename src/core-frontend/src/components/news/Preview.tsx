@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import type { Server } from '../../api';
 import { gameColor } from '../../games';
 import { EmbedView, type DiscordEmbed, type PreviewPart } from '../../pages/EmbedPreview';
+import { t, useI18n } from '../../i18n';
 import { imageSrc, invalidParts, parseHex, resolveVars, type Draft, type EmbedDraft, type VarSample } from './model';
 
 const load = <T extends string>(key: string, allowed: T[], def: T): T => {
@@ -45,10 +46,10 @@ function statusEmbeds(ids: number[], servers: Server[] | null): DiscordEmbed[] {
     const s = servers?.find((x) => x.id === id);
     const color = s ? parseHex(gameColor(s.game)) : 0x5865f2;
     return {
-      title: s ? s.name : `Сервер №${id}`,
-      description: s ? (s.online ? `🟢 Онлайн · ${s.players}/${s.maxPlayers} игроков${s.map ? ` · ${s.map}` : ''}` : '🔴 Офлайн') : 'Данные появятся при отправке',
+      title: s ? s.name : t('d2.mt.serverNo', { id }),
+      description: s ? (s.online ? `🟢 ${t('d2.srv.f.online')} · ${t('d2.pv.cnt', { a: s.players, b: s.maxPlayers })}${s.map ? ` · ${s.map}` : ''}` : `🔴 ${t('d2.bl.offline')}`) : t('d2.pv.dataLater'),
       color: Number.isFinite(color) ? color : 0x5865f2,
-      footer: { text: 'Статус сервера · обновится при отправке' },
+      footer: { text: t('d2.pv.footer') },
     };
   });
 }
@@ -63,6 +64,7 @@ export function Preview({
   onPick: (p: PreviewPart) => void;
   total: number;
 }) {
+  useI18n();
   const [theme, setTheme] = useState<'dark' | 'light'>(() => load('news_pv_theme', ['dark', 'light'], 'dark'));
   const [width, setWidth] = useState<'desktop' | 'phone'>(() => load('news_pv_width', ['desktop', 'phone'], 'desktop'));
   const content = messageContent(draft, vars);
@@ -89,20 +91,20 @@ export function Preview({
   return (
     <div className="panel p-4">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-lg font-black">Предпросмотр</h2>
+        <h2 className="text-lg font-black">{t('d2.pv.title')}</h2>
         <div className="flex flex-wrap items-center gap-2">
-          <div className="seg" role="group" aria-label="Тема Discord">
-            <button type="button" className="seg-item" aria-pressed={theme === 'dark'} onClick={() => { setTheme('dark'); save('news_pv_theme', 'dark'); }}>Тёмная</button>
-            <button type="button" className="seg-item" aria-pressed={theme === 'light'} onClick={() => { setTheme('light'); save('news_pv_theme', 'light'); }}>Светлая</button>
+          <div className="seg" role="group" aria-label={t('d2.pv.theme')}>
+            <button type="button" className="seg-item" aria-pressed={theme === 'dark'} onClick={() => { setTheme('dark'); save('news_pv_theme', 'dark'); }}>{t('cards.dark')}</button>
+            <button type="button" className="seg-item" aria-pressed={theme === 'light'} onClick={() => { setTheme('light'); save('news_pv_theme', 'light'); }}>{t('d2.brand.light')}</button>
           </div>
-          <div className="seg" role="group" aria-label="Ширина">
-            <button type="button" className="seg-item" aria-pressed={width === 'desktop'} onClick={() => { setWidth('desktop'); save('news_pv_width', 'desktop'); }}>Компьютер</button>
-            <button type="button" className="seg-item" aria-pressed={width === 'phone'} onClick={() => { setWidth('phone'); save('news_pv_width', 'phone'); }}>Телефон</button>
+          <div className="seg" role="group" aria-label={t('d2.pv.width')}>
+            <button type="button" className="seg-item" aria-pressed={width === 'desktop'} onClick={() => { setWidth('desktop'); save('news_pv_width', 'desktop'); }}>{t('d2.pv.desktop')}</button>
+            <button type="button" className="seg-item" aria-pressed={width === 'phone'} onClick={() => { setWidth('phone'); save('news_pv_width', 'phone'); }}>{t('d2.pv.phone')}</button>
           </div>
         </div>
       </div>
       {empty ? (
-        <p className="py-10 text-center font-semibold text-mute">Начните писать: здесь появится сообщение, как оно будет выглядеть в Discord.</p>
+        <p className="py-10 text-center font-semibold text-mute">{t('d2.pv.empty')}</p>
       ) : (
         <EmbedView
           content={content}
@@ -115,7 +117,7 @@ export function Preview({
         />
       )}
       <p className="mt-2 flex items-center justify-between gap-2 text-xs font-semibold text-mute">
-        <span>Нажмите на часть сообщения, чтобы перейти к её полю. Красная рамка: превышен лимит.</span>
+        <span>{t('d2.pv.hint')}</span>
         <span className={`shrink-0 font-extrabold tabular-nums ${total > 6000 ? 'text-bad' : ''}`}>{total}/6000</span>
       </p>
     </div>

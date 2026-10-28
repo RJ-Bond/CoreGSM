@@ -1,9 +1,11 @@
 /** Settings → Security: the administrator's own password. */
 import { type FormEvent, useState } from 'react';
 import { api } from '../../api';
-import { ErrorLine, plural, Section, TextField, toast, errText } from '../../ui';
+import { t, useI18n } from '../../i18n';
+import { ErrorLine, Section, TextField, toast, errText } from '../../ui';
 
 export function PasswordCard() {
+  useI18n();
   const [current, setCurrent] = useState('');
   const [next, setNext] = useState('');
   const [error, setError] = useState('');
@@ -11,7 +13,7 @@ export function PasswordCard() {
   const [busy, setBusy] = useState(false);
 
   // validated while typing (the server checks again)
-  const nextError = next && next.length < 10 ? `Ещё ${10 - next.length} ${plural(10 - next.length, ['символ', 'символа', 'символов'])}: нужно от 10` : next && next === current ? 'Новый пароль совпадает с текущим' : '';
+  const nextError = next && next.length < 10 ? t('d2.pw.more', { n: 10 - next.length }) : next && next === current ? t('d2.pw.same') : '';
   const ready = !!current && next.length >= 10 && !nextError;
 
   const submit = async (e: FormEvent) => {
@@ -23,7 +25,7 @@ export function PasswordCard() {
     try {
       await api('/auth/password', 'POST', { current, next });
       setDone(true);
-      toast('Пароль изменён');
+      toast(t('d2.pw.changed'));
       setCurrent('');
       setNext('');
     } catch (err) {
@@ -35,13 +37,13 @@ export function PasswordCard() {
   };
 
   return (
-    <Section title="Пароль администратора">
+    <Section title={t('d2.pw.title')}>
       <form onSubmit={submit} className="space-y-3.5">
-        <TextField id="pw-current" label="Текущий пароль" type="password" value={current} onChange={(v) => { setCurrent(v); setError(''); }} autoComplete="current-password" />
-        <TextField id="pw-next" label="Новый пароль (от 10 символов)" type="password" value={next} onChange={setNext} autoComplete="new-password" error={nextError} />
+        <TextField id="pw-current" label={t('d2.pw.current')} type="password" value={current} onChange={(v) => { setCurrent(v); setError(''); }} autoComplete="current-password" />
+        <TextField id="pw-next" label={t('d2.pw.new')} type="password" value={next} onChange={setNext} autoComplete="new-password" error={nextError} />
         <ErrorLine text={error} />
-        {done && <p className="rounded-ui-lg bg-okbg px-4 py-2.5 font-bold text-ok" role="status">Пароль изменён.</p>}
-        <button className="btn" disabled={!ready || busy}>Сохранить пароль</button>
+        {done && <p className="rounded-ui-lg bg-okbg px-4 py-2.5 font-bold text-ok" role="status">{t('d2.pw.changedDot')}</p>}
+        <button className="btn" disabled={!ready || busy}>{t('d2.pw.save')}</button>
       </form>
     </Section>
   );

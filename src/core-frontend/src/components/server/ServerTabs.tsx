@@ -1,15 +1,16 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ComponentType, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
 import { IconBars, IconBolt, IconGrid, IconPlug, IconTrend, IconUsers, type IconProps } from '../../icons';
 import { navigate } from '../../ui/route';
+import { t, useI18n, type TKey } from '../../i18n';
 import { tabHref, type TabId } from './helpers';
 
-export const TAB_LIST: { id: TabId; label: string; icon: ComponentType<IconProps> }[] = [
-  { id: '', label: 'Обзор', icon: IconGrid },
-  { id: 'players', label: 'Игроки', icon: IconUsers },
-  { id: 'history', label: 'История', icon: IconTrend },
-  { id: 'stats', label: 'Аналитика', icon: IconBars },
-  { id: 'events', label: 'События', icon: IconBolt },
-  { id: 'connect', label: 'Подключение', icon: IconPlug },
+export const TAB_LIST: { id: TabId; label: TKey; icon: ComponentType<IconProps> }[] = [
+  { id: '', label: 'd2.tabs.overview', icon: IconGrid },
+  { id: 'players', label: 'd2.pl.players', icon: IconUsers },
+  { id: 'history', label: 'd2.tabs.history', icon: IconTrend },
+  { id: 'stats', label: 'd2.tabs.stats', icon: IconBars },
+  { id: 'events', label: 'd2.sd.sec.events', icon: IconBolt },
+  { id: 'connect', label: 'd2.tabs.connect', icon: IconPlug },
 ];
 
 export const tabDomId = (id: TabId) => `srv-tab-${id || 'overview'}`;
@@ -20,6 +21,7 @@ export const panelDomId = (id: TabId) => `srv-panel-${id || 'overview'}`;
  * (the active tab is centred). Tabs are links, so the address bar and the back button work.
  */
 export default function ServerTabs({ id, tab, counts, toc, mini }: { id: number; tab: TabId; counts: Partial<Record<TabId, number>>; toc?: ReactNode; mini?: ReactNode }) {
+  useI18n();
   const seg = useRef<HTMLElement>(null);
   const sentinel = useRef<HTMLDivElement>(null);
   const [stuck, setStuck] = useState(false);
@@ -78,25 +80,25 @@ export default function ServerTabs({ id, tab, counts, toc, mini }: { id: number;
           ref={seg}
           className="srv-tabs seg fade-x no-scrollbar flex w-fit max-w-full overflow-x-auto"
           role="tablist"
-          aria-label="Разделы сервера"
+          aria-label={t('d2.tabs.label')}
           onKeyDown={onKey}
         >
-          {TAB_LIST.map((t) => {
-            const on = t.id === tab;
-            const n = counts[t.id];
+          {TAB_LIST.map((tb) => {
+            const on = tb.id === tab;
+            const n = counts[tb.id];
             return (
               <a
-                key={t.id || 'overview'}
-                id={tabDomId(t.id)}
+                key={tb.id || 'overview'}
+                id={tabDomId(tb.id)}
                 role="tab"
-                href={tabHref(id, t.id)}
+                href={tabHref(id, tb.id)}
                 aria-selected={on}
-                aria-controls={panelDomId(t.id)}
+                aria-controls={panelDomId(tb.id)}
                 tabIndex={on ? 0 : -1}
                 className={`seg-item shrink-0 ${on ? 'on' : ''}`}
               >
-                <t.icon size={17} className="srv-tab-i" />
-                {t.label}
+                <tb.icon size={17} className="srv-tab-i" />
+                {t(tb.label)}
                 {n != null && n > 0 && <span className="tab-count">{n}</span>}
               </a>
             );
