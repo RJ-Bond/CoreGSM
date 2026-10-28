@@ -1,9 +1,11 @@
 import { IconArrow } from '../ui';
+import { t, useI18n } from '../i18n';
 import { NotFoundArt } from './Illustrations';
 import { StateView } from './StateView';
 
 /** Unknown route or unknown server id. `kind` only changes the wording; both buttons are always there. */
 export default function NotFound({ kind = 'page' }: { kind?: 'page' | 'server' }) {
+  useI18n();
   return (
     <StateView
       kind="notfound"
@@ -15,16 +17,16 @@ export default function NotFound({ kind = 'page' }: { kind?: 'page' | 'server' }
           <p className="nf-code text-6xl font-black leading-none tracking-tighter sm:text-7xl" aria-hidden>404</p>
         </>
       )}
-      title={kind === 'server' ? 'Сервер не найден' : 'Такой страницы нет'}
+      title={kind === 'server' ? t('d2.nf.server') : t('d2.nf.page')}
       text={kind === 'server'
-        ? 'Возможно, его удалили или ссылка устарела. Откройте список серверов и найдите нужный.'
-        : 'Ссылка устарела или в адресе опечатка. Вернитесь на главную: всё самое нужное там.'}
+        ? t('d2.nf.serverText')
+        : t('d2.nf.pageText')}
     >
       <a className="btn" href="/" data-magnetic>
-        На главную
+        {t('d2.nf.home')}
         <IconArrow />
       </a>
-      <a className="btn btn-soft" href="/servers">К серверам</a>
+      <a className="btn btn-soft" href="/servers">{t('d2.nf.toServers')}</a>
     </StateView>
   );
 }

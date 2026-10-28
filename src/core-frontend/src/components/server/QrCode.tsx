@@ -1,8 +1,10 @@
 import { useMemo } from 'react';
 import qrcode from 'qrcode-generator';
+import { t, useI18n } from '../../i18n';
 
 /** a QR code as inline SVG (dark modules on white, always scannable regardless of the theme) */
 export default function QrCode({ text, label }: { text: string; label: string }) {
+  useI18n();
   const svg = useMemo(() => {
     try {
       const qr = qrcode(0, 'M');
@@ -24,7 +26,7 @@ export default function QrCode({ text, label }: { text: string; label: string })
       return null;
     }
   }, [text]);
-  if (!svg) return <p className="text-sm font-semibold text-mute">Слишком длинное значение для QR-кода.</p>;
+  if (!svg) return <p className="text-sm font-semibold text-mute">{t('d2.qr.long')}</p>;
   return (
     <div className="cn-qr">
       <svg viewBox={`0 0 ${svg.n} ${svg.n}`} role="img" aria-label={label} shapeRendering="crispEdges">
