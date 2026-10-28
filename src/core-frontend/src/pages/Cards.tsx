@@ -13,6 +13,14 @@ export default function CardsPage() {
   const [forced, setForced] = useState(0);
   const [copied, setCopied] = useState<number | null>(null);
   const [error, setError] = useState('');
+  const [style, setStyleS] = useState<'split' | 'strip'>(() => { try { return localStorage.getItem('coregsm_card_style') === 'strip' ? 'strip' : 'split'; } catch { return 'split'; } });
+  const [theme, setThemeS] = useState<'dark' | 'light'>(() => { try { return localStorage.getItem('coregsm_card_theme') === 'light' ? 'light' : 'dark'; } catch { return 'dark'; } });
+  const setStyle = (v: 'split' | 'strip') => { setStyleS(v); try { localStorage.setItem('coregsm_card_style', v); } catch { /* private mode */ } };
+  const setTheme = (v: 'dark' | 'light') => { setThemeS(v); try { localStorage.setItem('coregsm_card_theme', v); } catch { /* private mode */ } };
+  // the pictures refresh themselves every 30 seconds, so the page works as a live preview
+  const [tick, setTick] = useState(0);
+  useEffect(() => { const id = window.setInterval(() => setTick((n) => n + 1), 30_000); return () => window.clearInterval(id); }, []);
+  const q = (extra = '') => `${style === 'strip' ? 'style=strip&' : ''}${theme === 'light' ? 'theme=light&' : ''}${extra}`.replace(/&$/, '');
   const copyTimer = useRef<number | undefined>(undefined);
   useEffect(() => () => window.clearTimeout(copyTimer.current), []);
 
@@ -23,8 +31,8 @@ export default function CardsPage() {
       .finally(() => setLoaded(true));
   usePoll(load, 15_000);
 
-  const copy = async (s: Server, html = false) => {
-    const link = `${window.location.origin}/api/card/${s.id}.png`;
+  const copy = async (s: { id: number; name: string }, html = false) => {
+    const link = `${window.location.origin}/api/card/${s.id}.png${q() ? `?${q()}` : ''}`;
     const url = html ? `<img src="${link}" alt="${s.name.replace(/"/g, "&quot;")}" width="600">` : link;
     try {
       await navigator.clipboard.writeText(url);
@@ -69,10 +77,22 @@ export default function CardsPage() {
           <a className="btn mt-3" href="/admin/servers/new">Добавить сервер</a>
         </Empty>
       )}
+      {servers.length > 0 && (
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="seg" role="group" aria-label={t('cards.style')}>
+            <button type="button" className="seg-item" aria-pressed={style === 'split'} onClick={() => setStyle('split')}>{t('cards.split')}</button>
+            <button type="button" className="seg-item" aria-pressed={style === 'strip'} onClick={() => setStyle('strip')}>{t('cards.strip')}</button>
+          </div>
+          <div className="seg" role="group" aria-label={t('cards.theme')}>
+            <button type="button" className="seg-item" aria-pressed={theme === 'dark'} onClick={() => setTheme('dark')}>{t('cards.dark')}</button>
+            <button type="button" className="seg-item" aria-pressed={theme === 'light'} onClick={() => setTheme('light')}>{t('cards.light')}</button>
+          </div>
+        </div>
+      )}
       <div className="fade-in grid gap-5 lg:grid-cols-2">
         {servers.map((s) => (
           <div key={s.id} className="panel space-y-3 p-5">
-            <img src={`/api/card/${s.id}.png?v=${s.updatedAt ?? 0}&r=${forced}`} alt={`Карточка ${s.name}`} loading="lazy" className="w-full rounded-ui-lg bg-soft" />
+            <img src={`/api/card/${s.id}.png?${q(`v=${s.updatedAt ?? 0}&r=${forced}&a=${tick}`)}`} alt={`Карточка ${s.name}`} loading="lazy" className="w-full rounded-ui-lg bg-soft" />
             <div className="flex flex-wrap items-center justify-between gap-2">
               <span className="min-w-0 wrap-break-word font-black">{s.name}</span>
               <div className="flex flex-wrap gap-2">
@@ -85,13 +105,23 @@ export default function CardsPage() {
                   {copied === s.id ? 'Скопировано' : 'Копировать ссылку'}
                 </button>
                 <button className="btn btn-soft btn-sm" onClick={() => void copy(s, true)} title={t('cards.codeTip')}>{t('cards.code')}</button>
-                <a className="btn btn-soft btn-sm" href={`/api/card/${s.id}.png`} target="_blank" rel="noreferrer">Открыть</a>
-                <a className="btn btn-soft btn-sm" href={`/api/card/${s.id}.png`} download={`card-${s.id}.png`}>{t('cards.download')}</a>
+                <a className="btn btn-soft btn-sm" href={`/api/card/${s.id}.png${q() ? `?${q()}` : ''}`} target="_blank" rel="noreferrer">Открыть</a>
+                <a className="btn btn-soft btn-sm" href={`/api/card/${s.id}.png${q() ? `?${q()}` : ''}`} download={`card-${s.id}.png`}>{t('cards.download')}</a>
               </div>
             </div>
           </div>
         ))}
       </div>
+      {servers.length > 1 && (
+        <div className="panel space-y-3 p-5">
+          <h2 className="font-black">{t('cards.all')}</h2>
+          <p className="text-sm text-mute">{t('cards.allText')}</p>
+          <img src={`/api/card/all.png?${theme === 'light' ? 'theme=light&' : ''}r=${forced}&a=${tick}`} alt={t('cards.all')} loading="lazy" className="w-full max-w-3xl rounded-ui-lg bg-soft" />
+          <div className="flex flex-wrap gap-2">
+            <button className="btn btn-soft btn-sm" onClick={() => { const u = `${window.location.origin}/api/card/all.png${theme === 'light' ? '?theme=light' : ''}`; void navigator.clipboard?.writeText(u).then(() => toast(t('cards.linkCopied')), () => undefined); }}>{t('cards.copyLinkBtn')}</button>
+          </div>
+        </div>
+      )}
     </AdminPage>
   );
 }

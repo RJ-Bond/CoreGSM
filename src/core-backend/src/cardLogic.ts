@@ -40,3 +40,13 @@ export function stateBand(s: { known: boolean; online: boolean; since: number | 
   if (!s.known || s.online) return null;
   return { kind: 'offline', text: s.since ? `ОФЛАЙН · с ${clock(s.since, timeZone)}` : 'ОФЛАЙН' };
 }
+
+export interface CardOpts {
+  style: 'split' | 'strip';
+  theme: 'dark' | 'light';
+}
+
+/** the look of a card from the query (style=strip&theme=light); anything unknown means the default */
+export function parseCardOpts(q: { style?: unknown; theme?: unknown }): CardOpts {
+  return { style: q.style === 'strip' ? 'strip' : 'split', theme: q.theme === 'light' ? 'light' : 'dark' };
+}

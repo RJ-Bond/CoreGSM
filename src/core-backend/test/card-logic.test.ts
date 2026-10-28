@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { avatarColor, initialOf, stateBand, whoInGame } from '../src/cardLogic.ts';
+import { avatarColor, initialOf, parseCardOpts, stateBand, whoInGame } from '../src/cardLogic.ts';
 
 describe('card logic', () => {
   it('initials skip symbols and brackets', () => {
@@ -24,5 +24,13 @@ describe('card logic', () => {
     assert.deepEqual(stateBand({ known: true, online: false, since: t, maintenanceUntil: null }, 'UTC'), { kind: 'offline', text: 'ОФЛАЙН · с 11:20' });
     assert.equal(stateBand({ known: true, online: false, since: null, maintenanceUntil: null }, 'UTC')?.text, 'ОФЛАЙН');
     assert.equal(stateBand({ known: true, online: false, since: t, maintenanceUntil: t + 3_600_000 }, 'UTC')?.kind, 'maint');
+  });
+});
+
+describe('card look from the query', () => {
+  it('unknown values fall back to the default look', () => {
+    assert.deepEqual(parseCardOpts({}), { style: 'split', theme: 'dark' });
+    assert.deepEqual(parseCardOpts({ style: 'strip', theme: 'light' }), { style: 'strip', theme: 'light' });
+    assert.deepEqual(parseCardOpts({ style: 'x', theme: ['light'] }), { style: 'split', theme: 'dark' });
   });
 });
