@@ -16,6 +16,10 @@ interface language; the GitHub release text is built from the section of the ver
 
 ## Не выпущено | Unreleased
 
+### ✨ Новое | New
+- 👥 Список «Сейчас в игре» спокойнее: одна строка на игрока, эмблема ранга рядом с ником (название ранга появляется при наведении), время справа без рамок, тонкая шкала по нижнему краю строки, у лидеров мягкая подсветка; в плитках эмблема ранга значком на аватаре; красная рамка и «таблетка» ранга убраны | The «Playing now» list is calmer: one row per player, the rank emblem next to the nick (the rank name appears on hover), the time on the right without frames, a thin bar along the bottom edge of the row, a soft highlight for the leaders; in tiles the rank emblem is a badge on the avatar; the red frame and the rank pill are gone
+
+
 ## 1.0.0.77 · 28.10.2026
 
 ### ✨ Новое | New
