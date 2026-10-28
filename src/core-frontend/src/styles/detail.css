@@ -479,7 +479,7 @@ html[data-motion='reduce'] :is(.tab-slide-r, .tab-slide-l) { animation: none; }
 @media (max-width: 639px) { .srv-page { padding-bottom: 5.5rem; } }
 
 /* players: a rank colours the left edge of the row; session spread; empty state */
-.pl-row.has-rank, .has-rank { box-shadow: inset 3px 0 0 var(--rk); border-top-left-radius: 4px; border-bottom-left-radius: 4px; padding-left: 10px; }
+/* the rank is shown by its badge; the coloured stripe at the edge of the row is gone */
 .pl-spread { margin-bottom: 14px; padding: 10px 12px 8px; border-radius: var(--r-lg); background: rgb(var(--soft)); }
 .pl-spread-k { font-size: var(--fs-sm); font-weight: 700; color: rgb(var(--mute)); }
 .pl-spread-bars { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 6px; margin-top: 6px; }

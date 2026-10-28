@@ -9,7 +9,7 @@ import { api } from '../../api';
 import { AnimatedNumber, Burst, GameAvatar, ago, fmtDateTime, usePoll, num } from '../../ui';
 import '../../styles/community.css';
 
-export interface TopPlayer { name: string; hours: number; servers: number; online: boolean; prev: number | null }
+export interface TopPlayer { name: string; hours: number; servers: number; serverId?: number; online: boolean; prev: number | null }
 
 export interface Community {
   now: { players: number; online: number; servers: number };
