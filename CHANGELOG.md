@@ -19,6 +19,9 @@ interface language; the GitHub release text is built from the section of the ver
 ### ✨ Новое | New
 - 👥 Список «Сейчас в игре» спокойнее: одна строка на игрока, эмблема ранга рядом с ником (название ранга появляется при наведении), время справа без рамок, тонкая шкала по нижнему краю строки, у лидеров мягкая подсветка; в плитках эмблема ранга значком на аватаре; красная рамка и «таблетка» ранга убраны | The «Playing now» list is calmer: one row per player, the rank emblem next to the nick (the rank name appears on hover), the time on the right without frames, a thin bar along the bottom edge of the row, a soft highlight for the leaders; in tiles the rank emblem is a badge on the avatar; the red frame and the rank pill are gone
 
+### 🔧 Прочее | Other
+- 🌐 Интерфейс почти целиком переведён на английский: около 1900 текстов страниц и компонентов вынесены в словари (осталась демо-страница UiKit); попутно исправлен тур по панели в английском интерфейсе | The interface is almost fully translatable into English: about 1900 texts of pages and components moved into the dictionaries (only the UiKit demo page is left); the panel tour is also fixed in the English interface
+
 
 ## 1.0.0.77 · 28.10.2026
 

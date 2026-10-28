@@ -2,7 +2,6 @@ import { memo, useRef, useState, type ChangeEvent, type ClipboardEvent, type Key
 import type { NewsVariable } from '../../api';
 import { t, useI18n } from '../../i18n';
 import { searchEmoji } from './emoji';
-import { t, useI18n } from '../../i18n';
 
 const EMOJIS = ['📢', '📣', '🔔', '🎉', '🎊', '🎁', '🏆', '🥇', '⭐', '🌟', '✨', '🔥', '💥', '⚡', '🚀', '🆕', '✅', '❌', '⚠️', '❗', '❓', '🛠️', '🔧', '⚙️', '🧹', '🗑️', '📅', '🗓️', '⏰', '🕒', '⏳', '📍', '🌍', '🗺️', '🎮', '🕹️', '👑', '⚔️', '🛡️', '🏹', '💎', '💰', '🪙', '❤️', '💜', '💙', '💚', '👍', '👏', '🙌', '🤝', '💬', '📝', '📌', '🔗', '🖼️', '🎤', '🎧', '📈', '🟢', '🟡', '🔴', '🔵'];
 

@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { api, type CertInfo } from '../api';
 import { t, useI18n } from '../i18n';
+import StorageCard from '../components/StorageCard';
 import { Gauge, usageTone, type GaugeTone } from '../components/Gauge';
 import HealthHistoryCard, { type HealthFlag } from '../components/HealthHistoryCard';
 import ProbesSection from '../components/ProbesSection';

@@ -6,7 +6,6 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { api } from '../api';
 import { t, useI18n } from '../i18n';
 import { confirmDialog } from '../confirm';
-import { t, useI18n } from '../i18n';
 import { Button, ErrorLine, Field, IconCopy, IconRefresh, IconTrash, Modal, Section, ago, toast, SkeletonRows } from '../ui';
 
 interface Probe { id: number; name: string; createdAt: number; lastSeen: number | null; ip: string | null; version: string | null; alive: boolean; servers: number; online: number }

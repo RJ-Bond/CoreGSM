@@ -65,7 +65,7 @@ export default function PlayerPage({ name }: { name: string }) {
       .catch((e: Error) => (e instanceof ApiError && e.status === 404 ? setMissing(true) : setError(e.message)));
   }, [name]);
 
-  if (missing) return <Empty title={t('d2.pl.missing')} text={t('d2.pl.missingText', { name })}><a href="/community" className="btn mt-2">{t('d2.pl.toCommunity')}</a></Empty>;
+  if (missing) return <Empty art={<ArtPic src="empty/empty-players" size={132} />} title={t('d2.pl.missing')} text={t('d2.pl.missingText', { name })}><a href="/community" className="btn mt-2">{t('d2.pl.toCommunity')}</a></Empty>;
   if (error) return <ErrorLine text={error} />;
   if (!p) return <div className="space-y-4" aria-busy="true"><div className="tile skeleton h-44" /><div className="tile skeleton h-60" /></div>;
 
