@@ -144,31 +144,53 @@ async function renderCardNow(serverId: number): Promise<Buffer | null> {
   ctx.save();
   rr(ctx, 0, 0, W, H, 32);
   ctx.clip();
+  // layout «split»: the picture of the game on the left (it melts into the card), the figures on the right
   const bg = ctx.createLinearGradient(0, 0, 0, H);
   bg.addColorStop(0, C.bg2);
   bg.addColorStop(1, C.bg);
   ctx.fillStyle = bg;
   ctx.fillRect(0, 0, W, H);
+  const PW = 600;
   const file = coverFile(serverId);
   let cover: any = null;
   if (file) {
     try { cover = await loadImage(file); } catch { /* a broken file: no cover */ }
   }
+  // the picture lives on its own layer, so its right edge can fade to nothing (and show the card's own background)
+  const layer = new Canvas(PW, H);
+  const lg: any = layer.getContext('2d');
   if (cover) {
-    // the cover is blurred and a little larger than the card, so the text on top stays calm and the edges are not soft
-    const k = Math.max(W / cover.width, H / cover.height) * 1.08;
-    ctx.filter = 'blur(7px)';
-    ctx.drawImage(cover, (W - cover.width * k) / 2, (H - cover.height * k) / 2, cover.width * k, cover.height * k);
-    ctx.filter = 'none';
-    const veil = ctx.createLinearGradient(0, 0, W, 0);
-    veil.addColorStop(0, 'rgba(12, 10, 24, 0.95)');
-    veil.addColorStop(0.5, 'rgba(12, 10, 24, 0.84)');
-    veil.addColorStop(1, 'rgba(12, 10, 24, 0.62)');
-    ctx.fillStyle = veil;
-    ctx.fillRect(0, 0, W, H);
+    const k = Math.max(PW / cover.width, H / cover.height);
+    lg.drawImage(cover, (PW - cover.width * k) / 2, (H - cover.height * k) / 2, cover.width * k, cover.height * k);
+  } else {
+    const g0 = lg.createRadialGradient(220, 220, 0, 220, 220, 420);
+    g0.addColorStop(0, alpha(accent, 0.55));
+    g0.addColorStop(1, alpha(accent, 0));
+    lg.fillStyle = g0;
+    lg.fillRect(0, 0, PW, H);
+    const art0 = await gameImage(s.game);
+    if (art0) {
+      lg.globalAlpha = 0.4;
+      lg.drawImage(art0, 110, 90, 280, 280);
+      lg.globalAlpha = 1;
+    }
   }
-  const glow = ctx.createRadialGradient(W - 140, -40, 0, W - 140, -40, 560);
-  glow.addColorStop(0, alpha(accent, cover ? 0.28 : 0.4));
+  // the bottom is darker under the status and the address
+  const low = lg.createLinearGradient(0, H * 0.5, 0, H);
+  low.addColorStop(0, 'rgba(14, 12, 27, 0)');
+  low.addColorStop(1, 'rgba(14, 12, 27, 0.8)');
+  lg.fillStyle = low;
+  lg.fillRect(0, 0, PW, H);
+  // the right edge melts away
+  lg.globalCompositeOperation = 'destination-out';
+  const melt = lg.createLinearGradient(PW * 0.4, 0, PW, 0);
+  melt.addColorStop(0, 'rgba(0, 0, 0, 0)');
+  melt.addColorStop(1, 'rgba(0, 0, 0, 1)');
+  lg.fillStyle = melt;
+  lg.fillRect(0, 0, PW, H);
+  ctx.drawImage(layer, 0, 0);
+  const glow = ctx.createRadialGradient(W - 140, -40, 0, W - 140, -40, 520);
+  glow.addColorStop(0, alpha(accent, 0.22));
   glow.addColorStop(1, alpha(accent, 0));
   ctx.fillStyle = glow;
   ctx.fillRect(0, 0, W, H);
@@ -220,27 +242,31 @@ async function renderCardNow(serverId: number): Promise<Buffer | null> {
   const label = maint ? 'ОБСЛУЖИВАНИЕ' : !st ? 'ОЖИДАНИЕ' : !online ? 'OFFLINE' : laggy ? 'LAG' : 'ONLINE';
   ctx.font = `700 21px ${SANS}`;
   const pw = ctx.measureText(label).width + 60;
-  const px = W - 48 - pw;
+  const px = 48;
   ctx.fillStyle = alpha(status === C.mute ? '#9a95c4' : status, 0.16);
-  rr(ctx, px, 52, pw, 44, 22);
+  rr(ctx, px, 354, pw, 44, 22);
   ctx.fill();
   ctx.save();
   ctx.shadowColor = status;
   ctx.shadowBlur = 12;
   ctx.fillStyle = status;
   ctx.beginPath();
-  ctx.arc(px + 26, 74, 7, 0, Math.PI * 2);
+  ctx.arc(px + 26, 376, 7, 0, Math.PI * 2);
   ctx.fill();
   ctx.restore();
   ctx.fillStyle = status;
-  ctx.fillText(label, px + 42, 82);
+  ctx.fillText(label, px + 42, 384);
+  // the address, on the picture
+  ctx.fillStyle = C.ink;
+  ctx.font = `600 22px ${MONO}`;
+  ctx.fillText(fit(ctx, s.display_address || `${s.host}:${s.port}`, 470), 48, 436);
 
   // title: shrink the font first, then wrap onto two lines (ellipsis only if even that is not enough)
-  const titleX = 156;
+  const titleX = 520;
   // never put the internal query address on a public card: prefer the display address
   const address = s.display_address || `${s.host}:${s.port}`;
   const title = s.name || st?.name || address;
-  const maxTitleW = px - titleX - 24;
+  const maxTitleW = W - 48 - titleX;
   let titleSize = 44;
   ctx.fillStyle = C.ink;
   ctx.font = `800 ${titleSize}px ${SANS}`;
@@ -268,35 +294,35 @@ async function renderCardNow(serverId: number): Promise<Buffer | null> {
   ctx.fillStyle = C.mute;
   ctx.font = `700 21px ${SANS}`;
   const sub = [gameLabel(s.game), st?.version, online ? st?.map : null].filter(Boolean).join(' · ');
-  ctx.fillText(fit(ctx, sub, px - titleX - 24), titleX, subtitleY);
+  ctx.fillText(fit(ctx, sub, W - 48 - titleX), titleX, subtitleY);
 
   // players: the big number, the fill bar, who is in the game
   ctx.fillStyle = C.mute;
   ctx.font = `700 17px ${SANS}`;
-  ctx.fillText('ИГРОКИ', 48, 196);
+  ctx.fillText('ИГРОКИ', 520, 196);
   ctx.fillStyle = online ? C.ink : C.dim;
   ctx.font = `800 104px ${SANS}`;
   const big = online ? `${players}` : '–';
-  ctx.fillText(big, 44, 292);
+  ctx.fillText(big, 516, 292);
   const bigW = ctx.measureText(big).width;
   if (online && max) {
     ctx.fillStyle = C.mute;
     ctx.font = `700 40px ${SANS}`;
-    ctx.fillText(`/ ${max}`, 44 + bigW + 14, 292);
+    ctx.fillText(`/ ${max}`, 516 + bigW + 14, 292);
   }
-  const barW = 500;
+  const barW = W - 48 - 520;
   ctx.fillStyle = C.soft;
-  rr(ctx, 48, 314, barW, 14, 7);
+  rr(ctx, 520, 314, barW, 14, 7);
   ctx.fill();
   if (online && max > 0) {
-    const fill = ctx.createLinearGradient(48, 0, 48 + barW, 0);
+    const fill = ctx.createLinearGradient(520, 0, 520 + barW, 0);
     fill.addColorStop(0, accent);
     fill.addColorStop(1, alpha(accent, 0.7));
     ctx.save();
     ctx.shadowColor = alpha(accent, 0.6);
     ctx.shadowBlur = 14;
     ctx.fillStyle = fill;
-    rr(ctx, 48, 314, Math.max(14, barW * Math.min(1, players / max)), 14, 7);
+    rr(ctx, 520, 314, Math.max(14, barW * Math.min(1, players / max)), 14, 7);
     ctx.fill();
     ctx.restore();
   }
@@ -309,7 +335,7 @@ async function renderCardNow(serverId: number): Promise<Buffer | null> {
     const r = 15;
     const cy0 = 354;
     list.forEach((nick, i) => {
-      const x0 = 48 + i * slotW;
+      const x0 = 520 + i * slotW;
       ctx.fillStyle = avatarColor(nick);
       ctx.beginPath();
       ctx.arc(x0 + r, cy0, r, 0, Math.PI * 2);
@@ -324,7 +350,7 @@ async function renderCardNow(serverId: number): Promise<Buffer | null> {
       ctx.fillText(fit(ctx, nick, slotW - r * 2 - 18), x0 + r * 2 + 8, cy0 + 6);
     });
     if (more) {
-      const x0 = 48 + list.length * slotW;
+      const x0 = 520 + list.length * slotW;
       ctx.fillStyle = C.soft;
       ctx.beginPath();
       ctx.arc(x0 + r, cy0, r, 0, Math.PI * 2);
@@ -338,12 +364,12 @@ async function renderCardNow(serverId: number): Promise<Buffer | null> {
   } else if (!online && st) {
     ctx.fillStyle = C.mute;
     ctx.font = `700 18px ${SANS}`;
-    ctx.fillText('Сервер сейчас недоступен', 48, 362);
+    ctx.fillText('Сервер сейчас недоступен', 520, 362);
   }
 
   // the last 24 hours: players, outages in red, the 30-day record as a dashed line
-  const gx = 592, gy = 160, gw = W - 48 - gx, gh = 206;
-  ctx.fillStyle = cover ? 'rgba(14, 12, 27, 0.6)' : 'rgba(255, 255, 255, 0.045)';
+  const gx = 840, gy = 134, gw = W - 48 - gx, gh = 166;
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.045)';
   rr(ctx, gx, gy, gw, gh, 24);
   ctx.fill();
   ctx.strokeStyle = C.line;
@@ -378,11 +404,10 @@ async function renderCardNow(serverId: number): Promise<Buffer | null> {
     ctx.fillText(fit(ctx, v, w - 36), x + 18, 437);
   };
   const gap = 12;
-  const small = (W - 96 - 3 * gap - 380) / 3;
-  chip(48, 380, 'АДРЕС', address, C.ink, true);
-  chip(48 + 380 + gap, small, 'ПИНГ', online && st?.ping != null ? `${st.ping} мс` : '–', laggy ? C.warn : C.ink);
-  chip(48 + 380 + gap + (small + gap), small, 'РЕКОРД 30 ДН', record ? String(record) : '–', record && online && players >= record ? C.warn : C.ink);
-  chip(48 + 380 + gap + 2 * (small + gap), small, 'АПТАЙМ 24 Ч', uptime == null ? '–' : `${uptime}%`, uptime != null && uptime < 99 ? C.warn : C.ok);
+  const cwid = (W - 48 - 520 - 2 * gap) / 3;
+  chip(520, cwid, 'ПИНГ', online && st?.ping != null ? `${st.ping} мс` : '–', laggy ? C.warn : C.ink);
+  chip(520 + cwid + gap, cwid, 'РЕКОРД 30 ДН', record ? String(record) : '–', record && online && players >= record ? C.warn : C.ink);
+  chip(520 + 2 * (cwid + gap), cwid, 'АПТАЙМ 24 Ч', uptime == null ? '–' : `${uptime}%`, uptime != null && uptime < 99 ? C.warn : C.ok);
 
   // footer
   ctx.fillStyle = C.dim;
