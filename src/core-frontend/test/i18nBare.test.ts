@@ -37,20 +37,12 @@ function bareLines(src: string): number {
 
 // file (relative to src) -> allowed count of lines with bare Cyrillic. Can only shrink.
 const DEBT: Record<string, number> = {
-  'components/AccentPicker.tsx': 1,
   'components/CommandPalette.tsx': 1,
   'components/Illustrations.tsx': 6,
-  'components/news/DiscordMd.tsx': 2,
-  'components/news/ImageDrop.tsx': 3,
-  'components/server/EventsFeed.tsx': 1,
   'components/server/HistoryChart.tsx': 10,
   'components/server/PlayersList.tsx': 18,
-  'components/server/SubscribeMenu.tsx': 2,
-  'pages/Admin.tsx': 1,
   'pages/Cards.tsx': 9,
-  'pages/EmbedPreview.tsx': 1,
   'pages/UiKit.tsx': 138,
-  'ui/charts.tsx': 2,
 };
 
 describe('no bare Cyrillic in JSX outside t()', () => {

@@ -1,8 +1,8 @@
 import { useMemo, useState } from 'react';
 import type { ServerDetails } from '../../api';
 import { StateView } from '../StateView';
-import { t, useI18n } from '../../i18n';
-import { ago, plural } from '../../ui';
+import { t, useI18n, type TKey } from '../../i18n';
+import { ago } from '../../ui';
 import { fmtDuration } from './helpers';
 import { EVENT_FILTERS, eventCounts, filterEvents, groupByDay, type EventFilter } from './serverLogic';
 
@@ -23,14 +23,14 @@ const ICON: Record<Ev['type'], { cls: string; path: string }> = {
   maintenance: { cls: 'bg-soft text-link', path: 'M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z' },
 };
 
-const MARK_RU: Record<Ev['type'], string> = { up: 'возврат', down: 'сбой', peak: 'пик', maintenance: 'тех. работы' };
+const MARK_RU: Record<Ev['type'], TKey> = { up: 'd2.ef.m.up', down: 'd2.ef.m.down', peak: 'd2.ef.m.peak', maintenance: 'd2.ef.m.maint' };
 
 function title(e: Ev, downFor: number | null, stillDown: boolean): string {
-  if (e.type === 'up') return 'Сервер вернулся';
-  if (e.type === 'peak') return `Пик игроков: ${e.players ?? '–'}`;
-  if (e.type === 'maintenance') return e.name ? `Начались технические работы: ${e.name}` : 'Начались технические работы';
-  if (downFor != null) return `Сервер упал · был недоступен ${fmtDuration(downFor)}`;
-  return stillDown ? 'Сервер упал · недоступен до сих пор' : 'Сервер упал';
+  if (e.type === 'up') return t('d2.ef.up');
+  if (e.type === 'peak') return t('d2.ef.peak', { n: e.players ?? '–' });
+  if (e.type === 'maintenance') return e.name ? t('d2.ef.maintName', { name: e.name }) : t('d2.ef.maint');
+  if (downFor != null) return t('d2.ef.downFor', { v: fmtDuration(downFor) });
+  return stillDown ? t('d2.ef.stillDown') : t('d2.ef.down');
 }
 
 export default function EventsFeed({ events, online, limit, moreHref, uptimePct, windowLabel }: { events: Ev[]; online: boolean; limit?: number; moreHref?: string; uptimePct?: number | null; windowLabel?: string }) {
@@ -60,9 +60,9 @@ export default function EventsFeed({ events, online, limit, moreHref, uptimePct,
     <div>
       {!limit && events.length > 0 && (
         <div className="ev-sum">
-          <div className="ev-sum-c"><b>{outages}</b><span>{plural(outages, ['сбой', 'сбоя', 'сбоев'])}</span></div>
-          <div className="ev-sum-c"><b>{downTotal ? fmtDuration(downTotal) : '0'}</b><span>суммарный простой</span></div>
-          {uptimePct != null && <div className="ev-sum-c"><b>{Math.round(uptimePct * 10) / 10}%</b><span>доступность{windowLabel ? ` ${windowLabel}` : ''}</span></div>}
+          <div className="ev-sum-c"><b>{outages}</b><span>{t('d2.ef.outages', { n: outages })}</span></div>
+          <div className="ev-sum-c"><b>{downTotal ? fmtDuration(downTotal) : '0'}</b><span>{t('d2.ef.downTotal')}</span></div>
+          {uptimePct != null && <div className="ev-sum-c"><b>{Math.round(uptimePct * 10) / 10}%</b><span>{t('d2.ef.availability')}{windowLabel ? ` ${windowLabel}` : ''}</span></div>}
         </div>
       )}
       {!limit && (
@@ -97,7 +97,7 @@ export default function EventsFeed({ events, online, limit, moreHref, uptimePct,
                       </span>
                       <span className="min-w-0 flex-1">
                         <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-                          <span className={`ev-type ev-${e.type}`}>{MARK_RU[e.type]}</span>
+                          <span className={`ev-type ev-${e.type}`}>{t(MARK_RU[e.type])}</span>
                           <span className="block font-bold leading-snug">{title(e, downFor.get(e.ts) ?? null, !online && newestDown === e)}</span>
                         </span>
                         <time dateTime={new Date(e.ts).toISOString()} title={absTime(e.ts)} className="text-sm font-semibold text-mute">
@@ -114,7 +114,7 @@ export default function EventsFeed({ events, online, limit, moreHref, uptimePct,
       )}
       {limit && list.length > 0 && moreHref && (
         <a href={moreHref} className="mt-3 inline-flex min-h-[44px] items-center gap-1 text-sm font-extrabold text-link hover:underline md:min-h-0">
-          Все события →<span className="font-semibold text-mute">· {events.length} {plural(events.length, ['событие', 'события', 'событий'])}</span>
+          {t('d2.ef.all')}<span className="font-semibold text-mute">· {t('d2.ef.count', { n: events.length })}</span>
         </a>
       )}
     </div>

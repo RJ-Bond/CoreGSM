@@ -1,5 +1,5 @@
 import { createContext, Fragment, useContext, useState, type ReactNode } from 'react';
-import { t } from '../../i18n';
+import { t, t as tr } from '../../i18n';
 import { toast } from '../../ui';
 
 /**
@@ -113,7 +113,7 @@ function Spoiler({ children }: { children: ReactNode }) {
       data-spoiler
       role="button"
       tabIndex={0}
-      aria-label={open ? undefined : 'Спойлер: нажмите, чтобы показать'}
+      aria-label={open ? undefined : tr('d2.dm.spoiler')}
       onClick={(e) => { e.stopPropagation(); setOpen((v) => !v); }}
       onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); setOpen((v) => !v); } }}
       className="cursor-pointer rounded-sm px-0.5"
@@ -146,7 +146,7 @@ function TimeChip({ unix, style }: { unix: number; style: string }) {
 
 function ChannelChip({ id }: { id: string }) {
   const env = useContext(EnvCtx);
-  return <Chip kind="mention">#{env.channelName?.(id) ?? 'канал'}</Chip>;
+  return <Chip kind="mention">#{env.channelName?.(id) ?? t('d2.sd.channel')}</Chip>;
 }
 
 export function inlineMd(text: string, depth = 0): ReactNode[] {
@@ -162,8 +162,8 @@ export function inlineMd(text: string, depth = 0): ReactNode[] {
     const emo = /^<(a?):(\w+):(\d+)>$/.exec(part);
     if (emo) return <img key={k} src={`https://cdn.discordapp.com/emojis/${emo[3]}.${emo[1] ? 'gif' : 'png'}?size=48`} alt={`:${emo[2]}:`} title={`:${emo[2]}:`} className="inline-block h-[1.3em] w-[1.3em] align-text-bottom" />;
     if (part === '@everyone' || part === '@here') return <Chip key={k} kind="mention">{part}</Chip>;
-    if (part.startsWith('<@&')) return <Chip key={k} kind="mention">@роль</Chip>;
-    if (part.startsWith('<@')) return <Chip key={k} kind="mention">@участник</Chip>;
+    if (part.startsWith('<@&')) return <Chip key={k} kind="mention">@{t('d2.dm.role')}</Chip>;
+    if (part.startsWith('<@')) return <Chip key={k} kind="mention">@{t('d2.dm.member')}</Chip>;
     const ch = /^<#(\d+)>$/.exec(part);
     if (ch) return <ChannelChip key={k} id={ch[1]} />;
     if (depth < 3) {

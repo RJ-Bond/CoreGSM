@@ -1,7 +1,7 @@
 /** Small charts: the 24 h sparkline, smooth area paths and the fleet status bar. */
 import { useEffect, useId, useState } from 'react';
 import { getToken } from '../api';
-import { t } from '../i18n';
+import { t, useI18n } from '../i18n';
 
 /**
  * The 24 h curves of all servers come in one request (/api/servers/sparks) shared by every sparkline on the page:
@@ -74,12 +74,13 @@ export function smoothValues(vals: number[], r = 2): number[] {
 
 /** A small 24 h curve for table rows (no dot, no band, 24 px high); empty while there is no history. */
 export function MiniSpark({ serverId, color }: { serverId: number; color: string }) {
+  useI18n();
   const set = useSparkSet();
   const raw = set?.servers[serverId];
   const first = raw ? raw.players.findIndex((v) => v != null) : -1;
   const vals = raw && first >= 0 ? smoothValues(filled(raw.players.slice(first)), 1) : [];
   if (vals.length < 3) return <span className="text-mute" aria-hidden>–</span>;
-  return <div className="w-24"><SmoothArea values={vals} color={color} w={100} h={24} fill={0.18} strokeWidth={1.8} dot={false} className="h-6" label="График игроков за сутки" /></div>;
+  return <div className="w-24"><SmoothArea values={vals} color={color} w={100} h={24} fill={0.18} strokeWidth={1.8} dot={false} className="h-6" label={t('d2.ch.dayChart')} /></div>;
 }
 
 /** how many players more (or fewer) a server has than an hour ago, from the 24 h buckets; null while the history is too short */
@@ -107,7 +108,7 @@ export function useSparkSpanMin(serverId: number): number | null {
 
 /** «за 24 часа» / «за 3 ч» / «за 40 мин» for a span in minutes (null = the whole day while nothing is known) */
 export const spanCaption = (min: number | null): string =>
-  min == null || min >= 24 * 60 - 1 ? 'за 24 часа' : min >= 180 ? `за ${Math.round(min / 60)} ч` : `за ${Math.max(1, min)} мин`;
+  min == null || min >= 24 * 60 - 1 ? t('d2.sd.w24') : min >= 180 ? t('d2.ch.forH', { n: Math.round(min / 60) }) : t('d2.ch.forM', { n: Math.max(1, min) });
 
 /** empty buckets (no poll yet, or the panel was off) take the value before them */
 const filled = (vals: (number | null)[]): number[] => {
@@ -120,6 +121,7 @@ const filled = (vals: (number | null)[]): number[] => {
  * is shown only until the shared request answers.
  */
 export function Spark({ serverId, color, variant = 'tile' }: { serverId: number; color: string; variant?: 'tile' | 'hero' }) {
+  useI18n();
   const set = useSparkSet();
   const raw = set?.servers[serverId];
   const hero = variant === 'hero';
@@ -132,13 +134,13 @@ export function Spark({ serverId, color, variant = 'tile' }: { serverId: number;
   if (!raw || known < 2) {
     return (
       <div className={`${hero ? 'h-[130px] border-white/30 text-white/80' : 'h-10 border-line text-mute'} grid place-items-center rounded-2xl border border-dashed px-2 text-center text-xs font-bold`}>
-        История появится после нескольких опросов
+        {t('d2.ch.soon')}
       </div>
     );
   }
   const pts = smoothValues(filled(players), hero ? 2 : 1);
   const downs = downs24.filter(Boolean).length;
-  const label = `Игроков за 24 часа: от ${Math.min(...pts)} до ${Math.max(...pts)}${downs ? `; сервер был недоступен` : ''}`;
+  const label = `${t('d2.ch.range', { a: Math.min(...pts), b: Math.max(...pts) })}${downs ? `; ${t('d2.ch.wasDown')}` : ''}`;
   const top = Math.max(...pts);
   const spanMin = Math.round(((raw.players.length - first) * 24 * 60) / raw.players.length);
   return hero
@@ -146,7 +148,7 @@ export function Spark({ serverId, color, variant = 'tile' }: { serverId: number;
       <div className="relative">
         <SmoothArea values={pts} down={downs24} color={color} w={560} h={130} grid fill={0.3} strokeWidth={2} className="h-[130px]" label={label} />
         {/* the scale: the top of the day and the zero line (the curve starts at zero) */}
-        <span aria-hidden className="spark-axis" style={{ top: `${(1 - 1 / 1.12) * 100 + 1}%` }}>пик {Math.round(top)}</span>
+        <span aria-hidden className="spark-axis" style={{ top: `${(1 - 1 / 1.12) * 100 + 1}%` }}>{t('d2.ch.peak', { n: Math.round(top) })}</span>
         <span aria-hidden className="spark-axis" style={{ bottom: '3%' }}>0</span>
         <span aria-hidden className="spark-times"><span>{ageLabel(spanMin)}</span>{spanMin >= 60 && <span>{ageLabel(spanMin / 2)}</span>}<span>{t('spark.now')}</span></span>
       </div>
@@ -250,12 +252,13 @@ export function SmoothArea({
 
 // ---------- fleet status: one segmented bar for online / lag / offline ----------
 export function FleetBar({ online, lag, offline }: { online: number; lag: number; offline: number }) {
+  useI18n();
   const total = online + lag + offline;
   if (total === 0) return null;
   const seg = [
-    { n: online, cls: 'bg-ok', label: 'онлайн' },
-    { n: lag, cls: 'bg-warn', label: 'лагают' },
-    { n: offline, cls: 'bg-bad', label: 'недоступны' },
+    { n: online, cls: 'bg-ok', label: t('d2.ch.online') },
+    { n: lag, cls: 'bg-warn', label: t('d2.ch.lag') },
+    { n: offline, cls: 'bg-bad', label: t('d2.ch.offline') },
   ].filter((x) => x.n > 0);
   return (
     <div className="panel px-5 py-4">
