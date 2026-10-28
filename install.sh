@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="1980acec1a7f"
+COREGSM_BUILD="33a3a351250e"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.0.0.72"
+COREGSM_VERSION="1.0.0.73"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -113152,7 +113152,7 @@ export default function Passport({ d }: { d: PassportData }) {
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/server"
   cat > "$APP_DIR/core-frontend/src/components/server/PlayersList.tsx" << '__COREGSM_EOF__'
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import type { PlayerNow } from '../../api';
 import { StateView } from '../StateView';
 import NickPic from '../NickPic';
@@ -113273,7 +113273,12 @@ export default function PlayersList({
     window.setTimeout(() => setGone((g) => g.filter((x) => !left.includes(x))), 2600);
   }, [baseRows, limit, online]);
   const maxDur = useMemo(() => Math.max(1, ...baseRows.map((r) => (r.since != null ? now - r.since : 0))), [baseRows, now]);
-  const shown = limit ? rows.slice(0, limit) : rows;
+  const [pages, setPages] = useState(1);
+  const PAGE = 30;
+  const shown = limit ? rows.slice(0, limit) : rows.slice(0, PAGE * pages);
+  const FRESH_MS = 15 * 60_000;
+  // the groups «for a long time» / «just joined» only when both exist and the order is by time
+  const grouped = !limit && !query.trim() && sort === 'longest' && rows.length >= 4 && rows.some((p) => p.since != null && now - p.since < FRESH_MS) && rows.some((p) => p.since != null && now - p.since >= FRESH_MS);
   const showSearch = !limit && total > 5;
   const hasTimes = list.length > 0;
 
@@ -113377,9 +113382,13 @@ export default function PlayersList({
         </ul>
       ) : (
         <ul className="divide-y divide-line">
-          {shown.map((p) => {
+          {shown.map((p, idx) => {
             const dur = p.since != null ? now - p.since : null;
             const rank = rankById(p.rankId);
+            const isFresh = dur != null && dur < FRESH_MS;
+            const prevFresh = idx > 0 && shown[idx - 1].since != null && now - (shown[idx - 1].since as number) < FRESH_MS;
+            const heading = grouped && (idx === 0 || prevFresh !== isFresh) ? (isFresh ? 'Только зашли' : 'Давно в игре') : null;
+            const top = !limit && sort === 'longest' && !query.trim() && total >= 4 && idx < 3 && dur != null && !isFresh;
             const expandable = !limit;
             const isOpen = expandable && open === p.key;
             const inner = (
@@ -113388,14 +113397,14 @@ export default function PlayersList({
                 <span className="min-w-0 flex-1">
                   <span className="flex min-w-0 items-center gap-1.5">
                     <span className="truncate font-bold" title={p.name}>{p.name}</span>
+                    {dur != null && dur < NEWBIE_MS && <span className="pill pill-ok px-2! py-0! text-xs">новичок</span>}
                     {expandable && (known.get(p.name.toLowerCase()) ?? 0) > 0 && <span className="pl-place-chip" title="Место в рейтинге недели">#{known.get(p.name.toLowerCase())}</span>}
                   </span>
                   {(dur != null || rank) && (
                     <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
                       {expandable && p.since != null && <span className="text-xs font-semibold text-mute">{t('srv.pl.joined', { time: joinedAt(p.since, now) })}</span>}
-                      {dur != null && dur < NEWBIE_MS && <span className="pill pill-ok px-2! py-0! text-xs">новичок</span>}
                       {rank && (
-                        <span className="inline-flex items-center gap-1 text-xs font-extrabold text-mute" title={t('vr.rank.tip', { name: rankName(rank), hours: rank.minHours })}>
+                        <span className="pl-rank inline-flex items-center gap-1 text-xs font-extrabold text-mute" title={t('vr.rank.tip', { name: rankName(rank), hours: rank.minHours })}>
                           <RankEmblem rank={rank} size={26} />
                           {rankName(rank)}
                         </span>
@@ -113403,10 +113412,10 @@ export default function PlayersList({
                       {!rank && dur != null && dur >= VETERAN_MS && <span className="pill pill-warn px-2! py-0! text-xs">ветеран</span>}
                     </span>
                   )}
-                  {expandable && dur != null && <i className="pl-bar" aria-hidden><u style={{ width: `${Math.max(4, Math.round((dur / maxDur) * 100))}%` }} /></i>}
                 </span>
-                <span className="shrink-0 text-right text-sm font-semibold text-mute">
+                <span className="pl-time shrink-0 text-right text-sm font-semibold text-mute">
                   {p.since != null ? playedFor(p.since, now) : expandable ? 'в сети сейчас' : ''}
+                  {expandable && dur != null && <i className="pl-bar" aria-hidden><u style={{ width: `${Math.max(4, Math.round((dur / maxDur) * 100))}%` }} /></i>}
                 </span>
                 {expandable && (
                   <svg className="pl-chev" data-open={isOpen} width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
@@ -113416,7 +113425,9 @@ export default function PlayersList({
               </>
             );
             return (
-              <li key={p.key} className={`min-w-0 ${fresh.has(p.name) ? 'player-new' : ''}`}>
+              <Fragment key={p.key}>
+              {heading && <li className="pl-group" aria-hidden>{heading}</li>}
+              <li className={`min-w-0 ${top ? 'pl-top' : ''} ${fresh.has(p.name) ? 'player-new' : ''}`}>
                 {expandable ? (
                   <NickButton name={p.name} className={`pl-row ${rank ? 'has-rank' : ''}`} style={rank ? { ['--rk' as string]: rank.color } : undefined} expanded={isOpen} onClick={() => setOpen(isOpen ? null : p.key)}>{inner}</NickButton>
                 ) : (
@@ -113454,6 +113465,7 @@ export default function PlayersList({
                   </dl>
                 )}
               </li>
+              </Fragment>
             );
           })}
           {gone.filter((g) => !query.trim() || g.name.toLowerCase().includes(query.trim().toLowerCase())).map((g) => (
@@ -113466,6 +113478,9 @@ export default function PlayersList({
             </li>
           ))}
         </ul>
+      )}
+      {!limit && shown.length < rows.length && (
+        <button type="button" className="btn btn-soft btn-sm mt-3" onClick={() => setPages((n) => n + 1)}>Показать ещё {Math.min(PAGE, rows.length - shown.length)} из {rows.length - shown.length}</button>
       )}
       {hiddenCount > 0 && limit && (total > limit || hiddenCount > 0) && moreHref && (
         <a href={moreHref} className="mt-3 inline-flex min-h-[44px] items-center gap-1 text-sm font-extrabold text-link hover:underline md:min-h-0">
@@ -138725,6 +138740,15 @@ html[data-motion='reduce'] :is(.srv-record, .srv-swipe-hint, .srv-slots-bar > i.
   .srv-shell .srv-tabbar { margin-inline: 0; padding-inline: 0; }
   .srv-shell .srv-tabbar.is-stuck { background: linear-gradient(rgb(var(--page) / .94) 65%, transparent); box-shadow: none; -webkit-backdrop-filter: none; backdrop-filter: none; }
 }
+
+/* the players list: the rank as a ring round the avatar and a coloured name, the time with its bar in one column, the leaders, the groups */
+.pl-row.has-rank > :first-child, div.has-rank > :first-child { box-shadow: 0 0 0 2px rgb(var(--card)), 0 0 0 3.5px var(--rk); }
+.has-rank .pl-rank { color: color-mix(in srgb, var(--rk) 62%, rgb(var(--ink))); }
+.pl-time { display: grid; justify-items: end; gap: 5px; min-width: 4.75rem; }
+.pl-time .pl-bar { width: 4.75rem; margin-top: 0; }
+.pl-top { background: linear-gradient(90deg, rgb(var(--brand) / .09), transparent 70%); border-radius: var(--r-md); }
+.pl-group { padding: 12px 4px 4px; font-size: var(--fs-xs); font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: rgb(var(--mute)); }
+ul > .pl-group:first-child { padding-top: 2px; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/gallery.css" << '__COREGSM_EOF__'
