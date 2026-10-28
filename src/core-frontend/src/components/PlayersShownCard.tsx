@@ -30,7 +30,7 @@ export default function PlayersShownCard() {
     setBusy(true);
     try {
       await api('/settings/embed', 'PUT', { playersShown: n });
-      toast('Сохранено. Сообщения обновятся при следующем опросе');
+      toast(t('d2.psc.t.saved'));
     } catch (e) {
       setValue(prev);
       fail(e);
@@ -45,7 +45,7 @@ export default function PlayersShownCard() {
       const r = await api<{ chart: boolean; iconTile: boolean }>('/settings/embed', 'PUT', patch);
       setChart(r.chart);
       setTile(r.iconTile);
-      toast('Сохранено. Сообщения обновятся при следующем опросе');
+      toast(t('d2.psc.t.saved'));
     } catch (e) {
       fail(e);
     } finally {
@@ -56,10 +56,10 @@ export default function PlayersShownCard() {
   const options = OPTIONS.includes(value) ? OPTIONS : [...OPTIONS, value].sort((a, b) => a - b);
 
   return (
-    <Section title="Ники в сообщении" description="Сколько игроков перечислять в сообщении Discord. Остальные доступны по кнопке «Все игроки на сайте» и ссылке под списком. Первыми идут те, кто в игре дольше всех.">
-      <label htmlFor="players-shown" className="label">Показывать ников</label>
+    <Section title={t('d2.psc.title')} description={t('d2.psc.desc')}>
+      <label htmlFor="players-shown" className="label">{t('d2.psc.show')}</label>
       <select id="players-shown" className="input max-w-[16rem]" value={value} disabled={busy} onChange={(e) => void change(Number(e.target.value))}>
-        {options.map((n) => <option key={n} value={n}>{n === 0 ? '0: только счётчик' : String(n)}</option>)}
+        {options.map((n) => <option key={n} value={n}>{n === 0 ? t('d2.psc.counterOnly') : String(n)}</option>)}
       </select>
       <label className="mt-4 flex cursor-pointer items-start gap-3">
         <Switch className="mt-0.5" checked={chart} disabled={busy} onChange={(on) => void flag({ chart: on })} />
