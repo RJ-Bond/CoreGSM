@@ -1,5 +1,6 @@
 import { Component, useCallback, useEffect, useRef, useState, type CSSProperties, type ErrorInfo, type ReactNode } from 'react';
 import { IconChevronDown } from '../../icons';
+import { t, useI18n, type TKey } from '../../i18n';
 
 /**
  * Long server pages: sections that fold, a mini table of contents (chips) that scrolls inside the page, and a memory of
@@ -36,7 +37,7 @@ function writeStore(v: Record<string, boolean>) {
 
 export interface SectionDef {
   id: string;
-  label: string;
+  label: TKey;
   /** folded by default on phones */
   secondary?: boolean;
 }
@@ -54,9 +55,9 @@ export class BlockBoundary extends Component<{ children: ReactNode; label?: stri
     if (!this.state.error) return <div key={this.state.n} className="contents">{this.props.children}</div>;
     return (
       <div className="srv-block-err" role="alert">
-        <p className="font-extrabold">Не удалось показать этот блок</p>
-        <p className="text-sm font-semibold text-mute">Остальная страница работает как обычно.</p>
-        <button type="button" className="btn btn-soft btn-sm" onClick={() => this.setState((s) => ({ error: null, n: s.n + 1 }))}>Повторить</button>
+        <p className="font-extrabold">{t('d2.sec.failed')}</p>
+        <p className="text-sm font-semibold text-mute">{t('d2.sec.rest')}</p>
+        <button type="button" className="btn btn-soft btn-sm" onClick={() => this.setState((s) => ({ error: null, n: s.n + 1 }))}>{t('common.retry')}</button>
       </div>
     );
   }
@@ -139,6 +140,7 @@ export function goToSection(state: SectionState, id: string) {
 
 /** the chips: one per section; the one being read is marked */
 export function SectionChips({ defs, state }: { defs: SectionDef[]; state: SectionState }) {
+  useI18n();
   const [current, setCurrent] = useState(defs[0]?.id ?? '');
   useEffect(() => {
     let raf = 0;
@@ -166,7 +168,7 @@ export function SectionChips({ defs, state }: { defs: SectionDef[]; state: Secti
 
   if (defs.length < 2) return null;
   return (
-    <nav className="srv-chips no-scrollbar" aria-label="Блоки страницы">
+    <nav className="srv-chips no-scrollbar" aria-label={t('d2.sec.blocks')}>
       {defs.map((d) => (
         <button
           key={d.id}
@@ -176,7 +178,7 @@ export function SectionChips({ defs, state }: { defs: SectionDef[]; state: Secti
           data-closed={state.collapsed(d.id) ? 'true' : undefined}
           onClick={() => goToSection(state, d.id)}
         >
-          {d.label}
+          {t(d.label)}
         </button>
       ))}
     </nav>

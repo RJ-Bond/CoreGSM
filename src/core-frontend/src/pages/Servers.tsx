@@ -4,8 +4,8 @@ import { useAuth } from '../auth';
 import { gameColor, gameGradient, gameLabel } from '../games';
 import { coverBackground, emblemStyle, gameBackdrop, coverUrlOf } from '../cover';
 import MaintenanceChip from '../components/MaintenanceChip';
-import { AnimatedNumber, Burst, ErrorLine, GameAvatar, LoadError, IconServers, PageHead, Spark, StatusPill, ago, isLag, plural, spanCaption, useSparkSpanMin, usePoll, navigate, routeQuery } from '../ui';
-import { t, useI18n } from '../i18n';
+import { AnimatedNumber, Burst, ErrorLine, GameAvatar, LoadError, IconServers, PageHead, Spark, StatusPill, ago, isLag, spanCaption, useSparkSpanMin, usePoll, navigate, routeQuery } from '../ui';
+import { t, useI18n, type TKey } from '../i18n';
 import { calmSeriesColor, useCoverAccent } from '../components/server/coverAccent';
 import { pingTone, TONE_TEXT } from '../components/server/helpers';
 import { AddrCopy, CapacityBar, CountReact, ListSkeleton, NoFavsState, NoMatchState, NoServersState, PingBars, PlayerNames, StatusFlash, TilesSkeleton, TrendChip, durText, reactionOf, useServerReactions, type Reactions } from '../components/servers/serverUi';
@@ -105,20 +105,21 @@ function ScrollTop() {
 
 function greeting(name: string): string {
   const h = new Date().getHours();
-  const hello = h >= 5 && h < 12 ? 'Доброе утро' : h >= 12 && h < 18 ? 'Добрый день' : h >= 18 && h < 23 ? 'Добрый вечер' : 'Доброй ночи';
+  const hello = h >= 5 && h < 12 ? t('d2.srv.morning') : h >= 12 && h < 18 ? t('d2.srv.afternoon') : h >= 18 && h < 23 ? t('d2.srv.evening') : t('d2.srv.night');
   return `${hello}, ${name.trim() || name}`;
 }
 
 /** `className` colours the star; `glass` is the variant for covers (white star on a translucent disc) */
 function FavButton({ on, name, onClick, className = '', glass = false }: { on: boolean; name: string; onClick: () => void; className?: string; glass?: boolean }) {
+  useI18n();
   // the star pops (scale, tilt and a few sparks) only after the user's own click, not when the list loads
   const [pops, setPops] = useState(0);
   return (
     <button
       onClick={(e) => { e.stopPropagation(); if (!on) setPops((n) => n + 1); onClick(); }}
       className={`${glass ? 'btn-icon-glass btn-icon-sm' : 'btn-icon-ghost btn-icon-sm'} ${on ? '' : 'star-quiet'}`}
-      title={on ? 'Убрать из избранного' : 'В избранное'}
-      aria-label={`В избранное: ${name}`}
+      title={on ? t('d2.srv.favRemove') : t('d2.srv.fav')}
+      aria-label={t('d2.srv.favName', { name })}
       aria-pressed={on}
     >
       <span className={`star-wrap text-xl leading-none ${className}`}>
@@ -137,6 +138,7 @@ const stagger = (i: number): CSSProperties => ({ ['--i' as string]: i });
 
 /** a small "live" indicator: pulsing dot and how fresh the data is */
 function LiveBadge({ at, onRefresh, busy }: { at: number; onRefresh: () => void; busy: boolean }) {
+  useI18n();
   const [, tick] = useState(0);
   useEffect(() => {
     const t = window.setInterval(() => tick((n) => n + 1), 5000);
@@ -144,9 +146,9 @@ function LiveBadge({ at, onRefresh, busy }: { at: number; onRefresh: () => void;
   }, []);
   if (!at) return null;
   return (
-    <button type="button" className="srv-live" title="Страница обновляется сама. Нажмите, чтобы обновить сейчас" onClick={onRefresh} aria-busy={busy || undefined}>
+    <button type="button" className="srv-live" title={t('d2.srv.liveTitle')} onClick={onRefresh} aria-busy={busy || undefined}>
       <span className="live-dot" aria-hidden />
-      {busy ? 'обновляю…' : `обновлено ${ago(at)}`}
+      {busy ? t('d2.srv.refreshing') : t('d2.srv.updated', { ago: ago(at) })}
     </button>
   );
 }
@@ -166,6 +168,7 @@ function useIsPhone(): boolean {
 }
 
 function ServerList() {
+  useI18n();
   const phone = useIsPhone();
   const { me, isAdmin } = useAuth();
   const [favs, setFavs] = useState<number[]>([]);
@@ -312,13 +315,13 @@ function ServerList() {
   return (
     <div className="space-y-5">
       <PageHead
-        title="Серверы"
+        title={t('nav.servers')}
         subtitle={me ? `${greeting(me.username)}. ${liveLine}` : liveLine}
         icon={<IconServers />}
       >
         <span className="srv-head-actions">
           <LiveBadge at={updatedAt} onRefresh={() => void refreshNow()} busy={refreshing} />
-          {isAdmin && <a className="btn btn-soft btn-sm" href="/admin/servers" data-magnetic>Управление серверами</a>}
+          {isAdmin && <a className="btn btn-soft btn-sm" href="/admin/servers" data-magnetic>{t('d2.srv.manage')}</a>}
         </span>
       </PageHead>
 
@@ -330,12 +333,12 @@ function ServerList() {
       {servers.length > 0 && (
         <div className="srv-bar" id="srv-list">
           {servers.length > 1 ? (
-            <nav className="seg fade-x no-scrollbar flex w-fit max-w-full overflow-x-auto" aria-label="Фильтр серверов">
+            <nav className="seg fade-x no-scrollbar flex w-fit max-w-full overflow-x-auto" aria-label={t('d2.srv.filter')}>
               {([
-                ['all', `Все · ${servers.length}`, servers.length],
-                ['online', `Онлайн · ${online.length}`, online.length],
-                ['offline', `Недоступные · ${offlineCount}`, offlineCount],
-                ...(me ? [['fav', `Избранные · ${favCount}`, favCount]] : []),
+                ['all', `${t('d2.srv.f.all')} · ${servers.length}`, servers.length],
+                ['online', `${t('d2.srv.f.online')} · ${online.length}`, online.length],
+                ['offline', `${t('d2.srv.f.offline')} · ${offlineCount}`, offlineCount],
+                ...(me ? [['fav', `${t('d2.srv.f.fav')} · ${favCount}`, favCount]] : []),
               ] as [Filter, string, number][]).filter(([id, , count]) => id !== 'offline' || count > 0 || effFilter === id).map(([id, label, count]) => (
                 // an empty filter stays reachable but is dimmed, so the eye goes to the ones that have servers
                 <button key={id} type="button" className={`seg-item whitespace-nowrap${count === 0 && effFilter !== id ? ' opacity-70' : ''}`} aria-pressed={effFilter === id} onClick={() => setFilter(id)}>{label}</button>
@@ -344,21 +347,21 @@ function ServerList() {
           ) : <span />}
           <div className="srv-bar-tools flex items-center gap-2.5">
             {canSelect && (
-              <button type="button" className="btn btn-ghost btn-sm" aria-pressed={selOn} onClick={() => (selOn ? exitSelect() : setSelecting(true))} title="Выбрать несколько серверов для массовых действий">
-                {selOn ? 'Отменить выбор' : 'Выбрать'}
+              <button type="button" className="btn btn-ghost btn-sm" aria-pressed={selOn} onClick={() => (selOn ? exitSelect() : setSelecting(true))} title={t('d2.srv.selectTitle')}>
+                {selOn ? t('d2.srv.cancelSelect') : t('d2.srv.select')}
               </button>
             )}
             {effView === 'tiles' && (
-              <div className="seg max-sm:hidden" role="group" aria-label="Размер плиток">
-                {([['s', 'S', 'Компактные'], ['m', 'M', 'Обычные'], ['l', 'L', 'Крупные']] as const).map(([id, mark, label]) => (
-                  <button key={id} type="button" className="seg-item" aria-pressed={size === id} title={label} aria-label={label} onClick={() => setSize(id)}>{mark}</button>
+              <div className="seg max-sm:hidden" role="group" aria-label={t('d2.srv.tileSize')}>
+                {([['s', 'S', 'd2.srv.sz.s'], ['m', 'M', 'd2.srv.sz.m'], ['l', 'L', 'd2.srv.sz.l']] as const).map(([id, mark, label]) => (
+                  <button key={id} type="button" className="seg-item" aria-pressed={size === id} title={t(label)} aria-label={t(label)} onClick={() => setSize(id)}>{mark}</button>
                 ))}
               </div>
             )}
-            <div className="seg" role="group" aria-label="Вид списка">
-              {([['tiles', 'Плитки'], ['list', 'Список'], ['chart', 'График']] as [ServersView, string][]).map(([id, label]) => (
-                <button key={id} type="button" className="seg-item srv-view-btn" aria-pressed={effView === id} title={label} onClick={() => setView(id)}>
-                  <ViewIcon id={id} /><span className="max-sm:sr-only">{label}</span>
+            <div className="seg" role="group" aria-label={t('d2.news.viewLabel')}>
+              {([['tiles', 'd2.srv.v.tiles'], ['list', 'd2.news.viewList'], ['chart', 'd2.srv.v.chart']] as [ServersView, TKey][]).map(([id, label]) => (
+                <button key={id} type="button" className="seg-item srv-view-btn" aria-pressed={effView === id} title={t(label)} onClick={() => setView(id)}>
+                  <ViewIcon id={id} /><span className="max-sm:sr-only">{t(label)}</span>
                 </button>
               ))}
             </div>
@@ -416,7 +419,7 @@ function ServerList() {
       )}
 
       <ScrollTop />
-      {pull > 0 && <div className="srv-pull" style={{ height: pull }} aria-hidden>{pull >= PULL_AT ? 'Отпустите, чтобы обновить' : 'Потяните вниз'}</div>}
+      {pull > 0 && <div className="srv-pull" style={{ height: pull }} aria-hidden>{pull >= PULL_AT ? t('d2.srv.pullRelease') : t('d2.srv.pull')}</div>}
 
       {selOn && (
         <BulkBar
@@ -436,6 +439,7 @@ function ServerList() {
 
 /** the checkbox of the selection mode in a corner of a card */
 function CardCheck({ s, select, className = '' }: { s: Server; select: SelectProps; className?: string }) {
+  useI18n();
   return (
     <input
       type="checkbox"
@@ -443,7 +447,7 @@ function CardCheck({ s, select, className = '' }: { s: Server; select: SelectPro
       checked={select.has(s.id)}
       onChange={() => select.toggle(s.id)}
       onClick={(e) => e.stopPropagation()}
-      aria-label={`Выбрать: ${s.name}`}
+      aria-label={t('d2.news.pickOne', { title: s.name })}
     />
   );
 }
@@ -498,11 +502,11 @@ function HeroTile({ s, idx, uptime, downSince, fav, onFav, onOpen, rx, reason, s
           <>
             <div className="h3-count flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
               <CountReact r={r} onDark><AnimatedNumber value={s.players} className="text-[72px] font-extrabold leading-none tracking-[-0.05em] sm:text-[88px]" /></CountReact>
-              <span className="text-lg font-bold text-white/85">/ {s.maxPlayers} {plural(s.maxPlayers, ['игрок', 'игрока', 'игроков'])}</span>
+              <span className="text-lg font-bold text-white/85">/ {t('d2.srv.nPlayers', { n: s.maxPlayers })}</span>
             </div>
             <div className="h3-sub flex flex-wrap items-center gap-x-4 gap-y-1">
               <TrendChip serverId={s.id} onDark />
-              {s.ping != null && <span className="inline-flex items-center gap-1.5 font-bold text-white/90"><PingBars ping={s.ping} tone={pingTone(s.ping).tone} />пинг {s.ping} мс</span>}
+              {s.ping != null && <span className="inline-flex items-center gap-1.5 font-bold text-white/90"><PingBars ping={s.ping} tone={pingTone(s.ping).tone} />{t('d2.srv.ping', { ms: s.ping })}</span>}
             </div>
             <CapacityBar className="h3-bar" players={s.players} max={s.maxPlayers} color="#fff" onDark />
             <PlayerNames names={s.playerNames ?? []} max={4} onDark />
@@ -512,21 +516,21 @@ function HeroTile({ s, idx, uptime, downSince, fav, onFav, onOpen, rx, reason, s
           <div className="h3-down rounded-2xl bg-white/10 px-4 py-3" title={s.error ?? undefined}>
             {s.hasStatus ? (
               <>
-                <p className="line-clamp-3 text-base font-extrabold leading-snug">{s.error ?? 'Сервер не отвечает'}</p>
-                <p className="mt-1 text-sm font-semibold text-white/80">{downSince ? t('srv.down.for', { d: durText(Date.now() - downSince) }) + ' · ' : ''}Последний ответ: {ago(s.updatedAt)}</p>
+                <p className="line-clamp-3 text-base font-extrabold leading-snug">{s.error ?? t('d2.srv.noReply')}</p>
+                <p className="mt-1 text-sm font-semibold text-white/80">{downSince ? t('srv.down.for', { d: durText(Date.now() - downSince) }) + ' · ' : ''}{t('d2.srv.lastReply', { ago: ago(s.updatedAt) })}</p>
               </>
             ) : (
-              <p className="text-base font-extrabold">Ожидаем первый ответ</p>
+              <p className="text-base font-extrabold">{t('d2.srv.waitFirst')}</p>
             )}
           </div>
         )}
 
         <div className="h3-foot flex flex-wrap items-center text-fs-sm font-bold text-white/80">
           <span className="h3-fact"><CardClock />{spanCaption(sparkSpan)}</span>
-          {uptime != null && <span className="h3-fact"><CardUptime />аптайм {(Math.round(uptime * 10) / 10).toLocaleString('ru-RU')}%</span>}
-          {s.online && s.map && <span className="h3-fact"><CardMap />карта {s.map}</span>}
+          {uptime != null && <span className="h3-fact"><CardUptime />{t('d2.srv.uptime', { v: (Math.round(uptime * 10) / 10).toLocaleString('ru-RU') })}</span>}
+          {s.online && s.map && <span className="h3-fact"><CardMap />{t('d2.srv.map', { map: s.map })}</span>}
           {s.version && <span className="h3-fact"><CardTag />v{s.version}</span>}
-          {!s.online && <span className="h3-fact"><CardRefresh />обновлено {ago(s.updatedAt)}</span>}
+          {!s.online && <span className="h3-fact"><CardRefresh />{t('d2.srv.updated', { ago: ago(s.updatedAt) })}</span>}
         </div>
       </div>
 
@@ -568,7 +572,7 @@ function PhoneRow({ s, idx, fav, onFav, onOpen, select }: { rx: Reactions; s: Se
         {s.online ? (
           <CapacityBar className="srv-row-bar" players={s.players} max={s.maxPlayers} color="rgb(var(--ink) / .5)" showPct={false} slots={false} />
         ) : (
-          <p className="truncate text-fs-sm font-semibold text-mute">{s.hasStatus ? `Не отвечает · ${ago(s.updatedAt)}` : 'Ожидаем первый ответ'}</p>
+          <p className="truncate text-fs-sm font-semibold text-mute">{s.hasStatus ? t('d2.srv.noReplyAgo', { ago: ago(s.updatedAt) }) : t('d2.srv.waitFirst')}</p>
         )}
       </div>
       <div className="srv-row-count">
@@ -581,6 +585,7 @@ function PhoneRow({ s, idx, fav, onFav, onOpen, select }: { rx: Reactions; s: Se
 }
 
 function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince }: { rx: Reactions; s: Server; idx: number; fav: boolean | null; onFav: () => void; onOpen: () => void; select?: SelectProps; uptime?: number; downSince?: number }) {
+  useI18n();
   const [who, setWho] = useState(false);
   const [c1, c2] = gameGradient(s.game);
   // the accent is taken from the cover picture, so two games of the same colour family still look different
@@ -611,7 +616,7 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince }
         <h3 className="srv-name truncate text-fs-lg font-extrabold leading-tight" title={s.name}>
           <a href={`/servers/${s.id}`} onClick={linkClick(s, select)} className="hover:text-link">{s.name}</a>
         </h3>
-        <div className="srv-chips">{nearFull && <span className="srv-badge-full" title={t('srv.cap.nearFull', { pct: Math.round((s.players / s.maxPlayers) * 100) })}>{t('srv.tile.full')}</span>}<span className="truncate">{gameLabel(s.game)}</span>{s.online && s.map && <span className="srv-chip" title={`Карта: ${s.map}`}><CardMap />{s.map}</span>}{s.version && <span className="srv-chip" title="Версия"><CardTag />v{s.version}</span>}</div>
+        <div className="srv-chips">{nearFull && <span className="srv-badge-full" title={t('srv.cap.nearFull', { pct: Math.round((s.players / s.maxPlayers) * 100) })}>{t('srv.tile.full')}</span>}<span className="truncate">{gameLabel(s.game)}</span>{s.online && s.map && <span className="srv-chip" title={t('d2.srv.mapTitle', { map: s.map })}><CardMap />{s.map}</span>}{s.version && <span className="srv-chip" title={t('d2.srv.version')}><CardTag />v{s.version}</span>}</div>
         {s.maintenance && <MaintenanceChip m={s.maintenance} className="mt-1" />}
       </div>
 
@@ -622,7 +627,7 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince }
             <span className="text-fs-xl font-bold text-mute">/ {s.maxPlayers}</span>
             <TrendChip serverId={s.id} />
             {(s.playerNames?.length ?? 0) > 0 && <button type="button" className="srv-who" aria-expanded={who} onClick={(e) => { e.stopPropagation(); setWho((v) => !v); }}>{t('srv.who')}</button>}
-            <span className={`ml-auto inline-flex items-center gap-1.5 text-fs-sm font-bold ${s.ping != null ? TONE_TEXT[pingTone(s.ping).tone] : 'text-mute'}`}>{s.ping != null && <><PingBars ping={s.ping} tone={pingTone(s.ping).tone} />{`${s.ping} мс`}</>}</span>
+            <span className={`ml-auto inline-flex items-center gap-1.5 text-fs-sm font-bold ${s.ping != null ? TONE_TEXT[pingTone(s.ping).tone] : 'text-mute'}`}>{s.ping != null && <><PingBars ping={s.ping} tone={pingTone(s.ping).tone} />{t('d2.bot.ms', { n: s.ping })}</>}</span>
           </div>
           <CapacityBar className="px-1.5" players={s.players} max={s.maxPlayers} color="rgb(var(--ink) / .5)" />
           {who && <PlayerNames className="px-1.5" names={s.playerNames ?? []} max={12} />}
@@ -634,17 +639,17 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince }
         s.hasStatus ? (
           <div className="mx-1.5 flex items-center gap-2 rounded-xl bg-badbg px-3 py-2" title={s.error ?? undefined}>
             <span className="h-2 w-2 shrink-0 rounded-full bg-bad" aria-hidden />
-            <p className="truncate text-fs-sm font-bold leading-snug text-bad">{downSince ? t('srv.down.for', { d: durText(Date.now() - downSince) }) : `Не отвечает · ${ago(s.updatedAt)}`}</p>
+            <p className="truncate text-fs-sm font-bold leading-snug text-bad">{downSince ? t('srv.down.for', { d: durText(Date.now() - downSince) }) : t('d2.srv.noReplyAgo', { ago: ago(s.updatedAt) })}</p>
           </div>
         ) : (
-          <div className="mx-1.5 rounded-xl bg-soft px-3 py-2.5 text-fs-sm font-bold text-mute">Ожидаем первый ответ</div>
+          <div className="mx-1.5 rounded-xl bg-soft px-3 py-2.5 text-fs-sm font-bold text-mute">{t('d2.srv.waitFirst')}</div>
         )
       )}
 
       <div className="mt-auto flex items-center justify-between gap-2 px-1.5 pt-1 text-xs font-bold text-mute">
         <AddrCopy address={s.address} className="truncate font-mono" />
         <span className="flex shrink-0 items-center gap-2">
-          {uptime != null && <span className="srv-up" title="Аптайм за 30 дней">{(Math.round(uptime * 10) / 10).toLocaleString('ru-RU')}%</span>}
+          {uptime != null && <span className="srv-up" title={t('d2.srv.uptime30')}>{(Math.round(uptime * 10) / 10).toLocaleString('ru-RU')}%</span>}
           {s.online ? (s.updatedAt != null && Date.now() - s.updatedAt > 120_000 ? ago(s.updatedAt) : '') : ago(s.updatedAt)}
         </span>
       </div>
