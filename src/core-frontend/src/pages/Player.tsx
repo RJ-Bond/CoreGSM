@@ -12,6 +12,7 @@ import { FollowButton } from '../components/profile/Follows';
 import { ReportButton } from '../components/profile/ReportButton';
 import { rankById } from '../vrisingRanks';
 import { Empty, ErrorLine, GameAvatar, ago, fmtDateTime, fmtTime, plural, num } from '../ui';
+import ArtPic from '../components/ArtPic';
 import '../styles/community.css';
 import '../styles/profile.css';
 
@@ -61,7 +62,7 @@ export default function PlayerPage({ name }: { name: string }) {
       .catch((e: Error) => (e instanceof ApiError && e.status === 404 ? setMissing(true) : setError(e.message)));
   }, [name]);
 
-  if (missing) return <Empty title="Такого игрока не видели" text={`Ник «${name}» не появлялся на серверах за последние 90 дней.`}><a href="/community" className="btn mt-2">К сообществу</a></Empty>;
+  if (missing) return <Empty art={<ArtPic src="empty/empty-players" size={132} />} title="Такого игрока не видели" text={`Ник «${name}» не появлялся на серверах за последние 90 дней.`}><a href="/community" className="btn mt-2">К сообществу</a></Empty>;
   if (error) return <ErrorLine text={error} />;
   if (!p) return <div className="space-y-4" aria-busy="true"><div className="tile skeleton h-44" /><div className="tile skeleton h-60" /></div>;
 

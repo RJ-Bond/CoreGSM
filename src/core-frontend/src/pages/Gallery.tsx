@@ -9,6 +9,7 @@ import { errorText } from '../apiErrors';
 import { useAuth } from '../auth';
 import { IMAGE_TYPES, useDropTarget } from '../components/profile/AvatarEditor';
 import { Button, Empty, ErrorLine, Field, Modal, PageHead, ago, toast, errText } from '../ui';
+import ArtPic from '../components/ArtPic';
 import '../styles/gallery.css';
 
 export interface Shot {
@@ -238,7 +239,7 @@ export default function GalleryPage() {
       {list === null ? (
         <div className="gl-grid" aria-busy="true">{[0, 1, 2, 3, 4, 5].map((i) => <div key={i} className="skeleton h-48 rounded-2xl" />)}</div>
       ) : list.length === 0 ? (
-        <Empty title="Скриншотов пока нет" text="Поделитесь красивым кадром из игры: он появится здесь после проверки.">{me ? <button type="button" className="btn mt-2" onClick={() => setUploading(true)}>Загрузить первый скриншот</button> : <a href="/login" className="btn btn-soft mt-2">Войти и загрузить</a>}</Empty>
+        <Empty art={<ArtPic src="empty/empty-gallery" size={132} />} title="Скриншотов пока нет" text="Поделитесь красивым кадром из игры: он появится здесь после проверки.">{me ? <button type="button" className="btn mt-2" onClick={() => setUploading(true)}>Загрузить первый скриншот</button> : <a href="/login" className="btn btn-soft mt-2">Войти и загрузить</a>}</Empty>
       ) : (
         <ShotGrid list={list} onOpen={(i) => setOpen({ list, i })} />
       )}

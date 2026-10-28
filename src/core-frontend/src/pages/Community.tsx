@@ -16,22 +16,12 @@ import '../styles/community.css';
 import '../styles/gallery.css';
 import PollsCard from '../components/PollsCard';
 import { communityNavIcon } from '../components/CommunityIcons';
+import ArtPic from '../components/ArtPic';
 import { Lightbox, type Shot } from './Gallery';
 
 const IconPeople = () => (
   <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
     <circle cx="9" cy="8" r="3.2" /><path d="M3 20c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5" /><circle cx="17" cy="9" r="2.4" /><path d="M16.5 14.6c2.6.2 4.5 2 4.5 4.9" />
-  </svg>
-);
-
-/** a small drawing for the empty blocks: a few people */
-const PeopleArt = () => (
-  <svg width="120" height="84" viewBox="0 0 120 84" fill="none" aria-hidden>
-    <circle cx="60" cy="26" r="13" fill="rgb(var(--brand) / .22)" stroke="rgb(var(--brand))" strokeWidth="2.5" />
-    <path d="M34 74c0-14 11.600-24 26-24s26 10 26 24" fill="rgb(var(--brand) / .12)" stroke="rgb(var(--brand))" strokeWidth="2.5" strokeLinecap="round" />
-    <circle cx="25" cy="36" r="8" stroke="rgb(var(--mute))" strokeWidth="2" opacity=".6" />
-    <circle cx="95" cy="36" r="8" stroke="rgb(var(--mute))" strokeWidth="2" opacity=".6" />
-    <path d="M10 70c0-8 6-13 15-13M110 70c0-8-6-13-15-13" stroke="rgb(var(--mute))" strokeWidth="2" strokeLinecap="round" opacity=".6" />
   </svg>
 );
 
@@ -281,6 +271,7 @@ function HotServer({ servers }: { servers: Community['servers'] }) {
   );
 }
 
+const PODIUM_ART = ['badges/champion-gold', 'badges/champion-silver', 'badges/b5-crown-bronze'] as const;
 const PERIODS = ['day', 'week', 'month', 'all'] as const;
 type Period = (typeof PERIODS)[number];
 
@@ -334,7 +325,7 @@ function TopBlock({ c, mine }: { c: Community; mine: string }) {
         <button type="submit" className="btn btn-soft" disabled={!q.trim()}>{t('cm.top.open')}</button>
       </form>
       {items.length === 0 ? (
-        <Empty art={<PeopleArt />} title={t('cm.top.quiet')} text={period === 'day' ? t('cm.top.quietDay') : t('cm.top.quietText')} />
+        <Empty art={<ArtPic src="empty/empty-players" size={132} />} title={t('cm.top.quiet')} text={period === 'day' ? t('cm.top.quietDay') : t('cm.top.quietText')} />
       ) : (
         <>
           {podium.length === 3 && (
@@ -343,7 +334,7 @@ function TopBlock({ c, mine }: { c: Community; mine: string }) {
                 const p = podium[i];
                 return (
                   <a key={p.name} href={playerHref(p.name)} className={`cm-pod is-${i + 1}`}>
-                    <span aria-hidden className="text-xl">{MEDALS[i]}</span>
+                    <ArtPic src={PODIUM_ART[i]} size={i === 0 ? 44 : 36} />
                     <PlayerAvatar name={p.name} size={i === 0 ? 52 : 42} online={p.online} />
                     <span className="max-w-full truncate font-extrabold">{p.name}</span>
                     <span className="text-sm font-extrabold tabular-nums text-mute">{t('cm.h', { n: num(p.hours) })}</span>
@@ -383,7 +374,7 @@ function FeedBlock({ c, filter, setFilter }: { c: Community; filter: FeedFilter;
           {([['all', t('cm.feed.all')], ['online', t('cm.feed.online')], ['new', t('cm.feed.new')]] as [FeedFilter, string][]).map(([id, label]) => <button key={id} type="button" className="seg-item" aria-pressed={filter === id} onClick={() => setFilter(id)}>{label}</button>)}
         </div>
       </div>
-      {c.feed.length === 0 ? <Empty art={<PeopleArt />} title={t('cm.feed.none')} text={t('cm.feed.noneText')} />
+      {c.feed.length === 0 ? <Empty art={<ArtPic src="empty/empty-players" size={132} />} title={t('cm.feed.none')} text={t('cm.feed.noneText')} />
         : list.length === 0 ? <p className="cm-sub">{filter === 'new' ? t('cm.feed.noNew') : t('cm.feed.noOnline')}</p>
         : groups.map(([label, items]) => (
           <div key={label} className="cm-feed-group">
@@ -407,7 +398,7 @@ function GalleryStrip() {
         <a href="/gallery" className="text-sm font-extrabold text-link hover:underline">{list?.length ? t('cm.gal.all') : t('cm.gal.upload')}</a>
       </div>
       {list === null ? <div className="skeleton h-48 rounded-2xl" />
-        : list.length === 0 ? <Empty art={<PeopleArt />} title={t('cm.gal.none')} text={t('cm.gal.noneText')}><a href="/gallery" className="btn">{t('cm.gal.uploadBtn')}</a></Empty>
+        : list.length === 0 ? <Empty art={<ArtPic src="empty/empty-gallery" size={132} />} title={t('cm.gal.none')} text={t('cm.gal.noneText')}><a href="/gallery" className="btn">{t('cm.gal.uploadBtn')}</a></Empty>
         : (
           <ul className={`cm-gal n${Math.min(list.length, 5)}`}>
             {list.slice(0, 5).map((s, i) => (
@@ -457,7 +448,7 @@ function ServersBlock({ servers }: { servers: Community['servers'] }) {
           {games.map((g) => <button key={g} type="button" className="cm-chip" aria-pressed={game === g} onClick={() => setGame(g)}><i style={{ background: gameColor(g) }} aria-hidden />{gameLabel(g)}</button>)}
         </div>
       )}
-      {list.length === 0 ? <Empty art={<PeopleArt />} title={t('cm.srv.none')} text={t('cm.srv.noneText')} /> : (
+      {list.length === 0 ? <Empty art={<ArtPic src="empty/empty-players" size={132} />} title={t('cm.srv.none')} text={t('cm.srv.noneText')} /> : (
         <ul className="grid grid-cols-[minmax(0,1fr)] gap-2.5">
           {list.map((s) => (
             <li key={s.id}>
