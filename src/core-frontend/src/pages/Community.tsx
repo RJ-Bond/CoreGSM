@@ -267,10 +267,10 @@ function HotServer({ servers }: { servers: Community['servers'] }) {
     <section className="tile cm-hot p-4 sm:p-5">
       <h2 className="mb-3 text-lg font-extrabold">{t('cm.hot')}</h2>
       {!hot ? <p className="cm-sub">{t('cm.hot.none')}</p> : (
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <GameAvatar game={hot.game} size={48} />
-          <div className="min-w-0 flex-1">
-            <a href={`/servers/${hot.id}`} className="block truncate text-lg font-extrabold hover:text-link">{hot.name}</a>
+          <div className="min-w-0 flex-1 basis-48">
+            <a href={`/servers/${hot.id}`} className="block break-words text-lg font-extrabold hover:text-link">{hot.name}</a>
             <div className="text-sm font-bold text-mute"><AnimatedNumber value={hot.players} />{hot.maxPlayers ? t('cm.hot.of', { max: hot.maxPlayers, pct: Math.round((hot.players / hot.maxPlayers) * 100) }) : ''} · {gameLabel(hot.game)}</div>
             {addr && <code className="mt-0.5 block truncate font-mono text-xs font-semibold text-mute">{addr}</code>}
           </div>
