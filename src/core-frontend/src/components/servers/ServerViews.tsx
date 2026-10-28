@@ -139,7 +139,7 @@ function ListRow({ s, uptime, onOpen, rx, favButton, select }: RowProps) {
   );
 }
 
-const COLS = [['name', 'srv-td-name', 'nav.servers'], ['players', 'srv-td-pl', 'd2.an.players'], ['ping', 'srv-td-ping', 'd2.sd.ping'], ['up', 'srv-td-up', 'd2.sv.up']] as [ListSort['key'], string, TKey][];
+const COLS = [['name', 'srv-td-name', 'nav.servers'], ['players', 'srv-td-pl', 'd2.pl.players'], ['ping', 'srv-td-ping', 'd2.sd.ping'], ['up', 'srv-td-up', 'd2.sv.up']] as [ListSort['key'], string, TKey][];
 
 export function ServersList({ servers, uptime, rx, favOf, onOpen, renderFav, select, sort, onSort }: {
   select?: SelectProps;

@@ -6,7 +6,7 @@ import { tabHref, type TabId } from './helpers';
 
 export const TAB_LIST: { id: TabId; label: TKey; icon: ComponentType<IconProps> }[] = [
   { id: '', label: 'd2.tabs.overview', icon: IconGrid },
-  { id: 'players', label: 'd2.an.players', icon: IconUsers },
+  { id: 'players', label: 'd2.pl.players', icon: IconUsers },
   { id: 'history', label: 'd2.tabs.history', icon: IconTrend },
   { id: 'stats', label: 'd2.tabs.stats', icon: IconBars },
   { id: 'events', label: 'd2.sd.sec.events', icon: IconBolt },
