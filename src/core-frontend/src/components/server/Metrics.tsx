@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { useI18n } from '../../i18n';
+import { t, useI18n } from '../../i18n';
 import { fmtDateTime, num } from '../../ui';
 import { capLevel } from '../servers/capacity';
 import { downsample, metricFill, trendPct } from './serverLogic';
@@ -32,8 +32,8 @@ function Spark({ values }: { values: number[] }) {
 }
 
 function Trend({ pct }: { pct: number }) {
-  if (Math.abs(pct) < 3) return <span className="srv-trend is-flat" title="Без заметных изменений">→ ровно</span>;
-  return <span className={`srv-trend ${pct > 0 ? 'is-up' : 'is-down'}`} title="Конец периода к его началу">{pct > 0 ? '↑' : '↓'} {Math.abs(pct)}%</span>;
+  if (Math.abs(pct) < 3) return <span className="srv-trend is-flat" title={t('d2.mx.flatTitle')}>→ {t('d2.mx.flat')}</span>;
+  return <span className={`srv-trend ${pct > 0 ? 'is-up' : 'is-down'}`} title={t('d2.mx.trendTitle')}>{pct > 0 ? '↑' : '↓'} {Math.abs(pct)}%</span>;
 }
 
 function Cell({ k, v, hint, fill, level, spark, trend }: { k: string; v: ReactNode; hint?: ReactNode; fill: number; level?: 'ok' | 'good' | 'warm' | 'hot'; spark?: number[]; trend?: number | null }) {
@@ -59,28 +59,28 @@ export default function Metrics({ d, withSamples = false }: { d: MetricsData; wi
   return (
     <div className={`srv-metrics no-scrollbar ${withSamples ? 'has-4' : ''}`}>
       <Cell
-        k="Пик"
+        k={t('d2.an.peak')}
         v={d.peak == null ? '–' : String(d.peak)}
         hint={d.peakAt ? fmtDateTime(d.peakAt) : undefined}
         fill={metricFill(d.peak, d.maxPlayers)}
         level={d.peak == null ? undefined : capLevel(metricFill(d.peak, d.maxPlayers))}
       />
       <Cell
-        k="Аптайм"
+        k={t('d2.sv.up')}
         v={d.uptimePct == null ? '–' : `${num(d.uptimePct)}%`}
         hint={d.windowLabel}
         fill={d.uptimePct ?? 0}
         level={uptimeLevel(d.uptimePct)}
       />
       <Cell
-        k="В среднем"
+        k={t('d2.cc.avg')}
         spark={d.series}
         trend={d.series ? trendPct(d.series) : null}
         v={d.avg == null ? '–' : num(d.avg)}
-        hint="пока онлайн"
+        hint={t('d2.mx.whileOnline')}
         fill={metricFill(d.avg, d.maxPlayers)}
       />
-      {withSamples && <Cell k="Измерений" v={String(d.samples)} hint={d.windowLabel} fill={0} />}
+      {withSamples && <Cell k={t('d2.mx.samples')} v={String(d.samples)} hint={d.windowLabel} fill={0} />}
     </div>
   );
 }
