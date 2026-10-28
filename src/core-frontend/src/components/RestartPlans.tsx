@@ -7,7 +7,6 @@ import { api, type Server } from '../api';
 import { t, useI18n, type TKey } from '../i18n';
 import { useAuth } from '../auth';
 import { confirmDialog } from '../confirm';
-import { t, useI18n, type TKey } from '../i18n';
 import { Button, ErrorLine, Field, GameAvatar, Modal, Section, Switch, fmtDateTime, toast, errText } from '../ui';
 import { ChannelPicker } from './ChannelPicker';
 import '../styles/admin.css';

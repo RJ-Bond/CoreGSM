@@ -5,7 +5,6 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { api, type Server } from '../api';
 import { t, useI18n } from '../i18n';
 import { confirmDialog } from '../confirm';
-import { t, useI18n } from '../i18n';
 import { Button, ErrorLine, Field, IconTrash, Modal, Section, toast, SkeletonRows, errText } from '../ui';
 
 interface Extras {

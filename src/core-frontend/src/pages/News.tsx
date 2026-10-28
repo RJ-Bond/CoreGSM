@@ -240,7 +240,7 @@ function NewsList() {
       {view === 'calendar' && list.length > 0 && <NewsCalendar items={list} onMove={(n, day) => void reschedule(n, day)} />}
 
       {loaded && !error && list.length === 0 && (
-        <Empty art={<NewsArt />} title={t('d2.news.empty')} text={t('d2.news.emptyText')}>
+        <Empty art={<ArtPic src="empty/empty-news" size={132} />} title={t('d2.news.empty')} text={t('d2.news.emptyText')}>
           <a className="btn mt-3" href="/admin/news/new">{t('d2.news.write')}</a>
         </Empty>
       )}

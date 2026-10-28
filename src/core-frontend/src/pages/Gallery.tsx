@@ -244,7 +244,7 @@ export default function GalleryPage() {
       {list === null ? (
         <div className="gl-grid" aria-busy="true">{[0, 1, 2, 3, 4, 5].map((i) => <div key={i} className="skeleton h-48 rounded-2xl" />)}</div>
       ) : list.length === 0 ? (
-        <Empty title={t('d2.gal.empty')} text={t('d2.gal.emptyText')}>{me ? <button type="button" className="btn mt-2" onClick={() => setUploading(true)}>{t('d2.gal.uploadFirst')}</button> : <a href="/login" className="btn btn-soft mt-2">{t('d2.gal.signInUpload')}</a>}</Empty>
+        <Empty art={<ArtPic src="empty/empty-gallery" size={132} />} title={t('d2.gal.empty')} text={t('d2.gal.emptyText')}>{me ? <button type="button" className="btn mt-2" onClick={() => setUploading(true)}>{t('d2.gal.uploadFirst')}</button> : <a href="/login" className="btn btn-soft mt-2">{t('d2.gal.signInUpload')}</a>}</Empty>
       ) : (
         <ShotGrid list={list} onOpen={(i) => setOpen({ list, i })} />
       )}

@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="a8f6707c5c6e"
+COREGSM_BUILD="bb67c959f0f8"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.0.0.78"
+COREGSM_VERSION="1.0.0.79"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -111482,15 +111482,17 @@ __COREGSM_EOF__
 import type { CSSProperties } from 'react';
 import { ACCENT_MODES, useAccentMode } from '../accent';
 import { gameColor } from '../games';
+import { t, useI18n } from '../i18n';
 
 const swatch: Record<string, string | undefined> = { vrising: gameColor('vrising'), icarus: gameColor('icarus') };
 
 /** «Акцент по игре»: a segmented choice kept in this browser only (see accent.ts) */
 export function AccentPicker() {
+  useI18n();
   const [mode, setMode] = useAccentMode();
   return (
     <div>
-      <span id="accent-label" className="label">Акцент по игре</span>
+      <span id="accent-label" className="label">{t('d2.acc.label')}</span>
       <div className="seg flex-wrap" role="group" aria-labelledby="accent-label">
         {ACCENT_MODES.map((o) => (
           <button key={o.id} type="button" className="seg-item" aria-pressed={mode === o.id} onClick={() => setMode(o.id)}>
@@ -111499,7 +111501,7 @@ export function AccentPicker() {
           </button>
         ))}
       </div>
-      <p className="mt-2 text-sm font-semibold text-mute">{ACCENT_MODES.find((o) => o.id === mode)?.hint}. Запоминается в этом браузере.</p>
+      <p className="mt-2 text-sm font-semibold text-mute">{ACCENT_MODES.find((o) => o.id === mode)?.hint}. {t('d2.acc.remembered')}</p>
     </div>
   );
 }
@@ -111508,11 +111510,13 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/components/AdminStatusBar.tsx" << '__COREGSM_EOF__'
 import { useState } from 'react';
 import { api, type Server } from '../api';
+import { t, useI18n } from '../i18n';
 import { Button, ago, toast } from '../ui';
 import { useApiQuery } from '../ui/query';
 
 /** The strip at the top of the admin area: is the polling alive, when was the last poll, poll everything now */
 export default function AdminStatusBar() {
+  useI18n();
   const [busy, setBusy] = useState(false);
   const { data: servers, refetch } = useApiQuery<Server[]>('/servers', { pollMs: 20_000 });
 
@@ -111521,12 +111525,12 @@ export default function AdminStatusBar() {
   const stale = last > 0 && Date.now() - last > 5 * 60_000;
   const down = servers.filter((s) => !s.online && s.hasStatus && !s.maintenance).length;
   const tone = stale ? 'warn' : down > 0 ? 'bad' : 'ok';
-  const text = stale ? 'Опрос давно не отвечает' : down > 0 ? `Недоступно серверов: ${down}` : 'Опрос идёт, всё отвечает';
+  const text = stale ? t('d2.asb.stale') : down > 0 ? t('d2.asb.down', { n: down }) : t('d2.asb.ok');
 
   const pollAll = async () => {
     setBusy(true);
     await Promise.allSettled(servers.map((s) => api(`/servers/${s.id}/refresh`, 'POST')));
-    toast('Серверы опрошены');
+    toast(t('d2.asb.t.polled'));
     await refetch();
     setBusy(false);
   };
@@ -111535,8 +111539,8 @@ export default function AdminStatusBar() {
     <div className="adm-status" role="status">
       <span className={`adm-status-dot is-${tone}`} aria-hidden />
       <span className="font-extrabold">{text}</span>
-      {last > 0 && <span className="text-mute" title="Время последнего опроса">· {ago(last)}</span>}
-      <Button type="button" size="sm" variant="soft" className="ml-auto" loading={busy} onClick={() => void pollAll()}>Опросить всё</Button>
+      {last > 0 && <span className="text-mute" title={t('d2.asb.lastTitle')}>· {ago(last)}</span>}
+      <Button type="button" size="sm" variant="soft" className="ml-auto" loading={busy} onClick={() => void pollAll()}>{t('d2.asb.pollAll')}</Button>
     </div>
   );
 }
@@ -111942,6 +111946,7 @@ __COREGSM_EOF__
 import { useEffect, useState } from 'react';
 import { api, type StatusInfo, type StatusServer } from '../api';
 import { gameGradient, gameLabel } from '../games';
+import { t, useI18n } from '../i18n';
 // straight from the modules, not through ../ui (that one re-exports authParts, which imports this file: a cycle)
 import { AnimatedNumber } from '../ui/motion';
 import { GameAvatar, Logo } from '../ui/blocks';
@@ -111951,6 +111956,7 @@ import { GameAvatar, Logo } from '../ui/blocks';
  * is public (GET /status) and quiet generic tiles otherwise. Purely decorative: hidden from assistive tech.
  */
 export default function AuthShowcase({ side }: { side: 'left' | 'right' }) {
+  useI18n();
   const [info, setInfo] = useState<StatusInfo | null>(null);
 
   useEffect(() => {
@@ -111979,20 +111985,20 @@ export default function AuthShowcase({ side }: { side: 'left' | 'right' }) {
             <div className="mt-4 flex items-baseline gap-2">
               <span className="text-5xl font-extrabold leading-none tabular-nums" style={{ letterSpacing: '-0.04em' }}><AnimatedNumber value={top.players} /></span>
               <span className="font-bold opacity-90">/ {top.maxPlayers}</span>
-              <span className="ml-auto rounded-full bg-white/25 px-2.5 py-0.5 text-xs font-extrabold">ОНЛАЙН</span>
+              <span className="ml-auto rounded-full bg-white/25 px-2.5 py-0.5 text-xs font-extrabold">{t('d2.srv.f.online').toUpperCase()}</span>
             </div>
           </div>
         ) : (
           <div className="showcase-tile panel w-72 -rotate-2 p-5" style={{ animationDelay: '.15s' }}>
             <Logo size={44} alt="" />
-            <div className="mt-3 text-lg font-extrabold leading-tight">Серверы под присмотром</div>
-            <p className="mt-1 text-sm font-semibold text-mute">Онлайн, пинг и история игроков в одном месте.</p>
+            <div className="mt-3 text-lg font-extrabold leading-tight">{t('d2.as.watched')}</div>
+            <p className="mt-1 text-sm font-semibold text-mute">{t('d2.as.watchedText')}</p>
           </div>
         )}
         <div className="showcase-tile panel w-56 rotate-1 p-4" style={{ animationDelay: '.3s' }}>
-          <div className="stat-k">Серверов онлайн</div>
+          <div className="stat-k">{t('d2.as.serversOnline')}</div>
           <div className="stat-v">
-            {servers.length ? <><AnimatedNumber value={online.length} /><small> из {servers.length}</small></> : '·'}
+            {servers.length ? <><AnimatedNumber value={online.length} /><small> {t('d2.as.of', { n: servers.length })}</small></> : '·'}
           </div>
         </div>
       </div>
@@ -112002,11 +112008,11 @@ export default function AuthShowcase({ side }: { side: 'left' | 'right' }) {
   return (
     <div aria-hidden className="hidden flex-col items-start gap-4 xl:flex">
       <div className="showcase-tile panel w-60 rotate-2 p-4" style={{ animationDelay: '.25s' }}>
-        <div className="stat-k">Игроков сейчас</div>
+        <div className="stat-k">{t('d2.as.playersNow')}</div>
         <div className="stat-v">{servers.length ? <AnimatedNumber value={players} /> : '·'}</div>
       </div>
       <div className="showcase-tile panel w-72 -rotate-1 space-y-2.5 p-4" style={{ animationDelay: '.4s' }}>
-        <div className="stat-k">Состояние серверов</div>
+        <div className="stat-k">{t('d2.as.state')}</div>
         {(servers.length ? servers.slice(0, 4) : []).map((s) => (
           <div key={s.id} className="flex items-center gap-2.5">
             <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${s.online ? 'bg-ok' : 'bg-bad'}`} />
@@ -112015,12 +112021,12 @@ export default function AuthShowcase({ side }: { side: 'left' | 'right' }) {
           </div>
         ))}
         {!servers.length && (
-          <p className="text-sm font-semibold text-mute">Сообщения в Discord обновляются сами, новости публикуются от имени бота.</p>
+          <p className="text-sm font-semibold text-mute">{t('d2.as.note')}</p>
         )}
       </div>
       <div className="showcase-tile panel flex w-56 rotate-1 items-center gap-3 p-4" style={{ animationDelay: '.55s' }}>
         <span className="grid h-10 w-10 shrink-0 place-items-center rounded-2xl bg-soft text-xl">💬</span>
-        <div className="text-sm font-bold leading-snug">Карточки и новости прямо в Discord</div>
+        <div className="text-sm font-bold leading-snug">{t('d2.as.cards')}</div>
       </div>
     </div>
   );
@@ -112201,7 +112207,7 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/components/ChannelPicker.tsx" << '__COREGSM_EOF__'
 import { useEffect, useState } from 'react';
 import { api, type DiscordGuild } from '../api';
-import { t } from '../i18n';
+import { t, useI18n } from '../i18n';
 
 // the list of the bot's servers and channels, asked once a minute at most and shared by every label on the page
 let listAt = 0;
@@ -112237,11 +112243,12 @@ export function ChannelName({ id, known }: { id: string; /** a name the panel al
 
 /** A warning under the select when the chosen channel lacks soft permissions (embeds/images). */
 export function MissingNote({ guild, channelId }: { guild?: DiscordGuild; channelId: string }) {
+  useI18n();
   const missing = guild?.channels.find((c) => c.id === channelId)?.missing;
   if (!missing?.length) return null;
   return (
     <p className="rounded-xl bg-warnbg px-3 py-2 text-sm font-bold text-warn">
-      ⚠ У бота в этом канале нет прав: {missing.join(', ')}. Без «Встраивания ссылок» embed-сообщения могут не показываться, без «Прикрепления файлов» не отправятся картинки. Выдайте эти права роли бота в настройках канала.
+      {t('d2.chp.missing', { list: missing.join(', ') })}
     </p>
   );
 }
@@ -112251,6 +112258,7 @@ export function MissingNote({ guild, channelId }: { guild?: DiscordGuild; channe
  * with a manual ID field as a fallback.
  */
 export function ChannelPicker({ value, onChange, id = 'channel' }: { value: string; onChange: (channelId: string) => void; id?: string }) {
+  useI18n();
   const [guilds, setGuilds] = useState<DiscordGuild[] | null>(null);
   const [guildId, setGuildId] = useState('');
   const [manual, setManual] = useState(false);
@@ -112279,33 +112287,33 @@ export function ChannelPicker({ value, onChange, id = 'channel' }: { value: stri
       <div className="space-y-2.5">
         <div className="grid gap-2.5 sm:grid-cols-2">
           {guilds!.length > 1 && (
-            <select id={`${id}-guild`} aria-label="Сервер Discord" className="input" value={guildId} onChange={(e) => { setGuildId(e.target.value); onChange(''); }}>
+            <select id={`${id}-guild`} aria-label={t('d2.dx.guild')} className="input" value={guildId} onChange={(e) => { setGuildId(e.target.value); onChange(''); }}>
               {guilds!.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
             </select>
           )}
-          <select id={id} aria-label="Канал" className={`input ${guilds!.length > 1 ? '' : 'sm:col-span-2'}`} value={value} onChange={(e) => onChange(e.target.value)}>
-            <option value="" disabled>Выберите канал…</option>
+          <select id={id} aria-label={t('d2.dg.channel')} className={`input ${guilds!.length > 1 ? '' : 'sm:col-span-2'}`} value={value} onChange={(e) => onChange(e.target.value)}>
+            <option value="" disabled>{t('d2.chp.choose')}</option>
             {guild?.channels.map((c) => <option key={c.id} value={c.id}>{`# ${c.name}${c.missing?.length ? ' ⚠' : ''}`}</option>)}
           </select>
         </div>
         <MissingNote guild={guild} channelId={value} />
         <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm font-extrabold">
-          <button type="button" className="btn-link" onClick={() => setManual(true)}>Ввести ID вручную</button>
-          <button type="button" className="btn-link" onClick={refresh} disabled={busy}>{busy ? 'Обновляю…' : 'Обновить список'}</button>
+          <button type="button" className="btn-link" onClick={() => setManual(true)}>{t('d2.chp.manual')}</button>
+          <button type="button" className="btn-link" onClick={refresh} disabled={busy}>{busy ? t('d2.chp.refreshing') : t('d2.chp.refresh')}</button>
         </div>
       </div>
     );
   }
   return (
     <div className="space-y-2">
-      <input id={id} className="input font-mono" value={value} onChange={(e) => onChange(e.target.value.trim())} placeholder="ID канала, например 123456789012345678" inputMode="numeric" />
+      <input id={id} className="input font-mono" value={value} onChange={(e) => onChange(e.target.value.trim())} placeholder={t('d2.chp.idEx')} inputMode="numeric" />
       <p className="text-sm font-semibold text-mute">
-        {guilds && guilds.length === 0 ? <>Бот пока не видит каналов (его нужно пригласить на сервер Discord): <a href="/admin/discord" className="font-extrabold text-link hover:underline">проверить бота →</a>{' '}</> : ''}
-        Режим разработчика в Discord: правая кнопка по каналу → «Копировать ID канала».
+        {guilds && guilds.length === 0 ? <>{t('d2.chp.noChannels')} <a href="/admin/discord" className="font-extrabold text-link hover:underline">{t('d2.chp.checkBot')}</a>{' '}</> : ''}
+        {t('d2.chp.devMode')}
       </p>
       <div className="flex gap-4 text-sm font-extrabold">
-        {hasList && <button type="button" className="btn-link" onClick={() => setManual(false)}>Выбрать из списка</button>}
-        <button type="button" className="btn-link" onClick={refresh} disabled={busy}>{busy ? 'Обновляю…' : 'Обновить список'}</button>
+        {hasList && <button type="button" className="btn-link" onClick={() => setManual(false)}>{t('d2.chp.fromList')}</button>}
+        <button type="button" className="btn-link" onClick={refresh} disabled={busy}>{busy ? t('d2.chp.refreshing') : t('d2.chp.refresh')}</button>
       </div>
     </div>
   );
@@ -112316,6 +112324,7 @@ __COREGSM_EOF__
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
 import { api, type Server } from '../api';
 import { useAuth } from '../auth';
+import { t, useI18n, type TKey } from '../i18n';
 import { useBackdropClose, useDialogFocus } from '../confirm';
 import { gameLabel } from '../games';
 import { ADMIN_LINKS, ADMIN_SECTIONS, SECTION_PERM } from '../pages/adminNav';
@@ -112370,6 +112379,7 @@ const sectionItem = (key: string, label: string, hint: string, href: string, ico
  * the arrow keys (aria-activedescendant), Enter opens, Escape closes. Focus returns to whatever opened it.
  */
 export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose: () => void; isStaff: boolean; isAdmin: boolean }) {
+  const { lang } = useI18n();
   const { me, logout } = useAuth();
   const perms = me?.perms ?? (isAdmin ? ['news', 'moderation', 'servers', 'maintenance', 'journal'] : []);
   const box = useRef<HTMLDivElement>(null);
@@ -112455,9 +112465,9 @@ export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose:
       act('act-season', 'Начать новый сезон', 'Сообщество · Сезоны', 'сезон вайп wipe рейтинг', <IconTrophy />, () => navigate('/admin/community/seasons'));
     }
     const theme = currentTheme();
-    for (const [t, label, icon] of [['dark', 'Тёмная тема', <IconMoon key="m" />], ['light', 'Светлая тема', <IconSun key="s" />], ['auto', 'Тема как в системе', <IconSun key="a" />]] as const) {
-      if (t === theme) continue;
-      out.push({ key: `theme-${t}`, group: 'Действия', label, hint: 'Оформление панели', href: '', run: () => setThemeChoice(t), icon, hay: norm(`${label} тема оформление цвет ночь день dark light`) });
+    for (const [mode, label, icon] of [['dark', t('d2.cp.theme.dark'), <IconMoon key="m" />], ['light', t('d2.cp.theme.light'), <IconSun key="s" />], ['auto', t('d2.cp.theme.auto'), <IconSun key="a" />]] as const) {
+      if (mode === theme) continue;
+      out.push({ key: `theme-${mode}`, group: 'Действия', label, hint: 'Оформление панели', href: '', run: () => setThemeChoice(mode), icon, hay: norm(`${label} тема оформление цвет ночь день dark light`) });
     }
     if (adminThemeIsOwn() && /^\/admin(\/|$)/.test(currentPath())) out.push({ key: 'theme-site', group: 'Действия', label: 'Тема админки как на сайте', hint: 'Оформление панели', href: '', run: () => resetAdminTheme(), icon: <IconSun key="x" />, hay: norm('тема админки как на сайте сбросить оформление') });
     if (me) act('act-logout', 'Выйти', me.username, 'выход logout', <IconUser />, () => logout());
@@ -112473,7 +112483,7 @@ export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose:
       hay: norm('сменить плотность компактная обычная вид отступы density'),
     });
     return out;
-  }, [servers, isStaff, isAdmin, me, density, perms, logout]);
+  }, [servers, isStaff, isAdmin, me, density, perms, logout, lang]);
 
   const results = useMemo(() => {
     const words = norm(q).split(/\s+/).filter(Boolean);
@@ -112508,6 +112518,7 @@ export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose:
   };
 
   const groups: Group[] = ['Серверы', 'Разделы', 'Действия'];
+  const groupName: Record<Group, TKey> = { 'Серверы': 'nav.servers', 'Разделы': 'd2.cp.g.sections', 'Действия': 'd2.cp.g.actions' };
   const optId = (i: number) => `${uid}-opt-${i}`;
 
   return (
@@ -112516,7 +112527,7 @@ export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose:
         ref={box}
         role="dialog"
         aria-modal="true"
-        aria-label="Поиск по панели"
+        aria-label={t('d2.cp.search')}
         tabIndex={-1}
         className="pop panel w-full max-w-xl overflow-hidden outline-hidden"
       >
@@ -112535,8 +112546,8 @@ export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose:
             aria-controls={listId}
             aria-autocomplete="list"
             aria-activedescendant={results.length ? optId(safeActive) : undefined}
-            aria-label="Поиск серверов и разделов"
-            placeholder="Найти сервер или раздел…"
+            aria-label={t('d2.cp.searchLabel')}
+            placeholder={t('d2.cp.placeholder')}
             autoComplete="off"
             spellCheck={false}
             className="min-h-[44px] min-w-0 flex-1 bg-transparent text-fs-lg focus-visible:ring-0 font-bold text-ink outline-hidden placeholder:font-semibold placeholder:text-mute"
@@ -112545,7 +112556,7 @@ export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose:
             type="button"
             onClick={onClose}
             className="btn-soft btn-xs max-sm:hidden"
-            aria-label="Закрыть поиск"
+            aria-label={t('d2.cp.close')}
           >
             Esc
           </button>
@@ -112553,20 +112564,20 @@ export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose:
             type="button"
             onClick={onClose}
             className="btn-icon shrink-0 sm:hidden"
-            aria-label="Закрыть поиск"
+            aria-label={t('d2.cp.close')}
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" aria-hidden><path d="M6 6l12 12M18 6L6 18" /></svg>
           </button>
         </div>
 
-        <div ref={list} id={listId} role="listbox" aria-label="Результаты" className="max-h-[min(60dvh,26rem)] overflow-y-auto overscroll-contain p-2">
+        <div ref={list} id={listId} role="listbox" aria-label={t('d2.cp.results')} className="max-h-[min(60dvh,26rem)] overflow-y-auto overscroll-contain p-2">
           {groups.map((g) => {
             const rows = results.map((it, idx) => ({ it, idx })).filter((r) => r.it.group === g);
             if (!rows.length) return null;
             const gid = `${uid}-g-${g}`;
             return (
               <div key={g} role="group" aria-labelledby={gid}>
-                <div id={gid} className="px-3 pb-1 pt-2 text-xs font-extrabold uppercase tracking-wider text-mute">{g}</div>
+                <div id={gid} className="px-3 pb-1 pt-2 text-xs font-extrabold uppercase tracking-wider text-mute">{t(groupName[g])}</div>
                 {rows.map(({ it, idx }) => (
                   <div
                     key={it.key}
@@ -112591,18 +112602,18 @@ export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose:
           })}
           {results.length === 0 && (
             <p className="px-4 py-8 text-center font-semibold text-mute">
-              {servers === null ? 'Загрузка…' : 'Ничего не найдено. Попробуйте другое слово.'}
+              {servers === null ? t('nw.loadingMore') : t('d2.cp.nothing')}
             </p>
           )}
         </div>
 
         <div className="hidden items-center gap-4 border-t border-line px-4 py-2 text-xs font-bold text-mute sm:flex">
-          <span>↑ ↓ выбрать</span>
-          <span>Enter открыть</span>
-          <span>Esc закрыть</span>
+          <span>{t('d2.cp.hintSelect')}</span>
+          <span>{t('d2.cp.hintOpen')}</span>
+          <span>{t('d2.cp.hintClose')}</span>
           <span className="ml-auto">Ctrl K</span>
         </div>
-        <p className="sr-only" role="status">{results.length ? `Найдено: ${results.length}` : 'Ничего не найдено'}</p>
+        <p className="sr-only" role="status">{results.length ? t('d2.cp.found', { n: results.length }) : t('d2.cp.none')}</p>
       </div>
     </div>
   );
@@ -112639,6 +112650,7 @@ __COREGSM_EOF__
 import { useRef, useState } from 'react';
 import { api } from '../api';
 import { confirmDialog } from '../confirm';
+import { t, useI18n } from '../i18n';
 import { downloadFile } from '../pages/Backups';
 import { Button, ErrorLine, Section, toast, errText } from '../ui';
 
@@ -112646,19 +112658,20 @@ interface Summary { dry: boolean; serversAdded: number; serversUpdated: number; 
 
 export function summaryText(s: Summary): string {
   const parts = [
-    s.serversAdded && `новых серверов: ${s.serversAdded}`,
-    s.serversUpdated && `обновится серверов: ${s.serversUpdated}`,
-    s.bindings && `сообщений Discord: ${s.bindings}`,
-    s.maintenance && `окон обслуживания: ${s.maintenance}`,
-    s.restarts && `расписаний перезапуска: ${s.restarts}`,
-    s.autoroles && `авторолей: ${s.autoroles}`,
-    s.counters && `счётчиков: ${s.counters}`,
-    s.settings && `настроек: ${s.settings}`,
+    s.serversAdded && t('d2.ct.added', { n: s.serversAdded }),
+    s.serversUpdated && t('d2.ct.updated', { n: s.serversUpdated }),
+    s.bindings && t('d2.ct.bindings', { n: s.bindings }),
+    s.maintenance && t('d2.ct.maint', { n: s.maintenance }),
+    s.restarts && t('d2.ct.restarts', { n: s.restarts }),
+    s.autoroles && t('d2.ct.autoroles', { n: s.autoroles }),
+    s.counters && t('d2.ct.counters', { n: s.counters }),
+    s.settings && t('d2.ct.settings', { n: s.settings }),
   ].filter(Boolean);
-  return parts.length ? parts.join(', ') : 'ничего не изменится: всё уже так';
+  return parts.length ? parts.join(', ') : t('d2.ct.nothing');
 }
 
 export default function ConfigTransfer() {
+  useI18n();
   const [error, setError] = useState('');
   const [busy, setBusy] = useState('');
   const file = useRef<HTMLInputElement>(null);
@@ -112673,15 +112686,15 @@ export default function ConfigTransfer() {
     try {
       data = JSON.parse(await f.text());
     } catch {
-      return setError('Это не файл настроек CoreGSM или он повреждён');
+      return setError(t('d2.ct.e.bad'));
     }
     setBusy('import');
     try {
       const preview = await api<Summary>('/config/import?dry=1', 'POST', data);
-      const ok = await confirmDialog({ title: 'Импортировать настройки?', text: `Из файла «${f.name}»: ${summaryText(preview)}. Серверы с той же игрой, адресом и портом обновятся, остальные добавятся.`, confirmLabel: 'Импортировать' });
+      const ok = await confirmDialog({ title: t('d2.ct.c.title'), text: t('d2.ct.c.text', { name: f.name, sum: summaryText(preview) }), confirmLabel: t('d2.ct.c.confirm') });
       if (!ok) return;
       const done = await api<Summary>('/config/import', 'POST', data);
-      toast(`Импортировано: ${summaryText(done)}`);
+      toast(t('d2.ct.t.done', { sum: summaryText(done) }));
     } catch (e) {
       setError(errText(e));
     } finally {
@@ -112692,12 +112705,12 @@ export default function ConfigTransfer() {
 
   return (
     <Section
-      title="Перенос настроек"
-      description="Файл с настройкой панели: серверы, сообщения в Discord, оповещения и итоги недели, оформление, повторяющиеся окна обслуживания, перезапуски, автороли и счётчики. Без игроков, истории и секретов (токен бота и пароли вводятся заново). Удобно, чтобы поднять вторую панель или перенести её на другой сервер."
+      title={t('d2.ct.title')}
+      description={t('d2.ct.desc')}
     >
       <div className="flex flex-wrap gap-2">
-        <Button type="button" className="btn-soft" loading={busy === 'export'} onClick={() => void exportNow()}>Скачать файл настроек</Button>
-        <Button type="button" className="btn-soft" loading={busy === 'import'} onClick={() => file.current?.click()}>Импортировать из файла…</Button>
+        <Button type="button" className="btn-soft" loading={busy === 'export'} onClick={() => void exportNow()}>{t('d2.ct.export')}</Button>
+        <Button type="button" className="btn-soft" loading={busy === 'import'} onClick={() => file.current?.click()}>{t('d2.ct.import')}</Button>
         <input ref={file} type="file" accept="application/json,.json" className="sr-only" aria-hidden tabIndex={-1} onChange={(e) => { const f = e.target.files?.[0]; if (f) void importFile(f); }} />
       </div>
       <ErrorLine text={error} />
@@ -112801,6 +112814,7 @@ import {
   KIND_LABEL, STATUS_LABEL, attemptsText, canRetry, countdownText,
   type DeliveryKind, type DeliveryResponse, type DeliveryStatus,
 } from '../deliveries';
+import { t, useI18n, type TKey } from '../i18n';
 import { IconBell, IconDiscord, IconNews, IconRefresh, IconUsers, Section, ago, toast, usePoll } from '../ui';
 
 const KIND_ICON: Record<DeliveryKind, () => JSX.Element> = {
@@ -112818,17 +112832,18 @@ const STATUS_PILL: Record<DeliveryStatus, string> = {
   dead: 'pill pill-bad',
 };
 
-const FILTERS: { id: DeliveryStatus | ''; label: string }[] = [
-  { id: '', label: 'Все' },
-  { id: 'pending', label: 'В очереди' },
-  { id: 'sending', label: 'Отправляются' },
-  { id: 'sent', label: 'Доставлено' },
-  { id: 'error', label: 'С ошибкой' },
-  { id: 'dead', label: 'Не доставлено' },
+const FILTERS: { id: DeliveryStatus | ''; label: TKey }[] = [
+  { id: '', label: 'd2.srv.f.all' },
+  { id: 'pending', label: 'd2.dl.f.pending' },
+  { id: 'sending', label: 'd2.dl.f.sending' },
+  { id: 'sent', label: 'd2.dl.f.sent' },
+  { id: 'error', label: 'd2.dl.f.error' },
+  { id: 'dead', label: 'd2.dl.f.dead' },
 ];
 
 /** «Доставка»: the queue of messages the bot sends to Discord, with retries. Hidden when the backend has no queue. */
 export default function DeliveryList() {
+  useI18n();
   const [data, setData] = useState<DeliveryResponse | null>(null);
   const [gone, setGone] = useState(false);
   const [status, setStatus] = useState<DeliveryStatus | ''>('');
@@ -112861,10 +112876,10 @@ export default function DeliveryList() {
     setBusy((b) => [...b, id]);
     try {
       await api(`/deliveries/${id}/retry`, 'POST');
-      toast('Сообщение поставлено в очередь снова');
+      toast(t('d2.dl.t.requeued'));
       await load();
     } catch (e) {
-      toast(e instanceof ApiError && e.status === 409 ? 'Эту доставку уже нельзя повторить' : (e as Error).message, 'err');
+      toast(e instanceof ApiError && e.status === 409 ? t('d2.dl.t.noRetry') : (e as Error).message, 'err');
       void load();
     } finally {
       setBusy((b) => b.filter((x) => x !== id));
@@ -112877,31 +112892,31 @@ export default function DeliveryList() {
 
   return (
     <Section
-      title="Доставка"
-      description="Очередь сообщений в Discord: новости, оповещения и карточки статуса. Неудачные попытки повторяются сами, до 8 раз."
+      title={t('d2.dl.title')}
+      description={t('d2.dl.desc')}
       actions={(
-        <select className="input w-auto!" value={kind} onChange={(e) => setKind(e.target.value as DeliveryKind | '')} aria-label="Тип сообщений">
-          <option value="">Все типы</option>
+        <select className="input w-auto!" value={kind} onChange={(e) => setKind(e.target.value as DeliveryKind | '')} aria-label={t('d2.dl.type')}>
+          <option value="">{t('d2.dl.allTypes')}</option>
           {(Object.keys(KIND_LABEL) as DeliveryKind[]).map((k) => <option key={k} value={k}>{KIND_LABEL[k]}</option>)}
         </select>
       )}
     >
-      <div className="flex flex-wrap gap-2" role="group" aria-label="Фильтр по состоянию">
+      <div className="flex flex-wrap gap-2" role="group" aria-label={t('d2.dl.filter')}>
         {FILTERS.map((f) => {
           const n = f.id === '' ? total : counts?.[f.id] ?? 0;
           return (
             <button key={f.id || 'all'} type="button" className={`chip-filter ${status === f.id ? 'on' : ''}`} aria-pressed={status === f.id} onClick={() => setStatus(f.id)}>
-              {f.label}<span className="opacity-70">&nbsp;{n}</span>
+              {t(f.label)}<span className="opacity-70">&nbsp;{n}</span>
             </button>
           );
         })}
       </div>
 
       {!data ? (
-        <div className="skeleton h-24 rounded-ui-lg" aria-busy="true" aria-label="Загрузка" />
+        <div className="skeleton h-24 rounded-ui-lg" aria-busy="true" aria-label={t('d2.news.loading')} />
       ) : data.items.length === 0 ? (
         <p className="rounded-ui-lg bg-soft px-4 py-3 font-semibold text-mute">
-          {status || kind ? 'Под этот фильтр ничего не попало.' : 'Очередь пуста: сообщения уходят сразу.'}
+          {status || kind ? t('d2.dl.noMatch') : t('d2.dl.empty')}
         </p>
       ) : (
         <ul className="divide-y divide-line rounded-ui-lg border border-line">
@@ -112914,15 +112929,15 @@ export default function DeliveryList() {
                 <div className="wrap-break-word font-extrabold">{it.summary || KIND_LABEL[it.kind]}</div>
                 <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm font-semibold text-mute">
                   <span className={STATUS_PILL[it.status]}>{STATUS_LABEL[it.status]}</span>
-                  <span>попытки {attemptsText(it.attempts)}</span>
-                  {it.status === 'sent' && it.sentAt ? <span>{ago(it.sentAt)}</span> : <span>создано {ago(it.createdAt)}</span>}
-                  {it.nextTryAt != null && it.status !== 'sent' && it.status !== 'dead' && <span>следующая попытка {countdownText(it.nextTryAt, now)}</span>}
+                  <span>{t('d2.dl.attempts', { v: attemptsText(it.attempts) })}</span>
+                  {it.status === 'sent' && it.sentAt ? <span>{ago(it.sentAt)}</span> : <span>{t('d2.dl.created', { ago: ago(it.createdAt) })}</span>}
+                  {it.nextTryAt != null && it.status !== 'sent' && it.status !== 'dead' && <span>{t('d2.dl.next', { v: countdownText(it.nextTryAt, now) })}</span>}
                 </div>
                 {it.lastError && it.status !== 'sent' && <p className="mt-1 wrap-break-word rounded-xl bg-badbg px-3 py-1.5 text-sm font-bold text-bad">{it.lastError}</p>}
               </div>
               {canRetry(it.status) && (
                 <button type="button" className="btn btn-soft btn-sm" disabled={busy.includes(it.id)} onClick={() => void retry(it.id)}>
-                  <IconRefresh size={14} />Повторить
+                  <IconRefresh size={14} />{t('common.retry')}
                 </button>
               )}
             </li>
@@ -112937,10 +112952,10 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/components/DigestSection.tsx" << '__COREGSM_EOF__'
 /** Admin → Оповещения: the weekly digest (settings, the numbers of the coming digest and its picture). */
 import { useEffect, useState } from 'react';
-import { t as tr, useI18n } from '../i18n';
+import { t as tr, useI18n, type TKey } from '../i18n';
 import { api } from '../api';
 import { ChannelName, ChannelPicker } from './ChannelPicker';
-import { ErrorLine, Section, Switch, ago, plural, toast } from '../ui';
+import { ErrorLine, Section, Switch, ago, toast } from '../ui';
 
 interface DigestInfo {
   enabled: boolean;
@@ -112955,7 +112970,8 @@ interface DigestInfo {
   };
 }
 
-const WEEKDAYS = ['понедельник', 'вторник', 'среду', 'четверг', 'пятницу', 'субботу', 'воскресенье'];
+const WEEKDAYS: TKey[] = ['d2.dg.acc.0', 'd2.dg.acc.1', 'd2.dg.acc.2', 'd2.dg.acc.3', 'd2.dg.acc.4', 'd2.dg.acc.5', 'd2.dg.acc.6'];
+const WEEKDAYS_NOM: TKey[] = ['d2.dg.nom.0', 'd2.dg.nom.1', 'd2.dg.nom.2', 'd2.dg.nom.3', 'd2.dg.nom.4', 'd2.dg.nom.5', 'd2.dg.nom.6'];
 
 export default function DigestSection({ alertsChannel }: { alertsChannel: string }) {
   useI18n();
@@ -112977,46 +112993,46 @@ export default function DigestSection({ alertsChannel }: { alertsChannel: string
   const sendNow = async () => {
     setBusy(true);
     await api<DigestInfo>('/digest/send', 'POST')
-      .then((d) => { setInfo(d); toast('Итоги недели поставлены в очередь: бот отправит их в канал'); })
+      .then((d) => { setInfo(d); toast(tr('d2.dg.t.queued')); })
       .catch((e: Error) => setError(e.message))
       .finally(() => setBusy(false));
   };
 
-  if (!info) return <Section title="Итоги недели">{error ? <ErrorLine text={error} /> : <div className="skeleton h-24 rounded-ui-lg" aria-busy="true" />}</Section>;
+  if (!info) return <Section title={tr('d2.dg.title')}>{error ? <ErrorLine text={error} /> : <div className="skeleton h-24 rounded-ui-lg" aria-busy="true" />}</Section>;
   const t = info.preview.totals;
   const channel = info.channelId || alertsChannel;
   return (
-    <Section title="Итоги недели" description="Раз в неделю бот публикует картинку с итогами: игроки, пик, часы в игре, доступность серверов и самые активные игроки.">
+    <Section title={tr('d2.dg.title')} description={tr('d2.dg.desc')}>
       <ErrorLine text={error} />
       <div className="adm-split">
       <div className="min-w-0 space-y-4">
       <label className="flex cursor-pointer items-start gap-3">
-        <Switch className="mt-0.5" checked={info.enabled} onChange={(on) => void save({ enabled: on }, on ? 'Итоги недели включены' : 'Итоги недели выключены')} />
+        <Switch className="mt-0.5" checked={info.enabled} onChange={(on) => void save({ enabled: on }, on ? tr('d2.dg.t.on') : tr('d2.dg.t.off'))} />
         <span>
-          <span className="block font-extrabold">Публиковать итоги недели</span>
+          <span className="block font-extrabold">{tr('d2.dg.publish')}</span>
           <span className="block text-sm font-semibold text-mute">
-            {channel ? `В ${WEEKDAYS[info.weekday]} в ${String(info.hour).padStart(2, '0')}:00` : 'Нужен канал: выберите его ниже или в настройках оповещений'}
-            {info.lastSent ? ` · последний раз ${ago(info.lastSent)}` : ''}
+            {channel ? tr('d2.dg.when', { day: tr(WEEKDAYS[info.weekday]), hh: String(info.hour).padStart(2, '0') }) : tr('d2.dg.needChannel')}
+            {info.lastSent ? ` · ${tr('d2.dg.last', { ago: ago(info.lastSent) })}` : ''}
           </span>
         </span>
       </label>
 
       <div className="grid gap-4 sm:grid-cols-3">
         <div>
-          <label htmlFor="digest-day" className="label">День</label>
-          <select id="digest-day" className="input" value={info.weekday} onChange={(e) => void save({ weekday: Number(e.target.value) }, 'Сохранено')}>
-            {WEEKDAYS.map((d, i) => <option key={d} value={i}>{['Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота', 'Воскресенье'][i]}</option>)}
+          <label htmlFor="digest-day" className="label">{tr('d2.dg.day')}</label>
+          <select id="digest-day" className="input" value={info.weekday} onChange={(e) => void save({ weekday: Number(e.target.value) }, tr('d2.dg.saved'))}>
+            {WEEKDAYS.map((d, i) => <option key={d} value={i}>{tr(WEEKDAYS_NOM[i])}</option>)}
           </select>
         </div>
         <div>
-          <label htmlFor="digest-hour" className="label">Время</label>
-          <select id="digest-hour" className="input" value={info.hour} onChange={(e) => void save({ hour: Number(e.target.value) }, 'Сохранено')}>
+          <label htmlFor="digest-hour" className="label">{tr('d2.rp.time')}</label>
+          <select id="digest-hour" className="input" value={info.hour} onChange={(e) => void save({ hour: Number(e.target.value) }, tr('d2.dg.saved'))}>
             {Array.from({ length: 24 }, (_, h) => <option key={h} value={h}>{String(h).padStart(2, '0')}:00</option>)}
           </select>
         </div>
         <div>
           <label htmlFor="digest-theme" className="label">{tr('digest.theme')}</label>
-          <select id="digest-theme" className="input" value={info.theme} onChange={(e) => void save({ theme: e.target.value as 'dark' | 'light' }, 'Сохранено')}>
+          <select id="digest-theme" className="input" value={info.theme} onChange={(e) => void save({ theme: e.target.value as 'dark' | 'light' }, tr('d2.dg.saved'))}>
             <option value="dark">{tr('digest.theme.dark')}</option>
             <option value="light">{tr('digest.theme.light')}</option>
           </select>
@@ -113024,15 +113040,15 @@ export default function DigestSection({ alertsChannel }: { alertsChannel: string
       </div>
 
       <div>
-        <span className="label">Канал</span>
+        <span className="label">{tr('d2.dg.channel')}</span>
         <div className="flex flex-wrap items-center gap-3">
-          <span className="font-black">{info.channelId ? <ChannelName id={info.channelId} /> : alertsChannel ? 'тот же, что для оповещений' : 'не выбран'}</span>
-          <button className="btn btn-soft btn-sm" onClick={() => setPicking((v) => !v)} aria-expanded={picking}>Выбрать другой</button>
-          {info.channelId && <button className="btn-link text-sm" onClick={() => void save({ channelId: '' }, 'Итоги пойдут в канал оповещений')}>Как у оповещений</button>}
+          <span className="font-black">{info.channelId ? <ChannelName id={info.channelId} /> : alertsChannel ? tr('d2.dg.sameAsAlerts') : tr('d2.news.notChosen')}</span>
+          <button className="btn btn-soft btn-sm" onClick={() => setPicking((v) => !v)} aria-expanded={picking}>{tr('d2.dg.pickOther')}</button>
+          {info.channelId && <button className="btn-link text-sm" onClick={() => void save({ channelId: '' }, tr('d2.dg.t.toAlerts'))}>{tr('upd.o.chan.reset')}</button>}
         </div>
         {picking && (
           <div className="mt-3">
-            <ChannelPicker id="digest-channel" value={info.channelId} onChange={(v) => { if (/^\d{15,25}$/.test(v)) { void save({ channelId: v }, 'Канал сохранён'); setPicking(false); } }} />
+            <ChannelPicker id="digest-channel" value={info.channelId} onChange={(v) => { if (/^\d{15,25}$/.test(v)) { void save({ channelId: v }, tr('d2.dg.t.channel')); setPicking(false); } }} />
           </div>
         )}
       </div>
@@ -113040,13 +113056,13 @@ export default function DigestSection({ alertsChannel }: { alertsChannel: string
       </div>
       <div className="adm-split-side rounded-ui-lg bg-soft p-3">
         <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-          <span className="text-sm font-extrabold text-mute">Так будут выглядеть итоги последних 7 дней</span>
+          <span className="text-sm font-extrabold text-mute">{tr('d2.dg.preview')}</span>
           <span className="flex flex-wrap gap-2">
-            <button className="btn btn-soft btn-sm" onClick={() => setImgKey((k) => k + 1)}>Обновить картинку</button>
-            <button className="btn btn-sm" disabled={busy || !channel} onClick={() => void sendNow()}>Отправить сейчас</button>
+            <button className="btn btn-soft btn-sm" onClick={() => setImgKey((k) => k + 1)}>{tr('d2.dg.refresh')}</button>
+            <button className="btn btn-sm" disabled={busy || !channel} onClick={() => void sendNow()}>{tr('d2.dg.sendNow')}</button>
           </span>
         </div>
-        <img key={imgKey} src={`/api/digest/preview.png?k=${imgKey}`} alt={`Итоги недели: ${t.players} ${plural(t.players, ['игрок', 'игрока', 'игроков'])}, пик ${t.peak}, ${t.hours} часов в игре`} className="w-full rounded-ui-lg" loading="lazy" />
+        <img key={imgKey} src={`/api/digest/preview.png?k=${imgKey}`} alt={tr('d2.dg.alt', { n: t.players, peak: t.peak, hours: t.hours })} className="w-full rounded-ui-lg" loading="lazy" />
       </div>
       </div>
     </Section>
@@ -113072,11 +113088,11 @@ interface Extras {
 type Kind = 'online' | 'week_top' | 'hours';
 
 const KIND_TEXT: Record<Kind, (n: number) => string> = {
-  online: () => t('dx.kind.online'),
-  week_top: (n) => (n > 1 ? t('dx.kind.top', { n }) : t('dx.kind.topOne')),
-  hours: (n) => t('dx.kind.hours', { n }),
+  online: () => t('d2.dx.k.online'),
+  week_top: (n) => (n > 1 ? t('d2.dx.k.top', { n }) : t('d2.dx.k.topOne')),
+  hours: (n) => t('d2.dx.k.hours', { n }),
 };
-const TEMPLATES = ['🟢 Онлайн: {players}', '{status} Онлайн: {players}/{max}', '🎮 Игроков: {players} · серверов {online}/{servers}'];
+const templates = () => [t('d2.dx.tpl1'), t('d2.dx.tpl2'), t('d2.dx.tpl3')];
 
 const roleDot = (color: number) => (color ? `#${color.toString(16).padStart(6, '0')}` : 'rgb(var(--mute))');
 
@@ -113088,9 +113104,9 @@ export default function DiscordExtras({ servers }: { servers: Server[] }) {
   const load = () => api<Extras>('/discord/extras').then(setX).catch((e: Error) => setError(e.message));
   useEffect(() => { void load(); }, []);
 
-  const serverName = (id: number | null) => (id ? servers.find((s) => s.id === id)?.name ?? `#${id}` : t('dx.allServers'));
+  const serverName = (id: number | null) => (id ? servers.find((s) => s.id === id)?.name ?? `#${id}` : t('d2.dx.allServers'));
   const del = async (what: 'autoroles' | 'counters', id: number, text: string) => {
-    if (!(await confirmDialog({ title: t('dx.deleteQ'), text, confirmLabel: t('dx.delete'), danger: true }))) return;
+    if (!(await confirmDialog({ title: t('d2.dx.delQ'), text, confirmLabel: t('d2.news.delete'), danger: true }))) return;
     await api(`/discord/${what}/${id}`, 'DELETE').then(load).catch((e: Error) => setError(e.message));
   };
 
@@ -113099,51 +113115,51 @@ export default function DiscordExtras({ servers }: { servers: Server[] }) {
   return (
     <>
       <Section
-        title={t('dx.roles.title')}
-        description={t('dx.roles.desc')}
-        actions={<button type="button" className="btn btn-soft btn-sm" onClick={() => setForm('role')} disabled={!x || noRoles}>{t('dx.roles.add')}</button>}
+        title={t('d2.dx.roles')}
+        description={t('d2.dx.rolesDesc')}
+        actions={<button type="button" className="btn btn-soft btn-sm" onClick={() => setForm('role')} disabled={!x || noRoles}>{t('d2.dx.addRole')}</button>}
       >
         <ErrorLine text={error} />
-        {noRoles && <p className="rounded-xl bg-warnbg px-3 py-2 text-sm font-bold text-warn">{t('dx.roles.none')}</p>}
+        {noRoles && <p className="rounded-xl bg-warnbg px-3 py-2 text-sm font-bold text-warn">{t('d2.dx.noRoles')}</p>}
         {!x && !error && <SkeletonRows n={2} />}
-        {x && x.autoroles.length === 0 && !noRoles && <p className="text-sm font-semibold text-mute">{t('dx.roles.empty')}</p>}
+        {x && x.autoroles.length === 0 && !noRoles && <p className="text-sm font-semibold text-mute">{t('d2.dx.noAuto')}</p>}
         <ul className="grid grid-cols-[minmax(0,1fr)] gap-2">
           {x?.autoroles.map((r) => (
             <li key={r.id} className="flex flex-wrap items-center gap-3 rounded-2xl bg-soft px-3 py-2.5">
               <span className="h-3 w-3 shrink-0 rounded-full" style={{ background: roleDot(r.roleColor) }} aria-hidden />
               <span className="min-w-0 flex-1">
                 <span className="block font-extrabold">@{r.roleName ?? r.roleId}</span>
-                <span className="block text-sm font-semibold text-mute">{KIND_TEXT[r.kind](r.threshold)} · {serverName(r.serverId)} · {t('dx.roles.holders', { n: r.members })}</span>
+                <span className="block text-sm font-semibold text-mute">{KIND_TEXT[r.kind](r.threshold)} · {serverName(r.serverId)} · {t('d2.dx.members', { n: r.members })}</span>
                 {r.error && <span className="mt-1 block text-sm font-bold text-bad">{r.error}</span>}
               </span>
-              <button type="button" className="row-act row-act-danger" aria-label={t('dx.roles.del')} title={t('dx.delete')} onClick={() => void del('autoroles', r.id, t('dx.roles.delText'))}><IconTrash /></button>
+              <button type="button" className="row-act row-act-danger" aria-label={t('d2.dx.delRole')} title={t('d2.news.delete')} onClick={() => void del('autoroles', r.id, t('d2.dx.delRoleText'))}><IconTrash /></button>
             </li>
           ))}
         </ul>
       </Section>
 
       <Section
-        title={t('dx.cnt.title')}
-        description={t('dx.cnt.desc')}
-        actions={<button type="button" className="btn btn-soft btn-sm" onClick={() => setForm('counter')} disabled={!x || noVoice}>{t('dx.cnt.add')}</button>}
+        title={t('d2.dx.counter')}
+        description={t('d2.dx.counterDesc')}
+        actions={<button type="button" className="btn btn-soft btn-sm" onClick={() => setForm('counter')} disabled={!x || noVoice}>{t('d2.dx.addCounter')}</button>}
       >
         {!x && !error && <SkeletonRows n={1} />}
-        {noVoice && <p className="rounded-xl bg-warnbg px-3 py-2 text-sm font-bold text-warn">{t('dx.cnt.none')}</p>}
+        {noVoice && <p className="rounded-xl bg-warnbg px-3 py-2 text-sm font-bold text-warn">{t('d2.dx.noVoice')}</p>}
         <ul className="grid grid-cols-[minmax(0,1fr)] gap-2">
           {x?.counters.map((c) => (
             <li key={c.id} className="flex flex-wrap items-center gap-3 rounded-2xl bg-soft px-3 py-2.5">
               <span className="min-w-0 flex-1">
                 <span className="block font-extrabold">🔊 {c.preview}</span>
-                <span className="block text-sm font-semibold text-mute">{t('dx.cnt.channel', { name: c.channelName ?? c.channelId })}{c.guildName ? ` ${t('dx.cnt.on', { guild: c.guildName })}` : ''} · {serverName(c.serverId)} · {t('dx.cnt.template')} <code>{c.template}</code></span>
+                <span className="block text-sm font-semibold text-mute">{t('d2.dx.channel', { name: c.channelName ?? c.channelId })}{c.guildName ? ` ${t('d2.dx.onGuild', { name: c.guildName })}` : ''} · {serverName(c.serverId)} · {t('d2.dx.template')} <code>{c.template}</code></span>
                 {c.error && <span className="mt-1 block text-sm font-bold text-bad">{c.error}</span>}
               </span>
-              <button type="button" className="row-act row-act-danger" aria-label={t('dx.cnt.del')} title={t('dx.delete')} onClick={() => void del('counters', c.id, t('dx.cnt.delText'))}><IconTrash /></button>
+              <button type="button" className="row-act row-act-danger" aria-label={t('d2.dx.delCounter')} title={t('d2.news.delete')} onClick={() => void del('counters', c.id, t('d2.dx.delCounterText'))}><IconTrash /></button>
             </li>
           ))}
         </ul>
       </Section>
 
-      {form && x && <ExtraForm kind={form} extras={x} servers={servers} onClose={() => setForm(null)} onSaved={() => { setForm(null); void load(); toast(form === 'role' ? t('dx.roles.added') : t('dx.cnt.added')); }} />}
+      {form && x && <ExtraForm kind={form} extras={x} servers={servers} onClose={() => setForm(null)} onSaved={() => { setForm(null); void load(); toast(form === 'role' ? t('d2.dx.t.role') : t('d2.dx.t.counter')); }} />}
     </>
   );
 }
@@ -113156,7 +113172,7 @@ function ExtraForm({ kind, extras, servers, onClose, onSaved }: { kind: 'role' |
   const [target, setTarget] = useState('');
   const [rule, setRule] = useState<Kind>('online');
   const [threshold, setThreshold] = useState(100);
-  const [template, setTemplate] = useState(TEMPLATES[0]);
+  const [template, setTemplate] = useState(templates()[0]);
   const [serverId, setServerId] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -113177,55 +113193,55 @@ function ExtraForm({ kind, extras, servers, onClose, onSaved }: { kind: 'role' |
   };
 
   return (
-    <Modal title={kind === 'role' ? t('dx.f.newRole') : t('dx.f.newCnt')} onClose={onClose}>
+    <Modal title={kind === 'role' ? t('d2.dx.newRole') : t('d2.dx.newCounter')} onClose={onClose}>
       <form onSubmit={submit} className="space-y-3.5">
         {guilds.length > 1 && (
-          <Field label={t('dx.f.guild')}>
+          <Field label={t('d2.dx.guild')}>
             <select className="input" value={guildId} onChange={(e) => { setGuildId(e.target.value); setTarget(''); }}>
               {guilds.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
             </select>
           </Field>
         )}
-        <Field label={kind === 'role' ? t('dx.f.role') : t('dx.f.voice')}>
+        <Field label={kind === 'role' ? t('d2.dx.role') : t('d2.dx.voice')}>
           <select className="input" value={target} onChange={(e) => setTarget(e.target.value)} required>
-            <option value="" disabled>{t('dx.f.choose')}</option>
+            <option value="" disabled>{t('d2.dx.choose')}</option>
             {kind === 'role' ? g?.roles.map((r) => <option key={r.id} value={r.id}>@{r.name}</option>) : g?.voice.map((v) => <option key={v.id} value={v.id}>🔊 {v.name}</option>)}
           </select>
         </Field>
         {kind === 'role' ? (
           <>
-            <Field label={t('dx.f.who')}>
+            <Field label={t('d2.dx.whom')}>
               <select className="input" value={rule} onChange={(e) => { const k = e.target.value as Kind; setRule(k); setThreshold(k === 'hours' ? 100 : 1); }}>
-                <option value="online">{t('dx.f.rOnline')}</option>
-                <option value="week_top">{t('dx.f.rTop')}</option>
-                <option value="hours">{t('dx.f.rHours')}</option>
+                <option value="online">{t('d2.dx.w.online')}</option>
+                <option value="week_top">{t('d2.dx.w.top')}</option>
+                <option value="hours">{t('d2.dx.w.hours')}</option>
               </select>
             </Field>
             {rule !== 'online' && (
-              <Field label={rule === 'hours' ? t('dx.f.howManyH') : t('dx.f.howManyP')}>
+              <Field label={rule === 'hours' ? t('d2.dx.howManyHours') : t('d2.dx.howManyTop')}>
                 <input className="input" type="number" min={1} max={rule === 'hours' ? 10000 : 25} value={threshold} onChange={(e) => setThreshold(Number(e.target.value))} required />
               </Field>
             )}
           </>
         ) : (
           <>
-            <Field label={t('dx.f.chName')}>
+            <Field label={t('d2.dx.chName')}>
               <input className="input" value={template} onChange={(e) => setTemplate(e.target.value)} maxLength={100} required list="counter-templates" />
             </Field>
-            <datalist id="counter-templates">{TEMPLATES.map((t) => <option key={t} value={t} />)}</datalist>
-            <p className="-mt-2 text-sm font-semibold text-mute">{t('dx.f.vars')}</p>
+            <datalist id="counter-templates">{templates().map((tp) => <option key={tp} value={tp} />)}</datalist>
+            <p className="-mt-2 text-sm font-semibold text-mute">{t('d2.dx.vars')}</p>
           </>
         )}
-        <Field label={t('dx.f.scope')}>
+        <Field label={t('d2.dx.countBy')}>
           <select className="input" value={serverId ?? ''} onChange={(e) => setServerId(e.target.value ? Number(e.target.value) : null)}>
-            <option value="">{t('dx.f.all')}</option>
+            <option value="">{t('sn.f.all')}</option>
             {servers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
           </select>
         </Field>
         <ErrorLine text={error} />
         <div className="flex justify-end gap-2 pt-1">
           <button type="button" className="btn btn-ghost" onClick={onClose}>{t('common.cancel')}</button>
-          <Button loading={busy}>{t('dx.f.add')}</Button>
+          <Button loading={busy}>{t('d2.dx.add')}</Button>
         </div>
       </form>
     </Modal>
@@ -113333,6 +113349,7 @@ __COREGSM_EOF__
 import type { ReactNode } from 'react';
 import type { Binding, BotStatus, DiscordGuild } from '../api';
 import { IconCheck, IconRefresh } from '../icons';
+import { t, useI18n } from '../i18n';
 
 export type WizardState = 'done' | 'current' | 'blocked';
 
@@ -113367,52 +113384,52 @@ export function computeWizard(i: WizardInput): { steps: WizardStep[]; complete: 
   const first = done.findIndex((d) => !d);
   const stateOf = (n: number): WizardState => (done[n] ? 'done' : n === first ? 'current' : 'blocked');
 
-  const botText = i.bot?.state === 'connecting' ? 'Бот подключается к Discord, это занимает несколько секунд. Нажмите «Проверить», чтобы обновить.'
-    : i.bot?.state === 'error' ? 'Discord не принял токен или недоступен. Проверьте токен и прокси в настройках, затем проверьте снова.'
-      : 'Бот ещё не в сети. Сохраните токен: подключение начнётся само.';
+  const botText = i.bot?.state === 'connecting' ? t('d2.dw.bot.connecting')
+    : i.bot?.state === 'error' ? t('d2.dw.bot.error')
+      : t('d2.dw.bot.offline');
 
   const steps: WizardStep[] = [
     {
       id: 'token',
-      title: 'Токен введён',
+      title: t('d2.dw.s1.title'),
       state: stateOf(0),
-      text: done[0] ? 'Токен бота сохранён в настройках.' : 'Создайте бота в Discord Developer Portal и вставьте его токен в настройках панели.',
+      text: done[0] ? t('d2.dw.s1.done') : t('d2.dw.s1.todo'),
     },
     {
       id: 'bot',
-      title: 'Бот подключён',
+      title: t('d2.dw.s2.title'),
       state: stateOf(1),
-      text: done[1] ? `Бот в сети${i.bot?.tag ? `: ${i.bot.tag}` : ''}.` : i.tokenSet ? botText : 'Сначала введите токен.',
+      text: done[1] ? `${t('d2.dw.s2.online')}${i.bot?.tag ? `: ${i.bot.tag}` : ''}.` : i.tokenSet ? botText : t('d2.dw.s2.first'),
       problem: !done[1] && i.bot?.state === 'error' && i.bot.error ? i.bot.error : undefined,
     },
     {
       id: 'guild',
-      title: 'Бот приглашён на сервер Discord',
+      title: t('d2.dw.s3.title'),
       state: stateOf(2),
       text: done[2]
-        ? `Бот есть на серверах Discord: ${guildCount}.`
-        : 'Откройте приглашение, выберите свой сервер Discord и подтвердите права бота. Потом нажмите «Проверить».',
+        ? t('d2.dw.s3.done', { n: guildCount })
+        : t('d2.dw.s3.todo'),
     },
     {
       id: 'channel',
-      title: 'Канал выбран, права в порядке',
+      title: t('d2.dw.s4.title'),
       state: stateOf(3),
       text: done[3]
-        ? 'Канал привязан, у бота есть права на встраивания и файлы.'
+        ? t('d2.dw.s4.done')
         : bound && missing.length > 0
-          ? `В выбранном канале боту не хватает прав: ${missing.join(', ')}. Выдайте их роли бота в настройках канала и нажмите «Проверить».`
+          ? t('d2.dw.s4.missing', { list: missing.join(', ') })
           : i.serverCount === 0
-            ? 'Сначала добавьте игровой сервер, который бот будет показывать.'
+            ? t('d2.dw.s4.addServer')
             : channels.length > 0
-              ? 'Выберите канал и игровой сервер: бот будет публиковать там одно обновляемое сообщение.'
-              : 'Бот пока не видит каналов, куда может писать. Выдайте его роли права «Просмотр канала», «Отправка сообщений», «Встраивание ссылок», «Прикрепление файлов».',
-      problem: bound && missing.length > 0 ? `Нет прав: ${missing.join(', ')}` : undefined,
+              ? t('d2.dw.s4.pick')
+              : t('d2.dw.s4.noChannels'),
+      problem: bound && missing.length > 0 ? t('d2.dw.s4.noPerms', { list: missing.join(', ') }) : undefined,
     },
     {
       id: 'message',
-      title: 'Первое сообщение опубликовано',
+      title: t('d2.dw.s5.title'),
       state: stateOf(4),
-      text: done[4] ? 'Бот отправил сообщение и обновляет его по таймеру.' : 'Бот отправит сообщение в течение минуты после создания привязки. Нажмите «Проверить», чтобы увидеть результат.',
+      text: done[4] ? t('d2.dw.s5.done') : t('d2.dw.s5.todo'),
       problem: !done[4] ? i.bindings.find((b) => b.lastError)?.lastError ?? undefined : undefined,
     },
   ];
@@ -113432,15 +113449,16 @@ export function DiscordWizard({
   /** shown only when the wizard was reopened after completion */
   onClose?: () => void;
 }) {
+  useI18n();
   const { steps, complete, current } = computeWizard(input);
   const actionFor = (s: WizardStep): ReactNode => {
     if (s.state !== 'current') return null;
-    if (s.id === 'token') return <a className="btn btn-sm" href={settingsHref}>Указать токен</a>;
-    if (s.id === 'bot') return <a className="btn btn-soft btn-sm" href={settingsHref}>Открыть настройки бота</a>;
-    if (s.id === 'guild') return inviteUrl ? <a className="btn btn-sm" href={inviteUrl} target="_blank" rel="noreferrer">Открыть приглашение<span aria-hidden>↗</span></a> : null;
+    if (s.id === 'token') return <a className="btn btn-sm" href={settingsHref}>{t('d2.dw.a.token')}</a>;
+    if (s.id === 'bot') return <a className="btn btn-soft btn-sm" href={settingsHref}>{t('d2.dw.a.botSettings')}</a>;
+    if (s.id === 'guild') return inviteUrl ? <a className="btn btn-sm" href={inviteUrl} target="_blank" rel="noreferrer">{t('d2.dw.a.invite')}<span aria-hidden>↗</span></a> : null;
     if (s.id === 'channel') {
-      if (input.serverCount === 0) return <a className="btn btn-sm" href="/admin/servers/new">Добавить сервер</a>;
-      if (input.bindings.length === 0) return <button type="button" className="btn btn-sm" onClick={onCreateBinding}>Создать первую привязку</button>;
+      if (input.serverCount === 0) return <a className="btn btn-sm" href="/admin/servers/new">{t('d2.dw.a.addServer')}</a>;
+      if (input.bindings.length === 0) return <button type="button" className="btn btn-sm" onClick={onCreateBinding}>{t('d2.dw.a.bind')}</button>;
       return null;
     }
     return null;
@@ -113450,15 +113468,15 @@ export function DiscordWizard({
     <section className="panel space-y-4 p-5 sm:p-6" aria-labelledby="dw-title" data-complete={complete ? 'true' : undefined}>
       <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
         <div className="min-w-0">
-          <h2 id="dw-title" className="text-lg font-black">Мастер подключения</h2>
-          <p className="font-semibold text-mute">{complete ? 'Всё готово: бот публикует сообщения.' : `Шаг ${current + 1} из ${steps.length}`}</p>
+          <h2 id="dw-title" className="text-lg font-black">{t('d2.dw.title')}</h2>
+          <p className="font-semibold text-mute">{complete ? t('d2.dw.ready') : t('d2.dw.step', { a: current + 1, b: steps.length })}</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <button type="button" className="btn btn-soft btn-sm" onClick={onRecheck} disabled={busy} aria-busy={busy || undefined}>
             <IconRefresh spinning={busy} />
-            Проверить
+            {t('d2.dw.check')}
           </button>
-          {onClose && <button type="button" className="btn btn-ghost btn-sm" onClick={onClose}>Скрыть</button>}
+          {onClose && <button type="button" className="btn btn-ghost btn-sm" onClick={onClose}>{t('d2.ac.cm.hide')}</button>}
         </div>
       </div>
       <ol className="dw-steps">
@@ -113468,14 +113486,14 @@ export function DiscordWizard({
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-x-2">
                 <span className="font-black">{s.title}</span>
-                <span className="sr-only">{s.state === 'done' ? ': выполнено' : s.state === 'current' ? ': текущий шаг' : ': недоступно, пока не выполнены предыдущие шаги'}</span>
+                <span className="sr-only">{s.state === 'done' ? t('d2.dw.sr.done') : s.state === 'current' ? t('d2.dw.sr.current') : t('d2.dw.sr.blocked')}</span>
               </div>
               {s.state !== 'blocked' && <p className="text-sm font-semibold text-mute">{s.text}</p>}
               {s.problem && s.state === 'current' && <p className="mt-1 rounded-xl bg-badbg px-3 py-1.5 text-sm font-bold text-bad" role="alert">{s.problem}</p>}
               {s.state === 'current' && (
                 <div className="mt-2 flex flex-wrap items-center gap-2">
                   {actionFor(s)}
-                  <button type="button" className="btn btn-soft btn-sm" onClick={onRecheck} disabled={busy}>Проверить снова</button>
+                  <button type="button" className="btn btn-soft btn-sm" onClick={onRecheck} disabled={busy}>{t('d2.dw.checkAgain')}</button>
                 </div>
               )}
             </div>
@@ -113547,6 +113565,7 @@ __COREGSM_EOF__
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { GAMES } from '../games';
 import { GameAvatar } from '../ui';
+import { t, useI18n } from '../i18n';
 
 const CUSTOM = '__custom';
 
@@ -113573,6 +113592,7 @@ export default function GamePicker({
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState('');
   const [active, setActive] = useState(0);
+  useI18n();
   const btn = useRef<HTMLButtonElement>(null);
   const search = useRef<HTMLInputElement>(null);
   const list = useRef<HTMLUListElement>(null);
@@ -113581,7 +113601,7 @@ export default function GamePicker({
   const needle = q.trim().toLowerCase();
   const items = useMemo(() => {
     const games = GAMES.filter((g) => !needle || g.label.toLowerCase().includes(needle) || g.id.includes(needle));
-    return [...games.map((g) => ({ id: g.id, label: g.label })), ...(needle && !'другая'.includes(needle) && !'custom'.includes(needle) ? [] : [{ id: CUSTOM, label: 'Другая игра (ввести GameDig ID)…' }])];
+    return [...games.map((g) => ({ id: g.id, label: g.label })), ...(needle && !'другая'.includes(needle) && !'custom'.includes(needle) ? [] : [{ id: CUSTOM, label: t('d2.gp.custom') }])];
   }, [needle]);
 
   const current = custom ? null : GAMES.find((g) => g.id === value);
@@ -113635,7 +113655,7 @@ export default function GamePicker({
         onKeyDown={(e) => { if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && !open) { e.preventDefault(); setOpen(true); } }}
       >
         {current ? <GameAvatar game={current.id} size={30} /> : <span aria-hidden className="grid h-[30px] w-[30px] place-items-center rounded-ui-md bg-soft text-sm font-black text-mute">?</span>}
-        <span className="min-w-0 flex-1 truncate font-bold">{current ? current.label : 'Другая игра (GameDig ID)'}</span>
+        <span className="min-w-0 flex-1 truncate font-bold">{current ? current.label : t('d2.gp.customShort')}</span>
         <svg aria-hidden width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" className={`shrink-0 text-mute transition ${open ? 'rotate-180' : ''}`}><path d="m6 9 6 6 6-6" /></svg>
       </button>
 
@@ -113646,18 +113666,18 @@ export default function GamePicker({
               ref={search}
               className="input rounded-xl! py-2!"
               type="search"
-              placeholder="Найти игру…"
+              placeholder={t('d2.gp.find')}
               value={q}
               onChange={(e) => setQ(e.target.value)}
               role="combobox"
               aria-expanded
               aria-controls={`${uid}-list`}
               aria-activedescendant={items[active] ? `${uid}-opt-${active}` : undefined}
-              aria-label="Поиск игры"
+              aria-label={t('d2.gp.search')}
             />
           </div>
-          <ul ref={list} id={`${uid}-list`} role="listbox" aria-label="Игры" className="max-h-64 overflow-y-auto p-1.5">
-            {items.length === 0 && <li className="px-3 py-3 text-sm font-semibold text-mute">Ничего не найдено</li>}
+          <ul ref={list} id={`${uid}-list`} role="listbox" aria-label={t('d2.gp.games')} className="max-h-64 overflow-y-auto p-1.5">
+            {items.length === 0 && <li className="px-3 py-3 text-sm font-semibold text-mute">{t('d2.cp.none')}</li>}
             {items.map((it, i) => {
               const selected = it.id === (custom ? CUSTOM : value);
               return (
@@ -113751,6 +113771,7 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/components/HealthHistoryCard.tsx" << '__COREGSM_EOF__'
 import { useEffect, useState } from 'react';
 import { api } from '../api';
+import { t, useI18n, type TKey } from '../i18n';
 import { LineChart, Section, fmtTime } from '../ui';
 
 export interface HealthSample { ts: number; dbBytes: number | null; rssMb: number | null; pollMs: number | null; pollFailures: number | null; botState: string | null; queueLen: number | null; diskFree: number | null; loadPct?: number | null }
@@ -113758,24 +113779,25 @@ export interface HealthFlag { kind: 'bot_offline' | 'poll_slow' | 'disk_low' | '
 interface HistoryResponse { samples: HealthSample[]; flags: HealthFlag[] }
 
 const PERIODS = [
-  { hours: 24, label: '24 ч' },
-  { hours: 168, label: '7 д' },
-  { hours: 336, label: '14 д' },
+  { hours: 24, n: 24, unit: 'h' },
+  { hours: 168, n: 7, unit: 'd' },
+  { hours: 336, n: 14, unit: 'd' },
 ] as const;
 
-const mbText = (bytes: number) => `${(bytes / 1048576).toFixed(bytes < 10 * 1048576 ? 1 : 0).replace('.', ',')} МБ`;
-const msText = (ms: number) => (ms >= 10_000 ? `${Math.round(ms / 1000)} с` : ms >= 1000 ? `${(ms / 1000).toFixed(1).replace('.', ',')} с` : `${Math.round(ms)} мс`);
+const mbText = (bytes: number) => t('d2.sys.mb', { v: (bytes / 1048576).toFixed(bytes < 10 * 1048576 ? 1 : 0).replace('.', ',') });
+const msText = (ms: number) => (ms >= 10_000 ? t('dur.s', { n: Math.round(ms / 1000) }) : ms >= 1000 ? t('dur.s', { n: (ms / 1000).toFixed(1).replace('.', ',') }) : t('d2.bot.ms', { n: Math.round(ms) }));
 
-const METRICS: { id: string; title: string; pick: (s: HealthSample) => number | null; fmt: (n: number) => string }[] = [
-  { id: 'poll', title: 'Длительность опроса', pick: (s) => s.pollMs, fmt: msText },
-  { id: 'cpu', title: 'Нагрузка процессора', pick: (s) => s.loadPct ?? null, fmt: (n) => `${Math.round(n)} %` },
-  { id: 'mem', title: 'Память панели', pick: (s) => s.rssMb, fmt: (n) => `${Math.round(n)} МБ` },
-  { id: 'db', title: 'Размер базы', pick: (s) => s.dbBytes, fmt: mbText },
-  { id: 'queue', title: 'Очередь доставки', pick: (s) => s.queueLen, fmt: (n) => String(Math.round(n)) },
+const METRICS: { id: string; title: TKey; pick: (s: HealthSample) => number | null; fmt: (n: number) => string }[] = [
+  { id: 'poll', title: 'd2.hhc.poll', pick: (s) => s.pollMs, fmt: msText },
+  { id: 'cpu', title: 'd2.sys.cpu.load', pick: (s) => s.loadPct ?? null, fmt: (n) => `${Math.round(n)} %` },
+  { id: 'mem', title: 'd2.sys.mem.label', pick: (s) => s.rssMb, fmt: (n) => t('d2.sys.mb', { v: Math.round(n) }) },
+  { id: 'db', title: 'd2.hhc.dbSize', pick: (s) => s.dbBytes, fmt: mbText },
+  { id: 'queue', title: 'd2.hhc.queue', pick: (s) => s.queueLen, fmt: (n) => String(Math.round(n)) },
 ];
 
 /** «Состояние за период»: four static sparklines of the panel's own health. Hidden when the backend has no history. */
 export default function HealthHistoryCard({ onFlags }: { onFlags?: (f: HealthFlag[]) => void }) {
+  useI18n();
   const [hours, setHours] = useState<number>(24);
   const [data, setData] = useState<HistoryResponse | null>(null);
   const [gone, setGone] = useState(false);
@@ -113799,23 +113821,23 @@ export default function HealthHistoryCard({ onFlags }: { onFlags?: (f: HealthFla
 
   return (
     <Section
-      title="Состояние за период"
-      description={first ? `Замеры с ${fmtTime(first)}: ${samples.length}` : 'Как панель чувствовала себя последнее время.'}
+      title={t('d2.hhc.title')}
+      description={first ? t('d2.hhc.since', { when: fmtTime(first), n: samples.length }) : t('d2.hhc.desc')}
       actions={(
-        <div className="seg" role="group" aria-label="Период">
+        <div className="seg" role="group" aria-label={t('st.range')}>
           {PERIODS.map((p) => (
-            <button key={p.hours} type="button" className={`seg-item ${hours === p.hours ? 'on' : ''}`} aria-pressed={hours === p.hours} onClick={() => setHours(p.hours)}>{p.label}</button>
+            <button key={p.hours} type="button" className={`seg-item ${hours === p.hours ? 'on' : ''}`} aria-pressed={hours === p.hours} onClick={() => setHours(p.hours)}>{p.unit === 'h' ? t('dur.h', { n: p.n }) : t('d2.hhc.d', { n: p.n })}</button>
           ))}
         </div>
       )}
     >
       {!data ? (
-        <div className="skeleton h-40 rounded-ui-lg" aria-busy="true" aria-label="Загрузка" />
+        <div className="skeleton h-40 rounded-ui-lg" aria-busy="true" aria-label={t('d2.news.loading')} />
       ) : samples.length < 2 ? (
-        <p className="text-sm font-semibold text-mute">Замеров пока мало: график появится через несколько минут работы панели.</p>
+        <p className="text-sm font-semibold text-mute">{t('d2.hhc.few')}</p>
       ) : (
         <div className="grid gap-3 min-[520px]:grid-cols-2">
-          {METRICS.map((m) => <LineChart key={m.id} title={m.title} points={samples.map((x) => ({ ts: x.ts, v: m.pick(x) }))} fmt={m.fmt} height={96} floor={m.id === 'db' || m.id === 'mem'} />)}
+          {METRICS.map((m) => <LineChart key={m.id} title={t(m.title)} points={samples.map((x) => ({ ts: x.ts, v: m.pick(x) }))} fmt={m.fmt} height={96} floor={m.id === 'db' || m.id === 'mem'} />)}
         </div>
       )}
     </Section>
@@ -114061,11 +114083,13 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components"
   cat > "$APP_DIR/core-frontend/src/components/NotFound.tsx" << '__COREGSM_EOF__'
 import { IconArrow } from '../ui';
+import { t, useI18n } from '../i18n';
 import { NotFoundArt } from './Illustrations';
 import { StateView } from './StateView';
 
 /** Unknown route or unknown server id. `kind` only changes the wording; both buttons are always there. */
 export default function NotFound({ kind = 'page' }: { kind?: 'page' | 'server' }) {
+  useI18n();
   return (
     <StateView
       kind="notfound"
@@ -114077,16 +114101,16 @@ export default function NotFound({ kind = 'page' }: { kind?: 'page' | 'server' }
           <p className="nf-code text-6xl font-black leading-none tracking-tighter sm:text-7xl" aria-hidden>404</p>
         </>
       )}
-      title={kind === 'server' ? 'Сервер не найден' : 'Такой страницы нет'}
+      title={kind === 'server' ? t('d2.nf.server') : t('d2.nf.page')}
       text={kind === 'server'
-        ? 'Возможно, его удалили или ссылка устарела. Откройте список серверов и найдите нужный.'
-        : 'Ссылка устарела или в адресе опечатка. Вернитесь на главную: всё самое нужное там.'}
+        ? t('d2.nf.serverText')
+        : t('d2.nf.pageText')}
     >
       <a className="btn" href="/" data-magnetic>
-        На главную
+        {t('d2.nf.home')}
         <IconArrow />
       </a>
-      <a className="btn btn-soft" href="/servers">К серверам</a>
+      <a className="btn btn-soft" href="/servers">{t('d2.nf.toServers')}</a>
     </StateView>
   );
 }
@@ -114339,7 +114363,7 @@ export default function PlayersShownCard() {
     setBusy(true);
     try {
       await api('/settings/embed', 'PUT', { playersShown: n });
-      toast('Сохранено. Сообщения обновятся при следующем опросе');
+      toast(t('d2.psc.t.saved'));
     } catch (e) {
       setValue(prev);
       fail(e);
@@ -114354,7 +114378,7 @@ export default function PlayersShownCard() {
       const r = await api<{ chart: boolean; iconTile: boolean }>('/settings/embed', 'PUT', patch);
       setChart(r.chart);
       setTile(r.iconTile);
-      toast('Сохранено. Сообщения обновятся при следующем опросе');
+      toast(t('d2.psc.t.saved'));
     } catch (e) {
       fail(e);
     } finally {
@@ -114365,10 +114389,10 @@ export default function PlayersShownCard() {
   const options = OPTIONS.includes(value) ? OPTIONS : [...OPTIONS, value].sort((a, b) => a - b);
 
   return (
-    <Section title="Ники в сообщении" description="Сколько игроков перечислять в сообщении Discord. Остальные доступны по кнопке «Все игроки на сайте» и ссылке под списком. Первыми идут те, кто в игре дольше всех.">
-      <label htmlFor="players-shown" className="label">Показывать ников</label>
+    <Section title={t('d2.psc.title')} description={t('d2.psc.desc')}>
+      <label htmlFor="players-shown" className="label">{t('d2.psc.show')}</label>
       <select id="players-shown" className="input max-w-[16rem]" value={value} disabled={busy} onChange={(e) => void change(Number(e.target.value))}>
-        {options.map((n) => <option key={n} value={n}>{n === 0 ? '0: только счётчик' : String(n)}</option>)}
+        {options.map((n) => <option key={n} value={n}>{n === 0 ? t('d2.psc.counterOnly') : String(n)}</option>)}
       </select>
       <label className="mt-4 flex cursor-pointer items-start gap-3">
         <Switch className="mt-0.5" checked={chart} disabled={busy} onChange={(on) => void flag({ chart: on })} />
@@ -114392,13 +114416,14 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/components/PollSettingsCard.tsx" << '__COREGSM_EOF__'
 import { useEffect, useState } from 'react';
 import { api } from '../api';
-import { t } from '../i18n';
+import { t, useI18n } from '../i18n';
 import { CONC_MAX, CONC_MIN, FAIL_MAX, FAIL_MIN, WINDOW_MAX, confirmDelayText, durationText, ruleText, validatePoll, type PollSettings } from '../pollSettings';
-import { FieldError, SaveBadge, Section, Switch, ago, plural, useAutosave } from '../ui';
+import { FieldError, SaveBadge, Section, Switch, ago, useAutosave } from '../ui';
 import { useSaveBar, useSaveBarActive } from '../saveBar';
 
 /** «Опрос серверов»: when a failure is confirmed, how many servers are asked at once, and the numbers of the last poll. */
 export default function PollSettingsCard() {
+  useI18n();
   const [srv, setSrv] = useState<PollSettings | null>(null);
   const [gone, setGone] = useState(false);
   const [fail, setFail] = useState('3');
@@ -114446,33 +114471,33 @@ export default function PollSettingsCard() {
     },
   });
 
-  useSaveBar('poll', 'опрос серверов', auto.status, auto.saveNow, () => { if (srv) { setFail(String(srv.failThreshold)); setConc(String(srv.concurrency)); setFailN(srv.failN ? String(srv.failN) : ''); setFailM(srv.failM ? String(srv.failM) : ''); setVeto(!!srv.probeVeto); } });
+  useSaveBar('poll', t('d2.poll.bar'), auto.status, auto.saveNow, () => { if (srv) { setFail(String(srv.failThreshold)); setConc(String(srv.concurrency)); setFailN(srv.failN ? String(srv.failN) : ''); setFailM(srv.failM ? String(srv.failM) : ''); setVeto(!!srv.probeVeto); } });
 
   // the backend is older than the panel (or the poll settings are not available): the card is simply not shown
   if (gone) return null;
-  if (!srv) return <div className="skeleton panel h-40" aria-busy="true" aria-label="Загрузка" />;
+  if (!srv) return <div className="skeleton panel h-40" aria-busy="true" aria-label={t('d2.news.loading')} />;
   const last = srv.last;
 
   return (
     <Section
-      title="Опрос серверов"
-      description="Как панель проверяет игровые серверы и когда считает, что сервер действительно недоступен. Изменения сохраняются сами."
+      title={t('d2.poll.title')}
+      description={t('d2.poll.desc')}
       actions={<SaveBadge status={auto.status} error={auto.error} retry={auto.retry} />}
     >
       <div className="grid gap-4 min-[520px]:grid-cols-2">
         <div>
-          <label htmlFor="poll-fail" className="label">Неудачных опросов подряд до сбоя</label>
+          <label htmlFor="poll-fail" className="label">{t('d2.poll.failLabel')}</label>
           <select id="poll-fail" className="input" value={fail} onChange={(e) => setFail(e.target.value)} onBlur={auto.flush} aria-describedby="poll-fail-hint">
             {Array.from({ length: FAIL_MAX - FAIL_MIN + 1 }, (_, i) => FAIL_MIN + i).map((n) => (
               <option key={n} value={n}>{n}</option>
             ))}
           </select>
           <p id="poll-fail-hint" className="mt-1.5 text-sm font-semibold text-mute">
-            Сбой подтверждается {confirmDelayText(Number(fail) || 1)}. Так одиночная потеря пакета не вызывает тревогу, но настоящее падение заметно позже.
+            {t('d2.poll.failHint', { when: confirmDelayText(Number(fail) || 1) })}
           </p>
         </div>
         <div>
-          <label htmlFor="poll-conc" className="label">Серверов опрашивается одновременно</label>
+          <label htmlFor="poll-conc" className="label">{t('d2.poll.concLabel')}</label>
           <input
             id="poll-conc"
             className="input"
@@ -114487,7 +114512,7 @@ export default function PollSettingsCard() {
             aria-describedby="poll-conc-hint"
           />
           <p id="poll-conc-hint" className="mt-1.5 text-sm font-semibold text-mute">
-            От {CONC_MIN} до {CONC_MAX}. Больше значение, быстрее обход, но выше нагрузка на панель и сеть.
+            {t('d2.poll.concHint', { a: CONC_MIN, b: CONC_MAX })}
           </p>
         </div>
       </div>
@@ -114515,15 +114540,15 @@ export default function PollSettingsCard() {
       <FieldError id="poll-err" text={err && (value.failThreshold !== srv.failThreshold || value.concurrency !== srv.concurrency || value.failN !== (srv.failN ?? null) || value.failM !== (srv.failM ?? null)) ? err : undefined} />
 
       <div className="rounded-ui-lg bg-soft px-4 py-3">
-        <div className="text-sm font-extrabold text-mute">Последний обход</div>
+        <div className="text-sm font-extrabold text-mute">{t('d2.poll.last')}</div>
         {last ? (
           <p className="mt-0.5 font-bold">
-            {ago(last.at)}: {last.servers} {plural(last.servers, ['сервер', 'сервера', 'серверов'])} за {durationText(last.durationMs)}
-            {' · '}{last.failures === 0 ? 'без ошибок' : <span className="text-warn">{last.failures} {plural(last.failures, ['ошибка', 'ошибки', 'ошибок'])}</span>}
-            {' · '}по {last.concurrency} одновременно
+            {ago(last.at)}: {t('d2.poll.servers', { n: last.servers, d: durationText(last.durationMs) })}
+            {' · '}{last.failures === 0 ? t('d2.poll.noErrors') : <span className="text-warn">{t('d2.poll.errors', { n: last.failures })}</span>}
+            {' · '}{t('d2.poll.parallel', { n: last.concurrency })}
           </p>
         ) : (
-          <p className="mt-0.5 font-semibold text-mute">Обход ещё не выполнялся.</p>
+          <p className="mt-0.5 font-semibold text-mute">{t('d2.poll.never')}</p>
         )}
       </div>
     </Section>
@@ -114745,7 +114770,7 @@ function Copyable({ label, text }: { label: string; text: string }) {
     <div>
       <div className="mb-1 flex items-center justify-between gap-2">
         <span className="label mb-0!">{label}</span>
-        <button type="button" className="btn-link btn-xs" onClick={() => void navigator.clipboard?.writeText(text).then(() => toast(t('pb.copied')))}><IconCopy size={14} /> {t('common.copy')}</button>
+        <button type="button" className="btn-link btn-xs" onClick={() => void navigator.clipboard?.writeText(text).then(() => toast(t('d2.pr.copied')))}><IconCopy size={14} /> {t('common.copy')}</button>
       </div>
       <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all rounded-xl bg-soft px-3 py-2 font-mono text-fs-sm font-semibold">{text}</pre>
     </div>
@@ -114762,47 +114787,47 @@ export default function ProbesSection() {
   useEffect(() => { void load(); }, []);
 
   const rotate = async (p: Probe) => {
-    if (!(await confirmDialog({ title: t('pb.rotateQ', { name: p.name }), text: t('pb.rotateText'), confirmLabel: t('pb.rotateBtn') }))) return;
+    if (!(await confirmDialog({ title: t('d2.pr.c.keyTitle', { name: p.name }), text: t('d2.pr.c.keyText'), confirmLabel: t('d2.pr.c.keyConfirm') }))) return;
     await api<Issued>(`/probes/${p.id}/token`, 'POST').then((r) => setIssued({ ...r, name: p.name })).catch((e: Error) => setError(e.message));
   };
   const remove = async (p: Probe) => {
-    if (!(await confirmDialog({ title: t('pb.deleteQ', { name: p.name }), text: t('pb.deleteText'), confirmLabel: t('pb.delete'), danger: true }))) return;
+    if (!(await confirmDialog({ title: t('d2.pr.c.delTitle', { name: p.name }), text: t('d2.pr.c.delText'), confirmLabel: t('d2.news.delete'), danger: true }))) return;
     await api(`/probes/${p.id}`, 'DELETE').then(load).catch((e: Error) => setError(e.message));
   };
 
   return (
     <Section
-      title={t('pb.title')}
-      description={t('pb.desc')}
-      actions={<button type="button" className="btn btn-soft btn-sm" onClick={() => setAdding(true)}>{t('pb.add')}</button>}
+      title={t('d2.pr.title')}
+      description={t('d2.pr.desc')}
+      actions={<button type="button" className="btn btn-soft btn-sm" onClick={() => setAdding(true)}>{t('d2.pr.add')}</button>}
     >
       <ErrorLine text={error} />
       {!list && !error && <SkeletonRows n={2} />}
-      {list && list.length === 0 && <p className="text-sm font-semibold text-mute">{t('pb.empty')}</p>}
+      {list && list.length === 0 && <p className="text-sm font-semibold text-mute">{t('d2.pr.none')}</p>}
       <ul className="grid grid-cols-[minmax(0,1fr)] gap-2">
         {list?.map((p) => (
           <li key={p.id} className="flex flex-wrap items-center gap-3 rounded-2xl bg-soft px-3 py-2.5">
-            <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${p.alive ? 'bg-ok' : 'bg-mute'}`} aria-label={p.alive ? t('pb.alive') : t('pb.dead')} role="img" />
+            <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${p.alive ? 'bg-ok' : 'bg-mute'}`} aria-label={p.alive ? t('d2.pr.alive') : t('d2.pr.dead')} role="img" />
             <span className="min-w-0 flex-1">
               <span className="block font-extrabold">📍 {p.name}</span>
               <span className="block text-sm font-semibold text-mute">
-                {p.lastSeen ? `${t('pb.alive')} ${ago(p.lastSeen)}${p.alive ? ` · ${t('pb.sees', { online: p.online, servers: p.servers })}` : ''}${p.ip ? ` · ${p.ip}` : ''}` : t('pb.never')}
+                {p.lastSeen ? `${t('d2.pr.seen', { ago: ago(p.lastSeen) })}${p.alive ? ` · ${t('d2.pr.sees', { a: p.online, b: p.servers })}` : ''}${p.ip ? ` · ${p.ip}` : ''}` : t('d2.pr.never')}
               </span>
             </span>
-            <button type="button" className="row-act" aria-label={t('pb.newKey')} title={t('pb.newKey')} onClick={() => void rotate(p)}><IconRefresh /></button>
-            <button type="button" className="row-act row-act-danger" aria-label={t('pb.delete')} title={t('pb.delete')} onClick={() => void remove(p)}><IconTrash /></button>
+            <button type="button" className="row-act" aria-label={t('d2.pr.newKey')} title={t('d2.pr.newKey')} onClick={() => void rotate(p)}><IconRefresh /></button>
+            <button type="button" className="row-act row-act-danger" aria-label={t('d2.news.delete')} title={t('d2.news.delete')} onClick={() => void remove(p)}><IconTrash /></button>
           </li>
         ))}
       </ul>
       {adding && <AddProbe onClose={() => setAdding(false)} onDone={(r) => { setAdding(false); setIssued(r); void load(); }} />}
       {issued && (
-        <Modal title={t('pb.probeTitle', { name: issued.name })} onClose={() => { setIssued(null); void load(); }}>
+        <Modal title={t('d2.pr.probe', { name: issued.name })} onClose={() => { setIssued(null); void load(); }}>
           <div className="space-y-3.5">
-            <p className="font-semibold">{t('pb.run')}</p>
-            <Copyable label={t('pb.docker')} text={issued.commands.docker} />
-            <Copyable label={t('pb.node')} text={issued.commands.node} />
-            <p className="text-sm font-semibold text-mute">{t('pb.appears')}</p>
-            <div className="flex justify-end"><button type="button" className="btn" onClick={() => { setIssued(null); void load(); }}>{t('pb.done')}</button></div>
+            <p className="font-semibold">{t('d2.pr.run')}</p>
+            <Copyable label={t('d2.pr.docker')} text={issued.commands.docker} />
+            <Copyable label={t('d2.pr.node')} text={issued.commands.node} />
+            <p className="text-sm font-semibold text-mute">{t('d2.pr.appears')}</p>
+            <div className="flex justify-end"><button type="button" className="btn" onClick={() => { setIssued(null); void load(); }}>{t('wn.done')}</button></div>
           </div>
         </Modal>
       )}
@@ -114824,13 +114849,13 @@ function AddProbe({ onClose, onDone }: { onClose: () => void; onDone: (r: Issued
       .finally(() => setBusy(false));
   };
   return (
-    <Modal title={t('pb.newTitle')} onClose={onClose}>
+    <Modal title={t('d2.pr.newProbe')} onClose={onClose}>
       <form onSubmit={submit} className="space-y-3.5">
-        <Field label={t('pb.f.name')}><input className="input" value={name} onChange={(e) => setName(e.target.value)} maxLength={40} placeholder={t('pb.f.ph')} required autoFocus /></Field>
+        <Field label={t('d2.pr.name')}><input className="input" value={name} onChange={(e) => setName(e.target.value)} maxLength={40} placeholder={t('d2.pr.nameEx')} required autoFocus /></Field>
         <ErrorLine text={error} />
         <div className="flex justify-end gap-2">
           <button type="button" className="btn btn-ghost" onClick={onClose}>{t('common.cancel')}</button>
-          <Button loading={busy}>{t('pb.create')}</Button>
+          <Button loading={busy}>{t('d2.pr.create')}</Button>
         </div>
       </form>
     </Modal>
@@ -114871,7 +114896,7 @@ interface Plan {
 
 const DAYS: TKey[] = ['cm.dow.0', 'cm.dow.1', 'cm.dow.2', 'cm.dow.3', 'cm.dow.4', 'cm.dow.5', 'cm.dow.6'];
 const hhmm = (min: number) => `${String(Math.floor(min / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`;
-const daysText = (d: number) => (d === 127 ? t('rp.everyDay') : d === 0 ? t('rp.noDays') : DAYS.filter((_, i) => d & (1 << i)).map((x) => t(x)).join(', '));
+const daysText = (d: number) => (d === 127 ? t('d2.rp.everyDay') : d === 0 ? t('d2.rp.noDays') : DAYS.filter((_, i) => d & (1 << i)).map((k) => t(k)).join(', '));
 
 export default function RestartPlans({ servers }: { servers: Server[] }) {
   useI18n();
@@ -114883,8 +114908,8 @@ export default function RestartPlans({ servers }: { servers: Server[] }) {
   if (!servers.length) return null;
   return (
     <Section
-      title={t('rp.title')}
-      description={t('rp.desc')}
+      title={t('d2.rp.title')}
+      description={t('d2.rp.desc')}
     >
       <ul className="grid grid-cols-[minmax(0,1fr)] gap-2">
         {servers.map((s) => {
@@ -114895,13 +114920,13 @@ export default function RestartPlans({ servers }: { servers: Server[] }) {
               <span className="min-w-0 flex-1">
                 <span className="block truncate font-extrabold">{s.name}</span>
                 <span className="block text-sm font-semibold text-mute">
-                  {!p ? <span className="skeleton inline-block h-3 w-40 rounded-full align-middle" /> : p.enabled ? `${t('rp.daysAt', { days: daysText(p.days), time: hhmm(p.atMin) })}${p.next ? ` · ${t('rp.next', { when: fmtDateTime(p.next) })}` : ''}` : t('rp.off')}
-                  {p?.rcon.configured ? ` · ${t('rp.rconOn')}` : ''}
+                  {!p ? <span className="skeleton inline-block h-3 w-40 rounded-full align-middle" /> : p.enabled ? `${t('d2.rp.at', { days: daysText(p.days), time: hhmm(p.atMin) })}${p.next ? ` · ${t('d2.rp.next', { when: fmtDateTime(p.next) })}` : ''}` : t('d2.rp.off')}
+                  {p?.rcon.configured ? ` · ${t('d2.rp.rconOn')}` : ''}
                 </span>
-                {p?.lastResult && <span className="block text-xs font-bold text-mute">{t('rp.last', { when: p.lastRunAt ? fmtDateTime(p.lastRunAt) : '' })}: {p.lastResult}</span>}
+                {p?.lastResult && <span className="block text-xs font-bold text-mute">{t('d2.rp.lastTime')} {p.lastRunAt ? fmtDateTime(p.lastRunAt) : ''}: {p.lastResult}</span>}
               </span>
-              {p?.enabled && <span className="pill pill-ok">{t('rp.on')}</span>}
-              <button type="button" className="btn btn-soft btn-sm" onClick={() => setOpen(s)} disabled={!p}>{t('rp.setup')}</button>
+              {p?.enabled && <span className="pill pill-ok">{t('d2.rp.on')}</span>}
+              <button type="button" className="btn btn-soft btn-sm" onClick={() => setOpen(s)} disabled={!p}>{t('d2.rp.configure')}</button>
             </li>
           );
         })}
@@ -114938,7 +114963,7 @@ function PlanModal({ server, plan, onClose, onSaved }: { server: Server; plan: P
         p = await api<Plan>(`/servers/${server.id}/rcon`, 'PUT', { port: port ? Number(port) : null, ...(password ? { password } : {}) });
       }
       onSaved(p);
-      toast(t('rp.saved'));
+      toast(t('d2.rp.t.saved'));
       onClose();
     } catch (e) {
       setError(errText(e));
@@ -114956,7 +114981,7 @@ function PlanModal({ server, plan, onClose, onSaved }: { server: Server; plan: P
         setPassword('');
       }
       const r = await api<{ ok: boolean; answer: string }>(`/servers/${server.id}/rcon/test`, 'POST', { command: testCmd });
-      setAnswer({ ok: r.ok, text: r.answer || t('rp.noAnswer') });
+      setAnswer({ ok: r.ok, text: r.answer || t('d2.rp.noAnswer') });
     } catch (e) {
       setAnswer({ ok: false, text: (e as Error).message });
     } finally {
@@ -114964,19 +114989,19 @@ function PlanModal({ server, plan, onClose, onSaved }: { server: Server; plan: P
     }
   };
   const now = async () => {
-    if (!(await confirmDialog({ title: t('rp.nowQ', { name: server.name }), text: t('rp.nowText'), confirmLabel: t('rp.restart'), danger: true }))) return;
+    if (!(await confirmDialog({ title: t('d2.rp.c.title', { name: server.name }), text: t('d2.rp.c.text'), confirmLabel: t('d2.rp.c.confirm'), danger: true }))) return;
     setBusy('now');
-    await api<Plan>(`/servers/${server.id}/restart/now`, 'POST').then((p) => { onSaved(p); toast(p.lastResult ?? t('rp.done')); }).catch((e: Error) => setError(e.message)).finally(() => setBusy(''));
+    await api<Plan>(`/servers/${server.id}/restart/now`, 'POST').then((p) => { onSaved(p); toast(p.lastResult ?? t('wn.done')); }).catch((e: Error) => setError(e.message)).finally(() => setBusy(''));
   };
 
   return (
-    <Modal title={t('rp.modalTitle', { name: server.name })} onClose={onClose}>
+    <Modal title={t('d2.rp.restarts', { name: server.name })} onClose={onClose}>
       <div className="space-y-4">
         <label className="flex cursor-pointer items-center gap-3 font-extrabold">
-          <Switch checked={f.enabled} onChange={(on) => setF({ ...f, enabled: on })} /> {t('rp.bySchedule')}
+          <Switch checked={f.enabled} onChange={(on) => setF({ ...f, enabled: on })} /> {t('d2.rp.bySchedule')}
         </label>
         <fieldset>
-          <legend className="label">{t('rp.days')}</legend>
+          <legend className="label">{t('d2.rp.days')}</legend>
           <div className="flex flex-wrap gap-1.5">
             {DAYS.map((dk, i) => {
               const on = !!(f.days & (1 << i));
@@ -114985,40 +115010,40 @@ function PlanModal({ server, plan, onClose, onSaved }: { server: Server; plan: P
           </div>
         </fieldset>
         <div className="grid gap-3 sm:grid-cols-3">
-          <Field label={t('rp.f.time')}><input className="input" type="time" value={time} onChange={(e) => setTime(e.target.value)} required /></Field>
-          <Field label={t('rp.f.warn')}><input className="input" type="number" min={0} max={120} value={f.warnMin} onChange={(e) => setF({ ...f, warnMin: Number(e.target.value) })} /></Field>
-          <Field label={t('rp.f.dur')}><input className="input" type="number" min={1} max={240} value={f.durationMin} onChange={(e) => setF({ ...f, durationMin: Number(e.target.value) })} /></Field>
+          <Field label={t('d2.rp.time')}><input className="input" type="time" value={time} onChange={(e) => setTime(e.target.value)} required /></Field>
+          <Field label={t('d2.rp.warn')}><input className="input" type="number" min={0} max={120} value={f.warnMin} onChange={(e) => setF({ ...f, warnMin: Number(e.target.value) })} /></Field>
+          <Field label={t('d2.rp.lasts')}><input className="input" type="number" min={1} max={240} value={f.durationMin} onChange={(e) => setF({ ...f, durationMin: Number(e.target.value) })} /></Field>
         </div>
         {plan.suggestedHour != null && (
           <p className="-mt-2 text-sm font-semibold text-mute">
-            {t('rp.tzHint', { tz: plan.timezone, hour: String(plan.suggestedHour).padStart(2, '0') })}{' '}
-            <button type="button" className="btn-link btn-xs" onClick={() => setTime(`${String(plan.suggestedHour).padStart(2, '0')}:00`)}>{t('rp.setTime')}</button>
+            {t('d2.rp.panelTime', { tz: plan.timezone, hh: String(plan.suggestedHour).padStart(2, '0') })}{' '}
+            <button type="button" className="btn-link btn-xs" onClick={() => setTime(`${String(plan.suggestedHour).padStart(2, '0')}:00`)}>{t('d2.rp.setTime')}</button>
           </p>
         )}
         <div>
-          <span className="label">{t('rp.channel')}</span>
+          <span className="label">{t('d2.rp.channel')}</span>
           <ChannelPicker id="restart-channel" value={f.channelId} onChange={(v) => setF({ ...f, channelId: v })} />
-          <p className="mt-1 text-sm font-semibold text-mute">{t('wipe.channelHint')}</p>
+          <p className="mt-1 text-sm font-semibold text-mute">{t('d2.ws.channelNote')}</p>
         </div>
 
         <fieldset className="space-y-3 rounded-2xl bg-soft p-3.5">
-          <legend className="px-1 font-extrabold">{t('rp.rconTitle')}</legend>
-          <p className="text-sm font-semibold text-mute">{t('rp.rconNote')}</p>
+          <legend className="px-1 font-extrabold">{t('d2.rp.rcon')}</legend>
+          <p className="text-sm font-semibold text-mute">{t('d2.rp.rconNote')}</p>
           {isAdmin ? (
             <div className="grid gap-3 sm:grid-cols-2">
-              <Field label={t('rp.f.port')}><input className="input" inputMode="numeric" value={port} onChange={(e) => setPort(e.target.value.replace(/\D/g, ''))} placeholder={t('rp.portPh')} /></Field>
-              <Field label={plan.rcon.configured ? t('rp.f.passKeep') : t('rp.f.pass')}><input className="input" type="password" autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} /></Field>
+              <Field label={t('d2.rp.rconPort')}><input className="input" inputMode="numeric" value={port} onChange={(e) => setPort(e.target.value.replace(/\D/g, ''))} placeholder={t('d2.rp.portEx')} /></Field>
+              <Field label={plan.rcon.configured ? t('d2.rp.passKeep') : t('pf.2fa.password')}><input className="input" type="password" autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} /></Field>
             </div>
           ) : (
-            <p className="text-sm font-bold">{plan.rcon.configured ? t('rp.connectedPort', { port: String(plan.rcon.port) }) : t('rp.notConnected')}</p>
+            <p className="text-sm font-bold">{plan.rcon.configured ? t('d2.rp.connected', { port: plan.rcon.port ?? '' }) : t('d2.rp.notConnected')}</p>
           )}
-          <Field label={t('rp.f.cmd')}><input className="input font-mono" value={f.command} onChange={(e) => setF({ ...f, command: e.target.value })} placeholder={t('rp.cmdPh')} maxLength={200} /></Field>
-          <Field label={t('rp.f.say')}><input className="input font-mono" value={f.say} onChange={(e) => setF({ ...f, say: e.target.value })} maxLength={200} /></Field>
-          <p className="text-sm font-semibold text-mute">{t('rp.cmdNote')}</p>
+          <Field label={t('d2.rp.cmd')}><input className="input font-mono" value={f.command} onChange={(e) => setF({ ...f, command: e.target.value })} placeholder={t('d2.rp.cmdEx')} maxLength={200} /></Field>
+          <Field label={t('d2.rp.say')}><input className="input font-mono" value={f.say} onChange={(e) => setF({ ...f, say: e.target.value })} maxLength={200} /></Field>
+          <p className="text-sm font-semibold text-mute">{t('d2.rp.cmdNote')}</p>
           {isAdmin && (
             <div className="flex flex-wrap items-end gap-2">
-              <div className="min-w-40 flex-1"><Field label={t('rp.f.test')}><input className="input font-mono" value={testCmd} onChange={(e) => setTestCmd(e.target.value)} /></Field></div>
-              <Button type="button" className="btn-soft" loading={busy === 'test'} disabled={!port} onClick={() => void test()}>{t('rp.run')}</Button>
+              <div className="min-w-40 flex-1"><Field label={t('d2.rp.testCmd')}><input className="input font-mono" value={testCmd} onChange={(e) => setTestCmd(e.target.value)} /></Field></div>
+              <Button type="button" className="btn-soft" loading={busy === 'test'} disabled={!port} onClick={() => void test()}>{t('d2.rp.run')}</Button>
             </div>
           )}
           {answer && <pre className={`whitespace-pre-wrap rounded-xl px-3 py-2 text-sm font-semibold ${answer.ok ? 'bg-okbg text-ok' : 'bg-badbg text-bad'}`}>{answer.text}</pre>}
@@ -115026,7 +115051,7 @@ function PlanModal({ server, plan, onClose, onSaved }: { server: Server; plan: P
 
         <ErrorLine text={error} />
         <div className="flex flex-wrap justify-between gap-2">
-          <Button type="button" className="btn-ghost text-bad" loading={busy === 'now'} onClick={() => void now()}>{t('rp.restartNow')}</Button>
+          <Button type="button" className="btn-ghost text-bad" loading={busy === 'now'} onClick={() => void now()}>{t('d2.rp.now')}</Button>
           <div className="flex gap-2">
             <button type="button" className="btn btn-ghost" onClick={onClose}>{t('common.cancel')}</button>
             <Button type="button" loading={busy === 'save'} onClick={() => void save()}>{t('common.save')}</Button>
@@ -115350,7 +115375,7 @@ export function AppFooter({ brand, version }: { brand: string; version?: string 
         <a href="/news"><FootNews />{t('nav.news')}</a>
         <a href="/status"><FootStatus />{t('nav.status')}</a>
         <a href="/community"><FootCommunity />{t('nav.community')}</a>
-        <a href="/gallery"><FootGallery />Галерея</a>
+        <a href="/gallery"><FootGallery />{t('d2.gal.title')}</a>
       </nav>
       {version && <span className="app-foot-ver" title={t('foot.version', { v: version })}><FootTag />{footVersionText(version)}</span>}
     </footer>
@@ -115359,8 +115384,9 @@ export function AppFooter({ brand, version }: { brand: string; version?: string 
 
 // ---------- breadcrumbs ----------
 export function Crumbs({ items }: { items: [href: string, label: ReactNode][] }) {
+  useI18n();
   return (
-    <nav className="crumbs" aria-label="Хлебные крошки">
+    <nav className="crumbs" aria-label={t('d2.sh.crumbs')}>
       <ol>
         {items.map(([href, label], i) => (
           <li key={href + i}>
@@ -115405,11 +115431,11 @@ export function ProfileMenu({ me, isStaff, logout, active }: { me: Me; isStaff: 
             <UserAvatar name={me.username} url={me.avatarUrl} size={40} tone="grad" className="rounded-full!" />
             <div className="min-w-0">
               <div className="truncate font-extrabold">{me.username}</div>
-              <div className="text-xs font-bold text-mute">{me.role === 'admin' ? 'Администратор' : me.role === 'moderator' ? 'Модератор' : 'Игрок'}</div>
+              <div className="text-xs font-bold text-mute">{me.role === 'admin' ? t('d2.sh.admin') : me.role === 'moderator' ? t('d2.sh.moderator') : t('d2.sh.player')}</div>
             </div>
           </div>
           <a role="menuitem" className={`${link} pm-ico`} href="/profile"><MenuUser />{t('hdr.profile')}</a>
-          <a role="menuitem" className={`${link} pm-ico`} href="/gallery"><MenuGallery />Моя галерея</a>
+          <a role="menuitem" className={`${link} pm-ico`} href="/gallery"><MenuGallery />{t('d2.sh.myGallery')}</a>
           {isStaff && <a role="menuitem" className={`${link} pm-ico`} href="/admin"><MenuAdmin />{t('nav.admin')}</a>}
           <div className="pm-sep" role="separator" />
           {/* one tap, and the menu stays open so both can be set at once */}
@@ -115557,10 +115583,12 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/components/SmtpCard.tsx" << '__COREGSM_EOF__'
 import { useEffect, useState, type FormEvent } from 'react';
 import { api, type SmtpInfo } from '../api';
+import { t, useI18n } from '../i18n';
 import { ErrorLine, Section, TextField, toast, errText } from '../ui';
 
 /** Settings → security: outgoing e-mail (password reset, address confirmation, new-device letters). Administrators only. */
 export default function SmtpCard() {
+  useI18n();
   const [info, setInfo] = useState<SmtpInfo | null>(null);
   const [host, setHost] = useState('');
   const [port, setPort] = useState('587');
@@ -115589,7 +115617,7 @@ export default function SmtpCard() {
   }, []);
 
   const portNum = Number(port);
-  const portErr = port && (!Number.isInteger(portNum) || portNum < 1 || portNum > 65535) ? 'Порт от 1 до 65535' : '';
+  const portErr = port && (!Number.isInteger(portNum) || portNum < 1 || portNum > 65535) ? t('d2.smtp.portRange') : '';
 
   const save = async (e: FormEvent) => {
     e.preventDefault();
@@ -115602,7 +115630,7 @@ export default function SmtpCard() {
       // empty = keep the saved password
       if (password) body.password = password;
       apply(await api<SmtpInfo>('/settings/smtp', 'PUT', body));
-      toast('Настройки почты сохранены');
+      toast(t('d2.smtp.t.saved'));
     } catch (err) {
       setError(errText(err));
     } finally {
@@ -115625,7 +115653,7 @@ export default function SmtpCard() {
     setTesting(true);
     try {
       await api('/settings/smtp/test', 'POST', { to: to.trim() });
-      setNote(`Пробное письмо отправлено на ${to.trim()}`);
+      setNote(t('d2.smtp.t.test', { to: to.trim() }));
     } catch (err) {
       setError(errText(err));
     } finally {
@@ -115635,48 +115663,48 @@ export default function SmtpCard() {
 
   return (
     <Section
-      title="Почта (SMTP)"
-      description="Нужна для сброса пароля, подтверждения адреса и писем о входе с нового устройства. Без неё эти функции выключены."
-      actions={info && <span className={`pill ${info.ready ? 'pill-ok' : 'pill-mute'}`}>{info.ready ? 'ПОЧТА РАБОТАЕТ' : 'НЕ НАСТРОЕНА'}</span>}
+      title={t('d2.smtp.title')}
+      description={t('d2.smtp.desc')}
+      actions={info && <span className={`pill ${info.ready ? 'pill-ok' : 'pill-mute'}`}>{info.ready ? t('d2.smtp.ready') : t('d2.smtp.notReady')}</span>}
     >
       <form onSubmit={save} className="space-y-3.5">
         <div className="grid gap-3.5 sm:grid-cols-[minmax(0,1fr)_7rem]">
-          <TextField id="smtp-host" label="Сервер SMTP" value={host} onChange={setHost} placeholder="smtp.example.com" noAutofill />
-          <TextField id="smtp-port" label="Порт" value={port} onChange={setPort} inputMode="numeric" error={portErr} autoComplete="off" />
+          <TextField id="smtp-host" label={t('d2.smtp.host')} value={host} onChange={setHost} placeholder="smtp.example.com" noAutofill />
+          <TextField id="smtp-port" label={t('d2.sf.port')} value={port} onChange={setPort} inputMode="numeric" error={portErr} autoComplete="off" />
         </div>
         <label className="flex cursor-pointer items-center gap-2.5 font-bold text-mute">
           <input type="checkbox" className="h-4 w-4 accent-brand" checked={secure} onChange={(e) => { setSecure(e.target.checked); if (e.target.checked && port === '587') setPort('465'); if (!e.target.checked && port === '465') setPort('587'); }} />
-          Шифрование с первого байта (SSL/TLS, обычно порт 465). Иначе используется STARTTLS.
+          {t('d2.smtp.secure')}
         </label>
         <div className="grid gap-3.5 sm:grid-cols-2">
-          <TextField id="smtp-user" label="Логин" value={user} onChange={setUser} noAutofill />
+          <TextField id="smtp-user" label={t('login.user')} value={user} onChange={setUser} noAutofill />
           <TextField
             id="smtp-pass"
-            label={info?.passwordSet ? 'Пароль (сохранён, оставьте пустым чтобы не менять)' : 'Пароль'}
+            label={info?.passwordSet ? t('d2.smtp.passSaved') : t('pf.2fa.password')}
             type="password"
             value={password}
             onChange={setPassword}
             noAutofill
           />
         </div>
-        <TextField id="smtp-from" label="Адрес отправителя" value={from} onChange={setFrom} placeholder="CoreGSM <no-reply@example.com>" autoComplete="off" />
+        <TextField id="smtp-from" label={t('d2.smtp.from')} value={from} onChange={setFrom} placeholder="CoreGSM <no-reply@example.com>" autoComplete="off" />
         {info && !info.publicBase && (
           <p className="rounded-2xl bg-warnbg px-4 py-2.5 text-sm font-bold text-warn">
-            Публичный адрес панели неизвестен: письма со ссылками для сброса пароля не будут отправляться. Откройте панель по домену под администратором или задайте PUBLIC_URL в .env.
+            {t('d2.smtp.noBase')}
           </p>
         )}
         <ErrorLine text={error} />
         {note && <p className="rounded-ui-lg bg-okbg px-4 py-2.5 font-bold text-ok" role="status">{note}</p>}
         <div className="flex flex-wrap items-center gap-2">
-          <button className="btn" disabled={busy || !!portErr}>Сохранить</button>
-          {info?.passwordSet && <button type="button" className="btn btn-soft" onClick={() => void clearPassword()}>Удалить пароль</button>}
+          <button className="btn" disabled={busy || !!portErr}>{t('common.save')}</button>
+          {info?.passwordSet && <button type="button" className="btn btn-soft" onClick={() => void clearPassword()}>{t('d2.smtp.delPass')}</button>}
         </div>
       </form>
 
       <div className="space-y-2 border-t pt-4">
-        <TextField id="smtp-to" label="Отправить пробное письмо на" value={to} onChange={setTo} type="email" placeholder="you@example.com" autoComplete="email" />
+        <TextField id="smtp-to" label={t('d2.smtp.sendTo')} value={to} onChange={setTo} type="email" placeholder="you@example.com" autoComplete="email" />
         <button type="button" className="btn btn-soft" disabled={testing || !to.trim() || !info?.ready} onClick={() => void test()}>
-          {testing ? 'Отправляю…' : 'Отправить пробное письмо'}
+          {testing ? t('d2.smtp.sending') : t('d2.smtp.send')}
         </button>
       </div>
     </Section>
@@ -116083,7 +116111,8 @@ export function Switch({ checked, onChange, className = '', ...rest }: SwitchPro
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components"
   cat > "$APP_DIR/core-frontend/src/components/Tour.tsx" << '__COREGSM_EOF__'
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { t, useI18n } from '../i18n';
 import { useAuth } from '../auth';
 import { useDialogFocus } from '../confirm';
 import { currentPath, navigate } from '../ui/route';
@@ -116105,41 +116134,43 @@ interface Step {
   anchors: string[];
 }
 
-const ADMIN_NAV = 'nav[aria-label="Разделы админки"]';
-const SETTINGS_NAV = 'nav[aria-label="Разделы настроек"]';
-
-const STEPS: Step[] = [
+/** the steps in the current language (the navigation anchors carry translated aria-labels) */
+const buildSteps = (): Step[] => {
+  const ADMIN_NAV = `nav[aria-label="${t('adm.navLabel')}"]`;
+  const SETTINGS_NAV = `nav[aria-label="${t('d2.set.sections')}"]`;
+  return [
   {
-    title: 'Добавьте игровой сервер',
-    text: 'Добро пожаловать! Прогресс всегда виден в «Админка → Начало работы». Начнём с главного: в «Админка → Серверы» добавьте сервер, выбрав игру и указав адрес. Панель сразу начнёт показывать онлайн, карту и пинг.',
+    title: t('d2.tour.1.title'),
+    text: t('d2.tour.1.text'),
     route: '/admin/servers',
     anchors: ['[data-tour="add-server"]', `${ADMIN_NAV} a[href="/admin/servers"]`],
   },
   {
-    title: 'Подключите Discord-бота',
-    text: 'В «Настройки → Бот и Discord» вставьте токен бота из Discord Developer Portal и сохраните. После этого пригласите бота на свой Discord-сервер.',
+    title: t('d2.tour.2.title'),
+    text: t('d2.tour.2.text'),
     route: '/admin/settings/bot',
     anchors: ['[data-tour="bot-token"]', `${SETTINGS_NAV} a[href="/admin/settings/bot"]`],
   },
   {
-    title: 'Привяжите канал',
-    text: 'В разделе «Discord» выберите канал, куда бот будет публиковать карточку сервера. Сообщение обновляется по таймеру само.',
+    title: t('d2.tour.3.title'),
+    text: t('d2.tour.3.text'),
     route: '/admin/discord',
     anchors: ['[data-tour="bind-channel"]', `${ADMIN_NAV} a[href="/admin/discord"]`],
   },
   {
-    title: 'Пишите новости',
-    text: 'В «Новости» можно подготовить запись с картинкой, отправить её в Discord сразу или по расписанию и повторять по расписанию.',
+    title: t('d2.tour.4.title'),
+    text: t('d2.tour.4.text'),
     route: '/admin/news',
     anchors: ['[data-tour="news-new"]', `${ADMIN_NAV} a[href="/admin/news"]`],
   },
   {
-    title: 'Настройте оформление',
-    text: 'В «Настройки → Оформление» задайте название сообщества, логотип и фирменный цвет. На этом всё: подсказки можно показать снова в профиле.',
+    title: t('d2.tour.5.title'),
+    text: t('d2.tour.5.text'),
     route: '/admin/settings/brand',
     anchors: ['[data-tour="brand"]', `${SETTINGS_NAV} a[href="/admin/settings/brand"]`],
   },
-];
+  ];
+};
 
 const key = (username: string) => `coregsm_tour_${username}`;
 const RESTART = 'coregsm:tour-restart';
@@ -116159,6 +116190,7 @@ export function restartTour(username: string) {
 
 /** mounted once for a signed-in layout */
 export default function Tour() {
+  useI18n();
   const { me, isAdmin } = useAuth();
   const username = me?.username ?? '';
   const [open, setOpen] = useState(false);
@@ -116188,12 +116220,12 @@ export default function Tour() {
   if (open) return <TourOverlay onClose={close} />;
   if (!offer) return null;
   return (
-    <div role="dialog" aria-label="Подсказки по панели" className="pop panel panel-raised fixed bottom-24 right-4 z-60 flex w-[min(20rem,calc(100vw-2rem))] items-center gap-3 py-2.5 pl-4 pr-2 shadow-soft md:bottom-5">
+    <div role="dialog" aria-label={t('d2.tour.label')} className="pop panel panel-raised fixed bottom-24 right-4 z-60 flex w-[min(20rem,calc(100vw-2rem))] items-center gap-3 py-2.5 pl-4 pr-2 shadow-soft md:bottom-5">
       <div className="min-w-0 flex-1">
-        <div className="text-sm font-black">Впервые в Админке?</div>
-        <button className="text-sm font-extrabold text-link underline" onClick={() => { setOffer(false); setOpen(true); }}>Показать за минуту</button>
+        <div className="text-sm font-black">{t('d2.tour.first')}</div>
+        <button className="text-sm font-extrabold text-link underline" onClick={() => { setOffer(false); setOpen(true); }}>{t('d2.tour.show')}</button>
       </div>
-      <button className="btn-icon-ghost btn-icon-sm" aria-label="Не показывать" title="Не показывать" onClick={() => { setOffer(false); if (username) markSeen(username); }}>✕</button>
+      <button className="btn-icon-ghost btn-icon-sm" aria-label={t('d2.tour.dismiss')} title={t('d2.tour.dismiss')} onClick={() => { setOffer(false); if (username) markSeen(username); }}>✕</button>
     </div>
   );
 }
@@ -116209,6 +116241,8 @@ const findAnchor = (step: Step): HTMLElement | null => {
 const POP_W = 360;
 
 function TourOverlay({ onClose }: { onClose: () => void }) {
+  const { lang } = useI18n();
+  const STEPS = useMemo(() => buildSteps(), [lang]); // eslint-disable-line react-hooks/exhaustive-deps
   const [i, setI] = useState(0);
   const [rect, setRect] = useState<DOMRect | null>(null);
   const [vw, setVw] = useState(window.innerWidth);
@@ -116310,7 +116344,7 @@ function TourOverlay({ onClose }: { onClose: () => void }) {
         className={`panel absolute space-y-3 p-5 shadow-pop outline-hidden max-sm:inset-x-0 max-sm:bottom-0 max-sm:rounded-b-none max-sm:pb-[max(1.25rem,env(safe-area-inset-bottom))] ${mobile ? '' : 'max-w-[calc(100vw-1.5rem)]'}`}
       >
         <div className="flex items-center justify-between gap-3">
-          <p className="text-sm font-extrabold text-mute" aria-live="polite">Шаг {i + 1} из {STEPS.length}</p>
+          <p className="text-sm font-extrabold text-mute" aria-live="polite">{t('d2.dw.step', { a: i + 1, b: STEPS.length })}</p>
           <div className="flex gap-1.5" aria-hidden>
             {STEPS.map((_, n) => (
               <span key={n} className={`h-1.5 rounded-full transition-all ${n === i ? 'w-5 bg-brand' : n < i ? 'w-1.5 bg-brand/50' : 'w-1.5 bg-field/60'}`} />
@@ -116321,14 +116355,14 @@ function TourOverlay({ onClose }: { onClose: () => void }) {
         <p id="tour-text" className="font-semibold leading-relaxed text-mute">{step.text}</p>
         <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
           <button type="button" className="btn btn-ghost" onClick={onClose}>
-            Пропустить
+            {t('d2.su.skip')}
           </button>
           <div className="flex gap-2">
             {i > 0 && (
-              <button type="button" className="btn btn-soft" onClick={() => setI(i - 1)}>Назад</button>
+              <button type="button" className="btn btn-soft" onClick={() => setI(i - 1)}>{t('wn.back')}</button>
             )}
             <button type="button" data-next className="btn" onClick={() => (last ? onClose() : setI(i + 1))}>
-              {last ? 'Готово' : 'Далее'}
+              {last ? t('wn.done') : t('d2.su.next')}
             </button>
           </div>
         </div>
@@ -116556,14 +116590,14 @@ interface Wipe {
   failed: number;
 }
 
-const ANNOUNCE = [{ m: 10_080, label: 'wipe.ann.week' as const }, { m: 1440, label: 'wipe.ann.day' as const }, { m: 180, label: 'wipe.ann.h3' as const }, { m: 60, label: 'wipe.ann.h1' as const }, { m: 10, label: 'wipe.ann.m10' as const }];
-const SAY = [{ m: 30, label: 'wipe.say.m30' as const }, { m: 10, label: 'wipe.ann.m10' as const }, { m: 5, label: 'wipe.say.m5' as const }, { m: 1, label: 'wipe.say.m1' as const }];
-const STEP_LABEL: Record<string, TKey> = { window: 'wipe.step.window', commands: 'wipe.step.commands', season: 'wipe.step.season', news: 'wipe.step.news', discord: 'wipe.step.discord', say: 'wipe.step.say', missed: 'wipe.step.missed' };
+const ANNOUNCE: { m: number; label: TKey }[] = [{ m: 10_080, label: 'd2.ws.a.week' }, { m: 1440, label: 'd2.ws.a.day' }, { m: 180, label: 'd2.ws.a.3h' }, { m: 60, label: 'd2.ws.a.h' }, { m: 10, label: 'd2.ws.a.10m' }];
+const SAY: { m: number; label: TKey }[] = [{ m: 30, label: 'd2.ws.a.30m' }, { m: 10, label: 'd2.ws.a.10m' }, { m: 5, label: 'd2.ws.a.5m' }, { m: 1, label: 'd2.ws.a.1m' }];
+const STEP_LABEL: Record<string, TKey> = { window: 'd2.ws.s.window', commands: 'd2.ws.s.commands', season: 'd2.ws.s.season', news: 'd2.ws.s.news', discord: 'd2.ws.s.discord', say: 'd2.ws.s.say', missed: 'd2.ws.s.missed' };
 const STATUS: Record<Wipe['status'], { text: TKey; cls: string }> = {
-  scheduled: { text: 'wipe.st.scheduled', cls: 'pill pill-ok' },
-  done: { text: 'wipe.st.done', cls: 'pill pill-mute' },
-  missed: { text: 'wipe.st.missed', cls: 'pill pill-bad' },
-  cancelled: { text: 'wipe.st.cancelled', cls: 'pill pill-mute' },
+  scheduled: { text: 'd2.ws.st.scheduled', cls: 'pill pill-ok' },
+  done: { text: 'd2.ws.st.done', cls: 'pill pill-mute' },
+  missed: { text: 'd2.ws.st.missed', cls: 'pill pill-bad' },
+  cancelled: { text: 'd2.ws.st.cancelled', cls: 'pill pill-mute' },
 };
 
 /** the value of <input type="datetime-local"> for a timestamp (the browser's time zone) */
@@ -116574,7 +116608,7 @@ const localInput = (ts: number) => {
 
 const blank = (): Wipe => ({
   id: 0,
-  name: t('wipe.defName'),
+  name: t('d2.ws.defName'),
   wipeAt: Date.now() + 3 * 86_400_000,
   status: 'scheduled',
   announceMin: [1440, 60, 10],
@@ -116586,8 +116620,8 @@ const blank = (): Wipe => ({
   seed: '',
   seasonName: '',
   newsChannelId: '',
-  newsTitle: t('wipe.defNewsTitle'),
-  newsText: t('wipe.defNewsText'),
+  newsTitle: t('d2.ws.defNewsTitle'),
+  newsText: t('d2.ws.defNewsText'),
   mention: 'none',
   steps: [],
   failed: 0,
@@ -116608,8 +116642,8 @@ export default function WipeScenarios({ servers }: { servers: Server[] }) {
   if (!servers.length) return null;
   return (
     <Section
-      title={t('wipe.title')}
-      description={t('wipe.desc')}
+      title={t('d2.ws.title')}
+      description={t('d2.ws.desc')}
     >
       <ul className="grid grid-cols-[minmax(0,1fr)] gap-2">
         {servers.map((s) => {
@@ -116620,11 +116654,11 @@ export default function WipeScenarios({ servers }: { servers: Server[] }) {
               <span className="min-w-0 flex-1">
                 <span className="block truncate font-extrabold">{s.name}</span>
                 <span className="block text-sm font-semibold text-mute">
-                  {w === undefined ? <span className="skeleton inline-block h-3 w-40 rounded-full align-middle" /> : w ? `${w.name} · ${fmtDateTime(w.wipeAt)}` : t('wipe.none')}
+                  {w === undefined ? <span className="skeleton inline-block h-3 w-40 rounded-full align-middle" /> : w ? `${w.name} · ${fmtDateTime(w.wipeAt)}` : t('d2.ws.none')}
                 </span>
               </span>
-              {w && <span className="pill pill-ok">{t('wipe.st.scheduled')}</span>}
-              <button type="button" className="btn btn-soft btn-sm" onClick={() => setOpen(s)}>{t('wipe.scenarios')}</button>
+              {w && <span className="pill pill-ok">{t('d2.ws.st.scheduled')}</span>}
+              <button type="button" className="btn btn-soft btn-sm" onClick={() => setOpen(s)}>{t('d2.ws.scenarios')}</button>
             </li>
           );
         })}
@@ -116643,23 +116677,23 @@ function WipeModal({ server, onClose }: { server: Server; onClose: () => void })
   useEffect(() => { void load(); }, []);
 
   const remove = async (w: Wipe) => {
-    if (w.status === 'scheduled' && !(await confirmDialog({ title: t('wipe.cancelQ', { name: w.name }), text: t('wipe.cancelText'), confirmLabel: t('wipe.cancelBtn'), danger: true }))) return;
+    if (w.status === 'scheduled' && !(await confirmDialog({ title: t('d2.ws.c.title', { name: w.name }), text: t('d2.ws.c.text'), confirmLabel: t('d2.ws.c.confirm'), danger: true }))) return;
     await api(`/wipes/${w.id}`, 'DELETE').then(() => load()).catch((e: Error) => setError(e.message));
   };
 
   if (edit) return <WipeForm server={server} wipe={edit} onClose={() => setEdit(null)} onSaved={() => { setEdit(null); void load(); }} />;
   return (
-    <Modal title={t('wipe.modalTitle', { name: server.name })} onClose={onClose}>
+    <Modal title={t('d2.ws.wipes', { name: server.name })} onClose={onClose}>
       <div className="space-y-3">
         <ErrorLine text={error} />
-        {list === null ? <div className="skeleton h-20 rounded-2xl" /> : list.length === 0 ? <p className="text-sm font-semibold text-mute">{t('wipe.empty')}</p> : (
+        {list === null ? <div className="skeleton h-20 rounded-2xl" /> : list.length === 0 ? <p className="text-sm font-semibold text-mute">{t('d2.ws.empty')}</p> : (
           <ul className="grid grid-cols-[minmax(0,1fr)] gap-2">
             {list.map((w) => (
               <li key={w.id} className="rounded-2xl bg-soft px-3.5 py-3">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="font-extrabold">{w.name}</span>
                   <span className={STATUS[w.status].cls}>{t(STATUS[w.status].text)}</span>
-                  {w.failed > 0 && <span className="pill pill-bad">{t('wipe.errors', { n: w.failed })}</span>}
+                  {w.failed > 0 && <span className="pill pill-bad">{t('d2.ws.errors', { n: w.failed })}</span>}
                   <span className="ml-auto text-sm font-bold text-mute">{fmtDateTime(w.wipeAt)}</span>
                 </div>
                 {w.steps.length > 0 && (
@@ -116668,8 +116702,8 @@ function WipeModal({ server, onClose }: { server: Server; onClose: () => void })
                   </ul>
                 )}
                 <div className="mt-2 flex gap-2">
-                  {w.status === 'scheduled' && <button type="button" className="btn btn-soft btn-sm" onClick={() => setEdit(w)}>{t('wipe.edit')}</button>}
-                  <button type="button" className="btn btn-ghost btn-sm text-bad" onClick={() => void remove(w)}>{w.status === 'scheduled' ? t('wipe.cancel') : t('wipe.remove')}</button>
+                  {w.status === 'scheduled' && <button type="button" className="btn btn-soft btn-sm" onClick={() => setEdit(w)}>{t('d2.news.change')}</button>}
+                  <button type="button" className="btn btn-ghost btn-sm text-bad" onClick={() => void remove(w)}>{w.status === 'scheduled' ? t('d2.ws.cancel') : t('common.remove')}</button>
                 </div>
               </li>
             ))}
@@ -116677,7 +116711,7 @@ function WipeModal({ server, onClose }: { server: Server; onClose: () => void })
         )}
         <div className="flex justify-between gap-2">
           <button type="button" className="btn btn-ghost" onClick={onClose}>{t('common.close')}</button>
-          <Button type="button" onClick={() => setEdit(blank())}>{t('wipe.schedule')}</Button>
+          <Button type="button" onClick={() => setEdit(blank())}>{t('d2.ws.schedule')}</Button>
         </div>
       </div>
     </Modal>
@@ -116696,7 +116730,7 @@ function WipeForm({ server, wipe, onClose, onSaved }: { server: Server; wipe: Wi
 
   const save = async () => {
     const ts = new Date(at).getTime();
-    if (!Number.isFinite(ts)) return setError(t('wipe.needDate'));
+    if (!Number.isFinite(ts)) return setError(t('d2.ws.e.date'));
     setBusy(true);
     setError('');
     const body = {
@@ -116706,7 +116740,7 @@ function WipeForm({ server, wipe, onClose, onSaved }: { server: Server; wipe: Wi
     };
     try {
       await (wipe.id ? api(`/wipes/${wipe.id}`, 'PUT', body) : api(`/servers/${server.id}/wipes`, 'POST', body));
-      toast(t('wipe.saved'));
+      toast(t('d2.ws.t.saved'));
       onSaved();
     } catch (e) {
       setError(errText(e));
@@ -116715,67 +116749,67 @@ function WipeForm({ server, wipe, onClose, onSaved }: { server: Server; wipe: Wi
   };
 
   return (
-    <Modal title={wipe.id ? t('wipe.editTitle') : t('wipe.schedule')} onClose={onClose}>
+    <Modal title={wipe.id ? t('d2.ws.edit') : t('d2.ws.schedule')} onClose={onClose}>
       <div className="space-y-4">
         <div className="grid gap-3 sm:grid-cols-3">
-          <Field label={t('wipe.f.name')}><input className="input" maxLength={60} value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></Field>
-          <Field label={t('wipe.f.when')}><input className="input" type="datetime-local" value={at} onChange={(e) => setAt(e.target.value)} /></Field>
-          <Field label={t('wipe.f.window')}><input className="input" type="number" min={1} max={240} value={f.durationMin} onChange={(e) => setF({ ...f, durationMin: Number(e.target.value) })} /></Field>
+          <Field label={t('d2.sf.name')}><input className="input" maxLength={60} value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></Field>
+          <Field label={t('d2.ws.when')}><input className="input" type="datetime-local" value={at} onChange={(e) => setAt(e.target.value)} /></Field>
+          <Field label={t('d2.ws.window')}><input className="input" type="number" min={1} max={240} value={f.durationMin} onChange={(e) => setF({ ...f, durationMin: Number(e.target.value) })} /></Field>
         </div>
 
         <fieldset className="space-y-3 rounded-2xl bg-soft p-3.5">
-          <legend className="px-1 font-extrabold">{t('wipe.s1')}</legend>
+          <legend className="px-1 font-extrabold">{t('d2.ws.g1')}</legend>
           <div>
-            <span className="label">{t('wipe.inDiscord')}</span>
+            <span className="label">{t('d2.ws.inDiscord')}</span>
             <div className="flex flex-wrap gap-1.5">
               {ANNOUNCE.map((a) => <button key={a.m} type="button" className={`rp-day ${f.announceMin.includes(a.m) ? 'is-on' : ''}`} aria-pressed={f.announceMin.includes(a.m)} onClick={() => toggle('announceMin', a.m)}>{t(a.label)}</button>)}
             </div>
           </div>
           <div>
-            <span className="label">{t('wipe.inGame')}</span>
+            <span className="label">{t('d2.ws.inGame')}</span>
             <div className="flex flex-wrap gap-1.5">
               {SAY.map((a) => <button key={a.m} type="button" className={`rp-day ${f.sayMin.includes(a.m) ? 'is-on' : ''}`} aria-pressed={f.sayMin.includes(a.m)} onClick={() => toggle('sayMin', a.m)}>{t(a.label)}</button>)}
             </div>
           </div>
           <div>
-            <span className="label">{t('wipe.channel')}</span>
+            <span className="label">{t('d2.ws.channel')}</span>
             <ChannelPicker id="wipe-channel" value={f.channelId} onChange={(v) => setF({ ...f, channelId: v })} />
-            <p className="mt-1 text-sm font-semibold text-mute">{t('wipe.channelHint')}</p>
+            <p className="mt-1 text-sm font-semibold text-mute">{t('d2.ws.channelNote')}</p>
           </div>
         </fieldset>
 
         <fieldset className="space-y-3 rounded-2xl bg-soft p-3.5">
-          <legend className="px-1 font-extrabold">{t('wipe.s2')}</legend>
-          <Field label={t('wipe.f.cmds')}>
+          <legend className="px-1 font-extrabold">{t('d2.ws.g2')}</legend>
+          <Field label={t('d2.ws.rcon')}>
             <textarea className="input min-h-20 font-mono" value={cmds} onChange={(e) => setCmds(e.target.value)} placeholder={'server.seed {seed}\nserver.writecfg'} />
           </Field>
           <div className="grid gap-3 sm:grid-cols-2">
-            <Field label={t('wipe.f.seedMode')}>
+            <Field label={t('d2.ws.seedLabel')}>
               <select className="input" value={f.seedMode} onChange={(e) => setF({ ...f, seedMode: e.target.value as Wipe['seedMode'] })}>
-                <option value="none">{t('wipe.seed.none')}</option>
-                <option value="random">{t('wipe.seed.random')}</option>
-                <option value="fixed">{t('wipe.seed.fixed')}</option>
+                <option value="none">{t('d2.ws.seed.none')}</option>
+                <option value="random">{t('d2.ws.seed.random')}</option>
+                <option value="fixed">{t('d2.ws.seed.fixed')}</option>
               </select>
             </Field>
-            {f.seedMode === 'fixed' && <Field label={t('wipe.f.seed')}><input className="input font-mono" maxLength={40} value={f.seed} onChange={(e) => setF({ ...f, seed: e.target.value })} /></Field>}
+            {f.seedMode === 'fixed' && <Field label={t('d2.ws.seed')}><input className="input font-mono" maxLength={40} value={f.seed} onChange={(e) => setF({ ...f, seed: e.target.value })} /></Field>}
           </div>
-          <Field label={t('wipe.f.season')}><input className="input" maxLength={60} value={f.seasonName} onChange={(e) => setF({ ...f, seasonName: e.target.value })} placeholder={t('wipe.seasonPh')} /></Field>
-          <p className="text-sm font-semibold text-mute">{t('wipe.note')}</p>
+          <Field label={t('d2.ws.season')}><input className="input" maxLength={60} value={f.seasonName} onChange={(e) => setF({ ...f, seasonName: e.target.value })} placeholder={t('d2.ws.seasonEx')} /></Field>
+          <p className="text-sm font-semibold text-mute">{t('d2.ws.vars')}</p>
         </fieldset>
 
         <fieldset className="space-y-3 rounded-2xl bg-soft p-3.5">
-          <legend className="px-1 font-extrabold">{t('wipe.s3')}</legend>
+          <legend className="px-1 font-extrabold">{t('d2.ws.g3')}</legend>
           <div>
-            <span className="label">{t('wipe.newsChannel')}</span>
+            <span className="label">{t('d2.ws.newsChannel')}</span>
             <ChannelPicker id="wipe-news-channel" value={f.newsChannelId} onChange={(v) => setF({ ...f, newsChannelId: v })} />
           </div>
           {f.newsChannelId && (
             <>
-              <Field label={t('wipe.f.title')}><input className="input" maxLength={200} value={f.newsTitle} onChange={(e) => setF({ ...f, newsTitle: e.target.value })} /></Field>
-              <Field label={t('wipe.f.text')}><textarea className="input min-h-20" maxLength={2000} value={f.newsText} onChange={(e) => setF({ ...f, newsText: e.target.value })} /></Field>
-              <Field label={t('wipe.f.mention')}>
+              <Field label={t('d2.ws.newsTitle')}><input className="input" maxLength={200} value={f.newsTitle} onChange={(e) => setF({ ...f, newsTitle: e.target.value })} /></Field>
+              <Field label={t('d2.ws.newsText')}><textarea className="input min-h-20" maxLength={2000} value={f.newsText} onChange={(e) => setF({ ...f, newsText: e.target.value })} /></Field>
+              <Field label={t('d2.ws.mention')}>
                 <select className="input" value={f.mention} onChange={(e) => setF({ ...f, mention: e.target.value as Wipe['mention'] })}>
-                  <option value="none">{t('wipe.m.none')}</option>
+                  <option value="none">{t('d2.ws.mention.none')}</option>
                   <option value="here">@here</option>
                   <option value="everyone">@everyone</option>
                 </select>
@@ -116786,7 +116820,7 @@ function WipeForm({ server, wipe, onClose, onSaved }: { server: Server; wipe: Wi
 
         <ErrorLine text={error} />
         <div className="flex justify-end gap-2">
-          <button type="button" className="btn btn-ghost" onClick={onClose}>{t('wipe.back')}</button>
+          <button type="button" className="btn btn-ghost" onClick={onClose}>{t('wn.back')}</button>
           <Button type="button" loading={busy} onClick={() => void save()}>{t('common.save')}</Button>
         </div>
       </div>
@@ -116798,9 +116832,10 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/components/news/Calendar.tsx" << '__COREGSM_EOF__'
 import { useMemo, useState } from 'react';
 import type { NewsItem } from '../../api';
+import { t, useI18n, type TKey } from '../../i18n';
 
-const MONTHS = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
-const DOW = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
+const MONTHS: TKey[] = ['d2.cal.m.0', 'd2.cal.m.1', 'd2.cal.m.2', 'd2.cal.m.3', 'd2.cal.m.4', 'd2.cal.m.5', 'd2.cal.m.6', 'd2.cal.m.7', 'd2.cal.m.8', 'd2.cal.m.9', 'd2.cal.m.10', 'd2.cal.m.11'];
+const DOW: TKey[] = ['cm.dow.0', 'cm.dow.1', 'cm.dow.2', 'cm.dow.3', 'cm.dow.4', 'cm.dow.5', 'cm.dow.6'];
 
 const dateOf = (n: NewsItem): number | null => (n.status === 'sent' || n.status === 'edit_queued' ? n.sentAt ?? n.scheduledAt : n.scheduledAt);
 const movable = (n: NewsItem) => n.status === 'scheduled' || n.status === 'draft';
@@ -116811,6 +116846,7 @@ const tone = (n: NewsItem) =>
 
 /** Month grid of scheduled and sent news. Scheduled / draft items can be dragged to another day (time of day is kept). */
 export function NewsCalendar({ items, onMove }: { items: NewsItem[]; onMove: (n: NewsItem, day: Date) => void }) {
+  useI18n();
   const [month, setMonth] = useState(() => { const d = new Date(); return new Date(d.getFullYear(), d.getMonth(), 1); });
   const [drag, setDrag] = useState<number | null>(null);
   const [over, setOver] = useState<string | null>(null);
@@ -116840,25 +116876,25 @@ export function NewsCalendar({ items, onMove }: { items: NewsItem[]; onMove: (n:
       draggable={movable(n)}
       onDragStart={(e) => { setDrag(n.id); e.dataTransfer.setData('text/plain', String(n.id)); e.dataTransfer.effectAllowed = 'move'; }}
       onDragEnd={() => { setDrag(null); setOver(null); }}
-      title={`${n.title}${movable(n) ? ' (можно перетащить на другой день)' : ''}`}
+      title={`${n.title}${movable(n) ? ` (${t('d2.cal.movable')})` : ''}`}
       className={`block truncate rounded-md px-1.5 py-0.5 text-xs font-bold leading-4 ${tone(n)} ${drag === n.id ? 'opacity-50' : ''}`}
       style={{ borderLeft: `3px solid #${(n.payload.embed?.color ?? 0x5865f2).toString(16).padStart(6, '0')}` }}
     >
-      {dateOf(n) ? `${new Date(dateOf(n) as number).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })} ` : ''}{n.title || 'Без названия'}
+      {dateOf(n) ? `${new Date(dateOf(n) as number).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })} ` : ''}{n.title || t('d2.cal.untitled')}
     </a>
   );
 
   return (
     <div className="panel space-y-3 p-4">
       <div className="flex items-center justify-between gap-2">
-        <h2 className="text-lg font-black">{MONTHS[month.getMonth()]} {month.getFullYear()}</h2>
+        <h2 className="text-lg font-black">{t(MONTHS[month.getMonth()])} {month.getFullYear()}</h2>
         <div className="flex items-center gap-1.5">
-          <button type="button" className="btn btn-soft btn-sm" aria-label="Предыдущий месяц" onClick={() => setMonth(new Date(month.getFullYear(), month.getMonth() - 1, 1))}>←</button>
-          <button type="button" className="btn btn-soft btn-sm" onClick={() => { const d = new Date(); setMonth(new Date(d.getFullYear(), d.getMonth(), 1)); }}>Сегодня</button>
-          <button type="button" className="btn btn-soft btn-sm" aria-label="Следующий месяц" onClick={() => setMonth(new Date(month.getFullYear(), month.getMonth() + 1, 1))}>→</button>
+          <button type="button" className="btn btn-soft btn-sm" aria-label={t('d2.cal.prev')} onClick={() => setMonth(new Date(month.getFullYear(), month.getMonth() - 1, 1))}>←</button>
+          <button type="button" className="btn btn-soft btn-sm" onClick={() => { const d = new Date(); setMonth(new Date(d.getFullYear(), d.getMonth(), 1)); }}>{t('d2.jr.today')}</button>
+          <button type="button" className="btn btn-soft btn-sm" aria-label={t('d2.cal.next')} onClick={() => setMonth(new Date(month.getFullYear(), month.getMonth() + 1, 1))}>→</button>
         </div>
       </div>
-      <div className="grid grid-cols-7 gap-1 text-center text-xs font-extrabold uppercase text-mute">{DOW.map((d) => <div key={d}>{d}</div>)}</div>
+      <div className="grid grid-cols-7 gap-1 text-center text-xs font-extrabold uppercase text-mute">{DOW.map((d) => <div key={d}>{t(d)}</div>)}</div>
       <div className="grid grid-cols-7 gap-1">
         {cells.map((d) => {
           const k = dayKey(d);
@@ -116880,14 +116916,14 @@ export function NewsCalendar({ items, onMove }: { items: NewsItem[]; onMove: (n:
               className={`min-h-[72px] rounded-xl border-2 p-1 sm:min-h-[96px] ${over === k ? 'border-brand bg-brand/10' : k === todayKey ? 'border-brand/60' : 'border-line'} ${inMonth ? '' : 'opacity-50'}`}
             >
               <div className={`mb-0.5 text-right text-xs font-extrabold tabular-nums ${k === todayKey ? 'text-link' : 'text-mute'}`}>{d.getDate()}</div>
-              <div className="space-y-0.5">{list.slice(0, 3).map(chip)}{list.length > 3 && <div className="text-xs font-bold text-mute">ещё {list.length - 3}</div>}</div>
+              <div className="space-y-0.5">{list.slice(0, 3).map(chip)}{list.length > 3 && <div className="text-xs font-bold text-mute">{t('d2.cal.more', { n: list.length - 3 })}</div>}</div>
             </div>
           );
         })}
       </div>
       {undated.length > 0 && (
         <div className="rounded-2xl bg-soft p-3">
-          <div className="mb-1.5 text-xs font-extrabold uppercase tracking-wide text-mute">Черновики без даты: перетащите на день</div>
+          <div className="mb-1.5 text-xs font-extrabold uppercase tracking-wide text-mute">{t('d2.cal.undated')}</div>
           <div className="flex flex-wrap gap-1.5">{undated.map((n) => <div key={n.id} className="max-w-[16rem]">{chip(n)}</div>)}</div>
         </div>
       )}
@@ -116899,40 +116935,42 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/components/news/Checklist.tsx" << '__COREGSM_EOF__'
 import { useMemo } from 'react';
 import { Button, Modal } from '../../ui';
+import { t, useI18n, type TKey } from '../../i18n';
 import { runChecks, type Check, type Draft } from './model';
 
-const MARK: Record<Check['level'], { icon: string; cls: string; label: string }> = {
-  ok: { icon: '✓', cls: 'bg-okbg text-ok', label: 'Готово' },
-  warn: { icon: '!', cls: 'bg-warnbg text-warn', label: 'Предупреждение' },
-  error: { icon: '✕', cls: 'bg-badbg text-bad', label: 'Ошибка' },
+const MARK: Record<Check['level'], { icon: string; cls: string; label: TKey }> = {
+  ok: { icon: '✓', cls: 'bg-okbg text-ok', label: 'wn.done' },
+  warn: { icon: '!', cls: 'bg-warnbg text-warn', label: 'd2.ck.warning' },
+  error: { icon: '✕', cls: 'bg-badbg text-bad', label: 'd2.ck.error' },
 };
 
 /** Pre-send checklist: errors block, warnings can be overridden. */
 export function ChecklistModal({
   draft, mode, scheduleText, busy, onConfirm, onClose,
 }: { draft: Draft; mode: 'now' | 'schedule' | 'edit'; scheduleText?: string; busy?: boolean; onConfirm: () => void; onClose: () => void }) {
+  useI18n();
   const checks = useMemo(() => runChecks(draft), [draft]);
   const errors = checks.filter((c) => c.level === 'error');
   const warns = checks.filter((c) => c.level === 'warn');
-  const verb = mode === 'schedule' ? 'Запланировать' : mode === 'edit' ? 'Сохранить в Discord' : 'Опубликовать';
+  const verb = mode === 'schedule' ? t('d2.ck.schedule') : mode === 'edit' ? t('d2.ck.saveDiscord') : t('d2.news.publish');
   // problems first
   const sorted = [...errors, ...warns, ...checks.filter((c) => c.level === 'ok')];
   return (
-    <Modal title="Проверка перед отправкой" onClose={onClose}>
+    <Modal title={t('d2.ck.title')} onClose={onClose}>
       {scheduleText && <p className="mb-3 text-sm font-bold text-mute">{scheduleText}</p>}
-      <ul className="space-y-2" aria-label="Результаты проверки">
+      <ul className="space-y-2" aria-label={t('d2.ck.results')}>
         {sorted.map((c, i) => (
           <li key={i} className="flex items-start gap-3 rounded-2xl bg-soft px-3 py-2.5">
-            <span className={`grid h-6 w-6 shrink-0 place-items-center rounded-full text-sm font-black ${MARK[c.level].cls}`} aria-label={MARK[c.level].label}>{MARK[c.level].icon}</span>
+            <span className={`grid h-6 w-6 shrink-0 place-items-center rounded-full text-sm font-black ${MARK[c.level].cls}`} aria-label={t(MARK[c.level].label)}>{MARK[c.level].icon}</span>
             <span className="min-w-0 text-sm font-bold">{c.text}</span>
           </li>
         ))}
       </ul>
-      {errors.length > 0 && <p className="mt-3 text-sm font-bold text-bad" role="alert">Исправьте ошибки, чтобы продолжить.</p>}
+      {errors.length > 0 && <p className="mt-3 text-sm font-bold text-bad" role="alert">{t('d2.ck.fix')}</p>}
       <div className="mt-5 flex flex-wrap gap-2">
-        <Button variant="ghost" onClick={onClose}>Назад к редактору</Button>
+        <Button variant="ghost" onClick={onClose}>{t('d2.ck.back')}</Button>
         <Button className="flex-1" loading={busy} disabled={errors.length > 0} onClick={onConfirm}>
-          {warns.length > 0 ? `${verb} всё равно` : verb}
+          {warns.length > 0 ? t('d2.ck.anyway', { verb }) : verb}
         </Button>
       </div>
     </Modal>
@@ -117196,7 +117234,7 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/news"
   cat > "$APP_DIR/core-frontend/src/components/news/DiscordMd.tsx" << '__COREGSM_EOF__'
 import { createContext, Fragment, useContext, useState, type ReactNode } from 'react';
-import { t } from '../../i18n';
+import { t, t as tr } from '../../i18n';
 import { toast } from '../../ui';
 
 /**
@@ -117310,7 +117348,7 @@ function Spoiler({ children }: { children: ReactNode }) {
       data-spoiler
       role="button"
       tabIndex={0}
-      aria-label={open ? undefined : 'Спойлер: нажмите, чтобы показать'}
+      aria-label={open ? undefined : tr('d2.dm.spoiler')}
       onClick={(e) => { e.stopPropagation(); setOpen((v) => !v); }}
       onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); setOpen((v) => !v); } }}
       className="cursor-pointer rounded-sm px-0.5"
@@ -117343,7 +117381,7 @@ function TimeChip({ unix, style }: { unix: number; style: string }) {
 
 function ChannelChip({ id }: { id: string }) {
   const env = useContext(EnvCtx);
-  return <Chip kind="mention">#{env.channelName?.(id) ?? 'канал'}</Chip>;
+  return <Chip kind="mention">#{env.channelName?.(id) ?? t('d2.sd.channel')}</Chip>;
 }
 
 export function inlineMd(text: string, depth = 0): ReactNode[] {
@@ -117359,8 +117397,8 @@ export function inlineMd(text: string, depth = 0): ReactNode[] {
     const emo = /^<(a?):(\w+):(\d+)>$/.exec(part);
     if (emo) return <img key={k} src={`https://cdn.discordapp.com/emojis/${emo[3]}.${emo[1] ? 'gif' : 'png'}?size=48`} alt={`:${emo[2]}:`} title={`:${emo[2]}:`} className="inline-block h-[1.3em] w-[1.3em] align-text-bottom" />;
     if (part === '@everyone' || part === '@here') return <Chip key={k} kind="mention">{part}</Chip>;
-    if (part.startsWith('<@&')) return <Chip key={k} kind="mention">@роль</Chip>;
-    if (part.startsWith('<@')) return <Chip key={k} kind="mention">@участник</Chip>;
+    if (part.startsWith('<@&')) return <Chip key={k} kind="mention">@{t('d2.dm.role')}</Chip>;
+    if (part.startsWith('<@')) return <Chip key={k} kind="mention">@{t('d2.dm.member')}</Chip>;
     const ch = /^<#(\d+)>$/.exec(part);
     if (ch) return <ChannelChip key={k} id={ch[1]} />;
     if (depth < 3) {
@@ -117475,9 +117513,11 @@ import { useRef, useState } from 'react';
 import type { NewsVariable } from '../../api';
 import { LIMITS, newKey, type FieldRow } from './model';
 import { MarkdownField } from './MarkdownField';
+import { t, useI18n } from '../../i18n';
 
 /** schematic of how the fields sit in Discord: up to three inline ones in a row */
 function MiniLayout({ fields }: { fields: FieldRow[] }) {
+  useI18n();
   const rows: FieldRow[][] = [];
   let cur: FieldRow[] = [];
   for (const f of fields) {
@@ -117487,8 +117527,8 @@ function MiniLayout({ fields }: { fields: FieldRow[] }) {
   if (cur.length) rows.push(cur);
   if (!rows.length) return null;
   return (
-    <div className="rounded-2xl bg-soft p-3" aria-label="Схема расположения полей" role="img">
-      <div className="mb-1.5 text-xs font-extrabold uppercase tracking-wide text-mute">Как расположены поля</div>
+    <div className="rounded-2xl bg-soft p-3" aria-label={t('d2.fb.layoutLabel')} role="img">
+      <div className="mb-1.5 text-xs font-extrabold uppercase tracking-wide text-mute">{t('d2.fb.layout')}</div>
       <div className="space-y-1">
         {rows.map((row, i) => (
           <div key={i} className="grid gap-1" style={{ gridTemplateColumns: `repeat(${row.length}, minmax(0, 1fr))` }}>
@@ -117508,6 +117548,7 @@ const Down = () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" s
 const iconBtn = 'btn-icon-sm shrink-0';
 
 export function FieldsBuilder({ fields, onChange, variables }: { fields: FieldRow[]; onChange: (f: FieldRow[]) => void; variables?: NewsVariable[] }) {
+  useI18n();
   const [drag, setDrag] = useState<number | null>(null);
   const [over, setOver] = useState<number | null>(null);
   const cards = useRef<Record<string, HTMLDivElement | null>>({});
@@ -117536,8 +117577,8 @@ export function FieldsBuilder({ fields, onChange, variables }: { fields: FieldRo
             <span
               draggable
               role="img"
-              aria-label="Перетащить поле"
-              title="Перетащите, чтобы поменять порядок"
+              aria-label={t('d2.fb.drag')}
+              title={t('d2.fb.dragTitle')}
               onDragStart={(e) => {
                 setDrag(i);
                 e.dataTransfer.effectAllowed = 'move';
@@ -117552,39 +117593,39 @@ export function FieldsBuilder({ fields, onChange, variables }: { fields: FieldRo
             </span>
             <input
               id={`news-f${i}-name`}
-              aria-label={`Название поля ${i + 1}`}
+              aria-label={t('d2.fb.fieldName', { n: i + 1 })}
               className={`input ${f.name.length > LIMITS.fieldName ? 'border-bad!' : ''}`}
               value={f.name}
-              placeholder="Название"
+              placeholder={t('d2.sf.name')}
               onChange={(e) => patch(i, { name: e.target.value })}
             />
-            <button type="button" className={iconBtn} aria-label={`Поднять поле ${i + 1}`} disabled={i === 0} onClick={() => move(i, i - 1)}><Up /></button>
-            <button type="button" className={iconBtn} aria-label={`Опустить поле ${i + 1}`} disabled={i === fields.length - 1} onClick={() => move(i, i + 1)}><Down /></button>
+            <button type="button" className={iconBtn} aria-label={t('d2.fb.up', { n: i + 1 })} disabled={i === 0} onClick={() => move(i, i - 1)}><Up /></button>
+            <button type="button" className={iconBtn} aria-label={t('d2.fb.down', { n: i + 1 })} disabled={i === fields.length - 1} onClick={() => move(i, i + 1)}><Down /></button>
           </div>
           <MarkdownField
             id={`news-f${i}-value`}
-            label={`Текст поля ${i + 1}`}
+            label={t('d2.fb.fieldText', { n: i + 1 })}
             hideLabel
             compact
             rows={2}
             max={LIMITS.fieldValue}
             value={f.value}
-            placeholder="Текст"
+            placeholder={t('d2.ws.newsText')}
             variables={variables}
             onChange={(v) => patch(i, { value: v })}
           />
           <div className="flex flex-wrap items-center gap-2">
-            <div className="seg" role="group" aria-label={`Расположение поля ${i + 1}`}>
-              <button type="button" className="seg-item" aria-pressed={!f.inline} onClick={() => patch(i, { inline: false })} title="Во всю ширину">
-                <span aria-hidden className="mr-1 inline-block h-2.5 w-6 rounded-xs bg-current opacity-60" />Широкое
+            <div className="seg" role="group" aria-label={t('d2.fb.placement', { n: i + 1 })}>
+              <button type="button" className="seg-item" aria-pressed={!f.inline} onClick={() => patch(i, { inline: false })} title={t('d2.fb.fullTitle')}>
+                <span aria-hidden className="mr-1 inline-block h-2.5 w-6 rounded-xs bg-current opacity-60" />{t('d2.fb.full')}
               </button>
-              <button type="button" className="seg-item" aria-pressed={f.inline} onClick={() => patch(i, { inline: true })} title="В ряд с соседними">
-                <span aria-hidden className="mr-1 inline-flex gap-0.5 align-middle"><span className="inline-block h-2.5 w-2 rounded-xs bg-current opacity-60" /><span className="inline-block h-2.5 w-2 rounded-xs bg-current opacity-60" /><span className="inline-block h-2.5 w-2 rounded-xs bg-current opacity-60" /></span>В ряд
+              <button type="button" className="seg-item" aria-pressed={f.inline} onClick={() => patch(i, { inline: true })} title={t('d2.fb.inlineTitle')}>
+                <span aria-hidden className="mr-1 inline-flex gap-0.5 align-middle"><span className="inline-block h-2.5 w-2 rounded-xs bg-current opacity-60" /><span className="inline-block h-2.5 w-2 rounded-xs bg-current opacity-60" /><span className="inline-block h-2.5 w-2 rounded-xs bg-current opacity-60" /></span>{t('d2.fb.inline')}
               </button>
             </div>
             <span className="ml-auto flex items-center gap-1.5">
-              <button type="button" className="btn btn-soft btn-sm" disabled={fields.length >= LIMITS.fields} onClick={() => { const c = fields.slice(); c.splice(i + 1, 0, { ...f, k: newKey() }); onChange(c); }}>Дублировать</button>
-              <button type="button" className="btn btn-danger btn-sm" aria-label={`Удалить поле ${i + 1}`} onClick={() => onChange(fields.filter((_, j) => j !== i))}>Удалить</button>
+              <button type="button" className="btn btn-soft btn-sm" disabled={fields.length >= LIMITS.fields} onClick={() => { const c = fields.slice(); c.splice(i + 1, 0, { ...f, k: newKey() }); onChange(c); }}>{t('d2.news.dup')}</button>
+              <button type="button" className="btn btn-danger btn-sm" aria-label={t('d2.fb.delete', { n: i + 1 })} onClick={() => onChange(fields.filter((_, j) => j !== i))}>{t('d2.news.delete')}</button>
             </span>
           </div>
         </div>
@@ -117595,7 +117636,7 @@ export function FieldsBuilder({ fields, onChange, variables }: { fields: FieldRo
         disabled={fields.length >= LIMITS.fields}
         onClick={() => onChange([...fields, { k: newKey(), name: '', value: '', inline: fields.length > 0 && fields.length < 3 }])}
       >
-        + Добавить поле {fields.length > 0 && <span className="ml-1 text-mute">({fields.length}/{LIMITS.fields})</span>}
+        {t('d2.fb.add')} {fields.length > 0 && <span className="ml-1 text-mute">({fields.length}/{LIMITS.fields})</span>}
       </button>
     </div>
   );
@@ -117608,14 +117649,15 @@ import { api, ApiError, type NewsHistoryEntry, type NewsItem, type NewsPayload, 
 import { confirmDialog } from '../../confirm';
 import { EmbedView } from '../../pages/EmbedPreview';
 import { Button, Modal, fmtDateTime, toast } from '../../ui';
+import { t, useI18n, type TKey } from '../../i18n';
 import { fromPayload, sampleVars } from './model';
 import { embedView, messageContent } from './Preview';
 
-const ACTIONS: Record<string, string> = {
-  create: 'создал', created: 'создал', update: 'изменил', updated: 'изменил', edit: 'изменил', publish: 'опубликовал', published: 'опубликовал', schedule: 'запланировал', scheduled: 'запланировал',
-  restore: 'восстановил версию', restored: 'восстановил версию', delete: 'удалил', duplicate: 'дублировал', duplicated: 'дублировал', send: 'отправил', sent: 'отправил',
+const ACTIONS: Record<string, TKey> = {
+  create: 'd2.hp.a.create', created: 'd2.hp.a.create', update: 'd2.hp.a.update', updated: 'd2.hp.a.update', edit: 'd2.hp.a.update', publish: 'd2.hp.a.publish', published: 'd2.hp.a.publish', schedule: 'd2.hp.a.schedule', scheduled: 'd2.hp.a.schedule',
+  restore: 'd2.hp.a.restore', restored: 'd2.hp.a.restore', delete: 'd2.hp.a.delete', duplicate: 'd2.hp.a.duplicate', duplicated: 'd2.hp.a.duplicate', send: 'd2.hp.a.send', sent: 'd2.hp.a.send',
 };
-const actionText = (a: string) => ACTIONS[a] ?? a;
+const actionText = (a: string) => (ACTIONS[a] ? t(ACTIONS[a]) : a);
 
 function VersionPreview({ payload }: { payload: NewsPayload }) {
   const d = fromPayload(payload, '');
@@ -117626,6 +117668,7 @@ function VersionPreview({ payload }: { payload: NewsPayload }) {
 
 /** Version history and «who changed what» for an existing item. Hidden when the backend has no such routes. */
 export function HistoryPanel({ id, onRestored, locked }: { id: number; onRestored: (item: NewsItem) => void; locked?: boolean }) {
+  useI18n();
   const [versions, setVersions] = useState<NewsVersion[] | null>(null);
   const [history, setHistory] = useState<NewsHistoryEntry[] | null>(null);
   const [supported, setSupported] = useState(true);
@@ -117651,11 +117694,11 @@ export function HistoryPanel({ id, onRestored, locked }: { id: number; onRestore
   };
   const restore = async () => {
     if (!open) return;
-    if (!(await confirmDialog({ title: 'Восстановить эту версию?', text: 'Текущий текст заменится выбранной версией. Он сохранится в истории.', confirmLabel: 'Восстановить' }))) return;
+    if (!(await confirmDialog({ title: t('d2.hp.c.title'), text: t('d2.hp.c.text'), confirmLabel: t('d2.bk.restore') }))) return;
     setBusy(true);
     try {
       const item = await api<NewsItem>(`/news/${id}/versions/${open.id}/restore`, 'POST');
-      toast('Версия восстановлена');
+      toast(t('d2.hp.t.restored'));
       setOpen(null);
       onRestored(item);
       load();
@@ -117669,12 +117712,12 @@ export function HistoryPanel({ id, onRestored, locked }: { id: number; onRestore
   return (
     <section className="panel space-y-3.5 p-5">
       <div>
-        <h2 className="text-lg font-black">История версий</h2>
-        <p className="text-sm font-semibold text-mute">Каждое сохранение запоминается: можно посмотреть и вернуть прежний текст.</p>
+        <h2 className="text-lg font-black">{t('d2.hp.title')}</h2>
+        <p className="text-sm font-semibold text-mute">{t('d2.hp.text')}</p>
       </div>
       {err && <p className="text-sm font-bold text-bad" role="alert">{err}</p>}
       {versions === null && <div className="skeleton h-16 rounded-2xl" />}
-      {versions && versions.length === 0 && <p className="text-sm font-semibold text-mute">Прошлых версий пока нет.</p>}
+      {versions && versions.length === 0 && <p className="text-sm font-semibold text-mute">{t('d2.hp.none')}</p>}
       {versions && versions.length > 0 && (
         <ul className="divide-y divide-line rounded-2xl border-2 border-line">
           {versions.map((v) => (
@@ -117683,14 +117726,14 @@ export function HistoryPanel({ id, onRestored, locked }: { id: number; onRestore
                 <div className="text-sm font-extrabold">{fmtDateTime(v.ts)} · {v.actor}</div>
                 {v.note && <div className="truncate text-xs font-semibold text-mute">{v.note}</div>}
               </div>
-              <button type="button" className="btn btn-soft btn-sm" onClick={() => void view(v)}>Посмотреть</button>
+              <button type="button" className="btn btn-soft btn-sm" onClick={() => void view(v)}>{t('d2.hp.view')}</button>
             </li>
           ))}
         </ul>
       )}
       {history && history.length > 0 && (
         <div>
-          <h3 className="mb-1.5 text-sm font-extrabold text-mute">Кто и когда правил</h3>
+          <h3 className="mb-1.5 text-sm font-extrabold text-mute">{t('d2.hp.who')}</h3>
           <ul className="space-y-1">
             {history.slice(0, 20).map((h, i) => (
               <li key={i} className="text-sm font-semibold"><span className="text-mute">{fmtDateTime(h.ts)}</span> · <b>{h.actor}</b> {actionText(h.action)}</li>
@@ -117699,16 +117742,16 @@ export function HistoryPanel({ id, onRestored, locked }: { id: number; onRestore
         </div>
       )}
       {open && (
-        <Modal title={`Версия от ${fmtDateTime(open.ts)}`} onClose={() => setOpen(null)}>
-          <p className="mb-3 text-sm font-semibold text-mute">Только просмотр. Автор: {open.actor}.</p>
+        <Modal title={t('d2.hp.version', { when: fmtDateTime(open.ts) })} onClose={() => setOpen(null)}>
+          <p className="mb-3 text-sm font-semibold text-mute">{t('d2.hp.readOnly', { actor: open.actor })}</p>
           <div className="max-h-[55dvh] overflow-auto rounded-2xl">
             <VersionPreview payload={open.payload} />
           </div>
           <div className="mt-4 flex flex-wrap gap-2">
-            <Button variant="ghost" onClick={() => setOpen(null)}>Закрыть</Button>
-            <Button className="flex-1" loading={busy} disabled={locked} onClick={() => void restore()}>Восстановить эту версию</Button>
+            <Button variant="ghost" onClick={() => setOpen(null)}>{t('common.close')}</Button>
+            <Button className="flex-1" loading={busy} disabled={locked} onClick={() => void restore()}>{t('d2.hp.restoreBtn')}</Button>
           </div>
-          {locked && <p className="mt-2 text-xs font-semibold text-mute">Новость сейчас отправляется, подождите.</p>}
+          {locked && <p className="mt-2 text-xs font-semibold text-mute">{t('d2.hp.locked')}</p>}
         </Modal>
       )}
     </section>
@@ -117719,6 +117762,7 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/components/news/ImageDrop.tsx" << '__COREGSM_EOF__'
 import { useEffect, useRef, useState } from 'react';
 import { MAX_UPLOAD, uploadImage } from './model';
+import { t, useI18n } from '../../i18n';
 
 export interface ImageDropApi { upload: (file: File) => Promise<void> }
 
@@ -117738,6 +117782,7 @@ export function ImageDrop({
   /** gives the parent a way to upload a file (paste from the clipboard) */
   bind?: (api: ImageDropApi | null) => void;
 }) {
+  useI18n();
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   const [hot, setHot] = useState(false);
@@ -117771,9 +117816,9 @@ export function ImageDrop({
   useEffect(() => { setDims(null); }, [src]);
 
   const warns: string[] = [];
-  if (size && size > MAX_UPLOAD * 0.6) warns.push(`Файл тяжёлый (${(size / 1048576).toFixed(1)} МБ): Discord может грузить его медленно.`);
-  if (dims && minWidth && dims.w < minWidth) warns.push(`Картинка маленькая (${dims.w}×${dims.h}): в Discord она будет выглядеть размыто, лучше от ${minWidth} px по ширине.`);
-  if (url && !upload && !/^https:\/\//i.test(url)) warns.push('Ссылка должна начинаться с https://.');
+  if (size && size > MAX_UPLOAD * 0.6) warns.push(t('d2.idr.heavy', { mb: (size / 1048576).toFixed(1) }));
+  if (dims && minWidth && dims.w < minWidth) warns.push(t('d2.idr.small', { w: dims.w, h: dims.h, min: minWidth }));
+  if (url && !upload && !/^https:\/\//i.test(url)) warns.push(t('d2.idr.https'));
 
   return (
     <div className="flash-host space-y-2">
@@ -117782,10 +117827,10 @@ export function ImageDrop({
         <div className="flex items-center gap-3 rounded-2xl bg-soft p-2">
           <img src={src} alt="" className="h-16 w-16 shrink-0 rounded-xl object-cover" onLoad={(e) => setDims({ w: e.currentTarget.naturalWidth, h: e.currentTarget.naturalHeight })} />
           <div className="min-w-0 flex-1">
-            <div className="truncate text-sm font-bold">{upload ? 'Загруженная картинка' : url}</div>
-            {dims && <div className="text-xs font-semibold text-mute">{dims.w}×{dims.h}{size && upload ? ` · ${(size / 1024).toFixed(0)} КБ` : ''}</div>}
+            <div className="truncate text-sm font-bold">{upload ? t('d2.idr.uploaded') : url}</div>
+            {dims && <div className="text-xs font-semibold text-mute">{dims.w}×{dims.h}{size && upload ? ` · ${t('d2.bk.kb', { v: (size / 1024).toFixed(0) })}` : ''}</div>}
           </div>
-          <button type="button" className="btn btn-danger btn-sm" onClick={() => { onUpload(''); onUrl(''); setSize(null); }}>Убрать</button>
+          <button type="button" className="btn btn-danger btn-sm" onClick={() => { onUpload(''); onUrl(''); setSize(null); }}>{t('common.remove')}</button>
         </div>
       ) : (
         <div
@@ -117796,15 +117841,15 @@ export function ImageDrop({
         >
           {allowUpload && (
             <button type="button" disabled={busy} onClick={() => input.current?.click()} className="btn btn-ghost btn-sm btn-block">
-              {busy ? 'Загрузка…' : 'Перетащите картинку сюда или нажмите, чтобы выбрать файл'}
-              <span className="block text-xs font-semibold">PNG, JPEG, GIF, WebP до 8 МБ. Можно вставить из буфера (Ctrl+V) в текст.</span>
+              {busy ? t('nw.loadingMore') : t('d2.idr.drop')}
+              <span className="block text-xs font-semibold">{t('d2.idr.formats')}</span>
             </button>
           )}
-          <input ref={input} type="file" accept="image/png,image/jpeg,image/gif,image/webp" className="hidden" aria-label={`${label}: выбрать файл`} onChange={(e) => { void doUpload(e.target.files?.[0]); e.target.value = ''; }} />
-          <input id={id} aria-label={`${label}: ссылка`} className="input mt-1" value={url} onChange={(e) => onUrl(e.target.value.trim())} placeholder="https://… или ссылка на картинку" />
+          <input ref={input} type="file" accept="image/png,image/jpeg,image/gif,image/webp" className="hidden" aria-label={t('d2.idr.pickFile', { label })} onChange={(e) => { void doUpload(e.target.files?.[0]); e.target.value = ''; }} />
+          <input id={id} aria-label={t('d2.idr.link', { label })} className="input mt-1" value={url} onChange={(e) => onUrl(e.target.value.trim())} placeholder={t('d2.idr.ph')} />
         </div>
       )}
-      {src && !upload && <input id={id} aria-label={`${label}: ссылка`} className="sr-only" value={url} onChange={(e) => onUrl(e.target.value.trim())} />}
+      {src && !upload && <input id={id} aria-label={t('d2.idr.link', { label })} className="sr-only" value={url} onChange={(e) => onUrl(e.target.value.trim())} />}
       {err && <p className="text-sm font-bold text-bad" role="alert">{err}</p>}
       {warns.map((w) => <p key={w} className="rounded-xl bg-warnbg px-3 py-1.5 text-sm font-bold text-warn">⚠ {w}</p>)}
     </div>
@@ -117815,8 +117860,10 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/components/news/LimitsPanel.tsx" << '__COREGSM_EOF__'
 import { useState } from 'react';
 import { LIMITS, totalLength, type Draft } from './model';
+import { t, useI18n } from '../../i18n';
 
 function Bar({ label, value, max, detail }: { label: string; value: number; max: number; detail?: string }) {
+  useI18n();
   const r = max ? value / max : 0;
   const tone = r > 1 ? 'bad' : r >= 0.8 ? 'warn' : 'ok';
   const color = tone === 'bad' ? 'rgb(var(--bad))' : tone === 'warn' ? '#f0b232' : 'rgb(var(--brand))';
@@ -117824,7 +117871,7 @@ function Bar({ label, value, max, detail }: { label: string; value: number; max:
     <li className="space-y-1">
       <div className="flex items-baseline justify-between gap-2 text-sm">
         <span className="font-bold">{label}{detail && <span className="ml-1.5 text-xs font-semibold text-mute">{detail}</span>}</span>
-        <span className={`text-xs font-extrabold tabular-nums ${tone === 'bad' ? 'text-bad' : tone === 'warn' ? 'text-warn' : 'text-mute'}`}>{value}/{max}{tone === 'bad' ? ' · превышено' : ''}</span>
+        <span className={`text-xs font-extrabold tabular-nums ${tone === 'bad' ? 'text-bad' : tone === 'warn' ? 'text-warn' : 'text-mute'}`}>{value}/{max}{tone === 'bad' ? ` · ${t('d2.lim.over')}` : ''}</span>
       </div>
       <div className="h-1.5 overflow-hidden rounded-full bg-soft" role="progressbar" aria-label={label} aria-valuemin={0} aria-valuemax={max} aria-valuenow={Math.min(value, max)}>
         <div className="h-full rounded-full" style={{ width: `${Math.min(100, r * 100)}%`, background: color }} />
@@ -117835,6 +117882,7 @@ function Bar({ label, value, max, detail }: { label: string; value: number; max:
 
 /** One panel with every Discord limit that matters for the open embed and the whole message. */
 export function LimitsPanel({ d, active }: { d: Draft; active: number }) {
+  useI18n();
   const [open, setOpen] = useState(false);
   const e = d.embeds[active] ?? d.embeds[0];
   if (!e) return null;
@@ -117845,25 +117893,25 @@ export function LimitsPanel({ d, active }: { d: Draft; active: number }) {
   const worst = Math.max(d.content.length / LIMITS.content, e.title.length / LIMITS.title, e.description.length / LIMITS.description, worstName / LIMITS.fieldName, worstValue / LIMITS.fieldValue, e.footer.length / LIMITS.footer, e.fields.length / LIMITS.fields, d.embeds.length / LIMITS.embeds, total / LIMITS.total);
   const shown = open || worst >= 0.8;
   return (
-    <section className="panel space-y-3 p-4" aria-label="Лимиты Discord">
+    <section className="panel space-y-3 p-4" aria-label={t('d2.lim.label')}>
       <div className="flex items-center gap-3">
-        <h2 className="text-lg font-black">Лимиты</h2>
-        <span className={`pill ${worst > 1 ? 'pill-bad' : worst >= 0.8 ? 'pill-warn' : 'pill-ok'}`}>{worst > 1 ? 'превышены' : worst >= 0.8 ? 'почти предел' : 'в норме'}</span>
-        {worst < 0.8 && <button type="button" className="btn-link ml-auto text-sm" aria-expanded={open} onClick={() => setOpen((v) => !v)}>{open ? 'Скрыть' : 'Подробнее'}</button>}
+        <h2 className="text-lg font-black">{t('d2.lim.title')}</h2>
+        <span className={`pill ${worst > 1 ? 'pill-bad' : worst >= 0.8 ? 'pill-warn' : 'pill-ok'}`}>{worst > 1 ? t('d2.lim.exceeded') : worst >= 0.8 ? t('d2.lim.near') : t('d2.lim.ok')}</span>
+        {worst < 0.8 && <button type="button" className="btn-link ml-auto text-sm" aria-expanded={open} onClick={() => setOpen((v) => !v)}>{open ? t('d2.ac.cm.hide') : t('d2.lim.more')}</button>}
       </div>
       {shown && <div>
-        <p className="text-xs font-semibold text-mute">{d.embeds.length > 1 ? `Показаны значения для блока ${active + 1}; сумма: по всему сообщению.` : 'Ограничения Discord для этого сообщения.'}</p>
+        <p className="text-xs font-semibold text-mute">{d.embeds.length > 1 ? t('d2.lim.block', { n: active + 1 }) : t('d2.lim.hint')}</p>
       </div>}
       {shown && <ul className="space-y-2.5">
-        <Bar label="Текст сообщения" value={d.content.length} max={LIMITS.content} />
-        <Bar label="Заголовок" value={e.title.length} max={LIMITS.title} />
-        <Bar label="Основной текст" value={e.description.length} max={LIMITS.description} />
-        <Bar label="Название поля" value={worstName} max={LIMITS.fieldName} detail="самое длинное" />
-        <Bar label="Значение поля" value={worstValue} max={LIMITS.fieldValue} detail="самое длинное" />
-        <Bar label="Подпись" value={e.footer.length} max={LIMITS.footer} />
-        <Bar label="Полей" value={e.fields.length} max={LIMITS.fields} />
-        <Bar label="Embed-блоков" value={d.embeds.length} max={LIMITS.embeds} />
-        <Bar label="Всего символов во всех embed" value={total} max={LIMITS.total} />
+        <Bar label={t('d2.lim.content')} value={d.content.length} max={LIMITS.content} />
+        <Bar label={t('d2.ws.newsTitle')} value={e.title.length} max={LIMITS.title} />
+        <Bar label={t('d2.lim.desc')} value={e.description.length} max={LIMITS.description} />
+        <Bar label={t('d2.lim.fieldName')} value={worstName} max={LIMITS.fieldName} detail={t('d2.lim.longest')} />
+        <Bar label={t('d2.lim.fieldValue')} value={worstValue} max={LIMITS.fieldValue} detail={t('d2.lim.longest')} />
+        <Bar label={t('d2.lim.footer')} value={e.footer.length} max={LIMITS.footer} />
+        <Bar label={t('d2.lim.fields')} value={e.fields.length} max={LIMITS.fields} />
+        <Bar label={t('d2.lim.embeds')} value={d.embeds.length} max={LIMITS.embeds} />
+        <Bar label={t('d2.lim.total')} value={total} max={LIMITS.total} />
       </ul>}
     </section>
   );
@@ -117882,7 +117930,7 @@ export function Counter({ value, max }: { value: number; max: number }) {
   useI18n();
   const over = value > max;
   const near = !over && value > max * 0.9;
-  return <span className={`text-xs font-bold tabular-nums ${over ? 'text-bad' : near ? 'text-warn' : 'text-mute'}`} aria-label={t('mf.chars', { value, max })}>{value}/{max}</span>;
+  return <span className={`text-xs font-bold tabular-nums ${over ? 'text-bad' : near ? 'text-warn' : 'text-mute'}`} aria-label={t('d2.md.chars', { value, max })}>{value}/{max}</span>;
 }
 
 const Btn = ({ onClick, title, children, on }: { onClick: () => void; title: string; children: ReactNode; on?: boolean }) => (
@@ -117928,7 +117976,7 @@ function MarkdownFieldImpl({ id, label, value, onChange, max, rows = 6, placehol
     requestAnimationFrame(() => { ta?.focus(); ta?.setSelectionRange(selStart, selEnd); });
   };
 
-  const wrap = (mark: string, ph = t('mf.ph.text')) => {
+  const wrap = (mark: string, ph = t('d2.md.text')) => {
     const ta = ref.current;
     if (!ta) return;
     const s = ta.selectionStart, e = ta.selectionEnd;
@@ -117944,7 +117992,7 @@ function MarkdownFieldImpl({ id, label, value, onChange, max, rows = 6, placehol
   };
 
   /** line-based formats: the selection grows to whole lines */
-  const prefixLines = (prefix: string, ph = t('mf.ph.text')) => {
+  const prefixLines = (prefix: string, ph = t('d2.md.text')) => {
     const ta = ref.current;
     if (!ta) return;
     const s = ta.selectionStart, e = ta.selectionEnd;
@@ -117965,7 +118013,7 @@ function MarkdownFieldImpl({ id, label, value, onChange, max, rows = 6, placehol
     const ls = value.lastIndexOf('\n', s - 1) + 1;
     let le = value.indexOf('\n', e);
     if (le === -1) le = value.length;
-    const lines = (value.slice(ls, le) || t('mf.ph.item')).split('\n');
+    const lines = (value.slice(ls, le) || t('d2.md.item')).split('\n');
     const out = lines.map((l, i) => `${i + 1}. ${l.replace(/^\d+\.\s+/, '')}`).join('\n');
     apply(value.slice(0, ls) + out + value.slice(le), ls, ls + out.length);
   };
@@ -117974,7 +118022,7 @@ function MarkdownFieldImpl({ id, label, value, onChange, max, rows = 6, placehol
     const ta = ref.current;
     if (!ta) return;
     const s = ta.selectionStart, e = ta.selectionEnd;
-    const inner = value.slice(s, e) || t('mf.ph.code');
+    const inner = value.slice(s, e) || t('d2.md.code');
     const pre = s > 0 && value[s - 1] !== '\n' ? '\n' : '';
     const text = `${value.slice(0, s)}${pre}\`\`\`\n${inner}\n\`\`\`${value.slice(e)}`;
     const a = s + pre.length + 4;
@@ -117987,11 +118035,12 @@ function MarkdownFieldImpl({ id, label, value, onChange, max, rows = 6, placehol
     const s = ta.selectionStart, e = ta.selectionEnd;
     const sel = value.slice(s, e);
     if (/^https?:\/\/\S+$/.test(sel)) {
-      const text = `${value.slice(0, s)}[${t('mf.ph.link')}](${sel})${value.slice(e)}`;
-      apply(text, s + 1, s + 7);
+      const word = t('d2.md.linkWord');
+      const text = `${value.slice(0, s)}[${word}](${sel})${value.slice(e)}`;
+      apply(text, s + 1, s + 1 + word.length);
       return;
     }
-    const lbl = sel || t('mf.ph.linkText');
+    const lbl = sel || t('d2.md.linkText');
     const text = `${value.slice(0, s)}[${lbl}](https://)${value.slice(e)}`;
     const st = s + lbl.length + 3;
     apply(text, st, st + 8);
@@ -118062,41 +118111,41 @@ function MarkdownFieldImpl({ id, label, value, onChange, max, rows = 6, placehol
         <Counter value={value.length} max={max} />
       </div>
       <div className="flash-host relative rounded-2xl border-2 border-line focus-within:border-brand">
-        <div className="flex flex-wrap items-center gap-0.5 border-b-2 border-line px-1.5 py-1" role="toolbar" aria-label={t('mf.formatting', { label })}>
-          <Btn onClick={() => wrap('**')} title={t('mf.bold')}><b>{t('mf.boldCh')}</b></Btn>
-          <Btn onClick={() => wrap('*')} title={t('mf.italic')}><i>{t('mf.italicCh')}</i></Btn>
-          <Btn onClick={() => wrap('__')} title={t('mf.underline')}><u>{t('mf.underlineCh')}</u></Btn>
-          <Btn onClick={() => wrap('~~')} title={t('mf.strike')}><s>{t('mf.strikeCh')}</s></Btn>
-          <Btn onClick={() => wrap('||')} title={t('mf.spoiler')}>▒</Btn>
-          <Btn onClick={() => wrap('`', t('mf.ph.code'))} title={t('mf.inlineCode')}><span className="font-mono">{'<>'}</span></Btn>
-          {!compact && <Btn onClick={codeBlock} title={t('mf.codeBlock')}><span className="font-mono text-xs">{'```'}</span></Btn>}
+        <div className="flex flex-wrap items-center gap-0.5 border-b-2 border-line px-1.5 py-1" role="toolbar" aria-label={t('d2.md.formatting', { label })}>
+          <Btn onClick={() => wrap('**')} title={t('d2.md.bold')}><b>{t('d2.md.bold.k')}</b></Btn>
+          <Btn onClick={() => wrap('*')} title={t('d2.md.italic')}><i>{t('d2.md.italic.k')}</i></Btn>
+          <Btn onClick={() => wrap('__')} title={t('d2.md.underline')}><u>{t('d2.md.underline.k')}</u></Btn>
+          <Btn onClick={() => wrap('~~')} title={t('d2.md.strike')}><s>{t('d2.md.strike.k')}</s></Btn>
+          <Btn onClick={() => wrap('||')} title={t('d2.md.spoiler')}>▒</Btn>
+          <Btn onClick={() => wrap('`', t('d2.md.code'))} title={t('d2.md.inlineCode')}><span className="font-mono">{'<>'}</span></Btn>
+          {!compact && <Btn onClick={codeBlock} title={t('d2.md.codeBlock')}><span className="font-mono text-xs">{'```'}</span></Btn>}
           <span className="mx-1 h-5 w-px bg-line" aria-hidden />
           {!compact && (
             <>
-              <Btn onClick={() => prefixLines('# ', t('mf.ph.heading'))} title={t('mf.h1')}><span className="text-xs">H1</span></Btn>
-              <Btn onClick={() => prefixLines('## ', t('mf.ph.heading'))} title={t('mf.h2')}><span className="text-xs">H2</span></Btn>
-              <Btn onClick={() => prefixLines('### ', t('mf.ph.heading'))} title={t('mf.h3')}><span className="text-xs">H3</span></Btn>
-              <Btn onClick={() => prefixLines('-# ')} title={t('mf.small')}><span className="text-xs">-#</span></Btn>
+              <Btn onClick={() => prefixLines('# ', t('d2.md.heading'))} title={t('d2.md.h1')}><span className="text-xs">H1</span></Btn>
+              <Btn onClick={() => prefixLines('## ', t('d2.md.heading'))} title={t('d2.md.h2')}><span className="text-xs">H2</span></Btn>
+              <Btn onClick={() => prefixLines('### ', t('d2.md.heading'))} title={t('d2.md.h3')}><span className="text-xs">H3</span></Btn>
+              <Btn onClick={() => prefixLines('-# ')} title={t('d2.md.small')}><span className="text-xs">-#</span></Btn>
             </>
           )}
-          <Btn onClick={() => prefixLines('> ')} title={t('mf.quote')}>❝</Btn>
-          <Btn onClick={() => prefixLines('- ')} title={t('mf.bullets')}>•≡</Btn>
-          {!compact && <Btn onClick={numbered} title={t('mf.numbers')}><span className="text-xs">1.</span></Btn>}
-          <Btn onClick={link} title={t('mf.link')}>🔗</Btn>
-          <Btn onClick={() => setPanel((v) => (v === 'emoji' ? '' : 'emoji'))} title={t('mf.emoji')} on={panel === 'emoji'}>😀</Btn>
+          <Btn onClick={() => prefixLines('> ')} title={t('d2.md.quote')}>❝</Btn>
+          <Btn onClick={() => prefixLines('- ')} title={t('d2.md.bullets')}>•≡</Btn>
+          {!compact && <Btn onClick={numbered} title={t('d2.md.numbers')}><span className="text-xs">1.</span></Btn>}
+          <Btn onClick={link} title={t('d2.md.link')}>🔗</Btn>
+          <Btn onClick={() => setPanel((v) => (v === 'emoji' ? '' : 'emoji'))} title={t('d2.md.emoji')} on={panel === 'emoji'}>😀</Btn>
           {variables && variables.length > 0 && (
-            <Btn onClick={() => setPanel((v) => (v === 'vars' ? '' : 'vars'))} title={t('mf.variable')} on={panel === 'vars'}><span className="font-mono text-xs">{'{ }'}</span></Btn>
+            <Btn onClick={() => setPanel((v) => (v === 'vars' ? '' : 'vars'))} title={t('d2.md.variable')} on={panel === 'vars'}><span className="font-mono text-xs">{'{ }'}</span></Btn>
           )}
         </div>
         {panel === 'emoji' && (
           <div className="absolute right-0 top-11 z-20 grid w-72 max-w-[85vw] grid-cols-8 gap-0.5 rounded-2xl bg-card p-2 shadow-soft ring-2 ring-line">
             {EMOJIS.map((e) => (
-              <button key={e} type="button" aria-label={t('mf.emojiOne', { e })} className="grid h-8 w-8 place-items-center rounded-lg text-lg hover:bg-soft" onClick={() => { insert(e); setPanel(''); }}>{e}</button>
+              <button key={e} type="button" aria-label={t('d2.md.emojiN', { e })} className="grid h-8 w-8 place-items-center rounded-lg text-lg hover:bg-soft" onClick={() => { insert(e); setPanel(''); }}>{e}</button>
             ))}
           </div>
         )}
         {panel === 'vars' && variables && (
-          <div className="absolute right-0 top-11 z-20 max-h-72 w-80 max-w-[85vw] overflow-auto rounded-2xl bg-card p-1.5 shadow-soft ring-2 ring-line" role="menu" aria-label={t('mf.variables')}>
+          <div className="absolute right-0 top-11 z-20 max-h-72 w-80 max-w-[85vw] overflow-auto rounded-2xl bg-card p-1.5 shadow-soft ring-2 ring-line" role="menu" aria-label={t('d2.md.variables')}>
             {variables.map((v) => (
               <button key={v.token} type="button" role="menuitem" className="block w-full rounded-xl px-3 py-2 text-left hover:bg-soft" onClick={() => { insert(v.token); setPanel(''); }}>
                 <span className="block font-mono text-sm font-bold">{v.token}</span>
@@ -118121,7 +118170,7 @@ function MarkdownFieldImpl({ id, label, value, onChange, max, rows = 6, placehol
           className="w-full resize-y rounded-b-2xl bg-card px-3.5 py-2.5 font-semibold text-ink placeholder:font-normal placeholder:text-mute/80 focus:outline-hidden"
         />
         {sug && (
-          <ul id={`${id}-sug`} role="listbox" aria-label={t('mf.emojiHints')} className="absolute left-2 top-full z-30 mt-1 w-64 max-w-[85vw] overflow-hidden rounded-2xl bg-card p-1 shadow-soft ring-2 ring-line">
+          <ul id={`${id}-sug`} role="listbox" aria-label={t('d2.md.emojiHints')} className="absolute left-2 top-full z-30 mt-1 w-64 max-w-[85vw] overflow-hidden rounded-2xl bg-card p-1 shadow-soft ring-2 ring-line">
             {sug.items.map(([em, names], i) => (
               <li key={`${em}-${i}`} role="option" aria-selected={i === sug.idx}>
                 <button
@@ -119182,17 +119231,19 @@ __COREGSM_EOF__
 /** Admin: the statistics of one published news item: views by day, reactions, comments. */
 import { useEffect, useState } from 'react';
 import { api } from '../../api';
+import { t, useI18n } from '../../i18n';
 import { ErrorLine, Modal, fmtDateTime } from '../../ui';
 
 interface Stats { sentAt: number | null; views: number; byDay: { day: string; n: number }[]; reactions: { emoji: string; count: number }[]; comments: number }
 
 /** bars for the views of every day (a plain SVG; the tallest bar is the whole height) */
 export function ViewsChart({ days }: { days: { day: string; n: number }[] }) {
+  useI18n();
   const max = Math.max(1, ...days.map((d) => d.n));
   const w = 6;
   const gap = 2;
   return (
-    <svg viewBox={`0 0 ${days.length * (w + gap)} 60`} className="h-28 w-full" role="img" aria-label={`Просмотры за ${days.length} дней`} preserveAspectRatio="none">
+    <svg viewBox={`0 0 ${days.length * (w + gap)} 60`} className="h-28 w-full" role="img" aria-label={t('d2.ns.viewsFor', { n: days.length })} preserveAspectRatio="none">
       {days.map((d, i) => {
         const h = d.n === 0 ? 1 : Math.max(3, (d.n / max) * 56);
         return (
@@ -119206,6 +119257,7 @@ export function ViewsChart({ days }: { days: { day: string; n: number }[] }) {
 }
 
 export function NewsStatsModal({ id, title, onClose }: { id: number; title: string; onClose: () => void }) {
+  useI18n();
   const [s, setS] = useState<Stats | null>(null);
   const [error, setError] = useState('');
   useEffect(() => {
@@ -119213,27 +119265,27 @@ export function NewsStatsModal({ id, title, onClose }: { id: number; title: stri
   }, [id]);
   const week = s ? s.byDay.slice(-7).reduce((a, d) => a + d.n, 0) : 0;
   return (
-    <Modal title={`Статистика: ${title}`} onClose={onClose}>
+    <Modal title={t('d2.ns.title', { title })} onClose={onClose}>
       <div className="space-y-4">
         <ErrorLine text={error} />
         {!s && !error && <div className="skeleton h-40 rounded-2xl" />}
         {s && (
           <>
             <div className="grid grid-cols-3 gap-2 text-center">
-              <div className="rounded-2xl bg-soft px-2 py-3"><div className="text-2xl font-black tabular-nums">{s.views}</div><div className="text-xs font-bold text-mute">просмотров</div></div>
-              <div className="rounded-2xl bg-soft px-2 py-3"><div className="text-2xl font-black tabular-nums">{week}</div><div className="text-xs font-bold text-mute">за 7 дней</div></div>
-              <div className="rounded-2xl bg-soft px-2 py-3"><div className="text-2xl font-black tabular-nums">{s.comments}</div><div className="text-xs font-bold text-mute">комментариев</div></div>
+              <div className="rounded-2xl bg-soft px-2 py-3"><div className="text-2xl font-black tabular-nums">{s.views}</div><div className="text-xs font-bold text-mute">{t('d2.ns.views')}</div></div>
+              <div className="rounded-2xl bg-soft px-2 py-3"><div className="text-2xl font-black tabular-nums">{week}</div><div className="text-xs font-bold text-mute">{t('d2.ns.week')}</div></div>
+              <div className="rounded-2xl bg-soft px-2 py-3"><div className="text-2xl font-black tabular-nums">{s.comments}</div><div className="text-xs font-bold text-mute">{t('d2.ns.comments')}</div></div>
             </div>
             <div>
-              <div className="label">Просмотры по дням (30 дней)</div>
+              <div className="label">{t('d2.ns.byDay')}</div>
               <ViewsChart days={s.byDay} />
               <div className="flex justify-between text-xs font-bold text-mute"><span>{s.byDay[0]?.day}</span><span>{s.byDay[s.byDay.length - 1]?.day}</span></div>
             </div>
             <p className="font-bold">
-              Реакции:{' '}
-              {s.reactions.length ? s.reactions.map((r) => <span key={r.emoji} className="mr-3">{r.emoji} {r.count}</span>) : <span className="text-mute">пока нет</span>}
+              {t('d2.ns.reactions')}{' '}
+              {s.reactions.length ? s.reactions.map((r) => <span key={r.emoji} className="mr-3">{r.emoji} {r.count}</span>) : <span className="text-mute">{t('d2.ns.none')}</span>}
             </p>
-            {s.sentAt && <p className="text-sm font-semibold text-mute">Опубликовано {fmtDateTime(s.sentAt)}</p>}
+            {s.sentAt && <p className="text-sm font-semibold text-mute">{t('d2.ns.published', { when: fmtDateTime(s.sentAt) })}</p>}
           </>
         )}
       </div>
@@ -119247,6 +119299,7 @@ import { useMemo, useState } from 'react';
 import type { Server } from '../../api';
 import { gameColor } from '../../games';
 import { EmbedView, type DiscordEmbed, type PreviewPart } from '../../pages/EmbedPreview';
+import { t, useI18n } from '../../i18n';
 import { imageSrc, invalidParts, parseHex, resolveVars, type Draft, type EmbedDraft, type VarSample } from './model';
 
 const load = <T extends string>(key: string, allowed: T[], def: T): T => {
@@ -119290,10 +119343,10 @@ function statusEmbeds(ids: number[], servers: Server[] | null): DiscordEmbed[] {
     const s = servers?.find((x) => x.id === id);
     const color = s ? parseHex(gameColor(s.game)) : 0x5865f2;
     return {
-      title: s ? s.name : `Сервер №${id}`,
-      description: s ? (s.online ? `🟢 Онлайн · ${s.players}/${s.maxPlayers} игроков${s.map ? ` · ${s.map}` : ''}` : '🔴 Офлайн') : 'Данные появятся при отправке',
+      title: s ? s.name : t('d2.mt.serverNo', { id }),
+      description: s ? (s.online ? `🟢 ${t('d2.srv.f.online')} · ${t('d2.pv.cnt', { a: s.players, b: s.maxPlayers })}${s.map ? ` · ${s.map}` : ''}` : `🔴 ${t('d2.bl.offline')}`) : t('d2.pv.dataLater'),
       color: Number.isFinite(color) ? color : 0x5865f2,
-      footer: { text: 'Статус сервера · обновится при отправке' },
+      footer: { text: t('d2.pv.footer') },
     };
   });
 }
@@ -119308,6 +119361,7 @@ export function Preview({
   onPick: (p: PreviewPart) => void;
   total: number;
 }) {
+  useI18n();
   const [theme, setTheme] = useState<'dark' | 'light'>(() => load('news_pv_theme', ['dark', 'light'], 'dark'));
   const [width, setWidth] = useState<'desktop' | 'phone'>(() => load('news_pv_width', ['desktop', 'phone'], 'desktop'));
   const content = messageContent(draft, vars);
@@ -119334,20 +119388,20 @@ export function Preview({
   return (
     <div className="panel p-4">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-lg font-black">Предпросмотр</h2>
+        <h2 className="text-lg font-black">{t('d2.pv.title')}</h2>
         <div className="flex flex-wrap items-center gap-2">
-          <div className="seg" role="group" aria-label="Тема Discord">
-            <button type="button" className="seg-item" aria-pressed={theme === 'dark'} onClick={() => { setTheme('dark'); save('news_pv_theme', 'dark'); }}>Тёмная</button>
-            <button type="button" className="seg-item" aria-pressed={theme === 'light'} onClick={() => { setTheme('light'); save('news_pv_theme', 'light'); }}>Светлая</button>
+          <div className="seg" role="group" aria-label={t('d2.pv.theme')}>
+            <button type="button" className="seg-item" aria-pressed={theme === 'dark'} onClick={() => { setTheme('dark'); save('news_pv_theme', 'dark'); }}>{t('cards.dark')}</button>
+            <button type="button" className="seg-item" aria-pressed={theme === 'light'} onClick={() => { setTheme('light'); save('news_pv_theme', 'light'); }}>{t('d2.brand.light')}</button>
           </div>
-          <div className="seg" role="group" aria-label="Ширина">
-            <button type="button" className="seg-item" aria-pressed={width === 'desktop'} onClick={() => { setWidth('desktop'); save('news_pv_width', 'desktop'); }}>Компьютер</button>
-            <button type="button" className="seg-item" aria-pressed={width === 'phone'} onClick={() => { setWidth('phone'); save('news_pv_width', 'phone'); }}>Телефон</button>
+          <div className="seg" role="group" aria-label={t('d2.pv.width')}>
+            <button type="button" className="seg-item" aria-pressed={width === 'desktop'} onClick={() => { setWidth('desktop'); save('news_pv_width', 'desktop'); }}>{t('d2.pv.desktop')}</button>
+            <button type="button" className="seg-item" aria-pressed={width === 'phone'} onClick={() => { setWidth('phone'); save('news_pv_width', 'phone'); }}>{t('d2.pv.phone')}</button>
           </div>
         </div>
       </div>
       {empty ? (
-        <p className="py-10 text-center font-semibold text-mute">Начните писать: здесь появится сообщение, как оно будет выглядеть в Discord.</p>
+        <p className="py-10 text-center font-semibold text-mute">{t('d2.pv.empty')}</p>
       ) : (
         <EmbedView
           content={content}
@@ -119360,7 +119414,7 @@ export function Preview({
         />
       )}
       <p className="mt-2 flex items-center justify-between gap-2 text-xs font-semibold text-mute">
-        <span>Нажмите на часть сообщения, чтобы перейти к её полю. Красная рамка: превышен лимит.</span>
+        <span>{t('d2.pv.hint')}</span>
         <span className={`shrink-0 font-extrabold tabular-nums ${total > 6000 ? 'text-bad' : ''}`}>{total}/6000</span>
       </p>
     </div>
@@ -121009,6 +121063,7 @@ __COREGSM_EOF__
 import { useEffect, useState } from 'react';
 import { api } from '../../api';
 import { useAuth } from '../../auth';
+import { t, useI18n } from '../../i18n';
 import { Button, ErrorLine, Section, ago, toast, fail } from '../../ui';
 
 interface Follow { nick: string; createdAt: number }
@@ -121017,6 +121072,7 @@ const keyOf = (nick: string) => nick.trim().toLowerCase();
 
 /** «Следить» on /player/<nick>: a notification when the nick joins a server. Nothing for guests. */
 export function FollowButton({ nick }: { nick: string }) {
+  useI18n();
   const { me } = useAuth();
   const [on, setOn] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
@@ -121032,7 +121088,7 @@ export function FollowButton({ nick }: { nick: string }) {
     try {
       await api(`/players/${encodeURIComponent(nick)}/follow`, on ? 'DELETE' : 'PUT');
       setOn(!on);
-      toast(on ? `Больше не следим за ${nick}` : `Сообщим, когда ${nick} зайдёт на сервер`);
+      toast(on ? t('d2.fo.t.off', { nick }) : t('d2.fo.t.on', { nick }));
     } catch (e) {
       fail(e);
     }
@@ -121040,13 +121096,14 @@ export function FollowButton({ nick }: { nick: string }) {
   };
   return (
     <Button type="button" size="sm" variant={on ? 'outline' : 'soft'} loading={busy} aria-pressed={on} onClick={() => void flip()}>
-      {on ? '★ Вы следите' : '☆ Следить'}
+      {on ? t('d2.fo.following') : t('d2.fo.follow')}
     </Button>
   );
 }
 
 /** Profile: the nicks I follow, each with a way to stop */
 export function FollowsCard() {
+  useI18n();
   const [list, setList] = useState<Follow[] | null>(null);
   const [error, setError] = useState('');
   const load = () => api<Follow[]>('/me/follows').then(setList).catch((e: Error) => setError(e.message));
@@ -121056,17 +121113,17 @@ export function FollowsCard() {
     void load();
   };
   return (
-    <Section title="Слежу за игроками" description="Сообщим в панели, в Discord и на устройстве, когда эти игроки заходят на сервер. Не чаще раза в 30 минут на игрока.">
+    <Section title={t('d2.fo.title')} description={t('d2.fo.desc')}>
       <ErrorLine text={error} />
       {list === null ? <div className="skeleton h-12 rounded-2xl" /> : list.length === 0 ? (
-        <p className="font-semibold text-mute">Пока никого. Откройте страницу игрока и нажмите «Следить».</p>
+        <p className="font-semibold text-mute">{t('d2.fo.none')}</p>
       ) : (
         <ul className="divide-y divide-line">
           {list.map((f) => (
             <li key={f.nick} className="flex flex-wrap items-center gap-2 py-2">
               <a href={`/player/${encodeURIComponent(f.nick)}`} className="min-w-0 flex-1 truncate font-extrabold hover:text-link">{f.nick}</a>
-              <span className="text-xs font-semibold text-mute">с {ago(f.createdAt)}</span>
-              <button type="button" className="btn btn-soft btn-xs" onClick={() => void stop(f.nick)}>Перестать</button>
+              <span className="text-xs font-semibold text-mute">{t('d2.an.since', { date: ago(f.createdAt) })}</span>
+              <button type="button" className="btn btn-soft btn-xs" onClick={() => void stop(f.nick)}>{t('d2.fo.stop')}</button>
             </li>
           ))}
         </ul>
@@ -121425,10 +121482,12 @@ import { useEffect, useState } from 'react';
 import { api, type NewsCategory } from '../../api';
 import { ErrorLine, Section, toast, errText } from '../../ui';
 import { categoryLabel } from '../news/NewsParts';
+import { t, useI18n } from '../../i18n';
 
 const RUBRICS: NewsCategory[] = ['announcement', 'wipe', 'update', 'event', 'maintenance', 'other'];
 
 export function NewsSubsCard() {
+  useI18n();
   const [picked, setPicked] = useState<NewsCategory[] | null>(null);
   const [error, setError] = useState('');
   useEffect(() => {
@@ -121441,7 +121500,7 @@ export function NewsSubsCard() {
     try {
       const r = await api<{ categories: NewsCategory[] }>('/me/news-subscriptions', 'PUT', { categories: next });
       setPicked(r.categories);
-      toast(r.categories.length ? 'Подписка на новости сохранена' : 'Подписка на новости выключена');
+      toast(r.categories.length ? t('d2.nsub.t.saved') : t('d2.nsub.t.off'));
     } catch (e) {
       setPicked(before);
       setError(errText(e));
@@ -121450,13 +121509,13 @@ export function NewsSubsCard() {
   const flip = (c: NewsCategory) => void save(picked?.includes(c) ? picked.filter((x) => x !== c) : [...(picked ?? []), c]);
   const all = picked?.length === RUBRICS.length;
   return (
-    <Section title="Новости" description="О каких новостях сообщать: уведомление придёт в колокольчик, на устройства с включёнными уведомлениями и в личные сообщения Discord (если привязан).">
+    <Section title={t('d2.news.title')} description={t('d2.nsub.desc')}>
       <ErrorLine text={error} />
       {picked === null ? <div className="skeleton h-20 rounded-2xl" /> : (
         <div className="grid gap-2">
           <label className="flex cursor-pointer items-center gap-2.5 font-extrabold">
             <input type="checkbox" className="h-4 w-4 accent-brand" checked={all} onChange={() => void save(all ? [] : [...RUBRICS])} />
-            Все рубрики
+            {t('d2.nsub.all')}
           </label>
           <div className="grid gap-1.5 sm:grid-cols-2">
             {RUBRICS.map((c) => (
@@ -121592,6 +121651,7 @@ __COREGSM_EOF__
 /** Profile → Безопасность: notifications on this device (Web Push), the same as the inbox in the header. */
 import { useEffect, useState } from 'react';
 import { api } from '../../api';
+import { t, useI18n } from '../../i18n';
 import { Button, ErrorLine, Section, Switch, toast } from '../../ui';
 
 type State = 'unsupported' | 'denied' | 'off' | 'on' | 'loading';
@@ -121611,25 +121671,26 @@ const toMin = (v: string) => { const [h, m] = v.split(':').map(Number); return N
 
 /** quiet hours: no pushes to the devices in this window of the user's own day (the inbox still collects them) */
 function QuietHours() {
+  useI18n();
   const [q, setQ] = useState<Quiet | null>(null);
   useEffect(() => { api<Quiet>('/push/quiet').then(setQ).catch(() => undefined); }, []);
   if (!q) return null;
   const save = (next: Quiet) => {
     const body = { ...next, tz: -new Date().getTimezoneOffset() };
     setQ(body);
-    api<Quiet>('/push/quiet', 'PUT', body).then(() => toast('Сохранено')).catch((e: Error) => toast(e.message));
+    api<Quiet>('/push/quiet', 'PUT', body).then(() => toast(t('d2.dg.saved'))).catch((e: Error) => toast(e.message));
   };
   return (
     <div className="mt-4 space-y-2 border-t border-line pt-4">
       <label className="flex cursor-pointer items-center gap-3 font-extrabold">
         <Switch checked={q.enabled} onChange={(v) => save({ ...q, enabled: v })} />
-        Тихие часы
+        {t('d2.push.quiet')}
       </label>
-      <p className="text-sm font-semibold text-mute">В это время уведомления на устройства не приходят. Они остаются в колокольчике в шапке сайта.</p>
+      <p className="text-sm font-semibold text-mute">{t('d2.push.quietText')}</p>
       {q.enabled && (
         <div className="flex flex-wrap items-center gap-3">
-          <label className="flex items-center gap-2 text-sm font-bold">с <input type="time" className="input w-auto" value={hhmm(q.fromMin)} onChange={(e) => { const m = toMin(e.target.value); if (m != null) save({ ...q, fromMin: m }); }} /></label>
-          <label className="flex items-center gap-2 text-sm font-bold">до <input type="time" className="input w-auto" value={hhmm(q.toMin)} onChange={(e) => { const m = toMin(e.target.value); if (m != null) save({ ...q, toMin: m }); }} /></label>
+          <label className="flex items-center gap-2 text-sm font-bold">{t('d2.push.from')} <input type="time" className="input w-auto" value={hhmm(q.fromMin)} onChange={(e) => { const m = toMin(e.target.value); if (m != null) save({ ...q, fromMin: m }); }} /></label>
+          <label className="flex items-center gap-2 text-sm font-bold">{t('d2.push.to')} <input type="time" className="input w-auto" value={hhmm(q.toMin)} onChange={(e) => { const m = toMin(e.target.value); if (m != null) save({ ...q, toMin: m }); }} /></label>
         </div>
       )}
     </div>
@@ -121637,6 +121698,7 @@ function QuietHours() {
 }
 
 export function PushCard() {
+  useI18n();
   const [state, setState] = useState<State>('loading');
   const [installable, setInstallable] = useState(() => !!installPrompt());
   useEffect(() => {
@@ -121673,9 +121735,9 @@ export function PushCard() {
       const sub = (await reg.pushManager.getSubscription()) ?? (await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToBytes(publicKey) }));
       await api('/push/subscribe', 'POST', sub.toJSON());
       setState('on');
-      toast('Уведомления на этом устройстве включены');
+      toast(t('d2.push.t.on'));
     } catch (e) {
-      setError((e as Error).message || 'Браузер не разрешил уведомления');
+      setError((e as Error).message || t('d2.push.e.denied'));
     } finally {
       setBusy(false);
     }
@@ -121695,26 +121757,26 @@ export function PushCard() {
   };
   const test = async () => {
     setBusy(true);
-    await api<{ sent: number }>('/push/test', 'POST').then((r) => toast(r.sent ? 'Тестовое уведомление отправлено' : 'Не получилось доставить: включите уведомления заново')).catch((e: Error) => setError(e.message)).finally(() => setBusy(false));
+    await api<{ sent: number }>('/push/test', 'POST').then((r) => toast(r.sent ? t('d2.push.t.test') : t('d2.push.t.testFail'))).catch((e: Error) => setError(e.message)).finally(() => setBusy(false));
   };
 
   return (
-    <Section title="Уведомления на этом устройстве" description="Сервер упал или вернулся, на заполненном сервере освободилось место: придёт уведомление, даже если панель закрыта. Какие серверы — выбирается кнопкой «Подписаться» на странице сервера.">
-      {state === 'unsupported' && <p className="text-sm font-semibold text-mute">Этот браузер не умеет получать уведомления от сайтов. На iPhone сначала добавьте панель на экран «Домой».</p>}
-      {state === 'denied' && <p className="text-sm font-semibold text-warn">Уведомления запрещены в настройках браузера для этого сайта. Разрешите их там и обновите страницу.</p>}
+    <Section title={t('d2.push.title')} description={t('d2.push.desc')}>
+      {state === 'unsupported' && <p className="text-sm font-semibold text-mute">{t('d2.push.unsupported')}</p>}
+      {state === 'denied' && <p className="text-sm font-semibold text-warn">{t('d2.push.denied')}</p>}
       {(state === 'on' || state === 'off') && (
         <div className="flex flex-wrap items-center justify-between gap-3">
           <label className="flex cursor-pointer items-center gap-3 font-extrabold">
             <Switch checked={state === 'on'} disabled={busy} onChange={(v) => void (v ? turnOn() : turnOff())} />
-            {state === 'on' ? 'Включены' : 'Выключены'}
+            {state === 'on' ? t('d2.push.enabled') : t('d2.push.disabled')}
           </label>
-          {state === 'on' && <Button type="button" className="btn-soft btn-sm" loading={busy} onClick={() => void test()}>Проверить</Button>}
+          {state === 'on' && <Button type="button" className="btn-soft btn-sm" loading={busy} onClick={() => void test()}>{t('d2.push.check')}</Button>}
         </div>
       )}
       {installable && (
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-soft px-3 py-2.5">
-          <span className="text-sm font-semibold">Установите панель как приложение: своя иконка, отдельное окно и уведомления как у приложений.</span>
-          <button type="button" className="btn btn-sm" onClick={() => void install()}>Установить</button>
+          <span className="text-sm font-semibold">{t('d2.push.installText')}</span>
+          <button type="button" className="btn btn-sm" onClick={() => void install()}>{t('d2.push.install')}</button>
         </div>
       )}
       {state === 'on' && <QuietHours />}
@@ -121729,16 +121791,18 @@ __COREGSM_EOF__
 import { useState, type FormEvent } from 'react';
 import { api } from '../../api';
 import { useAuth } from '../../auth';
+import { t, useI18n, type TKey } from '../../i18n';
 import { Button, ErrorLine, Field, Modal, toast, errText } from '../../ui';
 
-export const REASONS = [
-  { id: 'cheating', label: 'Читы или нечестная игра' },
-  { id: 'abuse', label: 'Оскорбления, токсичность' },
-  { id: 'griefing', label: 'Грифинг, порча чужого' },
-  { id: 'other', label: 'Другое' },
-] as const;
+export const REASONS: readonly { id: 'cheating' | 'abuse' | 'griefing' | 'other'; label: TKey }[] = [
+  { id: 'cheating', label: 'd2.rb.r.cheating' },
+  { id: 'abuse', label: 'd2.rb.r.abuse' },
+  { id: 'griefing', label: 'd2.rb.r.griefing' },
+  { id: 'other', label: 'd2.ac.r.other' },
+];
 
 export function ReportButton({ nick }: { nick: string }) {
+  useI18n();
   const { me } = useAuth();
   const [open, setOpen] = useState(false);
   const [reason, setReason] = useState<(typeof REASONS)[number]['id']>('cheating');
@@ -121753,7 +121817,7 @@ export function ReportButton({ nick }: { nick: string }) {
     setError('');
     try {
       await api(`/players/${encodeURIComponent(nick)}/report`, 'POST', { reason, text: text.trim() });
-      toast('Жалоба отправлена модераторам. Ответ придёт в уведомления');
+      toast(t('d2.rb.t.sent'));
       setOpen(false);
       setText('');
     } catch (err) {
@@ -121764,27 +121828,27 @@ export function ReportButton({ nick }: { nick: string }) {
 
   return (
     <>
-      <Button type="button" size="sm" variant="ghost" onClick={() => setOpen(true)}>⚑ Пожаловаться</Button>
+      <Button type="button" size="sm" variant="ghost" onClick={() => setOpen(true)}>⚑ {t('d2.rb.report')}</Button>
       {open && (
-        <Modal title={`Жалоба на игрока ${nick}`} onClose={() => setOpen(false)}>
+        <Modal title={t('d2.rb.title', { nick })} onClose={() => setOpen(false)}>
           <form onSubmit={send} className="space-y-3.5">
             <fieldset className="space-y-1.5">
-              <legend className="label">Причина</legend>
+              <legend className="label">{t('d2.rb.reason')}</legend>
               {REASONS.map((r) => (
                 <label key={r.id} className="flex cursor-pointer items-center gap-2.5 font-bold">
                   <input type="radio" name="report-reason" className="h-4 w-4 accent-brand" checked={reason === r.id} onChange={() => setReason(r.id)} />
-                  {r.label}
+                  {t(r.label)}
                 </label>
               ))}
             </fieldset>
-            <Field label="Что произошло (необязательно)">
-              <textarea className="input min-h-24" maxLength={500} value={text} onChange={(e) => setText(e.target.value)} placeholder="Сервер, время, что именно сделал игрок" />
+            <Field label={t('d2.rb.what')}>
+              <textarea className="input min-h-24" maxLength={500} value={text} onChange={(e) => setText(e.target.value)} placeholder={t('d2.rb.ph')} />
             </Field>
-            <p className="text-sm font-semibold text-mute">Жалобу увидят только модераторы. Не больше 5 жалоб в сутки.</p>
+            <p className="text-sm font-semibold text-mute">{t('d2.rb.note')}</p>
             <ErrorLine text={error} />
             <div className="flex justify-end gap-2">
-              <Button type="button" variant="ghost" onClick={() => setOpen(false)}>Отмена</Button>
-              <Button type="submit" loading={busy}>Отправить</Button>
+              <Button type="button" variant="ghost" onClick={() => setOpen(false)}>{t('common.cancel')}</Button>
+              <Button type="submit" loading={busy}>{t('d2.gal.send')}</Button>
             </div>
           </form>
         </Modal>
@@ -122624,8 +122688,8 @@ interface Analytics {
   top: { name: string; hours: number; visits: number; lastSeen: number | null; rankId?: string }[];
 }
 
-const dowShort = (i: number) => t(`cm.dow.${i}` as TKey);
-const dowLong = (i: number) => t(`an.dowLong.${i}` as TKey);
+const DOW: TKey[] = ['cm.dow.0', 'cm.dow.1', 'cm.dow.2', 'cm.dow.3', 'cm.dow.4', 'cm.dow.5', 'cm.dow.6'];
+const DOW_LONG: TKey[] = ['d2.an.dl.0', 'd2.an.dl.1', 'd2.an.dl.2', 'd2.an.dl.3', 'd2.an.dl.4', 'd2.an.dl.5', 'd2.an.dl.6'];
 const hh = (h: number) => `${String(h).padStart(2, '0')}:00`;
 const minutesText = (m: number | null) => (m == null ? '–' : m < 60 ? t('dur.m', { n: m }) : m % 60 ? t('dur.hm', { h: Math.floor(m / 60), m: m % 60 }) : t('dur.h', { n: Math.floor(m / 60) }));
 const dayLabel = (d: string) => {
@@ -122636,9 +122700,9 @@ const dayLabel = (d: string) => {
 function PeriodSwitch({ days, onChange }: { days: number; onChange: (d: number) => void }) {
   useI18n();
   return (
-    <div className="seg" role="group" aria-label={t('an.period')}>
+    <div className="seg" role="group" aria-label={t('st.range')}>
       {[7, 30, 90].map((d) => (
-        <button key={d} type="button" className="seg-item" aria-pressed={days === d} onClick={() => onChange(d)}>{t('an.daysShort', { n: d })}</button>
+        <button key={d} type="button" className="seg-item" aria-pressed={days === d} onClick={() => onChange(d)}>{t('d2.an.dShort', { n: d })}</button>
       ))}
     </div>
   );
@@ -122662,19 +122726,19 @@ function Heatmap({ h }: { h: Analytics['heatmap'] }) {
   const cur = hover ? { avg: h.cells[hover.dow][hover.hour], peak: h.peak[hover.dow][hover.hour] } : null;
   return (
     <div>
-      <div className="an-heat" role="img" aria-label={h.busiest ? t('an.heatAria', { when: dowLong(h.busiest.dow), time: hh(h.busiest.hour) }) : t('an.fewData')} onMouseLeave={() => setHover(null)}>
+      <div className="an-heat" role="img" aria-label={h.busiest ? t('d2.an.busiestLabel', { when: t('d2.an.dayAt', { day: t(DOW_LONG[h.busiest.dow]), time: hh(h.busiest.hour) }) }) : t('d2.pl.fewData')} onMouseLeave={() => setHover(null)}>
         <span />
         {Array.from({ length: 24 }, (_, i) => <span key={i} className="an-heat-hour">{i % 3 === 0 ? i : ''}</span>)}
         {h.cells.map((row, dow) => (
           <div key={dow} className="contents">
-            <span className="an-heat-dow">{dowShort(dow)}</span>
+            <span className="an-heat-dow">{t(DOW[dow])}</span>
             {row.map((v, hour) => (
               <span
                 key={hour}
                 className={`an-heat-cell ${v == null ? 'is-empty' : ''} ${hover?.dow === dow && hover.hour === hour ? 'is-hover' : ''}`}
                 style={v == null ? undefined : { ['--a' as string]: (0.1 + 0.9 * (v / max)).toFixed(3) }}
                 onMouseEnter={() => setHover({ dow, hour })}
-                title={v == null ? t('an.noData') : t('an.cell', { dow: dowShort(dow), time: hh(hour), avg: v, max: h.peak[dow][hour] })}
+                title={v == null ? t('d2.sys.noData') : t('d2.an.cell', { day: t(DOW[dow]), time: hh(hour), avg: v, peak: h.peak[dow][hour] })}
               />
             ))}
           </div>
@@ -122682,16 +122746,16 @@ function Heatmap({ h }: { h: Analytics['heatmap'] }) {
       </div>
       <div className="an-heat-foot">
         <span className="an-heat-scale" aria-hidden>
-          {t('an.less')} <i style={{ ['--a' as string]: 0.15 }} /><i style={{ ['--a' as string]: 0.4 }} /><i style={{ ['--a' as string]: 0.7 }} /><i style={{ ['--a' as string]: 1 }} /> {t('an.more')}
+          {t('d2.an.less')} <i style={{ ['--a' as string]: 0.15 }} /><i style={{ ['--a' as string]: 0.4 }} /><i style={{ ['--a' as string]: 0.7 }} /><i style={{ ['--a' as string]: 1 }} /> {t('d2.an.more')}
         </span>
         <span className="font-bold text-ink" aria-live="polite">
-          {hover && cur ? (cur.avg == null ? `${dowShort(hover.dow)} ${hh(hover.hour)}: ${t('an.noData')}` : t('an.cell', { dow: dowShort(hover.dow), time: hh(hover.hour), avg: num(cur.avg), max: cur.peak })) : t('an.avgFor', { n: h.days })}
+          {hover && cur ? (cur.avg == null ? t('d2.an.cellNone', { day: t(DOW[hover.dow]), time: hh(hover.hour) }) : t('d2.an.cell', { day: t(DOW[hover.dow]), time: hh(hover.hour), avg: num(cur.avg), peak: cur.peak })) : t('d2.an.avgFor', { n: h.days })}
         </span>
       </div>
       <div className="an-facts">
-        {h.busiest && <p><b>{t('an.peak')}</b> {t('an.peakText', { when: dowLong(h.busiest.dow), time: hh(h.busiest.hour), avg: num(h.busiest.avg), n: Math.round(h.busiest.avg) })}</p>}
-        {h.quietest && <p><b>{t('an.quietest')}</b> {t('an.when', { when: dowLong(h.quietest.dow), time: hh(h.quietest.hour) })}</p>}
-        {h.restartHour != null && <p><b>{t('an.restart')}</b> {t('an.restartText', { time: hh(h.restartHour) })}</p>}
+        {h.busiest && <p><b>{t('d2.an.peak')}</b> {t('d2.an.dayAt', { day: t(DOW_LONG[h.busiest.dow]), time: hh(h.busiest.hour) })}: {t('d2.an.avgPlayers', { n: Math.round(h.busiest.avg), avg: num(h.busiest.avg) })}</p>}
+        {h.quietest && <p><b>{t('d2.an.quietest')}</b> {t('d2.an.dayAt', { day: t(DOW_LONG[h.quietest.dow]), time: hh(h.quietest.hour) })}</p>}
+        {h.restartHour != null && <p><b>{t('d2.an.restart')}</b> {t('d2.an.restartText', { time: hh(h.restartHour) })}</p>}
       </div>
     </div>
   );
@@ -122706,9 +122770,9 @@ function DailyBars({ daily }: { daily: Analytics['daily'] }) {
   const step = Math.ceil(daily.length / 8);
   return (
     <div>
-      <div className="an-bars" role="img" aria-label={t('an.dailyAria', { max })} onMouseLeave={() => setHover(null)}>
+      <div className="an-bars" role="img" aria-label={t('d2.an.uniqueLabel', { max })} onMouseLeave={() => setHover(null)}>
         {daily.map((x, i) => (
-          <div key={x.day} className={`an-bar ${hover === i ? 'is-hover' : ''}`} onMouseEnter={() => setHover(i)} title={t('an.barTitle', { day: dayLabel(x.day), n: x.players, news: x.newPlayers })}>
+          <div key={x.day} className={`an-bar ${hover === i ? 'is-hover' : ''}`} onMouseEnter={() => setHover(i)} title={t('d2.an.barTitle', { day: dayLabel(x.day), players: x.players, fresh: x.newPlayers })}>
             <span className="an-bar-new" style={{ height: `${(x.newPlayers / max) * 100}%` }} />
             <span className="an-bar-old" style={{ height: `${((x.players - x.newPlayers) / max) * 100}%` }} />
           </div>
@@ -122720,11 +122784,11 @@ function DailyBars({ daily }: { daily: Analytics['daily'] }) {
       </div>
       <div className="an-heat-foot">
         <span className="flex flex-wrap gap-3">
-          <span className="an-legend"><i className="an-bar-old" />{t('an.returned')}</span>
-          <span className="an-legend"><i className="an-bar-new" />{t('an.new')}</span>
+          <span className="an-legend"><i className="an-bar-old" />{t('d2.an.returned')}</span>
+          <span className="an-legend"><i className="an-bar-new" />{t('d2.an.fresh')}</span>
         </span>
         <span className="font-bold text-ink" aria-live="polite">
-          {d ? t('an.barHover', { day: dayLabel(d.day), n: d.players, news: d.newPlayers, hours: num(d.hours), peak: d.peak }) : t('an.hoverBar')}
+          {d ? t('d2.an.dayLine', { n: d.players, day: dayLabel(d.day), fresh: d.newPlayers, hours: num(d.hours), peak: d.peak }) : t('d2.an.hoverBar')}
         </span>
       </div>
     </div>
@@ -122751,21 +122815,21 @@ function SessionBars({ sessions }: { sessions: Analytics['sessions'] }) {
 function Cohorts({ cohorts }: { cohorts: Analytics['cohorts'] }) {
   useI18n();
   const width = Math.max(1, ...cohorts.map((c) => c.rates.length));
-  if (!cohorts.some((c) => c.size > 0)) return <p className="text-sm font-semibold text-mute">{t('an.noNew')}</p>;
+  if (!cohorts.some((c) => c.size > 0)) return <p className="text-sm font-semibold text-mute">{t('d2.an.noNew')}</p>;
   return (
     <div className="overflow-x-auto">
       <table className="an-cohorts">
         <thead>
           <tr>
-            <th scope="col">{t('an.firstWeek')}</th>
-            <th scope="col">{t('an.players')}</th>
-            {Array.from({ length: width }, (_, i) => <th key={i} scope="col">{t('an.weekPlus', { n: i + 1 })}</th>)}
+            <th scope="col">{t('d2.an.firstWeek')}</th>
+            <th scope="col">{t('d2.an.players')}</th>
+            {Array.from({ length: width }, (_, i) => <th key={i} scope="col">{t('d2.an.plusWeeks', { n: i + 1 })}</th>)}
           </tr>
         </thead>
         <tbody>
           {cohorts.map((c) => (
             <tr key={c.start}>
-              <th scope="row">{t('an.since', { date: fmtDate(c.start) })}</th>
+              <th scope="row">{t('d2.an.since', { date: fmtDate(c.start) })}</th>
               <td className="font-extrabold">{c.size}</td>
               {Array.from({ length: width }, (_, i) => {
                 const v = c.rates[i];
@@ -122782,7 +122846,7 @@ function Cohorts({ cohorts }: { cohorts: Analytics['cohorts'] }) {
 }
 
 type TopSort = 'hours' | 'visits' | 'recent';
-const TOP_SORTS: [TopSort, TKey][] = [['hours', 'an.sort.hours'], ['visits', 'an.sort.visits'], ['recent', 'an.sort.recent']];
+const TOP_SORTS: [TopSort, TKey][] = [['hours', 'd2.an.byHours'], ['visits', 'd2.an.byVisits'], ['recent', 'd2.an.byRecent']];
 
 function TopPlayers({ top }: { top: Analytics['top'] }) {
   useI18n();
@@ -122792,10 +122856,10 @@ function TopPlayers({ top }: { top: Analytics['top'] }) {
     [top, sort],
   );
   const max = Math.max(1, ...top.map((p) => (sort === 'visits' ? p.visits : p.hours)));
-  if (!top.length) return <p className="text-sm font-semibold text-mute">{t('an.nobody')}</p>;
+  if (!top.length) return <p className="text-sm font-semibold text-mute">{t('d2.an.nobody')}</p>;
   return (
     <div className="space-y-3">
-      <div className="seg" role="group" aria-label={t('an.order')}>
+      <div className="seg" role="group" aria-label={t('d2.an.order')}>
         {TOP_SORTS.map(([k, label]) => <button key={k} type="button" className="seg-item" aria-pressed={sort === k} onClick={() => setSort(k)}>{t(label)}</button>)}
       </div>
       <ol className="an-top">
@@ -122816,8 +122880,8 @@ function TopPlayers({ top }: { top: Analytics['top'] }) {
                 <span className="an-top-bar"><span style={{ width: `${(value / max) * 100}%` }} /></span>
               </span>
               <span className="shrink-0 text-right">
-                <span className="block font-extrabold tabular-nums">{sort === 'visits' ? t('an.visitsN', { n: p.visits }) : t('dur.h', { n: num(p.hours) })}</span>
-                <span className="block text-xs font-bold text-mute">{p.lastSeen ? ago(p.lastSeen) : t('an.playingNow')}</span>
+                <span className="block font-extrabold tabular-nums">{sort === 'visits' ? t('d2.pl.nVisits', { n: p.visits }) : t('dur.h', { n: num(p.hours) })}</span>
+                <span className="block text-xs font-bold text-mute">{p.lastSeen ? ago(p.lastSeen) : t('d2.pl.inGame')}</span>
               </span>
             </li>
           );
@@ -122845,47 +122909,47 @@ export default function AnalyticsTab({ id }: { id: number }) {
   const newShare = useMemo(() => (s && s.players ? Math.round((s.newPlayers / s.players) * 100) : 0), [s]);
 
   if (error) return <ErrorLine text={error} />;
-  if (!data || !s) return <div className="tile skeleton h-72" aria-label={t('an.loading')} role="status" />;
+  if (!data || !s) return <div className="tile skeleton h-72" aria-label={t('d2.an.loading')} role="status" />;
 
   return (
     <div className="an space-y-3.5">
       <section className="tile tile-in p-4 sm:p-5">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-          <h2 className="text-base font-extrabold">{t('an.playersFor', { n: days })}</h2>
+          <h2 className="text-base font-extrabold">{t('d2.an.playersFor', { n: days })}</h2>
           <PeriodSwitch days={days} onChange={setDays} />
         </div>
         <div className="an-kpis">
-          <Kpi k={t('an.kpi.unique')} v={s.players} hint={t('an.kpi.uniqueHint', { dau: s.dau, wau: s.wau, mau: s.mau })} />
-          <Kpi k={t('an.kpi.new')} v={s.newPlayers} hint={s.players ? t('an.kpi.newHint', { share: newShare, n: s.returning }) : undefined} />
-          <Kpi k={t('an.kpi.visit')} v={minutesText(s.medianMinutes)} hint={s.avgMinutes != null ? `${t('an.kpi.avg', { v: minutesText(s.avgMinutes) })} · ${t('an.visitsN', { n: s.visits })}` : undefined} />
-          <Kpi k={t('an.kpi.hours')} v={s.playerHours.toLocaleString('ru-RU')} hint={t('an.kpi.hoursHint')} />
+          <Kpi k={t('d2.an.k.unique')} v={s.players} hint={t('d2.an.k.uniqueHint', { dau: s.dau, wau: s.wau, mau: s.mau })} />
+          <Kpi k={t('d2.an.k.new')} v={s.newPlayers} hint={s.players ? t('d2.an.k.newHint', { p: newShare, n: s.returning }) : undefined} />
+          <Kpi k={t('d2.an.k.visit')} v={minutesText(s.medianMinutes)} hint={s.avgMinutes != null ? t('d2.an.k.visitHint', { avg: minutesText(s.avgMinutes), visits: t('d2.pl.nVisits', { n: s.visits }) }) : undefined} />
+          <Kpi k={t('d2.an.k.hours')} v={s.playerHours.toLocaleString('ru-RU')} hint={t('d2.an.k.hoursHint')} />
         </div>
       </section>
 
       <section className="tile tile-in p-4 sm:p-5">
-        <h2 className="mb-3 text-base font-extrabold">{t('an.when.title')}</h2>
+        <h2 className="mb-3 text-base font-extrabold">{t('d2.an.when')}</h2>
         <Heatmap h={data.heatmap} />
       </section>
 
       <div className="grid gap-3.5 lg:grid-cols-12">
         <section className="tile tile-in p-4 sm:p-5 lg:col-span-7">
-          <h2 className="mb-3 text-base font-extrabold">{t('an.daily.title')}</h2>
+          <h2 className="mb-3 text-base font-extrabold">{t('d2.an.byDay')}</h2>
           <DailyBars daily={data.daily} />
         </section>
         <section className="tile tile-in p-4 sm:p-5 lg:col-span-5">
-          <h2 className="mb-3 text-base font-extrabold">{t('an.sess.title')}</h2>
+          <h2 className="mb-3 text-base font-extrabold">{t('d2.an.sessionLen')}</h2>
           <SessionBars sessions={data.sessions} />
         </section>
       </div>
 
       <div className="grid gap-3.5 lg:grid-cols-12">
         <section className="tile tile-in p-4 sm:p-5 lg:col-span-7">
-          <h2 className="mb-1 text-base font-extrabold">{t('an.coh.title')}</h2>
-          <p className="mb-3 text-sm font-semibold text-mute">{t('an.coh.text')}</p>
+          <h2 className="mb-1 text-base font-extrabold">{t('d2.an.retention')}</h2>
+          <p className="mb-3 text-sm font-semibold text-mute">{t('d2.an.retentionText')}</p>
           <Cohorts cohorts={data.cohorts} />
         </section>
         <section className="tile tile-in p-4 sm:p-5 lg:col-span-5">
-          <h2 className="mb-3 text-base font-extrabold">{t('an.top.title')}</h2>
+          <h2 className="mb-3 text-base font-extrabold">{t('d2.an.topTitle')}</h2>
           <TopPlayers top={data.top} />
         </section>
       </div>
@@ -123023,8 +123087,8 @@ __COREGSM_EOF__
 import { useMemo, useState } from 'react';
 import type { ServerDetails } from '../../api';
 import { StateView } from '../StateView';
-import { t, useI18n } from '../../i18n';
-import { ago, plural } from '../../ui';
+import { t, useI18n, type TKey } from '../../i18n';
+import { ago } from '../../ui';
 import { fmtDuration } from './helpers';
 import { EVENT_FILTERS, eventCounts, filterEvents, groupByDay, type EventFilter } from './serverLogic';
 
@@ -123045,14 +123109,14 @@ const ICON: Record<Ev['type'], { cls: string; path: string }> = {
   maintenance: { cls: 'bg-soft text-link', path: 'M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z' },
 };
 
-const MARK_RU: Record<Ev['type'], string> = { up: 'возврат', down: 'сбой', peak: 'пик', maintenance: 'тех. работы' };
+const MARK_RU: Record<Ev['type'], TKey> = { up: 'd2.ef.m.up', down: 'd2.ef.m.down', peak: 'd2.ef.m.peak', maintenance: 'd2.ef.m.maint' };
 
 function title(e: Ev, downFor: number | null, stillDown: boolean): string {
-  if (e.type === 'up') return 'Сервер вернулся';
-  if (e.type === 'peak') return `Пик игроков: ${e.players ?? '–'}`;
-  if (e.type === 'maintenance') return e.name ? `Начались технические работы: ${e.name}` : 'Начались технические работы';
-  if (downFor != null) return `Сервер упал · был недоступен ${fmtDuration(downFor)}`;
-  return stillDown ? 'Сервер упал · недоступен до сих пор' : 'Сервер упал';
+  if (e.type === 'up') return t('d2.ef.up');
+  if (e.type === 'peak') return t('d2.ef.peak', { n: e.players ?? '–' });
+  if (e.type === 'maintenance') return e.name ? t('d2.ef.maintName', { name: e.name }) : t('d2.ef.maint');
+  if (downFor != null) return t('d2.ef.downFor', { v: fmtDuration(downFor) });
+  return stillDown ? t('d2.ef.stillDown') : t('d2.ef.down');
 }
 
 export default function EventsFeed({ events, online, limit, moreHref, uptimePct, windowLabel }: { events: Ev[]; online: boolean; limit?: number; moreHref?: string; uptimePct?: number | null; windowLabel?: string }) {
@@ -123082,9 +123146,9 @@ export default function EventsFeed({ events, online, limit, moreHref, uptimePct,
     <div>
       {!limit && events.length > 0 && (
         <div className="ev-sum">
-          <div className="ev-sum-c"><b>{outages}</b><span>{plural(outages, ['сбой', 'сбоя', 'сбоев'])}</span></div>
-          <div className="ev-sum-c"><b>{downTotal ? fmtDuration(downTotal) : '0'}</b><span>суммарный простой</span></div>
-          {uptimePct != null && <div className="ev-sum-c"><b>{Math.round(uptimePct * 10) / 10}%</b><span>доступность{windowLabel ? ` ${windowLabel}` : ''}</span></div>}
+          <div className="ev-sum-c"><b>{outages}</b><span>{t('d2.ef.outages', { n: outages })}</span></div>
+          <div className="ev-sum-c"><b>{downTotal ? fmtDuration(downTotal) : '0'}</b><span>{t('d2.ef.downTotal')}</span></div>
+          {uptimePct != null && <div className="ev-sum-c"><b>{Math.round(uptimePct * 10) / 10}%</b><span>{t('d2.ef.availability')}{windowLabel ? ` ${windowLabel}` : ''}</span></div>}
         </div>
       )}
       {!limit && (
@@ -123119,7 +123183,7 @@ export default function EventsFeed({ events, online, limit, moreHref, uptimePct,
                       </span>
                       <span className="min-w-0 flex-1">
                         <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-                          <span className={`ev-type ev-${e.type}`}>{MARK_RU[e.type]}</span>
+                          <span className={`ev-type ev-${e.type}`}>{t(MARK_RU[e.type])}</span>
                           <span className="block font-bold leading-snug">{title(e, downFor.get(e.ts) ?? null, !online && newestDown === e)}</span>
                         </span>
                         <time dateTime={new Date(e.ts).toISOString()} title={absTime(e.ts)} className="text-sm font-semibold text-mute">
@@ -123136,7 +123200,7 @@ export default function EventsFeed({ events, online, limit, moreHref, uptimePct,
       )}
       {limit && list.length > 0 && moreHref && (
         <a href={moreHref} className="mt-3 inline-flex min-h-[44px] items-center gap-1 text-sm font-extrabold text-link hover:underline md:min-h-0">
-          Все события →<span className="font-semibold text-mute">· {events.length} {plural(events.length, ['событие', 'события', 'событий'])}</span>
+          {t('d2.ef.all')}<span className="font-semibold text-mute">· {t('d2.ef.count', { n: events.length })}</span>
         </a>
       )}
     </div>
@@ -123147,7 +123211,7 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/components/server/Hero.tsx" << '__COREGSM_EOF__'
 import { useEffect, useRef, useState } from 'react';
 import { t, useI18n } from '../../i18n';
-import { AnimatedNumber, Burst, IconBell, ago, plural } from '../../ui';
+import { AnimatedNumber, Burst, IconBell, ago } from '../../ui';
 import MaintenanceChip from '../MaintenanceChip';
 import NickPic from '../NickPic';
 import { capLevel, capacityPct, slotsInfo } from '../servers/capacity';
@@ -123179,14 +123243,14 @@ function SlotBar({ players, max, peak }: { players: number; max: number; peak: n
           title={level === 'hot' ? t('srv.cap.nearFull', { pct }) : t('srv.cap.taken', { pct })}
         >
           {Array.from({ length: segs }, (_, i) => (
-            <i key={i} className={`${i < filled ? 'on' : ''} ${i === peakAt ? 'is-peak' : ''}`} style={{ ['--d' as string]: `${i * 16}ms` }} title={i === peakAt ? `Пик за период: ${peak}` : undefined} />
+            <i key={i} className={`${i < filled ? 'on' : ''} ${i === peakAt ? 'is-peak' : ''}`} style={{ ['--d' as string]: `${i * 16}ms` }} title={i === peakAt ? t('d2.hero.peakTitle', { n: peak ?? '' }) : undefined} />
           ))}
         </div>
         <span className={`srv-pct on-dark big ${level}`}>{pct}%</span>
       </div>
       <div className="mt-2 flex flex-wrap items-center gap-2">
         {info && <span className={`srv-slotpill ${info.kind}`}>{text}</span>}
-        {peak != null && peak > 0 && <span className="srv-peaknote">пик за период: {peak}</span>}
+        {peak != null && peak > 0 && <span className="srv-peaknote">{t('d2.hero.peakNote', { n: peak })}</span>}
       </div>
     </div>
   );
@@ -123199,11 +123263,11 @@ function HeroSpark({ values }: { values: number[] }) {
   const pts = values.map((y, i) => `${((i / (values.length - 1)) * 100).toFixed(1)},${(20 - (y / hi) * 18).toFixed(1)}`).join(' ');
   const d = values[values.length - 1] - values[0];
   return (
-    <div className="srv-hero-trend" title="Игроки за последние 2 часа">
+    <div className="srv-hero-trend" title={t('d2.hero.last2h')}>
       <svg viewBox="0 0 100 22" preserveAspectRatio="none" aria-hidden>
         <polyline points={pts} fill="none" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
       </svg>
-      <span>{d === 0 ? 'за 2 ч без изменений' : `за 2 ч ${d > 0 ? '+' : '−'}${Math.abs(d)}`}</span>
+      <span>{d === 0 ? t('d2.hero.noChange') : t('d2.hero.change', { sign: d > 0 ? '+' : '−', n: Math.abs(d) })}</span>
     </div>
   );
 }
@@ -123242,15 +123306,15 @@ function WhoStack({ who, players, href, now }: { who: Who[]; players: number; hr
           })}
           {rest > 0 && <span className="srv-who-more-n">+{rest}</span>}
         </span>
-        <a className="srv-who-link" href={href}>{plural(players, ['игрок', 'игрока', 'игроков'])} в игре →</a>
+        <a className="srv-who-link" href={href}>{t('d2.hero.inGame', { n: players })}</a>
       </div>
       {cur && (
         <div className="srv-who-pop" role="dialog" aria-label={cur.name}>
           <b className="block truncate text-base">{cur.name}</b>
-          <span className="text-sm font-semibold opacity-85">{cur.since != null ? `в игре ${playedFor(cur.since, now)}` : 'в сети сейчас'}</span>
+          <span className="text-sm font-semibold opacity-85">{cur.since != null ? t('d2.hero.playing', { v: playedFor(cur.since, now) }) : t('d2.hero.onlineNow')}</span>
           <span className="mt-1 flex flex-wrap items-center gap-2">
-            {place != null && place > 0 && <span className="pl-place-chip" title="Место в рейтинге недели">#{place}</span>}
-            {place != null && <a className="srv-who-prof" href={`/player/${encodeURIComponent(cur.name)}`}>Профиль →</a>}
+            {place != null && place > 0 && <span className="pl-place-chip" title={t('d2.hero.rankTitle')}>#{place}</span>}
+            {place != null && <a className="srv-who-prof" href={`/player/${encodeURIComponent(cur.name)}`}>{t('d2.hero.profile')}</a>}
           </span>
         </div>
       )}
@@ -123316,7 +123380,7 @@ export default function Hero({
           {online ? (
             <>
               <span className="srv-hero-n"><AnimatedNumber value={players} delta /></span>
-              {max > 0 && <span className="srv-hero-max"><small>из</small> {max}</span>}
+              {max > 0 && <span className="srv-hero-max"><small>{t('d2.as.of', { n: '' }).trim()}</small> {max}</span>}
               <span className="srv-hero-unit">{t('srv.hero.players')}</span>
             </>
           ) : (
@@ -123328,7 +123392,7 @@ export default function Hero({
           {boom > 0 && (
             <span key={boom} className="srv-record" role="status">
               <Burst count={10} radius={30} />
-              🏆 Новый рекорд
+              🏆 {t('d2.hero.record')}
             </span>
           )}
         </div>
@@ -123356,7 +123420,7 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/components/server/HistoryChart.tsx" << '__COREGSM_EOF__'
 import { useEffect, useId, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import type { ServerDetails } from '../../api';
-import { t, useI18n } from '../../i18n';
+import { t, useI18n, type TKey } from '../../i18n';
 import { fmtDateTime, smoothPath, smoothValues, toast } from '../../ui';
 import { exportFileName, pingTone, TONE_TEXT } from './helpers';
 import { findPeak, peakWhen } from './serverLogic';
@@ -123385,7 +123449,8 @@ const MARK: Record<Ev['type'], { fill: string; path: string }> = {
   maintenance: { fill: 'rgb(var(--warn))', path: 'M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z' },
 };
 const MARK_ORDER = ['down', 'up', 'peak', 'maintenance'] as const;
-const MARK_LABEL: Record<Ev['type'], string> = { down: 'сбой', up: 'возврат', peak: 'пик', maintenance: 'тех. работы' };
+const MARK_KEY: Record<Ev['type'], TKey> = { down: 'd2.ef.m.down', up: 'd2.ef.m.up', peak: 'd2.ef.m.peak', maintenance: 'd2.ef.m.maint' };
+const markLabel = (type: Ev['type']) => t(MARK_KEY[type]);
 
 const tickLabel = (ts: number, spanMs: number) =>
   spanMs <= 36 * 3600_000
@@ -123582,7 +123647,7 @@ export default function HistoryChart({
   const lastSeg = segments[segments.length - 1];
   // «now» only on the live chart: a zoomed stretch ends in the past
   const endPt = !zoom && lastSeg && now - lastSeg[lastSeg.length - 1].ts < gap ? lastSeg[lastSeg.length - 1] : null;
-  const unit = series === 'ping' ? 'мс' : '';
+  const unit = series === 'ping' ? t('d2.sv.ms') : '';
   const peak = findPeak(points.filter((p) => p.ts >= t0), series);
   const longRange = hours > 36;
   const peakText = peak
@@ -123593,19 +123658,19 @@ export default function HistoryChart({
   const capLine = series === 'players' && max > 0 && max <= yMax;
 
   const describe = (p: Point) => {
-    if (!p.online) return `${fullTime(p.ts)}: сервер не отвечал`;
-    const parts = [fullTime(p.ts), `игроков ${p.players}${max ? ` из ${max}` : ''}`];
-    if (p.ping != null) parts.push(`пинг ${p.ping} мс`);
+    if (!p.online) return `${fullTime(p.ts)}: ${t('d2.hch.down')}`;
+    const parts = [fullTime(p.ts), `${t('d2.hch.players', { n: p.players })}${max ? ` ${t('d2.as.of', { n: max })}` : ''}`];
+    if (p.ping != null) parts.push(t('d2.srv.ping', { ms: p.ping }));
     return parts.join(', ');
   };
   const summary = vals.length
-    ? `График ${series === 'ping' ? 'пинга' : 'игроков'} за ${hours <= 24 ? 'сутки' : 'неделю'}: от ${Math.min(...vals)} до ${Math.max(...vals)}${series === 'ping' ? ' мс' : ''}. Стрелки влево и вправо перемещают курсор.`
-    : 'График пока пуст.';
+    ? t(series === 'ping' ? (hours <= 24 ? 'd2.hch.sumPingDay' : 'd2.hch.sumPingWeek') : (hours <= 24 ? 'd2.hch.sumPlDay' : 'd2.hch.sumPlWeek'), { a: Math.min(...vals), b: Math.max(...vals), unit: series === 'ping' ? ` ${t('d2.sv.ms')}` : '' })
+    : t('d2.hch.empty');
 
   // tooltip: keep it inside the chart
   const TW = 188;
   const tx = hp ? Math.min(W - TW / 2 - 2, Math.max(TW / 2 + 2, x(hp.ts))) : 0;
-  const seriesName = series === 'ping' ? 'Пинг' : 'Игроки';
+  const seriesName = series === 'ping' ? t('d2.sd.ping') : t('d2.pl.players');
 
   /**
    * the chart as a PNG: computed styles are copied into a clone of the SVG, which is then drawn on a canvas.
@@ -123656,17 +123721,17 @@ export default function HistoryChart({
         return t.length > n ? `${t.slice(0, n - 1)}…` : t;
       };
       const font = esc(bs.fontFamily);
-      const periodName = hours <= 24 ? '24 часа' : hours <= 168 ? '7 дней' : '30 дней';
+      const periodName = hours <= 24 ? t('d2.hch.p24') : hours <= 168 ? t('d2.hch.p7') : t('d2.hch.p30');
       const stamp = Date.now();
       const range = `${fmtDateTime(stamp - hours * 3600_000)} - ${fmtDateTime(stamp)}`;
-      const head = title || 'Сервер';
+      const head = title || t('sn.f.server');
       const sub1 = `${game ? `${game} · ` : ''}${seriesName} · ${periodName} · ${range}`;
-      const sub2 = `CoreGSM · ${window.location.host} · создано ${fmtDateTime(stamp)}`;
+      const sub2 = `CoreGSM · ${window.location.host} · ${t('d2.hch.created', { when: fmtDateTime(stamp) })}`;
       // legend: the curve, the outage band and the markers that are on the chart
       const items: { kind: 'curve' | 'band' | 'dot'; label: string; fill?: string }[] = [
         { kind: 'curve', label: seriesName },
-        ...(points.some((p) => !p.online) ? [{ kind: 'band' as const, label: 'сервер не отвечал' }] : []),
-        ...MARK_ORDER.filter((t) => marks.some((m) => m.type === t)).map((t) => ({ kind: 'dot' as const, label: MARK_LABEL[t], fill: MARK[t].fill })),
+        ...(points.some((p) => !p.online) ? [{ kind: 'band' as const, label: t('d2.hch.down') }] : []),
+        ...MARK_ORDER.filter((t) => marks.some((m) => m.type === t)).map((t) => ({ kind: 'dot' as const, label: markLabel(t), fill: MARK[t].fill })),
       ];
       let lx = 12;
       const ly = CAP + H + 20;
@@ -123712,7 +123777,7 @@ export default function HistoryChart({
       a.remove();
       window.setTimeout(() => URL.revokeObjectURL(dl), 4000);
     } catch {
-      toast('Не удалось сохранить картинку', 'err');
+      toast(t('d2.hch.saveFail'), 'err');
     } finally {
       setSaving(false);
     }
@@ -123723,31 +123788,31 @@ export default function HistoryChart({
       {(sparse || late) && points.length > 0 && (
         <p className="mb-2 flex items-center gap-2 rounded-xl bg-soft px-3 py-1.5 text-sm font-bold text-mute">
           <span aria-hidden className="live-dot bg-warn!" />
-          {late && hours > 168 ? `История есть с ${fmtDateTime(first)}: измерения хранятся 7 дней` : `Данные накапливаются с ${fmtDateTime(first)}`}
+          {late && hours > 168 ? t('d2.hch.historyFrom', { when: fmtDateTime(first) }) : t('d2.hch.accumulating', { when: fmtDateTime(first) })}
         </p>
       )}
       {(hasUsual || series === 'players' || zoom) && (
         <div className="hc-tools">
           {hasUsual && (
             <button type="button" className="hc-chip" aria-pressed={showUsual} onClick={() => setShowUsual((v) => !v)}>
-              <i className="hc-chip-usual" aria-hidden />обычный уровень
+              <i className="hc-chip-usual" aria-hidden />{t('d2.hch.usual')}
             </button>
           )}
           {series === 'players' && allPoints.some((p) => p.ping != null) && (
             <button type="button" className="hc-chip" aria-pressed={showPing} onClick={() => setShowPing((v) => !v)}>
-              <i className="hc-chip-ping" aria-hidden />{showPing ? 'пинг, мс (справа)' : 'показать пинг'}
+              <i className="hc-chip-ping" aria-hidden />{showPing ? t('d2.hch.pingRight') : t('d2.hch.showPing')}
             </button>
           )}
           {zoom ? (
             <button type="button" className="hc-chip is-zoom" onClick={() => setZoom(null)}>
-              {fmtDateTime(zoom[0])} – {fmtDateTime(zoom[1])} · показать весь период
+              {fmtDateTime(zoom[0])} – {fmtDateTime(zoom[1])} · {t('d2.hch.showAll')}
             </button>
           ) : (
             <>
-              <span className="hc-tip">выделите участок мышью, чтобы приблизить</span>
+              <span className="hc-tip">{t('d2.hch.tip')}</span>
               {/* touch screens cannot drag a selection: the last hour / 6 hours / day / week in one tap */}
-              <span className="hc-quick" role="group" aria-label="Приблизить">
-                {([[1, '1 ч'], [6, '6 ч'], [24, '24 ч'], [168, '7 д']] as [number, string][]).filter(([h]) => h < hours).map(([h, label]) => (
+              <span className="hc-quick" role="group" aria-label={t('d2.hch.zoom')}>
+                {([[1, t('dur.h', { n: 1 })], [6, t('dur.h', { n: 6 })], [24, t('dur.h', { n: 24 })], [168, t('d2.hhc.d', { n: 7 })]] as [number, string][]).filter(([h]) => h < hours).map(([h, label]) => (
                   <button key={h} type="button" className="hc-chip" onClick={() => { const n = Date.now(); setZoom([n - h * 3600_000, n]); setHover(null); }}>{label}</button>
                 ))}
               </span>
@@ -123863,7 +123928,7 @@ export default function HistoryChart({
           {marks.map((m) => {
             const mx = Math.min(W - R - 9, Math.max(L + 9, x(m.ts)));
             const kind = MARK[m.type];
-            const label = m.type === 'peak' ? `Пик игроков: ${m.players ?? '–'}` : m.type === 'up' ? 'Сервер вернулся' : m.type === 'maintenance' ? 'Начались технические работы' : 'Сервер упал';
+            const label = m.type === 'peak' ? t('d2.ef.peak', { n: m.players ?? '–' }) : m.type === 'up' ? t('d2.ef.up') : m.type === 'maintenance' ? t('d2.ef.maint') : t('d2.ef.down');
             return (
               <g key={`${m.type}-${m.ts}`}>
                 <title>{`${label} · ${fullTime(m.ts)}`}</title>
@@ -123887,22 +123952,22 @@ export default function HistoryChart({
             {hp.online ? (
               <>
                 <div className="whitespace-nowrap">
-                  <span className="opacity-80">Игроки </span>
+                  <span className="opacity-80">{t('d2.pl.players')} </span>
                   <span className="text-fs-base font-extrabold">{hp.players}</span>
                   {max > 0 && <span className="opacity-80"> / {max}</span>}
                 </div>
                 {usualOn && baseline && usualAt(baseline, hp.ts) != null && (
-                  <div className="whitespace-nowrap"><span className="opacity-80">Обычно </span><span className="font-extrabold">~{Math.round(usualAt(baseline, hp.ts)!)}</span></div>
+                  <div className="whitespace-nowrap"><span className="opacity-80">{t('d2.hch.usually')} </span><span className="font-extrabold">~{Math.round(usualAt(baseline, hp.ts)!)}</span></div>
                 )}
                 <div className="whitespace-nowrap">
-                  <span className="opacity-80">Пинг </span>
-                  {hp.ping != null ? <span className="text-fs-base font-extrabold">{hp.ping} мс</span> : <span className="opacity-70">нет данных</span>}
+                  <span className="opacity-80">{t('d2.sd.ping')} </span>
+                  {hp.ping != null ? <span className="text-fs-base font-extrabold">{t('d2.bot.ms', { n: hp.ping })}</span> : <span className="opacity-70">{t('d2.sys.noData')}</span>}
                 </div>
               </>
             ) : (
               <div className="mt-0.5 flex items-center gap-1.5 whitespace-nowrap text-[#fca5a5]">
                 <span className="h-2 w-2 rounded-full bg-[#f87171]" />
-                сервер не отвечал
+                {t('d2.hch.down')}
               </div>
             )}
           </div>
@@ -123919,19 +123984,19 @@ export default function HistoryChart({
           <span className={`ml-2 ${TONE_TEXT[pingTone(hv).tone]}`}>{pingTone(hv).label}</span>
         )}
       </p>
-      <button type="button" className="btn btn-soft btn-sm" onClick={() => void exportPng()} disabled={saving || points.length === 0} title="Сохранить график как картинку PNG">
+      <button type="button" className="btn btn-soft btn-sm" onClick={() => void exportPng()} disabled={saving || points.length === 0} title={t('d2.hch.savePng')}>
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M12 4v11M7 11l5 5 5-5M5 20h14" /></svg>
-        {saving ? 'Готовим…' : 'Скачать PNG'}
+        {saving ? t('d2.hch.preparing') : t('d2.hch.png')}
       </button>
       </div>
       {marks.length > 0 && (
-        <ul className="hc-legend" aria-label="Обозначения на графике">
+        <ul className="hc-legend" aria-label={t('d2.hch.legend')}>
           {MARK_ORDER.filter((t) => marks.some((m) => m.type === t)).map((t) => (
             <li key={t}>
               <span className="hc-dot" style={{ background: MARK[t].fill }} aria-hidden>
                 <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3.4" strokeLinecap="round" strokeLinejoin="round"><path d={MARK[t].path} /></svg>
               </span>
-              {MARK_LABEL[t]}
+              {markLabel(t)}
             </li>
           ))}
         </ul>
@@ -123965,7 +124030,7 @@ function Overview({ points, hours, color, zoom, onZoom }: { points: Point[]; hou
         preserveAspectRatio="none"
         className="block h-11 w-full cursor-crosshair touch-none select-none"
         role="img"
-        aria-label="Весь период: потяните, чтобы выбрать участок"
+        aria-label={t('d2.hch.overview')}
         onPointerDown={(e) => { (e.target as Element).setPointerCapture?.(e.pointerId); const f = at(e.clientX); setSel({ a: f, b: f }); }}
         onPointerMove={(e) => { if (sel) setSel({ ...sel, b: at(e.clientX) }); }}
         onPointerUp={() => {
@@ -123994,7 +124059,7 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/server"
   cat > "$APP_DIR/core-frontend/src/components/server/Metrics.tsx" << '__COREGSM_EOF__'
 import type { ReactNode } from 'react';
-import { useI18n } from '../../i18n';
+import { t, useI18n } from '../../i18n';
 import { fmtDateTime, num } from '../../ui';
 import { capLevel } from '../servers/capacity';
 import { downsample, metricFill, trendPct } from './serverLogic';
@@ -124027,8 +124092,8 @@ function Spark({ values }: { values: number[] }) {
 }
 
 function Trend({ pct }: { pct: number }) {
-  if (Math.abs(pct) < 3) return <span className="srv-trend is-flat" title="Без заметных изменений">→ ровно</span>;
-  return <span className={`srv-trend ${pct > 0 ? 'is-up' : 'is-down'}`} title="Конец периода к его началу">{pct > 0 ? '↑' : '↓'} {Math.abs(pct)}%</span>;
+  if (Math.abs(pct) < 3) return <span className="srv-trend is-flat" title={t('d2.mx.flatTitle')}>→ {t('d2.mx.flat')}</span>;
+  return <span className={`srv-trend ${pct > 0 ? 'is-up' : 'is-down'}`} title={t('d2.mx.trendTitle')}>{pct > 0 ? '↑' : '↓'} {Math.abs(pct)}%</span>;
 }
 
 function Cell({ k, v, hint, fill, level, spark, trend }: { k: string; v: ReactNode; hint?: ReactNode; fill: number; level?: 'ok' | 'good' | 'warm' | 'hot'; spark?: number[]; trend?: number | null }) {
@@ -124054,28 +124119,28 @@ export default function Metrics({ d, withSamples = false }: { d: MetricsData; wi
   return (
     <div className={`srv-metrics no-scrollbar ${withSamples ? 'has-4' : ''}`}>
       <Cell
-        k="Пик"
+        k={t('d2.an.peak')}
         v={d.peak == null ? '–' : String(d.peak)}
         hint={d.peakAt ? fmtDateTime(d.peakAt) : undefined}
         fill={metricFill(d.peak, d.maxPlayers)}
         level={d.peak == null ? undefined : capLevel(metricFill(d.peak, d.maxPlayers))}
       />
       <Cell
-        k="Аптайм"
+        k={t('d2.sv.up')}
         v={d.uptimePct == null ? '–' : `${num(d.uptimePct)}%`}
         hint={d.windowLabel}
         fill={d.uptimePct ?? 0}
         level={uptimeLevel(d.uptimePct)}
       />
       <Cell
-        k="В среднем"
+        k={t('d2.cc.avg')}
         spark={d.series}
         trend={d.series ? trendPct(d.series) : null}
         v={d.avg == null ? '–' : num(d.avg)}
-        hint="пока онлайн"
+        hint={t('d2.mx.whileOnline')}
         fill={metricFill(d.avg, d.maxPlayers)}
       />
-      {withSamples && <Cell k="Измерений" v={String(d.samples)} hint={d.windowLabel} fill={0} />}
+      {withSamples && <Cell k={t('d2.mx.samples')} v={String(d.samples)} hint={d.windowLabel} fill={0} />}
     </div>
   );
 }
@@ -124181,11 +124246,12 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/components/server/Notice.tsx" << '__COREGSM_EOF__'
 import { useState } from 'react';
 import { api } from '../../api';
+import { t, useI18n, type TKey } from '../../i18n';
 import { ago, toast, fail } from '../../ui';
 
 export interface ServerNotice { text: string; tone: string; updatedAt: number }
 
-const TONES: [string, string][] = [['info', 'Информация'], ['ok', 'Хорошая новость'], ['warn', 'Важно'], ['bad', 'Срочно']];
+const TONES: [string, TKey][] = [['info', 'st.note.info'], ['ok', 'd2.nt.tone.ok'], ['warn', 'd2.nt.tone.warn'], ['bad', 'd2.nt.tone.bad']];
 const ICON: Record<string, string> = { info: 'ℹ️', ok: '✅', warn: '⚠️', bad: '🚨' };
 
 /**
@@ -124193,6 +124259,7 @@ const ICON: Record<string, string> = { info: 'ℹ️', ok: '✅', warn: '⚠️'
  * those who manage servers get «Закрепить объявление» / «Изменить» and a small form.
  */
 export default function PinnedNotice({ serverId, notice, canEdit, onChange }: { serverId: number; notice: ServerNotice | null; canEdit: boolean; onChange: (n: ServerNotice | null) => void }) {
+  useI18n();
   const [editing, setEditing] = useState(false);
   const [text, setText] = useState('');
   const [tone, setTone] = useState('info');
@@ -124205,7 +124272,7 @@ export default function PinnedNotice({ serverId, notice, canEdit, onChange }: { 
       const r = await api<{ notice: ServerNotice | null }>(`/servers/${serverId}/notice`, 'PUT', { text: value, tone });
       onChange(r.notice);
       setEditing(false);
-      toast(r.notice ? 'Объявление закреплено' : 'Объявление снято');
+      toast(r.notice ? t('d2.nt.t.pinned') : t('d2.nt.t.removed'));
     } catch (e) {
       fail(e);
     } finally {
@@ -124216,33 +124283,33 @@ export default function PinnedNotice({ serverId, notice, canEdit, onChange }: { 
   if (editing) {
     return (
       <form className="srv-notice-form" onSubmit={(e) => { e.preventDefault(); void save(text); }}>
-        <label className="font-extrabold" htmlFor="srv-notice-text">Объявление для игроков</label>
-        <textarea id="srv-notice-text" className="input min-h-20" value={text} maxLength={500} onChange={(e) => setText(e.target.value)} placeholder="Например: вайп в пятницу в 18:00 по Москве. Правила: без читов." autoFocus />
+        <label className="font-extrabold" htmlFor="srv-notice-text">{t('d2.nt.title')}</label>
+        <textarea id="srv-notice-text" className="input min-h-20" value={text} maxLength={500} onChange={(e) => setText(e.target.value)} placeholder={t('d2.nt.ph')} autoFocus />
         <div className="flex flex-wrap items-center gap-2">
-          <div className="seg" role="group" aria-label="Важность">
-            {TONES.map(([k, label]) => <button key={k} type="button" className="seg-item" aria-pressed={tone === k} onClick={() => setTone(k)}>{label}</button>)}
+          <div className="seg" role="group" aria-label={t('sn.f.level')}>
+            {TONES.map(([k, label]) => <button key={k} type="button" className="seg-item" aria-pressed={tone === k} onClick={() => setTone(k)}>{t(label)}</button>)}
           </div>
           <span className="ml-auto text-xs font-bold text-mute">{text.length}/500</span>
         </div>
         <div className="flex flex-wrap justify-end gap-2">
-          {notice && <button type="button" className="btn btn-ghost btn-sm" disabled={busy} onClick={() => void save('')}>Снять</button>}
-          <button type="button" className="btn btn-ghost btn-sm" onClick={() => setEditing(false)}>Отмена</button>
-          <button className="btn btn-sm" disabled={busy || !text.trim()}>Закрепить</button>
+          {notice && <button type="button" className="btn btn-ghost btn-sm" disabled={busy} onClick={() => void save('')}>{t('d2.nt.remove')}</button>}
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => setEditing(false)}>{t('common.cancel')}</button>
+          <button className="btn btn-sm" disabled={busy || !text.trim()}>{t('d2.news.pin')}</button>
         </div>
       </form>
     );
   }
   if (!notice) {
-    return canEdit ? <button type="button" className="srv-notice-add" onClick={open}>📌 Закрепить объявление</button> : null;
+    return canEdit ? <button type="button" className="srv-notice-add" onClick={open}>📌 {t('d2.nt.pin')}</button> : null;
   }
   return (
     <aside className={`srv-notice is-${notice.tone}`} role="note">
       <span className="srv-notice-i" aria-hidden>{ICON[notice.tone] ?? ICON.info}</span>
       <div className="min-w-0 flex-1">
         <p className="whitespace-pre-line font-bold leading-snug">{notice.text}</p>
-        <p className="mt-1 text-xs font-bold opacity-70">закреплено {ago(notice.updatedAt)}</p>
+        <p className="mt-1 text-xs font-bold opacity-70">{t('d2.nt.pinnedAgo', { ago: ago(notice.updatedAt) })}</p>
       </div>
-      {canEdit && <button type="button" className="btn-link btn-xs shrink-0" onClick={open}>Изменить</button>}
+      {canEdit && <button type="button" className="btn-link btn-xs shrink-0" onClick={open}>{t('d2.news.change')}</button>}
     </aside>
   );
 }
@@ -124367,31 +124434,31 @@ export default function Passport({ d }: { d: PassportData }) {
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(d.address);
-      toast('Адрес скопирован');
+      toast(t('d2.sd.t.addrCopied'));
     } catch {
-      toast(`Адрес: ${d.address}`, 'info', 8000);
+      toast(t('d2.sd.t.addr', { addr: d.address }), 'info', 8000);
     }
   };
   const pt = d.ping != null && d.online ? pingTone(d.ping) : null;
   return (
-    <section className="relative mt-3.5" aria-label="Паспорт сервера">
+    <section className="relative mt-3.5" aria-label={t('d2.pp.label')}>
       <ul className="pp-ribbon">
-        <Chip k="Игра" icon={<path d="M6 12h4M8 10v4M15 11.5h.01M18 13.5h.01M7 7h10a4 4 0 0 1 4 4v2a4 4 0 0 1-4 4h-1.5l-2-2h-3l-2 2H7a4 4 0 0 1-4-4v-2a4 4 0 0 1 4-4z" />}>{d.game}</Chip>
+        <Chip k={t('d2.sf.game')} icon={<path d="M6 12h4M8 10v4M15 11.5h.01M18 13.5h.01M7 7h10a4 4 0 0 1 4 4v2a4 4 0 0 1-4 4h-1.5l-2-2h-3l-2 2H7a4 4 0 0 1-4-4v-2a4 4 0 0 1 4-4z" />}>{d.game}</Chip>
         {/* a fact the server does not report is left out instead of showing a dash */}
-        {d.map && d.online && <Chip k="Карта" icon={<path d="M12 21s7-6.2 7-11.5A7 7 0 0 0 5 9.500C5 14.800 12 21 12 21zM12 12a2.500 2.500 0 1 0 0-5 2.500 2.500 0 0 0 0 5z" />}>{d.map}</Chip>}
-        {d.version && <Chip k="Версия" icon={<path d="M3 12V4h8l10 10-8 8L3 12zM7.500 8h.01" />}>{`v${d.version.replace(/^v/i, '')}`}</Chip>}
+        {d.map && d.online && <Chip k={t('d2.pp.map')} icon={<path d="M12 21s7-6.2 7-11.5A7 7 0 0 0 5 9.500C5 14.800 12 21 12 21zM12 12a2.500 2.500 0 1 0 0-5 2.500 2.500 0 0 0 0 5z" />}>{d.map}</Chip>}
+        {d.version && <Chip k={t('d2.srv.version')} icon={<path d="M3 12V4h8l10 10-8 8L3 12zM7.500 8h.01" />}>{`v${d.version.replace(/^v/i, '')}`}</Chip>}
         {d.country && (
-          <li className="pp-chip" title={`Страна: ${d.country}`}>
+          <li className="pp-chip" title={t('d2.pp.country', { name: d.country })}>
             <span className="pp-flag" aria-hidden>{d.flag}</span>
-            <span className="sr-only">Страна: </span>
+            <span className="sr-only">{t('d2.pp.countryK')} </span>
             <span className="truncate">{d.country}</span>
           </li>
         )}
         {pt && d.ping != null && (
-          <li className="pp-chip pp-ping" data-tone={pt.tone} title={`Пинг: ${pt.label}`}>
+          <li className="pp-chip pp-ping" data-tone={pt.tone} title={t('d2.pp.ping', { label: pt.label })}>
             <span className="pp-bars" aria-hidden data-n={pingBars(d.ping)}>{[1, 2, 3, 4, 5].map((i) => <i key={i} className={i <= pingBars(d.ping as number) ? 'on' : ''} style={{ height: 4 + i * 2.600 }} />)}</span>
-            <span className="sr-only">Пинг: </span>
-            <span><AnimatedNumber value={d.ping} /> мс</span>
+            <span className="sr-only">{t('d2.sd.ping')}: </span>
+            <span><AnimatedNumber value={d.ping} /> {t('d2.sv.ms')}</span>
           </li>
         )}
       </ul>
@@ -124401,20 +124468,20 @@ export default function Passport({ d }: { d: PassportData }) {
       </button>
       <div id={bodyId} hidden={!open}>
         <dl className="pp mt-2">
-          <Item k="Адрес" wide>
+          <Item k={t('d2.sv.address')} wide>
             <code title={d.address}>{d.address}</code>
-            <button type="button" className="pp-copy" onClick={() => void copy()} title="Скопировать адрес" aria-label="Скопировать адрес">
+            <button type="button" className="pp-copy" onClick={() => void copy()} title={t('d2.sv.copyAddr')} aria-label={t('d2.sv.copyAddr')}>
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
                 <rect x="9" y="9" width="11" height="11" rx="2.5" />
                 <path d="M5 15V6.5A2.5 2.5 0 0 1 7.5 4H15" />
               </svg>
             </button>
           </Item>
-          <Item k="Режим"><span>{d.mode ?? '–'}</span></Item>
-          <Item k="На панели" wide>
+          <Item k={t('d2.pp.mode')}><span>{d.mode ?? '–'}</span></Item>
+          <Item k={t('d2.pp.onPanel')} wide>
             <span title={d.createdAt ? fmtDateTime(d.createdAt) : undefined}>
-              {d.createdAt ? `с ${new Date(d.createdAt).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short', year: 'numeric' })}` : 'дата неизвестна'}
-              {d.lastSeen ? ` · опрос ${ago(d.lastSeen)}` : ''}
+              {d.createdAt ? t('d2.an.since', { date: new Date(d.createdAt).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short', year: 'numeric' }) }) : t('d2.pp.dateUnknown')}
+              {d.lastSeen ? ` · ${t('d2.pp.polled', { ago: ago(d.lastSeen) })}` : ''}
             </span>
           </Item>
           {d.discord.length > 0 && (
@@ -124900,9 +124967,11 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/components/server/QrCode.tsx" << '__COREGSM_EOF__'
 import { useMemo } from 'react';
 import qrcode from 'qrcode-generator';
+import { t, useI18n } from '../../i18n';
 
 /** a QR code as inline SVG (dark modules on white, always scannable regardless of the theme) */
 export default function QrCode({ text, label }: { text: string; label: string }) {
+  useI18n();
   const svg = useMemo(() => {
     try {
       const qr = qrcode(0, 'M');
@@ -124924,7 +124993,7 @@ export default function QrCode({ text, label }: { text: string; label: string })
       return null;
     }
   }, [text]);
-  if (!svg) return <p className="text-sm font-semibold text-mute">Слишком длинное значение для QR-кода.</p>;
+  if (!svg) return <p className="text-sm font-semibold text-mute">{t('d2.qr.long')}</p>;
   return (
     <div className="cn-qr">
       <svg viewBox={`0 0 ${svg.n} ${svg.n}`} role="img" aria-label={label} shapeRendering="crispEdges">
@@ -124939,16 +125008,18 @@ __COREGSM_EOF__
 /** Reviews of a server: the average with the spread of stars, the reviews, and the visitor's own one to write or edit. */
 import { useEffect, useState, type FormEvent } from 'react';
 import { api } from '../../api';
+import { t, useI18n, type TKey } from '../../i18n';
 import { useAuth } from '../../auth';
-import { Button, ErrorLine, UserAvatar, ago, plural, toast, num } from '../../ui';
+import { Button, ErrorLine, UserAvatar, ago, toast, num } from '../../ui';
 
 export interface Review { id: number; author: string; avatarUrl: string | null; stars: number; text: string; hidden: boolean; createdAt: number; updatedAt: number; votes?: number; voted?: boolean; reply?: string | null; replyAt?: number | null }
 interface Reviews { avg: number | null; count: number; dist: number[]; items: Review[]; mine: Review | null }
 
 /** `exact`: the stars are filled in parts (4.3 lights the fifth star by a third); otherwise the value is rounded */
 export function Stars({ value, size = 16, exact = false }: { value: number; size?: number; exact?: boolean }) {
+  useI18n();
   return (
-    <span className="rv-stars" role="img" aria-label={`${value} из 5`} style={{ fontSize: size }}>
+    <span className="rv-stars" role="img" aria-label={t('d2.rv.of5', { n: value })} style={{ fontSize: size }}>
       {[1, 2, 3, 4, 5].map((n) => {
         const f = exact ? Math.min(1, Math.max(0, value - (n - 1))) : n <= Math.round(value) ? 1 : 0;
         return <span key={n} className={f >= 1 ? 'on' : f > 0 ? 'fr' : ''} style={f > 0 && f < 1 ? { ['--f' as string]: f } : undefined} aria-hidden>★</span>;
@@ -124957,24 +125028,25 @@ export function Stars({ value, size = 16, exact = false }: { value: number; size
   );
 }
 
-const WORDS = ['', 'Ужасно', 'Плохо', 'Нормально', 'Хорошо', 'Отлично'];
+const WORDS: (TKey | '')[] = ['', 'd2.rv.w1', 'd2.rv.w2', 'd2.rv.w3', 'd2.rv.w4', 'd2.rv.w5'];
 type Sort = 'new' | 'useful' | 'high' | 'low';
-const SORTS: [Sort, string][] = [['new', 'Новые'], ['useful', 'Полезные'], ['high', 'Высокие'], ['low', 'Низкие']];
+const SORTS: [Sort, TKey][] = [['new', 'd2.rv.s.new'], ['useful', 'd2.rv.s.useful'], ['high', 'd2.rv.s.high'], ['low', 'd2.rv.s.low']];
 
 function StarPicker({ value, onChange }: { value: number; onChange: (v: number) => void }) {
+  useI18n();
   const [hover, setHover] = useState(0);
   const [pops, setPops] = useState(0);
   const shown = hover || value;
   return (
     <span className="inline-flex flex-wrap items-center gap-x-3">
-      <span className="rv-pick" role="radiogroup" aria-label="Оценка" onMouseLeave={() => setHover(0)}>
+      <span className="rv-pick" role="radiogroup" aria-label={t('d2.rv.rating')} onMouseLeave={() => setHover(0)}>
         {[1, 2, 3, 4, 5].map((n) => (
           <button
             key={`${n}-${n <= value ? pops : 0}`}
             type="button"
             role="radio"
             aria-checked={value === n}
-            aria-label={`${n} из 5`}
+            aria-label={t('d2.rv.of5', { n })}
             className={`${n <= shown ? 'on' : ''} ${n <= value && pops > 0 ? 'is-pop' : ''}`}
             style={{ ['--i' as string]: n }}
             onMouseEnter={() => setHover(n)}
@@ -124982,12 +125054,13 @@ function StarPicker({ value, onChange }: { value: number; onChange: (v: number) 
           >★</button>
         ))}
       </span>
-      <span className="rv-word" aria-live="polite">{WORDS[shown]}</span>
+      <span className="rv-word" aria-live="polite">{WORDS[shown] ? t(WORDS[shown] as TKey) : ''}</span>
     </span>
   );
 }
 
 export default function ServerReviews({ serverId }: { serverId: number }) {
+  useI18n();
   const { me, isAdmin } = useAuth();
   const canReply = isAdmin || !!me?.perms?.includes('servers');
   const [sort, setSort] = useState<Sort>('new');
@@ -125008,16 +125081,16 @@ export default function ServerReviews({ serverId }: { serverId: number }) {
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
-    if (!stars) return setError('Поставьте оценку: от 1 до 5 звёзд');
+    if (!stars) return setError(t('d2.rv.e.stars'));
     setBusy(true);
     setError('');
     await api(`/servers/${serverId}/reviews`, 'PUT', { stars, text })
-      .then(() => { toast(r?.mine ? 'Отзыв обновлён' : 'Спасибо за отзыв!'); setEditing(false); void load(); })
+      .then(() => { toast(r?.mine ? t('d2.rv.t.updated') : t('d2.rv.t.thanks')); setEditing(false); void load(); })
       .catch((err: Error) => setError(err.message))
       .finally(() => setBusy(false));
   };
   const remove = async () => {
-    await api(`/servers/${serverId}/reviews/mine`, 'DELETE').then(() => { toast('Отзыв удалён'); setEditing(false); void load(); }).catch((err: Error) => setError(err.message));
+    await api(`/servers/${serverId}/reviews/mine`, 'DELETE').then(() => { toast(t('d2.rv.t.deleted')); setEditing(false); void load(); }).catch((err: Error) => setError(err.message));
   };
 
   const vote = async (x: Review) => {
@@ -125043,21 +125116,21 @@ export default function ServerReviews({ serverId }: { serverId: number }) {
     <div className="rv">
       {empty && (
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-          <p className="rv-none">Отзывов пока нет{me ? ': станьте первым.' : '.'}</p>
-          {me && !r.mine && !formOpen && <button type="button" className="btn btn-soft btn-sm" onClick={() => setComposing(true)}>Оставить отзыв</button>}
+          <p className="rv-none">{t('d2.rv.none')}{me ? t('d2.rv.beFirst') : '.'}</p>
+          {me && !r.mine && !formOpen && <button type="button" className="btn btn-soft btn-sm" onClick={() => setComposing(true)}>{t('d2.rv.leave')}</button>}
         </div>
       )}
       {!empty && <div className="rv-score">
         <div className="text-center">
           <div className="rv-avg">{r.avg != null ? num(r.avg) : '—'}</div>
           <Stars value={r.avg ?? 0} size={22} exact />
-          <div className="mt-1 text-sm font-bold text-mute">{r.count} {plural(r.count, ['отзыв', 'отзыва', 'отзывов'])}</div>
-          <div className="rv-reco" title="Оценки 4 и 5">{recommend}% рекомендуют</div>
+          <div className="mt-1 text-sm font-bold text-mute">{t('d2.rv.count', { n: r.count })}</div>
+          <div className="rv-reco" title={t('d2.rv.reco45')}>{t('d2.rv.reco', { p: recommend })}</div>
         </div>
-        <ul className="rv-dist" aria-label="Оценки">
+        <ul className="rv-dist" aria-label={t('d2.rv.ratings')}>
           {[5, 4, 3, 2, 1].map((n) => (
             <li key={n}>
-              <button type="button" className={`rv-dist-row ${starFilter === n ? 'is-on' : ''}`} aria-pressed={starFilter === n} disabled={!r.dist[n - 1]} title={starFilter === n ? 'Показать все отзывы' : `Только отзывы на ${n} из 5`} onClick={() => setStarFilter(starFilter === n ? 0 : n)}>
+              <button type="button" className={`rv-dist-row ${starFilter === n ? 'is-on' : ''}`} aria-pressed={starFilter === n} disabled={!r.dist[n - 1]} title={starFilter === n ? t('d2.rv.showAll') : t('d2.rv.onlyN', { n })} onClick={() => setStarFilter(starFilter === n ? 0 : n)}>
                 <span className="w-3 text-right">{n}</span>
                 <span className="rv-dist-bar"><span style={{ width: `${r.count ? (r.dist[n - 1] / r.count) * 100 : 0}%` }} /></span>
                 <span className="w-6 text-right tabular-nums">{r.dist[n - 1]}</span>
@@ -125070,12 +125143,12 @@ export default function ServerReviews({ serverId }: { serverId: number }) {
       {r.mine && !editing && (
         <div className="rv-item is-mine">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="font-extrabold">Ваш отзыв</span>
+            <span className="font-extrabold">{t('d2.rv.yours')}</span>
             <Stars value={r.mine.stars} />
-            {r.mine.hidden && <span className="pill pill-mute">скрыт модератором</span>}
+            {r.mine.hidden && <span className="pill pill-mute">{t('d2.rv.hidden')}</span>}
             <span className="ml-auto flex gap-3">
-              <button type="button" className="btn-link btn-xs" onClick={() => setEditing(true)}>Изменить</button>
-              <button type="button" className="btn-link btn-link-danger btn-xs" onClick={() => void remove()}>Удалить</button>
+              <button type="button" className="btn-link btn-xs" onClick={() => setEditing(true)}>{t('d2.news.change')}</button>
+              <button type="button" className="btn-link btn-link-danger btn-xs" onClick={() => void remove()}>{t('d2.news.delete')}</button>
             </span>
           </div>
           {r.mine.text && <p className="mt-1 whitespace-pre-line font-semibold">{r.mine.text}</p>}
@@ -125085,23 +125158,23 @@ export default function ServerReviews({ serverId }: { serverId: number }) {
       {formOpen && (
         <form onSubmit={submit} className="rv-form">
           <div className="flex flex-wrap items-center gap-3">
-            <span className="font-extrabold">{r.mine ? 'Изменить отзыв' : 'Как вам сервер?'}</span>
+            <span className="font-extrabold">{r.mine ? t('d2.rv.edit') : t('d2.rv.how')}</span>
             <StarPicker value={stars} onChange={setStars} />
           </div>
-          <textarea className="input min-h-20" value={text} onChange={(e) => setText(e.target.value)} maxLength={1000} placeholder="Что понравилось, что стоит улучшить (необязательно)" aria-label="Текст отзыва" />
+          <textarea className="input min-h-20" value={text} onChange={(e) => setText(e.target.value)} maxLength={1000} placeholder={t('d2.rv.ph')} aria-label={t('d2.rv.textLabel')} />
           <ErrorLine text={error} />
           <div className="flex justify-end gap-2">
-            {(editing || (composing && empty)) && <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setEditing(false); setComposing(false); }}>Отмена</button>}
-            <Button loading={busy} className="btn-sm">{r.mine ? 'Сохранить' : 'Оставить отзыв'}</Button>
+            {(editing || (composing && empty)) && <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setEditing(false); setComposing(false); }}>{t('common.cancel')}</button>}
+            <Button loading={busy} className="btn-sm">{r.mine ? t('common.save') : t('d2.rv.leave')}</Button>
           </div>
         </form>
       )}
-      {!me && <p className="text-sm font-semibold text-mute"><a href="/login" className="font-extrabold text-link hover:underline">Войдите</a>, чтобы оставить отзыв.</p>}
+      {!me && <p className="text-sm font-semibold text-mute"><a href="/login" className="font-extrabold text-link hover:underline">{t('d2.rv.signIn')}</a>{t('d2.rv.signInRest')}</p>}
 
       {r.items.length > 1 && (
         <div className="flex flex-wrap items-center gap-2">
-          <div className="seg" role="group" aria-label="Порядок отзывов">
-            {SORTS.map(([k, label]) => <button key={k} type="button" className="seg-item" aria-pressed={sort === k} onClick={() => setSort(k)}>{label}</button>)}
+          <div className="seg" role="group" aria-label={t('d2.rv.order')}>
+            {SORTS.map(([k, label]) => <button key={k} type="button" className="seg-item" aria-pressed={sort === k} onClick={() => setSort(k)}>{t(label)}</button>)}
           </div>
           {starFilter > 0 && <button type="button" className="chip-filter on" onClick={() => setStarFilter(0)}>{starFilter} ★ ✕</button>}
         </div>
@@ -125119,27 +125192,27 @@ export default function ServerReviews({ serverId }: { serverId: number }) {
               {x.text && <p className="mt-1.5 whitespace-pre-line font-semibold">{x.text}</p>}
               {x.reply && replyFor !== x.id && (
                 <div className="rv-reply">
-                  <span className="rv-reply-k">Ответ администрации{x.replyAt ? ` · ${ago(x.replyAt)}` : ''}</span>
+                  <span className="rv-reply-k">{t('d2.rv.adminReply')}{x.replyAt ? ` · ${ago(x.replyAt)}` : ''}</span>
                   <p className="whitespace-pre-line font-semibold">{x.reply}</p>
                 </div>
               )}
               {replyFor === x.id && (
                 <form className="rv-reply-form" onSubmit={(e) => { e.preventDefault(); void saveReply(x); }}>
-                  <textarea className="input min-h-16" value={replyText} onChange={(e) => setReplyText(e.target.value)} maxLength={600} placeholder="Ответ увидят все. Пустой ответ удалит прежний." autoFocus />
+                  <textarea className="input min-h-16" value={replyText} onChange={(e) => setReplyText(e.target.value)} maxLength={600} placeholder={t('d2.rv.replyPh')} autoFocus />
                   <div className="flex justify-end gap-2">
-                    <button type="button" className="btn btn-ghost btn-sm" onClick={() => setReplyFor(null)}>Отмена</button>
-                    <button className="btn btn-sm">Ответить</button>
+                    <button type="button" className="btn btn-ghost btn-sm" onClick={() => setReplyFor(null)}>{t('common.cancel')}</button>
+                    <button className="btn btn-sm">{t('d2.rv.reply')}</button>
                   </div>
                 </form>
               )}
               <div className="rv-actions">
                 {(me || (x.votes ?? 0) > 0) && (
-                  <button type="button" className={`rv-vote ${x.voted ? 'is-on' : ''}`} aria-pressed={!!x.voted} disabled={!me} title={me ? 'Отзыв полезен' : 'Войдите, чтобы отметить'} onClick={() => void vote(x)}>
-                    <span aria-hidden>👍</span> Полезно{(x.votes ?? 0) > 0 ? ` · ${x.votes}` : ''}
+                  <button type="button" className={`rv-vote ${x.voted ? 'is-on' : ''}`} aria-pressed={!!x.voted} disabled={!me} title={me ? t('d2.rv.helpfulTitle') : t('d2.rv.signInMark')} onClick={() => void vote(x)}>
+                    <span aria-hidden>👍</span> {t('d2.rv.helpful')}{(x.votes ?? 0) > 0 ? ` · ${x.votes}` : ''}
                   </button>
                 )}
                 {canReply && replyFor !== x.id && (
-                  <button type="button" className="btn-link btn-xs" onClick={() => { setReplyFor(x.id); setReplyText(x.reply ?? ''); }}>{x.reply ? 'Изменить ответ' : 'Ответить'}</button>
+                  <button type="button" className="btn-link btn-xs" onClick={() => { setReplyFor(x.id); setReplyText(x.reply ?? ''); }}>{x.reply ? t('d2.rv.editReply') : t('d2.rv.reply')}</button>
                 )}
               </div>
             </li>
@@ -125154,6 +125227,7 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/components/server/Sections.tsx" << '__COREGSM_EOF__'
 import { Component, useCallback, useEffect, useRef, useState, type CSSProperties, type ErrorInfo, type ReactNode } from 'react';
 import { IconChevronDown } from '../../icons';
+import { t, useI18n, type TKey } from '../../i18n';
 
 /**
  * Long server pages: sections that fold, a mini table of contents (chips) that scrolls inside the page, and a memory of
@@ -125190,7 +125264,7 @@ function writeStore(v: Record<string, boolean>) {
 
 export interface SectionDef {
   id: string;
-  label: string;
+  label: TKey;
   /** folded by default on phones */
   secondary?: boolean;
 }
@@ -125208,9 +125282,9 @@ export class BlockBoundary extends Component<{ children: ReactNode; label?: stri
     if (!this.state.error) return <div key={this.state.n} className="contents">{this.props.children}</div>;
     return (
       <div className="srv-block-err" role="alert">
-        <p className="font-extrabold">Не удалось показать этот блок</p>
-        <p className="text-sm font-semibold text-mute">Остальная страница работает как обычно.</p>
-        <button type="button" className="btn btn-soft btn-sm" onClick={() => this.setState((s) => ({ error: null, n: s.n + 1 }))}>Повторить</button>
+        <p className="font-extrabold">{t('d2.sec.failed')}</p>
+        <p className="text-sm font-semibold text-mute">{t('d2.sec.rest')}</p>
+        <button type="button" className="btn btn-soft btn-sm" onClick={() => this.setState((s) => ({ error: null, n: s.n + 1 }))}>{t('common.retry')}</button>
       </div>
     );
   }
@@ -125293,6 +125367,7 @@ export function goToSection(state: SectionState, id: string) {
 
 /** the chips: one per section; the one being read is marked */
 export function SectionChips({ defs, state }: { defs: SectionDef[]; state: SectionState }) {
+  useI18n();
   const [current, setCurrent] = useState(defs[0]?.id ?? '');
   useEffect(() => {
     let raf = 0;
@@ -125320,7 +125395,7 @@ export function SectionChips({ defs, state }: { defs: SectionDef[]; state: Secti
 
   if (defs.length < 2) return null;
   return (
-    <nav className="srv-chips no-scrollbar" aria-label="Блоки страницы">
+    <nav className="srv-chips no-scrollbar" aria-label={t('d2.sec.blocks')}>
       {defs.map((d) => (
         <button
           key={d.id}
@@ -125330,7 +125405,7 @@ export function SectionChips({ defs, state }: { defs: SectionDef[]; state: Secti
           data-closed={state.collapsed(d.id) ? 'true' : undefined}
           onClick={() => goToSection(state, d.id)}
         >
-          {d.label}
+          {t(d.label)}
         </button>
       ))}
     </nav>
@@ -125342,15 +125417,16 @@ __COREGSM_EOF__
 import { useEffect, useLayoutEffect, useRef, useState, type ComponentType, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
 import { IconBars, IconBolt, IconGrid, IconPlug, IconTrend, IconUsers, type IconProps } from '../../icons';
 import { navigate } from '../../ui/route';
+import { t, useI18n, type TKey } from '../../i18n';
 import { tabHref, type TabId } from './helpers';
 
-export const TAB_LIST: { id: TabId; label: string; icon: ComponentType<IconProps> }[] = [
-  { id: '', label: 'Обзор', icon: IconGrid },
-  { id: 'players', label: 'Игроки', icon: IconUsers },
-  { id: 'history', label: 'История', icon: IconTrend },
-  { id: 'stats', label: 'Аналитика', icon: IconBars },
-  { id: 'events', label: 'События', icon: IconBolt },
-  { id: 'connect', label: 'Подключение', icon: IconPlug },
+export const TAB_LIST: { id: TabId; label: TKey; icon: ComponentType<IconProps> }[] = [
+  { id: '', label: 'd2.tabs.overview', icon: IconGrid },
+  { id: 'players', label: 'd2.pl.players', icon: IconUsers },
+  { id: 'history', label: 'd2.tabs.history', icon: IconTrend },
+  { id: 'stats', label: 'd2.tabs.stats', icon: IconBars },
+  { id: 'events', label: 'd2.sd.sec.events', icon: IconBolt },
+  { id: 'connect', label: 'd2.tabs.connect', icon: IconPlug },
 ];
 
 export const tabDomId = (id: TabId) => `srv-tab-${id || 'overview'}`;
@@ -125361,6 +125437,7 @@ export const panelDomId = (id: TabId) => `srv-panel-${id || 'overview'}`;
  * (the active tab is centred). Tabs are links, so the address bar and the back button work.
  */
 export default function ServerTabs({ id, tab, counts, toc, mini }: { id: number; tab: TabId; counts: Partial<Record<TabId, number>>; toc?: ReactNode; mini?: ReactNode }) {
+  useI18n();
   const seg = useRef<HTMLElement>(null);
   const sentinel = useRef<HTMLDivElement>(null);
   const [stuck, setStuck] = useState(false);
@@ -125419,25 +125496,25 @@ export default function ServerTabs({ id, tab, counts, toc, mini }: { id: number;
           ref={seg}
           className="srv-tabs seg fade-x no-scrollbar flex w-fit max-w-full overflow-x-auto"
           role="tablist"
-          aria-label="Разделы сервера"
+          aria-label={t('d2.tabs.label')}
           onKeyDown={onKey}
         >
-          {TAB_LIST.map((t) => {
-            const on = t.id === tab;
-            const n = counts[t.id];
+          {TAB_LIST.map((tb) => {
+            const on = tb.id === tab;
+            const n = counts[tb.id];
             return (
               <a
-                key={t.id || 'overview'}
-                id={tabDomId(t.id)}
+                key={tb.id || 'overview'}
+                id={tabDomId(tb.id)}
                 role="tab"
-                href={tabHref(id, t.id)}
+                href={tabHref(id, tb.id)}
                 aria-selected={on}
-                aria-controls={panelDomId(t.id)}
+                aria-controls={panelDomId(tb.id)}
                 tabIndex={on ? 0 : -1}
                 className={`seg-item shrink-0 ${on ? 'on' : ''}`}
               >
-                <t.icon size={17} className="srv-tab-i" />
-                {t.label}
+                <tb.icon size={17} className="srv-tab-i" />
+                {t(tb.label)}
                 {n != null && n > 0 && <span className="tab-count">{n}</span>}
               </a>
             );
@@ -125529,9 +125606,9 @@ const KIND_KEY: Record<SubKind, TKey> = { free_slot: 'sub.free_slot', back_onlin
 /** the choice of kinds: checkboxes and, when there is no linked Discord, a note about where the messages go */
 /** what the message will look like (the address is an example) */
 const PREVIEW: Record<SubKind, (n: string) => string> = {
-  free_slot: (n) => `🟢 На сервере «${n}» освободилось место (39/40). Адрес: play.example.com:27015`,
-  back_online: (n) => `✅ Сервер «${n}» снова в сети. Адрес: play.example.com:27015`,
-  went_down: (n) => `🔴 Сервер «${n}» недоступен. Адрес: play.example.com:27015`,
+  free_slot: (n) => t('d2.sm.p.free', { name: n }),
+  back_online: (n) => t('d2.sm.p.back', { name: n }),
+  went_down: (n) => t('d2.sm.p.down', { name: n }),
 };
 
 export function SubscribeForm({ kinds, onChange, discordLinked, idPrefix = 'sub', serverName }: { kinds: SubKind[]; onChange: (k: SubKind[]) => void; discordLinked: boolean; idPrefix?: string; serverName?: string }) {
@@ -125545,7 +125622,7 @@ export function SubscribeForm({ kinds, onChange, discordLinked, idPrefix = 'sub'
               <input id={`${idPrefix}-${k}`} type="checkbox" checked={kinds.includes(k)} onChange={() => onChange(toggleKind(kinds, k))} />
               {t(KIND_KEY[k])}
             </label>
-            {serverName && kinds.includes(k) && <p className="sub-preview" aria-label="Так будет выглядеть сообщение">{PREVIEW[k](serverName)}</p>}
+            {serverName && kinds.includes(k) && <p className="sub-preview" aria-label={t('d2.sm.preview')}>{PREVIEW[k](serverName)}</p>}
           </li>
         ))}
       </ul>
@@ -125603,7 +125680,7 @@ export default function SubscribeMenu({
     setTesting(true);
     try {
       const r = await api<{ dm: boolean; discordLinked: boolean }>(`/servers/${serverId}/subscription/test`, 'POST');
-      toast(r.dm ? 'Тест отправлен: смотрите колокольчик и личные сообщения Discord' : r.discordLinked ? 'Тест в колокольчике. Бот сейчас не в сети, в Discord не отправлено' : 'Тест в колокольчике. Привяжите Discord, чтобы получать и в личные сообщения');
+      toast(r.dm ? t('d2.sm.t.dm') : r.discordLinked ? t('d2.sm.t.botOff') : t('d2.sm.t.noDiscord'));
     } catch (e) {
       fail(e);
     } finally {
@@ -125641,8 +125718,8 @@ export default function SubscribeMenu({
             <SubscribeForm kinds={draft} onChange={setDraft} discordLinked={!!me.discordName} serverName={serverName} />
             <ErrorLine text={error} />
             <div className="flex flex-wrap items-center justify-end gap-2">
-              <button type="button" className="btn btn-soft mr-auto" disabled={testing} onClick={() => void sendTest()} title="Пришлёт в панель, в Discord и на устройства сообщение-образец">
-                {testing ? 'Отправляю…' : 'Тестовое сообщение'}
+              <button type="button" className="btn btn-soft mr-auto" disabled={testing} onClick={() => void sendTest()} title={t('d2.sm.testTitle')}>
+                {testing ? t('d2.smtp.sending') : t('d2.sm.test')}
               </button>
               <button type="button" className="btn btn-ghost" onClick={() => setOpen(false)}>{t('common.cancel')}</button>
               <Button loading={busy}>{t('sub.save')}</Button>
@@ -126154,6 +126231,7 @@ __COREGSM_EOF__
 // Administrator bulk actions on the servers page: poll now, maintenance window, favourites. Russian only (admin area).
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { api, type Server } from '../../api';
+import { t, useI18n, type TKey } from '../../i18n';
 import { Field, Modal, toast, ErrorLine } from '../../ui';
 import { fromLocalInput, toLocalInput, validateWindow } from '../../maintenance';
 
@@ -126161,7 +126239,8 @@ type Dur = '30' | '60' | '120' | 'until';
 
 /** the maintenance dialog: one window per selected server */
 function MaintenanceDialog({ servers, onClose, onDone }: { servers: Server[]; onClose: () => void; onDone: () => void }) {
-  const [name, setName] = useState('Плановые работы');
+  useI18n();
+  const [name, setName] = useState(t('d2.bb.defName'));
   const [dur, setDur] = useState<Dur>('60');
   const [until, setUntil] = useState(() => toLocalInput(Date.now() + 3 * 3600_000));
   const [busy, setBusy] = useState(false);
@@ -126187,39 +126266,39 @@ function MaintenanceDialog({ servers, onClose, onDone }: { servers: Server[]; on
       } catch (err) {
         setError(`«${s.name}»: ${(err as Error).message}`);
         setBusy(false);
-        if (ok) toast(`Создано окон: ${ok} из ${servers.length}`, 'err');
+        if (ok) toast(t('d2.bb.partial', { ok, total: servers.length }), 'err');
         return;
       }
     }
-    toast(ok === 1 ? 'Окно обслуживания создано' : `Окна обслуживания созданы: ${ok}`);
+    toast(ok === 1 ? t('d2.bb.created1') : t('d2.bb.createdN', { n: ok }));
     onDone();
   };
 
   return (
-    <Modal title="Окно обслуживания" onClose={onClose}>
+    <Modal title={t('d2.bb.title')} onClose={onClose}>
       <form className="space-y-4" onSubmit={(e) => void submit(e)} noValidate>
         <p className="text-sm font-semibold text-mute">
-          Для каждого из выбранных серверов ({servers.length}) будет создано своё окно. Уведомления на это время приглушаются, простой не считается в аптайм.
+          {t('d2.bb.text', { n: servers.length })}
         </p>
-        <Field label="Название">
+        <Field label={t('d2.sf.name')}>
           <input className="input" value={name} maxLength={80} onChange={(e) => setName(e.target.value)} />
         </Field>
-        <div role="group" aria-label="Длительность">
-          <span className="label">Длительность</span>
+        <div role="group" aria-label={t('d2.bb.duration')}>
+          <span className="label">{t('d2.bb.duration')}</span>
           <div className="flex flex-wrap gap-2">
-            {([['30', '30 минут'], ['60', '1 час'], ['120', '2 часа'], ['until', 'До времени']] as [Dur, string][]).map(([v, label]) => (
-              <button key={v} type="button" className={`chip-filter ${dur === v ? 'on' : ''}`} aria-pressed={dur === v} onClick={() => setDur(v)}>{label}</button>
+            {([['30', 'd2.bb.d30'], ['60', 'd2.bb.d60'], ['120', 'd2.bb.d120'], ['until', 'd2.bb.until']] as [Dur, TKey][]).map(([v, label]) => (
+              <button key={v} type="button" className={`chip-filter ${dur === v ? 'on' : ''}`} aria-pressed={dur === v} onClick={() => setDur(v)}>{t(label)}</button>
             ))}
           </div>
         </div>
         {dur === 'until' && (
-          <Field label="Окончание"><input className="input" type="datetime-local" value={until} onChange={(e) => setUntil(e.target.value)} /></Field>
+          <Field label={t('d2.mt.end')}><input className="input" type="datetime-local" value={until} onChange={(e) => setUntil(e.target.value)} /></Field>
         )}
         {problem && name.trim() !== '' && <p className="text-sm font-bold text-bad">{problem}</p>}
         <ErrorLine text={error} />
         <div className="flex flex-wrap justify-end gap-2.5">
-          <button type="button" className="btn btn-ghost" onClick={onClose}>Отмена</button>
-          <button type="submit" className="btn" disabled={!!problem || busy}>{busy ? 'Создаём…' : 'Создать окна'}</button>
+          <button type="button" className="btn btn-ghost" onClick={onClose}>{t('common.cancel')}</button>
+          <button type="submit" className="btn" disabled={!!problem || busy}>{busy ? t('d2.bb.creating') : t('d2.bb.create')}</button>
         </div>
       </form>
     </Modal>
@@ -126236,6 +126315,7 @@ export function BulkBar({ selected, visible, favs, onSelectAll, onClear, onExit,
   onReload: () => void;
   onFavs: (next: number[]) => void;
 }) {
+  useI18n();
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [dialog, setDialog] = useState(false);
   const alive = useRef(true);
@@ -126256,34 +126336,34 @@ export function BulkBar({ selected, visible, favs, onSelectAll, onClear, onExit,
       }
     }
     if (alive.current) setProgress(null);
-    toast(fail ? `Опрошено ${list.length - fail} из ${list.length}, ошибок: ${fail}` : list.length === 1 ? 'Сервер опрошен' : `Опрошено серверов: ${list.length}`, fail ? 'err' : 'ok');
+    toast(fail ? t('d2.bb.t.polledFail', { ok: list.length - fail, total: list.length, fail }) : list.length === 1 ? t('d2.bb.t.polled1') : t('d2.bb.t.polledN', { n: list.length }), fail ? 'err' : 'ok');
     onReload();
   };
 
   const setFav = async (on: boolean) => {
     if (busy || n === 0) return;
     const ids = selected.map((s) => s.id).filter((id) => favs.includes(id) !== on);
-    if (ids.length === 0) { toast(on ? 'Все выбранные уже в избранном' : 'Выбранных нет в избранном', 'info'); return; }
+    if (ids.length === 0) { toast(on ? t('d2.bb.t.allFav') : t('d2.bb.t.noneFav'), 'info'); return; }
     onFavs(on ? [...favs, ...ids] : favs.filter((id) => !ids.includes(id)));
     const res = await Promise.allSettled(ids.map((id) => api(`/favorites/${id}`, on ? 'PUT' : 'DELETE')));
     const bad = res.filter((r) => r.status === 'rejected').length;
-    toast(bad ? `Не удалось изменить: ${bad}` : on ? `В избранное добавлено: ${ids.length}` : `Убрано из избранного: ${ids.length}`, bad ? 'err' : 'ok');
+    toast(bad ? t('d2.bb.t.favFail', { n: bad }) : on ? t('d2.bb.t.favAdded', { n: ids.length }) : t('d2.bb.t.favRemoved', { n: ids.length }), bad ? 'err' : 'ok');
   };
 
   return (
     <>
-      <div className="srv-bulk" role="toolbar" aria-label="Действия с выбранными серверами">
+      <div className="srv-bulk" role="toolbar" aria-label={t('d2.bb.actions')}>
         <div className="srv-bulk-count" aria-live="polite">
-          {busy ? `Опрос ${progress.done + 1} из ${progress.total}…` : n === 0 ? 'Ничего не выбрано' : `Выбрано: ${n}`}
+          {busy ? t('d2.bb.progress', { a: progress.done + 1, b: progress.total }) : n === 0 ? t('d2.bb.none') : t('d2.news.picked', { n })}
         </div>
         <div className="srv-bulk-actions">
-          <button type="button" className="btn btn-soft" onClick={onSelectAll} disabled={busy || n === visible.length}>Выбрать все</button>
-          <button type="button" className="btn btn-soft" onClick={onClear} disabled={busy || n === 0}>Сбросить</button>
-          <button type="button" className="btn" onClick={() => void refreshAll()} disabled={busy || n === 0}>Опросить сейчас</button>
-          <button type="button" className="btn btn-soft" onClick={() => setDialog(true)} disabled={busy || n === 0}>Окно обслуживания…</button>
-          <button type="button" className="btn btn-soft" onClick={() => void setFav(true)} disabled={busy || n === 0}>Добавить в избранное</button>
-          <button type="button" className="btn btn-soft" onClick={() => void setFav(false)} disabled={busy || n === 0}>Убрать</button>
-          <button type="button" className="btn btn-soft" onClick={onExit}>Готово (Esc)</button>
+          <button type="button" className="btn btn-soft" onClick={onSelectAll} disabled={busy || n === visible.length}>{t('d2.news.pickAll')}</button>
+          <button type="button" className="btn btn-soft" onClick={onClear} disabled={busy || n === 0}>{t('d2.news.reset')}</button>
+          <button type="button" className="btn" onClick={() => void refreshAll()} disabled={busy || n === 0}>{t('d2.bb.pollNow')}</button>
+          <button type="button" className="btn btn-soft" onClick={() => setDialog(true)} disabled={busy || n === 0}>{t('d2.bb.maintenance')}</button>
+          <button type="button" className="btn btn-soft" onClick={() => void setFav(true)} disabled={busy || n === 0}>{t('d2.bb.addFav')}</button>
+          <button type="button" className="btn btn-soft" onClick={() => void setFav(false)} disabled={busy || n === 0}>{t('common.remove')}</button>
+          <button type="button" className="btn btn-soft" onClick={onExit}>{t('d2.bb.done')}</button>
         </div>
       </div>
       {dialog && <MaintenanceDialog servers={selected} onClose={() => setDialog(false)} onDone={() => { setDialog(false); onReload(); }} />}
@@ -126497,6 +126577,7 @@ import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointer
 import type { Server } from '../../api';
 import { getToken } from '../../api';
 import { gameColor } from '../../games';
+import { t, useI18n, type TKey } from '../../i18n';
 import { GameAvatar, smoothPath } from '../../ui';
 
 interface Sparks { hours: number; points: number; from: number; to: number; servers: Record<number, { players: (number | null)[]; down: boolean[] }> }
@@ -126504,7 +126585,7 @@ interface Sparks { hours: number; points: number; from: number; to: number; serv
 // distinct colours when two servers run the same game
 const SPARE = ['#2563eb', '#db2777', '#059669', '#d97706', '#7c3aed', '#0891b2', '#dc2626', '#65a30d', '#c026d3', '#0d9488'];
 
-const PERIODS: [number, string][] = [[24, 'Сутки'], [168, 'Неделя']];
+const PERIODS: [number, TKey][] = [[24, 'd2.cc.day'], [168, 'd2.cc.week']];
 
 /** distance between the hues of two '#rrggbb' colours, in degrees */
 function hueGap(a: string, b: string): number {
@@ -126522,6 +126603,7 @@ function hueGap(a: string, b: string): number {
 }
 
 export default function CompareChart({ servers }: { servers: Server[] }) {
+  useI18n();
   const [hours, setHours] = useState(24);
   const [pct, setPct] = useState(false);
   const [hidden, setHidden] = useState<Set<number>>(new Set());
@@ -126616,19 +126698,19 @@ export default function CompareChart({ servers }: { servers: Server[] }) {
   return (
     <section className="tile tile-in p-4 sm:p-5">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-        <h2 className="text-lg font-extrabold">Сравнение серверов</h2>
+        <h2 className="text-lg font-extrabold">{t('d2.cc.title')}</h2>
         <div className="flex flex-wrap gap-2">
-          <div className="seg" role="group" aria-label="Что показывать">
-            <button type="button" className="seg-item" aria-pressed={!pct} onClick={() => setPct(false)}>Игроки</button>
-            <button type="button" className="seg-item" aria-pressed={pct} onClick={() => setPct(true)}>% мест</button>
+          <div className="seg" role="group" aria-label={t('d2.cc.what')}>
+            <button type="button" className="seg-item" aria-pressed={!pct} onClick={() => setPct(false)}>{t('d2.pl.players')}</button>
+            <button type="button" className="seg-item" aria-pressed={pct} onClick={() => setPct(true)}>{t('d2.cc.slots')}</button>
           </div>
-          <div className="seg" role="group" aria-label="Период">
-            {PERIODS.map(([h, l]) => <button key={h} type="button" className="seg-item" aria-pressed={hours === h} onClick={() => setHours(h)}>{l}</button>)}
+          <div className="seg" role="group" aria-label={t('st.range')}>
+            {PERIODS.map(([h, l]) => <button key={h} type="button" className="seg-item" aria-pressed={hours === h} onClick={() => setHours(h)}>{t(l)}</button>)}
           </div>
         </div>
       </div>
 
-      <div className="mb-3 flex flex-wrap gap-2" aria-label="Показать или скрыть сервер">
+      <div className="mb-3 flex flex-wrap gap-2" aria-label={t('d2.cc.toggle')}>
         {series.map((x) => (
           <button key={x.s.id} type="button" className="cmp-chip" aria-pressed={!hidden.has(x.s.id)} onClick={() => toggle(x.s.id)} style={{ ['--c' as string]: x.color }}>
             <i aria-hidden />{x.s.name}
@@ -126638,9 +126720,9 @@ export default function CompareChart({ servers }: { servers: Server[] }) {
 
       <div ref={wrap} className="relative">
         {!data ? (
-          <div className="skeleton rounded-2xl bg-soft" style={{ height: H }} aria-label="Загрузка" role="status" />
+          <div className="skeleton rounded-2xl bg-soft" style={{ height: H }} aria-label={t('d2.news.loading')} role="status" />
         ) : (
-          <svg ref={svg} viewBox={`0 0 ${W} ${H}`} className="block h-auto w-full touch-pan-y select-none" role="img" aria-label={`Игроки на серверах за ${hours <= 24 ? 'сутки' : 'неделю'}`} onPointerMove={onMove} onPointerDown={onMove} onPointerLeave={() => setHover(null)}>
+          <svg ref={svg} viewBox={`0 0 ${W} ${H}`} className="block h-auto w-full touch-pan-y select-none" role="img" aria-label={hours <= 24 ? t('d2.cc.labelDay') : t('d2.cc.labelWeek')} onPointerMove={onMove} onPointerDown={onMove} onPointerLeave={() => setHover(null)}>
             {Array.from({ length: Math.floor(yMax / (pct ? 25 : step)) + 1 }, (_, i) => i * (pct ? 25 : step)).map((v) => (
               <g key={v}>
                 <line x1={L} x2={W - R} y1={y(v)} y2={y(v)} className="stroke-line" strokeDasharray={v ? '3 5' : undefined} />
@@ -126682,7 +126764,7 @@ export default function CompareChart({ servers }: { servers: Server[] }) {
       <div className="mt-4 overflow-x-auto">
         <table className="cmp-rank">
           <thead>
-            <tr><th scope="col">#</th><th scope="col">Сервер</th><th scope="col">В среднем</th><th scope="col">Пик</th><th scope="col">К прошлому периоду</th></tr>
+            <tr><th scope="col">#</th><th scope="col">{t('sn.f.server')}</th><th scope="col">{t('d2.cc.avg')}</th><th scope="col">{t('d2.an.peak')}</th><th scope="col">{t('d2.cc.vsPrev')}</th></tr>
           </thead>
           <tbody>
             {ranked.map((r, i) => (
@@ -126916,6 +126998,7 @@ import type { Server } from '../../api';
 import { gameColor, gameLabel } from '../../games';
 import { AnimatedNumber, GameAvatar, MiniSpark, StatusPill, ago, isLag, plural, num } from '../../ui';
 import MaintenanceChip from '../MaintenanceChip';
+import { t, useI18n, type TKey } from '../../i18n';
 import { CapacityBar, CountReact, StatusFlash, reactionOf, type Reactions } from './serverUi';
 
 export interface ListSort { key: 'name' | 'players' | 'ping' | 'up'; dir: 'asc' | 'desc' }
@@ -126942,6 +127025,7 @@ const fmtUp = (v: number) => `${num(v)}%`;
 
 /** copies the address; the button shows a check mark for a moment */
 function CopyAddress({ text, className = '' }: { text: string; className?: string }) {
+  useI18n();
   const [done, setDone] = useState(false);
   const timer = useRef<number | undefined>(undefined);
   useEffect(() => () => window.clearTimeout(timer.current), []);
@@ -126971,7 +127055,7 @@ function CopyAddress({ text, className = '' }: { text: string; className?: strin
     timer.current = window.setTimeout(() => setDone(false), 1500);
   };
   return (
-    <button type="button" onClick={(e) => void copy(e)} className={`${done ? 'btn-success' : 'btn-soft'} btn-xs max-w-full ${className}`} title="Скопировать адрес" aria-label={`Скопировать адрес ${text}`}>
+    <button type="button" onClick={(e) => void copy(e)} className={`${done ? 'btn-success' : 'btn-soft'} btn-xs max-w-full ${className}`} title={t('d2.sv.copyAddr')} aria-label={t('d2.sv.copyAddrOf', { addr: text })}>
       <span className="truncate font-mono">{text}</span>
       <span aria-hidden className="shrink-0">{done ? '✓' : '⧉'}</span>
     </button>
@@ -126999,10 +127083,11 @@ export interface SelectProps {
 }
 
 function ListRow({ s, uptime, onOpen, rx, favButton, select }: RowProps) {
+  useI18n();
   const r = reactionOf(rx, s.id);
   const lag = isLag(s);
   const kind = s.maintenance ? 'maint' : !s.hasStatus ? 'mute' : !s.online ? 'bad' : lag ? 'warn' : 'ok';
-  const label = s.maintenance ? 'Обслуживание' : !s.hasStatus ? 'Ожидание ответа' : !s.online ? 'Офлайн' : lag ? 'Лаги' : 'Онлайн';
+  const label = s.maintenance ? t('d2.mt.title') : !s.hasStatus ? t('d2.sv.waitReply') : !s.online ? t('d2.bl.offline') : lag ? t('d2.bl.lag') : t('d2.srv.f.online');
   return (
     <div
       className={`srv-tr ${s.online ? '' : 'off'} ${select?.on && select.has(s.id) ? 'selected' : ''}`}
@@ -127016,7 +127101,7 @@ function ListRow({ s, uptime, onOpen, rx, favButton, select }: RowProps) {
             checked={select.has(s.id)}
             onChange={() => select.toggle(s.id)}
             onClick={(e) => e.stopPropagation()}
-            aria-label={`Выбрать: ${s.name}`}
+            aria-label={t('d2.news.pickOne', { title: s.name })}
           />
         )}
         <StatusFlash r={r}><span className={`srv-dot ${kind}`} role="img" aria-label={label} title={label} /></StatusFlash>
@@ -127037,15 +127122,17 @@ function ListRow({ s, uptime, onOpen, rx, favButton, select }: RowProps) {
             <CapacityBar players={s.players} max={s.maxPlayers} color={gameColor(s.game)} showPct={false} slots={false} />
           </>
         ) : (
-          <span className="srv-tr-off" title={s.error ?? undefined}>{s.hasStatus ? `не отвечает · ${ago(s.updatedAt)}` : 'ожидаем ответ'}</span>
+          <span className="srv-tr-off" title={s.error ?? undefined}>{s.hasStatus ? `${t('d2.sv.noReply')} · ${ago(s.updatedAt)}` : t('d2.sv.waiting')}</span>
         )}
       </div>
-      <div className="srv-td-ping" data-label="Пинг">{s.online && s.ping != null ? <span className={lag ? 'text-warn' : ''}>{s.ping}<small> мс</small></span> : '–'}</div>
-      <div className="srv-td-up" data-label="Аптайм">{uptime != null ? fmtUp(uptime) : '–'}</div>
+      <div className="srv-td-ping" data-label={t('d2.sd.ping')}>{s.online && s.ping != null ? <span className={lag ? 'text-warn' : ''}>{s.ping}<small> {t('d2.sv.ms')}</small></span> : '–'}</div>
+      <div className="srv-td-up" data-label={t('d2.sv.up')}>{uptime != null ? fmtUp(uptime) : '–'}</div>
       <div className="srv-td-fav">{favButton}</div>
     </div>
   );
 }
+
+const COLS = [['name', 'srv-td-name', 'nav.servers'], ['players', 'srv-td-pl', 'd2.pl.players'], ['ping', 'srv-td-ping', 'd2.sd.ping'], ['up', 'srv-td-up', 'd2.sv.up']] as [ListSort['key'], string, TKey][];
 
 export function ServersList({ servers, uptime, rx, favOf, onOpen, renderFav, select, sort, onSort }: {
   select?: SelectProps;
@@ -127059,21 +127146,21 @@ export function ServersList({ servers, uptime, rx, favOf, onOpen, renderFav, sel
   renderFav: (s: Server, on: boolean) => React.ReactNode;
 }) {
   return (
-    <div className={`panel srv-tbl fade-in ${select?.on ? 'selecting' : ''}`} aria-label="Серверы">
+    <div className={`panel srv-tbl fade-in ${select?.on ? 'selecting' : ''}`} aria-label={t('nav.servers')}>
       <div className="srv-tr srv-th">
         <div className="srv-td-dot" />
-        {([['name', 'srv-td-name', 'Сервер'], ['players', 'srv-td-pl', 'Игроки'], ['ping', 'srv-td-ping', 'Пинг'], ['up', 'srv-td-up', 'Аптайм']] as const).filter(([k]) => k === 'name').map(([k, cls, label]) => (
+        {COLS.filter(([k]) => k === 'name').map(([k, cls, label]) => (
           <div key={k} className={cls} aria-sort={sort?.key === k ? (sort.dir === 'asc' ? 'ascending' : 'descending') : undefined}>
-            <button type="button" className="srv-sort" onClick={() => onSort?.(k)} title="Сортировать">
-              {label}<span aria-hidden>{sort?.key === k ? (sort.dir === 'asc' ? ' ↑' : ' ↓') : ''}</span>
+            <button type="button" className="srv-sort" onClick={() => onSort?.(k)} title={t('d2.sv.sort')}>
+              {t(label)}<span aria-hidden>{sort?.key === k ? (sort.dir === 'asc' ? ' ↑' : ' ↓') : ''}</span>
             </button>
           </div>
         ))}
-        <div className="srv-td-addr">Адрес</div>
-        {([['name', 'srv-td-name', 'Сервер'], ['players', 'srv-td-pl', 'Игроки'], ['ping', 'srv-td-ping', 'Пинг'], ['up', 'srv-td-up', 'Аптайм']] as const).filter(([k]) => k !== 'name').map(([k, cls, label]) => (
+        <div className="srv-td-addr">{t('d2.sv.address')}</div>
+        {COLS.filter(([k]) => k !== 'name').map(([k, cls, label]) => (
           <div key={k} className={cls} aria-sort={sort?.key === k ? (sort.dir === 'asc' ? 'ascending' : 'descending') : undefined}>
-            <button type="button" className="srv-sort" onClick={() => onSort?.(k)} title="Сортировать">
-              {label}<span aria-hidden>{sort?.key === k ? (sort.dir === 'asc' ? ' ↑' : ' ↓') : ''}</span>
+            <button type="button" className="srv-sort" onClick={() => onSort?.(k)} title={t('d2.sv.sort')}>
+              {t(label)}<span aria-hidden>{sort?.key === k ? (sort.dir === 'asc' ? ' ↑' : ' ↓') : ''}</span>
             </button>
           </div>
         ))}
@@ -127106,6 +127193,7 @@ __COREGSM_EOF__
 // Small static (no looping motion) SVG illustrations for the empty states of the servers page.
 // They use the theme tokens through Tailwind classes, so they work in the light and the dark theme.
 import type { ReactNode } from 'react';
+import { t } from '../../i18n';
 
 function Frame({ children, label }: { children: ReactNode; label: string }) {
   return (
@@ -127118,7 +127206,7 @@ function Frame({ children, label }: { children: ReactNode; label: string }) {
 /** an empty rack: dashed slots and a plus */
 export function EmptyRackArt() {
   return (
-    <Frame label="Серверов пока нет">
+    <Frame label={t('d2.su.noServers')}>
       <ellipse cx="110" cy="134" rx="78" ry="8" className="fill-soft" />
       <circle cx="110" cy="72" r="62" className="fill-soft" />
       {[32, 64, 96].map((y) => (
@@ -127137,7 +127225,7 @@ export function EmptyRackArt() {
 /** a card with an empty star */
 export function NoFavsArt() {
   return (
-    <Frame label="Избранных серверов нет">
+    <Frame label={t('d2.sa.noFavs')}>
       <ellipse cx="110" cy="134" rx="70" ry="8" className="fill-soft" />
       <circle cx="110" cy="72" r="60" className="fill-soft" />
       <rect x="58" y="38" width="104" height="70" rx="14" className="fill-card stroke-line" strokeWidth="2" />
@@ -127159,7 +127247,7 @@ export function NoFavsArt() {
 /** a magnifier over a few cards: nothing matched the filter */
 export function NoMatchArt() {
   return (
-    <Frame label="Ничего не найдено">
+    <Frame label={t('d2.cp.none')}>
       <ellipse cx="110" cy="134" rx="74" ry="8" className="fill-soft" />
       <circle cx="110" cy="72" r="60" className="fill-soft" />
       {[0, 1].map((i) => (
@@ -127588,33 +127676,36 @@ function EmptyState({ art, title, text, children }: { art: ReactNode; title: str
 }
 
 export function NoServersState({ isAdmin }: { isAdmin: boolean }) {
+  useI18n();
   return (
     <EmptyState
       art={<EmptyRackArt />}
-      title={isAdmin ? 'Добавьте первый сервер' : 'Серверов пока нет'}
-      text={isAdmin ? 'Укажите игру и адрес, и панель начнёт показывать онлайн, карту и пинг. Потом привяжите Discord-канал.' : 'Администратор ещё не добавил ни одного сервера. Загляните позже: список появится здесь.'}
+      title={isAdmin ? t('d2.su.addFirst') : t('d2.su.noServers')}
+      text={isAdmin ? t('d2.su.addFirstText') : t('d2.su.noServersText')}
     >
-      {isAdmin && <a className="btn" href="/admin/servers" data-magnetic>Добавить сервер</a>}
+      {isAdmin && <a className="btn" href="/admin/servers" data-magnetic>{t('d2.dw.a.addServer')}</a>}
     </EmptyState>
   );
 }
 
 export function NoFavsState({ onReset }: { onReset: () => void }) {
+  useI18n();
   return (
-    <EmptyState art={<NoFavsArt />} title="В избранном пока пусто" text="Нажмите ☆ на карточке сервера, и он появится здесь и будет закреплён первым в общем списке.">
-      <button type="button" className="btn btn-soft" onClick={onReset}>Показать все серверы</button>
+    <EmptyState art={<NoFavsArt />} title={t('d2.su.noFavs')} text={t('d2.su.noFavsText')}>
+      <button type="button" className="btn btn-soft" onClick={onReset}>{t('d2.su.showAll')}</button>
     </EmptyState>
   );
 }
 
 export function NoMatchState({ what, onReset }: { what: 'online' | 'offline'; onReset: () => void }) {
+  useI18n();
   return (
     <EmptyState
       art={<NoMatchArt />}
-      title={what === 'online' ? 'Сейчас нет серверов онлайн' : 'Недоступных серверов нет'}
-      text={what === 'online' ? 'Ни один сервер не отвечает на запросы. Сбросьте фильтр, чтобы увидеть все.' : 'Все серверы отвечают. Сбросьте фильтр, чтобы увидеть полный список.'}
+      title={what === 'online' ? t('d2.su.noOnline') : t('d2.su.noOffline')}
+      text={what === 'online' ? t('d2.su.noOnlineText') : t('d2.su.noOfflineText')}
     >
-      <button type="button" className="btn btn-soft" onClick={onReset}>Сбросить фильтр</button>
+      <button type="button" className="btn btn-soft" onClick={onReset}>{t('d2.su.resetFilter')}</button>
     </EmptyState>
   );
 }
@@ -127662,8 +127753,9 @@ function SkeletonSmall() {
 }
 
 export function TilesSkeleton() {
+  useI18n();
   return (
-    <div className="srv-grid" aria-busy="true" aria-label="Загрузка">
+    <div className="srv-grid" aria-busy="true" aria-label={t('d2.news.loading')}>
       <SkeletonPulse />
       <SkeletonHero />
       {[0, 1, 2, 3].map((i) => <SkeletonSmall key={i} />)}
@@ -127672,8 +127764,9 @@ export function TilesSkeleton() {
 }
 
 export function ListSkeleton() {
+  useI18n();
   return (
-    <div className="panel space-y-0 overflow-hidden p-0" aria-busy="true" aria-label="Загрузка">
+    <div className="panel space-y-0 overflow-hidden p-0" aria-busy="true" aria-label={t('d2.news.loading')}>
       {[0, 1, 2, 3, 4].map((i) => (
         <div key={i} className="flex items-center gap-3 border-b border-line px-4 py-3.5 last:border-0">
           <Bar w={84} h={24} />
@@ -127740,10 +127833,10 @@ export function PlayerNames({ names, max = 6, onDark = false, className = '' }: 
 /** «2 ч 10 мин» for a length of time in ms */
 export function durText(ms: number): string {
   const m = Math.max(1, Math.round(ms / 60_000));
-  if (m < 60) return `${m} мин`;
+  if (m < 60) return t('dur.m', { n: m });
   const h = Math.floor(m / 60);
-  if (h < 48) return m % 60 ? `${h} ч ${m % 60} мин` : `${h} ч`;
-  return `${Math.floor(h / 24)} дн`;
+  if (h < 48) return m % 60 ? t('dur.hm', { h, m: m % 60 }) : t('dur.h', { n: h });
+  return t('d2.an.dShort', { n: Math.floor(h / 24) });
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
@@ -133078,378 +133171,1462 @@ const en: Record<keyof typeof ru, string> = {
   'sn.reopen': 'Reopen',
   'sn.delete': 'Delete',
   'sn.deleteQ': 'Delete the note?',
-  // ---- i18n debt batch ----
-  'wipe.ann.week': 'a week before',
-  'wipe.ann.day': 'a day before',
-  'wipe.ann.h3': '3 hours before',
-  'wipe.ann.h1': 'an hour before',
-  'wipe.ann.m10': '10 min before',
-  'wipe.say.m30': '30 min before',
-  'wipe.say.m5': '5 min before',
-  'wipe.say.m1': 'a minute before',
-  'wipe.step.window': 'Maintenance window',
-  'wipe.step.commands': 'Wipe commands',
-  'wipe.step.season': 'New season',
-  'wipe.step.news': 'News',
-  'wipe.step.discord': 'Discord message',
-  'wipe.step.say': 'In-game chat',
-  'wipe.step.missed': 'Missed',
-  'wipe.st.scheduled': 'scheduled',
-  'wipe.st.done': 'done',
-  'wipe.st.missed': 'missed',
-  'wipe.st.cancelled': 'cancelled',
-  'wipe.defName': 'Wipe',
-  'wipe.defNewsTitle': 'Wipe on {server} is done',
-  'wipe.defNewsText': 'Server {server} was wiped on {date} at {time}. A new map is waiting: come on in!',
-  'wipe.title': 'Wipe scenario',
-  'wipe.desc': 'One scenario for the whole wipe: warnings in Discord and the game chat, the maintenance window, wipe commands with a new seed, a new season and a "wipe is done" news post. Every step runs once.',
-  'wipe.none': 'no wipe scheduled',
-  'wipe.scenarios': 'Scenarios',
-  'wipe.cancelQ': 'Cancel "{name}"?',
-  'wipe.cancelText': 'Warnings and wipe steps will not run.',
-  'wipe.cancelBtn': 'Cancel wipe',
-  'wipe.modalTitle': 'Wipes: {name}',
-  'wipe.empty': 'No scenarios yet.',
-  'wipe.errors': 'errors: {n}',
-  'wipe.edit': 'Edit',
-  'wipe.cancel': 'Cancel',
-  'wipe.remove': 'Remove',
-  'wipe.schedule': 'Schedule a wipe',
-  'wipe.needDate': 'Enter the date and time of the wipe',
-  'wipe.saved': 'Scenario saved',
-  'wipe.editTitle': 'Edit wipe',
-  'wipe.f.name': 'Name',
-  'wipe.f.when': 'When (your time)',
-  'wipe.f.window': 'Maintenance window, min',
-  'wipe.s1': '1. Warnings',
-  'wipe.inDiscord': 'In Discord',
-  'wipe.inGame': 'In the game chat (RCON required)',
-  'wipe.channel': 'Discord channel',
-  'wipe.channelHint': 'Not selected: messages go to the alerts channel.',
-  'wipe.s2': '2. At the moment of the wipe',
-  'wipe.f.cmds': 'RCON commands, one per line (optional)',
-  'wipe.f.seedMode': 'Seed {seed}',
-  'wipe.seed.none': 'Keep',
-  'wipe.seed.random': 'Random (the panel picks)',
-  'wipe.seed.fixed': 'Custom',
-  'wipe.f.seed': 'Seed',
-  'wipe.f.season': 'New season (empty: do not start)',
-  'wipe.seasonPh': 'e.g. Season {date}',
-  'wipe.note': 'The maintenance window always opens, so the wipe is not counted as an outage. {server}, {date}, {time} and {seed} work in commands and texts.',
-  'wipe.s3': '3. News after the wipe',
-  'wipe.newsChannel': 'News channel (not selected: no news)',
-  'wipe.f.title': 'Title',
-  'wipe.f.text': 'Text',
-  'wipe.f.mention': 'Mention',
-  'wipe.m.none': 'No mention',
-  'wipe.back': 'Back',
-  'rp.everyDay': 'every day',
-  'rp.noDays': 'no days selected',
-  'rp.title': 'Scheduled restarts',
-  'rp.desc': 'The panel warns players in Discord and in the game chat in advance, opens a maintenance window for the restart (it will not count as an outage) and, if RCON is set up, sends the restart command to the server itself.',
-  'rp.daysAt': '{days} at {time}',
-  'rp.next': 'next {when}',
-  'rp.off': 'off',
-  'rp.rconOn': 'RCON connected',
-  'rp.last': 'Last time {when}',
-  'rp.on': 'on',
-  'rp.setup': 'Set up',
-  'rp.saved': 'Restarts saved',
-  'rp.noAnswer': 'The server ran the command and did not answer',
-  'rp.nowQ': 'Restart "{name}" now?',
-  'rp.nowText': 'Without warning the players: a maintenance window opens and, if RCON is set up, the restart command is sent.',
-  'rp.restart': 'Restart',
-  'rp.done': 'Done',
-  'rp.modalTitle': 'Restarts: {name}',
-  'rp.bySchedule': 'Restart on a schedule',
-  'rp.days': 'Days',
-  'rp.f.time': 'Time',
-  'rp.f.warn': 'Warn, min',
-  'rp.f.dur': 'Lasts, min',
-  'rp.tzHint': 'Panel time: {tz}. There are usually the fewest players at {hour}:00.',
-  'rp.setTime': 'Use this time',
-  'rp.channel': 'Discord channel for warnings',
-  'rp.rconTitle': 'RCON (optional)',
-  'rp.rconNote': 'For Minecraft, CS, ARK, V Rising, Palworld and other games with Source RCON. Rust (WebRCON) is not supported yet.',
-  'rp.f.port': 'RCON port',
-  'rp.portPh': 'e.g. 25575',
-  'rp.f.passKeep': 'Password (empty: keep the current one)',
-  'rp.f.pass': 'Password',
-  'rp.connectedPort': 'Connected, port {port}',
-  'rp.notConnected': 'Not connected: the port and password are set by an administrator',
-  'rp.f.cmd': 'Restart command',
-  'rp.cmdPh': 'e.g. stop, quit or shutdown',
-  'rp.f.say': 'Game chat message ({text} is the warning text)',
-  'rp.cmdNote': 'The command only stops the server: the hosting or a service watching the process has to start it again.',
-  'rp.f.test': 'Test a command',
-  'rp.run': 'Run',
-  'rp.restartNow': 'Restart now',
-  'dx.kind.online': 'Currently playing',
-  'dx.kind.top': 'Top {n} of the week by hours',
-  'dx.kind.topOne': 'Player of the week (most hours in 7 days)',
-  'dx.kind.hours': 'Played {n} h or more',
-  'dx.allServers': 'all servers',
-  'dx.deleteQ': 'Delete?',
-  'dx.delete': 'Delete',
-  'dx.roles.title': 'Auto roles',
-  'dx.roles.desc': 'The bot gives and removes Discord roles by itself: "Currently playing", "Player of the week", "Veteran 100 h". Only players who linked Discord to their in-game nickname (the /register command) get roles.',
-  'dx.roles.add': 'Add a role',
-  'dx.roles.none': 'The bot sees no roles it can give. Grant the bot the "Manage Roles" permission and move its role above the ones it will give.',
-  'dx.roles.empty': 'No auto roles yet.',
-  'dx.roles.holders': 'currently {n} player|{n} players',
-  'dx.roles.del': 'Delete the auto role',
-  'dx.roles.delText': 'The bot will stop giving this role. Roles already given stay with the players.',
-  'dx.cnt.title': 'Online counter in a voice channel',
-  'dx.cnt.desc': 'The bot renames a voice channel into a live counter, for example "🟢 Online: 42". Discord limits how often a channel can be renamed, so the counter updates every 5 minutes.',
-  'dx.cnt.add': 'Add a counter',
-  'dx.cnt.none': 'The bot sees no voice channels it can rename. Grant it the "Manage Channels" permission on the channel you need.',
-  'dx.cnt.channel': 'Channel "{name}"',
-  'dx.cnt.on': 'on "{guild}"',
-  'dx.cnt.template': 'template',
-  'dx.cnt.del': 'Delete the counter',
-  'dx.cnt.delText': 'The bot will stop updating this channel name.',
-  'dx.roles.added': 'Auto role added: the bot will start giving it within a minute',
-  'dx.cnt.added': 'Counter added: the bot will rename the channel within a minute',
-  'dx.f.newRole': 'New auto role',
-  'dx.f.newCnt': 'New counter',
-  'dx.f.guild': 'Discord server',
-  'dx.f.role': 'Role',
-  'dx.f.voice': 'Voice channel',
-  'dx.f.choose': 'Choose…',
-  'dx.f.who': 'Who gets it',
-  'dx.f.rOnline': 'Those currently playing (removed on leave)',
-  'dx.f.rTop': 'The most active in 7 days',
-  'dx.f.rHours': 'Those who played N hours (in the last 90 days)',
-  'dx.f.howManyH': 'How many hours',
-  'dx.f.howManyP': 'How many top players',
-  'dx.f.chName': 'Channel name',
-  'dx.f.vars': '{players} players, {max} slots, {online} servers online, {servers} total, {status} 🟢/🟡/🔴, {name} server name',
-  'dx.f.scope': 'Count by server',
-  'dx.f.all': 'All servers',
-  'dx.f.add': 'Add',
-  'pb.copied': 'Copied',
-  'pb.rotateQ': 'New key for "{name}"?',
-  'pb.rotateText': 'The old key will stop working: the probe has to be restarted with the new one.',
-  'pb.rotateBtn': 'Issue a new one',
-  'pb.deleteQ': 'Delete "{name}"?',
-  'pb.deleteText': 'Its checks will disappear from the server pages.',
-  'pb.delete': 'Delete',
-  'pb.title': 'Probes',
-  'pb.desc': 'A small program on another computer or VPS (in another city, at another provider) checks the game servers from there. If the panel cannot see a server but the probes can, the problem is in the network between them, not in the server. Players will see on the server page where it is reachable from.',
-  'pb.add': 'Add a probe',
-  'pb.empty': 'No probes yet: only the panel itself checks the servers.',
-  'pb.alive': 'online',
-  'pb.dead': 'offline',
-  'pb.sees': 'sees {online} of {servers}',
-  'pb.never': 'has never connected yet',
-  'pb.newKey': 'New key',
-  'pb.probeTitle': 'Probe "{name}"',
-  'pb.run': 'Run one of the commands on the machine you need. The key is shown only now: save the command in case you need to repeat it.',
-  'pb.docker': 'Docker (the easiest)',
-  'pb.node': 'Or Node.js 18+',
-  'pb.appears': 'The probe will show as "online" a minute after it starts.',
-  'pb.done': 'Done',
-  'pb.newTitle': 'New probe',
-  'pb.f.name': 'Name (players will see it)',
-  'pb.f.ph': 'For example: Frankfurt',
-  'pb.create': 'Create',
-  'mf.chars': '{value} of {max} characters',
-  'mf.ph.text': 'text',
-  'mf.ph.item': 'item',
-  'mf.ph.code': 'code',
-  'mf.ph.link': 'link',
-  'mf.ph.linkText': 'link text',
-  'mf.formatting': 'Formatting: {label}',
-  'mf.bold': 'Bold (Ctrl+B)',
-  'mf.boldCh': 'B',
-  'mf.italic': 'Italic (Ctrl+I)',
-  'mf.italicCh': 'I',
-  'mf.underline': 'Underline (Ctrl+U)',
-  'mf.underlineCh': 'U',
-  'mf.strike': 'Strikethrough',
-  'mf.strikeCh': 'S',
-  'mf.spoiler': 'Spoiler',
-  'mf.inlineCode': 'Inline code',
-  'mf.codeBlock': 'Code block',
-  'mf.ph.heading': 'Heading',
-  'mf.h1': 'Heading 1',
-  'mf.h2': 'Heading 2',
-  'mf.h3': 'Heading 3',
-  'mf.small': 'Small text',
-  'mf.quote': 'Quote',
-  'mf.bullets': 'Bulleted list',
-  'mf.numbers': 'Numbered list',
-  'mf.link': 'Link (Ctrl+K)',
-  'mf.emoji': 'Emoji',
-  'mf.variable': 'Insert a variable',
-  'mf.emojiOne': 'Emoji {e}',
-  'mf.variables': 'Variables',
-  'mf.emojiHints': 'Emoji suggestions',
-  'an.dowLong.0': 'on Monday',
-  'an.dowLong.1': 'on Tuesday',
-  'an.dowLong.2': 'on Wednesday',
-  'an.dowLong.3': 'on Thursday',
-  'an.dowLong.4': 'on Friday',
-  'an.dowLong.5': 'on Saturday',
-  'an.dowLong.6': 'on Sunday',
-  'an.period': 'Period',
-  'an.daysShort': '{n} d',
-  'an.heatAria': 'Most players {when} at {time}',
-  'an.fewData': 'Not enough data yet',
-  'an.noData': 'no data',
-  'an.cell': '{dow} {time}: average {avg}, maximum {max}',
-  'an.less': 'less',
-  'an.more': 'more',
-  'an.avgFor': 'averages for {n} day|averages for {n} days',
-  'an.peak': 'Peak',
-  'an.peakText': '{when} at {time}: {avg} player on average|{when} at {time}: {avg} players on average',
-  'an.quietest': 'Quietest',
-  'an.when': '{when} at {time}',
-  'an.restart': 'Restart',
-  'an.restartText': 'is best at {time}: that is when there are the fewest players on any day',
-  'an.dailyAria': 'Unique players per day: up to {max}',
-  'an.barTitle': '{day}: {n} players, {news} new',
-  'an.returned': 'returning',
-  'an.new': 'new',
-  'an.barHover': '{day}: {n} player, {news} new, {hours} h played, peak {peak}|{day}: {n} players, {news} new, {hours} h played, peak {peak}',
-  'an.hoverBar': 'hover over a bar',
-  'an.noNew': 'There were no new players in six weeks.',
-  'an.firstWeek': 'Week of the first visit',
-  'an.players': 'Players',
-  'an.weekPlus': '+{n} wk',
-  'an.since': 'from {date}',
-  'an.sort.hours': 'By hours',
-  'an.sort.visits': 'By visits',
-  'an.sort.recent': 'By recency',
-  'an.nobody': 'Nobody played in this period.',
-  'an.order': 'Order',
-  'an.visitsN': '{n} visit|{n} visits',
-  'an.playingNow': 'playing now',
-  'an.loading': 'Loading analytics',
-  'an.playersFor': 'Players for {n} day|Players for {n} days',
-  'an.kpi.unique': 'Unique players',
-  'an.kpi.uniqueHint': 'today {dau} · this week {wau} · this month {mau}',
-  'an.kpi.new': 'New',
-  'an.kpi.newHint': '{share}% of all, {n} came back',
-  'an.kpi.visit': 'Typical visit',
-  'an.kpi.avg': 'on average {v}',
-  'an.kpi.hours': 'Hours played',
-  'an.kpi.hoursHint': 'all players together',
-  'an.when.title': 'When they play',
-  'an.daily.title': 'Players per day',
-  'an.sess.title': 'How long a visit lasts',
-  'an.coh.title': 'Do newcomers come back',
-  'an.coh.text': 'The share of players who first visited that week and came back one, two or more weeks later.',
-  'an.top.title': 'Most time in game',
-  'mt.defName': 'Maintenance',
-  'mt.st.active': 'In progress',
-  'mt.st.planned': 'Planned',
-  'mt.st.repeat': 'Repeating',
-  'mt.st.past': 'Finished',
-  'mt.deleted': 'Window "{name}" deleted',
-  'mt.title': 'Maintenance',
-  'mt.subtitle': 'Maintenance windows: no false alarms',
-  'mt.hint': 'While a window is active the server is marked "Maintenance" and outage alerts are not sent.',
-  'mt.help': 'Pick a server (or all of them) and the time of the work. A window can repeat every day or week. During a window the server cards show "Maintenance until …", and a downtime is not counted as an outage and does not trigger alerts.',
-  'mt.add': 'Add a window',
-  'mt.quick': 'Quick windows',
-  'mt.now30': 'Now for 30 minutes',
-  'mt.tonight': 'Tonight 04:00–05:00',
-  'mt.empty': 'No maintenance windows',
-  'mt.emptyText': 'Create a window before updating or restarting a server, and the panel will not count it as an outage.',
-  'mt.loading': 'Loading',
-  'mt.allServers': 'All servers',
-  'mt.serverNo': 'Server #{id}',
-  'mt.next': 'next {range}',
-  'mt.editAria': 'Edit window "{name}"',
-  'mt.edit': 'Edit',
-  'mt.delAria': 'Delete window "{name}"',
-  'mt.added': 'Window added',
-  'mt.saved': 'Window saved',
-  'mt.newTitle': 'New maintenance window',
-  'mt.editTitle': 'Edit window',
-  'mt.f.server': 'Server',
-  'mt.f.name': 'Name',
-  'mt.f.namePh': 'For example, a game update',
-  'mt.quickTime': 'Quick time',
-  'mt.f.start': 'Start',
-  'mt.f.end': 'End',
-  'mt.f.repeat': 'Repeat',
-  'mt.r.none': 'Once',
-  'mt.r.daily': 'Every day (up to 24 hours)',
-  'mt.r.weekly': 'Every week',
-  'mt.tzNote': 'The time follows your browser clock. A window can be at most 7 days long.',
-  'bk2.copy1': 'copy',
-  'bk2.copy2': 'copies',
-  'bk2.copy5': 'copies',
-  'bk2.total': 'total {size}',
-  'bk2.last': 'latest: {ago}',
-  'bk2.late': 'The schedule has not run for a long time',
-  'bk2.count': 'Copies: {n}',
-  'bk2.auto': 'auto',
-  'bk2.manual': 'manual',
-  'bk2.gb': 'GB',
-  'bk2.mb': 'MB',
-  'bk2.kb': 'KB',
-  'bk2.b': 'B',
-  'bk2.fetchFail': 'Could not get the copy',
-  'bk2.encTitle': 'The archive is encrypted',
-  'bk2.passLabel': 'Passphrase',
-  'bk2.encText': 'Enter the passphrase the archive "{what}" was created with.',
-  'bk2.continue': 'Continue',
-  'bk2.needPass': 'Enter the passphrase',
-  'bk2.downloaded': 'Copy downloaded',
-  'bk2.created': 'Copy created',
-  'bk2.delQ': 'Delete the copy?',
-  'bk2.delText': 'The file "{name}" will be deleted from the server permanently.',
-  'bk2.delete': 'Delete',
-  'bk2.deleted': 'Copy deleted',
-  'bk2.accepted': 'Copy accepted, the panel is restarting…',
-  'bk2.restoreQ': 'Restore from this copy?',
-  'bk2.restoreText': 'All current panel data will be replaced with the copy "{name}" from {date}. The current database will be kept on the server as coregsm.db.before-restore. The panel will restart.',
-  'bk2.restore': 'Restore',
-  'bk2.restoreFileQ': 'Restore from a file?',
-  'bk2.restoreFileText': 'All panel data will be replaced with the copy "{name}". The current database will be kept on the server as coregsm.db.before-restore. The panel will restart.',
-  'bk2.restoreFail': 'Could not restore the copy',
-  'bk2.httpsOnly': 'The upload address must start with https://',
-  'bk2.keepRange': 'You can keep from 1 to 30 copies',
-  'bk2.settingsSaved': 'Backup settings saved',
-  'bk2.title': 'Backups',
-  'bk2.desc': 'A copy contains the database (servers, links, users, news, settings), news images and the logo. It holds secrets inside: the bot token and password hashes. Keep the files as carefully as a password, preferably encrypted.',
-  'bk2.preparing': 'Preparing…',
-  'bk2.dlFull': 'Download a full copy',
-  'bk2.creating': 'Creating…',
-  'bk2.createOnServer': 'Create a copy on the server',
-  'bk2.restoring': 'Restoring…',
-  'bk2.restoreFile': 'Restore from a file',
-  'bk2.schedTitle': 'Schedule and retention',
-  'bk2.f.auto': 'Automatic copies',
-  'bk2.s.off': 'Off',
-  'bk2.s.daily': 'Every day',
-  'bk2.s.weekly': 'Every week',
-  'bk2.f.keep': 'How many copies to keep (1-30)',
-  'bk2.f.remote': 'Send a copy to an address (optional)',
-  'bk2.now': 'now: {url}',
-  'bk2.remoteHint': 'The address must start with https://. The copy is sent with the PUT method; it works with WebDAV/Nextcloud and signed S3 links.',
-  'bk2.remoteOff': 'Turn off sending',
-  'bk2.lastSend': 'Last upload: {at}',
-  'bk2.ok': 'success',
-  'bk2.error': 'error',
-  'bk2.f.pass': 'Encryption passphrase (optional)',
-  'bk2.passOn': 'encryption is on, enter a new phrase to replace it',
-  'bk2.passOff': 'not set: copies are not encrypted',
-  'bk2.passWarn': 'If you lose the passphrase, encrypted archives cannot be read. It cannot be recovered.',
-  'bk2.encOff': 'Turn off encryption of new copies',
-  'bk2.saving': 'Saving…',
-  'bk2.onServer': 'Copies on the server',
-  'bk2.empty': 'No copies yet',
-  'bk2.emptyText': 'Click "Create a copy on the server" or turn on the schedule.',
-  'bk2.tagAuto': 'AUTO',
-  'bk2.tagManual': 'MANUAL',
-  'bk2.tagEnc': 'ENCRYPTED',
-  'bk2.actions': 'Actions: {name}',
-  'bk2.download': 'Download',
-  'bk2.restoreHere': 'Restore from this copy',
+  // ---- i18n debt batch 2 ----
+  'd2.news.st.draft': 'DRAFT',
+  'd2.news.st.scheduled': 'SCHEDULED',
+  'd2.news.st.sending': 'SENDING',
+  'd2.news.st.updating': 'UPDATING',
+  'd2.news.st.deleting': 'DELETING',
+  'd2.news.st.sent': 'PUBLISHED',
+  'd2.news.st.error': 'ERROR',
+  'd2.news.st.pinned': 'PINNED',
+  'd2.news.rep.daily': 'EVERY DAY',
+  'd2.news.rep.weekly': 'EVERY WEEK',
+  'd2.news.rep.monthly': 'EVERY MONTH',
+  'd2.news.t.publishing': 'The news item is being sent to Discord',
+  'd2.news.t.copied': 'Copy created',
+  'd2.news.t.copyDraft': 'Copy saved as a draft',
+  'd2.news.t.past': 'You cannot schedule a time in the past',
+  'd2.news.t.moved': 'Moved to {when}',
+  'd2.news.t.unpinned': 'Unpinned',
+  'd2.news.t.pinnedTop': 'Pinned to the top of the feed',
+  'd2.news.c.bulkTitle': 'Delete {n} news items?',
+  'd2.news.c.bulkText': '{n} of them are published: their messages will also be deleted from Discord.',
+  'd2.news.v.publish': 'Sent',
+  'd2.news.v.pin': 'Pinned',
+  'd2.news.v.unpin': 'Unpinned',
+  'd2.news.v.delete': 'Deleted',
+  'd2.news.t.bulkBad': '{verb}: {ok}, failed: {bad}',
+  'd2.news.t.bulkOk': '{verb}: {n}',
+  'd2.news.t.bulkNone': 'None of the selected news items fit',
+  'd2.news.c.title': 'Delete the news item?',
+  'd2.news.c.text': 'The message will also be deleted from Discord.',
+  'd2.news.t.deleted': 'News item deleted',
+  'd2.news.t.deletedNamed': 'News item "{title}" deleted',
+  'd2.news.t.deleteFail': 'Could not delete the news item',
+  'd2.news.title': 'News',
+  'd2.news.subtitle': 'Posts on behalf of the bot in Discord',
+  'd2.news.hint': 'A news item is a message the bot sends to the chosen Discord channel. You can send it right away, schedule it or save it as a draft.',
+  'd2.news.help': 'Start from a ready template (wipe, restart, event), edit the text and check the preview. A published news item can be corrected: the Discord message will be updated. The default channel is filled into every new news item.',
+  'd2.news.write': '+ Write news',
+  'd2.news.quick': 'Quick news:',
+  'd2.news.defChannel': 'Default news channel',
+  'd2.news.notChosen': 'not chosen',
+  'd2.news.change': 'Change',
+  'd2.news.pickChannel': 'Pick a channel',
+  'd2.news.testChannel': 'Test channel',
+  'd2.news.channelId': 'Channel {id}',
+  'd2.news.testHint': '"Send test" from the editor goes here.',
+  'd2.news.reset': 'Reset',
+  'd2.news.viewLabel': 'List view',
+  'd2.news.viewList': 'List',
+  'd2.news.viewCal': 'Calendar',
+  'd2.news.empty': 'No news yet',
+  'd2.news.emptyText': 'Write your first news item: pick a template, edit the text and publish it right away or on a schedule.',
+  'd2.news.loading': 'Loading',
+  'd2.news.picked': 'Selected: {n}',
+  'd2.news.pickAll': 'Select all',
+  'd2.news.publish': 'Publish',
+  'd2.news.pin': 'Pin',
+  'd2.news.unpin': 'Unpin',
+  'd2.news.delete': 'Delete',
+  'd2.news.pickOne': 'Select: {title}',
+  'd2.news.reactions': 'Reactions',
+  'd2.news.dup': 'Duplicate',
+  'd2.news.publishNow': 'Publish now',
+  'd2.news.stats': 'Statistics',
+  'd2.news.openDiscord': 'Open in Discord ↗',
+  'd2.sf.h.spaces': 'The address must not contain spaces',
+  'd2.sf.h.noScheme': 'Enter just the address, without http:// or a path',
+  'd2.sf.h.port': 'The port goes in its own field, remove ":port" from the address',
+  'd2.sf.coverFail': 'Could not upload the image (PNG, JPG or WebP up to 5 MB)',
+  'd2.sf.portRange': 'The port is a number from 1 to 65535',
+  'd2.sf.discardTitle': 'Close without saving?',
+  'd2.sf.discardText': 'Changes in the form will be lost.',
+  'd2.sf.keepEditing': 'Keep editing',
+  'd2.sf.editTitle': 'Edit server',
+  'd2.sf.newTitle': 'New server',
+  'd2.sf.previewLabel': 'How the server will look in the list',
+  'd2.sf.serverName': 'Server name',
+  'd2.sf.address': 'address',
+  'd2.sf.noAnswer': 'not responding',
+  'd2.sf.notChecked': 'not checked',
+  'd2.sf.game': 'Game',
+  'd2.sf.gameIdEx': 'e.g. arma3',
+  'd2.sf.host': 'Address to query (IP or domain)',
+  'd2.sf.port': 'Port',
+  'd2.sf.testing': 'Querying…',
+  'd2.sf.test': 'Check server',
+  'd2.sf.answered': 'The server answered',
+  'd2.sf.players': 'Players',
+  'd2.sf.map': '· map {map}',
+  'd2.sf.ping': '· ping {ms} ms',
+  'd2.sf.noReply': 'The server did not answer',
+  'd2.sf.advanced': 'Advanced',
+  'd2.sf.name': 'Name',
+  'd2.sf.nameEx': 'taken from the server\'s answer',
+  'd2.sf.nameHint': 'Leave empty: the panel uses the name the server reports itself. A name of your own overrides it.',
+  'd2.sf.qport': 'Query port (if it differs from the game port)',
+  'd2.sf.notSet': 'not set',
+  'd2.sf.display': 'Address to display',
+  'd2.sf.displayEx': 'play.example.com:25565 or an external IP',
+  'd2.sf.country': 'Country (for the Discord message)',
+  'd2.sf.countryAuto': 'Detect automatically from the address',
+  'd2.sf.countryHint': 'Auto-detection does not work for local network addresses: pick the country by hand and the flag will appear in the message.',
+  'd2.sf.displayHint': 'The query uses the address above, while people see this address on the page and in the Discord card. Needed if the server is on a local network but reachable from outside under another IP or domain.',
+  'd2.sf.cover': 'Cover',
+  'd2.sf.uploading': 'Uploading…',
+  'd2.sf.upload': 'Upload an image',
+  'd2.sf.coverHint': 'PNG, JPG or WebP up to 5 MB; cropped to 16:9. Replaces the coloured card cover and the server page header.',
+  'd2.sf.coverLater': 'You can upload an image after the server is created: open "Edit".',
+  'd2.sf.saving': 'Saving…',
+  'd2.sys.gb': '{v} GB',
+  'd2.sys.mb': '{v} MB',
+  'd2.sys.dur.dh': '{d} d {h} h',
+  'd2.sys.cert.none': 'none (the panel runs over HTTP)',
+  'd2.sys.cert.expired': 'expired',
+  'd2.sys.s.version': 'Version',
+  'd2.sys.s.fromSource': 'built from source',
+  'd2.sys.s.uptime': 'Uptime',
+  'd2.sys.s.servers': 'Servers',
+  'd2.sys.s.serversOnline': '{a} of {b} online',
+  'd2.sys.s.bindings': 'Discord bindings',
+  'd2.sys.s.guilds': '{n} server with the bot|{n} servers with the bot',
+  'd2.sys.s.bot': 'Bot',
+  'd2.sys.bot.online': 'online',
+  'd2.sys.bot.idle': 'idle',
+  'd2.sys.bot.connecting': 'connecting',
+  'd2.sys.bot.error': 'error',
+  'd2.sys.cert.title': 'HTTPS certificate',
+  'd2.sys.cert.self': 'self-signed',
+  'd2.sys.s.users': 'Users',
+  'd2.sys.title': 'System',
+  'd2.sys.subtitle': 'Panel status and diagnostics',
+  'd2.sys.hint': 'Panel health: version, disk space, bot, HTTPS certificate. If something does not work, start with a check.',
+  'd2.sys.help': 'The check takes a few seconds: it looks at the database, the disk, the bot connection, server polling and access to Discord and GitHub. A green dot means all is well, yellow means it is worth a look, red means it needs fixing.',
+  'd2.sys.running': 'Checking…',
+  'd2.sys.run': 'Run the check',
+  'd2.sys.warnings': 'Warnings',
+  'd2.sys.since': 'since',
+  'd2.sys.resources': 'Resources',
+  'd2.sys.disk.used': 'Disk: used',
+  'd2.sys.disk.free': '{v} free',
+  'd2.sys.disk': 'Disk',
+  'd2.sys.disk.total': '{v} in total',
+  'd2.sys.disk.unknown': 'size unknown',
+  'd2.sys.cpu.load': 'CPU load',
+  'd2.sys.cpu': 'CPU',
+  'd2.sys.cpu.cores': 'cores: {n}, one-minute average',
+  'd2.sys.noData': 'no data',
+  'd2.sys.mem.label': 'Panel memory',
+  'd2.sys.mem.of': 'of {v} MB',
+  'd2.sys.mem': 'Memory',
+  'd2.sys.mem.hint': 'panel process, reference {v} MB',
+  'd2.sys.db': 'Database',
+  'd2.sys.db.ref': 'reference 1 GB',
+  'd2.sys.db.points': '{n} history points',
+  'd2.sys.cert.until': 'Valid until {when}',
+  'd2.sys.cert.daysLeft': 'Days left: {n}',
+  'd2.sys.cert.of90': '{left} of 90',
+  'd2.sys.cert.selfWarn': 'self-signed: browsers will show a warning',
+  'd2.sys.cert.issuer': 'issued by {name}',
+  'd2.sys.cert.renew': 'Time to renew: usually your reverse proxy does this (Caddy, Nginx Proxy Manager, certbot).',
+  'd2.sys.state': 'Status',
+  'd2.sys.diag': 'Diagnostics',
+  'd2.sys.diag.desc': 'Checks the database, the disk, the bot, server polling and access to Discord and GitHub.',
+  'd2.sys.diag.empty': 'Press "Run the check" at the top of the page: the result will appear here.',
+  'd2.sys.c.ok': 'ok',
+  'd2.sys.c.warn': 'warning',
+  'd2.sys.c.fail': 'error',
+  'd2.sys.checked': 'Checked {when}',
+  'd2.sys.backups': 'Backups',
+  'd2.sys.backups.text': 'Download a copy of the data, set up a schedule or restore the panel from a file.',
+  'd2.sys.backups.link': 'Updates and backups',
+  'd2.gal.shot': 'Screenshot',
+  'd2.gal.shotN': 'Screenshot {n}',
+  'd2.gal.all': 'All screenshots',
+  'd2.gal.prev': 'Previous',
+  'd2.gal.next': 'Next',
+  'd2.gal.best': 'Best',
+  'd2.gal.uploadFail': 'Could not upload the image (PNG, JPG or WebP up to 8 MB)',
+  'd2.gal.new': 'New screenshot',
+  'd2.gal.choose': 'Pick an image: PNG, JPG or WebP up to 8 MB',
+  'd2.gal.caption': 'Caption (optional)',
+  'd2.gal.captionEx': 'For example: sunset over the castle',
+  'd2.gal.server': 'Server',
+  'd2.gal.noServer': 'Do not specify',
+  'd2.gal.moderated': 'The screenshot will appear in the gallery after a moderator checks it.',
+  'd2.gal.send': 'Send',
+  'd2.gal.st.pending': 'under review',
+  'd2.gal.st.rejected': 'rejected',
+  'd2.gal.t.login': 'Sign in to upload a screenshot',
+  'd2.gal.t.type': 'An image is required: PNG, JPG or WebP',
+  'd2.gal.drop': 'Drop to upload the screenshot',
+  'd2.gal.title': 'Gallery',
+  'd2.gal.subtitle': 'Screenshots from players on our servers',
+  'd2.gal.upload': 'Upload a screenshot',
+  'd2.gal.loginUpload': 'Sign in to upload',
+  'd2.gal.mine': 'My screenshots under review',
+  'd2.gal.empty': 'No screenshots yet',
+  'd2.gal.emptyText': 'Share a nice shot from the game: it will appear here after review.',
+  'd2.gal.uploadFirst': 'Upload the first screenshot',
+  'd2.gal.signInUpload': 'Sign in and upload',
+  'd2.gal.t.published': 'Screenshot published',
+  'd2.gal.t.sent': 'Screenshot sent for review',
+  'd2.ac.seasonsOrder': 'Seasons in order',
+  'd2.ac.r.cheating': 'Cheating',
+  'd2.ac.r.abuse': 'Abuse',
+  'd2.ac.r.griefing': 'Griefing',
+  'd2.ac.r.other': 'Other',
+  'd2.ac.rep.resolved': 'Report closed: action taken',
+  'd2.ac.rep.dismissed': 'Report dismissed',
+  'd2.ac.rep.title': 'Reports on players',
+  'd2.ac.rep.descClosed': 'Handled reports, newest first',
+  'd2.ac.rep.descWait': 'Awaiting a decision: {n}. Oldest first',
+  'd2.ac.rep.descNone': 'No new reports',
+  'd2.ac.rep.which': 'Which reports',
+  'd2.ac.rep.open': 'Open',
+  'd2.ac.rep.handled': 'Handled',
+  'd2.ac.rep.nothingHandled': 'Nothing has been handled yet.',
+  'd2.ac.queueEmpty': 'The queue is empty.',
+  'd2.ac.rep.othersTitle': 'Other open reports on this player',
+  'd2.ac.rep.others': 'more reports: {n}',
+  'd2.ac.rep.server': 'Server:',
+  'd2.ac.rep.notePh': 'A comment for the author of the report (optional)',
+  'd2.ac.rep.note': 'Comment',
+  'd2.ac.rep.actionTaken': 'Action taken',
+  'd2.ac.dismiss': 'Dismiss',
+  'd2.ac.rep.doneMark': '✅ Action taken',
+  'd2.ac.rep.dismissedMark': 'ℹ️ Dismissed',
+  'd2.ac.cm.hideTitle': 'Hide comments',
+  'd2.ac.cm.reason': 'Reason (the author will see it)',
+  'd2.ac.cm.hide': 'Hide',
+  'd2.ac.cm.reasonEx': 'For example: abuse',
+  'd2.ac.cm.delTitle': 'Delete {n} comments?',
+  'd2.ac.cm.delText': 'This cannot be undone.',
+  'd2.ac.cm.delete': 'Delete',
+  'd2.ac.cm.on': 'Comments enabled',
+  'd2.ac.cm.off': 'Comments disabled',
+  'd2.ac.cm.title': 'News comments',
+  'd2.ac.cm.descQueue': 'In the queue: {n}. Reported ones first',
+  'd2.ac.cm.descNone': 'No reports or hidden comments',
+  'd2.ac.cm.picked': 'Selected: {n}',
+  'd2.ac.cm.keep': 'Keep',
+  'd2.ac.cm.pickOne': 'Select the comment by {name}',
+  'd2.ac.cm.hidden': 'hidden',
+  'd2.ac.cm.flags': 'reports: {n}',
+  'd2.ac.cm.show': 'Show',
+  'd2.ac.g.pending': 'Under review',
+  'd2.ac.g.later': 'Later',
+  'd2.bot.p.noToken': 'NO TOKEN SET',
+  'd2.bot.p.checking': 'CHECKING',
+  'd2.bot.p.noGuilds': 'ON NO SERVERS',
+  'd2.bot.p.connected': 'CONNECTED',
+  'd2.bot.p.connecting': 'CONNECTING',
+  'd2.bot.p.error': 'ERROR',
+  'd2.bot.p.idle': 'IDLE',
+  'd2.bot.lat': 'Bot latency',
+  'd2.bot.ms': '{n} ms',
+  'd2.bot.latLabel': 'Bot latency over the last hours, now {n} ms',
+  'd2.bot.slowBad': 'The bot answers very slowly: Discord commands may time out. Check the network and the proxy.',
+  'd2.bot.slow': 'The bot answers slower than usual. If this lasts, check the network and the proxy.',
+  'd2.bot.t.saved': 'Settings saved',
+  'd2.bot.c.tokenTitle': 'Delete the token?',
+  'd2.bot.c.tokenText': 'The bot will stop updating cards.',
+  'd2.bot.c.secretTitle': 'Delete the Client Secret?',
+  'd2.bot.c.secretText': 'Sign-in with Discord will stop working.',
+  'd2.bot.tokenWarn': 'This does not look like a bot token: it consists of three parts separated by dots. Copy it in full from the Developer Portal (Bot → Reset Token).',
+  'd2.bot.proxyWarn': 'Format: host:port:login:password or socks5://login:password@host:port',
+  'd2.bot.title': 'Bot and Discord sign-in',
+  'd2.bot.token': 'Bot token',
+  'd2.bot.tokenSaved': 'saved ({hint}), enter a new one to replace it',
+  'd2.bot.tokenPaste': 'paste the token from the Developer Portal',
+  'd2.bot.removeToken': 'Delete the saved token',
+  'd2.bot.proxy': 'Proxy (optional)',
+  'd2.bot.proxyNow': 'now: {url}',
+  'd2.bot.proxyOff': 'Turn the proxy off',
+  'd2.bot.proxyNote': 'Only the bot\'s connection to Discord goes through the proxy. Game servers are always polled directly.',
+  'd2.bot.login': 'Sign-in with Discord',
+  'd2.bot.on': 'ENABLED',
+  'd2.bot.notSet': 'NOT SET UP',
+  'd2.bot.secretSaved': 'saved, enter a new one to replace it',
+  'd2.bot.secretNone': 'not set',
+  'd2.bot.removeSecret': 'Delete the Client Secret',
+  'd2.bot.redirectNote': 'Add this address in the Developer Portal: OAuth2 → Redirects. Copy the Client Secret on the same OAuth2 page.',
+  'd2.bot.inviteNote': 'Discord will open: pick a server and confirm the permissions.',
+  'd2.bot.savedNote': 'Saved. The bot will reconnect within 10 seconds.',
+  'd2.bot.secretsNote': 'The token, Client Secret and proxy are saved only with the button: they are secrets and are not sent on the fly.',
+  'd2.brand.nameEmpty': 'Enter the community name',
+  'd2.brand.nameLong': 'No longer than 32 characters',
+  'd2.brand.colorFmt': 'The colour must be in the #RRGGBB format',
+  'd2.brand.bar': 'branding',
+  'd2.brand.uploadFail': 'Could not upload',
+  'd2.brand.t.updated': 'Logo updated',
+  'd2.brand.t.reset': 'Logo reset',
+  'd2.brand.title': 'Branding',
+  'd2.brand.desc': 'The name, colour and logo of your community. They show in the panel, on the sign-in page and in the footer of Discord messages. Changes are saved automatically.',
+  'd2.brand.visitorTheme': 'Theme for visitors',
+  'd2.brand.t.theme': 'Default theme saved',
+  'd2.brand.dark': 'Dark (game covers look best)',
+  'd2.brand.light': 'Light',
+  'd2.brand.auto': 'Same as the visitor\'s system',
+  'd2.brand.themeNote': 'Applies to those who have not chosen a theme with the button in the header.',
+  'd2.brand.theme': 'Theme',
+  'd2.brand.gameThemes': 'Game themes',
+  'd2.brand.gameThemesNote': 'The colour, the page glow and, for V Rising and Icarus, a muted game picture in the header of every page.',
+  'd2.brand.ownColor': 'Custom colour',
+  'd2.brand.preview': 'How it looks',
+  'd2.brand.tagline': 'Game server monitoring',
+  'd2.brand.button': 'Button',
+  'd2.brand.logo': 'Logo',
+  'd2.brand.logoNote': 'PNG, JPG or WebP up to 3 MB, a square works best',
+  'd2.pl.new': 'new',
+  'd2.pl.night': 'at night',
+  'd2.pl.morning': 'in the morning',
+  'd2.pl.day': 'during the day',
+  'd2.pl.evening': 'in the evening',
+  'd2.pl.missing': 'This player has not been seen',
+  'd2.pl.missingText': 'The nickname "{name}" has not appeared on the servers in the last 90 days.',
+  'd2.pl.toCommunity': 'To the community',
+  'd2.pl.community': 'Community',
+  'd2.pl.inGame': 'in game now',
+  'd2.pl.was': 'seen {ago}',
+  'd2.pl.first': 'first seen {when}',
+  'd2.pl.places': 'Ranks among players',
+  'd2.pl.week': 'this week',
+  'd2.pl.month': 'this month',
+  'd2.pl.allTime': 'all time',
+  'd2.pl.hours': 'Hours',
+  'd2.pl.visits': 'Visits',
+  'd2.pl.days': 'Days played',
+  'd2.pl.streak': 'In a row',
+  'd2.pl.when': 'When they play',
+  'd2.pl.usually': 'Most often {part}, around {hh}:00',
+  'd2.pl.fewData': 'Not enough data yet',
+  'd2.pl.hoursLabel': 'Hours played by time of day',
+  'd2.pl.where': 'Where they play',
+  'd2.pl.nVisits': '{n} visit|{n} visits',
+  'd2.pl.activity': 'Activity over 90 days',
+  'd2.pl.ach': 'Achievements',
+  'd2.pl.achOf': '{a} of {b}',
+  'd2.pl.recent': 'Recent visits',
+  'd2.mt.defName': 'Maintenance',
+  'd2.mt.st.active': 'In progress',
+  'd2.mt.st.planned': 'Planned',
+  'd2.mt.st.repeat': 'Repeats',
+  'd2.mt.st.past': 'Finished',
+  'd2.mt.deleted': 'Window "{name}" deleted',
+  'd2.mt.title': 'Maintenance',
+  'd2.mt.subtitle': 'Maintenance windows: no false alarms',
+  'd2.mt.hint': 'While a window is active, the server is marked "Maintenance" and downtime alerts are not sent.',
+  'd2.mt.help': 'Pick a server (or all of them) and the time of the work. A window can repeat every day or week. During the window server cards show "Maintenance until …", and downtime is not counted as an outage and does not reach alerts.',
+  'd2.mt.add': 'Add a window',
+  'd2.mt.quickWin': 'Quick windows',
+  'd2.mt.now30': 'Now for 30 minutes',
+  'd2.mt.tonight': 'Tonight 04:00–05:00',
+  'd2.mt.empty': 'No maintenance windows',
+  'd2.mt.emptyText': 'Create a window before updating or restarting a server and the panel will not count it as an outage.',
+  'd2.mt.serverNo': 'Server #{id}',
+  'd2.mt.next': 'next {range}',
+  'd2.mt.editWin': 'Edit window "{name}"',
+  'd2.mt.delWin': 'Delete window "{name}"',
+  'd2.mt.t.added': 'Window added',
+  'd2.mt.t.saved': 'Window saved',
+  'd2.mt.newWin': 'New maintenance window',
+  'd2.mt.editTitle': 'Edit window',
+  'd2.mt.nameEx': 'For example, game update',
+  'd2.mt.quickTime': 'Quick time',
+  'd2.mt.start': 'Start',
+  'd2.mt.end': 'End',
+  'd2.mt.repeat': 'Repeat',
+  'd2.mt.once': 'Once',
+  'd2.mt.daily': 'Every day (up to 24 hours)',
+  'd2.mt.weekly': 'Every week',
+  'd2.mt.tzNote': 'The time is set by your browser\'s clock. A window is at most 7 days long.',
+  'd2.bk.copies': 'copy|copies',
+  'd2.bk.total': '{size} in total',
+  'd2.bk.last': 'last: {ago}',
+  'd2.bk.late': 'The schedule has not run for a long time',
+  'd2.bk.countLabel': 'Copies: {n}',
+  'd2.bk.auto': 'auto',
+  'd2.bk.manual': 'manual',
+  'd2.bk.kb': '{v} KB',
+  'd2.bk.b': '{v} B',
+  'd2.bk.getFail': 'Could not get the copy',
+  'd2.bk.encTitle': 'The archive is encrypted',
+  'd2.bk.pass': 'Passphrase',
+  'd2.bk.encText': 'Enter the passphrase the archive "{what}" was created with.',
+  'd2.bk.continue': 'Continue',
+  'd2.bk.passEnter': 'Enter the passphrase',
+  'd2.bk.t.downloaded': 'Copy downloaded',
+  'd2.bk.t.created': 'Copy created',
+  'd2.bk.c.delTitle': 'Delete the copy?',
+  'd2.bk.c.delText': 'The file "{name}" will be deleted from the server permanently.',
+  'd2.bk.t.deleted': 'Copy deleted',
+  'd2.bk.t.accepted': 'Copy accepted, the panel is restarting…',
+  'd2.bk.c.restoreTitle': 'Restore from this copy?',
+  'd2.bk.c.restoreText': 'All current panel data will be replaced with the copy "{name}" from {when}. The current database will be kept on the server as coregsm.db.before-restore. The panel will restart.',
+  'd2.bk.restore': 'Restore',
+  'd2.bk.c.fileTitle': 'Restore from a file?',
+  'd2.bk.c.fileText': 'All panel data will be replaced with the copy "{name}". The current database will be kept on the server as coregsm.db.before-restore. The panel will restart.',
+  'd2.bk.restoreFail': 'Could not restore the copy',
+  'd2.bk.e.https': 'The upload address must start with https://',
+  'd2.bk.e.keep': 'You can keep from 1 to 30 copies',
+  'd2.bk.t.settings': 'Backup settings saved',
+  'd2.bk.desc': 'A copy includes the database (servers, bindings, users, news, settings), news images and the logo. It contains secrets: the bot token and password hashes. Keep the files as carefully as a password, preferably encrypted.',
+  'd2.bk.preparing': 'Preparing…',
+  'd2.bk.full': 'Download a full copy',
+  'd2.bk.creating': 'Creating…',
+  'd2.bk.create': 'Create a copy on the server',
+  'd2.bk.restoring': 'Restoring…',
+  'd2.bk.fromFile': 'Restore from a file',
+  'd2.bk.schedule': 'Schedule and retention',
+  'd2.bk.auto2': 'Automatic copies',
+  'd2.bk.everyDay': 'Every day',
+  'd2.bk.keep': 'How many copies to keep (1-30)',
+  'd2.bk.remote': 'Send the copy to an address (optional)',
+  'd2.bk.remoteHint': 'The address must start with https://. The copy is sent with the PUT method; works with WebDAV/Nextcloud and signed S3 links.',
+  'd2.bk.remoteOff': 'Turn the upload off',
+  'd2.bk.lastSend': 'Last upload:',
+  'd2.bk.ok': 'successful',
+  'd2.bk.passLabel': 'Encryption passphrase (optional)',
+  'd2.bk.passOn': 'encryption is on, enter a new phrase to replace it',
+  'd2.bk.passOff': 'not set: copies are not encrypted',
+  'd2.bk.passWarn': 'If you lose the passphrase, encrypted archives cannot be read. It cannot be recovered.',
+  'd2.bk.encOff': 'Turn off encryption of new copies',
+  'd2.bk.onServer': 'Copies on the server',
+  'd2.bk.empty': 'No copies yet',
+  'd2.bk.emptyText': 'Press "Create a copy on the server" or turn on the schedule.',
+  'd2.bk.autoU': 'AUTO',
+  'd2.bk.manualU': 'MANUAL',
+  'd2.bk.encrypted': 'ENCRYPTED',
+  'd2.bk.actions': 'Actions: {name}',
+  'd2.set.bot.hint': 'Here you connect the Discord bot: it publishes messages and news. The token comes from the Discord Developer Portal.',
+  'd2.set.bot.h0': 'How to get the token:',
+  'd2.set.bot.h1': 'Open discord.com/developers, the Applications section, and create an application.',
+  'd2.set.bot.h2': 'On the Bot tab press Reset Token and copy the token.',
+  'd2.set.bot.h3': 'Paste it below and save, then press "Invite the bot to a server".',
+  'd2.set.bot.h4': 'A proxy is needed only if Discord is not reachable from your server.',
+  'd2.set.brand.hint': 'The community name, colour and logo: all panel visitors see them, and members see them in the footer of Discord messages.',
+  'd2.set.brand.help': 'Ready-made themes change the colours of the whole panel at once. You can preview changes right away and they are saved with the "Save" button below; while saving is in progress or if it failed, the colours are visible only to you as a preview. "Accent by game" works only in your browser.',
+  'd2.set.sec.hint': 'The administrator password and access details: who can sign in to the panel and register.',
+  'd2.set.sec.help': 'Change the password if it was shared. The registration switches and community rules are under "Users".',
+  'd2.set.upd.hint': 'Installing new panel versions and data backups. A copy of the database is saved before an update, so it can be rolled back.',
+  'd2.set.upd.help': 'A copy contains servers, bindings, users, news and the bot token, so keep the files carefully. Automatic copies are turned on with the schedule below.',
+  'd2.set.title': 'Settings',
+  'd2.set.subtitle': 'Bot, branding, security, updates and backups',
+  'd2.set.sections': 'Settings sections',
+  'd2.set.updAvail': 'An update is available',
+  'd2.set.access': 'Sign-in and access',
+  'd2.set.access1': 'Who can open the panel, register and which roles people have is set under "Users".',
+  'd2.set.access2': 'The list of your device sign-ins and signing out of all the others is in your profile.',
+  'd2.set.usersLink': 'Users and access',
+  'd2.set.sessionsLink': 'My sessions in the profile',
+  'd2.set.domain1': 'The domain and ports are set at installation and stored in',
+  'd2.set.domain2': '. You can change them with the command',
+  'd2.set.domain3': 'on the server (the "Domain and proxy" item).',
+  'd2.su.step.account': 'Account',
+  'd2.su.step.discord': 'Discord',
+  'd2.su.step.done': 'Done',
+  'd2.su.e.user': 'Username: 3-32 characters: letters, digits, a space between words, _ . -',
+  'd2.su.e.pass': 'The password must be at least 10 characters long',
+  'd2.su.e.repeat': 'The passwords do not match',
+  'd2.su.subtitle': 'Initial panel setup',
+  'd2.su.steps': 'Steps',
+  'd2.su.code': 'Setup code',
+  'd2.su.codeEx': 'from the install.sh output',
+  'd2.su.codeHint': 'The code is shown at the end of the installation. If you lost it:',
+  'd2.su.login': 'Administrator username',
+  'd2.su.passLabel': 'Password (at least 10 characters)',
+  'd2.su.repeatLabel': 'Repeat the password',
+  'd2.su.match': 'The passwords match ✓',
+  'd2.su.next': 'Next',
+  'd2.su.botNote': 'The bot publishes server cards in Discord. You can set this up later, under "Settings".',
+  'd2.su.token': 'Discord bot token',
+  'd2.su.optional': 'optional',
+  'd2.su.proxy': 'Proxy for Discord',
+  'd2.su.skip': 'Skip',
+  'd2.su.creating': 'Creating…',
+  'd2.su.finish': 'Finish',
+  'd2.su.created': 'Administrator "{name}" created.',
+  'd2.su.todo1': 'Add a game server on the "Servers" tab.',
+  'd2.su.todo2a': 'Bind a Discord channel on the "Discord" tab.',
+  'd2.su.todo2b': 'Enter the bot token under "Settings", then bind a channel on the "Discord" tab.',
+  'd2.su.open': 'Open the panel',
+  'd2.ws.a.week': 'a week before',
+  'd2.ws.a.day': 'a day before',
+  'd2.ws.a.3h': '3 hours before',
+  'd2.ws.a.h': 'an hour before',
+  'd2.ws.a.10m': '10 min before',
+  'd2.ws.a.30m': '30 min before',
+  'd2.ws.a.5m': '5 min before',
+  'd2.ws.a.1m': 'a minute before',
+  'd2.ws.s.window': 'Maintenance window',
+  'd2.ws.s.commands': 'Wipe commands',
+  'd2.ws.s.season': 'New season',
+  'd2.ws.s.news': 'News',
+  'd2.ws.s.discord': 'Discord message',
+  'd2.ws.s.say': 'Game chat',
+  'd2.ws.s.missed': 'Missed',
+  'd2.ws.st.scheduled': 'scheduled',
+  'd2.ws.st.done': 'done',
+  'd2.ws.st.missed': 'missed',
+  'd2.ws.st.cancelled': 'cancelled',
+  'd2.ws.cancel': 'Cancel',
+  'd2.ws.defName': 'Wipe',
+  'd2.ws.defNewsTitle': 'Wipe on {server} is done',
+  'd2.ws.defNewsText': 'Server {server} was wiped on {date} at {time}. The new map is waiting: come in!',
+  'd2.ws.title': 'Wipe scenario',
+  'd2.ws.desc': 'One scenario for the whole wipe: warnings in Discord and the game chat, a maintenance window, wipe commands with a new seed, a new season and a "wipe is done" news item. Each step runs once.',
+  'd2.ws.none': 'no wipe scheduled',
+  'd2.ws.scenarios': 'Scenarios',
+  'd2.ws.c.title': 'Cancel "{name}"?',
+  'd2.ws.c.text': 'Warnings and wipe steps will not be run.',
+  'd2.ws.c.confirm': 'Cancel the wipe',
+  'd2.ws.wipes': 'Wipes: {name}',
+  'd2.ws.empty': 'No scenarios yet.',
+  'd2.ws.errors': 'errors: {n}',
+  'd2.ws.schedule': 'Schedule a wipe',
+  'd2.ws.e.date': 'Enter the date and time of the wipe',
+  'd2.ws.t.saved': 'Scenario saved',
+  'd2.ws.edit': 'Edit wipe',
+  'd2.ws.when': 'When (your time)',
+  'd2.ws.window': 'Maintenance window, min',
+  'd2.ws.g1': '1. Warnings',
+  'd2.ws.inDiscord': 'In Discord',
+  'd2.ws.inGame': 'In the game chat (needs RCON)',
+  'd2.ws.channel': 'Discord channel',
+  'd2.ws.channelNote': 'Not chosen: messages go to the alerts channel.',
+  'd2.ws.g2': '2. At the moment of the wipe',
+  'd2.ws.rcon': 'RCON commands, one per line (optional)',
+  'd2.ws.seedLabel': 'Seed {seed}',
+  'd2.ws.seed.none': 'Do not change',
+  'd2.ws.seed.random': 'Random (the panel picks)',
+  'd2.ws.seed.fixed': 'Custom',
+  'd2.ws.seed': 'Seed',
+  'd2.ws.season': 'New season (empty: do not start)',
+  'd2.ws.seasonEx': 'e.g. Season {date}',
+  'd2.ws.vars': 'The maintenance window always opens, so the wipe is not counted as an outage. {server}, {date}, {time} and {seed} work in commands and texts.',
+  'd2.ws.g3': '3. News after the wipe',
+  'd2.ws.newsChannel': 'News channel (not chosen: no news)',
+  'd2.ws.newsTitle': 'Title',
+  'd2.ws.newsText': 'Text',
+  'd2.ws.mention': 'Mention',
+  'd2.ws.mention.none': 'No mention',
+  'd2.rp.off': 'off',
+  'd2.rp.on': 'on',
+  'd2.rp.everyDay': 'every day',
+  'd2.rp.noDays': 'no days chosen',
+  'd2.rp.title': 'Scheduled restarts',
+  'd2.rp.desc': 'The panel will warn players in Discord and the game chat in advance, open a maintenance window for the restart (it will not count as an outage) and, if RCON is set up, send the restart command to the server itself.',
+  'd2.rp.at': '{days} at {time}',
+  'd2.rp.next': 'next {when}',
+  'd2.rp.rconOn': 'RCON connected',
+  'd2.rp.lastTime': 'Last time',
+  'd2.rp.configure': 'Configure',
+  'd2.rp.t.saved': 'Restarts saved',
+  'd2.rp.noAnswer': 'The server ran the command and answered nothing',
+  'd2.rp.c.title': 'Restart "{name}" now?',
+  'd2.rp.c.text': 'Without warning the players: a maintenance window will open and, if RCON is set up, the restart command will be sent.',
+  'd2.rp.c.confirm': 'Restart',
+  'd2.rp.restarts': 'Restarts: {name}',
+  'd2.rp.bySchedule': 'Restart on a schedule',
+  'd2.rp.days': 'Days',
+  'd2.rp.time': 'Time',
+  'd2.rp.warn': 'Warn, min',
+  'd2.rp.lasts': 'Lasts, min',
+  'd2.rp.panelTime': 'Panel time: {tz}. There are usually the fewest players at {hh}:00.',
+  'd2.rp.setTime': 'Use this time',
+  'd2.rp.channel': 'Discord channel for warnings',
+  'd2.rp.rcon': 'RCON (optional)',
+  'd2.rp.rconNote': 'For Minecraft, CS, ARK, V Rising, Palworld and other games with Source RCON. Rust (WebRCON) is not supported yet.',
+  'd2.rp.rconPort': 'RCON port',
+  'd2.rp.portEx': 'e.g. 25575',
+  'd2.rp.passKeep': 'Password (empty: keep the current one)',
+  'd2.rp.connected': 'Connected, port {port}',
+  'd2.rp.notConnected': 'Not connected: the port and password are set by an administrator',
+  'd2.rp.cmd': 'Restart command',
+  'd2.rp.cmdEx': 'e.g. stop, quit or shutdown',
+  'd2.rp.say': 'Message to the game chat ({text} is the warning text)',
+  'd2.rp.cmdNote': 'The command only stops the server: the host or a service watching the process must start it again.',
+  'd2.rp.testCmd': 'Test a command',
+  'd2.rp.run': 'Run',
+  'd2.rp.now': 'Restart now',
+  'd2.dx.k.online': 'Currently in game',
+  'd2.dx.k.top': 'Top {n} of the week by hours',
+  'd2.dx.k.topOne': 'Player of the week (most hours in 7 days)',
+  'd2.dx.k.hours': 'Played {n} h or more',
+  'd2.dx.tpl1': '🟢 Online: {players}',
+  'd2.dx.tpl2': '{status} Online: {players}/{max}',
+  'd2.dx.tpl3': '🎮 Players: {players} · servers {online}/{servers}',
+  'd2.dx.allServers': 'all servers',
+  'd2.dx.delQ': 'Delete?',
+  'd2.dx.roles': 'Autoroles',
+  'd2.dx.rolesDesc': 'The bot gives and removes Discord roles by itself: "Currently in game", "Player of the week", "Veteran 100 h". Only players who linked Discord to their in-game nickname (the /register command) get roles.',
+  'd2.dx.addRole': 'Add a role',
+  'd2.dx.noRoles': 'The bot sees no roles it can give. Give the bot the "Manage Roles" permission and move its role above the ones it will give.',
+  'd2.dx.noAuto': 'No autoroles yet.',
+  'd2.dx.members': 'currently {n} player has it|currently {n} players have it',
+  'd2.dx.delRole': 'Delete the autorole',
+  'd2.dx.delRoleText': 'The bot will stop giving this role. Roles already given stay with the players.',
+  'd2.dx.counter': 'Online counter in a voice channel',
+  'd2.dx.counterDesc': 'The bot renames a voice channel into a live counter, for example "🟢 Online: 42". Discord allows changing a channel name only rarely, so the counter updates once every 5 minutes.',
+  'd2.dx.addCounter': 'Add a counter',
+  'd2.dx.noVoice': 'The bot sees no voice channels it can rename. Give it the "Manage Channels" permission on the channel you need.',
+  'd2.dx.channel': 'Channel "{name}"',
+  'd2.dx.onGuild': 'on "{name}"',
+  'd2.dx.template': 'template',
+  'd2.dx.delCounter': 'Delete the counter',
+  'd2.dx.delCounterText': 'The bot will stop updating this channel\'s name.',
+  'd2.dx.t.role': 'Autorole added: the bot will start giving it within a minute',
+  'd2.dx.t.counter': 'Counter added: the bot will rename the channel within a minute',
+  'd2.dx.newRole': 'New autorole',
+  'd2.dx.newCounter': 'New counter',
+  'd2.dx.guild': 'Discord server',
+  'd2.dx.role': 'Role',
+  'd2.dx.voice': 'Voice channel',
+  'd2.dx.choose': 'Choose…',
+  'd2.dx.whom': 'Who gets it',
+  'd2.dx.w.online': 'Those currently in game (removed when they leave)',
+  'd2.dx.w.top': 'The most active over 7 days',
+  'd2.dx.w.hours': 'Those who played N hours (over the last 90 days)',
+  'd2.dx.howManyHours': 'How many hours',
+  'd2.dx.howManyTop': 'How many top players',
+  'd2.dx.chName': 'Channel name',
+  'd2.dx.vars': '{players} players, {max} slots, {online} servers online, {servers} in total, {status} 🟢/🟡/🔴, {name} server name',
+  'd2.dx.countBy': 'Count by server',
+  'd2.dx.add': 'Add',
+  'd2.md.chars': '{value} of {max} characters',
+  'd2.md.text': 'text',
+  'd2.md.item': 'item',
+  'd2.md.code': 'code',
+  'd2.md.linkWord': 'link',
+  'd2.md.linkText': 'link text',
+  'd2.md.formatting': 'Formatting: {label}',
+  'd2.md.bold': 'Bold (Ctrl+B)',
+  'd2.md.bold.k': 'B',
+  'd2.md.italic': 'Italic (Ctrl+I)',
+  'd2.md.italic.k': 'I',
+  'd2.md.underline': 'Underline (Ctrl+U)',
+  'd2.md.underline.k': 'U',
+  'd2.md.strike': 'Strikethrough',
+  'd2.md.strike.k': 'S',
+  'd2.md.spoiler': 'Spoiler',
+  'd2.md.inlineCode': 'Inline code',
+  'd2.md.codeBlock': 'Code block',
+  'd2.md.heading': 'Heading',
+  'd2.md.h1': 'Heading 1',
+  'd2.md.h2': 'Heading 2',
+  'd2.md.h3': 'Heading 3',
+  'd2.md.small': 'Small text',
+  'd2.md.quote': 'Quote',
+  'd2.md.bullets': 'Bulleted list',
+  'd2.md.numbers': 'Numbered list',
+  'd2.md.link': 'Link (Ctrl+K)',
+  'd2.md.emoji': 'Emoji',
+  'd2.md.variable': 'Insert a variable',
+  'd2.md.emojiN': 'Emoji {e}',
+  'd2.md.variables': 'Variables',
+  'd2.md.emojiHints': 'Emoji suggestions',
+  'd2.rv.of5': '{n} out of 5',
+  'd2.rv.w1': 'Terrible',
+  'd2.rv.w2': 'Bad',
+  'd2.rv.w3': 'Okay',
+  'd2.rv.w4': 'Good',
+  'd2.rv.w5': 'Excellent',
+  'd2.rv.s.new': 'Newest',
+  'd2.rv.s.useful': 'Most helpful',
+  'd2.rv.s.high': 'Highest',
+  'd2.rv.s.low': 'Lowest',
+  'd2.rv.rating': 'Rating',
+  'd2.rv.e.stars': 'Give a rating: from 1 to 5 stars',
+  'd2.rv.t.updated': 'Review updated',
+  'd2.rv.t.thanks': 'Thanks for the review!',
+  'd2.rv.t.deleted': 'Review deleted',
+  'd2.rv.none': 'No reviews yet',
+  'd2.rv.beFirst': ': be the first.',
+  'd2.rv.leave': 'Leave a review',
+  'd2.rv.count': '{n} review|{n} reviews',
+  'd2.rv.reco45': 'Ratings 4 and 5',
+  'd2.rv.reco': '{p}% recommend',
+  'd2.rv.ratings': 'Ratings',
+  'd2.rv.showAll': 'Show all reviews',
+  'd2.rv.onlyN': 'Only {n} out of 5 reviews',
+  'd2.rv.yours': 'Your review',
+  'd2.rv.hidden': 'hidden by a moderator',
+  'd2.rv.edit': 'Edit the review',
+  'd2.rv.how': 'How do you like the server?',
+  'd2.rv.ph': 'What you liked, what could be improved (optional)',
+  'd2.rv.textLabel': 'Review text',
+  'd2.rv.signIn': 'Sign in',
+  'd2.rv.signInRest': ' to leave a review.',
+  'd2.rv.order': 'Review order',
+  'd2.rv.adminReply': 'Reply from the administration',
+  'd2.rv.replyPh': 'Everyone will see the reply. An empty reply deletes the previous one.',
+  'd2.rv.reply': 'Reply',
+  'd2.rv.helpfulTitle': 'The review is helpful',
+  'd2.rv.signInMark': 'Sign in to mark it',
+  'd2.rv.helpful': 'Helpful',
+  'd2.rv.editReply': 'Edit the reply',
+  'd2.an.dl.0': 'on Monday',
+  'd2.an.dl.1': 'on Tuesday',
+  'd2.an.dl.2': 'on Wednesday',
+  'd2.an.dl.3': 'on Thursday',
+  'd2.an.dl.4': 'on Friday',
+  'd2.an.dl.5': 'on Saturday',
+  'd2.an.dl.6': 'on Sunday',
+  'd2.an.dShort': '{n} d',
+  'd2.an.busiestLabel': 'Most players {when}',
+  'd2.an.dayAt': '{day} at {time}',
+  'd2.an.cell': '{day} {time}: average {avg}, maximum {peak}',
+  'd2.an.cellNone': '{day} {time}: no data',
+  'd2.an.less': 'less',
+  'd2.an.more': 'more',
+  'd2.an.avgFor': 'averages over {n} day|averages over {n} days',
+  'd2.an.peak': 'Peak',
+  'd2.an.avgPlayers': 'on average {avg} player|on average {avg} players',
+  'd2.an.quietest': 'Quietest',
+  'd2.an.restart': 'Restart',
+  'd2.an.restartText': 'is best at {time}: that is when there are the fewest players on any day',
+  'd2.an.uniqueLabel': 'Unique players per day: up to {max}',
+  'd2.an.barTitle': '{day}: {players} players, {fresh} new',
+  'd2.an.returned': 'returned',
+  'd2.an.fresh': 'new',
+  'd2.an.dayLine': '{day}: {n} player, {fresh} new, {hours} h played, peak {peak}|{day}: {n} players, {fresh} new, {hours} h played, peak {peak}',
+  'd2.an.hoverBar': 'hover over a bar',
+  'd2.an.noNew': 'There were no new players in six weeks.',
+  'd2.an.firstWeek': 'Week of the first visit',
+  'd2.an.players': 'Players',
+  'd2.an.plusWeeks': '+{n} wk',
+  'd2.an.since': 'from {date}',
+  'd2.an.byHours': 'By hours',
+  'd2.an.byVisits': 'By visits',
+  'd2.an.byRecent': 'By recency',
+  'd2.an.nobody': 'Nobody played in this period.',
+  'd2.an.order': 'Order',
+  'd2.an.loading': 'Loading analytics',
+  'd2.an.playersFor': 'Players over {n} day|Players over {n} days',
+  'd2.an.k.unique': 'Unique players',
+  'd2.an.k.uniqueHint': 'today {dau} · this week {wau} · this month {mau}',
+  'd2.an.k.new': 'New',
+  'd2.an.k.newHint': '{p}% of all, {n} came back',
+  'd2.an.k.visit': 'Typical visit',
+  'd2.an.k.visitHint': 'on average {avg} · {visits}',
+  'd2.an.k.hours': 'Hours played',
+  'd2.an.k.hoursHint': 'all players together',
+  'd2.an.when': 'When they play',
+  'd2.an.byDay': 'Players by day',
+  'd2.an.sessionLen': 'How long a visit lasts',
+  'd2.an.retention': 'Do newcomers come back',
+  'd2.an.retentionText': 'The share of players who first joined that week and came back after one, two or more weeks.',
+  'd2.an.topTitle': 'Most time in game',
+  'd2.bb.defName': 'Planned maintenance',
+  'd2.bb.partial': 'Windows created: {ok} of {total}',
+  'd2.bb.created1': 'Maintenance window created',
+  'd2.bb.createdN': 'Maintenance windows created: {n}',
+  'd2.bb.title': 'Maintenance window',
+  'd2.bb.text': 'A separate window will be created for each of the selected servers ({n}). Notifications are muted for that time and the downtime does not count towards uptime.',
+  'd2.bb.duration': 'Duration',
+  'd2.bb.d30': '30 minutes',
+  'd2.bb.d60': '1 hour',
+  'd2.bb.d120': '2 hours',
+  'd2.bb.until': 'Until a time',
+  'd2.bb.creating': 'Creating…',
+  'd2.bb.create': 'Create windows',
+  'd2.bb.t.polledFail': 'Polled {ok} of {total}, errors: {fail}',
+  'd2.bb.t.polled1': 'Server polled',
+  'd2.bb.t.polledN': 'Servers polled: {n}',
+  'd2.bb.t.allFav': 'All selected are already in favourites',
+  'd2.bb.t.noneFav': 'None of the selected are in favourites',
+  'd2.bb.t.favFail': 'Could not change: {n}',
+  'd2.bb.t.favAdded': 'Added to favourites: {n}',
+  'd2.bb.t.favRemoved': 'Removed from favourites: {n}',
+  'd2.bb.actions': 'Actions on the selected servers',
+  'd2.bb.progress': 'Polling {a} of {b}…',
+  'd2.bb.none': 'Nothing selected',
+  'd2.bb.pollNow': 'Poll now',
+  'd2.bb.maintenance': 'Maintenance window…',
+  'd2.bb.addFav': 'Add to favourites',
+  'd2.bb.done': 'Done (Esc)',
+  'd2.pr.copied': 'Copied',
+  'd2.pr.c.keyTitle': 'A new key for "{name}"?',
+  'd2.pr.c.keyText': 'The old key will stop working: the probe must be restarted with the new one.',
+  'd2.pr.c.keyConfirm': 'Issue a new one',
+  'd2.pr.c.delTitle': 'Delete "{name}"?',
+  'd2.pr.c.delText': 'Its checks will disappear from the server pages.',
+  'd2.pr.title': 'Probes',
+  'd2.pr.desc': 'A small program on another computer or VPS (in another city, with another provider) checks the game servers from there. If the panel cannot see a server but the probes can, the problem is the network between them, not the server. Players will see on the server page where it is reachable from.',
+  'd2.pr.add': 'Add a probe',
+  'd2.pr.none': 'No probes yet: only the panel itself checks the servers.',
+  'd2.pr.alive': 'online',
+  'd2.pr.dead': 'offline',
+  'd2.pr.seen': 'seen {ago}',
+  'd2.pr.sees': 'sees {a} of {b}',
+  'd2.pr.never': 'has never connected yet',
+  'd2.pr.newKey': 'New key',
+  'd2.pr.probe': 'Probe "{name}"',
+  'd2.pr.run': 'Run one of the commands on the machine you need. The key is shown only now: save the command in case you need to repeat it.',
+  'd2.pr.docker': 'Docker (the easiest)',
+  'd2.pr.node': 'Or Node.js 18+',
+  'd2.pr.appears': 'The probe will show as "online" a minute after it starts.',
+  'd2.pr.newProbe': 'New probe',
+  'd2.pr.name': 'Name (players will see it)',
+  'd2.pr.nameEx': 'For example: Frankfurt',
+  'd2.pr.create': 'Create',
+  'd2.dg.acc.0': 'Monday',
+  'd2.dg.acc.1': 'Tuesday',
+  'd2.dg.acc.2': 'Wednesday',
+  'd2.dg.acc.3': 'Thursday',
+  'd2.dg.acc.4': 'Friday',
+  'd2.dg.acc.5': 'Saturday',
+  'd2.dg.acc.6': 'Sunday',
+  'd2.dg.nom.0': 'Monday',
+  'd2.dg.nom.1': 'Tuesday',
+  'd2.dg.nom.2': 'Wednesday',
+  'd2.dg.nom.3': 'Thursday',
+  'd2.dg.nom.4': 'Friday',
+  'd2.dg.nom.5': 'Saturday',
+  'd2.dg.nom.6': 'Sunday',
+  'd2.dg.t.queued': 'The weekly digest is queued: the bot will send it to the channel',
+  'd2.dg.title': 'Weekly digest',
+  'd2.dg.desc': 'Once a week the bot posts a picture with the results: players, peak, hours played, server availability and the most active players.',
+  'd2.dg.t.on': 'Weekly digest enabled',
+  'd2.dg.t.off': 'Weekly digest disabled',
+  'd2.dg.publish': 'Publish the weekly digest',
+  'd2.dg.when': 'On {day} at {hh}:00',
+  'd2.dg.needChannel': 'A channel is needed: pick it below or in the alert settings',
+  'd2.dg.last': 'last sent {ago}',
+  'd2.dg.day': 'Day',
+  'd2.dg.saved': 'Saved',
+  'd2.dg.channel': 'Channel',
+  'd2.dg.sameAsAlerts': 'the same as for alerts',
+  'd2.dg.pickOther': 'Pick another',
+  'd2.dg.t.toAlerts': 'The digest will go to the alerts channel',
+  'd2.dg.t.channel': 'Channel saved',
+  'd2.dg.preview': 'This is how the results of the last 7 days will look',
+  'd2.dg.refresh': 'Refresh the picture',
+  'd2.dg.sendNow': 'Send now',
+  'd2.dg.alt': 'Weekly digest: {n} player, peak {peak}, {hours} hours played|Weekly digest: {n} players, peak {peak}, {hours} hours played',
+  'd2.lim.over': 'exceeded',
+  'd2.lim.label': 'Discord limits',
+  'd2.lim.title': 'Limits',
+  'd2.lim.exceeded': 'exceeded',
+  'd2.lim.near': 'near the limit',
+  'd2.lim.ok': 'fine',
+  'd2.lim.more': 'Details',
+  'd2.lim.block': 'Values for block {n} are shown; the total is for the whole message.',
+  'd2.lim.hint': 'Discord limits for this message.',
+  'd2.lim.content': 'Message text',
+  'd2.lim.desc': 'Main text',
+  'd2.lim.fieldName': 'Field name',
+  'd2.lim.longest': 'the longest',
+  'd2.lim.fieldValue': 'Field value',
+  'd2.lim.footer': 'Footer',
+  'd2.lim.fields': 'Fields',
+  'd2.lim.embeds': 'Embed blocks',
+  'd2.lim.total': 'Total characters in all embeds',
+  'd2.push.quiet': 'Quiet hours',
+  'd2.push.quietText': 'No notifications reach devices during this time. They stay in the bell in the site header.',
+  'd2.push.from': 'from',
+  'd2.push.to': 'to',
+  'd2.push.t.on': 'Notifications on this device are enabled',
+  'd2.push.e.denied': 'The browser did not allow notifications',
+  'd2.push.t.test': 'Test notification sent',
+  'd2.push.t.testFail': 'Could not deliver: turn notifications on again',
+  'd2.push.title': 'Notifications on this device',
+  'd2.push.desc': 'A server went down or came back, a slot freed up on a full server: you will get a notification even if the panel is closed. Which servers is chosen with the "Subscribe" button on the server page.',
+  'd2.push.unsupported': 'This browser cannot receive notifications from sites. On iPhone, first add the panel to the Home Screen.',
+  'd2.push.denied': 'Notifications are blocked in the browser settings for this site. Allow them there and reload the page.',
+  'd2.push.enabled': 'Enabled',
+  'd2.push.disabled': 'Disabled',
+  'd2.push.check': 'Test',
+  'd2.push.installText': 'Install the panel as an app: its own icon, a separate window and app-like notifications.',
+  'd2.push.install': 'Install',
+  'd2.srv.morning': 'Good morning',
+  'd2.srv.afternoon': 'Good afternoon',
+  'd2.srv.evening': 'Good evening',
+  'd2.srv.night': 'Good night',
+  'd2.srv.favRemove': 'Remove from favourites',
+  'd2.srv.fav': 'Add to favourites',
+  'd2.srv.favName': 'Add to favourites: {name}',
+  'd2.srv.liveTitle': 'The page refreshes itself. Press to refresh now',
+  'd2.srv.refreshing': 'refreshing…',
+  'd2.srv.updated': 'updated {ago}',
+  'd2.srv.manage': 'Manage servers',
+  'd2.srv.filter': 'Server filter',
+  'd2.srv.f.all': 'All',
+  'd2.srv.f.online': 'Online',
+  'd2.srv.f.offline': 'Unavailable',
+  'd2.srv.f.fav': 'Favourites',
+  'd2.srv.selectTitle': 'Select several servers for bulk actions',
+  'd2.srv.cancelSelect': 'Cancel selection',
+  'd2.srv.select': 'Select',
+  'd2.srv.tileSize': 'Tile size',
+  'd2.srv.sz.s': 'Compact',
+  'd2.srv.sz.m': 'Regular',
+  'd2.srv.sz.l': 'Large',
+  'd2.srv.v.tiles': 'Tiles',
+  'd2.srv.v.chart': 'Chart',
+  'd2.srv.pullRelease': 'Release to refresh',
+  'd2.srv.pull': 'Pull down',
+  'd2.srv.nPlayers': '{n} player|{n} players',
+  'd2.srv.ping': 'ping {ms} ms',
+  'd2.srv.noReply': 'The server is not responding',
+  'd2.srv.lastReply': 'Last reply: {ago}',
+  'd2.srv.waitFirst': 'Waiting for the first reply',
+  'd2.srv.uptime': 'uptime {v}%',
+  'd2.srv.map': 'map {map}',
+  'd2.srv.noReplyAgo': 'Not responding · {ago}',
+  'd2.srv.mapTitle': 'Map: {map}',
+  'd2.srv.version': 'Version',
+  'd2.srv.uptime30': 'Uptime over 30 days',
+  'd2.sd.journal': 'Event log',
+  'd2.sd.recent': 'Recent events',
+  'd2.sd.playerReviews': 'Player reviews',
+  'd2.sd.availFrom': 'Availability from different places',
+  'd2.sd.inFav': 'In favourites',
+  'd2.sd.offline': 'offline',
+  'd2.sd.swipe': '← Swipe sideways to switch the tab →',
+  'd2.sec.failed': 'Could not show this block',
+  'd2.sec.rest': 'The rest of the page works as usual.',
+  'd2.sec.blocks': 'Page blocks',
+  'd2.sd.sec.stats': 'Statistics',
+  'd2.sd.sec.events': 'Events',
+  'd2.sd.sec.avail': 'Availability',
+  'd2.sd.sec.reviews': 'Reviews',
+  'd2.sd.sec.howto': 'How to connect',
+  'd2.sd.sec.qr': 'QR code',
+  'd2.sd.autoRefresh': 'The page refreshes itself',
+  'd2.sd.w24': 'over 24 hours',
+  'd2.sd.w7': 'over 7 days',
+  'd2.sd.w30': 'over 30 days',
+  'd2.sd.channel': 'channel',
+  'd2.sd.message': 'message',
+  'd2.sd.t.linkCopied': 'Link copied',
+  'd2.sd.t.copyFail': 'Could not copy. Link: {url}',
+  'd2.sd.c.title': 'Delete the server "{name}"?',
+  'd2.sd.c.text': 'The server will be deleted together with its Discord bindings.',
+  'd2.sd.t.deleted': 'Server deleted',
+  'd2.sd.t.addrCopied': 'Address copied',
+  'd2.sd.t.addr': 'Address: {addr}',
+  'd2.sd.ping': 'Ping',
+  'd2.sd.fewData': 'Not enough data yet: the chart will appear a few minutes after the server is added.',
+  'd2.sd.redNote': 'Red marks the periods when the server was not responding.',
+  'd2.sd.polling': 'Polling…',
+  'd2.sd.poll': 'Poll',
+  'd2.pl.inGame2': 'Currently in game',
+  'd2.bl.wait': 'Waiting',
+  'd2.bl.offline': 'Offline',
+  'd2.bl.lag': 'Lag',
+  'd2.bl.showHint': 'Show the hint',
+  'd2.bl.hideHint': 'Hide the hint',
+  'd2.bl.copyManual': 'Copy it manually',
+  'd2.bl.proxyType': 'Proxy type',
+  'd2.bl.proxyEx': '45.91.9.172:1080:login:password',
+  'd2.bl.fmtA': 'The format works:',
+  'd2.bl.fmt': 'host:port:login:password',
+  'd2.bl.fmtB': 'or a ready link starting with',
+  'd2.bl.fmtC': '. If the bot does not connect, change the type.',
+  'd2.bl.invite': 'Invite the bot to a server',
+  'd2.fb.layoutLabel': 'Field layout diagram',
+  'd2.fb.layout': 'How the fields are laid out',
+  'd2.fb.drag': 'Drag the field',
+  'd2.fb.dragTitle': 'Drag to change the order',
+  'd2.fb.fieldName': 'Name of field {n}',
+  'd2.fb.up': 'Move field {n} up',
+  'd2.fb.down': 'Move field {n} down',
+  'd2.fb.fieldText': 'Text of field {n}',
+  'd2.fb.placement': 'Placement of field {n}',
+  'd2.fb.fullTitle': 'Full width',
+  'd2.fb.full': 'Wide',
+  'd2.fb.inlineTitle': 'In a row with the neighbours',
+  'd2.fb.inline': 'Inline',
+  'd2.fb.delete': 'Delete field {n}',
+  'd2.fb.add': '+ Add a field',
+  'd2.cp.g.sections': 'Sections',
+  'd2.cp.g.actions': 'Actions',
+  'd2.cp.search': 'Panel search',
+  'd2.cp.searchLabel': 'Search servers and sections',
+  'd2.cp.placeholder': 'Find a server or section…',
+  'd2.cp.close': 'Close search',
+  'd2.cp.results': 'Results',
+  'd2.cp.nothing': 'Nothing found. Try another word.',
+  'd2.cp.hintSelect': '↑ ↓ select',
+  'd2.cp.hintOpen': 'Enter open',
+  'd2.cp.hintClose': 'Esc close',
+  'd2.cp.found': 'Found: {n}',
+  'd2.cp.none': 'Nothing found',
+  'd2.pv.cnt': '{a}/{b} players',
+  'd2.pv.dataLater': 'The data will appear when it is sent',
+  'd2.pv.footer': 'Server status · updated when sent',
+  'd2.pv.title': 'Preview',
+  'd2.pv.theme': 'Discord theme',
+  'd2.pv.width': 'Width',
+  'd2.pv.desktop': 'Desktop',
+  'd2.pv.phone': 'Phone',
+  'd2.pv.empty': 'Start writing: the message will appear here as it will look in Discord.',
+  'd2.pv.hint': 'Click a part of the message to jump to its field. A red frame means the limit is exceeded.',
+  'd2.smtp.portRange': 'Port from 1 to 65535',
+  'd2.smtp.t.saved': 'Mail settings saved',
+  'd2.smtp.t.test': 'A test letter was sent to {to}',
+  'd2.smtp.title': 'Mail (SMTP)',
+  'd2.smtp.desc': 'Needed for password reset, address confirmation and sign-in-from-a-new-device letters. Without it these features are off.',
+  'd2.smtp.ready': 'MAIL WORKS',
+  'd2.smtp.notReady': 'NOT SET UP',
+  'd2.smtp.host': 'SMTP server',
+  'd2.smtp.secure': 'Encryption from the first byte (SSL/TLS, usually port 465). Otherwise STARTTLS is used.',
+  'd2.smtp.passSaved': 'Password (saved, leave empty to keep it)',
+  'd2.smtp.from': 'Sender address',
+  'd2.smtp.noBase': 'The public address of the panel is unknown: letters with password reset links will not be sent. Open the panel by its domain as an administrator or set PUBLIC_URL in .env.',
+  'd2.smtp.delPass': 'Delete the password',
+  'd2.smtp.sendTo': 'Send a test letter to',
+  'd2.smtp.sending': 'Sending…',
+  'd2.smtp.send': 'Send a test letter',
+  'd2.chp.missing': '⚠ The bot lacks permissions in this channel: {list}. Without "Embed Links" embed messages may not show, without "Attach Files" images will not be sent. Give these permissions to the bot\'s role in the channel settings.',
+  'd2.chp.choose': 'Choose a channel…',
+  'd2.chp.manual': 'Enter an ID by hand',
+  'd2.chp.refresh': 'Refresh the list',
+  'd2.chp.idEx': 'Channel ID, e.g. 123456789012345678',
+  'd2.chp.noChannels': 'The bot sees no channels yet (it must be invited to a Discord server):',
+  'd2.chp.checkBot': 'check the bot →',
+  'd2.chp.devMode': 'Developer Mode in Discord: right-click the channel → "Copy Channel ID".',
+  'd2.chp.fromList': 'Pick from the list',
+  'd2.nt.tone.ok': 'Good news',
+  'd2.nt.tone.warn': 'Important',
+  'd2.nt.tone.bad': 'Urgent',
+  'd2.nt.t.pinned': 'Announcement pinned',
+  'd2.nt.t.removed': 'Announcement removed',
+  'd2.nt.title': 'Announcement for players',
+  'd2.nt.ph': 'For example: wipe on Friday at 18:00 Moscow time. Rules: no cheating.',
+  'd2.nt.remove': 'Remove',
+  'd2.nt.pin': 'Pin an announcement',
+  'd2.nt.pinnedAgo': 'pinned {ago}',
+  'd2.hp.a.create': 'created',
+  'd2.hp.a.update': 'changed',
+  'd2.hp.a.publish': 'published',
+  'd2.hp.a.schedule': 'scheduled',
+  'd2.hp.a.restore': 'restored a version',
+  'd2.hp.a.delete': 'deleted',
+  'd2.hp.a.duplicate': 'duplicated',
+  'd2.hp.a.send': 'sent',
+  'd2.hp.c.title': 'Restore this version?',
+  'd2.hp.c.text': 'The current text will be replaced by the chosen version. It will be kept in the history.',
+  'd2.hp.restoreBtn': 'Restore this version',
+  'd2.hp.t.restored': 'Version restored',
+  'd2.hp.title': 'Version history',
+  'd2.hp.text': 'Every save is remembered: you can view and bring back the previous text.',
+  'd2.hp.none': 'No earlier versions yet.',
+  'd2.hp.view': 'View',
+  'd2.hp.who': 'Who edited and when',
+  'd2.hp.version': 'Version from {when}',
+  'd2.hp.readOnly': 'View only. Author: {actor}.',
+  'd2.hp.locked': 'The news item is being sent now, please wait.',
+  'd2.jr.today': 'Today',
+  'd2.jr.yesterday': 'Yesterday',
+  'd2.jr.csv': 'time,who,action,details',
+  'd2.jr.title': 'Journal',
+  'd2.jr.subtitle': 'Who changed what in the panel',
+  'd2.jr.hint': 'Here is recorded which administrator changed what and when. It helps to find where a change came from.',
+  'd2.jr.help': 'The last 2000 actions are kept. Search works by name, action and details.',
+  'd2.jr.csvBtn': 'Download CSV',
+  'd2.jr.search': 'Search the journal…',
+  'd2.jr.searchLabel': 'Search the journal',
+  'd2.jr.empty': 'No entries',
+  'd2.jr.notFound': 'Nothing found.',
+  'd2.jr.emptyText': 'Administrators\' actions will appear here.',
+  'd2.jr.resetSearch': 'Reset the search',
+  'd2.jr.more': 'Show more',
+  'd2.dw.bot.connecting': 'The bot is connecting to Discord, this takes a few seconds. Press "Check" to refresh.',
+  'd2.dw.bot.error': 'Discord did not accept the token or is unreachable. Check the token and proxy in the settings, then check again.',
+  'd2.dw.bot.offline': 'The bot is not online yet. Save the token: the connection starts by itself.',
+  'd2.dw.s1.title': 'Token entered',
+  'd2.dw.s1.done': 'The bot token is saved in the settings.',
+  'd2.dw.s1.todo': 'Create a bot in the Discord Developer Portal and paste its token in the panel settings.',
+  'd2.dw.s2.title': 'Bot connected',
+  'd2.dw.s2.online': 'The bot is online',
+  'd2.dw.s2.first': 'Enter the token first.',
+  'd2.dw.s3.title': 'Bot invited to a Discord server',
+  'd2.dw.s3.done': 'The bot is on Discord servers: {n}.',
+  'd2.dw.s3.todo': 'Open the invitation, pick your Discord server and confirm the bot\'s permissions. Then press "Check".',
+  'd2.dw.s4.title': 'Channel chosen, permissions are fine',
+  'd2.dw.s4.done': 'The channel is bound, the bot has permissions for embeds and files.',
+  'd2.dw.s4.missing': 'The bot lacks permissions in the chosen channel: {list}. Give them to the bot\'s role in the channel settings and press "Check".',
+  'd2.dw.s4.addServer': 'First add a game server for the bot to show.',
+  'd2.dw.s4.pick': 'Pick a channel and a game server: the bot will post one updated message there.',
+  'd2.dw.s4.noChannels': 'The bot sees no channels it can write to. Give its role the permissions "View Channel", "Send Messages", "Embed Links", "Attach Files".',
+  'd2.dw.s4.noPerms': 'Missing permissions: {list}',
+  'd2.dw.s5.title': 'The first message is published',
+  'd2.dw.s5.done': 'The bot sent the message and updates it on a timer.',
+  'd2.dw.s5.todo': 'The bot will send the message within a minute of creating the binding. Press "Check" to see the result.',
+  'd2.dw.a.token': 'Enter the token',
+  'd2.dw.a.botSettings': 'Open the bot settings',
+  'd2.dw.a.invite': 'Open the invitation',
+  'd2.dw.a.addServer': 'Add a server',
+  'd2.dw.a.bind': 'Create the first binding',
+  'd2.dw.title': 'Connection wizard',
+  'd2.dw.ready': 'All set: the bot is posting messages.',
+  'd2.dw.step': 'Step {a} of {b}',
+  'd2.dw.check': 'Check',
+  'd2.dw.sr.done': ': done',
+  'd2.dw.sr.current': ': current step',
+  'd2.dw.sr.blocked': ': unavailable until the previous steps are done',
+  'd2.dw.checkAgain': 'Check again',
+  'd2.cc.day': 'Day',
+  'd2.cc.week': 'Week',
+  'd2.cc.title': 'Server comparison',
+  'd2.cc.what': 'What to show',
+  'd2.cc.slots': '% of slots',
+  'd2.cc.toggle': 'Show or hide a server',
+  'd2.cc.labelDay': 'Players on the servers over a day',
+  'd2.cc.labelWeek': 'Players on the servers over a week',
+  'd2.cc.avg': 'Average',
+  'd2.cc.vsPrev': 'Vs the previous period',
+  'd2.as.watched': 'Servers under watch',
+  'd2.as.watchedText': 'Online, ping and player history in one place.',
+  'd2.as.serversOnline': 'Servers online',
+  'd2.as.of': 'of {n}',
+  'd2.as.playersNow': 'Players now',
+  'd2.as.state': 'Server status',
+  'd2.as.note': 'Discord messages update themselves, news is posted on behalf of the bot.',
+  'd2.as.cards': 'Cards and news right in Discord',
+  'd2.tour.1.title': 'Add a game server',
+  'd2.tour.1.text': 'Welcome! Progress is always visible under "Admin → Getting started". Let\'s begin with the main thing: under "Admin → Servers" add a server by choosing a game and entering the address. The panel will start showing online, map and ping right away.',
+  'd2.tour.2.title': 'Connect the Discord bot',
+  'd2.tour.2.text': 'Under "Settings → Bot and Discord" paste the bot token from the Discord Developer Portal and save. Then invite the bot to your Discord server.',
+  'd2.tour.3.title': 'Bind a channel',
+  'd2.tour.3.text': 'In the "Discord" section pick the channel where the bot will post the server card. The message updates itself on a timer.',
+  'd2.tour.4.title': 'Write news',
+  'd2.tour.4.text': 'Under "News" you can prepare a post with a picture, send it to Discord right away or on a schedule and repeat it on a schedule.',
+  'd2.tour.5.title': 'Set up the branding',
+  'd2.tour.5.text': 'Under "Settings → Branding" set the community name, logo and brand colour. That is all: the tips can be shown again in your profile.',
+  'd2.tour.label': 'Panel tips',
+  'd2.tour.first': 'First time in the admin area?',
+  'd2.tour.show': 'Show in a minute',
+  'd2.tour.dismiss': 'Do not show',
+  'd2.ao.24h': 'over 24 hours',
+  'd2.ao.r.down': 'Some servers are unavailable',
+  'd2.ao.r.bot': 'The Discord bot has an error',
+  'd2.ao.r.cert': 'The certificate expires soon',
+  'd2.ao.r.backup': 'No backup for a long time',
+  'd2.ao.r.pending': 'Player requests are waiting',
+  'd2.ao.r.update': 'An update is available',
+  'd2.ao.health': 'Panel health',
+  'd2.ao.healthScore': 'Panel health: {n} out of 100',
+  'd2.ao.h.ok': 'The panel is fine',
+  'd2.ao.h.look': 'There is something to look at',
+  'd2.ao.h.act': 'Action is needed',
+  'd2.ao.h.allOk': 'Servers, bot, certificate and backups are all fine.',
+  'd2.ao.duty.servers': 'Look through the servers',
+  'd2.ao.duty.users': 'Handle the player requests',
+  'd2.ao.duty.backup': 'Check the backup',
+  'd2.ao.duty.journal': 'Look into the journal',
+  'd2.ao.duty': 'Today\'s round',
+  'd2.ao.duty.allDone': 'Everything is done: you can rest',
+  'd2.ao.duty.left': 'Left: {a} of {b}',
+  'd2.ao.open': 'Open',
+  'd2.ao.now': 'Servers now',
+  'd2.ao.maint': 'maintenance',
+  'd2.ao.down': 'unavailable',
+  'd2.ao.mine': 'Only mine',
+  'd2.ao.noMine': 'You have no actions yet',
+  'd2.sv.copyAddr': 'Copy the address',
+  'd2.sv.copyAddrOf': 'Copy the address {addr}',
+  'd2.sv.waitReply': 'Waiting for a reply',
+  'd2.sv.noReply': 'not responding',
+  'd2.sv.waiting': 'waiting for a reply',
+  'd2.sv.ms': 'ms',
+  'd2.sv.up': 'Uptime',
+  'd2.sv.address': 'Address',
+  'd2.sv.sort': 'Sort',
+  'd2.rb.r.cheating': 'Cheats or unfair play',
+  'd2.rb.r.abuse': 'Abuse, toxicity',
+  'd2.rb.r.griefing': 'Griefing, damaging others\' property',
+  'd2.rb.t.sent': 'The report was sent to the moderators. The answer will come to your notifications',
+  'd2.rb.report': 'Report',
+  'd2.rb.title': 'Report on the player {nick}',
+  'd2.rb.reason': 'Reason',
+  'd2.rb.what': 'What happened (optional)',
+  'd2.rb.ph': 'The server, the time, what exactly the player did',
+  'd2.rb.note': 'Only moderators will see the report. No more than 5 reports a day.',
+  'd2.su.addFirst': 'Add the first server',
+  'd2.su.noServers': 'No servers yet',
+  'd2.su.addFirstText': 'Enter the game and address and the panel will start showing online, map and ping. Then bind a Discord channel.',
+  'd2.su.noServersText': 'The administrator has not added any server yet. Check back later: the list will appear here.',
+  'd2.su.noFavs': 'Nothing in favourites yet',
+  'd2.su.noFavsText': 'Press ☆ on a server card and it will appear here and be pinned first in the general list.',
+  'd2.su.showAll': 'Show all servers',
+  'd2.su.noOnline': 'No servers online right now',
+  'd2.su.noOffline': 'No unavailable servers',
+  'd2.su.noOnlineText': 'No server answers the requests. Reset the filter to see them all.',
+  'd2.su.noOfflineText': 'All servers answer. Reset the filter to see the full list.',
+  'd2.su.resetFilter': 'Reset the filter',
+  'd2.poll.e.fail': 'Number of failed polls: from {a} to {b}',
+  'd2.poll.e.conc': 'Parallel polls: from {a} to {b}',
+  'd2.poll.e.rule': 'The "N of M" rule: numbers from 1 to {n} (or leave the fields empty)',
+  'd2.poll.noRule': 'No rule set: a failure is confirmed {when}.',
+  'd2.poll.rule': 'The server counts as down if it did not answer {a} of the last {b} polls (not necessarily in a row).',
+  'd2.poll.right': 'right after the first failure',
+  'd2.poll.after': 'after {n} failed polls in a row',
+  'd2.poll.bar': 'server polling',
+  'd2.poll.title': 'Server polling',
+  'd2.poll.desc': 'How the panel checks the game servers and when it decides a server is really unavailable. Changes are saved automatically.',
+  'd2.poll.failLabel': 'Failed polls in a row before an outage',
+  'd2.poll.failHint': 'An outage is confirmed {when}. A single lost packet does not raise an alarm, but a real crash is noticed later.',
+  'd2.poll.concLabel': 'Servers polled at the same time',
+  'd2.poll.concHint': 'From {a} to {b}. A higher value means a faster round but more load on the panel and network.',
+  'd2.poll.last': 'Last round',
+  'd2.poll.servers': '{n} server in {d}|{n} servers in {d}',
+  'd2.poll.noErrors': 'no errors',
+  'd2.poll.errors': '{n} error|{n} errors',
+  'd2.poll.parallel': '{n} at a time',
+  'd2.poll.never': 'No round has run yet.',
+  'd2.pw.more': '{n} more character needed: at least 10|{n} more characters needed: at least 10',
+  'd2.pw.same': 'The new password is the same as the current one',
+  'd2.pw.changed': 'Password changed',
+  'd2.pw.title': 'Administrator password',
+  'd2.pw.current': 'Current password',
+  'd2.pw.new': 'New password (at least 10 characters)',
+  'd2.pw.changedDot': 'Password changed.',
+  'd2.pw.save': 'Save the password',
+  'd2.pp.label': 'Server passport',
+  'd2.pp.map': 'Map',
+  'd2.pp.country': 'Country: {name}',
+  'd2.pp.countryK': 'Country:',
+  'd2.pp.ping': 'Ping: {label}',
+  'd2.pp.mode': 'Mode',
+  'd2.pp.onPanel': 'On the panel',
+  'd2.pp.dateUnknown': 'date unknown',
+  'd2.pp.polled': 'polled {ago}',
+  'd2.ns.viewsFor': 'Views over {n} days',
+  'd2.ns.title': 'Statistics: {title}',
+  'd2.ns.views': 'views',
+  'd2.ns.week': 'over 7 days',
+  'd2.ns.comments': 'comments',
+  'd2.ns.byDay': 'Views by day (30 days)',
+  'd2.ns.reactions': 'Reactions:',
+  'd2.ns.none': 'none yet',
+  'd2.ns.published': 'Published {when}',
+  'd2.dl.f.pending': 'Queued',
+  'd2.dl.f.sending': 'Sending',
+  'd2.dl.f.sent': 'Delivered',
+  'd2.dl.f.error': 'With an error',
+  'd2.dl.f.dead': 'Not delivered',
+  'd2.dl.t.requeued': 'The message was queued again',
+  'd2.dl.t.noRetry': 'This delivery can no longer be retried',
+  'd2.dl.title': 'Delivery',
+  'd2.dl.desc': 'The queue of messages to Discord: news, alerts and status cards. Failed attempts are repeated automatically, up to 8 times.',
+  'd2.dl.type': 'Message type',
+  'd2.dl.allTypes': 'All types',
+  'd2.dl.filter': 'Filter by status',
+  'd2.dl.noMatch': 'Nothing matches this filter.',
+  'd2.dl.empty': 'The queue is empty: messages go out at once.',
+  'd2.dl.attempts': 'attempts {v}',
+  'd2.dl.created': 'created {ago}',
+  'd2.dl.next': 'next attempt {v}',
+  'd2.adm.dirty': 'Changed…',
+  'd2.adm.saving': 'Saving…',
+  'd2.adm.notSaved': 'Not saved',
+  'd2.sb.unsaved': 'Unsaved changes',
+  'd2.sb.fix': 'Fix the fields with errors',
+  'd2.hero.peakTitle': 'Peak for the period: {n}',
+  'd2.hero.peakNote': 'peak for the period: {n}',
+  'd2.hero.last2h': 'Players over the last 2 hours',
+  'd2.hero.noChange': 'no change over 2 h',
+  'd2.hero.change': '{sign}{n} over 2 h',
+  'd2.hero.inGame': 'player in game →|players in game →',
+  'd2.hero.playing': 'playing for {v}',
+  'd2.hero.onlineNow': 'online now',
+  'd2.hero.rankTitle': 'Place in the weekly ranking',
+  'd2.hero.profile': 'Profile →',
+  'd2.hero.record': 'New record',
+  'd2.ck.warning': 'Warning',
+  'd2.ck.error': 'Error',
+  'd2.ck.schedule': 'Schedule',
+  'd2.ck.saveDiscord': 'Save to Discord',
+  'd2.ck.title': 'Check before sending',
+  'd2.ck.results': 'Check results',
+  'd2.ck.fix': 'Fix the errors to continue.',
+  'd2.ck.back': 'Back to the editor',
+  'd2.ck.anyway': '{verb} anyway',
+  'd2.cal.m.0': 'January',
+  'd2.cal.m.1': 'February',
+  'd2.cal.m.2': 'March',
+  'd2.cal.m.3': 'April',
+  'd2.cal.m.4': 'May',
+  'd2.cal.m.5': 'June',
+  'd2.cal.m.6': 'July',
+  'd2.cal.m.7': 'August',
+  'd2.cal.m.8': 'September',
+  'd2.cal.m.9': 'October',
+  'd2.cal.m.10': 'November',
+  'd2.cal.m.11': 'December',
+  'd2.cal.movable': 'can be dragged to another day',
+  'd2.cal.untitled': 'Untitled',
+  'd2.cal.prev': 'Previous month',
+  'd2.cal.next': 'Next month',
+  'd2.cal.more': '{n} more',
+  'd2.cal.undated': 'Drafts without a date: drag them to a day',
+  'd2.hhc.poll': 'Poll duration',
+  'd2.hhc.dbSize': 'Database size',
+  'd2.hhc.queue': 'Delivery queue',
+  'd2.hhc.title': 'Status over the period',
+  'd2.hhc.since': 'Samples since {when}: {n}',
+  'd2.hhc.desc': 'How the panel has been doing lately.',
+  'd2.hhc.d': '{n} d',
+  'd2.hhc.few': 'Not enough samples yet: the chart will appear after a few minutes of the panel running.',
+  'd2.sa.noFavs': 'No favourite servers',
+  'd2.mx.flatTitle': 'No noticeable change',
+  'd2.mx.flat': 'flat',
+  'd2.mx.trendTitle': 'End of the period against its start',
+  'd2.mx.whileOnline': 'while online',
+  'd2.mx.samples': 'Samples',
+  'd2.ast.table': 'Table',
+  'd2.ast.cards': 'Cards',
+  'd2.fo.t.off': 'No longer following {nick}',
+  'd2.fo.t.on': 'We will tell you when {nick} joins a server',
+  'd2.fo.following': '★ Following',
+  'd2.fo.follow': '☆ Follow',
+  'd2.fo.title': 'Players I follow',
+  'd2.fo.desc': 'We will tell you in the panel, in Discord and on your device when these players join a server. No more than once in 30 minutes per player.',
+  'd2.fo.none': 'Nobody yet. Open a player\'s page and press "Follow".',
+  'd2.fo.stop': 'Stop',
+  'd2.nsub.t.saved': 'News subscription saved',
+  'd2.nsub.t.off': 'News subscription turned off',
+  'd2.nsub.desc': 'Which news to tell you about: the notification goes to the bell, to devices with notifications enabled and to Discord direct messages (if linked).',
+  'd2.nsub.all': 'All rubrics',
+  'd2.psc.t.saved': 'Saved. Messages will update on the next poll',
+  'd2.psc.title': 'Nicknames in the message',
+  'd2.psc.desc': 'How many players to list in the Discord message. The rest are available with the "All players on the site" button and the link under the list. Those who have been in game the longest come first.',
+  'd2.psc.show': 'Nicknames to show',
+  'd2.psc.counterOnly': '0: counter only',
+  'd2.nf.server': 'Server not found',
+  'd2.nf.page': 'There is no such page',
+  'd2.nf.serverText': 'Perhaps it was deleted or the link is outdated. Open the server list and find the one you need.',
+  'd2.nf.pageText': 'The link is outdated or the address has a typo. Go back to the home page: everything you need is there.',
+  'd2.nf.home': 'To the home page',
+  'd2.nf.toServers': 'To the servers',
+  'd2.asb.stale': 'Polling has not answered for a long time',
+  'd2.asb.down': 'Servers unavailable: {n}',
+  'd2.asb.ok': 'Polling is running, everything answers',
+  'd2.asb.t.polled': 'Servers polled',
+  'd2.asb.lastTitle': 'Time of the last poll',
+  'd2.asb.pollAll': 'Poll all',
+  'd2.qr.long': 'The value is too long for a QR code.',
+  'd2.tabs.overview': 'Overview',
+  'd2.tabs.history': 'History',
+  'd2.tabs.stats': 'Analytics',
+  'd2.tabs.connect': 'Connect',
+  'd2.tabs.label': 'Server sections',
+  'd2.gp.custom': 'Another game (enter a GameDig ID)…',
+  'd2.gp.customShort': 'Another game (GameDig ID)',
+  'd2.gp.find': 'Find a game…',
+  'd2.gp.search': 'Search for a game',
+  'd2.gp.games': 'Games',
+  'd2.ct.added': 'new servers: {n}',
+  'd2.ct.updated': 'servers to update: {n}',
+  'd2.ct.bindings': 'Discord messages: {n}',
+  'd2.ct.maint': 'maintenance windows: {n}',
+  'd2.ct.restarts': 'restart schedules: {n}',
+  'd2.ct.autoroles': 'autoroles: {n}',
+  'd2.ct.counters': 'counters: {n}',
+  'd2.ct.settings': 'settings: {n}',
+  'd2.ct.nothing': 'nothing will change: it is already so',
+  'd2.ct.e.bad': 'This is not a CoreGSM settings file or it is damaged',
+  'd2.ct.c.title': 'Import the settings?',
+  'd2.ct.c.text': 'From the file "{name}": {sum}. Servers with the same game, address and port will be updated, the others added.',
+  'd2.ct.c.confirm': 'Import',
+  'd2.ct.t.done': 'Imported: {sum}',
+  'd2.ct.title': 'Settings transfer',
+  'd2.ct.desc': 'A file with the panel setup: servers, Discord messages, alerts and the weekly digest, branding, repeating maintenance windows, restarts, autoroles and counters. Without players, history and secrets (the bot token and passwords are entered again). Handy for setting up a second panel or moving it to another server.',
+  'd2.ct.export': 'Download the settings file',
+  'd2.ct.import': 'Import from a file…',
+  'd2.sh.crumbs': 'Breadcrumbs',
+  'd2.sh.admin': 'Administrator',
+  'd2.sh.moderator': 'Moderator',
+  'd2.sh.player': 'Player',
+  'd2.sh.myGallery': 'My gallery',
+  'd2.idr.heavy': 'The file is heavy ({mb} MB): Discord may load it slowly.',
+  'd2.idr.small': 'The picture is small ({w}×{h}): it will look blurry in Discord, better at least {min} px wide.',
+  'd2.idr.https': 'The link must start with https://.',
+  'd2.idr.uploaded': 'Uploaded picture',
+  'd2.idr.drop': 'Drag a picture here or click to choose a file',
+  'd2.idr.formats': 'PNG, JPEG, GIF, WebP up to 8 MB. You can paste from the clipboard (Ctrl+V) into the text.',
+  'd2.idr.pickFile': '{label}: choose a file',
+  'd2.idr.link': '{label}: link',
+  'd2.idr.ph': 'https://… or a link to a picture',
+  'd2.ch.dayChart': 'Players chart over a day',
+  'd2.ch.forH': 'over {n} h',
+  'd2.ch.forM': 'over {n} min',
+  'd2.ch.soon': 'The history will appear after a few polls',
+  'd2.ch.range': 'Players over 24 hours: from {a} to {b}',
+  'd2.ch.wasDown': 'the server was unavailable',
+  'd2.ch.peak': 'peak {n}',
+  'd2.ch.online': 'online',
+  'd2.ch.lag': 'lagging',
+  'd2.ch.offline': 'unavailable',
+  'd2.sm.p.free': '🟢 A slot freed up on the server "{name}" (39/40). Address: play.example.com:27015',
+  'd2.sm.p.back': '✅ The server "{name}" is back online. Address: play.example.com:27015',
+  'd2.sm.p.down': '🔴 The server "{name}" is unavailable. Address: play.example.com:27015',
+  'd2.sm.preview': 'This is how the message will look',
+  'd2.sm.t.dm': 'Test sent: check the bell and your Discord direct messages',
+  'd2.sm.t.botOff': 'The test is in the bell. The bot is offline now, nothing was sent to Discord',
+  'd2.sm.t.noDiscord': 'The test is in the bell. Link Discord to get it in direct messages too',
+  'd2.sm.testTitle': 'Sends a sample message to the panel, to Discord and to devices',
+  'd2.sm.test': 'Test message',
+  'd2.dm.spoiler': 'Spoiler: click to show',
+  'd2.dm.role': 'role',
+  'd2.dm.member': 'member',
+  'd2.ef.m.up': 'back',
+  'd2.ef.m.down': 'outage',
+  'd2.ef.m.peak': 'peak',
+  'd2.ef.m.maint': 'maintenance',
+  'd2.ef.up': 'The server is back',
+  'd2.ef.peak': 'Player peak: {n}',
+  'd2.ef.maintName': 'Maintenance started: {name}',
+  'd2.ef.maint': 'Maintenance started',
+  'd2.ef.downFor': 'The server went down · was unavailable for {v}',
+  'd2.ef.stillDown': 'The server went down · still unavailable',
+  'd2.ef.down': 'The server went down',
+  'd2.ef.outages': 'outage|outages',
+  'd2.ef.downTotal': 'total downtime',
+  'd2.ef.availability': 'availability',
+  'd2.ef.all': 'All events →',
+  'd2.ef.count': '{n} event|{n} events',
+  'd2.acc.label': 'Accent by game',
+  'd2.acc.remembered': 'Remembered in this browser.',
+  'd2.ep.bot': 'BOT',
+  'd2.ep.today': 'Today at {time}',
+  'd2.cp.theme.dark': 'Dark theme',
+  'd2.cp.theme.light': 'Light theme',
+  'd2.cp.theme.auto': 'Theme as in the system',
+  'd2.hch.down': 'the server was not responding',
+  'd2.hch.players': 'players {n}',
+  'd2.hch.sumPingDay': 'Ping chart over a day: from {a} to {b}{unit}. The left and right arrows move the cursor.',
+  'd2.hch.sumPingWeek': 'Ping chart over a week: from {a} to {b}{unit}. The left and right arrows move the cursor.',
+  'd2.hch.sumPlDay': 'Players chart over a day: from {a} to {b}{unit}. The left and right arrows move the cursor.',
+  'd2.hch.sumPlWeek': 'Players chart over a week: from {a} to {b}{unit}. The left and right arrows move the cursor.',
+  'd2.hch.empty': 'The chart is empty so far.',
+  'd2.hch.p24': '24 hours',
+  'd2.hch.p7': '7 days',
+  'd2.hch.p30': '30 days',
+  'd2.hch.created': 'created {when}',
+  'd2.hch.saveFail': 'Could not save the picture',
+  'd2.hch.historyFrom': 'History is available since {when}: samples are kept for 7 days',
+  'd2.hch.accumulating': 'Data has been accumulating since {when}',
+  'd2.hch.usual': 'usual level',
+  'd2.hch.pingRight': 'ping, ms (right)',
+  'd2.hch.showPing': 'show ping',
+  'd2.hch.showAll': 'show the whole period',
+  'd2.hch.tip': 'select a stretch with the mouse to zoom in',
+  'd2.hch.zoom': 'Zoom in',
+  'd2.hch.usually': 'Usually',
+  'd2.hch.savePng': 'Save the chart as a PNG picture',
+  'd2.hch.preparing': 'Preparing…',
+  'd2.hch.png': 'Download PNG',
+  'd2.hch.legend': 'Chart legend',
+  'd2.hch.overview': 'The whole period: drag to select a stretch',
+  'd2.pl.players': 'Players',
+  'd2.chp.refreshing': 'Refreshing…',
 };
 
 export default en;
@@ -135968,378 +137145,1462 @@ const ru = {
   'sn.reopen': 'Открыть снова',
   'sn.delete': 'Удалить',
   'sn.deleteQ': 'Удалить заметку?',
-  // ---- i18n debt batch ----
-  'wipe.ann.week': 'за неделю',
-  'wipe.ann.day': 'за сутки',
-  'wipe.ann.h3': 'за 3 часа',
-  'wipe.ann.h1': 'за час',
-  'wipe.ann.m10': 'за 10 мин',
-  'wipe.say.m30': 'за 30 мин',
-  'wipe.say.m5': 'за 5 мин',
-  'wipe.say.m1': 'за минуту',
-  'wipe.step.window': 'Окно обслуживания',
-  'wipe.step.commands': 'Команды вайпа',
-  'wipe.step.season': 'Новый сезон',
-  'wipe.step.news': 'Новость',
-  'wipe.step.discord': 'Сообщение в Discord',
-  'wipe.step.say': 'Игровой чат',
-  'wipe.step.missed': 'Пропущен',
-  'wipe.st.scheduled': 'запланирован',
-  'wipe.st.done': 'выполнен',
-  'wipe.st.missed': 'пропущен',
-  'wipe.st.cancelled': 'отменён',
-  'wipe.defName': 'Вайп',
-  'wipe.defNewsTitle': 'Вайп на {server} прошёл',
-  'wipe.defNewsText': 'Сервер {server} вайпнут {date} в {time}. Новая карта уже ждёт: заходите!',
-  'wipe.title': 'Сценарий вайпа',
-  'wipe.desc': 'Один сценарий на весь вайп: предупреждения в Discord и игровом чате, окно обслуживания, команды вайпа с новым сидом, новый сезон и новость «вайп прошёл». Каждый шаг выполняется один раз.',
-  'wipe.none': 'вайп не запланирован',
-  'wipe.scenarios': 'Сценарии',
-  'wipe.cancelQ': 'Отменить «{name}»?',
-  'wipe.cancelText': 'Предупреждения и шаги вайпа выполняться не будут.',
-  'wipe.cancelBtn': 'Отменить вайп',
-  'wipe.modalTitle': 'Вайпы: {name}',
-  'wipe.empty': 'Сценариев пока нет.',
-  'wipe.errors': 'ошибок: {n}',
-  'wipe.edit': 'Изменить',
-  'wipe.cancel': 'Отменить',
-  'wipe.remove': 'Убрать',
-  'wipe.schedule': 'Запланировать вайп',
-  'wipe.needDate': 'Укажите дату и время вайпа',
-  'wipe.saved': 'Сценарий сохранён',
-  'wipe.editTitle': 'Изменить вайп',
-  'wipe.f.name': 'Название',
-  'wipe.f.when': 'Когда (ваше время)',
-  'wipe.f.window': 'Окно обслуживания, мин',
-  'wipe.s1': '1. Предупреждения',
-  'wipe.inDiscord': 'В Discord',
-  'wipe.inGame': 'В игровом чате (нужен RCON)',
-  'wipe.channel': 'Канал Discord',
-  'wipe.channelHint': 'Не выбран: сообщения уйдут в канал оповещений.',
-  'wipe.s2': '2. В момент вайпа',
-  'wipe.f.cmds': 'Команды RCON, по одной в строке (необязательно)',
-  'wipe.f.seedMode': 'Сид {seed}',
-  'wipe.seed.none': 'Не менять',
-  'wipe.seed.random': 'Случайный (выберет панель)',
-  'wipe.seed.fixed': 'Свой',
-  'wipe.f.seed': 'Сид',
-  'wipe.f.season': 'Новый сезон (пусто: не начинать)',
-  'wipe.seasonPh': 'например Сезон {date}',
-  'wipe.note': 'Окно обслуживания открывается всегда, чтобы вайп не считался сбоем. В командах и текстах работают {server}, {date}, {time} и {seed}.',
-  'wipe.s3': '3. Новость после вайпа',
-  'wipe.newsChannel': 'Канал новостей (не выбран: новости не будет)',
-  'wipe.f.title': 'Заголовок',
-  'wipe.f.text': 'Текст',
-  'wipe.f.mention': 'Упоминание',
-  'wipe.m.none': 'Без упоминания',
-  'wipe.back': 'Назад',
-  'rp.everyDay': 'каждый день',
-  'rp.noDays': 'дни не выбраны',
-  'rp.title': 'Плановые перезапуски',
-  'rp.desc': 'Панель заранее предупредит игроков в Discord и в игровом чате, на время перезапуска откроет окно обслуживания (это не будет считаться сбоем) и, если настроен RCON, сама отправит серверу команду перезапуска.',
-  'rp.daysAt': '{days} в {time}',
-  'rp.next': 'следующий {when}',
-  'rp.off': 'выключено',
-  'rp.rconOn': 'RCON подключён',
-  'rp.last': 'Последний раз {when}',
-  'rp.on': 'включено',
-  'rp.setup': 'Настроить',
-  'rp.saved': 'Перезапуски сохранены',
-  'rp.noAnswer': 'Сервер выполнил команду и ничего не ответил',
-  'rp.nowQ': 'Перезапустить «{name}» сейчас?',
-  'rp.nowText': 'Без предупреждения игроков: откроется окно обслуживания и, если настроен RCON, уйдёт команда перезапуска.',
-  'rp.restart': 'Перезапустить',
-  'rp.done': 'Готово',
-  'rp.modalTitle': 'Перезапуски: {name}',
-  'rp.bySchedule': 'Перезапускать по расписанию',
-  'rp.days': 'Дни',
-  'rp.f.time': 'Время',
-  'rp.f.warn': 'Предупредить, мин',
-  'rp.f.dur': 'Длится, мин',
-  'rp.tzHint': 'Время панели: {tz}. Меньше всего игроков обычно в {hour}:00.',
-  'rp.setTime': 'Поставить это время',
-  'rp.channel': 'Канал Discord для предупреждений',
-  'rp.rconTitle': 'RCON (необязательно)',
-  'rp.rconNote': 'Для Minecraft, CS, ARK, V Rising, Palworld и других игр с Source RCON. Rust (WebRCON) пока не поддерживается.',
-  'rp.f.port': 'Порт RCON',
-  'rp.portPh': 'например 25575',
-  'rp.f.passKeep': 'Пароль (пусто: оставить прежний)',
-  'rp.f.pass': 'Пароль',
-  'rp.connectedPort': 'Подключён, порт {port}',
-  'rp.notConnected': 'Не подключён: порт и пароль задаёт администратор',
-  'rp.f.cmd': 'Команда перезапуска',
-  'rp.cmdPh': 'например stop, quit или shutdown',
-  'rp.f.say': 'Сообщение в игровой чат ({text} — текст предупреждения)',
-  'rp.cmdNote': 'Команда только останавливает сервер: запустить его снова должен хостинг или сервис, который следит за процессом.',
-  'rp.f.test': 'Проверить команду',
-  'rp.run': 'Выполнить',
-  'rp.restartNow': 'Перезапустить сейчас',
-  'dx.kind.online': 'Сейчас в игре',
-  'dx.kind.top': 'Топ-{n} недели по часам',
-  'dx.kind.topOne': 'Игрок недели (больше всех часов за 7 дней)',
-  'dx.kind.hours': 'Наиграл {n} ч и больше',
-  'dx.allServers': 'все серверы',
-  'dx.deleteQ': 'Удалить?',
-  'dx.delete': 'Удалить',
-  'dx.roles.title': 'Автороли',
-  'dx.roles.desc': 'Бот сам выдаёт и снимает роли в Discord: «Сейчас в игре», «Игрок недели», «Ветеран 100 ч». Роли получают только игроки, которые связали Discord с игровым ником (команда /register).',
-  'dx.roles.add': 'Добавить роль',
-  'dx.roles.none': 'Бот не видит ролей, которые может выдавать. Дайте боту право «Управлять ролями» и поднимите его роль выше тех, что он будет выдавать.',
-  'dx.roles.empty': 'Пока нет ни одной автороли.',
-  'dx.roles.holders': 'сейчас у {n} игрока|{n} игроков|{n} игроков',
-  'dx.roles.del': 'Удалить автороль',
-  'dx.roles.delText': 'Бот перестанет выдавать эту роль. Уже выданные роли останутся у игроков.',
-  'dx.cnt.title': 'Счётчик онлайна в голосовом канале',
-  'dx.cnt.desc': 'Бот переименовывает голосовой канал в живой счётчик, например «🟢 Онлайн: 42». Discord разрешает менять название канала нечасто, поэтому счётчик обновляется раз в 5 минут.',
-  'dx.cnt.add': 'Добавить счётчик',
-  'dx.cnt.none': 'Бот не видит голосовых каналов, которые может переименовать. Дайте ему право «Управлять каналами» на нужном канале.',
-  'dx.cnt.channel': 'Канал «{name}»',
-  'dx.cnt.on': 'на «{guild}»',
-  'dx.cnt.template': 'шаблон',
-  'dx.cnt.del': 'Удалить счётчик',
-  'dx.cnt.delText': 'Бот перестанет обновлять название этого канала.',
-  'dx.roles.added': 'Автороль добавлена: бот начнёт выдавать её в течение минуты',
-  'dx.cnt.added': 'Счётчик добавлен: бот переименует канал в течение минуты',
-  'dx.f.newRole': 'Новая автороль',
-  'dx.f.newCnt': 'Новый счётчик',
-  'dx.f.guild': 'Сервер Discord',
-  'dx.f.role': 'Роль',
-  'dx.f.voice': 'Голосовой канал',
-  'dx.f.choose': 'Выберите…',
-  'dx.f.who': 'Кому выдавать',
-  'dx.f.rOnline': 'Тем, кто сейчас в игре (снимается при выходе)',
-  'dx.f.rTop': 'Самым активным за 7 дней',
-  'dx.f.rHours': 'Наигравшим N часов (за последние 90 дней)',
-  'dx.f.howManyH': 'Сколько часов',
-  'dx.f.howManyP': 'Сколько игроков из топа',
-  'dx.f.chName': 'Название канала',
-  'dx.f.vars': '{players} игроков, {max} мест, {online} серверов в сети, {servers} всего, {status} 🟢/🟡/🔴, {name} название сервера',
-  'dx.f.scope': 'Считать по серверу',
-  'dx.f.all': 'Все серверы',
-  'dx.f.add': 'Добавить',
-  'pb.copied': 'Скопировано',
-  'pb.rotateQ': 'Новый ключ для «{name}»?',
-  'pb.rotateText': 'Старый ключ перестанет работать: точку нужно будет перезапустить с новым.',
-  'pb.rotateBtn': 'Выдать новый',
-  'pb.deleteQ': 'Удалить «{name}»?',
-  'pb.deleteText': 'Её проверки пропадут со страниц серверов.',
-  'pb.delete': 'Удалить',
-  'pb.title': 'Точки проверки',
-  'pb.desc': 'Небольшая программа на другом компьютере или VPS (в другом городе, у другого провайдера) проверяет игровые серверы оттуда. Если панель сервер не видит, а точки видят, — дело в сети между ними, а не в сервере. Игроки увидят на странице сервера, откуда он доступен.',
-  'pb.add': 'Добавить точку',
-  'pb.empty': 'Точек пока нет: серверы проверяет только сама панель.',
-  'pb.alive': 'на связи',
-  'pb.dead': 'не на связи',
-  'pb.sees': 'видит {online} из {servers}',
-  'pb.never': 'ещё ни разу не выходила на связь',
-  'pb.newKey': 'Новый ключ',
-  'pb.probeTitle': 'Точка «{name}»',
-  'pb.run': 'Запустите на нужной машине одну из команд. Ключ показывается только сейчас: сохраните команду, если понадобится повторить.',
-  'pb.docker': 'Docker (проще всего)',
-  'pb.node': 'Или Node.js 18+',
-  'pb.appears': 'Точка появится «на связи» через минуту после запуска.',
-  'pb.done': 'Готово',
-  'pb.newTitle': 'Новая точка проверки',
-  'pb.f.name': 'Название (его увидят игроки)',
-  'pb.f.ph': 'Например: Франкфурт',
-  'pb.create': 'Создать',
-  'mf.chars': '{value} из {max} символов',
-  'mf.ph.text': 'текст',
-  'mf.ph.item': 'пункт',
-  'mf.ph.code': 'код',
-  'mf.ph.link': 'ссылка',
-  'mf.ph.linkText': 'текст ссылки',
-  'mf.formatting': 'Форматирование: {label}',
-  'mf.bold': 'Жирный (Ctrl+B)',
-  'mf.boldCh': 'Ж',
-  'mf.italic': 'Курсив (Ctrl+I)',
-  'mf.italicCh': 'К',
-  'mf.underline': 'Подчёркнутый (Ctrl+U)',
-  'mf.underlineCh': 'Ч',
-  'mf.strike': 'Зачёркнутый',
-  'mf.strikeCh': 'З',
-  'mf.spoiler': 'Спойлер',
-  'mf.inlineCode': 'Код в строке',
-  'mf.codeBlock': 'Блок кода',
-  'mf.ph.heading': 'Заголовок',
-  'mf.h1': 'Заголовок 1',
-  'mf.h2': 'Заголовок 2',
-  'mf.h3': 'Заголовок 3',
-  'mf.small': 'Мелкий текст',
-  'mf.quote': 'Цитата',
-  'mf.bullets': 'Маркированный список',
-  'mf.numbers': 'Нумерованный список',
-  'mf.link': 'Ссылка (Ctrl+K)',
-  'mf.emoji': 'Эмодзи',
-  'mf.variable': 'Вставить переменную',
-  'mf.emojiOne': 'Эмодзи {e}',
-  'mf.variables': 'Переменные',
-  'mf.emojiHints': 'Подсказки эмодзи',
-  'an.dowLong.0': 'в понедельник',
-  'an.dowLong.1': 'во вторник',
-  'an.dowLong.2': 'в среду',
-  'an.dowLong.3': 'в четверг',
-  'an.dowLong.4': 'в пятницу',
-  'an.dowLong.5': 'в субботу',
-  'an.dowLong.6': 'в воскресенье',
-  'an.period': 'Период',
-  'an.daysShort': '{n} дн',
-  'an.heatAria': 'Больше всего игроков {when} в {time}',
-  'an.fewData': 'Пока мало данных',
-  'an.noData': 'нет данных',
-  'an.cell': '{dow} {time}: в среднем {avg}, максимум {max}',
-  'an.less': 'меньше',
-  'an.more': 'больше',
-  'an.avgFor': 'средние за {n} день|средние за {n} дня|средние за {n} дней',
-  'an.peak': 'Пик',
-  'an.peakText': '{when} в {time}: в среднем {avg} игрок|{when} в {time}: в среднем {avg} игрока|{when} в {time}: в среднем {avg} игроков',
-  'an.quietest': 'Тише всего',
-  'an.when': '{when} в {time}',
-  'an.restart': 'Рестарт',
-  'an.restartText': 'лучше всего в {time}: в это время меньше всего игроков в любой день',
-  'an.dailyAria': 'Уникальных игроков в день: до {max}',
-  'an.barTitle': '{day}: {n} игроков, новых {news}',
-  'an.returned': 'вернулись',
-  'an.new': 'новые',
-  'an.barHover': '{day}: {n} игрок, новых {news}, {hours} ч в игре, пик {peak}|{day}: {n} игрока, новых {news}, {hours} ч в игре, пик {peak}|{day}: {n} игроков, новых {news}, {hours} ч в игре, пик {peak}',
-  'an.hoverBar': 'наведите на столбец',
-  'an.noNew': 'Новых игроков за шесть недель не было.',
-  'an.firstWeek': 'Неделя первого входа',
-  'an.players': 'Игроков',
-  'an.weekPlus': '+{n} нед',
-  'an.since': 'с {date}',
-  'an.sort.hours': 'По часам',
-  'an.sort.visits': 'По визитам',
-  'an.sort.recent': 'По давности',
-  'an.nobody': 'За этот период никто не играл.',
-  'an.order': 'Порядок',
-  'an.visitsN': '{n} визит|{n} визита|{n} визитов',
-  'an.playingNow': 'сейчас в игре',
-  'an.loading': 'Загрузка аналитики',
-  'an.playersFor': 'Игроки за {n} день|Игроки за {n} дня|Игроки за {n} дней',
-  'an.kpi.unique': 'Уникальных игроков',
-  'an.kpi.uniqueHint': 'сегодня {dau} · за неделю {wau} · за месяц {mau}',
-  'an.kpi.new': 'Новых',
-  'an.kpi.newHint': '{share}% от всех, вернулись {n}',
-  'an.kpi.visit': 'Обычный визит',
-  'an.kpi.avg': 'в среднем {v}',
-  'an.kpi.hours': 'Часов в игре',
-  'an.kpi.hoursHint': 'все игроки вместе',
-  'an.when.title': 'Когда играют',
-  'an.daily.title': 'Игроки по дням',
-  'an.sess.title': 'Сколько длится визит',
-  'an.coh.title': 'Возвращаются ли новички',
-  'an.coh.text': 'Доля игроков, впервые зашедших в эту неделю, которые вернулись через одну, две и больше недель.',
-  'an.top.title': 'Больше всех в игре',
-  'mt.defName': 'Технические работы',
-  'mt.st.active': 'Идёт сейчас',
-  'mt.st.planned': 'Запланировано',
-  'mt.st.repeat': 'Повторяется',
-  'mt.st.past': 'Завершено',
-  'mt.deleted': 'Окно «{name}» удалено',
-  'mt.title': 'Обслуживание',
-  'mt.subtitle': 'Окна технических работ: без ложных тревог',
-  'mt.hint': 'Пока идёт окно, сервер помечается как «Обслуживание», а оповещения о падении не отправляются.',
-  'mt.help': 'Укажите сервер (или все сразу) и время работ. Окно может повторяться каждый день или неделю. Во время окна на карточках сервера показывается «Тех. работы до …», а падение не считается сбоем и не попадает в оповещения.',
-  'mt.add': 'Добавить окно',
-  'mt.quick': 'Быстрые окна',
-  'mt.now30': 'Сейчас на 30 минут',
-  'mt.tonight': 'Сегодня ночью 04:00–05:00',
-  'mt.empty': 'Окон обслуживания нет',
-  'mt.emptyText': 'Создайте окно перед обновлением или перезагрузкой сервера, и панель не будет считать это сбоем.',
-  'mt.loading': 'Загрузка',
-  'mt.allServers': 'Все серверы',
-  'mt.serverNo': 'Сервер №{id}',
-  'mt.next': 'следующее {range}',
-  'mt.editAria': 'Изменить окно «{name}»',
-  'mt.edit': 'Изменить',
-  'mt.delAria': 'Удалить окно «{name}»',
-  'mt.added': 'Окно добавлено',
-  'mt.saved': 'Окно сохранено',
-  'mt.newTitle': 'Новое окно обслуживания',
-  'mt.editTitle': 'Изменить окно',
-  'mt.f.server': 'Сервер',
-  'mt.f.name': 'Название',
-  'mt.f.namePh': 'Например, обновление игры',
-  'mt.quickTime': 'Быстрое время',
-  'mt.f.start': 'Начало',
-  'mt.f.end': 'Окончание',
-  'mt.f.repeat': 'Повтор',
-  'mt.r.none': 'Один раз',
-  'mt.r.daily': 'Каждый день (до 24 часов)',
-  'mt.r.weekly': 'Каждую неделю',
-  'mt.tzNote': 'Время указывается по часам вашего браузера. Окно не длиннее 7 суток.',
-  'bk2.copy1': 'копия',
-  'bk2.copy2': 'копии',
-  'bk2.copy5': 'копий',
-  'bk2.total': 'всего {size}',
-  'bk2.last': 'последняя: {ago}',
-  'bk2.late': 'Расписание давно не срабатывало',
-  'bk2.count': 'Копий: {n}',
-  'bk2.auto': 'авто',
-  'bk2.manual': 'вручную',
-  'bk2.gb': 'ГБ',
-  'bk2.mb': 'МБ',
-  'bk2.kb': 'КБ',
-  'bk2.b': 'Б',
-  'bk2.fetchFail': 'Не удалось получить копию',
-  'bk2.encTitle': 'Архив зашифрован',
-  'bk2.passLabel': 'Парольная фраза',
-  'bk2.encText': 'Введите парольную фразу, с которой был создан архив «{what}».',
-  'bk2.continue': 'Продолжить',
-  'bk2.needPass': 'Введите парольную фразу',
-  'bk2.downloaded': 'Копия скачана',
-  'bk2.created': 'Копия создана',
-  'bk2.delQ': 'Удалить копию?',
-  'bk2.delText': 'Файл «{name}» будет удалён с сервера без возможности восстановления.',
-  'bk2.delete': 'Удалить',
-  'bk2.deleted': 'Копия удалена',
-  'bk2.accepted': 'Копия принята, панель перезапускается…',
-  'bk2.restoreQ': 'Восстановить из этой копии?',
-  'bk2.restoreText': 'Все текущие данные панели будут заменены копией «{name}» от {date}. Текущая база будет сохранена на сервере как coregsm.db.before-restore. Панель перезапустится.',
-  'bk2.restore': 'Восстановить',
-  'bk2.restoreFileQ': 'Восстановить из файла?',
-  'bk2.restoreFileText': 'Все данные панели будут заменены копией «{name}». Текущая база будет сохранена на сервере как coregsm.db.before-restore. Панель перезапустится.',
-  'bk2.restoreFail': 'Не удалось восстановить копию',
-  'bk2.httpsOnly': 'Адрес для отправки должен начинаться с https://',
-  'bk2.keepRange': 'Хранить можно от 1 до 30 копий',
-  'bk2.settingsSaved': 'Настройки копий сохранены',
-  'bk2.title': 'Резервные копии',
-  'bk2.desc': 'В копию входят база (серверы, привязки, пользователи, новости, настройки), картинки новостей и логотип. Внутри хранятся секреты: токен бота и хэши паролей. Храните файлы так же бережно, как пароль, лучше зашифрованными.',
-  'bk2.preparing': 'Готовлю…',
-  'bk2.dlFull': 'Скачать полную копию',
-  'bk2.creating': 'Создаю…',
-  'bk2.createOnServer': 'Создать копию на сервере',
-  'bk2.restoring': 'Восстанавливаю…',
-  'bk2.restoreFile': 'Восстановить из файла',
-  'bk2.schedTitle': 'Расписание и хранение',
-  'bk2.f.auto': 'Автоматические копии',
-  'bk2.s.off': 'Выключено',
-  'bk2.s.daily': 'Каждый день',
-  'bk2.s.weekly': 'Каждую неделю',
-  'bk2.f.keep': 'Сколько копий хранить (1-30)',
-  'bk2.f.remote': 'Отправлять копию по адресу (необязательно)',
-  'bk2.now': 'сейчас: {url}',
-  'bk2.remoteHint': 'Адрес должен начинаться с https://. Копия отправляется методом PUT, подходит для WebDAV/Nextcloud и подписанных ссылок S3.',
-  'bk2.remoteOff': 'Отключить отправку',
-  'bk2.lastSend': 'Последняя отправка: {at}',
-  'bk2.ok': 'успешно',
-  'bk2.error': 'ошибка',
-  'bk2.f.pass': 'Парольная фраза для шифрования (необязательно)',
-  'bk2.passOn': 'шифрование включено, введите новую фразу для замены',
-  'bk2.passOff': 'не задана: копии не шифруются',
-  'bk2.passWarn': 'Если потерять парольную фразу, зашифрованные архивы нельзя будет прочитать. Восстановить её невозможно.',
-  'bk2.encOff': 'Отключить шифрование новых копий',
-  'bk2.saving': 'Сохраняю…',
-  'bk2.onServer': 'Копии на сервере',
-  'bk2.empty': 'Копий пока нет',
-  'bk2.emptyText': 'Нажмите «Создать копию на сервере» или включите расписание.',
-  'bk2.tagAuto': 'АВТО',
-  'bk2.tagManual': 'ВРУЧНУЮ',
-  'bk2.tagEnc': 'ЗАШИФРОВАНА',
-  'bk2.actions': 'Действия: {name}',
-  'bk2.download': 'Скачать',
-  'bk2.restoreHere': 'Восстановить из этой копии',
+  // ---- i18n debt batch 2 ----
+  'd2.news.st.draft': 'ЧЕРНОВИК',
+  'd2.news.st.scheduled': 'ЗАПЛАНИРОВАНО',
+  'd2.news.st.sending': 'ОТПРАВЛЯЕТСЯ',
+  'd2.news.st.updating': 'ОБНОВЛЯЕТСЯ',
+  'd2.news.st.deleting': 'УДАЛЯЕТСЯ',
+  'd2.news.st.sent': 'ОПУБЛИКОВАНО',
+  'd2.news.st.error': 'ОШИБКА',
+  'd2.news.st.pinned': 'ЗАКРЕПЛЕНО',
+  'd2.news.rep.daily': 'КАЖДЫЙ ДЕНЬ',
+  'd2.news.rep.weekly': 'КАЖДУЮ НЕДЕЛЮ',
+  'd2.news.rep.monthly': 'КАЖДЫЙ МЕСЯЦ',
+  'd2.news.t.publishing': 'Новость отправляется в Discord',
+  'd2.news.t.copied': 'Копия создана',
+  'd2.news.t.copyDraft': 'Копия сохранена как черновик',
+  'd2.news.t.past': 'Нельзя назначить время в прошлом',
+  'd2.news.t.moved': 'Перенесено на {when}',
+  'd2.news.t.unpinned': 'Откреплено',
+  'd2.news.t.pinnedTop': 'Закреплено вверху ленты',
+  'd2.news.c.bulkTitle': 'Удалить новостей: {n}?',
+  'd2.news.c.bulkText': 'Опубликованных среди них {n}: их сообщения также удалятся из Discord.',
+  'd2.news.v.publish': 'Отправлено',
+  'd2.news.v.pin': 'Закреплено',
+  'd2.news.v.unpin': 'Откреплено',
+  'd2.news.v.delete': 'Удалено',
+  'd2.news.t.bulkBad': '{verb}: {ok}, не удалось: {bad}',
+  'd2.news.t.bulkOk': '{verb}: {n}',
+  'd2.news.t.bulkNone': 'Подходящих новостей среди выбранных нет',
+  'd2.news.c.title': 'Удалить новость?',
+  'd2.news.c.text': 'Сообщение также будет удалено из Discord.',
+  'd2.news.t.deleted': 'Новость удалена',
+  'd2.news.t.deletedNamed': 'Новость «{title}» удалена',
+  'd2.news.t.deleteFail': 'Не удалось удалить новость',
+  'd2.news.title': 'Новости',
+  'd2.news.subtitle': 'Публикации от имени бота в Discord',
+  'd2.news.hint': 'Новость — это сообщение, которое бот отправляет в выбранный канал Discord. Её можно отправить сразу, запланировать или сохранить черновиком.',
+  'd2.news.help': 'Начните с готового шаблона (вайп, перезапуск, ивент), отредактируйте текст и проверьте предпросмотр. Опубликованную новость можно поправить: сообщение в Discord обновится. Канал по умолчанию подставляется в каждую новую новость.',
+  'd2.news.write': '+ Написать новость',
+  'd2.news.quick': 'Быстрая новость:',
+  'd2.news.defChannel': 'Канал новостей по умолчанию',
+  'd2.news.notChosen': 'не выбран',
+  'd2.news.change': 'Изменить',
+  'd2.news.pickChannel': 'Выбрать канал',
+  'd2.news.testChannel': 'Тестовый канал',
+  'd2.news.channelId': 'Канал {id}',
+  'd2.news.testHint': 'Сюда уходит «Отправить тест» из редактора.',
+  'd2.news.reset': 'Сбросить',
+  'd2.news.viewLabel': 'Вид списка',
+  'd2.news.viewList': 'Список',
+  'd2.news.viewCal': 'Календарь',
+  'd2.news.empty': 'Новостей пока нет',
+  'd2.news.emptyText': 'Напишите первую новость: выберите шаблон, отредактируйте текст и опубликуйте сразу или по расписанию.',
+  'd2.news.loading': 'Загрузка',
+  'd2.news.picked': 'Выбрано: {n}',
+  'd2.news.pickAll': 'Выбрать все',
+  'd2.news.publish': 'Опубликовать',
+  'd2.news.pin': 'Закрепить',
+  'd2.news.unpin': 'Открепить',
+  'd2.news.delete': 'Удалить',
+  'd2.news.pickOne': 'Выбрать: {title}',
+  'd2.news.reactions': 'Реакции',
+  'd2.news.dup': 'Дублировать',
+  'd2.news.publishNow': 'Опубликовать сейчас',
+  'd2.news.stats': 'Статистика',
+  'd2.news.openDiscord': 'Открыть в Discord ↗',
+  'd2.sf.h.spaces': 'В адресе не должно быть пробелов',
+  'd2.sf.h.noScheme': 'Укажите только адрес, без http:// и пути',
+  'd2.sf.h.port': 'Порт вводится в отдельном поле, уберите «:порт» из адреса',
+  'd2.sf.coverFail': 'Не удалось загрузить картинку (PNG, JPG или WebP до 5 МБ)',
+  'd2.sf.portRange': 'Порт — число от 1 до 65535',
+  'd2.sf.discardTitle': 'Закрыть без сохранения?',
+  'd2.sf.discardText': 'Изменения в форме будут потеряны.',
+  'd2.sf.keepEditing': 'Продолжить правку',
+  'd2.sf.editTitle': 'Изменить сервер',
+  'd2.sf.newTitle': 'Новый сервер',
+  'd2.sf.previewLabel': 'Так сервер увидят в списке',
+  'd2.sf.serverName': 'Название сервера',
+  'd2.sf.address': 'адрес',
+  'd2.sf.noAnswer': 'не отвечает',
+  'd2.sf.notChecked': 'не проверен',
+  'd2.sf.game': 'Игра',
+  'd2.sf.gameIdEx': 'например, arma3',
+  'd2.sf.host': 'Адрес для опроса (IP или домен)',
+  'd2.sf.port': 'Порт',
+  'd2.sf.testing': 'Опрашиваю…',
+  'd2.sf.test': 'Проверить сервер',
+  'd2.sf.answered': 'Сервер ответил',
+  'd2.sf.players': 'Игроков',
+  'd2.sf.map': '· карта {map}',
+  'd2.sf.ping': '· пинг {ms} мс',
+  'd2.sf.noReply': 'Сервер не ответил',
+  'd2.sf.advanced': 'Дополнительно',
+  'd2.sf.name': 'Название',
+  'd2.sf.nameEx': 'возьмётся из ответа сервера',
+  'd2.sf.nameHint': 'Оставьте пустым: панель использует название, которое сервер сообщает сам. Своё название переопределяет его.',
+  'd2.sf.qport': 'Query-порт (если отличается от порта игры)',
+  'd2.sf.notSet': 'не указан',
+  'd2.sf.display': 'Адрес для отображения',
+  'd2.sf.displayEx': 'play.example.com:25565 или внешний IP',
+  'd2.sf.country': 'Страна (для сообщения в Discord)',
+  'd2.sf.countryAuto': 'Определить автоматически по адресу',
+  'd2.sf.countryHint': 'Автоопределение не работает для адресов в локальной сети: выберите страну вручную, и флаг появится в сообщении.',
+  'd2.sf.displayHint': 'Опрос идёт по адресу выше, а людям на странице и в карточке Discord показывается этот адрес. Нужен, если сервер в локальной сети, а снаружи доступен по другому IP или домену.',
+  'd2.sf.cover': 'Обложка',
+  'd2.sf.uploading': 'Загружаю…',
+  'd2.sf.upload': 'Загрузить картинку',
+  'd2.sf.coverHint': 'PNG, JPG или WebP до 5 МБ; обрезается до 16:9. Заменяет цветную обложку карточки и шапку страницы сервера.',
+  'd2.sf.coverLater': 'Картинку можно загрузить после создания сервера: откройте «Изменить».',
+  'd2.sf.saving': 'Сохраняю…',
+  'd2.sys.gb': '{v} ГБ',
+  'd2.sys.mb': '{v} МБ',
+  'd2.sys.dur.dh': '{d} д {h} ч',
+  'd2.sys.cert.none': 'нет (панель работает по HTTP)',
+  'd2.sys.cert.expired': 'истёк',
+  'd2.sys.s.version': 'Версия',
+  'd2.sys.s.fromSource': 'сборка из исходников',
+  'd2.sys.s.uptime': 'Работает',
+  'd2.sys.s.servers': 'Серверы',
+  'd2.sys.s.serversOnline': '{a} из {b} онлайн',
+  'd2.sys.s.bindings': 'Привязки Discord',
+  'd2.sys.s.guilds': '{n} сервер с ботом|{n} сервера с ботом|{n} серверов с ботом',
+  'd2.sys.s.bot': 'Бот',
+  'd2.sys.bot.online': 'в сети',
+  'd2.sys.bot.idle': 'ожидание',
+  'd2.sys.bot.connecting': 'подключается',
+  'd2.sys.bot.error': 'ошибка',
+  'd2.sys.cert.title': 'Сертификат HTTPS',
+  'd2.sys.cert.self': 'самоподписанный',
+  'd2.sys.s.users': 'Пользователи',
+  'd2.sys.title': 'Система',
+  'd2.sys.subtitle': 'Состояние панели и диагностика',
+  'd2.sys.hint': 'Здоровье панели: версия, место на диске, бот, сертификат HTTPS. Если что-то не работает, начните с проверки.',
+  'd2.sys.help': 'Проверка занимает несколько секунд: она смотрит базу, диск, подключение бота, опрос серверов и доступ к Discord и GitHub. Зелёная точка значит, что всё в порядке, жёлтая — стоит присмотреться, красная — нужно исправить.',
+  'd2.sys.running': 'Проверяю…',
+  'd2.sys.run': 'Запустить проверку',
+  'd2.sys.warnings': 'Предупреждения',
+  'd2.sys.since': 'с',
+  'd2.sys.resources': 'Ресурсы',
+  'd2.sys.disk.used': 'Диск: занято',
+  'd2.sys.disk.free': 'свободно {v}',
+  'd2.sys.disk': 'Диск',
+  'd2.sys.disk.total': 'всего {v}',
+  'd2.sys.disk.unknown': 'размер неизвестен',
+  'd2.sys.cpu.load': 'Нагрузка процессора',
+  'd2.sys.cpu': 'Процессор',
+  'd2.sys.cpu.cores': 'ядер: {n}, средняя за минуту',
+  'd2.sys.noData': 'нет данных',
+  'd2.sys.mem.label': 'Память панели',
+  'd2.sys.mem.of': 'из {v} МБ',
+  'd2.sys.mem': 'Память',
+  'd2.sys.mem.hint': 'процесс панели, ориентир {v} МБ',
+  'd2.sys.db': 'База данных',
+  'd2.sys.db.ref': 'ориентир 1 ГБ',
+  'd2.sys.db.points': '{n} точек истории',
+  'd2.sys.cert.until': 'Действует до {when}',
+  'd2.sys.cert.daysLeft': 'Осталось дней: {n}',
+  'd2.sys.cert.of90': '{left} из 90',
+  'd2.sys.cert.selfWarn': 'самоподписанный: браузеры покажут предупреждение',
+  'd2.sys.cert.issuer': 'выдал {name}',
+  'd2.sys.cert.renew': 'Пора продлевать: обычно это делает ваш обратный прокси (Caddy, Nginx Proxy Manager, certbot).',
+  'd2.sys.state': 'Состояние',
+  'd2.sys.diag': 'Диагностика',
+  'd2.sys.diag.desc': 'Проверяет базу, диск, бота, опрос серверов и доступ к Discord и GitHub.',
+  'd2.sys.diag.empty': 'Нажмите «Запустить проверку» вверху страницы: результат появится здесь.',
+  'd2.sys.c.ok': 'в порядке',
+  'd2.sys.c.warn': 'внимание',
+  'd2.sys.c.fail': 'ошибка',
+  'd2.sys.checked': 'Проверено {when}',
+  'd2.sys.backups': 'Резервные копии',
+  'd2.sys.backups.text': 'Скачать копию данных, настроить расписание или восстановить панель из файла.',
+  'd2.sys.backups.link': 'Обновления и копии',
+  'd2.gal.shot': 'Скриншот',
+  'd2.gal.shotN': 'Скриншот {n}',
+  'd2.gal.all': 'Все скриншоты',
+  'd2.gal.prev': 'Предыдущий',
+  'd2.gal.next': 'Следующий',
+  'd2.gal.best': 'Лучшее',
+  'd2.gal.uploadFail': 'Не удалось загрузить картинку (PNG, JPG или WebP до 8 МБ)',
+  'd2.gal.new': 'Новый скриншот',
+  'd2.gal.choose': 'Выберите картинку: PNG, JPG или WebP до 8 МБ',
+  'd2.gal.caption': 'Подпись (необязательно)',
+  'd2.gal.captionEx': 'Например: закат над замком',
+  'd2.gal.server': 'Сервер',
+  'd2.gal.noServer': 'Не указывать',
+  'd2.gal.moderated': 'Скриншот появится в галерее после проверки модератором.',
+  'd2.gal.send': 'Отправить',
+  'd2.gal.st.pending': 'на проверке',
+  'd2.gal.st.rejected': 'отклонён',
+  'd2.gal.t.login': 'Войдите, чтобы загрузить скриншот',
+  'd2.gal.t.type': 'Нужна картинка: PNG, JPG или WebP',
+  'd2.gal.drop': 'Отпустите, чтобы загрузить скриншот',
+  'd2.gal.title': 'Галерея',
+  'd2.gal.subtitle': 'Скриншоты игроков с наших серверов',
+  'd2.gal.upload': 'Загрузить скриншот',
+  'd2.gal.loginUpload': 'Войдите, чтобы загрузить',
+  'd2.gal.mine': 'Мои скриншоты на проверке',
+  'd2.gal.empty': 'Скриншотов пока нет',
+  'd2.gal.emptyText': 'Поделитесь красивым кадром из игры: он появится здесь после проверки.',
+  'd2.gal.uploadFirst': 'Загрузить первый скриншот',
+  'd2.gal.signInUpload': 'Войти и загрузить',
+  'd2.gal.t.published': 'Скриншот опубликован',
+  'd2.gal.t.sent': 'Скриншот отправлен на проверку',
+  'd2.ac.seasonsOrder': 'Сезоны по порядку',
+  'd2.ac.r.cheating': 'Читы',
+  'd2.ac.r.abuse': 'Оскорбления',
+  'd2.ac.r.griefing': 'Грифинг',
+  'd2.ac.r.other': 'Другое',
+  'd2.ac.rep.resolved': 'Жалоба закрыта: меры приняты',
+  'd2.ac.rep.dismissed': 'Жалоба отклонена',
+  'd2.ac.rep.title': 'Жалобы на игроков',
+  'd2.ac.rep.descClosed': 'Рассмотренные жалобы, новые сверху',
+  'd2.ac.rep.descWait': 'Ждут решения: {n}. Старые сверху',
+  'd2.ac.rep.descNone': 'Новых жалоб нет',
+  'd2.ac.rep.which': 'Какие жалобы',
+  'd2.ac.rep.open': 'Открытые',
+  'd2.ac.rep.handled': 'Рассмотренные',
+  'd2.ac.rep.nothingHandled': 'Пока ничего не рассматривали.',
+  'd2.ac.queueEmpty': 'Очередь пуста.',
+  'd2.ac.rep.othersTitle': 'Других открытых жалоб на этого игрока',
+  'd2.ac.rep.others': 'ещё жалоб: {n}',
+  'd2.ac.rep.server': 'Сервер:',
+  'd2.ac.rep.notePh': 'Комментарий для автора жалобы (необязательно)',
+  'd2.ac.rep.note': 'Комментарий',
+  'd2.ac.rep.actionTaken': 'Меры приняты',
+  'd2.ac.dismiss': 'Отклонить',
+  'd2.ac.rep.doneMark': '✅ Меры приняты',
+  'd2.ac.rep.dismissedMark': 'ℹ️ Отклонена',
+  'd2.ac.cm.hideTitle': 'Скрыть комментарии',
+  'd2.ac.cm.reason': 'Причина (её увидит автор)',
+  'd2.ac.cm.hide': 'Скрыть',
+  'd2.ac.cm.reasonEx': 'Например: оскорбления',
+  'd2.ac.cm.delTitle': 'Удалить комментариев: {n}?',
+  'd2.ac.cm.delText': 'Это нельзя отменить.',
+  'd2.ac.cm.delete': 'Удалить',
+  'd2.ac.cm.on': 'Комментарии включены',
+  'd2.ac.cm.off': 'Комментарии выключены',
+  'd2.ac.cm.title': 'Комментарии к новостям',
+  'd2.ac.cm.descQueue': 'В очереди: {n}. Сначала те, на кого пожаловались',
+  'd2.ac.cm.descNone': 'Жалоб и скрытых комментариев нет',
+  'd2.ac.cm.picked': 'Выбрано: {n}',
+  'd2.ac.cm.keep': 'Оставить',
+  'd2.ac.cm.pickOne': 'Выбрать комментарий {name}',
+  'd2.ac.cm.hidden': 'скрыт',
+  'd2.ac.cm.flags': 'жалоб: {n}',
+  'd2.ac.cm.show': 'Показать',
+  'd2.ac.g.pending': 'На проверке',
+  'd2.ac.g.later': 'Позже',
+  'd2.bot.p.noToken': 'ТОКЕН НЕ ЗАДАН',
+  'd2.bot.p.checking': 'ПРОВЕРКА',
+  'd2.bot.p.noGuilds': 'НЕТ НА СЕРВЕРАХ',
+  'd2.bot.p.connected': 'ПОДКЛЮЧЁН',
+  'd2.bot.p.connecting': 'ПОДКЛЮЧАЕТСЯ',
+  'd2.bot.p.error': 'ОШИБКА',
+  'd2.bot.p.idle': 'ОЖИДАНИЕ',
+  'd2.bot.lat': 'Задержка бота',
+  'd2.bot.ms': '{n} мс',
+  'd2.bot.latLabel': 'Задержка бота за последние часы, сейчас {n} мс',
+  'd2.bot.slowBad': 'Бот отвечает очень медленно: команды в Discord могут не успевать. Проверьте сеть и прокси.',
+  'd2.bot.slow': 'Бот отвечает медленнее обычного. Если так долго, проверьте сеть и прокси.',
+  'd2.bot.t.saved': 'Настройки сохранены',
+  'd2.bot.c.tokenTitle': 'Удалить токен?',
+  'd2.bot.c.tokenText': 'Бот перестанет обновлять карточки.',
+  'd2.bot.c.secretTitle': 'Удалить Client Secret?',
+  'd2.bot.c.secretText': 'Вход через Discord перестанет работать.',
+  'd2.bot.tokenWarn': 'Похоже, это не токен бота: он состоит из трёх частей через точки. Скопируйте его целиком в Developer Portal (Bot → Reset Token).',
+  'd2.bot.proxyWarn': 'Формат: адрес:порт:логин:пароль или socks5://логин:пароль@адрес:порт',
+  'd2.bot.title': 'Бот и вход через Discord',
+  'd2.bot.token': 'Токен бота',
+  'd2.bot.tokenSaved': 'сохранён ({hint}), введите новый для замены',
+  'd2.bot.tokenPaste': 'вставьте токен из Developer Portal',
+  'd2.bot.removeToken': 'Удалить сохранённый токен',
+  'd2.bot.proxy': 'Прокси (необязательно)',
+  'd2.bot.proxyNow': 'сейчас: {url}',
+  'd2.bot.proxyOff': 'Отключить прокси',
+  'd2.bot.proxyNote': 'Через прокси идёт только связь бота с Discord. Опрос игровых серверов всегда идёт напрямую.',
+  'd2.bot.login': 'Вход через Discord',
+  'd2.bot.on': 'ВКЛЮЧЁН',
+  'd2.bot.notSet': 'НЕ НАСТРОЕН',
+  'd2.bot.secretSaved': 'сохранён, введите новый для замены',
+  'd2.bot.secretNone': 'не задан',
+  'd2.bot.removeSecret': 'Удалить Client Secret',
+  'd2.bot.redirectNote': 'Добавьте этот адрес в Developer Portal: OAuth2 → Redirects. Client Secret скопируйте на той же странице OAuth2.',
+  'd2.bot.inviteNote': 'Откроется Discord: выберите сервер и подтвердите права.',
+  'd2.bot.savedNote': 'Сохранено. Бот переподключится в течение 10 секунд.',
+  'd2.bot.secretsNote': 'Токен, Client Secret и прокси сохраняются только кнопкой: это секреты, их не отправляем «на лету».',
+  'd2.brand.nameEmpty': 'Введите название сообщества',
+  'd2.brand.nameLong': 'Не длиннее 32 символов',
+  'd2.brand.colorFmt': 'Цвет должен быть в формате #RRGGBB',
+  'd2.brand.bar': 'оформление',
+  'd2.brand.uploadFail': 'Не удалось загрузить',
+  'd2.brand.t.updated': 'Логотип обновлён',
+  'd2.brand.t.reset': 'Логотип сброшен',
+  'd2.brand.title': 'Оформление',
+  'd2.brand.desc': 'Название, цвет и логотип вашего сообщества. Они видны в панели, на странице входа и в подвале сообщений Discord. Изменения сохраняются сами.',
+  'd2.brand.visitorTheme': 'Тема для посетителей',
+  'd2.brand.t.theme': 'Тема по умолчанию сохранена',
+  'd2.brand.dark': 'Тёмная (обложки игр смотрятся лучше всего)',
+  'd2.brand.light': 'Светлая',
+  'd2.brand.auto': 'Как в системе посетителя',
+  'd2.brand.themeNote': 'Действует для тех, кто сам не выбирал тему кнопкой в шапке.',
+  'd2.brand.theme': 'Тема',
+  'd2.brand.gameThemes': 'Темы игр',
+  'd2.brand.gameThemesNote': 'Цвет, свечение страницы и, для V Rising и Icarus, приглушённая картинка игры в шапке каждой страницы.',
+  'd2.brand.ownColor': 'Свой цвет',
+  'd2.brand.preview': 'Как это выглядит',
+  'd2.brand.tagline': 'Мониторинг игровых серверов',
+  'd2.brand.button': 'Кнопка',
+  'd2.brand.logo': 'Логотип',
+  'd2.brand.logoNote': 'PNG, JPG или WebP до 3 МБ, лучше квадрат',
+  'd2.pl.new': 'новый',
+  'd2.pl.night': 'ночью',
+  'd2.pl.morning': 'утром',
+  'd2.pl.day': 'днём',
+  'd2.pl.evening': 'вечером',
+  'd2.pl.missing': 'Такого игрока не видели',
+  'd2.pl.missingText': 'Ник «{name}» не появлялся на серверах за последние 90 дней.',
+  'd2.pl.toCommunity': 'К сообществу',
+  'd2.pl.community': 'Сообщество',
+  'd2.pl.inGame': 'сейчас в игре',
+  'd2.pl.was': 'был {ago}',
+  'd2.pl.first': 'впервые {when}',
+  'd2.pl.places': 'Места среди игроков',
+  'd2.pl.week': 'за неделю',
+  'd2.pl.month': 'за месяц',
+  'd2.pl.allTime': 'за всё время',
+  'd2.pl.hours': 'Часов',
+  'd2.pl.visits': 'Визитов',
+  'd2.pl.days': 'Дней в игре',
+  'd2.pl.streak': 'Подряд',
+  'd2.pl.when': 'Когда играет',
+  'd2.pl.usually': 'Чаще всего {part}, около {hh}:00',
+  'd2.pl.fewData': 'Пока мало данных',
+  'd2.pl.hoursLabel': 'Часы в игре по времени суток',
+  'd2.pl.where': 'Где играет',
+  'd2.pl.nVisits': '{n} визит|{n} визита|{n} визитов',
+  'd2.pl.activity': 'Активность за 90 дней',
+  'd2.pl.ach': 'Достижения',
+  'd2.pl.achOf': '{a} из {b}',
+  'd2.pl.recent': 'Последние визиты',
+  'd2.mt.defName': 'Технические работы',
+  'd2.mt.st.active': 'Идёт сейчас',
+  'd2.mt.st.planned': 'Запланировано',
+  'd2.mt.st.repeat': 'Повторяется',
+  'd2.mt.st.past': 'Завершено',
+  'd2.mt.deleted': 'Окно «{name}» удалено',
+  'd2.mt.title': 'Обслуживание',
+  'd2.mt.subtitle': 'Окна технических работ: без ложных тревог',
+  'd2.mt.hint': 'Пока идёт окно, сервер помечается как «Обслуживание», а оповещения о падении не отправляются.',
+  'd2.mt.help': 'Укажите сервер (или все сразу) и время работ. Окно может повторяться каждый день или неделю. Во время окна на карточках сервера показывается «Тех. работы до …», а падение не считается сбоем и не попадает в оповещения.',
+  'd2.mt.add': 'Добавить окно',
+  'd2.mt.quickWin': 'Быстрые окна',
+  'd2.mt.now30': 'Сейчас на 30 минут',
+  'd2.mt.tonight': 'Сегодня ночью 04:00–05:00',
+  'd2.mt.empty': 'Окон обслуживания нет',
+  'd2.mt.emptyText': 'Создайте окно перед обновлением или перезагрузкой сервера, и панель не будет считать это сбоем.',
+  'd2.mt.serverNo': 'Сервер №{id}',
+  'd2.mt.next': 'следующее {range}',
+  'd2.mt.editWin': 'Изменить окно «{name}»',
+  'd2.mt.delWin': 'Удалить окно «{name}»',
+  'd2.mt.t.added': 'Окно добавлено',
+  'd2.mt.t.saved': 'Окно сохранено',
+  'd2.mt.newWin': 'Новое окно обслуживания',
+  'd2.mt.editTitle': 'Изменить окно',
+  'd2.mt.nameEx': 'Например, обновление игры',
+  'd2.mt.quickTime': 'Быстрое время',
+  'd2.mt.start': 'Начало',
+  'd2.mt.end': 'Окончание',
+  'd2.mt.repeat': 'Повтор',
+  'd2.mt.once': 'Один раз',
+  'd2.mt.daily': 'Каждый день (до 24 часов)',
+  'd2.mt.weekly': 'Каждую неделю',
+  'd2.mt.tzNote': 'Время указывается по часам вашего браузера. Окно не длиннее 7 суток.',
+  'd2.bk.copies': 'копия|копии|копий',
+  'd2.bk.total': 'всего {size}',
+  'd2.bk.last': 'последняя: {ago}',
+  'd2.bk.late': 'Расписание давно не срабатывало',
+  'd2.bk.countLabel': 'Копий: {n}',
+  'd2.bk.auto': 'авто',
+  'd2.bk.manual': 'вручную',
+  'd2.bk.kb': '{v} КБ',
+  'd2.bk.b': '{v} Б',
+  'd2.bk.getFail': 'Не удалось получить копию',
+  'd2.bk.encTitle': 'Архив зашифрован',
+  'd2.bk.pass': 'Парольная фраза',
+  'd2.bk.encText': 'Введите парольную фразу, с которой был создан архив «{what}».',
+  'd2.bk.continue': 'Продолжить',
+  'd2.bk.passEnter': 'Введите парольную фразу',
+  'd2.bk.t.downloaded': 'Копия скачана',
+  'd2.bk.t.created': 'Копия создана',
+  'd2.bk.c.delTitle': 'Удалить копию?',
+  'd2.bk.c.delText': 'Файл «{name}» будет удалён с сервера без возможности восстановления.',
+  'd2.bk.t.deleted': 'Копия удалена',
+  'd2.bk.t.accepted': 'Копия принята, панель перезапускается…',
+  'd2.bk.c.restoreTitle': 'Восстановить из этой копии?',
+  'd2.bk.c.restoreText': 'Все текущие данные панели будут заменены копией «{name}» от {when}. Текущая база будет сохранена на сервере как coregsm.db.before-restore. Панель перезапустится.',
+  'd2.bk.restore': 'Восстановить',
+  'd2.bk.c.fileTitle': 'Восстановить из файла?',
+  'd2.bk.c.fileText': 'Все данные панели будут заменены копией «{name}». Текущая база будет сохранена на сервере как coregsm.db.before-restore. Панель перезапустится.',
+  'd2.bk.restoreFail': 'Не удалось восстановить копию',
+  'd2.bk.e.https': 'Адрес для отправки должен начинаться с https://',
+  'd2.bk.e.keep': 'Хранить можно от 1 до 30 копий',
+  'd2.bk.t.settings': 'Настройки копий сохранены',
+  'd2.bk.desc': 'В копию входят база (серверы, привязки, пользователи, новости, настройки), картинки новостей и логотип. Внутри хранятся секреты: токен бота и хэши паролей. Храните файлы так же бережно, как пароль, лучше зашифрованными.',
+  'd2.bk.preparing': 'Готовлю…',
+  'd2.bk.full': 'Скачать полную копию',
+  'd2.bk.creating': 'Создаю…',
+  'd2.bk.create': 'Создать копию на сервере',
+  'd2.bk.restoring': 'Восстанавливаю…',
+  'd2.bk.fromFile': 'Восстановить из файла',
+  'd2.bk.schedule': 'Расписание и хранение',
+  'd2.bk.auto2': 'Автоматические копии',
+  'd2.bk.everyDay': 'Каждый день',
+  'd2.bk.keep': 'Сколько копий хранить (1-30)',
+  'd2.bk.remote': 'Отправлять копию по адресу (необязательно)',
+  'd2.bk.remoteHint': 'Адрес должен начинаться с https://. Копия отправляется методом PUT, подходит для WebDAV/Nextcloud и подписанных ссылок S3.',
+  'd2.bk.remoteOff': 'Отключить отправку',
+  'd2.bk.lastSend': 'Последняя отправка:',
+  'd2.bk.ok': 'успешно',
+  'd2.bk.passLabel': 'Парольная фраза для шифрования (необязательно)',
+  'd2.bk.passOn': 'шифрование включено, введите новую фразу для замены',
+  'd2.bk.passOff': 'не задана: копии не шифруются',
+  'd2.bk.passWarn': 'Если потерять парольную фразу, зашифрованные архивы нельзя будет прочитать. Восстановить её невозможно.',
+  'd2.bk.encOff': 'Отключить шифрование новых копий',
+  'd2.bk.onServer': 'Копии на сервере',
+  'd2.bk.empty': 'Копий пока нет',
+  'd2.bk.emptyText': 'Нажмите «Создать копию на сервере» или включите расписание.',
+  'd2.bk.autoU': 'АВТО',
+  'd2.bk.manualU': 'ВРУЧНУЮ',
+  'd2.bk.encrypted': 'ЗАШИФРОВАНА',
+  'd2.bk.actions': 'Действия: {name}',
+  'd2.set.bot.hint': 'Здесь вы подключаете Discord-бота: он публикует сообщения и новости. Токен берётся в Discord Developer Portal.',
+  'd2.set.bot.h0': 'Как получить токен:',
+  'd2.set.bot.h1': 'Откройте discord.com/developers, раздел Applications, и создайте приложение.',
+  'd2.set.bot.h2': 'На вкладке Bot нажмите Reset Token и скопируйте токен.',
+  'd2.set.bot.h3': 'Вставьте его ниже и сохраните, затем нажмите «Пригласить бота на сервер».',
+  'd2.set.bot.h4': 'Прокси нужен только если Discord недоступен с вашего сервера.',
+  'd2.set.brand.hint': 'Название, цвет и логотип сообщества: их видят все посетители панели и участники в подвале сообщений Discord.',
+  'd2.set.brand.help': 'Готовые темы меняют цвета всей панели сразу. Изменения можно посмотреть сразу, а сохраняются кнопкой «Сохранить» внизу; пока идёт сохранение или если оно не удалось, цвета видны только вам как предпросмотр. «Акцент по игре» действует только в вашем браузере.',
+  'd2.set.sec.hint': 'Пароль администратора и сведения о доступе: кто может входить в панель и регистрироваться.',
+  'd2.set.sec.help': 'Пароль нужно менять, если им делились. Переключатели регистрации и правила сообщества находятся в разделе «Пользователи».',
+  'd2.set.upd.hint': 'Установка новых версий панели и резервные копии данных. Перед обновлением сохраняется копия базы, поэтому его можно откатить.',
+  'd2.set.upd.help': 'Копия содержит серверы, привязки, пользователей, новости и токен бота, поэтому храните файлы бережно. Автоматические копии включаются расписанием ниже.',
+  'd2.set.title': 'Настройки',
+  'd2.set.subtitle': 'Бот, оформление, безопасность, обновления и копии',
+  'd2.set.sections': 'Разделы настроек',
+  'd2.set.updAvail': 'Доступно обновление',
+  'd2.set.access': 'Вход и доступ',
+  'd2.set.access1': 'Кто может открыть панель, регистрироваться и какие у людей роли, настраивается в разделе «Пользователи».',
+  'd2.set.access2': 'Список ваших входов с устройств и выход со всех остальных находится в профиле.',
+  'd2.set.usersLink': 'Пользователи и доступ',
+  'd2.set.sessionsLink': 'Мои сеансы в профиле',
+  'd2.set.domain1': 'Домен и порты задаются при установке и хранятся в',
+  'd2.set.domain2': '. Изменить их можно командой',
+  'd2.set.domain3': 'на сервере (пункт «Домен и прокси»).',
+  'd2.su.step.account': 'Аккаунт',
+  'd2.su.step.discord': 'Discord',
+  'd2.su.step.done': 'Готово',
+  'd2.su.e.user': 'Логин: 3-32 символа: буквы, цифры, пробел между словами, _ . -',
+  'd2.su.e.pass': 'Пароль должен быть не короче 10 символов',
+  'd2.su.e.repeat': 'Пароли не совпадают',
+  'd2.su.subtitle': 'Первоначальная настройка панели',
+  'd2.su.steps': 'Шаги',
+  'd2.su.code': 'Код установки',
+  'd2.su.codeEx': 'из вывода install.sh',
+  'd2.su.codeHint': 'Код показан в конце установки. Если потерялся:',
+  'd2.su.login': 'Логин администратора',
+  'd2.su.passLabel': 'Пароль (от 10 символов)',
+  'd2.su.repeatLabel': 'Повторите пароль',
+  'd2.su.match': 'Пароли совпадают ✓',
+  'd2.su.next': 'Далее',
+  'd2.su.botNote': 'Бот публикует карточки серверов в Discord. Это можно настроить и позже, в разделе «Настройки».',
+  'd2.su.token': 'Токен Discord-бота',
+  'd2.su.optional': 'необязательно',
+  'd2.su.proxy': 'Прокси для Discord',
+  'd2.su.skip': 'Пропустить',
+  'd2.su.creating': 'Создаю…',
+  'd2.su.finish': 'Завершить',
+  'd2.su.created': 'Администратор «{name}» создан.',
+  'd2.su.todo1': 'Добавьте игровой сервер на вкладке «Серверы».',
+  'd2.su.todo2a': 'Привяжите Discord-канал на вкладке «Discord».',
+  'd2.su.todo2b': 'Укажите токен бота в «Настройки», затем привяжите канал на вкладке «Discord».',
+  'd2.su.open': 'Открыть панель',
+  'd2.ws.a.week': 'за неделю',
+  'd2.ws.a.day': 'за сутки',
+  'd2.ws.a.3h': 'за 3 часа',
+  'd2.ws.a.h': 'за час',
+  'd2.ws.a.10m': 'за 10 мин',
+  'd2.ws.a.30m': 'за 30 мин',
+  'd2.ws.a.5m': 'за 5 мин',
+  'd2.ws.a.1m': 'за минуту',
+  'd2.ws.s.window': 'Окно обслуживания',
+  'd2.ws.s.commands': 'Команды вайпа',
+  'd2.ws.s.season': 'Новый сезон',
+  'd2.ws.s.news': 'Новость',
+  'd2.ws.s.discord': 'Сообщение в Discord',
+  'd2.ws.s.say': 'Игровой чат',
+  'd2.ws.s.missed': 'Пропущен',
+  'd2.ws.st.scheduled': 'запланирован',
+  'd2.ws.st.done': 'выполнен',
+  'd2.ws.st.missed': 'пропущен',
+  'd2.ws.st.cancelled': 'отменён',
+  'd2.ws.cancel': 'Отменить',
+  'd2.ws.defName': 'Вайп',
+  'd2.ws.defNewsTitle': 'Вайп на {server} прошёл',
+  'd2.ws.defNewsText': 'Сервер {server} вайпнут {date} в {time}. Новая карта уже ждёт: заходите!',
+  'd2.ws.title': 'Сценарий вайпа',
+  'd2.ws.desc': 'Один сценарий на весь вайп: предупреждения в Discord и игровом чате, окно обслуживания, команды вайпа с новым сидом, новый сезон и новость «вайп прошёл». Каждый шаг выполняется один раз.',
+  'd2.ws.none': 'вайп не запланирован',
+  'd2.ws.scenarios': 'Сценарии',
+  'd2.ws.c.title': 'Отменить «{name}»?',
+  'd2.ws.c.text': 'Предупреждения и шаги вайпа выполняться не будут.',
+  'd2.ws.c.confirm': 'Отменить вайп',
+  'd2.ws.wipes': 'Вайпы: {name}',
+  'd2.ws.empty': 'Сценариев пока нет.',
+  'd2.ws.errors': 'ошибок: {n}',
+  'd2.ws.schedule': 'Запланировать вайп',
+  'd2.ws.e.date': 'Укажите дату и время вайпа',
+  'd2.ws.t.saved': 'Сценарий сохранён',
+  'd2.ws.edit': 'Изменить вайп',
+  'd2.ws.when': 'Когда (ваше время)',
+  'd2.ws.window': 'Окно обслуживания, мин',
+  'd2.ws.g1': '1. Предупреждения',
+  'd2.ws.inDiscord': 'В Discord',
+  'd2.ws.inGame': 'В игровом чате (нужен RCON)',
+  'd2.ws.channel': 'Канал Discord',
+  'd2.ws.channelNote': 'Не выбран: сообщения уйдут в канал оповещений.',
+  'd2.ws.g2': '2. В момент вайпа',
+  'd2.ws.rcon': 'Команды RCON, по одной в строке (необязательно)',
+  'd2.ws.seedLabel': 'Сид {seed}',
+  'd2.ws.seed.none': 'Не менять',
+  'd2.ws.seed.random': 'Случайный (выберет панель)',
+  'd2.ws.seed.fixed': 'Свой',
+  'd2.ws.seed': 'Сид',
+  'd2.ws.season': 'Новый сезон (пусто: не начинать)',
+  'd2.ws.seasonEx': 'например Сезон {date}',
+  'd2.ws.vars': 'Окно обслуживания открывается всегда, чтобы вайп не считался сбоем. В командах и текстах работают {server}, {date}, {time} и {seed}.',
+  'd2.ws.g3': '3. Новость после вайпа',
+  'd2.ws.newsChannel': 'Канал новостей (не выбран: новости не будет)',
+  'd2.ws.newsTitle': 'Заголовок',
+  'd2.ws.newsText': 'Текст',
+  'd2.ws.mention': 'Упоминание',
+  'd2.ws.mention.none': 'Без упоминания',
+  'd2.rp.off': 'выключено',
+  'd2.rp.on': 'включено',
+  'd2.rp.everyDay': 'каждый день',
+  'd2.rp.noDays': 'дни не выбраны',
+  'd2.rp.title': 'Плановые перезапуски',
+  'd2.rp.desc': 'Панель заранее предупредит игроков в Discord и в игровом чате, на время перезапуска откроет окно обслуживания (это не будет считаться сбоем) и, если настроен RCON, сама отправит серверу команду перезапуска.',
+  'd2.rp.at': '{days} в {time}',
+  'd2.rp.next': 'следующий {when}',
+  'd2.rp.rconOn': 'RCON подключён',
+  'd2.rp.lastTime': 'Последний раз',
+  'd2.rp.configure': 'Настроить',
+  'd2.rp.t.saved': 'Перезапуски сохранены',
+  'd2.rp.noAnswer': 'Сервер выполнил команду и ничего не ответил',
+  'd2.rp.c.title': 'Перезапустить «{name}» сейчас?',
+  'd2.rp.c.text': 'Без предупреждения игроков: откроется окно обслуживания и, если настроен RCON, уйдёт команда перезапуска.',
+  'd2.rp.c.confirm': 'Перезапустить',
+  'd2.rp.restarts': 'Перезапуски: {name}',
+  'd2.rp.bySchedule': 'Перезапускать по расписанию',
+  'd2.rp.days': 'Дни',
+  'd2.rp.time': 'Время',
+  'd2.rp.warn': 'Предупредить, мин',
+  'd2.rp.lasts': 'Длится, мин',
+  'd2.rp.panelTime': 'Время панели: {tz}. Меньше всего игроков обычно в {hh}:00.',
+  'd2.rp.setTime': 'Поставить это время',
+  'd2.rp.channel': 'Канал Discord для предупреждений',
+  'd2.rp.rcon': 'RCON (необязательно)',
+  'd2.rp.rconNote': 'Для Minecraft, CS, ARK, V Rising, Palworld и других игр с Source RCON. Rust (WebRCON) пока не поддерживается.',
+  'd2.rp.rconPort': 'Порт RCON',
+  'd2.rp.portEx': 'например 25575',
+  'd2.rp.passKeep': 'Пароль (пусто: оставить прежний)',
+  'd2.rp.connected': 'Подключён, порт {port}',
+  'd2.rp.notConnected': 'Не подключён: порт и пароль задаёт администратор',
+  'd2.rp.cmd': 'Команда перезапуска',
+  'd2.rp.cmdEx': 'например stop, quit или shutdown',
+  'd2.rp.say': 'Сообщение в игровой чат ({text} — текст предупреждения)',
+  'd2.rp.cmdNote': 'Команда только останавливает сервер: запустить его снова должен хостинг или сервис, который следит за процессом.',
+  'd2.rp.testCmd': 'Проверить команду',
+  'd2.rp.run': 'Выполнить',
+  'd2.rp.now': 'Перезапустить сейчас',
+  'd2.dx.k.online': 'Сейчас в игре',
+  'd2.dx.k.top': 'Топ-{n} недели по часам',
+  'd2.dx.k.topOne': 'Игрок недели (больше всех часов за 7 дней)',
+  'd2.dx.k.hours': 'Наиграл {n} ч и больше',
+  'd2.dx.tpl1': '🟢 Онлайн: {players}',
+  'd2.dx.tpl2': '{status} Онлайн: {players}/{max}',
+  'd2.dx.tpl3': '🎮 Игроков: {players} · серверов {online}/{servers}',
+  'd2.dx.allServers': 'все серверы',
+  'd2.dx.delQ': 'Удалить?',
+  'd2.dx.roles': 'Автороли',
+  'd2.dx.rolesDesc': 'Бот сам выдаёт и снимает роли в Discord: «Сейчас в игре», «Игрок недели», «Ветеран 100 ч». Роли получают только игроки, которые связали Discord с игровым ником (команда /register).',
+  'd2.dx.addRole': 'Добавить роль',
+  'd2.dx.noRoles': 'Бот не видит ролей, которые может выдавать. Дайте боту право «Управлять ролями» и поднимите его роль выше тех, что он будет выдавать.',
+  'd2.dx.noAuto': 'Пока нет ни одной автороли.',
+  'd2.dx.members': 'сейчас у {n} игрока|сейчас у {n} игроков|сейчас у {n} игроков',
+  'd2.dx.delRole': 'Удалить автороль',
+  'd2.dx.delRoleText': 'Бот перестанет выдавать эту роль. Уже выданные роли останутся у игроков.',
+  'd2.dx.counter': 'Счётчик онлайна в голосовом канале',
+  'd2.dx.counterDesc': 'Бот переименовывает голосовой канал в живой счётчик, например «🟢 Онлайн: 42». Discord разрешает менять название канала нечасто, поэтому счётчик обновляется раз в 5 минут.',
+  'd2.dx.addCounter': 'Добавить счётчик',
+  'd2.dx.noVoice': 'Бот не видит голосовых каналов, которые может переименовать. Дайте ему право «Управлять каналами» на нужном канале.',
+  'd2.dx.channel': 'Канал «{name}»',
+  'd2.dx.onGuild': 'на «{name}»',
+  'd2.dx.template': 'шаблон',
+  'd2.dx.delCounter': 'Удалить счётчик',
+  'd2.dx.delCounterText': 'Бот перестанет обновлять название этого канала.',
+  'd2.dx.t.role': 'Автороль добавлена: бот начнёт выдавать её в течение минуты',
+  'd2.dx.t.counter': 'Счётчик добавлен: бот переименует канал в течение минуты',
+  'd2.dx.newRole': 'Новая автороль',
+  'd2.dx.newCounter': 'Новый счётчик',
+  'd2.dx.guild': 'Сервер Discord',
+  'd2.dx.role': 'Роль',
+  'd2.dx.voice': 'Голосовой канал',
+  'd2.dx.choose': 'Выберите…',
+  'd2.dx.whom': 'Кому выдавать',
+  'd2.dx.w.online': 'Тем, кто сейчас в игре (снимается при выходе)',
+  'd2.dx.w.top': 'Самым активным за 7 дней',
+  'd2.dx.w.hours': 'Наигравшим N часов (за последние 90 дней)',
+  'd2.dx.howManyHours': 'Сколько часов',
+  'd2.dx.howManyTop': 'Сколько игроков из топа',
+  'd2.dx.chName': 'Название канала',
+  'd2.dx.vars': '{players} игроков, {max} мест, {online} серверов в сети, {servers} всего, {status} 🟢/🟡/🔴, {name} название сервера',
+  'd2.dx.countBy': 'Считать по серверу',
+  'd2.dx.add': 'Добавить',
+  'd2.md.chars': '{value} из {max} символов',
+  'd2.md.text': 'текст',
+  'd2.md.item': 'пункт',
+  'd2.md.code': 'код',
+  'd2.md.linkWord': 'ссылка',
+  'd2.md.linkText': 'текст ссылки',
+  'd2.md.formatting': 'Форматирование: {label}',
+  'd2.md.bold': 'Жирный (Ctrl+B)',
+  'd2.md.bold.k': 'Ж',
+  'd2.md.italic': 'Курсив (Ctrl+I)',
+  'd2.md.italic.k': 'К',
+  'd2.md.underline': 'Подчёркнутый (Ctrl+U)',
+  'd2.md.underline.k': 'Ч',
+  'd2.md.strike': 'Зачёркнутый',
+  'd2.md.strike.k': 'З',
+  'd2.md.spoiler': 'Спойлер',
+  'd2.md.inlineCode': 'Код в строке',
+  'd2.md.codeBlock': 'Блок кода',
+  'd2.md.heading': 'Заголовок',
+  'd2.md.h1': 'Заголовок 1',
+  'd2.md.h2': 'Заголовок 2',
+  'd2.md.h3': 'Заголовок 3',
+  'd2.md.small': 'Мелкий текст',
+  'd2.md.quote': 'Цитата',
+  'd2.md.bullets': 'Маркированный список',
+  'd2.md.numbers': 'Нумерованный список',
+  'd2.md.link': 'Ссылка (Ctrl+K)',
+  'd2.md.emoji': 'Эмодзи',
+  'd2.md.variable': 'Вставить переменную',
+  'd2.md.emojiN': 'Эмодзи {e}',
+  'd2.md.variables': 'Переменные',
+  'd2.md.emojiHints': 'Подсказки эмодзи',
+  'd2.rv.of5': '{n} из 5',
+  'd2.rv.w1': 'Ужасно',
+  'd2.rv.w2': 'Плохо',
+  'd2.rv.w3': 'Нормально',
+  'd2.rv.w4': 'Хорошо',
+  'd2.rv.w5': 'Отлично',
+  'd2.rv.s.new': 'Новые',
+  'd2.rv.s.useful': 'Полезные',
+  'd2.rv.s.high': 'Высокие',
+  'd2.rv.s.low': 'Низкие',
+  'd2.rv.rating': 'Оценка',
+  'd2.rv.e.stars': 'Поставьте оценку: от 1 до 5 звёзд',
+  'd2.rv.t.updated': 'Отзыв обновлён',
+  'd2.rv.t.thanks': 'Спасибо за отзыв!',
+  'd2.rv.t.deleted': 'Отзыв удалён',
+  'd2.rv.none': 'Отзывов пока нет',
+  'd2.rv.beFirst': ': станьте первым.',
+  'd2.rv.leave': 'Оставить отзыв',
+  'd2.rv.count': '{n} отзыв|{n} отзыва|{n} отзывов',
+  'd2.rv.reco45': 'Оценки 4 и 5',
+  'd2.rv.reco': '{p}% рекомендуют',
+  'd2.rv.ratings': 'Оценки',
+  'd2.rv.showAll': 'Показать все отзывы',
+  'd2.rv.onlyN': 'Только отзывы на {n} из 5',
+  'd2.rv.yours': 'Ваш отзыв',
+  'd2.rv.hidden': 'скрыт модератором',
+  'd2.rv.edit': 'Изменить отзыв',
+  'd2.rv.how': 'Как вам сервер?',
+  'd2.rv.ph': 'Что понравилось, что стоит улучшить (необязательно)',
+  'd2.rv.textLabel': 'Текст отзыва',
+  'd2.rv.signIn': 'Войдите',
+  'd2.rv.signInRest': ', чтобы оставить отзыв.',
+  'd2.rv.order': 'Порядок отзывов',
+  'd2.rv.adminReply': 'Ответ администрации',
+  'd2.rv.replyPh': 'Ответ увидят все. Пустой ответ удалит прежний.',
+  'd2.rv.reply': 'Ответить',
+  'd2.rv.helpfulTitle': 'Отзыв полезен',
+  'd2.rv.signInMark': 'Войдите, чтобы отметить',
+  'd2.rv.helpful': 'Полезно',
+  'd2.rv.editReply': 'Изменить ответ',
+  'd2.an.dl.0': 'в понедельник',
+  'd2.an.dl.1': 'во вторник',
+  'd2.an.dl.2': 'в среду',
+  'd2.an.dl.3': 'в четверг',
+  'd2.an.dl.4': 'в пятницу',
+  'd2.an.dl.5': 'в субботу',
+  'd2.an.dl.6': 'в воскресенье',
+  'd2.an.dShort': '{n} дн',
+  'd2.an.busiestLabel': 'Больше всего игроков {when}',
+  'd2.an.dayAt': '{day} в {time}',
+  'd2.an.cell': '{day} {time}: в среднем {avg}, максимум {peak}',
+  'd2.an.cellNone': '{day} {time}: нет данных',
+  'd2.an.less': 'меньше',
+  'd2.an.more': 'больше',
+  'd2.an.avgFor': 'средние за {n} день|средние за {n} дня|средние за {n} дней',
+  'd2.an.peak': 'Пик',
+  'd2.an.avgPlayers': 'в среднем {avg} игрок|в среднем {avg} игрока|в среднем {avg} игроков',
+  'd2.an.quietest': 'Тише всего',
+  'd2.an.restart': 'Рестарт',
+  'd2.an.restartText': 'лучше всего в {time}: в это время меньше всего игроков в любой день',
+  'd2.an.uniqueLabel': 'Уникальных игроков в день: до {max}',
+  'd2.an.barTitle': '{day}: {players} игроков, новых {fresh}',
+  'd2.an.returned': 'вернулись',
+  'd2.an.fresh': 'новые',
+  'd2.an.dayLine': '{day}: {n} игрок, новых {fresh}, {hours} ч в игре, пик {peak}|{day}: {n} игрока, новых {fresh}, {hours} ч в игре, пик {peak}|{day}: {n} игроков, новых {fresh}, {hours} ч в игре, пик {peak}',
+  'd2.an.hoverBar': 'наведите на столбец',
+  'd2.an.noNew': 'Новых игроков за шесть недель не было.',
+  'd2.an.firstWeek': 'Неделя первого входа',
+  'd2.an.players': 'Игроков',
+  'd2.an.plusWeeks': '+{n} нед',
+  'd2.an.since': 'с {date}',
+  'd2.an.byHours': 'По часам',
+  'd2.an.byVisits': 'По визитам',
+  'd2.an.byRecent': 'По давности',
+  'd2.an.nobody': 'За этот период никто не играл.',
+  'd2.an.order': 'Порядок',
+  'd2.an.loading': 'Загрузка аналитики',
+  'd2.an.playersFor': 'Игроки за {n} день|Игроки за {n} дня|Игроки за {n} дней',
+  'd2.an.k.unique': 'Уникальных игроков',
+  'd2.an.k.uniqueHint': 'сегодня {dau} · за неделю {wau} · за месяц {mau}',
+  'd2.an.k.new': 'Новых',
+  'd2.an.k.newHint': '{p}% от всех, вернулись {n}',
+  'd2.an.k.visit': 'Обычный визит',
+  'd2.an.k.visitHint': 'в среднем {avg} · {visits}',
+  'd2.an.k.hours': 'Часов в игре',
+  'd2.an.k.hoursHint': 'все игроки вместе',
+  'd2.an.when': 'Когда играют',
+  'd2.an.byDay': 'Игроки по дням',
+  'd2.an.sessionLen': 'Сколько длится визит',
+  'd2.an.retention': 'Возвращаются ли новички',
+  'd2.an.retentionText': 'Доля игроков, впервые зашедших в эту неделю, которые вернулись через одну, две и больше недель.',
+  'd2.an.topTitle': 'Больше всех в игре',
+  'd2.bb.defName': 'Плановые работы',
+  'd2.bb.partial': 'Создано окон: {ok} из {total}',
+  'd2.bb.created1': 'Окно обслуживания создано',
+  'd2.bb.createdN': 'Окна обслуживания созданы: {n}',
+  'd2.bb.title': 'Окно обслуживания',
+  'd2.bb.text': 'Для каждого из выбранных серверов ({n}) будет создано своё окно. Уведомления на это время приглушаются, простой не считается в аптайм.',
+  'd2.bb.duration': 'Длительность',
+  'd2.bb.d30': '30 минут',
+  'd2.bb.d60': '1 час',
+  'd2.bb.d120': '2 часа',
+  'd2.bb.until': 'До времени',
+  'd2.bb.creating': 'Создаём…',
+  'd2.bb.create': 'Создать окна',
+  'd2.bb.t.polledFail': 'Опрошено {ok} из {total}, ошибок: {fail}',
+  'd2.bb.t.polled1': 'Сервер опрошен',
+  'd2.bb.t.polledN': 'Опрошено серверов: {n}',
+  'd2.bb.t.allFav': 'Все выбранные уже в избранном',
+  'd2.bb.t.noneFav': 'Выбранных нет в избранном',
+  'd2.bb.t.favFail': 'Не удалось изменить: {n}',
+  'd2.bb.t.favAdded': 'В избранное добавлено: {n}',
+  'd2.bb.t.favRemoved': 'Убрано из избранного: {n}',
+  'd2.bb.actions': 'Действия с выбранными серверами',
+  'd2.bb.progress': 'Опрос {a} из {b}…',
+  'd2.bb.none': 'Ничего не выбрано',
+  'd2.bb.pollNow': 'Опросить сейчас',
+  'd2.bb.maintenance': 'Окно обслуживания…',
+  'd2.bb.addFav': 'Добавить в избранное',
+  'd2.bb.done': 'Готово (Esc)',
+  'd2.pr.copied': 'Скопировано',
+  'd2.pr.c.keyTitle': 'Новый ключ для «{name}»?',
+  'd2.pr.c.keyText': 'Старый ключ перестанет работать: точку нужно будет перезапустить с новым.',
+  'd2.pr.c.keyConfirm': 'Выдать новый',
+  'd2.pr.c.delTitle': 'Удалить «{name}»?',
+  'd2.pr.c.delText': 'Её проверки пропадут со страниц серверов.',
+  'd2.pr.title': 'Точки проверки',
+  'd2.pr.desc': 'Небольшая программа на другом компьютере или VPS (в другом городе, у другого провайдера) проверяет игровые серверы оттуда. Если панель сервер не видит, а точки видят, — дело в сети между ними, а не в сервере. Игроки увидят на странице сервера, откуда он доступен.',
+  'd2.pr.add': 'Добавить точку',
+  'd2.pr.none': 'Точек пока нет: серверы проверяет только сама панель.',
+  'd2.pr.alive': 'на связи',
+  'd2.pr.dead': 'не на связи',
+  'd2.pr.seen': 'на связи {ago}',
+  'd2.pr.sees': 'видит {a} из {b}',
+  'd2.pr.never': 'ещё ни разу не выходила на связь',
+  'd2.pr.newKey': 'Новый ключ',
+  'd2.pr.probe': 'Точка «{name}»',
+  'd2.pr.run': 'Запустите на нужной машине одну из команд. Ключ показывается только сейчас: сохраните команду, если понадобится повторить.',
+  'd2.pr.docker': 'Docker (проще всего)',
+  'd2.pr.node': 'Или Node.js 18+',
+  'd2.pr.appears': 'Точка появится «на связи» через минуту после запуска.',
+  'd2.pr.newProbe': 'Новая точка проверки',
+  'd2.pr.name': 'Название (его увидят игроки)',
+  'd2.pr.nameEx': 'Например: Франкфурт',
+  'd2.pr.create': 'Создать',
+  'd2.dg.acc.0': 'понедельник',
+  'd2.dg.acc.1': 'вторник',
+  'd2.dg.acc.2': 'среду',
+  'd2.dg.acc.3': 'четверг',
+  'd2.dg.acc.4': 'пятницу',
+  'd2.dg.acc.5': 'субботу',
+  'd2.dg.acc.6': 'воскресенье',
+  'd2.dg.nom.0': 'Понедельник',
+  'd2.dg.nom.1': 'Вторник',
+  'd2.dg.nom.2': 'Среда',
+  'd2.dg.nom.3': 'Четверг',
+  'd2.dg.nom.4': 'Пятница',
+  'd2.dg.nom.5': 'Суббота',
+  'd2.dg.nom.6': 'Воскресенье',
+  'd2.dg.t.queued': 'Итоги недели поставлены в очередь: бот отправит их в канал',
+  'd2.dg.title': 'Итоги недели',
+  'd2.dg.desc': 'Раз в неделю бот публикует картинку с итогами: игроки, пик, часы в игре, доступность серверов и самые активные игроки.',
+  'd2.dg.t.on': 'Итоги недели включены',
+  'd2.dg.t.off': 'Итоги недели выключены',
+  'd2.dg.publish': 'Публиковать итоги недели',
+  'd2.dg.when': 'В {day} в {hh}:00',
+  'd2.dg.needChannel': 'Нужен канал: выберите его ниже или в настройках оповещений',
+  'd2.dg.last': 'последний раз {ago}',
+  'd2.dg.day': 'День',
+  'd2.dg.saved': 'Сохранено',
+  'd2.dg.channel': 'Канал',
+  'd2.dg.sameAsAlerts': 'тот же, что для оповещений',
+  'd2.dg.pickOther': 'Выбрать другой',
+  'd2.dg.t.toAlerts': 'Итоги пойдут в канал оповещений',
+  'd2.dg.t.channel': 'Канал сохранён',
+  'd2.dg.preview': 'Так будут выглядеть итоги последних 7 дней',
+  'd2.dg.refresh': 'Обновить картинку',
+  'd2.dg.sendNow': 'Отправить сейчас',
+  'd2.dg.alt': 'Итоги недели: {n} игрок, пик {peak}, {hours} часов в игре|Итоги недели: {n} игрока, пик {peak}, {hours} часов в игре|Итоги недели: {n} игроков, пик {peak}, {hours} часов в игре',
+  'd2.lim.over': 'превышено',
+  'd2.lim.label': 'Лимиты Discord',
+  'd2.lim.title': 'Лимиты',
+  'd2.lim.exceeded': 'превышены',
+  'd2.lim.near': 'почти предел',
+  'd2.lim.ok': 'в норме',
+  'd2.lim.more': 'Подробнее',
+  'd2.lim.block': 'Показаны значения для блока {n}; сумма: по всему сообщению.',
+  'd2.lim.hint': 'Ограничения Discord для этого сообщения.',
+  'd2.lim.content': 'Текст сообщения',
+  'd2.lim.desc': 'Основной текст',
+  'd2.lim.fieldName': 'Название поля',
+  'd2.lim.longest': 'самое длинное',
+  'd2.lim.fieldValue': 'Значение поля',
+  'd2.lim.footer': 'Подпись',
+  'd2.lim.fields': 'Полей',
+  'd2.lim.embeds': 'Embed-блоков',
+  'd2.lim.total': 'Всего символов во всех embed',
+  'd2.push.quiet': 'Тихие часы',
+  'd2.push.quietText': 'В это время уведомления на устройства не приходят. Они остаются в колокольчике в шапке сайта.',
+  'd2.push.from': 'с',
+  'd2.push.to': 'до',
+  'd2.push.t.on': 'Уведомления на этом устройстве включены',
+  'd2.push.e.denied': 'Браузер не разрешил уведомления',
+  'd2.push.t.test': 'Тестовое уведомление отправлено',
+  'd2.push.t.testFail': 'Не получилось доставить: включите уведомления заново',
+  'd2.push.title': 'Уведомления на этом устройстве',
+  'd2.push.desc': 'Сервер упал или вернулся, на заполненном сервере освободилось место: придёт уведомление, даже если панель закрыта. Какие серверы — выбирается кнопкой «Подписаться» на странице сервера.',
+  'd2.push.unsupported': 'Этот браузер не умеет получать уведомления от сайтов. На iPhone сначала добавьте панель на экран «Домой».',
+  'd2.push.denied': 'Уведомления запрещены в настройках браузера для этого сайта. Разрешите их там и обновите страницу.',
+  'd2.push.enabled': 'Включены',
+  'd2.push.disabled': 'Выключены',
+  'd2.push.check': 'Проверить',
+  'd2.push.installText': 'Установите панель как приложение: своя иконка, отдельное окно и уведомления как у приложений.',
+  'd2.push.install': 'Установить',
+  'd2.srv.morning': 'Доброе утро',
+  'd2.srv.afternoon': 'Добрый день',
+  'd2.srv.evening': 'Добрый вечер',
+  'd2.srv.night': 'Доброй ночи',
+  'd2.srv.favRemove': 'Убрать из избранного',
+  'd2.srv.fav': 'В избранное',
+  'd2.srv.favName': 'В избранное: {name}',
+  'd2.srv.liveTitle': 'Страница обновляется сама. Нажмите, чтобы обновить сейчас',
+  'd2.srv.refreshing': 'обновляю…',
+  'd2.srv.updated': 'обновлено {ago}',
+  'd2.srv.manage': 'Управление серверами',
+  'd2.srv.filter': 'Фильтр серверов',
+  'd2.srv.f.all': 'Все',
+  'd2.srv.f.online': 'Онлайн',
+  'd2.srv.f.offline': 'Недоступные',
+  'd2.srv.f.fav': 'Избранные',
+  'd2.srv.selectTitle': 'Выбрать несколько серверов для массовых действий',
+  'd2.srv.cancelSelect': 'Отменить выбор',
+  'd2.srv.select': 'Выбрать',
+  'd2.srv.tileSize': 'Размер плиток',
+  'd2.srv.sz.s': 'Компактные',
+  'd2.srv.sz.m': 'Обычные',
+  'd2.srv.sz.l': 'Крупные',
+  'd2.srv.v.tiles': 'Плитки',
+  'd2.srv.v.chart': 'График',
+  'd2.srv.pullRelease': 'Отпустите, чтобы обновить',
+  'd2.srv.pull': 'Потяните вниз',
+  'd2.srv.nPlayers': '{n} игрок|{n} игрока|{n} игроков',
+  'd2.srv.ping': 'пинг {ms} мс',
+  'd2.srv.noReply': 'Сервер не отвечает',
+  'd2.srv.lastReply': 'Последний ответ: {ago}',
+  'd2.srv.waitFirst': 'Ожидаем первый ответ',
+  'd2.srv.uptime': 'аптайм {v}%',
+  'd2.srv.map': 'карта {map}',
+  'd2.srv.noReplyAgo': 'Не отвечает · {ago}',
+  'd2.srv.mapTitle': 'Карта: {map}',
+  'd2.srv.version': 'Версия',
+  'd2.srv.uptime30': 'Аптайм за 30 дней',
+  'd2.sd.journal': 'Журнал событий',
+  'd2.sd.recent': 'Последние события',
+  'd2.sd.playerReviews': 'Отзывы игроков',
+  'd2.sd.availFrom': 'Доступность из разных мест',
+  'd2.sd.inFav': 'В избранном',
+  'd2.sd.offline': 'не в сети',
+  'd2.sd.swipe': '← Смахните вбок, чтобы переключить вкладку →',
+  'd2.sec.failed': 'Не удалось показать этот блок',
+  'd2.sec.rest': 'Остальная страница работает как обычно.',
+  'd2.sec.blocks': 'Блоки страницы',
+  'd2.sd.sec.stats': 'Показатели',
+  'd2.sd.sec.events': 'События',
+  'd2.sd.sec.avail': 'Доступность',
+  'd2.sd.sec.reviews': 'Отзывы',
+  'd2.sd.sec.howto': 'Как подключиться',
+  'd2.sd.sec.qr': 'QR-код',
+  'd2.sd.autoRefresh': 'Страница обновляется сама',
+  'd2.sd.w24': 'за 24 часа',
+  'd2.sd.w7': 'за 7 дней',
+  'd2.sd.w30': 'за 30 дней',
+  'd2.sd.channel': 'канал',
+  'd2.sd.message': 'сообщение',
+  'd2.sd.t.linkCopied': 'Ссылка скопирована',
+  'd2.sd.t.copyFail': 'Не удалось скопировать. Ссылка: {url}',
+  'd2.sd.c.title': 'Удалить сервер «{name}»?',
+  'd2.sd.c.text': 'Сервер будет удалён вместе с привязками к Discord.',
+  'd2.sd.t.deleted': 'Сервер удалён',
+  'd2.sd.t.addrCopied': 'Адрес скопирован',
+  'd2.sd.t.addr': 'Адрес: {addr}',
+  'd2.sd.ping': 'Пинг',
+  'd2.sd.fewData': 'Данных пока мало: график появится через несколько минут после добавления сервера.',
+  'd2.sd.redNote': 'Красным отмечены периоды, когда сервер не отвечал.',
+  'd2.sd.polling': 'Опрос…',
+  'd2.sd.poll': 'Опросить',
+  'd2.pl.inGame2': 'Сейчас в игре',
+  'd2.bl.wait': 'Ожидание',
+  'd2.bl.offline': 'Офлайн',
+  'd2.bl.lag': 'Лаги',
+  'd2.bl.showHint': 'Показать подсказку',
+  'd2.bl.hideHint': 'Скрыть подсказку',
+  'd2.bl.copyManual': 'Скопируйте вручную',
+  'd2.bl.proxyType': 'Тип прокси',
+  'd2.bl.proxyEx': '45.91.9.172:1080:логин:пароль',
+  'd2.bl.fmtA': 'Подойдёт формат',
+  'd2.bl.fmt': 'адрес:порт:логин:пароль',
+  'd2.bl.fmtB': 'или готовая ссылка с',
+  'd2.bl.fmtC': '. Если бот не подключается, смените тип.',
+  'd2.bl.invite': 'Пригласить бота на сервер',
+  'd2.fb.layoutLabel': 'Схема расположения полей',
+  'd2.fb.layout': 'Как расположены поля',
+  'd2.fb.drag': 'Перетащить поле',
+  'd2.fb.dragTitle': 'Перетащите, чтобы поменять порядок',
+  'd2.fb.fieldName': 'Название поля {n}',
+  'd2.fb.up': 'Поднять поле {n}',
+  'd2.fb.down': 'Опустить поле {n}',
+  'd2.fb.fieldText': 'Текст поля {n}',
+  'd2.fb.placement': 'Расположение поля {n}',
+  'd2.fb.fullTitle': 'Во всю ширину',
+  'd2.fb.full': 'Широкое',
+  'd2.fb.inlineTitle': 'В ряд с соседними',
+  'd2.fb.inline': 'В ряд',
+  'd2.fb.delete': 'Удалить поле {n}',
+  'd2.fb.add': '+ Добавить поле',
+  'd2.cp.g.sections': 'Разделы',
+  'd2.cp.g.actions': 'Действия',
+  'd2.cp.search': 'Поиск по панели',
+  'd2.cp.searchLabel': 'Поиск серверов и разделов',
+  'd2.cp.placeholder': 'Найти сервер или раздел…',
+  'd2.cp.close': 'Закрыть поиск',
+  'd2.cp.results': 'Результаты',
+  'd2.cp.nothing': 'Ничего не найдено. Попробуйте другое слово.',
+  'd2.cp.hintSelect': '↑ ↓ выбрать',
+  'd2.cp.hintOpen': 'Enter открыть',
+  'd2.cp.hintClose': 'Esc закрыть',
+  'd2.cp.found': 'Найдено: {n}',
+  'd2.cp.none': 'Ничего не найдено',
+  'd2.pv.cnt': '{a}/{b} игроков',
+  'd2.pv.dataLater': 'Данные появятся при отправке',
+  'd2.pv.footer': 'Статус сервера · обновится при отправке',
+  'd2.pv.title': 'Предпросмотр',
+  'd2.pv.theme': 'Тема Discord',
+  'd2.pv.width': 'Ширина',
+  'd2.pv.desktop': 'Компьютер',
+  'd2.pv.phone': 'Телефон',
+  'd2.pv.empty': 'Начните писать: здесь появится сообщение, как оно будет выглядеть в Discord.',
+  'd2.pv.hint': 'Нажмите на часть сообщения, чтобы перейти к её полю. Красная рамка: превышен лимит.',
+  'd2.smtp.portRange': 'Порт от 1 до 65535',
+  'd2.smtp.t.saved': 'Настройки почты сохранены',
+  'd2.smtp.t.test': 'Пробное письмо отправлено на {to}',
+  'd2.smtp.title': 'Почта (SMTP)',
+  'd2.smtp.desc': 'Нужна для сброса пароля, подтверждения адреса и писем о входе с нового устройства. Без неё эти функции выключены.',
+  'd2.smtp.ready': 'ПОЧТА РАБОТАЕТ',
+  'd2.smtp.notReady': 'НЕ НАСТРОЕНА',
+  'd2.smtp.host': 'Сервер SMTP',
+  'd2.smtp.secure': 'Шифрование с первого байта (SSL/TLS, обычно порт 465). Иначе используется STARTTLS.',
+  'd2.smtp.passSaved': 'Пароль (сохранён, оставьте пустым чтобы не менять)',
+  'd2.smtp.from': 'Адрес отправителя',
+  'd2.smtp.noBase': 'Публичный адрес панели неизвестен: письма со ссылками для сброса пароля не будут отправляться. Откройте панель по домену под администратором или задайте PUBLIC_URL в .env.',
+  'd2.smtp.delPass': 'Удалить пароль',
+  'd2.smtp.sendTo': 'Отправить пробное письмо на',
+  'd2.smtp.sending': 'Отправляю…',
+  'd2.smtp.send': 'Отправить пробное письмо',
+  'd2.chp.missing': '⚠ У бота в этом канале нет прав: {list}. Без «Встраивания ссылок» embed-сообщения могут не показываться, без «Прикрепления файлов» не отправятся картинки. Выдайте эти права роли бота в настройках канала.',
+  'd2.chp.choose': 'Выберите канал…',
+  'd2.chp.manual': 'Ввести ID вручную',
+  'd2.chp.refresh': 'Обновить список',
+  'd2.chp.idEx': 'ID канала, например 123456789012345678',
+  'd2.chp.noChannels': 'Бот пока не видит каналов (его нужно пригласить на сервер Discord):',
+  'd2.chp.checkBot': 'проверить бота →',
+  'd2.chp.devMode': 'Режим разработчика в Discord: правая кнопка по каналу → «Копировать ID канала».',
+  'd2.chp.fromList': 'Выбрать из списка',
+  'd2.nt.tone.ok': 'Хорошая новость',
+  'd2.nt.tone.warn': 'Важно',
+  'd2.nt.tone.bad': 'Срочно',
+  'd2.nt.t.pinned': 'Объявление закреплено',
+  'd2.nt.t.removed': 'Объявление снято',
+  'd2.nt.title': 'Объявление для игроков',
+  'd2.nt.ph': 'Например: вайп в пятницу в 18:00 по Москве. Правила: без читов.',
+  'd2.nt.remove': 'Снять',
+  'd2.nt.pin': 'Закрепить объявление',
+  'd2.nt.pinnedAgo': 'закреплено {ago}',
+  'd2.hp.a.create': 'создал',
+  'd2.hp.a.update': 'изменил',
+  'd2.hp.a.publish': 'опубликовал',
+  'd2.hp.a.schedule': 'запланировал',
+  'd2.hp.a.restore': 'восстановил версию',
+  'd2.hp.a.delete': 'удалил',
+  'd2.hp.a.duplicate': 'дублировал',
+  'd2.hp.a.send': 'отправил',
+  'd2.hp.c.title': 'Восстановить эту версию?',
+  'd2.hp.c.text': 'Текущий текст заменится выбранной версией. Он сохранится в истории.',
+  'd2.hp.restoreBtn': 'Восстановить эту версию',
+  'd2.hp.t.restored': 'Версия восстановлена',
+  'd2.hp.title': 'История версий',
+  'd2.hp.text': 'Каждое сохранение запоминается: можно посмотреть и вернуть прежний текст.',
+  'd2.hp.none': 'Прошлых версий пока нет.',
+  'd2.hp.view': 'Посмотреть',
+  'd2.hp.who': 'Кто и когда правил',
+  'd2.hp.version': 'Версия от {when}',
+  'd2.hp.readOnly': 'Только просмотр. Автор: {actor}.',
+  'd2.hp.locked': 'Новость сейчас отправляется, подождите.',
+  'd2.jr.today': 'Сегодня',
+  'd2.jr.yesterday': 'Вчера',
+  'd2.jr.csv': 'время,кто,действие,подробности',
+  'd2.jr.title': 'Журнал',
+  'd2.jr.subtitle': 'Кто и что менял в панели',
+  'd2.jr.hint': 'Здесь записано, кто из администраторов что и когда менял. Это помогает понять, откуда взялось изменение.',
+  'd2.jr.help': 'Хранятся последние 2000 действий. Поиск работает по имени, действию и подробностям.',
+  'd2.jr.csvBtn': 'Скачать CSV',
+  'd2.jr.search': 'Поиск по журналу…',
+  'd2.jr.searchLabel': 'Поиск по журналу',
+  'd2.jr.empty': 'Записей нет',
+  'd2.jr.notFound': 'Ничего не найдено.',
+  'd2.jr.emptyText': 'Действия администраторов будут появляться здесь.',
+  'd2.jr.resetSearch': 'Сбросить поиск',
+  'd2.jr.more': 'Показать ещё',
+  'd2.dw.bot.connecting': 'Бот подключается к Discord, это занимает несколько секунд. Нажмите «Проверить», чтобы обновить.',
+  'd2.dw.bot.error': 'Discord не принял токен или недоступен. Проверьте токен и прокси в настройках, затем проверьте снова.',
+  'd2.dw.bot.offline': 'Бот ещё не в сети. Сохраните токен: подключение начнётся само.',
+  'd2.dw.s1.title': 'Токен введён',
+  'd2.dw.s1.done': 'Токен бота сохранён в настройках.',
+  'd2.dw.s1.todo': 'Создайте бота в Discord Developer Portal и вставьте его токен в настройках панели.',
+  'd2.dw.s2.title': 'Бот подключён',
+  'd2.dw.s2.online': 'Бот в сети',
+  'd2.dw.s2.first': 'Сначала введите токен.',
+  'd2.dw.s3.title': 'Бот приглашён на сервер Discord',
+  'd2.dw.s3.done': 'Бот есть на серверах Discord: {n}.',
+  'd2.dw.s3.todo': 'Откройте приглашение, выберите свой сервер Discord и подтвердите права бота. Потом нажмите «Проверить».',
+  'd2.dw.s4.title': 'Канал выбран, права в порядке',
+  'd2.dw.s4.done': 'Канал привязан, у бота есть права на встраивания и файлы.',
+  'd2.dw.s4.missing': 'В выбранном канале боту не хватает прав: {list}. Выдайте их роли бота в настройках канала и нажмите «Проверить».',
+  'd2.dw.s4.addServer': 'Сначала добавьте игровой сервер, который бот будет показывать.',
+  'd2.dw.s4.pick': 'Выберите канал и игровой сервер: бот будет публиковать там одно обновляемое сообщение.',
+  'd2.dw.s4.noChannels': 'Бот пока не видит каналов, куда может писать. Выдайте его роли права «Просмотр канала», «Отправка сообщений», «Встраивание ссылок», «Прикрепление файлов».',
+  'd2.dw.s4.noPerms': 'Нет прав: {list}',
+  'd2.dw.s5.title': 'Первое сообщение опубликовано',
+  'd2.dw.s5.done': 'Бот отправил сообщение и обновляет его по таймеру.',
+  'd2.dw.s5.todo': 'Бот отправит сообщение в течение минуты после создания привязки. Нажмите «Проверить», чтобы увидеть результат.',
+  'd2.dw.a.token': 'Указать токен',
+  'd2.dw.a.botSettings': 'Открыть настройки бота',
+  'd2.dw.a.invite': 'Открыть приглашение',
+  'd2.dw.a.addServer': 'Добавить сервер',
+  'd2.dw.a.bind': 'Создать первую привязку',
+  'd2.dw.title': 'Мастер подключения',
+  'd2.dw.ready': 'Всё готово: бот публикует сообщения.',
+  'd2.dw.step': 'Шаг {a} из {b}',
+  'd2.dw.check': 'Проверить',
+  'd2.dw.sr.done': ': выполнено',
+  'd2.dw.sr.current': ': текущий шаг',
+  'd2.dw.sr.blocked': ': недоступно, пока не выполнены предыдущие шаги',
+  'd2.dw.checkAgain': 'Проверить снова',
+  'd2.cc.day': 'Сутки',
+  'd2.cc.week': 'Неделя',
+  'd2.cc.title': 'Сравнение серверов',
+  'd2.cc.what': 'Что показывать',
+  'd2.cc.slots': '% мест',
+  'd2.cc.toggle': 'Показать или скрыть сервер',
+  'd2.cc.labelDay': 'Игроки на серверах за сутки',
+  'd2.cc.labelWeek': 'Игроки на серверах за неделю',
+  'd2.cc.avg': 'В среднем',
+  'd2.cc.vsPrev': 'К прошлому периоду',
+  'd2.as.watched': 'Серверы под присмотром',
+  'd2.as.watchedText': 'Онлайн, пинг и история игроков в одном месте.',
+  'd2.as.serversOnline': 'Серверов онлайн',
+  'd2.as.of': 'из {n}',
+  'd2.as.playersNow': 'Игроков сейчас',
+  'd2.as.state': 'Состояние серверов',
+  'd2.as.note': 'Сообщения в Discord обновляются сами, новости публикуются от имени бота.',
+  'd2.as.cards': 'Карточки и новости прямо в Discord',
+  'd2.tour.1.title': 'Добавьте игровой сервер',
+  'd2.tour.1.text': 'Добро пожаловать! Прогресс всегда виден в «Админка → Начало работы». Начнём с главного: в «Админка → Серверы» добавьте сервер, выбрав игру и указав адрес. Панель сразу начнёт показывать онлайн, карту и пинг.',
+  'd2.tour.2.title': 'Подключите Discord-бота',
+  'd2.tour.2.text': 'В «Настройки → Бот и Discord» вставьте токен бота из Discord Developer Portal и сохраните. После этого пригласите бота на свой Discord-сервер.',
+  'd2.tour.3.title': 'Привяжите канал',
+  'd2.tour.3.text': 'В разделе «Discord» выберите канал, куда бот будет публиковать карточку сервера. Сообщение обновляется по таймеру само.',
+  'd2.tour.4.title': 'Пишите новости',
+  'd2.tour.4.text': 'В «Новости» можно подготовить запись с картинкой, отправить её в Discord сразу или по расписанию и повторять по расписанию.',
+  'd2.tour.5.title': 'Настройте оформление',
+  'd2.tour.5.text': 'В «Настройки → Оформление» задайте название сообщества, логотип и фирменный цвет. На этом всё: подсказки можно показать снова в профиле.',
+  'd2.tour.label': 'Подсказки по панели',
+  'd2.tour.first': 'Впервые в Админке?',
+  'd2.tour.show': 'Показать за минуту',
+  'd2.tour.dismiss': 'Не показывать',
+  'd2.ao.24h': 'за 24 часа',
+  'd2.ao.r.down': 'Есть недоступные серверы',
+  'd2.ao.r.bot': 'Бот Discord в ошибке',
+  'd2.ao.r.cert': 'Сертификат скоро истечёт',
+  'd2.ao.r.backup': 'Давно нет резервной копии',
+  'd2.ao.r.pending': 'Ждут заявки игроков',
+  'd2.ao.r.update': 'Доступно обновление',
+  'd2.ao.health': 'Здоровье панели',
+  'd2.ao.healthScore': 'Здоровье панели: {n} из 100',
+  'd2.ao.h.ok': 'Панель в порядке',
+  'd2.ao.h.look': 'Есть, на что взглянуть',
+  'd2.ao.h.act': 'Нужно вмешательство',
+  'd2.ao.h.allOk': 'Серверы, бот, сертификат и копии — всё в норме.',
+  'd2.ao.duty.servers': 'Просмотреть серверы',
+  'd2.ao.duty.users': 'Разобрать заявки игроков',
+  'd2.ao.duty.backup': 'Проверить резервную копию',
+  'd2.ao.duty.journal': 'Заглянуть в журнал',
+  'd2.ao.duty': 'Обход на сегодня',
+  'd2.ao.duty.allDone': 'Всё обойдено — можно отдыхать',
+  'd2.ao.duty.left': 'Осталось: {a} из {b}',
+  'd2.ao.open': 'Открыть',
+  'd2.ao.now': 'Серверы сейчас',
+  'd2.ao.maint': 'обслуживание',
+  'd2.ao.down': 'недоступен',
+  'd2.ao.mine': 'Только мои',
+  'd2.ao.noMine': 'Ваших действий пока нет',
+  'd2.sv.copyAddr': 'Скопировать адрес',
+  'd2.sv.copyAddrOf': 'Скопировать адрес {addr}',
+  'd2.sv.waitReply': 'Ожидание ответа',
+  'd2.sv.noReply': 'не отвечает',
+  'd2.sv.waiting': 'ожидаем ответ',
+  'd2.sv.ms': 'мс',
+  'd2.sv.up': 'Аптайм',
+  'd2.sv.address': 'Адрес',
+  'd2.sv.sort': 'Сортировать',
+  'd2.rb.r.cheating': 'Читы или нечестная игра',
+  'd2.rb.r.abuse': 'Оскорбления, токсичность',
+  'd2.rb.r.griefing': 'Грифинг, порча чужого',
+  'd2.rb.t.sent': 'Жалоба отправлена модераторам. Ответ придёт в уведомления',
+  'd2.rb.report': 'Пожаловаться',
+  'd2.rb.title': 'Жалоба на игрока {nick}',
+  'd2.rb.reason': 'Причина',
+  'd2.rb.what': 'Что произошло (необязательно)',
+  'd2.rb.ph': 'Сервер, время, что именно сделал игрок',
+  'd2.rb.note': 'Жалобу увидят только модераторы. Не больше 5 жалоб в сутки.',
+  'd2.su.addFirst': 'Добавьте первый сервер',
+  'd2.su.noServers': 'Серверов пока нет',
+  'd2.su.addFirstText': 'Укажите игру и адрес, и панель начнёт показывать онлайн, карту и пинг. Потом привяжите Discord-канал.',
+  'd2.su.noServersText': 'Администратор ещё не добавил ни одного сервера. Загляните позже: список появится здесь.',
+  'd2.su.noFavs': 'В избранном пока пусто',
+  'd2.su.noFavsText': 'Нажмите ☆ на карточке сервера, и он появится здесь и будет закреплён первым в общем списке.',
+  'd2.su.showAll': 'Показать все серверы',
+  'd2.su.noOnline': 'Сейчас нет серверов онлайн',
+  'd2.su.noOffline': 'Недоступных серверов нет',
+  'd2.su.noOnlineText': 'Ни один сервер не отвечает на запросы. Сбросьте фильтр, чтобы увидеть все.',
+  'd2.su.noOfflineText': 'Все серверы отвечают. Сбросьте фильтр, чтобы увидеть полный список.',
+  'd2.su.resetFilter': 'Сбросить фильтр',
+  'd2.poll.e.fail': 'Число неудачных опросов: от {a} до {b}',
+  'd2.poll.e.conc': 'Параллельных опросов: от {a} до {b}',
+  'd2.poll.e.rule': 'Правило «N из M»: числа от 1 до {n} (или оставьте поля пустыми)',
+  'd2.poll.noRule': 'Правило не задано: сбой подтверждается {when}.',
+  'd2.poll.rule': 'Сервер считается упавшим, если не ответил {a} из последних {b} опросов (необязательно подряд).',
+  'd2.poll.right': 'сразу после первой неудачи',
+  'd2.poll.after': 'после {n} неудачных опросов подряд',
+  'd2.poll.bar': 'опрос серверов',
+  'd2.poll.title': 'Опрос серверов',
+  'd2.poll.desc': 'Как панель проверяет игровые серверы и когда считает, что сервер действительно недоступен. Изменения сохраняются сами.',
+  'd2.poll.failLabel': 'Неудачных опросов подряд до сбоя',
+  'd2.poll.failHint': 'Сбой подтверждается {when}. Так одиночная потеря пакета не вызывает тревогу, но настоящее падение заметно позже.',
+  'd2.poll.concLabel': 'Серверов опрашивается одновременно',
+  'd2.poll.concHint': 'От {a} до {b}. Больше значение, быстрее обход, но выше нагрузка на панель и сеть.',
+  'd2.poll.last': 'Последний обход',
+  'd2.poll.servers': '{n} сервер за {d}|{n} сервера за {d}|{n} серверов за {d}',
+  'd2.poll.noErrors': 'без ошибок',
+  'd2.poll.errors': '{n} ошибка|{n} ошибки|{n} ошибок',
+  'd2.poll.parallel': 'по {n} одновременно',
+  'd2.poll.never': 'Обход ещё не выполнялся.',
+  'd2.pw.more': 'Ещё {n} символ: нужно от 10|Ещё {n} символа: нужно от 10|Ещё {n} символов: нужно от 10',
+  'd2.pw.same': 'Новый пароль совпадает с текущим',
+  'd2.pw.changed': 'Пароль изменён',
+  'd2.pw.title': 'Пароль администратора',
+  'd2.pw.current': 'Текущий пароль',
+  'd2.pw.new': 'Новый пароль (от 10 символов)',
+  'd2.pw.changedDot': 'Пароль изменён.',
+  'd2.pw.save': 'Сохранить пароль',
+  'd2.pp.label': 'Паспорт сервера',
+  'd2.pp.map': 'Карта',
+  'd2.pp.country': 'Страна: {name}',
+  'd2.pp.countryK': 'Страна:',
+  'd2.pp.ping': 'Пинг: {label}',
+  'd2.pp.mode': 'Режим',
+  'd2.pp.onPanel': 'На панели',
+  'd2.pp.dateUnknown': 'дата неизвестна',
+  'd2.pp.polled': 'опрос {ago}',
+  'd2.ns.viewsFor': 'Просмотры за {n} дней',
+  'd2.ns.title': 'Статистика: {title}',
+  'd2.ns.views': 'просмотров',
+  'd2.ns.week': 'за 7 дней',
+  'd2.ns.comments': 'комментариев',
+  'd2.ns.byDay': 'Просмотры по дням (30 дней)',
+  'd2.ns.reactions': 'Реакции:',
+  'd2.ns.none': 'пока нет',
+  'd2.ns.published': 'Опубликовано {when}',
+  'd2.dl.f.pending': 'В очереди',
+  'd2.dl.f.sending': 'Отправляются',
+  'd2.dl.f.sent': 'Доставлено',
+  'd2.dl.f.error': 'С ошибкой',
+  'd2.dl.f.dead': 'Не доставлено',
+  'd2.dl.t.requeued': 'Сообщение поставлено в очередь снова',
+  'd2.dl.t.noRetry': 'Эту доставку уже нельзя повторить',
+  'd2.dl.title': 'Доставка',
+  'd2.dl.desc': 'Очередь сообщений в Discord: новости, оповещения и карточки статуса. Неудачные попытки повторяются сами, до 8 раз.',
+  'd2.dl.type': 'Тип сообщений',
+  'd2.dl.allTypes': 'Все типы',
+  'd2.dl.filter': 'Фильтр по состоянию',
+  'd2.dl.noMatch': 'Под этот фильтр ничего не попало.',
+  'd2.dl.empty': 'Очередь пуста: сообщения уходят сразу.',
+  'd2.dl.attempts': 'попытки {v}',
+  'd2.dl.created': 'создано {ago}',
+  'd2.dl.next': 'следующая попытка {v}',
+  'd2.adm.dirty': 'Изменено…',
+  'd2.adm.saving': 'Сохраняется…',
+  'd2.adm.notSaved': 'Не сохранено',
+  'd2.sb.unsaved': 'Несохранённые изменения',
+  'd2.sb.fix': 'Исправьте поля с ошибкой',
+  'd2.hero.peakTitle': 'Пик за период: {n}',
+  'd2.hero.peakNote': 'пик за период: {n}',
+  'd2.hero.last2h': 'Игроки за последние 2 часа',
+  'd2.hero.noChange': 'за 2 ч без изменений',
+  'd2.hero.change': 'за 2 ч {sign}{n}',
+  'd2.hero.inGame': 'игрок в игре →|игрока в игре →|игроков в игре →',
+  'd2.hero.playing': 'в игре {v}',
+  'd2.hero.onlineNow': 'в сети сейчас',
+  'd2.hero.rankTitle': 'Место в рейтинге недели',
+  'd2.hero.profile': 'Профиль →',
+  'd2.hero.record': 'Новый рекорд',
+  'd2.ck.warning': 'Предупреждение',
+  'd2.ck.error': 'Ошибка',
+  'd2.ck.schedule': 'Запланировать',
+  'd2.ck.saveDiscord': 'Сохранить в Discord',
+  'd2.ck.title': 'Проверка перед отправкой',
+  'd2.ck.results': 'Результаты проверки',
+  'd2.ck.fix': 'Исправьте ошибки, чтобы продолжить.',
+  'd2.ck.back': 'Назад к редактору',
+  'd2.ck.anyway': '{verb} всё равно',
+  'd2.cal.m.0': 'Январь',
+  'd2.cal.m.1': 'Февраль',
+  'd2.cal.m.2': 'Март',
+  'd2.cal.m.3': 'Апрель',
+  'd2.cal.m.4': 'Май',
+  'd2.cal.m.5': 'Июнь',
+  'd2.cal.m.6': 'Июль',
+  'd2.cal.m.7': 'Август',
+  'd2.cal.m.8': 'Сентябрь',
+  'd2.cal.m.9': 'Октябрь',
+  'd2.cal.m.10': 'Ноябрь',
+  'd2.cal.m.11': 'Декабрь',
+  'd2.cal.movable': 'можно перетащить на другой день',
+  'd2.cal.untitled': 'Без названия',
+  'd2.cal.prev': 'Предыдущий месяц',
+  'd2.cal.next': 'Следующий месяц',
+  'd2.cal.more': 'ещё {n}',
+  'd2.cal.undated': 'Черновики без даты: перетащите на день',
+  'd2.hhc.poll': 'Длительность опроса',
+  'd2.hhc.dbSize': 'Размер базы',
+  'd2.hhc.queue': 'Очередь доставки',
+  'd2.hhc.title': 'Состояние за период',
+  'd2.hhc.since': 'Замеры с {when}: {n}',
+  'd2.hhc.desc': 'Как панель чувствовала себя последнее время.',
+  'd2.hhc.d': '{n} д',
+  'd2.hhc.few': 'Замеров пока мало: график появится через несколько минут работы панели.',
+  'd2.sa.noFavs': 'Избранных серверов нет',
+  'd2.mx.flatTitle': 'Без заметных изменений',
+  'd2.mx.flat': 'ровно',
+  'd2.mx.trendTitle': 'Конец периода к его началу',
+  'd2.mx.whileOnline': 'пока онлайн',
+  'd2.mx.samples': 'Измерений',
+  'd2.ast.table': 'Таблица',
+  'd2.ast.cards': 'Карточки',
+  'd2.fo.t.off': 'Больше не следим за {nick}',
+  'd2.fo.t.on': 'Сообщим, когда {nick} зайдёт на сервер',
+  'd2.fo.following': '★ Вы следите',
+  'd2.fo.follow': '☆ Следить',
+  'd2.fo.title': 'Слежу за игроками',
+  'd2.fo.desc': 'Сообщим в панели, в Discord и на устройстве, когда эти игроки заходят на сервер. Не чаще раза в 30 минут на игрока.',
+  'd2.fo.none': 'Пока никого. Откройте страницу игрока и нажмите «Следить».',
+  'd2.fo.stop': 'Перестать',
+  'd2.nsub.t.saved': 'Подписка на новости сохранена',
+  'd2.nsub.t.off': 'Подписка на новости выключена',
+  'd2.nsub.desc': 'О каких новостях сообщать: уведомление придёт в колокольчик, на устройства с включёнными уведомлениями и в личные сообщения Discord (если привязан).',
+  'd2.nsub.all': 'Все рубрики',
+  'd2.psc.t.saved': 'Сохранено. Сообщения обновятся при следующем опросе',
+  'd2.psc.title': 'Ники в сообщении',
+  'd2.psc.desc': 'Сколько игроков перечислять в сообщении Discord. Остальные доступны по кнопке «Все игроки на сайте» и ссылке под списком. Первыми идут те, кто в игре дольше всех.',
+  'd2.psc.show': 'Показывать ников',
+  'd2.psc.counterOnly': '0: только счётчик',
+  'd2.nf.server': 'Сервер не найден',
+  'd2.nf.page': 'Такой страницы нет',
+  'd2.nf.serverText': 'Возможно, его удалили или ссылка устарела. Откройте список серверов и найдите нужный.',
+  'd2.nf.pageText': 'Ссылка устарела или в адресе опечатка. Вернитесь на главную: всё самое нужное там.',
+  'd2.nf.home': 'На главную',
+  'd2.nf.toServers': 'К серверам',
+  'd2.asb.stale': 'Опрос давно не отвечает',
+  'd2.asb.down': 'Недоступно серверов: {n}',
+  'd2.asb.ok': 'Опрос идёт, всё отвечает',
+  'd2.asb.t.polled': 'Серверы опрошены',
+  'd2.asb.lastTitle': 'Время последнего опроса',
+  'd2.asb.pollAll': 'Опросить всё',
+  'd2.qr.long': 'Слишком длинное значение для QR-кода.',
+  'd2.tabs.overview': 'Обзор',
+  'd2.tabs.history': 'История',
+  'd2.tabs.stats': 'Аналитика',
+  'd2.tabs.connect': 'Подключение',
+  'd2.tabs.label': 'Разделы сервера',
+  'd2.gp.custom': 'Другая игра (ввести GameDig ID)…',
+  'd2.gp.customShort': 'Другая игра (GameDig ID)',
+  'd2.gp.find': 'Найти игру…',
+  'd2.gp.search': 'Поиск игры',
+  'd2.gp.games': 'Игры',
+  'd2.ct.added': 'новых серверов: {n}',
+  'd2.ct.updated': 'обновится серверов: {n}',
+  'd2.ct.bindings': 'сообщений Discord: {n}',
+  'd2.ct.maint': 'окон обслуживания: {n}',
+  'd2.ct.restarts': 'расписаний перезапуска: {n}',
+  'd2.ct.autoroles': 'авторолей: {n}',
+  'd2.ct.counters': 'счётчиков: {n}',
+  'd2.ct.settings': 'настроек: {n}',
+  'd2.ct.nothing': 'ничего не изменится: всё уже так',
+  'd2.ct.e.bad': 'Это не файл настроек CoreGSM или он повреждён',
+  'd2.ct.c.title': 'Импортировать настройки?',
+  'd2.ct.c.text': 'Из файла «{name}»: {sum}. Серверы с той же игрой, адресом и портом обновятся, остальные добавятся.',
+  'd2.ct.c.confirm': 'Импортировать',
+  'd2.ct.t.done': 'Импортировано: {sum}',
+  'd2.ct.title': 'Перенос настроек',
+  'd2.ct.desc': 'Файл с настройкой панели: серверы, сообщения в Discord, оповещения и итоги недели, оформление, повторяющиеся окна обслуживания, перезапуски, автороли и счётчики. Без игроков, истории и секретов (токен бота и пароли вводятся заново). Удобно, чтобы поднять вторую панель или перенести её на другой сервер.',
+  'd2.ct.export': 'Скачать файл настроек',
+  'd2.ct.import': 'Импортировать из файла…',
+  'd2.sh.crumbs': 'Хлебные крошки',
+  'd2.sh.admin': 'Администратор',
+  'd2.sh.moderator': 'Модератор',
+  'd2.sh.player': 'Игрок',
+  'd2.sh.myGallery': 'Моя галерея',
+  'd2.idr.heavy': 'Файл тяжёлый ({mb} МБ): Discord может грузить его медленно.',
+  'd2.idr.small': 'Картинка маленькая ({w}×{h}): в Discord она будет выглядеть размыто, лучше от {min} px по ширине.',
+  'd2.idr.https': 'Ссылка должна начинаться с https://.',
+  'd2.idr.uploaded': 'Загруженная картинка',
+  'd2.idr.drop': 'Перетащите картинку сюда или нажмите, чтобы выбрать файл',
+  'd2.idr.formats': 'PNG, JPEG, GIF, WebP до 8 МБ. Можно вставить из буфера (Ctrl+V) в текст.',
+  'd2.idr.pickFile': '{label}: выбрать файл',
+  'd2.idr.link': '{label}: ссылка',
+  'd2.idr.ph': 'https://… или ссылка на картинку',
+  'd2.ch.dayChart': 'График игроков за сутки',
+  'd2.ch.forH': 'за {n} ч',
+  'd2.ch.forM': 'за {n} мин',
+  'd2.ch.soon': 'История появится после нескольких опросов',
+  'd2.ch.range': 'Игроков за 24 часа: от {a} до {b}',
+  'd2.ch.wasDown': 'сервер был недоступен',
+  'd2.ch.peak': 'пик {n}',
+  'd2.ch.online': 'онлайн',
+  'd2.ch.lag': 'лагают',
+  'd2.ch.offline': 'недоступны',
+  'd2.sm.p.free': '🟢 На сервере «{name}» освободилось место (39/40). Адрес: play.example.com:27015',
+  'd2.sm.p.back': '✅ Сервер «{name}» снова в сети. Адрес: play.example.com:27015',
+  'd2.sm.p.down': '🔴 Сервер «{name}» недоступен. Адрес: play.example.com:27015',
+  'd2.sm.preview': 'Так будет выглядеть сообщение',
+  'd2.sm.t.dm': 'Тест отправлен: смотрите колокольчик и личные сообщения Discord',
+  'd2.sm.t.botOff': 'Тест в колокольчике. Бот сейчас не в сети, в Discord не отправлено',
+  'd2.sm.t.noDiscord': 'Тест в колокольчике. Привяжите Discord, чтобы получать и в личные сообщения',
+  'd2.sm.testTitle': 'Пришлёт в панель, в Discord и на устройства сообщение-образец',
+  'd2.sm.test': 'Тестовое сообщение',
+  'd2.dm.spoiler': 'Спойлер: нажмите, чтобы показать',
+  'd2.dm.role': 'роль',
+  'd2.dm.member': 'участник',
+  'd2.ef.m.up': 'возврат',
+  'd2.ef.m.down': 'сбой',
+  'd2.ef.m.peak': 'пик',
+  'd2.ef.m.maint': 'тех. работы',
+  'd2.ef.up': 'Сервер вернулся',
+  'd2.ef.peak': 'Пик игроков: {n}',
+  'd2.ef.maintName': 'Начались технические работы: {name}',
+  'd2.ef.maint': 'Начались технические работы',
+  'd2.ef.downFor': 'Сервер упал · был недоступен {v}',
+  'd2.ef.stillDown': 'Сервер упал · недоступен до сих пор',
+  'd2.ef.down': 'Сервер упал',
+  'd2.ef.outages': 'сбой|сбоя|сбоев',
+  'd2.ef.downTotal': 'суммарный простой',
+  'd2.ef.availability': 'доступность',
+  'd2.ef.all': 'Все события →',
+  'd2.ef.count': '{n} событие|{n} события|{n} событий',
+  'd2.acc.label': 'Акцент по игре',
+  'd2.acc.remembered': 'Запоминается в этом браузере.',
+  'd2.ep.bot': 'БОТ',
+  'd2.ep.today': 'Сегодня, в {time}',
+  'd2.cp.theme.dark': 'Тёмная тема',
+  'd2.cp.theme.light': 'Светлая тема',
+  'd2.cp.theme.auto': 'Тема как в системе',
+  'd2.hch.down': 'сервер не отвечал',
+  'd2.hch.players': 'игроков {n}',
+  'd2.hch.sumPingDay': 'График пинга за сутки: от {a} до {b}{unit}. Стрелки влево и вправо перемещают курсор.',
+  'd2.hch.sumPingWeek': 'График пинга за неделю: от {a} до {b}{unit}. Стрелки влево и вправо перемещают курсор.',
+  'd2.hch.sumPlDay': 'График игроков за сутки: от {a} до {b}{unit}. Стрелки влево и вправо перемещают курсор.',
+  'd2.hch.sumPlWeek': 'График игроков за неделю: от {a} до {b}{unit}. Стрелки влево и вправо перемещают курсор.',
+  'd2.hch.empty': 'График пока пуст.',
+  'd2.hch.p24': '24 часа',
+  'd2.hch.p7': '7 дней',
+  'd2.hch.p30': '30 дней',
+  'd2.hch.created': 'создано {when}',
+  'd2.hch.saveFail': 'Не удалось сохранить картинку',
+  'd2.hch.historyFrom': 'История есть с {when}: измерения хранятся 7 дней',
+  'd2.hch.accumulating': 'Данные накапливаются с {when}',
+  'd2.hch.usual': 'обычный уровень',
+  'd2.hch.pingRight': 'пинг, мс (справа)',
+  'd2.hch.showPing': 'показать пинг',
+  'd2.hch.showAll': 'показать весь период',
+  'd2.hch.tip': 'выделите участок мышью, чтобы приблизить',
+  'd2.hch.zoom': 'Приблизить',
+  'd2.hch.usually': 'Обычно',
+  'd2.hch.savePng': 'Сохранить график как картинку PNG',
+  'd2.hch.preparing': 'Готовим…',
+  'd2.hch.png': 'Скачать PNG',
+  'd2.hch.legend': 'Обозначения на графике',
+  'd2.hch.overview': 'Весь период: потяните, чтобы выбрать участок',
+  'd2.pl.players': 'Игроки',
+  'd2.chp.refreshing': 'Обновляю…',
 };
 
 export default ru;
@@ -136940,7 +139201,7 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
         {!home && isAdmin && <AdminStatusBar />}
         {!home && current !== 'start' && current !== 'overview' && (
           <nav className="adm-crumbs" aria-label={t('adm.crumb.aria')}>
-            <a href="/admin/overview">Админка</a>
+            <a href="/admin/overview">{t('nav.admin')}</a>
             <span aria-hidden>›</span>
             <span className="adm-crumb-menu">
               <button type="button" className="font-extrabold text-ink hover:text-link" aria-expanded={menu} onClick={() => setMenu((v) => !v)} onBlur={(e) => { if (!e.currentTarget.parentElement?.contains(e.relatedTarget as Node)) setMenu(false); }}>
@@ -137263,7 +139524,7 @@ __COREGSM_EOF__
 /** Admin → Сообщество: seasons (and the hall of fame they make), reviews of the servers, the screenshot gallery. */
 import { useEffect, useState, type FormEvent } from 'react';
 import { api } from '../api';
-import { t, useI18n } from '../i18n';
+import { t, useI18n, type TKey } from '../i18n';
 import { confirmDialog, promptDialog } from '../confirm';
 import { AdminPage, Button, Empty, ErrorLine, Field, IconEdit, IconEye, IconEyeOff, IconTrash, IconTrophy, PageHead, Section, ago, fmtDate, toast, num, SkeletonRows } from '../ui';
 import PollsAdmin from '../components/PollsAdmin';
@@ -137376,13 +139637,14 @@ function SeasonsAdmin() {
 
 /** the seasons on one line, the width of a piece = how long the season lasted (oldest at the left) */
 function SeasonLine({ rows }: { rows: { id: number; name: string; startsAt: number; endsAt: number | null; isCurrent: boolean }[] }) {
+  useI18n();
   const list = [...rows].sort((a, b) => a.startsAt - b.startsAt);
   const now = Date.now();
   const span = (r: (typeof list)[number]) => Math.max(86_400_000, (r.endsAt ?? now) - r.startsAt);
   return (
-    <ol className="se-line" aria-label="Сезоны по порядку">
+    <ol className="se-line" aria-label={t('d2.ac.seasonsOrder')}>
       {list.map((r) => (
-        <li key={r.id} className={r.isCurrent ? 'is-now' : ''} style={{ flexGrow: span(r) }} title={`${r.name}: ${fmtDate(r.startsAt)}${r.endsAt ? ` – ${fmtDate(r.endsAt)}` : ' – сейчас'}`}>
+        <li key={r.id} className={r.isCurrent ? 'is-now' : ''} style={{ flexGrow: span(r) }} title={`${r.name}: ${fmtDate(r.startsAt)}${r.endsAt ? ` – ${fmtDate(r.endsAt)}` : ` – ${t('adm.com.now')}`}`}>
           <span className="truncate">{r.name}</span>
         </li>
       ))}
@@ -137428,11 +139690,12 @@ function ReviewsAdmin() {
   );
 }
 
-const REASON_LABEL: Record<string, string> = { cheating: 'Читы', abuse: 'Оскорбления', griefing: 'Грифинг', other: 'Другое' };
+const REASON_LABEL: Record<string, TKey> = { cheating: 'd2.ac.r.cheating', abuse: 'd2.ac.r.abuse', griefing: 'd2.ac.r.griefing', other: 'd2.ac.r.other' };
 interface ReportRow { id: number; nick: string; reason: string; text: string; reporter: string; serverId: number | null; serverName: string | null; status: string; createdAt: number; handledBy: string | null; handledAt: number | null; note: string; others: number }
 
 /** the queue of reports on players: the oldest first; a closed one tells who handled it */
 function ReportsAdmin() {
+  useI18n();
   const [closed, setClosed] = useState(false);
   const [list, setList] = useState<ReportRow[] | null>(null);
   const [error, setError] = useState('');
@@ -137441,35 +139704,35 @@ function ReportsAdmin() {
   useEffect(() => { setList(null); void load(); }, [closed]);
   const close = (id: number, status: 'resolved' | 'dismissed') =>
     api(`/reports/${id}`, 'PATCH', { status, note: (notes[id] ?? '').trim() })
-      .then(() => { toast(status === 'resolved' ? 'Жалоба закрыта: меры приняты' : 'Жалоба отклонена'); void load(); })
+      .then(() => { toast(status === 'resolved' ? t('d2.ac.rep.resolved') : t('d2.ac.rep.dismissed')); void load(); })
       .catch((e: Error) => setError(e.message));
   return (
     <Section
-      title="Жалобы на игроков"
-      description={closed ? 'Рассмотренные жалобы, новые сверху' : list ? (list.length ? `Ждут решения: ${list.length}. Старые сверху` : 'Новых жалоб нет') : undefined}
-      actions={<div className="seg" role="group" aria-label="Какие жалобы"><button type="button" className="seg-item" aria-current={!closed ? "true" : undefined} onClick={() => setClosed(false)}>Открытые</button><button type="button" className="seg-item" aria-current={closed ? "true" : undefined} onClick={() => setClosed(true)}>Рассмотренные</button></div>}
+      title={t('d2.ac.rep.title')}
+      description={closed ? t('d2.ac.rep.descClosed') : list ? (list.length ? t('d2.ac.rep.descWait', { n: list.length }) : t('d2.ac.rep.descNone')) : undefined}
+      actions={<div className="seg" role="group" aria-label={t('d2.ac.rep.which')}><button type="button" className="seg-item" aria-current={!closed ? "true" : undefined} onClick={() => setClosed(false)}>{t('d2.ac.rep.open')}</button><button type="button" className="seg-item" aria-current={closed ? "true" : undefined} onClick={() => setClosed(true)}>{t('d2.ac.rep.handled')}</button></div>}
     >
       <ErrorLine text={error} />
-      {list === null ? <div className="skeleton h-24 rounded-2xl" /> : list.length === 0 ? <p className="text-sm font-semibold text-mute">{closed ? 'Пока ничего не рассматривали.' : 'Очередь пуста.'}</p> : (
+      {list === null ? <div className="skeleton h-24 rounded-2xl" /> : list.length === 0 ? <p className="text-sm font-semibold text-mute">{closed ? t('d2.ac.rep.nothingHandled') : t('d2.ac.queueEmpty')}</p> : (
         <ul className="grid gap-2.5">
           {list.map((r) => (
             <li key={r.id} className="rounded-2xl bg-soft px-4 py-3">
               <div className="flex flex-wrap items-center gap-2">
                 <a href={`/player/${encodeURIComponent(r.nick)}`} className="font-extrabold hover:text-link">{r.nick}</a>
-                <span className="pill pill-warn">{REASON_LABEL[r.reason] ?? r.reason}</span>
-                {r.others > 0 && <span className="pill pill-bad" title="Других открытых жалоб на этого игрока">ещё жалоб: {r.others}</span>}
+                <span className="pill pill-warn">{REASON_LABEL[r.reason] ? t(REASON_LABEL[r.reason]) : r.reason}</span>
+                {r.others > 0 && <span className="pill pill-bad" title={t('d2.ac.rep.othersTitle')}>{t('d2.ac.rep.others', { n: r.others })}</span>}
                 <span className="ml-auto text-xs font-bold text-mute">{r.reporter} · {ago(r.createdAt)}</span>
               </div>
               {r.text && <p className="mt-1.5 whitespace-pre-line text-sm font-semibold">{r.text}</p>}
-              {r.serverName && <p className="mt-1 text-xs font-bold text-mute">Сервер: <a href={`/servers/${r.serverId}`} className="hover:text-link">{r.serverName}</a></p>}
+              {r.serverName && <p className="mt-1 text-xs font-bold text-mute">{t('d2.ac.rep.server')} <a href={`/servers/${r.serverId}`} className="hover:text-link">{r.serverName}</a></p>}
               {r.status === 'open' ? (
                 <div className="mt-2.5 flex flex-wrap items-center gap-2">
-                  <input className="input min-w-48 flex-1" maxLength={300} placeholder="Комментарий для автора жалобы (необязательно)" aria-label="Комментарий" value={notes[r.id] ?? ''} onChange={(e) => setNotes((n) => ({ ...n, [r.id]: e.target.value }))} />
-                  <button type="button" className="btn btn-success btn-sm" onClick={() => void close(r.id, 'resolved')}>Меры приняты</button>
-                  <button type="button" className="btn btn-soft btn-sm" onClick={() => void close(r.id, 'dismissed')}>Отклонить</button>
+                  <input className="input min-w-48 flex-1" maxLength={300} placeholder={t('d2.ac.rep.notePh')} aria-label={t('d2.ac.rep.note')} value={notes[r.id] ?? ''} onChange={(e) => setNotes((n) => ({ ...n, [r.id]: e.target.value }))} />
+                  <button type="button" className="btn btn-success btn-sm" onClick={() => void close(r.id, 'resolved')}>{t('d2.ac.rep.actionTaken')}</button>
+                  <button type="button" className="btn btn-soft btn-sm" onClick={() => void close(r.id, 'dismissed')}>{t('d2.ac.dismiss')}</button>
                 </div>
               ) : (
-                <p className="mt-2 text-sm font-bold text-mute">{r.status === 'resolved' ? '✅ Меры приняты' : 'ℹ️ Отклонена'} · {r.handledBy}{r.handledAt ? `, ${ago(r.handledAt)}` : ''}{r.note ? ` · ${r.note}` : ''}</p>
+                <p className="mt-2 text-sm font-bold text-mute">{r.status === 'resolved' ? t('d2.ac.rep.doneMark') : t('d2.ac.rep.dismissedMark')} · {r.handledBy}{r.handledAt ? `, ${ago(r.handledAt)}` : ''}{r.note ? ` · ${r.note}` : ''}</p>
               )}
             </li>
           ))}
@@ -137483,6 +139746,7 @@ interface QueueRow { id: number; newsId: number; title: string; author: string; 
 
 /** complained-about and hidden comments under the news; the switch of the comments for the whole site */
 function CommentsAdmin() {
+  useI18n();
   const { me } = useAuth();
   const canSwitch = me?.role === 'admin' || !!me?.perms?.includes('news');
   const [rows, setRows] = useState<QueueRow[] | null>(null);
@@ -137496,46 +139760,46 @@ function CommentsAdmin() {
   }, []);
   const flip = (id: number) => setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
   const run = (ids: number[], action: 'approve' | 'hide' | 'delete', reason?: string) =>
-    api('/news/comments/bulk', 'POST', { ids, action, ...(reason ? { reason } : {}) }).then(() => { toast('Готово'); void load(); }).catch((e: Error) => setError(e.message));
+    api('/news/comments/bulk', 'POST', { ids, action, ...(reason ? { reason } : {}) }).then(() => { toast(t('wn.done')); void load(); }).catch((e: Error) => setError(e.message));
   const hideMany = async (ids: number[]) => {
-    const reason = await promptDialog({ title: 'Скрыть комментарии', label: 'Причина (её увидит автор)', confirmLabel: 'Скрыть', placeholder: 'Например: оскорбления' });
+    const reason = await promptDialog({ title: t('d2.ac.cm.hideTitle'), label: t('d2.ac.cm.reason'), confirmLabel: t('d2.ac.cm.hide'), placeholder: t('d2.ac.cm.reasonEx') });
     if (reason !== null) void run(ids, 'hide', reason);
   };
   const delMany = async (ids: number[]) => {
-    if (await confirmDialog({ title: `Удалить комментариев: ${ids.length}?`, text: 'Это нельзя отменить.', confirmLabel: 'Удалить', danger: true })) void run(ids, 'delete');
+    if (await confirmDialog({ title: t('d2.ac.cm.delTitle', { n: ids.length }), text: t('d2.ac.cm.delText'), confirmLabel: t('d2.ac.cm.delete'), danger: true })) void run(ids, 'delete');
   };
-  const switchSite = (v: boolean) => api<{ enabled: boolean }>('/news/comments/settings', 'PUT', { enabled: v }).then((s) => { setOn(s.enabled); toast(s.enabled ? 'Комментарии включены' : 'Комментарии выключены'); }).catch((e: Error) => setError(e.message));
+  const switchSite = (v: boolean) => api<{ enabled: boolean }>('/news/comments/settings', 'PUT', { enabled: v }).then((s) => { setOn(s.enabled); toast(s.enabled ? t('d2.ac.cm.on') : t('d2.ac.cm.off')); }).catch((e: Error) => setError(e.message));
   return (
     <Section
-      title="Комментарии к новостям"
-      description={rows ? (rows.length ? `В очереди: ${rows.length}. Сначала те, на кого пожаловались` : 'Жалоб и скрытых комментариев нет') : undefined}
-      actions={canSwitch && on !== null ? <label className="flex cursor-pointer items-center gap-2 font-bold"><input type="checkbox" className="h-4 w-4 accent-brand" checked={on} onChange={(e) => void switchSite(e.target.checked)} />Комментарии включены</label> : undefined}
+      title={t('d2.ac.cm.title')}
+      description={rows ? (rows.length ? t('d2.ac.cm.descQueue', { n: rows.length }) : t('d2.ac.cm.descNone')) : undefined}
+      actions={canSwitch && on !== null ? <label className="flex cursor-pointer items-center gap-2 font-bold"><input type="checkbox" className="h-4 w-4 accent-brand" checked={on} onChange={(e) => void switchSite(e.target.checked)} />{t('d2.ac.cm.on')}</label> : undefined}
     >
       <ErrorLine text={error} />
       {picked.length > 0 && (
         <div className="flex flex-wrap items-center gap-2 rounded-2xl bg-soft px-3 py-2">
-          <b>Выбрано: {picked.length}</b>
-          <button type="button" className="btn btn-success btn-sm" onClick={() => void run(picked, 'approve')}>Оставить</button>
-          <button type="button" className="btn btn-soft btn-sm" onClick={() => void hideMany(picked)}>Скрыть</button>
-          <button type="button" className="btn btn-danger btn-sm" onClick={() => void delMany(picked)}>Удалить</button>
+          <b>{t('d2.ac.cm.picked', { n: picked.length })}</b>
+          <button type="button" className="btn btn-success btn-sm" onClick={() => void run(picked, 'approve')}>{t('d2.ac.cm.keep')}</button>
+          <button type="button" className="btn btn-soft btn-sm" onClick={() => void hideMany(picked)}>{t('d2.ac.cm.hide')}</button>
+          <button type="button" className="btn btn-danger btn-sm" onClick={() => void delMany(picked)}>{t('d2.ac.cm.delete')}</button>
         </div>
       )}
-      {rows === null ? <div className="skeleton h-24 rounded-2xl" /> : rows.length === 0 ? <p className="text-sm font-semibold text-mute">Очередь пуста.</p> : (
+      {rows === null ? <div className="skeleton h-24 rounded-2xl" /> : rows.length === 0 ? <p className="text-sm font-semibold text-mute">{t('d2.ac.queueEmpty')}</p> : (
         <ul className="grid gap-2.5">
           {rows.map((r) => (
             <li key={r.id} className="rounded-2xl bg-soft px-4 py-3">
               <div className="flex flex-wrap items-center gap-2">
-                <input type="checkbox" className="h-4 w-4 accent-brand" checked={picked.includes(r.id)} onChange={() => flip(r.id)} aria-label={`Выбрать комментарий ${r.author}`} />
+                <input type="checkbox" className="h-4 w-4 accent-brand" checked={picked.includes(r.id)} onChange={() => flip(r.id)} aria-label={t('d2.ac.cm.pickOne', { name: r.author })} />
                 <b>{r.author}</b>
-                {r.status === 'hidden' ? <span className="pill pill-mute">скрыт{r.hideReason ? `: ${r.hideReason}` : ''}</span> : <span className="pill pill-bad">жалоб: {r.flags}</span>}
+                {r.status === 'hidden' ? <span className="pill pill-mute">{t('d2.ac.cm.hidden')}{r.hideReason ? `: ${r.hideReason}` : ''}</span> : <span className="pill pill-bad">{t('d2.ac.cm.flags', { n: r.flags })}</span>}
                 <a href={`/news/${r.newsId}#c-${r.id}`} className="min-w-0 truncate text-sm font-bold text-mute hover:text-link">{r.title}</a>
                 <span className="ml-auto text-xs font-bold text-mute">{ago(r.createdAt)}</span>
               </div>
               <p className="mt-1.5 whitespace-pre-line wrap-break-word text-sm font-semibold">{r.text}</p>
               <div className="mt-2 flex flex-wrap gap-2">
-                <button type="button" className="btn btn-success btn-xs" onClick={() => void run([r.id], 'approve')}>{r.status === 'hidden' ? 'Показать' : 'Оставить'}</button>
-                {r.status !== 'hidden' && <button type="button" className="btn btn-soft btn-xs" onClick={() => void hideMany([r.id])}>Скрыть</button>}
-                <button type="button" className="btn btn-danger btn-xs" onClick={() => void delMany([r.id])}>Удалить</button>
+                <button type="button" className="btn btn-success btn-xs" onClick={() => void run([r.id], 'approve')}>{r.status === 'hidden' ? t('d2.ac.cm.show') : t('d2.ac.cm.keep')}</button>
+                {r.status !== 'hidden' && <button type="button" className="btn btn-soft btn-xs" onClick={() => void hideMany([r.id])}>{t('d2.ac.cm.hide')}</button>}
+                <button type="button" className="btn btn-danger btn-xs" onClick={() => void delMany([r.id])}>{t('d2.ac.cm.delete')}</button>
               </div>
             </li>
           ))}
@@ -137583,13 +139847,13 @@ function GalleryAdmin() {
         <div className="mq">
           <img src={next.thumb} alt="" className="mq-img" />
           <div className="mq-body">
-            <p className="text-xs font-extrabold uppercase tracking-wide text-mute">На проверке · {waiting}</p>
+            <p className="text-xs font-extrabold uppercase tracking-wide text-mute">{t('d2.ac.g.pending')} · {waiting}</p>
             <p className="font-extrabold">{next.caption || t('adm.com.noCaption')}</p>
             <p className="text-sm font-semibold text-mute">{[next.author, next.serverName, ago(next.createdAt)].filter(Boolean).join(' · ')}</p>
             <div className="mt-2 flex flex-wrap gap-2">
-              <button type="button" className="btn btn-success btn-sm" onClick={() => void patch(next.id, { status: 'approved' }, t('adm.com.published'))}>Опубликовать <kbd>A</kbd></button>
-              <button type="button" className="btn btn-danger btn-sm" onClick={() => void patch(next.id, { status: 'rejected' }, t('adm.com.rejected'))}>Отклонить <kbd>X</kbd></button>
-              {waiting > 1 && <button type="button" className="btn btn-soft btn-sm" onClick={() => setSkipped((l) => [...l, next.id])}>Позже <kbd>→</kbd></button>}
+              <button type="button" className="btn btn-success btn-sm" onClick={() => void patch(next.id, { status: 'approved' }, t('adm.com.published'))}>{t('d2.news.publish')} <kbd>A</kbd></button>
+              <button type="button" className="btn btn-danger btn-sm" onClick={() => void patch(next.id, { status: 'rejected' }, t('adm.com.rejected'))}>{t('d2.ac.dismiss')} <kbd>X</kbd></button>
+              {waiting > 1 && <button type="button" className="btn btn-soft btn-sm" onClick={() => setSkipped((l) => [...l, next.id])}>{t('d2.ac.g.later')} <kbd>→</kbd></button>}
             </div>
           </div>
         </div>
@@ -137884,7 +140148,7 @@ import { useAuth } from '../auth';
 import { delta, dayKey, healthScore } from './adminLogic';
 import { api, type BackupInfo, type BotStatus, type CertInfo, type Server, type UpdateInfo, type UserRow } from '../api';
 import type { OverviewData } from '../components/servers/overviewLogic';
-import { t, useI18n } from '../i18n';
+import { t, useI18n, type TKey } from '../i18n';
 import { AdminPage, Button, PageHead, Section, SmoothArea, ago, fmtDateTime, toast, usePoll, fail } from '../ui';
 import { Icon } from '../icons';
 import { downloadFile } from './Backups';
@@ -137908,12 +140172,13 @@ const ok = <T,>(r: PromiseSettledResult<T>): T | null => (r.status === 'fulfille
 const WEEK = 7 * 86_400_000;
 
 function Tile({ label, value, sub, tone, href, change, spark }: { label: string; value: string; sub?: string; tone?: 'ok' | 'warn' | 'bad'; href?: string; change?: { text: string; tone: 'up' | 'down' } | null; spark?: number[] }) {
+  useI18n();
   const body = (
     <>
       <span className="adm-tile-k">{label}</span>
       <span className="adm-tile-row">
         <span className={`adm-tile-v ${tone ? `is-${tone}` : ''}`}>{value}</span>
-        {change && <span className={`adm-delta is-${change.tone}`} title="за 24 часа">{change.text}</span>}
+        {change && <span className={`adm-delta is-${change.tone}`} title={t('d2.ao.24h')}>{change.text}</span>}
       </span>
       {spark && spark.length >= 3 && <SmoothArea values={spark} color="rgb(var(--link))" w={160} h={28} fill={0.18} strokeWidth={1.5} className="adm-tile-spark" label={label} />}
       {sub && <span className="adm-tile-s">{sub}</span>}
@@ -137922,34 +140187,35 @@ function Tile({ label, value, sub, tone, href, change, spark }: { label: string;
   return href ? <a href={href} className="adm-tile">{body}</a> : <div className="adm-tile">{body}</div>;
 }
 
-const REASON_TEXT: Record<string, string> = {
-  down: 'Есть недоступные серверы',
-  bot: 'Бот Discord в ошибке',
-  cert: 'Сертификат скоро истечёт',
-  backup: 'Давно нет резервной копии',
-  pending: 'Ждут заявки игроков',
-  update: 'Доступно обновление',
+const REASON_TEXT: Record<string, TKey> = {
+  down: 'd2.ao.r.down',
+  bot: 'd2.ao.r.bot',
+  cert: 'd2.ao.r.cert',
+  backup: 'd2.ao.r.backup',
+  pending: 'd2.ao.r.pending',
+  update: 'd2.ao.r.update',
 };
 
 /** The ring of the panel's health: the number in the middle, the reasons under it */
 function HealthRing({ score, reasons }: { score: number; reasons: { id: string; cost: number; tone: string }[] }) {
+  useI18n();
   const R = 38;
   const C = 2 * Math.PI * R;
   const tone = score >= 90 ? 'ok' : score >= 65 ? 'warn' : 'bad';
   return (
-    <section className="panel adm-health" aria-label="Здоровье панели">
-      <svg viewBox="0 0 100 100" className="adm-ring" role="img" aria-label={`Здоровье панели: ${score} из 100`}>
+    <section className="panel adm-health" aria-label={t('d2.ao.health')}>
+      <svg viewBox="0 0 100 100" className="adm-ring" role="img" aria-label={t('d2.ao.healthScore', { n: score })}>
         <circle cx="50" cy="50" r={R} className="adm-ring-bg" />
         <circle cx="50" cy="50" r={R} className={`adm-ring-fg is-${tone}`} strokeDasharray={C} strokeDashoffset={C * (1 - score / 100)} transform="rotate(-90 50 50)" />
         <text x="50" y="56" textAnchor="middle" className="adm-ring-n">{score}</text>
       </svg>
       <div className="min-w-0">
-        <p className="font-extrabold">{score >= 90 ? 'Панель в порядке' : score >= 65 ? 'Есть, на что взглянуть' : 'Нужно вмешательство'}</p>
+        <p className="font-extrabold">{score >= 90 ? t('d2.ao.h.ok') : score >= 65 ? t('d2.ao.h.look') : t('d2.ao.h.act')}</p>
         {reasons.length === 0 ? (
-          <p className="text-sm font-semibold text-mute">Серверы, бот, сертификат и копии — всё в норме.</p>
+          <p className="text-sm font-semibold text-mute">{t('d2.ao.h.allOk')}</p>
         ) : (
           <ul className="mt-1 flex flex-wrap gap-1.5">
-            {reasons.map((r) => <li key={r.id} className={`adm-reason is-${r.tone}`}>{REASON_TEXT[r.id]} <b>−{r.cost}</b></li>)}
+            {reasons.map((r) => <li key={r.id} className={`adm-reason is-${r.tone}`}>{REASON_TEXT[r.id] ? t(REASON_TEXT[r.id]) : r.id} <b>−{r.cost}</b></li>)}
           </ul>
         )}
       </div>
@@ -137957,15 +140223,16 @@ function HealthRing({ score, reasons }: { score: number; reasons: { id: string; 
   );
 }
 
-const DUTY = [
-  { id: 'servers', text: 'Просмотреть серверы', href: '/admin/servers' },
-  { id: 'users', text: 'Разобрать заявки игроков', href: '/admin/users' },
-  { id: 'backup', text: 'Проверить резервную копию', href: '/admin/settings/updates' },
-  { id: 'journal', text: 'Заглянуть в журнал', href: '/admin/journal' },
+const DUTY: { id: string; text: TKey; href: string }[] = [
+  { id: 'servers', text: 'd2.ao.duty.servers', href: '/admin/servers' },
+  { id: 'users', text: 'd2.ao.duty.users', href: '/admin/users' },
+  { id: 'backup', text: 'd2.ao.duty.backup', href: '/admin/settings/updates' },
+  { id: 'journal', text: 'd2.ao.duty.journal', href: '/admin/journal' },
 ];
 
 /** The checks of the day: kept in this browser, start anew each day */
 function Duty() {
+  useI18n();
   const key = `adm-duty-${dayKey()}`;
   const [done, setDone] = useState<string[]>(() => {
     try { return JSON.parse(localStorage.getItem(key) ?? '[]') as string[]; } catch { return []; }
@@ -137977,15 +140244,15 @@ function Duty() {
   };
   const left = DUTY.filter((d) => !done.includes(d.id)).length;
   return (
-    <Section title="Обход на сегодня" description={left === 0 ? 'Всё обойдено — можно отдыхать' : `Осталось: ${left} из ${DUTY.length}`}>
+    <Section title={t('d2.ao.duty')} description={left === 0 ? t('d2.ao.duty.allDone') : t('d2.ao.duty.left', { a: left, b: DUTY.length })}>
       <ul className="space-y-1.5">
         {DUTY.map((d) => (
           <li key={d.id} className="adm-duty">
             <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-2.5">
               <input type="checkbox" checked={done.includes(d.id)} onChange={() => toggle(d.id)} />
-              <span className={`font-bold ${done.includes(d.id) ? 'text-mute line-through' : ''}`}>{d.text}</span>
+              <span className={`font-bold ${done.includes(d.id) ? 'text-mute line-through' : ''}`}>{t(d.text)}</span>
             </label>
-            <a href={d.href} className="text-sm font-extrabold text-link hover:underline">Открыть</a>
+            <a href={d.href} className="text-sm font-extrabold text-link hover:underline">{t('d2.ao.open')}</a>
           </li>
         ))}
       </ul>
@@ -138096,13 +140363,13 @@ export default function AdminOverview() {
           </div>
 
           {servers.length > 0 && (
-            <div className="adm-now" role="list" aria-label="Серверы сейчас">
+            <div className="adm-now" role="list" aria-label={t('d2.ao.now')}>
               {servers.map((s) => (
                 <a key={s.id} role="listitem" href={`/servers/${s.id}`} className={`adm-now-card ${s.maintenance ? 'is-maint' : s.online ? 'is-on' : 'is-off'}`}>
                   <span className="adm-now-dot" aria-hidden />
                   <span className="min-w-0">
                     <span className="block truncate text-sm font-extrabold">{s.name}</span>
-                    <span className="block text-xs font-semibold tabular-nums text-mute">{s.maintenance ? 'обслуживание' : s.online ? `${s.players} / ${s.maxPlayers}` : 'недоступен'}</span>
+                    <span className="block text-xs font-semibold tabular-nums text-mute">{s.maintenance ? t('d2.ao.maint') : s.online ? `${s.players} / ${s.maxPlayers}` : t('d2.ao.down')}</span>
                   </span>
                 </a>
               ))}
@@ -138155,7 +140422,7 @@ export default function AdminOverview() {
               title={t('adm.ov.recent')}
               actions={
                 <span className="flex items-center gap-3">
-                  <button type="button" className="adm-chip" aria-pressed={mine} onClick={() => setMine((v) => !v)}>Только мои</button>
+                  <button type="button" className="adm-chip" aria-pressed={mine} onClick={() => setMine((v) => !v)}>{t('d2.ao.mine')}</button>
                   <a href="/admin/journal" className="text-sm font-extrabold text-link hover:underline">{t('adm.ov.journal')}</a>
                 </span>
               }
@@ -138180,7 +140447,7 @@ export default function AdminOverview() {
                   })}
                 </ul>
               ) : (
-                <p className="font-semibold text-mute">{mine ? 'Ваших действий пока нет' : t('adm.ov.noEvents')}</p>
+                <p className="font-semibold text-mute">{mine ? t('d2.ao.noMine') : t('adm.ov.noEvents')}</p>
               )}
             </Section>
             <Duty />
@@ -138295,9 +140562,9 @@ export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableA
             </button>
           ))}
         </nav>
-        <div className="seg hidden w-fit md:flex" role="group" aria-label="Вид списка">
-          <button type="button" className="seg-item" aria-pressed={view === 'table'} onClick={() => pickView('table')}>Таблица</button>
-          <button type="button" className="seg-item" aria-pressed={view === 'cards'} onClick={() => pickView('cards')}>Карточки</button>
+        <div className="seg hidden w-fit md:flex" role="group" aria-label={t('d2.news.viewLabel')}>
+          <button type="button" className="seg-item" aria-pressed={view === 'table'} onClick={() => pickView('table')}>{t('d2.ast.table')}</button>
+          <button type="button" className="seg-item" aria-pressed={view === 'cards'} onClick={() => pickView('cards')}>{t('d2.ast.cards')}</button>
         </div>
         <details className="adm-cols hidden md:block">
           <summary className="seg-item cursor-pointer select-none">{t('adm.cols')}</summary>
@@ -139110,12 +141377,12 @@ function BackupTimeline({ items, schedule }: { items: BackupInfo['items']; sched
   return (
     <div className="mb-3 space-y-2 rounded-ui-lg bg-soft p-3.5">
       <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 text-sm font-bold text-mute">
-        <span><b className="text-ink">{items.length}</b> {items.length === 1 ? t('bk2.copy1') : items.length < 5 ? t('bk2.copy2') : t('bk2.copy5')}, {t('bk2.total', { size: fmtSize(total) })}</span>
-        <span className={late ? 'text-warn' : ''}>{t('bk2.last', { ago: ago(last.createdAt) })}{late ? `. ${t('bk2.late')}` : ''}</span>
+        <span><b className="text-ink">{items.length}</b> {t('d2.bk.copies', { n: items.length })}, {t('d2.bk.total', { size: fmtSize(total) })}</span>
+        <span className={late ? 'text-warn' : ''}>{t('d2.bk.last', { ago: ago(last.createdAt) })}{late ? `. ${t('d2.bk.late')}` : ''}</span>
       </div>
-      <div className="bk-line" role="img" aria-label={t('bk2.count', { n: items.length })}>
+      <div className="bk-line" role="img" aria-label={t('d2.bk.countLabel', { n: items.length })}>
         {list.map((b) => (
-          <span key={b.name} className={b.kind === 'auto' ? '' : 'is-manual'} style={{ height: `${Math.max(12, (b.size / max) * 100)}%` }} title={`${fmtDateTime(b.createdAt)} · ${fmtSize(b.size)} · ${b.kind === 'auto' ? t('bk2.auto') : t('bk2.manual')}`} />
+          <span key={b.name} className={b.kind === 'auto' ? '' : 'is-manual'} style={{ height: `${Math.max(12, (b.size / max) * 100)}%` }} title={`${fmtDateTime(b.createdAt)} · ${fmtSize(b.size)} · ${b.kind === 'auto' ? t('d2.bk.auto') : t('d2.bk.manual')}`} />
         ))}
       </div>
       <div className="flex justify-between text-xs font-bold text-mute"><span>{fmtDateTime(list[0].createdAt)}</span><span>{fmtDateTime(last.createdAt)}</span></div>
@@ -139124,14 +141391,14 @@ function BackupTimeline({ items, schedule }: { items: BackupInfo['items']; sched
 }
 
 export const fmtSize = (n: number) =>
-  n >= 1073741824 ? `${(n / 1073741824).toFixed(1)} ${t('bk2.gb')}` : n >= 1048576 ? `${(n / 1048576).toFixed(1)} ${t('bk2.mb')}` : n >= 1024 ? `${Math.round(n / 1024)} ${t('bk2.kb')}` : `${n} ${t('bk2.b')}`;
+  n >= 1073741824 ? t('d2.sys.gb', { v: (n / 1073741824).toFixed(1) }) : n >= 1048576 ? t('d2.sys.mb', { v: (n / 1048576).toFixed(1) }) : n >= 1024 ? t('d2.bk.kb', { v: Math.round(n / 1024) }) : t('d2.bk.b', { v: n });
 
 const isEncrypted = (name: string) => name.endsWith('.enc');
 
 /** save an authenticated GET as a file */
 export async function downloadFile(path: string, fallbackName: string) {
   const r = await fetch(`/api${path}`, { headers: { Authorization: `Bearer ${getToken() ?? ''}` } });
-  if (!r.ok) throw new Error(errorText(await r.json().catch(() => null), t('bk2.fetchFail')));
+  if (!r.ok) throw new Error(errorText(await r.json().catch(() => null), t('d2.bk.getFail')));
   const name = /filename="?([^"]+)"?/.exec(r.headers.get('content-disposition') ?? '')?.[1] ?? fallbackName;
   const url = URL.createObjectURL(await r.blob());
   const a = document.createElement('a');
@@ -139153,12 +141420,12 @@ async function waitAndReload() {
 
 const askPassphrase = (what: string) =>
   promptDialog({
-    title: t('bk2.encTitle'),
-    label: t('bk2.passLabel'),
-    text: t('bk2.encText', { what }),
+    title: t('d2.bk.encTitle'),
+    label: t('d2.bk.pass'),
+    text: t('d2.bk.encText', { what }),
     password: true,
-    confirmLabel: t('bk2.continue'),
-    validate: (v) => (v ? null : t('bk2.needPass')),
+    confirmLabel: t('d2.bk.continue'),
+    validate: (v) => (v ? null : t('d2.bk.passEnter')),
   });
 
 /** Stored archives, schedule, off-site upload and restore. */
@@ -139193,28 +141460,28 @@ export default function BackupsCard() {
 
   const downloadFull = () => guard('full', async () => {
     await downloadFile('/backup', 'coregsm-backup.tar.gz');
-    toast(t('bk2.downloaded'));
+    toast(t('d2.bk.t.downloaded'));
   });
   const createCopy = () => guard('run', async () => {
     await api<BackupItem>('/backups/run', 'POST');
-    toast(t('bk2.created'));
+    toast(t('d2.bk.t.created'));
     await load();
   });
   const download = (b: BackupItem) => guard(`dl:${b.name}`, async () => {
     await downloadFile(`/backups/${encodeURIComponent(b.name)}`, b.name);
   });
   const remove = async (b: BackupItem) => {
-    if (!(await confirmDialog({ title: t('bk2.delQ'), text: t('bk2.delText', { name: b.name }), confirmLabel: t('bk2.delete'), danger: true }))) return;
+    if (!(await confirmDialog({ title: t('d2.bk.c.delTitle'), text: t('d2.bk.c.delText', { name: b.name }), confirmLabel: t('d2.news.delete'), danger: true }))) return;
     await guard(`rm:${b.name}`, async () => {
       await api(`/backups/${encodeURIComponent(b.name)}`, 'DELETE');
-      toast(t('bk2.deleted'));
+      toast(t('d2.bk.t.deleted'));
       await load();
     });
   };
   /** after a restore: with unreadable secrets the page stays (and warns), otherwise it waits for the restart and reloads */
   const afterRestore = async (raw: unknown) => {
     const un = unreadableSecrets(raw).map((x) => x.id);
-    toast(t('bk2.accepted'));
+    toast(t('d2.bk.t.accepted'));
     if (un.length) {
       saveUnreadableSecrets(un);
       setUnreadable(un);
@@ -139225,9 +141492,9 @@ export default function BackupsCard() {
   };
   const restoreStored = async (b: BackupItem) => {
     if (!(await confirmDialog({
-      title: t('bk2.restoreQ'),
-      text: t('bk2.restoreText', { name: b.name, date: fmtDateTime(b.createdAt) }),
-      confirmLabel: t('bk2.restore'),
+      title: t('d2.bk.c.restoreTitle'),
+      text: t('d2.bk.c.restoreText', { name: b.name, when: fmtDateTime(b.createdAt) }),
+      confirmLabel: t('d2.bk.restore'),
       danger: true,
     }))) return;
     let pass: string | undefined;
@@ -139248,9 +141515,9 @@ export default function BackupsCard() {
   };
   const restoreFile = async (file: File) => {
     if (!(await confirmDialog({
-      title: t('bk2.restoreFileQ'),
-      text: t('bk2.restoreFileText', { name: file.name }),
-      confirmLabel: t('bk2.restore'),
+      title: t('d2.bk.c.fileTitle'),
+      text: t('d2.bk.c.fileText', { name: file.name }),
+      confirmLabel: t('d2.bk.restore'),
       danger: true,
     }))) return;
     const headers: Record<string, string> = { 'Content-Type': 'application/octet-stream', Authorization: `Bearer ${getToken() ?? ''}` };
@@ -139266,7 +141533,7 @@ export default function BackupsCard() {
     try {
       const r = await fetch('/api/backup/restore', { method: 'POST', headers, body: file });
       const j = (await r.json().catch(() => null)) as { error?: string; unreadableSecrets?: string[] } | null;
-      if (!r.ok) throw new Error(errorText(j, t('bk2.restoreFail')));
+      if (!r.ok) throw new Error(errorText(j, t('d2.bk.restoreFail')));
       await afterRestore(j?.unreadableSecrets);
     } catch (e) {
       setError(errText(e));
@@ -139278,8 +141545,8 @@ export default function BackupsCard() {
     e.preventDefault();
     setError('');
     const url = remoteUrl.trim();
-    if (url && !/^https:\/\//i.test(url)) { setError(t('bk2.httpsOnly')); return; }
-    if (!Number.isInteger(keep) || keep < 1 || keep > 30) { setError(t('bk2.keepRange')); return; }
+    if (url && !/^https:\/\//i.test(url)) { setError(t('d2.bk.e.https')); return; }
+    if (!Number.isInteger(keep) || keep < 1 || keep > 30) { setError(t('d2.bk.e.keep')); return; }
     const body: { schedule: string; keep: number; remoteUrl?: string; passphrase?: string } = { schedule, keep };
     if (clearRemote) body.remoteUrl = '';
     else if (url) body.remoteUrl = url;
@@ -139292,7 +141559,7 @@ export default function BackupsCard() {
       setClearRemote(false);
       setPassphrase('');
       setClearPass(false);
-      toast(t('bk2.settingsSaved'));
+      toast(t('d2.bk.t.settings'));
       await load();
     } catch (err) {
       setError(errText(err));
@@ -139305,8 +141572,8 @@ export default function BackupsCard() {
 
   return (
     <Section
-      title={t('bk2.title')}
-      description={t('bk2.desc')}
+      title={t('d2.sys.backups')}
+      description={t('d2.bk.desc')}
     >
       {error && !info ? <LoadError error={error} onRetry={() => void load()} compact bare /> : <ErrorLine text={error} />}
 
@@ -139326,10 +141593,10 @@ export default function BackupsCard() {
       )}
 
       <div className="flex flex-wrap items-center gap-3">
-        <button className="btn" onClick={() => void downloadFull()} disabled={disabled}>{busy === 'full' ? t('bk2.preparing') : t('bk2.dlFull')}</button>
-        <button className="btn btn-soft" onClick={() => void createCopy()} disabled={disabled}>{busy === 'run' ? t('bk2.creating') : t('bk2.createOnServer')}</button>
+        <button className="btn" onClick={() => void downloadFull()} disabled={disabled}>{busy === 'full' ? t('d2.bk.preparing') : t('d2.bk.full')}</button>
+        <button className="btn btn-soft" onClick={() => void createCopy()} disabled={disabled}>{busy === 'run' ? t('d2.bk.creating') : t('d2.bk.create')}</button>
         <label className={`btn btn-soft cursor-pointer ${disabled ? 'pointer-events-none opacity-50' : ''}`}>
-          {restoring ? t('bk2.restoring') : t('bk2.restoreFile')}
+          {restoring ? t('d2.bk.restoring') : t('d2.bk.fromFile')}
           <input
             type="file"
             accept=".db,.gz,.enc,.tar.gz,application/octet-stream"
@@ -139341,22 +141608,22 @@ export default function BackupsCard() {
       </div>
 
       <form onSubmit={saveSettings} className="space-y-4 rounded-ui-lg bg-soft p-4">
-        <h3 className="font-black">{t('bk2.schedTitle')}</h3>
+        <h3 className="font-black">{t('d2.bk.schedule')}</h3>
         <div className="grid gap-4 sm:grid-cols-2">
-          <Field label={t('bk2.f.auto')}>
+          <Field label={t('d2.bk.auto2')}>
             <select id="bk-schedule" className="input" value={schedule} onChange={(e) => setSchedule(e.target.value as BackupInfo['schedule'])}>
-              <option value="off">{t('bk2.s.off')}</option>
-              <option value="daily">{t('bk2.s.daily')}</option>
-              <option value="weekly">{t('bk2.s.weekly')}</option>
+              <option value="off">{t('al.smart.off')}</option>
+              <option value="daily">{t('d2.bk.everyDay')}</option>
+              <option value="weekly">{t('d2.mt.weekly')}</option>
             </select>
           </Field>
-          <Field label={t('bk2.f.keep')}>
+          <Field label={t('d2.bk.keep')}>
             <input id="bk-keep" className="input" type="number" min={1} max={30} value={keep} onChange={(e) => setKeep(Number(e.target.value))} />
           </Field>
         </div>
 
         <div>
-          <label htmlFor="bk-remote" className="label">{t('bk2.f.remote')}</label>
+          <label htmlFor="bk-remote" className="label">{t('d2.bk.remote')}</label>
           <input
             id="bk-remote"
             className="input font-mono"
@@ -139366,25 +141633,25 @@ export default function BackupsCard() {
             value={clearRemote ? '' : remoteUrl}
             disabled={clearRemote}
             onChange={(e) => setRemoteUrl(e.target.value)}
-            placeholder={info?.remoteUrl ? t('bk2.now', { url: info.remoteUrl }) : 'https://…'}
+            placeholder={info?.remoteUrl ? t('d2.bot.proxyNow', { url: info.remoteUrl }) : 'https://…'}
             aria-describedby="bk-remote-hint"
           />
-          <p id="bk-remote-hint" className="mt-1.5 text-sm font-semibold text-mute">{t('bk2.remoteHint')}</p>
+          <p id="bk-remote-hint" className="mt-1.5 text-sm font-semibold text-mute">{t('d2.bk.remoteHint')}</p>
           {info?.remoteUrl && (
             <label className="mt-2 flex items-center gap-3 text-sm font-bold text-mute">
               <Switch checked={clearRemote} onChange={setClearRemote} />
-              {t('bk2.remoteOff')}
+              {t('d2.bk.remoteOff')}
             </label>
           )}
           {info?.lastRemote && (
             <p className={`mt-2 rounded-2xl px-4 py-2 text-sm font-bold ${info.lastRemote.ok ? 'bg-okbg text-ok' : 'bg-badbg text-bad'}`} role="status">
-              {t('bk2.lastSend', { at: fmtDateTime(info.lastRemote.at) })}, {info.lastRemote.ok ? t('bk2.ok') : `${t('bk2.error')}${info.lastRemote.error ? `: ${info.lastRemote.error}` : ''}`}
+              {t('d2.bk.lastSend')} {fmtDateTime(info.lastRemote.at)}, {info.lastRemote.ok ? t('d2.bk.ok') : `${t('d2.sys.bot.error')}${info.lastRemote.error ? `: ${info.lastRemote.error}` : ''}`}
             </p>
           )}
         </div>
 
         <div>
-          <label htmlFor="bk-pass" className="label">{t('bk2.f.pass')}</label>
+          <label htmlFor="bk-pass" className="label">{t('d2.bk.passLabel')}</label>
           <input
             id="bk-pass"
             className="input"
@@ -139393,30 +141660,30 @@ export default function BackupsCard() {
             value={clearPass ? '' : passphrase}
             disabled={clearPass}
             onChange={(e) => setPassphrase(e.target.value)}
-            placeholder={info?.encrypted ? t('bk2.passOn') : t('bk2.passOff')}
+            placeholder={info?.encrypted ? t('d2.bk.passOn') : t('d2.bk.passOff')}
             aria-describedby="bk-pass-hint"
           />
-          <p id="bk-pass-hint" className="mt-1.5 text-sm font-bold text-warn">{t('bk2.passWarn')}</p>
+          <p id="bk-pass-hint" className="mt-1.5 text-sm font-bold text-warn">{t('d2.bk.passWarn')}</p>
           {info?.encrypted && (
             <label className="mt-2 flex items-center gap-3 text-sm font-bold text-mute">
               <Switch checked={clearPass} onChange={setClearPass} />
-              {t('bk2.encOff')}
+              {t('d2.bk.encOff')}
             </label>
           )}
         </div>
 
-        <Button loading={saving}>{saving ? t('bk2.saving') : t('common.save')}</Button>
+        <Button loading={saving}>{saving ? t('d2.sf.saving') : t('common.save')}</Button>
       </form>
 
       <BackupS3 info={info} reload={load} />
 
       <div>
-        <h3 className="mb-2 font-black">{t('bk2.onServer')}</h3>
+        <h3 className="mb-2 font-black">{t('d2.bk.onServer')}</h3>
         {info && info.items.length > 0 && <BackupTimeline items={info.items} schedule={info.schedule} />}
         {!info ? (
           <div className="skeleton h-20 rounded-2xl" />
         ) : info.items.length === 0 ? (
-          <StateView kind="empty" compact bare title={t('bk2.empty')} text={t('bk2.emptyText')} className="rounded-2xl bg-soft" />
+          <StateView kind="empty" compact bare title={t('d2.bk.empty')} text={t('d2.bk.emptyText')} className="rounded-2xl bg-soft" />
         ) : (
           <ul className="divide-y divide-line rounded-2xl border border-line">
             {info.items.map((b) => (
@@ -139425,12 +141692,12 @@ export default function BackupsCard() {
                   <div className="break-all font-mono text-sm font-bold">{b.name}</div>
                   <div className="text-sm font-semibold text-mute">{fmtDateTime(b.createdAt)} · {fmtSize(b.size)}</div>
                 </div>
-                <span className={`pill ${b.kind === 'auto' ? 'pill-mute' : 'pill-ok'}`}>{b.kind === 'auto' ? t('bk2.tagAuto') : t('bk2.tagManual')}</span>
-                {isEncrypted(b.name) && <span className="pill pill-warn">{t('bk2.tagEnc')}</span>}
-                <div className="flex items-center gap-1.5" role="group" aria-label={t('bk2.actions', { name: b.name })}>
-                  <button type="button" className="row-act" title={t('bk2.download')} aria-label={t('bk2.download')} onClick={() => void download(b)} disabled={disabled}><IconDownload /></button>
-                  <button type="button" className="row-act" title={t('bk2.restoreHere')} aria-label={t('bk2.restoreHere')} onClick={() => void restoreStored(b)} disabled={disabled}><IconRestore /></button>
-                  <button type="button" className="row-act row-act-danger" title={t('bk2.delete')} aria-label={t('bk2.delete')} onClick={() => void remove(b)} disabled={disabled}><IconTrash /></button>
+                <span className={`pill ${b.kind === 'auto' ? 'pill-mute' : 'pill-ok'}`}>{b.kind === 'auto' ? t('d2.bk.autoU') : t('d2.bk.manualU')}</span>
+                {isEncrypted(b.name) && <span className="pill pill-warn">{t('d2.bk.encrypted')}</span>}
+                <div className="flex items-center gap-1.5" role="group" aria-label={t('d2.bk.actions', { name: b.name })}>
+                  <button type="button" className="row-act" title={t('cards.download')} aria-label={t('cards.download')} onClick={() => void download(b)} disabled={disabled}><IconDownload /></button>
+                  <button type="button" className="row-act" title={t('d2.bk.c.restoreTitle')} aria-label={t('d2.bk.c.restoreTitle')} onClick={() => void restoreStored(b)} disabled={disabled}><IconRestore /></button>
+                  <button type="button" className="row-act row-act-danger" title={t('d2.news.delete')} aria-label={t('d2.news.delete')} onClick={() => void remove(b)} disabled={disabled}><IconTrash /></button>
                 </div>
               </li>
             ))}
@@ -140697,6 +142964,7 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/pages/EmbedPreview.tsx" << '__COREGSM_EOF__'
 import { useState, type CSSProperties, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react';
 import { api } from '../api';
+import { t as tr } from '../i18n';
 import { DiscordMd, EnvCtx, THEMES, ThemeCtx, type DTheme, type MdEnv } from '../components/news/DiscordMd';
 import { usePoll } from '../ui';
 
@@ -140885,8 +143153,8 @@ export function EmbedView({
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-x-2 text-fs-base leading-tight">
                   <span className="font-bold" style={{ color: t.title }}>{botName}</span>
-                  <span className="rounded-sm px-1 text-xs font-bold uppercase text-white" style={{ background: '#5865f2' }}>БОТ</span>
-                  <span className="text-xs" style={{ color: t.muted }}>Сегодня, в {pad2(now.getHours())}:{pad2(now.getMinutes())}</span>
+                  <span className="rounded-sm px-1 text-xs font-bold uppercase text-white" style={{ background: '#5865f2' }}>{tr('d2.ep.bot')}</span>
+                  <span className="text-xs" style={{ color: t.muted }}>{tr('d2.ep.today', { time: `${pad2(now.getHours())}:${pad2(now.getMinutes())}` })}</span>
                 </div>
                 {content && (
                   <Part part="content" embed={0} onPick={onPick} bad={invalid?.has('content')} className="mt-0.5">
@@ -140996,6 +143264,7 @@ import { useCallback, useEffect, useRef, useState, type TouchEvent } from 'react
 import { api, getToken, type Server } from '../api';
 import { errorText } from '../apiErrors';
 import { useAuth } from '../auth';
+import { t, useI18n, type TKey } from '../i18n';
 import { IMAGE_TYPES, useDropTarget } from '../components/profile/AvatarEditor';
 import { Button, Empty, ErrorLine, Field, Modal, PageHead, ago, toast, errText } from '../ui';
 import ArtPic from '../components/ArtPic';
@@ -141024,6 +143293,7 @@ const IconImage = () => (
 
 /** the full-size viewer over the page */
 export function Lightbox({ list, index, onClose, onIndex }: { list: Shot[]; index: number; onClose: () => void; onIndex: (i: number) => void }) {
+  useI18n();
   const s = list[index];
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
@@ -141054,9 +143324,9 @@ export function Lightbox({ list, index, onClose, onIndex }: { list: Shot[]; inde
   };
   if (!s) return null;
   return (
-    <div className="gl-box" role="dialog" aria-modal="true" aria-label={s.caption || 'Скриншот'} onClick={onClose} onTouchStart={onStart} onTouchEnd={onEnd}>
+    <div className="gl-box" role="dialog" aria-modal="true" aria-label={s.caption || t('d2.gal.shot')} onClick={onClose} onTouchStart={onStart} onTouchEnd={onEnd}>
       <figure className="gl-box-fig" onClick={(e) => e.stopPropagation()}>
-        <img key={s.id} src={s.url} alt={s.caption || 'Скриншот'} width={s.width} height={s.height} style={{ backgroundImage: `url(${s.thumb})`, backgroundSize: 'cover' }} />
+        <img key={s.id} src={s.url} alt={s.caption || t('d2.gal.shot')} width={s.width} height={s.height} style={{ backgroundImage: `url(${s.thumb})`, backgroundSize: 'cover' }} />
         <figcaption>
           <span className="min-w-0 flex-1">
             {s.caption && <span className="block font-extrabold">{s.caption}</span>}
@@ -141066,9 +143336,9 @@ export function Lightbox({ list, index, onClose, onIndex }: { list: Shot[]; inde
         </figcaption>
       </figure>
       {list.length > 1 && (
-        <div className="gl-box-strip" onClick={(e) => e.stopPropagation()} role="tablist" aria-label="Все скриншоты">
+        <div className="gl-box-strip" onClick={(e) => e.stopPropagation()} role="tablist" aria-label={t('d2.gal.all')}>
           {list.map((x, i) => (
-            <button key={x.id} type="button" role="tab" aria-selected={i === index} className={i === index ? 'is-on' : ''} onClick={() => onIndex(i)} aria-label={x.caption || `Скриншот ${i + 1}`}>
+            <button key={x.id} type="button" role="tab" aria-selected={i === index} className={i === index ? 'is-on' : ''} onClick={() => onIndex(i)} aria-label={x.caption || t('d2.gal.shotN', { n: i + 1 })}>
               <img src={x.thumb} alt="" loading="lazy" />
             </button>
           ))}
@@ -141076,11 +143346,11 @@ export function Lightbox({ list, index, onClose, onIndex }: { list: Shot[]; inde
       )}
       {list.length > 1 && (
         <>
-          <button type="button" className="gl-box-nav is-prev" aria-label="Предыдущий" onClick={(e) => { e.stopPropagation(); onIndex((index - 1 + list.length) % list.length); }}>‹</button>
-          <button type="button" className="gl-box-nav is-next" aria-label="Следующий" onClick={(e) => { e.stopPropagation(); onIndex((index + 1) % list.length); }}>›</button>
+          <button type="button" className="gl-box-nav is-prev" aria-label={t('d2.gal.prev')} onClick={(e) => { e.stopPropagation(); onIndex((index - 1 + list.length) % list.length); }}>‹</button>
+          <button type="button" className="gl-box-nav is-next" aria-label={t('d2.gal.next')} onClick={(e) => { e.stopPropagation(); onIndex((index + 1) % list.length); }}>›</button>
         </>
       )}
-      <button type="button" className="gl-box-close" aria-label="Закрыть" onClick={onClose}>✕</button>
+      <button type="button" className="gl-box-close" aria-label={t('common.close')} onClick={onClose}>✕</button>
     </div>
   );
 }
@@ -141105,13 +143375,14 @@ function ShotImg({ shot }: { shot: Shot }) {
 }
 
 export function ShotGrid({ list, onOpen, badge }: { list: Shot[]; onOpen: (i: number) => void; badge?: (s: Shot) => string | null }) {
+  useI18n();
   return (
     <ul className="gl-grid">
       {list.map((s, i) => (
         <li key={s.id} className="gl-cell">
           <button type="button" className="gl-shot" onClick={() => onOpen(i)} aria-label={s.caption || `Скриншот ${i + 1}`}>
             <ShotImg shot={s} />
-            {s.featured && <span className="gl-star" title="Лучшее">★</span>}
+            {s.featured && <span className="gl-star" title={t('d2.gal.best')}>★</span>}
             {badge?.(s) && <span className="gl-badge">{badge(s)}</span>}
             {(s.caption || s.author) && (
               <span className="gl-cap">
@@ -141127,6 +143398,7 @@ export function ShotGrid({ list, onOpen, badge }: { list: Shot[]; onOpen: (i: nu
 }
 
 function UploadForm({ servers, onClose, onDone, initial }: { servers: Server[]; onClose: () => void; onDone: (s: Shot) => void; initial?: File | null }) {
+  useI18n();
   const [file, setFile] = useState<File | null>(initial ?? null);
   const [preview, setPreview] = useState('');
   const [caption, setCaption] = useState('');
@@ -141148,7 +143420,7 @@ function UploadForm({ servers, onClose, onDone, initial }: { servers: Server[]; 
       if (serverId) q.set('serverId', String(serverId));
       const r = await fetch(`/api/gallery?${q.toString()}`, { method: 'POST', headers: { 'Content-Type': file.type, Authorization: `Bearer ${getToken() ?? ''}` }, body: file });
       const j = (await r.json().catch(() => null)) as (Shot & { error?: string }) | null;
-      if (!r.ok || !j) throw new Error(errorText(j, 'Не удалось загрузить картинку (PNG, JPG или WebP до 8 МБ)'));
+      if (!r.ok || !j) throw new Error(errorText(j, t('d2.gal.uploadFail')));
       onDone(j);
     } catch (e) {
       setError(errText(e));
@@ -141157,33 +143429,34 @@ function UploadForm({ servers, onClose, onDone, initial }: { servers: Server[]; 
     }
   };
   return (
-    <Modal title="Новый скриншот" onClose={onClose}>
+    <Modal title={t('d2.gal.new')} onClose={onClose}>
       <div className="space-y-3.5">
         <label className={`gl-drop ${preview ? 'has-file' : ''}`}>
           <input type="file" accept="image/png,image/jpeg,image/webp" className="sr-only" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
-          {preview ? <img src={preview} alt="" /> : <span className="font-extrabold text-mute">Выберите картинку: PNG, JPG или WebP до 8 МБ</span>}
+          {preview ? <img src={preview} alt="" /> : <span className="font-extrabold text-mute">{t('d2.gal.choose')}</span>}
         </label>
-        <Field label="Подпись (необязательно)"><input className="input" value={caption} onChange={(e) => setCaption(e.target.value)} maxLength={140} placeholder="Например: закат над замком" /></Field>
-        <Field label="Сервер">
+        <Field label={t('d2.gal.caption')}><input className="input" value={caption} onChange={(e) => setCaption(e.target.value)} maxLength={140} placeholder={t('d2.gal.captionEx')} /></Field>
+        <Field label={t('d2.gal.server')}>
           <select className="input" value={serverId} onChange={(e) => setServerId(e.target.value ? Number(e.target.value) : '')}>
-            <option value="">Не указывать</option>
+            <option value="">{t('d2.gal.noServer')}</option>
             {servers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
           </select>
         </Field>
-        <p className="text-sm font-semibold text-mute">Скриншот появится в галерее после проверки модератором.</p>
+        <p className="text-sm font-semibold text-mute">{t('d2.gal.moderated')}</p>
         <ErrorLine text={error} />
         <div className="flex justify-end gap-2">
-          <button type="button" className="btn btn-ghost" onClick={onClose}>Отмена</button>
-          <Button loading={busy} disabled={!file} onClick={() => void send()} type="button">Отправить</Button>
+          <button type="button" className="btn btn-ghost" onClick={onClose}>{t('common.cancel')}</button>
+          <Button loading={busy} disabled={!file} onClick={() => void send()} type="button">{t('d2.gal.send')}</Button>
         </div>
       </div>
     </Modal>
   );
 }
 
-const STATUS: Record<Shot['status'], string | null> = { pending: 'на проверке', rejected: 'отклонён', approved: null };
+const STATUS: Record<Shot['status'], TKey | null> = { pending: 'd2.gal.st.pending', rejected: 'd2.gal.st.rejected', approved: null };
 
 export default function GalleryPage() {
+  useI18n();
   const { me } = useAuth();
   const [list, setList] = useState<Shot[] | null>(null);
   const [mine, setMine] = useState<Shot[]>([]);
@@ -141203,32 +143476,32 @@ export default function GalleryPage() {
 
   // a picture dropped anywhere on the page opens the upload form with it
   const drop = useDropTarget((f) => {
-    if (!me) return toast('Войдите, чтобы загрузить скриншот', 'err');
-    if (!IMAGE_TYPES.includes(f.type)) return toast('Нужна картинка: PNG, JPG или WebP', 'err');
+    if (!me) return toast(t('d2.gal.t.login'), 'err');
+    if (!IMAGE_TYPES.includes(f.type)) return toast(t('d2.gal.t.type'), 'err');
     setDropped(f);
     setUploading(true);
   }, uploading);
   return (
     <div className="space-y-5" ref={topRef} {...drop.props}>
-      {drop.over && <div className="gl-dropzone" aria-hidden><span>Отпустите, чтобы загрузить скриншот</span></div>}
+      {drop.over && <div className="gl-dropzone" aria-hidden><span>{t('d2.gal.drop')}</span></div>}
       <PageHead
         icon={<IconImage />}
-        title="Галерея"
-        subtitle="Скриншоты игроков с наших серверов"
+        title={t('d2.gal.title')}
+        subtitle={t('d2.gal.subtitle')}
       >
-        {me ? <button type="button" className="btn" onClick={() => setUploading(true)}>Загрузить скриншот</button> : <a href="/login" className="btn btn-soft">Войдите, чтобы загрузить</a>}
+        {me ? <button type="button" className="btn" onClick={() => setUploading(true)}>{t('d2.gal.upload')}</button> : <a href="/login" className="btn btn-soft">{t('d2.gal.loginUpload')}</a>}
       </PageHead>
       <ErrorLine text={error} />
       {mine.length > 0 && (
         <section className="tile p-4 sm:p-5">
-          <h2 className="mb-3 text-lg font-extrabold">Мои скриншоты на проверке</h2>
-          <ShotGrid list={mine} onOpen={(i) => setOpen({ list: mine, i })} badge={(s) => STATUS[s.status]} />
+          <h2 className="mb-3 text-lg font-extrabold">{t('d2.gal.mine')}</h2>
+          <ShotGrid list={mine} onOpen={(i) => setOpen({ list: mine, i })} badge={(s) => { const k = STATUS[s.status]; return k ? t(k) : null; }} />
         </section>
       )}
       {list === null ? (
         <div className="gl-grid" aria-busy="true">{[0, 1, 2, 3, 4, 5].map((i) => <div key={i} className="skeleton h-48 rounded-2xl" />)}</div>
       ) : list.length === 0 ? (
-        <Empty art={<ArtPic src="empty/empty-gallery" size={132} />} title="Скриншотов пока нет" text="Поделитесь красивым кадром из игры: он появится здесь после проверки.">{me ? <button type="button" className="btn mt-2" onClick={() => setUploading(true)}>Загрузить первый скриншот</button> : <a href="/login" className="btn btn-soft mt-2">Войти и загрузить</a>}</Empty>
+        <Empty art={<ArtPic src="empty/empty-gallery" size={132} />} title={t('d2.gal.empty')} text={t('d2.gal.emptyText')}>{me ? <button type="button" className="btn mt-2" onClick={() => setUploading(true)}>{t('d2.gal.uploadFirst')}</button> : <a href="/login" className="btn btn-soft mt-2">{t('d2.gal.signInUpload')}</a>}</Empty>
       ) : (
         <ShotGrid list={list} onOpen={(i) => setOpen({ list, i })} />
       )}
@@ -141241,7 +143514,7 @@ export default function GalleryPage() {
           onDone={(s) => {
             setUploading(false);
             setDropped(null);
-            toast(s.status === 'approved' ? 'Скриншот опубликован' : 'Скриншот отправлен на проверку');
+            toast(s.status === 'approved' ? t('d2.gal.t.published') : t('d2.gal.t.sent'));
             load();
           }}
         />
@@ -141367,6 +143640,7 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/pages/Journal.tsx" << '__COREGSM_EOF__'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { api } from '../api';
+import { t, useI18n } from '../i18n';
 import { Icon } from '../icons';
 import { JournalArt } from '../components/Illustrations';
 import { AdminPage, Empty, ErrorLine, IconJournal, LoadError, PageHead, fmtDateTime, fmtTime, usePoll, SkeletonRows } from '../ui';
@@ -141398,8 +143672,8 @@ const dayLabel = (ts: number) => {
   const d = new Date(ts);
   const day = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
   const diff = Math.round((day(new Date()) - day(d)) / 86_400_000);
-  if (diff === 0) return 'Сегодня';
-  if (diff === 1) return 'Вчера';
+  if (diff === 0) return t('d2.jr.today');
+  if (diff === 1) return t('d2.jr.yesterday');
   return d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', weekday: 'long' });
 };
 
@@ -141407,6 +143681,7 @@ const csvCell = (v: string | number) => `"${String(v).replace(/"/g, '""')}"`;
 
 /** Who changed what and when (the last 2000 actions). */
 export default function JournalPage() {
+  useI18n();
   const [rows, setRows] = useState<Row[] | null>(null);
   const [q, setQ] = useState('');
   const [error, setError] = useState('');
@@ -141429,7 +143704,7 @@ export default function JournalPage() {
   }, [shown]);
 
   const exportCsv = () => {
-    const lines = ['время,кто,действие,подробности', ...shown.map((r) => [new Date(r.ts).toISOString(), r.actor, r.action, r.detail].map(csvCell).join(','))];
+    const lines = [t('d2.jr.csv'), ...shown.map((r) => [new Date(r.ts).toISOString(), r.actor, r.action, r.detail].map(csvCell).join(','))];
     const url = URL.createObjectURL(new Blob(['﻿' + lines.join('\n')], { type: 'text/csv;charset=utf-8' }));
     const a = document.createElement('a');
     a.href = url;
@@ -141445,19 +143720,19 @@ export default function JournalPage() {
       head={(
         <PageHead
           icon={<IconJournal />}
-          title="Журнал"
-          subtitle="Кто и что менял в панели"
-          hint="Здесь записано, кто из администраторов что и когда менял. Это помогает понять, откуда взялось изменение."
-          help={<p>Хранятся последние 2000 действий. Поиск работает по имени, действию и подробностям.</p>}
+          title={t('d2.jr.title')}
+          subtitle={t('d2.jr.subtitle')}
+          hint={t('d2.jr.hint')}
+          help={<p>{t('d2.jr.help')}</p>}
         >
-          <button type="button" className="btn btn-soft" onClick={exportCsv} disabled={shown.length === 0}>Скачать CSV</button>
+          <button type="button" className="btn btn-soft" onClick={exportCsv} disabled={shown.length === 0}>{t('d2.jr.csvBtn')}</button>
         </PageHead>
       )}
     >
       {error && !rows ? <LoadError error={error} onRetry={() => void load()} /> : <ErrorLine text={error} />}
-      <input className="input max-w-sm" type="search" placeholder="Поиск по журналу…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Поиск по журналу" />
+      <input className="input max-w-sm" type="search" placeholder={t('d2.jr.search')} value={q} onChange={(e) => setQ(e.target.value)} aria-label={t('d2.jr.searchLabel')} />
       {!rows && !error && <SkeletonRows n={6} h="h-12" />}
-      {rows && shown.length === 0 && <Empty art={<JournalArt />} title="Записей нет" text={needle ? 'Ничего не найдено.' : 'Действия администраторов будут появляться здесь.'}>{needle && <button type="button" className="btn btn-soft mt-3" onClick={() => setQ('')}>Сбросить поиск</button>}</Empty>}
+      {rows && shown.length === 0 && <Empty art={<JournalArt />} title={t('d2.jr.empty')} text={needle ? t('d2.jr.notFound') : t('d2.jr.emptyText')}>{needle && <button type="button" className="btn btn-soft mt-3" onClick={() => setQ('')}>{t('d2.jr.resetSearch')}</button>}</Empty>}
       {groups.map(([day, list]) => (
         <section key={day} className="space-y-2">
           <h2 className="text-xs font-extrabold uppercase tracking-wide text-mute">{day}</h2>
@@ -141477,7 +143752,7 @@ export default function JournalPage() {
           </ul>
         </section>
       ))}
-      {more && <button type="button" className="btn btn-soft" onClick={() => setLimit((l) => Math.min(MAX, l + STEP))}>Показать ещё</button>}
+      {more && <button type="button" className="btn btn-soft" onClick={() => setLimit((l) => Math.min(MAX, l + STEP))}>{t('d2.jr.more')}</button>}
     </AdminPage>
   );
 }
@@ -141711,14 +143986,14 @@ interface Draft { id: number | null; serverId: string; name: string; start: stri
 
 const emptyDraft = (): Draft => {
   const p = presetNow(Date.now());
-  return { id: null, serverId: '', name: t('mt.defName'), start: toLocalInput(p.startTs), end: toLocalInput(p.endTs), repeat: 'none' };
+  return { id: null, serverId: '', name: t('d2.mt.defName'), start: toLocalInput(p.startTs), end: toLocalInput(p.endTs), repeat: 'none' };
 };
 
 const CHIP: Record<WindowState, { text: TKey; cls: string }> = {
-  active: { text: 'mt.st.active', cls: 'pill pill-warn' },
-  planned: { text: 'mt.st.planned', cls: 'pill pill-mute' },
-  repeat: { text: 'mt.st.repeat', cls: 'pill pill-mute' },
-  past: { text: 'mt.st.past', cls: 'pill pill-mute' },
+  active: { text: 'd2.mt.st.active', cls: 'pill pill-warn' },
+  planned: { text: 'd2.mt.st.planned', cls: 'pill pill-mute' },
+  repeat: { text: 'd2.mt.st.repeat', cls: 'pill pill-mute' },
+  past: { text: 'd2.mt.st.past', cls: 'pill pill-mute' },
 };
 
 /** «Обслуживание»: windows during which a server is shown as «Обслуживание» and does not raise alerts. */
@@ -141758,7 +144033,7 @@ export default function MaintenancePage() {
   const remove = (w: MaintenanceWindow) => {
     setHidden((h) => [...h, w.id]);
     undoable({
-      text: t('mt.deleted', { name: w.name }),
+      text: t('d2.mt.deleted', { name: w.name }),
       restore: () => setHidden((h) => h.filter((x) => x !== w.id)),
       commit: () => api(`/maintenance/${w.id}`, 'DELETE')
         .catch((e: Error) => toast(e.message, 'err'))
@@ -141771,30 +144046,30 @@ export default function MaintenancePage() {
       head={(
         <PageHead
           icon={<IconWrench size={22} />}
-          title={t('mt.title')}
-          subtitle={t('mt.subtitle')}
-          hint={t('mt.hint')}
-          help={<p>{t('mt.help')}</p>}
+          title={t('d2.mt.title')}
+          subtitle={t('d2.mt.subtitle')}
+          hint={t('d2.mt.hint')}
+          help={<p>{t('d2.mt.help')}</p>}
         >
-          <button type="button" className="btn" onClick={() => open()}><IconPlus size={16} />{t('mt.add')}</button>
+          <button type="button" className="btn" onClick={() => open()}><IconPlus size={16} />{t('d2.mt.add')}</button>
         </PageHead>
       )}
     >
       {error && !list ? <LoadError error={error} onRetry={() => void load()} /> : <ErrorLine text={error} />}
 
-      <div className="flex flex-wrap gap-2" role="group" aria-label={t('mt.quick')}>
-        <button type="button" className="chip-filter" onClick={() => open(presetNow(Date.now()))}>{t('mt.now30')}</button>
-        <button type="button" className="chip-filter" onClick={() => open(presetTonight(Date.now()))}>{t('mt.tonight')}</button>
+      <div className="flex flex-wrap gap-2" role="group" aria-label={t('d2.mt.quickWin')}>
+        <button type="button" className="chip-filter" onClick={() => open(presetNow(Date.now()))}>{t('d2.mt.now30')}</button>
+        <button type="button" className="chip-filter" onClick={() => open(presetTonight(Date.now()))}>{t('d2.mt.tonight')}</button>
       </div>
 
       {list && rows.length === 0 && (
         <StateView
-          title={t('mt.empty')}
-          text={t('mt.emptyText')}
-          action={<button type="button" className="btn" onClick={() => open()}>{t('mt.add')}</button>}
+          title={t('d2.mt.empty')}
+          text={t('d2.mt.emptyText')}
+          action={<button type="button" className="btn" onClick={() => open()}>{t('d2.mt.add')}</button>}
         />
       )}
-      {!list && !error && <div className="skeleton panel h-40" aria-busy="true" aria-label={t('mt.loading')} />}
+      {!list && !error && <div className="skeleton panel h-40" aria-busy="true" aria-label={t('d2.news.loading')} />}
 
       {rows.length > 0 && (
         <ul className="panel divide-y divide-line overflow-hidden">
@@ -141807,16 +144082,16 @@ export default function MaintenancePage() {
                   {w.repeat !== 'none' && st !== 'repeat' && <span className="pill pill-mute">{REPEAT_LABEL[w.repeat]}</span>}
                 </div>
                 <div className="mt-0.5 wrap-break-word text-sm font-semibold text-mute">
-                  {w.serverId == null ? t('mt.allServers') : w.serverName ?? t('mt.serverNo', { id: w.serverId })}
+                  {w.serverId == null ? t('sn.f.all') : w.serverName ?? t('d2.mt.serverNo', { id: w.serverId })}
                   {' · '}
                   {rangeLabel(w.startTs, w.endTs)}
                   {st === 'active' && w.until ? ` · ${untilLabel(w.until)}` : ''}
-                  {st !== 'active' && w.repeat !== 'none' && w.nextStart ? ` · ${t('mt.next', { range: rangeLabel(w.nextStart, w.nextStart + (w.endTs - w.startTs)) })}` : ''}
+                  {st !== 'active' && w.repeat !== 'none' && w.nextStart ? ` · ${t('d2.mt.next', { range: rangeLabel(w.nextStart, w.nextStart + (w.endTs - w.startTs)) })}` : ''}
                 </div>
               </div>
               <div className="flex items-center gap-2">
-                <button type="button" className="btn btn-soft btn-sm" onClick={() => edit(w)} aria-label={t('mt.editAria', { name: w.name })}><IconEdit size={16} />{t('mt.edit')}</button>
-                <button type="button" className="row-act row-act-danger" onClick={() => remove(w)} aria-label={t('mt.delAria', { name: w.name })}><IconTrash size={16} /></button>
+                <button type="button" className="btn btn-soft btn-sm" onClick={() => edit(w)} aria-label={t('d2.mt.editWin', { name: w.name })}><IconEdit size={16} />{t('d2.news.change')}</button>
+                <button type="button" className="row-act row-act-danger" onClick={() => remove(w)} aria-label={t('d2.mt.delWin', { name: w.name })}><IconTrash size={16} /></button>
               </div>
             </li>
           ))}
@@ -141851,7 +144126,7 @@ function WindowModal({ draft, servers, onClose, onSaved }: { draft: Draft; serve
     setError('');
     try {
       await (f.id == null ? api('/maintenance', 'POST', body) : api(`/maintenance/${f.id}`, 'PUT', body));
-      toast(f.id == null ? t('mt.added') : t('mt.saved'));
+      toast(f.id == null ? t('d2.mt.t.added') : t('d2.mt.t.saved'));
       onSaved();
     } catch (err) {
       setError(errText(err));
@@ -141860,33 +144135,33 @@ function WindowModal({ draft, servers, onClose, onSaved }: { draft: Draft; serve
   };
 
   return (
-    <Modal title={f.id == null ? t('mt.newTitle') : t('mt.editTitle')} onClose={onClose}>
+    <Modal title={f.id == null ? t('d2.mt.newWin') : t('d2.mt.editTitle')} onClose={onClose}>
       <form className="space-y-4" onSubmit={(e) => void submit(e)} noValidate>
-        <Field label={t('mt.f.server')}>
+        <Field label={t('sn.f.server')}>
           <select className="input" value={f.serverId} onChange={(e) => set('serverId', e.target.value)}>
-            <option value="">{t('mt.allServers')}</option>
+            <option value="">{t('sn.f.all')}</option>
             {servers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
           </select>
         </Field>
-        <Field label={t('mt.f.name')}>
-          <input className="input" value={f.name} maxLength={80} onChange={(e) => set('name', e.target.value)} placeholder={t('mt.f.namePh')} />
+        <Field label={t('d2.sf.name')}>
+          <input className="input" value={f.name} maxLength={80} onChange={(e) => set('name', e.target.value)} placeholder={t('d2.mt.nameEx')} />
         </Field>
-        <div className="flex flex-wrap gap-2" role="group" aria-label={t('mt.quickTime')}>
-          <button type="button" className="chip-filter" onClick={() => apply(presetNow(Date.now()))}>{t('mt.now30')}</button>
-          <button type="button" className="chip-filter" onClick={() => apply(presetTonight(Date.now()))}>{t('mt.tonight')}</button>
+        <div className="flex flex-wrap gap-2" role="group" aria-label={t('d2.mt.quickTime')}>
+          <button type="button" className="chip-filter" onClick={() => apply(presetNow(Date.now()))}>{t('d2.mt.now30')}</button>
+          <button type="button" className="chip-filter" onClick={() => apply(presetTonight(Date.now()))}>{t('d2.mt.tonight')}</button>
         </div>
         <div className="grid gap-4 min-[460px]:grid-cols-2">
-          <Field label={t('mt.f.start')}><input className="input" type="datetime-local" value={f.start} onChange={(e) => set('start', e.target.value)} /></Field>
-          <Field label={t('mt.f.end')}><input className="input" type="datetime-local" value={f.end} onChange={(e) => set('end', e.target.value)} /></Field>
+          <Field label={t('d2.mt.start')}><input className="input" type="datetime-local" value={f.start} onChange={(e) => set('start', e.target.value)} /></Field>
+          <Field label={t('d2.mt.end')}><input className="input" type="datetime-local" value={f.end} onChange={(e) => set('end', e.target.value)} /></Field>
         </div>
-        <Field label={t('mt.f.repeat')}>
+        <Field label={t('d2.mt.repeat')}>
           <select className="input" value={f.repeat} onChange={(e) => set('repeat', e.target.value as MaintenanceRepeat)}>
-            <option value="none">{t('mt.r.none')}</option>
-            <option value="daily">{t('mt.r.daily')}</option>
-            <option value="weekly">{t('mt.r.weekly')}</option>
+            <option value="none">{t('d2.mt.once')}</option>
+            <option value="daily">{t('d2.mt.daily')}</option>
+            <option value="weekly">{t('d2.mt.weekly')}</option>
           </select>
         </Field>
-        <p className="text-sm font-semibold text-mute">{t('mt.tzNote')}</p>
+        <p className="text-sm font-semibold text-mute">{t('d2.mt.tzNote')}</p>
         <FieldError id="maint-problem" text={f.name.trim() && f.start && f.end ? problem ?? undefined : undefined} />
         <ErrorLine text={error} />
         <div className="flex flex-wrap justify-end gap-2">
@@ -141902,7 +144177,7 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/pages/News.tsx" << '__COREGSM_EOF__'
 import { Switch } from '../components/Switch';
 import { useState } from 'react';
-import { t } from '../i18n';
+import { t, useI18n } from '../i18n';
 import { NewsCalendar } from '../components/news/Calendar';
 import { confirmDialog } from '../confirm';
 import { api, ApiError, type NewsItem, type NewsSettings, type PublicNews } from '../api';
@@ -141927,14 +144202,15 @@ export default function NewsPage({ sub }: { sub: string }) {
 const BUSY = new Set(['queued', 'sending', 'edit_queued', 'delete_queued']);
 
 function StatusPill({ n }: { n: NewsItem }) {
+  useI18n();
   switch (n.status) {
-    case 'draft': return <span className="pill pill-mute">ЧЕРНОВИК</span>;
-    case 'scheduled': return <span className="pill pill-warn">ЗАПЛАНИРОВАНО{n.scheduledAt ? ` · ${fmtDateTime(n.scheduledAt)}` : ''}</span>;
-    case 'queued': case 'sending': return <span className="pill pill-warn">ОТПРАВЛЯЕТСЯ</span>;
-    case 'edit_queued': return <span className="pill pill-warn">ОБНОВЛЯЕТСЯ</span>;
-    case 'delete_queued': return <span className="pill pill-warn">УДАЛЯЕТСЯ</span>;
-    case 'sent': return <span className="pill pill-ok">ОПУБЛИКОВАНО{n.sentAt ? ` · ${fmtDateTime(n.sentAt)}` : ''}</span>;
-    default: return <span className="pill pill-bad">ОШИБКА</span>;
+    case 'draft': return <span className="pill pill-mute">{t('d2.news.st.draft')}</span>;
+    case 'scheduled': return <span className="pill pill-warn">{t('d2.news.st.scheduled')}{n.scheduledAt ? ` · ${fmtDateTime(n.scheduledAt)}` : ''}</span>;
+    case 'queued': case 'sending': return <span className="pill pill-warn">{t('d2.news.st.sending')}</span>;
+    case 'edit_queued': return <span className="pill pill-warn">{t('d2.news.st.updating')}</span>;
+    case 'delete_queued': return <span className="pill pill-warn">{t('d2.news.st.deleting')}</span>;
+    case 'sent': return <span className="pill pill-ok">{t('d2.news.st.sent')}{n.sentAt ? ` · ${fmtDateTime(n.sentAt)}` : ''}</span>;
+    default: return <span className="pill pill-bad">{t('d2.news.st.error')}</span>;
   }
 }
 
@@ -141945,6 +144221,7 @@ const excerpt = (n: NewsItem) => {
 };
 
 function NewsList() {
+  useI18n();
   const [items, setItems] = useState<NewsItem[]>([]);
   // items removed with «Отменить» pending stay hidden until the request is sent
   const [hidden, setHidden] = useState<number[]>([]);
@@ -141986,7 +144263,7 @@ function NewsList() {
   };
 
   const publish = async (n: NewsItem) => {
-    await api(`/news/${n.id}/publish`, 'POST').then(() => toast('Новость отправляется в Discord')).catch((e) => setError(e.message));
+    await api(`/news/${n.id}/publish`, 'POST').then(() => toast(t('d2.news.t.publishing'))).catch((e) => setError(e.message));
     void load();
   };
   const setTestChannel = async (testChannelId: string) => {
@@ -141998,27 +144275,27 @@ function NewsList() {
   const copy = async (n: NewsItem) => {
     try {
       const created = await api<NewsItem>(`/news/${n.id}/duplicate`, 'POST');
-      toast('Копия создана');
+      toast(t('d2.news.t.copied'));
       navigate(`/admin/news/${created.id}`);
       return;
     } catch (e) {
       // an older backend has no duplicate route: make the copy by hand
       if (!(e instanceof ApiError && (e.status === 404 || e.status === 405))) { setError(errText(e)); return; }
     }
-    await api('/news', 'POST', { channelId: n.channelId, payload: n.payload, action: 'draft' }).then(() => toast('Копия сохранена как черновик')).catch((e) => setError(e.message));
+    await api('/news', 'POST', { channelId: n.channelId, payload: n.payload, action: 'draft' }).then(() => toast(t('d2.news.t.copyDraft'))).catch((e) => setError(e.message));
     void load();
   };
   const reschedule = async (n: NewsItem, day: Date) => {
     const base = n.scheduledAt ? new Date(n.scheduledAt) : new Date(day.getFullYear(), day.getMonth(), day.getDate(), 12, 0);
     const at = new Date(day.getFullYear(), day.getMonth(), day.getDate(), base.getHours(), base.getMinutes()).getTime();
-    if (at <= Date.now()) { toast('Нельзя назначить время в прошлом', 'err'); return; }
+    if (at <= Date.now()) { toast(t('d2.news.t.past'), 'err'); return; }
     await api(`/news/${n.id}/schedule`, 'PATCH', { scheduledAt: at })
-      .then(() => toast(`Перенесено на ${fmtDateTime(at)}`))
+      .then(() => toast(t('d2.news.t.moved', { when: fmtDateTime(at) })))
       .catch((e) => setError(e.message));
     void load();
   };
   const togglePin = async (n: NewsItem) => {
-    await api(`/news/${n.id}/pin`, 'PATCH', { pinned: !n.pinned }).then(() => toast(n.pinned ? 'Откреплено' : 'Закреплено вверху ленты')).catch((e) => setError(e.message));
+    await api(`/news/${n.id}/pin`, 'PATCH', { pinned: !n.pinned }).then(() => toast(n.pinned ? t('d2.news.t.unpinned') : t('d2.news.t.pinnedTop'))).catch((e) => setError(e.message));
     void load();
   };
   const pick = (id: number) => setPicked((l) => (l.includes(id) ? l.filter((x) => x !== id) : [...l, id]));
@@ -142027,15 +144304,15 @@ function NewsList() {
     if (chosen.length === 0) return;
     if (kind === 'delete') {
       const sent = chosen.filter((n) => n.status === 'sent').length;
-      if (!(await confirmDialog({ title: `Удалить новостей: ${chosen.length}?`, text: sent ? `Опубликованных среди них ${sent}: их сообщения также удалятся из Discord.` : undefined, confirmLabel: 'Удалить', danger: true }))) return;
+      if (!(await confirmDialog({ title: t('d2.news.c.bulkTitle', { n: chosen.length }), text: sent ? t('d2.news.c.bulkText', { n: sent }) : undefined, confirmLabel: t('d2.news.delete'), danger: true }))) return;
     }
     setBulkBusy(true);
     const todo = kind === 'publish' ? chosen.filter((n) => ['draft', 'scheduled', 'error'].includes(n.status))
       : kind === 'pin' ? chosen.filter((n) => !n.pinned) : kind === 'unpin' ? chosen.filter((n) => n.pinned) : chosen;
     const res = await Promise.allSettled(todo.map((n) => (kind === 'publish' ? api(`/news/${n.id}/publish`, 'POST') : kind === 'delete' ? api(`/news/${n.id}`, 'DELETE') : api(`/news/${n.id}/pin`, 'PATCH', { pinned: kind === 'pin' }))));
     const bad = res.filter((r) => r.status === 'rejected').length;
-    const verb = { publish: 'Отправлено', pin: 'Закреплено', unpin: 'Откреплено', delete: 'Удалено' }[kind];
-    toast(bad ? `${verb}: ${todo.length - bad}, не удалось: ${bad}` : todo.length ? `${verb}: ${todo.length}` : 'Подходящих новостей среди выбранных нет', bad ? 'err' : undefined);
+    const verb = { publish: t('d2.news.v.publish'), pin: t('d2.news.v.pin'), unpin: t('d2.news.v.unpin'), delete: t('d2.news.v.delete') }[kind];
+    toast(bad ? t('d2.news.t.bulkBad', { verb, ok: todo.length - bad, bad }) : todo.length ? t('d2.news.t.bulkOk', { verb, n: todo.length }) : t('d2.news.t.bulkNone'), bad ? 'err' : undefined);
     setPicked([]);
     setBulkBusy(false);
     void load();
@@ -142044,22 +144321,22 @@ function NewsList() {
     const sent = n.status === 'sent';
     // a published news item also removes the Discord message: that stays behind a confirmation
     if (sent || BUSY.has(n.status)) {
-      if (!(await confirmDialog({ title: 'Удалить новость?', text: sent ? 'Сообщение также будет удалено из Discord.' : undefined, confirmLabel: 'Удалить', danger: true }))) return;
-      await api(`/news/${n.id}`, 'DELETE').then(() => toast('Новость удалена')).catch((e) => setError(e.message));
+      if (!(await confirmDialog({ title: t('d2.news.c.title'), text: sent ? t('d2.news.c.text') : undefined, confirmLabel: t('d2.news.delete'), danger: true }))) return;
+      await api(`/news/${n.id}`, 'DELETE').then(() => toast(t('d2.news.t.deleted'))).catch((e) => setError(e.message));
       void load();
       return;
     }
     // a draft or a scheduled item never reached Discord: it disappears at once and can be taken back for 6 s
     setHidden((h) => [...h, n.id]);
     undoable({
-      text: `Новость «${n.title}» удалена`,
+      text: t('d2.news.t.deletedNamed', { title: n.title }),
       restore: () => setHidden((h) => h.filter((x) => x !== n.id)),
       commit: async () => {
         try {
           await api(`/news/${n.id}`, 'DELETE');
         } catch (e) {
           setError(errText(e));
-          toast('Не удалось удалить новость', 'err');
+          toast(t('d2.news.t.deleteFail'), 'err');
         }
         setHidden((h) => h.filter((x) => x !== n.id));
         void load();
@@ -142072,30 +144349,30 @@ function NewsList() {
       head={(
         <PageHead
           icon={<IconNews />}
-          title="Новости"
-          subtitle="Публикации от имени бота в Discord"
-          hint="Новость — это сообщение, которое бот отправляет в выбранный канал Discord. Её можно отправить сразу, запланировать или сохранить черновиком."
-          help={<p>Начните с готового шаблона (вайп, перезапуск, ивент), отредактируйте текст и проверьте предпросмотр. Опубликованную новость можно поправить: сообщение в Discord обновится. Канал по умолчанию подставляется в каждую новую новость.</p>}
+          title={t('d2.news.title')}
+          subtitle={t('d2.news.subtitle')}
+          hint={t('d2.news.hint')}
+          help={<p>{t('d2.news.help')}</p>}
         >
-          <a className="btn" href="/admin/news/new" data-magnetic data-tour="news-new">+ Написать новость</a>
+          <a className="btn" href="/admin/news/new" data-magnetic data-tour="news-new">{t('d2.news.write')}</a>
         </PageHead>
       )}
     >
       {error && list.length === 0 ? <LoadError error={error} onRetry={() => void load()} /> : <ErrorLine text={error} />}
 
       <Strip className="justify-start!">
-        <span className="mr-1 text-sm font-extrabold text-mute">Быстрая новость:</span>
+        <span className="mr-1 text-sm font-extrabold text-mute">{t('d2.news.quick')}</span>
         {TEMPLATES.map((t) => <a key={t.id} className="btn btn-soft btn-sm" href={`/admin/news/new/${t.id}`}>{t.label}</a>)}
       </Strip>
 
       <Strip>
         <div className="min-w-0">
-          <div className="text-sm font-extrabold text-mute">Канал новостей по умолчанию</div>
+          <div className="text-sm font-extrabold text-mute">{t('d2.news.defChannel')}</div>
           <div className="font-black">
-            {settings?.channelId ? (settings.channelName ? `# ${settings.channelName}${settings.guildName ? ` · ${settings.guildName}` : ''}`   : <ChannelName id={settings.channelId} />) : 'не выбран'}
+            {settings?.channelId ? (settings.channelName ? `# ${settings.channelName}${settings.guildName ? ` · ${settings.guildName}` : ''}`   : <ChannelName id={settings.channelId} />) : t('d2.news.notChosen')}
           </div>
         </div>
-        <button className="btn btn-soft btn-sm" onClick={() => setChanging((v) => !v)} aria-expanded={changing}>{settings?.channelId ? 'Изменить' : 'Выбрать канал'}</button>
+        <button className="btn btn-soft btn-sm" onClick={() => setChanging((v) => !v)} aria-expanded={changing}>{settings?.channelId ? t('d2.news.change') : t('d2.news.pickChannel')}</button>
         {changing && (
           <div className="w-full">
             <ChannelPicker id="news-default-channel" value={settings?.channelId ?? ''} onChange={(v) => void setChannel(v)} />
@@ -142105,15 +144382,15 @@ function NewsList() {
 
       <Strip>
         <div className="min-w-0">
-          <div className="text-sm font-extrabold text-mute">Тестовый канал</div>
+          <div className="text-sm font-extrabold text-mute">{t('d2.news.testChannel')}</div>
           <div className="font-black">
-            {settings?.testChannelId ? (settings.testChannelName ? `# ${settings.testChannelName}${settings.testGuildName ? ` · ${settings.testGuildName}` : ''}` : `Канал ${settings.testChannelId}`) : 'не выбран'}
+            {settings?.testChannelId ? (settings.testChannelName ? `# ${settings.testChannelName}${settings.testGuildName ? ` · ${settings.testGuildName}` : ''}` : t('d2.news.channelId', { id: settings.testChannelId })) : t('d2.news.notChosen')}
           </div>
-          <div className="text-xs font-semibold text-mute">Сюда уходит «Отправить тест» из редактора.</div>
+          <div className="text-xs font-semibold text-mute">{t('d2.news.testHint')}</div>
         </div>
         <span className="flex gap-2">
-          {settings?.testChannelId && <button className="btn btn-soft btn-sm" onClick={() => void setTestChannel('')}>Сбросить</button>}
-          <button className="btn btn-soft btn-sm" onClick={() => setChangingTest((v) => !v)} aria-expanded={changingTest}>{settings?.testChannelId ? 'Изменить' : 'Выбрать канал'}</button>
+          {settings?.testChannelId && <button className="btn btn-soft btn-sm" onClick={() => void setTestChannel('')}>{t('d2.news.reset')}</button>}
+          <button className="btn btn-soft btn-sm" onClick={() => setChangingTest((v) => !v)} aria-expanded={changingTest}>{settings?.testChannelId ? t('d2.news.change') : t('d2.news.pickChannel')}</button>
         </span>
         {changingTest && (
           <div className="w-full">
@@ -142132,21 +144409,21 @@ function NewsList() {
         </label>
       </Strip>
 
-      <div className="seg" role="group" aria-label="Вид списка">
-        <button type="button" className="seg-item" aria-pressed={view === 'list'} onClick={() => pickView('list')}>Список</button>
-        <button type="button" className="seg-item" aria-pressed={view === 'calendar'} onClick={() => pickView('calendar')}>Календарь</button>
+      <div className="seg" role="group" aria-label={t('d2.news.viewLabel')}>
+        <button type="button" className="seg-item" aria-pressed={view === 'list'} onClick={() => pickView('list')}>{t('d2.news.viewList')}</button>
+        <button type="button" className="seg-item" aria-pressed={view === 'calendar'} onClick={() => pickView('calendar')}>{t('d2.news.viewCal')}</button>
       </div>
 
       {view === 'calendar' && list.length > 0 && <NewsCalendar items={list} onMove={(n, day) => void reschedule(n, day)} />}
 
       {loaded && !error && list.length === 0 && (
-        <Empty art={<ArtPic src="empty/empty-news" size={132} />} title="Новостей пока нет" text="Напишите первую новость: выберите шаблон, отредактируйте текст и опубликуйте сразу или по расписанию.">
-          <a className="btn mt-3" href="/admin/news/new">+ Написать новость</a>
+        <Empty art={<ArtPic src="empty/empty-news" size={132} />} title={t('d2.news.empty')} text={t('d2.news.emptyText')}>
+          <a className="btn mt-3" href="/admin/news/new">{t('d2.news.write')}</a>
         </Empty>
       )}
 
       {!loaded && (
-        <div className="grid gap-4 md:grid-cols-2" aria-busy="true" aria-label="Загрузка">
+        <div className="grid gap-4 md:grid-cols-2" aria-busy="true" aria-label={t('d2.news.loading')}>
           {[0, 1, 2, 3].map((i) => <div key={i} className="skeleton panel h-[188px]" />)}
         </div>
       )}
@@ -142155,14 +144432,14 @@ function NewsList() {
         <div className="flex flex-wrap items-center gap-2 rounded-ui-lg bg-soft px-4 py-2.5">
           <label className="flex items-center gap-2 font-bold">
             <input type="checkbox" className="h-4 w-4 accent-brand" checked={picked.length === list.length} onChange={(e) => setPicked(e.target.checked ? list.map((n) => n.id) : [])} />
-            {picked.length ? `Выбрано: ${picked.length}` : 'Выбрать все'}
+            {picked.length ? t('d2.news.picked', { n: picked.length }) : t('d2.news.pickAll')}
           </label>
           {picked.length > 0 && (
             <div className="ml-auto flex flex-wrap gap-2">
-              <button className="btn btn-soft btn-sm" disabled={bulkBusy} onClick={() => void bulk('publish')}>Опубликовать</button>
-              <button className="btn btn-soft btn-sm" disabled={bulkBusy} onClick={() => void bulk('pin')}>Закрепить</button>
-              <button className="btn btn-soft btn-sm" disabled={bulkBusy} onClick={() => void bulk('unpin')}>Открепить</button>
-              <button className="btn btn-danger btn-sm" disabled={bulkBusy} onClick={() => void bulk('delete')}>Удалить</button>
+              <button className="btn btn-soft btn-sm" disabled={bulkBusy} onClick={() => void bulk('publish')}>{t('d2.news.publish')}</button>
+              <button className="btn btn-soft btn-sm" disabled={bulkBusy} onClick={() => void bulk('pin')}>{t('d2.news.pin')}</button>
+              <button className="btn btn-soft btn-sm" disabled={bulkBusy} onClick={() => void bulk('unpin')}>{t('d2.news.unpin')}</button>
+              <button className="btn btn-danger btn-sm" disabled={bulkBusy} onClick={() => void bulk('delete')}>{t('d2.news.delete')}</button>
             </div>
           )}
         </div>
@@ -142175,10 +144452,10 @@ function NewsList() {
             <article key={n.id} className={`panel flex flex-col gap-3 overflow-hidden p-5 ${picked.includes(n.id) ? 'ring-2 ring-brand/60' : ''}`} style={{ borderTop: `4px solid ${color}` }}>
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="flex flex-wrap items-center gap-1.5">
-                  {list.length > 1 && <input type="checkbox" className="h-4 w-4 shrink-0 accent-brand" checked={picked.includes(n.id)} onChange={() => pick(n.id)} aria-label={`Выбрать: ${n.title}`} />}
+                  {list.length > 1 && <input type="checkbox" className="h-4 w-4 shrink-0 accent-brand" checked={picked.includes(n.id)} onChange={() => pick(n.id)} aria-label={t('d2.news.pickOne', { title: n.title })} />}
                   <StatusPill n={n} />
-                  {n.pinned && <span className="pill pill-ok">ЗАКРЕПЛЕНО</span>}
-                  {n.repeat && n.repeat !== 'none' && <span className="pill pill-mute">⟳ {n.repeat === 'daily' ? 'КАЖДЫЙ ДЕНЬ' : n.repeat === 'weekly' ? 'КАЖДУЮ НЕДЕЛЮ' : 'КАЖДЫЙ МЕСЯЦ'}</span>}
+                  {n.pinned && <span className="pill pill-ok">{t('d2.news.st.pinned')}</span>}
+                  {n.repeat && n.repeat !== 'none' && <span className="pill pill-mute">⟳ {n.repeat === 'daily' ? t('d2.news.rep.daily') : n.repeat === 'weekly' ? t('d2.news.rep.weekly') : t('d2.news.rep.monthly')}</span>}
                 </div>
                 <span className="truncate text-sm font-bold text-mute" title={n.channelId}>{<ChannelName id={n.channelId} known={n.channelName} />}</span>
               </div>
@@ -142190,21 +144467,21 @@ function NewsList() {
                 </div>
               </div>
               {(n.reactions ?? []).some((r) => r.count > 0) && (
-                <p className="flex flex-wrap gap-1.5 text-sm font-bold" aria-label="Реакции">
+                <p className="flex flex-wrap gap-1.5 text-sm font-bold" aria-label={t('d2.news.reactions')}>
                   {(n.reactions ?? []).filter((r) => r.count > 0).map((r) => <span key={r.emoji} className="nl-react">{r.emoji} {r.count}</span>)}
                 </p>
               )}
               {n.error && <p className="rounded-xl bg-badbg px-3 py-2 text-sm font-bold text-bad">{n.error}</p>}
               <div className="mt-auto flex flex-wrap gap-2 pt-1">
-                <a className="btn btn-soft btn-sm" href={`/admin/news/${n.id}`}>Изменить</a>
-                <button className="btn btn-soft btn-sm" onClick={() => void copy(n)}>Дублировать</button>
-                <button className="btn btn-soft btn-sm" aria-pressed={!!n.pinned} onClick={() => void togglePin(n)}>{n.pinned ? 'Открепить' : 'Закрепить'}</button>
-                {['draft', 'scheduled', 'error'].includes(n.status) && <button className="btn btn-soft btn-sm" onClick={() => publish(n)}>Опубликовать сейчас</button>}
-                {['sent', 'edit_queued'].includes(n.status) && <button className="btn btn-soft btn-sm" onClick={() => setStats({ id: n.id, title: n.title })}>Статистика</button>}
-                {n.messageUrl && <a className="btn btn-soft btn-sm" href={n.messageUrl} target="_blank" rel="noreferrer">Открыть в Discord ↗</a>}
+                <a className="btn btn-soft btn-sm" href={`/admin/news/${n.id}`}>{t('d2.news.change')}</a>
+                <button className="btn btn-soft btn-sm" onClick={() => void copy(n)}>{t('d2.news.dup')}</button>
+                <button className="btn btn-soft btn-sm" aria-pressed={!!n.pinned} onClick={() => void togglePin(n)}>{n.pinned ? t('d2.news.unpin') : t('d2.news.pin')}</button>
+                {['draft', 'scheduled', 'error'].includes(n.status) && <button className="btn btn-soft btn-sm" onClick={() => publish(n)}>{t('d2.news.publishNow')}</button>}
+                {['sent', 'edit_queued'].includes(n.status) && <button className="btn btn-soft btn-sm" onClick={() => setStats({ id: n.id, title: n.title })}>{t('d2.news.stats')}</button>}
+                {n.messageUrl && <a className="btn btn-soft btn-sm" href={n.messageUrl} target="_blank" rel="noreferrer">{t('d2.news.openDiscord')}</a>}
                 <span className="ml-auto flex items-center gap-1.5">
-                  <button type="button" className="row-act" title="Дублировать" aria-label="Дублировать" onClick={() => void copy(n)}><IconCopyPlus /></button>
-                  <button type="button" className="row-act row-act-danger" title="Удалить" aria-label="Удалить" onClick={() => void remove(n)}><IconTrash /></button>
+                  <button type="button" className="row-act" title={t('d2.news.dup')} aria-label={t('d2.news.dup')} onClick={() => void copy(n)}><IconCopyPlus /></button>
+                  <button type="button" className="row-act row-act-danger" title={t('d2.news.delete')} aria-label={t('d2.news.delete')} onClick={() => void remove(n)}><IconTrash /></button>
                 </span>
               </div>
             </article>
@@ -142972,6 +145249,7 @@ __COREGSM_EOF__
  */
 import { useEffect, useState } from 'react';
 import { api, ApiError, type Achievement } from '../api';
+import { t, useI18n } from '../i18n';
 import { ActivityStrip } from '../components/profile/Stats';
 import NickPic from '../components/NickPic';
 import { Crumbs } from '../components/ShellExtras';
@@ -143006,19 +145284,21 @@ interface PlayerCard {
 
 /** «№ 7 за неделю ▲2»: the place among all players, with the move against the week before */
 function RankChip({ place, before, label }: { place: number | null; before?: number | null; label: string }) {
+  useI18n();
   if (place == null) return null;
   const d = before === undefined ? null : before == null ? 'new' : before - place;
   return (
     <span className="pl-place">
       <b>№ {place}</b> {label}
-      {d === 'new' ? <i className="pl-move new">новый</i> : typeof d === 'number' && d !== 0 ? <i className={`pl-move ${d > 0 ? 'up' : 'down'}`}><span aria-hidden>{d > 0 ? '▲' : '▼'}</span>{Math.abs(d)}</i> : null}
+      {d === 'new' ? <i className="pl-move new">{t('d2.pl.new')}</i> : typeof d === 'number' && d !== 0 ? <i className={`pl-move ${d > 0 ? 'up' : 'down'}`}><span aria-hidden>{d > 0 ? '▲' : '▼'}</span>{Math.abs(d)}</i> : null}
     </span>
   );
 }
 
-const partOfDay = (h: number) => (h < 6 ? 'ночью' : h < 12 ? 'утром' : h < 18 ? 'днём' : 'вечером');
+const partOfDay = (h: number) => (h < 6 ? t('d2.pl.night') : h < 12 ? t('d2.pl.morning') : h < 18 ? t('d2.pl.day') : t('d2.pl.evening'));
 
 export default function PlayerPage({ name }: { name: string }) {
+  useI18n();
   const [p, setP] = useState<PlayerCard | null>(null);
   const [missing, setMissing] = useState(false);
   const [error, setError] = useState('');
@@ -143030,7 +145310,7 @@ export default function PlayerPage({ name }: { name: string }) {
       .catch((e: Error) => (e instanceof ApiError && e.status === 404 ? setMissing(true) : setError(e.message)));
   }, [name]);
 
-  if (missing) return <Empty art={<ArtPic src="empty/empty-players" size={132} />} title="Такого игрока не видели" text={`Ник «${name}» не появлялся на серверах за последние 90 дней.`}><a href="/community" className="btn mt-2">К сообществу</a></Empty>;
+  if (missing) return <Empty art={<ArtPic src="empty/empty-players" size={132} />} title={t('d2.pl.missing')} text={t('d2.pl.missingText', { name })}><a href="/community" className="btn mt-2">{t('d2.pl.toCommunity')}</a></Empty>;
   if (error) return <ErrorLine text={error} />;
   if (!p) return <div className="space-y-4" aria-busy="true"><div className="tile skeleton h-44" /><div className="tile skeleton h-60" /></div>;
 
@@ -143039,7 +145319,7 @@ export default function PlayerPage({ name }: { name: string }) {
   const maxS = Math.max(1, ...p.servers.map((s) => s.hours));
   return (
     <div className="space-y-5">
-      <Crumbs items={[['/community', 'Сообщество'], [`/player/${encodeURIComponent(p.name)}`, p.name]]} />
+      <Crumbs items={[['/community', t('d2.pl.community')], [`/player/${encodeURIComponent(p.name)}`, p.name]]} />
       <section className="tile pl-hero fade-in">
         <span className="pl-ava" aria-hidden><NickPic name={p.name} size={72} className="pl-ava-img">{p.name.slice(0, 1).toUpperCase()}</NickPic></span>
         <div className="min-w-0 flex-1">
@@ -143047,36 +145327,36 @@ export default function PlayerPage({ name }: { name: string }) {
           <p className="mt-1 flex flex-wrap items-center gap-2 font-bold text-mute">
             {p.online ? (
               <span className="cm-live">
-                сейчас в игре{(() => { const v = p.recent.find((r) => r.to == null); return v ? <> · <a href={`/servers/${v.serverId}`} className="underline decoration-dotted underline-offset-2">{v.serverName}</a></> : null; })()}
+                {t('d2.pl.inGame')}{(() => { const v = p.recent.find((r) => r.to == null); return v ? <> · <a href={`/servers/${v.serverId}`} className="underline decoration-dotted underline-offset-2">{v.serverName}</a></> : null; })()}
               </span>
-            ) : p.lastSeen ? <span>был {ago(p.lastSeen)}</span> : null}
+            ) : p.lastSeen ? <span>{t('d2.pl.was', { ago: ago(p.lastSeen) })}</span> : null}
             {rank && <span className="pl-rank">{rank.name}</span>}
-            <span>впервые {fmtDateTime(p.firstSeen)}</span>
+            <span>{t('d2.pl.first', { when: fmtDateTime(p.firstSeen) })}</span>
           </p>
           <div className="mt-2 flex flex-wrap items-center gap-2"><FollowButton nick={p.name} /><ReportButton nick={p.name} /></div>
         </div>
         {(p.ranks.week != null || p.ranks.month != null || p.ranks.all != null) && (
-          <div className="pl-places basis-full" aria-label="Места среди игроков">
-            <RankChip place={p.ranks.week} before={p.ranks.weekBefore} label="за неделю" />
-            <RankChip place={p.ranks.month} label="за месяц" />
-            <RankChip place={p.ranks.all} label="за всё время" />
+          <div className="pl-places basis-full" aria-label={t('d2.pl.places')}>
+            <RankChip place={p.ranks.week} before={p.ranks.weekBefore} label={t('d2.pl.week')} />
+            <RankChip place={p.ranks.month} label={t('d2.pl.month')} />
+            <RankChip place={p.ranks.all} label={t('d2.pl.allTime')} />
           </div>
         )}
         <dl className="pl-stats">
-          <div><dt>Часов</dt><dd>{num(p.hours)}</dd></div>
-          <div><dt>Визитов</dt><dd>{p.visits}</dd></div>
-          <div><dt>Дней в игре</dt><dd>{p.days}</dd></div>
-          <div className={p.streak >= 3 ? 'is-hot' : ''}><dt>Подряд</dt><dd>{p.streak >= 3 ? '🔥 ' : ''}{p.streak} {plural(p.streak, ['день', 'дня', 'дней'])}</dd></div>
+          <div><dt>{t('d2.pl.hours')}</dt><dd>{num(p.hours)}</dd></div>
+          <div><dt>{t('d2.pl.visits')}</dt><dd>{p.visits}</dd></div>
+          <div><dt>{t('d2.pl.days')}</dt><dd>{p.days}</dd></div>
+          <div className={p.streak >= 3 ? 'is-hot' : ''}><dt>{t('d2.pl.streak')}</dt><dd>{p.streak >= 3 ? '🔥 ' : ''}{t('pf.stats.days', { n: p.streak })}</dd></div>
         </dl>
       </section>
 
       <div className="grid gap-5 lg:grid-cols-2">
         <section className="tile p-4 sm:p-5">
-          <h2 className="mb-1 text-lg font-extrabold">Когда играет</h2>
-          <p className="mb-3 text-sm font-semibold text-mute">{p.usualHour != null ? `Чаще всего ${partOfDay(p.usualHour)}, около ${String(p.usualHour).padStart(2, '0')}:00` : 'Пока мало данных'}</p>
-          <div className="pl-hours" role="img" aria-label="Часы в игре по времени суток">
+          <h2 className="mb-1 text-lg font-extrabold">{t('d2.pl.when')}</h2>
+          <p className="mb-3 text-sm font-semibold text-mute">{p.usualHour != null ? t('d2.pl.usually', { part: partOfDay(p.usualHour), hh: String(p.usualHour).padStart(2, '0') }) : t('d2.pl.fewData')}</p>
+          <div className="pl-hours" role="img" aria-label={t('d2.pl.hoursLabel')}>
             {p.byHour.map((v, h) => (
-              <span key={h} className="pl-hour" title={`${String(h).padStart(2, '0')}:00 — ${num(v)} ч`}>
+              <span key={h} className="pl-hour" title={`${String(h).padStart(2, '0')}:00 — ${t('dur.h', { n: num(v) })}`}>
                 <i style={{ height: `${(v / maxH) * 100}%` }} />
                 <b>{h % 3 === 0 ? h : ''}</b>
               </span>
@@ -143085,7 +145365,7 @@ export default function PlayerPage({ name }: { name: string }) {
         </section>
 
         <section className="tile p-4 sm:p-5">
-          <h2 className="mb-3 text-lg font-extrabold">Где играет</h2>
+          <h2 className="mb-3 text-lg font-extrabold">{t('d2.pl.where')}</h2>
           <ul className="grid gap-2.5">
             {p.servers.map((s) => (
               <li key={s.id}>
@@ -143096,8 +145376,8 @@ export default function PlayerPage({ name }: { name: string }) {
                     <span className="cm-srv-bar"><span style={{ width: `${(s.hours / maxS) * 100}%` }} /></span>
                   </span>
                   <span className="shrink-0 text-right">
-                    <span className="block font-extrabold tabular-nums">{num(s.hours)} ч</span>
-                    <span className="block text-xs font-bold text-mute">{s.visits} {plural(s.visits, ['визит', 'визита', 'визитов'])}</span>
+                    <span className="block font-extrabold tabular-nums">{t('dur.h', { n: num(s.hours) })}</span>
+                    <span className="block text-xs font-bold text-mute">{t('d2.pl.nVisits', { n: s.visits })}</span>
                   </span>
                 </a>
               </li>
@@ -143107,15 +145387,15 @@ export default function PlayerPage({ name }: { name: string }) {
       </div>
 
       <section className="tile p-4 sm:p-5">
-        <h2 className="mb-3 text-lg font-extrabold">Активность за 90 дней</h2>
+        <h2 className="mb-3 text-lg font-extrabold">{t('d2.pl.activity')}</h2>
         <ActivityStrip byDay={p.byDay} />
       </section>
 
       {p.achievements && p.achievements.length > 0 && (
         <section className="tile p-4 sm:p-5">
           <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
-            <h2 className="text-lg font-extrabold">Достижения</h2>
-            <span className="text-sm font-bold text-mute">{p.achievements.filter((a) => a.earned).length} из {p.achievements.length}</span>
+            <h2 className="text-lg font-extrabold">{t('d2.pl.ach')}</h2>
+            <span className="text-sm font-bold text-mute">{t('d2.pl.achOf', { a: p.achievements.filter((x) => x.earned).length, b: p.achievements.length })}</span>
           </div>
           <ul className="pf-ach-grid">
             {[...p.achievements].sort((x, y) => Number(y.earned) - Number(x.earned) || (y.earnedAt ?? 0) - (x.earnedAt ?? 0)).map((a) => <AchievementCard key={a.id} a={a} />)}
@@ -143124,14 +145404,14 @@ export default function PlayerPage({ name }: { name: string }) {
       )}
 
       <section className="tile p-4 sm:p-5">
-        <h2 className="mb-3 text-lg font-extrabold">Последние визиты</h2>
+        <h2 className="mb-3 text-lg font-extrabold">{t('d2.pl.recent')}</h2>
         <ul className="divide-y divide-line">
           {p.recent.map((v) => (
             <li key={`${v.serverId}-${v.from}`} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2.5">
               <a href={`/servers/${v.serverId}`} className="min-w-0 flex-1 truncate font-bold hover:text-link">{v.serverName}</a>
               <span className="text-sm font-semibold text-mute">
-                {fmtDateTime(v.from)} – {v.to ? fmtTime(v.to) : 'сейчас'}
-                {v.to ? ` · ${Math.max(1, Math.round((v.to - v.from) / 60_000))} мин` : ''}
+                {fmtDateTime(v.from)} – {v.to ? fmtTime(v.to) : t('adm.com.now')}
+                {v.to ? ` · ${t('dur.m', { n: Math.max(1, Math.round((v.to - v.from) / 60_000)) })}` : ''}
               </span>
             </li>
           ))}
@@ -144010,7 +146290,7 @@ __COREGSM_EOF__
 import ServerReviews from '../components/server/Reviews';
 import ProbesView, { useProbes } from '../components/server/ProbesView';
 import { useEffect, useRef, useState, type ReactNode, type TouchEvent } from 'react';
-import { t, useI18n } from '../i18n';
+import { t, useI18n, type TKey } from '../i18n';
 import { Crumbs } from '../components/ShellExtras';
 import { normalizeKinds, useSubscriptions, type SubKind } from '../notifications';
 import { api, ApiError, type ServerDetails as BaseDetails } from '../api';
@@ -144059,20 +146339,20 @@ type ServerDetails = BaseDetails & {
 
 // foldable blocks of the long tabs (ids are shared with the fold memory in localStorage, so keep them stable)
 const OVERVIEW_SECTIONS: SectionDef[] = [
-  { id: 'ov-stats', label: 'Показатели' },
-  { id: 'ov-chart', label: 'График' },
-  { id: 'ov-events', label: 'События', secondary: true },
-  { id: 'ov-players', label: 'Игроки' },
-  { id: 'ov-probes', label: 'Доступность', secondary: true },
-  { id: 'ov-reviews', label: 'Отзывы', secondary: true },
+  { id: 'ov-stats', label: 'd2.sd.sec.stats' },
+  { id: 'ov-chart', label: 'd2.srv.v.chart' },
+  { id: 'ov-events', label: 'd2.sd.sec.events', secondary: true },
+  { id: 'ov-players', label: 'd2.pl.players' },
+  { id: 'ov-probes', label: 'd2.sd.sec.avail', secondary: true },
+  { id: 'ov-reviews', label: 'd2.sd.sec.reviews', secondary: true },
 ];
 const HISTORY_SECTIONS: SectionDef[] = [
-  { id: 'hi-chart', label: 'График' },
-  { id: 'hi-stats', label: 'Показатели', secondary: true },
+  { id: 'hi-chart', label: 'd2.srv.v.chart' },
+  { id: 'hi-stats', label: 'd2.sd.sec.stats', secondary: true },
 ];
 export const CONNECT_SECTIONS: SectionDef[] = [
-  { id: 'cn-steps', label: 'Как подключиться' },
-  { id: 'cn-qr', label: 'QR-код' },
+  { id: 'cn-steps', label: 'd2.sd.sec.howto' },
+  { id: 'cn-qr', label: 'd2.sd.sec.qr' },
 ];
 const ALL_SECTIONS = [...OVERVIEW_SECTIONS, ...HISTORY_SECTIONS, ...CONNECT_SECTIONS];
 
@@ -144083,17 +146363,19 @@ export default function ServerDetail({ id, tab = '' }: { id: number; tab?: strin
 
 /** a small "live" indicator: pulsing dot and how fresh the data is */
 function LiveBadge({ at }: { at: number | null }) {
+  useI18n();
   useNow(5000);
   if (!at) return null;
   return (
-    <span className="chip-glass srv-live" title={`Страница обновляется сама · обновлено ${ago(at)}`}>
+    <span className="chip-glass srv-live" title={`${t('d2.sd.autoRefresh')} · ${t('d2.srv.updated', { ago: ago(at) })}`}>
       <span className="live-dot" aria-hidden />
-      <span className="srv-live-t">обновлено {ago(at)}</span>
+      <span className="srv-live-t">{t('d2.srv.updated', { ago: ago(at) })}</span>
     </span>
   );
 }
 
 function FavStar({ on, name, onClick }: { on: boolean; name: string; onClick: () => void }) {
+  useI18n();
   // pops only after the user's own click
   const [pops, setPops] = useState(0);
   return (
@@ -144101,8 +146383,8 @@ function FavStar({ on, name, onClick }: { on: boolean; name: string; onClick: ()
       type="button"
       onClick={() => { if (!on) { setPops((n) => n + 1); try { navigator.vibrate?.(14); } catch { /* no vibration */ } } onClick(); }}
       className={`btn-icon-glass shrink-0 ${on ? 'is-fav' : ''}`}
-      title={on ? 'Убрать из избранного' : 'В избранное'}
-      aria-label={`${on ? 'Убрать из избранного' : 'В избранное'}: ${name}`}
+      title={on ? t('d2.srv.favRemove') : t('d2.srv.fav')}
+      aria-label={`${on ? t('d2.srv.favRemove') : t('d2.srv.fav')}: ${name}`}
       aria-pressed={on}
     >
       <span className="star-wrap text-xl leading-none">
@@ -144114,9 +146396,10 @@ function FavStar({ on, name, onClick }: { on: boolean; name: string; onClick: ()
 }
 
 function PeriodSeg({ hours, onChange }: { hours: number; onChange: (h: number) => void }) {
+  useI18n();
   return (
     <div className="seg" role="group" aria-label={t('srv.chart.period')}>
-      {([[24, '24 ч'], [168, '7 дн'], [720, '30 дн']] as [number, string][]).map(([h, label]) => (
+      {([[24, t('dur.h', { n: 24 })], [168, t('d2.an.dShort', { n: 7 })], [720, t('d2.an.dShort', { n: 30 })]] as [number, string][]).map(([h, label]) => (
         <button key={h} type="button" onClick={() => onChange(h)} aria-pressed={hours === h} className="seg-item">{label}</button>
       ))}
     </div>
@@ -144337,7 +146620,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
 
   if (!data) {
     return (
-      <div className="space-y-3.5" aria-busy={error ? undefined : true} aria-label={error ? undefined : 'Загрузка'}>
+      <div className="space-y-3.5" aria-busy={error ? undefined : true} aria-label={error ? undefined : t('d2.news.loading')}>
         {back}
         {error ? <LoadError error={error} onRetry={() => void load()} /> : (
           <>
@@ -144363,7 +146646,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
   const cName = countryName(code);
   const flag = flagEmoji(code);
   const kind = !s.hasStatus ? 'mute' : !s.online ? 'bad' : lag ? 'warn' : 'ok';
-  const windowLabel = data.hours <= 24 ? 'за 24 часа' : data.hours <= 168 ? 'за 7 дней' : 'за 30 дней';
+  const windowLabel = data.hours <= 24 ? t('d2.sd.w24') : data.hours <= 168 ? t('d2.sd.w7') : t('d2.sd.w30');
   const chartLoading = data.hours !== hours;
   const recent = points.filter((p) => p.online && p.ts >= nowTs - 2 * 3600_000).map((p) => p.players);
   const hourNow = new Date(nowTs).getHours();
@@ -144371,7 +146654,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
   const coverBg = coverBackground(s.coverUrl, gameBackdrop(c1, 120), { strong: true, game: s.game });
 
   const discordLinks = (data.discord ?? []).map((b) => {
-    const text = `${b.guildName ? `${b.guildName} · ` : ''}${b.channelName ? `#${b.channelName}` : 'канал'}${b.messageId ? ' · сообщение' : ''}`;
+    const text = `${b.guildName ? `${b.guildName} · ` : ''}${b.channelName ? `#${b.channelName}` : t('d2.sd.channel')}${b.messageId ? ` · ${t('d2.sd.message')}` : ''}`;
     const href = b.guildId ? `https://discord.com/channels/${b.guildId}/${b.channelId}${b.messageId ? `/${b.messageId}` : ''}` : null;
     return { text, href };
   });
@@ -144386,19 +146669,19 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
     const url = `${window.location.origin}/s/${id}`;
     try {
       await navigator.clipboard.writeText(url);
-      toast('Ссылка скопирована');
+      toast(t('d2.sd.t.linkCopied'));
       setShared(true);
       window.setTimeout(() => setShared(false), 1500);
     } catch {
-      toast(`Не удалось скопировать. Ссылка: ${url}`, 'err', 8000);
+      toast(t('d2.sd.t.copyFail', { url }), 'err', 8000);
     }
   };
   const remove = async () => {
-    const ok = await confirmDialog({ title: `Удалить сервер «${s.name}»?`, text: 'Сервер будет удалён вместе с привязками к Discord.', confirmLabel: 'Удалить', danger: true });
+    const ok = await confirmDialog({ title: t('d2.sd.c.title', { name: s.name }), text: t('d2.sd.c.text'), confirmLabel: t('d2.news.delete'), danger: true });
     if (!ok) return;
     try {
       await api(`/servers/${id}`, 'DELETE');
-      toast('Сервер удалён');
+      toast(t('d2.sd.t.deleted'));
       navigate('/servers');
     } catch (e) {
       setError(errText(e));
@@ -144407,9 +146690,9 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
   const copyAddress = async () => {
     try {
       await navigator.clipboard.writeText(s.address);
-      toast('Адрес скопирован');
+      toast(t('d2.sd.t.addrCopied'));
     } catch {
-      toast(`Адрес: ${s.address}`, 'info', 8000);
+      toast(t('d2.sd.t.addr', { addr: s.address }), 'info', 8000);
     }
   };
 
@@ -144430,22 +146713,22 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
       <div className="srv-chart-bar">
         {withSeries && (
           <div className="seg" role="group" aria-label={t('srv.chart.series')}>
-            {([['players', 'Игроки'], ['ping', 'Пинг']] as [Series, string][]).map(([k, label]) => (
-              <button key={k} type="button" className="seg-item" aria-pressed={series === k} onClick={() => setSeries(k)}>{label}</button>
+            {([['players', 'd2.pl.players'], ['ping', 'd2.sd.ping']] as [Series, TKey][]).map(([k, label]) => (
+              <button key={k} type="button" className="seg-item" aria-pressed={series === k} onClick={() => setSeries(k)}>{t(label)}</button>
             ))}
           </div>
         )}
         <PeriodSeg hours={hours} onChange={setHours} />
       </div>
       {stats.samples < 2 ? (
-        <p className="py-10 text-center font-semibold text-mute">Данных пока мало: график появится через несколько минут после добавления сервера.</p>
+        <p className="py-10 text-center font-semibold text-mute">{t('d2.sd.fewData')}</p>
       ) : down ? (
         <OfflineState since={outage?.ts ?? null} atLeast={outage?.atLeast ?? false} error={s.error ?? null} points={points} hours={data.hours} now={nowTs} uptimePct={stats.uptimePct ?? null} windowLabel={windowLabel}>
           {chartEl(withSeries)}
         </OfflineState>
       ) : chartEl(withSeries)}
       {!down && points.some((p) => !p.online) && stats.samples >= 2 && (
-        <p className="mt-2 flex items-center gap-2 text-sm font-semibold text-mute"><span className="inline-block h-3 w-3 rounded-sm bg-bad/30" /> Красным отмечены периоды, когда сервер не отвечал.</p>
+        <p className="mt-2 flex items-center gap-2 text-sm font-semibold text-mute"><span className="inline-block h-3 w-3 rounded-sm bg-bad/30" /> {t('d2.sd.redNote')}</p>
       )}
     </SectionCard>
   );
@@ -144470,7 +146753,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
   if (tab === 'players') {
     panel = (
       <section className="tile tile-in p-4 sm:p-5">
-        <h2 className="mb-3 flex items-center whitespace-nowrap text-base font-extrabold">Сейчас в игре{playerCountBadge}</h2>
+        <h2 className="mb-3 flex items-center whitespace-nowrap text-base font-extrabold">{t('d2.pl.inGame2')}{playerCountBadge}</h2>
         {s.online && <PlayerFacts peak={stats.peakPlayers ?? null} peakAt={stats.peakAt ?? null} avg={stats.avgPlayers ?? null} windowLabel={windowLabel} list={data.playersNow ?? []} />}
         {s.online && <SessionSpread list={data.playersNow ?? []} now={nowTs} />}
         <PlayersList {...playersProps} onSubscribe={canSubNow ? () => openSub(null) : undefined} />
@@ -144482,7 +146765,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
         <div className="grid gap-3.5 lg:grid-cols-12">
           {chartTile(0, true)}
         </div>
-        <SectionCard id="hi-stats" state={sections} title="Показатели">
+        <SectionCard id="hi-stats" state={sections} title={t('d2.sd.sec.stats')}>
           {metrics(true)}
         </SectionCard>
       </div>
@@ -144492,7 +146775,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
   } else if (tab === 'events') {
     panel = (
       <section className="tile tile-in p-4 sm:p-5">
-        <h2 className="mb-3 text-base font-extrabold">Журнал событий</h2>
+        <h2 className="mb-3 text-base font-extrabold">{t('d2.sd.journal')}</h2>
         <EventsFeed events={events} online={s.online} uptimePct={stats.uptimePct ?? null} windowLabel={windowLabel} />
       </section>
     );
@@ -144502,26 +146785,26 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
     panel = (
       <div className="space-y-3.5">
         <PinnedNotice serverId={id} notice={data.notice ?? null} canEdit={canEdit} onChange={(n) => setData((d) => (d ? { ...d, notice: n } : d))} />
-        <SectionCard id="ov-stats" state={sections} style={stagger(0)} title="Показатели">
+        <SectionCard id="ov-stats" state={sections} style={stagger(0)} title={t('d2.sd.sec.stats')}>
           {metrics(false)}
         </SectionCard>
         <div className="grid gap-3.5 lg:grid-cols-12">
           {chartTile(1, false)}
           <div className="space-y-3.5 lg:col-span-5 lg:col-start-1 lg:self-start max-lg:contents">
-          <SectionCard id="ov-events" state={sections} className="max-lg:order-1" style={stagger(2)} title="Последние события">
+          <SectionCard id="ov-events" state={sections} className="max-lg:order-1" style={stagger(2)} title={t('d2.sd.recent')}>
             <EventsFeed events={events} online={s.online} limit={6} moreHref={tabHref(id, 'events')} />
           </SectionCard>
           {/* the reviews sit under the events: the left column fills the height of the player list */}
-          <SectionCard id="ov-reviews" state={sections} className="max-lg:order-3" style={stagger(4)} title="Отзывы игроков">
+          <SectionCard id="ov-reviews" state={sections} className="max-lg:order-3" style={stagger(4)} title={t('d2.sd.playerReviews')}>
             <ServerReviews serverId={id} />
           </SectionCard>
           </div>
-          <SectionCard id="ov-players" state={sections} className="lg:col-span-7 lg:col-start-6 lg:row-span-2 max-lg:order-2" style={stagger(3)} title={<span className="inline-flex items-center whitespace-nowrap">Сейчас в игре{playerCountBadge}</span>}>
+          <SectionCard id="ov-players" state={sections} className="lg:col-span-7 lg:col-start-6 lg:row-span-2 max-lg:order-2" style={stagger(3)} title={<span className="inline-flex items-center whitespace-nowrap">{t('d2.pl.inGame2')}{playerCountBadge}</span>}>
             <PlayersList {...playersProps} limit={6} moreHref={tabHref(id, 'players')} />
           </SectionCard>
         </div>
         {probes && probes.probes.length > 0 && (
-          <SectionCard id="ov-probes" state={sections} style={stagger(4)} title="Доступность из разных мест">
+          <SectionCard id="ov-probes" state={sections} style={stagger(4)} title={t('d2.sd.availFrom')}>
             <ProbesView v={probes} />
           </SectionCard>
         )}
@@ -144544,10 +146827,10 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
   const moreItems: MoreItem[] = [
     { key: 'share', label: shared ? t('srv.act.linkCopied') : t('srv.act.share'), icon: shared ? <IconCheckMark /> : <IconShare />, onSelect: () => void share() },
     ...(canEdit ? [
-      { key: 'poll', label: busy ? 'Опрос…' : 'Опросить', icon: <IconRefresh />, onSelect: () => void refresh(), disabled: busy, divider: true },
-      { key: 'edit', label: 'Изменить', onSelect: () => setEditing(true) },
+      { key: 'poll', label: busy ? t('d2.sd.polling') : t('d2.sd.poll'), icon: <IconRefresh />, onSelect: () => void refresh(), disabled: busy, divider: true },
+      { key: 'edit', label: t('d2.news.change'), onSelect: () => setEditing(true) },
     ] : []),
-    ...(isAdmin ? [{ key: 'del', label: 'Удалить', onSelect: () => void remove(), danger: true }] : []),
+    ...(isAdmin ? [{ key: 'del', label: t('d2.news.delete'), onSelect: () => void remove(), danger: true }] : []),
   ];
 
   return (
@@ -144582,7 +146865,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
               <StatusPill glass online={s.online} known={s.hasStatus} lag={lag} maintenance={!!s.maintenance} />
               <span className="chip-glass srv-game-chip">{gameLabel(s.game)}</span>
               <LiveBadge at={s.updatedAt} />
-              {isFav && <span className="chip-glass"><span aria-hidden>★</span> В избранном</span>}
+              {isFav && <span className="chip-glass"><span aria-hidden>★</span> {t('d2.sd.inFav')}</span>}
             </div>
           </div>
           {me && <FavStar on={isFav} name={s.name} onClick={() => void toggleFav()} />}
@@ -144660,13 +146943,13 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
           <span className="srv-mini">
             <i className={`srv-mini-dot ${s.online ? 'on' : 'off'}`} aria-hidden />
             <b className="truncate">{s.name}</b>
-            <span className="tabular-nums">{s.online ? `${s.players}${s.maxPlayers ? ` / ${s.maxPlayers}` : ''}` : 'не в сети'}</span>
+            <span className="tabular-nums">{s.online ? `${s.players}${s.maxPlayers ? ` / ${s.maxPlayers}` : ''}` : t('d2.sd.offline')}</span>
             <AddrCopy address={s.address} className="truncate font-mono text-xs font-semibold" />
           </span>
         )}
       />
 
-      {swipeHint && <p className="srv-swipe-hint" role="status">← Смахните вбок, чтобы переключить вкладку →</p>}
+      {swipeHint && <p className="srv-swipe-hint" role="status">{t('d2.sd.swipe')}</p>}
 
       <div key={tab || 'overview'} className={slide.dir ? `tab-slide-${slide.dir}` : undefined} role="tabpanel" id={panelDomId(tab)} aria-labelledby={tabDomId(tab)} {...swipe}>
         <BlockBoundary label={tab || 'overview'}>{panel}</BlockBoundary>
@@ -144712,16 +146995,16 @@ import GamePicker from '../components/GamePicker';
 import { ErrorLine, Field, GameAvatar, Modal, errText } from '../ui';
 import { COUNTRIES } from '../countries';
 import { nextPort, shownFields, useGameProfiles } from '../gameProfiles';
-import { t } from '../i18n';
+import { t, useI18n } from '../i18n';
 import { errorText } from '../apiErrors';
 
 /** the first problem with the address field, or '' (an address only: no scheme, path, spaces or a port glued to it) */
 export function hostError(v: string): string {
   const h = v.trim();
   if (!h) return '';
-  if (/\s/.test(h)) return 'В адресе не должно быть пробелов';
-  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(h) || h.includes('/')) return 'Укажите только адрес, без http:// и пути';
-  if ((h.match(/:/g) ?? []).length === 1) return 'Порт вводится в отдельном поле, уберите «:порт» из адреса';
+  if (/\s/.test(h)) return t('d2.sf.h.spaces');
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(h) || h.includes('/')) return t('d2.sf.h.noScheme');
+  if ((h.match(/:/g) ?? []).length === 1) return t('d2.sf.h.port');
   return '';
 }
 
@@ -144729,6 +147012,7 @@ export const emptyServer: ServerInput = { name: '', game: 'minecraft', host: '',
 
 /** Add / edit a server. The first screen asks only what is needed; the rest is under "Дополнительно". */
 export default function ServerForm({ initial, id, coverUrl, onCoverChanged, onClose, onSaved }: { initial: ServerInput; id?: number; coverUrl?: string | null; onCoverChanged?: () => void; onClose: () => void; onSaved: () => void }) {
+  useI18n();
   const [f, setF] = useState(initial);
   const [cover, setCover] = useState<string | null>(coverUrl ?? null);
   const [coverBusy, setCoverBusy] = useState(false);
@@ -144740,7 +147024,7 @@ export default function ServerForm({ initial, id, coverUrl, onCoverChanged, onCl
     try {
       const r = await fetch(`/api/servers/${id}/cover`, { method: 'PUT', headers: { 'Content-Type': file.type, Authorization: `Bearer ${getToken() ?? ''}` }, body: file });
       const j = (await r.json().catch(() => null)) as { coverUrl?: string; error?: string } | null;
-      if (!r.ok) throw new Error(errorText(j, 'Не удалось загрузить картинку (PNG, JPG или WebP до 5 МБ)'));
+      if (!r.ok) throw new Error(errorText(j, t('d2.sf.coverFail')));
       setCover(j?.coverUrl ?? null);
       onCoverChanged?.();
     } catch (e) {
@@ -144803,7 +147087,7 @@ export default function ServerForm({ initial, id, coverUrl, onCoverChanged, onCl
   const fieldList = shownFields(gameProfile?.fields);
 
   const hostProblem = hostError(f.host);
-  const portProblem = f.port && (f.port < 1 || f.port > 65535 || !Number.isInteger(f.port)) ? 'Порт — число от 1 до 65535' : '';
+  const portProblem = f.port && (f.port < 1 || f.port > 65535 || !Number.isInteger(f.port)) ? t('d2.sf.portRange') : '';
   const canTest = f.host.trim().length > 0 && f.game.length > 0 && f.port > 0 && !hostProblem && !portProblem;
   // closing with unsaved edits asks first; a reload or closing the tab is warned about by the browser
   const dirty = JSON.stringify(f) !== JSON.stringify(initial);
@@ -144814,7 +147098,7 @@ export default function ServerForm({ initial, id, coverUrl, onCoverChanged, onCl
     return () => window.removeEventListener('beforeunload', warn);
   }, [dirty]);
   const close = async () => {
-    if (dirty && !(await confirmDialog({ title: 'Закрыть без сохранения?', text: 'Изменения в форме будут потеряны.', confirmLabel: 'Закрыть', cancelLabel: 'Продолжить правку', danger: true }))) return;
+    if (dirty && !(await confirmDialog({ title: t('d2.sf.discardTitle'), text: t('d2.sf.discardText'), confirmLabel: t('common.close'), cancelLabel: t('d2.sf.keepEditing'), danger: true }))) return;
     onClose();
   };
 
@@ -144845,35 +147129,35 @@ export default function ServerForm({ initial, id, coverUrl, onCoverChanged, onCl
   };
 
   return (
-    <Modal side title={id ? 'Изменить сервер' : 'Новый сервер'} onClose={() => void close()}>
+    <Modal side title={id ? t('d2.sf.editTitle') : t('d2.sf.newTitle')} onClose={() => void close()}>
       <form onSubmit={submit} className="space-y-3.5">
-        <div className="sf-preview" aria-label="Так сервер увидят в списке" style={cover ? { backgroundImage: `linear-gradient(rgb(0 0 0 / .45), rgb(0 0 0 / .65)), url(${cover})` } : undefined} data-cover={cover ? 'true' : undefined}>
+        <div className="sf-preview" aria-label={t('d2.sf.previewLabel')} style={cover ? { backgroundImage: `linear-gradient(rgb(0 0 0 / .45), rgb(0 0 0 / .65)), url(${cover})` } : undefined} data-cover={cover ? 'true' : undefined}>
           <GameAvatar game={f.game} size={44} />
           <div className="min-w-0 flex-1">
-            <p className="truncate font-extrabold">{f.name || (test?.online && test.name) || (f.host ? `${f.host}:${f.port}` : 'Название сервера')}</p>
-            <p className="truncate text-xs font-semibold opacity-80">{gameLabel(f.game)} · <span className="font-mono">{f.displayAddress || (f.host ? `${f.host}:${f.port}` : 'адрес')}</span></p>
+            <p className="truncate font-extrabold">{f.name || (test?.online && test.name) || (f.host ? `${f.host}:${f.port}` : t('d2.sf.serverName'))}</p>
+            <p className="truncate text-xs font-semibold opacity-80">{gameLabel(f.game)} · <span className="font-mono">{f.displayAddress || (f.host ? `${f.host}:${f.port}` : t('d2.sf.address'))}</span></p>
           </div>
           <span className={`sf-preview-st ${test ? (test.online ? 'is-on' : 'is-off') : ''}`}>
-            {test ? (test.online ? `${test.players}/${test.maxPlayers}` : 'не отвечает') : 'не проверен'}
+            {test ? (test.online ? `${test.players}/${test.maxPlayers}` : t('d2.sf.noAnswer')) : t('d2.sf.notChecked')}
           </span>
         </div>
         <div>
-          <span className="label">Игра</span>
+          <span className="label">{t('d2.sf.game')}</span>
           <GamePicker id="srv-game" value={f.game} custom={custom} onPick={pickGame} autoFocus />
         </div>
         {custom && (
           <Field label="GameDig ID">
-            <input id="srv-gameid" className="input" value={f.game} onChange={(e) => change({ game: e.target.value.trim() })} placeholder="например, arma3" required pattern="[A-Za-z0-9_]+" />
+            <input id="srv-gameid" className="input" value={f.game} onChange={(e) => change({ game: e.target.value.trim() })} placeholder={t('d2.sf.gameIdEx')} required pattern="[A-Za-z0-9_]+" />
           </Field>
         )}
         <div className="grid grid-cols-3 gap-3">
           <div className="col-span-2">
-            <Field label="Адрес для опроса (IP или домен)">
+            <Field label={t('d2.sf.host')}>
               <input id="srv-host" className="input" value={f.host} onChange={(e) => change({ host: e.target.value.trim() })} required placeholder="192.168.1.10" aria-invalid={hostProblem ? true : undefined} aria-describedby={hostProblem ? 'srv-host-err' : undefined} />
             {hostProblem && <p id="srv-host-err" className="mt-1 text-sm font-bold text-bad" role="alert">{hostProblem}</p>}
             </Field>
           </div>
-          <Field label="Порт">
+          <Field label={t('d2.sf.port')}>
             <input id="srv-port" className="input" type="number" min={1} max={65535} value={f.port} onChange={(e) => { portTouched.current = true; change({ port: Number(e.target.value) }); }} required />
           </Field>
         </div>
@@ -144882,60 +147166,60 @@ export default function ServerForm({ initial, id, coverUrl, onCoverChanged, onCl
 
         <div className="space-y-2">
           <button type="button" className="btn btn-soft" onClick={runTest} disabled={!canTest || testing}>
-            {testing ? 'Опрашиваю…' : 'Проверить сервер'}
+            {testing ? t('d2.sf.testing') : t('d2.sf.test')}
           </button>
           {test && test.online && (
             <div className="rounded-2xl bg-okbg px-4 py-3 text-sm font-bold text-ok" role="status">
-              ✔ Сервер ответил{test.name ? `: «${test.name}»` : ''}
+              ✔ {t('d2.sf.answered')}{test.name ? `: «${test.name}»` : ''}
               <div className="mt-0.5 font-semibold">
-                Игроков {test.players}/{test.maxPlayers}
-                {test.map ? ` · карта ${test.map}` : ''}
-                {test.ping != null ? ` · пинг ${test.ping} мс` : ''}
+                {t('d2.sf.players')} {test.players}/{test.maxPlayers}
+                {test.map ? ` ${t('d2.sf.map', { map: test.map })}` : ''}
+                {test.ping != null ? ` ${t('d2.sf.ping', { ms: test.ping })}` : ''}
               </div>
             </div>
           )}
           {test && !test.online && (
             <div className="rounded-2xl bg-badbg px-4 py-3 text-sm font-bold text-bad" role="alert">
-              ✖ {test.error ?? 'Сервер не ответил'}
+              ✖ {test.error ?? t('d2.sf.noReply')}
             </div>
           )}
         </div>
 
         <details className="group rounded-2xl border-2 border-line px-4 py-2.5" open={advancedUsed}>
-          <summary className="cursor-pointer select-none font-extrabold text-link">Дополнительно</summary>
+          <summary className="cursor-pointer select-none font-extrabold text-link">{t('d2.sf.advanced')}</summary>
           <div className="mt-3 space-y-3.5">
-            <Field label="Название">
-              <input id="srv-name" className="input" value={f.name} onChange={(e) => change({ name: e.target.value })} maxLength={64} placeholder="возьмётся из ответа сервера" />
+            <Field label={t('d2.sf.name')}>
+              <input id="srv-name" className="input" value={f.name} onChange={(e) => change({ name: e.target.value })} maxLength={64} placeholder={t('d2.sf.nameEx')} />
             </Field>
-            <p className="-mt-2 text-sm font-semibold text-mute">Оставьте пустым: панель использует название, которое сервер сообщает сам. Своё название переопределяет его.</p>
-            <Field label="Query-порт (если отличается от порта игры)">
-              <input id="srv-qport" className="input" type="number" min={1} max={65535} value={f.queryPort ?? ''} onChange={(e) => change({ queryPort: e.target.value ? Number(e.target.value) : null })} placeholder="не указан" />
+            <p className="-mt-2 text-sm font-semibold text-mute">{t('d2.sf.nameHint')}</p>
+            <Field label={t('d2.sf.qport')}>
+              <input id="srv-qport" className="input" type="number" min={1} max={65535} value={f.queryPort ?? ''} onChange={(e) => change({ queryPort: e.target.value ? Number(e.target.value) : null })} placeholder={t('d2.sf.notSet')} />
             </Field>
-            <Field label="Адрес для отображения">
-              <input id="srv-display" className="input font-mono" value={f.displayAddress} onChange={(e) => change({ displayAddress: e.target.value.trim() })} maxLength={100} placeholder="play.example.com:25565 или внешний IP" />
+            <Field label={t('d2.sf.display')}>
+              <input id="srv-display" className="input font-mono" value={f.displayAddress} onChange={(e) => change({ displayAddress: e.target.value.trim() })} maxLength={100} placeholder={t('d2.sf.displayEx')} />
             </Field>
-            <Field label="Страна (для сообщения в Discord)">
+            <Field label={t('d2.sf.country')}>
               <select id="srv-country" className="input" value={f.country} onChange={(e) => change({ country: e.target.value })}>
-                <option value="">Определить автоматически по адресу</option>
+                <option value="">{t('d2.sf.countryAuto')}</option>
                 {COUNTRIES.map(([code, name]) => <option key={code} value={code}>{name}</option>)}
               </select>
             </Field>
-            <p className="-mt-2 text-sm font-semibold text-mute">Автоопределение не работает для адресов в локальной сети: выберите страну вручную, и флаг появится в сообщении.</p>
-            <p className="-mt-2 text-sm font-semibold text-mute">Опрос идёт по адресу выше, а людям на странице и в карточке Discord показывается этот адрес. Нужен, если сервер в локальной сети, а снаружи доступен по другому IP или домену.</p>
+            <p className="-mt-2 text-sm font-semibold text-mute">{t('d2.sf.countryHint')}</p>
+            <p className="-mt-2 text-sm font-semibold text-mute">{t('d2.sf.displayHint')}</p>
             <div>
-              <span className="label">Обложка</span>
+              <span className="label">{t('d2.sf.cover')}</span>
               {id ? (
                 <div className="flex flex-wrap items-center gap-3">
                   <div className="h-[72px] w-32 shrink-0 overflow-hidden rounded-xl border border-line bg-soft" style={cover ? { backgroundImage: `url(${cover})`, backgroundSize: 'cover', backgroundPosition: 'center' } : undefined} aria-hidden />
                   <label className="btn btn-soft btn-sm cursor-pointer">
-                    {coverBusy ? 'Загружаю…' : 'Загрузить картинку'}
+                    {coverBusy ? t('d2.sf.uploading') : t('d2.sf.upload')}
                     <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" disabled={coverBusy} onChange={(e) => { const file = e.target.files?.[0]; if (file) void uploadCover(file); e.target.value = ''; }} />
                   </label>
-                  {cover && <button type="button" className="btn btn-soft btn-sm" onClick={() => void removeCover()} disabled={coverBusy}>Убрать</button>}
-                  <span className="basis-full text-sm font-semibold text-mute">PNG, JPG или WebP до 5 МБ; обрезается до 16:9. Заменяет цветную обложку карточки и шапку страницы сервера.</span>
+                  {cover && <button type="button" className="btn btn-soft btn-sm" onClick={() => void removeCover()} disabled={coverBusy}>{t('common.remove')}</button>}
+                  <span className="basis-full text-sm font-semibold text-mute">{t('d2.sf.coverHint')}</span>
                 </div>
               ) : (
-                <p className="text-sm font-semibold text-mute">Картинку можно загрузить после создания сервера: откройте «Изменить».</p>
+                <p className="text-sm font-semibold text-mute">{t('d2.sf.coverLater')}</p>
               )}
             </div>
           </div>
@@ -144944,8 +147228,8 @@ export default function ServerForm({ initial, id, coverUrl, onCoverChanged, onCl
         <ErrorLine text={error} />
         {portProblem && <p className="text-sm font-bold text-bad" role="alert">{portProblem}</p>}
         <div className="adm-sticky-foot flex justify-end gap-2 pt-1">
-          <button type="button" className="btn btn-ghost" onClick={() => void close()}>Отмена</button>
-          <button className="btn" disabled={busy || !canTest}>{busy ? 'Сохраняю…' : 'Сохранить'}</button>
+          <button type="button" className="btn btn-ghost" onClick={() => void close()}>{t('common.cancel')}</button>
+          <button className="btn" disabled={busy || !canTest}>{busy ? t('d2.sf.saving') : t('common.save')}</button>
         </div>
       </form>
     </Modal>
@@ -144960,8 +147244,8 @@ import { useAuth } from '../auth';
 import { gameColor, gameGradient, gameLabel } from '../games';
 import { coverBackground, emblemStyle, gameBackdrop, coverUrlOf } from '../cover';
 import MaintenanceChip from '../components/MaintenanceChip';
-import { AnimatedNumber, Burst, ErrorLine, GameAvatar, LoadError, IconServers, PageHead, Spark, StatusPill, ago, isLag, plural, spanCaption, useSparkSpanMin, usePoll, navigate, routeQuery } from '../ui';
-import { t, useI18n } from '../i18n';
+import { AnimatedNumber, Burst, ErrorLine, GameAvatar, LoadError, IconServers, PageHead, Spark, StatusPill, ago, isLag, spanCaption, useSparkSpanMin, usePoll, navigate, routeQuery } from '../ui';
+import { t, useI18n, type TKey } from '../i18n';
 import { calmSeriesColor, useCoverAccent } from '../components/server/coverAccent';
 import { pingTone, TONE_TEXT } from '../components/server/helpers';
 import { AddrCopy, CapacityBar, CountReact, ListSkeleton, NoFavsState, NoMatchState, NoServersState, PingBars, PlayerNames, StatusFlash, TilesSkeleton, TrendChip, durText, reactionOf, useServerReactions, type Reactions } from '../components/servers/serverUi';
@@ -145061,20 +147345,21 @@ function ScrollTop() {
 
 function greeting(name: string): string {
   const h = new Date().getHours();
-  const hello = h >= 5 && h < 12 ? 'Доброе утро' : h >= 12 && h < 18 ? 'Добрый день' : h >= 18 && h < 23 ? 'Добрый вечер' : 'Доброй ночи';
+  const hello = h >= 5 && h < 12 ? t('d2.srv.morning') : h >= 12 && h < 18 ? t('d2.srv.afternoon') : h >= 18 && h < 23 ? t('d2.srv.evening') : t('d2.srv.night');
   return `${hello}, ${name.trim() || name}`;
 }
 
 /** `className` colours the star; `glass` is the variant for covers (white star on a translucent disc) */
 function FavButton({ on, name, onClick, className = '', glass = false }: { on: boolean; name: string; onClick: () => void; className?: string; glass?: boolean }) {
+  useI18n();
   // the star pops (scale, tilt and a few sparks) only after the user's own click, not when the list loads
   const [pops, setPops] = useState(0);
   return (
     <button
       onClick={(e) => { e.stopPropagation(); if (!on) setPops((n) => n + 1); onClick(); }}
       className={`${glass ? 'btn-icon-glass btn-icon-sm' : 'btn-icon-ghost btn-icon-sm'} ${on ? '' : 'star-quiet'}`}
-      title={on ? 'Убрать из избранного' : 'В избранное'}
-      aria-label={`В избранное: ${name}`}
+      title={on ? t('d2.srv.favRemove') : t('d2.srv.fav')}
+      aria-label={t('d2.srv.favName', { name })}
       aria-pressed={on}
     >
       <span className={`star-wrap text-xl leading-none ${className}`}>
@@ -145093,6 +147378,7 @@ const stagger = (i: number): CSSProperties => ({ ['--i' as string]: i });
 
 /** a small "live" indicator: pulsing dot and how fresh the data is */
 function LiveBadge({ at, onRefresh, busy }: { at: number; onRefresh: () => void; busy: boolean }) {
+  useI18n();
   const [, tick] = useState(0);
   useEffect(() => {
     const t = window.setInterval(() => tick((n) => n + 1), 5000);
@@ -145100,9 +147386,9 @@ function LiveBadge({ at, onRefresh, busy }: { at: number; onRefresh: () => void;
   }, []);
   if (!at) return null;
   return (
-    <button type="button" className="srv-live" title="Страница обновляется сама. Нажмите, чтобы обновить сейчас" onClick={onRefresh} aria-busy={busy || undefined}>
+    <button type="button" className="srv-live" title={t('d2.srv.liveTitle')} onClick={onRefresh} aria-busy={busy || undefined}>
       <span className="live-dot" aria-hidden />
-      {busy ? 'обновляю…' : `обновлено ${ago(at)}`}
+      {busy ? t('d2.srv.refreshing') : t('d2.srv.updated', { ago: ago(at) })}
     </button>
   );
 }
@@ -145122,6 +147408,7 @@ function useIsPhone(): boolean {
 }
 
 function ServerList() {
+  useI18n();
   const phone = useIsPhone();
   const { me, isAdmin } = useAuth();
   const [favs, setFavs] = useState<number[]>([]);
@@ -145268,13 +147555,13 @@ function ServerList() {
   return (
     <div className="space-y-5">
       <PageHead
-        title="Серверы"
+        title={t('nav.servers')}
         subtitle={me ? `${greeting(me.username)}. ${liveLine}` : liveLine}
         icon={<IconServers />}
       >
         <span className="srv-head-actions">
           <LiveBadge at={updatedAt} onRefresh={() => void refreshNow()} busy={refreshing} />
-          {isAdmin && <a className="btn btn-soft btn-sm" href="/admin/servers" data-magnetic>Управление серверами</a>}
+          {isAdmin && <a className="btn btn-soft btn-sm" href="/admin/servers" data-magnetic>{t('d2.srv.manage')}</a>}
         </span>
       </PageHead>
 
@@ -145286,12 +147573,12 @@ function ServerList() {
       {servers.length > 0 && (
         <div className="srv-bar" id="srv-list">
           {servers.length > 1 ? (
-            <nav className="seg fade-x no-scrollbar flex w-fit max-w-full overflow-x-auto" aria-label="Фильтр серверов">
+            <nav className="seg fade-x no-scrollbar flex w-fit max-w-full overflow-x-auto" aria-label={t('d2.srv.filter')}>
               {([
-                ['all', `Все · ${servers.length}`, servers.length],
-                ['online', `Онлайн · ${online.length}`, online.length],
-                ['offline', `Недоступные · ${offlineCount}`, offlineCount],
-                ...(me ? [['fav', `Избранные · ${favCount}`, favCount]] : []),
+                ['all', `${t('d2.srv.f.all')} · ${servers.length}`, servers.length],
+                ['online', `${t('d2.srv.f.online')} · ${online.length}`, online.length],
+                ['offline', `${t('d2.srv.f.offline')} · ${offlineCount}`, offlineCount],
+                ...(me ? [['fav', `${t('d2.srv.f.fav')} · ${favCount}`, favCount]] : []),
               ] as [Filter, string, number][]).filter(([id, , count]) => id !== 'offline' || count > 0 || effFilter === id).map(([id, label, count]) => (
                 // an empty filter stays reachable but is dimmed, so the eye goes to the ones that have servers
                 <button key={id} type="button" className={`seg-item whitespace-nowrap${count === 0 && effFilter !== id ? ' opacity-70' : ''}`} aria-pressed={effFilter === id} onClick={() => setFilter(id)}>{label}</button>
@@ -145300,21 +147587,21 @@ function ServerList() {
           ) : <span />}
           <div className="srv-bar-tools flex items-center gap-2.5">
             {canSelect && (
-              <button type="button" className="btn btn-ghost btn-sm" aria-pressed={selOn} onClick={() => (selOn ? exitSelect() : setSelecting(true))} title="Выбрать несколько серверов для массовых действий">
-                {selOn ? 'Отменить выбор' : 'Выбрать'}
+              <button type="button" className="btn btn-ghost btn-sm" aria-pressed={selOn} onClick={() => (selOn ? exitSelect() : setSelecting(true))} title={t('d2.srv.selectTitle')}>
+                {selOn ? t('d2.srv.cancelSelect') : t('d2.srv.select')}
               </button>
             )}
             {effView === 'tiles' && (
-              <div className="seg max-sm:hidden" role="group" aria-label="Размер плиток">
-                {([['s', 'S', 'Компактные'], ['m', 'M', 'Обычные'], ['l', 'L', 'Крупные']] as const).map(([id, mark, label]) => (
-                  <button key={id} type="button" className="seg-item" aria-pressed={size === id} title={label} aria-label={label} onClick={() => setSize(id)}>{mark}</button>
+              <div className="seg max-sm:hidden" role="group" aria-label={t('d2.srv.tileSize')}>
+                {([['s', 'S', 'd2.srv.sz.s'], ['m', 'M', 'd2.srv.sz.m'], ['l', 'L', 'd2.srv.sz.l']] as const).map(([id, mark, label]) => (
+                  <button key={id} type="button" className="seg-item" aria-pressed={size === id} title={t(label)} aria-label={t(label)} onClick={() => setSize(id)}>{mark}</button>
                 ))}
               </div>
             )}
-            <div className="seg" role="group" aria-label="Вид списка">
-              {([['tiles', 'Плитки'], ['list', 'Список'], ['chart', 'График']] as [ServersView, string][]).map(([id, label]) => (
-                <button key={id} type="button" className="seg-item srv-view-btn" aria-pressed={effView === id} title={label} onClick={() => setView(id)}>
-                  <ViewIcon id={id} /><span className="max-sm:sr-only">{label}</span>
+            <div className="seg" role="group" aria-label={t('d2.news.viewLabel')}>
+              {([['tiles', 'd2.srv.v.tiles'], ['list', 'd2.news.viewList'], ['chart', 'd2.srv.v.chart']] as [ServersView, TKey][]).map(([id, label]) => (
+                <button key={id} type="button" className="seg-item srv-view-btn" aria-pressed={effView === id} title={t(label)} onClick={() => setView(id)}>
+                  <ViewIcon id={id} /><span className="max-sm:sr-only">{t(label)}</span>
                 </button>
               ))}
             </div>
@@ -145372,7 +147659,7 @@ function ServerList() {
       )}
 
       <ScrollTop />
-      {pull > 0 && <div className="srv-pull" style={{ height: pull }} aria-hidden>{pull >= PULL_AT ? 'Отпустите, чтобы обновить' : 'Потяните вниз'}</div>}
+      {pull > 0 && <div className="srv-pull" style={{ height: pull }} aria-hidden>{pull >= PULL_AT ? t('d2.srv.pullRelease') : t('d2.srv.pull')}</div>}
 
       {selOn && (
         <BulkBar
@@ -145392,6 +147679,7 @@ function ServerList() {
 
 /** the checkbox of the selection mode in a corner of a card */
 function CardCheck({ s, select, className = '' }: { s: Server; select: SelectProps; className?: string }) {
+  useI18n();
   return (
     <input
       type="checkbox"
@@ -145399,7 +147687,7 @@ function CardCheck({ s, select, className = '' }: { s: Server; select: SelectPro
       checked={select.has(s.id)}
       onChange={() => select.toggle(s.id)}
       onClick={(e) => e.stopPropagation()}
-      aria-label={`Выбрать: ${s.name}`}
+      aria-label={t('d2.news.pickOne', { title: s.name })}
     />
   );
 }
@@ -145454,11 +147742,11 @@ function HeroTile({ s, idx, uptime, downSince, fav, onFav, onOpen, rx, reason, s
           <>
             <div className="h3-count flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
               <CountReact r={r} onDark><AnimatedNumber value={s.players} className="text-[72px] font-extrabold leading-none tracking-[-0.05em] sm:text-[88px]" /></CountReact>
-              <span className="text-lg font-bold text-white/85">/ {s.maxPlayers} {plural(s.maxPlayers, ['игрок', 'игрока', 'игроков'])}</span>
+              <span className="text-lg font-bold text-white/85">/ {t('d2.srv.nPlayers', { n: s.maxPlayers })}</span>
             </div>
             <div className="h3-sub flex flex-wrap items-center gap-x-4 gap-y-1">
               <TrendChip serverId={s.id} onDark />
-              {s.ping != null && <span className="inline-flex items-center gap-1.5 font-bold text-white/90"><PingBars ping={s.ping} tone={pingTone(s.ping).tone} />пинг {s.ping} мс</span>}
+              {s.ping != null && <span className="inline-flex items-center gap-1.5 font-bold text-white/90"><PingBars ping={s.ping} tone={pingTone(s.ping).tone} />{t('d2.srv.ping', { ms: s.ping })}</span>}
             </div>
             <CapacityBar className="h3-bar" players={s.players} max={s.maxPlayers} color="#fff" onDark />
             <PlayerNames names={s.playerNames ?? []} max={4} onDark />
@@ -145468,21 +147756,21 @@ function HeroTile({ s, idx, uptime, downSince, fav, onFav, onOpen, rx, reason, s
           <div className="h3-down rounded-2xl bg-white/10 px-4 py-3" title={s.error ?? undefined}>
             {s.hasStatus ? (
               <>
-                <p className="line-clamp-3 text-base font-extrabold leading-snug">{s.error ?? 'Сервер не отвечает'}</p>
-                <p className="mt-1 text-sm font-semibold text-white/80">{downSince ? t('srv.down.for', { d: durText(Date.now() - downSince) }) + ' · ' : ''}Последний ответ: {ago(s.updatedAt)}</p>
+                <p className="line-clamp-3 text-base font-extrabold leading-snug">{s.error ?? t('d2.srv.noReply')}</p>
+                <p className="mt-1 text-sm font-semibold text-white/80">{downSince ? t('srv.down.for', { d: durText(Date.now() - downSince) }) + ' · ' : ''}{t('d2.srv.lastReply', { ago: ago(s.updatedAt) })}</p>
               </>
             ) : (
-              <p className="text-base font-extrabold">Ожидаем первый ответ</p>
+              <p className="text-base font-extrabold">{t('d2.srv.waitFirst')}</p>
             )}
           </div>
         )}
 
         <div className="h3-foot flex flex-wrap items-center text-fs-sm font-bold text-white/80">
           <span className="h3-fact"><CardClock />{spanCaption(sparkSpan)}</span>
-          {uptime != null && <span className="h3-fact"><CardUptime />аптайм {(Math.round(uptime * 10) / 10).toLocaleString('ru-RU')}%</span>}
-          {s.online && s.map && <span className="h3-fact"><CardMap />карта {s.map}</span>}
+          {uptime != null && <span className="h3-fact"><CardUptime />{t('d2.srv.uptime', { v: (Math.round(uptime * 10) / 10).toLocaleString('ru-RU') })}</span>}
+          {s.online && s.map && <span className="h3-fact"><CardMap />{t('d2.srv.map', { map: s.map })}</span>}
           {s.version && <span className="h3-fact"><CardTag />v{s.version}</span>}
-          {!s.online && <span className="h3-fact"><CardRefresh />обновлено {ago(s.updatedAt)}</span>}
+          {!s.online && <span className="h3-fact"><CardRefresh />{t('d2.srv.updated', { ago: ago(s.updatedAt) })}</span>}
         </div>
       </div>
 
@@ -145524,7 +147812,7 @@ function PhoneRow({ s, idx, fav, onFav, onOpen, select }: { rx: Reactions; s: Se
         {s.online ? (
           <CapacityBar className="srv-row-bar" players={s.players} max={s.maxPlayers} color="rgb(var(--ink) / .5)" showPct={false} slots={false} />
         ) : (
-          <p className="truncate text-fs-sm font-semibold text-mute">{s.hasStatus ? `Не отвечает · ${ago(s.updatedAt)}` : 'Ожидаем первый ответ'}</p>
+          <p className="truncate text-fs-sm font-semibold text-mute">{s.hasStatus ? t('d2.srv.noReplyAgo', { ago: ago(s.updatedAt) }) : t('d2.srv.waitFirst')}</p>
         )}
       </div>
       <div className="srv-row-count">
@@ -145537,6 +147825,7 @@ function PhoneRow({ s, idx, fav, onFav, onOpen, select }: { rx: Reactions; s: Se
 }
 
 function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince }: { rx: Reactions; s: Server; idx: number; fav: boolean | null; onFav: () => void; onOpen: () => void; select?: SelectProps; uptime?: number; downSince?: number }) {
+  useI18n();
   const [who, setWho] = useState(false);
   const [c1, c2] = gameGradient(s.game);
   // the accent is taken from the cover picture, so two games of the same colour family still look different
@@ -145567,7 +147856,7 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince }
         <h3 className="srv-name truncate text-fs-lg font-extrabold leading-tight" title={s.name}>
           <a href={`/servers/${s.id}`} onClick={linkClick(s, select)} className="hover:text-link">{s.name}</a>
         </h3>
-        <div className="srv-chips">{nearFull && <span className="srv-badge-full" title={t('srv.cap.nearFull', { pct: Math.round((s.players / s.maxPlayers) * 100) })}>{t('srv.tile.full')}</span>}<span className="truncate">{gameLabel(s.game)}</span>{s.online && s.map && <span className="srv-chip" title={`Карта: ${s.map}`}><CardMap />{s.map}</span>}{s.version && <span className="srv-chip" title="Версия"><CardTag />v{s.version}</span>}</div>
+        <div className="srv-chips">{nearFull && <span className="srv-badge-full" title={t('srv.cap.nearFull', { pct: Math.round((s.players / s.maxPlayers) * 100) })}>{t('srv.tile.full')}</span>}<span className="truncate">{gameLabel(s.game)}</span>{s.online && s.map && <span className="srv-chip" title={t('d2.srv.mapTitle', { map: s.map })}><CardMap />{s.map}</span>}{s.version && <span className="srv-chip" title={t('d2.srv.version')}><CardTag />v{s.version}</span>}</div>
         {s.maintenance && <MaintenanceChip m={s.maintenance} className="mt-1" />}
       </div>
 
@@ -145578,7 +147867,7 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince }
             <span className="text-fs-xl font-bold text-mute">/ {s.maxPlayers}</span>
             <TrendChip serverId={s.id} />
             {(s.playerNames?.length ?? 0) > 0 && <button type="button" className="srv-who" aria-expanded={who} onClick={(e) => { e.stopPropagation(); setWho((v) => !v); }}>{t('srv.who')}</button>}
-            <span className={`ml-auto inline-flex items-center gap-1.5 text-fs-sm font-bold ${s.ping != null ? TONE_TEXT[pingTone(s.ping).tone] : 'text-mute'}`}>{s.ping != null && <><PingBars ping={s.ping} tone={pingTone(s.ping).tone} />{`${s.ping} мс`}</>}</span>
+            <span className={`ml-auto inline-flex items-center gap-1.5 text-fs-sm font-bold ${s.ping != null ? TONE_TEXT[pingTone(s.ping).tone] : 'text-mute'}`}>{s.ping != null && <><PingBars ping={s.ping} tone={pingTone(s.ping).tone} />{t('d2.bot.ms', { n: s.ping })}</>}</span>
           </div>
           <CapacityBar className="px-1.5" players={s.players} max={s.maxPlayers} color="rgb(var(--ink) / .5)" />
           {who && <PlayerNames className="px-1.5" names={s.playerNames ?? []} max={12} />}
@@ -145590,17 +147879,17 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince }
         s.hasStatus ? (
           <div className="mx-1.5 flex items-center gap-2 rounded-xl bg-badbg px-3 py-2" title={s.error ?? undefined}>
             <span className="h-2 w-2 shrink-0 rounded-full bg-bad" aria-hidden />
-            <p className="truncate text-fs-sm font-bold leading-snug text-bad">{downSince ? t('srv.down.for', { d: durText(Date.now() - downSince) }) : `Не отвечает · ${ago(s.updatedAt)}`}</p>
+            <p className="truncate text-fs-sm font-bold leading-snug text-bad">{downSince ? t('srv.down.for', { d: durText(Date.now() - downSince) }) : t('d2.srv.noReplyAgo', { ago: ago(s.updatedAt) })}</p>
           </div>
         ) : (
-          <div className="mx-1.5 rounded-xl bg-soft px-3 py-2.5 text-fs-sm font-bold text-mute">Ожидаем первый ответ</div>
+          <div className="mx-1.5 rounded-xl bg-soft px-3 py-2.5 text-fs-sm font-bold text-mute">{t('d2.srv.waitFirst')}</div>
         )
       )}
 
       <div className="mt-auto flex items-center justify-between gap-2 px-1.5 pt-1 text-xs font-bold text-mute">
         <AddrCopy address={s.address} className="truncate font-mono" />
         <span className="flex shrink-0 items-center gap-2">
-          {uptime != null && <span className="srv-up" title="Аптайм за 30 дней">{(Math.round(uptime * 10) / 10).toLocaleString('ru-RU')}%</span>}
+          {uptime != null && <span className="srv-up" title={t('d2.srv.uptime30')}>{(Math.round(uptime * 10) / 10).toLocaleString('ru-RU')}%</span>}
           {s.online ? (s.updatedAt != null && Date.now() - s.updatedAt > 120_000 ? ago(s.updatedAt) : '') : ago(s.updatedAt)}
         </span>
       </div>
@@ -145623,59 +147912,62 @@ import CustomGamesCard from '../components/CustomGamesCard';
 import { PasswordCard } from './settings/PasswordCard';
 import { UpdateCard } from './settings/UpdateCard';
 import { SaveBarProvider } from '../saveBar';
+import { t, useI18n } from '../i18n';
 export { BotPill } from './settings/BotCard';
 export { UsersTab } from './settings/UsersTab';
 
 // the ids stay the canonical hashes (/admin/settings/bot|brand|security|updates); only the labels are friendlier
 const TABS = SETTINGS_TABS;
 
-const TAB_HINT: Record<string, { hint: string; help: ReactNode }> = {
+const tabHints = (): Record<string, { hint: string; help: ReactNode }> => ({
   bot: {
-    hint: 'Здесь вы подключаете Discord-бота: он публикует сообщения и новости. Токен берётся в Discord Developer Portal.',
+    hint: t('d2.set.bot.hint'),
     help: (
       <>
-        <p>Как получить токен:</p>
+        <p>{t('d2.set.bot.h0')}</p>
         <ol>
-          <li>Откройте discord.com/developers, раздел Applications, и создайте приложение.</li>
-          <li>На вкладке Bot нажмите Reset Token и скопируйте токен.</li>
-          <li>Вставьте его ниже и сохраните, затем нажмите «Пригласить бота на сервер».</li>
+          <li>{t('d2.set.bot.h1')}</li>
+          <li>{t('d2.set.bot.h2')}</li>
+          <li>{t('d2.set.bot.h3')}</li>
         </ol>
-        <p>Прокси нужен только если Discord недоступен с вашего сервера.</p>
+        <p>{t('d2.set.bot.h4')}</p>
       </>
     ),
   },
   brand: {
-    hint: 'Название, цвет и логотип сообщества: их видят все посетители панели и участники в подвале сообщений Discord.',
-    help: <p>Готовые темы меняют цвета всей панели сразу. Изменения можно посмотреть сразу, а сохраняются кнопкой «Сохранить» внизу; пока идёт сохранение или если оно не удалось, цвета видны только вам как предпросмотр. «Акцент по игре» действует только в вашем браузере.</p>,
+    hint: t('d2.set.brand.hint'),
+    help: <p>{t('d2.set.brand.help')}</p>,
   },
   security: {
-    hint: 'Пароль администратора и сведения о доступе: кто может входить в панель и регистрироваться.',
-    help: <p>Пароль нужно менять, если им делились. Переключатели регистрации и правила сообщества находятся в разделе «Пользователи».</p>,
+    hint: t('d2.set.sec.hint'),
+    help: <p>{t('d2.set.sec.help')}</p>,
   },
   updates: {
-    hint: 'Установка новых версий панели и резервные копии данных. Перед обновлением сохраняется копия базы, поэтому его можно откатить.',
-    help: <p>Копия содержит серверы, привязки, пользователей, новости и токен бота, поэтому храните файлы бережно. Автоматические копии включаются расписанием ниже.</p>,
+    hint: t('d2.set.upd.hint'),
+    help: <p>{t('d2.set.upd.help')}</p>,
   },
-};
+});
 
 export default function SettingsPage({ sub, updateAvailable }: { sub: string; updateAvailable: boolean }) {
-  const tab = TABS.some((t) => t.id === sub) ? sub : 'bot';
+  useI18n();
+  const tab = TABS.some((x) => x.id === sub) ? sub : 'bot';
+  const TAB_HINT = tabHints();
   return (
     <AdminPage
       narrow
-      head={<PageHead key={tab} icon={<IconSettings />} title="Настройки" subtitle="Бот, оформление, безопасность, обновления и копии" hint={TAB_HINT[tab].hint} help={TAB_HINT[tab].help} />}
+      head={<PageHead key={tab} icon={<IconSettings />} title={t('d2.set.title')} subtitle={t('d2.set.subtitle')} hint={TAB_HINT[tab].hint} help={TAB_HINT[tab].help} />}
     >
       <SaveBarProvider>
-      <nav className="flex w-full max-w-2xl gap-1 overflow-x-auto rounded-full bg-soft p-1" aria-label="Разделы настроек">
-        {TABS.map((t) => (
+      <nav className="flex w-full max-w-2xl gap-1 overflow-x-auto rounded-full bg-soft p-1" aria-label={t('d2.set.sections')}>
+        {TABS.map((tb) => (
           <a
-            key={t.id}
-            href={`/admin/settings/${t.id}`}
-            aria-current={tab === t.id ? 'page' : undefined}
-            className={`flex-1 whitespace-nowrap rounded-full px-4 py-1.5 text-center font-extrabold transition ${tab === t.id ? 'bg-brand text-white shadow-1' : 'text-mute hover:text-ink'}`}
+            key={tb.id}
+            href={`/admin/settings/${tb.id}`}
+            aria-current={tab === tb.id ? 'page' : undefined}
+            className={`flex-1 whitespace-nowrap rounded-full px-4 py-1.5 text-center font-extrabold transition ${tab === tb.id ? 'bg-brand text-white shadow-1' : 'text-mute hover:text-ink'}`}
           >
-            {t.label}
-            {t.id === 'updates' && updateAvailable && <span className="update-dot ml-1.5 align-middle" title="Доступно обновление" />}
+            {tb.label}
+            {tb.id === 'updates' && updateAvailable && <span className="update-dot ml-1.5 align-middle" title={t('d2.set.updAvail')} />}
           </a>
         ))}
       </nav>
@@ -145685,16 +147977,16 @@ export default function SettingsPage({ sub, updateAvailable }: { sub: string; up
         <>
           <PasswordCard />
           <SmtpCard />
-          <Section title="Вход и доступ">
-            <p className="font-semibold text-mute">Кто может открыть панель, регистрироваться и какие у людей роли, настраивается в разделе «Пользователи».</p>
-            <p className="font-semibold text-mute">Список ваших входов с устройств и выход со всех остальных находится в профиле.</p>
+          <Section title={t('d2.set.access')}>
+            <p className="font-semibold text-mute">{t('d2.set.access1')}</p>
+            <p className="font-semibold text-mute">{t('d2.set.access2')}</p>
             <div className="flex flex-wrap gap-x-5 gap-y-1">
-              <GoLink href="/admin/users">Пользователи и доступ</GoLink>
-              <GoLink href="/profile">Мои сеансы в профиле</GoLink>
+              <GoLink href="/admin/users">{t('d2.set.usersLink')}</GoLink>
+              <GoLink href="/profile">{t('d2.set.sessionsLink')}</GoLink>
             </div>
           </Section>
           <p className="font-semibold text-mute">
-            Домен и порты задаются при установке и хранятся в <span className="font-mono text-sm text-ink">/app/.env</span>. Изменить их можно командой <span className="font-mono text-sm text-ink">sudo coregsm</span> на сервере (пункт «Домен и прокси»).
+            {t('d2.set.domain1')} <span className="font-mono text-sm text-ink">/app/.env</span>{t('d2.set.domain2')} <span className="font-mono text-sm text-ink">sudo coregsm</span> {t('d2.set.domain3')}
           </p>
         </>
       )}
@@ -145714,13 +148006,15 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/pages/Setup.tsx" << '__COREGSM_EOF__'
 import { useRef, useState, type FormEvent } from 'react';
 import { api, setToken } from '../api';
+import { t, useI18n, type TKey } from '../i18n';
 import { AuthBrand, AuthShell, Button, ErrorLine, Field, FieldError, noAutofill, PasswordField, PasswordStrength, ProxyField, useShake, type ProxyType } from '../ui';
 
-const STEPS = ['Аккаунт', 'Discord', 'Готово'];
+const STEPS: TKey[] = ['d2.su.step.account', 'd2.su.step.discord', 'd2.su.step.done'];
 // same rule as on the server: letters of any alphabet, digits, _ . - and single spaces between words
 const LOGIN_RE = /^(?=.{3,32}$)[\p{L}\p{N}_.-]+(?: [\p{L}\p{N}_.-]+)*$/u;
 
 export default function Setup({ onDone }: { onDone: () => void }) {
+  useI18n();
   const [step, setStep] = useState(0);
   const [code, setCode] = useState('');
   const [username, setUsername] = useState('admin');
@@ -145742,9 +148036,9 @@ export default function Setup({ onDone }: { onDone: () => void }) {
     e.preventDefault();
     setError('');
     setErrs({});
-    if (!LOGIN_RE.test(username.trim())) { shake(); setErrs({ user: 'Логин: 3-32 символа: буквы, цифры, пробел между словами, _ . -' }); return userRef.current?.focus(); }
-    if (password.length < 10) { shake(); setErrs({ pass: 'Пароль должен быть не короче 10 символов' }); return passRef.current?.focus(); }
-    if (password !== repeat) { shake(); setErrs({ repeat: 'Пароли не совпадают' }); return repRef.current?.focus(); }
+    if (!LOGIN_RE.test(username.trim())) { shake(); setErrs({ user: t('d2.su.e.user') }); return userRef.current?.focus(); }
+    if (password.length < 10) { shake(); setErrs({ pass: t('d2.su.e.pass') }); return passRef.current?.focus(); }
+    if (password !== repeat) { shake(); setErrs({ repeat: t('d2.su.e.repeat') }); return repRef.current?.focus(); }
     setStep(1);
   };
 
@@ -145773,15 +148067,15 @@ export default function Setup({ onDone }: { onDone: () => void }) {
   return (
     <AuthShell>
       <div className={`auth-card w-full max-w-md rounded-3xl border bg-card/90 p-6 backdrop-blur-sm sm:p-7 ${shakeCls}`}>
-        <AuthBrand subtitle="Первоначальная настройка панели" />
+        <AuthBrand subtitle={t('d2.su.subtitle')} />
 
-        <ol className="mb-6 flex items-center gap-2" aria-label="Шаги">
+        <ol className="mb-6 flex items-center gap-2" aria-label={t('d2.su.steps')}>
           {STEPS.map((s, i) => (
             <li key={s} className="flex flex-1 items-center gap-2" aria-current={i === step ? 'step' : undefined}>
               <span className={`grid h-7 w-7 shrink-0 place-items-center rounded-full text-sm font-black ${i < step ? 'bg-okbg text-ok' : i === step ? 'bg-brand text-white' : 'bg-soft text-mute'}`}>
                 {i < step ? '✓' : i + 1}
               </span>
-              <span className={`text-sm font-extrabold ${i === step ? 'text-ink' : 'text-mute'}`}>{s}</span>
+              <span className={`text-sm font-extrabold ${i === step ? 'text-ink' : 'text-mute'}`}>{t(s)}</span>
               {i < STEPS.length - 1 && <span className="h-0.5 flex-1 rounded-sm bg-soft" />}
             </li>
           ))}
@@ -145789,60 +148083,60 @@ export default function Setup({ onDone }: { onDone: () => void }) {
 
         {step === 0 && (
           <form onSubmit={next} className="space-y-3.5">
-            <Field label="Код установки">
-              <input id="setup-code" className="input font-mono" value={code} onChange={(e) => setCode(e.target.value)} required autoFocus autoComplete="off" placeholder="из вывода install.sh" />
+            <Field label={t('d2.su.code')}>
+              <input id="setup-code" className="input font-mono" value={code} onChange={(e) => setCode(e.target.value)} required autoFocus autoComplete="off" placeholder={t('d2.su.codeEx')} />
             </Field>
             <p className="-mt-1 text-sm font-semibold text-mute">
-              Код показан в конце установки. Если потерялся: <span className="font-mono">grep SETUP_TOKEN /app/.env</span>
+              {t('d2.su.codeHint')} <span className="font-mono">grep SETUP_TOKEN /app/.env</span>
             </p>
-            <Field label="Логин администратора">
+            <Field label={t('d2.su.login')}>
               <input id="setup-user" ref={userRef} className="input" value={username} onChange={(e) => { setUsername(e.target.value); setErrs((x) => ({ ...x, user: undefined })); }} required autoComplete="username" aria-invalid={errs.user ? true : undefined} aria-describedby={errs.user ? 'setup-user-err' : undefined} />
               <FieldError id="setup-user-err" text={errs.user} />
             </Field>
-            <PasswordField id="setup-pass" ref={passRef} label="Пароль (от 10 символов)" value={password} onChange={(v) => { setPassword(v); setErrs((x) => ({ ...x, pass: undefined })); }} autoComplete="new-password" error={errs.pass}>
+            <PasswordField id="setup-pass" ref={passRef} label={t('d2.su.passLabel')} value={password} onChange={(v) => { setPassword(v); setErrs((x) => ({ ...x, pass: undefined })); }} autoComplete="new-password" error={errs.pass}>
               <PasswordStrength password={password} />
             </PasswordField>
             <PasswordField
               id="setup-pass2"
               ref={repRef}
-              label="Повторите пароль"
+              label={t('d2.su.repeatLabel')}
               value={repeat}
               onChange={(v) => { setRepeat(v); setErrs((x) => ({ ...x, repeat: undefined })); }}
               autoComplete="new-password"
               error={errs.repeat}
-              hint={repeat && repeat === password && !errs.repeat ? 'Пароли совпадают ✓' : undefined}
+              hint={repeat && repeat === password && !errs.repeat ? t('d2.su.match') : undefined}
             />
             <ErrorLine text={error} />
-            <button className="btn w-full">Далее</button>
+            <button className="btn w-full">{t('d2.su.next')}</button>
           </form>
         )}
 
         {step === 1 && (
           <form onSubmit={(e) => { e.preventDefault(); void finish(false); }} className="space-y-3.5">
-            <p className="font-semibold text-mute">Бот публикует карточки серверов в Discord. Это можно настроить и позже, в разделе «Настройки».</p>
-            <Field label="Токен Discord-бота">
-              <input id="setup-token" className="input font-mono" type="password" value={discordToken} onChange={(e) => setDiscordToken(e.target.value)} {...noAutofill(true)} placeholder="необязательно" />
+            <p className="font-semibold text-mute">{t('d2.su.botNote')}</p>
+            <Field label={t('d2.su.token')}>
+              <input id="setup-token" className="input font-mono" type="password" value={discordToken} onChange={(e) => setDiscordToken(e.target.value)} {...noAutofill(true)} placeholder={t('d2.su.optional')} />
             </Field>
-            <Field label="Прокси для Discord">
+            <Field label={t('d2.su.proxy')}>
               <ProxyField id="setup-proxy" value={proxyUrl} type={proxyType} onChange={setProxyUrl} onType={setProxyType} />
             </Field>
             <ErrorLine text={error} />
             <div className="flex gap-2 pt-1">
-              <button type="button" className="btn btn-soft" onClick={() => setStep(0)} disabled={busy}>Назад</button>
-              <button type="button" className="btn btn-soft ml-auto" onClick={() => void finish(true)} disabled={busy}>Пропустить</button>
-              <Button loading={busy}>{busy ? 'Создаю…' : 'Завершить'}</Button>
+              <button type="button" className="btn btn-soft" onClick={() => setStep(0)} disabled={busy}>{t('wn.back')}</button>
+              <button type="button" className="btn btn-soft ml-auto" onClick={() => void finish(true)} disabled={busy}>{t('d2.su.skip')}</button>
+              <Button loading={busy}>{busy ? t('d2.su.creating') : t('d2.su.finish')}</Button>
             </div>
           </form>
         )}
 
         {step === 2 && (
           <div className="space-y-4">
-            <div className="rounded-2xl bg-okbg px-4 py-3 font-bold text-ok">Администратор «{username.trim()}» создан.</div>
+            <div className="rounded-2xl bg-okbg px-4 py-3 font-bold text-ok">{t('d2.su.created', { name: username.trim() })}</div>
             <ol className="space-y-2 font-semibold text-mute">
-              <li><span className="font-black text-ink">1.</span> Добавьте игровой сервер на вкладке «Серверы».</li>
-              <li><span className="font-black text-ink">2.</span> {discordToken ? 'Привяжите Discord-канал на вкладке «Discord».' : 'Укажите токен бота в «Настройки», затем привяжите канал на вкладке «Discord».'}</li>
+              <li><span className="font-black text-ink">1.</span> {t('d2.su.todo1')}</li>
+              <li><span className="font-black text-ink">2.</span> {discordToken ? t('d2.su.todo2a') : t('d2.su.todo2b')}</li>
             </ol>
-            <button className="btn w-full" onClick={onDone}>Открыть панель</button>
+            <button className="btn w-full" onClick={onDone}>{t('d2.su.open')}</button>
           </div>
         )}
       </div>
@@ -146289,11 +148583,12 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/pages/System.tsx" << '__COREGSM_EOF__'
 import { useMemo, useState } from 'react';
 import { api, type CertInfo } from '../api';
+import { t, useI18n } from '../i18n';
+import StorageCard from '../components/StorageCard';
 import { Gauge, usageTone, type GaugeTone } from '../components/Gauge';
 import HealthHistoryCard, { type HealthFlag } from '../components/HealthHistoryCard';
 import ProbesSection from '../components/ProbesSection';
-import StorageCard from '../components/StorageCard';
-import { AdminPage, ErrorLine, GoLink, LoadError, IconDatabase, IconDisk, IconMemory, IconSystem, Notice, PageHead, Section, Strip, ago, fmtDateTime, fmtTime, plural, usePoll } from '../ui';
+import { AdminPage, ErrorLine, GoLink, LoadError, IconDatabase, IconDisk, IconMemory, IconSystem, Notice, PageHead, Section, Strip, ago, fmtDateTime, fmtTime, usePoll } from '../ui';
 
 interface Health {
   version: string | null;
@@ -146315,8 +148610,8 @@ interface Health {
 }
 interface Check { id: string; label: string; status: 'ok' | 'warn' | 'fail'; detail: string }
 
-const mb = (n: number | null) => (n == null ? '–' : n > 1073741824 ? `${(n / 1073741824).toFixed(1)} ГБ` : `${(n / 1048576).toFixed(1)} МБ`);
-const dur = (s: number) => (s < 3600 ? `${Math.floor(s / 60)} мин` : s < 86400 ? `${Math.floor(s / 3600)} ч ${Math.floor((s % 3600) / 60)} мин` : `${Math.floor(s / 86400)} д ${Math.floor((s % 86400) / 3600)} ч`);
+const mb = (n: number | null) => (n == null ? '–' : n > 1073741824 ? t('d2.sys.gb', { v: (n / 1073741824).toFixed(1) }) : t('d2.sys.mb', { v: (n / 1048576).toFixed(1) }));
+const dur = (s: number) => (s < 3600 ? t('dur.m', { n: Math.floor(s / 60) }) : s < 86400 ? t('dur.hm', { h: Math.floor(s / 3600), m: Math.floor((s % 3600) / 60) }) : t('d2.sys.dur.dh', { d: Math.floor(s / 86400), h: Math.floor((s % 86400) / 3600) }));
 
 // the backend reports the process memory and the database file only, so they are drawn against a fixed reference size
 const MEM_REF_MB = 512;
@@ -146324,13 +148619,14 @@ const DB_REF_BYTES = 1024 * 1048576;
 
 const certTone = (c: CertInfo): GaugeTone => (c.daysLeft == null ? 'mute' : c.daysLeft <= 0 ? 'bad' : c.daysLeft <= 14 ? 'warn' : 'ok');
 const certText = (c: CertInfo) => {
-  if (c.daysLeft == null) return 'нет (панель работает по HTTP)';
+  if (c.daysLeft == null) return t('d2.sys.cert.none');
   const d = c.daysLeft;
-  return d <= 0 ? 'истёк' : `${d} ${plural(d, ['день', 'дня', 'дней'])}`;
+  return d <= 0 ? t('d2.sys.cert.expired') : t('pf.stats.days', { n: d });
 };
 
 /** Health, diagnostics and the certificate; the backups live under Settings → «Обновления и копии». */
 export default function SystemPage() {
+  useI18n();
   const [h, setH] = useState<Health | null>(null);
   const [checks, setChecks] = useState<{ at: number; list: Check[] } | null>(null);
   const [running, setRunning] = useState(false);
@@ -146364,13 +148660,13 @@ export default function SystemPage() {
   const botTone: GaugeTone = !h ? 'mute' : h.bot.state === 'online' ? 'ok' : h.bot.state === 'connecting' ? 'warn' : h.bot.state === 'error' ? 'bad' : 'mute';
   const status: { k: string; v: string; sub?: string; tone: GaugeTone }[] = h
     ? [
-        { k: 'Версия', v: h.versionName || (h.version ? h.version.slice(0, 7) : 'сборка из исходников'), sub: `Node ${h.node}`, tone: 'mute' },
-        { k: 'Работает', v: dur(h.uptimeSec), tone: 'ok' },
-        { k: 'Серверы', v: `${h.counts.online} из ${h.counts.servers} онлайн`, tone: h.counts.servers === 0 ? 'mute' : h.counts.online === h.counts.servers ? 'ok' : h.counts.online === 0 ? 'bad' : 'warn' },
-        { k: 'Привязки Discord', v: String(h.counts.bindings), sub: `${h.guilds} ${plural(h.guilds, ['сервер', 'сервера', 'серверов'])} с ботом`, tone: 'mute' },
-        { k: 'Бот', v: h.bot.state === 'online' ? 'в сети' : h.bot.state === 'idle' ? 'ожидание' : h.bot.state === 'connecting' ? 'подключается' : 'ошибка', sub: h.bot.tag ?? (h.bot.updatedAt ? ago(h.bot.updatedAt) : undefined), tone: botTone },
-        ...(h.cert ? [{ k: 'Сертификат HTTPS', v: certText(h.cert), sub: [h.cert.issuer, h.cert.selfSigned ? 'самоподписанный' : null].filter(Boolean).join(' · ') || undefined, tone: certTone(h.cert) }] : []),
-        { k: 'Пользователи', v: String(h.counts.users), tone: 'mute' as GaugeTone },
+        { k: t('d2.sys.s.version'), v: h.versionName || (h.version ? h.version.slice(0, 7) : t('d2.sys.s.fromSource')), sub: `Node ${h.node}`, tone: 'mute' },
+        { k: t('d2.sys.s.uptime'), v: dur(h.uptimeSec), tone: 'ok' },
+        { k: t('d2.sys.s.servers'), v: t('d2.sys.s.serversOnline', { a: h.counts.online, b: h.counts.servers }), tone: h.counts.servers === 0 ? 'mute' : h.counts.online === h.counts.servers ? 'ok' : h.counts.online === 0 ? 'bad' : 'warn' },
+        { k: t('d2.sys.s.bindings'), v: String(h.counts.bindings), sub: t('d2.sys.s.guilds', { n: h.guilds }), tone: 'mute' },
+        { k: t('d2.sys.s.bot'), v: h.bot.state === 'online' ? t('d2.sys.bot.online') : h.bot.state === 'idle' ? t('d2.sys.bot.idle') : h.bot.state === 'connecting' ? t('d2.sys.bot.connecting') : t('d2.sys.bot.error'), sub: h.bot.tag ?? (h.bot.updatedAt ? ago(h.bot.updatedAt) : undefined), tone: botTone },
+        ...(h.cert ? [{ k: t('d2.sys.cert.title'), v: certText(h.cert), sub: [h.cert.issuer, h.cert.selfSigned ? t('d2.sys.cert.self') : null].filter(Boolean).join(' · ') || undefined, tone: certTone(h.cert) }] : []),
+        { k: t('d2.sys.s.users'), v: String(h.counts.users), tone: 'mute' as GaugeTone },
       ]
     : [];
   const dot = { ok: 'dot-ok', warn: 'dot-warn', fail: 'dot-bad' } as const;
@@ -146380,22 +148676,22 @@ export default function SystemPage() {
       head={(
         <PageHead
           icon={<IconSystem />}
-          title="Система"
-          subtitle="Состояние панели и диагностика"
-          hint="Здоровье панели: версия, место на диске, бот, сертификат HTTPS. Если что-то не работает, начните с проверки."
-          help={<p>Проверка занимает несколько секунд: она смотрит базу, диск, подключение бота, опрос серверов и доступ к Discord и GitHub. Зелёная точка значит, что всё в порядке, жёлтая — стоит присмотреться, красная — нужно исправить.</p>}
+          title={t('d2.sys.title')}
+          subtitle={t('d2.sys.subtitle')}
+          hint={t('d2.sys.hint')}
+          help={<p>{t('d2.sys.help')}</p>}
         >
-          <button className="btn" onClick={run} disabled={running}>{running ? 'Проверяю…' : 'Запустить проверку'}</button>
+          <button className="btn" onClick={run} disabled={running}>{running ? t('d2.sys.running') : t('d2.sys.run')}</button>
         </PageHead>
       )}
     >
       {error && !h ? <LoadError error={error} onRetry={() => void load()} /> : <ErrorLine text={error} />}
 
       {flags.length > 0 && (
-        <div className="space-y-2" role="group" aria-label="Предупреждения">
+        <div className="space-y-2" role="group" aria-label={t('d2.sys.warnings')}>
           {flags.map((f) => (
             <Notice key={f.kind} tone="warn">
-              {f.text}<span className="font-semibold opacity-80"> · с {new Date(f.since).toDateString() === new Date().toDateString() ? fmtTime(f.since) : fmtDateTime(f.since)}</span>
+              {f.text}<span className="font-semibold opacity-80"> · {t('d2.sys.since')} {new Date(f.since).toDateString() === new Date().toDateString() ? fmtTime(f.since) : fmtDateTime(f.since)}</span>
             </Notice>
           ))}
         </div>
@@ -146403,48 +148699,48 @@ export default function SystemPage() {
 
       {h ? (
         <>
-          <div className="grid grid-cols-1 gap-4 min-[460px]:grid-cols-2 xl:grid-cols-4" role="group" aria-label="Ресурсы">
+          <div className="grid grid-cols-1 gap-4 min-[460px]:grid-cols-2 xl:grid-cols-4" role="group" aria-label={t('d2.sys.resources')}>
             <div className="panel p-5 text-center">
               <Gauge
                 value={diskUsed}
-                label="Диск: занято"
+                label={t('d2.sys.disk.used')}
                 display={diskUsed == null ? '–' : `${Math.round(diskUsed * 100)} %`}
-                caption={h.diskFree != null ? `свободно ${mb(h.diskFree)}` : undefined}
+                caption={h.diskFree != null ? t('d2.sys.disk.free', { v: mb(h.diskFree) }) : undefined}
                 icon={<IconDisk size={18} />}
               />
-              <div className="mt-2 font-extrabold">Диск</div>
-              <div className="text-sm font-semibold text-mute">{h.diskTotal ? `всего ${mb(h.diskTotal)}` : 'размер неизвестен'}</div>
+              <div className="mt-2 font-extrabold">{t('d2.sys.disk')}</div>
+              <div className="text-sm font-semibold text-mute">{h.diskTotal ? t('d2.sys.disk.total', { v: mb(h.diskTotal) }) : t('d2.sys.disk.unknown')}</div>
             </div>
             <div className="panel p-5 text-center">
-              <Gauge value={cpuFrac} tone={usageTone(cpuFrac)} label="Нагрузка процессора" display={cpuFrac == null ? '–' : `${Math.round(cpuFrac * 100)} %`} caption={h.load1 != null ? `load ${h.load1}` : undefined} icon={<IconSystem size={18} />} />
-              <div className="mt-2 font-extrabold">Процессор</div>
-              <div className="text-sm font-semibold text-mute">{h.cpuCount ? `ядер: ${h.cpuCount}, средняя за минуту` : 'нет данных'}</div>
+              <Gauge value={cpuFrac} tone={usageTone(cpuFrac)} label={t('d2.sys.cpu.load')} display={cpuFrac == null ? '–' : `${Math.round(cpuFrac * 100)} %`} caption={h.load1 != null ? `load ${h.load1}` : undefined} icon={<IconSystem size={18} />} />
+              <div className="mt-2 font-extrabold">{t('d2.sys.cpu')}</div>
+              <div className="text-sm font-semibold text-mute">{h.cpuCount ? t('d2.sys.cpu.cores', { n: h.cpuCount }) : t('d2.sys.noData')}</div>
             </div>
             <div className="panel p-5 text-center">
-              <Gauge value={memFrac} tone={usageTone(memFrac)} label="Память панели" display={`${h.memoryMb} МБ`} caption={`из ${MEM_REF_MB} МБ`} icon={<IconMemory size={18} />} />
-              <div className="mt-2 font-extrabold">Память</div>
-              <div className="text-sm font-semibold text-mute">процесс панели, ориентир {MEM_REF_MB} МБ</div>
+              <Gauge value={memFrac} tone={usageTone(memFrac)} label={t('d2.sys.mem.label')} display={t('d2.sys.mb', { v: h.memoryMb })} caption={t('d2.sys.mem.of', { v: MEM_REF_MB })} icon={<IconMemory size={18} />} />
+              <div className="mt-2 font-extrabold">{t('d2.sys.mem')}</div>
+              <div className="text-sm font-semibold text-mute">{t('d2.sys.mem.hint', { v: MEM_REF_MB })}</div>
             </div>
             <div className="panel p-5 text-center">
-              <Gauge value={dbFrac} tone={usageTone(dbFrac)} label="База данных" display={mb(h.dbBytes)} caption="ориентир 1 ГБ" icon={<IconDatabase size={18} />} />
-              <div className="mt-2 font-extrabold">База данных</div>
-              <div className="text-sm font-semibold text-mute">{h.counts.history.toLocaleString('ru-RU')} точек истории</div>
+              <Gauge value={dbFrac} tone={usageTone(dbFrac)} label={t('d2.sys.db')} display={mb(h.dbBytes)} caption={t('d2.sys.db.ref')} icon={<IconDatabase size={18} />} />
+              <div className="mt-2 font-extrabold">{t('d2.sys.db')}</div>
+              <div className="text-sm font-semibold text-mute">{t('d2.sys.db.points', { n: h.counts.history.toLocaleString('ru-RU') })}</div>
             </div>
           </div>
 
           {h.cert && h.cert.daysLeft != null && (
-            <Section title="Сертификат HTTPS" description={h.cert.notAfter ? `Действует до ${fmtDateTime(h.cert.notAfter)}` : undefined}>
-              <div className="cert-bar" role="img" aria-label={`Осталось дней: ${h.cert.daysLeft}`}>
+            <Section title={t('d2.sys.cert.title')} description={h.cert.notAfter ? t('d2.sys.cert.until', { when: fmtDateTime(h.cert.notAfter) }) : undefined}>
+              <div className="cert-bar" role="img" aria-label={t('d2.sys.cert.daysLeft', { n: h.cert.daysLeft })}>
                 <i className={`is-${certTone(h.cert)}`} style={{ width: `${Math.max(2, Math.min(100, (h.cert.daysLeft / 90) * 100))}%` }} />
               </div>
               <p className="text-sm font-semibold text-mute">
-                {certText(h.cert)} из 90{h.cert.selfSigned ? ' · самоподписанный: браузеры покажут предупреждение' : h.cert.issuer ? ` · выдал ${h.cert.issuer}` : ''}.
-                {h.cert.daysLeft <= 14 ? ' Пора продлевать: обычно это делает ваш обратный прокси (Caddy, Nginx Proxy Manager, certbot).' : ''}
+                {t('d2.sys.cert.of90', { left: certText(h.cert) })}{h.cert.selfSigned ? ` · ${t('d2.sys.cert.selfWarn')}` : h.cert.issuer ? ` · ${t('d2.sys.cert.issuer', { name: h.cert.issuer })}` : ''}.
+                {h.cert.daysLeft <= 14 ? ` ${t('d2.sys.cert.renew')}` : ''}
               </p>
             </Section>
           )}
 
-          <Section title="Состояние">
+          <Section title={t('d2.sys.state')}>
             <ul className="divide-y divide-line">
               {status.map((r) => (
                 <li key={r.k} className="flex flex-wrap items-center gap-x-3 gap-y-0.5 py-2.5">
@@ -146458,19 +148754,19 @@ export default function SystemPage() {
           </Section>
         </>
       ) : (
-        <div className="skeleton panel h-40" aria-busy="true" aria-label="Загрузка" />
+        <div className="skeleton panel h-40" aria-busy="true" aria-label={t('d2.news.loading')} />
       )}
 
       <HealthHistoryCard onFlags={setHistFlags} />
 
-      <Section title="Диагностика" description="Проверяет базу, диск, бота, опрос серверов и доступ к Discord и GitHub.">
-        {!checks && <p className="text-sm font-semibold text-mute">Нажмите «Запустить проверку» вверху страницы: результат появится здесь.</p>}
+      <Section title={t('d2.sys.diag')} description={t('d2.sys.diag.desc')}>
+        {!checks && <p className="text-sm font-semibold text-mute">{t('d2.sys.diag.empty')}</p>}
         {checks && (
           <>
             <ul className="divide-y divide-line rounded-ui-lg border border-line">
               {checks.list.map((c) => (
                 <li key={c.id} className="flex items-start gap-3 px-4 py-2.5">
-                  <span className={`mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full ${dot[c.status]}`} role="img" aria-label={c.status === 'ok' ? 'в порядке' : c.status === 'warn' ? 'внимание' : 'ошибка'} />
+                  <span className={`mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full ${dot[c.status]}`} role="img" aria-label={c.status === 'ok' ? t('d2.sys.c.ok') : c.status === 'warn' ? t('d2.sys.c.warn') : t('d2.sys.c.fail')} />
                   <div className="min-w-0">
                     <div className="font-extrabold">{c.label}</div>
                     <div className="wrap-break-word text-sm font-semibold text-mute">{c.detail}</div>
@@ -146478,7 +148774,7 @@ export default function SystemPage() {
                 </li>
               ))}
             </ul>
-            <p className="text-sm font-semibold text-mute">Проверено {fmtDateTime(checks.at)}</p>
+            <p className="text-sm font-semibold text-mute">{t('d2.sys.checked', { when: fmtDateTime(checks.at) })}</p>
           </>
         )}
       </Section>
@@ -146489,10 +148785,10 @@ export default function SystemPage() {
 
       <Strip>
         <div className="min-w-0">
-          <h2 className="text-lg font-black">Резервные копии</h2>
-          <p className="font-semibold text-mute">Скачать копию данных, настроить расписание или восстановить панель из файла.</p>
+          <h2 className="text-lg font-black">{t('d2.sys.backups')}</h2>
+          <p className="font-semibold text-mute">{t('d2.sys.backups.text')}</p>
         </div>
-        <GoLink href="/admin/settings/updates">Обновления и копии</GoLink>
+        <GoLink href="/admin/settings/updates">{t('d2.sys.backups.link')}</GoLink>
       </Strip>
     </AdminPage>
   );
@@ -147403,24 +149699,27 @@ __COREGSM_EOF__
 import { type FormEvent, useState } from 'react';
 import { api, type BotStatus, type SettingsInfo } from '../../api';
 import { confirmDialog } from '../../confirm';
+import { t, useI18n } from '../../i18n';
 import { CopyButton, ErrorLine, Field, FieldError, InviteButton, noAutofill, ProxyField, type ProxyType, Section, toast, usePoll, errText } from '../../ui';
 
 export function BotPill({ status, tokenSet }: { status: BotStatus | null; tokenSet: boolean }) {
-  if (!tokenSet) return <span className="pill pill-mute">ТОКЕН НЕ ЗАДАН</span>;
-  if (!status) return <span className="pill pill-mute">ПРОВЕРКА</span>;
+  useI18n();
+  if (!tokenSet) return <span className="pill pill-mute">{t('d2.bot.p.noToken')}</span>;
+  if (!status) return <span className="pill pill-mute">{t('d2.bot.p.checking')}</span>;
   switch (status.state) {
     case 'online':
       // logged in to Discord, but it is on no server (kicked or never invited): nothing can be posted
-      if (typeof status.guildCount === 'number' && status.guildCount === 0) return <span className="pill pill-warn">НЕТ НА СЕРВЕРАХ{status.tag ? ` · ${status.tag}` : ''}</span>;
-      return <span className="pill pill-ok">ПОДКЛЮЧЁН{status.tag ? ` · ${status.tag}` : ''}</span>;
-    case 'connecting': return <span className="pill pill-warn">ПОДКЛЮЧАЕТСЯ</span>;
-    case 'error': return <span className="pill pill-bad">ОШИБКА</span>;
-    default: return <span className="pill pill-mute">ОЖИДАНИЕ</span>;
+      if (typeof status.guildCount === 'number' && status.guildCount === 0) return <span className="pill pill-warn">{t('d2.bot.p.noGuilds')}{status.tag ? ` · ${status.tag}` : ''}</span>;
+      return <span className="pill pill-ok">{t('d2.bot.p.connected')}{status.tag ? ` · ${status.tag}` : ''}</span>;
+    case 'connecting': return <span className="pill pill-warn">{t('d2.bot.p.connecting')}</span>;
+    case 'error': return <span className="pill pill-bad">{t('d2.bot.p.error')}</span>;
+    default: return <span className="pill pill-mute">{t('d2.bot.p.idle')}</span>;
   }
 }
 
 /** Gateway latency of the bot: the last hours as a line, and a warning when commands are likely to time out (Discord waits 3 s). */
 function BotLatency({ status }: { status: BotStatus }) {
+  useI18n();
   const pts = status.latency ?? [];
   if (status.state !== 'online' || status.ping == null) return null;
   const verdict = status.pingVerdict ?? 'ok';
@@ -147431,17 +149730,17 @@ function BotLatency({ status }: { status: BotStatus }) {
   return (
     <div className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-2xl bg-soft px-4 py-2.5">
       <div>
-        <div className="text-xs font-bold text-mute">Задержка бота</div>
-        <div className={`text-lg font-extrabold tabular-nums ${tone}`}>{status.ping} мс</div>
+        <div className="text-xs font-bold text-mute">{t('d2.bot.lat')}</div>
+        <div className={`text-lg font-extrabold tabular-nums ${tone}`}>{t('d2.bot.ms', { n: status.ping })}</div>
       </div>
       {d && (
-        <svg viewBox={`0 0 ${w} ${h}`} className={`h-10 min-w-0 flex-1 basis-40 ${tone}`} role="img" aria-label={`Задержка бота за последние часы, сейчас ${status.ping} мс`} preserveAspectRatio="none">
+        <svg viewBox={`0 0 ${w} ${h}`} className={`h-10 min-w-0 flex-1 basis-40 ${tone}`} role="img" aria-label={t('d2.bot.latLabel', { n: status.ping })} preserveAspectRatio="none">
           <path d={d} fill="none" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
         </svg>
       )}
       {verdict !== 'ok' && verdict !== 'unknown' && (
         <p className={`basis-full text-sm font-bold ${tone}`}>
-          {verdict === 'bad' ? 'Бот отвечает очень медленно: команды в Discord могут не успевать. Проверьте сеть и прокси.' : 'Бот отвечает медленнее обычного. Если так долго, проверьте сеть и прокси.'}
+          {verdict === 'bad' ? t('d2.bot.slowBad') : t('d2.bot.slow')}
         </p>
       )}
     </div>
@@ -147449,6 +149748,7 @@ function BotLatency({ status }: { status: BotStatus }) {
 }
 
 export function BotCard() {
+  useI18n();
   const [info, setInfo] = useState<SettingsInfo | null>(null);
   const [status, setStatus] = useState<BotStatus | null>(null);
   const [token, setTokenValue] = useState('');
@@ -147483,7 +149783,7 @@ export function BotCard() {
       setProxy('');
       setClearProxy(false);
       setSaved(true);
-      toast('Настройки сохранены');
+      toast(t('d2.bot.t.saved'));
     } catch (err) {
       setError(errText(err));
     } finally {
@@ -147492,7 +149792,7 @@ export function BotCard() {
   };
 
   const removeToken = async () => {
-    if (!(await confirmDialog({ title: 'Удалить токен?', text: 'Бот перестанет обновлять карточки.', confirmLabel: 'Удалить', danger: true }))) return;
+    if (!(await confirmDialog({ title: t('d2.bot.c.tokenTitle'), text: t('d2.bot.c.tokenText'), confirmLabel: t('d2.news.delete'), danger: true }))) return;
     try {
       setInfo(await api<SettingsInfo>('/settings', 'PUT', { discordToken: '' }));
     } catch (err) {
@@ -147501,7 +149801,7 @@ export function BotCard() {
   };
 
   const removeSecret = async () => {
-    if (!(await confirmDialog({ title: 'Удалить Client Secret?', text: 'Вход через Discord перестанет работать.', confirmLabel: 'Удалить', danger: true }))) return;
+    if (!(await confirmDialog({ title: t('d2.bot.c.secretTitle'), text: t('d2.bot.c.secretText'), confirmLabel: t('d2.news.delete'), danger: true }))) return;
     try {
       setInfo(await api<SettingsInfo>('/settings', 'PUT', { discordClientSecret: '' }));
     } catch (err) {
@@ -147512,11 +149812,11 @@ export function BotCard() {
   const tokenSet = !!info?.discordTokenSet;
   const secretSet = !!info?.discordSecretSet;
   // checked while typing; the message appears under the field, the button waits until it is fixed
-  const tokenWarn = token.trim() && !/^[\w-]{20,}\.[\w-]{4,}\.[\w-]{20,}$/.test(token.trim()) ? 'Похоже, это не токен бота: он состоит из трёх частей через точки. Скопируйте его целиком в Developer Portal (Bot → Reset Token).' : '';
-  const proxyWarn = proxy.trim() && !clearProxy && !/^([a-z0-9]+:\/\/)?[^\s:@/]+(:[^\s@/]+)*(@[^\s:@/]+(:\d{1,5})?)?$/i.test(proxy.trim()) ? 'Формат: адрес:порт:логин:пароль или socks5://логин:пароль@адрес:порт' : '';
+  const tokenWarn = token.trim() && !/^[\w-]{20,}\.[\w-]{4,}\.[\w-]{20,}$/.test(token.trim()) ? t('d2.bot.tokenWarn') : '';
+  const proxyWarn = proxy.trim() && !clearProxy && !/^([a-z0-9]+:\/\/)?[^\s:@/]+(:[^\s@/]+)*(@[^\s:@/]+(:\d{1,5})?)?$/i.test(proxy.trim()) ? t('d2.bot.proxyWarn') : '';
 
   return (
-    <Section title="Бот и вход через Discord" actions={<BotPill status={status} tokenSet={tokenSet} />}>
+    <Section title={t('d2.bot.title')} actions={<BotPill status={status} tokenSet={tokenSet} />}>
     <form onSubmit={save} className="space-y-3.5">
       {tokenSet && status?.state === 'error' && status.error && (
         <p className="rounded-2xl bg-badbg px-4 py-2.5 text-sm font-bold text-bad">{status.error}</p>
@@ -147525,7 +149825,7 @@ export function BotCard() {
       {tokenSet && status && <BotLatency status={status} />}
 
       <div data-tour="bot-token">
-      <Field label="Токен бота">
+      <Field label={t('d2.bot.token')}>
         <input
           id="set-token"
           className="input font-mono"
@@ -147533,7 +149833,7 @@ export function BotCard() {
           value={token}
           onChange={(e) => setTokenValue(e.target.value)}
           {...noAutofill(true)}
-          placeholder={tokenSet ? `сохранён (${info?.discordTokenHint}), введите новый для замены` : 'вставьте токен из Developer Portal'}
+          placeholder={tokenSet ? t('d2.bot.tokenSaved', { hint: info?.discordTokenHint ?? '' }) : t('d2.bot.tokenPaste')}
           aria-invalid={tokenWarn ? true : undefined}
           aria-describedby={tokenWarn ? 'set-token-err' : undefined}
         />
@@ -147541,10 +149841,10 @@ export function BotCard() {
       <FieldError id="set-token-err" text={tokenWarn} />
       </div>
       {tokenSet && (
-        <button type="button" className="btn-link-danger text-sm" onClick={removeToken}>Удалить сохранённый токен</button>
+        <button type="button" className="btn-link-danger text-sm" onClick={removeToken}>{t('d2.bot.removeToken')}</button>
       )}
 
-      <Field label="Прокси (необязательно)">
+      <Field label={t('d2.bot.proxy')}>
         <ProxyField
           id="set-proxy"
           value={clearProxy ? '' : proxy}
@@ -147552,22 +149852,22 @@ export function BotCard() {
           onChange={setProxy}
           onType={setProxyType}
           disabled={clearProxy}
-          placeholder={info?.proxyUrl ? `сейчас: ${info.proxyUrl}` : undefined}
+          placeholder={info?.proxyUrl ? t('d2.bot.proxyNow', { url: info.proxyUrl }) : undefined}
         />
       </Field>
       <FieldError id="set-proxy-err" text={proxyWarn} />
       {info?.proxyUrl && (
         <label className="flex items-center gap-2 text-sm font-bold text-mute">
           <input type="checkbox" className="h-4 w-4 accent-brand" checked={clearProxy} onChange={(e) => setClearProxy(e.target.checked)} />
-          Отключить прокси
+          {t('d2.bot.proxyOff')}
         </label>
       )}
-      <p className="text-sm font-semibold text-mute">Через прокси идёт только связь бота с Discord. Опрос игровых серверов всегда идёт напрямую.</p>
+      <p className="text-sm font-semibold text-mute">{t('d2.bot.proxyNote')}</p>
 
       <div className="space-y-3 rounded-ui-lg bg-soft p-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <h3 className="font-black">Вход через Discord</h3>
-          <span className={`pill ${secretSet ? 'pill-ok' : 'pill-mute'}`}>{secretSet ? 'ВКЛЮЧЁН' : 'НЕ НАСТРОЕН'}</span>
+          <h3 className="font-black">{t('d2.bot.login')}</h3>
+          <span className={`pill ${secretSet ? 'pill-ok' : 'pill-mute'}`}>{secretSet ? t('d2.bot.on') : t('d2.bot.notSet')}</span>
         </div>
         <Field label="Client Secret">
           <input
@@ -147577,11 +149877,11 @@ export function BotCard() {
             value={secret}
             onChange={(e) => setSecret(e.target.value)}
             {...noAutofill(true)}
-            placeholder={secretSet ? 'сохранён, введите новый для замены' : 'не задан'}
+            placeholder={secretSet ? t('d2.bot.secretSaved') : t('d2.bot.secretNone')}
           />
         </Field>
         {secretSet && (
-          <button type="button" className="btn-link-danger text-sm" onClick={() => void removeSecret()}>Удалить Client Secret</button>
+          <button type="button" className="btn-link-danger text-sm" onClick={() => void removeSecret()}>{t('d2.bot.removeSecret')}</button>
         )}
         {info?.discordRedirect && (
           <div>
@@ -147593,7 +149893,7 @@ export function BotCard() {
           </div>
         )}
         <p className="text-sm font-semibold text-mute">
-          Добавьте этот адрес в Developer Portal: OAuth2 → Redirects. Client Secret скопируйте на той же странице OAuth2.
+          {t('d2.bot.redirectNote')}
         </p>
       </div>
 
@@ -147601,12 +149901,12 @@ export function BotCard() {
       {tokenSet && status?.inviteUrl && (
         <div className="flex flex-wrap items-center gap-3 rounded-2xl bg-soft px-4 py-3">
           <InviteButton url={status.inviteUrl} />
-          <span className="text-sm font-semibold text-mute">Откроется Discord: выберите сервер и подтвердите права.</span>
+          <span className="text-sm font-semibold text-mute">{t('d2.bot.inviteNote')}</span>
         </div>
       )}
-      {saved && <p className="rounded-2xl bg-okbg px-4 py-2.5 font-bold text-ok" role="status">Сохранено. Бот переподключится в течение 10 секунд.</p>}
-      <p className="text-sm font-semibold text-mute">Токен, Client Secret и прокси сохраняются только кнопкой: это секреты, их не отправляем «на лету».</p>
-      <button className="btn" disabled={busy || !!tokenWarn || !!proxyWarn || (!token.trim() && !secret.trim() && !proxy.trim() && !clearProxy)}>Сохранить</button>
+      {saved && <p className="rounded-2xl bg-okbg px-4 py-2.5 font-bold text-ok" role="status">{t('d2.bot.savedNote')}</p>}
+      <p className="text-sm font-semibold text-mute">{t('d2.bot.secretsNote')}</p>
+      <button className="btn" disabled={busy || !!tokenWarn || !!proxyWarn || (!token.trim() && !secret.trim() && !proxy.trim() && !clearProxy)}>{t('common.save')}</button>
     </form>
     </Section>
   );
@@ -147626,11 +149926,13 @@ import { AccentPicker } from '../../components/AccentPicker';
 import { ErrorLine, FieldError, GameAvatar, IconCheck, Logo, SaveBadge, Section, TextField, toast, useAutosave, errText } from '../../ui';
 import { useSaveBar, useSaveBarActive } from '../../saveBar';
 import { errorText } from '../../apiErrors';
+import { t, useI18n } from '../../i18n';
 
 
 
 /** название, цвет и логотип сообщества: изменения сохраняются сами */
 export function BrandCard() {
+  useI18n();
   const { access, reload } = useAuth();
   const b = access.brand;
   const [name, setName] = useState(b.name);
@@ -147663,30 +149965,30 @@ export function BrandCard() {
   // name and colours are saved as you go: on a pause, on leaving the name field, on picking a colour
   const form = { name, color, color2, preset };
   const savedForm = { name: b.name, color: b.color, color2: b.color2 ?? '', preset: b.preset ?? '' };
-  const nameError = !name.trim() ? 'Введите название сообщества' : name.trim().length > 32 ? 'Не длиннее 32 символов' : '';
-  const colorError = parseHex(color) ? '' : 'Цвет должен быть в формате #RRGGBB';
+  const nameError = !name.trim() ? t('d2.brand.nameEmpty') : name.trim().length > 32 ? t('d2.brand.nameLong') : '';
+  const colorError = parseHex(color) ? '' : t('d2.brand.colorFmt');
   const bar = useSaveBarActive();
   const auto = useAutosave({
     manual: bar,
     value: form,
     saved: savedForm,
     delay: 800,
-    validate: (f) => (!f.name.trim() ? 'Введите название сообщества' : f.name.trim().length > 32 ? 'Не длиннее 32 символов' : parseHex(f.color) ? null : 'Цвет должен быть в формате #RRGGBB'),
+    validate: (f) => (!f.name.trim() ? t('d2.brand.nameEmpty') : f.name.trim().length > 32 ? t('d2.brand.nameLong') : parseHex(f.color) ? null : t('d2.brand.colorFmt')),
     save: async (f) => {
       await api('/branding', 'PUT', { name: f.name.trim(), color: f.color, color2: f.color2, preset: f.preset });
       await reload();
     },
   });
 
-  useSaveBar('brand', 'оформление', auto.status, auto.saveNow, () => { setName(b.name); setColor(b.color); setColor2(b.color2 ?? ''); setPreset(b.preset ?? ''); });
+  useSaveBar('brand', t('d2.brand.bar'), auto.status, auto.saveNow, () => { setName(b.name); setColor(b.color); setColor2(b.color2 ?? ''); setPreset(b.preset ?? ''); });
 
   const upload = async (file: File) => {
     setBusy(true);
     setError('');
     try {
       const r = await fetch('/api/branding/logo', { method: 'PUT', headers: { 'Content-Type': file.type, Authorization: `Bearer ${getToken() ?? ''}` }, body: file });
-      if (!r.ok) throw new Error(errorText(await r.json().catch(() => null), 'Не удалось загрузить'));
-      toast('Логотип обновлён');
+      if (!r.ok) throw new Error(errorText(await r.json().catch(() => null), t('d2.brand.uploadFail')));
+      toast(t('d2.brand.t.updated'));
       await reload();
     } catch (x) {
       setError(errText(x));
@@ -147694,36 +149996,36 @@ export function BrandCard() {
       setBusy(false);
     }
   };
-  const clearLogo = async () => { await api('/branding/logo', 'DELETE').catch(() => undefined); toast('Логотип сброшен'); await reload(); };
+  const clearLogo = async () => { await api('/branding/logo', 'DELETE').catch(() => undefined); toast(t('d2.brand.t.reset')); await reload(); };
 
   return (
     <Section
-      title="Оформление"
-      description="Название, цвет и логотип вашего сообщества. Они видны в панели, на странице входа и в подвале сообщений Discord. Изменения сохраняются сами."
+      title={t('d2.brand.title')}
+      description={t('d2.brand.desc')}
       actions={<SaveBadge status={auto.status} error={auto.error} retry={auto.retry} />}
       data-tour="brand"
     >
       <div>
-        <label htmlFor="brand-theme" className="label">Тема для посетителей</label>
+        <label htmlFor="brand-theme" className="label">{t('d2.brand.visitorTheme')}</label>
         <select
           id="brand-theme"
           className="input"
           value={b.theme ?? 'dark'}
           onChange={(e) => {
             void api('/branding/theme', 'PUT', { theme: e.target.value })
-              .then(() => { toast('Тема по умолчанию сохранена'); return reload(); })
+              .then(() => { toast(t('d2.brand.t.theme')); return reload(); })
               .catch((err: Error) => toast(err.message, 'err'));
           }}
         >
-          <option value="dark">Тёмная (обложки игр смотрятся лучше всего)</option>
-          <option value="light">Светлая</option>
-          <option value="auto">Как в системе посетителя</option>
+          <option value="dark">{t('d2.brand.dark')}</option>
+          <option value="light">{t('d2.brand.light')}</option>
+          <option value="auto">{t('d2.brand.auto')}</option>
         </select>
-        <p className="mt-1 text-sm font-semibold text-mute">Действует для тех, кто сам не выбирал тему кнопкой в шапке.</p>
+        <p className="mt-1 text-sm font-semibold text-mute">{t('d2.brand.themeNote')}</p>
       </div>
       <TextField
         id="brand-name"
-        label="Название"
+        label={t('d2.sf.name')}
         value={name}
         maxLength={32}
         onChange={setName}
@@ -147732,7 +150034,7 @@ export function BrandCard() {
         hint={`${name.trim().length} / 32`}
       />
       <div>
-        <span className="label">Тема</span>
+        <span className="label">{t('d2.brand.theme')}</span>
         <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
           {THEME_PRESETS.map((p) => {
             const on = preset === p.id;
@@ -147746,7 +150048,7 @@ export function BrandCard() {
         </div>
       </div>
       <div>
-        <span className="label">Темы игр</span>
+        <span className="label">{t('d2.brand.gameThemes')}</span>
         <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
           {GAME_PRESETS.map((p) => {
             const on = preset === p.id;
@@ -147760,28 +150062,28 @@ export function BrandCard() {
             );
           })}
         </div>
-        <p className="mt-1.5 text-sm font-semibold text-mute">Цвет, свечение страницы и, для V Rising и Icarus, приглушённая картинка игры в шапке каждой страницы.</p>
+        <p className="mt-1.5 text-sm font-semibold text-mute">{t('d2.brand.gameThemesNote')}</p>
       </div>
       <div>
-        <span className="label">Свой цвет</span>
+        <span className="label">{t('d2.brand.ownColor')}</span>
         <div className="flex flex-wrap items-center gap-2">
           {swatches.map((c) => (
             <button type="button" key={c} onClick={() => pickColor(c)} aria-label={c} aria-pressed={!preset && color === c} className={`h-9 w-9 rounded-full ring-offset-2 ring-offset-card ${!preset && color === c ? 'ring-2 ring-ink' : ''}`} style={{ background: c }} />
           ))}
-          <input type="color" value={parseHex(color) ? color : '#4f46e5'} onChange={(e) => pickColor(e.target.value)} className="h-9 w-12 cursor-pointer rounded-ui-sm border border-line bg-card" aria-label="Свой цвет" />
+          <input type="color" value={parseHex(color) ? color : '#4f46e5'} onChange={(e) => pickColor(e.target.value)} className="h-9 w-12 cursor-pointer rounded-ui-sm border border-line bg-card" aria-label={t('d2.brand.ownColor')} />
         </div>
         <FieldError id="brand-color-err" text={colorError} />
       </div>
       <div>
-        <span className="label">Как это выглядит</span>
+        <span className="label">{t('d2.brand.preview')}</span>
         <div className="flex flex-wrap items-center gap-4 rounded-ui-lg border border-line bg-soft p-4">
           <Logo size={44} />
           <div className="min-w-0">
             <div className="truncate text-base font-black">{name.trim() || 'CoreGSM'}</div>
-            <div className="text-sm font-semibold text-mute">Мониторинг игровых серверов</div>
+            <div className="text-sm font-semibold text-mute">{t('d2.brand.tagline')}</div>
           </div>
           <div className="ml-auto flex items-center gap-2">
-            <span className="btn pointer-events-none" aria-hidden>Кнопка</span>
+            <span className="btn pointer-events-none" aria-hidden>{t('d2.brand.button')}</span>
             <span className="grid h-9 w-9 place-items-center rounded-ui-md bg-linear-to-br from-brand to-brand-2 text-white shadow-1" aria-hidden>
               <IconCheck size={18} />
             </span>
@@ -147789,15 +150091,15 @@ export function BrandCard() {
         </div>
       </div>
       <div>
-        <span className="label">Логотип</span>
+        <span className="label">{t('d2.brand.logo')}</span>
         <div className="flex flex-wrap items-center gap-3">
           <Logo size={48} />
           <label className="btn btn-soft btn-sm cursor-pointer">
-            {busy ? 'Загружаю…' : 'Загрузить картинку'}
+            {busy ? t('d2.sf.uploading') : t('d2.sf.upload')}
             <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) void upload(f); e.target.value = ''; }} />
           </label>
-          {b.hasLogo && <button type="button" className="btn btn-soft btn-sm" onClick={() => void clearLogo()}>Сбросить</button>}
-          <span className="text-sm font-semibold text-mute">PNG, JPG или WebP до 3 МБ, лучше квадрат</span>
+          {b.hasLogo && <button type="button" className="btn btn-soft btn-sm" onClick={() => void clearLogo()}>{t('d2.news.reset')}</button>}
+          <span className="text-sm font-semibold text-mute">{t('d2.brand.logoNote')}</span>
         </div>
       </div>
       <ErrorLine text={error} />
@@ -147813,9 +150115,11 @@ __COREGSM_EOF__
 /** Settings → Security: the administrator's own password. */
 import { type FormEvent, useState } from 'react';
 import { api } from '../../api';
-import { ErrorLine, plural, Section, TextField, toast, errText } from '../../ui';
+import { t, useI18n } from '../../i18n';
+import { ErrorLine, Section, TextField, toast, errText } from '../../ui';
 
 export function PasswordCard() {
+  useI18n();
   const [current, setCurrent] = useState('');
   const [next, setNext] = useState('');
   const [error, setError] = useState('');
@@ -147823,7 +150127,7 @@ export function PasswordCard() {
   const [busy, setBusy] = useState(false);
 
   // validated while typing (the server checks again)
-  const nextError = next && next.length < 10 ? `Ещё ${10 - next.length} ${plural(10 - next.length, ['символ', 'символа', 'символов'])}: нужно от 10` : next && next === current ? 'Новый пароль совпадает с текущим' : '';
+  const nextError = next && next.length < 10 ? t('d2.pw.more', { n: 10 - next.length }) : next && next === current ? t('d2.pw.same') : '';
   const ready = !!current && next.length >= 10 && !nextError;
 
   const submit = async (e: FormEvent) => {
@@ -147835,7 +150139,7 @@ export function PasswordCard() {
     try {
       await api('/auth/password', 'POST', { current, next });
       setDone(true);
-      toast('Пароль изменён');
+      toast(t('d2.pw.changed'));
       setCurrent('');
       setNext('');
     } catch (err) {
@@ -147847,13 +150151,13 @@ export function PasswordCard() {
   };
 
   return (
-    <Section title="Пароль администратора">
+    <Section title={t('d2.pw.title')}>
       <form onSubmit={submit} className="space-y-3.5">
-        <TextField id="pw-current" label="Текущий пароль" type="password" value={current} onChange={(v) => { setCurrent(v); setError(''); }} autoComplete="current-password" />
-        <TextField id="pw-next" label="Новый пароль (от 10 символов)" type="password" value={next} onChange={setNext} autoComplete="new-password" error={nextError} />
+        <TextField id="pw-current" label={t('d2.pw.current')} type="password" value={current} onChange={(v) => { setCurrent(v); setError(''); }} autoComplete="current-password" />
+        <TextField id="pw-next" label={t('d2.pw.new')} type="password" value={next} onChange={setNext} autoComplete="new-password" error={nextError} />
         <ErrorLine text={error} />
-        {done && <p className="rounded-ui-lg bg-okbg px-4 py-2.5 font-bold text-ok" role="status">Пароль изменён.</p>}
-        <button className="btn" disabled={!ready || busy}>Сохранить пароль</button>
+        {done && <p className="rounded-ui-lg bg-okbg px-4 py-2.5 font-bold text-ok" role="status">{t('d2.pw.changedDot')}</p>}
+        <button className="btn" disabled={!ready || busy}>{t('d2.pw.save')}</button>
       </form>
     </Section>
   );
@@ -148988,6 +151292,7 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/pollSettings.ts" << '__COREGSM_EOF__'
 /** Poll settings («Опрос серверов»): types and pure helpers. */
+import { t } from './i18n';
 
 export interface PollLast { at: number; durationMs: number; servers: number; failures: number; concurrency: number }
 export interface PollRule { n: number; m: number; probeVeto: boolean; custom: boolean }
@@ -149010,35 +151315,35 @@ export const WINDOW_MAX = 20;
 
 /** the first problem with the two numbers, or null */
 export function validatePoll(v: { failThreshold: number; concurrency: number; failN?: number | null; failM?: number | null }): string | null {
-  if (!Number.isInteger(v.failThreshold) || v.failThreshold < FAIL_MIN || v.failThreshold > FAIL_MAX) return `Число неудачных опросов: от ${FAIL_MIN} до ${FAIL_MAX}`;
-  if (!Number.isInteger(v.concurrency) || v.concurrency < CONC_MIN || v.concurrency > CONC_MAX) return `Параллельных опросов: от ${CONC_MIN} до ${CONC_MAX}`;
+  if (!Number.isInteger(v.failThreshold) || v.failThreshold < FAIL_MIN || v.failThreshold > FAIL_MAX) return t('d2.poll.e.fail', { a: FAIL_MIN, b: FAIL_MAX });
+  if (!Number.isInteger(v.concurrency) || v.concurrency < CONC_MIN || v.concurrency > CONC_MAX) return t('d2.poll.e.conc', { a: CONC_MIN, b: CONC_MAX });
   for (const x of [v.failN, v.failM]) {
-    if (x !== null && x !== undefined && (!Number.isInteger(x) || x < 1 || x > WINDOW_MAX)) return `Правило «N из M»: числа от 1 до ${WINDOW_MAX} (или оставьте поля пустыми)`;
+    if (x !== null && x !== undefined && (!Number.isInteger(x) || x < 1 || x > WINDOW_MAX)) return t('d2.poll.e.rule', { n: WINDOW_MAX });
   }
   return null;
 }
 
 /** the sentence under the «N of M» fields */
 export function ruleText(n: number | null, m: number | null, threshold: number): string {
-  if (n === null && m === null) return `Правило не задано: сбой подтверждается ${confirmDelayText(threshold)}.`;
+  if (n === null && m === null) return t('d2.poll.noRule', { when: confirmDelayText(threshold) });
   const mm = m ?? Math.max(threshold, n ?? threshold);
   const nn = Math.min(n ?? Math.min(threshold, mm), mm);
-  return `Сервер считается упавшим, если не ответил ${nn} из последних ${mm} опросов (необязательно подряд).`;
+  return t('d2.poll.rule', { a: nn, b: mm });
 }
 
 /** 850 -> «0,9 с», 12400 -> «12 с», 95000 -> «1 мин 35 с» */
 export function durationText(ms: number): string {
   if (!Number.isFinite(ms) || ms < 0) return '–';
-  if (ms < 1000) return `${Math.round(ms)} мс`;
+  if (ms < 1000) return t('d2.bot.ms', { n: Math.round(ms) });
   const s = ms / 1000;
-  if (s < 10) return `${s.toFixed(1).replace('.', ',')} с`;
-  if (s < 60) return `${Math.round(s)} с`;
-  return `${Math.floor(s / 60)} мин ${Math.round(s % 60)} с`;
+  if (s < 10) return t('dur.s', { n: s.toFixed(1).replace('.', ',') });
+  if (s < 60) return t('dur.s', { n: Math.round(s) });
+  return `${t('dur.m', { n: Math.floor(s / 60) })} ${t('dur.s', { n: Math.round(s % 60) })}`;
 }
 
 /** how long a confirmed failure takes to show, given the polling interval in seconds */
 export function confirmDelayText(failThreshold: number): string {
-  return failThreshold <= 1 ? 'сразу после первой неудачи' : `после ${failThreshold} неудачных опросов подряд`;
+  return failThreshold <= 1 ? t('d2.poll.right') : t('d2.poll.after', { n: failThreshold });
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
@@ -149049,6 +151354,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import type { SaveStatus } from './autosave';
 import { needsBar, summarize } from './saveBarLogic';
 import { Spinner } from './ui';
+import { t, useI18n } from './i18n';
 
 interface Entry { label: string; status: SaveStatus; save: () => Promise<unknown>; discard: () => void }
 interface Ctx { set: (id: string, e: Entry | null) => void }
@@ -149069,6 +151375,7 @@ export function useSaveBar(id: string, label: string, status: SaveStatus, save: 
 }
 
 export function SaveBarProvider({ children }: { children: ReactNode }) {
+  useI18n();
   const [entries, setEntries] = useState<Record<string, Entry>>({});
   const set = useCallback((id: string, e: Entry | null) => {
     setEntries((cur) => {
@@ -149100,13 +151407,13 @@ export function SaveBarProvider({ children }: { children: ReactNode }) {
       <div className="space-y-5">
         {children}
         {state.show && (
-          <div className="save-bar" role="region" aria-label="Несохранённые изменения">
+          <div className="save-bar" role="region" aria-label={t('d2.sb.unsaved')}>
             <i aria-hidden className={`save-bar-dot ${state.failed ? 'is-bad' : ''}`} />
             <b className="min-w-0 flex-1 truncate" title={state.text}>{state.text}</b>
-            {state.blocked && <span className="hidden text-sm font-semibold text-bad sm:inline">Исправьте поля с ошибкой</span>}
-            <button type="button" className="btn btn-ghost btn-sm" disabled={state.saving} onClick={discard}>Отмена</button>
+            {state.blocked && <span className="hidden text-sm font-semibold text-bad sm:inline">{t('d2.sb.fix')}</span>}
+            <button type="button" className="btn btn-ghost btn-sm" disabled={state.saving} onClick={discard}>{t('common.cancel')}</button>
             <button type="button" className="btn btn-sm" disabled={state.saving || state.blocked || state.saveIds.length === 0} onClick={save}>
-              {state.saving ? <><Spinner className="h-3.5 w-3.5" />Сохраняется…</> : 'Сохранить'}
+              {state.saving ? <><Spinner className="h-3.5 w-3.5" />{t('d2.adm.saving')}</> : t('common.save')}
             </button>
           </div>
         )}
@@ -152924,6 +155231,7 @@ __COREGSM_EOF__
 import { type ReactNode, useId } from 'react';
 import type { SaveStatus } from '../autosave';
 import { IconCheck } from '../icons';
+import { t, useI18n } from '../i18n';
 import { FieldError, Spinner } from './authParts';
 import { noAutofill } from './noAutofill';
 
@@ -152974,15 +155282,16 @@ export function Strip({ children, className = '' }: { children: ReactNode; class
 
 /** «Сохраняется… / Сохранено / Не сохранено»: the state of an autosaved field; `retry` shows «Повторить» after a failure */
 export function SaveBadge({ status, error, retry }: { status: SaveStatus; error?: string; retry?: () => void }) {
+  useI18n();
   let body: ReactNode = null;
-  if (status === 'dirty') body = <span className="text-mute">Изменено…</span>;
-  else if (status === 'saving') body = <span className="inline-flex items-center gap-1.5 text-mute"><Spinner className="h-3.5 w-3.5" />Сохраняется…</span>;
-  else if (status === 'saved') body = <span className="inline-flex items-center gap-1.5 text-ok"><IconCheck size={14} />Сохранено</span>;
+  if (status === 'dirty') body = <span className="text-mute">{t('d2.adm.dirty')}</span>;
+  else if (status === 'saving') body = <span className="inline-flex items-center gap-1.5 text-mute"><Spinner className="h-3.5 w-3.5" />{t('d2.adm.saving')}</span>;
+  else if (status === 'saved') body = <span className="inline-flex items-center gap-1.5 text-ok"><IconCheck size={14} />{t('d2.dg.saved')}</span>;
   else if (status === 'error') {
     body = (
       <span className="inline-flex flex-wrap items-center gap-x-2 text-bad">
-        Не сохранено{error ? `: ${error}` : ''}
-        {retry && <button type="button" className="btn-link btn-link-tone" onClick={retry}>Повторить</button>}
+        {t('d2.adm.notSaved')}{error ? `: ${error}` : ''}
+        {retry && <button type="button" className="btn-link btn-link-tone" onClick={retry}>{t('common.retry')}</button>}
       </span>
     );
   }
@@ -153334,7 +155643,7 @@ import * as Dialog from '@radix-ui/react-dialog';
 import { promptDialog } from '../confirm';
 import { gameIconPath } from '../gameIcons';
 import { GAME_IMAGE, gameAbbr, gameGradient } from '../games';
-import { t } from '../i18n';
+import { t, useI18n } from '../i18n';
 import { IconClose, IconCopy } from '../icons';
 import { Burst } from './motion';
 import { noAutofill } from './noAutofill';
@@ -153407,6 +155716,7 @@ export function Field({ label, children }: { label: string; children: ReactNode 
 
 /** `glass`: for use on top of a cover or a gradient (dark translucent capsule, white text, coloured dot) */
 export function StatusPill({ online, known, lag, glass = false, maintenance = false }: { online: boolean; known: boolean; lag?: boolean; glass?: boolean; maintenance?: boolean }) {
+  useI18n();
   const kind = maintenance ? 'maint' : !known ? 'mute' : !online ? 'bad' : lag ? 'lag' : 'ok';
   // a change of state (not the first paint) plays a short swap animation on the badge
   const prev = useRef(kind);
@@ -153414,14 +155724,14 @@ export function StatusPill({ online, known, lag, glass = false, maintenance = fa
   useEffect(() => { prev.current = kind; }, [kind]);
   const swap = changed ? ' pill-swap' : '';
   // a window of maintenance explains the silence: neither «Офлайн» nor «Лаги»
-  if (maintenance) return glass ? <span className={`pill-glass pill-glass-maint${swap}`}>Обслуживание</span> : <span className={`pill pill-maint${swap}`}>ОБСЛУЖИВАНИЕ</span>;
+  if (maintenance) return glass ? <span className={`pill-glass pill-glass-maint${swap}`}>{t('d2.mt.title')}</span> : <span className={`pill pill-maint${swap}`}>{t('d2.mt.title').toUpperCase()}</span>;
   if (glass) {
-    const text = !known ? 'Ожидание' : !online ? 'Офлайн' : lag ? 'Лаги' : 'Онлайн';
+    const text = !known ? t('d2.bl.wait') : !online ? t('d2.bl.offline') : lag ? t('d2.bl.lag') : t('d2.srv.f.online');
     return <span className={`pill-glass pill-glass-${kind}${swap}`}>{text}</span>;
   }
-  if (!known) return <span className={`pill pill-mute${swap}`}>ОЖИДАНИЕ</span>;
-  if (!online) return <span className={`pill pill-bad${swap}`}>ОФЛАЙН</span>;
-  return lag ? <span className={`pill pill-warn lag${swap}`}>ЛАГИ</span> : <span className={`pill pill-ok live${swap}`}>ОНЛАЙН</span>;
+  if (!known) return <span className={`pill pill-mute${swap}`}>{t('d2.bl.wait').toUpperCase()}</span>;
+  if (!online) return <span className={`pill pill-bad${swap}`}>{t('d2.bl.offline').toUpperCase()}</span>;
+  return lag ? <span className={`pill pill-warn lag${swap}`}>{t('d2.bl.lag').toUpperCase()}</span> : <span className={`pill pill-ok live${swap}`}>{t('d2.srv.f.online').toUpperCase()}</span>;
 }
 
 /**
@@ -153477,6 +155787,7 @@ export function FillBar({ value, max, color }: { value: number; max: number; col
  * `hint`: one sentence under the title (what this page is and why); `help`: longer text behind a «Подробнее» disclosure.
  */
 export function PageHead({ title, subtitle, icon, hint, help, children }: { title: string; subtitle?: string; icon?: ReactNode; hint?: ReactNode; help?: ReactNode; children?: ReactNode }) {
+  useI18n();
   const [open, setOpen] = useState(false);
   const helpId = useId();
   // a hint is read once: the cross hides it (remembered per page in this browser), the «i» button next to the actions brings it back
@@ -153499,7 +155810,7 @@ export function PageHead({ title, subtitle, icon, hint, help, children }: { titl
         </div>
         {(children || (hasHint && hidden)) && (
           <div className="flex flex-wrap items-center gap-2">
-            {hasHint && hidden && <button type="button" className="btn-icon-ghost btn-icon-sm" title="Показать подсказку" aria-label="Показать подсказку" onClick={() => setHint(false)}><span aria-hidden className="hint-ico">i</span></button>}
+            {hasHint && hidden && <button type="button" className="btn-icon-ghost btn-icon-sm" title={t('d2.bl.showHint')} aria-label={t('d2.bl.showHint')} onClick={() => setHint(false)}><span aria-hidden className="hint-ico">i</span></button>}
             {children}
           </div>
         )}
@@ -153514,14 +155825,14 @@ export function PageHead({ title, subtitle, icon, hint, help, children }: { titl
                 <>
                   {hint ? ' ' : ''}
                   <button type="button" className="hint-more" aria-expanded={open} aria-controls={helpId} onClick={() => setOpen((v) => !v)}>
-                    {open ? 'Скрыть' : 'Подробнее'}
+                    {open ? t('d2.ac.cm.hide') : t('d2.lim.more')}
                   </button>
                 </>
               )}
             </p>
             {help && open && <div id={helpId} className="hint-help">{help}</div>}
           </div>
-          <button type="button" className="hint-close" aria-label="Скрыть подсказку" title="Скрыть подсказку" onClick={() => setHint(true)}>✕</button>
+          <button type="button" className="hint-close" aria-label={t('d2.bl.hideHint')} title={t('d2.bl.hideHint')} onClick={() => setHint(true)}>✕</button>
         </div>
       )}
     </div>
@@ -153559,7 +155870,9 @@ export function Empty({ title, text, art, children }: { title: string; text: str
 }
 
 /** Copies text to the clipboard; falls back to a dialog with the text selected where the Clipboard API is blocked. */
-export function CopyButton({ text, label = 'Копировать', className = '', tone = 'soft' }: { text: string; label?: string; className?: string; tone?: 'soft' | 'grad' | 'glass' }) {
+export function CopyButton({ text, label: labelProp, className = '', tone = 'soft' }: { text: string; label?: string; className?: string; tone?: 'soft' | 'grad' | 'glass' }) {
+  useI18n();
+  const label = labelProp ?? t('common.copy');
   const [done, setDone] = useState(false);
   const timer = useRef<number | undefined>(undefined);
   useEffect(() => () => window.clearTimeout(timer.current), []);
@@ -153570,7 +155883,7 @@ export function CopyButton({ text, label = 'Копировать', className = '
       window.clearTimeout(timer.current);
       timer.current = window.setTimeout(() => setDone(false), 1500);
     } catch {
-      await promptDialog({ title: 'Скопируйте вручную', label: 'Текст', value: text, readOnly: true });
+      await promptDialog({ title: t('d2.bl.copyManual'), label: t('d2.ws.newsText'), value: text, readOnly: true });
     }
   };
   return (
@@ -153582,7 +155895,7 @@ export function CopyButton({ text, label = 'Копировать', className = '
         </svg>
         {done && <Burst />}
       </span>
-      <span className="min-w-0 truncate" aria-live="polite">{done ? 'Скопировано' : label}</span>
+      <span className="min-w-0 truncate" aria-live="polite">{done ? t('d2.pr.copied') : label}</span>
     </button>
   );
 }
@@ -153627,7 +155940,7 @@ export function ProxyField({
     <div>
       <div className="flex gap-2">
         <select
-          aria-label="Тип прокси"
+          aria-label={t('d2.bl.proxyType')}
           className="input w-auto! shrink-0"
           value={type}
           disabled={disabled}
@@ -153643,11 +155956,11 @@ export function ProxyField({
           disabled={disabled}
           onChange={(e) => onChange(e.target.value)}
           {...noAutofill()}
-          placeholder={placeholder ?? '45.91.9.172:1080:логин:пароль'}
+          placeholder={placeholder ?? t('d2.bl.proxyEx')}
         />
       </div>
       <p className="mt-1.5 text-sm font-semibold text-mute">
-        Подойдёт формат <span className="font-mono">адрес:порт:логин:пароль</span> или готовая ссылка с <span className="font-mono">socks5://</span> / <span className="font-mono">http://</span>. Если бот не подключается, смените тип.
+        {t('d2.bl.fmtA')} <span className="font-mono">{t('d2.bl.fmt')}</span> {t('d2.bl.fmtB')} <span className="font-mono">socks5://</span> / <span className="font-mono">http://</span>{t('d2.bl.fmtC')}
       </p>
     </div>
   );
@@ -153655,10 +155968,11 @@ export function ProxyField({
 
 /** Opens Discord's own "add bot to a server" screen: the user picks the server there and confirms the permissions. */
 export function InviteButton({ url, className = '' }: { url: string | null; className?: string }) {
+  useI18n();
   if (!url) return null;
   return (
     <a className={`btn ${className}`} href={url} target="_blank" rel="noreferrer">
-      Пригласить бота на сервер
+      {t('d2.bl.invite')}
       <span aria-hidden>↗</span>
     </a>
   );
@@ -153678,7 +155992,7 @@ export function Wordmark({ className = '' }: { className?: string }) {
 /** a few grey rows while a list loads: the page keeps its shape instead of jumping when the data comes */
 export function SkeletonRows({ n = 3, h = 'h-14' }: { n?: number; h?: string }) {
   return (
-    <div className="grid gap-2" aria-busy="true" role="status" aria-label="Загрузка">
+    <div className="grid gap-2" aria-busy="true" role="status" aria-label={t('d2.news.loading')}>
       {Array.from({ length: n }, (_, i) => <div key={i} className={`skeleton ${h} rounded-2xl`} style={{ opacity: 1 - i * 0.18 }} />)}
     </div>
   );
@@ -153689,7 +156003,7 @@ __COREGSM_EOF__
 /** Small charts: the 24 h sparkline, smooth area paths and the fleet status bar. */
 import { useEffect, useId, useState } from 'react';
 import { getToken } from '../api';
-import { t } from '../i18n';
+import { t, useI18n } from '../i18n';
 
 /**
  * The 24 h curves of all servers come in one request (/api/servers/sparks) shared by every sparkline on the page:
@@ -153762,12 +156076,13 @@ export function smoothValues(vals: number[], r = 2): number[] {
 
 /** A small 24 h curve for table rows (no dot, no band, 24 px high); empty while there is no history. */
 export function MiniSpark({ serverId, color }: { serverId: number; color: string }) {
+  useI18n();
   const set = useSparkSet();
   const raw = set?.servers[serverId];
   const first = raw ? raw.players.findIndex((v) => v != null) : -1;
   const vals = raw && first >= 0 ? smoothValues(filled(raw.players.slice(first)), 1) : [];
   if (vals.length < 3) return <span className="text-mute" aria-hidden>–</span>;
-  return <div className="w-24"><SmoothArea values={vals} color={color} w={100} h={24} fill={0.18} strokeWidth={1.8} dot={false} className="h-6" label="График игроков за сутки" /></div>;
+  return <div className="w-24"><SmoothArea values={vals} color={color} w={100} h={24} fill={0.18} strokeWidth={1.8} dot={false} className="h-6" label={t('d2.ch.dayChart')} /></div>;
 }
 
 /** how many players more (or fewer) a server has than an hour ago, from the 24 h buckets; null while the history is too short */
@@ -153795,7 +156110,7 @@ export function useSparkSpanMin(serverId: number): number | null {
 
 /** «за 24 часа» / «за 3 ч» / «за 40 мин» for a span in minutes (null = the whole day while nothing is known) */
 export const spanCaption = (min: number | null): string =>
-  min == null || min >= 24 * 60 - 1 ? 'за 24 часа' : min >= 180 ? `за ${Math.round(min / 60)} ч` : `за ${Math.max(1, min)} мин`;
+  min == null || min >= 24 * 60 - 1 ? t('d2.sd.w24') : min >= 180 ? t('d2.ch.forH', { n: Math.round(min / 60) }) : t('d2.ch.forM', { n: Math.max(1, min) });
 
 /** empty buckets (no poll yet, or the panel was off) take the value before them */
 const filled = (vals: (number | null)[]): number[] => {
@@ -153808,6 +156123,7 @@ const filled = (vals: (number | null)[]): number[] => {
  * is shown only until the shared request answers.
  */
 export function Spark({ serverId, color, variant = 'tile' }: { serverId: number; color: string; variant?: 'tile' | 'hero' }) {
+  useI18n();
   const set = useSparkSet();
   const raw = set?.servers[serverId];
   const hero = variant === 'hero';
@@ -153820,13 +156136,13 @@ export function Spark({ serverId, color, variant = 'tile' }: { serverId: number;
   if (!raw || known < 2) {
     return (
       <div className={`${hero ? 'h-[130px] border-white/30 text-white/80' : 'h-10 border-line text-mute'} grid place-items-center rounded-2xl border border-dashed px-2 text-center text-xs font-bold`}>
-        История появится после нескольких опросов
+        {t('d2.ch.soon')}
       </div>
     );
   }
   const pts = smoothValues(filled(players), hero ? 2 : 1);
   const downs = downs24.filter(Boolean).length;
-  const label = `Игроков за 24 часа: от ${Math.min(...pts)} до ${Math.max(...pts)}${downs ? `; сервер был недоступен` : ''}`;
+  const label = `${t('d2.ch.range', { a: Math.min(...pts), b: Math.max(...pts) })}${downs ? `; ${t('d2.ch.wasDown')}` : ''}`;
   const top = Math.max(...pts);
   const spanMin = Math.round(((raw.players.length - first) * 24 * 60) / raw.players.length);
   return hero
@@ -153834,7 +156150,7 @@ export function Spark({ serverId, color, variant = 'tile' }: { serverId: number;
       <div className="relative">
         <SmoothArea values={pts} down={downs24} color={color} w={560} h={130} grid fill={0.3} strokeWidth={2} className="h-[130px]" label={label} />
         {/* the scale: the top of the day and the zero line (the curve starts at zero) */}
-        <span aria-hidden className="spark-axis" style={{ top: `${(1 - 1 / 1.12) * 100 + 1}%` }}>пик {Math.round(top)}</span>
+        <span aria-hidden className="spark-axis" style={{ top: `${(1 - 1 / 1.12) * 100 + 1}%` }}>{t('d2.ch.peak', { n: Math.round(top) })}</span>
         <span aria-hidden className="spark-axis" style={{ bottom: '3%' }}>0</span>
         <span aria-hidden className="spark-times"><span>{ageLabel(spanMin)}</span>{spanMin >= 60 && <span>{ageLabel(spanMin / 2)}</span>}<span>{t('spark.now')}</span></span>
       </div>
@@ -153938,12 +156254,13 @@ export function SmoothArea({
 
 // ---------- fleet status: one segmented bar for online / lag / offline ----------
 export function FleetBar({ online, lag, offline }: { online: number; lag: number; offline: number }) {
+  useI18n();
   const total = online + lag + offline;
   if (total === 0) return null;
   const seg = [
-    { n: online, cls: 'bg-ok', label: 'онлайн' },
-    { n: lag, cls: 'bg-warn', label: 'лагают' },
-    { n: offline, cls: 'bg-bad', label: 'недоступны' },
+    { n: online, cls: 'bg-ok', label: t('d2.ch.online') },
+    { n: lag, cls: 'bg-warn', label: t('d2.ch.lag') },
+    { n: offline, cls: 'bg-bad', label: t('d2.ch.offline') },
   ].filter((x) => x.n > 0);
   return (
     <div className="panel px-5 py-4">
