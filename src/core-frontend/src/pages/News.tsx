@@ -12,6 +12,7 @@ import { AdminPage, Empty, ErrorLine, GoLink, LoadError, IconCopyPlus, IconNews,
 import NewsEditor, { TEMPLATES } from './NewsEditor';
 import { newsImage } from '../components/news/newsLogic';
 import { NewsStatsModal } from '../components/news/NewsStats';
+import ArtPic from '../components/ArtPic';
 
 // the editor (administrators, inside the admin area); everybody else reads NewsFeed
 export default function NewsPage({ sub }: { sub: string }) {
@@ -237,7 +238,7 @@ function NewsList() {
       {view === 'calendar' && list.length > 0 && <NewsCalendar items={list} onMove={(n, day) => void reschedule(n, day)} />}
 
       {loaded && !error && list.length === 0 && (
-        <Empty art={<NewsArt />} title="Новостей пока нет" text="Напишите первую новость: выберите шаблон, отредактируйте текст и опубликуйте сразу или по расписанию.">
+        <Empty art={<ArtPic src="empty/empty-news" size={132} />} title="Новостей пока нет" text="Напишите первую новость: выберите шаблон, отредактируйте текст и опубликуйте сразу или по расписанию.">
           <a className="btn mt-3" href="/admin/news/new">+ Написать новость</a>
         </Empty>
       )}

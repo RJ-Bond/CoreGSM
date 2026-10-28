@@ -11,6 +11,7 @@ import { z } from 'zod';
 import { DATA_DIR, db, getSetting } from './db.js';
 import { wrap } from './http.js';
 import { currentFlags } from './health.js';
+import { pruneOld, retentionDays } from './gsm.js';
 import { log } from './logger.js';
 
 const DB_PATH = process.env.DB_PATH ?? './data/coregsm.db';
@@ -239,6 +240,29 @@ export function registerOps({ app, admin, getBot, guildCount, version, versionNa
     }
   };
   const count = (sql: string) => (db.prepare(sql).get() as { c: number }).c;
+
+  // what the database holds, how long each kind of rows is kept (HISTORY_DAYS and so on in .env) and a way to prune now
+  const storage = () => {
+    const r = retentionDays();
+    const row = (id: string, table: string, col: string, days: number) => {
+      const x = db.prepare(`SELECT COUNT(*) AS n, MIN(${col}) AS oldest FROM ${table}`).get() as { n: number; oldest: number | string | null };
+      return { id, rows: x.n, oldest: x.oldest == null ? null : typeof x.oldest === 'number' ? x.oldest : Date.parse(String(x.oldest)), days };
+    };
+    return {
+      dbBytes: (() => { try { return fs.statSync(DB_PATH).size; } catch { return null; } })(),
+      tables: [
+        row('history', 'history', 'ts', r.history),
+        row('playerSessions', 'player_sessions', 'joined_at', r.playerSessions),
+        row('accountEvents', 'account_events', 'ts', r.accountEvents),
+        row('uptime', 'uptime_daily', 'day', r.uptime),
+      ],
+    };
+  };
+  app.get('/api/system/storage', admin, (_req, res) => { res.json(storage()); });
+  app.post('/api/system/storage/prune', admin, (_req, res) => {
+    pruneOld();
+    res.json(storage());
+  });
 
   app.get('/api/system', admin, wrap(async (_req, res) => {
     const cert = await checkCert().catch(() => NO_CERT);

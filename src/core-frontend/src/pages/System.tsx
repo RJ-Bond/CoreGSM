@@ -3,6 +3,7 @@ import { api, type CertInfo } from '../api';
 import { Gauge, usageTone, type GaugeTone } from '../components/Gauge';
 import HealthHistoryCard, { type HealthFlag } from '../components/HealthHistoryCard';
 import ProbesSection from '../components/ProbesSection';
+import StorageCard from '../components/StorageCard';
 import { AdminPage, ErrorLine, GoLink, LoadError, IconDatabase, IconDisk, IconMemory, IconSystem, Notice, PageHead, Section, Strip, ago, fmtDateTime, fmtTime, plural, usePoll } from '../ui';
 
 interface Health {
@@ -192,6 +193,8 @@ export default function SystemPage() {
           </>
         )}
       </Section>
+
+      <StorageCard />
 
       <ProbesSection />
 

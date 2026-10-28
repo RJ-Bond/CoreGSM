@@ -2,11 +2,11 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { api, type PublicNews } from '../../api';
 import { t, useI18n } from '../../i18n';
-import { ago, fmtDateTime, fmtTime, usePoll } from '../../ui';
+import { fmtDateTime, fmtTime, usePoll } from '../../ui';
 import { NewsBanner, cardOf } from '../news/PublicFeed';
 import { IconChevronDown } from '../../icons';
 import { StateView } from '../StateView';
-import type { OverviewData, RecentEvent } from './overviewLogic';
+import type { OverviewData } from './overviewLogic';
 
 const OPEN_KEY = 'coregsm_whatsnew_open';
 const SEEN_KEY = 'coregsm_whatsnew_seen';
@@ -87,18 +87,6 @@ export function teaserNodes(n: Pick<PublicNews, 'payload'>, max = 220): ReactNod
   }
   push(raw.slice(last));
   return out;
-}
-
-const DOT: Record<RecentEvent['type'], string> = { up: 'bg-ok', down: 'bg-bad', peak: 'bg-link', maintenance: 'bg-warn' };
-
-function eventText(e: RecentEvent): string {
-  const name = e.serverName ?? t('srv.new.allServers');
-  switch (e.type) {
-    case 'up': return t('srv.new.ev.up', { name });
-    case 'down': return t('srv.new.ev.down', { name });
-    case 'peak': return t('srv.new.ev.peak', { name, n: e.players ?? 0 });
-    default: return t('srv.new.ev.maint', { name: e.serverName ? `${e.name || ''} · ${e.serverName}`.replace(/^ · /, '') : e.name || name });
-  }
 }
 
 export function WhatsNew({ open, onToggle, overview }: { open: boolean; onToggle: () => void; overview: OverviewData | null }) {

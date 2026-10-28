@@ -9,6 +9,7 @@ import { z } from 'zod';
 import { DATA_DIR, db, getSetting, setSetting } from './db.js';
 import { downRule, failThreshold, lastPollStats, pollConcurrency } from './gsm.js';
 import { log } from './logger.js';
+import { dispatchEvent } from './alertChannels.js';
 
 const DB_PATH = process.env.DB_PATH ?? './data/coregsm.db';
 const SAMPLE_EVERY_MS = 5 * 60_000;
@@ -250,9 +251,23 @@ export function registerHealth({ app, admin, bot }: { app: Express; admin: Reque
     if (!(db.prepare('SELECT 1 FROM health_samples LIMIT 1').get())) recordSample(now);
     res.json({ samples: samplesSince(now - hours * 3600_000), flags: currentFlags(now), thresholds: thresholds() });
   });
+  // the administrators are told once when a flag appears (not every 5 minutes), and once when it is gone
+  const told = new Set<string>();
+  const tell = () => {
+    const now = Date.now();
+    const flags = currentFlags(now);
+    const live = new Set(flags.map((f) => f.kind));
+    for (const f of flags) {
+      if (told.has(f.kind)) continue;
+      told.add(f.kind);
+      dispatchEvent({ event: 'panel_issue', title: 'Проблема с панелью', text: f.text, data: { kind: f.kind, since: f.since } });
+    }
+    for (const k of [...told]) if (!live.has(k as Flag['kind'])) told.delete(k);
+  };
   const tick = () => {
     try {
       recordSample();
+      tell();
     } catch (e) {
       log.error('health sample failed', (e as Error).message);
     }

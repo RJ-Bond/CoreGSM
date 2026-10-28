@@ -30,6 +30,7 @@ export { ADMIN_SECTIONS };
 import HealthPage from './Health';
 import SystemPage from './System';
 import AdminIntegrations from './AdminIntegrations';
+import ArtPic from '../components/ArtPic';
 
 /** n = 0 draws a bare dot (a state, not a count) */
 interface NavBadge { n: number; tone: 'bad' | 'warn'; label: string }
@@ -541,7 +542,7 @@ function ServersManage({ sub }: { sub: string }) {
       )}
 
       {loaded && !error && servers.length === 0 && (
-        <Empty art={<ServersArt />} title={t('adm.srv.emptyTitle')} text={t('adm.srv.emptyText')}>
+        <Empty art={<ArtPic src="empty/empty-servers" size={132} />} title={t('adm.srv.emptyTitle')} text={t('adm.srv.emptyText')}>
           <button className="btn mt-3" onClick={() => setEditing({ data: emptyServer })}>{t('adm.srv.add')}</button>
         </Empty>
       )}

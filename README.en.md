@@ -8,6 +8,20 @@ A self-hosted alternative to DiscordGSM. A web panel where you add game servers,
 
 ![Card example](docs/card-preview.png)
 
+<p align="center">
+  <img src="docs/screens/servers.jpg" alt="Server list" width="49%">
+  <img src="docs/screens/server.jpg" alt="Server page" width="49%">
+  <img src="docs/screens/servers-list.jpg" alt="Dense server table" width="49%">
+  <img src="docs/screens/community.jpg" alt="Community" width="49%">
+</p>
+
+## Cards
+
+A server card is a self-refreshing PNG (1200×480, or the 1200×240 «strip»): `/api/card/<id>.png`, open without a login (a private panel needs a session token). Query: `style=split|strip` and `theme=dark|light`, e.g. `/api/card/3.png?style=strip&theme=light`. `/api/card/all.png` is one picture with every server. The cover is the server's own, else the default cover of the game, else the game emblem. In the panel, **Admin → Cards** has the style and theme switches, the link and the HTML code for a site, and a «Cards in Discord» block that sets the look of the pictures the bot sends.
+
+![Strip](docs/card-strip.png)
+![Light theme](docs/card-light.png)
+
 - **Panel**: React and Tailwind. Servers, cards, channel bindings, roles, news, gallery, backups.
 - **Backend**: Node.js 24, TypeScript, Express, [GameDig](https://github.com/gamedig/node-gamedig) (server queries), SQLite, PNG card rendering.
 - **Bot**: discord.js 14. Sends one message with an image to a channel and edits it from then on.

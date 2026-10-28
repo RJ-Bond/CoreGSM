@@ -1,7 +1,7 @@
 /** Pure helpers of the extra alert channels (webhooks, e-mail): events, signature, message texts. No database, no network. */
 import crypto from 'node:crypto';
 
-export const CHANNEL_EVENTS = ['server_down', 'server_up', 'news_published', 'wipe', 'maintenance', 'bot_down', 'bot_up'] as const;
+export const CHANNEL_EVENTS = ['server_down', 'server_up', 'news_published', 'wipe', 'maintenance', 'bot_down', 'bot_up', 'panel_issue'] as const;
 export type ChannelEvent = (typeof CHANNEL_EVENTS)[number];
 export type ChannelKind = 'webhook' | 'email';
 
@@ -13,6 +13,7 @@ export const EVENT_LABELS: Record<ChannelEvent, string> = {
   maintenance: 'Запланировано обслуживание',
   bot_down: 'Discord-бот не на связи',
   bot_up: 'Discord-бот снова на связи',
+  panel_issue: 'Проблема с панелью (диск, база, опрос)',
 };
 
 export const isEvent = (v: unknown): v is ChannelEvent => typeof v === 'string' && (CHANNEL_EVENTS as readonly string[]).includes(v);
