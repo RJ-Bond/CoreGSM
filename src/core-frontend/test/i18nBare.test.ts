@@ -39,10 +39,7 @@ function bareLines(src: string): number {
 const DEBT: Record<string, number> = {
   'components/AccentPicker.tsx': 1,
   'components/CommandPalette.tsx': 1,
-  'components/ConfigTransfer.tsx': 3,
-  'components/GamePicker.tsx': 4,
   'components/Illustrations.tsx': 6,
-  'components/ShellExtras.tsx': 3,
   'components/news/DiscordMd.tsx': 2,
   'components/news/ImageDrop.tsx': 3,
   'components/server/EventsFeed.tsx': 1,

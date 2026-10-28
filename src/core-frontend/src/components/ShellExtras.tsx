@@ -104,7 +104,7 @@ export function AppFooter({ brand, version }: { brand: string; version?: string 
         <a href="/news"><FootNews />{t('nav.news')}</a>
         <a href="/status"><FootStatus />{t('nav.status')}</a>
         <a href="/community"><FootCommunity />{t('nav.community')}</a>
-        <a href="/gallery"><FootGallery />Галерея</a>
+        <a href="/gallery"><FootGallery />{t('d2.gal.title')}</a>
       </nav>
       {version && <span className="app-foot-ver" title={t('foot.version', { v: version })}><FootTag />{footVersionText(version)}</span>}
     </footer>
@@ -113,8 +113,9 @@ export function AppFooter({ brand, version }: { brand: string; version?: string 
 
 // ---------- breadcrumbs ----------
 export function Crumbs({ items }: { items: [href: string, label: ReactNode][] }) {
+  useI18n();
   return (
-    <nav className="crumbs" aria-label="Хлебные крошки">
+    <nav className="crumbs" aria-label={t('d2.sh.crumbs')}>
       <ol>
         {items.map(([href, label], i) => (
           <li key={href + i}>
@@ -159,11 +160,11 @@ export function ProfileMenu({ me, isStaff, logout, active }: { me: Me; isStaff: 
             <UserAvatar name={me.username} url={me.avatarUrl} size={40} tone="grad" className="rounded-full!" />
             <div className="min-w-0">
               <div className="truncate font-extrabold">{me.username}</div>
-              <div className="text-xs font-bold text-mute">{me.role === 'admin' ? 'Администратор' : me.role === 'moderator' ? 'Модератор' : 'Игрок'}</div>
+              <div className="text-xs font-bold text-mute">{me.role === 'admin' ? t('d2.sh.admin') : me.role === 'moderator' ? t('d2.sh.moderator') : t('d2.sh.player')}</div>
             </div>
           </div>
           <a role="menuitem" className={`${link} pm-ico`} href="/profile"><MenuUser />{t('hdr.profile')}</a>
-          <a role="menuitem" className={`${link} pm-ico`} href="/gallery"><MenuGallery />Моя галерея</a>
+          <a role="menuitem" className={`${link} pm-ico`} href="/gallery"><MenuGallery />{t('d2.sh.myGallery')}</a>
           {isStaff && <a role="menuitem" className={`${link} pm-ico`} href="/admin"><MenuAdmin />{t('nav.admin')}</a>}
           <div className="pm-sep" role="separator" />
           {/* one tap, and the menu stays open so both can be set at once */}

@@ -1,6 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { GAMES } from '../games';
 import { GameAvatar } from '../ui';
+import { t, useI18n } from '../i18n';
 
 const CUSTOM = '__custom';
 
@@ -27,6 +28,7 @@ export default function GamePicker({
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState('');
   const [active, setActive] = useState(0);
+  useI18n();
   const btn = useRef<HTMLButtonElement>(null);
   const search = useRef<HTMLInputElement>(null);
   const list = useRef<HTMLUListElement>(null);
@@ -35,7 +37,7 @@ export default function GamePicker({
   const needle = q.trim().toLowerCase();
   const items = useMemo(() => {
     const games = GAMES.filter((g) => !needle || g.label.toLowerCase().includes(needle) || g.id.includes(needle));
-    return [...games.map((g) => ({ id: g.id, label: g.label })), ...(needle && !'другая'.includes(needle) && !'custom'.includes(needle) ? [] : [{ id: CUSTOM, label: 'Другая игра (ввести GameDig ID)…' }])];
+    return [...games.map((g) => ({ id: g.id, label: g.label })), ...(needle && !'другая'.includes(needle) && !'custom'.includes(needle) ? [] : [{ id: CUSTOM, label: t('d2.gp.custom') }])];
   }, [needle]);
 
   const current = custom ? null : GAMES.find((g) => g.id === value);
@@ -89,7 +91,7 @@ export default function GamePicker({
         onKeyDown={(e) => { if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && !open) { e.preventDefault(); setOpen(true); } }}
       >
         {current ? <GameAvatar game={current.id} size={30} /> : <span aria-hidden className="grid h-[30px] w-[30px] place-items-center rounded-ui-md bg-soft text-sm font-black text-mute">?</span>}
-        <span className="min-w-0 flex-1 truncate font-bold">{current ? current.label : 'Другая игра (GameDig ID)'}</span>
+        <span className="min-w-0 flex-1 truncate font-bold">{current ? current.label : t('d2.gp.customShort')}</span>
         <svg aria-hidden width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" className={`shrink-0 text-mute transition ${open ? 'rotate-180' : ''}`}><path d="m6 9 6 6 6-6" /></svg>
       </button>
 
@@ -100,18 +102,18 @@ export default function GamePicker({
               ref={search}
               className="input rounded-xl! py-2!"
               type="search"
-              placeholder="Найти игру…"
+              placeholder={t('d2.gp.find')}
               value={q}
               onChange={(e) => setQ(e.target.value)}
               role="combobox"
               aria-expanded
               aria-controls={`${uid}-list`}
               aria-activedescendant={items[active] ? `${uid}-opt-${active}` : undefined}
-              aria-label="Поиск игры"
+              aria-label={t('d2.gp.search')}
             />
           </div>
-          <ul ref={list} id={`${uid}-list`} role="listbox" aria-label="Игры" className="max-h-64 overflow-y-auto p-1.5">
-            {items.length === 0 && <li className="px-3 py-3 text-sm font-semibold text-mute">Ничего не найдено</li>}
+          <ul ref={list} id={`${uid}-list`} role="listbox" aria-label={t('d2.gp.games')} className="max-h-64 overflow-y-auto p-1.5">
+            {items.length === 0 && <li className="px-3 py-3 text-sm font-semibold text-mute">{t('d2.cp.none')}</li>}
             {items.map((it, i) => {
               const selected = it.id === (custom ? CUSTOM : value);
               return (
