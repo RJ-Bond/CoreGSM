@@ -4,11 +4,13 @@ import { gameLabel } from './games.js';
 import { gameIconPath } from './gameIcons.js';
 import { GAME_IMAGES } from './gameImages.js';
 import { chartTop, drawOnlineChart } from './chartDraw.js';
-import { avatarColor, initialOf, stateBand, whoInGame } from './cardLogic.js';
+import { avatarColor, clock, initialOf, stateBand, whoInGame, type CardOpts } from './cardLogic.js';
 import { monogramColor, monogramOf } from './ogLogic.js';
 import { coverFile } from './covers.js';
 import { getSetting } from './db.js';
 import { maintenanceFor } from './maintenance.js';
+import fs from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 const { Canvas, Path2D, loadImage } = skia;
 
@@ -34,7 +36,31 @@ const C = {
   ok: '#3ddc84',
   warn: '#f6b73c',
   bad: '#ff5d6c',
+  veil: 'rgba(10, 8, 20, 0.5)',
 };
+const LIGHT: typeof C = {
+  bg: '#f3f3fa',
+  bg2: '#ffffff',
+  ink: '#14151f',
+  mute: '#5d6080',
+  dim: '#8a8da6',
+  line: 'rgba(20, 21, 40, 0.1)',
+  soft: 'rgba(20, 21, 40, 0.06)',
+  brand: '#5b4fe0',
+  ok: '#12a05a',
+  warn: '#c98a0a',
+  bad: '#e03a4a',
+  veil: 'rgba(244, 244, 250, 0.6)',
+};
+const PALETTES = { dark: C, light: LIGHT };
+
+const COVERS_DIR = fileURLToPath(new URL('../assets/covers/', import.meta.url));
+/** the picture of a game that ships a default cover (a smaller copy of the panel's one), or null */
+function defaultCoverFile(game: string): string | null {
+  if (!/^[a-z0-9_]+$/i.test(game)) return null;
+  const f = COVERS_DIR + game + '.jpg';
+  return fs.existsSync(f) ? f : null;
+}
 
 // per-game accent colours (same as the panel); unknown games use the brand colour
 const GAME_COLORS: Record<string, [string, string]> = {
@@ -68,16 +94,17 @@ function fit(ctx: any, text: string, maxWidth: number): string {
   return t + '…';
 }
 
-const cache = new Map<number, { at: number; buf: Buffer }>();
+const cache = new Map<string, { at: number; buf: Buffer }>();
 
-const inflight = new Map<number, Promise<Buffer | null>>();
+const inflight = new Map<string, Promise<Buffer | null>>();
 
 /** Concurrent requests for the same server share one render. */
-export function renderCard(serverId: number): Promise<Buffer | null> {
-  const running = inflight.get(serverId);
+export function renderCard(serverId: number, opts: CardOpts = { style: 'split', theme: 'dark' }): Promise<Buffer | null> {
+  const key = `${serverId}:${opts.style}:${opts.theme}`;
+  const running = inflight.get(key);
   if (running) return running;
-  const p = renderCardNow(serverId).finally(() => inflight.delete(serverId));
-  inflight.set(serverId, p);
+  const p = renderCardNow(serverId, opts).finally(() => inflight.delete(key));
+  inflight.set(key, p);
   return p;
 }
 
@@ -113,8 +140,10 @@ function last24h(serverId: number, now: number): { players: number; down: boolea
   return out;
 }
 
-async function renderCardNow(serverId: number): Promise<Buffer | null> {
-  const hit = cache.get(serverId);
+async function renderCardNow(serverId: number, opts: CardOpts): Promise<Buffer | null> {
+  const C = PALETTES[opts.theme];
+  const key = `${serverId}:${opts.style}:${opts.theme}`;
+  const hit = cache.get(key);
   if (hit && Date.now() - hit.at < 10_000) return hit.buf;
 
   const s = db.prepare('SELECT * FROM servers WHERE id = ?').get(serverId) as ServerRow | undefined;
@@ -136,6 +165,20 @@ async function renderCardNow(serverId: number): Promise<Buffer | null> {
   const maint = maintenanceFor(serverId, now);
   const status = maint ? '#7b8cff' : !st ? C.mute : !online ? C.bad : laggy ? C.warn : C.ok;
 
+  const tz = getSetting('timezone') || process.env.TZ || 'Europe/Moscow';
+  const band = stateBand({ known: !!st, online, since: st?.state_since ?? null, maintenanceUntil: maint?.until ?? null }, tz);
+  const file = coverFile(serverId) ?? defaultCoverFile(s.game);
+  let cover: any = null;
+  if (file) {
+    try { cover = await loadImage(file); } catch { /* a broken file: no cover */ }
+  }
+  const address0 = s.display_address || `${s.host}:${s.port}`;
+  if (opts.style === 'strip') {
+    const buf = (await drawStrip(C, { s, st, online, players, max, accent, abbr, status, laggy, uptime, record, cover, band, title: s.name || st?.name || address0 })) as Buffer;
+    cache.set(key, { at: Date.now(), buf });
+    return buf;
+  }
+
   const canvas = new Canvas(W, H);
   const ctx: any = canvas.getContext('2d');
   ctx.textBaseline = 'alphabetic';
@@ -151,11 +194,6 @@ async function renderCardNow(serverId: number): Promise<Buffer | null> {
   ctx.fillStyle = bg;
   ctx.fillRect(0, 0, W, H);
   const PW = 600;
-  const file = coverFile(serverId);
-  let cover: any = null;
-  if (file) {
-    try { cover = await loadImage(file); } catch { /* a broken file: no cover */ }
-  }
   // the picture lives on its own layer, so its right edge can fade to nothing (and show the card's own background)
   const layer = new Canvas(PW, H);
   const lg: any = layer.getContext('2d');
@@ -177,8 +215,8 @@ async function renderCardNow(serverId: number): Promise<Buffer | null> {
   }
   // the bottom is darker under the status and the address
   const low = lg.createLinearGradient(0, H * 0.5, 0, H);
-  low.addColorStop(0, 'rgba(14, 12, 27, 0)');
-  low.addColorStop(1, 'rgba(14, 12, 27, 0.8)');
+  low.addColorStop(0, alpha(C.bg, 0));
+  low.addColorStop(1, alpha(C.bg, 0.8));
   lg.fillStyle = low;
   lg.fillRect(0, 0, PW, H);
   // the right edge melts away
@@ -198,7 +236,7 @@ async function renderCardNow(serverId: number): Promise<Buffer | null> {
   ctx.fillStyle = status;
   ctx.fillRect(0, 0, W, 5);
   ctx.restore();
-  ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
+  ctx.strokeStyle = C.line;
   ctx.lineWidth = 2;
   rr(ctx, 1, 1, W - 2, H - 2, 31);
   ctx.stroke();
@@ -243,7 +281,7 @@ async function renderCardNow(serverId: number): Promise<Buffer | null> {
   ctx.font = `700 21px ${SANS}`;
   const pw = ctx.measureText(label).width + 60;
   const px = 48;
-  ctx.fillStyle = alpha(status === C.mute ? '#9a95c4' : status, 0.16);
+  ctx.fillStyle = opts.theme === 'light' ? 'rgba(255, 255, 255, 0.88)' : alpha(status === C.mute ? '#9a95c4' : status, 0.16);
   rr(ctx, px, 354, pw, 44, 22);
   ctx.fill();
   ctx.save();
@@ -412,20 +450,25 @@ async function renderCardNow(serverId: number): Promise<Buffer | null> {
   // footer
   ctx.fillStyle = C.dim;
   ctx.font = `700 14px ${SANS}`;
-  const when = st ? new Date(st.updated_at).toISOString().slice(11, 16) + ' UTC' : '–';
+  const when = st ? clock(st.updated_at, tz) : '–';
   ctx.fillText(`Обновлено ${when}`, 48, H - 12);
+  const lead = weekLeader(serverId, now);
+  if (lead) {
+    ctx.fillStyle = C.mute;
+    ctx.font = `700 14px ${SANS}`;
+    ctx.fillText(fit(ctx, `★ Лидер недели: ${lead.name} · ${lead.hours} ч`, 520), 520, H - 12);
+  }
   ctx.textAlign = 'right';
   ctx.fillStyle = C.brand;
   ctx.fillText('CoreGSM', W - 48, H - 12);
   ctx.textAlign = 'left';
 
   // a server that is down or under maintenance: the card dims and a banner crosses it, so the preview in a chat says it at once
-  const band = stateBand({ known: !!st, online, since: st?.state_since ?? null, maintenanceUntil: maint?.until ?? null }, getSetting('timezone') || process.env.TZ || 'Europe/Moscow');
   if (band) {
     ctx.save();
     rr(ctx, 0, 0, W, H, 32);
     ctx.clip();
-    ctx.fillStyle = 'rgba(10, 8, 20, 0.5)';
+    ctx.fillStyle = C.veil;
     ctx.fillRect(0, 0, W, H);
     ctx.translate(W / 2, H / 2);
     ctx.rotate(-0.16);
@@ -443,7 +486,247 @@ async function renderCardNow(serverId: number): Promise<Buffer | null> {
   }
 
   const buf = (await canvas.toBuffer('png')) as Buffer;
-  cache.set(serverId, { at: Date.now(), buf });
+  cache.set(key, { at: Date.now(), buf });
+  return buf;
+}
+
+/** the player with the most hours on the server over the last 7 days */
+function weekLeader(serverId: number, now: number): { name: string; hours: number } | null {
+  const since = now - 7 * DAY;
+  const r = db.prepare(
+    `SELECT MIN(name) AS name, SUM(MIN(COALESCE(left_at, ?), ?) - MAX(joined_at, ?)) / 3600000.0 AS h
+     FROM player_sessions WHERE server_id = ? AND COALESCE(left_at, ?) > ? AND joined_at < ? GROUP BY ulower(name) ORDER BY h DESC LIMIT 1`,
+  ).get(now, now, since, serverId, now, since, now) as { name: string; h: number } | undefined;
+  return r && r.h >= 0.5 ? { name: r.name, hours: Math.round(r.h * 10) / 10 } : null;
+}
+
+interface StripData {
+  s: ServerRow; st: StatusRow | undefined; online: boolean; players: number; max: number; accent: string; abbr: string; status: string;
+  laggy: boolean; uptime: number | null; record: number | null; cover: any; band: { kind: 'offline' | 'maint'; text: string } | null; title: string;
+}
+
+/** the low card, 1200x240: for page headers, forums and chat messages */
+async function drawStrip(C: typeof PALETTES.dark, d: StripData): Promise<Buffer> {
+  const SW = 1200, SH = 240;
+  const canvas = new Canvas(SW, SH);
+  const ctx: any = canvas.getContext('2d');
+  ctx.textBaseline = 'alphabetic';
+  ctx.save();
+  rr(ctx, 0, 0, SW, SH, 28);
+  ctx.clip();
+  const bg = ctx.createLinearGradient(0, 0, 0, SH);
+  bg.addColorStop(0, C.bg2);
+  bg.addColorStop(1, C.bg);
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, SW, SH);
+  const PW = 520;
+  const layer = new Canvas(PW, SH);
+  const lg: any = layer.getContext('2d');
+  const art = await gameImage(d.s.game);
+  if (d.cover) {
+    const k = Math.max(PW / d.cover.width, SH / d.cover.height);
+    lg.drawImage(d.cover, (PW - d.cover.width * k) / 2, (SH - d.cover.height * k) / 2, d.cover.width * k, d.cover.height * k);
+  } else {
+    const g0 = lg.createRadialGradient(120, 120, 0, 120, 120, 320);
+    g0.addColorStop(0, alpha(d.accent, 0.5));
+    g0.addColorStop(1, alpha(d.accent, 0));
+    lg.fillStyle = g0;
+    lg.fillRect(0, 0, PW, SH);
+  }
+  lg.globalCompositeOperation = 'destination-out';
+  const melt = lg.createLinearGradient(PW * 0.25, 0, PW, 0);
+  melt.addColorStop(0, 'rgba(0, 0, 0, 0.35)');
+  melt.addColorStop(1, 'rgba(0, 0, 0, 1)');
+  lg.fillStyle = melt;
+  lg.fillRect(0, 0, PW, SH);
+  ctx.globalAlpha = C === LIGHT ? 0.5 : 1;
+  ctx.drawImage(layer, 0, 0);
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = d.status;
+  ctx.fillRect(0, 0, SW, 5);
+
+  // the game tile
+  const tg = ctx.createLinearGradient(36, 72, 132, 168);
+  tg.addColorStop(0, art ? mixToBlack(d.accent, 0.45) : d.accent);
+  tg.addColorStop(1, art ? mixToBlack(d.accent, 0.75) : mixToBlack(d.accent, 0.3));
+  ctx.save();
+  ctx.shadowColor = alpha(d.accent, 0.5);
+  ctx.shadowBlur = 24;
+  ctx.shadowOffsetY = 8;
+  ctx.fillStyle = tg;
+  rr(ctx, 36, 72, 96, 96, 28);
+  ctx.fill();
+  ctx.restore();
+  const iconPath = gameIconPath(d.s.game);
+  if (art) {
+    ctx.drawImage(art, 84 - 44, 120 - 44, 88, 88);
+  } else if (iconPath) {
+    ctx.save();
+    ctx.translate(84 - 12 * 2.2, 120 - 12 * 2.2);
+    ctx.scale(2.2, 2.2);
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 2;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.stroke(new Path2D(iconPath));
+    ctx.restore();
+  } else {
+    ctx.fillStyle = '#ffffff';
+    ctx.font = `700 ${d.abbr.length > 2 ? 32 : 38}px ${SANS}`;
+    ctx.textAlign = 'center';
+    ctx.fillText(d.abbr, 84, 133);
+    ctx.textAlign = 'left';
+  }
+
+  // the name, the game, the status
+  const tx = 156;
+  ctx.fillStyle = C.ink;
+  ctx.font = `800 38px ${SANS}`;
+  ctx.fillText(fit(ctx, d.title, 590), tx, 108);
+  ctx.fillStyle = C.mute;
+  ctx.font = `700 20px ${SANS}`;
+  ctx.fillText(fit(ctx, [gameLabel(d.s.game), d.st?.version, d.online ? d.st?.map : null].filter(Boolean).join(' · '), 540), tx, 140);
+  const label = d.band?.kind === 'maint' ? 'ОБСЛУЖИВАНИЕ' : !d.st ? 'ОЖИДАНИЕ' : !d.online ? 'OFFLINE' : d.laggy ? 'LAG' : 'ONLINE';
+  ctx.font = `700 17px ${SANS}`;
+  const pw = ctx.measureText(label).width + 50;
+  ctx.fillStyle = alpha(d.status === C.mute ? '#9a95c4' : d.status, 0.16);
+  rr(ctx, tx, 160, pw, 36, 18);
+  ctx.fill();
+  ctx.fillStyle = d.status;
+  ctx.beginPath();
+  ctx.arc(tx + 22, 178, 6, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillText(label, tx + 36, 185);
+  ctx.fillStyle = C.mute;
+  ctx.font = `700 17px ${SANS}`;
+  ctx.fillText(d.online && d.st?.ping != null ? `${d.st.ping} мс` : '', tx + pw + 18, 185);
+
+  // the players: the number, the bar, the uptime
+  const rx = 760;
+  ctx.fillStyle = C.mute;
+  ctx.font = `700 15px ${SANS}`;
+  ctx.fillText('ИГРОКИ', rx, 62);
+  ctx.fillStyle = d.online ? C.ink : C.dim;
+  ctx.font = `800 92px ${SANS}`;
+  const big = d.online ? String(d.players) : '–';
+  ctx.fillText(big, rx - 3, 148);
+  const bw = ctx.measureText(big).width;
+  if (d.online && d.max) {
+    ctx.fillStyle = C.mute;
+    ctx.font = `700 34px ${SANS}`;
+    ctx.fillText(`/ ${d.max}`, rx + bw + 10, 148);
+  }
+  const barW = SW - 36 - rx;
+  ctx.fillStyle = C.soft;
+  rr(ctx, rx, 170, barW, 12, 6);
+  ctx.fill();
+  if (d.online && d.max > 0) {
+    ctx.fillStyle = d.accent;
+    rr(ctx, rx, 170, Math.max(12, barW * Math.min(1, d.players / d.max)), 12, 6);
+    ctx.fill();
+  }
+  ctx.fillStyle = C.mute;
+  ctx.font = `700 16px ${SANS}`;
+  ctx.fillText(`рекорд ${d.record ?? '–'} · аптайм ${d.uptime == null ? '–' : d.uptime + '%'}`, rx, 212);
+  ctx.textAlign = 'right';
+  ctx.fillStyle = C.brand;
+  ctx.fillText('CoreGSM', SW - 36, 226);
+  ctx.textAlign = 'left';
+
+  if (d.band) {
+    ctx.fillStyle = C.veil;
+    ctx.fillRect(0, 0, SW, SH);
+    ctx.save();
+    ctx.translate(SW / 2, SH / 2);
+    ctx.rotate(-0.1);
+    ctx.fillStyle = alpha(d.band.kind === 'maint' ? '#7b8cff' : C.bad, 0.92);
+    ctx.fillRect(-SW, -34, SW * 2, 68);
+    ctx.fillStyle = '#ffffff';
+    ctx.font = `800 36px ${SANS}`;
+    ctx.textAlign = 'center';
+    ctx.fillText(d.band.text, 0, 12);
+    ctx.restore();
+  }
+  ctx.restore();
+  ctx.strokeStyle = C.line;
+  ctx.lineWidth = 2;
+  rr(ctx, 1, 1, SW - 2, SH - 2, 27);
+  ctx.stroke();
+  return (await canvas.toBuffer('png')) as Buffer;
+}
+
+const allCache = new Map<string, { at: number; buf: Buffer }>();
+
+/** one picture with every server: a header with the totals and a row per server */
+export async function renderAllCard(theme: CardOpts['theme'] = 'dark'): Promise<Buffer> {
+  const hit = allCache.get(theme);
+  if (hit && Date.now() - hit.at < 10_000) return hit.buf;
+  const C = PALETTES[theme];
+  const rows = db.prepare('SELECT s.*, st.online AS st_online, st.players AS st_players, st.max_players AS st_max FROM servers s LEFT JOIN status st ON st.server_id = s.id ORDER BY s.id LIMIT 8').all() as (ServerRow & { st_online: number | null; st_players: number | null; st_max: number | null })[];
+  const total = rows.reduce((n, r) => n + (r.st_online ? r.st_players ?? 0 : 0), 0);
+  const up = rows.filter((r) => r.st_online).length;
+  const RH = 64, HEAD = 112;
+  const SH = HEAD + Math.max(1, rows.length) * RH + 26;
+  const canvas = new Canvas(W, SH);
+  const ctx: any = canvas.getContext('2d');
+  ctx.textBaseline = 'alphabetic';
+  ctx.save();
+  rr(ctx, 0, 0, W, SH, 28);
+  ctx.clip();
+  const bg = ctx.createLinearGradient(0, 0, 0, SH);
+  bg.addColorStop(0, C.bg2);
+  bg.addColorStop(1, C.bg);
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, W, SH);
+  const glow = ctx.createRadialGradient(W - 100, -40, 0, W - 100, -40, 520);
+  glow.addColorStop(0, alpha(C.brand, 0.25));
+  glow.addColorStop(1, alpha(C.brand, 0));
+  ctx.fillStyle = glow;
+  ctx.fillRect(0, 0, W, SH);
+  ctx.fillStyle = C.ink;
+  ctx.font = `800 40px ${SANS}`;
+  ctx.fillText('Серверы', 48, 66);
+  ctx.fillStyle = C.mute;
+  ctx.font = `700 20px ${SANS}`;
+  ctx.fillText(`играет ${total} · онлайн ${up} из ${rows.length}`, 48, 96);
+  rows.forEach((r, i) => {
+    const y = HEAD + i * RH;
+    const [, color] = GAME_COLORS[r.game] ?? [monogramOf(gameLabel(r.game)), monogramColor(r.game)];
+    const on = !!r.st_online;
+    ctx.fillStyle = C.soft;
+    rr(ctx, 36, y, W - 72, RH - 8, 18);
+    ctx.fill();
+    ctx.fillStyle = on ? C.ok : C.bad;
+    ctx.beginPath();
+    ctx.arc(66, y + (RH - 8) / 2, 7, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = C.ink;
+    ctx.font = `800 22px ${SANS}`;
+    ctx.fillText(fit(ctx, r.name || r.host, 520), 92, y + 30);
+    ctx.fillStyle = C.mute;
+    ctx.font = `700 15px ${SANS}`;
+    ctx.fillText(gameLabel(r.game), 92, y + 48);
+    const px = 700;
+    ctx.fillStyle = on ? C.ink : C.dim;
+    ctx.font = `800 24px ${SANS}`;
+    ctx.fillText(on ? `${r.st_players ?? 0}${r.st_max ? ' / ' + r.st_max : ''}` : 'не в сети', px, y + 38);
+    const bx = 880, bwid = W - 36 - 24 - bx;
+    ctx.fillStyle = C.soft;
+    rr(ctx, bx, y + 22, bwid, 12, 6);
+    ctx.fill();
+    if (on && r.st_max) {
+      ctx.fillStyle = color;
+      rr(ctx, bx, y + 22, Math.max(12, bwid * Math.min(1, (r.st_players ?? 0) / r.st_max)), 12, 6);
+      ctx.fill();
+    }
+  });
+  ctx.restore();
+  ctx.strokeStyle = C.line;
+  ctx.lineWidth = 2;
+  rr(ctx, 1, 1, W - 2, SH - 2, 27);
+  ctx.stroke();
+  const buf = (await canvas.toBuffer('png')) as Buffer;
+  allCache.set(theme, { at: Date.now(), buf });
   return buf;
 }
 

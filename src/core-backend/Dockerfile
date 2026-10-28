@@ -16,6 +16,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* && fc-cache -f
 COPY --from=build /build/node_modules ./node_modules
 COPY --from=build /build/dist ./dist
+COPY assets ./assets
 COPY package.json package-lock.json ./
 RUN mkdir -p /data && chown -R node:node /data /srv
 USER node

@@ -3,7 +3,8 @@ import express from 'express';
 import { z } from 'zod';
 import { admin, allow, isAdmin, loadUser, publicPanel, userFromToken, viewer } from '../auth.js';
 import { channelInfo } from '../botState.js';
-import { isKnownGame, renderCard, renderGameIcon } from '../card.js';
+import { isKnownGame, renderAllCard, renderCard, renderGameIcon } from '../card.js';
+import { parseCardOpts } from '../cardLogic.js';
 import { removeCover } from '../covers.js';
 import { type BindingRow, db, type ServerRow } from '../db.js';
 import { gameLabel } from '../games.js';
@@ -284,10 +285,17 @@ router.get('/api/servers/:id/history', viewer, (req, res) => {
 
 // public PNG card (shared links, link previews). A private panel hides it unless the request carries a session token (?t=).
 router.get(
+  '/api/card/all.png',
+  wrap(async (req, res) => {
+    if (!publicPanel() && !userFromToken(String(req.query.t ?? '')) && !loadUser(req)) return res.status(404).json({ error: 'Сервер не найден' });
+    res.set({ 'Content-Type': 'image/png', 'Cache-Control': 'no-cache' }).send(await renderAllCard(parseCardOpts(req.query).theme));
+  }),
+);
+router.get(
   '/api/card/:id.png', param('id'),
   wrap(async (req, res) => {
     if (!publicPanel() && !userFromToken(String(req.query.t ?? '')) && !loadUser(req)) return res.status(404).json({ error: 'Сервер не найден' });
-    const buf = await renderCard(Number(req.params.id));
+    const buf = await renderCard(Number(req.params.id), parseCardOpts(req.query));
     if (!buf) return res.status(404).json({ error: 'Сервер не найден' });
     res.set({ 'Content-Type': 'image/png', 'Cache-Control': 'no-cache' }).send(buf);
   }),
