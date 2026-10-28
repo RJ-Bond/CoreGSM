@@ -1,5 +1,5 @@
 import { useRef, useState, useEffect } from 'react';
-import { api, type Server } from '../api';
+import { api, type Server, type SettingsInfo } from '../api';
 import { t, useI18n } from '../i18n';
 import { CardsArt } from '../components/Illustrations';
 import { promptDialog } from '../confirm';
@@ -18,6 +18,14 @@ export default function CardsPage() {
   const setStyle = (v: 'split' | 'strip') => { setStyleS(v); try { localStorage.setItem('coregsm_card_style', v); } catch { /* private mode */ } };
   const setTheme = (v: 'dark' | 'light') => { setThemeS(v); try { localStorage.setItem('coregsm_card_theme', v); } catch { /* private mode */ } };
   // the pictures refresh themselves every 30 seconds, so the page works as a live preview
+  const [bot, setBot] = useState<{ style: 'split' | 'strip'; theme: 'dark' | 'light' } | null>(null);
+  useEffect(() => { api<SettingsInfo>('/settings').then((r) => setBot({ style: r.botCardStyle ?? 'split', theme: r.botCardTheme ?? 'dark' })).catch(() => undefined); }, []);
+  const saveBot = (patch: Partial<{ style: 'split' | 'strip'; theme: 'dark' | 'light' }>) => {
+    if (!bot) return;
+    const next = { ...bot, ...patch };
+    setBot(next);
+    api('/settings', 'PUT', { botCardStyle: next.style, botCardTheme: next.theme }).then(() => toast(t('cards.botSaved'))).catch((e: Error) => setError(e.message));
+  };
   const [tick, setTick] = useState(0);
   useEffect(() => { const id = window.setInterval(() => setTick((n) => n + 1), 30_000); return () => window.clearInterval(id); }, []);
   const q = (extra = '') => `${style === 'strip' ? 'style=strip&' : ''}${theme === 'light' ? 'theme=light&' : ''}${extra}`.replace(/&$/, '');
@@ -86,6 +94,19 @@ export default function CardsPage() {
           <div className="seg" role="group" aria-label={t('cards.theme')}>
             <button type="button" className="seg-item" aria-pressed={theme === 'dark'} onClick={() => setTheme('dark')}>{t('cards.dark')}</button>
             <button type="button" className="seg-item" aria-pressed={theme === 'light'} onClick={() => setTheme('light')}>{t('cards.light')}</button>
+          </div>
+        </div>
+      )}
+      {bot && (
+        <div className="panel flex flex-wrap items-center gap-3 p-4">
+          <div className="min-w-0 flex-1"><b>{t('cards.bot')}</b><p className="text-sm text-mute">{t('cards.botText')}</p></div>
+          <div className="seg" role="group" aria-label={t('cards.style')}>
+            <button type="button" className="seg-item" aria-pressed={bot.style === 'split'} onClick={() => saveBot({ style: 'split' })}>{t('cards.split')}</button>
+            <button type="button" className="seg-item" aria-pressed={bot.style === 'strip'} onClick={() => saveBot({ style: 'strip' })}>{t('cards.strip')}</button>
+          </div>
+          <div className="seg" role="group" aria-label={t('cards.theme')}>
+            <button type="button" className="seg-item" aria-pressed={bot.theme === 'dark'} onClick={() => saveBot({ theme: 'dark' })}>{t('cards.dark')}</button>
+            <button type="button" className="seg-item" aria-pressed={bot.theme === 'light'} onClick={() => saveBot({ theme: 'light' })}>{t('cards.light')}</button>
           </div>
         </div>
       )}

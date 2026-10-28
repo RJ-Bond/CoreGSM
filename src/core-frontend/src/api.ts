@@ -197,6 +197,9 @@ export interface SettingsInfo {
   discordSecretSet?: boolean;
   discordClientId?: string | null;
   discordRedirect?: string;
+  /** the look of the cards the bot posts to Discord */
+  botCardStyle?: 'split' | 'strip';
+  botCardTheme?: 'dark' | 'light';
 }
 
 /** SMTP settings (administrator); the password is never returned */

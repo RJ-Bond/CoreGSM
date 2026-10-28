@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { internal } from '../auth.js';
 import { bot } from '../botState.js';
 import { renderCard } from '../card.js';
+import { parseCardOpts } from '../cardLogic.js';
 import { type BindingRow, db, EFFECTIVE_NAME, getSetting, type ServerRow, setSetting } from '../db.js';
 import { refreshServer } from '../gsm.js';
 import { param, wrap } from '../http.js';
@@ -33,7 +34,9 @@ router.get(
   '/internal/card/:id.png', param('id'),
   internal,
   wrap(async (req, res) => {
-    const buf = await renderCard(Number(req.params.id));
+    // the look of the cards in Discord is a setting of the panel (Cards page), a query can still override it
+    const opts = parseCardOpts({ style: req.query.style ?? getSetting('bot_card_style'), theme: req.query.theme ?? getSetting('bot_card_theme') });
+    const buf = await renderCard(Number(req.params.id), opts);
     if (!buf) return res.status(404).json({ error: 'not found' });
     res.set({ 'Content-Type': 'image/png', 'Cache-Control': 'no-cache' }).send(buf);
   }),

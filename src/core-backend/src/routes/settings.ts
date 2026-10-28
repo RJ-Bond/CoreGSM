@@ -25,6 +25,8 @@ function settingsPayload(req?: Request) {
     proxyUrl: proxy ? maskProxy(proxy) : null,
     discordSecretSet: !!getSetting('discord_client_secret'),
     discordClientId: bot.status.clientId ?? clientIdFromToken(tok),
+    botCardStyle: getSetting('bot_card_style') === 'strip' ? 'strip' : 'split',
+    botCardTheme: getSetting('bot_card_theme') === 'light' ? 'light' : 'dark',
     discordRedirect: req ? `${publicBase() ?? baseOf(req)}/api/auth/discord/callback` : '',
   };
 }
@@ -39,6 +41,8 @@ const settingsSchema = z.object({
   proxyUrl: z.string().trim().max(300).optional(),
   proxyType: z.enum(['socks5', 'http']).optional(),
   discordClientSecret: z.string().trim().max(200).optional(),
+  botCardStyle: z.enum(['split', 'strip']).optional(),
+  botCardTheme: z.enum(['dark', 'light']).optional(),
 });
 
 router.put('/api/settings', admin, (req, res) => {
@@ -50,6 +54,8 @@ router.put('/api/settings', admin, (req, res) => {
   if (b.data.discordToken !== undefined) setSetting('discord_token', b.data.discordToken);
   if (proxyUrl !== undefined) setSetting('proxy_url', proxyUrl);
   if (b.data.discordClientSecret !== undefined) setSetting('discord_client_secret', b.data.discordClientSecret);
+  if (b.data.botCardStyle !== undefined) setSetting('bot_card_style', b.data.botCardStyle);
+  if (b.data.botCardTheme !== undefined) setSetting('bot_card_theme', b.data.botCardTheme);
   res.json(settingsPayload(req));
 });
 
