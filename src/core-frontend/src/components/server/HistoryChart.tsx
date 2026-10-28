@@ -547,7 +547,7 @@ export default function HistoryChart({
             ) : (
               <div className="mt-0.5 flex items-center gap-1.5 whitespace-nowrap text-[#fca5a5]">
                 <span className="h-2 w-2 rounded-full bg-[#f87171]" />
-                сервер не отвечал
+                {t('d2.hch.down')}
               </div>
             )}
           </div>
