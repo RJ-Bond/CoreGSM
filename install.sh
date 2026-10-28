@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="b80070f7205f"
+COREGSM_BUILD="ed4b213c5612"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.0.0.76"
+COREGSM_VERSION="1.0.0.77"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -15095,7 +15095,7 @@ __COREGSM_EOF__
 /** Pure helpers of the extra alert channels (webhooks, e-mail): events, signature, message texts. No database, no network. */
 import crypto from 'node:crypto';
 
-export const CHANNEL_EVENTS = ['server_down', 'server_up', 'news_published', 'wipe', 'maintenance', 'bot_down', 'bot_up'] as const;
+export const CHANNEL_EVENTS = ['server_down', 'server_up', 'news_published', 'wipe', 'maintenance', 'bot_down', 'bot_up', 'panel_issue'] as const;
 export type ChannelEvent = (typeof CHANNEL_EVENTS)[number];
 export type ChannelKind = 'webhook' | 'email';
 
@@ -15107,6 +15107,7 @@ export const EVENT_LABELS: Record<ChannelEvent, string> = {
   maintenance: 'Запланировано обслуживание',
   bot_down: 'Discord-бот не на связи',
   bot_up: 'Discord-бот снова на связи',
+  panel_issue: 'Проблема с панелью (диск, база, опрос)',
 };
 
 export const isEvent = (v: unknown): v is ChannelEvent => typeof v === 'string' && (CHANNEL_EVENTS as readonly string[]).includes(v);
@@ -22097,6 +22098,7 @@ import { z } from 'zod';
 import { DATA_DIR, db, getSetting, setSetting } from './db.js';
 import { downRule, failThreshold, lastPollStats, pollConcurrency } from './gsm.js';
 import { log } from './logger.js';
+import { dispatchEvent } from './alertChannels.js';
 
 const DB_PATH = process.env.DB_PATH ?? './data/coregsm.db';
 const SAMPLE_EVERY_MS = 5 * 60_000;
@@ -22338,9 +22340,23 @@ export function registerHealth({ app, admin, bot }: { app: Express; admin: Reque
     if (!(db.prepare('SELECT 1 FROM health_samples LIMIT 1').get())) recordSample(now);
     res.json({ samples: samplesSince(now - hours * 3600_000), flags: currentFlags(now), thresholds: thresholds() });
   });
+  // the administrators are told once when a flag appears (not every 5 minutes), and once when it is gone
+  const told = new Set<string>();
+  const tell = () => {
+    const now = Date.now();
+    const flags = currentFlags(now);
+    const live = new Set(flags.map((f) => f.kind));
+    for (const f of flags) {
+      if (told.has(f.kind)) continue;
+      told.add(f.kind);
+      dispatchEvent({ event: 'panel_issue', title: 'Проблема с панелью', text: f.text, data: { kind: f.kind, since: f.since } });
+    }
+    for (const k of [...told]) if (!live.has(k as Flag['kind'])) told.delete(k);
+  };
   const tick = () => {
     try {
       recordSample();
+      tell();
     } catch (e) {
       log.error('health sample failed', (e as Error).message);
     }
@@ -25953,6 +25969,7 @@ import { z } from 'zod';
 import { DATA_DIR, db, getSetting } from './db.js';
 import { wrap } from './http.js';
 import { currentFlags } from './health.js';
+import { pruneOld, retentionDays } from './gsm.js';
 import { log } from './logger.js';
 
 const DB_PATH = process.env.DB_PATH ?? './data/coregsm.db';
@@ -26181,6 +26198,29 @@ export function registerOps({ app, admin, getBot, guildCount, version, versionNa
     }
   };
   const count = (sql: string) => (db.prepare(sql).get() as { c: number }).c;
+
+  // what the database holds, how long each kind of rows is kept (HISTORY_DAYS and so on in .env) and a way to prune now
+  const storage = () => {
+    const r = retentionDays();
+    const row = (id: string, table: string, col: string, days: number) => {
+      const x = db.prepare(`SELECT COUNT(*) AS n, MIN(${col}) AS oldest FROM ${table}`).get() as { n: number; oldest: number | string | null };
+      return { id, rows: x.n, oldest: x.oldest == null ? null : typeof x.oldest === 'number' ? x.oldest : Date.parse(String(x.oldest)), days };
+    };
+    return {
+      dbBytes: (() => { try { return fs.statSync(DB_PATH).size; } catch { return null; } })(),
+      tables: [
+        row('history', 'history', 'ts', r.history),
+        row('playerSessions', 'player_sessions', 'joined_at', r.playerSessions),
+        row('accountEvents', 'account_events', 'ts', r.accountEvents),
+        row('uptime', 'uptime_daily', 'day', r.uptime),
+      ],
+    };
+  };
+  app.get('/api/system/storage', admin, (_req, res) => { res.json(storage()); });
+  app.post('/api/system/storage/prune', admin, (_req, res) => {
+    pruneOld();
+    res.json(storage());
+  });
 
   app.get('/api/system', admin, wrap(async (_req, res) => {
     const cert = await checkCert().catch(() => NO_CERT);
@@ -111753,6 +111793,13 @@ describe('AppFooter', () => {
 });
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/ArtPic.tsx" << '__COREGSM_EOF__'
+/** a picture from public/art (empty states, badges): decorative, the text next to it says the same */
+export default function ArtPic({ src, size = 120, className = '' }: { src: `empty/${string}` | `badges/${string}`; size?: number; className?: string }) {
+  return <img src={`/art/${src}.webp`} width={size} height={size} alt="" loading="lazy" draggable={false} className={`select-none ${className}`} style={{ width: size, height: size, objectFit: 'contain' }} />;
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
   cat > "$APP_DIR/core-frontend/src/components/AttentionBell.tsx" << '__COREGSM_EOF__'
 import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent } from 'react';
 import { api } from '../api';
@@ -113013,8 +113060,9 @@ __COREGSM_EOF__
  */
 import { useEffect, useState, type FormEvent } from 'react';
 import { api, type Server } from '../api';
+import { t, useI18n } from '../i18n';
 import { confirmDialog } from '../confirm';
-import { Button, ErrorLine, Field, IconTrash, Modal, Section, plural, toast, SkeletonRows, errText } from '../ui';
+import { Button, ErrorLine, Field, IconTrash, Modal, Section, toast, SkeletonRows, errText } from '../ui';
 
 interface Extras {
   autoroles: { id: number; guildId: string; roleId: string; roleName: string | null; roleColor: number; kind: Kind; threshold: number; serverId: number | null; members: number; error: string | null }[];
@@ -113023,25 +113071,26 @@ interface Extras {
 }
 type Kind = 'online' | 'week_top' | 'hours';
 
-const KIND_TEXT: Record<Kind, (t: number) => string> = {
-  online: () => 'Сейчас в игре',
-  week_top: (t) => (t > 1 ? `Топ-${t} недели по часам` : 'Игрок недели (больше всех часов за 7 дней)'),
-  hours: (t) => `Наиграл ${t} ч и больше`,
+const KIND_TEXT: Record<Kind, (n: number) => string> = {
+  online: () => t('dx.kind.online'),
+  week_top: (n) => (n > 1 ? t('dx.kind.top', { n }) : t('dx.kind.topOne')),
+  hours: (n) => t('dx.kind.hours', { n }),
 };
 const TEMPLATES = ['🟢 Онлайн: {players}', '{status} Онлайн: {players}/{max}', '🎮 Игроков: {players} · серверов {online}/{servers}'];
 
 const roleDot = (color: number) => (color ? `#${color.toString(16).padStart(6, '0')}` : 'rgb(var(--mute))');
 
 export default function DiscordExtras({ servers }: { servers: Server[] }) {
+  useI18n();
   const [x, setX] = useState<Extras | null>(null);
   const [error, setError] = useState('');
   const [form, setForm] = useState<'role' | 'counter' | null>(null);
   const load = () => api<Extras>('/discord/extras').then(setX).catch((e: Error) => setError(e.message));
   useEffect(() => { void load(); }, []);
 
-  const serverName = (id: number | null) => (id ? servers.find((s) => s.id === id)?.name ?? `#${id}` : 'все серверы');
+  const serverName = (id: number | null) => (id ? servers.find((s) => s.id === id)?.name ?? `#${id}` : t('dx.allServers'));
   const del = async (what: 'autoroles' | 'counters', id: number, text: string) => {
-    if (!(await confirmDialog({ title: 'Удалить?', text, confirmLabel: 'Удалить', danger: true }))) return;
+    if (!(await confirmDialog({ title: t('dx.deleteQ'), text, confirmLabel: t('dx.delete'), danger: true }))) return;
     await api(`/discord/${what}/${id}`, 'DELETE').then(load).catch((e: Error) => setError(e.message));
   };
 
@@ -113050,56 +113099,57 @@ export default function DiscordExtras({ servers }: { servers: Server[] }) {
   return (
     <>
       <Section
-        title="Автороли"
-        description="Бот сам выдаёт и снимает роли в Discord: «Сейчас в игре», «Игрок недели», «Ветеран 100 ч». Роли получают только игроки, которые связали Discord с игровым ником (команда /register)."
-        actions={<button type="button" className="btn btn-soft btn-sm" onClick={() => setForm('role')} disabled={!x || noRoles}>Добавить роль</button>}
+        title={t('dx.roles.title')}
+        description={t('dx.roles.desc')}
+        actions={<button type="button" className="btn btn-soft btn-sm" onClick={() => setForm('role')} disabled={!x || noRoles}>{t('dx.roles.add')}</button>}
       >
         <ErrorLine text={error} />
-        {noRoles && <p className="rounded-xl bg-warnbg px-3 py-2 text-sm font-bold text-warn">Бот не видит ролей, которые может выдавать. Дайте боту право «Управлять ролями» и поднимите его роль выше тех, что он будет выдавать.</p>}
+        {noRoles && <p className="rounded-xl bg-warnbg px-3 py-2 text-sm font-bold text-warn">{t('dx.roles.none')}</p>}
         {!x && !error && <SkeletonRows n={2} />}
-        {x && x.autoroles.length === 0 && !noRoles && <p className="text-sm font-semibold text-mute">Пока нет ни одной автороли.</p>}
+        {x && x.autoroles.length === 0 && !noRoles && <p className="text-sm font-semibold text-mute">{t('dx.roles.empty')}</p>}
         <ul className="grid grid-cols-[minmax(0,1fr)] gap-2">
           {x?.autoroles.map((r) => (
             <li key={r.id} className="flex flex-wrap items-center gap-3 rounded-2xl bg-soft px-3 py-2.5">
               <span className="h-3 w-3 shrink-0 rounded-full" style={{ background: roleDot(r.roleColor) }} aria-hidden />
               <span className="min-w-0 flex-1">
                 <span className="block font-extrabold">@{r.roleName ?? r.roleId}</span>
-                <span className="block text-sm font-semibold text-mute">{KIND_TEXT[r.kind](r.threshold)} · {serverName(r.serverId)} · сейчас у {r.members} {plural(r.members, ['игрока', 'игроков', 'игроков'])}</span>
+                <span className="block text-sm font-semibold text-mute">{KIND_TEXT[r.kind](r.threshold)} · {serverName(r.serverId)} · {t('dx.roles.holders', { n: r.members })}</span>
                 {r.error && <span className="mt-1 block text-sm font-bold text-bad">{r.error}</span>}
               </span>
-              <button type="button" className="row-act row-act-danger" aria-label="Удалить автороль" title="Удалить" onClick={() => void del('autoroles', r.id, 'Бот перестанет выдавать эту роль. Уже выданные роли останутся у игроков.')}><IconTrash /></button>
+              <button type="button" className="row-act row-act-danger" aria-label={t('dx.roles.del')} title={t('dx.delete')} onClick={() => void del('autoroles', r.id, t('dx.roles.delText'))}><IconTrash /></button>
             </li>
           ))}
         </ul>
       </Section>
 
       <Section
-        title="Счётчик онлайна в голосовом канале"
-        description="Бот переименовывает голосовой канал в живой счётчик, например «🟢 Онлайн: 42». Discord разрешает менять название канала нечасто, поэтому счётчик обновляется раз в 5 минут."
-        actions={<button type="button" className="btn btn-soft btn-sm" onClick={() => setForm('counter')} disabled={!x || noVoice}>Добавить счётчик</button>}
+        title={t('dx.cnt.title')}
+        description={t('dx.cnt.desc')}
+        actions={<button type="button" className="btn btn-soft btn-sm" onClick={() => setForm('counter')} disabled={!x || noVoice}>{t('dx.cnt.add')}</button>}
       >
         {!x && !error && <SkeletonRows n={1} />}
-        {noVoice && <p className="rounded-xl bg-warnbg px-3 py-2 text-sm font-bold text-warn">Бот не видит голосовых каналов, которые может переименовать. Дайте ему право «Управлять каналами» на нужном канале.</p>}
+        {noVoice && <p className="rounded-xl bg-warnbg px-3 py-2 text-sm font-bold text-warn">{t('dx.cnt.none')}</p>}
         <ul className="grid grid-cols-[minmax(0,1fr)] gap-2">
           {x?.counters.map((c) => (
             <li key={c.id} className="flex flex-wrap items-center gap-3 rounded-2xl bg-soft px-3 py-2.5">
               <span className="min-w-0 flex-1">
                 <span className="block font-extrabold">🔊 {c.preview}</span>
-                <span className="block text-sm font-semibold text-mute">Канал «{c.channelName ?? c.channelId}»{c.guildName ? ` на «${c.guildName}»` : ''} · {serverName(c.serverId)} · шаблон <code>{c.template}</code></span>
+                <span className="block text-sm font-semibold text-mute">{t('dx.cnt.channel', { name: c.channelName ?? c.channelId })}{c.guildName ? ` ${t('dx.cnt.on', { guild: c.guildName })}` : ''} · {serverName(c.serverId)} · {t('dx.cnt.template')} <code>{c.template}</code></span>
                 {c.error && <span className="mt-1 block text-sm font-bold text-bad">{c.error}</span>}
               </span>
-              <button type="button" className="row-act row-act-danger" aria-label="Удалить счётчик" title="Удалить" onClick={() => void del('counters', c.id, 'Бот перестанет обновлять название этого канала.')}><IconTrash /></button>
+              <button type="button" className="row-act row-act-danger" aria-label={t('dx.cnt.del')} title={t('dx.delete')} onClick={() => void del('counters', c.id, t('dx.cnt.delText'))}><IconTrash /></button>
             </li>
           ))}
         </ul>
       </Section>
 
-      {form && x && <ExtraForm kind={form} extras={x} servers={servers} onClose={() => setForm(null)} onSaved={() => { setForm(null); void load(); toast(form === 'role' ? 'Автороль добавлена: бот начнёт выдавать её в течение минуты' : 'Счётчик добавлен: бот переименует канал в течение минуты'); }} />}
+      {form && x && <ExtraForm kind={form} extras={x} servers={servers} onClose={() => setForm(null)} onSaved={() => { setForm(null); void load(); toast(form === 'role' ? t('dx.roles.added') : t('dx.cnt.added')); }} />}
     </>
   );
 }
 
 function ExtraForm({ kind, extras, servers, onClose, onSaved }: { kind: 'role' | 'counter'; extras: Extras; servers: Server[]; onClose: () => void; onSaved: () => void }) {
+  useI18n();
   const guilds = extras.guilds.filter((g) => (kind === 'role' ? g.roles.length : g.voice.length) > 0);
   const [guildId, setGuildId] = useState(guilds[0]?.id ?? '');
   const g = guilds.find((x) => x.id === guildId);
@@ -113127,55 +113177,55 @@ function ExtraForm({ kind, extras, servers, onClose, onSaved }: { kind: 'role' |
   };
 
   return (
-    <Modal title={kind === 'role' ? 'Новая автороль' : 'Новый счётчик'} onClose={onClose}>
+    <Modal title={kind === 'role' ? t('dx.f.newRole') : t('dx.f.newCnt')} onClose={onClose}>
       <form onSubmit={submit} className="space-y-3.5">
         {guilds.length > 1 && (
-          <Field label="Сервер Discord">
+          <Field label={t('dx.f.guild')}>
             <select className="input" value={guildId} onChange={(e) => { setGuildId(e.target.value); setTarget(''); }}>
               {guilds.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
             </select>
           </Field>
         )}
-        <Field label={kind === 'role' ? 'Роль' : 'Голосовой канал'}>
+        <Field label={kind === 'role' ? t('dx.f.role') : t('dx.f.voice')}>
           <select className="input" value={target} onChange={(e) => setTarget(e.target.value)} required>
-            <option value="" disabled>Выберите…</option>
+            <option value="" disabled>{t('dx.f.choose')}</option>
             {kind === 'role' ? g?.roles.map((r) => <option key={r.id} value={r.id}>@{r.name}</option>) : g?.voice.map((v) => <option key={v.id} value={v.id}>🔊 {v.name}</option>)}
           </select>
         </Field>
         {kind === 'role' ? (
           <>
-            <Field label="Кому выдавать">
+            <Field label={t('dx.f.who')}>
               <select className="input" value={rule} onChange={(e) => { const k = e.target.value as Kind; setRule(k); setThreshold(k === 'hours' ? 100 : 1); }}>
-                <option value="online">Тем, кто сейчас в игре (снимается при выходе)</option>
-                <option value="week_top">Самым активным за 7 дней</option>
-                <option value="hours">Наигравшим N часов (за последние 90 дней)</option>
+                <option value="online">{t('dx.f.rOnline')}</option>
+                <option value="week_top">{t('dx.f.rTop')}</option>
+                <option value="hours">{t('dx.f.rHours')}</option>
               </select>
             </Field>
             {rule !== 'online' && (
-              <Field label={rule === 'hours' ? 'Сколько часов' : 'Сколько игроков из топа'}>
+              <Field label={rule === 'hours' ? t('dx.f.howManyH') : t('dx.f.howManyP')}>
                 <input className="input" type="number" min={1} max={rule === 'hours' ? 10000 : 25} value={threshold} onChange={(e) => setThreshold(Number(e.target.value))} required />
               </Field>
             )}
           </>
         ) : (
           <>
-            <Field label="Название канала">
+            <Field label={t('dx.f.chName')}>
               <input className="input" value={template} onChange={(e) => setTemplate(e.target.value)} maxLength={100} required list="counter-templates" />
             </Field>
             <datalist id="counter-templates">{TEMPLATES.map((t) => <option key={t} value={t} />)}</datalist>
-            <p className="-mt-2 text-sm font-semibold text-mute">{'{players}'} игроков, {'{max}'} мест, {'{online}'} серверов в сети, {'{servers}'} всего, {'{status}'} 🟢/🟡/🔴, {'{name}'} название сервера</p>
+            <p className="-mt-2 text-sm font-semibold text-mute">{t('dx.f.vars')}</p>
           </>
         )}
-        <Field label="Считать по серверу">
+        <Field label={t('dx.f.scope')}>
           <select className="input" value={serverId ?? ''} onChange={(e) => setServerId(e.target.value ? Number(e.target.value) : null)}>
-            <option value="">Все серверы</option>
+            <option value="">{t('dx.f.all')}</option>
             {servers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
           </select>
         </Field>
         <ErrorLine text={error} />
         <div className="flex justify-end gap-2 pt-1">
-          <button type="button" className="btn btn-ghost" onClick={onClose}>Отмена</button>
-          <Button loading={busy}>Добавить</Button>
+          <button type="button" className="btn btn-ghost" onClick={onClose}>{t('common.cancel')}</button>
+          <Button loading={busy}>{t('dx.f.add')}</Button>
         </div>
       </form>
     </Modal>
@@ -114682,6 +114732,7 @@ __COREGSM_EOF__
  */
 import { useEffect, useState, type FormEvent } from 'react';
 import { api } from '../api';
+import { t, useI18n } from '../i18n';
 import { confirmDialog } from '../confirm';
 import { Button, ErrorLine, Field, IconCopy, IconRefresh, IconTrash, Modal, Section, ago, toast, SkeletonRows } from '../ui';
 
@@ -114689,11 +114740,12 @@ interface Probe { id: number; name: string; createdAt: number; lastSeen: number 
 interface Issued { token: string; commands: { docker: string; node: string } }
 
 function Copyable({ label, text }: { label: string; text: string }) {
+  useI18n();
   return (
     <div>
       <div className="mb-1 flex items-center justify-between gap-2">
         <span className="label mb-0!">{label}</span>
-        <button type="button" className="btn-link btn-xs" onClick={() => void navigator.clipboard?.writeText(text).then(() => toast('Скопировано'))}><IconCopy size={14} /> Копировать</button>
+        <button type="button" className="btn-link btn-xs" onClick={() => void navigator.clipboard?.writeText(text).then(() => toast(t('pb.copied')))}><IconCopy size={14} /> {t('common.copy')}</button>
       </div>
       <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all rounded-xl bg-soft px-3 py-2 font-mono text-fs-sm font-semibold">{text}</pre>
     </div>
@@ -114701,6 +114753,7 @@ function Copyable({ label, text }: { label: string; text: string }) {
 }
 
 export default function ProbesSection() {
+  useI18n();
   const [list, setList] = useState<Probe[] | null>(null);
   const [error, setError] = useState('');
   const [adding, setAdding] = useState(false);
@@ -114709,47 +114762,47 @@ export default function ProbesSection() {
   useEffect(() => { void load(); }, []);
 
   const rotate = async (p: Probe) => {
-    if (!(await confirmDialog({ title: `Новый ключ для «${p.name}»?`, text: 'Старый ключ перестанет работать: точку нужно будет перезапустить с новым.', confirmLabel: 'Выдать новый' }))) return;
+    if (!(await confirmDialog({ title: t('pb.rotateQ', { name: p.name }), text: t('pb.rotateText'), confirmLabel: t('pb.rotateBtn') }))) return;
     await api<Issued>(`/probes/${p.id}/token`, 'POST').then((r) => setIssued({ ...r, name: p.name })).catch((e: Error) => setError(e.message));
   };
   const remove = async (p: Probe) => {
-    if (!(await confirmDialog({ title: `Удалить «${p.name}»?`, text: 'Её проверки пропадут со страниц серверов.', confirmLabel: 'Удалить', danger: true }))) return;
+    if (!(await confirmDialog({ title: t('pb.deleteQ', { name: p.name }), text: t('pb.deleteText'), confirmLabel: t('pb.delete'), danger: true }))) return;
     await api(`/probes/${p.id}`, 'DELETE').then(load).catch((e: Error) => setError(e.message));
   };
 
   return (
     <Section
-      title="Точки проверки"
-      description="Небольшая программа на другом компьютере или VPS (в другом городе, у другого провайдера) проверяет игровые серверы оттуда. Если панель сервер не видит, а точки видят, — дело в сети между ними, а не в сервере. Игроки увидят на странице сервера, откуда он доступен."
-      actions={<button type="button" className="btn btn-soft btn-sm" onClick={() => setAdding(true)}>Добавить точку</button>}
+      title={t('pb.title')}
+      description={t('pb.desc')}
+      actions={<button type="button" className="btn btn-soft btn-sm" onClick={() => setAdding(true)}>{t('pb.add')}</button>}
     >
       <ErrorLine text={error} />
       {!list && !error && <SkeletonRows n={2} />}
-      {list && list.length === 0 && <p className="text-sm font-semibold text-mute">Точек пока нет: серверы проверяет только сама панель.</p>}
+      {list && list.length === 0 && <p className="text-sm font-semibold text-mute">{t('pb.empty')}</p>}
       <ul className="grid grid-cols-[minmax(0,1fr)] gap-2">
         {list?.map((p) => (
           <li key={p.id} className="flex flex-wrap items-center gap-3 rounded-2xl bg-soft px-3 py-2.5">
-            <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${p.alive ? 'bg-ok' : 'bg-mute'}`} aria-label={p.alive ? 'на связи' : 'не на связи'} role="img" />
+            <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${p.alive ? 'bg-ok' : 'bg-mute'}`} aria-label={p.alive ? t('pb.alive') : t('pb.dead')} role="img" />
             <span className="min-w-0 flex-1">
               <span className="block font-extrabold">📍 {p.name}</span>
               <span className="block text-sm font-semibold text-mute">
-                {p.lastSeen ? `на связи ${ago(p.lastSeen)}${p.alive ? ` · видит ${p.online} из ${p.servers}` : ''}${p.ip ? ` · ${p.ip}` : ''}` : 'ещё ни разу не выходила на связь'}
+                {p.lastSeen ? `${t('pb.alive')} ${ago(p.lastSeen)}${p.alive ? ` · ${t('pb.sees', { online: p.online, servers: p.servers })}` : ''}${p.ip ? ` · ${p.ip}` : ''}` : t('pb.never')}
               </span>
             </span>
-            <button type="button" className="row-act" aria-label="Новый ключ" title="Новый ключ" onClick={() => void rotate(p)}><IconRefresh /></button>
-            <button type="button" className="row-act row-act-danger" aria-label="Удалить" title="Удалить" onClick={() => void remove(p)}><IconTrash /></button>
+            <button type="button" className="row-act" aria-label={t('pb.newKey')} title={t('pb.newKey')} onClick={() => void rotate(p)}><IconRefresh /></button>
+            <button type="button" className="row-act row-act-danger" aria-label={t('pb.delete')} title={t('pb.delete')} onClick={() => void remove(p)}><IconTrash /></button>
           </li>
         ))}
       </ul>
       {adding && <AddProbe onClose={() => setAdding(false)} onDone={(r) => { setAdding(false); setIssued(r); void load(); }} />}
       {issued && (
-        <Modal title={`Точка «${issued.name}»`} onClose={() => { setIssued(null); void load(); }}>
+        <Modal title={t('pb.probeTitle', { name: issued.name })} onClose={() => { setIssued(null); void load(); }}>
           <div className="space-y-3.5">
-            <p className="font-semibold">Запустите на нужной машине одну из команд. Ключ показывается только сейчас: сохраните команду, если понадобится повторить.</p>
-            <Copyable label="Docker (проще всего)" text={issued.commands.docker} />
-            <Copyable label="Или Node.js 18+" text={issued.commands.node} />
-            <p className="text-sm font-semibold text-mute">Точка появится «на связи» через минуту после запуска.</p>
-            <div className="flex justify-end"><button type="button" className="btn" onClick={() => { setIssued(null); void load(); }}>Готово</button></div>
+            <p className="font-semibold">{t('pb.run')}</p>
+            <Copyable label={t('pb.docker')} text={issued.commands.docker} />
+            <Copyable label={t('pb.node')} text={issued.commands.node} />
+            <p className="text-sm font-semibold text-mute">{t('pb.appears')}</p>
+            <div className="flex justify-end"><button type="button" className="btn" onClick={() => { setIssued(null); void load(); }}>{t('pb.done')}</button></div>
           </div>
         </Modal>
       )}
@@ -114758,6 +114811,7 @@ export default function ProbesSection() {
 }
 
 function AddProbe({ onClose, onDone }: { onClose: () => void; onDone: (r: Issued & { name: string }) => void }) {
+  useI18n();
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -114770,13 +114824,13 @@ function AddProbe({ onClose, onDone }: { onClose: () => void; onDone: (r: Issued
       .finally(() => setBusy(false));
   };
   return (
-    <Modal title="Новая точка проверки" onClose={onClose}>
+    <Modal title={t('pb.newTitle')} onClose={onClose}>
       <form onSubmit={submit} className="space-y-3.5">
-        <Field label="Название (его увидят игроки)"><input className="input" value={name} onChange={(e) => setName(e.target.value)} maxLength={40} placeholder="Например: Франкфурт" required autoFocus /></Field>
+        <Field label={t('pb.f.name')}><input className="input" value={name} onChange={(e) => setName(e.target.value)} maxLength={40} placeholder={t('pb.f.ph')} required autoFocus /></Field>
         <ErrorLine text={error} />
         <div className="flex justify-end gap-2">
-          <button type="button" className="btn btn-ghost" onClick={onClose}>Отмена</button>
-          <Button loading={busy}>Создать</Button>
+          <button type="button" className="btn btn-ghost" onClick={onClose}>{t('common.cancel')}</button>
+          <Button loading={busy}>{t('pb.create')}</Button>
         </div>
       </form>
     </Modal>
@@ -114791,6 +114845,7 @@ __COREGSM_EOF__
  */
 import { useEffect, useState } from 'react';
 import { api, type Server } from '../api';
+import { t, useI18n, type TKey } from '../i18n';
 import { useAuth } from '../auth';
 import { confirmDialog } from '../confirm';
 import { Button, ErrorLine, Field, GameAvatar, Modal, Section, Switch, fmtDateTime, toast, errText } from '../ui';
@@ -114814,11 +114869,12 @@ interface Plan {
   rcon: { port: number | null; configured: boolean };
 }
 
-const DAYS = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
+const DAYS: TKey[] = ['cm.dow.0', 'cm.dow.1', 'cm.dow.2', 'cm.dow.3', 'cm.dow.4', 'cm.dow.5', 'cm.dow.6'];
 const hhmm = (min: number) => `${String(Math.floor(min / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`;
-const daysText = (d: number) => (d === 127 ? 'каждый день' : d === 0 ? 'дни не выбраны' : DAYS.filter((_, i) => d & (1 << i)).join(', '));
+const daysText = (d: number) => (d === 127 ? t('rp.everyDay') : d === 0 ? t('rp.noDays') : DAYS.filter((_, i) => d & (1 << i)).map((x) => t(x)).join(', '));
 
 export default function RestartPlans({ servers }: { servers: Server[] }) {
+  useI18n();
   const [plans, setPlans] = useState<Record<number, Plan>>({});
   const [open, setOpen] = useState<Server | null>(null);
   useEffect(() => {
@@ -114827,8 +114883,8 @@ export default function RestartPlans({ servers }: { servers: Server[] }) {
   if (!servers.length) return null;
   return (
     <Section
-      title="Плановые перезапуски"
-      description="Панель заранее предупредит игроков в Discord и в игровом чате, на время перезапуска откроет окно обслуживания (это не будет считаться сбоем) и, если настроен RCON, сама отправит серверу команду перезапуска."
+      title={t('rp.title')}
+      description={t('rp.desc')}
     >
       <ul className="grid grid-cols-[minmax(0,1fr)] gap-2">
         {servers.map((s) => {
@@ -114839,13 +114895,13 @@ export default function RestartPlans({ servers }: { servers: Server[] }) {
               <span className="min-w-0 flex-1">
                 <span className="block truncate font-extrabold">{s.name}</span>
                 <span className="block text-sm font-semibold text-mute">
-                  {!p ? <span className="skeleton inline-block h-3 w-40 rounded-full align-middle" /> : p.enabled ? `${daysText(p.days)} в ${hhmm(p.atMin)}${p.next ? ` · следующий ${fmtDateTime(p.next)}` : ''}` : 'выключено'}
-                  {p?.rcon.configured ? ' · RCON подключён' : ''}
+                  {!p ? <span className="skeleton inline-block h-3 w-40 rounded-full align-middle" /> : p.enabled ? `${t('rp.daysAt', { days: daysText(p.days), time: hhmm(p.atMin) })}${p.next ? ` · ${t('rp.next', { when: fmtDateTime(p.next) })}` : ''}` : t('rp.off')}
+                  {p?.rcon.configured ? ` · ${t('rp.rconOn')}` : ''}
                 </span>
-                {p?.lastResult && <span className="block text-xs font-bold text-mute">Последний раз {p.lastRunAt ? fmtDateTime(p.lastRunAt) : ''}: {p.lastResult}</span>}
+                {p?.lastResult && <span className="block text-xs font-bold text-mute">{t('rp.last', { when: p.lastRunAt ? fmtDateTime(p.lastRunAt) : '' })}: {p.lastResult}</span>}
               </span>
-              {p?.enabled && <span className="pill pill-ok">включено</span>}
-              <button type="button" className="btn btn-soft btn-sm" onClick={() => setOpen(s)} disabled={!p}>Настроить</button>
+              {p?.enabled && <span className="pill pill-ok">{t('rp.on')}</span>}
+              <button type="button" className="btn btn-soft btn-sm" onClick={() => setOpen(s)} disabled={!p}>{t('rp.setup')}</button>
             </li>
           );
         })}
@@ -114858,6 +114914,7 @@ export default function RestartPlans({ servers }: { servers: Server[] }) {
 }
 
 function PlanModal({ server, plan, onClose, onSaved }: { server: Server; plan: Plan; onClose: () => void; onSaved: (p: Plan) => void }) {
+  useI18n();
   const { isAdmin } = useAuth();
   const [f, setF] = useState(plan);
   const [time, setTime] = useState(hhmm(plan.atMin));
@@ -114881,7 +114938,7 @@ function PlanModal({ server, plan, onClose, onSaved }: { server: Server; plan: P
         p = await api<Plan>(`/servers/${server.id}/rcon`, 'PUT', { port: port ? Number(port) : null, ...(password ? { password } : {}) });
       }
       onSaved(p);
-      toast('Перезапуски сохранены');
+      toast(t('rp.saved'));
       onClose();
     } catch (e) {
       setError(errText(e));
@@ -114899,7 +114956,7 @@ function PlanModal({ server, plan, onClose, onSaved }: { server: Server; plan: P
         setPassword('');
       }
       const r = await api<{ ok: boolean; answer: string }>(`/servers/${server.id}/rcon/test`, 'POST', { command: testCmd });
-      setAnswer({ ok: r.ok, text: r.answer || 'Сервер выполнил команду и ничего не ответил' });
+      setAnswer({ ok: r.ok, text: r.answer || t('rp.noAnswer') });
     } catch (e) {
       setAnswer({ ok: false, text: (e as Error).message });
     } finally {
@@ -114907,61 +114964,61 @@ function PlanModal({ server, plan, onClose, onSaved }: { server: Server; plan: P
     }
   };
   const now = async () => {
-    if (!(await confirmDialog({ title: `Перезапустить «${server.name}» сейчас?`, text: 'Без предупреждения игроков: откроется окно обслуживания и, если настроен RCON, уйдёт команда перезапуска.', confirmLabel: 'Перезапустить', danger: true }))) return;
+    if (!(await confirmDialog({ title: t('rp.nowQ', { name: server.name }), text: t('rp.nowText'), confirmLabel: t('rp.restart'), danger: true }))) return;
     setBusy('now');
-    await api<Plan>(`/servers/${server.id}/restart/now`, 'POST').then((p) => { onSaved(p); toast(p.lastResult ?? 'Готово'); }).catch((e: Error) => setError(e.message)).finally(() => setBusy(''));
+    await api<Plan>(`/servers/${server.id}/restart/now`, 'POST').then((p) => { onSaved(p); toast(p.lastResult ?? t('rp.done')); }).catch((e: Error) => setError(e.message)).finally(() => setBusy(''));
   };
 
   return (
-    <Modal title={`Перезапуски: ${server.name}`} onClose={onClose}>
+    <Modal title={t('rp.modalTitle', { name: server.name })} onClose={onClose}>
       <div className="space-y-4">
         <label className="flex cursor-pointer items-center gap-3 font-extrabold">
-          <Switch checked={f.enabled} onChange={(on) => setF({ ...f, enabled: on })} /> Перезапускать по расписанию
+          <Switch checked={f.enabled} onChange={(on) => setF({ ...f, enabled: on })} /> {t('rp.bySchedule')}
         </label>
         <fieldset>
-          <legend className="label">Дни</legend>
+          <legend className="label">{t('rp.days')}</legend>
           <div className="flex flex-wrap gap-1.5">
-            {DAYS.map((d, i) => {
+            {DAYS.map((dk, i) => {
               const on = !!(f.days & (1 << i));
-              return <button key={d} type="button" className={`rp-day ${on ? 'is-on' : ''}`} aria-pressed={on} onClick={() => setF({ ...f, days: f.days ^ (1 << i) })}>{d}</button>;
+              return <button key={dk} type="button" className={`rp-day ${on ? 'is-on' : ''}`} aria-pressed={on} onClick={() => setF({ ...f, days: f.days ^ (1 << i) })}>{t(dk)}</button>;
             })}
           </div>
         </fieldset>
         <div className="grid gap-3 sm:grid-cols-3">
-          <Field label="Время"><input className="input" type="time" value={time} onChange={(e) => setTime(e.target.value)} required /></Field>
-          <Field label="Предупредить, мин"><input className="input" type="number" min={0} max={120} value={f.warnMin} onChange={(e) => setF({ ...f, warnMin: Number(e.target.value) })} /></Field>
-          <Field label="Длится, мин"><input className="input" type="number" min={1} max={240} value={f.durationMin} onChange={(e) => setF({ ...f, durationMin: Number(e.target.value) })} /></Field>
+          <Field label={t('rp.f.time')}><input className="input" type="time" value={time} onChange={(e) => setTime(e.target.value)} required /></Field>
+          <Field label={t('rp.f.warn')}><input className="input" type="number" min={0} max={120} value={f.warnMin} onChange={(e) => setF({ ...f, warnMin: Number(e.target.value) })} /></Field>
+          <Field label={t('rp.f.dur')}><input className="input" type="number" min={1} max={240} value={f.durationMin} onChange={(e) => setF({ ...f, durationMin: Number(e.target.value) })} /></Field>
         </div>
         {plan.suggestedHour != null && (
           <p className="-mt-2 text-sm font-semibold text-mute">
-            Время панели: {plan.timezone}. Меньше всего игроков обычно в {String(plan.suggestedHour).padStart(2, '0')}:00.{' '}
-            <button type="button" className="btn-link btn-xs" onClick={() => setTime(`${String(plan.suggestedHour).padStart(2, '0')}:00`)}>Поставить это время</button>
+            {t('rp.tzHint', { tz: plan.timezone, hour: String(plan.suggestedHour).padStart(2, '0') })}{' '}
+            <button type="button" className="btn-link btn-xs" onClick={() => setTime(`${String(plan.suggestedHour).padStart(2, '0')}:00`)}>{t('rp.setTime')}</button>
           </p>
         )}
         <div>
-          <span className="label">Канал Discord для предупреждений</span>
+          <span className="label">{t('rp.channel')}</span>
           <ChannelPicker id="restart-channel" value={f.channelId} onChange={(v) => setF({ ...f, channelId: v })} />
-          <p className="mt-1 text-sm font-semibold text-mute">Не выбран: сообщения уйдут в канал оповещений.</p>
+          <p className="mt-1 text-sm font-semibold text-mute">{t('wipe.channelHint')}</p>
         </div>
 
         <fieldset className="space-y-3 rounded-2xl bg-soft p-3.5">
-          <legend className="px-1 font-extrabold">RCON (необязательно)</legend>
-          <p className="text-sm font-semibold text-mute">Для Minecraft, CS, ARK, V Rising, Palworld и других игр с Source RCON. Rust (WebRCON) пока не поддерживается.</p>
+          <legend className="px-1 font-extrabold">{t('rp.rconTitle')}</legend>
+          <p className="text-sm font-semibold text-mute">{t('rp.rconNote')}</p>
           {isAdmin ? (
             <div className="grid gap-3 sm:grid-cols-2">
-              <Field label="Порт RCON"><input className="input" inputMode="numeric" value={port} onChange={(e) => setPort(e.target.value.replace(/\D/g, ''))} placeholder="например 25575" /></Field>
-              <Field label={plan.rcon.configured ? 'Пароль (пусто: оставить прежний)' : 'Пароль'}><input className="input" type="password" autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} /></Field>
+              <Field label={t('rp.f.port')}><input className="input" inputMode="numeric" value={port} onChange={(e) => setPort(e.target.value.replace(/\D/g, ''))} placeholder={t('rp.portPh')} /></Field>
+              <Field label={plan.rcon.configured ? t('rp.f.passKeep') : t('rp.f.pass')}><input className="input" type="password" autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} /></Field>
             </div>
           ) : (
-            <p className="text-sm font-bold">{plan.rcon.configured ? `Подключён, порт ${plan.rcon.port}` : 'Не подключён: порт и пароль задаёт администратор'}</p>
+            <p className="text-sm font-bold">{plan.rcon.configured ? t('rp.connectedPort', { port: String(plan.rcon.port) }) : t('rp.notConnected')}</p>
           )}
-          <Field label="Команда перезапуска"><input className="input font-mono" value={f.command} onChange={(e) => setF({ ...f, command: e.target.value })} placeholder="например stop, quit или shutdown" maxLength={200} /></Field>
-          <Field label="Сообщение в игровой чат ({text} — текст предупреждения)"><input className="input font-mono" value={f.say} onChange={(e) => setF({ ...f, say: e.target.value })} maxLength={200} /></Field>
-          <p className="text-sm font-semibold text-mute">Команда только останавливает сервер: запустить его снова должен хостинг или сервис, который следит за процессом.</p>
+          <Field label={t('rp.f.cmd')}><input className="input font-mono" value={f.command} onChange={(e) => setF({ ...f, command: e.target.value })} placeholder={t('rp.cmdPh')} maxLength={200} /></Field>
+          <Field label={t('rp.f.say')}><input className="input font-mono" value={f.say} onChange={(e) => setF({ ...f, say: e.target.value })} maxLength={200} /></Field>
+          <p className="text-sm font-semibold text-mute">{t('rp.cmdNote')}</p>
           {isAdmin && (
             <div className="flex flex-wrap items-end gap-2">
-              <div className="min-w-40 flex-1"><Field label="Проверить команду"><input className="input font-mono" value={testCmd} onChange={(e) => setTestCmd(e.target.value)} /></Field></div>
-              <Button type="button" className="btn-soft" loading={busy === 'test'} disabled={!port} onClick={() => void test()}>Выполнить</Button>
+              <div className="min-w-40 flex-1"><Field label={t('rp.f.test')}><input className="input font-mono" value={testCmd} onChange={(e) => setTestCmd(e.target.value)} /></Field></div>
+              <Button type="button" className="btn-soft" loading={busy === 'test'} disabled={!port} onClick={() => void test()}>{t('rp.run')}</Button>
             </div>
           )}
           {answer && <pre className={`whitespace-pre-wrap rounded-xl px-3 py-2 text-sm font-semibold ${answer.ok ? 'bg-okbg text-ok' : 'bg-badbg text-bad'}`}>{answer.text}</pre>}
@@ -114969,10 +115026,10 @@ function PlanModal({ server, plan, onClose, onSaved }: { server: Server; plan: P
 
         <ErrorLine text={error} />
         <div className="flex flex-wrap justify-between gap-2">
-          <Button type="button" className="btn-ghost text-bad" loading={busy === 'now'} onClick={() => void now()}>Перезапустить сейчас</Button>
+          <Button type="button" className="btn-ghost text-bad" loading={busy === 'now'} onClick={() => void now()}>{t('rp.restartNow')}</Button>
           <div className="flex gap-2">
-            <button type="button" className="btn btn-ghost" onClick={onClose}>Отмена</button>
-            <Button type="button" loading={busy === 'save'} onClick={() => void save()}>Сохранить</Button>
+            <button type="button" className="btn btn-ghost" onClick={onClose}>{t('common.cancel')}</button>
+            <Button type="button" loading={busy === 'save'} onClick={() => void save()}>{t('common.save')}</Button>
           </div>
         </div>
       </div>
@@ -115955,6 +116012,49 @@ export default function StatusNotesCard({ servers }: { servers: Server[] }) {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/StorageCard.tsx" << '__COREGSM_EOF__'
+import { useEffect, useState } from 'react';
+import { api } from '../api';
+import { t, useI18n } from '../i18n';
+import { fmtDateTime, Section, toast } from '../ui';
+
+interface Storage {
+  dbBytes: number | null;
+  tables: { id: string; rows: number; oldest: number | null; days: number }[];
+}
+
+const NAMES = { history: 'sto.history', playerSessions: 'sto.playerSessions', accountEvents: 'sto.accountEvents', uptime: 'sto.uptime' } as const;
+
+const mb = (n: number | null) => (n == null ? '–' : n > 1073741824 ? `${(n / 1073741824).toFixed(1)} ${t('sto.gb')}` : `${(n / 1048576).toFixed(1)} ${t('sto.mb')}`);
+
+/** «Data storage»: how much each kind of rows takes, how long it is kept and a button to prune the old rows now */
+export default function StorageCard() {
+  useI18n();
+  const [s, setS] = useState<Storage | null>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { api<Storage>('/system/storage').then(setS).catch(() => undefined); }, []);
+  if (!s) return null;
+  const prune = () => {
+    setBusy(true);
+    api<Storage>('/system/storage/prune', 'POST').then((r) => { setS(r); toast(t('sto.done')); }).catch((e: Error) => toast(e.message)).finally(() => setBusy(false));
+  };
+  return (
+    <Section title={t('sto.title')} description={t('sto.text', { size: mb(s.dbBytes) })}>
+      <ul className="divide-y divide-line">
+        {s.tables.map((r) => (
+          <li key={r.id} className="flex flex-wrap items-center gap-x-3 gap-y-0.5 py-2.5">
+            <span className="font-extrabold">{t(NAMES[r.id as keyof typeof NAMES] ?? 'sto.history')}</span>
+            <span className="text-sm font-semibold text-mute">{r.oldest ? t('sto.since', { date: fmtDateTime(r.oldest) }) : t('sto.empty')} · {t('sto.keep', { n: r.days })}</span>
+            <span className="ml-auto font-black tabular-nums">{r.rows.toLocaleString()}</span>
+          </li>
+        ))}
+      </ul>
+      <button className="btn btn-soft btn-sm" onClick={prune} disabled={busy}>{t('sto.prune')}</button>
+    </Section>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
   cat > "$APP_DIR/core-frontend/src/components/Switch.tsx" << '__COREGSM_EOF__'
 import type { InputHTMLAttributes } from 'react';
 
@@ -116428,6 +116528,7 @@ __COREGSM_EOF__
  */
 import { useEffect, useState } from 'react';
 import { api, type Server } from '../api';
+import { t, useI18n, type TKey } from '../i18n';
 import { confirmDialog } from '../confirm';
 import { Button, ErrorLine, Field, GameAvatar, Modal, Section, fmtDateTime, toast, errText } from '../ui';
 import { ChannelPicker } from './ChannelPicker';
@@ -116455,14 +116556,14 @@ interface Wipe {
   failed: number;
 }
 
-const ANNOUNCE = [{ m: 10_080, label: 'за неделю' }, { m: 1440, label: 'за сутки' }, { m: 180, label: 'за 3 часа' }, { m: 60, label: 'за час' }, { m: 10, label: 'за 10 мин' }];
-const SAY = [{ m: 30, label: 'за 30 мин' }, { m: 10, label: 'за 10 мин' }, { m: 5, label: 'за 5 мин' }, { m: 1, label: 'за минуту' }];
-const STEP_LABEL: Record<string, string> = { window: 'Окно обслуживания', commands: 'Команды вайпа', season: 'Новый сезон', news: 'Новость', discord: 'Сообщение в Discord', say: 'Игровой чат', missed: 'Пропущен' };
-const STATUS: Record<Wipe['status'], { text: string; cls: string }> = {
-  scheduled: { text: 'запланирован', cls: 'pill pill-ok' },
-  done: { text: 'выполнен', cls: 'pill pill-mute' },
-  missed: { text: 'пропущен', cls: 'pill pill-bad' },
-  cancelled: { text: 'отменён', cls: 'pill pill-mute' },
+const ANNOUNCE = [{ m: 10_080, label: 'wipe.ann.week' as const }, { m: 1440, label: 'wipe.ann.day' as const }, { m: 180, label: 'wipe.ann.h3' as const }, { m: 60, label: 'wipe.ann.h1' as const }, { m: 10, label: 'wipe.ann.m10' as const }];
+const SAY = [{ m: 30, label: 'wipe.say.m30' as const }, { m: 10, label: 'wipe.ann.m10' as const }, { m: 5, label: 'wipe.say.m5' as const }, { m: 1, label: 'wipe.say.m1' as const }];
+const STEP_LABEL: Record<string, TKey> = { window: 'wipe.step.window', commands: 'wipe.step.commands', season: 'wipe.step.season', news: 'wipe.step.news', discord: 'wipe.step.discord', say: 'wipe.step.say', missed: 'wipe.step.missed' };
+const STATUS: Record<Wipe['status'], { text: TKey; cls: string }> = {
+  scheduled: { text: 'wipe.st.scheduled', cls: 'pill pill-ok' },
+  done: { text: 'wipe.st.done', cls: 'pill pill-mute' },
+  missed: { text: 'wipe.st.missed', cls: 'pill pill-bad' },
+  cancelled: { text: 'wipe.st.cancelled', cls: 'pill pill-mute' },
 };
 
 /** the value of <input type="datetime-local"> for a timestamp (the browser's time zone) */
@@ -116473,7 +116574,7 @@ const localInput = (ts: number) => {
 
 const blank = (): Wipe => ({
   id: 0,
-  name: 'Вайп',
+  name: t('wipe.defName'),
   wipeAt: Date.now() + 3 * 86_400_000,
   status: 'scheduled',
   announceMin: [1440, 60, 10],
@@ -116485,14 +116586,15 @@ const blank = (): Wipe => ({
   seed: '',
   seasonName: '',
   newsChannelId: '',
-  newsTitle: 'Вайп на {server} прошёл',
-  newsText: 'Сервер {server} вайпнут {date} в {time}. Новая карта уже ждёт: заходите!',
+  newsTitle: t('wipe.defNewsTitle'),
+  newsText: t('wipe.defNewsText'),
   mention: 'none',
   steps: [],
   failed: 0,
 });
 
 export default function WipeScenarios({ servers }: { servers: Server[] }) {
+  useI18n();
   const [open, setOpen] = useState<Server | null>(null);
   const [next, setNext] = useState<Record<number, Wipe | null>>({});
   const load = () => {
@@ -116506,8 +116608,8 @@ export default function WipeScenarios({ servers }: { servers: Server[] }) {
   if (!servers.length) return null;
   return (
     <Section
-      title="Сценарий вайпа"
-      description="Один сценарий на весь вайп: предупреждения в Discord и игровом чате, окно обслуживания, команды вайпа с новым сидом, новый сезон и новость «вайп прошёл». Каждый шаг выполняется один раз."
+      title={t('wipe.title')}
+      description={t('wipe.desc')}
     >
       <ul className="grid grid-cols-[minmax(0,1fr)] gap-2">
         {servers.map((s) => {
@@ -116518,11 +116620,11 @@ export default function WipeScenarios({ servers }: { servers: Server[] }) {
               <span className="min-w-0 flex-1">
                 <span className="block truncate font-extrabold">{s.name}</span>
                 <span className="block text-sm font-semibold text-mute">
-                  {w === undefined ? <span className="skeleton inline-block h-3 w-40 rounded-full align-middle" /> : w ? `${w.name} · ${fmtDateTime(w.wipeAt)}` : 'вайп не запланирован'}
+                  {w === undefined ? <span className="skeleton inline-block h-3 w-40 rounded-full align-middle" /> : w ? `${w.name} · ${fmtDateTime(w.wipeAt)}` : t('wipe.none')}
                 </span>
               </span>
-              {w && <span className="pill pill-ok">запланирован</span>}
-              <button type="button" className="btn btn-soft btn-sm" onClick={() => setOpen(s)}>Сценарии</button>
+              {w && <span className="pill pill-ok">{t('wipe.st.scheduled')}</span>}
+              <button type="button" className="btn btn-soft btn-sm" onClick={() => setOpen(s)}>{t('wipe.scenarios')}</button>
             </li>
           );
         })}
@@ -116533,6 +116635,7 @@ export default function WipeScenarios({ servers }: { servers: Server[] }) {
 }
 
 function WipeModal({ server, onClose }: { server: Server; onClose: () => void }) {
+  useI18n();
   const [list, setList] = useState<Wipe[] | null>(null);
   const [edit, setEdit] = useState<Wipe | null>(null);
   const [error, setError] = useState('');
@@ -116540,41 +116643,41 @@ function WipeModal({ server, onClose }: { server: Server; onClose: () => void })
   useEffect(() => { void load(); }, []);
 
   const remove = async (w: Wipe) => {
-    if (w.status === 'scheduled' && !(await confirmDialog({ title: `Отменить «${w.name}»?`, text: 'Предупреждения и шаги вайпа выполняться не будут.', confirmLabel: 'Отменить вайп', danger: true }))) return;
+    if (w.status === 'scheduled' && !(await confirmDialog({ title: t('wipe.cancelQ', { name: w.name }), text: t('wipe.cancelText'), confirmLabel: t('wipe.cancelBtn'), danger: true }))) return;
     await api(`/wipes/${w.id}`, 'DELETE').then(() => load()).catch((e: Error) => setError(e.message));
   };
 
   if (edit) return <WipeForm server={server} wipe={edit} onClose={() => setEdit(null)} onSaved={() => { setEdit(null); void load(); }} />;
   return (
-    <Modal title={`Вайпы: ${server.name}`} onClose={onClose}>
+    <Modal title={t('wipe.modalTitle', { name: server.name })} onClose={onClose}>
       <div className="space-y-3">
         <ErrorLine text={error} />
-        {list === null ? <div className="skeleton h-20 rounded-2xl" /> : list.length === 0 ? <p className="text-sm font-semibold text-mute">Сценариев пока нет.</p> : (
+        {list === null ? <div className="skeleton h-20 rounded-2xl" /> : list.length === 0 ? <p className="text-sm font-semibold text-mute">{t('wipe.empty')}</p> : (
           <ul className="grid grid-cols-[minmax(0,1fr)] gap-2">
             {list.map((w) => (
               <li key={w.id} className="rounded-2xl bg-soft px-3.5 py-3">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="font-extrabold">{w.name}</span>
-                  <span className={STATUS[w.status].cls}>{STATUS[w.status].text}</span>
-                  {w.failed > 0 && <span className="pill pill-bad">ошибок: {w.failed}</span>}
+                  <span className={STATUS[w.status].cls}>{t(STATUS[w.status].text)}</span>
+                  {w.failed > 0 && <span className="pill pill-bad">{t('wipe.errors', { n: w.failed })}</span>}
                   <span className="ml-auto text-sm font-bold text-mute">{fmtDateTime(w.wipeAt)}</span>
                 </div>
                 {w.steps.length > 0 && (
                   <ul className="mt-2 space-y-0.5 text-sm font-semibold">
-                    {w.steps.map((s, i) => <li key={i} className={s.ok ? 'text-mute' : 'text-bad'}>{s.ok ? '✓' : '✗'} {STEP_LABEL[s.step] ?? s.step}: {s.text}</li>)}
+                    {w.steps.map((s, i) => <li key={i} className={s.ok ? 'text-mute' : 'text-bad'}>{s.ok ? '✓' : '✗'} {STEP_LABEL[s.step] ? t(STEP_LABEL[s.step]) : s.step}: {s.text}</li>)}
                   </ul>
                 )}
                 <div className="mt-2 flex gap-2">
-                  {w.status === 'scheduled' && <button type="button" className="btn btn-soft btn-sm" onClick={() => setEdit(w)}>Изменить</button>}
-                  <button type="button" className="btn btn-ghost btn-sm text-bad" onClick={() => void remove(w)}>{w.status === 'scheduled' ? 'Отменить' : 'Убрать'}</button>
+                  {w.status === 'scheduled' && <button type="button" className="btn btn-soft btn-sm" onClick={() => setEdit(w)}>{t('wipe.edit')}</button>}
+                  <button type="button" className="btn btn-ghost btn-sm text-bad" onClick={() => void remove(w)}>{w.status === 'scheduled' ? t('wipe.cancel') : t('wipe.remove')}</button>
                 </div>
               </li>
             ))}
           </ul>
         )}
         <div className="flex justify-between gap-2">
-          <button type="button" className="btn btn-ghost" onClick={onClose}>Закрыть</button>
-          <Button type="button" onClick={() => setEdit(blank())}>Запланировать вайп</Button>
+          <button type="button" className="btn btn-ghost" onClick={onClose}>{t('common.close')}</button>
+          <Button type="button" onClick={() => setEdit(blank())}>{t('wipe.schedule')}</Button>
         </div>
       </div>
     </Modal>
@@ -116582,6 +116685,7 @@ function WipeModal({ server, onClose }: { server: Server; onClose: () => void })
 }
 
 function WipeForm({ server, wipe, onClose, onSaved }: { server: Server; wipe: Wipe; onClose: () => void; onSaved: () => void }) {
+  useI18n();
   const [f, setF] = useState(wipe);
   const [at, setAt] = useState(localInput(wipe.wipeAt));
   const [cmds, setCmds] = useState(wipe.commands.join('\n'));
@@ -116592,7 +116696,7 @@ function WipeForm({ server, wipe, onClose, onSaved }: { server: Server; wipe: Wi
 
   const save = async () => {
     const ts = new Date(at).getTime();
-    if (!Number.isFinite(ts)) return setError('Укажите дату и время вайпа');
+    if (!Number.isFinite(ts)) return setError(t('wipe.needDate'));
     setBusy(true);
     setError('');
     const body = {
@@ -116602,7 +116706,7 @@ function WipeForm({ server, wipe, onClose, onSaved }: { server: Server; wipe: Wi
     };
     try {
       await (wipe.id ? api(`/wipes/${wipe.id}`, 'PUT', body) : api(`/servers/${server.id}/wipes`, 'POST', body));
-      toast('Сценарий сохранён');
+      toast(t('wipe.saved'));
       onSaved();
     } catch (e) {
       setError(errText(e));
@@ -116611,67 +116715,67 @@ function WipeForm({ server, wipe, onClose, onSaved }: { server: Server; wipe: Wi
   };
 
   return (
-    <Modal title={wipe.id ? 'Изменить вайп' : 'Запланировать вайп'} onClose={onClose}>
+    <Modal title={wipe.id ? t('wipe.editTitle') : t('wipe.schedule')} onClose={onClose}>
       <div className="space-y-4">
         <div className="grid gap-3 sm:grid-cols-3">
-          <Field label="Название"><input className="input" maxLength={60} value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></Field>
-          <Field label="Когда (ваше время)"><input className="input" type="datetime-local" value={at} onChange={(e) => setAt(e.target.value)} /></Field>
-          <Field label="Окно обслуживания, мин"><input className="input" type="number" min={1} max={240} value={f.durationMin} onChange={(e) => setF({ ...f, durationMin: Number(e.target.value) })} /></Field>
+          <Field label={t('wipe.f.name')}><input className="input" maxLength={60} value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></Field>
+          <Field label={t('wipe.f.when')}><input className="input" type="datetime-local" value={at} onChange={(e) => setAt(e.target.value)} /></Field>
+          <Field label={t('wipe.f.window')}><input className="input" type="number" min={1} max={240} value={f.durationMin} onChange={(e) => setF({ ...f, durationMin: Number(e.target.value) })} /></Field>
         </div>
 
         <fieldset className="space-y-3 rounded-2xl bg-soft p-3.5">
-          <legend className="px-1 font-extrabold">1. Предупреждения</legend>
+          <legend className="px-1 font-extrabold">{t('wipe.s1')}</legend>
           <div>
-            <span className="label">В Discord</span>
+            <span className="label">{t('wipe.inDiscord')}</span>
             <div className="flex flex-wrap gap-1.5">
-              {ANNOUNCE.map((a) => <button key={a.m} type="button" className={`rp-day ${f.announceMin.includes(a.m) ? 'is-on' : ''}`} aria-pressed={f.announceMin.includes(a.m)} onClick={() => toggle('announceMin', a.m)}>{a.label}</button>)}
+              {ANNOUNCE.map((a) => <button key={a.m} type="button" className={`rp-day ${f.announceMin.includes(a.m) ? 'is-on' : ''}`} aria-pressed={f.announceMin.includes(a.m)} onClick={() => toggle('announceMin', a.m)}>{t(a.label)}</button>)}
             </div>
           </div>
           <div>
-            <span className="label">В игровом чате (нужен RCON)</span>
+            <span className="label">{t('wipe.inGame')}</span>
             <div className="flex flex-wrap gap-1.5">
-              {SAY.map((a) => <button key={a.m} type="button" className={`rp-day ${f.sayMin.includes(a.m) ? 'is-on' : ''}`} aria-pressed={f.sayMin.includes(a.m)} onClick={() => toggle('sayMin', a.m)}>{a.label}</button>)}
+              {SAY.map((a) => <button key={a.m} type="button" className={`rp-day ${f.sayMin.includes(a.m) ? 'is-on' : ''}`} aria-pressed={f.sayMin.includes(a.m)} onClick={() => toggle('sayMin', a.m)}>{t(a.label)}</button>)}
             </div>
           </div>
           <div>
-            <span className="label">Канал Discord</span>
+            <span className="label">{t('wipe.channel')}</span>
             <ChannelPicker id="wipe-channel" value={f.channelId} onChange={(v) => setF({ ...f, channelId: v })} />
-            <p className="mt-1 text-sm font-semibold text-mute">Не выбран: сообщения уйдут в канал оповещений.</p>
+            <p className="mt-1 text-sm font-semibold text-mute">{t('wipe.channelHint')}</p>
           </div>
         </fieldset>
 
         <fieldset className="space-y-3 rounded-2xl bg-soft p-3.5">
-          <legend className="px-1 font-extrabold">2. В момент вайпа</legend>
-          <Field label="Команды RCON, по одной в строке (необязательно)">
+          <legend className="px-1 font-extrabold">{t('wipe.s2')}</legend>
+          <Field label={t('wipe.f.cmds')}>
             <textarea className="input min-h-20 font-mono" value={cmds} onChange={(e) => setCmds(e.target.value)} placeholder={'server.seed {seed}\nserver.writecfg'} />
           </Field>
           <div className="grid gap-3 sm:grid-cols-2">
-            <Field label="Сид {seed}">
+            <Field label={t('wipe.f.seedMode')}>
               <select className="input" value={f.seedMode} onChange={(e) => setF({ ...f, seedMode: e.target.value as Wipe['seedMode'] })}>
-                <option value="none">Не менять</option>
-                <option value="random">Случайный (выберет панель)</option>
-                <option value="fixed">Свой</option>
+                <option value="none">{t('wipe.seed.none')}</option>
+                <option value="random">{t('wipe.seed.random')}</option>
+                <option value="fixed">{t('wipe.seed.fixed')}</option>
               </select>
             </Field>
-            {f.seedMode === 'fixed' && <Field label="Сид"><input className="input font-mono" maxLength={40} value={f.seed} onChange={(e) => setF({ ...f, seed: e.target.value })} /></Field>}
+            {f.seedMode === 'fixed' && <Field label={t('wipe.f.seed')}><input className="input font-mono" maxLength={40} value={f.seed} onChange={(e) => setF({ ...f, seed: e.target.value })} /></Field>}
           </div>
-          <Field label="Новый сезон (пусто: не начинать)"><input className="input" maxLength={60} value={f.seasonName} onChange={(e) => setF({ ...f, seasonName: e.target.value })} placeholder="например Сезон {date}" /></Field>
-          <p className="text-sm font-semibold text-mute">Окно обслуживания открывается всегда, чтобы вайп не считался сбоем. В командах и текстах работают {'{server}'}, {'{date}'}, {'{time}'} и {'{seed}'}.</p>
+          <Field label={t('wipe.f.season')}><input className="input" maxLength={60} value={f.seasonName} onChange={(e) => setF({ ...f, seasonName: e.target.value })} placeholder={t('wipe.seasonPh')} /></Field>
+          <p className="text-sm font-semibold text-mute">{t('wipe.note')}</p>
         </fieldset>
 
         <fieldset className="space-y-3 rounded-2xl bg-soft p-3.5">
-          <legend className="px-1 font-extrabold">3. Новость после вайпа</legend>
+          <legend className="px-1 font-extrabold">{t('wipe.s3')}</legend>
           <div>
-            <span className="label">Канал новостей (не выбран: новости не будет)</span>
+            <span className="label">{t('wipe.newsChannel')}</span>
             <ChannelPicker id="wipe-news-channel" value={f.newsChannelId} onChange={(v) => setF({ ...f, newsChannelId: v })} />
           </div>
           {f.newsChannelId && (
             <>
-              <Field label="Заголовок"><input className="input" maxLength={200} value={f.newsTitle} onChange={(e) => setF({ ...f, newsTitle: e.target.value })} /></Field>
-              <Field label="Текст"><textarea className="input min-h-20" maxLength={2000} value={f.newsText} onChange={(e) => setF({ ...f, newsText: e.target.value })} /></Field>
-              <Field label="Упоминание">
+              <Field label={t('wipe.f.title')}><input className="input" maxLength={200} value={f.newsTitle} onChange={(e) => setF({ ...f, newsTitle: e.target.value })} /></Field>
+              <Field label={t('wipe.f.text')}><textarea className="input min-h-20" maxLength={2000} value={f.newsText} onChange={(e) => setF({ ...f, newsText: e.target.value })} /></Field>
+              <Field label={t('wipe.f.mention')}>
                 <select className="input" value={f.mention} onChange={(e) => setF({ ...f, mention: e.target.value as Wipe['mention'] })}>
-                  <option value="none">Без упоминания</option>
+                  <option value="none">{t('wipe.m.none')}</option>
                   <option value="here">@here</option>
                   <option value="everyone">@everyone</option>
                 </select>
@@ -116682,8 +116786,8 @@ function WipeForm({ server, wipe, onClose, onSaved }: { server: Server; wipe: Wi
 
         <ErrorLine text={error} />
         <div className="flex justify-end gap-2">
-          <button type="button" className="btn btn-ghost" onClick={onClose}>Назад</button>
-          <Button type="button" loading={busy} onClick={() => void save()}>Сохранить</Button>
+          <button type="button" className="btn btn-ghost" onClick={onClose}>{t('wipe.back')}</button>
+          <Button type="button" loading={busy} onClick={() => void save()}>{t('common.save')}</Button>
         </div>
       </div>
     </Modal>
@@ -117769,14 +117873,16 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/components/news/MarkdownField.tsx" << '__COREGSM_EOF__'
 import { memo, useRef, useState, type ChangeEvent, type ClipboardEvent, type KeyboardEvent, type ReactNode } from 'react';
 import type { NewsVariable } from '../../api';
+import { t, useI18n } from '../../i18n';
 import { searchEmoji } from './emoji';
 
 const EMOJIS = ['📢', '📣', '🔔', '🎉', '🎊', '🎁', '🏆', '🥇', '⭐', '🌟', '✨', '🔥', '💥', '⚡', '🚀', '🆕', '✅', '❌', '⚠️', '❗', '❓', '🛠️', '🔧', '⚙️', '🧹', '🗑️', '📅', '🗓️', '⏰', '🕒', '⏳', '📍', '🌍', '🗺️', '🎮', '🕹️', '👑', '⚔️', '🛡️', '🏹', '💎', '💰', '🪙', '❤️', '💜', '💙', '💚', '👍', '👏', '🙌', '🤝', '💬', '📝', '📌', '🔗', '🖼️', '🎤', '🎧', '📈', '🟢', '🟡', '🔴', '🔵'];
 
 export function Counter({ value, max }: { value: number; max: number }) {
+  useI18n();
   const over = value > max;
   const near = !over && value > max * 0.9;
-  return <span className={`text-xs font-bold tabular-nums ${over ? 'text-bad' : near ? 'text-warn' : 'text-mute'}`} aria-label={`${value} из ${max} символов`}>{value}/{max}</span>;
+  return <span className={`text-xs font-bold tabular-nums ${over ? 'text-bad' : near ? 'text-warn' : 'text-mute'}`} aria-label={t('mf.chars', { value, max })}>{value}/{max}</span>;
 }
 
 const Btn = ({ onClick, title, children, on }: { onClick: () => void; title: string; children: ReactNode; on?: boolean }) => (
@@ -117811,6 +117917,7 @@ interface Props {
 
 /** Text area with a Discord-markdown toolbar, shortcuts (Ctrl+B/I/U/K), `:name` emoji autocomplete and smart paste. */
 function MarkdownFieldImpl({ id, label, value, onChange, max, rows = 6, placeholder, compact, variables, onImage, hideLabel }: Props) {
+  useI18n();
   const ref = useRef<HTMLTextAreaElement>(null);
   const [panel, setPanel] = useState<'' | 'emoji' | 'vars'>('');
   const [sug, setSug] = useState<{ start: number; end: number; items: [string, string][]; idx: number } | null>(null);
@@ -117821,7 +117928,7 @@ function MarkdownFieldImpl({ id, label, value, onChange, max, rows = 6, placehol
     requestAnimationFrame(() => { ta?.focus(); ta?.setSelectionRange(selStart, selEnd); });
   };
 
-  const wrap = (mark: string, ph = 'текст') => {
+  const wrap = (mark: string, ph = t('mf.ph.text')) => {
     const ta = ref.current;
     if (!ta) return;
     const s = ta.selectionStart, e = ta.selectionEnd;
@@ -117837,7 +117944,7 @@ function MarkdownFieldImpl({ id, label, value, onChange, max, rows = 6, placehol
   };
 
   /** line-based formats: the selection grows to whole lines */
-  const prefixLines = (prefix: string, ph = 'текст') => {
+  const prefixLines = (prefix: string, ph = t('mf.ph.text')) => {
     const ta = ref.current;
     if (!ta) return;
     const s = ta.selectionStart, e = ta.selectionEnd;
@@ -117858,7 +117965,7 @@ function MarkdownFieldImpl({ id, label, value, onChange, max, rows = 6, placehol
     const ls = value.lastIndexOf('\n', s - 1) + 1;
     let le = value.indexOf('\n', e);
     if (le === -1) le = value.length;
-    const lines = (value.slice(ls, le) || 'пункт').split('\n');
+    const lines = (value.slice(ls, le) || t('mf.ph.item')).split('\n');
     const out = lines.map((l, i) => `${i + 1}. ${l.replace(/^\d+\.\s+/, '')}`).join('\n');
     apply(value.slice(0, ls) + out + value.slice(le), ls, ls + out.length);
   };
@@ -117867,7 +117974,7 @@ function MarkdownFieldImpl({ id, label, value, onChange, max, rows = 6, placehol
     const ta = ref.current;
     if (!ta) return;
     const s = ta.selectionStart, e = ta.selectionEnd;
-    const inner = value.slice(s, e) || 'код';
+    const inner = value.slice(s, e) || t('mf.ph.code');
     const pre = s > 0 && value[s - 1] !== '\n' ? '\n' : '';
     const text = `${value.slice(0, s)}${pre}\`\`\`\n${inner}\n\`\`\`${value.slice(e)}`;
     const a = s + pre.length + 4;
@@ -117880,21 +117987,21 @@ function MarkdownFieldImpl({ id, label, value, onChange, max, rows = 6, placehol
     const s = ta.selectionStart, e = ta.selectionEnd;
     const sel = value.slice(s, e);
     if (/^https?:\/\/\S+$/.test(sel)) {
-      const text = `${value.slice(0, s)}[ссылка](${sel})${value.slice(e)}`;
+      const text = `${value.slice(0, s)}[${t('mf.ph.link')}](${sel})${value.slice(e)}`;
       apply(text, s + 1, s + 7);
       return;
     }
-    const lbl = sel || 'текст ссылки';
+    const lbl = sel || t('mf.ph.linkText');
     const text = `${value.slice(0, s)}[${lbl}](https://)${value.slice(e)}`;
     const st = s + lbl.length + 3;
     apply(text, st, st + 8);
   };
 
-  const insert = (t: string) => {
+  const insert = (tok: string) => {
     const ta = ref.current;
     const s = ta?.selectionStart ?? value.length;
     const e = ta?.selectionEnd ?? value.length;
-    apply(value.slice(0, s) + t + value.slice(e), s + t.length, s + t.length);
+    apply(value.slice(0, s) + tok + value.slice(e), s + tok.length, s + tok.length);
   };
 
   const detect = (text: string, caret: number) => {
@@ -117955,41 +118062,41 @@ function MarkdownFieldImpl({ id, label, value, onChange, max, rows = 6, placehol
         <Counter value={value.length} max={max} />
       </div>
       <div className="flash-host relative rounded-2xl border-2 border-line focus-within:border-brand">
-        <div className="flex flex-wrap items-center gap-0.5 border-b-2 border-line px-1.5 py-1" role="toolbar" aria-label={`Форматирование: ${label}`}>
-          <Btn onClick={() => wrap('**')} title="Жирный (Ctrl+B)"><b>Ж</b></Btn>
-          <Btn onClick={() => wrap('*')} title="Курсив (Ctrl+I)"><i>К</i></Btn>
-          <Btn onClick={() => wrap('__')} title="Подчёркнутый (Ctrl+U)"><u>Ч</u></Btn>
-          <Btn onClick={() => wrap('~~')} title="Зачёркнутый"><s>З</s></Btn>
-          <Btn onClick={() => wrap('||')} title="Спойлер">▒</Btn>
-          <Btn onClick={() => wrap('`', 'код')} title="Код в строке"><span className="font-mono">{'<>'}</span></Btn>
-          {!compact && <Btn onClick={codeBlock} title="Блок кода"><span className="font-mono text-xs">{'```'}</span></Btn>}
+        <div className="flex flex-wrap items-center gap-0.5 border-b-2 border-line px-1.5 py-1" role="toolbar" aria-label={t('mf.formatting', { label })}>
+          <Btn onClick={() => wrap('**')} title={t('mf.bold')}><b>{t('mf.boldCh')}</b></Btn>
+          <Btn onClick={() => wrap('*')} title={t('mf.italic')}><i>{t('mf.italicCh')}</i></Btn>
+          <Btn onClick={() => wrap('__')} title={t('mf.underline')}><u>{t('mf.underlineCh')}</u></Btn>
+          <Btn onClick={() => wrap('~~')} title={t('mf.strike')}><s>{t('mf.strikeCh')}</s></Btn>
+          <Btn onClick={() => wrap('||')} title={t('mf.spoiler')}>▒</Btn>
+          <Btn onClick={() => wrap('`', t('mf.ph.code'))} title={t('mf.inlineCode')}><span className="font-mono">{'<>'}</span></Btn>
+          {!compact && <Btn onClick={codeBlock} title={t('mf.codeBlock')}><span className="font-mono text-xs">{'```'}</span></Btn>}
           <span className="mx-1 h-5 w-px bg-line" aria-hidden />
           {!compact && (
             <>
-              <Btn onClick={() => prefixLines('# ', 'Заголовок')} title="Заголовок 1"><span className="text-xs">H1</span></Btn>
-              <Btn onClick={() => prefixLines('## ', 'Заголовок')} title="Заголовок 2"><span className="text-xs">H2</span></Btn>
-              <Btn onClick={() => prefixLines('### ', 'Заголовок')} title="Заголовок 3"><span className="text-xs">H3</span></Btn>
-              <Btn onClick={() => prefixLines('-# ')} title="Мелкий текст"><span className="text-xs">-#</span></Btn>
+              <Btn onClick={() => prefixLines('# ', t('mf.ph.heading'))} title={t('mf.h1')}><span className="text-xs">H1</span></Btn>
+              <Btn onClick={() => prefixLines('## ', t('mf.ph.heading'))} title={t('mf.h2')}><span className="text-xs">H2</span></Btn>
+              <Btn onClick={() => prefixLines('### ', t('mf.ph.heading'))} title={t('mf.h3')}><span className="text-xs">H3</span></Btn>
+              <Btn onClick={() => prefixLines('-# ')} title={t('mf.small')}><span className="text-xs">-#</span></Btn>
             </>
           )}
-          <Btn onClick={() => prefixLines('> ')} title="Цитата">❝</Btn>
-          <Btn onClick={() => prefixLines('- ')} title="Маркированный список">•≡</Btn>
-          {!compact && <Btn onClick={numbered} title="Нумерованный список"><span className="text-xs">1.</span></Btn>}
-          <Btn onClick={link} title="Ссылка (Ctrl+K)">🔗</Btn>
-          <Btn onClick={() => setPanel((v) => (v === 'emoji' ? '' : 'emoji'))} title="Эмодзи" on={panel === 'emoji'}>😀</Btn>
+          <Btn onClick={() => prefixLines('> ')} title={t('mf.quote')}>❝</Btn>
+          <Btn onClick={() => prefixLines('- ')} title={t('mf.bullets')}>•≡</Btn>
+          {!compact && <Btn onClick={numbered} title={t('mf.numbers')}><span className="text-xs">1.</span></Btn>}
+          <Btn onClick={link} title={t('mf.link')}>🔗</Btn>
+          <Btn onClick={() => setPanel((v) => (v === 'emoji' ? '' : 'emoji'))} title={t('mf.emoji')} on={panel === 'emoji'}>😀</Btn>
           {variables && variables.length > 0 && (
-            <Btn onClick={() => setPanel((v) => (v === 'vars' ? '' : 'vars'))} title="Вставить переменную" on={panel === 'vars'}><span className="font-mono text-xs">{'{ }'}</span></Btn>
+            <Btn onClick={() => setPanel((v) => (v === 'vars' ? '' : 'vars'))} title={t('mf.variable')} on={panel === 'vars'}><span className="font-mono text-xs">{'{ }'}</span></Btn>
           )}
         </div>
         {panel === 'emoji' && (
           <div className="absolute right-0 top-11 z-20 grid w-72 max-w-[85vw] grid-cols-8 gap-0.5 rounded-2xl bg-card p-2 shadow-soft ring-2 ring-line">
             {EMOJIS.map((e) => (
-              <button key={e} type="button" aria-label={`Эмодзи ${e}`} className="grid h-8 w-8 place-items-center rounded-lg text-lg hover:bg-soft" onClick={() => { insert(e); setPanel(''); }}>{e}</button>
+              <button key={e} type="button" aria-label={t('mf.emojiOne', { e })} className="grid h-8 w-8 place-items-center rounded-lg text-lg hover:bg-soft" onClick={() => { insert(e); setPanel(''); }}>{e}</button>
             ))}
           </div>
         )}
         {panel === 'vars' && variables && (
-          <div className="absolute right-0 top-11 z-20 max-h-72 w-80 max-w-[85vw] overflow-auto rounded-2xl bg-card p-1.5 shadow-soft ring-2 ring-line" role="menu" aria-label="Переменные">
+          <div className="absolute right-0 top-11 z-20 max-h-72 w-80 max-w-[85vw] overflow-auto rounded-2xl bg-card p-1.5 shadow-soft ring-2 ring-line" role="menu" aria-label={t('mf.variables')}>
             {variables.map((v) => (
               <button key={v.token} type="button" role="menuitem" className="block w-full rounded-xl px-3 py-2 text-left hover:bg-soft" onClick={() => { insert(v.token); setPanel(''); }}>
                 <span className="block font-mono text-sm font-bold">{v.token}</span>
@@ -118014,7 +118121,7 @@ function MarkdownFieldImpl({ id, label, value, onChange, max, rows = 6, placehol
           className="w-full resize-y rounded-b-2xl bg-card px-3.5 py-2.5 font-semibold text-ink placeholder:font-normal placeholder:text-mute/80 focus:outline-hidden"
         />
         {sug && (
-          <ul id={`${id}-sug`} role="listbox" aria-label="Подсказки эмодзи" className="absolute left-2 top-full z-30 mt-1 w-64 max-w-[85vw] overflow-hidden rounded-2xl bg-card p-1 shadow-soft ring-2 ring-line">
+          <ul id={`${id}-sug`} role="listbox" aria-label={t('mf.emojiHints')} className="absolute left-2 top-full z-30 mt-1 w-64 max-w-[85vw] overflow-hidden rounded-2xl bg-card p-1 shadow-soft ring-2 ring-line">
             {sug.items.map(([em, names], i) => (
               <li key={`${em}-${i}`} role="option" aria-selected={i === sug.idx}>
                 <button
@@ -122490,8 +122597,9 @@ __COREGSM_EOF__
 import { useEffect, useMemo, useState } from 'react';
 import '../../styles/analytics.css';
 import { api } from '../../api';
+import { t, useI18n, type TKey } from '../../i18n';
 import { rankById } from '../../vrisingRanks';
-import { ago, ErrorLine, fmtDate, plural, num } from '../../ui';
+import { ago, ErrorLine, fmtDate, num } from '../../ui';
 import NickPic from '../NickPic';
 import { nickHue, nickInitial } from './helpers';
 
@@ -122516,20 +122624,21 @@ interface Analytics {
   top: { name: string; hours: number; visits: number; lastSeen: number | null; rankId?: string }[];
 }
 
-const DOW = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
-const DOW_LONG = ['в понедельник', 'во вторник', 'в среду', 'в четверг', 'в пятницу', 'в субботу', 'в воскресенье'];
+const dowShort = (i: number) => t(`cm.dow.${i}` as TKey);
+const dowLong = (i: number) => t(`an.dowLong.${i}` as TKey);
 const hh = (h: number) => `${String(h).padStart(2, '0')}:00`;
-const minutesText = (m: number | null) => (m == null ? '–' : m < 60 ? `${m} мин` : `${Math.floor(m / 60)} ч ${m % 60 ? `${m % 60} мин` : ''}`.trim());
+const minutesText = (m: number | null) => (m == null ? '–' : m < 60 ? t('dur.m', { n: m }) : m % 60 ? t('dur.hm', { h: Math.floor(m / 60), m: m % 60 }) : t('dur.h', { n: Math.floor(m / 60) }));
 const dayLabel = (d: string) => {
   const [, m, day] = d.split('-');
   return `${Number(day)}.${m}`;
 };
 
 function PeriodSwitch({ days, onChange }: { days: number; onChange: (d: number) => void }) {
+  useI18n();
   return (
-    <div className="seg" role="group" aria-label="Период">
+    <div className="seg" role="group" aria-label={t('an.period')}>
       {[7, 30, 90].map((d) => (
-        <button key={d} type="button" className="seg-item" aria-pressed={days === d} onClick={() => onChange(d)}>{d} дн</button>
+        <button key={d} type="button" className="seg-item" aria-pressed={days === d} onClick={() => onChange(d)}>{t('an.daysShort', { n: d })}</button>
       ))}
     </div>
   );
@@ -122547,24 +122656,25 @@ function Kpi({ k, v, hint }: { k: string; v: string | number; hint?: string }) {
 
 /** weekday x hour: the darker the cell, the more players on average */
 function Heatmap({ h }: { h: Analytics['heatmap'] }) {
+  useI18n();
   const [hover, setHover] = useState<{ dow: number; hour: number } | null>(null);
   const max = Math.max(1, ...h.cells.flat().map((v) => v ?? 0));
   const cur = hover ? { avg: h.cells[hover.dow][hover.hour], peak: h.peak[hover.dow][hover.hour] } : null;
   return (
     <div>
-      <div className="an-heat" role="img" aria-label={h.busiest ? `Больше всего игроков ${DOW_LONG[h.busiest.dow]} в ${hh(h.busiest.hour)}` : 'Пока мало данных'} onMouseLeave={() => setHover(null)}>
+      <div className="an-heat" role="img" aria-label={h.busiest ? t('an.heatAria', { when: dowLong(h.busiest.dow), time: hh(h.busiest.hour) }) : t('an.fewData')} onMouseLeave={() => setHover(null)}>
         <span />
         {Array.from({ length: 24 }, (_, i) => <span key={i} className="an-heat-hour">{i % 3 === 0 ? i : ''}</span>)}
         {h.cells.map((row, dow) => (
           <div key={dow} className="contents">
-            <span className="an-heat-dow">{DOW[dow]}</span>
+            <span className="an-heat-dow">{dowShort(dow)}</span>
             {row.map((v, hour) => (
               <span
                 key={hour}
                 className={`an-heat-cell ${v == null ? 'is-empty' : ''} ${hover?.dow === dow && hover.hour === hour ? 'is-hover' : ''}`}
                 style={v == null ? undefined : { ['--a' as string]: (0.1 + 0.9 * (v / max)).toFixed(3) }}
                 onMouseEnter={() => setHover({ dow, hour })}
-                title={v == null ? 'нет данных' : `${DOW[dow]} ${hh(hour)}: в среднем ${v}, максимум ${h.peak[dow][hour]}`}
+                title={v == null ? t('an.noData') : t('an.cell', { dow: dowShort(dow), time: hh(hour), avg: v, max: h.peak[dow][hour] })}
               />
             ))}
           </div>
@@ -122572,16 +122682,16 @@ function Heatmap({ h }: { h: Analytics['heatmap'] }) {
       </div>
       <div className="an-heat-foot">
         <span className="an-heat-scale" aria-hidden>
-          меньше <i style={{ ['--a' as string]: 0.15 }} /><i style={{ ['--a' as string]: 0.4 }} /><i style={{ ['--a' as string]: 0.7 }} /><i style={{ ['--a' as string]: 1 }} /> больше
+          {t('an.less')} <i style={{ ['--a' as string]: 0.15 }} /><i style={{ ['--a' as string]: 0.4 }} /><i style={{ ['--a' as string]: 0.7 }} /><i style={{ ['--a' as string]: 1 }} /> {t('an.more')}
         </span>
         <span className="font-bold text-ink" aria-live="polite">
-          {hover && cur ? (cur.avg == null ? `${DOW[hover.dow]} ${hh(hover.hour)}: нет данных` : `${DOW[hover.dow]} ${hh(hover.hour)}: в среднем ${num(cur.avg)}, максимум ${cur.peak}`) : `средние за ${h.days} ${plural(h.days, ['день', 'дня', 'дней'])}`}
+          {hover && cur ? (cur.avg == null ? `${dowShort(hover.dow)} ${hh(hover.hour)}: ${t('an.noData')}` : t('an.cell', { dow: dowShort(hover.dow), time: hh(hover.hour), avg: num(cur.avg), max: cur.peak })) : t('an.avgFor', { n: h.days })}
         </span>
       </div>
       <div className="an-facts">
-        {h.busiest && <p><b>Пик</b> {DOW_LONG[h.busiest.dow]} в {hh(h.busiest.hour)}: в среднем {num(h.busiest.avg)} {plural(Math.round(h.busiest.avg), ['игрок', 'игрока', 'игроков'])}</p>}
-        {h.quietest && <p><b>Тише всего</b> {DOW_LONG[h.quietest.dow]} в {hh(h.quietest.hour)}</p>}
-        {h.restartHour != null && <p><b>Рестарт</b> лучше всего в {hh(h.restartHour)}: в это время меньше всего игроков в любой день</p>}
+        {h.busiest && <p><b>{t('an.peak')}</b> {t('an.peakText', { when: dowLong(h.busiest.dow), time: hh(h.busiest.hour), avg: num(h.busiest.avg), n: Math.round(h.busiest.avg) })}</p>}
+        {h.quietest && <p><b>{t('an.quietest')}</b> {t('an.when', { when: dowLong(h.quietest.dow), time: hh(h.quietest.hour) })}</p>}
+        {h.restartHour != null && <p><b>{t('an.restart')}</b> {t('an.restartText', { time: hh(h.restartHour) })}</p>}
       </div>
     </div>
   );
@@ -122589,15 +122699,16 @@ function Heatmap({ h }: { h: Analytics['heatmap'] }) {
 
 /** unique players per day: returning (accent) and new (lighter) stacked */
 function DailyBars({ daily }: { daily: Analytics['daily'] }) {
+  useI18n();
   const [hover, setHover] = useState<number | null>(null);
   const max = Math.max(1, ...daily.map((d) => d.players));
   const d = hover != null ? daily[hover] : null;
   const step = Math.ceil(daily.length / 8);
   return (
     <div>
-      <div className="an-bars" role="img" aria-label={`Уникальных игроков в день: до ${max}`} onMouseLeave={() => setHover(null)}>
+      <div className="an-bars" role="img" aria-label={t('an.dailyAria', { max })} onMouseLeave={() => setHover(null)}>
         {daily.map((x, i) => (
-          <div key={x.day} className={`an-bar ${hover === i ? 'is-hover' : ''}`} onMouseEnter={() => setHover(i)} title={`${dayLabel(x.day)}: ${x.players} игроков, новых ${x.newPlayers}`}>
+          <div key={x.day} className={`an-bar ${hover === i ? 'is-hover' : ''}`} onMouseEnter={() => setHover(i)} title={t('an.barTitle', { day: dayLabel(x.day), n: x.players, news: x.newPlayers })}>
             <span className="an-bar-new" style={{ height: `${(x.newPlayers / max) * 100}%` }} />
             <span className="an-bar-old" style={{ height: `${((x.players - x.newPlayers) / max) * 100}%` }} />
           </div>
@@ -122609,11 +122720,11 @@ function DailyBars({ daily }: { daily: Analytics['daily'] }) {
       </div>
       <div className="an-heat-foot">
         <span className="flex flex-wrap gap-3">
-          <span className="an-legend"><i className="an-bar-old" />вернулись</span>
-          <span className="an-legend"><i className="an-bar-new" />новые</span>
+          <span className="an-legend"><i className="an-bar-old" />{t('an.returned')}</span>
+          <span className="an-legend"><i className="an-bar-new" />{t('an.new')}</span>
         </span>
         <span className="font-bold text-ink" aria-live="polite">
-          {d ? `${dayLabel(d.day)}: ${d.players} ${plural(d.players, ['игрок', 'игрока', 'игроков'])}, новых ${d.newPlayers}, ${num(d.hours)} ч в игре, пик ${d.peak}` : 'наведите на столбец'}
+          {d ? t('an.barHover', { day: dayLabel(d.day), n: d.players, news: d.newPlayers, hours: num(d.hours), peak: d.peak }) : t('an.hoverBar')}
         </span>
       </div>
     </div>
@@ -122638,22 +122749,23 @@ function SessionBars({ sessions }: { sessions: Analytics['sessions'] }) {
 
 /** of the players first seen in a week, the share that came back 1, 2 ... weeks later */
 function Cohorts({ cohorts }: { cohorts: Analytics['cohorts'] }) {
+  useI18n();
   const width = Math.max(1, ...cohorts.map((c) => c.rates.length));
-  if (!cohorts.some((c) => c.size > 0)) return <p className="text-sm font-semibold text-mute">Новых игроков за шесть недель не было.</p>;
+  if (!cohorts.some((c) => c.size > 0)) return <p className="text-sm font-semibold text-mute">{t('an.noNew')}</p>;
   return (
     <div className="overflow-x-auto">
       <table className="an-cohorts">
         <thead>
           <tr>
-            <th scope="col">Неделя первого входа</th>
-            <th scope="col">Игроков</th>
-            {Array.from({ length: width }, (_, i) => <th key={i} scope="col">+{i + 1} нед</th>)}
+            <th scope="col">{t('an.firstWeek')}</th>
+            <th scope="col">{t('an.players')}</th>
+            {Array.from({ length: width }, (_, i) => <th key={i} scope="col">{t('an.weekPlus', { n: i + 1 })}</th>)}
           </tr>
         </thead>
         <tbody>
           {cohorts.map((c) => (
             <tr key={c.start}>
-              <th scope="row">с {fmtDate(c.start)}</th>
+              <th scope="row">{t('an.since', { date: fmtDate(c.start) })}</th>
               <td className="font-extrabold">{c.size}</td>
               {Array.from({ length: width }, (_, i) => {
                 const v = c.rates[i];
@@ -122670,20 +122782,21 @@ function Cohorts({ cohorts }: { cohorts: Analytics['cohorts'] }) {
 }
 
 type TopSort = 'hours' | 'visits' | 'recent';
-const TOP_SORTS: [TopSort, string][] = [['hours', 'По часам'], ['visits', 'По визитам'], ['recent', 'По давности']];
+const TOP_SORTS: [TopSort, TKey][] = [['hours', 'an.sort.hours'], ['visits', 'an.sort.visits'], ['recent', 'an.sort.recent']];
 
 function TopPlayers({ top }: { top: Analytics['top'] }) {
+  useI18n();
   const [sort, setSort] = useState<TopSort>('hours');
   const list = useMemo(
     () => [...top].sort((a, b) => (sort === 'visits' ? b.visits - a.visits || b.hours - a.hours : sort === 'recent' ? (b.lastSeen ?? Infinity) - (a.lastSeen ?? Infinity) : b.hours - a.hours)),
     [top, sort],
   );
   const max = Math.max(1, ...top.map((p) => (sort === 'visits' ? p.visits : p.hours)));
-  if (!top.length) return <p className="text-sm font-semibold text-mute">За этот период никто не играл.</p>;
+  if (!top.length) return <p className="text-sm font-semibold text-mute">{t('an.nobody')}</p>;
   return (
     <div className="space-y-3">
-      <div className="seg" role="group" aria-label="Порядок">
-        {TOP_SORTS.map(([k, label]) => <button key={k} type="button" className="seg-item" aria-pressed={sort === k} onClick={() => setSort(k)}>{label}</button>)}
+      <div className="seg" role="group" aria-label={t('an.order')}>
+        {TOP_SORTS.map(([k, label]) => <button key={k} type="button" className="seg-item" aria-pressed={sort === k} onClick={() => setSort(k)}>{t(label)}</button>)}
       </div>
       <ol className="an-top">
         {list.map((p, i) => {
@@ -122703,8 +122816,8 @@ function TopPlayers({ top }: { top: Analytics['top'] }) {
                 <span className="an-top-bar"><span style={{ width: `${(value / max) * 100}%` }} /></span>
               </span>
               <span className="shrink-0 text-right">
-                <span className="block font-extrabold tabular-nums">{sort === 'visits' ? `${p.visits} ${plural(p.visits, ['визит', 'визита', 'визитов'])}` : `${num(p.hours)} ч`}</span>
-                <span className="block text-xs font-bold text-mute">{p.lastSeen ? ago(p.lastSeen) : 'сейчас в игре'}</span>
+                <span className="block font-extrabold tabular-nums">{sort === 'visits' ? t('an.visitsN', { n: p.visits }) : t('dur.h', { n: num(p.hours) })}</span>
+                <span className="block text-xs font-bold text-mute">{p.lastSeen ? ago(p.lastSeen) : t('an.playingNow')}</span>
               </span>
             </li>
           );
@@ -122715,6 +122828,7 @@ function TopPlayers({ top }: { top: Analytics['top'] }) {
 }
 
 export default function AnalyticsTab({ id }: { id: number }) {
+  useI18n();
   const [days, setDays] = useState(30);
   const [data, setData] = useState<Analytics | null>(null);
   const [error, setError] = useState('');
@@ -122731,47 +122845,47 @@ export default function AnalyticsTab({ id }: { id: number }) {
   const newShare = useMemo(() => (s && s.players ? Math.round((s.newPlayers / s.players) * 100) : 0), [s]);
 
   if (error) return <ErrorLine text={error} />;
-  if (!data || !s) return <div className="tile skeleton h-72" aria-label="Загрузка аналитики" role="status" />;
+  if (!data || !s) return <div className="tile skeleton h-72" aria-label={t('an.loading')} role="status" />;
 
   return (
     <div className="an space-y-3.5">
       <section className="tile tile-in p-4 sm:p-5">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-          <h2 className="text-base font-extrabold">Игроки за {days} {plural(days, ['день', 'дня', 'дней'])}</h2>
+          <h2 className="text-base font-extrabold">{t('an.playersFor', { n: days })}</h2>
           <PeriodSwitch days={days} onChange={setDays} />
         </div>
         <div className="an-kpis">
-          <Kpi k="Уникальных игроков" v={s.players} hint={`сегодня ${s.dau} · за неделю ${s.wau} · за месяц ${s.mau}`} />
-          <Kpi k="Новых" v={s.newPlayers} hint={s.players ? `${newShare}% от всех, вернулись ${s.returning}` : undefined} />
-          <Kpi k="Обычный визит" v={minutesText(s.medianMinutes)} hint={s.avgMinutes != null ? `в среднем ${minutesText(s.avgMinutes)} · ${s.visits} ${plural(s.visits, ['визит', 'визита', 'визитов'])}` : undefined} />
-          <Kpi k="Часов в игре" v={s.playerHours.toLocaleString('ru-RU')} hint="все игроки вместе" />
+          <Kpi k={t('an.kpi.unique')} v={s.players} hint={t('an.kpi.uniqueHint', { dau: s.dau, wau: s.wau, mau: s.mau })} />
+          <Kpi k={t('an.kpi.new')} v={s.newPlayers} hint={s.players ? t('an.kpi.newHint', { share: newShare, n: s.returning }) : undefined} />
+          <Kpi k={t('an.kpi.visit')} v={minutesText(s.medianMinutes)} hint={s.avgMinutes != null ? `${t('an.kpi.avg', { v: minutesText(s.avgMinutes) })} · ${t('an.visitsN', { n: s.visits })}` : undefined} />
+          <Kpi k={t('an.kpi.hours')} v={s.playerHours.toLocaleString('ru-RU')} hint={t('an.kpi.hoursHint')} />
         </div>
       </section>
 
       <section className="tile tile-in p-4 sm:p-5">
-        <h2 className="mb-3 text-base font-extrabold">Когда играют</h2>
+        <h2 className="mb-3 text-base font-extrabold">{t('an.when.title')}</h2>
         <Heatmap h={data.heatmap} />
       </section>
 
       <div className="grid gap-3.5 lg:grid-cols-12">
         <section className="tile tile-in p-4 sm:p-5 lg:col-span-7">
-          <h2 className="mb-3 text-base font-extrabold">Игроки по дням</h2>
+          <h2 className="mb-3 text-base font-extrabold">{t('an.daily.title')}</h2>
           <DailyBars daily={data.daily} />
         </section>
         <section className="tile tile-in p-4 sm:p-5 lg:col-span-5">
-          <h2 className="mb-3 text-base font-extrabold">Сколько длится визит</h2>
+          <h2 className="mb-3 text-base font-extrabold">{t('an.sess.title')}</h2>
           <SessionBars sessions={data.sessions} />
         </section>
       </div>
 
       <div className="grid gap-3.5 lg:grid-cols-12">
         <section className="tile tile-in p-4 sm:p-5 lg:col-span-7">
-          <h2 className="mb-1 text-base font-extrabold">Возвращаются ли новички</h2>
-          <p className="mb-3 text-sm font-semibold text-mute">Доля игроков, впервые зашедших в эту неделю, которые вернулись через одну, две и больше недель.</p>
+          <h2 className="mb-1 text-base font-extrabold">{t('an.coh.title')}</h2>
+          <p className="mb-3 text-sm font-semibold text-mute">{t('an.coh.text')}</p>
           <Cohorts cohorts={data.cohorts} />
         </section>
         <section className="tile tile-in p-4 sm:p-5 lg:col-span-5">
-          <h2 className="mb-3 text-base font-extrabold">Больше всех в игре</h2>
+          <h2 className="mb-3 text-base font-extrabold">{t('an.top.title')}</h2>
           <TopPlayers top={data.top} />
         </section>
       </div>
@@ -127065,11 +127179,11 @@ __COREGSM_EOF__
 import { useEffect, useState, type ReactNode } from 'react';
 import { api, type PublicNews } from '../../api';
 import { t, useI18n } from '../../i18n';
-import { ago, fmtDateTime, fmtTime, usePoll } from '../../ui';
+import { fmtDateTime, fmtTime, usePoll } from '../../ui';
 import { NewsBanner, cardOf } from '../news/PublicFeed';
 import { IconChevronDown } from '../../icons';
 import { StateView } from '../StateView';
-import type { OverviewData, RecentEvent } from './overviewLogic';
+import type { OverviewData } from './overviewLogic';
 
 const OPEN_KEY = 'coregsm_whatsnew_open';
 const SEEN_KEY = 'coregsm_whatsnew_seen';
@@ -127150,18 +127264,6 @@ export function teaserNodes(n: Pick<PublicNews, 'payload'>, max = 220): ReactNod
   }
   push(raw.slice(last));
   return out;
-}
-
-const DOT: Record<RecentEvent['type'], string> = { up: 'bg-ok', down: 'bg-bad', peak: 'bg-link', maintenance: 'bg-warn' };
-
-function eventText(e: RecentEvent): string {
-  const name = e.serverName ?? t('srv.new.allServers');
-  switch (e.type) {
-    case 'up': return t('srv.new.ev.up', { name });
-    case 'down': return t('srv.new.ev.down', { name });
-    case 'peak': return t('srv.new.ev.peak', { name, n: e.players ?? 0 });
-    default: return t('srv.new.ev.maint', { name: e.serverName ? `${e.name || ''} · ${e.serverName}`.replace(/^ · /, '') : e.name || name });
-  }
 }
 
 export function WhatsNew({ open, onToggle, overview }: { open: boolean; onToggle: () => void; overview: OverviewData | null }) {
@@ -132122,6 +132224,19 @@ const en: Record<keyof typeof ru, string> = {
   'cards.copyCode': 'Copy the code',
   'cards.copyLink': 'Copy the link',
   'cards.download': 'Download',
+  'sto.title': 'Data storage',
+  'sto.text': 'The database takes {size}. Old rows are removed automatically; the retention is set in .env (HISTORY_DAYS, PLAYER_SESSIONS_DAYS, ACCOUNT_EVENTS_DAYS, UPTIME_DAYS).',
+  'sto.history': 'Online history',
+  'sto.playerSessions': 'Player sessions',
+  'sto.accountEvents': 'Account events',
+  'sto.uptime': 'Uptime by day',
+  'sto.since': 'since {date}',
+  'sto.empty': 'empty',
+  'sto.keep': 'kept {n} d.',
+  'sto.prune': 'Prune old rows now',
+  'sto.done': 'Old rows removed',
+  'sto.mb': 'MB',
+  'sto.gb': 'GB',
   'cards.bot': 'Cards in Discord',
   'cards.botText': 'The look of the pictures the bot sends in messages and commands.',
   'cards.botSaved': 'The look of the bot cards is saved',
@@ -132959,6 +133074,378 @@ const en: Record<keyof typeof ru, string> = {
   'sn.reopen': 'Reopen',
   'sn.delete': 'Delete',
   'sn.deleteQ': 'Delete the note?',
+  // ---- i18n debt batch ----
+  'wipe.ann.week': 'a week before',
+  'wipe.ann.day': 'a day before',
+  'wipe.ann.h3': '3 hours before',
+  'wipe.ann.h1': 'an hour before',
+  'wipe.ann.m10': '10 min before',
+  'wipe.say.m30': '30 min before',
+  'wipe.say.m5': '5 min before',
+  'wipe.say.m1': 'a minute before',
+  'wipe.step.window': 'Maintenance window',
+  'wipe.step.commands': 'Wipe commands',
+  'wipe.step.season': 'New season',
+  'wipe.step.news': 'News',
+  'wipe.step.discord': 'Discord message',
+  'wipe.step.say': 'In-game chat',
+  'wipe.step.missed': 'Missed',
+  'wipe.st.scheduled': 'scheduled',
+  'wipe.st.done': 'done',
+  'wipe.st.missed': 'missed',
+  'wipe.st.cancelled': 'cancelled',
+  'wipe.defName': 'Wipe',
+  'wipe.defNewsTitle': 'Wipe on {server} is done',
+  'wipe.defNewsText': 'Server {server} was wiped on {date} at {time}. A new map is waiting: come on in!',
+  'wipe.title': 'Wipe scenario',
+  'wipe.desc': 'One scenario for the whole wipe: warnings in Discord and the game chat, the maintenance window, wipe commands with a new seed, a new season and a "wipe is done" news post. Every step runs once.',
+  'wipe.none': 'no wipe scheduled',
+  'wipe.scenarios': 'Scenarios',
+  'wipe.cancelQ': 'Cancel "{name}"?',
+  'wipe.cancelText': 'Warnings and wipe steps will not run.',
+  'wipe.cancelBtn': 'Cancel wipe',
+  'wipe.modalTitle': 'Wipes: {name}',
+  'wipe.empty': 'No scenarios yet.',
+  'wipe.errors': 'errors: {n}',
+  'wipe.edit': 'Edit',
+  'wipe.cancel': 'Cancel',
+  'wipe.remove': 'Remove',
+  'wipe.schedule': 'Schedule a wipe',
+  'wipe.needDate': 'Enter the date and time of the wipe',
+  'wipe.saved': 'Scenario saved',
+  'wipe.editTitle': 'Edit wipe',
+  'wipe.f.name': 'Name',
+  'wipe.f.when': 'When (your time)',
+  'wipe.f.window': 'Maintenance window, min',
+  'wipe.s1': '1. Warnings',
+  'wipe.inDiscord': 'In Discord',
+  'wipe.inGame': 'In the game chat (RCON required)',
+  'wipe.channel': 'Discord channel',
+  'wipe.channelHint': 'Not selected: messages go to the alerts channel.',
+  'wipe.s2': '2. At the moment of the wipe',
+  'wipe.f.cmds': 'RCON commands, one per line (optional)',
+  'wipe.f.seedMode': 'Seed {seed}',
+  'wipe.seed.none': 'Keep',
+  'wipe.seed.random': 'Random (the panel picks)',
+  'wipe.seed.fixed': 'Custom',
+  'wipe.f.seed': 'Seed',
+  'wipe.f.season': 'New season (empty: do not start)',
+  'wipe.seasonPh': 'e.g. Season {date}',
+  'wipe.note': 'The maintenance window always opens, so the wipe is not counted as an outage. {server}, {date}, {time} and {seed} work in commands and texts.',
+  'wipe.s3': '3. News after the wipe',
+  'wipe.newsChannel': 'News channel (not selected: no news)',
+  'wipe.f.title': 'Title',
+  'wipe.f.text': 'Text',
+  'wipe.f.mention': 'Mention',
+  'wipe.m.none': 'No mention',
+  'wipe.back': 'Back',
+  'rp.everyDay': 'every day',
+  'rp.noDays': 'no days selected',
+  'rp.title': 'Scheduled restarts',
+  'rp.desc': 'The panel warns players in Discord and in the game chat in advance, opens a maintenance window for the restart (it will not count as an outage) and, if RCON is set up, sends the restart command to the server itself.',
+  'rp.daysAt': '{days} at {time}',
+  'rp.next': 'next {when}',
+  'rp.off': 'off',
+  'rp.rconOn': 'RCON connected',
+  'rp.last': 'Last time {when}',
+  'rp.on': 'on',
+  'rp.setup': 'Set up',
+  'rp.saved': 'Restarts saved',
+  'rp.noAnswer': 'The server ran the command and did not answer',
+  'rp.nowQ': 'Restart "{name}" now?',
+  'rp.nowText': 'Without warning the players: a maintenance window opens and, if RCON is set up, the restart command is sent.',
+  'rp.restart': 'Restart',
+  'rp.done': 'Done',
+  'rp.modalTitle': 'Restarts: {name}',
+  'rp.bySchedule': 'Restart on a schedule',
+  'rp.days': 'Days',
+  'rp.f.time': 'Time',
+  'rp.f.warn': 'Warn, min',
+  'rp.f.dur': 'Lasts, min',
+  'rp.tzHint': 'Panel time: {tz}. There are usually the fewest players at {hour}:00.',
+  'rp.setTime': 'Use this time',
+  'rp.channel': 'Discord channel for warnings',
+  'rp.rconTitle': 'RCON (optional)',
+  'rp.rconNote': 'For Minecraft, CS, ARK, V Rising, Palworld and other games with Source RCON. Rust (WebRCON) is not supported yet.',
+  'rp.f.port': 'RCON port',
+  'rp.portPh': 'e.g. 25575',
+  'rp.f.passKeep': 'Password (empty: keep the current one)',
+  'rp.f.pass': 'Password',
+  'rp.connectedPort': 'Connected, port {port}',
+  'rp.notConnected': 'Not connected: the port and password are set by an administrator',
+  'rp.f.cmd': 'Restart command',
+  'rp.cmdPh': 'e.g. stop, quit or shutdown',
+  'rp.f.say': 'Game chat message ({text} is the warning text)',
+  'rp.cmdNote': 'The command only stops the server: the hosting or a service watching the process has to start it again.',
+  'rp.f.test': 'Test a command',
+  'rp.run': 'Run',
+  'rp.restartNow': 'Restart now',
+  'dx.kind.online': 'Currently playing',
+  'dx.kind.top': 'Top {n} of the week by hours',
+  'dx.kind.topOne': 'Player of the week (most hours in 7 days)',
+  'dx.kind.hours': 'Played {n} h or more',
+  'dx.allServers': 'all servers',
+  'dx.deleteQ': 'Delete?',
+  'dx.delete': 'Delete',
+  'dx.roles.title': 'Auto roles',
+  'dx.roles.desc': 'The bot gives and removes Discord roles by itself: "Currently playing", "Player of the week", "Veteran 100 h". Only players who linked Discord to their in-game nickname (the /register command) get roles.',
+  'dx.roles.add': 'Add a role',
+  'dx.roles.none': 'The bot sees no roles it can give. Grant the bot the "Manage Roles" permission and move its role above the ones it will give.',
+  'dx.roles.empty': 'No auto roles yet.',
+  'dx.roles.holders': 'currently {n} player|{n} players',
+  'dx.roles.del': 'Delete the auto role',
+  'dx.roles.delText': 'The bot will stop giving this role. Roles already given stay with the players.',
+  'dx.cnt.title': 'Online counter in a voice channel',
+  'dx.cnt.desc': 'The bot renames a voice channel into a live counter, for example "🟢 Online: 42". Discord limits how often a channel can be renamed, so the counter updates every 5 minutes.',
+  'dx.cnt.add': 'Add a counter',
+  'dx.cnt.none': 'The bot sees no voice channels it can rename. Grant it the "Manage Channels" permission on the channel you need.',
+  'dx.cnt.channel': 'Channel "{name}"',
+  'dx.cnt.on': 'on "{guild}"',
+  'dx.cnt.template': 'template',
+  'dx.cnt.del': 'Delete the counter',
+  'dx.cnt.delText': 'The bot will stop updating this channel name.',
+  'dx.roles.added': 'Auto role added: the bot will start giving it within a minute',
+  'dx.cnt.added': 'Counter added: the bot will rename the channel within a minute',
+  'dx.f.newRole': 'New auto role',
+  'dx.f.newCnt': 'New counter',
+  'dx.f.guild': 'Discord server',
+  'dx.f.role': 'Role',
+  'dx.f.voice': 'Voice channel',
+  'dx.f.choose': 'Choose…',
+  'dx.f.who': 'Who gets it',
+  'dx.f.rOnline': 'Those currently playing (removed on leave)',
+  'dx.f.rTop': 'The most active in 7 days',
+  'dx.f.rHours': 'Those who played N hours (in the last 90 days)',
+  'dx.f.howManyH': 'How many hours',
+  'dx.f.howManyP': 'How many top players',
+  'dx.f.chName': 'Channel name',
+  'dx.f.vars': '{players} players, {max} slots, {online} servers online, {servers} total, {status} 🟢/🟡/🔴, {name} server name',
+  'dx.f.scope': 'Count by server',
+  'dx.f.all': 'All servers',
+  'dx.f.add': 'Add',
+  'pb.copied': 'Copied',
+  'pb.rotateQ': 'New key for "{name}"?',
+  'pb.rotateText': 'The old key will stop working: the probe has to be restarted with the new one.',
+  'pb.rotateBtn': 'Issue a new one',
+  'pb.deleteQ': 'Delete "{name}"?',
+  'pb.deleteText': 'Its checks will disappear from the server pages.',
+  'pb.delete': 'Delete',
+  'pb.title': 'Probes',
+  'pb.desc': 'A small program on another computer or VPS (in another city, at another provider) checks the game servers from there. If the panel cannot see a server but the probes can, the problem is in the network between them, not in the server. Players will see on the server page where it is reachable from.',
+  'pb.add': 'Add a probe',
+  'pb.empty': 'No probes yet: only the panel itself checks the servers.',
+  'pb.alive': 'online',
+  'pb.dead': 'offline',
+  'pb.sees': 'sees {online} of {servers}',
+  'pb.never': 'has never connected yet',
+  'pb.newKey': 'New key',
+  'pb.probeTitle': 'Probe "{name}"',
+  'pb.run': 'Run one of the commands on the machine you need. The key is shown only now: save the command in case you need to repeat it.',
+  'pb.docker': 'Docker (the easiest)',
+  'pb.node': 'Or Node.js 18+',
+  'pb.appears': 'The probe will show as "online" a minute after it starts.',
+  'pb.done': 'Done',
+  'pb.newTitle': 'New probe',
+  'pb.f.name': 'Name (players will see it)',
+  'pb.f.ph': 'For example: Frankfurt',
+  'pb.create': 'Create',
+  'mf.chars': '{value} of {max} characters',
+  'mf.ph.text': 'text',
+  'mf.ph.item': 'item',
+  'mf.ph.code': 'code',
+  'mf.ph.link': 'link',
+  'mf.ph.linkText': 'link text',
+  'mf.formatting': 'Formatting: {label}',
+  'mf.bold': 'Bold (Ctrl+B)',
+  'mf.boldCh': 'B',
+  'mf.italic': 'Italic (Ctrl+I)',
+  'mf.italicCh': 'I',
+  'mf.underline': 'Underline (Ctrl+U)',
+  'mf.underlineCh': 'U',
+  'mf.strike': 'Strikethrough',
+  'mf.strikeCh': 'S',
+  'mf.spoiler': 'Spoiler',
+  'mf.inlineCode': 'Inline code',
+  'mf.codeBlock': 'Code block',
+  'mf.ph.heading': 'Heading',
+  'mf.h1': 'Heading 1',
+  'mf.h2': 'Heading 2',
+  'mf.h3': 'Heading 3',
+  'mf.small': 'Small text',
+  'mf.quote': 'Quote',
+  'mf.bullets': 'Bulleted list',
+  'mf.numbers': 'Numbered list',
+  'mf.link': 'Link (Ctrl+K)',
+  'mf.emoji': 'Emoji',
+  'mf.variable': 'Insert a variable',
+  'mf.emojiOne': 'Emoji {e}',
+  'mf.variables': 'Variables',
+  'mf.emojiHints': 'Emoji suggestions',
+  'an.dowLong.0': 'on Monday',
+  'an.dowLong.1': 'on Tuesday',
+  'an.dowLong.2': 'on Wednesday',
+  'an.dowLong.3': 'on Thursday',
+  'an.dowLong.4': 'on Friday',
+  'an.dowLong.5': 'on Saturday',
+  'an.dowLong.6': 'on Sunday',
+  'an.period': 'Period',
+  'an.daysShort': '{n} d',
+  'an.heatAria': 'Most players {when} at {time}',
+  'an.fewData': 'Not enough data yet',
+  'an.noData': 'no data',
+  'an.cell': '{dow} {time}: average {avg}, maximum {max}',
+  'an.less': 'less',
+  'an.more': 'more',
+  'an.avgFor': 'averages for {n} day|averages for {n} days',
+  'an.peak': 'Peak',
+  'an.peakText': '{when} at {time}: {avg} player on average|{when} at {time}: {avg} players on average',
+  'an.quietest': 'Quietest',
+  'an.when': '{when} at {time}',
+  'an.restart': 'Restart',
+  'an.restartText': 'is best at {time}: that is when there are the fewest players on any day',
+  'an.dailyAria': 'Unique players per day: up to {max}',
+  'an.barTitle': '{day}: {n} players, {news} new',
+  'an.returned': 'returning',
+  'an.new': 'new',
+  'an.barHover': '{day}: {n} player, {news} new, {hours} h played, peak {peak}|{day}: {n} players, {news} new, {hours} h played, peak {peak}',
+  'an.hoverBar': 'hover over a bar',
+  'an.noNew': 'There were no new players in six weeks.',
+  'an.firstWeek': 'Week of the first visit',
+  'an.players': 'Players',
+  'an.weekPlus': '+{n} wk',
+  'an.since': 'from {date}',
+  'an.sort.hours': 'By hours',
+  'an.sort.visits': 'By visits',
+  'an.sort.recent': 'By recency',
+  'an.nobody': 'Nobody played in this period.',
+  'an.order': 'Order',
+  'an.visitsN': '{n} visit|{n} visits',
+  'an.playingNow': 'playing now',
+  'an.loading': 'Loading analytics',
+  'an.playersFor': 'Players for {n} day|Players for {n} days',
+  'an.kpi.unique': 'Unique players',
+  'an.kpi.uniqueHint': 'today {dau} · this week {wau} · this month {mau}',
+  'an.kpi.new': 'New',
+  'an.kpi.newHint': '{share}% of all, {n} came back',
+  'an.kpi.visit': 'Typical visit',
+  'an.kpi.avg': 'on average {v}',
+  'an.kpi.hours': 'Hours played',
+  'an.kpi.hoursHint': 'all players together',
+  'an.when.title': 'When they play',
+  'an.daily.title': 'Players per day',
+  'an.sess.title': 'How long a visit lasts',
+  'an.coh.title': 'Do newcomers come back',
+  'an.coh.text': 'The share of players who first visited that week and came back one, two or more weeks later.',
+  'an.top.title': 'Most time in game',
+  'mt.defName': 'Maintenance',
+  'mt.st.active': 'In progress',
+  'mt.st.planned': 'Planned',
+  'mt.st.repeat': 'Repeating',
+  'mt.st.past': 'Finished',
+  'mt.deleted': 'Window "{name}" deleted',
+  'mt.title': 'Maintenance',
+  'mt.subtitle': 'Maintenance windows: no false alarms',
+  'mt.hint': 'While a window is active the server is marked "Maintenance" and outage alerts are not sent.',
+  'mt.help': 'Pick a server (or all of them) and the time of the work. A window can repeat every day or week. During a window the server cards show "Maintenance until …", and a downtime is not counted as an outage and does not trigger alerts.',
+  'mt.add': 'Add a window',
+  'mt.quick': 'Quick windows',
+  'mt.now30': 'Now for 30 minutes',
+  'mt.tonight': 'Tonight 04:00–05:00',
+  'mt.empty': 'No maintenance windows',
+  'mt.emptyText': 'Create a window before updating or restarting a server, and the panel will not count it as an outage.',
+  'mt.loading': 'Loading',
+  'mt.allServers': 'All servers',
+  'mt.serverNo': 'Server #{id}',
+  'mt.next': 'next {range}',
+  'mt.editAria': 'Edit window "{name}"',
+  'mt.edit': 'Edit',
+  'mt.delAria': 'Delete window "{name}"',
+  'mt.added': 'Window added',
+  'mt.saved': 'Window saved',
+  'mt.newTitle': 'New maintenance window',
+  'mt.editTitle': 'Edit window',
+  'mt.f.server': 'Server',
+  'mt.f.name': 'Name',
+  'mt.f.namePh': 'For example, a game update',
+  'mt.quickTime': 'Quick time',
+  'mt.f.start': 'Start',
+  'mt.f.end': 'End',
+  'mt.f.repeat': 'Repeat',
+  'mt.r.none': 'Once',
+  'mt.r.daily': 'Every day (up to 24 hours)',
+  'mt.r.weekly': 'Every week',
+  'mt.tzNote': 'The time follows your browser clock. A window can be at most 7 days long.',
+  'bk2.copy1': 'copy',
+  'bk2.copy2': 'copies',
+  'bk2.copy5': 'copies',
+  'bk2.total': 'total {size}',
+  'bk2.last': 'latest: {ago}',
+  'bk2.late': 'The schedule has not run for a long time',
+  'bk2.count': 'Copies: {n}',
+  'bk2.auto': 'auto',
+  'bk2.manual': 'manual',
+  'bk2.gb': 'GB',
+  'bk2.mb': 'MB',
+  'bk2.kb': 'KB',
+  'bk2.b': 'B',
+  'bk2.fetchFail': 'Could not get the copy',
+  'bk2.encTitle': 'The archive is encrypted',
+  'bk2.passLabel': 'Passphrase',
+  'bk2.encText': 'Enter the passphrase the archive "{what}" was created with.',
+  'bk2.continue': 'Continue',
+  'bk2.needPass': 'Enter the passphrase',
+  'bk2.downloaded': 'Copy downloaded',
+  'bk2.created': 'Copy created',
+  'bk2.delQ': 'Delete the copy?',
+  'bk2.delText': 'The file "{name}" will be deleted from the server permanently.',
+  'bk2.delete': 'Delete',
+  'bk2.deleted': 'Copy deleted',
+  'bk2.accepted': 'Copy accepted, the panel is restarting…',
+  'bk2.restoreQ': 'Restore from this copy?',
+  'bk2.restoreText': 'All current panel data will be replaced with the copy "{name}" from {date}. The current database will be kept on the server as coregsm.db.before-restore. The panel will restart.',
+  'bk2.restore': 'Restore',
+  'bk2.restoreFileQ': 'Restore from a file?',
+  'bk2.restoreFileText': 'All panel data will be replaced with the copy "{name}". The current database will be kept on the server as coregsm.db.before-restore. The panel will restart.',
+  'bk2.restoreFail': 'Could not restore the copy',
+  'bk2.httpsOnly': 'The upload address must start with https://',
+  'bk2.keepRange': 'You can keep from 1 to 30 copies',
+  'bk2.settingsSaved': 'Backup settings saved',
+  'bk2.title': 'Backups',
+  'bk2.desc': 'A copy contains the database (servers, links, users, news, settings), news images and the logo. It holds secrets inside: the bot token and password hashes. Keep the files as carefully as a password, preferably encrypted.',
+  'bk2.preparing': 'Preparing…',
+  'bk2.dlFull': 'Download a full copy',
+  'bk2.creating': 'Creating…',
+  'bk2.createOnServer': 'Create a copy on the server',
+  'bk2.restoring': 'Restoring…',
+  'bk2.restoreFile': 'Restore from a file',
+  'bk2.schedTitle': 'Schedule and retention',
+  'bk2.f.auto': 'Automatic copies',
+  'bk2.s.off': 'Off',
+  'bk2.s.daily': 'Every day',
+  'bk2.s.weekly': 'Every week',
+  'bk2.f.keep': 'How many copies to keep (1-30)',
+  'bk2.f.remote': 'Send a copy to an address (optional)',
+  'bk2.now': 'now: {url}',
+  'bk2.remoteHint': 'The address must start with https://. The copy is sent with the PUT method; it works with WebDAV/Nextcloud and signed S3 links.',
+  'bk2.remoteOff': 'Turn off sending',
+  'bk2.lastSend': 'Last upload: {at}',
+  'bk2.ok': 'success',
+  'bk2.error': 'error',
+  'bk2.f.pass': 'Encryption passphrase (optional)',
+  'bk2.passOn': 'encryption is on, enter a new phrase to replace it',
+  'bk2.passOff': 'not set: copies are not encrypted',
+  'bk2.passWarn': 'If you lose the passphrase, encrypted archives cannot be read. It cannot be recovered.',
+  'bk2.encOff': 'Turn off encryption of new copies',
+  'bk2.saving': 'Saving…',
+  'bk2.onServer': 'Copies on the server',
+  'bk2.empty': 'No copies yet',
+  'bk2.emptyText': 'Click "Create a copy on the server" or turn on the schedule.',
+  'bk2.tagAuto': 'AUTO',
+  'bk2.tagManual': 'MANUAL',
+  'bk2.tagEnc': 'ENCRYPTED',
+  'bk2.actions': 'Actions: {name}',
+  'bk2.download': 'Download',
+  'bk2.restoreHere': 'Restore from this copy',
 };
 
 export default en;
@@ -134627,6 +135114,19 @@ const ru = {
   'cards.copyCode': 'Скопируйте код',
   'cards.copyLink': 'Скопируйте ссылку',
   'cards.download': 'Скачать',
+  'sto.title': 'Хранение данных',
+  'sto.text': 'База данных занимает {size}. Старые записи удаляются сами; сроки хранения меняются в .env (HISTORY_DAYS, PLAYER_SESSIONS_DAYS, ACCOUNT_EVENTS_DAYS, UPTIME_DAYS).',
+  'sto.history': 'История онлайна',
+  'sto.playerSessions': 'Сессии игроков',
+  'sto.accountEvents': 'События аккаунтов',
+  'sto.uptime': 'Аптайм по дням',
+  'sto.since': 'с {date}',
+  'sto.empty': 'пусто',
+  'sto.keep': 'хранится {n} дн.',
+  'sto.prune': 'Очистить старое сейчас',
+  'sto.done': 'Старые записи удалены',
+  'sto.mb': 'МБ',
+  'sto.gb': 'ГБ',
   'cards.bot': 'Карточки в Discord',
   'cards.botText': 'Какой вид у картинок, которые бот присылает в сообщениях и командах.',
   'cards.botSaved': 'Вид карточек для бота сохранён',
@@ -135464,6 +135964,378 @@ const ru = {
   'sn.reopen': 'Открыть снова',
   'sn.delete': 'Удалить',
   'sn.deleteQ': 'Удалить заметку?',
+  // ---- i18n debt batch ----
+  'wipe.ann.week': 'за неделю',
+  'wipe.ann.day': 'за сутки',
+  'wipe.ann.h3': 'за 3 часа',
+  'wipe.ann.h1': 'за час',
+  'wipe.ann.m10': 'за 10 мин',
+  'wipe.say.m30': 'за 30 мин',
+  'wipe.say.m5': 'за 5 мин',
+  'wipe.say.m1': 'за минуту',
+  'wipe.step.window': 'Окно обслуживания',
+  'wipe.step.commands': 'Команды вайпа',
+  'wipe.step.season': 'Новый сезон',
+  'wipe.step.news': 'Новость',
+  'wipe.step.discord': 'Сообщение в Discord',
+  'wipe.step.say': 'Игровой чат',
+  'wipe.step.missed': 'Пропущен',
+  'wipe.st.scheduled': 'запланирован',
+  'wipe.st.done': 'выполнен',
+  'wipe.st.missed': 'пропущен',
+  'wipe.st.cancelled': 'отменён',
+  'wipe.defName': 'Вайп',
+  'wipe.defNewsTitle': 'Вайп на {server} прошёл',
+  'wipe.defNewsText': 'Сервер {server} вайпнут {date} в {time}. Новая карта уже ждёт: заходите!',
+  'wipe.title': 'Сценарий вайпа',
+  'wipe.desc': 'Один сценарий на весь вайп: предупреждения в Discord и игровом чате, окно обслуживания, команды вайпа с новым сидом, новый сезон и новость «вайп прошёл». Каждый шаг выполняется один раз.',
+  'wipe.none': 'вайп не запланирован',
+  'wipe.scenarios': 'Сценарии',
+  'wipe.cancelQ': 'Отменить «{name}»?',
+  'wipe.cancelText': 'Предупреждения и шаги вайпа выполняться не будут.',
+  'wipe.cancelBtn': 'Отменить вайп',
+  'wipe.modalTitle': 'Вайпы: {name}',
+  'wipe.empty': 'Сценариев пока нет.',
+  'wipe.errors': 'ошибок: {n}',
+  'wipe.edit': 'Изменить',
+  'wipe.cancel': 'Отменить',
+  'wipe.remove': 'Убрать',
+  'wipe.schedule': 'Запланировать вайп',
+  'wipe.needDate': 'Укажите дату и время вайпа',
+  'wipe.saved': 'Сценарий сохранён',
+  'wipe.editTitle': 'Изменить вайп',
+  'wipe.f.name': 'Название',
+  'wipe.f.when': 'Когда (ваше время)',
+  'wipe.f.window': 'Окно обслуживания, мин',
+  'wipe.s1': '1. Предупреждения',
+  'wipe.inDiscord': 'В Discord',
+  'wipe.inGame': 'В игровом чате (нужен RCON)',
+  'wipe.channel': 'Канал Discord',
+  'wipe.channelHint': 'Не выбран: сообщения уйдут в канал оповещений.',
+  'wipe.s2': '2. В момент вайпа',
+  'wipe.f.cmds': 'Команды RCON, по одной в строке (необязательно)',
+  'wipe.f.seedMode': 'Сид {seed}',
+  'wipe.seed.none': 'Не менять',
+  'wipe.seed.random': 'Случайный (выберет панель)',
+  'wipe.seed.fixed': 'Свой',
+  'wipe.f.seed': 'Сид',
+  'wipe.f.season': 'Новый сезон (пусто: не начинать)',
+  'wipe.seasonPh': 'например Сезон {date}',
+  'wipe.note': 'Окно обслуживания открывается всегда, чтобы вайп не считался сбоем. В командах и текстах работают {server}, {date}, {time} и {seed}.',
+  'wipe.s3': '3. Новость после вайпа',
+  'wipe.newsChannel': 'Канал новостей (не выбран: новости не будет)',
+  'wipe.f.title': 'Заголовок',
+  'wipe.f.text': 'Текст',
+  'wipe.f.mention': 'Упоминание',
+  'wipe.m.none': 'Без упоминания',
+  'wipe.back': 'Назад',
+  'rp.everyDay': 'каждый день',
+  'rp.noDays': 'дни не выбраны',
+  'rp.title': 'Плановые перезапуски',
+  'rp.desc': 'Панель заранее предупредит игроков в Discord и в игровом чате, на время перезапуска откроет окно обслуживания (это не будет считаться сбоем) и, если настроен RCON, сама отправит серверу команду перезапуска.',
+  'rp.daysAt': '{days} в {time}',
+  'rp.next': 'следующий {when}',
+  'rp.off': 'выключено',
+  'rp.rconOn': 'RCON подключён',
+  'rp.last': 'Последний раз {when}',
+  'rp.on': 'включено',
+  'rp.setup': 'Настроить',
+  'rp.saved': 'Перезапуски сохранены',
+  'rp.noAnswer': 'Сервер выполнил команду и ничего не ответил',
+  'rp.nowQ': 'Перезапустить «{name}» сейчас?',
+  'rp.nowText': 'Без предупреждения игроков: откроется окно обслуживания и, если настроен RCON, уйдёт команда перезапуска.',
+  'rp.restart': 'Перезапустить',
+  'rp.done': 'Готово',
+  'rp.modalTitle': 'Перезапуски: {name}',
+  'rp.bySchedule': 'Перезапускать по расписанию',
+  'rp.days': 'Дни',
+  'rp.f.time': 'Время',
+  'rp.f.warn': 'Предупредить, мин',
+  'rp.f.dur': 'Длится, мин',
+  'rp.tzHint': 'Время панели: {tz}. Меньше всего игроков обычно в {hour}:00.',
+  'rp.setTime': 'Поставить это время',
+  'rp.channel': 'Канал Discord для предупреждений',
+  'rp.rconTitle': 'RCON (необязательно)',
+  'rp.rconNote': 'Для Minecraft, CS, ARK, V Rising, Palworld и других игр с Source RCON. Rust (WebRCON) пока не поддерживается.',
+  'rp.f.port': 'Порт RCON',
+  'rp.portPh': 'например 25575',
+  'rp.f.passKeep': 'Пароль (пусто: оставить прежний)',
+  'rp.f.pass': 'Пароль',
+  'rp.connectedPort': 'Подключён, порт {port}',
+  'rp.notConnected': 'Не подключён: порт и пароль задаёт администратор',
+  'rp.f.cmd': 'Команда перезапуска',
+  'rp.cmdPh': 'например stop, quit или shutdown',
+  'rp.f.say': 'Сообщение в игровой чат ({text} — текст предупреждения)',
+  'rp.cmdNote': 'Команда только останавливает сервер: запустить его снова должен хостинг или сервис, который следит за процессом.',
+  'rp.f.test': 'Проверить команду',
+  'rp.run': 'Выполнить',
+  'rp.restartNow': 'Перезапустить сейчас',
+  'dx.kind.online': 'Сейчас в игре',
+  'dx.kind.top': 'Топ-{n} недели по часам',
+  'dx.kind.topOne': 'Игрок недели (больше всех часов за 7 дней)',
+  'dx.kind.hours': 'Наиграл {n} ч и больше',
+  'dx.allServers': 'все серверы',
+  'dx.deleteQ': 'Удалить?',
+  'dx.delete': 'Удалить',
+  'dx.roles.title': 'Автороли',
+  'dx.roles.desc': 'Бот сам выдаёт и снимает роли в Discord: «Сейчас в игре», «Игрок недели», «Ветеран 100 ч». Роли получают только игроки, которые связали Discord с игровым ником (команда /register).',
+  'dx.roles.add': 'Добавить роль',
+  'dx.roles.none': 'Бот не видит ролей, которые может выдавать. Дайте боту право «Управлять ролями» и поднимите его роль выше тех, что он будет выдавать.',
+  'dx.roles.empty': 'Пока нет ни одной автороли.',
+  'dx.roles.holders': 'сейчас у {n} игрока|{n} игроков|{n} игроков',
+  'dx.roles.del': 'Удалить автороль',
+  'dx.roles.delText': 'Бот перестанет выдавать эту роль. Уже выданные роли останутся у игроков.',
+  'dx.cnt.title': 'Счётчик онлайна в голосовом канале',
+  'dx.cnt.desc': 'Бот переименовывает голосовой канал в живой счётчик, например «🟢 Онлайн: 42». Discord разрешает менять название канала нечасто, поэтому счётчик обновляется раз в 5 минут.',
+  'dx.cnt.add': 'Добавить счётчик',
+  'dx.cnt.none': 'Бот не видит голосовых каналов, которые может переименовать. Дайте ему право «Управлять каналами» на нужном канале.',
+  'dx.cnt.channel': 'Канал «{name}»',
+  'dx.cnt.on': 'на «{guild}»',
+  'dx.cnt.template': 'шаблон',
+  'dx.cnt.del': 'Удалить счётчик',
+  'dx.cnt.delText': 'Бот перестанет обновлять название этого канала.',
+  'dx.roles.added': 'Автороль добавлена: бот начнёт выдавать её в течение минуты',
+  'dx.cnt.added': 'Счётчик добавлен: бот переименует канал в течение минуты',
+  'dx.f.newRole': 'Новая автороль',
+  'dx.f.newCnt': 'Новый счётчик',
+  'dx.f.guild': 'Сервер Discord',
+  'dx.f.role': 'Роль',
+  'dx.f.voice': 'Голосовой канал',
+  'dx.f.choose': 'Выберите…',
+  'dx.f.who': 'Кому выдавать',
+  'dx.f.rOnline': 'Тем, кто сейчас в игре (снимается при выходе)',
+  'dx.f.rTop': 'Самым активным за 7 дней',
+  'dx.f.rHours': 'Наигравшим N часов (за последние 90 дней)',
+  'dx.f.howManyH': 'Сколько часов',
+  'dx.f.howManyP': 'Сколько игроков из топа',
+  'dx.f.chName': 'Название канала',
+  'dx.f.vars': '{players} игроков, {max} мест, {online} серверов в сети, {servers} всего, {status} 🟢/🟡/🔴, {name} название сервера',
+  'dx.f.scope': 'Считать по серверу',
+  'dx.f.all': 'Все серверы',
+  'dx.f.add': 'Добавить',
+  'pb.copied': 'Скопировано',
+  'pb.rotateQ': 'Новый ключ для «{name}»?',
+  'pb.rotateText': 'Старый ключ перестанет работать: точку нужно будет перезапустить с новым.',
+  'pb.rotateBtn': 'Выдать новый',
+  'pb.deleteQ': 'Удалить «{name}»?',
+  'pb.deleteText': 'Её проверки пропадут со страниц серверов.',
+  'pb.delete': 'Удалить',
+  'pb.title': 'Точки проверки',
+  'pb.desc': 'Небольшая программа на другом компьютере или VPS (в другом городе, у другого провайдера) проверяет игровые серверы оттуда. Если панель сервер не видит, а точки видят, — дело в сети между ними, а не в сервере. Игроки увидят на странице сервера, откуда он доступен.',
+  'pb.add': 'Добавить точку',
+  'pb.empty': 'Точек пока нет: серверы проверяет только сама панель.',
+  'pb.alive': 'на связи',
+  'pb.dead': 'не на связи',
+  'pb.sees': 'видит {online} из {servers}',
+  'pb.never': 'ещё ни разу не выходила на связь',
+  'pb.newKey': 'Новый ключ',
+  'pb.probeTitle': 'Точка «{name}»',
+  'pb.run': 'Запустите на нужной машине одну из команд. Ключ показывается только сейчас: сохраните команду, если понадобится повторить.',
+  'pb.docker': 'Docker (проще всего)',
+  'pb.node': 'Или Node.js 18+',
+  'pb.appears': 'Точка появится «на связи» через минуту после запуска.',
+  'pb.done': 'Готово',
+  'pb.newTitle': 'Новая точка проверки',
+  'pb.f.name': 'Название (его увидят игроки)',
+  'pb.f.ph': 'Например: Франкфурт',
+  'pb.create': 'Создать',
+  'mf.chars': '{value} из {max} символов',
+  'mf.ph.text': 'текст',
+  'mf.ph.item': 'пункт',
+  'mf.ph.code': 'код',
+  'mf.ph.link': 'ссылка',
+  'mf.ph.linkText': 'текст ссылки',
+  'mf.formatting': 'Форматирование: {label}',
+  'mf.bold': 'Жирный (Ctrl+B)',
+  'mf.boldCh': 'Ж',
+  'mf.italic': 'Курсив (Ctrl+I)',
+  'mf.italicCh': 'К',
+  'mf.underline': 'Подчёркнутый (Ctrl+U)',
+  'mf.underlineCh': 'Ч',
+  'mf.strike': 'Зачёркнутый',
+  'mf.strikeCh': 'З',
+  'mf.spoiler': 'Спойлер',
+  'mf.inlineCode': 'Код в строке',
+  'mf.codeBlock': 'Блок кода',
+  'mf.ph.heading': 'Заголовок',
+  'mf.h1': 'Заголовок 1',
+  'mf.h2': 'Заголовок 2',
+  'mf.h3': 'Заголовок 3',
+  'mf.small': 'Мелкий текст',
+  'mf.quote': 'Цитата',
+  'mf.bullets': 'Маркированный список',
+  'mf.numbers': 'Нумерованный список',
+  'mf.link': 'Ссылка (Ctrl+K)',
+  'mf.emoji': 'Эмодзи',
+  'mf.variable': 'Вставить переменную',
+  'mf.emojiOne': 'Эмодзи {e}',
+  'mf.variables': 'Переменные',
+  'mf.emojiHints': 'Подсказки эмодзи',
+  'an.dowLong.0': 'в понедельник',
+  'an.dowLong.1': 'во вторник',
+  'an.dowLong.2': 'в среду',
+  'an.dowLong.3': 'в четверг',
+  'an.dowLong.4': 'в пятницу',
+  'an.dowLong.5': 'в субботу',
+  'an.dowLong.6': 'в воскресенье',
+  'an.period': 'Период',
+  'an.daysShort': '{n} дн',
+  'an.heatAria': 'Больше всего игроков {when} в {time}',
+  'an.fewData': 'Пока мало данных',
+  'an.noData': 'нет данных',
+  'an.cell': '{dow} {time}: в среднем {avg}, максимум {max}',
+  'an.less': 'меньше',
+  'an.more': 'больше',
+  'an.avgFor': 'средние за {n} день|средние за {n} дня|средние за {n} дней',
+  'an.peak': 'Пик',
+  'an.peakText': '{when} в {time}: в среднем {avg} игрок|{when} в {time}: в среднем {avg} игрока|{when} в {time}: в среднем {avg} игроков',
+  'an.quietest': 'Тише всего',
+  'an.when': '{when} в {time}',
+  'an.restart': 'Рестарт',
+  'an.restartText': 'лучше всего в {time}: в это время меньше всего игроков в любой день',
+  'an.dailyAria': 'Уникальных игроков в день: до {max}',
+  'an.barTitle': '{day}: {n} игроков, новых {news}',
+  'an.returned': 'вернулись',
+  'an.new': 'новые',
+  'an.barHover': '{day}: {n} игрок, новых {news}, {hours} ч в игре, пик {peak}|{day}: {n} игрока, новых {news}, {hours} ч в игре, пик {peak}|{day}: {n} игроков, новых {news}, {hours} ч в игре, пик {peak}',
+  'an.hoverBar': 'наведите на столбец',
+  'an.noNew': 'Новых игроков за шесть недель не было.',
+  'an.firstWeek': 'Неделя первого входа',
+  'an.players': 'Игроков',
+  'an.weekPlus': '+{n} нед',
+  'an.since': 'с {date}',
+  'an.sort.hours': 'По часам',
+  'an.sort.visits': 'По визитам',
+  'an.sort.recent': 'По давности',
+  'an.nobody': 'За этот период никто не играл.',
+  'an.order': 'Порядок',
+  'an.visitsN': '{n} визит|{n} визита|{n} визитов',
+  'an.playingNow': 'сейчас в игре',
+  'an.loading': 'Загрузка аналитики',
+  'an.playersFor': 'Игроки за {n} день|Игроки за {n} дня|Игроки за {n} дней',
+  'an.kpi.unique': 'Уникальных игроков',
+  'an.kpi.uniqueHint': 'сегодня {dau} · за неделю {wau} · за месяц {mau}',
+  'an.kpi.new': 'Новых',
+  'an.kpi.newHint': '{share}% от всех, вернулись {n}',
+  'an.kpi.visit': 'Обычный визит',
+  'an.kpi.avg': 'в среднем {v}',
+  'an.kpi.hours': 'Часов в игре',
+  'an.kpi.hoursHint': 'все игроки вместе',
+  'an.when.title': 'Когда играют',
+  'an.daily.title': 'Игроки по дням',
+  'an.sess.title': 'Сколько длится визит',
+  'an.coh.title': 'Возвращаются ли новички',
+  'an.coh.text': 'Доля игроков, впервые зашедших в эту неделю, которые вернулись через одну, две и больше недель.',
+  'an.top.title': 'Больше всех в игре',
+  'mt.defName': 'Технические работы',
+  'mt.st.active': 'Идёт сейчас',
+  'mt.st.planned': 'Запланировано',
+  'mt.st.repeat': 'Повторяется',
+  'mt.st.past': 'Завершено',
+  'mt.deleted': 'Окно «{name}» удалено',
+  'mt.title': 'Обслуживание',
+  'mt.subtitle': 'Окна технических работ: без ложных тревог',
+  'mt.hint': 'Пока идёт окно, сервер помечается как «Обслуживание», а оповещения о падении не отправляются.',
+  'mt.help': 'Укажите сервер (или все сразу) и время работ. Окно может повторяться каждый день или неделю. Во время окна на карточках сервера показывается «Тех. работы до …», а падение не считается сбоем и не попадает в оповещения.',
+  'mt.add': 'Добавить окно',
+  'mt.quick': 'Быстрые окна',
+  'mt.now30': 'Сейчас на 30 минут',
+  'mt.tonight': 'Сегодня ночью 04:00–05:00',
+  'mt.empty': 'Окон обслуживания нет',
+  'mt.emptyText': 'Создайте окно перед обновлением или перезагрузкой сервера, и панель не будет считать это сбоем.',
+  'mt.loading': 'Загрузка',
+  'mt.allServers': 'Все серверы',
+  'mt.serverNo': 'Сервер №{id}',
+  'mt.next': 'следующее {range}',
+  'mt.editAria': 'Изменить окно «{name}»',
+  'mt.edit': 'Изменить',
+  'mt.delAria': 'Удалить окно «{name}»',
+  'mt.added': 'Окно добавлено',
+  'mt.saved': 'Окно сохранено',
+  'mt.newTitle': 'Новое окно обслуживания',
+  'mt.editTitle': 'Изменить окно',
+  'mt.f.server': 'Сервер',
+  'mt.f.name': 'Название',
+  'mt.f.namePh': 'Например, обновление игры',
+  'mt.quickTime': 'Быстрое время',
+  'mt.f.start': 'Начало',
+  'mt.f.end': 'Окончание',
+  'mt.f.repeat': 'Повтор',
+  'mt.r.none': 'Один раз',
+  'mt.r.daily': 'Каждый день (до 24 часов)',
+  'mt.r.weekly': 'Каждую неделю',
+  'mt.tzNote': 'Время указывается по часам вашего браузера. Окно не длиннее 7 суток.',
+  'bk2.copy1': 'копия',
+  'bk2.copy2': 'копии',
+  'bk2.copy5': 'копий',
+  'bk2.total': 'всего {size}',
+  'bk2.last': 'последняя: {ago}',
+  'bk2.late': 'Расписание давно не срабатывало',
+  'bk2.count': 'Копий: {n}',
+  'bk2.auto': 'авто',
+  'bk2.manual': 'вручную',
+  'bk2.gb': 'ГБ',
+  'bk2.mb': 'МБ',
+  'bk2.kb': 'КБ',
+  'bk2.b': 'Б',
+  'bk2.fetchFail': 'Не удалось получить копию',
+  'bk2.encTitle': 'Архив зашифрован',
+  'bk2.passLabel': 'Парольная фраза',
+  'bk2.encText': 'Введите парольную фразу, с которой был создан архив «{what}».',
+  'bk2.continue': 'Продолжить',
+  'bk2.needPass': 'Введите парольную фразу',
+  'bk2.downloaded': 'Копия скачана',
+  'bk2.created': 'Копия создана',
+  'bk2.delQ': 'Удалить копию?',
+  'bk2.delText': 'Файл «{name}» будет удалён с сервера без возможности восстановления.',
+  'bk2.delete': 'Удалить',
+  'bk2.deleted': 'Копия удалена',
+  'bk2.accepted': 'Копия принята, панель перезапускается…',
+  'bk2.restoreQ': 'Восстановить из этой копии?',
+  'bk2.restoreText': 'Все текущие данные панели будут заменены копией «{name}» от {date}. Текущая база будет сохранена на сервере как coregsm.db.before-restore. Панель перезапустится.',
+  'bk2.restore': 'Восстановить',
+  'bk2.restoreFileQ': 'Восстановить из файла?',
+  'bk2.restoreFileText': 'Все данные панели будут заменены копией «{name}». Текущая база будет сохранена на сервере как coregsm.db.before-restore. Панель перезапустится.',
+  'bk2.restoreFail': 'Не удалось восстановить копию',
+  'bk2.httpsOnly': 'Адрес для отправки должен начинаться с https://',
+  'bk2.keepRange': 'Хранить можно от 1 до 30 копий',
+  'bk2.settingsSaved': 'Настройки копий сохранены',
+  'bk2.title': 'Резервные копии',
+  'bk2.desc': 'В копию входят база (серверы, привязки, пользователи, новости, настройки), картинки новостей и логотип. Внутри хранятся секреты: токен бота и хэши паролей. Храните файлы так же бережно, как пароль, лучше зашифрованными.',
+  'bk2.preparing': 'Готовлю…',
+  'bk2.dlFull': 'Скачать полную копию',
+  'bk2.creating': 'Создаю…',
+  'bk2.createOnServer': 'Создать копию на сервере',
+  'bk2.restoring': 'Восстанавливаю…',
+  'bk2.restoreFile': 'Восстановить из файла',
+  'bk2.schedTitle': 'Расписание и хранение',
+  'bk2.f.auto': 'Автоматические копии',
+  'bk2.s.off': 'Выключено',
+  'bk2.s.daily': 'Каждый день',
+  'bk2.s.weekly': 'Каждую неделю',
+  'bk2.f.keep': 'Сколько копий хранить (1-30)',
+  'bk2.f.remote': 'Отправлять копию по адресу (необязательно)',
+  'bk2.now': 'сейчас: {url}',
+  'bk2.remoteHint': 'Адрес должен начинаться с https://. Копия отправляется методом PUT, подходит для WebDAV/Nextcloud и подписанных ссылок S3.',
+  'bk2.remoteOff': 'Отключить отправку',
+  'bk2.lastSend': 'Последняя отправка: {at}',
+  'bk2.ok': 'успешно',
+  'bk2.error': 'ошибка',
+  'bk2.f.pass': 'Парольная фраза для шифрования (необязательно)',
+  'bk2.passOn': 'шифрование включено, введите новую фразу для замены',
+  'bk2.passOff': 'не задана: копии не шифруются',
+  'bk2.passWarn': 'Если потерять парольную фразу, зашифрованные архивы нельзя будет прочитать. Восстановить её невозможно.',
+  'bk2.encOff': 'Отключить шифрование новых копий',
+  'bk2.saving': 'Сохраняю…',
+  'bk2.onServer': 'Копии на сервере',
+  'bk2.empty': 'Копий пока нет',
+  'bk2.emptyText': 'Нажмите «Создать копию на сервере» или включите расписание.',
+  'bk2.tagAuto': 'АВТО',
+  'bk2.tagManual': 'ВРУЧНУЮ',
+  'bk2.tagEnc': 'ЗАШИФРОВАНА',
+  'bk2.actions': 'Действия: {name}',
+  'bk2.download': 'Скачать',
+  'bk2.restoreHere': 'Восстановить из этой копии',
 };
 
 export default ru;
@@ -135830,6 +136702,7 @@ export { ADMIN_SECTIONS };
 import HealthPage from './Health';
 import SystemPage from './System';
 import AdminIntegrations from './AdminIntegrations';
+import ArtPic from '../components/ArtPic';
 
 /** n = 0 draws a bare dot (a state, not a count) */
 interface NavBadge { n: number; tone: 'bad' | 'warn'; label: string }
@@ -136341,7 +137214,7 @@ function ServersManage({ sub }: { sub: string }) {
       )}
 
       {loaded && !error && servers.length === 0 && (
-        <Empty art={<ServersArt />} title={t('adm.srv.emptyTitle')} text={t('adm.srv.emptyText')}>
+        <Empty art={<ArtPic src="empty/empty-servers" size={132} />} title={t('adm.srv.emptyTitle')} text={t('adm.srv.emptyText')}>
           <button className="btn mt-3" onClick={() => setEditing({ data: emptyServer })}>{t('adm.srv.add')}</button>
         </Empty>
       )}
@@ -138214,7 +139087,7 @@ __COREGSM_EOF__
 import { useEffect, useState, type FormEvent } from 'react';
 import { api, getToken, type BackupInfo, type BackupItem } from '../api';
 import { confirmDialog, promptDialog } from '../confirm';
-import { t } from '../i18n';
+import { t, useI18n } from '../i18n';
 import { loadUnreadableSecrets, saveUnreadableSecrets, unreadableSecrets } from '../security';
 import { Button, ErrorLine, Field, IconDownload, LoadError, StateView, IconRestore, IconTrash, Section, Switch, fmtDateTime, ago, toast, errText } from '../ui';
 import { errorText } from '../apiErrors';
@@ -138222,6 +139095,7 @@ import { BackupS3 } from '../components/BackupS3';
 
 /** the copies on a time line: a bar per copy (the height is its size, the colour is auto / manual), and how old the last one is */
 function BackupTimeline({ items, schedule }: { items: BackupInfo['items']; schedule: BackupInfo['schedule'] }) {
+  useI18n();
   const list = [...items].sort((a, b) => a.createdAt - b.createdAt).slice(-30);
   const max = Math.max(1, ...list.map((b) => b.size));
   const total = items.reduce((n, b) => n + b.size, 0);
@@ -138232,12 +139106,12 @@ function BackupTimeline({ items, schedule }: { items: BackupInfo['items']; sched
   return (
     <div className="mb-3 space-y-2 rounded-ui-lg bg-soft p-3.5">
       <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 text-sm font-bold text-mute">
-        <span><b className="text-ink">{items.length}</b> {items.length === 1 ? 'копия' : items.length < 5 ? 'копии' : 'копий'}, всего {fmtSize(total)}</span>
-        <span className={late ? 'text-warn' : ''}>последняя: {ago(last.createdAt)}{late ? '. Расписание давно не срабатывало' : ''}</span>
+        <span><b className="text-ink">{items.length}</b> {items.length === 1 ? t('bk2.copy1') : items.length < 5 ? t('bk2.copy2') : t('bk2.copy5')}, {t('bk2.total', { size: fmtSize(total) })}</span>
+        <span className={late ? 'text-warn' : ''}>{t('bk2.last', { ago: ago(last.createdAt) })}{late ? `. ${t('bk2.late')}` : ''}</span>
       </div>
-      <div className="bk-line" role="img" aria-label={`Копий: ${items.length}`}>
+      <div className="bk-line" role="img" aria-label={t('bk2.count', { n: items.length })}>
         {list.map((b) => (
-          <span key={b.name} className={b.kind === 'auto' ? '' : 'is-manual'} style={{ height: `${Math.max(12, (b.size / max) * 100)}%` }} title={`${fmtDateTime(b.createdAt)} · ${fmtSize(b.size)} · ${b.kind === 'auto' ? 'авто' : 'вручную'}`} />
+          <span key={b.name} className={b.kind === 'auto' ? '' : 'is-manual'} style={{ height: `${Math.max(12, (b.size / max) * 100)}%` }} title={`${fmtDateTime(b.createdAt)} · ${fmtSize(b.size)} · ${b.kind === 'auto' ? t('bk2.auto') : t('bk2.manual')}`} />
         ))}
       </div>
       <div className="flex justify-between text-xs font-bold text-mute"><span>{fmtDateTime(list[0].createdAt)}</span><span>{fmtDateTime(last.createdAt)}</span></div>
@@ -138246,14 +139120,14 @@ function BackupTimeline({ items, schedule }: { items: BackupInfo['items']; sched
 }
 
 export const fmtSize = (n: number) =>
-  n >= 1073741824 ? `${(n / 1073741824).toFixed(1)} ГБ` : n >= 1048576 ? `${(n / 1048576).toFixed(1)} МБ` : n >= 1024 ? `${Math.round(n / 1024)} КБ` : `${n} Б`;
+  n >= 1073741824 ? `${(n / 1073741824).toFixed(1)} ${t('bk2.gb')}` : n >= 1048576 ? `${(n / 1048576).toFixed(1)} ${t('bk2.mb')}` : n >= 1024 ? `${Math.round(n / 1024)} ${t('bk2.kb')}` : `${n} ${t('bk2.b')}`;
 
 const isEncrypted = (name: string) => name.endsWith('.enc');
 
 /** save an authenticated GET as a file */
 export async function downloadFile(path: string, fallbackName: string) {
   const r = await fetch(`/api${path}`, { headers: { Authorization: `Bearer ${getToken() ?? ''}` } });
-  if (!r.ok) throw new Error(errorText(await r.json().catch(() => null), 'Не удалось получить копию'));
+  if (!r.ok) throw new Error(errorText(await r.json().catch(() => null), t('bk2.fetchFail')));
   const name = /filename="?([^"]+)"?/.exec(r.headers.get('content-disposition') ?? '')?.[1] ?? fallbackName;
   const url = URL.createObjectURL(await r.blob());
   const a = document.createElement('a');
@@ -138275,16 +139149,17 @@ async function waitAndReload() {
 
 const askPassphrase = (what: string) =>
   promptDialog({
-    title: 'Архив зашифрован',
-    label: 'Парольная фраза',
-    text: `Введите парольную фразу, с которой был создан архив «${what}».`,
+    title: t('bk2.encTitle'),
+    label: t('bk2.passLabel'),
+    text: t('bk2.encText', { what }),
     password: true,
-    confirmLabel: 'Продолжить',
-    validate: (v) => (v ? null : 'Введите парольную фразу'),
+    confirmLabel: t('bk2.continue'),
+    validate: (v) => (v ? null : t('bk2.needPass')),
   });
 
 /** Stored archives, schedule, off-site upload and restore. */
 export default function BackupsCard() {
+  useI18n();
   const [info, setInfo] = useState<BackupInfo | null>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
@@ -138314,28 +139189,28 @@ export default function BackupsCard() {
 
   const downloadFull = () => guard('full', async () => {
     await downloadFile('/backup', 'coregsm-backup.tar.gz');
-    toast('Копия скачана');
+    toast(t('bk2.downloaded'));
   });
   const createCopy = () => guard('run', async () => {
     await api<BackupItem>('/backups/run', 'POST');
-    toast('Копия создана');
+    toast(t('bk2.created'));
     await load();
   });
   const download = (b: BackupItem) => guard(`dl:${b.name}`, async () => {
     await downloadFile(`/backups/${encodeURIComponent(b.name)}`, b.name);
   });
   const remove = async (b: BackupItem) => {
-    if (!(await confirmDialog({ title: 'Удалить копию?', text: `Файл «${b.name}» будет удалён с сервера без возможности восстановления.`, confirmLabel: 'Удалить', danger: true }))) return;
+    if (!(await confirmDialog({ title: t('bk2.delQ'), text: t('bk2.delText', { name: b.name }), confirmLabel: t('bk2.delete'), danger: true }))) return;
     await guard(`rm:${b.name}`, async () => {
       await api(`/backups/${encodeURIComponent(b.name)}`, 'DELETE');
-      toast('Копия удалена');
+      toast(t('bk2.deleted'));
       await load();
     });
   };
   /** after a restore: with unreadable secrets the page stays (and warns), otherwise it waits for the restart and reloads */
   const afterRestore = async (raw: unknown) => {
     const un = unreadableSecrets(raw).map((x) => x.id);
-    toast('Копия принята, панель перезапускается…');
+    toast(t('bk2.accepted'));
     if (un.length) {
       saveUnreadableSecrets(un);
       setUnreadable(un);
@@ -138346,9 +139221,9 @@ export default function BackupsCard() {
   };
   const restoreStored = async (b: BackupItem) => {
     if (!(await confirmDialog({
-      title: 'Восстановить из этой копии?',
-      text: `Все текущие данные панели будут заменены копией «${b.name}» от ${fmtDateTime(b.createdAt)}. Текущая база будет сохранена на сервере как coregsm.db.before-restore. Панель перезапустится.`,
-      confirmLabel: 'Восстановить',
+      title: t('bk2.restoreQ'),
+      text: t('bk2.restoreText', { name: b.name, date: fmtDateTime(b.createdAt) }),
+      confirmLabel: t('bk2.restore'),
       danger: true,
     }))) return;
     let pass: string | undefined;
@@ -138369,9 +139244,9 @@ export default function BackupsCard() {
   };
   const restoreFile = async (file: File) => {
     if (!(await confirmDialog({
-      title: 'Восстановить из файла?',
-      text: `Все данные панели будут заменены копией «${file.name}». Текущая база будет сохранена на сервере как coregsm.db.before-restore. Панель перезапустится.`,
-      confirmLabel: 'Восстановить',
+      title: t('bk2.restoreFileQ'),
+      text: t('bk2.restoreFileText', { name: file.name }),
+      confirmLabel: t('bk2.restore'),
       danger: true,
     }))) return;
     const headers: Record<string, string> = { 'Content-Type': 'application/octet-stream', Authorization: `Bearer ${getToken() ?? ''}` };
@@ -138387,7 +139262,7 @@ export default function BackupsCard() {
     try {
       const r = await fetch('/api/backup/restore', { method: 'POST', headers, body: file });
       const j = (await r.json().catch(() => null)) as { error?: string; unreadableSecrets?: string[] } | null;
-      if (!r.ok) throw new Error(errorText(j, 'Не удалось восстановить копию'));
+      if (!r.ok) throw new Error(errorText(j, t('bk2.restoreFail')));
       await afterRestore(j?.unreadableSecrets);
     } catch (e) {
       setError(errText(e));
@@ -138399,8 +139274,8 @@ export default function BackupsCard() {
     e.preventDefault();
     setError('');
     const url = remoteUrl.trim();
-    if (url && !/^https:\/\//i.test(url)) { setError('Адрес для отправки должен начинаться с https://'); return; }
-    if (!Number.isInteger(keep) || keep < 1 || keep > 30) { setError('Хранить можно от 1 до 30 копий'); return; }
+    if (url && !/^https:\/\//i.test(url)) { setError(t('bk2.httpsOnly')); return; }
+    if (!Number.isInteger(keep) || keep < 1 || keep > 30) { setError(t('bk2.keepRange')); return; }
     const body: { schedule: string; keep: number; remoteUrl?: string; passphrase?: string } = { schedule, keep };
     if (clearRemote) body.remoteUrl = '';
     else if (url) body.remoteUrl = url;
@@ -138413,7 +139288,7 @@ export default function BackupsCard() {
       setClearRemote(false);
       setPassphrase('');
       setClearPass(false);
-      toast('Настройки копий сохранены');
+      toast(t('bk2.settingsSaved'));
       await load();
     } catch (err) {
       setError(errText(err));
@@ -138426,8 +139301,8 @@ export default function BackupsCard() {
 
   return (
     <Section
-      title="Резервные копии"
-      description="В копию входят база (серверы, привязки, пользователи, новости, настройки), картинки новостей и логотип. Внутри хранятся секреты: токен бота и хэши паролей. Храните файлы так же бережно, как пароль, лучше зашифрованными."
+      title={t('bk2.title')}
+      description={t('bk2.desc')}
     >
       {error && !info ? <LoadError error={error} onRetry={() => void load()} compact bare /> : <ErrorLine text={error} />}
 
@@ -138447,10 +139322,10 @@ export default function BackupsCard() {
       )}
 
       <div className="flex flex-wrap items-center gap-3">
-        <button className="btn" onClick={() => void downloadFull()} disabled={disabled}>{busy === 'full' ? 'Готовлю…' : 'Скачать полную копию'}</button>
-        <button className="btn btn-soft" onClick={() => void createCopy()} disabled={disabled}>{busy === 'run' ? 'Создаю…' : 'Создать копию на сервере'}</button>
+        <button className="btn" onClick={() => void downloadFull()} disabled={disabled}>{busy === 'full' ? t('bk2.preparing') : t('bk2.dlFull')}</button>
+        <button className="btn btn-soft" onClick={() => void createCopy()} disabled={disabled}>{busy === 'run' ? t('bk2.creating') : t('bk2.createOnServer')}</button>
         <label className={`btn btn-soft cursor-pointer ${disabled ? 'pointer-events-none opacity-50' : ''}`}>
-          {restoring ? 'Восстанавливаю…' : 'Восстановить из файла'}
+          {restoring ? t('bk2.restoring') : t('bk2.restoreFile')}
           <input
             type="file"
             accept=".db,.gz,.enc,.tar.gz,application/octet-stream"
@@ -138462,22 +139337,22 @@ export default function BackupsCard() {
       </div>
 
       <form onSubmit={saveSettings} className="space-y-4 rounded-ui-lg bg-soft p-4">
-        <h3 className="font-black">Расписание и хранение</h3>
+        <h3 className="font-black">{t('bk2.schedTitle')}</h3>
         <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Автоматические копии">
+          <Field label={t('bk2.f.auto')}>
             <select id="bk-schedule" className="input" value={schedule} onChange={(e) => setSchedule(e.target.value as BackupInfo['schedule'])}>
-              <option value="off">Выключено</option>
-              <option value="daily">Каждый день</option>
-              <option value="weekly">Каждую неделю</option>
+              <option value="off">{t('bk2.s.off')}</option>
+              <option value="daily">{t('bk2.s.daily')}</option>
+              <option value="weekly">{t('bk2.s.weekly')}</option>
             </select>
           </Field>
-          <Field label="Сколько копий хранить (1-30)">
+          <Field label={t('bk2.f.keep')}>
             <input id="bk-keep" className="input" type="number" min={1} max={30} value={keep} onChange={(e) => setKeep(Number(e.target.value))} />
           </Field>
         </div>
 
         <div>
-          <label htmlFor="bk-remote" className="label">Отправлять копию по адресу (необязательно)</label>
+          <label htmlFor="bk-remote" className="label">{t('bk2.f.remote')}</label>
           <input
             id="bk-remote"
             className="input font-mono"
@@ -138487,25 +139362,25 @@ export default function BackupsCard() {
             value={clearRemote ? '' : remoteUrl}
             disabled={clearRemote}
             onChange={(e) => setRemoteUrl(e.target.value)}
-            placeholder={info?.remoteUrl ? `сейчас: ${info.remoteUrl}` : 'https://…'}
+            placeholder={info?.remoteUrl ? t('bk2.now', { url: info.remoteUrl }) : 'https://…'}
             aria-describedby="bk-remote-hint"
           />
-          <p id="bk-remote-hint" className="mt-1.5 text-sm font-semibold text-mute">Адрес должен начинаться с https://. Копия отправляется методом PUT, подходит для WebDAV/Nextcloud и подписанных ссылок S3.</p>
+          <p id="bk-remote-hint" className="mt-1.5 text-sm font-semibold text-mute">{t('bk2.remoteHint')}</p>
           {info?.remoteUrl && (
             <label className="mt-2 flex items-center gap-3 text-sm font-bold text-mute">
               <Switch checked={clearRemote} onChange={setClearRemote} />
-              Отключить отправку
+              {t('bk2.remoteOff')}
             </label>
           )}
           {info?.lastRemote && (
             <p className={`mt-2 rounded-2xl px-4 py-2 text-sm font-bold ${info.lastRemote.ok ? 'bg-okbg text-ok' : 'bg-badbg text-bad'}`} role="status">
-              Последняя отправка: {fmtDateTime(info.lastRemote.at)}, {info.lastRemote.ok ? 'успешно' : `ошибка${info.lastRemote.error ? `: ${info.lastRemote.error}` : ''}`}
+              {t('bk2.lastSend', { at: fmtDateTime(info.lastRemote.at) })}, {info.lastRemote.ok ? t('bk2.ok') : `${t('bk2.error')}${info.lastRemote.error ? `: ${info.lastRemote.error}` : ''}`}
             </p>
           )}
         </div>
 
         <div>
-          <label htmlFor="bk-pass" className="label">Парольная фраза для шифрования (необязательно)</label>
+          <label htmlFor="bk-pass" className="label">{t('bk2.f.pass')}</label>
           <input
             id="bk-pass"
             className="input"
@@ -138514,30 +139389,30 @@ export default function BackupsCard() {
             value={clearPass ? '' : passphrase}
             disabled={clearPass}
             onChange={(e) => setPassphrase(e.target.value)}
-            placeholder={info?.encrypted ? 'шифрование включено, введите новую фразу для замены' : 'не задана: копии не шифруются'}
+            placeholder={info?.encrypted ? t('bk2.passOn') : t('bk2.passOff')}
             aria-describedby="bk-pass-hint"
           />
-          <p id="bk-pass-hint" className="mt-1.5 text-sm font-bold text-warn">Если потерять парольную фразу, зашифрованные архивы нельзя будет прочитать. Восстановить её невозможно.</p>
+          <p id="bk-pass-hint" className="mt-1.5 text-sm font-bold text-warn">{t('bk2.passWarn')}</p>
           {info?.encrypted && (
             <label className="mt-2 flex items-center gap-3 text-sm font-bold text-mute">
               <Switch checked={clearPass} onChange={setClearPass} />
-              Отключить шифрование новых копий
+              {t('bk2.encOff')}
             </label>
           )}
         </div>
 
-        <Button loading={saving}>{saving ? 'Сохраняю…' : 'Сохранить'}</Button>
+        <Button loading={saving}>{saving ? t('bk2.saving') : t('common.save')}</Button>
       </form>
 
       <BackupS3 info={info} reload={load} />
 
       <div>
-        <h3 className="mb-2 font-black">Копии на сервере</h3>
+        <h3 className="mb-2 font-black">{t('bk2.onServer')}</h3>
         {info && info.items.length > 0 && <BackupTimeline items={info.items} schedule={info.schedule} />}
         {!info ? (
           <div className="skeleton h-20 rounded-2xl" />
         ) : info.items.length === 0 ? (
-          <StateView kind="empty" compact bare title="Копий пока нет" text="Нажмите «Создать копию на сервере» или включите расписание." className="rounded-2xl bg-soft" />
+          <StateView kind="empty" compact bare title={t('bk2.empty')} text={t('bk2.emptyText')} className="rounded-2xl bg-soft" />
         ) : (
           <ul className="divide-y divide-line rounded-2xl border border-line">
             {info.items.map((b) => (
@@ -138546,12 +139421,12 @@ export default function BackupsCard() {
                   <div className="break-all font-mono text-sm font-bold">{b.name}</div>
                   <div className="text-sm font-semibold text-mute">{fmtDateTime(b.createdAt)} · {fmtSize(b.size)}</div>
                 </div>
-                <span className={`pill ${b.kind === 'auto' ? 'pill-mute' : 'pill-ok'}`}>{b.kind === 'auto' ? 'АВТО' : 'ВРУЧНУЮ'}</span>
-                {isEncrypted(b.name) && <span className="pill pill-warn">ЗАШИФРОВАНА</span>}
-                <div className="flex items-center gap-1.5" role="group" aria-label={`Действия: ${b.name}`}>
-                  <button type="button" className="row-act" title="Скачать" aria-label="Скачать" onClick={() => void download(b)} disabled={disabled}><IconDownload /></button>
-                  <button type="button" className="row-act" title="Восстановить из этой копии" aria-label="Восстановить из этой копии" onClick={() => void restoreStored(b)} disabled={disabled}><IconRestore /></button>
-                  <button type="button" className="row-act row-act-danger" title="Удалить" aria-label="Удалить" onClick={() => void remove(b)} disabled={disabled}><IconTrash /></button>
+                <span className={`pill ${b.kind === 'auto' ? 'pill-mute' : 'pill-ok'}`}>{b.kind === 'auto' ? t('bk2.tagAuto') : t('bk2.tagManual')}</span>
+                {isEncrypted(b.name) && <span className="pill pill-warn">{t('bk2.tagEnc')}</span>}
+                <div className="flex items-center gap-1.5" role="group" aria-label={t('bk2.actions', { name: b.name })}>
+                  <button type="button" className="row-act" title={t('bk2.download')} aria-label={t('bk2.download')} onClick={() => void download(b)} disabled={disabled}><IconDownload /></button>
+                  <button type="button" className="row-act" title={t('bk2.restoreHere')} aria-label={t('bk2.restoreHere')} onClick={() => void restoreStored(b)} disabled={disabled}><IconRestore /></button>
+                  <button type="button" className="row-act row-act-danger" title={t('bk2.delete')} aria-label={t('bk2.delete')} onClick={() => void remove(b)} disabled={disabled}><IconTrash /></button>
                 </div>
               </li>
             ))}
@@ -138733,22 +139608,12 @@ import '../styles/community.css';
 import '../styles/gallery.css';
 import PollsCard from '../components/PollsCard';
 import { communityNavIcon } from '../components/CommunityIcons';
+import ArtPic from '../components/ArtPic';
 import { Lightbox, type Shot } from './Gallery';
 
 const IconPeople = () => (
   <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
     <circle cx="9" cy="8" r="3.2" /><path d="M3 20c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5" /><circle cx="17" cy="9" r="2.4" /><path d="M16.5 14.6c2.6.2 4.5 2 4.5 4.9" />
-  </svg>
-);
-
-/** a small drawing for the empty blocks: a few people */
-const PeopleArt = () => (
-  <svg width="120" height="84" viewBox="0 0 120 84" fill="none" aria-hidden>
-    <circle cx="60" cy="26" r="13" fill="rgb(var(--brand) / .22)" stroke="rgb(var(--brand))" strokeWidth="2.5" />
-    <path d="M34 74c0-14 11.600-24 26-24s26 10 26 24" fill="rgb(var(--brand) / .12)" stroke="rgb(var(--brand))" strokeWidth="2.5" strokeLinecap="round" />
-    <circle cx="25" cy="36" r="8" stroke="rgb(var(--mute))" strokeWidth="2" opacity=".6" />
-    <circle cx="95" cy="36" r="8" stroke="rgb(var(--mute))" strokeWidth="2" opacity=".6" />
-    <path d="M10 70c0-8 6-13 15-13M110 70c0-8-6-13-15-13" stroke="rgb(var(--mute))" strokeWidth="2" strokeLinecap="round" opacity=".6" />
   </svg>
 );
 
@@ -138998,6 +139863,7 @@ function HotServer({ servers }: { servers: Community['servers'] }) {
   );
 }
 
+const PODIUM_ART = ['badges/champion-gold', 'badges/champion-silver', 'badges/b5-crown-bronze'] as const;
 const PERIODS = ['day', 'week', 'month', 'all'] as const;
 type Period = (typeof PERIODS)[number];
 
@@ -139051,7 +139917,7 @@ function TopBlock({ c, mine }: { c: Community; mine: string }) {
         <button type="submit" className="btn btn-soft" disabled={!q.trim()}>{t('cm.top.open')}</button>
       </form>
       {items.length === 0 ? (
-        <Empty art={<PeopleArt />} title={t('cm.top.quiet')} text={period === 'day' ? t('cm.top.quietDay') : t('cm.top.quietText')} />
+        <Empty art={<ArtPic src="empty/empty-players" size={132} />} title={t('cm.top.quiet')} text={period === 'day' ? t('cm.top.quietDay') : t('cm.top.quietText')} />
       ) : (
         <>
           {podium.length === 3 && (
@@ -139060,7 +139926,7 @@ function TopBlock({ c, mine }: { c: Community; mine: string }) {
                 const p = podium[i];
                 return (
                   <a key={p.name} href={playerHref(p.name)} className={`cm-pod is-${i + 1}`}>
-                    <span aria-hidden className="text-xl">{MEDALS[i]}</span>
+                    <ArtPic src={PODIUM_ART[i]} size={i === 0 ? 44 : 36} />
                     <PlayerAvatar name={p.name} size={i === 0 ? 52 : 42} online={p.online} />
                     <span className="max-w-full truncate font-extrabold">{p.name}</span>
                     <span className="text-sm font-extrabold tabular-nums text-mute">{t('cm.h', { n: num(p.hours) })}</span>
@@ -139100,7 +139966,7 @@ function FeedBlock({ c, filter, setFilter }: { c: Community; filter: FeedFilter;
           {([['all', t('cm.feed.all')], ['online', t('cm.feed.online')], ['new', t('cm.feed.new')]] as [FeedFilter, string][]).map(([id, label]) => <button key={id} type="button" className="seg-item" aria-pressed={filter === id} onClick={() => setFilter(id)}>{label}</button>)}
         </div>
       </div>
-      {c.feed.length === 0 ? <Empty art={<PeopleArt />} title={t('cm.feed.none')} text={t('cm.feed.noneText')} />
+      {c.feed.length === 0 ? <Empty art={<ArtPic src="empty/empty-players" size={132} />} title={t('cm.feed.none')} text={t('cm.feed.noneText')} />
         : list.length === 0 ? <p className="cm-sub">{filter === 'new' ? t('cm.feed.noNew') : t('cm.feed.noOnline')}</p>
         : groups.map(([label, items]) => (
           <div key={label} className="cm-feed-group">
@@ -139124,7 +139990,7 @@ function GalleryStrip() {
         <a href="/gallery" className="text-sm font-extrabold text-link hover:underline">{list?.length ? t('cm.gal.all') : t('cm.gal.upload')}</a>
       </div>
       {list === null ? <div className="skeleton h-48 rounded-2xl" />
-        : list.length === 0 ? <Empty art={<PeopleArt />} title={t('cm.gal.none')} text={t('cm.gal.noneText')}><a href="/gallery" className="btn">{t('cm.gal.uploadBtn')}</a></Empty>
+        : list.length === 0 ? <Empty art={<ArtPic src="empty/empty-gallery" size={132} />} title={t('cm.gal.none')} text={t('cm.gal.noneText')}><a href="/gallery" className="btn">{t('cm.gal.uploadBtn')}</a></Empty>
         : (
           <ul className={`cm-gal n${Math.min(list.length, 5)}`}>
             {list.slice(0, 5).map((s, i) => (
@@ -139174,7 +140040,7 @@ function ServersBlock({ servers }: { servers: Community['servers'] }) {
           {games.map((g) => <button key={g} type="button" className="cm-chip" aria-pressed={game === g} onClick={() => setGame(g)}><i style={{ background: gameColor(g) }} aria-hidden />{gameLabel(g)}</button>)}
         </div>
       )}
-      {list.length === 0 ? <Empty art={<PeopleArt />} title={t('cm.srv.none')} text={t('cm.srv.noneText')} /> : (
+      {list.length === 0 ? <Empty art={<ArtPic src="empty/empty-players" size={132} />} title={t('cm.srv.none')} text={t('cm.srv.noneText')} /> : (
         <ul className="grid grid-cols-[minmax(0,1fr)] gap-2.5">
           {list.map((s) => (
             <li key={s.id}>
@@ -140128,6 +140994,7 @@ import { errorText } from '../apiErrors';
 import { useAuth } from '../auth';
 import { IMAGE_TYPES, useDropTarget } from '../components/profile/AvatarEditor';
 import { Button, Empty, ErrorLine, Field, Modal, PageHead, ago, toast, errText } from '../ui';
+import ArtPic from '../components/ArtPic';
 import '../styles/gallery.css';
 
 export interface Shot {
@@ -140357,7 +141224,7 @@ export default function GalleryPage() {
       {list === null ? (
         <div className="gl-grid" aria-busy="true">{[0, 1, 2, 3, 4, 5].map((i) => <div key={i} className="skeleton h-48 rounded-2xl" />)}</div>
       ) : list.length === 0 ? (
-        <Empty title="Скриншотов пока нет" text="Поделитесь красивым кадром из игры: он появится здесь после проверки.">{me ? <button type="button" className="btn mt-2" onClick={() => setUploading(true)}>Загрузить первый скриншот</button> : <a href="/login" className="btn btn-soft mt-2">Войти и загрузить</a>}</Empty>
+        <Empty art={<ArtPic src="empty/empty-gallery" size={132} />} title="Скриншотов пока нет" text="Поделитесь красивым кадром из игры: он появится здесь после проверки.">{me ? <button type="button" className="btn mt-2" onClick={() => setUploading(true)}>Загрузить первый скриншот</button> : <a href="/login" className="btn btn-soft mt-2">Войти и загрузить</a>}</Empty>
       ) : (
         <ShotGrid list={list} onOpen={(i) => setOpen({ list, i })} />
       )}
@@ -140825,6 +141692,7 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/pages/Maintenance.tsx" << '__COREGSM_EOF__'
 import { useMemo, useState, type FormEvent } from 'react';
 import { api, type Server } from '../api';
+import { t, useI18n, type TKey } from '../i18n';
 import RestartPlans from '../components/RestartPlans';
 import StatusNotesCard from '../components/StatusNotesCard';
 import WipeScenarios from '../components/WipeScenarios';
@@ -140839,18 +141707,19 @@ interface Draft { id: number | null; serverId: string; name: string; start: stri
 
 const emptyDraft = (): Draft => {
   const p = presetNow(Date.now());
-  return { id: null, serverId: '', name: 'Технические работы', start: toLocalInput(p.startTs), end: toLocalInput(p.endTs), repeat: 'none' };
+  return { id: null, serverId: '', name: t('mt.defName'), start: toLocalInput(p.startTs), end: toLocalInput(p.endTs), repeat: 'none' };
 };
 
-const CHIP: Record<WindowState, { text: string; cls: string }> = {
-  active: { text: 'Идёт сейчас', cls: 'pill pill-warn' },
-  planned: { text: 'Запланировано', cls: 'pill pill-mute' },
-  repeat: { text: 'Повторяется', cls: 'pill pill-mute' },
-  past: { text: 'Завершено', cls: 'pill pill-mute' },
+const CHIP: Record<WindowState, { text: TKey; cls: string }> = {
+  active: { text: 'mt.st.active', cls: 'pill pill-warn' },
+  planned: { text: 'mt.st.planned', cls: 'pill pill-mute' },
+  repeat: { text: 'mt.st.repeat', cls: 'pill pill-mute' },
+  past: { text: 'mt.st.past', cls: 'pill pill-mute' },
 };
 
 /** «Обслуживание»: windows during which a server is shown as «Обслуживание» and does not raise alerts. */
 export default function MaintenancePage() {
+  useI18n();
   const [list, setList] = useState<MaintenanceWindow[] | null>(null);
   const [servers, setServers] = useState<Server[]>([]);
   const [error, setError] = useState('');
@@ -140885,7 +141754,7 @@ export default function MaintenancePage() {
   const remove = (w: MaintenanceWindow) => {
     setHidden((h) => [...h, w.id]);
     undoable({
-      text: `Окно «${w.name}» удалено`,
+      text: t('mt.deleted', { name: w.name }),
       restore: () => setHidden((h) => h.filter((x) => x !== w.id)),
       commit: () => api(`/maintenance/${w.id}`, 'DELETE')
         .catch((e: Error) => toast(e.message, 'err'))
@@ -140898,30 +141767,30 @@ export default function MaintenancePage() {
       head={(
         <PageHead
           icon={<IconWrench size={22} />}
-          title="Обслуживание"
-          subtitle="Окна технических работ: без ложных тревог"
-          hint="Пока идёт окно, сервер помечается как «Обслуживание», а оповещения о падении не отправляются."
-          help={<p>Укажите сервер (или все сразу) и время работ. Окно может повторяться каждый день или неделю. Во время окна на карточках сервера показывается «Тех. работы до …», а падение не считается сбоем и не попадает в оповещения.</p>}
+          title={t('mt.title')}
+          subtitle={t('mt.subtitle')}
+          hint={t('mt.hint')}
+          help={<p>{t('mt.help')}</p>}
         >
-          <button type="button" className="btn" onClick={() => open()}><IconPlus size={16} />Добавить окно</button>
+          <button type="button" className="btn" onClick={() => open()}><IconPlus size={16} />{t('mt.add')}</button>
         </PageHead>
       )}
     >
       {error && !list ? <LoadError error={error} onRetry={() => void load()} /> : <ErrorLine text={error} />}
 
-      <div className="flex flex-wrap gap-2" role="group" aria-label="Быстрые окна">
-        <button type="button" className="chip-filter" onClick={() => open(presetNow(Date.now()))}>Сейчас на 30 минут</button>
-        <button type="button" className="chip-filter" onClick={() => open(presetTonight(Date.now()))}>Сегодня ночью 04:00–05:00</button>
+      <div className="flex flex-wrap gap-2" role="group" aria-label={t('mt.quick')}>
+        <button type="button" className="chip-filter" onClick={() => open(presetNow(Date.now()))}>{t('mt.now30')}</button>
+        <button type="button" className="chip-filter" onClick={() => open(presetTonight(Date.now()))}>{t('mt.tonight')}</button>
       </div>
 
       {list && rows.length === 0 && (
         <StateView
-          title="Окон обслуживания нет"
-          text="Создайте окно перед обновлением или перезагрузкой сервера, и панель не будет считать это сбоем."
-          action={<button type="button" className="btn" onClick={() => open()}>Добавить окно</button>}
+          title={t('mt.empty')}
+          text={t('mt.emptyText')}
+          action={<button type="button" className="btn" onClick={() => open()}>{t('mt.add')}</button>}
         />
       )}
-      {!list && !error && <div className="skeleton panel h-40" aria-busy="true" aria-label="Загрузка" />}
+      {!list && !error && <div className="skeleton panel h-40" aria-busy="true" aria-label={t('mt.loading')} />}
 
       {rows.length > 0 && (
         <ul className="panel divide-y divide-line overflow-hidden">
@@ -140930,20 +141799,20 @@ export default function MaintenancePage() {
               <div className="min-w-0 flex-1 basis-60">
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                   <span className="min-w-0 wrap-break-word font-extrabold">{w.name}</span>
-                  <span className={CHIP[st].cls}>{CHIP[st].text}</span>
+                  <span className={CHIP[st].cls}>{t(CHIP[st].text)}</span>
                   {w.repeat !== 'none' && st !== 'repeat' && <span className="pill pill-mute">{REPEAT_LABEL[w.repeat]}</span>}
                 </div>
                 <div className="mt-0.5 wrap-break-word text-sm font-semibold text-mute">
-                  {w.serverId == null ? 'Все серверы' : w.serverName ?? `Сервер №${w.serverId}`}
+                  {w.serverId == null ? t('mt.allServers') : w.serverName ?? t('mt.serverNo', { id: w.serverId })}
                   {' · '}
                   {rangeLabel(w.startTs, w.endTs)}
                   {st === 'active' && w.until ? ` · ${untilLabel(w.until)}` : ''}
-                  {st !== 'active' && w.repeat !== 'none' && w.nextStart ? ` · следующее ${rangeLabel(w.nextStart, w.nextStart + (w.endTs - w.startTs))}` : ''}
+                  {st !== 'active' && w.repeat !== 'none' && w.nextStart ? ` · ${t('mt.next', { range: rangeLabel(w.nextStart, w.nextStart + (w.endTs - w.startTs)) })}` : ''}
                 </div>
               </div>
               <div className="flex items-center gap-2">
-                <button type="button" className="btn btn-soft btn-sm" onClick={() => edit(w)} aria-label={`Изменить окно «${w.name}»`}><IconEdit size={16} />Изменить</button>
-                <button type="button" className="row-act row-act-danger" onClick={() => remove(w)} aria-label={`Удалить окно «${w.name}»`}><IconTrash size={16} /></button>
+                <button type="button" className="btn btn-soft btn-sm" onClick={() => edit(w)} aria-label={t('mt.editAria', { name: w.name })}><IconEdit size={16} />{t('mt.edit')}</button>
+                <button type="button" className="row-act row-act-danger" onClick={() => remove(w)} aria-label={t('mt.delAria', { name: w.name })}><IconTrash size={16} /></button>
               </div>
             </li>
           ))}
@@ -140960,6 +141829,7 @@ export default function MaintenancePage() {
 }
 
 function WindowModal({ draft, servers, onClose, onSaved }: { draft: Draft; servers: Server[]; onClose: () => void; onSaved: () => void }) {
+  useI18n();
   const [f, setF] = useState<Draft>(draft);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -140977,7 +141847,7 @@ function WindowModal({ draft, servers, onClose, onSaved }: { draft: Draft; serve
     setError('');
     try {
       await (f.id == null ? api('/maintenance', 'POST', body) : api(`/maintenance/${f.id}`, 'PUT', body));
-      toast(f.id == null ? 'Окно добавлено' : 'Окно сохранено');
+      toast(f.id == null ? t('mt.added') : t('mt.saved'));
       onSaved();
     } catch (err) {
       setError(errText(err));
@@ -140986,38 +141856,38 @@ function WindowModal({ draft, servers, onClose, onSaved }: { draft: Draft; serve
   };
 
   return (
-    <Modal title={f.id == null ? 'Новое окно обслуживания' : 'Изменить окно'} onClose={onClose}>
+    <Modal title={f.id == null ? t('mt.newTitle') : t('mt.editTitle')} onClose={onClose}>
       <form className="space-y-4" onSubmit={(e) => void submit(e)} noValidate>
-        <Field label="Сервер">
+        <Field label={t('mt.f.server')}>
           <select className="input" value={f.serverId} onChange={(e) => set('serverId', e.target.value)}>
-            <option value="">Все серверы</option>
+            <option value="">{t('mt.allServers')}</option>
             {servers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
           </select>
         </Field>
-        <Field label="Название">
-          <input className="input" value={f.name} maxLength={80} onChange={(e) => set('name', e.target.value)} placeholder="Например, обновление игры" />
+        <Field label={t('mt.f.name')}>
+          <input className="input" value={f.name} maxLength={80} onChange={(e) => set('name', e.target.value)} placeholder={t('mt.f.namePh')} />
         </Field>
-        <div className="flex flex-wrap gap-2" role="group" aria-label="Быстрое время">
-          <button type="button" className="chip-filter" onClick={() => apply(presetNow(Date.now()))}>Сейчас на 30 минут</button>
-          <button type="button" className="chip-filter" onClick={() => apply(presetTonight(Date.now()))}>Сегодня ночью 04:00–05:00</button>
+        <div className="flex flex-wrap gap-2" role="group" aria-label={t('mt.quickTime')}>
+          <button type="button" className="chip-filter" onClick={() => apply(presetNow(Date.now()))}>{t('mt.now30')}</button>
+          <button type="button" className="chip-filter" onClick={() => apply(presetTonight(Date.now()))}>{t('mt.tonight')}</button>
         </div>
         <div className="grid gap-4 min-[460px]:grid-cols-2">
-          <Field label="Начало"><input className="input" type="datetime-local" value={f.start} onChange={(e) => set('start', e.target.value)} /></Field>
-          <Field label="Окончание"><input className="input" type="datetime-local" value={f.end} onChange={(e) => set('end', e.target.value)} /></Field>
+          <Field label={t('mt.f.start')}><input className="input" type="datetime-local" value={f.start} onChange={(e) => set('start', e.target.value)} /></Field>
+          <Field label={t('mt.f.end')}><input className="input" type="datetime-local" value={f.end} onChange={(e) => set('end', e.target.value)} /></Field>
         </div>
-        <Field label="Повтор">
+        <Field label={t('mt.f.repeat')}>
           <select className="input" value={f.repeat} onChange={(e) => set('repeat', e.target.value as MaintenanceRepeat)}>
-            <option value="none">Один раз</option>
-            <option value="daily">Каждый день (до 24 часов)</option>
-            <option value="weekly">Каждую неделю</option>
+            <option value="none">{t('mt.r.none')}</option>
+            <option value="daily">{t('mt.r.daily')}</option>
+            <option value="weekly">{t('mt.r.weekly')}</option>
           </select>
         </Field>
-        <p className="text-sm font-semibold text-mute">Время указывается по часам вашего браузера. Окно не длиннее 7 суток.</p>
+        <p className="text-sm font-semibold text-mute">{t('mt.tzNote')}</p>
         <FieldError id="maint-problem" text={f.name.trim() && f.start && f.end ? problem ?? undefined : undefined} />
         <ErrorLine text={error} />
         <div className="flex flex-wrap justify-end gap-2">
-          <button type="button" className="btn btn-ghost" onClick={onClose}>Отмена</button>
-          <button type="submit" className="btn" disabled={!!problem || busy}>{busy && <Spinner />}Сохранить</button>
+          <button type="button" className="btn btn-ghost" onClick={onClose}>{t('common.cancel')}</button>
+          <button type="submit" className="btn" disabled={!!problem || busy}>{busy && <Spinner />}{t('common.save')}</button>
         </div>
       </form>
     </Modal>
@@ -141040,6 +141910,7 @@ import { AdminPage, Empty, ErrorLine, GoLink, LoadError, IconCopyPlus, IconNews,
 import NewsEditor, { TEMPLATES } from './NewsEditor';
 import { newsImage } from '../components/news/newsLogic';
 import { NewsStatsModal } from '../components/news/NewsStats';
+import ArtPic from '../components/ArtPic';
 
 // the editor (administrators, inside the admin area); everybody else reads NewsFeed
 export default function NewsPage({ sub }: { sub: string }) {
@@ -141265,7 +142136,7 @@ function NewsList() {
       {view === 'calendar' && list.length > 0 && <NewsCalendar items={list} onMove={(n, day) => void reschedule(n, day)} />}
 
       {loaded && !error && list.length === 0 && (
-        <Empty art={<NewsArt />} title="Новостей пока нет" text="Напишите первую новость: выберите шаблон, отредактируйте текст и опубликуйте сразу или по расписанию.">
+        <Empty art={<ArtPic src="empty/empty-news" size={132} />} title="Новостей пока нет" text="Напишите первую новость: выберите шаблон, отредактируйте текст и опубликуйте сразу или по расписанию.">
           <a className="btn mt-3" href="/admin/news/new">+ Написать новость</a>
         </Empty>
       )}
@@ -142105,6 +142976,7 @@ import { FollowButton } from '../components/profile/Follows';
 import { ReportButton } from '../components/profile/ReportButton';
 import { rankById } from '../vrisingRanks';
 import { Empty, ErrorLine, GameAvatar, ago, fmtDateTime, fmtTime, plural, num } from '../ui';
+import ArtPic from '../components/ArtPic';
 import '../styles/community.css';
 import '../styles/profile.css';
 
@@ -142154,7 +143026,7 @@ export default function PlayerPage({ name }: { name: string }) {
       .catch((e: Error) => (e instanceof ApiError && e.status === 404 ? setMissing(true) : setError(e.message)));
   }, [name]);
 
-  if (missing) return <Empty title="Такого игрока не видели" text={`Ник «${name}» не появлялся на серверах за последние 90 дней.`}><a href="/community" className="btn mt-2">К сообществу</a></Empty>;
+  if (missing) return <Empty art={<ArtPic src="empty/empty-players" size={132} />} title="Такого игрока не видели" text={`Ник «${name}» не появлялся на серверах за последние 90 дней.`}><a href="/community" className="btn mt-2">К сообществу</a></Empty>;
   if (error) return <ErrorLine text={error} />;
   if (!p) return <div className="space-y-4" aria-busy="true"><div className="tile skeleton h-44" /><div className="tile skeleton h-60" /></div>;
 
@@ -145416,6 +146288,7 @@ import { api, type CertInfo } from '../api';
 import { Gauge, usageTone, type GaugeTone } from '../components/Gauge';
 import HealthHistoryCard, { type HealthFlag } from '../components/HealthHistoryCard';
 import ProbesSection from '../components/ProbesSection';
+import StorageCard from '../components/StorageCard';
 import { AdminPage, ErrorLine, GoLink, LoadError, IconDatabase, IconDisk, IconMemory, IconSystem, Notice, PageHead, Section, Strip, ago, fmtDateTime, fmtTime, plural, usePoll } from '../ui';
 
 interface Health {
@@ -145605,6 +146478,8 @@ export default function SystemPage() {
           </>
         )}
       </Section>
+
+      <StorageCard />
 
       <ProbesSection />
 
