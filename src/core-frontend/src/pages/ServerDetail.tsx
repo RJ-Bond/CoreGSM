@@ -53,7 +53,7 @@ const OVERVIEW_SECTIONS: SectionDef[] = [
   { id: 'ov-stats', label: 'd2.sd.sec.stats' },
   { id: 'ov-chart', label: 'd2.srv.v.chart' },
   { id: 'ov-events', label: 'd2.sd.sec.events', secondary: true },
-  { id: 'ov-players', label: 'd2.an.players' },
+  { id: 'ov-players', label: 'd2.pl.players' },
   { id: 'ov-probes', label: 'd2.sd.sec.avail', secondary: true },
   { id: 'ov-reviews', label: 'd2.sd.sec.reviews', secondary: true },
 ];
@@ -424,7 +424,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
       <div className="srv-chart-bar">
         {withSeries && (
           <div className="seg" role="group" aria-label={t('srv.chart.series')}>
-            {([['players', 'd2.an.players'], ['ping', 'd2.sd.ping']] as [Series, TKey][]).map(([k, label]) => (
+            {([['players', 'd2.pl.players'], ['ping', 'd2.sd.ping']] as [Series, TKey][]).map(([k, label]) => (
               <button key={k} type="button" className="seg-item" aria-pressed={series === k} onClick={() => setSeries(k)}>{t(label)}</button>
             ))}
           </div>

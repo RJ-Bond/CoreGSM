@@ -37,9 +37,8 @@ function bareLines(src: string): number {
 
 // file (relative to src) -> allowed count of lines with bare Cyrillic. Can only shrink.
 const DEBT: Record<string, number> = {
-  'components/CommandPalette.tsx': 1,
   'components/Illustrations.tsx': 6,
-  'components/server/HistoryChart.tsx': 10,
+  'components/server/HistoryChart.tsx': 1,
   'components/server/PlayersList.tsx': 18,
   'pages/Cards.tsx': 9,
   'pages/UiKit.tsx': 138,

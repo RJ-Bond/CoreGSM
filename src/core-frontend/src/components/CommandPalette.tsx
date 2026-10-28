@@ -56,7 +56,7 @@ const sectionItem = (key: string, label: string, hint: string, href: string, ico
  * the arrow keys (aria-activedescendant), Enter opens, Escape closes. Focus returns to whatever opened it.
  */
 export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose: () => void; isStaff: boolean; isAdmin: boolean }) {
-  useI18n();
+  const { lang } = useI18n();
   const { me, logout } = useAuth();
   const perms = me?.perms ?? (isAdmin ? ['news', 'moderation', 'servers', 'maintenance', 'journal'] : []);
   const box = useRef<HTMLDivElement>(null);
@@ -142,9 +142,9 @@ export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose:
       act('act-season', 'Начать новый сезон', 'Сообщество · Сезоны', 'сезон вайп wipe рейтинг', <IconTrophy />, () => navigate('/admin/community/seasons'));
     }
     const theme = currentTheme();
-    for (const [t, label, icon] of [['dark', 'Тёмная тема', <IconMoon key="m" />], ['light', 'Светлая тема', <IconSun key="s" />], ['auto', 'Тема как в системе', <IconSun key="a" />]] as const) {
-      if (t === theme) continue;
-      out.push({ key: `theme-${t}`, group: 'Действия', label, hint: 'Оформление панели', href: '', run: () => setThemeChoice(t), icon, hay: norm(`${label} тема оформление цвет ночь день dark light`) });
+    for (const [mode, label, icon] of [['dark', t('d2.cp.theme.dark'), <IconMoon key="m" />], ['light', t('d2.cp.theme.light'), <IconSun key="s" />], ['auto', t('d2.cp.theme.auto'), <IconSun key="a" />]] as const) {
+      if (mode === theme) continue;
+      out.push({ key: `theme-${mode}`, group: 'Действия', label, hint: 'Оформление панели', href: '', run: () => setThemeChoice(mode), icon, hay: norm(`${label} тема оформление цвет ночь день dark light`) });
     }
     if (adminThemeIsOwn() && /^\/admin(\/|$)/.test(currentPath())) out.push({ key: 'theme-site', group: 'Действия', label: 'Тема админки как на сайте', hint: 'Оформление панели', href: '', run: () => resetAdminTheme(), icon: <IconSun key="x" />, hay: norm('тема админки как на сайте сбросить оформление') });
     if (me) act('act-logout', 'Выйти', me.username, 'выход logout', <IconUser />, () => logout());
@@ -160,7 +160,7 @@ export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose:
       hay: norm('сменить плотность компактная обычная вид отступы density'),
     });
     return out;
-  }, [servers, isStaff, isAdmin, me, density, perms, logout]);
+  }, [servers, isStaff, isAdmin, me, density, perms, logout, lang]);
 
   const results = useMemo(() => {
     const words = norm(q).split(/\s+/).filter(Boolean);

@@ -131,7 +131,7 @@ export default function CompareChart({ servers }: { servers: Server[] }) {
         <h2 className="text-lg font-extrabold">{t('d2.cc.title')}</h2>
         <div className="flex flex-wrap gap-2">
           <div className="seg" role="group" aria-label={t('d2.cc.what')}>
-            <button type="button" className="seg-item" aria-pressed={!pct} onClick={() => setPct(false)}>{t('d2.an.players')}</button>
+            <button type="button" className="seg-item" aria-pressed={!pct} onClick={() => setPct(false)}>{t('d2.pl.players')}</button>
             <button type="button" className="seg-item" aria-pressed={pct} onClick={() => setPct(true)}>{t('d2.cc.slots')}</button>
           </div>
           <div className="seg" role="group" aria-label={t('st.range')}>

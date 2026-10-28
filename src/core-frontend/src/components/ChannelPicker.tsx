@@ -92,7 +92,7 @@ export function ChannelPicker({ value, onChange, id = 'channel' }: { value: stri
         <MissingNote guild={guild} channelId={value} />
         <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm font-extrabold">
           <button type="button" className="btn-link" onClick={() => setManual(true)}>{t('d2.chp.manual')}</button>
-          <button type="button" className="btn-link" onClick={refresh} disabled={busy}>{busy ? t('d2.srv.refreshing') : t('d2.chp.refresh')}</button>
+          <button type="button" className="btn-link" onClick={refresh} disabled={busy}>{busy ? t('d2.chp.refreshing') : t('d2.chp.refresh')}</button>
         </div>
       </div>
     );
@@ -106,7 +106,7 @@ export function ChannelPicker({ value, onChange, id = 'channel' }: { value: stri
       </p>
       <div className="flex gap-4 text-sm font-extrabold">
         {hasList && <button type="button" className="btn-link" onClick={() => setManual(false)}>{t('d2.chp.fromList')}</button>}
-        <button type="button" className="btn-link" onClick={refresh} disabled={busy}>{busy ? t('d2.srv.refreshing') : t('d2.chp.refresh')}</button>
+        <button type="button" className="btn-link" onClick={refresh} disabled={busy}>{busy ? t('d2.chp.refreshing') : t('d2.chp.refresh')}</button>
       </div>
     </div>
   );
