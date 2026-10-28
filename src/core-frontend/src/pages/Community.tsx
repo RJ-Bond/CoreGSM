@@ -305,6 +305,7 @@ function TopBlock({ c, mine }: { c: Community; mine: string }) {
   const rest = podium.length ? shown.slice(3) : shown;
   const names = useMemo(() => [...new Set([...Object.values(c.top).flat().map((p) => p.name), ...c.feed.map((f) => f.name)])], [c]);
   const go = (e: { preventDefault: () => void }) => { e.preventDefault(); const n = q.trim(); if (n) navigate(playerHref(n)); };
+  const srvName = (id?: number) => c.servers.find((x) => x.id === id)?.name;
   const row = (p: TopPlayer, i: number) => (
     <li key={p.name} className={mine && p.name.toLowerCase() === mine.toLowerCase() ? 'is-me' : ''}>
       <span className={`an-top-n ${i < 3 ? `is-${i + 1}` : ''}`}>{i + 1}</span>
@@ -315,7 +316,7 @@ function TopBlock({ c, mine }: { c: Community; mine: string }) {
       </span>
       <span className="shrink-0 text-right">
         <span className="block font-extrabold tabular-nums">{t('cm.h', { n: num(p.hours) })}</span>
-        <span className="block text-xs font-bold text-mute">{p.servers} {t('cm.word.servers', { n: p.servers })}</span>
+        <span className="block max-w-[11rem] truncate text-xs font-bold text-mute">{p.servers === 1 && srvName(p.serverId) ? srvName(p.serverId) : `${p.servers} ${t('cm.word.servers', { n: p.servers })}`}</span>
       </span>
     </li>
   );

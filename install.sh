@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="5c843f1ca9bd"
+COREGSM_BUILD="1980acec1a7f"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.0.0.71"
+COREGSM_VERSION="1.0.0.72"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -18693,13 +18693,13 @@ const serverNames = () =>
   new Map((db.prepare(`SELECT s.id, ${EFFECTIVE_NAME} AS name, s.game FROM servers s LEFT JOIN status st ON st.server_id = s.id`).all() as ServerName[]).map((s) => [s.id, s]));
 
 /** the players with the most hours since `since` (any case of a nick counts as one player) */
-export function topPlayers(since: number, now = Date.now(), limit = 10, serverId?: number): { name: string; hours: number; servers: number }[] {
+export function topPlayers(since: number, now = Date.now(), limit = 10, serverId?: number): { name: string; hours: number; servers: number; serverId: number }[] {
   return (db
     .prepare(
-      `SELECT MIN(name) AS name, ulower(name) AS k, SUM(MIN(COALESCE(left_at, ?), ?) - MAX(joined_at, ?)) / 3600000.0 AS h, COUNT(DISTINCT server_id) AS servers
+      `SELECT MIN(name) AS name, ulower(name) AS k, SUM(MIN(COALESCE(left_at, ?), ?) - MAX(joined_at, ?)) / 3600000.0 AS h, COUNT(DISTINCT server_id) AS servers, MIN(server_id) AS sid
        FROM player_sessions WHERE COALESCE(left_at, ?) > ? AND joined_at < ? ${serverId ? 'AND server_id = ?' : ''} GROUP BY k ORDER BY h DESC LIMIT ?`,
     )
-    .all(now, now, since, now, since, now, ...(serverId ? [serverId] : []), limit) as { name: string; h: number; servers: number }[]).map((r) => ({ name: r.name, hours: Math.round(r.h * 10) / 10, servers: r.servers }));
+    .all(now, now, since, now, since, now, ...(serverId ? [serverId] : []), limit) as { name: string; h: number; servers: number; sid: number }[]).map((r) => ({ name: r.name, hours: Math.round(r.h * 10) / 10, servers: r.servers, serverId: r.sid }));
 }
 
 function community(now = Date.now()) {
@@ -115022,7 +115022,7 @@ import { api } from '../../api';
 import { AnimatedNumber, Burst, GameAvatar, ago, fmtDateTime, usePoll, num } from '../../ui';
 import '../../styles/community.css';
 
-export interface TopPlayer { name: string; hours: number; servers: number; online: boolean; prev: number | null }
+export interface TopPlayer { name: string; hours: number; servers: number; serverId?: number; online: boolean; prev: number | null }
 
 export interface Community {
   now: { players: number; online: number; servers: number };
@@ -127743,6 +127743,7 @@ function TopBlock({ c, mine }: { c: Community; mine: string }) {
   const rest = podium.length ? shown.slice(3) : shown;
   const names = useMemo(() => [...new Set([...Object.values(c.top).flat().map((p) => p.name), ...c.feed.map((f) => f.name)])], [c]);
   const go = (e: { preventDefault: () => void }) => { e.preventDefault(); const n = q.trim(); if (n) navigate(playerHref(n)); };
+  const srvName = (id?: number) => c.servers.find((x) => x.id === id)?.name;
   const row = (p: TopPlayer, i: number) => (
     <li key={p.name} className={mine && p.name.toLowerCase() === mine.toLowerCase() ? 'is-me' : ''}>
       <span className={`an-top-n ${i < 3 ? `is-${i + 1}` : ''}`}>{i + 1}</span>
@@ -127753,7 +127754,7 @@ function TopBlock({ c, mine }: { c: Community; mine: string }) {
       </span>
       <span className="shrink-0 text-right">
         <span className="block font-extrabold tabular-nums">{t('cm.h', { n: num(p.hours) })}</span>
-        <span className="block text-xs font-bold text-mute">{p.servers} {t('cm.word.servers', { n: p.servers })}</span>
+        <span className="block max-w-[11rem] truncate text-xs font-bold text-mute">{p.servers === 1 && srvName(p.serverId) ? srvName(p.serverId) : `${p.servers} ${t('cm.word.servers', { n: p.servers })}`}</span>
       </span>
     </li>
   );
@@ -138553,7 +138554,7 @@ html[data-motion='reduce'] :is(.tab-slide-r, .tab-slide-l) { animation: none; }
 @media (max-width: 639px) { .srv-page { padding-bottom: 5.5rem; } }
 
 /* players: a rank colours the left edge of the row; session spread; empty state */
-.pl-row.has-rank, .has-rank { box-shadow: inset 3px 0 0 var(--rk); border-top-left-radius: 4px; border-bottom-left-radius: 4px; padding-left: 10px; }
+/* the rank is shown by its badge; the coloured stripe at the edge of the row is gone */
 .pl-spread { margin-bottom: 14px; padding: 10px 12px 8px; border-radius: var(--r-lg); background: rgb(var(--soft)); }
 .pl-spread-k { font-size: var(--fs-sm); font-weight: 700; color: rgb(var(--mute)); }
 .pl-spread-bars { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 6px; margin-top: 6px; }
@@ -140223,7 +140224,7 @@ html[data-motion='reduce'] .srv-new-chev, html[data-motion='reduce'] .srv-check,
 .srv-tbl { overflow: hidden; padding: 0; }
 .srv-tr {
   display: grid; align-items: center; gap: 4px 14px; padding: 0 16px; min-height: 48px; border-bottom: 1px solid rgb(var(--line) / .7);
-  grid-template-columns: minmax(20px, auto) minmax(0, 2fr) minmax(9.5rem, 1.1fr) minmax(8.5rem, .9fr) 4.2rem 4.4rem 2.75rem;
+  grid-template-columns: minmax(20px, auto) minmax(0, 3fr) minmax(8.5rem, 1.1fr) minmax(7.5rem, .8fr) 4rem 4.2rem 2.75rem;
   cursor: pointer; transition: background-color .15s ease; font-variant-numeric: tabular-nums;
 }
 .srv-tr:last-child { border-bottom: 0; }
@@ -140239,8 +140240,9 @@ html[data-motion='reduce'] .srv-new-chev, html[data-motion='reduce'] .srv-check,
 .srv-dot.warn, .srv-dot.maint { background: rgb(var(--warn)); box-shadow: 0 0 0 4px rgb(var(--warn) / .16); }
 .srv-dot.bad { background: rgb(var(--bad)); box-shadow: 0 0 0 4px rgb(var(--bad) / .16); }
 .srv-td-name { display: flex; align-items: center; gap: 10px; min-width: 0; padding-block: 7px; }
-.srv-td-name > div { display: flex; align-items: baseline; flex-wrap: wrap; gap: 0 10px; min-width: 0; }
-.srv-tr-title { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 700; font-size: var(--fs-md); }
+.srv-td-name > div { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; min-width: 0; }
+.srv-td-name > :first-child { flex: none; }
+.srv-tr-title { max-width: 100%; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow-wrap: anywhere; line-height: 1.25; font-weight: 700; font-size: var(--fs-md); }
 .srv-tr-title:hover { color: rgb(var(--link)); }
 .srv-tr-sub { font-size: var(--fs-sm); font-weight: 600; color: rgb(var(--mute)); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
 .srv-td-addr { min-width: 0; }
@@ -140253,7 +140255,7 @@ html[data-motion='reduce'] .srv-new-chev, html[data-motion='reduce'] .srv-check,
 .srv-td-ping small { color: rgb(var(--mute)); font-weight: 600; }
 .srv-td-fav { display: flex; justify-content: flex-end; }
 .srv-tr.off .srv-td-name { opacity: .85; }
-.srv-tbl.selecting .srv-tr { grid-template-columns: minmax(64px, auto) minmax(0, 2fr) minmax(9.5rem, 1.1fr) minmax(8.5rem, .9fr) 4.2rem 4.4rem 2.75rem; }
+.srv-tbl.selecting .srv-tr { grid-template-columns: minmax(64px, auto) minmax(0, 3fr) minmax(8.5rem, 1.1fr) minmax(7.5rem, .8fr) 4rem 4.2rem 2.75rem; }
 /* narrower than a desktop: the address column goes under the name, the figures in one row below */
 @media (max-width: 1099px) {
   .srv-tr { grid-template-columns: minmax(20px, auto) minmax(0, 2fr) minmax(7.5rem, 1fr) 3.8rem 4rem 2.75rem; }

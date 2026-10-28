@@ -32,13 +32,13 @@ const serverNames = () =>
   new Map((db.prepare(`SELECT s.id, ${EFFECTIVE_NAME} AS name, s.game FROM servers s LEFT JOIN status st ON st.server_id = s.id`).all() as ServerName[]).map((s) => [s.id, s]));
 
 /** the players with the most hours since `since` (any case of a nick counts as one player) */
-export function topPlayers(since: number, now = Date.now(), limit = 10, serverId?: number): { name: string; hours: number; servers: number }[] {
+export function topPlayers(since: number, now = Date.now(), limit = 10, serverId?: number): { name: string; hours: number; servers: number; serverId: number }[] {
   return (db
     .prepare(
-      `SELECT MIN(name) AS name, ulower(name) AS k, SUM(MIN(COALESCE(left_at, ?), ?) - MAX(joined_at, ?)) / 3600000.0 AS h, COUNT(DISTINCT server_id) AS servers
+      `SELECT MIN(name) AS name, ulower(name) AS k, SUM(MIN(COALESCE(left_at, ?), ?) - MAX(joined_at, ?)) / 3600000.0 AS h, COUNT(DISTINCT server_id) AS servers, MIN(server_id) AS sid
        FROM player_sessions WHERE COALESCE(left_at, ?) > ? AND joined_at < ? ${serverId ? 'AND server_id = ?' : ''} GROUP BY k ORDER BY h DESC LIMIT ?`,
     )
-    .all(now, now, since, now, since, now, ...(serverId ? [serverId] : []), limit) as { name: string; h: number; servers: number }[]).map((r) => ({ name: r.name, hours: Math.round(r.h * 10) / 10, servers: r.servers }));
+    .all(now, now, since, now, since, now, ...(serverId ? [serverId] : []), limit) as { name: string; h: number; servers: number; sid: number }[]).map((r) => ({ name: r.name, hours: Math.round(r.h * 10) / 10, servers: r.servers, serverId: r.sid }));
 }
 
 function community(now = Date.now()) {
