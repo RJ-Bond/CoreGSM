@@ -1,10 +1,12 @@
 import { useRef, useState, useEffect } from 'react';
 import { api, type Server } from '../api';
+import { t, useI18n } from '../i18n';
 import { CardsArt } from '../components/Illustrations';
 import { promptDialog } from '../confirm';
 import { AdminPage, Burst, Empty, ErrorLine, IconCards, LoadError, IconCheck, IconCopy, IconRefresh, PageHead, toast, usePoll } from '../ui';
 
 export default function CardsPage() {
+  useI18n();
   const [servers, setServers] = useState<Server[]>([]);
   const [loaded, setLoaded] = useState(false);
   // bumped by the "Обновить" button only; otherwise a picture is reloaded when the server's own data changed (updatedAt)
@@ -21,16 +23,17 @@ export default function CardsPage() {
       .finally(() => setLoaded(true));
   usePoll(load, 15_000);
 
-  const copy = async (s: Server) => {
-    const url = `${window.location.origin}/api/card/${s.id}.png`;
+  const copy = async (s: Server, html = false) => {
+    const link = `${window.location.origin}/api/card/${s.id}.png`;
+    const url = html ? `<img src="${link}" alt="${s.name.replace(/"/g, "&quot;")}" width="600">` : link;
     try {
       await navigator.clipboard.writeText(url);
       setCopied(s.id);
-      toast('Ссылка скопирована');
+      toast(html ? t('cards.codeCopied') : t('cards.linkCopied'));
       window.clearTimeout(copyTimer.current);
       copyTimer.current = window.setTimeout(() => setCopied(null), 1800);
     } catch {
-      await promptDialog({ title: 'Ссылка на картинку', label: 'Скопируйте ссылку', value: url, readOnly: true });
+      await promptDialog({ title: html ? t('cards.code') : t('cards.imgLink'), label: html ? t('cards.copyCode') : t('cards.copyLink'), value: url, readOnly: true });
     }
   };
 
@@ -66,7 +69,7 @@ export default function CardsPage() {
           <a className="btn mt-3" href="/admin/servers/new">Добавить сервер</a>
         </Empty>
       )}
-      <div className="fade-in grid gap-5 xl:grid-cols-2 2xl:grid-cols-3">
+      <div className="fade-in grid gap-5 lg:grid-cols-2">
         {servers.map((s) => (
           <div key={s.id} className="panel space-y-3 p-5">
             <img src={`/api/card/${s.id}.png?v=${s.updatedAt ?? 0}&r=${forced}`} alt={`Карточка ${s.name}`} loading="lazy" className="w-full rounded-ui-lg bg-soft" />
@@ -81,7 +84,9 @@ export default function CardsPage() {
                   </span>
                   {copied === s.id ? 'Скопировано' : 'Копировать ссылку'}
                 </button>
+                <button className="btn btn-soft btn-sm" onClick={() => void copy(s, true)} title={t('cards.codeTip')}>{t('cards.code')}</button>
                 <a className="btn btn-soft btn-sm" href={`/api/card/${s.id}.png`} target="_blank" rel="noreferrer">Открыть</a>
+                <a className="btn btn-soft btn-sm" href={`/api/card/${s.id}.png`} download={`card-${s.id}.png`}>{t('cards.download')}</a>
               </div>
             </div>
           </div>
