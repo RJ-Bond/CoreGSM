@@ -3,7 +3,7 @@ import { getPrefs, t, useI18n } from '../i18n';
 import { Icon } from '../icons';
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react';
 import { api, type StatusDay, type StatusIncident, type StatusInfo, type StatusNote, type StatusServer } from '../api';
-import { Empty, ErrorLine, GameAvatar, LoadError, PageHead, SmoothArea, StatusPill, ago, fmtDateTime, fmtTime, usePoll } from '../ui';
+import { CopyButton, Empty, ErrorLine, GameAvatar, LoadError, PageHead, SmoothArea, StatusPill, ago, fmtDateTime, fmtTime, usePoll } from '../ui';
 import '../styles/status.css';
 
 const loc = () => (getPrefs().lang === 'en' ? 'en-US' : 'ru-RU');
@@ -364,6 +364,35 @@ function Incidents({ list, days }: { list: StatusIncident[]; days: number }) {
 
 const LEGEND = ['ok', 'blip', 'warn', 'bad', 'planned', 'none'] as const;
 
+const FEED_PATH = '/api/status/feed.xml';
+
+/** how to follow the state without an account: the Atom feed, with the address to copy */
+function FollowCard() {
+  useI18n();
+  const url = `${window.location.origin}${FEED_PATH}`;
+  // a feed reader finds the feed from the page address itself
+  useEffect(() => {
+    const link = document.createElement('link');
+    link.rel = 'alternate';
+    link.type = 'application/atom+xml';
+    link.href = FEED_PATH;
+    link.title = t('st.feed.t');
+    document.head.appendChild(link);
+    return () => { link.remove(); };
+  }, []);
+  return (
+    <section className="panel p-5" aria-labelledby="st-follow">
+      <h2 id="st-follow" className="text-lg font-extrabold">{t('st.feed.t')}</h2>
+      <p className="mt-1 text-sm font-semibold text-mute">{t('st.feed.x')}</p>
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <code className="min-w-0 max-w-full flex-1 truncate rounded-ui-md bg-soft px-3 py-2 font-mono text-sm">{url}</code>
+        <CopyButton text={url} />
+        <a className="btn btn-soft" href={FEED_PATH} target="_blank" rel="noreferrer">{t('st.feed.open')}</a>
+      </div>
+    </section>
+  );
+}
+
 /** Public status page: the state now, 30 days of availability per server and the incidents behind it. */
 const IconPulse = () => <Icon size={22}><path d="M22 12h-4l-3 9L9 3l-3 9H2" /></Icon>;
 
@@ -425,6 +454,7 @@ export default function StatusPage() {
             ))}
           </div>
           <Incidents list={data.incidents ?? []} days={data.range ?? range} />
+          <FollowCard />
         </div>
       )}
     </div>

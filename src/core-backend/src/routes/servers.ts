@@ -18,6 +18,7 @@ import { completeOrder } from '../monitoring/serverOrderLogic.js';
 import { getServer, publicServer, SELECT_SERVERS, SERVER_ORDER, serialize, type ServerJoin } from '../monitoring/serverData.js';
 import { baseOf, brand, publicBase } from '../admin/site.js';
 import { publicNotes } from '../alerts/statusNotes.js';
+import { buildAtom, incidentEntry, type FeedEntry } from '../alerts/statusFeedLogic.js';
 
 export const router = express.Router();
 
@@ -451,4 +452,29 @@ router.get('/api/status', viewer, (req, res) => {
       };
     }),
   });
+});
+
+// ---------- Atom feed of the status page: notes and incidents of the last weeks, for feed readers and bots ----------
+router.get('/api/status/feed.xml', viewer, (req, res) => {
+  const base = publicBase() ?? baseOf(req);
+  const now = Date.now();
+  const list = (db.prepare(`${SELECT_SERVERS} ORDER BY ${SERVER_ORDER}`).all() as ServerJoin[]).map(serialize);
+  const shown = new Map((isAdmin(req) ? list : list.map(publicServer)).map((sv) => [sv.id, sv]));
+  const entries: FeedEntry[] = [];
+  for (const n of publicNotes(now)) {
+    const where = n.serverId != null && shown.has(n.serverId) ? `${shown.get(n.serverId)!.name}: ` : '';
+    entries.push({
+      id: `note-${n.id}`,
+      title: `${n.resolvedAt != null ? 'Решено: ' : ''}${where}${n.title}`,
+      body: n.body || n.title,
+      at: n.createdAt,
+      updated: n.resolvedAt ?? n.updatedAt,
+      link: `${base}/status`,
+    });
+  }
+  for (const i of incidentsSince(now - 30 * 86400_000, undefined, now)) {
+    const sv = shown.get(i.serverId);
+    if (sv) entries.push(incidentEntry(i, sv.name, base));
+  }
+  res.type('application/atom+xml; charset=utf-8').set('Cache-Control', 'public, max-age=60').send(buildAtom({ title: `${brand().name}: статус серверов`, base, entries, now }));
 });

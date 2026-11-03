@@ -169,6 +169,16 @@ describe('api: status page and digest', () => {
     assert.ok(sv.latency.filter((v: number | null) => v != null).length >= 1);
   });
 
+  it('status feed: an Atom document with the incident, public like the page', async () => {
+    const r = await api.call('GET', '/api/status/feed.xml');
+    assert.equal(r.status, 200);
+    assert.equal(typeof r.body, 'string');
+    assert.ok(r.body.startsWith('<?xml version="1.0" encoding="utf-8"?>'));
+    assert.ok(r.body.includes('<feed xmlns="http://www.w3.org/2005/Atom">'));
+    assert.ok(r.body.includes('Down'));
+    assert.match(r.body, /Снова работает: Down/);
+  });
+
   it('digest: settings need a channel; the picture is served only at its signed address', async () => {
     const g = await api.call('GET', '/api/digest', { token });
     assert.equal(g.status, 200);

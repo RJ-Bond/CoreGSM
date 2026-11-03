@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="967e1c2d06f0"
+COREGSM_BUILD="058e19907365"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.0.0.89"
+COREGSM_VERSION="1.0.0.90"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -19339,6 +19339,93 @@ export function trackSmart(serverId: number, s: { online: boolean; players: numb
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/alerts"
+  cat > "$APP_DIR/core-backend/src/alerts/statusFeedLogic.ts" << '__COREGSM_EOF__'
+/**
+ * The Atom feed of the status page (GET /api/status/feed.xml): the notes of the administrators and the incidents of the
+ * last weeks, newest first, so that a reader of feeds (or a chat bot) can follow the state of the servers without an
+ * account. Pure text building, no database: servers.ts collects the entries.
+ */
+export interface FeedEntry {
+  /** a stable id inside the feed: «note-5», «incident-3-1700000000000» */
+  id: string;
+  title: string;
+  body: string;
+  /** when the entry was created, ms */
+  at: number;
+  /** when it last changed, ms (≥ at) */
+  updated: number;
+  /** the page the entry belongs to, absolute */
+  link: string;
+}
+
+export const FEED_LIMIT = 50;
+
+/** text for XML: the five characters that matter and control characters that XML forbids */
+export function xmlEscape(v: string): string {
+  return v
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+
+const iso = (ms: number) => new Date(ms).toISOString();
+
+export interface IncidentLike { serverId: number; start: number; end: number | null; minutes: number; planned: boolean }
+
+/** one entry for an incident: the title tells whether it is going on, the body how long it took */
+export function incidentEntry(i: IncidentLike, serverName: string, base: string): FeedEntry {
+  const going = i.end == null;
+  const kind = i.planned ? 'Плановые работы' : 'Недоступен';
+  const title = going ? `${kind}: ${serverName}` : `${i.planned ? 'Работы завершены' : 'Снова работает'}: ${serverName}`;
+  const when = new Date(i.start).toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
+  const body = going
+    ? `${serverName}: ${i.planned ? 'идут плановые работы' : 'сервер не отвечает'} с ${when} (${i.minutes} мин).`
+    : `${serverName}: ${i.planned ? 'плановые работы' : 'сбой'} с ${when}, длилось ${i.minutes} мин.`;
+  return {
+    id: `incident-${i.serverId}-${i.start}`,
+    title,
+    body,
+    at: i.start,
+    updated: i.end ?? Date.now(),
+    link: `${base}/status`,
+  };
+}
+
+/** the Atom document; entries are sorted and cut here, so that the caller need not care */
+export function buildAtom(opts: { title: string; base: string; entries: FeedEntry[]; now?: number }): string {
+  const now = opts.now ?? Date.now();
+  const entries = [...opts.entries].sort((a, b) => b.updated - a.updated).slice(0, FEED_LIMIT);
+  const updated = entries[0]?.updated ?? now;
+  const self = `${opts.base}/api/status/feed.xml`;
+  const items = entries
+    .map(
+      (e) => `  <entry>
+    <id>${xmlEscape(`${opts.base}#${e.id}`)}</id>
+    <title>${xmlEscape(e.title)}</title>
+    <link href="${xmlEscape(e.link)}"/>
+    <published>${iso(e.at)}</published>
+    <updated>${iso(e.updated)}</updated>
+    <summary>${xmlEscape(e.body)}</summary>
+  </entry>`,
+    )
+    .join('\n');
+  return `<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <id>${xmlEscape(self)}</id>
+  <title>${xmlEscape(opts.title)}</title>
+  <link rel="self" type="application/atom+xml" href="${xmlEscape(self)}"/>
+  <link rel="alternate" type="text/html" href="${xmlEscape(`${opts.base}/status`)}"/>
+  <updated>${iso(updated)}</updated>
+${items}
+</feed>
+`;
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/alerts"
   cat > "$APP_DIR/core-backend/src/alerts/statusNotes.ts" << '__COREGSM_EOF__'
 /**
  * Notes of the administrators on the public status page: «Идут работы на сервере», «Причина найдена», «Всё починено».
@@ -31923,6 +32010,7 @@ import { completeOrder } from '../monitoring/serverOrderLogic.js';
 import { getServer, publicServer, SELECT_SERVERS, SERVER_ORDER, serialize, type ServerJoin } from '../monitoring/serverData.js';
 import { baseOf, brand, publicBase } from '../admin/site.js';
 import { publicNotes } from '../alerts/statusNotes.js';
+import { buildAtom, incidentEntry, type FeedEntry } from '../alerts/statusFeedLogic.js';
 
 export const router = express.Router();
 
@@ -32356,6 +32444,31 @@ router.get('/api/status', viewer, (req, res) => {
       };
     }),
   });
+});
+
+// ---------- Atom feed of the status page: notes and incidents of the last weeks, for feed readers and bots ----------
+router.get('/api/status/feed.xml', viewer, (req, res) => {
+  const base = publicBase() ?? baseOf(req);
+  const now = Date.now();
+  const list = (db.prepare(`${SELECT_SERVERS} ORDER BY ${SERVER_ORDER}`).all() as ServerJoin[]).map(serialize);
+  const shown = new Map((isAdmin(req) ? list : list.map(publicServer)).map((sv) => [sv.id, sv]));
+  const entries: FeedEntry[] = [];
+  for (const n of publicNotes(now)) {
+    const where = n.serverId != null && shown.has(n.serverId) ? `${shown.get(n.serverId)!.name}: ` : '';
+    entries.push({
+      id: `note-${n.id}`,
+      title: `${n.resolvedAt != null ? 'Решено: ' : ''}${where}${n.title}`,
+      body: n.body || n.title,
+      at: n.createdAt,
+      updated: n.resolvedAt ?? n.updatedAt,
+      link: `${base}/status`,
+    });
+  }
+  for (const i of incidentsSince(now - 30 * 86400_000, undefined, now)) {
+    const sv = shown.get(i.serverId);
+    if (sv) entries.push(incidentEntry(i, sv.name, base));
+  }
+  res.type('application/atom+xml; charset=utf-8').set('Cache-Control', 'public, max-age=60').send(buildAtom({ title: `${brand().name}: статус серверов`, base, entries, now }));
 });
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/routes"
@@ -132292,6 +132405,9 @@ const en: Record<keyof typeof ru, string> = {
   'st.players.word': 'players',
   'st.inc30': '{n} outage in {d} days|{n} outages in {d} days',
   'st.noInc30': 'no outages in {d} days',
+  'st.feed.t': 'Follow the status',
+  'st.feed.x': 'Subscribe to the feed in any RSS/Atom reader: it carries the notes of the administrators and the outages of the servers, no account needed.',
+  'st.feed.open': 'Open the feed',
   'st.ping': 'ping {n} ms',
   'st.hero.ok': 'All servers are up',
   'st.hero.okText': 'Players can join any server.',
@@ -136271,6 +136387,9 @@ const ru = {
   'st.players.word': 'игроков',
   'st.inc30': '{n} сбой за {d} дн.|{n} сбоя за {d} дн.|{n} сбоев за {d} дн.',
   'st.noInc30': 'без сбоев за {d} дн.',
+  'st.feed.t': 'Следите за статусом',
+  'st.feed.x': 'Подпишитесь на ленту в любом RSS/Atom-ридере: туда попадают заметки администраторов и сбои серверов, аккаунт не нужен.',
+  'st.feed.open': 'Открыть ленту',
   'st.ping': 'пинг {n} мс',
   'st.hero.ok': 'Все серверы работают',
   'st.hero.okText': 'Игроки могут заходить на любой сервер.',
@@ -148305,7 +148424,7 @@ import { getPrefs, t, useI18n } from '../i18n';
 import { Icon } from '../icons';
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react';
 import { api, type StatusDay, type StatusIncident, type StatusInfo, type StatusNote, type StatusServer } from '../api';
-import { Empty, ErrorLine, GameAvatar, LoadError, PageHead, SmoothArea, StatusPill, ago, fmtDateTime, fmtTime, usePoll } from '../ui';
+import { CopyButton, Empty, ErrorLine, GameAvatar, LoadError, PageHead, SmoothArea, StatusPill, ago, fmtDateTime, fmtTime, usePoll } from '../ui';
 import '../styles/status.css';
 
 const loc = () => (getPrefs().lang === 'en' ? 'en-US' : 'ru-RU');
@@ -148666,6 +148785,35 @@ function Incidents({ list, days }: { list: StatusIncident[]; days: number }) {
 
 const LEGEND = ['ok', 'blip', 'warn', 'bad', 'planned', 'none'] as const;
 
+const FEED_PATH = '/api/status/feed.xml';
+
+/** how to follow the state without an account: the Atom feed, with the address to copy */
+function FollowCard() {
+  useI18n();
+  const url = `${window.location.origin}${FEED_PATH}`;
+  // a feed reader finds the feed from the page address itself
+  useEffect(() => {
+    const link = document.createElement('link');
+    link.rel = 'alternate';
+    link.type = 'application/atom+xml';
+    link.href = FEED_PATH;
+    link.title = t('st.feed.t');
+    document.head.appendChild(link);
+    return () => { link.remove(); };
+  }, []);
+  return (
+    <section className="panel p-5" aria-labelledby="st-follow">
+      <h2 id="st-follow" className="text-lg font-extrabold">{t('st.feed.t')}</h2>
+      <p className="mt-1 text-sm font-semibold text-mute">{t('st.feed.x')}</p>
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <code className="min-w-0 max-w-full flex-1 truncate rounded-ui-md bg-soft px-3 py-2 font-mono text-sm">{url}</code>
+        <CopyButton text={url} />
+        <a className="btn btn-soft" href={FEED_PATH} target="_blank" rel="noreferrer">{t('st.feed.open')}</a>
+      </div>
+    </section>
+  );
+}
+
 /** Public status page: the state now, 30 days of availability per server and the incidents behind it. */
 const IconPulse = () => <Icon size={22}><path d="M22 12h-4l-3 9L9 3l-3 9H2" /></Icon>;
 
@@ -148727,6 +148875,7 @@ export default function StatusPage() {
             ))}
           </div>
           <Incidents list={data.incidents ?? []} days={data.range ?? range} />
+          <FollowCard />
         </div>
       )}
     </div>
