@@ -134,3 +134,11 @@ html[data-lite] img[loading='lazy'] { content-visibility: auto; }
 @media (min-width: 768px) and (max-width: 1023px) {
   .hdr-word, .pm-btn > .truncate { display: none; }
 }
+
+/* touch targets: small controls get at least 32 px of height on a phone; link-like ones keep their look and get a bigger hit area */
+@media (max-width: 639px) {
+  .srv-live, .cm-refresh, .cm-chip, .cn-part { min-height: 32px; }
+  button.hint-close { width: 32px; height: 32px; }
+  .srv-addr-copy, .hint-more { position: relative; }
+  .srv-addr-copy::before, .hint-more::before { content: ''; position: absolute; inset: -.55rem -.4rem; }
+}

@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="2434af6e3fe9"
+COREGSM_BUILD="967e1c2d06f0"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.0.0.88"
+COREGSM_VERSION="1.0.0.89"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -153606,6 +153606,14 @@ html[data-lite] img[loading='lazy'] { content-visibility: auto; }
 /* a phone on its side and a small tablet: the menu has no room for the brand name and the user name next to the sections */
 @media (min-width: 768px) and (max-width: 1023px) {
   .hdr-word, .pm-btn > .truncate { display: none; }
+}
+
+/* touch targets: small controls get at least 32 px of height on a phone; link-like ones keep their look and get a bigger hit area */
+@media (max-width: 639px) {
+  .srv-live, .cm-refresh, .cm-chip, .cn-part { min-height: 32px; }
+  button.hint-close { width: 32px; height: 32px; }
+  .srv-addr-copy, .hint-more { position: relative; }
+  .srv-addr-copy::before, .hint-more::before { content: ''; position: absolute; inset: -.55rem -.4rem; }
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"

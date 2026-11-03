@@ -1,0 +1,39 @@
+name: ui-check
+
+# The panel on a phone and a desktop, dark and light: tools/shots/run.mjs starts a demo stack, drives the Chrome of
+# the runner and checks the pages (script errors, horizontal scroll, small tap targets, axe WCAG A/AA).
+# The first runs are advisory (continue-on-error): remove that line once the job has been green on main.
+on:
+  push:
+    branches: [main]
+    paths: ['src/core-frontend/**', 'src/core-backend/**', 'tools/shots/**', '.github/workflows/ui-check.yml']
+  pull_request:
+    paths: ['src/core-frontend/**', 'src/core-backend/**', 'tools/shots/**', '.github/workflows/ui-check.yml']
+  workflow_dispatch:
+
+concurrency:
+  group: ui-check-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  ui-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: Install the backend and the frontend
+        run: |
+          npm ci --no-audit --no-fund --prefix src/core-backend
+          npm ci --no-audit --no-fund --prefix src/core-frontend
+      - name: Shoot the pages
+        run: node tools/shots/run.mjs --pages=all --viewports=phone,desktop --themes=dark,light --out=shots-out
+      - name: Show the report
+        if: always()
+        run: cat shots-out/report.md >> "$GITHUB_STEP_SUMMARY" || true
