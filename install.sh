@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="3e93673e0576"
+COREGSM_BUILD="1044248c3cb4"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.0.0.82"
+COREGSM_VERSION="1.0.0.83"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -130585,13 +130585,31 @@ html[data-motion='reduce'] .view-swap { animation: none; }
 
 /* ---------- updates tab ---------- */
 .update-hero { background: linear-gradient(135deg, #f59e0b 0%, #ea580c 55%, #be185d 120%); box-shadow: 0 1px 2px rgba(20, 24, 40, .06), 0 22px 44px -18px rgba(234, 88, 12, .55); }
-.upd-steps { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 0; padding: 0; list-style: none; font-size: var(--fs-sm); font-weight: 700; }
-.upd-step { display: inline-flex; align-items: center; gap: 7px; opacity: .65; }
+.upd-steps { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0 6px; margin: 0; padding: 0; list-style: none; font-size: var(--fs-sm); font-weight: 700; }
+.upd-step { display: flex; flex-direction: column; gap: 7px; min-width: 0; opacity: .6; }
 .upd-step.is-done, .upd-step.is-active { opacity: 1; }
-.upd-step-dot { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 999px; font-size: var(--fs-2xs); line-height: 1; box-shadow: inset 0 0 0 2px rgb(255 255 255 / .6); }
+.upd-step-top { display: flex; align-items: center; gap: 6px; }
+.upd-step-dot { display: inline-grid; flex: none; place-items: center; width: 22px; height: 22px; border-radius: 999px; font-size: var(--fs-2xs); line-height: 1; box-shadow: inset 0 0 0 2px rgb(255 255 255 / .55); }
 .upd-step.is-done .upd-step-dot { background: #fff; color: rgb(var(--brand)); box-shadow: none; }
-.upd-step.is-active .upd-step-dot { background: rgb(255 255 255 / .3); animation: live-ring 1.6s ease-in-out infinite; }
-@media (prefers-reduced-motion: reduce) { .upd-step.is-active .upd-step-dot { animation: none; } }
+.upd-step.is-active .upd-step-dot { background: rgb(255 255 255 / .3); box-shadow: inset 0 0 0 2px #fff; animation: live-ring 1.6s ease-in-out infinite; }
+.upd-step-line { position: relative; flex: 1; height: 4px; border-radius: var(--r-pill); background: rgb(255 255 255 / .22); overflow: hidden; }
+.upd-step:last-child .upd-step-line { display: none; }
+.upd-step.is-done .upd-step-line { background: #fff; }
+.upd-step.is-active .upd-step-line::after { content: ''; position: absolute; inset: 0 auto 0 0; width: 40%; border-radius: inherit; background: #fff; animation: update-slide 1.3s ease-in-out infinite; }
+.upd-step-name { line-height: 1.25; overflow-wrap: anywhere; }
+.upd-ring { position: relative; }
+.upd-ring > svg { position: absolute; inset: 0; width: 100%; height: 100%; transform: rotate(-90deg); }
+.upd-ring-arc { transition: stroke-dashoffset .6s cubic-bezier(.2, .8, .2, 1); }
+.upd-ring.is-spin > svg { animation: upd-spin 1.1s linear infinite; }
+@keyframes upd-spin { to { transform: rotate(270deg); } }
+.upd-hint { margin: 0; border-radius: var(--r-lg); background: rgb(0 0 0 / .15); padding: 10px 14px; font-size: var(--fs-sm); font-weight: 700; }
+@media (prefers-reduced-motion: reduce) {
+  .upd-step.is-active .upd-step-dot, .upd-ring.is-spin > svg { animation: none; }
+  .upd-step.is-active .upd-step-line::after { animation: none; width: 100%; }
+  .upd-ring-arc { transition: none; }
+}
+html[data-motion='reduce'] :is(.upd-step.is-active .upd-step-dot, .upd-ring.is-spin > svg) { animation: none !important; }
+html[data-motion='reduce'] .upd-step.is-active .upd-step-line::after { animation: none !important; width: 100%; }
 .update-hero-run { background: linear-gradient(135deg, rgb(var(--brand)), rgb(var(--brand-2, var(--brand)))); box-shadow: 0 1px 2px rgba(20, 24, 40, .06), 0 22px 44px -18px rgb(var(--brand) / .55); }
 .update-bob { animation: update-bob 1.6s ease-in-out infinite; }
 @keyframes update-bob { 0%, 100% { transform: translateY(2px); } 50% { transform: translateY(-3px); } }
@@ -133162,6 +133180,11 @@ const en: Record<keyof typeof ru, string> = {
   'upd.step.snapshot': 'Data copy',
   'upd.step.install': 'Install',
   'upd.step.health': 'Start check',
+  'upd.sub.download': 'Downloading version {v}',
+  'upd.sub.snapshot': 'Copying the data in case of a rollback',
+  'upd.sub.install': 'Installing version {v}',
+  'upd.sub.health': 'Checking that the panel has started',
+  'upd.keepOpen': 'The panel restarts by itself, you can leave this page open. It usually takes 1–3 minutes.',
   'upd.pf.players': 'Players online now: {n}. Game servers are not affected, but the panel and the bot are unavailable for 1–3 minutes.',
   'upd.pf.noBackup': 'There are no backups on the server. A database copy for the rollback is made before the update anyway.',
   'upd.pf.old': 'The last backup is {h} h old. A fresh database copy is made automatically before the update.',
@@ -137136,6 +137159,11 @@ const ru = {
   'upd.step.snapshot': 'Копия данных',
   'upd.step.install': 'Установка',
   'upd.step.health': 'Проверка запуска',
+  'upd.sub.download': 'Скачиваю версию {v}',
+  'upd.sub.snapshot': 'Копирую данные на случай отката',
+  'upd.sub.install': 'Устанавливаю версию {v}',
+  'upd.sub.health': 'Проверяю, что панель запустилась',
+  'upd.keepOpen': 'Панель перезапустится сама, страницу можно не закрывать. Обычно это 1–3 минуты.',
   'upd.pf.players': 'Сейчас на серверах играют: {n}. Игровым серверам обновление не мешает, но панель и бот будут недоступны 1–3 минуты.',
   'upd.pf.noBackup': 'Резервных копий на сервере нет. Перед обновлением всё равно создаётся копия базы данных для отката.',
   'upd.pf.old': 'Последняя копия сделана {h} ч назад. Перед обновлением автоматически создаётся свежая копия базы данных.',
@@ -150272,7 +150300,7 @@ import { type CSSProperties, useEffect, useRef, useState } from 'react';
 import { api, type Changelog, type UpdateInfo, type UpdateNotes, type UpdatePreflight } from '../../api';
 import { confirmDialog } from '../../confirm';
 import { t } from '../../i18n';
-import { ago, ErrorLine, fmtDate, IconArrowUp, IconCheck, Spinner, usePoll, errText } from '../../ui';
+import { ago, ErrorLine, fmtDate, IconArrowUp, IconCheck, usePoll, errText } from '../../ui';
 import { HistoryCard, NotesCard, OptionsCard, PreflightNote, StepList } from './updateParts';
 import { offered, versionText } from './updateLogic';
 
@@ -150403,6 +150431,9 @@ export function UpdateCard() {
   const state: 'running' | 'available' | 'latest' | 'skipped' | 'unknown' = running || finished ? 'running' : offered(info) ? 'available' : skipped ? 'skipped' : info?.latest ? 'latest' : 'unknown';
   const lastChecked = info?.checkedAt ?? null;
   const onGrad = state === 'available' || state === 'running';
+  const ringPct = finished ? 100 : pct;
+  const RING_R = 24;
+  const RING_C = 2 * Math.PI * RING_R;
   const curText = versionText(info?.currentLabel, info?.current);
   const newText = versionText(info?.latestLabel, info?.latest);
 
@@ -150424,9 +150455,11 @@ export function UpdateCard() {
     : state === 'latest' ? t('upd.t.latest')
     : state === 'skipped' ? t('upd.t.skipped')
     : t('upd.t.checking');
+  // what is happening now, in the panel's language (the manager's own message is Russian only: it is the fallback)
+  const stageText = !rollingBack && info?.stage && info.stage !== 'rollback' ? t(`upd.sub.${info.stage}` as const, { v: newText }) : '';
   const subtitle =
     state === 'running'
-      ? finished ? t('upd.s.done') : offline ? t('upd.s.restarting') : info?.job?.state === 'running' && info.job.message ? info.job.message : ''
+      ? finished ? t('upd.s.done') : offline ? t('upd.s.restarting') : stageText || (info?.job?.state === 'running' && info.job.message ? info.job.message : '')
       : state === 'available' ? t('upd.s.available')
       : state === 'latest' ? (lastChecked ? t('upd.s.latestChecked', { when: ago(lastChecked) }) : t('upd.s.latest'))
       : state === 'skipped' ? t('upd.s.skipped', { v: newText })
@@ -150440,18 +150473,27 @@ export function UpdateCard() {
           state === 'available' ? 'update-hero text-white' : state === 'running' ? 'update-hero update-hero-run text-white' : 'panel'
         }`}
       >
-        {onGrad && <span aria-hidden className="pointer-events-none absolute -right-14 -top-14 h-56 w-56 rounded-full bg-white/15" />}
+        {onGrad && <span aria-hidden className={`pointer-events-none absolute -right-14 -top-14 h-56 w-56 rounded-full ${state === 'running' ? 'bg-white/10' : 'bg-white/15'}`} />}
         <div className="relative flex flex-wrap items-start gap-4">
           <span
             aria-hidden
-            className={`grid h-14 w-14 shrink-0 place-items-center rounded-2xl ${
+            className={`grid h-14 w-14 shrink-0 place-items-center ${state === 'running' ? 'upd-ring rounded-full' : 'rounded-2xl'} ${
               onGrad ? 'bg-white/20 text-white' : state === 'latest' ? 'bg-okbg text-ok' : 'bg-soft text-mute'
-            }`}
+            }${state === 'running' && ringPct == null ? ' is-spin' : ''}`}
           >
             {state === 'latest' ? (
               <IconCheck size={30} />
             ) : state === 'running' ? (
-              <Spinner className="h-7 w-7" />
+              <>
+                <svg viewBox="0 0 56 56" fill="none">
+                  <circle cx="28" cy="28" r={RING_R} stroke="rgb(255 255 255 / .25)" strokeWidth="4" />
+                  <circle
+                    className="upd-ring-arc" cx="28" cy="28" r={RING_R} stroke="#fff" strokeWidth="4" strokeLinecap="round"
+                    strokeDasharray={RING_C} strokeDashoffset={RING_C * (1 - (ringPct ?? 28) / 100)}
+                  />
+                </svg>
+                {finished ? <IconCheck size={22} /> : ringPct != null ? <span className="relative text-sm font-black tabular-nums">{ringPct}%</span> : null}
+              </>
             ) : (
               <IconArrowUp size={30} className={state === 'available' ? 'update-bob' : ''} />
             )}
@@ -150461,16 +150503,16 @@ export function UpdateCard() {
             <p className={`mt-1 font-semibold ${onGrad ? 'text-white/90' : 'text-mute'}`}>{subtitle}</p>
 
             <dl className="mt-4 flex flex-wrap items-center gap-2 text-sm font-bold">
-              <div className={`flex flex-wrap items-center gap-x-2 rounded-full px-3.5 py-1.5 ${onGrad ? 'bg-white/20' : 'bg-soft'}`}>
+              <div className={`flex flex-wrap items-center gap-x-2 rounded-full px-3.5 py-1.5 ${state === 'running' ? 'bg-white/15 opacity-80' : onGrad ? 'bg-white/20' : 'bg-soft'}`}>
                 <dt className={onGrad ? 'text-white/85' : 'text-mute'}>{t('upd.installed')}</dt>
                 <dd className="font-mono">{curText}</dd>
                 {info?.installedAt ? <dd className={`font-sans font-semibold ${onGrad ? 'text-white/80' : 'text-mute'}`}>{t('upd.since', { date: fmtDate(info.installedAt) })}</dd> : null}
               </div>
-              {state === 'available' && <span aria-hidden className="text-lg font-black text-white/90">→</span>}
-              <div className={`flex flex-wrap items-center gap-x-2 rounded-full px-3.5 py-1.5 ${state === 'available' ? 'bg-white text-ink' : state === 'running' ? 'bg-white/20' : 'bg-soft'}`}>
-                <dt className={state === 'running' ? 'text-white/85' : 'text-mute'}>{t('upd.inRepo')}</dt>
+              {onGrad && <span aria-hidden className="text-lg font-black text-white/90">→</span>}
+              <div className={`flex flex-wrap items-center gap-x-2 rounded-full px-3.5 py-1.5 ${state === 'available' ? 'bg-white text-ink' : state === 'running' ? 'bg-white/30 ring-1 ring-white/60' : 'bg-soft'}`}>
+                <dt className={state === 'running' ? 'text-white/90' : 'text-mute'}>{t('upd.inRepo')}</dt>
                 <dd className="font-mono">{newText}</dd>
-                {info?.latestAt ? <dd className="font-sans font-semibold text-mute">{t('upd.from', { date: fmtDate(info.latestAt) })}</dd> : null}
+                {info?.latestAt ? <dd className={`font-sans font-semibold ${state === 'running' ? 'text-white/80' : 'text-mute'}`}>{t('upd.from', { date: fmtDate(info.latestAt) })}</dd> : null}
               </div>
             </dl>
           </div>
@@ -150478,25 +150520,19 @@ export function UpdateCard() {
 
         {state === 'running' && (
           <div className="relative mt-5 space-y-3">
-            {!rollingBack && <StepList stage={info?.stage} finished={!!finished} />}
-            <div className="flex items-center gap-3">
-              <div
-                className={`update-progress min-w-0 flex-1 ${pct != null ? 'det' : ''}`}
-                role="progressbar"
-                aria-label={rollingBack ? t('upd.aria.rollback') : t('upd.aria.update')}
-                aria-valuemin={0}
-                aria-valuemax={100}
-                aria-valuenow={pct ?? undefined}
-              >
-                <i style={pct != null ? ({ '--p': `${pct}%` } as CSSProperties) : undefined} />
+            {/* the same progress for screen readers whatever is drawn */}
+            <div
+              className="sr-only" role="progressbar" aria-label={rollingBack ? t('upd.aria.rollback') : t('upd.aria.update')}
+              aria-valuemin={0} aria-valuemax={100} aria-valuenow={ringPct ?? undefined}
+            />
+            {rollingBack ? (
+              <div className={`update-progress ${ringPct != null ? 'det' : ''}`} aria-hidden>
+                <i style={ringPct != null ? ({ '--p': `${ringPct}%` } as CSSProperties) : undefined} />
               </div>
-              {pct != null && <span className="w-14 shrink-0 text-right text-lg font-black tabular-nums" aria-hidden>{pct} %</span>}
-              {finished && (
-                <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-okbg text-ok" aria-hidden>
-                  <IconCheck size={16} />
-                </span>
-              )}
-            </div>
+            ) : (
+              <StepList stage={info?.stage} finished={!!finished} />
+            )}
+            {!finished && <p className="upd-hint">{t('upd.keepOpen')}</p>}
           </div>
         )}
 
@@ -151171,14 +151207,17 @@ import { ChannelName, ChannelPicker } from '../../components/ChannelPicker';
 import { ErrorLine, fmtDateTime, Section, errText, toast } from '../../ui';
 import { cleanNote, groupCommits, isNewerRelease, preflightWarnings, stepStates, upcomingFlags, versionText, type PreflightWarning } from './updateLogic';
 
-/** the four steps of an update; the active one pulses, finished ones carry a tick */
+/** the four steps of an update as a stepper: the line after a finished step is filled, the active one pulses */
 export function StepList({ stage, finished }: { stage: UpdateInfo['stage']; finished: boolean }) {
   return (
     <ol className="upd-steps" aria-label={t('upd.steps')}>
       {stepStates(stage, finished).map((s) => (
         <li key={s.id} className={`upd-step is-${s.state}`} aria-current={s.state === 'active' ? 'step' : undefined}>
-          <span className="upd-step-dot" aria-hidden>{s.state === 'done' ? '✓' : ''}</span>
-          <span>{t(`upd.step.${s.id}` as TKey)}</span>
+          <span className="upd-step-top" aria-hidden>
+            <span className="upd-step-dot">{s.state === 'done' ? '✓' : ''}</span>
+            <span className="upd-step-line" />
+          </span>
+          <span className="upd-step-name">{t(`upd.step.${s.id}` as TKey)}</span>
         </li>
       ))}
     </ol>

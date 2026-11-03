@@ -6,14 +6,17 @@ import { ChannelName, ChannelPicker } from '../../components/ChannelPicker';
 import { ErrorLine, fmtDateTime, Section, errText, toast } from '../../ui';
 import { cleanNote, groupCommits, isNewerRelease, preflightWarnings, stepStates, upcomingFlags, versionText, type PreflightWarning } from './updateLogic';
 
-/** the four steps of an update; the active one pulses, finished ones carry a tick */
+/** the four steps of an update as a stepper: the line after a finished step is filled, the active one pulses */
 export function StepList({ stage, finished }: { stage: UpdateInfo['stage']; finished: boolean }) {
   return (
     <ol className="upd-steps" aria-label={t('upd.steps')}>
       {stepStates(stage, finished).map((s) => (
         <li key={s.id} className={`upd-step is-${s.state}`} aria-current={s.state === 'active' ? 'step' : undefined}>
-          <span className="upd-step-dot" aria-hidden>{s.state === 'done' ? '✓' : ''}</span>
-          <span>{t(`upd.step.${s.id}` as TKey)}</span>
+          <span className="upd-step-top" aria-hidden>
+            <span className="upd-step-dot">{s.state === 'done' ? '✓' : ''}</span>
+            <span className="upd-step-line" />
+          </span>
+          <span className="upd-step-name">{t(`upd.step.${s.id}` as TKey)}</span>
         </li>
       ))}
     </ol>

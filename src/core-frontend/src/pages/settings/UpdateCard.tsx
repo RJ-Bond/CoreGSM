@@ -3,7 +3,7 @@ import { type CSSProperties, useEffect, useRef, useState } from 'react';
 import { api, type Changelog, type UpdateInfo, type UpdateNotes, type UpdatePreflight } from '../../api';
 import { confirmDialog } from '../../confirm';
 import { t } from '../../i18n';
-import { ago, ErrorLine, fmtDate, IconArrowUp, IconCheck, Spinner, usePoll, errText } from '../../ui';
+import { ago, ErrorLine, fmtDate, IconArrowUp, IconCheck, usePoll, errText } from '../../ui';
 import { HistoryCard, NotesCard, OptionsCard, PreflightNote, StepList } from './updateParts';
 import { offered, versionText } from './updateLogic';
 
@@ -134,6 +134,9 @@ export function UpdateCard() {
   const state: 'running' | 'available' | 'latest' | 'skipped' | 'unknown' = running || finished ? 'running' : offered(info) ? 'available' : skipped ? 'skipped' : info?.latest ? 'latest' : 'unknown';
   const lastChecked = info?.checkedAt ?? null;
   const onGrad = state === 'available' || state === 'running';
+  const ringPct = finished ? 100 : pct;
+  const RING_R = 24;
+  const RING_C = 2 * Math.PI * RING_R;
   const curText = versionText(info?.currentLabel, info?.current);
   const newText = versionText(info?.latestLabel, info?.latest);
 
@@ -155,9 +158,11 @@ export function UpdateCard() {
     : state === 'latest' ? t('upd.t.latest')
     : state === 'skipped' ? t('upd.t.skipped')
     : t('upd.t.checking');
+  // what is happening now, in the panel's language (the manager's own message is Russian only: it is the fallback)
+  const stageText = !rollingBack && info?.stage && info.stage !== 'rollback' ? t(`upd.sub.${info.stage}` as const, { v: newText }) : '';
   const subtitle =
     state === 'running'
-      ? finished ? t('upd.s.done') : offline ? t('upd.s.restarting') : info?.job?.state === 'running' && info.job.message ? info.job.message : ''
+      ? finished ? t('upd.s.done') : offline ? t('upd.s.restarting') : stageText || (info?.job?.state === 'running' && info.job.message ? info.job.message : '')
       : state === 'available' ? t('upd.s.available')
       : state === 'latest' ? (lastChecked ? t('upd.s.latestChecked', { when: ago(lastChecked) }) : t('upd.s.latest'))
       : state === 'skipped' ? t('upd.s.skipped', { v: newText })
@@ -171,18 +176,27 @@ export function UpdateCard() {
           state === 'available' ? 'update-hero text-white' : state === 'running' ? 'update-hero update-hero-run text-white' : 'panel'
         }`}
       >
-        {onGrad && <span aria-hidden className="pointer-events-none absolute -right-14 -top-14 h-56 w-56 rounded-full bg-white/15" />}
+        {onGrad && <span aria-hidden className={`pointer-events-none absolute -right-14 -top-14 h-56 w-56 rounded-full ${state === 'running' ? 'bg-white/10' : 'bg-white/15'}`} />}
         <div className="relative flex flex-wrap items-start gap-4">
           <span
             aria-hidden
-            className={`grid h-14 w-14 shrink-0 place-items-center rounded-2xl ${
+            className={`grid h-14 w-14 shrink-0 place-items-center ${state === 'running' ? 'upd-ring rounded-full' : 'rounded-2xl'} ${
               onGrad ? 'bg-white/20 text-white' : state === 'latest' ? 'bg-okbg text-ok' : 'bg-soft text-mute'
-            }`}
+            }${state === 'running' && ringPct == null ? ' is-spin' : ''}`}
           >
             {state === 'latest' ? (
               <IconCheck size={30} />
             ) : state === 'running' ? (
-              <Spinner className="h-7 w-7" />
+              <>
+                <svg viewBox="0 0 56 56" fill="none">
+                  <circle cx="28" cy="28" r={RING_R} stroke="rgb(255 255 255 / .25)" strokeWidth="4" />
+                  <circle
+                    className="upd-ring-arc" cx="28" cy="28" r={RING_R} stroke="#fff" strokeWidth="4" strokeLinecap="round"
+                    strokeDasharray={RING_C} strokeDashoffset={RING_C * (1 - (ringPct ?? 28) / 100)}
+                  />
+                </svg>
+                {finished ? <IconCheck size={22} /> : ringPct != null ? <span className="relative text-sm font-black tabular-nums">{ringPct}%</span> : null}
+              </>
             ) : (
               <IconArrowUp size={30} className={state === 'available' ? 'update-bob' : ''} />
             )}
@@ -192,16 +206,16 @@ export function UpdateCard() {
             <p className={`mt-1 font-semibold ${onGrad ? 'text-white/90' : 'text-mute'}`}>{subtitle}</p>
 
             <dl className="mt-4 flex flex-wrap items-center gap-2 text-sm font-bold">
-              <div className={`flex flex-wrap items-center gap-x-2 rounded-full px-3.5 py-1.5 ${onGrad ? 'bg-white/20' : 'bg-soft'}`}>
+              <div className={`flex flex-wrap items-center gap-x-2 rounded-full px-3.5 py-1.5 ${state === 'running' ? 'bg-white/15 opacity-80' : onGrad ? 'bg-white/20' : 'bg-soft'}`}>
                 <dt className={onGrad ? 'text-white/85' : 'text-mute'}>{t('upd.installed')}</dt>
                 <dd className="font-mono">{curText}</dd>
                 {info?.installedAt ? <dd className={`font-sans font-semibold ${onGrad ? 'text-white/80' : 'text-mute'}`}>{t('upd.since', { date: fmtDate(info.installedAt) })}</dd> : null}
               </div>
-              {state === 'available' && <span aria-hidden className="text-lg font-black text-white/90">→</span>}
-              <div className={`flex flex-wrap items-center gap-x-2 rounded-full px-3.5 py-1.5 ${state === 'available' ? 'bg-white text-ink' : state === 'running' ? 'bg-white/20' : 'bg-soft'}`}>
-                <dt className={state === 'running' ? 'text-white/85' : 'text-mute'}>{t('upd.inRepo')}</dt>
+              {onGrad && <span aria-hidden className="text-lg font-black text-white/90">→</span>}
+              <div className={`flex flex-wrap items-center gap-x-2 rounded-full px-3.5 py-1.5 ${state === 'available' ? 'bg-white text-ink' : state === 'running' ? 'bg-white/30 ring-1 ring-white/60' : 'bg-soft'}`}>
+                <dt className={state === 'running' ? 'text-white/90' : 'text-mute'}>{t('upd.inRepo')}</dt>
                 <dd className="font-mono">{newText}</dd>
-                {info?.latestAt ? <dd className="font-sans font-semibold text-mute">{t('upd.from', { date: fmtDate(info.latestAt) })}</dd> : null}
+                {info?.latestAt ? <dd className={`font-sans font-semibold ${state === 'running' ? 'text-white/80' : 'text-mute'}`}>{t('upd.from', { date: fmtDate(info.latestAt) })}</dd> : null}
               </div>
             </dl>
           </div>
@@ -209,25 +223,19 @@ export function UpdateCard() {
 
         {state === 'running' && (
           <div className="relative mt-5 space-y-3">
-            {!rollingBack && <StepList stage={info?.stage} finished={!!finished} />}
-            <div className="flex items-center gap-3">
-              <div
-                className={`update-progress min-w-0 flex-1 ${pct != null ? 'det' : ''}`}
-                role="progressbar"
-                aria-label={rollingBack ? t('upd.aria.rollback') : t('upd.aria.update')}
-                aria-valuemin={0}
-                aria-valuemax={100}
-                aria-valuenow={pct ?? undefined}
-              >
-                <i style={pct != null ? ({ '--p': `${pct}%` } as CSSProperties) : undefined} />
+            {/* the same progress for screen readers whatever is drawn */}
+            <div
+              className="sr-only" role="progressbar" aria-label={rollingBack ? t('upd.aria.rollback') : t('upd.aria.update')}
+              aria-valuemin={0} aria-valuemax={100} aria-valuenow={ringPct ?? undefined}
+            />
+            {rollingBack ? (
+              <div className={`update-progress ${ringPct != null ? 'det' : ''}`} aria-hidden>
+                <i style={ringPct != null ? ({ '--p': `${ringPct}%` } as CSSProperties) : undefined} />
               </div>
-              {pct != null && <span className="w-14 shrink-0 text-right text-lg font-black tabular-nums" aria-hidden>{pct} %</span>}
-              {finished && (
-                <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-okbg text-ok" aria-hidden>
-                  <IconCheck size={16} />
-                </span>
-              )}
-            </div>
+            ) : (
+              <StepList stage={info?.stage} finished={!!finished} />
+            )}
+            {!finished && <p className="upd-hint">{t('upd.keepOpen')}</p>}
           </div>
         )}
 
