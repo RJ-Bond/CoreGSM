@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="f1b9ae4acfc7"
+COREGSM_BUILD="a94b60fc8ab1"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.0.0.85"
+COREGSM_VERSION="1.0.0.86"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -130927,6 +130927,19 @@ html[data-motion='reduce'] [data-magnetic], html[data-motion='reduce'] .depth-l1
 html[data-motion='reduce'] .tile-hover:active { transform: none !important; }
 html[data-motion='reduce'] .depth::before, html[data-motion='reduce'] .depth::after { display: none !important; }
 html[data-motion='reduce'] ::view-transition-group(*), html[data-motion='reduce'] ::view-transition-old(*), html[data-motion='reduce'] ::view-transition-new(*) { animation: none !important; }
+/* the same for the operating-system setting: a safety net for every animation the selectors above do not name */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    animation-delay: 0s !important;
+    transition-duration: 0.01ms !important;
+    transition-delay: 0s !important;
+    scroll-behavior: auto !important;
+  }
+  .animate-spin, .ico-refresh.spinning { animation: spin 2s linear infinite !important; }
+  ::view-transition-group(*), ::view-transition-old(*), ::view-transition-new(*) { animation: none !important; }
+}
 
 /* ---------- appearance: «Крупный текст» (html[data-text='large']): root 112.5 %, fixed pixel sizes follow ---------- */
 html[data-text='large'] { font-size: 112.5%; }
@@ -140030,7 +140043,7 @@ import { useState } from 'react';
 import { api, type Server } from '../api';
 import { confirmDialog } from '../confirm';
 import { t, useI18n } from '../i18n';
-import { AdminPage, CopyButton, Empty, ErrorLine, Field, LoadError, PageHead, Section, IconServers, fmtDateTime, toast, usePoll } from '../ui';
+import { AdminPage, CopyButton, Empty, ErrorLine, Field, LoadError, PageHead, Section, IconServers, SkeletonRows, fmtDateTime, toast, usePoll } from '../ui';
 import { IconKey } from '../icons';
 import { badgeSnippets } from './integrationsLogic';
 
@@ -140130,6 +140143,7 @@ function KeysSection({ keys, onChanged }: { keys: ApiKey[] | null; onChanged: ()
       </form>
       <ErrorLine text={error} />
 
+      {keys === null && <SkeletonRows n={2} />}
       {keys && !keys.length && <Empty title={t('intg.empty.t')} text={t('intg.empty.x')} art={<IconKey />} />}
       {active.length > 0 && (
         <ul className="divide-y divide-line overflow-hidden rounded-2xl border border-line">

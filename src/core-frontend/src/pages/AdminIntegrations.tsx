@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { api, type Server } from '../api';
 import { confirmDialog } from '../confirm';
 import { t, useI18n } from '../i18n';
-import { AdminPage, CopyButton, Empty, ErrorLine, Field, LoadError, PageHead, Section, IconServers, fmtDateTime, toast, usePoll } from '../ui';
+import { AdminPage, CopyButton, Empty, ErrorLine, Field, LoadError, PageHead, Section, IconServers, SkeletonRows, fmtDateTime, toast, usePoll } from '../ui';
 import { IconKey } from '../icons';
 import { badgeSnippets } from './integrationsLogic';
 
@@ -102,6 +102,7 @@ function KeysSection({ keys, onChanged }: { keys: ApiKey[] | null; onChanged: ()
       </form>
       <ErrorLine text={error} />
 
+      {keys === null && <SkeletonRows n={2} />}
       {keys && !keys.length && <Empty title={t('intg.empty.t')} text={t('intg.empty.x')} art={<IconKey />} />}
       {active.length > 0 && (
         <ul className="divide-y divide-line overflow-hidden rounded-2xl border border-line">

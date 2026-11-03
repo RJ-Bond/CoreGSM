@@ -1662,6 +1662,19 @@ html[data-motion='reduce'] [data-magnetic], html[data-motion='reduce'] .depth-l1
 html[data-motion='reduce'] .tile-hover:active { transform: none !important; }
 html[data-motion='reduce'] .depth::before, html[data-motion='reduce'] .depth::after { display: none !important; }
 html[data-motion='reduce'] ::view-transition-group(*), html[data-motion='reduce'] ::view-transition-old(*), html[data-motion='reduce'] ::view-transition-new(*) { animation: none !important; }
+/* the same for the operating-system setting: a safety net for every animation the selectors above do not name */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    animation-delay: 0s !important;
+    transition-duration: 0.01ms !important;
+    transition-delay: 0s !important;
+    scroll-behavior: auto !important;
+  }
+  .animate-spin, .ico-refresh.spinning { animation: spin 2s linear infinite !important; }
+  ::view-transition-group(*), ::view-transition-old(*), ::view-transition-new(*) { animation: none !important; }
+}
 
 /* ---------- appearance: «Крупный текст» (html[data-text='large']): root 112.5 %, fixed pixel sizes follow ---------- */
 html[data-text='large'] { font-size: 112.5%; }
