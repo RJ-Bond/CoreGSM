@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { ByteLru, wantsWebp } from '../src/imageLogic.ts';
+import { ByteLru, wantsWebp } from '../src/images/imageLogic.ts';
 
 describe('wantsWebp', () => {
   it('reads the Accept header', () => {

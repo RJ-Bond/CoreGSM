@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { pollIsOpen, resultsText, tally, validatePoll } from '../src/communityPollLogic.ts';
+import { pollIsOpen, resultsText, tally, validatePoll } from '../src/community/communityPollLogic.ts';
 
 const now = 1_000_000;
 describe('validatePoll', () => {

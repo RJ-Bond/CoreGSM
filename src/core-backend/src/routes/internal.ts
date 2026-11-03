@@ -1,19 +1,19 @@
 /** Internal API of the bot (not exposed by nginx): configuration, status reports, bindings, embeds, cards. */
 import express from 'express';
 import { z } from 'zod';
-import { internal } from '../auth.js';
-import { bot } from '../botState.js';
-import { renderCard } from '../card.js';
-import { parseCardOpts } from '../cardLogic.js';
+import { internal } from '../security/auth.js';
+import { bot } from '../discord/botState.js';
+import { renderCard } from '../images/card.js';
+import { parseCardOpts } from '../images/cardLogic.js';
 import { type BindingRow, db, EFFECTIVE_NAME, getSetting, type ServerRow, setSetting } from '../db.js';
-import { refreshServer } from '../gsm.js';
+import { refreshServer } from '../monitoring/gsm.js';
 import { param, wrap } from '../http.js';
-import { addPing } from '../botLatencyLogic.js';
-import { buildPresence } from '../presence.js';
-import { currentStyle } from '../discordStyleState.js';
-import { welcomeSettings } from '../welcome.js';
-import { parseLayout } from '../embedLayout.js';
-import { embedFor, intervalParam, serializeBinding, SELECT_SERVERS, SERVER_ORDER, serialize, type ServerJoin } from '../serverData.js';
+import { addPing } from '../discord/botLatencyLogic.js';
+import { buildPresence } from '../monitoring/presence.js';
+import { currentStyle } from '../discord/discordStyleState.js';
+import { welcomeSettings } from '../community/welcome.js';
+import { parseLayout } from '../images/embedLayout.js';
+import { embedFor, intervalParam, serializeBinding, SELECT_SERVERS, SERVER_ORDER, serialize, type ServerJoin } from '../monitoring/serverData.js';
 
 export const router = express.Router();
 

@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveStyle, styleAlertEmbed } from '../src/discordStyleLogic.ts';
+import { resolveStyle, styleAlertEmbed } from '../src/discord/discordStyleLogic.ts';
 
 const base = { brandName: 'Club', brandColor: '#112233', accent: '', logo: true, footer: '', baseUrl: 'https://p.example' };
 describe('resolveStyle', () => {

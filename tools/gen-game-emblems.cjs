@@ -2,7 +2,7 @@
 /**
  * Game emblems: one source, two outputs.
  *   src/core-frontend/public/games/<id>.svg   the emblem for the web panel (crisp at any size)
- *   src/core-backend/src/gameImages.ts        the same emblem as a 192 px transparent PNG (base64) for the PNG card
+ *   src/core-backend/src/images/gameImages.ts        the same emblem as a 192 px transparent PNG (base64) for the PNG card
  *                                             and the Discord thumbnail (entries of other games are kept)
  * Every emblem is drawn in the colour of its game (read from core-frontend/src/games.ts): a gradient body, a darker
  * side and white highlights, so it reads on a dark tile, on a light Discord and as a bare thumbnail alike.
@@ -284,7 +284,7 @@ async function main() {
   fs.rmSync(tmp, { recursive: true, force: true });
 
   // gameImages.ts: keep the entries of the games that are not emblems (artwork PNGs), rewrite ours
-  const file = path.join(root, 'src/core-backend/src/gameImages.ts');
+  const file = path.join(root, 'src/core-backend/src/images/gameImages.ts');
   const src = fs.readFileSync(file, 'utf8').replace(/\r\n/g, '\n');
   const keep = [];
   for (const m of src.matchAll(/^ {2}([a-z0-9_]+): '([A-Za-z0-9+/=]+)',$/gm)) if (!E[m[1]]) keep.push([m[1], m[2]]);

@@ -1,11 +1,11 @@
 /** Discord bindings: which server is posted to which channel, the channel list and the embed preview. */
 import express from 'express';
 import { z } from 'zod';
-import { admin, staff } from '../auth.js';
-import { bot } from '../botState.js';
+import { admin, staff } from '../security/auth.js';
+import { bot } from '../discord/botState.js';
 import { type BindingRow, db, getSetting, setSetting } from '../db.js';
-import { parseLayout } from '../embedLayout.js';
-import { cleanExtra, embedFor, extraIds, intervalParam, playersShown, serializeBinding } from '../serverData.js';
+import { parseLayout } from '../images/embedLayout.js';
+import { cleanExtra, embedFor, extraIds, intervalParam, playersShown, serializeBinding } from '../monitoring/serverData.js';
 
 export const router = express.Router();
 

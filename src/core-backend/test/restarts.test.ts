@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 import net from 'node:net';
 import { after, before, describe, it } from 'node:test';
 import Database from 'better-sqlite3';
-import { decodePackets, encodePacket, rconCommand } from '../src/rcon.ts';
-import { defaultSay, nextRun } from '../src/restartLogic.ts';
-import { zonedTime } from '../src/localTime.ts';
+import { decodePackets, encodePacket, rconCommand } from '../src/monitoring/rcon.ts';
+import { defaultSay, nextRun } from '../src/monitoring/restartLogic.ts';
+import { zonedTime } from '../src/admin/localTime.ts';
 import { setupAdmin, startBackend, type Api } from './harness.ts';
 
 /** a fake Source RCON server: password «secret»; «long» answers in two packets; every command is remembered */

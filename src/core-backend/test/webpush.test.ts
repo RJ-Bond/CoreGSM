@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import http from 'node:http';
 import { after, before, describe, it } from 'node:test';
-import { encryptPayload } from '../src/webpush.ts';
+import { encryptPayload } from '../src/alerts/webpush.ts';
 import { setupAdmin, startBackend, type Api } from './harness.ts';
 
 /** a browser's side: its key pair and auth secret, and the RFC 8291 decryption */

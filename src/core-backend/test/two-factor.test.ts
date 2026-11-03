@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
-import { base32Decode, base32Encode, codeAt, newRecoveryCodes, useRecoveryCode, verifyCode } from '../src/totp.ts';
+import { base32Decode, base32Encode, codeAt, newRecoveryCodes, useRecoveryCode, verifyCode } from '../src/security/totp.ts';
 import { ADMIN, setupAdmin, startBackend, type Api } from './harness.ts';
 
 describe('totp primitives', () => {
