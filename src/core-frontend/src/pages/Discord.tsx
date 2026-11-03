@@ -5,7 +5,6 @@ import DeliveryList from '../components/DeliveryList';
 import DiscordExtras from '../components/DiscordExtras';
 import PlayersShownCard from '../components/PlayersShownCard';
 import { DiscordArt } from '../components/Illustrations';
-import { confirmDialog } from '../confirm';
 import { t, useI18n } from '../i18n';
 import { Button, Empty, ErrorLine, Field, LoadError, GameAvatar, GoLink, IconDiscord, IconEdit, IconPause, IconPlay, IconTrash, InviteButton, Modal, Notice, PageHead, Strip, Switch, AdminPage, ago, toast, undoable, usePoll, navigate, errText } from '../ui';
 import { BotPill } from './Settings';

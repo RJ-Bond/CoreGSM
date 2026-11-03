@@ -23,6 +23,7 @@ import { api, getToken } from './api';
 import { toast } from './ui/toast';
 import { initAppearance } from './appearance';
 import { QueryProvider } from './ui/query';
+import { ready as i18nReady } from './i18n';
 import { installViewport } from './ui/viewport';
 import { initDensity, installMagnetic, installSegIndicator } from './useMotion';
 
@@ -33,15 +34,18 @@ installMagnetic();
 installSegIndicator();
 installViewport();
 
-ReactDOM.createRoot(document.getElementById('root')!).render(
-  <React.StrictMode>
-    <RootBoundary>
-      <QueryProvider>
-        <App />
-      </QueryProvider>
-    </RootBoundary>
-  </React.StrictMode>,
-);
+// the English dictionary is a separate chunk: wait for it so that an English page never flashes in Russian first
+void i18nReady().then(() => {
+  ReactDOM.createRoot(document.getElementById('root')!).render(
+    <React.StrictMode>
+      <RootBoundary>
+        <QueryProvider>
+          <App />
+        </QueryProvider>
+      </RootBoundary>
+    </React.StrictMode>,
+  );
+});
 
 // installable as an app (home screen on phones, window on desktop)
 // the browser offers to install the panel as an app: keep the offer for the «Установить приложение» button

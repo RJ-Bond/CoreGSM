@@ -1,9 +1,8 @@
 // The «Список» and «ТВ» views of the servers page.
 import { useEffect, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
 import type { Server } from '../../api';
 import { gameColor, gameLabel } from '../../games';
-import { AnimatedNumber, GameAvatar, MiniSpark, StatusPill, ago, isLag, plural, num } from '../../ui';
+import { AnimatedNumber, GameAvatar, ago, isLag, num } from '../../ui';
 import MaintenanceChip from '../MaintenanceChip';
 import { t, useI18n, type TKey } from '../../i18n';
 import { CapacityBar, CountReact, StatusFlash, reactionOf, type Reactions } from './serverUi';

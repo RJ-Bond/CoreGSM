@@ -6,7 +6,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { api, onBusy, type Me } from '../api';
 import { useAppearance } from '../appearance';
-import { t, useI18n, type TKey } from '../i18n';
+import { t, useI18n } from '../i18n';
 import { UserAvatar } from '../ui';
 import { FootCommunity, FootGallery, FootNews, FootServers, FootStatus, FootTag } from './FooterIcons';
 import { MenuAdmin, MenuGallery, MenuLogout, MenuUser } from './HeaderIcons';

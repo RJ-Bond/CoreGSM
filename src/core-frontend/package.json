@@ -9,7 +9,8 @@
     "test": "vitest run",
     "coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit",
-    "lint": "oxlint"
+    "lint": "oxlint",
+    "lint:ratchet": "node scripts/lint-ratchet.mjs"
   },
   "dependencies": {
     "@fontsource-variable/golos-text": "^5.3.0",

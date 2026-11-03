@@ -9,7 +9,7 @@ const readName = () => {
   try { return localStorage.getItem(NAME_KEY) ?? ''; } catch { return ''; }
 };
 const writeName = (v: string) => {
-  try { v ? localStorage.setItem(NAME_KEY, v) : localStorage.removeItem(NAME_KEY); } catch { /* not remembered */ }
+  try { if (v) localStorage.setItem(NAME_KEY, v); else localStorage.removeItem(NAME_KEY); } catch { /* not remembered */ }
 };
 
 const clock = (sec: number) => `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;

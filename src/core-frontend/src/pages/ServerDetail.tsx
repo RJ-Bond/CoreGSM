@@ -346,7 +346,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
 
   const { server: s, stats, events, points } = data;
   const accent = coverAccentOrGame;
-  const [c1, c2] = gameGradient(s.game);
+  const [c1] = gameGradient(s.game);
   const lag = isLag(s);
   const profile = profiles?.[s.game];
   const guide = applyConnectTemplates(connectGuide(s.game, s.address), profile?.connect, s.address, profile?.defaultPort);

@@ -12,7 +12,7 @@ import { AchievementCard } from '../components/profile/Achievements';
 import { FollowButton } from '../components/profile/Follows';
 import { ReportButton } from '../components/profile/ReportButton';
 import { rankById } from '../vrisingRanks';
-import { Empty, ErrorLine, GameAvatar, ago, fmtDateTime, fmtTime, plural, num } from '../ui';
+import { Empty, ErrorLine, GameAvatar, ago, fmtDateTime, fmtTime, num } from '../ui';
 import ArtPic from '../components/ArtPic';
 import '../styles/community.css';
 import '../styles/profile.css';
