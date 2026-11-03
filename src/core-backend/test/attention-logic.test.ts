@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildAttention, diskLevel, shouldAlertDisk, type AttentionInput } from '../src/attentionLogic.ts';
+import { buildAttention, diskLevel, shouldAlertDisk, type AttentionInput } from '../src/alerts/attentionLogic.ts';
 
 const now = 1_800_000_000_000;
 const base = (o: Partial<AttentionInput> = {}): AttentionInput => ({

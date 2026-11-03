@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { needsAgreement, nextRulesVersion } from '../src/rulesLogic.ts';
+import { needsAgreement, nextRulesVersion } from '../src/monitoring/rulesLogic.ts';
 
 describe('nextRulesVersion', () => {
   it('the first text is version 1', () => assert.equal(nextRulesVersion(null, ' Be kind '), 1));

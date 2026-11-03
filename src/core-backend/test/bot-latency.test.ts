@@ -1,7 +1,7 @@
 /** Bot latency: sampling and the verdict (pure logic). */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { addPing, pingVerdict, thin, PING_BAD_MS, PING_GAP_MS, PING_KEEP, PING_SLOW_MS, type PingSample } from '../src/botLatencyLogic.ts';
+import { addPing, pingVerdict, thin, PING_BAD_MS, PING_GAP_MS, PING_KEEP, PING_SLOW_MS, type PingSample } from '../src/discord/botLatencyLogic.ts';
 
 describe('bot latency', () => {
   it('keeps one sample per minute and drops garbage', () => {

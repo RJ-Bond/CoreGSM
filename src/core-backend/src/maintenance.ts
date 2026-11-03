@@ -6,7 +6,7 @@
 import type { Express, Request, RequestHandler } from 'express';
 import { z } from 'zod';
 import { db } from './db.js';
-import { dispatchEvent } from './alertChannels.js';
+import { dispatchEvent } from './alerts/alertChannels.js';
 
 export type Repeat = 'none' | 'daily' | 'weekly';
 

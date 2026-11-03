@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
 import Database from 'better-sqlite3';
-import { nextRank, rankForHours, rankProgress, VR_RANKS } from '../src/ranks.ts';
+import { nextRank, rankForHours, rankProgress, VR_RANKS } from '../src/profile/ranks.ts';
 import { setupAdmin, startBackend, type Api } from './harness.ts';
 
 const H = 3600_000;

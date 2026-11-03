@@ -35,7 +35,7 @@ describe('secrets at rest', () => {
   it('round-trips and rejects a wrong key', async () => {
     process.env.JWT_SECRET = 'a'.repeat(48);
     delete process.env.SECRETS_KEY;
-    const s = await import('../src/secrets.ts');
+    const s = await import('../src/security/secrets.ts');
     const enc = s.encryptSecret('hunter2-token');
     assert.ok(enc.startsWith('enc:v1:'));
     assert.notEqual(enc, s.encryptSecret('hunter2-token'), 'random IV');
@@ -294,7 +294,7 @@ describe('secrets written with the old JWT_SECRET key move to SECRETS_KEY at boo
     const prevKey = process.env.SECRETS_KEY;
     process.env.JWT_SECRET = 'j'.repeat(48);
     delete process.env.SECRETS_KEY;
-    const s = await import('../src/secrets.ts');
+    const s = await import('../src/security/secrets.ts');
     legacy = s.encryptSecret(TOKEN);
     if (prevJwt === undefined) delete process.env.JWT_SECRET;
     else process.env.JWT_SECRET = prevJwt;

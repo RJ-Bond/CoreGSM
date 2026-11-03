@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { s3ObjectUrl, s3Problem, signV4 } from '../src/s3.js';
+import { s3ObjectUrl, s3Problem, signV4 } from '../src/admin/s3.js';
 
 test('SigV4 matches the example from the AWS documentation (GET with a Range header)', () => {
   const h = signV4({
