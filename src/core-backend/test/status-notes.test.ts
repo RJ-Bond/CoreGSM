@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { noteTone, NOTES_SHOWN, RESOLVED_KEEP_MS, visibleNotes } from '../src/statusNotesLogic.js';
+import { noteTone, NOTES_SHOWN, RESOLVED_KEEP_MS, visibleNotes } from '../src/alerts/statusNotesLogic.js';
 
 const NOW = 1_000_000_000_000;
 const n = (id: number, level: 'info' | 'warn' | 'bad' | 'ok', created: number, resolved: number | null = null) => ({ id, level, created_at: created, resolved_at: resolved });

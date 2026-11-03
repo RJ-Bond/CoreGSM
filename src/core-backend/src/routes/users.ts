@@ -2,12 +2,12 @@
 import express from 'express';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
-import { admin, type AuthedRequest, parsePerms, PERMS, type Role } from '../auth.js';
-import { avatarFor, removeAvatar } from '../avatars.js';
-import { activeBan, banUntil } from '../banLogic.js';
+import { admin, type AuthedRequest, parsePerms, PERMS, type Role } from '../security/auth.js';
+import { avatarFor, removeAvatar } from '../images/avatars.js';
+import { activeBan, banUntil } from '../security/banLogic.js';
 import { db } from '../db.js';
 import { wrap } from '../http.js';
-import { logAccount, removeBanner } from '../profile.js';
+import { logAccount, removeBanner } from '../profile/profile.js';
 
 export const router = express.Router();
 

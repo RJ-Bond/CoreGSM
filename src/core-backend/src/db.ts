@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
 import fs from 'node:fs';
 import path from 'node:path';
-import { canDecrypt, decryptSecret, encryptSecret, isEncrypted, isSecretKey, reencrypt, usesLegacyKey } from './secrets.js';
+import { canDecrypt, decryptSecret, encryptSecret, isEncrypted, isSecretKey, reencrypt, usesLegacyKey } from './security/secrets.js';
 import { runMigrations } from './migrations.js';
 import { addColumn } from './schema.js';
 import { log } from './logger.js';

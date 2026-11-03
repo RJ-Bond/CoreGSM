@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
-import { clampRateLimit, extractKey, generateKey, hashKey, keyPrefix, looksLikeKey, SlidingWindow } from '../src/apiKeyLogic.ts';
-import { badgeSvg, escapeXml, stateOf, valueText, widgetHtml } from '../src/badgeLogic.ts';
-import { openApiSpec } from '../src/openapi.ts';
+import { clampRateLimit, extractKey, generateKey, hashKey, keyPrefix, looksLikeKey, SlidingWindow } from '../src/security/apiKeyLogic.ts';
+import { badgeSvg, escapeXml, stateOf, valueText, widgetHtml } from '../src/profile/badgeLogic.ts';
+import { openApiSpec } from '../src/admin/openapi.ts';
 import { setupAdmin, startBackend, type Api } from './harness.ts';
 
 describe('api key logic', () => {

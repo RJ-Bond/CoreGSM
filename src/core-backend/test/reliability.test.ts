@@ -9,7 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import Database from 'better-sqlite3';
 import bcrypt from 'bcryptjs';
-import { clampConcurrency, clampDays, clampThreshold, decideStatus, pruneDue, RETENTION_DEFAULTS, runPool } from '../src/pollLogic.ts';
+import { clampConcurrency, clampDays, clampThreshold, decideStatus, pruneDue, RETENTION_DEFAULTS, runPool } from '../src/community/pollLogic.ts';
 import { ADMIN, setupAdmin, startBackend, type Api } from './harness.ts';
 
 // ---------------------------------------------------------------- pure logic
@@ -91,14 +91,14 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'coregsm-rel-'));
 process.env.DB_PATH = path.join(tmp, 'coregsm.db');
 process.env.NODE_ENV = 'test';
 const { db, setSetting } = await import('../src/db.ts');
-const { applyPollResult } = await import('../src/gsm.ts');
-const { trackAlerts } = await import('../src/alerts.ts');
+const { applyPollResult } = await import('../src/monitoring/gsm.ts');
+const { trackAlerts } = await import('../src/alerts/alerts.ts');
 const M = await import('../src/maintenance.ts');
 const { appliedVersions, LATEST_VERSION, runMigrations, MIGRATIONS } = await import('../src/migrations.ts');
-const health = await import('../src/health.ts');
-const dbMaint = await import('../src/dbMaintenance.ts');
+const health = await import('../src/monitoring/health.ts');
+const dbMaint = await import('../src/admin/dbMaintenance.ts');
 type ServerRow = import('../src/db.ts').ServerRow;
-type QueryResult = import('../src/gsm.ts').QueryResult;
+type QueryResult = import('../src/monitoring/gsm.ts').QueryResult;
 
 const UP: QueryResult = { online: true, name: 'S', players: 3, maxPlayers: 10, map: 'm', version: null, ping: 20, playerNames: ['a'], error: null };
 const DOWN: QueryResult = { online: false, name: null, players: 0, maxPlayers: 0, map: null, version: null, ping: null, playerNames: [], error: 'no answer' };
@@ -340,7 +340,7 @@ describe('versioned migrations', () => {
 });
 
 describe('health flags (pure)', () => {
-  const S = (o: Partial<import('../src/health.ts').Sample>): import('../src/health.ts').Sample => ({
+  const S = (o: Partial<import('../src/monitoring/health.ts').Sample>): import('../src/monitoring/health.ts').Sample => ({
     ts: 0, dbBytes: 1_000_000, rssMb: 100, pollMs: 500, pollFailures: 0, botState: 'online', queueLen: 0, diskFree: 50 * 1073741824, ...o,
   });
   const now = 10 * 86_400_000;

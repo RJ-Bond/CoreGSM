@@ -11,10 +11,10 @@
  *   top       the ten players with the most time on the server in the period
  */
 import express from 'express';
-import { viewer } from '../auth.js';
+import { viewer } from '../security/auth.js';
 import { db, getSetting } from '../db.js';
-import { localParts } from '../localTime.js';
-import { vrRankIdFor } from '../profile.js';
+import { localParts } from '../admin/localTime.js';
+import { vrRankIdFor } from '../profile/profile.js';
 import { param } from '../http.js';
 
 export const router = express.Router();

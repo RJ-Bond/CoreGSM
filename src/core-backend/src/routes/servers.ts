@@ -1,23 +1,23 @@
 /** Game servers: list and CRUD, server page data, history, PNG card, share page, status page. */
 import express from 'express';
 import { z } from 'zod';
-import { admin, allow, isAdmin, loadUser, publicPanel, userFromToken, viewer } from '../auth.js';
-import { channelInfo } from '../botState.js';
-import { isKnownGame, renderAllCard, renderCard, renderGameIcon } from '../card.js';
-import { parseCardOpts } from '../cardLogic.js';
-import { removeCover } from '../covers.js';
+import { admin, allow, isAdmin, loadUser, publicPanel, userFromToken, viewer } from '../security/auth.js';
+import { channelInfo } from '../discord/botState.js';
+import { isKnownGame, renderAllCard, renderCard, renderGameIcon } from '../images/card.js';
+import { parseCardOpts } from '../images/cardLogic.js';
+import { removeCover } from '../images/covers.js';
 import { type BindingRow, db, type ServerRow } from '../db.js';
-import { gameLabel } from '../games.js';
-import { countryOf } from '../geo.js';
-import { queryServer, refreshServer, retentionDays } from '../gsm.js';
+import { gameLabel } from '../monitoring/games.js';
+import { countryOf } from '../monitoring/geo.js';
+import { queryServer, refreshServer, retentionDays } from '../monitoring/gsm.js';
 import { param, wrap } from '../http.js';
 import { occurrencesBetween, type WindowRow } from '../maintenance.js';
-import { vrRankIdFor } from '../profile.js';
-import { downtimeByDay, incidentsSince } from '../incidents.js';
-import { completeOrder } from '../serverOrderLogic.js';
-import { getServer, publicServer, SELECT_SERVERS, SERVER_ORDER, serialize, type ServerJoin } from '../serverData.js';
-import { baseOf, brand, publicBase } from '../site.js';
-import { publicNotes } from '../statusNotes.js';
+import { vrRankIdFor } from '../profile/profile.js';
+import { downtimeByDay, incidentsSince } from '../alerts/incidents.js';
+import { completeOrder } from '../monitoring/serverOrderLogic.js';
+import { getServer, publicServer, SELECT_SERVERS, SERVER_ORDER, serialize, type ServerJoin } from '../monitoring/serverData.js';
+import { baseOf, brand, publicBase } from '../admin/site.js';
+import { publicNotes } from '../alerts/statusNotes.js';
 
 export const router = express.Router();
 

@@ -23,7 +23,7 @@ describe('V Rising rank ladder', () => {
     expect(rankById(undefined)).toBeUndefined();
   });
   it('matches the backend ladder (ids, hours, colours, images)', () => {
-    const src = readFileSync(new URL('../../core-backend/src/ranks.ts', import.meta.url), 'utf8');
+    const src = readFileSync(new URL('../../core-backend/src/profile/ranks.ts', import.meta.url), 'utf8');
     const rows = [...src.matchAll(/id: '([a-z]+)', name: '[^']+', minHours: (\d+), color: '(#[0-9a-f]{6})', image: '([^']+)'/g)].map((m) => ({ id: m[1], minHours: Number(m[2]), color: m[3], image: m[4] }));
     expect(rows).toEqual(VR_RANKS.map((r) => ({ id: r.id, minHours: r.minHours, color: r.color, image: r.image })));
   });

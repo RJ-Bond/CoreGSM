@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { GAME_TEMPLATE, parseGameFile } from '../src/gameFileLogic.ts';
+import { GAME_TEMPLATE, parseGameFile } from '../src/monitoring/gameFileLogic.ts';
 
 describe('parseGameFile', () => {
   it('the template is valid', () => {

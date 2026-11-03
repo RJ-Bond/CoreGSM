@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { classifyCommit, isNoopJob, jobKind, parseChannel, shouldAnnounce, stageOf } from '../src/updateLogic.js';
+import { classifyCommit, isNoopJob, jobKind, parseChannel, shouldAnnounce, stageOf } from '../src/admin/updateLogic.js';
 
 const run = (progress: number | undefined, message = 'x') => ({ state: 'running', message, time: 1, progress });
 
@@ -65,7 +65,7 @@ describe('announcements and channel', () => {
   });
 });
 
-import { buildNotice, cmpVersion, daysAgoText, noticeFields, noticeWarnings, notesBetween, notesText, parseChangelog, parseNoticeLang, parseNoticeMode, parseRemindDays, parseVersion, releaseAgeDays, shouldRemind } from '../src/updateLogic.js';
+import { buildNotice, cmpVersion, daysAgoText, noticeFields, noticeWarnings, notesBetween, notesText, parseChangelog, parseNoticeLang, parseNoticeMode, parseRemindDays, parseVersion, releaseAgeDays, shouldRemind } from '../src/admin/updateLogic.js';
 
 describe('readable versions', () => {
   it('compares number by number, not as text', () => {
