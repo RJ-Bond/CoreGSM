@@ -29,7 +29,7 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="14491ea4ac5b"
+COREGSM_BUILD="58bf8a9e7907"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -20227,7 +20227,8 @@ __COREGSM_EOF__
         "@fontsource-variable/literata": "^5.3.0",
         "qrcode-generator": "^2.0.4",
         "react": "^19.3.1",
-        "react-dom": "^19.3.1"
+        "react-dom": "^19.3.1",
+        "uplot": "^1.6.32"
       },
       "devDependencies": {
         "@tailwindcss/postcss": "^4.3.3",
@@ -22213,6 +22214,12 @@ __COREGSM_EOF__
         "browserslist": ">= 4.21.0"
       }
     },
+    "node_modules/uplot": {
+      "version": "1.6.32",
+      "resolved": "https://registry.npmjs.org/uplot/-/uplot-1.6.32.tgz",
+      "integrity": "sha512-KIMVnG68zvu5XXUbC4LQEPnhwOxBuLyW1AHtpm6IKTXImkbLgkMy+jabjLgSLMasNuGGzQm/ep3tOkyTxpiQIw==",
+      "license": "MIT"
+    },
     "node_modules/vite": {
       "version": "8.3.5",
       "resolved": "https://registry.npmjs.org/vite/-/vite-8.3.5.tgz",
@@ -22691,7 +22698,8 @@ __COREGSM_EOF__
     "@fontsource-variable/literata": "^5.3.0",
     "qrcode-generator": "^2.0.4",
     "react": "^19.3.1",
-    "react-dom": "^19.3.1"
+    "react-dom": "^19.3.1",
+    "uplot": "^1.6.32"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.3.3",
