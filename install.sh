@@ -31,7 +31,7 @@ fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
 COREGSM_BUILD="0184ab6ce466"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.0.0.92"
+COREGSM_VERSION="1.0.93"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------

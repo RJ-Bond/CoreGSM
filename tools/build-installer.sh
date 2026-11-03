@@ -47,17 +47,31 @@ trap 'rm -f "$GEN" "$FILES" "$MANAGER"' EXIT
 tr -d '\r' < tools/coregsm.sh > "$MANAGER"
 if grep -q '^MANAGER$' "$MANAGER"; then echo "Delimiter MANAGER found inside coregsm.sh" >&2; exit 1; fi
 
-# The pretty version "1.0.0.7": the base from VERSION plus a counter that grows whenever the build id changes.
+# The pretty version "1.0.91": VERSION holds the major and minor ("1.0"), a counter grows whenever the build id changes
+# and is written as minor.patch with 100 patches to a minor: ... 1.0.98, 1.0.99, 1.1.0, 1.1.1 ...
 # Unchanged sources keep their label, so the CI check "install.sh is up to date" stays stable.
-BASE_VERSION="$(tr -d ' \r\n' < VERSION 2>/dev/null)"; [ -n "$BASE_VERSION" ] || BASE_VERSION=1.0.0
+# Older labels with four parts ("1.0.0.90", base 1.0.0 plus a counter) are read as their counter.
+BASE_VERSION="$(tr -d " 
+" < VERSION 2>/dev/null)"; [ -n "$BASE_VERSION" ] || BASE_VERSION=1.0
+case "$BASE_VERSION" in [0-9]*.[0-9]*.*) BASE_VERSION="${BASE_VERSION%.*}" ;; esac # an old three-part VERSION: major.minor only
+BASE_MAJOR="${BASE_VERSION%%.*}"; BASE_MINOR="${BASE_VERSION#*.}"
 PREV_BUILD="$(sed -n 's/^build=//p' version.txt 2>/dev/null | head -n1)"
 PREV_VER="$(sed -n 's/^version=//p' version.txt 2>/dev/null | head -n1)"
-if [ "$PREV_BUILD" = "$BUILD_ID" ] && [ -n "$PREV_VER" ] && [ "${PREV_VER%.*}" = "$BASE_VERSION" ]; then
+counter_of() { # counter_of LABEL -> the number of builds the label stands for
+  local v="$1" b c n=0
+  case "$v" in
+    *.*.*.*) n="${v##*.}" ;;
+    *.*.*) b="${v#*.}"; b="${b%%.*}"; c="${v##*.}"
+           case "$b$c" in ''|*[!0-9]*) n=0 ;; *) n=$(( (b - BASE_MINOR) * 100 + c )) ;; esac ;;
+  esac
+  case "$n" in ''|*[!0-9]*) n=0 ;; esac
+  echo "$n"
+}
+if [ "$PREV_BUILD" = "$BUILD_ID" ] && [ -n "$PREV_VER" ]; then
   VERSION_LABEL="$PREV_VER"
 else
-  n=0; [ "${PREV_VER%.*}" = "$BASE_VERSION" ] && n="${PREV_VER##*.}"
-  case "$n" in ''|*[!0-9]*) n=0 ;; esac
-  VERSION_LABEL="$BASE_VERSION.$((n + 1))"
+  n=$(( $(counter_of "$PREV_VER") + 1 ))
+  VERSION_LABEL="$BASE_MAJOR.$(( BASE_MINOR + n / 100 )).$(( n % 100 ))"
 fi
 
 awk -v gen="$GEN" -v mgr="$MANAGER" -v build="$BUILD_ID" -v ver="$VERSION_LABEL" '
