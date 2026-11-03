@@ -10,7 +10,7 @@ import { SubscribeForm } from '../components/server/SubscribeMenu';
 import { badgeText, type SubKind } from '../notifications';
 import { unreadableSecrets } from '../security';
 import {
-  AdminPage, Button, Empty, ErrorLine, FieldError, FillBar, GoLink, ICON_SET, IconBell, IconPlus, IconRefresh, IconTrash, IconEdit, Modal,
+  AdminPage, Button, Empty, ErrorLine, FieldError, FillBar, GameAvatar, GoLink, LoadError, SkeletonRows, ICON_SET, IconBell, IconPlus, IconRefresh, IconTrash, IconEdit, Modal,
   Notice, PageHead, PasswordField, SaveBadge, Section, Spinner, StateView, StatusPill, Strip, Switch, TextField, ThemeToggle, toast, undoable,
   type SaveStatus,
 } from '../ui';
@@ -23,6 +23,9 @@ const SURFACES: [string, string, string][] = [
   ['page', 'bg-page', 'фон страницы'], ['card', 'bg-card', 'карточка'], ['raised', 'bg-raised', 'диалоги, меню'], ['soft', 'bg-soft', 'поля, подложки'],
 ];
 const TEXTS: [string, string][] = [['text-ink', 'Основной текст'], ['text-mute', 'Вторичный текст'], ['text-link', 'Ссылка и акцент'], ['text-ok', 'Успех'], ['text-warn', 'Внимание'], ['text-bad', 'Ошибка']];
+
+/** captions of the game-icon and list-state blocks (a reference page: Russian only, like the arrays above) */
+const KIT = { avatars: 'Значки игр', glass: 'glass на цвете', states: 'Состояния списка: загрузка · пусто · ошибка', emptyTitle: 'Здесь пока пусто', emptyText: 'Объясните, что это за раздел.' };
 
 function Block({ title, note, children }: { title: string; note?: ReactNode; children: ReactNode }) {
   return (
@@ -385,6 +388,36 @@ export default function UiKitPage() {
             <div className="skeleton skel-line w-5/6" />
           </div>
           <div className="flex items-center gap-2 font-bold text-mute"><Spinner />Идёт загрузка…</div>
+        </div>
+      </Block>
+
+      <Block
+        title={KIT.avatars}
+        note="GameAvatar: до 34 px лёгкая подложка цвета игры с тонкой рамкой (списки, таблицы), крупнее — глубокая плитка с эмблемой. glass — на цветном фоне героя. Размеры в коде: 26–34 списки, 40–46 карточки, 72 страница сервера."
+      >
+        <div className="flex flex-wrap items-end gap-5">
+          {[26, 32, 44, 72].map((px) => (
+            <figure key={px} className="grid justify-items-center gap-2">
+              <div className="flex items-center gap-2">
+                {['rust', 'vrising', 'icarus', 'minecraft'].map((g) => <GameAvatar key={g} game={g} size={px} />)}
+              </div>
+              <figcaption className="text-xs font-bold text-mute">{px} px</figcaption>
+            </figure>
+          ))}
+          <figure className="grid justify-items-center gap-2">
+            <div className="flex items-center gap-2 rounded-2xl bg-brand p-3">
+              {['rust', 'vrising'].map((g) => <GameAvatar key={g} game={g} size={40} glass />)}
+            </div>
+            <figcaption className="text-xs font-bold text-mute">{KIT.glass}</figcaption>
+          </figure>
+        </div>
+      </Block>
+
+      <Block title={KIT.states} note="Один и тот же блок в трёх состояниях: форма не прыгает. Загрузка — SkeletonRows, пусто — Empty с одним понятным действием, ошибка — LoadError с «Повторить».">
+        <div className="grid gap-4 md:grid-cols-3">
+          <div className="panel p-4"><SkeletonRows n={3} /></div>
+          <div className="panel p-4"><Empty title={KIT.emptyTitle} text={KIT.emptyText} /></div>
+          <div className="panel p-4"><LoadError error="Не удалось загрузить список" onRetry={() => undefined} /></div>
         </div>
       </Block>
 
