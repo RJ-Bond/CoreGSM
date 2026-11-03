@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { chartScale, playersBar } from '../src/chartLogic.ts';
+import { chartScale, playersBar } from '../src/images/chartLogic.ts';
 
 describe('players bar', () => {
   it('a half-full server is all in the game colour', () => {

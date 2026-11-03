@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
 import Database from 'better-sqlite3';
-import { distinctNames, levenshtein, similarNames, suggestNames } from '../src/nickMatch.ts';
+import { distinctNames, levenshtein, similarNames, suggestNames } from '../src/profile/nickMatch.ts';
 import { setupAdmin, startBackend, type Api } from './harness.ts';
 
 describe('nick matching (pure)', () => {

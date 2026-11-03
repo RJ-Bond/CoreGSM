@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
 import Database from 'better-sqlite3';
-import { cleanGameNick, sanitizeLogin, uniqueLogin } from '../src/discordNames.ts';
+import { cleanGameNick, sanitizeLogin, uniqueLogin } from '../src/discord/discordNames.ts';
 import { setupAdmin, startBackend, type Api } from './harness.ts';
 
 const LOGIN_RE = /^(?=.{3,32}$)[\p{L}\p{N}_.-]+(?: [\p{L}\p{N}_.-]+)*$/u;

@@ -7,12 +7,12 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { after, before, beforeEach, describe, it } from 'node:test';
-import { parseM2oInfo } from '../src/m2oInfo.ts';
-import { parseMasterlist, setMasterlistSource } from '../src/m2oMasterlist.ts';
+import { parseM2oInfo } from '../src/monitoring/m2oInfo.ts';
+import { parseMasterlist, setMasterlistSource } from '../src/monitoring/m2oMasterlist.ts';
 
 process.env.NODE_ENV = 'test';
-const { queryServer } = await import('../src/query.ts');
-const { GAME_PROFILES } = await import('../src/games.ts');
+const { queryServer } = await import('../src/monitoring/query.ts');
+const { GAME_PROFILES } = await import('../src/monitoring/games.ts');
 
 /** what GET / of a server answers (the keys of instance.cpp) */
 const INFO = {

@@ -15,6 +15,7 @@ cd src/core-frontend && npm ci && npm run dev        # панель на :5173, 
 - `npm run typecheck` и `npm test` в `src/core-backend`, `src/core-frontend`, `src/core-bot`.
 - `install.sh` и `version.txt` **генерируются**: после правок в `src/**` и `tools/**` выполните `bash tools/build-installer.sh` и закоммитьте результат (иначе упадёт проверка `up-to-date`).
 - Тексты ошибок API живут в `src/core-backend/src/errors.ts` и обязаны иметь перевод в `src/core-frontend/src/locales/errors.en.ts` (тест `errors.test.ts` следит за этим).
+- Бэкенд `src/core-backend/src` разложен по областям: `news/`, `alerts/` (оповещения, рассылки), `discord/`, `images/` (карточки, графики, обложки), `profile/`, `security/` (вход, ключи, баны), `monitoring/` (опрос серверов, игры), `community/`, `admin/` (копии, обновления, API); общее (`db`, `config`, `errors`, `http`, `index`) и `routes/` лежат в корне. Рядом с `xxx.ts` живёт чистая логика `xxxLogic.ts`, которую тестируют без ввода-вывода.
 - Строки интерфейса добавляйте в `locales/ru.ts` и `locales/en.ts` одновременно.
 - Миграции базы только добавляются в конец `migrations.ts`; выпущенные не правятся.
 - Классы кнопок берите из `styles/buttons.css` (тест `buttons.test.ts` проверяет, что каждый класс существует).

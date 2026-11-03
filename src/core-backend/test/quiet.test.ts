@@ -1,7 +1,7 @@
 /** Quiet hours of the push notifications (pure logic). */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { hhmm, inQuiet, localMinutes, parseHhmm, type Quiet } from '../src/quietLogic.ts';
+import { hhmm, inQuiet, localMinutes, parseHhmm, type Quiet } from '../src/alerts/quietLogic.ts';
 
 const at = (h: number, m = 0) => Date.UTC(2026, 9, 26, h, m);
 const night: Quiet = { enabled: true, fromMin: 23 * 60, toMin: 8 * 60, tz: 180 };

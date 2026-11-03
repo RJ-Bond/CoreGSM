@@ -4,14 +4,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { Request } from 'express';
 import { z } from 'zod';
-import { admin, publicPanel, registrationOpen } from '../auth.js';
-import { pingVerdict, thin } from '../botLatencyLogic.js';
-import { bot, BOT_COMMANDS, clientIdFromToken, discordLoginReady, invitePayload } from '../botState.js';
+import { admin, publicPanel, registrationOpen } from '../security/auth.js';
+import { pingVerdict, thin } from '../discord/botLatencyLogic.js';
+import { bot, BOT_COMMANDS, clientIdFromToken, discordLoginReady, invitePayload } from '../discord/botState.js';
 import { getSetting, setSetting } from '../db.js';
-import { BOT_TOKEN_RE, maskProxy, normalizeProxy, PROXY_HELP, PROXY_RE, TOKEN_HELP } from '../proxyInput.js';
-import { currentRules } from '../rules.js';
+import { BOT_TOKEN_RE, maskProxy, normalizeProxy, PROXY_HELP, PROXY_RE, TOKEN_HELP } from '../security/proxyInput.js';
+import { currentRules } from '../monitoring/rules.js';
 import { installedVersion } from './updates.js';
-import { baseOf, brand, LOGO_PATH, LOGO_TYPES, logoFile, publicBase, registrationMode, rulesText } from '../site.js';
+import { baseOf, brand, LOGO_PATH, LOGO_TYPES, logoFile, publicBase, registrationMode, rulesText } from '../admin/site.js';
 
 export const router = express.Router();
 

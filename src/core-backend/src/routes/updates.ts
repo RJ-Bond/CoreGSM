@@ -2,14 +2,14 @@
 import express from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
-import { admin } from '../auth.js';
+import { admin } from '../security/auth.js';
 import { APP_VERSION, APP_VERSION_NAME } from '../config.js';
 import { wrap } from '../http.js';
 import { log } from '../logger.js';
 import { db, getSetting, setSetting } from '../db.js';
-import { alertSettings, enqueueAlert, isQuietNow } from '../alerts.js';
-import { listBackups } from '../backup.js';
-import { buildNotice, classifyCommit, isNoopJob, parseChangelog, parseNoticeLang, parseNoticeMode, parseRemindDays, shouldRemind, type Notice, parseVersion, jobKind, parseChannel, shouldAnnounce, stageOf, type Channel, type CommitFlag, type CommitKind } from '../updateLogic.js';
+import { alertSettings, enqueueAlert, isQuietNow } from '../alerts/alerts.js';
+import { listBackups } from '../admin/backup.js';
+import { buildNotice, classifyCommit, isNoopJob, parseChangelog, parseNoticeLang, parseNoticeMode, parseRemindDays, shouldRemind, type Notice, parseVersion, jobKind, parseChannel, shouldAnnounce, stageOf, type Channel, type CommitFlag, type CommitKind } from '../admin/updateLogic.js';
 
 export const router = express.Router();
 

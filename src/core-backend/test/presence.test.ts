@@ -1,7 +1,7 @@
 /** The bot's status line: the dot colour and the rotating lines. */
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
-import { buildPresence, type PresenceServer } from '../src/presence.ts';
+import { buildPresence, type PresenceServer } from '../src/monitoring/presence.ts';
 import { startBackend, type Api } from './harness.ts';
 
 const sv = (name: string, o: Partial<PresenceServer> = {}): PresenceServer => ({ name, online: true, players: 0, maxPlayers: 20, hasStatus: true, ...o });

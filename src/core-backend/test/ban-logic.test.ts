@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { activeBan, banUntil } from '../src/banLogic.ts';
+import { activeBan, banUntil } from '../src/security/banLogic.ts';
 
 const NOW = 1_000_000_000;
 describe('activeBan', () => {
