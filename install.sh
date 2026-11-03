@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="1044248c3cb4"
+COREGSM_BUILD="589222769f3b"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.0.0.83"
+COREGSM_VERSION="1.0.0.84"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -147542,9 +147542,20 @@ function ServerList() {
   const phone = useIsPhone();
   const { me, isAdmin } = useAuth();
   const [favs, setFavs] = useState<number[]>([]);
+  // the remembered «Favourites» filter must not leave a person with an empty list: while nothing is starred it falls back to «All»
+  const pickedFilter = useRef(false);
   useEffect(() => {
-    if (me) api<number[]>('/favorites').then(setFavs).catch(() => undefined);
-    else setFavs([]);
+    if (me) {
+      api<number[]>('/favorites')
+        .then((r) => {
+          setFavs(r);
+          if (r.length === 0 && !pickedFilter.current) {
+            setFilterState((f) => (f === 'fav' ? 'all' : f));
+            try { if (localStorage.getItem(FILTER_KEY) === 'fav') localStorage.setItem(FILTER_KEY, 'all'); } catch { /* not remembered */ }
+          }
+        })
+        .catch(() => undefined);
+    } else setFavs([]);
   }, [me]);
   const toggleFav = async (id: number) => {
     const on = favs.includes(id);
@@ -147569,6 +147580,7 @@ function ServerList() {
     }
   });
   const setFilter = (f: Filter) => {
+    pickedFilter.current = true;
     setFilterState(f);
     try {
       localStorage.setItem(FILTER_KEY, f);
