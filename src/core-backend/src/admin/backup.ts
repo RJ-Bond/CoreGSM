@@ -417,6 +417,79 @@ const backupTimers: NodeJS.Timeout[] = [];
 export function startBackupTimer(): void {
   backupTimers.push(setTimeout(() => void runScheduledIfDue(), 60_000).unref());
   backupTimers.push(setInterval(() => void runScheduledIfDue(), 3600_000).unref());
+  backupTimers.push(setTimeout(() => void runVerifyIfDue(), 15 * 60_000).unref());
+  backupTimers.push(setInterval(() => void runVerifyIfDue(), 6 * 3600_000).unref());
+}
+
+// ---------- restore check: a backup nobody has tried to open is a hope, not a backup ----------
+export interface VerifyResult {
+  at: number;
+  name: string;
+  ok: boolean;
+  /** why the copy cannot be restored (Russian, for the panel); empty when the check passed */
+  message: string;
+  /** what the opened database holds, when the check passed */
+  servers?: number;
+  users?: number;
+}
+const VERIFY_KEY = 'backup_verify';
+const VERIFY_EVERY = 6.9 * 86400_000;
+
+export function lastVerify(): VerifyResult | null {
+  try {
+    const v = JSON.parse(getSetting(VERIFY_KEY) || 'null') as VerifyResult | null;
+    return v && typeof v.at === 'number' && typeof v.name === 'string' && typeof v.ok === 'boolean' ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+/** pure rule: check when there is a copy and the last check is older than a week, or does not concern the newest copy */
+export function verifyDue(newest: { name: string; createdAt: number } | null, last: { at: number; name: string } | null, now: number): boolean {
+  if (!newest) return false;
+  // a copy that has just been written is still being uploaded to the remote targets: give it a few minutes
+  if (now - newest.createdAt < 5 * 60_000) return false;
+  if (!last) return true;
+  return now - last.at >= VERIFY_EVERY;
+}
+
+/** Opens a stored archive the way a restore would (decrypt, unpack, check the database) in a scratch folder and removes it again. */
+export async function verifyBackup(name: string, now = Date.now()): Promise<VerifyResult> {
+  const file = path.join(BACKUP_DIR, name);
+  const stage = fs.mkdtempSync(path.join(DATA_DIR, '.verify-stage-'));
+  const tmp: string[] = [];
+  let result: VerifyResult;
+  try {
+    if (!isBackupName(name) || !fs.existsSync(file)) throw new BackupError('Копия не найдена');
+    await extractAndValidate(file, backupSettings().passphrase, stage, tmp);
+    const d = new Database(path.join(stage, 'coregsm.db'), { readonly: true });
+    try {
+      const n = (t: string) => (d.prepare(`SELECT COUNT(*) AS c FROM ${t}`).get() as { c: number }).c;
+      result = { at: now, name, ok: true, message: '', servers: n('servers'), users: n('users') };
+    } finally {
+      d.close();
+    }
+  } catch (e) {
+    result = { at: now, name, ok: false, message: e instanceof BackupError ? e.message : 'Не удалось открыть копию: ' + (e as Error).message.slice(0, 120) };
+  } finally {
+    rmrf(stage);
+    for (const t of tmp) rmrf(t);
+  }
+  setSetting(VERIFY_KEY, JSON.stringify(result));
+  if (result.ok) log.info(`backup check passed: ${name}`);
+  else log.error(`backup check FAILED: ${name}: ${result.message}`);
+  return result;
+}
+
+export async function runVerifyIfDue(now = Date.now()): Promise<VerifyResult | null> {
+  try {
+    const newest = listBackups()[0] ?? null;
+    if (!verifyDue(newest, lastVerify(), now)) return null;
+    return await verifyBackup(newest!.name, now);
+  } catch (e) {
+    log.error('backup check failed to run:', (e as Error).message);
+    return null;
+  }
 }
 
 /** Shutdown: no new scheduled backups; a backup being written is finished before the database closes. */
@@ -515,10 +588,8 @@ function unreadableSecrets(file: string): string[] {
   }
 }
 
-export async function stageRestore(file: string, passphrase: string | null): Promise<void> {
-  const stage = fs.mkdtempSync(path.join(DATA_DIR, '.restore-stage-'));
-  const tmp: string[] = [];
-  try {
+async function extractAndValidate(file: string, passphrase: string | null, stage: string, tmp: string[]): Promise<void> {
+  {
     let src = file;
     let head = readHead(src, 15);
     if (head.length >= 8 && head.subarray(0, 8).equals(MAGIC)) {
@@ -544,6 +615,14 @@ export async function stageRestore(file: string, passphrase: string | null): Pro
     }
     const bad = validateDb(path.join(stage, 'coregsm.db'));
     if (bad) throw new BackupError(bad);
+  }
+}
+
+export async function stageRestore(file: string, passphrase: string | null): Promise<void> {
+  const stage = fs.mkdtempSync(path.join(DATA_DIR, '.restore-stage-'));
+  const tmp: string[] = [];
+  try {
+    await extractAndValidate(file, passphrase, stage, tmp);
     // secrets are encrypted with SECRETS_KEY / JWT_SECRET of the host that made the copy: say so instead of failing later
     stagedUnreadable = unreadableSecrets(path.join(stage, 'coregsm.db'));
     rmrf(PENDING_DIR);
@@ -616,7 +695,7 @@ export function registerBackups({ app, admin }: { app: Express; admin: RequestHa
 
   const payload = () => {
     const s = backupSettings();
-    return { schedule: s.schedule, keep: s.keep, remoteUrl: maskUrl(s.remoteUrl), encrypted: !!s.passphrase, items: listBackups(), lastRemote: lastRemote(),
+    return { schedule: s.schedule, keep: s.keep, remoteUrl: maskUrl(s.remoteUrl), encrypted: !!s.passphrase, items: listBackups(), lastRemote: lastRemote(), verify: lastVerify(),
       s3: { endpoint: getSetting('backup_s3_endpoint') || '', bucket: getSetting('backup_s3_bucket') || '', region: getSetting('backup_s3_region') || 'us-east-1', prefix: getSetting('backup_s3_prefix') || '', configured: !!s.s3 },
       lastS3: lastS3(),
     };
@@ -743,6 +822,17 @@ export function registerBackups({ app, admin }: { app: Express; admin: RequestHa
     admin,
     guard(async (_req, res) => {
       res.status(201).json(await createStoredBackup('manual'));
+    }),
+  );
+
+  // opens the newest copy the way a restore would and says whether it can be restored
+  app.post(
+    '/api/backups/verify',
+    admin,
+    guard(async (_req, res) => {
+      const newest = listBackups()[0];
+      if (!newest) throw new BackupError('Копий пока нет: проверять нечего');
+      res.json(await verifyBackup(newest.name));
     }),
   );
 

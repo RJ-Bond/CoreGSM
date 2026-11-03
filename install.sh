@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="058e19907365"
+COREGSM_BUILD="5f3e6e645a01"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.0.0.90"
+COREGSM_VERSION="1.0.0.91"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -15082,6 +15082,79 @@ const backupTimers: NodeJS.Timeout[] = [];
 export function startBackupTimer(): void {
   backupTimers.push(setTimeout(() => void runScheduledIfDue(), 60_000).unref());
   backupTimers.push(setInterval(() => void runScheduledIfDue(), 3600_000).unref());
+  backupTimers.push(setTimeout(() => void runVerifyIfDue(), 15 * 60_000).unref());
+  backupTimers.push(setInterval(() => void runVerifyIfDue(), 6 * 3600_000).unref());
+}
+
+// ---------- restore check: a backup nobody has tried to open is a hope, not a backup ----------
+export interface VerifyResult {
+  at: number;
+  name: string;
+  ok: boolean;
+  /** why the copy cannot be restored (Russian, for the panel); empty when the check passed */
+  message: string;
+  /** what the opened database holds, when the check passed */
+  servers?: number;
+  users?: number;
+}
+const VERIFY_KEY = 'backup_verify';
+const VERIFY_EVERY = 6.9 * 86400_000;
+
+export function lastVerify(): VerifyResult | null {
+  try {
+    const v = JSON.parse(getSetting(VERIFY_KEY) || 'null') as VerifyResult | null;
+    return v && typeof v.at === 'number' && typeof v.name === 'string' && typeof v.ok === 'boolean' ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+/** pure rule: check when there is a copy and the last check is older than a week, or does not concern the newest copy */
+export function verifyDue(newest: { name: string; createdAt: number } | null, last: { at: number; name: string } | null, now: number): boolean {
+  if (!newest) return false;
+  // a copy that has just been written is still being uploaded to the remote targets: give it a few minutes
+  if (now - newest.createdAt < 5 * 60_000) return false;
+  if (!last) return true;
+  return now - last.at >= VERIFY_EVERY;
+}
+
+/** Opens a stored archive the way a restore would (decrypt, unpack, check the database) in a scratch folder and removes it again. */
+export async function verifyBackup(name: string, now = Date.now()): Promise<VerifyResult> {
+  const file = path.join(BACKUP_DIR, name);
+  const stage = fs.mkdtempSync(path.join(DATA_DIR, '.verify-stage-'));
+  const tmp: string[] = [];
+  let result: VerifyResult;
+  try {
+    if (!isBackupName(name) || !fs.existsSync(file)) throw new BackupError('Копия не найдена');
+    await extractAndValidate(file, backupSettings().passphrase, stage, tmp);
+    const d = new Database(path.join(stage, 'coregsm.db'), { readonly: true });
+    try {
+      const n = (t: string) => (d.prepare(`SELECT COUNT(*) AS c FROM ${t}`).get() as { c: number }).c;
+      result = { at: now, name, ok: true, message: '', servers: n('servers'), users: n('users') };
+    } finally {
+      d.close();
+    }
+  } catch (e) {
+    result = { at: now, name, ok: false, message: e instanceof BackupError ? e.message : 'Не удалось открыть копию: ' + (e as Error).message.slice(0, 120) };
+  } finally {
+    rmrf(stage);
+    for (const t of tmp) rmrf(t);
+  }
+  setSetting(VERIFY_KEY, JSON.stringify(result));
+  if (result.ok) log.info(`backup check passed: ${name}`);
+  else log.error(`backup check FAILED: ${name}: ${result.message}`);
+  return result;
+}
+
+export async function runVerifyIfDue(now = Date.now()): Promise<VerifyResult | null> {
+  try {
+    const newest = listBackups()[0] ?? null;
+    if (!verifyDue(newest, lastVerify(), now)) return null;
+    return await verifyBackup(newest!.name, now);
+  } catch (e) {
+    log.error('backup check failed to run:', (e as Error).message);
+    return null;
+  }
 }
 
 /** Shutdown: no new scheduled backups; a backup being written is finished before the database closes. */
@@ -15180,10 +15253,8 @@ function unreadableSecrets(file: string): string[] {
   }
 }
 
-export async function stageRestore(file: string, passphrase: string | null): Promise<void> {
-  const stage = fs.mkdtempSync(path.join(DATA_DIR, '.restore-stage-'));
-  const tmp: string[] = [];
-  try {
+async function extractAndValidate(file: string, passphrase: string | null, stage: string, tmp: string[]): Promise<void> {
+  {
     let src = file;
     let head = readHead(src, 15);
     if (head.length >= 8 && head.subarray(0, 8).equals(MAGIC)) {
@@ -15209,6 +15280,14 @@ export async function stageRestore(file: string, passphrase: string | null): Pro
     }
     const bad = validateDb(path.join(stage, 'coregsm.db'));
     if (bad) throw new BackupError(bad);
+  }
+}
+
+export async function stageRestore(file: string, passphrase: string | null): Promise<void> {
+  const stage = fs.mkdtempSync(path.join(DATA_DIR, '.restore-stage-'));
+  const tmp: string[] = [];
+  try {
+    await extractAndValidate(file, passphrase, stage, tmp);
     // secrets are encrypted with SECRETS_KEY / JWT_SECRET of the host that made the copy: say so instead of failing later
     stagedUnreadable = unreadableSecrets(path.join(stage, 'coregsm.db'));
     rmrf(PENDING_DIR);
@@ -15281,7 +15360,7 @@ export function registerBackups({ app, admin }: { app: Express; admin: RequestHa
 
   const payload = () => {
     const s = backupSettings();
-    return { schedule: s.schedule, keep: s.keep, remoteUrl: maskUrl(s.remoteUrl), encrypted: !!s.passphrase, items: listBackups(), lastRemote: lastRemote(),
+    return { schedule: s.schedule, keep: s.keep, remoteUrl: maskUrl(s.remoteUrl), encrypted: !!s.passphrase, items: listBackups(), lastRemote: lastRemote(), verify: lastVerify(),
       s3: { endpoint: getSetting('backup_s3_endpoint') || '', bucket: getSetting('backup_s3_bucket') || '', region: getSetting('backup_s3_region') || 'us-east-1', prefix: getSetting('backup_s3_prefix') || '', configured: !!s.s3 },
       lastS3: lastS3(),
     };
@@ -15408,6 +15487,17 @@ export function registerBackups({ app, admin }: { app: Express; admin: RequestHa
     admin,
     guard(async (_req, res) => {
       res.status(201).json(await createStoredBackup('manual'));
+    }),
+  );
+
+  // opens the newest copy the way a restore would and says whether it can be restored
+  app.post(
+    '/api/backups/verify',
+    admin,
+    guard(async (_req, res) => {
+      const newest = listBackups()[0];
+      if (!newest) throw new BackupError('Копий пока нет: проверять нечего');
+      res.json(await verifyBackup(newest.name));
     }),
   );
 
@@ -17527,7 +17617,7 @@ import fs from 'node:fs';
 import type { Express, RequestHandler } from 'express';
 import { DATA_DIR, db, getSetting, setSetting } from '../db.js';
 import { alertSettings, enqueueAlert } from './alerts.js';
-import { backupSettings, listBackups } from '../admin/backup.js';
+import { backupSettings, lastVerify, listBackups } from '../admin/backup.js';
 import { botStateNow } from '../monitoring/health.js';
 import { log } from '../logger.js';
 import { inMaintenance } from '../maintenance.js';
@@ -17587,6 +17677,12 @@ export function checkDisk(now = Date.now()): boolean {
   return true;
 }
 
+/** the result of the last restore check, only while the copy it concerned is still there */
+function backupCheckNow(): { ok: boolean; name: string } | null {
+  const v = lastVerify();
+  return v && listBackups().some((b) => b.name === v.name) ? { ok: v.ok, name: v.name } : null;
+}
+
 export function registerAttention({ app, admin }: { app: Express; admin: RequestHandler }): void {
   app.get('/api/admin/attention', admin, async (_req, res) => {
     const now = Date.now();
@@ -17601,6 +17697,7 @@ export function registerAttention({ app, admin }: { app: Express; admin: Request
       serversDown: down,
       deadDeliveries: n(`SELECT COUNT(*) AS c FROM deliveries WHERE status = 'dead' AND created_at > ${now - 7 * 86_400_000}`),
       backup: { schedule: bk.schedule, lastAt: last },
+      backupCheck: backupCheckNow(),
       certDays: cert?.daysLeft ?? null,
       updateLabel: updateWaitingLabel(),
       botState: botStateNow(now) === 'none' ? 'online' : botStateNow(now),
@@ -17628,7 +17725,7 @@ __COREGSM_EOF__
 /** The admin «needs attention» list: pure rules (what is shown and in which order), no I/O. */
 export type AttentionTone = 'bad' | 'warn' | 'info';
 export type AttentionKind =
-  | 'servers_down' | 'deliveries_dead' | 'backup_none' | 'backup_old' | 'cert' | 'update' | 'bot' | 'disk' | 'users_pending' | 'reports' | 'comments';
+  | 'servers_down' | 'deliveries_dead' | 'backup_none' | 'backup_old' | 'backup_unreadable' | 'cert' | 'update' | 'bot' | 'disk' | 'users_pending' | 'reports' | 'comments';
 
 export interface AttentionItem {
   id: AttentionKind;
@@ -17645,6 +17742,8 @@ export interface AttentionInput {
   serversDown: string[];
   deadDeliveries: number;
   backup: { schedule: 'off' | 'daily' | 'weekly'; lastAt: number | null };
+  /** the last check that opened the newest copy like a restore: a failed one means the copies cannot be relied on */
+  backupCheck?: { ok: boolean; name: string } | null;
   certDays: number | null;
   updateLabel: string | null;
   botState: string;
@@ -17687,6 +17786,7 @@ export function buildAttention(i: AttentionInput): AttentionItem[] {
     const days = Math.floor((i.now - i.backup.lastAt) / DAY);
     if (days > backupMaxAgeDays(i.backup.schedule)) out.push({ id: 'backup_old', tone: 'warn', n: days, href: '/admin/settings/backups' });
   }
+  if (i.backupCheck && !i.backupCheck.ok) out.push({ id: 'backup_unreadable', tone: 'bad', text: i.backupCheck.name, href: '/admin/settings/backups' });
   if (i.pendingUsers > 0) out.push({ id: 'users_pending', tone: 'info', n: i.pendingUsers, href: '/admin/users' });
   if (i.openReports > 0) out.push({ id: 'reports', tone: 'info', n: i.openReports, href: '/admin/community' });
   if (i.flaggedComments > 0) out.push({ id: 'comments', tone: 'info', n: i.flaggedComments, href: '/admin/community' });
@@ -21839,6 +21939,7 @@ export const ERRORS = {
   // ---- backups ----
   backup_op_failed: 'Не удалось выполнить операцию: {reason}',
   backup_not_found: 'Копия не найдена',
+  backup_nothing_to_check: 'Копий пока нет: проверять нечего',
   backup_remote_https: 'Адрес для копии должен начинаться с https://',
   backup_s3_https: 'Адрес хранилища должен начинаться с https://',
   backup_s3_endpoint: 'Адрес хранилища: например https://s3.eu-central-1.amazonaws.com',
@@ -110894,6 +110995,8 @@ export interface BackupInfo {
   encrypted: boolean;
   items: BackupItem[];
   lastRemote: { at: number; ok: boolean; error: string | null } | null;
+  /** the last restore check: the newest copy opened like a restore would */
+  verify?: { at: number; name: string; ok: boolean; message: string; servers?: number; users?: number } | null;
   s3?: { endpoint: string; bucket: string; region: string; prefix: string; configured: boolean };
   lastS3?: { at: number; ok: boolean; error: string | null } | null;
 }
@@ -112026,7 +112129,7 @@ interface Item { id: string; tone: Tone; n?: number; text?: string; href: string
 
 const POLL_MS = 60_000;
 const TITLE: Record<string, TKey> = {
-  servers_down: 'att.servers_down', deliveries_dead: 'att.deliveries_dead', backup_none: 'att.backup_none', backup_old: 'att.backup_old',
+  servers_down: 'att.servers_down', deliveries_dead: 'att.deliveries_dead', backup_none: 'att.backup_none', backup_old: 'att.backup_old', backup_unreadable: 'att.backup_unreadable',
   cert: 'att.cert', update: 'att.update', bot: 'att.bot', disk: 'att.disk', users_pending: 'att.users_pending', reports: 'att.reports', comments: 'att.comments',
 };
 const DOT: Record<Tone, string> = { bad: 'bg-bad', warn: 'bg-warn', info: 'bg-brand' };
@@ -132649,6 +132752,7 @@ const en: Record<keyof typeof ru, string> = {
   'att.deliveries_dead': 'Not delivered to Discord this week: {n}',
   'att.backup_none': 'There are no backups yet',
   'att.backup_old': 'The last backup is {n} days old — time for a new one',
+  'att.backup_unreadable': 'The copy could not be opened by the check: it cannot be relied on',
   'att.cert': 'The HTTPS certificate expires in {n} days',
   'att.update': 'A panel update is available: {text}',
   'att.bot': 'The Discord bot is not working ({text})',
@@ -133858,6 +133962,15 @@ const en: Record<keyof typeof ru, string> = {
   'd2.bk.passWarn': 'If you lose the passphrase, encrypted archives cannot be read. It cannot be recovered.',
   'd2.bk.encOff': 'Turn off encryption of new copies',
   'd2.bk.onServer': 'Copies on the server',
+  'd2.bk.verify.last': 'Restore check',
+  'd2.bk.verify.ok': 'the copy opens',
+  'd2.bk.verify.bad': 'the copy could not be opened',
+  'd2.bk.verify.none': 'The copies have not been checked yet: the panel opens a fresh copy by itself once a week.',
+  'd2.bk.verify.found': 'The database reads fine: {s} servers, {u} users',
+  'd2.bk.verify.btn': 'Check now',
+  'd2.bk.verify.running': 'Checking…',
+  'd2.bk.verify.t.ok': 'The copy opens and can be restored',
+  'd2.bk.verify.t.bad': 'The copy could not be opened: see the page for details',
   'd2.bk.empty': 'No copies yet',
   'd2.bk.emptyText': 'Press "Create a copy on the server" or turn on the schedule.',
   'd2.bk.autoU': 'AUTO',
@@ -135140,6 +135253,7 @@ const errorsEn: Record<string, string> = {
   // ---- backups ----
   backup_op_failed: 'The operation failed: {reason}',
   backup_not_found: 'Backup not found',
+  backup_nothing_to_check: 'There are no backups yet: nothing to check',
   backup_remote_https: 'The backup address must start with https://',
   backup_s3_https: 'The storage address must start with https://',
   backup_s3_endpoint: 'Storage address, for example https://s3.eu-central-1.amazonaws.com',
@@ -136631,6 +136745,7 @@ const ru = {
   'att.deliveries_dead': 'Не доставлено в Discord за неделю: {n}',
   'att.backup_none': 'Резервных копий ещё нет',
   'att.backup_old': 'Последней копии {n} дн. — пора обновить',
+  'att.backup_unreadable': 'Копию не удалось открыть при проверке: на неё нельзя рассчитывать',
   'att.cert': 'Сертификат HTTPS истекает через {n} дн.',
   'att.update': 'Доступно обновление панели: {text}',
   'att.bot': 'Бот Discord не работает ({text})',
@@ -137840,6 +137955,15 @@ const ru = {
   'd2.bk.passWarn': 'Если потерять парольную фразу, зашифрованные архивы нельзя будет прочитать. Восстановить её невозможно.',
   'd2.bk.encOff': 'Отключить шифрование новых копий',
   'd2.bk.onServer': 'Копии на сервере',
+  'd2.bk.verify.last': 'Проверка восстановления',
+  'd2.bk.verify.ok': 'копия открывается',
+  'd2.bk.verify.bad': 'копию не удалось открыть',
+  'd2.bk.verify.none': 'Копии ещё не проверялись: панель сама откроет свежую копию раз в неделю.',
+  'd2.bk.verify.found': 'База читается: серверов {s}, пользователей {u}',
+  'd2.bk.verify.btn': 'Проверить сейчас',
+  'd2.bk.verify.running': 'Проверяю…',
+  'd2.bk.verify.t.ok': 'Копия открывается, её можно восстановить',
+  'd2.bk.verify.t.bad': 'Копию не удалось открыть: подробности на странице',
   'd2.bk.empty': 'Копий пока нет',
   'd2.bk.emptyText': 'Нажмите «Создать копию на сервере» или включите расписание.',
   'd2.bk.autoU': 'АВТО',
@@ -141741,6 +141865,11 @@ export default function BackupsCard() {
     toast(t('d2.bk.t.created'));
     await load();
   });
+  const verifyNow = () => guard('verify', async () => {
+    const r = await api<NonNullable<BackupInfo['verify']>>('/backups/verify', 'POST');
+    toast(r.ok ? t('d2.bk.verify.t.ok') : t('d2.bk.verify.t.bad'), r.ok ? undefined : 'err');
+    await load();
+  });
   const download = (b: BackupItem) => guard(`dl:${b.name}`, async () => {
     await downloadFile(`/backups/${encodeURIComponent(b.name)}`, b.name);
   });
@@ -141954,6 +142083,16 @@ export default function BackupsCard() {
       <div>
         <h3 className="mb-2 font-black">{t('d2.bk.onServer')}</h3>
         {info && info.items.length > 0 && <BackupTimeline items={info.items} schedule={info.schedule} />}
+        {info && info.items.length > 0 && (
+          <div className={`mb-3 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-2xl px-4 py-2.5 text-sm font-bold ${!info.verify ? 'bg-soft text-mute' : info.verify.ok ? 'bg-okbg text-ok' : 'bg-badbg text-bad'}`} role="status">
+            <span className="min-w-0 flex-1">
+              {info.verify
+                ? `${t('d2.bk.verify.last')} ${fmtDateTime(info.verify.at)}: ${info.verify.ok ? t('d2.bk.verify.ok') : t('d2.bk.verify.bad')}. ${info.verify.ok ? t('d2.bk.verify.found', { s: info.verify.servers ?? 0, u: info.verify.users ?? 0 }) : errorText({ error: info.verify.message }, info.verify.message)}`
+                : t('d2.bk.verify.none')}
+            </span>
+            <button type="button" className="btn btn-soft btn-sm" onClick={verifyNow} disabled={busy !== null}>{busy === 'verify' ? t('d2.bk.verify.running') : t('d2.bk.verify.btn')}</button>
+          </div>
+        )}
         {!info ? (
           <div className="skeleton h-20 rounded-2xl" />
         ) : info.items.length === 0 ? (

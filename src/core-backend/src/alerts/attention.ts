@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import type { Express, RequestHandler } from 'express';
 import { DATA_DIR, db, getSetting, setSetting } from '../db.js';
 import { alertSettings, enqueueAlert } from './alerts.js';
-import { backupSettings, listBackups } from '../admin/backup.js';
+import { backupSettings, lastVerify, listBackups } from '../admin/backup.js';
 import { botStateNow } from '../monitoring/health.js';
 import { log } from '../logger.js';
 import { inMaintenance } from '../maintenance.js';
@@ -67,6 +67,12 @@ export function checkDisk(now = Date.now()): boolean {
   return true;
 }
 
+/** the result of the last restore check, only while the copy it concerned is still there */
+function backupCheckNow(): { ok: boolean; name: string } | null {
+  const v = lastVerify();
+  return v && listBackups().some((b) => b.name === v.name) ? { ok: v.ok, name: v.name } : null;
+}
+
 export function registerAttention({ app, admin }: { app: Express; admin: RequestHandler }): void {
   app.get('/api/admin/attention', admin, async (_req, res) => {
     const now = Date.now();
@@ -81,6 +87,7 @@ export function registerAttention({ app, admin }: { app: Express; admin: Request
       serversDown: down,
       deadDeliveries: n(`SELECT COUNT(*) AS c FROM deliveries WHERE status = 'dead' AND created_at > ${now - 7 * 86_400_000}`),
       backup: { schedule: bk.schedule, lastAt: last },
+      backupCheck: backupCheckNow(),
       certDays: cert?.daysLeft ?? null,
       updateLabel: updateWaitingLabel(),
       botState: botStateNow(now) === 'none' ? 'online' : botStateNow(now),

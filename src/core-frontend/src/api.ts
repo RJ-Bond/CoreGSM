@@ -375,6 +375,8 @@ export interface BackupInfo {
   encrypted: boolean;
   items: BackupItem[];
   lastRemote: { at: number; ok: boolean; error: string | null } | null;
+  /** the last restore check: the newest copy opened like a restore would */
+  verify?: { at: number; name: string; ok: boolean; message: string; servers?: number; users?: number } | null;
   s3?: { endpoint: string; bucket: string; region: string; prefix: string; configured: boolean };
   lastS3?: { at: number; ok: boolean; error: string | null } | null;
 }

@@ -110,6 +110,11 @@ export default function BackupsCard() {
     toast(t('d2.bk.t.created'));
     await load();
   });
+  const verifyNow = () => guard('verify', async () => {
+    const r = await api<NonNullable<BackupInfo['verify']>>('/backups/verify', 'POST');
+    toast(r.ok ? t('d2.bk.verify.t.ok') : t('d2.bk.verify.t.bad'), r.ok ? undefined : 'err');
+    await load();
+  });
   const download = (b: BackupItem) => guard(`dl:${b.name}`, async () => {
     await downloadFile(`/backups/${encodeURIComponent(b.name)}`, b.name);
   });
@@ -323,6 +328,16 @@ export default function BackupsCard() {
       <div>
         <h3 className="mb-2 font-black">{t('d2.bk.onServer')}</h3>
         {info && info.items.length > 0 && <BackupTimeline items={info.items} schedule={info.schedule} />}
+        {info && info.items.length > 0 && (
+          <div className={`mb-3 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-2xl px-4 py-2.5 text-sm font-bold ${!info.verify ? 'bg-soft text-mute' : info.verify.ok ? 'bg-okbg text-ok' : 'bg-badbg text-bad'}`} role="status">
+            <span className="min-w-0 flex-1">
+              {info.verify
+                ? `${t('d2.bk.verify.last')} ${fmtDateTime(info.verify.at)}: ${info.verify.ok ? t('d2.bk.verify.ok') : t('d2.bk.verify.bad')}. ${info.verify.ok ? t('d2.bk.verify.found', { s: info.verify.servers ?? 0, u: info.verify.users ?? 0 }) : errorText({ error: info.verify.message }, info.verify.message)}`
+                : t('d2.bk.verify.none')}
+            </span>
+            <button type="button" className="btn btn-soft btn-sm" onClick={verifyNow} disabled={busy !== null}>{busy === 'verify' ? t('d2.bk.verify.running') : t('d2.bk.verify.btn')}</button>
+          </div>
+        )}
         {!info ? (
           <div className="skeleton h-20 rounded-2xl" />
         ) : info.items.length === 0 ? (

@@ -8,7 +8,7 @@ interface Item { id: string; tone: Tone; n?: number; text?: string; href: string
 
 const POLL_MS = 60_000;
 const TITLE: Record<string, TKey> = {
-  servers_down: 'att.servers_down', deliveries_dead: 'att.deliveries_dead', backup_none: 'att.backup_none', backup_old: 'att.backup_old',
+  servers_down: 'att.servers_down', deliveries_dead: 'att.deliveries_dead', backup_none: 'att.backup_none', backup_old: 'att.backup_old', backup_unreadable: 'att.backup_unreadable',
   cert: 'att.cert', update: 'att.update', bot: 'att.bot', disk: 'att.disk', users_pending: 'att.users_pending', reports: 'att.reports', comments: 'att.comments',
 };
 const DOT: Record<Tone, string> = { bad: 'bg-bad', warn: 'bg-warn', info: 'bg-brand' };

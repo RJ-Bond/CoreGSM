@@ -56,3 +56,15 @@ describe('shouldAlertDisk', () => {
     assert.equal(shouldAlertDisk('warn', 'bad', now - 1000, now), false);
   });
 });
+
+describe('buildAttention: the restore check', () => {
+  it('a copy that cannot be restored is an alarm that leads to the backups', () => {
+    const r = buildAttention(base({ backupCheck: { ok: false, name: 'coregsm-20261103-120000-auto.tar.gz' } }));
+    assert.deepEqual(r.map((x) => [x.id, x.tone, x.href]), [['backup_unreadable', 'bad', '/admin/settings/backups']]);
+    assert.equal(r[0].text, 'coregsm-20261103-120000-auto.tar.gz');
+  });
+  it('a passed check, or none yet, says nothing', () => {
+    assert.deepEqual(buildAttention(base({ backupCheck: { ok: true, name: 'x' } })), []);
+    assert.deepEqual(buildAttention(base({ backupCheck: null })), []);
+  });
+});

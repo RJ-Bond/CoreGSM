@@ -1,7 +1,7 @@
 /** The admin «needs attention» list: pure rules (what is shown and in which order), no I/O. */
 export type AttentionTone = 'bad' | 'warn' | 'info';
 export type AttentionKind =
-  | 'servers_down' | 'deliveries_dead' | 'backup_none' | 'backup_old' | 'cert' | 'update' | 'bot' | 'disk' | 'users_pending' | 'reports' | 'comments';
+  | 'servers_down' | 'deliveries_dead' | 'backup_none' | 'backup_old' | 'backup_unreadable' | 'cert' | 'update' | 'bot' | 'disk' | 'users_pending' | 'reports' | 'comments';
 
 export interface AttentionItem {
   id: AttentionKind;
@@ -18,6 +18,8 @@ export interface AttentionInput {
   serversDown: string[];
   deadDeliveries: number;
   backup: { schedule: 'off' | 'daily' | 'weekly'; lastAt: number | null };
+  /** the last check that opened the newest copy like a restore: a failed one means the copies cannot be relied on */
+  backupCheck?: { ok: boolean; name: string } | null;
   certDays: number | null;
   updateLabel: string | null;
   botState: string;
@@ -60,6 +62,7 @@ export function buildAttention(i: AttentionInput): AttentionItem[] {
     const days = Math.floor((i.now - i.backup.lastAt) / DAY);
     if (days > backupMaxAgeDays(i.backup.schedule)) out.push({ id: 'backup_old', tone: 'warn', n: days, href: '/admin/settings/backups' });
   }
+  if (i.backupCheck && !i.backupCheck.ok) out.push({ id: 'backup_unreadable', tone: 'bad', text: i.backupCheck.name, href: '/admin/settings/backups' });
   if (i.pendingUsers > 0) out.push({ id: 'users_pending', tone: 'info', n: i.pendingUsers, href: '/admin/users' });
   if (i.openReports > 0) out.push({ id: 'reports', tone: 'info', n: i.openReports, href: '/admin/community' });
   if (i.flaggedComments > 0) out.push({ id: 'comments', tone: 'info', n: i.flaggedComments, href: '/admin/community' });

@@ -242,6 +242,7 @@ const errorsEn: Record<string, string> = {
   // ---- backups ----
   backup_op_failed: 'The operation failed: {reason}',
   backup_not_found: 'Backup not found',
+  backup_nothing_to_check: 'There are no backups yet: nothing to check',
   backup_remote_https: 'The backup address must start with https://',
   backup_s3_https: 'The storage address must start with https://',
   backup_s3_endpoint: 'Storage address, for example https://s3.eu-central-1.amazonaws.com',
