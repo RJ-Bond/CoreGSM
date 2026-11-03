@@ -332,7 +332,7 @@ export function NewsListPage() {
                 <ul className="nw-side-list nw-live">
                   {liveServers.map((sv: Server) => (
                     <li key={sv.id}>
-                      <a href={`/servers/${sv.id}`}>
+                      <a href={`/servers/${sv.id}`} title={sv.name}>
                         <span className={`nw-live-dot ${sv.online ? 'is-on' : 'is-off'}`} aria-hidden />
                         <span className="nw-live-name">{sv.name}</span>
                         <span className="nw-live-n tabular-nums">{sv.online ? `${sv.players}/${sv.maxPlayers}` : t('nw.offline')}</span>

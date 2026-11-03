@@ -172,20 +172,11 @@ function ServerList() {
   const phone = useIsPhone();
   const { me, isAdmin } = useAuth();
   const [favs, setFavs] = useState<number[]>([]);
-  // the remembered «Favourites» filter must not leave a person with an empty list: while nothing is starred it falls back to «All»
-  const pickedFilter = useRef(false);
+  const [favsLoaded, setFavsLoaded] = useState(false);
+  const [filterPicked, setFilterPicked] = useState(false);
   useEffect(() => {
-    if (me) {
-      api<number[]>('/favorites')
-        .then((r) => {
-          setFavs(r);
-          if (r.length === 0 && !pickedFilter.current) {
-            setFilterState((f) => (f === 'fav' ? 'all' : f));
-            try { if (localStorage.getItem(FILTER_KEY) === 'fav') localStorage.setItem(FILTER_KEY, 'all'); } catch { /* not remembered */ }
-          }
-        })
-        .catch(() => undefined);
-    } else setFavs([]);
+    if (me) api<number[]>('/favorites').then((r) => { setFavs(r); setFavsLoaded(true); }).catch(() => undefined);
+    else setFavs([]);
   }, [me]);
   const toggleFav = async (id: number) => {
     const on = favs.includes(id);
@@ -210,7 +201,7 @@ function ServerList() {
     }
   });
   const setFilter = (f: Filter) => {
-    pickedFilter.current = true;
+    setFilterPicked(true);
     setFilterState(f);
     try {
       localStorage.setItem(FILTER_KEY, f);
@@ -218,6 +209,13 @@ function ServerList() {
       /* not remembered */
     }
   };
+
+  // the remembered «Favourites» filter must not leave a person with an empty list: while nothing is starred it falls back to «All»
+  useEffect(() => {
+    if (!favsLoaded || filterPicked || favs.length > 0 || filter !== 'fav') return;
+    setFilterState('all');
+    try { localStorage.setItem(FILTER_KEY, 'all'); } catch { /* not remembered */ }
+  }, [favsLoaded, filterPicked, favs, filter]);
 
   const [view, setViewState] = useState<ServersView>(readView);
   const setView = (v: ServersView) => { setViewState(v); saveView(v); };

@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="589222769f3b"
+COREGSM_BUILD="f1b9ae4acfc7"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.0.0.84"
+COREGSM_VERSION="1.0.0.85"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -119231,7 +119231,7 @@ export function NewsListPage() {
                 <ul className="nw-side-list nw-live">
                   {liveServers.map((sv: Server) => (
                     <li key={sv.id}>
-                      <a href={`/servers/${sv.id}`}>
+                      <a href={`/servers/${sv.id}`} title={sv.name}>
                         <span className={`nw-live-dot ${sv.online ? 'is-on' : 'is-off'}`} aria-hidden />
                         <span className="nw-live-name">{sv.name}</span>
                         <span className="nw-live-n tabular-nums">{sv.online ? `${sv.players}/${sv.maxPlayers}` : t('nw.offline')}</span>
@@ -147542,20 +147542,11 @@ function ServerList() {
   const phone = useIsPhone();
   const { me, isAdmin } = useAuth();
   const [favs, setFavs] = useState<number[]>([]);
-  // the remembered «Favourites» filter must not leave a person with an empty list: while nothing is starred it falls back to «All»
-  const pickedFilter = useRef(false);
+  const [favsLoaded, setFavsLoaded] = useState(false);
+  const [filterPicked, setFilterPicked] = useState(false);
   useEffect(() => {
-    if (me) {
-      api<number[]>('/favorites')
-        .then((r) => {
-          setFavs(r);
-          if (r.length === 0 && !pickedFilter.current) {
-            setFilterState((f) => (f === 'fav' ? 'all' : f));
-            try { if (localStorage.getItem(FILTER_KEY) === 'fav') localStorage.setItem(FILTER_KEY, 'all'); } catch { /* not remembered */ }
-          }
-        })
-        .catch(() => undefined);
-    } else setFavs([]);
+    if (me) api<number[]>('/favorites').then((r) => { setFavs(r); setFavsLoaded(true); }).catch(() => undefined);
+    else setFavs([]);
   }, [me]);
   const toggleFav = async (id: number) => {
     const on = favs.includes(id);
@@ -147580,7 +147571,7 @@ function ServerList() {
     }
   });
   const setFilter = (f: Filter) => {
-    pickedFilter.current = true;
+    setFilterPicked(true);
     setFilterState(f);
     try {
       localStorage.setItem(FILTER_KEY, f);
@@ -147588,6 +147579,13 @@ function ServerList() {
       /* not remembered */
     }
   };
+
+  // the remembered «Favourites» filter must not leave a person with an empty list: while nothing is starred it falls back to «All»
+  useEffect(() => {
+    if (!favsLoaded || filterPicked || favs.length > 0 || filter !== 'fav') return;
+    setFilterState('all');
+    try { localStorage.setItem(FILTER_KEY, 'all'); } catch { /* not remembered */ }
+  }, [favsLoaded, filterPicked, favs, filter]);
 
   const [view, setViewState] = useState<ServersView>(readView);
   const setView = (v: ServersView) => { setViewState(v); saveView(v); };
@@ -153793,7 +153791,8 @@ __COREGSM_EOF__
 .nw-live-dot { width: .55rem; height: .55rem; flex: none; border-radius: var(--r-pill); background: rgb(var(--field)); }
 .nw-live-dot.is-on { background: rgb(var(--ok)); box-shadow: 0 0 0 3px rgb(var(--ok) / .2); }
 .nw-live-dot.is-off { background: rgb(var(--bad)); }
-.nw-live-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* the name may take two lines: server names are long («[RU] Just-Skill.Ru | Standart PvE») */
+.nw-live-name { flex: 1; min-width: 0; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; line-height: 1.3; }
 .nw-live-n { flex: none; font-size: .8125rem; font-weight: 650; color: rgb(var(--mute)); }
 
 /* ---------- editorial buttons in the news: text links with a coloured underline, an arrow on the main one ----------

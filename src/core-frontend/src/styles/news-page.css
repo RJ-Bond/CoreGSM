@@ -226,7 +226,8 @@
 .nw-live-dot { width: .55rem; height: .55rem; flex: none; border-radius: var(--r-pill); background: rgb(var(--field)); }
 .nw-live-dot.is-on { background: rgb(var(--ok)); box-shadow: 0 0 0 3px rgb(var(--ok) / .2); }
 .nw-live-dot.is-off { background: rgb(var(--bad)); }
-.nw-live-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* the name may take two lines: server names are long («[RU] Just-Skill.Ru | Standart PvE») */
+.nw-live-name { flex: 1; min-width: 0; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; line-height: 1.3; }
 .nw-live-n { flex: none; font-size: .8125rem; font-weight: 650; color: rgb(var(--mute)); }
 
 /* ---------- editorial buttons in the news: text links with a coloured underline, an arrow on the main one ----------
