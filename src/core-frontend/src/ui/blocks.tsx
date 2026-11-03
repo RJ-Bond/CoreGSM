@@ -104,6 +104,8 @@ export function StatusPill({ online, known, lag, glass = false, maintenance = fa
 export function GameAvatar({ game, size = 44, glass = false, vtId }: { game: string; size?: number; glass?: boolean; vtId?: number }) {
   const icon = gameIconPath(game);
   const [c1, c2] = gameGradient(game);
+  // small tiles in lists and tables: a light tint with a thin outline instead of the deep tile with a glow, the emblem a bit larger
+  const compact = size <= 34 && !glass && !!GAME_IMAGE[game];
   return (
     <div
       data-vt-avatar={vtId}
@@ -115,16 +117,18 @@ export function GameAvatar({ game, size = 44, glass = false, vtId }: { game: str
         // artwork sits on a deep tile of the game colour (as on the PNG card), a line pictogram on the colour itself
         background: glass
           ? 'rgba(255,255,255,0.24)'
-          : GAME_IMAGE[game]
+          : compact
+            ? `linear-gradient(135deg, color-mix(in srgb, ${c1} 26%, rgb(var(--soft))), color-mix(in srgb, ${c2} 14%, rgb(var(--soft))))`
+            : GAME_IMAGE[game]
             ? `linear-gradient(135deg, color-mix(in srgb, ${c1} 55%, #000), color-mix(in srgb, ${c2} 25%, #000))`
             : `linear-gradient(135deg, ${c1}, ${c2})`,
         fontSize: size * 0.34,
-        boxShadow: glass ? 'inset 0 0 0 1px rgba(255,255,255,0.25)' : `0 4px 12px -4px ${c1}99`,
+        boxShadow: glass ? 'inset 0 0 0 1px rgba(255,255,255,0.25)' : compact ? `inset 0 0 0 1px color-mix(in srgb, ${c1} 40%, transparent)` : `0 4px 12px -4px ${c1}99`,
       }}
       aria-hidden
     >
       {GAME_IMAGE[game] ? (
-        <img src={GAME_IMAGE[game]} width={size * 0.74} height={size * 0.74} alt="" draggable={false} className="object-contain" />
+        <img src={GAME_IMAGE[game]} width={size * (compact ? 0.82 : 0.74)} height={size * (compact ? 0.82 : 0.74)} alt="" draggable={false} className="object-contain" />
       ) : icon ? (
         <svg width={size * 0.58} height={size * 0.58} viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <path d={icon} />

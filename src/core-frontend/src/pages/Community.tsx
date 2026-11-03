@@ -304,11 +304,9 @@ function TopBlock({ c, mine }: { c: Community; mine: string }) {
       <span className="min-w-0 flex-1">
         <span className="flex items-center gap-2"><a href={playerHref(p.name)} className="truncate font-extrabold hover:text-link">{p.name}</a><Move p={p} i={i} period={period} /></span>
         <span className="an-top-bar"><span style={{ width: `${(p.hours / maxH) * 100}%`, background: 'rgb(var(--brand))' }} /></span>
+        <span className="mt-1 block truncate text-xs font-bold text-mute">{p.servers === 1 && srvName(p.serverId) ? srvName(p.serverId) : `${p.servers} ${t('cm.word.servers', { n: p.servers })}`}</span>
       </span>
-      <span className="shrink-0 text-right">
-        <span className="block font-extrabold tabular-nums">{t('cm.h', { n: num(p.hours) })}</span>
-        <span className="block max-w-[11rem] truncate text-xs font-bold text-mute">{p.servers === 1 && srvName(p.serverId) ? srvName(p.serverId) : `${p.servers} ${t('cm.word.servers', { n: p.servers })}`}</span>
-      </span>
+      <span className="shrink-0 text-right font-extrabold tabular-nums">{t('cm.h', { n: num(p.hours) })}</span>
     </li>
   );
   return (
