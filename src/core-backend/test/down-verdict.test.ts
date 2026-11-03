@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { decideStatus } from '../src/pollLogic.ts';
-import { judgeDown, MAX_WINDOW, resolveRule } from '../src/downVerdict.ts';
+import { decideStatus } from '../src/community/pollLogic.ts';
+import { judgeDown, MAX_WINDOW, resolveRule } from '../src/alerts/downVerdict.ts';
 
 const R = (n: number, m: number, probeVeto = false) => ({ n, m, probeVeto });
 

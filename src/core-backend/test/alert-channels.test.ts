@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import Database from 'better-sqlite3';
-import { verifySignature } from '../src/alertChannelsLogic.ts';
+import { verifySignature } from '../src/alerts/alertChannelsLogic.ts';
 import { setupAdmin, startBackend, type Api } from './harness.ts';
 
 interface Hit { headers: http.IncomingHttpHeaders; body: string }

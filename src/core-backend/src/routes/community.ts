@@ -15,12 +15,12 @@
  * GET /api/players/:name   one player by the nick the game servers report: where and when they play
  */
 import express from 'express';
-import { viewer } from '../auth.js';
-import { avatarFor } from '../avatars.js';
+import { viewer } from '../security/auth.js';
+import { avatarFor } from '../images/avatars.js';
 import { db, EFFECTIVE_NAME, getSetting } from '../db.js';
-import { localParts } from '../localTime.js';
-import { playAchievements, vrRankIdFor } from '../profile.js';
-import { seasonAchievements } from '../seasons.js';
+import { localParts } from '../admin/localTime.js';
+import { playAchievements, vrRankIdFor } from '../profile/profile.js';
+import { seasonAchievements } from '../profile/seasons.js';
 
 export const router = express.Router();
 

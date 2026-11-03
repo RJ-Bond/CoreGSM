@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { avatarColor, initialOf, parseCardOpts, stateBand, whoInGame } from '../src/cardLogic.ts';
+import { avatarColor, initialOf, parseCardOpts, stateBand, whoInGame } from '../src/images/cardLogic.ts';
 
 describe('card logic', () => {
   it('initials skip symbols and brackets', () => {

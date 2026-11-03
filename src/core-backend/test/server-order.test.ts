@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
 import Database from 'better-sqlite3';
-import { completeOrder } from '../src/serverOrderLogic.ts';
+import { completeOrder } from '../src/monitoring/serverOrderLogic.ts';
 import { setupAdmin, startBackend, type Api } from './harness.ts';
 
 describe('completeOrder', () => {

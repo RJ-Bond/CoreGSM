@@ -6,8 +6,8 @@ import { describe, it } from 'node:test';
 
 // the modules open the database on import: point them at a throw-away one first
 process.env.DB_PATH = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'coregsm-logic-')), 'coregsm.db');
-const del = await import('../src/deliveries.ts');
-const subs = await import('../src/subscriptions.ts');
+const del = await import('../src/alerts/deliveries.ts');
+const subs = await import('../src/community/subscriptions.ts');
 
 describe('delivery backoff', () => {
   it('follows 30 s, 1, 2, 5, 15 min and stays at 15 min', () => {

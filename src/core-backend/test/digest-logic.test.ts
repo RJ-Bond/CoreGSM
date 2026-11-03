@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { busiestDay, changePct, dailyPeaks, minutesText, sparkPoints, splitServers, stripCommonPrefix, trendText, uptimeBar, weekEvents, wrapName } from '../src/digestLogic.ts';
+import { busiestDay, changePct, dailyPeaks, minutesText, sparkPoints, splitServers, stripCommonPrefix, trendText, uptimeBar, weekEvents, wrapName } from '../src/alerts/digestLogic.ts';
 
 describe('digest logic', () => {
   it('takes the highest online of each day', () => {

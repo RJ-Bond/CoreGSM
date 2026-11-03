@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { hslHex, monogramColor, monogramOf, ogLine } from '../src/ogLogic.ts';
+import { hslHex, monogramColor, monogramOf, ogLine } from '../src/images/ogLogic.ts';
 
 describe('og logic', () => {
   it('the preview line', () => {

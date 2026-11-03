@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
-import { DEFAULT_FAV_PREFS, FAV_GAP_MS, favText, fullAt, mayPushFav, nextFavTrack, wantsFav, type FavTrack } from '../src/favoritePushLogic.ts';
+import { DEFAULT_FAV_PREFS, FAV_GAP_MS, favText, fullAt, mayPushFav, nextFavTrack, wantsFav, type FavTrack } from '../src/alerts/favoritePushLogic.ts';
 import { setupAdmin, startBackend, type Api } from './harness.ts';
 
 const obs = (players: number, maxPlayers = 20, online = true) => ({ online, players, maxPlayers });

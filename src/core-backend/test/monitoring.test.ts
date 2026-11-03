@@ -19,9 +19,9 @@ process.env.NODE_ENV = 'test';
 process.env.JWT_SECRET ??= 'j'.repeat(48);
 process.env.INTERNAL_TOKEN ??= 'i'.repeat(48);
 const { db, setSetting } = await import('../src/db.ts');
-const { incidentsSince, downtimeByDay } = await import('../src/incidents.ts');
-const { trackSmart } = await import('../src/smartAlerts.ts');
-const { buildDigest, digestDue } = await import('../src/digest.ts');
+const { incidentsSince, downtimeByDay } = await import('../src/alerts/incidents.ts');
+const { trackSmart } = await import('../src/alerts/smartAlerts.ts');
+const { buildDigest, digestDue } = await import('../src/alerts/digest.ts');
 
 const addServer = (name: string) => Number(db.prepare("INSERT INTO servers (name, game, host, port, created_at) VALUES (?, 'minecraft', '127.0.0.1', 25565, ?)").run(name, Date.now()).lastInsertRowid);
 const hist = db.prepare('INSERT INTO history (server_id, ts, online, players, ping, unconfirmed, maint) VALUES (?, ?, ?, ?, ?, ?, ?)');
@@ -109,7 +109,7 @@ describe('weekly digest (data)', () => {
   });
 
   it('adds a «Подробности на сайте» button under the picture when the public address is known', async () => {
-    const { digestMessage } = await import('../src/digest.ts');
+    const { digestMessage } = await import('../src/alerts/digest.ts');
     const prev = process.env.PUBLIC_URL;
     try {
       process.env.PUBLIC_URL = 'https://panel.example.com';
