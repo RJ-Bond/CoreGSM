@@ -1,0 +1,56 @@
+# Changes against main
+
+| picture | change | marked picture |
+|---|---|---|
+| dark-desktop-admin-top.png | 14.53% of pixels | diff/dark-desktop-admin-top.png |
+| dark-desktop-admin.png | size 1366x1290 -> 1366x1384 | |
+| dark-desktop-community-top.png | 12.58% of pixels | diff/dark-desktop-community-top.png |
+| dark-desktop-community.png | size 1366x2433 -> 1366x1393 | |
+| dark-desktop-login.png | 0.08% of pixels | diff/dark-desktop-login.png |
+| dark-desktop-news-top.png | 2.06% of pixels | diff/dark-desktop-news-top.png |
+| dark-desktop-news.png | 1.87% of pixels | diff/dark-desktop-news.png |
+| dark-desktop-server-top.png | 20.58% of pixels | diff/dark-desktop-server-top.png |
+| dark-desktop-server.png | size 1366x1602 -> 1366x1933 | |
+| dark-desktop-servers-top.png | 32.84% of pixels | diff/dark-desktop-servers-top.png |
+| dark-desktop-servers.png | size 1366x1426 -> 1366x1313 | |
+| dark-desktop-status-top.png | 22.31% of pixels | diff/dark-desktop-status-top.png |
+| dark-desktop-status.png | size 1366x1481 -> 1366x1299 | |
+| dark-phone-admin-top.png | 16.16% of pixels | diff/dark-phone-admin-top.png |
+| dark-phone-admin.png | size 780x4140 -> 780x4654 | |
+| dark-phone-community-top.png | 12.08% of pixels | diff/dark-phone-community-top.png |
+| dark-phone-community.png | size 780x8028 -> 780x3066 | |
+| dark-phone-login.png | 0.31% of pixels | diff/dark-phone-login.png |
+| dark-phone-news-top.png | 8.15% of pixels | diff/dark-phone-news-top.png |
+| dark-phone-news.png | size 780x2776 -> 804x1856 | |
+| dark-phone-server-top.png | 33.60% of pixels | diff/dark-phone-server-top.png |
+| dark-phone-server.png | size 780x5866 -> 780x5128 | |
+| dark-phone-servers-top.png | 37.07% of pixels | diff/dark-phone-servers-top.png |
+| dark-phone-servers.png | size 780x3118 -> 780x4912 | |
+| dark-phone-status-top.png | 23.24% of pixels | diff/dark-phone-status-top.png |
+| dark-phone-status.png | size 780x4530 -> 780x4108 | |
+| light-desktop-admin-top.png | 15.12% of pixels | diff/light-desktop-admin-top.png |
+| light-desktop-admin.png | size 1366x1290 -> 1366x1384 | |
+| light-desktop-community-top.png | 10.93% of pixels | diff/light-desktop-community-top.png |
+| light-desktop-community.png | size 1366x2433 -> 1366x1393 | |
+| light-desktop-login.png | 0.33% of pixels | diff/light-desktop-login.png |
+| light-desktop-news-top.png | 1.75% of pixels | diff/light-desktop-news-top.png |
+| light-desktop-news.png | 1.60% of pixels | diff/light-desktop-news.png |
+| light-desktop-server-top.png | 41.64% of pixels | diff/light-desktop-server-top.png |
+| light-desktop-server.png | size 1366x1602 -> 1366x1933 | |
+| light-desktop-servers-top.png | 27.16% of pixels | diff/light-desktop-servers-top.png |
+| light-desktop-servers.png | size 1366x1426 -> 1366x1313 | |
+| light-desktop-status-top.png | 16.92% of pixels | diff/light-desktop-status-top.png |
+| light-desktop-status.png | size 1366x1481 -> 1366x1299 | |
+| light-phone-admin-top.png | 13.95% of pixels | diff/light-phone-admin-top.png |
+| light-phone-admin.png | size 780x4140 -> 780x4654 | |
+| light-phone-community-top.png | 13.68% of pixels | diff/light-phone-community-top.png |
+| light-phone-community.png | size 780x8028 -> 780x3066 | |
+| light-phone-login.png | 0.25% of pixels | diff/light-phone-login.png |
+| light-phone-news-top.png | 7.94% of pixels | diff/light-phone-news-top.png |
+| light-phone-news.png | size 780x2776 -> 804x1856 | |
+| light-phone-server-top.png | 35.91% of pixels | diff/light-phone-server-top.png |
+| light-phone-server.png | size 780x5866 -> 780x5128 | |
+| light-phone-servers-top.png | 25.68% of pixels | diff/light-phone-servers-top.png |
+| light-phone-servers.png | size 780x3118 -> 780x4912 | |
+| light-phone-status-top.png | 14.98% of pixels | diff/light-phone-status-top.png |
+| light-phone-status.png | size 780x4530 -> 780x4108 | |
