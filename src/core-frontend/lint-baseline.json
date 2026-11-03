@@ -1,0 +1,18 @@
+{
+  "eslint(no-shadow)": 44,
+  "eslint(no-underscore-dangle)": 5,
+  "jsx-a11y(click-events-have-key-events)": 11,
+  "jsx-a11y(no-autofocus)": 12,
+  "jsx-a11y(no-interactive-element-to-noninteractive-role)": 1,
+  "jsx-a11y(no-noninteractive-element-interactions)": 12,
+  "jsx-a11y(no-noninteractive-element-to-interactive-role)": 6,
+  "jsx-a11y(no-noninteractive-tabindex)": 2,
+  "jsx-a11y(no-static-element-interactions)": 5,
+  "jsx-a11y(role-has-required-aria-props)": 1,
+  "jsx-a11y(role-supports-aria-props)": 1,
+  "react-hooks(exhaustive-deps)": 12,
+  "react(exhaustive-effect-dependencies)": 50,
+  "react(iframe-missing-sandbox)": 1,
+  "react(immutability)": 2,
+  "react(memo-dependencies)": 3
+}

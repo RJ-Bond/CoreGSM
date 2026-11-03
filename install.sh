@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="bb67c959f0f8"
+COREGSM_BUILD="08beb7034127"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.0.0.79"
+COREGSM_VERSION="1.0.0.80"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -37881,6 +37881,27 @@ __COREGSM_EOF__
 </html>
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend"
+  cat > "$APP_DIR/core-frontend/lint-baseline.json" << '__COREGSM_EOF__'
+{
+  "eslint(no-shadow)": 44,
+  "eslint(no-underscore-dangle)": 5,
+  "jsx-a11y(click-events-have-key-events)": 11,
+  "jsx-a11y(no-autofocus)": 12,
+  "jsx-a11y(no-interactive-element-to-noninteractive-role)": 1,
+  "jsx-a11y(no-noninteractive-element-interactions)": 12,
+  "jsx-a11y(no-noninteractive-element-to-interactive-role)": 6,
+  "jsx-a11y(no-noninteractive-tabindex)": 2,
+  "jsx-a11y(no-static-element-interactions)": 5,
+  "jsx-a11y(role-has-required-aria-props)": 1,
+  "jsx-a11y(role-supports-aria-props)": 1,
+  "react-hooks(exhaustive-deps)": 12,
+  "react(exhaustive-effect-dependencies)": 50,
+  "react(iframe-missing-sandbox)": 1,
+  "react(immutability)": 2,
+  "react(memo-dependencies)": 3
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend"
   cat > "$APP_DIR/core-frontend/nginx.conf" << '__COREGSM_EOF__'
 # Static panel (the edge nginx proxies "/" here and "/api" to the backend).
 #
@@ -42238,7 +42259,8 @@ __COREGSM_EOF__
     "test": "vitest run",
     "coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit",
-    "lint": "oxlint"
+    "lint": "oxlint",
+    "lint:ratchet": "node scripts/lint-ratchet.mjs"
   },
   "dependencies": {
     "@fontsource-variable/golos-text": "^5.3.0",
@@ -109590,6 +109612,41 @@ D7aGEx8CoIjvAiTDLa5e0i/a94kxabzjASw0PLzzZvTEmShpo+1okiC+VKhAs18H8TdJ+LteTp38
 3XynffBKOgBea985RzFhxiwPJU4ZUj18g6cO30fJGy2+uQ9QjEbpI8oc+fPDampqarK5mpEt5ShQ
 IwAAAABJRU5ErkJggg==
 __COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/scripts"
+  cat > "$APP_DIR/core-frontend/scripts/lint-ratchet.mjs" << '__COREGSM_EOF__'
+// Lint "ratchet": oxlint still reports old findings (the static a11y rules flag patterns that axe accepts), so the
+// check does not demand zero. It fails when any rule reports MORE findings than lint-baseline.json allows, so the
+// number can only go down. After fixing findings run `npm run lint:ratchet -- --update` and commit the new baseline.
+import { execFileSync } from 'node:child_process';
+import { readFileSync, writeFileSync } from 'node:fs';
+
+const BASE = new URL('../lint-baseline.json', import.meta.url);
+const bin = process.platform === 'win32' ? 'npx.cmd' : 'npx';
+let out;
+try {
+  out = execFileSync(bin, ['oxlint', '-f', 'json'], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, shell: process.platform === 'win32' });
+} catch (e) {
+  out = e.stdout; // oxlint exits non-zero when it has findings
+  if (!out) throw e;
+}
+const counts = {};
+for (const d of JSON.parse(out).diagnostics) counts[d.code] = (counts[d.code] || 0) + 1;
+const sorted = Object.fromEntries(Object.entries(counts).sort(([a], [b]) => a.localeCompare(b)));
+
+if (process.argv.includes('--update')) {
+  writeFileSync(BASE, JSON.stringify(sorted, null, 2) + '\n');
+  console.log('lint baseline updated:', Object.values(sorted).reduce((a, b) => a + b, 0), 'findings');
+  process.exit(0);
+}
+
+const base = JSON.parse(readFileSync(BASE, 'utf8'));
+const worse = Object.entries(sorted).filter(([k, n]) => n > (base[k] || 0));
+const better = Object.entries(base).filter(([k, n]) => (sorted[k] || 0) < n);
+for (const [k, n] of worse) console.error(`::error title=oxlint::${k}: ${n} findings, the baseline allows ${base[k] || 0}`);
+if (worse.length) process.exit(1);
+if (better.length) console.log(`Fewer findings than the baseline for ${better.length} rule(s): run "npm run lint:ratchet -- --update" and commit lint-baseline.json`);
+console.log('lint ratchet ok:', Object.values(sorted).reduce((a, b) => a + b, 0), 'findings');
+__COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend"
   cat > "$APP_DIR/core-frontend/security-headers.conf" << '__COREGSM_EOF__'
 # Response headers every location sends (included from nginx.conf). nginx does not inherit add_header into a location
@@ -109619,7 +109676,7 @@ import ServersPage from './pages/Servers';
 import { applyServerPrefs, t, useI18n, type TKey } from './i18n';
 import { lazyPage, PageFrame } from './lazyPage';
 import { OfflineBar } from './components/OfflineBar';
-import { AuthCard, AuthShell, IconNews, IconServers, IconSettings, Logo, ThemeToggle, Toaster, UserAvatar, Wordmark, applyDefaultTheme, setThemeScope, navigate, parseRoute, toast, useRoute } from './ui';
+import { AuthCard, AuthShell, IconNews, IconServers, IconSettings, Logo, ThemeToggle, Toaster, Wordmark, applyDefaultTheme, setThemeScope, navigate, parseRoute, toast, useRoute } from './ui';
 
 // loaded on demand: the server list (the first screen) does not wait for these
 const NewsFeed = lazyPage(() => import('./pages/NewsFeed'));
@@ -115277,7 +115334,7 @@ __COREGSM_EOF__
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { api, onBusy, type Me } from '../api';
 import { useAppearance } from '../appearance';
-import { t, useI18n, type TKey } from '../i18n';
+import { t, useI18n } from '../i18n';
 import { UserAvatar } from '../ui';
 import { FootCommunity, FootGallery, FootNews, FootServers, FootStatus, FootTag } from './FooterIcons';
 import { MenuAdmin, MenuGallery, MenuLogout, MenuUser } from './HeaderIcons';
@@ -126993,10 +127050,9 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/components/servers/ServerViews.tsx" << '__COREGSM_EOF__'
 // The «Список» and «ТВ» views of the servers page.
 import { useEffect, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
 import type { Server } from '../../api';
 import { gameColor, gameLabel } from '../../games';
-import { AnimatedNumber, GameAvatar, MiniSpark, StatusPill, ago, isLag, plural, num } from '../../ui';
+import { AnimatedNumber, GameAvatar, ago, isLag, num } from '../../ui';
 import MaintenanceChip from '../MaintenanceChip';
 import { t, useI18n, type TKey } from '../../i18n';
 import { CapacityBar, CountReact, StatusFlash, reactionOf, type Reactions } from './serverUi';
@@ -128911,7 +128967,6 @@ __COREGSM_EOF__
 import { useSyncExternalStore } from 'react';
 import { api, getToken, type Prefs } from './api';
 import ru from './locales/ru';
-import en from './locales/en';
 
 /**
  * Language and regional settings.
@@ -128921,14 +128976,19 @@ import en from './locales/en';
  * - `useI18n()` re-renders the component when the language or any regional setting changes.
  * - the choice is kept in localStorage (so it applies before sign-in) and, for a signed-in user, in /me/prefs.
  *
- * Translated: header and navigation, sign-in / registration, profile, public profile, shared buttons and toasts.
- * Other pages (servers, admin, news, status ...) stay Russian.
+ * Every page and component text goes through `t()`; the only untranslated page is the UiKit demo.
+ *
+ * The Russian dictionary is part of the main bundle (it is also the fallback). The English one is a separate chunk,
+ * loaded when English is the language (see `ready()`): until it arrives `t()` answers in Russian and the components
+ * re-render once it is there.
  */
 export type Lang = Prefs['lang'];
 export type { Prefs };
 export type TKey = keyof typeof ru;
 
-const dicts: Record<Lang, Record<TKey, string>> = { ru, en };
+let enDict: Record<TKey, string> | null = null;
+let enLoading: Promise<void> | null = null;
+const dictOf = (lang: Lang): Record<TKey, string> => (lang === 'en' && enDict ? enDict : ru);
 
 const STORE = 'coregsm_prefs';
 export const DEFAULT_PREFS: Prefs = { lang: 'ru', timezone: '', timeFormat: '24', dateFormat: 'dmy' };
@@ -128964,11 +129024,21 @@ paintHtmlLang();
 export const getPrefs = (): Prefs => current;
 export const getLang = (): Lang => current.lang;
 
+/** loads the dictionary of the current language (a no-op for Russian); resolves also when the chunk cannot be loaded */
+export function ready(): Promise<void> {
+  if (current.lang !== 'en' || enDict) return Promise.resolve();
+  enLoading ??= import('./locales/en')
+    .then((m) => { enDict = m.default; listeners.forEach((l) => l()); })
+    .catch(() => { enLoading = null; });
+  return enLoading;
+}
+
 function commit(next: Prefs) {
   if (next.lang === current.lang && next.timezone === current.timezone && next.timeFormat === current.timeFormat && next.dateFormat === current.dateFormat) return;
   current = next;
   try { localStorage.setItem(STORE, JSON.stringify(next)); } catch { /* private mode: not remembered */ }
   paintHtmlLang();
+  void ready();
   listeners.forEach((l) => l());
 }
 
@@ -129005,7 +129075,7 @@ function pickPlural(s: string, n: number, lang: Lang): string {
 
 export function t(key: TKey, params?: Record<string, string | number>): string {
   const lang = current.lang;
-  let s = dicts[lang][key] ?? ru[key] ?? String(key);
+  let s = dictOf(lang)[key] ?? ru[key] ?? String(key);
   if (params) {
     if (typeof params.n === 'number' && s.includes('|')) s = pickPlural(s, params.n, lang);
     s = s.replace(/\{(\w+)\}/g, (m, k: string) => (k in params ? String(params[k]) : m));
@@ -138632,6 +138702,7 @@ import { api, getToken } from './api';
 import { toast } from './ui/toast';
 import { initAppearance } from './appearance';
 import { QueryProvider } from './ui/query';
+import { ready as i18nReady } from './i18n';
 import { installViewport } from './ui/viewport';
 import { initDensity, installMagnetic, installSegIndicator } from './useMotion';
 
@@ -138642,15 +138713,18 @@ installMagnetic();
 installSegIndicator();
 installViewport();
 
-ReactDOM.createRoot(document.getElementById('root')!).render(
-  <React.StrictMode>
-    <RootBoundary>
-      <QueryProvider>
-        <App />
-      </QueryProvider>
-    </RootBoundary>
-  </React.StrictMode>,
-);
+// the English dictionary is a separate chunk: wait for it so that an English page never flashes in Russian first
+void i18nReady().then(() => {
+  ReactDOM.createRoot(document.getElementById('root')!).render(
+    <React.StrictMode>
+      <RootBoundary>
+        <QueryProvider>
+          <App />
+        </QueryProvider>
+      </RootBoundary>
+    </React.StrictMode>,
+  );
+});
 
 // installable as an app (home screen on phones, window on desktop)
 // the browser offers to install the panel as an app: keep the offer for the «Установить приложение» button
@@ -138940,15 +139014,13 @@ import { api, type Binding, type CertInfo, type Server, type ServerInput, type S
 import { useAuth } from '../auth';
 import { t, useI18n } from '../i18n';
 import type { MaintenanceWindow } from '../maintenance';
-import { gameLabel } from '../games';
-import { AdminPage as PageStack, Empty, ErrorLine, GameAvatar, IconArrowUp, LoadError, IconClose, IconEdit, IconRefresh, IconServers, IconTrash, PageHead, StatusPill, ago, toast, undoable, usePoll, navigate, fail } from '../ui';
+import { AdminPage as PageStack, Empty, ErrorLine, IconArrowUp, LoadError, IconClose, IconRefresh, IconServers, PageHead, toast, undoable, usePoll, navigate, fail } from '../ui';
 import { ADMIN_GROUPS, ADMIN_SECTIONS, OVERVIEW_SECTION, SECTION_PERM, START_SECTION, type AdminSection } from './adminNav';
 import { PINS_KEY, PINS_MAX, movePin, readIds, togglePin, writeIds } from './adminShortcuts';
 import AdminMobileNav, { type MobileNavGroup } from './AdminMobileNav';
 import AdminOverview from './AdminOverview';
 import AdminStatusBar from '../components/AdminStatusBar';
 import { CHORDS, chordOf } from './adminLogic';
-import { ServersArt } from '../components/Illustrations';
 import AdminStart, { AdminHome } from './AdminStart';
 import AdminCommunity from './AdminCommunity';
 import AlertsPage from './Alerts';
@@ -142482,7 +142554,6 @@ import DeliveryList from '../components/DeliveryList';
 import DiscordExtras from '../components/DiscordExtras';
 import PlayersShownCard from '../components/PlayersShownCard';
 import { DiscordArt } from '../components/Illustrations';
-import { confirmDialog } from '../confirm';
 import { t, useI18n } from '../i18n';
 import { Button, Empty, ErrorLine, Field, LoadError, GameAvatar, GoLink, IconDiscord, IconEdit, IconPause, IconPlay, IconTrash, InviteButton, Modal, Notice, PageHead, Strip, Switch, AdminPage, ago, toast, undoable, usePoll, navigate, errText } from '../ui';
 import { BotPill } from './Settings';
@@ -143770,7 +143841,7 @@ const readName = () => {
   try { return localStorage.getItem(NAME_KEY) ?? ''; } catch { return ''; }
 };
 const writeName = (v: string) => {
-  try { v ? localStorage.setItem(NAME_KEY, v) : localStorage.removeItem(NAME_KEY); } catch { /* not remembered */ }
+  try { if (v) localStorage.setItem(NAME_KEY, v); else localStorage.removeItem(NAME_KEY); } catch { /* not remembered */ }
 };
 
 const clock = (sec: number) => `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
@@ -144180,12 +144251,9 @@ import { useState } from 'react';
 import { t, useI18n } from '../i18n';
 import { NewsCalendar } from '../components/news/Calendar';
 import { confirmDialog } from '../confirm';
-import { api, ApiError, type NewsItem, type NewsSettings, type PublicNews } from '../api';
-import { useAuth } from '../auth';
-import { EmbedView, type DiscordEmbed } from './EmbedPreview';
+import { api, ApiError, type NewsItem, type NewsSettings } from '../api';
 import { ChannelName, ChannelPicker } from '../components/ChannelPicker';
-import { NewsArt } from '../components/Illustrations';
-import { AdminPage, Empty, ErrorLine, GoLink, LoadError, IconCopyPlus, IconNews, IconTrash, PageHead, Strip, fmtDateTime, toast, undoable, usePoll, navigate, errText } from '../ui';
+import { AdminPage, Empty, ErrorLine, LoadError, IconCopyPlus, IconNews, IconTrash, PageHead, Strip, fmtDateTime, toast, undoable, usePoll, navigate, errText } from '../ui';
 import NewsEditor, { TEMPLATES } from './NewsEditor';
 import { newsImage } from '../components/news/newsLogic';
 import { NewsStatsModal } from '../components/news/NewsStats';
@@ -144494,11 +144562,6 @@ function NewsList() {
 }
 
 /** stored embed -> what EmbedView draws (an uploaded picture is served by the panel) */
-function toView(e: PublicNews['payload']['embed']): DiscordEmbed | null {
-  if (!e) return null;
-  const src = e.image?.upload ? `/api/news/images/${e.image.upload}` : e.image?.url;
-  return { ...e, image: src ? { url: src } : undefined } as DiscordEmbed;
-}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/NewsEditor.tsx" << '__COREGSM_EOF__'
@@ -145257,7 +145320,7 @@ import { AchievementCard } from '../components/profile/Achievements';
 import { FollowButton } from '../components/profile/Follows';
 import { ReportButton } from '../components/profile/ReportButton';
 import { rankById } from '../vrisingRanks';
-import { Empty, ErrorLine, GameAvatar, ago, fmtDateTime, fmtTime, plural, num } from '../ui';
+import { Empty, ErrorLine, GameAvatar, ago, fmtDateTime, fmtTime, num } from '../ui';
 import ArtPic from '../components/ArtPic';
 import '../styles/community.css';
 import '../styles/profile.css';
@@ -146635,7 +146698,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
 
   const { server: s, stats, events, points } = data;
   const accent = coverAccentOrGame;
-  const [c1, c2] = gameGradient(s.game);
+  const [c1] = gameGradient(s.game);
   const lag = isLag(s);
   const profile = profiles?.[s.game];
   const guide = applyConnectTemplates(connectGuide(s.game, s.address), profile?.connect, s.address, profile?.defaultPort);
@@ -147827,7 +147890,7 @@ function PhoneRow({ s, idx, fav, onFav, onOpen, select }: { rx: Reactions; s: Se
 function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince }: { rx: Reactions; s: Server; idx: number; fav: boolean | null; onFav: () => void; onOpen: () => void; select?: SelectProps; uptime?: number; downSince?: number }) {
   useI18n();
   const [who, setWho] = useState(false);
-  const [c1, c2] = gameGradient(s.game);
+  const [c1] = gameGradient(s.game);
   // the accent is taken from the cover picture, so two games of the same colour family still look different
   const accent = calmSeriesColor(useCoverAccent(s.coverUrl, gameColor(s.game)), gameColor(s.game));
   const lag = isLag(s);

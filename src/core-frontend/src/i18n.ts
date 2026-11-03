@@ -1,7 +1,6 @@
 import { useSyncExternalStore } from 'react';
 import { api, getToken, type Prefs } from './api';
 import ru from './locales/ru';
-import en from './locales/en';
 
 /**
  * Language and regional settings.
@@ -11,14 +10,19 @@ import en from './locales/en';
  * - `useI18n()` re-renders the component when the language or any regional setting changes.
  * - the choice is kept in localStorage (so it applies before sign-in) and, for a signed-in user, in /me/prefs.
  *
- * Translated: header and navigation, sign-in / registration, profile, public profile, shared buttons and toasts.
- * Other pages (servers, admin, news, status ...) stay Russian.
+ * Every page and component text goes through `t()`; the only untranslated page is the UiKit demo.
+ *
+ * The Russian dictionary is part of the main bundle (it is also the fallback). The English one is a separate chunk,
+ * loaded when English is the language (see `ready()`): until it arrives `t()` answers in Russian and the components
+ * re-render once it is there.
  */
 export type Lang = Prefs['lang'];
 export type { Prefs };
 export type TKey = keyof typeof ru;
 
-const dicts: Record<Lang, Record<TKey, string>> = { ru, en };
+let enDict: Record<TKey, string> | null = null;
+let enLoading: Promise<void> | null = null;
+const dictOf = (lang: Lang): Record<TKey, string> => (lang === 'en' && enDict ? enDict : ru);
 
 const STORE = 'coregsm_prefs';
 export const DEFAULT_PREFS: Prefs = { lang: 'ru', timezone: '', timeFormat: '24', dateFormat: 'dmy' };
@@ -54,11 +58,21 @@ paintHtmlLang();
 export const getPrefs = (): Prefs => current;
 export const getLang = (): Lang => current.lang;
 
+/** loads the dictionary of the current language (a no-op for Russian); resolves also when the chunk cannot be loaded */
+export function ready(): Promise<void> {
+  if (current.lang !== 'en' || enDict) return Promise.resolve();
+  enLoading ??= import('./locales/en')
+    .then((m) => { enDict = m.default; listeners.forEach((l) => l()); })
+    .catch(() => { enLoading = null; });
+  return enLoading;
+}
+
 function commit(next: Prefs) {
   if (next.lang === current.lang && next.timezone === current.timezone && next.timeFormat === current.timeFormat && next.dateFormat === current.dateFormat) return;
   current = next;
   try { localStorage.setItem(STORE, JSON.stringify(next)); } catch { /* private mode: not remembered */ }
   paintHtmlLang();
+  void ready();
   listeners.forEach((l) => l());
 }
 
@@ -95,7 +109,7 @@ function pickPlural(s: string, n: number, lang: Lang): string {
 
 export function t(key: TKey, params?: Record<string, string | number>): string {
   const lang = current.lang;
-  let s = dicts[lang][key] ?? ru[key] ?? String(key);
+  let s = dictOf(lang)[key] ?? ru[key] ?? String(key);
   if (params) {
     if (typeof params.n === 'number' && s.includes('|')) s = pickPlural(s, params.n, lang);
     s = s.replace(/\{(\w+)\}/g, (m, k: string) => (k in params ? String(params[k]) : m));

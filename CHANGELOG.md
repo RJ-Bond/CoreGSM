@@ -21,6 +21,8 @@ interface language; the GitHub release text is built from the section of the ver
 
 ### 🔧 Прочее | Other
 - 🌐 Интерфейс почти целиком переведён на английский: около 1900 текстов страниц и компонентов вынесены в словари (осталась демо-страница UiKit); попутно исправлен тур по панели в английском интерфейсе | The interface is almost fully translatable into English: about 1900 texts of pages and components moved into the dictionaries (only the UiKit demo page is left); the panel tour is also fixed in the English interface
+- ⚡ Английский словарь интерфейса вынесен в отдельный файл и грузится только при английском языке: основной файл панели меньше примерно на 50 КБ в сжатом виде | The English dictionary of the interface is a separate file loaded only when English is the language: the main file of the panel is about 50 KB smaller compressed
+- 🧹 Проверка кода (oxlint) теперь блокирует PR, если замечаний стало больше, чем в `lint-baseline.json`; убраны неиспользуемые импорты и переменные; `audit.json` больше не хранится в репозитории | The code check (oxlint) now blocks a PR when it finds more than `lint-baseline.json` allows; unused imports and variables are removed; `audit.json` is no longer kept in the repository
 
 
 ## 1.0.0.77 · 28.10.2026
