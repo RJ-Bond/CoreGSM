@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { checkWebhookUrl, isBlockedAddress, safeLookup } from '../src/urlGuard.ts';
-import { botIsDown, parseRecipients, signBody, verifySignature, webhookBody, webhookHeaders, MAX_BODY_BYTES } from '../src/alertChannelsLogic.ts';
+import { checkWebhookUrl, isBlockedAddress, safeLookup } from '../src/security/urlGuard.ts';
+import { botIsDown, parseRecipients, signBody, verifySignature, webhookBody, webhookHeaders, MAX_BODY_BYTES } from '../src/alerts/alertChannelsLogic.ts';
 
 describe('isBlockedAddress', () => {
   it('blocks loopback, private, link-local, CGNAT, multicast and unspecified IPv4', () => {

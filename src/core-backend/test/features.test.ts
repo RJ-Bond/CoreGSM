@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
-import { buildEmbed, type EmbedServer } from '../src/embed.ts';
-import { GAME_PROFILES, gameLabel } from '../src/games.ts';
+import { buildEmbed, type EmbedServer } from '../src/images/embed.ts';
+import { GAME_PROFILES, gameLabel } from '../src/monitoring/games.ts';
 import { setupAdmin, startBackend, type Api } from './harness.ts';
 
 const srv = (game: string): EmbedServer => ({

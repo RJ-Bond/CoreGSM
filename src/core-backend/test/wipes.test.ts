@@ -1,7 +1,7 @@
 /** The wipe scenario: the texts (pure) and /api/servers/:id/wipes, /api/wipes/:id. */
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
-import { fill, leadText } from '../src/wipeLogic.ts';
+import { fill, leadText } from '../src/monitoring/wipeLogic.ts';
 import { setupAdmin, startBackend, type Api } from './harness.ts';
 
 describe('wipe texts', () => {

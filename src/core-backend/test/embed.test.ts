@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { buildEmbed, type EmbedServer } from '../src/embed.ts';
+import { buildEmbed, type EmbedServer } from '../src/images/embed.ts';
 
 const server = (over: Partial<EmbedServer> = {}): EmbedServer => ({
   name: '[RU] Test | PvE',

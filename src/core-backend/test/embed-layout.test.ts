@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { applyLayout, parseLayout } from '../src/embedLayout.ts';
-import type { DiscordEmbed } from '../src/embed.ts';
+import { applyLayout, parseLayout } from '../src/images/embedLayout.ts';
+import type { DiscordEmbed } from '../src/images/embed.ts';
 
 const e = (): DiscordEmbed => ({
   title: 'S', color: 1, description: '⚠️ x', author: { name: 'a' }, thumbnail: { url: 'u' }, image: { url: 'i' }, timestamp: 't', footer: { text: 'f' },

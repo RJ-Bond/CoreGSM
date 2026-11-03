@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { DEFAULT_WELCOME, renderWelcome } from '../src/welcomeLogic.ts';
+import { DEFAULT_WELCOME, renderWelcome } from '../src/community/welcomeLogic.ts';
 
 describe('renderWelcome', () => {
   it('fills the placeholders', () => {

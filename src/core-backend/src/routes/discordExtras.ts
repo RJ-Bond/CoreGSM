@@ -11,11 +11,11 @@
  */
 import express from 'express';
 import { z } from 'zod';
-import { admin, internal } from '../auth.js';
-import { bot } from '../botState.js';
+import { admin, internal } from '../security/auth.js';
+import { bot } from '../discord/botState.js';
 import { db, EFFECTIVE_NAME } from '../db.js';
-import { SERVER_ORDER } from '../serverData.js';
-import { publicBase } from '../site.js';
+import { SERVER_ORDER } from '../monitoring/serverData.js';
+import { publicBase } from '../admin/site.js';
 import { playerCard, topPlayers } from './community.js';
 import { param } from '../http.js';
 
