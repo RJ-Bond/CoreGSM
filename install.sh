@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="5f3e6e645a01"
+COREGSM_BUILD="0184ab6ce466"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.0.0.91"
+COREGSM_VERSION="1.0.0.92"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -112077,7 +112077,7 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/components/AppFooter.test.tsx" << '__COREGSM_EOF__'
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { AppFooter, footVersionText } from './ShellExtras';
+import { AppFooter, CHANGELOG_URL, PROJECT_URL, footVersionText } from './ShellExtras';
 
 describe('footVersionText', () => {
   it('writes a readable version as «v1.0.0.50»', () => expect(footVersionText('1.0.0.50')).toBe('v1.0.0.50'));
@@ -112101,6 +112101,16 @@ describe('AppFooter', () => {
     const html = renderToStaticMarkup(<AppFooter brand="CoreGSM" version="1.0.0.50" />);
     expect((html.match(/<svg/g) ?? []).length).toBe(6);
     expect((html.match(/aria-hidden="true"/g) ?? []).length).toBeGreaterThanOrEqual(6);
+  });
+
+  it('the default brand leads to the project and the version to the changelog; a custom name stays plain', () => {
+    const own = renderToStaticMarkup(<AppFooter brand="CoreGSM" version="1.0.91" />);
+    expect(own).toContain(`href="${PROJECT_URL}"`);
+    expect(own).toContain(`href="${CHANGELOG_URL}"`);
+    expect(own).toContain('rel="noopener noreferrer"');
+    const custom = renderToStaticMarkup(<AppFooter brand="Моя панель" version="1.0.91" />);
+    expect(custom).not.toContain(PROJECT_URL + '"');
+    expect(custom).toContain(`href="${CHANGELOG_URL}"`);
   });
 
   it('keeps the brand and the section links', () => {
@@ -115679,11 +115689,19 @@ export function usePanelPulse(enabled: boolean): number {
 /** «1.0.0.50» is shown as «v1.0.0.50»; a short build id (an older install) as it is */
 export const footVersionText = (v: string): string => (/^\d+(\.\d+)+$/.test(v) ? `v${v}` : v);
 
+/** the project of the panel and the changelog of its versions (every version has a section in CHANGELOG.md) */
+export const PROJECT_URL = 'https://github.com/RJ-Bond/CoreGSM';
+export const CHANGELOG_URL = `${PROJECT_URL}/blob/main/CHANGELOG.md`;
+const DEFAULT_BRAND = 'CoreGSM';
+
 export function AppFooter({ brand, version }: { brand: string; version?: string | null }) {
   useI18n();
   return (
     <footer className="app-foot">
-      <span className="font-extrabold">{brand}</span>
+      {/* a panel that carries its own name is not the project: only the default brand leads to the project page */}
+      {brand === DEFAULT_BRAND
+        ? <a className="font-extrabold" href={PROJECT_URL} target="_blank" rel="noopener noreferrer" title={t('foot.project')}>{brand}</a>
+        : <span className="font-extrabold">{brand}</span>}
       <nav aria-label={t('nav.sections')}>
         <a href="/servers"><FootServers />{t('nav.servers')}</a>
         <a href="/news"><FootNews />{t('nav.news')}</a>
@@ -115691,7 +115709,7 @@ export function AppFooter({ brand, version }: { brand: string; version?: string 
         <a href="/community"><FootCommunity />{t('nav.community')}</a>
         <a href="/gallery"><FootGallery />{t('d2.gal.title')}</a>
       </nav>
-      {version && <span className="app-foot-ver" title={t('foot.version', { v: version })}><FootTag />{footVersionText(version)}</span>}
+      {version && <a className="app-foot-ver" href={CHANGELOG_URL} target="_blank" rel="noopener noreferrer" title={t('foot.version', { v: version })}><FootTag />{footVersionText(version)}</a>}
     </footer>
   );
 }
@@ -131350,6 +131368,7 @@ const en: Record<keyof typeof ru, string> = {
   'net.back': 'Back online. Refreshing the data.',
   'nav.skip': 'Skip to content',
   'foot.version': 'Panel version {v}',
+  'foot.project': 'CoreGSM project page',
   'hdr.search': 'Search',
   'hdr.searchAria': 'Search the panel (Ctrl K)',
   'hdr.searchTitle': 'Search (Ctrl K)',
@@ -135343,6 +135362,7 @@ const ru = {
   'net.back': 'Сеть вернулась. Данные обновляются.',
   'nav.skip': 'Перейти к содержимому',
   'foot.version': 'Версия панели {v}',
+  'foot.project': 'Страница проекта CoreGSM',
   'hdr.search': 'Поиск',
   'hdr.searchAria': 'Поиск по панели (Ctrl K)',
   'hdr.searchTitle': 'Поиск (Ctrl K)',
@@ -155264,6 +155284,7 @@ __COREGSM_EOF__
 .app-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 6px 18px; margin-top: 36px; padding: 18px 0 4px; border-top: 1px solid rgb(var(--line)); font-size: var(--fs-sm); font-weight: 700; color: rgb(var(--mute)); }
 .app-foot nav { display: flex; flex-wrap: wrap; gap: 4px 16px; }
 .app-foot a:hover { color: rgb(var(--link)); }
+.app-foot-ver:hover { opacity: 1; }
 .app-foot nav a { display: inline-flex; align-items: center; gap: 6px; }
 .app-foot svg { flex: none; opacity: .8; }
 /* the version of the panel: a quiet mark at the end of the footer, not a link */

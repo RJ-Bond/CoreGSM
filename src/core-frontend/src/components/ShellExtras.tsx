@@ -94,11 +94,19 @@ export function usePanelPulse(enabled: boolean): number {
 /** «1.0.0.50» is shown as «v1.0.0.50»; a short build id (an older install) as it is */
 export const footVersionText = (v: string): string => (/^\d+(\.\d+)+$/.test(v) ? `v${v}` : v);
 
+/** the project of the panel and the changelog of its versions (every version has a section in CHANGELOG.md) */
+export const PROJECT_URL = 'https://github.com/RJ-Bond/CoreGSM';
+export const CHANGELOG_URL = `${PROJECT_URL}/blob/main/CHANGELOG.md`;
+const DEFAULT_BRAND = 'CoreGSM';
+
 export function AppFooter({ brand, version }: { brand: string; version?: string | null }) {
   useI18n();
   return (
     <footer className="app-foot">
-      <span className="font-extrabold">{brand}</span>
+      {/* a panel that carries its own name is not the project: only the default brand leads to the project page */}
+      {brand === DEFAULT_BRAND
+        ? <a className="font-extrabold" href={PROJECT_URL} target="_blank" rel="noopener noreferrer" title={t('foot.project')}>{brand}</a>
+        : <span className="font-extrabold">{brand}</span>}
       <nav aria-label={t('nav.sections')}>
         <a href="/servers"><FootServers />{t('nav.servers')}</a>
         <a href="/news"><FootNews />{t('nav.news')}</a>
@@ -106,7 +114,7 @@ export function AppFooter({ brand, version }: { brand: string; version?: string 
         <a href="/community"><FootCommunity />{t('nav.community')}</a>
         <a href="/gallery"><FootGallery />{t('d2.gal.title')}</a>
       </nav>
-      {version && <span className="app-foot-ver" title={t('foot.version', { v: version })}><FootTag />{footVersionText(version)}</span>}
+      {version && <a className="app-foot-ver" href={CHANGELOG_URL} target="_blank" rel="noopener noreferrer" title={t('foot.version', { v: version })}><FootTag />{footVersionText(version)}</a>}
     </footer>
   );
 }

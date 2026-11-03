@@ -7,6 +7,7 @@
 .app-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 6px 18px; margin-top: 36px; padding: 18px 0 4px; border-top: 1px solid rgb(var(--line)); font-size: var(--fs-sm); font-weight: 700; color: rgb(var(--mute)); }
 .app-foot nav { display: flex; flex-wrap: wrap; gap: 4px 16px; }
 .app-foot a:hover { color: rgb(var(--link)); }
+.app-foot-ver:hover { opacity: 1; }
 .app-foot nav a { display: inline-flex; align-items: center; gap: 6px; }
 .app-foot svg { flex: none; opacity: .8; }
 /* the version of the panel: a quiet mark at the end of the footer, not a link */

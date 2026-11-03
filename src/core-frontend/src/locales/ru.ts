@@ -59,6 +59,7 @@ const ru = {
   'net.back': 'Сеть вернулась. Данные обновляются.',
   'nav.skip': 'Перейти к содержимому',
   'foot.version': 'Версия панели {v}',
+  'foot.project': 'Страница проекта CoreGSM',
   'hdr.search': 'Поиск',
   'hdr.searchAria': 'Поиск по панели (Ctrl K)',
   'hdr.searchTitle': 'Поиск (Ctrl K)',

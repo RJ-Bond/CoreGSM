@@ -58,6 +58,7 @@ const en: Record<keyof typeof ru, string> = {
   'net.back': 'Back online. Refreshing the data.',
   'nav.skip': 'Skip to content',
   'foot.version': 'Panel version {v}',
+  'foot.project': 'CoreGSM project page',
   'hdr.search': 'Search',
   'hdr.searchAria': 'Search the panel (Ctrl K)',
   'hdr.searchTitle': 'Search (Ctrl K)',

@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { AppFooter, footVersionText } from './ShellExtras';
+import { AppFooter, CHANGELOG_URL, PROJECT_URL, footVersionText } from './ShellExtras';
 
 describe('footVersionText', () => {
   it('writes a readable version as «v1.0.0.50»', () => expect(footVersionText('1.0.0.50')).toBe('v1.0.0.50'));
@@ -24,6 +24,16 @@ describe('AppFooter', () => {
     const html = renderToStaticMarkup(<AppFooter brand="CoreGSM" version="1.0.0.50" />);
     expect((html.match(/<svg/g) ?? []).length).toBe(6);
     expect((html.match(/aria-hidden="true"/g) ?? []).length).toBeGreaterThanOrEqual(6);
+  });
+
+  it('the default brand leads to the project and the version to the changelog; a custom name stays plain', () => {
+    const own = renderToStaticMarkup(<AppFooter brand="CoreGSM" version="1.0.91" />);
+    expect(own).toContain(`href="${PROJECT_URL}"`);
+    expect(own).toContain(`href="${CHANGELOG_URL}"`);
+    expect(own).toContain('rel="noopener noreferrer"');
+    const custom = renderToStaticMarkup(<AppFooter brand="Моя панель" version="1.0.91" />);
+    expect(custom).not.toContain(PROJECT_URL + '"');
+    expect(custom).toContain(`href="${CHANGELOG_URL}"`);
   });
 
   it('keeps the brand and the section links', () => {
