@@ -587,7 +587,7 @@ function PhoneRow({ s, idx, fav, onFav, onOpen, select }: { rx: Reactions; s: Se
 function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince }: { rx: Reactions; s: Server; idx: number; fav: boolean | null; onFav: () => void; onOpen: () => void; select?: SelectProps; uptime?: number; downSince?: number }) {
   useI18n();
   const [who, setWho] = useState(false);
-  const [c1, c2] = gameGradient(s.game);
+  const [c1] = gameGradient(s.game);
   // the accent is taken from the cover picture, so two games of the same colour family still look different
   const accent = calmSeriesColor(useCoverAccent(s.coverUrl, gameColor(s.game)), gameColor(s.game));
   const lag = isLag(s);

@@ -3,12 +3,9 @@ import { useState } from 'react';
 import { t, useI18n } from '../i18n';
 import { NewsCalendar } from '../components/news/Calendar';
 import { confirmDialog } from '../confirm';
-import { api, ApiError, type NewsItem, type NewsSettings, type PublicNews } from '../api';
-import { useAuth } from '../auth';
-import { EmbedView, type DiscordEmbed } from './EmbedPreview';
+import { api, ApiError, type NewsItem, type NewsSettings } from '../api';
 import { ChannelName, ChannelPicker } from '../components/ChannelPicker';
-import { NewsArt } from '../components/Illustrations';
-import { AdminPage, Empty, ErrorLine, GoLink, LoadError, IconCopyPlus, IconNews, IconTrash, PageHead, Strip, fmtDateTime, toast, undoable, usePoll, navigate, errText } from '../ui';
+import { AdminPage, Empty, ErrorLine, LoadError, IconCopyPlus, IconNews, IconTrash, PageHead, Strip, fmtDateTime, toast, undoable, usePoll, navigate, errText } from '../ui';
 import NewsEditor, { TEMPLATES } from './NewsEditor';
 import { newsImage } from '../components/news/newsLogic';
 import { NewsStatsModal } from '../components/news/NewsStats';
@@ -317,8 +314,3 @@ function NewsList() {
 }
 
 /** stored embed -> what EmbedView draws (an uploaded picture is served by the panel) */
-function toView(e: PublicNews['payload']['embed']): DiscordEmbed | null {
-  if (!e) return null;
-  const src = e.image?.upload ? `/api/news/images/${e.image.upload}` : e.image?.url;
-  return { ...e, image: src ? { url: src } : undefined } as DiscordEmbed;
-}

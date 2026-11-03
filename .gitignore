@@ -6,3 +6,4 @@ data/
 .t*/
 shots-out/
 coverage/
+audit.json

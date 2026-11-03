@@ -16,7 +16,7 @@ import ServersPage from './pages/Servers';
 import { applyServerPrefs, t, useI18n, type TKey } from './i18n';
 import { lazyPage, PageFrame } from './lazyPage';
 import { OfflineBar } from './components/OfflineBar';
-import { AuthCard, AuthShell, IconNews, IconServers, IconSettings, Logo, ThemeToggle, Toaster, UserAvatar, Wordmark, applyDefaultTheme, setThemeScope, navigate, parseRoute, toast, useRoute } from './ui';
+import { AuthCard, AuthShell, IconNews, IconServers, IconSettings, Logo, ThemeToggle, Toaster, Wordmark, applyDefaultTheme, setThemeScope, navigate, parseRoute, toast, useRoute } from './ui';
 
 // loaded on demand: the server list (the first screen) does not wait for these
 const NewsFeed = lazyPage(() => import('./pages/NewsFeed'));

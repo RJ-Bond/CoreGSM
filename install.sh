@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="29348aff3b62"
+COREGSM_BUILD="4dc29f98aab8"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.0.0.80"
+COREGSM_VERSION="1.0.0.81"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -11419,31 +11419,6 @@ AoYUECYDYAUHcAAZAAIAAO4DAAhdgBAAAwABlAA+wCAAAAAH0AQDCEAIBgAUAAQigACBFB2CEEAA
 AghdwBgAAB//2Q==
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend"
-  cat > "$APP_DIR/core-backend/audit.json" << '__COREGSM_EOF__'
-{
-  "auditReportVersion": 2,
-  "vulnerabilities": {},
-  "metadata": {
-    "vulnerabilities": {
-      "info": 0,
-      "low": 0,
-      "moderate": 0,
-      "high": 0,
-      "critical": 0,
-      "total": 0
-    },
-    "dependencies": {
-      "prod": 197,
-      "dev": 48,
-      "optional": 35,
-      "peer": 0,
-      "peerOptional": 0,
-      "total": 252
-    }
-  }
-}
-__COREGSM_EOF__
-  mkdir -p "$APP_DIR/core-backend"
   cat > "$APP_DIR/core-backend/package-lock.json" << '__COREGSM_EOF__'
 {
   "name": "core-backend",
@@ -11461,7 +11436,7 @@ __COREGSM_EOF__
         "fetch-socks": "^1.3.3",
         "gamedig": "^5.1.0",
         "jsonwebtoken": "^9.0.2",
-        "nodemailer": "^10.2.1",
+        "nodemailer": "^10.3.1",
         "pino": "^10.4.0",
         "skia-canvas": "^4.0.0",
         "tar": "^7.5.22",
@@ -13158,9 +13133,9 @@ __COREGSM_EOF__
       }
     },
     "node_modules/follow-redirects": {
-      "version": "1.16.1",
-      "resolved": "https://registry.npmjs.org/follow-redirects/-/follow-redirects-1.16.1.tgz",
-      "integrity": "sha512-FNvFGzoMLWmE6Yj9spb/zjd7yiNCHiAW9/Tg9CXrQ8wuu32HtlJOwWO11OJafl5FfY3DxTdQ0vj42zU1kvv5jg==",
+      "version": "1.16.2",
+      "resolved": "https://registry.npmjs.org/follow-redirects/-/follow-redirects-1.16.2.tgz",
+      "integrity": "sha512-/kVP2U8z596Ia0gwFrwyIeo74ta5aVmSeU1FfAUMAmcEP5EP7zydmag3SLiN64NaRKef3lxsq7i/g7ltJQDGow==",
       "funding": [
         {
           "type": "individual",
@@ -13754,9 +13729,9 @@ __COREGSM_EOF__
       }
     },
     "node_modules/nodemailer": {
-      "version": "10.2.1",
-      "resolved": "https://registry.npmjs.org/nodemailer/-/nodemailer-10.2.1.tgz",
-      "integrity": "sha512-ZrDNsPFoDMwefNs7sJwrYiEJ/CG4ClJWDZv05iNJsEBWa8GRDry1QJHTJxsuTAY9eDDKjX4k+q3SxslXJOao7w==",
+      "version": "10.3.1",
+      "resolved": "https://registry.npmjs.org/nodemailer/-/nodemailer-10.3.1.tgz",
+      "integrity": "sha512-uF0AFsJC07Y1vdW7p580DKAnh7rAO+4UPSSB3mDCPNDufoiaOebV6JmrzpxB14OjEEEiBsNdYoM2Y+fN8M7BBA==",
       "license": "MIT-0",
       "engines": {
         "node": ">=20.0.0"
@@ -14667,7 +14642,7 @@ __COREGSM_EOF__
     "fetch-socks": "^1.3.3",
     "gamedig": "^5.1.0",
     "jsonwebtoken": "^9.0.2",
-    "nodemailer": "^10.2.1",
+    "nodemailer": "^10.3.1",
     "pino": "^10.4.0",
     "skia-canvas": "^4.0.0",
     "tar": "^7.5.22",
@@ -37881,6 +37856,27 @@ __COREGSM_EOF__
 </html>
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend"
+  cat > "$APP_DIR/core-frontend/lint-baseline.json" << '__COREGSM_EOF__'
+{
+  "eslint(no-shadow)": 44,
+  "eslint(no-underscore-dangle)": 5,
+  "jsx-a11y(click-events-have-key-events)": 11,
+  "jsx-a11y(no-autofocus)": 12,
+  "jsx-a11y(no-interactive-element-to-noninteractive-role)": 1,
+  "jsx-a11y(no-noninteractive-element-interactions)": 12,
+  "jsx-a11y(no-noninteractive-element-to-interactive-role)": 6,
+  "jsx-a11y(no-noninteractive-tabindex)": 2,
+  "jsx-a11y(no-static-element-interactions)": 5,
+  "jsx-a11y(role-has-required-aria-props)": 1,
+  "jsx-a11y(role-supports-aria-props)": 1,
+  "react-hooks(exhaustive-deps)": 12,
+  "react(exhaustive-effect-dependencies)": 50,
+  "react(iframe-missing-sandbox)": 1,
+  "react(immutability)": 2,
+  "react(memo-dependencies)": 3
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend"
   cat > "$APP_DIR/core-frontend/nginx.conf" << '__COREGSM_EOF__'
 # Static panel (the edge nginx proxies "/" here and "/api" to the backend).
 #
@@ -37971,11 +37967,11 @@ __COREGSM_EOF__
         "@types/react-dom": "^19.3.0",
         "@vitejs/plugin-react": "^6.1.2",
         "@vitest/coverage-v8": "^5.0.5",
-        "autoprefixer": "^10.4.20",
+        "autoprefixer": "^10.6.2",
         "axe-core": "^4.14.0",
         "happy-dom": "^21.0.4",
-        "oxlint": "^1.89.0",
-        "postcss": "^8.5.31",
+        "oxlint": "^1.90.0",
+        "postcss": "^8.5.32",
         "tailwindcss": "^4.3.3",
         "typescript": "^7.0.2",
         "vite": "^8.3.5",
@@ -38206,9 +38202,9 @@ __COREGSM_EOF__
       }
     },
     "node_modules/@oxlint/binding-android-arm-eabi": {
-      "version": "1.89.0",
-      "resolved": "https://registry.npmjs.org/@oxlint/binding-android-arm-eabi/-/binding-android-arm-eabi-1.89.0.tgz",
-      "integrity": "sha512-Pflpba5F3gRAQ12sWglRxvWTHEdAusNDvmi4Y5N1T5SY1AGkM7AixOnET8qkrnLJ/F32qAlNokO6eCknT8tmnw==",
+      "version": "1.90.0",
+      "resolved": "https://registry.npmjs.org/@oxlint/binding-android-arm-eabi/-/binding-android-arm-eabi-1.90.0.tgz",
+      "integrity": "sha512-sgfalb1HuxYjiAa4wESZ626z1FGusqNcXYHyB5oIOEprS2sbPg0UYEfo83uF1GNG70DIfZxHkXuE6KFrlSdn8Q==",
       "cpu": [
         "arm"
       ],
@@ -38223,9 +38219,9 @@ __COREGSM_EOF__
       }
     },
     "node_modules/@oxlint/binding-android-arm64": {
-      "version": "1.89.0",
-      "resolved": "https://registry.npmjs.org/@oxlint/binding-android-arm64/-/binding-android-arm64-1.89.0.tgz",
-      "integrity": "sha512-dYmyD1x7LaPlb79vZWUcpTShk8dI9z1I+IubtqrBxWNJaDhQdPHwcsvg7q5StTU4xWyd9AwPfLaTYFZY8NZgtQ==",
+      "version": "1.90.0",
+      "resolved": "https://registry.npmjs.org/@oxlint/binding-android-arm64/-/binding-android-arm64-1.90.0.tgz",
+      "integrity": "sha512-RcKhz1ETMq+fazE9TKS2+5NIRGwigm/nW8egqF0LI+A8Yw2iW5r0E/C3XAPRiwIm/vcPiutIRIa6IQCIKhZsTQ==",
       "cpu": [
         "arm64"
       ],
@@ -38240,9 +38236,9 @@ __COREGSM_EOF__
       }
     },
     "node_modules/@oxlint/binding-darwin-arm64": {
-      "version": "1.89.0",
-      "resolved": "https://registry.npmjs.org/@oxlint/binding-darwin-arm64/-/binding-darwin-arm64-1.89.0.tgz",
-      "integrity": "sha512-Z/oxOPiIqiS7fItRdxaaOEC+6GD3OpGi0IxoR0dMefzQHolsKLzScw2DNcu/5gUPok3tv+G9mslvYB5bo3i0qg==",
+      "version": "1.90.0",
+      "resolved": "https://registry.npmjs.org/@oxlint/binding-darwin-arm64/-/binding-darwin-arm64-1.90.0.tgz",
+      "integrity": "sha512-PSrxMvP6mx+p1karZcUxLdy9lpaP+JWQPti4al9FgTaPhxE+pT/BjhGExloVVSWgZgIfOlLOjVyyq8BXlodhLQ==",
       "cpu": [
         "arm64"
       ],
@@ -38257,9 +38253,9 @@ __COREGSM_EOF__
       }
     },
     "node_modules/@oxlint/binding-darwin-x64": {
-      "version": "1.89.0",
-      "resolved": "https://registry.npmjs.org/@oxlint/binding-darwin-x64/-/binding-darwin-x64-1.89.0.tgz",
-      "integrity": "sha512-eAjTkHSjAxrdCPJxO6y5sPQL5pYLKb2kvxZz9UU7tXnOZk9I/HLtkvx9S7GHY883k+AmL/eC7mqFt+w7WCwk0w==",
+      "version": "1.90.0",
+      "resolved": "https://registry.npmjs.org/@oxlint/binding-darwin-x64/-/binding-darwin-x64-1.90.0.tgz",
+      "integrity": "sha512-OLbU9qsrV2Q8QxT2OEzOPdO8zCCpyI8qB+hDI8yr6RsYELtkf0FAZhJdfjM/RnLHKzt44HWwAPnk92vBtKofvw==",
       "cpu": [
         "x64"
       ],
@@ -38274,9 +38270,9 @@ __COREGSM_EOF__
       }
     },
     "node_modules/@oxlint/binding-freebsd-x64": {
-      "version": "1.89.0",
-      "resolved": "https://registry.npmjs.org/@oxlint/binding-freebsd-x64/-/binding-freebsd-x64-1.89.0.tgz",
-      "integrity": "sha512-0lNCA9Tl1n1FKpqy2/9ckp0kIuSrtJ/l9bMRgaEhOtM7TsOHshFuwOcvW8oA9teXLMOJT61LjEKWiaHDFGxF/w==",
+      "version": "1.90.0",
+      "resolved": "https://registry.npmjs.org/@oxlint/binding-freebsd-x64/-/binding-freebsd-x64-1.90.0.tgz",
+      "integrity": "sha512-fBA4pWyVDARmNucQqpyFuPC49xYf1r+sX7dxPL5fNPQrSMLum39Sn56tZ9JPleWC7FzLPwSQ7plYYfirYBHF8A==",
       "cpu": [
         "x64"
       ],
@@ -38291,9 +38287,9 @@ __COREGSM_EOF__
       }
     },
     "node_modules/@oxlint/binding-linux-arm-gnueabihf": {
-      "version": "1.89.0",
-      "resolved": "https://registry.npmjs.org/@oxlint/binding-linux-arm-gnueabihf/-/binding-linux-arm-gnueabihf-1.89.0.tgz",
-      "integrity": "sha512-OTFEvi9W+JczaZD1Caj17SGCoW8H7TE+fvx0D7ATEWa1Lohn91UMxFQ6r145SiGy/yCxeIwptMys/RAM7gSVSQ==",
+      "version": "1.90.0",
+      "resolved": "https://registry.npmjs.org/@oxlint/binding-linux-arm-gnueabihf/-/binding-linux-arm-gnueabihf-1.90.0.tgz",
+      "integrity": "sha512-zhxH78eP2nR6/pGdhBc7MIfjhhcgATeu8fkmkFJbuzfk6Cj0FzBxyEhL85yDqrCybjx+G2YDzZGsxIO9kvO4Iw==",
       "cpu": [
         "arm"
       ],
@@ -38308,9 +38304,9 @@ __COREGSM_EOF__
       }
     },
     "node_modules/@oxlint/binding-linux-arm-musleabihf": {
-      "version": "1.89.0",
-      "resolved": "https://registry.npmjs.org/@oxlint/binding-linux-arm-musleabihf/-/binding-linux-arm-musleabihf-1.89.0.tgz",
-      "integrity": "sha512-fRxgNHvBLswj6MrhW2uBq5UDhPRQlCbHeq/Nf8yuG9zOxhDsXqX/mi2PX1axgsQxMm88el7HLiJAzglAnflYxw==",
+      "version": "1.90.0",
+      "resolved": "https://registry.npmjs.org/@oxlint/binding-linux-arm-musleabihf/-/binding-linux-arm-musleabihf-1.90.0.tgz",
+      "integrity": "sha512-MvYmpHyJqUJjEvkZbJHdwfdL45cGn8EVBkYmoXFiaYFW9suoD3dbJl5mBdpy0DVgdjlyddmldbRtk3cCgETadQ==",
       "cpu": [
         "arm"
       ],
@@ -38325,9 +38321,9 @@ __COREGSM_EOF__
       }
     },
     "node_modules/@oxlint/binding-linux-arm64-gnu": {
-      "version": "1.89.0",
-      "resolved": "https://registry.npmjs.org/@oxlint/binding-linux-arm64-gnu/-/binding-linux-arm64-gnu-1.89.0.tgz",
-      "integrity": "sha512-v9ENzHvwrQoYSWTtviH1pOYc7R9UovDxVofnck50cNmPihRRTcrg5X0UlRbLOZ7IVtxPOlh2hb7kDO+FpE8SfQ==",
+      "version": "1.90.0",
+      "resolved": "https://registry.npmjs.org/@oxlint/binding-linux-arm64-gnu/-/binding-linux-arm64-gnu-1.90.0.tgz",
+      "integrity": "sha512-L13Sy+Kg0nZhwTsToniqjUFPA2TuM6962qCZ5Wp5KeB517Tw7ApdLTTtlb+bF86fcZZa2EtvCVvAJxk4Dya/MQ==",
       "cpu": [
         "arm64"
       ],
@@ -38345,9 +38341,9 @@ __COREGSM_EOF__
       }
     },
     "node_modules/@oxlint/binding-linux-arm64-musl": {
-      "version": "1.89.0",
-      "resolved": "https://registry.npmjs.org/@oxlint/binding-linux-arm64-musl/-/binding-linux-arm64-musl-1.89.0.tgz",
-      "integrity": "sha512-vfffe8mQ484AzVadlUOFpgL+JDwhvs9hrzxTgQP1FVfi4ZEUUYeffXlzC9dFV7Dgnu5s/KrNKvfmG6HxBd/ISQ==",
+      "version": "1.90.0",
+      "resolved": "https://registry.npmjs.org/@oxlint/binding-linux-arm64-musl/-/binding-linux-arm64-musl-1.90.0.tgz",
+      "integrity": "sha512-wFDdZWGpzIPFdJFjSLWnKB0TGzFriTKUIrl04iMqMyM9BBIJTuerfCHYa0WpDSjr5x3lcW/CHLyacSt886WpGg==",
       "cpu": [
         "arm64"
       ],
@@ -38365,9 +38361,9 @@ __COREGSM_EOF__
       }
     },
     "node_modules/@oxlint/binding-linux-ppc64-gnu": {
-      "version": "1.89.0",
-      "resolved": "https://registry.npmjs.org/@oxlint/binding-linux-ppc64-gnu/-/binding-linux-ppc64-gnu-1.89.0.tgz",
-      "integrity": "sha512-Buonlp4hVS7RGNP5M7bPpGNQrenyzA2C64JcO/oz9C1c6dGOXJ7VEAnaiAMY7voou0JYyCJdvDVlFQc5DZX3DQ==",
+      "version": "1.90.0",
+      "resolved": "https://registry.npmjs.org/@oxlint/binding-linux-ppc64-gnu/-/binding-linux-ppc64-gnu-1.90.0.tgz",
+      "integrity": "sha512-FRywfn+MoKn8xpBSzgNwNVliSKRI2QXkxi/iF7o6FEQs8Bh8z2RpVTaFAcO3pchXjvB2eGNFIoLLQABIQ+u7VA==",
       "cpu": [
         "ppc64"
       ],
@@ -38385,9 +38381,9 @@ __COREGSM_EOF__
       }
     },
     "node_modules/@oxlint/binding-linux-riscv64-gnu": {
-      "version": "1.89.0",
-      "resolved": "https://registry.npmjs.org/@oxlint/binding-linux-riscv64-gnu/-/binding-linux-riscv64-gnu-1.89.0.tgz",
-      "integrity": "sha512-1eVwJJrJ3lYIPT+cm7BcBBZZXY6IQZP/oyonaruTor/MrVyWOpvnwt1oD5CLdsHg5aVBIxXodQSvt+1gK6ck5w==",
+      "version": "1.90.0",
+      "resolved": "https://registry.npmjs.org/@oxlint/binding-linux-riscv64-gnu/-/binding-linux-riscv64-gnu-1.90.0.tgz",
+      "integrity": "sha512-IS2PaUgpc/qeLADTyhUNmdx3x4ijs9pjJdPKBYHaT+mAE7k3FsjnHPTjhpsak1b++h6CIPhv6WX9Z+y7Pw0voQ==",
       "cpu": [
         "riscv64"
       ],
@@ -38405,9 +38401,9 @@ __COREGSM_EOF__
       }
     },
     "node_modules/@oxlint/binding-linux-riscv64-musl": {
-      "version": "1.89.0",
-      "resolved": "https://registry.npmjs.org/@oxlint/binding-linux-riscv64-musl/-/binding-linux-riscv64-musl-1.89.0.tgz",
-      "integrity": "sha512-fRQQsKUGShdEL5Fl9o9uhj3grkZbeXKLv0icQ5tspUCNYSDy8wzzEcP1WC2bKdTQ0rSszbKlO3iiHORxV22DLg==",
+      "version": "1.90.0",
+      "resolved": "https://registry.npmjs.org/@oxlint/binding-linux-riscv64-musl/-/binding-linux-riscv64-musl-1.90.0.tgz",
+      "integrity": "sha512-s7JFKRkGS8O7i2ZVODfuO++NC7sH6HDqpMn8lYxw91w0SXJOxnAVjQ8utvmDwLMMT0jaSkuOKuUYJDGDtu4sHQ==",
       "cpu": [
         "riscv64"
       ],
@@ -38425,9 +38421,9 @@ __COREGSM_EOF__
       }
     },
     "node_modules/@oxlint/binding-linux-s390x-gnu": {
-      "version": "1.89.0",
-      "resolved": "https://registry.npmjs.org/@oxlint/binding-linux-s390x-gnu/-/binding-linux-s390x-gnu-1.89.0.tgz",
-      "integrity": "sha512-dEtYjIy6+fHcjKklsmtmMkZRhwHr2UbzjmpvuPtQYSeN9awQ2hx5JLms5Wvri+8P/NZtD8v5hfgHALUql+/Ycg==",
+      "version": "1.90.0",
+      "resolved": "https://registry.npmjs.org/@oxlint/binding-linux-s390x-gnu/-/binding-linux-s390x-gnu-1.90.0.tgz",
+      "integrity": "sha512-b0GxrOQr5VONCkd7KLSqmP6b6nqZuTpuS8QPQHzltmqdXP5bY0Jl0CZ0QmlCTrS3ExaLYbioFYOARzNbYvcApQ==",
       "cpu": [
         "s390x"
       ],
@@ -38445,9 +38441,9 @@ __COREGSM_EOF__
       }
     },
     "node_modules/@oxlint/binding-linux-x64-gnu": {
-      "version": "1.89.0",
-      "resolved": "https://registry.npmjs.org/@oxlint/binding-linux-x64-gnu/-/binding-linux-x64-gnu-1.89.0.tgz",
-      "integrity": "sha512-hqjwIj5KOYM8Wjef/p7IruNi1iByLhSzbMBk62y22P/E8q7Jj0Pp+DeUTKTRYyZYCDtU1wEGlnWOnttHbyNIww==",
+      "version": "1.90.0",
+      "resolved": "https://registry.npmjs.org/@oxlint/binding-linux-x64-gnu/-/binding-linux-x64-gnu-1.90.0.tgz",
+      "integrity": "sha512-iaJeShJtgUp8rZbt9YUdTAGOpmX5KogCLba17Jp1tWdJ3F4M3D2g2TKUyI1FMTHxKH9NNHuQcuC2kZRg6IV7yQ==",
       "cpu": [
         "x64"
       ],
@@ -38465,9 +38461,9 @@ __COREGSM_EOF__
       }
     },
     "node_modules/@oxlint/binding-linux-x64-musl": {
-      "version": "1.89.0",
-      "resolved": "https://registry.npmjs.org/@oxlint/binding-linux-x64-musl/-/binding-linux-x64-musl-1.89.0.tgz",
-      "integrity": "sha512-iAQN3e6o9UgUCcdGwqRx/jYcKbG3HK7ur3rH6lTqVcQeNGZ85AeWIg6cgn/edwFQ0ofEZZItMwkzyCVTahnvEA==",
+      "version": "1.90.0",
+      "resolved": "https://registry.npmjs.org/@oxlint/binding-linux-x64-musl/-/binding-linux-x64-musl-1.90.0.tgz",
+      "integrity": "sha512-/aZoXnL5WBLCXuzfHqvEFXcm4iwYmr/cYByHDTXzLFzJdE5DC7bm6phpWqHv6BeqpVgY9IpBAxGDv2WEkl5JCg==",
       "cpu": [
         "x64"
       ],
@@ -38485,9 +38481,9 @@ __COREGSM_EOF__
       }
     },
     "node_modules/@oxlint/binding-openharmony-arm64": {
-      "version": "1.89.0",
-      "resolved": "https://registry.npmjs.org/@oxlint/binding-openharmony-arm64/-/binding-openharmony-arm64-1.89.0.tgz",
-      "integrity": "sha512-MNxjEByz3N/7Q4qFQuPWvc14TpN9LoD3pECEDsJTZbP/wyB7U+hduUXEl7QAbbgVezFwsb9sWtNUO6XVBndOhg==",
+      "version": "1.90.0",
+      "resolved": "https://registry.npmjs.org/@oxlint/binding-openharmony-arm64/-/binding-openharmony-arm64-1.90.0.tgz",
+      "integrity": "sha512-SMhk7ozwoxYDKfYqGZCQEfULOKDneF9uhaoIf2neoDLWvNtjY9yVeL7YHmE5L9WdKvMpWNwwZxhenxBu6AgfOg==",
       "cpu": [
         "arm64"
       ],
@@ -38502,9 +38498,9 @@ __COREGSM_EOF__
       }
     },
     "node_modules/@oxlint/binding-win32-arm64-msvc": {
-      "version": "1.89.0",
-      "resolved": "https://registry.npmjs.org/@oxlint/binding-win32-arm64-msvc/-/binding-win32-arm64-msvc-1.89.0.tgz",
-      "integrity": "sha512-xxe+i9wfuFso/VnoL4mfj0UlzE+cfCFiUB06vkXCMyQdgVVmItF5FfAF4tATAktSU6uHruWR+FjqvAT9cHZZzg==",
+      "version": "1.90.0",
+      "resolved": "https://registry.npmjs.org/@oxlint/binding-win32-arm64-msvc/-/binding-win32-arm64-msvc-1.90.0.tgz",
+      "integrity": "sha512-KBvR3A9fO7fCi2vCP8ifWvlia7tGEQV9NaYh+IGwa/7Groy48Mt/UaYqMK9/zOtAWl20BUCf6RPqzJ32fRw33Q==",
       "cpu": [
         "arm64"
       ],
@@ -38519,9 +38515,9 @@ __COREGSM_EOF__
       }
     },
     "node_modules/@oxlint/binding-win32-ia32-msvc": {
-      "version": "1.89.0",
-      "resolved": "https://registry.npmjs.org/@oxlint/binding-win32-ia32-msvc/-/binding-win32-ia32-msvc-1.89.0.tgz",
-      "integrity": "sha512-saFy07cO94E664glwgLmKLI40HgTL1PY86y4T6+ud4niX4H0Kdqjcmqmjps7mQNdBytV5guGbXDdyQtRfeLbLA==",
+      "version": "1.90.0",
+      "resolved": "https://registry.npmjs.org/@oxlint/binding-win32-ia32-msvc/-/binding-win32-ia32-msvc-1.90.0.tgz",
+      "integrity": "sha512-+x42rDHQGbTCuT3EzpWAzhP3NoVPE/cJsG4gnrakOSg0olV+GCdMpPU23Nvrl3zZMnXxFZdTtDv4D3SuaA5ZeQ==",
       "cpu": [
         "ia32"
       ],
@@ -38536,9 +38532,9 @@ __COREGSM_EOF__
       }
     },
     "node_modules/@oxlint/binding-win32-x64-msvc": {
-      "version": "1.89.0",
-      "resolved": "https://registry.npmjs.org/@oxlint/binding-win32-x64-msvc/-/binding-win32-x64-msvc-1.89.0.tgz",
-      "integrity": "sha512-hLFJ/o0f/dTJh/EW0vmcbREYSQO9tYgfiAAlsOkiLFiJuRRWvYtFELUXN5o2ijpSo/tlO1n+YlWN58tZwPG18A==",
+      "version": "1.90.0",
+      "resolved": "https://registry.npmjs.org/@oxlint/binding-win32-x64-msvc/-/binding-win32-x64-msvc-1.90.0.tgz",
+      "integrity": "sha512-30JiaFEBUB9peEOcvVM8ggo88SoN/IdSr9DW505JdBji/R6dM66gKEiG65hw6qcaF2f4mO0cEJ+RwRZprmun9g==",
       "cpu": [
         "x64"
       ],
@@ -39816,6 +39812,72 @@ __COREGSM_EOF__
         "node": ">=14.0.0"
       }
     },
+    "node_modules/@tailwindcss/oxide-wasm32-wasi/node_modules/@emnapi/core": {
+      "version": "1.11.1",
+      "dev": true,
+      "inBundle": true,
+      "license": "MIT",
+      "optional": true,
+      "dependencies": {
+        "@emnapi/wasi-threads": "1.2.2",
+        "tslib": "^2.4.0"
+      }
+    },
+    "node_modules/@tailwindcss/oxide-wasm32-wasi/node_modules/@emnapi/runtime": {
+      "version": "1.11.1",
+      "dev": true,
+      "inBundle": true,
+      "license": "MIT",
+      "optional": true,
+      "dependencies": {
+        "tslib": "^2.4.0"
+      }
+    },
+    "node_modules/@tailwindcss/oxide-wasm32-wasi/node_modules/@emnapi/wasi-threads": {
+      "version": "1.2.2",
+      "dev": true,
+      "inBundle": true,
+      "license": "MIT",
+      "optional": true,
+      "dependencies": {
+        "tslib": "^2.4.0"
+      }
+    },
+    "node_modules/@tailwindcss/oxide-wasm32-wasi/node_modules/@napi-rs/wasm-runtime": {
+      "version": "1.1.4",
+      "dev": true,
+      "inBundle": true,
+      "license": "MIT",
+      "optional": true,
+      "dependencies": {
+        "@tybys/wasm-util": "^0.10.1"
+      },
+      "funding": {
+        "type": "github",
+        "url": "https://github.com/sponsors/Brooooooklyn"
+      },
+      "peerDependencies": {
+        "@emnapi/core": "^1.7.1",
+        "@emnapi/runtime": "^1.7.1"
+      }
+    },
+    "node_modules/@tailwindcss/oxide-wasm32-wasi/node_modules/@tybys/wasm-util": {
+      "version": "0.10.2",
+      "dev": true,
+      "inBundle": true,
+      "license": "MIT",
+      "optional": true,
+      "dependencies": {
+        "tslib": "^2.4.0"
+      }
+    },
+    "node_modules/@tailwindcss/oxide-wasm32-wasi/node_modules/tslib": {
+      "version": "2.8.1",
+      "dev": true,
+      "inBundle": true,
+      "license": "0BSD",
+      "optional": true
+    },
     "node_modules/@tailwindcss/oxide-win32-arm64-msvc": {
       "version": "4.3.3",
       "resolved": "https://registry.npmjs.org/@tailwindcss/oxide-win32-arm64-msvc/-/oxide-win32-arm64-msvc-4.3.3.tgz",
@@ -40568,9 +40630,9 @@ __COREGSM_EOF__
       "license": "MIT"
     },
     "node_modules/autoprefixer": {
-      "version": "10.6.1",
-      "resolved": "https://registry.npmjs.org/autoprefixer/-/autoprefixer-10.6.1.tgz",
-      "integrity": "sha512-cL1Qz6ADZhcEbny/8HPfe99J6HhNoYtpX2LFLIbhgGE7Q1hlQVkYFdetDN7Id3KiQxhDrHwzlHr/YQCnZ8+xSA==",
+      "version": "10.6.2",
+      "resolved": "https://registry.npmjs.org/autoprefixer/-/autoprefixer-10.6.2.tgz",
+      "integrity": "sha512-VOw9/yGTGwPPgzFcODtcv6zhEPIeIWkRSe10L2ri2f5vZ7ID7lCt6jZzRF5/ubgOZ+szYydmEF5AYsA5jxX1tA==",
       "dev": true,
       "funding": [
         {
@@ -41264,9 +41326,9 @@ __COREGSM_EOF__
       }
     },
     "node_modules/oxlint": {
-      "version": "1.89.0",
-      "resolved": "https://registry.npmjs.org/oxlint/-/oxlint-1.89.0.tgz",
-      "integrity": "sha512-a25hkfo61okGPvJz432fRIPoxlKtNnOVy9w4rzrmGgNm4iVTPwpSQlmdqNWnp6p9QyyPVfAZRgnf5XvSBZFk/A==",
+      "version": "1.90.0",
+      "resolved": "https://registry.npmjs.org/oxlint/-/oxlint-1.90.0.tgz",
+      "integrity": "sha512-RkTN9EmgIUpLuhNoLhO3OliMGJlvb3Dk7XVjBZnfoMCHrVpuz5ESd97klfiyYeV7XfA2lNLnDCPMkUI+Qw5How==",
       "dev": true,
       "license": "MIT",
       "bin": {
@@ -41279,28 +41341,28 @@ __COREGSM_EOF__
         "url": "https://github.com/sponsors/oxc-project"
       },
       "optionalDependencies": {
-        "@oxlint/binding-android-arm-eabi": "1.89.0",
-        "@oxlint/binding-android-arm64": "1.89.0",
-        "@oxlint/binding-darwin-arm64": "1.89.0",
-        "@oxlint/binding-darwin-x64": "1.89.0",
-        "@oxlint/binding-freebsd-x64": "1.89.0",
-        "@oxlint/binding-linux-arm-gnueabihf": "1.89.0",
-        "@oxlint/binding-linux-arm-musleabihf": "1.89.0",
-        "@oxlint/binding-linux-arm64-gnu": "1.89.0",
-        "@oxlint/binding-linux-arm64-musl": "1.89.0",
-        "@oxlint/binding-linux-ppc64-gnu": "1.89.0",
-        "@oxlint/binding-linux-riscv64-gnu": "1.89.0",
-        "@oxlint/binding-linux-riscv64-musl": "1.89.0",
-        "@oxlint/binding-linux-s390x-gnu": "1.89.0",
-        "@oxlint/binding-linux-x64-gnu": "1.89.0",
-        "@oxlint/binding-linux-x64-musl": "1.89.0",
-        "@oxlint/binding-openharmony-arm64": "1.89.0",
-        "@oxlint/binding-win32-arm64-msvc": "1.89.0",
-        "@oxlint/binding-win32-ia32-msvc": "1.89.0",
-        "@oxlint/binding-win32-x64-msvc": "1.89.0"
+        "@oxlint/binding-android-arm-eabi": "1.90.0",
+        "@oxlint/binding-android-arm64": "1.90.0",
+        "@oxlint/binding-darwin-arm64": "1.90.0",
+        "@oxlint/binding-darwin-x64": "1.90.0",
+        "@oxlint/binding-freebsd-x64": "1.90.0",
+        "@oxlint/binding-linux-arm-gnueabihf": "1.90.0",
+        "@oxlint/binding-linux-arm-musleabihf": "1.90.0",
+        "@oxlint/binding-linux-arm64-gnu": "1.90.0",
+        "@oxlint/binding-linux-arm64-musl": "1.90.0",
+        "@oxlint/binding-linux-ppc64-gnu": "1.90.0",
+        "@oxlint/binding-linux-riscv64-gnu": "1.90.0",
+        "@oxlint/binding-linux-riscv64-musl": "1.90.0",
+        "@oxlint/binding-linux-s390x-gnu": "1.90.0",
+        "@oxlint/binding-linux-x64-gnu": "1.90.0",
+        "@oxlint/binding-linux-x64-musl": "1.90.0",
+        "@oxlint/binding-openharmony-arm64": "1.90.0",
+        "@oxlint/binding-win32-arm64-msvc": "1.90.0",
+        "@oxlint/binding-win32-ia32-msvc": "1.90.0",
+        "@oxlint/binding-win32-x64-msvc": "1.90.0"
       },
       "peerDependencies": {
-        "oxlint-tsgolint": ">=7.0.2003",
+        "oxlint-tsgolint": ">=7.0.2005",
         "vite-plus": "*"
       },
       "peerDependenciesMeta": {
@@ -41333,9 +41395,9 @@ __COREGSM_EOF__
       }
     },
     "node_modules/postcss": {
-      "version": "8.5.31",
-      "resolved": "https://registry.npmjs.org/postcss/-/postcss-8.5.31.tgz",
-      "integrity": "sha512-YUbWYCgErwnMAVkjUnYa+KlMBzGpHwiIt/DE7f0G33AuX2LH9UcTk6KgWxd3zRU+pN3u/C+Xl3EnMLM4Hea7Sg==",
+      "version": "8.5.32",
+      "resolved": "https://registry.npmjs.org/postcss/-/postcss-8.5.32.tgz",
+      "integrity": "sha512-LJlKCCAUFKOuZxipUdYw1NzIITEsPcgyOG9LkvRJvuKj/bRzbuRY0ARXvL0pWGpsZvn8jku+LMep2eU0seHp8g==",
       "dev": true,
       "funding": [
         {
@@ -42238,7 +42300,8 @@ __COREGSM_EOF__
     "test": "vitest run",
     "coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit",
-    "lint": "oxlint"
+    "lint": "oxlint",
+    "lint:ratchet": "node scripts/lint-ratchet.mjs"
   },
   "dependencies": {
     "@fontsource-variable/golos-text": "^5.3.0",
@@ -42263,11 +42326,11 @@ __COREGSM_EOF__
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.2",
     "@vitest/coverage-v8": "^5.0.5",
-    "autoprefixer": "^10.4.20",
+    "autoprefixer": "^10.6.2",
     "axe-core": "^4.14.0",
     "happy-dom": "^21.0.4",
-    "oxlint": "^1.89.0",
-    "postcss": "^8.5.31",
+    "oxlint": "^1.90.0",
+    "postcss": "^8.5.32",
     "tailwindcss": "^4.3.3",
     "typescript": "^7.0.2",
     "vite": "^8.3.5",
@@ -109590,6 +109653,41 @@ D7aGEx8CoIjvAiTDLa5e0i/a94kxabzjASw0PLzzZvTEmShpo+1okiC+VKhAs18H8TdJ+LteTp38
 3XynffBKOgBea985RzFhxiwPJU4ZUj18g6cO30fJGy2+uQ9QjEbpI8oc+fPDampqarK5mpEt5ShQ
 IwAAAABJRU5ErkJggg==
 __COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/scripts"
+  cat > "$APP_DIR/core-frontend/scripts/lint-ratchet.mjs" << '__COREGSM_EOF__'
+// Lint "ratchet": oxlint still reports old findings (the static a11y rules flag patterns that axe accepts), so the
+// check does not demand zero. It fails when any rule reports MORE findings than lint-baseline.json allows, so the
+// number can only go down. After fixing findings run `npm run lint:ratchet -- --update` and commit the new baseline.
+import { execFileSync } from 'node:child_process';
+import { readFileSync, writeFileSync } from 'node:fs';
+
+const BASE = new URL('../lint-baseline.json', import.meta.url);
+const bin = process.platform === 'win32' ? 'npx.cmd' : 'npx';
+let out;
+try {
+  out = execFileSync(bin, ['oxlint', '-f', 'json'], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, shell: process.platform === 'win32' });
+} catch (e) {
+  out = e.stdout; // oxlint exits non-zero when it has findings
+  if (!out) throw e;
+}
+const counts = {};
+for (const d of JSON.parse(out).diagnostics) counts[d.code] = (counts[d.code] || 0) + 1;
+const sorted = Object.fromEntries(Object.entries(counts).sort(([a], [b]) => a.localeCompare(b)));
+
+if (process.argv.includes('--update')) {
+  writeFileSync(BASE, JSON.stringify(sorted, null, 2) + '\n');
+  console.log('lint baseline updated:', Object.values(sorted).reduce((a, b) => a + b, 0), 'findings');
+  process.exit(0);
+}
+
+const base = JSON.parse(readFileSync(BASE, 'utf8'));
+const worse = Object.entries(sorted).filter(([k, n]) => n > (base[k] || 0));
+const better = Object.entries(base).filter(([k, n]) => (sorted[k] || 0) < n);
+for (const [k, n] of worse) console.error(`::error title=oxlint::${k}: ${n} findings, the baseline allows ${base[k] || 0}`);
+if (worse.length) process.exit(1);
+if (better.length) console.log(`Fewer findings than the baseline for ${better.length} rule(s): run "npm run lint:ratchet -- --update" and commit lint-baseline.json`);
+console.log('lint ratchet ok:', Object.values(sorted).reduce((a, b) => a + b, 0), 'findings');
+__COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend"
   cat > "$APP_DIR/core-frontend/security-headers.conf" << '__COREGSM_EOF__'
 # Response headers every location sends (included from nginx.conf). nginx does not inherit add_header into a location
@@ -109619,7 +109717,7 @@ import ServersPage from './pages/Servers';
 import { applyServerPrefs, t, useI18n, type TKey } from './i18n';
 import { lazyPage, PageFrame } from './lazyPage';
 import { OfflineBar } from './components/OfflineBar';
-import { AuthCard, AuthShell, IconNews, IconServers, IconSettings, Logo, ThemeToggle, Toaster, UserAvatar, Wordmark, applyDefaultTheme, setThemeScope, navigate, parseRoute, toast, useRoute } from './ui';
+import { AuthCard, AuthShell, IconNews, IconServers, IconSettings, Logo, ThemeToggle, Toaster, Wordmark, applyDefaultTheme, setThemeScope, navigate, parseRoute, toast, useRoute } from './ui';
 
 // loaded on demand: the server list (the first screen) does not wait for these
 const NewsFeed = lazyPage(() => import('./pages/NewsFeed'));
@@ -115277,7 +115375,7 @@ __COREGSM_EOF__
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { api, onBusy, type Me } from '../api';
 import { useAppearance } from '../appearance';
-import { t, useI18n, type TKey } from '../i18n';
+import { t, useI18n } from '../i18n';
 import { UserAvatar } from '../ui';
 import { FootCommunity, FootGallery, FootNews, FootServers, FootStatus, FootTag } from './FooterIcons';
 import { MenuAdmin, MenuGallery, MenuLogout, MenuUser } from './HeaderIcons';
@@ -126993,10 +127091,9 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/components/servers/ServerViews.tsx" << '__COREGSM_EOF__'
 // The «Список» and «ТВ» views of the servers page.
 import { useEffect, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
 import type { Server } from '../../api';
 import { gameColor, gameLabel } from '../../games';
-import { AnimatedNumber, GameAvatar, MiniSpark, StatusPill, ago, isLag, plural, num } from '../../ui';
+import { AnimatedNumber, GameAvatar, ago, isLag, num } from '../../ui';
 import MaintenanceChip from '../MaintenanceChip';
 import { t, useI18n, type TKey } from '../../i18n';
 import { CapacityBar, CountReact, StatusFlash, reactionOf, type Reactions } from './serverUi';
@@ -128911,7 +129008,6 @@ __COREGSM_EOF__
 import { useSyncExternalStore } from 'react';
 import { api, getToken, type Prefs } from './api';
 import ru from './locales/ru';
-import en from './locales/en';
 
 /**
  * Language and regional settings.
@@ -128921,14 +129017,19 @@ import en from './locales/en';
  * - `useI18n()` re-renders the component when the language or any regional setting changes.
  * - the choice is kept in localStorage (so it applies before sign-in) and, for a signed-in user, in /me/prefs.
  *
- * Translated: header and navigation, sign-in / registration, profile, public profile, shared buttons and toasts.
- * Other pages (servers, admin, news, status ...) stay Russian.
+ * Every page and component text goes through `t()`; the only untranslated page is the UiKit demo.
+ *
+ * The Russian dictionary is part of the main bundle (it is also the fallback). The English one is a separate chunk,
+ * loaded when English is the language (see `ready()`): until it arrives `t()` answers in Russian and the components
+ * re-render once it is there.
  */
 export type Lang = Prefs['lang'];
 export type { Prefs };
 export type TKey = keyof typeof ru;
 
-const dicts: Record<Lang, Record<TKey, string>> = { ru, en };
+let enDict: Record<TKey, string> | null = null;
+let enLoading: Promise<void> | null = null;
+const dictOf = (lang: Lang): Record<TKey, string> => (lang === 'en' && enDict ? enDict : ru);
 
 const STORE = 'coregsm_prefs';
 export const DEFAULT_PREFS: Prefs = { lang: 'ru', timezone: '', timeFormat: '24', dateFormat: 'dmy' };
@@ -128964,11 +129065,21 @@ paintHtmlLang();
 export const getPrefs = (): Prefs => current;
 export const getLang = (): Lang => current.lang;
 
+/** loads the dictionary of the current language (a no-op for Russian); resolves also when the chunk cannot be loaded */
+export function ready(): Promise<void> {
+  if (current.lang !== 'en' || enDict) return Promise.resolve();
+  enLoading ??= import('./locales/en')
+    .then((m) => { enDict = m.default; listeners.forEach((l) => l()); })
+    .catch(() => { enLoading = null; });
+  return enLoading;
+}
+
 function commit(next: Prefs) {
   if (next.lang === current.lang && next.timezone === current.timezone && next.timeFormat === current.timeFormat && next.dateFormat === current.dateFormat) return;
   current = next;
   try { localStorage.setItem(STORE, JSON.stringify(next)); } catch { /* private mode: not remembered */ }
   paintHtmlLang();
+  void ready();
   listeners.forEach((l) => l());
 }
 
@@ -129005,7 +129116,7 @@ function pickPlural(s: string, n: number, lang: Lang): string {
 
 export function t(key: TKey, params?: Record<string, string | number>): string {
   const lang = current.lang;
-  let s = dicts[lang][key] ?? ru[key] ?? String(key);
+  let s = dictOf(lang)[key] ?? ru[key] ?? String(key);
   if (params) {
     if (typeof params.n === 'number' && s.includes('|')) s = pickPlural(s, params.n, lang);
     s = s.replace(/\{(\w+)\}/g, (m, k: string) => (k in params ? String(params[k]) : m));
@@ -138632,6 +138743,7 @@ import { api, getToken } from './api';
 import { toast } from './ui/toast';
 import { initAppearance } from './appearance';
 import { QueryProvider } from './ui/query';
+import { ready as i18nReady } from './i18n';
 import { installViewport } from './ui/viewport';
 import { initDensity, installMagnetic, installSegIndicator } from './useMotion';
 
@@ -138642,15 +138754,18 @@ installMagnetic();
 installSegIndicator();
 installViewport();
 
-ReactDOM.createRoot(document.getElementById('root')!).render(
-  <React.StrictMode>
-    <RootBoundary>
-      <QueryProvider>
-        <App />
-      </QueryProvider>
-    </RootBoundary>
-  </React.StrictMode>,
-);
+// the English dictionary is a separate chunk: wait for it so that an English page never flashes in Russian first
+void i18nReady().then(() => {
+  ReactDOM.createRoot(document.getElementById('root')!).render(
+    <React.StrictMode>
+      <RootBoundary>
+        <QueryProvider>
+          <App />
+        </QueryProvider>
+      </RootBoundary>
+    </React.StrictMode>,
+  );
+});
 
 // installable as an app (home screen on phones, window on desktop)
 // the browser offers to install the panel as an app: keep the offer for the «Установить приложение» button
@@ -138940,15 +139055,13 @@ import { api, type Binding, type CertInfo, type Server, type ServerInput, type S
 import { useAuth } from '../auth';
 import { t, useI18n } from '../i18n';
 import type { MaintenanceWindow } from '../maintenance';
-import { gameLabel } from '../games';
-import { AdminPage as PageStack, Empty, ErrorLine, GameAvatar, IconArrowUp, LoadError, IconClose, IconEdit, IconRefresh, IconServers, IconTrash, PageHead, StatusPill, ago, toast, undoable, usePoll, navigate, fail } from '../ui';
+import { AdminPage as PageStack, Empty, ErrorLine, IconArrowUp, LoadError, IconClose, IconRefresh, IconServers, PageHead, toast, undoable, usePoll, navigate, fail } from '../ui';
 import { ADMIN_GROUPS, ADMIN_SECTIONS, OVERVIEW_SECTION, SECTION_PERM, START_SECTION, type AdminSection } from './adminNav';
 import { PINS_KEY, PINS_MAX, movePin, readIds, togglePin, writeIds } from './adminShortcuts';
 import AdminMobileNav, { type MobileNavGroup } from './AdminMobileNav';
 import AdminOverview from './AdminOverview';
 import AdminStatusBar from '../components/AdminStatusBar';
 import { CHORDS, chordOf } from './adminLogic';
-import { ServersArt } from '../components/Illustrations';
 import AdminStart, { AdminHome } from './AdminStart';
 import AdminCommunity from './AdminCommunity';
 import AlertsPage from './Alerts';
@@ -142482,7 +142595,6 @@ import DeliveryList from '../components/DeliveryList';
 import DiscordExtras from '../components/DiscordExtras';
 import PlayersShownCard from '../components/PlayersShownCard';
 import { DiscordArt } from '../components/Illustrations';
-import { confirmDialog } from '../confirm';
 import { t, useI18n } from '../i18n';
 import { Button, Empty, ErrorLine, Field, LoadError, GameAvatar, GoLink, IconDiscord, IconEdit, IconPause, IconPlay, IconTrash, InviteButton, Modal, Notice, PageHead, Strip, Switch, AdminPage, ago, toast, undoable, usePoll, navigate, errText } from '../ui';
 import { BotPill } from './Settings';
@@ -143770,7 +143882,7 @@ const readName = () => {
   try { return localStorage.getItem(NAME_KEY) ?? ''; } catch { return ''; }
 };
 const writeName = (v: string) => {
-  try { v ? localStorage.setItem(NAME_KEY, v) : localStorage.removeItem(NAME_KEY); } catch { /* not remembered */ }
+  try { if (v) localStorage.setItem(NAME_KEY, v); else localStorage.removeItem(NAME_KEY); } catch { /* not remembered */ }
 };
 
 const clock = (sec: number) => `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
@@ -144180,12 +144292,9 @@ import { useState } from 'react';
 import { t, useI18n } from '../i18n';
 import { NewsCalendar } from '../components/news/Calendar';
 import { confirmDialog } from '../confirm';
-import { api, ApiError, type NewsItem, type NewsSettings, type PublicNews } from '../api';
-import { useAuth } from '../auth';
-import { EmbedView, type DiscordEmbed } from './EmbedPreview';
+import { api, ApiError, type NewsItem, type NewsSettings } from '../api';
 import { ChannelName, ChannelPicker } from '../components/ChannelPicker';
-import { NewsArt } from '../components/Illustrations';
-import { AdminPage, Empty, ErrorLine, GoLink, LoadError, IconCopyPlus, IconNews, IconTrash, PageHead, Strip, fmtDateTime, toast, undoable, usePoll, navigate, errText } from '../ui';
+import { AdminPage, Empty, ErrorLine, LoadError, IconCopyPlus, IconNews, IconTrash, PageHead, Strip, fmtDateTime, toast, undoable, usePoll, navigate, errText } from '../ui';
 import NewsEditor, { TEMPLATES } from './NewsEditor';
 import { newsImage } from '../components/news/newsLogic';
 import { NewsStatsModal } from '../components/news/NewsStats';
@@ -144494,11 +144603,6 @@ function NewsList() {
 }
 
 /** stored embed -> what EmbedView draws (an uploaded picture is served by the panel) */
-function toView(e: PublicNews['payload']['embed']): DiscordEmbed | null {
-  if (!e) return null;
-  const src = e.image?.upload ? `/api/news/images/${e.image.upload}` : e.image?.url;
-  return { ...e, image: src ? { url: src } : undefined } as DiscordEmbed;
-}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/NewsEditor.tsx" << '__COREGSM_EOF__'
@@ -145257,7 +145361,7 @@ import { AchievementCard } from '../components/profile/Achievements';
 import { FollowButton } from '../components/profile/Follows';
 import { ReportButton } from '../components/profile/ReportButton';
 import { rankById } from '../vrisingRanks';
-import { Empty, ErrorLine, GameAvatar, ago, fmtDateTime, fmtTime, plural, num } from '../ui';
+import { Empty, ErrorLine, GameAvatar, ago, fmtDateTime, fmtTime, num } from '../ui';
 import ArtPic from '../components/ArtPic';
 import '../styles/community.css';
 import '../styles/profile.css';
@@ -146635,7 +146739,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
 
   const { server: s, stats, events, points } = data;
   const accent = coverAccentOrGame;
-  const [c1, c2] = gameGradient(s.game);
+  const [c1] = gameGradient(s.game);
   const lag = isLag(s);
   const profile = profiles?.[s.game];
   const guide = applyConnectTemplates(connectGuide(s.game, s.address), profile?.connect, s.address, profile?.defaultPort);
@@ -147827,7 +147931,7 @@ function PhoneRow({ s, idx, fav, onFav, onOpen, select }: { rx: Reactions; s: Se
 function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince }: { rx: Reactions; s: Server; idx: number; fav: boolean | null; onFav: () => void; onOpen: () => void; select?: SelectProps; uptime?: number; downSince?: number }) {
   useI18n();
   const [who, setWho] = useState(false);
-  const [c1, c2] = gameGradient(s.game);
+  const [c1] = gameGradient(s.game);
   // the accent is taken from the cover picture, so two games of the same colour family still look different
   const accent = calmSeriesColor(useCoverAccent(s.coverUrl, gameColor(s.game)), gameColor(s.game));
   const lag = isLag(s);

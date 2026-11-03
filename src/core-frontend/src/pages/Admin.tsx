@@ -3,15 +3,13 @@ import { api, type Binding, type CertInfo, type Server, type ServerInput, type S
 import { useAuth } from '../auth';
 import { t, useI18n } from '../i18n';
 import type { MaintenanceWindow } from '../maintenance';
-import { gameLabel } from '../games';
-import { AdminPage as PageStack, Empty, ErrorLine, GameAvatar, IconArrowUp, LoadError, IconClose, IconEdit, IconRefresh, IconServers, IconTrash, PageHead, StatusPill, ago, toast, undoable, usePoll, navigate, fail } from '../ui';
+import { AdminPage as PageStack, Empty, ErrorLine, IconArrowUp, LoadError, IconClose, IconRefresh, IconServers, PageHead, toast, undoable, usePoll, navigate, fail } from '../ui';
 import { ADMIN_GROUPS, ADMIN_SECTIONS, OVERVIEW_SECTION, SECTION_PERM, START_SECTION, type AdminSection } from './adminNav';
 import { PINS_KEY, PINS_MAX, movePin, readIds, togglePin, writeIds } from './adminShortcuts';
 import AdminMobileNav, { type MobileNavGroup } from './AdminMobileNav';
 import AdminOverview from './AdminOverview';
 import AdminStatusBar from '../components/AdminStatusBar';
 import { CHORDS, chordOf } from './adminLogic';
-import { ServersArt } from '../components/Illustrations';
 import AdminStart, { AdminHome } from './AdminStart';
 import AdminCommunity from './AdminCommunity';
 import AlertsPage from './Alerts';

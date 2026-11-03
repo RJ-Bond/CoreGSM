@@ -41,7 +41,7 @@ describe('button classes', () => {
   for (const [token, file] of used) {
     it(`.${token} has a selector (${file.replace(SRC, 'src')})`, () => {
       // JS identifiers and props such as `btn` (a local variable) are fine as long as the class exists too
-      const re = new RegExp(`\.${token}(?![\w-])`);
+      const re = new RegExp(`.${token}(?![w-])`);
       expect(re.test(css), `no CSS selector for .${token}`).toBe(true);
     });
   }
@@ -52,7 +52,7 @@ describe('button classes', () => {
       'btn-link', 'btn-xs', 'btn-sm', 'btn-lg', 'btn-block', 'btn-icon', 'btn-icon-sm', 'btn-icon-ghost', 'btn-icon-danger', 'btn-group',
       'btn-on-grad', 'btn-ghost-on-grad', 'btn-glass', 'btn-glass-quiet', 'btn-glass-danger', 'btn-cta', 'row-act', 'pp-copy', 'split',
     ];
-    for (const c of must) expect(new RegExp(`\.${c}(?![\w-])`).test(buttonsCss), c).toBe(true);
+    for (const c of must) expect(new RegExp(`.${c}(?![w-])`).test(buttonsCss), c).toBe(true);
   });
 
   it('no transform, translate or scale transition and no outline styling in the button stylesheet', () => {
