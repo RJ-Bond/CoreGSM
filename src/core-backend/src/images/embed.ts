@@ -69,6 +69,10 @@ const COLOR = { online: 0x23a55a, lag: 0xf0b232, offline: 0xf23f42, unknown: 0x5
 /** the side stripe of an online server follows the colour of its game (others keep the status green) */
 const accentOf = (game: string): number | undefined => gameProfile(game)?.accent;
 
+/** the project and its changelog: the signature line of every server card links to them */
+export const PROJECT_URL = 'https://github.com/RJ-Bond/CoreGSM';
+export const CHANGELOG_URL = `${PROJECT_URL}/blob/main/CHANGELOG.md`;
+
 const cut = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 
 /** games whose clients have a console with the "connect" command */
@@ -108,11 +112,12 @@ export function buildEmbed(s: EmbedServer, uptimePct: number | null, intervalSec
   const brand = extra.brandName || 'CoreGSM';
   // a readable version («1.0.0.7») is shown whole, a bare build hash is shortened
   const version = extra.version ? ` · v${/^\d+(\.\d+){1,4}$/.test(extra.version) ? extra.version : extra.version.slice(0, 7)}` : '';
-  // the footer is only the brand and the build; the update time is the embed timestamp, which Discord shows in the
-  // viewer's own time zone ("Сегодня, в 09:49"). The brand line with the link to the panel sits above the title.
-  const footer: { text: string; icon_url?: string } = { text: `${brand}${version}` };
+  // the last line is the brand (a link to the project, on a stock install) and the build (a link to the changelog);
+  // Discord footers cannot hold links, so it is a text line. The update time is the embed timestamp, which Discord
+  // shows in the viewer's own time zone. The brand line with the link to the panel sits above the title.
+  const verText = extra.version ? `v${/^\d+(\.\d+){1,4}$/.test(extra.version) ? extra.version : extra.version.slice(0, 7)}` : '';
+  const signature = [brand === 'CoreGSM' ? `[${brand}](${PROJECT_URL})` : brand, verText && (/^\d/.test(verText.slice(1)) ? `[${verText}](${CHANGELOG_URL})` : verText)].filter(Boolean).join(' · ');
   const logo = extra.baseUrl && extra.showLogo !== false ? extra.logoUrl || `${extra.baseUrl}/logo-128.png` : undefined;
-  if (logo) footer.icon_url = logo;
   const author: NonNullable<DiscordEmbed['author']> = { name: `${brand} · Мониторинг игровых серверов` };
   if (extra.baseUrl) author.url = extra.baseUrl;
   if (logo) author.icon_url = logo;
@@ -128,7 +133,6 @@ export function buildEmbed(s: EmbedServer, uptimePct: number | null, intervalSec
       thumbnail,
       author,
       timestamp,
-      footer,
     };
   }
 
@@ -160,6 +164,8 @@ export function buildEmbed(s: EmbedServer, uptimePct: number | null, intervalSec
     ...(gameShowsMap(s.game) ? [{ name: '🗺️ Карта', value: s.online && s.map ? cut(s.map, 100) : '—', inline: true }] : []),
     ...(third ? [third] : []),
   ];
+  // the signature goes last, under everything else
+  const signatureField = { name: '​', value: signature, inline: false };
 
   if (s.online) {
     if (s.playerNames.length > 0) {
@@ -196,9 +202,8 @@ ${tail}` : tail;
     color: !s.online ? COLOR.offline : lag ? COLOR.lag : (accentOf(s.game) ?? COLOR.online),
     thumbnail,
     ...(extra.chartUrl ? { image: { url: extra.chartUrl } } : {}),
-    fields,
+    fields: [...fields, signatureField],
     author,
     timestamp,
-    footer,
   };
 }

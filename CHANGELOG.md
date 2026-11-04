@@ -17,6 +17,7 @@ interface language; the GitHub release text is built from the section of the ver
 ## Не выпущено | Unreleased
 
 ### ✨ Новое | New
+🔗 Карточка сервера в Discord: внизу строка «CoreGSM · v1.0.N» — название ведёт на страницу проекта, версия на список изменений | The Discord server card: a last line «CoreGSM · v1.0.N» — the name leads to the project page, the version to the changelog
 - 🧩 Интеграции: конструктор виджета и карточки сервера — тема (светлая, тёмная, как у посетителя) и размер виджета, вид и тема картинки-карточки, живой предпросмотр и готовый код для сайта | Integrations: a builder for the server widget and card — the theme (light, dark, the visitor's own) and the size of the widget, the style and theme of the card picture, a live preview and ready code for a site
 - 📋 Перед обновлением в карточке видно, что изменится: сколько версий, нового, исправлений и прочего | Before an update the card shows what changes: how many versions, new things, fixes and other changes
 - 🔐 Вход с нового устройства: уведомление приходит не только письмом, но и в колокольчик, Web Push и личным сообщением в Discord (если аккаунт привязан), так что оно доходит и без подтверждённой почты | A sign-in from a new device: the notice comes not only by e-mail but also to the bell, by Web Push and as a Discord message (when the account is linked), so it arrives even without a verified e-mail

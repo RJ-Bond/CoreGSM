@@ -65,16 +65,17 @@ describe('discord embed', () => {
     assert.ok(e.fields!.length <= 25);
   });
 
-  it('has a brand line with a link on top and a plain footer with the build and the update time as timestamp', () => {
+  it('has a brand line with a link on top and a last line with the project and the build as links; the update time is the timestamp', () => {
     assert.equal(e.author!.url, 'https://panel.example.ru');
     assert.match(e.author!.name, /Мониторинг игровых серверов/);
-    assert.match(e.footer!.text, /^CoreGSM · vabcdef1$/);
+    assert.equal(e.footer, undefined);
+    assert.equal(e.fields!.at(-1)!.value, '[CoreGSM](https://github.com/RJ-Bond/CoreGSM) · vabcdef1');
     assert.equal(e.timestamp, '2026-10-12T14:00:00.000Z');
   });
 
-  it('shows a readable version whole in the footer', () => {
+  it('shows a readable version whole, linked to the changelog', () => {
     const r = buildEmbed(server(), 100, 60, { baseUrl: 'https://panel.example.ru', serverId: 7, version: '1.0.0.4' });
-    assert.match(r.footer!.text, /^CoreGSM · v1\.0\.0\.4$/);
+    assert.equal(r.fields!.at(-1)!.value, '[CoreGSM](https://github.com/RJ-Bond/CoreGSM) · [v1.0.0.4](https://github.com/RJ-Bond/CoreGSM/blob/main/CHANGELOG.md)');
   });
 
   it('lists 5 names by default and as many as the setting says; 0 leaves only the counter', () => {
