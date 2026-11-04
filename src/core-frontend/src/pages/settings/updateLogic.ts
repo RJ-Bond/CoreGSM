@@ -101,3 +101,16 @@ export function changeSummary(releases: UpdateNotesRelease[], current: string | 
 
 /** the offered version can be installed unless it was skipped */
 export const offered = (info: UpdateInfo | null): boolean => !!info?.available && !info.skipped;
+
+/** seconds left, guessed from the time spent and the percent (the percent is not linear, so it is a rough guess); null when too early to say */
+export function etaSeconds(elapsedMs: number, pct: number | null): number | null {
+  if (pct == null || pct < 15 || pct >= 97 || elapsedMs < 20_000) return null;
+  return Math.max(10, Math.round((elapsedMs / 1000) * (100 - pct) / pct));
+}
+
+/** «около 2 мин» as minutes and seconds parts: under a minute is «меньше минуты» */
+export const etaMinutes = (sec: number): number => Math.max(1, Math.round(sec / 60));
+
+/** the panel is considered slow to come back after a restart when it has not answered this long */
+export const SLOW_RESTART_MS = 120_000;
+

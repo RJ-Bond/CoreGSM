@@ -2,10 +2,10 @@
 import { type CSSProperties, useEffect, useRef, useState } from 'react';
 import { api, type Changelog, type UpdateInfo, type UpdateNotes, type UpdatePreflight } from '../../api';
 import { confirmDialog } from '../../confirm';
-import { t } from '../../i18n';
+import { t, useI18n } from '../../i18n';
 import { ago, ErrorLine, fmtDate, IconArrowUp, IconCheck, usePoll, errText } from '../../ui';
 import { ChangeSummary, HistoryCard, NotesCard, OptionsCard, PreflightNote, StepList } from './updateParts';
-import { offered, versionText } from './updateLogic';
+import { etaMinutes, etaSeconds, offered, SLOW_RESTART_MS, versionText } from './updateLogic';
 
 const DISMISS_KEY = 'coregsm_dismissed_update_error';
 const readDismissed = (): number => {
@@ -15,6 +15,12 @@ const rememberDismissed = (t: number) => {
   try { localStorage.setItem(DISMISS_KEY, String(t)); } catch { /* not remembered */ }
 };
 
+/** «2 мин 5 с» / «45 с» */
+const fmtTook = (ms: number): string => {
+  const s = Math.max(1, Math.round(ms / 1000));
+  return s < 60 ? t('upd.took.s', { n: s }) : t('upd.took.ms', { m: Math.floor(s / 60), s: s % 60 });
+};
+
 export function UpdateCard() {
   const [info, setInfo] = useState<UpdateInfo | null>(null);
   const [error, setError] = useState('');
@@ -22,6 +28,11 @@ export function UpdateCard() {
   // set when "Update" or "Rollback" was pressed: remembers the previous job timestamp to recognise the new result
   const [waiting, setWaiting] = useState<{ since: number; baseTime: number | null; kind: 'update' | 'rollback' } | null>(null);
   const [offline, setOffline] = useState(false);
+  const { lang } = useI18n();
+  // when the run started here, when the panel stopped answering, and how long the finished run took
+  const runStart = useRef<number | null>(null);
+  const offlineSince = useRef<number | null>(null);
+  const [tookMs, setTookMs] = useState<number | null>(null);
   const [log, setLog] = useState<Changelog | null>(null);
   const [logError, setLogError] = useState('');
   const [notes, setNotes] = useState<UpdateNotes | null>(null);
@@ -45,6 +56,7 @@ export function UpdateCard() {
     api<UpdateInfo>('/update/status')
       .then((r) => {
         setOffline(false);
+        offlineSince.current = null;
         setInfo(r);
         const j = r.job;
         const current = !!j && (j.state === 'running' || (!!waiting && j.time !== waiting.baseTime));
@@ -56,9 +68,10 @@ export function UpdateCard() {
         if (j.state === 'done') {
           setFinished(waiting.kind);
           setPct(100);
+          setTookMs(Date.now() - waiting.since);
           setWaiting(null);
-          // new frontend files are served now: reload to pick them up
-          setTimeout(() => window.location.reload(), 1500);
+          // new frontend files are served now: reload to pick them up (after a moment to read the result)
+          setTimeout(() => window.location.reload(), 4_000);
         } else if (j.state === 'error') {
           setWaiting(null);
           setError(j.message);
@@ -66,7 +79,7 @@ export function UpdateCard() {
       })
       .catch(() => {
         // the backend restarts during an update
-        if (waiting || info?.job?.state === 'running') setOffline(true);
+        if (waiting || info?.job?.state === 'running') { offlineSince.current ??= Date.now(); setOffline(true); }
       });
   }, running && !finished ? 2_000 : 30_000);
 
@@ -93,6 +106,7 @@ export function UpdateCard() {
       setInfo(r);
       setPct(null);
       setFinished(null);
+      runStart.current = Date.now();
       setWaiting({ since: Date.now(), baseTime: r.job?.time ?? null, kind: 'update' });
     } catch (e) {
       setError(errText(e));
@@ -116,6 +130,7 @@ export function UpdateCard() {
       setInfo(r);
       setPct(null);
       setFinished(null);
+      runStart.current = Date.now();
       setWaiting({ since: Date.now(), baseTime: r.job?.time ?? null, kind: 'rollback' });
     } catch (e) {
       setError(errText(e));
@@ -160,9 +175,15 @@ export function UpdateCard() {
     : t('upd.t.checking');
   // what is happening now, in the panel's language (the manager's own message is Russian only: it is the fallback)
   const stageText = !rollingBack && info?.stage && info.stage !== 'rollback' ? t(`upd.sub.${info.stage}` as const, { v: newText }) : '';
+  // what the manager says it is doing right now («Сборка образов: 2 мин 5 с»): its text is Russian only
+  const detail = !finished && !offline && lang === 'ru' && info?.job?.state === 'running' && info.job.message && info.job.message !== stageText ? info.job.message : '';
+  const eta = state === 'running' && !finished && !offline && runStart.current ? etaSeconds(Date.now() - runStart.current, pct) : null;
+  const slowRestart = state === 'running' && !finished && offline && offlineSince.current != null && Date.now() - offlineSince.current > SLOW_RESTART_MS;
+  // one short announcement for a screen reader: the stage changes and the result, not every percent
+  const announce = finished ? t('upd.s.done') : offline ? t('upd.s.restarting') : stageText;
   const subtitle =
     state === 'running'
-      ? finished ? t('upd.s.done') : offline ? t('upd.s.restarting') : stageText || (info?.job?.state === 'running' && info.job.message ? info.job.message : '')
+      ? finished ? (tookMs != null ? t('upd.s.doneIn', { v: newText, t: fmtTook(tookMs) }) : t('upd.s.done')) : offline ? t('upd.s.restarting') : stageText || (info?.job?.state === 'running' && info.job.message ? info.job.message : '')
       : state === 'available' ? t('upd.s.available')
       : state === 'latest' ? (lastChecked ? t('upd.s.latestChecked', { when: ago(lastChecked) }) : t('upd.s.latest'))
       : state === 'skipped' ? t('upd.s.skipped', { v: newText })
@@ -170,8 +191,8 @@ export function UpdateCard() {
 
   return (
     <div className="space-y-5">
+      <div className="sr-only" role="status" aria-live="polite">{state === 'running' ? announce : ''}</div>
       <section
-        aria-live="polite"
         className={`relative overflow-hidden rounded-ui-xl p-6 sm:p-7 ${
           state === 'available' ? 'update-hero text-white' : state === 'running' ? 'update-hero update-hero-run text-white' : 'panel'
         }`}
@@ -204,6 +225,11 @@ export function UpdateCard() {
           <div className="min-w-0 flex-1">
             <h2 className="text-2xl font-extrabold leading-tight" style={{ letterSpacing: '-0.02em' }}>{title}</h2>
             <p className={`mt-1 font-semibold ${onGrad ? 'text-white/90' : 'text-mute'}`}>{subtitle}</p>
+            {state === 'running' && (detail || eta != null) && (
+              <p className="mt-0.5 text-sm font-semibold text-white/75">
+                {detail}{detail && eta != null ? ' · ' : ''}{eta != null ? (eta < 60 ? t('upd.eta.lt') : t('upd.eta.n', { n: etaMinutes(eta) })) : ''}
+              </p>
+            )}
 
             <dl className="mt-4 flex flex-wrap items-center gap-2 text-sm font-bold">
               <div className={`flex flex-wrap items-center gap-x-2 rounded-full px-3.5 py-1.5 ${state === 'running' ? 'bg-white/15 opacity-80' : onGrad ? 'bg-white/20' : 'bg-soft'}`}>
@@ -235,7 +261,8 @@ export function UpdateCard() {
             ) : (
               <StepList stage={info?.stage} finished={!!finished} />
             )}
-            {!finished && <p className="upd-hint">{t('upd.keepOpen')}</p>}
+            {!finished && <p className="upd-hint">{slowRestart ? t('upd.slow') : t('upd.keepOpen')}</p>}
+            {slowRestart && <p className="upd-hint font-mono" translate="no">sudo coregsm status · sudo coregsm logs</p>}
           </div>
         )}
 

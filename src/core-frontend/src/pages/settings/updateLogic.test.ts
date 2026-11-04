@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { changeSummary, cmpVersion, groupCommits, isNewerRelease, preflightWarnings, releasesSince, stepStates, upcomingFlags, versionText } from './updateLogic';
+import { changeSummary, cmpVersion, groupCommits, isNewerRelease, preflightWarnings, releasesSince, stepStates, upcomingFlags, versionText, etaMinutes, etaSeconds } from './updateLogic';
 import type { ChangelogItem, UpdateNotesRelease } from '../../api';
 
 describe('update versions', () => {
@@ -91,5 +91,20 @@ describe('changeSummary', () => {
   it('is empty when nothing is newer, or the running version is unreadable', () => {
     expect(changeSummary([rel('1.0.90', [['✨ Новое', 1]])], '1.0.92').versions).toBe(0);
     expect(changeSummary([rel('1.0.95', [['✨ Новое', 1]])], null).versions).toBe(0);
+  });
+});
+
+describe('etaSeconds', () => {
+  it('says nothing too early or at the end', () => {
+    expect(etaSeconds(5_000, 50)).toBeNull();
+    expect(etaSeconds(60_000, 10)).toBeNull();
+    expect(etaSeconds(60_000, null)).toBeNull();
+    expect(etaSeconds(60_000, 97)).toBeNull();
+  });
+  it('guesses the time left from the pace', () => {
+    expect(etaSeconds(60_000, 50)).toBe(60);
+    expect(etaSeconds(90_000, 30)).toBe(210);
+    expect(etaMinutes(210)).toBe(4);
+    expect(etaMinutes(20)).toBe(1);
   });
 });

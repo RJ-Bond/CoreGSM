@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="70ff4c7eacce"
+COREGSM_BUILD="8d825df3d37f"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.0"
+COREGSM_VERSION="1.1.1"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -23302,10 +23302,6 @@ const COLOR = { online: 0x23a55a, lag: 0xf0b232, offline: 0xf23f42, unknown: 0x5
 /** the side stripe of an online server follows the colour of its game (others keep the status green) */
 const accentOf = (game: string): number | undefined => gameProfile(game)?.accent;
 
-/** the project and its changelog: the signature line of every server card links to them */
-export const PROJECT_URL = 'https://github.com/RJ-Bond/CoreGSM';
-export const CHANGELOG_URL = `${PROJECT_URL}/blob/main/CHANGELOG.md`;
-
 const cut = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 
 /** games whose clients have a console with the "connect" command */
@@ -23345,12 +23341,11 @@ export function buildEmbed(s: EmbedServer, uptimePct: number | null, intervalSec
   const brand = extra.brandName || 'CoreGSM';
   // a readable version («1.0.0.7») is shown whole, a bare build hash is shortened
   const version = extra.version ? ` · v${/^\d+(\.\d+){1,4}$/.test(extra.version) ? extra.version : extra.version.slice(0, 7)}` : '';
-  // the last line is the brand (a link to the project, on a stock install) and the build (a link to the changelog);
-  // Discord footers cannot hold links, so it is a text line. The update time is the embed timestamp, which Discord
-  // shows in the viewer's own time zone. The brand line with the link to the panel sits above the title.
-  const verText = extra.version ? `v${/^\d+(\.\d+){1,4}$/.test(extra.version) ? extra.version : extra.version.slice(0, 7)}` : '';
-  const signature = [brand === 'CoreGSM' ? `[${brand}](${PROJECT_URL})` : brand, verText && (/^\d/.test(verText.slice(1)) ? `[${verText}](${CHANGELOG_URL})` : verText)].filter(Boolean).join(' · ');
+  // the footer is only the brand and the build; the update time is the embed timestamp, which Discord shows in the
+  // viewer's own time zone ("Сегодня, в 09:49"). The brand line with the link to the panel sits above the title.
+  const footer: { text: string; icon_url?: string } = { text: `${brand}${version}` };
   const logo = extra.baseUrl && extra.showLogo !== false ? extra.logoUrl || `${extra.baseUrl}/logo-128.png` : undefined;
+  if (logo) footer.icon_url = logo;
   const author: NonNullable<DiscordEmbed['author']> = { name: `${brand} · Мониторинг игровых серверов` };
   if (extra.baseUrl) author.url = extra.baseUrl;
   if (logo) author.icon_url = logo;
@@ -23366,6 +23361,7 @@ export function buildEmbed(s: EmbedServer, uptimePct: number | null, intervalSec
       thumbnail,
       author,
       timestamp,
+      footer,
     };
   }
 
@@ -23397,8 +23393,6 @@ export function buildEmbed(s: EmbedServer, uptimePct: number | null, intervalSec
     ...(gameShowsMap(s.game) ? [{ name: '🗺️ Карта', value: s.online && s.map ? cut(s.map, 100) : '—', inline: true }] : []),
     ...(third ? [third] : []),
   ];
-  // the signature goes last, under everything else
-  const signatureField = { name: '​', value: signature, inline: false };
 
   if (s.online) {
     if (s.playerNames.length > 0) {
@@ -23435,9 +23429,10 @@ ${tail}` : tail;
     color: !s.online ? COLOR.offline : lag ? COLOR.lag : (accentOf(s.game) ?? COLOR.online),
     thumbnail,
     ...(extra.chartUrl ? { image: { url: extra.chartUrl } } : {}),
-    fields: [...fields, signatureField],
+    fields,
     author,
     timestamp,
+    footer,
   };
 }
 __COREGSM_EOF__
@@ -133525,6 +133520,12 @@ const en: Record<keyof typeof ru, string> = {
   'upd.sub.install': 'Installing version {v}',
   'upd.sub.health': 'Checking that the panel has started',
   'upd.keepOpen': 'The panel restarts by itself, you can leave this page open. It usually takes 1–3 minutes.',
+  'upd.s.doneIn': 'Done! Version {v} installed in {t}. The page reloads itself',
+  'upd.took.s': '{n} s',
+  'upd.took.ms': '{m} min {s} s',
+  'upd.eta.lt': 'less than a minute left',
+  'upd.eta.n': 'about {n} min left',
+  'upd.slow': 'The panel is taking longer than usual to answer. Wait a few more minutes, and if it does not come back, check the state on the server:',
   'upd.pf.players': 'Players online now: {n}. Game servers are not affected, but the panel and the bot are unavailable for 1–3 minutes.',
   'upd.pf.noBackup': 'There are no backups on the server. A database copy for the rollback is made before the update anyway.',
   'upd.pf.old': 'The last backup is {h} h old. A fresh database copy is made automatically before the update.',
@@ -137539,6 +137540,12 @@ const ru = {
   'upd.sub.install': 'Устанавливаю версию {v}',
   'upd.sub.health': 'Проверяю, что панель запустилась',
   'upd.keepOpen': 'Панель перезапустится сама, страницу можно не закрывать. Обычно это 1–3 минуты.',
+  'upd.s.doneIn': 'Готово! Версия {v} установлена за {t}. Страница обновится сама',
+  'upd.took.s': '{n} с',
+  'upd.took.ms': '{m} мин {s} с',
+  'upd.eta.lt': 'осталось меньше минуты',
+  'upd.eta.n': 'осталось примерно {n} мин',
+  'upd.slow': 'Панель отвечает дольше обычного. Подождите ещё несколько минут, а если она не появится — посмотрите состояние на сервере:',
   'upd.pf.players': 'Сейчас на серверах играют: {n}. Игровым серверам обновление не мешает, но панель и бот будут недоступны 1–3 минуты.',
   'upd.pf.noBackup': 'Резервных копий на сервере нет. Перед обновлением всё равно создаётся копия базы данных для отката.',
   'upd.pf.old': 'Последняя копия сделана {h} ч назад. Перед обновлением автоматически создаётся свежая копия базы данных.',
@@ -150853,10 +150860,10 @@ __COREGSM_EOF__
 import { type CSSProperties, useEffect, useRef, useState } from 'react';
 import { api, type Changelog, type UpdateInfo, type UpdateNotes, type UpdatePreflight } from '../../api';
 import { confirmDialog } from '../../confirm';
-import { t } from '../../i18n';
+import { t, useI18n } from '../../i18n';
 import { ago, ErrorLine, fmtDate, IconArrowUp, IconCheck, usePoll, errText } from '../../ui';
 import { ChangeSummary, HistoryCard, NotesCard, OptionsCard, PreflightNote, StepList } from './updateParts';
-import { offered, versionText } from './updateLogic';
+import { etaMinutes, etaSeconds, offered, SLOW_RESTART_MS, versionText } from './updateLogic';
 
 const DISMISS_KEY = 'coregsm_dismissed_update_error';
 const readDismissed = (): number => {
@@ -150866,6 +150873,12 @@ const rememberDismissed = (t: number) => {
   try { localStorage.setItem(DISMISS_KEY, String(t)); } catch { /* not remembered */ }
 };
 
+/** «2 мин 5 с» / «45 с» */
+const fmtTook = (ms: number): string => {
+  const s = Math.max(1, Math.round(ms / 1000));
+  return s < 60 ? t('upd.took.s', { n: s }) : t('upd.took.ms', { m: Math.floor(s / 60), s: s % 60 });
+};
+
 export function UpdateCard() {
   const [info, setInfo] = useState<UpdateInfo | null>(null);
   const [error, setError] = useState('');
@@ -150873,6 +150886,11 @@ export function UpdateCard() {
   // set when "Update" or "Rollback" was pressed: remembers the previous job timestamp to recognise the new result
   const [waiting, setWaiting] = useState<{ since: number; baseTime: number | null; kind: 'update' | 'rollback' } | null>(null);
   const [offline, setOffline] = useState(false);
+  const { lang } = useI18n();
+  // when the run started here, when the panel stopped answering, and how long the finished run took
+  const runStart = useRef<number | null>(null);
+  const offlineSince = useRef<number | null>(null);
+  const [tookMs, setTookMs] = useState<number | null>(null);
   const [log, setLog] = useState<Changelog | null>(null);
   const [logError, setLogError] = useState('');
   const [notes, setNotes] = useState<UpdateNotes | null>(null);
@@ -150896,6 +150914,7 @@ export function UpdateCard() {
     api<UpdateInfo>('/update/status')
       .then((r) => {
         setOffline(false);
+        offlineSince.current = null;
         setInfo(r);
         const j = r.job;
         const current = !!j && (j.state === 'running' || (!!waiting && j.time !== waiting.baseTime));
@@ -150907,9 +150926,10 @@ export function UpdateCard() {
         if (j.state === 'done') {
           setFinished(waiting.kind);
           setPct(100);
+          setTookMs(Date.now() - waiting.since);
           setWaiting(null);
-          // new frontend files are served now: reload to pick them up
-          setTimeout(() => window.location.reload(), 1500);
+          // new frontend files are served now: reload to pick them up (after a moment to read the result)
+          setTimeout(() => window.location.reload(), 4_000);
         } else if (j.state === 'error') {
           setWaiting(null);
           setError(j.message);
@@ -150917,7 +150937,7 @@ export function UpdateCard() {
       })
       .catch(() => {
         // the backend restarts during an update
-        if (waiting || info?.job?.state === 'running') setOffline(true);
+        if (waiting || info?.job?.state === 'running') { offlineSince.current ??= Date.now(); setOffline(true); }
       });
   }, running && !finished ? 2_000 : 30_000);
 
@@ -150944,6 +150964,7 @@ export function UpdateCard() {
       setInfo(r);
       setPct(null);
       setFinished(null);
+      runStart.current = Date.now();
       setWaiting({ since: Date.now(), baseTime: r.job?.time ?? null, kind: 'update' });
     } catch (e) {
       setError(errText(e));
@@ -150967,6 +150988,7 @@ export function UpdateCard() {
       setInfo(r);
       setPct(null);
       setFinished(null);
+      runStart.current = Date.now();
       setWaiting({ since: Date.now(), baseTime: r.job?.time ?? null, kind: 'rollback' });
     } catch (e) {
       setError(errText(e));
@@ -151011,9 +151033,15 @@ export function UpdateCard() {
     : t('upd.t.checking');
   // what is happening now, in the panel's language (the manager's own message is Russian only: it is the fallback)
   const stageText = !rollingBack && info?.stage && info.stage !== 'rollback' ? t(`upd.sub.${info.stage}` as const, { v: newText }) : '';
+  // what the manager says it is doing right now («Сборка образов: 2 мин 5 с»): its text is Russian only
+  const detail = !finished && !offline && lang === 'ru' && info?.job?.state === 'running' && info.job.message && info.job.message !== stageText ? info.job.message : '';
+  const eta = state === 'running' && !finished && !offline && runStart.current ? etaSeconds(Date.now() - runStart.current, pct) : null;
+  const slowRestart = state === 'running' && !finished && offline && offlineSince.current != null && Date.now() - offlineSince.current > SLOW_RESTART_MS;
+  // one short announcement for a screen reader: the stage changes and the result, not every percent
+  const announce = finished ? t('upd.s.done') : offline ? t('upd.s.restarting') : stageText;
   const subtitle =
     state === 'running'
-      ? finished ? t('upd.s.done') : offline ? t('upd.s.restarting') : stageText || (info?.job?.state === 'running' && info.job.message ? info.job.message : '')
+      ? finished ? (tookMs != null ? t('upd.s.doneIn', { v: newText, t: fmtTook(tookMs) }) : t('upd.s.done')) : offline ? t('upd.s.restarting') : stageText || (info?.job?.state === 'running' && info.job.message ? info.job.message : '')
       : state === 'available' ? t('upd.s.available')
       : state === 'latest' ? (lastChecked ? t('upd.s.latestChecked', { when: ago(lastChecked) }) : t('upd.s.latest'))
       : state === 'skipped' ? t('upd.s.skipped', { v: newText })
@@ -151021,8 +151049,8 @@ export function UpdateCard() {
 
   return (
     <div className="space-y-5">
+      <div className="sr-only" role="status" aria-live="polite">{state === 'running' ? announce : ''}</div>
       <section
-        aria-live="polite"
         className={`relative overflow-hidden rounded-ui-xl p-6 sm:p-7 ${
           state === 'available' ? 'update-hero text-white' : state === 'running' ? 'update-hero update-hero-run text-white' : 'panel'
         }`}
@@ -151055,6 +151083,11 @@ export function UpdateCard() {
           <div className="min-w-0 flex-1">
             <h2 className="text-2xl font-extrabold leading-tight" style={{ letterSpacing: '-0.02em' }}>{title}</h2>
             <p className={`mt-1 font-semibold ${onGrad ? 'text-white/90' : 'text-mute'}`}>{subtitle}</p>
+            {state === 'running' && (detail || eta != null) && (
+              <p className="mt-0.5 text-sm font-semibold text-white/75">
+                {detail}{detail && eta != null ? ' · ' : ''}{eta != null ? (eta < 60 ? t('upd.eta.lt') : t('upd.eta.n', { n: etaMinutes(eta) })) : ''}
+              </p>
+            )}
 
             <dl className="mt-4 flex flex-wrap items-center gap-2 text-sm font-bold">
               <div className={`flex flex-wrap items-center gap-x-2 rounded-full px-3.5 py-1.5 ${state === 'running' ? 'bg-white/15 opacity-80' : onGrad ? 'bg-white/20' : 'bg-soft'}`}>
@@ -151086,7 +151119,8 @@ export function UpdateCard() {
             ) : (
               <StepList stage={info?.stage} finished={!!finished} />
             )}
-            {!finished && <p className="upd-hint">{t('upd.keepOpen')}</p>}
+            {!finished && <p className="upd-hint">{slowRestart ? t('upd.slow') : t('upd.keepOpen')}</p>}
+            {slowRestart && <p className="upd-hint font-mono" translate="no">sudo coregsm status · sudo coregsm logs</p>}
           </div>
         )}
 
@@ -151582,7 +151616,7 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages/settings"
   cat > "$APP_DIR/core-frontend/src/pages/settings/updateLogic.test.ts" << '__COREGSM_EOF__'
 import { describe, expect, it } from 'vitest';
-import { changeSummary, cmpVersion, groupCommits, isNewerRelease, preflightWarnings, releasesSince, stepStates, upcomingFlags, versionText } from './updateLogic';
+import { changeSummary, cmpVersion, groupCommits, isNewerRelease, preflightWarnings, releasesSince, stepStates, upcomingFlags, versionText, etaMinutes, etaSeconds } from './updateLogic';
 import type { ChangelogItem, UpdateNotesRelease } from '../../api';
 
 describe('update versions', () => {
@@ -151674,6 +151708,21 @@ describe('changeSummary', () => {
   it('is empty when nothing is newer, or the running version is unreadable', () => {
     expect(changeSummary([rel('1.0.90', [['✨ Новое', 1]])], '1.0.92').versions).toBe(0);
     expect(changeSummary([rel('1.0.95', [['✨ Новое', 1]])], null).versions).toBe(0);
+  });
+});
+
+describe('etaSeconds', () => {
+  it('says nothing too early or at the end', () => {
+    expect(etaSeconds(5_000, 50)).toBeNull();
+    expect(etaSeconds(60_000, 10)).toBeNull();
+    expect(etaSeconds(60_000, null)).toBeNull();
+    expect(etaSeconds(60_000, 97)).toBeNull();
+  });
+  it('guesses the time left from the pace', () => {
+    expect(etaSeconds(60_000, 50)).toBe(60);
+    expect(etaSeconds(90_000, 30)).toBe(210);
+    expect(etaMinutes(210)).toBe(4);
+    expect(etaMinutes(20)).toBe(1);
   });
 });
 __COREGSM_EOF__
@@ -151782,6 +151831,19 @@ export function changeSummary(releases: UpdateNotesRelease[], current: string | 
 
 /** the offered version can be installed unless it was skipped */
 export const offered = (info: UpdateInfo | null): boolean => !!info?.available && !info.skipped;
+
+/** seconds left, guessed from the time spent and the percent (the percent is not linear, so it is a rough guess); null when too early to say */
+export function etaSeconds(elapsedMs: number, pct: number | null): number | null {
+  if (pct == null || pct < 15 || pct >= 97 || elapsedMs < 20_000) return null;
+  return Math.max(10, Math.round((elapsedMs / 1000) * (100 - pct) / pct));
+}
+
+/** «около 2 мин» as minutes and seconds parts: under a minute is «меньше минуты» */
+export const etaMinutes = (sec: number): number => Math.max(1, Math.round(sec / 60));
+
+/** the panel is considered slow to come back after a restart when it has not answered this long */
+export const SLOW_RESTART_MS = 120_000;
+
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages/settings"
   cat > "$APP_DIR/core-frontend/src/pages/settings/updateParts.tsx" << '__COREGSM_EOF__'
