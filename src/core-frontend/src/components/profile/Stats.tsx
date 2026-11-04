@@ -22,11 +22,11 @@ export function StatTiles({ s, compact = false }: { s: MyStats; compact?: boolea
   const fav = favRow?.name;
   return (
     <div className="pf-tiles">
-      <StatTile icon={<IcoClock />} value={fmtDuration(s.totalSeconds)} label={t('pf.stats.online')} extra={<DaySpark byDay={s.byDay ?? []} />} />
+      <StatTile icon={<IcoClock />} value={s.totalSeconds < 60 ? t('dur.h', { n: 0 }) : fmtDuration(s.totalSeconds)} label={t('pf.stats.online')} extra={<DaySpark byDay={s.byDay ?? []} />} />
       <StatTile icon={<IcoPlay />} value={String(s.sessions)} label={t('pf.stats.sessions')} />
       <StatTile icon={<IcoFlame />} hot={s.streakDays >= 7} value={t('pf.stats.days', { n: s.streakDays })} label={t('pf.stats.streak')} extra={<StreakStrip byDay={s.byDay ?? []} />} />
       {!compact && <StatTile icon={<IcoTimer />} value={fmtDuration(s.longestSessionSec)} label={t('pf.stats.longest')} />}
-      {!compact && <StatTile icon={favRow ? <GameAvatar game={favRow.game} size={20} /> : <IcoHeart />} value={fav ?? '–'} label={t('pf.stats.favourite')} />}
+      {<StatTile icon={favRow ? <GameAvatar game={favRow.game} size={20} /> : <IcoHeart />} value={fav ?? '–'} label={t('pf.stats.favourite')} />}
     </div>
   );
 }

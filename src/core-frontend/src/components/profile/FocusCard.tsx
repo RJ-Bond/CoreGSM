@@ -1,3 +1,4 @@
+import type { CSSProperties } from 'react';
 import { t } from '../../i18n';
 import { ago } from '../../ui';
 import type { Focus } from './heroLogic';
@@ -28,6 +29,16 @@ export function FocusCard({ focus }: { focus: Focus | null }) {
     sub = t('pf.focus.achSub', { done: Math.round(focus.progress), target: focus.target });
     href = '/profile/player';
     bar = { pct: focus.target > 0 ? Math.round((focus.progress / focus.target) * 100) : 0 };
+  } else if (focus.kind === 'setupNick') {
+    icon = '🎮';
+    title = t('pf.focus.setup');
+    sub = t('pf.focus.setupSub');
+    href = '/profile/player';
+  } else if (focus.kind === 'firstGame') {
+    icon = '🚀';
+    title = t('pf.focus.first');
+    sub = t('pf.focus.firstSub');
+    href = '/servers';
   } else {
     icon = '🟢';
     title = t('pf.focus.fav', { server: focus.name });
@@ -35,7 +46,7 @@ export function FocusCard({ focus }: { focus: Focus | null }) {
     href = `/servers/${focus.serverId}`;
   }
   return (
-    <section className={`pf-focus is-${focus.kind}`} aria-label={t('pf.focus.title')}>
+    <section className={`pf-focus is-${focus.kind}`} aria-label={t('pf.focus.title')} style={focus.kind === 'rank' ? ({ ['--rc' as string]: focus.color } as CSSProperties) : undefined}>
       <span className="pf-focus-ico" aria-hidden>{icon}</span>
       <div className="min-w-0 flex-1">
         <p className="pf-focus-k">{t('pf.focus.title')}</p>

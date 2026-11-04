@@ -74,7 +74,7 @@ export function AvatarEditor({ onChanged, size = 80, ring }: { onChanged: () => 
   const compact = ring !== undefined;
   return (
     <div className={`flex flex-col items-center ${compact ? 'gap-1' : 'gap-2'}`} {...drop.props}>
-      <div className={compact ? 'pf-avatar-ring p-1' : undefined} style={compact && ring ? { ['--ring' as string]: ring } : undefined}>
+      <div className={compact ? 'pf-avatar-ring relative p-1' : undefined} style={compact && ring ? { ['--ring' as string]: ring } : undefined}>
       <button
         type="button"
         onClick={() => input.current?.click()}
@@ -87,10 +87,15 @@ export function AvatarEditor({ onChanged, size = 80, ring }: { onChanged: () => 
           {busy ? '…' : drop.over ? t('pf.avatar.drop') : t('pf.avatar.change')}
         </span>
       </button>
+      {compact && (
+        <button type="button" className="pf-cam" onClick={() => input.current?.click()} disabled={busy} aria-label={t('pf.avatar.uploadLink')} title={t('pf.avatar.uploadLink')}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" /><circle cx="12" cy="13" r="4" /></svg>
+        </button>
+      )}
       </div>
       <input ref={input} type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) void upload(f); e.target.value = ''; }} />
       <div className={`flex ${compact ? 'gap-2 text-xs' : 'gap-3 text-sm'} font-extrabold`}>
-        <button type="button" className="btn-link" onClick={() => input.current?.click()} disabled={busy}>{t('pf.avatar.uploadLink')}</button>
+        {!compact && <button type="button" className="btn-link" onClick={() => input.current?.click()} disabled={busy}>{t('pf.avatar.uploadLink')}</button>}
         {me.avatarSource === 'custom' && <button type="button" className="btn-link-danger" onClick={() => void remove()} disabled={busy}>{me.discordName ? t('pf.avatar.fromDiscord') : t('common.remove')}</button>}
       </div>
       {!compact && <p className="max-w-48 text-center text-xs font-semibold text-mute">{me.avatarSource === 'discord' ? t('pf.avatar.isDiscord') : t('pf.avatar.dragHint')}</p>}

@@ -12,7 +12,11 @@ export type Focus =
   | { kind: 'playing'; name: string; serverId: number; since: number }
   | { kind: 'rank'; name: string; color: string; hoursLeft: number; progress: number }
   | { kind: 'ach'; id: string; icon: string; title: string; progress: number; target: number }
-  | { kind: 'fav'; name: string; serverId: number; players: number };
+  | { kind: 'fav'; name: string; serverId: number; players: number }
+  /** no game nick yet: the statistics cannot appear without it */
+  | { kind: 'setupNick' }
+  /** a nick, but no visit seen yet */
+  | { kind: 'firstGame' };
 
 const achShare = (a: Achievement) => (a.target > 0 ? Math.max(0, Math.min(1, a.progress / a.target)) : 0);
 
@@ -25,8 +29,13 @@ export function pickFocus(i: {
   rank: MyRank | null | undefined;
   achievements: Achievement[] | null | undefined;
   favs: Server[] | null | undefined;
+  /** the game nick: '' = none yet; undefined = not known yet (no onboarding card until it is) */
+  nick?: string | null;
+  /** at least one visit has been seen in the period */
+  hasPlayed?: boolean;
 }): Focus | null {
   if (i.playing) return { kind: 'playing', ...i.playing };
+  if (i.nick === '') return { kind: 'setupNick' };
   const r = i.rank && i.rank.nick && i.rank.next ? i.rank : null;
   const left = r?.next ? Math.max(0, r.next.minHours - r.hours) : null;
   if (r?.next && left !== null && left <= 5) return { kind: 'rank', name: r.next.name, color: r.next.color, hoursLeft: left, progress: r.progress };
@@ -35,6 +44,7 @@ export function pickFocus(i: {
   const busy = (i.favs ?? []).filter((s) => s.online && s.players > 0).sort((a, b) => b.players - a.players)[0];
   if (busy) return { kind: 'fav', name: busy.name, serverId: busy.id, players: busy.players };
   if (r?.next && left !== null) return { kind: 'rank', name: r.next.name, color: r.next.color, hoursLeft: left, progress: r.progress };
+  if (i.nick && i.hasPlayed === false) return { kind: 'firstGame' };
   return null;
 }
 

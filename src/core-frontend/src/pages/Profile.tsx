@@ -31,11 +31,11 @@ import { isNewDeviceDismissed } from '../security';
 import { ago, Button, ErrorLine, isLag, FieldError, GameAvatar, PageHead, PasswordField, PasswordStrength, Section, StatusPill, UserAvatar, toast, useRoute, errText } from '../ui';
 
 type Tab = 'overview' | 'player' | 'look' | 'security';
-const TABS: { id: Tab; label: TKey; icon: ReactNode }[] = [
-  { id: 'overview', label: 'pf.tab.overview', icon: <IcoHome /> },
-  { id: 'player', label: 'pf.tab.player', icon: <IcoGamepad /> },
-  { id: 'look', label: 'pf.tab.look', icon: <IcoSliders /> },
-  { id: 'security', label: 'pf.tab.security', icon: <IcoShield /> },
+const TABS: { id: Tab; label: TKey; short: TKey; icon: ReactNode }[] = [
+  { id: 'overview', label: 'pf.tab.overview', short: 'pf.tab.overview', icon: <IcoHome /> },
+  { id: 'player', label: 'pf.tab.player', short: 'pf.tab.player', icon: <IcoGamepad /> },
+  { id: 'look', label: 'pf.tab.look', short: 'pf.tab.lookShort', icon: <IcoSliders /> },
+  { id: 'security', label: 'pf.tab.security', short: 'pf.tab.securityShort', icon: <IcoShield /> },
 ];
 
 /** The signed-in user's own page: tabs «Обзор», «Игрок», «Оформление и регион», «Безопасность». The tab lives in the address (/profile/security). */
@@ -55,8 +55,8 @@ export default function ProfilePage() {
       <div className="pf-tabs">
         <nav className="seg" aria-label={t('pf.tabs')}>
           {TABS.map((x) => (
-            <a key={x.id} href={`/profile/${x.id}`} className="seg-item pf-tab" aria-current={tab === x.id ? 'page' : undefined}>
-              {x.icon}{t(x.label)}
+            <a key={x.id} href={`/profile/${x.id}`} className="seg-item pf-tab" aria-current={tab === x.id ? 'page' : undefined} aria-label={t(x.label)}>
+              {x.icon}<span className="pf-tab-full">{t(x.label)}</span><span className="pf-tab-short" aria-hidden>{t(x.short)}</span>
               {x.id === 'security' && newLogin && <span className="pf-tab-dot" title={t('pf.tab.alert')}><span className="sr-only">{t('pf.tab.alert')}</span></span>}
             </a>
           ))}
@@ -86,7 +86,14 @@ function OverviewTab() {
       .catch(() => setFavs([]));
   }, []);
   if (!me) return null;
-  const focus = pickFocus({ playing: stats.data?.playingNow, rank, achievements, favs });
+  const focus = pickFocus({
+    playing: stats.data?.playingNow,
+    rank,
+    achievements,
+    favs,
+    nick: stats.data ? stats.data.nick ?? '' : undefined,
+    hasPlayed: stats.data ? stats.data.sessions > 0 || stats.data.totalSeconds > 0 : undefined,
+  });
 
   return (
     <div className="space-y-5">
@@ -100,9 +107,9 @@ function OverviewTab() {
 
       <StatsSummary data={stats.data} />
 
-      <div className="grid items-start gap-5 lg:grid-cols-2">
-        <div className="space-y-5">
-          <AchievementsPreview />
+      <div className="pf-masonry">
+        <AchievementsPreview />
+        <div>
           <Section title={t('pf.favs.title')}>
             {favs === null && <div className="skeleton h-20 rounded-2xl bg-soft" />}
             {favs && favs.length === 0 && <p className="font-semibold text-mute">{t('pf.favs.none')}</p>}
@@ -115,7 +122,7 @@ function OverviewTab() {
             ))}
           </Section>
         </div>
-        <ActivityFeed />
+        <ActivityFeed limit={8} />
       </div>
 
       {isAdmin && (

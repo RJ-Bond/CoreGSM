@@ -37,6 +37,16 @@ describe('pickFocus', () => {
     const f = pickFocus({ ...none, favs: [srv(1, 3), srv(2, 9), srv(3, 20, false)] });
     expect(f).toMatchObject({ kind: 'fav', serverId: 2, players: 9 });
   });
+  it('a player without a nick is asked for one, and a nick without visits is told to go play', () => {
+    expect(pickFocus({ ...none, nick: '' })).toEqual({ kind: 'setupNick' });
+    expect(pickFocus({ ...none, nick: undefined })).toBeNull();
+    expect(pickFocus({ ...none, nick: 'Ren', hasPlayed: false })).toEqual({ kind: 'firstGame' });
+    expect(pickFocus({ ...none, nick: 'Ren', hasPlayed: true })).toBeNull();
+    // being in the game still wins, and a favourite beats the «go play» card
+    expect(pickFocus({ ...none, nick: '', playing: { name: 'A', serverId: 1, since: 5 } })).toMatchObject({ kind: 'playing' });
+    expect(pickFocus({ ...none, nick: 'Ren', hasPlayed: false, favs: [srv(2, 9)] })).toMatchObject({ kind: 'fav' });
+  });
+
   it('the far rank is the last resort and needs a game nick', () => {
     expect(pickFocus({ ...none, rank: rank(11, { name: 'H', minHours: 30 }) })).toMatchObject({ kind: 'rank', hoursLeft: 19 });
     expect(pickFocus({ ...none, rank: rank(11, { name: 'H', minHours: 30 }, '') })).toBeNull();

@@ -184,10 +184,11 @@
 
 /* ---------- the level ring around the avatar, the live chip ---------- */
 .pf-level { position: relative; display: inline-block; }
-/* the arc round the picture fills towards the next rank (the picture is the top 88px of the editor, centred) */
-.pf-level::before { content: ''; position: absolute; z-index: 1; top: -7px; left: 50%; width: 102px; height: 102px; transform: translateX(-50%); border-radius: 50%; pointer-events: none;
-  background: conic-gradient(var(--rc, rgb(var(--brand))) calc(var(--p, 0) * 1%), rgb(var(--line) / .6) 0);
-  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 4px), #000 calc(100% - 3px)); mask: radial-gradient(farthest-side, transparent calc(100% - 4px), #000 calc(100% - 3px)); }
+/* the arc round the picture (an SVG circle: it works in every browser); the picture is the top 88px of the editor, centred */
+.pf-lvring { position: absolute; z-index: 1; top: -7px; left: 50%; width: 102px; height: 102px; transform: translateX(-50%) rotate(-90deg); pointer-events: none; overflow: visible; }
+.pf-lvring circle { fill: none; stroke-width: 3.5; }
+.pf-lvring-track { stroke: rgb(var(--line) / .7); }
+.pf-lvring-arc { stroke: var(--rc, rgb(var(--brand))); stroke-linecap: round; transition: stroke-dashoffset 1s cubic-bezier(.2, .8, .2, 1); }
 .pf-level-badge { position: absolute; z-index: 2; top: -14px; left: calc(50% + 20px); padding: 1px 9px; border-radius: var(--r-pill); background: var(--rc, rgb(var(--brand))); color: #fff; font-size: var(--fs-2xs); font-weight: 800; white-space: nowrap; box-shadow: 0 0 0 3px rgb(var(--card)); }
 .pf-live { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 3px 11px 3px 6px; border-radius: var(--r-pill); background: rgb(var(--ok) / .14); color: rgb(var(--ok)); font-size: var(--fs-sm); font-weight: 800; }
 .pf-live:hover { background: rgb(var(--ok) / .22); }
@@ -240,3 +241,27 @@
   .pf-focus > .btn { width: 100%; justify-content: center; }
   .pf-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
+
+/* ---------- the banner: lower, and a quiet pattern when it has no picture; the camera chip on the avatar ---------- */
+@media (min-width: 640px) { .pf-banner { height: 8rem; } }
+@media (max-width: 639px) { .pf-banner { height: 5.5rem; } }
+.pf-banner.has-pattern::before { content: ''; position: absolute; inset: 0; pointer-events: none; background: radial-gradient(rgb(255 255 255 / .16) 1px, transparent 1.4px) 0 0 / 16px 16px; }
+.pf-cam { position: absolute; z-index: 3; right: -4px; bottom: -4px; display: grid; place-items: center; width: 28px; height: 28px; border: 0; border-radius: 50%; background: rgb(var(--brand)); color: #fff; box-shadow: 0 0 0 3px rgb(var(--card)); cursor: pointer; }
+.pf-cam:hover:not(:disabled) { filter: brightness(1.1); }
+@media (max-width: 639px) { .pf-cam { width: 32px; height: 32px; } }
+
+/* ---------- three blocks in two balanced columns (they flow like a masonry, no holes) ---------- */
+.pf-masonry { display: block; }
+.pf-masonry > * { margin-bottom: 1.25rem; break-inside: avoid; }
+@media (min-width: 1024px) { .pf-masonry { column-count: 2; column-gap: 1.25rem; } }
+
+/* ---------- tabs: full names on a wide screen, short ones on a phone ---------- */
+.pf-tab-short { display: none; }
+@media (max-width: 479px) { .pf-tab-full { display: none; } .pf-tab-short { display: inline; } }
+@media (max-width: 359px) { .pf-tabs { -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent); } }
+
+/* ---------- small touches: the focus tile takes the colour of the rank, the curve draws itself ---------- */
+.pf-focus.is-rank { background: linear-gradient(135deg, color-mix(in srgb, var(--rc, rgb(var(--brand))) 22%, transparent), color-mix(in srgb, var(--rc, rgb(var(--brand))) 4%, transparent)), rgb(var(--card)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--rc, rgb(var(--brand))) 40%, transparent); }
+.pf-spark-line { stroke-dasharray: 1; stroke-dashoffset: 0; animation: pf-draw .9s ease-out both; }
+@keyframes pf-draw { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
+.pf-strip > i[title] { cursor: help; }

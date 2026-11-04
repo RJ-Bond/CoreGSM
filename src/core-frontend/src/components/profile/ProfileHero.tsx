@@ -1,3 +1,4 @@
+import { useEffect, useState, type CSSProperties } from 'react';
 import { useAuth } from '../../auth';
 import { t } from '../../i18n';
 import { ago, GameAvatar } from '../../ui';
@@ -8,6 +9,23 @@ import { bannerStyle } from './banner';
 import { IcoCalendar, IcoDiscord, IcoGamepad, IcoLogout, ShareButton } from './bits';
 import { rankLevel } from './heroLogic';
 import { RankHeaderBadge, rankName } from './VrRank';
+
+/** the ring round the picture: an arc that fills towards the next rank, drawn once the page is up (it grows from empty) */
+function LevelRing({ pct }: { pct: number }) {
+  const [shown, setShown] = useState(0);
+  useEffect(() => {
+    const id = requestAnimationFrame(() => setShown(pct));
+    return () => cancelAnimationFrame(id);
+  }, [pct]);
+  const r = 48;
+  const c = 2 * Math.PI * r;
+  return (
+    <svg className="pf-lvring" viewBox="0 0 102 102" aria-hidden>
+      <circle cx="51" cy="51" r={r} className="pf-lvring-track" />
+      <circle cx="51" cy="51" r={r} className="pf-lvring-arc" strokeDasharray={c} strokeDashoffset={c * (1 - shown / 100)} />
+    </svg>
+  );
+}
 
 /**
  * The top of «Обзор»: the banner, the avatar in a ring that fills towards the next rank (with the level), the name,
@@ -29,7 +47,7 @@ export function ProfileHero({ rank, playing, editBanner, onToggleBanner, since }
 
   return (
     <div className="panel pf-hero">
-      <div className="pf-banner" style={bannerStyle(me.bannerUrl, me.bannerPreset)}>
+      <div className={`pf-banner ${me.bannerUrl ? '' : 'has-pattern'}`} style={bannerStyle(me.bannerUrl, me.bannerPreset)}>
         <button type="button" className="pf-banner-btn" aria-expanded={editBanner} onClick={onToggleBanner}>
           {editBanner ? t('pf.banner.close') : t('pf.banner.edit')}
         </button>
@@ -38,9 +56,10 @@ export function ProfileHero({ rank, playing, editBanner, onToggleBanner, since }
         <div className="pf-hero-avatar">
           <div
             className={ranked ? 'pf-level' : undefined}
-            style={ranked ? ({ ['--rc' as string]: rank.rank.color, ['--p' as string]: pct }) : undefined}
+            style={ranked ? ({ ['--rc' as string]: rank.rank.color } as CSSProperties) : undefined}
             title={ranked && lv ? t('pf.hero.levelTitle', { n: lv.level, total: lv.total, name: rankName(rank.rank) }) : undefined}
           >
+            {ranked && <LevelRing pct={pct} />}
             <AvatarEditor onChanged={reload} size={80} ring={null} />
             {ranked && lv && <span className="pf-level-badge">{t('pf.hero.level', { n: lv.level })}</span>}
           </div>

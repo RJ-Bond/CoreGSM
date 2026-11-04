@@ -63,7 +63,14 @@ export async function seed({ base, dbPath }) {
     }
     db.prepare('INSERT OR REPLACE INTO uptime_daily (server_id, day, up, total, peak) VALUES (?,?,?,?,?)').run(ids[i], new Date().toISOString().slice(0, 10), online ? (i === 6 ? 270 : 288) : 0, 288, pl + 4);
   });
+  // the admin plays V Rising under a nick: ten visits over two weeks and one that is going on now (rank, level, streak, «playing now»)
+  const own = db.prepare("SELECT id FROM users WHERE username = ?").get(ADMIN.username);
+  void own;
+  const sess = db.prepare('INSERT INTO player_sessions (server_id, name, joined_at, left_at) VALUES (?,?,?,?)');
+  for (const d of [13, 12, 10, 9, 8, 6, 5, 4, 2, 1]) sess.run(ids[1], 'ShotsHero', now - d * 86_400_000 - 3 * 3_600_000, now - d * 86_400_000 - 1 * 3_600_000);
+  sess.run(ids[1], 'ShotsHero', now - 40 * 60_000, null);
   db.close();
+  await call('PUT', '/api/me/player', { gameNick: 'ShotsHero', bio: 'Играю по вечерам', publicProfile: true }, token);
 
   const items = [
     { category: 'wipe', embed: { title: '🔥 Вайп Rust в субботу в 18:00', description: 'Карта 4000, x2, новые правила рейдов. Заходите заранее.', color: 0xea580c } },

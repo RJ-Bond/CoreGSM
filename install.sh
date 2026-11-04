@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="9c0727ccc4b6"
+COREGSM_BUILD="2af7cdbaf8e2"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.7"
+COREGSM_VERSION="1.1.8"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -121519,7 +121519,7 @@ export function AvatarEditor({ onChanged, size = 80, ring }: { onChanged: () => 
   const compact = ring !== undefined;
   return (
     <div className={`flex flex-col items-center ${compact ? 'gap-1' : 'gap-2'}`} {...drop.props}>
-      <div className={compact ? 'pf-avatar-ring p-1' : undefined} style={compact && ring ? { ['--ring' as string]: ring } : undefined}>
+      <div className={compact ? 'pf-avatar-ring relative p-1' : undefined} style={compact && ring ? { ['--ring' as string]: ring } : undefined}>
       <button
         type="button"
         onClick={() => input.current?.click()}
@@ -121532,10 +121532,15 @@ export function AvatarEditor({ onChanged, size = 80, ring }: { onChanged: () => 
           {busy ? '…' : drop.over ? t('pf.avatar.drop') : t('pf.avatar.change')}
         </span>
       </button>
+      {compact && (
+        <button type="button" className="pf-cam" onClick={() => input.current?.click()} disabled={busy} aria-label={t('pf.avatar.uploadLink')} title={t('pf.avatar.uploadLink')}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" /><circle cx="12" cy="13" r="4" /></svg>
+        </button>
+      )}
       </div>
       <input ref={input} type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) void upload(f); e.target.value = ''; }} />
       <div className={`flex ${compact ? 'gap-2 text-xs' : 'gap-3 text-sm'} font-extrabold`}>
-        <button type="button" className="btn-link" onClick={() => input.current?.click()} disabled={busy}>{t('pf.avatar.uploadLink')}</button>
+        {!compact && <button type="button" className="btn-link" onClick={() => input.current?.click()} disabled={busy}>{t('pf.avatar.uploadLink')}</button>}
         {me.avatarSource === 'custom' && <button type="button" className="btn-link-danger" onClick={() => void remove()} disabled={busy}>{me.discordName ? t('pf.avatar.fromDiscord') : t('common.remove')}</button>}
       </div>
       {!compact && <p className="max-w-48 text-center text-xs font-semibold text-mute">{me.avatarSource === 'discord' ? t('pf.avatar.isDiscord') : t('pf.avatar.dragHint')}</p>}
@@ -121731,6 +121736,7 @@ export function FavoritePushCard() {
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/profile"
   cat > "$APP_DIR/core-frontend/src/components/profile/FocusCard.tsx" << '__COREGSM_EOF__'
+import type { CSSProperties } from 'react';
 import { t } from '../../i18n';
 import { ago } from '../../ui';
 import type { Focus } from './heroLogic';
@@ -121761,6 +121767,16 @@ export function FocusCard({ focus }: { focus: Focus | null }) {
     sub = t('pf.focus.achSub', { done: Math.round(focus.progress), target: focus.target });
     href = '/profile/player';
     bar = { pct: focus.target > 0 ? Math.round((focus.progress / focus.target) * 100) : 0 };
+  } else if (focus.kind === 'setupNick') {
+    icon = '🎮';
+    title = t('pf.focus.setup');
+    sub = t('pf.focus.setupSub');
+    href = '/profile/player';
+  } else if (focus.kind === 'firstGame') {
+    icon = '🚀';
+    title = t('pf.focus.first');
+    sub = t('pf.focus.firstSub');
+    href = '/servers';
   } else {
     icon = '🟢';
     title = t('pf.focus.fav', { server: focus.name });
@@ -121768,7 +121784,7 @@ export function FocusCard({ focus }: { focus: Focus | null }) {
     href = `/servers/${focus.serverId}`;
   }
   return (
-    <section className={`pf-focus is-${focus.kind}`} aria-label={t('pf.focus.title')}>
+    <section className={`pf-focus is-${focus.kind}`} aria-label={t('pf.focus.title')} style={focus.kind === 'rank' ? ({ ['--rc' as string]: focus.color } as CSSProperties) : undefined}>
       <span className="pf-focus-ico" aria-hidden>{icon}</span>
       <div className="min-w-0 flex-1">
         <p className="pf-focus-k">{t('pf.focus.title')}</p>
@@ -122398,6 +122414,7 @@ export function PlayerCard() {
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/profile"
   cat > "$APP_DIR/core-frontend/src/components/profile/ProfileHero.tsx" << '__COREGSM_EOF__'
+import { useEffect, useState, type CSSProperties } from 'react';
 import { useAuth } from '../../auth';
 import { t } from '../../i18n';
 import { ago, GameAvatar } from '../../ui';
@@ -122408,6 +122425,23 @@ import { bannerStyle } from './banner';
 import { IcoCalendar, IcoDiscord, IcoGamepad, IcoLogout, ShareButton } from './bits';
 import { rankLevel } from './heroLogic';
 import { RankHeaderBadge, rankName } from './VrRank';
+
+/** the ring round the picture: an arc that fills towards the next rank, drawn once the page is up (it grows from empty) */
+function LevelRing({ pct }: { pct: number }) {
+  const [shown, setShown] = useState(0);
+  useEffect(() => {
+    const id = requestAnimationFrame(() => setShown(pct));
+    return () => cancelAnimationFrame(id);
+  }, [pct]);
+  const r = 48;
+  const c = 2 * Math.PI * r;
+  return (
+    <svg className="pf-lvring" viewBox="0 0 102 102" aria-hidden>
+      <circle cx="51" cy="51" r={r} className="pf-lvring-track" />
+      <circle cx="51" cy="51" r={r} className="pf-lvring-arc" strokeDasharray={c} strokeDashoffset={c * (1 - shown / 100)} />
+    </svg>
+  );
+}
 
 /**
  * The top of «Обзор»: the banner, the avatar in a ring that fills towards the next rank (with the level), the name,
@@ -122429,7 +122463,7 @@ export function ProfileHero({ rank, playing, editBanner, onToggleBanner, since }
 
   return (
     <div className="panel pf-hero">
-      <div className="pf-banner" style={bannerStyle(me.bannerUrl, me.bannerPreset)}>
+      <div className={`pf-banner ${me.bannerUrl ? '' : 'has-pattern'}`} style={bannerStyle(me.bannerUrl, me.bannerPreset)}>
         <button type="button" className="pf-banner-btn" aria-expanded={editBanner} onClick={onToggleBanner}>
           {editBanner ? t('pf.banner.close') : t('pf.banner.edit')}
         </button>
@@ -122438,9 +122472,10 @@ export function ProfileHero({ rank, playing, editBanner, onToggleBanner, since }
         <div className="pf-hero-avatar">
           <div
             className={ranked ? 'pf-level' : undefined}
-            style={ranked ? ({ ['--rc' as string]: rank.rank.color, ['--p' as string]: pct }) : undefined}
+            style={ranked ? ({ ['--rc' as string]: rank.rank.color } as CSSProperties) : undefined}
             title={ranked && lv ? t('pf.hero.levelTitle', { n: lv.level, total: lv.total, name: rankName(rank.rank) }) : undefined}
           >
+            {ranked && <LevelRing pct={pct} />}
             <AvatarEditor onChanged={reload} size={80} ring={null} />
             {ranked && lv && <span className="pf-level-badge">{t('pf.hero.level', { n: lv.level })}</span>}
           </div>
@@ -122771,11 +122806,11 @@ export function StatTiles({ s, compact = false }: { s: MyStats; compact?: boolea
   const fav = favRow?.name;
   return (
     <div className="pf-tiles">
-      <StatTile icon={<IcoClock />} value={fmtDuration(s.totalSeconds)} label={t('pf.stats.online')} extra={<DaySpark byDay={s.byDay ?? []} />} />
+      <StatTile icon={<IcoClock />} value={s.totalSeconds < 60 ? t('dur.h', { n: 0 }) : fmtDuration(s.totalSeconds)} label={t('pf.stats.online')} extra={<DaySpark byDay={s.byDay ?? []} />} />
       <StatTile icon={<IcoPlay />} value={String(s.sessions)} label={t('pf.stats.sessions')} />
       <StatTile icon={<IcoFlame />} hot={s.streakDays >= 7} value={t('pf.stats.days', { n: s.streakDays })} label={t('pf.stats.streak')} extra={<StreakStrip byDay={s.byDay ?? []} />} />
       {!compact && <StatTile icon={<IcoTimer />} value={fmtDuration(s.longestSessionSec)} label={t('pf.stats.longest')} />}
-      {!compact && <StatTile icon={favRow ? <GameAvatar game={favRow.game} size={20} /> : <IcoHeart />} value={fav ?? '–'} label={t('pf.stats.favourite')} />}
+      {<StatTile icon={favRow ? <GameAvatar game={favRow.game} size={20} /> : <IcoHeart />} value={fav ?? '–'} label={t('pf.stats.favourite')} />}
     </div>
   );
 }
@@ -123493,6 +123528,16 @@ describe('pickFocus', () => {
     const f = pickFocus({ ...none, favs: [srv(1, 3), srv(2, 9), srv(3, 20, false)] });
     expect(f).toMatchObject({ kind: 'fav', serverId: 2, players: 9 });
   });
+  it('a player without a nick is asked for one, and a nick without visits is told to go play', () => {
+    expect(pickFocus({ ...none, nick: '' })).toEqual({ kind: 'setupNick' });
+    expect(pickFocus({ ...none, nick: undefined })).toBeNull();
+    expect(pickFocus({ ...none, nick: 'Ren', hasPlayed: false })).toEqual({ kind: 'firstGame' });
+    expect(pickFocus({ ...none, nick: 'Ren', hasPlayed: true })).toBeNull();
+    // being in the game still wins, and a favourite beats the «go play» card
+    expect(pickFocus({ ...none, nick: '', playing: { name: 'A', serverId: 1, since: 5 } })).toMatchObject({ kind: 'playing' });
+    expect(pickFocus({ ...none, nick: 'Ren', hasPlayed: false, favs: [srv(2, 9)] })).toMatchObject({ kind: 'fav' });
+  });
+
   it('the far rank is the last resort and needs a game nick', () => {
     expect(pickFocus({ ...none, rank: rank(11, { name: 'H', minHours: 30 }) })).toMatchObject({ kind: 'rank', hoursLeft: 19 });
     expect(pickFocus({ ...none, rank: rank(11, { name: 'H', minHours: 30 }, '') })).toBeNull();
@@ -123534,7 +123579,11 @@ export type Focus =
   | { kind: 'playing'; name: string; serverId: number; since: number }
   | { kind: 'rank'; name: string; color: string; hoursLeft: number; progress: number }
   | { kind: 'ach'; id: string; icon: string; title: string; progress: number; target: number }
-  | { kind: 'fav'; name: string; serverId: number; players: number };
+  | { kind: 'fav'; name: string; serverId: number; players: number }
+  /** no game nick yet: the statistics cannot appear without it */
+  | { kind: 'setupNick' }
+  /** a nick, but no visit seen yet */
+  | { kind: 'firstGame' };
 
 const achShare = (a: Achievement) => (a.target > 0 ? Math.max(0, Math.min(1, a.progress / a.target)) : 0);
 
@@ -123547,8 +123596,13 @@ export function pickFocus(i: {
   rank: MyRank | null | undefined;
   achievements: Achievement[] | null | undefined;
   favs: Server[] | null | undefined;
+  /** the game nick: '' = none yet; undefined = not known yet (no onboarding card until it is) */
+  nick?: string | null;
+  /** at least one visit has been seen in the period */
+  hasPlayed?: boolean;
 }): Focus | null {
   if (i.playing) return { kind: 'playing', ...i.playing };
+  if (i.nick === '') return { kind: 'setupNick' };
   const r = i.rank && i.rank.nick && i.rank.next ? i.rank : null;
   const left = r?.next ? Math.max(0, r.next.minHours - r.hours) : null;
   if (r?.next && left !== null && left <= 5) return { kind: 'rank', name: r.next.name, color: r.next.color, hoursLeft: left, progress: r.progress };
@@ -123557,6 +123611,7 @@ export function pickFocus(i: {
   const busy = (i.favs ?? []).filter((s) => s.online && s.players > 0).sort((a, b) => b.players - a.players)[0];
   if (busy) return { kind: 'fav', name: busy.name, serverId: busy.id, players: busy.players };
   if (r?.next && left !== null) return { kind: 'rank', name: r.next.name, color: r.next.color, hoursLeft: left, progress: r.progress };
+  if (i.nick && i.hasPlayed === false) return { kind: 'firstGame' };
   return null;
 }
 
@@ -123689,6 +123744,8 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/profile"
   cat > "$APP_DIR/core-frontend/src/components/profile/statsViz.tsx" << '__COREGSM_EOF__'
 import { t } from '../../i18n';
+import { fmtDay } from '../../ui';
+import { fmtDuration } from './format';
 import { lastDaysMarks } from './heroLogic';
 
 /** hours per day as a small area curve, so a tile shows the trend and not only the total */
@@ -123704,18 +123761,23 @@ export function DaySpark({ byDay }: { byDay: { seconds: number }[] }) {
   return (
     <svg className="pf-spark" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" role="img" aria-label={t('pf.stats.sparkAria')}>
       <path d={`${line} L${W} ${H} L0 ${H} Z`} className="pf-spark-fill" />
-      <path d={line} className="pf-spark-line" fill="none" />
+      <path d={line} className="pf-spark-line" fill="none" pathLength={1} />
     </svg>
   );
 }
 
 /** the last two weeks as squares: a day with play is filled */
-export function StreakStrip({ byDay, days = 14 }: { byDay: { seconds: number }[]; days?: number }) {
+export function StreakStrip({ byDay, days = 14 }: { byDay: { seconds: number; date?: string }[]; days?: number }) {
   const marks = lastDaysMarks(byDay, days);
   if (marks.length === 0) return null;
+  const rows = byDay.slice(-days);
   return (
     <div className="pf-strip" role="img" aria-label={t('pf.stats.streakAria', { n: marks.filter(Boolean).length, days: marks.length })}>
-      {marks.map((on, i) => <i key={i} className={on ? 'is-on' : ''} />)}
+      {marks.map((on, i) => {
+        const d = rows[i];
+        const title = d?.date ? `${fmtDay(d.date)} · ${on ? fmtDuration(d.seconds) : t('pf.stats.noPlay')}` : undefined;
+        return <i key={i} className={on ? 'is-on' : ''} title={title} />;
+      })}
     </div>
   );
 }
@@ -132353,7 +132415,6 @@ const en: Record<keyof typeof ru, string> = {
   'pf.stats.sessionsN': '{n} session|{n} sessions',
   'pf.stats.strip': 'Activity over {n} days',
   'pf.stats.streakAria': 'Activity over {days} days: {active} days played, {time} in total',
-  'pf.stats.noPlay': 'no play',
   'pf.stats.less': 'less',
   'pf.stats.more': 'more',
   'pf.stats.byHour': 'By hour of the day',
@@ -133240,6 +133301,13 @@ const en: Record<keyof typeof ru, string> = {
   'pf.today.up': '{d} more than yesterday',
   'pf.today.down': '{d} less than yesterday',
   'pf.share': 'Share profile',
+  'pf.focus.setup': 'Set your game nick',
+  'pf.focus.setupSub': 'Without it the panel cannot tell that you play: statistics, the rank and achievements appear after that.',
+  'pf.focus.first': 'Join a server',
+  'pf.focus.firstSub': 'We will recognise you by the nick, and statistics, the rank and achievements will appear here.',
+  'pf.stats.noPlay': 'no play',
+  'pf.tab.lookShort': 'Look',
+  'pf.tab.securityShort': 'Safety',
   'pf.hero.level': 'Lv {n}',
   'pf.hero.levelTitle': 'Level {n} of {total}: {name}',
   'pf.hero.playing': 'Playing on {server}',
@@ -136380,7 +136448,6 @@ const ru = {
   'pf.stats.sessionsN': '{n} сессия|{n} сессии|{n} сессий',
   'pf.stats.strip': 'Активность за {n} дней',
   'pf.stats.streakAria': 'Активность за {days} дн.: дней с игрой {active}, всего {time}',
-  'pf.stats.noPlay': 'не играли',
   'pf.stats.less': 'меньше',
   'pf.stats.more': 'больше',
   'pf.stats.byHour': 'По часам суток',
@@ -137267,6 +137334,13 @@ const ru = {
   'pf.today.up': 'на {d} больше, чем вчера',
   'pf.today.down': 'на {d} меньше, чем вчера',
   'pf.share': 'Поделиться профилем',
+  'pf.focus.setup': 'Укажите игровой ник',
+  'pf.focus.setupSub': 'Без него панель не узнает, что вы играете: статистика, ранг и достижения появятся после этого.',
+  'pf.focus.first': 'Зайдите на сервер',
+  'pf.focus.firstSub': 'Мы увидим вас по нику, и здесь появятся статистика, ранг и достижения.',
+  'pf.stats.noPlay': 'не играли',
+  'pf.tab.lookShort': 'Вид',
+  'pf.tab.securityShort': 'Защита',
   'pf.hero.level': 'Ур. {n}',
   'pf.hero.levelTitle': 'Уровень {n} из {total}: {name}',
   'pf.hero.playing': 'Играет на {server}',
@@ -146416,11 +146490,11 @@ import { isNewDeviceDismissed } from '../security';
 import { ago, Button, ErrorLine, isLag, FieldError, GameAvatar, PageHead, PasswordField, PasswordStrength, Section, StatusPill, UserAvatar, toast, useRoute, errText } from '../ui';
 
 type Tab = 'overview' | 'player' | 'look' | 'security';
-const TABS: { id: Tab; label: TKey; icon: ReactNode }[] = [
-  { id: 'overview', label: 'pf.tab.overview', icon: <IcoHome /> },
-  { id: 'player', label: 'pf.tab.player', icon: <IcoGamepad /> },
-  { id: 'look', label: 'pf.tab.look', icon: <IcoSliders /> },
-  { id: 'security', label: 'pf.tab.security', icon: <IcoShield /> },
+const TABS: { id: Tab; label: TKey; short: TKey; icon: ReactNode }[] = [
+  { id: 'overview', label: 'pf.tab.overview', short: 'pf.tab.overview', icon: <IcoHome /> },
+  { id: 'player', label: 'pf.tab.player', short: 'pf.tab.player', icon: <IcoGamepad /> },
+  { id: 'look', label: 'pf.tab.look', short: 'pf.tab.lookShort', icon: <IcoSliders /> },
+  { id: 'security', label: 'pf.tab.security', short: 'pf.tab.securityShort', icon: <IcoShield /> },
 ];
 
 /** The signed-in user's own page: tabs «Обзор», «Игрок», «Оформление и регион», «Безопасность». The tab lives in the address (/profile/security). */
@@ -146440,8 +146514,8 @@ export default function ProfilePage() {
       <div className="pf-tabs">
         <nav className="seg" aria-label={t('pf.tabs')}>
           {TABS.map((x) => (
-            <a key={x.id} href={`/profile/${x.id}`} className="seg-item pf-tab" aria-current={tab === x.id ? 'page' : undefined}>
-              {x.icon}{t(x.label)}
+            <a key={x.id} href={`/profile/${x.id}`} className="seg-item pf-tab" aria-current={tab === x.id ? 'page' : undefined} aria-label={t(x.label)}>
+              {x.icon}<span className="pf-tab-full">{t(x.label)}</span><span className="pf-tab-short" aria-hidden>{t(x.short)}</span>
               {x.id === 'security' && newLogin && <span className="pf-tab-dot" title={t('pf.tab.alert')}><span className="sr-only">{t('pf.tab.alert')}</span></span>}
             </a>
           ))}
@@ -146471,7 +146545,14 @@ function OverviewTab() {
       .catch(() => setFavs([]));
   }, []);
   if (!me) return null;
-  const focus = pickFocus({ playing: stats.data?.playingNow, rank, achievements, favs });
+  const focus = pickFocus({
+    playing: stats.data?.playingNow,
+    rank,
+    achievements,
+    favs,
+    nick: stats.data ? stats.data.nick ?? '' : undefined,
+    hasPlayed: stats.data ? stats.data.sessions > 0 || stats.data.totalSeconds > 0 : undefined,
+  });
 
   return (
     <div className="space-y-5">
@@ -146485,9 +146566,9 @@ function OverviewTab() {
 
       <StatsSummary data={stats.data} />
 
-      <div className="grid items-start gap-5 lg:grid-cols-2">
-        <div className="space-y-5">
-          <AchievementsPreview />
+      <div className="pf-masonry">
+        <AchievementsPreview />
+        <div>
           <Section title={t('pf.favs.title')}>
             {favs === null && <div className="skeleton h-20 rounded-2xl bg-soft" />}
             {favs && favs.length === 0 && <p className="font-semibold text-mute">{t('pf.favs.none')}</p>}
@@ -146500,7 +146581,7 @@ function OverviewTab() {
             ))}
           </Section>
         </div>
-        <ActivityFeed />
+        <ActivityFeed limit={8} />
       </div>
 
       {isAdmin && (
@@ -155275,10 +155356,11 @@ __COREGSM_EOF__
 
 /* ---------- the level ring around the avatar, the live chip ---------- */
 .pf-level { position: relative; display: inline-block; }
-/* the arc round the picture fills towards the next rank (the picture is the top 88px of the editor, centred) */
-.pf-level::before { content: ''; position: absolute; z-index: 1; top: -7px; left: 50%; width: 102px; height: 102px; transform: translateX(-50%); border-radius: 50%; pointer-events: none;
-  background: conic-gradient(var(--rc, rgb(var(--brand))) calc(var(--p, 0) * 1%), rgb(var(--line) / .6) 0);
-  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 4px), #000 calc(100% - 3px)); mask: radial-gradient(farthest-side, transparent calc(100% - 4px), #000 calc(100% - 3px)); }
+/* the arc round the picture (an SVG circle: it works in every browser); the picture is the top 88px of the editor, centred */
+.pf-lvring { position: absolute; z-index: 1; top: -7px; left: 50%; width: 102px; height: 102px; transform: translateX(-50%) rotate(-90deg); pointer-events: none; overflow: visible; }
+.pf-lvring circle { fill: none; stroke-width: 3.5; }
+.pf-lvring-track { stroke: rgb(var(--line) / .7); }
+.pf-lvring-arc { stroke: var(--rc, rgb(var(--brand))); stroke-linecap: round; transition: stroke-dashoffset 1s cubic-bezier(.2, .8, .2, 1); }
 .pf-level-badge { position: absolute; z-index: 2; top: -14px; left: calc(50% + 20px); padding: 1px 9px; border-radius: var(--r-pill); background: var(--rc, rgb(var(--brand))); color: #fff; font-size: var(--fs-2xs); font-weight: 800; white-space: nowrap; box-shadow: 0 0 0 3px rgb(var(--card)); }
 .pf-live { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 3px 11px 3px 6px; border-radius: var(--r-pill); background: rgb(var(--ok) / .14); color: rgb(var(--ok)); font-size: var(--fs-sm); font-weight: 800; }
 .pf-live:hover { background: rgb(var(--ok) / .22); }
@@ -155331,6 +155413,30 @@ __COREGSM_EOF__
   .pf-focus > .btn { width: 100%; justify-content: center; }
   .pf-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
+
+/* ---------- the banner: lower, and a quiet pattern when it has no picture; the camera chip on the avatar ---------- */
+@media (min-width: 640px) { .pf-banner { height: 8rem; } }
+@media (max-width: 639px) { .pf-banner { height: 5.5rem; } }
+.pf-banner.has-pattern::before { content: ''; position: absolute; inset: 0; pointer-events: none; background: radial-gradient(rgb(255 255 255 / .16) 1px, transparent 1.4px) 0 0 / 16px 16px; }
+.pf-cam { position: absolute; z-index: 3; right: -4px; bottom: -4px; display: grid; place-items: center; width: 28px; height: 28px; border: 0; border-radius: 50%; background: rgb(var(--brand)); color: #fff; box-shadow: 0 0 0 3px rgb(var(--card)); cursor: pointer; }
+.pf-cam:hover:not(:disabled) { filter: brightness(1.1); }
+@media (max-width: 639px) { .pf-cam { width: 32px; height: 32px; } }
+
+/* ---------- three blocks in two balanced columns (they flow like a masonry, no holes) ---------- */
+.pf-masonry { display: block; }
+.pf-masonry > * { margin-bottom: 1.25rem; break-inside: avoid; }
+@media (min-width: 1024px) { .pf-masonry { column-count: 2; column-gap: 1.25rem; } }
+
+/* ---------- tabs: full names on a wide screen, short ones on a phone ---------- */
+.pf-tab-short { display: none; }
+@media (max-width: 479px) { .pf-tab-full { display: none; } .pf-tab-short { display: inline; } }
+@media (max-width: 359px) { .pf-tabs { -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent); } }
+
+/* ---------- small touches: the focus tile takes the colour of the rank, the curve draws itself ---------- */
+.pf-focus.is-rank { background: linear-gradient(135deg, color-mix(in srgb, var(--rc, rgb(var(--brand))) 22%, transparent), color-mix(in srgb, var(--rc, rgb(var(--brand))) 4%, transparent)), rgb(var(--card)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--rc, rgb(var(--brand))) 40%, transparent); }
+.pf-spark-line { stroke-dasharray: 1; stroke-dashoffset: 0; animation: pf-draw .9s ease-out both; }
+@keyframes pf-draw { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
+.pf-strip > i[title] { cursor: help; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/servers.css" << '__COREGSM_EOF__'
