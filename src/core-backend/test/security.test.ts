@@ -262,6 +262,11 @@ describe('e-mail: verification, password reset, new device', () => {
     assert.ok(me.body.newDevice?.ts > 0);
     assert.match(me.body.newDevice.label, /Firefox/);
     assert.ok(await findMail(mailFile, /Новый вход/));
+    // the bell hears about it too, with a link to the profile
+    const bell = await api.call('GET', '/api/me/notifications', { token: b.body.token });
+    const note = (bell.body.items ?? bell.body).find((n: { kind: string }) => n.kind === 'security');
+    assert.ok(note, 'a security notification');
+    assert.equal(note.url, '/profile');
   });
 
   it('resets the password once and ends all sessions', async () => {

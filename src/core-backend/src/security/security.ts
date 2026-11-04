@@ -18,6 +18,8 @@ import { wrap } from '../http.js';
 import { enqueueDelivery } from '../alerts/deliveries.js';
 import { layout, mailReady, sendMail, smtpConfig } from '../alerts/mail.js';
 import { logAccount, prefsOf, uaLabel } from '../profile/profile.js';
+import { dmAvailable, pushToUser } from '../community/subscriptions.js';
+import { newDeviceNotice } from './newDeviceLogic.js';
 import { log } from '../logger.js';
 
 // ---------- schema ----------
@@ -194,6 +196,16 @@ export function noteLogin(req: Request, userId: number, brandName: string): void
     if (first) return;
     const detail = `${label} · ${ip}`.slice(0, 200);
     db.prepare('INSERT INTO account_events (user_id, ts, kind, ip, ua, detail) VALUES (?, ?, ?, ?, ?, ?)').run(userId, now, 'login_new_device', ip.slice(0, 64), label, detail);
+    // the bell, the devices with Web Push and a linked Discord account hear about it too: not everybody has a verified address
+    try {
+      const notice = newDeviceNotice(prefsOf(userId).lang === 'en' ? 'en' : 'ru', label);
+      db.prepare('INSERT INTO user_notifications (user_id, ts, kind, server_id, text, url) VALUES (?, ?, ?, NULL, ?, ?)').run(userId, now, 'security', notice.text, '/profile');
+      pushToUser(userId, { title: notice.title, body: notice.text, url: '/profile', tag: `new-device-${userId}` });
+      const d = db.prepare('SELECT discord_id FROM users WHERE id = ?').get(userId) as { discord_id: string | null } | undefined;
+      if (d?.discord_id && dmAvailable()) enqueueDelivery({ kind: 'dm', refId: null, target: d.discord_id, payload: { content: notice.text, summary: notice.text.slice(0, 120) } });
+    } catch (e) {
+      log.error('new-device notice failed:', (e as Error).message);
+    }
     const u = emailOf(userId);
     if (u?.email && u.email_verified && mailReady()) {
       const en = prefsOf(userId).lang === 'en';

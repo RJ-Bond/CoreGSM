@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="0184ab6ce466"
+COREGSM_BUILD="fe8307f75f0f"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.0.93"
+COREGSM_VERSION="1.0.94"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -33844,6 +33844,23 @@ export function guardDelete(scope: GuardScope, key: string): void {
 setInterval(() => db.prepare('DELETE FROM login_guard WHERE expires_at <= ?').run(Date.now()), 3600_000).unref();
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/security"
+  cat > "$APP_DIR/core-backend/src/security/newDeviceLogic.ts" << '__COREGSM_EOF__'
+/** The short notice about a sign-in from a device the account has not been seen on (bell, push, Discord message). */
+export interface NewDeviceNotice {
+  /** one line for the bell and the Discord message */
+  text: string;
+  /** the title of the push notification */
+  title: string;
+}
+
+export function newDeviceNotice(lang: 'ru' | 'en', label: string): NewDeviceNotice {
+  const device = label.trim().slice(0, 80) || (lang === 'en' ? 'an unknown device' : 'неизвестное устройство');
+  return lang === 'en'
+    ? { title: 'New sign-in', text: `New sign-in to your account from ${device}. If it was not you, change your password and end the other sessions.` }
+    : { title: 'Новый вход', text: `Новый вход в ваш аккаунт с устройства: ${device}. Если это были не вы, смените пароль и завершите остальные сеансы.` };
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/security"
   cat > "$APP_DIR/core-backend/src/security/proxyFetch.ts" << '__COREGSM_EOF__'
 /**
  * fetch() for Discord requests made by the backend (OAuth sign-in): goes through the same proxy as the bot
@@ -34091,6 +34108,8 @@ import { wrap } from '../http.js';
 import { enqueueDelivery } from '../alerts/deliveries.js';
 import { layout, mailReady, sendMail, smtpConfig } from '../alerts/mail.js';
 import { logAccount, prefsOf, uaLabel } from '../profile/profile.js';
+import { dmAvailable, pushToUser } from '../community/subscriptions.js';
+import { newDeviceNotice } from './newDeviceLogic.js';
 import { log } from '../logger.js';
 
 // ---------- schema ----------
@@ -34267,6 +34286,16 @@ export function noteLogin(req: Request, userId: number, brandName: string): void
     if (first) return;
     const detail = `${label} · ${ip}`.slice(0, 200);
     db.prepare('INSERT INTO account_events (user_id, ts, kind, ip, ua, detail) VALUES (?, ?, ?, ?, ?, ?)').run(userId, now, 'login_new_device', ip.slice(0, 64), label, detail);
+    // the bell, the devices with Web Push and a linked Discord account hear about it too: not everybody has a verified address
+    try {
+      const notice = newDeviceNotice(prefsOf(userId).lang === 'en' ? 'en' : 'ru', label);
+      db.prepare('INSERT INTO user_notifications (user_id, ts, kind, server_id, text, url) VALUES (?, ?, ?, NULL, ?, ?)').run(userId, now, 'security', notice.text, '/profile');
+      pushToUser(userId, { title: notice.title, body: notice.text, url: '/profile', tag: `new-device-${userId}` });
+      const d = db.prepare('SELECT discord_id FROM users WHERE id = ?').get(userId) as { discord_id: string | null } | undefined;
+      if (d?.discord_id && dmAvailable()) enqueueDelivery({ kind: 'dm', refId: null, target: d.discord_id, payload: { content: notice.text, summary: notice.text.slice(0, 120) } });
+    } catch (e) {
+      log.error('new-device notice failed:', (e as Error).message);
+    }
     const u = emailOf(userId);
     if (u?.email && u.email_verified && mailReady()) {
       const en = prefsOf(userId).lang === 'en';
