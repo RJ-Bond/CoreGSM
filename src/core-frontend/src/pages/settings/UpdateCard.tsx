@@ -195,7 +195,7 @@ export function UpdateCard() {
                     strokeDasharray={RING_C} strokeDashoffset={RING_C * (1 - (ringPct ?? 28) / 100)}
                   />
                 </svg>
-                {finished ? <IconCheck size={22} /> : ringPct != null ? <span className="relative text-sm font-black tabular-nums">{ringPct}%</span> : null}
+                {finished ? <IconCheck size={22} /> : ringPct != null ? <span className="relative text-xs font-black tabular-nums">{ringPct}%</span> : null}
               </>
             ) : (
               <IconArrowUp size={30} className={state === 'available' ? 'update-bob' : ''} />
@@ -222,7 +222,7 @@ export function UpdateCard() {
         </div>
 
         {state === 'running' && (
-          <div className="relative mt-5 space-y-3">
+          <div className="relative mt-5 flex flex-col gap-4">
             {/* the same progress for screen readers whatever is drawn */}
             <div
               className="sr-only" role="progressbar" aria-label={rollingBack ? t('upd.aria.rollback') : t('upd.aria.update')}

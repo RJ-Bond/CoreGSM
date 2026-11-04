@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="1498d71d0fc1"
+COREGSM_BUILD="70ff4c7eacce"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.0.99"
+COREGSM_VERSION="1.1.0"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -130888,7 +130888,7 @@ html[data-motion='reduce'] .view-swap { animation: none; }
 /* ---------- updates tab ---------- */
 .update-hero { background: linear-gradient(135deg, #f59e0b 0%, #ea580c 55%, #be185d 120%); box-shadow: 0 1px 2px rgba(20, 24, 40, .06), 0 22px 44px -18px rgba(234, 88, 12, .55); }
 .upd-steps { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0 6px; margin: 0; padding: 0; list-style: none; font-size: var(--fs-sm); font-weight: 700; }
-.upd-step { display: flex; flex-direction: column; gap: 7px; min-width: 0; opacity: .6; }
+.upd-step { display: flex; flex-direction: column; gap: 8px; min-width: 0; opacity: .72; }
 .upd-step.is-done, .upd-step.is-active { opacity: 1; }
 .upd-step-top { display: flex; align-items: center; gap: 6px; }
 .upd-step-dot { display: inline-grid; flex: none; place-items: center; width: 22px; height: 22px; border-radius: 999px; font-size: var(--fs-2xs); line-height: 1; box-shadow: inset 0 0 0 2px rgb(255 255 255 / .55); }
@@ -130898,7 +130898,7 @@ html[data-motion='reduce'] .view-swap { animation: none; }
 .upd-step:last-child .upd-step-line { display: none; }
 .upd-step.is-done .upd-step-line { background: #fff; }
 .upd-step.is-active .upd-step-line::after { content: ''; position: absolute; inset: 0 auto 0 0; width: 40%; border-radius: inherit; background: #fff; animation: update-slide 1.3s ease-in-out infinite; }
-.upd-step-name { line-height: 1.25; overflow-wrap: anywhere; }
+.upd-step-name { line-height: 1.3; overflow-wrap: anywhere; padding-bottom: 2px; }
 .upd-ring { position: relative; }
 .upd-ring > svg { position: absolute; inset: 0; width: 100%; height: 100%; transform: rotate(-90deg); }
 .upd-ring-arc { transition: stroke-dashoffset .6s cubic-bezier(.2, .8, .2, 1); }
@@ -151046,7 +151046,7 @@ export function UpdateCard() {
                     strokeDasharray={RING_C} strokeDashoffset={RING_C * (1 - (ringPct ?? 28) / 100)}
                   />
                 </svg>
-                {finished ? <IconCheck size={22} /> : ringPct != null ? <span className="relative text-sm font-black tabular-nums">{ringPct}%</span> : null}
+                {finished ? <IconCheck size={22} /> : ringPct != null ? <span className="relative text-xs font-black tabular-nums">{ringPct}%</span> : null}
               </>
             ) : (
               <IconArrowUp size={30} className={state === 'available' ? 'update-bob' : ''} />
@@ -151073,7 +151073,7 @@ export function UpdateCard() {
         </div>
 
         {state === 'running' && (
-          <div className="relative mt-5 space-y-3">
+          <div className="relative mt-5 flex flex-col gap-4">
             {/* the same progress for screen readers whatever is drawn */}
             <div
               className="sr-only" role="progressbar" aria-label={rollingBack ? t('upd.aria.rollback') : t('upd.aria.update')}
