@@ -89,7 +89,12 @@ export interface WidgetData extends BadgeServer {
 const STATE_LABEL: Record<BadgeState, string> = { online: 'В сети', full: 'Сервер полон', offline: 'Не в сети', unknown: 'Нет данных' };
 
 /** a small self-contained page for an <iframe>: no scripts, no external resources, light and dark */
-export function widgetHtml(d: WidgetData): string {
+export type WidgetTheme = 'auto' | 'light' | 'dark';
+/** ?theme= of the widget: light or dark forces the palette, anything else follows the visitor's system setting */
+export const widgetTheme = (v: unknown): WidgetTheme => (v === 'light' || v === 'dark' ? v : 'auto');
+const DARK_VARS = '--bg:#161b22;--fg:#e6edf3;--mut:#8b949e;--line:#30363d';
+
+export function widgetHtml(d: WidgetData, theme: WidgetTheme = 'auto'): string {
   const st = stateOf(d);
   const color = BADGE_COLORS[st];
   const pct = d.maxPlayers > 0 ? Math.min(100, Math.round((d.players / d.maxPlayers) * 100)) : 0;
@@ -105,7 +110,7 @@ export function widgetHtml(d: WidgetData): string {
 <title>${escapeXml(d.name)}</title>
 <style>
 :root{--bg:#fff;--fg:#1f2328;--mut:#656d76;--line:#d0d7de;--st:${color}}
-@media (prefers-color-scheme:dark){:root{--bg:#161b22;--fg:#e6edf3;--mut:#8b949e;--line:#30363d}}
+${theme === 'dark' ? `:root{${DARK_VARS}}` : theme === 'auto' ? `@media (prefers-color-scheme:dark){:root{${DARK_VARS}}}` : ''}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
 a{display:block;color:inherit;text-decoration:none;padding:12px 14px;border:1px solid var(--line);border-left:4px solid var(--st);border-radius:8px}

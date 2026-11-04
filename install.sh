@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="6e1adeff103b"
+COREGSM_BUILD="6530016ada0e"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.0.95"
+COREGSM_VERSION="1.0.96"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -23833,7 +23833,7 @@ __COREGSM_EOF__
  */
 import type { Express, Request, Response } from 'express';
 import { publicPanel } from '../security/auth.js';
-import { badgeSvg, notFoundBadge, widgetHtml } from '../profile/badgeLogic.js';
+import { badgeSvg, notFoundBadge, widgetHtml, widgetTheme } from '../profile/badgeLogic.js';
 import { getServer } from '../monitoring/serverData.js';
 import { baseOf, brand, publicBase } from '../admin/site.js';
 import { param } from '../http.js';
@@ -23877,7 +23877,7 @@ export function registerWidgets(app: Express): void {
     }
     const base = publicBase() ?? baseOf(req);
     res.set('Cache-Control', WIDGET_CACHE);
-    res.send(widgetHtml({ ...sv, name: publicName(sv), url: `${base}/servers/${sv.id}`, brand: brand().name }));
+    res.send(widgetHtml({ ...sv, name: publicName(sv), url: `${base}/servers/${sv.id}`, brand: brand().name }, widgetTheme(req.query.theme)));
   });
 }
 __COREGSM_EOF__
@@ -29251,7 +29251,12 @@ export interface WidgetData extends BadgeServer {
 const STATE_LABEL: Record<BadgeState, string> = { online: 'В сети', full: 'Сервер полон', offline: 'Не в сети', unknown: 'Нет данных' };
 
 /** a small self-contained page for an <iframe>: no scripts, no external resources, light and dark */
-export function widgetHtml(d: WidgetData): string {
+export type WidgetTheme = 'auto' | 'light' | 'dark';
+/** ?theme= of the widget: light or dark forces the palette, anything else follows the visitor's system setting */
+export const widgetTheme = (v: unknown): WidgetTheme => (v === 'light' || v === 'dark' ? v : 'auto');
+const DARK_VARS = '--bg:#161b22;--fg:#e6edf3;--mut:#8b949e;--line:#30363d';
+
+export function widgetHtml(d: WidgetData, theme: WidgetTheme = 'auto'): string {
   const st = stateOf(d);
   const color = BADGE_COLORS[st];
   const pct = d.maxPlayers > 0 ? Math.min(100, Math.round((d.players / d.maxPlayers) * 100)) : 0;
@@ -29267,7 +29272,7 @@ export function widgetHtml(d: WidgetData): string {
 <title>${escapeXml(d.name)}</title>
 <style>
 :root{--bg:#fff;--fg:#1f2328;--mut:#656d76;--line:#d0d7de;--st:${color}}
-@media (prefers-color-scheme:dark){:root{--bg:#161b22;--fg:#e6edf3;--mut:#8b949e;--line:#30363d}}
+${theme === 'dark' ? `:root{${DARK_VARS}}` : theme === 'auto' ? `@media (prefers-color-scheme:dark){:root{${DARK_VARS}}}` : ''}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
 a{display:block;color:inherit;text-decoration:none;padding:12px 14px;border:1px solid var(--line);border-left:4px solid var(--st);border-radius:8px}
@@ -132150,6 +132155,21 @@ const en: Record<keyof typeof ru, string> = {
   'intg.snip.md': 'Markdown (forums, GitHub, Discord sites)',
   'intg.snip.widget': 'Widget (iframe)',
   'intg.snip.widgetTitle': 'Server widget',
+  'intg.opt.theme': 'Widget look',
+  'intg.opt.auto': 'Follows the visitor system setting',
+  'intg.opt.light': 'Light',
+  'intg.opt.dark': 'Dark',
+  'intg.opt.size': 'Widget size',
+  'intg.opt.sizeS': 'Small (240×120)',
+  'intg.opt.sizeM': 'Medium (320×140)',
+  'intg.opt.sizeL': 'Large (420×170)',
+  'intg.opt.cardStyle': 'Card picture style',
+  'intg.opt.split': 'Split',
+  'intg.opt.strip': 'Strip',
+  'intg.opt.cardTheme': 'Card theme',
+  'intg.snip.cardAlt': 'Server card',
+  'intg.snip.cardHtml': 'Card: HTML',
+  'intg.snip.cardMd': 'Card: Markdown',
   'intg.snip.none.t': 'No servers yet',
   'intg.snip.none.x': 'Add a server and ready-to-paste snippets will appear here.',
   'favpush.title': 'Notifications about favourite servers',
@@ -136149,6 +136169,21 @@ const ru = {
   'intg.snip.md': 'Markdown (форумы, GitHub, Discord-сайты)',
   'intg.snip.widget': 'Виджет (iframe)',
   'intg.snip.widgetTitle': 'Виджет сервера',
+  'intg.opt.theme': 'Оформление виджета',
+  'intg.opt.auto': 'Как у посетителя',
+  'intg.opt.light': 'Светлое',
+  'intg.opt.dark': 'Тёмное',
+  'intg.opt.size': 'Размер виджета',
+  'intg.opt.sizeS': 'Малый (240×120)',
+  'intg.opt.sizeM': 'Средний (320×140)',
+  'intg.opt.sizeL': 'Большой (420×170)',
+  'intg.opt.cardStyle': 'Вид карточки-картинки',
+  'intg.opt.split': 'Разделённая',
+  'intg.opt.strip': 'Полоса',
+  'intg.opt.cardTheme': 'Тема карточки',
+  'intg.snip.cardAlt': 'Карточка сервера',
+  'intg.snip.cardHtml': 'Карточка: HTML',
+  'intg.snip.cardMd': 'Карточка: Markdown',
   'intg.snip.none.t': 'Серверов пока нет',
   'intg.snip.none.x': 'Добавьте сервер, и здесь появятся готовые фрагменты для вставки.',
   'favpush.title': 'Уведомления об избранных серверах',
@@ -140347,7 +140382,7 @@ import { confirmDialog } from '../confirm';
 import { t, useI18n } from '../i18n';
 import { AdminPage, CopyButton, Empty, ErrorLine, Field, LoadError, PageHead, Section, IconServers, SkeletonRows, fmtDateTime, toast, usePoll } from '../ui';
 import { IconKey } from '../icons';
-import { badgeSnippets } from './integrationsLogic';
+import { badgeSnippets, type WidgetSize, type WidgetTheme } from './integrationsLogic';
 
 interface ApiKey {
   id: number;
@@ -140479,11 +140514,17 @@ function KeysSection({ keys, onChanged }: { keys: ApiKey[] | null; onChanged: ()
   );
 }
 
+const WIDGET_PX = { s: { w: 240, h: 120 }, m: { w: 320, h: 140 }, l: { w: 420, h: 170 } } as const;
+
 function SnippetsSection({ servers }: { servers: Server[] }) {
   const [sel, setSel] = useState<number | null>(null);
   const id = sel ?? servers[0]?.id ?? null;
   const s = servers.find((x) => x.id === id);
-  const sn = s ? badgeSnippets(window.location.origin, s.id, s.customName || s.name) : null;
+  const [theme, setTheme] = useState<WidgetTheme>('auto');
+  const [size, setSize] = useState<WidgetSize>('m');
+  const [cardStyle, setCardStyle] = useState<'split' | 'strip'>('split');
+  const [cardTheme, setCardTheme] = useState<'dark' | 'light'>('dark');
+  const sn = s ? badgeSnippets(window.location.origin, s.id, s.customName || s.name, { theme, size, cardStyle, cardTheme }) : null;
   return (
     <Section title={t('intg.snip.title')} description={t('intg.snip.desc')}>
       {!servers.length ? (
@@ -140495,6 +140536,34 @@ function SnippetsSection({ servers }: { servers: Server[] }) {
               {servers.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
             </select>
           </Field>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <Field label={t('intg.opt.theme')}>
+              <select className="input" value={theme} onChange={(e) => setTheme(e.target.value as WidgetTheme)}>
+                <option value="auto">{t('intg.opt.auto')}</option>
+                <option value="light">{t('intg.opt.light')}</option>
+                <option value="dark">{t('intg.opt.dark')}</option>
+              </select>
+            </Field>
+            <Field label={t('intg.opt.size')}>
+              <select className="input" value={size} onChange={(e) => setSize(e.target.value as WidgetSize)}>
+                <option value="s">{t('intg.opt.sizeS')}</option>
+                <option value="m">{t('intg.opt.sizeM')}</option>
+                <option value="l">{t('intg.opt.sizeL')}</option>
+              </select>
+            </Field>
+            <Field label={t('intg.opt.cardStyle')}>
+              <select className="input" value={cardStyle} onChange={(e) => setCardStyle(e.target.value as 'split' | 'strip')}>
+                <option value="split">{t('intg.opt.split')}</option>
+                <option value="strip">{t('intg.opt.strip')}</option>
+              </select>
+            </Field>
+            <Field label={t('intg.opt.cardTheme')}>
+              <select className="input" value={cardTheme} onChange={(e) => setCardTheme(e.target.value as 'dark' | 'light')}>
+                <option value="dark">{t('intg.opt.dark')}</option>
+                <option value="light">{t('intg.opt.light')}</option>
+              </select>
+            </Field>
+          </div>
           {sn && (
             <div className="grid items-start gap-4 md:grid-cols-2">
               <div className="space-y-3">
@@ -140504,8 +140573,15 @@ function SnippetsSection({ servers }: { servers: Server[] }) {
                 <Snippet label="BBCode" text={sn.bbcode} />
               </div>
               <div className="space-y-3">
-                <iframe title={t('intg.snip.widgetTitle')} src={sn.widget} className="block h-36 w-full max-w-xs rounded-2xl border-0" loading="lazy" />
+                <iframe key={sn.widget} title={t('intg.snip.widgetTitle')} src={sn.widget} style={{ width: `min(100%, ${WIDGET_PX[size].w}px)`, height: WIDGET_PX[size].h }} className="block rounded-2xl border-0" loading="lazy" />
                 <Snippet label={t('intg.snip.widget')} text={sn.iframe} />
+              </div>
+              <div className="space-y-3 md:col-span-2">
+                <img key={sn.card} src={sn.card} alt={t('intg.snip.cardAlt')} className="block h-auto max-w-full rounded-2xl" loading="lazy" />
+                <div className="grid gap-3 md:grid-cols-2">
+                  <Snippet label={t('intg.snip.cardHtml')} text={sn.cardHtml} />
+                  <Snippet label={t('intg.snip.cardMd')} text={sn.cardMarkdown} />
+                </div>
               </div>
             </div>
           )}
@@ -150179,7 +150255,7 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/integrationsLogic.test.ts" << '__COREGSM_EOF__'
 import { describe, expect, it } from 'vitest';
-import { badgeSnippets } from './integrationsLogic';
+import { badgeSnippets, WIDGET_SIZES } from './integrationsLogic';
 
 describe('badgeSnippets', () => {
   it('builds the links and escapes the name', () => {
@@ -150190,6 +150266,24 @@ describe('badgeSnippets', () => {
     expect(s.html).toContain('alt="A &quot;b&quot; [c] &lt;d&gt;"');
     expect(s.iframe).toContain('src="https://e.x/widget/servers/7"');
     expect(s.bbcode).toBe('[url=https://e.x/servers/7][img]https://e.x/badge/servers/7.svg[/img][/url]');
+  });
+
+  it('the widget takes the theme and the size of the builder', () => {
+    const d = badgeSnippets('https://e.x', 7, 'S', { theme: 'dark', size: 'l' });
+    expect(d.widget).toBe('https://e.x/widget/servers/7?theme=dark');
+    expect(d.iframe).toContain(`width="${WIDGET_SIZES.l.w}" height="${WIDGET_SIZES.l.h}"`);
+    expect(d.iframe).toContain('src="https://e.x/widget/servers/7?theme=dark"');
+    const auto = badgeSnippets('https://e.x', 7, 'S', { theme: 'auto' });
+    expect(auto.widget).toBe('https://e.x/widget/servers/7');
+    expect(auto.iframe).toContain('width="320" height="140"');
+  });
+
+  it('the picture card carries its style and theme, and the default has no query', () => {
+    expect(badgeSnippets('https://e.x', 7, 'S').card).toBe('https://e.x/api/card/7.png');
+    expect(badgeSnippets('https://e.x', 7, 'S', { cardStyle: 'strip', cardTheme: 'light' }).card).toBe('https://e.x/api/card/7.png?style=strip&theme=light');
+    const c = badgeSnippets('https://e.x', 7, 'A "b"', { cardTheme: 'light' });
+    expect(c.cardHtml).toBe('<a href="https://e.x/servers/7"><img src="https://e.x/api/card/7.png?theme=light" alt="A &quot;b&quot;" style="max-width:100%"></a>');
+    expect(c.cardMarkdown).toBe('[![A "b"](https://e.x/api/card/7.png?theme=light)](https://e.x/servers/7)');
   });
 });
 __COREGSM_EOF__
@@ -150205,25 +150299,47 @@ export interface Snippets {
   html: string;
   bbcode: string;
   iframe: string;
+  /** the picture card (PNG), with its snippets */
+  card: string;
+  cardHtml: string;
+  cardMarkdown: string;
 }
 
 const attr = (s: string) => s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 /** brackets would break a Markdown image text */
 const mdText = (s: string) => s.replace(/[[\]\\]/g, '\\$&').replace(/[\r\n]+/g, ' ');
 
-export function badgeSnippets(origin: string, id: number, name: string): Snippets {
+export type WidgetTheme = 'auto' | 'light' | 'dark';
+export type WidgetSize = 's' | 'm' | 'l';
+export const WIDGET_SIZES: Record<WidgetSize, { w: number; h: number }> = { s: { w: 240, h: 120 }, m: { w: 320, h: 140 }, l: { w: 420, h: 170 } };
+export interface BuilderOpts {
+  /** the widget palette; «auto» follows the visitor's system setting */
+  theme?: WidgetTheme;
+  size?: WidgetSize;
+  /** the picture card of the server (PNG) */
+  cardStyle?: 'split' | 'strip';
+  cardTheme?: 'dark' | 'light';
+}
+
+export function badgeSnippets(origin: string, id: number, name: string, opts: BuilderOpts = {}): Snippets {
   const base = origin.replace(/\/+$/, '');
   const badge = `${base}/badge/servers/${id}.svg`;
   const page = `${base}/servers/${id}`;
-  const widget = `${base}/widget/servers/${id}`;
+  const widget = `${base}/widget/servers/${id}${opts.theme && opts.theme !== 'auto' ? `?theme=${opts.theme}` : ''}`;
+  const { w, h } = WIDGET_SIZES[opts.size ?? 'm'];
+  const cardQuery = [opts.cardStyle === 'strip' ? 'style=strip' : '', opts.cardTheme === 'light' ? 'theme=light' : ''].filter(Boolean).join('&');
+  const card = `${base}/api/card/${id}.png${cardQuery ? `?${cardQuery}` : ''}`;
   return {
+    card,
+    cardHtml: `<a href="${page}"><img src="${card}" alt="${attr(name)}" style="max-width:100%"></a>`,
+    cardMarkdown: `[![${mdText(name)}](${card})](${page})`,
     badge,
     page,
     widget,
     markdown: `[![${mdText(name)}](${badge})](${page})`,
     html: `<a href="${page}"><img src="${badge}" alt="${attr(name)}"></a>`,
     bbcode: `[url=${page}][img]${badge}[/img][/url]`,
-    iframe: `<iframe src="${widget}" width="320" height="140" style="border:0" loading="lazy" title="${attr(name)}"></iframe>`,
+    iframe: `<iframe src="${widget}" width="${w}" height="${h}" style="border:0" loading="lazy" title="${attr(name)}"></iframe>`,
   };
 }
 __COREGSM_EOF__

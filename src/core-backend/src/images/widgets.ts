@@ -8,7 +8,7 @@
  */
 import type { Express, Request, Response } from 'express';
 import { publicPanel } from '../security/auth.js';
-import { badgeSvg, notFoundBadge, widgetHtml } from '../profile/badgeLogic.js';
+import { badgeSvg, notFoundBadge, widgetHtml, widgetTheme } from '../profile/badgeLogic.js';
 import { getServer } from '../monitoring/serverData.js';
 import { baseOf, brand, publicBase } from '../admin/site.js';
 import { param } from '../http.js';
@@ -52,6 +52,6 @@ export function registerWidgets(app: Express): void {
     }
     const base = publicBase() ?? baseOf(req);
     res.set('Cache-Control', WIDGET_CACHE);
-    res.send(widgetHtml({ ...sv, name: publicName(sv), url: `${base}/servers/${sv.id}`, brand: brand().name }));
+    res.send(widgetHtml({ ...sv, name: publicName(sv), url: `${base}/servers/${sv.id}`, brand: brand().name }, widgetTheme(req.query.theme)));
   });
 }

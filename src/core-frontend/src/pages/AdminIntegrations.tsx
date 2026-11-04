@@ -4,7 +4,7 @@ import { confirmDialog } from '../confirm';
 import { t, useI18n } from '../i18n';
 import { AdminPage, CopyButton, Empty, ErrorLine, Field, LoadError, PageHead, Section, IconServers, SkeletonRows, fmtDateTime, toast, usePoll } from '../ui';
 import { IconKey } from '../icons';
-import { badgeSnippets } from './integrationsLogic';
+import { badgeSnippets, type WidgetSize, type WidgetTheme } from './integrationsLogic';
 
 interface ApiKey {
   id: number;
@@ -136,11 +136,17 @@ function KeysSection({ keys, onChanged }: { keys: ApiKey[] | null; onChanged: ()
   );
 }
 
+const WIDGET_PX = { s: { w: 240, h: 120 }, m: { w: 320, h: 140 }, l: { w: 420, h: 170 } } as const;
+
 function SnippetsSection({ servers }: { servers: Server[] }) {
   const [sel, setSel] = useState<number | null>(null);
   const id = sel ?? servers[0]?.id ?? null;
   const s = servers.find((x) => x.id === id);
-  const sn = s ? badgeSnippets(window.location.origin, s.id, s.customName || s.name) : null;
+  const [theme, setTheme] = useState<WidgetTheme>('auto');
+  const [size, setSize] = useState<WidgetSize>('m');
+  const [cardStyle, setCardStyle] = useState<'split' | 'strip'>('split');
+  const [cardTheme, setCardTheme] = useState<'dark' | 'light'>('dark');
+  const sn = s ? badgeSnippets(window.location.origin, s.id, s.customName || s.name, { theme, size, cardStyle, cardTheme }) : null;
   return (
     <Section title={t('intg.snip.title')} description={t('intg.snip.desc')}>
       {!servers.length ? (
@@ -152,6 +158,34 @@ function SnippetsSection({ servers }: { servers: Server[] }) {
               {servers.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
             </select>
           </Field>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <Field label={t('intg.opt.theme')}>
+              <select className="input" value={theme} onChange={(e) => setTheme(e.target.value as WidgetTheme)}>
+                <option value="auto">{t('intg.opt.auto')}</option>
+                <option value="light">{t('intg.opt.light')}</option>
+                <option value="dark">{t('intg.opt.dark')}</option>
+              </select>
+            </Field>
+            <Field label={t('intg.opt.size')}>
+              <select className="input" value={size} onChange={(e) => setSize(e.target.value as WidgetSize)}>
+                <option value="s">{t('intg.opt.sizeS')}</option>
+                <option value="m">{t('intg.opt.sizeM')}</option>
+                <option value="l">{t('intg.opt.sizeL')}</option>
+              </select>
+            </Field>
+            <Field label={t('intg.opt.cardStyle')}>
+              <select className="input" value={cardStyle} onChange={(e) => setCardStyle(e.target.value as 'split' | 'strip')}>
+                <option value="split">{t('intg.opt.split')}</option>
+                <option value="strip">{t('intg.opt.strip')}</option>
+              </select>
+            </Field>
+            <Field label={t('intg.opt.cardTheme')}>
+              <select className="input" value={cardTheme} onChange={(e) => setCardTheme(e.target.value as 'dark' | 'light')}>
+                <option value="dark">{t('intg.opt.dark')}</option>
+                <option value="light">{t('intg.opt.light')}</option>
+              </select>
+            </Field>
+          </div>
           {sn && (
             <div className="grid items-start gap-4 md:grid-cols-2">
               <div className="space-y-3">
@@ -161,8 +195,15 @@ function SnippetsSection({ servers }: { servers: Server[] }) {
                 <Snippet label="BBCode" text={sn.bbcode} />
               </div>
               <div className="space-y-3">
-                <iframe title={t('intg.snip.widgetTitle')} src={sn.widget} className="block h-36 w-full max-w-xs rounded-2xl border-0" loading="lazy" />
+                <iframe key={sn.widget} title={t('intg.snip.widgetTitle')} src={sn.widget} style={{ width: `min(100%, ${WIDGET_PX[size].w}px)`, height: WIDGET_PX[size].h }} className="block rounded-2xl border-0" loading="lazy" />
                 <Snippet label={t('intg.snip.widget')} text={sn.iframe} />
+              </div>
+              <div className="space-y-3 md:col-span-2">
+                <img key={sn.card} src={sn.card} alt={t('intg.snip.cardAlt')} className="block h-auto max-w-full rounded-2xl" loading="lazy" />
+                <div className="grid gap-3 md:grid-cols-2">
+                  <Snippet label={t('intg.snip.cardHtml')} text={sn.cardHtml} />
+                  <Snippet label={t('intg.snip.cardMd')} text={sn.cardMarkdown} />
+                </div>
               </div>
             </div>
           )}

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
 import { clampRateLimit, extractKey, generateKey, hashKey, keyPrefix, looksLikeKey, SlidingWindow } from '../src/security/apiKeyLogic.ts';
-import { badgeSvg, escapeXml, stateOf, valueText, widgetHtml } from '../src/profile/badgeLogic.ts';
+import { badgeSvg, escapeXml, stateOf, valueText, widgetHtml, widgetTheme } from '../src/profile/badgeLogic.ts';
 import { openApiSpec } from '../src/admin/openapi.ts';
 import { setupAdmin, startBackend, type Api } from './harness.ts';
 
@@ -69,6 +69,23 @@ describe('badge and widget', () => {
     assert.ok(!html.includes('<img src=x>'));
     assert.ok(!html.includes('"zz"'));
     assert.ok(!html.includes('<script'));
+  });
+});
+
+describe('widget theme', () => {
+  const w = { name: 'S', hasStatus: true, online: true, players: 1, maxPlayers: 10, game: 'g', map: null, ping: null, url: 'https://e.x/servers/1', brand: 'B' };
+  it('reads ?theme= and falls back to the system setting', () => {
+    assert.equal(widgetTheme('light'), 'light');
+    assert.equal(widgetTheme('dark'), 'dark');
+    for (const v of [undefined, '', 'auto', 'neon', ['dark'], 5]) assert.equal(widgetTheme(v), 'auto');
+  });
+  it('light has no dark colours, dark has them always, auto only behind the media query', () => {
+    const light = widgetHtml(w, 'light');
+    const dark = widgetHtml(w, 'dark');
+    const auto = widgetHtml(w);
+    assert.ok(!light.includes('#161b22') && !light.includes('prefers-color-scheme'));
+    assert.ok(dark.includes(':root{--bg:#161b22') && !dark.includes('prefers-color-scheme'));
+    assert.ok(auto.includes('@media (prefers-color-scheme:dark)') && auto.includes('#161b22'));
   });
 });
 
