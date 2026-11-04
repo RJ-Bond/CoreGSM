@@ -234,6 +234,8 @@
 .pf-tabs { position: sticky; top: 4.75rem; z-index: 20; }
 @media (max-width: 639px) {
   .pf-hero-body { flex-direction: column; align-items: flex-start; }
+  /* in a column the name block must not keep its 14rem basis as a height */
+  .pf-hero-body > .flex-1 { flex: 0 0 auto; width: 100%; }
   .pf-hero-body > .mt-3 { align-self: stretch; justify-content: flex-start; }
   .pf-focus > .btn { width: 100%; justify-content: center; }
   .pf-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }

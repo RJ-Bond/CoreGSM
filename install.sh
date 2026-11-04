@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="5acd735ccd3c"
+COREGSM_BUILD="9c0727ccc4b6"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.6"
+COREGSM_VERSION="1.1.7"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -155325,6 +155325,8 @@ __COREGSM_EOF__
 .pf-tabs { position: sticky; top: 4.75rem; z-index: 20; }
 @media (max-width: 639px) {
   .pf-hero-body { flex-direction: column; align-items: flex-start; }
+  /* in a column the name block must not keep its 14rem basis as a height */
+  .pf-hero-body > .flex-1 { flex: 0 0 auto; width: 100%; }
   .pf-hero-body > .mt-3 { align-self: stretch; justify-content: flex-start; }
   .pf-focus > .btn { width: 100%; justify-content: center; }
   .pf-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
