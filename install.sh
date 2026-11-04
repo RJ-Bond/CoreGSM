@@ -562,6 +562,7 @@ setup_firewall() {
 # ---------- 7. project files ----------
 generate_project() {
   mkdir -p "$APP_DIR"
+  for d in core-backend core-frontend core-bot; do rm -rf "$APP_DIR/$d/src"; done
   mkdir -p "$APP_DIR/core-backend"
   cat > "$APP_DIR/core-backend/Dockerfile" << '__COREGSM_EOF__'
 FROM node:24-bookworm-slim AS build

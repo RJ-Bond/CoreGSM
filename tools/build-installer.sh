@@ -22,6 +22,9 @@ BUILD_ID="$( { cat tools/installer-head.sh tools/coregsm.sh; while IFS= read -r 
 {
   echo 'generate_project() {'
   echo '  mkdir -p "$APP_DIR"'
+  # an update must not leave files behind that the new version no longer has (a deleted page would still be compiled
+  # against translations that are gone): the source folders are written from scratch, nothing else lives in them
+  echo '  for d in core-backend core-frontend core-bot; do rm -rf "$APP_DIR/$d/src"; done'
   while IFS= read -r f; do
     rel="${f#src/}"
     echo "  mkdir -p \"\$APP_DIR/$(dirname "$rel")\""
