@@ -32,6 +32,27 @@ Everything installs with one command: the single `install.sh` script creates the
 
 > The full guide (Discord bot setup, roles, news, proxy, troubleshooting, internals) is in the Russian [README.md](README.md). This page covers the essentials.
 
+## Quick start in 5 minutes
+
+A clean Debian or Ubuntu server, root access, 2 GB of RAM.
+
+1. **Install.** Run on the server:
+   ```bash
+   apt-get update && apt-get install -y curl
+   curl -fsSL --compressed https://raw.githubusercontent.com/RJ-Bond/CoreGSM/refs/heads/main/install.sh -o install.sh
+   bash install.sh
+   ```
+2. **Answer two questions.** Proxy: just press Enter. Domain or IP: the address of the server, for example `192.168.88.152`.
+3. **Wait 5-10 minutes.** At the end the installer prints the panel address and a one-time **setup code**. Write it down.
+4. **Open the panel** at that address (for an IP the browser warns about the self-signed certificate: that is normal), enter the setup code and choose the administrator login and password.
+5. **Add the first server:** «Admin → Servers → Add», the game, the address and the port. A minute later it shows in the list with its status and chart.
+
+The **«Admin → Getting started»** page then leads through the rest: the Discord bot, the channel for messages, the look of the panel.
+
+<p align="center"><img src="docs/screens/admin-start.png" alt="The Getting started page of the admin area" width="80%"></p>
+
+Something wrong? Run `coregsm doctor`.
+
 ## Requirements
 
 - A Linux server (Debian or Ubuntu recommended) with root access, 1 GB RAM or more.
