@@ -238,10 +238,10 @@ export function UpdateCard() {
                 {info?.installedAt ? <dd className={`font-sans font-semibold ${onGrad ? 'text-white/80' : 'text-mute'}`}>{t('upd.since', { date: fmtDate(info.installedAt) })}</dd> : null}
               </div>
               {onGrad && <span aria-hidden className="text-lg font-black text-white/90">→</span>}
-              <div className={`flex flex-wrap items-center gap-x-2 rounded-full px-3.5 py-1.5 ${state === 'available' ? 'bg-white text-ink' : state === 'running' ? 'bg-white/30 ring-1 ring-white/60' : 'bg-soft'}`}>
-                <dt className={state === 'running' ? 'text-white/90' : 'text-mute'}>{t('upd.inRepo')}</dt>
+              <div className={`flex flex-wrap items-center gap-x-2 rounded-full px-3.5 py-1.5 ${state === 'available' ? 'bg-white text-slate-900' : state === 'running' ? 'bg-white/30 ring-1 ring-white/60' : 'bg-soft'}`}>
+                <dt className={state === 'running' ? 'text-white/90' : state === 'available' ? 'text-slate-500' : 'text-mute'}>{t('upd.inRepo')}</dt>
                 <dd className="font-mono">{newText}</dd>
-                {info?.latestAt ? <dd className={`font-sans font-semibold ${state === 'running' ? 'text-white/80' : 'text-mute'}`}>{t('upd.from', { date: fmtDate(info.latestAt) })}</dd> : null}
+                {info?.latestAt ? <dd className={`font-sans font-semibold ${state === 'running' ? 'text-white/80' : state === 'available' ? 'text-slate-500' : 'text-mute'}`}>{t('upd.from', { date: fmtDate(info.latestAt) })}</dd> : null}
               </div>
             </dl>
           </div>

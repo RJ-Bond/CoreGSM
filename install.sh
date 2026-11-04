@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="5c9a02b1192c"
+COREGSM_BUILD="4543f2dbf75e"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.3"
+COREGSM_VERSION="1.1.4"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -150419,10 +150419,10 @@ export function UpdateCard() {
                 {info?.installedAt ? <dd className={`font-sans font-semibold ${onGrad ? 'text-white/80' : 'text-mute'}`}>{t('upd.since', { date: fmtDate(info.installedAt) })}</dd> : null}
               </div>
               {onGrad && <span aria-hidden className="text-lg font-black text-white/90">→</span>}
-              <div className={`flex flex-wrap items-center gap-x-2 rounded-full px-3.5 py-1.5 ${state === 'available' ? 'bg-white text-ink' : state === 'running' ? 'bg-white/30 ring-1 ring-white/60' : 'bg-soft'}`}>
-                <dt className={state === 'running' ? 'text-white/90' : 'text-mute'}>{t('upd.inRepo')}</dt>
+              <div className={`flex flex-wrap items-center gap-x-2 rounded-full px-3.5 py-1.5 ${state === 'available' ? 'bg-white text-slate-900' : state === 'running' ? 'bg-white/30 ring-1 ring-white/60' : 'bg-soft'}`}>
+                <dt className={state === 'running' ? 'text-white/90' : state === 'available' ? 'text-slate-500' : 'text-mute'}>{t('upd.inRepo')}</dt>
                 <dd className="font-mono">{newText}</dd>
-                {info?.latestAt ? <dd className={`font-sans font-semibold ${state === 'running' ? 'text-white/80' : 'text-mute'}`}>{t('upd.from', { date: fmtDate(info.latestAt) })}</dd> : null}
+                {info?.latestAt ? <dd className={`font-sans font-semibold ${state === 'running' ? 'text-white/80' : state === 'available' ? 'text-slate-500' : 'text-mute'}`}>{t('upd.from', { date: fmtDate(info.latestAt) })}</dd> : null}
               </div>
             </dl>
           </div>
