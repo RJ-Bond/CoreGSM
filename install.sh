@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="a2c159613c29"
+COREGSM_BUILD="23160a17507b"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.0.97"
+COREGSM_VERSION="1.0.98"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -14690,7 +14690,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { Readable, Transform } from 'node:stream';
+import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { once } from 'node:events';
 import * as tar from 'tar';
@@ -14698,24 +14698,23 @@ import { z } from 'zod';
 import { DATA_DIR, db, getSetting, setSetting } from '../db.js';
 import { canDecrypt, isEncrypted, isSecretKey } from '../security/secrets.js';
 import { log } from '../logger.js';
-import { s3ObjectUrl, s3Problem, signV4, UNSIGNED_PAYLOAD, type S3Target } from './s3.js';
+import { s3Problem, type S3Target } from './s3.js';
+import { BackupError } from './backupError.js';
+import { decryptFile, encryptFile, MAGIC } from './backupCrypto.js';
+import { lastRemote, lastS3, uploadRemote, uploadS3 } from './backupRemote.js';
+
+// the old import paths keep working
+export { BackupError } from './backupError.js';
+export { decryptFile, encryptFile } from './backupCrypto.js';
+export { lastRemote, lastS3, uploadRemote, uploadS3, type RemoteResult } from './backupRemote.js';
 
 export const BACKUP_DIR = path.join(DATA_DIR, 'backups');
 const PENDING_DIR = path.join(DATA_DIR, 'restore-pending');
 const MAX_UPLOAD = 300 * 1024 * 1024;
 const MAX_UNPACKED = 2 * 1024 * 1024 * 1024;
-const MAGIC = Buffer.from('CGSMENC1');
-const HEADER_LEN = 8 + 16 + 12;
 const NAME_RE = /^coregsm-(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})-(auto|manual)\.tar\.gz(\.enc)?$/;
 const ALLOWED_ENTRY = /^(coregsm\.db|manifest\.json|brand-logo\.(png|jpg|webp)|news|news\/[a-f0-9]{24}\.(png|jpg|gif|webp)|covers|covers\/\d{1,9}(@s)?\.jpg|avatars|avatars\/\d{1,9}\.png|banners|banners\/\d{1,9}\.jpg|gallery|gallery\/\d{1,9}(@s)?\.jpg)$/;
 const DIR_ENTRIES = new Set(['news', 'covers', 'avatars', 'banners', 'gallery']);
-
-/** user-facing error (message is shown in the panel) */
-export class BackupError extends Error {
-  constructor(message: string, public status = 400) {
-    super(message);
-  }
-}
 
 // ---------- settings ----------
 export type Schedule = 'off' | 'daily' | 'weekly';
@@ -14752,72 +14751,6 @@ export function maskUrl(u: string | null): string | null {
   } catch {
     return '***';
   }
-}
-
-// ---------- encryption ----------
-const scrypt = (pass: string, salt: Buffer): Promise<Buffer> =>
-  new Promise((resolve, reject) => crypto.scrypt(pass, salt, 32, { N: 32768, r: 8, p: 1, maxmem: 128 * 1024 * 1024 }, (e, k) => (e ? reject(e) : resolve(k))));
-
-export async function encryptFile(src: string, dst: string, pass: string): Promise<void> {
-  const salt = crypto.randomBytes(16);
-  const iv = crypto.randomBytes(12);
-  const header = Buffer.concat([MAGIC, salt, iv]);
-  const cipher = crypto.createCipheriv('aes-256-gcm', await scrypt(pass, salt), iv);
-  cipher.setAAD(header);
-  const out = fs.createWriteStream(dst, { mode: 0o600 });
-  const done = new Promise<void>((res, rej) => {
-    out.on('finish', res);
-    out.on('error', rej);
-  });
-  // a failure before `await done` must not become an unhandled rejection
-  done.catch(() => undefined);
-  out.write(header);
-  for await (const chunk of fs.createReadStream(src)) {
-    const c = cipher.update(chunk as Buffer);
-    if (c.length && !out.write(c)) await once(out, 'drain');
-  }
-  out.write(cipher.final());
-  out.end(cipher.getAuthTag());
-  await done;
-}
-
-export async function decryptFile(src: string, dst: string, pass: string): Promise<void> {
-  const size = fs.statSync(src).size;
-  if (size < HEADER_LEN + 16) throw new BackupError('Файл повреждён');
-  const fd = fs.openSync(src, 'r');
-  const header = Buffer.alloc(HEADER_LEN);
-  const tag = Buffer.alloc(16);
-  try {
-    fs.readSync(fd, header, 0, HEADER_LEN, 0);
-    fs.readSync(fd, tag, 0, 16, size - 16);
-  } finally {
-    fs.closeSync(fd);
-  }
-  if (!header.subarray(0, 8).equals(MAGIC)) throw new BackupError('Это не зашифрованная копия CoreGSM');
-  const key = await scrypt(pass, header.subarray(8, 24));
-  const decipher = crypto.createDecipheriv('aes-256-gcm', key, header.subarray(24, 36));
-  decipher.setAAD(header);
-  decipher.setAuthTag(tag);
-  const out = fs.createWriteStream(dst, { mode: 0o600 });
-  const done = new Promise<void>((res, rej) => {
-    out.on('finish', res);
-    out.on('error', rej);
-  });
-  // a failure before `await done` must not become an unhandled rejection
-  done.catch(() => undefined);
-  try {
-    if (size - 16 > HEADER_LEN) {
-      for await (const chunk of fs.createReadStream(src, { start: HEADER_LEN, end: size - 17 })) {
-        const c = decipher.update(chunk as Buffer);
-        if (c.length && !out.write(c)) await once(out, 'drain');
-      }
-    }
-    out.end(decipher.final());
-  } catch {
-    out.destroy();
-    throw new BackupError('Неверный пароль шифрования или файл повреждён');
-  }
-  await done;
 }
 
 // ---------- names, listing ----------
@@ -14961,106 +14894,6 @@ export async function createStoredBackup(kind: 'auto' | 'manual'): Promise<Backu
   } finally {
     busy = false;
   }
-}
-
-// ---------- off-host copy ----------
-export interface RemoteResult {
-  at: number;
-  ok: boolean;
-  error: string | null;
-}
-export const lastRemote = (): RemoteResult | null => {
-  try {
-    const v = JSON.parse(getSetting('backup_last_remote') ?? 'null');
-    return v && typeof v.at === 'number' ? (v as RemoteResult) : null;
-  } catch {
-    return null;
-  }
-};
-
-/** HTTP PUT of the archive. If the URL ends with "/" the file name is appended. Never throws. */
-export async function uploadRemote(file: string, name: string, url: string): Promise<RemoteResult> {
-  let result: RemoteResult;
-  try {
-    const u = new URL(url);
-    if (u.protocol !== 'https:') throw new Error('адрес должен начинаться с https://');
-    const headers: Record<string, string> = { 'content-type': 'application/octet-stream', 'content-length': String(fs.statSync(file).size), 'user-agent': 'CoreGSM' };
-    if (u.username || u.password) {
-      headers.authorization = `Basic ${Buffer.from(`${decodeURIComponent(u.username)}:${decodeURIComponent(u.password)}`).toString('base64')}`;
-      u.username = '';
-      u.password = '';
-    }
-    if (u.pathname.endsWith('/')) u.pathname += name;
-    const r = await fetch(u, {
-      method: 'PUT',
-      headers,
-      body: Readable.toWeb(fs.createReadStream(file)) as unknown as BodyInit,
-      // streaming request bodies need this flag in Node's fetch
-      ...({ duplex: 'half' } as object),
-      signal: AbortSignal.timeout(15 * 60_000),
-    });
-    if (!r.ok) throw new Error(`сервер ответил HTTP ${r.status}`);
-    result = { at: Date.now(), ok: true, error: null };
-  } catch (e) {
-    const err = e as Error & { cause?: { message?: string } };
-    result = { at: Date.now(), ok: false, error: `${err.message}${err.cause?.message ? ` (${err.cause.message})` : ''}`.slice(0, 300) };
-    log.error('backup upload failed:', result.error);
-  }
-  try {
-    setSetting('backup_last_remote', JSON.stringify(result));
-  } catch (err) {
-    log.warn('backup: could not store the upload result:', (err as Error).message);
-  }
-  return result;
-}
-
-export const lastS3 = (): RemoteResult | null => {
-  try {
-    const v = JSON.parse(getSetting('backup_last_s3') ?? 'null');
-    return v && typeof v.at === 'number' ? (v as RemoteResult) : null;
-  } catch {
-    return null;
-  }
-};
-
-/** PUT of the archive (or of a small file) to an S3-compatible storage, signed with SigV4. Never throws. */
-export async function uploadS3(file: string, name: string, t: S3Target, opts: { remember?: boolean } = {}): Promise<RemoteResult> {
-  let result: RemoteResult;
-  try {
-    const bad = s3Problem(t);
-    if (bad) throw new Error(bad);
-    const size = fs.statSync(file).size;
-    const url = s3ObjectUrl(t, name);
-    const headers = signV4({
-      method: 'PUT', url, headers: { 'content-type': 'application/octet-stream', 'content-length': String(size) },
-      payloadHash: UNSIGNED_PAYLOAD, region: t.region, accessKey: t.accessKey, secretKey: t.secretKey,
-    });
-    delete headers.host;
-    const r = await fetch(url, {
-      method: 'PUT',
-      headers: { ...headers, 'user-agent': 'CoreGSM' },
-      body: Readable.toWeb(fs.createReadStream(file)) as unknown as BodyInit,
-      ...({ duplex: 'half' } as object),
-      signal: AbortSignal.timeout(15 * 60_000),
-    });
-    if (!r.ok) {
-      const body = (await r.text().catch(() => '')).match(/<Message>([^<]{1,150})<\/Message>/)?.[1];
-      throw new Error(`хранилище ответило HTTP ${r.status}${body ? `: ${body}` : ''}`);
-    }
-    result = { at: Date.now(), ok: true, error: null };
-  } catch (e) {
-    const err = e as Error & { cause?: { message?: string } };
-    result = { at: Date.now(), ok: false, error: `${err.message}${err.cause?.message ? ` (${err.cause.message})` : ''}`.slice(0, 300) };
-    log.error('backup S3 upload failed:', result.error);
-  }
-  if (opts.remember !== false) {
-    try {
-      setSetting('backup_last_s3', JSON.stringify(result));
-    } catch (err) {
-      log.warn('backup: could not store the S3 result:', (err as Error).message);
-    }
-  }
-  return result;
 }
 
 // ---------- scheduler ----------
@@ -15544,6 +15377,202 @@ export function registerBackups({ app, admin }: { app: Express; admin: RequestHa
       restartSoon();
     }),
   );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/admin"
+  cat > "$APP_DIR/core-backend/src/admin/backupCrypto.ts" << '__COREGSM_EOF__'
+/**
+ * Encryption of the backup archives (AES-256-GCM, key from a passphrase with scrypt). Layout of an encrypted archive
+ * (.tar.gz.enc): see the description at the top of backup.ts.
+ */
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import { once } from 'node:events';
+import { BackupError } from './backupError.js';
+
+export const MAGIC = Buffer.from('CGSMENC1');
+export const HEADER_LEN = 8 + 16 + 12;
+
+const scrypt = (pass: string, salt: Buffer): Promise<Buffer> =>
+  new Promise((resolve, reject) => crypto.scrypt(pass, salt, 32, { N: 32768, r: 8, p: 1, maxmem: 128 * 1024 * 1024 }, (e, k) => (e ? reject(e) : resolve(k))));
+
+export async function encryptFile(src: string, dst: string, pass: string): Promise<void> {
+  const salt = crypto.randomBytes(16);
+  const iv = crypto.randomBytes(12);
+  const header = Buffer.concat([MAGIC, salt, iv]);
+  const cipher = crypto.createCipheriv('aes-256-gcm', await scrypt(pass, salt), iv);
+  cipher.setAAD(header);
+  const out = fs.createWriteStream(dst, { mode: 0o600 });
+  const done = new Promise<void>((res, rej) => {
+    out.on('finish', res);
+    out.on('error', rej);
+  });
+  // a failure before `await done` must not become an unhandled rejection
+  done.catch(() => undefined);
+  out.write(header);
+  for await (const chunk of fs.createReadStream(src)) {
+    const c = cipher.update(chunk as Buffer);
+    if (c.length && !out.write(c)) await once(out, 'drain');
+  }
+  out.write(cipher.final());
+  out.end(cipher.getAuthTag());
+  await done;
+}
+
+export async function decryptFile(src: string, dst: string, pass: string): Promise<void> {
+  const size = fs.statSync(src).size;
+  if (size < HEADER_LEN + 16) throw new BackupError('Файл повреждён');
+  const fd = fs.openSync(src, 'r');
+  const header = Buffer.alloc(HEADER_LEN);
+  const tag = Buffer.alloc(16);
+  try {
+    fs.readSync(fd, header, 0, HEADER_LEN, 0);
+    fs.readSync(fd, tag, 0, 16, size - 16);
+  } finally {
+    fs.closeSync(fd);
+  }
+  if (!header.subarray(0, 8).equals(MAGIC)) throw new BackupError('Это не зашифрованная копия CoreGSM');
+  const key = await scrypt(pass, header.subarray(8, 24));
+  const decipher = crypto.createDecipheriv('aes-256-gcm', key, header.subarray(24, 36));
+  decipher.setAAD(header);
+  decipher.setAuthTag(tag);
+  const out = fs.createWriteStream(dst, { mode: 0o600 });
+  const done = new Promise<void>((res, rej) => {
+    out.on('finish', res);
+    out.on('error', rej);
+  });
+  // a failure before `await done` must not become an unhandled rejection
+  done.catch(() => undefined);
+  try {
+    if (size - 16 > HEADER_LEN) {
+      for await (const chunk of fs.createReadStream(src, { start: HEADER_LEN, end: size - 17 })) {
+        const c = decipher.update(chunk as Buffer);
+        if (c.length && !out.write(c)) await once(out, 'drain');
+      }
+    }
+    out.end(decipher.final());
+  } catch {
+    out.destroy();
+    throw new BackupError('Неверный пароль шифрования или файл повреждён');
+  }
+  await done;
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/admin"
+  cat > "$APP_DIR/core-backend/src/admin/backupError.ts" << '__COREGSM_EOF__'
+/** user-facing error (message is shown in the panel) */
+export class BackupError extends Error {
+  constructor(message: string, public status = 400) {
+    super(message);
+  }
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/admin"
+  cat > "$APP_DIR/core-backend/src/admin/backupRemote.ts" << '__COREGSM_EOF__'
+/** Off-host copies of the backups: a PUT to a URL and an S3-compatible bucket, and the result of the last attempt. */
+import fs from 'node:fs';
+import { Readable } from 'node:stream';
+import { getSetting, setSetting } from '../db.js';
+import { log } from '../logger.js';
+import { s3ObjectUrl, s3Problem, signV4, UNSIGNED_PAYLOAD, type S3Target } from './s3.js';
+
+export interface RemoteResult {
+  at: number;
+  ok: boolean;
+  error: string | null;
+}
+export const lastRemote = (): RemoteResult | null => {
+  try {
+    const v = JSON.parse(getSetting('backup_last_remote') ?? 'null');
+    return v && typeof v.at === 'number' ? (v as RemoteResult) : null;
+  } catch {
+    return null;
+  }
+};
+
+/** HTTP PUT of the archive. If the URL ends with "/" the file name is appended. Never throws. */
+export async function uploadRemote(file: string, name: string, url: string): Promise<RemoteResult> {
+  let result: RemoteResult;
+  try {
+    const u = new URL(url);
+    if (u.protocol !== 'https:') throw new Error('адрес должен начинаться с https://');
+    const headers: Record<string, string> = { 'content-type': 'application/octet-stream', 'content-length': String(fs.statSync(file).size), 'user-agent': 'CoreGSM' };
+    if (u.username || u.password) {
+      headers.authorization = `Basic ${Buffer.from(`${decodeURIComponent(u.username)}:${decodeURIComponent(u.password)}`).toString('base64')}`;
+      u.username = '';
+      u.password = '';
+    }
+    if (u.pathname.endsWith('/')) u.pathname += name;
+    const r = await fetch(u, {
+      method: 'PUT',
+      headers,
+      body: Readable.toWeb(fs.createReadStream(file)) as unknown as BodyInit,
+      // streaming request bodies need this flag in Node's fetch
+      ...({ duplex: 'half' } as object),
+      signal: AbortSignal.timeout(15 * 60_000),
+    });
+    if (!r.ok) throw new Error(`сервер ответил HTTP ${r.status}`);
+    result = { at: Date.now(), ok: true, error: null };
+  } catch (e) {
+    const err = e as Error & { cause?: { message?: string } };
+    result = { at: Date.now(), ok: false, error: `${err.message}${err.cause?.message ? ` (${err.cause.message})` : ''}`.slice(0, 300) };
+    log.error('backup upload failed:', result.error);
+  }
+  try {
+    setSetting('backup_last_remote', JSON.stringify(result));
+  } catch (err) {
+    log.warn('backup: could not store the upload result:', (err as Error).message);
+  }
+  return result;
+}
+
+export const lastS3 = (): RemoteResult | null => {
+  try {
+    const v = JSON.parse(getSetting('backup_last_s3') ?? 'null');
+    return v && typeof v.at === 'number' ? (v as RemoteResult) : null;
+  } catch {
+    return null;
+  }
+};
+
+/** PUT of the archive (or of a small file) to an S3-compatible storage, signed with SigV4. Never throws. */
+export async function uploadS3(file: string, name: string, t: S3Target, opts: { remember?: boolean } = {}): Promise<RemoteResult> {
+  let result: RemoteResult;
+  try {
+    const bad = s3Problem(t);
+    if (bad) throw new Error(bad);
+    const size = fs.statSync(file).size;
+    const url = s3ObjectUrl(t, name);
+    const headers = signV4({
+      method: 'PUT', url, headers: { 'content-type': 'application/octet-stream', 'content-length': String(size) },
+      payloadHash: UNSIGNED_PAYLOAD, region: t.region, accessKey: t.accessKey, secretKey: t.secretKey,
+    });
+    delete headers.host;
+    const r = await fetch(url, {
+      method: 'PUT',
+      headers: { ...headers, 'user-agent': 'CoreGSM' },
+      body: Readable.toWeb(fs.createReadStream(file)) as unknown as BodyInit,
+      ...({ duplex: 'half' } as object),
+      signal: AbortSignal.timeout(15 * 60_000),
+    });
+    if (!r.ok) {
+      const body = (await r.text().catch(() => '')).match(/<Message>([^<]{1,150})<\/Message>/)?.[1];
+      throw new Error(`хранилище ответило HTTP ${r.status}${body ? `: ${body}` : ''}`);
+    }
+    result = { at: Date.now(), ok: true, error: null };
+  } catch (e) {
+    const err = e as Error & { cause?: { message?: string } };
+    result = { at: Date.now(), ok: false, error: `${err.message}${err.cause?.message ? ` (${err.cause.message})` : ''}`.slice(0, 300) };
+    log.error('backup S3 upload failed:', result.error);
+  }
+  if (opts.remember !== false) {
+    try {
+      setSetting('backup_last_s3', JSON.stringify(result));
+    } catch (err) {
+      log.warn('backup: could not store the S3 result:', (err as Error).message);
+    }
+  }
+  return result;
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/admin"
