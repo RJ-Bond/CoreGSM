@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="22654cd07332"
+COREGSM_BUILD="5c9a02b1192c"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.2"
+COREGSM_VERSION="1.1.3"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -37952,17 +37952,17 @@ __COREGSM_EOF__
 {
   "eslint(no-shadow)": 44,
   "eslint(no-underscore-dangle)": 5,
-  "jsx-a11y(click-events-have-key-events)": 11,
+  "jsx-a11y(click-events-have-key-events)": 8,
   "jsx-a11y(no-autofocus)": 12,
   "jsx-a11y(no-interactive-element-to-noninteractive-role)": 1,
-  "jsx-a11y(no-noninteractive-element-interactions)": 12,
+  "jsx-a11y(no-noninteractive-element-interactions)": 10,
   "jsx-a11y(no-noninteractive-element-to-interactive-role)": 6,
   "jsx-a11y(no-noninteractive-tabindex)": 2,
   "jsx-a11y(no-static-element-interactions)": 5,
   "jsx-a11y(role-has-required-aria-props)": 1,
   "jsx-a11y(role-supports-aria-props)": 1,
   "react-hooks(exhaustive-deps)": 12,
-  "react(exhaustive-effect-dependencies)": 50,
+  "react(exhaustive-effect-dependencies)": 49,
   "react(iframe-missing-sandbox)": 1,
   "react(immutability)": 2,
   "react(memo-dependencies)": 3
@@ -130739,6 +130739,9 @@ html[data-motion='reduce'] .upd-step.is-active .upd-step-line::after { animation
 /* ghost buttons on the update hero: light glass instead of dark */
 .update-hero .btn-ghost-on-grad { background: rgb(255 255 255 / .2); box-shadow: inset 0 0 0 1px rgb(255 255 255 / .38); }
 .update-hero .btn-ghost-on-grad:hover { background: rgb(255 255 255 / .3); }
+/* the close button of the update banner: a round chip with a 36px hit area that stays readable on the gradient */
+.ub-close { display: inline-grid; place-items: center; width: 36px; height: 36px; flex: none; border-radius: 50%; color: #fff; background: rgb(255 255 255 / .18); transition: background .15s; }
+.ub-close:hover { background: rgb(255 255 255 / .32); }
 
 /* compact icon actions in admin rows: .row-act, styles/buttons.css */
 
@@ -132046,6 +132049,9 @@ const en: Record<keyof typeof ru, string> = {
   'adm.upd.failedHint': 'Details are on the updates page.',
   'adm.upd.available': 'A panel update is available',
   'adm.upd.build': 'The new build',
+  'adm.upd.version': 'Version {v} is ready to install',
+  'adm.upd.now': 'now {v}',
+  'adm.upd.notes': 'See what changed',
   'adm.upd.ready': 'is ready to install.',
   'adm.more': 'Details',
   'adm.open': 'Open',
@@ -136010,6 +136016,9 @@ const ru = {
   'adm.upd.failedHint': 'Подробности на странице обновлений.',
   'adm.upd.available': 'Доступно обновление панели',
   'adm.upd.build': 'Новая сборка',
+  'adm.upd.version': 'Версия {v} готова к установке',
+  'adm.upd.now': 'сейчас {v}',
+  'adm.upd.notes': 'Что нового',
   'adm.upd.ready': 'готова к установке.',
   'adm.more': 'Подробнее',
   'adm.open': 'Открыть',
@@ -139164,6 +139173,7 @@ export function useSubscriptions(enabled: boolean): { list: Subscription[] | nul
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/Admin.tsx" << '__COREGSM_EOF__'
+import { versionText } from './settings/updateLogic';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { api, type Binding, type CertInfo, type Server, type ServerInput, type StatusInfo, type UpdateInfo, type UserRow } from '../api';
 import { useAuth } from '../auth';
@@ -139497,10 +139507,11 @@ function UpdateBanner() {
   if (!running && info && !info.available) return null;
   if (hidden && !running && !failed) return null;
   const pct = typeof info?.job?.progress === "number" ? Math.max(0, Math.min(100, Math.round(info.job.progress))) : null;
-  const latest = info?.latest ?? null;
+  const newVer = versionText(info?.latestLabel, info?.latest);
+  const curVer = versionText(info?.currentLabel, info?.current);
   return (
     <div className="update-hero relative flex flex-wrap items-center gap-x-4 gap-y-2 overflow-hidden rounded-ui-xl px-5 py-3.5 text-white" role="status">
-      <span aria-hidden className="pointer-events-none absolute -right-8 -top-10 h-32 w-32 rounded-full bg-white/15" />
+      <span aria-hidden className="pointer-events-none absolute -right-8 -top-10 h-32 w-32 rounded-full bg-white/10" />
       <span aria-hidden className="relative grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-white/20">
         {running ? <IconRefresh spinning /> : <IconArrowUp className="update-bob" />}
       </span>
@@ -139519,13 +139530,17 @@ function UpdateBanner() {
         ) : (
           <>
             <div className="font-extrabold leading-tight">{t('adm.upd.available')}</div>
-            <div className="text-sm font-semibold text-white/90">{t('adm.upd.build')} {latest ? <span className="font-mono">{latest.slice(0, 7)}</span> : ""} {t('adm.upd.ready')}</div>
+            <div className="text-sm font-semibold text-white/90">
+              {t('adm.upd.version', { v: newVer })}
+              <span className="text-white/75"> · {t('adm.upd.now', { v: curVer })}</span>
+            </div>
           </>
         )}
       </div>
-      <a href="/admin/settings/updates" className="btn-on-grad btn-sm relative">{running ? t('adm.more') : failed ? t('adm.open') : t('adm.update')}</a>
+      {!running && !failed && <a href="/admin/settings/updates#update-changes" className="btn-ghost-on-grad btn-sm relative max-sm:hidden">{t('adm.upd.notes')}</a>}
+      <a href="/admin/settings/updates" className="btn-on-grad relative">{running ? t('adm.more') : failed ? t('adm.open') : t('adm.update')}</a>
       {!running && !failed && (
-        <button type="button" className="btn-icon-ghost btn-icon-sm relative text-white" aria-label={t('adm.stack.hide')} title={t('adm.stack.hide')} onClick={() => { try { sessionStorage.setItem('coregsm_update_banner_hidden', '1'); } catch { /* not remembered */ } setHidden(true); }}>
+        <button type="button" className="ub-close relative" aria-label={t('adm.stack.hide')} title={t('adm.stack.hide')} onClick={() => { try { sessionStorage.setItem('coregsm_update_banner_hidden', '1'); } catch { /* not remembered */ } setHidden(true); }}>
           <IconClose size={14} />
         </button>
       )}

@@ -1,3 +1,4 @@
+import { versionText } from './settings/updateLogic';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { api, type Binding, type CertInfo, type Server, type ServerInput, type StatusInfo, type UpdateInfo, type UserRow } from '../api';
 import { useAuth } from '../auth';
@@ -331,10 +332,11 @@ function UpdateBanner() {
   if (!running && info && !info.available) return null;
   if (hidden && !running && !failed) return null;
   const pct = typeof info?.job?.progress === "number" ? Math.max(0, Math.min(100, Math.round(info.job.progress))) : null;
-  const latest = info?.latest ?? null;
+  const newVer = versionText(info?.latestLabel, info?.latest);
+  const curVer = versionText(info?.currentLabel, info?.current);
   return (
     <div className="update-hero relative flex flex-wrap items-center gap-x-4 gap-y-2 overflow-hidden rounded-ui-xl px-5 py-3.5 text-white" role="status">
-      <span aria-hidden className="pointer-events-none absolute -right-8 -top-10 h-32 w-32 rounded-full bg-white/15" />
+      <span aria-hidden className="pointer-events-none absolute -right-8 -top-10 h-32 w-32 rounded-full bg-white/10" />
       <span aria-hidden className="relative grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-white/20">
         {running ? <IconRefresh spinning /> : <IconArrowUp className="update-bob" />}
       </span>
@@ -353,13 +355,17 @@ function UpdateBanner() {
         ) : (
           <>
             <div className="font-extrabold leading-tight">{t('adm.upd.available')}</div>
-            <div className="text-sm font-semibold text-white/90">{t('adm.upd.build')} {latest ? <span className="font-mono">{latest.slice(0, 7)}</span> : ""} {t('adm.upd.ready')}</div>
+            <div className="text-sm font-semibold text-white/90">
+              {t('adm.upd.version', { v: newVer })}
+              <span className="text-white/75"> · {t('adm.upd.now', { v: curVer })}</span>
+            </div>
           </>
         )}
       </div>
-      <a href="/admin/settings/updates" className="btn-on-grad btn-sm relative">{running ? t('adm.more') : failed ? t('adm.open') : t('adm.update')}</a>
+      {!running && !failed && <a href="/admin/settings/updates#update-changes" className="btn-ghost-on-grad btn-sm relative max-sm:hidden">{t('adm.upd.notes')}</a>}
+      <a href="/admin/settings/updates" className="btn-on-grad relative">{running ? t('adm.more') : failed ? t('adm.open') : t('adm.update')}</a>
       {!running && !failed && (
-        <button type="button" className="btn-icon-ghost btn-icon-sm relative text-white" aria-label={t('adm.stack.hide')} title={t('adm.stack.hide')} onClick={() => { try { sessionStorage.setItem('coregsm_update_banner_hidden', '1'); } catch { /* not remembered */ } setHidden(true); }}>
+        <button type="button" className="ub-close relative" aria-label={t('adm.stack.hide')} title={t('adm.stack.hide')} onClick={() => { try { sessionStorage.setItem('coregsm_update_banner_hidden', '1'); } catch { /* not remembered */ } setHidden(true); }}>
           <IconClose size={14} />
         </button>
       )}
