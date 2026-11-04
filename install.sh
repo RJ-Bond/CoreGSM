@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="fe8307f75f0f"
+COREGSM_BUILD="6e1adeff103b"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.0.94"
+COREGSM_VERSION="1.0.95"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -126849,7 +126849,7 @@ export function FeedItem({ f }: { f: Community['feed'][number] }) {
         <span className="cm-ava-game"><GameAvatar game={f.game} size={16} /></span>
       </span>
       <span className="min-w-0 flex-1">
-        <span className="block truncate text-sm">
+        <span className="block line-clamp-2 break-words text-sm">
           <a href={`/player/${encodeURIComponent(f.name)}`} className="font-extrabold hover:text-link">{f.name}</a>
           <span className="text-mute">{t('cm.joined')}</span>
           <a href={`/servers/${f.serverId}`} className="font-bold hover:text-link">{f.serverName}</a>
@@ -133461,6 +133461,11 @@ const en: Record<keyof typeof ru, string> = {
   'upd.step.snapshot': 'Data copy',
   'upd.step.install': 'Install',
   'upd.step.health': 'Start check',
+  'upd.sum.t': 'What changes',
+  'upd.sum.versions': '{n} version|{n} versions',
+  'upd.sum.new': 'new: {n}',
+  'upd.sum.fixed': 'fixes: {n}',
+  'upd.sum.other': 'other: {n}',
   'upd.sub.download': 'Downloading version {v}',
   'upd.sub.snapshot': 'Copying the data in case of a rollback',
   'upd.sub.install': 'Installing version {v}',
@@ -137455,6 +137460,11 @@ const ru = {
   'upd.step.snapshot': 'Копия данных',
   'upd.step.install': 'Установка',
   'upd.step.health': 'Проверка запуска',
+  'upd.sum.t': 'Что изменится',
+  'upd.sum.versions': '{n} версия|{n} версии|{n} версий',
+  'upd.sum.new': 'нового: {n}',
+  'upd.sum.fixed': 'исправлений: {n}',
+  'upd.sum.other': 'прочего: {n}',
   'upd.sub.download': 'Скачиваю версию {v}',
   'upd.sub.snapshot': 'Копирую данные на случай отката',
   'upd.sub.install': 'Устанавливаю версию {v}',
@@ -142629,7 +142639,7 @@ function TopBlock({ c, mine }: { c: Community; mine: string }) {
       <span className="min-w-0 flex-1">
         <span className="flex items-center gap-2"><a href={playerHref(p.name)} className="truncate font-extrabold hover:text-link">{p.name}</a><Move p={p} i={i} period={period} /></span>
         <span className="an-top-bar"><span style={{ width: `${(p.hours / maxH) * 100}%`, background: 'rgb(var(--brand))' }} /></span>
-        <span className="mt-1 block truncate text-xs font-bold text-mute">{p.servers === 1 && srvName(p.serverId) ? srvName(p.serverId) : `${p.servers} ${t('cm.word.servers', { n: p.servers })}`}</span>
+        <span className="mt-1 block line-clamp-2 break-words text-xs font-bold text-mute">{p.servers === 1 && srvName(p.serverId) ? srvName(p.serverId) : `${p.servers} ${t('cm.word.servers', { n: p.servers })}`}</span>
       </span>
       <span className="shrink-0 text-right font-extrabold tabular-nums">{t('cm.h', { n: num(p.hours) })}</span>
     </li>
@@ -142778,7 +142788,7 @@ function ServersBlock({ servers }: { servers: Community['servers'] }) {
               <a href={`/servers/${s.id}`} className={`cm-srv ${s.online ? '' : 'is-off'}`}>
                 <GameAvatar game={s.game} size={36} />
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate font-extrabold">{s.name}</span>
+                  <span className="block line-clamp-2 break-words font-extrabold leading-tight">{s.name}</span>
                   <span className="cm-srv-bar"><span style={{ width: `${(s.players / maxP) * 100}%` }} /></span>
                 </span>
                 <span className="cm-srv-spark max-sm:hidden">{s.online ? <MiniSpark serverId={s.id} color={gameColor(s.game)} /> : null}</span>
@@ -148267,7 +148277,7 @@ function PhoneRow({ s, idx, fav, onFav, onOpen, select }: { rx: Reactions; s: Se
       {select?.on && <CardCheck s={s} select={select} className="left-1 top-1" />}
       <GameAvatar game={s.game} size={40} vtId={s.id} />
       <div className="srv-row-main">
-        <h3 className="truncate text-fs-base font-extrabold leading-tight" title={s.name}>
+        <h3 className="text-fs-base font-extrabold leading-tight" title={s.name}>
           <a href={`/servers/${s.id}`} onClick={linkClick(s, select)}>{s.name}</a>
         </h3>
         {s.online ? (
@@ -148314,7 +148324,7 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince }
       </div>
 
       <div className="px-1.5">
-        <h3 className="srv-name truncate text-fs-lg font-extrabold leading-tight" title={s.name}>
+        <h3 className="srv-name text-fs-lg font-extrabold leading-tight" title={s.name}>
           <a href={`/servers/${s.id}`} onClick={linkClick(s, select)} className="hover:text-link">{s.name}</a>
         </h3>
         <div className="srv-chips">{nearFull && <span className="srv-badge-full" title={t('srv.cap.nearFull', { pct: Math.round((s.players / s.maxPlayers) * 100) })}>{t('srv.tile.full')}</span>}<span className="truncate">{gameLabel(s.game)}</span>{s.online && s.map && <span className="srv-chip" title={t('d2.srv.mapTitle', { map: s.map })}><CardMap />{s.map}</span>}{s.version && <span className="srv-chip" title={t('d2.srv.version')}><CardTag />v{s.version}</span>}</div>
@@ -150695,7 +150705,7 @@ import { api, type Changelog, type UpdateInfo, type UpdateNotes, type UpdatePref
 import { confirmDialog } from '../../confirm';
 import { t } from '../../i18n';
 import { ago, ErrorLine, fmtDate, IconArrowUp, IconCheck, usePoll, errText } from '../../ui';
-import { HistoryCard, NotesCard, OptionsCard, PreflightNote, StepList } from './updateParts';
+import { ChangeSummary, HistoryCard, NotesCard, OptionsCard, PreflightNote, StepList } from './updateParts';
 import { offered, versionText } from './updateLogic';
 
 const DISMISS_KEY = 'coregsm_dismissed_update_error';
@@ -150930,6 +150940,7 @@ export function UpdateCard() {
           </div>
         )}
 
+        {state === 'available' && <ChangeSummary current={info?.currentLabel} notes={notes} />}
         {state === 'available' && <PreflightNote pf={pf} current={info?.currentLabel} notes={notes} />}
 
         <div className="relative mt-5 flex flex-wrap items-center gap-2.5">
@@ -151421,7 +151432,7 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages/settings"
   cat > "$APP_DIR/core-frontend/src/pages/settings/updateLogic.test.ts" << '__COREGSM_EOF__'
 import { describe, expect, it } from 'vitest';
-import { cmpVersion, groupCommits, isNewerRelease, preflightWarnings, releasesSince, stepStates, upcomingFlags, versionText } from './updateLogic';
+import { changeSummary, cmpVersion, groupCommits, isNewerRelease, preflightWarnings, releasesSince, stepStates, upcomingFlags, versionText } from './updateLogic';
 import type { ChangelogItem, UpdateNotesRelease } from '../../api';
 
 describe('update versions', () => {
@@ -151498,6 +151509,21 @@ describe('releasesSince', () => {
     expect(releasesSince(list, '1.0.0.11', '1.0.0.11')).toEqual([]);
     expect(releasesSince(list, null, '1.0.0.11')).toEqual([]);
     expect(releasesSince(list, '1.0.0.9', null)).toEqual([]);
+  });
+});
+
+describe('changeSummary', () => {
+  const rel = (version: string, groups: [string, number][]): UpdateNotesRelease => ({
+    version, date: null,
+    groups: groups.map(([title, n]) => ({ title, items: Array.from({ length: n }, (_, i) => ({ text: 't' + i, flags: [] })) })),
+  });
+  it('counts only the releases newer than the running one, by kind of group', () => {
+    const list = [rel('1.0.95', [['✨ Новое', 2], ['🐛 Исправлено', 1]]), rel('1.0.94', [['🔧 Прочее', 3], ['✨ New', 1]]), rel('1.0.90', [['✨ Новое', 9]])];
+    expect(changeSummary(list, '1.0.92')).toEqual({ versions: 2, added: 3, fixed: 1, other: 3 });
+  });
+  it('is empty when nothing is newer, or the running version is unreadable', () => {
+    expect(changeSummary([rel('1.0.90', [['✨ Новое', 1]])], '1.0.92').versions).toBe(0);
+    expect(changeSummary([rel('1.0.95', [['✨ Новое', 1]])], null).versions).toBe(0);
   });
 });
 __COREGSM_EOF__
@@ -151588,6 +151614,22 @@ export function upcomingFlags(releases: UpdateNotesRelease[], current: string | 
   return out;
 }
 
+/** how much is waiting in the releases newer than the running one, by the kind of the group they are listed under */
+export function changeSummary(releases: UpdateNotesRelease[], current: string | null | undefined): { versions: number; added: number; fixed: number; other: number } {
+  const out = { versions: 0, added: 0, fixed: 0, other: 0 };
+  for (const r of releases) {
+    if (!isNewerRelease(r, current)) continue;
+    out.versions++;
+    for (const g of r.groups) {
+      const n = g.items.length;
+      if (/нов|new/i.test(g.title) || /new/i.test(g.titleEn ?? '')) out.added += n;
+      else if (/исправ|fix/i.test(g.title) || /fix/i.test(g.titleEn ?? '')) out.fixed += n;
+      else out.other += n;
+    }
+  }
+  return out;
+}
+
 /** the offered version can be installed unless it was skipped */
 export const offered = (info: UpdateInfo | null): boolean => !!info?.available && !info.skipped;
 __COREGSM_EOF__
@@ -151599,7 +151641,7 @@ import { api, type Changelog, type UpdateHistoryItem, type UpdateInfo, type Upda
 import { t, useI18n, type TKey } from '../../i18n';
 import { ChannelName, ChannelPicker } from '../../components/ChannelPicker';
 import { ErrorLine, fmtDateTime, Section, errText, toast } from '../../ui';
-import { cleanNote, groupCommits, isNewerRelease, preflightWarnings, stepStates, upcomingFlags, versionText, type PreflightWarning } from './updateLogic';
+import { changeSummary, cleanNote, groupCommits, isNewerRelease, preflightWarnings, stepStates, upcomingFlags, versionText, type PreflightWarning } from './updateLogic';
 
 /** the four steps of an update as a stepper: the line after a finished step is filled, the active one pulses */
 export function StepList({ stage, finished }: { stage: UpdateInfo['stage']; finished: boolean }) {
@@ -151620,6 +151662,19 @@ export function StepList({ stage, finished }: { stage: UpdateInfo['stage']; fini
 
 const warnText = (w: PreflightWarning): string =>
   w.kind === 'players' ? t('upd.pf.players', { n: w.n }) : w.kind === 'noBackup' ? t('upd.pf.noBackup') : t('upd.pf.old', { h: w.hours });
+
+/** «What changes»: how many versions, new things, fixes and other changes wait, counted from the changelog of the releases */
+export function ChangeSummary({ current, notes }: { current: string | null | undefined; notes: UpdateNotes | null }) {
+  useI18n();
+  const s = notes ? changeSummary(notes.releases, current) : null;
+  if (!s || s.versions === 0 || s.added + s.fixed + s.other === 0) return null;
+  const parts = [t('upd.sum.versions', { n: s.versions }), s.added ? t('upd.sum.new', { n: s.added }) : '', s.fixed ? t('upd.sum.fixed', { n: s.fixed }) : '', s.other ? t('upd.sum.other', { n: s.other }) : ''].filter(Boolean);
+  return (
+    <p className="relative mt-4 text-sm font-bold text-white/90">
+      <span className="font-black">{t('upd.sum.t')}:</span> {parts.join(' · ')}
+    </p>
+  );
+}
 
 /** what the update would interrupt, and the warnings from the notes of the newer versions */
 export function PreflightNote({ pf, current, notes }: { pf: UpdatePreflight | null; current: string | null | undefined; notes: UpdateNotes | null }) {
@@ -155147,7 +155202,7 @@ html[data-motion='reduce'] .srv-new-chev, html[data-motion='reduce'] .srv-check,
 .srv-tile.is-lag { box-shadow: var(--shadow-1), 0 0 0 1px rgb(var(--warn) / .5); }
 .tile.srv-tile.srv-selected { box-shadow: 0 0 0 3px rgb(var(--brand)); }
 .srv-name { min-width: 0; }
-.srv-name a, .srv-row-main h3 a { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.srv-name a, .srv-row-main h3 a { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; line-height: 1.25; } /* a long server name takes a second line instead of being cut off */
 .srv-chips { height: 24px; overflow: hidden; }
 .srv-badge-full { flex: none; padding: 0 8px; border-radius: var(--r-pill); font-size: var(--fs-xs); font-weight: 700; line-height: 20px; color: rgb(var(--warn)); background: rgb(var(--warnbg)); white-space: nowrap; }
 .srv-count { min-height: 44px; flex-wrap: nowrap; min-width: 0; }

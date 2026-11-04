@@ -94,7 +94,7 @@ export function FeedItem({ f }: { f: Community['feed'][number] }) {
         <span className="cm-ava-game"><GameAvatar game={f.game} size={16} /></span>
       </span>
       <span className="min-w-0 flex-1">
-        <span className="block truncate text-sm">
+        <span className="block line-clamp-2 break-words text-sm">
           <a href={`/player/${encodeURIComponent(f.name)}`} className="font-extrabold hover:text-link">{f.name}</a>
           <span className="text-mute">{t('cm.joined')}</span>
           <a href={`/servers/${f.serverId}`} className="font-bold hover:text-link">{f.serverName}</a>

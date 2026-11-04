@@ -576,7 +576,7 @@ function PhoneRow({ s, idx, fav, onFav, onOpen, select }: { rx: Reactions; s: Se
       {select?.on && <CardCheck s={s} select={select} className="left-1 top-1" />}
       <GameAvatar game={s.game} size={40} vtId={s.id} />
       <div className="srv-row-main">
-        <h3 className="truncate text-fs-base font-extrabold leading-tight" title={s.name}>
+        <h3 className="text-fs-base font-extrabold leading-tight" title={s.name}>
           <a href={`/servers/${s.id}`} onClick={linkClick(s, select)}>{s.name}</a>
         </h3>
         {s.online ? (
@@ -623,7 +623,7 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince }
       </div>
 
       <div className="px-1.5">
-        <h3 className="srv-name truncate text-fs-lg font-extrabold leading-tight" title={s.name}>
+        <h3 className="srv-name text-fs-lg font-extrabold leading-tight" title={s.name}>
           <a href={`/servers/${s.id}`} onClick={linkClick(s, select)} className="hover:text-link">{s.name}</a>
         </h3>
         <div className="srv-chips">{nearFull && <span className="srv-badge-full" title={t('srv.cap.nearFull', { pct: Math.round((s.players / s.maxPlayers) * 100) })}>{t('srv.tile.full')}</span>}<span className="truncate">{gameLabel(s.game)}</span>{s.online && s.map && <span className="srv-chip" title={t('d2.srv.mapTitle', { map: s.map })}><CardMap />{s.map}</span>}{s.version && <span className="srv-chip" title={t('d2.srv.version')}><CardTag />v{s.version}</span>}</div>

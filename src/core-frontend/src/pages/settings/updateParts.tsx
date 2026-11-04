@@ -4,7 +4,7 @@ import { api, type Changelog, type UpdateHistoryItem, type UpdateInfo, type Upda
 import { t, useI18n, type TKey } from '../../i18n';
 import { ChannelName, ChannelPicker } from '../../components/ChannelPicker';
 import { ErrorLine, fmtDateTime, Section, errText, toast } from '../../ui';
-import { cleanNote, groupCommits, isNewerRelease, preflightWarnings, stepStates, upcomingFlags, versionText, type PreflightWarning } from './updateLogic';
+import { changeSummary, cleanNote, groupCommits, isNewerRelease, preflightWarnings, stepStates, upcomingFlags, versionText, type PreflightWarning } from './updateLogic';
 
 /** the four steps of an update as a stepper: the line after a finished step is filled, the active one pulses */
 export function StepList({ stage, finished }: { stage: UpdateInfo['stage']; finished: boolean }) {
@@ -25,6 +25,19 @@ export function StepList({ stage, finished }: { stage: UpdateInfo['stage']; fini
 
 const warnText = (w: PreflightWarning): string =>
   w.kind === 'players' ? t('upd.pf.players', { n: w.n }) : w.kind === 'noBackup' ? t('upd.pf.noBackup') : t('upd.pf.old', { h: w.hours });
+
+/** «What changes»: how many versions, new things, fixes and other changes wait, counted from the changelog of the releases */
+export function ChangeSummary({ current, notes }: { current: string | null | undefined; notes: UpdateNotes | null }) {
+  useI18n();
+  const s = notes ? changeSummary(notes.releases, current) : null;
+  if (!s || s.versions === 0 || s.added + s.fixed + s.other === 0) return null;
+  const parts = [t('upd.sum.versions', { n: s.versions }), s.added ? t('upd.sum.new', { n: s.added }) : '', s.fixed ? t('upd.sum.fixed', { n: s.fixed }) : '', s.other ? t('upd.sum.other', { n: s.other }) : ''].filter(Boolean);
+  return (
+    <p className="relative mt-4 text-sm font-bold text-white/90">
+      <span className="font-black">{t('upd.sum.t')}:</span> {parts.join(' · ')}
+    </p>
+  );
+}
 
 /** what the update would interrupt, and the warnings from the notes of the newer versions */
 export function PreflightNote({ pf, current, notes }: { pf: UpdatePreflight | null; current: string | null | undefined; notes: UpdateNotes | null }) {

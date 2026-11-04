@@ -496,7 +496,7 @@ html[data-motion='reduce'] .srv-new-chev, html[data-motion='reduce'] .srv-check,
 .srv-tile.is-lag { box-shadow: var(--shadow-1), 0 0 0 1px rgb(var(--warn) / .5); }
 .tile.srv-tile.srv-selected { box-shadow: 0 0 0 3px rgb(var(--brand)); }
 .srv-name { min-width: 0; }
-.srv-name a, .srv-row-main h3 a { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.srv-name a, .srv-row-main h3 a { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; line-height: 1.25; } /* a long server name takes a second line instead of being cut off */
 .srv-chips { height: 24px; overflow: hidden; }
 .srv-badge-full { flex: none; padding: 0 8px; border-radius: var(--r-pill); font-size: var(--fs-xs); font-weight: 700; line-height: 20px; color: rgb(var(--warn)); background: rgb(var(--warnbg)); white-space: nowrap; }
 .srv-count { min-height: 44px; flex-wrap: nowrap; min-width: 0; }

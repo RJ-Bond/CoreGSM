@@ -4,7 +4,7 @@ import { api, type Changelog, type UpdateInfo, type UpdateNotes, type UpdatePref
 import { confirmDialog } from '../../confirm';
 import { t } from '../../i18n';
 import { ago, ErrorLine, fmtDate, IconArrowUp, IconCheck, usePoll, errText } from '../../ui';
-import { HistoryCard, NotesCard, OptionsCard, PreflightNote, StepList } from './updateParts';
+import { ChangeSummary, HistoryCard, NotesCard, OptionsCard, PreflightNote, StepList } from './updateParts';
 import { offered, versionText } from './updateLogic';
 
 const DISMISS_KEY = 'coregsm_dismissed_update_error';
@@ -239,6 +239,7 @@ export function UpdateCard() {
           </div>
         )}
 
+        {state === 'available' && <ChangeSummary current={info?.currentLabel} notes={notes} />}
         {state === 'available' && <PreflightNote pf={pf} current={info?.currentLabel} notes={notes} />}
 
         <div className="relative mt-5 flex flex-wrap items-center gap-2.5">

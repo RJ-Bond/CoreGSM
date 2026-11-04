@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cmpVersion, groupCommits, isNewerRelease, preflightWarnings, releasesSince, stepStates, upcomingFlags, versionText } from './updateLogic';
+import { changeSummary, cmpVersion, groupCommits, isNewerRelease, preflightWarnings, releasesSince, stepStates, upcomingFlags, versionText } from './updateLogic';
 import type { ChangelogItem, UpdateNotesRelease } from '../../api';
 
 describe('update versions', () => {
@@ -76,5 +76,20 @@ describe('releasesSince', () => {
     expect(releasesSince(list, '1.0.0.11', '1.0.0.11')).toEqual([]);
     expect(releasesSince(list, null, '1.0.0.11')).toEqual([]);
     expect(releasesSince(list, '1.0.0.9', null)).toEqual([]);
+  });
+});
+
+describe('changeSummary', () => {
+  const rel = (version: string, groups: [string, number][]): UpdateNotesRelease => ({
+    version, date: null,
+    groups: groups.map(([title, n]) => ({ title, items: Array.from({ length: n }, (_, i) => ({ text: 't' + i, flags: [] })) })),
+  });
+  it('counts only the releases newer than the running one, by kind of group', () => {
+    const list = [rel('1.0.95', [['✨ Новое', 2], ['🐛 Исправлено', 1]]), rel('1.0.94', [['🔧 Прочее', 3], ['✨ New', 1]]), rel('1.0.90', [['✨ Новое', 9]])];
+    expect(changeSummary(list, '1.0.92')).toEqual({ versions: 2, added: 3, fixed: 1, other: 3 });
+  });
+  it('is empty when nothing is newer, or the running version is unreadable', () => {
+    expect(changeSummary([rel('1.0.90', [['✨ Новое', 1]])], '1.0.92').versions).toBe(0);
+    expect(changeSummary([rel('1.0.95', [['✨ Новое', 1]])], null).versions).toBe(0);
   });
 });
