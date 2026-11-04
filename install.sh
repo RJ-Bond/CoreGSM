@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="6530016ada0e"
+COREGSM_BUILD="a2c159613c29"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.0.96"
+COREGSM_VERSION="1.0.97"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -158084,12 +158084,16 @@ __COREGSM_EOF__
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend"
   cat > "$APP_DIR/core-frontend/vite.config.ts" << '__COREGSM_EOF__'
-import { defineConfig } from 'vite';
+import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
 
 export default defineConfig({
   plugins: [react()],
   server: { proxy: { '/api': process.env.COREGSM_API ?? 'http://localhost:3000', '/badge': process.env.COREGSM_API ?? 'http://localhost:3000', '/widget': process.env.COREGSM_API ?? 'http://localhost:3000' } },
+  test: {
+    // `npm run coverage` (and CI) fail when the coverage of the files the tests load falls below the floor: it may only be raised
+    coverage: { reporter: ['text-summary', 'text'], thresholds: { statements: 40, branches: 33, functions: 34, lines: 44 } },
+  },
   build: {
     rollupOptions: {
       output: {

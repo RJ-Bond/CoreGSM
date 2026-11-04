@@ -49,8 +49,8 @@ jobs:
       - run: npm ci --no-audit --no-fund
       - name: Typecheck
         run: npm run typecheck
-      - name: Unit tests
-        run: npm test
+      - name: Unit tests and coverage floor
+        run: npm run coverage
       - name: Lint (oxlint ratchet)
         # oxlint still has old findings (its static a11y rules flag patterns that axe accepts): the step fails only when
         # a rule reports more findings than lint-baseline.json allows, so the number can only go down
