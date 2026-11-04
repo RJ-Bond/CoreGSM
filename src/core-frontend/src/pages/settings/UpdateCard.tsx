@@ -4,7 +4,7 @@ import { api, type Changelog, type UpdateInfo, type UpdateNotes, type UpdatePref
 import { confirmDialog } from '../../confirm';
 import { t, useI18n } from '../../i18n';
 import { ago, ErrorLine, fmtDate, IconArrowUp, IconCheck, usePoll, errText } from '../../ui';
-import { ChangeSummary, HistoryCard, NotesCard, OptionsCard, PreflightNote, StepList } from './updateParts';
+import { ChangeSummary, HistoryCard, MoreMenu, NotesCard, OptionsCard, PreflightNote, StepList, VersionHero } from './updateParts';
 import { etaMinutes, etaSeconds, offered, SLOW_RESTART_MS, versionText } from './updateLogic';
 
 const DISMISS_KEY = 'coregsm_dismissed_update_error';
@@ -194,10 +194,11 @@ export function UpdateCard() {
       <div className="sr-only" role="status" aria-live="polite">{state === 'running' ? announce : ''}</div>
       <section
         className={`relative overflow-hidden rounded-ui-xl p-6 sm:p-7 ${
-          state === 'available' ? 'update-hero text-white' : state === 'running' ? 'update-hero update-hero-run text-white' : 'panel'
+          state === 'available' ? 'update-hero update-hero-av text-white' : state === 'running' ? 'update-hero update-hero-run text-white' : 'panel'
         }`}
       >
-        {onGrad && <span aria-hidden className={`pointer-events-none absolute -right-14 -top-14 h-56 w-56 rounded-full ${state === 'running' ? 'bg-white/10' : 'bg-white/15'}`} />}
+        {state === 'available' && <IconArrowUp aria-hidden size={220} className="upd-watermark" />}
+        {state === 'running' && <span aria-hidden className="pointer-events-none absolute -right-14 -top-14 h-56 w-56 rounded-full bg-white/10" />}
         <div className="relative flex flex-wrap items-start gap-4">
           <span
             aria-hidden
@@ -219,7 +220,7 @@ export function UpdateCard() {
                 {finished ? <IconCheck size={22} /> : ringPct != null ? <span className="relative text-xs font-black tabular-nums">{ringPct}%</span> : null}
               </>
             ) : (
-              <IconArrowUp size={30} className={state === 'available' ? 'update-bob' : ''} />
+              <IconArrowUp size={30} />
             )}
           </span>
           <div className="min-w-0 flex-1">
@@ -231,6 +232,9 @@ export function UpdateCard() {
               </p>
             )}
 
+            {state === 'available' ? (
+              <VersionHero cur={curText} next={newText} since={info?.installedAt ? fmtDate(info.installedAt) : null} from={info?.latestAt ? fmtDate(info.latestAt) : null} />
+            ) : (
             <dl className="mt-4 flex flex-wrap items-center gap-2 text-sm font-bold">
               <div className={`flex flex-wrap items-center gap-x-2 rounded-full px-3.5 py-1.5 ${state === 'running' ? 'bg-white/15 opacity-80' : onGrad ? 'bg-white/20' : 'bg-soft'}`}>
                 <dt className={onGrad ? 'text-white/85' : 'text-mute'}>{t('upd.installed')}</dt>
@@ -238,12 +242,13 @@ export function UpdateCard() {
                 {info?.installedAt ? <dd className={`font-sans font-semibold ${onGrad ? 'text-white/80' : 'text-mute'}`}>{t('upd.since', { date: fmtDate(info.installedAt) })}</dd> : null}
               </div>
               {onGrad && <span aria-hidden className="text-lg font-black text-white/90">→</span>}
-              <div className={`flex flex-wrap items-center gap-x-2 rounded-full px-3.5 py-1.5 ${state === 'available' ? 'bg-white text-slate-900' : state === 'running' ? 'bg-white/30 ring-1 ring-white/60' : 'bg-soft'}`}>
-                <dt className={state === 'running' ? 'text-white/90' : state === 'available' ? 'text-slate-500' : 'text-mute'}>{t('upd.inRepo')}</dt>
+              <div className={`flex flex-wrap items-center gap-x-2 rounded-full px-3.5 py-1.5 ${state === 'running' ? 'bg-white/30 ring-1 ring-white/60' : 'bg-soft'}`}>
+                <dt className={state === 'running' ? 'text-white/90' : 'text-mute'}>{t('upd.inRepo')}</dt>
                 <dd className="font-mono">{newText}</dd>
-                {info?.latestAt ? <dd className={`font-sans font-semibold ${state === 'running' ? 'text-white/80' : state === 'available' ? 'text-slate-500' : 'text-mute'}`}>{t('upd.from', { date: fmtDate(info.latestAt) })}</dd> : null}
+                {info?.latestAt ? <dd className={`font-sans font-semibold ${state === 'running' ? 'text-white/80' : 'text-mute'}`}>{t('upd.from', { date: fmtDate(info.latestAt) })}</dd> : null}
               </div>
             </dl>
+            )}
           </div>
         </div>
 
@@ -269,15 +274,17 @@ export function UpdateCard() {
         {state === 'available' && <ChangeSummary current={info?.currentLabel} notes={notes} />}
         {state === 'available' && <PreflightNote pf={pf} current={info?.currentLabel} notes={notes} />}
 
-        <div className="relative mt-5 flex flex-wrap items-center gap-2.5">
+        <div className={`relative mt-5 flex flex-wrap items-center gap-2.5 ${state === 'available' ? 'upd-actions' : ''}`}>
           {state === 'available' && (
             <>
-              <button className="btn-on-grad btn-lg" onClick={apply} disabled={busy || running || !info?.canApply}>
-                {busy ? t('upd.btn.sending') : t('upd.btn.now')}
+              <button className="btn-on-grad btn-lg upd-main" onClick={apply} disabled={busy || running || !info?.canApply}>
+                <IconArrowUp size={18} aria-hidden />{busy ? t('upd.btn.sending') : t('upd.btn.now')}
               </button>
-              <a className="btn-ghost-on-grad" href="#update-changes" onClick={(e) => { e.preventDefault(); document.getElementById('update-changes')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}>{t('upd.btn.notes')}</a>
-              <button className="btn-ghost-on-grad" onClick={check} disabled={busy || running}>{t('upd.btn.recheck')}</button>
-              {info?.latest && <button className="btn-ghost-on-grad" onClick={() => void setSkip(info.latest)} disabled={busy || running}>{t('upd.btn.skip')}</button>}
+              <div className="upd-links">
+                <a className="upd-link" href="#update-changes" onClick={(e) => { e.preventDefault(); document.getElementById('update-changes')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}>{t('upd.btn.notes')}</a>
+                <button type="button" className="upd-link" onClick={check} disabled={busy || running}>{t('upd.btn.recheck')}</button>
+                {info?.latest && <button type="button" className="upd-link" onClick={() => void setSkip(info.latest)} disabled={busy || running}>{t('upd.btn.skip')}</button>}
+              </div>
             </>
           )}
           {state === 'skipped' && (
@@ -289,8 +296,15 @@ export function UpdateCard() {
           {(state === 'latest' || state === 'unknown') && (
             <button className="btn" onClick={check} disabled={busy || running}>{busy ? t('upd.btn.checking') : t('upd.btn.check')}</button>
           )}
-          {info?.canRollback && state !== 'running' && (
-            <button className={`${state === 'available' ? 'btn-ghost-on-grad' : 'btn btn-soft'} sm:ml-auto`} onClick={() => void rollback()} disabled={busy || running}>{t('upd.btn.rollback')}</button>
+          {info?.canRollback && state === 'available' && (
+            <div className="upd-actions-end">
+              <MoreMenu>
+                {(close) => <button type="button" role="menuitem" className="upd-more-item is-danger" onClick={() => { close(); void rollback(); }} disabled={busy || running}>{t('upd.btn.rollback')}</button>}
+              </MoreMenu>
+            </div>
+          )}
+          {info?.canRollback && state !== 'running' && state !== 'available' && (
+            <button className="btn btn-soft sm:ml-auto" onClick={() => void rollback()} disabled={busy || running}>{t('upd.btn.rollback')}</button>
           )}
         </div>
 

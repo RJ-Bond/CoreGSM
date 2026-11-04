@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="4543f2dbf75e"
+COREGSM_BUILD="3b1cffb1080d"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.4"
+COREGSM_VERSION="1.1.5"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -130739,6 +130739,48 @@ html[data-motion='reduce'] .upd-step.is-active .upd-step-line::after { animation
 /* ghost buttons on the update hero: light glass instead of dark */
 .update-hero .btn-ghost-on-grad { background: rgb(255 255 255 / .2); box-shadow: inset 0 0 0 1px rgb(255 255 255 / .38); }
 .update-hero .btn-ghost-on-grad:hover { background: rgb(255 255 255 / .3); }
+/* the «update available» card: a dotted texture, two soft glows and a big arrow as a watermark */
+.update-hero-av { background:
+    radial-gradient(60% 90% at 100% 0%, rgb(255 255 255 / .22), transparent 60%),
+    radial-gradient(50% 80% at 0% 100%, rgb(190 24 93 / .45), transparent 65%),
+    radial-gradient(rgb(255 255 255 / .13) 1px, transparent 1.4px) 0 0 / 18px 18px,
+    linear-gradient(135deg, #f59e0b 0%, #ea580c 55%, #be185d 120%); }
+.upd-watermark { position: absolute; right: -24px; bottom: -34px; opacity: .1; pointer-events: none; transform: rotate(8deg); }
+.upd-label { margin: 0 0 8px; font-size: var(--fs-xs); font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: rgb(255 255 255 / .8); }
+.upd-chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.upd-chip { display: inline-flex; align-items: center; gap: 6px; padding: 5px 13px; border-radius: var(--r-pill); background: rgb(255 255 255 / .18); box-shadow: inset 0 0 0 1px rgb(255 255 255 / .22); font-size: var(--fs-sm); font-weight: 700; }
+.upd-ver { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 6px 18px; margin: 16px 0 0; }
+.upd-ver-cell { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.upd-ver-cell > dt { font-size: var(--fs-xs); font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: rgb(255 255 255 / .75); }
+.upd-ver-n { margin: 0; font-family: var(--font-mono, ui-monospace, monospace); font-size: clamp(1.5rem, 5vw, 2rem); font-weight: 800; line-height: 1.1; letter-spacing: -.02em; }
+.upd-ver-cell.is-old .upd-ver-n { opacity: .7; }
+.upd-ver-cell.is-new .upd-ver-n { text-shadow: 0 2px 18px rgb(0 0 0 / .25); }
+.upd-ver-d { margin: 0; font-size: var(--fs-sm); font-weight: 600; color: rgb(255 255 255 / .8); }
+.upd-ver-arrow { padding-bottom: 1.45rem; font-size: 1.5rem; font-weight: 800; color: rgb(255 255 255 / .85); }
+.upd-note { position: relative; margin-top: 16px; display: grid; gap: 8px; padding: 11px 14px; border-radius: var(--r-lg); background: rgb(0 0 0 / .18); border-left: 4px solid #fde68a; font-size: var(--fs-sm); font-weight: 700; }
+.upd-note-row { display: flex; gap: 10px; margin: 0; }
+.upd-actions { align-items: center; row-gap: 12px; }
+.upd-main { display: inline-flex; align-items: center; gap: 8px; }
+.upd-links { display: flex; flex-wrap: wrap; align-items: center; gap: 0 6px; }
+.upd-link { min-height: 36px; padding: 0 10px; background: none; border: 0; border-radius: var(--r-md); color: #fff; font: inherit; font-size: var(--fs-sm); font-weight: 700; text-decoration: underline; text-decoration-color: rgb(255 255 255 / .45); text-underline-offset: 4px; cursor: pointer; }
+.upd-link:hover:not(:disabled) { background: rgb(255 255 255 / .14); text-decoration-color: #fff; }
+.upd-link:disabled { opacity: .55; cursor: default; }
+.upd-actions-end { margin-left: auto; }
+.upd-more { position: relative; }
+.upd-more-btn { display: inline-grid; place-items: center; width: 40px; height: 40px; border: 0; border-radius: 50%; background: rgb(255 255 255 / .18); color: #fff; font-size: 1.4rem; line-height: 1; cursor: pointer; }
+.upd-more-btn:hover { background: rgb(255 255 255 / .3); }
+.upd-more-menu { position: absolute; right: 0; bottom: calc(100% + 8px); z-index: 5; min-width: 14rem; padding: 6px; border-radius: var(--r-lg); background: rgb(var(--card)); color: rgb(var(--ink)); box-shadow: 0 12px 32px -8px rgb(0 0 0 / .45), 0 0 0 1px rgb(var(--line, 128 128 128) / .35); }
+.upd-more-item { display: block; width: 100%; padding: 9px 12px; border: 0; border-radius: var(--r-md); background: none; color: inherit; font: inherit; font-size: var(--fs-sm); font-weight: 700; text-align: left; cursor: pointer; }
+.upd-more-item:hover:not(:disabled) { background: rgb(var(--soft)); }
+.upd-more-item.is-danger { color: rgb(var(--bad)); }
+@media (max-width: 639px) {
+  .upd-main { width: 100%; justify-content: center; }
+  .upd-links { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); width: calc(100% - 52px); }
+  .upd-link { text-align: left; }
+  .upd-actions { position: relative; }
+  .upd-actions-end { position: absolute; right: 0; bottom: 0; }
+}
+@media (prefers-reduced-motion: reduce) { .upd-watermark { transform: none; } }
 /* the close button of the update banner: a round chip with a 36px hit area that stays readable on the gradient */
 .ub-close { display: inline-grid; place-items: center; width: 36px; height: 36px; flex: none; border-radius: 50%; color: #fff; background: rgb(255 255 255 / .18); transition: background .15s; }
 .ub-close:hover { background: rgb(255 255 255 / .32); }
@@ -133278,6 +133320,7 @@ const en: Record<keyof typeof ru, string> = {
   'upd.btn.recheck': 'Check again',
   'upd.btn.rollback': 'Roll back to the previous',
   'upd.btn.skip': 'Skip this version',
+  'upd.more': 'More',
   'upd.btn.unskip': 'Stop skipping',
   'upd.btn.anyway': 'Install anyway',
   'upd.noApply': 'The update button is not available on this server. Update with',
@@ -133316,7 +133359,7 @@ const en: Record<keyof typeof ru, string> = {
   'upd.eta.lt': 'less than a minute left',
   'upd.eta.n': 'about {n} min left',
   'upd.slow': 'The panel is taking longer than usual to answer. Wait a few more minutes, and if it does not come back, check the state on the server:',
-  'upd.pf.players': 'Players online now: {n}. Game servers are not affected, but the panel and the bot are unavailable for 1–3 minutes.',
+  'upd.pf.players': 'Playing now: {n}. Game servers are not affected, the panel and the bot are down for 1–3 minutes.',
   'upd.pf.noBackup': 'There are no backups on the server. A database copy for the rollback is made before the update anyway.',
   'upd.pf.old': 'The last backup is {h} h old. A fresh database copy is made automatically before the update.',
   'upd.fl.title': 'Before you update',
@@ -137245,6 +137288,7 @@ const ru = {
   'upd.btn.recheck': 'Проверить ещё раз',
   'upd.btn.rollback': 'Откатить к предыдущей',
   'upd.btn.skip': 'Пропустить эту версию',
+  'upd.more': 'Ещё',
   'upd.btn.unskip': 'Не пропускать',
   'upd.btn.anyway': 'Установить всё равно',
   'upd.noApply': 'Кнопка обновления недоступна на этом сервере. Обновляйте командой',
@@ -137283,7 +137327,7 @@ const ru = {
   'upd.eta.lt': 'осталось меньше минуты',
   'upd.eta.n': 'осталось примерно {n} мин',
   'upd.slow': 'Панель отвечает дольше обычного. Подождите ещё несколько минут, а если она не появится — посмотрите состояние на сервере:',
-  'upd.pf.players': 'Сейчас на серверах играют: {n}. Игровым серверам обновление не мешает, но панель и бот будут недоступны 1–3 минуты.',
+  'upd.pf.players': 'Сейчас играют: {n}. Серверам обновление не мешает, панель и бот будут недоступны 1–3 минуты.',
   'upd.pf.noBackup': 'Резервных копий на сервере нет. Перед обновлением всё равно создаётся копия базы данных для отката.',
   'upd.pf.old': 'Последняя копия сделана {h} ч назад. Перед обновлением автоматически создаётся свежая копия базы данных.',
   'upd.fl.title': 'Перед обновлением обратите внимание',
@@ -150185,7 +150229,7 @@ import { api, type Changelog, type UpdateInfo, type UpdateNotes, type UpdatePref
 import { confirmDialog } from '../../confirm';
 import { t, useI18n } from '../../i18n';
 import { ago, ErrorLine, fmtDate, IconArrowUp, IconCheck, usePoll, errText } from '../../ui';
-import { ChangeSummary, HistoryCard, NotesCard, OptionsCard, PreflightNote, StepList } from './updateParts';
+import { ChangeSummary, HistoryCard, MoreMenu, NotesCard, OptionsCard, PreflightNote, StepList, VersionHero } from './updateParts';
 import { etaMinutes, etaSeconds, offered, SLOW_RESTART_MS, versionText } from './updateLogic';
 
 const DISMISS_KEY = 'coregsm_dismissed_update_error';
@@ -150375,10 +150419,11 @@ export function UpdateCard() {
       <div className="sr-only" role="status" aria-live="polite">{state === 'running' ? announce : ''}</div>
       <section
         className={`relative overflow-hidden rounded-ui-xl p-6 sm:p-7 ${
-          state === 'available' ? 'update-hero text-white' : state === 'running' ? 'update-hero update-hero-run text-white' : 'panel'
+          state === 'available' ? 'update-hero update-hero-av text-white' : state === 'running' ? 'update-hero update-hero-run text-white' : 'panel'
         }`}
       >
-        {onGrad && <span aria-hidden className={`pointer-events-none absolute -right-14 -top-14 h-56 w-56 rounded-full ${state === 'running' ? 'bg-white/10' : 'bg-white/15'}`} />}
+        {state === 'available' && <IconArrowUp aria-hidden size={220} className="upd-watermark" />}
+        {state === 'running' && <span aria-hidden className="pointer-events-none absolute -right-14 -top-14 h-56 w-56 rounded-full bg-white/10" />}
         <div className="relative flex flex-wrap items-start gap-4">
           <span
             aria-hidden
@@ -150400,7 +150445,7 @@ export function UpdateCard() {
                 {finished ? <IconCheck size={22} /> : ringPct != null ? <span className="relative text-xs font-black tabular-nums">{ringPct}%</span> : null}
               </>
             ) : (
-              <IconArrowUp size={30} className={state === 'available' ? 'update-bob' : ''} />
+              <IconArrowUp size={30} />
             )}
           </span>
           <div className="min-w-0 flex-1">
@@ -150412,6 +150457,9 @@ export function UpdateCard() {
               </p>
             )}
 
+            {state === 'available' ? (
+              <VersionHero cur={curText} next={newText} since={info?.installedAt ? fmtDate(info.installedAt) : null} from={info?.latestAt ? fmtDate(info.latestAt) : null} />
+            ) : (
             <dl className="mt-4 flex flex-wrap items-center gap-2 text-sm font-bold">
               <div className={`flex flex-wrap items-center gap-x-2 rounded-full px-3.5 py-1.5 ${state === 'running' ? 'bg-white/15 opacity-80' : onGrad ? 'bg-white/20' : 'bg-soft'}`}>
                 <dt className={onGrad ? 'text-white/85' : 'text-mute'}>{t('upd.installed')}</dt>
@@ -150419,12 +150467,13 @@ export function UpdateCard() {
                 {info?.installedAt ? <dd className={`font-sans font-semibold ${onGrad ? 'text-white/80' : 'text-mute'}`}>{t('upd.since', { date: fmtDate(info.installedAt) })}</dd> : null}
               </div>
               {onGrad && <span aria-hidden className="text-lg font-black text-white/90">→</span>}
-              <div className={`flex flex-wrap items-center gap-x-2 rounded-full px-3.5 py-1.5 ${state === 'available' ? 'bg-white text-slate-900' : state === 'running' ? 'bg-white/30 ring-1 ring-white/60' : 'bg-soft'}`}>
-                <dt className={state === 'running' ? 'text-white/90' : state === 'available' ? 'text-slate-500' : 'text-mute'}>{t('upd.inRepo')}</dt>
+              <div className={`flex flex-wrap items-center gap-x-2 rounded-full px-3.5 py-1.5 ${state === 'running' ? 'bg-white/30 ring-1 ring-white/60' : 'bg-soft'}`}>
+                <dt className={state === 'running' ? 'text-white/90' : 'text-mute'}>{t('upd.inRepo')}</dt>
                 <dd className="font-mono">{newText}</dd>
-                {info?.latestAt ? <dd className={`font-sans font-semibold ${state === 'running' ? 'text-white/80' : state === 'available' ? 'text-slate-500' : 'text-mute'}`}>{t('upd.from', { date: fmtDate(info.latestAt) })}</dd> : null}
+                {info?.latestAt ? <dd className={`font-sans font-semibold ${state === 'running' ? 'text-white/80' : 'text-mute'}`}>{t('upd.from', { date: fmtDate(info.latestAt) })}</dd> : null}
               </div>
             </dl>
+            )}
           </div>
         </div>
 
@@ -150450,15 +150499,17 @@ export function UpdateCard() {
         {state === 'available' && <ChangeSummary current={info?.currentLabel} notes={notes} />}
         {state === 'available' && <PreflightNote pf={pf} current={info?.currentLabel} notes={notes} />}
 
-        <div className="relative mt-5 flex flex-wrap items-center gap-2.5">
+        <div className={`relative mt-5 flex flex-wrap items-center gap-2.5 ${state === 'available' ? 'upd-actions' : ''}`}>
           {state === 'available' && (
             <>
-              <button className="btn-on-grad btn-lg" onClick={apply} disabled={busy || running || !info?.canApply}>
-                {busy ? t('upd.btn.sending') : t('upd.btn.now')}
+              <button className="btn-on-grad btn-lg upd-main" onClick={apply} disabled={busy || running || !info?.canApply}>
+                <IconArrowUp size={18} aria-hidden />{busy ? t('upd.btn.sending') : t('upd.btn.now')}
               </button>
-              <a className="btn-ghost-on-grad" href="#update-changes" onClick={(e) => { e.preventDefault(); document.getElementById('update-changes')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}>{t('upd.btn.notes')}</a>
-              <button className="btn-ghost-on-grad" onClick={check} disabled={busy || running}>{t('upd.btn.recheck')}</button>
-              {info?.latest && <button className="btn-ghost-on-grad" onClick={() => void setSkip(info.latest)} disabled={busy || running}>{t('upd.btn.skip')}</button>}
+              <div className="upd-links">
+                <a className="upd-link" href="#update-changes" onClick={(e) => { e.preventDefault(); document.getElementById('update-changes')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}>{t('upd.btn.notes')}</a>
+                <button type="button" className="upd-link" onClick={check} disabled={busy || running}>{t('upd.btn.recheck')}</button>
+                {info?.latest && <button type="button" className="upd-link" onClick={() => void setSkip(info.latest)} disabled={busy || running}>{t('upd.btn.skip')}</button>}
+              </div>
             </>
           )}
           {state === 'skipped' && (
@@ -150470,8 +150521,15 @@ export function UpdateCard() {
           {(state === 'latest' || state === 'unknown') && (
             <button className="btn" onClick={check} disabled={busy || running}>{busy ? t('upd.btn.checking') : t('upd.btn.check')}</button>
           )}
-          {info?.canRollback && state !== 'running' && (
-            <button className={`${state === 'available' ? 'btn-ghost-on-grad' : 'btn btn-soft'} sm:ml-auto`} onClick={() => void rollback()} disabled={busy || running}>{t('upd.btn.rollback')}</button>
+          {info?.canRollback && state === 'available' && (
+            <div className="upd-actions-end">
+              <MoreMenu>
+                {(close) => <button type="button" role="menuitem" className="upd-more-item is-danger" onClick={() => { close(); void rollback(); }} disabled={busy || running}>{t('upd.btn.rollback')}</button>}
+              </MoreMenu>
+            </div>
+          )}
+          {info?.canRollback && state !== 'running' && state !== 'available' && (
+            <button className="btn btn-soft sm:ml-auto" onClick={() => void rollback()} disabled={busy || running}>{t('upd.btn.rollback')}</button>
           )}
         </div>
 
@@ -151171,7 +151229,7 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages/settings"
   cat > "$APP_DIR/core-frontend/src/pages/settings/updateParts.tsx" << '__COREGSM_EOF__'
 /** Pieces of Settings → Updates: steps, warnings, release notes, the log and the options. */
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { api, type Changelog, type UpdateHistoryItem, type UpdateInfo, type UpdateNotes, type UpdatePreflight } from '../../api';
 import { t, useI18n, type TKey } from '../../i18n';
 import { ChannelName, ChannelPicker } from '../../components/ChannelPicker';
@@ -151204,10 +151262,59 @@ export function ChangeSummary({ current, notes }: { current: string | null | und
   const s = notes ? changeSummary(notes.releases, current) : null;
   if (!s || s.versions === 0 || s.added + s.fixed + s.other === 0) return null;
   const parts = [t('upd.sum.versions', { n: s.versions }), s.added ? t('upd.sum.new', { n: s.added }) : '', s.fixed ? t('upd.sum.fixed', { n: s.fixed }) : '', s.other ? t('upd.sum.other', { n: s.other }) : ''].filter(Boolean);
+  void parts;
+  const chips: { icon: string; text: string }[] = [
+    { icon: '📦', text: t('upd.sum.versions', { n: s.versions }) },
+    ...(s.added ? [{ icon: '✨', text: t('upd.sum.new', { n: s.added }) }] : []),
+    ...(s.fixed ? [{ icon: '🔧', text: t('upd.sum.fixed', { n: s.fixed }) }] : []),
+    ...(s.other ? [{ icon: '🧩', text: t('upd.sum.other', { n: s.other }) }] : []),
+  ];
   return (
-    <p className="relative mt-4 text-sm font-bold text-white/90">
-      <span className="font-black">{t('upd.sum.t')}:</span> {parts.join(' · ')}
-    </p>
+    <div className="relative mt-5">
+      <p className="upd-label">{t('upd.sum.t')}</p>
+      <ul className="upd-chips">
+        {chips.map((c) => <li key={c.icon} className="upd-chip"><span aria-hidden>{c.icon}</span>{c.text}</li>)}
+      </ul>
+    </div>
+  );
+}
+
+/** the two versions side by side: what is installed and what is coming, big, with the dates under them */
+export function VersionHero({ cur, next, since, from }: { cur: string; next: string; since?: string | null; from?: string | null }) {
+  return (
+    <dl className="upd-ver">
+      <div className="upd-ver-cell is-old">
+        <dt>{t('upd.installed')}</dt>
+        <dd className="upd-ver-n">{cur}</dd>
+        {since ? <dd className="upd-ver-d">{t('upd.since', { date: since })}</dd> : null}
+      </div>
+      <div aria-hidden className="upd-ver-arrow">→</div>
+      <div className="upd-ver-cell is-new">
+        <dt>{t('upd.inRepo')}</dt>
+        <dd className="upd-ver-n">{next}</dd>
+        {from ? <dd className="upd-ver-d">{t('upd.from', { date: from })}</dd> : null}
+      </div>
+    </dl>
+  );
+}
+
+/** the rare and risky actions behind a «⋯» button: it closes on Esc, on a click outside and after a choice */
+export function MoreMenu({ children }: { children: (close: () => void) => ReactNode }) {
+  const [open, setOpen] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const away = (e: MouseEvent) => { if (!box.current?.contains(e.target as Node)) setOpen(false); };
+    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+    document.addEventListener('mousedown', away);
+    document.addEventListener('keydown', esc);
+    return () => { document.removeEventListener('mousedown', away); document.removeEventListener('keydown', esc); };
+  }, [open]);
+  return (
+    <div className="upd-more" ref={box}>
+      <button type="button" className="upd-more-btn" aria-haspopup="menu" aria-expanded={open} aria-label={t('upd.more')} title={t('upd.more')} onClick={() => setOpen((v) => !v)}>⋯</button>
+      {open && <div className="upd-more-menu" role="menu">{children(() => setOpen(false))}</div>}
+    </div>
   );
 }
 
@@ -151218,8 +151325,8 @@ export function PreflightNote({ pf, current, notes }: { pf: UpdatePreflight | nu
   const flags = notes ? upcomingFlags(notes.releases, current, lang) : [];
   if (warns.length === 0 && flags.length === 0) return null;
   return (
-    <div className="relative mt-4 space-y-2 rounded-2xl bg-black/20 px-4 py-3 text-sm font-bold" role="note">
-      {warns.map((w) => <p key={w.kind}>{warnText(w)}</p>)}
+    <div className="upd-note" role="note">
+      {warns.map((w) => <p key={w.kind} className="upd-note-row"><span aria-hidden>{w.kind === 'players' ? '👥' : w.kind === 'noBackup' ? '💾' : '🕒'}</span><span>{warnText(w)}</span></p>)}
       {flags.length > 0 && (
         <div>
           <p className="font-black">{t('upd.fl.title')}</p>
@@ -158797,6 +158904,12 @@ cmd_update() {
     # pull the actual cause out of the installer output so it is visible in the panel and on screen
     local reason
     reason="$(sed 's/\x1b\[[0-9;]*m//g' "$LOG" 2>/dev/null | grep -E '✖|FATAL|Не удалось|Недостаточно|Мало места|ERROR' | grep -v 'Подробности' | sed 's/\. Полный журнал:.*//' | tail -n 2 | tr -s ' \n' ' ' | cut -c1-220)"
+    # the lines above name the failed step only; the cause itself is in the output of the step (docker build, npm, disk)
+    local cause
+    cause="$(sed 's/\x1b\[[0-9;]*m//g' "$LOG" 2>/dev/null | grep -iE 'error|failed|no space left|denied|cannot|could not|timed out|non-zero|killed|unable|fatal' | grep -vE '✖|Не удалось|Подробности|Полный журнал|FAILED \(' | tail -n 2 | tr -s ' \n' ' ' | cut -c1-260)"
+    if [ -n "$cause" ]; then
+      reason="$(sed 's/\x1b\[[0-9;]*m//g' "$LOG" 2>/dev/null | grep '✖' | tail -n 1 | sed 's/^ *✖ *//' | cut -c1-80): $cause"
+    fi
     # still the old version: it keeps its build id, and if the build failed the new sources go back as well
     [ -n "$current" ] && env_set APP_VERSION "$current"
     env_set APP_VERSION_NAME "$cur_nm"

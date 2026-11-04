@@ -1,5 +1,5 @@
 /** Pieces of Settings → Updates: steps, warnings, release notes, the log and the options. */
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { api, type Changelog, type UpdateHistoryItem, type UpdateInfo, type UpdateNotes, type UpdatePreflight } from '../../api';
 import { t, useI18n, type TKey } from '../../i18n';
 import { ChannelName, ChannelPicker } from '../../components/ChannelPicker';
@@ -32,10 +32,59 @@ export function ChangeSummary({ current, notes }: { current: string | null | und
   const s = notes ? changeSummary(notes.releases, current) : null;
   if (!s || s.versions === 0 || s.added + s.fixed + s.other === 0) return null;
   const parts = [t('upd.sum.versions', { n: s.versions }), s.added ? t('upd.sum.new', { n: s.added }) : '', s.fixed ? t('upd.sum.fixed', { n: s.fixed }) : '', s.other ? t('upd.sum.other', { n: s.other }) : ''].filter(Boolean);
+  void parts;
+  const chips: { icon: string; text: string }[] = [
+    { icon: '📦', text: t('upd.sum.versions', { n: s.versions }) },
+    ...(s.added ? [{ icon: '✨', text: t('upd.sum.new', { n: s.added }) }] : []),
+    ...(s.fixed ? [{ icon: '🔧', text: t('upd.sum.fixed', { n: s.fixed }) }] : []),
+    ...(s.other ? [{ icon: '🧩', text: t('upd.sum.other', { n: s.other }) }] : []),
+  ];
   return (
-    <p className="relative mt-4 text-sm font-bold text-white/90">
-      <span className="font-black">{t('upd.sum.t')}:</span> {parts.join(' · ')}
-    </p>
+    <div className="relative mt-5">
+      <p className="upd-label">{t('upd.sum.t')}</p>
+      <ul className="upd-chips">
+        {chips.map((c) => <li key={c.icon} className="upd-chip"><span aria-hidden>{c.icon}</span>{c.text}</li>)}
+      </ul>
+    </div>
+  );
+}
+
+/** the two versions side by side: what is installed and what is coming, big, with the dates under them */
+export function VersionHero({ cur, next, since, from }: { cur: string; next: string; since?: string | null; from?: string | null }) {
+  return (
+    <dl className="upd-ver">
+      <div className="upd-ver-cell is-old">
+        <dt>{t('upd.installed')}</dt>
+        <dd className="upd-ver-n">{cur}</dd>
+        {since ? <dd className="upd-ver-d">{t('upd.since', { date: since })}</dd> : null}
+      </div>
+      <div aria-hidden className="upd-ver-arrow">→</div>
+      <div className="upd-ver-cell is-new">
+        <dt>{t('upd.inRepo')}</dt>
+        <dd className="upd-ver-n">{next}</dd>
+        {from ? <dd className="upd-ver-d">{t('upd.from', { date: from })}</dd> : null}
+      </div>
+    </dl>
+  );
+}
+
+/** the rare and risky actions behind a «⋯» button: it closes on Esc, on a click outside and after a choice */
+export function MoreMenu({ children }: { children: (close: () => void) => ReactNode }) {
+  const [open, setOpen] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const away = (e: MouseEvent) => { if (!box.current?.contains(e.target as Node)) setOpen(false); };
+    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+    document.addEventListener('mousedown', away);
+    document.addEventListener('keydown', esc);
+    return () => { document.removeEventListener('mousedown', away); document.removeEventListener('keydown', esc); };
+  }, [open]);
+  return (
+    <div className="upd-more" ref={box}>
+      <button type="button" className="upd-more-btn" aria-haspopup="menu" aria-expanded={open} aria-label={t('upd.more')} title={t('upd.more')} onClick={() => setOpen((v) => !v)}>⋯</button>
+      {open && <div className="upd-more-menu" role="menu">{children(() => setOpen(false))}</div>}
+    </div>
   );
 }
 
@@ -46,8 +95,8 @@ export function PreflightNote({ pf, current, notes }: { pf: UpdatePreflight | nu
   const flags = notes ? upcomingFlags(notes.releases, current, lang) : [];
   if (warns.length === 0 && flags.length === 0) return null;
   return (
-    <div className="relative mt-4 space-y-2 rounded-2xl bg-black/20 px-4 py-3 text-sm font-bold" role="note">
-      {warns.map((w) => <p key={w.kind}>{warnText(w)}</p>)}
+    <div className="upd-note" role="note">
+      {warns.map((w) => <p key={w.kind} className="upd-note-row"><span aria-hidden>{w.kind === 'players' ? '👥' : w.kind === 'noBackup' ? '💾' : '🕒'}</span><span>{warnText(w)}</span></p>)}
       {flags.length > 0 && (
         <div>
           <p className="font-black">{t('upd.fl.title')}</p>

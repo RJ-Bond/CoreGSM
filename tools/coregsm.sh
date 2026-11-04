@@ -780,6 +780,12 @@ cmd_update() {
     # pull the actual cause out of the installer output so it is visible in the panel and on screen
     local reason
     reason="$(sed 's/\x1b\[[0-9;]*m//g' "$LOG" 2>/dev/null | grep -E '✖|FATAL|Не удалось|Недостаточно|Мало места|ERROR' | grep -v 'Подробности' | sed 's/\. Полный журнал:.*//' | tail -n 2 | tr -s ' \n' ' ' | cut -c1-220)"
+    # the lines above name the failed step only; the cause itself is in the output of the step (docker build, npm, disk)
+    local cause
+    cause="$(sed 's/\x1b\[[0-9;]*m//g' "$LOG" 2>/dev/null | grep -iE 'error|failed|no space left|denied|cannot|could not|timed out|non-zero|killed|unable|fatal' | grep -vE '✖|Не удалось|Подробности|Полный журнал|FAILED \(' | tail -n 2 | tr -s ' \n' ' ' | cut -c1-260)"
+    if [ -n "$cause" ]; then
+      reason="$(sed 's/\x1b\[[0-9;]*m//g' "$LOG" 2>/dev/null | grep '✖' | tail -n 1 | sed 's/^ *✖ *//' | cut -c1-80): $cause"
+    fi
     # still the old version: it keeps its build id, and if the build failed the new sources go back as well
     [ -n "$current" ] && env_set APP_VERSION "$current"
     env_set APP_VERSION_NAME "$cur_nm"
