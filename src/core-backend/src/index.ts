@@ -14,6 +14,7 @@ import { registerDiscordRegistration } from './discord/discordRegister.js';
 import { errorCodes } from './errors.js';
 import { registerDigest, startDigestTimer } from './alerts/digest.js';
 import { registerOg } from './images/ogImage.js';
+import { registerProfileCard } from './images/profileCard.js';
 import { registerServerChart } from './images/serverChart.js';
 import { registerGames } from './monitoring/games.js';
 import { registerCustomGames } from './monitoring/customGames.js';
@@ -45,6 +46,7 @@ import { registerPublicApi } from './admin/publicApi.js';
 import { registerWidgets } from './images/widgets.js';
 import { registerFavoritePush } from './alerts/favoritePush.js';
 import { router as accountRouter } from './routes/account.js';
+import { router as accountDataRouter } from './routes/accountData.js';
 import { router as settingsRouter } from './routes/settings.js';
 import { router as updatesRouter } from './routes/updates.js';
 import { router as usersRouter } from './routes/users.js';
@@ -110,6 +112,7 @@ app.get('/api/health', (_req, res) => {
 
 // the order matters only where paths overlap; it is the order the routes had in one file
 app.use(accountRouter);
+app.use(accountDataRouter);
 app.use(settingsRouter);
 app.use(updatesRouter);
 app.use(usersRouter);
@@ -194,6 +197,7 @@ registerProfile({
     return customAvatarUrl(id) ?? (u ? avatarUrl(u) : null);
   },
 });
+registerProfileCard(app, rateLimit);
 registerDiscordRegistration({ app, internal, wrap, publicBase, registrationOpen, registrationMode, rulesText });
 registerNickStatus({ app, auth, userId: (req) => (req as AuthedRequest).user!.id });
 registerCovers({ app, admin: allow('servers') });

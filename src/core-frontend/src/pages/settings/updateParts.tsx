@@ -1,8 +1,9 @@
 /** Pieces of Settings → Updates: steps, warnings, release notes, the log and the options. */
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useState } from 'react';
 import { api, type Changelog, type UpdateHistoryItem, type UpdateInfo, type UpdateNotes, type UpdatePreflight } from '../../api';
 import { t, useI18n, type TKey } from '../../i18n';
 import { ChannelName, ChannelPicker } from '../../components/ChannelPicker';
+export { MoreMenu } from '../../components/MoreMenu';
 import { ErrorLine, fmtDateTime, Section, errText, toast } from '../../ui';
 import { changeSummary, cleanNote, groupCommits, isNewerRelease, preflightWarnings, stepStates, upcomingFlags, versionText, type PreflightWarning } from './updateLogic';
 
@@ -65,26 +66,6 @@ export function VersionHero({ cur, next, since, from }: { cur: string; next: str
         {from ? <dd className="upd-ver-d">{t('upd.from', { date: from })}</dd> : null}
       </div>
     </dl>
-  );
-}
-
-/** the rare and risky actions behind a «⋯» button: it closes on Esc, on a click outside and after a choice */
-export function MoreMenu({ children }: { children: (close: () => void) => ReactNode }) {
-  const [open, setOpen] = useState(false);
-  const box = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!open) return;
-    const away = (e: MouseEvent) => { if (!box.current?.contains(e.target as Node)) setOpen(false); };
-    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
-    document.addEventListener('mousedown', away);
-    document.addEventListener('keydown', esc);
-    return () => { document.removeEventListener('mousedown', away); document.removeEventListener('keydown', esc); };
-  }, [open]);
-  return (
-    <div className="upd-more" ref={box}>
-      <button type="button" className="upd-more-btn" aria-haspopup="menu" aria-expanded={open} aria-label={t('upd.more')} title={t('upd.more')} onClick={() => setOpen((v) => !v)}>⋯</button>
-      {open && <div className="upd-more-menu" role="menu">{children(() => setOpen(false))}</div>}
-    </div>
   );
 }
 

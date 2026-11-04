@@ -100,14 +100,32 @@ export function AchievementsPreview() {
       {data === undefined && <div className="skeleton h-16 rounded-2xl bg-soft" />}
       {data && earned.length === 0 && <p className="font-semibold text-mute">{t('pf.ach.noneYet')}</p>}
       {earned.length > 0 && (
-        <ul className="flex flex-wrap gap-2">
-          {earned.slice(0, 8).map((a) => (
-            <li key={a.id} className="pf-ach-mini" title={a.description}>
-              <span><AchievementArt id={a.id} slug={a.icon} size={26} /></span>
-              <span className="pr-1">{a.title}</span>
-            </li>
-          ))}
-        </ul>
+        <>
+          <p className="pf-ach-label">{t('pf.ach.latest')}</p>
+          <ul className="pf-ach-showcase">
+            {earned.slice(0, 3).map((a) => (
+              <li key={a.id} className="pf-ach-hero">
+                <span className="pf-ach-hero-art"><AchievementArt id={a.id} slug={a.icon} size={52} /></span>
+                <span className="min-w-0">
+                  <span className="block font-extrabold leading-tight">{a.title}</span>
+                  <span className="block text-sm font-semibold text-mute">{a.description}</span>
+                  {a.earnedAt ? <span className="mt-0.5 block text-xs font-bold text-mute">{fmtDate(a.earnedAt)}</span> : null}
+                </span>
+              </li>
+            ))}
+          </ul>
+          {earned.length > 3 && (
+            <ul className="mt-3 flex flex-wrap gap-2">
+              {earned.slice(3, 9).map((a) => (
+                <li key={a.id} className="pf-ach-mini" title={a.description}>
+                  <span><AchievementArt id={a.id} slug={a.icon} size={26} /></span>
+                  <span className="pr-1">{a.title}</span>
+                </li>
+              ))}
+              {earned.length > 9 && <li className="self-center text-sm font-extrabold text-mute">{t('pf.ach.more', { n: earned.length - 9 })}</li>}
+            </ul>
+          )}
+        </>
       )}
       {next && (
         <div className="pf-next">

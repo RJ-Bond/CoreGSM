@@ -25,7 +25,7 @@ import { DATA_DIR, db, EFFECTIVE_NAME } from '../db.js';
 import { nextRank, rankForHours, rankProgress } from './ranks.js';
 import { checkNickNow } from './nickOnboarding.js';
 import { log } from '../logger.js';
-import { validTz, prefsOf, playerOf, RETAIN_DAYS, computeStats, type Prefs, type PlayerProfile } from './profileCore.js';
+import { validTz, prefsOf, playerOf, RETAIN_DAYS, computeStats, type Prefs, type PlayerProfile, type Privacy } from './profileCore.js';
 import { achievementsOf } from './profileAchievements.js';
 import { vrAchievementsOf, vrHoursOf } from './profileVr.js';
 
@@ -167,6 +167,7 @@ export function registerProfile(deps: {
         gameNick: z.string().trim().max(40).optional(),
         bio: z.string().trim().max(200).optional(),
         publicProfile: z.boolean().optional(),
+        privacy: z.object({ stats: z.boolean().optional(), achievements: z.boolean().optional(), online: z.boolean().optional() }).optional(),
       })
       .safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Ник — до 40 символов, о себе — до 200' });
@@ -174,11 +175,12 @@ export function registerProfile(deps: {
       gameNick: (b.data.gameNick ?? cur.gameNick).replace(/[\u0000-\u001f]/g, ' ').trim(),
       bio: (b.data.bio ?? cur.bio).replace(/[\u0000-\u0009\u000b-\u001f]/g, ' '),
       publicProfile: b.data.publicProfile ?? cur.publicProfile,
+      privacy: { ...cur.privacy, ...Object.fromEntries(Object.entries(b.data.privacy ?? {}).filter(([, v]) => v !== undefined)) } as Privacy,
     };
     db.prepare(
-      `INSERT INTO user_player (user_id, game_nick, bio, public_profile) VALUES (?, ?, ?, ?)
-       ON CONFLICT(user_id) DO UPDATE SET game_nick = excluded.game_nick, bio = excluded.bio, public_profile = excluded.public_profile`,
-    ).run(userId(req), next.gameNick, next.bio, next.publicProfile ? 1 : 0);
+      `INSERT INTO user_player (user_id, game_nick, bio, public_profile, privacy) VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(user_id) DO UPDATE SET game_nick = excluded.game_nick, bio = excluded.bio, public_profile = excluded.public_profile, privacy = excluded.privacy`,
+    ).run(userId(req), next.gameNick, next.bio, next.publicProfile ? 1 : 0, JSON.stringify(next.privacy));
     if (JSON.stringify(cur) !== JSON.stringify(next)) logAccount(req, userId(req), 'profile_changed');
     if (next.gameNick !== cur.gameNick) checkNickNow(userId(req), next.gameNick);
     res.json(next);
@@ -305,22 +307,30 @@ export function registerProfile(deps: {
       gameNick: p.gameNick,
       bio: p.bio,
       memberSince: u.created_at,
-      stats: {
-        totalSeconds: stats.totalSeconds,
-        sessions: stats.sessions,
-        streakDays: stats.streakDays,
-        favouriteServerName: stats.byServer[0]?.name ?? null,
-      },
-      achievements: achievementsOf(u.id)
-        .filter((a) => a.earned)
-        .map((a) => ({ id: a.id, title: a.title, icon: a.icon })),
-      rank: (() => {
+      privacy: p.privacy,
+      playingNow: p.privacy.online && p.gameNick && stats.playingNow ? { serverId: stats.playingNow.serverId, name: stats.playingNow.name, game: stats.playingNow.game } : null,
+      stats: p.privacy.stats
+        ? {
+            totalSeconds: stats.totalSeconds,
+            sessions: stats.sessions,
+            streakDays: stats.streakDays,
+            favouriteServerName: stats.byServer[0]?.name ?? null,
+          }
+        : null,
+      achievements: !p.privacy.achievements
+        ? []
+        : achievementsOf(u.id)
+            .filter((a) => a.earned)
+            .map((a) => ({ id: a.id, title: a.title, icon: a.icon })),
+      rank: !p.privacy.stats ? null : (() => {
         const r = rankForHours(vrHoursOf(u.id, p.gameNick).hours);
         return { id: r.id, name: r.name, color: r.color, image: r.image };
       })(),
-      vrAchievements: vrAchievementsOf(u.id)
-        .filter((a) => a.earned)
-        .map((a) => ({ id: a.id, title: a.title, image: a.image })),
+      vrAchievements: !p.privacy.achievements
+        ? []
+        : vrAchievementsOf(u.id)
+            .filter((a) => a.earned)
+            .map((a) => ({ id: a.id, title: a.title, image: a.image })),
     });
   });
 }

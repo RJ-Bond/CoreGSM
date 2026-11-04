@@ -8,7 +8,8 @@ import { RankEmblem, rankName, vrAchText } from '../components/profile/VrRank';
 import { bannerStyle } from '../components/profile/banner';
 import { fmtDuration } from '../components/profile/format';
 import { t, useI18n } from '../i18n';
-import { Empty, fmtDate, Section, UserAvatar } from '../ui';
+import { Empty, fmtDate, GameAvatar, Section, UserAvatar } from '../ui';
+import { FollowButton } from '../components/profile/Follows';
 
 type State = { kind: 'loading' } | { kind: 'ok'; p: PublicProfile } | { kind: 'missing' } | { kind: 'error'; text: string };
 
@@ -100,12 +101,19 @@ export default function PublicProfilePage({ username }: { username: string }) {
               {mine && <span className="pill pill-ok">{t('pf.you')}</span>}
             </div>
             <div className="mt-2 flex flex-wrap items-center gap-2">
+              {p.playingNow && (
+                <a href={`/servers/${p.playingNow.serverId}`} className="pf-live" title={p.playingNow.name}>
+                  <GameAvatar game={p.playingNow.game} size={18} />
+                  <span className="truncate">{t('pf.hero.playing', { server: p.playingNow.name })}</span>
+                </a>
+              )}
               {p.gameNick && <span className="pf-meta"><IcoGamepad />{t('pub.nick', { nick: p.gameNick })}</span>}
               {Number.isFinite(since) && <span className="pf-meta"><IcoCalendar />{t('pub.since', { date: fmtDate(since) })}</span>}
             </div>
           </div>
           <div className="mt-3 flex flex-wrap gap-2">
             {mine && <a href="/profile" className="btn btn-sm">{t('pf.you.edit')}</a>}
+            {!mine && p.gameNick && <FollowButton nick={p.gameNick} />}
             <ShareButton username={p.username} />
           </div>
         </div>
@@ -117,14 +125,16 @@ export default function PublicProfilePage({ username }: { username: string }) {
         </Section>
       )}
 
-      <Section title={t('pub.stats')}>
-        <div className="pf-tiles">
-          <StatTile icon={<IcoClock />} value={fmtDuration(s.totalSeconds)} label={t('pf.stats.online')} />
-          <StatTile icon={<IcoPlay />} value={String(s.sessions)} label={t('pf.stats.sessions')} />
-          <StatTile icon={<IcoFlame />} hot={s.streakDays >= 7} value={t('pf.stats.days', { n: s.streakDays })} label={t('pf.stats.streak')} />
-          <StatTile icon={<IcoHeart />} value={s.favouriteServerName || '–'} label={t('pf.stats.favourite')} />
-        </div>
-      </Section>
+      {p.stats && (
+        <Section title={t('pub.stats')}>
+          <div className="pf-tiles">
+            <StatTile icon={<IcoClock />} value={fmtDuration(s.totalSeconds)} label={t('pf.stats.online')} />
+            <StatTile icon={<IcoPlay />} value={String(s.sessions)} label={t('pf.stats.sessions')} />
+            <StatTile icon={<IcoFlame />} hot={s.streakDays >= 7} value={t('pf.stats.days', { n: s.streakDays })} label={t('pf.stats.streak')} />
+            <StatTile icon={<IcoHeart />} value={s.favouriteServerName || '–'} label={t('pf.stats.favourite')} />
+          </div>
+        </Section>
+      )}
 
       {p.vrAchievements && p.vrAchievements.length > 0 && (
         <Section title={t('vr.ach.title')}>

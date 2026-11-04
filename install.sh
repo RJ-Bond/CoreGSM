@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="3b1cffb1080d"
+COREGSM_BUILD="5acd735ccd3c"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.5"
+COREGSM_VERSION="1.1.6"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -21787,6 +21787,8 @@ export const ERRORS = {
   backup_op_failed: 'Не удалось выполнить операцию: {reason}',
   backup_not_found: 'Копия не найдена',
   backup_nothing_to_check: 'Копий пока нет: проверять нечего',
+  check_input: 'Проверьте введённые данные',
+  confirm_username: 'Введите имя аккаунта для подтверждения',
   backup_remote_https: 'Адрес для копии должен начинаться с https://',
   backup_s3_https: 'Адрес хранилища должен начинаться с https://',
   backup_s3_endpoint: 'Адрес хранилища: например https://s3.eu-central-1.amazonaws.com',
@@ -23587,6 +23589,197 @@ export function monogramOf(label: string): string {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/images"
+  cat > "$APP_DIR/core-backend/src/images/profileCard.ts" << '__COREGSM_EOF__'
+/**
+ * A picture of a player's profile to share (Discord, a forum): the name, the rank, the last 30 days of play.
+ *
+ *   GET /api/u/:username/card.png      only for a public profile; what the owner hid is not drawn
+ */
+import type { Express, NextFunction, Request, RequestHandler, Response } from 'express';
+import skia from 'skia-canvas';
+import { db } from '../db.js';
+import { brand } from '../admin/site.js';
+import { computeStats, playerOf } from '../profile/profileCore.js';
+import { rankForHours } from '../profile/ranks.js';
+import { vrHoursOf } from '../profile/profileVr.js';
+import { hueOf, hoursText, initialOf } from './profileCardLogic.js';
+
+const { Canvas } = skia;
+const SANS = '"DejaVu Sans", "Liberation Sans", sans-serif';
+const W = 1200;
+const H = 630;
+
+export interface ProfileCardData {
+  username: string;
+  role: string;
+  rank: { name: string; color: string } | null;
+  stats: { hours: number; sessions: number; streakDays: number; favourite: string | null } | null;
+  playingNow: string | null;
+  bio: string;
+}
+
+/** null when there is no such user or the profile is not public */
+export function profileCardData(username: string): ProfileCardData | null {
+  const u = db.prepare("SELECT id, username, role FROM users WHERE ulower(username) = ? AND status = 'active'").get(username.trim().toLowerCase()) as
+    | { id: number; username: string; role: string }
+    | undefined;
+  if (!u) return null;
+  const p = playerOf(u.id);
+  if (!p.publicProfile) return null;
+  const { stats } = computeStats(u.id, 30);
+  const r = p.privacy.stats ? rankForHours(vrHoursOf(u.id, p.gameNick).hours) : null;
+  return {
+    username: u.username,
+    role: u.role,
+    rank: r ? { name: r.name, color: r.color } : null,
+    stats: p.privacy.stats ? { hours: stats.totalSeconds / 3600, sessions: stats.sessions, streakDays: stats.streakDays, favourite: stats.byServer[0]?.name ?? null } : null,
+    playingNow: p.privacy.online && p.gameNick && stats.playingNow ? stats.playingNow.name : null,
+    bio: p.bio,
+  };
+}
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+const fit = (ctx: any, text: string, maxW: number): string => {
+  let s = text;
+  while (s.length > 2 && ctx.measureText(s).width > maxW) s = `${s.slice(0, -2)}…`;
+  return s;
+};
+
+export async function renderProfileCard(d: ProfileCardData): Promise<Buffer> {
+  const b = brand();
+  const accent = /^#[0-9a-f]{6}$/i.test(b.color) ? b.color : '#7b6cf6';
+  const canvas = new Canvas(W, H);
+  const ctx: any = canvas.getContext('2d');
+  const bg = ctx.createLinearGradient(0, 0, W, H);
+  bg.addColorStop(0, '#17142c');
+  bg.addColorStop(1, '#0b0a16');
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, W, H);
+  // a soft glow of the brand colour in the corner
+  const glow = ctx.createRadialGradient(W, 0, 0, W, 0, 620);
+  glow.addColorStop(0, `${accent}55`);
+  glow.addColorStop(1, `${accent}00`);
+  ctx.fillStyle = glow;
+  ctx.fillRect(0, 0, W, H);
+
+  // the avatar: a circle with the first letter on a colour taken from the name
+  const hue = hueOf(d.username);
+  const ax = 150;
+  const ay = 170;
+  const ar = 78;
+  ctx.beginPath();
+  ctx.arc(ax, ay, ar + 8, 0, Math.PI * 2);
+  ctx.fillStyle = d.rank?.color ?? accent;
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(ax, ay, ar, 0, Math.PI * 2);
+  ctx.fillStyle = `hsl(${hue} 62% 46%)`;
+  ctx.fill();
+  ctx.fillStyle = '#ffffff';
+  ctx.font = `800 84px ${SANS}`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(initialOf(d.username), ax, ay + 4);
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
+
+  // the name, the rank and the line under them
+  const tx = 270;
+  let size = 76;
+  ctx.font = `800 ${size}px ${SANS}`;
+  while (size > 40 && ctx.measureText(d.username).width > W - tx - 60) {
+    size -= 4;
+    ctx.font = `800 ${size}px ${SANS}`;
+  }
+  ctx.fillStyle = '#f4f2ff';
+  ctx.fillText(d.username, tx, 160);
+  if (d.rank) {
+    ctx.fillStyle = d.rank.color;
+    ctx.font = `700 34px ${SANS}`;
+    ctx.fillText(d.rank.name, tx, 212);
+  }
+  const sub = d.playingNow ? `▶ ${d.playingNow}` : d.bio;
+  if (sub) {
+    ctx.fillStyle = d.playingNow ? '#3ddc84' : 'rgba(244,242,255,.7)';
+    ctx.font = `600 28px ${SANS}`;
+    ctx.fillText(fit(ctx, sub.replace(/\s+/g, ' '), W - tx - 60), tx, 262);
+  }
+
+  // four tiles with the numbers of the last 30 days
+  if (d.stats) {
+    const tiles: [string, string][] = [
+      [hoursText(d.stats.hours), 'в игре за 30 дней'],
+      [String(d.stats.sessions), 'заходов'],
+      [`${d.stats.streakDays}`, 'дней подряд'],
+      [d.stats.favourite ?? '—', 'любимый сервер'],
+    ];
+    const gap = 24;
+    const tw = (W - 100 - gap * 3) / 4;
+    tiles.forEach(([value, label], i) => {
+      const x = 50 + i * (tw + gap);
+      const y = 340;
+      ctx.fillStyle = 'rgba(255,255,255,.07)';
+      ctx.beginPath();
+      ctx.roundRect(x, y, tw, 170, 24);
+      ctx.fill();
+      ctx.fillStyle = '#f4f2ff';
+      let vs = 52;
+      ctx.font = `800 ${vs}px ${SANS}`;
+      while (vs > 24 && ctx.measureText(value).width > tw - 40) {
+        vs -= 4;
+        ctx.font = `800 ${vs}px ${SANS}`;
+      }
+      ctx.fillText(value, x + 20, y + 80);
+      ctx.fillStyle = '#9a95c4';
+      ctx.font = `600 24px ${SANS}`;
+      ctx.fillText(fit(ctx, label, tw - 40), x + 20, y + 128);
+    });
+  }
+
+  // the signature of the panel
+  ctx.fillStyle = accent;
+  ctx.fillRect(50, 568, 64, 6);
+  ctx.fillStyle = 'rgba(244,242,255,.75)';
+  ctx.font = `700 26px ${SANS}`;
+  ctx.fillText(b.name, 130, 580);
+  return (await canvas.toBuffer('png')) as Buffer;
+}
+
+export function registerProfileCard(app: Express, limiter: (max: number) => RequestHandler): void {
+  app.get('/api/u/:username/card.png', limiter(30), async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const d = profileCardData(String(req.params.username ?? ''));
+      if (!d) return void res.status(404).end();
+      res.set({ 'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=300' }).send(await renderProfileCard(d));
+    } catch (e) {
+      next(e);
+    }
+  });
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/images"
+  cat > "$APP_DIR/core-backend/src/images/profileCardLogic.ts" << '__COREGSM_EOF__'
+/** Small pure parts of the profile card picture. */
+
+/** a stable colour angle from a name: the same name is always the same colour */
+export function hueOf(name: string): number {
+  let h = 0;
+  for (const ch of name.toLowerCase()) h = (h * 31 + ch.charCodeAt(0)) % 360;
+  return h;
+}
+
+/** the first letter, upper case; «?» for an empty name */
+export const initialOf = (name: string): string => (Array.from(name.trim())[0] ?? '?').toUpperCase();
+
+/** «94,2 ч» / «12 ч» / «45 мин» / «0 ч» */
+export function hoursText(hours: number): string {
+  if (!Number.isFinite(hours) || hours <= 0) return '0 ч';
+  if (hours < 1) return `${Math.max(1, Math.round(hours * 60))} мин`;
+  const v = hours < 10 ? Math.round(hours * 10) / 10 : Math.round(hours);
+  return `${String(v).replace('.', ',')} ч`;
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/images"
   cat > "$APP_DIR/core-backend/src/images/serverChart.ts" << '__COREGSM_EOF__'
 /** The small 24-hour online chart under a server's Discord message: a signed public PNG. */
 import crypto from 'node:crypto';
@@ -23746,6 +23939,7 @@ import { registerDiscordRegistration } from './discord/discordRegister.js';
 import { errorCodes } from './errors.js';
 import { registerDigest, startDigestTimer } from './alerts/digest.js';
 import { registerOg } from './images/ogImage.js';
+import { registerProfileCard } from './images/profileCard.js';
 import { registerServerChart } from './images/serverChart.js';
 import { registerGames } from './monitoring/games.js';
 import { registerCustomGames } from './monitoring/customGames.js';
@@ -23777,6 +23971,7 @@ import { registerPublicApi } from './admin/publicApi.js';
 import { registerWidgets } from './images/widgets.js';
 import { registerFavoritePush } from './alerts/favoritePush.js';
 import { router as accountRouter } from './routes/account.js';
+import { router as accountDataRouter } from './routes/accountData.js';
 import { router as settingsRouter } from './routes/settings.js';
 import { router as updatesRouter } from './routes/updates.js';
 import { router as usersRouter } from './routes/users.js';
@@ -23842,6 +24037,7 @@ app.get('/api/health', (_req, res) => {
 
 // the order matters only where paths overlap; it is the order the routes had in one file
 app.use(accountRouter);
+app.use(accountDataRouter);
 app.use(settingsRouter);
 app.use(updatesRouter);
 app.use(usersRouter);
@@ -23926,6 +24122,7 @@ registerProfile({
     return customAvatarUrl(id) ?? (u ? avatarUrl(u) : null);
   },
 });
+registerProfileCard(app, rateLimit);
 registerDiscordRegistration({ app, internal, wrap, publicBase, registrationOpen, registrationMode, rulesText });
 registerNickStatus({ app, auth, userId: (req) => (req as AuthedRequest).user!.id });
 registerCovers({ app, admin: allow('servers') });
@@ -24400,6 +24597,12 @@ CREATE TABLE IF NOT EXISTS favorite_push_prefs (
   on_free_slot INTEGER NOT NULL DEFAULT 1,
   on_down INTEGER NOT NULL DEFAULT 0
 );`),
+  },
+  {
+    version: 14,
+    name: 'user_player.privacy',
+    // what a public profile shows: a JSON object of switches, empty = everything shown
+    up: (db) => { if (hasTable(db, 'user_player')) addColumn(db, 'user_player', 'privacy', "TEXT NOT NULL DEFAULT ''"); },
   },
 ];
 
@@ -29513,7 +29716,7 @@ import { DATA_DIR, db, EFFECTIVE_NAME } from '../db.js';
 import { nextRank, rankForHours, rankProgress } from './ranks.js';
 import { checkNickNow } from './nickOnboarding.js';
 import { log } from '../logger.js';
-import { validTz, prefsOf, playerOf, RETAIN_DAYS, computeStats, type Prefs, type PlayerProfile } from './profileCore.js';
+import { validTz, prefsOf, playerOf, RETAIN_DAYS, computeStats, type Prefs, type PlayerProfile, type Privacy } from './profileCore.js';
 import { achievementsOf } from './profileAchievements.js';
 import { vrAchievementsOf, vrHoursOf } from './profileVr.js';
 
@@ -29655,6 +29858,7 @@ export function registerProfile(deps: {
         gameNick: z.string().trim().max(40).optional(),
         bio: z.string().trim().max(200).optional(),
         publicProfile: z.boolean().optional(),
+        privacy: z.object({ stats: z.boolean().optional(), achievements: z.boolean().optional(), online: z.boolean().optional() }).optional(),
       })
       .safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Ник — до 40 символов, о себе — до 200' });
@@ -29662,11 +29866,12 @@ export function registerProfile(deps: {
       gameNick: (b.data.gameNick ?? cur.gameNick).replace(/[\u0000-\u001f]/g, ' ').trim(),
       bio: (b.data.bio ?? cur.bio).replace(/[\u0000-\u0009\u000b-\u001f]/g, ' '),
       publicProfile: b.data.publicProfile ?? cur.publicProfile,
+      privacy: { ...cur.privacy, ...Object.fromEntries(Object.entries(b.data.privacy ?? {}).filter(([, v]) => v !== undefined)) } as Privacy,
     };
     db.prepare(
-      `INSERT INTO user_player (user_id, game_nick, bio, public_profile) VALUES (?, ?, ?, ?)
-       ON CONFLICT(user_id) DO UPDATE SET game_nick = excluded.game_nick, bio = excluded.bio, public_profile = excluded.public_profile`,
-    ).run(userId(req), next.gameNick, next.bio, next.publicProfile ? 1 : 0);
+      `INSERT INTO user_player (user_id, game_nick, bio, public_profile, privacy) VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(user_id) DO UPDATE SET game_nick = excluded.game_nick, bio = excluded.bio, public_profile = excluded.public_profile, privacy = excluded.privacy`,
+    ).run(userId(req), next.gameNick, next.bio, next.publicProfile ? 1 : 0, JSON.stringify(next.privacy));
     if (JSON.stringify(cur) !== JSON.stringify(next)) logAccount(req, userId(req), 'profile_changed');
     if (next.gameNick !== cur.gameNick) checkNickNow(userId(req), next.gameNick);
     res.json(next);
@@ -29793,22 +29998,30 @@ export function registerProfile(deps: {
       gameNick: p.gameNick,
       bio: p.bio,
       memberSince: u.created_at,
-      stats: {
-        totalSeconds: stats.totalSeconds,
-        sessions: stats.sessions,
-        streakDays: stats.streakDays,
-        favouriteServerName: stats.byServer[0]?.name ?? null,
-      },
-      achievements: achievementsOf(u.id)
-        .filter((a) => a.earned)
-        .map((a) => ({ id: a.id, title: a.title, icon: a.icon })),
-      rank: (() => {
+      privacy: p.privacy,
+      playingNow: p.privacy.online && p.gameNick && stats.playingNow ? { serverId: stats.playingNow.serverId, name: stats.playingNow.name, game: stats.playingNow.game } : null,
+      stats: p.privacy.stats
+        ? {
+            totalSeconds: stats.totalSeconds,
+            sessions: stats.sessions,
+            streakDays: stats.streakDays,
+            favouriteServerName: stats.byServer[0]?.name ?? null,
+          }
+        : null,
+      achievements: !p.privacy.achievements
+        ? []
+        : achievementsOf(u.id)
+            .filter((a) => a.earned)
+            .map((a) => ({ id: a.id, title: a.title, icon: a.icon })),
+      rank: !p.privacy.stats ? null : (() => {
         const r = rankForHours(vrHoursOf(u.id, p.gameNick).hours);
         return { id: r.id, name: r.name, color: r.color, image: r.image };
       })(),
-      vrAchievements: vrAchievementsOf(u.id)
-        .filter((a) => a.earned)
-        .map((a) => ({ id: a.id, title: a.title, image: a.image })),
+      vrAchievements: !p.privacy.achievements
+        ? []
+        : vrAchievementsOf(u.id)
+            .filter((a) => a.earned)
+            .map((a) => ({ id: a.id, title: a.title, image: a.image })),
     });
   });
 }
@@ -29973,14 +30186,36 @@ export function prefsOf(userId: number): Prefs {
 }
 
 // ---------- player profile ----------
+/** what a public profile shows besides the name and the picture; everything is shown until the owner switches it off */
+export interface Privacy {
+  stats: boolean;
+  achievements: boolean;
+  /** «playing now on …» */
+  online: boolean;
+}
+export const PRIVACY_KEYS = ['stats', 'achievements', 'online'] as const;
+export function parsePrivacy(raw: string | null | undefined): Privacy {
+  let o: Record<string, unknown> = {};
+  try {
+    const v = raw ? JSON.parse(raw) : {};
+    if (v && typeof v === 'object') o = v as Record<string, unknown>;
+  } catch {
+    /* an unreadable value means the defaults */
+  }
+  return { stats: o.stats !== false, achievements: o.achievements !== false, online: o.online !== false };
+}
+
 export interface PlayerProfile {
   gameNick: string;
   bio: string;
   publicProfile: boolean;
+  privacy: Privacy;
 }
 export function playerOf(userId: number): PlayerProfile {
-  const r = db.prepare('SELECT game_nick, bio, public_profile FROM user_player WHERE user_id = ?').get(userId) as { game_nick: string; bio: string; public_profile: number } | undefined;
-  return { gameNick: r?.game_nick ?? '', bio: r?.bio ?? '', publicProfile: !!r?.public_profile };
+  const r = db.prepare('SELECT game_nick, bio, public_profile, privacy FROM user_player WHERE user_id = ?').get(userId) as
+    | { game_nick: string; bio: string; public_profile: number; privacy: string }
+    | undefined;
+  return { gameNick: r?.game_nick ?? '', bio: r?.bio ?? '', publicProfile: !!r?.public_profile, privacy: parsePrivacy(r?.privacy) };
 }
 
 // ---------- time zones ----------
@@ -30056,6 +30291,8 @@ export interface Stats {
   longestSessionSec: number;
   streakDays: number;
   lastSeenAt: number | null;
+  /** the visit that is going on right now */
+  playingNow: { serverId: number; name: string; game: string; since: number } | null;
   favouriteServerId: number | null;
   byServer: { serverId: number; name: string; game: string; seconds: number; sessions: number }[];
   byDay: { date: string; seconds: number }[];
@@ -30128,6 +30365,10 @@ export function computeStats(userId: number, days: number): { stats: Stats; all:
       longestSessionSec: Math.round(longest / 1000),
       streakDays: streak,
       lastSeenAt: lastSeen,
+      playingNow: (() => {
+        const open = [...all].reverse().find((s) => s.left_at === null);
+        return open ? { serverId: open.server_id, name: open.sname, game: open.game, since: open.joined_at } : null;
+      })(),
       favouriteServerId: byServer[0]?.serverId ?? null,
       byServer,
       byDay: [...byDayMap].map(([date, ms]) => ({ date, seconds: Math.round(ms / 1000) })),
@@ -30904,6 +31145,95 @@ router.delete('/api/me/discord', auth, (req: AuthedRequest, res) => {
   logAccount(req, req.user!.id, 'discord_unlinked');
   res.json({ ok: true });
 });
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/routes"
+  cat > "$APP_DIR/core-backend/src/routes/accountData.ts" << '__COREGSM_EOF__'
+/**
+ * The player's own data: a download of everything the panel keeps about the account, and deleting the account.
+ *
+ *   GET    /api/me/export   one JSON file (no password hashes, session tokens or push keys)
+ *   DELETE /api/me          deletes the account; asks for the password (or the user name, for an account made through
+ *                           Discord that has no password); the last administrator cannot be deleted
+ */
+import express from 'express';
+import bcrypt from 'bcryptjs';
+import { z } from 'zod';
+import { auth, type AuthedRequest } from '../security/auth.js';
+import { clearSessionCookie, windowLimiter } from '../security/security.js';
+import { db } from '../db.js';
+import { hasTable } from '../schema.js';
+import { wrap } from '../http.js';
+import { removeAvatar } from '../images/avatars.js';
+import { removeBanner } from '../profile/profile.js';
+import { log } from '../logger.js';
+
+export const router = express.Router();
+
+const rows = (sql: string, ...args: unknown[]): unknown[] => db.prepare(sql).all(...args);
+
+/** everything the panel keeps about one account, as plain data */
+export function exportAccount(id: number): Record<string, unknown> {
+  const u = db.prepare('SELECT username, role, email, email_verified, created_at, discord_name, status FROM users WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+  const out: Record<string, unknown> = {
+    exportedAt: new Date().toISOString(),
+    account: u ?? null,
+    preferences: db.prepare('SELECT lang, timezone, time_format, date_format, banner_preset FROM user_prefs WHERE user_id = ?').get(id) ?? null,
+    player: db.prepare('SELECT game_nick, bio, public_profile, privacy FROM user_player WHERE user_id = ?').get(id) ?? null,
+    favouriteServers: rows('SELECT s.id, s.name FROM favorites f JOIN servers s ON s.id = f.server_id WHERE f.user_id = ?', id),
+    journal: rows('SELECT ts, kind, ip, ua, detail FROM account_events WHERE user_id = ? ORDER BY ts DESC LIMIT 1000', id),
+  };
+  if (hasTable(db, 'player_follows')) out.followedPlayers = rows('SELECT nick, created_at FROM player_follows WHERE user_id = ?', id);
+  if (hasTable(db, 'favorite_push_prefs')) out.favouritePushPrefs = db.prepare('SELECT on_online, on_free_slot, on_down FROM favorite_push_prefs WHERE user_id = ?').get(id) ?? null;
+  const nick = (db.prepare('SELECT game_nick FROM user_player WHERE user_id = ?').get(id) as { game_nick: string } | undefined)?.game_nick;
+  if (nick) {
+    out.playSessions = rows(
+      `SELECT s.name AS server, ps.joined_at, ps.left_at FROM player_sessions ps JOIN servers s ON s.id = ps.server_id
+       WHERE ulower(ps.name) = ulower(?) ORDER BY ps.joined_at DESC LIMIT 5000`,
+      nick,
+    );
+  }
+  return out;
+}
+
+router.get('/api/me/export', auth, windowLimiter(10, 3600_000), (req: AuthedRequest, res) => {
+  const name = String(req.user!.username ?? 'account').replace(/[^\w.-]+/g, '_').slice(0, 40) || 'account';
+  res.set({
+    'Content-Type': 'application/json; charset=utf-8',
+    'Content-Disposition': `attachment; filename="coregsm-${name}.json"`,
+    'Cache-Control': 'no-store',
+  });
+  res.send(JSON.stringify(exportAccount(req.user!.id), null, 2));
+});
+
+router.delete(
+  '/api/me',
+  auth,
+  windowLimiter(5, 3600_000),
+  wrap(async (req: AuthedRequest, res) => {
+    const body = z.object({ password: z.string().max(256).optional(), confirm: z.string().max(64).optional() }).safeParse(req.body);
+    if (!body.success) return res.status(400).json({ error: 'Проверьте введённые данные' });
+    const id = req.user!.id;
+    const u = db.prepare('SELECT username, role, status, password_hash, no_password FROM users WHERE id = ?').get(id) as
+      | { username: string; role: string; status: string; password_hash: string; no_password: number }
+      | undefined;
+    if (!u) return res.status(404).json({ error: 'Пользователь не найден' });
+    if (u.role === 'admin' && u.status === 'active') {
+      const n = (db.prepare("SELECT COUNT(*) AS n FROM users WHERE role = 'admin' AND status = 'active'").get() as { n: number }).n;
+      if (n <= 1) return res.status(409).json({ error: 'Нельзя удалить последнего администратора' });
+    }
+    if (u.no_password) {
+      if ((body.data.confirm ?? '').trim().toLowerCase() !== u.username.toLowerCase()) return res.status(403).json({ error: 'Введите имя аккаунта для подтверждения' });
+    } else if (!(await bcrypt.compare(body.data.password ?? '', u.password_hash))) {
+      return res.status(403).json({ error: 'Пароль неверен' });
+    }
+    db.prepare('DELETE FROM users WHERE id = ?').run(id);
+    removeAvatar(id);
+    removeBanner(id);
+    log.info(`Account deleted by its owner: ${u.username}`);
+    clearSessionCookie(req, res);
+    res.json({ ok: true });
+  }),
+);
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/routes"
   cat > "$APP_DIR/core-backend/src/routes/analytics.ts" << '__COREGSM_EOF__'
@@ -111098,10 +111428,18 @@ export interface NickStatus {
 }
 
 /** GET/PUT /me/player */
+export interface Privacy {
+  stats: boolean;
+  achievements: boolean;
+  online: boolean;
+}
+
 export interface PlayerProfile {
   gameNick: string;
   bio: string;
   publicProfile: boolean;
+  /** what the public profile shows (everything until switched off) */
+  privacy?: Privacy;
 }
 
 /** GET /me/stats?days= */
@@ -111113,6 +111451,8 @@ export interface MyStats {
   longestSessionSec: number;
   streakDays: number;
   lastSeenAt: number | null;
+  /** the visit that is going on right now */
+  playingNow?: { serverId: number; name: string; game: string; since: number } | null;
   favouriteServerId: number | null;
   byServer: { serverId: number; name: string; game: string; seconds: number; sessions: number }[];
   /** date: YYYY-MM-DD, oldest first */
@@ -111184,9 +111524,11 @@ export interface PublicProfile {
   bio: string;
   /** ms (or an ISO string) */
   memberSince: number | string | null;
-  stats: { totalSeconds: number; sessions: number; streakDays: number; favouriteServerName: string | null };
+  /** null: the owner hid the statistics */
+  stats: { totalSeconds: number; sessions: number; streakDays: number; favouriteServerName: string | null } | null;
   achievements: { id: string; title: string; icon: string }[];
-  rank?: { id: string; name: string; color: string; image: string };
+  playingNow?: { serverId: number; name: string; game: string } | null;
+  rank?: { id: string; name: string; color: string; image: string } | null;
   vrAchievements?: { id: string; title: string; image: string }[];
 }
 
@@ -114245,6 +114587,35 @@ export default function MaintenanceChip({ m, glass = false, className = '' }: { 
       <IconWrench size={13} />
       <span className="truncate">{chipText(m, Date.now(), (ts) => fmtTime(ts))}</span>
     </span>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/MoreMenu.tsx" << '__COREGSM_EOF__'
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { t } from '../i18n';
+
+/**
+ * The rare and risky actions behind a «⋯» button: it closes on Esc, on a click outside and after a choice.
+ * `plain`: the button is a quiet chip on an ordinary card and the menu opens downwards (the default is a chip on a
+ * gradient and a menu that opens upwards).
+ */
+export function MoreMenu({ children, plain = false }: { children: (close: () => void) => ReactNode; plain?: boolean }) {
+  const [open, setOpen] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const away = (e: MouseEvent) => { if (!box.current?.contains(e.target as Node)) setOpen(false); };
+    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+    document.addEventListener('mousedown', away);
+    document.addEventListener('keydown', esc);
+    return () => { document.removeEventListener('mousedown', away); document.removeEventListener('keydown', esc); };
+  }, [open]);
+  return (
+    <div className={`upd-more ${plain ? 'is-plain' : ''}`} ref={box}>
+      <button type="button" className="upd-more-btn" aria-haspopup="menu" aria-expanded={open} aria-label={t('upd.more')} title={t('upd.more')} onClick={() => setOpen((v) => !v)}>⋯</button>
+      {open && <div className="upd-more-menu" role="menu">{children(() => setOpen(false))}</div>}
+    </div>
   );
 }
 __COREGSM_EOF__
@@ -120809,6 +121180,88 @@ export function NewsUnreadDot({ className = '' }: { className?: string }) {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/profile"
+  cat > "$APP_DIR/core-frontend/src/components/profile/AccountDataCard.tsx" << '__COREGSM_EOF__'
+import { useState, type FormEvent } from 'react';
+import { api, getToken } from '../../api';
+import { useAuth } from '../../auth';
+import { t } from '../../i18n';
+import { Button, ErrorLine, Section, TextField, toast, errText } from '../../ui';
+
+/** «Ваши данные»: download everything the panel keeps about the account, or delete the account for good */
+export function AccountDataCard() {
+  const { me } = useAuth();
+  const [busy, setBusy] = useState(false);
+  const [asking, setAsking] = useState(false);
+  const [secret, setSecret] = useState('');
+  const [error, setError] = useState('');
+  if (!me) return null;
+
+  const download = async () => {
+    setBusy(true);
+    setError('');
+    try {
+      const token = getToken();
+      const res = await fetch('/api/me/export', { headers: token ? { authorization: `Bearer ${token}` } : {}, credentials: 'same-origin' });
+      if (!res.ok) throw new Error(t('pf.data.exportFail'));
+      const url = URL.createObjectURL(await res.blob());
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `coregsm-${me.username}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      toast(t('pf.data.exported'));
+    } catch (e) {
+      setError(errText(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const remove = async (e: FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    setError('');
+    try {
+      await api('/me', 'DELETE', me.hasPassword ? { password: secret } : { confirm: secret });
+      toast(t('pf.data.deleted'));
+      window.location.href = '/login';
+    } catch (err) {
+      setError(errText(err));
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Section title={t('pf.data.title')} description={t('pf.data.desc')}>
+      <div className="flex flex-wrap items-center gap-3">
+        <Button type="button" variant="soft" loading={busy && !asking} onClick={() => void download()}>{t('pf.data.export')}</Button>
+        {!asking && <button type="button" className="btn-link-danger" onClick={() => { setAsking(true); setError(''); }}>{t('pf.data.delete')}</button>}
+      </div>
+      {asking && (
+        <form onSubmit={remove} className="pf-danger" noValidate>
+          <p className="font-bold text-bad">{t('pf.data.delHint')}</p>
+          <TextField
+            id="del-secret"
+            label={me.hasPassword ? t('pf.data.delPass') : t('pf.data.delConfirm', { name: me.username })}
+            type={me.hasPassword ? 'password' : 'text'}
+            value={secret}
+            onChange={setSecret}
+            autoComplete={me.hasPassword ? 'current-password' : 'off'}
+          />
+          <div className="flex flex-wrap items-center gap-3">
+            <Button variant="danger" loading={busy} disabled={!secret}>{t('pf.data.delGo')}</Button>
+            <button type="button" className="btn-link" onClick={() => { setAsking(false); setSecret(''); setError(''); }}>{t('common.cancel')}</button>
+          </div>
+        </form>
+      )}
+      <ErrorLine text={error} />
+    </Section>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/profile"
   cat > "$APP_DIR/core-frontend/src/components/profile/Achievements.tsx" << '__COREGSM_EOF__'
 import { useEffect, useState, type ReactNode } from 'react';
 import type { Achievement } from '../../api';
@@ -120912,14 +121365,32 @@ export function AchievementsPreview() {
       {data === undefined && <div className="skeleton h-16 rounded-2xl bg-soft" />}
       {data && earned.length === 0 && <p className="font-semibold text-mute">{t('pf.ach.noneYet')}</p>}
       {earned.length > 0 && (
-        <ul className="flex flex-wrap gap-2">
-          {earned.slice(0, 8).map((a) => (
-            <li key={a.id} className="pf-ach-mini" title={a.description}>
-              <span><AchievementArt id={a.id} slug={a.icon} size={26} /></span>
-              <span className="pr-1">{a.title}</span>
-            </li>
-          ))}
-        </ul>
+        <>
+          <p className="pf-ach-label">{t('pf.ach.latest')}</p>
+          <ul className="pf-ach-showcase">
+            {earned.slice(0, 3).map((a) => (
+              <li key={a.id} className="pf-ach-hero">
+                <span className="pf-ach-hero-art"><AchievementArt id={a.id} slug={a.icon} size={52} /></span>
+                <span className="min-w-0">
+                  <span className="block font-extrabold leading-tight">{a.title}</span>
+                  <span className="block text-sm font-semibold text-mute">{a.description}</span>
+                  {a.earnedAt ? <span className="mt-0.5 block text-xs font-bold text-mute">{fmtDate(a.earnedAt)}</span> : null}
+                </span>
+              </li>
+            ))}
+          </ul>
+          {earned.length > 3 && (
+            <ul className="mt-3 flex flex-wrap gap-2">
+              {earned.slice(3, 9).map((a) => (
+                <li key={a.id} className="pf-ach-mini" title={a.description}>
+                  <span><AchievementArt id={a.id} slug={a.icon} size={26} /></span>
+                  <span className="pr-1">{a.title}</span>
+                </li>
+              ))}
+              {earned.length > 9 && <li className="self-center text-sm font-extrabold text-mute">{t('pf.ach.more', { n: earned.length - 9 })}</li>}
+            </ul>
+          )}
+        </>
       )}
       {next && (
         <div className="pf-next">
@@ -121255,6 +121726,58 @@ export function FavoritePushCard() {
       )}
       <ErrorLine text={error} />
     </Section>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/profile"
+  cat > "$APP_DIR/core-frontend/src/components/profile/FocusCard.tsx" << '__COREGSM_EOF__'
+import { t } from '../../i18n';
+import { ago } from '../../ui';
+import type { Focus } from './heroLogic';
+
+const fmtH = (h: number) => (Math.round(h * 10) / 10).toLocaleString(undefined, { maximumFractionDigits: 1 });
+
+/** «The main thing today»: one tile with the one thing worth a look, instead of three cards of the same weight */
+export function FocusCard({ focus }: { focus: Focus | null }) {
+  if (!focus) return null;
+  let icon = '🎮';
+  let title = '';
+  let sub = '';
+  let href = '';
+  let bar: { pct: number; color?: string } | null = null;
+  if (focus.kind === 'playing') {
+    title = t('pf.focus.playing', { server: focus.name });
+    sub = t('pf.focus.playingSince', { when: ago(focus.since) });
+    href = `/servers/${focus.serverId}`;
+  } else if (focus.kind === 'rank') {
+    icon = '🏅';
+    title = t('pf.focus.rank', { name: focus.name, hours: fmtH(focus.hoursLeft) });
+    sub = t('pf.focus.rankSub', { pct: Math.round(focus.progress * 100) });
+    href = '/profile/player';
+    bar = { pct: Math.round(focus.progress * 100), color: focus.color };
+  } else if (focus.kind === 'ach') {
+    icon = '🏆';
+    title = t('pf.focus.ach', { title: focus.title });
+    sub = t('pf.focus.achSub', { done: Math.round(focus.progress), target: focus.target });
+    href = '/profile/player';
+    bar = { pct: focus.target > 0 ? Math.round((focus.progress / focus.target) * 100) : 0 };
+  } else {
+    icon = '🟢';
+    title = t('pf.focus.fav', { server: focus.name });
+    sub = t('pf.focus.favSub', { n: focus.players });
+    href = `/servers/${focus.serverId}`;
+  }
+  return (
+    <section className={`pf-focus is-${focus.kind}`} aria-label={t('pf.focus.title')}>
+      <span className="pf-focus-ico" aria-hidden>{icon}</span>
+      <div className="min-w-0 flex-1">
+        <p className="pf-focus-k">{t('pf.focus.title')}</p>
+        <p className="pf-focus-t">{title}</p>
+        <p className="pf-focus-s">{sub}</p>
+        {bar && <div className="pf-bar mt-2" aria-hidden><i style={{ width: `${bar.pct}%`, ...(bar.color ? { background: bar.color } : {}) }} /></div>}
+      </div>
+      <a href={href} className="btn btn-soft btn-sm">{t('pf.focus.open')}</a>
+    </section>
   );
 }
 __COREGSM_EOF__
@@ -121735,13 +122258,14 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/profile"
   cat > "$APP_DIR/core-frontend/src/components/profile/PlayerCard.tsx" << '__COREGSM_EOF__'
 import { useEffect, useState, type FormEvent } from 'react';
-import { api, type NickStatus, type PlayerProfile } from '../../api';
+import { api, type NickStatus, type PlayerProfile, type Privacy } from '../../api';
 import { useAuth } from '../../auth';
 import { t } from '../../i18n';
 import { ago, Button, CopyButton, ErrorLine, Section, Switch, TextField, toast, errText } from '../../ui';
 import { isObject, useFetched } from './useFetched';
 
 const NICK_MAX = 32;
+const ALL_PUBLIC: Privacy = { stats: true, achievements: true, online: true };
 const BIO_MAX = 280;
 
 /** address of the public page: the panel's own address with /u/<username> */
@@ -121755,6 +122279,7 @@ export function PlayerCard() {
   const [nick, setNick] = useState('');
   const [bio, setBio] = useState('');
   const [pub, setPub] = useState(false);
+  const [priv, setPriv] = useState<Privacy>(ALL_PUBLIC);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -121763,10 +122288,11 @@ export function PlayerCard() {
     setNick(data.gameNick ?? '');
     setBio(data.bio ?? '');
     setPub(!!data.publicProfile);
+    setPriv(data.privacy ?? ALL_PUBLIC);
   }, [data]);
 
   if (!me || data === null) return null; // the API is unavailable: the panel is hidden
-  const dirty = !!data && (nick.trim() !== (data.gameNick ?? '') || bio.trim() !== (data.bio ?? '') || pub !== !!data.publicProfile);
+  const dirty = !!data && (nick.trim() !== (data.gameNick ?? '') || bio.trim() !== (data.bio ?? '') || pub !== !!data.publicProfile || JSON.stringify(priv) !== JSON.stringify(data.privacy ?? ALL_PUBLIC));
   const link = publicLink(me.username);
 
   const submit = async (e: FormEvent) => {
@@ -121774,7 +122300,7 @@ export function PlayerCard() {
     setError('');
     setBusy(true);
     try {
-      await api('/me/player', 'PUT', { gameNick: nick.trim(), bio: bio.trim(), publicProfile: pub });
+      await api('/me/player', 'PUT', { gameNick: nick.trim(), bio: bio.trim(), publicProfile: pub, privacy: priv });
       toast(t('pf.player.saved'));
       reload();
       status.reload();
@@ -121837,6 +122363,29 @@ export function PlayerCard() {
                 </div>
               )}
               {pub && !!data && !data.publicProfile && <p className="text-sm font-bold text-mute">{t('pf.player.saveToPublish')}</p>}
+              {pub && (
+                <fieldset className="pf-priv">
+                  <legend className="label">{t('pf.priv.title')}</legend>
+                  {([['stats', 'pf.priv.stats'], ['achievements', 'pf.priv.ach'], ['online', 'pf.priv.online']] as const).map(([k, label]) => (
+                    <label key={k} className="flex cursor-pointer items-center gap-3">
+                      <Switch checked={priv[k]} onChange={(v) => setPriv((p) => ({ ...p, [k]: v }))} />
+                      <span className="font-bold">{t(label)}</span>
+                    </label>
+                  ))}
+                  <p className="text-sm font-semibold text-mute">{t('pf.priv.hint')}</p>
+                </fieldset>
+              )}
+              {!!data?.publicProfile && (
+                <div className="pf-card-share">
+                  <p className="font-extrabold">{t('pf.card.title')}</p>
+                  <p className="text-sm font-semibold text-mute">{t('pf.card.hint')}</p>
+                  <img className="pf-card-img" src={`/api/u/${encodeURIComponent(me.username)}/card.png`} alt={t('pf.card.alt')} loading="lazy" width={1200} height={630} />
+                  <div className="flex flex-wrap items-center gap-2">
+                    <CopyButton text={`${window.location.origin}/api/u/${encodeURIComponent(me.username)}/card.png`} label={t('pf.card.copy')} />
+                    <a className="btn btn-soft btn-sm" href={`/api/u/${encodeURIComponent(me.username)}/card.png`} download={`coregsm-${me.username}.png`}>{t('pf.card.download')}</a>
+                  </div>
+                </div>
+              )}
             </div>
             <ErrorLine text={error} />
             <Button loading={busy} disabled={!dirty}>{t('common.save')}</Button>
@@ -121844,6 +122393,89 @@ export function PlayerCard() {
         )}
       </Section>
     </form>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/profile"
+  cat > "$APP_DIR/core-frontend/src/components/profile/ProfileHero.tsx" << '__COREGSM_EOF__'
+import { useAuth } from '../../auth';
+import { t } from '../../i18n';
+import { ago, GameAvatar } from '../../ui';
+import { MoreMenu } from '../MoreMenu';
+import type { MyRank, MyStats } from '../../api';
+import { AvatarEditor } from './AvatarEditor';
+import { bannerStyle } from './banner';
+import { IcoCalendar, IcoDiscord, IcoGamepad, IcoLogout, ShareButton } from './bits';
+import { rankLevel } from './heroLogic';
+import { RankHeaderBadge, rankName } from './VrRank';
+
+/**
+ * The top of «Обзор»: the banner, the avatar in a ring that fills towards the next rank (with the level), the name,
+ * the role and the rank, the places the player is known by, and where they are playing right now.
+ */
+export function ProfileHero({ rank, playing, editBanner, onToggleBanner, since }: {
+  rank: MyRank | null | undefined;
+  playing: MyStats['playingNow'] | undefined;
+  editBanner: boolean;
+  onToggleBanner: () => void;
+  since?: number | null;
+}) {
+  const { me, isAdmin, logout, reload } = useAuth();
+  if (!me) return null;
+  const role = me.role === 'admin' ? t('pf.role.admin') : me.role === 'moderator' ? t('pf.role.moderator') : t('pf.role.player');
+  const ranked = !!rank && !!rank.nick;
+  const lv = ranked ? rankLevel(rank.rank.id) : null;
+  const pct = ranked ? (rank.next ? Math.round(rank.progress * 100) : 100) : 0;
+
+  return (
+    <div className="panel pf-hero">
+      <div className="pf-banner" style={bannerStyle(me.bannerUrl, me.bannerPreset)}>
+        <button type="button" className="pf-banner-btn" aria-expanded={editBanner} onClick={onToggleBanner}>
+          {editBanner ? t('pf.banner.close') : t('pf.banner.edit')}
+        </button>
+      </div>
+      <div className="pf-hero-body">
+        <div className="pf-hero-avatar">
+          <div
+            className={ranked ? 'pf-level' : undefined}
+            style={ranked ? ({ ['--rc' as string]: rank.rank.color, ['--p' as string]: pct }) : undefined}
+            title={ranked && lv ? t('pf.hero.levelTitle', { n: lv.level, total: lv.total, name: rankName(rank.rank) }) : undefined}
+          >
+            <AvatarEditor onChanged={reload} size={80} ring={null} />
+            {ranked && lv && <span className="pf-level-badge">{t('pf.hero.level', { n: lv.level })}</span>}
+          </div>
+        </div>
+        <div className="min-w-0 flex-1 basis-56 pt-3">
+          <div className="line-clamp-2 wrap-break-word text-2xl font-black leading-tight">{me.username}</div>
+          <div className="mt-1 flex flex-wrap items-center gap-2">
+            <span className={`pill ${isAdmin ? 'pill-ok' : 'pill-mute'}`}>{role}</span>
+            <RankHeaderBadge />
+          </div>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            {playing && (
+              <a href={`/servers/${playing.serverId}`} className="pf-live" title={playing.name}>
+                <GameAvatar game={playing.game} size={18} />
+                <span className="truncate">{t('pf.hero.playing', { server: playing.name })}</span>
+                <span className="text-mute">· {ago(playing.since)}</span>
+              </a>
+            )}
+            {me.discordName && <span className="pf-meta"><IcoDiscord />{me.discordName}</span>}
+            {rank?.nick && <span className="pf-meta"><IcoGamepad />{rank.nick}</span>}
+            {since ? <span className="pf-meta"><IcoCalendar />{t('pf.hero.since', { when: ago(since) })}</span> : null}
+          </div>
+        </div>
+        <div className="mt-3 flex items-center gap-2">
+          <ShareButton username={me.username} />
+          <MoreMenu plain>
+            {(close) => (
+              <button type="button" role="menuitem" className="upd-more-item" onClick={() => { close(); logout(); }}>
+                <span className="inline-flex items-center gap-2"><IcoLogout />{t('hdr.logout')}</span>
+              </button>
+            )}
+          </MoreMenu>
+        </div>
+      </div>
+    </div>
   );
 }
 __COREGSM_EOF__
@@ -122059,6 +122691,61 @@ export function ReportButton({ nick }: { nick: string }) {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/profile"
+  cat > "$APP_DIR/core-frontend/src/components/profile/SecurityOverview.tsx" << '__COREGSM_EOF__'
+import { useEffect, useState, type ReactNode } from 'react';
+import { api } from '../../api';
+import { useAuth } from '../../auth';
+import { t, type TKey } from '../../i18n';
+import { nextSecurityStep, securityChecks } from './heroLogic';
+
+/** «Защита аккаунта: 3 из 4»: a bar, what is done and the first thing still worth doing */
+export function SecurityScore() {
+  const { me } = useAuth();
+  const [tfa, setTfa] = useState<boolean | null>(null);
+  useEffect(() => {
+    api<{ enabled: boolean }>('/auth/2fa').then((r) => setTfa(!!r.enabled)).catch(() => setTfa(false));
+  }, []);
+  if (!me || tfa === null) return <div className="skeleton h-20 rounded-2xl bg-soft" />;
+  const checks = securityChecks(me, tfa);
+  const done = checks.filter((c) => c.ok).length;
+  const next = nextSecurityStep(checks);
+  return (
+    <section className="panel pf-score" aria-label={t('pf.sec.score', { n: done, total: checks.length })}>
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <h2 className="text-lg font-black">{t('pf.sec.score', { n: done, total: checks.length })}</h2>
+        <span className={`text-sm font-extrabold ${next ? 'text-mute' : 'text-ok'}`}>{next ? t(`pf.sec.next.${next}` as TKey) : t('pf.sec.allDone')}</span>
+      </div>
+      <div className="pf-bar mt-3" role="progressbar" aria-valuemin={0} aria-valuemax={checks.length} aria-valuenow={done} aria-label={t('pf.sec.score', { n: done, total: checks.length })}>
+        <i style={{ width: `${(done / checks.length) * 100}%` }} />
+      </div>
+      <ul className="pf-score-list">
+        {checks.map((c) => (
+          <li key={c.id} className={c.ok ? 'is-ok' : ''}>
+            <span aria-hidden>{c.ok ? '✓' : '○'}</span>{t(`pf.sec.chk.${c.id}` as TKey)}
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+/** a group of settings cards that folds: the first one is open */
+export function SecurityGroup({ title, hint, defaultOpen = false, children }: { title: string; hint?: string; defaultOpen?: boolean; children: ReactNode }) {
+  return (
+    <details className="pf-group" open={defaultOpen}>
+      <summary className="pf-group-head">
+        <span className="min-w-0">
+          <span className="block text-lg font-black">{title}</span>
+          {hint && <span className="block text-sm font-semibold text-mute">{hint}</span>}
+        </span>
+        <span className="pf-group-chev" aria-hidden>▾</span>
+      </summary>
+      <div className="pf-group-body">{children}</div>
+    </details>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/profile"
   cat > "$APP_DIR/core-frontend/src/components/profile/Stats.tsx" << '__COREGSM_EOF__'
 import { useEffect, useState } from 'react';
 import { StatTile, IcoClock, IcoFlame, IcoHeart, IcoPlay, IcoTimer } from './bits';
@@ -122066,6 +122753,7 @@ import type { MyStats } from '../../api';
 import { t } from '../../i18n';
 import { ago, Empty, fmtDay, fmtDateTime, GameAvatar, Section } from '../../ui';
 import { fmtDuration } from './format';
+import { DaySpark, StreakStrip } from './statsViz';
 import { isObject, useFetched } from './useFetched';
 
 const valid = (v: unknown) => isObject(v) && Array.isArray((v as MyStats).byDay);
@@ -122079,14 +122767,15 @@ export const PERIODS = [7, 30, 90] as const;
 
 /** the five numbers of a period: hours online, sessions, streak, longest session, favourite server */
 export function StatTiles({ s, compact = false }: { s: MyStats; compact?: boolean }) {
-  const fav = s.byServer?.find((x) => x.serverId === s.favouriteServerId)?.name;
+  const favRow = s.byServer?.find((x) => x.serverId === s.favouriteServerId);
+  const fav = favRow?.name;
   return (
     <div className="pf-tiles">
-      <StatTile icon={<IcoClock />} value={fmtDuration(s.totalSeconds)} label={t('pf.stats.online')} />
+      <StatTile icon={<IcoClock />} value={fmtDuration(s.totalSeconds)} label={t('pf.stats.online')} extra={<DaySpark byDay={s.byDay ?? []} />} />
       <StatTile icon={<IcoPlay />} value={String(s.sessions)} label={t('pf.stats.sessions')} />
-      <StatTile icon={<IcoFlame />} hot={s.streakDays >= 7} value={t('pf.stats.days', { n: s.streakDays })} label={t('pf.stats.streak')} />
+      <StatTile icon={<IcoFlame />} hot={s.streakDays >= 7} value={t('pf.stats.days', { n: s.streakDays })} label={t('pf.stats.streak')} extra={<StreakStrip byDay={s.byDay ?? []} />} />
       {!compact && <StatTile icon={<IcoTimer />} value={fmtDuration(s.longestSessionSec)} label={t('pf.stats.longest')} />}
-      {!compact && <StatTile icon={<IcoHeart />} value={fav ?? '–'} label={t('pf.stats.favourite')} />}
+      {!compact && <StatTile icon={favRow ? <GameAvatar game={favRow.game} size={20} /> : <IcoHeart />} value={fav ?? '–'} label={t('pf.stats.favourite')} />}
     </div>
   );
 }
@@ -122704,12 +123393,13 @@ export const IcoSliders = () => <Icon size={16}><path d="M4 21v-7M4 10V3M12 21v-
 export const IcoShield = () => <Icon size={16}><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z" /></Icon>;
 
 /** a stat tile: icon, value and label; `hot` tints the icon (a streak of a week or more) */
-export function StatTile({ value, label, icon, hot = false }: { value: string; label: string; icon?: ReactNode; hot?: boolean }) {
+export function StatTile({ value, label, icon, hot = false, extra }: { value: string; label: string; icon?: ReactNode; hot?: boolean; extra?: ReactNode }) {
   return (
     <div className="pf-tile">
       {icon && <span className={`pf-tile-ico ${hot ? 'is-hot' : ''}`} aria-hidden>{icon}</span>}
       <div className="pf-tile-v">{value}</div>
       <div className="pf-tile-l">{label}</div>
+      {extra}
     </div>
   );
 }
@@ -122760,6 +123450,134 @@ export function deviceName(ua: string): string {
     : /Linux/.test(ua) ? 'Linux'
     : '';
   return [browser, os].filter(Boolean).join(' · ') || ua.slice(0, 40);
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/profile"
+  cat > "$APP_DIR/core-frontend/src/components/profile/heroLogic.test.ts" << '__COREGSM_EOF__'
+import { describe, expect, it } from 'vitest';
+import type { Achievement, MyRank, Server } from '../../api';
+import { lastDaysMarks, nextSecurityStep, pickFocus, rankLevel, securityChecks } from './heroLogic';
+
+const rank = (hours: number, next: { name: string; minHours: number } | null, nick = 'Ren'): MyRank => ({
+  game: 'vrising', hours, rank: { id: 'wanderer', name: 'W', minHours: 10, color: '#111', image: '' },
+  next: next ? { id: 'hunter', name: next.name, minHours: next.minHours, color: '#f00', image: '' } : null, progress: 0.5, sessions: 3, nick,
+});
+const ach = (id: string, progress: number, target: number, earned = false): Achievement => ({ id, title: id, description: '', icon: 'star', earned, progress, target, earnedAt: null });
+const srv = (id: number, players: number, online = true): Server => ({ id, name: `S${id}`, players, online } as unknown as Server);
+
+describe('rankLevel', () => {
+  it('is the place in the ladder', () => {
+    expect(rankLevel('awakened')).toEqual({ level: 1, total: 8 });
+    expect(rankLevel('wanderer').level).toBe(2);
+    expect(rankLevel('progenitor').level).toBe(8);
+    expect(rankLevel('nope').level).toBe(1);
+  });
+});
+
+describe('pickFocus', () => {
+  const none = { playing: null, rank: null, achievements: null, favs: null };
+  it('nothing to say gives null', () => expect(pickFocus(none)).toBeNull());
+  it('being in the game wins over everything', () => {
+    const f = pickFocus({ ...none, playing: { name: 'A', serverId: 1, since: 5 }, rank: rank(28, { name: 'H', minHours: 30 }) });
+    expect(f).toMatchObject({ kind: 'playing', name: 'A', serverId: 1 });
+  });
+  it('a rank that is close (5 hours or less) comes next', () => {
+    const f = pickFocus({ ...none, rank: rank(28, { name: 'H', minHours: 30 }), achievements: [ach('a', 9, 10)] });
+    expect(f).toMatchObject({ kind: 'rank', name: 'H', hoursLeft: 2 });
+  });
+  it('then an achievement that is almost earned (60 % or more)', () => {
+    const f = pickFocus({ ...none, rank: rank(11, { name: 'H', minHours: 30 }), achievements: [ach('far', 1, 10), ach('near', 8, 10), ach('done', 10, 10, true)] });
+    expect(f).toMatchObject({ kind: 'ach', id: 'near' });
+  });
+  it('then the busiest online favourite', () => {
+    const f = pickFocus({ ...none, favs: [srv(1, 3), srv(2, 9), srv(3, 20, false)] });
+    expect(f).toMatchObject({ kind: 'fav', serverId: 2, players: 9 });
+  });
+  it('the far rank is the last resort and needs a game nick', () => {
+    expect(pickFocus({ ...none, rank: rank(11, { name: 'H', minHours: 30 }) })).toMatchObject({ kind: 'rank', hoursLeft: 19 });
+    expect(pickFocus({ ...none, rank: rank(11, { name: 'H', minHours: 30 }, '') })).toBeNull();
+    expect(pickFocus({ ...none, rank: rank(2000, null) })).toBeNull();
+  });
+});
+
+describe('security score', () => {
+  const me = { emailVerified: true, hasPassword: true, discordName: null as string | null };
+  it('marks what is done and names the first step left', () => {
+    const c = securityChecks(me, false);
+    expect(c.filter((x) => x.ok)).toHaveLength(2);
+    expect(nextSecurityStep(c)).toBe('tfa');
+    expect(nextSecurityStep(securityChecks({ ...me, discordName: 'x' }, true))).toBeNull();
+    expect(nextSecurityStep(securityChecks({ ...me, emailVerified: false }, true))).toBe('email');
+  });
+});
+
+describe('lastDaysMarks', () => {
+  it('takes the last days and marks the ones with play', () => {
+    expect(lastDaysMarks([{ seconds: 0 }, { seconds: 60 }, { seconds: 0 }, { seconds: 5 }], 3)).toEqual([true, false, true]);
+    expect(lastDaysMarks([], 14)).toEqual([]);
+  });
+});
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/profile"
+  cat > "$APP_DIR/core-frontend/src/components/profile/heroLogic.ts" << '__COREGSM_EOF__'
+/** Pure parts of the profile page: the level ring, «the main thing today» and the account protection score. */
+import type { Achievement, MyRank, Server } from '../../api';
+import { VR_RANKS } from '../../vrisingRanks';
+
+/** the level of a rank: its place in the ladder (1 = the first rank) */
+export function rankLevel(rankId: string | null | undefined): { level: number; total: number } {
+  const i = VR_RANKS.findIndex((r) => r.id === rankId);
+  return { level: i < 0 ? 1 : i + 1, total: VR_RANKS.length };
+}
+
+export type Focus =
+  | { kind: 'playing'; name: string; serverId: number; since: number }
+  | { kind: 'rank'; name: string; color: string; hoursLeft: number; progress: number }
+  | { kind: 'ach'; id: string; icon: string; title: string; progress: number; target: number }
+  | { kind: 'fav'; name: string; serverId: number; players: number };
+
+const achShare = (a: Achievement) => (a.target > 0 ? Math.max(0, Math.min(1, a.progress / a.target)) : 0);
+
+/**
+ * The one thing worth a look right now, by priority: you are in the game; a rank is close; an achievement is almost
+ * earned; a favourite server has people on it; otherwise the way to the next rank. null: nothing to say.
+ */
+export function pickFocus(i: {
+  playing: { name: string; serverId: number; since: number } | null | undefined;
+  rank: MyRank | null | undefined;
+  achievements: Achievement[] | null | undefined;
+  favs: Server[] | null | undefined;
+}): Focus | null {
+  if (i.playing) return { kind: 'playing', ...i.playing };
+  const r = i.rank && i.rank.nick && i.rank.next ? i.rank : null;
+  const left = r?.next ? Math.max(0, r.next.minHours - r.hours) : null;
+  if (r?.next && left !== null && left <= 5) return { kind: 'rank', name: r.next.name, color: r.next.color, hoursLeft: left, progress: r.progress };
+  const near = (i.achievements ?? []).filter((a) => !a.earned && achShare(a) >= 0.6).sort((a, b) => achShare(b) - achShare(a))[0];
+  if (near) return { kind: 'ach', id: near.id, icon: near.icon, title: near.title, progress: near.progress, target: near.target };
+  const busy = (i.favs ?? []).filter((s) => s.online && s.players > 0).sort((a, b) => b.players - a.players)[0];
+  if (busy) return { kind: 'fav', name: busy.name, serverId: busy.id, players: busy.players };
+  if (r?.next && left !== null) return { kind: 'rank', name: r.next.name, color: r.next.color, hoursLeft: left, progress: r.progress };
+  return null;
+}
+
+export type SecurityCheck = { id: 'email' | 'password' | 'tfa' | 'discord'; ok: boolean };
+
+/** what makes an account safer, each with a done/not done mark; the 2FA state is known only after it was asked */
+export function securityChecks(me: { emailVerified?: boolean; hasPassword: boolean; discordName: string | null }, tfaOn: boolean): SecurityCheck[] {
+  return [
+    { id: 'email', ok: !!me.emailVerified },
+    { id: 'password', ok: me.hasPassword },
+    { id: 'tfa', ok: tfaOn },
+    { id: 'discord', ok: !!me.discordName },
+  ];
+}
+
+/** the first thing still to do, or null when everything is done */
+export const nextSecurityStep = (checks: SecurityCheck[]): SecurityCheck['id'] | null => checks.find((c) => !c.ok)?.id ?? null;
+
+/** last `days` of the per-day seconds as 0/1 marks (oldest first), for the streak strip */
+export function lastDaysMarks(byDay: { seconds: number }[], days: number): boolean[] {
+  return byDay.slice(-days).map((d) => d.seconds > 0);
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/profile"
@@ -122819,6 +123637,86 @@ export function AchievementArt({ id, slug, earned = true, size = 48 }: { id: str
       onError={() => setFailed(true)}
       style={{ width: size, height: size, objectFit: 'contain' }}
     />
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/profile"
+  cat > "$APP_DIR/core-frontend/src/components/profile/profileParts.test.tsx" << '__COREGSM_EOF__'
+import { renderToStaticMarkup } from 'react-dom/server';
+import { describe, expect, it } from 'vitest';
+import { FocusCard } from './FocusCard';
+import { SecurityGroup } from './SecurityOverview';
+import { DaySpark, StreakStrip } from './statsViz';
+
+describe('FocusCard', () => {
+  it('draws nothing without a focus', () => expect(renderToStaticMarkup(<FocusCard focus={null} />)).toBe(''));
+
+  it('links the playing focus to the server and the rank focus to the player tab, with a bar', () => {
+    const playing = renderToStaticMarkup(<FocusCard focus={{ kind: 'playing', name: 'Alpha', serverId: 7, since: Date.now() - 60_000 }} />);
+    expect(playing).toContain('href="/servers/7"');
+    expect(playing).toContain('Alpha');
+    expect(playing).not.toContain('pf-bar');
+    const rank = renderToStaticMarkup(<FocusCard focus={{ kind: 'rank', name: 'Hunter', color: '#f00', hoursLeft: 2.5, progress: 0.8 }} />);
+    expect(rank).toContain('href="/profile/player"');
+    expect(rank).toContain('width:80%');
+    expect(rank).toContain('Hunter');
+  });
+
+  it('shows how far an almost earned achievement is', () => {
+    const html = renderToStaticMarkup(<FocusCard focus={{ kind: 'ach', id: 'a', icon: 'star', title: 'Night owl', progress: 8, target: 10 }} />);
+    expect(html).toContain('Night owl');
+    expect(html).toContain('width:80%');
+  });
+});
+
+describe('stats pictures', () => {
+  it('the curve needs a few days with play, the strip marks the days played', () => {
+    expect(renderToStaticMarkup(<DaySpark byDay={[{ seconds: 0 }, { seconds: 0 }, { seconds: 0 }]} />)).toBe('');
+    expect(renderToStaticMarkup(<DaySpark byDay={[{ seconds: 1 }, { seconds: 5 }, { seconds: 3 }]} />)).toContain('pf-spark-line');
+    const strip = renderToStaticMarkup(<StreakStrip byDay={[{ seconds: 0 }, { seconds: 9 }, { seconds: 9 }]} days={14} />);
+    expect((strip.match(/is-on/g) ?? []).length).toBe(2);
+    expect((strip.match(/<i/g) ?? []).length).toBe(3);
+  });
+});
+
+describe('SecurityGroup', () => {
+  it('is a folding block: open when asked, closed otherwise', () => {
+    expect(renderToStaticMarkup(<SecurityGroup title="A" defaultOpen><p>x</p></SecurityGroup>)).toContain('<details class="pf-group" open');
+    expect(renderToStaticMarkup(<SecurityGroup title="B"><p>x</p></SecurityGroup>)).not.toContain(' open');
+  });
+});
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/profile"
+  cat > "$APP_DIR/core-frontend/src/components/profile/statsViz.tsx" << '__COREGSM_EOF__'
+import { t } from '../../i18n';
+import { lastDaysMarks } from './heroLogic';
+
+/** hours per day as a small area curve, so a tile shows the trend and not only the total */
+export function DaySpark({ byDay }: { byDay: { seconds: number }[] }) {
+  const vals = byDay.map((d) => d.seconds);
+  if (vals.length < 3 || Math.max(...vals) <= 0) return null;
+  const W = 120;
+  const H = 28;
+  const max = Math.max(...vals);
+  const x = (i: number) => (i / (vals.length - 1)) * W;
+  const y = (v: number) => H - 2 - (v / max) * (H - 6);
+  const line = vals.map((v, i) => `${i === 0 ? 'M' : 'L'}${x(i).toFixed(1)} ${y(v).toFixed(1)}`).join(' ');
+  return (
+    <svg className="pf-spark" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" role="img" aria-label={t('pf.stats.sparkAria')}>
+      <path d={`${line} L${W} ${H} L0 ${H} Z`} className="pf-spark-fill" />
+      <path d={line} className="pf-spark-line" fill="none" />
+    </svg>
+  );
+}
+
+/** the last two weeks as squares: a day with play is filled */
+export function StreakStrip({ byDay, days = 14 }: { byDay: { seconds: number }[]; days?: number }) {
+  const marks = lastDaysMarks(byDay, days);
+  if (marks.length === 0) return null;
+  return (
+    <div className="pf-strip" role="img" aria-label={t('pf.stats.streakAria', { n: marks.filter(Boolean).length, days: marks.length })}>
+      {marks.map((on, i) => <i key={i} className={on ? 'is-on' : ''} />)}
+    </div>
   );
 }
 __COREGSM_EOF__
@@ -131454,7 +132352,7 @@ const en: Record<keyof typeof ru, string> = {
   'pf.stats.noServers': 'No play on servers in this period.',
   'pf.stats.sessionsN': '{n} session|{n} sessions',
   'pf.stats.strip': 'Activity over {n} days',
-  'pf.stats.stripAria': 'Activity over {days} days: {active} days played, {time} in total',
+  'pf.stats.streakAria': 'Activity over {days} days: {active} days played, {time} in total',
   'pf.stats.noPlay': 'no play',
   'pf.stats.less': 'less',
   'pf.stats.more': 'more',
@@ -132342,6 +133240,63 @@ const en: Record<keyof typeof ru, string> = {
   'pf.today.up': '{d} more than yesterday',
   'pf.today.down': '{d} less than yesterday',
   'pf.share': 'Share profile',
+  'pf.hero.level': 'Lv {n}',
+  'pf.hero.levelTitle': 'Level {n} of {total}: {name}',
+  'pf.hero.playing': 'Playing on {server}',
+  'pf.hero.since': 'with us {when}',
+  'pf.focus.title': 'Today',
+  'pf.focus.open': 'Open',
+  'pf.focus.playing': 'You are on {server} now',
+  'pf.focus.playingSince': 'In the game {when}',
+  'pf.focus.rank': '{hours} h left to the rank «{name}»',
+  'pf.focus.rankSub': 'Progress {pct}%',
+  'pf.focus.ach': 'Almost earned: «{title}»',
+  'pf.focus.achSub': '{done} of {target}',
+  'pf.focus.fav': 'Your favourite server {server} is online',
+  'pf.focus.favSub': '{n} playing',
+  'pf.stats.sparkAria': 'Hours of play by day',
+  'pf.stats.stripAria': 'The last {days} days: played on {n}',
+  'pf.ach.latest': 'Earned recently',
+  'pf.ach.more': 'and {n} more',
+  'pf.sec.score': 'Account protection: {n} of {total}',
+  'pf.sec.allDone': 'Everything is on',
+  'pf.sec.next.email': 'Next: confirm your e-mail',
+  'pf.sec.next.password': 'Next: set a password',
+  'pf.sec.next.tfa': 'Next: turn on two-factor sign-in',
+  'pf.sec.next.discord': 'Next: link Discord',
+  'pf.sec.chk.email': 'E-mail confirmed',
+  'pf.sec.chk.password': 'Has a password',
+  'pf.sec.chk.tfa': 'Two-factor sign-in',
+  'pf.sec.chk.discord': 'Discord linked',
+  'pf.sec.g.login': 'Sign-in',
+  'pf.sec.g.loginHint': 'E-mail, password, two-factor sign-in, Discord',
+  'pf.sec.g.notify': 'Notifications',
+  'pf.sec.g.notifyHint': 'Push, favourite servers, players and news',
+  'pf.sec.g.devices': 'Devices and journal',
+  'pf.sec.g.devicesHint': 'Where you are signed in and what happened in the account',
+  'pf.sec.g.data': 'Your data',
+  'pf.sec.g.dataHint': 'Download or delete',
+  'pf.priv.title': 'What the public profile shows',
+  'pf.priv.stats': 'Statistics and rank',
+  'pf.priv.ach': 'Achievements',
+  'pf.priv.online': 'Where you are playing now',
+  'pf.priv.hint': 'The name, the picture and «About me» are always shown while the profile is public.',
+  'pf.card.title': 'Profile picture',
+  'pf.card.hint': 'For Discord and forums: the nick, the rank and the last 30 days. What you hid in privacy is not drawn.',
+  'pf.card.alt': 'Profile picture',
+  'pf.card.copy': 'Copy the link',
+  'pf.card.download': 'Download',
+  'pf.data.title': 'Your data',
+  'pf.data.desc': 'Everything the panel keeps about the account can be downloaded as one file. The account can be deleted for good.',
+  'pf.data.export': 'Download my data',
+  'pf.data.exported': 'The data file is downloaded',
+  'pf.data.exportFail': 'Could not download the data',
+  'pf.data.delete': 'Delete the account',
+  'pf.data.delHint': 'The account and all its data will be deleted and cannot be restored.',
+  'pf.data.delPass': 'Enter your password to confirm',
+  'pf.data.delConfirm': 'Enter the account name «{name}» to confirm',
+  'pf.data.delGo': 'Delete for good',
+  'pf.data.deleted': 'The account is deleted',
   'pf.share.copied': 'Profile link copied',
   'pf.you': 'This is you',
   'pf.you.edit': 'Edit',
@@ -135161,6 +136116,8 @@ const errorsEn: Record<string, string> = {
   backup_op_failed: 'The operation failed: {reason}',
   backup_not_found: 'Backup not found',
   backup_nothing_to_check: 'There are no backups yet: nothing to check',
+  check_input: 'Check the entered data',
+  confirm_username: 'Enter the account name to confirm',
   backup_remote_https: 'The backup address must start with https://',
   backup_s3_https: 'The storage address must start with https://',
   backup_s3_endpoint: 'Storage address, for example https://s3.eu-central-1.amazonaws.com',
@@ -135422,7 +136379,7 @@ const ru = {
   'pf.stats.noServers': 'За этот период игры на серверах не было.',
   'pf.stats.sessionsN': '{n} сессия|{n} сессии|{n} сессий',
   'pf.stats.strip': 'Активность за {n} дней',
-  'pf.stats.stripAria': 'Активность за {days} дн.: дней с игрой {active}, всего {time}',
+  'pf.stats.streakAria': 'Активность за {days} дн.: дней с игрой {active}, всего {time}',
   'pf.stats.noPlay': 'не играли',
   'pf.stats.less': 'меньше',
   'pf.stats.more': 'больше',
@@ -136310,6 +137267,63 @@ const ru = {
   'pf.today.up': 'на {d} больше, чем вчера',
   'pf.today.down': 'на {d} меньше, чем вчера',
   'pf.share': 'Поделиться профилем',
+  'pf.hero.level': 'Ур. {n}',
+  'pf.hero.levelTitle': 'Уровень {n} из {total}: {name}',
+  'pf.hero.playing': 'Играет на {server}',
+  'pf.hero.since': 'с нами {when}',
+  'pf.focus.title': 'Главное сегодня',
+  'pf.focus.open': 'Открыть',
+  'pf.focus.playing': 'Вы сейчас на сервере {server}',
+  'pf.focus.playingSince': 'В игре {when}',
+  'pf.focus.rank': 'До ранга «{name}» осталось {hours} ч',
+  'pf.focus.rankSub': 'Прогресс {pct}%',
+  'pf.focus.ach': 'Почти получено: «{title}»',
+  'pf.focus.achSub': '{done} из {target}',
+  'pf.focus.fav': 'Любимый сервер {server} онлайн',
+  'pf.focus.favSub': 'Играют {n}',
+  'pf.stats.sparkAria': 'Часы игры по дням',
+  'pf.stats.stripAria': 'Последние {days} дней: в игре {n}',
+  'pf.ach.latest': 'Недавно получено',
+  'pf.ach.more': 'и ещё {n}',
+  'pf.sec.score': 'Защита аккаунта: {n} из {total}',
+  'pf.sec.allDone': 'Всё включено',
+  'pf.sec.next.email': 'Дальше: подтвердите почту',
+  'pf.sec.next.password': 'Дальше: задайте пароль',
+  'pf.sec.next.tfa': 'Дальше: включите двухфакторный вход',
+  'pf.sec.next.discord': 'Дальше: привяжите Discord',
+  'pf.sec.chk.email': 'Почта подтверждена',
+  'pf.sec.chk.password': 'Есть пароль',
+  'pf.sec.chk.tfa': 'Двухфакторный вход',
+  'pf.sec.chk.discord': 'Привязан Discord',
+  'pf.sec.g.login': 'Вход',
+  'pf.sec.g.loginHint': 'Почта, пароль, двухфакторный вход, Discord',
+  'pf.sec.g.notify': 'Уведомления',
+  'pf.sec.g.notifyHint': 'Push, избранные серверы, игроки и новости',
+  'pf.sec.g.devices': 'Устройства и журнал',
+  'pf.sec.g.devicesHint': 'Где выполнен вход и что происходило в аккаунте',
+  'pf.sec.g.data': 'Ваши данные',
+  'pf.sec.g.dataHint': 'Скачать или удалить',
+  'pf.priv.title': 'Что видно в публичном профиле',
+  'pf.priv.stats': 'Статистика и ранг',
+  'pf.priv.ach': 'Достижения',
+  'pf.priv.online': 'Где вы играете сейчас',
+  'pf.priv.hint': 'Имя, аватар и «О себе» видны всегда, пока профиль публичный.',
+  'pf.card.title': 'Картинка профиля',
+  'pf.card.hint': 'Для Discord и форумов: ник, ранг и итоги за 30 дней. Скрытое в приватности на ней не рисуется.',
+  'pf.card.alt': 'Картинка профиля',
+  'pf.card.copy': 'Копировать ссылку',
+  'pf.card.download': 'Скачать',
+  'pf.data.title': 'Ваши данные',
+  'pf.data.desc': 'Всё, что панель хранит об аккаунте, можно скачать одним файлом. Аккаунт можно удалить навсегда.',
+  'pf.data.export': 'Скачать мои данные',
+  'pf.data.exported': 'Файл с данными скачан',
+  'pf.data.exportFail': 'Не удалось скачать данные',
+  'pf.data.delete': 'Удалить аккаунт',
+  'pf.data.delHint': 'Аккаунт и все его данные будут удалены без возможности восстановления.',
+  'pf.data.delPass': 'Введите пароль для подтверждения',
+  'pf.data.delConfirm': 'Введите имя аккаунта «{name}» для подтверждения',
+  'pf.data.delGo': 'Удалить навсегда',
+  'pf.data.deleted': 'Аккаунт удалён',
   'pf.share.copied': 'Ссылка на профиль скопирована',
   'pf.you': 'Это вы',
   'pf.you.edit': 'Редактировать',
@@ -145377,11 +146391,14 @@ import { restartTour } from '../components/Tour';
 import { confirmDialog } from '../confirm';
 import { t, useI18n, type TKey } from '../i18n';
 import { ActivityFeed } from '../components/profile/Activity';
-import { AvatarEditor } from '../components/profile/AvatarEditor';
+import { ProfileHero } from '../components/profile/ProfileHero';
+import { FocusCard } from '../components/profile/FocusCard';
+import { pickFocus } from '../components/profile/heroLogic';
+import { SecurityGroup, SecurityScore } from '../components/profile/SecurityOverview';
+import { AccountDataCard } from '../components/profile/AccountDataCard';
 import { BannerEditor } from '../components/profile/BannerEditor';
-import { bannerStyle } from '../components/profile/banner';
-import { AchievementsGrid, AchievementsPreview } from '../components/profile/Achievements';
-import { RankCard, RankHeaderBadge, VrAchievementsGrid, useMyRank } from '../components/profile/VrRank';
+import { AchievementsGrid, AchievementsPreview, useAchievements } from '../components/profile/Achievements';
+import { RankCard, VrAchievementsGrid, useMyRank } from '../components/profile/VrRank';
 import { JournalCard } from '../components/profile/Journal';
 import { NewDeviceBanner } from '../components/profile/NewDeviceBanner';
 import { PushCard } from '../components/profile/PushCard';
@@ -145394,7 +146411,7 @@ import { PlayerCard } from '../components/profile/PlayerCard';
 import { StatsPanel, StatsSummary, useMyStats } from '../components/profile/Stats';
 import { deviceName } from '../components/profile/format';
 import { IconUser } from '../icons';
-import { IcoDiscord, IcoGamepad, IcoHome, IcoLogout, IcoShield, IcoSliders } from '../components/profile/bits';
+import { IcoGamepad, IcoHome, IcoShield, IcoSliders } from '../components/profile/bits';
 import { isNewDeviceDismissed } from '../security';
 import { ago, Button, ErrorLine, isLag, FieldError, GameAvatar, PageHead, PasswordField, PasswordStrength, Section, StatusPill, UserAvatar, toast, useRoute, errText } from '../ui';
 
@@ -145441,11 +146458,12 @@ export default function ProfilePage() {
 
 // ---------- «Обзор» ----------
 function OverviewTab() {
-  const { me, isAdmin, logout, reload } = useAuth();
+  const { me, isAdmin, reload } = useAuth();
   const [favs, setFavs] = useState<Server[] | null>(null);
   const [editBanner, setEditBanner] = useState(false);
   const stats = useMyStats(30);
   const rank = useMyRank().data;
+  const achievements = useAchievements().data;
 
   useEffect(() => {
     Promise.all([api<number[]>('/favorites'), api<Server[]>('/servers')])
@@ -145453,36 +146471,17 @@ function OverviewTab() {
       .catch(() => setFavs([]));
   }, []);
   if (!me) return null;
-
-  const role = me.role === 'admin' ? t('pf.role.admin') : me.role === 'moderator' ? t('pf.role.moderator') : t('pf.role.player');
+  const focus = pickFocus({ playing: stats.data?.playingNow, rank, achievements, favs });
 
   return (
     <div className="space-y-5">
       <NewDeviceBanner />
       <Greeting name={me.username} lastSeen={stats.data?.lastSeenAt ?? null} />
-      <div className="panel pf-hero">
-        <div className="pf-banner" style={bannerStyle(me.bannerUrl, me.bannerPreset)}>
-          <button type="button" className="pf-banner-btn" aria-expanded={editBanner} onClick={() => setEditBanner((v) => !v)}>
-            {editBanner ? t('pf.banner.close') : t('pf.banner.edit')}
-          </button>
-        </div>
-        <div className="pf-hero-body">
-          <div className="pf-hero-avatar"><AvatarEditor onChanged={reload} size={80} ring={rank && rank.nick ? rank.rank.color : null} /></div>
-          <div className="min-w-0 flex-1 basis-56 pt-3">
-            <div className="line-clamp-2 wrap-break-word text-2xl font-black leading-tight">{me.username}</div>
-            <div className="mt-1 flex flex-wrap items-center gap-2">
-              <span className={`pill ${isAdmin ? 'pill-ok' : 'pill-mute'}`}>{role}</span>
-              <RankHeaderBadge />
-            </div>
-            <div className="mt-2 flex flex-wrap items-center gap-2">
-              {me.discordName && <span className="pf-meta"><IcoDiscord />{me.discordName}</span>}
-            </div>
-          </div>
-          <button className="btn btn-soft btn-sm pf-icon-btn mt-3" onClick={logout} title={t('hdr.logout')} aria-label={t('hdr.logout')}><IcoLogout /><span className="max-sm:sr-only">{t('hdr.logout')}</span></button>
-        </div>
-      </div>
+      <ProfileHero rank={rank} playing={stats.data?.playingNow} editBanner={editBanner} onToggleBanner={() => setEditBanner((v) => !v)} />
 
       {editBanner && <BannerEditor onChanged={reload} />}
+
+      <FocusCard focus={focus} />
 
       <StatsSummary data={stats.data} />
 
@@ -145554,18 +146553,32 @@ function SecurityTab() {
   return (
     <div className="space-y-5">
       <NewDeviceBanner onRevoked={() => setRev((x) => x + 1)} />
-      <div className="grid items-start gap-5 md:grid-cols-2">
-        <EmailCard onChanged={reload} />
-        <PasswordCard hasPassword={me.hasPassword} discordLinked={!!me.discordName} onChanged={reload} />
-        <TwoFactorCard />
-        <DiscordCard onChanged={reload} />
-        <PushCard />
-        <FavoritePushCard />
-        <FollowsCard />
-        <NewsSubsCard />
-        <SessionsCard key={rev} />
-      </div>
-      <JournalCard onRevoked={() => setRev((x) => x + 1)} />
+      <SecurityScore />
+      <SecurityGroup title={t('pf.sec.g.login')} hint={t('pf.sec.g.loginHint')} defaultOpen>
+        <div className="grid items-start gap-5 md:grid-cols-2">
+          <EmailCard onChanged={reload} />
+          <PasswordCard hasPassword={me.hasPassword} discordLinked={!!me.discordName} onChanged={reload} />
+          <TwoFactorCard />
+          <DiscordCard onChanged={reload} />
+        </div>
+      </SecurityGroup>
+      <SecurityGroup title={t('pf.sec.g.notify')} hint={t('pf.sec.g.notifyHint')}>
+        <div className="grid items-start gap-5 md:grid-cols-2">
+          <PushCard />
+          <FavoritePushCard />
+          <FollowsCard />
+          <NewsSubsCard />
+        </div>
+      </SecurityGroup>
+      <SecurityGroup title={t('pf.sec.g.devices')} hint={t('pf.sec.g.devicesHint')}>
+        <div className="space-y-5">
+          <SessionsCard key={rev} />
+          <JournalCard onRevoked={() => setRev((x) => x + 1)} />
+        </div>
+      </SecurityGroup>
+      <SecurityGroup title={t('pf.sec.g.data')} hint={t('pf.sec.g.dataHint')}>
+        <AccountDataCard />
+      </SecurityGroup>
     </div>
   );
 }
@@ -145792,7 +146805,8 @@ import { RankEmblem, rankName, vrAchText } from '../components/profile/VrRank';
 import { bannerStyle } from '../components/profile/banner';
 import { fmtDuration } from '../components/profile/format';
 import { t, useI18n } from '../i18n';
-import { Empty, fmtDate, Section, UserAvatar } from '../ui';
+import { Empty, fmtDate, GameAvatar, Section, UserAvatar } from '../ui';
+import { FollowButton } from '../components/profile/Follows';
 
 type State = { kind: 'loading' } | { kind: 'ok'; p: PublicProfile } | { kind: 'missing' } | { kind: 'error'; text: string };
 
@@ -145884,12 +146898,19 @@ export default function PublicProfilePage({ username }: { username: string }) {
               {mine && <span className="pill pill-ok">{t('pf.you')}</span>}
             </div>
             <div className="mt-2 flex flex-wrap items-center gap-2">
+              {p.playingNow && (
+                <a href={`/servers/${p.playingNow.serverId}`} className="pf-live" title={p.playingNow.name}>
+                  <GameAvatar game={p.playingNow.game} size={18} />
+                  <span className="truncate">{t('pf.hero.playing', { server: p.playingNow.name })}</span>
+                </a>
+              )}
               {p.gameNick && <span className="pf-meta"><IcoGamepad />{t('pub.nick', { nick: p.gameNick })}</span>}
               {Number.isFinite(since) && <span className="pf-meta"><IcoCalendar />{t('pub.since', { date: fmtDate(since) })}</span>}
             </div>
           </div>
           <div className="mt-3 flex flex-wrap gap-2">
             {mine && <a href="/profile" className="btn btn-sm">{t('pf.you.edit')}</a>}
+            {!mine && p.gameNick && <FollowButton nick={p.gameNick} />}
             <ShareButton username={p.username} />
           </div>
         </div>
@@ -145901,14 +146922,16 @@ export default function PublicProfilePage({ username }: { username: string }) {
         </Section>
       )}
 
-      <Section title={t('pub.stats')}>
-        <div className="pf-tiles">
-          <StatTile icon={<IcoClock />} value={fmtDuration(s.totalSeconds)} label={t('pf.stats.online')} />
-          <StatTile icon={<IcoPlay />} value={String(s.sessions)} label={t('pf.stats.sessions')} />
-          <StatTile icon={<IcoFlame />} hot={s.streakDays >= 7} value={t('pf.stats.days', { n: s.streakDays })} label={t('pf.stats.streak')} />
-          <StatTile icon={<IcoHeart />} value={s.favouriteServerName || '–'} label={t('pf.stats.favourite')} />
-        </div>
-      </Section>
+      {p.stats && (
+        <Section title={t('pub.stats')}>
+          <div className="pf-tiles">
+            <StatTile icon={<IcoClock />} value={fmtDuration(s.totalSeconds)} label={t('pf.stats.online')} />
+            <StatTile icon={<IcoPlay />} value={String(s.sessions)} label={t('pf.stats.sessions')} />
+            <StatTile icon={<IcoFlame />} hot={s.streakDays >= 7} value={t('pf.stats.days', { n: s.streakDays })} label={t('pf.stats.streak')} />
+            <StatTile icon={<IcoHeart />} value={s.favouriteServerName || '–'} label={t('pf.stats.favourite')} />
+          </div>
+        </Section>
+      )}
 
       {p.vrAchievements && p.vrAchievements.length > 0 && (
         <Section title={t('vr.ach.title')}>
@@ -151230,10 +152253,11 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages/settings"
   cat > "$APP_DIR/core-frontend/src/pages/settings/updateParts.tsx" << '__COREGSM_EOF__'
 /** Pieces of Settings → Updates: steps, warnings, release notes, the log and the options. */
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useState } from 'react';
 import { api, type Changelog, type UpdateHistoryItem, type UpdateInfo, type UpdateNotes, type UpdatePreflight } from '../../api';
 import { t, useI18n, type TKey } from '../../i18n';
 import { ChannelName, ChannelPicker } from '../../components/ChannelPicker';
+export { MoreMenu } from '../../components/MoreMenu';
 import { ErrorLine, fmtDateTime, Section, errText, toast } from '../../ui';
 import { changeSummary, cleanNote, groupCommits, isNewerRelease, preflightWarnings, stepStates, upcomingFlags, versionText, type PreflightWarning } from './updateLogic';
 
@@ -151296,26 +152320,6 @@ export function VersionHero({ cur, next, since, from }: { cur: string; next: str
         {from ? <dd className="upd-ver-d">{t('upd.from', { date: from })}</dd> : null}
       </div>
     </dl>
-  );
-}
-
-/** the rare and risky actions behind a «⋯» button: it closes on Esc, on a click outside and after a choice */
-export function MoreMenu({ children }: { children: (close: () => void) => ReactNode }) {
-  const [open, setOpen] = useState(false);
-  const box = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!open) return;
-    const away = (e: MouseEvent) => { if (!box.current?.contains(e.target as Node)) setOpen(false); };
-    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
-    document.addEventListener('mousedown', away);
-    document.addEventListener('keydown', esc);
-    return () => { document.removeEventListener('mousedown', away); document.removeEventListener('keydown', esc); };
-  }, [open]);
-  return (
-    <div className="upd-more" ref={box}>
-      <button type="button" className="upd-more-btn" aria-haspopup="menu" aria-expanded={open} aria-label={t('upd.more')} title={t('upd.more')} onClick={() => setOpen((v) => !v)}>⋯</button>
-      {open && <div className="upd-more-menu" role="menu">{children(() => setOpen(false))}</div>}
-    </div>
   );
 }
 
@@ -154268,6 +155272,63 @@ __COREGSM_EOF__
 .pl-move.up { color: rgb(var(--ok)); background: rgb(var(--okbg)); }
 .pl-move.down { color: rgb(var(--bad)); background: rgb(var(--badbg)); }
 .pl-move.new { color: rgb(var(--link)); background: rgb(var(--link) / .14); }
+
+/* ---------- the level ring around the avatar, the live chip ---------- */
+.pf-level { position: relative; display: inline-block; }
+/* the arc round the picture fills towards the next rank (the picture is the top 88px of the editor, centred) */
+.pf-level::before { content: ''; position: absolute; z-index: 1; top: -7px; left: 50%; width: 102px; height: 102px; transform: translateX(-50%); border-radius: 50%; pointer-events: none;
+  background: conic-gradient(var(--rc, rgb(var(--brand))) calc(var(--p, 0) * 1%), rgb(var(--line) / .6) 0);
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 4px), #000 calc(100% - 3px)); mask: radial-gradient(farthest-side, transparent calc(100% - 4px), #000 calc(100% - 3px)); }
+.pf-level-badge { position: absolute; z-index: 2; top: -14px; left: calc(50% + 20px); padding: 1px 9px; border-radius: var(--r-pill); background: var(--rc, rgb(var(--brand))); color: #fff; font-size: var(--fs-2xs); font-weight: 800; white-space: nowrap; box-shadow: 0 0 0 3px rgb(var(--card)); }
+.pf-live { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 3px 11px 3px 6px; border-radius: var(--r-pill); background: rgb(var(--ok) / .14); color: rgb(var(--ok)); font-size: var(--fs-sm); font-weight: 800; }
+.pf-live:hover { background: rgb(var(--ok) / .22); }
+.upd-more.is-plain .upd-more-btn { background: rgb(var(--soft)); color: rgb(var(--ink)); }
+.upd-more.is-plain .upd-more-btn:hover { background: rgb(var(--line) / .6); }
+.upd-more.is-plain .upd-more-menu { top: calc(100% + 8px); bottom: auto; }
+
+/* ---------- «the main thing today» ---------- */
+.pf-focus { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; padding: 16px 18px; border-radius: var(--r-xl); background: linear-gradient(135deg, rgb(var(--brand) / .16), rgb(var(--brand) / .04)), rgb(var(--card)); box-shadow: inset 0 0 0 1px rgb(var(--brand) / .25); }
+.pf-focus.is-playing, .pf-focus.is-fav { background: linear-gradient(135deg, rgb(var(--ok) / .16), rgb(var(--ok) / .03)), rgb(var(--card)); box-shadow: inset 0 0 0 1px rgb(var(--ok) / .3); }
+.pf-focus-ico { display: grid; place-items: center; width: 48px; height: 48px; flex: none; border-radius: 50%; background: rgb(var(--soft)); font-size: 1.5rem; }
+.pf-focus-k { margin: 0; font-size: var(--fs-xs); font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: rgb(var(--mute)); }
+.pf-focus-t { margin: 2px 0 0; font-size: 1.1rem; font-weight: 800; line-height: 1.25; }
+.pf-focus-s { margin: 2px 0 0; font-size: var(--fs-sm); font-weight: 600; color: rgb(var(--mute)); }
+
+/* ---------- tiles with a trend and a strip, the achievement showcase ---------- */
+.pf-spark { display: block; width: 100%; height: 28px; margin-top: .55rem; }
+.pf-spark-line { stroke: rgb(var(--link)); stroke-width: 1.6; vector-effect: non-scaling-stroke; }
+.pf-spark-fill { fill: rgb(var(--brand) / .14); }
+.pf-strip { display: grid; grid-template-columns: repeat(14, 1fr); gap: 3px; margin-top: .6rem; }
+.pf-strip > i { aspect-ratio: 1; border-radius: 3px; background: rgb(var(--line) / .6); }
+.pf-strip > i.is-on { background: rgb(var(--warn)); }
+.pf-ach-label { margin: 0 0 8px; font-size: var(--fs-xs); font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: rgb(var(--mute)); }
+.pf-ach-showcase { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
+.pf-ach-hero { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: var(--r-lg); background: rgb(var(--soft)); }
+.pf-ach-hero-art { display: grid; place-items: center; width: 60px; height: 60px; flex: none; border-radius: var(--r-lg); background: rgb(var(--card)); }
+
+/* ---------- security: the score, folding groups, privacy, the picture, the danger zone ---------- */
+.pf-score { padding: 18px 20px; }
+.pf-score-list { display: flex; flex-wrap: wrap; gap: 8px 16px; margin: 14px 0 0; padding: 0; list-style: none; font-size: var(--fs-sm); font-weight: 700; color: rgb(var(--mute)); }
+.pf-score-list > li.is-ok { color: rgb(var(--ok)); }
+.pf-group { border-radius: var(--r-xl); }
+.pf-group-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 4px; cursor: pointer; list-style: none; }
+.pf-group-head::-webkit-details-marker { display: none; }
+.pf-group-chev { flex: none; transition: transform .2s; }
+.pf-group[open] .pf-group-chev { transform: rotate(180deg); }
+.pf-group-body { margin-top: 12px; }
+.pf-priv { display: grid; gap: 10px; margin: 0; padding: 0; border: 0; }
+.pf-card-share { display: grid; gap: 8px; }
+.pf-card-img { width: 100%; max-width: 30rem; height: auto; border-radius: var(--r-lg); background: rgb(var(--soft)); }
+.pf-danger { display: grid; gap: 12px; margin-top: 14px; padding: 14px 16px; border-radius: var(--r-lg); background: rgb(var(--bad) / .08); box-shadow: inset 0 0 0 1px rgb(var(--bad) / .3); }
+
+/* ---------- phone: the tabs stay under the header while the page scrolls, the hero is one column ---------- */
+.pf-tabs { position: sticky; top: 4.75rem; z-index: 20; }
+@media (max-width: 639px) {
+  .pf-hero-body { flex-direction: column; align-items: flex-start; }
+  .pf-hero-body > .mt-3 { align-self: stretch; justify-content: flex-start; }
+  .pf-focus > .btn { width: 100%; justify-content: center; }
+  .pf-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/servers.css" << '__COREGSM_EOF__'

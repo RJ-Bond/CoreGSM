@@ -603,10 +603,18 @@ export interface NickStatus {
 }
 
 /** GET/PUT /me/player */
+export interface Privacy {
+  stats: boolean;
+  achievements: boolean;
+  online: boolean;
+}
+
 export interface PlayerProfile {
   gameNick: string;
   bio: string;
   publicProfile: boolean;
+  /** what the public profile shows (everything until switched off) */
+  privacy?: Privacy;
 }
 
 /** GET /me/stats?days= */
@@ -618,6 +626,8 @@ export interface MyStats {
   longestSessionSec: number;
   streakDays: number;
   lastSeenAt: number | null;
+  /** the visit that is going on right now */
+  playingNow?: { serverId: number; name: string; game: string; since: number } | null;
   favouriteServerId: number | null;
   byServer: { serverId: number; name: string; game: string; seconds: number; sessions: number }[];
   /** date: YYYY-MM-DD, oldest first */
@@ -689,9 +699,11 @@ export interface PublicProfile {
   bio: string;
   /** ms (or an ISO string) */
   memberSince: number | string | null;
-  stats: { totalSeconds: number; sessions: number; streakDays: number; favouriteServerName: string | null };
+  /** null: the owner hid the statistics */
+  stats: { totalSeconds: number; sessions: number; streakDays: number; favouriteServerName: string | null } | null;
   achievements: { id: string; title: string; icon: string }[];
-  rank?: { id: string; name: string; color: string; image: string };
+  playingNow?: { serverId: number; name: string; game: string } | null;
+  rank?: { id: string; name: string; color: string; image: string } | null;
   vrAchievements?: { id: string; title: string; image: string }[];
 }
 

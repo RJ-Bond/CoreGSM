@@ -252,6 +252,8 @@ export const ERRORS = {
   backup_op_failed: 'Не удалось выполнить операцию: {reason}',
   backup_not_found: 'Копия не найдена',
   backup_nothing_to_check: 'Копий пока нет: проверять нечего',
+  check_input: 'Проверьте введённые данные',
+  confirm_username: 'Введите имя аккаунта для подтверждения',
   backup_remote_https: 'Адрес для копии должен начинаться с https://',
   backup_s3_https: 'Адрес хранилища должен начинаться с https://',
   backup_s3_endpoint: 'Адрес хранилища: например https://s3.eu-central-1.amazonaws.com',

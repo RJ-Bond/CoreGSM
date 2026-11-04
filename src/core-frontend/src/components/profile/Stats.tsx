@@ -4,6 +4,7 @@ import type { MyStats } from '../../api';
 import { t } from '../../i18n';
 import { ago, Empty, fmtDay, fmtDateTime, GameAvatar, Section } from '../../ui';
 import { fmtDuration } from './format';
+import { DaySpark, StreakStrip } from './statsViz';
 import { isObject, useFetched } from './useFetched';
 
 const valid = (v: unknown) => isObject(v) && Array.isArray((v as MyStats).byDay);
@@ -17,14 +18,15 @@ export const PERIODS = [7, 30, 90] as const;
 
 /** the five numbers of a period: hours online, sessions, streak, longest session, favourite server */
 export function StatTiles({ s, compact = false }: { s: MyStats; compact?: boolean }) {
-  const fav = s.byServer?.find((x) => x.serverId === s.favouriteServerId)?.name;
+  const favRow = s.byServer?.find((x) => x.serverId === s.favouriteServerId);
+  const fav = favRow?.name;
   return (
     <div className="pf-tiles">
-      <StatTile icon={<IcoClock />} value={fmtDuration(s.totalSeconds)} label={t('pf.stats.online')} />
+      <StatTile icon={<IcoClock />} value={fmtDuration(s.totalSeconds)} label={t('pf.stats.online')} extra={<DaySpark byDay={s.byDay ?? []} />} />
       <StatTile icon={<IcoPlay />} value={String(s.sessions)} label={t('pf.stats.sessions')} />
-      <StatTile icon={<IcoFlame />} hot={s.streakDays >= 7} value={t('pf.stats.days', { n: s.streakDays })} label={t('pf.stats.streak')} />
+      <StatTile icon={<IcoFlame />} hot={s.streakDays >= 7} value={t('pf.stats.days', { n: s.streakDays })} label={t('pf.stats.streak')} extra={<StreakStrip byDay={s.byDay ?? []} />} />
       {!compact && <StatTile icon={<IcoTimer />} value={fmtDuration(s.longestSessionSec)} label={t('pf.stats.longest')} />}
-      {!compact && <StatTile icon={<IcoHeart />} value={fav ?? '–'} label={t('pf.stats.favourite')} />}
+      {!compact && <StatTile icon={favRow ? <GameAvatar game={favRow.game} size={20} /> : <IcoHeart />} value={fav ?? '–'} label={t('pf.stats.favourite')} />}
     </div>
   );
 }

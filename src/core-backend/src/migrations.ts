@@ -176,6 +176,12 @@ CREATE TABLE IF NOT EXISTS favorite_push_prefs (
   on_down INTEGER NOT NULL DEFAULT 0
 );`),
   },
+  {
+    version: 14,
+    name: 'user_player.privacy',
+    // what a public profile shows: a JSON object of switches, empty = everything shown
+    up: (db) => { if (hasTable(db, 'user_player')) addColumn(db, 'user_player', 'privacy', "TEXT NOT NULL DEFAULT ''"); },
+  },
 ];
 
 export const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;

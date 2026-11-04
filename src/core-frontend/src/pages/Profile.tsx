@@ -6,11 +6,14 @@ import { restartTour } from '../components/Tour';
 import { confirmDialog } from '../confirm';
 import { t, useI18n, type TKey } from '../i18n';
 import { ActivityFeed } from '../components/profile/Activity';
-import { AvatarEditor } from '../components/profile/AvatarEditor';
+import { ProfileHero } from '../components/profile/ProfileHero';
+import { FocusCard } from '../components/profile/FocusCard';
+import { pickFocus } from '../components/profile/heroLogic';
+import { SecurityGroup, SecurityScore } from '../components/profile/SecurityOverview';
+import { AccountDataCard } from '../components/profile/AccountDataCard';
 import { BannerEditor } from '../components/profile/BannerEditor';
-import { bannerStyle } from '../components/profile/banner';
-import { AchievementsGrid, AchievementsPreview } from '../components/profile/Achievements';
-import { RankCard, RankHeaderBadge, VrAchievementsGrid, useMyRank } from '../components/profile/VrRank';
+import { AchievementsGrid, AchievementsPreview, useAchievements } from '../components/profile/Achievements';
+import { RankCard, VrAchievementsGrid, useMyRank } from '../components/profile/VrRank';
 import { JournalCard } from '../components/profile/Journal';
 import { NewDeviceBanner } from '../components/profile/NewDeviceBanner';
 import { PushCard } from '../components/profile/PushCard';
@@ -23,7 +26,7 @@ import { PlayerCard } from '../components/profile/PlayerCard';
 import { StatsPanel, StatsSummary, useMyStats } from '../components/profile/Stats';
 import { deviceName } from '../components/profile/format';
 import { IconUser } from '../icons';
-import { IcoDiscord, IcoGamepad, IcoHome, IcoLogout, IcoShield, IcoSliders } from '../components/profile/bits';
+import { IcoGamepad, IcoHome, IcoShield, IcoSliders } from '../components/profile/bits';
 import { isNewDeviceDismissed } from '../security';
 import { ago, Button, ErrorLine, isLag, FieldError, GameAvatar, PageHead, PasswordField, PasswordStrength, Section, StatusPill, UserAvatar, toast, useRoute, errText } from '../ui';
 
@@ -70,11 +73,12 @@ export default function ProfilePage() {
 
 // ---------- «Обзор» ----------
 function OverviewTab() {
-  const { me, isAdmin, logout, reload } = useAuth();
+  const { me, isAdmin, reload } = useAuth();
   const [favs, setFavs] = useState<Server[] | null>(null);
   const [editBanner, setEditBanner] = useState(false);
   const stats = useMyStats(30);
   const rank = useMyRank().data;
+  const achievements = useAchievements().data;
 
   useEffect(() => {
     Promise.all([api<number[]>('/favorites'), api<Server[]>('/servers')])
@@ -82,36 +86,17 @@ function OverviewTab() {
       .catch(() => setFavs([]));
   }, []);
   if (!me) return null;
-
-  const role = me.role === 'admin' ? t('pf.role.admin') : me.role === 'moderator' ? t('pf.role.moderator') : t('pf.role.player');
+  const focus = pickFocus({ playing: stats.data?.playingNow, rank, achievements, favs });
 
   return (
     <div className="space-y-5">
       <NewDeviceBanner />
       <Greeting name={me.username} lastSeen={stats.data?.lastSeenAt ?? null} />
-      <div className="panel pf-hero">
-        <div className="pf-banner" style={bannerStyle(me.bannerUrl, me.bannerPreset)}>
-          <button type="button" className="pf-banner-btn" aria-expanded={editBanner} onClick={() => setEditBanner((v) => !v)}>
-            {editBanner ? t('pf.banner.close') : t('pf.banner.edit')}
-          </button>
-        </div>
-        <div className="pf-hero-body">
-          <div className="pf-hero-avatar"><AvatarEditor onChanged={reload} size={80} ring={rank && rank.nick ? rank.rank.color : null} /></div>
-          <div className="min-w-0 flex-1 basis-56 pt-3">
-            <div className="line-clamp-2 wrap-break-word text-2xl font-black leading-tight">{me.username}</div>
-            <div className="mt-1 flex flex-wrap items-center gap-2">
-              <span className={`pill ${isAdmin ? 'pill-ok' : 'pill-mute'}`}>{role}</span>
-              <RankHeaderBadge />
-            </div>
-            <div className="mt-2 flex flex-wrap items-center gap-2">
-              {me.discordName && <span className="pf-meta"><IcoDiscord />{me.discordName}</span>}
-            </div>
-          </div>
-          <button className="btn btn-soft btn-sm pf-icon-btn mt-3" onClick={logout} title={t('hdr.logout')} aria-label={t('hdr.logout')}><IcoLogout /><span className="max-sm:sr-only">{t('hdr.logout')}</span></button>
-        </div>
-      </div>
+      <ProfileHero rank={rank} playing={stats.data?.playingNow} editBanner={editBanner} onToggleBanner={() => setEditBanner((v) => !v)} />
 
       {editBanner && <BannerEditor onChanged={reload} />}
+
+      <FocusCard focus={focus} />
 
       <StatsSummary data={stats.data} />
 
@@ -183,18 +168,32 @@ function SecurityTab() {
   return (
     <div className="space-y-5">
       <NewDeviceBanner onRevoked={() => setRev((x) => x + 1)} />
-      <div className="grid items-start gap-5 md:grid-cols-2">
-        <EmailCard onChanged={reload} />
-        <PasswordCard hasPassword={me.hasPassword} discordLinked={!!me.discordName} onChanged={reload} />
-        <TwoFactorCard />
-        <DiscordCard onChanged={reload} />
-        <PushCard />
-        <FavoritePushCard />
-        <FollowsCard />
-        <NewsSubsCard />
-        <SessionsCard key={rev} />
-      </div>
-      <JournalCard onRevoked={() => setRev((x) => x + 1)} />
+      <SecurityScore />
+      <SecurityGroup title={t('pf.sec.g.login')} hint={t('pf.sec.g.loginHint')} defaultOpen>
+        <div className="grid items-start gap-5 md:grid-cols-2">
+          <EmailCard onChanged={reload} />
+          <PasswordCard hasPassword={me.hasPassword} discordLinked={!!me.discordName} onChanged={reload} />
+          <TwoFactorCard />
+          <DiscordCard onChanged={reload} />
+        </div>
+      </SecurityGroup>
+      <SecurityGroup title={t('pf.sec.g.notify')} hint={t('pf.sec.g.notifyHint')}>
+        <div className="grid items-start gap-5 md:grid-cols-2">
+          <PushCard />
+          <FavoritePushCard />
+          <FollowsCard />
+          <NewsSubsCard />
+        </div>
+      </SecurityGroup>
+      <SecurityGroup title={t('pf.sec.g.devices')} hint={t('pf.sec.g.devicesHint')}>
+        <div className="space-y-5">
+          <SessionsCard key={rev} />
+          <JournalCard onRevoked={() => setRev((x) => x + 1)} />
+        </div>
+      </SecurityGroup>
+      <SecurityGroup title={t('pf.sec.g.data')} hint={t('pf.sec.g.dataHint')}>
+        <AccountDataCard />
+      </SecurityGroup>
     </div>
   );
 }

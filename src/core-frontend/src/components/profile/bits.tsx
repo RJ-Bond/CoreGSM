@@ -20,12 +20,13 @@ export const IcoSliders = () => <Icon size={16}><path d="M4 21v-7M4 10V3M12 21v-
 export const IcoShield = () => <Icon size={16}><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z" /></Icon>;
 
 /** a stat tile: icon, value and label; `hot` tints the icon (a streak of a week or more) */
-export function StatTile({ value, label, icon, hot = false }: { value: string; label: string; icon?: ReactNode; hot?: boolean }) {
+export function StatTile({ value, label, icon, hot = false, extra }: { value: string; label: string; icon?: ReactNode; hot?: boolean; extra?: ReactNode }) {
   return (
     <div className="pf-tile">
       {icon && <span className={`pf-tile-ico ${hot ? 'is-hot' : ''}`} aria-hidden>{icon}</span>}
       <div className="pf-tile-v">{value}</div>
       <div className="pf-tile-l">{label}</div>
+      {extra}
     </div>
   );
 }

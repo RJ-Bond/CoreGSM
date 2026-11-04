@@ -32,14 +32,36 @@ export function prefsOf(userId: number): Prefs {
 }
 
 // ---------- player profile ----------
+/** what a public profile shows besides the name and the picture; everything is shown until the owner switches it off */
+export interface Privacy {
+  stats: boolean;
+  achievements: boolean;
+  /** «playing now on …» */
+  online: boolean;
+}
+export const PRIVACY_KEYS = ['stats', 'achievements', 'online'] as const;
+export function parsePrivacy(raw: string | null | undefined): Privacy {
+  let o: Record<string, unknown> = {};
+  try {
+    const v = raw ? JSON.parse(raw) : {};
+    if (v && typeof v === 'object') o = v as Record<string, unknown>;
+  } catch {
+    /* an unreadable value means the defaults */
+  }
+  return { stats: o.stats !== false, achievements: o.achievements !== false, online: o.online !== false };
+}
+
 export interface PlayerProfile {
   gameNick: string;
   bio: string;
   publicProfile: boolean;
+  privacy: Privacy;
 }
 export function playerOf(userId: number): PlayerProfile {
-  const r = db.prepare('SELECT game_nick, bio, public_profile FROM user_player WHERE user_id = ?').get(userId) as { game_nick: string; bio: string; public_profile: number } | undefined;
-  return { gameNick: r?.game_nick ?? '', bio: r?.bio ?? '', publicProfile: !!r?.public_profile };
+  const r = db.prepare('SELECT game_nick, bio, public_profile, privacy FROM user_player WHERE user_id = ?').get(userId) as
+    | { game_nick: string; bio: string; public_profile: number; privacy: string }
+    | undefined;
+  return { gameNick: r?.game_nick ?? '', bio: r?.bio ?? '', publicProfile: !!r?.public_profile, privacy: parsePrivacy(r?.privacy) };
 }
 
 // ---------- time zones ----------
@@ -115,6 +137,8 @@ export interface Stats {
   longestSessionSec: number;
   streakDays: number;
   lastSeenAt: number | null;
+  /** the visit that is going on right now */
+  playingNow: { serverId: number; name: string; game: string; since: number } | null;
   favouriteServerId: number | null;
   byServer: { serverId: number; name: string; game: string; seconds: number; sessions: number }[];
   byDay: { date: string; seconds: number }[];
@@ -187,6 +211,10 @@ export function computeStats(userId: number, days: number): { stats: Stats; all:
       longestSessionSec: Math.round(longest / 1000),
       streakDays: streak,
       lastSeenAt: lastSeen,
+      playingNow: (() => {
+        const open = [...all].reverse().find((s) => s.left_at === null);
+        return open ? { serverId: open.server_id, name: open.sname, game: open.game, since: open.joined_at } : null;
+      })(),
       favouriteServerId: byServer[0]?.serverId ?? null,
       byServer,
       byDay: [...byDayMap].map(([date, ms]) => ({ date, seconds: Math.round(ms / 1000) })),

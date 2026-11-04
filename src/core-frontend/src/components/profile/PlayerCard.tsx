@@ -1,11 +1,12 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import { api, type NickStatus, type PlayerProfile } from '../../api';
+import { api, type NickStatus, type PlayerProfile, type Privacy } from '../../api';
 import { useAuth } from '../../auth';
 import { t } from '../../i18n';
 import { ago, Button, CopyButton, ErrorLine, Section, Switch, TextField, toast, errText } from '../../ui';
 import { isObject, useFetched } from './useFetched';
 
 const NICK_MAX = 32;
+const ALL_PUBLIC: Privacy = { stats: true, achievements: true, online: true };
 const BIO_MAX = 280;
 
 /** address of the public page: the panel's own address with /u/<username> */
@@ -19,6 +20,7 @@ export function PlayerCard() {
   const [nick, setNick] = useState('');
   const [bio, setBio] = useState('');
   const [pub, setPub] = useState(false);
+  const [priv, setPriv] = useState<Privacy>(ALL_PUBLIC);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -27,10 +29,11 @@ export function PlayerCard() {
     setNick(data.gameNick ?? '');
     setBio(data.bio ?? '');
     setPub(!!data.publicProfile);
+    setPriv(data.privacy ?? ALL_PUBLIC);
   }, [data]);
 
   if (!me || data === null) return null; // the API is unavailable: the panel is hidden
-  const dirty = !!data && (nick.trim() !== (data.gameNick ?? '') || bio.trim() !== (data.bio ?? '') || pub !== !!data.publicProfile);
+  const dirty = !!data && (nick.trim() !== (data.gameNick ?? '') || bio.trim() !== (data.bio ?? '') || pub !== !!data.publicProfile || JSON.stringify(priv) !== JSON.stringify(data.privacy ?? ALL_PUBLIC));
   const link = publicLink(me.username);
 
   const submit = async (e: FormEvent) => {
@@ -38,7 +41,7 @@ export function PlayerCard() {
     setError('');
     setBusy(true);
     try {
-      await api('/me/player', 'PUT', { gameNick: nick.trim(), bio: bio.trim(), publicProfile: pub });
+      await api('/me/player', 'PUT', { gameNick: nick.trim(), bio: bio.trim(), publicProfile: pub, privacy: priv });
       toast(t('pf.player.saved'));
       reload();
       status.reload();
@@ -101,6 +104,29 @@ export function PlayerCard() {
                 </div>
               )}
               {pub && !!data && !data.publicProfile && <p className="text-sm font-bold text-mute">{t('pf.player.saveToPublish')}</p>}
+              {pub && (
+                <fieldset className="pf-priv">
+                  <legend className="label">{t('pf.priv.title')}</legend>
+                  {([['stats', 'pf.priv.stats'], ['achievements', 'pf.priv.ach'], ['online', 'pf.priv.online']] as const).map(([k, label]) => (
+                    <label key={k} className="flex cursor-pointer items-center gap-3">
+                      <Switch checked={priv[k]} onChange={(v) => setPriv((p) => ({ ...p, [k]: v }))} />
+                      <span className="font-bold">{t(label)}</span>
+                    </label>
+                  ))}
+                  <p className="text-sm font-semibold text-mute">{t('pf.priv.hint')}</p>
+                </fieldset>
+              )}
+              {!!data?.publicProfile && (
+                <div className="pf-card-share">
+                  <p className="font-extrabold">{t('pf.card.title')}</p>
+                  <p className="text-sm font-semibold text-mute">{t('pf.card.hint')}</p>
+                  <img className="pf-card-img" src={`/api/u/${encodeURIComponent(me.username)}/card.png`} alt={t('pf.card.alt')} loading="lazy" width={1200} height={630} />
+                  <div className="flex flex-wrap items-center gap-2">
+                    <CopyButton text={`${window.location.origin}/api/u/${encodeURIComponent(me.username)}/card.png`} label={t('pf.card.copy')} />
+                    <a className="btn btn-soft btn-sm" href={`/api/u/${encodeURIComponent(me.username)}/card.png`} download={`coregsm-${me.username}.png`}>{t('pf.card.download')}</a>
+                  </div>
+                </div>
+              )}
             </div>
             <ErrorLine text={error} />
             <Button loading={busy} disabled={!dirty}>{t('common.save')}</Button>
