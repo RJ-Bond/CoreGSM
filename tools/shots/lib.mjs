@@ -28,7 +28,6 @@ export const GUEST_PAGES = [
   { id: 'news-item', path: '/news/1' },
   { id: 'status', path: '/status' },
   { id: 'community', path: '/community' },
-  { id: 'gallery', path: '/gallery' },
   { id: 'login', path: '/login' },
   { id: 'register', path: '/register' },
   { id: 'not-found', path: '/404' },

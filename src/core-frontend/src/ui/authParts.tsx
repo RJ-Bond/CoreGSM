@@ -240,12 +240,12 @@ export function UserAvatar({ name, url, size = 28, tone = 'soft', className = ''
   const [failed, setFailed] = useState(false);
   useEffect(() => setFailed(false), [url]);
   if (url && !failed) {
-    return <img src={url} width={size} height={size} alt="" referrerPolicy="no-referrer" draggable={false} onError={() => setFailed(true)} className={`shrink-0 rounded-[30%] object-cover ${className}`} style={{ width: size, height: size }} />;
+    return <img src={url} width={size} height={size} alt="" referrerPolicy="no-referrer" draggable={false} onError={() => setFailed(true)} className={`shrink-0 rounded-full object-cover ${className}`} style={{ width: size, height: size }} />;
   }
   return (
     <span
       aria-hidden
-      className={`grid shrink-0 place-items-center rounded-[30%] font-black ${tone === 'brand' ? 'bg-brand text-white' : tone === 'grad' ? 'bg-linear-to-br from-brand to-[#ec4899] text-white' : 'bg-soft text-link'} ${className}`}
+      className={`grid shrink-0 place-items-center rounded-full font-black ${tone === 'brand' ? 'bg-brand text-white' : tone === 'grad' ? 'bg-linear-to-br from-brand to-[#ec4899] text-white' : 'bg-soft text-link'} ${className}`}
       style={{ width: size, height: size, fontSize: size * 0.48 }}
     >
       {name.slice(0, 1).toUpperCase()}

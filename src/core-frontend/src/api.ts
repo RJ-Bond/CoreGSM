@@ -736,7 +736,7 @@ export interface Access {
 export type Perm = 'news' | 'moderation' | 'servers' | 'maintenance' | 'journal';
 export const PERM_LABELS: { id: Perm; label: string; hint: string }[] = [
   { id: 'news', label: 'Новости', hint: 'писать, планировать и публиковать' },
-  { id: 'moderation', label: 'Модерация', hint: 'отзывы и галерея скриншотов' },
+  { id: 'moderation', label: 'Модерация', hint: 'отзывы' },
   { id: 'servers', label: 'Серверы', hint: 'добавлять и изменять (удаляет только администратор)' },
   { id: 'maintenance', label: 'Обслуживание', hint: 'окна технических работ' },
   { id: 'journal', label: 'Журнал', hint: 'кто и что менял в панели' },

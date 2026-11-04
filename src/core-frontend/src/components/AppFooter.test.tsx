@@ -22,8 +22,8 @@ describe('AppFooter', () => {
 
   it('has an svg icon for every link and for the version, all hidden from screen readers', () => {
     const html = renderToStaticMarkup(<AppFooter brand="CoreGSM" version="1.0.0.50" />);
-    expect((html.match(/<svg/g) ?? []).length).toBe(6);
-    expect((html.match(/aria-hidden="true"/g) ?? []).length).toBeGreaterThanOrEqual(6);
+    expect((html.match(/<svg/g) ?? []).length).toBe(5);
+    expect((html.match(/aria-hidden="true"/g) ?? []).length).toBeGreaterThanOrEqual(5);
   });
 
   it('the default brand leads to the project and the version to the changelog; a custom name stays plain', () => {

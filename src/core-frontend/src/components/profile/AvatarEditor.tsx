@@ -80,10 +80,10 @@ export function AvatarEditor({ onChanged, size = 80, ring }: { onChanged: () => 
         onClick={() => input.current?.click()}
         disabled={busy}
         aria-label={t('pf.avatar.upload')}
-        className={`group relative rounded-3xl ${drop.over ? 'pf-drop-on' : ''}`}
+        className={`group relative rounded-full ${drop.over ? 'pf-drop-on' : ''}`}
       >
-        <UserAvatar name={me.username} url={me.avatarUrl} size={size} tone="brand" className="rounded-3xl!" />
-        <span className="absolute inset-0 grid place-items-center rounded-3xl bg-black/50 text-xs font-extrabold text-white opacity-0 transition group-hover:opacity-100 group-focus-visible:opacity-100">
+        <UserAvatar name={me.username} url={me.avatarUrl} size={size} tone="brand" className="rounded-full!" />
+        <span className="absolute inset-0 grid place-items-center rounded-full bg-black/50 text-xs font-extrabold text-white opacity-0 transition group-hover:opacity-100 group-focus-visible:opacity-100">
           {busy ? '…' : drop.over ? t('pf.avatar.drop') : t('pf.avatar.change')}
         </span>
       </button>

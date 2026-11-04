@@ -152,8 +152,6 @@ export const ERRORS = {
   config_bad_file: 'Это не файл настроек CoreGSM или он повреждён',
   rcon_password_required: 'Укажите пароль RCON',
   rcon_not_configured: 'Сначала сохраните порт и пароль RCON',
-  gallery_image_required: 'Нужна картинка PNG, JPG или WebP до 8 МБ',
-  gallery_queue_full: 'У вас уже 5 скриншотов ждут проверки. Дождитесь, пока их посмотрят.',
   game_address_port: 'Укажите игру, адрес и порт',
   display_address_format: 'Адрес для отображения не должен содержать пробелов и кавычек',
   channel_id_format: 'ID канала — число из 15–25 цифр',

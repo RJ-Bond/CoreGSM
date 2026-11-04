@@ -8,8 +8,8 @@ import { api, onBusy, type Me } from '../api';
 import { useAppearance } from '../appearance';
 import { t, useI18n } from '../i18n';
 import { UserAvatar } from '../ui';
-import { FootCommunity, FootGallery, FootNews, FootServers, FootStatus, FootTag } from './FooterIcons';
-import { MenuAdmin, MenuGallery, MenuLogout, MenuUser } from './HeaderIcons';
+import { FootCommunity, FootNews, FootServers, FootStatus, FootTag } from './FooterIcons';
+import { MenuAdmin, MenuLogout, MenuUser } from './HeaderIcons';
 import '../styles/shell.css';
 
 // ---------- progress strip ----------
@@ -112,7 +112,6 @@ export function AppFooter({ brand, version }: { brand: string; version?: string 
         <a href="/news"><FootNews />{t('nav.news')}</a>
         <a href="/status"><FootStatus />{t('nav.status')}</a>
         <a href="/community"><FootCommunity />{t('nav.community')}</a>
-        <a href="/gallery"><FootGallery />{t('d2.gal.title')}</a>
       </nav>
       {version && <a className="app-foot-ver" href={CHANGELOG_URL} target="_blank" rel="noopener noreferrer" title={t('foot.version', { v: version })}><FootTag />{footVersionText(version)}</a>}
     </footer>
@@ -172,7 +171,6 @@ export function ProfileMenu({ me, isStaff, logout, active }: { me: Me; isStaff: 
             </div>
           </div>
           <a role="menuitem" className={`${link} pm-ico`} href="/profile"><MenuUser />{t('hdr.profile')}</a>
-          <a role="menuitem" className={`${link} pm-ico`} href="/gallery"><MenuGallery />{t('d2.sh.myGallery')}</a>
           {isStaff && <a role="menuitem" className={`${link} pm-ico`} href="/admin"><MenuAdmin />{t('nav.admin')}</a>}
           <div className="pm-sep" role="separator" />
           {/* one tap, and the menu stays open so both can be set at once */}

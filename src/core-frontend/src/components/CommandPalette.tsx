@@ -7,7 +7,7 @@ import { gameLabel } from '../games';
 import { ADMIN_LINKS, ADMIN_SECTIONS, SECTION_PERM } from '../pages/adminNav';
 import { confirmDialog } from '../confirm';
 import { currentPath } from '../ui/route';
-import { GameAvatar, IconCards, IconCopy, IconMoon, IconNews, IconRefresh, IconServers, IconSun, IconTrophy, IconWrench, adminThemeIsOwn, currentTheme, resetAdminTheme, setThemeChoice, toast, useDensity, navigate } from '../ui';
+import { GameAvatar, IconCopy, IconMoon, IconNews, IconRefresh, IconServers, IconSun, IconTrophy, IconWrench, adminThemeIsOwn, currentTheme, resetAdminTheme, setThemeChoice, toast, useDensity, navigate } from '../ui';
 
 type Group = 'Серверы' | 'Разделы' | 'Действия';
 
@@ -97,7 +97,6 @@ export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose:
       sectionItem('p-news', 'Новости', 'Лента новостей', '/news', <IconNews />),
       sectionItem('p-status', 'Статус', 'Доступность за 30 дней', '/status', <IconPulse />),
       sectionItem('p-community', 'Сообщество', 'Кто играет, сезон, зал славы', '/community', <IconTrophy />, 'игроки рейтинг топ сезон'),
-      sectionItem('p-gallery', 'Галерея', 'Скриншоты игроков', '/gallery', <IconCards />, 'скриншоты картинки фото загрузить', true),
     );
     if (isStaff) {
       const sections = isAdmin ? ADMIN_SECTIONS : ADMIN_SECTIONS.filter((x) => SECTION_PERM[x.id] && perms.includes(SECTION_PERM[x.id]!));

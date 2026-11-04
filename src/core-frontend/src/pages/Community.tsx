@@ -13,11 +13,9 @@ import { busiestText, dowShort, FeedItem, HeatLegend, MiniHeat, PlayerAvatar, us
 import { AnimatedNumber, CopyButton, Empty, GameAvatar, MiniSpark, PageHead, ago, fmtDate, fmtDateTime, navigate, num } from '../ui';
 import '../styles/analytics.css';
 import '../styles/community.css';
-import '../styles/gallery.css';
 import PollsCard from '../components/PollsCard';
 import { communityNavIcon } from '../components/CommunityIcons';
 import ArtPic from '../components/ArtPic';
-import { Lightbox, type Shot } from './Gallery';
 
 const IconPeople = () => (
   <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
@@ -384,42 +382,6 @@ function FeedBlock({ c, filter, setFilter }: { c: Community; filter: FeedFilter;
   );
 }
 
-/** the latest screenshots: the first one large */
-function GalleryStrip() {
-  const [list, setList] = useState<Shot[] | null>(null);
-  const [open, setOpen] = useState<number | null>(null);
-  useEffect(() => { api<Shot[]>('/gallery?limit=6').then(setList).catch(() => setList([])); }, []);
-  return (
-    <section id="cm-gallery" className="tile p-4 sm:p-5">
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-lg font-extrabold">{t('cm.gal')}</h2>
-        <a href="/gallery" className="text-sm font-extrabold text-link hover:underline">{list?.length ? t('cm.gal.all') : t('cm.gal.upload')}</a>
-      </div>
-      {list === null ? <div className="skeleton h-48 rounded-2xl" />
-        : list.length === 0 ? <Empty art={<ArtPic src="empty/empty-gallery" size={132} />} title={t('cm.gal.none')} text={t('cm.gal.noneText')}><a href="/gallery" className="btn">{t('cm.gal.uploadBtn')}</a></Empty>
-        : (
-          <ul className={`cm-gal n${Math.min(list.length, 5)}`}>
-            {list.slice(0, 5).map((s, i) => (
-              <li key={s.id} className={i === 0 && list.length >= 3 ? 'is-big' : ''}>
-                <button type="button" className="gl-shot" onClick={() => setOpen(i)} aria-label={s.caption || t('cm.gal.shot', { n: i + 1 })}>
-                  <img src={s.thumb} alt="" loading="lazy" />
-                  {s.featured && <span className="gl-star" title={t('cm.gal.best')}>★</span>}
-                  {(s.caption || s.author) && (
-                    <span className="gl-cap">
-                      {s.caption && <span className="block truncate font-extrabold">{s.caption}</span>}
-                      <span className="block truncate text-xs font-bold opacity-80">{[s.author, s.serverName].filter(Boolean).join(' · ')}</span>
-                    </span>
-                  )}
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-      {open !== null && list && <Lightbox list={list} index={open} onClose={() => setOpen(null)} onIndex={setOpen} />}
-    </section>
-  );
-}
-
 type SrvSort = 'players' | 'fill' | 'name';
 
 /** the servers: sort, filter by game, a curve of the day in every row; servers that are down go last */
@@ -540,7 +502,6 @@ export default function CommunityPage() {
     ['cm-when', t('cm.nav.when')],
     ['cm-top', t('cm.nav.top')],
     ['cm-feed', t('cm.nav.feed')],
-    ['cm-gallery', t('cm.nav.gallery')],
     ['cm-servers', t('cm.nav.servers')],
   ];
 
@@ -600,7 +561,6 @@ export default function CommunityPage() {
       <div className="b-top"><TopBlock c={c} mine={mine} /></div>
 
       <div className="b-feed"><FeedBlock c={c} filter={feedFilter} setFilter={setFeedFilter} /></div>
-      <div className="b-gal"><GalleryStrip /></div>
 
       <div className="b-wide"><ServersBlock servers={c.servers} /></div>
       </div>

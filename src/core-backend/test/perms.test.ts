@@ -25,7 +25,6 @@ describe('api: moderator permissions', () => {
     assert.deepEqual((await api.call('GET', '/api/me', { token: mod })).body.perms, ['news', 'moderation']);
     assert.equal(await can('GET', '/api/news/settings'), 200);
     assert.equal(await can('GET', '/api/reviews'), 200);
-    assert.equal(await can('GET', '/api/gallery/queue'), 200);
     const r = await api.call('GET', '/api/audit', { token: mod });
     assert.equal(r.status, 403);
     assert.equal(r.body.code, 'perm_missing');

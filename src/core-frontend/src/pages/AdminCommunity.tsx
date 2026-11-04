@@ -1,21 +1,18 @@
-/** Admin → Сообщество: seasons (and the hall of fame they make), reviews of the servers, the screenshot gallery. */
+/** Admin → Сообщество: seasons (and the hall of fame they make), reviews of the servers. */
 import { useEffect, useState, type FormEvent } from 'react';
 import { api } from '../api';
 import { t, useI18n, type TKey } from '../i18n';
 import { confirmDialog, promptDialog } from '../confirm';
-import { AdminPage, Button, Empty, ErrorLine, Field, IconEdit, IconEye, IconEyeOff, IconTrash, IconTrophy, PageHead, Section, ago, fmtDate, toast, num, SkeletonRows } from '../ui';
+import { AdminPage, Button, ErrorLine, Field, IconEdit, IconEye, IconEyeOff, IconTrash, IconTrophy, PageHead, Section, ago, fmtDate, toast, num, SkeletonRows } from '../ui';
 import PollsAdmin from '../components/PollsAdmin';
 import type { Seasons } from './Community';
 import { useAuth } from '../auth';
 import { Stars, type Review } from '../components/server/Reviews';
-import { Lightbox, type Shot } from './Gallery';
-import '../styles/gallery.css';
 
 export const COMMUNITY_TABS = [
   { id: 'seasons', get label() { return t('adm.com.seasons'); }, admin: true },
   { id: 'polls', get label() { return t('adm.com.polls'); }, admin: true },
   { id: 'reviews', get label() { return t('adm.com.reviews'); }, admin: false },
-  { id: 'gallery', get label() { return t('adm.com.gallery'); }, admin: false },
   { id: 'reports', get label() { return t('adm.com.reports'); }, admin: false },
   { id: 'comments', get label() { return t('adm.com.comments'); }, admin: false },
 ] as const;
@@ -35,7 +32,6 @@ export default function AdminCommunity({ sub = '' }: { sub?: string }) {
       {tab === 'seasons' && <SeasonsAdmin />}
       {tab === 'polls' && <PollsAdmin />}
       {tab === 'reviews' && <ReviewsAdmin />}
-      {tab === 'gallery' && <GalleryAdmin />}
       {tab === 'reports' && <ReportsAdmin />}
       {tab === 'comments' && <CommentsAdmin />}
     </AdminPage>
@@ -286,76 +282,3 @@ function CommentsAdmin() {
   );
 }
 
-function GalleryAdmin() {
-  useI18n();
-  const [list, setList] = useState<Shot[] | null>(null);
-  const [error, setError] = useState('');
-  const [open, setOpen] = useState<number | null>(null);
-  const load = () => api<Shot[]>('/gallery/queue').then(setList).catch((e: Error) => setError(e.message));
-  useEffect(() => { void load(); }, []);
-  const patch = (id: number, body: { status?: Shot['status']; featured?: boolean }, done: string) =>
-    api(`/gallery/${id}`, 'PATCH', body).then(() => { toast(done); void load(); }).catch((e: Error) => setError(e.message));
-  const del = async (id: number) => {
-    if (!(await confirmDialog({ title: t('adm.com.shotDelQ'), text: t('adm.com.shotDelText'), confirmLabel: t('adm.srv.delete'), danger: true }))) return;
-    await api(`/gallery/${id}`, 'DELETE').then(load).catch((e: Error) => setError(e.message));
-  };
-  const pendingList = list?.filter((s) => s.status === 'pending') ?? [];
-  const waiting = pendingList.length;
-  const head = pendingList[0];
-  const [skipped, setSkipped] = useState<number[]>([]);
-  const next = pendingList.find((x) => !skipped.includes(x.id)) ?? head;
-  // A — publish, X — reject, → — later (not while typing)
-  useEffect(() => {
-    if (!next) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.ctrlKey || e.metaKey || e.altKey || (e.target as HTMLElement | null)?.closest('input, textarea, select, [contenteditable="true"]') || open !== null) return;
-      const k = e.key.toLowerCase();
-      if (k === 'a' || k === 'ф') void patch(next.id, { status: 'approved' }, t('adm.com.published'));
-      else if (k === 'x' || k === 'ч') void patch(next.id, { status: 'rejected' }, t('adm.com.rejected'));
-      else if (e.key === 'ArrowRight') setSkipped((l) => [...l, next.id]);
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  });
-  return (
-    <Section title={t('adm.com.gallery')} description={waiting ? t('adm.com.waiting', { n: waiting }) : t('adm.com.noWaiting')}>
-      <ErrorLine text={error} />
-      {next && (
-        <div className="mq">
-          <img src={next.thumb} alt="" className="mq-img" />
-          <div className="mq-body">
-            <p className="text-xs font-extrabold uppercase tracking-wide text-mute">{t('d2.ac.g.pending')} · {waiting}</p>
-            <p className="font-extrabold">{next.caption || t('adm.com.noCaption')}</p>
-            <p className="text-sm font-semibold text-mute">{[next.author, next.serverName, ago(next.createdAt)].filter(Boolean).join(' · ')}</p>
-            <div className="mt-2 flex flex-wrap gap-2">
-              <button type="button" className="btn btn-success btn-sm" onClick={() => void patch(next.id, { status: 'approved' }, t('adm.com.published'))}>{t('d2.news.publish')} <kbd>A</kbd></button>
-              <button type="button" className="btn btn-danger btn-sm" onClick={() => void patch(next.id, { status: 'rejected' }, t('adm.com.rejected'))}>{t('d2.ac.dismiss')} <kbd>X</kbd></button>
-              {waiting > 1 && <button type="button" className="btn btn-soft btn-sm" onClick={() => setSkipped((l) => [...l, next.id])}>{t('d2.ac.g.later')} <kbd>→</kbd></button>}
-            </div>
-          </div>
-        </div>
-      )}
-      {list === null ? <div className="skeleton h-40 rounded-2xl" /> : list.length === 0 ? <Empty title={t('adm.com.shotsNone')} text={t('adm.com.shotsNoneText')}><a href="/gallery" className="btn btn-soft mt-2">{t('adm.com.openGallery')}</a></Empty> : (
-        <ul className="ga-grid">
-          {list.map((s, i) => (
-            <li key={s.id} className={`ga-card is-${s.status}`}>
-              <button type="button" className="ga-img" onClick={() => setOpen(i)} aria-label={t('adm.open')}><img src={s.thumb} alt="" loading="lazy" /></button>
-              <div className="ga-meta">
-                <span className="block truncate font-extrabold">{s.caption || t('adm.com.noCaption')}</span>
-                <span className="block truncate text-xs font-bold text-mute">{[s.author, s.serverName, ago(s.createdAt)].filter(Boolean).join(' · ')}</span>
-              </div>
-              <div className="ga-acts">
-                {s.status !== 'approved' && <button type="button" className="btn btn-success btn-xs" onClick={() => void patch(s.id, { status: 'approved' }, t('adm.com.published'))}>{t('adm.com.approve')}</button>}
-                {s.status === 'pending' && <button type="button" className="btn btn-soft btn-xs" onClick={() => void patch(s.id, { status: 'rejected' }, t('adm.com.rejected'))}>{t('adm.com.reject')}</button>}
-                {s.status === 'approved' && <button type="button" className={`btn btn-xs ${s.featured ? 'btn-warn' : 'btn-soft'}`} onClick={() => void patch(s.id, { featured: !s.featured }, s.featured ? t('adm.com.unstarred') : t('adm.com.starred'))}>{s.featured ? t('adm.com.inBest') : t('adm.com.toBest')}</button>}
-                {s.status === 'approved' && <button type="button" className="btn btn-soft btn-xs" onClick={() => void patch(s.id, { status: 'rejected' }, t('adm.com.unpublished'))}>{t('adm.com.take')}</button>}
-                <button type="button" className="row-act row-act-danger" aria-label={t('adm.srv.delete')} title={t('adm.srv.delete')} onClick={() => void del(s.id)}><IconTrash /></button>
-              </div>
-            </li>
-          ))}
-        </ul>
-      )}
-      {open !== null && list && <Lightbox list={list} index={open} onClose={() => setOpen(null)} onIndex={setOpen} />}
-    </Section>
-  );
-}

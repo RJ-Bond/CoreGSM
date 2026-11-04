@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="8d825df3d37f"
+COREGSM_BUILD="22654cd07332"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.1"
+COREGSM_VERSION="1.1.2"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -19815,187 +19815,6 @@ export function resultsText(rows: TallyRow[], total: number): string {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/community"
-  cat > "$APP_DIR/core-backend/src/community/gallery.ts" << '__COREGSM_EOF__'
-/**
- * The screenshot gallery: signed-in players upload screenshots from the game, the staff approve them, the best ones
- * get a star and go to the top of the gallery.
- *
- * A picture is re-encoded as JPEG (the original never reaches other people): up to 1920 px wide for viewing and
- * 640 px for the grid, in <data dir>/gallery/<id>.jpg and <id>@s.jpg. Pictures of the staff are approved at once.
- *
- *   GET    /api/gallery                  approved pictures (?serverId, ?featured=1, ?limit)
- *   GET    /api/gallery/mine             the visitor's own pictures with their state
- *   POST   /api/gallery                  upload (raw image body; ?serverId, ?caption)
- *   GET    /api/gallery/queue            waiting and recent pictures (staff)
- *   PATCH  /api/gallery/:id              approve, reject, star (staff)
- *   DELETE /api/gallery/:id              delete (the author or the staff)
- *   GET    /api/gallery/img/:id.jpg      the picture (?s=1 the small one); waiting ones only for the author and staff
- */
-import { sendImage } from '../images/imageSend.js';
-import express from 'express';
-import fs from 'node:fs';
-import path from 'node:path';
-import skia from 'skia-canvas';
-import { z } from 'zod';
-import { allow, auth, type AuthedRequest, can, loadUser, permsOf, rateLimit, viewer } from '../security/auth.js';
-
-const staff = allow('moderation');
-import { db, EFFECTIVE_NAME } from '../db.js';
-import { param, wrap } from '../http.js';
-
-const { Canvas, loadImage } = skia;
-
-export const router = express.Router();
-
-const DIR = path.join(path.dirname(process.env.DB_PATH ?? './data/coregsm.db'), 'gallery');
-fs.mkdirSync(DIR, { recursive: true });
-const fileOf = (id: number, small = false) => path.join(DIR, `${Math.trunc(id)}${small ? '@s' : ''}.jpg`);
-
-db.exec(`
-CREATE TABLE IF NOT EXISTS gallery (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
-  server_id INTEGER REFERENCES servers(id) ON DELETE SET NULL,
-  caption TEXT NOT NULL DEFAULT '',
-  status TEXT NOT NULL DEFAULT 'pending',
-  featured INTEGER NOT NULL DEFAULT 0,
-  width INTEGER NOT NULL,
-  height INTEGER NOT NULL,
-  created_at INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_gallery_status ON gallery(status, created_at);
-`);
-
-/** pictures waiting for the staff, per author */
-export const PENDING_MAX = 5;
-const TYPES = ['image/png', 'image/jpeg', 'image/webp'];
-
-interface Row { id: number; user_id: number | null; server_id: number | null; caption: string; status: 'pending' | 'approved' | 'rejected'; featured: number; width: number; height: number; created_at: number; author: string | null; server_name: string | null }
-
-const SELECT = `SELECT g.*, u.username AS author, (SELECT ${EFFECTIVE_NAME} FROM servers s LEFT JOIN status st ON st.server_id = s.id WHERE s.id = g.server_id) AS server_name
-  FROM gallery g LEFT JOIN users u ON u.id = g.user_id`;
-const out = (r: Row) => ({
-  id: r.id,
-  url: `/api/gallery/img/${r.id}.jpg`,
-  thumb: `/api/gallery/img/${r.id}.jpg?s=1`,
-  caption: r.caption,
-  author: r.author,
-  serverId: r.server_id,
-  serverName: r.server_name,
-  status: r.status,
-  featured: !!r.featured,
-  width: r.width,
-  height: r.height,
-  createdAt: r.created_at,
-});
-
-async function encode(img: Awaited<ReturnType<typeof loadImage>>, maxW: number): Promise<{ buf: Buffer; w: number; h: number }> {
-  const k = Math.min(1, maxW / img.width);
-  const w = Math.max(1, Math.round(img.width * k));
-  const h = Math.max(1, Math.round(img.height * k));
-  const canvas = new Canvas(w, h);
-  const ctx = canvas.getContext('2d');
-  ctx.imageSmoothingQuality = 'high';
-  ctx.fillStyle = '#000';
-  ctx.fillRect(0, 0, w, h);
-  ctx.drawImage(img, 0, 0, w, h);
-  return { buf: await canvas.toBuffer('jpeg', { quality: 0.85 }), w, h };
-}
-
-router.get('/api/gallery', viewer, (req, res) => {
-  const serverId = Number(req.query.serverId) || 0;
-  const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 60));
-  const rows = db
-    .prepare(`${SELECT} WHERE g.status = 'approved' ${serverId ? 'AND g.server_id = ?' : ''} ${req.query.featured === '1' ? 'AND g.featured = 1' : ''} ORDER BY g.featured DESC, g.created_at DESC LIMIT ?`)
-    .all(...(serverId ? [serverId] : []), limit) as Row[];
-  res.json(rows.map(out));
-});
-
-router.get('/api/gallery/mine', auth, (req: AuthedRequest, res) => {
-  res.json((db.prepare(`${SELECT} WHERE g.user_id = ? ORDER BY g.created_at DESC LIMIT 100`).all(req.user!.id) as Row[]).map(out));
-});
-
-router.post('/api/gallery', auth, rateLimit(20), express.raw({ type: TYPES, limit: '8mb' }), wrap(async (req: AuthedRequest, res) => {
-  const q = z.object({ serverId: z.coerce.number().int().positive().optional(), caption: z.string().trim().max(140).default('') }).safeParse(req.query);
-  if (!q.success) return res.status(400).json({ error: 'Неверные данные' });
-  if (q.data.serverId && !db.prepare('SELECT 1 FROM servers WHERE id = ?').get(q.data.serverId)) return res.status(404).json({ error: 'Сервер не найден' });
-  const body = req.body as Buffer;
-  if (!Buffer.isBuffer(body) || body.length === 0) return res.status(400).json({ error: 'Нужна картинка PNG, JPG или WebP до 8 МБ' });
-  const trusted = can(req, 'moderation');
-  const waiting = (db.prepare("SELECT COUNT(*) AS n FROM gallery WHERE user_id = ? AND status = 'pending'").get(req.user!.id) as { n: number }).n;
-  if (!trusted && waiting >= PENDING_MAX) return res.status(429).json({ error: 'У вас уже 5 скриншотов ждут проверки. Дождитесь, пока их посмотрят.' });
-  let big: { buf: Buffer; w: number; h: number };
-  let small: { buf: Buffer };
-  try {
-    const img = await loadImage(body);
-    if (!img.width || !img.height || img.width > 12000 || img.height > 12000) throw new Error('size');
-    big = await encode(img, 1920);
-    small = await encode(img, 640);
-  } catch {
-    return res.status(400).json({ error: 'Не удалось прочитать картинку: выберите PNG, JPG или WebP' });
-  }
-  const id = Number(
-    db
-      .prepare('INSERT INTO gallery (user_id, server_id, caption, status, width, height, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
-      .run(req.user!.id, q.data.serverId ?? null, q.data.caption, trusted ? 'approved' : 'pending', big.w, big.h, Date.now()).lastInsertRowid,
-  );
-  try {
-    fs.writeFileSync(fileOf(id), big.buf, { mode: 0o644 });
-    fs.writeFileSync(fileOf(id, true), small.buf, { mode: 0o644 });
-  } catch (e) {
-    // a full disk must not leave a picture row without files
-    db.prepare('DELETE FROM gallery WHERE id = ?').run(id);
-    fs.rmSync(fileOf(id), { force: true });
-    throw e;
-  }
-  res.json(out(db.prepare(`${SELECT} WHERE g.id = ?`).get(id) as Row));
-}));
-
-router.get('/api/gallery/queue', staff, (_req, res) => {
-  const rows = db.prepare(`${SELECT} ORDER BY g.status = 'pending' DESC, g.created_at DESC LIMIT 200`).all() as Row[];
-  res.json(rows.map(out));
-});
-
-router.patch('/api/gallery/:id', param('id'), staff, (req, res) => {
-  const b = z.object({ status: z.enum(['approved', 'rejected', 'pending']).optional(), featured: z.boolean().optional() }).safeParse(req.body);
-  if (!b.success) return res.status(400).json({ error: 'Неверные данные' });
-  const id = Number(req.params.id);
-  if (!db.prepare('SELECT 1 FROM gallery WHERE id = ?').get(id)) return res.status(404).json({ error: 'Не найдено' });
-  if (b.data.status) db.prepare('UPDATE gallery SET status = ? WHERE id = ?').run(b.data.status, id);
-  // only an approved picture can be starred
-  if (b.data.featured !== undefined) db.prepare("UPDATE gallery SET featured = ? WHERE id = ? AND (status = 'approved' OR ? = 0)").run(b.data.featured ? 1 : 0, id, b.data.featured ? 1 : 0);
-  if (b.data.status && b.data.status !== 'approved') db.prepare('UPDATE gallery SET featured = 0 WHERE id = ?').run(id);
-  res.json(out(db.prepare(`${SELECT} WHERE g.id = ?`).get(id) as Row));
-});
-
-router.delete('/api/gallery/:id', param('id'), auth, (req: AuthedRequest, res) => {
-  const id = Number(req.params.id);
-  const row = db.prepare('SELECT user_id FROM gallery WHERE id = ?').get(id) as { user_id: number | null } | undefined;
-  if (!row) return res.status(404).json({ error: 'Не найдено' });
-  if (row.user_id !== req.user!.id && !can(req, 'moderation')) return res.status(403).json({ error: 'Это действие доступно администратору и модератору' });
-  db.prepare('DELETE FROM gallery WHERE id = ?').run(id);
-  fs.rmSync(fileOf(id), { force: true });
-  fs.rmSync(fileOf(id, true), { force: true });
-  res.json({ ok: true });
-});
-
-router.get('/api/gallery/img/:file', (req, res, next) => {
-  const m = /^(\d{1,9})\.jpg$/.exec(String(req.params.file));
-  if (!m) return res.status(404).end();
-  const id = Number(m[1]);
-  const row = db.prepare('SELECT user_id, status FROM gallery WHERE id = ?').get(id) as { user_id: number | null; status: string } | undefined;
-  if (!row) return res.status(404).end();
-  if (row.status !== 'approved') {
-    // a picture not approved yet: only its author and the staff see it
-    const u = loadUser(req);
-    if (!u || (u.id !== row.user_id && !permsOf(u).includes('moderation'))) return res.status(404).end();
-  }
-  const f = fileOf(id, req.query.s === '1');
-  if (!fs.existsSync(f)) return res.status(404).end();
-  sendImage(req, res, f, 'image/jpeg', row.status === 'approved' ? 'public, max-age=86400' : 'private, no-store').catch(next);
-});
-__COREGSM_EOF__
-  mkdir -p "$APP_DIR/core-backend/src/community"
   cat > "$APP_DIR/core-backend/src/community/pollLogic.ts" << '__COREGSM_EOF__'
 /** Pure helpers of the poller (no database, no network): unit-tested directly. */
 
@@ -21867,8 +21686,6 @@ export const ERRORS = {
   config_bad_file: 'Это не файл настроек CoreGSM или он повреждён',
   rcon_password_required: 'Укажите пароль RCON',
   rcon_not_configured: 'Сначала сохраните порт и пароль RCON',
-  gallery_image_required: 'Нужна картинка PNG, JPG или WebP до 8 МБ',
-  gallery_queue_full: 'У вас уже 5 скриншотов ждут проверки. Дождитесь, пока их посмотрят.',
   game_address_port: 'Укажите игру, адрес и порт',
   display_address_format: 'Адрес для отображения не должен содержать пробелов и кавычек',
   channel_id_format: 'ID канала — число из 15–25 цифр',
@@ -23970,7 +23787,6 @@ import { router as discordExtrasRouter } from './routes/discordExtras.js';
 import { router as seasonsRouter } from './profile/seasons.js';
 import { router as reviewsRouter } from './community/reviews.js';
 import { router as reportsRouter } from './community/reports.js';
-import { router as galleryRouter } from './community/gallery.js';
 import { router as restartsRouter, startRestartTimer, stopRestartTimer } from './monitoring/restarts.js';
 import { router as wipesRouter, startWipeTimer, stopWipeTimer } from './monitoring/wipes.js';
 import { router as newsCommentsRouter } from './news/newsComments.js';
@@ -24036,7 +23852,6 @@ app.use(discordExtrasRouter);
 app.use(seasonsRouter);
 app.use(reviewsRouter);
 app.use(reportsRouter);
-app.use(galleryRouter);
 app.use(restartsRouter);
 app.use(wipesRouter);
 app.use(probesRouter);
@@ -33695,7 +33510,7 @@ export function staff(req: AuthedRequest, res: Response, next: NextFunction) {
 }
 /**
  * What a moderator may do. Administrators may do everything; a moderator gets the permissions the administrator
- * ticked (the default set until then: news and moderation of reviews and screenshots).
+ * ticked (the default set until then: news and moderation of reviews).
  */
 export const PERMS = ['news', 'moderation', 'servers', 'maintenance', 'journal'] as const;
 export type Perm = (typeof PERMS)[number];
@@ -110005,7 +109820,6 @@ const StatusPage = lazyPage(() => import('./pages/Status'));
 const UiKitPage = lazyPage(() => import('./pages/UiKit'));
 const CommunityPage = lazyPage(() => import('./pages/Community'));
 const PlayerPage = lazyPage(() => import('./pages/Player'));
-const GalleryPage = lazyPage(() => import('./pages/Gallery'));
 // rare screens: the first-run wizard, the e-mail flows, the tour and the command palette
 const Setup = lazyPage(() => import('./pages/Setup'));
 const ForgotPassword = lazyPage(() => import('./pages/ForgotPassword'));
@@ -110193,7 +110007,7 @@ export default function App() {
         toast(t('app.sessionEnded'), 'info');
         setBoot((p) => ({ ...p, me: null }));
         const { page } = parseRoute();
-        const publicRoute = accessRef.current.publicPanel && (page === '' || page === 'servers' || page === 'news' || page === 'status' || page === 'community' || page === 'player' || page === 'gallery' || page === 'u');
+        const publicRoute = accessRef.current.publicPanel && (page === '' || page === 'servers' || page === 'news' || page === 'status' || page === 'community' || page === 'player' || page === 'u');
         if (!publicRoute) navigate('/login');
         void load();
       }, 300);
@@ -110261,8 +110075,8 @@ export default function App() {
   const showAuth = !me && rawPage !== 'u' && (!access.publicPanel || rawPage === 'login' || rawPage === 'auth' || rawPage === 'register');
   shellOk.current = boot.ready && !authing && !boot.offline && !boot.needsSetup && !showAuth;
   // a first segment nobody knows (typo, old link) gets the 404 page; known-but-unavailable routes keep falling back to the list
-  const notFound = rawPage !== '' && !['login', 'register', 'auth', 'profile', 'u', '_ui', 'forgot', 'reset', 'verify', 'player', 'gallery'].includes(rawPage) && !PAGES.some((p) => p.id === rawPage);
-  const page = notFound ? '404' : rawPage === 'u' ? 'u' : rawPage === 'player' && sub ? 'player' : rawPage === 'gallery' ? 'gallery' : rawPage === 'profile' && me ? 'profile' : rawPage === '_ui' && isAdmin && import.meta.env.DEV ? '_ui' : visible.some((p) => p.id === rawPage) ? rawPage : 'servers';
+  const notFound = rawPage !== '' && !['login', 'register', 'auth', 'profile', 'u', '_ui', 'forgot', 'reset', 'verify', 'player'].includes(rawPage) && !PAGES.some((p) => p.id === rawPage);
+  const page = notFound ? '404' : rawPage === 'u' ? 'u' : rawPage === 'player' && sub ? 'player' : rawPage === 'profile' && me ? 'profile' : rawPage === '_ui' && isAdmin && import.meta.env.DEV ? '_ui' : visible.some((p) => p.id === rawPage) ? rawPage : 'servers';
   const adminSection = sub.split('/')[0];
   let publicName = '';
   if (page === 'u' || page === 'player') {
@@ -110278,8 +110092,6 @@ export default function App() {
         ? t('title.notfound')
         : page === 'u' || page === 'player'
         ? publicName
-        : page === 'gallery'
-        ? 'Галерея'
         : page === 'profile'
         ? t('hdr.profile')
         : page === 'admin'
@@ -110448,7 +110260,6 @@ export default function App() {
             {page === 'status' && <StatusPage />}
             {page === 'community' && <CommunityPage />}
             {page === 'player' && <PlayerPage name={publicName} />}
-            {page === 'gallery' && <GalleryPage />}
             {page === 'admin' && <AdminPage sub={sub} updateAvailable={updateAvailable} />}
             {page === 'profile' && <ProfilePage />}
             {page === 'u' && <PublicProfilePage username={publicName} />}
@@ -111419,7 +111230,7 @@ export interface Access {
 export type Perm = 'news' | 'moderation' | 'servers' | 'maintenance' | 'journal';
 export const PERM_LABELS: { id: Perm; label: string; hint: string }[] = [
   { id: 'news', label: 'Новости', hint: 'писать, планировать и публиковать' },
-  { id: 'moderation', label: 'Модерация', hint: 'отзывы и галерея скриншотов' },
+  { id: 'moderation', label: 'Модерация', hint: 'отзывы' },
   { id: 'servers', label: 'Серверы', hint: 'добавлять и изменять (удаляет только администратор)' },
   { id: 'maintenance', label: 'Обслуживание', hint: 'окна технических работ' },
   { id: 'journal', label: 'Журнал', hint: 'кто и что менял в панели' },
@@ -112162,8 +111973,8 @@ describe('AppFooter', () => {
 
   it('has an svg icon for every link and for the version, all hidden from screen readers', () => {
     const html = renderToStaticMarkup(<AppFooter brand="CoreGSM" version="1.0.0.50" />);
-    expect((html.match(/<svg/g) ?? []).length).toBe(6);
-    expect((html.match(/aria-hidden="true"/g) ?? []).length).toBeGreaterThanOrEqual(6);
+    expect((html.match(/<svg/g) ?? []).length).toBe(5);
+    expect((html.match(/aria-hidden="true"/g) ?? []).length).toBeGreaterThanOrEqual(5);
   });
 
   it('the default brand leads to the project and the version to the changelog; a custom name stays plain', () => {
@@ -112717,7 +112528,7 @@ import { gameLabel } from '../games';
 import { ADMIN_LINKS, ADMIN_SECTIONS, SECTION_PERM } from '../pages/adminNav';
 import { confirmDialog } from '../confirm';
 import { currentPath } from '../ui/route';
-import { GameAvatar, IconCards, IconCopy, IconMoon, IconNews, IconRefresh, IconServers, IconSun, IconTrophy, IconWrench, adminThemeIsOwn, currentTheme, resetAdminTheme, setThemeChoice, toast, useDensity, navigate } from '../ui';
+import { GameAvatar, IconCopy, IconMoon, IconNews, IconRefresh, IconServers, IconSun, IconTrophy, IconWrench, adminThemeIsOwn, currentTheme, resetAdminTheme, setThemeChoice, toast, useDensity, navigate } from '../ui';
 
 type Group = 'Серверы' | 'Разделы' | 'Действия';
 
@@ -112807,7 +112618,6 @@ export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose:
       sectionItem('p-news', 'Новости', 'Лента новостей', '/news', <IconNews />),
       sectionItem('p-status', 'Статус', 'Доступность за 30 дней', '/status', <IconPulse />),
       sectionItem('p-community', 'Сообщество', 'Кто играет, сезон, зал славы', '/community', <IconTrophy />, 'игроки рейтинг топ сезон'),
-      sectionItem('p-gallery', 'Галерея', 'Скриншоты игроков', '/gallery', <IconCards />, 'скриншоты картинки фото загрузить', true),
     );
     if (isStaff) {
       const sections = isAdmin ? ADMIN_SECTIONS : ADMIN_SECTIONS.filter((x) => SECTION_PERM[x.id] && perms.includes(SECTION_PERM[x.id]!));
@@ -113022,11 +112832,10 @@ const SEASON = ico(<><path d="M5 21V4" /><path d="M5 5h12l-2.5 4L17 13H5" /></>)
 const WHEN = ico(<><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></>);
 const TOP = ico(<><path d="M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0V4Z" /><path d="M17 5h3v2a3 3 0 0 1-3 3M7 5H4v2a3 3 0 0 0 3 3" /></>);
 const FEED = ico(<><path d="M4 6h16M4 12h16M4 18h10" /></>);
-const GALLERY = ico(<><rect x="3" y="4" width="18" height="16" rx="2.5" /><circle cx="9" cy="10" r="1.8" /><path d="m21 16-5-5-8 8" /></>);
 const SERVERS = ico(<><rect x="3" y="4" width="18" height="6.5" rx="2" /><rect x="3" y="13.5" width="18" height="6.5" rx="2" /><path d="M7 7.25h.01M7 16.75h.01" /></>);
 
 /** the icon of a section of the page by the id of its block */
-export const communityNavIcon = (id: string): ReactNode => (({ 'cm-now': NOW, 'cm-season': SEASON, 'cm-when': WHEN, 'cm-top': TOP, 'cm-feed': FEED, 'cm-gallery': GALLERY, 'cm-servers': SERVERS }) as Record<string, ReactNode>)[id] ?? null;
+export const communityNavIcon = (id: string): ReactNode => (({ 'cm-now': NOW, 'cm-season': SEASON, 'cm-when': WHEN, 'cm-top': TOP, 'cm-feed': FEED, 'cm-servers': SERVERS }) as Record<string, ReactNode>)[id] ?? null;
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components"
   cat > "$APP_DIR/core-frontend/src/components/ConfigTransfer.tsx" << '__COREGSM_EOF__'
@@ -113944,7 +113753,6 @@ export const FootServers = () => svg(<><rect x="3" y="4" width="18" height="6.5"
 export const FootNews = () => svg(<><path d="M4 5h13a2 2 0 0 1 2 2v12H6a2 2 0 0 1-2-2V5Z" /><path d="M19 9h2v8a2 2 0 0 1-2 2M8 9h7M8 13h7" /></>);
 export const FootStatus = () => svg(<path d="M3 12h4l2.5 7 5-14L17 12h4" />);
 export const FootCommunity = () => svg(<><circle cx="9" cy="8" r="3.2" /><path d="M3 20c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5" /><circle cx="17" cy="9" r="2.4" /><path d="M16.5 14.6c2.6.2 4.5 2 4.5 4.9" /></>);
-export const FootGallery = () => svg(<><rect x="3" y="4" width="18" height="16" rx="2.5" /><circle cx="9" cy="10" r="1.8" /><path d="m21 16-5-5-8 8" /></>);
 export const FootTag = () => svg(<><path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8Z" /><path d="M7.5 7.5h.01" /></>);
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components"
@@ -114150,7 +113958,6 @@ const ico = (d: ReactNode) => (
 );
 
 export const MenuUser = () => ico(<><circle cx="12" cy="8" r="4" /><path d="M4 21c0-4 3.6-6.5 8-6.5s8 2.5 8 6.5" /></>);
-export const MenuGallery = () => ico(<><rect x="3" y="4" width="18" height="16" rx="2.5" /><circle cx="9" cy="10" r="1.8" /><path d="m21 16-5-5-8 8" /></>);
 export const MenuAdmin = () => ico(<><path d="M12 3 4 6v6c0 4.5 3.2 7.6 8 9 4.8-1.4 8-4.5 8-9V6l-8-3Z" /><path d="m9 12 2 2 4-4" /></>);
 export const MenuLogout = () => ico(<><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><path d="m16 17 5-5-5-5M21 12H9" /></>);
 __COREGSM_EOF__
@@ -115666,8 +115473,8 @@ import { api, onBusy, type Me } from '../api';
 import { useAppearance } from '../appearance';
 import { t, useI18n } from '../i18n';
 import { UserAvatar } from '../ui';
-import { FootCommunity, FootGallery, FootNews, FootServers, FootStatus, FootTag } from './FooterIcons';
-import { MenuAdmin, MenuGallery, MenuLogout, MenuUser } from './HeaderIcons';
+import { FootCommunity, FootNews, FootServers, FootStatus, FootTag } from './FooterIcons';
+import { MenuAdmin, MenuLogout, MenuUser } from './HeaderIcons';
 import '../styles/shell.css';
 
 // ---------- progress strip ----------
@@ -115770,7 +115577,6 @@ export function AppFooter({ brand, version }: { brand: string; version?: string 
         <a href="/news"><FootNews />{t('nav.news')}</a>
         <a href="/status"><FootStatus />{t('nav.status')}</a>
         <a href="/community"><FootCommunity />{t('nav.community')}</a>
-        <a href="/gallery"><FootGallery />{t('d2.gal.title')}</a>
       </nav>
       {version && <a className="app-foot-ver" href={CHANGELOG_URL} target="_blank" rel="noopener noreferrer" title={t('foot.version', { v: version })}><FootTag />{footVersionText(version)}</a>}
     </footer>
@@ -115830,7 +115636,6 @@ export function ProfileMenu({ me, isStaff, logout, active }: { me: Me; isStaff: 
             </div>
           </div>
           <a role="menuitem" className={`${link} pm-ico`} href="/profile"><MenuUser />{t('hdr.profile')}</a>
-          <a role="menuitem" className={`${link} pm-ico`} href="/gallery"><MenuGallery />{t('d2.sh.myGallery')}</a>
           {isStaff && <a role="menuitem" className={`${link} pm-ico`} href="/admin"><MenuAdmin />{t('nav.admin')}</a>}
           <div className="pm-sep" role="separator" />
           {/* one tap, and the menu stays open so both can be set at once */}
@@ -121248,10 +121053,10 @@ export function AvatarEditor({ onChanged, size = 80, ring }: { onChanged: () => 
         onClick={() => input.current?.click()}
         disabled={busy}
         aria-label={t('pf.avatar.upload')}
-        className={`group relative rounded-3xl ${drop.over ? 'pf-drop-on' : ''}`}
+        className={`group relative rounded-full ${drop.over ? 'pf-drop-on' : ''}`}
       >
-        <UserAvatar name={me.username} url={me.avatarUrl} size={size} tone="brand" className="rounded-3xl!" />
-        <span className="absolute inset-0 grid place-items-center rounded-3xl bg-black/50 text-xs font-extrabold text-white opacity-0 transition group-hover:opacity-100 group-focus-visible:opacity-100">
+        <UserAvatar name={me.username} url={me.avatarUrl} size={size} tone="brand" className="rounded-full!" />
+        <span className="absolute inset-0 grid place-items-center rounded-full bg-black/50 text-xs font-extrabold text-white opacity-0 transition group-hover:opacity-100 group-focus-visible:opacity-100">
           {busy ? '…' : drop.over ? t('pf.avatar.drop') : t('pf.avatar.change')}
         </span>
       </button>
@@ -124910,9 +124715,9 @@ import { NEWBIE_MS, VETERAN_MS, nickHue, nickInitial, playedFor, useNow, useStic
 
 function Avatar({ name, size = 36 }: { name: string; size?: number }) {
   return (
-    <NickPic name={name} size={size} className="rounded-ui-md">
+    <NickPic name={name} size={size} className="rounded-full">
       <span
-        className="avatar-hue grid shrink-0 place-items-center rounded-ui-md font-extrabold"
+        className="avatar-hue grid shrink-0 place-items-center rounded-full font-extrabold"
         style={{ ['--h' as string]: nickHue(name), width: size, height: size, fontSize: size * 0.42 }}
         aria-hidden
       >
@@ -132352,7 +132157,6 @@ const en: Record<keyof typeof ru, string> = {
   'adm.com.comments': 'Comments',
   'adm.com.seasons': 'Seasons',
   'adm.com.reviews': 'Reviews',
-  'adm.com.gallery': 'Gallery',
   'adm.com.subtitle': 'Seasons and the hall of fame, server reviews, the screenshot gallery',
   'adm.com.nav': 'Community sections',
   'adm.com.endQ': 'End “{name}”?',
@@ -132388,23 +132192,12 @@ const en: Record<keyof typeof ru, string> = {
   'adm.com.hidden': 'hidden',
   'adm.com.show': 'Show',
   'adm.com.hide': 'Hide',
-  'adm.com.shotDelQ': 'Delete the screenshot?',
-  'adm.com.shotDelText': 'The picture will be deleted for good.',
-  'adm.com.waiting': 'Waiting for review: {n}',
-  'adm.com.noWaiting': 'No new screenshots waiting for review.',
-  'adm.com.shotsNone': 'No screenshots yet',
-  'adm.com.shotsNoneText': 'Players upload them on the “Gallery” page.',
-  'adm.com.openGallery': 'Open the gallery',
-  'adm.com.noCaption': 'No caption',
-  'adm.com.published': 'Screenshot published',
   'adm.com.approve': 'Approve',
-  'adm.com.rejected': 'Screenshot rejected',
   'adm.com.reject': 'Reject',
   'adm.com.unstarred': 'Star removed',
   'adm.com.starred': 'Screenshot added to the best',
   'adm.com.inBest': '★ In the best',
   'adm.com.toBest': '☆ Add to the best',
-  'adm.com.unpublished': 'Screenshot unpublished',
   'adm.com.take': 'Unpublish',
   'srv.empty.now': 'Nobody online right now',
   'srv.addr.copy': 'Copy the address',
@@ -132741,14 +132534,6 @@ const en: Record<keyof typeof ru, string> = {
   'cm.feed.noneText': 'Players joining will show up here by themselves.',
   'cm.feed.noNew': 'No newcomers among the latest joins.',
   'cm.feed.noOnline': 'None of the latest joins is in game now.',
-  'cm.gal': 'Gallery',
-  'cm.gal.all': 'Whole gallery →',
-  'cm.gal.upload': 'Upload a screenshot →',
-  'cm.gal.none': 'No screenshots yet',
-  'cm.gal.noneText': 'Share the first shot from the game.',
-  'cm.gal.uploadBtn': 'Upload',
-  'cm.gal.shot': 'Screenshot {n}',
-  'cm.gal.best': 'Best',
   'cm.srv': 'Where people play now',
   'cm.srv.sort': 'Sort',
   'cm.srv.byPlayers': 'By players',
@@ -132769,7 +132554,6 @@ const en: Record<keyof typeof ru, string> = {
   'cm.nav.when': 'Activity',
   'cm.nav.top': 'Top',
   'cm.nav.feed': 'Feed',
-  'cm.nav.gallery': 'Gallery',
   'cm.nav.servers': 'Servers',
   'cards.code': 'Code for a site',
   'cards.codeTip': 'Copy the HTML code of the picture for a site',
@@ -133817,37 +133601,7 @@ const en: Record<keyof typeof ru, string> = {
   'd2.sys.backups': 'Backups',
   'd2.sys.backups.text': 'Download a copy of the data, set up a schedule or restore the panel from a file.',
   'd2.sys.backups.link': 'Updates and backups',
-  'd2.gal.shot': 'Screenshot',
-  'd2.gal.shotN': 'Screenshot {n}',
-  'd2.gal.all': 'All screenshots',
-  'd2.gal.prev': 'Previous',
-  'd2.gal.next': 'Next',
-  'd2.gal.best': 'Best',
-  'd2.gal.uploadFail': 'Could not upload the image (PNG, JPG or WebP up to 8 MB)',
-  'd2.gal.new': 'New screenshot',
-  'd2.gal.choose': 'Pick an image: PNG, JPG or WebP up to 8 MB',
-  'd2.gal.caption': 'Caption (optional)',
-  'd2.gal.captionEx': 'For example: sunset over the castle',
-  'd2.gal.server': 'Server',
-  'd2.gal.noServer': 'Do not specify',
-  'd2.gal.moderated': 'The screenshot will appear in the gallery after a moderator checks it.',
   'd2.gal.send': 'Send',
-  'd2.gal.st.pending': 'under review',
-  'd2.gal.st.rejected': 'rejected',
-  'd2.gal.t.login': 'Sign in to upload a screenshot',
-  'd2.gal.t.type': 'An image is required: PNG, JPG or WebP',
-  'd2.gal.drop': 'Drop to upload the screenshot',
-  'd2.gal.title': 'Gallery',
-  'd2.gal.subtitle': 'Screenshots from players on our servers',
-  'd2.gal.upload': 'Upload a screenshot',
-  'd2.gal.loginUpload': 'Sign in to upload',
-  'd2.gal.mine': 'My screenshots under review',
-  'd2.gal.empty': 'No screenshots yet',
-  'd2.gal.emptyText': 'Share a nice shot from the game: it will appear here after review.',
-  'd2.gal.uploadFirst': 'Upload the first screenshot',
-  'd2.gal.signInUpload': 'Sign in and upload',
-  'd2.gal.t.published': 'Screenshot published',
-  'd2.gal.t.sent': 'Screenshot sent for review',
   'd2.ac.seasonsOrder': 'Seasons in order',
   'd2.ac.r.cheating': 'Cheating',
   'd2.ac.r.abuse': 'Abuse',
@@ -133891,8 +133645,6 @@ const en: Record<keyof typeof ru, string> = {
   'd2.ac.cm.hidden': 'hidden',
   'd2.ac.cm.flags': 'reports: {n}',
   'd2.ac.cm.show': 'Show',
-  'd2.ac.g.pending': 'Under review',
-  'd2.ac.g.later': 'Later',
   'd2.bot.p.noToken': 'NO TOKEN SET',
   'd2.bot.p.checking': 'CHECKING',
   'd2.bot.p.noGuilds': 'ON NO SERVERS',
@@ -135028,7 +134780,6 @@ const en: Record<keyof typeof ru, string> = {
   'd2.sh.admin': 'Administrator',
   'd2.sh.moderator': 'Moderator',
   'd2.sh.player': 'Player',
-  'd2.sh.myGallery': 'My gallery',
   'd2.idr.heavy': 'The file is heavy ({mb} MB): Discord may load it slowly.',
   'd2.idr.small': 'The picture is small ({w}×{h}): it will look blurry in Discord, better at least {min} px wide.',
   'd2.idr.https': 'The link must start with https://.',
@@ -135266,8 +135017,6 @@ const errorsEn: Record<string, string> = {
   config_bad_file: 'This is not a CoreGSM settings file, or it is damaged',
   rcon_password_required: 'Enter the RCON password',
   rcon_not_configured: 'Save the RCON port and password first',
-  gallery_image_required: 'A PNG, JPG or WebP picture up to 8 MB is needed',
-  gallery_queue_full: 'You already have 5 screenshots waiting for review. Wait until they are checked.',
   game_address_port: 'Enter the game, the address and the port',
   display_address_format: 'The display address must not contain spaces or quotes',
   channel_id_format: 'A channel ID is a number of 15–25 digits',
@@ -136372,7 +136121,6 @@ const ru = {
   'adm.com.reports': 'Жалобы',
   'adm.com.comments': 'Комментарии',
   'adm.com.reviews': 'Отзывы',
-  'adm.com.gallery': 'Галерея',
   'adm.com.subtitle': 'Сезоны и зал славы, отзывы о серверах, галерея скриншотов',
   'adm.com.nav': 'Разделы сообщества',
   'adm.com.endQ': 'Завершить «{name}»?',
@@ -136408,23 +136156,12 @@ const ru = {
   'adm.com.hidden': 'скрыт',
   'adm.com.show': 'Показать',
   'adm.com.hide': 'Скрыть',
-  'adm.com.shotDelQ': 'Удалить скриншот?',
-  'adm.com.shotDelText': 'Картинка будет удалена насовсем.',
-  'adm.com.waiting': 'Ждут проверки: {n}',
-  'adm.com.noWaiting': 'Новых скриншотов на проверке нет.',
-  'adm.com.shotsNone': 'Скриншотов пока нет',
-  'adm.com.shotsNoneText': 'Игроки загружают их на странице «Галерея».',
-  'adm.com.openGallery': 'Открыть галерею',
-  'adm.com.noCaption': 'Без подписи',
-  'adm.com.published': 'Скриншот опубликован',
   'adm.com.approve': 'Одобрить',
-  'adm.com.rejected': 'Скриншот отклонён',
   'adm.com.reject': 'Отклонить',
   'adm.com.unstarred': 'Звезда снята',
   'adm.com.starred': 'Скриншот в лучших',
   'adm.com.inBest': '★ В лучших',
   'adm.com.toBest': '☆ В лучшие',
-  'adm.com.unpublished': 'Скриншот снят с публикации',
   'adm.com.take': 'Снять',
   'srv.empty.now': 'Сейчас никого',
   'srv.addr.copy': 'Скопировать адрес',
@@ -136761,14 +136498,6 @@ const ru = {
   'cm.feed.noneText': 'Заходы игроков появятся здесь сами.',
   'cm.feed.noNew': 'Новичков среди последних заходов нет.',
   'cm.feed.noOnline': 'Из последних заходов никого нет в игре.',
-  'cm.gal': 'Галерея',
-  'cm.gal.all': 'Вся галерея →',
-  'cm.gal.upload': 'Загрузить скриншот →',
-  'cm.gal.none': 'Скриншотов пока нет',
-  'cm.gal.noneText': 'Поделитесь первым кадром из игры.',
-  'cm.gal.uploadBtn': 'Загрузить',
-  'cm.gal.shot': 'Скриншот {n}',
-  'cm.gal.best': 'Лучшее',
   'cm.srv': 'Где играют сейчас',
   'cm.srv.sort': 'Сортировка',
   'cm.srv.byPlayers': 'По игрокам',
@@ -136789,7 +136518,6 @@ const ru = {
   'cm.nav.when': 'Активность',
   'cm.nav.top': 'Топ',
   'cm.nav.feed': 'Лента',
-  'cm.nav.gallery': 'Галерея',
   'cm.nav.servers': 'Серверы',
   'cards.code': 'Код для сайта',
   'cards.codeTip': 'Скопировать HTML-код картинки для сайта',
@@ -137837,37 +137565,7 @@ const ru = {
   'd2.sys.backups': 'Резервные копии',
   'd2.sys.backups.text': 'Скачать копию данных, настроить расписание или восстановить панель из файла.',
   'd2.sys.backups.link': 'Обновления и копии',
-  'd2.gal.shot': 'Скриншот',
-  'd2.gal.shotN': 'Скриншот {n}',
-  'd2.gal.all': 'Все скриншоты',
-  'd2.gal.prev': 'Предыдущий',
-  'd2.gal.next': 'Следующий',
-  'd2.gal.best': 'Лучшее',
-  'd2.gal.uploadFail': 'Не удалось загрузить картинку (PNG, JPG или WebP до 8 МБ)',
-  'd2.gal.new': 'Новый скриншот',
-  'd2.gal.choose': 'Выберите картинку: PNG, JPG или WebP до 8 МБ',
-  'd2.gal.caption': 'Подпись (необязательно)',
-  'd2.gal.captionEx': 'Например: закат над замком',
-  'd2.gal.server': 'Сервер',
-  'd2.gal.noServer': 'Не указывать',
-  'd2.gal.moderated': 'Скриншот появится в галерее после проверки модератором.',
   'd2.gal.send': 'Отправить',
-  'd2.gal.st.pending': 'на проверке',
-  'd2.gal.st.rejected': 'отклонён',
-  'd2.gal.t.login': 'Войдите, чтобы загрузить скриншот',
-  'd2.gal.t.type': 'Нужна картинка: PNG, JPG или WebP',
-  'd2.gal.drop': 'Отпустите, чтобы загрузить скриншот',
-  'd2.gal.title': 'Галерея',
-  'd2.gal.subtitle': 'Скриншоты игроков с наших серверов',
-  'd2.gal.upload': 'Загрузить скриншот',
-  'd2.gal.loginUpload': 'Войдите, чтобы загрузить',
-  'd2.gal.mine': 'Мои скриншоты на проверке',
-  'd2.gal.empty': 'Скриншотов пока нет',
-  'd2.gal.emptyText': 'Поделитесь красивым кадром из игры: он появится здесь после проверки.',
-  'd2.gal.uploadFirst': 'Загрузить первый скриншот',
-  'd2.gal.signInUpload': 'Войти и загрузить',
-  'd2.gal.t.published': 'Скриншот опубликован',
-  'd2.gal.t.sent': 'Скриншот отправлен на проверку',
   'd2.ac.seasonsOrder': 'Сезоны по порядку',
   'd2.ac.r.cheating': 'Читы',
   'd2.ac.r.abuse': 'Оскорбления',
@@ -137911,8 +137609,6 @@ const ru = {
   'd2.ac.cm.hidden': 'скрыт',
   'd2.ac.cm.flags': 'жалоб: {n}',
   'd2.ac.cm.show': 'Показать',
-  'd2.ac.g.pending': 'На проверке',
-  'd2.ac.g.later': 'Позже',
   'd2.bot.p.noToken': 'ТОКЕН НЕ ЗАДАН',
   'd2.bot.p.checking': 'ПРОВЕРКА',
   'd2.bot.p.noGuilds': 'НЕТ НА СЕРВЕРАХ',
@@ -139048,7 +138744,6 @@ const ru = {
   'd2.sh.admin': 'Администратор',
   'd2.sh.moderator': 'Модератор',
   'd2.sh.player': 'Игрок',
-  'd2.sh.myGallery': 'Моя галерея',
   'd2.idr.heavy': 'Файл тяжёлый ({mb} МБ): Discord может грузить его медленно.',
   'd2.idr.small': 'Картинка маленькая ({w}×{h}): в Discord она будет выглядеть размыто, лучше от {min} px по ширине.',
   'd2.idr.https': 'Ссылка должна начинаться с https://.',
@@ -140053,24 +139748,21 @@ function ServersManage({ sub }: { sub: string }) {
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/AdminCommunity.tsx" << '__COREGSM_EOF__'
-/** Admin → Сообщество: seasons (and the hall of fame they make), reviews of the servers, the screenshot gallery. */
+/** Admin → Сообщество: seasons (and the hall of fame they make), reviews of the servers. */
 import { useEffect, useState, type FormEvent } from 'react';
 import { api } from '../api';
 import { t, useI18n, type TKey } from '../i18n';
 import { confirmDialog, promptDialog } from '../confirm';
-import { AdminPage, Button, Empty, ErrorLine, Field, IconEdit, IconEye, IconEyeOff, IconTrash, IconTrophy, PageHead, Section, ago, fmtDate, toast, num, SkeletonRows } from '../ui';
+import { AdminPage, Button, ErrorLine, Field, IconEdit, IconEye, IconEyeOff, IconTrash, IconTrophy, PageHead, Section, ago, fmtDate, toast, num, SkeletonRows } from '../ui';
 import PollsAdmin from '../components/PollsAdmin';
 import type { Seasons } from './Community';
 import { useAuth } from '../auth';
 import { Stars, type Review } from '../components/server/Reviews';
-import { Lightbox, type Shot } from './Gallery';
-import '../styles/gallery.css';
 
 export const COMMUNITY_TABS = [
   { id: 'seasons', get label() { return t('adm.com.seasons'); }, admin: true },
   { id: 'polls', get label() { return t('adm.com.polls'); }, admin: true },
   { id: 'reviews', get label() { return t('adm.com.reviews'); }, admin: false },
-  { id: 'gallery', get label() { return t('adm.com.gallery'); }, admin: false },
   { id: 'reports', get label() { return t('adm.com.reports'); }, admin: false },
   { id: 'comments', get label() { return t('adm.com.comments'); }, admin: false },
 ] as const;
@@ -140090,7 +139782,6 @@ export default function AdminCommunity({ sub = '' }: { sub?: string }) {
       {tab === 'seasons' && <SeasonsAdmin />}
       {tab === 'polls' && <PollsAdmin />}
       {tab === 'reviews' && <ReviewsAdmin />}
-      {tab === 'gallery' && <GalleryAdmin />}
       {tab === 'reports' && <ReportsAdmin />}
       {tab === 'comments' && <CommentsAdmin />}
     </AdminPage>
@@ -140341,79 +140032,6 @@ function CommentsAdmin() {
   );
 }
 
-function GalleryAdmin() {
-  useI18n();
-  const [list, setList] = useState<Shot[] | null>(null);
-  const [error, setError] = useState('');
-  const [open, setOpen] = useState<number | null>(null);
-  const load = () => api<Shot[]>('/gallery/queue').then(setList).catch((e: Error) => setError(e.message));
-  useEffect(() => { void load(); }, []);
-  const patch = (id: number, body: { status?: Shot['status']; featured?: boolean }, done: string) =>
-    api(`/gallery/${id}`, 'PATCH', body).then(() => { toast(done); void load(); }).catch((e: Error) => setError(e.message));
-  const del = async (id: number) => {
-    if (!(await confirmDialog({ title: t('adm.com.shotDelQ'), text: t('adm.com.shotDelText'), confirmLabel: t('adm.srv.delete'), danger: true }))) return;
-    await api(`/gallery/${id}`, 'DELETE').then(load).catch((e: Error) => setError(e.message));
-  };
-  const pendingList = list?.filter((s) => s.status === 'pending') ?? [];
-  const waiting = pendingList.length;
-  const head = pendingList[0];
-  const [skipped, setSkipped] = useState<number[]>([]);
-  const next = pendingList.find((x) => !skipped.includes(x.id)) ?? head;
-  // A — publish, X — reject, → — later (not while typing)
-  useEffect(() => {
-    if (!next) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.ctrlKey || e.metaKey || e.altKey || (e.target as HTMLElement | null)?.closest('input, textarea, select, [contenteditable="true"]') || open !== null) return;
-      const k = e.key.toLowerCase();
-      if (k === 'a' || k === 'ф') void patch(next.id, { status: 'approved' }, t('adm.com.published'));
-      else if (k === 'x' || k === 'ч') void patch(next.id, { status: 'rejected' }, t('adm.com.rejected'));
-      else if (e.key === 'ArrowRight') setSkipped((l) => [...l, next.id]);
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  });
-  return (
-    <Section title={t('adm.com.gallery')} description={waiting ? t('adm.com.waiting', { n: waiting }) : t('adm.com.noWaiting')}>
-      <ErrorLine text={error} />
-      {next && (
-        <div className="mq">
-          <img src={next.thumb} alt="" className="mq-img" />
-          <div className="mq-body">
-            <p className="text-xs font-extrabold uppercase tracking-wide text-mute">{t('d2.ac.g.pending')} · {waiting}</p>
-            <p className="font-extrabold">{next.caption || t('adm.com.noCaption')}</p>
-            <p className="text-sm font-semibold text-mute">{[next.author, next.serverName, ago(next.createdAt)].filter(Boolean).join(' · ')}</p>
-            <div className="mt-2 flex flex-wrap gap-2">
-              <button type="button" className="btn btn-success btn-sm" onClick={() => void patch(next.id, { status: 'approved' }, t('adm.com.published'))}>{t('d2.news.publish')} <kbd>A</kbd></button>
-              <button type="button" className="btn btn-danger btn-sm" onClick={() => void patch(next.id, { status: 'rejected' }, t('adm.com.rejected'))}>{t('d2.ac.dismiss')} <kbd>X</kbd></button>
-              {waiting > 1 && <button type="button" className="btn btn-soft btn-sm" onClick={() => setSkipped((l) => [...l, next.id])}>{t('d2.ac.g.later')} <kbd>→</kbd></button>}
-            </div>
-          </div>
-        </div>
-      )}
-      {list === null ? <div className="skeleton h-40 rounded-2xl" /> : list.length === 0 ? <Empty title={t('adm.com.shotsNone')} text={t('adm.com.shotsNoneText')}><a href="/gallery" className="btn btn-soft mt-2">{t('adm.com.openGallery')}</a></Empty> : (
-        <ul className="ga-grid">
-          {list.map((s, i) => (
-            <li key={s.id} className={`ga-card is-${s.status}`}>
-              <button type="button" className="ga-img" onClick={() => setOpen(i)} aria-label={t('adm.open')}><img src={s.thumb} alt="" loading="lazy" /></button>
-              <div className="ga-meta">
-                <span className="block truncate font-extrabold">{s.caption || t('adm.com.noCaption')}</span>
-                <span className="block truncate text-xs font-bold text-mute">{[s.author, s.serverName, ago(s.createdAt)].filter(Boolean).join(' · ')}</span>
-              </div>
-              <div className="ga-acts">
-                {s.status !== 'approved' && <button type="button" className="btn btn-success btn-xs" onClick={() => void patch(s.id, { status: 'approved' }, t('adm.com.published'))}>{t('adm.com.approve')}</button>}
-                {s.status === 'pending' && <button type="button" className="btn btn-soft btn-xs" onClick={() => void patch(s.id, { status: 'rejected' }, t('adm.com.rejected'))}>{t('adm.com.reject')}</button>}
-                {s.status === 'approved' && <button type="button" className={`btn btn-xs ${s.featured ? 'btn-warn' : 'btn-soft'}`} onClick={() => void patch(s.id, { featured: !s.featured }, s.featured ? t('adm.com.unstarred') : t('adm.com.starred'))}>{s.featured ? t('adm.com.inBest') : t('adm.com.toBest')}</button>}
-                {s.status === 'approved' && <button type="button" className="btn btn-soft btn-xs" onClick={() => void patch(s.id, { status: 'rejected' }, t('adm.com.unpublished'))}>{t('adm.com.take')}</button>}
-                <button type="button" className="row-act row-act-danger" aria-label={t('adm.srv.delete')} title={t('adm.srv.delete')} onClick={() => void del(s.id)}><IconTrash /></button>
-              </div>
-            </li>
-          ))}
-        </ul>
-      )}
-      {open !== null && list && <Lightbox list={list} index={open} onClose={() => setOpen(null)} onIndex={setOpen} />}
-    </Section>
-  );
-}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/AdminIntegrations.tsx" << '__COREGSM_EOF__'
@@ -142465,11 +142083,9 @@ import { busiestText, dowShort, FeedItem, HeatLegend, MiniHeat, PlayerAvatar, us
 import { AnimatedNumber, CopyButton, Empty, GameAvatar, MiniSpark, PageHead, ago, fmtDate, fmtDateTime, navigate, num } from '../ui';
 import '../styles/analytics.css';
 import '../styles/community.css';
-import '../styles/gallery.css';
 import PollsCard from '../components/PollsCard';
 import { communityNavIcon } from '../components/CommunityIcons';
 import ArtPic from '../components/ArtPic';
-import { Lightbox, type Shot } from './Gallery';
 
 const IconPeople = () => (
   <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
@@ -142836,42 +142452,6 @@ function FeedBlock({ c, filter, setFilter }: { c: Community; filter: FeedFilter;
   );
 }
 
-/** the latest screenshots: the first one large */
-function GalleryStrip() {
-  const [list, setList] = useState<Shot[] | null>(null);
-  const [open, setOpen] = useState<number | null>(null);
-  useEffect(() => { api<Shot[]>('/gallery?limit=6').then(setList).catch(() => setList([])); }, []);
-  return (
-    <section id="cm-gallery" className="tile p-4 sm:p-5">
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-lg font-extrabold">{t('cm.gal')}</h2>
-        <a href="/gallery" className="text-sm font-extrabold text-link hover:underline">{list?.length ? t('cm.gal.all') : t('cm.gal.upload')}</a>
-      </div>
-      {list === null ? <div className="skeleton h-48 rounded-2xl" />
-        : list.length === 0 ? <Empty art={<ArtPic src="empty/empty-gallery" size={132} />} title={t('cm.gal.none')} text={t('cm.gal.noneText')}><a href="/gallery" className="btn">{t('cm.gal.uploadBtn')}</a></Empty>
-        : (
-          <ul className={`cm-gal n${Math.min(list.length, 5)}`}>
-            {list.slice(0, 5).map((s, i) => (
-              <li key={s.id} className={i === 0 && list.length >= 3 ? 'is-big' : ''}>
-                <button type="button" className="gl-shot" onClick={() => setOpen(i)} aria-label={s.caption || t('cm.gal.shot', { n: i + 1 })}>
-                  <img src={s.thumb} alt="" loading="lazy" />
-                  {s.featured && <span className="gl-star" title={t('cm.gal.best')}>★</span>}
-                  {(s.caption || s.author) && (
-                    <span className="gl-cap">
-                      {s.caption && <span className="block truncate font-extrabold">{s.caption}</span>}
-                      <span className="block truncate text-xs font-bold opacity-80">{[s.author, s.serverName].filter(Boolean).join(' · ')}</span>
-                    </span>
-                  )}
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-      {open !== null && list && <Lightbox list={list} index={open} onClose={() => setOpen(null)} onIndex={setOpen} />}
-    </section>
-  );
-}
-
 type SrvSort = 'players' | 'fill' | 'name';
 
 /** the servers: sort, filter by game, a curve of the day in every row; servers that are down go last */
@@ -142992,7 +142572,6 @@ export default function CommunityPage() {
     ['cm-when', t('cm.nav.when')],
     ['cm-top', t('cm.nav.top')],
     ['cm-feed', t('cm.nav.feed')],
-    ['cm-gallery', t('cm.nav.gallery')],
     ['cm-servers', t('cm.nav.servers')],
   ];
 
@@ -143052,7 +142631,6 @@ export default function CommunityPage() {
       <div className="b-top"><TopBlock c={c} mine={mine} /></div>
 
       <div className="b-feed"><FeedBlock c={c} filter={feedFilter} setFilter={setFeedFilter} /></div>
-      <div className="b-gal"><GalleryStrip /></div>
 
       <div className="b-wide"><ServersBlock servers={c.servers} /></div>
       </div>
@@ -143836,276 +143414,6 @@ export default function ForgotPassword() {
         <Button className="w-full" loading={busy}>{busy ? t('forgot.sending') : t('forgot.submit')}</Button>
       </form>
     </AuthFlow>
-  );
-}
-__COREGSM_EOF__
-  mkdir -p "$APP_DIR/core-frontend/src/pages"
-  cat > "$APP_DIR/core-frontend/src/pages/Gallery.tsx" << '__COREGSM_EOF__'
-/**
- * The screenshot gallery (/gallery): pictures from the players, the starred ones first. A click opens the picture
- * full size (arrows and Esc work). Signed-in players upload their own; until the staff approve a picture only its
- * author sees it, under «Мои скриншоты».
- */
-import { useCallback, useEffect, useRef, useState, type TouchEvent } from 'react';
-import { api, getToken, type Server } from '../api';
-import { errorText } from '../apiErrors';
-import { useAuth } from '../auth';
-import { t, useI18n, type TKey } from '../i18n';
-import { IMAGE_TYPES, useDropTarget } from '../components/profile/AvatarEditor';
-import { Button, Empty, ErrorLine, Field, Modal, PageHead, ago, toast, errText } from '../ui';
-import ArtPic from '../components/ArtPic';
-import '../styles/gallery.css';
-
-export interface Shot {
-  id: number;
-  url: string;
-  thumb: string;
-  caption: string;
-  author: string | null;
-  serverId: number | null;
-  serverName: string | null;
-  status: 'pending' | 'approved' | 'rejected';
-  featured: boolean;
-  width: number;
-  height: number;
-  createdAt: number;
-}
-
-const IconImage = () => (
-  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-    <rect x="3" y="4" width="18" height="16" rx="3" /><circle cx="9" cy="10" r="1.6" /><path d="M21 16l-5-5-8 8" />
-  </svg>
-);
-
-/** the full-size viewer over the page */
-export function Lightbox({ list, index, onClose, onIndex }: { list: Shot[]; index: number; onClose: () => void; onIndex: (i: number) => void }) {
-  useI18n();
-  const s = list[index];
-  useEffect(() => {
-    const key = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-      else if (e.key === 'ArrowRight') onIndex((index + 1) % list.length);
-      else if (e.key === 'ArrowLeft') onIndex((index - 1 + list.length) % list.length);
-    };
-    window.addEventListener('keydown', key);
-    return () => window.removeEventListener('keydown', key);
-  }, [index, list.length, onClose, onIndex]);
-  // the neighbours are loaded in advance, so a step is instant
-  useEffect(() => {
-    for (const k of [index + 1, index - 1]) {
-      const n = list[(k + list.length) % list.length];
-      if (n && n !== list[index]) new Image().src = n.url;
-    }
-  }, [index, list]);
-  const touch = useRef<{ x: number; y: number } | null>(null);
-  const onStart = (e: TouchEvent) => { touch.current = e.touches.length === 1 ? { x: e.touches[0].clientX, y: e.touches[0].clientY } : null; };
-  const onEnd = (e: TouchEvent) => {
-    const t0 = touch.current;
-    touch.current = null;
-    if (!t0 || list.length < 2) return;
-    const dx = e.changedTouches[0].clientX - t0.x;
-    const dy = e.changedTouches[0].clientY - t0.y;
-    if (Math.abs(dx) > 60 && Math.abs(dy) < Math.abs(dx) * 0.6) onIndex((index + (dx < 0 ? 1 : -1) + list.length) % list.length);
-    else if (dy > 90 && Math.abs(dx) < dy * 0.6) onClose();
-  };
-  if (!s) return null;
-  return (
-    <div className="gl-box" role="dialog" aria-modal="true" aria-label={s.caption || t('d2.gal.shot')} onClick={onClose} onTouchStart={onStart} onTouchEnd={onEnd}>
-      <figure className="gl-box-fig" onClick={(e) => e.stopPropagation()}>
-        <img key={s.id} src={s.url} alt={s.caption || t('d2.gal.shot')} width={s.width} height={s.height} style={{ backgroundImage: `url(${s.thumb})`, backgroundSize: 'cover' }} />
-        <figcaption>
-          <span className="min-w-0 flex-1">
-            {s.caption && <span className="block font-extrabold">{s.caption}</span>}
-            <span className="block text-sm font-semibold opacity-75">{[s.author, s.serverName, ago(s.createdAt)].filter(Boolean).join(' · ')}</span>
-          </span>
-          <span className="text-sm font-bold opacity-75">{index + 1} / {list.length}</span>
-        </figcaption>
-      </figure>
-      {list.length > 1 && (
-        <div className="gl-box-strip" onClick={(e) => e.stopPropagation()} role="tablist" aria-label={t('d2.gal.all')}>
-          {list.map((x, i) => (
-            <button key={x.id} type="button" role="tab" aria-selected={i === index} className={i === index ? 'is-on' : ''} onClick={() => onIndex(i)} aria-label={x.caption || t('d2.gal.shotN', { n: i + 1 })}>
-              <img src={x.thumb} alt="" loading="lazy" />
-            </button>
-          ))}
-        </div>
-      )}
-      {list.length > 1 && (
-        <>
-          <button type="button" className="gl-box-nav is-prev" aria-label={t('d2.gal.prev')} onClick={(e) => { e.stopPropagation(); onIndex((index - 1 + list.length) % list.length); }}>‹</button>
-          <button type="button" className="gl-box-nav is-next" aria-label={t('d2.gal.next')} onClick={(e) => { e.stopPropagation(); onIndex((index + 1) % list.length); }}>›</button>
-        </>
-      )}
-      <button type="button" className="gl-box-close" aria-label={t('common.close')} onClick={onClose}>✕</button>
-    </div>
-  );
-}
-
-/** a thumbnail that fades in once loaded, on a shimmering box of the right proportions (the page does not jump) */
-function ShotImg({ shot }: { shot: Shot }) {
-  const [ok, setOk] = useState(false);
-  return (
-    <span className={`gl-ph ${ok ? 'is-ok' : 'skeleton'}`} style={{ aspectRatio: `${shot.width} / ${shot.height}` }}>
-      <img
-        ref={(el) => { if (el?.complete && !ok) setOk(true); }}
-        src={shot.thumb}
-        alt=""
-        loading="lazy"
-        width={640}
-        height={Math.round((640 * shot.height) / shot.width)}
-        onLoad={() => setOk(true)}
-        onError={() => setOk(true)}
-      />
-    </span>
-  );
-}
-
-export function ShotGrid({ list, onOpen, badge }: { list: Shot[]; onOpen: (i: number) => void; badge?: (s: Shot) => string | null }) {
-  useI18n();
-  return (
-    <ul className="gl-grid">
-      {list.map((s, i) => (
-        <li key={s.id} className="gl-cell">
-          <button type="button" className="gl-shot" onClick={() => onOpen(i)} aria-label={s.caption || `Скриншот ${i + 1}`}>
-            <ShotImg shot={s} />
-            {s.featured && <span className="gl-star" title={t('d2.gal.best')}>★</span>}
-            {badge?.(s) && <span className="gl-badge">{badge(s)}</span>}
-            {(s.caption || s.author) && (
-              <span className="gl-cap">
-                {s.caption && <span className="block truncate font-extrabold">{s.caption}</span>}
-                <span className="block truncate text-xs font-bold opacity-80">{[s.author, s.serverName].filter(Boolean).join(' · ')}</span>
-              </span>
-            )}
-          </button>
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-function UploadForm({ servers, onClose, onDone, initial }: { servers: Server[]; onClose: () => void; onDone: (s: Shot) => void; initial?: File | null }) {
-  useI18n();
-  const [file, setFile] = useState<File | null>(initial ?? null);
-  const [preview, setPreview] = useState('');
-  const [caption, setCaption] = useState('');
-  const [serverId, setServerId] = useState<number | ''>('');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-  useEffect(() => {
-    if (!file) return;
-    const u = URL.createObjectURL(file);
-    setPreview(u);
-    return () => URL.revokeObjectURL(u);
-  }, [file]);
-  const send = async () => {
-    if (!file) return;
-    setBusy(true);
-    setError('');
-    try {
-      const q = new URLSearchParams({ caption: caption.trim() });
-      if (serverId) q.set('serverId', String(serverId));
-      const r = await fetch(`/api/gallery?${q.toString()}`, { method: 'POST', headers: { 'Content-Type': file.type, Authorization: `Bearer ${getToken() ?? ''}` }, body: file });
-      const j = (await r.json().catch(() => null)) as (Shot & { error?: string }) | null;
-      if (!r.ok || !j) throw new Error(errorText(j, t('d2.gal.uploadFail')));
-      onDone(j);
-    } catch (e) {
-      setError(errText(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-  return (
-    <Modal title={t('d2.gal.new')} onClose={onClose}>
-      <div className="space-y-3.5">
-        <label className={`gl-drop ${preview ? 'has-file' : ''}`}>
-          <input type="file" accept="image/png,image/jpeg,image/webp" className="sr-only" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
-          {preview ? <img src={preview} alt="" /> : <span className="font-extrabold text-mute">{t('d2.gal.choose')}</span>}
-        </label>
-        <Field label={t('d2.gal.caption')}><input className="input" value={caption} onChange={(e) => setCaption(e.target.value)} maxLength={140} placeholder={t('d2.gal.captionEx')} /></Field>
-        <Field label={t('d2.gal.server')}>
-          <select className="input" value={serverId} onChange={(e) => setServerId(e.target.value ? Number(e.target.value) : '')}>
-            <option value="">{t('d2.gal.noServer')}</option>
-            {servers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-          </select>
-        </Field>
-        <p className="text-sm font-semibold text-mute">{t('d2.gal.moderated')}</p>
-        <ErrorLine text={error} />
-        <div className="flex justify-end gap-2">
-          <button type="button" className="btn btn-ghost" onClick={onClose}>{t('common.cancel')}</button>
-          <Button loading={busy} disabled={!file} onClick={() => void send()} type="button">{t('d2.gal.send')}</Button>
-        </div>
-      </div>
-    </Modal>
-  );
-}
-
-const STATUS: Record<Shot['status'], TKey | null> = { pending: 'd2.gal.st.pending', rejected: 'd2.gal.st.rejected', approved: null };
-
-export default function GalleryPage() {
-  useI18n();
-  const { me } = useAuth();
-  const [list, setList] = useState<Shot[] | null>(null);
-  const [mine, setMine] = useState<Shot[]>([]);
-  const [servers, setServers] = useState<Server[]>([]);
-  const [open, setOpen] = useState<{ list: Shot[]; i: number } | null>(null);
-  const [uploading, setUploading] = useState(false);
-  const [dropped, setDropped] = useState<File | null>(null);
-  const [error, setError] = useState('');
-  const topRef = useRef<HTMLDivElement>(null);
-
-  const load = useCallback(() => {
-    api<Shot[]>('/gallery?limit=200').then(setList).catch((e: Error) => setError(e.message));
-    if (me) api<Shot[]>('/gallery/mine').then((m) => setMine(m.filter((s) => s.status !== 'approved'))).catch(() => undefined);
-  }, [me]);
-  useEffect(() => { load(); }, [load]);
-  useEffect(() => { if (me) api<Server[]>('/servers').then(setServers).catch(() => undefined); }, [me]);
-
-  // a picture dropped anywhere on the page opens the upload form with it
-  const drop = useDropTarget((f) => {
-    if (!me) return toast(t('d2.gal.t.login'), 'err');
-    if (!IMAGE_TYPES.includes(f.type)) return toast(t('d2.gal.t.type'), 'err');
-    setDropped(f);
-    setUploading(true);
-  }, uploading);
-  return (
-    <div className="space-y-5" ref={topRef} {...drop.props}>
-      {drop.over && <div className="gl-dropzone" aria-hidden><span>{t('d2.gal.drop')}</span></div>}
-      <PageHead
-        icon={<IconImage />}
-        title={t('d2.gal.title')}
-        subtitle={t('d2.gal.subtitle')}
-      >
-        {me ? <button type="button" className="btn" onClick={() => setUploading(true)}>{t('d2.gal.upload')}</button> : <a href="/login" className="btn btn-soft">{t('d2.gal.loginUpload')}</a>}
-      </PageHead>
-      <ErrorLine text={error} />
-      {mine.length > 0 && (
-        <section className="tile p-4 sm:p-5">
-          <h2 className="mb-3 text-lg font-extrabold">{t('d2.gal.mine')}</h2>
-          <ShotGrid list={mine} onOpen={(i) => setOpen({ list: mine, i })} badge={(s) => { const k = STATUS[s.status]; return k ? t(k) : null; }} />
-        </section>
-      )}
-      {list === null ? (
-        <div className="gl-grid" aria-busy="true">{[0, 1, 2, 3, 4, 5].map((i) => <div key={i} className="skeleton h-48 rounded-2xl" />)}</div>
-      ) : list.length === 0 ? (
-        <Empty art={<ArtPic src="empty/empty-gallery" size={132} />} title={t('d2.gal.empty')} text={t('d2.gal.emptyText')}>{me ? <button type="button" className="btn mt-2" onClick={() => setUploading(true)}>{t('d2.gal.uploadFirst')}</button> : <a href="/login" className="btn btn-soft mt-2">{t('d2.gal.signInUpload')}</a>}</Empty>
-      ) : (
-        <ShotGrid list={list} onOpen={(i) => setOpen({ list, i })} />
-      )}
-      {open && <Lightbox list={open.list} index={open.i} onClose={() => setOpen(null)} onIndex={(i) => setOpen({ ...open, i })} />}
-      {uploading && (
-        <UploadForm
-          servers={servers}
-          initial={dropped}
-          onClose={() => { setUploading(false); setDropped(null); }}
-          onDone={(s) => {
-            setUploading(false);
-            setDropped(null);
-            toast(s.status === 'approved' ? t('d2.gal.t.published') : t('d2.gal.t.sent'));
-            load();
-          }}
-        />
-      )}
-    </div>
   );
 }
 __COREGSM_EOF__
@@ -146470,7 +145778,7 @@ export default function PublicProfilePage({ username }: { username: string }) {
         <div className="panel pf-hero">
           <div className="pf-banner skeleton" />
           <div className="pf-hero-body">
-            <div className="pf-hero-avatar"><div className="pf-avatar-ring p-1"><div className="skeleton h-20 w-20 rounded-3xl bg-soft" /></div></div>
+            <div className="pf-hero-avatar"><div className="pf-avatar-ring p-1"><div className="skeleton h-20 w-20 rounded-full bg-soft" /></div></div>
             <div className="min-w-0 flex-1 basis-56 space-y-2 pt-3">
               <div className="skeleton h-7 w-48 rounded-full bg-soft" />
               <div className="skeleton h-5 w-64 max-w-full rounded-full bg-soft" />
@@ -146502,7 +145810,7 @@ export default function PublicProfilePage({ username }: { username: string }) {
       <div className="panel pf-hero">
         <div className="pf-banner" style={bannerStyle(p.bannerUrl, p.bannerPreset)} />
         <div className="pf-hero-body">
-          <div className="pf-hero-avatar"><div className="pf-avatar-ring p-1" style={p.rank ? { ['--ring' as string]: p.rank.color } : undefined}><UserAvatar name={p.username} url={p.avatarUrl} size={80} tone="brand" className="rounded-3xl!" /></div></div>
+          <div className="pf-hero-avatar"><div className="pf-avatar-ring p-1" style={p.rank ? { ['--ring' as string]: p.rank.color } : undefined}><UserAvatar name={p.username} url={p.avatarUrl} size={80} tone="brand" className="rounded-full!" /></div></div>
           <div className="min-w-0 flex-1 basis-56 pt-3">
             <h1 className="line-clamp-2 wrap-break-word text-2xl font-black leading-tight">{p.username}</h1>
             <div className="mt-1 flex flex-wrap items-center gap-2">
@@ -153191,7 +152499,7 @@ html[data-motion='reduce'] .cm-feed-i { animation: none; }
 /* player card */
 .pl-hero { display: flex; flex-wrap: wrap; align-items: center; gap: 16px 20px; padding: 22px 24px;
   background: radial-gradient(120% 160% at 100% 0%, rgb(var(--link) / .14), transparent 55%), rgb(var(--card)); }
-.pl-ava { display: grid; place-items: center; width: 72px; height: 72px; flex: none; border-radius: var(--r-xl); font-size: 32px; font-weight: 800; color: #fff;
+.pl-ava { display: grid; place-items: center; width: 72px; height: 72px; flex: none; border-radius: 50%; font-size: 32px; font-weight: 800; color: #fff;
   background: linear-gradient(135deg, rgb(var(--brand)), rgb(var(--link))); box-shadow: 0 12px 30px -12px rgb(var(--brand) / .7); }
 .pl-rank { border-radius: var(--r-pill); padding: 1px 10px; font-size: var(--fs-sm); background: rgb(var(--badbg)); color: rgb(var(--bad)); }
 .pl-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
@@ -153246,7 +152554,7 @@ html[data-motion='reduce'] .cm-feed-i { animation: none; }
 .cm-stat-link:hover { color: rgb(var(--link)); }
 
 /* avatars of players */
-.cm-ava { position: relative; display: inline-grid; place-items: center; flex: none; border-radius: 30%; font-weight: 800; color: #fff; background: linear-gradient(135deg, hsl(var(--h) 62% 48%), hsl(calc(var(--h) + 40) 62% 38%)); }
+.cm-ava { position: relative; display: inline-grid; place-items: center; flex: none; border-radius: 50%; font-weight: 800; color: #fff; background: linear-gradient(135deg, hsl(var(--h) 62% 48%), hsl(calc(var(--h) + 40) 62% 38%)); }
 .cm-ava-img { position: absolute; inset: 0; border-radius: inherit; }
 .cm-ava-on { position: absolute; right: -2px; bottom: -2px; width: 10px; height: 10px; border-radius: 50%; background: rgb(var(--ok)); box-shadow: 0 0 0 2px rgb(var(--card)); }
 .cm-ava-game { position: absolute; right: -5px; top: -5px; line-height: 0; border-radius: 50%; box-shadow: 0 0 0 2px rgb(var(--card)); overflow: hidden; }
@@ -153288,7 +152596,7 @@ html[data-motion='reduce'] .cm-feed-i { animation: none; }
 .cm-me { margin-bottom: 10px; padding: 6px 12px; border-radius: var(--r-pill); display: inline-block; background: rgb(var(--brand) / .12); font-size: var(--fs-sm); font-weight: 800; }
 .cm-me.is-out { background: rgb(var(--soft)); color: rgb(var(--mute)); }
 
-/* feed groups, servers, gallery */
+/* feed groups, servers */
 .cm-feed-group + .cm-feed-group { margin-top: 14px; }
 .cm-feed-h { margin-bottom: 8px; font-size: var(--fs-xs); font-weight: 800; letter-spacing: .04em; text-transform: uppercase; color: rgb(var(--mute)); }
 .cm-feed-i { align-items: center; }
@@ -153298,15 +152606,6 @@ html[data-motion='reduce'] .cm-feed-i { animation: none; }
 .cm-chip[aria-pressed='true'] { background: rgb(var(--brand)); color: #fff; }
 .cm-srv.is-off { opacity: .6; }
 .cm-srv-spark { flex: none; }
-.cm-gal { display: grid; gap: 8px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
-.cm-gal li { min-width: 0; aspect-ratio: 16 / 10; }
-.cm-gal .gl-shot { height: 100%; }
-.cm-gal .gl-shot img { height: 100%; object-fit: cover; }
-.cm-gal li.is-big { grid-column: 1 / -1; aspect-ratio: 16 / 8; }
-@media (min-width: 720px) {
-  .cm-gal { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-  .cm-gal li.is-big { grid-column: span 2; grid-row: span 2; aspect-ratio: auto; }
-}
 .pl-ava { overflow: hidden; }
 .pl-ava-img { width: 100% !important; height: 100% !important; border-radius: inherit; }
 
@@ -153321,8 +152620,7 @@ html[data-motion='reduce'] .cm-feed-i { animation: none; }
   .cm-bento > .b-games { grid-column: span 7; }
   .cm-bento > .b-when { grid-column: span 7; }
   .cm-bento > .b-top { grid-column: span 5; }
-  .cm-bento > .b-feed { grid-column: span 7; }
-  .cm-bento > .b-gal { grid-column: span 5; }
+  .cm-bento > .b-feed { grid-column: 1 / -1; }
 }
 /* every tile has its own quiet tint, like the tiles of a dashboard (the colours are soft, so both themes read well) */
 .cm-bento > .cm-hero { background: linear-gradient(160deg, rgb(var(--brand) / .2), rgb(var(--brand) / .05) 70%), rgb(var(--card)); }
@@ -153331,7 +152629,6 @@ html[data-motion='reduce'] .cm-feed-i { animation: none; }
 .cm-bento > .b-when > .tile { background: linear-gradient(160deg, rgb(34 197 94 / .1), transparent 70%), rgb(var(--card)); }
 .cm-bento > .b-top > .tile { background: linear-gradient(160deg, rgb(250 204 21 / .11), transparent 70%), rgb(var(--card)); }
 .cm-bento > .b-feed > .tile { background: linear-gradient(160deg, rgb(244 114 182 / .1), transparent 70%), rgb(var(--card)); }
-.cm-bento > .b-gal > .tile, .cm-bento > .b-gal > section { background: linear-gradient(160deg, rgb(249 115 22 / .11), transparent 70%), rgb(var(--card)); }
 
 /* the strip of sections: a gap under it (the sticky capsule has no margin of its own), the icons in front of the labels */
 .cm-nav { margin-bottom: 1.25rem; }
@@ -154007,71 +153304,6 @@ html[data-motion='reduce'] :is(.srv-record, .srv-swipe-hint, .srv-slots-bar > i.
 .pl-top { background: linear-gradient(90deg, rgb(var(--brand) / .09), transparent 70%); border-radius: var(--r-md); }
 .pl-group { padding: 12px 4px 4px; font-size: var(--fs-xs); font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: rgb(var(--mute)); }
 ul > .pl-group:first-child { padding-top: 2px; }
-__COREGSM_EOF__
-  mkdir -p "$APP_DIR/core-frontend/src/styles"
-  cat > "$APP_DIR/core-frontend/src/styles/gallery.css" << '__COREGSM_EOF__'
-/* the screenshot gallery: a masonry of thumbnails and the full-size viewer */
-.gl-grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 17rem), 1fr)); align-items: start; }
-.gl-cell { min-width: 0; }
-.gl-shot { position: relative; display: block; width: 100%; overflow: hidden; border-radius: var(--r-lg); background: rgb(var(--soft)); box-shadow: 0 0 0 1px rgb(var(--line)); cursor: zoom-in; }
-.gl-shot img { display: block; width: 100%; height: auto; transition: transform .5s cubic-bezier(.2, .8, .2, 1); }
-.gl-shot:hover img { transform: scale(1.04); }
-.gl-cap { position: absolute; inset: auto 0 0 0; padding: 26px 12px 10px; text-align: left; color: #fff; background: linear-gradient(180deg, transparent, rgba(8, 10, 20, .8)); opacity: 0; transform: translateY(6px); transition: opacity .2s ease, transform .2s ease; }
-.gl-shot:hover .gl-cap, .gl-shot:focus-visible .gl-cap { opacity: 1; transform: none; }
-@media (hover: none) { .gl-cap { opacity: 1; transform: none; } }
-.gl-star { position: absolute; top: 8px; left: 8px; display: grid; place-items: center; width: 28px; height: 28px; border-radius: var(--r-pill); color: #f6b73c; background: rgba(8, 10, 20, .55); font-size: var(--fs-base); }
-.gl-badge { position: absolute; top: 8px; right: 8px; border-radius: var(--r-pill); padding: 2px 9px; font-size: var(--fs-xs); font-weight: 650; color: #fff; background: rgba(8, 10, 20, .65); }
-
-.gl-box { position: fixed; inset: 0; z-index: 80; display: grid; place-items: center; padding: 24px 64px; background: rgba(6, 6, 14, .92); animation: gl-in .2s ease both; }
-@keyframes gl-in { from { opacity: 0; } }
-.gl-box-fig { max-width: min(1400px, 100%); display: grid; gap: 10px; color: #fff; }
-.gl-box-fig img { max-width: 100%; max-height: calc(100dvh - 140px); width: auto; height: auto; margin: 0 auto; border-radius: var(--r-md); box-shadow: 0 30px 80px -20px #000; }
-.gl-box-fig figcaption { display: flex; gap: 12px; align-items: flex-end; }
-.gl-box-nav, .gl-box-close { position: absolute; display: grid; place-items: center; border-radius: var(--r-pill); color: #fff; background: rgba(255, 255, 255, .1); transition: background .15s ease; }
-.gl-box-nav:hover, .gl-box-close:hover { background: rgba(255, 255, 255, .22); }
-.gl-box-nav { top: 50%; width: 46px; height: 46px; margin-top: -23px; font-size: 30px; line-height: 1; }
-.gl-box-nav.is-prev { left: 12px; } .gl-box-nav.is-next { right: 12px; }
-.gl-box-close { top: 14px; right: 14px; width: 40px; height: 40px; font-size: var(--fs-xl); }
-@media (max-width: 639px) { .gl-box { padding: 56px 8px 16px; } .gl-box-nav { top: auto; bottom: 14px; } }
-
-.gl-drop { display: grid; place-items: center; min-height: 10rem; border-radius: var(--r-lg); border: 2px dashed rgb(var(--line)); cursor: pointer; overflow: hidden; text-align: center; padding: 12px; transition: border-color .15s ease; }
-.gl-drop:hover { border-color: rgb(var(--brand)); }
-.gl-drop.has-file { padding: 0; border-style: solid; }
-.gl-drop img { display: block; width: 100%; max-height: 18rem; object-fit: contain; background: #000; }
-@media (prefers-reduced-motion: reduce) { .gl-shot img, .gl-cap, .gl-box { transition: none; animation: none; } }
-
-/* admin: the moderation queue */
-.ga-grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 15rem), 1fr)); }
-.ga-card { display: grid; border-radius: var(--r-lg); overflow: hidden; background: rgb(var(--soft)); box-shadow: 0 0 0 1px rgb(var(--line)); }
-.ga-card.is-pending { box-shadow: 0 0 0 2px rgb(var(--warn) / .7); }
-.ga-card.is-rejected { opacity: .55; }
-.ga-img { display: block; aspect-ratio: 16 / 9; background: #000; cursor: zoom-in; }
-.ga-img img { width: 100%; height: 100%; object-fit: cover; }
-.ga-meta { padding: 8px 12px 0; min-width: 0; }
-.ga-acts { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px 12px 12px; }
-.ga-acts .row-act { margin-left: auto; }
-
-/* thumbnails fade in on a box of the right proportions */
-.gl-ph { display: block; width: 100%; overflow: hidden; }
-.gl-ph > img { opacity: 0; transition: opacity .35s ease, transform .5s cubic-bezier(.2, .8, .2, 1); }
-.gl-ph.is-ok > img { opacity: 1; }
-@media (prefers-reduced-motion: reduce) { .gl-ph > img { transition: none; } }
-
-/* the viewer: a strip of thumbnails, swipe on a phone */
-.gl-box { touch-action: pan-y pinch-zoom; }
-.gl-box-strip { position: absolute; left: 0; right: 0; bottom: 10px; display: flex; justify-content: center; gap: 6px; padding: 0 64px; overflow-x: auto; scrollbar-width: none; }
-.gl-box-strip::-webkit-scrollbar { display: none; }
-.gl-box-strip button { flex: none; width: 56px; height: 40px; border-radius: var(--r-sm); overflow: hidden; opacity: .55; box-shadow: 0 0 0 2px transparent; transition: opacity .15s ease, box-shadow .15s ease; }
-.gl-box-strip button:hover { opacity: .9; }
-.gl-box-strip button.is-on { opacity: 1; box-shadow: 0 0 0 2px #fff; }
-.gl-box-strip img { display: block; width: 100%; height: 100%; object-fit: cover; }
-.gl-box-fig img { min-width: 120px; background-color: rgb(20 22 32); }
-.gl-box-fig img { max-height: calc(100dvh - 190px); }
-@media (max-width: 639px) { .gl-box-strip { bottom: 66px; padding: 0 12px; justify-content: flex-start; } .gl-box-fig img { max-height: calc(100dvh - 230px); } }
-
-/* a picture dragged over the page */
-.gl-dropzone { position: fixed; inset: 12px; z-index: 70; display: grid; place-items: center; border: 3px dashed rgb(var(--brand)); border-radius: var(--r-xl); background: rgb(var(--brand) / .12); pointer-events: none; }
-.gl-dropzone > span { padding: 12px 22px; border-radius: var(--r-pill); background: rgb(var(--brand)); color: #fff; font-size: var(--fs-xl); font-weight: 800; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/mobile.css" << '__COREGSM_EOF__'
@@ -154757,7 +153989,7 @@ __COREGSM_EOF__
 @media (max-width: 639px) { .pf-banner-btn { min-height: 44px; } }
 .pf-hero-body { display: flex; flex-wrap: wrap; align-items: flex-start; gap: .5rem 1.25rem; padding: 0 1.25rem 1.25rem; }
 .pf-hero-avatar { margin-top: -2.75rem; position: relative; z-index: 1; }
-.pf-avatar-ring { border-radius: var(--r-xl); background: rgb(var(--card)); box-shadow: 0 0 0 4px rgb(var(--card)), 0 0 0 7px var(--ring, rgb(var(--card))); }
+.pf-avatar-ring { border-radius: 50%; background: rgb(var(--card)); box-shadow: 0 0 0 4px rgb(var(--card)), 0 0 0 7px var(--ring, rgb(var(--card))); }
 .pf-drop-on { box-shadow: 0 0 0 3px rgb(var(--brand)), 0 0 0 7px rgb(var(--brand) / .25); }
 .pf-banner-ratio { aspect-ratio: 3 / 1; width: 100%; background-size: cover; background-position: center; border-radius: var(--r-lg); background-color: rgb(var(--soft)); }
 
@@ -156390,12 +155622,12 @@ export function UserAvatar({ name, url, size = 28, tone = 'soft', className = ''
   const [failed, setFailed] = useState(false);
   useEffect(() => setFailed(false), [url]);
   if (url && !failed) {
-    return <img src={url} width={size} height={size} alt="" referrerPolicy="no-referrer" draggable={false} onError={() => setFailed(true)} className={`shrink-0 rounded-[30%] object-cover ${className}`} style={{ width: size, height: size }} />;
+    return <img src={url} width={size} height={size} alt="" referrerPolicy="no-referrer" draggable={false} onError={() => setFailed(true)} className={`shrink-0 rounded-full object-cover ${className}`} style={{ width: size, height: size }} />;
   }
   return (
     <span
       aria-hidden
-      className={`grid shrink-0 place-items-center rounded-[30%] font-black ${tone === 'brand' ? 'bg-brand text-white' : tone === 'grad' ? 'bg-linear-to-br from-brand to-[#ec4899] text-white' : 'bg-soft text-link'} ${className}`}
+      className={`grid shrink-0 place-items-center rounded-full font-black ${tone === 'brand' ? 'bg-brand text-white' : tone === 'grad' ? 'bg-linear-to-br from-brand to-[#ec4899] text-white' : 'bg-soft text-link'} ${className}`}
       style={{ width: size, height: size, fontSize: size * 0.48 }}
     >
       {name.slice(0, 1).toUpperCase()}

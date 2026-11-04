@@ -96,7 +96,7 @@ export function staff(req: AuthedRequest, res: Response, next: NextFunction) {
 }
 /**
  * What a moderator may do. Administrators may do everything; a moderator gets the permissions the administrator
- * ticked (the default set until then: news and moderation of reviews and screenshots).
+ * ticked (the default set until then: news and moderation of reviews).
  */
 export const PERMS = ['news', 'moderation', 'servers', 'maintenance', 'journal'] as const;
 export type Perm = (typeof PERMS)[number];

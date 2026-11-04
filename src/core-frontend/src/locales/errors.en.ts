@@ -147,8 +147,6 @@ const errorsEn: Record<string, string> = {
   config_bad_file: 'This is not a CoreGSM settings file, or it is damaged',
   rcon_password_required: 'Enter the RCON password',
   rcon_not_configured: 'Save the RCON port and password first',
-  gallery_image_required: 'A PNG, JPG or WebP picture up to 8 MB is needed',
-  gallery_queue_full: 'You already have 5 screenshots waiting for review. Wait until they are checked.',
   game_address_port: 'Enter the game, the address and the port',
   display_address_format: 'The display address must not contain spaces or quotes',
   channel_id_format: 'A channel ID is a number of 15–25 digits',
