@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="e51b89f8bbb8"
+COREGSM_BUILD="e7a3bedb8c53"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.19"
+COREGSM_VERSION="1.1.20"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -38302,7 +38302,7 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend"
   cat > "$APP_DIR/core-frontend/lint-baseline.json" << '__COREGSM_EOF__'
 {
-  "eslint(no-shadow)": 44,
+  "eslint(no-shadow)": 43,
   "eslint(no-underscore-dangle)": 5,
   "jsx-a11y(click-events-have-key-events)": 8,
   "jsx-a11y(no-autofocus)": 12,
@@ -113865,6 +113865,7 @@ export default function DiscordStyleCard() {
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
   const [width, setWidth] = useState<'desktop' | 'phone'>('desktop');
   const [group, setGroup] = useState<(typeof GROUPS)[number]>('servers');
+  const [pickId, setPickId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const loadGallery = () => api<{ items: Sample[] }>('/admin/discord-gallery').then((r) => setItems(r.items)).catch(() => setItems([]));
@@ -113892,6 +113893,8 @@ export default function DiscordStyleCard() {
   };
 
   const shown = (items ?? []).filter((x) => x.group === group);
+  // one sample at a time: a row of small buttons picks which one is drawn
+  const cur = shown.find((x) => x.id === pickId) ?? shown[0];
   return (
     <Section title={t('ds.title')} description={t('ds.help')}>
       <div className="grid gap-4 sm:grid-cols-2">
@@ -113921,8 +113924,15 @@ export default function DiscordStyleCard() {
         <button type="button" className="btn-link" onClick={() => setWidth(width === 'desktop' ? 'phone' : 'desktop')}>{width === 'desktop' ? t('ds.phone') : t('ds.desktop')}</button>
       </div>
       {items === null && <div className="skeleton h-40 rounded-2xl bg-soft" aria-hidden />}
+      {shown.length > 1 && (
+        <div className="mb-3 flex flex-wrap gap-2" role="group" aria-label={t('ds.pick')}>
+          {shown.map((x) => (
+            <button key={x.id} type="button" className={`chip-filter ${cur?.id === x.id ? 'on' : ''}`} aria-pressed={cur?.id === x.id} onClick={() => setPickId(x.id)}>{x.title}</button>
+          ))}
+        </div>
+      )}
       <div className="space-y-5">
-        {shown.map((x) => (
+        {(cur ? [cur] : []).map((x) => (
           <figure key={x.id}>
             <figcaption className="mb-1 text-sm font-extrabold text-mute">{x.title}</figcaption>
             <EmbedView embed={Object.keys(x.embed).length ? x.embed : null} content={x.content} theme={theme} width={width}>
@@ -133185,6 +133195,8 @@ const en: Record<keyof typeof ru, string> = {
   'adm.tbl.selected': 'Selected servers',
   'adm.tbl.picked': 'Selected: {n}',
   'adm.tbl.poll': 'Poll now',
+  'adm.tbl.copyAddrs': 'Copy addresses',
+  'adm.tbl.copiedAddrs': 'Addresses copied: {n}',
   'adm.tbl.clear': 'Clear selection',
   'adm.tbl.none': 'Nothing found.',
   'adm.tbl.reset': 'Reset filters',
@@ -134010,6 +134022,12 @@ const en: Record<keyof typeof ru, string> = {
   'dc.srv': 'Server #{id}',
   'dc.chId': 'Channel ID {id}',
   'dc.ch': 'Channel {id}',
+  'dc.tabs': 'Discord sections',
+  'dc.tab.channels': 'Channels',
+  'dc.tab.look': 'Look',
+  'dc.tab.extra': 'Roles and counter',
+  'dc.tab.delivery': 'Delivery',
+  'ds.pick': 'Which message to show',
   'dc.st.paused': 'PAUSED',
   'dc.st.error': 'ERROR',
   'dc.st.ok': 'WORKING',
@@ -134670,6 +134688,8 @@ const en: Record<keyof typeof ru, string> = {
   'd2.news.pickOne': 'Select: {title}',
   'd2.news.reactions': 'Reactions',
   'd2.news.dup': 'Duplicate',
+  'd2.news.quickMore': '{n} more',
+  'd2.news.quickLess': 'Fold',
   'd2.news.publishNow': 'Publish now',
   'd2.news.stats': 'Statistics',
   'd2.news.openDiscord': 'Open in Discord ↗',
@@ -137232,6 +137252,8 @@ const ru = {
   'adm.tbl.selected': 'Выбранные серверы',
   'adm.tbl.picked': 'Выбрано: {n}',
   'adm.tbl.poll': 'Опросить сейчас',
+  'adm.tbl.copyAddrs': 'Скопировать адреса',
+  'adm.tbl.copiedAddrs': 'Скопировано адресов: {n}',
   'adm.tbl.clear': 'Снять выбор',
   'adm.tbl.none': 'Ничего не найдено.',
   'adm.tbl.reset': 'Сбросить фильтры',
@@ -138057,6 +138079,12 @@ const ru = {
   'dc.srv': 'Сервер #{id}',
   'dc.chId': 'ID канала {id}',
   'dc.ch': 'Канал {id}',
+  'dc.tabs': 'Разделы Discord',
+  'dc.tab.channels': 'Каналы',
+  'dc.tab.look': 'Оформление',
+  'dc.tab.extra': 'Роли и счётчик',
+  'dc.tab.delivery': 'Доставка',
+  'ds.pick': 'Какое сообщение показать',
   'dc.st.paused': 'ПАУЗА',
   'dc.st.error': 'ОШИБКА',
   'dc.st.ok': 'РАБОТАЕТ',
@@ -138717,6 +138745,8 @@ const ru = {
   'd2.news.pickOne': 'Выбрать: {title}',
   'd2.news.reactions': 'Реакции',
   'd2.news.dup': 'Дублировать',
+  'd2.news.quickMore': 'Ещё {n}',
+  'd2.news.quickLess': 'Свернуть',
   'd2.news.publishNow': 'Опубликовать сейчас',
   'd2.news.stats': 'Статистика',
   'd2.news.openDiscord': 'Открыть в Discord ↗',
@@ -141959,8 +141989,9 @@ export function spanText(ms: number): string {
   if (h < 48) return `${h} ч`;
   return `${Math.floor(h / 24)} дн`;
 }
+/** how long the state lasts: only for a server that does not answer (a working one needs no line) */
 const stateLine = (s: Server): string | null => {
-  if (s.maintenance || !s.hasStatus || !s.stateSince) return null;
+  if (s.maintenance || !s.hasStatus || !s.stateSince || s.online) return null;
   return `${s.online ? 'работает' : 'не отвечает'} · ${spanText(Date.now() - s.stateSince)}`;
 };
 const pct = (v: number | undefined) => (v == null ? '–' : `${(Math.round(v * 10) / 10).toLocaleString('ru-RU')}%`);
@@ -141975,6 +142006,10 @@ export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableA
   const toggleCol = (c: TableColumn) => setCols((l) => { const n = l.includes(c) ? l.filter((x) => x !== c) : TABLE_COLUMNS.filter((x) => x === c || l.includes(x)); saveColumns(n); return n; });
   const has = (c: TableColumn) => cols.includes(c);
   const [sel, setSel] = useState<number[]>([]);
+  const copyPicked = async () => {
+    const list = servers.filter((x) => sel.includes(x.id)).map((x) => `${x.name}\t${x.host}:${x.port}`).join('\n');
+    try { await navigator.clipboard.writeText(list); toast(t('adm.tbl.copiedAddrs', { n: sel.length })); } catch { toast(t('nw.copyFail'), 'err'); }
+  };
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState<number[]>([]);
   const [view, setView] = useState<'table' | 'cards'>(() => { try { return localStorage.getItem('coregsm_admin_srv_view') === 'cards' ? 'cards' : 'table'; } catch { return 'table'; } });
@@ -142047,6 +142082,7 @@ export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableA
         <div className="adm-bulk adm-bulk-float" role="region" aria-label={t('adm.tbl.selected')}>
           <b>{t('adm.tbl.picked', { n: picked.length })}</b>
           <button type="button" className="btn btn-soft btn-sm" disabled={busy} onClick={() => void many(a.onRefreshMany)}>{t('adm.tbl.poll')}</button>
+          <button type="button" className="btn btn-soft btn-sm" onClick={() => void copyPicked()}>{t('adm.tbl.copyAddrs')}</button>
           {a.isAdmin && <button type="button" className="btn btn-danger btn-sm" disabled={busy} onClick={() => void removeMany()}>{t('adm.srv.delete')}</button>}
           <button type="button" className="btn btn-ghost btn-sm ml-auto" onClick={() => setSel([])}>{t('adm.tbl.clear')}</button>
         </div>
@@ -142071,8 +142107,8 @@ export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableA
                   {has('map') && <th>{t('adm.col.map')}</th>}
                   {has('version') && <th>{t('adm.col.version')}</th>}
                   {has('channels') && <th>{t('adm.col.channels')}</th>}
-                  {has('uptime') && <th>{t('adm.tbl.uptime')}</th>}
-                  {has('h24') && <th>{t('adm.tbl.h24')}</th>}
+                  {has('uptime') && <th className="adm-c-up">{t('adm.tbl.uptime')}</th>}
+                  {has('h24') && <th className="adm-c-h24">{t('adm.tbl.h24')}</th>}
                   {has('updated') && <th>{t('adm.col.updated')}</th>}
                   <th aria-label={t('adm.tbl.actions')} />
                 </tr>
@@ -142103,13 +142139,13 @@ export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableA
                     {has('map') && <td className="max-w-40 truncate text-mute" title={s.map ?? undefined}>{s.online && s.map ? s.map : '—'}</td>}
                     {has('version') && <td className="max-w-32 truncate font-mono text-xs text-mute" title={s.version ?? undefined}>{s.version || '—'}</td>}
                     {has('channels') && <td className="tabular-nums"><a href="/admin/discord" className="text-link hover:underline">{a.bindings.get(s.id) ?? 0}</a></td>}
-                    {has('uptime') && <td className="tabular-nums">{pct(a.uptime.get(s.id))}</td>}
-                    {has('h24') && <td><MiniSpark serverId={s.id} color={gameColor(s.game)} /></td>}
+                    {has('uptime') && <td className="adm-c-up tabular-nums">{pct(a.uptime.get(s.id))}</td>}
+                    {has('h24') && <td className="adm-c-h24"><MiniSpark serverId={s.id} color={gameColor(s.game)} /></td>}
                     {has('updated') && <td className="text-mute">{ago(s.updatedAt)}</td>}
                     <td>
                       <div className="flex items-center justify-end gap-1" role="group" aria-label={`${t('adm.tbl.actions')}: ${s.name}`}>
-                        <button type="button" className="btn btn-soft btn-sm" aria-label={`${t('adm.tbl.edit')}: ${s.name}`} onClick={() => a.onEdit(s)}><IconEdit /><span>{t('adm.tbl.edit')}</span></button>
-                        <button type="button" className="row-act" title={t('adm.tbl.poll')} aria-label={`${t('adm.tbl.poll')}: ${s.name}`} onClick={() => a.onRefresh(s)} disabled={a.busyId === s.id} aria-busy={a.busyId === s.id || undefined}>
+                        <button type="button" className="row-act" title={t('adm.tbl.edit')} aria-label={`${t('adm.tbl.edit')}: ${s.name}`} onClick={() => a.onEdit(s)}><IconEdit /></button>
+                        <button type="button" className="row-act row-act-hover" title={t('adm.tbl.poll')} aria-label={`${t('adm.tbl.poll')}: ${s.name}`} onClick={() => a.onRefresh(s)} disabled={a.busyId === s.id} aria-busy={a.busyId === s.id || undefined}>
                           <IconRefresh spinning={a.busyId === s.id} />
                         </button>
                         <RowMenu label={`${t('adm.tbl.more')}: ${s.name}`} items={menuItems(s)} />
@@ -143926,7 +143962,7 @@ import { DiscordWizard, computeWizard } from '../components/DiscordWizard';
 import DeliveryList from '../components/DeliveryList';
 import DiscordExtras from '../components/DiscordExtras';
 import PlayersShownCard from '../components/PlayersShownCard';
-import { DiscordArt } from '../components/Illustrations';
+
 import { t, useI18n } from '../i18n';
 import { Button, Empty, ErrorLine, Field, LoadError, GameAvatar, GoLink, IconDiscord, IconEdit, IconPause, IconPlay, IconTrash, InviteButton, Modal, Notice, PageHead, Strip, Switch, AdminPage, ago, toast, undoable, usePoll, navigate, errText } from '../ui';
 import { BotPill } from './Settings';
@@ -143939,6 +143975,13 @@ type Style = 'embed' | 'card' | 'both';
 interface Draft { id?: number; serverId: number; /** more servers shown in the same message (the main one is serverId) */ extraServerIds?: number[]; channelId: string; intervalSec: number; enabled: boolean; style: Style; layout?: 'detailed' | 'compact' | 'minimal' }
 
 /** the sub-route: «new» opens an empty binding form, «new/<serverId>» opens it with that server chosen */
+const DC_TABS = ['channels', 'look', 'extra', 'delivery'] as const;
+type DcTab = (typeof DC_TABS)[number];
+const TAB_KEY = 'coregsm_discord_tab';
+const readTab = (): DcTab => {
+  try { const v = sessionStorage.getItem(TAB_KEY); return (DC_TABS as readonly string[]).includes(v ?? '') ? (v as DcTab) : 'channels'; } catch { return 'channels'; }
+};
+
 export default function DiscordPage({ sub = '' }: { sub?: string }) {
   useI18n();
   const [servers, setServers] = useState<Server[]>([]);
@@ -143950,6 +143993,8 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
   const [bot, setBot] = useState<BotStatus | null>(null);
   const [guilds, setGuilds] = useState<DiscordGuild[]>([]);
   const [rechecking, setRechecking] = useState(false);
+  const [tab, setTab] = useState<DcTab>(readTab);
+  const pickTab = (x: DcTab) => { setTab(x); try { sessionStorage.setItem(TAB_KEY, x); } catch { /* not remembered */ } };
   const [wizardOpen, setWizardOpen] = useState(false);
   const [picked, setPicked] = useState<number[]>([]);
   // bindings removed with «Отменить» pending: hidden here until the request is really sent
@@ -144109,6 +144154,12 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
         </div>
       )}
 
+      <nav className="seg" aria-label={t('dc.tabs')}>
+        {DC_TABS.map((x) => <button key={x} type="button" className="seg-item" aria-current={tab === x ? 'page' : undefined} onClick={() => pickTab(x)}>{t(`dc.tab.${x}` as const)}</button>)}
+      </nav>
+
+      {tab === 'channels' && (
+        <>
       {loaded && settings && (!wizard.complete || wizardOpen) && (
         <DiscordWizard
           input={{ tokenSet: !!settings.discordTokenSet, bot, guilds, bindings, serverCount: servers.length }}
@@ -144126,7 +144177,7 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
       {!loaded && <div className="skeleton panel h-64" aria-busy="true" aria-label={t('dc.loading')} />}
 
       {loaded && settings && shown.length === 0 && (
-        <Empty art={<DiscordArt />} title={t('dc.none')} text={t('dc.noneText')}>
+        <Empty compact title={t('dc.none')} text={t('dc.noneText')}>
           {servers.length > 0
             ? <button className="btn mt-3" onClick={() => setDraft({ serverId: servers[0].id, channelId: '', intervalSec: 60, enabled: true, style: 'embed' })}>{t('dc.bind')}</button>
             : <a className="btn mt-3" href="/admin/servers/new">{t('dc.addFirst')}</a>}
@@ -144221,11 +144272,18 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
         })}
       </div>
 
-      <PlayersShownCard />
-      <WelcomeCard />
-      <DiscordStyleCard />
-      {loaded && <DiscordExtras servers={servers} />}
-      <DeliveryList />
+        </>
+      )}
+
+      {tab === 'look' && (
+        <>
+          <PlayersShownCard />
+          <WelcomeCard />
+          <DiscordStyleCard />
+        </>
+      )}
+      {tab === 'extra' && loaded && <DiscordExtras servers={servers} />}
+      {tab === 'delivery' && <DeliveryList />}
 
       {draft && (
         <BindingForm
@@ -145370,7 +145428,8 @@ import { NewsCalendar } from '../components/news/Calendar';
 import { confirmDialog } from '../confirm';
 import { api, ApiError, type NewsItem, type NewsSettings } from '../api';
 import { ChannelName, ChannelPicker } from '../components/ChannelPicker';
-import { AdminPage, Empty, ErrorLine, LoadError, IconCopyPlus, IconNews, IconTrash, PageHead, Strip, fmtDateTime, toast, undoable, usePoll, navigate, errText } from '../ui';
+import RowMenu, { type RowMenuItem } from '../components/RowMenu';
+import { AdminPage, Empty, ErrorLine, LoadError, IconNews, PageHead, Strip, fmtDateTime, toast, undoable, usePoll, navigate, errText } from '../ui';
 import NewsEditor, { TEMPLATES } from './NewsEditor';
 import { newsImage } from '../components/news/newsLogic';
 import { NewsStatsModal } from '../components/news/NewsStats';
@@ -145414,6 +145473,7 @@ function NewsList() {
   const [settings, setSettings] = useState<NewsSettings | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [stats, setStats] = useState<{ id: number; title: string } | null>(null);
+  const [quickAll, setQuickAll] = useState(false);
   const [error, setError] = useState('');
   const [changing, setChanging] = useState(false);
   const [picked, setPicked] = useState<number[]>([]);
@@ -145479,6 +145539,14 @@ function NewsList() {
       .catch((e) => setError(e.message));
     void load();
   };
+  /** what used to be five equal buttons on a card: the rest of the actions sit in a «⋯» menu */
+  const newsMenu = (n: NewsItem): RowMenuItem[] => [
+    { key: 'dup', label: t('d2.news.dup'), onSelect: () => void copy(n) },
+    { key: 'pin', label: n.pinned ? t('d2.news.unpin') : t('d2.news.pin'), onSelect: () => void togglePin(n) },
+    ...(['sent', 'edit_queued'].includes(n.status) ? [{ key: 'stats', label: t('d2.news.stats'), onSelect: () => setStats({ id: n.id, title: n.title }) }] : []),
+    ...(n.messageUrl ? [{ key: 'discord', label: t('d2.news.openDiscord'), href: n.messageUrl }] : []),
+    { key: 'del', label: t('d2.news.delete'), onSelect: () => void remove(n), danger: true, sep: true },
+  ];
   const togglePin = async (n: NewsItem) => {
     await api(`/news/${n.id}/pin`, 'PATCH', { pinned: !n.pinned }).then(() => toast(n.pinned ? t('d2.news.t.unpinned') : t('d2.news.t.pinnedTop'))).catch((e) => setError(e.message));
     void load();
@@ -145547,7 +145615,12 @@ function NewsList() {
 
       <Strip className="justify-start!">
         <span className="mr-1 text-sm font-extrabold text-mute">{t('d2.news.quick')}</span>
-        {TEMPLATES.map((t) => <a key={t.id} className="btn btn-soft btn-sm" href={`/admin/news/new/${t.id}`}>{t.label}</a>)}
+        {(quickAll ? TEMPLATES : TEMPLATES.slice(0, 4)).map((tpl) => <a key={tpl.id} className="btn btn-soft btn-sm" href={`/admin/news/new/${tpl.id}`}>{tpl.label}</a>)}
+        {TEMPLATES.length > 4 && (
+          <button type="button" className="btn btn-ghost btn-sm" aria-expanded={quickAll} onClick={() => setQuickAll((v) => !v)}>
+            {quickAll ? t('d2.news.quickLess') : t('d2.news.quickMore', { n: TEMPLATES.length - 4 })}
+          </button>
+        )}
       </Strip>
 
       <Strip>
@@ -145657,16 +145730,11 @@ function NewsList() {
                 </p>
               )}
               {n.error && <p className="rounded-xl bg-badbg px-3 py-2 text-sm font-bold text-bad">{n.error}</p>}
-              <div className="mt-auto flex flex-wrap gap-2 pt-1">
+              <div className="mt-auto flex flex-wrap items-center gap-2 pt-1">
                 <a className="btn btn-soft btn-sm" href={`/admin/news/${n.id}`}>{t('d2.news.change')}</a>
-                <button className="btn btn-soft btn-sm" onClick={() => void copy(n)}>{t('d2.news.dup')}</button>
-                <button className="btn btn-soft btn-sm" aria-pressed={!!n.pinned} onClick={() => void togglePin(n)}>{n.pinned ? t('d2.news.unpin') : t('d2.news.pin')}</button>
                 {['draft', 'scheduled', 'error'].includes(n.status) && <button className="btn btn-soft btn-sm" onClick={() => publish(n)}>{t('d2.news.publishNow')}</button>}
-                {['sent', 'edit_queued'].includes(n.status) && <button className="btn btn-soft btn-sm" onClick={() => setStats({ id: n.id, title: n.title })}>{t('d2.news.stats')}</button>}
-                {n.messageUrl && <a className="btn btn-soft btn-sm" href={n.messageUrl} target="_blank" rel="noreferrer">{t('d2.news.openDiscord')}</a>}
-                <span className="ml-auto flex items-center gap-1.5">
-                  <button type="button" className="row-act" title={t('d2.news.dup')} aria-label={t('d2.news.dup')} onClick={() => void copy(n)}><IconCopyPlus /></button>
-                  <button type="button" className="row-act row-act-danger" title={t('d2.news.delete')} aria-label={t('d2.news.delete')} onClick={() => void remove(n)}><IconTrash /></button>
+                <span className="ml-auto">
+                  <RowMenu label={`${t('adm.tbl.more')}: ${n.title}`} items={newsMenu(n)} />
                 </span>
               </div>
             </article>
@@ -153794,6 +153862,8 @@ html[data-motion='reduce'] :is(.btn, .btn-soft, .btn-outline, .btn-ghost, .btn-d
 /* header search: a round icon button on phones, a pill with the label and the shortcut from md up */
 .hdr-search { --b-px: 0; --b-fg: rgb(var(--mute)); --b-fg-h: rgb(var(--ink)); width: max(2.5rem, var(--tap, 0px)); height: max(2.5rem, var(--tap, 0px)); min-height: 2.5rem; padding: 0; justify-content: center; white-space: nowrap; }
 .hdr-search > svg { flex: none; }
+/* a row action that shows only while its row is hovered or focused (always on touch screens) */
+.row-act-hover { transition: opacity .15s ease; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/community.css" << '__COREGSM_EOF__'
@@ -155500,6 +155570,14 @@ a.tile:active, a.panel:active, button.tile:active, [role='link'].tile:active { t
 .auth-summary { display: flex; align-items: center; gap: 12px; margin: 0; padding: 7px 16px; border-radius: var(--r-pill); background: rgb(var(--card) / .8); box-shadow: inset 0 0 0 1px rgb(var(--line)); font-size: var(--fs-sm); font-weight: 650; color: rgb(var(--mute)); }
 .auth-summary b { color: rgb(var(--ink)); font-weight: 800; }
 .auth-summary > i { width: 4px; height: 4px; border-radius: 50%; background: rgb(var(--mute) / .6); }
+
+/* ---------- admin servers table: the poll button shows on hover, columns drop by priority as the table narrows ---------- */
+.adm-table tbody tr:not(:hover):not(:focus-within) .row-act-hover { opacity: 0; }
+@media (hover: none) { .adm-table .row-act-hover { opacity: 1 !important; } }
+.row-act-hover { transition: opacity .15s ease; }
+.tile.adm-tablewrap { container: admtbl / inline-size; }
+@container admtbl (max-width: 1180px) { .adm-c-h24 { display: none; } }
+@container admtbl (max-width: 980px) { .adm-c-up { display: none; } }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/profile.css" << '__COREGSM_EOF__'
@@ -157556,8 +157634,8 @@ export function ErrorLine({ text }: { text: string }) {
 }
 
 /** an empty list: the «empty» variant of StateView (kept under its old name, every page uses it) */
-export function Empty({ title, text, art, children }: { title: string; text: string; art?: ReactNode; children?: ReactNode }) {
-  return <StateView kind="empty" title={title} text={text} art={art}>{children}</StateView>;
+export function Empty({ title, text, art, compact = false, children }: { title: string; text: string; art?: ReactNode; compact?: boolean; children?: ReactNode }) {
+  return <StateView kind="empty" title={title} text={text} art={art} compact={compact}>{children}</StateView>;
 }
 
 /** Copies text to the clipboard; falls back to a dialog with the text selected where the Clipboard API is blocked. */

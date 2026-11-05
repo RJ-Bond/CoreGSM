@@ -354,3 +354,5 @@ html[data-motion='reduce'] :is(.btn, .btn-soft, .btn-outline, .btn-ghost, .btn-d
 /* header search: a round icon button on phones, a pill with the label and the shortcut from md up */
 .hdr-search { --b-px: 0; --b-fg: rgb(var(--mute)); --b-fg-h: rgb(var(--ink)); width: max(2.5rem, var(--tap, 0px)); height: max(2.5rem, var(--tap, 0px)); min-height: 2.5rem; padding: 0; justify-content: center; white-space: nowrap; }
 .hdr-search > svg { flex: none; }
+/* a row action that shows only while its row is hovered or focused (always on touch screens) */
+.row-act-hover { transition: opacity .15s ease; }

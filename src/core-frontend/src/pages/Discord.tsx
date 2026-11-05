@@ -4,7 +4,7 @@ import { DiscordWizard, computeWizard } from '../components/DiscordWizard';
 import DeliveryList from '../components/DeliveryList';
 import DiscordExtras from '../components/DiscordExtras';
 import PlayersShownCard from '../components/PlayersShownCard';
-import { DiscordArt } from '../components/Illustrations';
+
 import { t, useI18n } from '../i18n';
 import { Button, Empty, ErrorLine, Field, LoadError, GameAvatar, GoLink, IconDiscord, IconEdit, IconPause, IconPlay, IconTrash, InviteButton, Modal, Notice, PageHead, Strip, Switch, AdminPage, ago, toast, undoable, usePoll, navigate, errText } from '../ui';
 import { BotPill } from './Settings';
@@ -17,6 +17,13 @@ type Style = 'embed' | 'card' | 'both';
 interface Draft { id?: number; serverId: number; /** more servers shown in the same message (the main one is serverId) */ extraServerIds?: number[]; channelId: string; intervalSec: number; enabled: boolean; style: Style; layout?: 'detailed' | 'compact' | 'minimal' }
 
 /** the sub-route: «new» opens an empty binding form, «new/<serverId>» opens it with that server chosen */
+const DC_TABS = ['channels', 'look', 'extra', 'delivery'] as const;
+type DcTab = (typeof DC_TABS)[number];
+const TAB_KEY = 'coregsm_discord_tab';
+const readTab = (): DcTab => {
+  try { const v = sessionStorage.getItem(TAB_KEY); return (DC_TABS as readonly string[]).includes(v ?? '') ? (v as DcTab) : 'channels'; } catch { return 'channels'; }
+};
+
 export default function DiscordPage({ sub = '' }: { sub?: string }) {
   useI18n();
   const [servers, setServers] = useState<Server[]>([]);
@@ -28,6 +35,8 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
   const [bot, setBot] = useState<BotStatus | null>(null);
   const [guilds, setGuilds] = useState<DiscordGuild[]>([]);
   const [rechecking, setRechecking] = useState(false);
+  const [tab, setTab] = useState<DcTab>(readTab);
+  const pickTab = (x: DcTab) => { setTab(x); try { sessionStorage.setItem(TAB_KEY, x); } catch { /* not remembered */ } };
   const [wizardOpen, setWizardOpen] = useState(false);
   const [picked, setPicked] = useState<number[]>([]);
   // bindings removed with «Отменить» pending: hidden here until the request is really sent
@@ -187,6 +196,12 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
         </div>
       )}
 
+      <nav className="seg" aria-label={t('dc.tabs')}>
+        {DC_TABS.map((x) => <button key={x} type="button" className="seg-item" aria-current={tab === x ? 'page' : undefined} onClick={() => pickTab(x)}>{t(`dc.tab.${x}` as const)}</button>)}
+      </nav>
+
+      {tab === 'channels' && (
+        <>
       {loaded && settings && (!wizard.complete || wizardOpen) && (
         <DiscordWizard
           input={{ tokenSet: !!settings.discordTokenSet, bot, guilds, bindings, serverCount: servers.length }}
@@ -204,7 +219,7 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
       {!loaded && <div className="skeleton panel h-64" aria-busy="true" aria-label={t('dc.loading')} />}
 
       {loaded && settings && shown.length === 0 && (
-        <Empty art={<DiscordArt />} title={t('dc.none')} text={t('dc.noneText')}>
+        <Empty compact title={t('dc.none')} text={t('dc.noneText')}>
           {servers.length > 0
             ? <button className="btn mt-3" onClick={() => setDraft({ serverId: servers[0].id, channelId: '', intervalSec: 60, enabled: true, style: 'embed' })}>{t('dc.bind')}</button>
             : <a className="btn mt-3" href="/admin/servers/new">{t('dc.addFirst')}</a>}
@@ -299,11 +314,18 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
         })}
       </div>
 
-      <PlayersShownCard />
-      <WelcomeCard />
-      <DiscordStyleCard />
-      {loaded && <DiscordExtras servers={servers} />}
-      <DeliveryList />
+        </>
+      )}
+
+      {tab === 'look' && (
+        <>
+          <PlayersShownCard />
+          <WelcomeCard />
+          <DiscordStyleCard />
+        </>
+      )}
+      {tab === 'extra' && loaded && <DiscordExtras servers={servers} />}
+      {tab === 'delivery' && <DeliveryList />}
 
       {draft && (
         <BindingForm

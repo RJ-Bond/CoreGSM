@@ -36,8 +36,9 @@ export function spanText(ms: number): string {
   if (h < 48) return `${h} ч`;
   return `${Math.floor(h / 24)} дн`;
 }
+/** how long the state lasts: only for a server that does not answer (a working one needs no line) */
 const stateLine = (s: Server): string | null => {
-  if (s.maintenance || !s.hasStatus || !s.stateSince) return null;
+  if (s.maintenance || !s.hasStatus || !s.stateSince || s.online) return null;
   return `${s.online ? 'работает' : 'не отвечает'} · ${spanText(Date.now() - s.stateSince)}`;
 };
 const pct = (v: number | undefined) => (v == null ? '–' : `${(Math.round(v * 10) / 10).toLocaleString('ru-RU')}%`);
@@ -52,6 +53,10 @@ export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableA
   const toggleCol = (c: TableColumn) => setCols((l) => { const n = l.includes(c) ? l.filter((x) => x !== c) : TABLE_COLUMNS.filter((x) => x === c || l.includes(x)); saveColumns(n); return n; });
   const has = (c: TableColumn) => cols.includes(c);
   const [sel, setSel] = useState<number[]>([]);
+  const copyPicked = async () => {
+    const list = servers.filter((x) => sel.includes(x.id)).map((x) => `${x.name}\t${x.host}:${x.port}`).join('\n');
+    try { await navigator.clipboard.writeText(list); toast(t('adm.tbl.copiedAddrs', { n: sel.length })); } catch { toast(t('nw.copyFail'), 'err'); }
+  };
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState<number[]>([]);
   const [view, setView] = useState<'table' | 'cards'>(() => { try { return localStorage.getItem('coregsm_admin_srv_view') === 'cards' ? 'cards' : 'table'; } catch { return 'table'; } });
@@ -124,6 +129,7 @@ export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableA
         <div className="adm-bulk adm-bulk-float" role="region" aria-label={t('adm.tbl.selected')}>
           <b>{t('adm.tbl.picked', { n: picked.length })}</b>
           <button type="button" className="btn btn-soft btn-sm" disabled={busy} onClick={() => void many(a.onRefreshMany)}>{t('adm.tbl.poll')}</button>
+          <button type="button" className="btn btn-soft btn-sm" onClick={() => void copyPicked()}>{t('adm.tbl.copyAddrs')}</button>
           {a.isAdmin && <button type="button" className="btn btn-danger btn-sm" disabled={busy} onClick={() => void removeMany()}>{t('adm.srv.delete')}</button>}
           <button type="button" className="btn btn-ghost btn-sm ml-auto" onClick={() => setSel([])}>{t('adm.tbl.clear')}</button>
         </div>
@@ -148,8 +154,8 @@ export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableA
                   {has('map') && <th>{t('adm.col.map')}</th>}
                   {has('version') && <th>{t('adm.col.version')}</th>}
                   {has('channels') && <th>{t('adm.col.channels')}</th>}
-                  {has('uptime') && <th>{t('adm.tbl.uptime')}</th>}
-                  {has('h24') && <th>{t('adm.tbl.h24')}</th>}
+                  {has('uptime') && <th className="adm-c-up">{t('adm.tbl.uptime')}</th>}
+                  {has('h24') && <th className="adm-c-h24">{t('adm.tbl.h24')}</th>}
                   {has('updated') && <th>{t('adm.col.updated')}</th>}
                   <th aria-label={t('adm.tbl.actions')} />
                 </tr>
@@ -180,13 +186,13 @@ export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableA
                     {has('map') && <td className="max-w-40 truncate text-mute" title={s.map ?? undefined}>{s.online && s.map ? s.map : '—'}</td>}
                     {has('version') && <td className="max-w-32 truncate font-mono text-xs text-mute" title={s.version ?? undefined}>{s.version || '—'}</td>}
                     {has('channels') && <td className="tabular-nums"><a href="/admin/discord" className="text-link hover:underline">{a.bindings.get(s.id) ?? 0}</a></td>}
-                    {has('uptime') && <td className="tabular-nums">{pct(a.uptime.get(s.id))}</td>}
-                    {has('h24') && <td><MiniSpark serverId={s.id} color={gameColor(s.game)} /></td>}
+                    {has('uptime') && <td className="adm-c-up tabular-nums">{pct(a.uptime.get(s.id))}</td>}
+                    {has('h24') && <td className="adm-c-h24"><MiniSpark serverId={s.id} color={gameColor(s.game)} /></td>}
                     {has('updated') && <td className="text-mute">{ago(s.updatedAt)}</td>}
                     <td>
                       <div className="flex items-center justify-end gap-1" role="group" aria-label={`${t('adm.tbl.actions')}: ${s.name}`}>
-                        <button type="button" className="btn btn-soft btn-sm" aria-label={`${t('adm.tbl.edit')}: ${s.name}`} onClick={() => a.onEdit(s)}><IconEdit /><span>{t('adm.tbl.edit')}</span></button>
-                        <button type="button" className="row-act" title={t('adm.tbl.poll')} aria-label={`${t('adm.tbl.poll')}: ${s.name}`} onClick={() => a.onRefresh(s)} disabled={a.busyId === s.id} aria-busy={a.busyId === s.id || undefined}>
+                        <button type="button" className="row-act" title={t('adm.tbl.edit')} aria-label={`${t('adm.tbl.edit')}: ${s.name}`} onClick={() => a.onEdit(s)}><IconEdit /></button>
+                        <button type="button" className="row-act row-act-hover" title={t('adm.tbl.poll')} aria-label={`${t('adm.tbl.poll')}: ${s.name}`} onClick={() => a.onRefresh(s)} disabled={a.busyId === s.id} aria-busy={a.busyId === s.id || undefined}>
                           <IconRefresh spinning={a.busyId === s.id} />
                         </button>
                         <RowMenu label={`${t('adm.tbl.more')}: ${s.name}`} items={menuItems(s)} />

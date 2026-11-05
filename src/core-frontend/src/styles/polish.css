@@ -176,3 +176,11 @@ a.tile:active, a.panel:active, button.tile:active, [role='link'].tile:active { t
 .auth-summary { display: flex; align-items: center; gap: 12px; margin: 0; padding: 7px 16px; border-radius: var(--r-pill); background: rgb(var(--card) / .8); box-shadow: inset 0 0 0 1px rgb(var(--line)); font-size: var(--fs-sm); font-weight: 650; color: rgb(var(--mute)); }
 .auth-summary b { color: rgb(var(--ink)); font-weight: 800; }
 .auth-summary > i { width: 4px; height: 4px; border-radius: 50%; background: rgb(var(--mute) / .6); }
+
+/* ---------- admin servers table: the poll button shows on hover, columns drop by priority as the table narrows ---------- */
+.adm-table tbody tr:not(:hover):not(:focus-within) .row-act-hover { opacity: 0; }
+@media (hover: none) { .adm-table .row-act-hover { opacity: 1 !important; } }
+.row-act-hover { transition: opacity .15s ease; }
+.tile.adm-tablewrap { container: admtbl / inline-size; }
+@container admtbl (max-width: 1180px) { .adm-c-h24 { display: none; } }
+@container admtbl (max-width: 980px) { .adm-c-up { display: none; } }

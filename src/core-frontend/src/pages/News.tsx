@@ -5,7 +5,8 @@ import { NewsCalendar } from '../components/news/Calendar';
 import { confirmDialog } from '../confirm';
 import { api, ApiError, type NewsItem, type NewsSettings } from '../api';
 import { ChannelName, ChannelPicker } from '../components/ChannelPicker';
-import { AdminPage, Empty, ErrorLine, LoadError, IconCopyPlus, IconNews, IconTrash, PageHead, Strip, fmtDateTime, toast, undoable, usePoll, navigate, errText } from '../ui';
+import RowMenu, { type RowMenuItem } from '../components/RowMenu';
+import { AdminPage, Empty, ErrorLine, LoadError, IconNews, PageHead, Strip, fmtDateTime, toast, undoable, usePoll, navigate, errText } from '../ui';
 import NewsEditor, { TEMPLATES } from './NewsEditor';
 import { newsImage } from '../components/news/newsLogic';
 import { NewsStatsModal } from '../components/news/NewsStats';
@@ -49,6 +50,7 @@ function NewsList() {
   const [settings, setSettings] = useState<NewsSettings | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [stats, setStats] = useState<{ id: number; title: string } | null>(null);
+  const [quickAll, setQuickAll] = useState(false);
   const [error, setError] = useState('');
   const [changing, setChanging] = useState(false);
   const [picked, setPicked] = useState<number[]>([]);
@@ -114,6 +116,14 @@ function NewsList() {
       .catch((e) => setError(e.message));
     void load();
   };
+  /** what used to be five equal buttons on a card: the rest of the actions sit in a «⋯» menu */
+  const newsMenu = (n: NewsItem): RowMenuItem[] => [
+    { key: 'dup', label: t('d2.news.dup'), onSelect: () => void copy(n) },
+    { key: 'pin', label: n.pinned ? t('d2.news.unpin') : t('d2.news.pin'), onSelect: () => void togglePin(n) },
+    ...(['sent', 'edit_queued'].includes(n.status) ? [{ key: 'stats', label: t('d2.news.stats'), onSelect: () => setStats({ id: n.id, title: n.title }) }] : []),
+    ...(n.messageUrl ? [{ key: 'discord', label: t('d2.news.openDiscord'), href: n.messageUrl }] : []),
+    { key: 'del', label: t('d2.news.delete'), onSelect: () => void remove(n), danger: true, sep: true },
+  ];
   const togglePin = async (n: NewsItem) => {
     await api(`/news/${n.id}/pin`, 'PATCH', { pinned: !n.pinned }).then(() => toast(n.pinned ? t('d2.news.t.unpinned') : t('d2.news.t.pinnedTop'))).catch((e) => setError(e.message));
     void load();
@@ -182,7 +192,12 @@ function NewsList() {
 
       <Strip className="justify-start!">
         <span className="mr-1 text-sm font-extrabold text-mute">{t('d2.news.quick')}</span>
-        {TEMPLATES.map((t) => <a key={t.id} className="btn btn-soft btn-sm" href={`/admin/news/new/${t.id}`}>{t.label}</a>)}
+        {(quickAll ? TEMPLATES : TEMPLATES.slice(0, 4)).map((tpl) => <a key={tpl.id} className="btn btn-soft btn-sm" href={`/admin/news/new/${tpl.id}`}>{tpl.label}</a>)}
+        {TEMPLATES.length > 4 && (
+          <button type="button" className="btn btn-ghost btn-sm" aria-expanded={quickAll} onClick={() => setQuickAll((v) => !v)}>
+            {quickAll ? t('d2.news.quickLess') : t('d2.news.quickMore', { n: TEMPLATES.length - 4 })}
+          </button>
+        )}
       </Strip>
 
       <Strip>
@@ -292,16 +307,11 @@ function NewsList() {
                 </p>
               )}
               {n.error && <p className="rounded-xl bg-badbg px-3 py-2 text-sm font-bold text-bad">{n.error}</p>}
-              <div className="mt-auto flex flex-wrap gap-2 pt-1">
+              <div className="mt-auto flex flex-wrap items-center gap-2 pt-1">
                 <a className="btn btn-soft btn-sm" href={`/admin/news/${n.id}`}>{t('d2.news.change')}</a>
-                <button className="btn btn-soft btn-sm" onClick={() => void copy(n)}>{t('d2.news.dup')}</button>
-                <button className="btn btn-soft btn-sm" aria-pressed={!!n.pinned} onClick={() => void togglePin(n)}>{n.pinned ? t('d2.news.unpin') : t('d2.news.pin')}</button>
                 {['draft', 'scheduled', 'error'].includes(n.status) && <button className="btn btn-soft btn-sm" onClick={() => publish(n)}>{t('d2.news.publishNow')}</button>}
-                {['sent', 'edit_queued'].includes(n.status) && <button className="btn btn-soft btn-sm" onClick={() => setStats({ id: n.id, title: n.title })}>{t('d2.news.stats')}</button>}
-                {n.messageUrl && <a className="btn btn-soft btn-sm" href={n.messageUrl} target="_blank" rel="noreferrer">{t('d2.news.openDiscord')}</a>}
-                <span className="ml-auto flex items-center gap-1.5">
-                  <button type="button" className="row-act" title={t('d2.news.dup')} aria-label={t('d2.news.dup')} onClick={() => void copy(n)}><IconCopyPlus /></button>
-                  <button type="button" className="row-act row-act-danger" title={t('d2.news.delete')} aria-label={t('d2.news.delete')} onClick={() => void remove(n)}><IconTrash /></button>
+                <span className="ml-auto">
+                  <RowMenu label={`${t('adm.tbl.more')}: ${n.title}`} items={newsMenu(n)} />
                 </span>
               </div>
             </article>

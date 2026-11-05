@@ -18,6 +18,7 @@ export default function DiscordStyleCard() {
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
   const [width, setWidth] = useState<'desktop' | 'phone'>('desktop');
   const [group, setGroup] = useState<(typeof GROUPS)[number]>('servers');
+  const [pickId, setPickId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const loadGallery = () => api<{ items: Sample[] }>('/admin/discord-gallery').then((r) => setItems(r.items)).catch(() => setItems([]));
@@ -45,6 +46,8 @@ export default function DiscordStyleCard() {
   };
 
   const shown = (items ?? []).filter((x) => x.group === group);
+  // one sample at a time: a row of small buttons picks which one is drawn
+  const cur = shown.find((x) => x.id === pickId) ?? shown[0];
   return (
     <Section title={t('ds.title')} description={t('ds.help')}>
       <div className="grid gap-4 sm:grid-cols-2">
@@ -74,8 +77,15 @@ export default function DiscordStyleCard() {
         <button type="button" className="btn-link" onClick={() => setWidth(width === 'desktop' ? 'phone' : 'desktop')}>{width === 'desktop' ? t('ds.phone') : t('ds.desktop')}</button>
       </div>
       {items === null && <div className="skeleton h-40 rounded-2xl bg-soft" aria-hidden />}
+      {shown.length > 1 && (
+        <div className="mb-3 flex flex-wrap gap-2" role="group" aria-label={t('ds.pick')}>
+          {shown.map((x) => (
+            <button key={x.id} type="button" className={`chip-filter ${cur?.id === x.id ? 'on' : ''}`} aria-pressed={cur?.id === x.id} onClick={() => setPickId(x.id)}>{x.title}</button>
+          ))}
+        </div>
+      )}
       <div className="space-y-5">
-        {shown.map((x) => (
+        {(cur ? [cur] : []).map((x) => (
           <figure key={x.id}>
             <figcaption className="mb-1 text-sm font-extrabold text-mute">{x.title}</figcaption>
             <EmbedView embed={Object.keys(x.embed).length ? x.embed : null} content={x.content} theme={theme} width={width}>

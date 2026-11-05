@@ -232,8 +232,8 @@ export function ErrorLine({ text }: { text: string }) {
 }
 
 /** an empty list: the «empty» variant of StateView (kept under its old name, every page uses it) */
-export function Empty({ title, text, art, children }: { title: string; text: string; art?: ReactNode; children?: ReactNode }) {
-  return <StateView kind="empty" title={title} text={text} art={art}>{children}</StateView>;
+export function Empty({ title, text, art, compact = false, children }: { title: string; text: string; art?: ReactNode; compact?: boolean; children?: ReactNode }) {
+  return <StateView kind="empty" title={title} text={text} art={art} compact={compact}>{children}</StateView>;
 }
 
 /** Copies text to the clipboard; falls back to a dialog with the text selected where the Clipboard API is blocked. */
