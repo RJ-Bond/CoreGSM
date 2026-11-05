@@ -133,6 +133,16 @@ export function registerBotExtras(deps: { app: Express; admin: RequestHandler; i
     res.json({ status: 'ok', on: b.data.on, name: nick });
   });
 
+  // the latest punishments for the administrators (/help → Moderation); the bot checks the rights
+  app.get('/internal/discord/cases', internal, (req, res) => {
+    const guild = String(req.query.guildId ?? '');
+    const limit = Math.min(20, Math.max(1, Number(req.query.limit) || 8));
+    const rows = (/^\d{15,25}$/.test(guild)
+      ? db.prepare('SELECT kind, user_name, mod_name, reason, created_at FROM mod_cases WHERE guild_id = ? ORDER BY id DESC LIMIT ?').all(guild, limit)
+      : db.prepare('SELECT kind, user_name, mod_name, reason, created_at FROM mod_cases ORDER BY id DESC LIMIT ?').all(limit)) as { kind: string; user_name: string; mod_name: string; reason: string; created_at: number }[];
+    res.json({ cases: rows.map((r) => ({ kind: r.kind, userName: r.user_name, modName: r.mod_name, reason: r.reason, at: r.created_at })) });
+  });
+
   // ----- dashboard -----
   const payload = () => {
     const s = dashboardSettings();

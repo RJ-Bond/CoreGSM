@@ -40,7 +40,7 @@ async function suggestions(u: User): Promise<{ label: string; value: string }[]>
 }
 
 /** the first screen: where the person is now and what to press */
-async function startScreen(u: User): Promise<Reply> {
+export async function startScreen(u: User): Promise<Reply> {
   const [card, options] = await Promise.all([loadCard(u).catch(() => null), suggestions(u)]);
   const has = !!card?.gameNick;
   const e = new EmbedBuilder()

@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="d3c20c836c5c"
+COREGSM_BUILD="a49a86f7a3d4"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.45"
+COREGSM_VERSION="1.1.46"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -20627,6 +20627,144 @@ export function resultsText(rows: TallyRow[], total: number): string {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/community"
+  cat > "$APP_DIR/core-backend/src/community/faq.ts" << '__COREGSM_EOF__'
+/**
+ * Auto-answers of the bot (FAQ): the administrator writes questions with keywords and answers in the panel; the bot answers
+ * /faq (with suggestions) and, when somebody mentions it in a question, the answer whose keywords fit.
+ *
+ *   GET|POST /api/faq, PUT|DELETE /api/faq/:id, PUT /api/settings/faq   (admin)
+ *   POST /internal/faq/match, GET /internal/faq/suggest, GET /internal/faq/:id   (the bot)
+ */
+import type { Express, RequestHandler } from 'express';
+import { z } from 'zod';
+import { db, getSetting, setSetting } from '../db.js';
+import { MAX_ANSWER, matchFaq, parseKeywords, type FaqEntry } from './faqLogic.js';
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS faq (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  title TEXT NOT NULL,
+  keywords TEXT NOT NULL DEFAULT '[]',
+  answer TEXT NOT NULL,
+  hits INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL
+);
+`);
+
+interface Row { id: number; title: string; keywords: string; answer: string; hits: number; created_at: number }
+const entry = (r: Row): FaqEntry => ({ id: r.id, title: r.title, keywords: JSON.parse(r.keywords) as string[], answer: r.answer });
+const all = (): FaqEntry[] => (db.prepare('SELECT * FROM faq ORDER BY id').all() as Row[]).map(entry);
+export const faqEnabled = (): boolean => getSetting('faq_enabled') !== '0';
+
+const body = z.object({ title: z.string().trim().min(2).max(100), keywords: z.string().max(1000), answer: z.string().trim().min(2).max(MAX_ANSWER) });
+
+export function registerFaq(deps: { app: Express; admin: RequestHandler; internal: RequestHandler }): void {
+  const { app, admin, internal } = deps;
+  const list = () => ({ enabled: faqEnabled(), items: (db.prepare('SELECT * FROM faq ORDER BY id').all() as Row[]).map((r) => ({ ...entry(r), hits: r.hits })) });
+
+  app.get('/api/faq', admin, (_req, res) => res.json(list()));
+  app.post('/api/faq', admin, (req, res) => {
+    const b = body.safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'Вопрос — от 2 до 100 символов, ответ — от 2 до 1500' });
+    if ((db.prepare('SELECT COUNT(*) AS n FROM faq').get() as { n: number }).n >= 100) return res.status(400).json({ error: 'Можно хранить не больше 100 ответов' });
+    db.prepare('INSERT INTO faq (title, keywords, answer, created_at) VALUES (?, ?, ?, ?)').run(b.data.title, JSON.stringify(parseKeywords(b.data.keywords)), b.data.answer, Date.now());
+    res.json(list());
+  });
+  app.put('/api/faq/:id', admin, (req, res) => {
+    const b = body.safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'Вопрос — от 2 до 100 символов, ответ — от 2 до 1500' });
+    const r = db.prepare('UPDATE faq SET title = ?, keywords = ?, answer = ? WHERE id = ?').run(b.data.title, JSON.stringify(parseKeywords(b.data.keywords)), b.data.answer, Number(req.params.id));
+    if (!r.changes) return res.status(404).json({ error: 'Не найдено' });
+    res.json(list());
+  });
+  app.delete('/api/faq/:id', admin, (req, res) => {
+    db.prepare('DELETE FROM faq WHERE id = ?').run(Number(req.params.id));
+    res.json(list());
+  });
+  app.put('/api/settings/faq', admin, (req, res) => {
+    const b = z.object({ enabled: z.boolean() }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'bad body' });
+    setSetting('faq_enabled', b.data.enabled ? '1' : '0');
+    res.json(list());
+  });
+
+  // the bot
+  app.post('/internal/faq/match', internal, (req, res) => {
+    const b = z.object({ text: z.string().max(500) }).safeParse(req.body);
+    if (!b.success || !faqEnabled()) return res.status(404).json({ error: 'none' });
+    const e = matchFaq(b.data.text, all());
+    if (!e) return res.status(404).json({ error: 'none' });
+    db.prepare('UPDATE faq SET hits = hits + 1 WHERE id = ?').run(e.id);
+    res.json({ id: e.id, title: e.title, answer: e.answer });
+  });
+  app.get('/internal/faq/suggest', internal, (req, res) => {
+    const q = String(req.query.q ?? '').toLowerCase().slice(0, 60);
+    const items = all()
+      .filter((e) => !q || e.title.toLowerCase().includes(q) || e.keywords.some((k) => k.includes(q)))
+      .slice(0, 25)
+      .map((e) => ({ name: e.title.slice(0, 100), value: String(e.id) }));
+    res.json({ items: faqEnabled() ? items : [] });
+  });
+  app.get('/internal/faq/:id', internal, (req, res) => {
+    const r = db.prepare('SELECT * FROM faq WHERE id = ?').get(Number(req.params.id)) as Row | undefined;
+    if (!r || !faqEnabled()) return res.status(404).json({ error: 'none' });
+    db.prepare('UPDATE faq SET hits = hits + 1 WHERE id = ?').run(r.id);
+    res.json({ id: r.id, title: r.title, answer: r.answer });
+  });
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/community"
+  cat > "$APP_DIR/core-backend/src/community/faqLogic.ts" << '__COREGSM_EOF__'
+/** The auto-answers of the bot (FAQ): keywords of an entry, which entry fits a question. Pure. */
+
+export interface FaqEntry {
+  id: number;
+  title: string;
+  keywords: string[];
+  answer: string;
+}
+
+export const MAX_KEYWORDS = 20;
+export const MAX_ANSWER = 1500;
+
+/** lower case, «ё» as «е», punctuation as spaces, single spaces */
+export const normalize = (s: string): string => s.toLowerCase().replace(/ё/g, 'е').replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+
+/** keywords from a comma or line separated text: 2..40 characters each, distinct, at most 20 */
+export function parseKeywords(raw: string | string[]): string[] {
+  const parts = Array.isArray(raw) ? raw : raw.split(/[,\n;]/);
+  const out: string[] = [];
+  for (const p of parts) {
+    const k = normalize(String(p));
+    if (k.length >= 2 && k.length <= 40 && !out.includes(k)) out.push(k);
+    if (out.length >= MAX_KEYWORDS) break;
+  }
+  return out;
+}
+
+/**
+ * The entry whose keywords appear in the text (as whole words or phrases): more matching keywords win, then the longer ones.
+ * Nothing when nothing fits or the text is too short to mean anything.
+ */
+export function matchFaq(text: string, list: FaqEntry[]): FaqEntry | null {
+  const t = ` ${normalize(text)} `;
+  if (t.trim().length < 3) return null;
+  let best: { e: FaqEntry; hits: number; len: number } | null = null;
+  for (const e of list) {
+    let hits = 0;
+    let len = 0;
+    for (const k of e.keywords) {
+      if (t.includes(` ${k} `)) {
+        hits++;
+        len = Math.max(len, k.length);
+      }
+    }
+    if (hits && (!best || hits > best.hits || (hits === best.hits && len > best.len))) best = { e, hits, len };
+  }
+  return best?.e ?? null;
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/community"
   cat > "$APP_DIR/core-backend/src/community/moderation.ts" << '__COREGSM_EOF__'
 /**
  * Settings and records of the moderation commands of the bot (/clear, /ban, /unban, /kick, /warn, the context menus):
@@ -22390,6 +22528,16 @@ export function registerBotExtras(deps: { app: Express; admin: RequestHandler; i
       db.prepare('DELETE FROM player_follows WHERE user_id = ? AND nick_key = ?').run(u.id, key);
     }
     res.json({ status: 'ok', on: b.data.on, name: nick });
+  });
+
+  // the latest punishments for the administrators (/help → Moderation); the bot checks the rights
+  app.get('/internal/discord/cases', internal, (req, res) => {
+    const guild = String(req.query.guildId ?? '');
+    const limit = Math.min(20, Math.max(1, Number(req.query.limit) || 8));
+    const rows = (/^\d{15,25}$/.test(guild)
+      ? db.prepare('SELECT kind, user_name, mod_name, reason, created_at FROM mod_cases WHERE guild_id = ? ORDER BY id DESC LIMIT ?').all(guild, limit)
+      : db.prepare('SELECT kind, user_name, mod_name, reason, created_at FROM mod_cases ORDER BY id DESC LIMIT ?').all(limit)) as { kind: string; user_name: string; mod_name: string; reason: string; created_at: number }[];
+    res.json({ cases: rows.map((r) => ({ kind: r.kind, userName: r.user_name, modName: r.mod_name, reason: r.reason, at: r.created_at })) });
   });
 
   // ----- dashboard -----
@@ -25547,6 +25695,7 @@ import { registerModeration } from './community/moderation.js';
 import { registerWelcome } from './community/welcome.js';
 import { registerDmQueue } from './alerts/dmQueue.js';
 import { registerBotExtras, startWeekly } from './discord/botExtras.js';
+import { registerFaq } from './community/faq.js';
 import { registerRules } from './monitoring/rules.js';
 import { registerPolls } from './community/polls.js';
 import { registerDiscordGallery } from './discord/discordGallery.js';
@@ -25731,6 +25880,7 @@ registerAnnouncements({ app, admin });
 registerWelcome({ app, admin, internal });
 registerDmQueue({ app, auth, internal, userId: (req) => (req as AuthedRequest).user!.id });
 registerBotExtras({ app, admin, internal });
+registerFaq({ app, admin, internal });
 startWeekly();
 registerModeration({ app, admin, internal });
 registerRules({ app, auth, admin });
@@ -40555,12 +40705,14 @@ import { ActionRowBuilder, AttachmentBuilder, ButtonBuilder, ButtonStyle, EmbedB
 import { backend, backendJson } from './backend.js';
 import { CLEAR_GUIDE_FIELDS, CLEAR_GUIDE_FIELDS_EN } from './clearGuide.js';
 import { followButton } from './follow.js';
-import { BLURB, CATEGORIES, CMDS, categoryOf, cmdInfo, langOf, liveLine, meLine, shortItem, suggestCommands, tx, visibleCategories, type Category, type ChangelogAnswer, type CmdInfo, type Lang, type Live, type MeLike } from './helpData.js';
+import { BLURB, CATEGORIES, CMDS, categoryOf, cmdInfo, langOf, liveLine, meLine, shortItem, shortText, suggestCommands, tx, visibleCategories, type Category, type ChangelogAnswer, type CmdInfo, type Lang, type Live, type MeLike } from './helpData.js';
 import { log } from './log.js';
 import { COLORS, replyEmbed } from './replies.js';
 import { footerOf, getStyle } from './style.js';
 import { healthColor, panelRow, stamped } from './ui.js';
 import { onlineEmbed, topEmbed, type OnlineData, type TopData } from './info.js';
+import { serverLine } from './dashboardLogic.js';
+import { startScreen } from './link.js';
 
 export const HELP_COMMANDS = [
   {
@@ -40601,13 +40753,14 @@ export interface HelpCtx {
   news?: ChangelogAnswer | null;
 }
 
-export const liveOf = (d: OnlineData | null): Live | null => (d ? { players: d.players, up: d.servers.filter((s) => s.online).length, total: d.servers.length } : null);
+export const liveOf = (d: OnlineData | null): Live | null => (d ? { players: d.players, up: d.servers.filter((s) => s.online).length, total: d.servers.length, servers: d.servers } : null);
 
 // ---------- the cards ----------
-const lineOf = (c: CmdInfo, lang: Lang) => `\`${c.cmd}\` — ${c.text[lang]}`;
-const brand = (e: EmbedBuilder): EmbedBuilder => {
+const lineOf = (c: CmdInfo, lang: Lang) => `▸ \`${c.cmd}\` — ${shortText(c.text[lang])}`;
+/** the logo as a big picture only on the first screen: beside a list it squeezes the text into a narrow column */
+const brand = (e: EmbedBuilder, thumb = false): EmbedBuilder => {
   const logo = getStyle().logoUrl;
-  if (logo) e.setThumbnail(logo);
+  if (thumb && logo) e.setThumbnail(logo);
   return stamped(e.setFooter(footerOf()));
 };
 
@@ -40618,7 +40771,7 @@ export function helpEmbed(category: string | null, ctx: HelpCtx): EmbedBuilder {
   if (!cat || (cat.admin && !ctx.admin)) {
     const status = [ctx.live ? liveLine(ctx.live, lang) : '', meLine(ctx.me, lang)].filter(Boolean).join('\n');
     const list = visibleCategories(ctx.admin).filter((c) => c.id !== 'modclr').map((c) => `${c.emoji} **${c.label[lang]}** — ${BLURB[c.id]?.[lang] ?? ''}`).join('\n');
-    return brand(new EmbedBuilder().setTitle(tx('title', lang)).setDescription(`${status ? `${status}\n\n` : ''}${tx('intro', lang)}\n\n${list}`).setColor(ctx.live ? healthColor(ctx.live.up, ctx.live.total) : getStyle().accent));
+    return brand(new EmbedBuilder().setTitle(tx('title', lang)).setDescription(`${status ? `${status}\n\n` : ''}${tx('intro', lang)}\n\n${list}`).setColor(ctx.live ? healthColor(ctx.live.up, ctx.live.total) : getStyle().accent), true);
   }
   const e = new EmbedBuilder().setTitle(`${cat.emoji} ${cat.title[lang]}`).setColor(cat.color);
   if (cat.id === 'modclr') return brand(e.addFields(lang === 'en' ? CLEAR_GUIDE_FIELDS_EN : CLEAR_GUIDE_FIELDS));
@@ -40629,9 +40782,13 @@ export function helpEmbed(category: string | null, ctx: HelpCtx): EmbedBuilder {
     return brand(e.setDescription(lines ? lines.slice(0, 3900) : tx('noNews', lang)));
   }
   const lines = cat.cmds.map((c) => cmdInfo(c)).filter((c): c is CmdInfo => !!c).map((c) => lineOf(c, lang));
-  for (const x of cat.extra ?? []) lines.push(`\`${x.cmd}\` — ${x.text[lang]}`);
-  const head = cat.id === 'srv' && ctx.live ? `${liveLine(ctx.live, lang)}\n\n` : '';
-  return brand(e.setDescription(head + lines.join('\n')));
+  for (const x of cat.extra ?? []) lines.push(`▸ \`${x.cmd}\` — ${shortText(x.text[lang])}`);
+  let head = '';
+  if (cat.id === 'srv' && ctx.live) {
+    const list = (ctx.live.servers ?? []).slice(0, 8).map(serverLine).join('\n');
+    head = `${liveLine(ctx.live, lang)}\n${list ? `${list}\n` : ''}\n`;
+  }
+  return brand(e.setDescription(`${head}${lines.join('\n')}\n\n${tx('noAnswer', lang)}`));
 }
 
 /** the details of one command */
@@ -40651,8 +40808,20 @@ export function commandEmbed(c: CmdInfo, lang: Lang): EmbedBuilder {
 }
 
 // ---------- the controls ----------
-/** the menu of sections and the row of buttons under a card */
-export function helpComponents(active: string, ctx: Pick<HelpCtx, 'lang' | 'admin' | 'supportUrl'>): ActionRowBuilder<StringSelectMenuBuilder | ButtonBuilder>[] {
+/** the buttons that belong to one section (a second row under the menu) */
+function sectionButtons(active: string, ctx: Pick<HelpCtx, 'lang' | 'admin'>): ButtonBuilder[] {
+  const { lang } = ctx;
+  if (active === 'play') return [new ButtonBuilder().setCustomId('help:act:link').setLabel(tx('linkNick', lang)).setEmoji('🔗').setStyle(ButtonStyle.Success)];
+  if (active === 'stat') return [
+    new ButtonBuilder().setCustomId('help:act:top').setLabel(tx('topWeek', lang)).setEmoji('🏆').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('help:act:topm').setLabel(tx('topMonth', lang)).setEmoji('🏅').setStyle(ButtonStyle.Secondary),
+  ];
+  if (active === 'mod' && ctx.admin) return [new ButtonBuilder().setCustomId('help:act:cases').setLabel(tx('cases', lang)).setEmoji('📋').setStyle(ButtonStyle.Secondary)];
+  return [];
+}
+
+/** the menu of sections, the buttons of the section and the navigation row under a card */
+export function helpComponents(active: string, ctx: Pick<HelpCtx, 'lang' | 'admin' | 'supportUrl'> & { live?: Live | null }): ActionRowBuilder<StringSelectMenuBuilder | ButtonBuilder>[] {
   const { lang } = ctx;
   const menu = new StringSelectMenuBuilder()
     .setCustomId('help:pick')
@@ -40661,18 +40830,32 @@ export function helpComponents(active: string, ctx: Pick<HelpCtx, 'lang' | 'admi
       { label: tx('home', lang), value: 'home', emoji: '🏠', description: tx('homeDesc', lang), default: active === 'home' },
       ...visibleCategories(ctx.admin).map((c) => ({ label: c.label[lang], value: c.id, emoji: c.emoji, description: (BLURB[c.id]?.[lang] ?? '').slice(0, 100), default: active === c.id })),
     );
-  const btns: ButtonBuilder[] =
+  const rows: ActionRowBuilder<StringSelectMenuBuilder | ButtonBuilder>[] = [new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(menu)];
+  // «Servers»: a menu with the servers, a pick opens the card
+  const servers = (ctx.live?.servers ?? []).slice(0, 25);
+  if (active === 'srv' && servers.length) {
+    rows.push(
+      new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+        new StringSelectMenuBuilder().setCustomId('help:card').setPlaceholder(tx('openCard', lang)).addOptions(servers.map((s) => ({ label: (s.name || `#${s.id}`).slice(0, 100), value: String(s.id), emoji: s.online ? '🟢' : '🔴' }))),
+      ),
+    );
+  }
+  const extra = sectionButtons(active, ctx);
+  if (extra.length) rows.push(row(...extra));
+  const nav: ButtonBuilder[] =
     active === 'home'
       ? [
           new ButtonBuilder().setCustomId('help:act:online').setLabel(tx('online', lang)).setEmoji('📡').setStyle(ButtonStyle.Success),
           new ButtonBuilder().setCustomId('help:act:top').setLabel(tx('top', lang)).setEmoji('🏆').setStyle(ButtonStyle.Primary),
         ]
-      : [new ButtonBuilder().setCustomId('help:home').setLabel(tx('home', lang)).setEmoji('🏠').setStyle(ButtonStyle.Primary)];
+      : [new ButtonBuilder().setCustomId('help:home').setLabel(`‹ ${tx('back', lang)}`).setStyle(ButtonStyle.Primary)];
   const links = panelRow([{ label: `🌐 ${tx('panel', lang)}`, path: '/' }])[0];
-  if (links) btns.push(...(links.components as ButtonBuilder[]));
-  if (ctx.supportUrl) btns.push(new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel(`💬 ${tx('support', lang)}`).setURL(ctx.supportUrl));
-  btns.push(new ButtonBuilder().setCustomId('help:close').setEmoji('✖️').setStyle(ButtonStyle.Secondary));
-  return [new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(menu), row(...btns.slice(0, 5))] as never;
+  if (links) nav.push(...(links.components as ButtonBuilder[]));
+  if (ctx.supportUrl) nav.push(new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel(`💬 ${tx('support', lang)}`).setURL(ctx.supportUrl));
+  // a plain word: the dark cross emoji is almost invisible on a grey button
+  nav.push(new ButtonBuilder().setCustomId('help:close').setLabel(tx('close', lang)).setStyle(ButtonStyle.Secondary));
+  rows.push(row(...nav.slice(0, 5)));
+  return rows;
 }
 
 export const helpView = (category: string | null, ctx: HelpCtx) => {
@@ -40750,6 +40933,29 @@ async function serversScreen(): Promise<{ embeds: EmbedBuilder[]; components: Ac
   return { embeds: [stamped(e)], components: serverButtons(data.servers), files: [] };
 }
 
+/** the picture card of a server with the buttons «back» and «follow» */
+async function serverCardReply(id: number) {
+  const r = await backend(`/internal/card/${id}.png`);
+  if (!r.ok) {
+    return { ...replyEmbed(r.status === 404 ? 'Сервер не найден' : 'Не получилось', r.status === 404 ? 'Возможно, его удалили. Вернитесь к списку.' : 'Панель сейчас не отвечает. Попробуйте чуть позже.', COLORS.warn), components: [backButton()], attachments: [] as never[] };
+  }
+  const file = new AttachmentBuilder(Buffer.from(await r.arrayBuffer()), { name: `server-${id}.png` });
+  return { embeds: [] as EmbedBuilder[], files: [file], components: [backButton(id)] };
+}
+
+interface CaseRow { kind: string; userName: string; modName: string; reason: string; at: number }
+const CASE_EMOJI: Record<string, string> = { warn: '⚠️', ban: '🔨', unban: '🔓', kick: '👢', timeout: '🔇', unmute: '🔊', appeal: '📨' };
+
+/** «Latest punishments» for the administrators */
+async function casesReply(i: { guildId?: string | null }, ctx: HelpCtx) {
+  const { lang } = ctx;
+  const q = new URLSearchParams({ limit: '8', ...(i.guildId ? { guildId: i.guildId } : {}) });
+  const { data } = await backendJson<{ cases: CaseRow[] }>(`/internal/discord/cases?${q.toString()}`);
+  const lines = (data?.cases ?? []).map((c) => `${CASE_EMOJI[c.kind] ?? '•'} **${c.userName || '?'}** — ${(c.reason || '—').slice(0, 80)} · <t:${Math.floor(c.at / 1000)}:R>`);
+  const e = new EmbedBuilder().setTitle(tx('casesTitle', lang)).setColor(0xef4444).setDescription(data ? lines.join('\n') || tx('noCases', lang) : tx('panelDown', lang));
+  return { embeds: [stamped(e.setFooter(footerOf()))], components: helpComponents('mod', ctx) as never };
+}
+
 // ---------- handlers ----------
 export async function handleHelp(i: ChatInputCommandInteraction): Promise<void> {
   try {
@@ -40801,6 +41007,11 @@ export async function handleHelpSelect(i: StringSelectMenuInteraction): Promise<
   }
   try {
     const id = i.values[0] ?? 'home';
+    if (i.customId === 'help:card') {
+      const n = Number(id);
+      if (Number.isInteger(n) && n > 0) await i.editReply((await serverCardReply(n)) as never);
+      return;
+    }
     await i.editReply(helpView(id === 'home' ? null : id, await ctxFor(i, id)) as never);
   } catch (e) {
     log('help menu failed:', (e as Error).message);
@@ -40829,15 +41040,25 @@ export async function handleHelpButton(i: ButtonInteraction): Promise<void> {
       await i.editReply(helpView(null, await ctxFor(i, null)) as never);
       return;
     }
-    if (i.customId === 'help:act:online' || i.customId === 'help:act:top') {
+    if (i.customId === 'help:act:link') {
+      await i.editReply((await startScreen(i.user)) as never);
+      return;
+    }
+    if (i.customId === 'help:act:cases') {
+      const ctx = await ctxFor(i, 'none');
+      if (!ctx.admin) return void (await i.editReply(helpView(null, await ctxFor(i, null)) as never));
+      await i.editReply((await casesReply(i, ctx)) as never);
+      return;
+    }
+    if (i.customId === 'help:act:online' || i.customId === 'help:act:top' || i.customId === 'help:act:topm') {
       const lang = langOf(i.locale);
       const ctx = await ctxFor(i, 'none');
-      const keep = helpComponents('home', ctx) as never;
+      const keep = helpComponents(i.customId === 'help:act:topm' ? 'stat' : 'home', ctx) as never;
       if (i.customId === 'help:act:online') {
         const { data } = await backendJson<OnlineData>('/internal/discord/online');
         await i.editReply(data ? { embeds: [stamped(onlineEmbed(data))], components: keep } : { ...replyEmbed(tx('title', lang), tx('panelDown', lang), COLORS.bad), components: keep });
       } else {
-        const { data } = await backendJson<TopData>('/internal/discord/top?period=week');
+        const { data } = await backendJson<TopData>(`/internal/discord/top?period=${i.customId === 'help:act:topm' ? 'month' : 'week'}`);
         await i.editReply(data ? { embeds: [stamped(topEmbed(data))], components: keep } : { ...replyEmbed(tx('title', lang), tx('panelDown', lang), COLORS.bad), components: keep });
       }
       return;
@@ -40854,13 +41075,7 @@ export async function handleHelpButton(i: ButtonInteraction): Promise<void> {
     }
     const id = Number(i.customId.slice(4));
     if (!Number.isInteger(id) || id <= 0) return;
-    const r = await backend(`/internal/card/${id}.png`);
-    if (!r.ok) {
-      await i.editReply({ ...replyEmbed(r.status === 404 ? 'Сервер не найден' : 'Не получилось', r.status === 404 ? 'Возможно, его удалили. Вернитесь к списку.' : 'Панель сейчас не отвечает. Попробуйте чуть позже.', COLORS.warn), components: [backButton()], attachments: [] });
-      return;
-    }
-    const file = new AttachmentBuilder(Buffer.from(await r.arrayBuffer()), { name: `server-${id}.png` });
-    await i.editReply({ embeds: [], files: [file], components: [backButton(id)] });
+    await i.editReply((await serverCardReply(id)) as never);
   } catch (e) {
     log(`button ${i.customId} failed:`, (e as Error).message);
     await staleNotice(i);
@@ -40983,15 +41198,32 @@ export const UI = {
   adminOnly: { ru: 'Только для администраторов', en: 'Administrators only' },
   noNews: { ru: 'Не удалось загрузить список изменений. Попробуйте чуть позже.', en: 'Could not load the list of changes. Try again later.' },
   unlinked: { ru: '🔗 Ник не привязан: команда `/link` подключит часы, ранг и достижения.', en: '🔗 No nick linked yet: `/link` turns on hours, rank and achievements.' },
+  back: { ru: 'Назад', en: 'Back' },
+  noAnswer: { ru: '💬 Не нашли ответ? Подробности по команде: `/help command:…`', en: '💬 Did not find the answer? Details of a command: `/help command:…`' },
+  openCard: { ru: 'Открыть карточку сервера…', en: 'Open a server card…' },
+  linkNick: { ru: 'Привязать ник', en: 'Link my nick' },
+  topWeek: { ru: 'Топ недели', en: 'Top of the week' },
+  topMonth: { ru: 'Топ месяца', en: 'Top of the month' },
+  cases: { ru: 'Последние наказания', en: 'Latest punishments' },
+  noCases: { ru: 'Наказаний пока нет.', en: 'No punishments yet.' },
+  casesTitle: { ru: '📋 Последние наказания', en: '📋 Latest punishments' },
   panelDown: { ru: 'Панель сейчас не отвечает. Попробуйте чуть позже.', en: 'The panel is not answering now. Try again later.' },
 } satisfies Record<string, Two>;
 export const tx = (k: keyof typeof UI, lang: Lang): string => UI[k][lang];
 
-export interface Live { players: number; up: number; total: number }
+export interface LiveServer { id: number; name: string; online: boolean; players: number; maxPlayers: number; map: string | null }
+export interface Live { players: number; up: number; total: number; servers?: LiveServer[] }
 export const liveLine = (l: Live, lang: Lang): string => {
   const dot = l.up === l.total && l.total > 0 ? '🟢' : l.up === 0 ? '🔴' : '🟡';
   return lang === 'en' ? `${dot} Playing now: **${l.players}** · servers online: **${l.up} of ${l.total}**` : `${dot} Сейчас играют **${l.players}** · серверов в сети **${l.up} из ${l.total}**`;
 };
+
+/** the short form of a command note for the lists: up to the first «:», «,» or bracket, at most 48 characters */
+export function shortText(text: string, max = 48): string {
+  const cut = text.search(/[:,(]/);
+  const s = (cut > 8 ? text.slice(0, cut) : text).trim();
+  return s.length > max ? `${s.slice(0, max - 1).trimEnd()}…` : s;
+}
 
 export interface MeLike { found: boolean; gameNick: string; rank: { name: string; hours: number } | null }
 /** the line about the person on the first screen: their nick, rank and hours, or a hint to link the nick */
@@ -41244,7 +41476,7 @@ async function suggestions(u: User): Promise<{ label: string; value: string }[]>
 }
 
 /** the first screen: where the person is now and what to press */
-async function startScreen(u: User): Promise<Reply> {
+export async function startScreen(u: User): Promise<Reply> {
   const [card, options] = await Promise.all([loadCard(u).catch(() => null), suggestions(u)]);
   const has = !!card?.gameNick;
   const e = new EmbedBuilder()

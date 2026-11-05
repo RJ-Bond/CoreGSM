@@ -107,15 +107,32 @@ export const UI = {
   adminOnly: { ru: 'Только для администраторов', en: 'Administrators only' },
   noNews: { ru: 'Не удалось загрузить список изменений. Попробуйте чуть позже.', en: 'Could not load the list of changes. Try again later.' },
   unlinked: { ru: '🔗 Ник не привязан: команда `/link` подключит часы, ранг и достижения.', en: '🔗 No nick linked yet: `/link` turns on hours, rank and achievements.' },
+  back: { ru: 'Назад', en: 'Back' },
+  noAnswer: { ru: '💬 Не нашли ответ? Подробности по команде: `/help command:…`', en: '💬 Did not find the answer? Details of a command: `/help command:…`' },
+  openCard: { ru: 'Открыть карточку сервера…', en: 'Open a server card…' },
+  linkNick: { ru: 'Привязать ник', en: 'Link my nick' },
+  topWeek: { ru: 'Топ недели', en: 'Top of the week' },
+  topMonth: { ru: 'Топ месяца', en: 'Top of the month' },
+  cases: { ru: 'Последние наказания', en: 'Latest punishments' },
+  noCases: { ru: 'Наказаний пока нет.', en: 'No punishments yet.' },
+  casesTitle: { ru: '📋 Последние наказания', en: '📋 Latest punishments' },
   panelDown: { ru: 'Панель сейчас не отвечает. Попробуйте чуть позже.', en: 'The panel is not answering now. Try again later.' },
 } satisfies Record<string, Two>;
 export const tx = (k: keyof typeof UI, lang: Lang): string => UI[k][lang];
 
-export interface Live { players: number; up: number; total: number }
+export interface LiveServer { id: number; name: string; online: boolean; players: number; maxPlayers: number; map: string | null }
+export interface Live { players: number; up: number; total: number; servers?: LiveServer[] }
 export const liveLine = (l: Live, lang: Lang): string => {
   const dot = l.up === l.total && l.total > 0 ? '🟢' : l.up === 0 ? '🔴' : '🟡';
   return lang === 'en' ? `${dot} Playing now: **${l.players}** · servers online: **${l.up} of ${l.total}**` : `${dot} Сейчас играют **${l.players}** · серверов в сети **${l.up} из ${l.total}**`;
 };
+
+/** the short form of a command note for the lists: up to the first «:», «,» or bracket, at most 48 characters */
+export function shortText(text: string, max = 48): string {
+  const cut = text.search(/[:,(]/);
+  const s = (cut > 8 ? text.slice(0, cut) : text).trim();
+  return s.length > max ? `${s.slice(0, max - 1).trimEnd()}…` : s;
+}
 
 export interface MeLike { found: boolean; gameNick: string; rank: { name: string; hours: number } | null }
 /** the line about the person on the first screen: their nick, rank and hours, or a hint to link the nick */

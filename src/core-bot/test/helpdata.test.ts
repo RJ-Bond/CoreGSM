@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { BLURB, CATEGORIES, CMDS, categoryOf, cmdInfo, langOf, liveLine, meLine, shortItem, suggestCommands, visibleCategories } from '../src/helpData.js';
+import { BLURB, CATEGORIES, CMDS, categoryOf, cmdInfo, langOf, liveLine, meLine, shortItem, shortText, suggestCommands, visibleCategories } from '../src/helpData.js';
 
 test('language from the Discord locale', () => {
   assert.equal(langOf('ru'), 'ru');
@@ -54,4 +54,11 @@ test('texts: live line, the line about the person, short changelog items', () =>
   assert.equal(meLine({ found: true, gameNick: 'Bob', rank: { name: 'Рекрут', hours: 12.5 } }, 'en'), '👤 **Bob** · Рекрут · 12.5 h');
   assert.equal(shortItem('🧹 Команда `/clear` — очищает чат'), '🧹 Команда `/clear`');
   assert.equal(shortItem('x'.repeat(300)).length, 130);
+});
+
+test('short notes for the lists', () => {
+  assert.equal(shortText('создать аккаунт в панели через Discord, пароль не нужен'), 'создать аккаунт в панели через Discord');
+  assert.equal(shortText('сколько игроков на каждом сервере'), 'сколько игроков на каждом сервере');
+  assert.ok(shortText('x'.repeat(100)).length <= 48);
+  for (const c of CMDS) assert.ok(shortText(c.text.ru).length > 3 && shortText(c.text.en).length > 3, c.cmd);
 });

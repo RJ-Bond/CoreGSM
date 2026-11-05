@@ -7,12 +7,14 @@ import { ActionRowBuilder, AttachmentBuilder, ButtonBuilder, ButtonStyle, EmbedB
 import { backend, backendJson } from './backend.js';
 import { CLEAR_GUIDE_FIELDS, CLEAR_GUIDE_FIELDS_EN } from './clearGuide.js';
 import { followButton } from './follow.js';
-import { BLURB, CATEGORIES, CMDS, categoryOf, cmdInfo, langOf, liveLine, meLine, shortItem, suggestCommands, tx, visibleCategories, type Category, type ChangelogAnswer, type CmdInfo, type Lang, type Live, type MeLike } from './helpData.js';
+import { BLURB, CATEGORIES, CMDS, categoryOf, cmdInfo, langOf, liveLine, meLine, shortItem, shortText, suggestCommands, tx, visibleCategories, type Category, type ChangelogAnswer, type CmdInfo, type Lang, type Live, type MeLike } from './helpData.js';
 import { log } from './log.js';
 import { COLORS, replyEmbed } from './replies.js';
 import { footerOf, getStyle } from './style.js';
 import { healthColor, panelRow, stamped } from './ui.js';
 import { onlineEmbed, topEmbed, type OnlineData, type TopData } from './info.js';
+import { serverLine } from './dashboardLogic.js';
+import { startScreen } from './link.js';
 
 export const HELP_COMMANDS = [
   {
@@ -53,13 +55,14 @@ export interface HelpCtx {
   news?: ChangelogAnswer | null;
 }
 
-export const liveOf = (d: OnlineData | null): Live | null => (d ? { players: d.players, up: d.servers.filter((s) => s.online).length, total: d.servers.length } : null);
+export const liveOf = (d: OnlineData | null): Live | null => (d ? { players: d.players, up: d.servers.filter((s) => s.online).length, total: d.servers.length, servers: d.servers } : null);
 
 // ---------- the cards ----------
-const lineOf = (c: CmdInfo, lang: Lang) => `\`${c.cmd}\` — ${c.text[lang]}`;
-const brand = (e: EmbedBuilder): EmbedBuilder => {
+const lineOf = (c: CmdInfo, lang: Lang) => `▸ \`${c.cmd}\` — ${shortText(c.text[lang])}`;
+/** the logo as a big picture only on the first screen: beside a list it squeezes the text into a narrow column */
+const brand = (e: EmbedBuilder, thumb = false): EmbedBuilder => {
   const logo = getStyle().logoUrl;
-  if (logo) e.setThumbnail(logo);
+  if (thumb && logo) e.setThumbnail(logo);
   return stamped(e.setFooter(footerOf()));
 };
 
@@ -70,7 +73,7 @@ export function helpEmbed(category: string | null, ctx: HelpCtx): EmbedBuilder {
   if (!cat || (cat.admin && !ctx.admin)) {
     const status = [ctx.live ? liveLine(ctx.live, lang) : '', meLine(ctx.me, lang)].filter(Boolean).join('\n');
     const list = visibleCategories(ctx.admin).filter((c) => c.id !== 'modclr').map((c) => `${c.emoji} **${c.label[lang]}** — ${BLURB[c.id]?.[lang] ?? ''}`).join('\n');
-    return brand(new EmbedBuilder().setTitle(tx('title', lang)).setDescription(`${status ? `${status}\n\n` : ''}${tx('intro', lang)}\n\n${list}`).setColor(ctx.live ? healthColor(ctx.live.up, ctx.live.total) : getStyle().accent));
+    return brand(new EmbedBuilder().setTitle(tx('title', lang)).setDescription(`${status ? `${status}\n\n` : ''}${tx('intro', lang)}\n\n${list}`).setColor(ctx.live ? healthColor(ctx.live.up, ctx.live.total) : getStyle().accent), true);
   }
   const e = new EmbedBuilder().setTitle(`${cat.emoji} ${cat.title[lang]}`).setColor(cat.color);
   if (cat.id === 'modclr') return brand(e.addFields(lang === 'en' ? CLEAR_GUIDE_FIELDS_EN : CLEAR_GUIDE_FIELDS));
@@ -81,9 +84,13 @@ export function helpEmbed(category: string | null, ctx: HelpCtx): EmbedBuilder {
     return brand(e.setDescription(lines ? lines.slice(0, 3900) : tx('noNews', lang)));
   }
   const lines = cat.cmds.map((c) => cmdInfo(c)).filter((c): c is CmdInfo => !!c).map((c) => lineOf(c, lang));
-  for (const x of cat.extra ?? []) lines.push(`\`${x.cmd}\` — ${x.text[lang]}`);
-  const head = cat.id === 'srv' && ctx.live ? `${liveLine(ctx.live, lang)}\n\n` : '';
-  return brand(e.setDescription(head + lines.join('\n')));
+  for (const x of cat.extra ?? []) lines.push(`▸ \`${x.cmd}\` — ${shortText(x.text[lang])}`);
+  let head = '';
+  if (cat.id === 'srv' && ctx.live) {
+    const list = (ctx.live.servers ?? []).slice(0, 8).map(serverLine).join('\n');
+    head = `${liveLine(ctx.live, lang)}\n${list ? `${list}\n` : ''}\n`;
+  }
+  return brand(e.setDescription(`${head}${lines.join('\n')}\n\n${tx('noAnswer', lang)}`));
 }
 
 /** the details of one command */
@@ -103,8 +110,20 @@ export function commandEmbed(c: CmdInfo, lang: Lang): EmbedBuilder {
 }
 
 // ---------- the controls ----------
-/** the menu of sections and the row of buttons under a card */
-export function helpComponents(active: string, ctx: Pick<HelpCtx, 'lang' | 'admin' | 'supportUrl'>): ActionRowBuilder<StringSelectMenuBuilder | ButtonBuilder>[] {
+/** the buttons that belong to one section (a second row under the menu) */
+function sectionButtons(active: string, ctx: Pick<HelpCtx, 'lang' | 'admin'>): ButtonBuilder[] {
+  const { lang } = ctx;
+  if (active === 'play') return [new ButtonBuilder().setCustomId('help:act:link').setLabel(tx('linkNick', lang)).setEmoji('🔗').setStyle(ButtonStyle.Success)];
+  if (active === 'stat') return [
+    new ButtonBuilder().setCustomId('help:act:top').setLabel(tx('topWeek', lang)).setEmoji('🏆').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('help:act:topm').setLabel(tx('topMonth', lang)).setEmoji('🏅').setStyle(ButtonStyle.Secondary),
+  ];
+  if (active === 'mod' && ctx.admin) return [new ButtonBuilder().setCustomId('help:act:cases').setLabel(tx('cases', lang)).setEmoji('📋').setStyle(ButtonStyle.Secondary)];
+  return [];
+}
+
+/** the menu of sections, the buttons of the section and the navigation row under a card */
+export function helpComponents(active: string, ctx: Pick<HelpCtx, 'lang' | 'admin' | 'supportUrl'> & { live?: Live | null }): ActionRowBuilder<StringSelectMenuBuilder | ButtonBuilder>[] {
   const { lang } = ctx;
   const menu = new StringSelectMenuBuilder()
     .setCustomId('help:pick')
@@ -113,18 +132,32 @@ export function helpComponents(active: string, ctx: Pick<HelpCtx, 'lang' | 'admi
       { label: tx('home', lang), value: 'home', emoji: '🏠', description: tx('homeDesc', lang), default: active === 'home' },
       ...visibleCategories(ctx.admin).map((c) => ({ label: c.label[lang], value: c.id, emoji: c.emoji, description: (BLURB[c.id]?.[lang] ?? '').slice(0, 100), default: active === c.id })),
     );
-  const btns: ButtonBuilder[] =
+  const rows: ActionRowBuilder<StringSelectMenuBuilder | ButtonBuilder>[] = [new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(menu)];
+  // «Servers»: a menu with the servers, a pick opens the card
+  const servers = (ctx.live?.servers ?? []).slice(0, 25);
+  if (active === 'srv' && servers.length) {
+    rows.push(
+      new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+        new StringSelectMenuBuilder().setCustomId('help:card').setPlaceholder(tx('openCard', lang)).addOptions(servers.map((s) => ({ label: (s.name || `#${s.id}`).slice(0, 100), value: String(s.id), emoji: s.online ? '🟢' : '🔴' }))),
+      ),
+    );
+  }
+  const extra = sectionButtons(active, ctx);
+  if (extra.length) rows.push(row(...extra));
+  const nav: ButtonBuilder[] =
     active === 'home'
       ? [
           new ButtonBuilder().setCustomId('help:act:online').setLabel(tx('online', lang)).setEmoji('📡').setStyle(ButtonStyle.Success),
           new ButtonBuilder().setCustomId('help:act:top').setLabel(tx('top', lang)).setEmoji('🏆').setStyle(ButtonStyle.Primary),
         ]
-      : [new ButtonBuilder().setCustomId('help:home').setLabel(tx('home', lang)).setEmoji('🏠').setStyle(ButtonStyle.Primary)];
+      : [new ButtonBuilder().setCustomId('help:home').setLabel(`‹ ${tx('back', lang)}`).setStyle(ButtonStyle.Primary)];
   const links = panelRow([{ label: `🌐 ${tx('panel', lang)}`, path: '/' }])[0];
-  if (links) btns.push(...(links.components as ButtonBuilder[]));
-  if (ctx.supportUrl) btns.push(new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel(`💬 ${tx('support', lang)}`).setURL(ctx.supportUrl));
-  btns.push(new ButtonBuilder().setCustomId('help:close').setEmoji('✖️').setStyle(ButtonStyle.Secondary));
-  return [new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(menu), row(...btns.slice(0, 5))] as never;
+  if (links) nav.push(...(links.components as ButtonBuilder[]));
+  if (ctx.supportUrl) nav.push(new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel(`💬 ${tx('support', lang)}`).setURL(ctx.supportUrl));
+  // a plain word: the dark cross emoji is almost invisible on a grey button
+  nav.push(new ButtonBuilder().setCustomId('help:close').setLabel(tx('close', lang)).setStyle(ButtonStyle.Secondary));
+  rows.push(row(...nav.slice(0, 5)));
+  return rows;
 }
 
 export const helpView = (category: string | null, ctx: HelpCtx) => {
@@ -202,6 +235,29 @@ async function serversScreen(): Promise<{ embeds: EmbedBuilder[]; components: Ac
   return { embeds: [stamped(e)], components: serverButtons(data.servers), files: [] };
 }
 
+/** the picture card of a server with the buttons «back» and «follow» */
+async function serverCardReply(id: number) {
+  const r = await backend(`/internal/card/${id}.png`);
+  if (!r.ok) {
+    return { ...replyEmbed(r.status === 404 ? 'Сервер не найден' : 'Не получилось', r.status === 404 ? 'Возможно, его удалили. Вернитесь к списку.' : 'Панель сейчас не отвечает. Попробуйте чуть позже.', COLORS.warn), components: [backButton()], attachments: [] as never[] };
+  }
+  const file = new AttachmentBuilder(Buffer.from(await r.arrayBuffer()), { name: `server-${id}.png` });
+  return { embeds: [] as EmbedBuilder[], files: [file], components: [backButton(id)] };
+}
+
+interface CaseRow { kind: string; userName: string; modName: string; reason: string; at: number }
+const CASE_EMOJI: Record<string, string> = { warn: '⚠️', ban: '🔨', unban: '🔓', kick: '👢', timeout: '🔇', unmute: '🔊', appeal: '📨' };
+
+/** «Latest punishments» for the administrators */
+async function casesReply(i: { guildId?: string | null }, ctx: HelpCtx) {
+  const { lang } = ctx;
+  const q = new URLSearchParams({ limit: '8', ...(i.guildId ? { guildId: i.guildId } : {}) });
+  const { data } = await backendJson<{ cases: CaseRow[] }>(`/internal/discord/cases?${q.toString()}`);
+  const lines = (data?.cases ?? []).map((c) => `${CASE_EMOJI[c.kind] ?? '•'} **${c.userName || '?'}** — ${(c.reason || '—').slice(0, 80)} · <t:${Math.floor(c.at / 1000)}:R>`);
+  const e = new EmbedBuilder().setTitle(tx('casesTitle', lang)).setColor(0xef4444).setDescription(data ? lines.join('\n') || tx('noCases', lang) : tx('panelDown', lang));
+  return { embeds: [stamped(e.setFooter(footerOf()))], components: helpComponents('mod', ctx) as never };
+}
+
 // ---------- handlers ----------
 export async function handleHelp(i: ChatInputCommandInteraction): Promise<void> {
   try {
@@ -253,6 +309,11 @@ export async function handleHelpSelect(i: StringSelectMenuInteraction): Promise<
   }
   try {
     const id = i.values[0] ?? 'home';
+    if (i.customId === 'help:card') {
+      const n = Number(id);
+      if (Number.isInteger(n) && n > 0) await i.editReply((await serverCardReply(n)) as never);
+      return;
+    }
     await i.editReply(helpView(id === 'home' ? null : id, await ctxFor(i, id)) as never);
   } catch (e) {
     log('help menu failed:', (e as Error).message);
@@ -281,15 +342,25 @@ export async function handleHelpButton(i: ButtonInteraction): Promise<void> {
       await i.editReply(helpView(null, await ctxFor(i, null)) as never);
       return;
     }
-    if (i.customId === 'help:act:online' || i.customId === 'help:act:top') {
+    if (i.customId === 'help:act:link') {
+      await i.editReply((await startScreen(i.user)) as never);
+      return;
+    }
+    if (i.customId === 'help:act:cases') {
+      const ctx = await ctxFor(i, 'none');
+      if (!ctx.admin) return void (await i.editReply(helpView(null, await ctxFor(i, null)) as never));
+      await i.editReply((await casesReply(i, ctx)) as never);
+      return;
+    }
+    if (i.customId === 'help:act:online' || i.customId === 'help:act:top' || i.customId === 'help:act:topm') {
       const lang = langOf(i.locale);
       const ctx = await ctxFor(i, 'none');
-      const keep = helpComponents('home', ctx) as never;
+      const keep = helpComponents(i.customId === 'help:act:topm' ? 'stat' : 'home', ctx) as never;
       if (i.customId === 'help:act:online') {
         const { data } = await backendJson<OnlineData>('/internal/discord/online');
         await i.editReply(data ? { embeds: [stamped(onlineEmbed(data))], components: keep } : { ...replyEmbed(tx('title', lang), tx('panelDown', lang), COLORS.bad), components: keep });
       } else {
-        const { data } = await backendJson<TopData>('/internal/discord/top?period=week');
+        const { data } = await backendJson<TopData>(`/internal/discord/top?period=${i.customId === 'help:act:topm' ? 'month' : 'week'}`);
         await i.editReply(data ? { embeds: [stamped(topEmbed(data))], components: keep } : { ...replyEmbed(tx('title', lang), tx('panelDown', lang), COLORS.bad), components: keep });
       }
       return;
@@ -306,13 +377,7 @@ export async function handleHelpButton(i: ButtonInteraction): Promise<void> {
     }
     const id = Number(i.customId.slice(4));
     if (!Number.isInteger(id) || id <= 0) return;
-    const r = await backend(`/internal/card/${id}.png`);
-    if (!r.ok) {
-      await i.editReply({ ...replyEmbed(r.status === 404 ? 'Сервер не найден' : 'Не получилось', r.status === 404 ? 'Возможно, его удалили. Вернитесь к списку.' : 'Панель сейчас не отвечает. Попробуйте чуть позже.', COLORS.warn), components: [backButton()], attachments: [] });
-      return;
-    }
-    const file = new AttachmentBuilder(Buffer.from(await r.arrayBuffer()), { name: `server-${id}.png` });
-    await i.editReply({ embeds: [], files: [file], components: [backButton(id)] });
+    await i.editReply((await serverCardReply(id)) as never);
   } catch (e) {
     log(`button ${i.customId} failed:`, (e as Error).message);
     await staleNotice(i);
