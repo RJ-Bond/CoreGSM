@@ -66,7 +66,7 @@ router.post('/internal/bot-guilds', internal, (req, res) => {
         name: z.string().max(120),
         hidden: z.number().int().min(0).optional(),
         channels: z.array(z.object({ id: z.string().max(30), name: z.string().max(120), missing: z.array(z.string().max(40)).max(4).optional() })).max(300),
-        roles: z.array(z.object({ id: z.string().max(30), name: z.string().max(120), color: z.number().int().min(0).max(0xffffff) })).max(250).optional(),
+        roles: z.array(z.object({ id: z.string().max(30), name: z.string().max(120), color: z.number().int().min(0).max(0xffffff), pick: z.boolean().optional() })).max(250).optional(),
         voice: z.array(z.object({ id: z.string().max(30), name: z.string().max(120) })).max(250).optional(),
       }),
     )

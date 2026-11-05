@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="4a15c9401535"
+COREGSM_BUILD="5eb61e3cd651"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.30"
+COREGSM_VERSION="1.1.31"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -20854,57 +20854,189 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-backend/src/community/welcome.ts" << '__COREGSM_EOF__'
 /**
  * Welcome message for new members of the Discord server:
- *   GET|PUT /api/settings/welcome   { enabled, channelId, text }   (admin)
- *   GET /internal/welcome?user=&server=   the ready message for the bot, 404 while the feature is off
+ *   GET|PUT /api/settings/welcome   { enabled, channelId, text, embed, roles }   (admin)
+ *   GET /internal/welcome?user=&server=&count=   the ready message for the bot, 404 while the feature is off
+ *   GET /internal/roles/options   the roles a member may take by himself (the menu under the greeting and /roles)
  * The bot needs the privileged «Server Members» intent only while the feature is on.
+ *
+ * `text` may hold several greetings separated by a line with «---»: one of them is picked at random. Empty text means the
+ * funny defaults (welcomeLogic.ts). `embed` is the beautiful look (avatar, colour, member number); `roles` are the roles
+ * a member can pick from a menu (at most 25, a Discord limit).
  */
 import type { Express, RequestHandler } from 'express';
 import { z } from 'zod';
 import { getSetting, setSetting } from '../db.js';
-import { DEFAULT_WELCOME, MAX_WELCOME, renderWelcome } from './welcomeLogic.js';
+import { bot, channelInfo } from '../discord/botState.js';
+import { DEFAULT_WELCOME, MAX_WELCOME, renderWelcomePick } from './welcomeLogic.js';
+
+export const MAX_PICK_ROLES = 25;
 
 export const welcomeSettings = () => ({
   enabled: getSetting('welcome_enabled') === '1' && /^\d{15,25}$/.test(getSetting('welcome_channel') ?? ''),
   channelId: getSetting('welcome_channel') ?? '',
   text: getSetting('welcome_text') ?? '',
+  /** the beautiful look is on unless it was switched off */
+  embed: getSetting('welcome_embed') !== '0',
 });
+
+/** the role ids chosen in the panel (only well-formed ids, no duplicates) */
+export function pickRoleIds(): string[] {
+  try {
+    const v = JSON.parse(getSetting('welcome_roles') ?? '[]') as unknown;
+    return Array.isArray(v) ? [...new Set(v.filter((x): x is string => typeof x === 'string' && /^\d{15,25}$/.test(x)))].slice(0, MAX_PICK_ROLES) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** the roles of the Discord server of the welcome channel that the bot may hand out (the bot decides what is safe) */
+export function availableRoles(channelId: string): { id: string; name: string; color: number }[] {
+  const guildId = channelInfo(channelId).guildId;
+  const g = bot.guilds.find((x) => x.id === guildId);
+  return (g?.roles ?? []).filter((r) => r.pick !== false).map(({ id, name, color }) => ({ id, name, color }));
+}
+
+/** the last greeting that was used: the next one is a different one */
+let lastIndex = -1;
 
 export function registerWelcome({ app, admin, internal }: { app: Express; admin: RequestHandler; internal: RequestHandler }): void {
   const payload = () => {
     const s = welcomeSettings();
-    return { enabled: getSetting('welcome_enabled') === '1', channelId: s.channelId, text: s.text, defaultText: DEFAULT_WELCOME, maxLength: MAX_WELCOME };
+    return {
+      enabled: getSetting('welcome_enabled') === '1',
+      channelId: s.channelId,
+      text: s.text,
+      embed: s.embed,
+      roles: pickRoleIds(),
+      availableRoles: availableRoles(s.channelId),
+      defaultText: DEFAULT_WELCOME,
+      maxLength: MAX_WELCOME,
+      maxRoles: MAX_PICK_ROLES,
+    };
   };
   app.get('/api/settings/welcome', admin, (_req, res) => res.json(payload()));
   app.put('/api/settings/welcome', admin, (req, res) => {
     const b = z
-      .object({ enabled: z.boolean().optional(), channelId: z.string().regex(/^(\d{15,25})?$/).optional(), text: z.string().max(MAX_WELCOME).optional() })
+      .object({
+        enabled: z.boolean().optional(),
+        channelId: z.string().regex(/^(\d{15,25})?$/).optional(),
+        text: z.string().max(MAX_WELCOME).optional(),
+        embed: z.boolean().optional(),
+        roles: z.array(z.string().regex(/^\d{15,25}$/)).max(MAX_PICK_ROLES).optional(),
+      })
       .safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Приветствие: проверьте канал и длину текста (до 1000 символов)' });
     if (b.data.channelId !== undefined) setSetting('welcome_channel', b.data.channelId);
     if (b.data.text !== undefined) setSetting('welcome_text', b.data.text.trim());
     if (b.data.enabled !== undefined) setSetting('welcome_enabled', b.data.enabled ? '1' : '0');
+    if (b.data.embed !== undefined) setSetting('welcome_embed', b.data.embed ? '1' : '0');
+    if (b.data.roles !== undefined) setSetting('welcome_roles', JSON.stringify([...new Set(b.data.roles)]));
     res.json(payload());
   });
   app.get('/internal/welcome', internal, (req, res) => {
     const s = welcomeSettings();
     if (!s.enabled) return res.status(404).json({ error: 'off' });
-    res.json({ channelId: s.channelId, content: renderWelcome(s.text, { userId: String(req.query.user ?? ''), server: String(req.query.server ?? '') }) });
+    const count = Number(req.query.count);
+    const r = renderWelcomePick(s.text, { userId: String(req.query.user ?? ''), server: String(req.query.server ?? ''), count: Number.isInteger(count) ? count : null }, Math.random, lastIndex, s.embed);
+    lastIndex = r.index;
+    res.json({ channelId: s.channelId, content: r.content, embed: s.embed, funny: r.funny, roles: pickRoleIds() });
   });
+  // the menu does not depend on the greeting being on: /roles works on its own
+  app.get('/internal/roles/options', internal, (_req, res) => res.json({ roles: pickRoleIds() }));
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/community"
   cat > "$APP_DIR/core-backend/src/community/welcomeLogic.ts" << '__COREGSM_EOF__'
-/** The welcome message for new members of the Discord server: the default text and the placeholders. */
+/** The welcome message for new members of the Discord server: the default texts, the placeholders and the random pick. */
 export const DEFAULT_WELCOME = 'Добро пожаловать, {user}! 👋 Чтобы связать игровой ник с Discord и попасть в рейтинг, зарегистрируйтесь командой /register.';
 export const MAX_WELCOME = 1000;
 
-/** {user} → a mention, {server} → the name of the Discord server; unknown placeholders stay as they are */
-export function renderWelcome(text: string, v: { userId: string; server: string }): string {
-  const src = text.trim() || DEFAULT_WELCOME;
-  return src
+/**
+ * Funny greetings in the style of Discord's own «welcome» messages. Used while the text in the panel is empty: one of them
+ * is picked at random (never the same one twice in a row). {count} is the member number; a line with it is skipped when
+ * the number is unknown.
+ */
+export const FUNNY_WELCOMES: readonly string[] = [
+  'Добро пожаловать, {user}! Надеемся, ты захватил пиццу 🍕',
+  'Новый игрок {user} только что подключился к {server}! Прячьте печеньки 🍪',
+  '{user} спрыгнул к нам с парашютом 🪂 Принимайте!',
+  'Дикий {user} появился! 🌿 Кто пойдёт знакомиться?',
+  '{user} зашёл «на минуточку». Все мы знаем, чем это кончится 😏',
+  'Тревога! 🚨 В {server} проникло новое лицо — {user}. Встречайте!',
+  'Добро пожаловать, {user}! Диван мягкий, чай горячий, сервер ждёт ☕',
+  '{user} присоединился к нашему сообществу. Пицца не обязательна, но приветствуется 🍕',
+  'Ура, {user} с нами! Скажите ему «привет», только не все сразу 👋',
+  '{user} телепортировался в {server}. Проверьте инвентарь на пропажи 🎒',
+  'Встречайте {user}! Лутбоксов нет, зато люди хорошие 🎁',
+  'Новичок на горизонте! 🔭 {user}, располагайся и не стесняйся.',
+  'Раз, два, три... {user} в игре! Респаун прошёл успешно 💫',
+  '{user} вошёл как к себе домой, и мы совсем не против 🏠',
+  'Привет, {user}! Ты у нас {count}-й. Билеты на выход закончились 🎟️',
+  '{user}, добро пожаловать! Ты {count}-й участник: почти юбилейный 🎉',
+];
+
+/** shown under the funny default greetings, so the newcomer still learns how to get into the rating */
+export const FUNNY_HINT = '-# Чтобы попасть в рейтинг, свяжите игровой ник с Discord командой /register';
+
+/** the lines that separate your own variants in the text of the panel */
+const SEPARATOR = /^[ \t]*---[ \t]*$/m;
+
+export interface WelcomeVars {
+  userId: string;
+  server: string;
+  /** the number of members of the Discord server, when the bot knows it */
+  count?: number | null;
+}
+
+/**
+ * the variants to pick from: the greetings written in the panel (split by a line with «---»), or the funny defaults
+ * (`funny`). Variants with {count} are left out while the number of members is unknown.
+ */
+export function welcomeVariants(text: string, hasCount: boolean): { list: string[]; funny: boolean } {
+  const usable = (s: string) => hasCount || !s.includes('{count}');
+  const own = text
+    .split(SEPARATOR)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (own.length) {
+    const list = own.filter(usable);
+    return { list: list.length ? list : [DEFAULT_WELCOME], funny: false };
+  }
+  return { list: FUNNY_WELCOMES.filter(usable), funny: true };
+}
+
+/** an index in 0..n-1 that differs from `last` whenever n > 1; `r` is a random number in [0, 1) */
+export function pickIndex(n: number, r: number, last: number): number {
+  if (n <= 1) return 0;
+  const i = Math.min(n - 1, Math.max(0, Math.floor(r * n)));
+  return i === last ? (i + 1) % n : i;
+}
+
+/** {user} → a mention, {server} → the name of the Discord server, {count} → the member number; unknown placeholders stay as they are */
+export function renderVariant(src: string, v: WelcomeVars): string {
+  const count = Number.isInteger(v.count) && (v.count as number) > 0 ? String(v.count) : '';
+  return (src.trim() || DEFAULT_WELCOME)
     .replace(/\{user\}/g, `<@${v.userId.replace(/\D/g, '')}>`)
     .replace(/\{server\}/g, v.server.replace(/[*_~`|>@]/g, ''))
+    .replace(/\{count\}/g, count)
     .slice(0, 1900);
+}
+
+/** a ready greeting: one of the variants, picked at random (`last` is the index used the time before) */
+export function renderWelcome(text: string, v: WelcomeVars, rand: () => number = Math.random, last = -1): string {
+  return renderWelcomePick(text, v, rand, last).content;
+}
+
+/**
+ * The same with more: the index that was used (so that the caller can remember it) and `funny` when the funny defaults
+ * were used. In a plain message (`embed` false) the hint about /register goes under such a greeting; an embed shows it
+ * as a block of its own.
+ */
+export function renderWelcomePick(text: string, v: WelcomeVars, rand: () => number = Math.random, last = -1, embed = false): { content: string; index: number; funny: boolean } {
+  const { list, funny } = welcomeVariants(text, Number.isInteger(v.count) && (v.count as number) > 0);
+  const index = pickIndex(list.length, rand(), last);
+  const body = renderVariant(list[index] ?? DEFAULT_WELCOME, v);
+  return { content: funny && !embed ? `${body}\n${FUNNY_HINT}` : body, index, funny };
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
@@ -21357,7 +21489,7 @@ export interface BotGuild {
   hidden?: number;
   channels: { id: string; name: string; missing?: string[] }[];
   /** roles the bot can give (below its own role, not managed by an integration) */
-  roles?: { id: string; name: string; color: number }[];
+  roles?: { id: string; name: string; color: number; /** safe to hand out by a menu: no administrative permissions */ pick?: boolean }[];
   /** voice channels the bot can rename (live counters) */
   voice?: { id: string; name: string }[];
 }
@@ -21414,6 +21546,7 @@ export const BOT_COMMANDS = [
   { name: '/player', description: 'Карточка игрока: часы, серия дней, где и когда играет. Параметр: nick' },
   { name: '/top', description: 'Самые активные игроки недели или месяца' },
   { name: '/servers', description: 'Список серверов: кнопки открывают карточку выбранного сервера (видно только вам)' },
+  { name: '/roles', description: 'Выбрать себе роли в меню: можно взять и снять (видно только вам)' },
   { name: '/help', description: 'Что умеет бот: команды по разделам, кнопки переключают разделы (видно только вам)' },
 ];
 
@@ -32735,7 +32868,7 @@ router.post('/internal/bot-guilds', internal, (req, res) => {
         name: z.string().max(120),
         hidden: z.number().int().min(0).optional(),
         channels: z.array(z.object({ id: z.string().max(30), name: z.string().max(120), missing: z.array(z.string().max(40)).max(4).optional() })).max(300),
-        roles: z.array(z.object({ id: z.string().max(30), name: z.string().max(120), color: z.number().int().min(0).max(0xffffff) })).max(250).optional(),
+        roles: z.array(z.object({ id: z.string().max(30), name: z.string().max(120), color: z.number().int().min(0).max(0xffffff), pick: z.boolean().optional() })).max(250).optional(),
         voice: z.array(z.object({ id: z.string().max(30), name: z.string().max(120) })).max(250).optional(),
       }),
     )
@@ -37510,9 +37643,9 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-bot/src"
   cat > "$APP_DIR/core-bot/src/bot.ts" << '__COREGSM_EOF__'
 /** The bot's main loop: connection to Discord from the panel's settings, status messages, news and deliveries. */
-import { setStyle } from './style.js';
+import { footerOf, getStyle, setStyle } from './style.js';
 import fs from 'node:fs';
-import { ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, Client, EmbedBuilder, GatewayIntentBits } from 'discord.js';
+import { ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, Client, EmbedBuilder, GatewayIntentBits, type GuildMember } from 'discord.js';
 import { backend, report } from './backend.js';
 import { handleInteraction, registerCommands } from './commands.js';
 import { deliveryFailure, humanDiscordError, isMessageGone, newNonce, retryAfterOf, retrySocket, stableNonce } from './errors.js';
@@ -37520,6 +37653,7 @@ import { setGatewayAgent } from './gateway.js';
 import { log } from './log.js';
 import { buildNews, buildPayload, type Binding, type NewsPayload } from './messages.js';
 import { parseProxy } from './proxy.js';
+import { isPickable, welcomeRoleRow } from './roles.js';
 import { syncDiscord } from './sync.js';
 import { updatePresence } from './presence.js';
 import { STUCK_MS, stuckFor } from './watchdog.js';
@@ -37582,7 +37716,7 @@ function collectGuilds(c: Client) {
     name: string;
     hidden: number;
     channels: { id: string; name: string; pos: number; missing: string[] }[];
-    roles: { id: string; name: string; color: number }[];
+    roles: { id: string; name: string; color: number; pick: boolean }[];
     voice: { id: string; name: string }[];
   }[] = [];
   for (const g of c.guilds.cache.values()) {
@@ -37602,7 +37736,7 @@ function collectGuilds(c: Client) {
       .filter((r) => r.id !== g.id && !r.managed && r.editable)
       .sort((x, y) => y.position - x.position)
       .slice(0, 200)
-      .map((r) => ({ id: r.id, name: r.name, color: r.color }));
+      .map((r) => ({ id: r.id, name: r.name, color: r.color, pick: isPickable(r, g.id) }));
     // voice channels the bot may rename (live counters)
     const voice = [...g.channels.cache.values()]
       .filter((ch) => (ch.type === ChannelType.GuildVoice || ch.type === ChannelType.GuildStageVoice) && (!me || ch.permissionsFor(me)?.has(['ViewChannel', 'ManageChannels'])))
@@ -37709,7 +37843,7 @@ async function applyConfig(): Promise<void> {
   if (cfg.welcome) {
     c.on('guildMemberAdd', (m) => {
       if (stopping || m.user.bot) return;
-      void welcomeMember(c, m.id, m.guild.name).catch((e) => log('welcome failed:', (e as Error).message));
+      void welcomeMember(c, m).catch((e) => log('welcome failed:', (e as Error).message));
     });
   }
   c.on('guildCreate', guildsChanged);
@@ -37739,15 +37873,40 @@ async function applyConfig(): Promise<void> {
   }
 }
 
-/** greets a new member in the channel chosen in the panel (the text is rendered there) */
-async function welcomeMember(c: Client, userId: string, server: string): Promise<void> {
-  const res = await backend(`/internal/welcome?user=${encodeURIComponent(userId)}&server=${encodeURIComponent(server)}`);
+/**
+ * Greets a new member in the channel chosen in the panel. The panel picks and renders the text (a funny one, or one of
+ * the administrator's own); here it gets its look: an embed with the picture of the newcomer, the colour of the community
+ * and his number, and a menu of roles to take when the administrator chose some.
+ */
+async function welcomeMember(c: Client, m: GuildMember): Promise<void> {
+  const q = new URLSearchParams({ user: m.id, server: m.guild.name, count: String(m.guild.memberCount) });
+  const res = await backend(`/internal/welcome?${q.toString()}`);
   if (!res.ok) return;
-  const w = (await res.json()) as { channelId: string; content: string };
+  const w = (await res.json()) as { channelId: string; content: string; embed?: boolean; funny?: boolean; roles?: string[] };
   const channel = await c.channels.fetch(w.channelId);
   if (!channel || !channel.isTextBased() || !('send' in channel)) return;
+  const row = welcomeRoleRow(m.guild, w.roles ?? []);
+  const components = row ? [row] : [];
   // only the new member is pinged: no @everyone / @here from the text
-  await channel.send({ content: w.content, allowedMentions: { users: [userId] } });
+  const allowedMentions = { users: [m.id] };
+  if (!w.embed) {
+    await channel.send({ content: w.content, components, allowedMentions });
+    return;
+  }
+  const e = new EmbedBuilder()
+    .setColor(getStyle().accent)
+    .setAuthor({ name: m.displayName.slice(0, 120), iconURL: m.displayAvatarURL({ size: 64 }) })
+    .setTitle('👋 Новый участник!')
+    .setDescription(w.content.slice(0, 3000))
+    .setThumbnail(m.displayAvatarURL({ size: 256 }))
+    .setFooter(footerOf(`Участник №${m.guild.memberCount}`))
+    .setTimestamp();
+  const fields: { name: string; value: string }[] = [];
+  if (w.funny) fields.push({ name: '🎮 Что дальше', value: 'Свяжите игровой ник с Discord командой `/register`: попадёте в рейтинг, получите ранг и достижения.' });
+  if (row) fields.push({ name: '🎭 Роли', value: 'Выберите роли в меню ниже. Изменить выбор потом можно командой `/roles`.' });
+  if (fields.length) e.addFields(fields);
+  // the mention in the text of an embed does not notify: the short line above it does
+  await channel.send({ content: `<@${m.id}>`, embeds: [e], components, allowedMentions });
 }
 
 /**
@@ -38033,6 +38192,7 @@ import { log } from './log.js';
 import { handleInfo, INFO_COMMANDS, INFO_NAMES, infoAutocomplete } from './info.js';
 import { HELP_COMMANDS, HELP_NAMES, handleHelp, handleHelpButton } from './help.js';
 import { COLORS, cardReply, replyEmbed, type ProfileData } from './replies.js';
+import { ROLE_COMMANDS, ROLE_NAMES, handleRoleSelect, handleRolesCommand } from './roles.js';
 
 export const COMMANDS = [
   {
@@ -38050,6 +38210,7 @@ export const COMMANDS = [
   },
   { name: 'profile', description: 'Моя карточка: ник, ранг V Rising, часы в игре и достижения' },
   ...INFO_COMMANDS,
+  ...ROLE_COMMANDS,
   ...HELP_COMMANDS,
 ];
 
@@ -38121,10 +38282,12 @@ async function handlePollButton(i: ButtonInteraction): Promise<void> {
 }
 
 export async function handleInteraction(i: Interaction): Promise<void> {
+  if (i.isStringSelectMenu()) return handleRoleSelect(i);
   if (i.isButton()) return /^(help|srv):/.test(i.customId) ? handleHelpButton(i) : handlePollButton(i);
   if (i.isAutocomplete()) return INFO_NAMES.has(i.commandName) ? infoAutocomplete(i) : handleAutocomplete(i);
   if (!i.isChatInputCommand()) return;
   if (INFO_NAMES.has(i.commandName)) return handleInfo(i);
+  if (ROLE_NAMES.has(i.commandName)) return handleRolesCommand(i);
   if (HELP_NAMES.has(i.commandName)) return handleHelp(i);
   const name = i.commandName;
   if (name !== 'register' && name !== 'nick' && name !== 'profile') return;
@@ -38342,6 +38505,7 @@ export const HELP_CATEGORIES: HelpCategory[] = [
       ['/register', 'создать аккаунт в панели через Discord, пароль не нужен'],
       ['/nick', 'сменить игровой ник, по которому считается статистика'],
       ['/profile', 'моя карточка: ранг, часы в игре, достижения'],
+      ['/roles', 'выбрать себе роли в меню: взять или снять'],
     ],
   },
   {
@@ -39096,6 +39260,165 @@ export function cardReply(
     );
   }
   return { embeds: [e], components };
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-bot/src"
+  cat > "$APP_DIR/core-bot/src/roles.ts" << '__COREGSM_EOF__'
+/**
+ * Roles a member takes by himself: a menu under the welcome message and the /roles command.
+ *
+ * The administrator chooses the roles in the panel; the bot checks them again each time, because a role can change after
+ * it was chosen: it is handed out only when it is not managed by an integration, the bot can edit it, and it carries no
+ * administrative permission (so a menu can never make anybody a moderator).
+ */
+import { ActionRowBuilder, EmbedBuilder, PermissionFlagsBits, StringSelectMenuBuilder, StringSelectMenuOptionBuilder, type ChatInputCommandInteraction, type Guild, type Role, type StringSelectMenuInteraction } from 'discord.js';
+import { backendJson } from './backend.js';
+import { humanDiscordError } from './errors.js';
+import { log } from './log.js';
+import { COLORS, replyEmbed } from './replies.js';
+import { footerOf, getStyle } from './style.js';
+
+export const ROLE_COMMANDS = [{ name: 'roles', description: 'Выбрать себе роли в меню: можно взять и снять', dm_permission: false }];
+export const ROLE_NAMES = new Set(ROLE_COMMANDS.map((c) => c.name));
+
+/** the menu under the greeting only adds roles; the menu of /roles sets the whole choice (adds and removes) */
+export const MENU_WELCOME = 'roles:welcome';
+export const MENU_SET = 'roles:set';
+/** Discord allows 25 options in a menu */
+export const MAX_OPTIONS = 25;
+
+const EPHEMERAL = 64;
+
+/** a role with any of these is never handed out by a menu */
+export const DANGEROUS = [
+  PermissionFlagsBits.Administrator,
+  PermissionFlagsBits.ManageGuild,
+  PermissionFlagsBits.ManageRoles,
+  PermissionFlagsBits.ManageChannels,
+  PermissionFlagsBits.ManageMessages,
+  PermissionFlagsBits.ManageWebhooks,
+  PermissionFlagsBits.ManageNicknames,
+  PermissionFlagsBits.ManageGuildExpressions,
+  PermissionFlagsBits.ViewAuditLog,
+  PermissionFlagsBits.KickMembers,
+  PermissionFlagsBits.BanMembers,
+  PermissionFlagsBits.ModerateMembers,
+  PermissionFlagsBits.MentionEveryone,
+];
+
+interface RoleLike {
+  id: string;
+  managed: boolean;
+  editable: boolean;
+  permissions: { any: (bits: bigint[]) => boolean };
+}
+
+/** true when the role may be given by a menu */
+export const isPickable = (r: RoleLike, guildId: string): boolean => r.id !== guildId && !r.managed && r.editable && !r.permissions.any(DANGEROUS);
+
+/** the chosen roles that still exist in this server and are safe, the highest first */
+export function pickableRoles(guild: Guild, ids: string[]) {
+  return [...new Set(ids)]
+    .map((id) => guild.roles.cache.get(id))
+    .filter((r): r is Role => !!r && isPickable(r, guild.id))
+    .sort((a, b) => b.position - a.position)
+    .slice(0, MAX_OPTIONS);
+}
+
+type RoleOption = { id: string; name: string; unicodeEmoji: string | null };
+
+/** the drop-down: `min` 1 for the greeting (it only adds), 0 for /roles (an empty choice removes everything) */
+export function roleMenu(customId: string, roles: RoleOption[], have: Set<string>, min: 0 | 1) {
+  const menu = new StringSelectMenuBuilder()
+    .setCustomId(customId)
+    .setPlaceholder(min ? '🎭 Выберите роли' : '🎭 Ваши роли: отметьте нужные')
+    .setMinValues(min)
+    .setMaxValues(Math.max(1, roles.length))
+    .addOptions(
+      roles.map((r) => {
+        const o = new StringSelectMenuOptionBuilder().setLabel(r.name.slice(0, 100) || r.id).setValue(r.id).setDefault(have.has(r.id));
+        // a role icon that is an ordinary emoji is shown in front of the name
+        return r.unicodeEmoji ? o.setEmoji(r.unicodeEmoji) : o;
+      }),
+    );
+  return new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(menu);
+}
+
+/** the menu under the welcome message, or null when no safe role was chosen */
+export function welcomeRoleRow(guild: Guild, ids: string[]) {
+  const roles = pickableRoles(guild, ids);
+  return roles.length ? roleMenu(MENU_WELCOME, roles, new Set(), 1) : null;
+}
+
+async function allowedIds(): Promise<string[]> {
+  const r = await backendJson<{ roles?: unknown }>('/internal/roles/options').catch(() => null);
+  const list = r?.data?.roles;
+  return Array.isArray(list) ? list.filter((x): x is string => typeof x === 'string' && /^\d{15,25}$/.test(x)) : [];
+}
+
+const mentions = (ids: string[]) => ids.map((id) => `<@&${id}>`).join(' ');
+
+export async function handleRolesCommand(i: ChatInputCommandInteraction): Promise<void> {
+  try {
+    if (!i.guild) {
+      await i.reply({ ...replyEmbed('Только на сервере', 'Команда работает на Discord-сервере, а не в личных сообщениях.', COLORS.warn), flags: EPHEMERAL });
+      return;
+    }
+    await i.deferReply({ flags: EPHEMERAL });
+    const roles = pickableRoles(i.guild, await allowedIds());
+    if (!roles.length) {
+      await i.editReply(replyEmbed('Ролей пока нет', 'Администратор ещё не выбрал роли, которые можно брать самому.', COLORS.warn));
+      return;
+    }
+    const member = await i.guild.members.fetch(i.user.id);
+    const e = new EmbedBuilder()
+      .setColor(getStyle().accent)
+      .setTitle('🎭 Выбор ролей')
+      .setDescription('Отметьте роли, которые хотите иметь, в меню ниже. Снимите отметку, и роль уберётся.')
+      .addFields({ name: 'Доступные роли', value: mentions(roles.map((r) => r.id)).slice(0, 1000) })
+      .setFooter(footerOf());
+    await i.editReply({ embeds: [e], components: [roleMenu(MENU_SET, roles, new Set(member.roles.cache.keys()), 0)] });
+  } catch (e) {
+    log('/roles failed:', (e as Error).message);
+    await i.editReply(replyEmbed('Не получилось', humanDiscordError(e), COLORS.bad)).catch(() => undefined);
+  }
+}
+
+/** a choice in one of the two menus */
+export async function handleRoleSelect(i: StringSelectMenuInteraction): Promise<void> {
+  const set = i.customId === MENU_SET;
+  if (!set && i.customId !== MENU_WELCOME) return;
+  try {
+    if (!i.guild) return;
+    // the set menu lives in the private message of /roles and is updated in place; the greeting menu is public: answer privately
+    if (set) await i.deferUpdate();
+    else await i.deferReply({ flags: EPHEMERAL });
+    const roles = pickableRoles(i.guild, await allowedIds());
+    const allowed = new Set(roles.map((r) => r.id));
+    const chosen = new Set(i.values.filter((v) => allowed.has(v)));
+    const member = await i.guild.members.fetch(i.user.id);
+    const have = new Set(member.roles.cache.keys());
+    const add = [...chosen].filter((id) => !have.has(id));
+    const remove = set ? roles.filter((r) => have.has(r.id) && !chosen.has(r.id)).map((r) => r.id) : [];
+    if (add.length) await member.roles.add(add, 'CoreGSM: выбор ролей');
+    if (remove.length) await member.roles.remove(remove, 'CoreGSM: выбор ролей');
+    const now = new Set([...have, ...add].filter((id) => !remove.includes(id)));
+    const e = new EmbedBuilder().setColor(add.length || remove.length ? COLORS.ok : getStyle().accent).setFooter(footerOf());
+    if (!add.length && !remove.length) {
+      e.setTitle('Ничего не изменилось').setDescription(set ? 'Выбранные роли у вас уже есть.' : 'Эти роли у вас уже есть. Убрать роль можно командой `/roles`.');
+    } else {
+      e.setTitle('✅ Роли обновлены');
+      if (add.length) e.addFields({ name: 'Добавлено', value: mentions(add).slice(0, 1000) });
+      if (remove.length) e.addFields({ name: 'Убрано', value: mentions(remove).slice(0, 1000) });
+      if (!set) e.setDescription('Убрать роль можно командой `/roles`.');
+    }
+    if (set) await i.editReply({ embeds: [e], components: [roleMenu(MENU_SET, roles, now, 0)] });
+    else await i.editReply({ embeds: [e] });
+  } catch (e) {
+    log(`roles menu ${i.customId} failed:`, (e as Error).message);
+    const out = replyEmbed('Не получилось', humanDiscordError(e), COLORS.bad);
+    await (i.deferred || i.replied ? i.editReply({ ...out, components: [] }) : i.reply({ ...out, flags: EPHEMERAL })).catch(() => undefined);
+  }
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-bot/src"
@@ -118253,9 +118576,15 @@ import { t, useI18n } from '../i18n';
 import { Button, Section, Switch, fail, toast } from '../ui';
 import { ChannelName, ChannelPicker } from './ChannelPicker';
 
-interface Welcome { enabled: boolean; channelId: string; text: string; defaultText: string; maxLength: number }
+interface Role { id: string; name: string; color: number }
+interface Welcome { enabled: boolean; channelId: string; text: string; embed: boolean; roles: string[]; availableRoles: Role[]; defaultText: string; maxLength: number; maxRoles: number }
 
-/** «Приветствие новичков»: the bot greets a new member of the Discord server and points to /register. */
+const roleDot = (color: number) => (color ? `#${color.toString(16).padStart(6, '0')}` : 'rgb(var(--mute))');
+
+/**
+ * «Приветствие новичков»: the bot greets a new member of the Discord server (a funny line at random, or the administrator's
+ * own ones), in a beautiful embed, and offers a menu of roles to take.
+ */
 export default function WelcomeCard() {
   useI18n();
   const [w, setW] = useState<Welcome | null>(null);
@@ -118270,7 +118599,7 @@ export default function WelcomeCard() {
   }, []);
   if (!w) return null;
 
-  const save = async (patch: Partial<Pick<Welcome, 'enabled' | 'channelId' | 'text'>>) => {
+  const save = async (patch: Partial<Pick<Welcome, 'enabled' | 'channelId' | 'text' | 'embed' | 'roles'>>) => {
     setBusy(true);
     try {
       const r = await api<Welcome>('/settings/welcome', 'PUT', patch);
@@ -118301,6 +118630,37 @@ export default function WelcomeCard() {
             <label htmlFor="welcome-text" className="label">{t('wl.text')}</label>
             <textarea id="welcome-text" className="input min-h-24" maxLength={w.maxLength} value={text} placeholder={w.defaultText} onChange={(e) => setText(e.target.value)} />
             <p className="mt-1 text-sm font-semibold text-mute">{t('wl.vars')}</p>
+          </div>
+          <label className="flex items-center gap-3 font-bold">
+            <Switch id="welcome-embed" checked={w.embed} onChange={(on) => void save({ embed: on })} /> {t('wl.embed')}
+          </label>
+          <p className="-mt-1 text-sm font-semibold text-mute">{t('wl.embedHint')}</p>
+          <div>
+            <span className="label">{t('wl.roles')}</span>
+            <p className="mb-2 text-sm font-semibold text-mute">{t('wl.rolesHelp', { n: w.maxRoles })}</p>
+            {w.availableRoles.length === 0 ? (
+              <p className="text-sm font-semibold text-mute">{w.channelId ? t('wl.noRoles') : t('wl.rolesNoChannel')}</p>
+            ) : (
+              <div className="flex flex-wrap gap-2" role="group" aria-label={t('wl.roles')}>
+                {w.availableRoles.map((r) => {
+                  const on = w.roles.includes(r.id);
+                  const full = !on && w.roles.length >= w.maxRoles;
+                  return (
+                    <button
+                      key={r.id}
+                      type="button"
+                      className={`chip-filter ${on ? 'on' : ''}`}
+                      aria-pressed={on}
+                      disabled={busy || full}
+                      onClick={() => void save({ roles: on ? w.roles.filter((x) => x !== r.id) : [...w.roles, r.id] })}
+                    >
+                      <span aria-hidden="true" className="mr-2 inline-block h-2.5 w-2.5 rounded-full" style={{ background: roleDot(r.color) }} />
+                      {r.name}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </div>
           <div className="flex items-center gap-3">
             <Button type="button" loading={busy} onClick={() => void save({ text })} disabled={text.trim() === w.text}>{t('common.save')}</Button>
@@ -135453,7 +135813,13 @@ const en: Record<keyof typeof ru, string> = {
   'wl.noChannel': 'No channel chosen — nothing will be posted',
   'wl.pick': 'Choose channel',
   'wl.text': 'Greeting text',
-  'wl.vars': 'You can use {user} — a mention of the newcomer — and {server} — the server name. Empty — the default text.',
+  'wl.vars': 'You can use {user} — a mention of the newcomer, {server} — the server name and {count} — the member number. Empty — the bot posts a random funny line («…we hope you brought pizza 🍕»). Separate your own variants with a line of three dashes (---): a random one is used each time.',
+  'wl.embed': 'Beautiful look',
+  'wl.embedHint': 'A card with the newcomer\'s picture, the colour of your community and the member number. Turn it off for a plain text message.',
+  'wl.roles': 'Roles to choose from',
+  'wl.rolesHelp': 'A menu appears under the greeting: the newcomer takes the roles he wants (up to {n}). The same roles are open to everybody with /roles. Roles with administrator or moderator rights are never offered.',
+  'wl.noRoles': 'The bot sees no roles on this server. Give it the «Manage Roles» permission and put its role above the ones you want to offer.',
+  'wl.rolesNoChannel': 'Choose a channel first: the roles come from its Discord server.',
   'wl.saved': 'Saved',
   'wl.intent': 'Needs the «Server Members Intent» in Developer Portal → Bot.',
   'ds.title': 'Look of the bot messages',
@@ -139608,7 +139974,13 @@ const ru = {
   'wl.noChannel': 'Канал не выбран — приветствий не будет',
   'wl.pick': 'Выбрать канал',
   'wl.text': 'Текст приветствия',
-  'wl.vars': 'Можно использовать {user} — упоминание новичка и {server} — название сервера. Пусто — стандартный текст.',
+  'wl.vars': 'Можно использовать {user} — упоминание новичка, {server} — название сервера и {count} — номер участника. Пусто — бот шлёт случайную шутку («…надеемся, ты захватил пиццу 🍕»). Свои варианты разделяйте строкой из трёх дефисов (---): каждый раз выбирается случайный.',
+  'wl.embed': 'Красивое оформление',
+  'wl.embedHint': 'Карточка с аватаркой новичка, цветом вашего сообщества и номером участника. Выключите, чтобы бот писал обычным текстом.',
+  'wl.roles': 'Роли на выбор',
+  'wl.rolesHelp': 'Под приветствием появится меню: новичок сам берёт нужные роли (до {n}). Те же роли доступны всем по команде /roles. Роли с правами администратора или модератора сюда не попадают.',
+  'wl.noRoles': 'Бот не видит ролей на этом сервере. Дайте боту право «Управлять ролями» и поставьте его роль выше нужных.',
+  'wl.rolesNoChannel': 'Сначала выберите канал: роли берутся с его Discord-сервера.',
   'wl.saved': 'Сохранено',
   'wl.intent': 'Нужен «Server Members Intent» в Developer Portal → Bot.',
   'ds.title': 'Вид сообщений бота',

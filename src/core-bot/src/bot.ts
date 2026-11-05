@@ -1,7 +1,7 @@
 /** The bot's main loop: connection to Discord from the panel's settings, status messages, news and deliveries. */
-import { setStyle } from './style.js';
+import { footerOf, getStyle, setStyle } from './style.js';
 import fs from 'node:fs';
-import { ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, Client, EmbedBuilder, GatewayIntentBits } from 'discord.js';
+import { ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, Client, EmbedBuilder, GatewayIntentBits, type GuildMember } from 'discord.js';
 import { backend, report } from './backend.js';
 import { handleInteraction, registerCommands } from './commands.js';
 import { deliveryFailure, humanDiscordError, isMessageGone, newNonce, retryAfterOf, retrySocket, stableNonce } from './errors.js';
@@ -9,6 +9,7 @@ import { setGatewayAgent } from './gateway.js';
 import { log } from './log.js';
 import { buildNews, buildPayload, type Binding, type NewsPayload } from './messages.js';
 import { parseProxy } from './proxy.js';
+import { isPickable, welcomeRoleRow } from './roles.js';
 import { syncDiscord } from './sync.js';
 import { updatePresence } from './presence.js';
 import { STUCK_MS, stuckFor } from './watchdog.js';
@@ -71,7 +72,7 @@ function collectGuilds(c: Client) {
     name: string;
     hidden: number;
     channels: { id: string; name: string; pos: number; missing: string[] }[];
-    roles: { id: string; name: string; color: number }[];
+    roles: { id: string; name: string; color: number; pick: boolean }[];
     voice: { id: string; name: string }[];
   }[] = [];
   for (const g of c.guilds.cache.values()) {
@@ -91,7 +92,7 @@ function collectGuilds(c: Client) {
       .filter((r) => r.id !== g.id && !r.managed && r.editable)
       .sort((x, y) => y.position - x.position)
       .slice(0, 200)
-      .map((r) => ({ id: r.id, name: r.name, color: r.color }));
+      .map((r) => ({ id: r.id, name: r.name, color: r.color, pick: isPickable(r, g.id) }));
     // voice channels the bot may rename (live counters)
     const voice = [...g.channels.cache.values()]
       .filter((ch) => (ch.type === ChannelType.GuildVoice || ch.type === ChannelType.GuildStageVoice) && (!me || ch.permissionsFor(me)?.has(['ViewChannel', 'ManageChannels'])))
@@ -198,7 +199,7 @@ async function applyConfig(): Promise<void> {
   if (cfg.welcome) {
     c.on('guildMemberAdd', (m) => {
       if (stopping || m.user.bot) return;
-      void welcomeMember(c, m.id, m.guild.name).catch((e) => log('welcome failed:', (e as Error).message));
+      void welcomeMember(c, m).catch((e) => log('welcome failed:', (e as Error).message));
     });
   }
   c.on('guildCreate', guildsChanged);
@@ -228,15 +229,40 @@ async function applyConfig(): Promise<void> {
   }
 }
 
-/** greets a new member in the channel chosen in the panel (the text is rendered there) */
-async function welcomeMember(c: Client, userId: string, server: string): Promise<void> {
-  const res = await backend(`/internal/welcome?user=${encodeURIComponent(userId)}&server=${encodeURIComponent(server)}`);
+/**
+ * Greets a new member in the channel chosen in the panel. The panel picks and renders the text (a funny one, or one of
+ * the administrator's own); here it gets its look: an embed with the picture of the newcomer, the colour of the community
+ * and his number, and a menu of roles to take when the administrator chose some.
+ */
+async function welcomeMember(c: Client, m: GuildMember): Promise<void> {
+  const q = new URLSearchParams({ user: m.id, server: m.guild.name, count: String(m.guild.memberCount) });
+  const res = await backend(`/internal/welcome?${q.toString()}`);
   if (!res.ok) return;
-  const w = (await res.json()) as { channelId: string; content: string };
+  const w = (await res.json()) as { channelId: string; content: string; embed?: boolean; funny?: boolean; roles?: string[] };
   const channel = await c.channels.fetch(w.channelId);
   if (!channel || !channel.isTextBased() || !('send' in channel)) return;
+  const row = welcomeRoleRow(m.guild, w.roles ?? []);
+  const components = row ? [row] : [];
   // only the new member is pinged: no @everyone / @here from the text
-  await channel.send({ content: w.content, allowedMentions: { users: [userId] } });
+  const allowedMentions = { users: [m.id] };
+  if (!w.embed) {
+    await channel.send({ content: w.content, components, allowedMentions });
+    return;
+  }
+  const e = new EmbedBuilder()
+    .setColor(getStyle().accent)
+    .setAuthor({ name: m.displayName.slice(0, 120), iconURL: m.displayAvatarURL({ size: 64 }) })
+    .setTitle('👋 Новый участник!')
+    .setDescription(w.content.slice(0, 3000))
+    .setThumbnail(m.displayAvatarURL({ size: 256 }))
+    .setFooter(footerOf(`Участник №${m.guild.memberCount}`))
+    .setTimestamp();
+  const fields: { name: string; value: string }[] = [];
+  if (w.funny) fields.push({ name: '🎮 Что дальше', value: 'Свяжите игровой ник с Discord командой `/register`: попадёте в рейтинг, получите ранг и достижения.' });
+  if (row) fields.push({ name: '🎭 Роли', value: 'Выберите роли в меню ниже. Изменить выбор потом можно командой `/roles`.' });
+  if (fields.length) e.addFields(fields);
+  // the mention in the text of an embed does not notify: the short line above it does
+  await channel.send({ content: `<@${m.id}>`, embeds: [e], components, allowedMentions });
 }
 
 /**

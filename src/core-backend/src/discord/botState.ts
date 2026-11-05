@@ -19,7 +19,7 @@ export interface BotGuild {
   hidden?: number;
   channels: { id: string; name: string; missing?: string[] }[];
   /** roles the bot can give (below its own role, not managed by an integration) */
-  roles?: { id: string; name: string; color: number }[];
+  roles?: { id: string; name: string; color: number; /** safe to hand out by a menu: no administrative permissions */ pick?: boolean }[];
   /** voice channels the bot can rename (live counters) */
   voice?: { id: string; name: string }[];
 }
@@ -76,6 +76,7 @@ export const BOT_COMMANDS = [
   { name: '/player', description: 'Карточка игрока: часы, серия дней, где и когда играет. Параметр: nick' },
   { name: '/top', description: 'Самые активные игроки недели или месяца' },
   { name: '/servers', description: 'Список серверов: кнопки открывают карточку выбранного сервера (видно только вам)' },
+  { name: '/roles', description: 'Выбрать себе роли в меню: можно взять и снять (видно только вам)' },
   { name: '/help', description: 'Что умеет бот: команды по разделам, кнопки переключают разделы (видно только вам)' },
 ];
 

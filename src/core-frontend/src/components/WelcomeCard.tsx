@@ -4,9 +4,15 @@ import { t, useI18n } from '../i18n';
 import { Button, Section, Switch, fail, toast } from '../ui';
 import { ChannelName, ChannelPicker } from './ChannelPicker';
 
-interface Welcome { enabled: boolean; channelId: string; text: string; defaultText: string; maxLength: number }
+interface Role { id: string; name: string; color: number }
+interface Welcome { enabled: boolean; channelId: string; text: string; embed: boolean; roles: string[]; availableRoles: Role[]; defaultText: string; maxLength: number; maxRoles: number }
 
-/** «Приветствие новичков»: the bot greets a new member of the Discord server and points to /register. */
+const roleDot = (color: number) => (color ? `#${color.toString(16).padStart(6, '0')}` : 'rgb(var(--mute))');
+
+/**
+ * «Приветствие новичков»: the bot greets a new member of the Discord server (a funny line at random, or the administrator's
+ * own ones), in a beautiful embed, and offers a menu of roles to take.
+ */
 export default function WelcomeCard() {
   useI18n();
   const [w, setW] = useState<Welcome | null>(null);
@@ -21,7 +27,7 @@ export default function WelcomeCard() {
   }, []);
   if (!w) return null;
 
-  const save = async (patch: Partial<Pick<Welcome, 'enabled' | 'channelId' | 'text'>>) => {
+  const save = async (patch: Partial<Pick<Welcome, 'enabled' | 'channelId' | 'text' | 'embed' | 'roles'>>) => {
     setBusy(true);
     try {
       const r = await api<Welcome>('/settings/welcome', 'PUT', patch);
@@ -52,6 +58,37 @@ export default function WelcomeCard() {
             <label htmlFor="welcome-text" className="label">{t('wl.text')}</label>
             <textarea id="welcome-text" className="input min-h-24" maxLength={w.maxLength} value={text} placeholder={w.defaultText} onChange={(e) => setText(e.target.value)} />
             <p className="mt-1 text-sm font-semibold text-mute">{t('wl.vars')}</p>
+          </div>
+          <label className="flex items-center gap-3 font-bold">
+            <Switch id="welcome-embed" checked={w.embed} onChange={(on) => void save({ embed: on })} /> {t('wl.embed')}
+          </label>
+          <p className="-mt-1 text-sm font-semibold text-mute">{t('wl.embedHint')}</p>
+          <div>
+            <span className="label">{t('wl.roles')}</span>
+            <p className="mb-2 text-sm font-semibold text-mute">{t('wl.rolesHelp', { n: w.maxRoles })}</p>
+            {w.availableRoles.length === 0 ? (
+              <p className="text-sm font-semibold text-mute">{w.channelId ? t('wl.noRoles') : t('wl.rolesNoChannel')}</p>
+            ) : (
+              <div className="flex flex-wrap gap-2" role="group" aria-label={t('wl.roles')}>
+                {w.availableRoles.map((r) => {
+                  const on = w.roles.includes(r.id);
+                  const full = !on && w.roles.length >= w.maxRoles;
+                  return (
+                    <button
+                      key={r.id}
+                      type="button"
+                      className={`chip-filter ${on ? 'on' : ''}`}
+                      aria-pressed={on}
+                      disabled={busy || full}
+                      onClick={() => void save({ roles: on ? w.roles.filter((x) => x !== r.id) : [...w.roles, r.id] })}
+                    >
+                      <span aria-hidden="true" className="mr-2 inline-block h-2.5 w-2.5 rounded-full" style={{ background: roleDot(r.color) }} />
+                      {r.name}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </div>
           <div className="flex items-center gap-3">
             <Button type="button" loading={busy} onClick={() => void save({ text })} disabled={text.trim() === w.text}>{t('common.save')}</Button>
