@@ -15,7 +15,7 @@ export const COUNTDOWN_SECONDS = 3;
 /** the quick amounts under the confirmation; 0 = the whole chat */
 export const QUICK_COUNTS = [10, 50, 100, 0] as const;
 
-export type ClearAction = 'go' | 'no' | 'stop' | 'set';
+export type ClearAction = 'go' | 'no' | 'stop' | 'set' | 'info';
 
 /** what the person has chosen so far; it travels in the id of every button, so nothing is stored on the server */
 export interface ClearState {
@@ -44,7 +44,7 @@ export const clearId = (action: ClearAction, userId: string, st: ClearState, at:
 export const stopId = (channelId: string): string => `clear:stop:${channelId}:0:0:0:0:0`;
 
 export function parseClearId(id: string): ClearId | null {
-  const m = /^clear:(go|no|stop|set):(\d{1,25}):(\d{1,5}):([0-9a-z]{1,12}):([01]):(\d{1,25}):([01])$/.exec(id);
+  const m = /^clear:(go|no|stop|set|info):(\d{1,25}):(\d{1,5}):([0-9a-z]{1,12}):([01]):(\d{1,25}):([01])$/.exec(id);
   if (!m) return null;
   return { action: m[1] as ClearAction, userId: m[2] as string, count: Number(m[3]), at: parseInt(m[4] as string, 36), pinned: m[5] === '1', target: m[6] === '0' ? '' : (m[6] as string), old: m[7] === '1' };
 }

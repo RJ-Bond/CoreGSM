@@ -15,6 +15,7 @@ import {
   type ClearState, type Estimate, type Moderation, type MsgLike,
 } from './clearLogic.js';
 import { backendJson } from './backend.js';
+import { clearGuideEmbed } from './clearGuide.js';
 import { humanDiscordError } from './errors.js';
 import { log } from './log.js';
 import { COLORS, bar10, replyEmbed } from './replies.js';
@@ -23,12 +24,13 @@ import { footerOf, getStyle } from './style.js';
 export const CLEAR_COMMANDS = [
   {
     name: 'clear',
-    description: 'Очистить чат в этом канале (для администраторов, с подтверждением)',
+    description: '🧹 Очистить чат в канале · только админы',
+    description_localizations: { ru: '🧹 Очистить чат в канале · только админы', 'en-US': "🧹 Wipe this channel's chat · admins only", 'en-GB': "🧹 Wipe this channel's chat · admins only" },
     dm_permission: false,
     default_member_permissions: String(PermissionFlagsBits.Administrator),
     options: [
-      { type: 4, name: 'count', description: `Сколько последних сообщений удалить (по умолчанию весь чат, не больше ${MAX_COUNT})`, min_value: 1, max_value: MAX_COUNT, required: false },
-      { type: 6, name: 'user', description: 'Удалить только сообщения этого участника', required: false },
+      { type: 4, name: 'count', description: '🔢 Сколько последних (пусто — весь чат)', description_localizations: { ru: '🔢 Сколько последних (пусто — весь чат)', 'en-US': '🔢 How many latest (empty — all)', 'en-GB': '🔢 How many latest (empty — all)' }, min_value: 1, max_value: MAX_COUNT, required: false },
+      { type: 6, name: 'user', description: '👤 Чьи сообщения удалить', description_localizations: { ru: '👤 Чьи сообщения удалить', 'en-US': '👤 Whose messages to delete', 'en-GB': '👤 Whose messages to delete' }, required: false },
     ],
   },
 ];
@@ -123,6 +125,7 @@ function confirmView(channelId: string, userId: string, st: ClearState, at: numb
   const row3 = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder().setCustomId(clearId('go', userId, st, at)).setLabel(e.deletable ? 'Да, очистить' : 'Удалять нечего').setEmoji('🧹').setStyle(ButtonStyle.Danger).setDisabled(!e.deletable),
     new ButtonBuilder().setCustomId(clearId('no', userId, st, at)).setLabel('Отмена').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(clearId('info', userId, st, at)).setLabel('Как это работает').setEmoji('ℹ️').setStyle(ButtonStyle.Secondary),
   );
   return { embeds: [embed], components: [row1, row2, row3] };
 }
@@ -224,6 +227,10 @@ export async function handleClearButton(i: ButtonInteraction): Promise<void> {
     }
     if (i.user.id !== p.userId) {
       await i.reply({ ...replyEmbed('Это не ваша очистка', 'Подтвердить может только тот, кто набрал команду. Наберите `/clear` сами.', COLORS.warn), flags: EPHEMERAL });
+      return;
+    }
+    if (p.action === 'info') {
+      await i.reply({ embeds: [clearGuideEmbed()], flags: EPHEMERAL });
       return;
     }
     if (p.action === 'no') {

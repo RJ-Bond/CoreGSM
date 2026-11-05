@@ -1,4 +1,5 @@
 /** /help (categories as buttons) and /servers (the list of servers, a button opens the card). Both answers are private to the person who asked. */
+import { CLEAR_GUIDE_FIELDS } from './clearGuide.js';
 import { ActionRowBuilder, AttachmentBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, type ButtonInteraction, type ChatInputCommandInteraction } from 'discord.js';
 import { backend, backendJson } from './backend.js';
 import { log } from './log.js';
@@ -14,7 +15,7 @@ export const HELP_NAMES = new Set(HELP_COMMANDS.map((c) => c.name));
 
 const EPHEMERAL = 64;
 
-export interface HelpCategory { id: string; label: string; emoji: string; title: string; lines: [string, string][] }
+export interface HelpCategory { id: string; label: string; emoji: string; title: string; lines: [string, string][]; /** extra blocks under the list */ fields?: { name: string; value: string }[] }
 export const HELP_CATEGORIES: HelpCategory[] = [
   {
     id: 'play', label: 'Игроку', emoji: '🙋', title: 'Игроку: аккаунт и профиль',
@@ -43,6 +44,7 @@ export const HELP_CATEGORIES: HelpCategory[] = [
   {
     id: 'mod', label: 'Модерация', emoji: '🛡️', title: 'Модерация (для администраторов)',
     lines: [['/clear', 'очистить чат в этом канале: с подтверждением, закреплённые остаются']],
+    fields: CLEAR_GUIDE_FIELDS,
   },
 ];
 
@@ -65,6 +67,7 @@ export function helpEmbed(category: string | null): EmbedBuilder {
   return new EmbedBuilder()
     .setTitle(`${cat.emoji} ${cat.title}`)
     .setDescription(cat.lines.map(([cmd, text]) => `\`${cmd}\` — ${text}`).join('\n'))
+    .addFields(cat.fields ?? [])
     .setColor(getStyle().accent)
     .setFooter(footerOf());
 }

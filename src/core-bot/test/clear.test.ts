@@ -10,6 +10,9 @@ test('/clear is registered once, is hidden from non-administrators and works onl
   assert.equal(c.dm_permission, false);
   assert.equal(c.default_member_permissions, String(1n << 3n));
   assert.deepEqual(c.options.map((o) => o.name), ['count', 'user']);
+  // Discord shows 100 characters at most, in every language
+  for (const d of [c.description, ...Object.values(c.description_localizations), ...c.options.flatMap((o) => [o.description, ...Object.values(o.description_localizations)])]) assert.ok(d.length <= 100, d);
+  assert.ok(c.description.length <= 45);
 });
 
 test('button ids round-trip, stay short and reject foreign ids', () => {
@@ -21,6 +24,7 @@ test('button ids round-trip, stay short and reject foreign ids', () => {
   assert.equal(parseClearId('clear:go:abc:1:1:0:0'), null);
   assert.equal(parseClearId('clear:go:12:1:1'), null);
   assert.equal(parseClearId('help:play'), null);
+  assert.equal(parseClearId(clearId('info', '1234', { count: 0, pinned: false, target: '', old: false }, 5))?.action, 'info');
   assert.equal(parseClearId(stopId('123456789012345678'))?.action, 'stop');
   assert.equal(parseClearId(stopId('123456789012345678'))?.userId, '123456789012345678');
 });

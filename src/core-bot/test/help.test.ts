@@ -28,3 +28,10 @@ test('/servers: five buttons per row, at most 20, the id is in the customId', ()
   assert.equal(rows.reduce((a, r) => a + r.components.length, 0), 20);
   assert.equal((rows[0]!.components[0]!.toJSON() as { custom_id: string }).custom_id, 'srv:1');
 });
+
+test('/help: the moderation section carries the memo about /clear', () => {
+  const e = helpEmbed('mod').toJSON();
+  assert.match(e.description!, /\/clear/);
+  assert.ok((e.fields ?? []).length >= 5);
+  for (const f of e.fields ?? []) assert.ok(f.value.length <= 1024, f.name);
+});

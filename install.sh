@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="518582951572"
+COREGSM_BUILD="ee657d6e62d5"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.36"
+COREGSM_VERSION="1.1.37"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -38283,6 +38283,7 @@ import {
   type ClearState, type Estimate, type Moderation, type MsgLike,
 } from './clearLogic.js';
 import { backendJson } from './backend.js';
+import { clearGuideEmbed } from './clearGuide.js';
 import { humanDiscordError } from './errors.js';
 import { log } from './log.js';
 import { COLORS, bar10, replyEmbed } from './replies.js';
@@ -38291,12 +38292,13 @@ import { footerOf, getStyle } from './style.js';
 export const CLEAR_COMMANDS = [
   {
     name: 'clear',
-    description: 'Очистить чат в этом канале (для администраторов, с подтверждением)',
+    description: '🧹 Очистить чат в канале · только админы',
+    description_localizations: { ru: '🧹 Очистить чат в канале · только админы', 'en-US': "🧹 Wipe this channel's chat · admins only", 'en-GB': "🧹 Wipe this channel's chat · admins only" },
     dm_permission: false,
     default_member_permissions: String(PermissionFlagsBits.Administrator),
     options: [
-      { type: 4, name: 'count', description: `Сколько последних сообщений удалить (по умолчанию весь чат, не больше ${MAX_COUNT})`, min_value: 1, max_value: MAX_COUNT, required: false },
-      { type: 6, name: 'user', description: 'Удалить только сообщения этого участника', required: false },
+      { type: 4, name: 'count', description: '🔢 Сколько последних (пусто — весь чат)', description_localizations: { ru: '🔢 Сколько последних (пусто — весь чат)', 'en-US': '🔢 How many latest (empty — all)', 'en-GB': '🔢 How many latest (empty — all)' }, min_value: 1, max_value: MAX_COUNT, required: false },
+      { type: 6, name: 'user', description: '👤 Чьи сообщения удалить', description_localizations: { ru: '👤 Чьи сообщения удалить', 'en-US': '👤 Whose messages to delete', 'en-GB': '👤 Whose messages to delete' }, required: false },
     ],
   },
 ];
@@ -38391,6 +38393,7 @@ function confirmView(channelId: string, userId: string, st: ClearState, at: numb
   const row3 = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder().setCustomId(clearId('go', userId, st, at)).setLabel(e.deletable ? 'Да, очистить' : 'Удалять нечего').setEmoji('🧹').setStyle(ButtonStyle.Danger).setDisabled(!e.deletable),
     new ButtonBuilder().setCustomId(clearId('no', userId, st, at)).setLabel('Отмена').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(clearId('info', userId, st, at)).setLabel('Как это работает').setEmoji('ℹ️').setStyle(ButtonStyle.Secondary),
   );
   return { embeds: [embed], components: [row1, row2, row3] };
 }
@@ -38492,6 +38495,10 @@ export async function handleClearButton(i: ButtonInteraction): Promise<void> {
     }
     if (i.user.id !== p.userId) {
       await i.reply({ ...replyEmbed('Это не ваша очистка', 'Подтвердить может только тот, кто набрал команду. Наберите `/clear` сами.', COLORS.warn), flags: EPHEMERAL });
+      return;
+    }
+    if (p.action === 'info') {
+      await i.reply({ embeds: [clearGuideEmbed()], flags: EPHEMERAL });
       return;
     }
     if (p.action === 'no') {
@@ -38638,6 +38645,31 @@ async function record(i: ButtonInteraction, mod: Moderation, ch: Cleanable, t: T
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-bot/src"
+  cat > "$APP_DIR/core-bot/src/clearGuide.ts" << '__COREGSM_EOF__'
+/** The memo about /clear: shown in /help (Moderation) and by the «How it works» button of the confirmation. */
+import { EmbedBuilder } from 'discord.js';
+import { footerOf, getStyle } from './style.js';
+
+/** the fields of the memo (also used inside the help card) */
+export const CLEAR_GUIDE_FIELDS: { name: string; value: string }[] = [
+  { name: '📝 Примеры', value: '`/clear` — весь чат\n`/clear count:50` — последние 50 сообщений\n`/clear user:@Вася` — только его сообщения' },
+  { name: '✅ Что удаляется', value: 'Сообщения младше 14 дней: быстро, по 100 за раз. Перед удалением бот показывает, сколько их найдено.' },
+  { name: '📌 Закреплённые', value: 'Остаются на месте. Кнопкой «Закреплённые» их можно удалить тоже.' },
+  { name: '⏳ Старше 14 дней', value: 'Discord не даёт удалить их пачкой. Кнопка «Старые: удалять по одному» уберёт и их, но медленно: около 3 сообщений в секунду.' },
+  { name: '⏹️ Остановка', value: 'После подтверждения 3 секунды на раздумье, дальше кнопка «Остановить» работает в любой момент. Уже удалённое не вернуть.' },
+  { name: '🛡️ Защита', value: 'В панели (Discord → Модерация): защищённые каналы, пауза между очистками и журнал очисток.' },
+];
+
+export function clearGuideEmbed(): EmbedBuilder {
+  return new EmbedBuilder()
+    .setColor(getStyle().accent)
+    .setTitle('🧹 Команда /clear: как это работает')
+    .setDescription('Очищает чат в канале, где вы её набрали. Только для администраторов сервера и всегда с подтверждением.')
+    .addFields(CLEAR_GUIDE_FIELDS)
+    .setFooter(footerOf('Памятка'));
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-bot/src"
   cat > "$APP_DIR/core-bot/src/clearLogic.ts" << '__COREGSM_EOF__'
 /** /clear: pure logic (button ids, which messages can be deleted, estimates, texts). No discord.js import. */
 
@@ -38656,7 +38688,7 @@ export const COUNTDOWN_SECONDS = 3;
 /** the quick amounts under the confirmation; 0 = the whole chat */
 export const QUICK_COUNTS = [10, 50, 100, 0] as const;
 
-export type ClearAction = 'go' | 'no' | 'stop' | 'set';
+export type ClearAction = 'go' | 'no' | 'stop' | 'set' | 'info';
 
 /** what the person has chosen so far; it travels in the id of every button, so nothing is stored on the server */
 export interface ClearState {
@@ -38685,7 +38717,7 @@ export const clearId = (action: ClearAction, userId: string, st: ClearState, at:
 export const stopId = (channelId: string): string => `clear:stop:${channelId}:0:0:0:0:0`;
 
 export function parseClearId(id: string): ClearId | null {
-  const m = /^clear:(go|no|stop|set):(\d{1,25}):(\d{1,5}):([0-9a-z]{1,12}):([01]):(\d{1,25}):([01])$/.exec(id);
+  const m = /^clear:(go|no|stop|set|info):(\d{1,25}):(\d{1,5}):([0-9a-z]{1,12}):([01]):(\d{1,25}):([01])$/.exec(id);
   if (!m) return null;
   return { action: m[1] as ClearAction, userId: m[2] as string, count: Number(m[3]), at: parseInt(m[4] as string, 36), pinned: m[5] === '1', target: m[6] === '0' ? '' : (m[6] as string), old: m[7] === '1' };
 }
@@ -39134,6 +39166,7 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-bot/src"
   cat > "$APP_DIR/core-bot/src/help.ts" << '__COREGSM_EOF__'
 /** /help (categories as buttons) and /servers (the list of servers, a button opens the card). Both answers are private to the person who asked. */
+import { CLEAR_GUIDE_FIELDS } from './clearGuide.js';
 import { ActionRowBuilder, AttachmentBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, type ButtonInteraction, type ChatInputCommandInteraction } from 'discord.js';
 import { backend, backendJson } from './backend.js';
 import { log } from './log.js';
@@ -39149,7 +39182,7 @@ export const HELP_NAMES = new Set(HELP_COMMANDS.map((c) => c.name));
 
 const EPHEMERAL = 64;
 
-export interface HelpCategory { id: string; label: string; emoji: string; title: string; lines: [string, string][] }
+export interface HelpCategory { id: string; label: string; emoji: string; title: string; lines: [string, string][]; /** extra blocks under the list */ fields?: { name: string; value: string }[] }
 export const HELP_CATEGORIES: HelpCategory[] = [
   {
     id: 'play', label: 'Игроку', emoji: '🙋', title: 'Игроку: аккаунт и профиль',
@@ -39178,6 +39211,7 @@ export const HELP_CATEGORIES: HelpCategory[] = [
   {
     id: 'mod', label: 'Модерация', emoji: '🛡️', title: 'Модерация (для администраторов)',
     lines: [['/clear', 'очистить чат в этом канале: с подтверждением, закреплённые остаются']],
+    fields: CLEAR_GUIDE_FIELDS,
   },
 ];
 
@@ -39200,6 +39234,7 @@ export function helpEmbed(category: string | null): EmbedBuilder {
   return new EmbedBuilder()
     .setTitle(`${cat.emoji} ${cat.title}`)
     .setDescription(cat.lines.map(([cmd, text]) => `\`${cmd}\` — ${text}`).join('\n'))
+    .addFields(cat.fields ?? [])
     .setColor(getStyle().accent)
     .setFooter(footerOf());
 }
