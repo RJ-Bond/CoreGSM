@@ -336,6 +336,7 @@ export function NewsListPage() {
                         <span className={`nw-live-dot ${sv.online ? 'is-on' : 'is-off'}`} aria-hidden />
                         <span className="nw-live-name">{sv.name}</span>
                         <span className="nw-live-n tabular-nums">{sv.online ? `${sv.players}/${sv.maxPlayers}` : t('nw.offline')}</span>
+                        {sv.online && sv.maxPlayers > 0 && <span className="nw-live-bar" aria-hidden><i style={{ width: `${Math.min(100, Math.round((sv.players / sv.maxPlayers) * 100))}%` }} /></span>}
                       </a>
                     </li>
                   ))}

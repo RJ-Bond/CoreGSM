@@ -109,3 +109,17 @@ a.tile:active, a.panel:active, button.tile:active, [role='link'].tile:active { t
 .hc-tools { margin-bottom: 4px; }
 .hc-tip { font-size: var(--fs-xs); }
 .srv-cta-addr { font-size: var(--fs-sm); opacity: .85; }
+
+/* ---------- news: lower generated covers, a tighter body, month headings as a line with a count, a sticky side column ---------- */
+.nb-banner.nw-gen { height: 8.75rem; }
+.nb-body { gap: .6rem; padding: 1rem 1.5rem 1rem; }
+.nb-text { -webkit-line-clamp: 4; }
+.nb-title { -webkit-line-clamp: 2; overflow-wrap: break-word; word-break: normal; hyphens: auto; }
+.nw-cover-title { overflow-wrap: break-word; }
+.ne-h { display: flex; align-items: center; gap: .75rem; font-size: var(--fs-md); color: rgb(var(--ink)); letter-spacing: 0; }
+.ne-h::after { content: ''; flex: 1; height: 1px; background: rgb(var(--line)); }
+.ne-h-n { order: 2; min-width: 1.5rem; padding: 1px 8px; border-radius: var(--r-pill); background: rgb(var(--soft)); font-size: var(--fs-xs); font-weight: 800; text-align: center; color: rgb(var(--mute)); }
+@media (min-width: 1100px) { .nw-aside { top: 5.75rem; } }
+.nw-live a { flex-wrap: wrap; row-gap: 4px; }
+.nw-live-bar { flex: 1 0 100%; height: 3px; margin: -4px 0 6px 1.05rem; border-radius: 2px; background: rgb(var(--soft)); overflow: hidden; }
+.nw-live-bar > i { display: block; height: 100%; border-radius: inherit; background: rgb(var(--ok)); }

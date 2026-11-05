@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="1d01505e4fdf"
+COREGSM_BUILD="b90ce2e5e153"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.14"
+COREGSM_VERSION="1.1.15"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -119754,6 +119754,7 @@ export function NewsListPage() {
                         <span className={`nw-live-dot ${sv.online ? 'is-on' : 'is-off'}`} aria-hidden />
                         <span className="nw-live-name">{sv.name}</span>
                         <span className="nw-live-n tabular-nums">{sv.online ? `${sv.players}/${sv.maxPlayers}` : t('nw.offline')}</span>
+                        {sv.online && sv.maxPlayers > 0 && <span className="nw-live-bar" aria-hidden><i style={{ width: `${Math.min(100, Math.round((sv.players / sv.maxPlayers) * 100))}%` }} /></span>}
                       </a>
                     </li>
                   ))}
@@ -120051,6 +120052,13 @@ import {
   CATEGORY_HEX, categoryOf, defaultCoverBackground, galleryUrls, groupByMonth, isFresh, isGeneratedCover, isPinned, newsImage, plainExcerpt, readingMinutes,
 } from './newsLogic';
 
+/** a title with long words that have no spaces («long_name_without_spaces»): a soft break after «_» and «-» lets it wrap at a seam instead of in the middle of a word */
+function breakable(text: string): ReactNode {
+  const parts = text.split(/([_-])/);
+  if (parts.length === 1) return text;
+  return parts.map((p, i) => (i % 2 === 1 ? <span key={i}>{p}<wbr /></span> : p));
+}
+
 export { PANEL_THEME } from './NewsParts';
 
 export interface Card {
@@ -120150,7 +120158,7 @@ export function NewsCover({ c, servers, as: H = 'h2', href, tall = false }: { c:
           <CategoryChip category={c.category} />
           {c.at && <span className="nw-chip nw-chip-date">{newsWhen(c.at)}</span>}
         </div>
-        <H className="nw-cover-title">{href ? <a href={href}>{c.title}</a> : c.title}</H>
+        <H className="nw-cover-title">{href ? <a href={href}>{breakable(c.title)}</a> : breakable(c.title)}</H>
       </div>
     </div>
   );
@@ -120181,7 +120189,7 @@ export function NewsBanner({ c, children }: { c: Card; children?: ReactNode }) {
             <CategoryChip category={c.category} />
             {c.at && <time className="nb-date" dateTime={new Date(c.at).toISOString()} title={fmtDate(c.at)}>{newsWhen(c.at)}</time>}
           </span>
-          <h3 className="nb-title">{c.title}</h3>
+          <h3 className="nb-title">{breakable(c.title)}</h3>
         </span>
       </a>
       <div className="nb-body">
@@ -120293,13 +120301,13 @@ export function PublicFeed({ items, servers, flat = false, seen = null, dense = 
     <div className={`nw-feed ne-list ${dense ? 'is-dense' : ''}`}>
       {pinned.length > 0 && (
         <section className="nw-group">
-          <h2 className="ne-h">{t('nw.pinned')}</h2>
+          <h2 className="ne-h"><span>{t('nw.pinned')}</span><span className="ne-h-n">{pinned.length}</span></h2>
           {pinned.map((c) => (dense ? <Row key={c.id} c={c} servers={servers} /> : <Entry key={c.id} c={c} servers={servers} lang={lang} seen={seen} />))}
         </section>
       )}
       {groups.map((g) => (
         <section key={g.key} className="nw-group">
-          {(g.label || pinned.length > 0) && <h2 className="ne-h">{g.label || t('nw.earlier')}</h2>}
+          {(g.label || pinned.length > 0) && <h2 className="ne-h"><span>{g.label || t('nw.earlier')}</span><span className="ne-h-n">{g.items.length}</span></h2>}
           {g.items.map((c) => (dense ? <Row key={c.id} c={c} servers={servers} /> : <Entry key={c.id} c={c} servers={servers} lang={lang} seen={seen} />))}
         </section>
       ))}
@@ -155356,6 +155364,20 @@ a.tile:active, a.panel:active, button.tile:active, [role='link'].tile:active { t
 .hc-tools { margin-bottom: 4px; }
 .hc-tip { font-size: var(--fs-xs); }
 .srv-cta-addr { font-size: var(--fs-sm); opacity: .85; }
+
+/* ---------- news: lower generated covers, a tighter body, month headings as a line with a count, a sticky side column ---------- */
+.nb-banner.nw-gen { height: 8.75rem; }
+.nb-body { gap: .6rem; padding: 1rem 1.5rem 1rem; }
+.nb-text { -webkit-line-clamp: 4; }
+.nb-title { -webkit-line-clamp: 2; overflow-wrap: break-word; word-break: normal; hyphens: auto; }
+.nw-cover-title { overflow-wrap: break-word; }
+.ne-h { display: flex; align-items: center; gap: .75rem; font-size: var(--fs-md); color: rgb(var(--ink)); letter-spacing: 0; }
+.ne-h::after { content: ''; flex: 1; height: 1px; background: rgb(var(--line)); }
+.ne-h-n { order: 2; min-width: 1.5rem; padding: 1px 8px; border-radius: var(--r-pill); background: rgb(var(--soft)); font-size: var(--fs-xs); font-weight: 800; text-align: center; color: rgb(var(--mute)); }
+@media (min-width: 1100px) { .nw-aside { top: 5.75rem; } }
+.nw-live a { flex-wrap: wrap; row-gap: 4px; }
+.nw-live-bar { flex: 1 0 100%; height: 3px; margin: -4px 0 6px 1.05rem; border-radius: 2px; background: rgb(var(--soft)); overflow: hidden; }
+.nw-live-bar > i { display: block; height: 100%; border-radius: inherit; background: rgb(var(--ok)); }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/profile.css" << '__COREGSM_EOF__'

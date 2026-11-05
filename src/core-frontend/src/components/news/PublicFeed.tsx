@@ -9,6 +9,13 @@ import {
   CATEGORY_HEX, categoryOf, defaultCoverBackground, galleryUrls, groupByMonth, isFresh, isGeneratedCover, isPinned, newsImage, plainExcerpt, readingMinutes,
 } from './newsLogic';
 
+/** a title with long words that have no spaces («long_name_without_spaces»): a soft break after «_» and «-» lets it wrap at a seam instead of in the middle of a word */
+function breakable(text: string): ReactNode {
+  const parts = text.split(/([_-])/);
+  if (parts.length === 1) return text;
+  return parts.map((p, i) => (i % 2 === 1 ? <span key={i}>{p}<wbr /></span> : p));
+}
+
 export { PANEL_THEME } from './NewsParts';
 
 export interface Card {
@@ -108,7 +115,7 @@ export function NewsCover({ c, servers, as: H = 'h2', href, tall = false }: { c:
           <CategoryChip category={c.category} />
           {c.at && <span className="nw-chip nw-chip-date">{newsWhen(c.at)}</span>}
         </div>
-        <H className="nw-cover-title">{href ? <a href={href}>{c.title}</a> : c.title}</H>
+        <H className="nw-cover-title">{href ? <a href={href}>{breakable(c.title)}</a> : breakable(c.title)}</H>
       </div>
     </div>
   );
@@ -139,7 +146,7 @@ export function NewsBanner({ c, children }: { c: Card; children?: ReactNode }) {
             <CategoryChip category={c.category} />
             {c.at && <time className="nb-date" dateTime={new Date(c.at).toISOString()} title={fmtDate(c.at)}>{newsWhen(c.at)}</time>}
           </span>
-          <h3 className="nb-title">{c.title}</h3>
+          <h3 className="nb-title">{breakable(c.title)}</h3>
         </span>
       </a>
       <div className="nb-body">
@@ -251,13 +258,13 @@ export function PublicFeed({ items, servers, flat = false, seen = null, dense = 
     <div className={`nw-feed ne-list ${dense ? 'is-dense' : ''}`}>
       {pinned.length > 0 && (
         <section className="nw-group">
-          <h2 className="ne-h">{t('nw.pinned')}</h2>
+          <h2 className="ne-h"><span>{t('nw.pinned')}</span><span className="ne-h-n">{pinned.length}</span></h2>
           {pinned.map((c) => (dense ? <Row key={c.id} c={c} servers={servers} /> : <Entry key={c.id} c={c} servers={servers} lang={lang} seen={seen} />))}
         </section>
       )}
       {groups.map((g) => (
         <section key={g.key} className="nw-group">
-          {(g.label || pinned.length > 0) && <h2 className="ne-h">{g.label || t('nw.earlier')}</h2>}
+          {(g.label || pinned.length > 0) && <h2 className="ne-h"><span>{g.label || t('nw.earlier')}</span><span className="ne-h-n">{g.items.length}</span></h2>}
           {g.items.map((c) => (dense ? <Row key={c.id} c={c} servers={servers} /> : <Entry key={c.id} c={c} servers={servers} lang={lang} seen={seen} />))}
         </section>
       ))}
