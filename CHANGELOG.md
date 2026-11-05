@@ -35,8 +35,13 @@ interface language; the GitHub release text is built from the section of the ver
 - 🤖 Вход: после трёх неверных паролей с одного адреса страница сама решает небольшую задачу (капча без внешних сервисов) | Sign-in: after three wrong passwords from one address the page solves a small puzzle by itself (a captcha with no outside service)
 - ✉️ Подтверждённую почту можно сменить только по ссылке из письма на прежний адрес | A verified e-mail can be changed only through the link in a letter to the old address
 - 📋 Админка → Серверы: «Копировать» в меню строки открывает форму нового сервера с данными текущего | Admin → Servers: «Duplicate» in a row menu opens the new-server form filled in from this one
+- 📜 Журнал действий: фильтры по автору и по виду действия (создано, изменено, удалено, безопасность) | Action log: filters by who did it and by the kind of action (created, changed, removed, security)
+- 🛠️ Серверы в админке: обслуживание на час или его завершение сразу для нескольких выбранных серверов | Servers in the admin area: start or end maintenance for several selected servers at once
+- 🔔 Профиль: отдельная вкладка «Уведомления» (push, избранные серверы, игроки, новости); в списке «Следить» видно, кто сейчас в игре и на каком сервере | Profile: a separate «Notifications» tab (push, favourite servers, players, news); the «Following» list shows who is in a game right now and where
+- 🏁 Новый сезон: итоги завершённого сезона (пьедестал по часам) публикуются в канале оповещений Discord | A new season: the finished one (podium by hours) is announced in the Discord alert channel
 
 ### 🐛 Исправлено | Fixed
+- 🎮 Иконки игр в списках не упираются в края плитки: у всех одинаковые отступы | Game icons in lists no longer touch the edges of their tile: the same padding for all
 - ⏱️ Страница игрока: длительность визита пишется «1 ч 44 мин», а не «104 мин» | Player page: a visit length reads «1 h 44 min», not «104 min»
 - 🎯 Профиль: кольцо уровня у аватара без тёмной серой обводки; в «Активности» вместо login_new_device «Вход с нового устройства» | Profile: the level ring has no dark grey outline; the Activity feed says «Sign-in from a new device» instead of login_new_device
 

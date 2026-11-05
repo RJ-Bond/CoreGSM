@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { api } from '../api';
-import { t, useI18n } from '../i18n';
+import { t, useI18n, type TKey } from '../i18n';
 import { Icon } from '../icons';
 import { JournalArt } from '../components/Illustrations';
 import { AdminPage, Empty, ErrorLine, IconJournal, LoadError, PageHead, fmtDateTime, fmtTime, usePoll, SkeletonRows } from '../ui';
@@ -25,6 +25,7 @@ const ICON: Record<Kind, ReactNode> = {
   sec: <><rect x="5" y="11" width="14" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" /></>,
 };
 
+const KINDS: [Kind | 'all', TKey][] = [['all', 'd2.jr.k.all'], ['add', 'd2.jr.k.add'], ['edit', 'd2.jr.k.edit'], ['del', 'd2.jr.k.del'], ['sec', 'd2.jr.k.sec']];
 const STEP = 200;
 const MAX = 2000;
 
@@ -44,6 +45,8 @@ export default function JournalPage() {
   useI18n();
   const [rows, setRows] = useState<Row[] | null>(null);
   const [q, setQ] = useState('');
+  const [kind, setKind] = useState<Kind | 'all'>('all');
+  const [actor, setActor] = useState('');
   const [error, setError] = useState('');
   const [limit, setLimit] = useState(100);
   const limitRef = useRef(limit);
@@ -53,7 +56,9 @@ export default function JournalPage() {
   useEffect(() => { void load(); }, [limit]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const needle = q.trim().toLowerCase();
-  const shown = (rows ?? []).filter((r) => !needle || `${r.actor} ${r.action} ${r.detail}`.toLowerCase().includes(needle));
+  const actors = useMemo(() => [...new Set((rows ?? []).map((r) => r.actor))].sort((a, b) => a.localeCompare(b)), [rows]);
+  const shown = (rows ?? []).filter((r) => (!needle || `${r.actor} ${r.action} ${r.detail}`.toLowerCase().includes(needle)) && (!actor || r.actor === actor) && (kind === 'all' || kindOf(r.action) === kind));
+  const filtered = needle !== '' || actor !== '' || kind !== 'all';
   const groups = useMemo(() => {
     const m = new Map<string, Row[]>();
     for (const r of shown) {
@@ -90,9 +95,18 @@ export default function JournalPage() {
       )}
     >
       {error && !rows ? <LoadError error={error} onRetry={() => void load()} /> : <ErrorLine text={error} />}
-      <input className="input max-w-sm" type="search" placeholder={t('d2.jr.search')} value={q} onChange={(e) => setQ(e.target.value)} aria-label={t('d2.jr.searchLabel')} />
+      <div className="flex flex-wrap items-center gap-3">
+        <input className="input max-w-sm" type="search" placeholder={t('d2.jr.search')} value={q} onChange={(e) => setQ(e.target.value)} aria-label={t('d2.jr.searchLabel')} />
+        <select className="input max-w-52" value={actor} onChange={(e) => setActor(e.target.value)} aria-label={t('d2.jr.actor')}>
+          <option value="">{t('d2.jr.anyActor')}</option>
+          {actors.map((a) => <option key={a} value={a}>{a}</option>)}
+        </select>
+        <div className="seg flex-wrap" role="group" aria-label={t('d2.jr.kind')}>
+          {KINDS.map(([k, label]) => <button key={k} type="button" className="seg-item" aria-pressed={kind === k} onClick={() => setKind(k)}>{t(label)}</button>)}
+        </div>
+      </div>
       {!rows && !error && <SkeletonRows n={6} h="h-12" />}
-      {rows && shown.length === 0 && <Empty art={<JournalArt />} title={t('d2.jr.empty')} text={needle ? t('d2.jr.notFound') : t('d2.jr.emptyText')}>{needle && <button type="button" className="btn btn-soft mt-3" onClick={() => setQ('')}>{t('d2.jr.resetSearch')}</button>}</Empty>}
+      {rows && shown.length === 0 && <Empty art={<JournalArt />} title={t('d2.jr.empty')} text={filtered ? t('d2.jr.notFound') : t('d2.jr.emptyText')}>{filtered && <button type="button" className="btn btn-soft mt-3" onClick={() => { setQ(''); setActor(''); setKind('all'); }}>{t('d2.jr.resetSearch')}</button>}</Empty>}
       {groups.map(([day, list]) => (
         <section key={day} className="space-y-2">
           <h2 className="text-xs font-extrabold uppercase tracking-wide text-mute">{day}</h2>

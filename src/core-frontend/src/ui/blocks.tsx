@@ -128,7 +128,7 @@ export function GameAvatar({ game, size = 44, glass = false, vtId }: { game: str
       aria-hidden
     >
       {GAME_IMAGE[game] ? (
-        <img src={GAME_IMAGE[game]} width={size * (compact ? 0.82 : 0.74)} height={size * (compact ? 0.82 : 0.74)} alt="" draggable={false} className="object-contain" />
+        <img src={GAME_IMAGE[game]} width={size * (compact ? 0.66 : 0.7)} height={size * (compact ? 0.66 : 0.7)} alt="" draggable={false} className="object-contain" />
       ) : icon ? (
         <svg width={size * 0.58} height={size * 0.58} viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <path d={icon} />

@@ -25,6 +25,8 @@ export interface TableActions {
   /** refresh / delete several at once; resolve when done */
   onRefreshMany: (list: Server[]) => Promise<void>;
   onRemoveMany: (list: Server[]) => Promise<void>;
+  /** put several servers into maintenance for an hour (true) or end it (false) */
+  onMaintenanceMany: (list: Server[], on: boolean) => Promise<void>;
   /** move a server one step up/down in the manual order (the ids on screen, in order) */
   onMove: (s: Server, dir: -1 | 1, shown: number[]) => void;
 }
@@ -133,6 +135,8 @@ export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableA
         <div className="adm-bulk adm-bulk-float" role="region" aria-label={t('adm.tbl.selected')}>
           <b>{t('adm.tbl.picked', { n: picked.length })}</b>
           <button type="button" className="btn btn-soft btn-sm" disabled={busy} onClick={() => void many(a.onRefreshMany)}>{t('adm.tbl.poll')}</button>
+          <button type="button" className="btn btn-soft btn-sm" disabled={busy} onClick={() => void many((l) => a.onMaintenanceMany(l, true))}>{t('adm.tbl.maintOnMany')}</button>
+          <button type="button" className="btn btn-soft btn-sm" disabled={busy} onClick={() => void many((l) => a.onMaintenanceMany(l, false))}>{t('adm.tbl.maintOffMany')}</button>
           <button type="button" className="btn btn-soft btn-sm" onClick={() => void copyPicked()}>{t('adm.tbl.copyAddrs')}</button>
           {a.isAdmin && <button type="button" className="btn btn-danger btn-sm" disabled={busy} onClick={() => void removeMany()}>{t('adm.srv.delete')}</button>}
           <button type="button" className="btn btn-ghost btn-sm ml-auto" onClick={() => setSel([])}>{t('adm.tbl.clear')}</button>

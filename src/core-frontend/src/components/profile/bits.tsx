@@ -17,6 +17,7 @@ export const IcoLock = () => <Icon size={12}><rect x="5" y="11" width="14" heigh
 export const IcoCheck = () => <Icon size={12}><path d="M20 6 9 17l-5-5" /></Icon>;
 export const IcoHome = () => <Icon size={16}><path d="m3 11 9-8 9 8" /><path d="M5 10v10h14V10" /></Icon>;
 export const IcoSliders = () => <Icon size={16}><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6" /></Icon>;
+export const IcoBell = () => <Icon size={16}><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.94 1.94 0 0 0 3.4 0" /></Icon>;
 export const IcoShield = () => <Icon size={16}><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z" /></Icon>;
 
 /** a stat tile: icon, value and label; `hot` tints the icon (a streak of a week or more) */

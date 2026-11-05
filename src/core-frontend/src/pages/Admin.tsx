@@ -502,6 +502,18 @@ function ServersManage({ sub }: { sub: string }) {
     toast(t('adm.srv.polled', { n: list.length }));
     await load();
   };
+  /** several servers into maintenance for an hour, or out of it (only the windows of the server itself can be ended here) */
+  const maintenanceMany = async (list: Server[], on: boolean) => {
+    const now = Date.now();
+    const jobs = list.flatMap((s) => {
+      if (on) return s.maintenance ? [] : [api('/maintenance', 'POST', { serverId: s.id, name: t('adm.tbl.maintName'), startTs: now, endTs: now + 3_600_000, repeat: 'none' })];
+      const w = windows.find((x) => x.serverId === s.id && x.active);
+      return s.maintenance && w ? [api(`/maintenance/${w.id}`, 'DELETE')] : [];
+    });
+    await Promise.allSettled(jobs);
+    toast(t(on ? 'adm.tbl.maintManyOn' : 'adm.tbl.maintManyOff', { n: jobs.length }));
+    await load();
+  };
   const removeMany = async (list: Server[]) => {
     removeSome(list, t('adm.srv.delMany', { n: list.length }));
   };
@@ -566,6 +578,7 @@ function ServersManage({ sub }: { sub: string }) {
               onEdit: (sv) => setEditing({ id: sv.id, data: { name: sv.customName, game: sv.game, host: sv.host, port: sv.port, queryPort: sv.queryPort, displayAddress: sv.displayAddress, country: sv.country }, cover: sv.coverUrl }),
               onRemove: (sv) => void remove(sv),
               onRefreshMany: refreshMany,
+              onMaintenanceMany: maintenanceMany,
               onRemoveMany: removeMany,
               onMove: (sv, dir, shown) => void move(sv, dir, shown),
             }}

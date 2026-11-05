@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="98142a4a93a1"
+COREGSM_BUILD="7d1a14f04e1e"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.27"
+COREGSM_VERSION="1.1.28"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -29996,8 +29996,16 @@ export function registerPlayerFollows(deps: { app: Express; auth: RequestHandler
   const { app, auth, userId } = deps;
 
   app.get('/api/me/follows', auth, (req, res) => {
-    const rows = db.prepare('SELECT nick, created_at FROM player_follows WHERE user_id = ? ORDER BY created_at DESC').all(userId(req)) as { nick: string; created_at: number }[];
-    res.json(rows.map((r) => ({ nick: r.nick, createdAt: r.created_at })));
+    const rows = db.prepare('SELECT nick, nick_key, created_at FROM player_follows WHERE user_id = ? ORDER BY created_at DESC').all(userId(req)) as { nick: string; nick_key: string; created_at: number }[];
+    // who of them is in a game right now (an open session), and where
+    const playing = db.prepare(`SELECT ${EFFECTIVE_NAME} AS sname, s.id AS sid, ps.joined_at AS since FROM player_sessions ps JOIN servers s ON s.id = ps.server_id LEFT JOIN status st ON st.server_id = s.id WHERE ulower(ps.name) = ? AND ps.left_at IS NULL ORDER BY ps.joined_at DESC LIMIT 1`);
+    const out = rows.map((r) => {
+      const p = playing.get(r.nick_key) as { sname: string; sid: number; since: number } | undefined;
+      return { nick: r.nick, createdAt: r.created_at, playing: p ? { serverId: p.sid, server: p.sname, since: p.since } : null };
+    });
+    // those in a game first
+    out.sort((a, b) => Number(!!b.playing) - Number(!!a.playing));
+    res.json(out);
   });
 
   app.put('/api/players/:nick/follow', auth, (req, res) => {
@@ -30952,6 +30960,33 @@ export function rankById(id: string): VrRank | undefined {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/profile"
+  cat > "$APP_DIR/core-backend/src/profile/seasonLogic.ts" << '__COREGSM_EOF__'
+/** The Discord message about a finished season: the podium and the length of the season. Pure, so it is tested on its own. */
+import { COLORS } from '../discord/palette.js';
+
+export interface PodiumRow { name: string; hours: number }
+
+/** markdown characters of a nick, so a nick cannot format the message */
+const SPECIAL = new Set(['*', '_', '~', '|', '>', String.fromCharCode(96), String.fromCharCode(92)]);
+const esc = (v: string) => [...v].map((c) => (SPECIAL.has(c) ? String.fromCharCode(92) + c : c)).join('');
+
+const MEDALS = ['🥇', '🥈', '🥉'];
+
+export function seasonSummary(name: string, startsAt: number, endsAt: number, podium: PodiumRow[], next: string): { content: string; mention: 'none'; embed: Record<string, unknown> } {
+  const days = Math.max(1, Math.round((endsAt - startsAt) / 86_400_000));
+  const lines = podium.slice(0, 3).map((p, i) => `${MEDALS[i]} **${esc(p.name)}** · ${Math.round(p.hours * 10) / 10} ч`);
+  return {
+    content: '',
+    mention: 'none',
+    embed: {
+      title: `🏁 Сезон «${name}» завершён`,
+      description: `${lines.length ? lines.join('\n') : 'В этом сезоне никто не играл.'}\n\nСезон длился ${days} дн. Начинается «${next}»: лидерам нового сезона достанутся значки первых.`,
+      color: COLORS.info,
+    },
+  };
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/profile"
   cat > "$APP_DIR/core-backend/src/profile/seasons.ts" << '__COREGSM_EOF__'
 /**
  * Seasons (usually one per wipe): the admin starts a new season, the previous one ends at that moment.
@@ -30971,6 +31006,9 @@ import { db } from '../db.js';
 import { mk, type Achievement } from './profile.js';
 import { topPlayers } from '../routes/community.js';
 import { param } from '../http.js';
+import { alertSettings, enqueueAlert } from '../alerts/alerts.js';
+import { log } from '../logger.js';
+import { seasonSummary } from './seasonLogic.js';
 
 export const router = express.Router();
 
@@ -31059,7 +31097,17 @@ router.post('/api/seasons', admin, (req, res) => {
   const b = z.object({ name: nameSchema, startsAt: z.number().int().positive().optional() }).safeParse(req.body);
   if (!b.success) return res.status(400).json({ error: 'Неверные данные' });
   const at = Math.min(b.data.startsAt ?? Date.now(), Date.now() + 365 * 86_400_000);
+  const before = seasonsView().current;
   const id = startSeason(b.data.name, at);
+  // the finished season is announced in the alert channel: the podium by hours played
+  try {
+    if (before && alertSettings().channelId) {
+      const podium = topPlayers(before.startsAt, at, 3).map((p) => ({ name: p.name, hours: p.hours }));
+      enqueueAlert('digest', before.name, seasonSummary(before.name, before.startsAt, at, podium, b.data.name));
+    }
+  } catch (e) {
+    log.warn('season summary not sent', (e as Error).message);
+  }
   res.json({ id, ...seasonsView() });
 });
 
@@ -122826,7 +122874,7 @@ import { useAuth } from '../../auth';
 import { t, useI18n } from '../../i18n';
 import { Button, ErrorLine, Section, ago, toast, fail } from '../../ui';
 
-interface Follow { nick: string; createdAt: number }
+interface Follow { nick: string; createdAt: number; playing?: { serverId: number; server: string; since: number } | null }
 
 const keyOf = (nick: string) => nick.trim().toLowerCase();
 
@@ -122882,7 +122930,9 @@ export function FollowsCard() {
           {list.map((f) => (
             <li key={f.nick} className="flex flex-wrap items-center gap-2 py-2">
               <a href={`/player/${encodeURIComponent(f.nick)}`} className="min-w-0 flex-1 truncate font-extrabold hover:text-link">{f.nick}</a>
-              <span className="text-xs font-semibold text-mute">{t('d2.an.since', { date: ago(f.createdAt) })}</span>
+              {f.playing
+                ? <a href={`/servers/${f.playing.serverId}`} className="pill pill-ok max-w-full truncate" title={f.playing.server}>{t('d2.fo.playing', { server: f.playing.server })}</a>
+                : <span className="text-xs font-semibold text-mute">{t('d2.an.since', { date: ago(f.createdAt) })}</span>}
               <button type="button" className="btn btn-soft btn-xs" onClick={() => void stop(f.nick)}>{t('d2.fo.stop')}</button>
             </li>
           ))}
@@ -124456,6 +124506,7 @@ export const IcoLock = () => <Icon size={12}><rect x="5" y="11" width="14" heigh
 export const IcoCheck = () => <Icon size={12}><path d="M20 6 9 17l-5-5" /></Icon>;
 export const IcoHome = () => <Icon size={16}><path d="m3 11 9-8 9 8" /><path d="M5 10v10h14V10" /></Icon>;
 export const IcoSliders = () => <Icon size={16}><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6" /></Icon>;
+export const IcoBell = () => <Icon size={16}><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.94 1.94 0 0 0 3.4 0" /></Icon>;
 export const IcoShield = () => <Icon size={16}><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z" /></Icon>;
 
 /** a stat tile: icon, value and label; `hot` tints the icon (a streak of a week or more) */
@@ -133458,6 +133509,7 @@ const en: Record<keyof typeof ru, string> = {
   'pf.tabs': 'Profile sections',
   'pf.tab.overview': 'Overview',
   'pf.tab.player': 'Player',
+  'pf.tab.notify': 'Notifications',
   'pf.tab.look': 'Appearance & region',
   'pf.tab.security': 'Security',
   'pf.role.admin': 'ADMINISTRATOR',
@@ -135613,6 +135665,10 @@ const en: Record<keyof typeof ru, string> = {
   'login.banUntil': ' Blocked until {d}.',
   'adm.tbl.duplicate': 'Duplicate',
   'adm.tbl.copySuffix': '(copy)',
+  'adm.tbl.maintOnMany': 'Start maintenance',
+  'adm.tbl.maintOffMany': 'End maintenance',
+  'adm.tbl.maintManyOn': 'Maintenance for an hour started: {n}',
+  'adm.tbl.maintManyOff': 'Maintenance ended: {n}',
   'adm.tbl.up': 'Move up',
   'adm.tbl.down': 'Move down',
   'adm.tbl.moved': 'Server order saved',
@@ -136714,6 +136770,14 @@ const en: Record<keyof typeof ru, string> = {
   'd2.jr.hint': 'Here is recorded which administrator changed what and when. It helps to find where a change came from.',
   'd2.jr.help': 'The last 2000 actions are kept. Search works by name, action and details.',
   'd2.jr.csvBtn': 'Download CSV',
+  'd2.jr.actor': 'Who did it',
+  'd2.jr.anyActor': 'Everyone',
+  'd2.jr.kind': 'What was done',
+  'd2.jr.k.all': 'All',
+  'd2.jr.k.add': 'Created',
+  'd2.jr.k.edit': 'Changed',
+  'd2.jr.k.del': 'Removed',
+  'd2.jr.k.sec': 'Security',
   'd2.jr.search': 'Search the journal…',
   'd2.jr.searchLabel': 'Search the journal',
   'd2.jr.empty': 'No entries',
@@ -136971,6 +137035,7 @@ const en: Record<keyof typeof ru, string> = {
   'd2.fo.t.on': 'We will tell you when {nick} joins a server',
   'd2.fo.following': '★ Following',
   'd2.fo.follow': '☆ Follow',
+  'd2.fo.playing': 'Playing: {server}',
   'd2.fo.title': 'Players I follow',
   'd2.fo.desc': 'We will tell you in the panel, in Discord and on your device when these players join a server. No more than once in 30 minutes per player.',
   'd2.fo.none': 'Nobody yet. Open a player\'s page and press "Follow".',
@@ -137573,6 +137638,7 @@ const ru = {
   'pf.tabs': 'Разделы профиля',
   'pf.tab.overview': 'Обзор',
   'pf.tab.player': 'Игрок',
+  'pf.tab.notify': 'Уведомления',
   'pf.tab.look': 'Оформление и регион',
   'pf.tab.security': 'Безопасность',
   'pf.role.admin': 'АДМИНИСТРАТОР',
@@ -139728,6 +139794,10 @@ const ru = {
   'login.banUntil': ' Блокировка до {d}.',
   'adm.tbl.duplicate': 'Копировать',
   'adm.tbl.copySuffix': '(копия)',
+  'adm.tbl.maintOnMany': 'В обслуживание',
+  'adm.tbl.maintOffMany': 'Завершить обслуживание',
+  'adm.tbl.maintManyOn': 'Обслуживание на час включено: {n}',
+  'adm.tbl.maintManyOff': 'Обслуживание завершено: {n}',
   'adm.tbl.up': 'Выше',
   'adm.tbl.down': 'Ниже',
   'adm.tbl.moved': 'Порядок серверов сохранён',
@@ -140829,6 +140899,14 @@ const ru = {
   'd2.jr.hint': 'Здесь записано, кто из администраторов что и когда менял. Это помогает понять, откуда взялось изменение.',
   'd2.jr.help': 'Хранятся последние 2000 действий. Поиск работает по имени, действию и подробностям.',
   'd2.jr.csvBtn': 'Скачать CSV',
+  'd2.jr.actor': 'Кто сделал',
+  'd2.jr.anyActor': 'Все, кто делал',
+  'd2.jr.kind': 'Что сделали',
+  'd2.jr.k.all': 'Всё',
+  'd2.jr.k.add': 'Создано',
+  'd2.jr.k.edit': 'Изменено',
+  'd2.jr.k.del': 'Удалено',
+  'd2.jr.k.sec': 'Безопасность',
   'd2.jr.search': 'Поиск по журналу…',
   'd2.jr.searchLabel': 'Поиск по журналу',
   'd2.jr.empty': 'Записей нет',
@@ -141086,6 +141164,7 @@ const ru = {
   'd2.fo.t.on': 'Сообщим, когда {nick} зайдёт на сервер',
   'd2.fo.following': '★ Вы следите',
   'd2.fo.follow': '☆ Следить',
+  'd2.fo.playing': 'Играет: {server}',
   'd2.fo.title': 'Слежу за игроками',
   'd2.fo.desc': 'Сообщим в панели, в Discord и на устройстве, когда эти игроки заходят на сервер. Не чаще раза в 30 минут на игрока.',
   'd2.fo.none': 'Пока никого. Откройте страницу игрока и нажмите «Следить».',
@@ -142076,6 +142155,18 @@ function ServersManage({ sub }: { sub: string }) {
     toast(t('adm.srv.polled', { n: list.length }));
     await load();
   };
+  /** several servers into maintenance for an hour, or out of it (only the windows of the server itself can be ended here) */
+  const maintenanceMany = async (list: Server[], on: boolean) => {
+    const now = Date.now();
+    const jobs = list.flatMap((s) => {
+      if (on) return s.maintenance ? [] : [api('/maintenance', 'POST', { serverId: s.id, name: t('adm.tbl.maintName'), startTs: now, endTs: now + 3_600_000, repeat: 'none' })];
+      const w = windows.find((x) => x.serverId === s.id && x.active);
+      return s.maintenance && w ? [api(`/maintenance/${w.id}`, 'DELETE')] : [];
+    });
+    await Promise.allSettled(jobs);
+    toast(t(on ? 'adm.tbl.maintManyOn' : 'adm.tbl.maintManyOff', { n: jobs.length }));
+    await load();
+  };
   const removeMany = async (list: Server[]) => {
     removeSome(list, t('adm.srv.delMany', { n: list.length }));
   };
@@ -142140,6 +142231,7 @@ function ServersManage({ sub }: { sub: string }) {
               onEdit: (sv) => setEditing({ id: sv.id, data: { name: sv.customName, game: sv.game, host: sv.host, port: sv.port, queryPort: sv.queryPort, displayAddress: sv.displayAddress, country: sv.country }, cover: sv.coverUrl }),
               onRemove: (sv) => void remove(sv),
               onRefreshMany: refreshMany,
+              onMaintenanceMany: maintenanceMany,
               onRemoveMany: removeMany,
               onMove: (sv, dir, shown) => void move(sv, dir, shown),
             }}
@@ -143132,6 +143224,8 @@ export interface TableActions {
   /** refresh / delete several at once; resolve when done */
   onRefreshMany: (list: Server[]) => Promise<void>;
   onRemoveMany: (list: Server[]) => Promise<void>;
+  /** put several servers into maintenance for an hour (true) or end it (false) */
+  onMaintenanceMany: (list: Server[], on: boolean) => Promise<void>;
   /** move a server one step up/down in the manual order (the ids on screen, in order) */
   onMove: (s: Server, dir: -1 | 1, shown: number[]) => void;
 }
@@ -143240,6 +143334,8 @@ export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableA
         <div className="adm-bulk adm-bulk-float" role="region" aria-label={t('adm.tbl.selected')}>
           <b>{t('adm.tbl.picked', { n: picked.length })}</b>
           <button type="button" className="btn btn-soft btn-sm" disabled={busy} onClick={() => void many(a.onRefreshMany)}>{t('adm.tbl.poll')}</button>
+          <button type="button" className="btn btn-soft btn-sm" disabled={busy} onClick={() => void many((l) => a.onMaintenanceMany(l, true))}>{t('adm.tbl.maintOnMany')}</button>
+          <button type="button" className="btn btn-soft btn-sm" disabled={busy} onClick={() => void many((l) => a.onMaintenanceMany(l, false))}>{t('adm.tbl.maintOffMany')}</button>
           <button type="button" className="btn btn-soft btn-sm" onClick={() => void copyPicked()}>{t('adm.tbl.copyAddrs')}</button>
           {a.isAdmin && <button type="button" className="btn btn-danger btn-sm" disabled={busy} onClick={() => void removeMany()}>{t('adm.srv.delete')}</button>}
           <button type="button" className="btn btn-ghost btn-sm ml-auto" onClick={() => setSel([])}>{t('adm.tbl.clear')}</button>
@@ -146060,7 +146156,7 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/pages/Journal.tsx" << '__COREGSM_EOF__'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { api } from '../api';
-import { t, useI18n } from '../i18n';
+import { t, useI18n, type TKey } from '../i18n';
 import { Icon } from '../icons';
 import { JournalArt } from '../components/Illustrations';
 import { AdminPage, Empty, ErrorLine, IconJournal, LoadError, PageHead, fmtDateTime, fmtTime, usePoll, SkeletonRows } from '../ui';
@@ -146085,6 +146181,7 @@ const ICON: Record<Kind, ReactNode> = {
   sec: <><rect x="5" y="11" width="14" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" /></>,
 };
 
+const KINDS: [Kind | 'all', TKey][] = [['all', 'd2.jr.k.all'], ['add', 'd2.jr.k.add'], ['edit', 'd2.jr.k.edit'], ['del', 'd2.jr.k.del'], ['sec', 'd2.jr.k.sec']];
 const STEP = 200;
 const MAX = 2000;
 
@@ -146104,6 +146201,8 @@ export default function JournalPage() {
   useI18n();
   const [rows, setRows] = useState<Row[] | null>(null);
   const [q, setQ] = useState('');
+  const [kind, setKind] = useState<Kind | 'all'>('all');
+  const [actor, setActor] = useState('');
   const [error, setError] = useState('');
   const [limit, setLimit] = useState(100);
   const limitRef = useRef(limit);
@@ -146113,7 +146212,9 @@ export default function JournalPage() {
   useEffect(() => { void load(); }, [limit]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const needle = q.trim().toLowerCase();
-  const shown = (rows ?? []).filter((r) => !needle || `${r.actor} ${r.action} ${r.detail}`.toLowerCase().includes(needle));
+  const actors = useMemo(() => [...new Set((rows ?? []).map((r) => r.actor))].sort((a, b) => a.localeCompare(b)), [rows]);
+  const shown = (rows ?? []).filter((r) => (!needle || `${r.actor} ${r.action} ${r.detail}`.toLowerCase().includes(needle)) && (!actor || r.actor === actor) && (kind === 'all' || kindOf(r.action) === kind));
+  const filtered = needle !== '' || actor !== '' || kind !== 'all';
   const groups = useMemo(() => {
     const m = new Map<string, Row[]>();
     for (const r of shown) {
@@ -146150,9 +146251,18 @@ export default function JournalPage() {
       )}
     >
       {error && !rows ? <LoadError error={error} onRetry={() => void load()} /> : <ErrorLine text={error} />}
-      <input className="input max-w-sm" type="search" placeholder={t('d2.jr.search')} value={q} onChange={(e) => setQ(e.target.value)} aria-label={t('d2.jr.searchLabel')} />
+      <div className="flex flex-wrap items-center gap-3">
+        <input className="input max-w-sm" type="search" placeholder={t('d2.jr.search')} value={q} onChange={(e) => setQ(e.target.value)} aria-label={t('d2.jr.searchLabel')} />
+        <select className="input max-w-52" value={actor} onChange={(e) => setActor(e.target.value)} aria-label={t('d2.jr.actor')}>
+          <option value="">{t('d2.jr.anyActor')}</option>
+          {actors.map((a) => <option key={a} value={a}>{a}</option>)}
+        </select>
+        <div className="seg flex-wrap" role="group" aria-label={t('d2.jr.kind')}>
+          {KINDS.map(([k, label]) => <button key={k} type="button" className="seg-item" aria-pressed={kind === k} onClick={() => setKind(k)}>{t(label)}</button>)}
+        </div>
+      </div>
       {!rows && !error && <SkeletonRows n={6} h="h-12" />}
-      {rows && shown.length === 0 && <Empty art={<JournalArt />} title={t('d2.jr.empty')} text={needle ? t('d2.jr.notFound') : t('d2.jr.emptyText')}>{needle && <button type="button" className="btn btn-soft mt-3" onClick={() => setQ('')}>{t('d2.jr.resetSearch')}</button>}</Empty>}
+      {rows && shown.length === 0 && <Empty art={<JournalArt />} title={t('d2.jr.empty')} text={filtered ? t('d2.jr.notFound') : t('d2.jr.emptyText')}>{filtered && <button type="button" className="btn btn-soft mt-3" onClick={() => { setQ(''); setActor(''); setKind('all'); }}>{t('d2.jr.resetSearch')}</button>}</Empty>}
       {groups.map(([day, list]) => (
         <section key={day} className="space-y-2">
           <h2 className="text-xs font-extrabold uppercase tracking-wide text-mute">{day}</h2>
@@ -146261,9 +146371,9 @@ export default function Login({ onDone, notice }: { onDone: () => void; notice?:
       const payload = needCode ? { username: name, password, code: code.trim() } : { username: name, password };
       const send = (pow?: { challenge: string; nonce: string }) => api<{ token?: string; twoFactor?: boolean }>('/auth/login', 'POST', pow ? { ...payload, pow } : payload);
       // after a few wrong passwords the panel asks for a small puzzle, which the page solves by itself
-      const r = await (needPow.current ? fetchProof().then(send) : send()).catch(async (e: unknown) => {
-        if (e instanceof ApiError && e.status === 428 && e.data.captcha) { needPow.current = true; return send(await fetchProof()); }
-        throw e;
+      const r = await (needPow.current ? fetchProof().then(send) : send()).catch(async (failure: unknown) => {
+        if (failure instanceof ApiError && failure.status === 428 && failure.data.captcha) { needPow.current = true; return send(await fetchProof()); }
+        throw failure;
       });
       if (!r.token) {
         // the password was right and the account asks for a code
@@ -147899,15 +148009,16 @@ import { PlayerCard } from '../components/profile/PlayerCard';
 import { StatsPanel, StatsSummary, useMyStats } from '../components/profile/Stats';
 import { deviceName } from '../components/profile/format';
 import { IconUser } from '../icons';
-import { IcoGamepad, IcoHome, IcoShield, IcoSliders } from '../components/profile/bits';
+import { IcoBell, IcoGamepad, IcoHome, IcoShield, IcoSliders } from '../components/profile/bits';
 import { isNewDeviceDismissed } from '../security';
 import { ago, Button, ErrorLine, isLag, FieldError, GameAvatar, PageHead, PasswordField, PasswordStrength, Section, StatusPill, UserAvatar, toast, useRoute, errText } from '../ui';
 
-type Tab = 'overview' | 'player' | 'look' | 'security';
+type Tab = 'overview' | 'player' | 'look' | 'notify' | 'security';
 const TABS: { id: Tab; label: TKey; short: TKey; icon: ReactNode }[] = [
   { id: 'overview', label: 'pf.tab.overview', short: 'pf.tab.overview', icon: <IcoHome /> },
   { id: 'player', label: 'pf.tab.player', short: 'pf.tab.player', icon: <IcoGamepad /> },
   { id: 'look', label: 'pf.tab.look', short: 'pf.tab.lookShort', icon: <IcoSliders /> },
+  { id: 'notify', label: 'pf.tab.notify', short: 'pf.tab.notify', icon: <IcoBell /> },
   { id: 'security', label: 'pf.tab.security', short: 'pf.tab.securityShort', icon: <IcoShield /> },
 ];
 
@@ -147939,6 +148050,7 @@ export default function ProfilePage() {
       {tab === 'overview' && <OverviewTab />}
       {tab === 'player' && <PlayerTab />}
       {tab === 'look' && <LookTab />}
+      {tab === 'notify' && <NotifyTab />}
       {tab === 'security' && <SecurityTab />}
     </div>
   );
@@ -148040,6 +148152,18 @@ function LookTab() {
   );
 }
 
+// ---------- «Уведомления»: where the panel may reach me, and about what ----------
+function NotifyTab() {
+  return (
+    <div className="grid items-start gap-5 md:grid-cols-2">
+      <PushCard />
+      <FavoritePushCard />
+      <FollowsCard />
+      <NewsSubsCard />
+    </div>
+  );
+}
+
 // ---------- «Безопасность» ----------
 function SecurityTab() {
   const { me, reload } = useAuth();
@@ -148055,14 +148179,6 @@ function SecurityTab() {
           <PasswordCard hasPassword={me.hasPassword} discordLinked={!!me.discordName} onChanged={reload} />
           <TwoFactorCard />
           <DiscordCard onChanged={reload} />
-        </div>
-      </SecurityGroup>
-      <SecurityGroup title={t('pf.sec.g.notify')} hint={t('pf.sec.g.notifyHint')}>
-        <div className="grid items-start gap-5 md:grid-cols-2">
-          <PushCard />
-          <FavoritePushCard />
-          <FollowsCard />
-          <NewsSubsCard />
         </div>
       </SecurityGroup>
       <SecurityGroup title={t('pf.sec.g.devices')} hint={t('pf.sec.g.devicesHint')}>
@@ -158989,7 +159105,7 @@ export function GameAvatar({ game, size = 44, glass = false, vtId }: { game: str
       aria-hidden
     >
       {GAME_IMAGE[game] ? (
-        <img src={GAME_IMAGE[game]} width={size * (compact ? 0.82 : 0.74)} height={size * (compact ? 0.82 : 0.74)} alt="" draggable={false} className="object-contain" />
+        <img src={GAME_IMAGE[game]} width={size * (compact ? 0.66 : 0.7)} height={size * (compact ? 0.66 : 0.7)} alt="" draggable={false} className="object-contain" />
       ) : icon ? (
         <svg width={size * 0.58} height={size * 0.58} viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <path d={icon} />

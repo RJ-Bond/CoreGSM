@@ -16,6 +16,9 @@ import { db } from '../db.js';
 import { mk, type Achievement } from './profile.js';
 import { topPlayers } from '../routes/community.js';
 import { param } from '../http.js';
+import { alertSettings, enqueueAlert } from '../alerts/alerts.js';
+import { log } from '../logger.js';
+import { seasonSummary } from './seasonLogic.js';
 
 export const router = express.Router();
 
@@ -104,7 +107,17 @@ router.post('/api/seasons', admin, (req, res) => {
   const b = z.object({ name: nameSchema, startsAt: z.number().int().positive().optional() }).safeParse(req.body);
   if (!b.success) return res.status(400).json({ error: 'Неверные данные' });
   const at = Math.min(b.data.startsAt ?? Date.now(), Date.now() + 365 * 86_400_000);
+  const before = seasonsView().current;
   const id = startSeason(b.data.name, at);
+  // the finished season is announced in the alert channel: the podium by hours played
+  try {
+    if (before && alertSettings().channelId) {
+      const podium = topPlayers(before.startsAt, at, 3).map((p) => ({ name: p.name, hours: p.hours }));
+      enqueueAlert('digest', before.name, seasonSummary(before.name, before.startsAt, at, podium, b.data.name));
+    }
+  } catch (e) {
+    log.warn('season summary not sent', (e as Error).message);
+  }
   res.json({ id, ...seasonsView() });
 });
 

@@ -26,15 +26,16 @@ import { PlayerCard } from '../components/profile/PlayerCard';
 import { StatsPanel, StatsSummary, useMyStats } from '../components/profile/Stats';
 import { deviceName } from '../components/profile/format';
 import { IconUser } from '../icons';
-import { IcoGamepad, IcoHome, IcoShield, IcoSliders } from '../components/profile/bits';
+import { IcoBell, IcoGamepad, IcoHome, IcoShield, IcoSliders } from '../components/profile/bits';
 import { isNewDeviceDismissed } from '../security';
 import { ago, Button, ErrorLine, isLag, FieldError, GameAvatar, PageHead, PasswordField, PasswordStrength, Section, StatusPill, UserAvatar, toast, useRoute, errText } from '../ui';
 
-type Tab = 'overview' | 'player' | 'look' | 'security';
+type Tab = 'overview' | 'player' | 'look' | 'notify' | 'security';
 const TABS: { id: Tab; label: TKey; short: TKey; icon: ReactNode }[] = [
   { id: 'overview', label: 'pf.tab.overview', short: 'pf.tab.overview', icon: <IcoHome /> },
   { id: 'player', label: 'pf.tab.player', short: 'pf.tab.player', icon: <IcoGamepad /> },
   { id: 'look', label: 'pf.tab.look', short: 'pf.tab.lookShort', icon: <IcoSliders /> },
+  { id: 'notify', label: 'pf.tab.notify', short: 'pf.tab.notify', icon: <IcoBell /> },
   { id: 'security', label: 'pf.tab.security', short: 'pf.tab.securityShort', icon: <IcoShield /> },
 ];
 
@@ -66,6 +67,7 @@ export default function ProfilePage() {
       {tab === 'overview' && <OverviewTab />}
       {tab === 'player' && <PlayerTab />}
       {tab === 'look' && <LookTab />}
+      {tab === 'notify' && <NotifyTab />}
       {tab === 'security' && <SecurityTab />}
     </div>
   );
@@ -167,6 +169,18 @@ function LookTab() {
   );
 }
 
+// ---------- «Уведомления»: where the panel may reach me, and about what ----------
+function NotifyTab() {
+  return (
+    <div className="grid items-start gap-5 md:grid-cols-2">
+      <PushCard />
+      <FavoritePushCard />
+      <FollowsCard />
+      <NewsSubsCard />
+    </div>
+  );
+}
+
 // ---------- «Безопасность» ----------
 function SecurityTab() {
   const { me, reload } = useAuth();
@@ -182,14 +196,6 @@ function SecurityTab() {
           <PasswordCard hasPassword={me.hasPassword} discordLinked={!!me.discordName} onChanged={reload} />
           <TwoFactorCard />
           <DiscordCard onChanged={reload} />
-        </div>
-      </SecurityGroup>
-      <SecurityGroup title={t('pf.sec.g.notify')} hint={t('pf.sec.g.notifyHint')}>
-        <div className="grid items-start gap-5 md:grid-cols-2">
-          <PushCard />
-          <FavoritePushCard />
-          <FollowsCard />
-          <NewsSubsCard />
         </div>
       </SecurityGroup>
       <SecurityGroup title={t('pf.sec.g.devices')} hint={t('pf.sec.g.devicesHint')}>

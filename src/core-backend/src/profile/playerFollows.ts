@@ -85,8 +85,16 @@ export function registerPlayerFollows(deps: { app: Express; auth: RequestHandler
   const { app, auth, userId } = deps;
 
   app.get('/api/me/follows', auth, (req, res) => {
-    const rows = db.prepare('SELECT nick, created_at FROM player_follows WHERE user_id = ? ORDER BY created_at DESC').all(userId(req)) as { nick: string; created_at: number }[];
-    res.json(rows.map((r) => ({ nick: r.nick, createdAt: r.created_at })));
+    const rows = db.prepare('SELECT nick, nick_key, created_at FROM player_follows WHERE user_id = ? ORDER BY created_at DESC').all(userId(req)) as { nick: string; nick_key: string; created_at: number }[];
+    // who of them is in a game right now (an open session), and where
+    const playing = db.prepare(`SELECT ${EFFECTIVE_NAME} AS sname, s.id AS sid, ps.joined_at AS since FROM player_sessions ps JOIN servers s ON s.id = ps.server_id LEFT JOIN status st ON st.server_id = s.id WHERE ulower(ps.name) = ? AND ps.left_at IS NULL ORDER BY ps.joined_at DESC LIMIT 1`);
+    const out = rows.map((r) => {
+      const p = playing.get(r.nick_key) as { sname: string; sid: number; since: number } | undefined;
+      return { nick: r.nick, createdAt: r.created_at, playing: p ? { serverId: p.sid, server: p.sname, since: p.since } : null };
+    });
+    // those in a game first
+    out.sort((a, b) => Number(!!b.playing) - Number(!!a.playing));
+    res.json(out);
   });
 
   app.put('/api/players/:nick/follow', auth, (req, res) => {
