@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="4d8c9ac05128"
+COREGSM_BUILD="4ccff01f2d1a"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.10"
+COREGSM_VERSION="1.1.11"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -156063,7 +156063,7 @@ html[data-motion='reduce'] .srv-new-chev, html[data-motion='reduce'] .srv-check,
 .srv-tbl { overflow: hidden; padding: 0; }
 .srv-tr {
   display: grid; align-items: center; gap: 4px 14px; padding: 0 16px; min-height: 48px; border-bottom: 1px solid rgb(var(--line) / .7);
-  grid-template-columns: minmax(20px, auto) minmax(0, 3fr) minmax(8.5rem, 1.1fr) minmax(7.5rem, .8fr) 4rem 4.2rem 2.75rem;
+  grid-template-columns: minmax(20px, auto) minmax(0, 2.6fr) minmax(13.5rem, 1.5fr) minmax(7.5rem, .8fr) 4rem 4.2rem 2.75rem;
   cursor: pointer; transition: background-color .15s ease; font-variant-numeric: tabular-nums;
 }
 .srv-tr:last-child { border-bottom: 0; }
@@ -156085,6 +156085,9 @@ html[data-motion='reduce'] .srv-new-chev, html[data-motion='reduce'] .srv-check,
 .srv-tr-title:hover { color: rgb(var(--link)); }
 .srv-tr-sub { font-size: var(--fs-sm); font-weight: 600; color: rgb(var(--mute)); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
 .srv-td-addr { min-width: 0; }
+/* the whole address is shown: when a long one does not fit it takes a second line instead of being cut */
+.srv-td-addr .btn-xs { height: auto; min-height: 28px; padding-block: 3px; white-space: normal; text-align: left; }
+.srv-td-addr .btn-xs > .truncate { overflow: visible; text-overflow: clip; white-space: normal; overflow-wrap: anywhere; line-height: 1.25; }
 .srv-td-pl { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .srv-td-pl > .srv-cap, .srv-td-pl > div { flex: 1; min-width: 40px; }
 .srv-tr-count { font-weight: 800; white-space: nowrap; }
