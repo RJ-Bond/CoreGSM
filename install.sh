@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="ecc1d68ec213"
+COREGSM_BUILD="4d8c9ac05128"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.9"
+COREGSM_VERSION="1.1.10"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -155258,10 +155258,13 @@ __COREGSM_EOF__
 
 .pf-cal-outer { display: flex; gap: .5rem; align-items: flex-start; }
 .pf-cal-days { display: grid; grid-template-rows: repeat(7, 14px); gap: 4px; margin-top: 20px; font-size: var(--fs-2xs); font-weight: 650; line-height: 14px; color: rgb(var(--mute)); }
-.pf-cal-wrap { min-width: 0; overflow-x: auto; padding-bottom: .25rem; }
+.pf-cal-wrap { min-width: 0; overflow-x: auto; overflow-y: hidden; padding-bottom: .25rem; scrollbar-width: thin; scrollbar-color: rgb(var(--line)) transparent; }
+.pf-cal-wrap::-webkit-scrollbar { height: 6px; }
+.pf-cal-wrap::-webkit-scrollbar-track { background: transparent; }
+.pf-cal-wrap::-webkit-scrollbar-thumb { border-radius: 3px; background: rgb(var(--line)); }
 .pf-cal-months { display: grid; gap: 4px; height: 16px; margin-bottom: 4px; font-size: var(--fs-2xs); font-weight: 650; line-height: 16px; color: rgb(var(--mute)); }
 .pf-cal-months > span { white-space: nowrap; overflow: visible; }
-.pf-cal-body { position: relative; padding: 12px 0; margin: -12px 0; }
+.pf-cal-body { position: relative; padding: 30px 0; margin: -30px 0; }
 .pf-cal-tip { position: absolute; z-index: 3; display: grid; gap: 1px; padding: 6px 9px; border-radius: var(--r-lg); background: rgb(var(--card)); border: 1px solid rgb(var(--line)); box-shadow: var(--shadow-2); font-size: var(--fs-xs); white-space: nowrap; pointer-events: none; transform: translateY(-50%); }
 .pf-cal-tip.is-left { transform: translate(-100%, -50%); }
 .pf-cal-tip span { color: rgb(var(--mute)); font-weight: 650; }
@@ -155380,7 +155383,7 @@ __COREGSM_EOF__
 /* the arc round the picture (an SVG circle: it works in every browser); the picture is the top 88px of the editor, centred */
 .pf-lvring { position: absolute; z-index: 1; top: -7px; left: 50%; width: 102px; height: 102px; transform: translateX(-50%) rotate(-90deg); pointer-events: none; overflow: visible; }
 .pf-lvring circle { fill: none; stroke-width: 3.5; }
-.pf-lvring-track { stroke: rgb(var(--line) / .7); }
+.pf-lvring-track { stroke: var(--rc, rgb(var(--brand))); opacity: .28; }
 .pf-lvring-arc { stroke: var(--rc, rgb(var(--brand))); stroke-linecap: round; transition: stroke-dashoffset 1s cubic-bezier(.2, .8, .2, 1); }
 .pf-level-badge { position: absolute; z-index: 2; top: -14px; left: calc(50% + 20px); padding: 1px 9px; border-radius: var(--r-pill); background: var(--rc, rgb(var(--brand))); color: #fff; font-size: var(--fs-2xs); font-weight: 800; white-space: nowrap; box-shadow: 0 0 0 3px rgb(var(--card)); }
 .pf-live { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 3px 11px 3px 6px; border-radius: var(--r-pill); background: rgb(var(--ok) / .14); color: rgb(var(--ok)); font-size: var(--fs-sm); font-weight: 800; }

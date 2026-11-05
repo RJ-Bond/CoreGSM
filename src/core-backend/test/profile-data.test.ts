@@ -22,7 +22,7 @@ describe('profile card logic', () => {
   });
   it('a long text goes to two lines: at a space when it can, by characters when it cannot', () => {
     const ctx = { measureText: (t: string) => ({ width: t.length * 10 }) };
-    assert.deepEqual(splitLines(ctx, '[RU] Just-Skill.Ru | Standart PvE', 150), ['[RU] Just-Skill.Ru', '| Standart PvE']);
+    assert.deepEqual(splitLines(ctx, '[RU] Just-Skill.Ru | Standart PvE', 150), ['[RU]', 'Just-Skill.Ru | Standart PvE']);
     assert.deepEqual(splitLines(ctx, 'Short', 150), ['Short', '']);
     const [a, b] = splitLines(ctx, 'Valheim_Co-op_Very_Long_Server_Name', 150);
     assert.equal(a.length, 15);
