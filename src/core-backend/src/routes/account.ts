@@ -13,20 +13,27 @@ import { db, setSetting } from '../db.js';
 import { safeEqual, wrap } from '../http.js';
 import { bannerPresetOf, bannerUrlOf, logAccount, prefsOf } from '../profile/profile.js';
 import { BOT_TOKEN_RE, normalizeProxy, PROXY_HELP, PROXY_RE, TOKEN_HELP } from '../security/proxyInput.js';
-import { clearSessionCookie, emailChanged, ipLockRemaining, ipLoginFailed, noteLogin, recentNewDevice, setSessionCookie, windowLimiter } from '../security/security.js';
+import { captchaClear, captchaFailure, captchaNeeded, checkProof, newChallenge } from '../security/powCaptcha.js';
+import { clearSessionCookie, emailChanged, requestEmailChange, ipLockRemaining, ipLoginFailed, noteLogin, recentNewDevice, setSessionCookie, windowLimiter } from '../security/security.js';
 import { recordConsent } from '../monitoring/rules.js';
-import { brand, needsSetup, publicBase, registrationMode, rememberAdminBase, rulesText } from '../admin/site.js';
+import { baseOf, brand, needsSetup, publicBase, registrationMode, rememberAdminBase, rulesText } from '../admin/site.js';
 import { unreadNotifications } from '../community/subscriptions.js';
 import { log } from '../logger.js';
 
 export const router = express.Router();
 
+router.get('/api/auth/challenge', rateLimit(30), (_req, res) => res.json(newChallenge()));
+
 router.post(
   '/api/auth/login',
   loginLimiter,
   wrap(async (req, res) => {
-    const body = z.object({ username: z.string().trim().max(64), password: z.string().max(256), code: z.string().trim().max(32).optional() }).safeParse(req.body);
+    const body = z.object({ username: z.string().trim().max(64), password: z.string().max(256), code: z.string().trim().max(32).optional(), pow: z.object({ challenge: z.string().max(120), nonce: z.string().max(24) }).optional() }).safeParse(req.body);
     if (!body.success) return res.status(400).json({ error: 'Неверные данные' });
+    // after a few wrong passwords from this address the browser has to solve a small puzzle first
+    if (captchaNeeded(req.ip) && !checkProof(body.data.pow?.challenge, body.data.pow?.nonce)) {
+      return res.status(428).json({ error: 'Подтвердите, что вы не робот: страница решит небольшую задачу сама', captcha: true });
+    }
     // progressive lockout of the whole address after failures across several logins
     const ipWait = ipLockRemaining(req.ip);
     if (ipWait > 0) {
@@ -46,8 +53,9 @@ router.post(
     if (!u || !ok) {
       const attemptsLeft = accountLoginFailed(req.ip, body.data.username);
       ipLoginFailed(req.ip, body.data.username);
+      captchaFailure(req.ip);
       if (u) logAccount(req, u.id, 'login_failed');
-      return res.status(401).json({ error: 'Неверный логин или пароль', attemptsLeft });
+      return res.status(401).json({ error: 'Неверный логин или пароль', attemptsLeft, captcha: captchaNeeded(req.ip) || undefined });
     }
     if (u.status !== 'active') {
       accountLoginOk(req.ip, body.data.username);
@@ -81,11 +89,13 @@ router.post(
       if (!passed) {
         const attemptsLeft = accountLoginFailed(req.ip, body.data.username);
         ipLoginFailed(req.ip, body.data.username);
+        captchaFailure(req.ip);
         logAccount(req, u.id, 'login_failed', '2fa');
         return res.status(401).json({ error: 'Неверный код подтверждения', attemptsLeft, twoFactor: true });
       }
     }
     accountLoginOk(req.ip, body.data.username);
+    captchaClear(req.ip);
     resetAttempts(req.ip);
     logAccount(req, u.id, 'login');
     noteLogin(req, u.id, brand().name);
@@ -270,6 +280,14 @@ router.put(
     if (email) {
       const taken = db.prepare('SELECT id FROM users WHERE lower(email) = ? AND id != ?').get(email, req.user!.id);
       if (taken) return res.status(409).json({ error: 'Этот адрес уже привязан к другому аккаунту' });
+    }
+    // a verified address changes only after a letter to it is confirmed
+    if ((u.email ?? '').toLowerCase() !== email) {
+      try {
+        if (await requestEmailChange(u.id, email, baseOf(req))) return res.json({ ok: true, pending: true, email: u.email });
+      } catch (e) {
+        return res.status(502).json({ error: (e as Error).message });
+      }
     }
     db.prepare('UPDATE users SET email = ? WHERE id = ?').run(email || null, req.user!.id);
     if ((u.email ?? '') !== email) {

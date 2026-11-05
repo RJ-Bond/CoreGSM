@@ -278,8 +278,9 @@ function EmailCard({ onChanged }: { onChanged: () => Promise<void> }) {
     if (me.hasPassword && !current) { setError(t('pf.email.needPassword')); return; }
     setBusy(true);
     try {
-      await api('/me/email', 'PUT', { email: v, current: me.hasPassword ? current : undefined });
-      toast(v ? t('pf.email.saved') : t('pf.email.removed'));
+      const r = await api<{ pending?: boolean }>('/me/email', 'PUT', { email: v, current: me.hasPassword ? current : undefined });
+      // a verified address is changed only after the link in the letter to it is followed
+      if (r.pending) { toast(t('pf.email.pending', { email: saved })); setEmail(saved); } else toast(v ? t('pf.email.saved') : t('pf.email.removed'));
       setCurrent('');
       await onChanged();
     } catch (err) {

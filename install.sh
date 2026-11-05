@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="a9c86e79b42c"
+COREGSM_BUILD="98142a4a93a1"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.26"
+COREGSM_VERSION="1.1.27"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -21739,6 +21739,7 @@ export const ERRORS = {
 
   // ---- sign-in, setup, registration ----
   login_locked: 'Слишком много неверных попыток. Повторите через {sec} с.',
+  captcha_required: 'Подтвердите, что вы не робот: страница решит небольшую задачу сама',
   ip_locked: 'Слишком много неудачных попыток входа с этого адреса. Повторите через {sec} с.',
   bad_credentials: 'Неверный логин или пароль',
   registration_pending: 'Заявка на регистрацию ещё не одобрена администратором',
@@ -31099,20 +31100,27 @@ import { db, setSetting } from '../db.js';
 import { safeEqual, wrap } from '../http.js';
 import { bannerPresetOf, bannerUrlOf, logAccount, prefsOf } from '../profile/profile.js';
 import { BOT_TOKEN_RE, normalizeProxy, PROXY_HELP, PROXY_RE, TOKEN_HELP } from '../security/proxyInput.js';
-import { clearSessionCookie, emailChanged, ipLockRemaining, ipLoginFailed, noteLogin, recentNewDevice, setSessionCookie, windowLimiter } from '../security/security.js';
+import { captchaClear, captchaFailure, captchaNeeded, checkProof, newChallenge } from '../security/powCaptcha.js';
+import { clearSessionCookie, emailChanged, requestEmailChange, ipLockRemaining, ipLoginFailed, noteLogin, recentNewDevice, setSessionCookie, windowLimiter } from '../security/security.js';
 import { recordConsent } from '../monitoring/rules.js';
-import { brand, needsSetup, publicBase, registrationMode, rememberAdminBase, rulesText } from '../admin/site.js';
+import { baseOf, brand, needsSetup, publicBase, registrationMode, rememberAdminBase, rulesText } from '../admin/site.js';
 import { unreadNotifications } from '../community/subscriptions.js';
 import { log } from '../logger.js';
 
 export const router = express.Router();
 
+router.get('/api/auth/challenge', rateLimit(30), (_req, res) => res.json(newChallenge()));
+
 router.post(
   '/api/auth/login',
   loginLimiter,
   wrap(async (req, res) => {
-    const body = z.object({ username: z.string().trim().max(64), password: z.string().max(256), code: z.string().trim().max(32).optional() }).safeParse(req.body);
+    const body = z.object({ username: z.string().trim().max(64), password: z.string().max(256), code: z.string().trim().max(32).optional(), pow: z.object({ challenge: z.string().max(120), nonce: z.string().max(24) }).optional() }).safeParse(req.body);
     if (!body.success) return res.status(400).json({ error: 'Неверные данные' });
+    // after a few wrong passwords from this address the browser has to solve a small puzzle first
+    if (captchaNeeded(req.ip) && !checkProof(body.data.pow?.challenge, body.data.pow?.nonce)) {
+      return res.status(428).json({ error: 'Подтвердите, что вы не робот: страница решит небольшую задачу сама', captcha: true });
+    }
     // progressive lockout of the whole address after failures across several logins
     const ipWait = ipLockRemaining(req.ip);
     if (ipWait > 0) {
@@ -31132,8 +31140,9 @@ router.post(
     if (!u || !ok) {
       const attemptsLeft = accountLoginFailed(req.ip, body.data.username);
       ipLoginFailed(req.ip, body.data.username);
+      captchaFailure(req.ip);
       if (u) logAccount(req, u.id, 'login_failed');
-      return res.status(401).json({ error: 'Неверный логин или пароль', attemptsLeft });
+      return res.status(401).json({ error: 'Неверный логин или пароль', attemptsLeft, captcha: captchaNeeded(req.ip) || undefined });
     }
     if (u.status !== 'active') {
       accountLoginOk(req.ip, body.data.username);
@@ -31167,11 +31176,13 @@ router.post(
       if (!passed) {
         const attemptsLeft = accountLoginFailed(req.ip, body.data.username);
         ipLoginFailed(req.ip, body.data.username);
+        captchaFailure(req.ip);
         logAccount(req, u.id, 'login_failed', '2fa');
         return res.status(401).json({ error: 'Неверный код подтверждения', attemptsLeft, twoFactor: true });
       }
     }
     accountLoginOk(req.ip, body.data.username);
+    captchaClear(req.ip);
     resetAttempts(req.ip);
     logAccount(req, u.id, 'login');
     noteLogin(req, u.id, brand().name);
@@ -31356,6 +31367,14 @@ router.put(
     if (email) {
       const taken = db.prepare('SELECT id FROM users WHERE lower(email) = ? AND id != ?').get(email, req.user!.id);
       if (taken) return res.status(409).json({ error: 'Этот адрес уже привязан к другому аккаунту' });
+    }
+    // a verified address changes only after a letter to it is confirmed
+    if ((u.email ?? '').toLowerCase() !== email) {
+      try {
+        if (await requestEmailChange(u.id, email, baseOf(req))) return res.json({ ok: true, pending: true, email: u.email });
+      } catch (e) {
+        return res.status(502).json({ error: (e as Error).message });
+      }
     }
     db.prepare('UPDATE users SET email = ? WHERE id = ?').run(email || null, req.user!.id);
     if ((u.email ?? '') !== email) {
@@ -34443,7 +34462,7 @@ __COREGSM_EOF__
  */
 import { db } from '../db.js';
 
-export type GuardScope = 'account' | 'ip' | 'attempts';
+export type GuardScope = 'account' | 'ip' | 'attempts' | 'pow' | 'powfail';
 
 const getStmt = db.prepare('SELECT data FROM login_guard WHERE scope = ? AND key = ? AND expires_at > ?');
 const setStmt = db.prepare(
@@ -34567,6 +34586,74 @@ export function passwordError(password: string, opts: { username?: string; role?
   const p = passwordProblem(password, opts);
   return p ? PASSWORD_MESSAGES[p] : null;
 }
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/security"
+  cat > "$APP_DIR/core-backend/src/security/powCaptcha.ts" << '__COREGSM_EOF__'
+/**
+ * A captcha with no outside service: a small proof of work. After a few wrong passwords from one address the panel asks
+ * the browser to find a number that makes SHA-256(challenge:nonce) start with N zero bits (a fraction of a second for a
+ * person, a real cost for a script that tries thousands of passwords). Nothing is loaded from another site, so the
+ * content security policy stays as strict as it was.
+ *
+ *   GET /api/auth/challenge   { challenge, bits }  (a challenge lives 2 minutes and works once)
+ *
+ * The challenge is signed with the server secret, so it needs no storage until it is used.
+ */
+import crypto from 'node:crypto';
+import { JWT_SECRET } from '../config.js';
+import { guardDelete, guardGet, guardSet } from './loginGuard.js';
+
+export const POW_BITS = 16;
+/** wrong passwords from one address before the puzzle is asked (LOGIN_CAPTCHA_AFTER; 0 turns it off) */
+const fromEnv = Number(process.env.LOGIN_CAPTCHA_AFTER ?? 3);
+export const POW_AFTER = Number.isFinite(fromEnv) && fromEnv >= 0 ? Math.trunc(fromEnv) : 3;
+const TTL_MS = 2 * 60_000;
+
+const sign = (body: string) => crypto.createHmac('sha256', `pow:${JWT_SECRET}`).update(body).digest('base64url');
+
+export function newChallenge(now = Date.now()): { challenge: string; bits: number } {
+  const body = `${now + TTL_MS}.${crypto.randomBytes(12).toString('base64url')}`;
+  return { challenge: `${body}.${sign(body)}`, bits: POW_BITS };
+}
+
+export function leadingZeroBits(buf: Buffer): number {
+  let n = 0;
+  for (const b of buf) {
+    if (b === 0) { n += 8; continue; }
+    n += Math.clz32(b) - 24;
+    break;
+  }
+  return n;
+}
+
+/** true when the challenge is ours, fresh, not used before, and the nonce solves it; a good challenge is spent */
+export function checkProof(challenge: unknown, nonce: unknown, now = Date.now()): boolean {
+  if (typeof challenge !== 'string' || typeof nonce !== 'string' || challenge.length > 120 || nonce.length > 24) return false;
+  const parts = challenge.split('.');
+  if (parts.length !== 3) return false;
+  const body = `${parts[0]}.${parts[1]}`;
+  const want = Buffer.from(sign(body));
+  const got = Buffer.from(parts[2]);
+  if (want.length !== got.length || !crypto.timingSafeEqual(want, got)) return false;
+  const exp = Number(parts[0]);
+  if (!Number.isFinite(exp) || exp < now) return false;
+  if (leadingZeroBits(crypto.createHash('sha256').update(`${challenge}:${nonce}`).digest()) < POW_BITS) return false;
+  // one use: remembered until the challenge would have expired anyway
+  if (guardGet('pow', parts[1])) return false;
+  guardSet('pow', parts[1], 1, exp + 1000);
+  return true;
+}
+
+// ---------- when the captcha is asked: after POW_AFTER wrong passwords from the address within half an hour ----------
+interface Fails { n: number }
+export const captchaNeeded = (ip: string | undefined): boolean => POW_AFTER > 0 && (guardGet<Fails>('powfail', ip ?? 'x')?.n ?? 0) >= POW_AFTER;
+export function captchaFailure(ip: string | undefined): void {
+  const key = ip ?? 'x';
+  const f = guardGet<Fails>('powfail', key) ?? { n: 0 };
+  f.n++;
+  guardSet('powfail', key, f, Date.now() + 30 * 60_000);
+}
+export const captchaClear = (ip: string | undefined): void => guardDelete('powfail', ip ?? 'x');
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/security"
   cat > "$APP_DIR/core-backend/src/security/proxyFetch.ts" << '__COREGSM_EOF__'
@@ -34880,6 +34967,13 @@ CREATE TABLE IF NOT EXISTS email_verifications (
   used_at INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_email_verifications_user ON email_verifications(user_id);
+CREATE TABLE IF NOT EXISTS email_changes (
+  token_hash TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  new_email TEXT NOT NULL,
+  expires_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_email_changes_user ON email_changes(user_id);
 CREATE TABLE IF NOT EXISTS login_fingerprints (
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   fp TEXT NOT NULL,
@@ -34892,6 +34986,7 @@ setInterval(() => {
   const now = Date.now();
   db.prepare('DELETE FROM password_resets WHERE expires_at < ?').run(now - 24 * 3600_000);
   db.prepare('DELETE FROM email_verifications WHERE expires_at < ?').run(now - 24 * 3600_000);
+  db.prepare('DELETE FROM email_changes WHERE expires_at < ?').run(now - 24 * 3600_000);
 }, 3600_000).unref();
 
 // ---------- session cookie and CSRF ----------
@@ -35084,6 +35179,39 @@ export function recentNewDevice(userId: number): { ts: number; label: string } |
   return r ? { ts: r.ts, label: r.detail } : null;
 }
 
+/** the panel's own settings for letters (set by registerSecurity): the public address and the brand name */
+let mailDeps: { publicBase: () => string | null; brandName: () => string } | null = null;
+
+/**
+ * A verified address is not replaced on one request: a letter with a link goes to the OLD address, and only the owner
+ * of that mailbox can confirm. Someone who got hold of an open session (and the password) cannot quietly move the
+ * recovery address to their own. Returns false when the change has to be made at once (no verified address, or no mail).
+ */
+export async function requestEmailChange(userId: number, newEmail: string, base: string): Promise<boolean> {
+  const u = emailOf(userId);
+  if (!u?.email || !u.email_verified || !mailReady() || !mailDeps) return false;
+  const token = newToken();
+  db.prepare('DELETE FROM email_changes WHERE user_id = ?').run(userId);
+  db.prepare('INSERT INTO email_changes (token_hash, user_id, new_email, expires_at) VALUES (?, ?, ?, ?)').run(hashToken(token), userId, newEmail.toLowerCase(), Date.now() + 24 * 3600_000);
+  const en = prefsOf(userId).lang === 'en';
+  const url = `${mailDeps.publicBase() ?? base}/#/verify/${token}`;
+  const shown = newEmail || (en ? 'no address (remove it)' : 'без адреса (удалить)');
+  const body = layout(
+    mailDeps.brandName(),
+    en
+      ? [`A request was made to change the e-mail of the account "${u.username}" to ${shown}.`, 'If it was you, confirm the change. If not, ignore this letter and change your password: nothing will change.', 'The link works for 24 hours.']
+      : [`Запрошена смена почты аккаунта «${u.username}» на ${shown}.`, 'Если это вы, подтвердите смену. Если нет, просто проигнорируйте письмо и смените пароль: ничего не изменится.', 'Ссылка действует 24 часа.'],
+    { label: en ? 'Confirm the change' : 'Подтвердить смену', url },
+  );
+  try {
+    await sendMail({ to: u.email, subject: en ? 'Confirm the change of your e-mail' : 'Подтверждение смены почты', ...body });
+  } catch (e) {
+    db.prepare('DELETE FROM email_changes WHERE user_id = ?').run(userId);
+    throw e;
+  }
+  return true;
+}
+
 /** a changed address is not verified any more; letters for the old one stop working */
 export function emailChanged(userId: number): void {
   db.prepare('UPDATE users SET email_verified = 0 WHERE id = ?').run(userId);
@@ -35108,6 +35236,7 @@ const FORGOT_TEXT = 'Если у аккаунта есть подтверждё�
 
 export function registerSecurity(d: SecurityDeps): void {
   const { app } = d;
+  mailDeps = { publicBase: d.publicBase, brandName: d.brandName };
   const smtpLimiter = windowLimiter(10, 10 * 60_000);
   const forgotLimiter = windowLimiter(5, 15 * 60_000, 'Слишком много запросов на сброс пароля. Попробуйте позже.');
   const resetLimiter = windowLimiter(10, 15 * 60_000);
@@ -35205,6 +35334,20 @@ export function registerSecurity(d: SecurityDeps): void {
     const bad = () => res.status(400).json({ error: 'Ссылка недействительна или устарела' });
     const b = z.object({ token: z.string().min(10).max(200) }).safeParse(req.body);
     if (!b.success) return bad();
+    // a link from the letter to the OLD address: the change of the address is made here
+    const change = db.prepare('SELECT user_id, new_email, expires_at FROM email_changes WHERE token_hash = ?').get(hashToken(b.data.token)) as { user_id: number; new_email: string; expires_at: number } | undefined;
+    if (change) {
+      if (change.expires_at < Date.now()) return bad();
+      const taken = change.new_email ? db.prepare('SELECT id FROM users WHERE lower(email) = ? AND id != ?').get(change.new_email, change.user_id) : undefined;
+      if (taken) return res.status(409).json({ error: 'Этот адрес уже привязан к другому аккаунту' });
+      db.transaction(() => {
+        db.prepare('UPDATE users SET email = ? WHERE id = ?').run(change.new_email || null, change.user_id);
+        emailChanged(change.user_id);
+        db.prepare('DELETE FROM email_changes WHERE user_id = ?').run(change.user_id);
+      })();
+      logAccount(req, change.user_id, 'email_changed', 'подтверждено с прежнего адреса');
+      return res.json({ ok: true, email: change.new_email || null, changed: true });
+    }
     const row = db.prepare('SELECT * FROM email_verifications WHERE token_hash = ?').get(hashToken(b.data.token)) as
       | { token_hash: string; user_id: number; email: string; expires_at: number; used_at: number | null }
       | undefined;
@@ -133465,6 +133608,7 @@ const en: Record<keyof typeof ru, string> = {
   'pf.pass.mismatch': 'Passwords do not match',
   'pf.pass.changed': 'Password changed',
   'pf.pass.set': 'Password set',
+  'pf.email.pending': 'A letter with a link was sent to the current address {email}: the change happens when you confirm it',
   'pf.email.title': 'E-mail',
   'pf.email.text': 'Used for account recovery and notifications. Never shown to anyone.',
   'pf.email.address': 'Address',
@@ -135467,6 +135611,8 @@ const en: Record<keyof typeof ru, string> = {
   'us.matrix.noMods': 'No moderators yet',
   'login.banReason': ' Reason: {r}.',
   'login.banUntil': ' Blocked until {d}.',
+  'adm.tbl.duplicate': 'Duplicate',
+  'adm.tbl.copySuffix': '(copy)',
   'adm.tbl.up': 'Move up',
   'adm.tbl.down': 'Move down',
   'adm.tbl.moved': 'Server order saved',
@@ -137003,6 +137149,7 @@ const errorsEn: Record<string, string> = {
 
   // ---- sign-in, setup, registration ----
   login_locked: 'Too many wrong attempts. Try again in {sec} s.',
+  captcha_required: 'Confirm you are not a robot: the page solves a small puzzle by itself',
   ip_locked: 'Too many failed sign-ins from this address. Try again in {sec} s.',
   bad_credentials: 'Wrong login or password',
   registration_pending: 'Your registration has not been approved by an administrator yet',
@@ -137576,6 +137723,7 @@ const ru = {
   'pf.pass.mismatch': 'Пароли не совпадают',
   'pf.pass.changed': 'Пароль изменён',
   'pf.pass.set': 'Пароль задан',
+  'pf.email.pending': 'Письмо со ссылкой отправлено на текущий адрес {email}: смена произойдёт, когда вы её подтвердите',
   'pf.email.title': 'Электронная почта',
   'pf.email.text': 'Нужна для восстановления доступа и уведомлений. Никому не показывается.',
   'pf.email.address': 'Адрес',
@@ -139578,6 +139726,8 @@ const ru = {
   'us.matrix.noMods': 'Модераторов пока нет',
   'login.banReason': ' Причина: {r}.',
   'login.banUntil': ' Блокировка до {d}.',
+  'adm.tbl.duplicate': 'Копировать',
+  'adm.tbl.copySuffix': '(копия)',
   'adm.tbl.up': 'Выше',
   'adm.tbl.down': 'Ниже',
   'adm.tbl.moved': 'Порядок серверов сохранён',
@@ -141986,6 +142136,7 @@ function ServersManage({ sub }: { sub: string }) {
               bindings,
               onMaintenance: (sv) => void toggleMaintenance(sv),
               onRefresh: (sv) => void refresh(sv),
+              onDuplicate: (sv) => setEditing({ data: { name: `${sv.customName || sv.name} ${t('adm.tbl.copySuffix')}`, game: sv.game, host: sv.host, port: sv.port, queryPort: sv.queryPort, displayAddress: sv.displayAddress, country: sv.country } }),
               onEdit: (sv) => setEditing({ id: sv.id, data: { name: sv.customName, game: sv.game, host: sv.host, port: sv.port, queryPort: sv.queryPort, displayAddress: sv.displayAddress, country: sv.country }, cover: sv.coverUrl }),
               onRemove: (sv) => void remove(sv),
               onRefreshMany: refreshMany,
@@ -142975,6 +143126,8 @@ export interface TableActions {
   onMaintenance: (s: Server) => void;
   onRefresh: (s: Server) => void;
   onEdit: (s: Server) => void;
+  /** open the «new server» form filled in from this one (the name gets «копия»), nothing is saved until the form is */
+  onDuplicate: (s: Server) => void;
   onRemove: (s: Server) => void;
   /** refresh / delete several at once; resolve when done */
   onRefreshMany: (list: Server[]) => Promise<void>;
@@ -143038,6 +143191,7 @@ export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableA
       { key: 'up', label: t('adm.tbl.up'), disabled: s.id === shownIds[0], onSelect: () => a.onMove(s, -1, shownIds) },
       { key: 'down', label: t('adm.tbl.down'), disabled: s.id === shownIds[shownIds.length - 1], onSelect: () => a.onMove(s, 1, shownIds) },
     ] : []),
+    { key: 'dup', label: t('adm.tbl.duplicate'), onSelect: () => a.onDuplicate(s) },
     { key: 'bind', label: t('adm.tbl.bind'), href: `/admin/discord/new/${s.id}`, sep: canMove },
     { key: 'maint', label: s.maintenance ? t('adm.tbl.maintOff') : t('adm.tbl.maintOn'), onSelect: () => a.onMaintenance(s) },
     ...(a.isAdmin ? [{ key: 'del', label: t('adm.srv.delete'), danger: true, sep: true, onSelect: () => a.onRemove(s) }] : []),
@@ -146028,6 +146182,7 @@ __COREGSM_EOF__
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { api, ApiError, setToken } from '../api';
 import { useAuth } from '../auth';
+import { fetchProof } from '../powSolver';
 import { getPrefs, t } from '../i18n';
 import { Button, DiscordButton, ErrorLine, FieldError, OrDivider, PasswordField, useShake, errText } from '../ui';
 
@@ -146059,6 +146214,7 @@ export default function Login({ onDone, notice }: { onDone: () => void; notice?:
   const [code, setCode] = useState('');
   const [codeErr, setCodeErr] = useState('');
   const codeRef = useRef<HTMLInputElement>(null);
+  const needPow = useRef(false);
   const [busy, setBusy] = useState(false);
   const [lockUntil, setLockUntil] = useState(0);
   const [now, setNow] = useState(Date.now());
@@ -146102,7 +146258,13 @@ export default function Login({ onDone, notice }: { onDone: () => void; notice?:
     }
     setBusy(true);
     try {
-      const r = await api<{ token?: string; twoFactor?: boolean }>('/auth/login', 'POST', needCode ? { username: name, password, code: code.trim() } : { username: name, password });
+      const payload = needCode ? { username: name, password, code: code.trim() } : { username: name, password };
+      const send = (pow?: { challenge: string; nonce: string }) => api<{ token?: string; twoFactor?: boolean }>('/auth/login', 'POST', pow ? { ...payload, pow } : payload);
+      // after a few wrong passwords the panel asks for a small puzzle, which the page solves by itself
+      const r = await (needPow.current ? fetchProof().then(send) : send()).catch(async (e: unknown) => {
+        if (e instanceof ApiError && e.status === 428 && e.data.captcha) { needPow.current = true; return send(await fetchProof()); }
+        throw e;
+      });
       if (!r.token) {
         // the password was right and the account asks for a code
         setNeedCode(true);
@@ -146115,6 +146277,7 @@ export default function Login({ onDone, notice }: { onDone: () => void; notice?:
     } catch (err) {
       const status = err instanceof ApiError ? err.status : 0;
       const data = err instanceof ApiError ? err.data : {};
+      if (data.captcha) needPow.current = true;
       if (status === 429) {
         const sec = Math.max(1, Number(data.retryAfter) || 60);
         setLockUntil(Date.now() + sec * 1000);
@@ -147988,8 +148151,9 @@ function EmailCard({ onChanged }: { onChanged: () => Promise<void> }) {
     if (me.hasPassword && !current) { setError(t('pf.email.needPassword')); return; }
     setBusy(true);
     try {
-      await api('/me/email', 'PUT', { email: v, current: me.hasPassword ? current : undefined });
-      toast(v ? t('pf.email.saved') : t('pf.email.removed'));
+      const r = await api<{ pending?: boolean }>('/me/email', 'PUT', { email: v, current: me.hasPassword ? current : undefined });
+      // a verified address is changed only after the link in the letter to it is followed
+      if (r.pending) { toast(t('pf.email.pending', { email: saved })); setEmail(saved); } else toast(v ? t('pf.email.saved') : t('pf.email.removed'));
       setCurrent('');
       await onChanged();
     } catch (err) {
@@ -153980,6 +154144,54 @@ export function durationText(ms: number): string {
 /** how long a confirmed failure takes to show, given the polling interval in seconds */
 export function confirmDelayText(failThreshold: number): string {
   return failThreshold <= 1 ? t('d2.poll.right') : t('d2.poll.after', { n: failThreshold });
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src"
+  cat > "$APP_DIR/core-frontend/src/powSolver.test.ts" << '__COREGSM_EOF__'
+import { describe, expect, it } from 'vitest';
+import { solve, zeroBits } from './powSolver';
+
+describe('sign-in puzzle', () => {
+  it('counts leading zero bits', () => {
+    expect(zeroBits(Uint8Array.of(0, 0, 0xff))).toBe(16);
+    expect(zeroBits(Uint8Array.of(0, 0x10))).toBe(11);
+    expect(zeroBits(Uint8Array.of(0x80))).toBe(0);
+  });
+  it('finds a nonce that really has the zero bits', async () => {
+    const nonce = await solve('test.challenge', 8);
+    const h = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`test.challenge:${nonce}`)));
+    expect(zeroBits(h)).toBeGreaterThanOrEqual(8);
+  });
+});
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src"
+  cat > "$APP_DIR/core-frontend/src/powSolver.ts" << '__COREGSM_EOF__'
+/** the browser side of the sign-in puzzle (core-backend/src/security/powCaptcha.ts): find a nonce so SHA-256(challenge:nonce) starts with `bits` zero bits */
+import { api } from './api';
+
+export function zeroBits(h: Uint8Array): number {
+  let n = 0;
+  for (const b of h) {
+    if (b === 0) { n += 8; continue; }
+    n += Math.clz32(b) - 24;
+    break;
+  }
+  return n;
+}
+
+export async function solve(challenge: string, bits: number): Promise<string> {
+  const enc = new TextEncoder();
+  const BATCH = 512;
+  for (let base = 0; ; base += BATCH) {
+    const hashes = await Promise.all(Array.from({ length: BATCH }, (_, i) => crypto.subtle.digest('SHA-256', enc.encode(`${challenge}:${base + i}`))));
+    for (let i = 0; i < BATCH; i++) if (zeroBits(new Uint8Array(hashes[i])) >= bits) return String(base + i);
+  }
+}
+
+/** a fresh puzzle from the panel, solved: what the sign-in request carries as `pow` */
+export async function fetchProof(): Promise<{ challenge: string; nonce: string }> {
+  const c = await api<{ challenge: string; bits: number }>('/auth/challenge');
+  return { challenge: c.challenge, nonce: await solve(c.challenge, c.bits) };
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"

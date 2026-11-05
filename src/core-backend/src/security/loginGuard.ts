@@ -4,7 +4,7 @@
  */
 import { db } from '../db.js';
 
-export type GuardScope = 'account' | 'ip' | 'attempts';
+export type GuardScope = 'account' | 'ip' | 'attempts' | 'pow' | 'powfail';
 
 const getStmt = db.prepare('SELECT data FROM login_guard WHERE scope = ? AND key = ? AND expires_at > ?');
 const setStmt = db.prepare(

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { api, ApiError, setToken } from '../api';
 import { useAuth } from '../auth';
+import { fetchProof } from '../powSolver';
 import { getPrefs, t } from '../i18n';
 import { Button, DiscordButton, ErrorLine, FieldError, OrDivider, PasswordField, useShake, errText } from '../ui';
 
@@ -32,6 +33,7 @@ export default function Login({ onDone, notice }: { onDone: () => void; notice?:
   const [code, setCode] = useState('');
   const [codeErr, setCodeErr] = useState('');
   const codeRef = useRef<HTMLInputElement>(null);
+  const needPow = useRef(false);
   const [busy, setBusy] = useState(false);
   const [lockUntil, setLockUntil] = useState(0);
   const [now, setNow] = useState(Date.now());
@@ -75,7 +77,13 @@ export default function Login({ onDone, notice }: { onDone: () => void; notice?:
     }
     setBusy(true);
     try {
-      const r = await api<{ token?: string; twoFactor?: boolean }>('/auth/login', 'POST', needCode ? { username: name, password, code: code.trim() } : { username: name, password });
+      const payload = needCode ? { username: name, password, code: code.trim() } : { username: name, password };
+      const send = (pow?: { challenge: string; nonce: string }) => api<{ token?: string; twoFactor?: boolean }>('/auth/login', 'POST', pow ? { ...payload, pow } : payload);
+      // after a few wrong passwords the panel asks for a small puzzle, which the page solves by itself
+      const r = await (needPow.current ? fetchProof().then(send) : send()).catch(async (failure: unknown) => {
+        if (failure instanceof ApiError && failure.status === 428 && failure.data.captcha) { needPow.current = true; return send(await fetchProof()); }
+        throw failure;
+      });
       if (!r.token) {
         // the password was right and the account asks for a code
         setNeedCode(true);
@@ -88,6 +96,7 @@ export default function Login({ onDone, notice }: { onDone: () => void; notice?:
     } catch (err) {
       const status = err instanceof ApiError ? err.status : 0;
       const data = err instanceof ApiError ? err.data : {};
+      if (data.captcha) needPow.current = true;
       if (status === 429) {
         const sec = Math.max(1, Number(data.retryAfter) || 60);
         setLockUntil(Date.now() + sec * 1000);

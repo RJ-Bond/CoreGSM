@@ -44,6 +44,7 @@ const OPEN: Record<string, string> = {
   'GET /api/setup/status': 'tells the first-run page whether setup is still open',
   'POST /api/setup': 'first-run setup: needs the setup code, closes itself',
   'POST /api/auth/login': 'sign-in (rate limited, locks out)',
+  'GET /api/auth/challenge': 'a puzzle for the sign-in form (rate limited, signed, works once)',
   'POST /api/auth/register': 'registration (rate limited, closes by the setting)',
   'GET /api/auth/check': 'does this login name exist: rate limited',
   'POST /api/auth/forgot': 'password reset request (rate limited, same answer for any login)',

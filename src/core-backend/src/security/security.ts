@@ -42,6 +42,13 @@ CREATE TABLE IF NOT EXISTS email_verifications (
   used_at INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_email_verifications_user ON email_verifications(user_id);
+CREATE TABLE IF NOT EXISTS email_changes (
+  token_hash TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  new_email TEXT NOT NULL,
+  expires_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_email_changes_user ON email_changes(user_id);
 CREATE TABLE IF NOT EXISTS login_fingerprints (
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   fp TEXT NOT NULL,
@@ -54,6 +61,7 @@ setInterval(() => {
   const now = Date.now();
   db.prepare('DELETE FROM password_resets WHERE expires_at < ?').run(now - 24 * 3600_000);
   db.prepare('DELETE FROM email_verifications WHERE expires_at < ?').run(now - 24 * 3600_000);
+  db.prepare('DELETE FROM email_changes WHERE expires_at < ?').run(now - 24 * 3600_000);
 }, 3600_000).unref();
 
 // ---------- session cookie and CSRF ----------
@@ -246,6 +254,39 @@ export function recentNewDevice(userId: number): { ts: number; label: string } |
   return r ? { ts: r.ts, label: r.detail } : null;
 }
 
+/** the panel's own settings for letters (set by registerSecurity): the public address and the brand name */
+let mailDeps: { publicBase: () => string | null; brandName: () => string } | null = null;
+
+/**
+ * A verified address is not replaced on one request: a letter with a link goes to the OLD address, and only the owner
+ * of that mailbox can confirm. Someone who got hold of an open session (and the password) cannot quietly move the
+ * recovery address to their own. Returns false when the change has to be made at once (no verified address, or no mail).
+ */
+export async function requestEmailChange(userId: number, newEmail: string, base: string): Promise<boolean> {
+  const u = emailOf(userId);
+  if (!u?.email || !u.email_verified || !mailReady() || !mailDeps) return false;
+  const token = newToken();
+  db.prepare('DELETE FROM email_changes WHERE user_id = ?').run(userId);
+  db.prepare('INSERT INTO email_changes (token_hash, user_id, new_email, expires_at) VALUES (?, ?, ?, ?)').run(hashToken(token), userId, newEmail.toLowerCase(), Date.now() + 24 * 3600_000);
+  const en = prefsOf(userId).lang === 'en';
+  const url = `${mailDeps.publicBase() ?? base}/#/verify/${token}`;
+  const shown = newEmail || (en ? 'no address (remove it)' : 'без адреса (удалить)');
+  const body = layout(
+    mailDeps.brandName(),
+    en
+      ? [`A request was made to change the e-mail of the account "${u.username}" to ${shown}.`, 'If it was you, confirm the change. If not, ignore this letter and change your password: nothing will change.', 'The link works for 24 hours.']
+      : [`Запрошена смена почты аккаунта «${u.username}» на ${shown}.`, 'Если это вы, подтвердите смену. Если нет, просто проигнорируйте письмо и смените пароль: ничего не изменится.', 'Ссылка действует 24 часа.'],
+    { label: en ? 'Confirm the change' : 'Подтвердить смену', url },
+  );
+  try {
+    await sendMail({ to: u.email, subject: en ? 'Confirm the change of your e-mail' : 'Подтверждение смены почты', ...body });
+  } catch (e) {
+    db.prepare('DELETE FROM email_changes WHERE user_id = ?').run(userId);
+    throw e;
+  }
+  return true;
+}
+
 /** a changed address is not verified any more; letters for the old one stop working */
 export function emailChanged(userId: number): void {
   db.prepare('UPDATE users SET email_verified = 0 WHERE id = ?').run(userId);
@@ -270,6 +311,7 @@ const FORGOT_TEXT = 'Если у аккаунта есть подтверждё�
 
 export function registerSecurity(d: SecurityDeps): void {
   const { app } = d;
+  mailDeps = { publicBase: d.publicBase, brandName: d.brandName };
   const smtpLimiter = windowLimiter(10, 10 * 60_000);
   const forgotLimiter = windowLimiter(5, 15 * 60_000, 'Слишком много запросов на сброс пароля. Попробуйте позже.');
   const resetLimiter = windowLimiter(10, 15 * 60_000);
@@ -367,6 +409,20 @@ export function registerSecurity(d: SecurityDeps): void {
     const bad = () => res.status(400).json({ error: 'Ссылка недействительна или устарела' });
     const b = z.object({ token: z.string().min(10).max(200) }).safeParse(req.body);
     if (!b.success) return bad();
+    // a link from the letter to the OLD address: the change of the address is made here
+    const change = db.prepare('SELECT user_id, new_email, expires_at FROM email_changes WHERE token_hash = ?').get(hashToken(b.data.token)) as { user_id: number; new_email: string; expires_at: number } | undefined;
+    if (change) {
+      if (change.expires_at < Date.now()) return bad();
+      const taken = change.new_email ? db.prepare('SELECT id FROM users WHERE lower(email) = ? AND id != ?').get(change.new_email, change.user_id) : undefined;
+      if (taken) return res.status(409).json({ error: 'Этот адрес уже привязан к другому аккаунту' });
+      db.transaction(() => {
+        db.prepare('UPDATE users SET email = ? WHERE id = ?').run(change.new_email || null, change.user_id);
+        emailChanged(change.user_id);
+        db.prepare('DELETE FROM email_changes WHERE user_id = ?').run(change.user_id);
+      })();
+      logAccount(req, change.user_id, 'email_changed', 'подтверждено с прежнего адреса');
+      return res.json({ ok: true, email: change.new_email || null, changed: true });
+    }
     const row = db.prepare('SELECT * FROM email_verifications WHERE token_hash = ?').get(hashToken(b.data.token)) as
       | { token_hash: string; user_id: number; email: string; expires_at: number; used_at: number | null }
       | undefined;

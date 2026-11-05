@@ -41,6 +41,8 @@ export async function startBackend(extraEnv: Record<string, string> = {}): Promi
     SETUP_TOKEN: setupCode,
     POLL_INTERVAL_SEC: '3600',
     NODE_ENV: 'test',
+    // the sign-in puzzle is off in tests (the lockout tests fail passwords on purpose); captcha.test.ts turns it on
+    LOGIN_CAPTCHA_AFTER: '0',
     ...extraEnv,
   };
   let log = '';

@@ -19,6 +19,8 @@ export interface TableActions {
   onMaintenance: (s: Server) => void;
   onRefresh: (s: Server) => void;
   onEdit: (s: Server) => void;
+  /** open the «new server» form filled in from this one (the name gets «копия»), nothing is saved until the form is */
+  onDuplicate: (s: Server) => void;
   onRemove: (s: Server) => void;
   /** refresh / delete several at once; resolve when done */
   onRefreshMany: (list: Server[]) => Promise<void>;
@@ -82,6 +84,7 @@ export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableA
       { key: 'up', label: t('adm.tbl.up'), disabled: s.id === shownIds[0], onSelect: () => a.onMove(s, -1, shownIds) },
       { key: 'down', label: t('adm.tbl.down'), disabled: s.id === shownIds[shownIds.length - 1], onSelect: () => a.onMove(s, 1, shownIds) },
     ] : []),
+    { key: 'dup', label: t('adm.tbl.duplicate'), onSelect: () => a.onDuplicate(s) },
     { key: 'bind', label: t('adm.tbl.bind'), href: `/admin/discord/new/${s.id}`, sep: canMove },
     { key: 'maint', label: s.maintenance ? t('adm.tbl.maintOff') : t('adm.tbl.maintOn'), onSelect: () => a.onMaintenance(s) },
     ...(a.isAdmin ? [{ key: 'del', label: t('adm.srv.delete'), danger: true, sep: true, onSelect: () => a.onRemove(s) }] : []),

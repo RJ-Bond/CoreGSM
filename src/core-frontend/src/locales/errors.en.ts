@@ -25,6 +25,7 @@ const errorsEn: Record<string, string> = {
 
   // ---- sign-in, setup, registration ----
   login_locked: 'Too many wrong attempts. Try again in {sec} s.',
+  captcha_required: 'Confirm you are not a robot: the page solves a small puzzle by itself',
   ip_locked: 'Too many failed sign-ins from this address. Try again in {sec} s.',
   bad_credentials: 'Wrong login or password',
   registration_pending: 'Your registration has not been approved by an administrator yet',

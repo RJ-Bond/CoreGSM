@@ -32,6 +32,9 @@ interface language; the GitHub release text is built from the section of the ver
 - 🍪 По https сессионная кука получает префикс `__Host-`: соседний сайт не может её подменить | Over https the session cookie gets the `__Host-` prefix: a sibling site cannot replace it
 - 🛡️ Защищённые действия (восстановление и скачивание копий, токен бота и прокси, почтовый сервер, API-ключи, удаление серверов и аккаунтов, смена ролей) просят пароль ещё раз и действуют 10 минут; с двухфакторной защитой нужен и код | Protected actions (restoring and downloading backups, the bot token and proxy, the mail server, API keys, deleting servers and accounts, changing roles) ask for the password again and work for 10 minutes; with two-factor protection the code is needed too
 - 🔑 API-ключи: срок действия и список разрешённых адресов (адреса и сети IPv4), видно, с какого адреса ключ использовали в последний раз [migration] | API keys: an expiry and a list of allowed addresses (addresses and IPv4 networks), the address of the last use is shown
+- 🤖 Вход: после трёх неверных паролей с одного адреса страница сама решает небольшую задачу (капча без внешних сервисов) | Sign-in: after three wrong passwords from one address the page solves a small puzzle by itself (a captcha with no outside service)
+- ✉️ Подтверждённую почту можно сменить только по ссылке из письма на прежний адрес | A verified e-mail can be changed only through the link in a letter to the old address
+- 📋 Админка → Серверы: «Копировать» в меню строки открывает форму нового сервера с данными текущего | Admin → Servers: «Duplicate» in a row menu opens the new-server form filled in from this one
 
 ### 🐛 Исправлено | Fixed
 - ⏱️ Страница игрока: длительность визита пишется «1 ч 44 мин», а не «104 мин» | Player page: a visit length reads «1 h 44 min», not «104 min»

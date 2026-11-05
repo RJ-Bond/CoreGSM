@@ -562,6 +562,7 @@ function ServersManage({ sub }: { sub: string }) {
               bindings,
               onMaintenance: (sv) => void toggleMaintenance(sv),
               onRefresh: (sv) => void refresh(sv),
+              onDuplicate: (sv) => setEditing({ data: { name: `${sv.customName || sv.name} ${t('adm.tbl.copySuffix')}`, game: sv.game, host: sv.host, port: sv.port, queryPort: sv.queryPort, displayAddress: sv.displayAddress, country: sv.country } }),
               onEdit: (sv) => setEditing({ id: sv.id, data: { name: sv.customName, game: sv.game, host: sv.host, port: sv.port, queryPort: sv.queryPort, displayAddress: sv.displayAddress, country: sv.country }, cover: sv.coverUrl }),
               onRemove: (sv) => void remove(sv),
               onRefreshMany: refreshMany,
