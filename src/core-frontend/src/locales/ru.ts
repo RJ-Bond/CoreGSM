@@ -85,6 +85,8 @@ const ru = {
   'hdr.loading': 'Загрузка',
   'hdr.offlineTitle': 'Нет связи с сервером',
   'hdr.offlineText': 'Вы остаётесь в аккаунте. Проверьте подключение: мы попробуем ещё раз автоматически.',
+  'upd.badge.avail': 'Доступна версия {v}',
+  'upd.badge.running': 'Идёт обновление: {p}%',
   'hdr.update': 'Доступно обновление',
   'title.setup': 'Первый запуск',
   'title.notfound': 'Не найдено',

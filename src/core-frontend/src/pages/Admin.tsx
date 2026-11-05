@@ -1,4 +1,5 @@
 import { versionText } from './settings/updateLogic';
+import { UpdateBadge } from '../components/UpdateBadge';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { api, type Binding, type CertInfo, type Server, type ServerInput, type StatusInfo, type UpdateInfo, type UserRow } from '../api';
 import { useAuth } from '../auth';
@@ -153,7 +154,7 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
       {badges[s.id] && (badges[s.id].n === 0
         ? <span className={`adm-dot is-${badges[s.id].tone}`} title={badges[s.id].label} role="img" aria-label={badges[s.id].label} />
         : <span className={`adm-badge is-${badges[s.id].tone}`} title={badges[s.id].label} aria-label={badges[s.id].label}>{badges[s.id].n}</span>)}
-      {s.id === 'settings' && updateAvailable && <span className="update-dot ml-auto" title={t('adm.updAvail')} />}
+      {s.id === 'settings' && <UpdateBadge className="ml-auto" />}
     </a>
   );
   // the sliding indicator under the current link

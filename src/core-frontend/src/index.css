@@ -1365,9 +1365,18 @@ html[data-motion='reduce'] .upd-step.is-active .upd-step-line::after { animation
 @media (prefers-reduced-motion: reduce) { .pill-glass-ok::before { animation: none; } }
 
 /* update marker: a pulsing amber dot */
-/* the badge of the bottom bar sits on the corner of the icon pill; the ring cuts it out of the pill */
-.nav-bottom .bn-update { position: absolute; top: -3px; right: 9px; width: 11px; height: 11px; box-shadow: 0 0 0 2px rgb(var(--card)); }
-:root[data-theme='dark'] .nav-bottom .bn-update { box-shadow: 0 0 0 2px rgb(var(--card)); }
+/* one badge for «an update waits» (an arrow) and «it is being installed» (a ring that fills up with the percent) */
+.upd-badge { --s: 16px; --p: 0; position: relative; display: inline-grid; place-items: center; flex: none; width: var(--s); height: var(--s); border-radius: 50%; background: #f59e0b; color: #1c1204; box-shadow: 0 0 0 2px rgb(var(--card)); }
+.upd-badge svg { width: 64%; height: 64%; position: relative; z-index: 1; }
+.upd-badge.is-avail::after { content: ''; position: absolute; inset: 0; border-radius: inherit; background: #f59e0b; animation: live-ping 1.8s cubic-bezier(0, 0, .2, 1) infinite; }
+.upd-badge.is-running { background: conic-gradient(#f59e0b calc(var(--p) * 1%), rgb(245 158 11 / .28) 0); color: #f59e0b; }
+.upd-badge.is-running::before { content: ''; position: absolute; inset: 2px; border-radius: 50%; background: rgb(var(--card)); }
+.upd-badge.is-running svg { animation: upd-nudge 1.2s ease-in-out infinite; }
+@keyframes upd-nudge { 50% { transform: translateY(-1px); } }
+@media (prefers-reduced-motion: reduce) { .upd-badge::after, .upd-badge svg { animation: none !important; } }
+html[data-motion='reduce'] .upd-badge::after, html[data-motion='reduce'] .upd-badge svg { animation: none !important; }
+/* the bottom bar: on the corner of the icon pill */
+.nav-bottom .upd-badge { position: absolute; top: -5px; right: 6px; --s: 17px; }
 .update-dot { position: relative; display: inline-block; width: 10px; height: 10px; border-radius: var(--r-pill); background: #f59e0b; box-shadow: 0 0 0 2px rgb(255 255 255 / .85); flex: none; }
 .update-dot::after { content: ''; position: absolute; inset: 0; border-radius: inherit; background: #f59e0b; animation: live-ping 1.8s cubic-bezier(0, 0, .2, 1) infinite; }
 :root[data-theme='dark'] .update-dot { box-shadow: 0 0 0 2px rgb(var(--card)); }

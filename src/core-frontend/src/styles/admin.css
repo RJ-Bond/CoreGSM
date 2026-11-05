@@ -302,7 +302,8 @@ a.adm-tile:hover { box-shadow: var(--shadow-2); border-color: rgb(var(--brand) /
   .adm-rail .adm-link, .adm-rail .adm-density, .adm-rail .adm-find { justify-content: center; padding-inline: 0; }
   .adm-rail .adm-link.md\:w-full { padding-right: 0; }
   .adm-rail .adm-link { position: relative; }
-  .adm-rail .adm-badge, .adm-rail .adm-dot, .adm-rail .update-dot { position: absolute; top: 2px; right: 4px; margin: 0; }
+  .adm-rail .adm-badge, .adm-rail .adm-dot, .adm-rail .update-dot, .adm-rail .upd-badge { position: absolute; top: 2px; right: 4px; margin: 0; }
+  .adm-rail .upd-badge { --s: 14px; }
   .adm-rail .adm-badge { min-width: 1rem; height: 1rem; padding: 0 3px; font-size: var(--fs-2xs); line-height: 1rem; }
 }
 

@@ -1,4 +1,5 @@
 import BackupsCard from './Backups';
+import { UpdateBadge } from '../components/UpdateBadge';
 import ConfigTransfer from '../components/ConfigTransfer';
 import SmtpCard from '../components/SmtpCard';
 import PollSettingsCard from '../components/PollSettingsCard';
@@ -47,7 +48,7 @@ const tabHints = (): Record<string, { hint: string; help: ReactNode }> => ({
   },
 });
 
-export default function SettingsPage({ sub, updateAvailable }: { sub: string; updateAvailable: boolean }) {
+export default function SettingsPage({ sub }: { sub: string; updateAvailable?: boolean }) {
   useI18n();
   const tab = TABS.some((x) => x.id === sub) ? sub : 'bot';
   const TAB_HINT = tabHints();
@@ -66,7 +67,7 @@ export default function SettingsPage({ sub, updateAvailable }: { sub: string; up
             className={`flex-1 whitespace-nowrap rounded-full px-4 py-1.5 text-center font-extrabold transition ${tab === tb.id ? 'bg-brand text-white shadow-1' : 'text-mute hover:text-ink'}`}
           >
             {tb.label}
-            {tb.id === 'updates' && updateAvailable && <span className="update-dot ml-1.5 align-middle" title={t('d2.set.updAvail')} />}
+            {tb.id === 'updates' && <UpdateBadge className="ml-1.5 align-middle" />}
           </a>
         ))}
       </nav>

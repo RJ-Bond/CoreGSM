@@ -84,6 +84,8 @@ const en: Record<keyof typeof ru, string> = {
   'hdr.loading': 'Loading',
   'hdr.offlineTitle': 'Cannot reach the server',
   'hdr.offlineText': 'You stay signed in. Check your connection: we will try again automatically.',
+  'upd.badge.avail': 'Version {v} is available',
+  'upd.badge.running': 'Updating: {p}%',
   'hdr.update': 'Update available',
   'title.setup': 'First start',
   'title.notfound': 'Not found',

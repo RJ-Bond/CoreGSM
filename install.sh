@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="85c77709f7b1"
+COREGSM_BUILD="1b12ae59342d"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.43"
+COREGSM_VERSION="1.1.44"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -114905,9 +114905,10 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/App.tsx" << '__COREGSM_EOF__'
 import { NewsUnreadDot } from './components/news/newsSeen';
+import { UpdateBadge, shownUpdate, useUpdatePolling, useUpdateState } from './components/UpdateBadge';
 import { paintGameTheme } from './gameThemes';
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { api, ApiError, getToken, setToken, type Access, type Me, type UpdateInfo } from './api';
+import { api, ApiError, getToken, setToken, type Access, type Me } from './api';
 import { AuthContext } from './auth';
 import { onAccentChange, paintBrand, useAutoAccent } from './accent';
 import NotificationBell from './components/NotificationBell';
@@ -115149,16 +115150,10 @@ export default function App() {
   const { me, access } = boot;
   const isAdmin = me?.role === 'admin';
 
-  useEffect(() => {
-    if (!isAdmin) return;
-    const check = () => {
-      if (document.hidden) return;
-      api<UpdateInfo>('/update/status').then((r) => setUpdateAvailable(r.available && !r.skipped)).catch(() => undefined);
-    };
-    check();
-    const t = setInterval(check, 60_000);
-    return () => clearInterval(t);
-  }, [isAdmin]);
+  useUpdatePolling(isAdmin, setUpdateAvailable);
+  const updState = useUpdateState();
+  // the Admin link leads straight to the updates while one waits or is being installed
+  const adminHref = isAdmin && shownUpdate(updState) ? '/admin/settings/updates' : '/admin';
 
   const logout = useCallback(async () => {
     if (loggingOut.current) return;
@@ -115318,11 +115313,7 @@ export default function App() {
     );
   }
 
-  const dot = (
-    <span className="update-dot ml-1.5 align-middle" title={t('hdr.update')}>
-      <span className="sr-only">({t('hdr.update')})</span>
-    </span>
-  );
+  const dot = <UpdateBadge className="ml-1.5 align-middle" />;
 
   return (
     <AuthContext.Provider value={ctx}>
@@ -115344,10 +115335,10 @@ export default function App() {
           {/* desktop navigation; on phones the same sections live in the bottom bar */}
           <nav className="seg hdr-nav hidden md:inline-flex" aria-label={t('nav.sections')}>
             {visible.map((p) => (
-              <a key={p.id} href={`/${p.id}`} aria-current={page === p.id ? 'page' : undefined} className="seg-item py-1.5!">
+              <a key={p.id} href={p.id === 'admin' ? adminHref : `/${p.id}`} aria-current={page === p.id ? 'page' : undefined} className="seg-item py-1.5!">
                 {p.icon()}<span>{t(p.label)}</span>
                 {p.id === 'news' && page !== 'news' && <NewsUnreadDot />}
-                {p.id === 'admin' && updateAvailable && dot}
+                {p.id === 'admin' && dot}
               </a>
             ))}
           </nav>
@@ -115417,13 +115408,13 @@ export default function App() {
               return (
                 <li key={p.id} className="flex-1">
                   <a
-                    href={`/${p.id}`}
+                    href={p.id === 'admin' ? adminHref : `/${p.id}`}
                     aria-current={active ? 'page' : undefined}
                     className={`bn-item relative flex min-h-[58px] flex-col items-center gap-0.5 px-1 pb-1.5 pt-2 text-xs font-extrabold ${active ? 'text-link' : 'text-mute'}`}
                   >
                     <span className={`relative grid h-7 w-14 place-items-center rounded-full transition ${active ? 'bg-linear-to-br from-brand to-brand-2 text-white shadow-pop' : ''}`}>
                       {p.icon()}
-                      {p.id === 'admin' && updateAvailable && <span className="bn-update update-dot"><span className="sr-only">{t('hdr.update')}</span></span>}
+                      {p.id === 'admin' && <UpdateBadge className="bn-update" />}
                     </span>
                     {t(p.label)}
                     {p.id === 'news' && page !== 'news' && <NewsUnreadDot className="nw-unread-abs" />}
@@ -122339,6 +122330,79 @@ function TourOverlay({ onClose }: { onClose: () => void }) {
         </div>
       </div>
     </div>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/UpdateBadge.tsx" << '__COREGSM_EOF__'
+import { useEffect, useSyncExternalStore, type CSSProperties } from 'react';
+import { api, type UpdateInfo } from '../api';
+import { NO_UPDATE, shownUpdate, updateStateOf, type UpdateState } from './updateState';
+import { t } from '../i18n';
+
+export { NO_UPDATE, shownUpdate, updateStateOf, type UpdateState } from './updateState';
+
+// one state for every badge (the bottom bar, the header, the side menu, the settings tab)
+let current: UpdateState = NO_UPDATE;
+const listeners = new Set<() => void>();
+const same = (a: UpdateState, b: UpdateState) => a.available === b.available && a.running === b.running && a.progress === b.progress && a.version === b.version;
+export function setUpdateState(next: UpdateState): void {
+  if (same(current, next)) return;
+  current = next;
+  listeners.forEach((l) => l());
+}
+export const useUpdateState = (): UpdateState =>
+  useSyncExternalStore((cb) => { listeners.add(cb); return () => { listeners.delete(cb); }; }, () => current, () => NO_UPDATE);
+
+/** Asks the panel about updates: once a minute, every three seconds while one is being installed. */
+export function useUpdatePolling(enabled: boolean, onAvailable?: (v: boolean) => void): void {
+  useEffect(() => {
+    if (!enabled) {
+      setUpdateState(NO_UPDATE);
+      return;
+    }
+    let stop = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const tick = async () => {
+      let next = current.running ? 3_000 : 60_000;
+      if (!document.hidden || current.running) {
+        try {
+          const s = updateStateOf(await api<UpdateInfo>('/update/status'));
+          setUpdateState(s);
+          onAvailable?.(s.available);
+          next = s.running ? 3_000 : 60_000;
+        } catch {
+          /* the panel is restarting or offline: try again */
+        }
+      }
+      if (!stop) timer = setTimeout(() => void tick(), next);
+    };
+    void tick();
+    return () => {
+      stop = true;
+      if (timer) clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enabled]);
+}
+
+/** The one badge for «an update is waiting» (an arrow) and «it is being installed» (a ring that fills up). */
+export function UpdateBadge({ className = '' }: { className?: string }) {
+  const s = useUpdateState();
+  if (!shownUpdate(s)) return null;
+  const label = s.running ? t('upd.badge.running', { p: s.progress }) : t('upd.badge.avail', { v: s.version || '' });
+  return (
+    <span
+      className={`upd-badge ${s.running ? 'is-running' : 'is-avail'} ${className}`}
+      style={s.running ? ({ '--p': s.progress } as CSSProperties) : undefined}
+      role="img"
+      aria-label={label}
+      title={label}
+    >
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+        <path d="M8 13V3M3.5 7.5 8 3l4.5 4.5" />
+      </svg>
+    </span>
   );
 }
 __COREGSM_EOF__
@@ -134598,6 +134662,65 @@ export function durText(ms: number): string {
   return t('d2.an.dShort', { n: Math.floor(h / 24) });
 }
 __COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/updateState.test.ts" << '__COREGSM_EOF__'
+import { describe, expect, it } from 'vitest';
+import type { UpdateInfo } from '../api';
+import { NO_UPDATE, shownUpdate, updateStateOf } from './updateState';
+
+const base = { current: '1', latest: '2', available: true, checkedAt: 1, error: null, canApply: true, canRollback: false, pending: false, job: null } as UpdateInfo;
+
+describe('update state of the badges', () => {
+  it('an update waits', () => {
+    const s = updateStateOf({ ...base, latestLabel: '1.1.43' });
+    expect(s).toEqual({ available: true, running: false, progress: 0, version: '1.1.43' });
+    expect(shownUpdate(s)).toBe(true);
+  });
+  it('a skipped version does not nag', () => {
+    expect(shownUpdate(updateStateOf({ ...base, skipped: true }))).toBe(false);
+  });
+  it('the percent of a running update is kept in 0..100', () => {
+    expect(updateStateOf({ ...base, job: { state: 'running', message: '', time: 1, progress: 48.4 } }).progress).toBe(48);
+    expect(updateStateOf({ ...base, job: { state: 'running', message: '', time: 1, progress: 140 } }).progress).toBe(100);
+    expect(updateStateOf({ ...base, job: { state: 'running', message: '' , time: 1 } }).progress).toBe(0);
+  });
+  it('a finished job shows no ring, nothing at all when up to date', () => {
+    expect(updateStateOf({ ...base, available: false, job: { state: 'done', message: '', time: 1, progress: 100 } })).toEqual({ ...NO_UPDATE, version: '2' });
+    expect(shownUpdate(NO_UPDATE)).toBe(false);
+  });
+  it('running keeps the badge even when nothing else is offered', () => {
+    expect(shownUpdate(updateStateOf({ ...base, available: false, job: { state: 'running', message: '', time: 1, progress: 10 } }))).toBe(true);
+  });
+});
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/updateState.ts" << '__COREGSM_EOF__'
+import type { UpdateInfo } from '../api';
+
+/** What the badges of the panel show: an update waits, or one is being installed right now (with its percent). */
+export interface UpdateState {
+  available: boolean;
+  running: boolean;
+  /** 0..100 while an update is running */
+  progress: number;
+  version: string;
+}
+export const NO_UPDATE: UpdateState = { available: false, running: false, progress: 0, version: '' };
+
+export const shownUpdate = (s: UpdateState): boolean => s.available || s.running;
+
+/** the state from the answer of /update/status (skipped versions do not nag) */
+export function updateStateOf(r: UpdateInfo): UpdateState {
+  const running = r.job?.state === 'running';
+  const p = r.job?.progress;
+  return {
+    available: r.available && !r.skipped,
+    running,
+    progress: running && typeof p === 'number' ? Math.max(0, Math.min(100, Math.round(p))) : 0,
+    version: r.latestLabel || r.latest || '',
+  };
+}
+__COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/confirm.tsx" << '__COREGSM_EOF__'
 import { useEffect, useRef, useState, type FormEvent, type MouseEvent, type RefObject } from 'react';
@@ -137292,9 +137415,18 @@ html[data-motion='reduce'] .upd-step.is-active .upd-step-line::after { animation
 @media (prefers-reduced-motion: reduce) { .pill-glass-ok::before { animation: none; } }
 
 /* update marker: a pulsing amber dot */
-/* the badge of the bottom bar sits on the corner of the icon pill; the ring cuts it out of the pill */
-.nav-bottom .bn-update { position: absolute; top: -3px; right: 9px; width: 11px; height: 11px; box-shadow: 0 0 0 2px rgb(var(--card)); }
-:root[data-theme='dark'] .nav-bottom .bn-update { box-shadow: 0 0 0 2px rgb(var(--card)); }
+/* one badge for «an update waits» (an arrow) and «it is being installed» (a ring that fills up with the percent) */
+.upd-badge { --s: 16px; --p: 0; position: relative; display: inline-grid; place-items: center; flex: none; width: var(--s); height: var(--s); border-radius: 50%; background: #f59e0b; color: #1c1204; box-shadow: 0 0 0 2px rgb(var(--card)); }
+.upd-badge svg { width: 64%; height: 64%; position: relative; z-index: 1; }
+.upd-badge.is-avail::after { content: ''; position: absolute; inset: 0; border-radius: inherit; background: #f59e0b; animation: live-ping 1.8s cubic-bezier(0, 0, .2, 1) infinite; }
+.upd-badge.is-running { background: conic-gradient(#f59e0b calc(var(--p) * 1%), rgb(245 158 11 / .28) 0); color: #f59e0b; }
+.upd-badge.is-running::before { content: ''; position: absolute; inset: 2px; border-radius: 50%; background: rgb(var(--card)); }
+.upd-badge.is-running svg { animation: upd-nudge 1.2s ease-in-out infinite; }
+@keyframes upd-nudge { 50% { transform: translateY(-1px); } }
+@media (prefers-reduced-motion: reduce) { .upd-badge::after, .upd-badge svg { animation: none !important; } }
+html[data-motion='reduce'] .upd-badge::after, html[data-motion='reduce'] .upd-badge svg { animation: none !important; }
+/* the bottom bar: on the corner of the icon pill */
+.nav-bottom .upd-badge { position: absolute; top: -5px; right: 6px; --s: 17px; }
 .update-dot { position: relative; display: inline-block; width: 10px; height: 10px; border-radius: var(--r-pill); background: #f59e0b; box-shadow: 0 0 0 2px rgb(255 255 255 / .85); flex: none; }
 .update-dot::after { content: ''; position: absolute; inset: 0; border-radius: inherit; background: #f59e0b; animation: live-ping 1.8s cubic-bezier(0, 0, .2, 1) infinite; }
 :root[data-theme='dark'] .update-dot { box-shadow: 0 0 0 2px rgb(var(--card)); }
@@ -137870,6 +138002,8 @@ const en: Record<keyof typeof ru, string> = {
   'hdr.loading': 'Loading',
   'hdr.offlineTitle': 'Cannot reach the server',
   'hdr.offlineText': 'You stay signed in. Check your connection: we will try again automatically.',
+  'upd.badge.avail': 'Version {v} is available',
+  'upd.badge.running': 'Updating: {p}%',
   'hdr.update': 'Update available',
   'title.setup': 'First start',
   'title.notfound': 'Not found',
@@ -142103,6 +142237,8 @@ const ru = {
   'hdr.loading': 'Загрузка',
   'hdr.offlineTitle': 'Нет связи с сервером',
   'hdr.offlineText': 'Вы остаётесь в аккаунте. Проверьте подключение: мы попробуем ещё раз автоматически.',
+  'upd.badge.avail': 'Доступна версия {v}',
+  'upd.badge.running': 'Идёт обновление: {p}%',
   'hdr.update': 'Доступно обновление',
   'title.setup': 'Первый запуск',
   'title.notfound': 'Не найдено',
@@ -146299,6 +146435,7 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/Admin.tsx" << '__COREGSM_EOF__'
 import { versionText } from './settings/updateLogic';
+import { UpdateBadge } from '../components/UpdateBadge';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { api, type Binding, type CertInfo, type Server, type ServerInput, type StatusInfo, type UpdateInfo, type UserRow } from '../api';
 import { useAuth } from '../auth';
@@ -146453,7 +146590,7 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
       {badges[s.id] && (badges[s.id].n === 0
         ? <span className={`adm-dot is-${badges[s.id].tone}`} title={badges[s.id].label} role="img" aria-label={badges[s.id].label} />
         : <span className={`adm-badge is-${badges[s.id].tone}`} title={badges[s.id].label} aria-label={badges[s.id].label}>{badges[s.id].n}</span>)}
-      {s.id === 'settings' && updateAvailable && <span className="update-dot ml-auto" title={t('adm.updAvail')} />}
+      {s.id === 'settings' && <UpdateBadge className="ml-auto" />}
     </a>
   );
   // the sliding indicator under the current link
@@ -155186,6 +155323,7 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/Settings.tsx" << '__COREGSM_EOF__'
 import BackupsCard from './Backups';
+import { UpdateBadge } from '../components/UpdateBadge';
 import ConfigTransfer from '../components/ConfigTransfer';
 import SmtpCard from '../components/SmtpCard';
 import PollSettingsCard from '../components/PollSettingsCard';
@@ -155234,7 +155372,7 @@ const tabHints = (): Record<string, { hint: string; help: ReactNode }> => ({
   },
 });
 
-export default function SettingsPage({ sub, updateAvailable }: { sub: string; updateAvailable: boolean }) {
+export default function SettingsPage({ sub }: { sub: string; updateAvailable?: boolean }) {
   useI18n();
   const tab = TABS.some((x) => x.id === sub) ? sub : 'bot';
   const TAB_HINT = tabHints();
@@ -155253,7 +155391,7 @@ export default function SettingsPage({ sub, updateAvailable }: { sub: string; up
             className={`flex-1 whitespace-nowrap rounded-full px-4 py-1.5 text-center font-extrabold transition ${tab === tb.id ? 'bg-brand text-white shadow-1' : 'text-mute hover:text-ink'}`}
           >
             {tb.label}
-            {tb.id === 'updates' && updateAvailable && <span className="update-dot ml-1.5 align-middle" title={t('d2.set.updAvail')} />}
+            {tb.id === 'updates' && <UpdateBadge className="ml-1.5 align-middle" />}
           </a>
         ))}
       </nav>
@@ -159584,7 +159722,8 @@ a.adm-tile:hover { box-shadow: var(--shadow-2); border-color: rgb(var(--brand) /
   .adm-rail .adm-link, .adm-rail .adm-density, .adm-rail .adm-find { justify-content: center; padding-inline: 0; }
   .adm-rail .adm-link.md\:w-full { padding-right: 0; }
   .adm-rail .adm-link { position: relative; }
-  .adm-rail .adm-badge, .adm-rail .adm-dot, .adm-rail .update-dot { position: absolute; top: 2px; right: 4px; margin: 0; }
+  .adm-rail .adm-badge, .adm-rail .adm-dot, .adm-rail .update-dot, .adm-rail .upd-badge { position: absolute; top: 2px; right: 4px; margin: 0; }
+  .adm-rail .upd-badge { --s: 14px; }
   .adm-rail .adm-badge { min-width: 1rem; height: 1rem; padding: 0 3px; font-size: var(--fs-2xs); line-height: 1rem; }
 }
 

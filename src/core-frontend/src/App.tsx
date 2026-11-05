@@ -1,7 +1,8 @@
 import { NewsUnreadDot } from './components/news/newsSeen';
+import { UpdateBadge, shownUpdate, useUpdatePolling, useUpdateState } from './components/UpdateBadge';
 import { paintGameTheme } from './gameThemes';
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { api, ApiError, getToken, setToken, type Access, type Me, type UpdateInfo } from './api';
+import { api, ApiError, getToken, setToken, type Access, type Me } from './api';
 import { AuthContext } from './auth';
 import { onAccentChange, paintBrand, useAutoAccent } from './accent';
 import NotificationBell from './components/NotificationBell';
@@ -243,16 +244,10 @@ export default function App() {
   const { me, access } = boot;
   const isAdmin = me?.role === 'admin';
 
-  useEffect(() => {
-    if (!isAdmin) return;
-    const check = () => {
-      if (document.hidden) return;
-      api<UpdateInfo>('/update/status').then((r) => setUpdateAvailable(r.available && !r.skipped)).catch(() => undefined);
-    };
-    check();
-    const t = setInterval(check, 60_000);
-    return () => clearInterval(t);
-  }, [isAdmin]);
+  useUpdatePolling(isAdmin, setUpdateAvailable);
+  const updState = useUpdateState();
+  // the Admin link leads straight to the updates while one waits or is being installed
+  const adminHref = isAdmin && shownUpdate(updState) ? '/admin/settings/updates' : '/admin';
 
   const logout = useCallback(async () => {
     if (loggingOut.current) return;
@@ -412,11 +407,7 @@ export default function App() {
     );
   }
 
-  const dot = (
-    <span className="update-dot ml-1.5 align-middle" title={t('hdr.update')}>
-      <span className="sr-only">({t('hdr.update')})</span>
-    </span>
-  );
+  const dot = <UpdateBadge className="ml-1.5 align-middle" />;
 
   return (
     <AuthContext.Provider value={ctx}>
@@ -438,10 +429,10 @@ export default function App() {
           {/* desktop navigation; on phones the same sections live in the bottom bar */}
           <nav className="seg hdr-nav hidden md:inline-flex" aria-label={t('nav.sections')}>
             {visible.map((p) => (
-              <a key={p.id} href={`/${p.id}`} aria-current={page === p.id ? 'page' : undefined} className="seg-item py-1.5!">
+              <a key={p.id} href={p.id === 'admin' ? adminHref : `/${p.id}`} aria-current={page === p.id ? 'page' : undefined} className="seg-item py-1.5!">
                 {p.icon()}<span>{t(p.label)}</span>
                 {p.id === 'news' && page !== 'news' && <NewsUnreadDot />}
-                {p.id === 'admin' && updateAvailable && dot}
+                {p.id === 'admin' && dot}
               </a>
             ))}
           </nav>
@@ -511,13 +502,13 @@ export default function App() {
               return (
                 <li key={p.id} className="flex-1">
                   <a
-                    href={`/${p.id}`}
+                    href={p.id === 'admin' ? adminHref : `/${p.id}`}
                     aria-current={active ? 'page' : undefined}
                     className={`bn-item relative flex min-h-[58px] flex-col items-center gap-0.5 px-1 pb-1.5 pt-2 text-xs font-extrabold ${active ? 'text-link' : 'text-mute'}`}
                   >
                     <span className={`relative grid h-7 w-14 place-items-center rounded-full transition ${active ? 'bg-linear-to-br from-brand to-brand-2 text-white shadow-pop' : ''}`}>
                       {p.icon()}
-                      {p.id === 'admin' && updateAvailable && <span className="bn-update update-dot"><span className="sr-only">{t('hdr.update')}</span></span>}
+                      {p.id === 'admin' && <UpdateBadge className="bn-update" />}
                     </span>
                     {t(p.label)}
                     {p.id === 'news' && page !== 'news' && <NewsUnreadDot className="nw-unread-abs" />}
