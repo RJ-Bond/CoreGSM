@@ -120,6 +120,19 @@ export default function App() {
   useI18n();
   // the admin area keeps a theme of its own (the header button then changes only that one)
   useEffect(() => { setThemeScope(rawPage === 'admin'); }, [rawPage]);
+  // the header lifts off the page once it scrolls (a class on the element, no state: nothing re-renders on scroll)
+  useEffect(() => {
+    let on = false;
+    const sync = () => {
+      const now = window.scrollY > 8;
+      if (now === on) return;
+      on = now;
+      document.querySelector('header.hdr')?.classList.toggle('is-scrolled', now);
+    };
+    window.addEventListener('scroll', sync, { passive: true });
+    sync();
+    return () => window.removeEventListener('scroll', sync);
+  }, []);
   const [boot, setBoot] = useState<Boot>({ ready: false, offline: false, needsSetup: false, me: null, access: DEFAULT_ACCESS });
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const [authing, setAuthing] = useState(false);

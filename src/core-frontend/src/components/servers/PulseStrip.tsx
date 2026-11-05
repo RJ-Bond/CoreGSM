@@ -151,15 +151,15 @@ export function PulseStrip({ servers, overview, uptime, now, onOpen }: { servers
         </div>
         <div>
           <dt>{t('srv.pulse.servers')}</dt>
-          <dd>{online.length}<small>/{servers.length}</small></dd>
+          <dd className={servers.length === 0 ? '' : online.length === servers.length ? 'text-ok' : online.length === 0 ? 'text-bad' : 'text-warn'}>{online.length}<small>/{servers.length}</small></dd>
         </div>
         <div>
           <dt>{t('srv.pulse.ping')}</dt>
-          <dd className={avg != null && avg > LAG_PING ? 'text-warn' : ''}>{avg == null ? '–' : <>{avg}<small> {t('srv.unit.ms')}</small></>}</dd>
+          <dd className={avg == null ? '' : avg > 200 ? 'text-bad' : avg > LAG_PING ? 'text-warn' : avg <= 60 ? 'text-ok' : ''}>{avg == null ? '–' : <>{avg}<small> {t('srv.unit.ms')}</small></>}</dd>
         </div>
         <div>
           <dt>{t('srv.pulse.uptime')}</dt>
-          <dd>{uptime == null ? '–' : <>{num(uptime)}<small>%</small></>}</dd>
+          <dd className={uptime == null ? '' : uptime >= 99 ? 'text-ok' : uptime >= 95 ? 'text-warn' : 'text-bad'}>{uptime == null ? '–' : <>{num(uptime)}<small>%</small></>}</dd>
         </div>
       </dl>
       <PlayersChart data={overview} now={now} />

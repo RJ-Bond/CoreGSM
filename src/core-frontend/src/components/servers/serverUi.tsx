@@ -7,6 +7,7 @@ import { capLevel, capacityPct, slotsInfo } from './capacity';
 import { toast, useHourTrend } from '../../ui';
 import { EmptyRackArt, NoFavsArt, NoMatchArt } from './ServersArt';
 import { CardSeat, CardUsers } from './CardIcons';
+import { PlayerAvatar } from './CommunityBento';
 
 // ---------- reactions to changes (item 29) ----------
 export interface Reaction {
@@ -277,9 +278,20 @@ export function PlayerNames({ names, max = 6, onDark = false, className = '' }: 
   return (
     <ul className={`srv-names ${onDark ? 'on-dark' : ''} ${className}`} aria-label={t('srv.who')}>
       <li className="srv-names-ico" aria-hidden="true"><CardUsers /></li>
-      {names.slice(0, max).map((n, i) => <li key={`${n}-${i}`} title={n}>{n}</li>)}
+      {names.slice(0, max).map((n, i) => <li key={`${n}-${i}`} title={n}><PlayerAvatar name={n} size={18} /><span className="truncate">{n}</span></li>)}
       {names.length > max && <li className="more">+{names.length - max}</li>}
     </ul>
+  );
+}
+
+/** the first players of a server as small round pictures that overlap: the opener of the full list on a tile */
+export function PlayerStack({ names, max = 3 }: { names: string[]; max?: number }) {
+  if (names.length === 0) return null;
+  return (
+    <span className="srv-who-stack" aria-hidden>
+      {names.slice(0, max).map((n, i) => <PlayerAvatar key={`${n}-${i}`} name={n} size={22} />)}
+      {names.length > max && <span className="srv-who-more">+{names.length - max}</span>}
+    </span>
   );
 }
 

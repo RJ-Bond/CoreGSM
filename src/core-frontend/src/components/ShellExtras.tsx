@@ -103,17 +103,28 @@ export function AppFooter({ brand, version }: { brand: string; version?: string 
   useI18n();
   return (
     <footer className="app-foot">
-      {/* a panel that carries its own name is not the project: only the default brand leads to the project page */}
-      {brand === DEFAULT_BRAND
-        ? <a className="font-extrabold" href={PROJECT_URL} target="_blank" rel="noopener noreferrer" title={t('foot.project')}>{brand}</a>
-        : <span className="font-extrabold">{brand}</span>}
-      <nav aria-label={t('nav.sections')}>
-        <a href="/servers"><FootServers />{t('nav.servers')}</a>
-        <a href="/news"><FootNews />{t('nav.news')}</a>
-        <a href="/status"><FootStatus />{t('nav.status')}</a>
-        <a href="/community"><FootCommunity />{t('nav.community')}</a>
-      </nav>
-      {version && <a className="app-foot-ver" href={CHANGELOG_URL} target="_blank" rel="noopener noreferrer" title={t('foot.version', { v: version })}><FootTag />{footVersionText(version)}</a>}
+      <div className="app-foot-col">
+        {/* a panel that carries its own name is not the project: only the default brand leads to the project page */}
+        {brand === DEFAULT_BRAND
+          ? <a className="text-lg font-black" href={PROJECT_URL} target="_blank" rel="noopener noreferrer" title={t('foot.project')}>{brand}</a>
+          : <span className="text-lg font-black">{brand}</span>}
+        <p className="app-foot-note">{t('foot.tagline')}</p>
+      </div>
+      <div className="app-foot-col">
+        <p className="app-foot-title">{t('nav.sections')}</p>
+        <nav className="app-foot-links" aria-label={t('nav.sections')}>
+          <a href="/servers"><FootServers />{t('nav.servers')}</a>
+          <a href="/news"><FootNews />{t('nav.news')}</a>
+          <a href="/status"><FootStatus />{t('nav.status')}</a>
+          <a href="/community"><FootCommunity />{t('nav.community')}</a>
+        </nav>
+      </div>
+      <div className="app-foot-col">
+        <p className="app-foot-title">{t('foot.panel')}</p>
+        <span className="app-foot-status"><i aria-hidden />{t('foot.up')}</span>
+        {version && <a className="app-foot-ver" href={CHANGELOG_URL} target="_blank" rel="noopener noreferrer" title={t('foot.version', { v: version })}><FootTag />{footVersionText(version)}</a>}
+        {brand === DEFAULT_BRAND && <a href={CHANGELOG_URL} target="_blank" rel="noopener noreferrer">{t('foot.changelog')}</a>}
+      </div>
     </footer>
   );
 }

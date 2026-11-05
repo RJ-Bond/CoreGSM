@@ -171,8 +171,8 @@ export function PageHead({ title, subtitle, icon, hint, help, children }: { titl
         <div className="flex min-w-0 items-center gap-3.5">
           {icon && <span className="grid h-11 w-11 shrink-0 place-items-center rounded-ui-lg bg-linear-to-br from-brand to-brand-2 text-white shadow-pop sm:h-12 sm:w-12">{icon}</span>}
           <div className="min-w-0">
-            <h1 className="text-xl font-extrabold tracking-tight sm:text-[30px]">{title}</h1>
-            {subtitle && <p className="mt-0.5 hidden font-semibold text-mute sm:block">{subtitle}</p>}
+            <h1 className="text-2xl font-black tracking-tight sm:text-[34px]" style={{ letterSpacing: '-0.025em' }}>{title}</h1>
+            {subtitle && <p className="mt-1 hidden text-fs-md font-semibold text-mute sm:block">{subtitle}</p>}
           </div>
         </div>
         {(children || (hasHint && hidden)) && (

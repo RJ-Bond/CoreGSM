@@ -8,7 +8,7 @@ import { AnimatedNumber, Burst, ErrorLine, GameAvatar, LoadError, IconServers, P
 import { t, useI18n, type TKey } from '../i18n';
 import { calmSeriesColor, useCoverAccent } from '../components/server/coverAccent';
 import { pingTone, TONE_TEXT } from '../components/server/helpers';
-import { AddrCopy, CapacityBar, CountReact, ListSkeleton, NoFavsState, NoMatchState, NoServersState, PingBars, PlayerNames, StatusFlash, TilesSkeleton, TrendChip, durText, reactionOf, useServerReactions, type Reactions } from '../components/servers/serverUi';
+import { AddrCopy, PlayerStack, CapacityBar, CountReact, ListSkeleton, NoFavsState, NoMatchState, NoServersState, PingBars, PlayerNames, StatusFlash, TilesSkeleton, TrendChip, durText, reactionOf, useServerReactions, type Reactions } from '../components/servers/serverUi';
 import { ServersList, readView, saveView, type ListSort, type SelectProps, type ServersView } from '../components/servers/ServerViews';
 import CompareChart from '../components/servers/CompareChart';
 import { QuickMenu } from '../components/servers/QuickMenu';
@@ -636,7 +636,7 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince }
             <CountReact r={r}><AnimatedNumber value={s.players} className="text-[38px] font-extrabold leading-none tracking-[-0.03em]" /></CountReact>
             <span className="text-fs-xl font-bold text-mute">/ {s.maxPlayers}</span>
             <TrendChip serverId={s.id} />
-            {(s.playerNames?.length ?? 0) > 0 && <button type="button" className="srv-who" aria-expanded={who} onClick={(e) => { e.stopPropagation(); setWho((v) => !v); }}>{t('srv.who')}</button>}
+            {(s.playerNames?.length ?? 0) > 0 && <button type="button" className="srv-who" aria-label={t('srv.who')} title={t('srv.who')} aria-expanded={who} onClick={(e) => { e.stopPropagation(); setWho((v) => !v); }}><PlayerStack names={s.playerNames ?? []} /></button>}
             <span className={`ml-auto inline-flex items-center gap-1.5 text-fs-sm font-bold ${s.ping != null ? TONE_TEXT[pingTone(s.ping).tone] : 'text-mute'}`}>{s.ping != null && <><PingBars ping={s.ping} tone={pingTone(s.ping).tone} />{t('d2.bot.ms', { n: s.ping })}</>}</span>
           </div>
           <CapacityBar className="px-1.5" players={s.players} max={s.maxPlayers} color="rgb(var(--ink) / .5)" />
@@ -647,10 +647,13 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince }
         </>
       ) : (
         s.hasStatus ? (
-          <div className="mx-1.5 flex items-center gap-2 rounded-xl bg-badbg px-3 py-2" title={s.error ?? undefined}>
-            <span className="h-2 w-2 shrink-0 rounded-full bg-bad" aria-hidden />
-            <p className="truncate text-fs-sm font-bold leading-snug text-bad">{downSince ? t('srv.down.for', { d: durText(Date.now() - downSince) }) : t('d2.srv.noReplyAgo', { ago: ago(s.updatedAt) })}</p>
-          </div>
+          <>
+            <div className="mx-1.5 flex items-center gap-2 rounded-xl bg-badbg px-3 py-2" title={s.error ?? undefined}>
+              <span className="h-2 w-2 shrink-0 rounded-full bg-bad" aria-hidden />
+              <p className="truncate text-fs-sm font-bold leading-snug text-bad">{downSince ? t('srv.down.for', { d: durText(Date.now() - downSince) }) : t('d2.srv.noReplyAgo', { ago: ago(s.updatedAt) })}</p>
+            </div>
+            <div className="srv-off-fig px-1.5" aria-hidden><b>{t('srv.off.fig')}</b><i /></div>
+          </>
         ) : (
           <div className="mx-1.5 rounded-xl bg-soft px-3 py-2.5 text-fs-sm font-bold text-mute">{t('d2.srv.waitFirst')}</div>
         )

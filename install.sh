@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="4ccff01f2d1a"
+COREGSM_BUILD="db49e0ad7bc9"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.11"
+COREGSM_VERSION="1.1.13"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -110265,6 +110265,19 @@ export default function App() {
   useI18n();
   // the admin area keeps a theme of its own (the header button then changes only that one)
   useEffect(() => { setThemeScope(rawPage === 'admin'); }, [rawPage]);
+  // the header lifts off the page once it scrolls (a class on the element, no state: nothing re-renders on scroll)
+  useEffect(() => {
+    let on = false;
+    const sync = () => {
+      const now = window.scrollY > 8;
+      if (now === on) return;
+      on = now;
+      document.querySelector('header.hdr')?.classList.toggle('is-scrolled', now);
+    };
+    window.addEventListener('scroll', sync, { passive: true });
+    sync();
+    return () => window.removeEventListener('scroll', sync);
+  }, []);
   const [boot, setBoot] = useState<Boot>({ ready: false, offline: false, needsSetup: false, me: null, access: DEFAULT_ACCESS });
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const [authing, setAuthing] = useState(false);
@@ -115961,17 +115974,28 @@ export function AppFooter({ brand, version }: { brand: string; version?: string 
   useI18n();
   return (
     <footer className="app-foot">
-      {/* a panel that carries its own name is not the project: only the default brand leads to the project page */}
-      {brand === DEFAULT_BRAND
-        ? <a className="font-extrabold" href={PROJECT_URL} target="_blank" rel="noopener noreferrer" title={t('foot.project')}>{brand}</a>
-        : <span className="font-extrabold">{brand}</span>}
-      <nav aria-label={t('nav.sections')}>
-        <a href="/servers"><FootServers />{t('nav.servers')}</a>
-        <a href="/news"><FootNews />{t('nav.news')}</a>
-        <a href="/status"><FootStatus />{t('nav.status')}</a>
-        <a href="/community"><FootCommunity />{t('nav.community')}</a>
-      </nav>
-      {version && <a className="app-foot-ver" href={CHANGELOG_URL} target="_blank" rel="noopener noreferrer" title={t('foot.version', { v: version })}><FootTag />{footVersionText(version)}</a>}
+      <div className="app-foot-col">
+        {/* a panel that carries its own name is not the project: only the default brand leads to the project page */}
+        {brand === DEFAULT_BRAND
+          ? <a className="text-lg font-black" href={PROJECT_URL} target="_blank" rel="noopener noreferrer" title={t('foot.project')}>{brand}</a>
+          : <span className="text-lg font-black">{brand}</span>}
+        <p className="app-foot-note">{t('foot.tagline')}</p>
+      </div>
+      <div className="app-foot-col">
+        <p className="app-foot-title">{t('nav.sections')}</p>
+        <nav className="app-foot-links" aria-label={t('nav.sections')}>
+          <a href="/servers"><FootServers />{t('nav.servers')}</a>
+          <a href="/news"><FootNews />{t('nav.news')}</a>
+          <a href="/status"><FootStatus />{t('nav.status')}</a>
+          <a href="/community"><FootCommunity />{t('nav.community')}</a>
+        </nav>
+      </div>
+      <div className="app-foot-col">
+        <p className="app-foot-title">{t('foot.panel')}</p>
+        <span className="app-foot-status"><i aria-hidden />{t('foot.up')}</span>
+        {version && <a className="app-foot-ver" href={CHANGELOG_URL} target="_blank" rel="noopener noreferrer" title={t('foot.version', { v: version })}><FootTag />{footVersionText(version)}</a>}
+        {brand === DEFAULT_BRAND && <a href={CHANGELOG_URL} target="_blank" rel="noopener noreferrer">{t('foot.changelog')}</a>}
+      </div>
     </footer>
   );
 }
@@ -128125,15 +128149,15 @@ export function PulseStrip({ servers, overview, uptime, now, onOpen }: { servers
         </div>
         <div>
           <dt>{t('srv.pulse.servers')}</dt>
-          <dd>{online.length}<small>/{servers.length}</small></dd>
+          <dd className={servers.length === 0 ? '' : online.length === servers.length ? 'text-ok' : online.length === 0 ? 'text-bad' : 'text-warn'}>{online.length}<small>/{servers.length}</small></dd>
         </div>
         <div>
           <dt>{t('srv.pulse.ping')}</dt>
-          <dd className={avg != null && avg > LAG_PING ? 'text-warn' : ''}>{avg == null ? '–' : <>{avg}<small> {t('srv.unit.ms')}</small></>}</dd>
+          <dd className={avg == null ? '' : avg > 200 ? 'text-bad' : avg > LAG_PING ? 'text-warn' : avg <= 60 ? 'text-ok' : ''}>{avg == null ? '–' : <>{avg}<small> {t('srv.unit.ms')}</small></>}</dd>
         </div>
         <div>
           <dt>{t('srv.pulse.uptime')}</dt>
-          <dd>{uptime == null ? '–' : <>{num(uptime)}<small>%</small></>}</dd>
+          <dd className={uptime == null ? '' : uptime >= 99 ? 'text-ok' : uptime >= 95 ? 'text-warn' : 'text-bad'}>{uptime == null ? '–' : <>{num(uptime)}<small>%</small></>}</dd>
         </div>
       </dl>
       <PlayersChart data={overview} now={now} />
@@ -128735,6 +128759,7 @@ import { capLevel, capacityPct, slotsInfo } from './capacity';
 import { toast, useHourTrend } from '../../ui';
 import { EmptyRackArt, NoFavsArt, NoMatchArt } from './ServersArt';
 import { CardSeat, CardUsers } from './CardIcons';
+import { PlayerAvatar } from './CommunityBento';
 
 // ---------- reactions to changes (item 29) ----------
 export interface Reaction {
@@ -129005,9 +129030,20 @@ export function PlayerNames({ names, max = 6, onDark = false, className = '' }: 
   return (
     <ul className={`srv-names ${onDark ? 'on-dark' : ''} ${className}`} aria-label={t('srv.who')}>
       <li className="srv-names-ico" aria-hidden="true"><CardUsers /></li>
-      {names.slice(0, max).map((n, i) => <li key={`${n}-${i}`} title={n}>{n}</li>)}
+      {names.slice(0, max).map((n, i) => <li key={`${n}-${i}`} title={n}><PlayerAvatar name={n} size={18} /><span className="truncate">{n}</span></li>)}
       {names.length > max && <li className="more">+{names.length - max}</li>}
     </ul>
+  );
+}
+
+/** the first players of a server as small round pictures that overlap: the opener of the full list on a tile */
+export function PlayerStack({ names, max = 3 }: { names: string[]; max?: number }) {
+  if (names.length === 0) return null;
+  return (
+    <span className="srv-who-stack" aria-hidden>
+      {names.slice(0, max).map((n, i) => <PlayerAvatar key={`${n}-${i}`} name={n} size={22} />)}
+      {names.length > max && <span className="srv-who-more">+{names.length - max}</span>}
+    </span>
   );
 }
 
@@ -132264,6 +132300,10 @@ const en: Record<keyof typeof ru, string> = {
   'nav.skip': 'Skip to content',
   'foot.version': 'Panel version {v}',
   'foot.project': 'CoreGSM project page',
+  'foot.tagline': 'Game server monitoring: who plays, when and where.',
+  'foot.panel': 'Panel',
+  'foot.up': 'Up and running',
+  'foot.changelog': 'Changelog',
   'hdr.search': 'Search',
   'hdr.searchAria': 'Search the panel (Ctrl K)',
   'hdr.searchTitle': 'Search (Ctrl K)',
@@ -132719,6 +132759,7 @@ const en: Record<keyof typeof ru, string> = {
   'srv.hero.busiest': 'Busiest',
   'srv.trend.hour': 'per hour',
   'srv.who': "who's on",
+  'srv.off.fig': 'No answer',
   'srv.top': 'Back to top',
   'srv.down.for': 'Down for {d}',
   'srv.new.fresh': 'new',
@@ -136297,6 +136338,10 @@ const ru = {
   'nav.skip': 'Перейти к содержимому',
   'foot.version': 'Версия панели {v}',
   'foot.project': 'Страница проекта CoreGSM',
+  'foot.tagline': 'Мониторинг игровых серверов: кто играет, когда и где.',
+  'foot.panel': 'Панель',
+  'foot.up': 'Работает',
+  'foot.changelog': 'Список изменений',
   'hdr.search': 'Поиск',
   'hdr.searchAria': 'Поиск по панели (Ctrl K)',
   'hdr.searchTitle': 'Поиск (Ctrl K)',
@@ -136752,6 +136797,7 @@ const ru = {
   'srv.hero.busiest': 'Самый загруженный',
   'srv.trend.hour': 'за час',
   'srv.who': 'кто играет',
+  'srv.off.fig': 'Нет ответа',
   'srv.top': 'Наверх',
   'srv.down.for': 'Простой {d}',
   'srv.new.fresh': 'новое',
@@ -140010,6 +140056,8 @@ import './styles/system.css';
 import './styles/news.css';
 import './styles/news-page.css';
 import './styles/profile.css';
+// depth, headings, background, tooltips, header and footer, reaction of link cards
+import './styles/polish.css';
 // the button system last: one source of truth for every .btn* class
 import './styles/buttons.css';
 // phone layout fixes: loaded after the others, so it wins at equal specificity
@@ -148319,7 +148367,7 @@ import { AnimatedNumber, Burst, ErrorLine, GameAvatar, LoadError, IconServers, P
 import { t, useI18n, type TKey } from '../i18n';
 import { calmSeriesColor, useCoverAccent } from '../components/server/coverAccent';
 import { pingTone, TONE_TEXT } from '../components/server/helpers';
-import { AddrCopy, CapacityBar, CountReact, ListSkeleton, NoFavsState, NoMatchState, NoServersState, PingBars, PlayerNames, StatusFlash, TilesSkeleton, TrendChip, durText, reactionOf, useServerReactions, type Reactions } from '../components/servers/serverUi';
+import { AddrCopy, PlayerStack, CapacityBar, CountReact, ListSkeleton, NoFavsState, NoMatchState, NoServersState, PingBars, PlayerNames, StatusFlash, TilesSkeleton, TrendChip, durText, reactionOf, useServerReactions, type Reactions } from '../components/servers/serverUi';
 import { ServersList, readView, saveView, type ListSort, type SelectProps, type ServersView } from '../components/servers/ServerViews';
 import CompareChart from '../components/servers/CompareChart';
 import { QuickMenu } from '../components/servers/QuickMenu';
@@ -148947,7 +148995,7 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince }
             <CountReact r={r}><AnimatedNumber value={s.players} className="text-[38px] font-extrabold leading-none tracking-[-0.03em]" /></CountReact>
             <span className="text-fs-xl font-bold text-mute">/ {s.maxPlayers}</span>
             <TrendChip serverId={s.id} />
-            {(s.playerNames?.length ?? 0) > 0 && <button type="button" className="srv-who" aria-expanded={who} onClick={(e) => { e.stopPropagation(); setWho((v) => !v); }}>{t('srv.who')}</button>}
+            {(s.playerNames?.length ?? 0) > 0 && <button type="button" className="srv-who" aria-label={t('srv.who')} title={t('srv.who')} aria-expanded={who} onClick={(e) => { e.stopPropagation(); setWho((v) => !v); }}><PlayerStack names={s.playerNames ?? []} /></button>}
             <span className={`ml-auto inline-flex items-center gap-1.5 text-fs-sm font-bold ${s.ping != null ? TONE_TEXT[pingTone(s.ping).tone] : 'text-mute'}`}>{s.ping != null && <><PingBars ping={s.ping} tone={pingTone(s.ping).tone} />{t('d2.bot.ms', { n: s.ping })}</>}</span>
           </div>
           <CapacityBar className="px-1.5" players={s.players} max={s.maxPlayers} color="rgb(var(--ink) / .5)" />
@@ -148958,10 +149006,13 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince }
         </>
       ) : (
         s.hasStatus ? (
-          <div className="mx-1.5 flex items-center gap-2 rounded-xl bg-badbg px-3 py-2" title={s.error ?? undefined}>
-            <span className="h-2 w-2 shrink-0 rounded-full bg-bad" aria-hidden />
-            <p className="truncate text-fs-sm font-bold leading-snug text-bad">{downSince ? t('srv.down.for', { d: durText(Date.now() - downSince) }) : t('d2.srv.noReplyAgo', { ago: ago(s.updatedAt) })}</p>
-          </div>
+          <>
+            <div className="mx-1.5 flex items-center gap-2 rounded-xl bg-badbg px-3 py-2" title={s.error ?? undefined}>
+              <span className="h-2 w-2 shrink-0 rounded-full bg-bad" aria-hidden />
+              <p className="truncate text-fs-sm font-bold leading-snug text-bad">{downSince ? t('srv.down.for', { d: durText(Date.now() - downSince) }) : t('d2.srv.noReplyAgo', { ago: ago(s.updatedAt) })}</p>
+            </div>
+            <div className="srv-off-fig px-1.5" aria-hidden><b>{t('srv.off.fig')}</b><i /></div>
+          </>
         ) : (
           <div className="mx-1.5 rounded-xl bg-soft px-3 py-2.5 text-fs-sm font-bold text-mute">{t('d2.srv.waitFirst')}</div>
         )
@@ -155190,6 +155241,111 @@ __COREGSM_EOF__
 .nb.nb-compact .nb-text { font-size: .9375rem; line-height: 1.5; -webkit-line-clamp: 4; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
+  cat > "$APP_DIR/core-frontend/src/styles/polish.css" << '__COREGSM_EOF__'
+/*
+  The visual layer on top of the pages: depth, headings, the page background, the way lists come in, one look for every
+  tooltip, the header and the footer, readable small text and a reaction of every card that is a link.
+  Loaded after the page styles and before buttons.css / mobile.css.
+*/
+
+/* ---------- 1. depth: three levels ----------
+   page < panel / tile (shadow-2) < what floats (menus, tips: shadow-pop). A card inside a card does not cast a second
+   shadow: it is a flat field with a thin outline, so the eye reads one level at a time. */
+.panel .tile, .tile .tile, .panel .panel, .tile .panel {
+  background-image: none;
+  box-shadow: inset 0 0 0 1px var(--tile-border);
+}
+
+/* ---------- 3. the page background keeps its light down a long page ----------
+   two more soft lights, in the middle and at the bottom of the page, laid on the body itself (no fixed layer) */
+body {
+  background-image:
+    radial-gradient(60% 38% at 50% -4%, rgb(var(--brand) / var(--au1)), transparent 100%),
+    radial-gradient(40% 30% at 98% 2%, rgb(45 212 191 / var(--au2)), transparent 100%),
+    radial-gradient(45% 50% at 0% 50%, rgb(var(--brand) / calc(var(--au1) * .45)), transparent 100%),
+    radial-gradient(55% 100% at 100% 100%, rgb(45 212 191 / calc(var(--au2) * .5)), transparent 100%);
+  background-size: 100% 110vh, 100% 110vh, 100% 90vh, 100% 70vh;
+  background-repeat: no-repeat;
+  background-position: top, top, 0 58%, 100% 100%;
+}
+html[data-game-art] body { background-position: top, top center, top; background-size: 100% 100vh, 100% auto, 100% 110vh; }
+
+/* ---------- 4. lists come in one after another ---------- */
+.stagger > * { animation: tile-in .45s cubic-bezier(.2, .8, .2, 1) both; }
+.stagger > :nth-child(1) { animation-delay: 0ms; }
+.stagger > :nth-child(2) { animation-delay: 45ms; }
+.stagger > :nth-child(3) { animation-delay: 90ms; }
+.stagger > :nth-child(4) { animation-delay: 135ms; }
+.stagger > :nth-child(5) { animation-delay: 180ms; }
+.stagger > :nth-child(6) { animation-delay: 225ms; }
+.stagger > :nth-child(7) { animation-delay: 270ms; }
+.stagger > :nth-child(n + 8) { animation-delay: 315ms; }
+html[data-motion='reduce'] .stagger > * { animation: none !important; }
+@media (prefers-reduced-motion: reduce) { .stagger > * { animation: none !important; } }
+
+/* ---------- 6. one look for every tooltip ---------- */
+.lc-tip, .cm-chart-tip, .pulse-tip, .pf-cal-tip, .st-tip {
+  background: rgb(var(--raised));
+  color: rgb(var(--ink));
+  border: 0;
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-pop), inset 0 0 0 1px rgb(var(--line));
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+/* ---------- 7. header: the section you are in is underlined, and it lifts off the page once the page scrolls ---------- */
+.hdr { transition: box-shadow .2s ease; }
+.hdr.is-scrolled { box-shadow: var(--shadow-3), inset 0 0 0 1px rgb(var(--line) / .8); }
+.hdr-nav .seg-item { position: relative; }
+.hdr-nav .seg-item[aria-current='page']::after { content: ''; position: absolute; left: 22%; right: 22%; bottom: 2px; height: 2px; border-radius: 2px; background: rgb(var(--brand)); }
+
+/* ---------- 8. footer: the project, the sections, the panel ---------- */
+footer.app-foot { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: start; justify-content: stretch; gap: 20px 32px; padding: 22px 0 8px; }
+.app-foot-col { display: grid; gap: 8px; align-content: start; min-width: 0; }
+.app-foot-title { margin: 0; font-size: var(--fs-xs); font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: rgb(var(--mute)); }
+.app-foot-note { margin: 0; font-size: var(--fs-sm); font-weight: 600; line-height: 1.4; color: rgb(var(--mute)); }
+.app-foot .app-foot-links { display: grid; gap: 6px; }
+.app-foot-status { display: inline-flex; align-items: center; gap: 8px; }
+.app-foot-status > i { width: 8px; height: 8px; border-radius: 50%; background: rgb(var(--ok)); box-shadow: 0 0 0 3px rgb(var(--ok) / .18); }
+@media (max-width: 719px) { footer.app-foot { grid-template-columns: minmax(0, 1fr); gap: 16px; } }
+
+/* ---------- 39. small text stays readable ---------- */
+:root { --fs-2xs: 12px; --fs-xs: 12.5px; }
+
+/* ---------- 40. a card that is a link answers the pointer: a lift, a brand outline, a press ---------- */
+a.tile, a.panel, button.tile, [role='link'].tile {
+  cursor: pointer;
+  transition: box-shadow .18s ease, transform .18s ease;
+}
+a.tile:hover, a.panel:hover, button.tile:hover, [role='link'].tile:hover {
+  box-shadow: var(--shadow-3), inset 0 0 0 1px rgb(var(--brand) / .5);
+}
+a.tile:active, a.panel:active, button.tile:active, [role='link'].tile:active { transform: scale(.992); }
+.srv-tile.tile-hover:hover, .srv-row:hover { box-shadow: var(--shadow-3), inset 0 0 0 1px rgb(var(--brand) / .4); }
+@media (prefers-reduced-motion: reduce) { a.tile:active, a.panel:active, button.tile:active { transform: none; } }
+
+/* ---------- servers: the opener of the player list is a stack of round pictures; an offline tile has a figure, not a void ---------- */
+.srv-who { display: inline-flex; align-items: center; gap: 4px; padding: 2px 4px; border-radius: var(--r-pill); }
+.srv-who:hover { background: rgb(var(--soft)); }
+.srv-who-stack { display: inline-flex; align-items: center; }
+.srv-who-stack > .cm-ava { box-shadow: 0 0 0 2px rgb(var(--card)); }
+.srv-who-stack > .cm-ava + .cm-ava { margin-left: -7px; }
+.srv-who-more { margin-left: 5px; font-size: var(--fs-xs); font-weight: 800; color: rgb(var(--mute)); }
+.srv-names > li { display: inline-flex; align-items: center; gap: 6px; padding-left: 3px; }
+.srv-names > li.more, .srv-names > li.srv-names-ico { padding-left: 9px; }
+.srv-names > li > .cm-ava { flex: none; }
+.srv-names > li > .truncate { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.hero3 .srv-cap, .srv-hero .srv-cap { height: 12px; }
+.srv-off-fig { display: grid; justify-items: start; gap: 8px; margin-block: auto; padding-block: 10px; }
+.srv-off-fig > b { font-size: 1.6rem; font-weight: 800; letter-spacing: -.02em; color: rgb(var(--mute)); opacity: .75; }
+.srv-off-fig > i { display: block; width: 100%; height: 0; border-top: 2px dashed rgb(var(--bad) / .45); }
+.pulse-nums dd.text-ok { color: rgb(var(--ok)); }
+.pulse-nums dd.text-warn { color: rgb(var(--warn)); }
+.pulse-nums dd.text-bad { color: rgb(var(--bad)); }
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/profile.css" << '__COREGSM_EOF__'
 /* Profile, public profile, achievements, statistics, account journal.
    Static surfaces only: no transforms, no infinite animations, no outline (focus rings come from the global box-shadow rule). */
@@ -156098,13 +156254,19 @@ html[data-motion='reduce'] .srv-new-chev, html[data-motion='reduce'] .srv-check,
 .srv-td-fav { display: flex; justify-content: flex-end; }
 .srv-tr.off .srv-td-name { opacity: .85; }
 .srv-tbl.selecting .srv-tr { grid-template-columns: minmax(64px, auto) minmax(0, 3fr) minmax(8.5rem, 1.1fr) minmax(7.5rem, .8fr) 4rem 4.2rem 2.75rem; }
-/* narrower than a desktop: the address column goes under the name, the figures in one row below */
-@media (max-width: 1099px) {
-  .srv-tr { grid-template-columns: minmax(20px, auto) minmax(0, 2fr) minmax(7.5rem, 1fr) 3.8rem 4rem 2.75rem; }
-  .srv-td-addr { display: none; }
+/* the table answers to its own width (it is narrower beside the «what is new» column than the window is): below 960px
+   the address goes to a second line under the figures, so it is always shown whole */
+.srv-tbl { container: srvtbl / inline-size; }
+@container srvtbl (max-width: 960px) {
+  .srv-tr { grid-template-columns: minmax(20px, auto) minmax(0, 2fr) minmax(7.5rem, 1fr) 3.8rem 4rem 2.75rem; grid-template-areas: 'dot name pl ping up fav' '. addr addr addr addr .'; row-gap: 2px; padding-bottom: 8px; }
+  .srv-td-addr { display: block; grid-area: addr; padding-bottom: 2px; }
+  .srv-td-addr .btn-xs { min-height: 26px; }
+  .srv-td-dot { grid-area: dot; } .srv-td-name { grid-area: name; } .srv-td-pl { grid-area: pl; } .srv-td-ping { grid-area: ping; } .srv-td-up { grid-area: up; } .srv-td-fav { grid-area: fav; }
   .srv-tbl.selecting .srv-tr { grid-template-columns: minmax(64px, auto) minmax(0, 2fr) minmax(7.5rem, 1fr) 3.8rem 4rem 2.75rem; }
+  .srv-th { grid-template-areas: 'dot name pl ping up fav'; padding-bottom: 0; row-gap: 4px; }
+  .srv-th .srv-td-addr { display: none; }
 }
-@media (max-width: 760px) {
+@container srvtbl (max-width: 700px) {
   .srv-th { display: none; }
   .srv-tr, .srv-tbl.selecting .srv-tr {
     grid-template-columns: minmax(20px, auto) minmax(0, 1fr) auto auto; padding: 10px 14px; row-gap: 6px;
@@ -157171,8 +157333,8 @@ export function PageHead({ title, subtitle, icon, hint, help, children }: { titl
         <div className="flex min-w-0 items-center gap-3.5">
           {icon && <span className="grid h-11 w-11 shrink-0 place-items-center rounded-ui-lg bg-linear-to-br from-brand to-brand-2 text-white shadow-pop sm:h-12 sm:w-12">{icon}</span>}
           <div className="min-w-0">
-            <h1 className="text-xl font-extrabold tracking-tight sm:text-[30px]">{title}</h1>
-            {subtitle && <p className="mt-0.5 hidden font-semibold text-mute sm:block">{subtitle}</p>}
+            <h1 className="text-2xl font-black tracking-tight sm:text-[34px]" style={{ letterSpacing: '-0.025em' }}>{title}</h1>
+            {subtitle && <p className="mt-1 hidden text-fs-md font-semibold text-mute sm:block">{subtitle}</p>}
           </div>
         </div>
         {(children || (hasHint && hidden)) && (

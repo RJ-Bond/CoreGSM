@@ -1,0 +1,102 @@
+/*
+  The visual layer on top of the pages: depth, headings, the page background, the way lists come in, one look for every
+  tooltip, the header and the footer, readable small text and a reaction of every card that is a link.
+  Loaded after the page styles and before buttons.css / mobile.css.
+*/
+
+/* ---------- 1. depth: three levels ----------
+   page < panel / tile (shadow-2) < what floats (menus, tips: shadow-pop). A card inside a card does not cast a second
+   shadow: it is a flat field with a thin outline, so the eye reads one level at a time. */
+.panel .tile, .tile .tile, .panel .panel, .tile .panel {
+  background-image: none;
+  box-shadow: inset 0 0 0 1px var(--tile-border);
+}
+
+/* ---------- 3. the page background keeps its light down a long page ----------
+   two more soft lights, in the middle and at the bottom of the page, laid on the body itself (no fixed layer) */
+body {
+  background-image:
+    radial-gradient(60% 38% at 50% -4%, rgb(var(--brand) / var(--au1)), transparent 100%),
+    radial-gradient(40% 30% at 98% 2%, rgb(45 212 191 / var(--au2)), transparent 100%),
+    radial-gradient(45% 50% at 0% 50%, rgb(var(--brand) / calc(var(--au1) * .45)), transparent 100%),
+    radial-gradient(55% 100% at 100% 100%, rgb(45 212 191 / calc(var(--au2) * .5)), transparent 100%);
+  background-size: 100% 110vh, 100% 110vh, 100% 90vh, 100% 70vh;
+  background-repeat: no-repeat;
+  background-position: top, top, 0 58%, 100% 100%;
+}
+html[data-game-art] body { background-position: top, top center, top; background-size: 100% 100vh, 100% auto, 100% 110vh; }
+
+/* ---------- 4. lists come in one after another ---------- */
+.stagger > * { animation: tile-in .45s cubic-bezier(.2, .8, .2, 1) both; }
+.stagger > :nth-child(1) { animation-delay: 0ms; }
+.stagger > :nth-child(2) { animation-delay: 45ms; }
+.stagger > :nth-child(3) { animation-delay: 90ms; }
+.stagger > :nth-child(4) { animation-delay: 135ms; }
+.stagger > :nth-child(5) { animation-delay: 180ms; }
+.stagger > :nth-child(6) { animation-delay: 225ms; }
+.stagger > :nth-child(7) { animation-delay: 270ms; }
+.stagger > :nth-child(n + 8) { animation-delay: 315ms; }
+html[data-motion='reduce'] .stagger > * { animation: none !important; }
+@media (prefers-reduced-motion: reduce) { .stagger > * { animation: none !important; } }
+
+/* ---------- 6. one look for every tooltip ---------- */
+.lc-tip, .cm-chart-tip, .pulse-tip, .pf-cal-tip, .st-tip {
+  background: rgb(var(--raised));
+  color: rgb(var(--ink));
+  border: 0;
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-pop), inset 0 0 0 1px rgb(var(--line));
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+/* ---------- 7. header: the section you are in is underlined, and it lifts off the page once the page scrolls ---------- */
+.hdr { transition: box-shadow .2s ease; }
+.hdr.is-scrolled { box-shadow: var(--shadow-3), inset 0 0 0 1px rgb(var(--line) / .8); }
+.hdr-nav .seg-item { position: relative; }
+.hdr-nav .seg-item[aria-current='page']::after { content: ''; position: absolute; left: 22%; right: 22%; bottom: 2px; height: 2px; border-radius: 2px; background: rgb(var(--brand)); }
+
+/* ---------- 8. footer: the project, the sections, the panel ---------- */
+footer.app-foot { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: start; justify-content: stretch; gap: 20px 32px; padding: 22px 0 8px; }
+.app-foot-col { display: grid; gap: 8px; align-content: start; min-width: 0; }
+.app-foot-title { margin: 0; font-size: var(--fs-xs); font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: rgb(var(--mute)); }
+.app-foot-note { margin: 0; font-size: var(--fs-sm); font-weight: 600; line-height: 1.4; color: rgb(var(--mute)); }
+.app-foot .app-foot-links { display: grid; gap: 6px; }
+.app-foot-status { display: inline-flex; align-items: center; gap: 8px; }
+.app-foot-status > i { width: 8px; height: 8px; border-radius: 50%; background: rgb(var(--ok)); box-shadow: 0 0 0 3px rgb(var(--ok) / .18); }
+@media (max-width: 719px) { footer.app-foot { grid-template-columns: minmax(0, 1fr); gap: 16px; } }
+
+/* ---------- 39. small text stays readable ---------- */
+:root { --fs-2xs: 12px; --fs-xs: 12.5px; }
+
+/* ---------- 40. a card that is a link answers the pointer: a lift, a brand outline, a press ---------- */
+a.tile, a.panel, button.tile, [role='link'].tile {
+  cursor: pointer;
+  transition: box-shadow .18s ease, transform .18s ease;
+}
+a.tile:hover, a.panel:hover, button.tile:hover, [role='link'].tile:hover {
+  box-shadow: var(--shadow-3), inset 0 0 0 1px rgb(var(--brand) / .5);
+}
+a.tile:active, a.panel:active, button.tile:active, [role='link'].tile:active { transform: scale(.992); }
+.srv-tile.tile-hover:hover, .srv-row:hover { box-shadow: var(--shadow-3), inset 0 0 0 1px rgb(var(--brand) / .4); }
+@media (prefers-reduced-motion: reduce) { a.tile:active, a.panel:active, button.tile:active { transform: none; } }
+
+/* ---------- servers: the opener of the player list is a stack of round pictures; an offline tile has a figure, not a void ---------- */
+.srv-who { display: inline-flex; align-items: center; gap: 4px; padding: 2px 4px; border-radius: var(--r-pill); }
+.srv-who:hover { background: rgb(var(--soft)); }
+.srv-who-stack { display: inline-flex; align-items: center; }
+.srv-who-stack > .cm-ava { box-shadow: 0 0 0 2px rgb(var(--card)); }
+.srv-who-stack > .cm-ava + .cm-ava { margin-left: -7px; }
+.srv-who-more { margin-left: 5px; font-size: var(--fs-xs); font-weight: 800; color: rgb(var(--mute)); }
+.srv-names > li { display: inline-flex; align-items: center; gap: 6px; padding-left: 3px; }
+.srv-names > li.more, .srv-names > li.srv-names-ico { padding-left: 9px; }
+.srv-names > li > .cm-ava { flex: none; }
+.srv-names > li > .truncate { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.hero3 .srv-cap, .srv-hero .srv-cap { height: 12px; }
+.srv-off-fig { display: grid; justify-items: start; gap: 8px; margin-block: auto; padding-block: 10px; }
+.srv-off-fig > b { font-size: 1.6rem; font-weight: 800; letter-spacing: -.02em; color: rgb(var(--mute)); opacity: .75; }
+.srv-off-fig > i { display: block; width: 100%; height: 0; border-top: 2px dashed rgb(var(--bad) / .45); }
+.pulse-nums dd.text-ok { color: rgb(var(--ok)); }
+.pulse-nums dd.text-warn { color: rgb(var(--warn)); }
+.pulse-nums dd.text-bad { color: rgb(var(--bad)); }
