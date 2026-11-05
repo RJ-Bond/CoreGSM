@@ -515,12 +515,12 @@ export default function App() {
                     aria-current={active ? 'page' : undefined}
                     className={`bn-item relative flex min-h-[58px] flex-col items-center gap-0.5 px-1 pb-1.5 pt-2 text-xs font-extrabold ${active ? 'text-link' : 'text-mute'}`}
                   >
-                    <span className={`grid h-7 w-14 place-items-center rounded-full transition ${active ? 'bg-linear-to-br from-brand to-brand-2 text-white shadow-pop' : ''}`}>{p.icon()}</span>
+                    <span className={`relative grid h-7 w-14 place-items-center rounded-full transition ${active ? 'bg-linear-to-br from-brand to-brand-2 text-white shadow-pop' : ''}`}>
+                      {p.icon()}
+                      {p.id === 'admin' && updateAvailable && <span className="bn-update update-dot"><span className="sr-only">{t('hdr.update')}</span></span>}
+                    </span>
                     {t(p.label)}
                     {p.id === 'news' && page !== 'news' && <NewsUnreadDot className="nw-unread-abs" />}
-                    {p.id === 'admin' && updateAvailable && (
-                      <span className="update-dot absolute right-[26%] top-2"><span className="sr-only">{t('hdr.update')}</span></span>
-                    )}
                   </a>
                 </li>
               );

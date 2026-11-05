@@ -1365,6 +1365,9 @@ html[data-motion='reduce'] .upd-step.is-active .upd-step-line::after { animation
 @media (prefers-reduced-motion: reduce) { .pill-glass-ok::before { animation: none; } }
 
 /* update marker: a pulsing amber dot */
+/* the badge of the bottom bar sits on the corner of the icon pill; the ring cuts it out of the pill */
+.nav-bottom .bn-update { position: absolute; top: -3px; right: 9px; width: 11px; height: 11px; box-shadow: 0 0 0 2px rgb(var(--card)); }
+:root[data-theme='dark'] .nav-bottom .bn-update { box-shadow: 0 0 0 2px rgb(var(--card)); }
 .update-dot { position: relative; display: inline-block; width: 10px; height: 10px; border-radius: var(--r-pill); background: #f59e0b; box-shadow: 0 0 0 2px rgb(255 255 255 / .85); flex: none; }
 .update-dot::after { content: ''; position: absolute; inset: 0; border-radius: inherit; background: #f59e0b; animation: live-ping 1.8s cubic-bezier(0, 0, .2, 1) infinite; }
 :root[data-theme='dark'] .update-dot { box-shadow: 0 0 0 2px rgb(var(--card)); }

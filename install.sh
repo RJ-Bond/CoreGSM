@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="7cbb6e9a9221"
+COREGSM_BUILD="85c77709f7b1"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.42"
+COREGSM_VERSION="1.1.43"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -115421,12 +115421,12 @@ export default function App() {
                     aria-current={active ? 'page' : undefined}
                     className={`bn-item relative flex min-h-[58px] flex-col items-center gap-0.5 px-1 pb-1.5 pt-2 text-xs font-extrabold ${active ? 'text-link' : 'text-mute'}`}
                   >
-                    <span className={`grid h-7 w-14 place-items-center rounded-full transition ${active ? 'bg-linear-to-br from-brand to-brand-2 text-white shadow-pop' : ''}`}>{p.icon()}</span>
+                    <span className={`relative grid h-7 w-14 place-items-center rounded-full transition ${active ? 'bg-linear-to-br from-brand to-brand-2 text-white shadow-pop' : ''}`}>
+                      {p.icon()}
+                      {p.id === 'admin' && updateAvailable && <span className="bn-update update-dot"><span className="sr-only">{t('hdr.update')}</span></span>}
+                    </span>
                     {t(p.label)}
                     {p.id === 'news' && page !== 'news' && <NewsUnreadDot className="nw-unread-abs" />}
-                    {p.id === 'admin' && updateAvailable && (
-                      <span className="update-dot absolute right-[26%] top-2"><span className="sr-only">{t('hdr.update')}</span></span>
-                    )}
                   </a>
                 </li>
               );
@@ -137292,6 +137292,9 @@ html[data-motion='reduce'] .upd-step.is-active .upd-step-line::after { animation
 @media (prefers-reduced-motion: reduce) { .pill-glass-ok::before { animation: none; } }
 
 /* update marker: a pulsing amber dot */
+/* the badge of the bottom bar sits on the corner of the icon pill; the ring cuts it out of the pill */
+.nav-bottom .bn-update { position: absolute; top: -3px; right: 9px; width: 11px; height: 11px; box-shadow: 0 0 0 2px rgb(var(--card)); }
+:root[data-theme='dark'] .nav-bottom .bn-update { box-shadow: 0 0 0 2px rgb(var(--card)); }
 .update-dot { position: relative; display: inline-block; width: 10px; height: 10px; border-radius: var(--r-pill); background: #f59e0b; box-shadow: 0 0 0 2px rgb(255 255 255 / .85); flex: none; }
 .update-dot::after { content: ''; position: absolute; inset: 0; border-radius: inherit; background: #f59e0b; animation: live-ping 1.8s cubic-bezier(0, 0, .2, 1) infinite; }
 :root[data-theme='dark'] .update-dot { box-shadow: 0 0 0 2px rgb(var(--card)); }
