@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { COMMANDS } from '../src/commands.js';
-import { HELP_CATEGORIES, HELP_COMMANDS, helpButtons, helpEmbed, serverButtons } from '../src/help.js';
+import { HELP_CATEGORIES, HELP_COMMANDS, helpButtons, helpEmbed, liveLine, serverButtons } from '../src/help.js';
 
 test('/help and /servers are registered once', () => {
   for (const c of HELP_COMMANDS) assert.equal(COMMANDS.filter((x) => x.name === c.name).length, 1, c.name);
@@ -13,7 +13,10 @@ test('/help: the first screen lists every section, a section lists its commands'
   const cat = helpEmbed('stat').toJSON();
   assert.match(cat.description!, /\/player/);
   assert.match(cat.description!, /\/top/);
-  assert.equal(helpButtons('stat')[0]!.components.length, HELP_CATEGORIES.length);
+  assert.equal(helpButtons('stat')[0]!.components.length, HELP_CATEGORIES.length + 1, 'home + sections');
+  const ids = helpButtons(null).flatMap((r) => r.components.map((c) => (c.toJSON() as { custom_id?: string }).custom_id));
+  assert.ok(ids.includes('help:home') && ids.includes('help:close'));
+  assert.notEqual(helpEmbed('mod').toJSON().color, helpEmbed('srv').toJSON().color, 'a colour for every section');
 });
 
 test('every command of the bot is described in /help', () => {
@@ -34,4 +37,12 @@ test('/help: the moderation section carries the memo about /clear', () => {
   assert.match(e.description!, /\/clear/);
   assert.ok((e.fields ?? []).length >= 5);
   for (const f of e.fields ?? []) assert.ok(f.value.length <= 1024, f.name);
+});
+
+test('/help: live numbers in the title of the first screen and in «Серверы»', () => {
+  const live = { players: 16, up: 4, total: 4 };
+  assert.match(helpEmbed(null, live).toJSON().title!, /4\/4 онлайн · 16/);
+  assert.match(helpEmbed('srv', live).toJSON().description!, /Сейчас играют \*\*16\*\*/);
+  assert.match(liveLine({ players: 0, up: 0, total: 2 }), /🔴/);
+  assert.doesNotMatch(helpEmbed('play', live).toJSON().description!, /Сейчас играют/);
 });

@@ -72,6 +72,7 @@ export const botClientId = () => bot.status.clientId ?? clientIdFromToken(getSet
 export const BOT_COMMANDS = [
   { name: '/register', description: 'Зарегистрироваться на сайте через Discord (пароль не нужен). Параметры: nick (ник в игре), agree (согласие с правилами)' },
   { name: '/nick', description: 'Сменить игровой ник, по которому считается статистика' },
+  { name: '/link', description: 'Привязать игровой ник: выберите себя из списка игроков или впишите ник вручную' },
   { name: '/profile', description: 'Моя карточка: ник, ранг V Rising, часы в игре и достижения' },
   { name: '/online', description: 'Кто сейчас играет: онлайн всех серверов' },
   { name: '/status', description: 'Карточка сервера с графиком за сутки. Параметр: server' },

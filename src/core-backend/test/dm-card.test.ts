@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { BYPASS_QUIET, COLORS, digestCard, digestLine, inQuiet, localHour, newDeviceCard, newsCard, normQuiet, quietEnd, resetCard, seenCard, serverCard, stamp, type Ctx } from '../src/alerts/dmCard.js';
+import { BYPASS_QUIET, COLORS, digestCard, digestLine, inQuiet, localHour, newDeviceCard, newsCard, normQuiet, trend, weeklyCard, weeklyDue, quietEnd, resetCard, seenCard, serverCard, stamp, type Ctx } from '../src/alerts/dmCard.js';
 
 const ru: Ctx = { lang: 'ru', base: 'https://panel.example', brand: 'CoreGSM' };
 const en: Ctx = { ...ru, lang: 'en' };
@@ -73,4 +73,21 @@ test('security cards are never held back; digest is capped', () => {
   const d = digestCard(ru, { lines, since: 1000 });
   assert.equal(d.embed.description?.split('\n').length, 16);
   assert.match(d.embed.description ?? '', /ещё 5/);
+});
+
+test('weekly summary: card and schedule', () => {
+  const w = { from: 0, to: 7 * 86_400_000, peak: 24, peakPrev: 20, peakAt: 1000, newPlayers: 9, activePlayers: 31, newAccounts: 3, warns: 4, bans: 1, kicks: 2, mutes: 0, reports: 5 };
+  const c = weeklyCard(ru, w);
+  assert.match(c.embed.title, /Итоги недели/);
+  assert.match(c.embed.fields![0]!.value, /\*\*24\*\* · ▲ 20%/);
+  assert.match(c.embed.fields!.find((f) => f.name.includes('Наказаний'))!.value, /^7/);
+  assert.equal(trend(0, 0), '=');
+  assert.equal(trend(5, 10), '▼ 50%');
+  // 2026-11-02 is a Monday; 09:30 Moscow = 06:30 UTC
+  const mon = Date.UTC(2026, 10, 2, 6, 30);
+  assert.ok(weeklyDue(mon, 0, 'Europe/Moscow'));
+  assert.ok(!weeklyDue(Date.UTC(2026, 10, 2, 5, 0), 0, 'Europe/Moscow'), 'before 09:00');
+  assert.ok(!weeklyDue(Date.UTC(2026, 10, 3, 9, 0), 0, 'Europe/Moscow'), 'Tuesday');
+  assert.ok(!weeklyDue(mon, mon - 3600_000, 'Europe/Moscow'), 'already sent today');
+  assert.ok(BYPASS_QUIET.has('weekly'));
 });

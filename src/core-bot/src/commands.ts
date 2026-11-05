@@ -1,5 +1,7 @@
 /** Slash commands: registration of players from Discord (/register, /nick, /profile) and the nick autocomplete. */
 import { handleDmx } from './dmx.js';
+import { handleFollow } from './follow.js';
+import { LINK_COMMANDS, LINK_NAMES, handleLinkButton, handleLinkCommand, handleLinkModal, handleLinkSelect } from './link.js';
 import type { AutocompleteInteraction, ButtonInteraction, Client, Interaction } from 'discord.js';
 import { backend, backendJson } from './backend.js';
 import { humanDiscordError } from './errors.js';
@@ -31,6 +33,7 @@ export const COMMANDS = [
   ...ROLE_COMMANDS,
   ...CLEAR_COMMANDS,
   ...PUNISH_COMMANDS,
+  ...LINK_COMMANDS,
   ...HELP_COMMANDS,
 ];
 
@@ -102,12 +105,14 @@ async function handlePollButton(i: ButtonInteraction): Promise<void> {
 }
 
 export async function handleInteraction(i: Interaction): Promise<void> {
-  if (i.isStringSelectMenu()) return i.customId.startsWith('modban:') ? handleBanPick(i) : handleRoleSelect(i);
+  if (i.isStringSelectMenu()) return i.customId.startsWith('modban:') ? handleBanPick(i) : i.customId.startsWith('lnk:') ? handleLinkSelect(i) : handleRoleSelect(i);
   if (i.isButton() && i.customId.startsWith('clear:')) return handleClearButton(i);
   if (i.isButton() && i.customId.startsWith('mod:')) return handlePunishButton(i);
   if (i.isButton() && i.customId.startsWith('appeal:')) return handleAppealButton(i);
   if (i.isButton() && i.customId.startsWith('dmx:')) return handleDmx(i);
-  if (i.isModalSubmit()) return i.customId.startsWith('appeal:') ? handleAppealModal(i) : handleReasonModal(i);
+  if (i.isButton() && i.customId.startsWith('fol:')) return handleFollow(i);
+  if (i.isButton() && i.customId.startsWith('lnk:')) return handleLinkButton(i);
+  if (i.isModalSubmit()) return i.customId.startsWith('appeal:') ? handleAppealModal(i) : i.customId.startsWith('lnk:') ? handleLinkModal(i) : handleReasonModal(i);
   if ((i.isUserContextMenuCommand() || i.isMessageContextMenuCommand()) && CONTEXT_NAMES.has(i.commandName)) return handleContext(i);
   if (i.isButton()) return /^(help|srv):/.test(i.customId) ? handleHelpButton(i) : handlePollButton(i);
   if (i.isAutocomplete() && PUNISH_NAMES.has(i.commandName)) return punishAutocomplete(i);
@@ -118,6 +123,7 @@ export async function handleInteraction(i: Interaction): Promise<void> {
   if (CLEAR_NAMES.has(i.commandName)) return handleClearCommand(i);
   if (PUNISH_NAMES.has(i.commandName)) return handlePunish(i);
   if (HELP_NAMES.has(i.commandName)) return handleHelp(i);
+  if (LINK_NAMES.has(i.commandName)) return handleLinkCommand(i);
   const name = i.commandName;
   if (name !== 'register' && name !== 'nick' && name !== 'profile') return;
   // Discord wants an answer within 3 seconds: acknowledge first, do the work after, and log how long it took

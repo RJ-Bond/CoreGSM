@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="f0e20fd0af7a"
+COREGSM_BUILD="7cbb6e9a9221"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.41"
+COREGSM_VERSION="1.1.42"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -19266,6 +19266,72 @@ export function digestLine(title: string, ts: number): string {
   return `• ${clip(title.replace(/\s+/g, ' ').trim(), 150)} · ${stamp(ts)}`;
 }
 
+// ---------- weekly summary for administrators ----------
+export interface WeeklyStats {
+  from: number;
+  to: number;
+  /** most players online at once, this week and the week before */
+  peak: number;
+  peakPrev: number;
+  peakAt: number | null;
+  newPlayers: number;
+  activePlayers: number;
+  newAccounts: number;
+  warns: number;
+  bans: number;
+  kicks: number;
+  mutes: number;
+  reports: number;
+}
+
+/** «▲ 12%» / «▼ 5%» / «=»: the change against the week before */
+export function trend(now: number, prev: number): string {
+  if (prev <= 0) return now > 0 ? '▲ new' : '=';
+  const p = Math.round(((now - prev) / prev) * 100);
+  return p === 0 ? '=' : `${p > 0 ? '▲' : '▼'} ${Math.abs(p)}%`;
+}
+
+export function weeklyCard(c: Ctx, w: WeeklyStats): DmCard {
+  const punish = w.warns + w.bans + w.kicks + w.mutes;
+  return make(
+    c,
+    {
+      title: L(c.lang, '📈 Итоги недели', '📈 Weekly summary'),
+      description: L(c.lang, `Период: ${stamp(w.from, 'f')} — ${stamp(w.to, 'f')}`, `Period: ${stamp(w.from, 'f')} — ${stamp(w.to, 'f')}`),
+      color: COLORS.news,
+      fields: [
+        { name: L(c.lang, '🔝 Пик онлайна', '🔝 Peak online'), value: `**${w.peak}** · ${trend(w.peak, w.peakPrev)}${w.peakAt ? `\n${stamp(w.peakAt, 'f')}` : ''}`, inline: true },
+        { name: L(c.lang, '🆕 Новых игроков', '🆕 New players'), value: String(w.newPlayers), inline: true },
+        { name: L(c.lang, '🎮 Играло', '🎮 Played'), value: String(w.activePlayers), inline: true },
+        { name: L(c.lang, '👤 Новых аккаунтов', '👤 New accounts'), value: String(w.newAccounts), inline: true },
+        { name: L(c.lang, '🛡️ Наказаний', '🛡️ Punishments'), value: `${punish}\n⚠️ ${w.warns} · 🔨 ${w.bans} · 👢 ${w.kicks} · 🔇 ${w.mutes}`, inline: true },
+        { name: L(c.lang, '🚩 Жалоб', '🚩 Reports'), value: String(w.reports), inline: true },
+      ],
+      timestamp: new Date(w.to).toISOString(),
+    },
+    L(c.lang, 'Итоги недели', 'Weekly summary'),
+    { actions: c.base ? [{ label: L(c.lang, '📊 Открыть панель', '📊 Open the panel'), url: c.base }] : [] },
+  );
+}
+
+/** weekday (0 = Sunday) and hour of a moment in a time zone */
+export function weekdayHour(ms: number, tz: string): { day: number; hour: number } {
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', { weekday: 'short', hour: 'numeric', hourCycle: 'h23', ...(tz ? { timeZone: tz } : {}) }).formatToParts(new Date(ms));
+    const wd = parts.find((p) => p.type === 'weekday')?.value ?? 'Sun';
+    return { day: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(wd), hour: Number(parts.find((p) => p.type === 'hour')?.value ?? 0) % 24 };
+  } catch {
+    const d = new Date(ms);
+    return { day: d.getUTCDay(), hour: d.getUTCHours() };
+  }
+}
+
+/** the summary goes out on Monday from 09:00 (server time), once per week */
+export function weeklyDue(now: number, lastAt: number, tz: string): boolean {
+  const { day, hour } = weekdayHour(now, tz);
+  return day === 1 && hour >= 9 && now - lastAt >= 6 * 86_400_000;
+}
+
 // ---------- quiet hours ----------
 export interface Quiet {
   /** hour of the day 0-23 when the quiet time starts; -1 = off */
@@ -19306,7 +19372,7 @@ export function quietEnd(now: number, q: Quiet, tz: string): number {
 }
 
 /** security notices and password letters are never held back */
-export const BYPASS_QUIET: ReadonlySet<string> = new Set(['newdevice', 'reset', 'changed', 'test']);
+export const BYPASS_QUIET: ReadonlySet<string> = new Set(['newdevice', 'reset', 'changed', 'test', 'weekly']);
 
 /** how long a new alert about a server waits for its neighbours before it is sent */
 export const GROUP_WAIT_MS = 20_000;
@@ -22190,6 +22256,172 @@ export interface BindingRow {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/discord"
+  cat > "$APP_DIR/core-backend/src/discord/botExtras.ts" << '__COREGSM_EOF__'
+/**
+ * More for the bot:
+ *   POST /internal/discord/follow       «🔔 Следить» under a server card or a player card (the account is found by Discord id)
+ *   GET|PUT /api/settings/dashboard     the live dashboard message (one message with all servers, edited by the bot) and the
+ *                                       weekly summary for the administrators
+ *   GET|PATCH /internal/dashboard       what the bot needs to keep the dashboard up to date
+ * The weekly summary: every Monday from 09:00 (server time) the administrators with a linked Discord get a private card.
+ */
+import type { Express, RequestHandler } from 'express';
+import { z } from 'zod';
+import { db, EFFECTIVE_NAME, getSetting, setSetting } from '../db.js';
+import { queueCard } from '../alerts/dmQueue.js';
+import { weeklyCard, weeklyDue, type WeeklyStats } from '../alerts/dmCard.js';
+import { bot, channelInfo } from './botState.js';
+import { dmAvailable, SUB_KINDS } from '../community/subscriptions.js';
+import { MAX_FOLLOWS, nickKey, validNick } from '../profile/playerFollows.js';
+import { log } from '../logger.js';
+
+const WEEK = 7 * 86_400_000;
+
+export const dashboardSettings = () => ({
+  enabled: getSetting('dash_enabled') === '1' && /^\d{15,25}$/.test(getSetting('dash_channel') ?? ''),
+  channelId: getSetting('dash_channel') ?? '',
+  messageId: getSetting('dash_message') ?? '',
+  error: getSetting('dash_error') ?? '',
+  /** the weekly summary for the administrators is on unless it was switched off */
+  weekly: getSetting('admin_weekly') !== '0',
+});
+
+/** numbers of the last seven days (and the peak of the week before) */
+export function weeklyStats(now: number): WeeklyStats {
+  const from = now - WEEK;
+  const peakOf = (a: number, b: number) =>
+    db
+      .prepare('SELECT SUM(players) AS n, MIN(ts) AS t FROM history WHERE ts >= ? AND ts < ? AND online = 1 GROUP BY ts / 60000 ORDER BY n DESC LIMIT 1')
+      .get(a, b) as { n: number; t: number } | undefined;
+  const peak = peakOf(from, now);
+  const prev = peakOf(from - WEEK, from);
+  const one = (sql: string, ...a: unknown[]) => (db.prepare(sql).get(...a) as { n: number }).n;
+  const cases = (kind: string) => one("SELECT COUNT(*) AS n FROM mod_cases WHERE kind = ? AND created_at >= ?", kind, from);
+  return {
+    from,
+    to: now,
+    peak: peak?.n ?? 0,
+    peakPrev: prev?.n ?? 0,
+    peakAt: peak?.t ?? null,
+    newPlayers: one('SELECT COUNT(*) AS n FROM (SELECT ulower(name) AS k, MIN(joined_at) AS m FROM player_sessions GROUP BY k HAVING m >= ?)', from),
+    activePlayers: one('SELECT COUNT(DISTINCT ulower(name)) AS n FROM player_sessions WHERE joined_at >= ? OR left_at IS NULL', from),
+    newAccounts: one('SELECT COUNT(*) AS n FROM users WHERE created_at >= ?', from),
+    warns: cases('warn'),
+    bans: cases('ban'),
+    kicks: cases('kick'),
+    mutes: cases('timeout'),
+    reports: one('SELECT COUNT(*) AS n FROM player_reports WHERE created_at >= ?', from),
+  };
+}
+
+/** Sends the summary when it is due; returns how many administrators got it. Never throws. */
+export function sendWeekly(now = Date.now(), force = false): number {
+  try {
+    if (!dashboardSettings().weekly && !force) return 0;
+    const tz = getSetting('timezone') || process.env.TZ || 'Europe/Moscow';
+    const last = Number(getSetting('admin_weekly_at') ?? 0) || 0;
+    if (!force && !weeklyDue(now, last, tz)) return 0;
+    if (!dmAvailable()) return 0;
+    const admins = db.prepare("SELECT id, discord_id FROM users WHERE role = 'admin' AND status = 'active' AND discord_id IS NOT NULL").all() as { id: number; discord_id: string }[];
+    const stats = weeklyStats(now);
+    setSetting('admin_weekly_at', String(now));
+    for (const a of admins) queueCard({ userId: a.id, discordId: a.discord_id, kind: 'weekly', card: (c) => weeklyCard(c, stats) }, now);
+    return admins.length;
+  } catch (e) {
+    log.error('weekly summary failed', (e as Error).message);
+    return 0;
+  }
+}
+
+let timer: NodeJS.Timeout | null = null;
+export function startWeekly(): void {
+  if (timer) return;
+  timer = setInterval(() => void sendWeekly(), 10 * 60_000);
+  timer.unref();
+}
+
+export function registerBotExtras(deps: { app: Express; admin: RequestHandler; internal: RequestHandler }): void {
+  const { app, admin, internal } = deps;
+
+  // ----- «🔔 Следить» -----
+  app.post('/internal/discord/follow', internal, (req, res) => {
+    const b = z
+      .object({
+        discordId: z.string().regex(/^\d{15,25}$/),
+        kind: z.enum(['server', 'player']),
+        serverId: z.number().int().min(1).optional(),
+        nick: z.string().max(64).optional(),
+        on: z.boolean(),
+      })
+      .safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'bad body' });
+    const u = db.prepare("SELECT id FROM users WHERE discord_id = ? AND status = 'active'").get(b.data.discordId) as { id: number } | undefined;
+    if (!u) return res.json({ status: 'unlinked' });
+    if (b.data.kind === 'server') {
+      const sid = b.data.serverId ?? 0;
+      const s = db.prepare(`SELECT ${EFFECTIVE_NAME} AS n FROM servers s LEFT JOIN status st ON st.server_id = s.id WHERE s.id = ?`).get(sid) as { n: string } | undefined;
+      if (!s) return res.json({ status: 'notfound' });
+      db.transaction(() => {
+        for (const k of SUB_KINDS) {
+          if (b.data.on) db.prepare('INSERT OR IGNORE INTO server_subscriptions (user_id, server_id, kind, created_at) VALUES (?, ?, ?, ?)').run(u.id, sid, k, Date.now());
+          else db.prepare('DELETE FROM server_subscriptions WHERE user_id = ? AND server_id = ? AND kind = ?').run(u.id, sid, k);
+        }
+      })();
+      return res.json({ status: 'ok', on: b.data.on, name: s.n });
+    }
+    const nick = (b.data.nick ?? '').trim();
+    if (!validNick(nick)) return res.json({ status: 'notfound' });
+    const key = nickKey(nick);
+    if (b.data.on) {
+      const have = db.prepare('SELECT 1 FROM player_follows WHERE user_id = ? AND nick_key = ?').get(u.id, key);
+      if (!have) {
+        const n = (db.prepare('SELECT COUNT(*) AS n FROM player_follows WHERE user_id = ?').get(u.id) as { n: number }).n;
+        if (n >= MAX_FOLLOWS) return res.json({ status: 'limit', max: MAX_FOLLOWS });
+        db.prepare('INSERT INTO player_follows (user_id, nick_key, nick, created_at) VALUES (?, ?, ?, ?)').run(u.id, key, nick, Date.now());
+      }
+    } else {
+      db.prepare('DELETE FROM player_follows WHERE user_id = ? AND nick_key = ?').run(u.id, key);
+    }
+    res.json({ status: 'ok', on: b.data.on, name: nick });
+  });
+
+  // ----- dashboard -----
+  const payload = () => {
+    const s = dashboardSettings();
+    return { enabled: getSetting('dash_enabled') === '1', channelId: s.channelId, channelName: channelInfo(s.channelId).channelName, error: s.error, weekly: s.weekly, botOnline: bot.status.state === 'online' };
+  };
+  app.get('/api/settings/dashboard', admin, (_req, res) => res.json(payload()));
+  app.put('/api/settings/dashboard', admin, (req, res) => {
+    const b = z.object({ enabled: z.boolean().optional(), channelId: z.string().regex(/^(\d{15,25})?$/).optional(), weekly: z.boolean().optional() }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'Проверьте канал' });
+    if (b.data.channelId !== undefined && b.data.channelId !== (getSetting('dash_channel') ?? '')) {
+      // another channel: the old message is forgotten, the bot posts a new one
+      setSetting('dash_channel', b.data.channelId);
+      setSetting('dash_message', '');
+      setSetting('dash_error', '');
+    }
+    if (b.data.enabled !== undefined) setSetting('dash_enabled', b.data.enabled ? '1' : '0');
+    if (b.data.weekly !== undefined) setSetting('admin_weekly', b.data.weekly ? '1' : '0');
+    res.json(payload());
+  });
+  // a test of the weekly summary: sent to the administrators at once
+  app.post('/api/settings/dashboard/weekly-test', admin, (_req, res) => res.json({ sent: sendWeekly(Date.now(), true) }));
+
+  app.get('/internal/dashboard', internal, (_req, res) => {
+    const s = dashboardSettings();
+    if (!s.enabled) return res.status(404).json({ error: 'off' });
+    res.json({ channelId: s.channelId, messageId: s.messageId || null });
+  });
+  app.patch('/internal/dashboard', internal, (req, res) => {
+    const b = z.object({ messageId: z.string().regex(/^\d{15,25}$/).optional(), error: z.string().max(300).nullable().optional() }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'bad body' });
+    if (b.data.messageId !== undefined) setSetting('dash_message', b.data.messageId);
+    if (b.data.error !== undefined) setSetting('dash_error', b.data.error ?? '');
+    res.json({ ok: true });
+  });
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/discord"
   cat > "$APP_DIR/core-backend/src/discord/botLatencyLogic.ts" << '__COREGSM_EOF__'
 /** Bot gateway latency: how the samples are kept and judged. Pure, so the tests can import it without opening the database. */
 export interface PingSample { ts: number; ms: number }
@@ -22304,6 +22536,7 @@ export const botClientId = () => bot.status.clientId ?? clientIdFromToken(getSet
 export const BOT_COMMANDS = [
   { name: '/register', description: 'Зарегистрироваться на сайте через Discord (пароль не нужен). Параметры: nick (ник в игре), agree (согласие с правилами)' },
   { name: '/nick', description: 'Сменить игровой ник, по которому считается статистика' },
+  { name: '/link', description: 'Привязать игровой ник: выберите себя из списка игроков или впишите ник вручную' },
   { name: '/profile', description: 'Моя карточка: ник, ранг V Rising, часы в игре и достижения' },
   { name: '/online', description: 'Кто сейчас играет: онлайн всех серверов' },
   { name: '/status', description: 'Карточка сервера с графиком за сутки. Параметр: server' },
@@ -25290,6 +25523,7 @@ import { registerAttention } from './alerts/attention.js';
 import { registerModeration } from './community/moderation.js';
 import { registerWelcome } from './community/welcome.js';
 import { registerDmQueue } from './alerts/dmQueue.js';
+import { registerBotExtras, startWeekly } from './discord/botExtras.js';
 import { registerRules } from './monitoring/rules.js';
 import { registerPolls } from './community/polls.js';
 import { registerDiscordGallery } from './discord/discordGallery.js';
@@ -25473,6 +25707,8 @@ registerAttention({ app, admin });
 registerAnnouncements({ app, admin });
 registerWelcome({ app, admin, internal });
 registerDmQueue({ app, auth, internal, userId: (req) => (req as AuthedRequest).user!.id });
+registerBotExtras({ app, admin, internal });
+startWeekly();
 registerModeration({ app, admin, internal });
 registerRules({ app, auth, admin });
 registerPolls({ app, auth, admin, internal });
@@ -33595,6 +33831,8 @@ import { addPing } from '../discord/botLatencyLogic.js';
 import { buildPresence } from '../monitoring/presence.js';
 import { currentStyle } from '../discord/discordStyleState.js';
 import { welcomeSettings } from '../community/welcome.js';
+import { APP_VERSION } from '../config.js';
+import { publicBase } from '../admin/site.js';
 import { parseLayout } from '../images/embedLayout.js';
 import { embedFor, intervalParam, serializeBinding, SELECT_SERVERS, SERVER_ORDER, serialize, type ServerJoin } from '../monitoring/serverData.js';
 
@@ -33638,7 +33876,7 @@ router.post(
 );
 
 router.get('/internal/config', internal, (_req, res) => {
-  res.json({ discordToken: getSetting('discord_token') ?? '', proxyUrl: getSetting('proxy_url') ?? '', welcome: welcomeSettings().enabled, style: (() => { const s = currentStyle(); return { footer: s.footer, accent: s.accent, logoUrl: s.logoUrl }; })() });
+  res.json({ discordToken: getSetting('discord_token') ?? '', proxyUrl: getSetting('proxy_url') ?? '', welcome: welcomeSettings().enabled, style: (() => { const s = currentStyle(); return { footer: s.footer, accent: s.accent, logoUrl: s.logoUrl, version: APP_VERSION, panelUrl: publicBase() ?? null }; })() });
 });
 
 router.post('/internal/bot-guilds', internal, (req, res) => {
@@ -38535,6 +38773,7 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-bot/src"
   cat > "$APP_DIR/core-bot/src/bot.ts" << '__COREGSM_EOF__'
 /** The bot's main loop: connection to Discord from the panel's settings, status messages, news and deliveries. */
+import { updateDashboard } from './dashboard.js';
 import { DMX_ID, dmxStyle } from './dmxLogic.js';
 import { footerOf, getStyle, setStyle } from './style.js';
 import fs from 'node:fs';
@@ -39048,6 +39287,7 @@ async function tick(): Promise<void> {
     await updateBindings();
     await processNews();
     await processDeliveries();
+    if (client && state === 'online') await updateDashboard(client);
     if (client && state === 'online') await syncDiscord(client, () => stopping);
     if (client && state === 'online') await updatePresence(client);
   } catch (e) {
@@ -39696,6 +39936,8 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-bot/src/commands.ts" << '__COREGSM_EOF__'
 /** Slash commands: registration of players from Discord (/register, /nick, /profile) and the nick autocomplete. */
 import { handleDmx } from './dmx.js';
+import { handleFollow } from './follow.js';
+import { LINK_COMMANDS, LINK_NAMES, handleLinkButton, handleLinkCommand, handleLinkModal, handleLinkSelect } from './link.js';
 import type { AutocompleteInteraction, ButtonInteraction, Client, Interaction } from 'discord.js';
 import { backend, backendJson } from './backend.js';
 import { humanDiscordError } from './errors.js';
@@ -39727,6 +39969,7 @@ export const COMMANDS = [
   ...ROLE_COMMANDS,
   ...CLEAR_COMMANDS,
   ...PUNISH_COMMANDS,
+  ...LINK_COMMANDS,
   ...HELP_COMMANDS,
 ];
 
@@ -39798,12 +40041,14 @@ async function handlePollButton(i: ButtonInteraction): Promise<void> {
 }
 
 export async function handleInteraction(i: Interaction): Promise<void> {
-  if (i.isStringSelectMenu()) return i.customId.startsWith('modban:') ? handleBanPick(i) : handleRoleSelect(i);
+  if (i.isStringSelectMenu()) return i.customId.startsWith('modban:') ? handleBanPick(i) : i.customId.startsWith('lnk:') ? handleLinkSelect(i) : handleRoleSelect(i);
   if (i.isButton() && i.customId.startsWith('clear:')) return handleClearButton(i);
   if (i.isButton() && i.customId.startsWith('mod:')) return handlePunishButton(i);
   if (i.isButton() && i.customId.startsWith('appeal:')) return handleAppealButton(i);
   if (i.isButton() && i.customId.startsWith('dmx:')) return handleDmx(i);
-  if (i.isModalSubmit()) return i.customId.startsWith('appeal:') ? handleAppealModal(i) : handleReasonModal(i);
+  if (i.isButton() && i.customId.startsWith('fol:')) return handleFollow(i);
+  if (i.isButton() && i.customId.startsWith('lnk:')) return handleLinkButton(i);
+  if (i.isModalSubmit()) return i.customId.startsWith('appeal:') ? handleAppealModal(i) : i.customId.startsWith('lnk:') ? handleLinkModal(i) : handleReasonModal(i);
   if ((i.isUserContextMenuCommand() || i.isMessageContextMenuCommand()) && CONTEXT_NAMES.has(i.commandName)) return handleContext(i);
   if (i.isButton()) return /^(help|srv):/.test(i.customId) ? handleHelpButton(i) : handlePollButton(i);
   if (i.isAutocomplete() && PUNISH_NAMES.has(i.commandName)) return punishAutocomplete(i);
@@ -39814,6 +40059,7 @@ export async function handleInteraction(i: Interaction): Promise<void> {
   if (CLEAR_NAMES.has(i.commandName)) return handleClearCommand(i);
   if (PUNISH_NAMES.has(i.commandName)) return handlePunish(i);
   if (HELP_NAMES.has(i.commandName)) return handleHelp(i);
+  if (LINK_NAMES.has(i.commandName)) return handleLinkCommand(i);
   const name = i.commandName;
   if (name !== 'register' && name !== 'nick' && name !== 'profile') return;
   // Discord wants an answer within 3 seconds: acknowledge first, do the work after, and log how long it took
@@ -39913,6 +40159,104 @@ export async function handleInteraction(i: Interaction): Promise<void> {
     log('command failed:', (e as Error).message);
     await friendly();
   }
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-bot/src"
+  cat > "$APP_DIR/core-bot/src/dashboard.ts" << '__COREGSM_EOF__'
+/** Keeps the live dashboard message up to date: the panel says where it lives, the bot edits it (or posts it once). */
+import { type Client, EmbedBuilder } from 'discord.js';
+import { backend, backendJson } from './backend.js';
+import { DASH_INTERVAL_MS, dashboardEmbed, type DashOnline, type DashTop } from './dashboardLogic.js';
+import { humanDiscordError } from './errors.js';
+import { log } from './log.js';
+import { getStyle } from './style.js';
+import { panelRow } from './ui.js';
+
+let last = 0;
+
+const isGone = (e: unknown): boolean => (e as { code?: number })?.code === 10008;
+
+async function report(body: { messageId?: string; error?: string | null }): Promise<void> {
+  await backend('/internal/dashboard', { method: 'PATCH', body: JSON.stringify(body) }).catch(() => undefined);
+}
+
+export async function updateDashboard(c: Client, now = Date.now()): Promise<void> {
+  if (now - last < DASH_INTERVAL_MS) return;
+  last = now;
+  const cfg = await backendJson<{ channelId: string; messageId: string | null }>('/internal/dashboard');
+  if (!cfg.ok || !cfg.data) return; // 404 = switched off
+  try {
+    const [online, top] = await Promise.all([backendJson<DashOnline>('/internal/discord/online'), backendJson<DashTop>('/internal/discord/top?period=week')]);
+    if (!online.data) return;
+    const st = getStyle();
+    const embed = new EmbedBuilder(dashboardEmbed(online.data, top.data, st, now));
+    const components = panelRow([{ label: '🌐 Открыть панель', url: online.data.url }, { label: '🏆 Сообщество', path: '/community' }]);
+    const channel = await c.channels.fetch(cfg.data.channelId);
+    if (!channel || !channel.isTextBased() || !('send' in channel)) throw Object.assign(new Error('Канал не найден или не текстовый'), { code: 10003 });
+    if (cfg.data.messageId) {
+      try {
+        const msg = await channel.messages.fetch(cfg.data.messageId);
+        await msg.edit({ embeds: [embed], components });
+        if (cfg.data.messageId) await report({ error: null });
+        return;
+      } catch (e) {
+        if (!isGone(e)) throw e;
+        log('dashboard: the message was deleted, posting a new one');
+      }
+    }
+    const sent = await channel.send({ embeds: [embed], components });
+    await report({ messageId: sent.id, error: null });
+  } catch (e) {
+    log('dashboard failed:', (e as Error).message);
+    await report({ error: humanDiscordError(e) });
+  }
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-bot/src"
+  cat > "$APP_DIR/core-bot/src/dashboardLogic.ts" << '__COREGSM_EOF__'
+/** The live dashboard message: one embed with every server, edited by the bot every minute. No discord.js import. */
+
+export interface DashServer { id: number; name: string; online: boolean; players: number; maxPlayers: number; map: string | null }
+export interface DashOnline { players: number; servers: DashServer[]; url: string | null }
+export interface DashTop { top: { name: string; hours: number }[] }
+export interface DashStyle { footer: string; accent: number; logoUrl: string | null; version: string }
+
+export const DASH_INTERVAL_MS = 60_000;
+
+const bar = (p: number): string => {
+  const n = Math.max(0, Math.min(8, Math.round(p * 8)));
+  return '█'.repeat(n) + '░'.repeat(8 - n);
+};
+const hours = (h: number): string => (Number.isInteger(h) ? String(h) : h.toFixed(1)).replace('.', ',');
+
+export const dashColor = (up: number, total: number): number => (total === 0 || up === 0 ? 0xe74c3c : up < total ? 0xf5b01e : 0x2ecc71);
+
+export function serverLine(s: DashServer): string {
+  if (!s.online) return `🔴 **${s.name}** — не в сети`;
+  const cap = s.maxPlayers > 0 ? `${s.players}/${s.maxPlayers} ${bar(s.players / s.maxPlayers)}` : String(s.players);
+  return `🟢 **${s.name}** — ${cap}${s.map ? ` · ${s.map}` : ''}`;
+}
+
+export function dashboardEmbed(o: DashOnline, top: DashTop | null, st: DashStyle, now = Date.now()) {
+  const up = o.servers.filter((s) => s.online).length;
+  const shown = o.servers.slice(0, 15);
+  const lines = shown.map(serverLine);
+  if (o.servers.length > shown.length) lines.push(`…и ещё ${o.servers.length - shown.length}`);
+  const medals = ['🥇', '🥈', '🥉'];
+  const fields: { name: string; value: string; inline?: boolean }[] = [
+    { name: '🎮 Играют сейчас', value: `**${o.players}**`, inline: true },
+    { name: '🖥️ Серверов в сети', value: `**${up}** из ${o.servers.length}`, inline: true },
+  ];
+  const t = (top?.top ?? []).slice(0, 3);
+  if (t.length) fields.push({ name: '🏆 Топ недели', value: t.map((p, i) => `${medals[i]} **${p.name}** — ${hours(p.hours)} ч`).join('\n').slice(0, 1000) });
+  return {
+    title: `📡 Серверы · ${up}/${o.servers.length} онлайн · ${o.players} ${o.players === 1 ? 'игрок' : 'игроков'}`,
+    description: (lines.join('\n') || 'Серверов пока нет.').slice(0, 3900),
+    color: dashColor(up, o.servers.length),
+    fields,
+    footer: { text: ['Обновляется каждую минуту', st.footer, st.version ? `v${st.version}` : ''].filter(Boolean).join(' · '), ...(st.logoUrl ? { icon_url: st.logoUrl } : {}) },
+    timestamp: new Date(now).toISOString(),
+  };
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-bot/src"
@@ -40074,6 +40418,88 @@ export async function retrySocket<T>(fn: () => Promise<T>, tries = 3, delayMs = 
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-bot/src"
+  cat > "$APP_DIR/core-bot/src/follow.ts" << '__COREGSM_EOF__'
+/** «🔔 Следить» under a server card or a player card: subscribes the person (found by Discord id) to alerts in private messages. */
+import { ActionRowBuilder, ButtonBuilder, ButtonStyle, type ButtonInteraction } from 'discord.js';
+import { backendJson } from './backend.js';
+import { followId, followText, parseFollow, type FollowAnswer } from './followLogic.js';
+import { log } from './log.js';
+import { COLORS, replyEmbed } from './replies.js';
+
+const EPHEMERAL = 64;
+
+export const followButton = (kind: 'server' | 'player', key: string | number, label = '🔔 Следить'): ButtonBuilder =>
+  new ButtonBuilder().setCustomId(followId(kind, key, true)).setLabel(label).setStyle(ButtonStyle.Secondary);
+
+export async function handleFollow(i: ButtonInteraction): Promise<void> {
+  const f = parseFollow(i.customId);
+  if (!f) return;
+  try {
+    await i.deferReply({ flags: EPHEMERAL });
+  } catch (e) {
+    log(`follow from ${i.user.id}: could not acknowledge:`, (e as Error).message);
+    return;
+  }
+  try {
+    const r = await backendJson<FollowAnswer>('/internal/discord/follow', {
+      method: 'POST',
+      body: JSON.stringify({ discordId: i.user.id, kind: f.kind, ...(f.kind === 'server' ? { serverId: f.id } : { nick: f.nick }), on: f.on }),
+    });
+    if (!r.data) {
+      await i.editReply(replyEmbed('Не получилось', 'Панель сейчас не отвечает. Попробуйте чуть позже.', COLORS.bad));
+      return;
+    }
+    const t = followText(r.data, f);
+    const out = replyEmbed(t.title, t.text, t.ok ? COLORS.ok : COLORS.warn);
+    // the opposite button: the person can change their mind at once
+    const back = t.ok ? [new ActionRowBuilder<ButtonBuilder>().addComponents(new ButtonBuilder().setCustomId(followId(f.kind, f.kind === 'server' ? f.id : f.nick, !f.on)).setLabel(f.on ? '🔕 Отписаться' : '🔔 Следить снова').setStyle(ButtonStyle.Secondary))] : [];
+    await i.editReply({ ...out, components: back });
+  } catch (e) {
+    log('follow failed:', (e as Error).message);
+    await i.editReply(replyEmbed('Не получилось', 'Панель сейчас не отвечает. Попробуйте чуть позже.', COLORS.bad)).catch(() => undefined);
+  }
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-bot/src"
+  cat > "$APP_DIR/core-bot/src/followLogic.ts" << '__COREGSM_EOF__'
+/** «🔔 Следить» buttons under server and player cards: ids and texts. No discord.js import. */
+
+export type FollowId = { kind: 'server'; id: number; on: boolean } | { kind: 'player'; nick: string; on: boolean };
+
+export const followId = (kind: 'server' | 'player', key: string | number, on: boolean): string => `fol:${on ? '' : 'u'}${kind === 'server' ? 's' : 'p'}:${String(key).slice(0, 64)}`;
+
+export function parseFollow(id: string): FollowId | null {
+  const m = /^fol:(u?)(s|p):(.{1,64})$/s.exec(id);
+  if (!m) return null;
+  const on = m[1] !== 'u';
+  if (m[2] === 's') return /^\d{1,9}$/.test(m[3] as string) ? { kind: 'server', id: Number(m[3]), on } : null;
+  return { kind: 'player', nick: (m[3] as string).trim(), on };
+}
+
+export interface FollowAnswer {
+  status: 'ok' | 'unlinked' | 'notfound' | 'limit';
+  on?: boolean;
+  name?: string;
+  max?: number;
+}
+
+/** the title and the text of the private answer */
+export function followText(a: FollowAnswer, f: FollowId): { title: string; text: string; ok: boolean } {
+  if (a.status === 'unlinked') return { title: 'Нужен аккаунт', text: 'Следить можно с аккаунтом панели, привязанным к Discord. Создайте его командой `/register` или `/link`.', ok: false };
+  if (a.status === 'notfound') return { title: f.kind === 'server' ? 'Сервер не найден' : 'Игрок не найден', text: 'Возможно, его уже нет в списке.', ok: false };
+  if (a.status === 'limit') return { title: 'Слишком много подписок', text: `Можно следить не больше чем за ${a.max ?? 30} игроками. Отпишитесь от лишних в профиле.`, ok: false };
+  const name = a.name ?? '';
+  if (f.kind === 'server') {
+    return a.on
+      ? { title: `🔔 Вы следите за «${name}»`, text: 'Напишу в личные сообщения, когда на сервере освободится место, он вернётся в сеть или станет недоступен.', ok: true }
+      : { title: `🔕 Вы больше не следите за «${name}»`, text: 'Уведомления об этом сервере отключены.', ok: true };
+  }
+  return a.on
+    ? { title: `🔔 Вы следите за игроком ${name}`, text: 'Напишу в личные сообщения, когда он зайдёт на любой сервер (не чаще раза в 30 минут).', ok: true }
+    : { title: `🔕 Вы больше не следите за ${name}`, text: 'Уведомления об этом игроке отключены.', ok: true };
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-bot/src"
   cat > "$APP_DIR/core-bot/src/gateway.ts" << '__COREGSM_EOF__'
 import type { Agent } from 'node:http';
 
@@ -40090,9 +40516,11 @@ __COREGSM_EOF__
 import { CLEAR_GUIDE_FIELDS } from './clearGuide.js';
 import { ActionRowBuilder, AttachmentBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, type ButtonInteraction, type ChatInputCommandInteraction } from 'discord.js';
 import { backend, backendJson } from './backend.js';
+import { followButton } from './follow.js';
 import { log } from './log.js';
 import { COLORS, replyEmbed } from './replies.js';
 import { footerOf, getStyle } from './style.js';
+import { healthColor, panelRow, stamped } from './ui.js';
 import type { OnlineData } from './info.js';
 
 export const HELP_COMMANDS = [
@@ -40103,19 +40531,20 @@ export const HELP_NAMES = new Set(HELP_COMMANDS.map((c) => c.name));
 
 const EPHEMERAL = 64;
 
-export interface HelpCategory { id: string; label: string; emoji: string; title: string; lines: [string, string][]; /** extra blocks under the list */ fields?: { name: string; value: string }[] }
+export interface HelpCategory { id: string; label: string; emoji: string; title: string; /** the colour of the card */ color: number; lines: [string, string][]; /** extra blocks under the list */ fields?: { name: string; value: string }[] }
 export const HELP_CATEGORIES: HelpCategory[] = [
   {
-    id: 'play', label: 'Игроку', emoji: '🙋', title: 'Игроку: аккаунт и профиль',
+    id: 'play', color: 0x57f287, label: 'Игроку', emoji: '🙋', title: 'Игроку: аккаунт и профиль',
     lines: [
       ['/register', 'создать аккаунт в панели через Discord, пароль не нужен'],
+      ['/link', 'привязать игровой ник: выберите себя из списка или впишите вручную'],
       ['/nick', 'сменить игровой ник, по которому считается статистика'],
       ['/profile', 'моя карточка: ранг, часы в игре, достижения'],
       ['/roles', 'выбрать себе роли в меню: взять или снять'],
     ],
   },
   {
-    id: 'srv', label: 'Серверы', emoji: '🖥️', title: 'Серверы: кто и где играет',
+    id: 'srv', color: 0x3b82f6, label: 'Серверы', emoji: '🖥️', title: 'Серверы: кто и где играет',
     lines: [
       ['/online', 'сколько игроков на каждом сервере'],
       ['/servers', 'список серверов с кнопками: нажмите, чтобы открыть карточку'],
@@ -40123,14 +40552,14 @@ export const HELP_CATEGORIES: HelpCategory[] = [
     ],
   },
   {
-    id: 'stat', label: 'Статистика', emoji: '📊', title: 'Статистика игроков',
+    id: 'stat', color: 0x8b5cf6, label: 'Статистика', emoji: '📊', title: 'Статистика игроков',
     lines: [
       ['/player', 'карточка игрока: часы, серия дней, где и когда играет'],
       ['/top', 'самые активные игроки за неделю или месяц'],
     ],
   },
   {
-    id: 'mod', label: 'Модерация', emoji: '🛡️', title: 'Модерация (для администраторов)',
+    id: 'mod', color: 0xef4444, label: 'Модерация', emoji: '🛡️', title: 'Модерация (для администраторов)',
     lines: [
       ['/clear', 'очистить чат в этом канале: с подтверждением, закреплённые остаются'],
       ['/ban', 'заблокировать участника с причиной (удаляет его сообщения, пишет ему в ЛС)'],
@@ -40148,25 +40577,42 @@ export const HELP_CATEGORIES: HelpCategory[] = [
 const row = (...b: ButtonBuilder[]) => new ActionRowBuilder<ButtonBuilder>().addComponents(...b);
 
 export function helpButtons(active: string | null): ActionRowBuilder<ButtonBuilder>[] {
-  return [row(...HELP_CATEGORIES.map((c) => new ButtonBuilder().setCustomId(`help:${c.id}`).setLabel(c.label).setEmoji(c.emoji).setStyle(c.id === active ? ButtonStyle.Primary : ButtonStyle.Secondary)))];
+  const rows = [
+    row(
+      new ButtonBuilder().setCustomId('help:home').setLabel('Главная').setEmoji('🏠').setStyle(active === null ? ButtonStyle.Success : ButtonStyle.Secondary),
+      ...HELP_CATEGORIES.map((c) => new ButtonBuilder().setCustomId(`help:${c.id}`).setLabel(c.label).setEmoji(c.emoji).setStyle(c.id === active ? ButtonStyle.Primary : ButtonStyle.Secondary)),
+    ),
+  ];
+  const panel = panelRow([{ label: '🌐 Открыть панель', path: '/' }]);
+  const close = new ButtonBuilder().setCustomId('help:close').setLabel('Закрыть').setEmoji('✖️').setStyle(ButtonStyle.Danger);
+  const last = panel[0];
+  if (last) last.addComponents(close);
+  rows.push(last ?? row(close));
+  return rows;
 }
 
+/** what the first screen and «Серверы» show above the text: how many play now */
+export interface Live { players: number; up: number; total: number }
+export const liveOf = (d: OnlineData | null): Live | null => (d ? { players: d.players, up: d.servers.filter((s) => s.online).length, total: d.servers.length } : null);
+export const liveLine = (l: Live): string => `${l.up === l.total && l.total > 0 ? '🟢' : l.up === 0 ? '🔴' : '🟡'} Сейчас играют **${l.players}** · серверов в сети **${l.up} из ${l.total}**`;
+
 /** the first screen (category null) or one category */
-export function helpEmbed(category: string | null): EmbedBuilder {
+export function helpEmbed(category: string | null, live: Live | null = null): EmbedBuilder {
   const cat = HELP_CATEGORIES.find((c) => c.id === category);
   if (!cat) {
-    return new EmbedBuilder()
-      .setTitle('📖 Что умеет бот')
+    return stamped(new EmbedBuilder()
+      .setTitle(live ? `📖 Что умеет бот · ${live.up}/${live.total} онлайн · ${live.players} ${live.players === 1 ? 'игрок' : 'игроков'}` : '📖 Что умеет бот')
       .setDescription('Выберите раздел кнопкой ниже: в каждом команды с коротким пояснением.\n\n' + HELP_CATEGORIES.map((c) => `${c.emoji} **${c.label}** — ${c.lines.map((l) => `\`${l[0]}\``).join(', ')}`).join('\n'))
-      .setColor(getStyle().accent)
-      .setFooter(footerOf());
+      .setColor(live ? healthColor(live.up, live.total) : getStyle().accent)
+      .setFooter(footerOf()));
   }
-  return new EmbedBuilder()
+  const head = cat.id === 'srv' && live ? `${liveLine(live)}\n\n` : '';
+  return stamped(new EmbedBuilder()
     .setTitle(`${cat.emoji} ${cat.title}`)
-    .setDescription(cat.lines.map(([cmd, text]) => `\`${cmd}\` — ${text}`).join('\n'))
+    .setDescription(head + cat.lines.map(([cmd, text]) => `\`${cmd}\` — ${text}`).join('\n'))
     .addFields(cat.fields ?? [])
-    .setColor(getStyle().accent)
-    .setFooter(footerOf());
+    .setColor(cat.color)
+    .setFooter(footerOf()));
 }
 
 /** buttons under /servers: one per server (Discord allows 25), «srv:<id>» */
@@ -40179,7 +40625,17 @@ export function serverButtons(servers: OnlineData['servers']): ActionRowBuilder<
   return rows;
 }
 
-export const backButton = () => row(new ButtonBuilder().setCustomId('srv:list').setLabel('К списку').setEmoji('⬅️').setStyle(ButtonStyle.Primary));
+export const backButton = (serverId?: number) => row(new ButtonBuilder().setCustomId('srv:list').setLabel('К списку').setEmoji('⬅️').setStyle(ButtonStyle.Primary), ...(serverId ? [followButton('server', serverId, '🔔 Следить')] : []));
+
+/** the numbers for the card; empty when the panel does not answer within two seconds */
+async function liveNow(): Promise<Live | null> {
+  try {
+    const r = await backendJson<OnlineData>('/internal/discord/online', { signal: AbortSignal.timeout(2000) });
+    return liveOf(r.data);
+  } catch {
+    return null;
+  }
+}
 
 async function serversScreen(): Promise<{ embeds: EmbedBuilder[]; components: ActionRowBuilder<ButtonBuilder>[]; files: AttachmentBuilder[] } | null> {
   const { data } = await backendJson<OnlineData>('/internal/discord/online');
@@ -40188,15 +40644,18 @@ async function serversScreen(): Promise<{ embeds: EmbedBuilder[]; components: Ac
   const e = new EmbedBuilder()
     .setTitle('🖥️ Серверы')
     .setDescription(data.servers.length ? `Нажмите на сервер, чтобы открыть его карточку.\nСейчас играют: **${data.players}**, в сети серверов: **${up}** из ${data.servers.length}.` : 'Серверов пока нет.')
-    .setColor(getStyle().accent)
+    .setColor(healthColor(up, data.servers.length))
     .setFooter(footerOf());
-  return { embeds: [e], components: serverButtons(data.servers), files: [] };
+  return { embeds: [stamped(e)], components: serverButtons(data.servers), files: [] };
 }
 
 export async function handleHelp(i: ChatInputCommandInteraction): Promise<void> {
   try {
     if (i.commandName === 'help') {
-      await i.reply({ embeds: [helpEmbed(null)], components: helpButtons(null), flags: EPHEMERAL });
+      // the live numbers need a short call to the panel: acknowledge first, they are in the card when it appears
+      await i.deferReply({ flags: EPHEMERAL });
+      const live = await liveNow();
+      await i.editReply({ embeds: [helpEmbed(null, live)], components: helpButtons(null) });
       return;
     }
     await i.deferReply({ flags: EPHEMERAL });
@@ -40216,9 +40675,18 @@ export async function handleHelpButton(i: ButtonInteraction): Promise<void> {
     return;
   }
   try {
+    if (i.customId === 'help:close') {
+      try {
+        await i.deleteReply();
+      } catch {
+        await i.editReply({ content: '✖️ Закрыто', embeds: [], components: [] }).catch(() => undefined);
+      }
+      return;
+    }
     if (i.customId.startsWith('help:')) {
       const id = i.customId.slice(5);
-      await i.editReply({ embeds: [helpEmbed(id)], components: helpButtons(id) });
+      const cat = id === 'home' ? null : id;
+      await i.editReply({ embeds: [helpEmbed(cat, cat === null || cat === 'srv' ? await liveNow() : null)], components: helpButtons(cat) });
       return;
     }
     if (i.customId === 'srv:list') {
@@ -40234,7 +40702,7 @@ export async function handleHelpButton(i: ButtonInteraction): Promise<void> {
       return;
     }
     const file = new AttachmentBuilder(Buffer.from(await r.arrayBuffer()), { name: `server-${id}.png` });
-    await i.editReply({ embeds: [], files: [file], components: [backButton()] });
+    await i.editReply({ embeds: [], files: [file], components: [backButton(id)] });
   } catch (e) {
     log(`button ${i.customId} failed:`, (e as Error).message);
   }
@@ -40265,6 +40733,9 @@ import { AttachmentBuilder, EmbedBuilder, type AutocompleteInteraction, type Cha
 import { backend, backendJson } from './backend.js';
 import { log } from './log.js';
 import { COLORS, hoursText, replyEmbed } from './replies.js';
+import { followButton } from './follow.js';
+import { panelRow, stamped } from './ui.js';
+import { ActionRowBuilder, type ButtonBuilder } from 'discord.js';
 
 export const INFO_COMMANDS = [
   { name: 'online', description: 'Кто сейчас играет: онлайн всех серверов' },
@@ -40399,18 +40870,18 @@ export async function handleInfo(i: ChatInputCommandInteraction): Promise<void> 
   try {
     if (i.commandName === 'online') {
       const { data } = await backendJson<OnlineData>('/internal/discord/online');
-      return void (await (data ? reply({ embeds: [onlineEmbed(data)] }) : down()));
+      return void (await (data ? reply({ embeds: [stamped(onlineEmbed(data))], components: panelRow([{ label: '🌐 Открыть панель', url: data.url }, { label: '🖥️ Серверы', path: '/' }]) }) : down()));
     }
     if (i.commandName === 'top') {
       const period = i.options.getString('period') === 'month' ? 'month' : 'week';
       const { data } = await backendJson<TopData>(`/internal/discord/top?period=${period}`);
-      return void (await (data ? reply({ embeds: [topEmbed(data)] }) : down()));
+      return void (await (data ? reply({ embeds: [stamped(topEmbed(data))], components: panelRow([{ label: '🏆 Сообщество', url: data.url }]) }) : down()));
     }
     if (i.commandName === 'player') {
       const nick = i.options.getString('nick', true);
       const { status, data } = await backendJson<PlayerData>(`/internal/discord/player?nick=${encodeURIComponent(nick)}`);
       if (status === 404) return void (await reply(replyEmbed('Игрок не найден', `Ник «${nick.slice(0, 64)}» не появлялся на серверах за последние 90 дней.`, COLORS.warn)));
-      return void (await (data ? reply({ embeds: [playerEmbed(data)] }) : down()));
+      return void (await (data ? reply({ embeds: [stamped(playerEmbed(data))], components: [new ActionRowBuilder<ButtonBuilder>().addComponents(followButton('player', data.name, '🔔 Следить за игроком')), ...panelRow([{ label: '👤 Профиль игрока', url: data.url }])] }) : down()));
     }
     // /status: the same picture card as in the status messages
     const id = Number(i.options.getString('server', true));
@@ -40419,11 +40890,212 @@ export async function handleInfo(i: ChatInputCommandInteraction): Promise<void> 
     if (r.status === 404) return void (await reply(replyEmbed('Сервер не найден', 'Выберите сервер из списка подсказок.', COLORS.warn)));
     if (!r.ok) return void (await down());
     const file = new AttachmentBuilder(Buffer.from(await r.arrayBuffer()), { name: `server-${id}.png` });
-    await reply({ files: [file] });
+    await reply({ files: [file], components: [new ActionRowBuilder<ButtonBuilder>().addComponents(followButton('server', id, '🔔 Следить за сервером'))] });
   } catch (e) {
     log(`/${i.commandName} failed:`, (e as Error).message);
     await down();
   }
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-bot/src"
+  cat > "$APP_DIR/core-bot/src/link.ts" << '__COREGSM_EOF__'
+/**
+ * /link: a wizard that ties the Discord account to the panel and to the in-game nick. A menu offers the names seen on the
+ * servers (the person just picks theirs), or the nick is typed in a window. With no account yet it registers one (asking for
+ * the rules first when the community has them), with an account it changes the nick.
+ */
+import { ActionRowBuilder, ButtonBuilder, EmbedBuilder, ButtonStyle, ModalBuilder, StringSelectMenuBuilder, TextInputBuilder, TextInputStyle, type ButtonInteraction, type ChatInputCommandInteraction, type ModalSubmitInteraction, type StringSelectMenuInteraction, type User } from 'discord.js';
+import { backend, backendJson } from './backend.js';
+import { log } from './log.js';
+import { COLORS, cardReply, replyEmbed, type ProfileData } from './replies.js';
+import { agreeId, cleanNick, nickOptions, parseLink } from './linkLogic.js';
+import { footerOf, getStyle } from './style.js';
+import { panelRow, stamped } from './ui.js';
+
+export const LINK_COMMANDS = [{ name: 'link', description: 'Привязать игровой ник: выберите себя из списка игроков' }];
+export const LINK_NAMES = new Set(LINK_COMMANDS.map((c) => c.name));
+
+const EPHEMERAL = 64;
+
+type Reply = Parameters<ChatInputCommandInteraction['editReply']>[0];
+
+const who = (u: User) => ({ discordId: u.id, displayName: (u.globalName || u.username || '').trim(), avatarHash: u.avatar ?? null });
+
+async function loadCard(u: User): Promise<ProfileData | null> {
+  const w = who(u);
+  const q = new URLSearchParams({ discordId: w.discordId, displayName: w.displayName });
+  if (w.avatarHash) q.set('avatarHash', w.avatarHash);
+  const r = await backendJson<ProfileData>(`/internal/discord/profile?${q.toString()}`);
+  return r.data && r.data.found ? r.data : null;
+}
+
+async function suggestions(u: User): Promise<{ label: string; value: string }[]> {
+  try {
+    const q = new URLSearchParams({ q: '', discordId: u.id });
+    const r = await backend(`/internal/discord/nick-suggest?${q.toString()}`, { signal: AbortSignal.timeout(2500) });
+    const d = (await r.json()) as { names?: unknown };
+    return nickOptions(d.names);
+  } catch {
+    return [];
+  }
+}
+
+/** the first screen: where the person is now and what to press */
+async function startScreen(u: User): Promise<Reply> {
+  const [card, options] = await Promise.all([loadCard(u).catch(() => null), suggestions(u)]);
+  const has = !!card?.gameNick;
+  const e = new EmbedBuilder()
+    .setTitle(has ? '🔗 Игровой ник' : '🔗 Привязка аккаунта')
+    .setColor(has ? (card?.nickSeen ? COLORS.ok : COLORS.warn) : getStyle().accent)
+    .setDescription(
+      has
+        ? `Сейчас ник: **${card!.gameNick}** ${card!.nickSeen ? '✅ найден на сервере' : '⏳ ждём первый заход на сервер'}.\nЧтобы сменить, выберите другой в меню или впишите вручную.`
+        : 'Выберите себя из списка игроков, которых панель видела на серверах: по нику считаются часы, ранг и достижения.\nНе нашли себя? Нажмите «Ввести ник вручную».',
+    )
+    .addFields({ name: 'Шаги', value: card ? '1. Выберите ник\n2. Зайдите в игру, если ещё не заходили\n3. Откройте профиль в панели' : '1. Выберите ник\n2. Аккаунт в панели создастся сам\n3. Входите кнопкой «Войти через Discord»: пароль не нужен' })
+    .setFooter(footerOf());
+  const rows: unknown[] = [];
+  if (options.length) {
+    rows.push(new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(new StringSelectMenuBuilder().setCustomId('lnk:pick').setPlaceholder('Выберите свой ник из списка').addOptions(options)));
+  }
+  rows.push(new ActionRowBuilder<ButtonBuilder>().addComponents(new ButtonBuilder().setCustomId('lnk:manual').setLabel('Ввести ник вручную').setEmoji('✍️').setStyle(ButtonStyle.Primary)));
+  return { embeds: [stamped(e)], components: [...rows, ...panelRow([{ label: '🌐 Панель', path: '/' }])] as never };
+}
+
+export async function handleLinkCommand(i: ChatInputCommandInteraction): Promise<void> {
+  try {
+    await i.deferReply({ flags: EPHEMERAL });
+    await i.editReply(await startScreen(i.user));
+  } catch (e) {
+    log('/link failed:', (e as Error).message);
+    await i.editReply(replyEmbed('Не получилось', 'Панель сейчас не отвечает. Попробуйте чуть позже.', COLORS.bad)).catch(() => undefined);
+  }
+}
+
+interface RegisterAnswer { status?: 'created' | 'exists' | 'pending' | 'disabled' | 'rules' | 'conflict'; username?: string; profileUrl?: string; rulesText?: string; message?: string }
+
+/** an answer that replaces the whole message: the menu and the buttons of the previous screen go away */
+const shown = (r: Reply): Reply => ({ components: [], ...(r as object) }) as Reply;
+
+/** saves the nick (registers when there is no account yet) and returns what to show */
+async function apply(u: User, nick: string, agree: boolean): Promise<Reply> {
+  const w = who(u);
+  const card = await loadCard(u).catch(() => null);
+  const friendly = replyEmbed('Не получилось', 'Панель сейчас не отвечает. Попробуйте чуть позже.', COLORS.bad);
+  if (card) {
+    const { data } = await backendJson<{ status?: string; gameNick?: string }>('/internal/discord/nick', { method: 'POST', body: JSON.stringify({ ...w, gameNick: nick }) });
+    if (!data) return friendly;
+    if (data.status === 'conflict') return replyEmbed('Ник занят', 'Этот игровой ник уже занят другим аккаунтом.', COLORS.bad);
+    if (data.status !== 'ok') return replyEmbed('Проверьте ник', 'Игровой ник: от 2 до 40 символов.', COLORS.warn);
+    const fresh = await loadCard(u).catch(() => null);
+    return fresh ? cardReply(u, w.displayName, fresh, { title: '🔗 Ник привязан', description: `Часы, ранг и достижения считаются по нику **${data.gameNick ?? fresh.gameNick}**.`, color: COLORS.ok, onboarding: true }) : replyEmbed('Ник сохранён', `Игровой ник: **${data.gameNick ?? nick}**.`, COLORS.ok);
+  }
+  const { ok, data } = await backendJson<RegisterAnswer>('/internal/discord/register', { method: 'POST', body: JSON.stringify({ ...w, gameNick: nick, agree: agree || undefined }) });
+  if (!data) return friendly;
+  if (!ok || !data.status) return replyEmbed('Проверьте ник', data.message || 'Панель отклонила запрос.', COLORS.warn);
+  switch (data.status) {
+    case 'created':
+    case 'exists': {
+      const fresh = await loadCard(u).catch(() => null);
+      if (fresh) return cardReply(u, w.displayName, fresh, { title: data.status === 'created' ? '🩸 Добро пожаловать!' : 'Аккаунт уже есть', description: data.status === 'created' ? `Аккаунт создан. Логин в панели: **${data.username}**.\nВходите кнопкой «Войти через Discord»: пароль не нужен.` : data.message ?? '', color: COLORS.ok, onboarding: true });
+      return replyEmbed('Аккаунт готов', `Логин в панели: **${data.username ?? ''}**.`, COLORS.ok, data.profileUrl);
+    }
+    case 'pending':
+      return replyEmbed('Заявка отправлена', data.message ?? 'Дождитесь одобрения администратора.', COLORS.warn);
+    case 'disabled':
+      return replyEmbed('Регистрация закрыта', data.message ?? 'Администратор закрыл регистрацию.', COLORS.bad);
+    case 'conflict':
+      return replyEmbed('Ник занят', data.message ?? 'Этот игровой ник уже занят другим аккаунтом.', COLORS.bad);
+    case 'rules': {
+      const out = replyEmbed('Правила сообщества', `${data.rulesText ?? ''}\n\nЕсли согласны, нажмите кнопку ниже.`.slice(0, 3900), COLORS.info);
+      return { ...out, components: [new ActionRowBuilder<ButtonBuilder>().addComponents(new ButtonBuilder().setCustomId(agreeId(nick)).setLabel('Согласен с правилами').setEmoji('✅').setStyle(ButtonStyle.Success))] };
+    }
+  }
+  return friendly;
+}
+
+export async function handleLinkSelect(i: StringSelectMenuInteraction): Promise<void> {
+  if (parseLink(i.customId)?.kind !== 'pick') return;
+  const nick = cleanNick(i.values[0] ?? '');
+  try {
+    await i.deferUpdate();
+    if (!nick) return void (await i.editReply(replyEmbed('Проверьте ник', 'Игровой ник: от 2 до 40 символов.', COLORS.warn)));
+    await i.editReply(shown(await apply(i.user, nick, false)));
+  } catch (e) {
+    log('/link select failed:', (e as Error).message);
+  }
+}
+
+export async function handleLinkButton(i: ButtonInteraction): Promise<void> {
+  const a = parseLink(i.customId);
+  if (!a) return;
+  try {
+    if (a.kind === 'manual') {
+      await i.showModal(
+        new ModalBuilder()
+          .setCustomId('lnk:modal')
+          .setTitle('Игровой ник')
+          .addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(new TextInputBuilder().setCustomId('nick').setLabel('Ник в игре, точно как в игре').setStyle(TextInputStyle.Short).setRequired(true).setMinLength(2).setMaxLength(40))),
+      );
+      return;
+    }
+    if (a.kind === 'agree') {
+      await i.deferUpdate();
+      await i.editReply(shown(await apply(i.user, a.nick, true)));
+    }
+  } catch (e) {
+    log('/link button failed:', (e as Error).message);
+  }
+}
+
+export async function handleLinkModal(i: ModalSubmitInteraction): Promise<void> {
+  if (parseLink(i.customId)?.kind !== 'modal') return;
+  try {
+    await i.deferReply({ flags: EPHEMERAL });
+    const nick = cleanNick(i.fields.getTextInputValue('nick'));
+    await i.editReply(nick ? ((await apply(i.user, nick, false)) as never) : replyEmbed('Проверьте ник', 'Игровой ник: от 2 до 40 символов.', COLORS.warn));
+  } catch (e) {
+    log('/link modal failed:', (e as Error).message);
+  }
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-bot/src"
+  cat > "$APP_DIR/core-bot/src/linkLogic.ts" << '__COREGSM_EOF__'
+/** /link wizard: ids and the list of nicks for the menu. No discord.js import. */
+
+export type LinkAction = { kind: 'pick' } | { kind: 'manual' } | { kind: 'modal' } | { kind: 'agree'; nick: string };
+
+export function parseLink(id: string): LinkAction | null {
+  if (id === 'lnk:pick') return { kind: 'pick' };
+  if (id === 'lnk:manual') return { kind: 'manual' };
+  if (id === 'lnk:modal') return { kind: 'modal' };
+  const m = /^lnk:ok:(.{2,40})$/s.exec(id);
+  return m ? { kind: 'agree', nick: (m[1] as string).trim() } : null;
+}
+
+export const agreeId = (nick: string): string => `lnk:ok:${nick.trim().slice(0, 40)}`;
+
+/** the options of the menu: distinct names (case does not matter), at most 25, each up to 100 characters */
+export function nickOptions(names: unknown): { label: string; value: string }[] {
+  if (!Array.isArray(names)) return [];
+  const seen = new Set<string>();
+  const out: { label: string; value: string }[] = [];
+  for (const n of names) {
+    if (typeof n !== 'string') continue;
+    const v = n.trim().slice(0, 40);
+    const k = v.toLowerCase();
+    if (v.length < 2 || seen.has(k)) continue;
+    seen.add(k);
+    out.push({ label: v, value: v });
+    if (out.length >= 25) break;
+  }
+  return out;
+}
+
+/** a nick typed by hand: 2..40 characters without control characters */
+export function cleanNick(v: string): string | null {
+  const n = v.replace(/[\u0000-\u001f]/g, ' ').replace(/\s+/g, ' ').trim();
+  return n.length >= 2 && n.length <= 40 ? n : null;
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-bot/src"
@@ -42123,22 +42795,29 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-bot/src"
   cat > "$APP_DIR/core-bot/src/style.ts" << '__COREGSM_EOF__'
 /** The look of the bot's own replies (footer, accent colour, logo): set in the panel and refreshed with the config. */
-export interface BotStyle { footer: string; accent: number; logoUrl: string | null }
+export interface BotStyle { footer: string; accent: number; logoUrl: string | null; version: string; panelUrl: string | null }
 
-let current: BotStyle = { footer: 'CoreGSM', accent: 0x9b1c31, logoUrl: null };
+let current: BotStyle = { footer: 'CoreGSM', accent: 0x9b1c31, logoUrl: null, version: '', panelUrl: null };
 
 export const getStyle = (): BotStyle => current;
 
 export function setStyle(s: unknown): void {
   const o = s as Partial<BotStyle> | null;
   if (!o || typeof o.footer !== 'string' || typeof o.accent !== 'number') return;
-  current = { footer: o.footer.slice(0, 40) || 'CoreGSM', accent: o.accent, logoUrl: typeof o.logoUrl === 'string' && /^https?:\/\//.test(o.logoUrl) ? o.logoUrl : null };
+  current = {
+    footer: o.footer.slice(0, 40) || 'CoreGSM',
+    accent: o.accent,
+    logoUrl: typeof o.logoUrl === 'string' && /^https?:\/\//.test(o.logoUrl) ? o.logoUrl : null,
+    version: typeof o.version === 'string' && /^[\w.+-]{1,20}$/.test(o.version) ? o.version : '',
+    panelUrl: typeof o.panelUrl === 'string' && /^https?:\/\/[^\s]+$/.test(o.panelUrl) ? o.panelUrl.replace(/\/+$/, '') : null,
+  };
 }
 
-/** footer for an embed: «<signature> · <what>» or just the signature, with the logo when there is one */
+/** footer for an embed: «<what> · <signature> · v<version>» with the logo when there is one */
 export function footerOf(what?: string): { text: string; iconURL?: string } {
   const s = current;
-  return { text: what ? `${what} · ${s.footer}` : s.footer, ...(s.logoUrl ? { iconURL: s.logoUrl } : {}) };
+  const text = [what, s.footer, s.version ? `v${s.version}` : ''].filter(Boolean).join(' · ');
+  return { text: text.slice(0, 2000), ...(s.logoUrl ? { iconURL: s.logoUrl } : {}) };
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-bot/src"
@@ -42229,6 +42908,29 @@ export async function syncDiscord(c: Client, stopping: () => boolean): Promise<v
     }
   }
 }
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-bot/src"
+  cat > "$APP_DIR/core-bot/src/ui.ts" << '__COREGSM_EOF__'
+/** One look for the bot's cards: a link row to the panel, the status colours and the «now» timestamp. */
+import { ActionRowBuilder, ButtonBuilder, ButtonStyle, type EmbedBuilder } from 'discord.js';
+import { getStyle } from './style.js';
+
+/** a row with link buttons to the panel; `path` is added to the address of the panel, `url` is used as it is */
+export function panelRow(links: { label: string; path?: string; url?: string | null }[]): ActionRowBuilder<ButtonBuilder>[] {
+  const base = getStyle().panelUrl;
+  const btns = links
+    .map((l) => ({ label: l.label, url: l.url && /^https?:\/\//.test(l.url) ? l.url : base && l.path ? `${base}${l.path}` : '' }))
+    .filter((l) => l.url)
+    .slice(0, 5)
+    .map((l) => new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel(l.label.slice(0, 80)).setURL(l.url));
+  return btns.length ? [new ActionRowBuilder<ButtonBuilder>().addComponents(btns)] : [];
+}
+
+/** the same finishing touch for every card */
+export const stamped = (e: EmbedBuilder): EmbedBuilder => e.setTimestamp(new Date());
+
+/** the colour of a card by the share of the servers that are up */
+export const healthColor = (up: number, total: number): number => (total === 0 || up === 0 ? 0xe74c3c : up < total ? 0xf5b01e : 0x2ecc71);
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-bot/src"
   cat > "$APP_DIR/core-bot/src/watchdog.ts" << '__COREGSM_EOF__'
@@ -117734,6 +118436,84 @@ export default function CustomGamesCard() {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/DashboardCard.tsx" << '__COREGSM_EOF__'
+import { useEffect, useState } from 'react';
+import { api } from '../api';
+import { t } from '../i18n';
+import { Button, Section, Switch, fail, toast } from '../ui';
+import { ChannelName, ChannelPicker } from './ChannelPicker';
+
+interface Dash {
+  enabled: boolean;
+  channelId: string;
+  channelName: string | null;
+  error: string;
+  weekly: boolean;
+  botOnline: boolean;
+}
+
+/** the live dashboard message in a channel and the weekly summary for the administrators */
+export default function DashboardCard() {
+  const [d, setD] = useState<Dash | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [picking, setPicking] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    api<Dash>('/settings/dashboard').then((r) => { if (alive) setD(r); }).catch(() => undefined);
+    return () => { alive = false; };
+  }, []);
+  if (!d) return null;
+
+  const save = async (patch: Partial<Pick<Dash, 'enabled' | 'channelId' | 'weekly'>>) => {
+    setBusy(true);
+    try {
+      setD(await api<Dash>('/settings/dashboard', 'PUT', patch));
+      toast(t('dash.saved'));
+    } catch (e) {
+      fail(e);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const test = async () => {
+    setBusy(true);
+    try {
+      const r = await api<{ sent: number }>('/settings/dashboard/weekly-test', 'POST');
+      toast(r.sent ? t('dash.testSent', { n: r.sent }) : t('dash.testNone'));
+    } catch (e) {
+      fail(e);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Section title={t('dash.title')}>
+      <p className="mb-3 text-sm font-semibold text-mute">{t('dash.help')}</p>
+      <label className="mb-3 flex items-center gap-3 font-bold">
+        <Switch id="dash-on" checked={d.enabled} onChange={(on) => void save({ enabled: on })} /> {t('dash.on')}
+      </label>
+      <div className="mb-4">
+        <span className="label">{t('dash.channel')}</span>
+        <div className="flex flex-wrap items-center gap-3">
+          <span className="font-black">{d.channelId ? <ChannelName id={d.channelId} /> : t('dash.noChannel')}</span>
+          <button type="button" className="btn btn-soft btn-sm" onClick={() => setPicking(!picking)} aria-expanded={picking}>{t('mod.pick')}</button>
+        </div>
+        {picking && <div className="mt-2"><ChannelPicker id="dash-channel" value={d.channelId} onChange={(v) => { if (/^\d{15,25}$/.test(v)) { void save({ channelId: v, enabled: true }); setPicking(false); } }} /></div>}
+        {d.enabled && d.error && <p className="mt-2 text-sm font-bold text-red-500" role="alert">{d.error}</p>}
+      </div>
+      <label className="mb-2 flex items-center gap-3 font-bold">
+        <Switch id="weekly-on" checked={d.weekly} onChange={(on) => void save({ weekly: on })} /> {t('dash.weekly')}
+      </label>
+      <p className="mb-3 text-sm font-semibold text-mute">{t('dash.weeklyHelp')}</p>
+      <Button type="button" loading={busy} onClick={() => void test()}>{t('dash.test')}</Button>
+    </Section>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
   cat > "$APP_DIR/core-frontend/src/components/DeliveryList.tsx" << '__COREGSM_EOF__'
 import { useEffect, useState, type JSX } from 'react';
 import { api, ApiError } from '../api';
@@ -138925,6 +139705,17 @@ const en: Record<keyof typeof ru, string> = {
   'wl.rolesNoChannel': 'Choose a channel first: the roles come from its Discord server.',
   'wl.saved': 'Saved',
   'wl.intent': 'Needs the «Server Members Intent» in Developer Portal → Bot.',
+  'dash.title': 'Live board and weekly summary',
+  'dash.help': 'One message in a channel with all servers, online and the top of the week: the bot edits it once a minute.',
+  'dash.on': 'Turn the live board on',
+  'dash.channel': 'Board channel',
+  'dash.noChannel': 'not chosen',
+  'dash.saved': 'Saved',
+  'dash.weekly': 'Weekly summary for administrators',
+  'dash.weeklyHelp': 'On Mondays from 09:00 administrators with a linked Discord get a private card: peak online, new players, punishments and reports.',
+  'dash.test': 'Send the summary now',
+  'dash.testSent': 'Sent to administrators: {n}',
+  'dash.testNone': 'Nobody to send to: an administrator with a linked Discord and a running bot are needed',
   'mod.title': 'Moderation: /clear, /ban, /kick, /warn',
   'mod.help': 'The /clear command wipes the chat of the channel where it is typed. Only server administrators (the «Administrator» permission) can see and use it. Before deleting, the bot shows how many messages it found and asks to confirm.',
   'mod.on': 'Allow the /clear command',
@@ -143147,6 +143938,17 @@ const ru = {
   'wl.rolesNoChannel': 'Сначала выберите канал: роли берутся с его Discord-сервера.',
   'wl.saved': 'Сохранено',
   'wl.intent': 'Нужен «Server Members Intent» в Developer Portal → Bot.',
+  'dash.title': 'Живая сводка и итоги недели',
+  'dash.help': 'Одно сообщение в канале со всеми серверами, онлайном и топом недели: бот сам обновляет его раз в минуту.',
+  'dash.on': 'Включить живую сводку',
+  'dash.channel': 'Канал для сводки',
+  'dash.noChannel': 'не выбран',
+  'dash.saved': 'Сохранено',
+  'dash.weekly': 'Итоги недели администраторам',
+  'dash.weeklyHelp': 'По понедельникам с 09:00 администраторы с привязанным Discord получают в личные сообщения карточку: пик онлайна, новые игроки, наказания и жалобы.',
+  'dash.test': 'Отправить итоги сейчас',
+  'dash.testSent': 'Отправлено администраторам: {n}',
+  'dash.testNone': 'Некому отправлять: нужен администратор с привязанным Discord и запущенный бот',
   'mod.title': 'Модерация: /clear, /ban, /kick, /warn',
   'mod.help': 'Команда /clear очищает чат в канале, где её ввели. Её видят и могут использовать только администраторы сервера (право «Администратор»). Перед удалением бот показывает, сколько сообщений найдено, и просит подтвердить.',
   'mod.on': 'Разрешить команду /clear',
@@ -149098,6 +149900,7 @@ import EmbedPreview from './EmbedPreview';
 import CasesCard from '../components/CasesCard';
 import ModerationCard from '../components/ModerationCard';
 import WelcomeCard from '../components/WelcomeCard';
+import DashboardCard from '../components/DashboardCard';
 import DiscordStyleCard from '../components/DiscordStyleCard';
 
 type Style = 'embed' | 'card' | 'both';
@@ -149408,6 +150211,7 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
         <>
           <PlayersShownCard />
           <WelcomeCard />
+          <DashboardCard />
           <DiscordStyleCard />
         </>
       )}

@@ -280,6 +280,72 @@ export function digestLine(title: string, ts: number): string {
   return `• ${clip(title.replace(/\s+/g, ' ').trim(), 150)} · ${stamp(ts)}`;
 }
 
+// ---------- weekly summary for administrators ----------
+export interface WeeklyStats {
+  from: number;
+  to: number;
+  /** most players online at once, this week and the week before */
+  peak: number;
+  peakPrev: number;
+  peakAt: number | null;
+  newPlayers: number;
+  activePlayers: number;
+  newAccounts: number;
+  warns: number;
+  bans: number;
+  kicks: number;
+  mutes: number;
+  reports: number;
+}
+
+/** «▲ 12%» / «▼ 5%» / «=»: the change against the week before */
+export function trend(now: number, prev: number): string {
+  if (prev <= 0) return now > 0 ? '▲ new' : '=';
+  const p = Math.round(((now - prev) / prev) * 100);
+  return p === 0 ? '=' : `${p > 0 ? '▲' : '▼'} ${Math.abs(p)}%`;
+}
+
+export function weeklyCard(c: Ctx, w: WeeklyStats): DmCard {
+  const punish = w.warns + w.bans + w.kicks + w.mutes;
+  return make(
+    c,
+    {
+      title: L(c.lang, '📈 Итоги недели', '📈 Weekly summary'),
+      description: L(c.lang, `Период: ${stamp(w.from, 'f')} — ${stamp(w.to, 'f')}`, `Period: ${stamp(w.from, 'f')} — ${stamp(w.to, 'f')}`),
+      color: COLORS.news,
+      fields: [
+        { name: L(c.lang, '🔝 Пик онлайна', '🔝 Peak online'), value: `**${w.peak}** · ${trend(w.peak, w.peakPrev)}${w.peakAt ? `\n${stamp(w.peakAt, 'f')}` : ''}`, inline: true },
+        { name: L(c.lang, '🆕 Новых игроков', '🆕 New players'), value: String(w.newPlayers), inline: true },
+        { name: L(c.lang, '🎮 Играло', '🎮 Played'), value: String(w.activePlayers), inline: true },
+        { name: L(c.lang, '👤 Новых аккаунтов', '👤 New accounts'), value: String(w.newAccounts), inline: true },
+        { name: L(c.lang, '🛡️ Наказаний', '🛡️ Punishments'), value: `${punish}\n⚠️ ${w.warns} · 🔨 ${w.bans} · 👢 ${w.kicks} · 🔇 ${w.mutes}`, inline: true },
+        { name: L(c.lang, '🚩 Жалоб', '🚩 Reports'), value: String(w.reports), inline: true },
+      ],
+      timestamp: new Date(w.to).toISOString(),
+    },
+    L(c.lang, 'Итоги недели', 'Weekly summary'),
+    { actions: c.base ? [{ label: L(c.lang, '📊 Открыть панель', '📊 Open the panel'), url: c.base }] : [] },
+  );
+}
+
+/** weekday (0 = Sunday) and hour of a moment in a time zone */
+export function weekdayHour(ms: number, tz: string): { day: number; hour: number } {
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', { weekday: 'short', hour: 'numeric', hourCycle: 'h23', ...(tz ? { timeZone: tz } : {}) }).formatToParts(new Date(ms));
+    const wd = parts.find((p) => p.type === 'weekday')?.value ?? 'Sun';
+    return { day: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(wd), hour: Number(parts.find((p) => p.type === 'hour')?.value ?? 0) % 24 };
+  } catch {
+    const d = new Date(ms);
+    return { day: d.getUTCDay(), hour: d.getUTCHours() };
+  }
+}
+
+/** the summary goes out on Monday from 09:00 (server time), once per week */
+export function weeklyDue(now: number, lastAt: number, tz: string): boolean {
+  const { day, hour } = weekdayHour(now, tz);
+  return day === 1 && hour >= 9 && now - lastAt >= 6 * 86_400_000;
+}
+
 // ---------- quiet hours ----------
 export interface Quiet {
   /** hour of the day 0-23 when the quiet time starts; -1 = off */
@@ -320,7 +386,7 @@ export function quietEnd(now: number, q: Quiet, tz: string): number {
 }
 
 /** security notices and password letters are never held back */
-export const BYPASS_QUIET: ReadonlySet<string> = new Set(['newdevice', 'reset', 'changed', 'test']);
+export const BYPASS_QUIET: ReadonlySet<string> = new Set(['newdevice', 'reset', 'changed', 'test', 'weekly']);
 
 /** how long a new alert about a server waits for its neighbours before it is sent */
 export const GROUP_WAIT_MS = 20_000;

@@ -4,6 +4,9 @@ import { AttachmentBuilder, EmbedBuilder, type AutocompleteInteraction, type Cha
 import { backend, backendJson } from './backend.js';
 import { log } from './log.js';
 import { COLORS, hoursText, replyEmbed } from './replies.js';
+import { followButton } from './follow.js';
+import { panelRow, stamped } from './ui.js';
+import { ActionRowBuilder, type ButtonBuilder } from 'discord.js';
 
 export const INFO_COMMANDS = [
   { name: 'online', description: 'Кто сейчас играет: онлайн всех серверов' },
@@ -138,18 +141,18 @@ export async function handleInfo(i: ChatInputCommandInteraction): Promise<void> 
   try {
     if (i.commandName === 'online') {
       const { data } = await backendJson<OnlineData>('/internal/discord/online');
-      return void (await (data ? reply({ embeds: [onlineEmbed(data)] }) : down()));
+      return void (await (data ? reply({ embeds: [stamped(onlineEmbed(data))], components: panelRow([{ label: '🌐 Открыть панель', url: data.url }, { label: '🖥️ Серверы', path: '/' }]) }) : down()));
     }
     if (i.commandName === 'top') {
       const period = i.options.getString('period') === 'month' ? 'month' : 'week';
       const { data } = await backendJson<TopData>(`/internal/discord/top?period=${period}`);
-      return void (await (data ? reply({ embeds: [topEmbed(data)] }) : down()));
+      return void (await (data ? reply({ embeds: [stamped(topEmbed(data))], components: panelRow([{ label: '🏆 Сообщество', url: data.url }]) }) : down()));
     }
     if (i.commandName === 'player') {
       const nick = i.options.getString('nick', true);
       const { status, data } = await backendJson<PlayerData>(`/internal/discord/player?nick=${encodeURIComponent(nick)}`);
       if (status === 404) return void (await reply(replyEmbed('Игрок не найден', `Ник «${nick.slice(0, 64)}» не появлялся на серверах за последние 90 дней.`, COLORS.warn)));
-      return void (await (data ? reply({ embeds: [playerEmbed(data)] }) : down()));
+      return void (await (data ? reply({ embeds: [stamped(playerEmbed(data))], components: [new ActionRowBuilder<ButtonBuilder>().addComponents(followButton('player', data.name, '🔔 Следить за игроком')), ...panelRow([{ label: '👤 Профиль игрока', url: data.url }])] }) : down()));
     }
     // /status: the same picture card as in the status messages
     const id = Number(i.options.getString('server', true));
@@ -158,7 +161,7 @@ export async function handleInfo(i: ChatInputCommandInteraction): Promise<void> 
     if (r.status === 404) return void (await reply(replyEmbed('Сервер не найден', 'Выберите сервер из списка подсказок.', COLORS.warn)));
     if (!r.ok) return void (await down());
     const file = new AttachmentBuilder(Buffer.from(await r.arrayBuffer()), { name: `server-${id}.png` });
-    await reply({ files: [file] });
+    await reply({ files: [file], components: [new ActionRowBuilder<ButtonBuilder>().addComponents(followButton('server', id, '🔔 Следить за сервером'))] });
   } catch (e) {
     log(`/${i.commandName} failed:`, (e as Error).message);
     await down();

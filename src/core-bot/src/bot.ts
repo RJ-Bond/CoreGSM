@@ -1,4 +1,5 @@
 /** The bot's main loop: connection to Discord from the panel's settings, status messages, news and deliveries. */
+import { updateDashboard } from './dashboard.js';
 import { DMX_ID, dmxStyle } from './dmxLogic.js';
 import { footerOf, getStyle, setStyle } from './style.js';
 import fs from 'node:fs';
@@ -512,6 +513,7 @@ async function tick(): Promise<void> {
     await updateBindings();
     await processNews();
     await processDeliveries();
+    if (client && state === 'online') await updateDashboard(client);
     if (client && state === 'online') await syncDiscord(client, () => stopping);
     if (client && state === 'online') await updatePresence(client);
   } catch (e) {

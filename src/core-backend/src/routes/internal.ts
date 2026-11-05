@@ -12,6 +12,8 @@ import { addPing } from '../discord/botLatencyLogic.js';
 import { buildPresence } from '../monitoring/presence.js';
 import { currentStyle } from '../discord/discordStyleState.js';
 import { welcomeSettings } from '../community/welcome.js';
+import { APP_VERSION } from '../config.js';
+import { publicBase } from '../admin/site.js';
 import { parseLayout } from '../images/embedLayout.js';
 import { embedFor, intervalParam, serializeBinding, SELECT_SERVERS, SERVER_ORDER, serialize, type ServerJoin } from '../monitoring/serverData.js';
 
@@ -55,7 +57,7 @@ router.post(
 );
 
 router.get('/internal/config', internal, (_req, res) => {
-  res.json({ discordToken: getSetting('discord_token') ?? '', proxyUrl: getSetting('proxy_url') ?? '', welcome: welcomeSettings().enabled, style: (() => { const s = currentStyle(); return { footer: s.footer, accent: s.accent, logoUrl: s.logoUrl }; })() });
+  res.json({ discordToken: getSetting('discord_token') ?? '', proxyUrl: getSetting('proxy_url') ?? '', welcome: welcomeSettings().enabled, style: (() => { const s = currentStyle(); return { footer: s.footer, accent: s.accent, logoUrl: s.logoUrl, version: APP_VERSION, panelUrl: publicBase() ?? null }; })() });
 });
 
 router.post('/internal/bot-guilds', internal, (req, res) => {

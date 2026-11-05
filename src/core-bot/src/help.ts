@@ -2,9 +2,11 @@
 import { CLEAR_GUIDE_FIELDS } from './clearGuide.js';
 import { ActionRowBuilder, AttachmentBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, type ButtonInteraction, type ChatInputCommandInteraction } from 'discord.js';
 import { backend, backendJson } from './backend.js';
+import { followButton } from './follow.js';
 import { log } from './log.js';
 import { COLORS, replyEmbed } from './replies.js';
 import { footerOf, getStyle } from './style.js';
+import { healthColor, panelRow, stamped } from './ui.js';
 import type { OnlineData } from './info.js';
 
 export const HELP_COMMANDS = [
@@ -15,19 +17,20 @@ export const HELP_NAMES = new Set(HELP_COMMANDS.map((c) => c.name));
 
 const EPHEMERAL = 64;
 
-export interface HelpCategory { id: string; label: string; emoji: string; title: string; lines: [string, string][]; /** extra blocks under the list */ fields?: { name: string; value: string }[] }
+export interface HelpCategory { id: string; label: string; emoji: string; title: string; /** the colour of the card */ color: number; lines: [string, string][]; /** extra blocks under the list */ fields?: { name: string; value: string }[] }
 export const HELP_CATEGORIES: HelpCategory[] = [
   {
-    id: 'play', label: 'Игроку', emoji: '🙋', title: 'Игроку: аккаунт и профиль',
+    id: 'play', color: 0x57f287, label: 'Игроку', emoji: '🙋', title: 'Игроку: аккаунт и профиль',
     lines: [
       ['/register', 'создать аккаунт в панели через Discord, пароль не нужен'],
+      ['/link', 'привязать игровой ник: выберите себя из списка или впишите вручную'],
       ['/nick', 'сменить игровой ник, по которому считается статистика'],
       ['/profile', 'моя карточка: ранг, часы в игре, достижения'],
       ['/roles', 'выбрать себе роли в меню: взять или снять'],
     ],
   },
   {
-    id: 'srv', label: 'Серверы', emoji: '🖥️', title: 'Серверы: кто и где играет',
+    id: 'srv', color: 0x3b82f6, label: 'Серверы', emoji: '🖥️', title: 'Серверы: кто и где играет',
     lines: [
       ['/online', 'сколько игроков на каждом сервере'],
       ['/servers', 'список серверов с кнопками: нажмите, чтобы открыть карточку'],
@@ -35,14 +38,14 @@ export const HELP_CATEGORIES: HelpCategory[] = [
     ],
   },
   {
-    id: 'stat', label: 'Статистика', emoji: '📊', title: 'Статистика игроков',
+    id: 'stat', color: 0x8b5cf6, label: 'Статистика', emoji: '📊', title: 'Статистика игроков',
     lines: [
       ['/player', 'карточка игрока: часы, серия дней, где и когда играет'],
       ['/top', 'самые активные игроки за неделю или месяц'],
     ],
   },
   {
-    id: 'mod', label: 'Модерация', emoji: '🛡️', title: 'Модерация (для администраторов)',
+    id: 'mod', color: 0xef4444, label: 'Модерация', emoji: '🛡️', title: 'Модерация (для администраторов)',
     lines: [
       ['/clear', 'очистить чат в этом канале: с подтверждением, закреплённые остаются'],
       ['/ban', 'заблокировать участника с причиной (удаляет его сообщения, пишет ему в ЛС)'],
@@ -60,25 +63,42 @@ export const HELP_CATEGORIES: HelpCategory[] = [
 const row = (...b: ButtonBuilder[]) => new ActionRowBuilder<ButtonBuilder>().addComponents(...b);
 
 export function helpButtons(active: string | null): ActionRowBuilder<ButtonBuilder>[] {
-  return [row(...HELP_CATEGORIES.map((c) => new ButtonBuilder().setCustomId(`help:${c.id}`).setLabel(c.label).setEmoji(c.emoji).setStyle(c.id === active ? ButtonStyle.Primary : ButtonStyle.Secondary)))];
+  const rows = [
+    row(
+      new ButtonBuilder().setCustomId('help:home').setLabel('Главная').setEmoji('🏠').setStyle(active === null ? ButtonStyle.Success : ButtonStyle.Secondary),
+      ...HELP_CATEGORIES.map((c) => new ButtonBuilder().setCustomId(`help:${c.id}`).setLabel(c.label).setEmoji(c.emoji).setStyle(c.id === active ? ButtonStyle.Primary : ButtonStyle.Secondary)),
+    ),
+  ];
+  const panel = panelRow([{ label: '🌐 Открыть панель', path: '/' }]);
+  const close = new ButtonBuilder().setCustomId('help:close').setLabel('Закрыть').setEmoji('✖️').setStyle(ButtonStyle.Danger);
+  const last = panel[0];
+  if (last) last.addComponents(close);
+  rows.push(last ?? row(close));
+  return rows;
 }
 
+/** what the first screen and «Серверы» show above the text: how many play now */
+export interface Live { players: number; up: number; total: number }
+export const liveOf = (d: OnlineData | null): Live | null => (d ? { players: d.players, up: d.servers.filter((s) => s.online).length, total: d.servers.length } : null);
+export const liveLine = (l: Live): string => `${l.up === l.total && l.total > 0 ? '🟢' : l.up === 0 ? '🔴' : '🟡'} Сейчас играют **${l.players}** · серверов в сети **${l.up} из ${l.total}**`;
+
 /** the first screen (category null) or one category */
-export function helpEmbed(category: string | null): EmbedBuilder {
+export function helpEmbed(category: string | null, live: Live | null = null): EmbedBuilder {
   const cat = HELP_CATEGORIES.find((c) => c.id === category);
   if (!cat) {
-    return new EmbedBuilder()
-      .setTitle('📖 Что умеет бот')
+    return stamped(new EmbedBuilder()
+      .setTitle(live ? `📖 Что умеет бот · ${live.up}/${live.total} онлайн · ${live.players} ${live.players === 1 ? 'игрок' : 'игроков'}` : '📖 Что умеет бот')
       .setDescription('Выберите раздел кнопкой ниже: в каждом команды с коротким пояснением.\n\n' + HELP_CATEGORIES.map((c) => `${c.emoji} **${c.label}** — ${c.lines.map((l) => `\`${l[0]}\``).join(', ')}`).join('\n'))
-      .setColor(getStyle().accent)
-      .setFooter(footerOf());
+      .setColor(live ? healthColor(live.up, live.total) : getStyle().accent)
+      .setFooter(footerOf()));
   }
-  return new EmbedBuilder()
+  const head = cat.id === 'srv' && live ? `${liveLine(live)}\n\n` : '';
+  return stamped(new EmbedBuilder()
     .setTitle(`${cat.emoji} ${cat.title}`)
-    .setDescription(cat.lines.map(([cmd, text]) => `\`${cmd}\` — ${text}`).join('\n'))
+    .setDescription(head + cat.lines.map(([cmd, text]) => `\`${cmd}\` — ${text}`).join('\n'))
     .addFields(cat.fields ?? [])
-    .setColor(getStyle().accent)
-    .setFooter(footerOf());
+    .setColor(cat.color)
+    .setFooter(footerOf()));
 }
 
 /** buttons under /servers: one per server (Discord allows 25), «srv:<id>» */
@@ -91,7 +111,17 @@ export function serverButtons(servers: OnlineData['servers']): ActionRowBuilder<
   return rows;
 }
 
-export const backButton = () => row(new ButtonBuilder().setCustomId('srv:list').setLabel('К списку').setEmoji('⬅️').setStyle(ButtonStyle.Primary));
+export const backButton = (serverId?: number) => row(new ButtonBuilder().setCustomId('srv:list').setLabel('К списку').setEmoji('⬅️').setStyle(ButtonStyle.Primary), ...(serverId ? [followButton('server', serverId, '🔔 Следить')] : []));
+
+/** the numbers for the card; empty when the panel does not answer within two seconds */
+async function liveNow(): Promise<Live | null> {
+  try {
+    const r = await backendJson<OnlineData>('/internal/discord/online', { signal: AbortSignal.timeout(2000) });
+    return liveOf(r.data);
+  } catch {
+    return null;
+  }
+}
 
 async function serversScreen(): Promise<{ embeds: EmbedBuilder[]; components: ActionRowBuilder<ButtonBuilder>[]; files: AttachmentBuilder[] } | null> {
   const { data } = await backendJson<OnlineData>('/internal/discord/online');
@@ -100,15 +130,18 @@ async function serversScreen(): Promise<{ embeds: EmbedBuilder[]; components: Ac
   const e = new EmbedBuilder()
     .setTitle('🖥️ Серверы')
     .setDescription(data.servers.length ? `Нажмите на сервер, чтобы открыть его карточку.\nСейчас играют: **${data.players}**, в сети серверов: **${up}** из ${data.servers.length}.` : 'Серверов пока нет.')
-    .setColor(getStyle().accent)
+    .setColor(healthColor(up, data.servers.length))
     .setFooter(footerOf());
-  return { embeds: [e], components: serverButtons(data.servers), files: [] };
+  return { embeds: [stamped(e)], components: serverButtons(data.servers), files: [] };
 }
 
 export async function handleHelp(i: ChatInputCommandInteraction): Promise<void> {
   try {
     if (i.commandName === 'help') {
-      await i.reply({ embeds: [helpEmbed(null)], components: helpButtons(null), flags: EPHEMERAL });
+      // the live numbers need a short call to the panel: acknowledge first, they are in the card when it appears
+      await i.deferReply({ flags: EPHEMERAL });
+      const live = await liveNow();
+      await i.editReply({ embeds: [helpEmbed(null, live)], components: helpButtons(null) });
       return;
     }
     await i.deferReply({ flags: EPHEMERAL });
@@ -128,9 +161,18 @@ export async function handleHelpButton(i: ButtonInteraction): Promise<void> {
     return;
   }
   try {
+    if (i.customId === 'help:close') {
+      try {
+        await i.deleteReply();
+      } catch {
+        await i.editReply({ content: '✖️ Закрыто', embeds: [], components: [] }).catch(() => undefined);
+      }
+      return;
+    }
     if (i.customId.startsWith('help:')) {
       const id = i.customId.slice(5);
-      await i.editReply({ embeds: [helpEmbed(id)], components: helpButtons(id) });
+      const cat = id === 'home' ? null : id;
+      await i.editReply({ embeds: [helpEmbed(cat, cat === null || cat === 'srv' ? await liveNow() : null)], components: helpButtons(cat) });
       return;
     }
     if (i.customId === 'srv:list') {
@@ -146,7 +188,7 @@ export async function handleHelpButton(i: ButtonInteraction): Promise<void> {
       return;
     }
     const file = new AttachmentBuilder(Buffer.from(await r.arrayBuffer()), { name: `server-${id}.png` });
-    await i.editReply({ embeds: [], files: [file], components: [backButton()] });
+    await i.editReply({ embeds: [], files: [file], components: [backButton(id)] });
   } catch (e) {
     log(`button ${i.customId} failed:`, (e as Error).message);
   }
