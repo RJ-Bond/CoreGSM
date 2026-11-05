@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="d66fd4ef4e97"
+COREGSM_BUILD="f0e20fd0af7a"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.40"
+COREGSM_VERSION="1.1.41"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -18983,6 +18983,479 @@ export function weekEvents(i: { peak: number; peakWhen: string; worst: { minutes
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/alerts"
+  cat > "$APP_DIR/core-backend/src/alerts/dmCard.ts" << '__COREGSM_EOF__'
+/**
+ * The look of the private messages of the bot: one embed card per kind (colour by meaning, fields, Discord timestamps,
+ * buttons), the language of the person, the quiet hours and the grouping of alerts about one server. Pure: no database.
+ */
+
+export type Lang = 'ru' | 'en';
+
+export interface CardButtonLink {
+  label: string;
+  url: string;
+}
+export interface CardButton {
+  customId: string;
+  label: string;
+}
+export interface DmCard {
+  embed: {
+    title: string;
+    description?: string;
+    color: number;
+    fields?: { name: string; value: string; inline?: boolean }[];
+    footer: { text: string; icon_url?: string };
+    thumbnail?: { url: string };
+    image?: { url: string };
+    timestamp?: string;
+  };
+  /** link buttons */
+  actions: CardButtonLink[];
+  /** buttons the bot answers itself (`dmx:*`) */
+  buttons: CardButton[];
+  /** plain text for the delivery journal */
+  summary: string;
+}
+
+export const COLORS = {
+  good: 0x22c55e,
+  bad: 0xef4444,
+  info: 0x3b82f6,
+  warn: 0xf59e0b,
+  seen: 0x8b5cf6,
+  news: 0x4f46e5,
+  follow: 0x14b8a6,
+  quiet: 0x64748b,
+} as const;
+
+export interface Ctx {
+  lang: Lang;
+  /** public address of the panel without a trailing slash; empty when unknown (no links then) */
+  base: string;
+  brand: string;
+  logoUrl?: string;
+}
+
+const L = (lang: Lang, ru: string, en: string): string => (lang === 'en' ? en : ru);
+
+/** Discord timestamp: shown in the time zone and language of the reader */
+export const stamp = (ms: number, style: 'R' | 't' | 'f' | 'T' = 'R'): string => `<t:${Math.floor(ms / 1000)}:${style}>`;
+
+const clip = (s: string, n: number): string => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
+
+/** the settings button under every card */
+function settingsLink(c: Ctx): CardButtonLink[] {
+  return c.base ? [{ label: L(c.lang, '⚙️ Настроить уведомления', '⚙️ Notification settings'), url: `${c.base}/profile` }] : [];
+}
+
+function make(c: Ctx, e: Omit<DmCard['embed'], 'footer'>, summary: string, o: { actions?: CardButtonLink[]; buttons?: CardButton[]; settings?: boolean } = {}): DmCard {
+  const actions = [...(o.actions ?? []), ...(o.settings === false ? [] : settingsLink(c))].filter((a) => /^https?:\/\//i.test(a.url)).slice(0, 5);
+  return {
+    embed: { ...e, footer: { text: c.brand || 'CoreGSM', ...(c.logoUrl ? { icon_url: c.logoUrl } : {}) } },
+    actions,
+    buttons: (o.buttons ?? []).slice(0, 5),
+    summary: clip(summary, 120),
+  };
+}
+
+// ---------- server alerts (grouped) ----------
+export type ServerEventKind = 'free_slot' | 'back_online' | 'went_down';
+export interface ServerEvent {
+  kind: ServerEventKind;
+  ts: number;
+  players: number;
+  max: number;
+}
+export interface ServerData {
+  serverId: number;
+  name: string;
+  address: string;
+  events: ServerEvent[];
+  /** picture with the graph of the server (empty when the panel is private) */
+  imageUrl?: string;
+  /** a test card */
+  test?: boolean;
+}
+
+const EVENT_LINE: Record<ServerEventKind, [string, string]> = {
+  free_slot: ['🟢 Освободилось место', '🟢 A slot is free'],
+  back_online: ['✅ Снова в сети', '✅ Back online'],
+  went_down: ['🔴 Недоступен', '🔴 Went down'],
+};
+
+export const eventLine = (lang: Lang, e: ServerEvent): string => {
+  const [ru, en] = EVENT_LINE[e.kind];
+  return `${L(lang, ru, en)} · ${stamp(e.ts)}`;
+};
+
+/** the colour of a group: the last event decides */
+export const serverColor = (events: ServerEvent[]): number => {
+  const last = events[events.length - 1]?.kind;
+  return last === 'went_down' ? COLORS.bad : last === 'back_online' ? COLORS.good : COLORS.info;
+};
+
+export function serverCard(c: Ctx, d: ServerData): DmCard {
+  const events = d.events.slice(-8);
+  const last = events[events.length - 1] as ServerEvent | undefined;
+  const title = d.test
+    ? L(c.lang, '🧪 Проверка уведомлений', '🧪 Notification test')
+    : events.length > 1
+      ? L(c.lang, `📡 ${d.name}: ${events.length} события`, `📡 ${d.name}: ${events.length} events`)
+      : last?.kind === 'went_down'
+        ? L(c.lang, `🔴 ${d.name} недоступен`, `🔴 ${d.name} is down`)
+        : last?.kind === 'free_slot'
+          ? L(c.lang, `🟢 На ${d.name} освободилось место`, `🟢 A slot is free on ${d.name}`)
+          : L(c.lang, `✅ ${d.name} снова в сети`, `✅ ${d.name} is back online`);
+  const fields: NonNullable<DmCard['embed']['fields']> = [{ name: L(c.lang, 'Сервер', 'Server'), value: clip(d.name, 100), inline: true }];
+  if (last && last.max > 0) fields.push({ name: L(c.lang, 'Игроков', 'Players'), value: `${last.players}/${last.max}`, inline: true });
+  if (d.address) fields.push({ name: L(c.lang, 'Адрес', 'Address'), value: `\`${clip(d.address, 80)}\``, inline: true });
+  const description = events.length > 1 ? events.map((e) => eventLine(c.lang, e)).join('\n') : last ? eventLine(c.lang, last) : '';
+  return make(
+    c,
+    { title: clip(title, 250), description, color: serverColor(events), fields, ...(d.imageUrl ? { image: { url: d.imageUrl } } : {}), timestamp: new Date(last?.ts ?? 0).toISOString() },
+    `${title}`,
+    {
+      actions: c.base ? [{ label: L(c.lang, '🔎 Открыть карточку', '🔎 Open the card'), url: `${c.base}/servers/${d.serverId}` }] : [],
+      buttons: [{ customId: `dmx:mute:${d.serverId}`, label: L(c.lang, '🔕 Заглушить это', '🔕 Mute this') }],
+    },
+  );
+}
+
+// ---------- security ----------
+export function newDeviceCard(c: Ctx, d: { device: string; ts: number }): DmCard {
+  const device = clip(d.device.trim() || L(c.lang, 'неизвестное устройство', 'an unknown device'), 100);
+  return make(
+    c,
+    {
+      title: L(c.lang, '🔐 Новый вход в аккаунт', '🔐 New sign-in'),
+      description: L(c.lang, 'Мы заметили вход с устройства, на котором вы раньше не были.', 'We noticed a sign-in from a device that was not used before.'),
+      color: COLORS.warn,
+      fields: [
+        { name: L(c.lang, 'Устройство', 'Device'), value: device, inline: true },
+        { name: L(c.lang, 'Время', 'Time'), value: `${stamp(d.ts, 'f')} (${stamp(d.ts)})`, inline: true },
+        { name: L(c.lang, 'Что делать', 'What to do'), value: L(c.lang, 'Это вы? Нажмите «Это был я». Если нет, смените пароль и завершите другие сеансы.', 'Was it you? Press “It was me”. If not, change the password and end the other sessions.') },
+      ],
+    },
+    L(c.lang, 'Новый вход в аккаунт', 'New sign-in'),
+    {
+      actions: c.base ? [{ label: L(c.lang, '🛡️ Безопасность', '🛡️ Security'), url: `${c.base}/profile` }] : [],
+      buttons: [
+        { customId: 'dmx:ack:me', label: L(c.lang, '✅ Это был я', '✅ It was me') },
+        { customId: 'dmx:ack:notme', label: L(c.lang, '🚨 Это не я', '🚨 It was not me') },
+      ],
+      settings: false,
+    },
+  );
+}
+
+export function resetCard(c: Ctx, d: { username: string; url: string; expiresAt: number }): DmCard {
+  return make(
+    c,
+    {
+      title: L(c.lang, '🔑 Сброс пароля', '🔑 Password reset'),
+      description: L(c.lang, 'Запрошен сброс пароля. Нажмите кнопку ниже, чтобы задать новый.', 'A password reset was requested. Press the button below to set a new one.'),
+      color: COLORS.warn,
+      fields: [
+        { name: L(c.lang, 'Аккаунт', 'Account'), value: clip(d.username, 60), inline: true },
+        { name: L(c.lang, 'Действует', 'Valid'), value: `${stamp(d.expiresAt)} · ${L(c.lang, 'один раз', 'once')}`, inline: true },
+        { name: L(c.lang, 'Это были не вы?', 'Was it not you?'), value: L(c.lang, 'Просто проигнорируйте сообщение: пароль останется прежним.', 'Just ignore this message: the password stays as it is.') },
+      ],
+    },
+    L(c.lang, 'Сброс пароля', 'Password reset'),
+    { actions: [{ label: L(c.lang, '🔑 Задать новый пароль', '🔑 Set a new password'), url: d.url }], settings: false },
+  );
+}
+
+export function changedCard(c: Ctx, d: { username: string; ts: number }): DmCard {
+  return make(
+    c,
+    {
+      title: L(c.lang, '✅ Пароль изменён', '✅ Password changed'),
+      description: L(c.lang, 'Все сеансы завершены. Если это были не вы, срочно сообщите администратору.', 'All sessions were ended. If this was not you, contact an administrator.'),
+      color: COLORS.good,
+      fields: [
+        { name: L(c.lang, 'Аккаунт', 'Account'), value: clip(d.username, 60), inline: true },
+        { name: L(c.lang, 'Время', 'Time'), value: stamp(d.ts, 'f'), inline: true },
+      ],
+    },
+    L(c.lang, 'Пароль изменён', 'Password changed'),
+    { settings: false },
+  );
+}
+
+// ---------- the rest ----------
+export function seenCard(c: Ctx, d: { server: string; nick: string; ts: number; rank?: string }): DmCard {
+  const fields: NonNullable<DmCard['embed']['fields']> = [
+    { name: L(c.lang, 'Сервер', 'Server'), value: clip(d.server, 100), inline: true },
+    { name: L(c.lang, 'Ник', 'Nick'), value: clip(d.nick, 60), inline: true },
+  ];
+  if (d.rank) fields.push({ name: L(c.lang, 'Ранг', 'Rank'), value: clip(d.rank, 60), inline: true });
+  return make(
+    c,
+    {
+      title: L(c.lang, '👣 Мы увидели вас на сервере', '👣 We saw you on the server'),
+      description: L(c.lang, 'Статистика, ранг и достижения теперь считаются.', 'Statistics, rank and achievements are now counted.'),
+      color: COLORS.seen,
+      fields,
+      timestamp: new Date(d.ts).toISOString(),
+    },
+    L(c.lang, `Мы увидели вас на сервере «${d.server}»`, `We saw you on “${d.server}”`),
+    { actions: c.base ? [{ label: L(c.lang, '👤 Открыть профиль', '👤 Open the profile'), url: `${c.base}/profile` }] : [] },
+  );
+}
+
+export function newsCard(c: Ctx, d: { title: string; category: string; text?: string; imageUrl?: string; url: string; ts: number }): DmCard {
+  const text = (d.text ?? '').replace(/\s+/g, ' ').trim();
+  return make(
+    c,
+    {
+      title: clip(`📰 ${d.title}`, 250),
+      ...(text ? { description: clip(text, 280) } : {}),
+      color: COLORS.news,
+      fields: d.category ? [{ name: L(c.lang, 'Рубрика', 'Category'), value: clip(d.category, 60), inline: true }] : [],
+      ...(d.imageUrl ? { image: { url: d.imageUrl } } : {}),
+      timestamp: new Date(d.ts).toISOString(),
+    },
+    clip(d.title, 100),
+    { actions: d.url ? [{ label: L(c.lang, '📖 Читать на сайте', '📖 Read on the site'), url: d.url }] : [] },
+  );
+}
+
+export function followCard(c: Ctx, d: { nick: string; server: string; address: string; serverId: number; ts: number }): DmCard {
+  const fields: NonNullable<DmCard['embed']['fields']> = [
+    { name: L(c.lang, 'Игрок', 'Player'), value: clip(d.nick, 60), inline: true },
+    { name: L(c.lang, 'Сервер', 'Server'), value: clip(d.server, 100), inline: true },
+  ];
+  if (d.address) fields.push({ name: L(c.lang, 'Адрес', 'Address'), value: `\`${clip(d.address, 80)}\``, inline: true });
+  return make(
+    c,
+    {
+      title: L(c.lang, `🟢 ${d.nick} в сети`, `🟢 ${d.nick} is online`),
+      description: L(c.lang, `Игрок зашёл на сервер ${stamp(d.ts)}.`, `The player joined the server ${stamp(d.ts)}.`),
+      color: COLORS.follow,
+      fields,
+      timestamp: new Date(d.ts).toISOString(),
+    },
+    L(c.lang, `${d.nick} в сети`, `${d.nick} is online`),
+    {
+      actions: c.base ? [{ label: L(c.lang, '🔎 Открыть карточку', '🔎 Open the card'), url: `${c.base}/servers/${d.serverId}` }] : [],
+      buttons: [{ customId: `dmx:mute:${d.serverId}`, label: L(c.lang, '🔕 Заглушить сервер', '🔕 Mute the server') }],
+    },
+  );
+}
+
+/** the morning card: what arrived during the quiet hours */
+export function digestCard(c: Ctx, d: { lines: string[]; since: number }): DmCard {
+  const shown = d.lines.slice(-15);
+  const more = d.lines.length - shown.length;
+  return make(
+    c,
+    {
+      title: L(c.lang, '🌅 Пока вы отдыхали', '🌅 While you were away'),
+      description: clip(shown.join('\n') + (more > 0 ? `\n${L(c.lang, `…и ещё ${more}`, `…and ${more} more`)}` : ''), 3800),
+      color: COLORS.quiet,
+      fields: [{ name: L(c.lang, 'Событий', 'Events'), value: String(d.lines.length), inline: true }, { name: L(c.lang, 'С', 'Since'), value: stamp(d.since, 'f'), inline: true }],
+    },
+    L(c.lang, `Пока вы отдыхали: ${d.lines.length}`, `While you were away: ${d.lines.length}`),
+  );
+}
+
+/** the one line of a card in the morning digest */
+export function digestLine(title: string, ts: number): string {
+  return `• ${clip(title.replace(/\s+/g, ' ').trim(), 150)} · ${stamp(ts)}`;
+}
+
+// ---------- quiet hours ----------
+export interface Quiet {
+  /** hour of the day 0-23 when the quiet time starts; -1 = off */
+  from: number;
+  /** hour of the day 0-23 when it ends */
+  to: number;
+}
+export const QUIET_OFF: Quiet = { from: -1, to: -1 };
+
+export const normQuiet = (v: unknown): Quiet => {
+  const o = (v ?? {}) as Partial<Quiet>;
+  const ok = (n: unknown): n is number => typeof n === 'number' && Number.isInteger(n) && n >= 0 && n <= 23;
+  return ok(o.from) && ok(o.to) && o.from !== o.to ? { from: o.from, to: o.to } : QUIET_OFF;
+};
+
+/** the hour (0-23) in the time zone; the zone of the server when it is empty or unknown */
+export function localHour(ms: number, tz: string): number {
+  try {
+    const h = new Intl.DateTimeFormat('en-GB', { hour: 'numeric', hourCycle: 'h23', ...(tz ? { timeZone: tz } : {}) }).formatToParts(new Date(ms)).find((p) => p.type === 'hour')?.value;
+    return h === undefined ? new Date(ms).getUTCHours() : Number(h) % 24;
+  } catch {
+    return new Date(ms).getUTCHours();
+  }
+}
+
+export function inQuiet(hour: number, q: Quiet): boolean {
+  if (q.from < 0 || q.to < 0 || q.from === q.to) return false;
+  return q.from < q.to ? hour >= q.from && hour < q.to : hour >= q.from || hour < q.to;
+}
+
+/** when the quiet time ends (ms, rounded to the quarter of an hour); `now` itself when it is not quiet */
+export function quietEnd(now: number, q: Quiet, tz: string): number {
+  if (!inQuiet(localHour(now, tz), q)) return now;
+  const step = 15 * 60_000;
+  let t = now - (now % step) + step;
+  for (let i = 0; i < 96 + 4 && inQuiet(localHour(t, tz), q); i++) t += step;
+  return t;
+}
+
+/** security notices and password letters are never held back */
+export const BYPASS_QUIET: ReadonlySet<string> = new Set(['newdevice', 'reset', 'changed', 'test']);
+
+/** how long a new alert about a server waits for its neighbours before it is sent */
+export const GROUP_WAIT_MS = 20_000;
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/alerts"
+  cat > "$APP_DIR/core-backend/src/alerts/dmQueue.ts" << '__COREGSM_EOF__'
+/**
+ * Sends the private cards of the bot: the person's language, the quiet hours (a morning digest instead of night alerts),
+ * the muted servers and the grouping of several alerts about one server into one card.
+ */
+import type { Express, Request, RequestHandler } from 'express';
+import { z } from 'zod';
+import { db } from '../db.js';
+import { brand, logoFile, publicBase } from '../admin/site.js';
+import { chartSign } from '../images/serverChart.js';
+import { prefsOf } from '../profile/profileCore.js';
+import { enqueueDelivery } from './deliveries.js';
+import {
+  BYPASS_QUIET, GROUP_WAIT_MS, QUIET_OFF, type Ctx, type DmCard, type Quiet, type ServerData, type ServerEvent,
+  digestCard, digestLine, inQuiet, localHour, normQuiet, quietEnd, serverCard,
+} from './dmCard.js';
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS dm_quiet (
+  user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  from_hour INTEGER NOT NULL DEFAULT -1,
+  to_hour INTEGER NOT NULL DEFAULT -1
+);
+CREATE TABLE IF NOT EXISTS dm_mutes (
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  server_id INTEGER NOT NULL,
+  until INTEGER NOT NULL,
+  PRIMARY KEY (user_id, server_id)
+);
+`);
+
+export const quietOf = (userId: number): Quiet => {
+  const r = db.prepare('SELECT from_hour AS "from", to_hour AS "to" FROM dm_quiet WHERE user_id = ?').get(userId) as Quiet | undefined;
+  return r ? normQuiet(r) : QUIET_OFF;
+};
+
+export const isMuted = (userId: number, serverId: number, now = Date.now()): boolean =>
+  !!db.prepare('SELECT 1 FROM dm_mutes WHERE user_id = ? AND server_id = ? AND until > ?').get(userId, serverId, now);
+
+export function ctxOf(userId: number): Ctx {
+  const b = publicBase() ?? '';
+  return { lang: prefsOf(userId).lang, base: b, brand: brand().name || 'CoreGSM', ...(b && logoFile() ? { logoUrl: `${b}/api/branding/logo?v=${brand().logoV}` } : {}) };
+}
+
+interface Row {
+  id: number;
+  payload: string;
+}
+
+/** a still waiting delivery of the same group for this person */
+function waiting(discordId: string, group: string): Row | undefined {
+  return db
+    .prepare("SELECT id, payload FROM deliveries WHERE kind = 'dm' AND target = ? AND status = 'pending' AND json_extract(payload, '$.group') = ? ORDER BY id DESC LIMIT 1")
+    .get(discordId, group) as Row | undefined;
+}
+
+function put(discordId: string, card: DmCard, extra: Record<string, unknown>, delayMs: number): void {
+  enqueueDelivery({ kind: 'dm', refId: null, target: discordId, payload: { embed: card.embed, actions: card.actions, buttons: card.buttons, summary: card.summary, ...extra }, delayMs });
+}
+
+/** holds the card until the quiet time is over; everything held for one person goes into one morning card */
+function toDigest(userId: number, discordId: string, c: Ctx, card: DmCard, q: Quiet, tz: string, now: number): void {
+  const group = `dig:${userId}`;
+  const line = digestLine(card.summary, now);
+  const w = waiting(discordId, group);
+  if (w) {
+    const p = JSON.parse(w.payload) as { lines: string[]; since: number };
+    const lines = [...p.lines, line].slice(-60);
+    const dc = digestCard(c, { lines, since: p.since });
+    db.prepare('UPDATE deliveries SET payload = ? WHERE id = ?').run(JSON.stringify({ embed: dc.embed, actions: dc.actions, buttons: dc.buttons, summary: dc.summary, group, lines, since: p.since }), w.id);
+    return;
+  }
+  const dc = digestCard(c, { lines: [line], since: now });
+  put(discordId, dc, { group, lines: [line], since: now }, Math.max(0, quietEnd(now, q, tz) - now));
+}
+
+/** Queues a ready card for a person. `kind` decides whether the quiet hours apply. Returns false when it was dropped. */
+export function queueCard(o: { userId: number; discordId: string; kind: string; card: (c: Ctx) => DmCard; serverId?: number }, now = Date.now()): boolean {
+  if (o.serverId !== undefined && isMuted(o.userId, o.serverId, now)) return false;
+  const c = ctxOf(o.userId);
+  const card = o.card(c);
+  const q = quietOf(o.userId);
+  const tz = prefsOf(o.userId).timezone;
+  if (!BYPASS_QUIET.has(o.kind) && inQuiet(localHour(now, tz), q)) {
+    toDigest(o.userId, o.discordId, c, card, q, tz, now);
+    return true;
+  }
+  put(o.discordId, card, {}, 0);
+  return true;
+}
+
+/** An alert about a server: alerts about the same server that arrive within a few seconds become one card. */
+export function queueServerAlert(o: { userId: number; discordId: string; data: Omit<ServerData, 'events' | 'imageUrl'>; event: ServerEvent }, now = Date.now()): boolean {
+  const { userId, discordId, data, event } = o;
+  if (isMuted(userId, data.serverId, now)) return false;
+  const c = ctxOf(userId);
+  const imageUrl = c.base ? `${c.base}/api/server-chart/${data.serverId}-${chartSign(data.serverId)}.png?v=${Math.floor(now / 600_000)}` : undefined;
+  const q = quietOf(userId);
+  const tz = prefsOf(userId).timezone;
+  if (inQuiet(localHour(now, tz), q)) {
+    toDigest(userId, discordId, c, serverCard(c, { ...data, events: [event] }), q, tz, now);
+    return true;
+  }
+  const group = `srv:${data.serverId}`;
+  const w = waiting(discordId, group);
+  if (w) {
+    const p = JSON.parse(w.payload) as { events: ServerEvent[] };
+    const events = [...p.events, event].slice(-8);
+    const card = serverCard(c, { ...data, events, ...(imageUrl ? { imageUrl } : {}) });
+    db.prepare('UPDATE deliveries SET payload = ? WHERE id = ?').run(JSON.stringify({ embed: card.embed, actions: card.actions, buttons: card.buttons, summary: card.summary, group, events }), w.id);
+    return true;
+  }
+  const card = serverCard(c, { ...data, events: [event], ...(imageUrl ? { imageUrl } : {}) });
+  put(discordId, card, { group, events: [event] }, GROUP_WAIT_MS);
+  return true;
+}
+
+// ---------- routes ----------
+export function registerDmQueue(deps: { app: Express; auth: RequestHandler; internal: RequestHandler; userId: (req: Request) => number }): void {
+  const { app, auth, internal, userId } = deps;
+
+  app.get('/api/me/dm-quiet', auth, (req, res) => res.json(quietOf(userId(req))));
+  app.put('/api/me/dm-quiet', auth, (req, res) => {
+    const b = z.object({ from: z.number().int().min(-1).max(23), to: z.number().int().min(-1).max(23) }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'Проверьте часы' });
+    const q = normQuiet(b.data);
+    db.prepare('INSERT INTO dm_quiet (user_id, from_hour, to_hour) VALUES (?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET from_hour = excluded.from_hour, to_hour = excluded.to_hour').run(userId(req), q.from, q.to);
+    res.json(q);
+  });
+
+  // «🔕 Заглушить это» under a card: the bot passes the Discord id of the person
+  app.post('/internal/dm/mute', internal, (req, res) => {
+    const b = z.object({ discordId: z.string().regex(/^\d{15,25}$/), serverId: z.number().int().min(1), hours: z.number().int().min(1).max(24 * 30).default(24) }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'bad body' });
+    const u = db.prepare('SELECT id FROM users WHERE discord_id = ?').get(b.data.discordId) as { id: number } | undefined;
+    if (!u) return res.status(404).json({ error: 'not linked' });
+    const until = Date.now() + b.data.hours * 3600_000;
+    db.prepare('INSERT INTO dm_mutes (user_id, server_id, until) VALUES (?, ?, ?) ON CONFLICT(user_id, server_id) DO UPDATE SET until = excluded.until').run(u.id, b.data.serverId, until);
+    db.prepare('DELETE FROM dm_mutes WHERE until < ?').run(Date.now());
+    res.json({ ok: true, until, lang: prefsOf(u.id).lang });
+  });
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/alerts"
   cat > "$APP_DIR/core-backend/src/alerts/downVerdict.ts" << '__COREGSM_EOF__'
 /**
  * The rule «the server is down»: at least N of the last M checks did not get an answer.
@@ -20919,7 +21392,8 @@ import type { Express, RequestHandler } from 'express';
 import { z } from 'zod';
 import { db, EFFECTIVE_NAME } from '../db.js';
 import { addColumn } from '../schema.js';
-import { enqueueDelivery } from '../alerts/deliveries.js';
+import { queueCard, queueServerAlert } from '../alerts/dmQueue.js';
+import { serverCard } from '../alerts/dmCard.js';
 
 /** device notifications (push.ts plugs itself in, so this module stays free of the web layer) */
 type PushHook = (userId: number, m: { title: string; body: string; url?: string; tag?: string }) => void;
@@ -21034,7 +21508,7 @@ export function notifySubscribers(serverId: number, kind: SubKind, obs: Observat
     if (!mayNotify(s.last_notified_at, now)) continue;
     insert.run(s.user_id, now, kind, serverId, text);
     touch.run(now, s.user_id, serverId, kind);
-    if (s.discord_id && canDm()) enqueueDelivery({ kind: 'dm', refId: null, target: s.discord_id, payload: { content: text, summary: text.slice(0, 120) } });
+    if (s.discord_id && canDm()) queueServerAlert({ userId: s.user_id, discordId: s.discord_id, data: { serverId, name: info.n, address }, event: { kind, ts: now, players: obs.players, max: obs.maxPlayers } }, now);
     // and on the devices where the player turned notifications on
     pushLater(s.user_id, { title: info.n, body: text, url: `/servers/${serverId}`, tag: `srv-${serverId}-${kind}` });
     n++;
@@ -21105,7 +21579,7 @@ export function registerSubscriptions(deps: { app: Express; auth: RequestHandler
     db.prepare('INSERT INTO user_notifications (user_id, ts, kind, server_id, text) VALUES (?, ?, ?, ?, ?)').run(uid, now, 'test', sid, text);
     const u = db.prepare('SELECT discord_id FROM users WHERE id = ?').get(uid) as { discord_id: string | null } | undefined;
     const dm = !!u?.discord_id && canDm();
-    if (dm) enqueueDelivery({ kind: 'dm', refId: null, target: u!.discord_id as string, payload: { content: text, summary: text.slice(0, 120) } });
+    if (dm) queueCard({ userId: uid, discordId: u!.discord_id as string, kind: 'test', card: (c) => serverCard(c, { serverId: sid, name: info.n, address: info.display_address || `${info.host}:${info.port}`, events: [{ kind: 'back_online', ts: now, players: 0, max: 0 }], test: true }) }, now);
     pushLater(uid, { title: info.n, body: text, url: `/servers/${sid}`, tag: `srv-${sid}-test` });
     res.json({ inbox: true, dm, discordLinked: !!u?.discord_id });
   });
@@ -24815,6 +25289,7 @@ import { registerAnnouncements } from './alerts/announcements.js';
 import { registerAttention } from './alerts/attention.js';
 import { registerModeration } from './community/moderation.js';
 import { registerWelcome } from './community/welcome.js';
+import { registerDmQueue } from './alerts/dmQueue.js';
 import { registerRules } from './monitoring/rules.js';
 import { registerPolls } from './community/polls.js';
 import { registerDiscordGallery } from './discord/discordGallery.js';
@@ -24997,6 +25472,7 @@ registerOverview({ app, viewer });
 registerAttention({ app, admin });
 registerAnnouncements({ app, admin });
 registerWelcome({ app, admin, internal });
+registerDmQueue({ app, auth, internal, userId: (req) => (req as AuthedRequest).user!.id });
 registerModeration({ app, admin, internal });
 registerRules({ app, auth, admin });
 registerPolls({ app, auth, admin, internal });
@@ -29260,7 +29736,10 @@ ${r.sent_at ? `<meta property="article:published_time" content="${new Date(r.sen
       if (prev && !prev.sent_at && prev.repeat === 'none') {
         try {
           const p = JSON.parse(prev.payload) as NewsPayload;
-          notifyNewsPublished({ id, title: titleOf(p), category: p.category ?? 'announcement', authorId: prev.created_by ?? null }, deps.publicBase() ?? '');
+          const nb = deps.publicBase() ?? '';
+          const img = p.embed?.image?.upload ? `${nb}/api/news/images/${p.embed.image.upload}` : p.embed?.image?.url && /^https:\/\//i.test(p.embed.image.url) ? p.embed.image.url : '';
+          const txt = (p.embed?.description || p.content || '').replace(/[*_~`>#|]/g, '').replace(/\[([^\]]+)\]\([^)]*\)/g, '$1').replace(/\s+/g, ' ').trim().slice(0, 300);
+          notifyNewsPublished({ id, title: titleOf(p), category: p.category ?? 'announcement', authorId: prev.created_by ?? null, ...(txt ? { text: txt } : {}), ...(img && nb ? { imageUrl: img } : {}) }, nb);
           dispatchEvent({ event: 'news_published', title: `Новость: ${titleOf(p)}`, text: '', data: { newsId: id, title: titleOf(p), category: p.category ?? 'announcement', url: deps.publicBase() ? `${deps.publicBase()}/news/${id}` : null } });
         } catch { /* the post itself is done */ }
       }
@@ -29953,7 +30432,8 @@ import express from 'express';
 import { z } from 'zod';
 import { allow, auth, type AuthedRequest } from '../security/auth.js';
 import { db } from '../db.js';
-import { enqueueDelivery } from '../alerts/deliveries.js';
+import { queueCard } from '../alerts/dmQueue.js';
+import { newsCard } from '../alerts/dmCard.js';
 import { param } from '../http.js';
 import { log } from '../logger.js';
 import { viewsByDay, viewsOf } from './newsViews.js';
@@ -29972,7 +30452,7 @@ CREATE INDEX IF NOT EXISTS idx_news_subs_cat ON news_subscriptions(category);
 `);
 
 /** Tells the subscribers of the rubric about a published item (never throws into the news flow). Returns how many were told. */
-export function notifyNewsPublished(item: { id: number; title: string; category: string; authorId: number | null }, base = ''): number {
+export function notifyNewsPublished(item: { id: number; title: string; category: string; authorId: number | null; text?: string; imageUrl?: string }, base = ''): number {
   try {
     const category = normRubric(item.category);
     const subs = db
@@ -29986,8 +30466,7 @@ export function notifyNewsPublished(item: { id: number; title: string; category:
     for (const s of subs) {
       insert.run(s.user_id, now, 'news', text, url);
       if (s.discord_id && dmAvailable()) {
-        const content = base ? `${text}\n${base}${url}` : text;
-        enqueueDelivery({ kind: 'dm', refId: null, target: s.discord_id, payload: { content, summary: text.slice(0, 120) } });
+        queueCard({ userId: s.user_id, discordId: s.discord_id, kind: 'news', card: (c) => newsCard(c, { title: item.title, category: item.category, ...(item.text ? { text: item.text } : {}), ...(item.imageUrl ? { imageUrl: item.imageUrl } : {}), url: base ? `${base}${url}` : '', ts: now }) }, now);
       }
       pushToUser(s.user_id, { title: 'Новости', body: text, url, tag: `news-${item.id}` });
     }
@@ -30310,7 +30789,8 @@ __COREGSM_EOF__
  */
 import type { Express, Request, RequestHandler } from 'express';
 import { db, EFFECTIVE_NAME } from '../db.js';
-import { enqueueDelivery } from '../alerts/deliveries.js';
+import { queueCard } from '../alerts/dmQueue.js';
+import { seenCard } from '../alerts/dmCard.js';
 import { dmAvailable } from '../community/subscriptions.js';
 import { distinctNames, similarNames, suggestNames } from './nickMatch.js';
 import { log } from '../logger.js';
@@ -30416,7 +30896,8 @@ function markSeen(userId: number, serverId: number, now: number): void {
   db.prepare("INSERT INTO account_events (user_id, ts, kind, ip, ua, detail) VALUES (?, ?, 'nick_seen', '', '', ?)").run(userId, now, (srv?.n ?? '').slice(0, 200));
   const u = db.prepare('SELECT discord_id FROM users WHERE id = ?').get(userId) as { discord_id: string | null } | undefined;
   if (u?.discord_id && dmAvailable()) {
-    enqueueDelivery({ kind: 'dm', refId: null, target: u.discord_id, payload: { content: `👣 ${text}`, summary: text.slice(0, 120) } });
+    const nick = (db.prepare('SELECT game_nick FROM user_player WHERE user_id = ?').get(userId) as { game_nick: string } | undefined)?.game_nick ?? '';
+    queueCard({ userId, discordId: u.discord_id, kind: 'seen', card: (c) => seenCard(c, { server: srv?.n ?? (c.lang === 'en' ? 'server' : 'сервер'), nick, ts: now }) }, now);
   }
 }
 
@@ -30481,7 +30962,8 @@ __COREGSM_EOF__
  */
 import type { Express, Request, RequestHandler } from 'express';
 import { db, EFFECTIVE_NAME } from '../db.js';
-import { enqueueDelivery } from '../alerts/deliveries.js';
+import { queueCard } from '../alerts/dmQueue.js';
+import { followCard } from '../alerts/dmCard.js';
 import { dmAvailable, pushToUser } from '../community/subscriptions.js';
 import { log } from '../logger.js';
 
@@ -30539,7 +31021,7 @@ export function notifyFollowers(serverId: number, names: string[], now = Date.no
       const text = followText(shown.get(f.nick_key) ?? f.nick_key, info.n, address);
       insert.run(f.user_id, now, 'player_online', serverId, text);
       touch.run(now, f.user_id, f.nick_key);
-      if (f.discord_id && dmAvailable()) enqueueDelivery({ kind: 'dm', refId: null, target: f.discord_id, payload: { content: text, summary: text.slice(0, 120) } });
+      if (f.discord_id && dmAvailable()) queueCard({ userId: f.user_id, discordId: f.discord_id, kind: 'follow', serverId, card: (c) => followCard(c, { nick: shown.get(f.nick_key) ?? f.nick_key, server: info.n, address, serverId, ts: now }) }, now);
       pushToUser(f.user_id, { title: info.n, body: text, url: `/servers/${serverId}`, tag: `follow-${f.nick_key}` });
       n++;
     }
@@ -35546,7 +36028,8 @@ import { db, setSetting } from '../db.js';
 import { guardGet, guardSet } from './loginGuard.js';
 import { addColumn } from '../schema.js';
 import { wrap } from '../http.js';
-import { enqueueDelivery } from '../alerts/deliveries.js';
+import { queueCard } from '../alerts/dmQueue.js';
+import { changedCard, newDeviceCard, resetCard } from '../alerts/dmCard.js';
 import { layout, mailReady, sendMail, smtpConfig } from '../alerts/mail.js';
 import { logAccount, prefsOf, uaLabel } from '../profile/profile.js';
 import { dmAvailable, pushToUser } from '../community/subscriptions.js';
@@ -35757,7 +36240,7 @@ export function noteLogin(req: Request, userId: number, brandName: string): void
       db.prepare('INSERT INTO user_notifications (user_id, ts, kind, server_id, text, url) VALUES (?, ?, ?, NULL, ?, ?)').run(userId, now, 'security', notice.text, '/profile');
       pushToUser(userId, { title: notice.title, body: notice.text, url: '/profile', tag: `new-device-${userId}` });
       const d = db.prepare('SELECT discord_id FROM users WHERE id = ?').get(userId) as { discord_id: string | null } | undefined;
-      if (d?.discord_id && dmAvailable()) enqueueDelivery({ kind: 'dm', refId: null, target: d.discord_id, payload: { content: notice.text, summary: notice.text.slice(0, 120) } });
+      if (d?.discord_id && dmAvailable()) queueCard({ userId, discordId: d.discord_id, kind: 'newdevice', card: (c) => newDeviceCard(c, { device: label, ts: now }) }, now);
     } catch (e) {
       log.error('new-device notice failed:', (e as Error).message);
     }
@@ -36004,10 +36487,7 @@ export function registerSecurity(d: SecurityDeps): void {
           const en = prefsOf(u.id).lang === 'en';
           const resetUrl = `${base}/#/reset/${token}`;
           if (viaDiscord) {
-            const text = en
-              ? `🔐 A password reset was requested for the account "${u.username}".\nSet a new password (the link works for 30 minutes and only once):\n${resetUrl}\n\nIf this was not you, ignore this message: the password stays as it is.`
-              : `🔐 Запрошен сброс пароля для аккаунта «${u.username}».\nЗадайте новый пароль (ссылка действует 30 минут и только один раз):\n${resetUrl}\n\nЕсли это были не вы, просто проигнорируйте сообщение: пароль останется прежним.`;
-            enqueueDelivery({ kind: 'dm', refId: null, target: u.discord_id!, payload: { content: text, summary: en ? 'Password reset' : 'Сброс пароля' } });
+            queueCard({ userId: u.id, discordId: u.discord_id!, kind: 'reset', card: (c) => resetCard(c, { username: u.username, url: resetUrl, expiresAt: now + 30 * 60_000 }) }, now);
           }
           if (viaMail) {
             const body = layout(
@@ -36050,11 +36530,7 @@ export function registerSecurity(d: SecurityDeps): void {
     // a confirmation in Discord too: if it was not the owner, they see it at once
     const dm = db.prepare('SELECT username, discord_id FROM users WHERE id = ?').get(row.user_id) as { username: string; discord_id: string | null } | undefined;
     if (dm?.discord_id) {
-      const enDm = prefsOf(row.user_id).lang === 'en';
-      const text = enDm
-        ? `✅ The password of the account "${dm.username}" was changed. All sessions were ended. If this was not you, contact an administrator.`
-        : `✅ Пароль аккаунта «${dm.username}» изменён, все сеансы завершены. Если это были не вы, срочно сообщите администратору.`;
-      enqueueDelivery({ kind: 'dm', refId: null, target: dm.discord_id, payload: { content: text, summary: enDm ? 'Password changed' : 'Пароль изменён' } });
+      queueCard({ userId: row.user_id, discordId: dm.discord_id, kind: 'changed', card: (c) => changedCard(c, { username: dm.username, ts: Date.now() }) });
     }
     const u = emailOf(row.user_id);
     if (u?.email && u.email_verified && mailReady()) {
@@ -38059,6 +38535,7 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-bot/src"
   cat > "$APP_DIR/core-bot/src/bot.ts" << '__COREGSM_EOF__'
 /** The bot's main loop: connection to Discord from the panel's settings, status messages, news and deliveries. */
+import { DMX_ID, dmxStyle } from './dmxLogic.js';
 import { footerOf, getStyle, setStyle } from './style.js';
 import fs from 'node:fs';
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, Client, EmbedBuilder, GatewayIntentBits, type GuildMember } from 'discord.js';
@@ -38453,6 +38930,16 @@ function actionRows(buttons: { customId: string; label: string }[] | undefined) 
   }
   return rows;
 }
+/** buttons under the private cards (`dmx:*`): the bot answers them itself */
+function dmRows(buttons: { customId: string; label: string }[] | undefined) {
+  const list = (buttons ?? []).filter((b) => DMX_ID.test(b.customId) && b.label).slice(0, 5);
+  if (!list.length) return [];
+  return [
+    new ActionRowBuilder<ButtonBuilder>().addComponents(
+      list.map((b) => new ButtonBuilder().setStyle(dmxStyle(b.customId) as ButtonStyle).setCustomId(b.customId).setLabel(b.label.slice(0, 80))),
+    ),
+  ];
+}
 /** one row of link buttons (Discord allows 5 per row; https links only) */
 function linkRows(actions: { label: string; url: string }[] | undefined) {
   const links = (actions ?? []).filter((a) => a.label && /^https?:\/\//i.test(a.url)).slice(0, 5);
@@ -38476,7 +38963,7 @@ async function processDeliveries(): Promise<void> {
         await user.send({
           content: (it.payload.content ?? '').slice(0, 2000) || undefined,
           embeds: it.payload.embed ? [new EmbedBuilder(it.payload.embed)] : [],
-          components: linkRows(it.payload.actions),
+          components: [...dmRows(it.payload.buttons), ...linkRows(it.payload.actions)],
           allowedMentions: { parse: [] },
         });
       } else {
@@ -39208,6 +39695,7 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-bot/src"
   cat > "$APP_DIR/core-bot/src/commands.ts" << '__COREGSM_EOF__'
 /** Slash commands: registration of players from Discord (/register, /nick, /profile) and the nick autocomplete. */
+import { handleDmx } from './dmx.js';
 import type { AutocompleteInteraction, ButtonInteraction, Client, Interaction } from 'discord.js';
 import { backend, backendJson } from './backend.js';
 import { humanDiscordError } from './errors.js';
@@ -39314,6 +39802,7 @@ export async function handleInteraction(i: Interaction): Promise<void> {
   if (i.isButton() && i.customId.startsWith('clear:')) return handleClearButton(i);
   if (i.isButton() && i.customId.startsWith('mod:')) return handlePunishButton(i);
   if (i.isButton() && i.customId.startsWith('appeal:')) return handleAppealButton(i);
+  if (i.isButton() && i.customId.startsWith('dmx:')) return handleDmx(i);
   if (i.isModalSubmit()) return i.customId.startsWith('appeal:') ? handleAppealModal(i) : handleReasonModal(i);
   if ((i.isUserContextMenuCommand() || i.isMessageContextMenuCommand()) && CONTEXT_NAMES.has(i.commandName)) return handleContext(i);
   if (i.isButton()) return /^(help|srv):/.test(i.customId) ? handleHelpButton(i) : handlePollButton(i);
@@ -39425,6 +39914,86 @@ export async function handleInteraction(i: Interaction): Promise<void> {
     await friendly();
   }
 }
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-bot/src"
+  cat > "$APP_DIR/core-bot/src/dmx.ts" << '__COREGSM_EOF__'
+/** Buttons under the private cards: «Это был я» / «Это не я» and «Заглушить это». */
+import { ActionRowBuilder, ButtonBuilder, EmbedBuilder, type APIEmbed, type ButtonInteraction } from 'discord.js';
+import { backendJson } from './backend.js';
+import { DMX_ID, MUTE_HOURS, dmxText, parseDmx } from './dmxLogic.js';
+import { log } from './log.js';
+
+/** the link buttons of the card stay, the buttons of the bot go */
+function linksOnly(i: ButtonInteraction) {
+  const rows: ActionRowBuilder<ButtonBuilder>[] = [];
+  for (const row of i.message.components) {
+    const btns = ('components' in row ? row.components : []).filter((c) => c.type === 2 && 'url' in c && c.url).map((c) => ButtonBuilder.from(c as never));
+    if (btns.length) rows.push(new ActionRowBuilder<ButtonBuilder>().addComponents(btns));
+  }
+  return rows;
+}
+
+const note = (e: APIEmbed | undefined, text: string, color: number, title?: string): EmbedBuilder => {
+  const b = EmbedBuilder.from(e ?? {}).setColor(color);
+  const fields = [...(e?.fields ?? [])].filter((f) => f.name !== '\u200b').slice(0, 24);
+  b.setFields(...fields, { name: title ?? '\u200b', value: text.slice(0, 1000) });
+  return b;
+};
+
+export async function handleDmx(i: ButtonInteraction): Promise<void> {
+  const a = DMX_ID.test(i.customId) ? parseDmx(i.customId) : null;
+  if (!a) return;
+  const ru = !i.locale.startsWith('en');
+  const t = dmxText(ru);
+  const embed = i.message.embeds[0]?.toJSON();
+  try {
+    if (a.kind === 'ack') {
+      const text = a.me ? t.confirmed : t.notMeBody;
+      await i.update({ embeds: [note(embed, text, a.me ? 0x22c55e : 0xef4444, a.me ? undefined : t.notMeTitle)], components: linksOnly(i) });
+      return;
+    }
+    const r = await backendJson<{ ok: boolean; lang?: string }>('/internal/dm/mute', { method: 'POST', body: JSON.stringify({ discordId: i.user.id, serverId: a.serverId, hours: MUTE_HOURS }) });
+    if (!r.ok) {
+      await i.reply({ content: t.failed }).catch(() => undefined);
+      return;
+    }
+    const tt = dmxText(r.data?.lang !== 'en');
+    // the other buttons stay: the person may still open the card
+    const keep = linksOnly(i);
+    await i.update({ embeds: [note(embed, tt.muted(MUTE_HOURS), 0x64748b)], components: keep });
+  } catch (e) {
+    log('dmx failed:', (e as Error).message);
+  }
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-bot/src"
+  cat > "$APP_DIR/core-bot/src/dmxLogic.ts" << '__COREGSM_EOF__'
+/** Buttons under the private cards of the bot (`dmx:*`): ids and texts. No discord.js import. */
+
+export type DmxAction = { kind: 'ack'; me: boolean } | { kind: 'mute'; serverId: number };
+
+export const DMX_ID = /^dmx:(ack:(me|notme)|mute:\d{1,9})$/;
+
+export function parseDmx(id: string): DmxAction | null {
+  const m = /^dmx:(?:ack:(me|notme)|mute:(\d{1,9}))$/.exec(id);
+  if (!m) return null;
+  return m[1] ? { kind: 'ack', me: m[1] === 'me' } : { kind: 'mute', serverId: Number(m[2]) };
+}
+
+/** a button style by id: green «it was me», red «it was not me», grey for the rest (numbers of discord.js ButtonStyle) */
+export const dmxStyle = (id: string): 2 | 3 | 4 => (id === 'dmx:ack:me' ? 3 : id === 'dmx:ack:notme' ? 4 : 2);
+
+export const MUTE_HOURS = 24;
+
+export const dmxText = (ru: boolean) => ({
+  confirmed: ru ? '✅ Вход подтверждён' : '✅ Sign-in confirmed',
+  notMeTitle: ru ? '🚨 Срочно защитите аккаунт' : '🚨 Protect the account now',
+  notMeBody: ru
+    ? '1. Смените пароль.\n2. В профиле завершите все чужие сеансы.\n3. Если нужна помощь, напишите администратору.'
+    : '1. Change the password.\n2. End all unknown sessions in the profile.\n3. Ask an administrator if you need help.',
+  muted: (h: number) => (ru ? `🔕 Заглушено на ${h} ч. Вернуть можно в настройках уведомлений.` : `🔕 Muted for ${h} h. You can turn it back on in the notification settings.`),
+  failed: ru ? 'Не получилось, попробуйте позже.' : 'Did not work, try again later.',
+});
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-bot/src"
   cat > "$APP_DIR/core-bot/src/errors.ts" << '__COREGSM_EOF__'
@@ -126762,6 +127331,71 @@ export function PushCard() {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/profile"
+  cat > "$APP_DIR/core-frontend/src/components/profile/QuietHours.tsx" << '__COREGSM_EOF__'
+import { useEffect, useState } from 'react';
+import { api } from '../../api';
+import { t } from '../../i18n';
+import { Section, Switch, toast } from '../../ui';
+
+interface Quiet {
+  from: number;
+  to: number;
+}
+
+const HOURS = Array.from({ length: 24 }, (_, h) => h);
+const label = (h: number) => `${String(h).padStart(2, '0')}:00`;
+
+/** «Тихие часы»: the private messages of the bot wait for the morning and arrive as one card (security notices do not wait) */
+export function QuietHoursCard() {
+  const [q, setQ] = useState<Quiet | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    api<Quiet>('/me/dm-quiet').then((r) => { if (alive) setQ(r); }).catch(() => undefined);
+    return () => { alive = false; };
+  }, []);
+
+  const save = async (next: Quiet) => {
+    setBusy(true);
+    try {
+      setQ(await api<Quiet>('/me/dm-quiet', 'PUT', next));
+      toast(t('pf.quiet.saved'));
+    } catch (e) {
+      toast((e as Error).message, 'err');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!q) return null;
+  const on = q.from >= 0 && q.to >= 0;
+  return (
+    <Section title={t('pf.quiet.title')} description={t('pf.quiet.desc')}>
+      <label htmlFor="qh-on" className="flex items-center gap-3 font-bold">
+        <Switch id="qh-on" checked={on} onChange={(v) => void save(v ? { from: 23, to: 8 } : { from: -1, to: -1 })} /> {t('pf.quiet.on')}
+      </label>
+      {on && (
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label htmlFor="qh-from" className="label">{t('pf.quiet.from')}</label>
+            <select id="qh-from" className="input" value={q.from} disabled={busy} onChange={(e) => void save({ ...q, from: Number(e.target.value) })}>
+              {HOURS.map((h) => <option key={h} value={h}>{label(h)}</option>)}
+            </select>
+          </div>
+          <div>
+            <label htmlFor="qh-to" className="label">{t('pf.quiet.to')}</label>
+            <select id="qh-to" className="input" value={q.to} disabled={busy} onChange={(e) => void save({ ...q, to: Number(e.target.value) })}>
+              {HOURS.map((h) => <option key={h} value={h}>{label(h)}</option>)}
+            </select>
+          </div>
+        </div>
+      )}
+    </Section>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/profile"
   cat > "$APP_DIR/core-frontend/src/components/profile/ReportButton.tsx" << '__COREGSM_EOF__'
 /** «Пожаловаться» on a player's page: a reason and a few words go to the moderators' queue. */
 import { useState, type FormEvent } from 'react';
@@ -136690,6 +137324,12 @@ const en: Record<keyof typeof ru, string> = {
   'pf.region.mdy': 'mm/dd/yyyy',
   'pf.region.iso': 'yyyy-mm-dd',
   'pf.region.example': 'Now:',
+  'pf.quiet.title': 'Quiet hours',
+  'pf.quiet.desc': 'During this time the bot does not message you one by one: in the morning you get a single “While you were away” card. Security notices always arrive. The time follows your time zone.',
+  'pf.quiet.on': 'Turn quiet hours on',
+  'pf.quiet.from': 'From',
+  'pf.quiet.to': 'To',
+  'pf.quiet.saved': 'Saved',
   'pf.region.saved': 'Settings saved',
   'pf.region.notSynced': 'Works in this browser, but was not saved to your account.',
 
@@ -140906,6 +141546,12 @@ const ru = {
   'pf.region.mdy': 'мм/дд/гггг',
   'pf.region.iso': 'гггг-мм-дд',
   'pf.region.example': 'Сейчас:',
+  'pf.quiet.title': 'Тихие часы',
+  'pf.quiet.desc': 'Личные сообщения бота в это время не приходят по одному: утром вы получите одну карточку «Пока вы отдыхали». Уведомления о безопасности приходят всегда. Время считается по вашему часовому поясу.',
+  'pf.quiet.on': 'Включить тихие часы',
+  'pf.quiet.from': 'С',
+  'pf.quiet.to': 'До',
+  'pf.quiet.saved': 'Сохранено',
   'pf.region.saved': 'Настройки сохранены',
   'pf.region.notSynced': 'Работает в этом браузере, но не сохранилось в аккаунте.',
 
@@ -151210,6 +151856,7 @@ import { FollowsCard } from '../components/profile/Follows';
 import { NewsSubsCard } from '../components/profile/NewsSubs';
 import { TwoFactorCard } from '../components/profile/TwoFactorCard';
 import { AppearanceCard, RegionCard } from '../components/profile/LookRegion';
+import { QuietHoursCard } from '../components/profile/QuietHours';
 import { PlayerCard } from '../components/profile/PlayerCard';
 import { StatsPanel, StatsSummary, useMyStats } from '../components/profile/Stats';
 import { deviceName } from '../components/profile/format';
@@ -151353,6 +152000,7 @@ function LookTab() {
     <div className="grid items-start gap-5 md:grid-cols-2">
       <AppearanceCard />
       <RegionCard />
+      <QuietHoursCard />
     </div>
   );
 }

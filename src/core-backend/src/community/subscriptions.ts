@@ -14,7 +14,8 @@ import type { Express, RequestHandler } from 'express';
 import { z } from 'zod';
 import { db, EFFECTIVE_NAME } from '../db.js';
 import { addColumn } from '../schema.js';
-import { enqueueDelivery } from '../alerts/deliveries.js';
+import { queueCard, queueServerAlert } from '../alerts/dmQueue.js';
+import { serverCard } from '../alerts/dmCard.js';
 
 /** device notifications (push.ts plugs itself in, so this module stays free of the web layer) */
 type PushHook = (userId: number, m: { title: string; body: string; url?: string; tag?: string }) => void;
@@ -129,7 +130,7 @@ export function notifySubscribers(serverId: number, kind: SubKind, obs: Observat
     if (!mayNotify(s.last_notified_at, now)) continue;
     insert.run(s.user_id, now, kind, serverId, text);
     touch.run(now, s.user_id, serverId, kind);
-    if (s.discord_id && canDm()) enqueueDelivery({ kind: 'dm', refId: null, target: s.discord_id, payload: { content: text, summary: text.slice(0, 120) } });
+    if (s.discord_id && canDm()) queueServerAlert({ userId: s.user_id, discordId: s.discord_id, data: { serverId, name: info.n, address }, event: { kind, ts: now, players: obs.players, max: obs.maxPlayers } }, now);
     // and on the devices where the player turned notifications on
     pushLater(s.user_id, { title: info.n, body: text, url: `/servers/${serverId}`, tag: `srv-${serverId}-${kind}` });
     n++;
@@ -200,7 +201,7 @@ export function registerSubscriptions(deps: { app: Express; auth: RequestHandler
     db.prepare('INSERT INTO user_notifications (user_id, ts, kind, server_id, text) VALUES (?, ?, ?, ?, ?)').run(uid, now, 'test', sid, text);
     const u = db.prepare('SELECT discord_id FROM users WHERE id = ?').get(uid) as { discord_id: string | null } | undefined;
     const dm = !!u?.discord_id && canDm();
-    if (dm) enqueueDelivery({ kind: 'dm', refId: null, target: u!.discord_id as string, payload: { content: text, summary: text.slice(0, 120) } });
+    if (dm) queueCard({ userId: uid, discordId: u!.discord_id as string, kind: 'test', card: (c) => serverCard(c, { serverId: sid, name: info.n, address: info.display_address || `${info.host}:${info.port}`, events: [{ kind: 'back_online', ts: now, players: 0, max: 0 }], test: true }) }, now);
     pushLater(uid, { title: info.n, body: text, url: `/servers/${sid}`, tag: `srv-${sid}-test` });
     res.json({ inbox: true, dm, discordLinked: !!u?.discord_id });
   });

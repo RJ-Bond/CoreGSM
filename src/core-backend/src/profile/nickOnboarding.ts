@@ -4,7 +4,8 @@
  */
 import type { Express, Request, RequestHandler } from 'express';
 import { db, EFFECTIVE_NAME } from '../db.js';
-import { enqueueDelivery } from '../alerts/deliveries.js';
+import { queueCard } from '../alerts/dmQueue.js';
+import { seenCard } from '../alerts/dmCard.js';
 import { dmAvailable } from '../community/subscriptions.js';
 import { distinctNames, similarNames, suggestNames } from './nickMatch.js';
 import { log } from '../logger.js';
@@ -110,7 +111,8 @@ function markSeen(userId: number, serverId: number, now: number): void {
   db.prepare("INSERT INTO account_events (user_id, ts, kind, ip, ua, detail) VALUES (?, ?, 'nick_seen', '', '', ?)").run(userId, now, (srv?.n ?? '').slice(0, 200));
   const u = db.prepare('SELECT discord_id FROM users WHERE id = ?').get(userId) as { discord_id: string | null } | undefined;
   if (u?.discord_id && dmAvailable()) {
-    enqueueDelivery({ kind: 'dm', refId: null, target: u.discord_id, payload: { content: `👣 ${text}`, summary: text.slice(0, 120) } });
+    const nick = (db.prepare('SELECT game_nick FROM user_player WHERE user_id = ?').get(userId) as { game_nick: string } | undefined)?.game_nick ?? '';
+    queueCard({ userId, discordId: u.discord_id, kind: 'seen', card: (c) => seenCard(c, { server: srv?.n ?? (c.lang === 'en' ? 'server' : 'сервер'), nick, ts: now }) }, now);
   }
 }
 

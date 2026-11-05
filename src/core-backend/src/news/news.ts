@@ -864,7 +864,10 @@ ${r.sent_at ? `<meta property="article:published_time" content="${new Date(r.sen
       if (prev && !prev.sent_at && prev.repeat === 'none') {
         try {
           const p = JSON.parse(prev.payload) as NewsPayload;
-          notifyNewsPublished({ id, title: titleOf(p), category: p.category ?? 'announcement', authorId: prev.created_by ?? null }, deps.publicBase() ?? '');
+          const nb = deps.publicBase() ?? '';
+          const img = p.embed?.image?.upload ? `${nb}/api/news/images/${p.embed.image.upload}` : p.embed?.image?.url && /^https:\/\//i.test(p.embed.image.url) ? p.embed.image.url : '';
+          const txt = (p.embed?.description || p.content || '').replace(/[*_~`>#|]/g, '').replace(/\[([^\]]+)\]\([^)]*\)/g, '$1').replace(/\s+/g, ' ').trim().slice(0, 300);
+          notifyNewsPublished({ id, title: titleOf(p), category: p.category ?? 'announcement', authorId: prev.created_by ?? null, ...(txt ? { text: txt } : {}), ...(img && nb ? { imageUrl: img } : {}) }, nb);
           dispatchEvent({ event: 'news_published', title: `Новость: ${titleOf(p)}`, text: '', data: { newsId: id, title: titleOf(p), category: p.category ?? 'announcement', url: deps.publicBase() ? `${deps.publicBase()}/news/${id}` : null } });
         } catch { /* the post itself is done */ }
       }

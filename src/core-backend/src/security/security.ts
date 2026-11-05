@@ -15,7 +15,8 @@ import { db, setSetting } from '../db.js';
 import { guardGet, guardSet } from './loginGuard.js';
 import { addColumn } from '../schema.js';
 import { wrap } from '../http.js';
-import { enqueueDelivery } from '../alerts/deliveries.js';
+import { queueCard } from '../alerts/dmQueue.js';
+import { changedCard, newDeviceCard, resetCard } from '../alerts/dmCard.js';
 import { layout, mailReady, sendMail, smtpConfig } from '../alerts/mail.js';
 import { logAccount, prefsOf, uaLabel } from '../profile/profile.js';
 import { dmAvailable, pushToUser } from '../community/subscriptions.js';
@@ -226,7 +227,7 @@ export function noteLogin(req: Request, userId: number, brandName: string): void
       db.prepare('INSERT INTO user_notifications (user_id, ts, kind, server_id, text, url) VALUES (?, ?, ?, NULL, ?, ?)').run(userId, now, 'security', notice.text, '/profile');
       pushToUser(userId, { title: notice.title, body: notice.text, url: '/profile', tag: `new-device-${userId}` });
       const d = db.prepare('SELECT discord_id FROM users WHERE id = ?').get(userId) as { discord_id: string | null } | undefined;
-      if (d?.discord_id && dmAvailable()) enqueueDelivery({ kind: 'dm', refId: null, target: d.discord_id, payload: { content: notice.text, summary: notice.text.slice(0, 120) } });
+      if (d?.discord_id && dmAvailable()) queueCard({ userId, discordId: d.discord_id, kind: 'newdevice', card: (c) => newDeviceCard(c, { device: label, ts: now }) }, now);
     } catch (e) {
       log.error('new-device notice failed:', (e as Error).message);
     }
@@ -473,10 +474,7 @@ export function registerSecurity(d: SecurityDeps): void {
           const en = prefsOf(u.id).lang === 'en';
           const resetUrl = `${base}/#/reset/${token}`;
           if (viaDiscord) {
-            const text = en
-              ? `🔐 A password reset was requested for the account "${u.username}".\nSet a new password (the link works for 30 minutes and only once):\n${resetUrl}\n\nIf this was not you, ignore this message: the password stays as it is.`
-              : `🔐 Запрошен сброс пароля для аккаунта «${u.username}».\nЗадайте новый пароль (ссылка действует 30 минут и только один раз):\n${resetUrl}\n\nЕсли это были не вы, просто проигнорируйте сообщение: пароль останется прежним.`;
-            enqueueDelivery({ kind: 'dm', refId: null, target: u.discord_id!, payload: { content: text, summary: en ? 'Password reset' : 'Сброс пароля' } });
+            queueCard({ userId: u.id, discordId: u.discord_id!, kind: 'reset', card: (c) => resetCard(c, { username: u.username, url: resetUrl, expiresAt: now + 30 * 60_000 }) }, now);
           }
           if (viaMail) {
             const body = layout(
@@ -519,11 +517,7 @@ export function registerSecurity(d: SecurityDeps): void {
     // a confirmation in Discord too: if it was not the owner, they see it at once
     const dm = db.prepare('SELECT username, discord_id FROM users WHERE id = ?').get(row.user_id) as { username: string; discord_id: string | null } | undefined;
     if (dm?.discord_id) {
-      const enDm = prefsOf(row.user_id).lang === 'en';
-      const text = enDm
-        ? `✅ The password of the account "${dm.username}" was changed. All sessions were ended. If this was not you, contact an administrator.`
-        : `✅ Пароль аккаунта «${dm.username}» изменён, все сеансы завершены. Если это были не вы, срочно сообщите администратору.`;
-      enqueueDelivery({ kind: 'dm', refId: null, target: dm.discord_id, payload: { content: text, summary: enDm ? 'Password changed' : 'Пароль изменён' } });
+      queueCard({ userId: row.user_id, discordId: dm.discord_id, kind: 'changed', card: (c) => changedCard(c, { username: dm.username, ts: Date.now() }) });
     }
     const u = emailOf(row.user_id);
     if (u?.email && u.email_verified && mailReady()) {

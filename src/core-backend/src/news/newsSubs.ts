@@ -15,7 +15,8 @@ import express from 'express';
 import { z } from 'zod';
 import { allow, auth, type AuthedRequest } from '../security/auth.js';
 import { db } from '../db.js';
-import { enqueueDelivery } from '../alerts/deliveries.js';
+import { queueCard } from '../alerts/dmQueue.js';
+import { newsCard } from '../alerts/dmCard.js';
 import { param } from '../http.js';
 import { log } from '../logger.js';
 import { viewsByDay, viewsOf } from './newsViews.js';
@@ -34,7 +35,7 @@ CREATE INDEX IF NOT EXISTS idx_news_subs_cat ON news_subscriptions(category);
 `);
 
 /** Tells the subscribers of the rubric about a published item (never throws into the news flow). Returns how many were told. */
-export function notifyNewsPublished(item: { id: number; title: string; category: string; authorId: number | null }, base = ''): number {
+export function notifyNewsPublished(item: { id: number; title: string; category: string; authorId: number | null; text?: string; imageUrl?: string }, base = ''): number {
   try {
     const category = normRubric(item.category);
     const subs = db
@@ -48,8 +49,7 @@ export function notifyNewsPublished(item: { id: number; title: string; category:
     for (const s of subs) {
       insert.run(s.user_id, now, 'news', text, url);
       if (s.discord_id && dmAvailable()) {
-        const content = base ? `${text}\n${base}${url}` : text;
-        enqueueDelivery({ kind: 'dm', refId: null, target: s.discord_id, payload: { content, summary: text.slice(0, 120) } });
+        queueCard({ userId: s.user_id, discordId: s.discord_id, kind: 'news', card: (c) => newsCard(c, { title: item.title, category: item.category, ...(item.text ? { text: item.text } : {}), ...(item.imageUrl ? { imageUrl: item.imageUrl } : {}), url: base ? `${base}${url}` : '', ts: now }) }, now);
       }
       pushToUser(s.user_id, { title: 'Новости', body: text, url, tag: `news-${item.id}` });
     }

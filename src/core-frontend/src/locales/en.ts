@@ -321,6 +321,12 @@ const en: Record<keyof typeof ru, string> = {
   'pf.region.mdy': 'mm/dd/yyyy',
   'pf.region.iso': 'yyyy-mm-dd',
   'pf.region.example': 'Now:',
+  'pf.quiet.title': 'Quiet hours',
+  'pf.quiet.desc': 'During this time the bot does not message you one by one: in the morning you get a single “While you were away” card. Security notices always arrive. The time follows your time zone.',
+  'pf.quiet.on': 'Turn quiet hours on',
+  'pf.quiet.from': 'From',
+  'pf.quiet.to': 'To',
+  'pf.quiet.saved': 'Saved',
   'pf.region.saved': 'Settings saved',
   'pf.region.notSynced': 'Works in this browser, but was not saved to your account.',
 

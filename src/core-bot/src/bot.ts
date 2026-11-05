@@ -1,4 +1,5 @@
 /** The bot's main loop: connection to Discord from the panel's settings, status messages, news and deliveries. */
+import { DMX_ID, dmxStyle } from './dmxLogic.js';
 import { footerOf, getStyle, setStyle } from './style.js';
 import fs from 'node:fs';
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, Client, EmbedBuilder, GatewayIntentBits, type GuildMember } from 'discord.js';
@@ -393,6 +394,16 @@ function actionRows(buttons: { customId: string; label: string }[] | undefined) 
   }
   return rows;
 }
+/** buttons under the private cards (`dmx:*`): the bot answers them itself */
+function dmRows(buttons: { customId: string; label: string }[] | undefined) {
+  const list = (buttons ?? []).filter((b) => DMX_ID.test(b.customId) && b.label).slice(0, 5);
+  if (!list.length) return [];
+  return [
+    new ActionRowBuilder<ButtonBuilder>().addComponents(
+      list.map((b) => new ButtonBuilder().setStyle(dmxStyle(b.customId) as ButtonStyle).setCustomId(b.customId).setLabel(b.label.slice(0, 80))),
+    ),
+  ];
+}
 /** one row of link buttons (Discord allows 5 per row; https links only) */
 function linkRows(actions: { label: string; url: string }[] | undefined) {
   const links = (actions ?? []).filter((a) => a.label && /^https?:\/\//i.test(a.url)).slice(0, 5);
@@ -416,7 +427,7 @@ async function processDeliveries(): Promise<void> {
         await user.send({
           content: (it.payload.content ?? '').slice(0, 2000) || undefined,
           embeds: it.payload.embed ? [new EmbedBuilder(it.payload.embed)] : [],
-          components: linkRows(it.payload.actions),
+          components: [...dmRows(it.payload.buttons), ...linkRows(it.payload.actions)],
           allowedMentions: { parse: [] },
         });
       } else {

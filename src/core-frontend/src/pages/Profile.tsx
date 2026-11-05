@@ -22,6 +22,7 @@ import { FollowsCard } from '../components/profile/Follows';
 import { NewsSubsCard } from '../components/profile/NewsSubs';
 import { TwoFactorCard } from '../components/profile/TwoFactorCard';
 import { AppearanceCard, RegionCard } from '../components/profile/LookRegion';
+import { QuietHoursCard } from '../components/profile/QuietHours';
 import { PlayerCard } from '../components/profile/PlayerCard';
 import { StatsPanel, StatsSummary, useMyStats } from '../components/profile/Stats';
 import { deviceName } from '../components/profile/format';
@@ -165,6 +166,7 @@ function LookTab() {
     <div className="grid items-start gap-5 md:grid-cols-2">
       <AppearanceCard />
       <RegionCard />
+      <QuietHoursCard />
     </div>
   );
 }

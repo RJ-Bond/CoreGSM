@@ -12,7 +12,8 @@
  */
 import type { Express, Request, RequestHandler } from 'express';
 import { db, EFFECTIVE_NAME } from '../db.js';
-import { enqueueDelivery } from '../alerts/deliveries.js';
+import { queueCard } from '../alerts/dmQueue.js';
+import { followCard } from '../alerts/dmCard.js';
 import { dmAvailable, pushToUser } from '../community/subscriptions.js';
 import { log } from '../logger.js';
 
@@ -70,7 +71,7 @@ export function notifyFollowers(serverId: number, names: string[], now = Date.no
       const text = followText(shown.get(f.nick_key) ?? f.nick_key, info.n, address);
       insert.run(f.user_id, now, 'player_online', serverId, text);
       touch.run(now, f.user_id, f.nick_key);
-      if (f.discord_id && dmAvailable()) enqueueDelivery({ kind: 'dm', refId: null, target: f.discord_id, payload: { content: text, summary: text.slice(0, 120) } });
+      if (f.discord_id && dmAvailable()) queueCard({ userId: f.user_id, discordId: f.discord_id, kind: 'follow', serverId, card: (c) => followCard(c, { nick: shown.get(f.nick_key) ?? f.nick_key, server: info.n, address, serverId, ts: now }) }, now);
       pushToUser(f.user_id, { title: info.n, body: text, url: `/servers/${serverId}`, tag: `follow-${f.nick_key}` });
       n++;
     }
