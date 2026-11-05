@@ -25,6 +25,11 @@ const errorsEn: Record<string, string> = {
 
   // ---- sign-in, setup, registration ----
   login_locked: 'Too many wrong attempts. Try again in {sec} s.',
+  announcement_no_text: 'Enter the text of the announcement',
+  announcement_long: 'The text must not be longer than {n} characters',
+  announcement_no_channel: 'Choose a Discord channel',
+  announcement_bad_time: 'Set a time in the future, not later than a year',
+  announcement_limit: 'No more than {n} scheduled announcements',
   captcha_required: 'Confirm you are not a robot: the page solves a small puzzle by itself',
   ip_locked: 'Too many failed sign-ins from this address. Try again in {sec} s.',
   bad_credentials: 'Wrong login or password',

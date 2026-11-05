@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="7d1a14f04e1e"
+COREGSM_BUILD="4a15c9401535"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.28"
+COREGSM_VERSION="1.1.30"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -17756,6 +17756,125 @@ export function registerAlerts(deps: {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/alerts"
+  cat > "$APP_DIR/core-backend/src/alerts/announcementLogic.ts" << '__COREGSM_EOF__'
+/** Scheduled announcements for a Discord channel: checking the form and working out the next run. Pure. */
+export type Repeat = 'none' | 'daily' | 'weekly';
+export const REPEATS: readonly Repeat[] = ['none', 'daily', 'weekly'];
+export const MAX_TEXT = 1800;
+export const MAX_ACTIVE = 50;
+
+export interface AnnouncementInput { title: string; text: string; channelId: string; mention: 'none' | 'here' | 'everyone'; at: number; repeat: Repeat }
+
+const STEP: Record<Exclude<Repeat, 'none'>, number> = { daily: 86_400_000, weekly: 7 * 86_400_000 };
+
+/** the form is fine, or the reason it is not */
+export function validateAnnouncement(i: unknown, now = Date.now()): { ok: true; value: AnnouncementInput } | { ok: false; error: string } {
+  const v = i as Partial<AnnouncementInput> | null;
+  if (!v || typeof v !== 'object') return { ok: false, error: 'Неверные данные' };
+  const text = typeof v.text === 'string' ? v.text.trim() : '';
+  if (!text) return { ok: false, error: 'Введите текст объявления' };
+  if (text.length > MAX_TEXT) return { ok: false, error: `Текст не длиннее ${MAX_TEXT} символов` };
+  const channelId = typeof v.channelId === 'string' ? v.channelId.trim() : '';
+  if (!/^\d{15,25}$/.test(channelId)) return { ok: false, error: 'Выберите канал Discord' };
+  const at = Number(v.at);
+  if (!Number.isFinite(at) || at < now - 60_000 || at > now + 366 * 86_400_000) return { ok: false, error: 'Укажите время в будущем, не дальше года' };
+  const repeat = REPEATS.includes(v.repeat as Repeat) ? (v.repeat as Repeat) : 'none';
+  const mention = v.mention === 'here' || v.mention === 'everyone' ? v.mention : 'none';
+  const title = typeof v.title === 'string' ? v.title.trim().slice(0, 100) : '';
+  return { ok: true, value: { title, text, channelId, mention, at: Math.round(at), repeat } };
+}
+
+/** when it runs after the run at `at`; null when it does not repeat. A panel that was off for days does not send a pile: the next run is in the future */
+export function nextRun(at: number, repeat: Repeat, now: number): number | null {
+  if (repeat === 'none') return null;
+  const step = STEP[repeat];
+  let n = at + step;
+  if (n <= now) n += Math.ceil((now - n) / step) * step;
+  return n;
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/alerts"
+  cat > "$APP_DIR/core-backend/src/alerts/announcements.ts" << '__COREGSM_EOF__'
+/**
+ * Scheduled announcements: a text sent to a Discord channel at a set time, once or every day / week.
+ *
+ *   GET    /api/announcements        (admin) the plan
+ *   POST   /api/announcements        (admin) { title?, text, channelId, mention?, at, repeat? }
+ *   DELETE /api/announcements/:id    (admin)
+ *
+ * A timer looks every 30 seconds for the ones that are due and puts them in the same queue as the other messages
+ * of the panel (retries, quiet hours and the common look come with it).
+ */
+import type { Express, RequestHandler } from 'express';
+import { COLORS } from '../discord/palette.js';
+import { db } from '../db.js';
+import { log } from '../logger.js';
+import { param } from '../http.js';
+import { enqueueAlert } from './alerts.js';
+import { MAX_ACTIVE, nextRun, validateAnnouncement, type Repeat } from './announcementLogic.js';
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS announcements (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  title TEXT NOT NULL DEFAULT '',
+  text TEXT NOT NULL,
+  channel_id TEXT NOT NULL,
+  mention TEXT NOT NULL DEFAULT 'none',
+  repeat TEXT NOT NULL DEFAULT 'none',
+  next_at INTEGER,
+  last_sent_at INTEGER,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_announcements_next ON announcements(next_at);
+`);
+
+interface Row { id: number; title: string; text: string; channel_id: string; mention: 'none' | 'here' | 'everyone'; repeat: Repeat; next_at: number | null; last_sent_at: number | null; created_at: number }
+
+/** sends what is due; returns how many */
+export function runDueAnnouncements(now = Date.now()): number {
+  const due = db.prepare('SELECT * FROM announcements WHERE next_at IS NOT NULL AND next_at <= ? ORDER BY next_at').all(now) as Row[];
+  for (const a of due) {
+    try {
+      enqueueAlert('digest', a.title || 'announcement', {
+        content: a.mention === 'none' ? '' : `@${a.mention}`,
+        mention: a.mention,
+        embed: { ...(a.title ? { title: a.title } : {}), description: a.text, color: COLORS.info },
+      }, a.channel_id);
+    } catch (e) {
+      log.warn('announcement not queued', (e as Error).message);
+    }
+    db.prepare('UPDATE announcements SET last_sent_at = ?, next_at = ? WHERE id = ?').run(now, nextRun(a.next_at!, a.repeat, now), a.id);
+  }
+  return due.length;
+}
+
+export function registerAnnouncements({ app, admin }: { app: Express; admin: RequestHandler }): void {
+  const view = (r: Row) => ({ id: r.id, title: r.title, text: r.text, channelId: r.channel_id, mention: r.mention, repeat: r.repeat, nextAt: r.next_at, lastSentAt: r.last_sent_at });
+
+  app.get('/api/announcements', admin, (_req, res) => {
+    res.json((db.prepare('SELECT * FROM announcements ORDER BY COALESCE(next_at, 9e15), id DESC').all() as Row[]).map(view));
+  });
+
+  app.post('/api/announcements', admin, (req, res) => {
+    const v = validateAnnouncement(req.body);
+    if (!v.ok) return res.status(400).json({ error: v.error });
+    const active = (db.prepare('SELECT COUNT(*) AS n FROM announcements WHERE next_at IS NOT NULL').get() as { n: number }).n;
+    if (active >= MAX_ACTIVE) return res.status(400).json({ error: `Не больше ${MAX_ACTIVE} запланированных объявлений` });
+    const i = v.value;
+    const id = Number(db.prepare('INSERT INTO announcements (title, text, channel_id, mention, repeat, next_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run(i.title, i.text, i.channelId, i.mention, i.repeat, i.at, Date.now()).lastInsertRowid);
+    res.json(view(db.prepare('SELECT * FROM announcements WHERE id = ?').get(id) as Row));
+  });
+
+  app.delete('/api/announcements/:id', param('id'), admin, (req, res) => {
+    const r = db.prepare('DELETE FROM announcements WHERE id = ?').run(Number(req.params.id));
+    if (!r.changes) return res.status(404).json({ error: 'Не найдено' });
+    res.json({ ok: true });
+  });
+
+  setInterval(() => { try { runDueAnnouncements(); } catch (e) { log.warn('announcements tick failed', (e as Error).message); } }, 30_000).unref();
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/alerts"
   cat > "$APP_DIR/core-backend/src/alerts/attention.ts" << '__COREGSM_EOF__'
 /**
  * «Needs attention» for administrators:
@@ -21739,6 +21858,11 @@ export const ERRORS = {
 
   // ---- sign-in, setup, registration ----
   login_locked: 'Слишком много неверных попыток. Повторите через {sec} с.',
+  announcement_no_text: 'Введите текст объявления',
+  announcement_long: 'Текст не длиннее {n} символов',
+  announcement_no_channel: 'Выберите канал Discord',
+  announcement_bad_time: 'Укажите время в будущем, не дальше года',
+  announcement_limit: 'Не больше {n} запланированных объявлений',
   captcha_required: 'Подтвердите, что вы не робот: страница решит небольшую задачу сама',
   ip_locked: 'Слишком много неудачных попыток входа с этого адреса. Повторите через {sec} с.',
   bad_credentials: 'Неверный логин или пароль',
@@ -24257,6 +24381,7 @@ import { registerNews } from './news/news.js';
 import { registerNickStatus } from './profile/nickOnboarding.js';
 import { installAudit, registerOps } from './admin/ops.js';
 import { registerOverview } from './monitoring/overview.js';
+import { registerAnnouncements } from './alerts/announcements.js';
 import { registerAttention } from './alerts/attention.js';
 import { registerWelcome } from './community/welcome.js';
 import { registerRules } from './monitoring/rules.js';
@@ -24439,6 +24564,7 @@ registerHealth({ app, admin, bot: () => bot.status });
 startDbMaintenance();
 registerOverview({ app, viewer });
 registerAttention({ app, admin });
+registerAnnouncements({ app, admin });
 registerWelcome({ app, admin, internal });
 registerRules({ app, auth, admin });
 registerPolls({ app, auth, admin, internal });
@@ -113269,6 +113395,122 @@ function ChannelForm({ channel, kind, events, smtpReady, onClose, onSaved }: {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/AnnouncementsAdmin.tsx" << '__COREGSM_EOF__'
+import { useEffect, useState, type FormEvent } from 'react';
+import { api } from '../api';
+import { confirmDialog } from '../confirm';
+import { t, useI18n } from '../i18n';
+import { Button, ErrorLine, Section, fail, fmtDateTime, toast } from '../ui';
+import { ChannelName, ChannelPicker } from './ChannelPicker';
+
+interface Announcement { id: number; title: string; text: string; channelId: string; mention: 'none' | 'here' | 'everyone'; repeat: 'none' | 'daily' | 'weekly'; nextAt: number | null; lastSentAt: number | null }
+
+/** Discord → «Дополнительно»: a text sent to a channel at a set time, once, daily or weekly */
+export default function AnnouncementsAdmin() {
+  useI18n();
+  const [list, setList] = useState<Announcement[] | null>(null);
+  const [title, setTitle] = useState('');
+  const [text, setText] = useState('');
+  const [at, setAt] = useState('');
+  const [repeat, setRepeat] = useState<Announcement['repeat']>('none');
+  const [mention, setMention] = useState<Announcement['mention']>('none');
+  const [channelId, setChannelId] = useState('');
+  const [picking, setPicking] = useState(false);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const load = () => api<Announcement[]>('/announcements').then(setList).catch((e: Error) => setError(e.message));
+  useEffect(() => {
+    let alive = true;
+    api<Announcement[]>('/announcements').then((l) => { if (alive) setList(l); }).catch((e: Error) => { if (alive) setError(e.message); });
+    return () => { alive = false; };
+  }, []);
+
+  const create = async (e: FormEvent) => {
+    e.preventDefault();
+    setError('');
+    if (!at) { setError(t('ann.needTime')); return; }
+    setBusy(true);
+    try {
+      await api('/announcements', 'POST', { title, text, channelId, mention, repeat, at: new Date(at).getTime() });
+      setTitle(''); setText(''); setAt(''); setRepeat('none'); setMention('none');
+      toast(t('ann.created'));
+      await load();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const remove = async (a: Announcement) => {
+    if (!(await confirmDialog({ title: t('ann.deleteQ'), text: a.title || a.text.slice(0, 80), confirmLabel: t('ann.delete'), danger: true }))) return;
+    try { await api(`/announcements/${a.id}`, 'DELETE'); await load(); } catch (err) { fail(err); }
+  };
+
+  return (
+    <Section title={t('ann.title')} description={t('ann.desc')}>
+      <form onSubmit={(e) => void create(e)} className="space-y-3">
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div>
+            <label htmlFor="ann-title" className="label">{t('ann.heading')}</label>
+            <input id="ann-title" className="input" value={title} maxLength={100} onChange={(e) => setTitle(e.target.value)} />
+          </div>
+          <div>
+            <label htmlFor="ann-at" className="label">{t('ann.when')}</label>
+            <input id="ann-at" className="input" type="datetime-local" value={at} onChange={(e) => setAt(e.target.value)} required />
+          </div>
+        </div>
+        <div>
+          <label htmlFor="ann-text" className="label">{t('ann.text')}</label>
+          <textarea id="ann-text" className="input min-h-24" value={text} maxLength={1800} onChange={(e) => setText(e.target.value)} required />
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div>
+            <label htmlFor="ann-repeat" className="label">{t('ann.repeat')}</label>
+            <select id="ann-repeat" className="input" value={repeat} onChange={(e) => setRepeat(e.target.value as Announcement['repeat'])}>
+              <option value="none">{t('ann.r.none')}</option>
+              <option value="daily">{t('ann.r.daily')}</option>
+              <option value="weekly">{t('ann.r.weekly')}</option>
+            </select>
+          </div>
+          <div>
+            <label htmlFor="ann-mention" className="label">{t('ann.mention')}</label>
+            <select id="ann-mention" className="input" value={mention} onChange={(e) => setMention(e.target.value as Announcement['mention'])}>
+              <option value="none">{t('ann.m.none')}</option>
+              <option value="here">@here</option>
+              <option value="everyone">@everyone</option>
+            </select>
+          </div>
+        </div>
+        <div>
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="font-black">{channelId ? <ChannelName id={channelId} /> : t('ann.noChannel')}</span>
+            <button type="button" className="btn btn-soft btn-sm" onClick={() => setPicking((v) => !v)} aria-expanded={picking}>{t('ann.pick')}</button>
+          </div>
+          {picking && <div className="mt-3"><ChannelPicker id="ann-channel" value={channelId} onChange={(v) => { if (/^\d{15,25}$/.test(v)) { setChannelId(v); setPicking(false); } }} /></div>}
+        </div>
+        <ErrorLine text={error} />
+        <Button loading={busy} disabled={!channelId}>{t('ann.create')}</Button>
+      </form>
+      <div className="mt-5 divide-y divide-line">
+        {list && list.length === 0 && <p className="font-semibold text-mute">{t('ann.none')}</p>}
+        {list?.map((a) => (
+          <div key={a.id} className="flex flex-wrap items-center gap-x-4 gap-y-1 py-3">
+            <div className="min-w-0 flex-1">
+              <div className="font-extrabold wrap-break-word">{a.title || a.text.slice(0, 60)}</div>
+              <div className="text-sm font-semibold text-mute">
+                <ChannelName id={a.channelId} /> · {a.nextAt ? t('ann.next', { when: fmtDateTime(a.nextAt) }) : t('ann.sent')}{a.repeat !== 'none' ? ` · ${t(`ann.r.${a.repeat}` as const)}` : ''}
+              </div>
+            </div>
+            <button type="button" className="btn-link text-bad" onClick={() => void remove(a)}>{t('ann.delete')}</button>
+          </div>
+        ))}
+      </div>
+    </Section>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
   cat > "$APP_DIR/core-frontend/src/components/AppFooter.test.tsx" << '__COREGSM_EOF__'
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
@@ -133510,6 +133752,27 @@ const en: Record<keyof typeof ru, string> = {
   'pf.tab.overview': 'Overview',
   'pf.tab.player': 'Player',
   'pf.tab.notify': 'Notifications',
+  'ann.title': 'Scheduled announcements',
+  'ann.desc': 'The text goes to the chosen channel at the set time: once, every day or every week. For example a restart warning or a reminder of the rules.',
+  'ann.heading': 'Heading (optional)',
+  'ann.when': 'Send at',
+  'ann.text': 'Text',
+  'ann.repeat': 'Repeat',
+  'ann.r.none': 'Once',
+  'ann.r.daily': 'Every day',
+  'ann.r.weekly': 'Every week',
+  'ann.mention': 'Mention',
+  'ann.m.none': 'No mention',
+  'ann.noChannel': 'No channel chosen',
+  'ann.pick': 'Choose a channel',
+  'ann.create': 'Schedule',
+  'ann.created': 'Announcement scheduled',
+  'ann.needTime': 'Set the time to send',
+  'ann.none': 'Nothing is scheduled yet',
+  'ann.next': 'next: {when}',
+  'ann.sent': 'sent',
+  'ann.delete': 'Delete',
+  'ann.deleteQ': 'Delete the announcement?',
   'pf.tab.look': 'Appearance & region',
   'pf.tab.security': 'Security',
   'pf.role.admin': 'ADMINISTRATOR',
@@ -137214,6 +137477,11 @@ const errorsEn: Record<string, string> = {
 
   // ---- sign-in, setup, registration ----
   login_locked: 'Too many wrong attempts. Try again in {sec} s.',
+  announcement_no_text: 'Enter the text of the announcement',
+  announcement_long: 'The text must not be longer than {n} characters',
+  announcement_no_channel: 'Choose a Discord channel',
+  announcement_bad_time: 'Set a time in the future, not later than a year',
+  announcement_limit: 'No more than {n} scheduled announcements',
   captcha_required: 'Confirm you are not a robot: the page solves a small puzzle by itself',
   ip_locked: 'Too many failed sign-ins from this address. Try again in {sec} s.',
   bad_credentials: 'Wrong login or password',
@@ -137639,6 +137907,27 @@ const ru = {
   'pf.tab.overview': 'Обзор',
   'pf.tab.player': 'Игрок',
   'pf.tab.notify': 'Уведомления',
+  'ann.title': 'Запланированные объявления',
+  'ann.desc': 'Текст уйдёт в выбранный канал в указанное время: один раз, каждый день или каждую неделю. Например, предупреждение о рестарте или напоминание о правилах.',
+  'ann.heading': 'Заголовок (необязательно)',
+  'ann.when': 'Когда отправить',
+  'ann.text': 'Текст',
+  'ann.repeat': 'Повтор',
+  'ann.r.none': 'Один раз',
+  'ann.r.daily': 'Каждый день',
+  'ann.r.weekly': 'Каждую неделю',
+  'ann.mention': 'Упоминание',
+  'ann.m.none': 'Без упоминания',
+  'ann.noChannel': 'Канал не выбран',
+  'ann.pick': 'Выбрать канал',
+  'ann.create': 'Запланировать',
+  'ann.created': 'Объявление запланировано',
+  'ann.needTime': 'Укажите время отправки',
+  'ann.none': 'Пока ничего не запланировано',
+  'ann.next': 'следующее: {when}',
+  'ann.sent': 'отправлено',
+  'ann.delete': 'Удалить',
+  'ann.deleteQ': 'Удалить объявление?',
   'pf.tab.look': 'Оформление и регион',
   'pf.tab.security': 'Безопасность',
   'pf.role.admin': 'АДМИНИСТРАТОР',
@@ -145244,6 +145533,7 @@ import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { api, type Binding, type BotStatus, type DiscordGuild, type Server, type SettingsInfo } from '../api';
 import { DiscordWizard, computeWizard } from '../components/DiscordWizard';
 import DeliveryList from '../components/DeliveryList';
+import AnnouncementsAdmin from '../components/AnnouncementsAdmin';
 import DiscordExtras from '../components/DiscordExtras';
 import PlayersShownCard from '../components/PlayersShownCard';
 
@@ -145566,7 +145856,7 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
           <DiscordStyleCard />
         </>
       )}
-      {tab === 'extra' && loaded && <DiscordExtras servers={servers} />}
+      {tab === 'extra' && loaded && <><DiscordExtras servers={servers} /><AnnouncementsAdmin /></>}
       {tab === 'delivery' && <DeliveryList />}
 
       {draft && (
@@ -161759,15 +162049,37 @@ screen_power() {
 
 # ---------- installer download / run ----------
 # The Sigstore signature that release.yml made for install.sh. It proves the file was built by that workflow in this
-# repository, which a checksum from the same place cannot. Checked when cosign is installed; without it only the
-# checksum is verified (and a note says so). Only for the release channel. Messages go to stderr: the caller captures
+# repository, which a checksum from the same place cannot. Checked with the cosign on the server or a pinned one the
+# panel downloads itself; only when neither can be had is the checksum all that is verified (and a note says so). Only for the release channel. Messages go to stderr: the caller captures
 # the stdout of download_installer (the path of the file).
+# cosign for this check: the one installed on the server, else a pinned release downloaded once into the panel's own
+# folder. The version is the one release.yml signs with, and the SHA-256 of the binary is written here, so a tampered
+# download is never run. Prints the path; fails (nothing printed) when it cannot be had.
+COSIGN_VERSION=v2.5.2
+cosign_path() {
+  if command -v cosign >/dev/null 2>&1; then command -v cosign; return 0; fi
+  local arch sum f="$APP_DIR/bin/cosign-$COSIGN_VERSION" t
+  case "$(uname -m)" in
+    x86_64|amd64) arch=amd64; sum=bcfeae05557a9f313ee4392d2f335d0ff69ebbfd232019e3736fb04999fe1734 ;;
+    aarch64|arm64) arch=arm64; sum=2cbcea1873ad76274c3f241ef175d204654e3aac3e73e6ec4504e5227015cb0a ;;
+    *) return 1 ;;
+  esac
+  if [ -x "$f" ] && [ "$(sha256sum "$f" | cut -d' ' -f1)" = "$sum" ]; then printf '%s' "$f"; return 0; fi
+  mkdir -p "$APP_DIR/bin" 2>/dev/null || return 1
+  t="$(mktemp)"
+  if curl -fsSL --max-time 120 ${PROXY_ARGS[@]+"${PROXY_ARGS[@]}"} "https://github.com/sigstore/cosign/releases/download/$COSIGN_VERSION/cosign-linux-$arch" > "$t" 2>/dev/null \
+     && [ "$(sha256sum "$t" | cut -d' ' -f1)" = "$sum" ]; then
+    install -m 0755 "$t" "$f" && rm -f "$t" && printf '%s' "$f"; return 0
+  fi
+  rm -f "$t"; return 1
+}
+
 release_signature_ok() { # release_signature_ok FILE
   [ "$R_SOURCE" = release ] || return 0
-  if ! command -v cosign >/dev/null 2>&1; then dim "Подпись релиза не проверена: cosign не установлен (контрольная сумма проверена)" >&2; return 0; fi
+  local cs; cs="$(cosign_path)" || { dim "Подпись релиза не проверена: cosign недоступен (контрольная сумма проверена)" >&2; return 0; }
   local b rc; b="$(mktemp)"
   if ! fetch "$RELEASE_BASE/install.sh.bundle" > "$b" 2>/dev/null; then rm -f "$b"; bad "У релиза нет файла подписи install.sh.bundle" >&2; return 1; fi
-  cosign verify-blob --bundle "$b" \
+  "$cs" verify-blob --bundle "$b" \
     --certificate-identity-regexp '^https://github\.com/RJ-Bond/CoreGSM/\.github/workflows/release\.yml@refs/heads/main$' \
     --certificate-oidc-issuer https://token.actions.githubusercontent.com "$1" >/dev/null 2>&1
   rc=$?; rm -f "$b"

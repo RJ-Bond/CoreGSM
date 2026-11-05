@@ -39,6 +39,10 @@ interface language; the GitHub release text is built from the section of the ver
 - 🛠️ Серверы в админке: обслуживание на час или его завершение сразу для нескольких выбранных серверов | Servers in the admin area: start or end maintenance for several selected servers at once
 - 🔔 Профиль: отдельная вкладка «Уведомления» (push, избранные серверы, игроки, новости); в списке «Следить» видно, кто сейчас в игре и на каком сервере | Profile: a separate «Notifications» tab (push, favourite servers, players, news); the «Following» list shows who is in a game right now and where
 - 🏁 Новый сезон: итоги завершённого сезона (пьедестал по часам) публикуются в канале оповещений Discord | A new season: the finished one (podium by hours) is announced in the Discord alert channel
+- 📣 Discord → «Дополнительно»: запланированные объявления (текст, канал, время, повтор раз в день или неделю, упоминание) | Discord → «Extras»: scheduled announcements (text, channel, time, a daily or weekly repeat, a mention)
+- 🛡️ Защита поставки: CodeQL и поиск секретов (gitleaks) в CI, действия GitHub закреплены по хешам, найденная исправимая критическая уязвимость в образах роняет сборку | Supply-chain protection: CodeQL and secret scanning (gitleaks) in CI, GitHub Actions pinned by hash, a fixable critical vulnerability in the images fails the build
+- 🧾 Релиз: к нему прикладываются список компонентов (SBOM) с подписью и подтверждение сборки установщика | Release: ships with a signed list of components (SBOM) and a build provenance attestation of the installer
+- ✅ Обновление проверяет подпись релиза и без cosign на сервере: панель сама скачивает закреплённую версию с проверкой SHA-256 | Update verifies the release signature even without cosign on the server: the panel downloads a pinned version and checks its SHA-256
 
 ### 🐛 Исправлено | Fixed
 - 🎮 Иконки игр в списках не упираются в края плитки: у всех одинаковые отступы | Game icons in lists no longer touch the edges of their tile: the same padding for all

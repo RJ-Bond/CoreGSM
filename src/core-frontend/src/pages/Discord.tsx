@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { api, type Binding, type BotStatus, type DiscordGuild, type Server, type SettingsInfo } from '../api';
 import { DiscordWizard, computeWizard } from '../components/DiscordWizard';
 import DeliveryList from '../components/DeliveryList';
+import AnnouncementsAdmin from '../components/AnnouncementsAdmin';
 import DiscordExtras from '../components/DiscordExtras';
 import PlayersShownCard from '../components/PlayersShownCard';
 
@@ -324,7 +325,7 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
           <DiscordStyleCard />
         </>
       )}
-      {tab === 'extra' && loaded && <DiscordExtras servers={servers} />}
+      {tab === 'extra' && loaded && <><DiscordExtras servers={servers} /><AnnouncementsAdmin /></>}
       {tab === 'delivery' && <DeliveryList />}
 
       {draft && (

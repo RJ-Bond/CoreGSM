@@ -368,15 +368,37 @@ screen_power() {
 
 # ---------- installer download / run ----------
 # The Sigstore signature that release.yml made for install.sh. It proves the file was built by that workflow in this
-# repository, which a checksum from the same place cannot. Checked when cosign is installed; without it only the
-# checksum is verified (and a note says so). Only for the release channel. Messages go to stderr: the caller captures
+# repository, which a checksum from the same place cannot. Checked with the cosign on the server or a pinned one the
+# panel downloads itself; only when neither can be had is the checksum all that is verified (and a note says so). Only for the release channel. Messages go to stderr: the caller captures
 # the stdout of download_installer (the path of the file).
+# cosign for this check: the one installed on the server, else a pinned release downloaded once into the panel's own
+# folder. The version is the one release.yml signs with, and the SHA-256 of the binary is written here, so a tampered
+# download is never run. Prints the path; fails (nothing printed) when it cannot be had.
+COSIGN_VERSION=v2.5.2
+cosign_path() {
+  if command -v cosign >/dev/null 2>&1; then command -v cosign; return 0; fi
+  local arch sum f="$APP_DIR/bin/cosign-$COSIGN_VERSION" t
+  case "$(uname -m)" in
+    x86_64|amd64) arch=amd64; sum=bcfeae05557a9f313ee4392d2f335d0ff69ebbfd232019e3736fb04999fe1734 ;;
+    aarch64|arm64) arch=arm64; sum=2cbcea1873ad76274c3f241ef175d204654e3aac3e73e6ec4504e5227015cb0a ;;
+    *) return 1 ;;
+  esac
+  if [ -x "$f" ] && [ "$(sha256sum "$f" | cut -d' ' -f1)" = "$sum" ]; then printf '%s' "$f"; return 0; fi
+  mkdir -p "$APP_DIR/bin" 2>/dev/null || return 1
+  t="$(mktemp)"
+  if curl -fsSL --max-time 120 ${PROXY_ARGS[@]+"${PROXY_ARGS[@]}"} "https://github.com/sigstore/cosign/releases/download/$COSIGN_VERSION/cosign-linux-$arch" > "$t" 2>/dev/null \
+     && [ "$(sha256sum "$t" | cut -d' ' -f1)" = "$sum" ]; then
+    install -m 0755 "$t" "$f" && rm -f "$t" && printf '%s' "$f"; return 0
+  fi
+  rm -f "$t"; return 1
+}
+
 release_signature_ok() { # release_signature_ok FILE
   [ "$R_SOURCE" = release ] || return 0
-  if ! command -v cosign >/dev/null 2>&1; then dim "Подпись релиза не проверена: cosign не установлен (контрольная сумма проверена)" >&2; return 0; fi
+  local cs; cs="$(cosign_path)" || { dim "Подпись релиза не проверена: cosign недоступен (контрольная сумма проверена)" >&2; return 0; }
   local b rc; b="$(mktemp)"
   if ! fetch "$RELEASE_BASE/install.sh.bundle" > "$b" 2>/dev/null; then rm -f "$b"; bad "У релиза нет файла подписи install.sh.bundle" >&2; return 1; fi
-  cosign verify-blob --bundle "$b" \
+  "$cs" verify-blob --bundle "$b" \
     --certificate-identity-regexp '^https://github\.com/RJ-Bond/CoreGSM/\.github/workflows/release\.yml@refs/heads/main$' \
     --certificate-oidc-issuer https://token.actions.githubusercontent.com "$1" >/dev/null 2>&1
   rc=$?; rm -f "$b"

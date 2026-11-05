@@ -30,6 +30,11 @@ export const ERRORS = {
 
   // ---- sign-in, setup, registration ----
   login_locked: 'Слишком много неверных попыток. Повторите через {sec} с.',
+  announcement_no_text: 'Введите текст объявления',
+  announcement_long: 'Текст не длиннее {n} символов',
+  announcement_no_channel: 'Выберите канал Discord',
+  announcement_bad_time: 'Укажите время в будущем, не дальше года',
+  announcement_limit: 'Не больше {n} запланированных объявлений',
   captcha_required: 'Подтвердите, что вы не робот: страница решит небольшую задачу сама',
   ip_locked: 'Слишком много неудачных попыток входа с этого адреса. Повторите через {sec} с.',
   bad_credentials: 'Неверный логин или пароль',
