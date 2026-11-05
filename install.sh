@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="b799692ebe49"
+COREGSM_BUILD="8122c93c1488"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.17"
+COREGSM_VERSION="1.1.18"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -155299,9 +155299,9 @@ __COREGSM_EOF__
 body {
   background-image:
     radial-gradient(60% 38% at 50% -4%, rgb(var(--brand) / var(--au1)), transparent 100%),
-    radial-gradient(40% 30% at 98% 2%, rgb(45 212 191 / var(--au2)), transparent 100%),
+    radial-gradient(40% 30% at 98% 2%, rgb(var(--brand-2) / calc(var(--au2) * 1.3)), transparent 100%),
     radial-gradient(45% 50% at 0% 50%, rgb(var(--brand) / calc(var(--au1) * .45)), transparent 100%),
-    radial-gradient(55% 100% at 100% 100%, rgb(45 212 191 / calc(var(--au2) * .5)), transparent 100%);
+    radial-gradient(55% 50% at 100% 50%, rgb(var(--brand-2) / calc(var(--au2) * .9)), transparent 100%);
   background-size: 100% 110vh, 100% 110vh, 100% 90vh, 100% 70vh;
   background-repeat: no-repeat;
   background-position: top, top, 0 58%, 100% 100%;
@@ -155435,6 +155435,21 @@ a.tile:active, a.panel:active, button.tile:active, [role='link'].tile:active { t
 .adm-badge { min-width: 1.25rem; }
 
 .cm-hero-stats dd .cm-delta { display: flex; margin-top: 2px; font-weight: 800; }
+
+/* ---------- surfaces: the dark theme gets more steps between the page, a card, a raised surface and a field ---------- */
+:root[data-theme='dark'] { --card: 21 23 32; --raised: 31 34 46; --overlay: 41 45 61; --soft: 34 37 49; --line: 44 47 61; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme='light']) { --card: 21 23 32; --raised: 31 34 46; --overlay: 41 45 61; --soft: 34 37 49; --line: 44 47 61; } }
+/* the light theme: a page with a slight tint so white cards stand off it, a firmer line */
+:root[data-theme='light'] { --page: 237 239 247; --line: 224 227 238; --soft: 232 235 245; }
+@media (prefers-color-scheme: light) { :root:not([data-theme='dark']) { --page: 237 239 247; --line: 224 227 238; --soft: 232 235 245; } }
+:root[data-theme='light'] .tile, :root[data-theme='light'] .panel { box-shadow: 0 1px 2px rgb(20 24 40 / .06), 0 8px 24px -12px rgb(20 24 40 / .16); }
+/* charts read well on a light page: a firmer line and a visible area */
+:root[data-theme='light'] .hc-line { stroke-width: 3; }
+:root[data-theme='light'] .hc-wrap svg path[fill]:not([fill='none']) { fill-opacity: .9; }
+
+/* ---------- icon buttons in rows are easier to hit ---------- */
+.adm-table .row-act { --b-i: 2.25rem; }
+.row-act, .btn-icon-sm { min-width: 36px; min-height: 36px; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/profile.css" << '__COREGSM_EOF__'
@@ -158472,8 +158487,8 @@ export function toast(text: string, kindOrOptions: ToastKind | ToastOptions = 'o
   const t: ToastItem = { id: ++toastSeq, text, kind, action: o.action, duration, onClose: o.onClose };
   const next = [...toasts, t];
   // the oldest ones are pushed out: they count as timed out, so a pending "delete after the undo window" still happens
-  const evicted = next.slice(0, Math.max(0, next.length - 4));
-  toasts = next.slice(-4);
+  const evicted = next.slice(0, Math.max(0, next.length - 3));
+  toasts = next.slice(-3);
   evicted.forEach((e) => { window.clearTimeout(toastTimers.get(e.id)); toastTimers.delete(e.id); e.onClose?.('timeout'); });
   emitToasts();
   armToast(t.id, duration);

@@ -41,8 +41,8 @@ export function toast(text: string, kindOrOptions: ToastKind | ToastOptions = 'o
   const t: ToastItem = { id: ++toastSeq, text, kind, action: o.action, duration, onClose: o.onClose };
   const next = [...toasts, t];
   // the oldest ones are pushed out: they count as timed out, so a pending "delete after the undo window" still happens
-  const evicted = next.slice(0, Math.max(0, next.length - 4));
-  toasts = next.slice(-4);
+  const evicted = next.slice(0, Math.max(0, next.length - 3));
+  toasts = next.slice(-3);
   evicted.forEach((e) => { window.clearTimeout(toastTimers.get(e.id)); toastTimers.delete(e.id); e.onClose?.('timeout'); });
   emitToasts();
   armToast(t.id, duration);
