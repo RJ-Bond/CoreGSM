@@ -112,6 +112,7 @@ function fmtDur(sec: number): string {
 const EVENT_TEXT: Record<string, string> = {
   login: 'Вход в аккаунт',
   login_failed: 'Неудачная попытка входа',
+  login_new_device: 'Вход с нового устройства',
   password_changed: 'Пароль изменён',
   email_changed: 'Электронная почта изменена',
   discord_linked: 'Привязан Discord',

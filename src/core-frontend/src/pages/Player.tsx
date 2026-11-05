@@ -52,6 +52,9 @@ function RankChip({ place, before, label }: { place: number | null; before?: num
 
 const partOfDay = (h: number) => (h < 6 ? t('d2.pl.night') : h < 12 ? t('d2.pl.morning') : h < 18 ? t('d2.pl.day') : t('d2.pl.evening'));
 
+/** 104 min → «1 ч 44 мин», a whole hour → «2 ч» */
+const visitMinutes = (m: number) => (m < 60 ? t('dur.m', { n: m }) : m % 60 ? t('dur.hm', { h: Math.floor(m / 60), m: m % 60 }) : t('dur.h', { n: m / 60 }));
+
 export default function PlayerPage({ name }: { name: string }) {
   useI18n();
   const [p, setP] = useState<PlayerCard | null>(null);
@@ -166,7 +169,7 @@ export default function PlayerPage({ name }: { name: string }) {
               <a href={`/servers/${v.serverId}`} className="min-w-0 flex-1 truncate font-bold hover:text-link">{v.serverName}</a>
               <span className="text-sm font-semibold text-mute">
                 {fmtDateTime(v.from)} – {v.to ? fmtTime(v.to) : t('adm.com.now')}
-                {v.to ? ` · ${t('dur.m', { n: Math.max(1, Math.round((v.to - v.from) / 60_000)) })}` : ''}
+                {v.to ? ` · ${visitMinutes(Math.max(1, Math.round((v.to - v.from) / 60_000)))}` : ''}
               </span>
             </li>
           ))}

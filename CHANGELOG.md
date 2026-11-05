@@ -33,6 +33,10 @@ interface language; the GitHub release text is built from the section of the ver
 - 🛡️ Защищённые действия (восстановление и скачивание копий, токен бота и прокси, почтовый сервер, API-ключи, удаление серверов и аккаунтов, смена ролей) просят пароль ещё раз и действуют 10 минут; с двухфакторной защитой нужен и код | Protected actions (restoring and downloading backups, the bot token and proxy, the mail server, API keys, deleting servers and accounts, changing roles) ask for the password again and work for 10 minutes; with two-factor protection the code is needed too
 - 🔑 API-ключи: срок действия и список разрешённых адресов (адреса и сети IPv4), видно, с какого адреса ключ использовали в последний раз [migration] | API keys: an expiry and a list of allowed addresses (addresses and IPv4 networks), the address of the last use is shown
 
+### 🐛 Исправлено | Fixed
+- ⏱️ Страница игрока: длительность визита пишется «1 ч 44 мин», а не «104 мин» | Player page: a visit length reads «1 h 44 min», not «104 min»
+- 🎯 Профиль: кольцо уровня у аватара без тёмной серой обводки; в «Активности» вместо login_new_device «Вход с нового устройства» | Profile: the level ring has no dark grey outline; the Activity feed says «Sign-in from a new device» instead of login_new_device
+
 ## 1.1.21 · 05.11.2026
 
 ### ✨ Новое | New
