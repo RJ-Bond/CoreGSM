@@ -65,7 +65,7 @@ test('/help: live numbers, the line about the person, the English version', () =
   assert.match(JSON.stringify(helpComponents('play', ctx())[1]!.toJSON()), /help:cmd:play/);
   assert.match(helpEmbed('play', { ...ctx(), live }).toJSON().description!, /^🟢 Сейчас играют|^.*Сейчас играют/);
   assert.equal(helpEmbed('srv', ctx()).toJSON().thumbnail, undefined, 'no big logo beside the list');
-  assert.doesNotMatch(helpEmbed('play', { ...ctx(), live }).toJSON().description!, /Сейчас играют/);
+  assert.match(helpEmbed('play', { ...ctx(), live }).toJSON().description!, /^🟢 Сейчас играют/);
   const me = { found: true, gameNick: 'Bob', rank: null };
   assert.match(helpEmbed(null, { ...ctx(), me }).toJSON().description!, /Bob/);
   assert.equal(helpEmbed(null, ctx('en')).toJSON().title, '📖 What the bot can do');
