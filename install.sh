@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="412d5b091fe9"
+COREGSM_BUILD="71ff6c7f0407"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.47"
+COREGSM_VERSION="1.1.48"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -20765,6 +20765,182 @@ export function matchFaq(text: string, list: FaqEntry[]): FaqEntry | null {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/community"
+  cat > "$APP_DIR/core-backend/src/community/giveawayLogic.ts" << '__COREGSM_EOF__'
+/** Giveaways: who may join and a fair draw. Pure (the randomness is passed in). */
+
+export interface Conditions { roleId: string; minHours: number }
+export interface Joiner { roles: string[]; hours: number | null }
+
+/** null = may join; otherwise why not */
+export function joinProblem(c: Conditions, j: Joiner): 'role' | 'unlinked' | 'hours' | null {
+  if (c.roleId && !j.roles.includes(c.roleId)) return 'role';
+  if (c.minHours > 0) {
+    if (j.hours === null) return 'unlinked';
+    if (j.hours < c.minHours) return 'hours';
+  }
+  return null;
+}
+
+/**
+ * `count` different winners out of `pool` without the ones in `skip` (Fisher–Yates with the given random function:
+ * rnd(n) returns an integer in [0, n)).
+ */
+export function draw(pool: string[], count: number, rnd: (n: number) => number, skip: string[] = []): string[] {
+  const bad = new Set(skip);
+  const a = [...new Set(pool)].filter((x) => !bad.has(x));
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = rnd(i + 1);
+    [a[i], a[j]] = [a[j]!, a[i]!];
+  }
+  return a.slice(0, Math.max(0, count));
+}
+
+export function validateGiveaway(o: { prize: string; winners: number; hours: number; minHours?: number }): string | null {
+  if (o.prize.trim().length < 2 || o.prize.length > 200) return 'Приз — от 2 до 200 символов';
+  if (!Number.isInteger(o.winners) || o.winners < 1 || o.winners > 20) return 'Победителей — от 1 до 20';
+  if (!(o.hours >= 0.05) || o.hours > 24 * 30) return 'Длительность — от 3 минут до 30 дней';
+  if ((o.minHours ?? 0) < 0 || (o.minHours ?? 0) > 100000) return 'Минимум часов — от 0';
+  return null;
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/community"
+  cat > "$APP_DIR/core-backend/src/community/giveaways.ts" << '__COREGSM_EOF__'
+/**
+ * Giveaways, started by an administrator with /giveaway in Discord: a card with the «🎉 Участвую» button, optional conditions
+ * (a role, hours of play), a fair draw when the time comes, /giveaway end and reroll.
+ *   POST /internal/giveaways/start|end|reroll|join   (the bot)
+ */
+import { randomInt } from 'node:crypto';
+import type { Express, RequestHandler } from 'express';
+import { z } from 'zod';
+import { enqueueAlert } from '../alerts/alerts.js';
+import { COLORS } from '../discord/palette.js';
+import { db } from '../db.js';
+import { log } from '../logger.js';
+import { vrHoursOf } from '../profile/profileVr.js';
+import { draw, joinProblem, validateGiveaway } from './giveawayLogic.js';
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS giveaways (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  prize TEXT NOT NULL,
+  winners INTEGER NOT NULL,
+  ends_at INTEGER NOT NULL,
+  channel_id TEXT NOT NULL,
+  role_id TEXT NOT NULL DEFAULT '',
+  min_hours REAL NOT NULL DEFAULT 0,
+  host_id TEXT NOT NULL,
+  ended INTEGER NOT NULL DEFAULT 0,
+  winner_ids TEXT NOT NULL DEFAULT '[]',
+  created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS giveaway_entries (
+  giveaway_id INTEGER NOT NULL REFERENCES giveaways(id) ON DELETE CASCADE,
+  discord_id TEXT NOT NULL,
+  PRIMARY KEY (giveaway_id, discord_id)
+);
+`);
+
+interface Row { id: number; prize: string; winners: number; ends_at: number; channel_id: string; role_id: string; min_hours: number; host_id: string; ended: number; winner_ids: string }
+const get = (id: number) => db.prepare('SELECT * FROM giveaways WHERE id = ?').get(id) as Row | undefined;
+const entries = (id: number) => (db.prepare('SELECT discord_id FROM giveaway_entries WHERE giveaway_id = ?').all(id) as { discord_id: string }[]).map((r) => r.discord_id);
+
+function conditionsText(g: Row): string {
+  const l: string[] = [];
+  if (g.role_id) l.push(`роль <@&${g.role_id}>`);
+  if (g.min_hours > 0) l.push(`от ${g.min_hours} ч игры (нужен привязанный ник — /link)`);
+  return l.length ? `\n📋 Условия: ${l.join(', ')}` : '';
+}
+
+function announceNew(g: Row): void {
+  enqueueAlert('poll', 'CoreGSM', {
+    content: '',
+    mention: 'none',
+    embed: {
+      title: `🎉 Розыгрыш: ${g.prize}`,
+      description: `Нажмите кнопку, чтобы участвовать.\n🏆 Победителей: **${g.winners}**\n⏰ Итоги <t:${Math.floor(g.ends_at / 1000)}:R>${conditionsText(g)}\n🆔 Номер розыгрыша: **${g.id}**`,
+      color: COLORS.info,
+    },
+    buttons: [{ customId: `gw:${g.id}`, label: '🎉 Участвую' }],
+  }, g.channel_id);
+}
+
+/** picks and announces the winners; skip = those who already won (reroll) */
+export function finish(g: Row, skip: string[] = []): string[] {
+  const winners = draw(entries(g.id), g.winners, (n) => randomInt(n), skip);
+  db.prepare('UPDATE giveaways SET ended = 1, winner_ids = ? WHERE id = ?').run(JSON.stringify(winners), g.id);
+  enqueueAlert('poll', 'CoreGSM', {
+    content: winners.map((w) => `<@${w}>`).join(' '),
+    mention: 'none',
+    embed: {
+      title: `🏆 Итоги розыгрыша: ${g.prize}`,
+      description: winners.length ? `Победител${winners.length > 1 ? 'и' : 'ь'}: ${winners.map((w) => `<@${w}>`).join(', ')}\nПоздравляем! Администратор свяжется с вами.` : 'Никто не участвовал — победителей нет.',
+      color: winners.length ? COLORS.ok : COLORS.warn,
+    },
+  }, g.channel_id);
+  return winners;
+}
+
+export function finishDue(now = Date.now()): number {
+  const due = db.prepare('SELECT * FROM giveaways WHERE ended = 0 AND ends_at <= ?').all(now) as Row[];
+  for (const g of due) finish(g);
+  return due.length;
+}
+
+export function registerGiveaways({ app, internal }: { app: Express; internal: RequestHandler }): void {
+  app.post('/internal/giveaways/start', internal, (req, res) => {
+    const b = z.object({ prize: z.string().max(200), winners: z.number().int(), hours: z.number(), roleId: z.string().regex(/^(\d{15,25})?$/).optional(), minHours: z.number().optional(), channelId: z.string().regex(/^\d{15,25}$/), hostId: z.string().regex(/^\d{15,25}$/) }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'bad body' });
+    const bad = validateGiveaway({ prize: b.data.prize, winners: b.data.winners, hours: b.data.hours, minHours: b.data.minHours });
+    if (bad) return res.status(400).json({ error: bad });
+    const now = Date.now();
+    const id = Number(db.prepare('INSERT INTO giveaways (prize, winners, ends_at, channel_id, role_id, min_hours, host_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(b.data.prize.trim(), b.data.winners, now + Math.round(b.data.hours * 3600_000), b.data.channelId, b.data.roleId ?? '', b.data.minHours ?? 0, b.data.hostId, now).lastInsertRowid);
+    announceNew(get(id)!);
+    res.json({ id });
+  });
+
+  app.post('/internal/giveaways/end', internal, (req, res) => {
+    const b = z.object({ id: z.number().int(), reroll: z.boolean().optional() }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'bad body' });
+    const g = get(b.data.id);
+    if (!g) return res.json({ status: 'notfound' });
+    if (b.data.reroll) {
+      if (!g.ended) return res.json({ status: 'running' });
+      return res.json({ status: 'ok', winners: finish(g, JSON.parse(g.winner_ids) as string[]) });
+    }
+    if (g.ended) return res.json({ status: 'ended' });
+    res.json({ status: 'ok', winners: finish(g) });
+  });
+
+  app.post('/internal/giveaways/join', internal, (req, res) => {
+    const b = z.object({ id: z.number().int(), discordId: z.string().regex(/^\d{15,25}$/), roles: z.array(z.string()).max(250) }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'bad body' });
+    const g = get(b.data.id);
+    if (!g) return res.json({ status: 'notfound' });
+    if (g.ended || g.ends_at <= Date.now()) return res.json({ status: 'ended' });
+    let hours: number | null = null;
+    if (g.min_hours > 0) {
+      const u = db.prepare("SELECT id, game_nick FROM users WHERE discord_id = ? AND status = 'active'").get(b.data.discordId) as { id: number; game_nick: string } | undefined;
+      if (u?.game_nick) hours = vrHoursOf(u.id, u.game_nick).hours;
+    }
+    const p = joinProblem({ roleId: g.role_id, minHours: g.min_hours }, { roles: b.data.roles, hours });
+    if (p) return res.json({ status: p, roleId: g.role_id, minHours: g.min_hours, hours });
+    const r = db.prepare('INSERT OR IGNORE INTO giveaway_entries (giveaway_id, discord_id) VALUES (?, ?)').run(g.id, b.data.discordId);
+    res.json({ status: r.changes ? 'ok' : 'already', total: entries(g.id).length });
+  });
+
+  const tick = () => {
+    try {
+      finishDue();
+    } catch (e) {
+      log.error('finishing giveaways failed', (e as Error).message);
+    }
+  };
+  setTimeout(tick, 50_000).unref();
+  setInterval(tick, 30_000).unref();
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/community"
   cat > "$APP_DIR/core-backend/src/community/moderation.ts" << '__COREGSM_EOF__'
 /**
  * Settings and records of the moderation commands of the bot (/clear, /ban, /unban, /kick, /warn, the context menus):
@@ -22707,6 +22883,7 @@ export const botClientId = () => bot.status.clientId ?? clientIdFromToken(getSet
 export const BOT_COMMANDS = [
   { name: '/register', description: 'Зарегистрироваться на сайте через Discord (пароль не нужен). Параметры: nick (ник в игре), agree (согласие с правилами)' },
   { name: '/nick', description: 'Сменить игровой ник, по которому считается статистика' },
+  { name: '/giveaway', description: 'Розыгрыш призов (только админы): start — начать, end — подвести итоги, reroll — выбрать других победителей' },
   { name: '/faq', description: 'Ответ на частый вопрос (ответы пишутся в панели); бот отвечает и на упоминание с вопросом' },
   { name: '/link', description: 'Привязать игровой ник: выберите себя из списка игроков или впишите ник вручную' },
   { name: '/profile', description: 'Моя карточка: ник, ранг V Rising, часы в игре и достижения' },
@@ -25697,6 +25874,7 @@ import { registerWelcome } from './community/welcome.js';
 import { registerDmQueue } from './alerts/dmQueue.js';
 import { registerBotExtras, startWeekly } from './discord/botExtras.js';
 import { registerFaq } from './community/faq.js';
+import { registerGiveaways } from './community/giveaways.js';
 import { registerRules } from './monitoring/rules.js';
 import { registerPolls } from './community/polls.js';
 import { registerDiscordGallery } from './discord/discordGallery.js';
@@ -25882,6 +26060,7 @@ registerWelcome({ app, admin, internal });
 registerDmQueue({ app, auth, internal, userId: (req) => (req as AuthedRequest).user!.id });
 registerBotExtras({ app, admin, internal });
 registerFaq({ app, admin, internal });
+registerGiveaways({ app, internal });
 startWeekly();
 registerModeration({ app, admin, internal });
 registerRules({ app, auth, admin });
@@ -39342,7 +39521,7 @@ interface DeliveryItem {
 }
 /** buttons answered by the bot (a poll): five to a row */
 function actionRows(buttons: { customId: string; label: string }[] | undefined) {
-  const list = (buttons ?? []).filter((b) => /^poll:\d+:\d+$/.test(b.customId) && b.label).slice(0, 10);
+  const list = (buttons ?? []).filter((b) => /^(poll:\d+:\d+|gw:\d+)$/.test(b.customId) && b.label).slice(0, 10);
   const rows: ActionRowBuilder<ButtonBuilder>[] = [];
   for (let i = 0; i < list.length; i += 5) {
     rows.push(new ActionRowBuilder<ButtonBuilder>().addComponents(list.slice(i, i + 5).map((b) => new ButtonBuilder().setStyle(ButtonStyle.Secondary).setCustomId(b.customId).setLabel(b.label.slice(0, 80)))));
@@ -40131,6 +40310,7 @@ import type { AutocompleteInteraction, ButtonInteraction, Client, Interaction } 
 import { backend, backendJson } from './backend.js';
 import { humanDiscordError } from './errors.js';
 import { log } from './log.js';
+import { GIVEAWAY_COMMANDS, GIVEAWAY_NAMES, handleGiveaway, handleGiveawayButton } from './giveaway.js';
 import { FAQ_COMMANDS, FAQ_NAMES, faqAutocomplete, handleFaq } from './faq.js';
 import { handleInfo, INFO_COMMANDS, INFO_NAMES, infoAutocomplete } from './info.js';
 import { HELP_COMMANDS, HELP_NAMES, handleHelp, handleHelpButton, handleHelpSelect, helpAutocomplete } from './help.js';
@@ -40162,6 +40342,7 @@ export const COMMANDS = [
   ...LINK_COMMANDS,
   ...HELP_COMMANDS,
   ...FAQ_COMMANDS,
+  ...GIVEAWAY_COMMANDS,
 ];
 
 /** registers the commands and returns how many Discord accepted (0 on failure) */
@@ -40236,6 +40417,7 @@ export async function handleInteraction(i: Interaction): Promise<void> {
   if (i.isButton() && i.customId.startsWith('clear:')) return handleClearButton(i);
   if (i.isButton() && i.customId.startsWith('mod:')) return handlePunishButton(i);
   if (i.isButton() && i.customId.startsWith('appeal:')) return handleAppealButton(i);
+  if (i.isButton() && i.customId.startsWith('gw:')) return handleGiveawayButton(i);
   if (i.isButton() && i.customId.startsWith('dmx:')) return handleDmx(i);
   if (i.isButton() && i.customId.startsWith('fol:')) return handleFollow(i);
   if (i.isButton() && i.customId.startsWith('lnk:')) return handleLinkButton(i);
@@ -40253,6 +40435,7 @@ export async function handleInteraction(i: Interaction): Promise<void> {
   if (PUNISH_NAMES.has(i.commandName)) return handlePunish(i);
   if (HELP_NAMES.has(i.commandName)) return handleHelp(i);
   if (FAQ_NAMES.has(i.commandName)) return handleFaq(i);
+  if (GIVEAWAY_NAMES.has(i.commandName)) return handleGiveaway(i);
   if (LINK_NAMES.has(i.commandName)) return handleLinkCommand(i);
   const name = i.commandName;
   if (name !== 'register' && name !== 'nick' && name !== 'profile') return;
@@ -40808,6 +40991,114 @@ export const setGatewayAgent = (a: Agent | undefined) => {
 };
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-bot/src"
+  cat > "$APP_DIR/core-bot/src/giveaway.ts" << '__COREGSM_EOF__'
+/** /giveaway start|end|reroll (administrators) and the «🎉 Участвую» button under a giveaway. The backend keeps the entries and draws. */
+import { PermissionFlagsBits, type ButtonInteraction, type ChatInputCommandInteraction } from 'discord.js';
+import { backendJson } from './backend.js';
+import { log } from './log.js';
+import { COLORS, replyEmbed } from './replies.js';
+
+const EPHEMERAL = 64;
+const loc = (ru: string, en: string) => ({ ru, 'en-US': en, 'en-GB': en });
+const idOpt = { type: 4, name: 'id', description: 'Номер розыгрыша', description_localizations: loc('Номер розыгрыша', 'Giveaway number'), required: true, min_value: 1 };
+
+export const GIVEAWAY_COMMANDS = [
+  {
+    name: 'giveaway',
+    description: '🎉 Розыгрыш призов · только админы',
+    description_localizations: loc('🎉 Розыгрыш призов · только админы', '🎉 Prize giveaway · admins only'),
+    dm_permission: false,
+    default_member_permissions: String(PermissionFlagsBits.Administrator),
+    options: [
+      {
+        type: 1,
+        name: 'start',
+        description: 'Начать розыгрыш в этом канале',
+        description_localizations: loc('Начать розыгрыш в этом канале', 'Start a giveaway in this channel'),
+        options: [
+          { type: 3, name: 'prize', description: 'Приз', description_localizations: loc('Приз', 'Prize'), required: true, max_length: 200 },
+          { type: 10, name: 'hours', description: 'Через сколько часов подвести итоги', description_localizations: loc('Через сколько часов подвести итоги', 'Hours until the draw'), required: true, min_value: 0.05, max_value: 720 },
+          { type: 4, name: 'winners', description: 'Сколько победителей (по умолчанию 1)', description_localizations: loc('Сколько победителей (по умолчанию 1)', 'How many winners (1 by default)'), min_value: 1, max_value: 20 },
+          { type: 8, name: 'role', description: 'Участвовать могут только с этой ролью', description_localizations: loc('Участвовать могут только с этой ролью', 'Only members with this role may join') },
+          { type: 10, name: 'min_hours', description: 'Минимум часов игры (нужен привязанный ник)', description_localizations: loc('Минимум часов игры (нужен привязанный ник)', 'Minimum hours of play (a linked nick is needed)'), min_value: 0, max_value: 100000 },
+        ],
+      },
+      { type: 1, name: 'end', description: 'Подвести итоги сейчас', description_localizations: loc('Подвести итоги сейчас', 'Draw now'), options: [idOpt] },
+      { type: 1, name: 'reroll', description: 'Выбрать новых победителей вместо прежних', description_localizations: loc('Выбрать новых победителей вместо прежних', 'Pick new winners instead of the old ones'), options: [idOpt] },
+    ],
+  },
+];
+export const GIVEAWAY_NAMES = new Set(GIVEAWAY_COMMANDS.map((c) => c.name));
+
+export async function handleGiveaway(i: ChatInputCommandInteraction): Promise<void> {
+  if (!i.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+    await i.reply({ embeds: [replyEmbed('Только для администраторов', 'Розыгрышами управляют администраторы сервера.', COLORS.warn)], flags: EPHEMERAL }).catch(() => undefined);
+    return;
+  }
+  try {
+    await i.deferReply({ flags: EPHEMERAL });
+  } catch (e) {
+    log('giveaway: could not acknowledge:', (e as Error).message);
+    return;
+  }
+  const sub = i.options.getSubcommand();
+  let out;
+  if (sub === 'start') {
+    const r = await backendJson<{ id?: number; error?: string }>('/internal/giveaways/start', {
+      method: 'POST',
+      body: JSON.stringify({
+        prize: i.options.getString('prize', true),
+        hours: i.options.getNumber('hours', true),
+        winners: i.options.getInteger('winners') ?? 1,
+        roleId: i.options.getRole('role')?.id ?? '',
+        minHours: i.options.getNumber('min_hours') ?? 0,
+        channelId: i.channelId,
+        hostId: i.user.id,
+      }),
+    }).catch(() => null);
+    out = r?.ok ? replyEmbed('Розыгрыш запущен', `Номер **${r.data?.id}**. Карточка появится в канале через несколько секунд. Итоги подведутся сами; раньше — \`/giveaway end id:${r.data?.id}\`.`, COLORS.ok)
+      : replyEmbed('Не получилось', r?.data?.error ?? 'Панель сейчас не отвечает, попробуйте ещё раз чуть позже.', COLORS.bad);
+  } else {
+    const r = await backendJson<{ status?: string; winners?: string[] }>('/internal/giveaways/end', { method: 'POST', body: JSON.stringify({ id: i.options.getInteger('id', true), reroll: sub === 'reroll' }) }).catch(() => null);
+    const s = r?.data?.status;
+    out = s === 'ok' ? replyEmbed(sub === 'reroll' ? 'Новые победители выбраны' : 'Итоги подведены', 'Результат появится в канале розыгрыша.', COLORS.ok)
+      : s === 'notfound' ? replyEmbed('Розыгрыш не найден', 'Проверьте номер на карточке розыгрыша.', COLORS.bad)
+      : s === 'ended' ? replyEmbed('Уже подведено', 'Чтобы выбрать других победителей, используйте `/giveaway reroll`.', COLORS.warn)
+      : s === 'running' ? replyEmbed('Розыгрыш ещё идёт', 'Сначала подведите итоги: `/giveaway end`.', COLORS.warn)
+      : replyEmbed('Не получилось', 'Панель сейчас не отвечает, попробуйте ещё раз чуть позже.', COLORS.bad);
+  }
+  await i.editReply(out).catch((e) => log('giveaway reply failed:', (e as Error).message));
+}
+
+/** the «🎉 Участвую» button: «gw:<id>» */
+export async function handleGiveawayButton(i: ButtonInteraction): Promise<void> {
+  const m = /^gw:(\d+)$/.exec(i.customId);
+  if (!m) return;
+  try {
+    await i.deferReply({ flags: EPHEMERAL });
+  } catch (e) {
+    log('giveaway button: could not acknowledge:', (e as Error).message);
+    return;
+  }
+  const roles = Array.isArray(i.member?.roles) ? (i.member.roles as string[]) : [...(i.member?.roles?.cache?.keys() ?? [])];
+  const r = await backendJson<{ status?: string; roleId?: string; minHours?: number; hours?: number | null; total?: number }>('/internal/giveaways/join', {
+    method: 'POST',
+    body: JSON.stringify({ id: Number(m[1]), discordId: i.user.id, roles }),
+  }).catch(() => null);
+  const d = r?.data;
+  const out =
+    d?.status === 'ok' ? replyEmbed('Вы участвуете', `Удачи! Участников: ${d.total}.`, COLORS.ok)
+    : d?.status === 'already' ? replyEmbed('Вы уже участвуете', 'Повторно нажимать не нужно.', COLORS.ok)
+    : d?.status === 'role' ? replyEmbed('Нужна роль', `Участвовать могут только участники с ролью <@&${d.roleId}>.`, COLORS.warn)
+    : d?.status === 'unlinked' ? replyEmbed('Нужен привязанный ник', `Нужно от ${d.minHours} ч игры, а ник не привязан: сделайте это командой /link.`, COLORS.warn)
+    : d?.status === 'hours' ? replyEmbed('Пока не хватает часов', `Нужно от ${d.minHours} ч игры, у вас ${(d.hours ?? 0).toFixed(1)} ч.`, COLORS.warn)
+    : d?.status === 'ended' ? replyEmbed('Розыгрыш завершён', 'Приём участников закончился.', COLORS.warn)
+    : d?.status === 'notfound' ? replyEmbed('Розыгрыш не найден', 'Возможно, его удалили.', COLORS.bad)
+    : replyEmbed('Не получилось', 'Панель сейчас не отвечает, попробуйте ещё раз чуть позже.', COLORS.bad);
+  await i.editReply(out).catch((e) => log('giveaway reply failed:', (e as Error).message));
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-bot/src"
   cat > "$APP_DIR/core-bot/src/help.ts" << '__COREGSM_EOF__'
 /**
  * /help: a menu of sections (the language of the person, the moderation for administrators only), the details of one command
@@ -41233,6 +41524,7 @@ export const CMDS: CmdInfo[] = [
   { cmd: '/status', text: { ru: 'карточка сервера с графиком за сутки', en: 'a server card with the graph of the day' }, usage: '/status server:<сервер>', examples: ['/status server:Just-Skill'], needs: NONE },
   { cmd: '/player', text: { ru: 'карточка игрока: часы, серия дней, где и когда играет', en: 'a player card: hours, streak, where and when they play' }, usage: '/player nick:<ник>', examples: ['/player nick:Vasya'], needs: NONE },
   { cmd: '/top', text: { ru: 'самые активные игроки за неделю или месяц', en: 'the most active players of the week or the month' }, usage: '/top [period:неделя|месяц]', examples: ['/top', '/top period:месяц'], needs: NONE },
+  { cmd: '/giveaway', text: { ru: 'розыгрыш призов: кнопка «Участвую», условия (роль, часы игры), честный выбор победителей', en: 'prize giveaway: a «Join» button, conditions (role, hours of play), a fair draw' }, usage: '/giveaway start prize:<приз> hours:<часы> [winners] [role] [min_hours] · end id · reroll id', examples: ['/giveaway start prize:Скин hours:24 winners:2 min_hours:10', '/giveaway end id:3'], needs: NONE },
   { cmd: '/clear', text: { ru: 'очистить чат в этом канале: с подтверждением, закреплённые остаются', en: 'wipe the chat of this channel: with a confirmation, pinned messages stay' }, usage: '/clear [count:<число>] [user:@участник]', examples: ['/clear', '/clear count:50', '/clear user:@Vasya'], needs: withBot('«Управлять сообщениями» и «Читать историю»', 'Manage Messages and Read Message History') },
   { cmd: '/ban', text: { ru: 'заблокировать участника с причиной (удаляет его сообщения, пишет ему в ЛС)', en: 'ban a member with a reason (deletes their messages, writes to them privately)' }, usage: '/ban user:@участник reason:<причина> [delete_days:0|1|7]', examples: ['/ban user:@Vasya reason:спам'], needs: withBot('«Банить участников»', 'Ban Members') },
   { cmd: '/unban', text: { ru: 'снять блокировку: без параметра покажет список банов с меню, с параметром подскажет имя или ID', en: 'lift a ban: without a parameter shows the ban list with a menu, with one suggests a name or ID' }, usage: '/unban [user:<имя или ID>]', examples: ['/unban', '/unban user:Vasya'], needs: withBot('«Банить участников»', 'Ban Members') },
@@ -41261,7 +41553,7 @@ export const CATEGORIES: Category[] = [
   { id: 'stat', emoji: '📊', color: 0x8b5cf6, label: { ru: 'Статистика', en: 'Statistics' }, title: { ru: 'Статистика игроков', en: 'Player statistics' }, cmds: ['/player', '/top'] },
   {
     id: 'mod', emoji: '🛡️', color: 0xef4444, admin: true, label: { ru: 'Модерация', en: 'Moderation' }, title: { ru: 'Модерация (для администраторов)', en: 'Moderation (for administrators)' },
-    cmds: ['/clear', '/ban', '/unban', '/kick', '/warn', '/mute', '/unmute'],
+    cmds: ['/clear', '/giveaway', '/ban', '/unban', '/kick', '/warn', '/mute', '/unmute'],
     extra: [{ cmd: '⚠️ Предупредить', text: { ru: 'правый клик по участнику или сообщению → «Приложения»: окно с причиной, к варну прикрепляется ссылка на сообщение', en: 'right-click a member or a message → «Apps»: a window with the reason, the message link is attached to the warning' } }],
   },
   { id: 'modclr', emoji: '🧹', color: 0xef4444, admin: true, label: { ru: 'Памятка /clear', en: '/clear guide' }, title: { ru: 'Команда /clear: как это работает', en: 'The /clear command: how it works' }, cmds: [] },

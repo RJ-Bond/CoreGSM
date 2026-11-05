@@ -6,6 +6,7 @@ import type { AutocompleteInteraction, ButtonInteraction, Client, Interaction } 
 import { backend, backendJson } from './backend.js';
 import { humanDiscordError } from './errors.js';
 import { log } from './log.js';
+import { GIVEAWAY_COMMANDS, GIVEAWAY_NAMES, handleGiveaway, handleGiveawayButton } from './giveaway.js';
 import { FAQ_COMMANDS, FAQ_NAMES, faqAutocomplete, handleFaq } from './faq.js';
 import { handleInfo, INFO_COMMANDS, INFO_NAMES, infoAutocomplete } from './info.js';
 import { HELP_COMMANDS, HELP_NAMES, handleHelp, handleHelpButton, handleHelpSelect, helpAutocomplete } from './help.js';
@@ -37,6 +38,7 @@ export const COMMANDS = [
   ...LINK_COMMANDS,
   ...HELP_COMMANDS,
   ...FAQ_COMMANDS,
+  ...GIVEAWAY_COMMANDS,
 ];
 
 /** registers the commands and returns how many Discord accepted (0 on failure) */
@@ -111,6 +113,7 @@ export async function handleInteraction(i: Interaction): Promise<void> {
   if (i.isButton() && i.customId.startsWith('clear:')) return handleClearButton(i);
   if (i.isButton() && i.customId.startsWith('mod:')) return handlePunishButton(i);
   if (i.isButton() && i.customId.startsWith('appeal:')) return handleAppealButton(i);
+  if (i.isButton() && i.customId.startsWith('gw:')) return handleGiveawayButton(i);
   if (i.isButton() && i.customId.startsWith('dmx:')) return handleDmx(i);
   if (i.isButton() && i.customId.startsWith('fol:')) return handleFollow(i);
   if (i.isButton() && i.customId.startsWith('lnk:')) return handleLinkButton(i);
@@ -128,6 +131,7 @@ export async function handleInteraction(i: Interaction): Promise<void> {
   if (PUNISH_NAMES.has(i.commandName)) return handlePunish(i);
   if (HELP_NAMES.has(i.commandName)) return handleHelp(i);
   if (FAQ_NAMES.has(i.commandName)) return handleFaq(i);
+  if (GIVEAWAY_NAMES.has(i.commandName)) return handleGiveaway(i);
   if (LINK_NAMES.has(i.commandName)) return handleLinkCommand(i);
   const name = i.commandName;
   if (name !== 'register' && name !== 'nick' && name !== 'profile') return;
