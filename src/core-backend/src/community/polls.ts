@@ -7,6 +7,7 @@
  *   DELETE /api/polls/:id           (admin)
  *   POST   /internal/polls/vote     the bot: a button press { pollId, optionId, discordId }
  */
+import { COLORS } from '../discord/palette.js';
 import type { Express, RequestHandler } from 'express';
 import { z } from 'zod';
 import { enqueueAlert } from '../alerts/alerts.js';
@@ -52,7 +53,7 @@ function view(p: PollRow, userId: number | null) {
   return { id: p.id, question: p.question, closesAt: p.closes_at, closed: !open(p), createdAt: p.created_at, total: t.total, options: t.rows, myVote: mine };
 }
 
-const COLOR = { open: 0x5865f2, closed: 0x23a55a };
+const COLOR = { open: COLORS.info, closed: COLORS.ok };
 
 /** the message of a poll (new / results): also used by the message gallery in the admin */
 export function pollEmbed(o: { question: string; closesAt: number | null; rows: TallyRow[]; total: number; isNew: boolean; site: boolean }) {

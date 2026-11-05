@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
 import Database from 'better-sqlite3';
 import { clampRateLimit, extractKey, generateKey, hashKey, ipAllowed, keyExpired, keyPrefix, looksLikeKey, normalizeIp, parseAllowList, SlidingWindow } from '../src/security/apiKeyLogic.ts';
-import { badgeSvg, escapeXml, stateOf, valueText, widgetHtml, widgetTheme } from '../src/profile/badgeLogic.ts';
+import { badgeSvg, escapeXml, stateOf, valueText, widgetHtml, widgetStyle, widgetTheme } from '../src/profile/badgeLogic.ts';
 import { openApiSpec } from '../src/admin/openapi.ts';
 import { setupAdmin, startBackend, type Api } from './harness.ts';
 
@@ -280,5 +280,19 @@ describe('api: keys, public API, badge, widget', () => {
     // other pages stay unframeable
     const h = await fetch(`${api.base}/api/health`);
     assert.equal(h.headers.get('x-frame-options'), 'DENY');
+  });
+});
+
+describe('widget look', () => {
+  const d = { name: 'S', players: 3, maxPlayers: 10, online: true, hasStatus: true, map: 'm', ping: 40, url: 'https://p.example.ru/servers/1', brand: 'B' } as unknown as Parameters<typeof widgetHtml>[0];
+  it('takes a radius and one of three fonts, and nothing else reaches the CSS', () => {
+    assert.deepEqual(widgetStyle({}), { radius: 8, font: 'sans' });
+    assert.deepEqual(widgetStyle({ radius: '16', font: 'mono' }), { radius: 16, font: 'mono' });
+    assert.deepEqual(widgetStyle({ radius: '99', font: 'serif' }), { radius: 24, font: 'serif' });
+    assert.deepEqual(widgetStyle({ radius: 'red;}body{display:none', font: 'comic-sans' }), { radius: 8, font: 'sans' });
+    const html = widgetHtml(d, 'auto', { radius: 24, font: 'serif' });
+    assert.match(html, /border-radius:24px/);
+    assert.match(html, /Georgia/);
+    assert.match(widgetHtml(d), /border-radius:8px/);
   });
 });

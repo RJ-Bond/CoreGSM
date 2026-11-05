@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { exportFileName } from '../src/components/server/helpers';
 import { computeWizard } from '../src/components/DiscordWizard';
 import { cleanIds, movePin, pushRecent, togglePin } from '../src/pages/adminShortcuts';
-import { normalizeAppearance } from '../src/appearance';
+import { normalizeAppearance, PRESETS, presetOf } from '../src/appearance';
 import type { Binding, BotStatus, DiscordGuild } from '../src/api';
 
 const bot = (over: Partial<BotStatus> = {}): BotStatus => ({ state: 'online', tag: 'Bot#1', clientId: '1', inviteUrl: 'https://discord.com/oauth2', error: null, updatedAt: 0, guildCount: 1, channelCount: 1, ...over });
@@ -78,7 +78,16 @@ describe('admin shortcuts', () => {
 
 describe('appearance', () => {
   it('normalises stored values', () => {
-    expect(normalizeAppearance(null)).toEqual({ reduceMotion: false, largeText: false, highContrast: false, liteData: false });
-    expect(normalizeAppearance({ reduceMotion: true, largeText: 'yes' })).toEqual({ reduceMotion: true, largeText: false, highContrast: false, liteData: false });
+    expect(normalizeAppearance(null)).toEqual({ reduceMotion: false, largeText: false, highContrast: false, liteData: false, oled: false });
+    expect(normalizeAppearance({ reduceMotion: true, largeText: 'yes' })).toEqual({ reduceMotion: true, largeText: false, highContrast: false, liteData: false, oled: false });
+  });
+
+  it('a preset is recognised by its options, a custom mix is not', () => {
+    expect(presetOf(PRESETS.classic)).toBe('classic');
+    expect(presetOf(PRESETS.contrast)).toBe('contrast');
+    expect(presetOf(PRESETS.soft)).toBe('soft');
+    expect(presetOf(PRESETS.oled)).toBe('oled');
+    expect(presetOf({ ...PRESETS.classic, largeText: true })).toBeNull();
+    expect(presetOf(normalizeAppearance({ reduceMotion: true, liteData: true }))).toBe('soft');
   });
 });

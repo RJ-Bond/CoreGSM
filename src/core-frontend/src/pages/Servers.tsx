@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent } from 'react';
+import { HomeBlocksMenu, useHomeBlocks } from '../components/servers/HomeBlocks';
 import { api, type Server, type StatusInfo } from '../api';
 import { useAuth } from '../auth';
 import { gameColor, gameGradient, gameLabel } from '../games';
@@ -322,6 +323,7 @@ function ServerList() {
     downSince: downSince.get(s.id),
   });
 
+  const [home, setHome] = useHomeBlocks();
   return (
     <div className="space-y-5">
       <PageHead
@@ -331,11 +333,12 @@ function ServerList() {
       >
         <span className="srv-head-actions">
           <LiveBadge at={updatedAt} onRefresh={() => void refreshNow()} busy={refreshing} />
+          <HomeBlocksMenu blocks={home} onChange={setHome} />
           {isAdmin && <a className="btn btn-soft btn-sm" href="/admin/servers" data-magnetic>{t('d2.srv.manage')}</a>}
         </span>
       </PageHead>
 
-      {loaded && servers.length > 0 && (
+      {loaded && servers.length > 0 && home.pulse && (
         <PulseStrip servers={servers} overview={overview} uptime={upAvg} now={overviewAt || updatedAt} onOpen={open} />
       )}
 
@@ -424,7 +427,7 @@ function ServerList() {
               </div>
             )}
           </div>
-          <WhatsNew open={wnOpen} onToggle={toggleWn} overview={overview} />
+          {home.news && <WhatsNew open={wnOpen} onToggle={toggleWn} overview={overview} />}
         </div>
       )}
 

@@ -27,10 +27,30 @@ let adminScope = false;
 const readScoped = (): Theme => (adminScope ? read(ADMIN_KEY) ?? readTheme() : readTheme());
 /** does the admin area have its own theme right now */
 export const adminThemeIsOwn = (): boolean => read(ADMIN_KEY) !== null;
+/** «243 244 248» (the page colour token) -> «#f3f4f8» */
+export function rgbTokenToHex(token: string): string | null {
+  const m = /^\s*(\d{1,3})\s+(\d{1,3})\s+(\d{1,3})\s*$/.exec(token);
+  if (!m) return null;
+  const parts = m.slice(1).map(Number);
+  if (parts.some((n) => n > 255)) return null;
+  return `#${parts.map((n) => n.toString(16).padStart(2, '0')).join('')}`;
+}
+
+/**
+ * The browser bar of a phone (and the title bar of an installed panel) takes the colour of the page of the current
+ * theme. While a game accent paints the page, accent.ts owns the colour and this leaves it alone.
+ */
+function syncBarColor() {
+  const root = document.documentElement;
+  if (root.hasAttribute('data-game-art')) return;
+  const hex = rgbTokenToHex(getComputedStyle(root).getPropertyValue('--page'));
+  if (hex) document.querySelector('meta[name=theme-color]')?.setAttribute('content', hex);
+}
 const paint = (t: Theme) => {
   const root = document.documentElement;
   if (t === 'auto') root.removeAttribute('data-theme');
   else root.setAttribute('data-theme', t);
+  syncBarColor();
 };
 function applyTheme(t: Theme) {
   paint(t);

@@ -88,13 +88,44 @@ export async function sendMail(m: Mail): Promise<void> {
 
 const escHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
-/** a small, plain HTML letter around a paragraph and one button */
+/** the accent colour of the community (the setting of the brand), or the default one; only a plain #rrggbb is let into the markup */
+const accentColor = (): string => {
+  const c = (getSetting('brand_color') ?? '').trim();
+  return /^#[0-9a-f]{6}$/i.test(c) ? c : '#4f46e5';
+};
+
+/** where the logo of the panel is: its public address, or null when the panel has none (a letter cannot show a picture then) */
+const logoUrl = (): string | null => {
+  const env = (process.env.PUBLIC_URL ?? '').trim().replace(/\/+$/, '');
+  if (/^https:\/\/[^\s/]+$/i.test(env)) return `${env}/logo-128.png`;
+  const d = (process.env.DOMAIN ?? '').trim();
+  if (/^[a-z0-9.-]+$/i.test(d) && d.includes('.') && !/^[\d.]+$/.test(d)) return `https://${d}/logo-128.png`;
+  return null;
+};
+
+/**
+ * A letter in the look of the panel: the brand (logo and name) on a bar of the accent colour, the text, one big button
+ * and a quiet footer. Tables and inline styles only: mail programs ignore anything else.
+ */
 export function layout(brand: string, lines: string[], action?: { label: string; url: string }): { text: string; html: string } {
   const text = [...lines, ...(action ? ['', `${action.label}: ${action.url}`] : []), '', `— ${brand}`].join('\n');
+  const accent = accentColor();
+  const logo = logoUrl();
+  const head =
+    `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:${accent}"><tr><td style="padding:18px 28px;font-size:18px;font-weight:700;color:#ffffff">` +
+    (logo ? `<img src="${escHtml(logo)}" width="28" height="28" alt="" style="vertical-align:middle;border-radius:7px;margin-right:10px">` : '') +
+    `<span style="vertical-align:middle">${escHtml(brand)}</span></td></tr></table>`;
+  const body = lines.map((l) => `<p style="margin:0 0 14px">${escHtml(l)}</p>`).join('');
+  const button = action
+    ? `<table role="presentation" cellpadding="0" cellspacing="0" style="margin:22px 0 6px"><tr><td style="border-radius:10px;background:${accent}"><a href="${escHtml(action.url)}" style="display:inline-block;padding:13px 26px;font-size:16px;font-weight:700;color:#ffffff;text-decoration:none">${escHtml(action.label)}</a></td></tr></table>` +
+      `<p style="margin:14px 0 0;font-size:12px;color:#6b7280;word-break:break-all">${escHtml(action.url)}</p>`
+    : '';
   const html =
-    `<div style="font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.5;color:#1f2937;max-width:520px">` +
-    lines.map((l) => `<p>${escHtml(l)}</p>`).join('') +
-    (action ? `<p><a href="${escHtml(action.url)}" style="display:inline-block;padding:10px 18px;border-radius:8px;background:#4f46e5;color:#fff;text-decoration:none">${escHtml(action.label)}</a></p><p style="font-size:13px;color:#6b7280;word-break:break-all">${escHtml(action.url)}</p>` : '') +
-    `<p style="font-size:13px;color:#6b7280">${escHtml(brand)}</p></div>`;
+    `<div style="margin:0;padding:24px 12px;background:#f3f4f8;font-family:Arial,Helvetica,sans-serif">` +
+    `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;margin:0 auto;background:#ffffff;border-radius:14px;overflow:hidden">` +
+    `<tr><td>${head}</td></tr>` +
+    `<tr><td style="padding:26px 28px 8px;font-size:15px;line-height:1.55;color:#1f2937">${body}${button}</td></tr>` +
+    `<tr><td style="padding:18px 28px 24px;font-size:12px;color:#9ca3af">${escHtml(brand)}</td></tr>` +
+    `</table></div>`;
   return { text, html };
 }

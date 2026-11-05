@@ -5,6 +5,7 @@
  * is drawn here (skia, like the server cards) and served at a signed address so that Discord can fetch it even
  * when the panel is private.
  */
+import { COLORS } from '../discord/palette.js';
 import crypto from 'node:crypto';
 import skia from 'skia-canvas';
 import type { Express, RequestHandler } from 'express';
@@ -413,7 +414,7 @@ export function digestMessage(d: Digest) {
     embed: {
       title: `📊 Неделя на ${brand().name}: ${dateRu(d.from)} – ${dateRu(d.to)}`,
       description: lines.join('\n'),
-      color: 0x5865f2,
+      color: COLORS.info,
       ...(base ? { url: `${base}/status`, image: { url: `${base}/api/digest/${d.to}-${sign(d.to)}.png` } } : {}),
       footer: { text: 'CoreGSM · итоги недели' },
       timestamp: new Date(d.to).toISOString(),

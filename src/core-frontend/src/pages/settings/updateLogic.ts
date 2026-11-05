@@ -83,6 +83,18 @@ export function upcomingFlags(releases: UpdateNotesRelease[], current: string | 
   return out;
 }
 
+/** what one release holds, by the kind of the group each entry is listed under */
+export function releaseCounts(r: UpdateNotesRelease): { added: number; fixed: number; other: number } {
+  const out = { added: 0, fixed: 0, other: 0 };
+  for (const g of r.groups) {
+    const n = g.items.length;
+    if (/нов|new/i.test(g.title) || /new/i.test(g.titleEn ?? '')) out.added += n;
+    else if (/исправ|fix/i.test(g.title) || /fix/i.test(g.titleEn ?? '')) out.fixed += n;
+    else out.other += n;
+  }
+  return out;
+}
+
 /** how much is waiting in the releases newer than the running one, by the kind of the group they are listed under */
 export function changeSummary(releases: UpdateNotesRelease[], current: string | null | undefined): { versions: number; added: number; fixed: number; other: number } {
   const out = { versions: 0, added: 0, fixed: 0, other: 0 };

@@ -3,6 +3,7 @@
  *   GET /api/admin/attention   the list (servers down, dead deliveries, backups, certificate, update, bot, disk, queues)
  * and a check of the free disk space every 30 minutes that sends a Discord alert (once per level per day).
  */
+import { COLORS } from '../discord/palette.js';
 import fs from 'node:fs';
 import type { Express, RequestHandler } from 'express';
 import { DATA_DIR, db, getSetting, setSetting } from '../db.js';
@@ -40,7 +41,7 @@ export function diskEmbed(level: 'warn' | 'bad', free: number, total: number) {
   return {
     title: level === 'bad' ? '💾 Заканчивается место на диске' : '💾 Остаётся мало места на диске',
     description: `Свободно **${gb(free)} ГБ** из ${gb(total)} ГБ (**${diskFreePct(free, total)}%**).\nБэкапы, база и картинки хранятся на этом диске — освободите место, пока панель не начала сбоить.`,
-    color: level === 'bad' ? 0xf23f42 : 0xf0b232,
+    color: level === 'bad' ? COLORS.bad : COLORS.warn,
   };
 }
 

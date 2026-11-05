@@ -1,5 +1,6 @@
 // The «Серверы» table of the admin area: search, filters, a checkbox per row for bulk actions, the figures of every
 // server (status, players, ping, uptime, a 24 h curve) and the row actions as icons. On a phone it is a list of cards.
+import { StateView } from '../components/StateView';
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import type { Server } from '../api';
 import { confirmDialog } from '../confirm';
@@ -135,7 +136,9 @@ export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableA
         </div>
       )}
 
-      {rows.length === 0 ? (
+      {servers.length === 0 ? (
+        <StateView kind="empty" title={t('adm.tbl.emptyTitle')} text={t('adm.tbl.emptyText')} action={<a className="btn" href="/admin/servers/new">{t('adm.tbl.emptyAdd')}</a>} />
+      ) : rows.length === 0 ? (
         <div className="tile px-5 py-8 text-center font-semibold text-mute">
           {t('adm.tbl.none')} <button type="button" className="font-extrabold text-link underline" onClick={() => { setFilter('all'); setQuery(''); }}>{t('adm.tbl.reset')}</button>
         </div>

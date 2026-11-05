@@ -142,6 +142,7 @@ export function Spark({ serverId, color, variant = 'tile' }: { serverId: number;
   const downs = downs24.filter(Boolean).length;
   const label = `${t('d2.ch.range', { a: Math.min(...pts), b: Math.max(...pts) })}${downs ? `; ${t('d2.ch.wasDown')}` : ''}`;
   const top = Math.max(...pts);
+  const avg = pts.reduce((x, y) => x + y, 0) / pts.length;
   const spanMin = Math.round(((raw.players.length - first) * 24 * 60) / raw.players.length);
   return hero
     ? (
@@ -153,7 +154,15 @@ export function Spark({ serverId, color, variant = 'tile' }: { serverId: number;
         <span aria-hidden className="spark-times"><span>{ageLabel(spanMin)}</span>{spanMin >= 60 && <span>{ageLabel(spanMin / 2)}</span>}<span>{t('spark.now')}</span></span>
       </div>
     )
-    : <SmoothArea values={pts} down={downs24} color={color} w={240} h={40} fill={0.25} strokeWidth={2} className="h-10" label={label} />;
+    : (
+      <div className="relative">
+        <SmoothArea values={pts} down={downs24} color={color} w={240} h={40} fill={0.25} strokeWidth={2} className="h-10" label={label} />
+        {/* a dashed line at the average of the day: above it the server is busier than usual, below it quieter */}
+        {known >= 6 && top > 0 && (
+          <span aria-hidden className="spark-avg" title={t('spark.avg', { n: Math.round(avg) })} style={{ top: `${Math.min(92, Math.max(8, (1 - avg / (top * 1.12)) * 100))}%` }} />
+        )}
+      </div>
+    );
 }
 
 /** «−24 ч» / «−90 мин»: how long ago a point of the chart is */

@@ -189,3 +189,58 @@ a.tile:active, a.panel:active, button.tile:active, [role='link'].tile:active { t
 .srv-mini { position: fixed; z-index: 45; left: 12px; right: 12px; top: 8px; display: flex; align-items: center; gap: 10px; padding: 6px 8px 6px 10px; border-radius: var(--r-xl); transform: translateY(-160%); opacity: 0; pointer-events: none; transition: transform .25s cubic-bezier(.2, .8, .2, 1), opacity .2s ease; }
 .srv-mini.is-on { transform: none; opacity: 1; pointer-events: auto; }
 html[data-motion='reduce'] .srv-mini { transition: none; }
+
+/* ---------- the pure black option: the page is black, the cards a step above it ---------- */
+:root[data-theme='dark'][data-oled='1'] { --page: 0 0 0; --card: 10 11 15; --raised: 18 20 28; --soft: 22 24 32; --line: 34 37 48; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme='light'])[data-oled='1'] { --page: 0 0 0; --card: 10 11 15; --raised: 18 20 28; --soft: 22 24 32; --line: 34 37 48; } }
+:root[data-oled='1'] body { background-image: none; }
+
+/* ---------- type: six steps of size are in the tokens; headings share one rhythm and every changing number has equal-width digits ---------- */
+h1, h2, h3 { line-height: 1.2; }
+h4, h5, h6 { line-height: 1.3; }
+dd, .stat-v, .pf-tile-v, .srv-count, .pulse-nums dd, .cm-hero-stats dd, .upd-ver-n, time, .tabular { font-variant-numeric: tabular-nums; }
+.hdr-motion[aria-pressed='true'] { color: rgb(var(--link)); background: rgb(var(--brand) / .14); }
+
+/* ---------- keyboard focus: a ring that reads on a gradient too (a white line inside, a dark one outside) ---------- */
+.btn-on-grad:focus-visible, .btn-ghost-on-grad:focus-visible, .upd-link:focus-visible, .upd-more-btn:focus-visible, .ub-close:focus-visible, .btn-cta:focus-visible {
+  box-shadow: 0 0 0 2px #fff, 0 0 0 4px rgb(0 0 0 / .65) !important;
+}
+
+/* ---------- «what is new»: a card for every version, the newest open ---------- */
+.upd-rel { border-radius: var(--r-xl); background: rgb(var(--soft)); box-shadow: inset 0 0 0 1px rgb(var(--line)); }
+.upd-rel + .upd-rel { margin-top: 12px; }
+.upd-rel-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 14px 16px; list-style: none; cursor: pointer; }
+.upd-rel-head::-webkit-details-marker { display: none; }
+.upd-rel-ver { font-family: var(--font-mono, ui-monospace, monospace); font-size: 1.15rem; font-weight: 800; letter-spacing: -.01em; }
+.upd-rel-counts { display: inline-flex; flex-wrap: wrap; gap: 6px; margin-left: auto; }
+.upd-rel-c { padding: 2px 10px; border-radius: var(--r-pill); background: rgb(var(--card)); font-size: var(--fs-sm); font-weight: 800; }
+.upd-rel-chev { flex: none; transition: transform .2s; color: rgb(var(--mute)); }
+.upd-rel[open] > .upd-rel-head .upd-rel-chev { transform: rotate(180deg); }
+.upd-rel > div { padding: 0 16px 14px; }
+
+/* ---------- a page that is not found: where else to go ---------- */
+.nf-links { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 16px; width: 100%; margin-top: 8px; font-size: var(--fs-sm); font-weight: 700; color: rgb(var(--mute)); }
+.nf-links a { color: rgb(var(--link)); }
+
+/* the dashed average line over the small curve of a tile */
+.spark-avg { position: absolute; left: 2px; right: 2px; height: 0; border-top: 1.5px dashed rgb(var(--mute) / .7); pointer-events: none; }
+
+/* ---------- the servers page: the menu that shows and hides its blocks ---------- */
+.home-blocks { position: relative; }
+.home-blocks-pop { position: absolute; z-index: 30; right: 0; top: calc(100% + 8px); min-width: 15rem; display: grid; gap: 2px; padding: 8px; border-radius: var(--r-lg); background: rgb(var(--raised)); box-shadow: var(--shadow-pop), inset 0 0 0 1px rgb(var(--line)); }
+.home-blocks-row { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: var(--r-md); font-weight: 700; cursor: pointer; }
+.home-blocks-row:hover { background: rgb(var(--soft)); }
+
+/* ---------- icons: every line icon has round ends and joins, so a stray one drawn without them does not stand out ---------- */
+svg[stroke='currentColor'] { stroke-linecap: round; stroke-linejoin: round; }
+
+/* ---------- on paper: no header, bars or decoration; cards are plain boxes that are not cut across pages ---------- */
+@media print {
+  body { background: #fff !important; color: #000 !important; }
+  .hdr, .nav-bottom, .srv-mini, .toaster, .tour-pop, .net-bar, .route-progress, .hdr-motion, .upd-more, .home-blocks, .skeleton, .live-dot { display: none !important; }
+  footer.app-foot { grid-template-columns: repeat(3, 1fr); border-top: 1px solid #bbb; }
+  .tile, .panel { box-shadow: none !important; background: #fff !important; border: 1px solid #bbb !important; break-inside: avoid; }
+  .tile *, .panel * { color: #000 !important; }
+  a { text-decoration: underline; }
+  * { animation: none !important; transition: none !important; }
+}

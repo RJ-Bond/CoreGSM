@@ -860,7 +860,16 @@ report() {
   echo -e "  ${DIM}Секреты:  ${APP_DIR}/.env      Логи:  cd ${APP_DIR} && docker compose logs -f${NC}"
   echo -e "  ${DIM}Резервные копии: ${APP_DIR}/backups      Данные (база, картинки): том Docker coregsm_data${NC}"
   echo -e "  ${DIM}Управление, обновление, копии, удаление:  sudo coregsm${NC}"
-  echo -e "  ${DIM}Токен Discord-бота, прокси и пароль: в панели, раздел «Настройки».${NC}\n"
+  echo -e "  ${DIM}Токен Discord-бота, прокси и пароль: в панели, раздел «Настройки».${NC}"
+  # the state of the protection of the host (harden_host puts it there on a fresh install)
+  if systemctl is-active --quiet fail2ban 2>/dev/null; then
+    echo -e "  ${GREEN}✔${NC} ${DIM}Защита хоста: fail2ban следит за SSH, автообновления безопасности включены${NC}"
+  fi
+  echo -e "\n  ${BOLD}Что дальше${NC}"
+  echo -e "  ${CYAN}1${NC}  Откройте панель и создайте администратора (код установки выше)"
+  echo -e "  ${CYAN}2${NC}  «Начало работы»: добавьте первый игровой сервер"
+  echo -e "  ${CYAN}3${NC}  «Настройки»: токен Discord-бота, затем привяжите канал"
+  echo -e "  ${CYAN}4${NC}  «Копии»: сохраните фразу шифрования, которую покажет панель\n"
 }
 
 # /usr/local/bin/coregsm (the manager, see tools/coregsm.sh), the old coregsm-update name as an alias,

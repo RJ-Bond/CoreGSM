@@ -27,6 +27,13 @@ export default function NotFound({ kind = 'page' }: { kind?: 'page' | 'server' }
         <IconArrow />
       </a>
       <a className="btn btn-soft" href="/servers">{t('d2.nf.toServers')}</a>
+      <button type="button" className="btn btn-soft" onClick={() => window.dispatchEvent(new Event('coregsm:palette'))}>{t('d2.nf.search')}</button>
+      <nav className="nf-links" aria-label={t('d2.nf.also')}>
+        <span>{t('d2.nf.also')}</span>
+        <a href="/news">{t('nav.news')}</a>
+        <a href="/status">{t('nav.status')}</a>
+        <a href="/community">{t('nav.community')}</a>
+      </nav>
     </StateView>
   );
 }

@@ -29,4 +29,11 @@ describe('badgeSnippets', () => {
     expect(c.cardHtml).toBe('<a href="https://e.x/servers/7"><img src="https://e.x/api/card/7.png?theme=light" alt="A &quot;b&quot;" style="max-width:100%"></a>');
     expect(c.cardMarkdown).toBe('[![A "b"](https://e.x/api/card/7.png?theme=light)](https://e.x/servers/7)');
   });
+
+  it('the widget takes the corner radius and the font, and the default look has no query', () => {
+    expect(badgeSnippets('https://e.x', 7, 'S').widget).toBe('https://e.x/widget/servers/7');
+    expect(badgeSnippets('https://e.x', 7, 'S', { radius: 16, font: 'mono' }).widget).toBe('https://e.x/widget/servers/7?radius=16&font=mono');
+    expect(badgeSnippets('https://e.x', 7, 'S', { theme: 'dark', radius: 99 }).widget).toBe('https://e.x/widget/servers/7?theme=dark&radius=24');
+    expect(badgeSnippets('https://e.x', 7, 'S', { radius: 8, font: 'sans' }).widget).toBe('https://e.x/widget/servers/7');
+  });
 });

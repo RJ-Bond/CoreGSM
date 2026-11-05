@@ -13,15 +13,31 @@ export interface Appearance {
   largeText: boolean;
   highContrast: boolean;
   liteData: boolean;
+  /** pure black page and darker cards in the dark theme (saves an OLED screen, rests the eyes at night) */
+  oled: boolean;
+}
+
+/** presets: a few options at once; the ones not named are switched off */
+export type PresetId = 'classic' | 'contrast' | 'soft' | 'oled';
+export const PRESETS: Record<PresetId, Appearance> = {
+  classic: { reduceMotion: false, largeText: false, highContrast: false, liteData: false, oled: false },
+  contrast: { reduceMotion: false, largeText: true, highContrast: true, liteData: false, oled: false },
+  soft: { reduceMotion: true, largeText: false, highContrast: false, liteData: true, oled: false },
+  oled: { reduceMotion: false, largeText: false, highContrast: false, liteData: false, oled: true },
+};
+export const PRESET_IDS = Object.keys(PRESETS) as PresetId[];
+/** the preset the options match exactly, or null (a custom mix) */
+export function presetOf(a: Appearance): PresetId | null {
+  return PRESET_IDS.find((id) => (Object.keys(PRESETS[id]) as (keyof Appearance)[]).every((k) => PRESETS[id][k] === a[k])) ?? null;
 }
 
 export const APPEARANCE_KEY = 'coregsm_appearance';
-export const DEFAULT_APPEARANCE: Appearance = { reduceMotion: false, largeText: false, highContrast: false, liteData: false };
+export const DEFAULT_APPEARANCE: Appearance = { reduceMotion: false, largeText: false, highContrast: false, liteData: false, oled: false };
 
 /** anything (a stored string, a broken value) -> a complete Appearance */
 export function normalizeAppearance(raw: unknown): Appearance {
   const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
-  return { reduceMotion: r.reduceMotion === true, largeText: r.largeText === true, highContrast: r.highContrast === true, liteData: r.liteData === true };
+  return { reduceMotion: r.reduceMotion === true, largeText: r.largeText === true, highContrast: r.highContrast === true, liteData: r.liteData === true, oled: r.oled === true };
 }
 
 function read(): Appearance {
@@ -49,6 +65,7 @@ export function applyAppearance(a: Appearance, root: HTMLElement = document.docu
   set('data-text', a.largeText ? 'large' : null);
   set('data-contrast', a.highContrast ? 'high' : null);
   set('data-lite', a.liteData || networkWantsLite() ? '1' : null);
+  set('data-oled', a.oled ? '1' : null);
 }
 
 let current: Appearance = typeof window === 'undefined' ? DEFAULT_APPEARANCE : read();
@@ -58,7 +75,7 @@ export const getAppearance = () => current;
 
 export function setAppearance(patch: Partial<Appearance>) {
   const next = normalizeAppearance({ ...current, ...patch });
-  if (next.reduceMotion === current.reduceMotion && next.largeText === current.largeText && next.highContrast === current.highContrast && next.liteData === current.liteData) return;
+  if (next.reduceMotion === current.reduceMotion && next.largeText === current.largeText && next.highContrast === current.highContrast && next.liteData === current.liteData && next.oled === current.oled) return;
   current = next;
   try {
     localStorage.setItem(APPEARANCE_KEY, JSON.stringify(next));

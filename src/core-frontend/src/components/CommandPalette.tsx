@@ -9,7 +9,15 @@ import { confirmDialog } from '../confirm';
 import { currentPath } from '../ui/route';
 import { GameAvatar, IconCopy, IconMoon, IconNews, IconRefresh, IconServers, IconSun, IconTrophy, IconWrench, adminThemeIsOwn, currentTheme, resetAdminTheme, setThemeChoice, toast, useDensity, navigate } from '../ui';
 
-type Group = 'Серверы' | 'Разделы' | 'Действия';
+type Group = 'Недавние' | 'Серверы' | 'Разделы' | 'Действия';
+
+const RECENT_KEY = 'coregsm_palette_recent';
+const readRecent = (): string[] => {
+  try { const v = JSON.parse(localStorage.getItem(RECENT_KEY) ?? '[]') as unknown; return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string').slice(0, 5) : []; } catch { return []; }
+};
+const rememberRecent = (key: string) => {
+  try { localStorage.setItem(RECENT_KEY, JSON.stringify([key, ...readRecent().filter((k) => k !== key)].slice(0, 5))); } catch { /* not remembered */ }
+};
 
 interface Item {
   key: string;
@@ -98,6 +106,7 @@ export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose:
       sectionItem('p-status', 'Статус', 'Доступность за 30 дней', '/status', <IconPulse />),
       sectionItem('p-community', 'Сообщество', 'Кто играет, сезон, зал славы', '/community', <IconTrophy />, 'игроки рейтинг топ сезон'),
     );
+    if (isAdmin) out.push(sectionItem('p-design', 'Дизайн-система', 'Цвета, кнопки, поля и пустые состояния панели', '/_ui', <IconWrench />, 'тема дизайн компоненты ui кит', true));
     if (isStaff) {
       const sections = isAdmin ? ADMIN_SECTIONS : ADMIN_SECTIONS.filter((x) => SECTION_PERM[x.id] && perms.includes(SECTION_PERM[x.id]!));
       for (const sec of sections) out.push(sectionItem(`a-${sec.id}`, sec.label, `Админка · ${sec.desc}`, `/admin/${sec.id}`, sec.icon(), `${sec.keywords} админка`));
@@ -167,7 +176,9 @@ export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose:
     const servs = hit.filter((i) => i.group === 'Серверы').slice(0, words.length ? 10 : 6);
     const secs = hit.filter((i) => i.group === 'Разделы');
     const acts = hit.filter((i) => i.group === 'Действия');
-    return [...servs, ...secs, ...acts];
+    // with nothing typed: what was picked last (a server, a section or a quick action) comes first
+    const recent: Item[] = words.length ? [] : readRecent().flatMap((k) => { const it = items.find((i) => i.key === k); return it ? [{ ...it, key: `recent-${it.key}`, group: 'Недавние' as Group }] : []; });
+    return [...recent, ...servs, ...secs, ...acts];
   }, [items, q]);
 
   useEffect(() => setActive(0), [q]);
@@ -180,6 +191,7 @@ export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose:
   const go = (it: Item | undefined) => {
     if (!it) return;
     onClose();
+    rememberRecent(it.key.replace(/^recent-/, ''));
     if (it.run) it.run();
     else navigate(it.href);
   };
@@ -193,8 +205,8 @@ export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose:
     else if (e.key === 'Enter') { e.preventDefault(); go(results[safeActive]); }
   };
 
-  const groups: Group[] = ['Серверы', 'Разделы', 'Действия'];
-  const groupName: Record<Group, TKey> = { 'Серверы': 'nav.servers', 'Разделы': 'd2.cp.g.sections', 'Действия': 'd2.cp.g.actions' };
+  const groups: Group[] = ['Недавние', 'Серверы', 'Разделы', 'Действия'];
+  const groupName: Record<Group, TKey> = { 'Недавние': 'd2.cp.g.recent', 'Серверы': 'nav.servers', 'Разделы': 'd2.cp.g.sections', 'Действия': 'd2.cp.g.actions' };
   const optId = (i: number) => `${uid}-opt-${i}`;
 
   return (

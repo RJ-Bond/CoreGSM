@@ -92,9 +92,25 @@ const STATE_LABEL: Record<BadgeState, string> = { online: 'В сети', full: '
 export type WidgetTheme = 'auto' | 'light' | 'dark';
 /** ?theme= of the widget: light or dark forces the palette, anything else follows the visitor's system setting */
 export const widgetTheme = (v: unknown): WidgetTheme => (v === 'light' || v === 'dark' ? v : 'auto');
+
+/** the look of the widget besides the palette: the corner radius (0..24 px) and one of three fixed font families */
+export type WidgetFont = 'sans' | 'serif' | 'mono';
+export interface WidgetStyle { radius: number; font: WidgetFont }
+export const DEFAULT_WIDGET_STYLE: WidgetStyle = { radius: 8, font: 'sans' };
+const FONT_STACK: Record<WidgetFont, string> = {
+  sans: 'system-ui,-apple-system,"Segoe UI",Roboto,sans-serif',
+  serif: 'Georgia,"Times New Roman",serif',
+  mono: 'ui-monospace,SFMono-Regular,Menlo,Consolas,monospace',
+};
+/** ?radius= and ?font= of the widget; anything else gives the default (only a number and a name from the list reach the CSS) */
+export function widgetStyle(q: { radius?: unknown; font?: unknown }): WidgetStyle {
+  const r = typeof q.radius === 'string' && /^\d{1,2}$/.test(q.radius) ? Number(q.radius) : DEFAULT_WIDGET_STYLE.radius;
+  const f = q.font === 'serif' || q.font === 'mono' || q.font === 'sans' ? q.font : DEFAULT_WIDGET_STYLE.font;
+  return { radius: Math.min(24, Math.max(0, r)), font: f };
+}
 const DARK_VARS = '--bg:#161b22;--fg:#e6edf3;--mut:#8b949e;--line:#30363d';
 
-export function widgetHtml(d: WidgetData, theme: WidgetTheme = 'auto'): string {
+export function widgetHtml(d: WidgetData, theme: WidgetTheme = 'auto', style: WidgetStyle = DEFAULT_WIDGET_STYLE): string {
   const st = stateOf(d);
   const color = BADGE_COLORS[st];
   const pct = d.maxPlayers > 0 ? Math.min(100, Math.round((d.players / d.maxPlayers) * 100)) : 0;
@@ -112,8 +128,8 @@ export function widgetHtml(d: WidgetData, theme: WidgetTheme = 'auto'): string {
 :root{--bg:#fff;--fg:#1f2328;--mut:#656d76;--line:#d0d7de;--st:${color}}
 ${theme === 'dark' ? `:root{${DARK_VARS}}` : theme === 'auto' ? `@media (prefers-color-scheme:dark){:root{${DARK_VARS}}}` : ''}
 *{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
-a{display:block;color:inherit;text-decoration:none;padding:12px 14px;border:1px solid var(--line);border-left:4px solid var(--st);border-radius:8px}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.4 ${FONT_STACK[style.font]}}
+a{display:block;color:inherit;text-decoration:none;padding:12px 14px;border:1px solid var(--line);border-left:4px solid var(--st);border-radius:${style.radius}px}
 .h{display:flex;align-items:center;gap:8px;font-weight:600}
 .h b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
 .s{font-size:12px;font-weight:600;color:var(--st);white-space:nowrap}

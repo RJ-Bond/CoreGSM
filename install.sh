@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="cc27ed9c6459"
+COREGSM_BUILD="b4c0c493f752"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.24"
+COREGSM_VERSION="1.1.25"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -17483,6 +17483,7 @@ __COREGSM_EOF__
  * Alerts: a message to an administrators' Discord channel when a game server stops answering
  * (after a grace period) and another one when it is back. The bot delivers the queued messages.
  */
+import { COLORS } from '../discord/palette.js';
 import { currentStyle } from '../discord/discordStyleState.js';
 import { styleAlertEmbed } from '../discord/discordStyleLogic.js';
 import type { Express, RequestHandler } from 'express';
@@ -17535,7 +17536,7 @@ export function isQuietNow(now = Date.now()): boolean {
   return q.from < q.to ? h >= q.from && h < q.to : h >= q.from || h < q.to;
 }
 
-const COLOR = { down: 0xf23f42, up: 0x23a55a, test: 0x5865f2 };
+const COLOR = { down: COLORS.bad, up: COLORS.ok, test: COLORS.info };
 
 interface ServerAlert { name: string; address: string; game: string; downMs: number; now: number }
 /** «server is back»: also used by the message gallery in the admin */
@@ -17761,6 +17762,7 @@ __COREGSM_EOF__
  *   GET /api/admin/attention   the list (servers down, dead deliveries, backups, certificate, update, bot, disk, queues)
  * and a check of the free disk space every 30 minutes that sends a Discord alert (once per level per day).
  */
+import { COLORS } from '../discord/palette.js';
 import fs from 'node:fs';
 import type { Express, RequestHandler } from 'express';
 import { DATA_DIR, db, getSetting, setSetting } from '../db.js';
@@ -17798,7 +17800,7 @@ export function diskEmbed(level: 'warn' | 'bad', free: number, total: number) {
   return {
     title: level === 'bad' ? '💾 Заканчивается место на диске' : '💾 Остаётся мало места на диске',
     description: `Свободно **${gb(free)} ГБ** из ${gb(total)} ГБ (**${diskFreePct(free, total)}%**).\nБэкапы, база и картинки хранятся на этом диске — освободите место, пока панель не начала сбоить.`,
-    color: level === 'bad' ? 0xf23f42 : 0xf0b232,
+    color: level === 'bad' ? COLORS.bad : COLORS.warn,
   };
 }
 
@@ -18249,6 +18251,7 @@ __COREGSM_EOF__
  * is drawn here (skia, like the server cards) and served at a signed address so that Discord can fetch it even
  * when the panel is private.
  */
+import { COLORS } from '../discord/palette.js';
 import crypto from 'node:crypto';
 import skia from 'skia-canvas';
 import type { Express, RequestHandler } from 'express';
@@ -18657,7 +18660,7 @@ export function digestMessage(d: Digest) {
     embed: {
       title: `📊 Неделя на ${brand().name}: ${dateRu(d.from)} – ${dateRu(d.to)}`,
       description: lines.join('\n'),
-      color: 0x5865f2,
+      color: COLORS.info,
       ...(base ? { url: `${base}/status`, image: { url: `${base}/api/digest/${d.to}-${sign(d.to)}.png` } } : {}),
       footer: { text: 'CoreGSM · итоги недели' },
       timestamp: new Date(d.to).toISOString(),
@@ -19305,14 +19308,45 @@ export async function sendMail(m: Mail): Promise<void> {
 
 const escHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
-/** a small, plain HTML letter around a paragraph and one button */
+/** the accent colour of the community (the setting of the brand), or the default one; only a plain #rrggbb is let into the markup */
+const accentColor = (): string => {
+  const c = (getSetting('brand_color') ?? '').trim();
+  return /^#[0-9a-f]{6}$/i.test(c) ? c : '#4f46e5';
+};
+
+/** where the logo of the panel is: its public address, or null when the panel has none (a letter cannot show a picture then) */
+const logoUrl = (): string | null => {
+  const env = (process.env.PUBLIC_URL ?? '').trim().replace(/\/+$/, '');
+  if (/^https:\/\/[^\s/]+$/i.test(env)) return `${env}/logo-128.png`;
+  const d = (process.env.DOMAIN ?? '').trim();
+  if (/^[a-z0-9.-]+$/i.test(d) && d.includes('.') && !/^[\d.]+$/.test(d)) return `https://${d}/logo-128.png`;
+  return null;
+};
+
+/**
+ * A letter in the look of the panel: the brand (logo and name) on a bar of the accent colour, the text, one big button
+ * and a quiet footer. Tables and inline styles only: mail programs ignore anything else.
+ */
 export function layout(brand: string, lines: string[], action?: { label: string; url: string }): { text: string; html: string } {
   const text = [...lines, ...(action ? ['', `${action.label}: ${action.url}`] : []), '', `— ${brand}`].join('\n');
+  const accent = accentColor();
+  const logo = logoUrl();
+  const head =
+    `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:${accent}"><tr><td style="padding:18px 28px;font-size:18px;font-weight:700;color:#ffffff">` +
+    (logo ? `<img src="${escHtml(logo)}" width="28" height="28" alt="" style="vertical-align:middle;border-radius:7px;margin-right:10px">` : '') +
+    `<span style="vertical-align:middle">${escHtml(brand)}</span></td></tr></table>`;
+  const body = lines.map((l) => `<p style="margin:0 0 14px">${escHtml(l)}</p>`).join('');
+  const button = action
+    ? `<table role="presentation" cellpadding="0" cellspacing="0" style="margin:22px 0 6px"><tr><td style="border-radius:10px;background:${accent}"><a href="${escHtml(action.url)}" style="display:inline-block;padding:13px 26px;font-size:16px;font-weight:700;color:#ffffff;text-decoration:none">${escHtml(action.label)}</a></td></tr></table>` +
+      `<p style="margin:14px 0 0;font-size:12px;color:#6b7280;word-break:break-all">${escHtml(action.url)}</p>`
+    : '';
   const html =
-    `<div style="font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.5;color:#1f2937;max-width:520px">` +
-    lines.map((l) => `<p>${escHtml(l)}</p>`).join('') +
-    (action ? `<p><a href="${escHtml(action.url)}" style="display:inline-block;padding:10px 18px;border-radius:8px;background:#4f46e5;color:#fff;text-decoration:none">${escHtml(action.label)}</a></p><p style="font-size:13px;color:#6b7280;word-break:break-all">${escHtml(action.url)}</p>` : '') +
-    `<p style="font-size:13px;color:#6b7280">${escHtml(brand)}</p></div>`;
+    `<div style="margin:0;padding:24px 12px;background:#f3f4f8;font-family:Arial,Helvetica,sans-serif">` +
+    `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;margin:0 auto;background:#ffffff;border-radius:14px;overflow:hidden">` +
+    `<tr><td>${head}</td></tr>` +
+    `<tr><td style="padding:26px 28px 8px;font-size:15px;line-height:1.55;color:#1f2937">${body}${button}</td></tr>` +
+    `<tr><td style="padding:18px 28px 24px;font-size:12px;color:#9ca3af">${escHtml(brand)}</td></tr>` +
+    `</table></div>`;
   return { text, html };
 }
 __COREGSM_EOF__
@@ -19470,6 +19504,7 @@ __COREGSM_EOF__
  *   ping  the ping is over twice the day's average and over 150 ms for 15 minutes
  *   full  90% of the slots or more are taken for 15 minutes
  */
+import { COLORS } from '../discord/palette.js';
 import { alertSettings, enqueueAlert } from './alerts.js';
 import { db, EFFECTIVE_NAME, getSetting } from '../db.js';
 import { gameLabel } from '../monitoring/games.js';
@@ -19478,9 +19513,9 @@ export type SmartKind = 'low' | 'ping' | 'full';
 export const SMART_KINDS: SmartKind[] = ['low', 'ping', 'full'];
 
 const RULES: Record<SmartKind, { holdMin: number; cooldownH: number; color: number }> = {
-  low: { holdMin: 20, cooldownH: 6, color: 0xf5b01e },
-  ping: { holdMin: 15, cooldownH: 3, color: 0xf5b01e },
-  full: { holdMin: 15, cooldownH: 12, color: 0x5865f2 },
+  low: { holdMin: 20, cooldownH: 6, color: COLORS.warn },
+  ping: { holdMin: 15, cooldownH: 3, color: COLORS.warn },
+  full: { holdMin: 15, cooldownH: 12, color: COLORS.info },
 };
 
 export const smartEnabled = (k: SmartKind) => getSetting(`alerts_smart_${k}`) === '1';
@@ -20028,6 +20063,7 @@ __COREGSM_EOF__
  *   DELETE /api/polls/:id           (admin)
  *   POST   /internal/polls/vote     the bot: a button press { pollId, optionId, discordId }
  */
+import { COLORS } from '../discord/palette.js';
 import type { Express, RequestHandler } from 'express';
 import { z } from 'zod';
 import { enqueueAlert } from '../alerts/alerts.js';
@@ -20073,7 +20109,7 @@ function view(p: PollRow, userId: number | null) {
   return { id: p.id, question: p.question, closesAt: p.closes_at, closed: !open(p), createdAt: p.created_at, total: t.total, options: t.rows, myVote: mine };
 }
 
-const COLOR = { open: 0x5865f2, closed: 0x23a55a };
+const COLOR = { open: COLORS.info, closed: COLORS.ok };
 
 /** the message of a poll (new / results): also used by the message gallery in the admin */
 export function pollEmbed(o: { question: string; closesAt: number | null; rows: TallyRow[]; total: number; isNew: boolean; site: boolean }) {
@@ -21649,6 +21685,26 @@ export function currentStyle(): DiscordStyle {
   return resolveStyle({ brandName: b.name, brandColor: b.color, accent: s.accent, logo: s.logo, footer: s.footer, baseUrl: publicBase() });
 }
 __COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/discord"
+  cat > "$APP_DIR/core-backend/src/discord/palette.ts" << '__COREGSM_EOF__'
+/**
+ * The colours of the stripe on the side of a Discord message: one meaning, one colour, in every message the panel posts
+ * (the server card, an alert, the weekly digest, a poll). Discord draws the stripe on its own dark or light background,
+ * so these are the same values Discord uses for its own green, amber, red and blurple, readable on both.
+ */
+export const COLORS = {
+  /** online, restored, finished */
+  ok: 0x23a55a,
+  /** lag, a warning, something to watch */
+  warn: 0xf0b232,
+  /** offline, a failure */
+  bad: 0xf23f42,
+  /** information, a test, an open poll */
+  info: 0x5865f2,
+  /** no data yet */
+  unknown: 0x5a4bd1,
+} as const;
+__COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/errors.ts" << '__COREGSM_EOF__'
 /**
@@ -23186,6 +23242,7 @@ __COREGSM_EOF__
  *
  * Layout (three columns): status · address · country / game · map · players / player list.
  */
+import { COLORS } from '../discord/palette.js';
 import { playersBar } from './chartLogic.js';
 import { gameLabel, gameProfile, gameShowsMap } from '../monitoring/games.js';
 
@@ -23246,7 +23303,7 @@ export interface EmbedExtra {
   timeZone?: string | null;
 }
 
-const COLOR = { online: 0x23a55a, lag: 0xf0b232, offline: 0xf23f42, unknown: 0x5a4bd1 };
+const COLOR = { online: COLORS.ok, lag: COLORS.warn, offline: COLORS.bad, unknown: COLORS.unknown };
 
 /** the side stripe of an online server follows the colour of its game (others keep the status green) */
 const accentOf = (game: string): number | undefined => gameProfile(game)?.accent;
@@ -24118,7 +24175,7 @@ __COREGSM_EOF__
  */
 import type { Express, Request, Response } from 'express';
 import { publicPanel } from '../security/auth.js';
-import { badgeSvg, notFoundBadge, widgetHtml, widgetTheme } from '../profile/badgeLogic.js';
+import { badgeSvg, notFoundBadge, widgetHtml, widgetTheme, widgetStyle } from '../profile/badgeLogic.js';
 import { getServer } from '../monitoring/serverData.js';
 import { baseOf, brand, publicBase } from '../admin/site.js';
 import { param } from '../http.js';
@@ -24162,7 +24219,7 @@ export function registerWidgets(app: Express): void {
     }
     const base = publicBase() ?? baseOf(req);
     res.set('Cache-Control', WIDGET_CACHE);
-    res.send(widgetHtml({ ...sv, name: publicName(sv), url: `${base}/servers/${sv.id}`, brand: brand().name }, widgetTheme(req.query.theme)));
+    res.send(widgetHtml({ ...sv, name: publicName(sv), url: `${base}/servers/${sv.id}`, brand: brand().name }, widgetTheme(req.query.theme), widgetStyle(req.query)));
   });
 }
 __COREGSM_EOF__
@@ -29563,9 +29620,25 @@ const STATE_LABEL: Record<BadgeState, string> = { online: 'В сети', full: '
 export type WidgetTheme = 'auto' | 'light' | 'dark';
 /** ?theme= of the widget: light or dark forces the palette, anything else follows the visitor's system setting */
 export const widgetTheme = (v: unknown): WidgetTheme => (v === 'light' || v === 'dark' ? v : 'auto');
+
+/** the look of the widget besides the palette: the corner radius (0..24 px) and one of three fixed font families */
+export type WidgetFont = 'sans' | 'serif' | 'mono';
+export interface WidgetStyle { radius: number; font: WidgetFont }
+export const DEFAULT_WIDGET_STYLE: WidgetStyle = { radius: 8, font: 'sans' };
+const FONT_STACK: Record<WidgetFont, string> = {
+  sans: 'system-ui,-apple-system,"Segoe UI",Roboto,sans-serif',
+  serif: 'Georgia,"Times New Roman",serif',
+  mono: 'ui-monospace,SFMono-Regular,Menlo,Consolas,monospace',
+};
+/** ?radius= and ?font= of the widget; anything else gives the default (only a number and a name from the list reach the CSS) */
+export function widgetStyle(q: { radius?: unknown; font?: unknown }): WidgetStyle {
+  const r = typeof q.radius === 'string' && /^\d{1,2}$/.test(q.radius) ? Number(q.radius) : DEFAULT_WIDGET_STYLE.radius;
+  const f = q.font === 'serif' || q.font === 'mono' || q.font === 'sans' ? q.font : DEFAULT_WIDGET_STYLE.font;
+  return { radius: Math.min(24, Math.max(0, r)), font: f };
+}
 const DARK_VARS = '--bg:#161b22;--fg:#e6edf3;--mut:#8b949e;--line:#30363d';
 
-export function widgetHtml(d: WidgetData, theme: WidgetTheme = 'auto'): string {
+export function widgetHtml(d: WidgetData, theme: WidgetTheme = 'auto', style: WidgetStyle = DEFAULT_WIDGET_STYLE): string {
   const st = stateOf(d);
   const color = BADGE_COLORS[st];
   const pct = d.maxPlayers > 0 ? Math.min(100, Math.round((d.players / d.maxPlayers) * 100)) : 0;
@@ -29583,8 +29656,8 @@ export function widgetHtml(d: WidgetData, theme: WidgetTheme = 'auto'): string {
 :root{--bg:#fff;--fg:#1f2328;--mut:#656d76;--line:#d0d7de;--st:${color}}
 ${theme === 'dark' ? `:root{${DARK_VARS}}` : theme === 'auto' ? `@media (prefers-color-scheme:dark){:root{${DARK_VARS}}}` : ''}
 *{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
-a{display:block;color:inherit;text-decoration:none;padding:12px 14px;border:1px solid var(--line);border-left:4px solid var(--st);border-radius:8px}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.4 ${FONT_STACK[style.font]}}
+a{display:block;color:inherit;text-decoration:none;padding:12px 14px;border:1px solid var(--line);border-left:4px solid var(--st);border-radius:${style.radius}px}
 .h{display:flex;align-items:center;gap:8px;font-weight:600}
 .h b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
 .s{font-size:12px;font-weight:600;color:var(--st);white-space:nowrap}
@@ -110805,6 +110878,7 @@ import ServersPage from './pages/Servers';
 import { applyServerPrefs, t, useI18n, type TKey } from './i18n';
 import { lazyPage, PageFrame } from './lazyPage';
 import { OfflineBar } from './components/OfflineBar';
+import { MotionToggle } from './components/MotionToggle';
 import { AuthCard, AuthShell, IconNews, IconServers, IconSettings, Logo, ThemeToggle, Toaster, Wordmark, applyDefaultTheme, setThemeScope, navigate, parseRoute, toast, useRoute } from './ui';
 
 // loaded on demand: the server list (the first screen) does not wait for these
@@ -111085,7 +111159,7 @@ export default function App() {
   shellOk.current = boot.ready && !authing && !boot.offline && !boot.needsSetup && !showAuth;
   // a first segment nobody knows (typo, old link) gets the 404 page; known-but-unavailable routes keep falling back to the list
   const notFound = rawPage !== '' && !['login', 'register', 'auth', 'profile', 'u', '_ui', 'forgot', 'reset', 'verify', 'player'].includes(rawPage) && !PAGES.some((p) => p.id === rawPage);
-  const page = notFound ? '404' : rawPage === 'u' ? 'u' : rawPage === 'player' && sub ? 'player' : rawPage === 'profile' && me ? 'profile' : rawPage === '_ui' && isAdmin && import.meta.env.DEV ? '_ui' : visible.some((p) => p.id === rawPage) ? rawPage : 'servers';
+  const page = notFound ? '404' : rawPage === 'u' ? 'u' : rawPage === 'player' && sub ? 'player' : rawPage === 'profile' && me ? 'profile' : rawPage === '_ui' && isAdmin ? '_ui' : visible.some((p) => p.id === rawPage) ? rawPage : 'servers';
   const adminSection = sub.split('/')[0];
   let publicName = '';
   if (page === 'u' || page === 'player') {
@@ -111246,6 +111320,7 @@ export default function App() {
             </button>
             {isAdmin && <AttentionBell />}
             {me && <NotificationBell initialUnread={me.unreadNotifications ?? 0} />}
+            <MotionToggle />
             <ThemeToggle />
             <i className="hdr-sep" aria-hidden />
             {me ? (
@@ -112368,15 +112443,31 @@ export interface Appearance {
   largeText: boolean;
   highContrast: boolean;
   liteData: boolean;
+  /** pure black page and darker cards in the dark theme (saves an OLED screen, rests the eyes at night) */
+  oled: boolean;
+}
+
+/** presets: a few options at once; the ones not named are switched off */
+export type PresetId = 'classic' | 'contrast' | 'soft' | 'oled';
+export const PRESETS: Record<PresetId, Appearance> = {
+  classic: { reduceMotion: false, largeText: false, highContrast: false, liteData: false, oled: false },
+  contrast: { reduceMotion: false, largeText: true, highContrast: true, liteData: false, oled: false },
+  soft: { reduceMotion: true, largeText: false, highContrast: false, liteData: true, oled: false },
+  oled: { reduceMotion: false, largeText: false, highContrast: false, liteData: false, oled: true },
+};
+export const PRESET_IDS = Object.keys(PRESETS) as PresetId[];
+/** the preset the options match exactly, or null (a custom mix) */
+export function presetOf(a: Appearance): PresetId | null {
+  return PRESET_IDS.find((id) => (Object.keys(PRESETS[id]) as (keyof Appearance)[]).every((k) => PRESETS[id][k] === a[k])) ?? null;
 }
 
 export const APPEARANCE_KEY = 'coregsm_appearance';
-export const DEFAULT_APPEARANCE: Appearance = { reduceMotion: false, largeText: false, highContrast: false, liteData: false };
+export const DEFAULT_APPEARANCE: Appearance = { reduceMotion: false, largeText: false, highContrast: false, liteData: false, oled: false };
 
 /** anything (a stored string, a broken value) -> a complete Appearance */
 export function normalizeAppearance(raw: unknown): Appearance {
   const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
-  return { reduceMotion: r.reduceMotion === true, largeText: r.largeText === true, highContrast: r.highContrast === true, liteData: r.liteData === true };
+  return { reduceMotion: r.reduceMotion === true, largeText: r.largeText === true, highContrast: r.highContrast === true, liteData: r.liteData === true, oled: r.oled === true };
 }
 
 function read(): Appearance {
@@ -112404,6 +112495,7 @@ export function applyAppearance(a: Appearance, root: HTMLElement = document.docu
   set('data-text', a.largeText ? 'large' : null);
   set('data-contrast', a.highContrast ? 'high' : null);
   set('data-lite', a.liteData || networkWantsLite() ? '1' : null);
+  set('data-oled', a.oled ? '1' : null);
 }
 
 let current: Appearance = typeof window === 'undefined' ? DEFAULT_APPEARANCE : read();
@@ -112413,7 +112505,7 @@ export const getAppearance = () => current;
 
 export function setAppearance(patch: Partial<Appearance>) {
   const next = normalizeAppearance({ ...current, ...patch });
-  if (next.reduceMotion === current.reduceMotion && next.largeText === current.largeText && next.highContrast === current.highContrast && next.liteData === current.liteData) return;
+  if (next.reduceMotion === current.reduceMotion && next.largeText === current.largeText && next.highContrast === current.highContrast && next.liteData === current.liteData && next.oled === current.oled) return;
   current = next;
   try {
     localStorage.setItem(APPEARANCE_KEY, JSON.stringify(next));
@@ -113589,7 +113681,15 @@ import { confirmDialog } from '../confirm';
 import { currentPath } from '../ui/route';
 import { GameAvatar, IconCopy, IconMoon, IconNews, IconRefresh, IconServers, IconSun, IconTrophy, IconWrench, adminThemeIsOwn, currentTheme, resetAdminTheme, setThemeChoice, toast, useDensity, navigate } from '../ui';
 
-type Group = 'Серверы' | 'Разделы' | 'Действия';
+type Group = 'Недавние' | 'Серверы' | 'Разделы' | 'Действия';
+
+const RECENT_KEY = 'coregsm_palette_recent';
+const readRecent = (): string[] => {
+  try { const v = JSON.parse(localStorage.getItem(RECENT_KEY) ?? '[]') as unknown; return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string').slice(0, 5) : []; } catch { return []; }
+};
+const rememberRecent = (key: string) => {
+  try { localStorage.setItem(RECENT_KEY, JSON.stringify([key, ...readRecent().filter((k) => k !== key)].slice(0, 5))); } catch { /* not remembered */ }
+};
 
 interface Item {
   key: string;
@@ -113678,6 +113778,7 @@ export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose:
       sectionItem('p-status', 'Статус', 'Доступность за 30 дней', '/status', <IconPulse />),
       sectionItem('p-community', 'Сообщество', 'Кто играет, сезон, зал славы', '/community', <IconTrophy />, 'игроки рейтинг топ сезон'),
     );
+    if (isAdmin) out.push(sectionItem('p-design', 'Дизайн-система', 'Цвета, кнопки, поля и пустые состояния панели', '/_ui', <IconWrench />, 'тема дизайн компоненты ui кит', true));
     if (isStaff) {
       const sections = isAdmin ? ADMIN_SECTIONS : ADMIN_SECTIONS.filter((x) => SECTION_PERM[x.id] && perms.includes(SECTION_PERM[x.id]!));
       for (const sec of sections) out.push(sectionItem(`a-${sec.id}`, sec.label, `Админка · ${sec.desc}`, `/admin/${sec.id}`, sec.icon(), `${sec.keywords} админка`));
@@ -113747,7 +113848,9 @@ export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose:
     const servs = hit.filter((i) => i.group === 'Серверы').slice(0, words.length ? 10 : 6);
     const secs = hit.filter((i) => i.group === 'Разделы');
     const acts = hit.filter((i) => i.group === 'Действия');
-    return [...servs, ...secs, ...acts];
+    // with nothing typed: what was picked last (a server, a section or a quick action) comes first
+    const recent: Item[] = words.length ? [] : readRecent().flatMap((k) => { const it = items.find((i) => i.key === k); return it ? [{ ...it, key: `recent-${it.key}`, group: 'Недавние' as Group }] : []; });
+    return [...recent, ...servs, ...secs, ...acts];
   }, [items, q]);
 
   useEffect(() => setActive(0), [q]);
@@ -113760,6 +113863,7 @@ export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose:
   const go = (it: Item | undefined) => {
     if (!it) return;
     onClose();
+    rememberRecent(it.key.replace(/^recent-/, ''));
     if (it.run) it.run();
     else navigate(it.href);
   };
@@ -113773,8 +113877,8 @@ export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose:
     else if (e.key === 'Enter') { e.preventDefault(); go(results[safeActive]); }
   };
 
-  const groups: Group[] = ['Серверы', 'Разделы', 'Действия'];
-  const groupName: Record<Group, TKey> = { 'Серверы': 'nav.servers', 'Разделы': 'd2.cp.g.sections', 'Действия': 'd2.cp.g.actions' };
+  const groups: Group[] = ['Недавние', 'Серверы', 'Разделы', 'Действия'];
+  const groupName: Record<Group, TKey> = { 'Недавние': 'd2.cp.g.recent', 'Серверы': 'nav.servers', 'Разделы': 'd2.cp.g.sections', 'Действия': 'd2.cp.g.actions' };
   const optId = (i: number) => `${uid}-opt-${i}`;
 
   return (
@@ -115346,6 +115450,26 @@ export function MoreMenu({ children, plain = false }: { children: (close: () => 
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/MotionToggle.tsx" << '__COREGSM_EOF__'
+import { useAppearance } from '../appearance';
+import { t, useI18n } from '../i18n';
+
+/** one button for «less movement»: animations off (the same switch as in the profile), remembered in this browser */
+export function MotionToggle() {
+  useI18n();
+  const [look, setLook] = useAppearance();
+  const off = look.reduceMotion;
+  const label = off ? t('hdr.motionOn') : t('hdr.motionOff');
+  return (
+    <button type="button" className="btn-icon hdr-motion" aria-pressed={off} title={label} aria-label={label} onClick={() => setLook({ reduceMotion: !off })}>
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+        {off ? <><path d="M6 4h4v16H6zM14 4h4v16h-4z" /></> : <><path d="M3 12c2-6 4-6 6 0s4 6 6 0 4-6 6 0" /></>}
+      </svg>
+    </button>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
   cat > "$APP_DIR/core-frontend/src/components/NickPic.tsx" << '__COREGSM_EOF__'
 import { useEffect, useState, type ReactNode } from 'react';
 import { useNickAvatar } from '../nickAvatars';
@@ -115403,6 +115527,13 @@ export default function NotFound({ kind = 'page' }: { kind?: 'page' | 'server' }
         <IconArrow />
       </a>
       <a className="btn btn-soft" href="/servers">{t('d2.nf.toServers')}</a>
+      <button type="button" className="btn btn-soft" onClick={() => window.dispatchEvent(new Event('coregsm:palette'))}>{t('d2.nf.search')}</button>
+      <nav className="nf-links" aria-label={t('d2.nf.also')}>
+        <span>{t('d2.nf.also')}</span>
+        <a href="/news">{t('nav.news')}</a>
+        <a href="/status">{t('nav.status')}</a>
+        <a href="/community">{t('nav.community')}</a>
+      </nav>
     </StateView>
   );
 }
@@ -122741,7 +122872,7 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/components/profile/LookRegion.tsx" << '__COREGSM_EOF__'
 import { useMemo, useState, type CSSProperties } from 'react';
 import { ACCENT_MODES, useAccentMode, type AccentMode } from '../../accent';
-import { useAppearance, type Appearance } from '../../appearance';
+import { PRESET_IDS, PRESETS, presetOf, useAppearance, type Appearance, type PresetId } from '../../appearance';
 import { gameColor } from '../../games';
 import { type Prefs, type TKey, t, updatePrefs, useI18n } from '../../i18n';
 import { fmtDateTime, Section, Switch, toast, useDensity, type Density } from '../../ui';
@@ -122765,13 +122896,24 @@ export function AppearanceCard() {
     ['largeText', 'pf.a11y.text', 'pf.a11y.textHint'],
     ['highContrast', 'pf.a11y.contrast', 'pf.a11y.contrastHint'],
     ['liteData', 'pf.a11y.lite', 'pf.a11y.liteHint'],
+    ['oled', 'pf.a11y.oled', 'pf.a11y.oledHint'],
   ];
+  const active = presetOf(look);
   const options: [Density, TKey, TKey][] = [
     ['normal', 'pf.density.normal', 'pf.density.normalHint'],
     ['compact', 'pf.density.compact', 'pf.density.compactHint'],
   ];
   return (
     <Section title={t('pf.look.title')}>
+      <div>
+        <span id="preset-label" className="label">{t('pf.preset.label')}</span>
+        <div className="seg flex-wrap" role="group" aria-labelledby="preset-label">
+          {PRESET_IDS.map((id: PresetId) => (
+            <button key={id} type="button" className="seg-item" aria-pressed={active === id} onClick={() => setLook(PRESETS[id])}>{t(`pf.preset.${id}` as TKey)}</button>
+          ))}
+        </div>
+        <p className="mt-2 text-sm font-semibold text-mute">{active ? t(`pf.preset.${active}Hint` as TKey) : t('pf.preset.customHint')} {t('pf.thisBrowser')}</p>
+      </div>
       <div>
         <span id="density-label" className="label">{t('pf.density.label')}</span>
         <div className="seg" role="group" aria-labelledby="density-label">
@@ -128699,6 +128841,66 @@ export default function CompareChart({ servers }: { servers: Server[] }) {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/servers"
+  cat > "$APP_DIR/core-frontend/src/components/servers/HomeBlocks.tsx" << '__COREGSM_EOF__'
+import { useEffect, useRef, useState } from 'react';
+import { t, useI18n } from '../../i18n';
+
+/** which blocks of the servers page are shown: remembered in this browser; both are on until the person turns one off */
+export interface HomeBlocks { pulse: boolean; news: boolean }
+const KEY = 'coregsm_home_blocks';
+const ALL_ON: HomeBlocks = { pulse: true, news: true };
+
+const read = (): HomeBlocks => {
+  try {
+    const v = JSON.parse(localStorage.getItem(KEY) ?? '{}') as Partial<HomeBlocks>;
+    return { pulse: v.pulse !== false, news: v.news !== false };
+  } catch {
+    return ALL_ON;
+  }
+};
+
+export function useHomeBlocks(): [HomeBlocks, (patch: Partial<HomeBlocks>) => void] {
+  const [blocks, setBlocks] = useState<HomeBlocks>(read);
+  const set = (patch: Partial<HomeBlocks>) => setBlocks((b) => {
+    const next = { ...b, ...patch };
+    try { localStorage.setItem(KEY, JSON.stringify(next)); } catch { /* not remembered */ }
+    return next;
+  });
+  return [blocks, set];
+}
+
+/** «Customise»: a small menu with a switch for every block of the page; closes on Esc and on a click outside */
+export function HomeBlocksMenu({ blocks, onChange }: { blocks: HomeBlocks; onChange: (patch: Partial<HomeBlocks>) => void }) {
+  useI18n();
+  const [open, setOpen] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return undefined;
+    const away = (e: MouseEvent) => { if (!box.current?.contains(e.target as Node)) setOpen(false); };
+    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+    document.addEventListener('mousedown', away);
+    document.addEventListener('keydown', esc);
+    return () => { document.removeEventListener('mousedown', away); document.removeEventListener('keydown', esc); };
+  }, [open]);
+  const rows: [keyof HomeBlocks, string][] = [['pulse', t('home.b.pulse')], ['news', t('home.b.news')]];
+  return (
+    <div className="home-blocks" ref={box}>
+      <button type="button" className="btn btn-soft btn-sm" aria-haspopup="true" aria-expanded={open} onClick={() => setOpen((v) => !v)}>{t('home.customize')}</button>
+      {open && (
+        <div className="home-blocks-pop" role="group" aria-label={t('home.customize')}>
+          {rows.map(([k, label]) => (
+            <label key={k} className="home-blocks-row">
+              <input type="checkbox" className="srv-check" checked={blocks[k]} onChange={(e) => onChange({ [k]: e.target.checked })} />
+              <span>{label}</span>
+            </label>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/servers"
   cat > "$APP_DIR/core-frontend/src/components/servers/PulseStrip.tsx" << '__COREGSM_EOF__'
 // The «pulse» strip above the servers: one sentence about the state, four numbers and a 24-hour chart of players.
 import { useId, useState, type JSX, type PointerEvent } from 'react';
@@ -132949,6 +133151,9 @@ import type ru from './ru';
 const en: Record<keyof typeof ru, string> = {
   // ---- shared ----
   'common.cancel': 'Cancel',
+  'home.customize': 'Customise',
+  'home.b.pulse': 'The summary with a chart',
+  'home.b.news': 'The «What is new» block',
   'su.title': 'Confirm the action',
   'su.text': 'This is a protected operation. Enter your password again: the confirmation lasts 10 minutes.',
   'su.name': 'Account name',
@@ -133354,6 +133559,20 @@ const en: Record<keyof typeof ru, string> = {
   'pf.a11y.contrast': 'High contrast',
   'pf.a11y.contrastHint': 'Black text and firmer borders around elements.',
   'pf.a11y.lite': 'Data saver',
+  'pf.preset.label': 'Ready-made look',
+  'pf.preset.classic': 'Classic',
+  'pf.preset.contrast': 'Contrast',
+  'pf.preset.soft': 'Soft',
+  'pf.preset.oled': 'OLED',
+  'pf.preset.classicHint': 'The usual look: every switch below is off.',
+  'pf.preset.contrastHint': 'Large text and stronger borders, easier to read with weak eyesight.',
+  'pf.preset.softHint': 'No animations and saving traffic: calmer and lighter for weak devices.',
+  'pf.preset.oledHint': 'A pure black page in the dark theme: saves an OLED screen and glares less at night.',
+  'pf.preset.customHint': 'A custom mix: the switches below are set one by one.',
+  'pf.a11y.oled': 'Black background (OLED)',
+  'pf.a11y.oledHint': 'In the dark theme the page is pure black and the cards are darker.',
+  'hdr.motionOff': 'Turn animations off',
+  'hdr.motionOn': 'Turn animations on',
   'pf.a11y.liteHint': 'No background pictures or animations, data refreshes half as often. Turns on by itself when the browser asks to save data.',
 
   // ---- e-mail: password reset, address confirmation ----
@@ -133782,6 +134001,11 @@ const en: Record<keyof typeof ru, string> = {
   'intg.snip.widget': 'Widget (iframe)',
   'intg.snip.widgetTitle': 'Server widget',
   'intg.opt.theme': 'Widget look',
+  'intg.opt.radius': 'Widget corners',
+  'intg.opt.font': 'Widget font',
+  'intg.opt.fontSans': 'Plain',
+  'intg.opt.fontSerif': 'Serif',
+  'intg.opt.fontMono': 'Monospace',
   'intg.opt.auto': 'Follows the visitor system setting',
   'intg.opt.light': 'Light',
   'intg.opt.dark': 'Dark',
@@ -134004,6 +134228,7 @@ const en: Record<keyof typeof ru, string> = {
   'srv.quick.linkCopied': 'Link copied',
   'srv.quick.label': 'Actions: {name}',
   'spark.now': 'now',
+  'spark.avg': 'Average of the day: {n}',
   'spark.h': 'h',
   'spark.min': 'min',
   'srv.sub.live': 'Players now: {n} · servers online: {s} of {total}',
@@ -136257,6 +136482,7 @@ const en: Record<keyof typeof ru, string> = {
   'd2.fb.add': '+ Add a field',
   'd2.cp.g.sections': 'Sections',
   'd2.cp.g.actions': 'Actions',
+  'd2.cp.g.recent': 'Recent',
   'd2.cp.search': 'Panel search',
   'd2.cp.searchLabel': 'Search servers and sections',
   'd2.cp.placeholder': 'Find a server or section…',
@@ -136616,6 +136842,11 @@ const en: Record<keyof typeof ru, string> = {
   'd2.nf.serverText': 'Perhaps it was deleted or the link is outdated. Open the server list and find the one you need.',
   'd2.nf.pageText': 'The link is outdated or the address has a typo. Go back to the home page: everything you need is there.',
   'd2.nf.home': 'To the home page',
+  'd2.nf.search': 'Search the panel',
+  'd2.nf.also': 'Or open',
+  'adm.tbl.emptyTitle': 'No servers yet',
+  'adm.tbl.emptyText': 'Add your first game server: the players, the map and the ping start updating by themselves.',
+  'adm.tbl.emptyAdd': 'Add the first server',
   'd2.nf.toServers': 'To the servers',
   'd2.asb.stale': 'Polling has not answered for a long time',
   'd2.asb.down': 'Servers unavailable: {n}',
@@ -137031,6 +137262,9 @@ __COREGSM_EOF__
 const ru = {
   // ---- shared ----
   'common.cancel': 'Отмена',
+  'home.customize': 'Настроить',
+  'home.b.pulse': 'Сводка с графиком',
+  'home.b.news': 'Блок «Что нового»',
   'su.title': 'Подтвердите действие',
   'su.text': 'Это защищённая операция. Введите пароль ещё раз: подтверждение действует 10 минут.',
   'su.name': 'Имя аккаунта',
@@ -137436,6 +137670,20 @@ const ru = {
   'pf.a11y.contrast': 'Высокий контраст',
   'pf.a11y.contrastHint': 'Чёрный текст и более чёткие границы элементов.',
   'pf.a11y.lite': 'Экономия трафика',
+  'pf.preset.label': 'Готовый вид',
+  'pf.preset.classic': 'Классика',
+  'pf.preset.contrast': 'Контраст',
+  'pf.preset.soft': 'Мягкая',
+  'pf.preset.oled': 'OLED',
+  'pf.preset.classicHint': 'Обычный вид панели: все переключатели ниже выключены.',
+  'pf.preset.contrastHint': 'Крупный текст и усиленные границы, лучше читается при плохом зрении.',
+  'pf.preset.softHint': 'Без анимаций и с экономией трафика: спокойнее и легче для слабых устройств.',
+  'pf.preset.oledHint': 'Чисто чёрный фон в тёмной теме: экономит экран OLED и меньше слепит ночью.',
+  'pf.preset.customHint': 'Свой набор: переключатели ниже настроены по отдельности.',
+  'pf.a11y.oled': 'Чёрный фон (OLED)',
+  'pf.a11y.oledHint': 'В тёмной теме страница чисто чёрная, карточки темнее.',
+  'hdr.motionOff': 'Выключить анимации',
+  'hdr.motionOn': 'Включить анимации',
   'pf.a11y.liteHint': 'Без фоновых картинок и анимаций, данные обновляются вдвое реже. Включается само, если браузер просит экономить трафик.',
 
   // ---- e-mail: password reset, address confirmation ----
@@ -137864,6 +138112,11 @@ const ru = {
   'intg.snip.widget': 'Виджет (iframe)',
   'intg.snip.widgetTitle': 'Виджет сервера',
   'intg.opt.theme': 'Оформление виджета',
+  'intg.opt.radius': 'Скругление виджета',
+  'intg.opt.font': 'Шрифт виджета',
+  'intg.opt.fontSans': 'Обычный',
+  'intg.opt.fontSerif': 'С засечками',
+  'intg.opt.fontMono': 'Моноширинный',
   'intg.opt.auto': 'Как у посетителя',
   'intg.opt.light': 'Светлое',
   'intg.opt.dark': 'Тёмное',
@@ -138086,6 +138339,7 @@ const ru = {
   'srv.quick.linkCopied': 'Ссылка скопирована',
   'srv.quick.label': 'Действия: {name}',
   'spark.now': 'сейчас',
+  'spark.avg': 'Среднее за сутки: {n}',
   'spark.h': 'ч',
   'spark.min': 'мин',
   'srv.sub.live': 'Игроков сейчас: {n} · серверов онлайн: {s} из {total}',
@@ -140339,6 +140593,7 @@ const ru = {
   'd2.fb.add': '+ Добавить поле',
   'd2.cp.g.sections': 'Разделы',
   'd2.cp.g.actions': 'Действия',
+  'd2.cp.g.recent': 'Недавние',
   'd2.cp.search': 'Поиск по панели',
   'd2.cp.searchLabel': 'Поиск серверов и разделов',
   'd2.cp.placeholder': 'Найти сервер или раздел…',
@@ -140698,6 +140953,11 @@ const ru = {
   'd2.nf.serverText': 'Возможно, его удалили или ссылка устарела. Откройте список серверов и найдите нужный.',
   'd2.nf.pageText': 'Ссылка устарела или в адресе опечатка. Вернитесь на главную: всё самое нужное там.',
   'd2.nf.home': 'На главную',
+  'd2.nf.search': 'Найти по панели',
+  'd2.nf.also': 'Или откройте',
+  'adm.tbl.emptyTitle': 'Серверов пока нет',
+  'adm.tbl.emptyText': 'Добавьте первый игровой сервер: онлайн, карта и пинг начнут обновляться сами.',
+  'adm.tbl.emptyAdd': 'Добавить первый сервер',
   'd2.nf.toServers': 'К серверам',
   'd2.asb.stale': 'Опрос давно не отвечает',
   'd2.asb.down': 'Недоступно серверов: {n}',
@@ -142208,9 +142468,11 @@ function SnippetsSection({ servers }: { servers: Server[] }) {
   const s = servers.find((x) => x.id === id);
   const [theme, setTheme] = useState<WidgetTheme>('auto');
   const [size, setSize] = useState<WidgetSize>('m');
+  const [radius, setRadius] = useState(8);
+  const [font, setFont] = useState<'sans' | 'serif' | 'mono'>('sans');
   const [cardStyle, setCardStyle] = useState<'split' | 'strip'>('split');
   const [cardTheme, setCardTheme] = useState<'dark' | 'light'>('dark');
-  const sn = s ? badgeSnippets(window.location.origin, s.id, s.customName || s.name, { theme, size, cardStyle, cardTheme }) : null;
+  const sn = s ? badgeSnippets(window.location.origin, s.id, s.customName || s.name, { theme, size, radius, font, cardStyle, cardTheme }) : null;
   return (
     <Section title={t('intg.snip.title')} description={t('intg.snip.desc')}>
       {!servers.length ? (
@@ -142222,7 +142484,7 @@ function SnippetsSection({ servers }: { servers: Server[] }) {
               {servers.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
             </select>
           </Field>
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             <Field label={t('intg.opt.theme')}>
               <select className="input" value={theme} onChange={(e) => setTheme(e.target.value as WidgetTheme)}>
                 <option value="auto">{t('intg.opt.auto')}</option>
@@ -142235,6 +142497,18 @@ function SnippetsSection({ servers }: { servers: Server[] }) {
                 <option value="s">{t('intg.opt.sizeS')}</option>
                 <option value="m">{t('intg.opt.sizeM')}</option>
                 <option value="l">{t('intg.opt.sizeL')}</option>
+              </select>
+            </Field>
+            <Field label={t('intg.opt.radius')}>
+              <select className="input" value={radius} onChange={(e) => setRadius(Number(e.target.value))}>
+                {[0, 4, 8, 16, 24].map((r) => <option key={r} value={r}>{r} px</option>)}
+              </select>
+            </Field>
+            <Field label={t('intg.opt.font')}>
+              <select className="input" value={font} onChange={(e) => setFont(e.target.value as 'sans' | 'serif' | 'mono')}>
+                <option value="sans">{t('intg.opt.fontSans')}</option>
+                <option value="serif">{t('intg.opt.fontSerif')}</option>
+                <option value="mono">{t('intg.opt.fontMono')}</option>
               </select>
             </Field>
             <Field label={t('intg.opt.cardStyle')}>
@@ -142681,6 +142955,7 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/pages/AdminServersTable.tsx" << '__COREGSM_EOF__'
 // The «Серверы» table of the admin area: search, filters, a checkbox per row for bulk actions, the figures of every
 // server (status, players, ping, uptime, a 24 h curve) and the row actions as icons. On a phone it is a list of cards.
+import { StateView } from '../components/StateView';
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import type { Server } from '../api';
 import { confirmDialog } from '../confirm';
@@ -142816,7 +143091,9 @@ export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableA
         </div>
       )}
 
-      {rows.length === 0 ? (
+      {servers.length === 0 ? (
+        <StateView kind="empty" title={t('adm.tbl.emptyTitle')} text={t('adm.tbl.emptyText')} action={<a className="btn" href="/admin/servers/new">{t('adm.tbl.emptyAdd')}</a>} />
+      ) : rows.length === 0 ? (
         <div className="tile px-5 py-8 text-center font-semibold text-mute">
           {t('adm.tbl.none')} <button type="button" className="font-extrabold text-link underline" onClick={() => { setFilter('all'); setQuery(''); }}>{t('adm.tbl.reset')}</button>
         </div>
@@ -149288,6 +149565,7 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/Servers.tsx" << '__COREGSM_EOF__'
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent } from 'react';
+import { HomeBlocksMenu, useHomeBlocks } from '../components/servers/HomeBlocks';
 import { api, type Server, type StatusInfo } from '../api';
 import { useAuth } from '../auth';
 import { gameColor, gameGradient, gameLabel } from '../games';
@@ -149611,6 +149889,7 @@ function ServerList() {
     downSince: downSince.get(s.id),
   });
 
+  const [home, setHome] = useHomeBlocks();
   return (
     <div className="space-y-5">
       <PageHead
@@ -149620,11 +149899,12 @@ function ServerList() {
       >
         <span className="srv-head-actions">
           <LiveBadge at={updatedAt} onRefresh={() => void refreshNow()} busy={refreshing} />
+          <HomeBlocksMenu blocks={home} onChange={setHome} />
           {isAdmin && <a className="btn btn-soft btn-sm" href="/admin/servers" data-magnetic>{t('d2.srv.manage')}</a>}
         </span>
       </PageHead>
 
-      {loaded && servers.length > 0 && (
+      {loaded && servers.length > 0 && home.pulse && (
         <PulseStrip servers={servers} overview={overview} uptime={upAvg} now={overviewAt || updatedAt} onOpen={open} />
       )}
 
@@ -149713,7 +149993,7 @@ function ServerList() {
               </div>
             )}
           </div>
-          <WhatsNew open={wnOpen} onToggle={toggleWn} overview={overview} />
+          {home.news && <WhatsNew open={wnOpen} onToggle={toggleWn} overview={overview} />}
         </div>
       )}
 
@@ -151803,6 +152083,13 @@ describe('badgeSnippets', () => {
     expect(c.cardHtml).toBe('<a href="https://e.x/servers/7"><img src="https://e.x/api/card/7.png?theme=light" alt="A &quot;b&quot;" style="max-width:100%"></a>');
     expect(c.cardMarkdown).toBe('[![A "b"](https://e.x/api/card/7.png?theme=light)](https://e.x/servers/7)');
   });
+
+  it('the widget takes the corner radius and the font, and the default look has no query', () => {
+    expect(badgeSnippets('https://e.x', 7, 'S').widget).toBe('https://e.x/widget/servers/7');
+    expect(badgeSnippets('https://e.x', 7, 'S', { radius: 16, font: 'mono' }).widget).toBe('https://e.x/widget/servers/7?radius=16&font=mono');
+    expect(badgeSnippets('https://e.x', 7, 'S', { theme: 'dark', radius: 99 }).widget).toBe('https://e.x/widget/servers/7?theme=dark&radius=24');
+    expect(badgeSnippets('https://e.x', 7, 'S', { radius: 8, font: 'sans' }).widget).toBe('https://e.x/widget/servers/7');
+  });
 });
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
@@ -151834,6 +152121,9 @@ export interface BuilderOpts {
   /** the widget palette; «auto» follows the visitor's system setting */
   theme?: WidgetTheme;
   size?: WidgetSize;
+  /** corner radius of the widget (0..24) and its font family */
+  radius?: number;
+  font?: 'sans' | 'serif' | 'mono';
   /** the picture card of the server (PNG) */
   cardStyle?: 'split' | 'strip';
   cardTheme?: 'dark' | 'light';
@@ -151843,7 +152133,8 @@ export function badgeSnippets(origin: string, id: number, name: string, opts: Bu
   const base = origin.replace(/\/+$/, '');
   const badge = `${base}/badge/servers/${id}.svg`;
   const page = `${base}/servers/${id}`;
-  const widget = `${base}/widget/servers/${id}${opts.theme && opts.theme !== 'auto' ? `?theme=${opts.theme}` : ''}`;
+  const wq = [opts.theme && opts.theme !== 'auto' ? `theme=${opts.theme}` : '', opts.radius != null && opts.radius !== 8 ? `radius=${Math.min(24, Math.max(0, Math.round(opts.radius)))}` : '', opts.font && opts.font !== 'sans' ? `font=${opts.font}` : ''].filter(Boolean).join('&');
+  const widget = `${base}/widget/servers/${id}${wq ? `?${wq}` : ''}`;
   const { w, h } = WIDGET_SIZES[opts.size ?? 'm'];
   const cardQuery = [opts.cardStyle === 'strip' ? 'style=strip' : '', opts.cardTheme === 'light' ? 'theme=light' : ''].filter(Boolean).join('&');
   const card = `${base}/api/card/${id}.png${cardQuery ? `?${cardQuery}` : ''}`;
@@ -153304,6 +153595,18 @@ export function upcomingFlags(releases: UpdateNotesRelease[], current: string | 
   return out;
 }
 
+/** what one release holds, by the kind of the group each entry is listed under */
+export function releaseCounts(r: UpdateNotesRelease): { added: number; fixed: number; other: number } {
+  const out = { added: 0, fixed: 0, other: 0 };
+  for (const g of r.groups) {
+    const n = g.items.length;
+    if (/нов|new/i.test(g.title) || /new/i.test(g.titleEn ?? '')) out.added += n;
+    else if (/исправ|fix/i.test(g.title) || /fix/i.test(g.titleEn ?? '')) out.fixed += n;
+    else out.other += n;
+  }
+  return out;
+}
+
 /** how much is waiting in the releases newer than the running one, by the kind of the group they are listed under */
 export function changeSummary(releases: UpdateNotesRelease[], current: string | null | undefined): { versions: number; added: number; fixed: number; other: number } {
   const out = { versions: 0, added: 0, fixed: 0, other: 0 };
@@ -153345,7 +153648,7 @@ import { t, useI18n, type TKey } from '../../i18n';
 import { ChannelName, ChannelPicker } from '../../components/ChannelPicker';
 export { MoreMenu } from '../../components/MoreMenu';
 import { ErrorLine, fmtDateTime, Section, errText, toast } from '../../ui';
-import { changeSummary, cleanNote, groupCommits, isNewerRelease, preflightWarnings, stepStates, upcomingFlags, versionText, type PreflightWarning } from './updateLogic';
+import { changeSummary, cleanNote, releaseCounts, groupCommits, isNewerRelease, preflightWarnings, stepStates, upcomingFlags, versionText, type PreflightWarning } from './updateLogic';
 
 /** the four steps of an update as a stepper: the line after a finished step is filled, the active one pulses */
 export function StepList({ stage, finished }: { stage: UpdateInfo['stage']; finished: boolean }) {
@@ -153452,13 +153755,19 @@ export function NotesCard({ notes, log, logError, current, installedAt }: {
       {hasNotes ? (
         <div className="space-y-5">
           {shown.map((r) => (
-            <article key={r.version ?? 'unreleased'}>
-              <h3 className="flex flex-wrap items-center gap-2 font-black">
-                <span>{r.version ?? t('upd.n.unreleased')}</span>
+            <details key={r.version ?? 'unreleased'} className="upd-rel" open={isNewerRelease(r, current) || r === shown[0]}>
+              <summary className="upd-rel-head">
+                <span className="upd-rel-ver">{r.version ?? t('upd.n.unreleased')}</span>
                 {r.date && <span className="text-sm font-semibold text-mute">{r.date}</span>}
                 {isNewerRelease(r, current) && <span className="pill pill-ok">{t('upd.n.new')}</span>}
                 {r.version && r.version === current && <span className="pill pill-mute">{t('upd.n.current')}</span>}
-              </h3>
+                <span className="upd-rel-counts" aria-hidden>
+                  {releaseCounts(r).added > 0 && <span className="upd-rel-c">✨ {releaseCounts(r).added}</span>}
+                  {releaseCounts(r).fixed > 0 && <span className="upd-rel-c">🔧 {releaseCounts(r).fixed}</span>}
+                  {releaseCounts(r).other > 0 && <span className="upd-rel-c">🧩 {releaseCounts(r).other}</span>}
+                </span>
+                <span className="upd-rel-chev" aria-hidden>▾</span>
+              </summary>
               {r.groups.map((g) => (
                 <div key={g.title} className="mt-2">
                   <h4 className="text-sm font-black text-mute">{lang === 'en' && g.titleEn ? g.titleEn : g.title}</h4>
@@ -153472,7 +153781,7 @@ export function NotesCard({ notes, log, logError, current, installedAt }: {
                   </ul>
                 </div>
               ))}
-            </article>
+            </details>
           ))}
           {rest.length > 1 && (
             <button type="button" className="btn-link" onClick={() => setOlder((v) => !v)}>{older ? t('upd.n.fewer') : t('upd.n.older')}</button>
@@ -156450,6 +156759,61 @@ a.tile:active, a.panel:active, button.tile:active, [role='link'].tile:active { t
 .srv-mini { position: fixed; z-index: 45; left: 12px; right: 12px; top: 8px; display: flex; align-items: center; gap: 10px; padding: 6px 8px 6px 10px; border-radius: var(--r-xl); transform: translateY(-160%); opacity: 0; pointer-events: none; transition: transform .25s cubic-bezier(.2, .8, .2, 1), opacity .2s ease; }
 .srv-mini.is-on { transform: none; opacity: 1; pointer-events: auto; }
 html[data-motion='reduce'] .srv-mini { transition: none; }
+
+/* ---------- the pure black option: the page is black, the cards a step above it ---------- */
+:root[data-theme='dark'][data-oled='1'] { --page: 0 0 0; --card: 10 11 15; --raised: 18 20 28; --soft: 22 24 32; --line: 34 37 48; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme='light'])[data-oled='1'] { --page: 0 0 0; --card: 10 11 15; --raised: 18 20 28; --soft: 22 24 32; --line: 34 37 48; } }
+:root[data-oled='1'] body { background-image: none; }
+
+/* ---------- type: six steps of size are in the tokens; headings share one rhythm and every changing number has equal-width digits ---------- */
+h1, h2, h3 { line-height: 1.2; }
+h4, h5, h6 { line-height: 1.3; }
+dd, .stat-v, .pf-tile-v, .srv-count, .pulse-nums dd, .cm-hero-stats dd, .upd-ver-n, time, .tabular { font-variant-numeric: tabular-nums; }
+.hdr-motion[aria-pressed='true'] { color: rgb(var(--link)); background: rgb(var(--brand) / .14); }
+
+/* ---------- keyboard focus: a ring that reads on a gradient too (a white line inside, a dark one outside) ---------- */
+.btn-on-grad:focus-visible, .btn-ghost-on-grad:focus-visible, .upd-link:focus-visible, .upd-more-btn:focus-visible, .ub-close:focus-visible, .btn-cta:focus-visible {
+  box-shadow: 0 0 0 2px #fff, 0 0 0 4px rgb(0 0 0 / .65) !important;
+}
+
+/* ---------- «what is new»: a card for every version, the newest open ---------- */
+.upd-rel { border-radius: var(--r-xl); background: rgb(var(--soft)); box-shadow: inset 0 0 0 1px rgb(var(--line)); }
+.upd-rel + .upd-rel { margin-top: 12px; }
+.upd-rel-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 14px 16px; list-style: none; cursor: pointer; }
+.upd-rel-head::-webkit-details-marker { display: none; }
+.upd-rel-ver { font-family: var(--font-mono, ui-monospace, monospace); font-size: 1.15rem; font-weight: 800; letter-spacing: -.01em; }
+.upd-rel-counts { display: inline-flex; flex-wrap: wrap; gap: 6px; margin-left: auto; }
+.upd-rel-c { padding: 2px 10px; border-radius: var(--r-pill); background: rgb(var(--card)); font-size: var(--fs-sm); font-weight: 800; }
+.upd-rel-chev { flex: none; transition: transform .2s; color: rgb(var(--mute)); }
+.upd-rel[open] > .upd-rel-head .upd-rel-chev { transform: rotate(180deg); }
+.upd-rel > div { padding: 0 16px 14px; }
+
+/* ---------- a page that is not found: where else to go ---------- */
+.nf-links { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 16px; width: 100%; margin-top: 8px; font-size: var(--fs-sm); font-weight: 700; color: rgb(var(--mute)); }
+.nf-links a { color: rgb(var(--link)); }
+
+/* the dashed average line over the small curve of a tile */
+.spark-avg { position: absolute; left: 2px; right: 2px; height: 0; border-top: 1.5px dashed rgb(var(--mute) / .7); pointer-events: none; }
+
+/* ---------- the servers page: the menu that shows and hides its blocks ---------- */
+.home-blocks { position: relative; }
+.home-blocks-pop { position: absolute; z-index: 30; right: 0; top: calc(100% + 8px); min-width: 15rem; display: grid; gap: 2px; padding: 8px; border-radius: var(--r-lg); background: rgb(var(--raised)); box-shadow: var(--shadow-pop), inset 0 0 0 1px rgb(var(--line)); }
+.home-blocks-row { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: var(--r-md); font-weight: 700; cursor: pointer; }
+.home-blocks-row:hover { background: rgb(var(--soft)); }
+
+/* ---------- icons: every line icon has round ends and joins, so a stray one drawn without them does not stand out ---------- */
+svg[stroke='currentColor'] { stroke-linecap: round; stroke-linejoin: round; }
+
+/* ---------- on paper: no header, bars or decoration; cards are plain boxes that are not cut across pages ---------- */
+@media print {
+  body { background: #fff !important; color: #000 !important; }
+  .hdr, .nav-bottom, .srv-mini, .toaster, .tour-pop, .net-bar, .route-progress, .hdr-motion, .upd-more, .home-blocks, .skeleton, .live-dot { display: none !important; }
+  footer.app-foot { grid-template-columns: repeat(3, 1fr); border-top: 1px solid #bbb; }
+  .tile, .panel { box-shadow: none !important; background: #fff !important; border: 1px solid #bbb !important; break-inside: avoid; }
+  .tile *, .panel * { color: #000 !important; }
+  a { text-decoration: underline; }
+  * { animation: none !important; transition: none !important; }
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/profile.css" << '__COREGSM_EOF__'
@@ -157885,20 +158249,27 @@ export function AdminPage({ head, narrow = false, children }: { head: ReactNode;
  * The section card of the admin pages: a panel with a title (h2), an optional description and optional actions on the
  * right of the title. Padding is p-5 on phones and p-6 from sm, so the compact density and the 400 px width stay consistent.
  */
-export function Section({ title, description, actions, children, className = '', id, tone = 'panel', ...rest }: {
+export function Section({ title, description, actions, children, className = '', id, tone = 'panel', save, ...rest }: {
   title?: ReactNode; description?: ReactNode; actions?: ReactNode; children?: ReactNode; className?: string; id?: string;
   tone?: 'panel' | 'soft'; 'data-tour'?: string;
+  /** the state of an autosaved card, shown in its header next to the actions */
+  save?: { status: SaveStatus; error?: string; retry?: () => void };
 }) {
   const hid = useId();
   return (
     <section id={id} aria-labelledby={title ? hid : undefined} className={`${tone === 'soft' ? 'rounded-ui-lg bg-soft p-4' : 'panel p-5 sm:p-6'} space-y-4 ${className}`} {...rest}>
-      {(title || actions) && (
+      {(title || actions || save) && (
         <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
           <div className="min-w-0 flex-1 basis-56">
             {title && <h2 id={hid} className={`${tone === 'soft' ? 'text-base' : 'text-lg'} font-black`}>{title}</h2>}
             {description && <p className="mt-0.5 font-semibold text-mute">{description}</p>}
           </div>
-          {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
+          {(actions || save) && (
+            <div className="flex flex-wrap items-center gap-2">
+              {save && <SaveBadge status={save.status} error={save.error} retry={save.retry} />}
+              {actions}
+            </div>
+          )}
         </div>
       )}
       {children}
@@ -158785,6 +159156,7 @@ export function Spark({ serverId, color, variant = 'tile' }: { serverId: number;
   const downs = downs24.filter(Boolean).length;
   const label = `${t('d2.ch.range', { a: Math.min(...pts), b: Math.max(...pts) })}${downs ? `; ${t('d2.ch.wasDown')}` : ''}`;
   const top = Math.max(...pts);
+  const avg = pts.reduce((x, y) => x + y, 0) / pts.length;
   const spanMin = Math.round(((raw.players.length - first) * 24 * 60) / raw.players.length);
   return hero
     ? (
@@ -158796,7 +159168,15 @@ export function Spark({ serverId, color, variant = 'tile' }: { serverId: number;
         <span aria-hidden className="spark-times"><span>{ageLabel(spanMin)}</span>{spanMin >= 60 && <span>{ageLabel(spanMin / 2)}</span>}<span>{t('spark.now')}</span></span>
       </div>
     )
-    : <SmoothArea values={pts} down={downs24} color={color} w={240} h={40} fill={0.25} strokeWidth={2} className="h-10" label={label} />;
+    : (
+      <div className="relative">
+        <SmoothArea values={pts} down={downs24} color={color} w={240} h={40} fill={0.25} strokeWidth={2} className="h-10" label={label} />
+        {/* a dashed line at the average of the day: above it the server is busier than usual, below it quieter */}
+        {known >= 6 && top > 0 && (
+          <span aria-hidden className="spark-avg" title={t('spark.avg', { n: Math.round(avg) })} style={{ top: `${Math.min(92, Math.max(8, (1 - avg / (top * 1.12)) * 100))}%` }} />
+        )}
+      </div>
+    );
 }
 
 /** «−24 ч» / «−90 мин»: how long ago a point of the chart is */
@@ -159363,10 +159743,30 @@ let adminScope = false;
 const readScoped = (): Theme => (adminScope ? read(ADMIN_KEY) ?? readTheme() : readTheme());
 /** does the admin area have its own theme right now */
 export const adminThemeIsOwn = (): boolean => read(ADMIN_KEY) !== null;
+/** «243 244 248» (the page colour token) -> «#f3f4f8» */
+export function rgbTokenToHex(token: string): string | null {
+  const m = /^\s*(\d{1,3})\s+(\d{1,3})\s+(\d{1,3})\s*$/.exec(token);
+  if (!m) return null;
+  const parts = m.slice(1).map(Number);
+  if (parts.some((n) => n > 255)) return null;
+  return `#${parts.map((n) => n.toString(16).padStart(2, '0')).join('')}`;
+}
+
+/**
+ * The browser bar of a phone (and the title bar of an installed panel) takes the colour of the page of the current
+ * theme. While a game accent paints the page, accent.ts owns the colour and this leaves it alone.
+ */
+function syncBarColor() {
+  const root = document.documentElement;
+  if (root.hasAttribute('data-game-art')) return;
+  const hex = rgbTokenToHex(getComputedStyle(root).getPropertyValue('--page'));
+  if (hex) document.querySelector('meta[name=theme-color]')?.setAttribute('content', hex);
+}
 const paint = (t: Theme) => {
   const root = document.documentElement;
   if (t === 'auto') root.removeAttribute('data-theme');
   else root.setAttribute('data-theme', t);
+  syncBarColor();
 };
 function applyTheme(t: Theme) {
   paint(t);
@@ -160641,7 +161041,16 @@ report() {
   echo -e "  ${DIM}Секреты:  ${APP_DIR}/.env      Логи:  cd ${APP_DIR} && docker compose logs -f${NC}"
   echo -e "  ${DIM}Резервные копии: ${APP_DIR}/backups      Данные (база, картинки): том Docker coregsm_data${NC}"
   echo -e "  ${DIM}Управление, обновление, копии, удаление:  sudo coregsm${NC}"
-  echo -e "  ${DIM}Токен Discord-бота, прокси и пароль: в панели, раздел «Настройки».${NC}\n"
+  echo -e "  ${DIM}Токен Discord-бота, прокси и пароль: в панели, раздел «Настройки».${NC}"
+  # the state of the protection of the host (harden_host puts it there on a fresh install)
+  if systemctl is-active --quiet fail2ban 2>/dev/null; then
+    echo -e "  ${GREEN}✔${NC} ${DIM}Защита хоста: fail2ban следит за SSH, автообновления безопасности включены${NC}"
+  fi
+  echo -e "\n  ${BOLD}Что дальше${NC}"
+  echo -e "  ${CYAN}1${NC}  Откройте панель и создайте администратора (код установки выше)"
+  echo -e "  ${CYAN}2${NC}  «Начало работы»: добавьте первый игровой сервер"
+  echo -e "  ${CYAN}3${NC}  «Настройки»: токен Discord-бота, затем привяжите канал"
+  echo -e "  ${CYAN}4${NC}  «Копии»: сохраните фразу шифрования, которую покажет панель\n"
 }
 
 # /usr/local/bin/coregsm (the manager, see tools/coregsm.sh), the old coregsm-update name as an alias,

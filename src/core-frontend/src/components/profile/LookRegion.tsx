@@ -1,6 +1,6 @@
 import { useMemo, useState, type CSSProperties } from 'react';
 import { ACCENT_MODES, useAccentMode, type AccentMode } from '../../accent';
-import { useAppearance, type Appearance } from '../../appearance';
+import { PRESET_IDS, PRESETS, presetOf, useAppearance, type Appearance, type PresetId } from '../../appearance';
 import { gameColor } from '../../games';
 import { type Prefs, type TKey, t, updatePrefs, useI18n } from '../../i18n';
 import { fmtDateTime, Section, Switch, toast, useDensity, type Density } from '../../ui';
@@ -24,13 +24,24 @@ export function AppearanceCard() {
     ['largeText', 'pf.a11y.text', 'pf.a11y.textHint'],
     ['highContrast', 'pf.a11y.contrast', 'pf.a11y.contrastHint'],
     ['liteData', 'pf.a11y.lite', 'pf.a11y.liteHint'],
+    ['oled', 'pf.a11y.oled', 'pf.a11y.oledHint'],
   ];
+  const active = presetOf(look);
   const options: [Density, TKey, TKey][] = [
     ['normal', 'pf.density.normal', 'pf.density.normalHint'],
     ['compact', 'pf.density.compact', 'pf.density.compactHint'],
   ];
   return (
     <Section title={t('pf.look.title')}>
+      <div>
+        <span id="preset-label" className="label">{t('pf.preset.label')}</span>
+        <div className="seg flex-wrap" role="group" aria-labelledby="preset-label">
+          {PRESET_IDS.map((id: PresetId) => (
+            <button key={id} type="button" className="seg-item" aria-pressed={active === id} onClick={() => setLook(PRESETS[id])}>{t(`pf.preset.${id}` as TKey)}</button>
+          ))}
+        </div>
+        <p className="mt-2 text-sm font-semibold text-mute">{active ? t(`pf.preset.${active}Hint` as TKey) : t('pf.preset.customHint')} {t('pf.thisBrowser')}</p>
+      </div>
       <div>
         <span id="density-label" className="label">{t('pf.density.label')}</span>
         <div className="seg" role="group" aria-labelledby="density-label">

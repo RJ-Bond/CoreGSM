@@ -4,6 +4,7 @@
  *
  * Layout (three columns): status · address · country / game · map · players / player list.
  */
+import { COLORS } from '../discord/palette.js';
 import { playersBar } from './chartLogic.js';
 import { gameLabel, gameProfile, gameShowsMap } from '../monitoring/games.js';
 
@@ -64,7 +65,7 @@ export interface EmbedExtra {
   timeZone?: string | null;
 }
 
-const COLOR = { online: 0x23a55a, lag: 0xf0b232, offline: 0xf23f42, unknown: 0x5a4bd1 };
+const COLOR = { online: COLORS.ok, lag: COLORS.warn, offline: COLORS.bad, unknown: COLORS.unknown };
 
 /** the side stripe of an online server follows the colour of its game (others keep the status green) */
 const accentOf = (game: string): number | undefined => gameProfile(game)?.accent;

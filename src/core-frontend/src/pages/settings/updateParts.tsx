@@ -5,7 +5,7 @@ import { t, useI18n, type TKey } from '../../i18n';
 import { ChannelName, ChannelPicker } from '../../components/ChannelPicker';
 export { MoreMenu } from '../../components/MoreMenu';
 import { ErrorLine, fmtDateTime, Section, errText, toast } from '../../ui';
-import { changeSummary, cleanNote, groupCommits, isNewerRelease, preflightWarnings, stepStates, upcomingFlags, versionText, type PreflightWarning } from './updateLogic';
+import { changeSummary, cleanNote, releaseCounts, groupCommits, isNewerRelease, preflightWarnings, stepStates, upcomingFlags, versionText, type PreflightWarning } from './updateLogic';
 
 /** the four steps of an update as a stepper: the line after a finished step is filled, the active one pulses */
 export function StepList({ stage, finished }: { stage: UpdateInfo['stage']; finished: boolean }) {
@@ -112,13 +112,19 @@ export function NotesCard({ notes, log, logError, current, installedAt }: {
       {hasNotes ? (
         <div className="space-y-5">
           {shown.map((r) => (
-            <article key={r.version ?? 'unreleased'}>
-              <h3 className="flex flex-wrap items-center gap-2 font-black">
-                <span>{r.version ?? t('upd.n.unreleased')}</span>
+            <details key={r.version ?? 'unreleased'} className="upd-rel" open={isNewerRelease(r, current) || r === shown[0]}>
+              <summary className="upd-rel-head">
+                <span className="upd-rel-ver">{r.version ?? t('upd.n.unreleased')}</span>
                 {r.date && <span className="text-sm font-semibold text-mute">{r.date}</span>}
                 {isNewerRelease(r, current) && <span className="pill pill-ok">{t('upd.n.new')}</span>}
                 {r.version && r.version === current && <span className="pill pill-mute">{t('upd.n.current')}</span>}
-              </h3>
+                <span className="upd-rel-counts" aria-hidden>
+                  {releaseCounts(r).added > 0 && <span className="upd-rel-c">✨ {releaseCounts(r).added}</span>}
+                  {releaseCounts(r).fixed > 0 && <span className="upd-rel-c">🔧 {releaseCounts(r).fixed}</span>}
+                  {releaseCounts(r).other > 0 && <span className="upd-rel-c">🧩 {releaseCounts(r).other}</span>}
+                </span>
+                <span className="upd-rel-chev" aria-hidden>▾</span>
+              </summary>
               {r.groups.map((g) => (
                 <div key={g.title} className="mt-2">
                   <h4 className="text-sm font-black text-mute">{lang === 'en' && g.titleEn ? g.titleEn : g.title}</h4>
@@ -132,7 +138,7 @@ export function NotesCard({ notes, log, logError, current, installedAt }: {
                   </ul>
                 </div>
               ))}
-            </article>
+            </details>
           ))}
           {rest.length > 1 && (
             <button type="button" className="btn-link" onClick={() => setOlder((v) => !v)}>{older ? t('upd.n.fewer') : t('upd.n.older')}</button>

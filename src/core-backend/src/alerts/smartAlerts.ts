@@ -6,6 +6,7 @@
  *   ping  the ping is over twice the day's average and over 150 ms for 15 minutes
  *   full  90% of the slots or more are taken for 15 minutes
  */
+import { COLORS } from '../discord/palette.js';
 import { alertSettings, enqueueAlert } from './alerts.js';
 import { db, EFFECTIVE_NAME, getSetting } from '../db.js';
 import { gameLabel } from '../monitoring/games.js';
@@ -14,9 +15,9 @@ export type SmartKind = 'low' | 'ping' | 'full';
 export const SMART_KINDS: SmartKind[] = ['low', 'ping', 'full'];
 
 const RULES: Record<SmartKind, { holdMin: number; cooldownH: number; color: number }> = {
-  low: { holdMin: 20, cooldownH: 6, color: 0xf5b01e },
-  ping: { holdMin: 15, cooldownH: 3, color: 0xf5b01e },
-  full: { holdMin: 15, cooldownH: 12, color: 0x5865f2 },
+  low: { holdMin: 20, cooldownH: 6, color: COLORS.warn },
+  ping: { holdMin: 15, cooldownH: 3, color: COLORS.warn },
+  full: { holdMin: 15, cooldownH: 12, color: COLORS.info },
 };
 
 export const smartEnabled = (k: SmartKind) => getSetting(`alerts_smart_${k}`) === '1';

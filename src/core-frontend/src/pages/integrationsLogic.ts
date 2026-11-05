@@ -25,6 +25,9 @@ export interface BuilderOpts {
   /** the widget palette; «auto» follows the visitor's system setting */
   theme?: WidgetTheme;
   size?: WidgetSize;
+  /** corner radius of the widget (0..24) and its font family */
+  radius?: number;
+  font?: 'sans' | 'serif' | 'mono';
   /** the picture card of the server (PNG) */
   cardStyle?: 'split' | 'strip';
   cardTheme?: 'dark' | 'light';
@@ -34,7 +37,8 @@ export function badgeSnippets(origin: string, id: number, name: string, opts: Bu
   const base = origin.replace(/\/+$/, '');
   const badge = `${base}/badge/servers/${id}.svg`;
   const page = `${base}/servers/${id}`;
-  const widget = `${base}/widget/servers/${id}${opts.theme && opts.theme !== 'auto' ? `?theme=${opts.theme}` : ''}`;
+  const wq = [opts.theme && opts.theme !== 'auto' ? `theme=${opts.theme}` : '', opts.radius != null && opts.radius !== 8 ? `radius=${Math.min(24, Math.max(0, Math.round(opts.radius)))}` : '', opts.font && opts.font !== 'sans' ? `font=${opts.font}` : ''].filter(Boolean).join('&');
+  const widget = `${base}/widget/servers/${id}${wq ? `?${wq}` : ''}`;
   const { w, h } = WIDGET_SIZES[opts.size ?? 'm'];
   const cardQuery = [opts.cardStyle === 'strip' ? 'style=strip' : '', opts.cardTheme === 'light' ? 'theme=light' : ''].filter(Boolean).join('&');
   const card = `${base}/api/card/${id}.png${cardQuery ? `?${cardQuery}` : ''}`;

@@ -25,20 +25,27 @@ export function AdminPage({ head, narrow = false, children }: { head: ReactNode;
  * The section card of the admin pages: a panel with a title (h2), an optional description and optional actions on the
  * right of the title. Padding is p-5 on phones and p-6 from sm, so the compact density and the 400 px width stay consistent.
  */
-export function Section({ title, description, actions, children, className = '', id, tone = 'panel', ...rest }: {
+export function Section({ title, description, actions, children, className = '', id, tone = 'panel', save, ...rest }: {
   title?: ReactNode; description?: ReactNode; actions?: ReactNode; children?: ReactNode; className?: string; id?: string;
   tone?: 'panel' | 'soft'; 'data-tour'?: string;
+  /** the state of an autosaved card, shown in its header next to the actions */
+  save?: { status: SaveStatus; error?: string; retry?: () => void };
 }) {
   const hid = useId();
   return (
     <section id={id} aria-labelledby={title ? hid : undefined} className={`${tone === 'soft' ? 'rounded-ui-lg bg-soft p-4' : 'panel p-5 sm:p-6'} space-y-4 ${className}`} {...rest}>
-      {(title || actions) && (
+      {(title || actions || save) && (
         <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
           <div className="min-w-0 flex-1 basis-56">
             {title && <h2 id={hid} className={`${tone === 'soft' ? 'text-base' : 'text-lg'} font-black`}>{title}</h2>}
             {description && <p className="mt-0.5 font-semibold text-mute">{description}</p>}
           </div>
-          {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
+          {(actions || save) && (
+            <div className="flex flex-wrap items-center gap-2">
+              {save && <SaveBadge status={save.status} error={save.error} retry={save.retry} />}
+              {actions}
+            </div>
+          )}
         </div>
       )}
       {children}

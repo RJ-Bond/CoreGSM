@@ -168,9 +168,11 @@ function SnippetsSection({ servers }: { servers: Server[] }) {
   const s = servers.find((x) => x.id === id);
   const [theme, setTheme] = useState<WidgetTheme>('auto');
   const [size, setSize] = useState<WidgetSize>('m');
+  const [radius, setRadius] = useState(8);
+  const [font, setFont] = useState<'sans' | 'serif' | 'mono'>('sans');
   const [cardStyle, setCardStyle] = useState<'split' | 'strip'>('split');
   const [cardTheme, setCardTheme] = useState<'dark' | 'light'>('dark');
-  const sn = s ? badgeSnippets(window.location.origin, s.id, s.customName || s.name, { theme, size, cardStyle, cardTheme }) : null;
+  const sn = s ? badgeSnippets(window.location.origin, s.id, s.customName || s.name, { theme, size, radius, font, cardStyle, cardTheme }) : null;
   return (
     <Section title={t('intg.snip.title')} description={t('intg.snip.desc')}>
       {!servers.length ? (
@@ -182,7 +184,7 @@ function SnippetsSection({ servers }: { servers: Server[] }) {
               {servers.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
             </select>
           </Field>
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             <Field label={t('intg.opt.theme')}>
               <select className="input" value={theme} onChange={(e) => setTheme(e.target.value as WidgetTheme)}>
                 <option value="auto">{t('intg.opt.auto')}</option>
@@ -195,6 +197,18 @@ function SnippetsSection({ servers }: { servers: Server[] }) {
                 <option value="s">{t('intg.opt.sizeS')}</option>
                 <option value="m">{t('intg.opt.sizeM')}</option>
                 <option value="l">{t('intg.opt.sizeL')}</option>
+              </select>
+            </Field>
+            <Field label={t('intg.opt.radius')}>
+              <select className="input" value={radius} onChange={(e) => setRadius(Number(e.target.value))}>
+                {[0, 4, 8, 16, 24].map((r) => <option key={r} value={r}>{r} px</option>)}
+              </select>
+            </Field>
+            <Field label={t('intg.opt.font')}>
+              <select className="input" value={font} onChange={(e) => setFont(e.target.value as 'sans' | 'serif' | 'mono')}>
+                <option value="sans">{t('intg.opt.fontSans')}</option>
+                <option value="serif">{t('intg.opt.fontSerif')}</option>
+                <option value="mono">{t('intg.opt.fontMono')}</option>
               </select>
             </Field>
             <Field label={t('intg.opt.cardStyle')}>

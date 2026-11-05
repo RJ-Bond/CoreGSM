@@ -2,6 +2,7 @@
  * Alerts: a message to an administrators' Discord channel when a game server stops answering
  * (after a grace period) and another one when it is back. The bot delivers the queued messages.
  */
+import { COLORS } from '../discord/palette.js';
 import { currentStyle } from '../discord/discordStyleState.js';
 import { styleAlertEmbed } from '../discord/discordStyleLogic.js';
 import type { Express, RequestHandler } from 'express';
@@ -54,7 +55,7 @@ export function isQuietNow(now = Date.now()): boolean {
   return q.from < q.to ? h >= q.from && h < q.to : h >= q.from || h < q.to;
 }
 
-const COLOR = { down: 0xf23f42, up: 0x23a55a, test: 0x5865f2 };
+const COLOR = { down: COLORS.bad, up: COLORS.ok, test: COLORS.info };
 
 interface ServerAlert { name: string; address: string; game: string; downMs: number; now: number }
 /** «server is back»: also used by the message gallery in the admin */
