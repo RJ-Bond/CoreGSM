@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, type ReactNode, type TouchEvent } from 're
 import { t, useI18n, type TKey } from '../i18n';
 import { Crumbs } from '../components/ShellExtras';
 import { normalizeKinds, useSubscriptions, type SubKind } from '../notifications';
-import { api, ApiError, type ServerDetails as BaseDetails } from '../api';
+import { api, ApiError, type Server, type ServerDetails as BaseDetails } from '../api';
 import { useAuth } from '../auth';
 import { gameGradient, gameLabel } from '../games';
 import { coverBackground, coverUrlOf, emblemStyle, gameBackdrop } from '../cover';
@@ -68,6 +68,34 @@ export const CONNECT_SECTIONS: SectionDef[] = [
 const ALL_SECTIONS = [...OVERVIEW_SECTIONS, ...HISTORY_SECTIONS, ...CONNECT_SECTIONS];
 
 /** key={id}: switching between servers starts from a clean state */
+/** true once the banner of the server has scrolled out of the top of the window */
+function useBannerGone(): boolean {
+  const [gone, setGone] = useState(false);
+  useEffect(() => {
+    const el = document.querySelector('.srv-banner');
+    if (!el || typeof IntersectionObserver === 'undefined') return undefined;
+    const io = new IntersectionObserver(([e]) => setGone(!e.isIntersecting && e.boundingClientRect.top < 0), { threshold: 0 });
+    io.observe(el);
+    return () => io.disconnect();
+  }, []);
+  return gone;
+}
+
+/** phones: the tall banner folds into one thin line (name, players, «Connect») while the page is scrolled */
+function MiniBar({ s, href, onConnect, label }: { s: Server; href: string; onConnect?: (e: { preventDefault: () => void }) => void; label: string }) {
+  const gone = useBannerGone();
+  return (
+    <div className={`srv-mini glass lg:hidden ${gone ? 'is-on' : ''}`} aria-hidden={!gone}>
+      <GameAvatar game={s.game} size={30} />
+      <span className="min-w-0 flex-1">
+        <b className="block truncate text-sm font-extrabold leading-tight">{s.name}</b>
+        <span className="block text-xs font-bold text-mute">{s.online ? `${s.players} / ${s.maxPlayers}` : t('d2.bl.offline')}</span>
+      </span>
+      <a className="btn btn-sm" href={href} onClick={onConnect} tabIndex={gone ? 0 : -1}>{label}</a>
+    </div>
+  );
+}
+
 export default function ServerDetail({ id, tab = '' }: { id: number; tab?: string }) {
   return <ServerDetailView key={id} id={id} tab={tab as TabId} />;
 }
@@ -502,7 +530,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
         <div className="grid gap-3.5 lg:grid-cols-12">
           {chartTile(1, false)}
           <div className="space-y-3.5 lg:col-span-5 lg:col-start-1 lg:flex lg:flex-col lg:gap-3.5 lg:space-y-0 lg:self-stretch max-lg:contents">
-          <SectionCard id="ov-events" state={sections} className="max-lg:order-1" style={stagger(2)} title={t('d2.sd.recent')}>
+          <SectionCard id="ov-events" state={sections} className={`max-lg:order-1 ${events.length === 0 ? 'max-lg:hidden' : ''}`} style={stagger(2)} title={t('d2.sd.recent')}>
             <EventsFeed events={events} online={s.online} limit={6} moreHref={tabHref(id, 'events')} />
           </SectionCard>
           {/* the reviews sit under the events: the left column fills the height of the player list */}
@@ -546,6 +574,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
 
   return (
     <div className="srv-page space-y-3.5" style={{ ['--srv-accent' as string]: accent }}>
+      <MiniBar s={s} href={connectHref} onConnect={onConnect} label={connectLabel} />
       {back}
 
       {/* from lg up: the banner is a column on the left (it stays in view), the tabs and the content are on the right */}

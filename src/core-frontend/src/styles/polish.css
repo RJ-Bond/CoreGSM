@@ -184,3 +184,8 @@ a.tile:active, a.panel:active, button.tile:active, [role='link'].tile:active { t
 .tile.adm-tablewrap { container: admtbl / inline-size; }
 @container admtbl (max-width: 1180px) { .adm-c-h24 { display: none; } }
 @container admtbl (max-width: 980px) { .adm-c-up { display: none; } }
+
+/* ---------- phones: the thin bar of the server page ---------- */
+.srv-mini { position: fixed; z-index: 45; left: 12px; right: 12px; top: 8px; display: flex; align-items: center; gap: 10px; padding: 6px 8px 6px 10px; border-radius: var(--r-xl); transform: translateY(-160%); opacity: 0; pointer-events: none; transition: transform .25s cubic-bezier(.2, .8, .2, 1), opacity .2s ease; }
+.srv-mini.is-on { transform: none; opacity: 1; pointer-events: auto; }
+html[data-motion='reduce'] .srv-mini { transition: none; }

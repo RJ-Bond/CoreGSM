@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="e7a3bedb8c53"
+COREGSM_BUILD="df87b36c8aec"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.20"
+COREGSM_VERSION="1.1.21"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -147557,7 +147557,7 @@ import { useEffect, useRef, useState, type ReactNode, type TouchEvent } from 're
 import { t, useI18n, type TKey } from '../i18n';
 import { Crumbs } from '../components/ShellExtras';
 import { normalizeKinds, useSubscriptions, type SubKind } from '../notifications';
-import { api, ApiError, type ServerDetails as BaseDetails } from '../api';
+import { api, ApiError, type Server, type ServerDetails as BaseDetails } from '../api';
 import { useAuth } from '../auth';
 import { gameGradient, gameLabel } from '../games';
 import { coverBackground, coverUrlOf, emblemStyle, gameBackdrop } from '../cover';
@@ -147621,6 +147621,34 @@ export const CONNECT_SECTIONS: SectionDef[] = [
 const ALL_SECTIONS = [...OVERVIEW_SECTIONS, ...HISTORY_SECTIONS, ...CONNECT_SECTIONS];
 
 /** key={id}: switching between servers starts from a clean state */
+/** true once the banner of the server has scrolled out of the top of the window */
+function useBannerGone(): boolean {
+  const [gone, setGone] = useState(false);
+  useEffect(() => {
+    const el = document.querySelector('.srv-banner');
+    if (!el || typeof IntersectionObserver === 'undefined') return undefined;
+    const io = new IntersectionObserver(([e]) => setGone(!e.isIntersecting && e.boundingClientRect.top < 0), { threshold: 0 });
+    io.observe(el);
+    return () => io.disconnect();
+  }, []);
+  return gone;
+}
+
+/** phones: the tall banner folds into one thin line (name, players, «Connect») while the page is scrolled */
+function MiniBar({ s, href, onConnect, label }: { s: Server; href: string; onConnect?: (e: { preventDefault: () => void }) => void; label: string }) {
+  const gone = useBannerGone();
+  return (
+    <div className={`srv-mini glass lg:hidden ${gone ? 'is-on' : ''}`} aria-hidden={!gone}>
+      <GameAvatar game={s.game} size={30} />
+      <span className="min-w-0 flex-1">
+        <b className="block truncate text-sm font-extrabold leading-tight">{s.name}</b>
+        <span className="block text-xs font-bold text-mute">{s.online ? `${s.players} / ${s.maxPlayers}` : t('d2.bl.offline')}</span>
+      </span>
+      <a className="btn btn-sm" href={href} onClick={onConnect} tabIndex={gone ? 0 : -1}>{label}</a>
+    </div>
+  );
+}
+
 export default function ServerDetail({ id, tab = '' }: { id: number; tab?: string }) {
   return <ServerDetailView key={id} id={id} tab={tab as TabId} />;
 }
@@ -148055,7 +148083,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
         <div className="grid gap-3.5 lg:grid-cols-12">
           {chartTile(1, false)}
           <div className="space-y-3.5 lg:col-span-5 lg:col-start-1 lg:flex lg:flex-col lg:gap-3.5 lg:space-y-0 lg:self-stretch max-lg:contents">
-          <SectionCard id="ov-events" state={sections} className="max-lg:order-1" style={stagger(2)} title={t('d2.sd.recent')}>
+          <SectionCard id="ov-events" state={sections} className={`max-lg:order-1 ${events.length === 0 ? 'max-lg:hidden' : ''}`} style={stagger(2)} title={t('d2.sd.recent')}>
             <EventsFeed events={events} online={s.online} limit={6} moreHref={tabHref(id, 'events')} />
           </SectionCard>
           {/* the reviews sit under the events: the left column fills the height of the player list */}
@@ -148099,6 +148127,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
 
   return (
     <div className="srv-page space-y-3.5" style={{ ['--srv-accent' as string]: accent }}>
+      <MiniBar s={s} href={connectHref} onConnect={onConnect} label={connectLabel} />
       {back}
 
       {/* from lg up: the banner is a column on the left (it stays in view), the tabs and the content are on the right */}
@@ -155578,6 +155607,11 @@ a.tile:active, a.panel:active, button.tile:active, [role='link'].tile:active { t
 .tile.adm-tablewrap { container: admtbl / inline-size; }
 @container admtbl (max-width: 1180px) { .adm-c-h24 { display: none; } }
 @container admtbl (max-width: 980px) { .adm-c-up { display: none; } }
+
+/* ---------- phones: the thin bar of the server page ---------- */
+.srv-mini { position: fixed; z-index: 45; left: 12px; right: 12px; top: 8px; display: flex; align-items: center; gap: 10px; padding: 6px 8px 6px 10px; border-radius: var(--r-xl); transform: translateY(-160%); opacity: 0; pointer-events: none; transition: transform .25s cubic-bezier(.2, .8, .2, 1), opacity .2s ease; }
+.srv-mini.is-on { transform: none; opacity: 1; pointer-events: auto; }
+html[data-motion='reduce'] .srv-mini { transition: none; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/profile.css" << '__COREGSM_EOF__'
