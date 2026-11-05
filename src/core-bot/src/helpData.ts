@@ -110,6 +110,7 @@ export const UI = {
   noNews: { ru: 'Не удалось загрузить список изменений. Попробуйте чуть позже.', en: 'Could not load the list of changes. Try again later.' },
   unlinked: { ru: '🔗 Ник не привязан: команда `/link` подключит часы, ранг и достижения.', en: '🔗 No nick linked yet: `/link` turns on hours, rank and achievements.' },
   back: { ru: 'Назад', en: 'Back' },
+  askCmd: { ru: 'Справка по команде…', en: 'Help for a command…' },
   noAnswer: { ru: '💬 Не нашли ответ? Подробности по команде: `/help command:…`', en: '💬 Did not find the answer? Details of a command: `/help command:…`' },
   openCard: { ru: 'Открыть карточку сервера…', en: 'Open a server card…' },
   linkNick: { ru: 'Привязать ник', en: 'Link my nick' },

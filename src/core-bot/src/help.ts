@@ -85,12 +85,13 @@ export function helpEmbed(category: string | null, ctx: HelpCtx): EmbedBuilder {
   }
   const lines = cat.cmds.map((c) => cmdInfo(c)).filter((c): c is CmdInfo => !!c).map((c) => lineOf(c, lang));
   for (const x of cat.extra ?? []) lines.push(`▸ \`${x.cmd}\` — ${shortText(x.text[lang])}`);
-  let head = '';
+  let head = ctx.live ? `${liveLine(ctx.live, lang)}\n` : '';
   if (cat.id === 'srv' && ctx.live) {
     const list = (ctx.live.servers ?? []).slice(0, 8).map(serverLine).join('\n');
-    head = `${liveLine(ctx.live, lang)}\n${list ? `${list}\n` : ''}\n`;
+    head += list ? `${list}\n` : '';
+    e.setColor(healthColor(ctx.live.up, ctx.live.total));
   }
-  return brand(e.setDescription(`${head}${lines.join('\n')}\n\n${tx('noAnswer', lang)}`));
+  return brand(e.setDescription(`${head}${head ? '\n' : ''}${lines.join('\n')}`));
 }
 
 /** the details of one command */
@@ -139,6 +140,16 @@ export function helpComponents(active: string, ctx: Pick<HelpCtx, 'lang' | 'admi
     rows.push(
       new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
         new StringSelectMenuBuilder().setCustomId('help:card').setPlaceholder(tx('openCard', lang)).addOptions(servers.map((s) => ({ label: (s.name || `#${s.id}`).slice(0, 100), value: String(s.id), emoji: s.online ? '🟢' : '🔴' }))),
+      ),
+    );
+  }
+  // a menu with the commands of the section: a pick shows the details of the command
+  const here = CATEGORIES.find((c) => c.id === active);
+  const names = (here?.cmds ?? []).map((c) => cmdInfo(c)).filter((c): c is CmdInfo => !!c).slice(0, 25);
+  if (names.length) {
+    rows.push(
+      new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+        new StringSelectMenuBuilder().setCustomId(`help:cmd:${active}`).setPlaceholder(tx('askCmd', lang)).addOptions(names.map((c) => ({ label: c.cmd, value: c.cmd, description: shortText(c.text[lang], 90) }))),
       ),
     );
   }
@@ -203,7 +214,7 @@ async function ctxFor(i: Asker, category: string | null): Promise<HelpCtx> {
   const lang = langOf(i.locale);
   const home = category === null || category === 'home';
   const [live, me, news] = await Promise.all([
-    home || category === 'srv' ? liveNow() : Promise.resolve(null),
+    home || (category !== null && !['none', 'news', 'modclr'].includes(category)) ? liveNow() : Promise.resolve(null),
     home ? meNow(i.user.id, (i.user.globalName || i.user.username || '').trim()) : Promise.resolve(null),
     category === 'news' ? newsNow(lang) : Promise.resolve(undefined),
   ]);
@@ -309,6 +320,16 @@ export async function handleHelpSelect(i: StringSelectMenuInteraction): Promise<
   }
   try {
     const id = i.values[0] ?? 'home';
+    if (i.customId.startsWith('help:cmd:')) {
+      const info = cmdInfo(id);
+      const section = i.customId.slice('help:cmd:'.length);
+      const lang = langOf(i.locale);
+      if (info) {
+        const back = new ButtonBuilder().setCustomId(`help:back:${section}`).setLabel(`‹ ${tx('back', lang)}`).setStyle(ButtonStyle.Primary);
+        await i.editReply({ embeds: [commandEmbed(info, lang)], components: [row(back)] } as never);
+      }
+      return;
+    }
     if (i.customId === 'help:card') {
       const n = Number(id);
       if (Number.isInteger(n) && n > 0) await i.editReply((await serverCardReply(n)) as never);
@@ -340,6 +361,11 @@ export async function handleHelpButton(i: ButtonInteraction): Promise<void> {
     }
     if (i.customId === 'help:home') {
       await i.editReply(helpView(null, await ctxFor(i, null)) as never);
+      return;
+    }
+    if (i.customId.startsWith('help:back:')) {
+      const section = i.customId.slice('help:back:'.length);
+      await i.editReply(helpView(section, await ctxFor(i, section)) as never);
       return;
     }
     if (i.customId === 'help:act:link') {

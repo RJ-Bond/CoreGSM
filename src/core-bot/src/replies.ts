@@ -1,4 +1,5 @@
 /** Ephemeral replies to the slash commands: plain notices and the player's card. */
+import { rankBar } from './bars.js';
 import { nextStep } from './hints.js';
 import { footerOf, getStyle } from './style.js';
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } from 'discord.js';
@@ -64,7 +65,7 @@ export function cardReply(
     fields.push({ name: '⏱️ Часов в игре', value: hoursText(p.rank.hours), inline: true });
     if (p.rank.next) {
       const left = Math.max(0, p.rank.next.minHours - p.rank.hours);
-      fields.push({ name: `Следующий ранг: ${p.rank.next.name}`, value: `${bar10(p.rank.progress)}  ещё **${hoursText(left)} ч**` });
+      fields.push({ name: `Следующий ранг: ${p.rank.next.name}`, value: `${rankBar(p.rank.progress, p.rank.color)}  ещё **${hoursText(left)} ч**` });
     } else {
       fields.push({ name: 'Вершина лестницы', value: 'Вы достигли высшего ранга.' });
     }

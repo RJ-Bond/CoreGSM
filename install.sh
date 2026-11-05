@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="0854d494a52d"
+COREGSM_BUILD="5c96e305f6f2"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.54"
+COREGSM_VERSION="1.1.55"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -39354,6 +39354,34 @@ export function playersBar(players: number, max: number, game?: string | null, t
   const base = gameSquare(game);
   return Array.from({ length: total }, (_, i) => (i >= n ? '⬛' : i === total - 1 ? '🟥' : i === total - 2 ? '🟧' : base)).join('');
 }
+
+const SQUARES: [string, [number, number, number]][] = [
+  ['🟥', [221, 46, 68]], ['🟧', [244, 144, 12]], ['🟨', [253, 203, 88]], ['🟩', [120, 177, 89]], ['🟦', [85, 172, 238]], ['🟪', [170, 142, 214]], ['🟫', [193, 105, 79]],
+];
+
+/** the coloured square closest to a «#rrggbb» colour (purple when it cannot be read) */
+export function squareOfHex(hex: string): string {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
+  if (!m) return '🟪';
+  const n = parseInt(m[1]!, 16);
+  const c: [number, number, number] = [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  let best = SQUARES[0]!;
+  let bd = Infinity;
+  for (const q of SQUARES) {
+    const d = (q[1][0] - c[0]) ** 2 + (q[1][1] - c[1]) ** 2 + (q[1][2] - c[2]) ** 2;
+    if (d < bd) {
+      bd = d;
+      best = q;
+    }
+  }
+  return best[0];
+}
+
+/** progress to the next rank: ten squares in the colour of the rank */
+export function rankBar(progress: number, hex: string, total = 10): string {
+  const n = Math.max(0, Math.min(total, Math.round((Number.isFinite(progress) ? progress : 0) * total)));
+  return squareOfHex(hex).repeat(n) + '⬛'.repeat(total - n);
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-bot/src"
   cat > "$APP_DIR/core-bot/src/bot.ts" << '__COREGSM_EOF__'
@@ -41487,12 +41515,13 @@ export function helpEmbed(category: string | null, ctx: HelpCtx): EmbedBuilder {
   }
   const lines = cat.cmds.map((c) => cmdInfo(c)).filter((c): c is CmdInfo => !!c).map((c) => lineOf(c, lang));
   for (const x of cat.extra ?? []) lines.push(`▸ \`${x.cmd}\` — ${shortText(x.text[lang])}`);
-  let head = '';
+  let head = ctx.live ? `${liveLine(ctx.live, lang)}\n` : '';
   if (cat.id === 'srv' && ctx.live) {
     const list = (ctx.live.servers ?? []).slice(0, 8).map(serverLine).join('\n');
-    head = `${liveLine(ctx.live, lang)}\n${list ? `${list}\n` : ''}\n`;
+    head += list ? `${list}\n` : '';
+    e.setColor(healthColor(ctx.live.up, ctx.live.total));
   }
-  return brand(e.setDescription(`${head}${lines.join('\n')}\n\n${tx('noAnswer', lang)}`));
+  return brand(e.setDescription(`${head}${head ? '\n' : ''}${lines.join('\n')}`));
 }
 
 /** the details of one command */
@@ -41541,6 +41570,16 @@ export function helpComponents(active: string, ctx: Pick<HelpCtx, 'lang' | 'admi
     rows.push(
       new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
         new StringSelectMenuBuilder().setCustomId('help:card').setPlaceholder(tx('openCard', lang)).addOptions(servers.map((s) => ({ label: (s.name || `#${s.id}`).slice(0, 100), value: String(s.id), emoji: s.online ? '🟢' : '🔴' }))),
+      ),
+    );
+  }
+  // a menu with the commands of the section: a pick shows the details of the command
+  const here = CATEGORIES.find((c) => c.id === active);
+  const names = (here?.cmds ?? []).map((c) => cmdInfo(c)).filter((c): c is CmdInfo => !!c).slice(0, 25);
+  if (names.length) {
+    rows.push(
+      new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+        new StringSelectMenuBuilder().setCustomId(`help:cmd:${active}`).setPlaceholder(tx('askCmd', lang)).addOptions(names.map((c) => ({ label: c.cmd, value: c.cmd, description: shortText(c.text[lang], 90) }))),
       ),
     );
   }
@@ -41605,7 +41644,7 @@ async function ctxFor(i: Asker, category: string | null): Promise<HelpCtx> {
   const lang = langOf(i.locale);
   const home = category === null || category === 'home';
   const [live, me, news] = await Promise.all([
-    home || category === 'srv' ? liveNow() : Promise.resolve(null),
+    home || (category !== null && !['none', 'news', 'modclr'].includes(category)) ? liveNow() : Promise.resolve(null),
     home ? meNow(i.user.id, (i.user.globalName || i.user.username || '').trim()) : Promise.resolve(null),
     category === 'news' ? newsNow(lang) : Promise.resolve(undefined),
   ]);
@@ -41711,6 +41750,16 @@ export async function handleHelpSelect(i: StringSelectMenuInteraction): Promise<
   }
   try {
     const id = i.values[0] ?? 'home';
+    if (i.customId.startsWith('help:cmd:')) {
+      const info = cmdInfo(id);
+      const section = i.customId.slice('help:cmd:'.length);
+      const lang = langOf(i.locale);
+      if (info) {
+        const back = new ButtonBuilder().setCustomId(`help:back:${section}`).setLabel(`‹ ${tx('back', lang)}`).setStyle(ButtonStyle.Primary);
+        await i.editReply({ embeds: [commandEmbed(info, lang)], components: [row(back)] } as never);
+      }
+      return;
+    }
     if (i.customId === 'help:card') {
       const n = Number(id);
       if (Number.isInteger(n) && n > 0) await i.editReply((await serverCardReply(n)) as never);
@@ -41742,6 +41791,11 @@ export async function handleHelpButton(i: ButtonInteraction): Promise<void> {
     }
     if (i.customId === 'help:home') {
       await i.editReply(helpView(null, await ctxFor(i, null)) as never);
+      return;
+    }
+    if (i.customId.startsWith('help:back:')) {
+      const section = i.customId.slice('help:back:'.length);
+      await i.editReply(helpView(section, await ctxFor(i, section)) as never);
       return;
     }
     if (i.customId === 'help:act:link') {
@@ -41905,6 +41959,7 @@ export const UI = {
   noNews: { ru: 'Не удалось загрузить список изменений. Попробуйте чуть позже.', en: 'Could not load the list of changes. Try again later.' },
   unlinked: { ru: '🔗 Ник не привязан: команда `/link` подключит часы, ранг и достижения.', en: '🔗 No nick linked yet: `/link` turns on hours, rank and achievements.' },
   back: { ru: 'Назад', en: 'Back' },
+  askCmd: { ru: 'Справка по команде…', en: 'Help for a command…' },
   noAnswer: { ru: '💬 Не нашли ответ? Подробности по команде: `/help command:…`', en: '💬 Did not find the answer? Details of a command: `/help command:…`' },
   openCard: { ru: 'Открыть карточку сервера…', en: 'Open a server card…' },
   linkNick: { ru: 'Привязать ник', en: 'Link my nick' },
@@ -43800,6 +43855,7 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-bot/src"
   cat > "$APP_DIR/core-bot/src/replies.ts" << '__COREGSM_EOF__'
 /** Ephemeral replies to the slash commands: plain notices and the player's card. */
+import { rankBar } from './bars.js';
 import { nextStep } from './hints.js';
 import { footerOf, getStyle } from './style.js';
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } from 'discord.js';
@@ -43865,7 +43921,7 @@ export function cardReply(
     fields.push({ name: '⏱️ Часов в игре', value: hoursText(p.rank.hours), inline: true });
     if (p.rank.next) {
       const left = Math.max(0, p.rank.next.minHours - p.rank.hours);
-      fields.push({ name: `Следующий ранг: ${p.rank.next.name}`, value: `${bar10(p.rank.progress)}  ещё **${hoursText(left)} ч**` });
+      fields.push({ name: `Следующий ранг: ${p.rank.next.name}`, value: `${rankBar(p.rank.progress, p.rank.color)}  ещё **${hoursText(left)} ч**` });
     } else {
       fields.push({ name: 'Вершина лестницы', value: 'Вы достигли высшего ранга.' });
     }

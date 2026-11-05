@@ -37,16 +37,16 @@ test('/help: a player does not see the moderation, an administrator does', () =>
 
 test('/help: the menu marks the open section, the buttons fit a row', () => {
   const rows = helpComponents('srv', ctx());
-  assert.equal(rows.length, 2, 'no server menu while the numbers are unknown');
+  assert.equal(rows.length, 3, 'no server menu while the numbers are unknown: sections, commands, navigation');
   const servers = [{ id: 1, name: 'A', online: true, players: 2, maxPlayers: 10, map: null }, { id: 2, name: 'B', online: false, players: 0, maxPlayers: 0, map: null }];
   const withServers = helpComponents('srv', { ...ctx(), live: { ...live, servers } });
-  assert.equal(withServers.length, 3, 'the menu of server cards appears');
+  assert.equal(withServers.length, 4, 'the menu of server cards appears');
   assert.match(JSON.stringify(withServers[1]!.toJSON()), /help:card/);
   const ids2 = (a: string) => helpComponents(a, ctx())[helpComponents(a, ctx()).length - 1]!.components.map((c) => (c.toJSON() as { custom_id?: string }).custom_id);
   assert.ok(ids2('play').includes('help:home') && !ids2('home').includes('help:home'));
-  assert.match(JSON.stringify(helpComponents('play', ctx())[1]!.toJSON()), /help:act:link/);
-  assert.match(JSON.stringify(helpComponents('stat', ctx())[1]!.toJSON()), /help:act:topm/);
-  assert.match(JSON.stringify(helpComponents('mod', ctx())[1]!.toJSON()), /help:act:cases/);
+  assert.match(JSON.stringify(helpComponents('play', ctx())[2]!.toJSON()), /help:act:link/);
+  assert.match(JSON.stringify(helpComponents('stat', ctx())[2]!.toJSON()), /help:act:topm/);
+  assert.match(JSON.stringify(helpComponents('mod', ctx())[2]!.toJSON()), /help:act:cases/);
   assert.doesNotMatch(JSON.stringify(helpComponents('mod', ctx('ru', false)).map((r) => r.toJSON())), /help:act:cases/);
   const menu = rows[0]!.toJSON() as { components: { options: { value: string; default?: boolean }[] }[] };
   assert.equal(menu.components[0]!.options.find((o) => o.default)?.value, 'srv');
@@ -59,9 +59,11 @@ test('/help: the menu marks the open section, the buttons fit a row', () => {
 test('/help: live numbers, the line about the person, the English version', () => {
   assert.match(helpEmbed(null, { ...ctx(), live }).toJSON().description!, /Сейчас играют \*\*16\*\*/);
   assert.match(helpEmbed('srv', { ...ctx(), live }).toJSON().description!, /Сейчас играют/);
-  assert.match(helpEmbed('srv', { ...ctx(), live: { ...live, servers: [{ id: 1, name: 'Alpha', online: true, players: 3, maxPlayers: 10, map: null }] } }).toJSON().description!, /🟢 \*\*Alpha\*\* — 3\/10/);
+  assert.match(helpEmbed('srv', { ...ctx(), live: { ...live, servers: [{ id: 1, name: 'Alpha', online: true, players: 3, maxPlayers: 10, map: null }] } }).toJSON().description!, /🟢 \*\*Alpha\*\*\n👥 \*\*3\*\*\/10/);
   assert.match(helpEmbed('play', ctx()).toJSON().description!, /▸ `\/register` — /);
-  assert.match(helpEmbed('play', ctx()).toJSON().description!, /Не нашли ответ/);
+  assert.doesNotMatch(helpEmbed('play', ctx()).toJSON().description!, /Не нашли ответ/);
+  assert.match(JSON.stringify(helpComponents('play', ctx())[1]!.toJSON()), /help:cmd:play/);
+  assert.match(helpEmbed('play', { ...ctx(), live }).toJSON().description!, /^🟢 Сейчас играют|^.*Сейчас играют/);
   assert.equal(helpEmbed('srv', ctx()).toJSON().thumbnail, undefined, 'no big logo beside the list');
   assert.doesNotMatch(helpEmbed('play', { ...ctx(), live }).toJSON().description!, /Сейчас играют/);
   const me = { found: true, gameNick: 'Bob', rank: null };
