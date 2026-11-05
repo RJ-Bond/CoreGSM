@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="4a88418a3cf6"
+COREGSM_BUILD="318f916e8c66"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.34"
+COREGSM_VERSION="1.1.35"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -21626,7 +21626,7 @@ export const BOT_COMMANDS = [
   { name: '/top', description: 'Самые активные игроки недели или месяца' },
   { name: '/servers', description: 'Список серверов: кнопки открывают карточку выбранного сервера (видно только вам)' },
   { name: '/roles', description: 'Выбрать себе роли в меню: можно взять и снять (видно только вам)' },
-  { name: '/clear', description: 'Очистить чат в этом канале: только для тех, кто может управлять сообщениями, с подтверждением кнопкой. Параметры: count (сколько), user (только чьи сообщения)' },
+  { name: '/clear', description: 'Очистить чат в этом канале: только для администраторов, с подтверждением кнопкой. Параметры: count (сколько), user (только чьи сообщения)' },
   { name: '/help', description: 'Что умеет бот: команды по разделам, кнопки переключают разделы (видно только вам)' },
 ];
 
@@ -38267,7 +38267,7 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-bot/src"
   cat > "$APP_DIR/core-bot/src/clear.ts" << '__COREGSM_EOF__'
 /**
- * /clear: wipes the chat of the channel where it was typed. Only for those who may manage messages, always with a
+ * /clear: wipes the chat of the channel where it was typed. Only for server administrators, always with a
  * confirmation. The confirmation card shows what is found (how many messages, how many are pinned or too old), has quick
  * amounts (10 / 50 / 100 / all) and a switch for the pinned messages; its buttons live two minutes and answer only to the
  * person who typed the command. After «Yes» a three-second countdown leaves time to stop; then the private message shows the
@@ -38291,9 +38291,9 @@ import { footerOf, getStyle } from './style.js';
 export const CLEAR_COMMANDS = [
   {
     name: 'clear',
-    description: 'Очистить чат в этом канале (для модераторов, с подтверждением)',
+    description: 'Очистить чат в этом канале (для администраторов, с подтверждением)',
     dm_permission: false,
-    default_member_permissions: String(PermissionFlagsBits.ManageMessages),
+    default_member_permissions: String(PermissionFlagsBits.Administrator),
     options: [
       { type: 4, name: 'count', description: `Сколько последних сообщений удалить (по умолчанию весь чат, не больше ${MAX_COUNT})`, min_value: 1, max_value: MAX_COUNT, required: false },
       { type: 6, name: 'user', description: 'Удалить только сообщения этого участника', required: false },
@@ -38436,7 +38436,7 @@ const noPerm = (text: string) => ({ ...replyEmbed('Недостаточно пр
 /** everything that can forbid a cleaning of this channel; a text for the person, or null when it is allowed */
 async function forbidden(i: ChatInputCommandInteraction | ButtonInteraction, ch: Cleanable | null): Promise<{ title: string; text: string; mod?: undefined } | { mod: Moderation; title?: undefined; text?: undefined }> {
   if (!i.guild || !ch) return { title: 'Только на сервере', text: 'Команда работает в канале Discord-сервера.' };
-  if (!i.memberPermissions?.has(PermissionFlagsBits.ManageMessages)) return { title: 'Недостаточно прав', text: 'Очищать чат могут участники с правом «Управлять сообщениями».' };
+  if (!i.memberPermissions?.has(PermissionFlagsBits.Administrator)) return { title: 'Недостаточно прав', text: 'Очищать чат могут только администраторы сервера.' };
   if (i.appPermissions && !i.appPermissions.has(NEED)) return { title: 'Недостаточно прав', text: NEED_TEXT };
   const r = await backendJson<unknown>('/internal/moderation').catch(() => null);
   const mod = r?.ok ? readModeration(r.data) : null;
@@ -38474,8 +38474,8 @@ export async function handleClearButton(i: ButtonInteraction): Promise<void> {
   const p = parseClearId(i.customId);
   if (!p) return;
   try {
-    if (!i.memberPermissions?.has(PermissionFlagsBits.ManageMessages)) {
-      await i.reply({ ...noPerm('Нужно право «Управлять сообщениями».'), flags: EPHEMERAL });
+    if (!i.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+      await i.reply({ ...noPerm('Это действие доступно только администраторам сервера.'), flags: EPHEMERAL });
       return;
     }
     if (p.action === 'stop') {
@@ -39143,7 +39143,7 @@ export const HELP_CATEGORIES: HelpCategory[] = [
     ],
   },
   {
-    id: 'mod', label: 'Модерация', emoji: '🛡️', title: 'Модерация (для тех, кто управляет сообщениями)',
+    id: 'mod', label: 'Модерация', emoji: '🛡️', title: 'Модерация (для администраторов)',
     lines: [['/clear', 'очистить чат в этом канале: с подтверждением, закреплённые остаются']],
   },
 ];
@@ -136555,7 +136555,7 @@ const en: Record<keyof typeof ru, string> = {
   'wl.saved': 'Saved',
   'wl.intent': 'Needs the «Server Members Intent» in Developer Portal → Bot.',
   'mod.title': 'Moderation: the /clear command',
-  'mod.help': 'The /clear command wipes the chat of the channel where it is typed. Only those who may manage messages can see and use it. Before deleting, the bot shows how many messages it found and asks to confirm.',
+  'mod.help': 'The /clear command wipes the chat of the channel where it is typed. Only server administrators (the «Administrator» permission) can see and use it. Before deleting, the bot shows how many messages it found and asks to confirm.',
   'mod.on': 'Allow the /clear command',
   'mod.log': 'Cleaning log',
   'mod.logHelp': 'The bot writes a record of each cleaning to this channel: who, where, how many messages and how long it took.',
@@ -140731,7 +140731,7 @@ const ru = {
   'wl.saved': 'Сохранено',
   'wl.intent': 'Нужен «Server Members Intent» в Developer Portal → Bot.',
   'mod.title': 'Модерация: команда /clear',
-  'mod.help': 'Команда /clear очищает чат в канале, где её ввели. Её видят и могут использовать только те, у кого есть право «Управлять сообщениями». Перед удалением бот показывает, сколько сообщений найдено, и просит подтвердить.',
+  'mod.help': 'Команда /clear очищает чат в канале, где её ввели. Её видят и могут использовать только администраторы сервера (право «Администратор»). Перед удалением бот показывает, сколько сообщений найдено, и просит подтвердить.',
   'mod.on': 'Разрешить команду /clear',
   'mod.log': 'Журнал очисток',
   'mod.logHelp': 'В этот канал бот пишет запись о каждой очистке: кто, где, сколько удалил и за сколько.',

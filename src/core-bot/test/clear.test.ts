@@ -4,11 +4,11 @@ import { COMMANDS } from '../src/commands.js';
 import { BULK_MAX_AGE_MS, CONFIRM_TTL_MS, MAX_COUNT, clearId, cooldownLeft, estimate, etaText, expectedTotal, isExpired, messages, normalizeCount, parseClearId, pickLine, plural, readModeration, sortPage, speedText, stopId, waitText } from '../src/clearLogic.js';
 import { CLEAR_COMMANDS } from '../src/clear.js';
 
-test('/clear is registered once, is hidden from those who cannot manage messages and works only on a server', () => {
+test('/clear is registered once, is hidden from non-administrators and works only on a server', () => {
   assert.equal(COMMANDS.filter((c) => c.name === 'clear').length, 1);
   const c = CLEAR_COMMANDS[0]!;
   assert.equal(c.dm_permission, false);
-  assert.equal(c.default_member_permissions, String(1n << 13n));
+  assert.equal(c.default_member_permissions, String(1n << 3n));
   assert.deepEqual(c.options.map((o) => o.name), ['count', 'user']);
 });
 

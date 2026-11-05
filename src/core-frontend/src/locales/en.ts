@@ -1879,7 +1879,7 @@ const en: Record<keyof typeof ru, string> = {
   'wl.saved': 'Saved',
   'wl.intent': 'Needs the «Server Members Intent» in Developer Portal → Bot.',
   'mod.title': 'Moderation: the /clear command',
-  'mod.help': 'The /clear command wipes the chat of the channel where it is typed. Only those who may manage messages can see and use it. Before deleting, the bot shows how many messages it found and asks to confirm.',
+  'mod.help': 'The /clear command wipes the chat of the channel where it is typed. Only server administrators (the «Administrator» permission) can see and use it. Before deleting, the bot shows how many messages it found and asks to confirm.',
   'mod.on': 'Allow the /clear command',
   'mod.log': 'Cleaning log',
   'mod.logHelp': 'The bot writes a record of each cleaning to this channel: who, where, how many messages and how long it took.',

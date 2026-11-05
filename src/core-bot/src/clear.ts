@@ -1,5 +1,5 @@
 /**
- * /clear: wipes the chat of the channel where it was typed. Only for those who may manage messages, always with a
+ * /clear: wipes the chat of the channel where it was typed. Only for server administrators, always with a
  * confirmation. The confirmation card shows what is found (how many messages, how many are pinned or too old), has quick
  * amounts (10 / 50 / 100 / all) and a switch for the pinned messages; its buttons live two minutes and answer only to the
  * person who typed the command. After «Yes» a three-second countdown leaves time to stop; then the private message shows the
@@ -23,9 +23,9 @@ import { footerOf, getStyle } from './style.js';
 export const CLEAR_COMMANDS = [
   {
     name: 'clear',
-    description: 'Очистить чат в этом канале (для модераторов, с подтверждением)',
+    description: 'Очистить чат в этом канале (для администраторов, с подтверждением)',
     dm_permission: false,
-    default_member_permissions: String(PermissionFlagsBits.ManageMessages),
+    default_member_permissions: String(PermissionFlagsBits.Administrator),
     options: [
       { type: 4, name: 'count', description: `Сколько последних сообщений удалить (по умолчанию весь чат, не больше ${MAX_COUNT})`, min_value: 1, max_value: MAX_COUNT, required: false },
       { type: 6, name: 'user', description: 'Удалить только сообщения этого участника', required: false },
@@ -168,7 +168,7 @@ const noPerm = (text: string) => ({ ...replyEmbed('Недостаточно пр
 /** everything that can forbid a cleaning of this channel; a text for the person, or null when it is allowed */
 async function forbidden(i: ChatInputCommandInteraction | ButtonInteraction, ch: Cleanable | null): Promise<{ title: string; text: string; mod?: undefined } | { mod: Moderation; title?: undefined; text?: undefined }> {
   if (!i.guild || !ch) return { title: 'Только на сервере', text: 'Команда работает в канале Discord-сервера.' };
-  if (!i.memberPermissions?.has(PermissionFlagsBits.ManageMessages)) return { title: 'Недостаточно прав', text: 'Очищать чат могут участники с правом «Управлять сообщениями».' };
+  if (!i.memberPermissions?.has(PermissionFlagsBits.Administrator)) return { title: 'Недостаточно прав', text: 'Очищать чат могут только администраторы сервера.' };
   if (i.appPermissions && !i.appPermissions.has(NEED)) return { title: 'Недостаточно прав', text: NEED_TEXT };
   const r = await backendJson<unknown>('/internal/moderation').catch(() => null);
   const mod = r?.ok ? readModeration(r.data) : null;
@@ -206,8 +206,8 @@ export async function handleClearButton(i: ButtonInteraction): Promise<void> {
   const p = parseClearId(i.customId);
   if (!p) return;
   try {
-    if (!i.memberPermissions?.has(PermissionFlagsBits.ManageMessages)) {
-      await i.reply({ ...noPerm('Нужно право «Управлять сообщениями».'), flags: EPHEMERAL });
+    if (!i.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+      await i.reply({ ...noPerm('Это действие доступно только администраторам сервера.'), flags: EPHEMERAL });
       return;
     }
     if (p.action === 'stop') {
