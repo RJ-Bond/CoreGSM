@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="2af7cdbaf8e2"
+COREGSM_BUILD="ecc1d68ec213"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.8"
+COREGSM_VERSION="1.1.9"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -23639,6 +23639,19 @@ export function profileCardData(username: string): ProfileCardData | null {
 }
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
+/** the text in at most two lines of the given width: it breaks at a space when it can and at the width when it cannot */
+export function splitLines(ctx: any, text: string, maxW: number): [string, string] {
+  const words = text.split(/\s+/).filter(Boolean);
+  let first = '';
+  let i = 0;
+  while (i < words.length && ctx.measureText(first ? `${first} ${words[i]}` : words[i]).width <= maxW) first = first ? `${first} ${words[i++]}` : words[i++];
+  if (first) return [first, words.slice(i).join(' ')];
+  // one word wider than the line: cut it by characters
+  let cut = text;
+  while (cut.length > 1 && ctx.measureText(cut).width > maxW) cut = cut.slice(0, -1);
+  return [cut, text.slice(cut.length)];
+}
+
 const fit = (ctx: any, text: string, maxW: number): string => {
   let s = text;
   while (s.length > 2 && ctx.measureText(s).width > maxW) s = `${s.slice(0, -2)}…`;
@@ -23708,7 +23721,7 @@ export async function renderProfileCard(d: ProfileCardData): Promise<Buffer> {
   // four tiles with the numbers of the last 30 days
   if (d.stats) {
     const tiles: [string, string][] = [
-      [hoursText(d.stats.hours), 'в игре за 30 дней'],
+      [hoursText(d.stats.hours), 'за 30 дней'],
       [String(d.stats.sessions), 'заходов'],
       [`${d.stats.streakDays}`, 'дней подряд'],
       [d.stats.favourite ?? '—', 'любимый сервер'],
@@ -23725,14 +23738,22 @@ export async function renderProfileCard(d: ProfileCardData): Promise<Buffer> {
       ctx.fillStyle = '#f4f2ff';
       let vs = 52;
       ctx.font = `800 ${vs}px ${SANS}`;
-      while (vs > 24 && ctx.measureText(value).width > tw - 40) {
+      while (vs > 36 && ctx.measureText(value).width > tw - 40) {
         vs -= 4;
         ctx.font = `800 ${vs}px ${SANS}`;
       }
-      ctx.fillText(value, x + 20, y + 80);
+      if (ctx.measureText(value).width <= tw - 40) {
+        ctx.fillText(value, x + 20, y + 80);
+      } else {
+        // a long text (a server name): two lines of a smaller size, the end cut with «…»
+        ctx.font = `800 30px ${SANS}`;
+        const [l1, l2] = splitLines(ctx, value, tw - 40);
+        ctx.fillText(l1, x + 20, y + 66);
+        if (l2) ctx.fillText(fit(ctx, l2, tw - 40), x + 20, y + 102);
+      }
       ctx.fillStyle = '#9a95c4';
-      ctx.font = `600 24px ${SANS}`;
-      ctx.fillText(fit(ctx, label, tw - 40), x + 20, y + 128);
+      ctx.font = `600 21px ${SANS}`;
+      ctx.fillText(fit(ctx, label, tw - 40), x + 20, y + 142);
     });
   }
 

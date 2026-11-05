@@ -5,6 +5,7 @@ import Database from 'better-sqlite3';
 import { setupAdmin, startBackend, type Api } from './harness.ts';
 import { hoursText, hueOf, initialOf } from '../src/images/profileCardLogic.ts';
 import { parsePrivacy } from '../src/profile/profileCore.ts';
+import { splitLines } from '../src/images/profileCard.ts';
 
 describe('profile card logic', () => {
   it('writes hours the way a player reads them', () => {
@@ -18,6 +19,14 @@ describe('profile card logic', () => {
     assert.ok(hueOf('Ren') >= 0 && hueOf('Ren') < 360);
     assert.equal(initialOf(' ren'), 'R');
     assert.equal(initialOf(''), '?');
+  });
+  it('a long text goes to two lines: at a space when it can, by characters when it cannot', () => {
+    const ctx = { measureText: (t: string) => ({ width: t.length * 10 }) };
+    assert.deepEqual(splitLines(ctx, '[RU] Just-Skill.Ru | Standart PvE', 150), ['[RU] Just-Skill.Ru', '| Standart PvE']);
+    assert.deepEqual(splitLines(ctx, 'Short', 150), ['Short', '']);
+    const [a, b] = splitLines(ctx, 'Valheim_Co-op_Very_Long_Server_Name', 150);
+    assert.equal(a.length, 15);
+    assert.equal(a + b, 'Valheim_Co-op_Very_Long_Server_Name');
   });
   it('privacy: everything is shown until switched off, junk means the defaults', () => {
     assert.deepEqual(parsePrivacy(''), { stats: true, achievements: true, online: true });
