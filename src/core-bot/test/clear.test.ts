@@ -13,11 +13,11 @@ test('/clear is registered once, is hidden from non-administrators and works onl
 });
 
 test('button ids round-trip, stay short and reject foreign ids', () => {
-  const st = { count: 250, pinned: true, target: '123456789012345678' };
+  const st = { count: 250, pinned: true, target: '123456789012345678', old: true };
   const id = clearId('go', '123456789012345678', st, 1_800_000_000_000);
   assert.ok(id.length <= 100);
   assert.deepEqual(parseClearId(id), { action: 'go', userId: '123456789012345678', ...st, at: 1_800_000_000_000 });
-  assert.deepEqual(parseClearId(clearId('set', '1234', { count: 0, pinned: false, target: '' }, 5)), { action: 'set', userId: '1234', count: 0, pinned: false, target: '', at: 5 });
+  assert.deepEqual(parseClearId(clearId('set', '1234', { count: 0, pinned: false, target: '', old: false }, 5)), { action: 'set', userId: '1234', count: 0, pinned: false, target: '', old: false, at: 5 });
   assert.equal(parseClearId('clear:go:abc:1:1:0:0'), null);
   assert.equal(parseClearId('clear:go:12:1:1'), null);
   assert.equal(parseClearId('help:play'), null);
@@ -46,25 +46,33 @@ const keep = { pinned: false, target: '' };
 
 test('sortPage keeps pinned and old messages and respects the room', () => {
   const page = [m('1', 1000), m('2', 2000, { pinned: true }), m('3', 3000), m('4', BULK_MAX_AGE_MS + 1), m('5', BULK_MAX_AGE_MS + 5, { pinned: true })];
-  assert.deepEqual(sortPage(page, now, keep, Infinity), { del: ['1', '3'], pinned: 2, old: 1 });
+  assert.deepEqual(sortPage(page, now, keep, Infinity), { del: ['1', '3'], slow: [], pinned: 2, old: 1 });
   assert.deepEqual(sortPage([m('1', 1), m('2', 2), m('3', 3)], now, keep, 2).del, ['1', '2']);
 });
 
 test('sortPage: pinned can be deleted on request, a target limits it to one member', () => {
   const page = [m('1', 1000), m('2', 2000, { pinned: true }), m('3', 3000, { by: 'b' }), m('4', BULK_MAX_AGE_MS + 1)];
-  assert.deepEqual(sortPage(page, now, { pinned: true, target: '' }, Infinity), { del: ['1', '2', '3'], pinned: 0, old: 1 });
-  assert.deepEqual(sortPage(page, now, { pinned: false, target: 'b' }, Infinity), { del: ['3'], pinned: 0, old: 0 });
+  assert.deepEqual(sortPage(page, now, { pinned: true, target: '' }, Infinity), { del: ['1', '2', '3'], slow: [], pinned: 0, old: 1 });
+  assert.deepEqual(sortPage(page, now, { pinned: false, target: 'b' }, Infinity), { del: ['3'], slow: [], pinned: 0, old: 0 });
+});
+
+test('old messages are deleted one by one only on request, and count against the room', () => {
+  const page = [m('1', 1000), m('2', BULK_MAX_AGE_MS + 1), m('3', BULK_MAX_AGE_MS + 2), m('4', BULK_MAX_AGE_MS + 3, { pinned: true })];
+  assert.deepEqual(sortPage(page, now, { pinned: false, target: '', old: true }, Infinity), { del: ['1'], slow: ['2', '3'], pinned: 1, old: 0 });
+  assert.deepEqual(sortPage(page, now, { pinned: false, target: '', old: true }, 2), { del: ['1'], slow: ['2'], pinned: 1, old: 1 });
+  const e = estimate(page, true, now, { count: 0, pinned: false, target: '', old: true });
+  assert.deepEqual([e.deletable, e.slow, e.old], [3, 2, 0]);
 });
 
 test('estimate and the number the progress counts to', () => {
   const list = [m('1', 1), m('2', 2), m('3', 3, { pinned: true }), m('4', BULK_MAX_AGE_MS + 9)];
-  const e = estimate(list, true, now, { count: 0, pinned: false, target: '' });
-  assert.deepEqual(e, { scanned: 4, complete: true, deletable: 2, pinned: 1, old: 1 });
+  const e = estimate(list, true, now, { count: 0, pinned: false, target: '', old: false });
+  assert.deepEqual(e, { scanned: 4, complete: true, deletable: 2, slow: 0, pinned: 1, old: 1 });
   assert.equal(expectedTotal(e, 0), 2);
   assert.equal(expectedTotal({ ...e, complete: false }, 0), 0);
   assert.equal(expectedTotal({ ...e, complete: false }, 2), 2);
   assert.equal(expectedTotal(null, 5), 0);
-  assert.equal(estimate(list, true, now, { count: 1, pinned: false, target: '' }).deletable, 1);
+  assert.equal(estimate(list, true, now, { count: 1, pinned: false, target: '', old: false }).deletable, 1);
 });
 
 test('speed, time left, pause', () => {

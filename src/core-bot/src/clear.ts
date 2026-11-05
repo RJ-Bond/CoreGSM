@@ -11,7 +11,7 @@
  */
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, PermissionFlagsBits, type ButtonInteraction, type ChatInputCommandInteraction } from 'discord.js';
 import {
-  COUNTDOWN_SECONDS, CONFIRM_TTL_MS, MAX_COUNT, MAX_RUN_MS, QUICK_COUNTS, SCAN_LIMIT, clearId, cooldownLeft, durationText, estimate, etaText, expectedTotal, isExpired, messages, normalizeCount, parseClearId, pickLine, readModeration, sortPage, speedText, stopId, waitText,
+  COUNTDOWN_SECONDS, CONFIRM_TTL_MS, MAX_COUNT, MAX_RUN_MS, QUICK_COUNTS, SCAN_LIMIT, SLOW_PER_SECOND, clearId, cooldownLeft, durationText, estimate, etaText, expectedTotal, isExpired, messages, normalizeCount, parseClearId, pickLine, readModeration, sortPage, speedText, stopId, waitText,
   type ClearState, type Estimate, type Moderation, type MsgLike,
 } from './clearLogic.js';
 import { backendJson } from './backend.js';
@@ -43,7 +43,7 @@ type RawMsg = { id: string; createdTimestamp: number; pinned: boolean; author?: 
 /** the part of a text channel that the run needs (kept small on purpose) */
 interface Cleanable {
   id: string;
-  messages: { fetch: (o: { limit: number; before?: string }) => Promise<Map<string, RawMsg>> };
+  messages: { fetch: (o: { limit: number; before?: string }) => Promise<Map<string, RawMsg>>; delete: (id: string) => Promise<unknown> };
   bulkDelete: (ids: string[], filterOld: boolean) => Promise<{ size: number }>;
   send?: (o: unknown) => Promise<{ delete: () => Promise<unknown> }>;
 }
@@ -90,7 +90,7 @@ function confirmView(channelId: string, userId: string, st: ClearState, at: numb
   const embed = new EmbedBuilder()
     .setColor(COLORS.warn)
     .setTitle('🧹 Очистить канал?')
-    .setDescription(`Канал <#${channelId}>: будут удалены ${amountText(st)}${st.target ? `, ${who(st)}` : ''}.\nВернуть сообщения после удаления нельзя.`)
+    .setDescription(`Канал <#${channelId}>: будут удалены ${amountText(st)}${st.target ? `, ${who(st)}` : ''}.\nВернуть сообщения после удаления нельзя.${!e.deletable && e.old ? '\n\n⏳ Все найденные сообщения старше 14 дней. Нажмите «Старые: удалять по одному», чтобы убрать и их.' : ''}`)
     .addFields(
       { name: '🔎 Просмотрено', value: found, inline: true },
       { name: '🗑️ Будет удалено', value: e.deletable ? `**${e.complete || (st.count && e.deletable >= st.count) ? e.deletable : `${e.deletable}+`}**` : '0', inline: true },
@@ -98,6 +98,7 @@ function confirmView(channelId: string, userId: string, st: ClearState, at: numb
     )
     .setFooter(footerOf(`Подтвердите в течение ${Math.round(CONFIRM_TTL_MS / 60_000)} мин`));
   if (e.old) embed.addFields({ name: '⏳ Старше 14 дней', value: `${e.old}${e.complete ? '' : '+'} — останутся: Discord не удаляет такие пачкой`, inline: false });
+  if (e.slow) embed.addFields({ name: '🐢 Старые по одному', value: `${e.slow} — займёт около ${durationText((e.slow / SLOW_PER_SECOND) * 1000)}`, inline: false });
   const amounts = [...new Set([...(st.count && !(QUICK_COUNTS as readonly number[]).includes(st.count) ? [st.count] : []), ...QUICK_COUNTS])];
   const row1 = new ActionRowBuilder<ButtonBuilder>().addComponents(
     amounts.map((n) =>
@@ -113,6 +114,11 @@ function confirmView(channelId: string, userId: string, st: ClearState, at: numb
       .setLabel(st.pinned ? 'Закреплённые: удалить тоже' : 'Закреплённые: оставить')
       .setEmoji('📌')
       .setStyle(st.pinned ? ButtonStyle.Danger : ButtonStyle.Secondary),
+    new ButtonBuilder()
+      .setCustomId(clearId('set', userId, { ...st, old: !st.old }, at))
+      .setLabel(st.old ? 'Старые: удалять по одному' : 'Старые: оставить')
+      .setEmoji('⏳')
+      .setStyle(st.old ? ButtonStyle.Danger : ButtonStyle.Secondary),
   );
   const row3 = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder().setCustomId(clearId('go', userId, st, at)).setLabel(e.deletable ? 'Да, очистить' : 'Удалять нечего').setEmoji('🧹').setStyle(ButtonStyle.Danger).setDisabled(!e.deletable),
@@ -193,7 +199,7 @@ export async function handleClearCommand(i: ChatInputCommandInteraction): Promis
       await i.editReply(replyEmbed(f.title ?? 'Сюда нельзя', f.text ?? 'В этом канале очистка не поддерживается.', f.title === 'Уже идёт' || f.title === 'Подождите немного' ? COLORS.warn : COLORS.bad));
       return;
     }
-    const st: ClearState = { count: normalizeCount(i.options.getInteger('count')), pinned: false, target: i.options.getUser('user')?.id ?? '' };
+    const st: ClearState = { count: normalizeCount(i.options.getInteger('count')), pinned: false, old: false, target: i.options.getUser('user')?.id ?? '' };
     const s = await scan(ch, true);
     await i.editReply(confirmView(ch.id, i.user.id, st, Date.now(), estimate(s.list, s.complete, Date.now(), st)));
   } catch (e) {
@@ -235,7 +241,7 @@ export async function handleClearButton(i: ButtonInteraction): Promise<void> {
       await i.editReply({ ...replyEmbed(f.title ?? 'Сюда нельзя', f.text ?? 'В этом канале очистка не поддерживается.', COLORS.bad), ...empty() });
       return;
     }
-    const st: ClearState = { count: p.count, pinned: p.pinned, target: p.target };
+    const st: ClearState = { count: p.count, pinned: p.pinned, target: p.target, old: p.old };
     if (p.action === 'set') {
       const s = await scan(ch);
       await i.editReply(confirmView(ch.id, p.userId, st, p.at, estimate(s.list, s.complete, Date.now(), st)));
@@ -278,8 +284,24 @@ async function run(i: ButtonInteraction, ch: Cleanable, st: ClearState, mod: Mod
       t.pinned += s.pinned;
       t.old += s.old;
       if (s.del.length) t.deleted += (await ch.bulkDelete(s.del, true)).size;
-      // newest first: once an old message is met, everything after it is old as well
-      if (s.old > 0 || raw.length < 100) break;
+      // the old ones go one by one: Discord does not allow more, so it is slow
+      for (const id of s.slow) {
+        if (state.stop) break;
+        try {
+          await ch.messages.delete(id);
+          t.deleted++;
+        } catch (e) {
+          // already deleted by somebody else
+          if ((e as { code?: number }).code !== 10008) throw e;
+        }
+        if (Date.now() - shown > 2000) {
+          shown = Date.now();
+          await i.editReply(progressView(ch.id, total, t.deleted, Date.now() - started)).catch(() => undefined);
+        }
+        if (Date.now() - started >= MAX_RUN_MS) break;
+      }
+      // newest first: once an old message is met, everything after it is old as well (left in place unless chosen)
+      if ((s.old > 0 && !st.old) || raw.length < 100) break;
       if (Date.now() - shown > 2000) {
         shown = Date.now();
         await i.editReply(progressView(ch.id, total, t.deleted, Date.now() - started)).catch(() => undefined);
@@ -334,7 +356,7 @@ async function record(i: ButtonInteraction, mod: Moderation, ch: Cleanable, t: T
         { name: 'Итог', value: outcome === 'ok' ? 'завершено' : outcome === 'stopped' ? 'остановлено' : 'ошибка', inline: true },
         { name: 'Удалено', value: String(t.deleted), inline: true },
         { name: 'Время', value: durationText(elapsed), inline: true },
-        { name: 'Что просили', value: `${st.count ? `последние ${st.count}` : 'весь чат'}${st.target ? `, только <@${st.target}>` : ''}${st.pinned ? ', включая закреплённые' : ''}`, inline: false },
+        { name: 'Что просили', value: `${st.count ? `последние ${st.count}` : 'весь чат'}${st.target ? `, только <@${st.target}>` : ''}${st.pinned ? ', включая закреплённые' : ''}${st.old ? ', включая старше 14 дней' : ''}`, inline: false },
       )
       .setTimestamp(new Date())
       .setFooter(footerOf('Журнал'));
