@@ -1,13 +1,20 @@
 /**
  * /clear: wipes the chat of the channel where it was typed. Only for those who may manage messages, always with a
- * confirmation (the buttons live two minutes and answer only to the person who typed the command). While it works the
- * private message shows the progress with a «Stop» button; when it is done the channel gets a short notice that removes itself.
+ * confirmation. The confirmation card shows what is found (how many messages, how many are pinned or too old), has quick
+ * amounts (10 / 50 / 100 / all) and a switch for the pinned messages; its buttons live two minutes and answer only to the
+ * person who typed the command. After «Yes» a three-second countdown leaves time to stop; then the private message shows the
+ * progress (speed and time left) with a «Stop» button. At the end the channel gets a short notice that removes itself, and the
+ * log channel of the panel gets a record.
  *
- * Discord deletes messages in bulk only while they are younger than 14 days: older ones stay, and the result says how many.
- * Pinned messages are never deleted.
+ * The panel (Discord → Moderation) can switch the command off, protect channels, set the pause between cleanings and the log channel.
+ * Discord deletes messages in bulk only while they are younger than 14 days: older ones stay. Pinned ones stay unless chosen.
  */
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, PermissionFlagsBits, type ButtonInteraction, type ChatInputCommandInteraction } from 'discord.js';
-import { CONFIRM_TTL_MS, MAX_COUNT, MAX_RUN_MS, clearId, durationText, isExpired, messages, normalizeCount, parseClearId, sortPage, stopId } from './clearLogic.js';
+import {
+  COUNTDOWN_SECONDS, CONFIRM_TTL_MS, MAX_COUNT, MAX_RUN_MS, QUICK_COUNTS, SCAN_LIMIT, clearId, cooldownLeft, durationText, estimate, etaText, expectedTotal, isExpired, messages, normalizeCount, parseClearId, pickLine, readModeration, sortPage, speedText, stopId, waitText,
+  type ClearState, type Estimate, type Moderation, type MsgLike,
+} from './clearLogic.js';
+import { backendJson } from './backend.js';
 import { humanDiscordError } from './errors.js';
 import { log } from './log.js';
 import { COLORS, bar10, replyEmbed } from './replies.js';
@@ -19,95 +26,179 @@ export const CLEAR_COMMANDS = [
     description: 'Очистить чат в этом канале (для модераторов, с подтверждением)',
     dm_permission: false,
     default_member_permissions: String(PermissionFlagsBits.ManageMessages),
-    options: [{ type: 4, name: 'count', description: `Сколько последних сообщений удалить (по умолчанию весь чат, не больше ${MAX_COUNT})`, min_value: 1, max_value: MAX_COUNT, required: false }],
+    options: [
+      { type: 4, name: 'count', description: `Сколько последних сообщений удалить (по умолчанию весь чат, не больше ${MAX_COUNT})`, min_value: 1, max_value: MAX_COUNT, required: false },
+      { type: 6, name: 'user', description: 'Удалить только сообщения этого участника', required: false },
+    ],
   },
 ];
 export const CLEAR_NAMES = new Set(CLEAR_COMMANDS.map((c) => c.name));
 
 const EPHEMERAL = 64;
 const NEED = [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageMessages];
+const NEED_TEXT = 'Боту нужны в этом канале права «Просмотр канала», «Читать историю сообщений» и «Управлять сообщениями». Выдайте их роли бота или пригласите бота заново по ссылке из панели.';
+
+type RawMsg = { id: string; createdTimestamp: number; pinned: boolean; author?: { id: string } | null };
 
 /** the part of a text channel that the run needs (kept small on purpose) */
 interface Cleanable {
   id: string;
-  messages: { fetch: (o: { limit: number; before?: string }) => Promise<Map<string, { id: string; createdTimestamp: number; pinned: boolean }>> };
+  messages: { fetch: (o: { limit: number; before?: string }) => Promise<Map<string, RawMsg>> };
   bulkDelete: (ids: string[], filterOld: boolean) => Promise<{ size: number }>;
   send?: (o: unknown) => Promise<{ delete: () => Promise<unknown> }>;
 }
 
 /** channels where a run is going now; `stop` is set by the «Stop» button */
 const running = new Map<string, { stop: boolean }>();
+/** when each channel was cleaned last (for the pause of the panel) */
+const lastDone = new Map<string, number>();
+/** what the preview found, kept half a minute so that the buttons answer at once */
+const scans = new Map<string, { at: number; list: MsgLike[]; complete: boolean }>();
 
 const empty = () => ({ components: [] as never[] });
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+const toLike = (m: RawMsg): MsgLike => ({ id: m.id, createdTimestamp: m.createdTimestamp, pinned: m.pinned, authorId: m.author?.id ?? '' });
+const oldestId = (page: RawMsg[]) => page.reduce((a, b) => (b.createdTimestamp < a.createdTimestamp ? b : a)).id;
 
-function confirmView(channelId: string, userId: string, count: number, now: number) {
-  const e = new EmbedBuilder()
-    .setColor(COLORS.warn)
-    .setTitle('🧹 Очистить канал?')
-    .setDescription(`${count ? `Будут удалены последние **${messages(count)}**` : 'Будет удалён **весь чат**'} в канале <#${channelId}>.\nПосле удаления вернуть сообщения нельзя.`)
-    .addFields(
-      { name: '📌 Закреплённые', value: 'останутся на месте', inline: true },
-      { name: '⏳ Старше 14 дней', value: 'Discord не даёт удалить, останутся', inline: true },
-      { name: '⏱️ Подтвердите', value: `в течение ${Math.round(CONFIRM_TTL_MS / 60_000)} мин`, inline: true },
-    )
-    .setFooter(footerOf('Очистка'));
-  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder().setCustomId(clearId('go', userId, count, now)).setLabel('Да, очистить').setEmoji('🧹').setStyle(ButtonStyle.Danger),
-    new ButtonBuilder().setCustomId(clearId('no', userId, count, now)).setLabel('Отмена').setStyle(ButtonStyle.Secondary),
-  );
-  return { embeds: [e], components: [row] };
+/** looks through the newest SCAN_LIMIT messages of the channel (not deleting anything) */
+async function scan(ch: Cleanable, fresh = false) {
+  const hit = scans.get(ch.id);
+  if (!fresh && hit && Date.now() - hit.at < 30_000) return hit;
+  const list: MsgLike[] = [];
+  let cursor: string | undefined;
+  let complete = false;
+  while (list.length < SCAN_LIMIT) {
+    const page = [...(await ch.messages.fetch({ limit: 100, ...(cursor ? { before: cursor } : {}) })).values()];
+    list.push(...page.map(toLike));
+    if (page.length < 100) {
+      complete = true;
+      break;
+    }
+    cursor = oldestId(page);
+  }
+  if (scans.size > 50) scans.clear();
+  const r = { at: Date.now(), list, complete };
+  scans.set(ch.id, r);
+  return r;
 }
 
-function progressView(channelId: string, count: number, deleted: number, elapsed: number) {
+const who = (st: ClearState) => (st.target ? `только сообщения <@${st.target}>` : '');
+const amountText = (st: ClearState) => (st.count ? `последние **${messages(st.count)}**` : '**весь чат**');
+
+function confirmView(channelId: string, userId: string, st: ClearState, at: number, e: Estimate) {
+  const found = e.complete ? `${e.scanned}` : `${e.scanned}+`;
+  const embed = new EmbedBuilder()
+    .setColor(COLORS.warn)
+    .setTitle('🧹 Очистить канал?')
+    .setDescription(`Канал <#${channelId}>: будут удалены ${amountText(st)}${st.target ? `, ${who(st)}` : ''}.\nВернуть сообщения после удаления нельзя.`)
+    .addFields(
+      { name: '🔎 Просмотрено', value: found, inline: true },
+      { name: '🗑️ Будет удалено', value: e.deletable ? `**${e.complete || (st.count && e.deletable >= st.count) ? e.deletable : `${e.deletable}+`}**` : '0', inline: true },
+      { name: '📌 Закреплённые', value: e.pinned || !st.pinned ? `${e.pinned} — ${st.pinned ? 'удалятся' : 'останутся'}` : 'удалятся', inline: true },
+    )
+    .setFooter(footerOf(`Подтвердите в течение ${Math.round(CONFIRM_TTL_MS / 60_000)} мин`));
+  if (e.old) embed.addFields({ name: '⏳ Старше 14 дней', value: `${e.old}${e.complete ? '' : '+'} — останутся: Discord не удаляет такие пачкой`, inline: false });
+  const amounts = [...new Set([...(st.count && !(QUICK_COUNTS as readonly number[]).includes(st.count) ? [st.count] : []), ...QUICK_COUNTS])];
+  const row1 = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    amounts.map((n) =>
+      new ButtonBuilder()
+        .setCustomId(clearId('set', userId, { ...st, count: n }, at))
+        .setLabel(n ? String(n) : 'Всё')
+        .setStyle(n === st.count ? ButtonStyle.Primary : ButtonStyle.Secondary),
+    ),
+  );
+  const row2 = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId(clearId('set', userId, { ...st, pinned: !st.pinned }, at))
+      .setLabel(st.pinned ? 'Закреплённые: удалить тоже' : 'Закреплённые: оставить')
+      .setEmoji('📌')
+      .setStyle(st.pinned ? ButtonStyle.Danger : ButtonStyle.Secondary),
+  );
+  const row3 = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder().setCustomId(clearId('go', userId, st, at)).setLabel(e.deletable ? 'Да, очистить' : 'Удалять нечего').setEmoji('🧹').setStyle(ButtonStyle.Danger).setDisabled(!e.deletable),
+    new ButtonBuilder().setCustomId(clearId('no', userId, st, at)).setLabel('Отмена').setStyle(ButtonStyle.Secondary),
+  );
+  return { embeds: [embed], components: [row1, row2, row3] };
+}
+
+const stopRow = (channelId: string, danger = false) =>
+  new ActionRowBuilder<ButtonBuilder>().addComponents(new ButtonBuilder().setCustomId(stopId(channelId)).setLabel('Остановить').setEmoji('⏹️').setStyle(danger ? ButtonStyle.Danger : ButtonStyle.Secondary));
+
+function countdownView(channelId: string, left: number) {
+  const e = new EmbedBuilder()
+    .setColor(COLORS.warn)
+    .setTitle(`⏳ Старт через ${left}…`)
+    .setDescription('Передумали? Нажмите «Остановить», пока ничего не удалено.')
+    .setFooter(footerOf('Очистка'));
+  return { embeds: [e], components: [stopRow(channelId, true)] };
+}
+
+function progressView(channelId: string, total: number, deleted: number, elapsed: number) {
+  const speed = speedText(deleted, elapsed);
+  const eta = etaText(deleted, total, elapsed);
   const e = new EmbedBuilder()
     .setColor(getStyle().accent)
     .setTitle('🧹 Очищаю канал…')
-    .setDescription(count ? `${bar10(Math.min(1, deleted / count))} **${deleted}** из ${count}` : `Удалено: **${messages(deleted)}**`)
-    .addFields({ name: 'Прошло', value: durationText(elapsed), inline: true })
+    .setDescription(total ? `${bar10(Math.min(1, deleted / total))} **${deleted}** из ${total}` : `Удалено: **${messages(deleted)}**`)
+    .addFields({ name: '⏱️ Прошло', value: durationText(elapsed), inline: true })
     .setFooter(footerOf('Очистка'));
-  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(new ButtonBuilder().setCustomId(stopId(channelId)).setLabel('Остановить').setEmoji('⏹️').setStyle(ButtonStyle.Secondary));
-  return { embeds: [e], components: [row] };
+  if (speed) e.addFields({ name: '⚡ Скорость', value: speed, inline: true });
+  if (eta) e.addFields({ name: '🏁 Осталось', value: eta, inline: true });
+  return { embeds: [e], components: [stopRow(channelId)] };
 }
 
 interface Totals { deleted: number; pinned: number; old: number }
+type Outcome = 'ok' | 'stopped' | 'error';
 
-function doneEmbed(t: Totals, elapsed: number, stopped: boolean, count: number) {
-  const e = new EmbedBuilder()
-    .setColor(t.deleted ? COLORS.ok : getStyle().accent)
-    .setTitle(t.deleted ? (stopped ? '⏹️ Остановлено' : '✨ Канал очищен') : 'Удалять было нечего')
-    .setFooter(footerOf('Очистка'));
-  if (t.deleted) e.setDescription(`Удалено: **${messages(t.deleted)}** за ${durationText(elapsed)}.${count && t.deleted < count && !stopped ? '\nВ канале больше нет сообщений, которые можно удалить.' : ''}`);
-  else e.setDescription('В канале нет сообщений, которые можно удалить.');
+function resultEmbed(t: Totals, elapsed: number, outcome: Outcome, st: ClearState, reason = '') {
+  const color = outcome === 'error' ? COLORS.bad : outcome === 'stopped' ? COLORS.warn : t.deleted ? COLORS.ok : getStyle().accent;
+  const title = outcome === 'error' ? '❌ Очистка прервана' : outcome === 'stopped' ? '⏹️ Остановлено' : t.deleted ? '✨ Канал очищен' : 'Удалять было нечего';
+  const e = new EmbedBuilder().setColor(color).setTitle(title).setFooter(footerOf('Очистка'));
+  e.setDescription(t.deleted ? `Удалено **${messages(t.deleted)}** за ${durationText(elapsed)}${st.target ? ` (${who(st)})` : ''}.` : 'В канале нет сообщений, которые можно удалить.');
+  const speed = speedText(t.deleted, elapsed);
+  if (speed) e.addFields({ name: '⚡ Скорость', value: speed, inline: true });
   if (t.pinned) e.addFields({ name: '📌 Закреплённых оставлено', value: String(t.pinned), inline: true });
-  if (t.old) e.addFields({ name: '⏳ Старше 14 дней', value: `${t.old}+ осталось: Discord не удаляет такие пачкой`, inline: true });
+  if (t.old) e.addFields({ name: '⏳ Старше 14 дней', value: `${t.old}+ осталось: Discord не удаляет такие пачкой` });
+  if (reason) e.addFields({ name: 'Причина', value: reason.slice(0, 500) });
   return e;
 }
 
-const noPerm = (text: string) => ({ ...replyEmbed('Недостаточно прав', text, COLORS.bad), flags: EPHEMERAL });
+const noPerm = (text: string) => ({ ...replyEmbed('Недостаточно прав', text, COLORS.bad), ...empty() });
+
+/** everything that can forbid a cleaning of this channel; a text for the person, or null when it is allowed */
+async function forbidden(i: ChatInputCommandInteraction | ButtonInteraction, ch: Cleanable | null): Promise<{ title: string; text: string; mod?: undefined } | { mod: Moderation; title?: undefined; text?: undefined }> {
+  if (!i.guild || !ch) return { title: 'Только на сервере', text: 'Команда работает в канале Discord-сервера.' };
+  if (!i.memberPermissions?.has(PermissionFlagsBits.ManageMessages)) return { title: 'Недостаточно прав', text: 'Очищать чат могут участники с правом «Управлять сообщениями».' };
+  if (i.appPermissions && !i.appPermissions.has(NEED)) return { title: 'Недостаточно прав', text: NEED_TEXT };
+  const r = await backendJson<unknown>('/internal/moderation').catch(() => null);
+  const mod = r?.ok ? readModeration(r.data) : null;
+  // the panel decides what is protected: without its answer nothing is cleaned
+  if (!mod) return { title: 'Панель не отвечает', text: 'Не удалось получить настройки модерации. Попробуйте ещё раз чуть позже.' };
+  if (!mod.enabled) return { title: 'Команда выключена', text: 'Администратор отключил `/clear` в панели (Discord → Модерация).' };
+  if (mod.protectedChannels.includes(ch.id)) return { title: 'Канал защищён', text: `Канал <#${ch.id}> отмечен в панели как защищённый: очищать его нельзя.` };
+  if (running.has(ch.id)) return { title: 'Уже идёт', text: 'В этом канале очистка уже выполняется.' };
+  const wait = cooldownLeft(lastDone.get(ch.id), mod.cooldown, Date.now());
+  if (wait) return { title: 'Подождите немного', text: `Этот канал только что очищали. Следующая очистка через ${waitText(wait)}.` };
+  return { mod };
+}
+
+const asChannel = (i: ChatInputCommandInteraction | ButtonInteraction) => (i.channel && typeof (i.channel as unknown as Cleanable).bulkDelete === 'function' ? (i.channel as unknown as Cleanable) : null);
 
 export async function handleClearCommand(i: ChatInputCommandInteraction): Promise<void> {
   try {
-    if (!i.guild || !i.channel) {
-      await i.reply({ ...replyEmbed('Только на сервере', 'Команда работает в канале Discord-сервера.', COLORS.warn), flags: EPHEMERAL });
+    await i.deferReply({ flags: EPHEMERAL });
+    const ch = asChannel(i);
+    const f = await forbidden(i, ch);
+    if (!f.mod || !ch) {
+      await i.editReply(replyEmbed(f.title ?? 'Сюда нельзя', f.text ?? 'В этом канале очистка не поддерживается.', f.title === 'Уже идёт' || f.title === 'Подождите немного' ? COLORS.warn : COLORS.bad));
       return;
     }
-    if (!i.memberPermissions?.has(PermissionFlagsBits.ManageMessages)) {
-      await i.reply(noPerm('Очищать чат могут участники с правом «Управлять сообщениями».'));
-      return;
-    }
-    if (i.appPermissions && !i.appPermissions.has(NEED)) {
-      await i.reply(noPerm('Боту нужны в этом канале права «Просмотр канала», «Читать историю сообщений» и «Управлять сообщениями». Выдайте их роли бота или пригласите бота заново по ссылке из панели.'));
-      return;
-    }
-    if (running.has(i.channel.id)) {
-      await i.reply({ ...replyEmbed('Уже идёт', 'В этом канале очистка уже выполняется.', COLORS.warn), flags: EPHEMERAL });
-      return;
-    }
-    const count = normalizeCount(i.options.getInteger('count'));
-    await i.reply({ ...confirmView(i.channel.id, i.user.id, count, Date.now()), flags: EPHEMERAL });
+    const st: ClearState = { count: normalizeCount(i.options.getInteger('count')), pinned: false, target: i.options.getUser('user')?.id ?? '' };
+    const s = await scan(ch, true);
+    await i.editReply(confirmView(ch.id, i.user.id, st, Date.now(), estimate(s.list, s.complete, Date.now(), st)));
   } catch (e) {
     log('/clear failed:', (e as Error).message);
-    await i.reply({ ...replyEmbed('Не получилось', humanDiscordError(e), COLORS.bad), flags: EPHEMERAL }).catch(() => undefined);
+    await i.editReply(replyEmbed('Не получилось', humanDiscordError(e), COLORS.bad)).catch(() => undefined);
   }
 }
 
@@ -116,11 +207,11 @@ export async function handleClearButton(i: ButtonInteraction): Promise<void> {
   if (!p) return;
   try {
     if (!i.memberPermissions?.has(PermissionFlagsBits.ManageMessages)) {
-      await i.reply(noPerm('Нужно право «Управлять сообщениями».'));
+      await i.reply({ ...noPerm('Нужно право «Управлять сообщениями».'), flags: EPHEMERAL });
       return;
     }
     if (p.action === 'stop') {
-      const r = running.get(String(p.userId));
+      const r = running.get(p.userId);
       if (r) r.stop = true;
       await i.deferUpdate();
       return;
@@ -137,7 +228,20 @@ export async function handleClearButton(i: ButtonInteraction): Promise<void> {
       await i.update({ ...replyEmbed('Время вышло', 'Подтверждение устарело. Наберите `/clear` ещё раз.', COLORS.warn), ...empty() });
       return;
     }
-    await run(i, p.count);
+    await i.deferUpdate();
+    const ch = asChannel(i);
+    const f = await forbidden(i, ch);
+    if (!f.mod || !ch) {
+      await i.editReply({ ...replyEmbed(f.title ?? 'Сюда нельзя', f.text ?? 'В этом канале очистка не поддерживается.', COLORS.bad), ...empty() });
+      return;
+    }
+    const st: ClearState = { count: p.count, pinned: p.pinned, target: p.target };
+    if (p.action === 'set') {
+      const s = await scan(ch);
+      await i.editReply(confirmView(ch.id, p.userId, st, p.at, estimate(s.list, s.complete, Date.now(), st)));
+      return;
+    }
+    await run(i, ch, st, f.mod);
   } catch (e) {
     log('/clear button failed:', (e as Error).message);
     const out = { ...replyEmbed('Не получилось', humanDiscordError(e), COLORS.bad), ...empty() };
@@ -145,61 +249,100 @@ export async function handleClearButton(i: ButtonInteraction): Promise<void> {
   }
 }
 
-async function run(i: ButtonInteraction, count: number): Promise<void> {
-  const ch = i.channel as unknown as Cleanable | null;
-  if (!ch || typeof ch.bulkDelete !== 'function') {
-    await i.update({ ...replyEmbed('Сюда нельзя', 'В этом канале очистка не поддерживается.', COLORS.bad), ...empty() });
-    return;
-  }
-  if (running.has(ch.id)) {
-    await i.update({ ...replyEmbed('Уже идёт', 'В этом канале очистка уже выполняется.', COLORS.warn), ...empty() });
-    return;
-  }
+async function run(i: ButtonInteraction, ch: Cleanable, st: ClearState, mod: Moderation): Promise<void> {
   const state = { stop: false };
   running.set(ch.id, state);
-  const started = Date.now();
+  const cached = scans.get(ch.id);
+  const total = expectedTotal(cached ? estimate(cached.list, cached.complete, Date.now(), st) : null, st.count);
   const t: Totals = { deleted: 0, pinned: 0, old: 0 };
-  let failure: unknown = null;
+  let started = Date.now();
+  let outcome: Outcome = 'ok';
+  let reason = '';
   try {
-    await i.update(progressView(ch.id, count, 0, 0));
+    // a pause to change one's mind
+    for (let left = COUNTDOWN_SECONDS; left > 0 && !state.stop; left--) {
+      await i.editReply(countdownView(ch.id, left)).catch(() => undefined);
+      await sleep(1000);
+    }
+    started = Date.now();
+    if (!state.stop) await i.editReply(progressView(ch.id, total, 0, 0)).catch(() => undefined);
     let cursor: string | undefined;
     let shown = 0;
     while (!state.stop && Date.now() - started < MAX_RUN_MS) {
-      const room = count ? count - t.deleted : Infinity;
+      const room = st.count ? st.count - t.deleted : Infinity;
       if (room <= 0) break;
-      const page = [...(await ch.messages.fetch({ limit: 100, ...(cursor ? { before: cursor } : {}) })).values()];
-      if (!page.length) break;
-      cursor = page.reduce((a, b) => (b.createdTimestamp < a.createdTimestamp ? b : a)).id;
-      const s = sortPage(page, Date.now(), room);
+      const raw = [...(await ch.messages.fetch({ limit: 100, ...(cursor ? { before: cursor } : {}) })).values()];
+      if (!raw.length) break;
+      cursor = oldestId(raw);
+      const s = sortPage(raw.map(toLike), Date.now(), st, room);
       t.pinned += s.pinned;
       t.old += s.old;
       if (s.del.length) t.deleted += (await ch.bulkDelete(s.del, true)).size;
       // newest first: once an old message is met, everything after it is old as well
-      if (s.old > 0 || page.length < 100) break;
+      if (s.old > 0 || raw.length < 100) break;
       if (Date.now() - shown > 2000) {
         shown = Date.now();
-        await i.editReply(progressView(ch.id, count, t.deleted, Date.now() - started)).catch(() => undefined);
+        await i.editReply(progressView(ch.id, total, t.deleted, Date.now() - started)).catch(() => undefined);
       }
     }
+    if (state.stop) outcome = 'stopped';
   } catch (e) {
-    failure = e;
+    outcome = 'error';
+    const code = (e as { code?: number }).code;
+    reason = code === 50013 || code === 50001 ? NEED_TEXT : humanDiscordError(e);
     log('/clear run failed:', (e as Error).message);
   } finally {
     running.delete(ch.id);
+    scans.delete(ch.id);
+    if (t.deleted) lastDone.set(ch.id, Date.now());
   }
   const elapsed = Date.now() - started;
-  if (failure) {
-    const code = (failure as { code?: number }).code;
-    const text = code === 50013 || code === 50001 ? 'Боту не хватает прав в этом канале: нужны «Просмотр канала», «Читать историю сообщений» и «Управлять сообщениями».' : humanDiscordError(failure);
-    const e = doneEmbed(t, elapsed, true, count).setColor(COLORS.bad).setTitle('❌ Очистка прервана').addFields({ name: 'Причина', value: text.slice(0, 500) });
-    await i.editReply({ embeds: [e], ...empty() }).catch(() => undefined);
-    return;
-  }
-  await i.editReply({ embeds: [doneEmbed(t, elapsed, state.stop, count)], ...empty() }).catch(() => undefined);
-  // a short notice for everybody in the channel; it removes itself
-  if (t.deleted && ch.send) {
-    const n = new EmbedBuilder().setColor(getStyle().accent).setDescription(`🧹 <@${i.user.id}> очистил(а) канал: удалено **${messages(t.deleted)}**.`).setFooter(footerOf('Очистка'));
-    const sent = await ch.send({ embeds: [n], allowedMentions: { parse: [] } }).catch(() => null);
-    if (sent) setTimeout(() => void sent.delete().catch(() => undefined), 15_000);
+  await i.editReply({ embeds: [resultEmbed(t, elapsed, outcome, st, reason)], ...empty() }).catch(() => undefined);
+  await Promise.all([notice(i, ch, t, st), record(i, mod, ch, t, elapsed, outcome, st, reason)]);
+}
+
+/** a short notice for everybody in the channel; it removes itself */
+async function notice(i: ButtonInteraction, ch: Cleanable, t: Totals, st: ClearState): Promise<void> {
+  if (!t.deleted || !ch.send) return;
+  const style = getStyle();
+  const n = new EmbedBuilder()
+    .setColor(style.accent)
+    .setAuthor({ name: (i.user.globalName ?? i.user.username).slice(0, 100), iconURL: i.user.displayAvatarURL({ size: 64 }) })
+    .setTitle('🧹 Канал очищен')
+    .setDescription(pickLine(Math.random()))
+    .addFields({ name: 'Удалено', value: messages(t.deleted), inline: true }, { name: 'Кто убрался', value: `<@${i.user.id}>`, inline: true })
+    .setFooter(footerOf('Очистка'));
+  if (st.target) n.addFields({ name: 'Чьи сообщения', value: `<@${st.target}>`, inline: true });
+  if (style.logoUrl) n.setThumbnail(style.logoUrl);
+  const sent = await ch.send({ embeds: [n], allowedMentions: { parse: [] } }).catch(() => null);
+  if (sent) setTimeout(() => void sent.delete().catch(() => undefined), 15_000);
+}
+
+/** a record in the log channel of the panel */
+async function record(i: ButtonInteraction, mod: Moderation, ch: Cleanable, t: Totals, elapsed: number, outcome: Outcome, st: ClearState, reason: string): Promise<void> {
+  if (!mod.logChannelId || (!t.deleted && outcome !== 'error')) return;
+  try {
+    const target = (await i.client.channels.fetch(mod.logChannelId)) as unknown as { send?: (o: unknown) => Promise<unknown> } | null;
+    if (!target?.send) return;
+    const e = new EmbedBuilder()
+      .setColor(outcome === 'error' ? COLORS.bad : outcome === 'stopped' ? COLORS.warn : COLORS.ok)
+      .setTitle('🧹 Очистка канала')
+      .setThumbnail(i.user.displayAvatarURL({ size: 64 }))
+      .addFields(
+        { name: 'Модератор', value: `<@${i.user.id}> (${i.user.username})`, inline: true },
+        { name: 'Канал', value: `<#${ch.id}>`, inline: true },
+        { name: 'Итог', value: outcome === 'ok' ? 'завершено' : outcome === 'stopped' ? 'остановлено' : 'ошибка', inline: true },
+        { name: 'Удалено', value: String(t.deleted), inline: true },
+        { name: 'Время', value: durationText(elapsed), inline: true },
+        { name: 'Что просили', value: `${st.count ? `последние ${st.count}` : 'весь чат'}${st.target ? `, только <@${st.target}>` : ''}${st.pinned ? ', включая закреплённые' : ''}`, inline: false },
+      )
+      .setTimestamp(new Date())
+      .setFooter(footerOf('Журнал'));
+    if (t.pinned) e.addFields({ name: '📌 Закреплённых оставлено', value: String(t.pinned), inline: true });
+    if (t.old) e.addFields({ name: '⏳ Старше 14 дней', value: `${t.old}+`, inline: true });
+    if (reason) e.addFields({ name: 'Причина', value: reason.slice(0, 500) });
+    await target.send({ embeds: [e], allowedMentions: { parse: [] } });
+  } catch (e) {
+    log('/clear log record failed:', (e as Error).message);
   }
 }
