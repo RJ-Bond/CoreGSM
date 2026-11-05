@@ -151,3 +151,5 @@ a.tile:active, a.panel:active, button.tile:active, [role='link'].tile:active { t
 .start-chain > li.is-current .start-chain-name { color: rgb(var(--ink)); }
 .adm-group-title { font-size: var(--fs-xs); color: rgb(var(--ink) / .62); letter-spacing: .08em; }
 .adm-badge { min-width: 1.25rem; }
+
+.cm-hero-stats dd .cm-delta { display: flex; margin-top: 2px; font-weight: 800; }

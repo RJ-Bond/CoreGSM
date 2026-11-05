@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="6f611d8b0516"
+COREGSM_BUILD="b799692ebe49"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.16"
+COREGSM_VERSION="1.1.17"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -143864,13 +143864,12 @@ export default function CommunityPage() {
           {c.series.length > 2 && <div className="cm-chart-ticks" aria-hidden><span>{t('cm.ticks.ago')}</span><span>{t('cm.ticks.now')}</span></div>}
         </div>
         <dl className="cm-hero-stats">
-          <div><dt>{t('cm.st.day')}</dt><dd><AnimatedNumber value={c.players.day} /><small className="cm-unit">{t('cm.st.unit')}</small></dd><Delta now={c.players.day} prev={c.players.prev.day} /></div>
-          <div><dt>{t('cm.st.week')}</dt><dd><AnimatedNumber value={c.players.week} /><small className="cm-unit">{t('cm.st.unit')}</small></dd><Delta now={c.players.week} prev={c.players.prev.week} /></div>
-          <div><dt>{t('cm.st.month')}</dt><dd><AnimatedNumber value={c.players.month} /><small className="cm-unit">{t('cm.st.unit')}</small></dd><Delta now={c.players.month} prev={c.players.prev.month} /></div>
+          <div><dt>{t('cm.st.day')}</dt><dd><AnimatedNumber value={c.players.day} /><small className="cm-unit">{t('cm.st.unit')}</small><Delta now={c.players.day} prev={c.players.prev.day} /></dd></div>
+          <div><dt>{t('cm.st.week')}</dt><dd><AnimatedNumber value={c.players.week} /><small className="cm-unit">{t('cm.st.unit')}</small><Delta now={c.players.week} prev={c.players.prev.week} /></dd></div>
+          <div><dt>{t('cm.st.month')}</dt><dd><AnimatedNumber value={c.players.month} /><small className="cm-unit">{t('cm.st.unit')}</small><Delta now={c.players.month} prev={c.players.prev.month} /></dd></div>
           <div>
             <dt>{t('cm.st.new')}</dt>
-            <dd>{c.players.newWeek > 0 ? <button type="button" className="cm-stat-link" onClick={() => showFeed('new')} title={t('cm.st.newShow')}><AnimatedNumber value={c.players.newWeek} /></button> : 0}</dd>
-            <Delta now={c.players.newWeek} prev={c.players.prev.newWeek} />
+            <dd>{c.players.newWeek > 0 ? <button type="button" className="cm-stat-link" onClick={() => showFeed('new')} title={t('cm.st.newShow')}><AnimatedNumber value={c.players.newWeek} /></button> : 0}<Delta now={c.players.newWeek} prev={c.players.prev.newWeek} /></dd>
           </div>
         </dl>
       </section>
@@ -155434,6 +155433,8 @@ a.tile:active, a.panel:active, button.tile:active, [role='link'].tile:active { t
 .start-chain > li.is-current .start-chain-name { color: rgb(var(--ink)); }
 .adm-group-title { font-size: var(--fs-xs); color: rgb(var(--ink) / .62); letter-spacing: .08em; }
 .adm-badge { min-width: 1.25rem; }
+
+.cm-hero-stats dd .cm-delta { display: flex; margin-top: 2px; font-weight: 800; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/profile.css" << '__COREGSM_EOF__'

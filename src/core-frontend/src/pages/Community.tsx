@@ -542,13 +542,12 @@ export default function CommunityPage() {
           {c.series.length > 2 && <div className="cm-chart-ticks" aria-hidden><span>{t('cm.ticks.ago')}</span><span>{t('cm.ticks.now')}</span></div>}
         </div>
         <dl className="cm-hero-stats">
-          <div><dt>{t('cm.st.day')}</dt><dd><AnimatedNumber value={c.players.day} /><small className="cm-unit">{t('cm.st.unit')}</small></dd><Delta now={c.players.day} prev={c.players.prev.day} /></div>
-          <div><dt>{t('cm.st.week')}</dt><dd><AnimatedNumber value={c.players.week} /><small className="cm-unit">{t('cm.st.unit')}</small></dd><Delta now={c.players.week} prev={c.players.prev.week} /></div>
-          <div><dt>{t('cm.st.month')}</dt><dd><AnimatedNumber value={c.players.month} /><small className="cm-unit">{t('cm.st.unit')}</small></dd><Delta now={c.players.month} prev={c.players.prev.month} /></div>
+          <div><dt>{t('cm.st.day')}</dt><dd><AnimatedNumber value={c.players.day} /><small className="cm-unit">{t('cm.st.unit')}</small><Delta now={c.players.day} prev={c.players.prev.day} /></dd></div>
+          <div><dt>{t('cm.st.week')}</dt><dd><AnimatedNumber value={c.players.week} /><small className="cm-unit">{t('cm.st.unit')}</small><Delta now={c.players.week} prev={c.players.prev.week} /></dd></div>
+          <div><dt>{t('cm.st.month')}</dt><dd><AnimatedNumber value={c.players.month} /><small className="cm-unit">{t('cm.st.unit')}</small><Delta now={c.players.month} prev={c.players.prev.month} /></dd></div>
           <div>
             <dt>{t('cm.st.new')}</dt>
-            <dd>{c.players.newWeek > 0 ? <button type="button" className="cm-stat-link" onClick={() => showFeed('new')} title={t('cm.st.newShow')}><AnimatedNumber value={c.players.newWeek} /></button> : 0}</dd>
-            <Delta now={c.players.newWeek} prev={c.players.prev.newWeek} />
+            <dd>{c.players.newWeek > 0 ? <button type="button" className="cm-stat-link" onClick={() => showFeed('new')} title={t('cm.st.newShow')}><AnimatedNumber value={c.players.newWeek} /></button> : 0}<Delta now={c.players.newWeek} prev={c.players.prev.newWeek} /></dd>
           </div>
         </dl>
       </section>
