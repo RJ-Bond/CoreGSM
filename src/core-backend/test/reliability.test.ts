@@ -89,6 +89,7 @@ describe('poll pool', () => {
 // ---------------------------------------------------------------- in-process: database, poll, maintenance
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'coregsm-rel-'));
 process.env.JWT_SECRET ||= 'j'.repeat(48);
+process.env.INTERNAL_TOKEN ||= 'i'.repeat(48);
 process.env.DB_PATH = path.join(tmp, 'coregsm.db');
 process.env.NODE_ENV = 'test';
 const { db, setSetting } = await import('../src/db.ts');

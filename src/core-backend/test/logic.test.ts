@@ -6,6 +6,7 @@ import { describe, it } from 'node:test';
 
 // the modules open the database on import: point them at a throw-away one first
 process.env.JWT_SECRET ||= 'j'.repeat(48);
+process.env.INTERNAL_TOKEN ||= 'i'.repeat(48);
 process.env.DB_PATH = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'coregsm-logic-')), 'coregsm.db');
 const del = await import('../src/alerts/deliveries.ts');
 const subs = await import('../src/community/subscriptions.ts');

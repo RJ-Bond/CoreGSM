@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { api } from '../api';
 import { t, useI18n } from '../i18n';
 import { Button, Section, Switch, fail, toast } from '../ui';
@@ -32,7 +32,7 @@ export default function ModerationCard() {
   const [picking, setPicking] = useState<'' | 'log' | 'appeal'>('');
   const [busy, setBusy] = useState(false);
 
-  const load = (r: Moderation) => {
+  const load = useCallback((r: Moderation) => {
     setM(r);
     setCool(String(r.cooldown));
     setTtl(String(r.warnTtlDays));
@@ -40,13 +40,13 @@ export default function ModerationCard() {
     setMuteMin(String(r.muteMinutes));
     setKickAt(String(r.kickAt));
     setReasons(r.reasons.join('\n'));
-  };
+  }, []);
 
   useEffect(() => {
     let alive = true;
     api<Moderation>('/settings/moderation').then((r) => { if (alive) load(r); }).catch(() => undefined);
     return () => { alive = false; };
-  }, []);
+  }, [load]);
   if (!m) return null;
 
   const save = async (patch: Patch) => {

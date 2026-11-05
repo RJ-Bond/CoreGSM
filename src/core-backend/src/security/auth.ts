@@ -9,6 +9,7 @@ import { db, getSetting } from '../db.js';
 import { safeEqual } from '../http.js';
 import { guardDelete, guardGet, guardSet } from './loginGuard.js';
 import { uaLabel } from '../profile/profile.js';
+import { discordAvatarUrl } from '../images/avatars.js';
 import { readSessionCookie } from './security.js';
 
 // a real bcrypt hash (cost 12) to compare against when the login does not exist: the response time stays the same
@@ -218,7 +219,7 @@ export const resetAttempts = (ip: string | undefined) => guardDelete('attempts',
 
 // ---------- the signed-in user: profile, password, sessions, Discord account ----------
 export interface UserFull { id: number; username: string; role: Role; password_hash: string; no_password: number; discord_id: string | null; discord_name: string | null; discord_avatar: string | null; email?: string | null; email_verified?: number }
-export const avatarUrl = (u: UserFull) => (u.discord_id && u.discord_avatar ? `https://cdn.discordapp.com/avatars/${u.discord_id}/${u.discord_avatar}.png?size=64` : null);
+export const avatarUrl = (u: UserFull) => discordAvatarUrl(u.id, u.discord_id, u.discord_avatar);
 
 // ---------- internal (bot only, not exposed by nginx) ----------
 export function internal(req: Request, res: Response, next: NextFunction) {

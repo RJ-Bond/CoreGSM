@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="899697fe020b"
+COREGSM_BUILD="a6cbd5e8a0bf"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.52"
+COREGSM_VERSION="1.1.53"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -22643,6 +22643,70 @@ export interface BindingRow {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/discord"
+  cat > "$APP_DIR/core-backend/src/discord/avatarSync.ts" << '__COREGSM_EOF__'
+/**
+ * Keeps the Discord pictures of linked accounts fresh: a person changes the avatar in Discord, the panel learns about it
+ * within hours (until now only at a sign-in or /register), and a copy is stored on our side (see images/avatars.ts).
+ * Asks Discord for the user with the bot token, a few accounts per minute, going round all of them.
+ */
+import { db, getSetting, setSetting } from '../db.js';
+import { mirrorDiscordAvatar } from '../images/avatars.js';
+import { log } from '../logger.js';
+import { nextBatch } from './avatarSyncLogic.js';
+import { discordFetch } from '../security/proxyFetch.js';
+
+const PER_RUN = 20;
+const EVERY_MS = 60_000;
+
+export async function syncAvatars(): Promise<number> {
+  const token = getSetting('discord_token');
+  if (!token) return 0;
+  const rows = db.prepare("SELECT id, discord_id, discord_avatar FROM users WHERE discord_id IS NOT NULL AND discord_id != '' AND status = 'active'").all() as { id: number; discord_id: string; discord_avatar: string | null }[];
+  if (!rows.length) return 0;
+  const batch = nextBatch(rows, Number(getSetting('avatar_sync_cursor') ?? 0) || 0, PER_RUN);
+  let changed = 0;
+  for (const u of batch) {
+    try {
+      const r = await discordFetch(`https://discord.com/api/v10/users/${u.discord_id}`, { headers: { Authorization: `Bot ${token}` } });
+      if (r.status === 429) break;
+      if (r.ok) {
+        const me = (await r.json()) as { avatar?: string | null };
+        const hash = me.avatar ?? null;
+        if (hash !== u.discord_avatar) {
+          db.prepare('UPDATE users SET discord_avatar = ? WHERE id = ?').run(hash, u.id);
+          changed++;
+        }
+        if (hash) await mirrorDiscordAvatar(u.id, u.discord_id, hash);
+      }
+    } catch (e) {
+      log.warn('Discord avatar sync failed', (e as Error).message);
+      break;
+    }
+    setSetting('avatar_sync_cursor', String(u.id));
+    await new Promise((res) => setTimeout(res, 400));
+  }
+  if (batch.length && batch[batch.length - 1]!.id === Math.max(...rows.map((x) => x.id))) setSetting('avatar_sync_cursor', '0');
+  return changed;
+}
+
+export function startAvatarSync(): void {
+  const tick = () => void syncAvatars().catch((e) => log.warn('avatar sync', (e as Error).message));
+  setTimeout(tick, 90_000).unref();
+  setInterval(tick, EVERY_MS).unref();
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/discord"
+  cat > "$APP_DIR/core-backend/src/discord/avatarSyncLogic.ts" << '__COREGSM_EOF__'
+/** Which accounts the avatar sync visits next. Pure. */
+
+/** the next users of a round: those after `cursor` (by id), then from the start */
+export function nextBatch<T extends { id: number }>(rows: T[], cursor: number, n: number): T[] {
+  const sorted = [...rows].sort((a, b) => a.id - b.id);
+  const after = sorted.filter((r) => r.id > cursor);
+  return [...after, ...sorted.filter((r) => r.id <= cursor)].slice(0, n);
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/discord"
   cat > "$APP_DIR/core-backend/src/discord/botExtras.ts" << '__COREGSM_EOF__'
 /**
  * More for the bot:
@@ -23817,6 +23881,8 @@ import express, { type Express, type RequestHandler } from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
 import skia from 'skia-canvas';
+import { discordFetch } from '../security/proxyFetch.js';
+import { log } from '../logger.js';
 
 const { Canvas, loadImage } = skia;
 
@@ -23835,9 +23901,49 @@ export function customAvatarUrl(userId: number): string | null {
   }
 }
 
+const HASH = /^[a-z0-9_]{1,64}$/i;
+const mirrorFile = (userId: number, hash: string) => path.join(DIR, `d${Math.trunc(userId)}_${hash}.png`);
+const inFlight = new Set<string>();
+
+/**
+ * Copies the Discord picture of a user to our own storage, so that browsers that cannot reach Discord's CDN (it is blocked in
+ * some countries) still see it. The request goes through the same proxy as the bot. True when the copy exists afterwards.
+ */
+export async function mirrorDiscordAvatar(userId: number, discordId: string, hash: string): Promise<boolean> {
+  if (!HASH.test(hash) || !/^\d{15,25}$/.test(discordId)) return false;
+  const f = mirrorFile(userId, hash);
+  if (fs.existsSync(f)) return true;
+  const key = `${userId}:${hash}`;
+  if (inFlight.has(key)) return false;
+  inFlight.add(key);
+  try {
+    const r = await discordFetch(`https://cdn.discordapp.com/avatars/${discordId}/${hash}.png?size=256`, { timeoutMs: 15_000 });
+    if (!r.ok) return false;
+    const buf = Buffer.from(await r.arrayBuffer());
+    if (buf.length < 100 || buf.length > 2 * 1024 * 1024 || imageProblem(buf)) return false;
+    fs.writeFileSync(f, buf, { mode: 0o644 });
+    // older copies of the same user are not needed any more
+    for (const n of fs.readdirSync(DIR)) if (n.startsWith(`d${Math.trunc(userId)}_`) && n !== path.basename(f)) fs.rmSync(path.join(DIR, n), { force: true });
+    return true;
+  } catch (e) {
+    log.warn('Discord avatar copy failed', (e as Error).message);
+    return false;
+  } finally {
+    inFlight.delete(key);
+  }
+}
+
+/** the Discord picture of the user: our copy when there is one (and a copy is started when there is not), otherwise Discord's own address */
+export function discordAvatarUrl(userId: number, discordId: string | null, hash: string | null): string | null {
+  if (!discordId || !hash || !HASH.test(hash)) return null;
+  if (fs.existsSync(mirrorFile(userId, hash))) return `/api/avatars/d${Math.trunc(userId)}_${hash}.png`;
+  void mirrorDiscordAvatar(userId, discordId, hash);
+  return `https://cdn.discordapp.com/avatars/${discordId}/${hash}.png?size=64`;
+}
+
 /** the picture of a user: the uploaded one first, then the linked Discord account's, otherwise null */
 export function avatarFor(u: { id: number; discord_id: string | null; discord_avatar: string | null }): string | null {
-  return customAvatarUrl(u.id) ?? (u.discord_id && u.discord_avatar ? `https://cdn.discordapp.com/avatars/${u.discord_id}/${u.discord_avatar}.png?size=64` : null);
+  return customAvatarUrl(u.id) ?? discordAvatarUrl(u.id, u.discord_id, u.discord_avatar);
 }
 
 export function removeAvatar(userId: number): void {
@@ -23881,11 +23987,14 @@ export function registerAvatars(deps: { app: Express; auth: RequestHandler; user
   });
 
   app.get('/api/avatars/:file', (req, res, next) => {
-    const m = /^(\d{1,9})\.png$/.exec(String(req.params.file));
-    if (!m) return res.status(404).end();
-    const f = fileOf(Number(m[1]));
+    const file = String(req.params.file);
+    const m = /^(\d{1,9})\.png$/.exec(file);
+    const d = /^d(\d{1,9})_([a-z0-9_]{1,64})\.png$/i.exec(file);
+    if (!m && !d) return res.status(404).end();
+    const f = m ? fileOf(Number(m[1])) : mirrorFile(Number(d![1]), d![2]!);
     if (!fs.existsSync(f)) return res.status(404).end();
-    sendImage(req, res, f, 'image/png', 'public, max-age=86400').catch(next);
+    // a copy of a Discord picture never changes (the hash is in the name), the uploaded one can
+    sendImage(req, res, f, 'image/png', d ? 'public, max-age=31536000, immutable' : 'public, max-age=86400').catch(next);
   });
 }
 __COREGSM_EOF__
@@ -25977,6 +26086,7 @@ import { registerBotExtras, startWeekly } from './discord/botExtras.js';
 import { registerFaq } from './community/faq.js';
 import { registerGiveaways } from './community/giveaways.js';
 import { registerVerify } from './community/verify.js';
+import { startAvatarSync } from './discord/avatarSync.js';
 import { registerRules } from './monitoring/rules.js';
 import { registerPolls } from './community/polls.js';
 import { registerDiscordGallery } from './discord/discordGallery.js';
@@ -26165,6 +26275,7 @@ registerFaq({ app, admin, internal });
 registerGiveaways({ app, admin, internal });
 registerVerify({ app, admin });
 startWeekly();
+startAvatarSync();
 registerModeration({ app, admin, internal });
 registerRules({ app, auth, admin });
 registerPolls({ app, auth, admin, internal });
@@ -35990,6 +36101,7 @@ import { db, getSetting } from '../db.js';
 import { safeEqual } from '../http.js';
 import { guardDelete, guardGet, guardSet } from './loginGuard.js';
 import { uaLabel } from '../profile/profile.js';
+import { discordAvatarUrl } from '../images/avatars.js';
 import { readSessionCookie } from './security.js';
 
 // a real bcrypt hash (cost 12) to compare against when the login does not exist: the response time stays the same
@@ -36199,7 +36311,7 @@ export const resetAttempts = (ip: string | undefined) => guardDelete('attempts',
 
 // ---------- the signed-in user: profile, password, sessions, Discord account ----------
 export interface UserFull { id: number; username: string; role: Role; password_hash: string; no_password: number; discord_id: string | null; discord_name: string | null; discord_avatar: string | null; email?: string | null; email_verified?: number }
-export const avatarUrl = (u: UserFull) => (u.discord_id && u.discord_avatar ? `https://cdn.discordapp.com/avatars/${u.discord_id}/${u.discord_avatar}.png?size=64` : null);
+export const avatarUrl = (u: UserFull) => discordAvatarUrl(u.id, u.discord_id, u.discord_avatar);
 
 // ---------- internal (bot only, not exposed by nginx) ----------
 export function internal(req: Request, res: Response, next: NextFunction) {
@@ -121151,7 +121263,7 @@ export default function MaintenanceChip({ m, glass = false, className = '' }: { 
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components"
   cat > "$APP_DIR/core-frontend/src/components/ModerationCard.tsx" << '__COREGSM_EOF__'
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { api } from '../api';
 import { t, useI18n } from '../i18n';
 import { Button, Section, Switch, fail, toast } from '../ui';
@@ -121185,7 +121297,7 @@ export default function ModerationCard() {
   const [picking, setPicking] = useState<'' | 'log' | 'appeal'>('');
   const [busy, setBusy] = useState(false);
 
-  const load = (r: Moderation) => {
+  const load = useCallback((r: Moderation) => {
     setM(r);
     setCool(String(r.cooldown));
     setTtl(String(r.warnTtlDays));
@@ -121193,13 +121305,13 @@ export default function ModerationCard() {
     setMuteMin(String(r.muteMinutes));
     setKickAt(String(r.kickAt));
     setReasons(r.reasons.join('\n'));
-  };
+  }, []);
 
   useEffect(() => {
     let alive = true;
     api<Moderation>('/settings/moderation').then((r) => { if (alive) load(r); }).catch(() => undefined);
     return () => { alive = false; };
-  }, []);
+  }, [load]);
   if (!m) return null;
 
   const save = async (patch: Patch) => {
