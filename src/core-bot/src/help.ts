@@ -40,6 +40,10 @@ export const HELP_CATEGORIES: HelpCategory[] = [
       ['/top', 'самые активные игроки за неделю или месяц'],
     ],
   },
+  {
+    id: 'mod', label: 'Модерация', emoji: '🛡️', title: 'Модерация (для тех, кто управляет сообщениями)',
+    lines: [['/clear', 'очистить чат в этом канале: с подтверждением, закреплённые остаются']],
+  },
 ];
 
 const row = (...b: ButtonBuilder[]) => new ActionRowBuilder<ButtonBuilder>().addComponents(...b);

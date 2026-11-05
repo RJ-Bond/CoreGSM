@@ -50,7 +50,8 @@ export function channelInfo(channelId: string): { channelName: string | null; gu
 }
 
 // View Channel + Send Messages + Embed Links + Attach Files + Manage Channels (counters) + Manage Roles (autoroles)
-const BOT_PERMISSIONS = 52224 + 16 + 268435456;
+// + Manage Messages (8192) + Read Message History (65536) for /clear
+const BOT_PERMISSIONS = 52224 + 16 + 268435456 + 8192 + 65536;
 
 /** The first segment of a bot token is the base64 of the bot user id (= application id). */
 export function clientIdFromToken(token: string | null): string | null {
@@ -77,6 +78,7 @@ export const BOT_COMMANDS = [
   { name: '/top', description: 'Самые активные игроки недели или месяца' },
   { name: '/servers', description: 'Список серверов: кнопки открывают карточку выбранного сервера (видно только вам)' },
   { name: '/roles', description: 'Выбрать себе роли в меню: можно взять и снять (видно только вам)' },
+  { name: '/clear', description: 'Очистить чат в этом канале: только для тех, кто может управлять сообщениями, с подтверждением кнопкой. Параметр: count' },
   { name: '/help', description: 'Что умеет бот: команды по разделам, кнопки переключают разделы (видно только вам)' },
 ];
 
