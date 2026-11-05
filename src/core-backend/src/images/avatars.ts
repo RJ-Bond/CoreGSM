@@ -2,6 +2,7 @@
  * User avatars uploaded in the profile. The picture is cropped to a square and stored as a 256 px PNG
  * (<data dir>/avatars/<user id>.png); it takes priority over the Discord avatar.
  */
+import { imageProblem } from './imageGuard.js';
 import { sendImage } from './imageSend.js';
 import express, { type Express, type RequestHandler } from 'express';
 import fs from 'node:fs';
@@ -46,6 +47,7 @@ export function registerAvatars(deps: { app: Express; auth: RequestHandler; user
     const body = req.body as Buffer;
     if (!Buffer.isBuffer(body) || body.length === 0) return res.status(400).json({ error: 'Нужна картинка PNG, JPG или WebP до 3 МБ' });
     try {
+      if (imageProblem(body)) throw new Error('size');
       const img = await loadImage(body);
       if (!img.width || !img.height || img.width > 8000 || img.height > 8000) throw new Error('size');
       const side = Math.min(img.width, img.height);

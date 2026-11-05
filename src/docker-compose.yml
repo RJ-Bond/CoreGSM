@@ -18,6 +18,14 @@ x-hardening-node: &hardening-node
     - no-new-privileges:true
   cap_drop:
     - ALL
+# the Node services also run with a read-only root filesystem: what they write goes to the data volume or to a small
+# memory disk (/tmp, the font cache), so a compromised process cannot change the program files or leave a tool behind
+x-readonly-node: &readonly-node
+  read_only: true
+  pids_limit: 512
+  tmpfs:
+    - /tmp:size=64m,mode=1777
+    - /home/node/.cache:size=32m,uid=1000,gid=1000,mode=755
 
 # Memory ceilings: a runaway process is stopped (and restarted) instead of taking the whole host down. Raise one in
 # .env when a large server needs more, e.g. BACKEND_MEM_LIMIT=3g. The backend decodes uploaded pictures (up to
@@ -30,7 +38,7 @@ services:
         HTTP_PROXY: ${BUILD_PROXY:-}
         HTTPS_PROXY: ${BUILD_PROXY:-}
         NO_PROXY: localhost,127.0.0.1
-    <<: *hardening-node
+    <<: [*hardening-node, *readonly-node]
     mem_limit: ${BACKEND_MEM_LIMIT:-1536m}
     init: true
     restart: unless-stopped
@@ -39,6 +47,8 @@ services:
     environment:
       PORT: "3000"
       DB_PATH: /data/coregsm.db
+      # archives that are built for a download go to the data volume, not into the memory disk of /tmp
+      TMPDIR: /data/tmp
       UPDATE_DIR: /update
       # public address of the panel: the trusted URL and the certificate check
       DOMAIN: ${DOMAIN}
@@ -65,7 +75,7 @@ services:
         HTTP_PROXY: ${BUILD_PROXY:-}
         HTTPS_PROXY: ${BUILD_PROXY:-}
         NO_PROXY: localhost,127.0.0.1
-    <<: *hardening-node
+    <<: [*hardening-node, *readonly-node]
     mem_limit: ${BOT_MEM_LIMIT:-512m}
     init: true
     restart: unless-stopped

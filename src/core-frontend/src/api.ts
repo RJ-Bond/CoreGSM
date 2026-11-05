@@ -387,6 +387,8 @@ export interface BackupInfo {
   /** masked */
   remoteUrl: string | null;
   encrypted: boolean;
+  /** the panel made the phrase itself and the owner has not confirmed yet that it is kept */
+  passphraseUnseen?: boolean;
   items: BackupItem[];
   lastRemote: { at: number; ok: boolean; error: string | null } | null;
   /** the last restore check: the newest copy opened like a restore would */

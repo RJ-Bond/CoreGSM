@@ -174,12 +174,29 @@ export async function renderProfileCard(d: ProfileCardData): Promise<Buffer> {
   return (await canvas.toBuffer('png')) as Buffer;
 }
 
+/** a picture is drawn once for five minutes: the drawing is the expensive part, a request for it must not be */
+const CACHE_MS = 5 * 60_000;
+const CACHE_MAX = 300;
+const cache = new Map<string, { at: number; buf: Buffer }>();
+export const profileCardCacheSize = (): number => cache.size;
+
 export function registerProfileCard(app: Express, limiter: (max: number) => RequestHandler): void {
   app.get('/api/u/:username/card.png', limiter(30), async (req: Request, res: Response, next: NextFunction) => {
     try {
       const d = profileCardData(String(req.params.username ?? ''));
       if (!d) return void res.status(404).end();
-      res.set({ 'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=300' }).send(await renderProfileCard(d));
+      const b = brand();
+      const key = `${b.name}|${b.color}|${JSON.stringify(d)}`;
+      const hit = cache.get(key);
+      let buf: Buffer;
+      if (hit && Date.now() - hit.at < CACHE_MS) buf = hit.buf;
+      else {
+        buf = await renderProfileCard(d);
+        // the oldest entries go first once the cache is full
+        if (cache.size >= CACHE_MAX) for (const k of [...cache.keys()].slice(0, cache.size - CACHE_MAX + 1)) cache.delete(k);
+        cache.set(key, { at: Date.now(), buf });
+      }
+      res.set({ 'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=300' }).send(buf);
     } catch (e) {
       next(e);
     }

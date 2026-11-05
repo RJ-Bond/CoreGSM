@@ -242,6 +242,7 @@ const errorsEn: Record<string, string> = {
   backup_not_found: 'Backup not found',
   backup_nothing_to_check: 'There are no backups yet: nothing to check',
   check_input: 'Check the entered data',
+  backup_phrase_seen: 'The phrase is already confirmed',
   api_allow_list: 'The address list: up to 20 entries, each an address or a network like 203.0.113.0/24',
   reauth_required: 'This is a protected action: confirm it with your password again',
   password_short_staff: 'An administrator or moderator password must be at least 12 characters long',

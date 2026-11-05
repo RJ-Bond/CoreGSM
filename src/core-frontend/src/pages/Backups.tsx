@@ -3,7 +3,7 @@ import { api, getToken, type BackupInfo, type BackupItem, fetchStepUp } from '..
 import { confirmDialog, promptDialog } from '../confirm';
 import { t, useI18n } from '../i18n';
 import { loadUnreadableSecrets, saveUnreadableSecrets, unreadableSecrets } from '../security';
-import { Button, ErrorLine, Field, IconDownload, LoadError, StateView, IconRestore, IconTrash, Section, Switch, fmtDateTime, ago, toast, errText } from '../ui';
+import { Button, ErrorLine, Field, IconDownload, LoadError, StateView, IconRestore, IconTrash, Section, Switch, fmtDateTime, ago, toast, errText, CopyButton } from '../ui';
 import { errorText } from '../apiErrors';
 import { BackupS3 } from '../components/BackupS3';
 
@@ -100,6 +100,17 @@ export default function BackupsCard() {
     setError('');
     try { await fn(); } catch (e) { setError(errText(e)); } finally { setBusy(null); }
   };
+
+  // the phrase the panel made for the copies: shown once (the password is asked first), then confirmed as kept
+  const [phrase, setPhrase] = useState('');
+  const showPhrase = () => guard('phrase', async () => {
+    setPhrase((await api<{ phrase: string }>('/backups-passphrase')).phrase);
+  });
+  const ackPhrase = () => guard('phraseAck', async () => {
+    await api('/backups-passphrase/ack', 'POST');
+    setPhrase('');
+    await load();
+  });
 
   const downloadFull = () => guard('full', async () => {
     await downloadFile('/backup', 'coregsm-backup.tar.gz');
@@ -224,6 +235,23 @@ export default function BackupsCard() {
       description={t('d2.bk.desc')}
     >
       {error && !info ? <LoadError error={error} onRetry={() => void load()} compact bare /> : <ErrorLine text={error} />}
+
+      {info?.passphraseUnseen && (
+        <div className="space-y-3 rounded-ui-lg bg-warnbg p-4 text-warn" role="alert">
+          <h3 className="font-black">{t('bk.phraseTitle')}</h3>
+          <p className="font-semibold">{t('bk.phraseText')}</p>
+          {phrase ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <code className="min-w-0 flex-1 break-all rounded-xl bg-card px-3 py-2 font-mono text-sm font-bold text-ink">{phrase}</code>
+              <CopyButton text={phrase} />
+            </div>
+          ) : null}
+          <div className="flex flex-wrap gap-2">
+            {!phrase && <button type="button" className="btn btn-sm" onClick={() => void showPhrase()}>{t('bk.phraseShow')}</button>}
+            {phrase && <button type="button" className="btn btn-sm" onClick={() => void ackPhrase()}>{t('bk.phraseKept')}</button>}
+          </div>
+        </div>
+      )}
 
       {unreadable.length > 0 && (
         <div className="space-y-3 rounded-ui-lg bg-warnbg p-4 text-warn" role="alert">

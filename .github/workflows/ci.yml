@@ -104,6 +104,30 @@ jobs:
           for part in core-backend core-bot core-frontend; do
             docker build -t "coregsm-$part:ci" "src/$part"
           done
+      - name: The nginx configuration is valid (nginx -t on the rendered template)
+        run: |
+          set -e
+          mkdir certs
+          openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj "/CN=panel.example.test" -keyout certs/privkey.pem -out certs/fullchain.pem 2>/dev/null
+          docker build -t coregsm-nginx:ci src/nginx
+          docker run --rm -e DOMAIN=panel.example.test -v "$PWD/certs:/etc/letsencrypt/live/panel.example.test:ro" --entrypoint sh coregsm-nginx:ci -c 'envsubst "\$DOMAIN" < /etc/nginx/templates/default.conf.template > /etc/nginx/conf.d/default.conf && nginx -t'
+      - name: The backend starts with a read-only root filesystem and draws a picture
+        run: |
+          set -e
+          docker volume create smoke-data >/dev/null
+          docker run -d --name smoke --read-only --tmpfs /tmp:size=64m,mode=1777 --tmpfs /home/node/.cache:size=32m,uid=1000,gid=1000,mode=755 \
+            --cap-drop ALL --security-opt no-new-privileges:true --pids-limit 512 -v smoke-data:/data \
+            -e PORT=3000 -e DB_PATH=/data/coregsm.db -e TMPDIR=/data/tmp -e DOMAIN=localhost \
+            -e JWT_SECRET="$(openssl rand -hex 32)" -e INTERNAL_TOKEN="$(openssl rand -hex 32)" coregsm-core-backend:ci
+          ok=0
+          for i in $(seq 1 40); do
+            if docker exec smoke node -e "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"; then ok=1; break; fi
+            sleep 2
+          done
+          docker logs smoke 2>&1 | tail -20
+          test "$ok" = 1
+          docker exec smoke node -e "fetch('http://127.0.0.1:3000/api/og/default.png').then(async r=>{const b=Buffer.from(await r.arrayBuffer());process.exit(r.ok&&b.length>1000?0:1)}).catch(()=>process.exit(1))"
+          docker rm -f smoke >/dev/null
       - name: Backend image loads its native modules
         run: docker run --rm --entrypoint node coregsm-core-backend:ci -e "require('better-sqlite3'); require('skia-canvas'); console.log('native modules ok')"
       - name: Scan the images for known vulnerabilities (Trivy, advisory)

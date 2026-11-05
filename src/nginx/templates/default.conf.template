@@ -1,4 +1,10 @@
 limit_req_zone $binary_remote_addr zone=login:10m rate=10r/m;
+# the other doors of the account (a reset letter, the codes of the second factor, a confirmation of a protected action)
+limit_req_zone $binary_remote_addr zone=sensitive:10m rate=20r/m;
+# pictures that are drawn on request (cards, charts, link previews): the drawing costs CPU, so one address may ask for a few a second
+limit_req_zone $binary_remote_addr zone=pictures:10m rate=30r/m;
+# everything else of the API: generous for a page that makes many calls, a stop for a flood
+limit_req_zone $binary_remote_addr zone=api:10m rate=20r/s;
 # a refused request is "429 Too Many Requests" (the default is 503, which reads like an outage)
 limit_req_status 429;
 # no nginx version in the Server header and on error pages
@@ -27,6 +33,10 @@ server {
     ssl_certificate     /etc/letsencrypt/live/${DOMAIN}/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/${DOMAIN}/privkey.pem;
     ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_ciphers         ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305;
+    ssl_prefer_server_ciphers off;
+    # no session tickets: a stolen ticket key cannot decrypt old sessions
+    ssl_session_tickets off;
     ssl_session_cache   shared:SSL:10m;
     ssl_session_timeout 1d;
 
@@ -34,6 +44,7 @@ server {
     add_header X-Content-Type-Options nosniff always;
     add_header X-Frame-Options DENY always;
     add_header Referrer-Policy same-origin always;
+    add_header Cross-Origin-Opener-Policy same-origin always;
     # The backend and the frontend nginx send these four headers too (the Referrer-Policy even with another value), so
     # an answer used to carry each twice. This layer is the single source for them: the upstream copies are dropped.
     # (proxy_hide_header is inherited by every location below, none of them sets its own.)
@@ -67,6 +78,39 @@ server {
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # the other doors of the account: a reset letter, a confirmation, the second factor, a protected action, a new password
+    location ~ ^/api/auth/(forgot|reset|verify-email|reauth|session|2fa/.+)$ {
+        limit_req zone=sensitive burst=5 nodelay;
+        set $backend http://backend:3000;
+        proxy_pass $backend;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location = /api/auth/password {
+        limit_req zone=sensitive burst=5 nodelay;
+        set $backend http://backend:3000;
+        proxy_pass $backend;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # pictures drawn on request
+    location ~ ^/api/(card/|u/[^/]+/card\.png$|server-chart/|digest/|og/|game-icon/) {
+        limit_req zone=pictures burst=20 nodelay;
+        set $backend http://backend:3000;
+        proxy_pass $backend;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 30s;
     }
 
     # creating and downloading a backup archive can take a while
@@ -123,6 +167,7 @@ server {
     }
 
     location /api/ {
+        limit_req zone=api burst=100 nodelay;
         set $backend http://backend:3000;
         proxy_pass $backend;
         proxy_set_header Host $host;

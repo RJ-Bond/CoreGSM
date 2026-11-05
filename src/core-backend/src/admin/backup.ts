@@ -45,6 +45,12 @@ export { decryptFile, encryptFile } from './backupCrypto.js';
 export { lastRemote, lastS3, uploadRemote, uploadS3, type RemoteResult } from './backupRemote.js';
 
 export const BACKUP_DIR = path.join(DATA_DIR, 'backups');
+// with a read-only root filesystem the compose file points TMPDIR into the data volume: the folder has to exist
+try {
+  if (process.env.TMPDIR) fs.mkdirSync(process.env.TMPDIR, { recursive: true });
+} catch {
+  /* an unwritable TMPDIR: the system temporary folder is used by the code that needs one */
+}
 const PENDING_DIR = path.join(DATA_DIR, 'restore-pending');
 const MAX_UPLOAD = 300 * 1024 * 1024;
 const MAX_UNPACKED = 2 * 1024 * 1024 * 1024;
@@ -209,12 +215,26 @@ export async function buildArchive(dest: string, passphrase: string | null): Pro
 
 let busy = false;
 
+/**
+ * A panel that has no backups yet and whose owner never chose writes encrypted ones: the phrase is made here, stored
+ * (encrypted like the other secrets) and shown once in the panel (`backup_passphrase_unseen`) so that the owner keeps it
+ * outside the server. A panel that already has copies keeps them as they are; choosing a phrase of your own or none at
+ * all (the settings) ends the default for good.
+ */
+export function ensureBackupPassphrase(): void {
+  if (getSetting('backup_passphrase') || getSetting('backup_encrypt_choice')) return;
+  if (listBackups().length > 0) return;
+  setSetting('backup_passphrase', crypto.randomBytes(18).toString('base64url'));
+  setSetting('backup_passphrase_unseen', '1');
+}
+
 /** Creates a stored archive, prunes old ones and starts the off-host copy (not awaited: it can be slow). */
 export async function createStoredBackup(kind: 'auto' | 'manual'): Promise<BackupItem> {
   if (busy) throw new BackupError('Резервная копия уже создаётся, подождите', 409);
   busy = true;
   try {
     fs.mkdirSync(BACKUP_DIR, { recursive: true, mode: 0o700 });
+    ensureBackupPassphrase();
     const s = backupSettings();
     let t = Date.now();
     const nameFor = () => `coregsm-${stamp(new Date(t))}-${kind}.tar.gz${s.passphrase ? '.enc' : ''}`;
@@ -529,7 +549,7 @@ export function registerBackups({ app, admin }: { app: Express; admin: RequestHa
 
   const payload = () => {
     const s = backupSettings();
-    return { schedule: s.schedule, keep: s.keep, remoteUrl: maskUrl(s.remoteUrl), encrypted: !!s.passphrase, items: listBackups(), lastRemote: lastRemote(), verify: lastVerify(),
+    return { schedule: s.schedule, keep: s.keep, remoteUrl: maskUrl(s.remoteUrl), encrypted: !!s.passphrase, passphraseUnseen: getSetting('backup_passphrase_unseen') === '1', items: listBackups(), lastRemote: lastRemote(), verify: lastVerify(),
       s3: { endpoint: getSetting('backup_s3_endpoint') || '', bucket: getSetting('backup_s3_bucket') || '', region: getSetting('backup_s3_region') || 'us-east-1', prefix: getSetting('backup_s3_prefix') || '', configured: !!s.s3 },
       lastS3: lastS3(),
     };
@@ -631,7 +651,12 @@ export function registerBackups({ app, admin }: { app: Express; admin: RequestHa
       if (b.data.schedule !== undefined) setSetting('backup_schedule', b.data.schedule);
       if (b.data.keep !== undefined) setSetting('backup_keep', String(b.data.keep));
       if (b.data.remoteUrl !== undefined) setSetting('backup_remote_url', b.data.remoteUrl);
-      if (b.data.passphrase !== undefined) setSetting('backup_passphrase', b.data.passphrase);
+      if (b.data.passphrase !== undefined) {
+        setSetting('backup_passphrase', b.data.passphrase);
+        // the owner chose (a phrase of their own, or none): the default no longer applies
+        setSetting('backup_encrypt_choice', b.data.passphrase ? 'own' : 'off');
+        setSetting('backup_passphrase_unseen', '');
+      }
       res.json(payload());
     }),
   );
@@ -699,6 +724,26 @@ export function registerBackups({ app, admin }: { app: Express; admin: RequestHa
       const f = storedFile(req, res);
       if (!f) return;
       fs.rmSync(f.file, { force: true });
+      res.json({ ok: true });
+    }),
+  );
+
+  // the phrase the panel made by itself: shown once (after the password is confirmed), then the owner confirms it is kept
+  app.get(
+    '/api/backups-passphrase',
+    admin,
+    stepUp,
+    guard((_req, res) => {
+      const phrase = getSetting('backup_passphrase');
+      if (getSetting('backup_passphrase_unseen') !== '1' || !phrase) return void res.status(404).json({ error: 'Фраза уже подтверждена' });
+      res.json({ phrase });
+    }),
+  );
+  app.post(
+    '/api/backups-passphrase/ack',
+    admin,
+    guard((_req, res) => {
+      setSetting('backup_passphrase_unseen', '');
       res.json({ ok: true });
     }),
   );

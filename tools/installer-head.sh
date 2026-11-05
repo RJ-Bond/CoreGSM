@@ -559,6 +559,74 @@ setup_firewall() {
   info "Порты backend (3000), frontend и бота наружу не публикуются: они доступны только внутри сети Docker."
 }
 
+# ---------- 6b. the host itself ----------
+# Security updates of the system install by themselves, and a password guesser on SSH is shut out by fail2ban. Both are
+# installed on a fresh install only (an update never adds packages behind the owner's back); COREGSM_HARDEN=0 skips them.
+# Turning the password login of SSH off is a question that defaults to "no": a mistake there locks the owner out.
+harden_host() {
+  [ "${COREGSM_HARDEN:-1}" = 0 ] && return 0
+  [ "${COREGSM_FROM_MANAGER:-}" = 1 ] && return 0
+  step "Защита сервера: автообновления безопасности и fail2ban"
+  if ! run_soft "Установка fail2ban и unattended-upgrades" apt-get "${APT_OPTS[@]}" install -y --no-install-recommends fail2ban unattended-upgrades python3-systemd; then
+    warn "Не удалось поставить fail2ban и unattended-upgrades: продолжаю без них (подробности в $LOGFILE)"
+    return 0
+  fi
+  # security updates of the system: the lists every day, the packages with them; the machine is never restarted by itself
+  cat > /etc/apt/apt.conf.d/20auto-upgrades <<'APTCONF'
+APT::Periodic::Update-Package-Lists "1";
+APT::Periodic::Unattended-Upgrade "1";
+APTCONF
+  # ssh: five wrong attempts in ten minutes close the address for an hour
+  local ssh_port
+  ssh_port="$( (sshd -T 2>/dev/null | awk '/^port /{print $2; exit}') || true)"; [ -n "$ssh_port" ] || ssh_port=22
+  mkdir -p /etc/fail2ban/jail.d
+  cat > /etc/fail2ban/jail.d/coregsm.local <<JAIL
+[sshd]
+enabled  = true
+port     = ${ssh_port}
+backend  = systemd
+maxretry = 5
+findtime = 10m
+bantime  = 1h
+JAIL
+  systemctl enable --now fail2ban >/dev/null 2>&1 || true
+  systemctl restart fail2ban >/dev/null 2>&1 || true
+  ok "Автообновления безопасности включены, fail2ban следит за SSH (порт ${ssh_port})"
+  harden_ssh
+}
+
+harden_ssh() {
+  # only when a key is already in place: without one the owner could not log in at all
+  local home keyfile="" h
+  for h in "${SUDO_USER:+$(getent passwd "$SUDO_USER" | cut -d: -f6)}" "$HOME" /root; do
+    [ -n "$h" ] && [ -s "$h/.ssh/authorized_keys" ] && { keyfile="$h/.ssh/authorized_keys"; break; }
+  done
+  [ -n "$keyfile" ] || return 0
+  grep -qiE '^\s*PasswordAuthentication\s+no' /etc/ssh/sshd_config /etc/ssh/sshd_config.d/*.conf 2>/dev/null && return 0
+  info "В $keyfile есть ключ. Вход в SSH по паролю можно отключить: пароль подобрать нельзя, останется вход по ключу."
+  local HARDEN_SSH="${COREGSM_SSH_NOPASS:-}"
+  ask HARDEN_SSH "Отключить вход в SSH по паролю? Откройте ВТОРОЕ окно с ключом и проверьте вход (y/N)" n
+  case "$HARDEN_SSH" in y|Y|yes|да|д) ;; *) return 0 ;; esac
+  # the name sorts first: sshd takes the first value it reads, a cloud image's own file must not win
+  cat > /etc/ssh/sshd_config.d/10-coregsm.conf <<'SSHCONF'
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitRootLogin prohibit-password
+SSHCONF
+  if ! sshd -t 2>>"$LOGFILE"; then
+    rm -f /etc/ssh/sshd_config.d/10-coregsm.conf
+    warn "Проверка конфигурации SSH не прошла: оставил как было"
+    return 0
+  fi
+  if [ "$(sshd -T 2>/dev/null | awk '/^passwordauthentication /{print $2}')" != "no" ]; then
+    rm -f /etc/ssh/sshd_config.d/10-coregsm.conf
+    warn "Другой файл настроек SSH перебивает запрет пароля: оставил как было"
+    return 0
+  fi
+  systemctl reload ssh >/dev/null 2>&1 || systemctl reload sshd >/dev/null 2>&1 || true
+  ok "Вход в SSH по паролю отключён. Если что-то пошло не так, уберите /etc/ssh/sshd_config.d/10-coregsm.conf"
+}
+
 # ---------- 7. project files ----------
 @@GENERATE_FUNCTION@@
 
@@ -954,6 +1022,7 @@ HELP
   install_docker
   collect_input
   setup_firewall
+  harden_host
   step "Создание файлов проекта в $APP_DIR"
   generate_project
   ok "Файлы проекта созданы"

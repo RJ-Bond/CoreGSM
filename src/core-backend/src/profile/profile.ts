@@ -15,6 +15,7 @@
  *   prefs_changed    language, time zone or date/time format changed
  *   profile_changed  game nick, bio or profile visibility changed
  */
+import { imageProblem } from '../images/imageGuard.js';
 import { sendImage } from '../images/imageSend.js';
 import express, { type Express, type NextFunction, type Request, type RequestHandler, type Response } from 'express';
 import fs from 'node:fs';
@@ -247,6 +248,7 @@ export function registerProfile(deps: {
     const body = req.body as Buffer;
     if (!Buffer.isBuffer(body) || body.length === 0) return res.status(400).json({ error: 'Нужна картинка PNG, JPG или WebP до 4 МБ' });
     try {
+      if (imageProblem(body)) throw new Error('size');
       const img = await loadImage(body);
       if (!img.width || !img.height || img.width > 10000 || img.height > 10000) throw new Error('size');
       const W = 1200;

@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="21970b9eea8c"
+COREGSM_BUILD="cc27ed9c6459"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.22"
+COREGSM_VERSION="1.1.24"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -557,6 +557,74 @@ setup_firewall() {
   ufw --force enable >/dev/null
   ok "Открыты порты: SSH (${ssh_port}), 80, 443. Все остальные входящие закрыты."
   info "Порты backend (3000), frontend и бота наружу не публикуются: они доступны только внутри сети Docker."
+}
+
+# ---------- 6b. the host itself ----------
+# Security updates of the system install by themselves, and a password guesser on SSH is shut out by fail2ban. Both are
+# installed on a fresh install only (an update never adds packages behind the owner's back); COREGSM_HARDEN=0 skips them.
+# Turning the password login of SSH off is a question that defaults to "no": a mistake there locks the owner out.
+harden_host() {
+  [ "${COREGSM_HARDEN:-1}" = 0 ] && return 0
+  [ "${COREGSM_FROM_MANAGER:-}" = 1 ] && return 0
+  step "Защита сервера: автообновления безопасности и fail2ban"
+  if ! run_soft "Установка fail2ban и unattended-upgrades" apt-get "${APT_OPTS[@]}" install -y --no-install-recommends fail2ban unattended-upgrades python3-systemd; then
+    warn "Не удалось поставить fail2ban и unattended-upgrades: продолжаю без них (подробности в $LOGFILE)"
+    return 0
+  fi
+  # security updates of the system: the lists every day, the packages with them; the machine is never restarted by itself
+  cat > /etc/apt/apt.conf.d/20auto-upgrades <<'APTCONF'
+APT::Periodic::Update-Package-Lists "1";
+APT::Periodic::Unattended-Upgrade "1";
+APTCONF
+  # ssh: five wrong attempts in ten minutes close the address for an hour
+  local ssh_port
+  ssh_port="$( (sshd -T 2>/dev/null | awk '/^port /{print $2; exit}') || true)"; [ -n "$ssh_port" ] || ssh_port=22
+  mkdir -p /etc/fail2ban/jail.d
+  cat > /etc/fail2ban/jail.d/coregsm.local <<JAIL
+[sshd]
+enabled  = true
+port     = ${ssh_port}
+backend  = systemd
+maxretry = 5
+findtime = 10m
+bantime  = 1h
+JAIL
+  systemctl enable --now fail2ban >/dev/null 2>&1 || true
+  systemctl restart fail2ban >/dev/null 2>&1 || true
+  ok "Автообновления безопасности включены, fail2ban следит за SSH (порт ${ssh_port})"
+  harden_ssh
+}
+
+harden_ssh() {
+  # only when a key is already in place: without one the owner could not log in at all
+  local home keyfile="" h
+  for h in "${SUDO_USER:+$(getent passwd "$SUDO_USER" | cut -d: -f6)}" "$HOME" /root; do
+    [ -n "$h" ] && [ -s "$h/.ssh/authorized_keys" ] && { keyfile="$h/.ssh/authorized_keys"; break; }
+  done
+  [ -n "$keyfile" ] || return 0
+  grep -qiE '^\s*PasswordAuthentication\s+no' /etc/ssh/sshd_config /etc/ssh/sshd_config.d/*.conf 2>/dev/null && return 0
+  info "В $keyfile есть ключ. Вход в SSH по паролю можно отключить: пароль подобрать нельзя, останется вход по ключу."
+  local HARDEN_SSH="${COREGSM_SSH_NOPASS:-}"
+  ask HARDEN_SSH "Отключить вход в SSH по паролю? Откройте ВТОРОЕ окно с ключом и проверьте вход (y/N)" n
+  case "$HARDEN_SSH" in y|Y|yes|да|д) ;; *) return 0 ;; esac
+  # the name sorts first: sshd takes the first value it reads, a cloud image's own file must not win
+  cat > /etc/ssh/sshd_config.d/10-coregsm.conf <<'SSHCONF'
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitRootLogin prohibit-password
+SSHCONF
+  if ! sshd -t 2>>"$LOGFILE"; then
+    rm -f /etc/ssh/sshd_config.d/10-coregsm.conf
+    warn "Проверка конфигурации SSH не прошла: оставил как было"
+    return 0
+  fi
+  if [ "$(sshd -T 2>/dev/null | awk '/^passwordauthentication /{print $2}')" != "no" ]; then
+    rm -f /etc/ssh/sshd_config.d/10-coregsm.conf
+    warn "Другой файл настроек SSH перебивает запрет пароля: оставил как было"
+    return 0
+  fi
+  systemctl reload ssh >/dev/null 2>&1 || systemctl reload sshd >/dev/null 2>&1 || true
+  ok "Вход в SSH по паролю отключён. Если что-то пошло не так, уберите /etc/ssh/sshd_config.d/10-coregsm.conf"
 }
 
 # ---------- 7. project files ----------
@@ -14711,6 +14779,12 @@ export { decryptFile, encryptFile } from './backupCrypto.js';
 export { lastRemote, lastS3, uploadRemote, uploadS3, type RemoteResult } from './backupRemote.js';
 
 export const BACKUP_DIR = path.join(DATA_DIR, 'backups');
+// with a read-only root filesystem the compose file points TMPDIR into the data volume: the folder has to exist
+try {
+  if (process.env.TMPDIR) fs.mkdirSync(process.env.TMPDIR, { recursive: true });
+} catch {
+  /* an unwritable TMPDIR: the system temporary folder is used by the code that needs one */
+}
 const PENDING_DIR = path.join(DATA_DIR, 'restore-pending');
 const MAX_UPLOAD = 300 * 1024 * 1024;
 const MAX_UNPACKED = 2 * 1024 * 1024 * 1024;
@@ -14875,12 +14949,26 @@ export async function buildArchive(dest: string, passphrase: string | null): Pro
 
 let busy = false;
 
+/**
+ * A panel that has no backups yet and whose owner never chose writes encrypted ones: the phrase is made here, stored
+ * (encrypted like the other secrets) and shown once in the panel (`backup_passphrase_unseen`) so that the owner keeps it
+ * outside the server. A panel that already has copies keeps them as they are; choosing a phrase of your own or none at
+ * all (the settings) ends the default for good.
+ */
+export function ensureBackupPassphrase(): void {
+  if (getSetting('backup_passphrase') || getSetting('backup_encrypt_choice')) return;
+  if (listBackups().length > 0) return;
+  setSetting('backup_passphrase', crypto.randomBytes(18).toString('base64url'));
+  setSetting('backup_passphrase_unseen', '1');
+}
+
 /** Creates a stored archive, prunes old ones and starts the off-host copy (not awaited: it can be slow). */
 export async function createStoredBackup(kind: 'auto' | 'manual'): Promise<BackupItem> {
   if (busy) throw new BackupError('Резервная копия уже создаётся, подождите', 409);
   busy = true;
   try {
     fs.mkdirSync(BACKUP_DIR, { recursive: true, mode: 0o700 });
+    ensureBackupPassphrase();
     const s = backupSettings();
     let t = Date.now();
     const nameFor = () => `coregsm-${stamp(new Date(t))}-${kind}.tar.gz${s.passphrase ? '.enc' : ''}`;
@@ -15195,7 +15283,7 @@ export function registerBackups({ app, admin }: { app: Express; admin: RequestHa
 
   const payload = () => {
     const s = backupSettings();
-    return { schedule: s.schedule, keep: s.keep, remoteUrl: maskUrl(s.remoteUrl), encrypted: !!s.passphrase, items: listBackups(), lastRemote: lastRemote(), verify: lastVerify(),
+    return { schedule: s.schedule, keep: s.keep, remoteUrl: maskUrl(s.remoteUrl), encrypted: !!s.passphrase, passphraseUnseen: getSetting('backup_passphrase_unseen') === '1', items: listBackups(), lastRemote: lastRemote(), verify: lastVerify(),
       s3: { endpoint: getSetting('backup_s3_endpoint') || '', bucket: getSetting('backup_s3_bucket') || '', region: getSetting('backup_s3_region') || 'us-east-1', prefix: getSetting('backup_s3_prefix') || '', configured: !!s.s3 },
       lastS3: lastS3(),
     };
@@ -15297,7 +15385,12 @@ export function registerBackups({ app, admin }: { app: Express; admin: RequestHa
       if (b.data.schedule !== undefined) setSetting('backup_schedule', b.data.schedule);
       if (b.data.keep !== undefined) setSetting('backup_keep', String(b.data.keep));
       if (b.data.remoteUrl !== undefined) setSetting('backup_remote_url', b.data.remoteUrl);
-      if (b.data.passphrase !== undefined) setSetting('backup_passphrase', b.data.passphrase);
+      if (b.data.passphrase !== undefined) {
+        setSetting('backup_passphrase', b.data.passphrase);
+        // the owner chose (a phrase of their own, or none): the default no longer applies
+        setSetting('backup_encrypt_choice', b.data.passphrase ? 'own' : 'off');
+        setSetting('backup_passphrase_unseen', '');
+      }
       res.json(payload());
     }),
   );
@@ -15365,6 +15458,26 @@ export function registerBackups({ app, admin }: { app: Express; admin: RequestHa
       const f = storedFile(req, res);
       if (!f) return;
       fs.rmSync(f.file, { force: true });
+      res.json({ ok: true });
+    }),
+  );
+
+  // the phrase the panel made by itself: shown once (after the password is confirmed), then the owner confirms it is kept
+  app.get(
+    '/api/backups-passphrase',
+    admin,
+    stepUp,
+    guard((_req, res) => {
+      const phrase = getSetting('backup_passphrase');
+      if (getSetting('backup_passphrase_unseen') !== '1' || !phrase) return void res.status(404).json({ error: 'Фраза уже подтверждена' });
+      res.json({ phrase });
+    }),
+  );
+  app.post(
+    '/api/backups-passphrase/ack',
+    admin,
+    guard((_req, res) => {
+      setSetting('backup_passphrase_unseen', '');
       res.json({ ok: true });
     }),
   );
@@ -21793,6 +21906,7 @@ export const ERRORS = {
   backup_not_found: 'Копия не найдена',
   backup_nothing_to_check: 'Копий пока нет: проверять нечего',
   check_input: 'Проверьте введённые данные',
+  backup_phrase_seen: 'Фраза уже подтверждена',
   api_allow_list: 'Список адресов: до 20 записей, каждая — адрес или сеть вида 203.0.113.0/24',
   reauth_required: 'Это защищённое действие: подтвердите его паролем ещё раз',
   password_short_staff: 'Для администратора и модератора пароль должен быть не короче 12 символов',
@@ -21929,6 +22043,7 @@ __COREGSM_EOF__
  * User avatars uploaded in the profile. The picture is cropped to a square and stored as a 256 px PNG
  * (<data dir>/avatars/<user id>.png); it takes priority over the Discord avatar.
  */
+import { imageProblem } from './imageGuard.js';
 import { sendImage } from './imageSend.js';
 import express, { type Express, type RequestHandler } from 'express';
 import fs from 'node:fs';
@@ -21973,6 +22088,7 @@ export function registerAvatars(deps: { app: Express; auth: RequestHandler; user
     const body = req.body as Buffer;
     if (!Buffer.isBuffer(body) || body.length === 0) return res.status(400).json({ error: 'Нужна картинка PNG, JPG или WebP до 3 МБ' });
     try {
+      if (imageProblem(body)) throw new Error('size');
       const img = await loadImage(body);
       if (!img.width || !img.height || img.width > 8000 || img.height > 8000) throw new Error('size');
       const side = Math.min(img.width, img.height);
@@ -22967,6 +23083,7 @@ __COREGSM_EOF__
  * Cover pictures of servers. The uploaded picture is centre-cropped to 16:9 and stored as a 1280x720 JPEG
  * (<data dir>/covers/<server id>.jpg) plus a 640x360 variant (<server id>@s.jpg) for small tiles.
  */
+import { imageProblem } from './imageGuard.js';
 import { sendImage } from './imageSend.js';
 import express, { type Express, type RequestHandler } from 'express';
 import fs from 'node:fs';
@@ -23031,6 +23148,7 @@ export function registerCovers(deps: { app: Express; admin: RequestHandler }): v
     const body = req.body as Buffer;
     if (!Buffer.isBuffer(body) || body.length === 0) return res.status(400).json({ error: 'Нужна картинка PNG, JPG или WebP до 5 МБ' });
     try {
+      if (imageProblem(body)) throw new Error('size');
       const img = await loadImage(body);
       if (!img.width || !img.height || img.width > 10000 || img.height > 10000) throw new Error('size');
       const big = await render(img, 1280, 720);
@@ -23371,6 +23489,84 @@ export const GAME_IMAGES: Record<string, string> = {
   valheim: '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',
   vrising: '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',
 };
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/images"
+  cat > "$APP_DIR/core-backend/src/images/imageGuard.ts" << '__COREGSM_EOF__'
+/**
+ * Reads the size of an uploaded picture from its header BEFORE it is decoded. A small file can declare a huge picture
+ * (a «decompression bomb»: a 30 KB PNG of 12000×12000 pixels needs more than half a gigabyte once decoded), so the size is
+ * checked first and a picture over the limit never reaches the decoder.
+ */
+
+/** the longest side and the number of pixels a picture of the panel may have */
+export const MAX_SIDE = 6000;
+export const MAX_PIXELS = 24_000_000;
+
+export interface ImageInfo {
+  type: 'png' | 'jpeg' | 'webp';
+  width: number;
+  height: number;
+}
+
+const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+function pngInfo(b: Buffer): ImageInfo | null {
+  if (b.length < 24 || !b.subarray(0, 8).equals(PNG) || b.toString('latin1', 12, 16) !== 'IHDR') return null;
+  return { type: 'png', width: b.readUInt32BE(16), height: b.readUInt32BE(20) };
+}
+
+function jpegInfo(b: Buffer): ImageInfo | null {
+  if (b.length < 4 || b[0] !== 0xff || b[1] !== 0xd8) return null;
+  let pos = 2;
+  while (pos + 9 < b.length) {
+    if (b[pos] !== 0xff) {
+      pos++;
+      continue;
+    }
+    const marker = b[pos + 1];
+    if (marker === 0xff) {
+      pos++;
+      continue;
+    }
+    // standalone markers carry no length
+    if (marker === 0xd8 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) {
+      pos += 2;
+      continue;
+    }
+    const len = b.readUInt16BE(pos + 2);
+    // the start-of-frame markers hold the size (C4, C8 and CC are not frames)
+    if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
+      return { type: 'jpeg', height: b.readUInt16BE(pos + 5), width: b.readUInt16BE(pos + 7) };
+    }
+    if (len < 2) return null;
+    pos += 2 + len;
+  }
+  return null;
+}
+
+function webpInfo(b: Buffer): ImageInfo | null {
+  if (b.length < 30 || b.toString('latin1', 0, 4) !== 'RIFF' || b.toString('latin1', 8, 12) !== 'WEBP') return null;
+  const kind = b.toString('latin1', 12, 16);
+  if (kind === 'VP8 ') return { type: 'webp', width: b.readUInt16LE(26) & 0x3fff, height: b.readUInt16LE(28) & 0x3fff };
+  if (kind === 'VP8L') {
+    const bits = b.readUInt32LE(21);
+    return { type: 'webp', width: (bits & 0x3fff) + 1, height: ((bits >> 14) & 0x3fff) + 1 };
+  }
+  if (kind === 'VP8X') return { type: 'webp', width: 1 + b.readUIntLE(24, 3), height: 1 + b.readUIntLE(27, 3) };
+  return null;
+}
+
+/** the type and size from the header, or null when it is not a PNG, JPEG or WebP we can read */
+export const imageInfo = (b: Buffer): ImageInfo | null => pngInfo(b) ?? jpegInfo(b) ?? webpInfo(b);
+
+/** null when the picture may be decoded, otherwise what is wrong with it */
+export function imageProblem(b: Buffer, maxSide = MAX_SIDE, maxPixels = MAX_PIXELS): 'unknown' | 'empty' | 'big' | null {
+  const info = imageInfo(b);
+  if (!info) return 'unknown';
+  if (info.width < 1 || info.height < 1) return 'empty';
+  if (info.width > maxSide || info.height > maxSide || info.width * info.height > maxPixels) return 'big';
+  return null;
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/images"
   cat > "$APP_DIR/core-backend/src/images/imageLogic.ts" << '__COREGSM_EOF__'
@@ -23777,12 +23973,29 @@ export async function renderProfileCard(d: ProfileCardData): Promise<Buffer> {
   return (await canvas.toBuffer('png')) as Buffer;
 }
 
+/** a picture is drawn once for five minutes: the drawing is the expensive part, a request for it must not be */
+const CACHE_MS = 5 * 60_000;
+const CACHE_MAX = 300;
+const cache = new Map<string, { at: number; buf: Buffer }>();
+export const profileCardCacheSize = (): number => cache.size;
+
 export function registerProfileCard(app: Express, limiter: (max: number) => RequestHandler): void {
   app.get('/api/u/:username/card.png', limiter(30), async (req: Request, res: Response, next: NextFunction) => {
     try {
       const d = profileCardData(String(req.params.username ?? ''));
       if (!d) return void res.status(404).end();
-      res.set({ 'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=300' }).send(await renderProfileCard(d));
+      const b = brand();
+      const key = `${b.name}|${b.color}|${JSON.stringify(d)}`;
+      const hit = cache.get(key);
+      let buf: Buffer;
+      if (hit && Date.now() - hit.at < CACHE_MS) buf = hit.buf;
+      else {
+        buf = await renderProfileCard(d);
+        // the oldest entries go first once the cache is full
+        if (cache.size >= CACHE_MAX) for (const k of [...cache.keys()].slice(0, cache.size - CACHE_MAX + 1)) cache.delete(k);
+        cache.set(key, { at: Date.now(), buf });
+      }
+      res.set({ 'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=300' }).send(buf);
     } catch (e) {
       next(e);
     }
@@ -24206,6 +24419,7 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/logger.ts" << '__COREGSM_EOF__'
 import pino from 'pino';
+import { redact } from './security/redact.js';
 
 /**
  * Structured logging (JSON lines on stdout). Level via LOG_LEVEL (default info,
@@ -24217,21 +24431,23 @@ const base = pino({
   base: undefined,
   timestamp: pino.stdTimeFunctions.isoTime,
   formatters: { level: (label) => ({ level: label }) },
+  // an error from a library can carry a token or a password in its message or its stack
+  serializers: { err: (e: Error) => ({ type: e.name, message: redact(e.message), stack: redact(e.stack ?? '') }) },
 });
 
 function detail(rest: unknown[]): Record<string, unknown> | undefined {
   if (!rest.length) return undefined;
   const err = rest.find((x) => x instanceof Error) as Error | undefined;
-  const text = rest.map((x) => (x instanceof Error ? x.message : typeof x === 'string' ? x : JSON.stringify(x))).join(' ');
+  const text = redact(rest.map((x) => (x instanceof Error ? x.message : typeof x === 'string' ? x : JSON.stringify(x))).join(' '));
   return err ? { err, detail: text } : { detail: text };
 }
 
 function make(level: 'info' | 'warn' | 'error') {
   return (msg: unknown, ...rest: unknown[]): void => {
-    if (msg instanceof Error) return void base[level]({ err: msg }, msg.message);
+    if (msg instanceof Error) return void base[level]({ err: msg }, redact(msg.message));
     const d = detail(rest);
-    if (d) base[level](d, String(msg));
-    else base[level](String(msg));
+    if (d) base[level](d, redact(String(msg)));
+    else base[level](redact(String(msg)));
   };
 }
 
@@ -29751,6 +29967,7 @@ __COREGSM_EOF__
  *   prefs_changed    language, time zone or date/time format changed
  *   profile_changed  game nick, bio or profile visibility changed
  */
+import { imageProblem } from '../images/imageGuard.js';
 import { sendImage } from '../images/imageSend.js';
 import express, { type Express, type NextFunction, type Request, type RequestHandler, type Response } from 'express';
 import fs from 'node:fs';
@@ -29983,6 +30200,7 @@ export function registerProfile(deps: {
     const body = req.body as Buffer;
     if (!Buffer.isBuffer(body) || body.length === 0) return res.status(400).json({ error: 'Нужна картинка PNG, JPG или WebP до 4 МБ' });
     try {
+      if (imageProblem(body)) throw new Error('size');
       const img = await loadImage(body);
       if (!img.width || !img.height || img.width > 10000 || img.height > 10000) throw new Error('size');
       const W = 1200;
@@ -34379,6 +34597,46 @@ export const BOT_TOKEN_RE = /^[\w-]{20,}\.[\w-]{4,}\.[\w-]{20,}$/;
 export const TOKEN_HELP = 'Это не похоже на токен бота: он состоит из трёх частей через точки. Скопируйте его целиком в Discord Developer Portal (Bot → Reset Token).';
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/security"
+  cat > "$APP_DIR/core-backend/src/security/redact.ts" << '__COREGSM_EOF__'
+/**
+ * Takes secrets out of text that is about to be written to a log: the bot token, webhook addresses, session tokens,
+ * API keys, passwords in addresses and in «password=…» pairs, encrypted values of the settings. An error message from a
+ * library can carry any of them (a failed request prints its URL and headers), so everything the logger writes goes
+ * through here. The mark that replaces a secret is «***».
+ */
+
+const MASK = '***';
+
+const RULES: [RegExp, string][] = [
+  // a Discord bot token: id.timestamp.hmac
+  [/\b[MNO][A-Za-z0-9_-]{23,27}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{27,}\b/g, `${MASK}`],
+  // a Discord webhook: the part after the id is the secret
+  [/(discord(?:app)?\.com\/api\/webhooks\/\d+\/)[A-Za-z0-9_-]+/gi, `$1${MASK}`],
+  // a JSON Web Token (the session)
+  [/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g, `${MASK}`],
+  // an Authorization header
+  [/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{8,}/gi, `$1 ${MASK}`],
+  // a key of the public API of the panel
+  [/\bcgsm_[A-Za-z0-9_-]{16,}/g, `cgsm_${MASK}`],
+  // an encrypted value of the settings
+  [/\benc:v1:[A-Za-z0-9+/=_-]{8,}/g, `enc:v1:${MASK}`],
+  // credentials inside an address: scheme://user:pass@host
+  [/\b([a-z][a-z0-9+.-]*:\/\/)[^\s/:@]+:[^\s/@]+@/gi, `$1${MASK}:${MASK}@`],
+  // «password=…», «"token": "…"», «secret: …» in a query string, JSON or a line of text
+  [/(["']?\b(?:password|passwd|pass|secret|token|api[_-]?key|apikey|cookie|passphrase)["']?\s*[:=]\s*["']?)[^\s"',;&}]{3,}/gi, `$1${MASK}`],
+  // a long hexadecimal string: a hash, a signing key, an internal token
+  [/\b[a-f0-9]{40,}\b/gi, `${MASK}`],
+];
+
+/** the text without secrets; anything that is not a string is returned as it is */
+export function redact<T>(value: T): T {
+  if (typeof value !== 'string' || value.length === 0) return value;
+  let out: string = value;
+  for (const [re, to] of RULES) out = out.replace(re, to);
+  return out as T;
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/security"
   cat > "$APP_DIR/core-backend/src/security/secrets.ts" << '__COREGSM_EOF__'
 /**
  * Secrets at rest.
@@ -37994,7 +38252,11 @@ export async function handleInfo(i: ChatInputCommandInteraction): Promise<void> 
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-bot/src"
   cat > "$APP_DIR/core-bot/src/log.ts" << '__COREGSM_EOF__'
-export const log = (...a: unknown[]) => console.log(new Date().toISOString(), ...a);
+import { redact } from './redact.js';
+
+/** one line to stdout; secrets (the token, an address with a password ...) are taken out of every string and error first */
+export const log = (...a: unknown[]) =>
+  console.log(new Date().toISOString(), ...a.map((x) => (x instanceof Error ? redact(x.stack ?? x.message) : redact(x))));
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-bot/src"
   cat > "$APP_DIR/core-bot/src/messages.ts" << '__COREGSM_EOF__'
@@ -38303,6 +38565,46 @@ export function patchGatewayAgent(getAgent: () => Agent | undefined): void {
     }
   }
   ws.WebSocket = ProxiedWebSocket;
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-bot/src"
+  cat > "$APP_DIR/core-bot/src/redact.ts" << '__COREGSM_EOF__'
+/**
+ * Takes secrets out of text that is about to be written to a log: the bot token, webhook addresses, session tokens,
+ * API keys, passwords in addresses and in «password=…» pairs, encrypted values of the settings. An error message from a
+ * library can carry any of them (a failed request prints its URL and headers), so everything the logger writes goes
+ * through here. The mark that replaces a secret is «***».
+ */
+
+const MASK = '***';
+
+const RULES: [RegExp, string][] = [
+  // a Discord bot token: id.timestamp.hmac
+  [/\b[MNO][A-Za-z0-9_-]{23,27}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{27,}\b/g, `${MASK}`],
+  // a Discord webhook: the part after the id is the secret
+  [/(discord(?:app)?\.com\/api\/webhooks\/\d+\/)[A-Za-z0-9_-]+/gi, `$1${MASK}`],
+  // a JSON Web Token (the session)
+  [/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g, `${MASK}`],
+  // an Authorization header
+  [/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{8,}/gi, `$1 ${MASK}`],
+  // a key of the public API of the panel
+  [/\bcgsm_[A-Za-z0-9_-]{16,}/g, `cgsm_${MASK}`],
+  // an encrypted value of the settings
+  [/\benc:v1:[A-Za-z0-9+/=_-]{8,}/g, `enc:v1:${MASK}`],
+  // credentials inside an address: scheme://user:pass@host
+  [/\b([a-z][a-z0-9+.-]*:\/\/)[^\s/:@]+:[^\s/@]+@/gi, `$1${MASK}:${MASK}@`],
+  // «password=…», «"token": "…"», «secret: …» in a query string, JSON or a line of text
+  [/(["']?\b(?:password|passwd|pass|secret|token|api[_-]?key|apikey|cookie|passphrase)["']?\s*[:=]\s*["']?)[^\s"',;&}]{3,}/gi, `$1${MASK}`],
+  // a long hexadecimal string: a hash, a signing key, an internal token
+  [/\b[a-f0-9]{40,}\b/gi, `${MASK}`],
+];
+
+/** the text without secrets; anything that is not a string is returned as it is */
+export function redact<T>(value: T): T {
+  if (typeof value !== 'string' || value.length === 0) return value;
+  let out: string = value;
+  for (const [re, to] of RULES) out = out.replace(re, to);
+  return out as T;
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-bot/src"
@@ -111588,6 +111890,8 @@ export interface BackupInfo {
   /** masked */
   remoteUrl: string | null;
   encrypted: boolean;
+  /** the panel made the phrase itself and the owner has not confirmed yet that it is kept */
+  passphraseUnseen?: boolean;
   items: BackupItem[];
   lastRemote: { at: number; ok: boolean; error: string | null } | null;
   /** the last restore check: the newest copy opened like a restore would */
@@ -133111,6 +133415,10 @@ const en: Record<keyof typeof ru, string> = {
   'nd.followup': 'Other sessions were ended. Now change your password to close access completely.',
   'nd.changePassword': 'Change password',
   'bk.unreadTitle': 'Some secrets could not be read',
+  'bk.phraseTitle': 'Keep the backup encryption phrase',
+  'bk.phraseText': 'The backups are encrypted. Without this phrase they cannot be restored on another server. Show it, copy it into a password manager and confirm.',
+  'bk.phraseShow': 'Show the phrase',
+  'bk.phraseKept': 'I have kept the phrase',
   'bk.unreadText': 'The copy was made with a different secrets key. Enter these values again in the settings:',
   'bk.unreadSettings': 'Open settings',
   'bk.unreadReload': 'Reload the panel',
@@ -136680,6 +136988,7 @@ const errorsEn: Record<string, string> = {
   backup_not_found: 'Backup not found',
   backup_nothing_to_check: 'There are no backups yet: nothing to check',
   check_input: 'Check the entered data',
+  backup_phrase_seen: 'The phrase is already confirmed',
   api_allow_list: 'The address list: up to 20 entries, each an address or a network like 203.0.113.0/24',
   reauth_required: 'This is a protected action: confirm it with your password again',
   password_short_staff: 'An administrator or moderator password must be at least 12 characters long',
@@ -137188,6 +137497,10 @@ const ru = {
   'nd.followup': 'Другие сессии завершены. Теперь смените пароль, чтобы закрыть доступ полностью.',
   'nd.changePassword': 'Сменить пароль',
   'bk.unreadTitle': 'Часть секретов не удалось прочитать',
+  'bk.phraseTitle': 'Сохраните фразу шифрования копий',
+  'bk.phraseText': 'Резервные копии шифруются. Без этой фразы их нельзя восстановить на другом сервере. Покажите её, перепишите в менеджер паролей и подтвердите.',
+  'bk.phraseShow': 'Показать фразу',
+  'bk.phraseKept': 'Я сохранил(а) фразу',
   'bk.unreadText': 'Копия сделана с другим ключом шифрования секретов. Введите эти значения в настройках заново:',
   'bk.unreadSettings': 'Открыть настройки',
   'bk.unreadReload': 'Перезагрузить панель',
@@ -143283,7 +143596,7 @@ import { api, getToken, type BackupInfo, type BackupItem, fetchStepUp } from '..
 import { confirmDialog, promptDialog } from '../confirm';
 import { t, useI18n } from '../i18n';
 import { loadUnreadableSecrets, saveUnreadableSecrets, unreadableSecrets } from '../security';
-import { Button, ErrorLine, Field, IconDownload, LoadError, StateView, IconRestore, IconTrash, Section, Switch, fmtDateTime, ago, toast, errText } from '../ui';
+import { Button, ErrorLine, Field, IconDownload, LoadError, StateView, IconRestore, IconTrash, Section, Switch, fmtDateTime, ago, toast, errText, CopyButton } from '../ui';
 import { errorText } from '../apiErrors';
 import { BackupS3 } from '../components/BackupS3';
 
@@ -143380,6 +143693,17 @@ export default function BackupsCard() {
     setError('');
     try { await fn(); } catch (e) { setError(errText(e)); } finally { setBusy(null); }
   };
+
+  // the phrase the panel made for the copies: shown once (the password is asked first), then confirmed as kept
+  const [phrase, setPhrase] = useState('');
+  const showPhrase = () => guard('phrase', async () => {
+    setPhrase((await api<{ phrase: string }>('/backups-passphrase')).phrase);
+  });
+  const ackPhrase = () => guard('phraseAck', async () => {
+    await api('/backups-passphrase/ack', 'POST');
+    setPhrase('');
+    await load();
+  });
 
   const downloadFull = () => guard('full', async () => {
     await downloadFile('/backup', 'coregsm-backup.tar.gz');
@@ -143504,6 +143828,23 @@ export default function BackupsCard() {
       description={t('d2.bk.desc')}
     >
       {error && !info ? <LoadError error={error} onRetry={() => void load()} compact bare /> : <ErrorLine text={error} />}
+
+      {info?.passphraseUnseen && (
+        <div className="space-y-3 rounded-ui-lg bg-warnbg p-4 text-warn" role="alert">
+          <h3 className="font-black">{t('bk.phraseTitle')}</h3>
+          <p className="font-semibold">{t('bk.phraseText')}</p>
+          {phrase ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <code className="min-w-0 flex-1 break-all rounded-xl bg-card px-3 py-2 font-mono text-sm font-bold text-ink">{phrase}</code>
+              <CopyButton text={phrase} />
+            </div>
+          ) : null}
+          <div className="flex flex-wrap gap-2">
+            {!phrase && <button type="button" className="btn btn-sm" onClick={() => void showPhrase()}>{t('bk.phraseShow')}</button>}
+            {phrase && <button type="button" className="btn btn-sm" onClick={() => void ackPhrase()}>{t('bk.phraseKept')}</button>}
+          </div>
+        </div>
+      )}
 
       {unreadable.length > 0 && (
         <div className="space-y-3 rounded-ui-lg bg-warnbg p-4 text-warn" role="alert">
@@ -159706,6 +160047,14 @@ x-hardening-node: &hardening-node
     - no-new-privileges:true
   cap_drop:
     - ALL
+# the Node services also run with a read-only root filesystem: what they write goes to the data volume or to a small
+# memory disk (/tmp, the font cache), so a compromised process cannot change the program files or leave a tool behind
+x-readonly-node: &readonly-node
+  read_only: true
+  pids_limit: 512
+  tmpfs:
+    - /tmp:size=64m,mode=1777
+    - /home/node/.cache:size=32m,uid=1000,gid=1000,mode=755
 
 # Memory ceilings: a runaway process is stopped (and restarted) instead of taking the whole host down. Raise one in
 # .env when a large server needs more, e.g. BACKEND_MEM_LIMIT=3g. The backend decodes uploaded pictures (up to
@@ -159718,7 +160067,7 @@ services:
         HTTP_PROXY: ${BUILD_PROXY:-}
         HTTPS_PROXY: ${BUILD_PROXY:-}
         NO_PROXY: localhost,127.0.0.1
-    <<: *hardening-node
+    <<: [*hardening-node, *readonly-node]
     mem_limit: ${BACKEND_MEM_LIMIT:-1536m}
     init: true
     restart: unless-stopped
@@ -159727,6 +160076,8 @@ services:
     environment:
       PORT: "3000"
       DB_PATH: /data/coregsm.db
+      # archives that are built for a download go to the data volume, not into the memory disk of /tmp
+      TMPDIR: /data/tmp
       UPDATE_DIR: /update
       # public address of the panel: the trusted URL and the certificate check
       DOMAIN: ${DOMAIN}
@@ -159753,7 +160104,7 @@ services:
         HTTP_PROXY: ${BUILD_PROXY:-}
         HTTPS_PROXY: ${BUILD_PROXY:-}
         NO_PROXY: localhost,127.0.0.1
-    <<: *hardening-node
+    <<: [*hardening-node, *readonly-node]
     mem_limit: ${BOT_MEM_LIMIT:-512m}
     init: true
     restart: unless-stopped
@@ -159872,6 +160223,12 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/nginx/templates"
   cat > "$APP_DIR/nginx/templates/default.conf.template" << '__COREGSM_EOF__'
 limit_req_zone $binary_remote_addr zone=login:10m rate=10r/m;
+# the other doors of the account (a reset letter, the codes of the second factor, a confirmation of a protected action)
+limit_req_zone $binary_remote_addr zone=sensitive:10m rate=20r/m;
+# pictures that are drawn on request (cards, charts, link previews): the drawing costs CPU, so one address may ask for a few a second
+limit_req_zone $binary_remote_addr zone=pictures:10m rate=30r/m;
+# everything else of the API: generous for a page that makes many calls, a stop for a flood
+limit_req_zone $binary_remote_addr zone=api:10m rate=20r/s;
 # a refused request is "429 Too Many Requests" (the default is 503, which reads like an outage)
 limit_req_status 429;
 # no nginx version in the Server header and on error pages
@@ -159900,6 +160257,10 @@ server {
     ssl_certificate     /etc/letsencrypt/live/${DOMAIN}/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/${DOMAIN}/privkey.pem;
     ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_ciphers         ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305;
+    ssl_prefer_server_ciphers off;
+    # no session tickets: a stolen ticket key cannot decrypt old sessions
+    ssl_session_tickets off;
     ssl_session_cache   shared:SSL:10m;
     ssl_session_timeout 1d;
 
@@ -159907,6 +160268,7 @@ server {
     add_header X-Content-Type-Options nosniff always;
     add_header X-Frame-Options DENY always;
     add_header Referrer-Policy same-origin always;
+    add_header Cross-Origin-Opener-Policy same-origin always;
     # The backend and the frontend nginx send these four headers too (the Referrer-Policy even with another value), so
     # an answer used to carry each twice. This layer is the single source for them: the upstream copies are dropped.
     # (proxy_hide_header is inherited by every location below, none of them sets its own.)
@@ -159940,6 +160302,39 @@ server {
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # the other doors of the account: a reset letter, a confirmation, the second factor, a protected action, a new password
+    location ~ ^/api/auth/(forgot|reset|verify-email|reauth|session|2fa/.+)$ {
+        limit_req zone=sensitive burst=5 nodelay;
+        set $backend http://backend:3000;
+        proxy_pass $backend;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location = /api/auth/password {
+        limit_req zone=sensitive burst=5 nodelay;
+        set $backend http://backend:3000;
+        proxy_pass $backend;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # pictures drawn on request
+    location ~ ^/api/(card/|u/[^/]+/card\.png$|server-chart/|digest/|og/|game-icon/) {
+        limit_req zone=pictures burst=20 nodelay;
+        set $backend http://backend:3000;
+        proxy_pass $backend;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 30s;
     }
 
     # creating and downloading a backup archive can take a while
@@ -159996,6 +160391,7 @@ server {
     }
 
     location /api/ {
+        limit_req zone=api burst=100 nodelay;
         set $backend http://backend:3000;
         proxy_pass $backend;
         proxy_set_header Host $host;
@@ -161445,6 +161841,7 @@ HELP
   install_docker
   collect_input
   setup_firewall
+  harden_host
   step "Создание файлов проекта в $APP_DIR"
   generate_project
   ok "Файлы проекта созданы"

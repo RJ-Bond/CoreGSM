@@ -204,3 +204,57 @@ describe('api: protected actions need the password again', () => {
     assert.equal((await api.call('POST', '/api/auth/reauth', { token, body: { confirm: 'DSCD' } })).status, 200);
   });
 });
+
+describe('api: backups are encrypted by default on a fresh panel', () => {
+  let api: Api;
+  let admin = '';
+  before(async () => {
+    api = await startBackend();
+    admin = await setupAdmin(api);
+  });
+  after(async () => { await api.stop(); });
+
+  it('the first backup is encrypted with a phrase the panel made, shown once', async () => {
+    assert.equal((await api.call('GET', '/api/backups', { token: admin })).body.encrypted, false);
+    const made = await api.call('POST', '/api/backups/run', { token: admin });
+    assert.equal(made.status, 201, JSON.stringify(made.body));
+    assert.match(made.body.name, /\.tar\.gz\.enc$/);
+    const list = await api.call('GET', '/api/backups', { token: admin });
+    assert.equal(list.body.encrypted, true);
+    assert.equal(list.body.passphraseUnseen, true);
+    const phrase = await api.call('GET', '/api/backups-passphrase', { token: admin });
+    assert.equal(phrase.status, 200);
+    assert.ok(String(phrase.body.phrase).length >= 20);
+    // the settings never hand the phrase out
+    assert.equal(JSON.stringify(list.body).includes(phrase.body.phrase), false);
+    assert.equal((await api.call('POST', '/api/backups-passphrase/ack', { token: admin })).status, 200);
+    assert.equal((await api.call('GET', '/api/backups/' + made.body.name, { token: admin })).status, 200);
+    assert.equal((await api.call('GET', '/api/backups-passphrase', { token: admin })).status, 404);
+    assert.equal((await api.call('GET', '/api/backups', { token: admin })).body.passphraseUnseen, false);
+  });
+
+  it('the phrase needs the password again to be shown', async () => {
+    const fresh = await startBackend();
+    try {
+      const t = await setupAdmin(fresh);
+      await fresh.call('POST', '/api/backups/run', { token: t });
+      const refused = await fresh.call('GET', '/api/backups-passphrase', { token: t, reauth: false });
+      assert.equal(refused.status, 403);
+      assert.equal(refused.body.code, 'reauth_required');
+    } finally {
+      await fresh.stop();
+    }
+  });
+
+  it('a panel whose owner chose none keeps writing plain copies', async () => {
+    const other = await startBackend();
+    try {
+      const t = await setupAdmin(other);
+      assert.equal((await other.call('PUT', '/api/backups/settings', { token: t, body: { passphrase: '' } })).status, 200);
+      const made = await other.call('POST', '/api/backups/run', { token: t });
+      assert.doesNotMatch(made.body.name, /\.enc$/);
+    } finally {
+      await other.stop();
+    }
+  });
+});

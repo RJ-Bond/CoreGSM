@@ -2,6 +2,7 @@
  * Cover pictures of servers. The uploaded picture is centre-cropped to 16:9 and stored as a 1280x720 JPEG
  * (<data dir>/covers/<server id>.jpg) plus a 640x360 variant (<server id>@s.jpg) for small tiles.
  */
+import { imageProblem } from './imageGuard.js';
 import { sendImage } from './imageSend.js';
 import express, { type Express, type RequestHandler } from 'express';
 import fs from 'node:fs';
@@ -66,6 +67,7 @@ export function registerCovers(deps: { app: Express; admin: RequestHandler }): v
     const body = req.body as Buffer;
     if (!Buffer.isBuffer(body) || body.length === 0) return res.status(400).json({ error: 'Нужна картинка PNG, JPG или WebP до 5 МБ' });
     try {
+      if (imageProblem(body)) throw new Error('size');
       const img = await loadImage(body);
       if (!img.width || !img.height || img.width > 10000 || img.height > 10000) throw new Error('size');
       const big = await render(img, 1280, 720);
