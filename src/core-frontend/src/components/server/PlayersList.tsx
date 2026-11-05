@@ -264,7 +264,7 @@ export default function PlayersList({
                   )}
                 </span>
                 <span className="pl-time shrink-0 text-right text-sm font-semibold text-mute">
-                  {p.since != null ? playedFor(p.since, now) : expandable ? 'в сети сейчас' : ''}
+                  {p.since != null ? playedFor(p.since, now) : t('d2.hero.onlineNow')}
                   {expandable && dur != null && <i className="pl-bar" aria-hidden><u style={{ width: `${Math.max(4, Math.round((dur / maxDur) * 100))}%` }} /></i>}
                 </span>
                 {expandable && (

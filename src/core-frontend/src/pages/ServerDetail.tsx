@@ -501,12 +501,12 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
         </SectionCard>
         <div className="grid gap-3.5 lg:grid-cols-12">
           {chartTile(1, false)}
-          <div className="space-y-3.5 lg:col-span-5 lg:col-start-1 lg:self-start max-lg:contents">
+          <div className="space-y-3.5 lg:col-span-5 lg:col-start-1 lg:flex lg:flex-col lg:gap-3.5 lg:space-y-0 lg:self-stretch max-lg:contents">
           <SectionCard id="ov-events" state={sections} className="max-lg:order-1" style={stagger(2)} title={t('d2.sd.recent')}>
             <EventsFeed events={events} online={s.online} limit={6} moreHref={tabHref(id, 'events')} />
           </SectionCard>
           {/* the reviews sit under the events: the left column fills the height of the player list */}
-          <SectionCard id="ov-reviews" state={sections} className="max-lg:order-3" style={stagger(4)} title={t('d2.sd.playerReviews')}>
+          <SectionCard id="ov-reviews" state={sections} className="max-lg:order-3 lg:flex-1" style={stagger(4)} title={t('d2.sd.playerReviews')}>
             <ServerReviews serverId={id} />
           </SectionCard>
           </div>

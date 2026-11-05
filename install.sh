@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="db49e0ad7bc9"
+COREGSM_BUILD="1d01505e4fdf"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.13"
+COREGSM_VERSION="1.1.14"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -125036,6 +125036,9 @@ export default function HistoryChart({
               {t('srv.chart.now', { n: `${endPt.v}${unit ? ` ${unit}` : ''}` })}
             </span>
           )}
+          <button type="button" className="hc-save" onClick={() => void exportPng()} disabled={saving || points.length === 0} title={t('d2.hch.savePng')} aria-label={saving ? t('d2.hch.preparing') : t('d2.hch.png')}>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M12 4v11M7 11l5 5 5-5M5 20h14" /></svg>
+          </button>
         </span>
       </div>
       <div
@@ -125190,10 +125193,6 @@ export default function HistoryChart({
           <span className={`ml-2 ${TONE_TEXT[pingTone(hv).tone]}`}>{pingTone(hv).label}</span>
         )}
       </p>
-      <button type="button" className="btn btn-soft btn-sm" onClick={() => void exportPng()} disabled={saving || points.length === 0} title={t('d2.hch.savePng')}>
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M12 4v11M7 11l5 5 5-5M5 20h14" /></svg>
-        {saving ? t('d2.hch.preparing') : t('d2.hch.png')}
-      </button>
       </div>
       {marks.length > 0 && (
         <ul className="hc-legend" aria-label={t('d2.hch.legend')}>
@@ -125973,7 +125972,7 @@ export default function PlayersList({
                   )}
                 </span>
                 <span className="pl-time shrink-0 text-right text-sm font-semibold text-mute">
-                  {p.since != null ? playedFor(p.since, now) : expandable ? 'в сети сейчас' : ''}
+                  {p.since != null ? playedFor(p.since, now) : t('d2.hero.onlineNow')}
                   {expandable && dur != null && <i className="pl-bar" aria-hidden><u style={{ width: `${Math.max(4, Math.round((dur / maxDur) * 100))}%` }} /></i>}
                 </span>
                 {expandable && (
@@ -126216,6 +126215,7 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { api } from '../../api';
 import { t, useI18n, type TKey } from '../../i18n';
 import { useAuth } from '../../auth';
+import { StateView } from '../StateView';
 import { Button, ErrorLine, UserAvatar, ago, toast, num } from '../../ui';
 
 export interface Review { id: number; author: string; avatarUrl: string | null; stars: number; text: string; hidden: boolean; createdAt: number; updatedAt: number; votes?: number; voted?: boolean; reply?: string | null; replyAt?: number | null }
@@ -126321,10 +126321,13 @@ export default function ServerReviews({ serverId }: { serverId: number }) {
   return (
     <div className="rv">
       {empty && (
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-          <p className="rv-none">{t('d2.rv.none')}{me ? t('d2.rv.beFirst') : '.'}</p>
-          {me && !r.mine && !formOpen && <button type="button" className="btn btn-soft btn-sm" onClick={() => setComposing(true)}>{t('d2.rv.leave')}</button>}
-        </div>
+        <StateView
+          bare
+          compact
+          title={t('d2.rv.none').replace(/[.\s]+$/, '')}
+          text={me ? t('d2.rv.beFirst').replace(/^[:\s]+/, '').replace(/^./, (c) => c.toUpperCase()) : ''}
+          action={me && !r.mine && !formOpen ? <button type="button" className="btn btn-soft btn-sm" onClick={() => setComposing(true)}>{t('d2.rv.leave')}</button> : undefined}
+        />
       )}
       {!empty && <div className="rv-score">
         <div className="text-center">
@@ -135804,7 +135807,7 @@ const en: Record<keyof typeof ru, string> = {
   'd2.hero.last2h': 'Players over the last 2 hours',
   'd2.hero.noChange': 'no change over 2 h',
   'd2.hero.change': '{sign}{n} over 2 h',
-  'd2.hero.inGame': 'player in game →|players in game →',
+  'd2.hero.inGame': '{n} player in game →|{n} players in game →',
   'd2.hero.playing': 'playing for {v}',
   'd2.hero.onlineNow': 'online now',
   'd2.hero.rankTitle': 'Place in the weekly ranking',
@@ -139842,7 +139845,7 @@ const ru = {
   'd2.hero.last2h': 'Игроки за последние 2 часа',
   'd2.hero.noChange': 'за 2 ч без изменений',
   'd2.hero.change': 'за 2 ч {sign}{n}',
-  'd2.hero.inGame': 'игрок в игре →|игрока в игре →|игроков в игре →',
+  'd2.hero.inGame': '{n} игрок в игре →|{n} игрока в игре →|{n} игроков в игре →',
   'd2.hero.playing': 'в игре {v}',
   'd2.hero.onlineNow': 'в сети сейчас',
   'd2.hero.rankTitle': 'Место в рейтинге недели',
@@ -147909,12 +147912,12 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
         </SectionCard>
         <div className="grid gap-3.5 lg:grid-cols-12">
           {chartTile(1, false)}
-          <div className="space-y-3.5 lg:col-span-5 lg:col-start-1 lg:self-start max-lg:contents">
+          <div className="space-y-3.5 lg:col-span-5 lg:col-start-1 lg:flex lg:flex-col lg:gap-3.5 lg:space-y-0 lg:self-stretch max-lg:contents">
           <SectionCard id="ov-events" state={sections} className="max-lg:order-1" style={stagger(2)} title={t('d2.sd.recent')}>
             <EventsFeed events={events} online={s.online} limit={6} moreHref={tabHref(id, 'events')} />
           </SectionCard>
           {/* the reviews sit under the events: the left column fills the height of the player list */}
-          <SectionCard id="ov-reviews" state={sections} className="max-lg:order-3" style={stagger(4)} title={t('d2.sd.playerReviews')}>
+          <SectionCard id="ov-reviews" state={sections} className="max-lg:order-3 lg:flex-1" style={stagger(4)} title={t('d2.sd.playerReviews')}>
             <ServerReviews serverId={id} />
           </SectionCard>
           </div>
@@ -155344,6 +155347,15 @@ a.tile:active, a.panel:active, button.tile:active, [role='link'].tile:active { t
 .pulse-nums dd.text-ok { color: rgb(var(--ok)); }
 .pulse-nums dd.text-warn { color: rgb(var(--warn)); }
 .pulse-nums dd.text-bad { color: rgb(var(--bad)); }
+
+/* ---------- server page: the chart has one row of tools; the cards of the left column stretch to the player list ---------- */
+.hc-save { display: inline-grid; place-items: center; width: 30px; height: 30px; flex: none; border: 0; border-radius: var(--r-md); background: rgb(var(--soft)); color: rgb(var(--link)); cursor: pointer; }
+.hc-save:hover:not(:disabled) { background: rgb(var(--brand) / .18); }
+.hc-save:disabled { opacity: .5; cursor: default; }
+.hc-notes { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.hc-tools { margin-bottom: 4px; }
+.hc-tip { font-size: var(--fs-xs); }
+.srv-cta-addr { font-size: var(--fs-sm); opacity: .85; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/profile.css" << '__COREGSM_EOF__'

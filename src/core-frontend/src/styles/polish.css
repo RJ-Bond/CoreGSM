@@ -100,3 +100,12 @@ a.tile:active, a.panel:active, button.tile:active, [role='link'].tile:active { t
 .pulse-nums dd.text-ok { color: rgb(var(--ok)); }
 .pulse-nums dd.text-warn { color: rgb(var(--warn)); }
 .pulse-nums dd.text-bad { color: rgb(var(--bad)); }
+
+/* ---------- server page: the chart has one row of tools; the cards of the left column stretch to the player list ---------- */
+.hc-save { display: inline-grid; place-items: center; width: 30px; height: 30px; flex: none; border: 0; border-radius: var(--r-md); background: rgb(var(--soft)); color: rgb(var(--link)); cursor: pointer; }
+.hc-save:hover:not(:disabled) { background: rgb(var(--brand) / .18); }
+.hc-save:disabled { opacity: .5; cursor: default; }
+.hc-notes { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.hc-tools { margin-bottom: 4px; }
+.hc-tip { font-size: var(--fs-xs); }
+.srv-cta-addr { font-size: var(--fs-sm); opacity: .85; }

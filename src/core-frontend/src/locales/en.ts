@@ -3563,7 +3563,7 @@ const en: Record<keyof typeof ru, string> = {
   'd2.hero.last2h': 'Players over the last 2 hours',
   'd2.hero.noChange': 'no change over 2 h',
   'd2.hero.change': '{sign}{n} over 2 h',
-  'd2.hero.inGame': 'player in game →|players in game →',
+  'd2.hero.inGame': '{n} player in game →|{n} players in game →',
   'd2.hero.playing': 'playing for {v}',
   'd2.hero.onlineNow': 'online now',
   'd2.hero.rankTitle': 'Place in the weekly ranking',

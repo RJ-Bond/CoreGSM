@@ -410,6 +410,9 @@ export default function HistoryChart({
               {t('srv.chart.now', { n: `${endPt.v}${unit ? ` ${unit}` : ''}` })}
             </span>
           )}
+          <button type="button" className="hc-save" onClick={() => void exportPng()} disabled={saving || points.length === 0} title={t('d2.hch.savePng')} aria-label={saving ? t('d2.hch.preparing') : t('d2.hch.png')}>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M12 4v11M7 11l5 5 5-5M5 20h14" /></svg>
+          </button>
         </span>
       </div>
       <div
@@ -564,10 +567,6 @@ export default function HistoryChart({
           <span className={`ml-2 ${TONE_TEXT[pingTone(hv).tone]}`}>{pingTone(hv).label}</span>
         )}
       </p>
-      <button type="button" className="btn btn-soft btn-sm" onClick={() => void exportPng()} disabled={saving || points.length === 0} title={t('d2.hch.savePng')}>
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M12 4v11M7 11l5 5 5-5M5 20h14" /></svg>
-        {saving ? t('d2.hch.preparing') : t('d2.hch.png')}
-      </button>
       </div>
       {marks.length > 0 && (
         <ul className="hc-legend" aria-label={t('d2.hch.legend')}>
