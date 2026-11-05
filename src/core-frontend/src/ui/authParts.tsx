@@ -1,5 +1,5 @@
 /** Sign-in and first-run screens: backdrop, card, password fields, Discord button. */
-import AuthShowcase from '../components/AuthShowcase';
+import AuthShowcase, { AuthSummary } from '../components/AuthShowcase';
 import { type CSSProperties, forwardRef, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, useEffect, useRef, useState } from 'react';
 import { useAuth } from '../auth';
 import { ICON_PATHS } from '../gameIcons';
@@ -52,7 +52,10 @@ export function AuthShell({ children }: { children: ReactNode }) {
       <div className="absolute right-4 top-4 z-10"><ThemeToggle /></div>
       <div className="relative z-1 grid w-full max-w-6xl items-center justify-items-center gap-10 xl:grid-cols-[minmax(0,1fr)_24rem_minmax(0,1fr)]">
         <AuthShowcase side="left" />
-        {children}
+        <div className="flex w-full flex-col items-center gap-4">
+          <AuthSummary />
+          {children}
+        </div>
         <AuthShowcase side="right" />
       </div>
     </div>
@@ -147,9 +150,11 @@ export const PasswordField = forwardRef<
     disabled?: boolean;
     autoFocus?: boolean;
     onKeyDown?: (e: ReactKeyboardEvent<HTMLInputElement>) => void;
+    /** a picture on the left inside the field */
+    icon?: ReactNode;
     children?: ReactNode;
   }
->(function PasswordField({ id, label, value, onChange, autoComplete, error, hint, placeholder, disabled, autoFocus, onKeyDown, children }, ref) {
+>(function PasswordField({ id, label, value, onChange, autoComplete, error, hint, placeholder, disabled, autoFocus, onKeyDown, icon, children }, ref) {
   const [shown, setShown] = useState(false);
   const [caps, setCaps] = useState(false);
   const describedBy = [error ? `${id}-err` : '', caps ? `${id}-caps` : '', hint ? `${id}-hint` : ''].filter(Boolean).join(' ') || undefined;
@@ -161,10 +166,11 @@ export const PasswordField = forwardRef<
     <div>
       <label htmlFor={id} className="label">{label}</label>
       <div className="relative">
+        {icon && <span className="auth-ico" aria-hidden>{icon}</span>}
         <input
           id={id}
           ref={ref}
-          className="input pr-12! max-sm:pr-14!"
+          className={`input pr-12! max-sm:pr-14! ${icon ? 'pl-11!' : ''}`}
           type={shown ? 'text' : 'password'}
           value={value}
           onChange={(e) => onChange(e.target.value)}

@@ -168,3 +168,11 @@ a.tile:active, a.panel:active, button.tile:active, [role='link'].tile:active { t
 /* ---------- icon buttons in rows are easier to hit ---------- */
 .adm-table .row-act { --b-i: 2.25rem; }
 .row-act, .btn-icon-sm { min-width: 36px; min-height: 36px; }
+
+/* ---------- sign-in: pictures in the fields, a greeting for a returning person, a summary on a narrow screen ---------- */
+.auth-ico { position: absolute; z-index: 1; left: 14px; top: 50%; transform: translateY(-50%); display: grid; place-items: center; color: rgb(var(--mute)); pointer-events: none; }
+.input:focus ~ .auth-ico, .relative:focus-within > .auth-ico { color: rgb(var(--link)); }
+.auth-back { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 12px; margin: 0; padding: 10px 14px; border-radius: var(--r-lg); background: rgb(var(--soft)); font-weight: 800; }
+.auth-summary { display: flex; align-items: center; gap: 12px; margin: 0; padding: 7px 16px; border-radius: var(--r-pill); background: rgb(var(--card) / .8); box-shadow: inset 0 0 0 1px rgb(var(--line)); font-size: var(--fs-sm); font-weight: 650; color: rgb(var(--mute)); }
+.auth-summary b { color: rgb(var(--ink)); font-weight: 800; }
+.auth-summary > i { width: 4px; height: 4px; border-radius: 50%; background: rgb(var(--mute) / .6); }

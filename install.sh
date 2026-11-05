@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="8122c93c1488"
+COREGSM_BUILD="e51b89f8bbb8"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.18"
+COREGSM_VERSION="1.1.19"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -112526,6 +112526,28 @@ import { t, useI18n } from '../i18n';
 import { AnimatedNumber } from '../ui/motion';
 import { GameAvatar, Logo } from '../ui/blocks';
 
+/** the two numbers of the side tiles in one line above the card, for screens narrower than the wide layout */
+export function AuthSummary() {
+  useI18n();
+  const [info, setInfo] = useState<StatusInfo | null>(null);
+  useEffect(() => {
+    let alive = true;
+    api<StatusInfo>('/status').then((s) => { if (alive) setInfo(s); }).catch(() => undefined);
+    return () => { alive = false; };
+  }, []);
+  const servers = info?.servers ?? [];
+  if (servers.length === 0) return null;
+  const online = servers.filter((s) => s.online);
+  const players = online.reduce((n, s) => n + s.players, 0);
+  return (
+    <p className="auth-summary xl:hidden" aria-hidden>
+      <span><b><AnimatedNumber value={online.length} /></b> {t('d2.as.of', { n: servers.length })} {t('d2.as.serversOnline').toLowerCase()}</span>
+      <i />
+      <span><b><AnimatedNumber value={players} /></b> {t('d2.as.players').toLowerCase()}</span>
+    </p>
+  );
+}
+
 /**
  * Decorative "bento" tiles around the sign-in card (wide screens only). They show live numbers when the panel
  * is public (GET /status) and quiet generic tiles otherwise. Purely decorative: hidden from assistive tech.
@@ -132352,6 +132374,9 @@ const en: Record<keyof typeof ru, string> = {
   'login.locked': 'Too many attempts. Try again in {time}',
   'login.remember': 'Remember me (username only)',
   'login.submit': 'Sign in',
+  'login.back': 'Welcome back, {name}',
+  'login.notMe': 'Not me',
+  'd2.as.players': 'Players online',
   'login.code': 'Verification code',
   'login.enterCode': 'Enter the code',
   'login.codeHint': 'Six digits from your authenticator app, or one of your recovery codes.',
@@ -136396,6 +136421,9 @@ const ru = {
   'login.locked': 'Слишком много попыток. Повторите через {time}',
   'login.remember': 'Запомнить меня (только логин)',
   'login.submit': 'Войти',
+  'login.back': 'С возвращением, {name}',
+  'login.notMe': 'Это не я',
+  'd2.as.players': 'Игроков онлайн',
   'login.code': 'Код подтверждения',
   'login.enterCode': 'Введите код',
   'login.codeHint': 'Шесть цифр из приложения-аутентификатора или один из кодов восстановления.',
@@ -144927,6 +144955,9 @@ export default function Login({ onDone, notice }: { onDone: () => void; notice?:
   const [username, setUsername] = useState(readName);
   const [password, setPassword] = useState('');
   const [remember, setRemember] = useState(() => readName() !== '');
+  // a name left from the last visit: the form greets the person and goes straight to the password
+  const [returning, setReturning] = useState(readName);
+  useEffect(() => { if (readName()) passRef.current?.focus(); }, []);
   const [userErr, setUserErr] = useState('');
   const [passErr, setPassErr] = useState('');
   const [error, setError] = useState('');
@@ -145034,12 +145065,21 @@ export default function Login({ onDone, notice }: { onDone: () => void; notice?:
         </p>
       )}
 
+      {returning && (
+        <p className="auth-back" role="status">
+          <span>{t('login.back', { name: returning })}</span>
+          <button type="button" className="btn-link" onClick={() => { writeName(''); setUsername(''); setRemember(false); setReturning(''); userRef.current?.focus(); }}>{t('login.notMe')}</button>
+        </p>
+      )}
+
       <div>
         <label htmlFor="login-user" className="label">{t('login.user')}</label>
+        <div className="relative">
+          <span className="auth-ico" aria-hidden><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><circle cx="12" cy="8" r="4" /><path d="M4 21a8 8 0 0 1 16 0" /></svg></span>
         <input
           id="login-user"
           ref={userRef}
-          className="input"
+          className="input pl-11!"
           value={username}
           onChange={(e) => setUsername(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter' && !password) { e.preventDefault(); passRef.current?.focus(); } }}
@@ -145051,12 +145091,14 @@ export default function Login({ onDone, notice }: { onDone: () => void; notice?:
           aria-invalid={userErr ? true : undefined}
           aria-describedby={userErr ? 'login-user-err' : undefined}
         />
+        </div>
         <FieldError id="login-user-err" text={userErr} />
       </div>
 
       <PasswordField
         id="login-pass"
         ref={passRef}
+        icon={<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><rect x="4" y="11" width="16" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" /></svg>}
         label={t('login.pass')}
         value={password}
         onChange={setPassword}
@@ -155450,6 +155492,14 @@ a.tile:active, a.panel:active, button.tile:active, [role='link'].tile:active { t
 /* ---------- icon buttons in rows are easier to hit ---------- */
 .adm-table .row-act { --b-i: 2.25rem; }
 .row-act, .btn-icon-sm { min-width: 36px; min-height: 36px; }
+
+/* ---------- sign-in: pictures in the fields, a greeting for a returning person, a summary on a narrow screen ---------- */
+.auth-ico { position: absolute; z-index: 1; left: 14px; top: 50%; transform: translateY(-50%); display: grid; place-items: center; color: rgb(var(--mute)); pointer-events: none; }
+.input:focus ~ .auth-ico, .relative:focus-within > .auth-ico { color: rgb(var(--link)); }
+.auth-back { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 12px; margin: 0; padding: 10px 14px; border-radius: var(--r-lg); background: rgb(var(--soft)); font-weight: 800; }
+.auth-summary { display: flex; align-items: center; gap: 12px; margin: 0; padding: 7px 16px; border-radius: var(--r-pill); background: rgb(var(--card) / .8); box-shadow: inset 0 0 0 1px rgb(var(--line)); font-size: var(--fs-sm); font-weight: 650; color: rgb(var(--mute)); }
+.auth-summary b { color: rgb(var(--ink)); font-weight: 800; }
+.auth-summary > i { width: 4px; height: 4px; border-radius: 50%; background: rgb(var(--mute) / .6); }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/profile.css" << '__COREGSM_EOF__'
@@ -156968,7 +157018,7 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/ui"
   cat > "$APP_DIR/core-frontend/src/ui/authParts.tsx" << '__COREGSM_EOF__'
 /** Sign-in and first-run screens: backdrop, card, password fields, Discord button. */
-import AuthShowcase from '../components/AuthShowcase';
+import AuthShowcase, { AuthSummary } from '../components/AuthShowcase';
 import { type CSSProperties, forwardRef, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, useEffect, useRef, useState } from 'react';
 import { useAuth } from '../auth';
 import { ICON_PATHS } from '../gameIcons';
@@ -157021,7 +157071,10 @@ export function AuthShell({ children }: { children: ReactNode }) {
       <div className="absolute right-4 top-4 z-10"><ThemeToggle /></div>
       <div className="relative z-1 grid w-full max-w-6xl items-center justify-items-center gap-10 xl:grid-cols-[minmax(0,1fr)_24rem_minmax(0,1fr)]">
         <AuthShowcase side="left" />
-        {children}
+        <div className="flex w-full flex-col items-center gap-4">
+          <AuthSummary />
+          {children}
+        </div>
         <AuthShowcase side="right" />
       </div>
     </div>
@@ -157116,9 +157169,11 @@ export const PasswordField = forwardRef<
     disabled?: boolean;
     autoFocus?: boolean;
     onKeyDown?: (e: ReactKeyboardEvent<HTMLInputElement>) => void;
+    /** a picture on the left inside the field */
+    icon?: ReactNode;
     children?: ReactNode;
   }
->(function PasswordField({ id, label, value, onChange, autoComplete, error, hint, placeholder, disabled, autoFocus, onKeyDown, children }, ref) {
+>(function PasswordField({ id, label, value, onChange, autoComplete, error, hint, placeholder, disabled, autoFocus, onKeyDown, icon, children }, ref) {
   const [shown, setShown] = useState(false);
   const [caps, setCaps] = useState(false);
   const describedBy = [error ? `${id}-err` : '', caps ? `${id}-caps` : '', hint ? `${id}-hint` : ''].filter(Boolean).join(' ') || undefined;
@@ -157130,10 +157185,11 @@ export const PasswordField = forwardRef<
     <div>
       <label htmlFor={id} className="label">{label}</label>
       <div className="relative">
+        {icon && <span className="auth-ico" aria-hidden>{icon}</span>}
         <input
           id={id}
           ref={ref}
-          className="input pr-12! max-sm:pr-14!"
+          className={`input pr-12! max-sm:pr-14! ${icon ? 'pl-11!' : ''}`}
           type={shown ? 'text' : 'password'}
           value={value}
           onChange={(e) => onChange(e.target.value)}

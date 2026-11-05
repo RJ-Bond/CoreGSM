@@ -6,6 +6,28 @@ import { t, useI18n } from '../i18n';
 import { AnimatedNumber } from '../ui/motion';
 import { GameAvatar, Logo } from '../ui/blocks';
 
+/** the two numbers of the side tiles in one line above the card, for screens narrower than the wide layout */
+export function AuthSummary() {
+  useI18n();
+  const [info, setInfo] = useState<StatusInfo | null>(null);
+  useEffect(() => {
+    let alive = true;
+    api<StatusInfo>('/status').then((s) => { if (alive) setInfo(s); }).catch(() => undefined);
+    return () => { alive = false; };
+  }, []);
+  const servers = info?.servers ?? [];
+  if (servers.length === 0) return null;
+  const online = servers.filter((s) => s.online);
+  const players = online.reduce((n, s) => n + s.players, 0);
+  return (
+    <p className="auth-summary xl:hidden" aria-hidden>
+      <span><b><AnimatedNumber value={online.length} /></b> {t('d2.as.of', { n: servers.length })} {t('d2.as.serversOnline').toLowerCase()}</span>
+      <i />
+      <span><b><AnimatedNumber value={players} /></b> {t('d2.as.players').toLowerCase()}</span>
+    </p>
+  );
+}
+
 /**
  * Decorative "bento" tiles around the sign-in card (wide screens only). They show live numbers when the panel
  * is public (GET /status) and quiet generic tiles otherwise. Purely decorative: hidden from assistive tech.
