@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="a49a86f7a3d4"
+COREGSM_BUILD="412d5b091fe9"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.46"
+COREGSM_VERSION="1.1.47"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -22707,6 +22707,7 @@ export const botClientId = () => bot.status.clientId ?? clientIdFromToken(getSet
 export const BOT_COMMANDS = [
   { name: '/register', description: 'Зарегистрироваться на сайте через Discord (пароль не нужен). Параметры: nick (ник в игре), agree (согласие с правилами)' },
   { name: '/nick', description: 'Сменить игровой ник, по которому считается статистика' },
+  { name: '/faq', description: 'Ответ на частый вопрос (ответы пишутся в панели); бот отвечает и на упоминание с вопросом' },
   { name: '/link', description: 'Привязать игровой ник: выберите себя из списка игроков или впишите ник вручную' },
   { name: '/profile', description: 'Моя карточка: ник, ранг V Rising, часы в игре и достижения' },
   { name: '/online', description: 'Кто сейчас играет: онлайн всех серверов' },
@@ -38953,6 +38954,7 @@ import { footerOf, getStyle, setStyle } from './style.js';
 import fs from 'node:fs';
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, Client, EmbedBuilder, GatewayIntentBits, type GuildMember } from 'discord.js';
 import { backend, report } from './backend.js';
+import { handleFaqMessage } from './faq.js';
 import { handleInteraction, registerCommands } from './commands.js';
 import { deliveryFailure, humanDiscordError, isMessageGone, newNonce, retryAfterOf, retrySocket, stableNonce } from './errors.js';
 import { setGatewayAgent } from './gateway.js';
@@ -39136,7 +39138,7 @@ async function applyConfig(): Promise<void> {
   if (proxy) log('Using proxy for Discord:', proxy.label);
 
   const c = new Client({
-    intents: cfg.welcome ? [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers] : [GatewayIntentBits.Guilds],
+    intents: cfg.welcome ? [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.GuildMembers] : [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages],
     rest: { timeout: 10_000, ...(proxy ? { agent: proxy.rest } : {}) },
   });
   c.on('error', (e) => log('client error', e));
@@ -39152,6 +39154,10 @@ async function applyConfig(): Promise<void> {
       void welcomeMember(c, m).catch((e) => log('welcome failed:', (e as Error).message));
     });
   }
+  c.on('messageCreate', (m) => {
+    if (stopping) return;
+    void handleFaqMessage(m).catch((e) => log('faq message failed:', (e as Error).message));
+  });
   c.on('guildCreate', guildsChanged);
   c.on('guildDelete', guildsChanged);
   c.on('interactionCreate', (i) => {
@@ -40125,6 +40131,7 @@ import type { AutocompleteInteraction, ButtonInteraction, Client, Interaction } 
 import { backend, backendJson } from './backend.js';
 import { humanDiscordError } from './errors.js';
 import { log } from './log.js';
+import { FAQ_COMMANDS, FAQ_NAMES, faqAutocomplete, handleFaq } from './faq.js';
 import { handleInfo, INFO_COMMANDS, INFO_NAMES, infoAutocomplete } from './info.js';
 import { HELP_COMMANDS, HELP_NAMES, handleHelp, handleHelpButton, handleHelpSelect, helpAutocomplete } from './help.js';
 import { COLORS, cardReply, replyEmbed, type ProfileData } from './replies.js';
@@ -40154,6 +40161,7 @@ export const COMMANDS = [
   ...PUNISH_COMMANDS,
   ...LINK_COMMANDS,
   ...HELP_COMMANDS,
+  ...FAQ_COMMANDS,
 ];
 
 /** registers the commands and returns how many Discord accepted (0 on failure) */
@@ -40235,6 +40243,7 @@ export async function handleInteraction(i: Interaction): Promise<void> {
   if ((i.isUserContextMenuCommand() || i.isMessageContextMenuCommand()) && CONTEXT_NAMES.has(i.commandName)) return handleContext(i);
   if (i.isButton()) return /^(help|srv):/.test(i.customId) ? handleHelpButton(i) : handlePollButton(i);
   if (i.isAutocomplete() && i.commandName === 'help') return helpAutocomplete(i);
+  if (i.isAutocomplete() && FAQ_NAMES.has(i.commandName)) return faqAutocomplete(i);
   if (i.isAutocomplete() && PUNISH_NAMES.has(i.commandName)) return punishAutocomplete(i);
   if (i.isAutocomplete()) return INFO_NAMES.has(i.commandName) ? infoAutocomplete(i) : handleAutocomplete(i);
   if (!i.isChatInputCommand()) return;
@@ -40243,6 +40252,7 @@ export async function handleInteraction(i: Interaction): Promise<void> {
   if (CLEAR_NAMES.has(i.commandName)) return handleClearCommand(i);
   if (PUNISH_NAMES.has(i.commandName)) return handlePunish(i);
   if (HELP_NAMES.has(i.commandName)) return handleHelp(i);
+  if (FAQ_NAMES.has(i.commandName)) return handleFaq(i);
   if (LINK_NAMES.has(i.commandName)) return handleLinkCommand(i);
   const name = i.commandName;
   if (name !== 'register' && name !== 'nick' && name !== 'profile') return;
@@ -40599,6 +40609,109 @@ export async function retrySocket<T>(fn: () => Promise<T>, tries = 3, delayMs = 
       await new Promise((r) => setTimeout(r, delayMs * i));
     }
   }
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-bot/src"
+  cat > "$APP_DIR/core-bot/src/faq.ts" << '__COREGSM_EOF__'
+/** /faq (answers written in the panel, with suggestions while typing) and the answer when somebody mentions the bot in a question. */
+import { EmbedBuilder, type AutocompleteInteraction, type ChatInputCommandInteraction, type Message } from 'discord.js';
+import { backendJson } from './backend.js';
+import { faqAllowed, mentionQuestion } from './faqLogic.js';
+import { langOf } from './helpData.js';
+import { log } from './log.js';
+import { footerOf, getStyle } from './style.js';
+
+export const FAQ_COMMANDS = [
+  {
+    name: 'faq',
+    description: 'Ответ на частый вопрос о сообществе и серверах',
+    description_localizations: { 'en-US': 'Answer to a frequent question about the community and servers', 'en-GB': 'Answer to a frequent question about the community and servers' },
+    options: [
+      {
+        type: 3,
+        name: 'question',
+        description: 'Вопрос: начните вводить и выберите из списка',
+        description_localizations: { 'en-US': 'Question: start typing and pick from the list', 'en-GB': 'Question: start typing and pick from the list' },
+        required: true,
+        autocomplete: true,
+      },
+    ],
+  },
+];
+export const FAQ_NAMES = new Set(FAQ_COMMANDS.map((c) => c.name));
+
+interface Answer { id: number; title: string; answer: string }
+
+function card(a: Answer): EmbedBuilder {
+  return new EmbedBuilder().setTitle(`💬 ${a.title}`.slice(0, 256)).setDescription(a.answer.slice(0, 4000)).setColor(getStyle().accent).setFooter(footerOf('FAQ'));
+}
+
+export async function faqAutocomplete(i: AutocompleteInteraction): Promise<void> {
+  let items: { name: string; value: string }[] = [];
+  try {
+    const r = await backendJson<{ items?: { name: string; value: string }[] }>(`/internal/faq/suggest?q=${encodeURIComponent(String(i.options.getFocused()).slice(0, 60))}`, { signal: AbortSignal.timeout(2000) });
+    items = r.data?.items ?? [];
+  } catch {
+    items = [];
+  }
+  await i.respond(items.slice(0, 25)).catch((e) => log('faq autocomplete failed:', (e as Error).message));
+}
+
+export async function handleFaq(i: ChatInputCommandInteraction): Promise<void> {
+  const en = langOf(i.locale) === 'en';
+  try {
+    await i.deferReply();
+  } catch (e) {
+    log('faq: could not acknowledge:', (e as Error).message);
+    return;
+  }
+  const v = i.options.getString('question', true);
+  const path = /^\d+$/.test(v) ? `/internal/faq/${v}` : null;
+  const r = path
+    ? await backendJson<Answer>(path).catch(() => null)
+    : await backendJson<Answer>('/internal/faq/match', { method: 'POST', body: JSON.stringify({ text: v }) }).catch(() => null);
+  if (!r?.data || !r.ok) {
+    await i.editReply({ content: en ? 'No ready answer for that. Ask the moderators.' : 'Готового ответа на это нет. Спросите у модераторов.' }).catch(() => undefined);
+    return;
+  }
+  await i.editReply({ embeds: [card(r.data)], allowedMentions: { parse: [] } }).catch((e) => log('faq reply failed:', (e as Error).message));
+}
+
+const last = new Map<string, number>();
+
+/** a message that mentions the bot with a question: answer with the matching entry, once per channel pause, stay silent otherwise */
+export async function handleFaqMessage(m: Message): Promise<void> {
+  const me = m.client.user?.id;
+  if (!me || m.author.bot || !m.guildId || !m.mentions.users.has(me)) return;
+  const q = mentionQuestion(m.content, me);
+  if (!q) return;
+  const r = await backendJson<Answer>('/internal/faq/match', { method: 'POST', body: JSON.stringify({ text: q }), signal: AbortSignal.timeout(3000) }).catch(() => null);
+  if (!r?.ok || !r.data) return;
+  if (!faqAllowed(last, m.channelId, Date.now())) return;
+  await m.reply({ embeds: [card(r.data)], allowedMentions: { parse: [], repliedUser: false } }).catch((e) => log('faq answer failed:', (e as Error).message));
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-bot/src"
+  cat > "$APP_DIR/core-bot/src/faqLogic.ts" << '__COREGSM_EOF__'
+/** FAQ in the bot: the question out of a message that mentions the bot, and the per-channel pause between answers. Pure. */
+
+/** the text of the message without mentions of the bot; null when it is not a question for the bot */
+export function mentionQuestion(content: string, botId: string): string | null {
+  const re = new RegExp(`<@!?${botId}>`, 'g');
+  if (!re.test(content)) return null;
+  const q = content.replace(new RegExp(`<@!?${botId}>`, 'g'), ' ').replace(/\s+/g, ' ').trim();
+  return q.length >= 3 ? q.slice(0, 300) : null;
+}
+
+export const FAQ_PAUSE_MS = 20_000;
+
+/** true when the channel may get an answer now; remembers the time (and forgets old channels) */
+export function faqAllowed(last: Map<string, number>, channelId: string, now: number, pause = FAQ_PAUSE_MS): boolean {
+  const t = last.get(channelId);
+  if (t !== undefined && now - t < pause) return false;
+  last.set(channelId, now);
+  if (last.size > 500) for (const [k, v] of last) if (now - v > pause) last.delete(k);
+  return true;
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-bot/src"
@@ -41110,6 +41223,7 @@ const withBot = (ru: string, en: string): Two => ({ ru: `право «Админ
 
 export const CMDS: CmdInfo[] = [
   { cmd: '/register', text: { ru: 'создать аккаунт в панели через Discord, пароль не нужен', en: 'create an account in the panel through Discord, no password' }, usage: '/register nick:<ник> [agree:True]', examples: ['/register nick:Vasya'], needs: NONE },
+  { cmd: '/faq', text: { ru: 'ответ на частый вопрос: начните вводить и выберите из списка', en: 'answer to a frequent question: start typing and pick from the list' }, usage: '/faq question:<вопрос>', examples: ['/faq question:Как зайти на сервер'], needs: NONE },
   { cmd: '/link', text: { ru: 'привязать игровой ник: выберите себя из списка или впишите вручную', en: 'link your in-game nick: pick yourself from the list or type it' }, usage: '/link', examples: ['/link'], needs: NONE },
   { cmd: '/nick', text: { ru: 'сменить игровой ник, по которому считается статистика', en: 'change the in-game nick your statistics are counted by' }, usage: '/nick nick:<ник>', examples: ['/nick nick:Vasya'], needs: NONE },
   { cmd: '/profile', text: { ru: 'моя карточка: ранг, часы в игре, достижения', en: 'my card: rank, hours played, achievements' }, usage: '/profile', examples: ['/profile'], needs: NONE },
@@ -41142,7 +41256,7 @@ export interface Category {
 }
 
 export const CATEGORIES: Category[] = [
-  { id: 'play', emoji: '🙋', color: 0x57f287, label: { ru: 'Игроку', en: 'Player' }, title: { ru: 'Игроку: аккаунт и профиль', en: 'Player: account and profile' }, cmds: ['/register', '/link', '/nick', '/profile', '/roles'] },
+  { id: 'play', emoji: '🙋', color: 0x57f287, label: { ru: 'Игроку', en: 'Player' }, title: { ru: 'Игроку: аккаунт и профиль', en: 'Player: account and profile' }, cmds: ['/register', '/link', '/nick', '/profile', '/roles', '/faq'] },
   { id: 'srv', emoji: '🖥️', color: 0x3b82f6, label: { ru: 'Серверы', en: 'Servers' }, title: { ru: 'Серверы: кто и где играет', en: 'Servers: who plays where' }, cmds: ['/online', '/servers', '/status'] },
   { id: 'stat', emoji: '📊', color: 0x8b5cf6, label: { ru: 'Статистика', en: 'Statistics' }, title: { ru: 'Статистика игроков', en: 'Player statistics' }, cmds: ['/player', '/top'] },
   {
@@ -119797,6 +119911,98 @@ export default function EmailVerifyState() {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/FaqCard.tsx" << '__COREGSM_EOF__'
+import { useEffect, useState } from 'react';
+import { api } from '../api';
+import { t } from '../i18n';
+import { Button, Section, Switch, fail, toast } from '../ui';
+
+interface Item { id: number; title: string; keywords: string[]; answer: string; hits: number }
+interface Data { enabled: boolean; items: Item[] }
+const EMPTY = { id: 0, title: '', keywords: '', answer: '' };
+
+/** answers to frequent questions: /faq in Discord and the reply when somebody mentions the bot with a question */
+export default function FaqCard() {
+  const [d, setD] = useState<Data | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [form, setForm] = useState<typeof EMPTY | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    api<Data>('/faq').then((r) => { if (alive) setD(r); }).catch(() => undefined);
+    return () => { alive = false; };
+  }, []);
+  if (!d) return null;
+
+  const run = async (f: () => Promise<Data>, ok?: string) => {
+    setBusy(true);
+    try {
+      setD(await f());
+      if (ok) toast(ok);
+    } catch (e) {
+      fail(e);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const submit = async () => {
+    if (!form) return;
+    const body = { title: form.title, keywords: form.keywords, answer: form.answer };
+    await run(() => (form.id ? api<Data>(`/faq/${form.id}`, 'PUT', body) : api<Data>('/faq', 'POST', body)), t('faq.saved'));
+    setForm(null);
+  };
+  const valid = !!form && form.title.trim().length >= 2 && form.answer.trim().length >= 2;
+
+  return (
+    <Section title={t('faq.title')}>
+      <p className="mb-3 text-sm font-semibold text-mute">{t('faq.help')}</p>
+      <label className="mb-4 flex items-center gap-3 font-bold">
+        <Switch id="faq-on" checked={d.enabled} onChange={(on) => void run(() => api<Data>('/settings/faq', 'PUT', { enabled: on }), t('faq.saved'))} /> {t('faq.on')}
+      </label>
+      {d.items.length === 0 && !form && <p className="mb-3 text-sm font-semibold text-mute">{t('faq.empty')}</p>}
+      <ul className="mb-3 grid gap-2">
+        {d.items.map((e) => (
+          <li key={e.id} className="rounded-xl border border-line p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <b>{e.title}</b>
+              <span className="flex gap-2">
+                <button type="button" className="btn btn-soft btn-sm" onClick={() => setForm({ id: e.id, title: e.title, keywords: e.keywords.join(', '), answer: e.answer })}>{t('adm.tbl.edit')}</button>
+                <button type="button" className="btn btn-soft btn-sm" disabled={busy} onClick={() => void run(() => api<Data>(`/faq/${e.id}`, 'DELETE'), t('faq.deleted'))}>{t('ann.delete')}</button>
+              </span>
+            </div>
+            <p className="mt-1 line-clamp-2 text-sm font-semibold text-mute">{e.answer}</p>
+            <p className="mt-1 text-xs font-semibold text-mute">{e.keywords.join(' · ') || t('faq.noKeys')} · {t('faq.hits', { n: e.hits })}</p>
+          </li>
+        ))}
+      </ul>
+      {form ? (
+        <div className="grid gap-3">
+          <div>
+            <label htmlFor="faq-title" className="label">{t('faq.q')}</label>
+            <input id="faq-title" className="input w-full" maxLength={100} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
+          </div>
+          <div>
+            <label htmlFor="faq-keys" className="label">{t('faq.keys')}</label>
+            <input id="faq-keys" className="input w-full" maxLength={1000} placeholder={t('faq.keysHint')} value={form.keywords} onChange={(e) => setForm({ ...form, keywords: e.target.value })} />
+          </div>
+          <div>
+            <label htmlFor="faq-answer" className="label">{t('faq.a')}</label>
+            <textarea id="faq-answer" className="input min-h-28 w-full" maxLength={1500} value={form.answer} onChange={(e) => setForm({ ...form, answer: e.target.value })} />
+          </div>
+          <div className="flex gap-2">
+            <Button type="button" loading={busy} disabled={!valid} onClick={() => void submit()}>{t('common.save')}</Button>
+            <button type="button" className="btn btn-soft" onClick={() => setForm(null)}>{t('common.cancel')}</button>
+          </div>
+        </div>
+      ) : (
+        <button type="button" className="btn btn-soft" onClick={() => setForm({ ...EMPTY })}>{t('faq.add')}</button>
+      )}
+    </Section>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
   cat > "$APP_DIR/core-frontend/src/components/FooterIcons.tsx" << '__COREGSM_EOF__'
 import type { ReactNode } from 'react';
 
@@ -140388,6 +140594,19 @@ const en: Record<keyof typeof ru, string> = {
   'wl.rolesNoChannel': 'Choose a channel first: the roles come from its Discord server.',
   'wl.saved': 'Saved',
   'wl.intent': 'Needs the «Server Members Intent» in Developer Portal → Bot.',
+  'faq.title': 'Auto-answers: frequent questions',
+  'faq.help': 'Write questions and answers: players get them with /faq (with suggestions while typing), and the bot answers by itself when it is mentioned in a question with matching words.',
+  'faq.on': 'Auto-answers are on',
+  'faq.empty': 'Nothing yet. Add the first answer.',
+  'faq.add': 'Add an answer',
+  'faq.q': 'Question (title)',
+  'faq.a': 'Answer',
+  'faq.keys': 'Keywords',
+  'faq.keysHint': 'address, how to join, ip',
+  'faq.noKeys': 'no keywords',
+  'faq.hits': 'shown {n}',
+  'faq.saved': 'Saved',
+  'faq.deleted': 'Deleted',
   'dash.title': 'Live board and weekly summary',
   'dash.help': 'One message in a channel with all servers, online and the top of the week: the bot edits it once a minute.',
   'dash.on': 'Turn the live board on',
@@ -144625,6 +144844,19 @@ const ru = {
   'wl.rolesNoChannel': 'Сначала выберите канал: роли берутся с его Discord-сервера.',
   'wl.saved': 'Сохранено',
   'wl.intent': 'Нужен «Server Members Intent» в Developer Portal → Bot.',
+  'faq.title': 'Автоответчик: частые вопросы',
+  'faq.help': 'Напишите вопросы и ответы — игроки получат их командой /faq (с подсказками при вводе), а бот сам ответит, если его упомянуть в вопросе с подходящими словами.',
+  'faq.on': 'Автоответчик включён',
+  'faq.empty': 'Пока ничего нет. Добавьте первый ответ.',
+  'faq.add': 'Добавить ответ',
+  'faq.q': 'Вопрос (название)',
+  'faq.a': 'Ответ',
+  'faq.keys': 'Ключевые слова',
+  'faq.keysHint': 'адрес, как зайти, ip',
+  'faq.noKeys': 'без ключевых слов',
+  'faq.hits': 'показан {n}',
+  'faq.saved': 'Сохранено',
+  'faq.deleted': 'Удалено',
   'dash.title': 'Живая сводка и итоги недели',
   'dash.help': 'Одно сообщение в канале со всеми серверами, онлайном и топом недели: бот сам обновляет его раз в минуту.',
   'dash.on': 'Включить живую сводку',
@@ -150591,6 +150823,7 @@ import CasesCard from '../components/CasesCard';
 import ModerationCard from '../components/ModerationCard';
 import WelcomeCard from '../components/WelcomeCard';
 import DashboardCard from '../components/DashboardCard';
+import FaqCard from '../components/FaqCard';
 import DiscordStyleCard from '../components/DiscordStyleCard';
 
 type Style = 'embed' | 'card' | 'both';
@@ -150902,6 +151135,7 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
           <PlayersShownCard />
           <WelcomeCard />
           <DashboardCard />
+          <FaqCard />
           <DiscordStyleCard />
         </>
       )}

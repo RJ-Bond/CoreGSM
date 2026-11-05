@@ -15,6 +15,7 @@ import CasesCard from '../components/CasesCard';
 import ModerationCard from '../components/ModerationCard';
 import WelcomeCard from '../components/WelcomeCard';
 import DashboardCard from '../components/DashboardCard';
+import FaqCard from '../components/FaqCard';
 import DiscordStyleCard from '../components/DiscordStyleCard';
 
 type Style = 'embed' | 'card' | 'both';
@@ -326,6 +327,7 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
           <PlayersShownCard />
           <WelcomeCard />
           <DashboardCard />
+          <FaqCard />
           <DiscordStyleCard />
         </>
       )}

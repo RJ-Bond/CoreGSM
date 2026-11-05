@@ -19,6 +19,7 @@ const withBot = (ru: string, en: string): Two => ({ ru: `право «Админ
 
 export const CMDS: CmdInfo[] = [
   { cmd: '/register', text: { ru: 'создать аккаунт в панели через Discord, пароль не нужен', en: 'create an account in the panel through Discord, no password' }, usage: '/register nick:<ник> [agree:True]', examples: ['/register nick:Vasya'], needs: NONE },
+  { cmd: '/faq', text: { ru: 'ответ на частый вопрос: начните вводить и выберите из списка', en: 'answer to a frequent question: start typing and pick from the list' }, usage: '/faq question:<вопрос>', examples: ['/faq question:Как зайти на сервер'], needs: NONE },
   { cmd: '/link', text: { ru: 'привязать игровой ник: выберите себя из списка или впишите вручную', en: 'link your in-game nick: pick yourself from the list or type it' }, usage: '/link', examples: ['/link'], needs: NONE },
   { cmd: '/nick', text: { ru: 'сменить игровой ник, по которому считается статистика', en: 'change the in-game nick your statistics are counted by' }, usage: '/nick nick:<ник>', examples: ['/nick nick:Vasya'], needs: NONE },
   { cmd: '/profile', text: { ru: 'моя карточка: ранг, часы в игре, достижения', en: 'my card: rank, hours played, achievements' }, usage: '/profile', examples: ['/profile'], needs: NONE },
@@ -51,7 +52,7 @@ export interface Category {
 }
 
 export const CATEGORIES: Category[] = [
-  { id: 'play', emoji: '🙋', color: 0x57f287, label: { ru: 'Игроку', en: 'Player' }, title: { ru: 'Игроку: аккаунт и профиль', en: 'Player: account and profile' }, cmds: ['/register', '/link', '/nick', '/profile', '/roles'] },
+  { id: 'play', emoji: '🙋', color: 0x57f287, label: { ru: 'Игроку', en: 'Player' }, title: { ru: 'Игроку: аккаунт и профиль', en: 'Player: account and profile' }, cmds: ['/register', '/link', '/nick', '/profile', '/roles', '/faq'] },
   { id: 'srv', emoji: '🖥️', color: 0x3b82f6, label: { ru: 'Серверы', en: 'Servers' }, title: { ru: 'Серверы: кто и где играет', en: 'Servers: who plays where' }, cmds: ['/online', '/servers', '/status'] },
   { id: 'stat', emoji: '📊', color: 0x8b5cf6, label: { ru: 'Статистика', en: 'Statistics' }, title: { ru: 'Статистика игроков', en: 'Player statistics' }, cmds: ['/player', '/top'] },
   {

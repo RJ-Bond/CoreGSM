@@ -6,6 +6,7 @@ import type { AutocompleteInteraction, ButtonInteraction, Client, Interaction } 
 import { backend, backendJson } from './backend.js';
 import { humanDiscordError } from './errors.js';
 import { log } from './log.js';
+import { FAQ_COMMANDS, FAQ_NAMES, faqAutocomplete, handleFaq } from './faq.js';
 import { handleInfo, INFO_COMMANDS, INFO_NAMES, infoAutocomplete } from './info.js';
 import { HELP_COMMANDS, HELP_NAMES, handleHelp, handleHelpButton, handleHelpSelect, helpAutocomplete } from './help.js';
 import { COLORS, cardReply, replyEmbed, type ProfileData } from './replies.js';
@@ -35,6 +36,7 @@ export const COMMANDS = [
   ...PUNISH_COMMANDS,
   ...LINK_COMMANDS,
   ...HELP_COMMANDS,
+  ...FAQ_COMMANDS,
 ];
 
 /** registers the commands and returns how many Discord accepted (0 on failure) */
@@ -116,6 +118,7 @@ export async function handleInteraction(i: Interaction): Promise<void> {
   if ((i.isUserContextMenuCommand() || i.isMessageContextMenuCommand()) && CONTEXT_NAMES.has(i.commandName)) return handleContext(i);
   if (i.isButton()) return /^(help|srv):/.test(i.customId) ? handleHelpButton(i) : handlePollButton(i);
   if (i.isAutocomplete() && i.commandName === 'help') return helpAutocomplete(i);
+  if (i.isAutocomplete() && FAQ_NAMES.has(i.commandName)) return faqAutocomplete(i);
   if (i.isAutocomplete() && PUNISH_NAMES.has(i.commandName)) return punishAutocomplete(i);
   if (i.isAutocomplete()) return INFO_NAMES.has(i.commandName) ? infoAutocomplete(i) : handleAutocomplete(i);
   if (!i.isChatInputCommand()) return;
@@ -124,6 +127,7 @@ export async function handleInteraction(i: Interaction): Promise<void> {
   if (CLEAR_NAMES.has(i.commandName)) return handleClearCommand(i);
   if (PUNISH_NAMES.has(i.commandName)) return handlePunish(i);
   if (HELP_NAMES.has(i.commandName)) return handleHelp(i);
+  if (FAQ_NAMES.has(i.commandName)) return handleFaq(i);
   if (LINK_NAMES.has(i.commandName)) return handleLinkCommand(i);
   const name = i.commandName;
   if (name !== 'register' && name !== 'nick' && name !== 'profile') return;
