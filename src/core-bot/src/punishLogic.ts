@@ -218,3 +218,12 @@ export const PICK_ID = 'modban:pick';
 
 /** a time in the style of Discord that shows in the reader's own time zone: <t:…:R> */
 export const timeTag = (ms: number): string => `<t:${Math.floor(ms / 1000)}:R>`;
+
+/** the body of a result card: short lines with icons instead of a column of one-word fields (they stack badly on a phone) */
+export function cardBody(o: { done: string; targetId: string; targetName: string; modId: string; reason: string; bar?: string; chips: string[] }): string {
+  const lines = [`<@${o.targetId}> ${o.done}.`];
+  if (o.bar) lines.push(o.bar);
+  lines.push('', `👤 **${o.targetName}**  ·  🛡️ <@${o.modId}>`, `📝 ${o.reason || 'причина не указана'}`);
+  if (o.chips.length) lines.push(o.chips.join('  ·  '));
+  return lines.join('\n');
+}

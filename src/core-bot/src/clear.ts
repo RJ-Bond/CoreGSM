@@ -11,7 +11,7 @@
  */
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, PermissionFlagsBits, type ButtonInteraction, type ChatInputCommandInteraction } from 'discord.js';
 import {
-  COUNTDOWN_SECONDS, CONFIRM_TTL_MS, logDescription, logTitle, MAX_COUNT, MAX_RUN_MS, QUICK_COUNTS, SCAN_LIMIT, SLOW_PER_SECOND, clearId, cooldownLeft, durationText, estimate, etaText, expectedTotal, isExpired, messages, normalizeCount, parseClearId, pickLine, readModeration, sortPage, speedText, stopId, waitText,
+  COUNTDOWN_SECONDS, CONFIRM_TTL_MS, logDescription, logTitle, noteCleaning, MAX_COUNT, MAX_RUN_MS, QUICK_COUNTS, SCAN_LIMIT, SLOW_PER_SECOND, clearId, cooldownLeft, durationText, estimate, etaText, expectedTotal, isExpired, messages, normalizeCount, parseClearId, pickLine, readModeration, sortPage, speedText, stopId, waitText,
   type ClearState, type Estimate, type Moderation, type MsgLike,
 } from './clearLogic.js';
 import { backendJson } from './backend.js';
@@ -20,6 +20,7 @@ import { humanDiscordError } from './errors.js';
 import { log } from './log.js';
 import { COLORS, bar10, replyEmbed } from './replies.js';
 import { footerOf, getStyle } from './style.js';
+import { panelRow } from './ui.js';
 
 export const CLEAR_COMMANDS = [
   {
@@ -54,6 +55,7 @@ interface Cleanable {
 const running = new Map<string, { stop: boolean }>();
 /** when each channel was cleaned last (for the pause of the panel) */
 const lastDone = new Map<string, number>();
+const cleanLog = new Map<string, number[]>();
 /** what the preview found, kept half a minute so that the buttons answer at once */
 const scans = new Map<string, { at: number; list: MsgLike[]; complete: boolean }>();
 
@@ -357,10 +359,12 @@ async function record(i: ButtonInteraction, mod: Moderation, ch: Cleanable, t: T
       .setColor(outcome === 'error' ? COLORS.bad : outcome === 'stopped' ? COLORS.warn : COLORS.ok)
       .setAuthor({ name: (i.user.globalName ?? i.user.username).slice(0, 100), iconURL: i.user.displayAvatarURL({ size: 64 }) })
       .setTitle(logTitle(outcome))
-      .setDescription(logDescription({ modId: i.user.id, channelId: ch.id, deleted: t.deleted, elapsedMs: elapsed, pinned: t.pinned, old: t.old, count: st.count, target: st.target ?? '', keepPinned: !st.pinned, includeOld: !!st.old, reason }))
+      .setDescription(logDescription({ modId: i.user.id, channelId: ch.id, deleted: t.deleted, elapsedMs: elapsed, pinned: t.pinned, old: t.old, count: st.count, target: st.target ?? '', keepPinned: !st.pinned, includeOld: !!st.old, reason, weekN: t.deleted ? noteCleaning(cleanLog, ch.id, Date.now()) : 0 }))
       .setTimestamp(new Date())
       .setFooter(footerOf('Журнал'));
-    await target.send({ embeds: [e], allowedMentions: { parse: [] } });
+    const go = i.guildId ? new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('📍 Перейти в канал').setURL(`https://discord.com/channels/${i.guildId}/${ch.id}`) : null;
+    const rows = [...(go ? [new ActionRowBuilder<ButtonBuilder>().addComponents(go)] : []), ...panelRow([{ label: '🌐 Журнал в панели', path: '/admin/discord' }])].slice(0, 2);
+    await target.send({ embeds: [e], components: rows, allowedMentions: { parse: [] } });
   } catch (e) {
     log('/clear log record failed:', (e as Error).message);
   }

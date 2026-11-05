@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="715d33328b58"
+COREGSM_BUILD="5625a89c6098"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.49"
+COREGSM_VERSION="1.1.50"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -39699,7 +39699,7 @@ __COREGSM_EOF__
  */
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, PermissionFlagsBits, type ButtonInteraction, type ChatInputCommandInteraction } from 'discord.js';
 import {
-  COUNTDOWN_SECONDS, CONFIRM_TTL_MS, logDescription, logTitle, MAX_COUNT, MAX_RUN_MS, QUICK_COUNTS, SCAN_LIMIT, SLOW_PER_SECOND, clearId, cooldownLeft, durationText, estimate, etaText, expectedTotal, isExpired, messages, normalizeCount, parseClearId, pickLine, readModeration, sortPage, speedText, stopId, waitText,
+  COUNTDOWN_SECONDS, CONFIRM_TTL_MS, logDescription, logTitle, noteCleaning, MAX_COUNT, MAX_RUN_MS, QUICK_COUNTS, SCAN_LIMIT, SLOW_PER_SECOND, clearId, cooldownLeft, durationText, estimate, etaText, expectedTotal, isExpired, messages, normalizeCount, parseClearId, pickLine, readModeration, sortPage, speedText, stopId, waitText,
   type ClearState, type Estimate, type Moderation, type MsgLike,
 } from './clearLogic.js';
 import { backendJson } from './backend.js';
@@ -39708,6 +39708,7 @@ import { humanDiscordError } from './errors.js';
 import { log } from './log.js';
 import { COLORS, bar10, replyEmbed } from './replies.js';
 import { footerOf, getStyle } from './style.js';
+import { panelRow } from './ui.js';
 
 export const CLEAR_COMMANDS = [
   {
@@ -39742,6 +39743,7 @@ interface Cleanable {
 const running = new Map<string, { stop: boolean }>();
 /** when each channel was cleaned last (for the pause of the panel) */
 const lastDone = new Map<string, number>();
+const cleanLog = new Map<string, number[]>();
 /** what the preview found, kept half a minute so that the buttons answer at once */
 const scans = new Map<string, { at: number; list: MsgLike[]; complete: boolean }>();
 
@@ -40045,10 +40047,12 @@ async function record(i: ButtonInteraction, mod: Moderation, ch: Cleanable, t: T
       .setColor(outcome === 'error' ? COLORS.bad : outcome === 'stopped' ? COLORS.warn : COLORS.ok)
       .setAuthor({ name: (i.user.globalName ?? i.user.username).slice(0, 100), iconURL: i.user.displayAvatarURL({ size: 64 }) })
       .setTitle(logTitle(outcome))
-      .setDescription(logDescription({ modId: i.user.id, channelId: ch.id, deleted: t.deleted, elapsedMs: elapsed, pinned: t.pinned, old: t.old, count: st.count, target: st.target ?? '', keepPinned: !st.pinned, includeOld: !!st.old, reason }))
+      .setDescription(logDescription({ modId: i.user.id, channelId: ch.id, deleted: t.deleted, elapsedMs: elapsed, pinned: t.pinned, old: t.old, count: st.count, target: st.target ?? '', keepPinned: !st.pinned, includeOld: !!st.old, reason, weekN: t.deleted ? noteCleaning(cleanLog, ch.id, Date.now()) : 0 }))
       .setTimestamp(new Date())
       .setFooter(footerOf('Журнал'));
-    await target.send({ embeds: [e], allowedMentions: { parse: [] } });
+    const go = i.guildId ? new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('📍 Перейти в канал').setURL(`https://discord.com/channels/${i.guildId}/${ch.id}`) : null;
+    const rows = [...(go ? [new ActionRowBuilder<ButtonBuilder>().addComponents(go)] : []), ...panelRow([{ label: '🌐 Журнал в панели', path: '/admin/discord' }])].slice(0, 2);
+    await target.send({ embeds: [e], components: rows, allowedMentions: { parse: [] } });
   } catch (e) {
     log('/clear log record failed:', (e as Error).message);
   }
@@ -40302,6 +40306,8 @@ export interface LogInfo {
   keepPinned: boolean;
   includeOld: boolean;
   reason: string;
+  /** how many cleanings this channel had in the last week, this one included (0 = unknown) */
+  weekN?: number;
 }
 
 /** the title of the record in the log channel: what happened in a few words */
@@ -40318,8 +40324,19 @@ export function logDescription(o: LogInfo): string {
   ];
   const left = [o.pinned ? `📌 закреплённых оставлено: **${o.pinned}**` : '', o.old ? `⏳ старше 14 дней осталось: **${o.old}+**` : ''].filter(Boolean);
   if (left.length) lines.push(left.join('  ·  '));
+  if ((o.weekN ?? 0) >= 2) lines.push(`🔁 ${o.weekN}-я очистка этого канала за неделю`);
   if (o.reason) lines.push(`💬 ${o.reason.slice(0, 500)}`);
   return lines.join('\n');
+}
+
+export const WEEK_MS = 7 * 24 * 3600_000;
+
+/** remembers a cleaning of the channel and tells how many there were in the last week (this one included) */
+export function noteCleaning(log: Map<string, number[]>, channelId: string, now: number): number {
+  const list = (log.get(channelId) ?? []).filter((t) => now - t < WEEK_MS);
+  list.push(now);
+  log.set(channelId, list);
+  return list.length;
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-bot/src"
@@ -43043,7 +43060,7 @@ import { backendJson } from './backend.js';
 import { readModeration, type Moderation } from './clearLogic.js';
 import { log } from './log.js';
 import { footerOf } from './style.js';
-import { META, UNDO_MS, appealGoId, dmText, escalationHint, standingProblem, timeTag, undoId, userBtnId, warnBar, warnColor, daysText, durationLabel, type DmOpts, type PunishAction } from './punishLogic.js';
+import { META, UNDO_MS, cardBody, appealGoId, dmText, escalationHint, standingProblem, timeTag, undoId, userBtnId, warnBar, warnColor, daysText, durationLabel, type DmOpts, type PunishAction } from './punishLogic.js';
 
 export const EPHEMERAL = 64;
 
@@ -43103,23 +43120,21 @@ export interface CardData {
 export function card(d: CardData): EmbedBuilder {
   const m = META[d.action];
   const w = d.warns;
+  const chips: string[] = [];
+  if (d.link) chips.push(`🔗 [сообщение](${d.link})`);
+  if (d.action === 'ban' && d.days !== undefined) chips.push(`🧹 ${daysText(d.days)}`);
+  if (d.action === 'timeout' && d.minutes) chips.push(`⏳ ${durationLabel(d.minutes)} · до ${timeTag(Date.now() + d.minutes * 60_000)}`);
+  if (d.dm !== null) chips.push(d.dm ? '✉️ ЛС доставлено' : '📪 ЛС не доставлено (закрыты)');
+  if (w?.expiresAt) chips.push(`⌛ перестанет учитываться ${timeTag(w.expiresAt)}`);
   const e = new EmbedBuilder()
     .setColor(w ? warnColor(w.no, w.scale) : m.color)
+    .setAuthor({ name: (d.mod.username ?? '').slice(0, 100) })
     .setTitle(`${m.emoji} ${m.title}${w ? ` №${w.no}` : ''}`)
-    .setDescription(`<@${d.target.id}> ${m.done}.${w ? `\n\n${warnBar(w.no, w.scale)}` : ''}`)
+    .setDescription(cardBody({ done: m.done, targetId: d.target.id, targetName: d.target.username, modId: d.mod.id, reason: d.reason, ...(w ? { bar: warnBar(w.no, w.scale) } : {}), chips }))
     .setThumbnail(d.target.displayAvatarURL({ size: 128 }) || null)
-    .addFields({ name: '👤 Участник', value: person(d.target), inline: true }, { name: '🛡️ Модератор', value: person(d.mod), inline: true }, { name: '📝 Причина', value: d.reason || 'не указана' })
     .setTimestamp(new Date())
     .setFooter(footerOf('Модерация'));
-  if (d.link) e.addFields({ name: '🔗 Основание', value: `[сообщение](${d.link})`, inline: true });
-  if (d.action === 'ban' && d.days !== undefined) e.addFields({ name: '🧹 Его сообщения', value: daysText(d.days), inline: true });
-  if (d.action === 'timeout' && d.minutes) {
-    const until = Date.now() + d.minutes * 60_000;
-    e.addFields({ name: '⏳ Срок', value: `${durationLabel(d.minutes)} · до ${timeTag(until)}`, inline: true });
-  }
-  if (d.dm !== null) e.addFields({ name: '✉️ Личное сообщение', value: d.dm ? 'доставлено' : 'не доставлено (закрыты ЛС)', inline: true });
   if (w) {
-    if (w.expiresAt) e.addFields({ name: '⌛ Перестанет учитываться', value: timeTag(w.expiresAt), inline: true });
     if (w.recent.length) e.addFields({ name: '📜 Предыдущие', value: w.recent.map((x) => `${timeTag(x.createdAt)} — ${x.reason}`.slice(0, 200)).join('\n').slice(0, 1000) });
     const hint = d.auto?.length ? '' : escalationHint(w.no);
     if (hint) e.addFields({ name: '🚨 Внимание', value: hint });
@@ -43455,6 +43470,15 @@ export const PICK_ID = 'modban:pick';
 
 /** a time in the style of Discord that shows in the reader's own time zone: <t:…:R> */
 export const timeTag = (ms: number): string => `<t:${Math.floor(ms / 1000)}:R>`;
+
+/** the body of a result card: short lines with icons instead of a column of one-word fields (they stack badly on a phone) */
+export function cardBody(o: { done: string; targetId: string; targetName: string; modId: string; reason: string; bar?: string; chips: string[] }): string {
+  const lines = [`<@${o.targetId}> ${o.done}.`];
+  if (o.bar) lines.push(o.bar);
+  lines.push('', `👤 **${o.targetName}**  ·  🛡️ <@${o.modId}>`, `📝 ${o.reason || 'причина не указана'}`);
+  if (o.chips.length) lines.push(o.chips.join('  ·  '));
+  return lines.join('\n');
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-bot/src"
   cat > "$APP_DIR/core-bot/src/redact.ts" << '__COREGSM_EOF__'

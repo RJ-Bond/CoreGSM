@@ -210,6 +210,8 @@ export interface LogInfo {
   keepPinned: boolean;
   includeOld: boolean;
   reason: string;
+  /** how many cleanings this channel had in the last week, this one included (0 = unknown) */
+  weekN?: number;
 }
 
 /** the title of the record in the log channel: what happened in a few words */
@@ -226,6 +228,17 @@ export function logDescription(o: LogInfo): string {
   ];
   const left = [o.pinned ? `📌 закреплённых оставлено: **${o.pinned}**` : '', o.old ? `⏳ старше 14 дней осталось: **${o.old}+**` : ''].filter(Boolean);
   if (left.length) lines.push(left.join('  ·  '));
+  if ((o.weekN ?? 0) >= 2) lines.push(`🔁 ${o.weekN}-я очистка этого канала за неделю`);
   if (o.reason) lines.push(`💬 ${o.reason.slice(0, 500)}`);
   return lines.join('\n');
+}
+
+export const WEEK_MS = 7 * 24 * 3600_000;
+
+/** remembers a cleaning of the channel and tells how many there were in the last week (this one included) */
+export function noteCleaning(log: Map<string, number[]>, channelId: string, now: number): number {
+  const list = (log.get(channelId) ?? []).filter((t) => now - t < WEEK_MS);
+  list.push(now);
+  log.set(channelId, list);
+  return list.length;
 }

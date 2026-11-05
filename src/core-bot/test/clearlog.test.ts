@@ -22,3 +22,22 @@ test('clear log: compact lines', () => {
   assert.match(d2, /5\+/);
   assert.match(d2, /спам/);
 });
+
+import { noteCleaning, WEEK_MS } from '../src/clearLogic.js';
+import { cardBody } from '../src/punishLogic.js';
+
+test('clear log: weekly counter', () => {
+  const m = new Map<string, number[]>();
+  assert.equal(noteCleaning(m, 'a', 1000), 1);
+  assert.equal(noteCleaning(m, 'a', 2000), 2);
+  assert.equal(noteCleaning(m, 'b', 2000), 1);
+  assert.equal(noteCleaning(m, 'a', 2000 + WEEK_MS - 1), 2, 'the first one is over a week old by now');
+  assert.match(logDescription({ ...base, weekN: 3 }), /🔁 3-я очистка/);
+  assert.doesNotMatch(logDescription({ ...base, weekN: 1 }), /🔁/);
+});
+
+test('mod card body: compact lines', () => {
+  const b = cardBody({ done: 'заблокирован', targetId: '5', targetName: 'vasya', modId: '7', reason: 'спам', chips: ['🧹 7 дней', '✉️ ЛС доставлено'] });
+  assert.equal(b, '<@5> заблокирован.\n\n👤 **vasya**  ·  🛡️ <@7>\n📝 спам\n🧹 7 дней  ·  ✉️ ЛС доставлено');
+  assert.match(cardBody({ done: 'x', targetId: '5', targetName: 'v', modId: '7', reason: '', bar: '▰▱', chips: [] }), /x\.\n▰▱\n\n.*\n📝 причина не указана$/);
+});

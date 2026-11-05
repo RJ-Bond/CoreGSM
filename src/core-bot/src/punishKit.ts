@@ -4,7 +4,7 @@ import { backendJson } from './backend.js';
 import { readModeration, type Moderation } from './clearLogic.js';
 import { log } from './log.js';
 import { footerOf } from './style.js';
-import { META, UNDO_MS, appealGoId, dmText, escalationHint, standingProblem, timeTag, undoId, userBtnId, warnBar, warnColor, daysText, durationLabel, type DmOpts, type PunishAction } from './punishLogic.js';
+import { META, UNDO_MS, cardBody, appealGoId, dmText, escalationHint, standingProblem, timeTag, undoId, userBtnId, warnBar, warnColor, daysText, durationLabel, type DmOpts, type PunishAction } from './punishLogic.js';
 
 export const EPHEMERAL = 64;
 
@@ -64,23 +64,21 @@ export interface CardData {
 export function card(d: CardData): EmbedBuilder {
   const m = META[d.action];
   const w = d.warns;
+  const chips: string[] = [];
+  if (d.link) chips.push(`🔗 [сообщение](${d.link})`);
+  if (d.action === 'ban' && d.days !== undefined) chips.push(`🧹 ${daysText(d.days)}`);
+  if (d.action === 'timeout' && d.minutes) chips.push(`⏳ ${durationLabel(d.minutes)} · до ${timeTag(Date.now() + d.minutes * 60_000)}`);
+  if (d.dm !== null) chips.push(d.dm ? '✉️ ЛС доставлено' : '📪 ЛС не доставлено (закрыты)');
+  if (w?.expiresAt) chips.push(`⌛ перестанет учитываться ${timeTag(w.expiresAt)}`);
   const e = new EmbedBuilder()
     .setColor(w ? warnColor(w.no, w.scale) : m.color)
+    .setAuthor({ name: (d.mod.username ?? '').slice(0, 100) })
     .setTitle(`${m.emoji} ${m.title}${w ? ` №${w.no}` : ''}`)
-    .setDescription(`<@${d.target.id}> ${m.done}.${w ? `\n\n${warnBar(w.no, w.scale)}` : ''}`)
+    .setDescription(cardBody({ done: m.done, targetId: d.target.id, targetName: d.target.username, modId: d.mod.id, reason: d.reason, ...(w ? { bar: warnBar(w.no, w.scale) } : {}), chips }))
     .setThumbnail(d.target.displayAvatarURL({ size: 128 }) || null)
-    .addFields({ name: '👤 Участник', value: person(d.target), inline: true }, { name: '🛡️ Модератор', value: person(d.mod), inline: true }, { name: '📝 Причина', value: d.reason || 'не указана' })
     .setTimestamp(new Date())
     .setFooter(footerOf('Модерация'));
-  if (d.link) e.addFields({ name: '🔗 Основание', value: `[сообщение](${d.link})`, inline: true });
-  if (d.action === 'ban' && d.days !== undefined) e.addFields({ name: '🧹 Его сообщения', value: daysText(d.days), inline: true });
-  if (d.action === 'timeout' && d.minutes) {
-    const until = Date.now() + d.minutes * 60_000;
-    e.addFields({ name: '⏳ Срок', value: `${durationLabel(d.minutes)} · до ${timeTag(until)}`, inline: true });
-  }
-  if (d.dm !== null) e.addFields({ name: '✉️ Личное сообщение', value: d.dm ? 'доставлено' : 'не доставлено (закрыты ЛС)', inline: true });
   if (w) {
-    if (w.expiresAt) e.addFields({ name: '⌛ Перестанет учитываться', value: timeTag(w.expiresAt), inline: true });
     if (w.recent.length) e.addFields({ name: '📜 Предыдущие', value: w.recent.map((x) => `${timeTag(x.createdAt)} — ${x.reason}`.slice(0, 200)).join('\n').slice(0, 1000) });
     const hint = d.auto?.length ? '' : escalationHint(w.no);
     if (hint) e.addFields({ name: '🚨 Внимание', value: hint });
