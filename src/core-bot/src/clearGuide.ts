@@ -12,6 +12,15 @@ export const CLEAR_GUIDE_FIELDS: { name: string; value: string }[] = [
   { name: '🛡️ Защита', value: 'В панели (Discord → Модерация): защищённые каналы, пауза между очистками и журнал очисток.' },
 ];
 
+export const CLEAR_GUIDE_FIELDS_EN: { name: string; value: string }[] = [
+  { name: '📝 Examples', value: '`/clear` — the whole chat\n`/clear count:50` — the last 50 messages\n`/clear user:@Vasya` — only their messages' },
+  { name: '✅ What gets deleted', value: 'Messages younger than 14 days: fast, 100 at a time. Before deleting the bot shows how many were found.' },
+  { name: '📌 Pinned', value: 'They stay. The «Pinned» button lets you delete them too.' },
+  { name: '⏳ Older than 14 days', value: 'Discord does not let the bot delete them in bulk. «Old: delete one by one» removes them too, but slowly: about 3 messages a second.' },
+  { name: '⏹️ Stopping', value: 'After the confirmation there are 3 seconds to think, then «Stop» works at any moment. What is deleted cannot be brought back.' },
+  { name: '🛡️ Protection', value: 'In the panel (Discord → Moderation): protected channels, a pause between cleanings and a cleaning log.' },
+];
+
 export function clearGuideEmbed(): EmbedBuilder {
   return new EmbedBuilder()
     .setColor(getStyle().accent)

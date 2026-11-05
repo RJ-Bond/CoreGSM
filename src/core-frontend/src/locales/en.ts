@@ -1935,6 +1935,8 @@ const en: Record<keyof typeof ru, string> = {
   'dash.test': 'Send the summary now',
   'dash.testSent': 'Sent to administrators: {n}',
   'dash.testNone': 'Nobody to send to: an administrator with a linked Discord and a running bot are needed',
+  'dash.support': '«Support» link in /help',
+  'dash.supportHelp': 'The «💬 Support» button of the /help card leads here: a support chat, a form or a channel. https:// only. Empty — no button.',
   'mod.title': 'Moderation: /clear, /ban, /kick, /warn',
   'mod.help': 'The /clear command wipes the chat of the channel where it is typed. Only server administrators (the «Administrator» permission) can see and use it. Before deleting, the bot shows how many messages it found and asks to confirm.',
   'mod.on': 'Allow the /clear command',

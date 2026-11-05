@@ -1,7 +1,7 @@
 /** The look of the bot's own replies (footer, accent colour, logo): set in the panel and refreshed with the config. */
-export interface BotStyle { footer: string; accent: number; logoUrl: string | null; version: string; panelUrl: string | null }
+export interface BotStyle { footer: string; accent: number; logoUrl: string | null; version: string; panelUrl: string | null; supportUrl: string | null }
 
-let current: BotStyle = { footer: 'CoreGSM', accent: 0x9b1c31, logoUrl: null, version: '', panelUrl: null };
+let current: BotStyle = { footer: 'CoreGSM', accent: 0x9b1c31, logoUrl: null, version: '', panelUrl: null, supportUrl: null };
 
 export const getStyle = (): BotStyle => current;
 
@@ -13,6 +13,7 @@ export function setStyle(s: unknown): void {
     accent: o.accent,
     logoUrl: typeof o.logoUrl === 'string' && /^https?:\/\//.test(o.logoUrl) ? o.logoUrl : null,
     version: typeof o.version === 'string' && /^[\w.+-]{1,20}$/.test(o.version) ? o.version : '',
+    supportUrl: typeof o.supportUrl === 'string' && /^https:\/\/[^\s]{4,300}$/.test(o.supportUrl) ? o.supportUrl : null,
     panelUrl: typeof o.panelUrl === 'string' && /^https?:\/\/[^\s]+$/.test(o.panelUrl) ? o.panelUrl.replace(/\/+$/, '') : null,
   };
 }

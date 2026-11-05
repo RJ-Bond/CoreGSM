@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="1b12ae59342d"
+COREGSM_BUILD="d3c20c836c5c"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.44"
+COREGSM_VERSION="1.1.45"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -22274,6 +22274,7 @@ import { bot, channelInfo } from './botState.js';
 import { dmAvailable, SUB_KINDS } from '../community/subscriptions.js';
 import { MAX_FOLLOWS, nickKey, validNick } from '../profile/playerFollows.js';
 import { log } from '../logger.js';
+import { loadNotes } from '../routes/updates.js';
 
 const WEEK = 7 * 86_400_000;
 
@@ -22285,6 +22286,12 @@ export const dashboardSettings = () => ({
   /** the weekly summary for the administrators is on unless it was switched off */
   weekly: getSetting('admin_weekly') !== '0',
 });
+
+/** the «Support» link of /help: https only */
+export const supportUrl = (): string => {
+  const v = (getSetting('support_url') ?? '').trim();
+  return /^https:\/\/[^\s]{4,300}$/.test(v) ? v : '';
+};
 
 /** numbers of the last seven days (and the peak of the week before) */
 export function weeklyStats(now: number): WeeklyStats {
@@ -22388,12 +22395,12 @@ export function registerBotExtras(deps: { app: Express; admin: RequestHandler; i
   // ----- dashboard -----
   const payload = () => {
     const s = dashboardSettings();
-    return { enabled: getSetting('dash_enabled') === '1', channelId: s.channelId, channelName: channelInfo(s.channelId).channelName, error: s.error, weekly: s.weekly, botOnline: bot.status.state === 'online' };
+    return { enabled: getSetting('dash_enabled') === '1', channelId: s.channelId, channelName: channelInfo(s.channelId).channelName, error: s.error, weekly: s.weekly, supportUrl: supportUrl(), botOnline: bot.status.state === 'online' };
   };
   app.get('/api/settings/dashboard', admin, (_req, res) => res.json(payload()));
   app.put('/api/settings/dashboard', admin, (req, res) => {
-    const b = z.object({ enabled: z.boolean().optional(), channelId: z.string().regex(/^(\d{15,25})?$/).optional(), weekly: z.boolean().optional() }).safeParse(req.body);
-    if (!b.success) return res.status(400).json({ error: 'Проверьте канал' });
+    const b = z.object({ enabled: z.boolean().optional(), channelId: z.string().regex(/^(\d{15,25})?$/).optional(), weekly: z.boolean().optional(), supportUrl: z.string().trim().max(300).regex(/^(https:\/\/[^\s]{4,300})?$/).optional() }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'Проверьте канал и ссылку (только https://…)' });
     if (b.data.channelId !== undefined && b.data.channelId !== (getSetting('dash_channel') ?? '')) {
       // another channel: the old message is forgotten, the bot posts a new one
       setSetting('dash_channel', b.data.channelId);
@@ -22402,10 +22409,26 @@ export function registerBotExtras(deps: { app: Express; admin: RequestHandler; i
     }
     if (b.data.enabled !== undefined) setSetting('dash_enabled', b.data.enabled ? '1' : '0');
     if (b.data.weekly !== undefined) setSetting('admin_weekly', b.data.weekly ? '1' : '0');
+    if (b.data.supportUrl !== undefined) setSetting('support_url', b.data.supportUrl);
     res.json(payload());
   });
   // a test of the weekly summary: sent to the administrators at once
   app.post('/api/settings/dashboard/weekly-test', admin, (_req, res) => res.json({ sent: sendWeekly(Date.now(), true) }));
+
+  // «Что нового» in /help: the items of the newest released version of CHANGELOG.md (not the unreleased ones), in the asked language
+  app.get('/internal/changelog', internal, async (req, res) => {
+    try {
+      const en = req.query.lang === 'en';
+      const n = await loadNotes();
+      const rel = n.releases.find((r) => r.version);
+      if (!rel) return res.status(404).json({ error: 'no notes' });
+      const items = rel.groups.flatMap((g) => g.items).map((i) => (en ? i.textEn ?? i.text : i.text)).filter(Boolean).slice(0, 8);
+      res.json({ version: rel.version, date: rel.date, items });
+    } catch (e) {
+      log.error('changelog for the bot failed', (e as Error).message);
+      res.status(502).json({ error: 'unavailable' });
+    }
+  });
 
   app.get('/internal/dashboard', internal, (_req, res) => {
     const s = dashboardSettings();
@@ -33831,7 +33854,8 @@ import { addPing } from '../discord/botLatencyLogic.js';
 import { buildPresence } from '../monitoring/presence.js';
 import { currentStyle } from '../discord/discordStyleState.js';
 import { welcomeSettings } from '../community/welcome.js';
-import { APP_VERSION } from '../config.js';
+import { APP_VERSION_NAME } from '../config.js';
+import { supportUrl } from '../discord/botExtras.js';
 import { publicBase } from '../admin/site.js';
 import { parseLayout } from '../images/embedLayout.js';
 import { embedFor, intervalParam, serializeBinding, SELECT_SERVERS, SERVER_ORDER, serialize, type ServerJoin } from '../monitoring/serverData.js';
@@ -33876,7 +33900,7 @@ router.post(
 );
 
 router.get('/internal/config', internal, (_req, res) => {
-  res.json({ discordToken: getSetting('discord_token') ?? '', proxyUrl: getSetting('proxy_url') ?? '', welcome: welcomeSettings().enabled, style: (() => { const s = currentStyle(); return { footer: s.footer, accent: s.accent, logoUrl: s.logoUrl, version: APP_VERSION, panelUrl: publicBase() ?? null }; })() });
+  res.json({ discordToken: getSetting('discord_token') ?? '', proxyUrl: getSetting('proxy_url') ?? '', welcome: welcomeSettings().enabled, style: (() => { const s = currentStyle(); return { footer: s.footer, accent: s.accent, logoUrl: s.logoUrl, version: APP_VERSION_NAME || '', panelUrl: publicBase() ?? null, supportUrl: supportUrl() || null }; })() });
 });
 
 router.post('/internal/bot-guilds', internal, (req, res) => {
@@ -35076,7 +35100,7 @@ router.post('/api/update/rollback', admin, (_req, res) => {
 
 // ---- release notes: CHANGELOG.md of the repository (Russian, written by hand); the commits are the fallback
 let notes: { at: number; releases: ReturnType<typeof parseChangelog>; error: string | null } | null = null;
-async function loadNotes() {
+export async function loadNotes() {
   if (!notes || Date.now() - notes.at > (notes.error ? 60_000 : 10 * 60_000)) {
     try {
       notes = { at: Date.now(), releases: parseChangelog(await fetchRepoText('CHANGELOG.md')).slice(0, 12), error: null };
@@ -39721,6 +39745,15 @@ export const CLEAR_GUIDE_FIELDS: { name: string; value: string }[] = [
   { name: '🛡️ Защита', value: 'В панели (Discord → Модерация): защищённые каналы, пауза между очистками и журнал очисток.' },
 ];
 
+export const CLEAR_GUIDE_FIELDS_EN: { name: string; value: string }[] = [
+  { name: '📝 Examples', value: '`/clear` — the whole chat\n`/clear count:50` — the last 50 messages\n`/clear user:@Vasya` — only their messages' },
+  { name: '✅ What gets deleted', value: 'Messages younger than 14 days: fast, 100 at a time. Before deleting the bot shows how many were found.' },
+  { name: '📌 Pinned', value: 'They stay. The «Pinned» button lets you delete them too.' },
+  { name: '⏳ Older than 14 days', value: 'Discord does not let the bot delete them in bulk. «Old: delete one by one» removes them too, but slowly: about 3 messages a second.' },
+  { name: '⏹️ Stopping', value: 'After the confirmation there are 3 seconds to think, then «Stop» works at any moment. What is deleted cannot be brought back.' },
+  { name: '🛡️ Protection', value: 'In the panel (Discord → Moderation): protected channels, a pause between cleanings and a cleaning log.' },
+];
+
 export function clearGuideEmbed(): EmbedBuilder {
   return new EmbedBuilder()
     .setColor(getStyle().accent)
@@ -39943,7 +39976,7 @@ import { backend, backendJson } from './backend.js';
 import { humanDiscordError } from './errors.js';
 import { log } from './log.js';
 import { handleInfo, INFO_COMMANDS, INFO_NAMES, infoAutocomplete } from './info.js';
-import { HELP_COMMANDS, HELP_NAMES, handleHelp, handleHelpButton } from './help.js';
+import { HELP_COMMANDS, HELP_NAMES, handleHelp, handleHelpButton, handleHelpSelect, helpAutocomplete } from './help.js';
 import { COLORS, cardReply, replyEmbed, type ProfileData } from './replies.js';
 import { handleAppealButton, handleAppealModal } from './appeals.js';
 import { CONTEXT_NAMES, PUNISH_COMMANDS, PUNISH_NAMES, handleBanPick, handleContext, handlePunish, handlePunishButton, handleReasonModal, punishAutocomplete } from './punish.js';
@@ -40041,7 +40074,7 @@ async function handlePollButton(i: ButtonInteraction): Promise<void> {
 }
 
 export async function handleInteraction(i: Interaction): Promise<void> {
-  if (i.isStringSelectMenu()) return i.customId.startsWith('modban:') ? handleBanPick(i) : i.customId.startsWith('lnk:') ? handleLinkSelect(i) : handleRoleSelect(i);
+  if (i.isStringSelectMenu()) return i.customId.startsWith('modban:') ? handleBanPick(i) : i.customId.startsWith('lnk:') ? handleLinkSelect(i) : i.customId.startsWith('help:') ? handleHelpSelect(i) : handleRoleSelect(i);
   if (i.isButton() && i.customId.startsWith('clear:')) return handleClearButton(i);
   if (i.isButton() && i.customId.startsWith('mod:')) return handlePunishButton(i);
   if (i.isButton() && i.customId.startsWith('appeal:')) return handleAppealButton(i);
@@ -40051,6 +40084,7 @@ export async function handleInteraction(i: Interaction): Promise<void> {
   if (i.isModalSubmit()) return i.customId.startsWith('appeal:') ? handleAppealModal(i) : i.customId.startsWith('lnk:') ? handleLinkModal(i) : handleReasonModal(i);
   if ((i.isUserContextMenuCommand() || i.isMessageContextMenuCommand()) && CONTEXT_NAMES.has(i.commandName)) return handleContext(i);
   if (i.isButton()) return /^(help|srv):/.test(i.customId) ? handleHelpButton(i) : handlePollButton(i);
+  if (i.isAutocomplete() && i.commandName === 'help') return helpAutocomplete(i);
   if (i.isAutocomplete() && PUNISH_NAMES.has(i.commandName)) return punishAutocomplete(i);
   if (i.isAutocomplete()) return INFO_NAMES.has(i.commandName) ? infoAutocomplete(i) : handleAutocomplete(i);
   if (!i.isChatInputCommand()) return;
@@ -40512,109 +40546,186 @@ export const setGatewayAgent = (a: Agent | undefined) => {
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-bot/src"
   cat > "$APP_DIR/core-bot/src/help.ts" << '__COREGSM_EOF__'
-/** /help (categories as buttons) and /servers (the list of servers, a button opens the card). Both answers are private to the person who asked. */
-import { CLEAR_GUIDE_FIELDS } from './clearGuide.js';
-import { ActionRowBuilder, AttachmentBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, type ButtonInteraction, type ChatInputCommandInteraction } from 'discord.js';
+/**
+ * /help: a menu of sections (the language of the person, the moderation for administrators only), the details of one command
+ * (`/help command:ban`), quick actions, «What's new»; and /servers (the list of servers, a button opens the card).
+ * Both answers are private to the person who asked.
+ */
+import { ActionRowBuilder, AttachmentBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, PermissionFlagsBits, StringSelectMenuBuilder, type AutocompleteInteraction, type ButtonInteraction, type ChatInputCommandInteraction, type StringSelectMenuInteraction } from 'discord.js';
 import { backend, backendJson } from './backend.js';
+import { CLEAR_GUIDE_FIELDS, CLEAR_GUIDE_FIELDS_EN } from './clearGuide.js';
 import { followButton } from './follow.js';
+import { BLURB, CATEGORIES, CMDS, categoryOf, cmdInfo, langOf, liveLine, meLine, shortItem, suggestCommands, tx, visibleCategories, type Category, type ChangelogAnswer, type CmdInfo, type Lang, type Live, type MeLike } from './helpData.js';
 import { log } from './log.js';
 import { COLORS, replyEmbed } from './replies.js';
 import { footerOf, getStyle } from './style.js';
 import { healthColor, panelRow, stamped } from './ui.js';
-import type { OnlineData } from './info.js';
+import { onlineEmbed, topEmbed, type OnlineData, type TopData } from './info.js';
 
 export const HELP_COMMANDS = [
-  { name: 'help', description: 'Что умеет бот: команды по разделам' },
-  { name: 'servers', description: 'Список серверов: нажмите на сервер, чтобы увидеть его карточку' },
+  {
+    name: 'help',
+    description: 'Что умеет бот: команды по разделам',
+    description_localizations: { ru: 'Что умеет бот: команды по разделам', 'en-US': 'What the bot can do: commands by section', 'en-GB': 'What the bot can do: commands by section' },
+    options: [
+      {
+        type: 3,
+        name: 'command',
+        description: 'Подробно об одной команде',
+        description_localizations: { ru: 'Подробно об одной команде', 'en-US': 'Details of one command', 'en-GB': 'Details of one command' },
+        required: false,
+        autocomplete: true,
+      },
+    ],
+  },
+  {
+    name: 'servers',
+    description: 'Список серверов: нажмите на сервер, чтобы увидеть его карточку',
+    description_localizations: { ru: 'Список серверов: нажмите на сервер, чтобы увидеть его карточку', 'en-US': 'The servers: press one to see its card', 'en-GB': 'The servers: press one to see its card' },
+  },
 ];
 export const HELP_NAMES = new Set(HELP_COMMANDS.map((c) => c.name));
 
 const EPHEMERAL = 64;
-
-export interface HelpCategory { id: string; label: string; emoji: string; title: string; /** the colour of the card */ color: number; lines: [string, string][]; /** extra blocks under the list */ fields?: { name: string; value: string }[] }
-export const HELP_CATEGORIES: HelpCategory[] = [
-  {
-    id: 'play', color: 0x57f287, label: 'Игроку', emoji: '🙋', title: 'Игроку: аккаунт и профиль',
-    lines: [
-      ['/register', 'создать аккаунт в панели через Discord, пароль не нужен'],
-      ['/link', 'привязать игровой ник: выберите себя из списка или впишите вручную'],
-      ['/nick', 'сменить игровой ник, по которому считается статистика'],
-      ['/profile', 'моя карточка: ранг, часы в игре, достижения'],
-      ['/roles', 'выбрать себе роли в меню: взять или снять'],
-    ],
-  },
-  {
-    id: 'srv', color: 0x3b82f6, label: 'Серверы', emoji: '🖥️', title: 'Серверы: кто и где играет',
-    lines: [
-      ['/online', 'сколько игроков на каждом сервере'],
-      ['/servers', 'список серверов с кнопками: нажмите, чтобы открыть карточку'],
-      ['/status', 'карточка сервера с графиком за сутки'],
-    ],
-  },
-  {
-    id: 'stat', color: 0x8b5cf6, label: 'Статистика', emoji: '📊', title: 'Статистика игроков',
-    lines: [
-      ['/player', 'карточка игрока: часы, серия дней, где и когда играет'],
-      ['/top', 'самые активные игроки за неделю или месяц'],
-    ],
-  },
-  {
-    id: 'mod', color: 0xef4444, label: 'Модерация', emoji: '🛡️', title: 'Модерация (для администраторов)',
-    lines: [
-      ['/clear', 'очистить чат в этом канале: с подтверждением, закреплённые остаются'],
-      ['/ban', 'заблокировать участника с причиной (удаляет его сообщения, пишет ему в ЛС)'],
-      ['/unban', 'снять блокировку: без параметра покажет список банов с меню, с параметром подскажет имя или ID'],
-      ['/kick', 'исключить участника с причиной, он сможет вернуться по приглашению'],
-      ['/warn', 'вынести предупреждение: шкала ●●○○○, прошлые причины, лесенка наказаний из панели'],
-      ['/mute', 'запретить писать и говорить на время (10m, 1h, 1d… до 28 дней)'],
-      ['/unmute', 'снять мут досрочно'],
-      ['⚠️ Предупредить', 'правый клик по участнику или сообщению → «Приложения»: окно с причиной, к варну прикрепляется ссылка на сообщение'],
-    ],
-    fields: CLEAR_GUIDE_FIELDS,
-  },
-];
-
 const row = (...b: ButtonBuilder[]) => new ActionRowBuilder<ButtonBuilder>().addComponents(...b);
 
-export function helpButtons(active: string | null): ActionRowBuilder<ButtonBuilder>[] {
-  const rows = [
-    row(
-      new ButtonBuilder().setCustomId('help:home').setLabel('Главная').setEmoji('🏠').setStyle(active === null ? ButtonStyle.Success : ButtonStyle.Secondary),
-      ...HELP_CATEGORIES.map((c) => new ButtonBuilder().setCustomId(`help:${c.id}`).setLabel(c.label).setEmoji(c.emoji).setStyle(c.id === active ? ButtonStyle.Primary : ButtonStyle.Secondary)),
-    ),
-  ];
-  const panel = panelRow([{ label: '🌐 Открыть панель', path: '/' }]);
-  const close = new ButtonBuilder().setCustomId('help:close').setLabel('Закрыть').setEmoji('✖️').setStyle(ButtonStyle.Danger);
-  const last = panel[0];
-  if (last) last.addComponents(close);
-  rows.push(last ?? row(close));
-  return rows;
+/** who is asking and what the card may show */
+export interface HelpCtx {
+  lang: Lang;
+  /** an administrator of the Discord server */
+  admin: boolean;
+  live: Live | null;
+  me: MeLike | null;
+  supportUrl: string | null;
+  /** «What's new» text, loaded only for that section */
+  news?: ChangelogAnswer | null;
 }
 
-/** what the first screen and «Серверы» show above the text: how many play now */
-export interface Live { players: number; up: number; total: number }
 export const liveOf = (d: OnlineData | null): Live | null => (d ? { players: d.players, up: d.servers.filter((s) => s.online).length, total: d.servers.length } : null);
-export const liveLine = (l: Live): string => `${l.up === l.total && l.total > 0 ? '🟢' : l.up === 0 ? '🔴' : '🟡'} Сейчас играют **${l.players}** · серверов в сети **${l.up} из ${l.total}**`;
 
-/** the first screen (category null) or one category */
-export function helpEmbed(category: string | null, live: Live | null = null): EmbedBuilder {
-  const cat = HELP_CATEGORIES.find((c) => c.id === category);
-  if (!cat) {
-    return stamped(new EmbedBuilder()
-      .setTitle(live ? `📖 Что умеет бот · ${live.up}/${live.total} онлайн · ${live.players} ${live.players === 1 ? 'игрок' : 'игроков'}` : '📖 Что умеет бот')
-      .setDescription('Выберите раздел кнопкой ниже: в каждом команды с коротким пояснением.\n\n' + HELP_CATEGORIES.map((c) => `${c.emoji} **${c.label}** — ${c.lines.map((l) => `\`${l[0]}\``).join(', ')}`).join('\n'))
-      .setColor(live ? healthColor(live.up, live.total) : getStyle().accent)
-      .setFooter(footerOf()));
+// ---------- the cards ----------
+const lineOf = (c: CmdInfo, lang: Lang) => `\`${c.cmd}\` — ${c.text[lang]}`;
+const brand = (e: EmbedBuilder): EmbedBuilder => {
+  const logo = getStyle().logoUrl;
+  if (logo) e.setThumbnail(logo);
+  return stamped(e.setFooter(footerOf()));
+};
+
+/** the first screen (category null) or one section */
+export function helpEmbed(category: string | null, ctx: HelpCtx): EmbedBuilder {
+  const { lang } = ctx;
+  const cat = CATEGORIES.find((c) => c.id === category);
+  if (!cat || (cat.admin && !ctx.admin)) {
+    const status = [ctx.live ? liveLine(ctx.live, lang) : '', meLine(ctx.me, lang)].filter(Boolean).join('\n');
+    const list = visibleCategories(ctx.admin).filter((c) => c.id !== 'modclr').map((c) => `${c.emoji} **${c.label[lang]}** — ${BLURB[c.id]?.[lang] ?? ''}`).join('\n');
+    return brand(new EmbedBuilder().setTitle(tx('title', lang)).setDescription(`${status ? `${status}\n\n` : ''}${tx('intro', lang)}\n\n${list}`).setColor(ctx.live ? healthColor(ctx.live.up, ctx.live.total) : getStyle().accent));
   }
-  const head = cat.id === 'srv' && live ? `${liveLine(live)}\n\n` : '';
-  return stamped(new EmbedBuilder()
-    .setTitle(`${cat.emoji} ${cat.title}`)
-    .setDescription(head + cat.lines.map(([cmd, text]) => `\`${cmd}\` — ${text}`).join('\n'))
-    .addFields(cat.fields ?? [])
-    .setColor(cat.color)
-    .setFooter(footerOf()));
+  const e = new EmbedBuilder().setTitle(`${cat.emoji} ${cat.title[lang]}`).setColor(cat.color);
+  if (cat.id === 'modclr') return brand(e.addFields(lang === 'en' ? CLEAR_GUIDE_FIELDS_EN : CLEAR_GUIDE_FIELDS));
+  if (cat.id === 'news') {
+    const n = ctx.news;
+    const lines = n?.items.map((x) => `• ${x}`).join('\n');
+    if (n?.version) e.setTitle(`${cat.emoji} ${cat.title[lang]} · v${n.version}`);
+    return brand(e.setDescription(lines ? lines.slice(0, 3900) : tx('noNews', lang)));
+  }
+  const lines = cat.cmds.map((c) => cmdInfo(c)).filter((c): c is CmdInfo => !!c).map((c) => lineOf(c, lang));
+  for (const x of cat.extra ?? []) lines.push(`\`${x.cmd}\` — ${x.text[lang]}`);
+  const head = cat.id === 'srv' && ctx.live ? `${liveLine(ctx.live, lang)}\n\n` : '';
+  return brand(e.setDescription(head + lines.join('\n')));
 }
 
+/** the details of one command */
+export function commandEmbed(c: CmdInfo, lang: Lang): EmbedBuilder {
+  const cat = categoryOf(c.cmd);
+  const e = new EmbedBuilder()
+    .setTitle(`${cat?.emoji ?? '📖'} ${c.cmd}`)
+    .setDescription(c.text[lang].charAt(0).toUpperCase() + c.text[lang].slice(1))
+    .setColor(cat?.color ?? getStyle().accent)
+    .addFields(
+      { name: tx('usage', lang), value: `\`${c.usage}\`` },
+      { name: tx('examples', lang), value: c.examples.map((x) => `\`${x}\``).join('\n') },
+      { name: tx('needs', lang), value: c.needs[lang] },
+    );
+  if (cat) e.addFields({ name: tx('section', lang), value: `${cat.emoji} ${cat.label[lang]}`, inline: true });
+  return brand(e);
+}
+
+// ---------- the controls ----------
+/** the menu of sections and the row of buttons under a card */
+export function helpComponents(active: string, ctx: Pick<HelpCtx, 'lang' | 'admin' | 'supportUrl'>): ActionRowBuilder<StringSelectMenuBuilder | ButtonBuilder>[] {
+  const { lang } = ctx;
+  const menu = new StringSelectMenuBuilder()
+    .setCustomId('help:pick')
+    .setPlaceholder(tx('placeholder', lang))
+    .addOptions(
+      { label: tx('home', lang), value: 'home', emoji: '🏠', description: tx('homeDesc', lang), default: active === 'home' },
+      ...visibleCategories(ctx.admin).map((c) => ({ label: c.label[lang], value: c.id, emoji: c.emoji, description: (BLURB[c.id]?.[lang] ?? '').slice(0, 100), default: active === c.id })),
+    );
+  const btns: ButtonBuilder[] =
+    active === 'home'
+      ? [
+          new ButtonBuilder().setCustomId('help:act:online').setLabel(tx('online', lang)).setEmoji('📡').setStyle(ButtonStyle.Success),
+          new ButtonBuilder().setCustomId('help:act:top').setLabel(tx('top', lang)).setEmoji('🏆').setStyle(ButtonStyle.Primary),
+        ]
+      : [new ButtonBuilder().setCustomId('help:home').setLabel(tx('home', lang)).setEmoji('🏠').setStyle(ButtonStyle.Primary)];
+  const links = panelRow([{ label: `🌐 ${tx('panel', lang)}`, path: '/' }])[0];
+  if (links) btns.push(...(links.components as ButtonBuilder[]));
+  if (ctx.supportUrl) btns.push(new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel(`💬 ${tx('support', lang)}`).setURL(ctx.supportUrl));
+  btns.push(new ButtonBuilder().setCustomId('help:close').setEmoji('✖️').setStyle(ButtonStyle.Secondary));
+  return [new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(menu), row(...btns.slice(0, 5))] as never;
+}
+
+export const helpView = (category: string | null, ctx: HelpCtx) => {
+  const cat = CATEGORIES.find((c) => c.id === category);
+  const shown = !cat || (cat.admin && !ctx.admin) ? 'home' : cat.id;
+  return { embeds: [helpEmbed(shown === 'home' ? null : shown, ctx)], components: helpComponents(shown, ctx), content: '' };
+};
+
+// ---------- data ----------
+const isAdminOf = (i: { memberPermissions?: { has: (p: bigint) => boolean } | null }): boolean => !!i.memberPermissions?.has(PermissionFlagsBits.Administrator);
+
+async function liveNow(): Promise<Live | null> {
+  try {
+    return liveOf((await backendJson<OnlineData>('/internal/discord/online', { signal: AbortSignal.timeout(2000) })).data);
+  } catch {
+    return null;
+  }
+}
+
+async function meNow(userId: string, name: string): Promise<MeLike | null> {
+  try {
+    const q = new URLSearchParams({ discordId: userId, displayName: name });
+    const r = await backendJson<MeLike & { found: boolean }>(`/internal/discord/profile?${q.toString()}`, { signal: AbortSignal.timeout(2000) });
+    return r.data;
+  } catch {
+    return null;
+  }
+}
+
+async function newsNow(lang: Lang): Promise<ChangelogAnswer | null> {
+  try {
+    const r = await backendJson<ChangelogAnswer>(`/internal/changelog?lang=${lang}`, { signal: AbortSignal.timeout(3000) });
+    return r.data ? { ...r.data, items: r.data.items.map((x) => shortItem(x)) } : null;
+  } catch {
+    return null;
+  }
+}
+
+type Asker = { locale: string; user: { id: string; globalName?: string | null; username: string }; memberPermissions?: { has: (p: bigint) => boolean } | null };
+
+/** everything a card of the given section needs; the slow parts are asked for only where they are shown */
+async function ctxFor(i: Asker, category: string | null): Promise<HelpCtx> {
+  const lang = langOf(i.locale);
+  const home = category === null || category === 'home';
+  const [live, me, news] = await Promise.all([
+    home || category === 'srv' ? liveNow() : Promise.resolve(null),
+    home ? meNow(i.user.id, (i.user.globalName || i.user.username || '').trim()) : Promise.resolve(null),
+    category === 'news' ? newsNow(lang) : Promise.resolve(undefined),
+  ]);
+  return { lang, admin: isAdminOf(i), live, me, supportUrl: getStyle().supportUrl, ...(news !== undefined ? { news } : {}) };
+}
+
+// ---------- /servers ----------
 /** buttons under /servers: one per server (Discord allows 25), «srv:<id>» */
 export function serverButtons(servers: OnlineData['servers']): ActionRowBuilder<ButtonBuilder>[] {
   const rows: ActionRowBuilder<ButtonBuilder>[] = [];
@@ -40626,16 +40737,6 @@ export function serverButtons(servers: OnlineData['servers']): ActionRowBuilder<
 }
 
 export const backButton = (serverId?: number) => row(new ButtonBuilder().setCustomId('srv:list').setLabel('К списку').setEmoji('⬅️').setStyle(ButtonStyle.Primary), ...(serverId ? [followButton('server', serverId, '🔔 Следить')] : []));
-
-/** the numbers for the card; empty when the panel does not answer within two seconds */
-async function liveNow(): Promise<Live | null> {
-  try {
-    const r = await backendJson<OnlineData>('/internal/discord/online', { signal: AbortSignal.timeout(2000) });
-    return liveOf(r.data);
-  } catch {
-    return null;
-  }
-}
 
 async function serversScreen(): Promise<{ embeds: EmbedBuilder[]; components: ActionRowBuilder<ButtonBuilder>[]; files: AttachmentBuilder[] } | null> {
   const { data } = await backendJson<OnlineData>('/internal/discord/online');
@@ -40649,16 +40750,27 @@ async function serversScreen(): Promise<{ embeds: EmbedBuilder[]; components: Ac
   return { embeds: [stamped(e)], components: serverButtons(data.servers), files: [] };
 }
 
+// ---------- handlers ----------
 export async function handleHelp(i: ChatInputCommandInteraction): Promise<void> {
   try {
+    await i.deferReply({ flags: EPHEMERAL });
     if (i.commandName === 'help') {
-      // the live numbers need a short call to the panel: acknowledge first, they are in the card when it appears
-      await i.deferReply({ flags: EPHEMERAL });
-      const live = await liveNow();
-      await i.editReply({ embeds: [helpEmbed(null, live)], components: helpButtons(null) });
+      const asked = i.options.getString('command');
+      const lang = langOf(i.locale);
+      if (asked) {
+        const c = cmdInfo(asked);
+        const allowed = c && visibleCategories(isAdminOf(i)).some((x) => x.cmds.includes(c.cmd));
+        if (!c || !allowed) {
+          await i.editReply(replyEmbed(tx('title', lang), tx('noCommand', lang), COLORS.warn));
+          return;
+        }
+        const ctx = await ctxFor(i, 'none');
+        await i.editReply({ embeds: [commandEmbed(c, lang)], components: helpComponents(categoryOf(c.cmd)?.id ?? 'home', ctx) as never });
+        return;
+      }
+      await i.editReply(helpView(null, await ctxFor(i, null)) as never);
       return;
     }
-    await i.deferReply({ flags: EPHEMERAL });
     const s = await serversScreen();
     await i.editReply(s ?? replyEmbed('Не получилось', 'Панель сейчас не отвечает. Попробуйте чуть позже.', COLORS.bad));
   } catch (e) {
@@ -40666,7 +40778,37 @@ export async function handleHelp(i: ChatInputCommandInteraction): Promise<void> 
   }
 }
 
-/** a button of /help («help:<category>») or /servers («srv:list», «srv:<id>») */
+/** autocomplete of `/help command:` */
+export async function helpAutocomplete(i: AutocompleteInteraction): Promise<void> {
+  try {
+    await i.respond(suggestCommands(String(i.options.getFocused()), isAdminOf(i), langOf(i.locale)));
+  } catch (e) {
+    log('help autocomplete failed:', (e as Error).message);
+  }
+}
+
+const staleNotice = async (i: ButtonInteraction | StringSelectMenuInteraction): Promise<void> => {
+  await i.followUp({ content: tx('stale', langOf(i.locale)), flags: EPHEMERAL }).catch(() => undefined);
+};
+
+/** the menu «help:pick» */
+export async function handleHelpSelect(i: StringSelectMenuInteraction): Promise<void> {
+  try {
+    await i.deferUpdate();
+  } catch (e) {
+    log(`help menu: could not acknowledge:`, (e as Error).message);
+    return;
+  }
+  try {
+    const id = i.values[0] ?? 'home';
+    await i.editReply(helpView(id === 'home' ? null : id, await ctxFor(i, id)) as never);
+  } catch (e) {
+    log('help menu failed:', (e as Error).message);
+    await staleNotice(i);
+  }
+}
+
+/** a button of /help («help:home», «help:close», «help:act:*») or /servers («srv:list», «srv:<id>») */
 export async function handleHelpButton(i: ButtonInteraction): Promise<void> {
   try {
     await i.deferUpdate();
@@ -40679,14 +40821,30 @@ export async function handleHelpButton(i: ButtonInteraction): Promise<void> {
       try {
         await i.deleteReply();
       } catch {
-        await i.editReply({ content: '✖️ Закрыто', embeds: [], components: [] }).catch(() => undefined);
+        await i.editReply({ content: tx('closed', langOf(i.locale)), embeds: [], components: [] }).catch(() => undefined);
+      }
+      return;
+    }
+    if (i.customId === 'help:home') {
+      await i.editReply(helpView(null, await ctxFor(i, null)) as never);
+      return;
+    }
+    if (i.customId === 'help:act:online' || i.customId === 'help:act:top') {
+      const lang = langOf(i.locale);
+      const ctx = await ctxFor(i, 'none');
+      const keep = helpComponents('home', ctx) as never;
+      if (i.customId === 'help:act:online') {
+        const { data } = await backendJson<OnlineData>('/internal/discord/online');
+        await i.editReply(data ? { embeds: [stamped(onlineEmbed(data))], components: keep } : { ...replyEmbed(tx('title', lang), tx('panelDown', lang), COLORS.bad), components: keep });
+      } else {
+        const { data } = await backendJson<TopData>('/internal/discord/top?period=week');
+        await i.editReply(data ? { embeds: [stamped(topEmbed(data))], components: keep } : { ...replyEmbed(tx('title', lang), tx('panelDown', lang), COLORS.bad), components: keep });
       }
       return;
     }
     if (i.customId.startsWith('help:')) {
-      const id = i.customId.slice(5);
-      const cat = id === 'home' ? null : id;
-      await i.editReply({ embeds: [helpEmbed(cat, cat === null || cat === 'srv' ? await liveNow() : null)], components: helpButtons(cat) });
+      // an id from an older version of the menu: the first screen instead of silence
+      await i.editReply(helpView(null, await ctxFor(i, null)) as never);
       return;
     }
     if (i.customId === 'srv:list') {
@@ -40705,7 +40863,152 @@ export async function handleHelpButton(i: ButtonInteraction): Promise<void> {
     await i.editReply({ embeds: [], files: [file], components: [backButton(id)] });
   } catch (e) {
     log(`button ${i.customId} failed:`, (e as Error).message);
+    await staleNotice(i);
   }
+}
+
+// used by the tests and by the check that every command is described
+export const HELP_CATEGORIES: Category[] = CATEGORIES;
+export const HELP_CMD_NAMES: string[] = CMDS.map((c) => c.cmd);
+export type { Category };
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-bot/src"
+  cat > "$APP_DIR/core-bot/src/helpData.ts" << '__COREGSM_EOF__'
+/** /help: the texts (Russian and English), the sections, the details of every command and small helpers. No discord.js import. */
+
+export type Lang = 'ru' | 'en';
+/** the language of the person from their Discord locale («ru», «en-US», «en-GB», …): Russian for Russian, English for the rest */
+export const langOf = (locale: string | null | undefined): Lang => (/^ru/i.test(locale ?? '') || !locale ? 'ru' : 'en');
+
+interface Two { ru: string; en: string }
+export interface CmdInfo {
+  cmd: string;
+  text: Two;
+  usage: string;
+  examples: string[];
+  needs: Two;
+}
+
+const NONE: Two = { ru: 'ничего особенного', en: 'nothing special' };
+const ADMIN: Two = { ru: 'право «Администратор» у вас', en: 'the Administrator permission for you' };
+const withBot = (ru: string, en: string): Two => ({ ru: `право «Администратор» у вас; у бота: ${ru}`, en: `the Administrator permission for you; for the bot: ${en}` });
+
+export const CMDS: CmdInfo[] = [
+  { cmd: '/register', text: { ru: 'создать аккаунт в панели через Discord, пароль не нужен', en: 'create an account in the panel through Discord, no password' }, usage: '/register nick:<ник> [agree:True]', examples: ['/register nick:Vasya'], needs: NONE },
+  { cmd: '/link', text: { ru: 'привязать игровой ник: выберите себя из списка или впишите вручную', en: 'link your in-game nick: pick yourself from the list or type it' }, usage: '/link', examples: ['/link'], needs: NONE },
+  { cmd: '/nick', text: { ru: 'сменить игровой ник, по которому считается статистика', en: 'change the in-game nick your statistics are counted by' }, usage: '/nick nick:<ник>', examples: ['/nick nick:Vasya'], needs: NONE },
+  { cmd: '/profile', text: { ru: 'моя карточка: ранг, часы в игре, достижения', en: 'my card: rank, hours played, achievements' }, usage: '/profile', examples: ['/profile'], needs: NONE },
+  { cmd: '/roles', text: { ru: 'выбрать себе роли в меню: взять или снять', en: 'pick your roles in a menu: take or remove' }, usage: '/roles', examples: ['/roles'], needs: NONE },
+  { cmd: '/online', text: { ru: 'сколько игроков на каждом сервере', en: 'how many players are on every server' }, usage: '/online', examples: ['/online'], needs: NONE },
+  { cmd: '/servers', text: { ru: 'список серверов с кнопками: нажмите, чтобы открыть карточку', en: 'a list of servers with buttons: press one to open its card' }, usage: '/servers', examples: ['/servers'], needs: NONE },
+  { cmd: '/status', text: { ru: 'карточка сервера с графиком за сутки', en: 'a server card with the graph of the day' }, usage: '/status server:<сервер>', examples: ['/status server:Just-Skill'], needs: NONE },
+  { cmd: '/player', text: { ru: 'карточка игрока: часы, серия дней, где и когда играет', en: 'a player card: hours, streak, where and when they play' }, usage: '/player nick:<ник>', examples: ['/player nick:Vasya'], needs: NONE },
+  { cmd: '/top', text: { ru: 'самые активные игроки за неделю или месяц', en: 'the most active players of the week or the month' }, usage: '/top [period:неделя|месяц]', examples: ['/top', '/top period:месяц'], needs: NONE },
+  { cmd: '/clear', text: { ru: 'очистить чат в этом канале: с подтверждением, закреплённые остаются', en: 'wipe the chat of this channel: with a confirmation, pinned messages stay' }, usage: '/clear [count:<число>] [user:@участник]', examples: ['/clear', '/clear count:50', '/clear user:@Vasya'], needs: withBot('«Управлять сообщениями» и «Читать историю»', 'Manage Messages and Read Message History') },
+  { cmd: '/ban', text: { ru: 'заблокировать участника с причиной (удаляет его сообщения, пишет ему в ЛС)', en: 'ban a member with a reason (deletes their messages, writes to them privately)' }, usage: '/ban user:@участник reason:<причина> [delete_days:0|1|7]', examples: ['/ban user:@Vasya reason:спам'], needs: withBot('«Банить участников»', 'Ban Members') },
+  { cmd: '/unban', text: { ru: 'снять блокировку: без параметра покажет список банов с меню, с параметром подскажет имя или ID', en: 'lift a ban: without a parameter shows the ban list with a menu, with one suggests a name or ID' }, usage: '/unban [user:<имя или ID>]', examples: ['/unban', '/unban user:Vasya'], needs: withBot('«Банить участников»', 'Ban Members') },
+  { cmd: '/kick', text: { ru: 'исключить участника с причиной, он сможет вернуться по приглашению', en: 'kick a member with a reason, they can return by an invite' }, usage: '/kick user:@участник reason:<причина>', examples: ['/kick user:@Vasya reason:реклама'], needs: withBot('«Выгонять участников»', 'Kick Members') },
+  { cmd: '/warn', text: { ru: 'вынести предупреждение: шкала ●●○○○, прошлые причины, лесенка наказаний из панели', en: 'give a warning: a ●●○○○ scale, earlier reasons, the ladder of punishments from the panel' }, usage: '/warn user:@участник reason:<причина>', examples: ['/warn user:@Vasya reason:мат в чате'], needs: ADMIN },
+  { cmd: '/mute', text: { ru: 'запретить писать и говорить на время (10m, 1h, 1d… до 28 дней)', en: 'forbid writing and speaking for a while (10m, 1h, 1d… up to 28 days)' }, usage: '/mute user:@участник duration:<срок> reason:<причина>', examples: ['/mute user:@Vasya duration:1h reason:флуд'], needs: withBot('«Отправлять участников подумать о своём поведении»', 'Timeout Members') },
+  { cmd: '/unmute', text: { ru: 'снять мут досрочно', en: 'lift a mute early' }, usage: '/unmute user:@участник', examples: ['/unmute user:@Vasya'], needs: ADMIN },
+];
+
+export interface Category {
+  id: string;
+  emoji: string;
+  color: number;
+  /** only for administrators of the Discord server */
+  admin?: boolean;
+  label: Two;
+  title: Two;
+  /** the commands of the section (names with a slash) and extra lines that are not slash commands */
+  cmds: string[];
+  extra?: { cmd: string; text: Two }[];
+}
+
+export const CATEGORIES: Category[] = [
+  { id: 'play', emoji: '🙋', color: 0x57f287, label: { ru: 'Игроку', en: 'Player' }, title: { ru: 'Игроку: аккаунт и профиль', en: 'Player: account and profile' }, cmds: ['/register', '/link', '/nick', '/profile', '/roles'] },
+  { id: 'srv', emoji: '🖥️', color: 0x3b82f6, label: { ru: 'Серверы', en: 'Servers' }, title: { ru: 'Серверы: кто и где играет', en: 'Servers: who plays where' }, cmds: ['/online', '/servers', '/status'] },
+  { id: 'stat', emoji: '📊', color: 0x8b5cf6, label: { ru: 'Статистика', en: 'Statistics' }, title: { ru: 'Статистика игроков', en: 'Player statistics' }, cmds: ['/player', '/top'] },
+  {
+    id: 'mod', emoji: '🛡️', color: 0xef4444, admin: true, label: { ru: 'Модерация', en: 'Moderation' }, title: { ru: 'Модерация (для администраторов)', en: 'Moderation (for administrators)' },
+    cmds: ['/clear', '/ban', '/unban', '/kick', '/warn', '/mute', '/unmute'],
+    extra: [{ cmd: '⚠️ Предупредить', text: { ru: 'правый клик по участнику или сообщению → «Приложения»: окно с причиной, к варну прикрепляется ссылка на сообщение', en: 'right-click a member or a message → «Apps»: a window with the reason, the message link is attached to the warning' } }],
+  },
+  { id: 'modclr', emoji: '🧹', color: 0xef4444, admin: true, label: { ru: 'Памятка /clear', en: '/clear guide' }, title: { ru: 'Команда /clear: как это работает', en: 'The /clear command: how it works' }, cmds: [] },
+  { id: 'news', emoji: '🆕', color: 0x4f46e5, label: { ru: 'Что нового', en: "What's new" }, title: { ru: 'Что нового', en: "What's new" }, cmds: [] },
+];
+
+/** one short line per section for the first screen */
+export const BLURB: Record<string, Two> = {
+  play: { ru: 'аккаунт, ник, профиль, роли', en: 'account, nick, profile, roles' },
+  srv: { ru: 'кто и где играет сейчас', en: 'who plays where right now' },
+  stat: { ru: 'карточки игроков и топ', en: 'player cards and the top' },
+  mod: { ru: 'бан, кик, мут, предупреждения, очистка', en: 'ban, kick, mute, warnings, cleaning' },
+  modclr: { ru: 'примеры и что удаляется', en: 'examples and what gets deleted' },
+  news: { ru: 'последние изменения бота и панели', en: 'the latest changes of the bot and the panel' },
+};
+
+export const cmdInfo = (cmd: string): CmdInfo | undefined => CMDS.find((c) => c.cmd === cmd || c.cmd === `/${cmd.replace(/^\//, '')}`);
+export const categoryOf = (cmd: string): Category | undefined => CATEGORIES.find((c) => c.cmds.includes(cmd));
+export const visibleCategories = (admin: boolean): Category[] => CATEGORIES.filter((c) => admin || !c.admin);
+
+/** the commands the person may ask about, filtered by what they typed (for the autocomplete of `/help command:`) */
+export function suggestCommands(query: string, admin: boolean, lang: Lang): { name: string; value: string }[] {
+  const q = query.trim().toLowerCase().replace(/^\//, '');
+  const allowed = new Set(visibleCategories(admin).flatMap((c) => c.cmds));
+  return CMDS.filter((c) => allowed.has(c.cmd) && (!q || c.cmd.slice(1).includes(q) || c.text[lang].toLowerCase().includes(q)))
+    .slice(0, 25)
+    .map((c) => ({ name: `${c.cmd} — ${c.text[lang]}`.slice(0, 100), value: c.cmd.slice(1) }));
+}
+
+export const UI = {
+  title: { ru: '📖 Что умеет бот', en: '📖 What the bot can do' },
+  intro: { ru: 'Выберите раздел в меню ниже: в каждом команды с коротким пояснением. Подробности по одной команде: `/help command:ban`.', en: 'Pick a section in the menu below: each has commands with a short note. Details of one command: `/help command:ban`.' },
+  placeholder: { ru: 'Выберите раздел…', en: 'Pick a section…' },
+  home: { ru: 'Главная', en: 'Home' },
+  homeDesc: { ru: 'Что умеет бот', en: 'What the bot can do' },
+  panel: { ru: 'Панель', en: 'Panel' },
+  support: { ru: 'Поддержка', en: 'Support' },
+  close: { ru: 'Закрыть', en: 'Close' },
+  online: { ru: 'Онлайн сейчас', en: 'Online now' },
+  top: { ru: 'Топ недели', en: 'Top of the week' },
+  closed: { ru: '✖️ Закрыто', en: '✖️ Closed' },
+  stale: { ru: 'Это меню устарело. Вызовите `/help` заново.', en: 'This menu is out of date. Run `/help` again.' },
+  noCommand: { ru: 'Такой команды нет. Начните вводить название и выберите из списка.', en: 'There is no such command. Start typing a name and pick one from the list.' },
+  usage: { ru: 'Как пользоваться', en: 'Usage' },
+  examples: { ru: 'Примеры', en: 'Examples' },
+  needs: { ru: 'Что нужно', en: 'Requirements' },
+  section: { ru: 'Раздел', en: 'Section' },
+  adminOnly: { ru: 'Только для администраторов', en: 'Administrators only' },
+  noNews: { ru: 'Не удалось загрузить список изменений. Попробуйте чуть позже.', en: 'Could not load the list of changes. Try again later.' },
+  unlinked: { ru: '🔗 Ник не привязан: команда `/link` подключит часы, ранг и достижения.', en: '🔗 No nick linked yet: `/link` turns on hours, rank and achievements.' },
+  panelDown: { ru: 'Панель сейчас не отвечает. Попробуйте чуть позже.', en: 'The panel is not answering now. Try again later.' },
+} satisfies Record<string, Two>;
+export const tx = (k: keyof typeof UI, lang: Lang): string => UI[k][lang];
+
+export interface Live { players: number; up: number; total: number }
+export const liveLine = (l: Live, lang: Lang): string => {
+  const dot = l.up === l.total && l.total > 0 ? '🟢' : l.up === 0 ? '🔴' : '🟡';
+  return lang === 'en' ? `${dot} Playing now: **${l.players}** · servers online: **${l.up} of ${l.total}**` : `${dot} Сейчас играют **${l.players}** · серверов в сети **${l.up} из ${l.total}**`;
+};
+
+export interface MeLike { found: boolean; gameNick: string; rank: { name: string; hours: number } | null }
+/** the line about the person on the first screen: their nick, rank and hours, or a hint to link the nick */
+export function meLine(me: MeLike | null, lang: Lang): string {
+  if (!me) return '';
+  if (!me.found || !me.gameNick) return tx('unlinked', lang);
+  const hours = me.rank ? ` · ${me.rank.name} · ${Number.isInteger(me.rank.hours) ? me.rank.hours : me.rank.hours.toFixed(1)} ${lang === 'en' ? 'h' : 'ч'}` : '';
+  return `👤 **${me.gameNick}**${hours}`;
+}
+
+export interface ChangelogAnswer { version: string | null; date: string | null; items: string[] }
+/** the first words of a changelog item: up to the first « — », « | » or full stop, cut at `max` characters */
+export function shortItem(text: string, max = 130): string {
+  const t = text.replace(/\s+/g, ' ').trim();
+  const cut = t.search(/ — | \| |\. /);
+  const s = cut > 10 ? t.slice(0, cut) : t;
+  return s.length > max ? `${s.slice(0, max - 1).trimEnd()}…` : s;
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-bot/src"
@@ -42795,9 +43098,9 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-bot/src"
   cat > "$APP_DIR/core-bot/src/style.ts" << '__COREGSM_EOF__'
 /** The look of the bot's own replies (footer, accent colour, logo): set in the panel and refreshed with the config. */
-export interface BotStyle { footer: string; accent: number; logoUrl: string | null; version: string; panelUrl: string | null }
+export interface BotStyle { footer: string; accent: number; logoUrl: string | null; version: string; panelUrl: string | null; supportUrl: string | null }
 
-let current: BotStyle = { footer: 'CoreGSM', accent: 0x9b1c31, logoUrl: null, version: '', panelUrl: null };
+let current: BotStyle = { footer: 'CoreGSM', accent: 0x9b1c31, logoUrl: null, version: '', panelUrl: null, supportUrl: null };
 
 export const getStyle = (): BotStyle => current;
 
@@ -42809,6 +43112,7 @@ export function setStyle(s: unknown): void {
     accent: o.accent,
     logoUrl: typeof o.logoUrl === 'string' && /^https?:\/\//.test(o.logoUrl) ? o.logoUrl : null,
     version: typeof o.version === 'string' && /^[\w.+-]{1,20}$/.test(o.version) ? o.version : '',
+    supportUrl: typeof o.supportUrl === 'string' && /^https:\/\/[^\s]{4,300}$/.test(o.supportUrl) ? o.supportUrl : null,
     panelUrl: typeof o.panelUrl === 'string' && /^https?:\/\/[^\s]+$/.test(o.panelUrl) ? o.panelUrl.replace(/\/+$/, '') : null,
   };
 }
@@ -118440,6 +118744,7 @@ interface Dash {
   channelName: string | null;
   error: string;
   weekly: boolean;
+  supportUrl: string;
   botOnline: boolean;
 }
 
@@ -118448,15 +118753,16 @@ export default function DashboardCard() {
   const [d, setD] = useState<Dash | null>(null);
   const [busy, setBusy] = useState(false);
   const [picking, setPicking] = useState(false);
+  const [support, setSupport] = useState('');
 
   useEffect(() => {
     let alive = true;
-    api<Dash>('/settings/dashboard').then((r) => { if (alive) setD(r); }).catch(() => undefined);
+    api<Dash>('/settings/dashboard').then((r) => { if (alive) { setD(r); setSupport(r.supportUrl); } }).catch(() => undefined);
     return () => { alive = false; };
   }, []);
   if (!d) return null;
 
-  const save = async (patch: Partial<Pick<Dash, 'enabled' | 'channelId' | 'weekly'>>) => {
+  const save = async (patch: Partial<Pick<Dash, 'enabled' | 'channelId' | 'weekly' | 'supportUrl'>>) => {
     setBusy(true);
     try {
       setD(await api<Dash>('/settings/dashboard', 'PUT', patch));
@@ -118500,6 +118806,14 @@ export default function DashboardCard() {
       </label>
       <p className="mb-3 text-sm font-semibold text-mute">{t('dash.weeklyHelp')}</p>
       <Button type="button" loading={busy} onClick={() => void test()}>{t('dash.test')}</Button>
+      <div className="mt-5">
+        <label htmlFor="support-url" className="label">{t('dash.support')}</label>
+        <p className="mb-2 text-sm font-semibold text-mute">{t('dash.supportHelp')}</p>
+        <div className="flex flex-wrap gap-2">
+          <input id="support-url" type="url" inputMode="url" placeholder="https://" className="input min-w-0 flex-1" maxLength={300} value={support} onChange={(e) => setSupport(e.target.value)} />
+          <Button type="button" loading={busy} disabled={support.trim() === d.supportUrl || (support.trim() !== '' && !/^https:\/\/\S{4,300}$/.test(support.trim()))} onClick={() => void save({ supportUrl: support.trim() })}>{t('common.save')}</Button>
+        </div>
+      </div>
     </Section>
   );
 }
@@ -139853,6 +140167,8 @@ const en: Record<keyof typeof ru, string> = {
   'dash.test': 'Send the summary now',
   'dash.testSent': 'Sent to administrators: {n}',
   'dash.testNone': 'Nobody to send to: an administrator with a linked Discord and a running bot are needed',
+  'dash.support': '«Support» link in /help',
+  'dash.supportHelp': 'The «💬 Support» button of the /help card leads here: a support chat, a form or a channel. https:// only. Empty — no button.',
   'mod.title': 'Moderation: /clear, /ban, /kick, /warn',
   'mod.help': 'The /clear command wipes the chat of the channel where it is typed. Only server administrators (the «Administrator» permission) can see and use it. Before deleting, the bot shows how many messages it found and asks to confirm.',
   'mod.on': 'Allow the /clear command',
@@ -144088,6 +144404,8 @@ const ru = {
   'dash.test': 'Отправить итоги сейчас',
   'dash.testSent': 'Отправлено администраторам: {n}',
   'dash.testNone': 'Некому отправлять: нужен администратор с привязанным Discord и запущенный бот',
+  'dash.support': 'Ссылка «Поддержка» в /help',
+  'dash.supportHelp': 'Кнопка «💬 Поддержка» в карточке /help ведёт сюда: чат поддержки, форма или канал. Только https://. Пусто — кнопки нет.',
   'mod.title': 'Модерация: /clear, /ban, /kick, /warn',
   'mod.help': 'Команда /clear очищает чат в канале, где её ввели. Её видят и могут использовать только администраторы сервера (право «Администратор»). Перед удалением бот показывает, сколько сообщений найдено, и просит подтвердить.',
   'mod.on': 'Разрешить команду /clear',

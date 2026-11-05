@@ -10,6 +10,7 @@ interface Dash {
   channelName: string | null;
   error: string;
   weekly: boolean;
+  supportUrl: string;
   botOnline: boolean;
 }
 
@@ -18,15 +19,16 @@ export default function DashboardCard() {
   const [d, setD] = useState<Dash | null>(null);
   const [busy, setBusy] = useState(false);
   const [picking, setPicking] = useState(false);
+  const [support, setSupport] = useState('');
 
   useEffect(() => {
     let alive = true;
-    api<Dash>('/settings/dashboard').then((r) => { if (alive) setD(r); }).catch(() => undefined);
+    api<Dash>('/settings/dashboard').then((r) => { if (alive) { setD(r); setSupport(r.supportUrl); } }).catch(() => undefined);
     return () => { alive = false; };
   }, []);
   if (!d) return null;
 
-  const save = async (patch: Partial<Pick<Dash, 'enabled' | 'channelId' | 'weekly'>>) => {
+  const save = async (patch: Partial<Pick<Dash, 'enabled' | 'channelId' | 'weekly' | 'supportUrl'>>) => {
     setBusy(true);
     try {
       setD(await api<Dash>('/settings/dashboard', 'PUT', patch));
@@ -70,6 +72,14 @@ export default function DashboardCard() {
       </label>
       <p className="mb-3 text-sm font-semibold text-mute">{t('dash.weeklyHelp')}</p>
       <Button type="button" loading={busy} onClick={() => void test()}>{t('dash.test')}</Button>
+      <div className="mt-5">
+        <label htmlFor="support-url" className="label">{t('dash.support')}</label>
+        <p className="mb-2 text-sm font-semibold text-mute">{t('dash.supportHelp')}</p>
+        <div className="flex flex-wrap gap-2">
+          <input id="support-url" type="url" inputMode="url" placeholder="https://" className="input min-w-0 flex-1" maxLength={300} value={support} onChange={(e) => setSupport(e.target.value)} />
+          <Button type="button" loading={busy} disabled={support.trim() === d.supportUrl || (support.trim() !== '' && !/^https:\/\/\S{4,300}$/.test(support.trim()))} onClick={() => void save({ supportUrl: support.trim() })}>{t('common.save')}</Button>
+        </div>
+      </div>
     </Section>
   );
 }

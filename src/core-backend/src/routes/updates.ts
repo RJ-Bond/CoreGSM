@@ -443,7 +443,7 @@ router.post('/api/update/rollback', admin, (_req, res) => {
 
 // ---- release notes: CHANGELOG.md of the repository (Russian, written by hand); the commits are the fallback
 let notes: { at: number; releases: ReturnType<typeof parseChangelog>; error: string | null } | null = null;
-async function loadNotes() {
+export async function loadNotes() {
   if (!notes || Date.now() - notes.at > (notes.error ? 60_000 : 10 * 60_000)) {
     try {
       notes = { at: Date.now(), releases: parseChangelog(await fetchRepoText('CHANGELOG.md')).slice(0, 12), error: null };

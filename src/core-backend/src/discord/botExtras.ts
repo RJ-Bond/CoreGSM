@@ -15,6 +15,7 @@ import { bot, channelInfo } from './botState.js';
 import { dmAvailable, SUB_KINDS } from '../community/subscriptions.js';
 import { MAX_FOLLOWS, nickKey, validNick } from '../profile/playerFollows.js';
 import { log } from '../logger.js';
+import { loadNotes } from '../routes/updates.js';
 
 const WEEK = 7 * 86_400_000;
 
@@ -26,6 +27,12 @@ export const dashboardSettings = () => ({
   /** the weekly summary for the administrators is on unless it was switched off */
   weekly: getSetting('admin_weekly') !== '0',
 });
+
+/** the «Support» link of /help: https only */
+export const supportUrl = (): string => {
+  const v = (getSetting('support_url') ?? '').trim();
+  return /^https:\/\/[^\s]{4,300}$/.test(v) ? v : '';
+};
 
 /** numbers of the last seven days (and the peak of the week before) */
 export function weeklyStats(now: number): WeeklyStats {
@@ -129,12 +136,12 @@ export function registerBotExtras(deps: { app: Express; admin: RequestHandler; i
   // ----- dashboard -----
   const payload = () => {
     const s = dashboardSettings();
-    return { enabled: getSetting('dash_enabled') === '1', channelId: s.channelId, channelName: channelInfo(s.channelId).channelName, error: s.error, weekly: s.weekly, botOnline: bot.status.state === 'online' };
+    return { enabled: getSetting('dash_enabled') === '1', channelId: s.channelId, channelName: channelInfo(s.channelId).channelName, error: s.error, weekly: s.weekly, supportUrl: supportUrl(), botOnline: bot.status.state === 'online' };
   };
   app.get('/api/settings/dashboard', admin, (_req, res) => res.json(payload()));
   app.put('/api/settings/dashboard', admin, (req, res) => {
-    const b = z.object({ enabled: z.boolean().optional(), channelId: z.string().regex(/^(\d{15,25})?$/).optional(), weekly: z.boolean().optional() }).safeParse(req.body);
-    if (!b.success) return res.status(400).json({ error: 'Проверьте канал' });
+    const b = z.object({ enabled: z.boolean().optional(), channelId: z.string().regex(/^(\d{15,25})?$/).optional(), weekly: z.boolean().optional(), supportUrl: z.string().trim().max(300).regex(/^(https:\/\/[^\s]{4,300})?$/).optional() }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'Проверьте канал и ссылку (только https://…)' });
     if (b.data.channelId !== undefined && b.data.channelId !== (getSetting('dash_channel') ?? '')) {
       // another channel: the old message is forgotten, the bot posts a new one
       setSetting('dash_channel', b.data.channelId);
@@ -143,10 +150,26 @@ export function registerBotExtras(deps: { app: Express; admin: RequestHandler; i
     }
     if (b.data.enabled !== undefined) setSetting('dash_enabled', b.data.enabled ? '1' : '0');
     if (b.data.weekly !== undefined) setSetting('admin_weekly', b.data.weekly ? '1' : '0');
+    if (b.data.supportUrl !== undefined) setSetting('support_url', b.data.supportUrl);
     res.json(payload());
   });
   // a test of the weekly summary: sent to the administrators at once
   app.post('/api/settings/dashboard/weekly-test', admin, (_req, res) => res.json({ sent: sendWeekly(Date.now(), true) }));
+
+  // «Что нового» in /help: the items of the newest released version of CHANGELOG.md (not the unreleased ones), in the asked language
+  app.get('/internal/changelog', internal, async (req, res) => {
+    try {
+      const en = req.query.lang === 'en';
+      const n = await loadNotes();
+      const rel = n.releases.find((r) => r.version);
+      if (!rel) return res.status(404).json({ error: 'no notes' });
+      const items = rel.groups.flatMap((g) => g.items).map((i) => (en ? i.textEn ?? i.text : i.text)).filter(Boolean).slice(0, 8);
+      res.json({ version: rel.version, date: rel.date, items });
+    } catch (e) {
+      log.error('changelog for the bot failed', (e as Error).message);
+      res.status(502).json({ error: 'unavailable' });
+    }
+  });
 
   app.get('/internal/dashboard', internal, (_req, res) => {
     const s = dashboardSettings();

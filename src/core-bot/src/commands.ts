@@ -7,7 +7,7 @@ import { backend, backendJson } from './backend.js';
 import { humanDiscordError } from './errors.js';
 import { log } from './log.js';
 import { handleInfo, INFO_COMMANDS, INFO_NAMES, infoAutocomplete } from './info.js';
-import { HELP_COMMANDS, HELP_NAMES, handleHelp, handleHelpButton } from './help.js';
+import { HELP_COMMANDS, HELP_NAMES, handleHelp, handleHelpButton, handleHelpSelect, helpAutocomplete } from './help.js';
 import { COLORS, cardReply, replyEmbed, type ProfileData } from './replies.js';
 import { handleAppealButton, handleAppealModal } from './appeals.js';
 import { CONTEXT_NAMES, PUNISH_COMMANDS, PUNISH_NAMES, handleBanPick, handleContext, handlePunish, handlePunishButton, handleReasonModal, punishAutocomplete } from './punish.js';
@@ -105,7 +105,7 @@ async function handlePollButton(i: ButtonInteraction): Promise<void> {
 }
 
 export async function handleInteraction(i: Interaction): Promise<void> {
-  if (i.isStringSelectMenu()) return i.customId.startsWith('modban:') ? handleBanPick(i) : i.customId.startsWith('lnk:') ? handleLinkSelect(i) : handleRoleSelect(i);
+  if (i.isStringSelectMenu()) return i.customId.startsWith('modban:') ? handleBanPick(i) : i.customId.startsWith('lnk:') ? handleLinkSelect(i) : i.customId.startsWith('help:') ? handleHelpSelect(i) : handleRoleSelect(i);
   if (i.isButton() && i.customId.startsWith('clear:')) return handleClearButton(i);
   if (i.isButton() && i.customId.startsWith('mod:')) return handlePunishButton(i);
   if (i.isButton() && i.customId.startsWith('appeal:')) return handleAppealButton(i);
@@ -115,6 +115,7 @@ export async function handleInteraction(i: Interaction): Promise<void> {
   if (i.isModalSubmit()) return i.customId.startsWith('appeal:') ? handleAppealModal(i) : i.customId.startsWith('lnk:') ? handleLinkModal(i) : handleReasonModal(i);
   if ((i.isUserContextMenuCommand() || i.isMessageContextMenuCommand()) && CONTEXT_NAMES.has(i.commandName)) return handleContext(i);
   if (i.isButton()) return /^(help|srv):/.test(i.customId) ? handleHelpButton(i) : handlePollButton(i);
+  if (i.isAutocomplete() && i.commandName === 'help') return helpAutocomplete(i);
   if (i.isAutocomplete() && PUNISH_NAMES.has(i.commandName)) return punishAutocomplete(i);
   if (i.isAutocomplete()) return INFO_NAMES.has(i.commandName) ? infoAutocomplete(i) : handleAutocomplete(i);
   if (!i.isChatInputCommand()) return;
