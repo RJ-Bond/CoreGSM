@@ -6,7 +6,7 @@ import { log } from './log.js';
 import { handleInfo, INFO_COMMANDS, INFO_NAMES, infoAutocomplete } from './info.js';
 import { HELP_COMMANDS, HELP_NAMES, handleHelp, handleHelpButton } from './help.js';
 import { COLORS, cardReply, replyEmbed, type ProfileData } from './replies.js';
-import { PUNISH_COMMANDS, PUNISH_NAMES, handlePunish, handlePunishButton, punishAutocomplete } from './punish.js';
+import { PUNISH_COMMANDS, PUNISH_NAMES, handleBanPick, handlePunish, handlePunishButton, punishAutocomplete } from './punish.js';
 import { CLEAR_COMMANDS, CLEAR_NAMES, handleClearButton, handleClearCommand } from './clear.js';
 import { ROLE_COMMANDS, ROLE_NAMES, handleRoleSelect, handleRolesCommand } from './roles.js';
 
@@ -100,7 +100,7 @@ async function handlePollButton(i: ButtonInteraction): Promise<void> {
 }
 
 export async function handleInteraction(i: Interaction): Promise<void> {
-  if (i.isStringSelectMenu()) return handleRoleSelect(i);
+  if (i.isStringSelectMenu()) return i.customId.startsWith('modban:') ? handleBanPick(i) : handleRoleSelect(i);
   if (i.isButton() && i.customId.startsWith('clear:')) return handleClearButton(i);
   if (i.isButton() && i.customId.startsWith('mod:')) return handlePunishButton(i);
   if (i.isButton()) return /^(help|srv):/.test(i.customId) ? handleHelpButton(i) : handlePollButton(i);

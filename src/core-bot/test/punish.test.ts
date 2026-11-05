@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { COMMANDS } from '../src/commands.js';
 import { PUNISH_COMMANDS } from '../src/punish.js';
-import { MAX_REASON, auditReason, cleanReason, daysText, deleteDays, deleteSeconds, dmText, escalationHint, idFromInput, isStale, newToken, parsePunishId, punishId, standingProblem, PUNISH_TTL_MS } from '../src/punishLogic.js';
+import { BAN_PAGE, MAX_REASON, banLine, pageId, paginate, parsePageId, auditReason, cleanReason, daysText, deleteDays, deleteSeconds, dmText, escalationHint, idFromInput, isStale, newToken, parsePunishId, punishId, standingProblem, PUNISH_TTL_MS } from '../src/punishLogic.js';
 
 test('/ban /unban /kick /warn are registered once, for administrators only, and fit the limits of Discord', () => {
   for (const name of ['ban', 'unban', 'kick', 'warn']) assert.equal(COMMANDS.filter((c) => c.name === name).length, 1, name);
@@ -76,4 +76,16 @@ test('texts: the private message and the hint after repeated warnings', () => {
   assert.match(dmText('warn', 'Сервер', 2).title, /№2/);
   assert.equal(escalationHint(2), '');
   assert.match(escalationHint(3), /3-е/);
+});
+
+test('the ban list: pages, lines and the ids of the page buttons', () => {
+  assert.deepEqual(paginate(0, 0), { page: 0, pages: 1, from: 0, to: 0 });
+  assert.deepEqual(paginate(25, 1), { page: 1, pages: 3, from: BAN_PAGE, to: 2 * BAN_PAGE });
+  assert.deepEqual(paginate(25, 9), { page: 2, pages: 3, from: 20, to: 25 });
+  assert.deepEqual(paginate(25, -4), { page: 0, pages: 3, from: 0, to: 10 });
+  assert.equal(banLine({ id: '123456789012345678', username: 'Va*sya', reason: '' }), '**Vasya** · `123456789012345678`');
+  assert.equal(banLine({ id: '1', username: 'a', reason: 'читы\nи спам' }), '**a** · `1` — читы и спам');
+  assert.equal(parsePageId(pageId(3)), 3);
+  assert.equal(parsePageId('mod:go:abcdefgh'), null);
+  assert.ok(pageId(999).length <= 100);
 });

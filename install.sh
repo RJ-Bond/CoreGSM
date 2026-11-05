@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="82ef53e6f061"
+COREGSM_BUILD="745fad00712e"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.38"
+COREGSM_VERSION="1.1.39"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -21665,7 +21665,7 @@ export const BOT_COMMANDS = [
   { name: '/roles', description: 'Выбрать себе роли в меню: можно взять и снять (видно только вам)' },
   { name: '/clear', description: 'Очистить чат в этом канале: только для администраторов, с подтверждением кнопкой. Параметры: count (сколько), user (только чьи сообщения)' },
   { name: '/ban', description: 'Заблокировать участника с причиной (для администраторов, с подтверждением). Параметры: user, reason, delete, public' },
-  { name: '/unban', description: 'Снять блокировку: участник подсказывается из списка банов. Параметры: user, reason, public' },
+  { name: '/unban', description: 'Снять блокировку: без параметра открывает список банов с меню выбора. Параметры: user, reason, public' },
   { name: '/kick', description: 'Исключить участника с сервера с причиной (для администраторов, с подтверждением). Параметры: user, reason, public' },
   { name: '/warn', description: 'Вынести предупреждение: бот считает их и пишет участнику в ЛС. Параметры: user, reason, public' },
   { name: '/help', description: 'Что умеет бот: команды по разделам, кнопки переключают разделы (видно только вам)' },
@@ -38916,7 +38916,7 @@ import { log } from './log.js';
 import { handleInfo, INFO_COMMANDS, INFO_NAMES, infoAutocomplete } from './info.js';
 import { HELP_COMMANDS, HELP_NAMES, handleHelp, handleHelpButton } from './help.js';
 import { COLORS, cardReply, replyEmbed, type ProfileData } from './replies.js';
-import { PUNISH_COMMANDS, PUNISH_NAMES, handlePunish, handlePunishButton, punishAutocomplete } from './punish.js';
+import { PUNISH_COMMANDS, PUNISH_NAMES, handleBanPick, handlePunish, handlePunishButton, punishAutocomplete } from './punish.js';
 import { CLEAR_COMMANDS, CLEAR_NAMES, handleClearButton, handleClearCommand } from './clear.js';
 import { ROLE_COMMANDS, ROLE_NAMES, handleRoleSelect, handleRolesCommand } from './roles.js';
 
@@ -39010,7 +39010,7 @@ async function handlePollButton(i: ButtonInteraction): Promise<void> {
 }
 
 export async function handleInteraction(i: Interaction): Promise<void> {
-  if (i.isStringSelectMenu()) return handleRoleSelect(i);
+  if (i.isStringSelectMenu()) return i.customId.startsWith('modban:') ? handleBanPick(i) : handleRoleSelect(i);
   if (i.isButton() && i.customId.startsWith('clear:')) return handleClearButton(i);
   if (i.isButton() && i.customId.startsWith('mod:')) return handlePunishButton(i);
   if (i.isButton()) return /^(help|srv):/.test(i.customId) ? handleHelpButton(i) : handlePollButton(i);
@@ -39262,7 +39262,7 @@ export const HELP_CATEGORIES: HelpCategory[] = [
     lines: [
       ['/clear', 'очистить чат в этом канале: с подтверждением, закреплённые остаются'],
       ['/ban', 'заблокировать участника с причиной (удаляет его сообщения, пишет ему в ЛС)'],
-      ['/unban', 'снять блокировку: имя или ID подсказываются из списка банов'],
+      ['/unban', 'снять блокировку: без параметра покажет список банов с меню, с параметром подскажет имя или ID'],
       ['/kick', 'исключить участника с причиной, он сможет вернуться по приглашению'],
       ['/warn', 'вынести предупреждение: бот считает их и показывает прошлые причины'],
     ],
@@ -39877,14 +39877,14 @@ __COREGSM_EOF__
  * panel (the card shows its number and the earlier reasons). The person gets a private message first, when Discord lets us.
  * The result goes to the moderator privately, to the channel when `public` is chosen, and to the log channel of the panel.
  */
-import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, PermissionFlagsBits, type AutocompleteInteraction, type ButtonInteraction, type ChatInputCommandInteraction, type Guild, type User } from 'discord.js';
+import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, PermissionFlagsBits, StringSelectMenuBuilder, StringSelectMenuOptionBuilder, type AutocompleteInteraction, type ButtonInteraction, type ChatInputCommandInteraction, type Guild, type StringSelectMenuInteraction, type User } from 'discord.js';
 import { backendJson } from './backend.js';
 import { readModeration, type Moderation } from './clearLogic.js';
 import { humanDiscordError } from './errors.js';
 import { log } from './log.js';
 import { COLORS, replyEmbed } from './replies.js';
-import { footerOf } from './style.js';
-import { DELETE_DAYS, META, PUNISH_TTL_MS, auditReason, cleanReason, daysText, deleteDays, deleteSeconds, dmText, escalationHint, idFromInput, isStale, newToken, parsePunishId, punishId, standingProblem, timeTag, MAX_REASON, type PunishAction } from './punishLogic.js';
+import { footerOf, getStyle } from './style.js';
+import { BAN_PAGE, DELETE_DAYS, META, PICK_ID, banLine, pageId, paginate, parsePageId, PUNISH_TTL_MS, auditReason, cleanReason, daysText, deleteDays, deleteSeconds, dmText, escalationHint, idFromInput, isStale, newToken, parsePunishId, punishId, standingProblem, timeTag, MAX_REASON, type PunishAction } from './punishLogic.js';
 
 const EPHEMERAL = 64;
 const ADMIN = String(PermissionFlagsBits.Administrator);
@@ -39928,7 +39928,7 @@ export const PUNISH_COMMANDS = [
     description: '🔓 Снять блокировку · только админы',
     description_localizations: loc('🔓 Снять блокировку · только админы', '🔓 Unban a member · admins only'),
     options: [
-      { type: 3, name: 'user', description: '👤 Кого разблокировать (имя или ID из списка банов)', description_localizations: loc('👤 Кого разблокировать (имя или ID из списка банов)', '👤 Who to unban (name or ID from the ban list)'), required: true, autocomplete: true },
+      { type: 3, name: 'user', description: '👤 Кого разблокировать (пусто — открыть список банов)', description_localizations: loc('👤 Кого разблокировать (пусто — открыть список банов)', '👤 Who to unban (empty — open the ban list)'), required: false, autocomplete: true },
       reasonOpt(false),
       publicOpt,
     ],
@@ -40031,7 +40031,7 @@ async function sendDm(guild: Guild, target: User, action: PunishAction, reason: 
 type Sendable = { send?: (o: unknown) => Promise<unknown> } | null;
 
 /** the card to the channel (when `public`) and to the log channel of the panel */
-async function publish(i: ChatInputCommandInteraction | ButtonInteraction, mod: Moderation, e: EmbedBuilder, publicCard: boolean, channelId: string): Promise<void> {
+async function publish(i: Pick<ChatInputCommandInteraction, 'client'>, mod: Moderation, e: EmbedBuilder, publicCard: boolean, channelId: string): Promise<void> {
   const to = async (id: string) => {
     try {
       const ch = (await i.client.channels.fetch(id)) as unknown as Sendable;
@@ -40045,7 +40045,7 @@ async function publish(i: ChatInputCommandInteraction | ButtonInteraction, mod: 
 }
 
 /** the checks shared by every command; a ready reply for the moderator when something forbids the action */
-async function gate(i: ChatInputCommandInteraction | ButtonInteraction, action: PunishAction): Promise<{ title: string; text: string } | { mod: Moderation }> {
+async function gate(i: ChatInputCommandInteraction | ButtonInteraction | StringSelectMenuInteraction, action: PunishAction): Promise<{ title: string; text: string } | { mod: Moderation }> {
   if (!i.guild) return { title: 'Только на сервере', text: 'Команда работает на Discord-сервере.' };
   if (!i.memberPermissions?.has(PermissionFlagsBits.Administrator)) return { title: 'Недостаточно прав', text: 'Эта команда доступна только администраторам сервера.' };
   const need = BOT_NEEDS[action];
@@ -40086,7 +40086,13 @@ export async function handlePunish(i: ChatInputCommandInteraction): Promise<void
     const reason = cleanReason(i.options.getString('reason'));
     const publicCard = i.options.getBoolean('public') ?? false;
     if (action === 'unban') {
-      await doUnban(i, g.mod, guild, i.options.getString('user', true), reason, publicCard);
+      const input = i.options.getString('user');
+      if (!input) {
+        const rows = await loadBans(guild, true);
+        await i.editReply(rows ? banListView(rows, 0) : fail('Не получилось', 'Не удалось прочитать список банов: боту нужно право «Банить участников».'));
+        return;
+      }
+      await doUnban(i, g.mod, guild, input, reason, publicCard);
       return;
     }
     const target = i.options.getUser('user', true);
@@ -40125,6 +40131,8 @@ export async function handlePunish(i: ChatInputCommandInteraction): Promise<void
 }
 
 export async function handlePunishButton(i: ButtonInteraction): Promise<void> {
+  const page = parsePageId(i.customId);
+  if (page !== null) return handleBanPage(i, page);
   const p = parsePunishId(i.customId);
   if (!p) return;
   try {
@@ -40184,41 +40192,123 @@ async function doWarn(i: ChatInputCommandInteraction, mod: Moderation, guild: Gu
   await publish(i, mod, e, publicCard, i.channelId);
 }
 
-async function doUnban(i: ChatInputCommandInteraction, mod: Moderation, guild: Guild, input: string, reason: string, publicCard: boolean): Promise<void> {
-  const id = idFromInput(input);
-  if (!id) {
-    await i.editReply(fail('Не понял, кого', 'Выберите участника из списка подсказок или впишите его ID (число).'));
-    return;
-  }
+/** unbans one person: the card, or a text of the refusal */
+async function unbanCore(i: { client: ChatInputCommandInteraction['client']; user: User }, guild: Guild, id: string, reason: string): Promise<{ e: EmbedBuilder } | { title: string; text: string }> {
   try {
     await guild.members.unban(id, auditReason(i.user.username, reason || 'без причины'));
   } catch (e) {
     const code = (e as { code?: number }).code;
-    await i.editReply(fail('Не получилось', code === 10026 ? 'Этого человека нет в списке банов сервера.' : code === 50013 ? 'Боту не хватает права «Банить участников».' : humanDiscordError(e)));
-    return;
+    return { title: 'Не получилось', text: code === 10026 ? 'Этого человека нет в списке банов сервера.' : code === 50013 ? 'Боту не хватает права «Банить участников».' : humanDiscordError(e) };
   }
   forgetBans(guild.id);
   const target = await i.client.users.fetch(id).catch(() => null);
-  const shown: User | { id: string; username: string; displayAvatarURL: () => string } = target ?? { id, username: id, displayAvatarURL: () => '' };
+  const shown = target ?? { id, username: id, displayAvatarURL: () => '' };
   const dm = target ? await sendDm(guild, target, 'unban', reason) : null;
-  const e = card({ action: 'unban', target: shown as unknown as User, mod: i.user, reason, dm });
-  await i.editReply({ embeds: [e], components: [] });
-  await publish(i, mod, e, publicCard, i.channelId);
+  return { e: card({ action: 'unban', target: shown as unknown as User, mod: i.user, reason, dm }) };
+}
+
+async function doUnban(i: ChatInputCommandInteraction, mod: Moderation, guild: Guild, input: string, reason: string, publicCard: boolean): Promise<void> {
+  const id = idFromInput(input);
+  if (!id) {
+    await i.editReply(fail('Не понял, кого', 'Выберите участника из подсказок, впишите его ID (число) или оставьте поле пустым, чтобы открыть список банов.'));
+    return;
+  }
+  const r = await unbanCore(i, guild, id, reason);
+  if (!('e' in r)) {
+    await i.editReply(fail(r.title, r.text));
+    return;
+  }
+  await i.editReply({ embeds: [r.e], components: [] });
+  await publish(i, mod, r.e, publicCard, i.channelId);
+}
+
+interface BanRow { id: string; username: string; reason: string }
+/** the ban list of a server, kept a minute (it is read again after each ban or unban) */
+const banCache = new Map<string, { at: number; list: BanRow[] }>();
+
+async function loadBans(guild: Guild, fresh = false): Promise<BanRow[] | null> {
+  const hit = banCache.get(guild.id);
+  if (!fresh && hit && Date.now() - hit.at < 60_000) return hit.list;
+  const bans = await guild.bans.fetch({ limit: 1000 }).catch(() => null);
+  if (!bans) return null;
+  const list = [...bans.values()].map((b) => ({ id: b.user.id, username: b.user.username, reason: b.reason ?? '' }));
+  banCache.set(guild.id, { at: Date.now(), list });
+  return list;
+}
+
+/** the list of the banned: a page of lines, a menu to pick whom to unban, buttons for the pages */
+function banListView(rows: BanRow[], pageNo: number) {
+  const pg = paginate(rows.length, pageNo, BAN_PAGE);
+  const slice = rows.slice(pg.from, pg.to);
+  const e = new EmbedBuilder()
+    .setColor(getStyle().accent)
+    .setTitle('🔓 Список банов')
+    .setDescription(slice.length ? slice.map(banLine).join('\n') : 'Список банов пуст: никто не заблокирован.')
+    .setFooter(footerOf(`Страница ${pg.page + 1} из ${pg.pages} · всего ${rows.length}`));
+  const components: (ActionRowBuilder<StringSelectMenuBuilder> | ActionRowBuilder<ButtonBuilder>)[] = [];
+  if (slice.length) {
+    components.push(
+      new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+        new StringSelectMenuBuilder()
+          .setCustomId(PICK_ID)
+          .setPlaceholder('🔓 Выберите, кого разблокировать')
+          .addOptions(slice.map((b) => new StringSelectMenuOptionBuilder().setLabel(b.username.slice(0, 100) || b.id).setDescription(`ID ${b.id}${b.reason ? ` · ${b.reason}` : ''}`.slice(0, 100)).setValue(b.id))),
+      ),
+    );
+  }
+  if (pg.pages > 1) {
+    components.push(
+      new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder().setCustomId(pageId(pg.page - 1)).setLabel('Назад').setEmoji('◀️').setStyle(ButtonStyle.Secondary).setDisabled(pg.page === 0),
+        new ButtonBuilder().setCustomId(pageId(pg.page + 1)).setLabel('Дальше').setEmoji('▶️').setStyle(ButtonStyle.Secondary).setDisabled(pg.page >= pg.pages - 1),
+      ),
+    );
+  }
+  return { embeds: [e], components };
+}
+
+async function handleBanPage(i: ButtonInteraction, page: number): Promise<void> {
+  try {
+    await i.deferUpdate();
+    if (!i.guild || !i.memberPermissions?.has(PermissionFlagsBits.Administrator)) return;
+    const rows = await loadBans(i.guild);
+    await i.editReply(rows ? banListView(rows, page) : fail('Не получилось', 'Не удалось прочитать список банов: боту нужно право «Банить участников».'));
+  } catch (e) {
+    log('ban list page failed:', (e as Error).message);
+  }
+}
+
+/** a choice in the menu of the ban list: the person is unbanned, the list is shown again without them */
+export async function handleBanPick(i: StringSelectMenuInteraction): Promise<void> {
+  if (i.customId !== PICK_ID) return;
+  try {
+    await i.deferUpdate();
+    const g = await gate(i, 'unban');
+    if (!('mod' in g)) {
+      await i.followUp({ ...fail(g.title, g.text), flags: EPHEMERAL });
+      return;
+    }
+    const guild = i.guild as Guild;
+    const r = await unbanCore(i, guild, i.values[0] ?? '', 'снят через список банов');
+    if (!('e' in r)) {
+      await i.followUp({ ...fail(r.title, r.text), flags: EPHEMERAL });
+      return;
+    }
+    const rows = await loadBans(guild, true);
+    await i.editReply(rows ? banListView(rows, 0) : { embeds: [r.e], components: [] });
+    await i.followUp({ embeds: [r.e], flags: EPHEMERAL });
+    await publish(i, g.mod, r.e, false, i.channelId);
+  } catch (e) {
+    log('ban list pick failed:', (e as Error).message);
+    await i.followUp({ ...fail('Не получилось', humanDiscordError(e)), flags: EPHEMERAL }).catch(() => undefined);
+  }
 }
 
 /** hints for /unban: the banned members of the server, found by name or ID */
-const banCache = new Map<string, { at: number; list: { id: string; username: string }[] }>();
-
 export async function punishAutocomplete(i: AutocompleteInteraction): Promise<void> {
   try {
     if (i.commandName !== 'unban' || !i.guild || !i.memberPermissions?.has(PermissionFlagsBits.Administrator)) return void (await i.respond([]));
-    const hit = banCache.get(i.guild.id);
-    let list = hit && Date.now() - hit.at < 60_000 ? hit.list : null;
-    if (!list) {
-      const bans = await i.guild.bans.fetch({ limit: 1000 }).catch(() => null);
-      list = bans ? [...bans.values()].map((b) => ({ id: b.user.id, username: b.user.username })) : [];
-      banCache.set(i.guild.id, { at: Date.now(), list });
-    }
+    const list = (await loadBans(i.guild)) ?? [];
     const q = String(i.options.getFocused()).trim().toLowerCase();
     const found = list.filter((b) => !q || b.username.toLowerCase().includes(q) || b.id.startsWith(q)).slice(0, 24).map((b) => ({ name: `${b.username} · ${b.id}`.slice(0, 100), value: b.id }));
     const typed = idFromInput(q);
@@ -40322,6 +40412,28 @@ export const auditReason = (mod: string, reason: string): string => `${mod}: ${r
 
 /** «3 дня», «1 день», «7 дней» */
 export const daysText = (n: number): string => (n === 0 ? 'не удалять' : n === 1 ? 'за 1 день' : `за ${n} дней`);
+
+export const BAN_PAGE = 10;
+
+/** the page of a list: the page is kept inside the list, `from`/`to` cut the items */
+export function paginate(total: number, page: number, size = BAN_PAGE): { page: number; pages: number; from: number; to: number } {
+  const pages = Math.max(1, Math.ceil(total / size));
+  const p = Math.min(pages - 1, Math.max(0, Number.isInteger(page) ? page : 0));
+  return { page: p, pages, from: p * size, to: Math.min(total, (p + 1) * size) };
+}
+
+/** a line of the ban list: «**name** · `id` — reason» */
+export function banLine(b: { id: string; username: string; reason: string }): string {
+  const name = b.username.replace(/[*_~`|>\\]/g, '');
+  return `**${name}** · \`${b.id}\`${b.reason ? ` — ${b.reason.replace(/\s+/g, ' ').slice(0, 70)}` : ''}`;
+}
+
+export const pageId = (n: number): string => `mod:pg:${n}`;
+export const parsePageId = (id: string): number | null => {
+  const m = /^mod:pg:(\d{1,3})$/.exec(id);
+  return m ? Number(m[1]) : null;
+};
+export const PICK_ID = 'modban:pick';
 
 /** a time in the style of Discord that shows in the reader's own time zone: <t:…:R> */
 export const timeTag = (ms: number): string => `<t:${Math.floor(ms / 1000)}:R>`;

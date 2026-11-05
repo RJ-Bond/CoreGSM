@@ -86,5 +86,27 @@ export const auditReason = (mod: string, reason: string): string => `${mod}: ${r
 /** «3 дня», «1 день», «7 дней» */
 export const daysText = (n: number): string => (n === 0 ? 'не удалять' : n === 1 ? 'за 1 день' : `за ${n} дней`);
 
+export const BAN_PAGE = 10;
+
+/** the page of a list: the page is kept inside the list, `from`/`to` cut the items */
+export function paginate(total: number, page: number, size = BAN_PAGE): { page: number; pages: number; from: number; to: number } {
+  const pages = Math.max(1, Math.ceil(total / size));
+  const p = Math.min(pages - 1, Math.max(0, Number.isInteger(page) ? page : 0));
+  return { page: p, pages, from: p * size, to: Math.min(total, (p + 1) * size) };
+}
+
+/** a line of the ban list: «**name** · `id` — reason» */
+export function banLine(b: { id: string; username: string; reason: string }): string {
+  const name = b.username.replace(/[*_~`|>\\]/g, '');
+  return `**${name}** · \`${b.id}\`${b.reason ? ` — ${b.reason.replace(/\s+/g, ' ').slice(0, 70)}` : ''}`;
+}
+
+export const pageId = (n: number): string => `mod:pg:${n}`;
+export const parsePageId = (id: string): number | null => {
+  const m = /^mod:pg:(\d{1,3})$/.exec(id);
+  return m ? Number(m[1]) : null;
+};
+export const PICK_ID = 'modban:pick';
+
 /** a time in the style of Discord that shows in the reader's own time zone: <t:…:R> */
 export const timeTag = (ms: number): string => `<t:${Math.floor(ms / 1000)}:R>`;
