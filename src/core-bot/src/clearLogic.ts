@@ -177,6 +177,10 @@ export interface Moderation {
   logChannelId: string;
   protectedChannels: string[];
   cooldown: number;
+  /** the reasons offered while a moderator types a punishment */
+  reasons: string[];
+  /** where the appeals of the banned arrive (empty = the log channel) */
+  appealChannelId: string;
 }
 
 export function readModeration(v: unknown): Moderation | null {
@@ -189,5 +193,7 @@ export function readModeration(v: unknown): Moderation | null {
     logChannelId: typeof o.logChannelId === 'string' && /^\d{15,25}$/.test(o.logChannelId) ? o.logChannelId : '',
     protectedChannels: o.protectedChannels.filter((x): x is string => typeof x === 'string'),
     cooldown: typeof o.cooldown === 'number' && o.cooldown >= 0 ? o.cooldown : 0,
+    reasons: Array.isArray(o.reasons) ? o.reasons.filter((x): x is string => typeof x === 'string').slice(0, 25) : [],
+    appealChannelId: typeof o.appealChannelId === 'string' && /^\d{15,25}$/.test(o.appealChannelId) ? o.appealChannelId : '',
   };
 }

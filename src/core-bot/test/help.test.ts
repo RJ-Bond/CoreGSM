@@ -18,7 +18,7 @@ test('/help: the first screen lists every section, a section lists its commands'
 
 test('every command of the bot is described in /help', () => {
   const text = HELP_CATEGORIES.flatMap((c) => c.lines.map((l) => l[0])).join(' ');
-  for (const c of COMMANDS) if (c.name !== 'help') assert.ok(text.includes(`/${c.name}`), c.name);
+  for (const c of COMMANDS) if (c.name !== 'help' && !(c as { type?: number }).type) assert.ok(text.includes(`/${c.name}`), c.name);
 });
 
 test('/servers: five buttons per row, at most 20, the id is in the customId', () => {

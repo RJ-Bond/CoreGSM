@@ -6,7 +6,8 @@ import { log } from './log.js';
 import { handleInfo, INFO_COMMANDS, INFO_NAMES, infoAutocomplete } from './info.js';
 import { HELP_COMMANDS, HELP_NAMES, handleHelp, handleHelpButton } from './help.js';
 import { COLORS, cardReply, replyEmbed, type ProfileData } from './replies.js';
-import { PUNISH_COMMANDS, PUNISH_NAMES, handleBanPick, handlePunish, handlePunishButton, punishAutocomplete } from './punish.js';
+import { handleAppealButton, handleAppealModal } from './appeals.js';
+import { CONTEXT_NAMES, PUNISH_COMMANDS, PUNISH_NAMES, handleBanPick, handleContext, handlePunish, handlePunishButton, handleReasonModal, punishAutocomplete } from './punish.js';
 import { CLEAR_COMMANDS, CLEAR_NAMES, handleClearButton, handleClearCommand } from './clear.js';
 import { ROLE_COMMANDS, ROLE_NAMES, handleRoleSelect, handleRolesCommand } from './roles.js';
 
@@ -103,6 +104,9 @@ export async function handleInteraction(i: Interaction): Promise<void> {
   if (i.isStringSelectMenu()) return i.customId.startsWith('modban:') ? handleBanPick(i) : handleRoleSelect(i);
   if (i.isButton() && i.customId.startsWith('clear:')) return handleClearButton(i);
   if (i.isButton() && i.customId.startsWith('mod:')) return handlePunishButton(i);
+  if (i.isButton() && i.customId.startsWith('appeal:')) return handleAppealButton(i);
+  if (i.isModalSubmit()) return i.customId.startsWith('appeal:') ? handleAppealModal(i) : handleReasonModal(i);
+  if ((i.isUserContextMenuCommand() || i.isMessageContextMenuCommand()) && CONTEXT_NAMES.has(i.commandName)) return handleContext(i);
   if (i.isButton()) return /^(help|srv):/.test(i.customId) ? handleHelpButton(i) : handlePollButton(i);
   if (i.isAutocomplete() && PUNISH_NAMES.has(i.commandName)) return punishAutocomplete(i);
   if (i.isAutocomplete()) return INFO_NAMES.has(i.commandName) ? infoAutocomplete(i) : handleAutocomplete(i);

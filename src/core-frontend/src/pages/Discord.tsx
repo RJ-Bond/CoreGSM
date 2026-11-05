@@ -11,6 +11,7 @@ import { Button, Empty, ErrorLine, Field, LoadError, GameAvatar, GoLink, IconDis
 import { BotPill } from './Settings';
 import { MissingNote } from '../components/ChannelPicker';
 import EmbedPreview from './EmbedPreview';
+import CasesCard from '../components/CasesCard';
 import ModerationCard from '../components/ModerationCard';
 import WelcomeCard from '../components/WelcomeCard';
 import DiscordStyleCard from '../components/DiscordStyleCard';
@@ -19,7 +20,7 @@ type Style = 'embed' | 'card' | 'both';
 interface Draft { id?: number; serverId: number; /** more servers shown in the same message (the main one is serverId) */ extraServerIds?: number[]; channelId: string; intervalSec: number; enabled: boolean; style: Style; layout?: 'detailed' | 'compact' | 'minimal' }
 
 /** the sub-route: «new» opens an empty binding form, «new/<serverId>» opens it with that server chosen */
-const DC_TABS = ['channels', 'look', 'extra', 'delivery'] as const;
+const DC_TABS = ['channels', 'look', 'mod', 'extra', 'delivery'] as const;
 type DcTab = (typeof DC_TABS)[number];
 const TAB_KEY = 'coregsm_discord_tab';
 const readTab = (): DcTab => {
@@ -323,8 +324,13 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
         <>
           <PlayersShownCard />
           <WelcomeCard />
-          <ModerationCard />
           <DiscordStyleCard />
+        </>
+      )}
+      {tab === 'mod' && (
+        <>
+          <ModerationCard />
+          <CasesCard />
         </>
       )}
       {tab === 'extra' && loaded && <><DiscordExtras servers={servers} /><AnnouncementsAdmin /></>}

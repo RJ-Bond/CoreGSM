@@ -95,7 +95,7 @@ test('speed, time left, pause', () => {
 });
 
 test('the panel answer is checked, the notice line is always there', () => {
-  assert.deepEqual(readModeration({ enabled: true, logChannelId: '123456789012345678', protectedChannels: ['1'], cooldown: 2 }), { enabled: true, punish: true, logChannelId: '123456789012345678', protectedChannels: ['1'], cooldown: 2 });
+  assert.deepEqual(readModeration({ enabled: true, logChannelId: '123456789012345678', protectedChannels: ['1'], cooldown: 2 }), { enabled: true, punish: true, logChannelId: '123456789012345678', protectedChannels: ['1'], cooldown: 2, reasons: [], appealChannelId: '' });
   assert.equal(readModeration({ enabled: 'yes' }), null);
   assert.equal(readModeration(null), null);
   assert.equal(readModeration({ enabled: false, logChannelId: 'x', protectedChannels: [], cooldown: -1 })?.logChannelId, '');

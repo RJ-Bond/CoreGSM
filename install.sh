@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="745fad00712e"
+COREGSM_BUILD="d66fd4ef4e97"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.39"
+COREGSM_VERSION="1.1.40"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -20090,36 +20090,51 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/community"
   cat > "$APP_DIR/core-backend/src/community/moderation.ts" << '__COREGSM_EOF__'
 /**
- * Settings of the moderation commands of the bot (/clear, /ban, /unban, /kick, /warn):
- *   GET|PUT /api/settings/moderation   { enabled, logChannelId, protectedChannels, cooldown }   (admin)
+ * Settings and records of the moderation commands of the bot (/clear, /ban, /unban, /kick, /warn, the context menus):
+ *   GET|PUT /api/settings/moderation   the settings (admin): switches, log channel, protected channels, pause, warning
+ *     lifetime, the ladder (timeout / kick after so many warnings), the reasons offered, the channel of appeals
  *   GET /internal/moderation   the same for the bot, read at each command
- *   POST /internal/warns   { guildId, userId, modId, reason }   records a warning, answers { id, total, recent }
- *   GET /internal/warns?guild=&user=   the warnings of a member
- * `protectedChannels` are never cleaned; `logChannelId` receives a record of each cleaning; `cooldown` is the pause in
- * minutes between two cleanings of one channel.
+ *   POST /internal/cases   { guildId, userId, userName, modId, modName, kind, reason, link }   writes a record (the case)
+ *     and, for a warning, answers the number of active warnings, the earlier ones and the step of the ladder
+ *   GET /internal/cases?guild=&user=   the history of a member;  POST /internal/cases/:id/revoke   withdraws a record
+ *   GET /api/moderation/cases   the list for the panel (admin);  POST /api/moderation/cases/:id/revoke   withdraws a warning
+ * A warning counts while it is not withdrawn and not expired.
  */
 import type { Express, RequestHandler } from 'express';
 import { z } from 'zod';
 import { db, getSetting, setSetting } from '../db.js';
 import { bot } from '../discord/botState.js';
-import { MAX_COOLDOWN, MAX_PROTECTED, cleanCooldown, cleanIds, parseIds } from './moderationLogic.js';
+import {
+  DEFAULT_MUTE_MINUTES, DEFAULT_WARN_TTL_DAYS, MAX_COOLDOWN, MAX_LADDER, MAX_MUTE_MINUTES, MAX_PROTECTED, MAX_REASONS, MAX_REASON_LEN, MAX_WARN_TTL_DAYS,
+  cleanCooldown, cleanIds, cleanInt, cleanReasons, expiresAt, ladderFor, parseIds, parseReasons, scaleOf, type Ladder,
+} from './moderationLogic.js';
 
 db.exec(`
-CREATE TABLE IF NOT EXISTS mod_warns (
+CREATE TABLE IF NOT EXISTS mod_cases (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   guild_id TEXT NOT NULL,
   user_id TEXT NOT NULL,
+  user_name TEXT NOT NULL DEFAULT '',
   mod_id TEXT NOT NULL,
-  reason TEXT NOT NULL,
-  created_at INTEGER NOT NULL
+  mod_name TEXT NOT NULL DEFAULT '',
+  kind TEXT NOT NULL,
+  reason TEXT NOT NULL DEFAULT '',
+  link TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER,
+  revoked_at INTEGER,
+  revoked_by TEXT
 );
-CREATE INDEX IF NOT EXISTS mod_warns_user ON mod_warns(guild_id, user_id, id);
+CREATE INDEX IF NOT EXISTS mod_cases_user ON mod_cases(guild_id, user_id, id);
+CREATE INDEX IF NOT EXISTS mod_cases_kind ON mod_cases(kind, id);
 `);
+// the first version kept warnings in their own table: they move to the records once
+if (db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'mod_warns'").get() && (db.prepare('SELECT COUNT(*) AS n FROM mod_cases').get() as { n: number }).n === 0) {
+  db.exec("INSERT INTO mod_cases (guild_id, user_id, mod_id, kind, reason, created_at) SELECT guild_id, user_id, mod_id, 'warn', reason, created_at FROM mod_warns");
+}
 
-const RECENT = 3;
-const recentWarns = (guild: string, user: string, limit = RECENT) =>
-  (db.prepare('SELECT id, mod_id AS modId, reason, created_at AS createdAt FROM mod_warns WHERE guild_id = ? AND user_id = ? ORDER BY id DESC LIMIT ?').all(guild, user, limit) as { id: number; modId: string; reason: string; createdAt: number }[]);
-const totalWarns = (guild: string, user: string) => (db.prepare('SELECT COUNT(*) AS n FROM mod_warns WHERE guild_id = ? AND user_id = ?').get(guild, user) as { n: number }).n;
+const KINDS = ['warn', 'ban', 'unban', 'kick', 'timeout', 'unmute', 'appeal'] as const;
+const PAGE_SIZE = 20;
 
 export const moderationSettings = () => ({
   enabled: getSetting('clear_enabled') !== '0',
@@ -20128,13 +20143,36 @@ export const moderationSettings = () => ({
   logChannelId: /^\d{15,25}$/.test(getSetting('clear_log_channel') ?? '') ? (getSetting('clear_log_channel') as string) : '',
   protectedChannels: parseIds(getSetting('clear_protected')),
   cooldown: cleanCooldown(getSetting('clear_cooldown')),
+  /** days a warning counts (0 = for ever) */
+  warnTtlDays: cleanInt(getSetting('warn_ttl_days'), 0, MAX_WARN_TTL_DAYS, DEFAULT_WARN_TTL_DAYS),
+  muteAt: cleanInt(getSetting('warn_mute_at'), 0, MAX_LADDER, 0),
+  muteMinutes: cleanInt(getSetting('warn_mute_minutes'), 1, MAX_MUTE_MINUTES, DEFAULT_MUTE_MINUTES),
+  kickAt: cleanInt(getSetting('warn_kick_at'), 0, MAX_LADDER, 0),
+  reasons: parseReasons(getSetting('mod_reasons')),
+  /** where appeals of the banned arrive (empty = the log channel) */
+  appealChannelId: /^\d{15,25}$/.test(getSetting('appeal_channel') ?? '') ? (getSetting('appeal_channel') as string) : '',
 });
+
+const ladderOf = (s: ReturnType<typeof moderationSettings>): Ladder => ({ muteAt: s.muteAt, muteMinutes: s.muteMinutes, kickAt: s.kickAt });
+
+interface CaseRow { id: number; guildId: string; userId: string; userName: string; modId: string; modName: string; kind: string; reason: string; link: string; createdAt: number; expiresAt: number | null; revokedAt: number | null; revokedBy: string | null }
+const COLS = 'id, guild_id AS guildId, user_id AS userId, user_name AS userName, mod_id AS modId, mod_name AS modName, kind, reason, link, created_at AS createdAt, expires_at AS expiresAt, revoked_at AS revokedAt, revoked_by AS revokedBy';
+const ACTIVE = "kind = 'warn' AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > ?)";
+
+const activeWarns = (guild: string, user: string, now: number) => (db.prepare(`SELECT COUNT(*) AS n FROM mod_cases WHERE guild_id = ? AND user_id = ? AND ${ACTIVE}`).get(guild, user, now) as { n: number }).n;
+const recentActive = (guild: string, user: string, now: number, limit: number) =>
+  db.prepare(`SELECT reason, created_at AS createdAt FROM mod_cases WHERE guild_id = ? AND user_id = ? AND ${ACTIVE} ORDER BY id DESC LIMIT ?`).all(guild, user, now, limit) as { reason: string; createdAt: number }[];
 
 export function registerModeration({ app, admin, internal }: { app: Express; admin: RequestHandler; internal: RequestHandler }): void {
   const payload = () => ({
     ...moderationSettings(),
     maxProtected: MAX_PROTECTED,
     maxCooldown: MAX_COOLDOWN,
+    maxWarnTtlDays: MAX_WARN_TTL_DAYS,
+    maxLadder: MAX_LADDER,
+    maxMuteMinutes: MAX_MUTE_MINUTES,
+    maxReasons: MAX_REASONS,
+    maxReasonLen: MAX_REASON_LEN,
     channels: bot.guilds.flatMap((g) => g.channels.map((c) => ({ id: c.id, name: c.name, guild: g.name }))),
   });
   app.get('/api/settings/moderation', admin, (_req, res) => res.json(payload()));
@@ -20144,31 +20182,103 @@ export function registerModeration({ app, admin, internal }: { app: Express; adm
         enabled: z.boolean().optional(),
         punish: z.boolean().optional(),
         logChannelId: z.string().regex(/^(\d{15,25})?$/).optional(),
+        appealChannelId: z.string().regex(/^(\d{15,25})?$/).optional(),
         protectedChannels: z.array(z.string().regex(/^\d{15,25}$/)).max(MAX_PROTECTED).optional(),
         cooldown: z.number().int().min(0).max(MAX_COOLDOWN).optional(),
+        warnTtlDays: z.number().int().min(0).max(MAX_WARN_TTL_DAYS).optional(),
+        muteAt: z.number().int().min(0).max(MAX_LADDER).optional(),
+        muteMinutes: z.number().int().min(1).max(MAX_MUTE_MINUTES).optional(),
+        kickAt: z.number().int().min(0).max(MAX_LADDER).optional(),
+        reasons: z.array(z.string().max(MAX_REASON_LEN * 3)).max(MAX_REASONS * 2).optional(),
       })
       .safeParse(req.body);
-    if (!b.success) return res.status(400).json({ error: 'Модерация: проверьте канал и паузу (0–1440 минут)' });
-    if (b.data.enabled !== undefined) setSetting('clear_enabled', b.data.enabled ? '1' : '0');
-    if (b.data.punish !== undefined) setSetting('punish_enabled', b.data.punish ? '1' : '0');
-    if (b.data.logChannelId !== undefined) setSetting('clear_log_channel', b.data.logChannelId);
-    if (b.data.protectedChannels !== undefined) setSetting('clear_protected', JSON.stringify(cleanIds(b.data.protectedChannels)));
-    if (b.data.cooldown !== undefined) setSetting('clear_cooldown', String(b.data.cooldown));
+    if (!b.success) return res.status(400).json({ error: 'Модерация: проверьте каналы, паузу и числа' });
+    const d = b.data;
+    if (d.enabled !== undefined) setSetting('clear_enabled', d.enabled ? '1' : '0');
+    if (d.punish !== undefined) setSetting('punish_enabled', d.punish ? '1' : '0');
+    if (d.logChannelId !== undefined) setSetting('clear_log_channel', d.logChannelId);
+    if (d.appealChannelId !== undefined) setSetting('appeal_channel', d.appealChannelId);
+    if (d.protectedChannels !== undefined) setSetting('clear_protected', JSON.stringify(cleanIds(d.protectedChannels)));
+    if (d.cooldown !== undefined) setSetting('clear_cooldown', String(d.cooldown));
+    if (d.warnTtlDays !== undefined) setSetting('warn_ttl_days', String(d.warnTtlDays));
+    if (d.muteAt !== undefined) setSetting('warn_mute_at', String(d.muteAt));
+    if (d.muteMinutes !== undefined) setSetting('warn_mute_minutes', String(d.muteMinutes));
+    if (d.kickAt !== undefined) setSetting('warn_kick_at', String(d.kickAt));
+    if (d.reasons !== undefined) setSetting('mod_reasons', JSON.stringify(cleanReasons(d.reasons)));
     res.json(payload());
   });
   app.get('/internal/moderation', internal, (_req, res) => res.json(moderationSettings()));
-  app.post('/internal/warns', internal, (req, res) => {
-    const b = z.object({ guildId: z.string().regex(/^\d{15,25}$/), userId: z.string().regex(/^\d{15,25}$/), modId: z.string().regex(/^\d{15,25}$/), reason: z.string().trim().min(1).max(400) }).safeParse(req.body);
-    if (!b.success) return res.status(400).json({ error: 'bad warning' });
-    const recent = recentWarns(b.data.guildId, b.data.userId);
-    const r = db.prepare('INSERT INTO mod_warns (guild_id, user_id, mod_id, reason, created_at) VALUES (?, ?, ?, ?, ?)').run(b.data.guildId, b.data.userId, b.data.modId, b.data.reason, Date.now());
-    res.json({ id: Number(r.lastInsertRowid), total: totalWarns(b.data.guildId, b.data.userId), recent });
+
+  app.post('/internal/cases', internal, (req, res) => {
+    const id = z.string().regex(/^\d{15,25}$/);
+    const b = z
+      .object({
+        guildId: id,
+        userId: id,
+        userName: z.string().max(100).default(''),
+        modId: z.string().regex(/^\d{1,25}$/),
+        modName: z.string().max(100).default(''),
+        kind: z.enum(KINDS),
+        reason: z.string().trim().max(400).default(''),
+        link: z.string().max(300).regex(/^(https?:\/\/\S*)?$/).default(''),
+      })
+      .safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'bad case' });
+    const d = b.data;
+    const s = moderationSettings();
+    const now = Date.now();
+    const exp = d.kind === 'warn' ? expiresAt(now, s.warnTtlDays) : null;
+    const earlier = d.kind === 'warn' ? recentActive(d.guildId, d.userId, now, 3) : [];
+    const r = db.prepare('INSERT INTO mod_cases (guild_id, user_id, user_name, mod_id, mod_name, kind, reason, link, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(d.guildId, d.userId, d.userName, d.modId, d.modName, d.kind, d.reason, d.link, now, exp);
+    const total = d.kind === 'warn' ? activeWarns(d.guildId, d.userId, now) : 0;
+    res.json({ id: Number(r.lastInsertRowid), createdAt: now, expiresAt: exp, total, recent: earlier, scale: scaleOf(ladderOf(s)), step: d.kind === 'warn' ? ladderFor(total, ladderOf(s)) : null });
   });
-  app.get('/internal/warns', internal, (req, res) => {
+
+  app.get('/internal/cases', internal, (req, res) => {
     const guild = String(req.query.guild ?? '');
     const user = String(req.query.user ?? '');
     if (!/^\d{15,25}$/.test(guild) || !/^\d{15,25}$/.test(user)) return res.status(400).json({ error: 'bad id' });
-    res.json({ total: totalWarns(guild, user), recent: recentWarns(guild, user, 10) });
+    const now = Date.now();
+    const items = db.prepare(`SELECT ${COLS} FROM mod_cases WHERE guild_id = ? AND user_id = ? AND kind != 'appeal' ORDER BY id DESC LIMIT 10`).all(guild, user) as CaseRow[];
+    res.json({ total: activeWarns(guild, user, now), scale: scaleOf(ladderOf(moderationSettings())), items });
+  });
+
+  const revoke = (id: number, by: string, onlyWarn: boolean): { ok: boolean; row?: CaseRow; error?: string } => {
+    const row = db.prepare(`SELECT ${COLS} FROM mod_cases WHERE id = ?`).get(id) as CaseRow | undefined;
+    if (!row) return { ok: false, error: 'not found' };
+    if (onlyWarn && row.kind !== 'warn') return { ok: false, error: 'only warnings' };
+    if (row.revokedAt) return { ok: true, row };
+    db.prepare('UPDATE mod_cases SET revoked_at = ?, revoked_by = ? WHERE id = ?').run(Date.now(), by.slice(0, 100), id);
+    return { ok: true, row: { ...row, revokedAt: Date.now(), revokedBy: by } };
+  };
+  app.post('/internal/cases/:id/revoke', internal, (req, res) => {
+    const r = revoke(Number(req.params.id), String(req.body?.by ?? 'bot'), false);
+    if (!r.ok || !r.row) return res.status(404).json({ error: r.error });
+    res.json({ ok: true, kind: r.row.kind, userId: r.row.userId, total: activeWarns(r.row.guildId, r.row.userId, Date.now()) });
+  });
+
+  app.get('/api/moderation/cases', admin, (req, res) => {
+    const q = z.object({ kind: z.enum(KINDS).optional(), q: z.string().max(100).optional(), page: z.coerce.number().int().min(0).max(10_000).default(0) }).safeParse(req.query);
+    if (!q.success) return res.status(400).json({ error: 'bad query' });
+    const where: string[] = [];
+    const args: (string | number)[] = [];
+    if (q.data.kind) { where.push('kind = ?'); args.push(q.data.kind); }
+    const text = q.data.q?.trim();
+    if (text) {
+      const like = `%${text.replace(/[%_\\]/g, (c) => `\\${c}`)}%`;
+      where.push("(user_name LIKE ? ESCAPE '\\' OR user_id LIKE ? ESCAPE '\\' OR reason LIKE ? ESCAPE '\\' OR mod_name LIKE ? ESCAPE '\\')");
+      args.push(like, like, like, like);
+    }
+    const w = where.length ? `WHERE ${where.join(' AND ')}` : '';
+    const total = (db.prepare(`SELECT COUNT(*) AS n FROM mod_cases ${w}`).get(...args) as { n: number }).n;
+    const items = db.prepare(`SELECT ${COLS} FROM mod_cases ${w} ORDER BY id DESC LIMIT ? OFFSET ?`).all(...args, PAGE_SIZE, q.data.page * PAGE_SIZE) as CaseRow[];
+    const counts = Object.fromEntries((db.prepare('SELECT kind, COUNT(*) AS n FROM mod_cases GROUP BY kind').all() as { kind: string; n: number }[]).map((r) => [r.kind, r.n]));
+    res.json({ items, total, page: q.data.page, pageSize: PAGE_SIZE, counts, now: Date.now() });
+  });
+  app.post('/api/moderation/cases/:id/revoke', admin, (req, res) => {
+    const r = revoke(Number(req.params.id), 'panel', true);
+    if (!r.ok) return res.status(r.error === 'not found' ? 404 : 400).json({ error: r.error });
+    res.json({ ok: true });
   });
 }
 __COREGSM_EOF__
@@ -20200,6 +20310,70 @@ export function parseIds(raw: string | null | undefined): string[] {
     return [];
   }
 }
+
+/** the reasons offered while a moderator types /ban, /kick or /warn (the panel can change the list) */
+export const DEFAULT_REASONS = ['Спам', 'Оскорбления', 'Читы / нечестная игра', 'Реклама', 'Нарушение правил сервера'];
+export const MAX_REASONS = 15;
+export const MAX_REASON_LEN = 100;
+
+/** the list of reasons: trimmed, no empty ones or duplicates, each up to 100 characters (a limit of Discord hints), at most 15 */
+export function cleanReasons(v: unknown): string[] {
+  if (!Array.isArray(v)) return [];
+  const out: string[] = [];
+  for (const x of v) {
+    const s = typeof x === 'string' ? x.replace(/\s+/g, ' ').trim().slice(0, MAX_REASON_LEN) : '';
+    if (s && !out.includes(s)) out.push(s);
+  }
+  return out.slice(0, MAX_REASONS);
+}
+
+/** the stored reasons; before anything is saved the defaults are offered */
+export function parseReasons(raw: string | null | undefined): string[] {
+  if (raw === null || raw === undefined) return DEFAULT_REASONS;
+  try {
+    return cleanReasons(JSON.parse(raw) as unknown);
+  } catch {
+    return DEFAULT_REASONS;
+  }
+}
+
+/** a whole number in [min, max], anything else is `def` */
+export function cleanInt(v: unknown, min: number, max: number, def: number): number {
+  const n = typeof v === 'string' && v.trim() !== '' ? Number(v) : v;
+  return typeof n === 'number' && Number.isInteger(n) && n >= min && n <= max ? n : def;
+}
+
+export const DEFAULT_WARN_TTL_DAYS = 30;
+export const MAX_WARN_TTL_DAYS = 3650;
+/** a timeout of Discord lasts 28 days at most */
+export const MAX_MUTE_MINUTES = 40_320;
+export const DEFAULT_MUTE_MINUTES = 60;
+export const MAX_LADDER = 50;
+/** how many warnings fill the scale when no kick threshold is set */
+export const DEFAULT_SCALE = 5;
+
+export interface Ladder {
+  /** warnings that bring a timeout (0 = off) */
+  muteAt: number;
+  muteMinutes: number;
+  /** warnings that bring a kick (0 = off) */
+  kickAt: number;
+}
+
+export type LadderStep = { action: 'timeout'; minutes: number } | { action: 'kick' } | null;
+
+/** what the warning that makes `total` active warnings brings: a kick beats a timeout */
+export function ladderFor(total: number, l: Ladder): LadderStep {
+  if (l.kickAt > 0 && total >= l.kickAt) return { action: 'kick' };
+  if (l.muteAt > 0 && total >= l.muteAt) return { action: 'timeout', minutes: l.muteMinutes };
+  return null;
+}
+
+/** the number the scale of warnings counts to */
+export const scaleOf = (l: Ladder): number => (l.kickAt > 0 ? l.kickAt : l.muteAt > 0 ? Math.max(l.muteAt, DEFAULT_SCALE) : DEFAULT_SCALE);
+
+/** a warning expires `days` after it was given; 0 days = never */
+export const expiresAt = (now: number, days: number): number | null => (days > 0 ? now + days * 86_400_000 : null);
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/community"
   cat > "$APP_DIR/core-backend/src/community/pollLogic.ts" << '__COREGSM_EOF__'
@@ -21635,8 +21809,8 @@ export function channelInfo(channelId: string): { channelName: string | null; gu
 
 // View Channel + Send Messages + Embed Links + Attach Files + Manage Channels (counters) + Manage Roles (autoroles)
 // + Manage Messages (8192) + Read Message History (65536) for /clear
-// + Kick Members (2) + Ban Members (4) for /kick, /ban and /unban
-const BOT_PERMISSIONS = 52224 + 16 + 268435456 + 8192 + 65536 + 2 + 4;
+// + Kick Members (2) + Ban Members (4) for /kick, /ban and /unban + Moderate Members (2^40) for /mute
+const BOT_PERMISSIONS = 52224 + 16 + 268435456 + 8192 + 65536 + 2 + 4 + 1099511627776;
 
 /** The first segment of a bot token is the base64 of the bot user id (= application id). */
 export function clientIdFromToken(token: string | null): string | null {
@@ -21668,6 +21842,8 @@ export const BOT_COMMANDS = [
   { name: '/unban', description: 'Снять блокировку: без параметра открывает список банов с меню выбора. Параметры: user, reason, public' },
   { name: '/kick', description: 'Исключить участника с сервера с причиной (для администраторов, с подтверждением). Параметры: user, reason, public' },
   { name: '/warn', description: 'Вынести предупреждение: бот считает их и пишет участнику в ЛС. Параметры: user, reason, public' },
+  { name: '/mute', description: 'Запретить участнику писать и говорить на время: 10m, 1h, 1d, до 28 дней (для администраторов). Параметры: user, duration, reason, public' },
+  { name: '/unmute', description: 'Снять мут досрочно. Параметры: user, reason, public' },
   { name: '/help', description: 'Что умеет бот: команды по разделам, кнопки переключают разделы (видно только вам)' },
 ];
 
@@ -37725,6 +37901,123 @@ __COREGSM_EOF__
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-bot/src"
+  cat > "$APP_DIR/core-bot/src/appeals.ts" << '__COREGSM_EOF__'
+/**
+ * Appeals of the banned: the private message of a ban has a button; it opens a window for the text; the appeal goes to the
+ * appeals channel of the panel (or the log channel) with the buttons «Accept» (the ban is lifted) and «Decline». A person may
+ * send one appeal in twelve hours, and only while the ban lasts.
+ */
+import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, ModalBuilder, PermissionFlagsBits, TextInputBuilder, TextInputStyle, type ButtonInteraction, type ModalSubmitInteraction } from 'discord.js';
+import { humanDiscordError } from './errors.js';
+import { log } from './log.js';
+import { APPEAL_PAUSE_MS, appealDecideId, appealSendId, auditReason, parseAppeal } from './punishLogic.js';
+import { EPHEMERAL, person, recordCase, sendDm, settings } from './punishKit.js';
+import { COLORS } from './replies.js';
+import { footerOf, getStyle } from './style.js';
+
+const lastAppeal = new Map<string, number>();
+
+const appealModal = (guildId: string) =>
+  new ModalBuilder()
+    .setCustomId(appealSendId(guildId))
+    .setTitle('📨 Апелляция на блокировку')
+    .addComponents(
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        new TextInputBuilder().setCustomId('text').setLabel('Почему блокировку стоит снять?').setStyle(TextInputStyle.Paragraph).setRequired(true).setMinLength(10).setMaxLength(1000),
+      ),
+    );
+
+export async function handleAppealButton(i: ButtonInteraction): Promise<void> {
+  const p = parseAppeal(i.customId);
+  if (!p) return;
+  try {
+    if (p.kind === 'go') {
+      await i.showModal(appealModal(p.guildId));
+      return;
+    }
+    if (p.kind !== 'ok' && p.kind !== 'no') return;
+    if (!i.guild || !i.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+      await i.reply({ content: 'Решать по апелляциям могут только администраторы сервера.', flags: EPHEMERAL });
+      return;
+    }
+    await i.deferUpdate();
+    const ok = p.kind === 'ok';
+    const user = await i.client.users.fetch(p.userId);
+    let note = '';
+    if (ok) {
+      try {
+        await i.guild.members.unban(p.userId, auditReason(i.user.username, 'апелляция принята'));
+        await recordCase({ guildId: i.guild.id, userId: user.id, userName: user.username, modId: i.user.id, modName: i.user.username, kind: 'unban', reason: 'апелляция принята' });
+      } catch (e) {
+        note = (e as { code?: number }).code === 10026 ? 'Блокировки уже нет.' : `Не удалось снять блокировку: ${humanDiscordError(e)}`;
+      }
+      if (!note) await sendDm(i.guild, user, 'unban', 'Апелляция принята');
+    } else {
+      const icon = i.guild.iconURL({ size: 128 });
+      await user
+        .send({ embeds: [new EmbedBuilder().setColor(COLORS.bad).setTitle('📨 Апелляция отклонена').setDescription(`Администрация сервера **${i.guild.name}** рассмотрела апелляцию и оставила блокировку.`).setFooter({ text: i.guild.name, ...(icon ? { iconURL: icon } : {}) })] })
+        .catch(() => undefined);
+    }
+    const base = i.message.embeds[0];
+    const e = (base ? EmbedBuilder.from(base) : new EmbedBuilder().setTitle('📨 Апелляция'))
+      .setColor(note ? COLORS.warn : ok ? COLORS.ok : COLORS.bad)
+      .setFooter(footerOf(`${ok ? 'Принято' : 'Отклонено'}: ${i.user.username}`));
+    if (note) e.addFields({ name: 'Примечание', value: note.slice(0, 500) });
+    await i.editReply({ embeds: [e], components: [] });
+  } catch (e) {
+    log('appeal button failed:', (e as Error).message);
+    await i.followUp({ content: `Не получилось: ${humanDiscordError(e)}`, flags: EPHEMERAL }).catch(() => undefined);
+  }
+}
+
+export async function handleAppealModal(i: ModalSubmitInteraction): Promise<void> {
+  const p = parseAppeal(i.customId);
+  if (!p || p.kind !== 'send') return;
+  try {
+    await i.deferReply();
+    const key = `${p.guildId}:${i.user.id}`;
+    const last = lastAppeal.get(key);
+    if (last && Date.now() - last < APPEAL_PAUSE_MS) {
+      await i.editReply('Вы уже отправляли апелляцию. Следующую можно подать через несколько часов.');
+      return;
+    }
+    const guild = await i.client.guilds.fetch(p.guildId).catch(() => null);
+    const ban = guild ? await guild.bans.fetch(i.user.id).catch(() => null) : null;
+    if (!guild || !ban) {
+      await i.editReply('Не нашёл вашей блокировки на этом сервере: возможно, она уже снята.');
+      return;
+    }
+    const mod = await settings();
+    const channelId = mod?.appealChannelId || mod?.logChannelId || '';
+    const target = channelId ? ((await i.client.channels.fetch(channelId).catch(() => null)) as unknown as { send?: (o: unknown) => Promise<unknown> } | null) : null;
+    if (!target?.send) {
+      await i.editReply('Этот сервер сейчас не принимает апелляции. Свяжитесь с администрацией другим способом.');
+      return;
+    }
+    const text = i.fields.getTextInputValue('text').trim().slice(0, 1000);
+    const e = new EmbedBuilder()
+      .setColor(getStyle().accent)
+      .setTitle('📨 Апелляция на блокировку')
+      .setThumbnail(i.user.displayAvatarURL({ size: 128 }))
+      .addFields({ name: '👤 Участник', value: person(i.user), inline: true }, { name: '🔨 Причина блокировки', value: (ban.reason || 'не указана').slice(0, 500) }, { name: '✍️ Что написал участник', value: text })
+      .setTimestamp(new Date())
+      .setFooter(footerOf('Апелляция'));
+    const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder().setCustomId(appealDecideId(true, guild.id, i.user.id)).setLabel('Принять и разбанить').setEmoji('✅').setStyle(ButtonStyle.Success),
+      new ButtonBuilder().setCustomId(appealDecideId(false, guild.id, i.user.id)).setLabel('Отклонить').setEmoji('✖️').setStyle(ButtonStyle.Danger),
+    );
+    await target.send({ embeds: [e], components: [row], allowedMentions: { parse: [] } });
+    await recordCase({ guildId: guild.id, userId: i.user.id, userName: i.user.username, modId: i.user.id, modName: i.user.username, kind: 'appeal', reason: text.slice(0, 400) });
+    lastAppeal.set(key, Date.now());
+    if (lastAppeal.size > 500) lastAppeal.clear();
+    await i.editReply('✅ Апелляция отправлена администрации. Решение придёт вам в личные сообщения.');
+  } catch (e) {
+    log('appeal failed:', (e as Error).message);
+    await i.editReply('Не получилось отправить апелляцию. Попробуйте позже.').catch(() => undefined);
+  }
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-bot/src"
   cat > "$APP_DIR/core-bot/src/backend.ts" << '__COREGSM_EOF__'
 /** Calls to the panel's internal API. Inside the Docker network they never use the proxy. */
 import { log } from './log.js';
@@ -38891,6 +39184,10 @@ export interface Moderation {
   logChannelId: string;
   protectedChannels: string[];
   cooldown: number;
+  /** the reasons offered while a moderator types a punishment */
+  reasons: string[];
+  /** where the appeals of the banned arrive (empty = the log channel) */
+  appealChannelId: string;
 }
 
 export function readModeration(v: unknown): Moderation | null {
@@ -38903,6 +39200,8 @@ export function readModeration(v: unknown): Moderation | null {
     logChannelId: typeof o.logChannelId === 'string' && /^\d{15,25}$/.test(o.logChannelId) ? o.logChannelId : '',
     protectedChannels: o.protectedChannels.filter((x): x is string => typeof x === 'string'),
     cooldown: typeof o.cooldown === 'number' && o.cooldown >= 0 ? o.cooldown : 0,
+    reasons: Array.isArray(o.reasons) ? o.reasons.filter((x): x is string => typeof x === 'string').slice(0, 25) : [],
+    appealChannelId: typeof o.appealChannelId === 'string' && /^\d{15,25}$/.test(o.appealChannelId) ? o.appealChannelId : '',
   };
 }
 __COREGSM_EOF__
@@ -38916,7 +39215,8 @@ import { log } from './log.js';
 import { handleInfo, INFO_COMMANDS, INFO_NAMES, infoAutocomplete } from './info.js';
 import { HELP_COMMANDS, HELP_NAMES, handleHelp, handleHelpButton } from './help.js';
 import { COLORS, cardReply, replyEmbed, type ProfileData } from './replies.js';
-import { PUNISH_COMMANDS, PUNISH_NAMES, handleBanPick, handlePunish, handlePunishButton, punishAutocomplete } from './punish.js';
+import { handleAppealButton, handleAppealModal } from './appeals.js';
+import { CONTEXT_NAMES, PUNISH_COMMANDS, PUNISH_NAMES, handleBanPick, handleContext, handlePunish, handlePunishButton, handleReasonModal, punishAutocomplete } from './punish.js';
 import { CLEAR_COMMANDS, CLEAR_NAMES, handleClearButton, handleClearCommand } from './clear.js';
 import { ROLE_COMMANDS, ROLE_NAMES, handleRoleSelect, handleRolesCommand } from './roles.js';
 
@@ -39013,6 +39313,9 @@ export async function handleInteraction(i: Interaction): Promise<void> {
   if (i.isStringSelectMenu()) return i.customId.startsWith('modban:') ? handleBanPick(i) : handleRoleSelect(i);
   if (i.isButton() && i.customId.startsWith('clear:')) return handleClearButton(i);
   if (i.isButton() && i.customId.startsWith('mod:')) return handlePunishButton(i);
+  if (i.isButton() && i.customId.startsWith('appeal:')) return handleAppealButton(i);
+  if (i.isModalSubmit()) return i.customId.startsWith('appeal:') ? handleAppealModal(i) : handleReasonModal(i);
+  if ((i.isUserContextMenuCommand() || i.isMessageContextMenuCommand()) && CONTEXT_NAMES.has(i.commandName)) return handleContext(i);
   if (i.isButton()) return /^(help|srv):/.test(i.customId) ? handleHelpButton(i) : handlePollButton(i);
   if (i.isAutocomplete() && PUNISH_NAMES.has(i.commandName)) return punishAutocomplete(i);
   if (i.isAutocomplete()) return INFO_NAMES.has(i.commandName) ? infoAutocomplete(i) : handleAutocomplete(i);
@@ -39264,7 +39567,10 @@ export const HELP_CATEGORIES: HelpCategory[] = [
       ['/ban', 'заблокировать участника с причиной (удаляет его сообщения, пишет ему в ЛС)'],
       ['/unban', 'снять блокировку: без параметра покажет список банов с меню, с параметром подскажет имя или ID'],
       ['/kick', 'исключить участника с причиной, он сможет вернуться по приглашению'],
-      ['/warn', 'вынести предупреждение: бот считает их и показывает прошлые причины'],
+      ['/warn', 'вынести предупреждение: шкала ●●○○○, прошлые причины, лесенка наказаний из панели'],
+      ['/mute', 'запретить писать и говорить на время (10m, 1h, 1d… до 28 дней)'],
+      ['/unmute', 'снять мут досрочно'],
+      ['⚠️ Предупредить', 'правый клик по участнику или сообщению → «Приложения»: окно с причиной, к варну прикрепляется ссылка на сообщение'],
     ],
     fields: CLEAR_GUIDE_FIELDS,
   },
@@ -39871,33 +40177,41 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-bot/src"
   cat > "$APP_DIR/core-bot/src/punish.ts" << '__COREGSM_EOF__'
 /**
- * /ban, /unban, /kick, /warn: punishments for the administrators of the server, in the style of the other cards of the bot.
- * A reason is required for a ban, a kick and a warning (it goes to the audit log of Discord, to the private message of the
- * person and to the card). A ban and a kick are asked to be confirmed with a button (two minutes); a warning is counted by the
- * panel (the card shows its number and the earlier reasons). The person gets a private message first, when Discord lets us.
- * The result goes to the moderator privately, to the channel when `public` is chosen, and to the log channel of the panel.
+ * /ban, /unban, /kick, /warn, /mute, /unmute and the context menus «Warn»: punishments for the administrators of the server.
+ * A reason is required (except for /unban and /unmute); while it is typed the bot offers the reasons of the panel. A ban and
+ * a kick wait for a button; a warning is counted by the panel (a scale like ●●○○○, the earlier reasons, the ladder: a mute or a
+ * kick after so many warnings). Under every result card there are buttons: «Undo» (thirty seconds), «Another warning»,
+ * «Lift the ban», «Lift the mute», «History». The person gets a private message first (a ban has the button of an appeal).
+ * The card goes to the moderator privately, to the channel when `public` is chosen, and to the log channel of the panel.
  */
-import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, PermissionFlagsBits, StringSelectMenuBuilder, StringSelectMenuOptionBuilder, type AutocompleteInteraction, type ButtonInteraction, type ChatInputCommandInteraction, type Guild, type StringSelectMenuInteraction, type User } from 'discord.js';
+import {
+  ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, ModalBuilder, PermissionFlagsBits, StringSelectMenuBuilder, StringSelectMenuOptionBuilder, TextInputBuilder, TextInputStyle,
+  type AutocompleteInteraction, type ButtonInteraction, type ChatInputCommandInteraction, type Client, type Guild, type MessageContextMenuCommandInteraction, type ModalSubmitInteraction, type StringSelectMenuInteraction, type User, type UserContextMenuCommandInteraction,
+} from 'discord.js';
 import { backendJson } from './backend.js';
-import { readModeration, type Moderation } from './clearLogic.js';
 import { humanDiscordError } from './errors.js';
 import { log } from './log.js';
+import {
+  BAN_PAGE, DELETE_DAYS, META, MAX_REASON, PICK_ID, PUNISH_TTL_MS, auditReason, banLine, cleanReason, daysText, deleteDays, deleteSeconds, durationHints, durationLabel, idFromInput, isStale, messageLink, newToken, pageId, paginate,
+  parseDuration, parsePageId, parsePunishId, parseReasonModal, parseUndoId, parseUserBtn, punishId, reasonHints, reasonModalId, timeTag, undoFresh, warnBar, type PunishAction,
+} from './punishLogic.js';
+import { EPHEMERAL, appealRow, card, expireUndo, gate, person, publish, recordCase, resultRows, sendDm, settings, standing, type CardData, type CaseAnswer, type CaseBody } from './punishKit.js';
 import { COLORS, replyEmbed } from './replies.js';
 import { footerOf, getStyle } from './style.js';
-import { BAN_PAGE, DELETE_DAYS, META, PICK_ID, banLine, pageId, paginate, parsePageId, PUNISH_TTL_MS, auditReason, cleanReason, daysText, deleteDays, deleteSeconds, dmText, escalationHint, idFromInput, isStale, newToken, parsePunishId, punishId, standingProblem, timeTag, MAX_REASON, type PunishAction } from './punishLogic.js';
+import type { Moderation } from './clearLogic.js';
 
-const EPHEMERAL = 64;
 const ADMIN = String(PermissionFlagsBits.Administrator);
 
 const loc = (ru: string, en: string) => ({ ru, 'en-US': en, 'en-GB': en });
-const userOpt = { type: 6, name: 'user', required: true };
+const userOpt = (ru: string, en: string) => ({ type: 6, name: 'user', required: true, description: ru, description_localizations: loc(ru, en) });
 const reasonOpt = (required: boolean) => ({
   type: 3,
   name: 'reason',
-  description: '📝 Причина (попадёт в журнал и в ЛС участнику)',
-  description_localizations: loc('📝 Причина (попадёт в журнал и в ЛС участнику)', '📝 Reason (goes to the log and to the member)'),
+  description: '📝 Причина (подсказки из панели; попадёт в журнал и в ЛС)',
+  description_localizations: loc('📝 Причина (подсказки из панели; попадёт в журнал и в ЛС)', '📝 Reason (hints from the panel; goes to the log and to the member)'),
   required,
   max_length: MAX_REASON,
+  autocomplete: true,
 });
 const publicOpt = { type: 5, name: 'public', description: '📣 Показать карточку всем в канале', description_localizations: loc('📣 Показать карточку всем в канале', '📣 Show the card to everybody in the channel'), required: false };
 const base = { dm_permission: false, default_member_permissions: ADMIN };
@@ -39909,7 +40223,7 @@ export const PUNISH_COMMANDS = [
     description: '🔨 Заблокировать участника · только админы',
     description_localizations: loc('🔨 Заблокировать участника · только админы', '🔨 Ban a member · admins only'),
     options: [
-      { ...userOpt, description: '👤 Кого заблокировать', description_localizations: loc('👤 Кого заблокировать', '👤 Who to ban') },
+      userOpt('👤 Кого заблокировать', '👤 Who to ban'),
       reasonOpt(true),
       {
         type: 4,
@@ -39938,26 +40252,175 @@ export const PUNISH_COMMANDS = [
     name: 'kick',
     description: '👢 Исключить участника с сервера · только админы',
     description_localizations: loc('👢 Исключить участника с сервера · только админы', '👢 Kick a member · admins only'),
-    options: [{ ...userOpt, description: '👤 Кого исключить', description_localizations: loc('👤 Кого исключить', '👤 Who to kick') }, reasonOpt(true), publicOpt],
+    options: [userOpt('👤 Кого исключить', '👤 Who to kick'), reasonOpt(true), publicOpt],
   },
   {
     ...base,
     name: 'warn',
     description: '⚠️ Вынести предупреждение · только админы',
     description_localizations: loc('⚠️ Вынести предупреждение · только админы', '⚠️ Warn a member · admins only'),
-    options: [{ ...userOpt, description: '👤 Кому', description_localizations: loc('👤 Кому', '👤 Who to warn') }, reasonOpt(true), publicOpt],
+    options: [userOpt('👤 Кому', '👤 Who to warn'), reasonOpt(true), publicOpt],
   },
+  {
+    ...base,
+    name: 'mute',
+    description: '🔇 Запретить писать и говорить на время · только админы',
+    description_localizations: loc('🔇 Запретить писать и говорить на время · только админы', '🔇 Mute a member for a while · admins only'),
+    options: [
+      userOpt('👤 Кого заглушить', '👤 Who to mute'),
+      { type: 3, name: 'duration', description: '⏳ На сколько: 10m, 1h, 1d, до 28 дней', description_localizations: loc('⏳ На сколько: 10m, 1h, 1d, до 28 дней', '⏳ For how long: 10m, 1h, 1d, up to 28 days'), required: true, autocomplete: true },
+      reasonOpt(true),
+      publicOpt,
+    ],
+  },
+  {
+    ...base,
+    name: 'unmute',
+    description: '🔊 Снять мут · только админы',
+    description_localizations: loc('🔊 Снять мут · только админы', '🔊 Unmute a member · admins only'),
+    options: [userOpt('👤 С кого снять мут', '👤 Who to unmute'), reasonOpt(false), publicOpt],
+  },
+  { ...base, name: '⚠️ Предупредить', type: 2 },
+  { ...base, name: '⚠️ Предупредить автора', type: 3 },
 ];
-export const PUNISH_NAMES = new Set(PUNISH_COMMANDS.map((c) => c.name));
+export const PUNISH_NAMES = new Set(PUNISH_COMMANDS.filter((c) => !('type' in c)).map((c) => c.name));
+export const CONTEXT_NAMES = new Set(PUNISH_COMMANDS.filter((c) => 'type' in c).map((c) => c.name));
 
-/** the permission the bot needs for an action */
-const BOT_NEEDS: Record<PunishAction, bigint | null> = { ban: PermissionFlagsBits.BanMembers, unban: PermissionFlagsBits.BanMembers, kick: PermissionFlagsBits.KickMembers, warn: null };
-const BOT_NEEDS_TEXT: Record<PunishAction, string> = {
-  ban: 'Боту нужно право «Банить участников».',
-  unban: 'Боту нужно право «Банить участников».',
-  kick: 'Боту нужно право «Выгонять участников».',
-  warn: '',
+const ACTION_OF: Record<string, PunishAction> = { ban: 'ban', unban: 'unban', kick: 'kick', warn: 'warn', mute: 'timeout', unmute: 'unmute' };
+
+interface Ctx {
+  guild: Guild;
+  mod: Moderation;
+  actor: User;
+  channelId: string;
+  client: Client;
+}
+
+/** what an action gives: the card and the buttons under it */
+interface Outcome {
+  embed: EmbedBuilder;
+  rows: (undo: boolean) => ActionRowBuilder<ButtonBuilder>[];
+  undoable: boolean;
+}
+
+/** a refusal with a text for the moderator */
+class Refusal extends Error {}
+
+const errText = (e: unknown): string => {
+  if (e instanceof Refusal) return e.message;
+  const code = (e as { code?: number }).code;
+  return code === 50013 ? 'Боту не хватает прав или его роль ниже роли участника.' : humanDiscordError(e);
 };
+
+const fail = (title: string, text: string) => ({ ...replyEmbed(title, text, COLORS.bad), components: [] as never[] });
+
+const caseOf = (c: Ctx, target: User, kind: CaseBody['kind'], reason: string, link = ''): CaseBody => ({
+  guildId: c.guild.id,
+  userId: target.id,
+  userName: target.username,
+  modId: c.actor.id,
+  modName: c.actor.username,
+  kind,
+  reason,
+  link,
+});
+
+const rowsFor = (kind: PunishAction, id: number | null, userId: string) => (undo: boolean) => resultRows({ kind, caseId: id, userId, undo });
+
+async function performWarn(c: Ctx, target: User, reason: string, link: string): Promise<Outcome> {
+  const w: CaseAnswer | null = await recordCase(caseOf(c, target, 'warn', reason, link));
+  const dm = await sendDm(c.guild, target, 'warn', reason, w ? { warnNo: w.total, scale: w.scale, expiresAt: w.expiresAt } : {});
+  const auto: string[] = [];
+  if (w?.step) auto.push(await autoStep(c, target, w.step));
+  const data: CardData = { action: 'warn', target, mod: c.actor, reason, dm, link, auto, ...(w ? { warns: { no: w.total, scale: w.scale, recent: w.recent, expiresAt: w.expiresAt } } : {}) };
+  const embed = card(data);
+  if (!w) embed.addFields({ name: '⚠️ Счётчик', value: 'Панель не ответила: предупреждение не записано в историю.' });
+  return { embed, rows: rowsFor('warn', w?.id ?? null, target.id), undoable: !!w };
+}
+
+/** the ladder of the panel: a mute or a kick after so many warnings */
+async function autoStep(c: Ctx, target: User, step: NonNullable<CaseAnswer['step']>): Promise<string> {
+  const member = await c.guild.members.fetch(target.id).catch(() => null);
+  if (!member) return 'участника уже нет на сервере';
+  const bot = c.client.user;
+  const body = (kind: 'timeout' | 'kick'): CaseBody => ({ ...caseOf(c, target, kind, 'Авто: порог предупреждений'), modId: bot?.id ?? c.actor.id, modName: 'Авто' });
+  try {
+    if (step.action === 'timeout') {
+      await member.timeout(step.minutes * 60_000, auditReason('авто', 'порог предупреждений'));
+      await sendDm(c.guild, target, 'timeout', 'Порог предупреждений', { minutes: step.minutes });
+      await recordCase(body('timeout'));
+      return `мут на ${durationLabel(step.minutes)}`;
+    }
+    await sendDm(c.guild, target, 'kick', 'Порог предупреждений');
+    await c.guild.members.kick(target.id, auditReason('авто', 'порог предупреждений'));
+    await recordCase(body('kick'));
+    return 'участник исключён с сервера';
+  } catch {
+    return 'не удалось применить: роль бота ниже или не хватает прав';
+  }
+}
+
+async function performBan(c: Ctx, target: User, reason: string, days: number): Promise<Outcome> {
+  // the person can write an appeal only when somebody receives it
+  const appeals = !!(c.mod.appealChannelId || c.mod.logChannelId);
+  const dm = await sendDm(c.guild, target, 'ban', reason, {}, appeals ? [appealRow(c.guild.id)] : []);
+  await c.guild.members.ban(target.id, { reason: auditReason(c.actor.username, reason), deleteMessageSeconds: deleteSeconds(days) });
+  forgetBans(c.guild.id);
+  const k = await recordCase(caseOf(c, target, 'ban', reason));
+  return { embed: card({ action: 'ban', target, mod: c.actor, reason, dm, days }), rows: rowsFor('ban', k?.id ?? null, target.id), undoable: !!k };
+}
+
+async function performKick(c: Ctx, target: User, reason: string): Promise<Outcome> {
+  const dm = await sendDm(c.guild, target, 'kick', reason);
+  await c.guild.members.kick(target.id, auditReason(c.actor.username, reason));
+  const k = await recordCase(caseOf(c, target, 'kick', reason));
+  return { embed: card({ action: 'kick', target, mod: c.actor, reason, dm }), rows: rowsFor('kick', k?.id ?? null, target.id), undoable: false };
+}
+
+async function performTimeout(c: Ctx, target: User, minutes: number, reason: string): Promise<Outcome> {
+  const member = await c.guild.members.fetch(target.id).catch(() => null);
+  if (!member) throw new Refusal('Участника нет на сервере: мут выдать нельзя.');
+  await member.timeout(minutes * 60_000, auditReason(c.actor.username, reason));
+  const dm = await sendDm(c.guild, target, 'timeout', reason, { minutes });
+  const k = await recordCase(caseOf(c, target, 'timeout', reason));
+  return { embed: card({ action: 'timeout', target, mod: c.actor, reason, dm, minutes }), rows: rowsFor('timeout', k?.id ?? null, target.id), undoable: !!k };
+}
+
+async function performUnmute(c: Ctx, target: User, reason: string): Promise<Outcome> {
+  const member = await c.guild.members.fetch(target.id).catch(() => null);
+  if (!member) throw new Refusal('Участника нет на сервере.');
+  if (!member.communicationDisabledUntilTimestamp || member.communicationDisabledUntilTimestamp <= Date.now()) throw new Refusal('У участника нет действующего мута.');
+  await member.timeout(null, auditReason(c.actor.username, reason || 'без причины'));
+  const dm = await sendDm(c.guild, target, 'unmute', reason);
+  const k = await recordCase(caseOf(c, target, 'unmute', reason));
+  return { embed: card({ action: 'unmute', target, mod: c.actor, reason, dm }), rows: rowsFor('unmute', k?.id ?? null, target.id), undoable: false };
+}
+
+async function performUnban(c: Ctx, id: string, reason: string): Promise<Outcome> {
+  try {
+    await c.guild.members.unban(id, auditReason(c.actor.username, reason || 'без причины'));
+  } catch (e) {
+    const code = (e as { code?: number }).code;
+    throw new Refusal(code === 10026 ? 'Этого человека нет в списке банов сервера.' : code === 50013 ? 'Боту не хватает права «Банить участников».' : humanDiscordError(e));
+  }
+  forgetBans(c.guild.id);
+  const fetched = await c.client.users.fetch(id).catch(() => null);
+  const target = fetched ?? ({ id, username: id, displayAvatarURL: () => '' } as unknown as User);
+  const dm = fetched ? await sendDm(c.guild, fetched, 'unban', reason) : null;
+  const k = await recordCase(caseOf(c, target, 'unban', reason));
+  return { embed: card({ action: 'unban', target, mod: c.actor, reason, dm }), rows: rowsFor('unban', k?.id ?? null, id), undoable: false };
+}
+
+type Replying = ChatInputCommandInteraction | ButtonInteraction | ModalSubmitInteraction;
+
+/** the card to the moderator, the thirty-second «Undo», the copies to the channel and the log */
+async function finish(i: Replying, c: Ctx, out: Outcome, publicCard: boolean): Promise<void> {
+  await i.editReply({ embeds: [out.embed], components: out.rows(out.undoable) });
+  if (out.undoable) expireUndo(i, out.rows(false));
+  await publish(c.client, c.mod, out.embed, publicCard, c.channelId);
+}
+
+const ctxOf = (i: Replying, guild: Guild, mod: Moderation): Ctx => ({ guild, mod, actor: i.user, channelId: i.channelId ?? '', client: i.client });
 
 interface Pending {
   action: 'ban' | 'kick';
@@ -39966,115 +40429,14 @@ interface Pending {
   reason: string;
   days: number;
   publicCard: boolean;
-  channelId: string;
   at: number;
 }
 /** a ban or a kick waits here for the button */
 const pending = new Map<string, Pending>();
 
-interface Warns { id: number; total: number; recent: { reason: string; createdAt: number }[] }
-
-const noPerm = (text: string) => ({ ...replyEmbed('Недостаточно прав', text, COLORS.bad), components: [] as never[] });
-
-async function settings(): Promise<Moderation | null> {
-  const r = await backendJson<unknown>('/internal/moderation').catch(() => null);
-  return r?.ok ? readModeration(r.data) : null;
-}
-
-/** the user card as a line: mention and name */
-const person = (u: { id: string; username: string }) => `<@${u.id}> (${u.username})`;
-
-interface CardData {
-  action: PunishAction;
-  target: User;
-  mod: User;
-  reason: string;
-  dm: boolean | null;
-  days?: number;
-  warns?: { no: number; recent: { reason: string; createdAt: number }[] };
-}
-
-function card(d: CardData): EmbedBuilder {
-  const m = META[d.action];
-  const e = new EmbedBuilder()
-    .setColor(m.color)
-    .setTitle(`${m.emoji} ${m.title}${d.warns ? ` №${d.warns.no}` : ''}`)
-    .setDescription(`<@${d.target.id}> ${m.done}.`)
-    .setThumbnail(d.target.displayAvatarURL({ size: 128 }))
-    .addFields({ name: '👤 Участник', value: person(d.target), inline: true }, { name: '🛡️ Модератор', value: person(d.mod), inline: true }, { name: '📝 Причина', value: d.reason || 'не указана' })
-    .setTimestamp(new Date())
-    .setFooter(footerOf('Модерация'));
-  if (d.action === 'ban' && d.days !== undefined) e.addFields({ name: '🧹 Его сообщения', value: daysText(d.days), inline: true });
-  if (d.dm !== null) e.addFields({ name: '✉️ Личное сообщение', value: d.dm ? 'доставлено' : 'не доставлено (закрыты ЛС)', inline: true });
-  if (d.warns) {
-    if (d.warns.recent.length) e.addFields({ name: '📜 Предыдущие', value: d.warns.recent.map((w) => `${timeTag(w.createdAt)} — ${w.reason}`.slice(0, 200)).join('\n').slice(0, 1000) });
-    const hint = escalationHint(d.warns.no);
-    if (hint) e.addFields({ name: '🚨 Внимание', value: hint });
-  }
-  return e;
-}
-
-/** a private message to the person; false when Discord does not let us (closed messages) */
-async function sendDm(guild: Guild, target: User, action: PunishAction, reason: string, warnNo?: number): Promise<boolean> {
-  const t = dmText(action, guild.name, warnNo);
-  const e = new EmbedBuilder()
-    .setColor(META[action].color)
-    .setTitle(t.title)
-    .setDescription(t.text)
-    .addFields({ name: '📝 Причина', value: reason || 'не указана' })
-    .setFooter({ text: guild.name, ...(guild.iconURL() ? { iconURL: guild.iconURL() as string } : {}) });
-  const icon = guild.iconURL({ size: 128 });
-  if (icon) e.setThumbnail(icon);
-  return target.send({ embeds: [e] }).then(() => true, () => false);
-}
-
-type Sendable = { send?: (o: unknown) => Promise<unknown> } | null;
-
-/** the card to the channel (when `public`) and to the log channel of the panel */
-async function publish(i: Pick<ChatInputCommandInteraction, 'client'>, mod: Moderation, e: EmbedBuilder, publicCard: boolean, channelId: string): Promise<void> {
-  const to = async (id: string) => {
-    try {
-      const ch = (await i.client.channels.fetch(id)) as unknown as Sendable;
-      await ch?.send?.({ embeds: [e], allowedMentions: { parse: [] } });
-    } catch (err) {
-      log('moderation post failed:', (err as Error).message);
-    }
-  };
-  if (publicCard) await to(channelId);
-  if (mod.logChannelId && !(publicCard && mod.logChannelId === channelId)) await to(mod.logChannelId);
-}
-
-/** the checks shared by every command; a ready reply for the moderator when something forbids the action */
-async function gate(i: ChatInputCommandInteraction | ButtonInteraction | StringSelectMenuInteraction, action: PunishAction): Promise<{ title: string; text: string } | { mod: Moderation }> {
-  if (!i.guild) return { title: 'Только на сервере', text: 'Команда работает на Discord-сервере.' };
-  if (!i.memberPermissions?.has(PermissionFlagsBits.Administrator)) return { title: 'Недостаточно прав', text: 'Эта команда доступна только администраторам сервера.' };
-  const need = BOT_NEEDS[action];
-  if (need && i.appPermissions && !i.appPermissions.has(need)) return { title: 'Недостаточно прав', text: `${BOT_NEEDS_TEXT[action]} Выдайте его роли бота или пригласите бота заново по ссылке из панели.` };
-  const mod = await settings();
-  if (!mod) return { title: 'Панель не отвечает', text: 'Не удалось получить настройки модерации. Попробуйте ещё раз чуть позже.' };
-  if (!mod.punish) return { title: 'Команды выключены', text: 'Администратор отключил команды наказаний в панели (Discord → Модерация).' };
-  return { mod };
-}
-
-/** may the moderator act on this person: a text for the refusal, or null */
-async function standing(guild: Guild, modId: string, target: User): Promise<string | null> {
-  const [me, mod, member] = await Promise.all([guild.members.fetchMe().catch(() => null), guild.members.fetch(modId).catch(() => null), guild.members.fetch(target.id).catch(() => null)]);
-  return standingProblem({
-    targetId: target.id,
-    modId,
-    botId: guild.client.user.id,
-    ownerId: guild.ownerId,
-    inGuild: !!member,
-    targetPos: member?.roles.highest.position ?? 0,
-    modPos: mod?.roles.highest.position ?? 0,
-    botPos: me?.roles.highest.position ?? 0,
-  });
-}
-
-const fail = (title: string, text: string) => ({ ...replyEmbed(title, text, COLORS.bad), components: [] as never[] });
-
 export async function handlePunish(i: ChatInputCommandInteraction): Promise<void> {
-  const action = i.commandName as PunishAction;
+  const action = ACTION_OF[i.commandName];
+  if (!action) return;
   try {
     await i.deferReply({ flags: EPHEMERAL });
     const g = await gate(i, action);
@@ -40083,6 +40445,7 @@ export async function handlePunish(i: ChatInputCommandInteraction): Promise<void
       return;
     }
     const guild = i.guild as Guild;
+    const c = ctxOf(i, guild, g.mod);
     const reason = cleanReason(i.options.getString('reason'));
     const publicCard = i.options.getBoolean('public') ?? false;
     if (action === 'unban') {
@@ -40092,7 +40455,12 @@ export async function handlePunish(i: ChatInputCommandInteraction): Promise<void
         await i.editReply(rows ? banListView(rows, 0) : fail('Не получилось', 'Не удалось прочитать список банов: боту нужно право «Банить участников».'));
         return;
       }
-      await doUnban(i, g.mod, guild, input, reason, publicCard);
+      const id = idFromInput(input);
+      if (!id) {
+        await i.editReply(fail('Не понял, кого', 'Выберите участника из подсказок, впишите его ID (число) или оставьте поле пустым, чтобы открыть список банов.'));
+        return;
+      }
+      await finish(i, c, await performUnban(c, id, reason), publicCard);
       return;
     }
     const target = i.options.getUser('user', true);
@@ -40101,20 +40469,26 @@ export async function handlePunish(i: ChatInputCommandInteraction): Promise<void
       await i.editReply(fail('Нельзя', why));
       return;
     }
-    if (action === 'warn') {
-      await doWarn(i, g.mod, guild, target, reason, publicCard);
-      return;
+    if (action === 'warn') return await finish(i, c, await performWarn(c, target, reason, ''), publicCard);
+    if (action === 'unmute') return await finish(i, c, await performUnmute(c, target, reason), publicCard);
+    if (action === 'timeout') {
+      const minutes = parseDuration(i.options.getString('duration', true));
+      if (!minutes) {
+        await i.editReply(fail('Не понял срок', 'Напишите число с единицей: `30m`, `2h`, `1d`, `7d` (минуты, часы, дни; не больше 28 дней).'));
+        return;
+      }
+      return await finish(i, c, await performTimeout(c, target, minutes, reason), publicCard);
     }
     // a ban and a kick wait for a button
     const days = deleteDays(i.options.getInteger('delete'));
     const token = newToken();
-    pending.set(token, { action: action as 'ban' | 'kick', modId: i.user.id, targetId: target.id, reason, days, publicCard, channelId: i.channelId, at: Date.now() });
+    pending.set(token, { action: action as 'ban' | 'kick', modId: i.user.id, targetId: target.id, reason, days, publicCard, at: Date.now() });
     if (pending.size > 100) for (const [k, v] of pending) if (isStale(v.at, Date.now())) pending.delete(k);
     const m = META[action];
     const e = new EmbedBuilder()
       .setColor(COLORS.warn)
       .setTitle(`${m.emoji} ${action === 'ban' ? 'Заблокировать участника?' : 'Исключить участника?'}`)
-      .setDescription(action === 'ban' ? 'Участник потеряет доступ к серверу. Разблокировать можно командой `/unban`.' : 'Участник будет исключён, но сможет вернуться по новому приглашению.')
+      .setDescription(action === 'ban' ? 'Участник потеряет доступ к серверу. Ему придёт личное сообщение с кнопкой апелляции. Разблокировать можно командой `/unban`.' : 'Участник будет исключён, но сможет вернуться по новому приглашению.')
       .setThumbnail(target.displayAvatarURL({ size: 128 }))
       .addFields({ name: '👤 Участник', value: person(target), inline: true }, { name: '📝 Причина', value: reason })
       .setFooter(footerOf(`Подтвердите в течение ${Math.round(PUNISH_TTL_MS / 60_000)} мин`));
@@ -40125,14 +40499,98 @@ export async function handlePunish(i: ChatInputCommandInteraction): Promise<void
     );
     await i.editReply({ embeds: [e], components: [row] });
   } catch (e) {
-    log(`/${action} failed:`, (e as Error).message);
-    await i.editReply(fail('Не получилось', humanDiscordError(e))).catch(() => undefined);
+    log(`/${i.commandName} failed:`, (e as Error).message);
+    await i.editReply(fail('Не получилось', errText(e))).catch(() => undefined);
   }
+}
+
+const isAdmin = (i: { memberPermissions: { has: (p: bigint) => boolean } | null }) => !!i.memberPermissions?.has(PermissionFlagsBits.Administrator);
+
+/** the window with the reason of a warning */
+const reasonModal = (id: string, name: string) =>
+  new ModalBuilder()
+    .setCustomId(id)
+    .setTitle(`⚠️ Предупреждение: ${name}`.slice(0, 45))
+    .addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(new TextInputBuilder().setCustomId('reason').setLabel('Причина').setStyle(TextInputStyle.Paragraph).setRequired(true).setMaxLength(MAX_REASON).setPlaceholder('Например: спам в чате')));
+
+/** the context menus «Warn» on a member and on a message: the window opens at once, the checks run when it is sent */
+export async function handleContext(i: UserContextMenuCommandInteraction | MessageContextMenuCommandInteraction): Promise<void> {
+  try {
+    if (!isAdmin(i)) {
+      await i.reply({ ...fail('Недостаточно прав', 'Эта команда доступна только администраторам сервера.'), flags: EPHEMERAL });
+      return;
+    }
+    if (i.isMessageContextMenuCommand()) {
+      const m = i.targetMessage;
+      await i.showModal(reasonModal(reasonModalId(m.author.id, m.channelId, m.id), m.author.username));
+    } else {
+      await i.showModal(reasonModal(reasonModalId(i.targetUser.id), i.targetUser.username));
+    }
+  } catch (e) {
+    log('context menu failed:', (e as Error).message);
+  }
+}
+
+/** the window with a reason was sent: the warning is given */
+export async function handleReasonModal(i: ModalSubmitInteraction): Promise<void> {
+  const p = parseReasonModal(i.customId);
+  if (!p) return;
+  try {
+    await i.deferReply({ flags: EPHEMERAL });
+    const reason = cleanReason(i.fields.getTextInputValue('reason'));
+    if (!reason) {
+      await i.editReply(fail('Нужна причина', 'Напишите, за что предупреждение.'));
+      return;
+    }
+    const g = await gate(i, 'warn');
+    if (!('mod' in g)) {
+      await i.editReply(fail(g.title, g.text));
+      return;
+    }
+    const guild = i.guild as Guild;
+    const target = await i.client.users.fetch(p.userId);
+    const why = await standing(guild, i.user.id, target);
+    if (why) {
+      await i.editReply(fail('Нельзя', why));
+      return;
+    }
+    const link = p.chan !== '0' && p.msg !== '0' ? messageLink(guild.id, p.chan, p.msg) : '';
+    const c = ctxOf(i, guild, g.mod);
+    await finish(i, c, await performWarn(c, target, reason, link), false);
+  } catch (e) {
+    log('reason window failed:', (e as Error).message);
+    await i.editReply(fail('Не получилось', errText(e))).catch(() => undefined);
+  }
+}
+
+interface Hist {
+  total: number;
+  scale: number;
+  items: { id: number; kind: string; reason: string; createdAt: number; expiresAt: number | null; revokedAt: number | null; modName: string; link: string }[];
+}
+
+function historyEmbed(user: User, h: Hist): EmbedBuilder {
+  const now = Date.now();
+  const line = (x: Hist['items'][number]) => {
+    const meta = META[x.kind as PunishAction];
+    const state = x.revokedAt ? ' · ↩️ снято' : x.expiresAt && x.expiresAt < now ? ' · ⌛ истекло' : '';
+    return `${meta?.emoji ?? '•'} **${meta?.title ?? x.kind}** ${timeTag(x.createdAt)} · ${x.modName || '—'}${state}\n${x.reason ? `> ${x.reason.replace(/\n/g, ' ').slice(0, 150)}` : '> без причины'}${x.link ? ` · [сообщение](${x.link})` : ''}`;
+  };
+  return new EmbedBuilder()
+    .setColor(h.total ? 0xe67e22 : COLORS.ok)
+    .setTitle(`📜 История: ${user.username}`.slice(0, 250))
+    .setThumbnail(user.displayAvatarURL({ size: 128 }) || null)
+    .setDescription(`${warnBar(h.total, h.scale)} действующих предупреждений\n\n${h.items.length ? h.items.map(line).join('\n\n').slice(0, 3400) : 'Записей пока нет.'}`)
+    .setFooter(footerOf('Досье'));
 }
 
 export async function handlePunishButton(i: ButtonInteraction): Promise<void> {
   const page = parsePageId(i.customId);
   if (page !== null) return handleBanPage(i, page);
+  const undo = parseUndoId(i.customId);
+  if (undo) return handleUndo(i, undo.caseId, undo.at);
+  const ub = parseUserBtn(i.customId);
+  if (ub) return handleUserButton(i, ub.kind, ub.userId);
   const p = parsePunishId(i.customId);
   if (!p) return;
   try {
@@ -40164,62 +40622,97 @@ export async function handlePunishButton(i: ButtonInteraction): Promise<void> {
       await i.editReply(fail('Нельзя', why));
       return;
     }
-    const dm = await sendDm(guild, target, job.action, job.reason);
-    try {
-      if (job.action === 'ban') await guild.members.ban(target.id, { reason: auditReason(i.user.username, job.reason), deleteMessageSeconds: deleteSeconds(job.days) });
-      else await guild.members.kick(target.id, auditReason(i.user.username, job.reason));
-    } catch (e) {
-      await i.editReply(fail('Не получилось', (e as { code?: number }).code === 50013 ? 'Боту не хватает прав или его роль ниже роли участника.' : humanDiscordError(e)));
-      return;
-    }
-    forgetBans(guild.id);
-    const e = card({ action: job.action, target, mod: i.user, reason: job.reason, dm, ...(job.action === 'ban' ? { days: job.days } : {}) });
-    await i.editReply({ embeds: [e], components: [] });
-    await publish(i, g.mod, e, job.publicCard, job.channelId);
+    const c = ctxOf(i, guild, g.mod);
+    const out = job.action === 'ban' ? await performBan(c, target, job.reason, job.days) : await performKick(c, target, job.reason);
+    await finish(i, c, out, job.publicCard);
   } catch (e) {
     log('moderation button failed:', (e as Error).message);
-    await (i.deferred || i.replied ? i.editReply(fail('Не получилось', humanDiscordError(e))) : i.update(fail('Не получилось', humanDiscordError(e)))).catch(() => undefined);
+    const out = fail('Не получилось', errText(e));
+    await (i.deferred || i.replied ? i.editReply(out) : i.update(out)).catch(() => undefined);
   }
 }
 
-async function doWarn(i: ChatInputCommandInteraction, mod: Moderation, guild: Guild, target: User, reason: string, publicCard: boolean): Promise<void> {
-  const r = await backendJson<Warns>('/internal/warns', { method: 'POST', body: JSON.stringify({ guildId: guild.id, userId: target.id, modId: i.user.id, reason }) }).catch(() => null);
-  const w = r?.ok ? r.data : null;
-  const dm = await sendDm(guild, target, 'warn', reason, w?.total);
-  const e = card({ action: 'warn', target, mod: i.user, reason, dm, ...(w ? { warns: { no: w.total, recent: w.recent } } : {}) });
-  if (!w) e.addFields({ name: '⚠️ Счётчик', value: 'Панель не ответила: предупреждение не записано в историю.' });
-  await i.editReply({ embeds: [e], components: [] });
-  await publish(i, mod, e, publicCard, i.channelId);
-}
-
-/** unbans one person: the card, or a text of the refusal */
-async function unbanCore(i: { client: ChatInputCommandInteraction['client']; user: User }, guild: Guild, id: string, reason: string): Promise<{ e: EmbedBuilder } | { title: string; text: string }> {
+/** «Undo» under a card: the record is withdrawn and a ban or a mute is lifted (thirty seconds after the action) */
+async function handleUndo(i: ButtonInteraction, caseId: number, at: number): Promise<void> {
   try {
-    await guild.members.unban(id, auditReason(i.user.username, reason || 'без причины'));
+    if (!isAdmin(i)) {
+      await i.reply({ ...fail('Недостаточно прав', 'Только для администраторов сервера.'), flags: EPHEMERAL });
+      return;
+    }
+    if (!undoFresh(at, Date.now())) {
+      await i.reply({ ...replyEmbed('Время отмены прошло', 'Отменить можно только в первые 30 секунд. Снимите наказание кнопкой «Снять бан», «Снять мут» или командой.', COLORS.warn), flags: EPHEMERAL });
+      return;
+    }
+    await i.deferUpdate();
+    const g = await gate(i, 'warn');
+    if (!('mod' in g)) {
+      await i.editReply(fail(g.title, g.text));
+      return;
+    }
+    const guild = i.guild as Guild;
+    const r = await backendJson<{ kind: string; userId: string }>(`/internal/cases/${caseId}/revoke`, { method: 'POST', body: JSON.stringify({ by: i.user.username }) }).catch(() => null);
+    if (!r?.ok || !r.data) {
+      await i.editReply(fail('Не получилось', 'Панель не нашла запись для отмены.'));
+      return;
+    }
+    const { kind, userId } = r.data;
+    let tail = '';
+    if (kind === 'ban') {
+      await guild.members.unban(userId, auditReason(i.user.username, 'отмена в течение 30 секунд'));
+      forgetBans(guild.id);
+    } else if (kind === 'timeout') {
+      const m = await guild.members.fetch(userId).catch(() => null);
+      await m?.timeout(null, auditReason(i.user.username, 'отмена в течение 30 секунд'));
+    } else if (kind === 'warn') {
+      tail = ' Мут или кик лесенки, если они были, нужно снять отдельно.';
+    }
+    const meta = META[kind as PunishAction];
+    const e = new EmbedBuilder()
+      .setColor(COLORS.ok)
+      .setTitle('↩️ Действие отменено')
+      .setDescription(`${meta?.emoji ?? ''} ${meta?.title ?? kind}: <@${userId}> — отменено ${person(i.user)}.${tail}`)
+      .setTimestamp(new Date())
+      .setFooter(footerOf('Модерация'));
+    await i.editReply({ embeds: [e], components: [] });
+    await publish(i.client, g.mod, e, false, i.channelId);
   } catch (e) {
-    const code = (e as { code?: number }).code;
-    return { title: 'Не получилось', text: code === 10026 ? 'Этого человека нет в списке банов сервера.' : code === 50013 ? 'Боту не хватает права «Банить участников».' : humanDiscordError(e) };
+    log('undo failed:', (e as Error).message);
+    await i.followUp({ ...fail('Не получилось', errText(e)), flags: EPHEMERAL }).catch(() => undefined);
   }
-  forgetBans(guild.id);
-  const target = await i.client.users.fetch(id).catch(() => null);
-  const shown = target ?? { id, username: id, displayAvatarURL: () => '' };
-  const dm = target ? await sendDm(guild, target, 'unban', reason) : null;
-  return { e: card({ action: 'unban', target: shown as unknown as User, mod: i.user, reason, dm }) };
 }
 
-async function doUnban(i: ChatInputCommandInteraction, mod: Moderation, guild: Guild, input: string, reason: string, publicCard: boolean): Promise<void> {
-  const id = idFromInput(input);
-  if (!id) {
-    await i.editReply(fail('Не понял, кого', 'Выберите участника из подсказок, впишите его ID (число) или оставьте поле пустым, чтобы открыть список банов.'));
-    return;
+/** the buttons «Another warning», «Lift the ban», «Lift the mute», «History» under a card */
+async function handleUserButton(i: ButtonInteraction, kind: 'hist' | 'more' | 'unb' | 'unm', userId: string): Promise<void> {
+  try {
+    if (!isAdmin(i)) {
+      await i.reply({ ...fail('Недостаточно прав', 'Только для администраторов сервера.'), flags: EPHEMERAL });
+      return;
+    }
+    if (kind === 'more') {
+      const u = await i.client.users.fetch(userId);
+      await i.showModal(reasonModal(reasonModalId(userId), u.username));
+      return;
+    }
+    await i.deferReply({ flags: EPHEMERAL });
+    const guild = i.guild as Guild;
+    const user = await i.client.users.fetch(userId);
+    if (kind === 'hist') {
+      const r = await backendJson<Hist>(`/internal/cases?guild=${guild.id}&user=${userId}`).catch(() => null);
+      await i.editReply(r?.ok && r.data ? { embeds: [historyEmbed(user, r.data)] } : fail('Панель не отвечает', 'Не удалось получить историю.'));
+      return;
+    }
+    const action: PunishAction = kind === 'unb' ? 'unban' : 'unmute';
+    const g = await gate(i, action);
+    if (!('mod' in g)) {
+      await i.editReply(fail(g.title, g.text));
+      return;
+    }
+    const c = ctxOf(i, guild, g.mod);
+    await finish(i, c, kind === 'unb' ? await performUnban(c, userId, 'кнопка в карточке') : await performUnmute(c, user, 'кнопка в карточке'), false);
+  } catch (e) {
+    log('user button failed:', (e as Error).message);
+    await (i.deferred || i.replied ? i.editReply(fail('Не получилось', errText(e))) : i.reply({ ...fail('Не получилось', errText(e)), flags: EPHEMERAL })).catch(() => undefined);
   }
-  const r = await unbanCore(i, guild, id, reason);
-  if (!('e' in r)) {
-    await i.editReply(fail(r.title, r.text));
-    return;
-  }
-  await i.editReply({ embeds: [r.e], components: [] });
-  await publish(i, mod, r.e, publicCard, i.channelId);
 }
 
 interface BanRow { id: string; username: string; reason: string }
@@ -40235,6 +40728,9 @@ async function loadBans(guild: Guild, fresh = false): Promise<BanRow[] | null> {
   banCache.set(guild.id, { at: Date.now(), list });
   return list;
 }
+
+/** a new ban list is read after the next ban or unban */
+const forgetBans = (guildId: string): void => void banCache.delete(guildId);
 
 /** the list of the banned: a page of lines, a menu to pick whom to unban, buttons for the pages */
 function banListView(rows: BanRow[], pageNo: number) {
@@ -40270,7 +40766,7 @@ function banListView(rows: BanRow[], pageNo: number) {
 async function handleBanPage(i: ButtonInteraction, page: number): Promise<void> {
   try {
     await i.deferUpdate();
-    if (!i.guild || !i.memberPermissions?.has(PermissionFlagsBits.Administrator)) return;
+    if (!i.guild || !isAdmin(i)) return;
     const rows = await loadBans(i.guild);
     await i.editReply(rows ? banListView(rows, page) : fail('Не получилось', 'Не удалось прочитать список банов: боту нужно право «Банить участников».'));
   } catch (e) {
@@ -40289,45 +40785,255 @@ export async function handleBanPick(i: StringSelectMenuInteraction): Promise<voi
       return;
     }
     const guild = i.guild as Guild;
-    const r = await unbanCore(i, guild, i.values[0] ?? '', 'снят через список банов');
-    if (!('e' in r)) {
-      await i.followUp({ ...fail(r.title, r.text), flags: EPHEMERAL });
-      return;
-    }
+    const c: Ctx = { guild, mod: g.mod, actor: i.user, channelId: i.channelId ?? '', client: i.client };
+    const out = await performUnban(c, i.values[0] ?? '', 'снят через список банов');
     const rows = await loadBans(guild, true);
-    await i.editReply(rows ? banListView(rows, 0) : { embeds: [r.e], components: [] });
-    await i.followUp({ embeds: [r.e], flags: EPHEMERAL });
-    await publish(i, g.mod, r.e, false, i.channelId);
+    await i.editReply(rows ? banListView(rows, 0) : { embeds: [out.embed], components: [] });
+    await i.followUp({ embeds: [out.embed], components: out.rows(false), flags: EPHEMERAL });
+    await publish(i.client, g.mod, out.embed, false, i.channelId ?? '');
   } catch (e) {
     log('ban list pick failed:', (e as Error).message);
-    await i.followUp({ ...fail('Не получилось', humanDiscordError(e)), flags: EPHEMERAL }).catch(() => undefined);
+    await i.followUp({ ...fail('Не получилось', errText(e)), flags: EPHEMERAL }).catch(() => undefined);
   }
 }
 
-/** hints for /unban: the banned members of the server, found by name or ID */
+/** the reasons of the panel are kept half a minute: autocomplete must answer in three seconds */
+let reasonsAt = 0;
+let reasonsList: string[] = [];
+async function reasons(): Promise<string[]> {
+  if (Date.now() - reasonsAt > 30_000) {
+    const m = await settings();
+    if (m) {
+      reasonsList = m.reasons;
+      reasonsAt = Date.now();
+    }
+  }
+  return reasonsList;
+}
+
+/** hints: the reasons of the panel, the lengths of a mute, the banned members for /unban */
 export async function punishAutocomplete(i: AutocompleteInteraction): Promise<void> {
   try {
-    if (i.commandName !== 'unban' || !i.guild || !i.memberPermissions?.has(PermissionFlagsBits.Administrator)) return void (await i.respond([]));
+    if (!i.guild || !i.memberPermissions?.has(PermissionFlagsBits.Administrator)) return void (await i.respond([]));
+    const f = i.options.getFocused(true);
+    if (f.name === 'reason') return void (await i.respond(reasonHints(await reasons(), f.value)));
+    if (f.name === 'duration') return void (await i.respond(durationHints(f.value)));
+    if (i.commandName !== 'unban' || f.name !== 'user') return void (await i.respond([]));
     const list = (await loadBans(i.guild)) ?? [];
-    const q = String(i.options.getFocused()).trim().toLowerCase();
+    const q = f.value.trim().toLowerCase();
     const found = list.filter((b) => !q || b.username.toLowerCase().includes(q) || b.id.startsWith(q)).slice(0, 24).map((b) => ({ name: `${b.username} · ${b.id}`.slice(0, 100), value: b.id }));
     const typed = idFromInput(q);
-    if (typed && !found.some((f) => f.value === typed)) found.push({ name: `ID ${typed}`, value: typed });
+    if (typed && !found.some((x) => x.value === typed)) found.push({ name: `ID ${typed}`, value: typed });
     await i.respond(found);
   } catch (e) {
-    log('/unban autocomplete failed:', (e as Error).message);
+    log('moderation autocomplete failed:', (e as Error).message);
     await i.respond([]).catch(() => undefined);
   }
 }
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-bot/src"
+  cat > "$APP_DIR/core-bot/src/punishKit.ts" << '__COREGSM_EOF__'
+/** What the moderation commands share: the settings of the panel, the records, the cards, private messages, buttons, the log. */
+import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, PermissionFlagsBits, type ChatInputCommandInteraction, type Client, type Guild, type User } from 'discord.js';
+import { backendJson } from './backend.js';
+import { readModeration, type Moderation } from './clearLogic.js';
+import { log } from './log.js';
+import { footerOf } from './style.js';
+import { META, UNDO_MS, appealGoId, dmText, escalationHint, standingProblem, timeTag, undoId, userBtnId, warnBar, warnColor, daysText, durationLabel, type DmOpts, type PunishAction } from './punishLogic.js';
 
-/** a new ban list is read after the next ban or unban */
-export const forgetBans = (guildId: string): void => void banCache.delete(guildId);
+export const EPHEMERAL = 64;
+
+export async function settings(): Promise<Moderation | null> {
+  const r = await backendJson<unknown>('/internal/moderation').catch(() => null);
+  return r?.ok ? readModeration(r.data) : null;
+}
+
+/** the answer of the panel to a new record */
+export interface CaseAnswer {
+  id: number;
+  createdAt: number;
+  expiresAt: number | null;
+  /** active warnings after this one */
+  total: number;
+  recent: { reason: string; createdAt: number }[];
+  scale: number;
+  step: { action: 'timeout'; minutes: number } | { action: 'kick' } | null;
+}
+
+export interface CaseBody {
+  guildId: string;
+  userId: string;
+  userName: string;
+  modId: string;
+  modName: string;
+  kind: 'warn' | 'ban' | 'unban' | 'kick' | 'timeout' | 'unmute' | 'appeal';
+  reason: string;
+  link?: string;
+}
+
+export async function recordCase(body: CaseBody): Promise<CaseAnswer | null> {
+  const r = await backendJson<CaseAnswer>('/internal/cases', { method: 'POST', body: JSON.stringify(body) }).catch(() => null);
+  return r?.ok ? r.data : null;
+}
+
+/** the user as a line: mention and name */
+export const person = (u: { id: string; username: string }): string => `<@${u.id}> (${u.username})`;
+
+export interface CardData {
+  action: PunishAction;
+  target: User;
+  mod: { id: string; username: string };
+  reason: string;
+  /** the private message was delivered (null = none was tried) */
+  dm: boolean | null;
+  days?: number;
+  /** the length of a mute, minutes */
+  minutes?: number;
+  link?: string;
+  warns?: { no: number; scale: number; recent: { reason: string; createdAt: number }[]; expiresAt: number | null };
+  /** what the ladder of the panel did by itself */
+  auto?: string[];
+}
+
+/** the card of a result: the same for the moderator, the channel and the log, coloured by the kind of the action */
+export function card(d: CardData): EmbedBuilder {
+  const m = META[d.action];
+  const w = d.warns;
+  const e = new EmbedBuilder()
+    .setColor(w ? warnColor(w.no, w.scale) : m.color)
+    .setTitle(`${m.emoji} ${m.title}${w ? ` №${w.no}` : ''}`)
+    .setDescription(`<@${d.target.id}> ${m.done}.${w ? `\n\n${warnBar(w.no, w.scale)}` : ''}`)
+    .setThumbnail(d.target.displayAvatarURL({ size: 128 }) || null)
+    .addFields({ name: '👤 Участник', value: person(d.target), inline: true }, { name: '🛡️ Модератор', value: person(d.mod), inline: true }, { name: '📝 Причина', value: d.reason || 'не указана' })
+    .setTimestamp(new Date())
+    .setFooter(footerOf('Модерация'));
+  if (d.link) e.addFields({ name: '🔗 Основание', value: `[сообщение](${d.link})`, inline: true });
+  if (d.action === 'ban' && d.days !== undefined) e.addFields({ name: '🧹 Его сообщения', value: daysText(d.days), inline: true });
+  if (d.action === 'timeout' && d.minutes) {
+    const until = Date.now() + d.minutes * 60_000;
+    e.addFields({ name: '⏳ Срок', value: `${durationLabel(d.minutes)} · до ${timeTag(until)}`, inline: true });
+  }
+  if (d.dm !== null) e.addFields({ name: '✉️ Личное сообщение', value: d.dm ? 'доставлено' : 'не доставлено (закрыты ЛС)', inline: true });
+  if (w) {
+    if (w.expiresAt) e.addFields({ name: '⌛ Перестанет учитываться', value: timeTag(w.expiresAt), inline: true });
+    if (w.recent.length) e.addFields({ name: '📜 Предыдущие', value: w.recent.map((x) => `${timeTag(x.createdAt)} — ${x.reason}`.slice(0, 200)).join('\n').slice(0, 1000) });
+    const hint = d.auto?.length ? '' : escalationHint(w.no);
+    if (hint) e.addFields({ name: '🚨 Внимание', value: hint });
+  }
+  if (d.auto?.length) e.addFields({ name: '🤖 Лесенка наказаний', value: d.auto.join('\n').slice(0, 1000) });
+  return e;
+}
+
+/** a private message to the person; false when Discord does not let us (closed messages) */
+export async function sendDm(guild: Guild, target: User, action: PunishAction, reason: string, opts: DmOpts = {}, rows: ActionRowBuilder<ButtonBuilder>[] = []): Promise<boolean> {
+  const t = dmText(action, guild.name, opts);
+  const icon = guild.iconURL({ size: 128 });
+  const e = new EmbedBuilder()
+    .setColor(opts.warnNo && opts.scale ? warnColor(opts.warnNo, opts.scale) : META[action].color)
+    .setAuthor({ name: guild.name, ...(icon ? { iconURL: icon } : {}) })
+    .setTitle(t.title)
+    .setDescription(t.text)
+    .addFields({ name: '📝 Причина', value: reason || 'не указана' })
+    .setTimestamp(new Date())
+    .setFooter({ text: guild.name });
+  if (icon) e.setThumbnail(icon);
+  return target.send({ embeds: [e], components: rows }).then(() => true, () => false);
+}
+
+type Sendable = { send?: (o: unknown) => Promise<unknown> } | null;
+
+/** the card to the channel (when `public`) and to the log channel of the panel */
+export async function publish(client: Client, mod: Moderation, e: EmbedBuilder, publicCard: boolean, channelId: string): Promise<void> {
+  const to = async (id: string) => {
+    try {
+      const ch = (await client.channels.fetch(id)) as unknown as Sendable;
+      await ch?.send?.({ embeds: [e], allowedMentions: { parse: [] } });
+    } catch (err) {
+      log('moderation post failed:', (err as Error).message);
+    }
+  };
+  if (publicCard) await to(channelId);
+  if (mod.logChannelId && !(publicCard && mod.logChannelId === channelId)) await to(mod.logChannelId);
+}
+
+/** the permission the bot needs for an action */
+export const BOT_NEEDS: Record<PunishAction, bigint | null> = {
+  ban: PermissionFlagsBits.BanMembers,
+  unban: PermissionFlagsBits.BanMembers,
+  kick: PermissionFlagsBits.KickMembers,
+  warn: null,
+  timeout: PermissionFlagsBits.ModerateMembers,
+  unmute: PermissionFlagsBits.ModerateMembers,
+};
+export const BOT_NEEDS_TEXT: Record<PunishAction, string> = {
+  ban: 'Боту нужно право «Банить участников».',
+  unban: 'Боту нужно право «Банить участников».',
+  kick: 'Боту нужно право «Выгонять участников».',
+  warn: '',
+  timeout: 'Боту нужно право «Отправлять участников подумать о своём поведении» (тайм-аут).',
+  unmute: 'Боту нужно право «Отправлять участников подумать о своём поведении» (тайм-аут).',
+};
+
+type Gated = Pick<ChatInputCommandInteraction, 'guild' | 'memberPermissions' | 'appPermissions'>;
+
+/** the checks shared by every command; a text for the moderator when something forbids the action */
+export async function gate(i: Gated, action: PunishAction): Promise<{ title: string; text: string } | { mod: Moderation }> {
+  if (!i.guild) return { title: 'Только на сервере', text: 'Команда работает на Discord-сервере.' };
+  if (!i.memberPermissions?.has(PermissionFlagsBits.Administrator)) return { title: 'Недостаточно прав', text: 'Эта команда доступна только администраторам сервера.' };
+  const need = BOT_NEEDS[action];
+  if (need && i.appPermissions && !i.appPermissions.has(need)) return { title: 'Недостаточно прав', text: `${BOT_NEEDS_TEXT[action]} Выдайте его роли бота или пригласите бота заново по ссылке из панели.` };
+  const mod = await settings();
+  if (!mod) return { title: 'Панель не отвечает', text: 'Не удалось получить настройки модерации. Попробуйте ещё раз чуть позже.' };
+  if (!mod.punish) return { title: 'Команды выключены', text: 'Администратор отключил команды наказаний в панели (Discord → Модерация).' };
+  return { mod };
+}
+
+/** may the moderator act on this person: a text for the refusal, or null */
+export async function standing(guild: Guild, modId: string, target: User): Promise<string | null> {
+  const [me, mod, member] = await Promise.all([guild.members.fetchMe().catch(() => null), guild.members.fetch(modId).catch(() => null), guild.members.fetch(target.id).catch(() => null)]);
+  return standingProblem({
+    targetId: target.id,
+    modId,
+    botId: guild.client.user.id,
+    ownerId: guild.ownerId,
+    inGuild: !!member,
+    targetPos: member?.roles.highest.position ?? 0,
+    modPos: mod?.roles.highest.position ?? 0,
+    botPos: me?.roles.highest.position ?? 0,
+  });
+}
+
+/** the buttons under a result card; «Undo» exists only while `undo` is true (thirty seconds) */
+export function resultRows(o: { kind: PunishAction; caseId: number | null; userId: string; undo: boolean }): ActionRowBuilder<ButtonBuilder>[] {
+  const b: ButtonBuilder[] = [];
+  if (o.undo && o.caseId && (o.kind === 'warn' || o.kind === 'ban' || o.kind === 'timeout')) {
+    b.push(new ButtonBuilder().setCustomId(undoId(o.caseId, Date.now())).setLabel('Отменить').setEmoji('↩️').setStyle(ButtonStyle.Secondary));
+  }
+  if (o.kind === 'warn') b.push(new ButtonBuilder().setCustomId(userBtnId('more', o.userId)).setLabel('Ещё предупреждение').setEmoji('➕').setStyle(ButtonStyle.Secondary));
+  if (o.kind === 'ban') b.push(new ButtonBuilder().setCustomId(userBtnId('unb', o.userId)).setLabel('Снять бан').setEmoji('🔓').setStyle(ButtonStyle.Secondary));
+  if (o.kind === 'timeout') b.push(new ButtonBuilder().setCustomId(userBtnId('unm', o.userId)).setLabel('Снять мут').setEmoji('🔊').setStyle(ButtonStyle.Secondary));
+  b.push(new ButtonBuilder().setCustomId(userBtnId('hist', o.userId)).setLabel('История').setEmoji('📜').setStyle(ButtonStyle.Secondary));
+  return [new ActionRowBuilder<ButtonBuilder>().addComponents(b)];
+}
+
+/** the button of an appeal under the private message of a ban */
+export const appealRow = (guildId: string): ActionRowBuilder<ButtonBuilder> =>
+  new ActionRowBuilder<ButtonBuilder>().addComponents(new ButtonBuilder().setCustomId(appealGoId(guildId)).setLabel('Подать апелляцию').setEmoji('📨').setStyle(ButtonStyle.Primary));
+
+interface Replier {
+  editReply(o: { components: ActionRowBuilder<ButtonBuilder>[] }): Promise<unknown>;
+}
+
+/** after thirty seconds the «Undo» button goes away */
+export function expireUndo(i: Replier, rowsWithout: ActionRowBuilder<ButtonBuilder>[]): void {
+  setTimeout(() => void i.editReply({ components: rowsWithout }).catch(() => undefined), UNDO_MS);
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-bot/src"
   cat > "$APP_DIR/core-bot/src/punishLogic.ts" << '__COREGSM_EOF__'
 /** /ban, /unban, /kick, /warn: pure logic (checks of who may act on whom, texts, the waiting confirmations). No discord.js import. */
 
-export type PunishAction = 'ban' | 'unban' | 'kick' | 'warn';
+export type PunishAction = 'ban' | 'unban' | 'kick' | 'warn' | 'timeout' | 'unmute';
 
 export const MAX_REASON = 400;
 /** a confirmation of a ban or a kick lives this long */
@@ -40373,17 +41079,125 @@ export const META: Record<PunishAction, { emoji: string; title: string; color: n
   unban: { emoji: '🔓', title: 'Разбан', color: 0x2ecc71, done: 'разблокирован' },
   kick: { emoji: '👢', title: 'Кик', color: 0xe67e22, done: 'исключён с сервера' },
   warn: { emoji: '⚠️', title: 'Предупреждение', color: 0xf5b01e, done: 'получил предупреждение' },
+  timeout: { emoji: '🔇', title: 'Мут', color: 0x7f8c8d, done: 'не может писать и говорить' },
+  unmute: { emoji: '🔊', title: 'Размут', color: 0x2ecc71, done: 'снова может писать и говорить' },
 };
 
+export interface DmOpts {
+  warnNo?: number;
+  /** how many warnings fill the scale */
+  scale?: number;
+  /** when the warning stops counting (ms) */
+  expiresAt?: number | null;
+  /** the length of a timeout */
+  minutes?: number;
+}
+
 /** what the person is told in a private message */
-export function dmText(action: PunishAction, guild: string, warnNo?: number): { title: string; text: string } {
+export function dmText(action: PunishAction, guild: string, o: DmOpts = {}): { title: string; text: string } {
   switch (action) {
-    case 'ban': return { title: '🔨 Вы заблокированы', text: `Администрация сервера **${guild}** заблокировала вас.` };
+    case 'ban': return { title: '🔨 Вы заблокированы', text: `Администрация сервера **${guild}** заблокировала вас. Если считаете это ошибкой, подайте апелляцию кнопкой ниже.` };
     case 'kick': return { title: '👢 Вас исключили с сервера', text: `Вас исключили с сервера **${guild}**. Вернуться можно по новому приглашению, если правила для вас понятны.` };
-    case 'unban': return { title: '🔓 Вы разблокированы', text: `Блокировка на сервере **${guild}** снята.` };
-    case 'warn': return { title: `⚠️ Предупреждение${warnNo ? ` №${warnNo}` : ''}`, text: `Администрация сервера **${guild}** вынесла вам предупреждение. Повторные нарушения могут привести к исключению или блокировке.` };
+    case 'unban': return { title: '🔓 Вы разблокированы', text: `Блокировка на сервере **${guild}** снята. Вы можете вернуться по приглашению.` };
+    case 'timeout': return { title: '🔇 Вам выдан мут', text: `На сервере **${guild}** вы не можете писать и говорить${o.minutes ? ` ${durationLabel(o.minutes)}` : ''}. Когда срок кончится, всё вернётся само.` };
+    case 'unmute': return { title: '🔊 Мут снят', text: `На сервере **${guild}** вы снова можете писать и говорить.` };
+    case 'warn': {
+      const scale = o.scale ?? 0;
+      const tail = o.expiresAt ? ` Это предупреждение перестанет учитываться ${timeTag(o.expiresAt)}.` : '';
+      const count = o.warnNo && scale ? ` Ваши предупреждения: ${warnBar(o.warnNo, scale)}.` : '';
+      return { title: `⚠️ Предупреждение${o.warnNo ? ` №${o.warnNo}` : ''}`, text: `Администрация сервера **${guild}** вынесла вам предупреждение.${count} Повторные нарушения могут привести к муту, исключению или блокировке.${tail}` };
+    }
   }
 }
+
+/** ●●○○○ 2 из 5: the scale of warnings (up to 10 marks) */
+export function warnBar(n: number, max: number): string {
+  const m = Math.max(1, Math.min(10, max));
+  const full = Math.max(0, Math.min(m, n));
+  return `${'●'.repeat(full)}${'○'.repeat(m - full)} ${n} из ${max}`;
+}
+
+/** the colour of a warning card gets warmer with each warning: yellow, orange, red */
+export function warnColor(n: number, max: number): number {
+  const r = max > 0 ? n / max : 1;
+  return r < 0.4 ? 0xf5b01e : r < 0.8 ? 0xe67e22 : 0xe74c3c;
+}
+
+/** «10 мин», «2 ч», «1 д 2 ч», «28 д» */
+export function durationLabel(minutes: number): string {
+  const d = Math.floor(minutes / 1440);
+  const h = Math.floor((minutes % 1440) / 60);
+  const m = minutes % 60;
+  return [d ? `${d} д` : '', h ? `${h} ч` : '', m ? `${m} мин` : ''].filter(Boolean).join(' ') || '0 мин';
+}
+
+/** a timeout of Discord lasts 28 days at most */
+export const MAX_MUTE_MINUTES = 40_320;
+export const DURATION_PRESETS: readonly [string, string][] = [
+  ['10 минут', '10m'], ['1 час', '1h'], ['6 часов', '6h'], ['1 день', '1d'], ['3 дня', '3d'], ['7 дней', '7d'], ['28 дней', '28d'],
+];
+
+/** «30», «30m», «2h», «1d», «1w», «10 мин», «2 ч», «3 дн»: minutes (1..40320), or null when it cannot be understood */
+export function parseDuration(text: string): number | null {
+  const m = /^(\d{1,6})\s*(m|min|мин|м|h|hr|ч|час|d|д|дн|w|н|нед)?$/i.exec(text.trim());
+  if (!m) return null;
+  const unit = (m[2] ?? 'm').toLowerCase();
+  const k = unit.startsWith('h') || unit === 'ч' || unit === 'час' ? 60 : unit.startsWith('d') || unit === 'д' || unit === 'дн' ? 1440 : unit.startsWith('w') || unit === 'н' || unit === 'нед' ? 10_080 : 1;
+  const minutes = Number(m[1]) * k;
+  return minutes >= 1 && minutes <= MAX_MUTE_MINUTES ? minutes : null;
+}
+
+/** the reasons that fit what is typed (all of them while nothing is typed), at most 25 */
+export function reasonHints(reasons: string[], typed: string): { name: string; value: string }[] {
+  const q = typed.trim().toLowerCase();
+  return reasons.filter((r) => !q || r.toLowerCase().includes(q)).slice(0, 25).map((r) => ({ name: r.slice(0, 100), value: r.slice(0, 100) }));
+}
+
+/** the presets of a mute that fit what is typed */
+export function durationHints(typed: string): { name: string; value: string }[] {
+  const q = typed.trim().toLowerCase();
+  const out = DURATION_PRESETS.filter(([name, v]) => !q || name.includes(q) || v.includes(q)).map(([name, value]) => ({ name, value }));
+  const own = parseDuration(typed);
+  if (own && !out.some((o) => parseDuration(o.value) === own)) out.unshift({ name: durationLabel(own), value: typed.trim() });
+  return out;
+}
+
+/** a link to a message, kept in the record as the ground for a warning */
+export const messageLink = (guildId: string, channelId: string, messageId: string): string => `https://discord.com/channels/${guildId}/${channelId}/${messageId}`;
+
+/** the buttons under a result card: «Undo» works thirty seconds */
+export const UNDO_MS = 30_000;
+export const undoId = (caseId: number, at: number): string => `mod:undo:${caseId}:${at.toString(36)}`;
+export function parseUndoId(id: string): { caseId: number; at: number } | null {
+  const m = /^mod:undo:(\d{1,10}):([0-9a-z]{1,12})$/.exec(id);
+  return m ? { caseId: Number(m[1]), at: parseInt(m[2] as string, 36) } : null;
+}
+export const undoFresh = (at: number, now: number): boolean => now - at >= 0 && now - at <= UNDO_MS + 5000;
+
+export type UserButton = 'hist' | 'more' | 'unb' | 'unm';
+export const userBtnId = (kind: UserButton, userId: string): string => `mod:${kind}:${userId}`;
+export function parseUserBtn(id: string): { kind: UserButton; userId: string } | null {
+  const m = /^mod:(hist|more|unb|unm):(\d{15,25})$/.exec(id);
+  return m ? { kind: m[1] as UserButton, userId: m[2] as string } : null;
+}
+
+/** the window with the reason of a warning (from a button or a context menu); `chan`/`msg` are 0 when there is no message */
+export const reasonModalId = (userId: string, chan = '0', msg = '0'): string => `modr:w:${userId}:${chan}:${msg}`;
+export function parseReasonModal(id: string): { userId: string; chan: string; msg: string } | null {
+  const m = /^modr:w:(\d{15,25}):(\d{1,25}):(\d{1,25})$/.exec(id);
+  return m ? { userId: m[1] as string, chan: m[2] as string, msg: m[3] as string } : null;
+}
+
+/** appeals: the button in the private message, its window, the buttons for the administrators */
+export const appealGoId = (guildId: string): string => `appeal:go:${guildId}`;
+export const appealSendId = (guildId: string): string => `appeal:send:${guildId}`;
+export const appealDecideId = (ok: boolean, guildId: string, userId: string): string => `appeal:${ok ? 'ok' : 'no'}:${guildId}:${userId}`;
+export function parseAppeal(id: string): { kind: 'go' | 'send' | 'ok' | 'no'; guildId: string; userId: string } | null {
+  const m = /^appeal:(go|send|ok|no):(\d{15,25})(?::(\d{15,25}))?$/.exec(id);
+  return m ? { kind: m[1] as 'go' | 'send' | 'ok' | 'no', guildId: m[2] as string, userId: m[3] ?? '' } : null;
+}
+/** one appeal per person in this time */
+export const APPEAL_PAUSE_MS = 12 * 3600_000;
 
 /** the line after the third warning and every further one */
 export const WARN_ESCALATE_AT = 3;
@@ -115628,6 +116442,116 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
 });
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/CasesCard.tsx" << '__COREGSM_EOF__'
+import { useCallback, useEffect, useState } from 'react';
+import { api } from '../api';
+import { t, useI18n, type TKey } from '../i18n';
+import { Button, Section, fail, toast } from '../ui';
+
+type Kind = 'warn' | 'ban' | 'unban' | 'kick' | 'timeout' | 'unmute' | 'appeal';
+interface Case { id: number; userId: string; userName: string; modName: string; kind: Kind; reason: string; link: string; createdAt: number; expiresAt: number | null; revokedAt: number | null }
+interface Resp { items: Case[]; total: number; page: number; pageSize: number; counts: Record<string, number>; now: number }
+
+const KINDS: Kind[] = ['warn', 'ban', 'unban', 'kick', 'timeout', 'unmute', 'appeal'];
+const KIND_LABEL: Record<Kind, TKey> = { warn: 'mc.k.warn', ban: 'mc.k.ban', unban: 'mc.k.unban', kick: 'mc.k.kick', timeout: 'mc.k.timeout', unmute: 'mc.k.unmute', appeal: 'mc.k.appeal' };
+const KIND_EMOJI: Record<Kind, string> = { warn: '⚠️', ban: '🔨', unban: '🔓', kick: '👢', timeout: '🔇', unmute: '🔊', appeal: '📨' };
+const KIND_PILL: Record<Kind, string> = { warn: 'pill pill-warn', ban: 'pill pill-bad', unban: 'pill pill-ok', kick: 'pill pill-warn', timeout: 'pill pill-mute', unmute: 'pill pill-ok', appeal: 'pill pill-mute' };
+
+/**
+ * «Наказания»: the records of the moderation commands (warnings, bans, kicks, mutes, appeals) with a search and a filter;
+ * an active warning can be withdrawn here.
+ */
+export default function CasesCard() {
+  useI18n();
+  const [kind, setKind] = useState<Kind | ''>('');
+  const [q, setQ] = useState('');
+  const [query, setQuery] = useState('');
+  const [page, setPage] = useState(0);
+  const [data, setData] = useState<Resp | null>(null);
+  const [busy, setBusy] = useState(0);
+
+  const load = useCallback(() => {
+    const params = new URLSearchParams({ page: String(page) });
+    if (kind) params.set('kind', kind);
+    if (query.trim()) params.set('q', query.trim());
+    return api<Resp>(`/moderation/cases?${params.toString()}`).then(setData).catch(() => undefined);
+  }, [kind, query, page]);
+  useEffect(() => { void load(); }, [load]);
+
+  const revoke = async (c: Case) => {
+    setBusy(c.id);
+    try {
+      await api(`/moderation/cases/${c.id}/revoke`, 'POST');
+      toast(t('mc.revoked'));
+      await load();
+    } catch (e) {
+      fail(e);
+    } finally {
+      setBusy(0);
+    }
+  };
+
+  const state = (c: Case, now: number): { text: TKey; pill: string } | null => {
+    if (c.revokedAt) return { text: 'mc.s.revoked', pill: 'pill pill-mute' };
+    if (c.kind === 'warn') return c.expiresAt && c.expiresAt < now ? { text: 'mc.s.expired', pill: 'pill pill-mute' } : { text: 'mc.s.active', pill: 'pill pill-warn' };
+    return null;
+  };
+  const pages = data ? Math.max(1, Math.ceil(data.total / data.pageSize)) : 1;
+
+  return (
+    <Section title={t('mc.title')}>
+      <p className="mb-3 text-sm font-semibold text-mute">{t('mc.help')}</p>
+      <form className="mb-3 flex flex-wrap items-center gap-2" onSubmit={(e) => { e.preventDefault(); setPage(0); setQuery(q); }}>
+        <label htmlFor="cases-q" className="sr-only">{t('mc.search')}</label>
+        <input id="cases-q" className="input w-56" value={q} placeholder={t('mc.search')} onChange={(e) => setQ(e.target.value)} />
+        <button type="submit" className="btn btn-soft btn-sm">{t('mc.find')}</button>
+      </form>
+      <div className="mb-3 flex flex-wrap gap-2" role="group" aria-label={t('mc.filter')}>
+        <button type="button" className={`chip-filter ${kind === '' ? 'on' : ''}`} aria-pressed={kind === ''} onClick={() => { setKind(''); setPage(0); }}>{t('mc.all')}</button>
+        {KINDS.map((k) => (
+          <button key={k} type="button" className={`chip-filter ${kind === k ? 'on' : ''}`} aria-pressed={kind === k} onClick={() => { setKind(k); setPage(0); }}>
+            {KIND_EMOJI[k]} {t(KIND_LABEL[k])}{data?.counts[k] ? ` · ${data.counts[k]}` : ''}
+          </button>
+        ))}
+      </div>
+      {!data ? null : data.items.length === 0 ? (
+        <p className="text-sm font-semibold text-mute">{t('mc.empty')}</p>
+      ) : (
+        <ul className="space-y-2">
+          {data.items.map((c) => {
+            const st = state(c, data.now);
+            return (
+              <li key={c.id} className="rounded-xl border border-line p-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className={KIND_PILL[c.kind]}>{KIND_EMOJI[c.kind]} {t(KIND_LABEL[c.kind])}</span>
+                  <span className="font-black">{c.userName || c.userId}</span>
+                  <span className="text-sm font-semibold text-mute">{c.userId}</span>
+                  {st && <span className={st.pill}>{t(st.text)}</span>}
+                  <span className="ml-auto text-sm font-semibold text-mute">{new Date(c.createdAt).toLocaleString()}</span>
+                </div>
+                <p className="mt-1 text-sm">{c.reason || t('mc.noReason')}</p>
+                <div className="mt-1 flex flex-wrap items-center gap-3 text-sm font-semibold text-mute">
+                  <span>{t('mc.by', { name: c.modName || '—' })}</span>
+                  {c.link && <a className="underline" href={c.link} target="_blank" rel="noreferrer noopener">{t('mc.link')}</a>}
+                  {c.kind === 'warn' && st?.text === 'mc.s.active' && <Button type="button" loading={busy === c.id} onClick={() => void revoke(c)}>{t('mc.revoke')}</Button>}
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {data && pages > 1 && (
+        <div className="mt-3 flex items-center gap-3">
+          <button type="button" className="btn btn-soft btn-sm" disabled={page === 0} onClick={() => setPage(page - 1)}>{t('mc.prev')}</button>
+          <span className="text-sm font-semibold text-mute">{t('mc.page', { n: page + 1, m: pages, total: data.total })}</span>
+          <button type="button" className="btn btn-soft btn-sm" disabled={page >= pages - 1} onClick={() => setPage(page + 1)}>{t('mc.next')}</button>
+        </div>
+      )}
+    </Section>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
   cat > "$APP_DIR/core-frontend/src/components/ChannelPicker.tsx" << '__COREGSM_EOF__'
 import { useEffect, useState } from 'react';
 import { api, type DiscordGuild } from '../api';
@@ -117504,32 +118428,54 @@ import { Button, Section, Switch, fail, toast } from '../ui';
 import { ChannelName, ChannelPicker } from './ChannelPicker';
 
 interface Channel { id: string; name: string; guild: string }
-interface Moderation { enabled: boolean; punish: boolean; logChannelId: string; protectedChannels: string[]; cooldown: number; channels: Channel[]; maxProtected: number; maxCooldown: number }
+interface Moderation {
+  enabled: boolean; punish: boolean; logChannelId: string; appealChannelId: string; protectedChannels: string[]; cooldown: number;
+  warnTtlDays: number; muteAt: number; muteMinutes: number; kickAt: number; reasons: string[];
+  channels: Channel[];
+  maxProtected: number; maxCooldown: number; maxWarnTtlDays: number; maxLadder: number; maxMuteMinutes: number; maxReasons: number; maxReasonLen: number;
+}
+type Patch = Partial<Pick<Moderation, 'enabled' | 'punish' | 'logChannelId' | 'appealChannelId' | 'protectedChannels' | 'cooldown' | 'warnTtlDays' | 'muteAt' | 'muteMinutes' | 'kickAt' | 'reasons'>>;
+
+const inRange = (s: string, max: number, min = 0) => s.trim() !== '' && Number.isInteger(Number(s)) && Number(s) >= min && Number(s) <= max;
 
 /**
- * «Модерация»: settings of the /clear command of the bot: switch it off, protect channels from cleaning, the pause between
- * two cleanings of one channel and the channel that receives a record of each cleaning.
+ * «Модерация»: settings of the moderation commands of the bot: /clear (switch, pause between cleanings, protected channels),
+ * /ban /kick /warn /mute (switch, the lifetime of a warning, the ladder: a mute or a kick after so many warnings, the reasons
+ * offered while typing), and the channels for the log and for the appeals of the banned.
  */
 export default function ModerationCard() {
   useI18n();
   const [m, setM] = useState<Moderation | null>(null);
   const [cool, setCool] = useState('');
-  const [picking, setPicking] = useState(false);
+  const [ttl, setTtl] = useState('');
+  const [muteAt, setMuteAt] = useState('');
+  const [muteMin, setMuteMin] = useState('');
+  const [kickAt, setKickAt] = useState('');
+  const [reasons, setReasons] = useState('');
+  const [picking, setPicking] = useState<'' | 'log' | 'appeal'>('');
   const [busy, setBusy] = useState(false);
+
+  const load = (r: Moderation) => {
+    setM(r);
+    setCool(String(r.cooldown));
+    setTtl(String(r.warnTtlDays));
+    setMuteAt(String(r.muteAt));
+    setMuteMin(String(r.muteMinutes));
+    setKickAt(String(r.kickAt));
+    setReasons(r.reasons.join('\n'));
+  };
 
   useEffect(() => {
     let alive = true;
-    api<Moderation>('/settings/moderation').then((r) => { if (alive) { setM(r); setCool(String(r.cooldown)); } }).catch(() => undefined);
+    api<Moderation>('/settings/moderation').then((r) => { if (alive) load(r); }).catch(() => undefined);
     return () => { alive = false; };
   }, []);
   if (!m) return null;
 
-  const save = async (patch: Partial<Pick<Moderation, 'enabled' | 'punish' | 'logChannelId' | 'protectedChannels' | 'cooldown'>>) => {
+  const save = async (patch: Patch) => {
     setBusy(true);
     try {
-      const r = await api<Moderation>('/settings/moderation', 'PUT', patch);
-      setM(r);
-      setCool(String(r.cooldown));
+      load(await api<Moderation>('/settings/moderation', 'PUT', patch));
       toast(t('mod.saved'));
     } catch (e) {
       fail(e);
@@ -117538,9 +118484,25 @@ export default function ModerationCard() {
     }
   };
 
-  const coolNum = Number(cool);
-  const coolOk = cool.trim() !== '' && Number.isInteger(coolNum) && coolNum >= 0 && coolNum <= m.maxCooldown;
   const multi = new Set(m.channels.map((c) => c.guild)).size > 1;
+  const coolOk = inRange(cool, m.maxCooldown);
+  const warnOk = inRange(ttl, m.maxWarnTtlDays) && inRange(muteAt, m.maxLadder) && inRange(muteMin, m.maxMuteMinutes, 1) && inRange(kickAt, m.maxLadder);
+  const warnSame = Number(ttl) === m.warnTtlDays && Number(muteAt) === m.muteAt && Number(muteMin) === m.muteMinutes && Number(kickAt) === m.kickAt;
+  const reasonList = reasons.split('\n').map((x) => x.trim()).filter(Boolean);
+  const reasonsSame = reasonList.join('\n') === m.reasons.join('\n');
+
+  const channelRow = (kind: 'log' | 'appeal', id: string, label: string, help: string, none: string, pickId: string, patch: (v: string) => Patch) => (
+    <div>
+      <span className="label">{label}</span>
+      <p className="mb-2 text-sm font-semibold text-mute">{help}</p>
+      <div className="flex flex-wrap items-center gap-3">
+        <span className="font-black">{id ? <ChannelName id={id} /> : none}</span>
+        <button type="button" className="btn btn-soft btn-sm" onClick={() => setPicking(picking === kind ? '' : kind)} aria-expanded={picking === kind}>{t('mod.pick')}</button>
+        {id && <button type="button" className="btn btn-soft btn-sm" disabled={busy} onClick={() => void save(patch(''))}>{t('mod.clearLog')}</button>}
+      </div>
+      {picking === kind && <div className="mt-2"><ChannelPicker id={pickId} value={id} onChange={(v) => { if (/^\d{15,25}$/.test(v)) { void save(patch(v)); setPicking(''); } }} /></div>}
+    </div>
+  );
 
   return (
     <Section title={t('mod.title')}>
@@ -117553,52 +118515,86 @@ export default function ModerationCard() {
       </label>
       <p className="-mt-1 mb-3 text-sm font-semibold text-mute">{t('mod.punishHelp')}</p>
       {(m.enabled || m.punish) && (
-        <div className="space-y-4">
-          <div>
-            <span className="label">{t('mod.log')}</span>
-            <p className="mb-2 text-sm font-semibold text-mute">{t('mod.logHelp')}</p>
-            <div className="flex flex-wrap items-center gap-3">
-              <span className="font-black">{m.logChannelId ? <ChannelName id={m.logChannelId} /> : t('mod.noLog')}</span>
-              <button type="button" className="btn btn-soft btn-sm" onClick={() => setPicking((v) => !v)} aria-expanded={picking}>{t('mod.pick')}</button>
-              {m.logChannelId && <button type="button" className="btn btn-soft btn-sm" disabled={busy} onClick={() => void save({ logChannelId: '' })}>{t('mod.clearLog')}</button>}
-            </div>
-            {picking && <div className="mt-2"><ChannelPicker id="clear-log-channel" value={m.logChannelId} onChange={(v) => { if (/^\d{15,25}$/.test(v)) { void save({ logChannelId: v }); setPicking(false); } }} /></div>}
-          </div>
-          <div>
-            <label htmlFor="clear-cooldown" className="label">{t('mod.cooldown')}</label>
-            <p className="mb-2 text-sm font-semibold text-mute">{t('mod.cooldownHelp')}</p>
-            <div className="flex flex-wrap items-center gap-3">
-              <input id="clear-cooldown" type="number" min={0} max={m.maxCooldown} step={1} className="input w-28" value={cool} onChange={(e) => setCool(e.target.value)} />
-              <Button type="button" loading={busy} onClick={() => void save({ cooldown: coolNum })} disabled={!coolOk || coolNum === m.cooldown}>{t('common.save')}</Button>
-            </div>
-          </div>
-          <div>
-            <span className="label">{t('mod.protected')}</span>
-            <p className="mb-2 text-sm font-semibold text-mute">{t('mod.protectedHelp', { n: m.maxProtected })}</p>
-            {m.channels.length === 0 ? (
-              <p className="text-sm font-semibold text-mute">{t('mod.noChannels')}</p>
-            ) : (
-              <div className="flex flex-wrap gap-2" role="group" aria-label={t('mod.protected')}>
-                {m.channels.map((c) => {
-                  const on = m.protectedChannels.includes(c.id);
-                  const full = !on && m.protectedChannels.length >= m.maxProtected;
-                  return (
-                    <button
-                      key={c.id}
-                      type="button"
-                      className={`chip-filter ${on ? 'on' : ''}`}
-                      aria-pressed={on}
-                      disabled={busy || full}
-                      onClick={() => void save({ protectedChannels: on ? m.protectedChannels.filter((x) => x !== c.id) : [...m.protectedChannels, c.id] })}
-                    >
-                      <span aria-hidden="true" className="mr-1.5">{on ? '🛡️' : '#'}</span>
-                      {c.name}{multi ? ` · ${c.guild}` : ''}
-                    </button>
-                  );
-                })}
+        <div className="space-y-5">
+          {channelRow('log', m.logChannelId, t('mod.log'), t('mod.logHelp'), t('mod.noLog'), 'clear-log-channel', (v) => ({ logChannelId: v }))}
+          {m.punish && channelRow('appeal', m.appealChannelId, t('mod.appeal'), t('mod.appealHelp'), t('mod.noAppeal'), 'appeal-channel', (v) => ({ appealChannelId: v }))}
+          {m.punish && (
+            <div>
+              <span className="label">{t('mod.warnTitle')}</span>
+              <p className="mb-2 text-sm font-semibold text-mute">{t('mod.warnHelp')}</p>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div>
+                  <label htmlFor="warn-ttl" className="label">{t('mod.ttl')}</label>
+                  <input id="warn-ttl" type="number" min={0} max={m.maxWarnTtlDays} className="input" value={ttl} onChange={(e) => setTtl(e.target.value)} />
+                </div>
+                <div>
+                  <label htmlFor="warn-mute-at" className="label">{t('mod.muteAt')}</label>
+                  <input id="warn-mute-at" type="number" min={0} max={m.maxLadder} className="input" value={muteAt} onChange={(e) => setMuteAt(e.target.value)} />
+                </div>
+                <div>
+                  <label htmlFor="warn-mute-min" className="label">{t('mod.muteMin')}</label>
+                  <input id="warn-mute-min" type="number" min={1} max={m.maxMuteMinutes} className="input" value={muteMin} onChange={(e) => setMuteMin(e.target.value)} />
+                </div>
+                <div>
+                  <label htmlFor="warn-kick-at" className="label">{t('mod.kickAt')}</label>
+                  <input id="warn-kick-at" type="number" min={0} max={m.maxLadder} className="input" value={kickAt} onChange={(e) => setKickAt(e.target.value)} />
+                </div>
               </div>
-            )}
-          </div>
+              <p className="mt-1 text-sm font-semibold text-mute">{t('mod.ladderHelp')}</p>
+              <div className="mt-2">
+                <Button type="button" loading={busy} disabled={!warnOk || warnSame} onClick={() => void save({ warnTtlDays: Number(ttl), muteAt: Number(muteAt), muteMinutes: Number(muteMin), kickAt: Number(kickAt) })}>{t('common.save')}</Button>
+              </div>
+            </div>
+          )}
+          {m.punish && (
+            <div>
+              <label htmlFor="mod-reasons" className="label">{t('mod.reasons')}</label>
+              <p className="mb-2 text-sm font-semibold text-mute">{t('mod.reasonsHelp', { n: m.maxReasons, len: m.maxReasonLen })}</p>
+              <textarea id="mod-reasons" className="input min-h-24" value={reasons} onChange={(e) => setReasons(e.target.value)} />
+              <div className="mt-2">
+                <Button type="button" loading={busy} disabled={reasonsSame} onClick={() => void save({ reasons: reasonList })}>{t('common.save')}</Button>
+              </div>
+            </div>
+          )}
+          {m.enabled && (
+            <div>
+              <label htmlFor="clear-cooldown" className="label">{t('mod.cooldown')}</label>
+              <p className="mb-2 text-sm font-semibold text-mute">{t('mod.cooldownHelp')}</p>
+              <div className="flex flex-wrap items-center gap-3">
+                <input id="clear-cooldown" type="number" min={0} max={m.maxCooldown} step={1} className="input w-28" value={cool} onChange={(e) => setCool(e.target.value)} />
+                <Button type="button" loading={busy} onClick={() => void save({ cooldown: Number(cool) })} disabled={!coolOk || Number(cool) === m.cooldown}>{t('common.save')}</Button>
+              </div>
+            </div>
+          )}
+          {m.enabled && (
+            <div>
+              <span className="label">{t('mod.protected')}</span>
+              <p className="mb-2 text-sm font-semibold text-mute">{t('mod.protectedHelp', { n: m.maxProtected })}</p>
+              {m.channels.length === 0 ? (
+                <p className="text-sm font-semibold text-mute">{t('mod.noChannels')}</p>
+              ) : (
+                <div className="flex flex-wrap gap-2" role="group" aria-label={t('mod.protected')}>
+                  {m.channels.map((c) => {
+                    const on = m.protectedChannels.includes(c.id);
+                    const full = !on && m.protectedChannels.length >= m.maxProtected;
+                    return (
+                      <button
+                        key={c.id}
+                        type="button"
+                        className={`chip-filter ${on ? 'on' : ''}`}
+                        aria-pressed={on}
+                        disabled={busy || full}
+                        onClick={() => void save({ protectedChannels: on ? m.protectedChannels.filter((x) => x !== c.id) : [...m.protectedChannels, c.id] })}
+                      >
+                        <span aria-hidden="true" className="mr-1.5">{on ? '🛡️' : '#'}</span>
+                        {c.name}{multi ? ` · ${c.guild}` : ''}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
           <p className="text-sm font-semibold text-mute">{t('mod.perms')}</p>
         </div>
       )}
@@ -137179,6 +138175,44 @@ const en: Record<keyof typeof ru, string> = {
   'dc.tab.look': 'Look',
   'dc.tab.extra': 'Roles and counter',
   'dc.tab.delivery': 'Delivery',
+  'dc.tab.mod': 'Moderation',
+  'mod.appeal': 'Appeals channel',
+  'mod.appealHelp': 'A banned member gets an «Appeal» button in a private message. The request arrives here with «Accept and unban» and «Decline». Not chosen — requests go to the moderation log.',
+  'mod.noAppeal': 'Not chosen — appeals go to the log',
+  'mod.warnTitle': 'Warnings and the ladder of punishments',
+  'mod.warnHelp': 'A warning counts until it is withdrawn or expires. The ladder punishes by itself when enough active warnings have gathered.',
+  'mod.ttl': 'Lifetime of a warning, days',
+  'mod.muteAt': 'Mute after this many warnings',
+  'mod.muteMin': 'Length of the automatic mute, minutes',
+  'mod.kickAt': 'Kick after this many warnings',
+  'mod.ladderHelp': '0 in the lifetime — warnings never expire, 0 in the thresholds — the step is off. The automatic mute needs the «Timeout Members» permission for the bot.',
+  'mod.reasons': 'Reason templates',
+  'mod.reasonsHelp': 'One per line, up to {n}, each up to {len} characters. The bot suggests them while a moderator types a reason. Empty — no hints.',
+  'mc.title': 'Punishments',
+  'mc.help': 'Every warning, ban, kick, mute and appeal that went through the commands of the bot. An active warning can be withdrawn here.',
+  'mc.search': 'Name, ID or reason',
+  'mc.find': 'Search',
+  'mc.filter': 'Kind of record',
+  'mc.all': 'All',
+  'mc.k.warn': 'Warning',
+  'mc.k.ban': 'Ban',
+  'mc.k.unban': 'Unban',
+  'mc.k.kick': 'Kick',
+  'mc.k.timeout': 'Mute',
+  'mc.k.unmute': 'Unmute',
+  'mc.k.appeal': 'Appeal',
+  'mc.s.active': 'active',
+  'mc.s.expired': 'expired',
+  'mc.s.revoked': 'withdrawn',
+  'mc.revoke': 'Withdraw',
+  'mc.revoked': 'Warning withdrawn',
+  'mc.empty': 'No records yet.',
+  'mc.noReason': 'No reason given',
+  'mc.by': 'Given by {name}',
+  'mc.link': 'Message',
+  'mc.prev': 'Back',
+  'mc.next': 'Next',
+  'mc.page': 'Page {n} of {m} · {total} in all',
   'ds.pick': 'Which message to show',
   'dc.st.paused': 'PAUSED',
   'dc.st.error': 'ERROR',
@@ -137266,8 +138300,8 @@ const en: Record<keyof typeof ru, string> = {
   'mod.noChannels': 'The bot does not see any channels yet. Invite it to the server and wait a minute.',
   'mod.perms': 'The bot needs «Manage Messages» and «Read Message History». Discord cannot delete messages older than 14 days; pinned messages stay by default.',
   'mod.saved': 'Saved',
-  'mod.punish': 'Allow the /ban, /unban, /kick and /warn commands',
-  'mod.punishHelp': 'Server administrators only. A reason is required: it goes to the Discord audit log, to the private message of the member and to the card. The bot needs «Ban Members» and «Kick Members», and its role must stand above the roles of those who are punished.',
+  'mod.punish': 'Allow the /ban, /unban, /kick, /warn, /mute and /unmute commands',
+  'mod.punishHelp': 'Server administrators only. A reason is required: it goes to the Discord audit log, to the private message of the member and to the card. The bot needs «Ban Members», «Kick Members» and «Timeout Members» (mute), and its role must stand above the roles of those who are punished.',
   'ds.title': 'Look of the bot messages',
   'ds.help': 'One accent colour, signature and logo for everything the bot posts: alerts, polls, the weekly digest, command replies. Red, green and yellow stay with the state of the servers.',
   'ds.accent': 'Accent colour',
@@ -141357,6 +142391,44 @@ const ru = {
   'dc.tab.look': 'Оформление',
   'dc.tab.extra': 'Роли и счётчик',
   'dc.tab.delivery': 'Доставка',
+  'dc.tab.mod': 'Модерация',
+  'mod.appeal': 'Канал апелляций',
+  'mod.appealHelp': 'Забаненный получает в личку кнопку «Подать апелляцию». Заявка приходит сюда с кнопками «Принять и разбанить» и «Отклонить». Не выбран — заявки идут в журнал модерации.',
+  'mod.noAppeal': 'Не выбран — апелляции идут в журнал',
+  'mod.warnTitle': 'Предупреждения и лесенка наказаний',
+  'mod.warnHelp': 'Предупреждение считается, пока не снято и не истекло. Лесенка наказывает сама, когда набралось достаточно действующих предупреждений.',
+  'mod.ttl': 'Срок предупреждения, дней',
+  'mod.muteAt': 'Мут после стольких предупреждений',
+  'mod.muteMin': 'Длина авто-мута, минут',
+  'mod.kickAt': 'Кик после стольких предупреждений',
+  'mod.ladderHelp': '0 в сроке — предупреждения не истекают, 0 в порогах — шаг выключен. Для авто-мута боту нужно право «Отправлять участников подумать о своём поведении».',
+  'mod.reasons': 'Шаблоны причин',
+  'mod.reasonsHelp': 'По одному в строке, до {n} штук, не длиннее {len} символов. Бот подсказывает их, когда модератор вводит причину. Пусто — подсказок не будет.',
+  'mc.title': 'Наказания',
+  'mc.help': 'Все предупреждения, баны, кики, муты и апелляции, которые прошли через команды бота. Действующее предупреждение можно снять здесь.',
+  'mc.search': 'Имя, ID или причина',
+  'mc.find': 'Найти',
+  'mc.filter': 'Тип записи',
+  'mc.all': 'Все',
+  'mc.k.warn': 'Предупреждение',
+  'mc.k.ban': 'Бан',
+  'mc.k.unban': 'Разбан',
+  'mc.k.kick': 'Кик',
+  'mc.k.timeout': 'Мут',
+  'mc.k.unmute': 'Размут',
+  'mc.k.appeal': 'Апелляция',
+  'mc.s.active': 'действует',
+  'mc.s.expired': 'истекло',
+  'mc.s.revoked': 'снято',
+  'mc.revoke': 'Снять',
+  'mc.revoked': 'Предупреждение снято',
+  'mc.empty': 'Записей пока нет.',
+  'mc.noReason': 'Причина не указана',
+  'mc.by': 'Выдал: {name}',
+  'mc.link': 'Сообщение',
+  'mc.prev': 'Назад',
+  'mc.next': 'Дальше',
+  'mc.page': 'Страница {n} из {m} · всего {total}',
   'ds.pick': 'Какое сообщение показать',
   'dc.st.paused': 'ПАУЗА',
   'dc.st.error': 'ОШИБКА',
@@ -141444,8 +142516,8 @@ const ru = {
   'mod.noChannels': 'Бот пока не видит каналов. Пригласите его на сервер и подождите минуту.',
   'mod.perms': 'Боту нужны права «Управлять сообщениями» и «Читать историю сообщений». Сообщения старше 14 дней Discord удалить не даёт, закреплённые по умолчанию остаются.',
   'mod.saved': 'Сохранено',
-  'mod.punish': 'Разрешить команды /ban, /unban, /kick и /warn',
-  'mod.punishHelp': 'Только для администраторов сервера. Причина обязательна: она попадает в журнал Discord, в личное сообщение участнику и в карточку. Боту нужны права «Банить участников» и «Выгонять участников», а его роль должна стоять выше ролей наказываемых.',
+  'mod.punish': 'Разрешить команды /ban, /unban, /kick, /warn, /mute и /unmute',
+  'mod.punishHelp': 'Только для администраторов сервера. Причина обязательна: она попадает в журнал Discord, в личное сообщение участнику и в карточку. Боту нужны права «Банить участников», «Выгонять участников» и «Отправлять участников подумать о своём поведении» (мут), а его роль должна стоять выше ролей наказываемых.',
   'ds.title': 'Вид сообщений бота',
   'ds.help': 'Один акцентный цвет, подпись и логотип для всего, что публикует бот: оповещения, голосования, итоги недели, ответы на команды. Красный, зелёный и жёлтый остаются за состоянием серверов.',
   'ds.accent': 'Акцентный цвет',
@@ -147377,6 +148449,7 @@ import { Button, Empty, ErrorLine, Field, LoadError, GameAvatar, GoLink, IconDis
 import { BotPill } from './Settings';
 import { MissingNote } from '../components/ChannelPicker';
 import EmbedPreview from './EmbedPreview';
+import CasesCard from '../components/CasesCard';
 import ModerationCard from '../components/ModerationCard';
 import WelcomeCard from '../components/WelcomeCard';
 import DiscordStyleCard from '../components/DiscordStyleCard';
@@ -147385,7 +148458,7 @@ type Style = 'embed' | 'card' | 'both';
 interface Draft { id?: number; serverId: number; /** more servers shown in the same message (the main one is serverId) */ extraServerIds?: number[]; channelId: string; intervalSec: number; enabled: boolean; style: Style; layout?: 'detailed' | 'compact' | 'minimal' }
 
 /** the sub-route: «new» opens an empty binding form, «new/<serverId>» opens it with that server chosen */
-const DC_TABS = ['channels', 'look', 'extra', 'delivery'] as const;
+const DC_TABS = ['channels', 'look', 'mod', 'extra', 'delivery'] as const;
 type DcTab = (typeof DC_TABS)[number];
 const TAB_KEY = 'coregsm_discord_tab';
 const readTab = (): DcTab => {
@@ -147689,8 +148762,13 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
         <>
           <PlayersShownCard />
           <WelcomeCard />
-          <ModerationCard />
           <DiscordStyleCard />
+        </>
+      )}
+      {tab === 'mod' && (
+        <>
+          <ModerationCard />
+          <CasesCard />
         </>
       )}
       {tab === 'extra' && loaded && <><DiscordExtras servers={servers} /><AnnouncementsAdmin /></>}
