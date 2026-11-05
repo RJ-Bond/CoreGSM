@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="5c96e305f6f2"
+COREGSM_BUILD="bfb03ea34284"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.55"
+COREGSM_VERSION="1.1.56"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -138817,7 +138817,9 @@ __COREGSM_EOF__
   55% { transform: scale(1.5) rotate(14deg); }
   100% { transform: scale(1) rotate(0); }
 }
-.star-wrap { position: relative; display: inline-grid; place-items: center; }
+.star-wrap { position: relative; display: inline-grid; place-items: center; width: 1.25em; height: 1.25em; flex: none; white-space: nowrap; overflow: visible; }
+.star-wrap > span:first-child { grid-area: 1 / 1; line-height: 1; }
+button:has(> .star-wrap) { flex: none; overflow: hidden; }
 
 /* ---------- toasts spring in and out ---------- */
 .toast-in { animation: toast-in .46s cubic-bezier(.34, 1.56, .64, 1) both; }
@@ -164570,7 +164572,8 @@ html[data-motion='reduce'] .srv-new-chev, html[data-motion='reduce'] .srv-check,
 .srv-tr-off { font-size: var(--fs-sm); font-weight: 650; color: rgb(var(--mute)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .srv-td-ping, .srv-td-up { font-weight: 650; font-size: var(--fs-md); white-space: nowrap; }
 .srv-td-ping small { color: rgb(var(--mute)); font-weight: 600; }
-.srv-td-fav { display: flex; justify-content: flex-end; }
+.srv-td-fav { display: flex; flex-wrap: nowrap; align-items: center; justify-content: flex-end; }
+.srv-td-fav > * { flex: none; }
 .srv-tr.off .srv-td-name { opacity: .85; }
 .srv-tbl.selecting .srv-tr { grid-template-columns: minmax(64px, auto) minmax(0, 3fr) minmax(8.5rem, 1.1fr) minmax(7.5rem, .8fr) 4rem 4.2rem 2.75rem; }
 /* the table answers to its own width (it is narrower beside the «what is new» column than the window is): below 960px
