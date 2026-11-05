@@ -197,3 +197,35 @@ export function readModeration(v: unknown): Moderation | null {
     appealChannelId: typeof o.appealChannelId === 'string' && /^\d{15,25}$/.test(o.appealChannelId) ? o.appealChannelId : '',
   };
 }
+
+export interface LogInfo {
+  modId: string;
+  channelId: string;
+  deleted: number;
+  elapsedMs: number;
+  pinned: number;
+  old: number;
+  count: number;
+  target: string;
+  keepPinned: boolean;
+  includeOld: boolean;
+  reason: string;
+}
+
+/** the title of the record in the log channel: what happened in a few words */
+export const logTitle = (outcome: 'ok' | 'stopped' | 'error'): string =>
+  outcome === 'ok' ? '🧹 Канал очищен' : outcome === 'stopped' ? '⏹️ Очистка остановлена' : '⚠️ Очистка не удалась';
+
+/** the body of the record: short lines with icons instead of a column of one-word fields (they stack badly on a phone) */
+export function logDescription(o: LogInfo): string {
+  const speed = speedText(o.deleted, o.elapsedMs);
+  const lines = [
+    `👮 <@${o.modId}>  ·  📍 <#${o.channelId}>`,
+    `🗑️ **${messages(o.deleted)}**  ·  ⏱️ ${durationText(o.elapsedMs)}${speed ? `  ·  ⚡ ${speed}` : ''}`,
+    `🎯 ${o.count ? `последние ${o.count}` : 'весь чат'}${o.target ? `, только <@${o.target}>` : ''}${o.keepPinned ? '' : ', включая закреплённые'}${o.includeOld ? ', включая старше 14 дней' : ''}`,
+  ];
+  const left = [o.pinned ? `📌 закреплённых оставлено: **${o.pinned}**` : '', o.old ? `⏳ старше 14 дней осталось: **${o.old}+**` : ''].filter(Boolean);
+  if (left.length) lines.push(left.join('  ·  '));
+  if (o.reason) lines.push(`💬 ${o.reason.slice(0, 500)}`);
+  return lines.join('\n');
+}

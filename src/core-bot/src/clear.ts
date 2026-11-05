@@ -11,7 +11,7 @@
  */
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, PermissionFlagsBits, type ButtonInteraction, type ChatInputCommandInteraction } from 'discord.js';
 import {
-  COUNTDOWN_SECONDS, CONFIRM_TTL_MS, MAX_COUNT, MAX_RUN_MS, QUICK_COUNTS, SCAN_LIMIT, SLOW_PER_SECOND, clearId, cooldownLeft, durationText, estimate, etaText, expectedTotal, isExpired, messages, normalizeCount, parseClearId, pickLine, readModeration, sortPage, speedText, stopId, waitText,
+  COUNTDOWN_SECONDS, CONFIRM_TTL_MS, logDescription, logTitle, MAX_COUNT, MAX_RUN_MS, QUICK_COUNTS, SCAN_LIMIT, SLOW_PER_SECOND, clearId, cooldownLeft, durationText, estimate, etaText, expectedTotal, isExpired, messages, normalizeCount, parseClearId, pickLine, readModeration, sortPage, speedText, stopId, waitText,
   type ClearState, type Estimate, type Moderation, type MsgLike,
 } from './clearLogic.js';
 import { backendJson } from './backend.js';
@@ -355,21 +355,11 @@ async function record(i: ButtonInteraction, mod: Moderation, ch: Cleanable, t: T
     if (!target?.send) return;
     const e = new EmbedBuilder()
       .setColor(outcome === 'error' ? COLORS.bad : outcome === 'stopped' ? COLORS.warn : COLORS.ok)
-      .setTitle('🧹 Очистка канала')
-      .setThumbnail(i.user.displayAvatarURL({ size: 64 }))
-      .addFields(
-        { name: 'Модератор', value: `<@${i.user.id}> (${i.user.username})`, inline: true },
-        { name: 'Канал', value: `<#${ch.id}>`, inline: true },
-        { name: 'Итог', value: outcome === 'ok' ? 'завершено' : outcome === 'stopped' ? 'остановлено' : 'ошибка', inline: true },
-        { name: 'Удалено', value: String(t.deleted), inline: true },
-        { name: 'Время', value: durationText(elapsed), inline: true },
-        { name: 'Что просили', value: `${st.count ? `последние ${st.count}` : 'весь чат'}${st.target ? `, только <@${st.target}>` : ''}${st.pinned ? ', включая закреплённые' : ''}${st.old ? ', включая старше 14 дней' : ''}`, inline: false },
-      )
+      .setAuthor({ name: (i.user.globalName ?? i.user.username).slice(0, 100), iconURL: i.user.displayAvatarURL({ size: 64 }) })
+      .setTitle(logTitle(outcome))
+      .setDescription(logDescription({ modId: i.user.id, channelId: ch.id, deleted: t.deleted, elapsedMs: elapsed, pinned: t.pinned, old: t.old, count: st.count, target: st.target ?? '', keepPinned: !st.pinned, includeOld: !!st.old, reason }))
       .setTimestamp(new Date())
       .setFooter(footerOf('Журнал'));
-    if (t.pinned) e.addFields({ name: '📌 Закреплённых оставлено', value: String(t.pinned), inline: true });
-    if (t.old) e.addFields({ name: '⏳ Старше 14 дней', value: `${t.old}+`, inline: true });
-    if (reason) e.addFields({ name: 'Причина', value: reason.slice(0, 500) });
     await target.send({ embeds: [e], allowedMentions: { parse: [] } });
   } catch (e) {
     log('/clear log record failed:', (e as Error).message);
