@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="b90ce2e5e153"
+COREGSM_BUILD="6f611d8b0516"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.15"
+COREGSM_VERSION="1.1.16"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -127674,7 +127674,7 @@ export function MiniHeat({ cells, big = false, now }: { cells: (number | null)[]
         <div key={d} className="contents">
           <span className="cm-heat-d">{dowShort()[d]}</span>
           {row.map((v, h) => (
-            <span key={h} className={`cm-heat-c ${now && now.dow === d && now.hour === h ? 'is-now' : ''}`} style={v == null ? undefined : { ['--a' as string]: (0.12 + 0.88 * (v / max)).toFixed(3) }} title={v == null ? undefined : t('cm.heat.cell', { d: dowShort()[d], time: `${String(h).padStart(2, '0')}:00`, n: num(v) })} />
+            <span key={h} className={`cm-heat-c ${now && now.dow === d && now.hour === h ? 'is-now' : ''} ${v != null && v > 0 && v === max ? 'is-peak' : ''}`} style={v == null ? undefined : { ['--a' as string]: (0.12 + 0.88 * (v / max)).toFixed(3) }} title={v == null ? undefined : t('cm.heat.cell', { d: dowShort()[d], time: `${String(h).padStart(2, '0')}:00`, n: num(v) })} />
           ))}
         </div>
       ))}
@@ -127689,6 +127689,7 @@ export function HeatLegend() {
   return (
     <p className="cm-heat-scale" aria-hidden>
       {t('cm.heat.less')} {[0.15, 0.4, 0.7, 1].map((a) => <i key={a} style={{ ['--a' as string]: a }} />)} {t('cm.heat.more')}
+      <span className="cm-peak-key"><i /> {t('cm.heat.peak')}</span>
     </p>
   );
 }
@@ -133548,6 +133549,12 @@ const en: Record<keyof typeof ru, string> = {
   'st.feed.open': 'Open the feed',
   'st.ping': 'ping {n} ms',
   'st.hero.ok': 'All servers are up',
+  'st.hero.slow': '{n} server is slow|{n} servers are slow',
+  'st.hero.slowText': 'Every server answers, but some have a high ping.',
+  'cm.delta.eq': 'no change',
+  'cm.st.unit': 'players',
+  'cm.heat.peak': 'the busiest time',
+  'cm.top.fillHint': 'Play on the servers to get into the ranking: it updates every hour.',
   'st.hero.okText': 'Players can join any server.',
   'st.hero.bad': 'All servers are down',
   'st.hero.badText': 'We can see the problem: the page updates by itself when the servers are back.',
@@ -137586,6 +137593,12 @@ const ru = {
   'st.feed.open': 'Открыть ленту',
   'st.ping': 'пинг {n} мс',
   'st.hero.ok': 'Все серверы работают',
+  'st.hero.slow': '{n} сервер отвечает медленно|{n} сервера отвечают медленно|{n} серверов отвечают медленно',
+  'st.hero.slowText': 'Все серверы на связи, но у части высокий пинг.',
+  'cm.delta.eq': 'без изменений',
+  'cm.st.unit': 'чел.',
+  'cm.heat.peak': 'самое людное время',
+  'cm.top.fillHint': 'Играйте на серверах, чтобы попасть в рейтинг: он обновляется каждый час.',
   'st.hero.okText': 'Игроки могут заходить на любой сервер.',
   'st.hero.bad': 'Все серверы недоступны',
   'st.hero.badText': 'Мы уже видим проблему: страница обновится сама, когда серверы вернутся.',
@@ -142353,15 +142366,26 @@ export default function AdminStart() {
               <a className="btn" href="/admin/servers">{t('start.toServers')}</a>
             </div>
           ) : (
-            <div className="tile flex flex-wrap items-center gap-4 p-5">
-              <Ring done={s.doneCount} total={s.total} />
-              <div className="min-w-0 flex-1 basis-60">
-                <h2 className="text-xl font-extrabold leading-tight">{t('start.stepsDone', { a: s.doneCount, b: s.total })}</h2>
-                <p className="font-semibold text-mute">
-                  {left.length > 0 ? t('start.left', { list: left.map((x) => x.short).join(', ') }) : ''}
-                </p>
+            <div className="tile space-y-4 p-5">
+              <div className="flex flex-wrap items-center gap-4">
+                <Ring done={s.doneCount} total={s.total} />
+                <div className="min-w-0 flex-1 basis-60">
+                  <h2 className="text-xl font-extrabold leading-tight">{t('start.stepsDone', { a: s.doneCount, b: s.total })}</h2>
+                  <p className="font-semibold text-mute">
+                    {left.length > 0 ? t('start.left', { list: left.map((x) => x.short).join(', ') }) : ''}
+                  </p>
+                </div>
+                {firstTodo && <a className="btn" href={firstTodo.href}>{t('start.continue')} {firstTodo.cta.toLowerCase()}</a>}
               </div>
-              {firstTodo && <a className="btn" href={firstTodo.href}>{t('start.continue')} {firstTodo.cta.toLowerCase()}</a>}
+              {/* the whole road at a glance: the cards below hide the finished steps, so their numbers skip */}
+              <ol className="start-chain" aria-hidden>
+                {s.steps.map((st, i) => (
+                  <li key={st.id} className={`is-${st.state} ${firstTodo?.id === st.id ? 'is-current' : ''}`}>
+                    <span className="start-chain-dot">{st.state === 'done' ? '✓' : i + 1}</span>
+                    <span className="start-chain-name">{st.short}</span>
+                  </li>
+                ))}
+              </ol>
             </div>
           )}
 
@@ -143348,7 +143372,7 @@ function Delta({ now, prev }: { now: number; prev: number }) {
   if (now === 0 && prev === 0) return null;
   const up = now >= prev;
   const text = prev > 0 ? `${up ? '+' : '−'}${Math.abs(Math.round(((now - prev) / prev) * 100))}%` : `+${now}`;
-  if (now === prev) return <span className="cm-delta" title={t('cm.delta.same')}>=</span>;
+  if (now === prev) return <span className="cm-delta" title={t('cm.delta.same')}>{t('cm.delta.eq')}</span>;
   return <span className={`cm-delta ${up ? 'up' : 'down'}`} title={t('cm.delta.prev', { n: prev })}><span aria-hidden>{up ? '▲' : '▼'}</span> {text}</span>;
 }
 
@@ -143618,6 +143642,7 @@ function TopBlock({ c, mine }: { c: Community; mine: string }) {
         <datalist id="cm-names">{names.map((n) => <option key={n} value={n} />)}</datalist>
         <button type="submit" className="btn btn-soft" disabled={!q.trim()}>{t('cm.top.open')}</button>
       </form>
+      {items.length > 0 && items.length < 4 && <p className="cm-top-hint">{t('cm.top.fillHint')}</p>}
       {items.length === 0 ? (
         <Empty art={<ArtPic src="empty/empty-players" size={132} />} title={t('cm.top.quiet')} text={period === 'day' ? t('cm.top.quietDay') : t('cm.top.quietText')} />
       ) : (
@@ -143839,9 +143864,9 @@ export default function CommunityPage() {
           {c.series.length > 2 && <div className="cm-chart-ticks" aria-hidden><span>{t('cm.ticks.ago')}</span><span>{t('cm.ticks.now')}</span></div>}
         </div>
         <dl className="cm-hero-stats">
-          <div><dt>{t('cm.st.day')}</dt><dd><AnimatedNumber value={c.players.day} /></dd><Delta now={c.players.day} prev={c.players.prev.day} /></div>
-          <div><dt>{t('cm.st.week')}</dt><dd><AnimatedNumber value={c.players.week} /></dd><Delta now={c.players.week} prev={c.players.prev.week} /></div>
-          <div><dt>{t('cm.st.month')}</dt><dd><AnimatedNumber value={c.players.month} /></dd><Delta now={c.players.month} prev={c.players.prev.month} /></div>
+          <div><dt>{t('cm.st.day')}</dt><dd><AnimatedNumber value={c.players.day} /><small className="cm-unit">{t('cm.st.unit')}</small></dd><Delta now={c.players.day} prev={c.players.prev.day} /></div>
+          <div><dt>{t('cm.st.week')}</dt><dd><AnimatedNumber value={c.players.week} /><small className="cm-unit">{t('cm.st.unit')}</small></dd><Delta now={c.players.week} prev={c.players.prev.week} /></div>
+          <div><dt>{t('cm.st.month')}</dt><dd><AnimatedNumber value={c.players.month} /><small className="cm-unit">{t('cm.st.unit')}</small></dd><Delta now={c.players.month} prev={c.players.prev.month} /></div>
           <div>
             <dt>{t('cm.st.new')}</dt>
             <dd>{c.players.newWeek > 0 ? <button type="button" className="cm-stat-link" onClick={() => showFeed('new')} title={t('cm.st.newShow')}><AnimatedNumber value={c.players.newWeek} /></button> : 0}</dd>
@@ -149518,11 +149543,14 @@ function Banner({ data, fetchedAt }: { data: StatusInfo; fetchedAt: number }) {
   const upN = Math.round(useCountUp(up));
   const playersN = Math.round(useCountUp(players));
   const avgN = useCountUp(avg ?? 0);
+  const slow = servers.filter((s) => s.online && (s.avgPing ?? 0) > 100).length;
   const [tone, title, text] = up === total
-    ? ['ok', t('st.hero.ok'), t('st.hero.okText')]
+    ? slow > 0
+      ? ['warn', t('st.hero.slow', { n: slow }), t('st.hero.slowText')]
+      : ['ok', t('st.hero.ok'), t('st.hero.okText')]
     : up === 0
       ? ['bad', t('st.hero.bad'), t('st.hero.badText')]
-      : ['warn', t('st.hero.some', { n: total - up }), t('st.hero.someText')];
+      : ['bad', t('st.hero.some', { n: total - up }), t('st.hero.someText')];
   const last = ongoing > 0 ? t('st.last.now') : lastBad ? t('st.last.ago', { when: ago(lastBad.start) }) : t('st.last.none', { d: data.range ?? 30 });
   return (
     <section className={`st-banner is-${tone}`} role="status">
@@ -155378,6 +155406,34 @@ a.tile:active, a.panel:active, button.tile:active, [role='link'].tile:active { t
 .nw-live a { flex-wrap: wrap; row-gap: 4px; }
 .nw-live-bar { flex: 1 0 100%; height: 3px; margin: -4px 0 6px 1.05rem; border-radius: 2px; background: rgb(var(--soft)); overflow: hidden; }
 .nw-live-bar > i { display: block; height: 100%; border-radius: inherit; background: rgb(var(--ok)); }
+
+/* ---------- status: a day with no data is hatched, not an empty outline ---------- */
+.st-day:not(.is-ok):not(.is-blip):not(.is-warn):not(.is-bad):not(.is-planned) {
+  border: 1px solid rgb(var(--mute) / .3);
+  background: repeating-linear-gradient(135deg, rgb(var(--mute) / .22) 0 3px, transparent 3px 7px);
+}
+
+/* ---------- community: a readable heat grid with the peak marked, units on the numbers, a hint in a short ranking ---------- */
+.cm-heat-c { background: color-mix(in srgb, rgb(var(--brand)) calc(var(--a, 0) * 92%), rgb(var(--ink) / .1)); }
+.cm-heat-c.is-peak { box-shadow: inset 0 0 0 2px rgb(var(--warn)); }
+.cm-peak-key { display: inline-flex; align-items: center; gap: 5px; margin-left: 12px; }
+.cm-peak-key > i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; box-shadow: inset 0 0 0 2px rgb(var(--warn)); background: rgb(var(--brand)); }
+.cm-unit { margin-left: 4px; font-size: var(--fs-xs); font-weight: 700; color: rgb(var(--mute)); }
+.cm-delta { white-space: nowrap; }
+.cm-top-hint { margin: 10px 0 0; padding: 10px 12px; border-radius: var(--r-lg); background: rgb(var(--soft)); font-size: var(--fs-sm); font-weight: 700; color: rgb(var(--mute)); }
+
+/* ---------- admin: the road of the first steps as a chain; the group titles of the side menu are readable ---------- */
+.start-chain { display: flex; align-items: flex-start; gap: 0; margin: 0; padding: 0; list-style: none; }
+.start-chain > li { position: relative; flex: 1 1 0; min-width: 0; display: grid; justify-items: center; gap: 6px; text-align: center; }
+.start-chain > li + li::before { content: ''; position: absolute; top: 13px; right: 50%; width: 100%; height: 3px; border-radius: 2px; background: rgb(var(--line)); z-index: 0; }
+.start-chain > li.is-done + li::before { background: rgb(var(--ok)); }
+.start-chain-dot { position: relative; z-index: 1; display: grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; background: rgb(var(--soft)); font-size: var(--fs-sm); font-weight: 800; color: rgb(var(--mute)); box-shadow: 0 0 0 3px rgb(var(--card)); }
+.start-chain > li.is-done .start-chain-dot { background: rgb(var(--ok)); color: #fff; }
+.start-chain > li.is-current .start-chain-dot { background: rgb(var(--brand)); color: #fff; }
+.start-chain-name { max-width: 100%; font-size: var(--fs-xs); font-weight: 700; color: rgb(var(--mute)); overflow-wrap: anywhere; }
+.start-chain > li.is-current .start-chain-name { color: rgb(var(--ink)); }
+.adm-group-title { font-size: var(--fs-xs); color: rgb(var(--ink) / .62); letter-spacing: .08em; }
+.adm-badge { min-width: 1.25rem; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/profile.css" << '__COREGSM_EOF__'

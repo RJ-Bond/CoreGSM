@@ -223,15 +223,26 @@ export default function AdminStart() {
               <a className="btn" href="/admin/servers">{t('start.toServers')}</a>
             </div>
           ) : (
-            <div className="tile flex flex-wrap items-center gap-4 p-5">
-              <Ring done={s.doneCount} total={s.total} />
-              <div className="min-w-0 flex-1 basis-60">
-                <h2 className="text-xl font-extrabold leading-tight">{t('start.stepsDone', { a: s.doneCount, b: s.total })}</h2>
-                <p className="font-semibold text-mute">
-                  {left.length > 0 ? t('start.left', { list: left.map((x) => x.short).join(', ') }) : ''}
-                </p>
+            <div className="tile space-y-4 p-5">
+              <div className="flex flex-wrap items-center gap-4">
+                <Ring done={s.doneCount} total={s.total} />
+                <div className="min-w-0 flex-1 basis-60">
+                  <h2 className="text-xl font-extrabold leading-tight">{t('start.stepsDone', { a: s.doneCount, b: s.total })}</h2>
+                  <p className="font-semibold text-mute">
+                    {left.length > 0 ? t('start.left', { list: left.map((x) => x.short).join(', ') }) : ''}
+                  </p>
+                </div>
+                {firstTodo && <a className="btn" href={firstTodo.href}>{t('start.continue')} {firstTodo.cta.toLowerCase()}</a>}
               </div>
-              {firstTodo && <a className="btn" href={firstTodo.href}>{t('start.continue')} {firstTodo.cta.toLowerCase()}</a>}
+              {/* the whole road at a glance: the cards below hide the finished steps, so their numbers skip */}
+              <ol className="start-chain" aria-hidden>
+                {s.steps.map((st, i) => (
+                  <li key={st.id} className={`is-${st.state} ${firstTodo?.id === st.id ? 'is-current' : ''}`}>
+                    <span className="start-chain-dot">{st.state === 'done' ? '✓' : i + 1}</span>
+                    <span className="start-chain-name">{st.short}</span>
+                  </li>
+                ))}
+              </ol>
             </div>
           )}
 

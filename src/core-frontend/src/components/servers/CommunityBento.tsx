@@ -63,7 +63,7 @@ export function MiniHeat({ cells, big = false, now }: { cells: (number | null)[]
         <div key={d} className="contents">
           <span className="cm-heat-d">{dowShort()[d]}</span>
           {row.map((v, h) => (
-            <span key={h} className={`cm-heat-c ${now && now.dow === d && now.hour === h ? 'is-now' : ''}`} style={v == null ? undefined : { ['--a' as string]: (0.12 + 0.88 * (v / max)).toFixed(3) }} title={v == null ? undefined : t('cm.heat.cell', { d: dowShort()[d], time: `${String(h).padStart(2, '0')}:00`, n: num(v) })} />
+            <span key={h} className={`cm-heat-c ${now && now.dow === d && now.hour === h ? 'is-now' : ''} ${v != null && v > 0 && v === max ? 'is-peak' : ''}`} style={v == null ? undefined : { ['--a' as string]: (0.12 + 0.88 * (v / max)).toFixed(3) }} title={v == null ? undefined : t('cm.heat.cell', { d: dowShort()[d], time: `${String(h).padStart(2, '0')}:00`, n: num(v) })} />
           ))}
         </div>
       ))}
@@ -78,6 +78,7 @@ export function HeatLegend() {
   return (
     <p className="cm-heat-scale" aria-hidden>
       {t('cm.heat.less')} {[0.15, 0.4, 0.7, 1].map((a) => <i key={a} style={{ ['--a' as string]: a }} />)} {t('cm.heat.more')}
+      <span className="cm-peak-key"><i /> {t('cm.heat.peak')}</span>
     </p>
   );
 }

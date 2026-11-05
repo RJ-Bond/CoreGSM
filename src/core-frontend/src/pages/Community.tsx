@@ -50,7 +50,7 @@ function Delta({ now, prev }: { now: number; prev: number }) {
   if (now === 0 && prev === 0) return null;
   const up = now >= prev;
   const text = prev > 0 ? `${up ? '+' : '−'}${Math.abs(Math.round(((now - prev) / prev) * 100))}%` : `+${now}`;
-  if (now === prev) return <span className="cm-delta" title={t('cm.delta.same')}>=</span>;
+  if (now === prev) return <span className="cm-delta" title={t('cm.delta.same')}>{t('cm.delta.eq')}</span>;
   return <span className={`cm-delta ${up ? 'up' : 'down'}`} title={t('cm.delta.prev', { n: prev })}><span aria-hidden>{up ? '▲' : '▼'}</span> {text}</span>;
 }
 
@@ -320,6 +320,7 @@ function TopBlock({ c, mine }: { c: Community; mine: string }) {
         <datalist id="cm-names">{names.map((n) => <option key={n} value={n} />)}</datalist>
         <button type="submit" className="btn btn-soft" disabled={!q.trim()}>{t('cm.top.open')}</button>
       </form>
+      {items.length > 0 && items.length < 4 && <p className="cm-top-hint">{t('cm.top.fillHint')}</p>}
       {items.length === 0 ? (
         <Empty art={<ArtPic src="empty/empty-players" size={132} />} title={t('cm.top.quiet')} text={period === 'day' ? t('cm.top.quietDay') : t('cm.top.quietText')} />
       ) : (
@@ -541,9 +542,9 @@ export default function CommunityPage() {
           {c.series.length > 2 && <div className="cm-chart-ticks" aria-hidden><span>{t('cm.ticks.ago')}</span><span>{t('cm.ticks.now')}</span></div>}
         </div>
         <dl className="cm-hero-stats">
-          <div><dt>{t('cm.st.day')}</dt><dd><AnimatedNumber value={c.players.day} /></dd><Delta now={c.players.day} prev={c.players.prev.day} /></div>
-          <div><dt>{t('cm.st.week')}</dt><dd><AnimatedNumber value={c.players.week} /></dd><Delta now={c.players.week} prev={c.players.prev.week} /></div>
-          <div><dt>{t('cm.st.month')}</dt><dd><AnimatedNumber value={c.players.month} /></dd><Delta now={c.players.month} prev={c.players.prev.month} /></div>
+          <div><dt>{t('cm.st.day')}</dt><dd><AnimatedNumber value={c.players.day} /><small className="cm-unit">{t('cm.st.unit')}</small></dd><Delta now={c.players.day} prev={c.players.prev.day} /></div>
+          <div><dt>{t('cm.st.week')}</dt><dd><AnimatedNumber value={c.players.week} /><small className="cm-unit">{t('cm.st.unit')}</small></dd><Delta now={c.players.week} prev={c.players.prev.week} /></div>
+          <div><dt>{t('cm.st.month')}</dt><dd><AnimatedNumber value={c.players.month} /><small className="cm-unit">{t('cm.st.unit')}</small></dd><Delta now={c.players.month} prev={c.players.prev.month} /></div>
           <div>
             <dt>{t('cm.st.new')}</dt>
             <dd>{c.players.newWeek > 0 ? <button type="button" className="cm-stat-link" onClick={() => showFeed('new')} title={t('cm.st.newShow')}><AnimatedNumber value={c.players.newWeek} /></button> : 0}</dd>

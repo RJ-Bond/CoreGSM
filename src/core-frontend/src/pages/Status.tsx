@@ -227,11 +227,14 @@ function Banner({ data, fetchedAt }: { data: StatusInfo; fetchedAt: number }) {
   const upN = Math.round(useCountUp(up));
   const playersN = Math.round(useCountUp(players));
   const avgN = useCountUp(avg ?? 0);
+  const slow = servers.filter((s) => s.online && (s.avgPing ?? 0) > 100).length;
   const [tone, title, text] = up === total
-    ? ['ok', t('st.hero.ok'), t('st.hero.okText')]
+    ? slow > 0
+      ? ['warn', t('st.hero.slow', { n: slow }), t('st.hero.slowText')]
+      : ['ok', t('st.hero.ok'), t('st.hero.okText')]
     : up === 0
       ? ['bad', t('st.hero.bad'), t('st.hero.badText')]
-      : ['warn', t('st.hero.some', { n: total - up }), t('st.hero.someText')];
+      : ['bad', t('st.hero.some', { n: total - up }), t('st.hero.someText')];
   const last = ongoing > 0 ? t('st.last.now') : lastBad ? t('st.last.ago', { when: ago(lastBad.start) }) : t('st.last.none', { d: data.range ?? 30 });
   return (
     <section className={`st-banner is-${tone}`} role="status">
