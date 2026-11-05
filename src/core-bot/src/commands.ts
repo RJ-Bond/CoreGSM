@@ -6,6 +6,7 @@ import { log } from './log.js';
 import { handleInfo, INFO_COMMANDS, INFO_NAMES, infoAutocomplete } from './info.js';
 import { HELP_COMMANDS, HELP_NAMES, handleHelp, handleHelpButton } from './help.js';
 import { COLORS, cardReply, replyEmbed, type ProfileData } from './replies.js';
+import { PUNISH_COMMANDS, PUNISH_NAMES, handlePunish, handlePunishButton, punishAutocomplete } from './punish.js';
 import { CLEAR_COMMANDS, CLEAR_NAMES, handleClearButton, handleClearCommand } from './clear.js';
 import { ROLE_COMMANDS, ROLE_NAMES, handleRoleSelect, handleRolesCommand } from './roles.js';
 
@@ -27,6 +28,7 @@ export const COMMANDS = [
   ...INFO_COMMANDS,
   ...ROLE_COMMANDS,
   ...CLEAR_COMMANDS,
+  ...PUNISH_COMMANDS,
   ...HELP_COMMANDS,
 ];
 
@@ -100,12 +102,15 @@ async function handlePollButton(i: ButtonInteraction): Promise<void> {
 export async function handleInteraction(i: Interaction): Promise<void> {
   if (i.isStringSelectMenu()) return handleRoleSelect(i);
   if (i.isButton() && i.customId.startsWith('clear:')) return handleClearButton(i);
+  if (i.isButton() && i.customId.startsWith('mod:')) return handlePunishButton(i);
   if (i.isButton()) return /^(help|srv):/.test(i.customId) ? handleHelpButton(i) : handlePollButton(i);
+  if (i.isAutocomplete() && PUNISH_NAMES.has(i.commandName)) return punishAutocomplete(i);
   if (i.isAutocomplete()) return INFO_NAMES.has(i.commandName) ? infoAutocomplete(i) : handleAutocomplete(i);
   if (!i.isChatInputCommand()) return;
   if (INFO_NAMES.has(i.commandName)) return handleInfo(i);
   if (ROLE_NAMES.has(i.commandName)) return handleRolesCommand(i);
   if (CLEAR_NAMES.has(i.commandName)) return handleClearCommand(i);
+  if (PUNISH_NAMES.has(i.commandName)) return handlePunish(i);
   if (HELP_NAMES.has(i.commandName)) return handleHelp(i);
   const name = i.commandName;
   if (name !== 'register' && name !== 'nick' && name !== 'profile') return;

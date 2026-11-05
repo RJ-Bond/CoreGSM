@@ -51,7 +51,8 @@ export function channelInfo(channelId: string): { channelName: string | null; gu
 
 // View Channel + Send Messages + Embed Links + Attach Files + Manage Channels (counters) + Manage Roles (autoroles)
 // + Manage Messages (8192) + Read Message History (65536) for /clear
-const BOT_PERMISSIONS = 52224 + 16 + 268435456 + 8192 + 65536;
+// + Kick Members (2) + Ban Members (4) for /kick, /ban and /unban
+const BOT_PERMISSIONS = 52224 + 16 + 268435456 + 8192 + 65536 + 2 + 4;
 
 /** The first segment of a bot token is the base64 of the bot user id (= application id). */
 export function clientIdFromToken(token: string | null): string | null {
@@ -79,6 +80,10 @@ export const BOT_COMMANDS = [
   { name: '/servers', description: 'Список серверов: кнопки открывают карточку выбранного сервера (видно только вам)' },
   { name: '/roles', description: 'Выбрать себе роли в меню: можно взять и снять (видно только вам)' },
   { name: '/clear', description: 'Очистить чат в этом канале: только для администраторов, с подтверждением кнопкой. Параметры: count (сколько), user (только чьи сообщения)' },
+  { name: '/ban', description: 'Заблокировать участника с причиной (для администраторов, с подтверждением). Параметры: user, reason, delete, public' },
+  { name: '/unban', description: 'Снять блокировку: участник подсказывается из списка банов. Параметры: user, reason, public' },
+  { name: '/kick', description: 'Исключить участника с сервера с причиной (для администраторов, с подтверждением). Параметры: user, reason, public' },
+  { name: '/warn', description: 'Вынести предупреждение: бот считает их и пишет участнику в ЛС. Параметры: user, reason, public' },
   { name: '/help', description: 'Что умеет бот: команды по разделам, кнопки переключают разделы (видно только вам)' },
 ];
 

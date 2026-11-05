@@ -172,6 +172,8 @@ export function pickLine(rand: number): string {
 /** the moderation settings of the panel; the defaults are used only to read a broken answer */
 export interface Moderation {
   enabled: boolean;
+  /** /ban, /unban, /kick and /warn */
+  punish: boolean;
   logChannelId: string;
   protectedChannels: string[];
   cooldown: number;
@@ -183,6 +185,7 @@ export function readModeration(v: unknown): Moderation | null {
   if (typeof o.enabled !== 'boolean' || !Array.isArray(o.protectedChannels)) return null;
   return {
     enabled: o.enabled,
+    punish: o.punish !== false,
     logChannelId: typeof o.logChannelId === 'string' && /^\d{15,25}$/.test(o.logChannelId) ? o.logChannelId : '',
     protectedChannels: o.protectedChannels.filter((x): x is string => typeof x === 'string'),
     cooldown: typeof o.cooldown === 'number' && o.cooldown >= 0 ? o.cooldown : 0,

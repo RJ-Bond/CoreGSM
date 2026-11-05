@@ -5,7 +5,7 @@ import { Button, Section, Switch, fail, toast } from '../ui';
 import { ChannelName, ChannelPicker } from './ChannelPicker';
 
 interface Channel { id: string; name: string; guild: string }
-interface Moderation { enabled: boolean; logChannelId: string; protectedChannels: string[]; cooldown: number; channels: Channel[]; maxProtected: number; maxCooldown: number }
+interface Moderation { enabled: boolean; punish: boolean; logChannelId: string; protectedChannels: string[]; cooldown: number; channels: Channel[]; maxProtected: number; maxCooldown: number }
 
 /**
  * «Модерация»: settings of the /clear command of the bot: switch it off, protect channels from cleaning, the pause between
@@ -25,7 +25,7 @@ export default function ModerationCard() {
   }, []);
   if (!m) return null;
 
-  const save = async (patch: Partial<Pick<Moderation, 'enabled' | 'logChannelId' | 'protectedChannels' | 'cooldown'>>) => {
+  const save = async (patch: Partial<Pick<Moderation, 'enabled' | 'punish' | 'logChannelId' | 'protectedChannels' | 'cooldown'>>) => {
     setBusy(true);
     try {
       const r = await api<Moderation>('/settings/moderation', 'PUT', patch);
@@ -49,7 +49,11 @@ export default function ModerationCard() {
       <label className="mb-3 flex items-center gap-3 font-bold">
         <Switch id="clear-on" checked={m.enabled} onChange={(on) => void save({ enabled: on })} /> {t('mod.on')}
       </label>
-      {m.enabled && (
+      <label className="mb-3 flex items-center gap-3 font-bold">
+        <Switch id="punish-on" checked={m.punish} onChange={(on) => void save({ punish: on })} /> {t('mod.punish')}
+      </label>
+      <p className="-mt-1 mb-3 text-sm font-semibold text-mute">{t('mod.punishHelp')}</p>
+      {(m.enabled || m.punish) && (
         <div className="space-y-4">
           <div>
             <span className="label">{t('mod.log')}</span>

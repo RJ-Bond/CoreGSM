@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="ee657d6e62d5"
+COREGSM_BUILD="82ef53e6f061"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.37"
+COREGSM_VERSION="1.1.38"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -20090,20 +20090,41 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/community"
   cat > "$APP_DIR/core-backend/src/community/moderation.ts" << '__COREGSM_EOF__'
 /**
- * Settings of the moderation commands of the bot (/clear):
+ * Settings of the moderation commands of the bot (/clear, /ban, /unban, /kick, /warn):
  *   GET|PUT /api/settings/moderation   { enabled, logChannelId, protectedChannels, cooldown }   (admin)
  *   GET /internal/moderation   the same for the bot, read at each command
+ *   POST /internal/warns   { guildId, userId, modId, reason }   records a warning, answers { id, total, recent }
+ *   GET /internal/warns?guild=&user=   the warnings of a member
  * `protectedChannels` are never cleaned; `logChannelId` receives a record of each cleaning; `cooldown` is the pause in
  * minutes between two cleanings of one channel.
  */
 import type { Express, RequestHandler } from 'express';
 import { z } from 'zod';
-import { getSetting, setSetting } from '../db.js';
+import { db, getSetting, setSetting } from '../db.js';
 import { bot } from '../discord/botState.js';
 import { MAX_COOLDOWN, MAX_PROTECTED, cleanCooldown, cleanIds, parseIds } from './moderationLogic.js';
 
+db.exec(`
+CREATE TABLE IF NOT EXISTS mod_warns (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  guild_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  mod_id TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS mod_warns_user ON mod_warns(guild_id, user_id, id);
+`);
+
+const RECENT = 3;
+const recentWarns = (guild: string, user: string, limit = RECENT) =>
+  (db.prepare('SELECT id, mod_id AS modId, reason, created_at AS createdAt FROM mod_warns WHERE guild_id = ? AND user_id = ? ORDER BY id DESC LIMIT ?').all(guild, user, limit) as { id: number; modId: string; reason: string; createdAt: number }[]);
+const totalWarns = (guild: string, user: string) => (db.prepare('SELECT COUNT(*) AS n FROM mod_warns WHERE guild_id = ? AND user_id = ?').get(guild, user) as { n: number }).n;
+
 export const moderationSettings = () => ({
   enabled: getSetting('clear_enabled') !== '0',
+  /** /ban, /unban, /kick and /warn */
+  punish: getSetting('punish_enabled') !== '0',
   logChannelId: /^\d{15,25}$/.test(getSetting('clear_log_channel') ?? '') ? (getSetting('clear_log_channel') as string) : '',
   protectedChannels: parseIds(getSetting('clear_protected')),
   cooldown: cleanCooldown(getSetting('clear_cooldown')),
@@ -20121,6 +20142,7 @@ export function registerModeration({ app, admin, internal }: { app: Express; adm
     const b = z
       .object({
         enabled: z.boolean().optional(),
+        punish: z.boolean().optional(),
         logChannelId: z.string().regex(/^(\d{15,25})?$/).optional(),
         protectedChannels: z.array(z.string().regex(/^\d{15,25}$/)).max(MAX_PROTECTED).optional(),
         cooldown: z.number().int().min(0).max(MAX_COOLDOWN).optional(),
@@ -20128,12 +20150,26 @@ export function registerModeration({ app, admin, internal }: { app: Express; adm
       .safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Модерация: проверьте канал и паузу (0–1440 минут)' });
     if (b.data.enabled !== undefined) setSetting('clear_enabled', b.data.enabled ? '1' : '0');
+    if (b.data.punish !== undefined) setSetting('punish_enabled', b.data.punish ? '1' : '0');
     if (b.data.logChannelId !== undefined) setSetting('clear_log_channel', b.data.logChannelId);
     if (b.data.protectedChannels !== undefined) setSetting('clear_protected', JSON.stringify(cleanIds(b.data.protectedChannels)));
     if (b.data.cooldown !== undefined) setSetting('clear_cooldown', String(b.data.cooldown));
     res.json(payload());
   });
   app.get('/internal/moderation', internal, (_req, res) => res.json(moderationSettings()));
+  app.post('/internal/warns', internal, (req, res) => {
+    const b = z.object({ guildId: z.string().regex(/^\d{15,25}$/), userId: z.string().regex(/^\d{15,25}$/), modId: z.string().regex(/^\d{15,25}$/), reason: z.string().trim().min(1).max(400) }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'bad warning' });
+    const recent = recentWarns(b.data.guildId, b.data.userId);
+    const r = db.prepare('INSERT INTO mod_warns (guild_id, user_id, mod_id, reason, created_at) VALUES (?, ?, ?, ?, ?)').run(b.data.guildId, b.data.userId, b.data.modId, b.data.reason, Date.now());
+    res.json({ id: Number(r.lastInsertRowid), total: totalWarns(b.data.guildId, b.data.userId), recent });
+  });
+  app.get('/internal/warns', internal, (req, res) => {
+    const guild = String(req.query.guild ?? '');
+    const user = String(req.query.user ?? '');
+    if (!/^\d{15,25}$/.test(guild) || !/^\d{15,25}$/.test(user)) return res.status(400).json({ error: 'bad id' });
+    res.json({ total: totalWarns(guild, user), recent: recentWarns(guild, user, 10) });
+  });
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/community"
@@ -21599,7 +21635,8 @@ export function channelInfo(channelId: string): { channelName: string | null; gu
 
 // View Channel + Send Messages + Embed Links + Attach Files + Manage Channels (counters) + Manage Roles (autoroles)
 // + Manage Messages (8192) + Read Message History (65536) for /clear
-const BOT_PERMISSIONS = 52224 + 16 + 268435456 + 8192 + 65536;
+// + Kick Members (2) + Ban Members (4) for /kick, /ban and /unban
+const BOT_PERMISSIONS = 52224 + 16 + 268435456 + 8192 + 65536 + 2 + 4;
 
 /** The first segment of a bot token is the base64 of the bot user id (= application id). */
 export function clientIdFromToken(token: string | null): string | null {
@@ -21627,6 +21664,10 @@ export const BOT_COMMANDS = [
   { name: '/servers', description: 'Список серверов: кнопки открывают карточку выбранного сервера (видно только вам)' },
   { name: '/roles', description: 'Выбрать себе роли в меню: можно взять и снять (видно только вам)' },
   { name: '/clear', description: 'Очистить чат в этом канале: только для администраторов, с подтверждением кнопкой. Параметры: count (сколько), user (только чьи сообщения)' },
+  { name: '/ban', description: 'Заблокировать участника с причиной (для администраторов, с подтверждением). Параметры: user, reason, delete, public' },
+  { name: '/unban', description: 'Снять блокировку: участник подсказывается из списка банов. Параметры: user, reason, public' },
+  { name: '/kick', description: 'Исключить участника с сервера с причиной (для администраторов, с подтверждением). Параметры: user, reason, public' },
+  { name: '/warn', description: 'Вынести предупреждение: бот считает их и пишет участнику в ЛС. Параметры: user, reason, public' },
   { name: '/help', description: 'Что умеет бот: команды по разделам, кнопки переключают разделы (видно только вам)' },
 ];
 
@@ -38845,6 +38886,8 @@ export function pickLine(rand: number): string {
 /** the moderation settings of the panel; the defaults are used only to read a broken answer */
 export interface Moderation {
   enabled: boolean;
+  /** /ban, /unban, /kick and /warn */
+  punish: boolean;
   logChannelId: string;
   protectedChannels: string[];
   cooldown: number;
@@ -38856,6 +38899,7 @@ export function readModeration(v: unknown): Moderation | null {
   if (typeof o.enabled !== 'boolean' || !Array.isArray(o.protectedChannels)) return null;
   return {
     enabled: o.enabled,
+    punish: o.punish !== false,
     logChannelId: typeof o.logChannelId === 'string' && /^\d{15,25}$/.test(o.logChannelId) ? o.logChannelId : '',
     protectedChannels: o.protectedChannels.filter((x): x is string => typeof x === 'string'),
     cooldown: typeof o.cooldown === 'number' && o.cooldown >= 0 ? o.cooldown : 0,
@@ -38872,6 +38916,7 @@ import { log } from './log.js';
 import { handleInfo, INFO_COMMANDS, INFO_NAMES, infoAutocomplete } from './info.js';
 import { HELP_COMMANDS, HELP_NAMES, handleHelp, handleHelpButton } from './help.js';
 import { COLORS, cardReply, replyEmbed, type ProfileData } from './replies.js';
+import { PUNISH_COMMANDS, PUNISH_NAMES, handlePunish, handlePunishButton, punishAutocomplete } from './punish.js';
 import { CLEAR_COMMANDS, CLEAR_NAMES, handleClearButton, handleClearCommand } from './clear.js';
 import { ROLE_COMMANDS, ROLE_NAMES, handleRoleSelect, handleRolesCommand } from './roles.js';
 
@@ -38893,6 +38938,7 @@ export const COMMANDS = [
   ...INFO_COMMANDS,
   ...ROLE_COMMANDS,
   ...CLEAR_COMMANDS,
+  ...PUNISH_COMMANDS,
   ...HELP_COMMANDS,
 ];
 
@@ -38966,12 +39012,15 @@ async function handlePollButton(i: ButtonInteraction): Promise<void> {
 export async function handleInteraction(i: Interaction): Promise<void> {
   if (i.isStringSelectMenu()) return handleRoleSelect(i);
   if (i.isButton() && i.customId.startsWith('clear:')) return handleClearButton(i);
+  if (i.isButton() && i.customId.startsWith('mod:')) return handlePunishButton(i);
   if (i.isButton()) return /^(help|srv):/.test(i.customId) ? handleHelpButton(i) : handlePollButton(i);
+  if (i.isAutocomplete() && PUNISH_NAMES.has(i.commandName)) return punishAutocomplete(i);
   if (i.isAutocomplete()) return INFO_NAMES.has(i.commandName) ? infoAutocomplete(i) : handleAutocomplete(i);
   if (!i.isChatInputCommand()) return;
   if (INFO_NAMES.has(i.commandName)) return handleInfo(i);
   if (ROLE_NAMES.has(i.commandName)) return handleRolesCommand(i);
   if (CLEAR_NAMES.has(i.commandName)) return handleClearCommand(i);
+  if (PUNISH_NAMES.has(i.commandName)) return handlePunish(i);
   if (HELP_NAMES.has(i.commandName)) return handleHelp(i);
   const name = i.commandName;
   if (name !== 'register' && name !== 'nick' && name !== 'profile') return;
@@ -39210,7 +39259,13 @@ export const HELP_CATEGORIES: HelpCategory[] = [
   },
   {
     id: 'mod', label: 'Модерация', emoji: '🛡️', title: 'Модерация (для администраторов)',
-    lines: [['/clear', 'очистить чат в этом канале: с подтверждением, закреплённые остаются']],
+    lines: [
+      ['/clear', 'очистить чат в этом канале: с подтверждением, закреплённые остаются'],
+      ['/ban', 'заблокировать участника с причиной (удаляет его сообщения, пишет ему в ЛС)'],
+      ['/unban', 'снять блокировку: имя или ID подсказываются из списка банов'],
+      ['/kick', 'исключить участника с причиной, он сможет вернуться по приглашению'],
+      ['/warn', 'вынести предупреждение: бот считает их и показывает прошлые причины'],
+    ],
     fields: CLEAR_GUIDE_FIELDS,
   },
 ];
@@ -39812,6 +39867,464 @@ export function patchGatewayAgent(getAgent: () => Agent | undefined): void {
   }
   ws.WebSocket = ProxiedWebSocket;
 }
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-bot/src"
+  cat > "$APP_DIR/core-bot/src/punish.ts" << '__COREGSM_EOF__'
+/**
+ * /ban, /unban, /kick, /warn: punishments for the administrators of the server, in the style of the other cards of the bot.
+ * A reason is required for a ban, a kick and a warning (it goes to the audit log of Discord, to the private message of the
+ * person and to the card). A ban and a kick are asked to be confirmed with a button (two minutes); a warning is counted by the
+ * panel (the card shows its number and the earlier reasons). The person gets a private message first, when Discord lets us.
+ * The result goes to the moderator privately, to the channel when `public` is chosen, and to the log channel of the panel.
+ */
+import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, PermissionFlagsBits, type AutocompleteInteraction, type ButtonInteraction, type ChatInputCommandInteraction, type Guild, type User } from 'discord.js';
+import { backendJson } from './backend.js';
+import { readModeration, type Moderation } from './clearLogic.js';
+import { humanDiscordError } from './errors.js';
+import { log } from './log.js';
+import { COLORS, replyEmbed } from './replies.js';
+import { footerOf } from './style.js';
+import { DELETE_DAYS, META, PUNISH_TTL_MS, auditReason, cleanReason, daysText, deleteDays, deleteSeconds, dmText, escalationHint, idFromInput, isStale, newToken, parsePunishId, punishId, standingProblem, timeTag, MAX_REASON, type PunishAction } from './punishLogic.js';
+
+const EPHEMERAL = 64;
+const ADMIN = String(PermissionFlagsBits.Administrator);
+
+const loc = (ru: string, en: string) => ({ ru, 'en-US': en, 'en-GB': en });
+const userOpt = { type: 6, name: 'user', required: true };
+const reasonOpt = (required: boolean) => ({
+  type: 3,
+  name: 'reason',
+  description: '📝 Причина (попадёт в журнал и в ЛС участнику)',
+  description_localizations: loc('📝 Причина (попадёт в журнал и в ЛС участнику)', '📝 Reason (goes to the log and to the member)'),
+  required,
+  max_length: MAX_REASON,
+});
+const publicOpt = { type: 5, name: 'public', description: '📣 Показать карточку всем в канале', description_localizations: loc('📣 Показать карточку всем в канале', '📣 Show the card to everybody in the channel'), required: false };
+const base = { dm_permission: false, default_member_permissions: ADMIN };
+
+export const PUNISH_COMMANDS = [
+  {
+    ...base,
+    name: 'ban',
+    description: '🔨 Заблокировать участника · только админы',
+    description_localizations: loc('🔨 Заблокировать участника · только админы', '🔨 Ban a member · admins only'),
+    options: [
+      { ...userOpt, description: '👤 Кого заблокировать', description_localizations: loc('👤 Кого заблокировать', '👤 Who to ban') },
+      reasonOpt(true),
+      {
+        type: 4,
+        name: 'delete',
+        description: '🧹 Удалить его сообщения за последнее время',
+        description_localizations: loc('🧹 Удалить его сообщения за последнее время', '🧹 Delete his recent messages'),
+        required: false,
+        choices: DELETE_DAYS.map((d) => ({ name: daysText(d), value: d })),
+      },
+      publicOpt,
+    ],
+  },
+  {
+    ...base,
+    name: 'unban',
+    description: '🔓 Снять блокировку · только админы',
+    description_localizations: loc('🔓 Снять блокировку · только админы', '🔓 Unban a member · admins only'),
+    options: [
+      { type: 3, name: 'user', description: '👤 Кого разблокировать (имя или ID из списка банов)', description_localizations: loc('👤 Кого разблокировать (имя или ID из списка банов)', '👤 Who to unban (name or ID from the ban list)'), required: true, autocomplete: true },
+      reasonOpt(false),
+      publicOpt,
+    ],
+  },
+  {
+    ...base,
+    name: 'kick',
+    description: '👢 Исключить участника с сервера · только админы',
+    description_localizations: loc('👢 Исключить участника с сервера · только админы', '👢 Kick a member · admins only'),
+    options: [{ ...userOpt, description: '👤 Кого исключить', description_localizations: loc('👤 Кого исключить', '👤 Who to kick') }, reasonOpt(true), publicOpt],
+  },
+  {
+    ...base,
+    name: 'warn',
+    description: '⚠️ Вынести предупреждение · только админы',
+    description_localizations: loc('⚠️ Вынести предупреждение · только админы', '⚠️ Warn a member · admins only'),
+    options: [{ ...userOpt, description: '👤 Кому', description_localizations: loc('👤 Кому', '👤 Who to warn') }, reasonOpt(true), publicOpt],
+  },
+];
+export const PUNISH_NAMES = new Set(PUNISH_COMMANDS.map((c) => c.name));
+
+/** the permission the bot needs for an action */
+const BOT_NEEDS: Record<PunishAction, bigint | null> = { ban: PermissionFlagsBits.BanMembers, unban: PermissionFlagsBits.BanMembers, kick: PermissionFlagsBits.KickMembers, warn: null };
+const BOT_NEEDS_TEXT: Record<PunishAction, string> = {
+  ban: 'Боту нужно право «Банить участников».',
+  unban: 'Боту нужно право «Банить участников».',
+  kick: 'Боту нужно право «Выгонять участников».',
+  warn: '',
+};
+
+interface Pending {
+  action: 'ban' | 'kick';
+  modId: string;
+  targetId: string;
+  reason: string;
+  days: number;
+  publicCard: boolean;
+  channelId: string;
+  at: number;
+}
+/** a ban or a kick waits here for the button */
+const pending = new Map<string, Pending>();
+
+interface Warns { id: number; total: number; recent: { reason: string; createdAt: number }[] }
+
+const noPerm = (text: string) => ({ ...replyEmbed('Недостаточно прав', text, COLORS.bad), components: [] as never[] });
+
+async function settings(): Promise<Moderation | null> {
+  const r = await backendJson<unknown>('/internal/moderation').catch(() => null);
+  return r?.ok ? readModeration(r.data) : null;
+}
+
+/** the user card as a line: mention and name */
+const person = (u: { id: string; username: string }) => `<@${u.id}> (${u.username})`;
+
+interface CardData {
+  action: PunishAction;
+  target: User;
+  mod: User;
+  reason: string;
+  dm: boolean | null;
+  days?: number;
+  warns?: { no: number; recent: { reason: string; createdAt: number }[] };
+}
+
+function card(d: CardData): EmbedBuilder {
+  const m = META[d.action];
+  const e = new EmbedBuilder()
+    .setColor(m.color)
+    .setTitle(`${m.emoji} ${m.title}${d.warns ? ` №${d.warns.no}` : ''}`)
+    .setDescription(`<@${d.target.id}> ${m.done}.`)
+    .setThumbnail(d.target.displayAvatarURL({ size: 128 }))
+    .addFields({ name: '👤 Участник', value: person(d.target), inline: true }, { name: '🛡️ Модератор', value: person(d.mod), inline: true }, { name: '📝 Причина', value: d.reason || 'не указана' })
+    .setTimestamp(new Date())
+    .setFooter(footerOf('Модерация'));
+  if (d.action === 'ban' && d.days !== undefined) e.addFields({ name: '🧹 Его сообщения', value: daysText(d.days), inline: true });
+  if (d.dm !== null) e.addFields({ name: '✉️ Личное сообщение', value: d.dm ? 'доставлено' : 'не доставлено (закрыты ЛС)', inline: true });
+  if (d.warns) {
+    if (d.warns.recent.length) e.addFields({ name: '📜 Предыдущие', value: d.warns.recent.map((w) => `${timeTag(w.createdAt)} — ${w.reason}`.slice(0, 200)).join('\n').slice(0, 1000) });
+    const hint = escalationHint(d.warns.no);
+    if (hint) e.addFields({ name: '🚨 Внимание', value: hint });
+  }
+  return e;
+}
+
+/** a private message to the person; false when Discord does not let us (closed messages) */
+async function sendDm(guild: Guild, target: User, action: PunishAction, reason: string, warnNo?: number): Promise<boolean> {
+  const t = dmText(action, guild.name, warnNo);
+  const e = new EmbedBuilder()
+    .setColor(META[action].color)
+    .setTitle(t.title)
+    .setDescription(t.text)
+    .addFields({ name: '📝 Причина', value: reason || 'не указана' })
+    .setFooter({ text: guild.name, ...(guild.iconURL() ? { iconURL: guild.iconURL() as string } : {}) });
+  const icon = guild.iconURL({ size: 128 });
+  if (icon) e.setThumbnail(icon);
+  return target.send({ embeds: [e] }).then(() => true, () => false);
+}
+
+type Sendable = { send?: (o: unknown) => Promise<unknown> } | null;
+
+/** the card to the channel (when `public`) and to the log channel of the panel */
+async function publish(i: ChatInputCommandInteraction | ButtonInteraction, mod: Moderation, e: EmbedBuilder, publicCard: boolean, channelId: string): Promise<void> {
+  const to = async (id: string) => {
+    try {
+      const ch = (await i.client.channels.fetch(id)) as unknown as Sendable;
+      await ch?.send?.({ embeds: [e], allowedMentions: { parse: [] } });
+    } catch (err) {
+      log('moderation post failed:', (err as Error).message);
+    }
+  };
+  if (publicCard) await to(channelId);
+  if (mod.logChannelId && !(publicCard && mod.logChannelId === channelId)) await to(mod.logChannelId);
+}
+
+/** the checks shared by every command; a ready reply for the moderator when something forbids the action */
+async function gate(i: ChatInputCommandInteraction | ButtonInteraction, action: PunishAction): Promise<{ title: string; text: string } | { mod: Moderation }> {
+  if (!i.guild) return { title: 'Только на сервере', text: 'Команда работает на Discord-сервере.' };
+  if (!i.memberPermissions?.has(PermissionFlagsBits.Administrator)) return { title: 'Недостаточно прав', text: 'Эта команда доступна только администраторам сервера.' };
+  const need = BOT_NEEDS[action];
+  if (need && i.appPermissions && !i.appPermissions.has(need)) return { title: 'Недостаточно прав', text: `${BOT_NEEDS_TEXT[action]} Выдайте его роли бота или пригласите бота заново по ссылке из панели.` };
+  const mod = await settings();
+  if (!mod) return { title: 'Панель не отвечает', text: 'Не удалось получить настройки модерации. Попробуйте ещё раз чуть позже.' };
+  if (!mod.punish) return { title: 'Команды выключены', text: 'Администратор отключил команды наказаний в панели (Discord → Модерация).' };
+  return { mod };
+}
+
+/** may the moderator act on this person: a text for the refusal, or null */
+async function standing(guild: Guild, modId: string, target: User): Promise<string | null> {
+  const [me, mod, member] = await Promise.all([guild.members.fetchMe().catch(() => null), guild.members.fetch(modId).catch(() => null), guild.members.fetch(target.id).catch(() => null)]);
+  return standingProblem({
+    targetId: target.id,
+    modId,
+    botId: guild.client.user.id,
+    ownerId: guild.ownerId,
+    inGuild: !!member,
+    targetPos: member?.roles.highest.position ?? 0,
+    modPos: mod?.roles.highest.position ?? 0,
+    botPos: me?.roles.highest.position ?? 0,
+  });
+}
+
+const fail = (title: string, text: string) => ({ ...replyEmbed(title, text, COLORS.bad), components: [] as never[] });
+
+export async function handlePunish(i: ChatInputCommandInteraction): Promise<void> {
+  const action = i.commandName as PunishAction;
+  try {
+    await i.deferReply({ flags: EPHEMERAL });
+    const g = await gate(i, action);
+    if (!('mod' in g)) {
+      await i.editReply(fail(g.title, g.text));
+      return;
+    }
+    const guild = i.guild as Guild;
+    const reason = cleanReason(i.options.getString('reason'));
+    const publicCard = i.options.getBoolean('public') ?? false;
+    if (action === 'unban') {
+      await doUnban(i, g.mod, guild, i.options.getString('user', true), reason, publicCard);
+      return;
+    }
+    const target = i.options.getUser('user', true);
+    const why = await standing(guild, i.user.id, target);
+    if (why) {
+      await i.editReply(fail('Нельзя', why));
+      return;
+    }
+    if (action === 'warn') {
+      await doWarn(i, g.mod, guild, target, reason, publicCard);
+      return;
+    }
+    // a ban and a kick wait for a button
+    const days = deleteDays(i.options.getInteger('delete'));
+    const token = newToken();
+    pending.set(token, { action: action as 'ban' | 'kick', modId: i.user.id, targetId: target.id, reason, days, publicCard, channelId: i.channelId, at: Date.now() });
+    if (pending.size > 100) for (const [k, v] of pending) if (isStale(v.at, Date.now())) pending.delete(k);
+    const m = META[action];
+    const e = new EmbedBuilder()
+      .setColor(COLORS.warn)
+      .setTitle(`${m.emoji} ${action === 'ban' ? 'Заблокировать участника?' : 'Исключить участника?'}`)
+      .setDescription(action === 'ban' ? 'Участник потеряет доступ к серверу. Разблокировать можно командой `/unban`.' : 'Участник будет исключён, но сможет вернуться по новому приглашению.')
+      .setThumbnail(target.displayAvatarURL({ size: 128 }))
+      .addFields({ name: '👤 Участник', value: person(target), inline: true }, { name: '📝 Причина', value: reason })
+      .setFooter(footerOf(`Подтвердите в течение ${Math.round(PUNISH_TTL_MS / 60_000)} мин`));
+    if (action === 'ban') e.addFields({ name: '🧹 Его сообщения', value: daysText(days), inline: true });
+    const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder().setCustomId(punishId('go', token)).setLabel(action === 'ban' ? 'Да, забанить' : 'Да, исключить').setEmoji(m.emoji).setStyle(ButtonStyle.Danger),
+      new ButtonBuilder().setCustomId(punishId('no', token)).setLabel('Отмена').setStyle(ButtonStyle.Secondary),
+    );
+    await i.editReply({ embeds: [e], components: [row] });
+  } catch (e) {
+    log(`/${action} failed:`, (e as Error).message);
+    await i.editReply(fail('Не получилось', humanDiscordError(e))).catch(() => undefined);
+  }
+}
+
+export async function handlePunishButton(i: ButtonInteraction): Promise<void> {
+  const p = parsePunishId(i.customId);
+  if (!p) return;
+  try {
+    const job = pending.get(p.token);
+    if (!job || isStale(job.at, Date.now())) {
+      pending.delete(p.token);
+      await i.update({ ...replyEmbed('Время вышло', 'Подтверждение устарело. Наберите команду ещё раз.', COLORS.warn), components: [] });
+      return;
+    }
+    if (i.user.id !== job.modId) {
+      await i.reply({ ...replyEmbed('Это не ваше действие', 'Подтвердить может только тот, кто набрал команду.', COLORS.warn), flags: EPHEMERAL });
+      return;
+    }
+    pending.delete(p.token);
+    if (p.action === 'no') {
+      await i.update({ ...replyEmbed('Отменено', 'Ничего не сделано.', COLORS.ok), components: [] });
+      return;
+    }
+    await i.deferUpdate();
+    const g = await gate(i, job.action);
+    if (!('mod' in g)) {
+      await i.editReply(fail(g.title, g.text));
+      return;
+    }
+    const guild = i.guild as Guild;
+    const target = await i.client.users.fetch(job.targetId);
+    const why = await standing(guild, i.user.id, target);
+    if (why) {
+      await i.editReply(fail('Нельзя', why));
+      return;
+    }
+    const dm = await sendDm(guild, target, job.action, job.reason);
+    try {
+      if (job.action === 'ban') await guild.members.ban(target.id, { reason: auditReason(i.user.username, job.reason), deleteMessageSeconds: deleteSeconds(job.days) });
+      else await guild.members.kick(target.id, auditReason(i.user.username, job.reason));
+    } catch (e) {
+      await i.editReply(fail('Не получилось', (e as { code?: number }).code === 50013 ? 'Боту не хватает прав или его роль ниже роли участника.' : humanDiscordError(e)));
+      return;
+    }
+    forgetBans(guild.id);
+    const e = card({ action: job.action, target, mod: i.user, reason: job.reason, dm, ...(job.action === 'ban' ? { days: job.days } : {}) });
+    await i.editReply({ embeds: [e], components: [] });
+    await publish(i, g.mod, e, job.publicCard, job.channelId);
+  } catch (e) {
+    log('moderation button failed:', (e as Error).message);
+    await (i.deferred || i.replied ? i.editReply(fail('Не получилось', humanDiscordError(e))) : i.update(fail('Не получилось', humanDiscordError(e)))).catch(() => undefined);
+  }
+}
+
+async function doWarn(i: ChatInputCommandInteraction, mod: Moderation, guild: Guild, target: User, reason: string, publicCard: boolean): Promise<void> {
+  const r = await backendJson<Warns>('/internal/warns', { method: 'POST', body: JSON.stringify({ guildId: guild.id, userId: target.id, modId: i.user.id, reason }) }).catch(() => null);
+  const w = r?.ok ? r.data : null;
+  const dm = await sendDm(guild, target, 'warn', reason, w?.total);
+  const e = card({ action: 'warn', target, mod: i.user, reason, dm, ...(w ? { warns: { no: w.total, recent: w.recent } } : {}) });
+  if (!w) e.addFields({ name: '⚠️ Счётчик', value: 'Панель не ответила: предупреждение не записано в историю.' });
+  await i.editReply({ embeds: [e], components: [] });
+  await publish(i, mod, e, publicCard, i.channelId);
+}
+
+async function doUnban(i: ChatInputCommandInteraction, mod: Moderation, guild: Guild, input: string, reason: string, publicCard: boolean): Promise<void> {
+  const id = idFromInput(input);
+  if (!id) {
+    await i.editReply(fail('Не понял, кого', 'Выберите участника из списка подсказок или впишите его ID (число).'));
+    return;
+  }
+  try {
+    await guild.members.unban(id, auditReason(i.user.username, reason || 'без причины'));
+  } catch (e) {
+    const code = (e as { code?: number }).code;
+    await i.editReply(fail('Не получилось', code === 10026 ? 'Этого человека нет в списке банов сервера.' : code === 50013 ? 'Боту не хватает права «Банить участников».' : humanDiscordError(e)));
+    return;
+  }
+  forgetBans(guild.id);
+  const target = await i.client.users.fetch(id).catch(() => null);
+  const shown: User | { id: string; username: string; displayAvatarURL: () => string } = target ?? { id, username: id, displayAvatarURL: () => '' };
+  const dm = target ? await sendDm(guild, target, 'unban', reason) : null;
+  const e = card({ action: 'unban', target: shown as unknown as User, mod: i.user, reason, dm });
+  await i.editReply({ embeds: [e], components: [] });
+  await publish(i, mod, e, publicCard, i.channelId);
+}
+
+/** hints for /unban: the banned members of the server, found by name or ID */
+const banCache = new Map<string, { at: number; list: { id: string; username: string }[] }>();
+
+export async function punishAutocomplete(i: AutocompleteInteraction): Promise<void> {
+  try {
+    if (i.commandName !== 'unban' || !i.guild || !i.memberPermissions?.has(PermissionFlagsBits.Administrator)) return void (await i.respond([]));
+    const hit = banCache.get(i.guild.id);
+    let list = hit && Date.now() - hit.at < 60_000 ? hit.list : null;
+    if (!list) {
+      const bans = await i.guild.bans.fetch({ limit: 1000 }).catch(() => null);
+      list = bans ? [...bans.values()].map((b) => ({ id: b.user.id, username: b.user.username })) : [];
+      banCache.set(i.guild.id, { at: Date.now(), list });
+    }
+    const q = String(i.options.getFocused()).trim().toLowerCase();
+    const found = list.filter((b) => !q || b.username.toLowerCase().includes(q) || b.id.startsWith(q)).slice(0, 24).map((b) => ({ name: `${b.username} · ${b.id}`.slice(0, 100), value: b.id }));
+    const typed = idFromInput(q);
+    if (typed && !found.some((f) => f.value === typed)) found.push({ name: `ID ${typed}`, value: typed });
+    await i.respond(found);
+  } catch (e) {
+    log('/unban autocomplete failed:', (e as Error).message);
+    await i.respond([]).catch(() => undefined);
+  }
+}
+
+/** a new ban list is read after the next ban or unban */
+export const forgetBans = (guildId: string): void => void banCache.delete(guildId);
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-bot/src"
+  cat > "$APP_DIR/core-bot/src/punishLogic.ts" << '__COREGSM_EOF__'
+/** /ban, /unban, /kick, /warn: pure logic (checks of who may act on whom, texts, the waiting confirmations). No discord.js import. */
+
+export type PunishAction = 'ban' | 'unban' | 'kick' | 'warn';
+
+export const MAX_REASON = 400;
+/** a confirmation of a ban or a kick lives this long */
+export const PUNISH_TTL_MS = 2 * 60_000;
+/** history of messages that a ban may delete, in days (Discord allows 0..7) */
+export const DELETE_DAYS = [0, 1, 7] as const;
+
+/** the reason as the moderator typed it: trimmed, line breaks tamed, cut to the limit */
+export function cleanReason(s: unknown): string {
+  return (typeof s === 'string' ? s : '').replace(/\r/g, '').replace(/\n{3,}/g, '\n\n').trim().slice(0, MAX_REASON);
+}
+
+/** the days of messages to delete with a ban: one of the allowed values, anything else is 0 */
+export const deleteDays = (v: unknown): number => ((DELETE_DAYS as readonly number[]).includes(v as number) ? (v as number) : 0);
+export const deleteSeconds = (days: number): number => deleteDays(days) * 86_400;
+
+export interface Standing {
+  targetId: string;
+  modId: string;
+  botId: string;
+  ownerId: string;
+  /** the member is on the server (a ban may also hit a person who has left) */
+  inGuild: boolean;
+  /** position of the highest role of the target, the moderator and the bot */
+  targetPos: number;
+  modPos: number;
+  botPos: number;
+}
+
+/** why this person cannot be punished by this moderator (a text for the moderator), or null when it is allowed */
+export function standingProblem(s: Standing): string | null {
+  if (s.targetId === s.modId) return 'Нельзя применить команду к самому себе.';
+  if (s.targetId === s.botId) return 'Нельзя применить команду к боту.';
+  if (s.targetId === s.ownerId) return 'Это владелец сервера: его нельзя наказать.';
+  if (!s.inGuild) return null;
+  if (s.targetPos >= s.botPos) return 'Высшая роль участника не ниже роли бота. Поднимите роль бота выше в настройках сервера.';
+  if (s.modId !== s.ownerId && s.targetPos >= s.modPos) return 'Высшая роль участника не ниже вашей.';
+  return null;
+}
+
+export const META: Record<PunishAction, { emoji: string; title: string; color: number; done: string }> = {
+  ban: { emoji: '🔨', title: 'Бан', color: 0xe74c3c, done: 'заблокирован' },
+  unban: { emoji: '🔓', title: 'Разбан', color: 0x2ecc71, done: 'разблокирован' },
+  kick: { emoji: '👢', title: 'Кик', color: 0xe67e22, done: 'исключён с сервера' },
+  warn: { emoji: '⚠️', title: 'Предупреждение', color: 0xf5b01e, done: 'получил предупреждение' },
+};
+
+/** what the person is told in a private message */
+export function dmText(action: PunishAction, guild: string, warnNo?: number): { title: string; text: string } {
+  switch (action) {
+    case 'ban': return { title: '🔨 Вы заблокированы', text: `Администрация сервера **${guild}** заблокировала вас.` };
+    case 'kick': return { title: '👢 Вас исключили с сервера', text: `Вас исключили с сервера **${guild}**. Вернуться можно по новому приглашению, если правила для вас понятны.` };
+    case 'unban': return { title: '🔓 Вы разблокированы', text: `Блокировка на сервере **${guild}** снята.` };
+    case 'warn': return { title: `⚠️ Предупреждение${warnNo ? ` №${warnNo}` : ''}`, text: `Администрация сервера **${guild}** вынесла вам предупреждение. Повторные нарушения могут привести к исключению или блокировке.` };
+  }
+}
+
+/** the line after the third warning and every further one */
+export const WARN_ESCALATE_AT = 3;
+export const escalationHint = (total: number): string => (total >= WARN_ESCALATE_AT ? `Это уже ${total}-е предупреждение: подумайте о кике или бане.` : '');
+
+/** a short token for the buttons of a confirmation (the reason does not fit in a button id) */
+export const newToken = (rand: () => number = Math.random): string => Array.from({ length: 8 }, () => 'abcdefghijklmnopqrstuvwxyz0123456789'[Math.floor(rand() * 36)]).join('');
+
+export const punishId = (action: 'go' | 'no', token: string): string => `mod:${action}:${token}`;
+
+export function parsePunishId(id: string): { action: 'go' | 'no'; token: string } | null {
+  const m = /^mod:(go|no):([0-9a-z]{6,12})$/.exec(id);
+  return m ? { action: m[1] as 'go' | 'no', token: m[2] as string } : null;
+}
+
+export const isStale = (at: number, now: number): boolean => !(now - at >= 0 && now - at <= PUNISH_TTL_MS);
+
+/** a user id from the text of the /unban option: only the digits of an id or a mention <@id> */
+export function idFromInput(s: string): string | null {
+  const m = /^<@!?(\d{15,25})>$|^(\d{15,25})$/.exec(s.trim());
+  return m ? ((m[1] ?? m[2]) as string) : null;
+}
+
+/** the audit log of Discord keeps 512 characters: «moderator: reason» */
+export const auditReason = (mod: string, reason: string): string => `${mod}: ${reason}`.slice(0, 500);
+
+/** «3 дня», «1 день», «7 дней» */
+export const daysText = (n: number): string => (n === 0 ? 'не удалять' : n === 1 ? 'за 1 день' : `за ${n} дней`);
+
+/** a time in the style of Discord that shows in the reader's own time zone: <t:…:R> */
+export const timeTag = (ms: number): string => `<t:${Math.floor(ms / 1000)}:R>`;
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-bot/src"
   cat > "$APP_DIR/core-bot/src/redact.ts" << '__COREGSM_EOF__'
@@ -116879,7 +117392,7 @@ import { Button, Section, Switch, fail, toast } from '../ui';
 import { ChannelName, ChannelPicker } from './ChannelPicker';
 
 interface Channel { id: string; name: string; guild: string }
-interface Moderation { enabled: boolean; logChannelId: string; protectedChannels: string[]; cooldown: number; channels: Channel[]; maxProtected: number; maxCooldown: number }
+interface Moderation { enabled: boolean; punish: boolean; logChannelId: string; protectedChannels: string[]; cooldown: number; channels: Channel[]; maxProtected: number; maxCooldown: number }
 
 /**
  * «Модерация»: settings of the /clear command of the bot: switch it off, protect channels from cleaning, the pause between
@@ -116899,7 +117412,7 @@ export default function ModerationCard() {
   }, []);
   if (!m) return null;
 
-  const save = async (patch: Partial<Pick<Moderation, 'enabled' | 'logChannelId' | 'protectedChannels' | 'cooldown'>>) => {
+  const save = async (patch: Partial<Pick<Moderation, 'enabled' | 'punish' | 'logChannelId' | 'protectedChannels' | 'cooldown'>>) => {
     setBusy(true);
     try {
       const r = await api<Moderation>('/settings/moderation', 'PUT', patch);
@@ -116923,7 +117436,11 @@ export default function ModerationCard() {
       <label className="mb-3 flex items-center gap-3 font-bold">
         <Switch id="clear-on" checked={m.enabled} onChange={(on) => void save({ enabled: on })} /> {t('mod.on')}
       </label>
-      {m.enabled && (
+      <label className="mb-3 flex items-center gap-3 font-bold">
+        <Switch id="punish-on" checked={m.punish} onChange={(on) => void save({ punish: on })} /> {t('mod.punish')}
+      </label>
+      <p className="-mt-1 mb-3 text-sm font-semibold text-mute">{t('mod.punishHelp')}</p>
+      {(m.enabled || m.punish) && (
         <div className="space-y-4">
           <div>
             <span className="label">{t('mod.log')}</span>
@@ -136622,11 +137139,11 @@ const en: Record<keyof typeof ru, string> = {
   'wl.rolesNoChannel': 'Choose a channel first: the roles come from its Discord server.',
   'wl.saved': 'Saved',
   'wl.intent': 'Needs the «Server Members Intent» in Developer Portal → Bot.',
-  'mod.title': 'Moderation: the /clear command',
+  'mod.title': 'Moderation: /clear, /ban, /kick, /warn',
   'mod.help': 'The /clear command wipes the chat of the channel where it is typed. Only server administrators (the «Administrator» permission) can see and use it. Before deleting, the bot shows how many messages it found and asks to confirm.',
   'mod.on': 'Allow the /clear command',
-  'mod.log': 'Cleaning log',
-  'mod.logHelp': 'The bot writes a record of each cleaning to this channel: who, where, how many messages and how long it took.',
+  'mod.log': 'Moderation log',
+  'mod.logHelp': 'The bot writes a record of each chat cleaning, ban, kick and warning to this channel: who, whom and why.',
   'mod.noLog': 'No channel chosen — no records',
   'mod.pick': 'Choose channel',
   'mod.clearLog': 'Do not keep a log',
@@ -136637,6 +137154,8 @@ const en: Record<keyof typeof ru, string> = {
   'mod.noChannels': 'The bot does not see any channels yet. Invite it to the server and wait a minute.',
   'mod.perms': 'The bot needs «Manage Messages» and «Read Message History». Discord cannot delete messages older than 14 days; pinned messages stay by default.',
   'mod.saved': 'Saved',
+  'mod.punish': 'Allow the /ban, /unban, /kick and /warn commands',
+  'mod.punishHelp': 'Server administrators only. A reason is required: it goes to the Discord audit log, to the private message of the member and to the card. The bot needs «Ban Members» and «Kick Members», and its role must stand above the roles of those who are punished.',
   'ds.title': 'Look of the bot messages',
   'ds.help': 'One accent colour, signature and logo for everything the bot posts: alerts, polls, the weekly digest, command replies. Red, green and yellow stay with the state of the servers.',
   'ds.accent': 'Accent colour',
@@ -140798,11 +141317,11 @@ const ru = {
   'wl.rolesNoChannel': 'Сначала выберите канал: роли берутся с его Discord-сервера.',
   'wl.saved': 'Сохранено',
   'wl.intent': 'Нужен «Server Members Intent» в Developer Portal → Bot.',
-  'mod.title': 'Модерация: команда /clear',
+  'mod.title': 'Модерация: /clear, /ban, /kick, /warn',
   'mod.help': 'Команда /clear очищает чат в канале, где её ввели. Её видят и могут использовать только администраторы сервера (право «Администратор»). Перед удалением бот показывает, сколько сообщений найдено, и просит подтвердить.',
   'mod.on': 'Разрешить команду /clear',
-  'mod.log': 'Журнал очисток',
-  'mod.logHelp': 'В этот канал бот пишет запись о каждой очистке: кто, где, сколько удалил и за сколько.',
+  'mod.log': 'Журнал модерации',
+  'mod.logHelp': 'В этот канал бот пишет запись о каждой очистке чата, бане, кике и предупреждении: кто, кого и за что.',
   'mod.noLog': 'Канал не выбран — записей не будет',
   'mod.pick': 'Выбрать канал',
   'mod.clearLog': 'Не вести журнал',
@@ -140813,6 +141332,8 @@ const ru = {
   'mod.noChannels': 'Бот пока не видит каналов. Пригласите его на сервер и подождите минуту.',
   'mod.perms': 'Боту нужны права «Управлять сообщениями» и «Читать историю сообщений». Сообщения старше 14 дней Discord удалить не даёт, закреплённые по умолчанию остаются.',
   'mod.saved': 'Сохранено',
+  'mod.punish': 'Разрешить команды /ban, /unban, /kick и /warn',
+  'mod.punishHelp': 'Только для администраторов сервера. Причина обязательна: она попадает в журнал Discord, в личное сообщение участнику и в карточку. Боту нужны права «Банить участников» и «Выгонять участников», а его роль должна стоять выше ролей наказываемых.',
   'ds.title': 'Вид сообщений бота',
   'ds.help': 'Один акцентный цвет, подпись и логотип для всего, что публикует бот: оповещения, голосования, итоги недели, ответы на команды. Красный, зелёный и жёлтый остаются за состоянием серверов.',
   'ds.accent': 'Акцентный цвет',
