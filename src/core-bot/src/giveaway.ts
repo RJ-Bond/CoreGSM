@@ -1,6 +1,7 @@
 /** /giveaway start|end|reroll (administrators) and the «🎉 Участвую» button under a giveaway. The backend keeps the entries and draws. */
-import { PermissionFlagsBits, type ButtonInteraction, type ChatInputCommandInteraction } from 'discord.js';
+import { EmbedBuilder, PermissionFlagsBits, type ButtonInteraction, type ChatInputCommandInteraction } from 'discord.js';
 import { backendJson } from './backend.js';
+import { mayEdit, withParticipants } from './giveawayLogic.js';
 import { log } from './log.js';
 import { COLORS, replyEmbed } from './replies.js';
 
@@ -76,6 +77,8 @@ export async function handleGiveaway(i: ChatInputCommandInteraction): Promise<vo
   await i.editReply(out).catch((e) => log('giveaway reply failed:', (e as Error).message));
 }
 
+const lastEdit = new Map<string, number>();
+
 /** the «🎉 Участвую» button: «gw:<id>» */
 export async function handleGiveawayButton(i: ButtonInteraction): Promise<void> {
   const m = /^gw:(\d+)$/.exec(i.customId);
@@ -102,4 +105,9 @@ export async function handleGiveawayButton(i: ButtonInteraction): Promise<void> 
     : d?.status === 'notfound' ? replyEmbed('Розыгрыш не найден', 'Возможно, его удалили.', COLORS.bad)
     : replyEmbed('Не получилось', 'Панель сейчас не отвечает, попробуйте ещё раз чуть позже.', COLORS.bad);
   await i.editReply(out).catch((e) => log('giveaway reply failed:', (e as Error).message));
+  // the card shows how many people take part
+  if ((d?.status === 'ok' || d?.status === 'already') && typeof d.total === 'number' && i.message.embeds[0] && mayEdit(lastEdit, i.message.id, Date.now())) {
+    const e = EmbedBuilder.from(i.message.embeds[0]).setDescription(withParticipants(i.message.embeds[0].description ?? '', d.total));
+    await i.message.edit({ embeds: [e] }).catch((err) => log('giveaway card update failed:', (err as Error).message));
+  }
 }

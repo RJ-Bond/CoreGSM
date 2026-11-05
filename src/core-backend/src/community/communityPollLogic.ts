@@ -28,5 +28,6 @@ const bar = (pct: number) => '▰'.repeat(Math.round(pct / 10)) + '▱'.repeat(1
 /** «▰▰▰▰▱▱▱▱▱▱ 40% · Вариант (4)» for every option */
 export function resultsText(rows: TallyRow[], total: number): string {
   const lines = rows.map((r) => `${bar(r.pct)} **${r.pct}%** · ${r.text.replace(/[*_~`|>]/g, '')} (${r.votes})`);
-  return `${lines.join('\n')}\n\nВсего голосов: **${total}**`;
+  const lead = total > 0 && rows.length ? rows.reduce((a, b) => (b.votes > a.votes ? b : a)) : null;
+  return `${lines.join('\n')}\n\n🗳️ Всего голосов: **${total}**${lead && lead.votes > 0 ? `\n🏆 Лидирует: **${lead.text.replace(/[*_~`|>]/g, '')}**` : ''}`;
 }

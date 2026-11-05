@@ -60,7 +60,7 @@ export function pollEmbed(o: { question: string; closesAt: number | null; rows: 
   return {
     title: o.isNew ? `🗳️ Голосование: ${o.question}` : `📊 Итоги голосования: ${o.question}`,
     description: o.isNew
-      ? `Выберите вариант кнопкой ниже${o.site ? ' или на сайте' : ''}. Нужен аккаунт, привязанный к Discord (команда /register).${o.closesAt ? `\nЗавершится <t:${Math.floor(o.closesAt / 1000)}:R>.` : ''}`
+      ? `👇 Выберите вариант кнопкой ниже${o.site ? ' или на сайте' : ''}.\n👤 Нужен аккаунт, привязанный к Discord (команда /register).${o.closesAt ? `\n⏰ Завершится <t:${Math.floor(o.closesAt / 1000)}:R>.` : ''}`
       : resultsText(o.rows, o.total),
     color: o.isNew ? COLOR.open : COLOR.closed,
   };

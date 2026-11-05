@@ -61,7 +61,7 @@ interface ServerAlert { name: string; address: string; game: string; downMs: num
 /** «server is back»: also used by the message gallery in the admin */
 export const upEmbed = (a: ServerAlert) => ({
   title: `🟢 ${a.name} снова в сети`,
-  description: `📍 \`${a.address}\`\nПростой: **${human(minutes(a.downMs))}**`,
+  description: `📍 \`${a.address}\`\n⏱️ Простой был **${human(minutes(a.downMs))}**\n🟢 Игроки снова могут заходить`,
   color: COLOR.up,
   author: { name: `🎮 ${gameLabel(a.game)}` },
   footer: { text: 'CoreGSM · оповещение' },
@@ -69,7 +69,7 @@ export const upEmbed = (a: ServerAlert) => ({
 });
 export const downEmbed = (a: ServerAlert & { error?: string | null }) => ({
   title: `🔴 ${a.name} недоступен`,
-  description: `📍 \`${a.address}\`\nСервер не отвечает уже **${human(minutes(a.downMs))}**${a.error ? `\n⚠️ ${a.error.slice(0, 300)}` : ''}`,
+  description: `📍 \`${a.address}\`\n⏱️ Не отвечает уже **${human(minutes(a.downMs))}**${a.error ? `\n⚠️ ${a.error.slice(0, 300)}` : ''}`,
   color: COLOR.down,
   author: { name: `🎮 ${gameLabel(a.game)}` },
   footer: { text: 'CoreGSM · оповещение' },

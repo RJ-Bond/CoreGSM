@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="5625a89c6098"
+COREGSM_BUILD="2d7eabc462e5"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.50"
+COREGSM_VERSION="1.1.51"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -17542,7 +17542,7 @@ interface ServerAlert { name: string; address: string; game: string; downMs: num
 /** «server is back»: also used by the message gallery in the admin */
 export const upEmbed = (a: ServerAlert) => ({
   title: `🟢 ${a.name} снова в сети`,
-  description: `📍 \`${a.address}\`\nПростой: **${human(minutes(a.downMs))}**`,
+  description: `📍 \`${a.address}\`\n⏱️ Простой был **${human(minutes(a.downMs))}**\n🟢 Игроки снова могут заходить`,
   color: COLOR.up,
   author: { name: `🎮 ${gameLabel(a.game)}` },
   footer: { text: 'CoreGSM · оповещение' },
@@ -17550,7 +17550,7 @@ export const upEmbed = (a: ServerAlert) => ({
 });
 export const downEmbed = (a: ServerAlert & { error?: string | null }) => ({
   title: `🔴 ${a.name} недоступен`,
-  description: `📍 \`${a.address}\`\nСервер не отвечает уже **${human(minutes(a.downMs))}**${a.error ? `\n⚠️ ${a.error.slice(0, 300)}` : ''}`,
+  description: `📍 \`${a.address}\`\n⏱️ Не отвечает уже **${human(minutes(a.downMs))}**${a.error ? `\n⚠️ ${a.error.slice(0, 300)}` : ''}`,
   color: COLOR.down,
   author: { name: `🎮 ${gameLabel(a.game)}` },
   footer: { text: 'CoreGSM · оповещение' },
@@ -20623,7 +20623,8 @@ const bar = (pct: number) => '▰'.repeat(Math.round(pct / 10)) + '▱'.repeat(1
 /** «▰▰▰▰▱▱▱▱▱▱ 40% · Вариант (4)» for every option */
 export function resultsText(rows: TallyRow[], total: number): string {
   const lines = rows.map((r) => `${bar(r.pct)} **${r.pct}%** · ${r.text.replace(/[*_~`|>]/g, '')} (${r.votes})`);
-  return `${lines.join('\n')}\n\nВсего голосов: **${total}**`;
+  const lead = total > 0 && rows.length ? rows.reduce((a, b) => (b.votes > a.votes ? b : a)) : null;
+  return `${lines.join('\n')}\n\n🗳️ Всего голосов: **${total}**${lead && lead.votes > 0 ? `\n🏆 Лидирует: **${lead.text.replace(/[*_~`|>]/g, '')}**` : ''}`;
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/community"
@@ -20845,22 +20846,34 @@ interface Row { id: number; prize: string; winners: number; ends_at: number; cha
 const get = (id: number) => db.prepare('SELECT * FROM giveaways WHERE id = ?').get(id) as Row | undefined;
 const entries = (id: number) => (db.prepare('SELECT discord_id FROM giveaway_entries WHERE giveaway_id = ?').all(id) as { discord_id: string }[]).map((r) => r.discord_id);
 
-function conditionsText(g: Row): string {
+export interface GiveawayView { id: number; prize: string; winners: number; ends_at: number; role_id: string; min_hours: number }
+
+function conditionsText(g: Pick<Row, 'role_id' | 'min_hours'>): string {
   const l: string[] = [];
   if (g.role_id) l.push(`роль <@&${g.role_id}>`);
   if (g.min_hours > 0) l.push(`от ${g.min_hours} ч игры (нужен привязанный ник — /link)`);
   return l.length ? `\n📋 Условия: ${l.join(', ')}` : '';
 }
 
+/** the card of a running giveaway: also used by the message gallery in the admin */
+export const giveawayEmbed = (g: GiveawayView, entriesNow = 0) => ({
+  title: `🎉 Розыгрыш: ${g.prize}`,
+  description: `Нажмите кнопку, чтобы участвовать.\n🏆 Победителей: **${g.winners}**\n⏰ Итоги <t:${Math.floor(g.ends_at / 1000)}:R>${conditionsText(g)}\n👥 Участников: **${entriesNow}**\n🆔 Номер розыгрыша: **${g.id}**`,
+  color: COLORS.info,
+});
+
+/** the card with the winners */
+export const giveawayResultEmbed = (prize: string, winners: string[]) => ({
+  title: `🏆 Итоги розыгрыша: ${prize}`,
+  description: winners.length ? `Победител${winners.length > 1 ? 'и' : 'ь'}: ${winners.map((w) => `<@${w}>`).join(', ')}\nПоздравляем! Администратор свяжется с вами.` : 'Никто не участвовал — победителей нет.',
+  color: winners.length ? COLORS.ok : COLORS.warn,
+});
+
 function announceNew(g: Row): void {
   enqueueAlert('poll', 'CoreGSM', {
     content: '',
     mention: 'none',
-    embed: {
-      title: `🎉 Розыгрыш: ${g.prize}`,
-      description: `Нажмите кнопку, чтобы участвовать.\n🏆 Победителей: **${g.winners}**\n⏰ Итоги <t:${Math.floor(g.ends_at / 1000)}:R>${conditionsText(g)}\n🆔 Номер розыгрыша: **${g.id}**`,
-      color: COLORS.info,
-    },
+    embed: giveawayEmbed(g),
     buttons: [{ customId: `gw:${g.id}`, label: '🎉 Участвую' }],
   }, g.channel_id);
 }
@@ -20872,11 +20885,7 @@ export function finish(g: Row, skip: string[] = []): string[] {
   enqueueAlert('poll', 'CoreGSM', {
     content: winners.map((w) => `<@${w}>`).join(' '),
     mention: 'none',
-    embed: {
-      title: `🏆 Итоги розыгрыша: ${g.prize}`,
-      description: winners.length ? `Победител${winners.length > 1 ? 'и' : 'ь'}: ${winners.map((w) => `<@${w}>`).join(', ')}\nПоздравляем! Администратор свяжется с вами.` : 'Никто не участвовал — победителей нет.',
-      color: winners.length ? COLORS.ok : COLORS.warn,
-    },
+    embed: giveawayResultEmbed(g.prize, winners),
   }, g.channel_id);
   return winners;
 }
@@ -20887,16 +20896,51 @@ export function finishDue(now = Date.now()): number {
   return due.length;
 }
 
-export function registerGiveaways({ app, internal }: { app: Express; internal: RequestHandler }): void {
+interface StartOpts { prize: string; winners: number; hours: number; roleId?: string; minHours?: number; channelId: string; hostId: string }
+
+/** creates a giveaway and posts its card; an error text when the data is wrong */
+export function startGiveaway(o: StartOpts): { id: number } | { error: string } {
+  const bad = validateGiveaway({ prize: o.prize, winners: o.winners, hours: o.hours, minHours: o.minHours });
+  if (bad) return { error: bad };
+  const now = Date.now();
+  const id = Number(db.prepare('INSERT INTO giveaways (prize, winners, ends_at, channel_id, role_id, min_hours, host_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(o.prize.trim(), o.winners, now + Math.round(o.hours * 3600_000), o.channelId, o.roleId ?? '', o.minHours ?? 0, o.hostId, now).lastInsertRowid);
+  announceNew(get(id)!);
+  return { id };
+}
+
+export function registerGiveaways({ app, admin, internal }: { app: Express; admin: RequestHandler; internal: RequestHandler }): void {
+  const list = () =>
+    (db.prepare('SELECT * FROM giveaways ORDER BY id DESC LIMIT 20').all() as Row[]).map((g) => ({
+      id: g.id, prize: g.prize, winners: g.winners, endsAt: g.ends_at, channelId: g.channel_id, roleId: g.role_id, minHours: g.min_hours,
+      ended: !!g.ended, winnerIds: JSON.parse(g.winner_ids) as string[], entries: entries(g.id).length,
+    }));
+  app.get('/api/giveaways', admin, (_req, res) => res.json({ items: list() }));
+  app.post('/api/giveaways', admin, (req, res) => {
+    const b = z.object({ prize: z.string().max(200), winners: z.number().int(), hours: z.number(), roleId: z.string().regex(/^(\d{15,25})?$/).optional(), minHours: z.number().optional(), channelId: z.string().regex(/^\d{15,25}$/) }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'Проверьте поля: нужен канал, приз, число победителей и срок' });
+    const r = startGiveaway({ ...b.data, hostId: '0' });
+    if ('error' in r) return res.status(400).json(r);
+    res.status(201).json({ items: list() });
+  });
+  app.post('/api/giveaways/:id/:act', admin, (req, res) => {
+    const g = get(Number(req.params.id));
+    if (!g) return res.status(404).json({ error: 'Розыгрыш не найден' });
+    if (req.params.act === 'end' && !g.ended) finish(g);
+    else if (req.params.act === 'reroll' && g.ended) finish(g, JSON.parse(g.winner_ids) as string[]);
+    else return res.status(400).json({ error: req.params.act === 'end' ? 'Уже подведено' : 'Сначала нужно подвести итоги' });
+    res.json({ items: list() });
+  });
+  app.delete('/api/giveaways/:id', admin, (req, res) => {
+    db.prepare('DELETE FROM giveaways WHERE id = ?').run(Number(req.params.id));
+    res.json({ items: list() });
+  });
+
   app.post('/internal/giveaways/start', internal, (req, res) => {
     const b = z.object({ prize: z.string().max(200), winners: z.number().int(), hours: z.number(), roleId: z.string().regex(/^(\d{15,25})?$/).optional(), minHours: z.number().optional(), channelId: z.string().regex(/^\d{15,25}$/), hostId: z.string().regex(/^\d{15,25}$/) }).safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'bad body' });
-    const bad = validateGiveaway({ prize: b.data.prize, winners: b.data.winners, hours: b.data.hours, minHours: b.data.minHours });
-    if (bad) return res.status(400).json({ error: bad });
-    const now = Date.now();
-    const id = Number(db.prepare('INSERT INTO giveaways (prize, winners, ends_at, channel_id, role_id, min_hours, host_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(b.data.prize.trim(), b.data.winners, now + Math.round(b.data.hours * 3600_000), b.data.channelId, b.data.roleId ?? '', b.data.minHours ?? 0, b.data.hostId, now).lastInsertRowid);
-    announceNew(get(id)!);
-    res.json({ id });
+    const r = startGiveaway({ prize: b.data.prize, winners: b.data.winners, hours: b.data.hours, roleId: b.data.roleId ?? '', minHours: b.data.minHours ?? 0, channelId: b.data.channelId, hostId: b.data.hostId });
+    if ('error' in r) return res.status(400).json(r);
+    res.json(r);
   });
 
   app.post('/internal/giveaways/end', internal, (req, res) => {
@@ -21376,7 +21420,7 @@ export function pollEmbed(o: { question: string; closesAt: number | null; rows: 
   return {
     title: o.isNew ? `🗳️ Голосование: ${o.question}` : `📊 Итоги голосования: ${o.question}`,
     description: o.isNew
-      ? `Выберите вариант кнопкой ниже${o.site ? ' или на сайте' : ''}. Нужен аккаунт, привязанный к Discord (команда /register).${o.closesAt ? `\nЗавершится <t:${Math.floor(o.closesAt / 1000)}:R>.` : ''}`
+      ? `👇 Выберите вариант кнопкой ниже${o.site ? ' или на сайте' : ''}.\n👤 Нужен аккаунт, привязанный к Discord (команда /register).${o.closesAt ? `\n⏰ Завершится <t:${Math.floor(o.closesAt / 1000)}:R>.` : ''}`
       : resultsText(o.rows, o.total),
     color: o.isNew ? COLOR.open : COLOR.closed,
   };
@@ -21989,6 +22033,35 @@ export function registerSubscriptions(deps: { app: Express; auth: RequestHandler
       db.transaction(() => b.data.ids!.forEach((id) => mark.run(uid, id)))();
     }
     res.json({ ok: true, unread: unreadNotifications(uid) });
+  });
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/community"
+  cat > "$APP_DIR/core-backend/src/community/verify.ts" << '__COREGSM_EOF__'
+/**
+ * «Accept the rules» card: the administrator picks a channel, a role and a text; the card gets a button and a member who
+ * presses it receives the role (the bot does it: the role id is in the button, so nothing is stored).
+ *   POST /api/discord/verify-card   (admin) { channelId, roleId, title?, text }
+ */
+import type { Express, RequestHandler } from 'express';
+import { z } from 'zod';
+import { enqueueAlert } from '../alerts/alerts.js';
+import { COLORS } from '../discord/palette.js';
+
+/** the card with the rules and the button: also used by the message gallery in the admin */
+export const verifyEmbed = (title: string, text: string) => ({ title: title || '📜 Правила сообщества', description: `${text}\n\n👇 Нажимая кнопку, вы принимаете правила и получаете доступ к каналам.`, color: COLORS.info });
+
+export function registerVerify({ app, admin }: { app: Express; admin: RequestHandler }): void {
+  app.post('/api/discord/verify-card', admin, (req, res) => {
+    const b = z.object({ channelId: z.string().regex(/^\d{15,25}$/), roleId: z.string().regex(/^\d{15,25}$/), title: z.string().trim().max(100).optional(), text: z.string().trim().min(3).max(1500) }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'Нужны канал, ID роли и текст правил (от 3 символов)' });
+    enqueueAlert('poll', 'CoreGSM', {
+      content: '',
+      mention: 'none',
+      embed: verifyEmbed(b.data.title ?? '', b.data.text),
+      buttons: [{ customId: `vfy:${b.data.roleId}`, label: '✅ Принимаю правила' }],
+    }, b.data.channelId);
+    res.json({ ok: true });
   });
 }
 __COREGSM_EOF__
@@ -22934,8 +23007,11 @@ import { buildNotice } from '../admin/updateLogic.js';
 import { renderWelcome } from '../community/welcomeLogic.js';
 import { tally } from '../community/communityPollLogic.js';
 import { brand, publicBase } from '../admin/site.js';
+import { giveawayEmbed, giveawayResultEmbed } from '../community/giveaways.js';
+import { verifyEmbed } from '../community/verify.js';
+import { digestCard, digestLine, followCard, newDeviceCard, newsCard, seenCard, serverCard, weeklyCard, type Ctx, type DmCard } from '../alerts/dmCard.js';
 
-interface Sample { id: string; group: 'servers' | 'alerts' | 'community' | 'updates'; title: string; content?: string; embed: Record<string, unknown>; buttons?: string[] }
+interface Sample { id: string; group: 'servers' | 'alerts' | 'community' | 'private' | 'updates'; title: string; content?: string; embed: Record<string, unknown>; buttons?: string[] }
 
 export function buildGallery(now = Date.now()): Sample[] {
   const st = currentStyle();
@@ -22961,6 +23037,22 @@ export function buildGallery(now = Date.now()): Sample[] {
   out.push({ id: 'poll-new', group: 'community', title: 'Новое голосование', embed: styled('poll', pollEmbed({ question: 'Нужна новая карта?', closesAt: now + 86_400_000, rows: t.rows, total: t.total, isNew: true, site: !!base })), buttons: t.rows.map((r) => r.text) });
   out.push({ id: 'poll-result', group: 'community', title: 'Итоги голосования', embed: styled('poll', pollEmbed({ question: 'Нужна новая карта?', closesAt: null, rows: t.rows, total: t.total, isNew: false, site: !!base })) });
   out.push({ id: 'welcome', group: 'community', title: 'Приветствие новичка', content: renderWelcome('', { userId: '123456789012345678', server: brand().name }), embed: {} });
+
+  out.push({ id: 'giveaway-new', group: 'community', title: 'Розыгрыш: идёт', embed: styled('poll', giveawayEmbed({ id: 3, prize: 'Скин «Тёмный рыцарь»', winners: 2, ends_at: now + 86_400_000, role_id: '', min_hours: 10 }, 17)), buttons: ['🎉 Участвую'] });
+  out.push({ id: 'giveaway-result', group: 'community', title: 'Розыгрыш: итоги', content: '<@123456789012345678>', embed: styled('poll', giveawayResultEmbed('Скин «Тёмный рыцарь»', ['123456789012345678', '234567890123456789'])) });
+  out.push({ id: 'verify', group: 'community', title: 'Принятие правил', embed: styled('poll', verifyEmbed('', '1. Уважайте других игроков.\n2. Без рекламы и спама.\n3. Решения модераторов не обсуждаются в чате.')), buttons: ['✅ Принимаю правила'] });
+
+  // private cards (DM): the same builders the delivery uses
+  const ctx: Ctx = { lang: 'ru', base: base ?? '', brand: st.footer, ...(st.logoUrl ? { logoUrl: st.logoUrl } : {}) };
+  const dm = (id: string, title: string, c: DmCard) => out.push({ id: `dm-${id}`, group: 'private', title, embed: c.embed as unknown as Record<string, unknown>, buttons: [...c.buttons.map((b) => b.label), ...c.actions.map((a) => a.label)] });
+  dm('server', 'Сервер: событие', serverCard(ctx, { serverId: 1, name: 'Мой сервер', address: 'play.example.com:27015', events: [{ kind: 'free_slot', ts: now, players: 31, max: 32 }] }));
+  dm('server-many', 'Сервер: несколько событий', serverCard(ctx, { serverId: 1, name: 'Мой сервер', address: 'play.example.com:27015', events: [{ kind: 'went_down', ts: now - 600_000, players: 0, max: 32 }, { kind: 'back_online', ts: now, players: 3, max: 32 }] }));
+  dm('device', 'Вход с нового устройства', newDeviceCard(ctx, { device: 'Chrome на Windows', ts: now }));
+  dm('seen', 'Игрок на сервере', seenCard(ctx, { server: 'Мой сервер', nick: 'Alex', ts: now, rank: 'Ветеран' }));
+  dm('follow', 'Слежение за игроком', followCard(ctx, { nick: 'Alex', server: 'Мой сервер', address: 'play.example.com:27015', serverId: 1, ts: now }));
+  dm('news', 'Новость', newsCard(ctx, { title: 'Вайп в субботу', category: 'Новости', text: 'Сервер перезапустится в 12:00 по Москве.', url: base ? `${base}/news/1` : 'https://example.com', ts: now }));
+  dm('digest', 'Сводка за тихие часы', digestCard(ctx, { lines: [digestLine('🔴 Мой сервер недоступен', now - 3_600_000), digestLine('✅ Мой сервер снова в сети', now - 3_000_000)], since: now - 28_800_000 }));
+  dm('weekly', 'Итоги недели (администраторам)', weeklyCard(ctx, { from: now - 7 * 86_400_000, to: now, peak: 28, peakPrev: 22, peakAt: now - 86_400_000, newPlayers: 14, activePlayers: 63, newAccounts: 9, warns: 5, bans: 1, kicks: 2, mutes: 3, reports: 4 }));
 
   const n = buildNotice({ kind: 'available', mode: 'brief', lang: 'ru', links: { to: base ? `${base}/` : 'https://example.com/releases', more: null }, from: '1.0.0.20', to: '1.0.0.27', line: 'Доступна новая версия панели.', now, releases: [{ version: '1.0.0.27', date: '26.10.2026', groups: [{ title: 'Новое', titleEn: 'New', items: [{ text: 'Заметки о выпуске в сообщении', textEn: 'Release notes in the message', flags: [] }] }, { title: '🐛 Исправлено', titleEn: '🐛 Fixed', items: [{ text: 'Мелкая правка', textEn: 'A small fix', flags: [] }, { text: 'Ещё одна правка', textEn: 'Another fix', flags: [] }] }] }] });
   out.push({ id: 'update', group: 'updates', title: 'Доступно обновление панели', embed: styled('update', { title: n.title, description: n.description, color: n.color, ...(n.fields.length ? { fields: n.fields } : {}), ...(n.footer ? { footer: { text: n.footer } } : {}) }), buttons: (n.actions ?? []).map((a) => a.label) });
@@ -25875,6 +25967,7 @@ import { registerDmQueue } from './alerts/dmQueue.js';
 import { registerBotExtras, startWeekly } from './discord/botExtras.js';
 import { registerFaq } from './community/faq.js';
 import { registerGiveaways } from './community/giveaways.js';
+import { registerVerify } from './community/verify.js';
 import { registerRules } from './monitoring/rules.js';
 import { registerPolls } from './community/polls.js';
 import { registerDiscordGallery } from './discord/discordGallery.js';
@@ -26060,7 +26153,8 @@ registerWelcome({ app, admin, internal });
 registerDmQueue({ app, auth, internal, userId: (req) => (req as AuthedRequest).user!.id });
 registerBotExtras({ app, admin, internal });
 registerFaq({ app, admin, internal });
-registerGiveaways({ app, internal });
+registerGiveaways({ app, admin, internal });
+registerVerify({ app, admin });
 startWeekly();
 registerModeration({ app, admin, internal });
 registerRules({ app, auth, admin });
@@ -39521,7 +39615,7 @@ interface DeliveryItem {
 }
 /** buttons answered by the bot (a poll): five to a row */
 function actionRows(buttons: { customId: string; label: string }[] | undefined) {
-  const list = (buttons ?? []).filter((b) => /^(poll:\d+:\d+|gw:\d+)$/.test(b.customId) && b.label).slice(0, 10);
+  const list = (buttons ?? []).filter((b) => /^(poll:\d+:\d+|gw:\d+|vfy:\d+)$/.test(b.customId) && b.label).slice(0, 10);
   const rows: ActionRowBuilder<ButtonBuilder>[] = [];
   for (let i = 0; i < list.length; i += 5) {
     rows.push(new ActionRowBuilder<ButtonBuilder>().addComponents(list.slice(i, i + 5).map((b) => new ButtonBuilder().setStyle(ButtonStyle.Secondary).setCustomId(b.customId).setLabel(b.label.slice(0, 80)))));
@@ -40349,6 +40443,7 @@ import type { AutocompleteInteraction, ButtonInteraction, Client, Interaction } 
 import { backend, backendJson } from './backend.js';
 import { humanDiscordError } from './errors.js';
 import { log } from './log.js';
+import { handleVerify } from './verify.js';
 import { GIVEAWAY_COMMANDS, GIVEAWAY_NAMES, handleGiveaway, handleGiveawayButton } from './giveaway.js';
 import { FAQ_COMMANDS, FAQ_NAMES, faqAutocomplete, handleFaq } from './faq.js';
 import { handleInfo, INFO_COMMANDS, INFO_NAMES, infoAutocomplete } from './info.js';
@@ -40456,6 +40551,7 @@ export async function handleInteraction(i: Interaction): Promise<void> {
   if (i.isButton() && i.customId.startsWith('clear:')) return handleClearButton(i);
   if (i.isButton() && i.customId.startsWith('mod:')) return handlePunishButton(i);
   if (i.isButton() && i.customId.startsWith('appeal:')) return handleAppealButton(i);
+  if (i.isButton() && i.customId.startsWith('vfy:')) return handleVerify(i);
   if (i.isButton() && i.customId.startsWith('gw:')) return handleGiveawayButton(i);
   if (i.isButton() && i.customId.startsWith('dmx:')) return handleDmx(i);
   if (i.isButton() && i.customId.startsWith('fol:')) return handleFollow(i);
@@ -41032,8 +41128,9 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-bot/src"
   cat > "$APP_DIR/core-bot/src/giveaway.ts" << '__COREGSM_EOF__'
 /** /giveaway start|end|reroll (administrators) and the «🎉 Участвую» button under a giveaway. The backend keeps the entries and draws. */
-import { PermissionFlagsBits, type ButtonInteraction, type ChatInputCommandInteraction } from 'discord.js';
+import { EmbedBuilder, PermissionFlagsBits, type ButtonInteraction, type ChatInputCommandInteraction } from 'discord.js';
 import { backendJson } from './backend.js';
+import { mayEdit, withParticipants } from './giveawayLogic.js';
 import { log } from './log.js';
 import { COLORS, replyEmbed } from './replies.js';
 
@@ -41109,6 +41206,8 @@ export async function handleGiveaway(i: ChatInputCommandInteraction): Promise<vo
   await i.editReply(out).catch((e) => log('giveaway reply failed:', (e as Error).message));
 }
 
+const lastEdit = new Map<string, number>();
+
 /** the «🎉 Участвую» button: «gw:<id>» */
 export async function handleGiveawayButton(i: ButtonInteraction): Promise<void> {
   const m = /^gw:(\d+)$/.exec(i.customId);
@@ -41135,6 +41234,32 @@ export async function handleGiveawayButton(i: ButtonInteraction): Promise<void> 
     : d?.status === 'notfound' ? replyEmbed('Розыгрыш не найден', 'Возможно, его удалили.', COLORS.bad)
     : replyEmbed('Не получилось', 'Панель сейчас не отвечает, попробуйте ещё раз чуть позже.', COLORS.bad);
   await i.editReply(out).catch((e) => log('giveaway reply failed:', (e as Error).message));
+  // the card shows how many people take part
+  if ((d?.status === 'ok' || d?.status === 'already') && typeof d.total === 'number' && i.message.embeds[0] && mayEdit(lastEdit, i.message.id, Date.now())) {
+    const e = EmbedBuilder.from(i.message.embeds[0]).setDescription(withParticipants(i.message.embeds[0].description ?? '', d.total));
+    await i.message.edit({ embeds: [e] }).catch((err) => log('giveaway card update failed:', (err as Error).message));
+  }
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-bot/src"
+  cat > "$APP_DIR/core-bot/src/giveawayLogic.ts" << '__COREGSM_EOF__'
+/** The live card of a giveaway: the line with the number of participants, kept fresh by the bot on every press. Pure. */
+
+const LINE = /^👥 Участников: \*\*\d+\*\*$/m;
+
+/** the description with the participants line set to `n` (added at the end when it is not there yet) */
+export function withParticipants(description: string, n: number): string {
+  const line = `👥 Участников: **${n}**`;
+  return LINE.test(description) ? description.replace(LINE, line) : `${description}\n${line}`;
+}
+
+/** edits of one message are limited by Discord: no more often than every `gap` ms */
+export function mayEdit(last: Map<string, number>, key: string, now: number, gap = 4000): boolean {
+  const t = last.get(key);
+  if (t !== undefined && now - t < gap) return false;
+  last.set(key, now);
+  if (last.size > 300) for (const [k, v] of last) if (now - v > gap) last.delete(k);
+  return true;
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-bot/src"
@@ -41686,6 +41811,26 @@ export function shortItem(text: string, max = 130): string {
   const cut = t.search(/ — | \| |\. /);
   const s = cut > 10 ? t.slice(0, cut) : t;
   return s.length > max ? `${s.slice(0, max - 1).trimEnd()}…` : s;
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-bot/src"
+  cat > "$APP_DIR/core-bot/src/hints.ts" << '__COREGSM_EOF__'
+/** «What to do next» under a notice about a problem: a short hint chosen by what the notice says. Pure. */
+
+const RULES: [RegExp, string][] = [
+  [/привязанн\w* (ник|аккаунт)|ник не привязан|нужен привязанный/i, 'Привяжите ник командой **/link** — это займёт полминуты.'],
+  [/нужен аккаунт|зарегистрируйтесь|аккаунт.*не найден|не зарегистрир/i, 'Создайте аккаунт командой **/register** — пароль не нужен.'],
+  [/не найден|не найдена|не найдено/i, 'Проверьте написание: ник подсказывается при вводе команды.'],
+  [/панель.*не отвечает|не удалось связаться|повторите позже|попробуйте ещё раз чуть позже/i, 'Это обычно временно: повторите через минуту. Если не проходит — **/help** покажет статус и ссылку на поддержку.'],
+  [/нет прав|нужно право|не хватает прав|только для администратор/i, 'Попросите администратора выдать право или выполнить действие вместо вас.'],
+  [/(уже|ещё) (идёт|подвед)|на паузе|подождите|слишком часто/i, 'Подождите немного и повторите.'],
+  [/закрыты лс|не доставлен/i, 'Откройте личные сообщения от участников сервера: Настройки → Конфиденциальность.'],
+];
+
+/** the hint for the text of a notice, or '' when nothing fits */
+export function nextStep(text: string): string {
+  for (const [re, hint] of RULES) if (re.test(text)) return hint;
+  return '';
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-bot/src"
@@ -43523,6 +43668,7 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-bot/src"
   cat > "$APP_DIR/core-bot/src/replies.ts" << '__COREGSM_EOF__'
 /** Ephemeral replies to the slash commands: plain notices and the player's card. */
+import { nextStep } from './hints.js';
 import { footerOf, getStyle } from './style.js';
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } from 'discord.js';
 
@@ -43548,6 +43694,10 @@ export function replyEmbed(title: string, description: string, color: number, ur
   const lead = /^\p{Extended_Pictographic}/u.test(title) ? '' : `${markOf(color)} `;
   const e = new EmbedBuilder().setTitle(`${lead}${title}`.slice(0, 250)).setDescription(description.slice(0, 3900)).setColor(color === COLORS.info ? getStyle().accent : color).setFooter(footerOf());
   if (url && /^https?:\/\//.test(url)) e.setURL(url);
+  if (color === COLORS.bad || color === COLORS.warn) {
+    const hint = nextStep(`${title} ${description}`);
+    if (hint) e.addFields({ name: '➡️ Что дальше', value: hint });
+  }
   return { embeds: [e] };
 }
 
@@ -43919,6 +44069,42 @@ export const stamped = (e: EmbedBuilder): EmbedBuilder => e.setTimestamp(new Dat
 
 /** the colour of a card by the share of the servers that are up */
 export const healthColor = (up: number, total: number): number => (total === 0 || up === 0 ? 0xe74c3c : up < total ? 0xf5b01e : 0x2ecc71);
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-bot/src"
+  cat > "$APP_DIR/core-bot/src/verify.ts" << '__COREGSM_EOF__'
+/** The «✅ Принимаю правила» button: gives the member the role written in the button («vfy:<role id>»). */
+import type { ButtonInteraction } from 'discord.js';
+import { log } from './log.js';
+import { COLORS, replyEmbed } from './replies.js';
+
+const EPHEMERAL = 64;
+
+export async function handleVerify(i: ButtonInteraction): Promise<void> {
+  const m = /^vfy:(\d{15,25})$/.exec(i.customId);
+  if (!m || !i.inGuild()) return;
+  try {
+    await i.deferReply({ flags: EPHEMERAL });
+  } catch (e) {
+    log('verify: could not acknowledge:', (e as Error).message);
+    return;
+  }
+  const member = await i.guild?.members.fetch(i.user.id).catch(() => null);
+  if (!member) {
+    await i.editReply(replyEmbed('Не получилось', 'Не удалось найти вас на сервере, попробуйте ещё раз.', COLORS.bad)).catch(() => undefined);
+    return;
+  }
+  if (member.roles.cache.has(m[1]!)) {
+    await i.editReply(replyEmbed('Вы уже в сообществе', 'Роль уже выдана, дополнительно ничего делать не нужно.', COLORS.ok)).catch(() => undefined);
+    return;
+  }
+  try {
+    await member.roles.add(m[1]!, 'Принял правила (кнопка в панели CoreGSM)');
+    await i.editReply(replyEmbed('Добро пожаловать!', 'Правила приняты, роль выдана: каналы открыты. Привязать игровой ник — команда /link.', COLORS.ok)).catch(() => undefined);
+  } catch (e) {
+    log('verify: could not give the role:', (e as Error).message);
+    await i.editReply(replyEmbed('Не получилось выдать роль', 'У бота нет права «Управлять ролями» или его роль ниже выдаваемой. Сообщите администратору.', COLORS.bad)).catch(() => undefined);
+  }
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-bot/src"
   cat > "$APP_DIR/core-bot/src/watchdog.ts" << '__COREGSM_EOF__'
@@ -119953,9 +120139,9 @@ import { EmbedView, type DiscordEmbed } from '../pages/EmbedPreview';
 import { Section, Switch, fail, toast } from '../ui';
 
 interface Style { accent: string; logo: boolean; footer: string; brandAccent: string }
-interface Sample { id: string; group: 'servers' | 'alerts' | 'community' | 'updates'; title: string; content?: string; embed: DiscordEmbed; buttons?: string[] }
+interface Sample { id: string; group: 'servers' | 'alerts' | 'community' | 'private' | 'updates'; title: string; content?: string; embed: DiscordEmbed; buttons?: string[] }
 
-const GROUPS = ['servers', 'alerts', 'community', 'updates'] as const;
+const GROUPS = ['servers', 'alerts', 'community', 'private', 'updates'] as const;
 
 /** «Вид сообщений бота»: one accent, signature and logo for everything the bot posts, and a gallery of every kind of message. */
 export default function DiscordStyleCard() {
@@ -120545,6 +120731,111 @@ export function Gauge({ value, tone, label, display, caption, icon }: {
       </div>
       {caption && <div className="-mt-1 text-center text-xs font-bold text-mute">{caption}</div>}
     </div>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/GiveawaysCard.tsx" << '__COREGSM_EOF__'
+import { useEffect, useState } from 'react';
+import { api } from '../api';
+import { t } from '../i18n';
+import { Button, Section, fail, toast } from '../ui';
+import { ChannelName, ChannelPicker } from './ChannelPicker';
+
+interface Item { id: number; prize: string; winners: number; endsAt: number; channelId: string; roleId: string; minHours: number; ended: boolean; winnerIds: string[]; entries: number }
+const BLANK = { prize: '', winners: '1', hours: '24', minHours: '0', roleId: '', channelId: '' };
+
+/** giveaways: the list with participants, «draw now» / «pick again», and a form to start one from the panel */
+export default function GiveawaysCard() {
+  const [items, setItems] = useState<Item[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [form, setForm] = useState<typeof BLANK | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    api<{ items: Item[] }>('/giveaways').then((r) => { if (alive) setItems(r.items); }).catch(() => undefined);
+    return () => { alive = false; };
+  }, []);
+  if (!items) return null;
+
+  const run = async (f: () => Promise<{ items: Item[] }>, ok: string) => {
+    setBusy(true);
+    try {
+      setItems((await f()).items);
+      toast(ok);
+    } catch (e) {
+      fail(e);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const start = async () => {
+    if (!form) return;
+    await run(() => api<{ items: Item[] }>('/giveaways', 'POST', { prize: form.prize, winners: Number(form.winners), hours: Number(form.hours), minHours: Number(form.minHours) || 0, roleId: form.roleId.trim(), channelId: form.channelId }), t('gw.started'));
+    setForm(null);
+  };
+  const valid = !!form && form.prize.trim().length >= 2 && /^\d{15,25}$/.test(form.channelId) && Number(form.winners) >= 1 && Number(form.hours) > 0 && /^(\d{15,25})?$/.test(form.roleId.trim());
+
+  return (
+    <Section title={t('gw.title')}>
+      <p className="mb-3 text-sm font-semibold text-mute">{t('gw.help')}</p>
+      {items.length === 0 && !form && <p className="mb-3 text-sm font-semibold text-mute">{t('gw.empty')}</p>}
+      <ul className="mb-3 grid gap-2">
+        {items.map((g) => (
+          <li key={g.id} className="rounded-xl border border-line p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <b>🎉 #{g.id} · {g.prize}</b>
+              <span className="flex gap-2">
+                {!g.ended && <button type="button" className="btn btn-soft btn-sm" disabled={busy} onClick={() => void run(() => api<{ items: Item[] }>(`/giveaways/${g.id}/end`, 'POST'), t('gw.drawn'))}>{t('gw.end')}</button>}
+                {g.ended && <button type="button" className="btn btn-soft btn-sm" disabled={busy} onClick={() => void run(() => api<{ items: Item[] }>(`/giveaways/${g.id}/reroll`, 'POST'), t('gw.drawn'))}>{t('gw.reroll')}</button>}
+                <button type="button" className="btn btn-soft btn-sm" disabled={busy} onClick={() => void run(() => api<{ items: Item[] }>(`/giveaways/${g.id}`, 'DELETE'), t('gw.deleted'))}>{t('ann.delete')}</button>
+              </span>
+            </div>
+            <p className="mt-1 text-sm font-semibold text-mute">
+              {g.ended ? t('gw.endedAt') : t('gw.endsAt', { d: new Date(g.endsAt).toLocaleString() })} · 👥 {g.entries} · 🏆 {g.winners}
+              {g.minHours > 0 ? ` · ⏱️ ${g.minHours} ${t('gw.hoursShort')}` : ''} · <ChannelName id={g.channelId} />
+            </p>
+            {g.ended && <p className="mt-1 text-sm font-semibold">{g.winnerIds.length ? `🏆 ${g.winnerIds.join(', ')}` : t('gw.noWinners')}</p>}
+          </li>
+        ))}
+      </ul>
+      {form ? (
+        <div className="grid gap-3">
+          <div>
+            <label htmlFor="gw-prize" className="label">{t('gw.prize')}</label>
+            <input id="gw-prize" className="input w-full" maxLength={200} value={form.prize} onChange={(e) => setForm({ ...form, prize: e.target.value })} />
+          </div>
+          <div className="grid grid-cols-3 gap-2">
+            <div>
+              <label htmlFor="gw-winners" className="label">{t('gw.winners')}</label>
+              <input id="gw-winners" type="number" min={1} max={20} className="input w-full" value={form.winners} onChange={(e) => setForm({ ...form, winners: e.target.value })} />
+            </div>
+            <div>
+              <label htmlFor="gw-hours" className="label">{t('gw.hours')}</label>
+              <input id="gw-hours" type="number" min={0.05} step="any" className="input w-full" value={form.hours} onChange={(e) => setForm({ ...form, hours: e.target.value })} />
+            </div>
+            <div>
+              <label htmlFor="gw-min" className="label">{t('gw.minHours')}</label>
+              <input id="gw-min" type="number" min={0} className="input w-full" value={form.minHours} onChange={(e) => setForm({ ...form, minHours: e.target.value })} />
+            </div>
+          </div>
+          <div>
+            <label htmlFor="gw-role" className="label">{t('gw.role')}</label>
+            <input id="gw-role" className="input w-full" inputMode="numeric" placeholder={t('gw.roleHint')} value={form.roleId} onChange={(e) => setForm({ ...form, roleId: e.target.value })} />
+          </div>
+          <div>
+            <span className="label">{t('gw.channel')}</span>
+            <ChannelPicker id="gw-channel" value={form.channelId} onChange={(v) => setForm({ ...form, channelId: v })} />
+          </div>
+          <div className="flex gap-2">
+            <Button type="button" loading={busy} disabled={!valid} onClick={() => void start()}>{t('gw.start')}</Button>
+            <button type="button" className="btn btn-soft" onClick={() => setForm(null)}>{t('common.cancel')}</button>
+          </div>
+        </div>
+      ) : (
+        <button type="button" className="btn btn-soft" onClick={() => setForm({ ...BLANK })}>{t('gw.new')}</button>
+      )}
+    </Section>
   );
 }
 __COREGSM_EOF__
@@ -123493,6 +123784,56 @@ export function UpdateBadge({ className = '' }: { className?: string }) {
         <path d="M8 13V3M3.5 7.5 8 3l4.5 4.5" />
       </svg>
     </span>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/VerifyCard.tsx" << '__COREGSM_EOF__'
+import { useState } from 'react';
+import { api } from '../api';
+import { t } from '../i18n';
+import { Button, Section, fail, toast } from '../ui';
+import { ChannelPicker } from './ChannelPicker';
+
+/** posts the «Accept the rules» card: the button gives the member the chosen role */
+export default function VerifyCard() {
+  const [channelId, setChannelId] = useState('');
+  const [roleId, setRoleId] = useState('');
+  const [text, setText] = useState('');
+  const [busy, setBusy] = useState(false);
+  const valid = /^\d{15,25}$/.test(channelId) && /^\d{15,25}$/.test(roleId.trim()) && text.trim().length >= 3;
+
+  const send = async () => {
+    setBusy(true);
+    try {
+      await api('/discord/verify-card', 'POST', { channelId, roleId: roleId.trim(), text: text.trim() });
+      toast(t('vfy.sent'));
+    } catch (e) {
+      fail(e);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Section title={t('vfy.title')}>
+      <p className="mb-3 text-sm font-semibold text-mute">{t('vfy.help')}</p>
+      <div className="grid gap-3">
+        <div>
+          <span className="label">{t('gw.channel')}</span>
+          <ChannelPicker id="vfy-channel" value={channelId} onChange={setChannelId} />
+        </div>
+        <div>
+          <label htmlFor="vfy-role" className="label">{t('vfy.role')}</label>
+          <input id="vfy-role" className="input w-full" inputMode="numeric" placeholder={t('gw.roleHint')} value={roleId} onChange={(e) => setRoleId(e.target.value)} />
+        </div>
+        <div>
+          <label htmlFor="vfy-text" className="label">{t('vfy.text')}</label>
+          <textarea id="vfy-text" className="input min-h-28 w-full" maxLength={1500} value={text} onChange={(e) => setText(e.target.value)} />
+        </div>
+        <div><Button type="button" loading={busy} disabled={!valid} onClick={() => void send()}>{t('vfy.send')}</Button></div>
+      </div>
+    </Section>
   );
 }
 __COREGSM_EOF__
@@ -140932,6 +141273,33 @@ const en: Record<keyof typeof ru, string> = {
   'wl.rolesNoChannel': 'Choose a channel first: the roles come from its Discord server.',
   'wl.saved': 'Saved',
   'wl.intent': 'Needs the «Server Members Intent» in Developer Portal → Bot.',
+  'gw.title': 'Giveaways',
+  'gw.help': 'A card with a «Join» button appears in the chosen channel; the draw happens by itself at the set time. The same actions are available with the /giveaway command.',
+  'gw.empty': 'No giveaways yet.',
+  'gw.new': 'New giveaway',
+  'gw.prize': 'Prize',
+  'gw.winners': 'Winners',
+  'gw.hours': 'Hours until the draw',
+  'gw.minHours': 'Minimum hours of play',
+  'gw.role': 'Role of participants (optional)',
+  'gw.roleHint': 'Discord role ID',
+  'gw.channel': 'Channel',
+  'gw.start': 'Start',
+  'gw.started': 'Giveaway started',
+  'gw.end': 'Draw now',
+  'gw.reroll': 'Pick again',
+  'gw.drawn': 'Done',
+  'gw.deleted': 'Deleted',
+  'gw.endedAt': 'Finished',
+  'gw.endsAt': 'Draw {d}',
+  'gw.hoursShort': 'h of play',
+  'gw.noWinners': 'No winners: nobody took part',
+  'vfy.title': '«Accept the rules» card',
+  'vfy.help': 'The bot posts the rules with a button: whoever presses it gets the chosen role. The bot role in Discord must be above the given one and have «Manage Roles».',
+  'vfy.role': 'ID of the role to give',
+  'vfy.text': 'Rules text',
+  'vfy.send': 'Post the card',
+  'vfy.sent': 'Card sent',
   'faq.title': 'Auto-answers: frequent questions',
   'faq.help': 'Write questions and answers: players get them with /faq (with suggestions while typing), and the bot answers by itself when it is mentioned in a question with matching words.',
   'faq.on': 'Auto-answers are on',
@@ -140989,6 +141357,7 @@ const en: Record<keyof typeof ru, string> = {
   'ds.g.servers': 'Servers',
   'ds.g.alerts': 'Alerts',
   'ds.g.community': 'Community',
+  'ds.g.private': 'Private messages',
   'ds.g.updates': 'Updates',
   'ds.light': 'Light Discord theme',
   'ds.dark': 'Dark Discord theme',
@@ -145182,6 +145551,33 @@ const ru = {
   'wl.rolesNoChannel': 'Сначала выберите канал: роли берутся с его Discord-сервера.',
   'wl.saved': 'Сохранено',
   'wl.intent': 'Нужен «Server Members Intent» в Developer Portal → Bot.',
+  'gw.title': 'Розыгрыши',
+  'gw.help': 'Карточка с кнопкой «Участвую» появится в выбранном канале; итоги подведутся сами в назначенное время. Те же действия есть командой /giveaway.',
+  'gw.empty': 'Розыгрышей пока не было.',
+  'gw.new': 'Новый розыгрыш',
+  'gw.prize': 'Приз',
+  'gw.winners': 'Победителей',
+  'gw.hours': 'Часов до итогов',
+  'gw.minHours': 'Минимум часов игры',
+  'gw.role': 'Роль участников (необязательно)',
+  'gw.roleHint': 'ID роли Discord',
+  'gw.channel': 'Канал',
+  'gw.start': 'Запустить',
+  'gw.started': 'Розыгрыш запущен',
+  'gw.end': 'Подвести итоги',
+  'gw.reroll': 'Выбрать заново',
+  'gw.drawn': 'Готово',
+  'gw.deleted': 'Удалено',
+  'gw.endedAt': 'Завершён',
+  'gw.endsAt': 'Итоги {d}',
+  'gw.hoursShort': 'ч игры',
+  'gw.noWinners': 'Победителей нет: никто не участвовал',
+  'vfy.title': 'Карточка «Принимаю правила»',
+  'vfy.help': 'Бот опубликует правила с кнопкой: нажавший получает выбранную роль. Роль бота в Discord должна стоять выше выдаваемой и иметь право «Управлять ролями».',
+  'vfy.role': 'ID выдаваемой роли',
+  'vfy.text': 'Текст правил',
+  'vfy.send': 'Опубликовать карточку',
+  'vfy.sent': 'Карточка отправлена',
   'faq.title': 'Автоответчик: частые вопросы',
   'faq.help': 'Напишите вопросы и ответы — игроки получат их командой /faq (с подсказками при вводе), а бот сам ответит, если его упомянуть в вопросе с подходящими словами.',
   'faq.on': 'Автоответчик включён',
@@ -145239,6 +145635,7 @@ const ru = {
   'ds.g.servers': 'Серверы',
   'ds.g.alerts': 'Оповещения',
   'ds.g.community': 'Сообщество',
+  'ds.g.private': 'Личные сообщения',
   'ds.g.updates': 'Обновления',
   'ds.light': 'Светлая тема Discord',
   'ds.dark': 'Тёмная тема Discord',
@@ -151162,6 +151559,8 @@ import ModerationCard from '../components/ModerationCard';
 import WelcomeCard from '../components/WelcomeCard';
 import DashboardCard from '../components/DashboardCard';
 import FaqCard from '../components/FaqCard';
+import GiveawaysCard from '../components/GiveawaysCard';
+import VerifyCard from '../components/VerifyCard';
 import DiscordStyleCard from '../components/DiscordStyleCard';
 
 type Style = 'embed' | 'card' | 'both';
@@ -151483,7 +151882,7 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
           <CasesCard />
         </>
       )}
-      {tab === 'extra' && loaded && <><DiscordExtras servers={servers} /><AnnouncementsAdmin /></>}
+      {tab === 'extra' && loaded && <><DiscordExtras servers={servers} /><AnnouncementsAdmin /><GiveawaysCard /><VerifyCard /></>}
       {tab === 'delivery' && <DeliveryList />}
 
       {draft && (

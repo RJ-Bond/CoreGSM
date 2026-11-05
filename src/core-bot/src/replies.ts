@@ -1,4 +1,5 @@
 /** Ephemeral replies to the slash commands: plain notices and the player's card. */
+import { nextStep } from './hints.js';
 import { footerOf, getStyle } from './style.js';
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } from 'discord.js';
 
@@ -24,6 +25,10 @@ export function replyEmbed(title: string, description: string, color: number, ur
   const lead = /^\p{Extended_Pictographic}/u.test(title) ? '' : `${markOf(color)} `;
   const e = new EmbedBuilder().setTitle(`${lead}${title}`.slice(0, 250)).setDescription(description.slice(0, 3900)).setColor(color === COLORS.info ? getStyle().accent : color).setFooter(footerOf());
   if (url && /^https?:\/\//.test(url)) e.setURL(url);
+  if (color === COLORS.bad || color === COLORS.warn) {
+    const hint = nextStep(`${title} ${description}`);
+    if (hint) e.addFields({ name: '➡️ Что дальше', value: hint });
+  }
   return { embeds: [e] };
 }
 

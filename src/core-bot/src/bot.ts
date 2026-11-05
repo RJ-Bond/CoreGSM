@@ -393,7 +393,7 @@ interface DeliveryItem {
 }
 /** buttons answered by the bot (a poll): five to a row */
 function actionRows(buttons: { customId: string; label: string }[] | undefined) {
-  const list = (buttons ?? []).filter((b) => /^(poll:\d+:\d+|gw:\d+)$/.test(b.customId) && b.label).slice(0, 10);
+  const list = (buttons ?? []).filter((b) => /^(poll:\d+:\d+|gw:\d+|vfy:\d+)$/.test(b.customId) && b.label).slice(0, 10);
   const rows: ActionRowBuilder<ButtonBuilder>[] = [];
   for (let i = 0; i < list.length; i += 5) {
     rows.push(new ActionRowBuilder<ButtonBuilder>().addComponents(list.slice(i, i + 5).map((b) => new ButtonBuilder().setStyle(ButtonStyle.Secondary).setCustomId(b.customId).setLabel(b.label.slice(0, 80)))));

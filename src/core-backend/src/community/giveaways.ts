@@ -38,22 +38,34 @@ interface Row { id: number; prize: string; winners: number; ends_at: number; cha
 const get = (id: number) => db.prepare('SELECT * FROM giveaways WHERE id = ?').get(id) as Row | undefined;
 const entries = (id: number) => (db.prepare('SELECT discord_id FROM giveaway_entries WHERE giveaway_id = ?').all(id) as { discord_id: string }[]).map((r) => r.discord_id);
 
-function conditionsText(g: Row): string {
+export interface GiveawayView { id: number; prize: string; winners: number; ends_at: number; role_id: string; min_hours: number }
+
+function conditionsText(g: Pick<Row, 'role_id' | 'min_hours'>): string {
   const l: string[] = [];
   if (g.role_id) l.push(`роль <@&${g.role_id}>`);
   if (g.min_hours > 0) l.push(`от ${g.min_hours} ч игры (нужен привязанный ник — /link)`);
   return l.length ? `\n📋 Условия: ${l.join(', ')}` : '';
 }
 
+/** the card of a running giveaway: also used by the message gallery in the admin */
+export const giveawayEmbed = (g: GiveawayView, entriesNow = 0) => ({
+  title: `🎉 Розыгрыш: ${g.prize}`,
+  description: `Нажмите кнопку, чтобы участвовать.\n🏆 Победителей: **${g.winners}**\n⏰ Итоги <t:${Math.floor(g.ends_at / 1000)}:R>${conditionsText(g)}\n👥 Участников: **${entriesNow}**\n🆔 Номер розыгрыша: **${g.id}**`,
+  color: COLORS.info,
+});
+
+/** the card with the winners */
+export const giveawayResultEmbed = (prize: string, winners: string[]) => ({
+  title: `🏆 Итоги розыгрыша: ${prize}`,
+  description: winners.length ? `Победител${winners.length > 1 ? 'и' : 'ь'}: ${winners.map((w) => `<@${w}>`).join(', ')}\nПоздравляем! Администратор свяжется с вами.` : 'Никто не участвовал — победителей нет.',
+  color: winners.length ? COLORS.ok : COLORS.warn,
+});
+
 function announceNew(g: Row): void {
   enqueueAlert('poll', 'CoreGSM', {
     content: '',
     mention: 'none',
-    embed: {
-      title: `🎉 Розыгрыш: ${g.prize}`,
-      description: `Нажмите кнопку, чтобы участвовать.\n🏆 Победителей: **${g.winners}**\n⏰ Итоги <t:${Math.floor(g.ends_at / 1000)}:R>${conditionsText(g)}\n🆔 Номер розыгрыша: **${g.id}**`,
-      color: COLORS.info,
-    },
+    embed: giveawayEmbed(g),
     buttons: [{ customId: `gw:${g.id}`, label: '🎉 Участвую' }],
   }, g.channel_id);
 }
@@ -65,11 +77,7 @@ export function finish(g: Row, skip: string[] = []): string[] {
   enqueueAlert('poll', 'CoreGSM', {
     content: winners.map((w) => `<@${w}>`).join(' '),
     mention: 'none',
-    embed: {
-      title: `🏆 Итоги розыгрыша: ${g.prize}`,
-      description: winners.length ? `Победител${winners.length > 1 ? 'и' : 'ь'}: ${winners.map((w) => `<@${w}>`).join(', ')}\nПоздравляем! Администратор свяжется с вами.` : 'Никто не участвовал — победителей нет.',
-      color: winners.length ? COLORS.ok : COLORS.warn,
-    },
+    embed: giveawayResultEmbed(g.prize, winners),
   }, g.channel_id);
   return winners;
 }
@@ -80,16 +88,51 @@ export function finishDue(now = Date.now()): number {
   return due.length;
 }
 
-export function registerGiveaways({ app, internal }: { app: Express; internal: RequestHandler }): void {
+interface StartOpts { prize: string; winners: number; hours: number; roleId?: string; minHours?: number; channelId: string; hostId: string }
+
+/** creates a giveaway and posts its card; an error text when the data is wrong */
+export function startGiveaway(o: StartOpts): { id: number } | { error: string } {
+  const bad = validateGiveaway({ prize: o.prize, winners: o.winners, hours: o.hours, minHours: o.minHours });
+  if (bad) return { error: bad };
+  const now = Date.now();
+  const id = Number(db.prepare('INSERT INTO giveaways (prize, winners, ends_at, channel_id, role_id, min_hours, host_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(o.prize.trim(), o.winners, now + Math.round(o.hours * 3600_000), o.channelId, o.roleId ?? '', o.minHours ?? 0, o.hostId, now).lastInsertRowid);
+  announceNew(get(id)!);
+  return { id };
+}
+
+export function registerGiveaways({ app, admin, internal }: { app: Express; admin: RequestHandler; internal: RequestHandler }): void {
+  const list = () =>
+    (db.prepare('SELECT * FROM giveaways ORDER BY id DESC LIMIT 20').all() as Row[]).map((g) => ({
+      id: g.id, prize: g.prize, winners: g.winners, endsAt: g.ends_at, channelId: g.channel_id, roleId: g.role_id, minHours: g.min_hours,
+      ended: !!g.ended, winnerIds: JSON.parse(g.winner_ids) as string[], entries: entries(g.id).length,
+    }));
+  app.get('/api/giveaways', admin, (_req, res) => res.json({ items: list() }));
+  app.post('/api/giveaways', admin, (req, res) => {
+    const b = z.object({ prize: z.string().max(200), winners: z.number().int(), hours: z.number(), roleId: z.string().regex(/^(\d{15,25})?$/).optional(), minHours: z.number().optional(), channelId: z.string().regex(/^\d{15,25}$/) }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'Проверьте поля: нужен канал, приз, число победителей и срок' });
+    const r = startGiveaway({ ...b.data, hostId: '0' });
+    if ('error' in r) return res.status(400).json(r);
+    res.status(201).json({ items: list() });
+  });
+  app.post('/api/giveaways/:id/:act', admin, (req, res) => {
+    const g = get(Number(req.params.id));
+    if (!g) return res.status(404).json({ error: 'Розыгрыш не найден' });
+    if (req.params.act === 'end' && !g.ended) finish(g);
+    else if (req.params.act === 'reroll' && g.ended) finish(g, JSON.parse(g.winner_ids) as string[]);
+    else return res.status(400).json({ error: req.params.act === 'end' ? 'Уже подведено' : 'Сначала нужно подвести итоги' });
+    res.json({ items: list() });
+  });
+  app.delete('/api/giveaways/:id', admin, (req, res) => {
+    db.prepare('DELETE FROM giveaways WHERE id = ?').run(Number(req.params.id));
+    res.json({ items: list() });
+  });
+
   app.post('/internal/giveaways/start', internal, (req, res) => {
     const b = z.object({ prize: z.string().max(200), winners: z.number().int(), hours: z.number(), roleId: z.string().regex(/^(\d{15,25})?$/).optional(), minHours: z.number().optional(), channelId: z.string().regex(/^\d{15,25}$/), hostId: z.string().regex(/^\d{15,25}$/) }).safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'bad body' });
-    const bad = validateGiveaway({ prize: b.data.prize, winners: b.data.winners, hours: b.data.hours, minHours: b.data.minHours });
-    if (bad) return res.status(400).json({ error: bad });
-    const now = Date.now();
-    const id = Number(db.prepare('INSERT INTO giveaways (prize, winners, ends_at, channel_id, role_id, min_hours, host_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(b.data.prize.trim(), b.data.winners, now + Math.round(b.data.hours * 3600_000), b.data.channelId, b.data.roleId ?? '', b.data.minHours ?? 0, b.data.hostId, now).lastInsertRowid);
-    announceNew(get(id)!);
-    res.json({ id });
+    const r = startGiveaway({ prize: b.data.prize, winners: b.data.winners, hours: b.data.hours, roleId: b.data.roleId ?? '', minHours: b.data.minHours ?? 0, channelId: b.data.channelId, hostId: b.data.hostId });
+    if ('error' in r) return res.status(400).json(r);
+    res.json(r);
   });
 
   app.post('/internal/giveaways/end', internal, (req, res) => {

@@ -5,9 +5,9 @@ import { EmbedView, type DiscordEmbed } from '../pages/EmbedPreview';
 import { Section, Switch, fail, toast } from '../ui';
 
 interface Style { accent: string; logo: boolean; footer: string; brandAccent: string }
-interface Sample { id: string; group: 'servers' | 'alerts' | 'community' | 'updates'; title: string; content?: string; embed: DiscordEmbed; buttons?: string[] }
+interface Sample { id: string; group: 'servers' | 'alerts' | 'community' | 'private' | 'updates'; title: string; content?: string; embed: DiscordEmbed; buttons?: string[] }
 
-const GROUPS = ['servers', 'alerts', 'community', 'updates'] as const;
+const GROUPS = ['servers', 'alerts', 'community', 'private', 'updates'] as const;
 
 /** «Вид сообщений бота»: one accent, signature and logo for everything the bot posts, and a gallery of every kind of message. */
 export default function DiscordStyleCard() {

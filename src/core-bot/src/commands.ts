@@ -6,6 +6,7 @@ import type { AutocompleteInteraction, ButtonInteraction, Client, Interaction } 
 import { backend, backendJson } from './backend.js';
 import { humanDiscordError } from './errors.js';
 import { log } from './log.js';
+import { handleVerify } from './verify.js';
 import { GIVEAWAY_COMMANDS, GIVEAWAY_NAMES, handleGiveaway, handleGiveawayButton } from './giveaway.js';
 import { FAQ_COMMANDS, FAQ_NAMES, faqAutocomplete, handleFaq } from './faq.js';
 import { handleInfo, INFO_COMMANDS, INFO_NAMES, infoAutocomplete } from './info.js';
@@ -113,6 +114,7 @@ export async function handleInteraction(i: Interaction): Promise<void> {
   if (i.isButton() && i.customId.startsWith('clear:')) return handleClearButton(i);
   if (i.isButton() && i.customId.startsWith('mod:')) return handlePunishButton(i);
   if (i.isButton() && i.customId.startsWith('appeal:')) return handleAppealButton(i);
+  if (i.isButton() && i.customId.startsWith('vfy:')) return handleVerify(i);
   if (i.isButton() && i.customId.startsWith('gw:')) return handleGiveawayButton(i);
   if (i.isButton() && i.customId.startsWith('dmx:')) return handleDmx(i);
   if (i.isButton() && i.customId.startsWith('fol:')) return handleFollow(i);
