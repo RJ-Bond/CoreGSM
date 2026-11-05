@@ -39,7 +39,7 @@ export const GIVEAWAY_NAMES = new Set(GIVEAWAY_COMMANDS.map((c) => c.name));
 
 export async function handleGiveaway(i: ChatInputCommandInteraction): Promise<void> {
   if (!i.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
-    await i.reply({ embeds: [replyEmbed('Только для администраторов', 'Розыгрышами управляют администраторы сервера.', COLORS.warn)], flags: EPHEMERAL }).catch(() => undefined);
+    await i.reply({ ...replyEmbed('Только для администраторов', 'Розыгрышами управляют администраторы сервера.', COLORS.warn), flags: EPHEMERAL }).catch(() => undefined);
     return;
   }
   try {

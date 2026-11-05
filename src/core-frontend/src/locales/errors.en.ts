@@ -278,6 +278,14 @@ const errorsEn: Record<string, string> = {
   backup_wrong_file_short: 'This is not a CoreGSM backup file',
   backup_too_large: 'The file is larger than 300 MB',
   upload_aborted: 'The upload was interrupted',
+  quiet_check: 'Check the hours',
+  faq_bad: 'The question is 2 to 100 characters, the answer 2 to 1500',
+  faq_limit: 'At most 100 answers can be stored',
+  giveaway_bad: 'Check the fields: a channel, a prize, the number of winners and the time are needed',
+  giveaway_not_found: 'Giveaway not found',
+  mod_bad: 'Moderation: check the channels, the pause and the numbers',
+  verify_bad: 'A channel, a role ID and the rules text (3+ characters) are needed',
+  support_url_bad: 'Check the channel and the link (https:// only)',
 };
 
 export default errorsEn;

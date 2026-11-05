@@ -21,11 +21,11 @@ describe('password recovery via Discord', () => {
 
   const dms = async () => {
     const r = await api.call('GET', '/internal/deliveries/pending?kinds=dm', { headers: H });
-    return r.body as { target: string; payload: { content: string } }[];
+    return r.body as { target: string; payload: Record<string, unknown> }[];
   };
   const waitDm = async (re: RegExp) => {
     for (let i = 0; i < 40; i++) {
-      const hit = (await dms()).find((d) => re.test(d.payload.content));
+      const hit = (await dms()).find((d) => re.test(JSON.stringify(d.payload)));
       if (hit) return hit;
       await new Promise((r) => setTimeout(r, 100));
     }
@@ -38,8 +38,8 @@ describe('password recovery via Discord', () => {
     const dm = await waitDm(/#\/reset\//);
     assert.ok(dm, 'a private message with the link is queued');
     assert.equal(dm.target, DISCORD_ID);
-    const token = /#\/reset\/([A-Za-z0-9_-]+)/.exec(dm.payload.content)?.[1] ?? '';
-    assert.ok(dm.payload.content.includes(`${BASE}/#/reset/`));
+    const token = /#\/reset\/([A-Za-z0-9_-]+)/.exec(JSON.stringify(dm.payload))?.[1] ?? '';
+    assert.ok(JSON.stringify(dm.payload).includes(`${BASE}/#/reset/`));
 
     const done = await api.call('POST', '/api/auth/reset', { body: { token, password: 'Via-discord-pass1' } });
     assert.equal(done.status, 200);

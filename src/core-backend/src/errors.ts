@@ -289,6 +289,15 @@ export const ERRORS = {
   backup_wrong_file_short: 'Это не файл резервной копии CoreGSM',
   backup_too_large: 'Файл больше 300 МБ',
   upload_aborted: 'Загрузка прервана',
+  // ---- discord extras ----
+  quiet_check: 'Проверьте часы',
+  faq_bad: 'Вопрос — от 2 до 100 символов, ответ — от 2 до 1500',
+  faq_limit: 'Можно хранить не больше 100 ответов',
+  giveaway_bad: 'Проверьте поля: нужен канал, приз, число победителей и срок',
+  giveaway_not_found: 'Розыгрыш не найден',
+  mod_bad: 'Модерация: проверьте каналы, паузу и числа',
+  verify_bad: 'Нужны канал, ID роли и текст правил (от 3 символов)',
+  support_url_bad: 'Проверьте канал и ссылку (только https://…)',
 } as const satisfies Record<string, string>;
 
 export type ErrorCode = keyof typeof ERRORS;

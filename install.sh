@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="2d7eabc462e5"
+COREGSM_BUILD="899697fe020b"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.51"
+COREGSM_VERSION="1.1.52"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -23695,6 +23695,15 @@ export const ERRORS = {
   backup_wrong_file_short: 'Это не файл резервной копии CoreGSM',
   backup_too_large: 'Файл больше 300 МБ',
   upload_aborted: 'Загрузка прервана',
+  // ---- discord extras ----
+  quiet_check: 'Проверьте часы',
+  faq_bad: 'Вопрос — от 2 до 100 символов, ответ — от 2 до 1500',
+  faq_limit: 'Можно хранить не больше 100 ответов',
+  giveaway_bad: 'Проверьте поля: нужен канал, приз, число победителей и срок',
+  giveaway_not_found: 'Розыгрыш не найден',
+  mod_bad: 'Модерация: проверьте каналы, паузу и числа',
+  verify_bad: 'Нужны канал, ID роли и текст правил (от 3 символов)',
+  support_url_bad: 'Проверьте канал и ссылку (только https://…)',
 } as const satisfies Record<string, string>;
 
 export type ErrorCode = keyof typeof ERRORS;
@@ -41168,7 +41177,7 @@ export const GIVEAWAY_NAMES = new Set(GIVEAWAY_COMMANDS.map((c) => c.name));
 
 export async function handleGiveaway(i: ChatInputCommandInteraction): Promise<void> {
   if (!i.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
-    await i.reply({ embeds: [replyEmbed('Только для администраторов', 'Розыгрышами управляют администраторы сервера.', COLORS.warn)], flags: EPHEMERAL }).catch(() => undefined);
+    await i.reply({ ...replyEmbed('Только для администраторов', 'Розыгрышами управляют администраторы сервера.', COLORS.warn), flags: EPHEMERAL }).catch(() => undefined);
     return;
   }
   try {
@@ -123716,7 +123725,7 @@ function TourOverlay({ onClose }: { onClose: () => void }) {
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components"
   cat > "$APP_DIR/core-frontend/src/components/UpdateBadge.tsx" << '__COREGSM_EOF__'
-import { useEffect, useSyncExternalStore, type CSSProperties } from 'react';
+import { useEffect, useRef, useSyncExternalStore, type CSSProperties } from 'react';
 import { api, type UpdateInfo } from '../api';
 import { NO_UPDATE, shownUpdate, updateStateOf, type UpdateState } from './updateState';
 import { t } from '../i18n';
@@ -123737,6 +123746,8 @@ export const useUpdateState = (): UpdateState =>
 
 /** Asks the panel about updates: once a minute, every three seconds while one is being installed. */
 export function useUpdatePolling(enabled: boolean, onAvailable?: (v: boolean) => void): void {
+  const notify = useRef(onAvailable);
+  notify.current = onAvailable;
   useEffect(() => {
     if (!enabled) {
       setUpdateState(NO_UPDATE);
@@ -123750,7 +123761,7 @@ export function useUpdatePolling(enabled: boolean, onAvailable?: (v: boolean) =>
         try {
           const s = updateStateOf(await api<UpdateInfo>('/update/status'));
           setUpdateState(s);
-          onAvailable?.(s.available);
+          notify.current?.(s.available);
           next = s.running ? 3_000 : 60_000;
         } catch {
           /* the panel is restarting or offline: try again */
@@ -123763,7 +123774,6 @@ export function useUpdatePolling(enabled: boolean, onAvailable?: (v: boolean) =>
       stop = true;
       if (timer) clearTimeout(timer);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled]);
 }
 
@@ -143618,6 +143628,14 @@ const errorsEn: Record<string, string> = {
   backup_wrong_file_short: 'This is not a CoreGSM backup file',
   backup_too_large: 'The file is larger than 300 MB',
   upload_aborted: 'The upload was interrupted',
+  quiet_check: 'Check the hours',
+  faq_bad: 'The question is 2 to 100 characters, the answer 2 to 1500',
+  faq_limit: 'At most 100 answers can be stored',
+  giveaway_bad: 'Check the fields: a channel, a prize, the number of winners and the time are needed',
+  giveaway_not_found: 'Giveaway not found',
+  mod_bad: 'Moderation: check the channels, the pause and the numbers',
+  verify_bad: 'A channel, a role ID and the rules text (3+ characters) are needed',
+  support_url_bad: 'Check the channel and the link (https:// only)',
 };
 
 export default errorsEn;

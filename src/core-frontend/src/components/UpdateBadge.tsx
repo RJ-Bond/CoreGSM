@@ -1,4 +1,4 @@
-import { useEffect, useSyncExternalStore, type CSSProperties } from 'react';
+import { useEffect, useRef, useSyncExternalStore, type CSSProperties } from 'react';
 import { api, type UpdateInfo } from '../api';
 import { NO_UPDATE, shownUpdate, updateStateOf, type UpdateState } from './updateState';
 import { t } from '../i18n';
@@ -19,6 +19,8 @@ export const useUpdateState = (): UpdateState =>
 
 /** Asks the panel about updates: once a minute, every three seconds while one is being installed. */
 export function useUpdatePolling(enabled: boolean, onAvailable?: (v: boolean) => void): void {
+  const notify = useRef(onAvailable);
+  notify.current = onAvailable;
   useEffect(() => {
     if (!enabled) {
       setUpdateState(NO_UPDATE);
@@ -32,7 +34,7 @@ export function useUpdatePolling(enabled: boolean, onAvailable?: (v: boolean) =>
         try {
           const s = updateStateOf(await api<UpdateInfo>('/update/status'));
           setUpdateState(s);
-          onAvailable?.(s.available);
+          notify.current?.(s.available);
           next = s.running ? 3_000 : 60_000;
         } catch {
           /* the panel is restarting or offline: try again */
@@ -45,7 +47,6 @@ export function useUpdatePolling(enabled: boolean, onAvailable?: (v: boolean) =>
       stop = true;
       if (timer) clearTimeout(timer);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled]);
 }
 
