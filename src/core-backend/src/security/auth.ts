@@ -9,7 +9,7 @@ import { db, getSetting } from '../db.js';
 import { safeEqual } from '../http.js';
 import { guardDelete, guardGet, guardSet } from './loginGuard.js';
 import { uaLabel } from '../profile/profile.js';
-import { readCookie, SESSION_COOKIE } from './security.js';
+import { readSessionCookie } from './security.js';
 
 // a real bcrypt hash (cost 12) to compare against when the login does not exist: the response time stays the same
 export const DUMMY_HASH = bcrypt.hashSync(crypto.randomBytes(8).toString('hex'), 12);
@@ -31,8 +31,16 @@ export function userFromToken(token: string): { id: number; username: string; ro
     if (!u) return null;
     if (activeBan(u, Date.now())) return null;
     // an ended session (revoked from the profile) stops working at once
-    if (!db.prepare('SELECT 1 FROM sessions WHERE id = ? AND user_id = ?').get(p.sid, u.id)) return null;
+    const sess = db.prepare('SELECT last_seen FROM sessions WHERE id = ? AND user_id = ?').get(p.sid, u.id) as { last_seen: number } | undefined;
+    if (!sess) return null;
     const now = Date.now();
+    // an administrator or a moderator who has been away for too long signs in again (a player keeps the 7 days of the token)
+    const idle = u.role === 'player' ? 0 : staffIdleMs();
+    if (idle > 0 && now - (sess.last_seen ?? 0) > idle) {
+      db.prepare('DELETE FROM sessions WHERE id = ?').run(p.sid);
+      lastSeen.delete(p.sid);
+      return null;
+    }
     if (now - (lastSeen.get(p.sid) ?? 0) > 60_000) {
       lastSeen.set(p.sid, now);
       db.prepare('UPDATE sessions SET last_seen = ? WHERE id = ?').run(now, p.sid);
@@ -44,10 +52,16 @@ export function userFromToken(token: string): { id: number; username: string; ro
 }
 export const lastSeen = new Map<string, number>();
 
+/** how long an administrator or a moderator may be silent before the session ends: the setting `staff_idle_hours` (default 12, 0 = never) */
+export function staffIdleMs(): number {
+  const v = Number(getSetting('staff_idle_hours') ?? 12);
+  return Number.isFinite(v) && v >= 0 ? Math.min(v, 24 * 30) * 3600_000 : 12 * 3600_000;
+}
+
 /** Bearer header first (API clients, the bot), then the HttpOnly session cookie of the web panel. */
 export function loadUser(req: Request) {
   const h = req.headers.authorization ?? '';
-  return userFromToken(h.startsWith('Bearer ') ? h.slice(7) : '') ?? userFromToken(readCookie(req, SESSION_COOKIE));
+  return userFromToken(h.startsWith('Bearer ') ? h.slice(7) : '') ?? userFromToken(readSessionCookie(req));
 }
 
 /** Starts a session and returns the signed token for it. */

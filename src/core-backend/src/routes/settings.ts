@@ -1,4 +1,5 @@
 /** Administrator settings: bot token and proxy, bot status, access, branding, web app manifest. */
+import { needStepUp } from '../security/stepUp.js';
 import express from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -48,6 +49,8 @@ const settingsSchema = z.object({
 router.put('/api/settings', admin, (req, res) => {
   const b = settingsSchema.safeParse(req.body);
   if (!b.success) return res.status(400).json({ error: 'Проверьте поля формы' });
+  // the secrets of the panel: a stolen session alone must not be able to swap the bot token or the proxy
+  if ((b.data.discordToken !== undefined || b.data.discordClientSecret !== undefined || b.data.proxyUrl !== undefined) && needStepUp(req, res)) return undefined;
   const proxyUrl = b.data.proxyUrl === undefined ? undefined : normalizeProxy(b.data.proxyUrl, b.data.proxyType ?? 'socks5');
   if (proxyUrl && !PROXY_RE.test(proxyUrl)) return res.status(400).json({ error: PROXY_HELP });
   if (b.data.discordToken && !BOT_TOKEN_RE.test(b.data.discordToken)) return res.status(400).json({ error: TOKEN_HELP });

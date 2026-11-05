@@ -15,6 +15,9 @@ interface ApiKey {
   lastUsedAt: number | null;
   revokedAt: number | null;
   rateLimit: number;
+  expiresAt?: number | null;
+  allowIps?: string[];
+  lastUsedIp?: string | null;
 }
 type Created = ApiKey & { key: string };
 
@@ -44,6 +47,8 @@ export default function AdminIntegrations() {
 function KeysSection({ keys, onChanged }: { keys: ApiKey[] | null; onChanged: () => void }) {
   const [name, setName] = useState('');
   const [limit, setLimit] = useState('60');
+  const [days, setDays] = useState('');
+  const [ips, setIps] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [created, setCreated] = useState<Created | null>(null);
@@ -52,9 +57,10 @@ function KeysSection({ keys, onChanged }: { keys: ApiKey[] | null; onChanged: ()
     setBusy(true);
     setError('');
     try {
-      const c = await api<Created>('/integrations/keys', 'POST', { name: name.trim(), rateLimit: Number(limit) || 60 });
+      const c = await api<Created>('/integrations/keys', 'POST', { name: name.trim(), rateLimit: Number(limit) || 60, ...(Number(days) > 0 ? { expiresInDays: Number(days) } : {}), ...(ips.trim() ? { allowIps: ips } : {}) });
       setCreated(c);
       setName('');
+      setIps('');
       onChanged();
     } catch (e) {
       setError((e as Error).message);
@@ -99,6 +105,20 @@ function KeysSection({ keys, onChanged }: { keys: ApiKey[] | null; onChanged: ()
           <input className="input" type="number" min={1} max={6000} value={limit} onChange={(e) => setLimit(e.target.value)} />
         </Field>
         <button type="submit" className="btn" disabled={busy || !name.trim()}>{t('intg.create')}</button>
+        <div className="grid gap-3 sm:col-span-3 sm:grid-cols-[9rem_1fr]">
+          <Field label={t('intg.f.expires')}>
+            <select className="input" value={days} onChange={(e) => setDays(e.target.value)}>
+              <option value="">{t('intg.f.never')}</option>
+              <option value="30">{t('intg.f.days', { n: 30 })}</option>
+              <option value="90">{t('intg.f.days', { n: 90 })}</option>
+              <option value="365">{t('intg.f.days', { n: 365 })}</option>
+            </select>
+          </Field>
+          <Field label={t('intg.f.ips')}>
+            <input className="input font-mono" value={ips} maxLength={400} placeholder="203.0.113.7, 198.51.100.0/24" onChange={(e) => setIps(e.target.value)} />
+            <span className="mt-1 block text-sm font-semibold text-mute">{t('intg.f.ipsHint')}</span>
+          </Field>
+        </div>
       </form>
       <ErrorLine text={error} />
 
@@ -110,11 +130,15 @@ function KeysSection({ keys, onChanged }: { keys: ApiKey[] | null; onChanged: ()
             <li key={k.id} className="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-3">
               <div className="min-w-0 flex-1 basis-48">
                 <div className="truncate font-extrabold">{k.name}</div>
-                <div className="text-sm font-semibold text-mute"><code>{k.prefix}…</code> · {t('intg.rate', { n: k.rateLimit })}</div>
+                <div className="text-sm font-semibold text-mute">
+                  <code>{k.prefix}…</code> · {t('intg.rate', { n: k.rateLimit })}
+                  {k.expiresAt ? <> · {t('intg.expiresAt', { when: fmtDateTime(k.expiresAt) })}</> : null}
+                  {k.allowIps && k.allowIps.length > 0 ? <> · {t('intg.onlyFrom', { list: k.allowIps.join(', ') })}</> : null}
+                </div>
               </div>
               <div className="text-sm font-semibold text-mute">
                 {k.createdBy ? t('intg.createdBy', { when: fmtDateTime(k.createdAt), who: k.createdBy }) : t('intg.createdAt', { when: fmtDateTime(k.createdAt) })}<br />
-                {k.lastUsedAt ? t('intg.usedAt', { when: fmtDateTime(k.lastUsedAt) }) : t('intg.unused')}
+                {k.lastUsedAt ? t('intg.usedAt', { when: fmtDateTime(k.lastUsedAt) }) : t('intg.unused')}{k.lastUsedIp ? ` · ${k.lastUsedIp}` : ''}
               </div>
               <button type="button" className="btn btn-soft btn-sm" onClick={() => void revoke(k)}>{t('intg.revoke')}</button>
             </li>

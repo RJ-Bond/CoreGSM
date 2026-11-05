@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
-import { clampRateLimit, extractKey, generateKey, hashKey, keyPrefix, looksLikeKey, SlidingWindow } from '../src/security/apiKeyLogic.ts';
+import Database from 'better-sqlite3';
+import { clampRateLimit, extractKey, generateKey, hashKey, ipAllowed, keyExpired, keyPrefix, looksLikeKey, normalizeIp, parseAllowList, SlidingWindow } from '../src/security/apiKeyLogic.ts';
 import { badgeSvg, escapeXml, stateOf, valueText, widgetHtml, widgetTheme } from '../src/profile/badgeLogic.ts';
 import { openApiSpec } from '../src/admin/openapi.ts';
 import { setupAdmin, startBackend, type Api } from './harness.ts';
@@ -44,6 +45,34 @@ describe('api key logic', () => {
     assert.equal(w.hit('a', 2, 61_001).ok, true);
     w.prune(1_000_000);
     assert.equal(w.size, 0);
+  });
+});
+
+describe('api key: where and until when', () => {
+  it('matches an address, an IPv4 network and the mapped form', () => {
+    assert.equal(normalizeIp('::ffff:203.0.113.7'), '203.0.113.7');
+    assert.ok(ipAllowed('203.0.113.7', []));
+    assert.ok(ipAllowed('203.0.113.7', ['203.0.113.7']));
+    assert.ok(ipAllowed('::ffff:203.0.113.7', ['203.0.113.0/24']));
+    assert.ok(!ipAllowed('203.0.114.7', ['203.0.113.0/24']));
+    assert.ok(ipAllowed('10.1.2.3', ['10.0.0.0/8', '192.168.0.1']));
+    assert.ok(!ipAllowed('11.1.2.3', ['10.0.0.0/8']));
+    assert.ok(ipAllowed('1.2.3.4', ['0.0.0.0/0']));
+    assert.ok(ipAllowed('2001:db8::1', ['2001:db8::1']));
+    assert.ok(!ipAllowed('2001:db8::2', ['2001:db8::1']));
+  });
+  it('reads a list: one per line or separated, without repeats; a wrong entry refuses the whole list', () => {
+    assert.deepEqual(parseAllowList('203.0.113.7\n203.0.113.0/24, 203.0.113.7'), ['203.0.113.7', '203.0.113.0/24']);
+    assert.deepEqual(parseAllowList(''), []);
+    assert.equal(parseAllowList('203.0.113.7/33'), null);
+    assert.equal(parseAllowList('999.1.1.1'), null);
+    assert.equal(parseAllowList('not an address'), null);
+    assert.equal(parseAllowList(Array.from({ length: 21 }, (_, i) => `10.0.0.${i}`).join(',')), null);
+  });
+  it('a key is out of date at its moment and never when there is none', () => {
+    assert.ok(keyExpired(1000, 1000));
+    assert.ok(!keyExpired(1001, 1000));
+    assert.ok(!keyExpired(null));
   });
 });
 
@@ -128,6 +157,29 @@ describe('api: keys, public API, badge, widget', () => {
     assert.equal(list.body.length, 1);
     assert.equal(JSON.stringify(list.body).includes(c.body.key), false);
     assert.equal(list.body[0].lastUsedAt, null);
+  });
+
+  it('a key with an expiry or a list of addresses', async () => {
+    const wrongNet = await api.call('POST', '/api/integrations/keys', { token, body: { name: 'Net', allowIps: '203.0.113.0/24' } });
+    assert.equal(wrongNet.status, 201);
+    assert.deepEqual(wrongNet.body.allowIps, ['203.0.113.0/24']);
+    const refused = await api.call('GET', '/api/v1/servers', { headers: { authorization: `Bearer ${wrongNet.body.key}` } });
+    assert.equal(refused.status, 403);
+    assert.equal(refused.body.error.code, 'forbidden_ip');
+    const here = await api.call('POST', '/api/integrations/keys', { token, body: { name: 'Here', allowIps: '127.0.0.1, ::1' } });
+    assert.equal((await api.call('GET', '/api/v1/servers', { headers: { authorization: `Bearer ${here.body.key}` } })).status, 200);
+    const list = await api.call('GET', '/api/integrations/keys', { token });
+    assert.match(list.body.find((x: { id: number }) => x.id === here.body.id).lastUsedIp, /127\.0\.0\.1|::1/);
+    assert.equal((await api.call('POST', '/api/integrations/keys', { token, body: { name: 'Bad', allowIps: '300.1.1.1' } })).status, 400);
+    const soon = await api.call('POST', '/api/integrations/keys', { token, body: { name: 'Soon', expiresInDays: 30 } });
+    assert.ok(soon.body.expiresAt > Date.now() + 29 * 86_400_000);
+    assert.equal((await api.call('GET', '/api/v1/servers', { headers: { authorization: `Bearer ${soon.body.key}` } })).status, 200);
+    const db = new Database(api.dbPath);
+    db.prepare('UPDATE api_keys SET expires_at = ? WHERE id = ?').run(Date.now() - 1000, soon.body.id);
+    db.close();
+    const gone = await api.call('GET', '/api/v1/servers', { headers: { authorization: `Bearer ${soon.body.key}` } });
+    assert.equal(gone.status, 401);
+    assert.equal(gone.body.error.code, 'invalid_key');
   });
 
   it('serves the public API with a key and refuses without one', async () => {

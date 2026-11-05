@@ -30,6 +30,7 @@ import { pipeline } from 'node:stream/promises';
 import { once } from 'node:events';
 import * as tar from 'tar';
 import { z } from 'zod';
+import { stepUp } from '../security/stepUp.js';
 import { DATA_DIR, db, getSetting, setSetting } from '../db.js';
 import { canDecrypt, isEncrypted, isSecretKey } from '../security/secrets.js';
 import { log } from '../logger.js';
@@ -538,6 +539,7 @@ export function registerBackups({ app, admin }: { app: Express; admin: RequestHa
   app.get(
     '/api/backup',
     admin,
+    stepUp,
     guard(async (_req, res) => {
       const s = backupSettings();
       const tmp = path.join(os.tmpdir(), `coregsm-dl-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`);
@@ -550,6 +552,7 @@ export function registerBackups({ app, admin }: { app: Express; admin: RequestHa
   app.post(
     '/api/backup/restore',
     admin,
+    stepUp,
     guard(async (req, res) => {
       const upload = path.join(DATA_DIR, `.restore-upload-${crypto.randomBytes(6).toString('hex')}`);
       try {
@@ -682,6 +685,7 @@ export function registerBackups({ app, admin }: { app: Express; admin: RequestHa
   app.get(
     '/api/backups/:name',
     admin,
+    stepUp,
     guard((req, res) => {
       const f = storedFile(req, res);
       if (f) res.download(f.file, f.name);
@@ -702,6 +706,7 @@ export function registerBackups({ app, admin }: { app: Express; admin: RequestHa
   app.post(
     '/api/backups/:name/restore',
     admin,
+    stepUp,
     guard(async (req, res) => {
       const f = storedFile(req, res);
       if (!f) return;

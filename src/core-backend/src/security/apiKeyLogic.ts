@@ -71,3 +71,59 @@ export class SlidingWindow {
     return this.hits.size;
   }
 }
+
+// ---------- where and until when a key works ----------
+
+/** «::ffff:1.2.3.4» is the IPv4 address 1.2.3.4 */
+export const normalizeIp = (ip: string): string => (ip.startsWith('::ffff:') && ip.includes('.') ? ip.slice(7) : ip).trim().toLowerCase();
+
+const ipv4 = (s: string): number | null => {
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(s);
+  if (!m) return null;
+  const p = m.slice(1).map(Number);
+  if (p.some((n) => n > 255)) return null;
+  return ((p[0] << 24) | (p[1] << 16) | (p[2] << 8) | p[3]) >>> 0;
+};
+
+/** an entry of the list is an address or an IPv4 network («203.0.113.0/24»); false for anything else */
+export function validAllowEntry(entry: string): boolean {
+  const e = normalizeIp(entry);
+  if (!e) return false;
+  const [addr, bits] = e.split('/');
+  if (bits !== undefined) {
+    const n = Number(bits);
+    return ipv4(addr) !== null && /^\d{1,2}$/.test(bits) && n >= 0 && n <= 32;
+  }
+  return ipv4(addr) !== null || /^[0-9a-f:]{2,39}$/.test(addr);
+}
+
+/** the list is empty (any address) or the address is in it */
+export function ipAllowed(ip: string, list: string[]): boolean {
+  if (list.length === 0) return true;
+  const me = normalizeIp(ip);
+  const mine = ipv4(me);
+  for (const raw of list) {
+    const e = normalizeIp(raw);
+    const [addr, bits] = e.split('/');
+    if (bits === undefined) {
+      if (addr === me) return true;
+      continue;
+    }
+    const net = ipv4(addr);
+    if (net === null || mine === null) continue;
+    const n = Number(bits);
+    const mask = n === 0 ? 0 : (0xffffffff << (32 - n)) >>> 0;
+    if ((mine & mask) === (net & mask)) return true;
+  }
+  return false;
+}
+
+/** the list as it is stored: one entry per line or separated by commas, checked, without repeats; null when an entry is wrong */
+export function parseAllowList(text: string): string[] | null {
+  const items = [...new Set(text.split(/[\s,;]+/).map((x) => normalizeIp(x)).filter(Boolean))];
+  if (items.length > 20) return null;
+  return items.every(validAllowEntry) ? items : null;
+}
+
+/** the key is out of date */
+export const keyExpired = (expiresAt: number | null | undefined, now = Date.now()): boolean => expiresAt != null && expiresAt <= now;

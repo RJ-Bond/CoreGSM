@@ -1,4 +1,5 @@
 /** Game servers: list and CRUD, server page data, history, PNG card, share page, status page. */
+import { stepUp } from '../security/stepUp.js';
 import express from 'express';
 import { z } from 'zod';
 import { admin, allow, isAdmin, loadUser, publicPanel, userFromToken, viewer } from '../security/auth.js';
@@ -126,7 +127,7 @@ router.put(
   }),
 );
 
-router.delete('/api/servers/:id', admin, (req, res) => {
+router.delete('/api/servers/:id', admin, stepUp, (req, res) => {
   const r = db.prepare('DELETE FROM servers WHERE id = ?').run(Number(req.params.id));
   if (!r.changes) return res.status(404).json({ error: 'Сервер не найден' });
   removeCover(Number(req.params.id));

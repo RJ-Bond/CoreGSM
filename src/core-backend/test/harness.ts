@@ -13,7 +13,7 @@ export interface Api {
   stop: () => Promise<void>;
   /** stops the backend (SIGTERM) and starts it again on the same database and port */
   restart: () => Promise<void>;
-  call: (method: string, url: string, opts?: { token?: string; body?: unknown; raw?: BodyInit; headers?: Record<string, string> }) => Promise<{ status: number; body: any }>;
+  call: (method: string, url: string, opts?: { token?: string; body?: unknown; raw?: BodyInit; headers?: Record<string, string>; /** false: do not confirm a protected action; a string: the password to confirm with (default: the admin's) */ reauth?: false | string }) => Promise<{ status: number; body: any }>;
 }
 
 const freePort = () =>
@@ -78,7 +78,16 @@ export async function startBackend(extraEnv: Record<string, string> = {}): Promi
     await Promise.race([exited, new Promise((r) => setTimeout(r, 10_000))]);
   };
 
+  // like the panel: a protected action (code reauth_required) is confirmed with the password and sent again
   const call: Api['call'] = async (method, url, opts = {}) => {
+    const first = await callOnce(method, url, opts);
+    if (first.status === 403 && (first.body as { code?: string } | null)?.code === 'reauth_required' && opts.token && opts.reauth !== false) {
+      const ok = await callOnce('POST', '/api/auth/reauth', { token: opts.token, body: { password: typeof opts.reauth === 'string' ? opts.reauth : ADMIN.password } });
+      if (ok.status === 200) return callOnce(method, url, opts);
+    }
+    return first;
+  };
+  const callOnce: Api['call'] = async (method, url, opts = {}) => {
     const headers: Record<string, string> = { ...(opts.headers ?? {}) };
     if (opts.token) headers.Authorization = `Bearer ${opts.token}`;
     let body: BodyInit | undefined;

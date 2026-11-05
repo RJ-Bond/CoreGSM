@@ -182,6 +182,17 @@ CREATE TABLE IF NOT EXISTS favorite_push_prefs (
     // what a public profile shows: a JSON object of switches, empty = everything shown
     up: (db) => { if (hasTable(db, 'user_player')) addColumn(db, 'user_player', 'privacy', "TEXT NOT NULL DEFAULT ''"); },
   },
+  {
+    version: 15,
+    name: 'api_keys.expiry+allowlist',
+    // expires_at: the key stops working then (null = never); allow_ips: the addresses it may be used from (one per line, '' = any)
+    up: (db) => {
+      if (!hasTable(db, 'api_keys')) return;
+      addColumn(db, 'api_keys', 'expires_at', 'INTEGER');
+      addColumn(db, 'api_keys', 'allow_ips', "TEXT NOT NULL DEFAULT ''");
+      addColumn(db, 'api_keys', 'last_used_ip', "TEXT NOT NULL DEFAULT ''");
+    },
+  },
 ];
 
 export const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;

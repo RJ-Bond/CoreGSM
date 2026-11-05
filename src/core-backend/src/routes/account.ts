@@ -6,6 +6,7 @@ import { decryptSecret, encryptSecret } from '../security/secrets.js';
 import { newRecoveryCodes, newSecret, otpauthUri, useRecoveryCode, verifyCode } from '../security/totp.js';
 import { accountLockRemaining, accountLoginFailed, accountLoginOk, auth, type AuthedRequest, avatarUrl, DUMMY_HASH, issueToken, loginLimiter, permsOf, rateLimit, registrationOpen, resetAttempts, type Role, type UserFull } from '../security/auth.js';
 import { customAvatarUrl } from '../images/avatars.js';
+import { passwordError, type PasswordRole } from '../security/passwordPolicy.js';
 import { SETUP_TOKEN } from '../config.js';
 import { activeBan } from '../security/banLogic.js';
 import { db, setSetting } from '../db.js';
@@ -120,6 +121,8 @@ router.post(
     const b = setupSchema.safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: b.error.issues[0]?.message ?? 'Проверьте поля формы' });
     if (!safeEqual(b.data.code.trim(), SETUP_TOKEN)) return res.status(403).json({ error: 'Неверный код установки' });
+    const weakSetup = passwordError(b.data.password, { username: b.data.username, role: 'admin' });
+    if (weakSetup) return res.status(400).json({ error: weakSetup });
     const proxyUrl = normalizeProxy(b.data.proxyUrl ?? '', b.data.proxyType ?? 'socks5');
     if (proxyUrl && !PROXY_RE.test(proxyUrl)) return res.status(400).json({ error: PROXY_HELP });
     if (b.data.discordToken && !BOT_TOKEN_RE.test(b.data.discordToken)) return res.status(400).json({ error: TOKEN_HELP });
@@ -172,6 +175,8 @@ router.post(
       .safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: b.error.issues[0]?.message ?? 'Проверьте поля формы' });
     if (rulesText() && !b.data.acceptRules) return res.status(400).json({ error: 'Нужно согласиться с правилами сообщества' });
+    const weakReg = passwordError(b.data.password, { username: b.data.username, role: 'player' });
+    if (weakReg) return res.status(400).json({ error: weakReg });
     if (db.prepare('SELECT 1 FROM users WHERE ulower(username) = ?').get(b.data.username.toLowerCase())) {
       return res.status(409).json({ error: 'Этот логин уже занят' });
     }
@@ -283,6 +288,8 @@ router.post(
     if (!body.success) return res.status(400).json({ error: 'Новый пароль должен быть не короче 8 символов' });
     if (body.data.confirm !== undefined && body.data.confirm !== body.data.next) return res.status(400).json({ error: 'Пароли не совпадают' });
     const u = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user!.id) as UserFull;
+    const weakNew = passwordError(body.data.next, { username: u.username, role: u.role as PasswordRole });
+    if (weakNew) return res.status(400).json({ error: weakNew });
     // an account created through Discord has no password yet: no current one to check
     if (!u.no_password && !(await bcrypt.compare(body.data.current ?? '', u.password_hash))) {
       return res.status(403).json({ error: 'Текущий пароль неверен' });

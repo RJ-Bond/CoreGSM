@@ -20,6 +20,8 @@ import { layout, mailReady, sendMail, smtpConfig } from '../alerts/mail.js';
 import { logAccount, prefsOf, uaLabel } from '../profile/profile.js';
 import { dmAvailable, pushToUser } from '../community/subscriptions.js';
 import { newDeviceNotice } from './newDeviceLogic.js';
+import { passwordError, type PasswordRole } from './passwordPolicy.js';
+import { needStepUp } from './stepUp.js';
 import { log } from '../logger.js';
 
 // ---------- schema ----------
@@ -56,6 +58,8 @@ setInterval(() => {
 
 // ---------- session cookie and CSRF ----------
 export const SESSION_COOKIE = 'coregsm_session';
+/** over https the cookie carries the __Host- prefix: the browser then accepts it only with Secure, Path=/ and no Domain, so a sibling site cannot plant or overwrite it */
+export const HOST_SESSION_COOKIE = '__Host-coregsm_session';
 /** lifetime of a session token (issueToken signs it for the same period) */
 export const SESSION_TTL_MS = 7 * 24 * 3600_000;
 
@@ -75,12 +79,24 @@ export function readCookie(req: Request, name: string): string {
   return '';
 }
 
+/** the session cookie of a request: the prefixed one first, the plain one of an older sign-in or of plain http next */
+export const readSessionCookie = (req: Request): string => readCookie(req, HOST_SESSION_COOKIE) || readCookie(req, SESSION_COOKIE);
+
 export function setSessionCookie(req: Request, res: Response, token: string, maxAgeMs = SESSION_TTL_MS): void {
-  res.cookie(SESSION_COOKIE, token, { httpOnly: true, sameSite: 'lax', path: '/', secure: req.secure, maxAge: maxAgeMs });
+  const opts = { httpOnly: true, sameSite: 'lax', path: '/', secure: req.secure } as const;
+  if (req.secure) {
+    res.cookie(HOST_SESSION_COOKIE, token, { ...opts, maxAge: maxAgeMs });
+    // the plain cookie of an earlier visit is dropped, so only the protected one is left
+    res.clearCookie(SESSION_COOKIE, opts);
+  } else {
+    res.cookie(SESSION_COOKIE, token, { ...opts, maxAge: maxAgeMs });
+  }
 }
 
 export function clearSessionCookie(req: Request, res: Response): void {
-  res.clearCookie(SESSION_COOKIE, { httpOnly: true, sameSite: 'lax', path: '/', secure: req.secure });
+  const opts = { httpOnly: true, sameSite: 'lax', path: '/', secure: req.secure } as const;
+  res.clearCookie(SESSION_COOKIE, opts);
+  if (req.secure) res.clearCookie(HOST_SESSION_COOKIE, opts);
 }
 
 /**
@@ -89,7 +105,7 @@ export function clearSessionCookie(req: Request, res: Response): void {
  */
 export const csrfGuard: RequestHandler = (req, res, next) => {
   if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return next();
-  if (!req.headers.cookie || !readCookie(req, SESSION_COOKIE)) return next();
+  if (!req.headers.cookie || !readSessionCookie(req)) return next();
   if (req.headers.authorization || req.headers['x-coregsm']) return next();
   res.status(403).json({ error: 'Запрос отклонён: не хватает заголовка X-CoreGSM' });
 };
@@ -283,6 +299,7 @@ export function registerSecurity(d: SecurityDeps): void {
       .optional(),
   });
   app.put('/api/settings/smtp', d.admin, (req, res) => {
+    if (needStepUp(req, res)) return;
     const b = smtpSchema.safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: b.error.issues[0]?.message ?? 'Проверьте поля формы' });
     const v = b.data;
@@ -430,6 +447,9 @@ export function registerSecurity(d: SecurityDeps): void {
       | { token_hash: string; user_id: number; expires_at: number; used_at: number | null }
       | undefined;
     if (!row || row.used_at || row.expires_at < Date.now()) return bad();
+    const target = db.prepare('SELECT username, role FROM users WHERE id = ?').get(row.user_id) as { username: string; role: string } | undefined;
+    const weak = passwordError(b.data.password, { username: target?.username, role: (target?.role ?? 'player') as PasswordRole });
+    if (weak) return res.status(400).json({ error: weak });
     const hash = await bcrypt.hash(b.data.password, 12);
     // claim the token first: two parallel requests cannot both use it
     const claim = db.prepare('UPDATE password_resets SET used_at = ? WHERE token_hash = ? AND used_at IS NULL AND expires_at >= ?').run(Date.now(), row.token_hash, Date.now());

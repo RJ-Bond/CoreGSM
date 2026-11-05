@@ -16,6 +16,13 @@ interface language; the GitHub release text is built from the section of the ver
 
 ## Не выпущено | Unreleased
 
+### ✨ Новое | New
+- 🔐 Пароли: самые частые пароли, имя аккаунта и простые последовательности отклоняются; администратору и модератору нужно не меньше 12 символов | Passwords: the most common passwords, the account name and simple sequences are refused; an administrator or moderator needs at least 12 characters
+- ⏳ Сеанс администратора или модератора заканчивается после 12 часов без действий (настройка `staff_idle_hours`, 0 — не заканчивать) | A staff session ends after 12 hours without activity (the setting `staff_idle_hours`, 0 = never)
+- 🍪 По https сессионная кука получает префикс `__Host-`: соседний сайт не может её подменить | Over https the session cookie gets the `__Host-` prefix: a sibling site cannot replace it
+- 🛡️ Защищённые действия (восстановление и скачивание копий, токен бота и прокси, почтовый сервер, API-ключи, удаление серверов и аккаунтов, смена ролей) просят пароль ещё раз и действуют 10 минут; с двухфакторной защитой нужен и код | Protected actions (restoring and downloading backups, the bot token and proxy, the mail server, API keys, deleting servers and accounts, changing roles) ask for the password again and work for 10 minutes; with two-factor protection the code is needed too
+- 🔑 API-ключи: срок действия и список разрешённых адресов (адреса и сети IPv4), видно, с какого адреса ключ использовали в последний раз [migration] | API keys: an expiry and a list of allowed addresses (addresses and IPv4 networks), the address of the last use is shown
+
 ## 1.1.21 · 05.11.2026
 
 ### ✨ Новое | New

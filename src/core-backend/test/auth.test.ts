@@ -72,21 +72,21 @@ describe('account: password and e-mail', () => {
   after(async () => { await api.stop(); });
 
   it('requires matching confirmation and the right current password', async () => {
-    const mismatch = await api.call('POST', '/api/auth/password', { token, body: { current: ADMIN.password, next: 'Newpass123', confirm: 'Different1' } });
+    const mismatch = await api.call('POST', '/api/auth/password', { token, body: { current: ADMIN.password, next: 'Newpass-123456', confirm: 'Different1' } });
     assert.equal(mismatch.status, 400);
-    const wrong = await api.call('POST', '/api/auth/password', { token, body: { current: 'not-the-password', next: 'Newpass123', confirm: 'Newpass123' } });
+    const wrong = await api.call('POST', '/api/auth/password', { token, body: { current: 'not-the-password', next: 'Newpass-123456', confirm: 'Newpass-123456' } });
     assert.equal(wrong.status, 403);
-    const ok = await api.call('POST', '/api/auth/password', { token, body: { current: ADMIN.password, next: 'Newpass123', confirm: 'Newpass123' } });
+    const ok = await api.call('POST', '/api/auth/password', { token, body: { current: ADMIN.password, next: 'Newpass-123456', confirm: 'Newpass-123456' } });
     assert.equal(ok.status, 200);
-    assert.equal((await api.call('POST', '/api/auth/login', { body: { username: 'admin', password: 'Newpass123' } })).status, 200);
+    assert.equal((await api.call('POST', '/api/auth/login', { body: { username: 'admin', password: 'Newpass-123456' } })).status, 200);
   });
 
   it('validates the e-mail and asks for the password', async () => {
-    const bad = await api.call('PUT', '/api/me/email', { token, body: { email: 'not-an-email', current: 'Newpass123' } });
+    const bad = await api.call('PUT', '/api/me/email', { token, body: { email: 'not-an-email', current: 'Newpass-123456' } });
     assert.equal(bad.status, 400);
     const noPass = await api.call('PUT', '/api/me/email', { token, body: { email: 'a@example.com' } });
     assert.equal(noPass.status, 403);
-    const ok = await api.call('PUT', '/api/me/email', { token, body: { email: 'Admin@Example.com', current: 'Newpass123' } });
+    const ok = await api.call('PUT', '/api/me/email', { token, body: { email: 'Admin@Example.com', current: 'Newpass-123456' } });
     assert.equal(ok.status, 200);
     assert.equal(ok.body.email, 'admin@example.com');
     assert.equal((await api.call('GET', '/api/me', { token })).body.email, 'admin@example.com');

@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import { api, getToken, type BackupInfo, type BackupItem } from '../api';
+import { api, getToken, type BackupInfo, type BackupItem, fetchStepUp } from '../api';
 import { confirmDialog, promptDialog } from '../confirm';
 import { t, useI18n } from '../i18n';
 import { loadUnreadableSecrets, saveUnreadableSecrets, unreadableSecrets } from '../security';
@@ -40,7 +40,7 @@ const isEncrypted = (name: string) => name.endsWith('.enc');
 
 /** save an authenticated GET as a file */
 export async function downloadFile(path: string, fallbackName: string) {
-  const r = await fetch(`/api${path}`, { headers: { Authorization: `Bearer ${getToken() ?? ''}` } });
+  const r = await fetchStepUp(`/api${path}`, { headers: { Authorization: `Bearer ${getToken() ?? ''}` } });
   if (!r.ok) throw new Error(errorText(await r.json().catch(() => null), t('d2.bk.getFail')));
   const name = /filename="?([^"]+)"?/.exec(r.headers.get('content-disposition') ?? '')?.[1] ?? fallbackName;
   const url = URL.createObjectURL(await r.blob());
@@ -179,7 +179,7 @@ export default function BackupsCard() {
     setRestoring(true);
     setError('');
     try {
-      const r = await fetch('/api/backup/restore', { method: 'POST', headers, body: file });
+      const r = await fetchStepUp('/api/backup/restore', { method: 'POST', headers, body: file });
       const j = (await r.json().catch(() => null)) as { error?: string; unreadableSecrets?: string[] } | null;
       if (!r.ok) throw new Error(errorText(j, t('d2.bk.restoreFail')));
       await afterRestore(j?.unreadableSecrets);

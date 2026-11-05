@@ -170,8 +170,22 @@ export async function api<T>(path: string, method = 'GET', body?: unknown): Prom
   }
 }
 
+/**
+ * A protected action (restoring a backup, the bot token, deleting a server ...) is refused with code `reauth_required`
+ * until the session is confirmed with the password. The panel asks for it (askReauth) and repeats the request once.
+ */
+let reauthAsk: (() => Promise<boolean>) | null = null;
+export const setReauthHandler = (f: () => Promise<boolean>): void => { reauthAsk = f; };
+export async function fetchStepUp(input: string, init?: RequestInit): Promise<Response> {
+  const res = await fetch(input, init);
+  if (res.status !== 403 || !reauthAsk) return res;
+  const data = (await res.clone().json().catch(() => null)) as { code?: string } | null;
+  if (data?.code !== 'reauth_required') return res;
+  return (await reauthAsk()) ? fetch(input, init) : res;
+}
+
 async function request<T>(path: string, method: string, body?: unknown): Promise<T> {
-  const res = await fetch('/api' + path, {
+  const res = await fetchStepUp('/api' + path, {
     method,
     headers: {
       'Content-Type': 'application/json',

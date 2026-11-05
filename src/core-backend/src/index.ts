@@ -47,6 +47,7 @@ import { registerWidgets } from './images/widgets.js';
 import { registerFavoritePush } from './alerts/favoritePush.js';
 import { router as accountRouter } from './routes/account.js';
 import { router as accountDataRouter } from './routes/accountData.js';
+import { registerStepUp } from './security/stepUp.js';
 import { router as settingsRouter } from './routes/settings.js';
 import { router as updatesRouter } from './routes/updates.js';
 import { router as usersRouter } from './routes/users.js';
@@ -113,6 +114,7 @@ app.get('/api/health', (_req, res) => {
 // the order matters only where paths overlap; it is the order the routes had in one file
 app.use(accountRouter);
 app.use(accountDataRouter);
+registerStepUp(app, auth);
 app.use(settingsRouter);
 app.use(updatesRouter);
 app.use(usersRouter);

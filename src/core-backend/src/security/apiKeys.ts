@@ -6,11 +6,12 @@
  *   POST   /api/integrations/keys       { name, rateLimit? } -> the new key, shown this once                  administrator
  *   DELETE /api/integrations/keys/:id   revoke a key (it stops working at once)                               administrator
  */
+import { stepUp } from './stepUp.js';
 import type { Express, NextFunction, Request, RequestHandler, Response } from 'express';
 import { z } from 'zod';
 import { db } from '../db.js';
 import { param, safeEqual } from '../http.js';
-import { clampRateLimit, DEFAULT_RATE_LIMIT, extractKey, generateKey, hashKey, keyPrefix, looksLikeKey, SlidingWindow } from './apiKeyLogic.js';
+import { clampRateLimit, DEFAULT_RATE_LIMIT, extractKey, generateKey, hashKey, ipAllowed, keyExpired, keyPrefix, looksLikeKey, normalizeIp, parseAllowList, SlidingWindow } from './apiKeyLogic.js';
 
 export const MAX_ACTIVE_KEYS = 20;
 
@@ -24,6 +25,10 @@ interface KeyRow {
   last_used_at: number | null;
   revoked_at: number | null;
   rate_limit: number;
+  expires_at: number | null;
+  /** the addresses and networks the key may be used from, one per line; '' = any */
+  allow_ips: string;
+  last_used_ip: string;
 }
 
 const view = (r: KeyRow) => ({
@@ -35,14 +40,17 @@ const view = (r: KeyRow) => ({
   lastUsedAt: r.last_used_at,
   revokedAt: r.revoked_at,
   rateLimit: r.rate_limit,
+  expiresAt: r.expires_at,
+  allowIps: r.allow_ips ? r.allow_ips.split('\n') : [],
+  lastUsedIp: r.last_used_ip || null,
 });
 
 /** creates a key; returns the plain key (the only moment it exists) and the stored row */
-export function createApiKey(name: string, createdBy: string, rateLimit = DEFAULT_RATE_LIMIT, now = Date.now()) {
+export function createApiKey(name: string, createdBy: string, rateLimit = DEFAULT_RATE_LIMIT, now = Date.now(), opts: { expiresAt?: number | null; allowIps?: string[] } = {}) {
   const key = generateKey();
   const info = db
-    .prepare('INSERT INTO api_keys (name, prefix, key_hash, created_at, created_by, rate_limit) VALUES (?, ?, ?, ?, ?, ?)')
-    .run(name, keyPrefix(key), hashKey(key), now, createdBy, clampRateLimit(rateLimit));
+    .prepare('INSERT INTO api_keys (name, prefix, key_hash, created_at, created_by, rate_limit, expires_at, allow_ips) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+    .run(name, keyPrefix(key), hashKey(key), now, createdBy, clampRateLimit(rateLimit), opts.expiresAt ?? null, (opts.allowIps ?? []).join('\n'));
   const row = db.prepare('SELECT * FROM api_keys WHERE id = ?').get(Number(info.lastInsertRowid)) as KeyRow;
   return { key, row };
 }
@@ -53,6 +61,8 @@ export function findActiveKey(plain: string): KeyRow | null {
   const h = hashKey(plain);
   const row = db.prepare('SELECT * FROM api_keys WHERE key_hash = ?').get(h) as KeyRow | undefined;
   if (!row || row.revoked_at !== null || !safeEqual(row.key_hash, h)) return null;
+  // a key that is out of date stops working like a revoked one
+  if (keyExpired(row.expires_at)) return null;
   return row;
 }
 
@@ -90,6 +100,11 @@ export const apiKeyAuth: RequestHandler = (req: KeyedRequest, res: Response, nex
     }
     return void apiError(res, 401, 'invalid_key', 'The API key is wrong or has been revoked.');
   }
+  // a key tied to addresses works from them only; the answer does not say which addresses (nothing to learn from a guess)
+  if (row.allow_ips && !ipAllowed(ip, row.allow_ips.split('\n'))) {
+    failWindows.hit(ip, FAIL_LIMIT);
+    return void apiError(res, 403, 'forbidden_ip', 'This API key cannot be used from this address.');
+  }
   const r = windows.hit(`k${row.id}`, row.rate_limit);
   res.setHeader('X-RateLimit-Limit', String(r.limit));
   res.setHeader('X-RateLimit-Remaining', String(r.remaining));
@@ -102,7 +117,7 @@ export const apiKeyAuth: RequestHandler = (req: KeyedRequest, res: Response, nex
   if (now - (lastTouch.get(row.id) ?? 0) >= 60_000) {
     lastTouch.set(row.id, now);
     try {
-      db.prepare('UPDATE api_keys SET last_used_at = ? WHERE id = ?').run(now, row.id);
+      db.prepare('UPDATE api_keys SET last_used_at = ?, last_used_ip = ? WHERE id = ?').run(now, normalizeIp(ip).slice(0, 64), row.id);
     } catch {
       /* a bookkeeping failure must not fail the request */
     }
@@ -116,15 +131,27 @@ export function registerApiKeys({ app, admin }: { app: Express; admin: RequestHa
     res.json((db.prepare('SELECT * FROM api_keys ORDER BY id DESC').all() as KeyRow[]).map(view));
   });
 
-  app.post('/api/integrations/keys', admin, (req, res) => {
+  app.post('/api/integrations/keys', admin, stepUp, (req, res) => {
     const b = z
-      .object({ name: z.string().trim().min(1).max(60), rateLimit: z.number().int().min(1).max(6000).optional() })
+      .object({
+        name: z.string().trim().min(1).max(60),
+        rateLimit: z.number().int().min(1).max(6000).optional(),
+        /** days until the key stops working; absent = never */
+        expiresInDays: z.number().int().min(1).max(3650).optional(),
+        /** addresses and IPv4 networks, one per line; absent or empty = any address */
+        allowIps: z.string().max(1000).optional(),
+      })
       .safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Неверные данные' });
+    const allow = parseAllowList(b.data.allowIps ?? '');
+    if (allow === null) return res.status(400).json({ error: 'Список адресов: до 20 записей, каждая — адрес или сеть вида 203.0.113.0/24' });
     const active = (db.prepare('SELECT COUNT(*) AS n FROM api_keys WHERE revoked_at IS NULL').get() as { n: number }).n;
     if (active >= MAX_ACTIVE_KEYS) return res.status(400).json({ error: `Можно держать не больше ${MAX_ACTIVE_KEYS} действующих ключей: отзовите ненужные` });
     const actor = (req as Request & { user?: { username: string } }).user?.username ?? '';
-    const { key, row } = createApiKey(b.data.name, actor, b.data.rateLimit ?? DEFAULT_RATE_LIMIT);
+    const { key, row } = createApiKey(b.data.name, actor, b.data.rateLimit ?? DEFAULT_RATE_LIMIT, Date.now(), {
+      expiresAt: b.data.expiresInDays ? Date.now() + b.data.expiresInDays * 86_400_000 : null,
+      allowIps: allow,
+    });
     res.status(201).json({ ...view(row), key });
   });
 

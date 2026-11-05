@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="df87b36c8aec"
+COREGSM_BUILD="21970b9eea8c"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.21"
+COREGSM_VERSION="1.1.22"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -14696,6 +14696,7 @@ import { pipeline } from 'node:stream/promises';
 import { once } from 'node:events';
 import * as tar from 'tar';
 import { z } from 'zod';
+import { stepUp } from '../security/stepUp.js';
 import { DATA_DIR, db, getSetting, setSetting } from '../db.js';
 import { canDecrypt, isEncrypted, isSecretKey } from '../security/secrets.js';
 import { log } from '../logger.js';
@@ -15204,6 +15205,7 @@ export function registerBackups({ app, admin }: { app: Express; admin: RequestHa
   app.get(
     '/api/backup',
     admin,
+    stepUp,
     guard(async (_req, res) => {
       const s = backupSettings();
       const tmp = path.join(os.tmpdir(), `coregsm-dl-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`);
@@ -15216,6 +15218,7 @@ export function registerBackups({ app, admin }: { app: Express; admin: RequestHa
   app.post(
     '/api/backup/restore',
     admin,
+    stepUp,
     guard(async (req, res) => {
       const upload = path.join(DATA_DIR, `.restore-upload-${crypto.randomBytes(6).toString('hex')}`);
       try {
@@ -15348,6 +15351,7 @@ export function registerBackups({ app, admin }: { app: Express; admin: RequestHa
   app.get(
     '/api/backups/:name',
     admin,
+    stepUp,
     guard((req, res) => {
       const f = storedFile(req, res);
       if (f) res.download(f.file, f.name);
@@ -15368,6 +15372,7 @@ export function registerBackups({ app, admin }: { app: Express; admin: RequestHa
   app.post(
     '/api/backups/:name/restore',
     admin,
+    stepUp,
     guard(async (req, res) => {
       const f = storedFile(req, res);
       if (!f) return;
@@ -21788,6 +21793,12 @@ export const ERRORS = {
   backup_not_found: 'Копия не найдена',
   backup_nothing_to_check: 'Копий пока нет: проверять нечего',
   check_input: 'Проверьте введённые данные',
+  api_allow_list: 'Список адресов: до 20 записей, каждая — адрес или сеть вида 203.0.113.0/24',
+  reauth_required: 'Это защищённое действие: подтвердите его паролем ещё раз',
+  password_short_staff: 'Для администратора и модератора пароль должен быть не короче 12 символов',
+  password_common: 'Этот пароль слишком простой: он входит в список самых частых. Придумайте другой',
+  password_same_as_name: 'Пароль не должен совпадать с именем аккаунта',
+  password_run: 'Пароль не должен быть повторяющимся или простой последовательностью',
   confirm_username: 'Введите имя аккаунта для подтверждения',
   backup_remote_https: 'Адрес для копии должен начинаться с https://',
   backup_s3_https: 'Адрес хранилища должен начинаться с https://',
@@ -23993,6 +24004,7 @@ import { registerWidgets } from './images/widgets.js';
 import { registerFavoritePush } from './alerts/favoritePush.js';
 import { router as accountRouter } from './routes/account.js';
 import { router as accountDataRouter } from './routes/accountData.js';
+import { registerStepUp } from './security/stepUp.js';
 import { router as settingsRouter } from './routes/settings.js';
 import { router as updatesRouter } from './routes/updates.js';
 import { router as usersRouter } from './routes/users.js';
@@ -24059,6 +24071,7 @@ app.get('/api/health', (_req, res) => {
 // the order matters only where paths overlap; it is the order the routes had in one file
 app.use(accountRouter);
 app.use(accountDataRouter);
+registerStepUp(app, auth);
 app.use(settingsRouter);
 app.use(updatesRouter);
 app.use(usersRouter);
@@ -24624,6 +24637,17 @@ CREATE TABLE IF NOT EXISTS favorite_push_prefs (
     name: 'user_player.privacy',
     // what a public profile shows: a JSON object of switches, empty = everything shown
     up: (db) => { if (hasTable(db, 'user_player')) addColumn(db, 'user_player', 'privacy', "TEXT NOT NULL DEFAULT ''"); },
+  },
+  {
+    version: 15,
+    name: 'api_keys.expiry+allowlist',
+    // expires_at: the key stops working then (null = never); allow_ips: the addresses it may be used from (one per line, '' = any)
+    up: (db) => {
+      if (!hasTable(db, 'api_keys')) return;
+      addColumn(db, 'api_keys', 'expires_at', 'INTEGER');
+      addColumn(db, 'api_keys', 'allow_ips', "TEXT NOT NULL DEFAULT ''");
+      addColumn(db, 'api_keys', 'last_used_ip', "TEXT NOT NULL DEFAULT ''");
+    },
   },
 ];
 
@@ -30776,6 +30800,7 @@ import { decryptSecret, encryptSecret } from '../security/secrets.js';
 import { newRecoveryCodes, newSecret, otpauthUri, useRecoveryCode, verifyCode } from '../security/totp.js';
 import { accountLockRemaining, accountLoginFailed, accountLoginOk, auth, type AuthedRequest, avatarUrl, DUMMY_HASH, issueToken, loginLimiter, permsOf, rateLimit, registrationOpen, resetAttempts, type Role, type UserFull } from '../security/auth.js';
 import { customAvatarUrl } from '../images/avatars.js';
+import { passwordError, type PasswordRole } from '../security/passwordPolicy.js';
 import { SETUP_TOKEN } from '../config.js';
 import { activeBan } from '../security/banLogic.js';
 import { db, setSetting } from '../db.js';
@@ -30890,6 +30915,8 @@ router.post(
     const b = setupSchema.safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: b.error.issues[0]?.message ?? 'Проверьте поля формы' });
     if (!safeEqual(b.data.code.trim(), SETUP_TOKEN)) return res.status(403).json({ error: 'Неверный код установки' });
+    const weakSetup = passwordError(b.data.password, { username: b.data.username, role: 'admin' });
+    if (weakSetup) return res.status(400).json({ error: weakSetup });
     const proxyUrl = normalizeProxy(b.data.proxyUrl ?? '', b.data.proxyType ?? 'socks5');
     if (proxyUrl && !PROXY_RE.test(proxyUrl)) return res.status(400).json({ error: PROXY_HELP });
     if (b.data.discordToken && !BOT_TOKEN_RE.test(b.data.discordToken)) return res.status(400).json({ error: TOKEN_HELP });
@@ -30942,6 +30969,8 @@ router.post(
       .safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: b.error.issues[0]?.message ?? 'Проверьте поля формы' });
     if (rulesText() && !b.data.acceptRules) return res.status(400).json({ error: 'Нужно согласиться с правилами сообщества' });
+    const weakReg = passwordError(b.data.password, { username: b.data.username, role: 'player' });
+    if (weakReg) return res.status(400).json({ error: weakReg });
     if (db.prepare('SELECT 1 FROM users WHERE ulower(username) = ?').get(b.data.username.toLowerCase())) {
       return res.status(409).json({ error: 'Этот логин уже занят' });
     }
@@ -31053,6 +31082,8 @@ router.post(
     if (!body.success) return res.status(400).json({ error: 'Новый пароль должен быть не короче 8 символов' });
     if (body.data.confirm !== undefined && body.data.confirm !== body.data.next) return res.status(400).json({ error: 'Пароли не совпадают' });
     const u = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user!.id) as UserFull;
+    const weakNew = passwordError(body.data.next, { username: u.username, role: u.role as PasswordRole });
+    if (weakNew) return res.status(400).json({ error: weakNew });
     // an account created through Discord has no password yet: no current one to check
     if (!u.no_password && !(await bcrypt.compare(body.data.current ?? '', u.password_hash))) {
       return res.status(403).json({ error: 'Текущий пароль неверен' });
@@ -32293,6 +32324,7 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/routes"
   cat > "$APP_DIR/core-backend/src/routes/servers.ts" << '__COREGSM_EOF__'
 /** Game servers: list and CRUD, server page data, history, PNG card, share page, status page. */
+import { stepUp } from '../security/stepUp.js';
 import express from 'express';
 import { z } from 'zod';
 import { admin, allow, isAdmin, loadUser, publicPanel, userFromToken, viewer } from '../security/auth.js';
@@ -32420,7 +32452,7 @@ router.put(
   }),
 );
 
-router.delete('/api/servers/:id', admin, (req, res) => {
+router.delete('/api/servers/:id', admin, stepUp, (req, res) => {
   const r = db.prepare('DELETE FROM servers WHERE id = ?').run(Number(req.params.id));
   if (!r.changes) return res.status(404).json({ error: 'Сервер не найден' });
   removeCover(Number(req.params.id));
@@ -32776,6 +32808,7 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/routes"
   cat > "$APP_DIR/core-backend/src/routes/settings.ts" << '__COREGSM_EOF__'
 /** Administrator settings: bot token and proxy, bot status, access, branding, web app manifest. */
+import { needStepUp } from '../security/stepUp.js';
 import express from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -32825,6 +32858,8 @@ const settingsSchema = z.object({
 router.put('/api/settings', admin, (req, res) => {
   const b = settingsSchema.safeParse(req.body);
   if (!b.success) return res.status(400).json({ error: 'Проверьте поля формы' });
+  // the secrets of the panel: a stolen session alone must not be able to swap the bot token or the proxy
+  if ((b.data.discordToken !== undefined || b.data.discordClientSecret !== undefined || b.data.proxyUrl !== undefined) && needStepUp(req, res)) return undefined;
   const proxyUrl = b.data.proxyUrl === undefined ? undefined : normalizeProxy(b.data.proxyUrl, b.data.proxyType ?? 'socks5');
   if (proxyUrl && !PROXY_RE.test(proxyUrl)) return res.status(400).json({ error: PROXY_HELP });
   if (b.data.discordToken && !BOT_TOKEN_RE.test(b.data.discordToken)) return res.status(400).json({ error: TOKEN_HELP });
@@ -33426,6 +33461,7 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/routes"
   cat > "$APP_DIR/core-backend/src/routes/users.ts" << '__COREGSM_EOF__'
 /** User management (administrators). */
+import { needStepUp, stepUp } from '../security/stepUp.js';
 import express from 'express';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
@@ -33472,6 +33508,8 @@ router.put('/api/users/:id', admin, (req: AuthedRequest, res) => {
   const id = Number(req.params.id);
   const u = db.prepare('SELECT id, role FROM users WHERE id = ?').get(id) as { id: number; role: Role } | undefined;
   if (!u) return res.status(404).json({ error: 'Пользователь не найден' });
+  // changing who is an administrator or a moderator is a protected operation
+  if (b.data.role !== u.role && needStepUp(req, res)) return undefined;
   if (u.role === 'admin' && b.data.role !== 'admin' && adminCount() <= 1) return res.status(409).json({ error: 'Нельзя снять права с последнего администратора' });
   db.prepare('UPDATE users SET role = ? WHERE id = ?').run(b.data.role, id);
   // the permissions matter for a moderator only; not sent: the ones already set stay
@@ -33515,7 +33553,7 @@ router.post('/api/users/:id/unban', admin, (req, res) => {
   res.json({ ok: true });
 });
 
-router.delete('/api/users/:id', admin, (req: AuthedRequest, res) => {
+router.delete('/api/users/:id', admin, stepUp, (req: AuthedRequest, res) => {
   const id = Number(req.params.id);
   if (id === req.user!.id) return res.status(409).json({ error: 'Нельзя удалить собственную учётную запись' });
   const u = db.prepare('SELECT role, status FROM users WHERE id = ?').get(id) as { role: Role; status: string } | undefined;
@@ -33620,6 +33658,62 @@ export class SlidingWindow {
     return this.hits.size;
   }
 }
+
+// ---------- where and until when a key works ----------
+
+/** «::ffff:1.2.3.4» is the IPv4 address 1.2.3.4 */
+export const normalizeIp = (ip: string): string => (ip.startsWith('::ffff:') && ip.includes('.') ? ip.slice(7) : ip).trim().toLowerCase();
+
+const ipv4 = (s: string): number | null => {
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(s);
+  if (!m) return null;
+  const p = m.slice(1).map(Number);
+  if (p.some((n) => n > 255)) return null;
+  return ((p[0] << 24) | (p[1] << 16) | (p[2] << 8) | p[3]) >>> 0;
+};
+
+/** an entry of the list is an address or an IPv4 network («203.0.113.0/24»); false for anything else */
+export function validAllowEntry(entry: string): boolean {
+  const e = normalizeIp(entry);
+  if (!e) return false;
+  const [addr, bits] = e.split('/');
+  if (bits !== undefined) {
+    const n = Number(bits);
+    return ipv4(addr) !== null && /^\d{1,2}$/.test(bits) && n >= 0 && n <= 32;
+  }
+  return ipv4(addr) !== null || /^[0-9a-f:]{2,39}$/.test(addr);
+}
+
+/** the list is empty (any address) or the address is in it */
+export function ipAllowed(ip: string, list: string[]): boolean {
+  if (list.length === 0) return true;
+  const me = normalizeIp(ip);
+  const mine = ipv4(me);
+  for (const raw of list) {
+    const e = normalizeIp(raw);
+    const [addr, bits] = e.split('/');
+    if (bits === undefined) {
+      if (addr === me) return true;
+      continue;
+    }
+    const net = ipv4(addr);
+    if (net === null || mine === null) continue;
+    const n = Number(bits);
+    const mask = n === 0 ? 0 : (0xffffffff << (32 - n)) >>> 0;
+    if ((mine & mask) === (net & mask)) return true;
+  }
+  return false;
+}
+
+/** the list as it is stored: one entry per line or separated by commas, checked, without repeats; null when an entry is wrong */
+export function parseAllowList(text: string): string[] | null {
+  const items = [...new Set(text.split(/[\s,;]+/).map((x) => normalizeIp(x)).filter(Boolean))];
+  if (items.length > 20) return null;
+  return items.every(validAllowEntry) ? items : null;
+}
+
+/** the key is out of date */
+export const keyExpired = (expiresAt: number | null | undefined, now = Date.now()): boolean => expiresAt != null && expiresAt <= now;
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/security"
   cat > "$APP_DIR/core-backend/src/security/apiKeys.ts" << '__COREGSM_EOF__'
@@ -33631,11 +33725,12 @@ __COREGSM_EOF__
  *   POST   /api/integrations/keys       { name, rateLimit? } -> the new key, shown this once                  administrator
  *   DELETE /api/integrations/keys/:id   revoke a key (it stops working at once)                               administrator
  */
+import { stepUp } from './stepUp.js';
 import type { Express, NextFunction, Request, RequestHandler, Response } from 'express';
 import { z } from 'zod';
 import { db } from '../db.js';
 import { param, safeEqual } from '../http.js';
-import { clampRateLimit, DEFAULT_RATE_LIMIT, extractKey, generateKey, hashKey, keyPrefix, looksLikeKey, SlidingWindow } from './apiKeyLogic.js';
+import { clampRateLimit, DEFAULT_RATE_LIMIT, extractKey, generateKey, hashKey, ipAllowed, keyExpired, keyPrefix, looksLikeKey, normalizeIp, parseAllowList, SlidingWindow } from './apiKeyLogic.js';
 
 export const MAX_ACTIVE_KEYS = 20;
 
@@ -33649,6 +33744,10 @@ interface KeyRow {
   last_used_at: number | null;
   revoked_at: number | null;
   rate_limit: number;
+  expires_at: number | null;
+  /** the addresses and networks the key may be used from, one per line; '' = any */
+  allow_ips: string;
+  last_used_ip: string;
 }
 
 const view = (r: KeyRow) => ({
@@ -33660,14 +33759,17 @@ const view = (r: KeyRow) => ({
   lastUsedAt: r.last_used_at,
   revokedAt: r.revoked_at,
   rateLimit: r.rate_limit,
+  expiresAt: r.expires_at,
+  allowIps: r.allow_ips ? r.allow_ips.split('\n') : [],
+  lastUsedIp: r.last_used_ip || null,
 });
 
 /** creates a key; returns the plain key (the only moment it exists) and the stored row */
-export function createApiKey(name: string, createdBy: string, rateLimit = DEFAULT_RATE_LIMIT, now = Date.now()) {
+export function createApiKey(name: string, createdBy: string, rateLimit = DEFAULT_RATE_LIMIT, now = Date.now(), opts: { expiresAt?: number | null; allowIps?: string[] } = {}) {
   const key = generateKey();
   const info = db
-    .prepare('INSERT INTO api_keys (name, prefix, key_hash, created_at, created_by, rate_limit) VALUES (?, ?, ?, ?, ?, ?)')
-    .run(name, keyPrefix(key), hashKey(key), now, createdBy, clampRateLimit(rateLimit));
+    .prepare('INSERT INTO api_keys (name, prefix, key_hash, created_at, created_by, rate_limit, expires_at, allow_ips) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+    .run(name, keyPrefix(key), hashKey(key), now, createdBy, clampRateLimit(rateLimit), opts.expiresAt ?? null, (opts.allowIps ?? []).join('\n'));
   const row = db.prepare('SELECT * FROM api_keys WHERE id = ?').get(Number(info.lastInsertRowid)) as KeyRow;
   return { key, row };
 }
@@ -33678,6 +33780,8 @@ export function findActiveKey(plain: string): KeyRow | null {
   const h = hashKey(plain);
   const row = db.prepare('SELECT * FROM api_keys WHERE key_hash = ?').get(h) as KeyRow | undefined;
   if (!row || row.revoked_at !== null || !safeEqual(row.key_hash, h)) return null;
+  // a key that is out of date stops working like a revoked one
+  if (keyExpired(row.expires_at)) return null;
   return row;
 }
 
@@ -33715,6 +33819,11 @@ export const apiKeyAuth: RequestHandler = (req: KeyedRequest, res: Response, nex
     }
     return void apiError(res, 401, 'invalid_key', 'The API key is wrong or has been revoked.');
   }
+  // a key tied to addresses works from them only; the answer does not say which addresses (nothing to learn from a guess)
+  if (row.allow_ips && !ipAllowed(ip, row.allow_ips.split('\n'))) {
+    failWindows.hit(ip, FAIL_LIMIT);
+    return void apiError(res, 403, 'forbidden_ip', 'This API key cannot be used from this address.');
+  }
   const r = windows.hit(`k${row.id}`, row.rate_limit);
   res.setHeader('X-RateLimit-Limit', String(r.limit));
   res.setHeader('X-RateLimit-Remaining', String(r.remaining));
@@ -33727,7 +33836,7 @@ export const apiKeyAuth: RequestHandler = (req: KeyedRequest, res: Response, nex
   if (now - (lastTouch.get(row.id) ?? 0) >= 60_000) {
     lastTouch.set(row.id, now);
     try {
-      db.prepare('UPDATE api_keys SET last_used_at = ? WHERE id = ?').run(now, row.id);
+      db.prepare('UPDATE api_keys SET last_used_at = ?, last_used_ip = ? WHERE id = ?').run(now, normalizeIp(ip).slice(0, 64), row.id);
     } catch {
       /* a bookkeeping failure must not fail the request */
     }
@@ -33741,15 +33850,27 @@ export function registerApiKeys({ app, admin }: { app: Express; admin: RequestHa
     res.json((db.prepare('SELECT * FROM api_keys ORDER BY id DESC').all() as KeyRow[]).map(view));
   });
 
-  app.post('/api/integrations/keys', admin, (req, res) => {
+  app.post('/api/integrations/keys', admin, stepUp, (req, res) => {
     const b = z
-      .object({ name: z.string().trim().min(1).max(60), rateLimit: z.number().int().min(1).max(6000).optional() })
+      .object({
+        name: z.string().trim().min(1).max(60),
+        rateLimit: z.number().int().min(1).max(6000).optional(),
+        /** days until the key stops working; absent = never */
+        expiresInDays: z.number().int().min(1).max(3650).optional(),
+        /** addresses and IPv4 networks, one per line; absent or empty = any address */
+        allowIps: z.string().max(1000).optional(),
+      })
       .safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Неверные данные' });
+    const allow = parseAllowList(b.data.allowIps ?? '');
+    if (allow === null) return res.status(400).json({ error: 'Список адресов: до 20 записей, каждая — адрес или сеть вида 203.0.113.0/24' });
     const active = (db.prepare('SELECT COUNT(*) AS n FROM api_keys WHERE revoked_at IS NULL').get() as { n: number }).n;
     if (active >= MAX_ACTIVE_KEYS) return res.status(400).json({ error: `Можно держать не больше ${MAX_ACTIVE_KEYS} действующих ключей: отзовите ненужные` });
     const actor = (req as Request & { user?: { username: string } }).user?.username ?? '';
-    const { key, row } = createApiKey(b.data.name, actor, b.data.rateLimit ?? DEFAULT_RATE_LIMIT);
+    const { key, row } = createApiKey(b.data.name, actor, b.data.rateLimit ?? DEFAULT_RATE_LIMIT, Date.now(), {
+      expiresAt: b.data.expiresInDays ? Date.now() + b.data.expiresInDays * 86_400_000 : null,
+      allowIps: allow,
+    });
     res.status(201).json({ ...view(row), key });
   });
 
@@ -33775,7 +33896,7 @@ import { db, getSetting } from '../db.js';
 import { safeEqual } from '../http.js';
 import { guardDelete, guardGet, guardSet } from './loginGuard.js';
 import { uaLabel } from '../profile/profile.js';
-import { readCookie, SESSION_COOKIE } from './security.js';
+import { readSessionCookie } from './security.js';
 
 // a real bcrypt hash (cost 12) to compare against when the login does not exist: the response time stays the same
 export const DUMMY_HASH = bcrypt.hashSync(crypto.randomBytes(8).toString('hex'), 12);
@@ -33797,8 +33918,16 @@ export function userFromToken(token: string): { id: number; username: string; ro
     if (!u) return null;
     if (activeBan(u, Date.now())) return null;
     // an ended session (revoked from the profile) stops working at once
-    if (!db.prepare('SELECT 1 FROM sessions WHERE id = ? AND user_id = ?').get(p.sid, u.id)) return null;
+    const sess = db.prepare('SELECT last_seen FROM sessions WHERE id = ? AND user_id = ?').get(p.sid, u.id) as { last_seen: number } | undefined;
+    if (!sess) return null;
     const now = Date.now();
+    // an administrator or a moderator who has been away for too long signs in again (a player keeps the 7 days of the token)
+    const idle = u.role === 'player' ? 0 : staffIdleMs();
+    if (idle > 0 && now - (sess.last_seen ?? 0) > idle) {
+      db.prepare('DELETE FROM sessions WHERE id = ?').run(p.sid);
+      lastSeen.delete(p.sid);
+      return null;
+    }
     if (now - (lastSeen.get(p.sid) ?? 0) > 60_000) {
       lastSeen.set(p.sid, now);
       db.prepare('UPDATE sessions SET last_seen = ? WHERE id = ?').run(now, p.sid);
@@ -33810,10 +33939,16 @@ export function userFromToken(token: string): { id: number; username: string; ro
 }
 export const lastSeen = new Map<string, number>();
 
+/** how long an administrator or a moderator may be silent before the session ends: the setting `staff_idle_hours` (default 12, 0 = never) */
+export function staffIdleMs(): number {
+  const v = Number(getSetting('staff_idle_hours') ?? 12);
+  return Number.isFinite(v) && v >= 0 ? Math.min(v, 24 * 30) * 3600_000 : 12 * 3600_000;
+}
+
 /** Bearer header first (API clients, the bot), then the HttpOnly session cookie of the web panel. */
 export function loadUser(req: Request) {
   const h = req.headers.authorization ?? '';
-  return userFromToken(h.startsWith('Bearer ') ? h.slice(7) : '') ?? userFromToken(readCookie(req, SESSION_COOKIE));
+  return userFromToken(h.startsWith('Bearer ') ? h.slice(7) : '') ?? userFromToken(readSessionCookie(req));
 }
 
 /** Starts a session and returns the signed token for it. */
@@ -34059,6 +34194,86 @@ export function newDeviceNotice(lang: 'ru' | 'en', label: string): NewDeviceNoti
   return lang === 'en'
     ? { title: 'New sign-in', text: `New sign-in to your account from ${device}. If it was not you, change your password and end the other sessions.` }
     : { title: 'Новый вход', text: `Новый вход в ваш аккаунт с устройства: ${device}. Если это были не вы, смените пароль и завершите остальные сеансы.` };
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/security"
+  cat > "$APP_DIR/core-backend/src/security/passwordPolicy.ts" << '__COREGSM_EOF__'
+/**
+ * What a password must look like. The minimum is 8 characters for a player and 12 for an administrator or a moderator
+ * (their accounts can change the whole panel). A password from the list of the most common ones, the same as the name
+ * of the account, one character repeated or a plain run («12345678», «abcdefgh») is refused whatever its length.
+ * The list is checked offline: nothing is sent anywhere.
+ */
+
+export type PasswordRole = 'admin' | 'moderator' | 'player';
+
+export const MIN_LENGTH: Record<PasswordRole, number> = { admin: 12, moderator: 12, player: 8 };
+
+// the most common passwords of the public leaks (lower case), with the keyboard runs of both layouts
+const COMMON = new Set(
+  `123456 1234567 12345678 123456789 1234567890 12345678910 123123 1231234 121212 112233 111111 000000 222222 654321 7654321
+  987654321 0987654321 123321 123qwe 123qweasd 1q2w3e4r 1q2w3e4r5t 1q2w3e 1qaz2wsx 1qazxsw2 q1w2e3r4 q1w2e3r4t5 zaq12wsx
+  qwerty qwerty1 qwerty12 qwerty123 qwerty1234 qwertyuiop qwertyui asdfgh asdfghjk asdfghjkl zxcvbn zxcvbnm qazwsx qazwsxedc
+  qweasd qweasdzxc qwe123 asd123 zxc123 password password1 password12 password123 password1234 passw0rd p@ssw0rd p@ssword
+  pass1234 pass12345 passwort pa55word letmein welcome welcome1 welcome123 admin admin1 admin12 admin123 admin1234 administrator
+  root toor changeme changeme123 default guest user test test123 test1234 testing temp temp123 secret secret123 master login
+  abc123 abc1234 abc12345 abcd1234 abcdefgh abcdefg abcdef a1b2c3 a1b2c3d4 aaaaaa aaaaaaaa aaa111 qqqqqq zzzzzz iloveyou
+  iloveyou1 princess monkey dragon sunshine shadow football baseball superman batman trustno1 starwars master123 hello hello123
+  hunter hunter2 whatever freedom lovely michael jordan jessica charlie donald computer internet minecraft minecraft123 rust rust123
+  rustserver counterstrike steam steam123 gaming gamer gamer123 coregsm coregsm123 server server123 gameserver monitoring
+  пароль пароль1 пароль123 йцукен йцукен123 йцукенгшщзх фыва фывапролдж ячсмить привет привет123 админ админ123 qazwsxedcrfv
+  1111 11111 111111 1111111 11111111 0123456789 01234567 12341234 12344321 11223344 1122334455 123454321 147258369 159357 741852963
+  963852741 321321 369369 456456 456789 789456 789456123 147852369 1357924680 2468013579 14789632 12qwaszx 1q1q1q1q 1a2b3c4d
+  samsung google facebook iphone android linux ubuntu windows windows10 mypassword mypass newpassword newpass pass password!
+  zaq1xsw2 zaq1zaq1 qweqwe qweqweqwe asdasd asdasdasd zxczxc zxczxczxc 1234qwer 1234qwerty qwer1234 qwer4321 asdf1234 asdfasdf
+  zxcv1234 q1234567 a1234567 z1234567 aa123456 aa12345678 password01 password2 passw0rd1 Password1 Qwerty123 Admin123`
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((w) => w.toLowerCase()),
+);
+
+/** the same character repeated, or every next one is the previous plus or minus one («12345678», «hgfedcba») */
+function isRun(pw: string): boolean {
+  if (pw.length < 4) return false;
+  if (new Set(pw).size === 1) return true;
+  let up = true;
+  let down = true;
+  for (let i = 1; i < pw.length; i++) {
+    const d = pw.charCodeAt(i) - pw.charCodeAt(i - 1);
+    if (d !== 1) up = false;
+    if (d !== -1) down = false;
+  }
+  return up || down;
+}
+
+export type PasswordProblem = 'short' | 'short_admin' | 'common' | 'same_as_name' | 'run' | null;
+
+/** null when the password is acceptable, otherwise what is wrong with it (the caller maps it to a message) */
+export function passwordProblem(password: string, opts: { username?: string; role?: PasswordRole } = {}): PasswordProblem {
+  const role = opts.role ?? 'player';
+  const pw = password;
+  const low = pw.toLowerCase();
+  if (pw.length < MIN_LENGTH[role]) return role === 'player' ? 'short' : 'short_admin';
+  if (COMMON.has(low)) return 'common';
+  const name = (opts.username ?? '').trim().toLowerCase();
+  if (name && (low === name || (name.length >= 4 && low.includes(name) && low.length <= name.length + 3))) return 'same_as_name';
+  if (isRun(low)) return 'run';
+  return null;
+}
+
+/** Russian text for the API (the panel translates it by the code in errors.ts) */
+export const PASSWORD_MESSAGES: Record<Exclude<PasswordProblem, null>, string> = {
+  short: 'Пароль должен быть не короче 8 символов',
+  short_admin: 'Для администратора и модератора пароль должен быть не короче 12 символов',
+  common: 'Этот пароль слишком простой: он входит в список самых частых. Придумайте другой',
+  same_as_name: 'Пароль не должен совпадать с именем аккаунта',
+  run: 'Пароль не должен быть повторяющимся или простой последовательностью',
+};
+
+/** the message for a password, or null when it is fine */
+export function passwordError(password: string, opts: { username?: string; role?: PasswordRole } = {}): string | null {
+  const p = passwordProblem(password, opts);
+  return p ? PASSWORD_MESSAGES[p] : null;
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/security"
@@ -34311,6 +34526,8 @@ import { layout, mailReady, sendMail, smtpConfig } from '../alerts/mail.js';
 import { logAccount, prefsOf, uaLabel } from '../profile/profile.js';
 import { dmAvailable, pushToUser } from '../community/subscriptions.js';
 import { newDeviceNotice } from './newDeviceLogic.js';
+import { passwordError, type PasswordRole } from './passwordPolicy.js';
+import { needStepUp } from './stepUp.js';
 import { log } from '../logger.js';
 
 // ---------- schema ----------
@@ -34347,6 +34564,8 @@ setInterval(() => {
 
 // ---------- session cookie and CSRF ----------
 export const SESSION_COOKIE = 'coregsm_session';
+/** over https the cookie carries the __Host- prefix: the browser then accepts it only with Secure, Path=/ and no Domain, so a sibling site cannot plant or overwrite it */
+export const HOST_SESSION_COOKIE = '__Host-coregsm_session';
 /** lifetime of a session token (issueToken signs it for the same period) */
 export const SESSION_TTL_MS = 7 * 24 * 3600_000;
 
@@ -34366,12 +34585,24 @@ export function readCookie(req: Request, name: string): string {
   return '';
 }
 
+/** the session cookie of a request: the prefixed one first, the plain one of an older sign-in or of plain http next */
+export const readSessionCookie = (req: Request): string => readCookie(req, HOST_SESSION_COOKIE) || readCookie(req, SESSION_COOKIE);
+
 export function setSessionCookie(req: Request, res: Response, token: string, maxAgeMs = SESSION_TTL_MS): void {
-  res.cookie(SESSION_COOKIE, token, { httpOnly: true, sameSite: 'lax', path: '/', secure: req.secure, maxAge: maxAgeMs });
+  const opts = { httpOnly: true, sameSite: 'lax', path: '/', secure: req.secure } as const;
+  if (req.secure) {
+    res.cookie(HOST_SESSION_COOKIE, token, { ...opts, maxAge: maxAgeMs });
+    // the plain cookie of an earlier visit is dropped, so only the protected one is left
+    res.clearCookie(SESSION_COOKIE, opts);
+  } else {
+    res.cookie(SESSION_COOKIE, token, { ...opts, maxAge: maxAgeMs });
+  }
 }
 
 export function clearSessionCookie(req: Request, res: Response): void {
-  res.clearCookie(SESSION_COOKIE, { httpOnly: true, sameSite: 'lax', path: '/', secure: req.secure });
+  const opts = { httpOnly: true, sameSite: 'lax', path: '/', secure: req.secure } as const;
+  res.clearCookie(SESSION_COOKIE, opts);
+  if (req.secure) res.clearCookie(HOST_SESSION_COOKIE, opts);
 }
 
 /**
@@ -34380,7 +34611,7 @@ export function clearSessionCookie(req: Request, res: Response): void {
  */
 export const csrfGuard: RequestHandler = (req, res, next) => {
   if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return next();
-  if (!req.headers.cookie || !readCookie(req, SESSION_COOKIE)) return next();
+  if (!req.headers.cookie || !readSessionCookie(req)) return next();
   if (req.headers.authorization || req.headers['x-coregsm']) return next();
   res.status(403).json({ error: 'Запрос отклонён: не хватает заголовка X-CoreGSM' });
 };
@@ -34574,6 +34805,7 @@ export function registerSecurity(d: SecurityDeps): void {
       .optional(),
   });
   app.put('/api/settings/smtp', d.admin, (req, res) => {
+    if (needStepUp(req, res)) return;
     const b = smtpSchema.safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: b.error.issues[0]?.message ?? 'Проверьте поля формы' });
     const v = b.data;
@@ -34721,6 +34953,9 @@ export function registerSecurity(d: SecurityDeps): void {
       | { token_hash: string; user_id: number; expires_at: number; used_at: number | null }
       | undefined;
     if (!row || row.used_at || row.expires_at < Date.now()) return bad();
+    const target = db.prepare('SELECT username, role FROM users WHERE id = ?').get(row.user_id) as { username: string; role: string } | undefined;
+    const weak = passwordError(b.data.password, { username: target?.username, role: (target?.role ?? 'player') as PasswordRole });
+    if (weak) return res.status(400).json({ error: weak });
     const hash = await bcrypt.hash(b.data.password, 12);
     // claim the token first: two parallel requests cannot both use it
     const claim = db.prepare('UPDATE password_resets SET used_at = ? WHERE token_hash = ? AND used_at IS NULL AND expires_at >= ?').run(Date.now(), row.token_hash, Date.now());
@@ -34759,6 +34994,113 @@ export function registerSecurity(d: SecurityDeps): void {
     const left = exp ? exp * 1000 - Date.now() : SESSION_TTL_MS;
     setSessionCookie(req, res, token, Math.max(60_000, Math.min(SESSION_TTL_MS, left)));
     res.json({ ok: true });
+  });
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/security"
+  cat > "$APP_DIR/core-backend/src/security/stepUp.ts" << '__COREGSM_EOF__'
+/**
+ * «Sudo mode»: a few operations can take over the whole panel or lose its data (restoring a backup, downloading one, the
+ * bot token, the mail server, API keys, deleting a server or an account, changing a role). A stolen session cookie must
+ * not be enough for them: the signed-in person confirms with the password (and the code of the second factor, when it is
+ * on) and the session is then «confirmed» for ten minutes.
+ *
+ *   GET  /api/auth/reauth   { active, until, method: 'password' | 'name', twoFactor }
+ *   POST /api/auth/reauth   { password?, confirm?, code? }   starts the ten minutes for this session
+ *
+ * `stepUp` is the middleware (after `admin`); `needStepUp(req, res)` is the same check inside a handler, for a route
+ * where only some changes need it. The panel answers a refused request (code `reauth_required`) by asking for the
+ * password and repeating the request.
+ */
+import bcrypt from 'bcryptjs';
+import { z } from 'zod';
+import type { Express, NextFunction, Request, RequestHandler, Response } from 'express';
+import { db } from '../db.js';
+import { addColumn } from '../schema.js';
+import { decryptSecret } from './secrets.js';
+import { useRecoveryCode, verifyCode } from './totp.js';
+import { logAccount } from '../profile/profile.js';
+import type { AuthedRequest } from './auth.js';
+import { windowLimiter } from './security.js';
+
+export const STEP_UP_MS = 10 * 60_000;
+
+addColumn(db, 'sessions', 'sudo_until', 'INTEGER NOT NULL DEFAULT 0');
+
+export const REAUTH_TEXT = 'Это защищённое действие: подтвердите его паролем ещё раз';
+
+export function stepUpActive(sid: string | undefined, now = Date.now()): boolean {
+  if (!sid) return false;
+  const row = db.prepare('SELECT sudo_until FROM sessions WHERE id = ?').get(sid) as { sudo_until: number } | undefined;
+  return !!row && row.sudo_until > now;
+}
+
+/** inside a handler: true when the request was refused (the answer is already sent) */
+export function needStepUp(req: Request, res: Response): boolean {
+  if (stepUpActive((req as AuthedRequest).user?.sid)) return false;
+  res.status(403).json({ error: REAUTH_TEXT });
+  return true;
+}
+
+export const stepUp: RequestHandler = (req: Request, res: Response, next: NextFunction) => {
+  if (needStepUp(req, res)) return;
+  next();
+};
+
+interface Row { username: string; password_hash: string; no_password: number; totp_secret: string | null; totp_enabled: number; totp_step: number; totp_recovery: string | null }
+
+export function registerStepUp(app: Express, auth: RequestHandler): void {
+  const limiter = windowLimiter(10, 10 * 60_000, 'Слишком много попыток. Попробуйте позже.');
+  const rowOf = (id: number) => db.prepare('SELECT username, password_hash, no_password, totp_secret, totp_enabled, totp_step, totp_recovery FROM users WHERE id = ?').get(id) as Row | undefined;
+
+  app.get('/api/auth/reauth', auth, (req, res) => {
+    const u = (req as AuthedRequest).user!;
+    const r = rowOf(u.id);
+    const until = (db.prepare('SELECT sudo_until FROM sessions WHERE id = ?').get(u.sid ?? '') as { sudo_until: number } | undefined)?.sudo_until ?? 0;
+    res.json({ active: until > Date.now(), until, method: r?.no_password ? 'name' : 'password', twoFactor: !!r?.totp_enabled });
+  });
+
+  app.post('/api/auth/reauth', auth, limiter, (req, res, next) => {
+    void (async () => {
+      const u = (req as AuthedRequest).user!;
+      const b = z.object({ password: z.string().max(256).optional(), confirm: z.string().max(64).optional(), code: z.string().max(32).optional() }).safeParse(req.body);
+      if (!b.success) return void res.status(400).json({ error: 'Проверьте введённые данные' });
+      const r = rowOf(u.id);
+      if (!r || !u.sid) return void res.status(401).json({ error: 'Требуется вход' });
+      if (r.no_password) {
+        if ((b.data.confirm ?? '').trim().toLowerCase() !== r.username.toLowerCase()) return void res.status(403).json({ error: 'Введите имя аккаунта для подтверждения' });
+      } else if (!(await bcrypt.compare(b.data.password ?? '', r.password_hash))) {
+        logAccount(req, u.id, 'login_failed', 'reauth');
+        return void res.status(403).json({ error: 'Пароль неверен' });
+      }
+      if (r.totp_enabled) {
+        if (!b.data.code) return void res.status(400).json({ error: 'Введите код из приложения', twoFactor: true });
+        let ok = false;
+        try {
+          const step = verifyCode(decryptSecret(r.totp_secret ?? ''), b.data.code, Date.now(), r.totp_step);
+          if (step !== null) {
+            db.prepare('UPDATE users SET totp_step = ? WHERE id = ?').run(step, u.id);
+            ok = true;
+          } else {
+            const left = useRecoveryCode(JSON.parse(r.totp_recovery || '[]') as string[], b.data.code);
+            if (left) {
+              db.prepare('UPDATE users SET totp_recovery = ? WHERE id = ?').run(JSON.stringify(left), u.id);
+              ok = true;
+            }
+          }
+        } catch {
+          /* an unreadable secret: nobody passes on a guess */
+        }
+        if (!ok) {
+          logAccount(req, u.id, 'login_failed', 'reauth 2fa');
+          return void res.status(401).json({ error: 'Неверный код подтверждения', twoFactor: true });
+        }
+      }
+      const until = Date.now() + STEP_UP_MS;
+      db.prepare('UPDATE sessions SET sudo_until = ? WHERE id = ?').run(until, u.sid);
+      logAccount(req, u.id, 'profile_changed', 'reauth');
+      res.json({ ok: true, until });
+    })().catch(next);
   });
 }
 __COREGSM_EOF__
@@ -111029,8 +111371,22 @@ export async function api<T>(path: string, method = 'GET', body?: unknown): Prom
   }
 }
 
+/**
+ * A protected action (restoring a backup, the bot token, deleting a server ...) is refused with code `reauth_required`
+ * until the session is confirmed with the password. The panel asks for it (askReauth) and repeats the request once.
+ */
+let reauthAsk: (() => Promise<boolean>) | null = null;
+export const setReauthHandler = (f: () => Promise<boolean>): void => { reauthAsk = f; };
+export async function fetchStepUp(input: string, init?: RequestInit): Promise<Response> {
+  const res = await fetch(input, init);
+  if (res.status !== 403 || !reauthAsk) return res;
+  const data = (await res.clone().json().catch(() => null)) as { code?: string } | null;
+  if (data?.code !== 'reauth_required') return res;
+  return (await reauthAsk()) ? fetch(input, init) : res;
+}
+
 async function request<T>(path: string, method: string, body?: unknown): Promise<T> {
-  const res = await fetch('/api' + path, {
+  const res = await fetchStepUp('/api' + path, {
     method,
     headers: {
       'Content-Type': 'application/json',
@@ -132289,6 +132645,13 @@ import type ru from './ru';
 const en: Record<keyof typeof ru, string> = {
   // ---- shared ----
   'common.cancel': 'Cancel',
+  'su.title': 'Confirm the action',
+  'su.text': 'This is a protected operation. Enter your password again: the confirmation lasts 10 minutes.',
+  'su.name': 'Account name',
+  'su.pass': 'Password',
+  'su.code': 'Code from the app',
+  'su.codeText': 'Enter the two-factor code (or a recovery code).',
+  'su.go': 'Confirm',
   'common.close': 'Close',
   'common.copy': 'Copy',
   'common.remove': 'Remove',
@@ -133080,6 +133443,13 @@ const en: Record<keyof typeof ru, string> = {
   'intg.f.name': 'Name (who the key is for)',
   'intg.f.namePh': 'Clan website',
   'intg.f.limit': 'Requests per minute',
+  'intg.f.expires': 'Expires',
+  'intg.f.never': 'Never',
+  'intg.f.days': '{n} days',
+  'intg.f.ips': 'Allowed addresses',
+  'intg.f.ipsHint': 'Comma separated: addresses and IPv4 networks. Empty: from any address.',
+  'intg.expiresAt': 'until {when}',
+  'intg.onlyFrom': 'only from {list}',
   'intg.create': 'Create key',
   'intg.empty.t': 'No keys yet',
   'intg.empty.x': 'Create the first one so a site or a bot can read server data.',
@@ -136310,6 +136680,12 @@ const errorsEn: Record<string, string> = {
   backup_not_found: 'Backup not found',
   backup_nothing_to_check: 'There are no backups yet: nothing to check',
   check_input: 'Check the entered data',
+  api_allow_list: 'The address list: up to 20 entries, each an address or a network like 203.0.113.0/24',
+  reauth_required: 'This is a protected action: confirm it with your password again',
+  password_short_staff: 'An administrator or moderator password must be at least 12 characters long',
+  password_common: 'This password is too simple: it is among the most common ones. Choose another',
+  password_same_as_name: 'The password must not be the same as the account name',
+  password_run: 'The password must not be a repeated character or a simple sequence',
   confirm_username: 'Enter the account name to confirm',
   backup_remote_https: 'The backup address must start with https://',
   backup_s3_https: 'The storage address must start with https://',
@@ -136346,6 +136722,13 @@ __COREGSM_EOF__
 const ru = {
   // ---- shared ----
   'common.cancel': 'Отмена',
+  'su.title': 'Подтвердите действие',
+  'su.text': 'Это защищённая операция. Введите пароль ещё раз: подтверждение действует 10 минут.',
+  'su.name': 'Имя аккаунта',
+  'su.pass': 'Пароль',
+  'su.code': 'Код из приложения',
+  'su.codeText': 'Введите код двухфакторной защиты (или код восстановления).',
+  'su.go': 'Подтвердить',
   'common.close': 'Закрыть',
   'common.copy': 'Копировать',
   'common.remove': 'Убрать',
@@ -137137,6 +137520,13 @@ const ru = {
   'intg.f.name': 'Название (для кого ключ)',
   'intg.f.namePh': 'Сайт клана',
   'intg.f.limit': 'Запросов в минуту',
+  'intg.f.expires': 'Срок действия',
+  'intg.f.never': 'Без срока',
+  'intg.f.days': '{n} дней',
+  'intg.f.ips': 'Разрешённые адреса',
+  'intg.f.ipsHint': 'Через запятую: адреса и сети IPv4. Пусто — с любого адреса.',
+  'intg.expiresAt': 'до {when}',
+  'intg.onlyFrom': 'только с {list}',
   'intg.create': 'Создать ключ',
   'intg.empty.t': 'Ключей пока нет',
   'intg.empty.x': 'Создайте первый, чтобы сайт или бот мог читать данные серверов.',
@@ -140144,6 +140534,7 @@ import './styles/polish.css';
 import './styles/buttons.css';
 // phone layout fixes: loaded after the others, so it wins at equal specificity
 import './styles/mobile.css';
+import './reauth';
 import App from './App';
 import { RootBoundary } from './RootBoundary';
 import { api, getToken } from './api';
@@ -141351,6 +141742,9 @@ interface ApiKey {
   lastUsedAt: number | null;
   revokedAt: number | null;
   rateLimit: number;
+  expiresAt?: number | null;
+  allowIps?: string[];
+  lastUsedIp?: string | null;
 }
 type Created = ApiKey & { key: string };
 
@@ -141380,6 +141774,8 @@ export default function AdminIntegrations() {
 function KeysSection({ keys, onChanged }: { keys: ApiKey[] | null; onChanged: () => void }) {
   const [name, setName] = useState('');
   const [limit, setLimit] = useState('60');
+  const [days, setDays] = useState('');
+  const [ips, setIps] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [created, setCreated] = useState<Created | null>(null);
@@ -141388,9 +141784,10 @@ function KeysSection({ keys, onChanged }: { keys: ApiKey[] | null; onChanged: ()
     setBusy(true);
     setError('');
     try {
-      const c = await api<Created>('/integrations/keys', 'POST', { name: name.trim(), rateLimit: Number(limit) || 60 });
+      const c = await api<Created>('/integrations/keys', 'POST', { name: name.trim(), rateLimit: Number(limit) || 60, ...(Number(days) > 0 ? { expiresInDays: Number(days) } : {}), ...(ips.trim() ? { allowIps: ips } : {}) });
       setCreated(c);
       setName('');
+      setIps('');
       onChanged();
     } catch (e) {
       setError((e as Error).message);
@@ -141435,6 +141832,20 @@ function KeysSection({ keys, onChanged }: { keys: ApiKey[] | null; onChanged: ()
           <input className="input" type="number" min={1} max={6000} value={limit} onChange={(e) => setLimit(e.target.value)} />
         </Field>
         <button type="submit" className="btn" disabled={busy || !name.trim()}>{t('intg.create')}</button>
+        <div className="grid gap-3 sm:col-span-3 sm:grid-cols-[9rem_1fr]">
+          <Field label={t('intg.f.expires')}>
+            <select className="input" value={days} onChange={(e) => setDays(e.target.value)}>
+              <option value="">{t('intg.f.never')}</option>
+              <option value="30">{t('intg.f.days', { n: 30 })}</option>
+              <option value="90">{t('intg.f.days', { n: 90 })}</option>
+              <option value="365">{t('intg.f.days', { n: 365 })}</option>
+            </select>
+          </Field>
+          <Field label={t('intg.f.ips')}>
+            <input className="input font-mono" value={ips} maxLength={400} placeholder="203.0.113.7, 198.51.100.0/24" onChange={(e) => setIps(e.target.value)} />
+            <span className="mt-1 block text-sm font-semibold text-mute">{t('intg.f.ipsHint')}</span>
+          </Field>
+        </div>
       </form>
       <ErrorLine text={error} />
 
@@ -141446,11 +141857,15 @@ function KeysSection({ keys, onChanged }: { keys: ApiKey[] | null; onChanged: ()
             <li key={k.id} className="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-3">
               <div className="min-w-0 flex-1 basis-48">
                 <div className="truncate font-extrabold">{k.name}</div>
-                <div className="text-sm font-semibold text-mute"><code>{k.prefix}…</code> · {t('intg.rate', { n: k.rateLimit })}</div>
+                <div className="text-sm font-semibold text-mute">
+                  <code>{k.prefix}…</code> · {t('intg.rate', { n: k.rateLimit })}
+                  {k.expiresAt ? <> · {t('intg.expiresAt', { when: fmtDateTime(k.expiresAt) })}</> : null}
+                  {k.allowIps && k.allowIps.length > 0 ? <> · {t('intg.onlyFrom', { list: k.allowIps.join(', ') })}</> : null}
+                </div>
               </div>
               <div className="text-sm font-semibold text-mute">
                 {k.createdBy ? t('intg.createdBy', { when: fmtDateTime(k.createdAt), who: k.createdBy }) : t('intg.createdAt', { when: fmtDateTime(k.createdAt) })}<br />
-                {k.lastUsedAt ? t('intg.usedAt', { when: fmtDateTime(k.lastUsedAt) }) : t('intg.unused')}
+                {k.lastUsedAt ? t('intg.usedAt', { when: fmtDateTime(k.lastUsedAt) }) : t('intg.unused')}{k.lastUsedIp ? ` · ${k.lastUsedIp}` : ''}
               </div>
               <button type="button" className="btn btn-soft btn-sm" onClick={() => void revoke(k)}>{t('intg.revoke')}</button>
             </li>
@@ -142864,7 +143279,7 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/Backups.tsx" << '__COREGSM_EOF__'
 import { useEffect, useState, type FormEvent } from 'react';
-import { api, getToken, type BackupInfo, type BackupItem } from '../api';
+import { api, getToken, type BackupInfo, type BackupItem, fetchStepUp } from '../api';
 import { confirmDialog, promptDialog } from '../confirm';
 import { t, useI18n } from '../i18n';
 import { loadUnreadableSecrets, saveUnreadableSecrets, unreadableSecrets } from '../security';
@@ -142905,7 +143320,7 @@ const isEncrypted = (name: string) => name.endsWith('.enc');
 
 /** save an authenticated GET as a file */
 export async function downloadFile(path: string, fallbackName: string) {
-  const r = await fetch(`/api${path}`, { headers: { Authorization: `Bearer ${getToken() ?? ''}` } });
+  const r = await fetchStepUp(`/api${path}`, { headers: { Authorization: `Bearer ${getToken() ?? ''}` } });
   if (!r.ok) throw new Error(errorText(await r.json().catch(() => null), t('d2.bk.getFail')));
   const name = /filename="?([^"]+)"?/.exec(r.headers.get('content-disposition') ?? '')?.[1] ?? fallbackName;
   const url = URL.createObjectURL(await r.blob());
@@ -143044,7 +143459,7 @@ export default function BackupsCard() {
     setRestoring(true);
     setError('');
     try {
-      const r = await fetch('/api/backup/restore', { method: 'POST', headers, body: file });
+      const r = await fetchStepUp('/api/backup/restore', { method: 'POST', headers, body: file });
       const j = (await r.json().catch(() => null)) as { error?: string; unreadableSecrets?: string[] } | null;
       if (!r.ok) throw new Error(errorText(j, t('d2.bk.restoreFail')));
       await afterRestore(j?.unreadableSecrets);
@@ -152914,6 +153329,46 @@ export function confirmDelayText(failThreshold: number): string {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
+  cat > "$APP_DIR/core-frontend/src/reauth.ts" << '__COREGSM_EOF__'
+/** Asks for the password (and the code of the second factor) when the server wants a protected action confirmed. */
+import { api, setReauthHandler } from './api';
+import { promptDialog } from './confirm';
+import { t } from './i18n';
+import { errText, toast } from './ui';
+
+interface Info { active: boolean; method: 'password' | 'name'; twoFactor: boolean }
+
+export async function askReauth(): Promise<boolean> {
+  let info: Info;
+  try {
+    info = await api<Info>('/auth/reauth');
+  } catch {
+    return false;
+  }
+  if (info.active) return true;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const byName = info.method === 'name';
+    const secret = await promptDialog({ title: t('su.title'), text: t('su.text'), label: byName ? t('su.name') : t('su.pass'), password: !byName, confirmLabel: t('su.go') });
+    if (secret === null || secret === '') return false;
+    let code: string | undefined;
+    if (info.twoFactor) {
+      const c = await promptDialog({ title: t('su.title'), text: t('su.codeText'), label: t('su.code'), confirmLabel: t('su.go') });
+      if (c === null || c === '') return false;
+      code = c.trim();
+    }
+    try {
+      await api('/auth/reauth', 'POST', { ...(byName ? { confirm: secret } : { password: secret }), ...(code ? { code } : {}) });
+      return true;
+    } catch (e) {
+      toast(errText(e), 'err');
+    }
+  }
+  return false;
+}
+
+setReauthHandler(askReauth);
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/saveBar.tsx" << '__COREGSM_EOF__'
 // A common «Есть несохранённые изменения: Отмена / Сохранить» bar for pages with several forms (settings, users).
 // A form joins it with useSaveBar(); without a provider around it a form keeps saving by itself (useAutosave).
@@ -153138,6 +153593,48 @@ export function downsample(values: (number | null)[], max: number): (number | nu
   }
   return out;
 }
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src"
+  cat > "$APP_DIR/core-frontend/src/stepUp.test.ts" << '__COREGSM_EOF__'
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { fetchStepUp, setReauthHandler } from './api';
+
+const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+
+afterEach(() => vi.unstubAllGlobals());
+
+describe('fetchStepUp', () => {
+  it('a protected action is confirmed once and then repeated', async () => {
+    const f = vi.fn()
+      .mockResolvedValueOnce(json(403, { error: 'x', code: 'reauth_required' }))
+      .mockResolvedValueOnce(json(200, { ok: true }));
+    vi.stubGlobal('fetch', f);
+    const ask = vi.fn(async () => true);
+    setReauthHandler(ask);
+    const r = await fetchStepUp('/api/servers/1', { method: 'DELETE' });
+    expect(r.status).toBe(200);
+    expect(ask).toHaveBeenCalledTimes(1);
+    expect(f).toHaveBeenCalledTimes(2);
+  });
+
+  it('a refusal to confirm leaves the original answer', async () => {
+    const f = vi.fn().mockResolvedValue(json(403, { error: 'x', code: 'reauth_required' }));
+    vi.stubGlobal('fetch', f);
+    setReauthHandler(async () => false);
+    const r = await fetchStepUp('/api/servers/1', { method: 'DELETE' });
+    expect(r.status).toBe(403);
+    expect(f).toHaveBeenCalledTimes(1);
+  });
+
+  it('other answers are not touched, even a 403', async () => {
+    const f = vi.fn().mockResolvedValue(json(403, { error: 'no', code: 'forbidden' }));
+    vi.stubGlobal('fetch', f);
+    const ask = vi.fn(async () => true);
+    setReauthHandler(ask);
+    expect((await fetchStepUp('/api/x')).status).toBe(403);
+    expect(ask).not.toHaveBeenCalled();
+  });
+});
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/admin.css" << '__COREGSM_EOF__'

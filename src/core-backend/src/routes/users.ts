@@ -1,4 +1,5 @@
 /** User management (administrators). */
+import { needStepUp, stepUp } from '../security/stepUp.js';
 import express from 'express';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
@@ -45,6 +46,8 @@ router.put('/api/users/:id', admin, (req: AuthedRequest, res) => {
   const id = Number(req.params.id);
   const u = db.prepare('SELECT id, role FROM users WHERE id = ?').get(id) as { id: number; role: Role } | undefined;
   if (!u) return res.status(404).json({ error: 'Пользователь не найден' });
+  // changing who is an administrator or a moderator is a protected operation
+  if (b.data.role !== u.role && needStepUp(req, res)) return undefined;
   if (u.role === 'admin' && b.data.role !== 'admin' && adminCount() <= 1) return res.status(409).json({ error: 'Нельзя снять права с последнего администратора' });
   db.prepare('UPDATE users SET role = ? WHERE id = ?').run(b.data.role, id);
   // the permissions matter for a moderator only; not sent: the ones already set stay
@@ -88,7 +91,7 @@ router.post('/api/users/:id/unban', admin, (req, res) => {
   res.json({ ok: true });
 });
 
-router.delete('/api/users/:id', admin, (req: AuthedRequest, res) => {
+router.delete('/api/users/:id', admin, stepUp, (req: AuthedRequest, res) => {
   const id = Number(req.params.id);
   if (id === req.user!.id) return res.status(409).json({ error: 'Нельзя удалить собственную учётную запись' });
   const u = db.prepare('SELECT role, status FROM users WHERE id = ?').get(id) as { role: Role; status: string } | undefined;
