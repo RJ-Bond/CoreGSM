@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="5eb61e3cd651"
+COREGSM_BUILD="e72e885f6cd7"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.31"
+COREGSM_VERSION="1.1.32"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -39601,6 +39601,8 @@ COPY . .
 RUN npm run build
 
 FROM nginx:stable-bookworm
+# system packages of the base image come with the latest fixes (a fixable CRITICAL finding of Trivy fails the build, see ci.yml)
+RUN apt-get update && apt-get -y upgrade && rm -rf /var/lib/apt/lists/*
 RUN rm -f /etc/nginx/conf.d/default.conf
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 COPY security-headers.conf csp.conf /etc/nginx/snippets/

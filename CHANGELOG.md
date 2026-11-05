@@ -48,6 +48,7 @@ interface language; the GitHub release text is built from the section of the ver
 - ✅ Обновление проверяет подпись релиза и без cosign на сервере: панель сама скачивает закреплённую версию с проверкой SHA-256 | Update verifies the release signature even without cosign on the server: the panel downloads a pinned version and checks its SHA-256
 
 ### 🐛 Исправлено | Fixed
+- 🛡️ Образ панели (frontend) при сборке обновляет системные пакеты nginx-образа: проверка Trivy больше не падает на уже исправленных критических уязвимостях | The panel (frontend) image upgrades the system packages of the nginx base image while building: the Trivy check no longer fails on critical vulnerabilities that already have a fix
 - 🎮 Иконки игр в списках не упираются в края плитки: у всех одинаковые отступы | Game icons in lists no longer touch the edges of their tile: the same padding for all
 - ⏱️ Страница игрока: длительность визита пишется «1 ч 44 мин», а не «104 мин» | Player page: a visit length reads «1 h 44 min», not «104 min»
 - 🎯 Профиль: кольцо уровня у аватара без тёмной серой обводки; в «Активности» вместо login_new_device «Вход с нового устройства» | Profile: the level ring has no dark grey outline; the Activity feed says «Sign-in from a new device» instead of login_new_device
