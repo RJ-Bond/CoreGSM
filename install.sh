@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="a6cbd5e8a0bf"
+COREGSM_BUILD="0854d494a52d"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.53"
+COREGSM_VERSION="1.1.54"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -39340,6 +39340,22 @@ export async function report(id: number, body: { messageId?: string | null; erro
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-bot/src"
+  cat > "$APP_DIR/core-bot/src/bars.ts" << '__COREGSM_EOF__'
+/** The fill bar of a server like in the monitoring card: squares in the colour of the game, the last two amber and red. Pure. */
+
+/** the colour of the game: purple for V Rising, yellow for Icarus, green for the rest */
+export const gameSquare = (game?: string | null): string => (game === 'vrising' ? '🟪' : game === 'icarus' ? '🟨' : '🟩');
+
+/** «🟪🟪🟧⬛⬛⬛»: filled squares by the share of players; a server with players always shows at least one */
+export function playersBar(players: number, max: number, game?: string | null, total = 6): string {
+  if (!(max > 0)) return '';
+  let n = Math.round((Math.min(Math.max(players, 0), max) / max) * total);
+  if (players > 0 && n === 0) n = 1;
+  const base = gameSquare(game);
+  return Array.from({ length: total }, (_, i) => (i >= n ? '⬛' : i === total - 1 ? '🟥' : i === total - 2 ? '🟧' : base)).join('');
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-bot/src"
   cat > "$APP_DIR/core-bot/src/bot.ts" << '__COREGSM_EOF__'
 /** The bot's main loop: connection to Discord from the panel's settings, status messages, news and deliveries. */
 import { updateDashboard } from './dashboard.js';
@@ -40849,25 +40865,24 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-bot/src/dashboardLogic.ts" << '__COREGSM_EOF__'
 /** The live dashboard message: one embed with every server, edited by the bot every minute. No discord.js import. */
 
-export interface DashServer { id: number; name: string; online: boolean; players: number; maxPlayers: number; map: string | null }
+import { playersBar } from './bars.js';
+
+export interface DashServer { id: number; name: string; online: boolean; players: number; maxPlayers: number; map: string | null; game?: string }
 export interface DashOnline { players: number; servers: DashServer[]; url: string | null }
 export interface DashTop { top: { name: string; hours: number }[] }
 export interface DashStyle { footer: string; accent: number; logoUrl: string | null; version: string }
 
 export const DASH_INTERVAL_MS = 60_000;
 
-const bar = (p: number): string => {
-  const n = Math.max(0, Math.min(8, Math.round(p * 8)));
-  return '█'.repeat(n) + '░'.repeat(8 - n);
-};
 const hours = (h: number): string => (Number.isInteger(h) ? String(h) : h.toFixed(1)).replace('.', ',');
 
 export const dashColor = (up: number, total: number): number => (total === 0 || up === 0 ? 0xe74c3c : up < total ? 0xf5b01e : 0x2ecc71);
 
+/** two lines: the name with the state, then the players with the fill bar and the map */
 export function serverLine(s: DashServer): string {
   if (!s.online) return `🔴 **${s.name}** — не в сети`;
-  const cap = s.maxPlayers > 0 ? `${s.players}/${s.maxPlayers} ${bar(s.players / s.maxPlayers)}` : String(s.players);
-  return `🟢 **${s.name}** — ${cap}${s.map ? ` · ${s.map}` : ''}`;
+  const cap = s.maxPlayers > 0 ? `👥 **${s.players}**/${s.maxPlayers}  ${playersBar(s.players, s.maxPlayers, s.game)}` : `👥 **${s.players}**`;
+  return `🟢 **${s.name}**\n${cap}${s.map ? `  ·  🗺️ ${s.map}` : ''}`;
 }
 
 export function dashboardEmbed(o: DashOnline, top: DashTop | null, st: DashStyle, now = Date.now()) {
@@ -41980,6 +41995,7 @@ import { backend, backendJson } from './backend.js';
 import { log } from './log.js';
 import { COLORS, hoursText, replyEmbed } from './replies.js';
 import { followButton } from './follow.js';
+import { serverLine } from './dashboardLogic.js';
 import { panelRow, stamped } from './ui.js';
 import { ActionRowBuilder, type ButtonBuilder } from 'discord.js';
 
@@ -42027,16 +42043,11 @@ const plural = (n: number, f: [string, string, string]) => {
   const b = a % 10;
   return a > 10 && a < 20 ? f[2] : b > 1 && b < 5 ? f[1] : b === 1 ? f[0] : f[2];
 };
-const bar = (p: number) => {
-  const n = Math.max(0, Math.min(8, Math.round(p * 8)));
-  return '█'.repeat(n) + '░'.repeat(8 - n);
-};
-
 export function onlineEmbed(d: OnlineData): EmbedBuilder {
   const up = d.servers.filter((s) => s.online);
   const lines = d.servers.slice(0, 20).map((s) =>
     s.online
-      ? `🟢 **${s.name}** — ${s.players}${s.maxPlayers ? `/${s.maxPlayers}` : ''} ${s.maxPlayers ? bar(s.players / s.maxPlayers) : ''}${s.map ? ` · ${s.map}` : ''}`
+      ? serverLine(s)
       : `🔴 **${s.name}** — не в сети`,
   );
   const e = new EmbedBuilder()

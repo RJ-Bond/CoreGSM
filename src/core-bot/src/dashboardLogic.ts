@@ -1,24 +1,23 @@
 /** The live dashboard message: one embed with every server, edited by the bot every minute. No discord.js import. */
 
-export interface DashServer { id: number; name: string; online: boolean; players: number; maxPlayers: number; map: string | null }
+import { playersBar } from './bars.js';
+
+export interface DashServer { id: number; name: string; online: boolean; players: number; maxPlayers: number; map: string | null; game?: string }
 export interface DashOnline { players: number; servers: DashServer[]; url: string | null }
 export interface DashTop { top: { name: string; hours: number }[] }
 export interface DashStyle { footer: string; accent: number; logoUrl: string | null; version: string }
 
 export const DASH_INTERVAL_MS = 60_000;
 
-const bar = (p: number): string => {
-  const n = Math.max(0, Math.min(8, Math.round(p * 8)));
-  return '█'.repeat(n) + '░'.repeat(8 - n);
-};
 const hours = (h: number): string => (Number.isInteger(h) ? String(h) : h.toFixed(1)).replace('.', ',');
 
 export const dashColor = (up: number, total: number): number => (total === 0 || up === 0 ? 0xe74c3c : up < total ? 0xf5b01e : 0x2ecc71);
 
+/** two lines: the name with the state, then the players with the fill bar and the map */
 export function serverLine(s: DashServer): string {
   if (!s.online) return `🔴 **${s.name}** — не в сети`;
-  const cap = s.maxPlayers > 0 ? `${s.players}/${s.maxPlayers} ${bar(s.players / s.maxPlayers)}` : String(s.players);
-  return `🟢 **${s.name}** — ${cap}${s.map ? ` · ${s.map}` : ''}`;
+  const cap = s.maxPlayers > 0 ? `👥 **${s.players}**/${s.maxPlayers}  ${playersBar(s.players, s.maxPlayers, s.game)}` : `👥 **${s.players}**`;
+  return `🟢 **${s.name}**\n${cap}${s.map ? `  ·  🗺️ ${s.map}` : ''}`;
 }
 
 export function dashboardEmbed(o: DashOnline, top: DashTop | null, st: DashStyle, now = Date.now()) {

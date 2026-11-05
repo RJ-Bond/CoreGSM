@@ -19,7 +19,7 @@ test('/online: total in the title, online servers with a fill bar, offline ones 
     ],
   }).toJSON();
   assert.match(e.title!, /25 игроков/);
-  assert.match(e.description!, /🟢 \*\*Alpha\*\* — 25\/50 ████░░░░ · Procedural/);
+  assert.match(e.description!, /🟢 \*\*Alpha\*\*\n👥 \*\*25\*\*\/50  🟩🟩🟩⬛⬛⬛  ·  🗺️ Procedural/);
   assert.match(e.description!, /🔴 \*\*Beta\*\* — не в сети/);
   assert.equal(e.url, 'https://panel.example');
   assert.match(e.footer!.text, /1 из 2/);

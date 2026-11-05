@@ -43,7 +43,7 @@ test('dashboard embed', () => {
   const e = dashboardEmbed({ players: 5, servers, url: null }, { top: [{ name: 'Bob', hours: 12.5 }] }, st, 1_700_000_000_000);
   assert.match(e.title, /1\/2 онлайн · 5 игроков/);
   assert.equal(e.color, 0xf5b01e);
-  assert.match(e.description, /🟢 \*\*A\*\* — 5\/10/);
+  assert.match(e.description, /🟢 \*\*A\*\*\n👥 \*\*5\*\*\/10/);
   assert.match(e.description, /🔴 \*\*B\*\*/);
   assert.match(e.fields[2]!.value, /🥇 \*\*Bob\*\* — 12,5 ч/);
   assert.match(e.footer.text, /v1\.1\.42/);

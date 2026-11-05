@@ -5,6 +5,7 @@ import { backend, backendJson } from './backend.js';
 import { log } from './log.js';
 import { COLORS, hoursText, replyEmbed } from './replies.js';
 import { followButton } from './follow.js';
+import { serverLine } from './dashboardLogic.js';
 import { panelRow, stamped } from './ui.js';
 import { ActionRowBuilder, type ButtonBuilder } from 'discord.js';
 
@@ -52,16 +53,11 @@ const plural = (n: number, f: [string, string, string]) => {
   const b = a % 10;
   return a > 10 && a < 20 ? f[2] : b > 1 && b < 5 ? f[1] : b === 1 ? f[0] : f[2];
 };
-const bar = (p: number) => {
-  const n = Math.max(0, Math.min(8, Math.round(p * 8)));
-  return '█'.repeat(n) + '░'.repeat(8 - n);
-};
-
 export function onlineEmbed(d: OnlineData): EmbedBuilder {
   const up = d.servers.filter((s) => s.online);
   const lines = d.servers.slice(0, 20).map((s) =>
     s.online
-      ? `🟢 **${s.name}** — ${s.players}${s.maxPlayers ? `/${s.maxPlayers}` : ''} ${s.maxPlayers ? bar(s.players / s.maxPlayers) : ''}${s.map ? ` · ${s.map}` : ''}`
+      ? serverLine(s)
       : `🔴 **${s.name}** — не в сети`,
   );
   const e = new EmbedBuilder()
