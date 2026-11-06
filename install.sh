@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="0ab25108a67a"
+COREGSM_BUILD="3d7e527c7419"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.57"
+COREGSM_VERSION="1.1.58"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -116264,6 +116264,7 @@ add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/App.tsx" << '__COREGSM_EOF__'
+import { onPageTitleDetail, tabTitle } from './pageTitle';
 import { NewsUnreadDot } from './components/news/newsSeen';
 import { UpdateBadge, shownUpdate, useUpdatePolling, useUpdateState } from './components/UpdateBadge';
 import { paintGameTheme } from './gameThemes';
@@ -116581,10 +116582,12 @@ export default function App() {
           : (() => { const d = PAGES.find((p) => p.id === page); return d ? t(d.label) : ''; })();
   // players now in the tab title and a dot on the icon (only where the panel is shown)
   const livePlayers = usePanelPulse(shellOk.current && access.publicPanel !== false);
+  const [titleDetail, setTitleDetail] = useState<string | null>(null);
+  useEffect(() => onPageTitleDetail(setTitleDetail), []);
   useEffect(() => {
-    const title = boot.ready && sectionTitle ? `${sectionTitle} · ${access.brand.name}` : access.brand.name;
+    const title = boot.ready && sectionTitle ? tabTitle(sectionTitle, page === 'servers' ? titleDetail : null, access.brand.name) : access.brand.name;
     document.title = livePlayers > 0 && shellOk.current ? `(${livePlayers}) ${title}` : title;
-  }, [boot.ready, sectionTitle, access.brand.name, livePlayers]);
+  }, [boot.ready, sectionTitle, titleDetail, page, access.brand.name, livePlayers]);
   useScrollMemory();
   const navHidden = useHideOnScroll();
 
@@ -116755,7 +116758,7 @@ export default function App() {
           {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} isStaff={isStaff} isAdmin={!!isAdmin} />}
         </Suspense>
 
-        <AppFooter brand={access.brand.name} version={access.version} />
+        <AppFooter brand={access.brand.name} version={access.version} compact={page === 'admin'} />
 
         <nav
           className={`nav-bottom glass fixed inset-x-3 z-40 mx-auto max-w-md rounded-ui-xl md:hidden ${navHidden ? 'is-hidden' : ''}`}
@@ -118250,9 +118253,11 @@ export default function AdminStatusBar() {
   return (
     <div className="adm-status" role="status">
       <span className={`adm-status-dot is-${tone}`} aria-hidden />
-      <span className="font-extrabold">{text}</span>
-      {last > 0 && <span className="text-mute" title={t('d2.asb.lastTitle')}>· {ago(last)}</span>}
-      <Button type="button" size="sm" variant="soft" className="ml-auto" loading={busy} onClick={() => void pollAll()}>{t('d2.asb.pollAll')}</Button>
+      <span className="min-w-0 flex-1 max-sm:basis-full">
+        <span className="font-extrabold">{text}</span>
+        {last > 0 && <span className="whitespace-nowrap text-mute" title={t('d2.asb.lastTitle')}> · {ago(last)}</span>}
+      </span>
+      <Button type="button" size="sm" variant="soft" className="ml-auto shrink-0" loading={busy} onClick={() => void pollAll()}>{t('d2.asb.pollAll')}</Button>
     </div>
   );
 }
@@ -121552,7 +121557,10 @@ export function MotionToggle() {
   return (
     <button type="button" className="btn-icon hdr-motion" aria-pressed={off} title={label} aria-label={label} onClick={() => setLook({ reduceMotion: !off })}>
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-        {off ? <><path d="M6 4h4v16H6zM14 4h4v16h-4z" /></> : <><path d="M3 12c2-6 4-6 6 0s4 6 6 0 4-6 6 0" /></>}
+        {/* sparkles: «animations»; crossed out when they are off */}
+        <path d="M11 3l1.9 5.1L18 10l-5.1 1.9L11 17l-1.9-5.1L4 10l5.1-1.9z" />
+        <path d="M19 15l.8 2.2 2.2.8-2.2.8L19 21l-.8-2.2-2.2-.8 2.2-.8z" />
+        {off && <path d="M3 3l18 18" />}
       </svg>
     </button>
   );
@@ -122882,8 +122890,17 @@ export const PROJECT_URL = 'https://github.com/RJ-Bond/CoreGSM';
 export const CHANGELOG_URL = `${PROJECT_URL}/blob/main/CHANGELOG.md`;
 const DEFAULT_BRAND = 'CoreGSM';
 
-export function AppFooter({ brand, version }: { brand: string; version?: string | null }) {
+export function AppFooter({ brand, version, compact = false }: { brand: string; version?: string | null; compact?: boolean }) {
   useI18n();
+  if (compact) {
+    return (
+      <footer className="app-foot app-foot-compact">
+        <span className="font-black">{brand}</span>
+        <span className="app-foot-status"><i aria-hidden />{t('foot.up')}</span>
+        {version && <a className="app-foot-ver" href={CHANGELOG_URL} target="_blank" rel="noopener noreferrer" title={t('foot.version', { v: version })}><FootTag />{footVersionText(version)}</a>}
+      </footer>
+    );
+  }
   return (
     <footer className="app-foot">
       <div className="app-foot-col">
@@ -123745,6 +123762,15 @@ export default function Tour() {
     if (username) markSeen(username);
     setOpen(false);
   }, [username]);
+
+  // the offer does not stay over the page: it folds itself after 15 seconds (and comes back next visit), Esc dismisses it for good
+  useEffect(() => {
+    if (!offer || open) return undefined;
+    const timer = setTimeout(() => setOffer(false), 15_000);
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { setOffer(false); if (username) markSeen(username); } };
+    window.addEventListener('keydown', onKey);
+    return () => { clearTimeout(timer); window.removeEventListener('keydown', onKey); };
+  }, [offer, open, username]);
 
   if (!isAdmin) return null;
   if (open) return <TourOverlay onClose={close} />;
@@ -128541,6 +128567,7 @@ __COREGSM_EOF__
 import type { ActivityItem } from '../../api';
 import { t } from '../../i18n';
 import { ago, fmtDateTime, IconClock, IconUsers, Section } from '../../ui';
+import { collapseRuns } from '../servers/feedRuns';
 import { isArray, useFetched } from './useFetched';
 
 /** «Активность»: sessions on the servers and account events, newest first, with relative times */
@@ -128553,11 +128580,11 @@ export function ActivityFeed({ limit = 30 }: { limit?: number }) {
       {data && data.length === 0 && <p className="font-semibold text-mute">{t('pf.act.none')}</p>}
       {data && data.length > 0 && (
         <ul className="pf-line">
-          {data.map((a, i) => (
+          {collapseRuns(data, (x, y) => x.text === y.text).map(({ item: a, count }, i) => (
             <li key={`${a.ts}-${i}`}>
               <span className="pf-dot" aria-hidden>{a.kind === 'session' ? <IconClock size={16} /> : <IconUsers size={16} />}</span>
               <div className="min-w-0 flex-1 pt-1">
-                <div className="wrap-break-word font-bold">{a.text}</div>
+                <div className="wrap-break-word font-bold">{a.text}{count > 1 && <span className="cm-more ml-2">{t('cm.feed.times', { n: count })}</span>}</div>
                 <div className="text-sm font-semibold text-mute" title={fmtDateTime(a.ts)}>{ago(a.ts)}</div>
               </div>
             </li>
@@ -130424,9 +130451,10 @@ export function RankHeaderBadge() {
   const { data } = useMyRank();
   if (!data || !data.nick) return null;
   return (
-    <span className="inline-flex items-center gap-1.5 text-sm font-extrabold" style={{ color: data.rank.color }} title={t('vr.rank.title')}>
+    <span className="inline-flex items-center gap-1.5 text-sm font-extrabold" title={t('vr.rank.title')}>
       <RankEmblem rank={data.rank} size={36} />
-      {rankName(data.rank)}
+      {/* the colour of the rank is on the emblem and a thin line under the name; the text itself stays readable on any theme */}
+      <span className="pf-rank-name" style={{ boxShadow: `inset 0 -2px 0 ${data.rank.color}` }}>{rankName(data.rank)}</span>
     </span>
   );
 }
@@ -132232,12 +132260,12 @@ export default function HistoryChart({
           {scale.ticks.map((v) => (
             <g key={v}>
               <line x1={L} x2={W - R} y1={y(v)} y2={y(v)} className="stroke-line" strokeWidth="1" strokeDasharray={v === 0 ? undefined : '3 5'} />
-              <text x={L - 8} y={y(v) + 4} textAnchor="end" className="fill-mute" fontSize="12" fontWeight="700">{v}</text>
+              <text x={L - 8} y={y(v) + 4} textAnchor="end" className="fill-mute" fontSize="13" fontWeight="700">{v}</text>
             </g>
           ))}
           {[0, 1, 2, 3, 4].map((i) => {
             const ts = t0 + (span * i) / 4;
-            return <text key={i} x={x(ts)} y={H - 8} textAnchor={i === 0 ? 'start' : i === 4 ? 'end' : 'middle'} className="fill-mute" fontSize="12" fontWeight="700">{tickLabel(ts, span)}</text>;
+            return <text key={i} x={x(ts)} y={H - 8} textAnchor={i === 0 ? 'start' : i === 4 ? 'end' : 'middle'} className="fill-mute" fontSize="13" fontWeight="700">{tickLabel(ts, span)}</text>;
           })}
           {capLine && <line x1={L} x2={W - R} y1={y(max)} y2={y(max)} className="stroke-mute" strokeDasharray="4 4" strokeWidth="1" opacity="0.5" />}
           {points.filter((p) => !p.online && p.ts >= t0).map((p) => {
@@ -132268,7 +132296,7 @@ export default function HistoryChart({
           })}
           {pingSegs.map((run, i) => (run.length > 1 ? <path key={`p${i}`} d={smoothPath(run)} className="hc-ping" fill="none" /> : null))}
           {pingOn && pScale.ticks.map((v) => (
-            <text key={`pt${v}`} x={W - R + 6} y={y2(v) + 4} className="hc-ping-tick" fontSize="11" fontWeight="700">{v}</text>
+            <text key={`pt${v}`} x={W - R + 6} y={y2(v) + 4} className="hc-ping-tick" fontSize="12" fontWeight="700">{v}</text>
           ))}
           {drag && Math.abs(drag.to - drag.from) > 3 && (
             <rect x={Math.max(L, Math.min(drag.from, drag.to))} y={T} width={Math.min(W - R, Math.max(drag.from, drag.to)) - Math.max(L, Math.min(drag.from, drag.to))} height={H - T - B} className="hc-drag" />
@@ -134851,7 +134879,8 @@ export function busiestText(b: Community['heatmap']['busiest']) {
   return b ? t('cm.busiest', { when: t(`cm.dowIn.${b.dow}` as TKey), time: `${String(b.hour).padStart(2, '0')}:00` }) : t('cm.busiest.none');
 }
 
-export function FeedItem({ f }: { f: Community['feed'][number] }) {
+/** `more`: how many arrivals of the same player on the same server are folded into this line, `since`: the oldest of them */
+export function FeedItem({ f, more = 1, since }: { f: Community['feed'][number]; more?: number; since?: number }) {
   return (
     <li className="cm-feed-i">
       <span className="relative shrink-0">
@@ -134868,6 +134897,7 @@ export function FeedItem({ f }: { f: Community['feed'][number] }) {
           {ago(f.at)}
           {f.online && <span className="cm-live">{t('cm.live')}</span>}
           {f.newcomer && <span className="cm-new">{t('cm.new')}</span>}
+          {more > 1 && <span className="cm-more" title={since ? ago(since) : undefined}>{t('cm.feed.times', { n: more })}</span>}
         </span>
       </span>
     </li>
@@ -135894,6 +135924,38 @@ export function slotsInfo(players: number, max: number): { kind: SlotsKind; free
   const free = Math.max(0, max - Math.max(0, players));
   if (free === 0) return { kind: 'full', free };
   return { kind: capacityPct(players, max) >= 90 ? 'almost' : 'free', free };
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/servers"
+  cat > "$APP_DIR/core-frontend/src/components/servers/feedRuns.test.ts" << '__COREGSM_EOF__'
+import { describe, expect, it } from 'vitest';
+import { collapseRuns } from './feedRuns';
+
+const same = (a: { n: string; s: number }, b: { n: string; s: number }) => a.n === b.n && a.s === b.s;
+
+describe('collapseRuns', () => {
+  it('joins neighbours that match and keeps the newest and the oldest of a run', () => {
+    const r = collapseRuns([{ n: 'a', s: 1 }, { n: 'a', s: 1 }, { n: 'b', s: 1 }, { n: 'a', s: 1 }, { n: 'a', s: 2 }], same);
+    expect(r.map((x) => [x.item.n, x.item.s, x.count])).toEqual([['a', 1, 2], ['b', 1, 1], ['a', 1, 1], ['a', 2, 1]]);
+  });
+  it('is empty for an empty list and keeps single entries as they are', () => {
+    expect(collapseRuns([], same)).toEqual([]);
+    expect(collapseRuns([{ n: 'a', s: 1 }], same)[0].count).toBe(1);
+  });
+});
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/servers"
+  cat > "$APP_DIR/core-frontend/src/components/servers/feedRuns.ts" << '__COREGSM_EOF__'
+/** Consecutive entries about the same thing become one entry with a count: ten arrivals of one player on one server are one line. */
+export interface Run<T> { item: T; count: number; /** the oldest entry of the run */ last: T }
+
+export function collapseRuns<T>(list: T[], same: (a: T, b: T) => boolean): Run<T>[] {
+  const out: Run<T>[] = [];
+  for (const item of list) {
+    const prev = out[out.length - 1];
+    if (prev && same(prev.last, item)) { prev.count++; prev.last = item; } else out.push({ item, count: 1, last: item });
+  }
+  return out;
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/servers"
@@ -140998,6 +141060,7 @@ const en: Record<keyof typeof ru, string> = {
   'cm.fame': 'Hall of fame',
   'cm.place': 'place {n}',
   'cm.nobody': 'Nobody played',
+  'cm.when.curve': 'Curve of the day: {d}',
   'cm.when': 'When the community plays',
   'cm.when.today': 'Today the best time to join:',
   'cm.when.peak': '. Right now is the peak.',
@@ -141040,6 +141103,7 @@ const en: Record<keyof typeof ru, string> = {
   'cm.feedG.hour': 'Last hour',
   'cm.feedG.today': 'Today',
   'cm.feedG.earlier': 'Earlier',
+  'cm.feed.times': '×{n}',
   'cm.feed': 'Live feed',
   'cm.feed.filter': 'Feed filter',
   'cm.feed.all': 'All',
@@ -145284,6 +145348,7 @@ const ru = {
   'cm.fame': 'Зал славы',
   'cm.place': '{n} место',
   'cm.nobody': 'Никто не играл',
+  'cm.when.curve': 'Кривая дня: {d}',
   'cm.when': 'Когда играет сообщество',
   'cm.when.today': 'Сегодня лучшее время зайти:',
   'cm.when.peak': '. Сейчас как раз пик.',
@@ -145326,6 +145391,7 @@ const ru = {
   'cm.feedG.hour': 'Последний час',
   'cm.feedG.today': 'Сегодня',
   'cm.feedG.earlier': 'Раньше',
+  'cm.feed.times': '×{n}',
   'cm.feed': 'Живая лента',
   'cm.feed.filter': 'Фильтр ленты',
   'cm.feed.all': 'Все',
@@ -148147,6 +148213,37 @@ export function useSubscriptions(enabled: boolean): { list: Subscription[] | nul
   return { list, unavailable, set };
 }
 __COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src"
+  cat > "$APP_DIR/core-frontend/src/pageTitle.test.ts" << '__COREGSM_EOF__'
+import { describe, expect, it } from 'vitest';
+import { tabTitle } from './pageTitle';
+
+describe('tabTitle', () => {
+  it('joins the section, the detail and the brand, skipping what is empty', () => {
+    expect(tabTitle('Серверы', 'Rust | Vanilla', 'CoreGSM')).toBe('Серверы · Rust | Vanilla · CoreGSM');
+    expect(tabTitle('Серверы', null, 'CoreGSM')).toBe('Серверы · CoreGSM');
+    expect(tabTitle('', null, 'CoreGSM')).toBe('CoreGSM');
+  });
+});
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src"
+  cat > "$APP_DIR/core-frontend/src/pageTitle.ts" << '__COREGSM_EOF__'
+/** A page that knows a better name for the tab than its section (a server page: the name of the server) says it here. */
+const EVENT = 'coregsm:title';
+
+export function setPageTitleDetail(name: string | null): void {
+  window.dispatchEvent(new CustomEvent<string | null>(EVENT, { detail: name }));
+}
+
+export function onPageTitleDetail(fn: (name: string | null) => void): () => void {
+  const h = (e: Event) => fn((e as CustomEvent<string | null>).detail ?? null);
+  window.addEventListener(EVENT, h);
+  return () => window.removeEventListener(EVENT, h);
+}
+
+/** «Servers · Rust | Vanilla · CoreGSM»: the section, the detail when there is one */
+export const tabTitle = (section: string, detail: string | null, brand: string): string => [section, detail, brand].filter(Boolean).join(' · ');
+__COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/Admin.tsx" << '__COREGSM_EOF__'
 import { versionText } from './settings/updateLogic';
@@ -149834,8 +149931,10 @@ export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableA
           <b>{t('adm.tbl.picked', { n: picked.length })}</b>
           <button type="button" className="btn btn-soft btn-sm" disabled={busy} onClick={() => void many(a.onRefreshMany)}>{t('adm.tbl.poll')}</button>
           <button type="button" className="btn btn-soft btn-sm" disabled={busy} onClick={() => void many((l) => a.onMaintenanceMany(l, true))}>{t('adm.tbl.maintOnMany')}</button>
-          <button type="button" className="btn btn-soft btn-sm" disabled={busy} onClick={() => void many((l) => a.onMaintenanceMany(l, false))}>{t('adm.tbl.maintOffMany')}</button>
-          <button type="button" className="btn btn-soft btn-sm" onClick={() => void copyPicked()}>{t('adm.tbl.copyAddrs')}</button>
+          <RowMenu label={t('adm.tbl.more')} items={[
+            { key: 'maintoff', label: t('adm.tbl.maintOffMany'), onSelect: () => void many((l) => a.onMaintenanceMany(l, false)) },
+            { key: 'copy', label: t('adm.tbl.copyAddrs'), onSelect: () => void copyPicked() },
+          ]} />
           {a.isAdmin && <button type="button" className="btn btn-danger btn-sm" disabled={busy} onClick={() => void removeMany()}>{t('adm.srv.delete')}</button>}
           <button type="button" className="btn btn-ghost btn-sm ml-auto" onClick={() => setSel([])}>{t('adm.tbl.clear')}</button>
         </div>
@@ -149935,17 +150034,17 @@ export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableA
                 <input type="checkbox" className="srv-check" checked={sel.includes(s.id)} onChange={() => toggle(s.id)} aria-label={`${t('adm.tbl.select')}: ${s.name}`} />
                 <GameAvatar game={s.game} size={40} />
                 <div className="min-w-0 flex-1 basis-40">
-                  <a href={`/servers/${s.id}`} className="block wrap-break-word font-extrabold leading-tight">{s.name}</a>
-                  <div className="truncate text-xs font-semibold text-mute">{gameLabel(s.game)} · <span className="font-mono">{s.host}:{s.port}</span></div>
+                  <a href={`/servers/${s.id}`} title={s.name} className="block wrap-break-word font-extrabold leading-tight">{s.name}</a>
+                  <div className="text-xs font-semibold text-mute [overflow-wrap:anywhere]">{gameLabel(s.game)} · <span className="font-mono">{s.host}:{s.port}</span></div>
                 </div>
                 <StatusPill online={s.online} known={s.hasStatus} lag={isLag(s)} maintenance={!!s.maintenance} />
                 {stateLine(s) && <div className="w-full text-xs font-semibold text-mute">{stateLine(s)}</div>}
                 <div className="flex w-full items-center gap-2 text-sm font-semibold text-mute">
                   <span className="tabular-nums">{s.online ? <><b className="text-ink">{s.players}</b>/{s.maxPlayers}</> : '—'}</span>
-                  <span>· {ago(s.updatedAt)}</span>
+                  <span className="whitespace-nowrap">· {ago(s.updatedAt)}</span>
                   <div className="ml-auto flex items-center gap-1">
                     <button type="button" className="row-act" aria-label={`${t('adm.tbl.poll')}: ${s.name}`} onClick={() => a.onRefresh(s)} disabled={a.busyId === s.id}><IconRefresh spinning={a.busyId === s.id} /></button>
-                    <button type="button" className="btn btn-soft btn-sm" aria-label={`${t('adm.tbl.edit')}: ${s.name}`} onClick={() => a.onEdit(s)}><IconEdit /><span>{t('adm.tbl.edit')}</span></button>
+                    <button type="button" className="btn btn-soft btn-sm" aria-label={`${t('adm.tbl.edit')}: ${s.name}`} onClick={() => a.onEdit(s)}><IconEdit /><span className="max-[400px]:sr-only">{t('adm.tbl.edit')}</span></button>
                     <RowMenu label={`${t('adm.tbl.more')}: ${s.name}`} items={menuItems(s)} />
                   </div>
                 </div>
@@ -151178,6 +151277,7 @@ import { api, type PlayerProfile, type Server } from '../api';
 import { useAuth } from '../auth';
 import { getPrefs, t, useI18n } from '../i18n';
 import { gameColor, gameLabel } from '../games';
+import { collapseRuns } from '../components/servers/feedRuns';
 import { busiestText, dowShort, FeedItem, HeatLegend, MiniHeat, PlayerAvatar, useCommunityLive, type Community, type TopPlayer } from '../components/servers/CommunityBento';
 import { AnimatedNumber, CopyButton, Empty, GameAvatar, MiniSpark, PageHead, ago, fmtDate, fmtDateTime, navigate, num } from '../ui';
 import '../styles/analytics.css';
@@ -151380,6 +151480,7 @@ function WhenBlock({ c }: { c: Community }) {
       <MiniHeat cells={c.heatmap.cells} big now={here} />
       <HeatLegend />
       <p className="cm-sub">{busiestText(c.heatmap.busiest)}. {t('cm.when.note')}</p>
+      <h3 className="cm-subh">{t('cm.when.curve', { d: dowShort()[dow] })}</h3>
       <div className="cm-days" role="group" aria-label={t('cm.when.typical')}>
         {dowShort().map((d, i) => <button key={d} type="button" className="seg-item" aria-pressed={dow === i} onClick={() => setDow(i)}>{d}</button>)}
       </div>
@@ -151545,7 +151646,7 @@ function FeedBlock({ c, filter, setFilter }: { c: Community; filter: FeedFilter;
         : groups.map(([label, items]) => (
           <div key={label} className="cm-feed-group">
             <h3 className="cm-feed-h">{label}</h3>
-            <ul className="cm-feed-list">{items.map((f) => <FeedItem key={`${f.name}-${f.at}`} f={f} />)}</ul>
+            <ul className="cm-feed-list">{collapseRuns(items, (a, b) => a.name === b.name && a.serverId === b.serverId).map((r) => <FeedItem key={`${r.item.name}-${r.item.at}`} f={r.item} more={r.count} since={r.last.at} />)}</ul>
           </div>
         ))}
     </section>
@@ -151885,7 +151986,7 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
       )}
     >
       {error && servers.length === 0 && bindings.length === 0 && !settings ? <LoadError error={error} onRetry={() => void load()} /> : <ErrorLine text={error} />}
-      {loaded && settings && !settings.discordTokenSet && (
+      {loaded && settings && !settings.discordTokenSet && wizard.complete && (
         <Notice action={<GoLink href="/admin/settings/bot">{t('dc.setToken')}</GoLink>}>
           {t('dc.noToken')}
         </Notice>
@@ -151966,7 +152067,7 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
 
       {!loaded && <div className="skeleton panel h-64" aria-busy="true" aria-label={t('dc.loading')} />}
 
-      {loaded && settings && shown.length === 0 && (
+      {loaded && settings && shown.length === 0 && wizard.complete && (
         <Empty compact title={t('dc.none')} text={t('dc.noneText')}>
           {servers.length > 0
             ? <button className="btn mt-3" onClick={() => setDraft({ serverId: servers[0].id, channelId: '', intervalSec: 60, enabled: true, style: 'embed' })}>{t('dc.bind')}</button>
@@ -155384,6 +155485,7 @@ export default function ResetPassword({ token }: { token: string }) {
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/ServerDetail.tsx" << '__COREGSM_EOF__'
+import { setPageTitleDetail } from '../pageTitle';
 import ServerReviews from '../components/server/Reviews';
 import ProbesView, { useProbes } from '../components/server/ProbesView';
 import { useEffect, useRef, useState, type ReactNode, type TouchEvent } from 'react';
@@ -155737,6 +155839,9 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
   if (slide.idx !== tabIdx) setSlide({ idx: tabIdx, dir: tabIdx > slide.idx ? 'r' : 'l' });
 
   // the colour of the page: from the server's cover when it has one, else the game's (a hook: before any return)
+  // the tab of the browser carries the name of the server
+  const serverName = data?.server.name ?? null;
+  useEffect(() => { setPageTitleDetail(serverName); return () => setPageTitleDetail(null); }, [serverName]);
   const coverAccentOrGame = useCoverAccent(data ? coverUrlOf(data.server.coverUrl, data.server.game) : null, data ? gameAccent(data.server.game) : 'rgb(var(--brand))');
 
   if (missing) return <NotFound kind="server" />;
@@ -163664,6 +163769,102 @@ svg[stroke='currentColor'] { stroke-linecap: round; stroke-linejoin: round; }
   a { text-decoration: underline; }
   * { animation: none !important; transition: none !important; }
 }
+
+/* ================= design audit, batch A: type, pills, fields, colours ================= */
+
+/* 1. one step more between the weights: a heading (800), a value or a label (700), the text (600) */
+:root { --font-weight-extrabold: 700; }
+
+/* 2. the micro-labels in capitals: lighter and not wider than they need to be */
+.adm-group-title, .label-caps, .upd-label, .upd-ver-cell > dt { letter-spacing: .06em; font-weight: 650; }
+.uppercase { letter-spacing: .05em; font-weight: 650; }
+.uppercase.tracking-widest, .uppercase.tracking-wider { letter-spacing: .06em; }
+
+/* 3. status pills: a dot and a word in a normal case, a little smaller than the buttons */
+.pill { font-size: var(--fs-sm); font-weight: 650; padding: 2px 9px; }
+.pill::before { width: 6px; height: 6px; }
+
+/* 29. the search in a table head and a text field are one height */
+.adm-search { min-height: 2.5rem; }
+.adm-search input { height: 2.375rem; }
+.input { min-height: 2.5rem; }
+
+/* 33. counters beside a tab or a heading: readable, not a ghost */
+.tab-count { background: rgb(var(--ink) / .12); font-weight: 700; padding: 0 7px; }
+
+/* 36. every switch of a range or a mode is the same segmented control */
+.seg { gap: 2px; }
+.seg-item { min-height: 2rem; }
+
+/* 41. light theme: the honeycomb is a hint at the edge of the page, not a pattern under the cards */
+:root:not([data-theme='dark']) { --hex-a: .1; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme='light']):not([data-theme='dark']) { --hex-a: .06; } }
+:root[data-theme='light'] { --glass-a: .94; }
+
+/* 43. the second-level text in the dark theme a step lighter */
+:root[data-theme='dark'] { --mute: 172 178 194; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme='light']) { --mute: 172 178 194; } }
+
+/* 47. one length and one curve for the small things that move */
+:root { --t-fast: 160ms; --t-base: 200ms; --ease-out: cubic-bezier(.2, .8, .2, 1); }
+.btn, .btn-soft, .btn-icon, .seg-item, .pill, .tile, .panel, .adm-link, .row-act { transition-duration: var(--t-fast); transition-timing-function: var(--ease-out); }
+
+/* ================= design audit, batch B: the admin area ================= */
+
+/* 8. the footer inside the admin area: one quiet line */
+footer.app-foot.app-foot-compact { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 6px 18px; padding: 14px 16px; margin-top: 12px; font-size: var(--fs-sm); color: rgb(var(--mute)); }
+footer.app-foot.app-foot-compact .app-foot-ver { display: inline-flex; align-items: center; gap: 4px; }
+
+/* 9. a dot and a number in the side menu sit on one axis and have one weight */
+.adm-dot { width: 10px; height: 10px; margin-right: 5px; }
+.adm-badge { margin-right: 0; }
+
+/* 10. a row of the server table opens by a wide target, with a visible arrow */
+.adm-table .adm-expand { min-width: 28px; min-height: 28px; display: inline-grid; place-items: center; border-radius: var(--r-md); color: rgb(var(--mute)); }
+.adm-table .adm-expand:hover { background: rgb(var(--soft)); color: rgb(var(--ink)); }
+
+/* a folded run of the same entry */
+.cm-more { display: inline-block; padding: 0 8px; border-radius: var(--r-pill); background: rgb(var(--ink) / .1); font-size: var(--fs-xs); font-weight: 700; color: rgb(var(--mute)); }
+
+/* ================= design audit, batch C: community and profile ================= */
+/* 14. the heat map: bigger cells, a clearer border of the current hour */
+.cm-heat.is-big { gap: 4px; }
+.cm-heat.is-big .cm-heat-c { height: clamp(18px, 3vw, 32px); border-radius: 6px; }
+.cm-heat-c.is-now { outline-width: 2px; outline-offset: 2px; }
+.cm-heat-d, .cm-heat-h { font-size: var(--fs-sm); }
+/* 15. the heading over the curve of the chosen day */
+.cm-subh { margin: 16px 0 8px; font-size: var(--fs-sm); font-weight: 700; color: rgb(var(--mute)); }
+/* 16. the small curves in the server list: one width, aligned */
+.cm-srv-spark { width: 96px; flex: none; display: grid; place-items: center; }
+/* 18. in the indicators of a server the main number is larger than the notes */
+.srv-kpi-main, .stat-v { font-size: calc(var(--fs-xl, 1.5rem) * 1.1); }
+/* 20. the line «playing now» in the profile hero may take two lines */
+.pf-live { max-width: 100%; align-items: center; }
+.pf-live .truncate { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; text-overflow: clip; }
+/* 21. the rank is a colour of the badge, the text stays quiet */
+.pf-rank-name { color: rgb(var(--ink)); }
+/* 23. the favourite server in a tile takes two lines at most */
+.pf-tile-v { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+
+/* 22. the cover melts into the card: a longer, stronger fade */
+.pf-banner::after { height: 70%; background: linear-gradient(to bottom, transparent, rgb(var(--card) / .9)); }
+/* 25. the open section in the header is a quiet tint with a bold name, so it does not look like the filled buttons beside it */
+.hdr-nav .seg-item[aria-current='page'] { font-weight: 800; }
+.hdr-nav[data-ind]::before { background: rgb(var(--brand) / .14); box-shadow: inset 0 0 0 1px rgb(var(--brand) / .3); }
+.hdr-nav:not([data-ind]) .seg-item[aria-current='page'] { background: rgb(var(--brand) / .14); box-shadow: inset 0 0 0 1px rgb(var(--brand) / .3); }
+
+/* ================= design audit, batch D: components ================= */
+/* 31. a toast does not sit on the floating bar of bulk actions: it moves one bar higher while the bar is on the screen */
+body:has(.adm-bulk-float) .toaster { bottom: calc(9rem + env(safe-area-inset-bottom, 0px)); }
+@media (min-width: 768px) { body:has(.adm-bulk-float) .toaster { bottom: 5.5rem; } }
+/* 32. the offer of the tour is out of the way of the table rows: lower, narrower */
+@media (min-width: 768px) { [aria-label][role='dialog'].pop.fixed.bottom-24 { bottom: 1rem; } }
+
+/* ================= design audit, batch E: phones ================= */
+/* 38. the buttons of a server card are a finger wide */
+@media (max-width: 767px) {
+  .adm-card .row-act, .adm-card .btn-sm, .adm-card [aria-haspopup] { min-height: 44px; min-width: 44px; }
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/profile.css" << '__COREGSM_EOF__'
@@ -165583,14 +165784,14 @@ export function StatusPill({ online, known, lag, glass = false, maintenance = fa
   useEffect(() => { prev.current = kind; }, [kind]);
   const swap = changed ? ' pill-swap' : '';
   // a window of maintenance explains the silence: neither «Офлайн» nor «Лаги»
-  if (maintenance) return glass ? <span className={`pill-glass pill-glass-maint${swap}`}>{t('d2.mt.title')}</span> : <span className={`pill pill-maint${swap}`}>{t('d2.mt.title').toUpperCase()}</span>;
+  if (maintenance) return glass ? <span className={`pill-glass pill-glass-maint${swap}`}>{t('d2.mt.title')}</span> : <span className={`pill pill-maint${swap}`}>{t('d2.mt.title')}</span>;
   if (glass) {
     const text = !known ? t('d2.bl.wait') : !online ? t('d2.bl.offline') : lag ? t('d2.bl.lag') : t('d2.srv.f.online');
     return <span className={`pill-glass pill-glass-${kind}${swap}`}>{text}</span>;
   }
-  if (!known) return <span className={`pill pill-mute${swap}`}>{t('d2.bl.wait').toUpperCase()}</span>;
-  if (!online) return <span className={`pill pill-bad${swap}`}>{t('d2.bl.offline').toUpperCase()}</span>;
-  return lag ? <span className={`pill pill-warn lag${swap}`}>{t('d2.bl.lag').toUpperCase()}</span> : <span className={`pill pill-ok live${swap}`}>{t('d2.srv.f.online').toUpperCase()}</span>;
+  if (!known) return <span className={`pill pill-mute${swap}`}>{t('d2.bl.wait')}</span>;
+  if (!online) return <span className={`pill pill-bad${swap}`}>{t('d2.bl.offline')}</span>;
+  return lag ? <span className={`pill pill-warn lag${swap}`}>{t('d2.bl.lag')}</span> : <span className={`pill pill-ok live${swap}`}>{t('d2.srv.f.online')}</span>;
 }
 
 /**
@@ -165601,7 +165802,7 @@ export function GameAvatar({ game, size = 44, glass = false, vtId }: { game: str
   const icon = gameIconPath(game);
   const [c1, c2] = gameGradient(game);
   // small tiles in lists and tables: a light tint with a thin outline instead of the deep tile with a glow, the emblem a bit larger
-  const compact = size <= 34 && !glass && !!GAME_IMAGE[game];
+  const compact = size <= 40 && !glass && !!GAME_IMAGE[game];
   return (
     <div
       data-vt-avatar={vtId}
@@ -166835,7 +167036,7 @@ export function Toaster() {
     </div>
   );
   return (
-    <div className="pointer-events-none fixed inset-x-4 bottom-[calc(5.25rem+env(safe-area-inset-bottom,0px))] z-90 flex flex-col items-center gap-2 md:inset-x-auto md:bottom-6 md:right-6 md:items-end">
+    <div className="toaster pointer-events-none fixed inset-x-4 bottom-[calc(5.25rem+env(safe-area-inset-bottom,0px))] z-90 flex flex-col items-center gap-2 md:inset-x-auto md:bottom-6 md:right-6 md:items-end">
       <div aria-live="polite" className="flex w-full flex-col items-center gap-2 md:items-end">{list.filter((t) => t.kind !== 'err').map(item)}</div>
       <div role="alert" className="flex w-full flex-col items-center gap-2 md:items-end">{list.filter((t) => t.kind === 'err').map(item)}</div>
     </div>

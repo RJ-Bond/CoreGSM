@@ -1,3 +1,4 @@
+import { setPageTitleDetail } from '../pageTitle';
 import ServerReviews from '../components/server/Reviews';
 import ProbesView, { useProbes } from '../components/server/ProbesView';
 import { useEffect, useRef, useState, type ReactNode, type TouchEvent } from 'react';
@@ -351,6 +352,9 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
   if (slide.idx !== tabIdx) setSlide({ idx: tabIdx, dir: tabIdx > slide.idx ? 'r' : 'l' });
 
   // the colour of the page: from the server's cover when it has one, else the game's (a hook: before any return)
+  // the tab of the browser carries the name of the server
+  const serverName = data?.server.name ?? null;
+  useEffect(() => { setPageTitleDetail(serverName); return () => setPageTitleDetail(null); }, [serverName]);
   const coverAccentOrGame = useCoverAccent(data ? coverUrlOf(data.server.coverUrl, data.server.game) : null, data ? gameAccent(data.server.game) : 'rgb(var(--brand))');
 
   if (missing) return <NotFound kind="server" />;

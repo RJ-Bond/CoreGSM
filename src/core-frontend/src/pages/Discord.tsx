@@ -144,7 +144,7 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
       )}
     >
       {error && servers.length === 0 && bindings.length === 0 && !settings ? <LoadError error={error} onRetry={() => void load()} /> : <ErrorLine text={error} />}
-      {loaded && settings && !settings.discordTokenSet && (
+      {loaded && settings && !settings.discordTokenSet && wizard.complete && (
         <Notice action={<GoLink href="/admin/settings/bot">{t('dc.setToken')}</GoLink>}>
           {t('dc.noToken')}
         </Notice>
@@ -225,7 +225,7 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
 
       {!loaded && <div className="skeleton panel h-64" aria-busy="true" aria-label={t('dc.loading')} />}
 
-      {loaded && settings && shown.length === 0 && (
+      {loaded && settings && shown.length === 0 && wizard.complete && (
         <Empty compact title={t('dc.none')} text={t('dc.noneText')}>
           {servers.length > 0
             ? <button className="btn mt-3" onClick={() => setDraft({ serverId: servers[0].id, channelId: '', intervalSec: 60, enabled: true, style: 'embed' })}>{t('dc.bind')}</button>

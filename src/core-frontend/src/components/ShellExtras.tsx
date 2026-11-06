@@ -99,8 +99,17 @@ export const PROJECT_URL = 'https://github.com/RJ-Bond/CoreGSM';
 export const CHANGELOG_URL = `${PROJECT_URL}/blob/main/CHANGELOG.md`;
 const DEFAULT_BRAND = 'CoreGSM';
 
-export function AppFooter({ brand, version }: { brand: string; version?: string | null }) {
+export function AppFooter({ brand, version, compact = false }: { brand: string; version?: string | null; compact?: boolean }) {
   useI18n();
+  if (compact) {
+    return (
+      <footer className="app-foot app-foot-compact">
+        <span className="font-black">{brand}</span>
+        <span className="app-foot-status"><i aria-hidden />{t('foot.up')}</span>
+        {version && <a className="app-foot-ver" href={CHANGELOG_URL} target="_blank" rel="noopener noreferrer" title={t('foot.version', { v: version })}><FootTag />{footVersionText(version)}</a>}
+      </footer>
+    );
+  }
   return (
     <footer className="app-foot">
       <div className="app-foot-col">

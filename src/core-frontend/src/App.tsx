@@ -1,3 +1,4 @@
+import { onPageTitleDetail, tabTitle } from './pageTitle';
 import { NewsUnreadDot } from './components/news/newsSeen';
 import { UpdateBadge, shownUpdate, useUpdatePolling, useUpdateState } from './components/UpdateBadge';
 import { paintGameTheme } from './gameThemes';
@@ -315,10 +316,12 @@ export default function App() {
           : (() => { const d = PAGES.find((p) => p.id === page); return d ? t(d.label) : ''; })();
   // players now in the tab title and a dot on the icon (only where the panel is shown)
   const livePlayers = usePanelPulse(shellOk.current && access.publicPanel !== false);
+  const [titleDetail, setTitleDetail] = useState<string | null>(null);
+  useEffect(() => onPageTitleDetail(setTitleDetail), []);
   useEffect(() => {
-    const title = boot.ready && sectionTitle ? `${sectionTitle} · ${access.brand.name}` : access.brand.name;
+    const title = boot.ready && sectionTitle ? tabTitle(sectionTitle, page === 'servers' ? titleDetail : null, access.brand.name) : access.brand.name;
     document.title = livePlayers > 0 && shellOk.current ? `(${livePlayers}) ${title}` : title;
-  }, [boot.ready, sectionTitle, access.brand.name, livePlayers]);
+  }, [boot.ready, sectionTitle, titleDetail, page, access.brand.name, livePlayers]);
   useScrollMemory();
   const navHidden = useHideOnScroll();
 
@@ -489,7 +492,7 @@ export default function App() {
           {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} isStaff={isStaff} isAdmin={!!isAdmin} />}
         </Suspense>
 
-        <AppFooter brand={access.brand.name} version={access.version} />
+        <AppFooter brand={access.brand.name} version={access.version} compact={page === 'admin'} />
 
         <nav
           className={`nav-bottom glass fixed inset-x-3 z-40 mx-auto max-w-md rounded-ui-xl md:hidden ${navHidden ? 'is-hidden' : ''}`}

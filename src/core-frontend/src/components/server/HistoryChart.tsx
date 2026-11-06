@@ -445,12 +445,12 @@ export default function HistoryChart({
           {scale.ticks.map((v) => (
             <g key={v}>
               <line x1={L} x2={W - R} y1={y(v)} y2={y(v)} className="stroke-line" strokeWidth="1" strokeDasharray={v === 0 ? undefined : '3 5'} />
-              <text x={L - 8} y={y(v) + 4} textAnchor="end" className="fill-mute" fontSize="12" fontWeight="700">{v}</text>
+              <text x={L - 8} y={y(v) + 4} textAnchor="end" className="fill-mute" fontSize="13" fontWeight="700">{v}</text>
             </g>
           ))}
           {[0, 1, 2, 3, 4].map((i) => {
             const ts = t0 + (span * i) / 4;
-            return <text key={i} x={x(ts)} y={H - 8} textAnchor={i === 0 ? 'start' : i === 4 ? 'end' : 'middle'} className="fill-mute" fontSize="12" fontWeight="700">{tickLabel(ts, span)}</text>;
+            return <text key={i} x={x(ts)} y={H - 8} textAnchor={i === 0 ? 'start' : i === 4 ? 'end' : 'middle'} className="fill-mute" fontSize="13" fontWeight="700">{tickLabel(ts, span)}</text>;
           })}
           {capLine && <line x1={L} x2={W - R} y1={y(max)} y2={y(max)} className="stroke-mute" strokeDasharray="4 4" strokeWidth="1" opacity="0.5" />}
           {points.filter((p) => !p.online && p.ts >= t0).map((p) => {
@@ -481,7 +481,7 @@ export default function HistoryChart({
           })}
           {pingSegs.map((run, i) => (run.length > 1 ? <path key={`p${i}`} d={smoothPath(run)} className="hc-ping" fill="none" /> : null))}
           {pingOn && pScale.ticks.map((v) => (
-            <text key={`pt${v}`} x={W - R + 6} y={y2(v) + 4} className="hc-ping-tick" fontSize="11" fontWeight="700">{v}</text>
+            <text key={`pt${v}`} x={W - R + 6} y={y2(v) + 4} className="hc-ping-tick" fontSize="12" fontWeight="700">{v}</text>
           ))}
           {drag && Math.abs(drag.to - drag.from) > 3 && (
             <rect x={Math.max(L, Math.min(drag.from, drag.to))} y={T} width={Math.min(W - R, Math.max(drag.from, drag.to)) - Math.max(L, Math.min(drag.from, drag.to))} height={H - T - B} className="hc-drag" />

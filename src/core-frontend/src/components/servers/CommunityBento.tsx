@@ -87,7 +87,8 @@ export function busiestText(b: Community['heatmap']['busiest']) {
   return b ? t('cm.busiest', { when: t(`cm.dowIn.${b.dow}` as TKey), time: `${String(b.hour).padStart(2, '0')}:00` }) : t('cm.busiest.none');
 }
 
-export function FeedItem({ f }: { f: Community['feed'][number] }) {
+/** `more`: how many arrivals of the same player on the same server are folded into this line, `since`: the oldest of them */
+export function FeedItem({ f, more = 1, since }: { f: Community['feed'][number]; more?: number; since?: number }) {
   return (
     <li className="cm-feed-i">
       <span className="relative shrink-0">
@@ -104,6 +105,7 @@ export function FeedItem({ f }: { f: Community['feed'][number] }) {
           {ago(f.at)}
           {f.online && <span className="cm-live">{t('cm.live')}</span>}
           {f.newcomer && <span className="cm-new">{t('cm.new')}</span>}
+          {more > 1 && <span className="cm-more" title={since ? ago(since) : undefined}>{t('cm.feed.times', { n: more })}</span>}
         </span>
       </span>
     </li>

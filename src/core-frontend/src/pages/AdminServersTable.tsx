@@ -136,8 +136,10 @@ export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableA
           <b>{t('adm.tbl.picked', { n: picked.length })}</b>
           <button type="button" className="btn btn-soft btn-sm" disabled={busy} onClick={() => void many(a.onRefreshMany)}>{t('adm.tbl.poll')}</button>
           <button type="button" className="btn btn-soft btn-sm" disabled={busy} onClick={() => void many((l) => a.onMaintenanceMany(l, true))}>{t('adm.tbl.maintOnMany')}</button>
-          <button type="button" className="btn btn-soft btn-sm" disabled={busy} onClick={() => void many((l) => a.onMaintenanceMany(l, false))}>{t('adm.tbl.maintOffMany')}</button>
-          <button type="button" className="btn btn-soft btn-sm" onClick={() => void copyPicked()}>{t('adm.tbl.copyAddrs')}</button>
+          <RowMenu label={t('adm.tbl.more')} items={[
+            { key: 'maintoff', label: t('adm.tbl.maintOffMany'), onSelect: () => void many((l) => a.onMaintenanceMany(l, false)) },
+            { key: 'copy', label: t('adm.tbl.copyAddrs'), onSelect: () => void copyPicked() },
+          ]} />
           {a.isAdmin && <button type="button" className="btn btn-danger btn-sm" disabled={busy} onClick={() => void removeMany()}>{t('adm.srv.delete')}</button>}
           <button type="button" className="btn btn-ghost btn-sm ml-auto" onClick={() => setSel([])}>{t('adm.tbl.clear')}</button>
         </div>
@@ -237,17 +239,17 @@ export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableA
                 <input type="checkbox" className="srv-check" checked={sel.includes(s.id)} onChange={() => toggle(s.id)} aria-label={`${t('adm.tbl.select')}: ${s.name}`} />
                 <GameAvatar game={s.game} size={40} />
                 <div className="min-w-0 flex-1 basis-40">
-                  <a href={`/servers/${s.id}`} className="block wrap-break-word font-extrabold leading-tight">{s.name}</a>
-                  <div className="truncate text-xs font-semibold text-mute">{gameLabel(s.game)} · <span className="font-mono">{s.host}:{s.port}</span></div>
+                  <a href={`/servers/${s.id}`} title={s.name} className="block wrap-break-word font-extrabold leading-tight">{s.name}</a>
+                  <div className="text-xs font-semibold text-mute [overflow-wrap:anywhere]">{gameLabel(s.game)} · <span className="font-mono">{s.host}:{s.port}</span></div>
                 </div>
                 <StatusPill online={s.online} known={s.hasStatus} lag={isLag(s)} maintenance={!!s.maintenance} />
                 {stateLine(s) && <div className="w-full text-xs font-semibold text-mute">{stateLine(s)}</div>}
                 <div className="flex w-full items-center gap-2 text-sm font-semibold text-mute">
                   <span className="tabular-nums">{s.online ? <><b className="text-ink">{s.players}</b>/{s.maxPlayers}</> : '—'}</span>
-                  <span>· {ago(s.updatedAt)}</span>
+                  <span className="whitespace-nowrap">· {ago(s.updatedAt)}</span>
                   <div className="ml-auto flex items-center gap-1">
                     <button type="button" className="row-act" aria-label={`${t('adm.tbl.poll')}: ${s.name}`} onClick={() => a.onRefresh(s)} disabled={a.busyId === s.id}><IconRefresh spinning={a.busyId === s.id} /></button>
-                    <button type="button" className="btn btn-soft btn-sm" aria-label={`${t('adm.tbl.edit')}: ${s.name}`} onClick={() => a.onEdit(s)}><IconEdit /><span>{t('adm.tbl.edit')}</span></button>
+                    <button type="button" className="btn btn-soft btn-sm" aria-label={`${t('adm.tbl.edit')}: ${s.name}`} onClick={() => a.onEdit(s)}><IconEdit /><span className="max-[400px]:sr-only">{t('adm.tbl.edit')}</span></button>
                     <RowMenu label={`${t('adm.tbl.more')}: ${s.name}`} items={menuItems(s)} />
                   </div>
                 </div>

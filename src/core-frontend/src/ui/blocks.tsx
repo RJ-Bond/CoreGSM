@@ -87,14 +87,14 @@ export function StatusPill({ online, known, lag, glass = false, maintenance = fa
   useEffect(() => { prev.current = kind; }, [kind]);
   const swap = changed ? ' pill-swap' : '';
   // a window of maintenance explains the silence: neither «Офлайн» nor «Лаги»
-  if (maintenance) return glass ? <span className={`pill-glass pill-glass-maint${swap}`}>{t('d2.mt.title')}</span> : <span className={`pill pill-maint${swap}`}>{t('d2.mt.title').toUpperCase()}</span>;
+  if (maintenance) return glass ? <span className={`pill-glass pill-glass-maint${swap}`}>{t('d2.mt.title')}</span> : <span className={`pill pill-maint${swap}`}>{t('d2.mt.title')}</span>;
   if (glass) {
     const text = !known ? t('d2.bl.wait') : !online ? t('d2.bl.offline') : lag ? t('d2.bl.lag') : t('d2.srv.f.online');
     return <span className={`pill-glass pill-glass-${kind}${swap}`}>{text}</span>;
   }
-  if (!known) return <span className={`pill pill-mute${swap}`}>{t('d2.bl.wait').toUpperCase()}</span>;
-  if (!online) return <span className={`pill pill-bad${swap}`}>{t('d2.bl.offline').toUpperCase()}</span>;
-  return lag ? <span className={`pill pill-warn lag${swap}`}>{t('d2.bl.lag').toUpperCase()}</span> : <span className={`pill pill-ok live${swap}`}>{t('d2.srv.f.online').toUpperCase()}</span>;
+  if (!known) return <span className={`pill pill-mute${swap}`}>{t('d2.bl.wait')}</span>;
+  if (!online) return <span className={`pill pill-bad${swap}`}>{t('d2.bl.offline')}</span>;
+  return lag ? <span className={`pill pill-warn lag${swap}`}>{t('d2.bl.lag')}</span> : <span className={`pill pill-ok live${swap}`}>{t('d2.srv.f.online')}</span>;
 }
 
 /**
@@ -105,7 +105,7 @@ export function GameAvatar({ game, size = 44, glass = false, vtId }: { game: str
   const icon = gameIconPath(game);
   const [c1, c2] = gameGradient(game);
   // small tiles in lists and tables: a light tint with a thin outline instead of the deep tile with a glow, the emblem a bit larger
-  const compact = size <= 34 && !glass && !!GAME_IMAGE[game];
+  const compact = size <= 40 && !glass && !!GAME_IMAGE[game];
   return (
     <div
       data-vt-avatar={vtId}

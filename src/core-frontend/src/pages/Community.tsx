@@ -9,6 +9,7 @@ import { api, type PlayerProfile, type Server } from '../api';
 import { useAuth } from '../auth';
 import { getPrefs, t, useI18n } from '../i18n';
 import { gameColor, gameLabel } from '../games';
+import { collapseRuns } from '../components/servers/feedRuns';
 import { busiestText, dowShort, FeedItem, HeatLegend, MiniHeat, PlayerAvatar, useCommunityLive, type Community, type TopPlayer } from '../components/servers/CommunityBento';
 import { AnimatedNumber, CopyButton, Empty, GameAvatar, MiniSpark, PageHead, ago, fmtDate, fmtDateTime, navigate, num } from '../ui';
 import '../styles/analytics.css';
@@ -211,6 +212,7 @@ function WhenBlock({ c }: { c: Community }) {
       <MiniHeat cells={c.heatmap.cells} big now={here} />
       <HeatLegend />
       <p className="cm-sub">{busiestText(c.heatmap.busiest)}. {t('cm.when.note')}</p>
+      <h3 className="cm-subh">{t('cm.when.curve', { d: dowShort()[dow] })}</h3>
       <div className="cm-days" role="group" aria-label={t('cm.when.typical')}>
         {dowShort().map((d, i) => <button key={d} type="button" className="seg-item" aria-pressed={dow === i} onClick={() => setDow(i)}>{d}</button>)}
       </div>
@@ -376,7 +378,7 @@ function FeedBlock({ c, filter, setFilter }: { c: Community; filter: FeedFilter;
         : groups.map(([label, items]) => (
           <div key={label} className="cm-feed-group">
             <h3 className="cm-feed-h">{label}</h3>
-            <ul className="cm-feed-list">{items.map((f) => <FeedItem key={`${f.name}-${f.at}`} f={f} />)}</ul>
+            <ul className="cm-feed-list">{collapseRuns(items, (a, b) => a.name === b.name && a.serverId === b.serverId).map((r) => <FeedItem key={`${r.item.name}-${r.item.at}`} f={r.item} more={r.count} since={r.last.at} />)}</ul>
           </div>
         ))}
     </section>

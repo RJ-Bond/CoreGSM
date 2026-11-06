@@ -10,7 +10,10 @@ export function MotionToggle() {
   return (
     <button type="button" className="btn-icon hdr-motion" aria-pressed={off} title={label} aria-label={label} onClick={() => setLook({ reduceMotion: !off })}>
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-        {off ? <><path d="M6 4h4v16H6zM14 4h4v16h-4z" /></> : <><path d="M3 12c2-6 4-6 6 0s4 6 6 0 4-6 6 0" /></>}
+        {/* sparkles: «animations»; crossed out when they are off */}
+        <path d="M11 3l1.9 5.1L18 10l-5.1 1.9L11 17l-1.9-5.1L4 10l5.1-1.9z" />
+        <path d="M19 15l.8 2.2 2.2.8-2.2.8L19 21l-.8-2.2-2.2-.8 2.2-.8z" />
+        {off && <path d="M3 3l18 18" />}
       </svg>
     </button>
   );

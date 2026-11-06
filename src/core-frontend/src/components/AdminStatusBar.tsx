@@ -28,9 +28,11 @@ export default function AdminStatusBar() {
   return (
     <div className="adm-status" role="status">
       <span className={`adm-status-dot is-${tone}`} aria-hidden />
-      <span className="font-extrabold">{text}</span>
-      {last > 0 && <span className="text-mute" title={t('d2.asb.lastTitle')}>· {ago(last)}</span>}
-      <Button type="button" size="sm" variant="soft" className="ml-auto" loading={busy} onClick={() => void pollAll()}>{t('d2.asb.pollAll')}</Button>
+      <span className="min-w-0 flex-1 max-sm:basis-full">
+        <span className="font-extrabold">{text}</span>
+        {last > 0 && <span className="whitespace-nowrap text-mute" title={t('d2.asb.lastTitle')}> · {ago(last)}</span>}
+      </span>
+      <Button type="button" size="sm" variant="soft" className="ml-auto shrink-0" loading={busy} onClick={() => void pollAll()}>{t('d2.asb.pollAll')}</Button>
     </div>
   );
 }

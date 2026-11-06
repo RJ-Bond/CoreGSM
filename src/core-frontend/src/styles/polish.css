@@ -244,3 +244,99 @@ svg[stroke='currentColor'] { stroke-linecap: round; stroke-linejoin: round; }
   a { text-decoration: underline; }
   * { animation: none !important; transition: none !important; }
 }
+
+/* ================= design audit, batch A: type, pills, fields, colours ================= */
+
+/* 1. one step more between the weights: a heading (800), a value or a label (700), the text (600) */
+:root { --font-weight-extrabold: 700; }
+
+/* 2. the micro-labels in capitals: lighter and not wider than they need to be */
+.adm-group-title, .label-caps, .upd-label, .upd-ver-cell > dt { letter-spacing: .06em; font-weight: 650; }
+.uppercase { letter-spacing: .05em; font-weight: 650; }
+.uppercase.tracking-widest, .uppercase.tracking-wider { letter-spacing: .06em; }
+
+/* 3. status pills: a dot and a word in a normal case, a little smaller than the buttons */
+.pill { font-size: var(--fs-sm); font-weight: 650; padding: 2px 9px; }
+.pill::before { width: 6px; height: 6px; }
+
+/* 29. the search in a table head and a text field are one height */
+.adm-search { min-height: 2.5rem; }
+.adm-search input { height: 2.375rem; }
+.input { min-height: 2.5rem; }
+
+/* 33. counters beside a tab or a heading: readable, not a ghost */
+.tab-count { background: rgb(var(--ink) / .12); font-weight: 700; padding: 0 7px; }
+
+/* 36. every switch of a range or a mode is the same segmented control */
+.seg { gap: 2px; }
+.seg-item { min-height: 2rem; }
+
+/* 41. light theme: the honeycomb is a hint at the edge of the page, not a pattern under the cards */
+:root:not([data-theme='dark']) { --hex-a: .1; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme='light']):not([data-theme='dark']) { --hex-a: .06; } }
+:root[data-theme='light'] { --glass-a: .94; }
+
+/* 43. the second-level text in the dark theme a step lighter */
+:root[data-theme='dark'] { --mute: 172 178 194; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme='light']) { --mute: 172 178 194; } }
+
+/* 47. one length and one curve for the small things that move */
+:root { --t-fast: 160ms; --t-base: 200ms; --ease-out: cubic-bezier(.2, .8, .2, 1); }
+.btn, .btn-soft, .btn-icon, .seg-item, .pill, .tile, .panel, .adm-link, .row-act { transition-duration: var(--t-fast); transition-timing-function: var(--ease-out); }
+
+/* ================= design audit, batch B: the admin area ================= */
+
+/* 8. the footer inside the admin area: one quiet line */
+footer.app-foot.app-foot-compact { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 6px 18px; padding: 14px 16px; margin-top: 12px; font-size: var(--fs-sm); color: rgb(var(--mute)); }
+footer.app-foot.app-foot-compact .app-foot-ver { display: inline-flex; align-items: center; gap: 4px; }
+
+/* 9. a dot and a number in the side menu sit on one axis and have one weight */
+.adm-dot { width: 10px; height: 10px; margin-right: 5px; }
+.adm-badge { margin-right: 0; }
+
+/* 10. a row of the server table opens by a wide target, with a visible arrow */
+.adm-table .adm-expand { min-width: 28px; min-height: 28px; display: inline-grid; place-items: center; border-radius: var(--r-md); color: rgb(var(--mute)); }
+.adm-table .adm-expand:hover { background: rgb(var(--soft)); color: rgb(var(--ink)); }
+
+/* a folded run of the same entry */
+.cm-more { display: inline-block; padding: 0 8px; border-radius: var(--r-pill); background: rgb(var(--ink) / .1); font-size: var(--fs-xs); font-weight: 700; color: rgb(var(--mute)); }
+
+/* ================= design audit, batch C: community and profile ================= */
+/* 14. the heat map: bigger cells, a clearer border of the current hour */
+.cm-heat.is-big { gap: 4px; }
+.cm-heat.is-big .cm-heat-c { height: clamp(18px, 3vw, 32px); border-radius: 6px; }
+.cm-heat-c.is-now { outline-width: 2px; outline-offset: 2px; }
+.cm-heat-d, .cm-heat-h { font-size: var(--fs-sm); }
+/* 15. the heading over the curve of the chosen day */
+.cm-subh { margin: 16px 0 8px; font-size: var(--fs-sm); font-weight: 700; color: rgb(var(--mute)); }
+/* 16. the small curves in the server list: one width, aligned */
+.cm-srv-spark { width: 96px; flex: none; display: grid; place-items: center; }
+/* 18. in the indicators of a server the main number is larger than the notes */
+.srv-kpi-main, .stat-v { font-size: calc(var(--fs-xl, 1.5rem) * 1.1); }
+/* 20. the line «playing now» in the profile hero may take two lines */
+.pf-live { max-width: 100%; align-items: center; }
+.pf-live .truncate { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; text-overflow: clip; }
+/* 21. the rank is a colour of the badge, the text stays quiet */
+.pf-rank-name { color: rgb(var(--ink)); }
+/* 23. the favourite server in a tile takes two lines at most */
+.pf-tile-v { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+
+/* 22. the cover melts into the card: a longer, stronger fade */
+.pf-banner::after { height: 70%; background: linear-gradient(to bottom, transparent, rgb(var(--card) / .9)); }
+/* 25. the open section in the header is a quiet tint with a bold name, so it does not look like the filled buttons beside it */
+.hdr-nav .seg-item[aria-current='page'] { font-weight: 800; }
+.hdr-nav[data-ind]::before { background: rgb(var(--brand) / .14); box-shadow: inset 0 0 0 1px rgb(var(--brand) / .3); }
+.hdr-nav:not([data-ind]) .seg-item[aria-current='page'] { background: rgb(var(--brand) / .14); box-shadow: inset 0 0 0 1px rgb(var(--brand) / .3); }
+
+/* ================= design audit, batch D: components ================= */
+/* 31. a toast does not sit on the floating bar of bulk actions: it moves one bar higher while the bar is on the screen */
+body:has(.adm-bulk-float) .toaster { bottom: calc(9rem + env(safe-area-inset-bottom, 0px)); }
+@media (min-width: 768px) { body:has(.adm-bulk-float) .toaster { bottom: 5.5rem; } }
+/* 32. the offer of the tour is out of the way of the table rows: lower, narrower */
+@media (min-width: 768px) { [aria-label][role='dialog'].pop.fixed.bottom-24 { bottom: 1rem; } }
+
+/* ================= design audit, batch E: phones ================= */
+/* 38. the buttons of a server card are a finger wide */
+@media (max-width: 767px) {
+  .adm-card .row-act, .adm-card .btn-sm, .adm-card [aria-haspopup] { min-height: 44px; min-width: 44px; }
+}

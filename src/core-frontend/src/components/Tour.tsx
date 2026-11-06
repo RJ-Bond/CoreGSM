@@ -103,6 +103,15 @@ export default function Tour() {
     setOpen(false);
   }, [username]);
 
+  // the offer does not stay over the page: it folds itself after 15 seconds (and comes back next visit), Esc dismisses it for good
+  useEffect(() => {
+    if (!offer || open) return undefined;
+    const timer = setTimeout(() => setOffer(false), 15_000);
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { setOffer(false); if (username) markSeen(username); } };
+    window.addEventListener('keydown', onKey);
+    return () => { clearTimeout(timer); window.removeEventListener('keydown', onKey); };
+  }, [offer, open, username]);
+
   if (!isAdmin) return null;
   if (open) return <TourOverlay onClose={close} />;
   if (!offer) return null;

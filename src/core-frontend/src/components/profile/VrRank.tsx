@@ -48,9 +48,10 @@ export function RankHeaderBadge() {
   const { data } = useMyRank();
   if (!data || !data.nick) return null;
   return (
-    <span className="inline-flex items-center gap-1.5 text-sm font-extrabold" style={{ color: data.rank.color }} title={t('vr.rank.title')}>
+    <span className="inline-flex items-center gap-1.5 text-sm font-extrabold" title={t('vr.rank.title')}>
       <RankEmblem rank={data.rank} size={36} />
-      {rankName(data.rank)}
+      {/* the colour of the rank is on the emblem and a thin line under the name; the text itself stays readable on any theme */}
+      <span className="pf-rank-name" style={{ boxShadow: `inset 0 -2px 0 ${data.rank.color}` }}>{rankName(data.rank)}</span>
     </span>
   );
 }
