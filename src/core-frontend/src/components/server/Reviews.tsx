@@ -3,7 +3,6 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { api } from '../../api';
 import { t, useI18n, type TKey } from '../../i18n';
 import { useAuth } from '../../auth';
-import { StateView } from '../StateView';
 import { Button, ErrorLine, UserAvatar, ago, toast, num } from '../../ui';
 
 export interface Review { id: number; author: string; avatarUrl: string | null; stars: number; text: string; hidden: boolean; createdAt: number; updatedAt: number; votes?: number; voted?: boolean; reply?: string | null; replyAt?: number | null }
@@ -109,13 +108,10 @@ export default function ServerReviews({ serverId }: { serverId: number }) {
   return (
     <div className="rv">
       {empty && (
-        <StateView
-          bare
-          compact
-          title={t('d2.rv.none').replace(/[.\s]+$/, '')}
-          text={me ? t('d2.rv.beFirst').replace(/^[:\s]+/, '').replace(/^./, (c) => c.toUpperCase()) : ''}
-          action={me && !r.mine && !formOpen ? <button type="button" className="btn btn-soft btn-sm" onClick={() => setComposing(true)}>{t('d2.rv.leave')}</button> : undefined}
-        />
+        <p className="flex flex-wrap items-center gap-x-3 gap-y-2 font-semibold text-mute">
+          <span>{t('srv.rv.emptyLine')}</span>
+          {me && !r.mine && !formOpen && <button type="button" className="btn btn-soft btn-sm" onClick={() => setComposing(true)}>{t('d2.rv.leave')}</button>}
+        </p>
       )}
       {!empty && <div className="rv-score">
         <div className="text-center">

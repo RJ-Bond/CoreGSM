@@ -562,7 +562,7 @@ export default function HistoryChart({
       )}
       <div className="mt-1 flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
       <p className="text-xs font-bold text-mute">
-        {t('srv.chart.axisX', { period: hours <= 24 ? t('srv.chart.p24') : hours <= 168 ? t('srv.chart.p7') : t('srv.chart.p30') })}
+        <span className="sr-only">{t('srv.chart.axisX', { period: hours <= 24 ? t('srv.chart.p24') : hours <= 168 ? t('srv.chart.p7') : t('srv.chart.p30') })}</span>
         {hp && hv != null && series === 'ping' && (
           <span className={`ml-2 ${TONE_TEXT[pingTone(hv).tone]}`}>{pingTone(hv).label}</span>
         )}

@@ -47,14 +47,11 @@ export function TabSkeleton({ tab }: { tab: TabId }) {
   }
   return (
     <div className="space-y-3.5">
-      <div className="grid grid-cols-2 gap-3.5 lg:grid-cols-4">
-        {[0, 1, 2, 3].map((i) => <div key={i} className={`${sk} h-[132px]`} />)}
-      </div>
+      <div className={`${sk} h-[150px]`} />
+      <div className={`${sk} h-[420px]`} />
       <div className="grid gap-3.5 lg:grid-cols-12">
-        <div className={`${sk} h-[380px] lg:col-span-8`} />
-        <div className={`${sk} h-[380px] lg:col-span-4`} />
-        <div className={`${sk} h-52 lg:col-span-8`} />
-        <div className={`${sk} h-52 lg:col-span-4`} />
+        <div className={`${sk} h-52 lg:col-span-5`} />
+        <div className={`${sk} h-52 lg:col-span-7`} />
       </div>
     </div>
   );

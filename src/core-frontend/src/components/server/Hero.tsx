@@ -14,9 +14,7 @@ export interface Who { name: string; since: number | null }
 function SlotBar({ players, max, peak }: { players: number; max: number; peak: number | null }) {
   const pct = capacityPct(players, max);
   const level = capLevel(pct);
-  const segs = Math.max(1, Math.min(max, 40));
-  const filled = players > 0 ? Math.max(1, Math.round((players / max) * segs)) : 0;
-  const peakAt = peak != null && peak > players ? Math.min(segs - 1, Math.max(0, Math.round((peak / max) * segs) - 1)) : -1;
+  const peakPct = peak != null && peak > players && max > 0 ? Math.min(100, Math.round((peak / max) * 100)) : null;
   const info = slotsInfo(players, max);
   const text = !info ? '' : info.kind === 'full' ? t('srv.slots.full') : info.kind === 'almost' ? t('srv.slots.almost') : t('srv.slots.free', { n: info.free });
   return (
@@ -31,9 +29,8 @@ function SlotBar({ players, max, peak }: { players: number; max: number; peak: n
           aria-valuenow={pct}
           title={level === 'hot' ? t('srv.cap.nearFull', { pct }) : t('srv.cap.taken', { pct })}
         >
-          {Array.from({ length: segs }, (_, i) => (
-            <i key={i} className={`${i < filled ? 'on' : ''} ${i === peakAt ? 'is-peak' : ''}`} style={{ ['--d' as string]: `${i * 16}ms` }} title={i === peakAt ? t('d2.hero.peakTitle', { n: peak ?? '' }) : undefined} />
-          ))}
+          <span className="srv-meter-fill" style={{ width: `${Math.min(100, pct)}%` }} />
+          {peakPct != null && <i className="srv-meter-peak" style={{ left: `${peakPct}%` }} title={t('d2.hero.peakTitle', { n: peak ?? '' })} />}
         </div>
         <span className={`srv-pct on-dark big ${level}`}>{pct}%</span>
       </div>
@@ -86,7 +83,7 @@ function WhoStack({ who, players, href, now }: { who: Who[]; players: number; hr
             const dur = w.since != null ? now - w.since : null;
             const ring = dur == null ? '' : dur < NEWBIE_MS ? 'ring-new' : dur >= VETERAN_MS ? 'ring-vet' : '';
             return (
-              <button key={w.name} type="button" className={`srv-who-av ${ring}`} aria-expanded={sel === w.name} aria-label={w.name} onClick={() => setSel(sel === w.name ? null : w.name)}>
+              <button key={w.name} type="button" className={`srv-who-av ${ring}`} aria-expanded={sel === w.name} aria-label={w.name} title={dur != null ? `${w.name} · ${playedFor(w.since as number, now)}` : w.name} onClick={() => setSel(sel === w.name ? null : w.name)}>
                 <NickPic name={w.name} size={32} className="rounded-full">
                   <i className="avatar-hue" style={{ ['--h' as string]: nickHue(w.name) }}>{nickInitial(w.name)}</i>
                 </NickPic>

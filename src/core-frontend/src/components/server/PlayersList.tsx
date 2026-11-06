@@ -1,3 +1,4 @@
+import { FollowButton } from '../profile/Follows';
 import { Fragment, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import type { PlayerNow } from '../../api';
 import { StateView } from '../StateView';
@@ -264,7 +265,7 @@ export default function PlayersList({
                   )}
                 </span>
                 <span className="pl-time shrink-0 text-right text-sm font-semibold text-mute">
-                  {p.since != null ? playedFor(p.since, now) : t('d2.hero.onlineNow')}
+                  {p.since != null ? playedFor(p.since, now) : hasTimes ? t('d2.hero.onlineNow') : ''}
                   {expandable && dur != null && <i className="pl-bar" aria-hidden><u style={{ width: `${Math.max(4, Math.round((dur / maxDur) * 100))}%` }} /></i>}
                 </span>
                 {expandable && (
@@ -296,7 +297,10 @@ export default function PlayersList({
                     {known.has(p.name.toLowerCase()) && (
                       <div className="col-span-2">
                         <dt>Профиль</dt>
-                        <dd><a className="font-extrabold text-link hover:underline" href={`/player/${encodeURIComponent(p.name)}`}>Открыть профиль игрока →</a></dd>
+                        <dd className="flex flex-wrap items-center gap-3">
+                          <a className="font-extrabold text-link hover:underline" href={`/player/${encodeURIComponent(p.name)}`}>Открыть профиль игрока →</a>
+                          <FollowButton nick={p.name} />
+                        </dd>
                       </div>
                     )}
                     <div className="col-span-2">

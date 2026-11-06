@@ -48,6 +48,20 @@ export default function ServerTabs({ id, tab, counts, toc, mini }: { id: number;
     return () => io.disconnect();
   }, [top]);
 
+  // which edge of a scrolling strip still has tabs behind it: the fade is drawn only there
+  useEffect(() => {
+    const s = seg.current;
+    if (!s) return undefined;
+    const mark = () => {
+      const more = s.scrollWidth - s.clientWidth > 2;
+      s.dataset.scroll = !more ? 'none' : s.scrollLeft <= 2 ? 'start' : s.scrollLeft + s.clientWidth >= s.scrollWidth - 2 ? 'end' : 'mid';
+    };
+    mark();
+    s.addEventListener('scroll', mark, { passive: true });
+    window.addEventListener('resize', mark);
+    return () => { s.removeEventListener('scroll', mark); window.removeEventListener('resize', mark); };
+  }, []);
+
   // the active tab scrolls into view inside the strip
   useEffect(() => {
     const s = seg.current;
@@ -99,7 +113,7 @@ export default function ServerTabs({ id, tab, counts, toc, mini }: { id: number;
               >
                 <tb.icon size={17} className="srv-tab-i" />
                 {t(tb.label)}
-                {n != null && n > 0 && <span className="tab-count">{n}</span>}
+                {n != null && n > 0 && <span className={`tab-count ${tb.id === 'events' && !on ? 'is-hot' : ''}`}>{n}</span>}
               </a>
             );
           })}

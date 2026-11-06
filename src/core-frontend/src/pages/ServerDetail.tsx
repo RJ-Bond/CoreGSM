@@ -1,5 +1,6 @@
 import { setPageTitleDetail } from '../pageTitle';
 import ServerReviews from '../components/server/Reviews';
+import { eventFacts, whenShort } from '../components/server/serverLogic';
 import ProbesView, { useProbes } from '../components/server/ProbesView';
 import { useEffect, useRef, useState, type ReactNode, type TouchEvent } from 'react';
 import { t, useI18n, type TKey } from '../i18n';
@@ -99,6 +100,17 @@ function MiniBar({ s, href, onConnect, label }: { s: Server; href: string; onCon
 
 export default function ServerDetail({ id, tab = '' }: { id: number; tab?: string }) {
   return <ServerDetailView key={id} id={id} tab={tab as TabId} />;
+}
+
+/** under the recent events: how many outages the period had and when the last one was */
+function OutageFacts({ events }: { events: { ts: number; type: 'up' | 'down' | 'peak' | 'maintenance' }[] }) {
+  useI18n();
+  const f = eventFacts(events);
+  return (
+    <p className="srv-ev-facts">
+      {f.downs === 0 ? t('srv.ev.noDowns') : `${t('srv.ev.downs', { n: f.downs })} · ${t('srv.ev.lastDown', { when: whenShort(f.lastDown as number) })}`}
+    </p>
+  );
 }
 
 /** a small "live" indicator: pulsing dot and how fresh the data is */
@@ -536,6 +548,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
           <div className="space-y-3.5 lg:col-span-5 lg:col-start-1 lg:flex lg:flex-col lg:gap-3.5 lg:space-y-0 lg:self-stretch max-lg:contents">
           <SectionCard id="ov-events" state={sections} className={`max-lg:order-1 ${events.length === 0 ? 'max-lg:hidden' : ''}`} style={stagger(2)} title={t('d2.sd.recent')}>
             <EventsFeed events={events} online={s.online} limit={6} moreHref={tabHref(id, 'events')} />
+            <OutageFacts events={events} />
           </SectionCard>
           {/* the reviews sit under the events: the left column fills the height of the player list */}
           <SectionCard id="ov-reviews" state={sections} className="max-lg:order-3 lg:flex-1" style={stagger(4)} title={t('d2.sd.playerReviews')}>
@@ -607,7 +620,6 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
             <h1 className="wrap-break-word text-[22px] font-extrabold leading-tight tracking-[-0.02em] sm:text-[28px]">{s.name}</h1>
             <div className="mt-1.5 flex flex-wrap items-center gap-2">
               <StatusPill glass online={s.online} known={s.hasStatus} lag={lag} maintenance={!!s.maintenance} />
-              <span className="chip-glass srv-game-chip">{gameLabel(s.game)}</span>
               <LiveBadge at={s.updatedAt} />
               {isFav && <span className="chip-glass"><span aria-hidden>★</span> {t('d2.sd.inFav')}</span>}
             </div>
@@ -658,9 +670,15 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
         <div ref={actionsRef} className="srv-actions relative mt-4 grid grid-cols-[minmax(0,1fr)_auto] gap-2 sm:flex sm:flex-wrap sm:items-center">
           <a className="btn-cta srv-cta max-sm:col-span-2" href={connectHref} onClick={onConnect}>
             <span>{connectLabel}</span>
-            <small className="srv-cta-addr">{s.address}</small>
+            {copyInstead && <small className="srv-cta-addr">{s.address}</small>}
           </a>
-          <CopyButton text={s.address} label={t('srv.cn.copy')} tone="glass" className="srv-addr-btn" />
+          {/* the address is a field of its own with a copy button; on the tab where the main button copies it, the button is enough */}
+          {!copyInstead && (
+            <div className="srv-addr-field max-sm:col-span-2">
+              <code title={s.address}>{s.address}</code>
+              <CopyButton text={s.address} label={t('srv.cn.copy')} tone="glass" className="srv-addr-btn" />
+            </div>
+          )}
           <div className="srv-act-group">
             {/* hidden on phones by a wrapper: the glass button's own CSS would win over a hidden utility on the button itself */}
             {canSub && (
@@ -694,6 +712,8 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
       />
 
       {swipeHint && <p className="srv-swipe-hint" role="status">{t('d2.sd.swipe')}</p>}
+
+      <h2 className="srv-tabhead">{t(TAB_LIST.find((x) => x.id === tab)?.label ?? 'd2.tabs.overview')}<span>{s.name}</span></h2>
 
       <div key={tab || 'overview'} className={slide.dir ? `tab-slide-${slide.dir}` : undefined} role="tabpanel" id={panelDomId(tab)} aria-labelledby={tabDomId(tab)} {...swipe}>
         <BlockBoundary label={tab || 'overview'}>{panel}</BlockBoundary>

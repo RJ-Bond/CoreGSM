@@ -1,3 +1,4 @@
+import { t } from '../../i18n';
 // Pure helpers of the server page (covered by tests): accent, event filters / day groups, player sorting, chart peak.
 import { findGame } from '../../games';
 import { capacityPct, slotsInfo } from '../servers/capacity';
@@ -109,6 +110,23 @@ export function downsample(values: number[], n: number): number[] {
 }
 
 // ---------- an outage in progress ----------
+/** «сегодня, 19:38», «вчера, 19:38», else the date and the time; `now` is passed in, so it can be tested */
+export function whenShort(ts: number, now: number = Date.now()): string {
+  const d = new Date(ts);
+  const time = d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+  const day = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const diff = Math.round((day(new Date(now)) - day(d)) / 86_400_000);
+  if (diff === 0) return t('srv.when.today', { time });
+  if (diff === 1) return t('srv.when.yesterday', { time });
+  return `${d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })}, ${time}`;
+}
+
+/** how many outages the period had and when the last one began */
+export function eventFacts(events: { ts: number; type: EventKind }[]): { downs: number; lastDown: number | null } {
+  const downs = events.filter((e) => e.type === 'down');
+  return { downs: downs.length, lastDown: downs.reduce<number | null>((m, e) => (m == null || e.ts > m ? e.ts : m), null) };
+}
+
 /** when the running outage began: the newest 'down' event, else the first offline sample of the tail; `atLeast` when it began before the window */
 export function offlineSince(events: { ts: number; type: EventKind }[], points: { ts: number; online: number }[]): { ts: number; atLeast: boolean } | null {
   const last = events.find((e) => e.type === 'up' || e.type === 'down');

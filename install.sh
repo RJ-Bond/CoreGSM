@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="3d7e527c7419"
+COREGSM_BUILD="c586a3e6aaef"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.58"
+COREGSM_VERSION="1.1.59"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -131620,9 +131620,7 @@ export interface Who { name: string; since: number | null }
 function SlotBar({ players, max, peak }: { players: number; max: number; peak: number | null }) {
   const pct = capacityPct(players, max);
   const level = capLevel(pct);
-  const segs = Math.max(1, Math.min(max, 40));
-  const filled = players > 0 ? Math.max(1, Math.round((players / max) * segs)) : 0;
-  const peakAt = peak != null && peak > players ? Math.min(segs - 1, Math.max(0, Math.round((peak / max) * segs) - 1)) : -1;
+  const peakPct = peak != null && peak > players && max > 0 ? Math.min(100, Math.round((peak / max) * 100)) : null;
   const info = slotsInfo(players, max);
   const text = !info ? '' : info.kind === 'full' ? t('srv.slots.full') : info.kind === 'almost' ? t('srv.slots.almost') : t('srv.slots.free', { n: info.free });
   return (
@@ -131637,9 +131635,8 @@ function SlotBar({ players, max, peak }: { players: number; max: number; peak: n
           aria-valuenow={pct}
           title={level === 'hot' ? t('srv.cap.nearFull', { pct }) : t('srv.cap.taken', { pct })}
         >
-          {Array.from({ length: segs }, (_, i) => (
-            <i key={i} className={`${i < filled ? 'on' : ''} ${i === peakAt ? 'is-peak' : ''}`} style={{ ['--d' as string]: `${i * 16}ms` }} title={i === peakAt ? t('d2.hero.peakTitle', { n: peak ?? '' }) : undefined} />
-          ))}
+          <span className="srv-meter-fill" style={{ width: `${Math.min(100, pct)}%` }} />
+          {peakPct != null && <i className="srv-meter-peak" style={{ left: `${peakPct}%` }} title={t('d2.hero.peakTitle', { n: peak ?? '' })} />}
         </div>
         <span className={`srv-pct on-dark big ${level}`}>{pct}%</span>
       </div>
@@ -131692,7 +131689,7 @@ function WhoStack({ who, players, href, now }: { who: Who[]; players: number; hr
             const dur = w.since != null ? now - w.since : null;
             const ring = dur == null ? '' : dur < NEWBIE_MS ? 'ring-new' : dur >= VETERAN_MS ? 'ring-vet' : '';
             return (
-              <button key={w.name} type="button" className={`srv-who-av ${ring}`} aria-expanded={sel === w.name} aria-label={w.name} onClick={() => setSel(sel === w.name ? null : w.name)}>
+              <button key={w.name} type="button" className={`srv-who-av ${ring}`} aria-expanded={sel === w.name} aria-label={w.name} title={dur != null ? `${w.name} · ${playedFor(w.since as number, now)}` : w.name} onClick={() => setSel(sel === w.name ? null : w.name)}>
                 <NickPic name={w.name} size={32} className="rounded-full">
                   <i className="avatar-hue" style={{ ['--h' as string]: nickHue(w.name) }}>{nickInitial(w.name)}</i>
                 </NickPic>
@@ -132377,7 +132374,7 @@ export default function HistoryChart({
       )}
       <div className="mt-1 flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
       <p className="text-xs font-bold text-mute">
-        {t('srv.chart.axisX', { period: hours <= 24 ? t('srv.chart.p24') : hours <= 168 ? t('srv.chart.p7') : t('srv.chart.p30') })}
+        <span className="sr-only">{t('srv.chart.axisX', { period: hours <= 24 ? t('srv.chart.p24') : hours <= 168 ? t('srv.chart.p7') : t('srv.chart.p30') })}</span>
         {hp && hv != null && series === 'ping' && (
           <span className={`ml-2 ${TONE_TEXT[pingTone(hv).tone]}`}>{pingTone(hv).label}</span>
         )}
@@ -132454,9 +132451,9 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/components/server/Metrics.tsx" << '__COREGSM_EOF__'
 import type { ReactNode } from 'react';
 import { t, useI18n } from '../../i18n';
-import { fmtDateTime, num } from '../../ui';
+import { num } from '../../ui';
 import { capLevel } from '../servers/capacity';
-import { downsample, metricFill, trendPct } from './serverLogic';
+import { downsample, metricFill, trendPct, whenShort } from './serverLogic';
 
 export interface MetricsData {
   online: boolean;
@@ -132490,7 +132487,7 @@ function Trend({ pct }: { pct: number }) {
   return <span className={`srv-trend ${pct > 0 ? 'is-up' : 'is-down'}`} title={t('d2.mx.trendTitle')}>{pct > 0 ? '↑' : '↓'} {Math.abs(pct)}%</span>;
 }
 
-function Cell({ k, v, hint, fill, level, spark, trend }: { k: string; v: ReactNode; hint?: ReactNode; fill: number; level?: 'ok' | 'good' | 'warm' | 'hot'; spark?: number[]; trend?: number | null }) {
+function Cell({ k, v, hint, fill, level, spark, trend }: { k: ReactNode; v: ReactNode; hint?: ReactNode; fill: number; level?: 'ok' | 'good' | 'warm' | 'hot'; spark?: number[]; trend?: number | null }) {
   return (
     <div className="srv-metric">
       <div className="stat-k">{k}</div>
@@ -132513,21 +132510,21 @@ export default function Metrics({ d, withSamples = false }: { d: MetricsData; wi
   return (
     <div className={`srv-metrics no-scrollbar ${withSamples ? 'has-4' : ''}`}>
       <Cell
-        k={t('d2.an.peak')}
+        k={<>{t('d2.an.peak')} <small className="srv-metric-per">{d.windowLabel}</small></>}
         v={d.peak == null ? '–' : String(d.peak)}
-        hint={d.peakAt ? fmtDateTime(d.peakAt) : undefined}
+        hint={d.peakAt ? whenShort(d.peakAt) : undefined}
         fill={metricFill(d.peak, d.maxPlayers)}
         level={d.peak == null ? undefined : capLevel(metricFill(d.peak, d.maxPlayers))}
       />
       <Cell
-        k={t('d2.sv.up')}
+        k={<>{t('d2.sv.up')} <small className="srv-metric-per">{d.windowLabel}</small></>}
         v={d.uptimePct == null ? '–' : `${num(d.uptimePct)}%`}
-        hint={d.windowLabel}
+        hint={`${t('d2.mx.samples')}: ${d.samples}`}
         fill={d.uptimePct ?? 0}
         level={uptimeLevel(d.uptimePct)}
       />
       <Cell
-        k={t('d2.cc.avg')}
+        k={<>{t('d2.cc.avg')} <small className="srv-metric-per">{d.windowLabel}</small></>}
         spark={d.series}
         trend={d.series ? trendPct(d.series) : null}
         v={d.avg == null ? '–' : num(d.avg)}
@@ -132895,6 +132892,7 @@ export default function Passport({ d }: { d: PassportData }) {
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/server"
   cat > "$APP_DIR/core-frontend/src/components/server/PlayersList.tsx" << '__COREGSM_EOF__'
+import { FollowButton } from '../profile/Follows';
 import { Fragment, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import type { PlayerNow } from '../../api';
 import { StateView } from '../StateView';
@@ -133161,7 +133159,7 @@ export default function PlayersList({
                   )}
                 </span>
                 <span className="pl-time shrink-0 text-right text-sm font-semibold text-mute">
-                  {p.since != null ? playedFor(p.since, now) : t('d2.hero.onlineNow')}
+                  {p.since != null ? playedFor(p.since, now) : hasTimes ? t('d2.hero.onlineNow') : ''}
                   {expandable && dur != null && <i className="pl-bar" aria-hidden><u style={{ width: `${Math.max(4, Math.round((dur / maxDur) * 100))}%` }} /></i>}
                 </span>
                 {expandable && (
@@ -133193,7 +133191,10 @@ export default function PlayersList({
                     {known.has(p.name.toLowerCase()) && (
                       <div className="col-span-2">
                         <dt>Профиль</dt>
-                        <dd><a className="font-extrabold text-link hover:underline" href={`/player/${encodeURIComponent(p.name)}`}>Открыть профиль игрока →</a></dd>
+                        <dd className="flex flex-wrap items-center gap-3">
+                          <a className="font-extrabold text-link hover:underline" href={`/player/${encodeURIComponent(p.name)}`}>Открыть профиль игрока →</a>
+                          <FollowButton nick={p.name} />
+                        </dd>
                       </div>
                     )}
                     <div className="col-span-2">
@@ -133404,7 +133405,6 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { api } from '../../api';
 import { t, useI18n, type TKey } from '../../i18n';
 import { useAuth } from '../../auth';
-import { StateView } from '../StateView';
 import { Button, ErrorLine, UserAvatar, ago, toast, num } from '../../ui';
 
 export interface Review { id: number; author: string; avatarUrl: string | null; stars: number; text: string; hidden: boolean; createdAt: number; updatedAt: number; votes?: number; voted?: boolean; reply?: string | null; replyAt?: number | null }
@@ -133510,13 +133510,10 @@ export default function ServerReviews({ serverId }: { serverId: number }) {
   return (
     <div className="rv">
       {empty && (
-        <StateView
-          bare
-          compact
-          title={t('d2.rv.none').replace(/[.\s]+$/, '')}
-          text={me ? t('d2.rv.beFirst').replace(/^[:\s]+/, '').replace(/^./, (c) => c.toUpperCase()) : ''}
-          action={me && !r.mine && !formOpen ? <button type="button" className="btn btn-soft btn-sm" onClick={() => setComposing(true)}>{t('d2.rv.leave')}</button> : undefined}
-        />
+        <p className="flex flex-wrap items-center gap-x-3 gap-y-2 font-semibold text-mute">
+          <span>{t('srv.rv.emptyLine')}</span>
+          {me && !r.mine && !formOpen && <button type="button" className="btn btn-soft btn-sm" onClick={() => setComposing(true)}>{t('d2.rv.leave')}</button>}
+        </p>
       )}
       {!empty && <div className="rv-score">
         <div className="text-center">
@@ -133862,6 +133859,20 @@ export default function ServerTabs({ id, tab, counts, toc, mini }: { id: number;
     return () => io.disconnect();
   }, [top]);
 
+  // which edge of a scrolling strip still has tabs behind it: the fade is drawn only there
+  useEffect(() => {
+    const s = seg.current;
+    if (!s) return undefined;
+    const mark = () => {
+      const more = s.scrollWidth - s.clientWidth > 2;
+      s.dataset.scroll = !more ? 'none' : s.scrollLeft <= 2 ? 'start' : s.scrollLeft + s.clientWidth >= s.scrollWidth - 2 ? 'end' : 'mid';
+    };
+    mark();
+    s.addEventListener('scroll', mark, { passive: true });
+    window.addEventListener('resize', mark);
+    return () => { s.removeEventListener('scroll', mark); window.removeEventListener('resize', mark); };
+  }, []);
+
   // the active tab scrolls into view inside the strip
   useEffect(() => {
     const s = seg.current;
@@ -133913,7 +133924,7 @@ export default function ServerTabs({ id, tab, counts, toc, mini }: { id: number;
               >
                 <tb.icon size={17} className="srv-tab-i" />
                 {t(tb.label)}
-                {n != null && n > 0 && <span className="tab-count">{n}</span>}
+                {n != null && n > 0 && <span className={`tab-count ${tb.id === 'events' && !on ? 'is-hot' : ''}`}>{n}</span>}
               </a>
             );
           })}
@@ -133977,14 +133988,11 @@ export function TabSkeleton({ tab }: { tab: TabId }) {
   }
   return (
     <div className="space-y-3.5">
-      <div className="grid grid-cols-2 gap-3.5 lg:grid-cols-4">
-        {[0, 1, 2, 3].map((i) => <div key={i} className={`${sk} h-[132px]`} />)}
-      </div>
+      <div className={`${sk} h-[150px]`} />
+      <div className={`${sk} h-[420px]`} />
       <div className="grid gap-3.5 lg:grid-cols-12">
-        <div className={`${sk} h-[380px] lg:col-span-8`} />
-        <div className={`${sk} h-[380px] lg:col-span-4`} />
-        <div className={`${sk} h-52 lg:col-span-8`} />
-        <div className={`${sk} h-52 lg:col-span-4`} />
+        <div className={`${sk} h-52 lg:col-span-5`} />
+        <div className={`${sk} h-52 lg:col-span-7`} />
       </div>
     </div>
   );
@@ -134445,6 +134453,7 @@ describe('availability verdict', () => {
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/server"
   cat > "$APP_DIR/core-frontend/src/components/server/serverLogic.ts" << '__COREGSM_EOF__'
+import { t } from '../../i18n';
 // Pure helpers of the server page (covered by tests): accent, event filters / day groups, player sorting, chart peak.
 import { findGame } from '../../games';
 import { capacityPct, slotsInfo } from '../servers/capacity';
@@ -134556,6 +134565,23 @@ export function downsample(values: number[], n: number): number[] {
 }
 
 // ---------- an outage in progress ----------
+/** «сегодня, 19:38», «вчера, 19:38», else the date and the time; `now` is passed in, so it can be tested */
+export function whenShort(ts: number, now: number = Date.now()): string {
+  const d = new Date(ts);
+  const time = d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+  const day = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const diff = Math.round((day(new Date(now)) - day(d)) / 86_400_000);
+  if (diff === 0) return t('srv.when.today', { time });
+  if (diff === 1) return t('srv.when.yesterday', { time });
+  return `${d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })}, ${time}`;
+}
+
+/** how many outages the period had and when the last one began */
+export function eventFacts(events: { ts: number; type: EventKind }[]): { downs: number; lastDown: number | null } {
+  const downs = events.filter((e) => e.type === 'down');
+  return { downs: downs.length, lastDown: downs.reduce<number | null>((m, e) => (m == null || e.ts > m ? e.ts : m), null) };
+}
+
 /** when the running outage began: the newest 'down' event, else the first offline sample of the tail; `atLeast` when it began before the window */
 export function offlineSince(events: { ts: number; type: EventKind }[], points: { ts: number; online: number }[]): { ts: number; atLeast: boolean } | null {
   const last = events.find((e) => e.type === 'up' || e.type === 'down');
@@ -134580,6 +134606,28 @@ export function uptimeCells(points: { ts: number; online: number }[], start: num
   }
   return ok.map((o, k) => ({ from: start + k * step, to: start + (k + 1) * step, kind: o && bad[k] ? 'part' : o ? 'up' : bad[k] ? 'down' : 'none' }));
 }
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/server"
+  cat > "$APP_DIR/core-frontend/src/components/server/serverLogicFacts.test.ts" << '__COREGSM_EOF__'
+import { describe, expect, it } from 'vitest';
+import { eventFacts, whenShort } from './serverLogic';
+
+describe('whenShort', () => {
+  const now = new Date(2026, 10, 5, 12, 0).getTime();
+  it('says today and yesterday, else the date', () => {
+    expect(whenShort(new Date(2026, 10, 5, 8, 30).getTime(), now)).toMatch(/08:30/);
+    expect(whenShort(new Date(2026, 10, 4, 19, 38).getTime(), now)).toMatch(/19:38/);
+    expect(whenShort(new Date(2026, 10, 4, 19, 38).getTime(), now)).not.toBe(whenShort(new Date(2026, 10, 1, 19, 38).getTime(), now));
+    expect(whenShort(new Date(2026, 9, 20, 7, 5).getTime(), now)).toMatch(/07:05/);
+  });
+});
+
+describe('eventFacts', () => {
+  it('counts the outages and finds the latest', () => {
+    expect(eventFacts([{ ts: 5, type: 'down' }, { ts: 9, type: 'up' }, { ts: 20, type: 'down' }, { ts: 3, type: 'peak' }])).toEqual({ downs: 2, lastDown: 20 });
+    expect(eventFacts([{ ts: 1, type: 'peak' }])).toEqual({ downs: 0, lastDown: null });
+  });
+});
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/server"
   cat > "$APP_DIR/core-frontend/src/components/server/trend.test.ts" << '__COREGSM_EOF__'
@@ -143429,6 +143477,12 @@ const en: Record<keyof typeof ru, string> = {
   'd2.hhc.d': '{n} d',
   'd2.hhc.few': 'Not enough samples yet: the chart will appear after a few minutes of the panel running.',
   'd2.sa.noFavs': 'No favourite servers',
+  'srv.when.today': 'today, {time}',
+  'srv.when.yesterday': 'yesterday, {time}',
+  'srv.ev.lastDown': 'last on {when}',
+  'srv.ev.downs': 'Outages in the period: {n}',
+  'srv.ev.noDowns': 'No outages in the period',
+  'srv.rv.emptyLine': 'No reviews yet.',
   'd2.mx.flatTitle': 'No noticeable change',
   'd2.mx.flat': 'flat',
   'd2.mx.trendTitle': 'End of the period against its start',
@@ -147717,6 +147771,12 @@ const ru = {
   'd2.hhc.d': '{n} д',
   'd2.hhc.few': 'Замеров пока мало: график появится через несколько минут работы панели.',
   'd2.sa.noFavs': 'Избранных серверов нет',
+  'srv.when.today': 'сегодня, {time}',
+  'srv.when.yesterday': 'вчера, {time}',
+  'srv.ev.lastDown': 'последний {when}',
+  'srv.ev.downs': 'Простоев за период: {n}',
+  'srv.ev.noDowns': 'Простоев за период не было',
+  'srv.rv.emptyLine': 'Отзывов пока нет.',
   'd2.mx.flatTitle': 'Без заметных изменений',
   'd2.mx.flat': 'ровно',
   'd2.mx.trendTitle': 'Конец периода к его началу',
@@ -155487,6 +155547,7 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/pages/ServerDetail.tsx" << '__COREGSM_EOF__'
 import { setPageTitleDetail } from '../pageTitle';
 import ServerReviews from '../components/server/Reviews';
+import { eventFacts, whenShort } from '../components/server/serverLogic';
 import ProbesView, { useProbes } from '../components/server/ProbesView';
 import { useEffect, useRef, useState, type ReactNode, type TouchEvent } from 'react';
 import { t, useI18n, type TKey } from '../i18n';
@@ -155586,6 +155647,17 @@ function MiniBar({ s, href, onConnect, label }: { s: Server; href: string; onCon
 
 export default function ServerDetail({ id, tab = '' }: { id: number; tab?: string }) {
   return <ServerDetailView key={id} id={id} tab={tab as TabId} />;
+}
+
+/** under the recent events: how many outages the period had and when the last one was */
+function OutageFacts({ events }: { events: { ts: number; type: 'up' | 'down' | 'peak' | 'maintenance' }[] }) {
+  useI18n();
+  const f = eventFacts(events);
+  return (
+    <p className="srv-ev-facts">
+      {f.downs === 0 ? t('srv.ev.noDowns') : `${t('srv.ev.downs', { n: f.downs })} · ${t('srv.ev.lastDown', { when: whenShort(f.lastDown as number) })}`}
+    </p>
+  );
 }
 
 /** a small "live" indicator: pulsing dot and how fresh the data is */
@@ -156023,6 +156095,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
           <div className="space-y-3.5 lg:col-span-5 lg:col-start-1 lg:flex lg:flex-col lg:gap-3.5 lg:space-y-0 lg:self-stretch max-lg:contents">
           <SectionCard id="ov-events" state={sections} className={`max-lg:order-1 ${events.length === 0 ? 'max-lg:hidden' : ''}`} style={stagger(2)} title={t('d2.sd.recent')}>
             <EventsFeed events={events} online={s.online} limit={6} moreHref={tabHref(id, 'events')} />
+            <OutageFacts events={events} />
           </SectionCard>
           {/* the reviews sit under the events: the left column fills the height of the player list */}
           <SectionCard id="ov-reviews" state={sections} className="max-lg:order-3 lg:flex-1" style={stagger(4)} title={t('d2.sd.playerReviews')}>
@@ -156094,7 +156167,6 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
             <h1 className="wrap-break-word text-[22px] font-extrabold leading-tight tracking-[-0.02em] sm:text-[28px]">{s.name}</h1>
             <div className="mt-1.5 flex flex-wrap items-center gap-2">
               <StatusPill glass online={s.online} known={s.hasStatus} lag={lag} maintenance={!!s.maintenance} />
-              <span className="chip-glass srv-game-chip">{gameLabel(s.game)}</span>
               <LiveBadge at={s.updatedAt} />
               {isFav && <span className="chip-glass"><span aria-hidden>★</span> {t('d2.sd.inFav')}</span>}
             </div>
@@ -156145,9 +156217,15 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
         <div ref={actionsRef} className="srv-actions relative mt-4 grid grid-cols-[minmax(0,1fr)_auto] gap-2 sm:flex sm:flex-wrap sm:items-center">
           <a className="btn-cta srv-cta max-sm:col-span-2" href={connectHref} onClick={onConnect}>
             <span>{connectLabel}</span>
-            <small className="srv-cta-addr">{s.address}</small>
+            {copyInstead && <small className="srv-cta-addr">{s.address}</small>}
           </a>
-          <CopyButton text={s.address} label={t('srv.cn.copy')} tone="glass" className="srv-addr-btn" />
+          {/* the address is a field of its own with a copy button; on the tab where the main button copies it, the button is enough */}
+          {!copyInstead && (
+            <div className="srv-addr-field max-sm:col-span-2">
+              <code title={s.address}>{s.address}</code>
+              <CopyButton text={s.address} label={t('srv.cn.copy')} tone="glass" className="srv-addr-btn" />
+            </div>
+          )}
           <div className="srv-act-group">
             {/* hidden on phones by a wrapper: the glass button's own CSS would win over a hidden utility on the button itself */}
             {canSub && (
@@ -156181,6 +156259,8 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
       />
 
       {swipeHint && <p className="srv-swipe-hint" role="status">{t('d2.sd.swipe')}</p>}
+
+      <h2 className="srv-tabhead">{t(TAB_LIST.find((x) => x.id === tab)?.label ?? 'd2.tabs.overview')}<span>{s.name}</span></h2>
 
       <div key={tab || 'overview'} className={slide.dir ? `tab-slide-${slide.dir}` : undefined} role="tabpanel" id={panelDomId(tab)} aria-labelledby={tabDomId(tab)} {...swipe}>
         <BlockBoundary label={tab || 'overview'}>{panel}</BlockBoundary>
@@ -163864,6 +163944,96 @@ body:has(.adm-bulk-float) .toaster { bottom: calc(9rem + env(safe-area-inset-bot
 /* 38. the buttons of a server card are a finger wide */
 @media (max-width: 767px) {
   .adm-card .row-act, .adm-card .btn-sm, .adm-card [aria-haspopup] { min-height: 44px; min-width: 44px; }
+}
+
+/* ================= server page ================= */
+/* 1, 2. the places: one solid bar, the record as a tick on it; the percentage is a note, not a second headline */
+.srv-slots-bar { display: block; position: relative; flex: 1; min-width: 0; height: 10px; border-radius: var(--r-pill); background: rgb(255 255 255 / .22); }
+.srv-meter-fill { position: absolute; inset: 0 auto 0 0; border-radius: var(--r-pill); background: #fff; transition: width .6s var(--ease-out); }
+.srv-slots-bar.warm .srv-meter-fill { background: #fbbf24; }
+.srv-slots-bar.hot .srv-meter-fill { background: #f87171; }
+.srv-meter-peak { position: absolute; top: -3px; bottom: -3px; width: 3px; margin-left: -1px; border-radius: 2px; background: #fde047; }
+.srv-pct.big { font-size: var(--fs-md); font-weight: 700; }
+@media (prefers-reduced-motion: reduce) { .srv-meter-fill { transition: none; } }
+
+/* 3. the cover under the text is always dark enough to read it */
+.srv-scrim { background: linear-gradient(90deg, rgb(8 10 20 / .62) 0%, rgb(8 10 20 / .38) 62%, rgb(8 10 20 / .2) 100%), linear-gradient(180deg, rgb(8 10 20 / .15) 0%, transparent 35%, rgb(8 10 20 / .5) 100%); }
+
+/* 4. the status and the freshness are one line: a pill and plain words next to it */
+.srv-banner .srv-live { background: none; box-shadow: none; padding: 0; color: rgb(255 255 255 / .8); }
+
+/* 5. «free places» is a caption under the bar, not a second pill */
+.srv-slotpill { padding: 0; background: none !important; box-shadow: none !important; border-radius: 0; font-size: var(--fs-sm); font-weight: 700; }
+.srv-slotpill::before { content: '●'; margin-right: .45em; font-size: .7em; vertical-align: .12em; }
+
+/* 7. the facts about the server: two columns of small chips, not a menu */
+@media (min-width: 1024px) {
+  .srv-shell .pp-ribbon { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; margin-top: .75rem; }
+  .srv-shell .pp-chip { padding: .45rem .65rem !important; border-bottom: 0 !important; border-radius: var(--r-md) !important; background: rgb(255 255 255 / .1) !important; box-shadow: inset 0 0 0 1px rgb(255 255 255 / .14) !important; }
+  .srv-shell .pp-chip:first-child { grid-column: 1 / -1; }
+}
+/* 8. the ping chip is in the colour of its quality */
+.pp-ping[data-tone] .pp-bars > i.on { background: var(--tone); }
+.pp-ping[data-tone] { color: var(--tone); }
+
+/* 9, 10. the address is a field with a copy button; below it two equal buttons */
+.srv-addr-field { display: flex; align-items: center; gap: 4px; min-width: 0; padding: 4px 4px 4px 12px; border-radius: var(--r-pill); background: rgb(8 10 20 / .35); box-shadow: inset 0 0 0 1px rgb(255 255 255 / .2); }
+.srv-addr-field code { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); font-size: var(--fs-sm); font-weight: 600; color: #fff; }
+.srv-addr-field .srv-addr-btn { flex: none; width: auto; min-width: 0; font-size: 0; gap: 0; padding-inline: .7rem; }
+.srv-addr-field .srv-addr-btn svg { width: 18px; height: 18px; }
+.srv-shell .srv-actions .srv-addr-field { grid-column: 1 / -1; }
+.srv-act-group > * { flex: 1; }
+.srv-act-group .btn-glass, .srv-act-group .srv-more > button { width: 100%; justify-content: center; }
+
+/* 11. «Подробнее»: an arrow that turns */
+.pp-more-chev { width: 16px; height: 16px; transition: transform var(--t-base) var(--ease-out); }
+
+/* 12. the banner stays in view on every screen of a laptop height, not only on tall ones */
+@media (min-width: 1024px) and (min-height: 800px) { .srv-shell > .srv-banner { position: sticky; top: 5.25rem; } }
+
+/* 13. the glow of a healthy server: a hint, not a halo */
+.srv-glow { box-shadow: 0 1px 2px rgba(20, 24, 40, .08), 0 0 0 1px rgb(var(--g) / .35), 0 14px 38px -16px rgb(var(--g) / .4); }
+
+/* 14, 18. the heading of the open tab, with the name of the server beside it */
+.srv-tabhead { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; margin: 8px 2px 2px; font-size: var(--fs-xl, 1.35rem); font-weight: 800; letter-spacing: -.01em; }
+.srv-tabhead > span { font-size: var(--fs-md); font-weight: 650; color: rgb(var(--mute)); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+
+/* 15. a strip of tabs that goes on beyond its edge fades there */
+.srv-tabs[data-scroll='start'] { -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 36px), transparent); mask-image: linear-gradient(90deg, #000 calc(100% - 36px), transparent); }
+.srv-tabs[data-scroll='end'] { -webkit-mask-image: linear-gradient(90deg, transparent, #000 36px); mask-image: linear-gradient(90deg, transparent, #000 36px); }
+.srv-tabs[data-scroll='mid'] { -webkit-mask-image: linear-gradient(90deg, transparent, #000 36px, #000 calc(100% - 36px), transparent); mask-image: linear-gradient(90deg, transparent, #000 36px, #000 calc(100% - 36px), transparent); }
+.srv-tabs[data-scroll='none'] { -webkit-mask-image: none; mask-image: none; }
+
+/* 16. a counter on a tab you are not on stands out when there is something */
+.srv-tabs > .seg-item .tab-count.is-hot { background: rgb(var(--brand) / .22); color: rgb(var(--link)); }
+
+/* 17. the open tab is in the colour of the rest of the panel, not of the cover */
+.srv-tabs.seg[data-ind]::before, .srv-tabs:not([data-ind]) > .seg-item.on { background: rgb(var(--brand) / .16); box-shadow: inset 0 0 0 1px rgb(var(--brand) / .34); }
+.srv-tabs > .seg-item.on .srv-tab-i { color: rgb(var(--link)); }
+
+/* 19, 20, 21, 22. the indicators: tiles of one height, the period beside the name */
+.srv-metrics { align-items: stretch; }
+.srv-metric { display: flex; flex-direction: column; }
+.srv-metric-h { margin-top: auto; }
+.srv-metric-per { margin-left: 4px; font-size: var(--fs-xs); font-weight: 600; color: rgb(var(--mute)); text-transform: none; letter-spacing: 0; }
+
+/* 28. facts under the recent events */
+.srv-ev-facts { margin: 12px 0 0; padding-top: 10px; border-top: 1px solid rgb(var(--line)); font-size: var(--fs-sm); font-weight: 650; color: rgb(var(--mute)); }
+
+/* 42, 43. the steps of the connection: one rhythm, the host and the port as chips */
+.cn-wizard { gap: 20px; }
+.cn-step-big { align-items: flex-start; }
+.cn-step-big > .cn-num { flex: none; }
+.cn-step-big .cn-h { margin: 0; line-height: 36px; }
+.cn-part { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: var(--r-pill); background: rgb(var(--soft)); box-shadow: inset 0 0 0 1px rgb(var(--line)); text-decoration: none; }
+.cn-part:hover { background: rgb(var(--brand) / .12); }
+
+/* 45. phones: the facts about the server are one scrolling row, the banner is not a wall */
+@media (max-width: 639px) {
+  .srv-banner .pp-ribbon { gap: 6px; }
+  .srv-banner .pp-chip { padding: 4px 10px; }
+  .srv-banner .srv-peaknote, .srv-banner .srv-hero-trend { display: none; }
+  .srv-tabhead { margin-top: 0; }
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"

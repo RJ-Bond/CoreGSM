@@ -1,8 +1,8 @@
 import type { ReactNode } from 'react';
 import { t, useI18n } from '../../i18n';
-import { fmtDateTime, num } from '../../ui';
+import { num } from '../../ui';
 import { capLevel } from '../servers/capacity';
-import { downsample, metricFill, trendPct } from './serverLogic';
+import { downsample, metricFill, trendPct, whenShort } from './serverLogic';
 
 export interface MetricsData {
   online: boolean;
@@ -36,7 +36,7 @@ function Trend({ pct }: { pct: number }) {
   return <span className={`srv-trend ${pct > 0 ? 'is-up' : 'is-down'}`} title={t('d2.mx.trendTitle')}>{pct > 0 ? '↑' : '↓'} {Math.abs(pct)}%</span>;
 }
 
-function Cell({ k, v, hint, fill, level, spark, trend }: { k: string; v: ReactNode; hint?: ReactNode; fill: number; level?: 'ok' | 'good' | 'warm' | 'hot'; spark?: number[]; trend?: number | null }) {
+function Cell({ k, v, hint, fill, level, spark, trend }: { k: ReactNode; v: ReactNode; hint?: ReactNode; fill: number; level?: 'ok' | 'good' | 'warm' | 'hot'; spark?: number[]; trend?: number | null }) {
   return (
     <div className="srv-metric">
       <div className="stat-k">{k}</div>
@@ -59,21 +59,21 @@ export default function Metrics({ d, withSamples = false }: { d: MetricsData; wi
   return (
     <div className={`srv-metrics no-scrollbar ${withSamples ? 'has-4' : ''}`}>
       <Cell
-        k={t('d2.an.peak')}
+        k={<>{t('d2.an.peak')} <small className="srv-metric-per">{d.windowLabel}</small></>}
         v={d.peak == null ? '–' : String(d.peak)}
-        hint={d.peakAt ? fmtDateTime(d.peakAt) : undefined}
+        hint={d.peakAt ? whenShort(d.peakAt) : undefined}
         fill={metricFill(d.peak, d.maxPlayers)}
         level={d.peak == null ? undefined : capLevel(metricFill(d.peak, d.maxPlayers))}
       />
       <Cell
-        k={t('d2.sv.up')}
+        k={<>{t('d2.sv.up')} <small className="srv-metric-per">{d.windowLabel}</small></>}
         v={d.uptimePct == null ? '–' : `${num(d.uptimePct)}%`}
-        hint={d.windowLabel}
+        hint={`${t('d2.mx.samples')}: ${d.samples}`}
         fill={d.uptimePct ?? 0}
         level={uptimeLevel(d.uptimePct)}
       />
       <Cell
-        k={t('d2.cc.avg')}
+        k={<>{t('d2.cc.avg')} <small className="srv-metric-per">{d.windowLabel}</small></>}
         spark={d.series}
         trend={d.series ? trendPct(d.series) : null}
         v={d.avg == null ? '–' : num(d.avg)}
