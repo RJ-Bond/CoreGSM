@@ -1,0 +1,15 @@
+# Settings for the secret scan (.github/workflows/secrets.yml). The default rules stay on.
+# What is skipped, and why: install.sh is generated from src/ and carries embedded base64 pictures in older commits
+# (they look like tokens); the tests hold made-up passwords, tokens and Discord ids to feed the code.
+title = "CoreGSM"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "generated installer and test fixtures"
+paths = [
+  '''^install\.sh$''',
+  '''^src/[^/]+/test/.*''',
+  '''.*\.test\.(ts|tsx|mjs)$''',
+]
