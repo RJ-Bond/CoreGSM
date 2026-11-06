@@ -16,6 +16,7 @@ export function Switch({ checked, onChange, className = '', ...rest }: SwitchPro
       {...rest}
       type="checkbox"
       role="switch"
+      aria-checked={checked}
       className={`switch ${className}`.trim()}
       checked={checked}
       onChange={(e) => onChange(e.target.checked)}

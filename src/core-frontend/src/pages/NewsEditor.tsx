@@ -527,7 +527,7 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
             <div className="no-scrollbar flex items-center gap-2 overflow-x-auto" role="tablist" aria-label={t('ne.embedTabs')}>
               <div className="seg flex w-fit shrink-0">
                 {d.embeds.map((x, i) => (
-                  <button key={i} type="button" role="tab" aria-selected={i === cur} aria-pressed={i === cur} className="seg-item whitespace-nowrap" onClick={() => setActive(i)}>
+                  <button key={i} type="button" aria-pressed={i === cur} className="seg-item whitespace-nowrap" onClick={() => setActive(i)}>
                     Embed {i + 1}{!embedHasContent(x) && <span className="ml-1 text-mute" aria-label={t('ne.emptyAria')}>·</span>}
                   </button>
                 ))}

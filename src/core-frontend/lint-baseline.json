@@ -1,5 +1,5 @@
 {
-  "eslint(no-shadow)": 43,
+  "eslint(no-shadow)": 42,
   "eslint(no-underscore-dangle)": 5,
   "jsx-a11y(click-events-have-key-events)": 8,
   "jsx-a11y(no-autofocus)": 12,
@@ -8,8 +8,6 @@
   "jsx-a11y(no-noninteractive-element-to-interactive-role)": 6,
   "jsx-a11y(no-noninteractive-tabindex)": 2,
   "jsx-a11y(no-static-element-interactions)": 5,
-  "jsx-a11y(role-has-required-aria-props)": 1,
-  "jsx-a11y(role-supports-aria-props)": 1,
   "react-hooks(exhaustive-deps)": 12,
   "react(exhaustive-effect-dependencies)": 49,
   "react(iframe-missing-sandbox)": 1,

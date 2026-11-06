@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="bfb03ea34284"
+COREGSM_BUILD="0ab25108a67a"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.56"
+COREGSM_VERSION="1.1.57"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -44425,7 +44425,7 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend"
   cat > "$APP_DIR/core-frontend/lint-baseline.json" << '__COREGSM_EOF__'
 {
-  "eslint(no-shadow)": 43,
+  "eslint(no-shadow)": 42,
   "eslint(no-underscore-dangle)": 5,
   "jsx-a11y(click-events-have-key-events)": 8,
   "jsx-a11y(no-autofocus)": 12,
@@ -44434,8 +44434,6 @@ __COREGSM_EOF__
   "jsx-a11y(no-noninteractive-element-to-interactive-role)": 6,
   "jsx-a11y(no-noninteractive-tabindex)": 2,
   "jsx-a11y(no-static-element-interactions)": 5,
-  "jsx-a11y(role-has-required-aria-props)": 1,
-  "jsx-a11y(role-supports-aria-props)": 1,
   "react-hooks(exhaustive-deps)": 12,
   "react(exhaustive-effect-dependencies)": 49,
   "react(iframe-missing-sandbox)": 1,
@@ -123633,6 +123631,7 @@ export function Switch({ checked, onChange, className = '', ...rest }: SwitchPro
       {...rest}
       type="checkbox"
       role="switch"
+      aria-checked={checked}
       className={`switch ${className}`.trim()}
       checked={checked}
       onChange={(e) => onChange(e.target.checked)}
@@ -154101,7 +154100,7 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
             <div className="no-scrollbar flex items-center gap-2 overflow-x-auto" role="tablist" aria-label={t('ne.embedTabs')}>
               <div className="seg flex w-fit shrink-0">
                 {d.embeds.map((x, i) => (
-                  <button key={i} type="button" role="tab" aria-selected={i === cur} aria-pressed={i === cur} className="seg-item whitespace-nowrap" onClick={() => setActive(i)}>
+                  <button key={i} type="button" aria-pressed={i === cur} className="seg-item whitespace-nowrap" onClick={() => setActive(i)}>
                     Embed {i + 1}{!embedHasContent(x) && <span className="ml-1 text-mute" aria-label={t('ne.emptyAria')}>·</span>}
                   </button>
                 ))}
