@@ -65,3 +65,18 @@ describe('automatic announcement form', () => {
     expect(validateRule({ ...ok, activeFrom: 10, activeTo: 5 }, NOW)).toBe('period');
   });
 });
+
+import { versionLess } from '../src/gameNews';
+
+describe('plugin version', () => {
+  it('compares dotted versions by number', () => {
+    expect(versionLess('0.2.0', '0.3.0')).toBe(true);
+    expect(versionLess('0.2.0', '0.2.0')).toBe(false);
+    expect(versionLess('0.10.0', '0.9.5')).toBe(false);
+    expect(versionLess('0.2', '0.2.1')).toBe(true);
+  });
+  it('treats an unknown version as old', () => {
+    expect(versionLess('', '0.2.0')).toBe(true);
+    expect(versionLess('x', '0.2.0')).toBe(true);
+  });
+});

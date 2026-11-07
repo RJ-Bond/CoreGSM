@@ -1,13 +1,21 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import { api } from '../api';
 import { NewsEditor, NewsPreview, Styled } from '../components/NewsEditor';
 import { confirmDialog } from '../confirm';
 import { t, useI18n } from '../i18n';
-import { pluginConfig, validateNews, type NewsLogRow, type NewsSendResult, type NewsServerInfo, type NewsStatus } from '../gameNews';
+import { pluginConfig, validateNews, versionLess, type NewsLogRow, type NewsSendResult, type NewsServerInfo, type NewsStatus } from '../gameNews';
 import { AdminPage, ErrorLine, IconNews, IconSettings, LoadError, Modal, PageHead, Spinner, errText, toast, usePoll } from '../ui';
 import GameNewsRules from './GameNewsRules';
 
-interface NewsState { servers: NewsServerInfo[]; log: NewsLogRow[] }
+interface NewsState { servers: NewsServerInfo[]; log: NewsLogRow[]; pluginLatest: string }
+
+/** «3 с назад», «5 мин назад», «2 ч назад» */
+function ago(ts: number): string {
+  const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
+  if (s < 90) return t('gn.ago.s', { n: s });
+  if (s < 5400) return t('gn.ago.m', { n: Math.round(s / 60) });
+  return t('gn.ago.h', { n: Math.round(s / 3600) });
+}
 
 const STATUS: Record<NewsStatus, { text: 'gn.h.queued' | 'gn.h.ok' | 'gn.h.expired' | 'gn.h.fail'; cls: string }> = {
   queued: { text: 'gn.h.queued', cls: 'pill pill-mute' },
@@ -35,11 +43,23 @@ export default function GameNewsPage() {
   usePoll(load, 10_000);
 
   const problem = validateNews(text);
-  const ready = (data?.servers ?? []).filter((s) => s.hasToken);
+  // the plugin exists for some games only: servers of other games are not listed (their number is shown)
+  const shown = (data?.servers ?? []).filter((s) => s.supported);
+  const hiddenCount = (data?.servers.length ?? 0) - shown.length;
+  const ready = shown.filter((s) => s.hasToken);
   const settingsServer = data?.servers.find((s) => s.id === settingsFor) ?? null;
-  const toggle = (id: number) => setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
+  const touched = useRef(false);
+  const toggle = (id: number) => { touched.current = true; setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id])); };
+  // a single server with a plugin is chosen right away (until the administrator picks by hand)
+  useEffect(() => {
+    if (!touched.current && ready.length === 1 && picked.length === 0) setPicked([ready[0].id]);
+  }, [ready, picked.length]);
+  const sendHint = problem === 'empty' ? t('gn.hint.text') : problem === 'long' ? t('gn.hint.long') : !picked.length ? t('gn.hint.server') : '';
+  const onKey = (e: KeyboardEvent<HTMLFormElement>) => {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); void send(e); }
+  };
 
-  const send = async (e: FormEvent) => {
+  const send = async (e: FormEvent | KeyboardEvent) => {
     e.preventDefault();
     if (problem || !picked.length || busy) return;
     const names = (data?.servers ?? []).filter((s) => picked.includes(s.id)).map((s) => s.name).join(', ');
@@ -79,7 +99,7 @@ export default function GameNewsPage() {
 
       {data && tab === 'send' && (
         <>
-          <form className="grid gap-5 lg:grid-cols-2" onSubmit={(e) => void send(e)} noValidate>
+          <form className="grid gap-5 lg:grid-cols-2" onSubmit={(e) => void send(e)} onKeyDown={onKey} noValidate>
             <section className="panel p-5"><NewsEditor value={text} onChange={setText} /></section>
 
             <section className="space-y-5">
@@ -87,29 +107,46 @@ export default function GameNewsPage() {
 
               <div className="panel space-y-3 p-5">
                 <h3 className="font-extrabold">{t('gn.servers')}</h3>
-                {data.servers.length === 0 && <p className="text-sm font-semibold text-mute">{t('gn.noServers')}</p>}
+                {shown.length === 0 && <p className="text-sm font-semibold text-mute">{t('gn.noServers')}</p>}
                 <ul className="divide-y divide-line">
-                  {data.servers.map((s) => (
-                    <li key={s.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2.5">
-                      <label className="flex min-w-0 flex-1 basis-48 items-center gap-2.5 font-bold">
-                        <input type="checkbox" disabled={!s.hasToken} checked={picked.includes(s.id)} onChange={() => toggle(s.id)} />
-                        <span className="min-w-0 wrap-break-word">{s.name}</span>
-                      </label>
-                      <span className={!s.hasToken ? 'pill pill-mute' : s.online ? 'pill pill-ok' : 'pill pill-warn'}>
-                        {!s.hasToken ? t('gn.plugin.off') : s.online ? t('gn.plugin.online') : t('gn.plugin.silent')}
-                      </span>
-                      <button type="button" className="row-act" onClick={() => setSettingsFor(s.id)} aria-label={t('gn.plugin.settings', { name: s.name })}><IconSettings size={16} /></button>
-                    </li>
-                  ))}
+                  {shown.map((s) => {
+                    const old = s.hasToken && s.online && versionLess(s.pluginVersion, data.pluginLatest);
+                    return (
+                      <li key={s.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2.5">
+                        <label className="flex min-w-0 flex-1 basis-48 items-center gap-2.5 font-bold">
+                          <input type="checkbox" disabled={!s.hasToken} checked={picked.includes(s.id)} onChange={() => toggle(s.id)} />
+                          <span className="min-w-0 wrap-break-word">
+                            {s.name}
+                            {s.name !== s.address && <span className="block text-xs font-semibold text-mute">{s.address}</span>}
+                          </span>
+                        </label>
+                        <span
+                          className={!s.hasToken ? 'pill pill-mute' : !s.online ? 'pill pill-warn' : old ? 'pill pill-warn' : 'pill pill-ok'}
+                          title={s.lastSeen ? t('gn.plugin.lastPoll', { time: ago(s.lastSeen) }) : undefined}
+                        >
+                          {!s.hasToken
+                            ? t('gn.plugin.off')
+                            : !s.online
+                              ? (s.pluginVersion ? `${t('gn.plugin.silent')} · v${s.pluginVersion}` : t('gn.plugin.silent'))
+                              : old
+                                ? t('gn.plugin.outdated', { v: s.pluginVersion || '?', latest: data.pluginLatest })
+                                : `${t('gn.plugin.online')} · v${s.pluginVersion || '?'}`}
+                        </span>
+                        <button type="button" className="row-act" onClick={() => setSettingsFor(s.id)} aria-label={t('gn.plugin.settings', { name: s.name })}><IconSettings size={16} /></button>
+                      </li>
+                    );
+                  })}
                 </ul>
-                {data.servers.length > 0 && ready.length === 0 && <p className="text-sm font-semibold text-mute">{t('gn.noPlugin')}</p>}
+                {hiddenCount > 0 && <p className="text-sm font-semibold text-mute">{t('gn.hiddenOther', { n: hiddenCount })}</p>}
+                {shown.length > 0 && ready.length === 0 && <p className="text-sm font-semibold text-mute">{t('gn.noPlugin')}</p>}
                 {ready.length > 1 && (
                   <button type="button" className="chip-filter" onClick={() => setPicked(picked.length === ready.length ? [] : ready.map((s) => s.id))}>
                     {picked.length === ready.length ? t('gn.pickNone') : t('gn.pickAll')}
                   </button>
                 )}
-                <div className="flex justify-end">
-                  <button type="submit" className="btn" disabled={!!problem || !picked.length || busy}>{busy && <Spinner />}{t('gn.send')}</button>
+                <div className="sticky bottom-3 z-10 flex flex-wrap items-center justify-end gap-3">
+                  {sendHint && <span className="text-sm font-semibold text-mute">{sendHint}</span>}
+                  <button type="submit" className="btn" disabled={!!problem || !picked.length || busy} title={t('gn.sendKey')}>{busy && <Spinner />}{t('gn.send')}</button>
                 </div>
                 {lastResult && (
                   <ul className="space-y-1 text-sm font-semibold">

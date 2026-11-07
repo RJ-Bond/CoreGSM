@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="ab3fba0b75f5"
+COREGSM_BUILD="3ac593dc364e"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.64"
+COREGSM_VERSION="1.1.65"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -23864,6 +23864,10 @@ import { checkNews } from './gameNewsLogic.js';
 export const QUEUE_TTL_MS = 5 * 60_000;
 /** the plugin counts as «online» when it polled within this time */
 export const ONLINE_MS = 30_000;
+/** the version of the game plugin this panel was built for: an older plugin is shown as outdated */
+export const PLUGIN_VERSION = '0.2.0';
+/** the games the plugin exists for */
+export const SUPPORTED_GAMES = new Set(['vrising']);
 const PULL_MIN_GAP_MS = 800;
 const PULL_BATCH = 5;
 const MIN_GAP_MS = 2000;
@@ -23925,13 +23929,13 @@ export function queueNews(text: string, serverIds: number[], by: string, now: nu
 
 export function registerGameNews({ app, admin }: { app: Express; admin: RequestHandler }): void {
   const servers = () => {
-    const rows = db.prepare("SELECT id, COALESCE(NULLIF(name, ''), host || ':' || port) AS name, game FROM servers ORDER BY id").all() as { id: number; name: string; game: string }[];
+    const rows = db.prepare("SELECT s.id, COALESCE(NULLIF(s.name, ''), NULLIF(st.name, ''), s.host || ':' || s.port) AS name, s.host || ':' || s.port AS address, s.game FROM servers s LEFT JOIN status st ON st.server_id = s.id ORDER BY s.id").all() as { id: number; name: string; address: string; game: string }[];
     const targets = new Map((db.prepare('SELECT * FROM game_news_targets').all() as TargetRow[]).map((t) => [t.server_id, t]));
     const now = Date.now();
     return rows.map((s) => {
       const t = targets.get(s.id);
       return {
-        id: s.id, name: s.name, game: s.game,
+        id: s.id, name: s.name, address: s.address, game: s.game, supported: SUPPORTED_GAMES.has(s.game),
         hasToken: !!t?.token_hash,
         lastSeen: t?.last_seen || null,
         online: !!t && t.last_seen > 0 && now - t.last_seen < ONLINE_MS,
@@ -23946,7 +23950,7 @@ export function registerGameNews({ app, admin }: { app: Express; admin: RequestH
       id: r.id, serverId: r.server_id, serverName: r.server_name, text: r.text, status: r.status, error: r.error,
       sentBy: r.sent_by, sentAt: r.sent_at, deliveredAt: r.delivered_at,
     }));
-    res.json({ servers: servers(), log });
+    res.json({ servers: servers(), log, pluginLatest: PLUGIN_VERSION });
   });
 
   // a new token for the server's plugin: shown once, only the hash is stored (the old token stops working)
@@ -137833,7 +137837,7 @@ __COREGSM_EOF__
 
 export const MAX_VISIBLE = 400;
 
-export interface NewsServerInfo { id: number; name: string; game: string; hasToken: boolean; lastSeen: number | null; online: boolean; pluginVersion: string }
+export interface NewsServerInfo { id: number; name: string; address: string; game: string; supported: boolean; hasToken: boolean; lastSeen: number | null; online: boolean; pluginVersion: string }
 export type NewsStatus = 'queued' | 'delivered' | 'expired' | 'failed';
 export interface NewsLogRow { id: number; serverId: number | null; serverName: string; text: string; status: NewsStatus; error: string; sentBy: string; sentAt: number; deliveredAt: number | null }
 export interface NewsSendResult { text: string; results: { serverId: number; serverName: string; queued: boolean; online: boolean; error: string }[] }
@@ -137972,6 +137976,19 @@ export function validateRule(r: RuleBody, now: number): 'name' | 'text' | 'every
   if (r.kind === 'once' && (r.runAt == null || r.runAt <= now)) return 'runAt';
   if (r.activeFrom != null && r.activeTo != null && r.activeTo < r.activeFrom) return 'period';
   return null;
+}
+
+/** true when version `a` is older than `b` (numeric dotted versions: 0.2.0 < 0.10.1); an unknown version counts as older */
+export function versionLess(a: string, b: string): boolean {
+  const pa = a.split('.').map((x) => parseInt(x, 10));
+  const pb = b.split('.').map((x) => parseInt(x, 10));
+  if (!a || pa.some(Number.isNaN)) return true;
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const x = pa[i] ?? 0;
+    const y = pb[i] ?? 0;
+    if (x !== y) return x < y;
+  }
+  return false;
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
@@ -141331,7 +141348,16 @@ const en: Record<keyof typeof ru, string> = {
   'gn.h.expired': 'Not delivered',
   'gn.h.fail': 'Failed',
   'gn.reuse': 'Use again',  'adm.s.alerts': 'Alerts',
-  'gn.tab.send': 'Send',
+  'gn.plugin.lastPoll': 'Last poll: {time}',
+  'gn.plugin.outdated': 'Plugin v{v}, v{latest} is available',
+  'gn.ago.s': '{n} s ago',
+  'gn.ago.m': '{n} min ago',
+  'gn.ago.h': '{n} h ago',
+  'gn.hiddenOther': 'Servers of other games hidden: {n} (the plugin is for V Rising only).',
+  'gn.hint.text': 'Enter the message text',
+  'gn.hint.long': 'The message is too long',
+  'gn.hint.server': 'Pick a server',
+  'gn.sendKey': 'Ctrl+Enter',  'gn.tab.send': 'Send',
   'gn.tab.auto': 'Auto announcements',
   'gn.a.intro': 'Write an announcement once and set a schedule: the panel sends it to the game by itself, no «Send» button.',
   'gn.a.add': 'Add an announcement',
@@ -145764,7 +145790,16 @@ const ru = {
   'gn.h.expired': 'Не доставлено',
   'gn.h.fail': 'Ошибка',
   'gn.reuse': 'Использовать снова',  'adm.s.alerts': 'Оповещения',
-  'gn.tab.send': 'Отправить',
+  'gn.plugin.lastPoll': 'Последний опрос: {time}',
+  'gn.plugin.outdated': 'Плагин v{v}, есть v{latest}',
+  'gn.ago.s': '{n} с назад',
+  'gn.ago.m': '{n} мин назад',
+  'gn.ago.h': '{n} ч назад',
+  'gn.hiddenOther': 'Серверов других игр скрыто: {n} (плагин только для V Rising).',
+  'gn.hint.text': 'Введите текст сообщения',
+  'gn.hint.long': 'Сообщение слишком длинное',
+  'gn.hint.server': 'Выберите сервер',
+  'gn.sendKey': 'Ctrl+Enter',  'gn.tab.send': 'Отправить',
   'gn.tab.auto': 'Автообъявления',
   'gn.a.intro': 'Напишите объявление один раз и задайте расписание: панель сама будет отправлять его в игру, без кнопки «Отправить».',
   'gn.a.add': 'Добавить автообъявление',
@@ -153762,16 +153797,24 @@ export default function ForgotPassword() {
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/GameNews.tsx" << '__COREGSM_EOF__'
-import { useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import { api } from '../api';
 import { NewsEditor, NewsPreview, Styled } from '../components/NewsEditor';
 import { confirmDialog } from '../confirm';
 import { t, useI18n } from '../i18n';
-import { pluginConfig, validateNews, type NewsLogRow, type NewsSendResult, type NewsServerInfo, type NewsStatus } from '../gameNews';
+import { pluginConfig, validateNews, versionLess, type NewsLogRow, type NewsSendResult, type NewsServerInfo, type NewsStatus } from '../gameNews';
 import { AdminPage, ErrorLine, IconNews, IconSettings, LoadError, Modal, PageHead, Spinner, errText, toast, usePoll } from '../ui';
 import GameNewsRules from './GameNewsRules';
 
-interface NewsState { servers: NewsServerInfo[]; log: NewsLogRow[] }
+interface NewsState { servers: NewsServerInfo[]; log: NewsLogRow[]; pluginLatest: string }
+
+/** «3 с назад», «5 мин назад», «2 ч назад» */
+function ago(ts: number): string {
+  const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
+  if (s < 90) return t('gn.ago.s', { n: s });
+  if (s < 5400) return t('gn.ago.m', { n: Math.round(s / 60) });
+  return t('gn.ago.h', { n: Math.round(s / 3600) });
+}
 
 const STATUS: Record<NewsStatus, { text: 'gn.h.queued' | 'gn.h.ok' | 'gn.h.expired' | 'gn.h.fail'; cls: string }> = {
   queued: { text: 'gn.h.queued', cls: 'pill pill-mute' },
@@ -153799,11 +153842,23 @@ export default function GameNewsPage() {
   usePoll(load, 10_000);
 
   const problem = validateNews(text);
-  const ready = (data?.servers ?? []).filter((s) => s.hasToken);
+  // the plugin exists for some games only: servers of other games are not listed (their number is shown)
+  const shown = (data?.servers ?? []).filter((s) => s.supported);
+  const hiddenCount = (data?.servers.length ?? 0) - shown.length;
+  const ready = shown.filter((s) => s.hasToken);
   const settingsServer = data?.servers.find((s) => s.id === settingsFor) ?? null;
-  const toggle = (id: number) => setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
+  const touched = useRef(false);
+  const toggle = (id: number) => { touched.current = true; setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id])); };
+  // a single server with a plugin is chosen right away (until the administrator picks by hand)
+  useEffect(() => {
+    if (!touched.current && ready.length === 1 && picked.length === 0) setPicked([ready[0].id]);
+  }, [ready, picked.length]);
+  const sendHint = problem === 'empty' ? t('gn.hint.text') : problem === 'long' ? t('gn.hint.long') : !picked.length ? t('gn.hint.server') : '';
+  const onKey = (e: KeyboardEvent<HTMLFormElement>) => {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); void send(e); }
+  };
 
-  const send = async (e: FormEvent) => {
+  const send = async (e: FormEvent | KeyboardEvent) => {
     e.preventDefault();
     if (problem || !picked.length || busy) return;
     const names = (data?.servers ?? []).filter((s) => picked.includes(s.id)).map((s) => s.name).join(', ');
@@ -153843,7 +153898,7 @@ export default function GameNewsPage() {
 
       {data && tab === 'send' && (
         <>
-          <form className="grid gap-5 lg:grid-cols-2" onSubmit={(e) => void send(e)} noValidate>
+          <form className="grid gap-5 lg:grid-cols-2" onSubmit={(e) => void send(e)} onKeyDown={onKey} noValidate>
             <section className="panel p-5"><NewsEditor value={text} onChange={setText} /></section>
 
             <section className="space-y-5">
@@ -153851,29 +153906,46 @@ export default function GameNewsPage() {
 
               <div className="panel space-y-3 p-5">
                 <h3 className="font-extrabold">{t('gn.servers')}</h3>
-                {data.servers.length === 0 && <p className="text-sm font-semibold text-mute">{t('gn.noServers')}</p>}
+                {shown.length === 0 && <p className="text-sm font-semibold text-mute">{t('gn.noServers')}</p>}
                 <ul className="divide-y divide-line">
-                  {data.servers.map((s) => (
-                    <li key={s.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2.5">
-                      <label className="flex min-w-0 flex-1 basis-48 items-center gap-2.5 font-bold">
-                        <input type="checkbox" disabled={!s.hasToken} checked={picked.includes(s.id)} onChange={() => toggle(s.id)} />
-                        <span className="min-w-0 wrap-break-word">{s.name}</span>
-                      </label>
-                      <span className={!s.hasToken ? 'pill pill-mute' : s.online ? 'pill pill-ok' : 'pill pill-warn'}>
-                        {!s.hasToken ? t('gn.plugin.off') : s.online ? t('gn.plugin.online') : t('gn.plugin.silent')}
-                      </span>
-                      <button type="button" className="row-act" onClick={() => setSettingsFor(s.id)} aria-label={t('gn.plugin.settings', { name: s.name })}><IconSettings size={16} /></button>
-                    </li>
-                  ))}
+                  {shown.map((s) => {
+                    const old = s.hasToken && s.online && versionLess(s.pluginVersion, data.pluginLatest);
+                    return (
+                      <li key={s.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2.5">
+                        <label className="flex min-w-0 flex-1 basis-48 items-center gap-2.5 font-bold">
+                          <input type="checkbox" disabled={!s.hasToken} checked={picked.includes(s.id)} onChange={() => toggle(s.id)} />
+                          <span className="min-w-0 wrap-break-word">
+                            {s.name}
+                            {s.name !== s.address && <span className="block text-xs font-semibold text-mute">{s.address}</span>}
+                          </span>
+                        </label>
+                        <span
+                          className={!s.hasToken ? 'pill pill-mute' : !s.online ? 'pill pill-warn' : old ? 'pill pill-warn' : 'pill pill-ok'}
+                          title={s.lastSeen ? t('gn.plugin.lastPoll', { time: ago(s.lastSeen) }) : undefined}
+                        >
+                          {!s.hasToken
+                            ? t('gn.plugin.off')
+                            : !s.online
+                              ? (s.pluginVersion ? `${t('gn.plugin.silent')} · v${s.pluginVersion}` : t('gn.plugin.silent'))
+                              : old
+                                ? t('gn.plugin.outdated', { v: s.pluginVersion || '?', latest: data.pluginLatest })
+                                : `${t('gn.plugin.online')} · v${s.pluginVersion || '?'}`}
+                        </span>
+                        <button type="button" className="row-act" onClick={() => setSettingsFor(s.id)} aria-label={t('gn.plugin.settings', { name: s.name })}><IconSettings size={16} /></button>
+                      </li>
+                    );
+                  })}
                 </ul>
-                {data.servers.length > 0 && ready.length === 0 && <p className="text-sm font-semibold text-mute">{t('gn.noPlugin')}</p>}
+                {hiddenCount > 0 && <p className="text-sm font-semibold text-mute">{t('gn.hiddenOther', { n: hiddenCount })}</p>}
+                {shown.length > 0 && ready.length === 0 && <p className="text-sm font-semibold text-mute">{t('gn.noPlugin')}</p>}
                 {ready.length > 1 && (
                   <button type="button" className="chip-filter" onClick={() => setPicked(picked.length === ready.length ? [] : ready.map((s) => s.id))}>
                     {picked.length === ready.length ? t('gn.pickNone') : t('gn.pickAll')}
                   </button>
                 )}
-                <div className="flex justify-end">
-                  <button type="submit" className="btn" disabled={!!problem || !picked.length || busy}>{busy && <Spinner />}{t('gn.send')}</button>
+                <div className="sticky bottom-3 z-10 flex flex-wrap items-center justify-end gap-3">
+                  {sendHint && <span className="text-sm font-semibold text-mute">{sendHint}</span>}
+                  <button type="submit" className="btn" disabled={!!problem || !picked.length || busy} title={t('gn.sendKey')}>{busy && <Spinner />}{t('gn.send')}</button>
                 </div>
                 {lastResult && (
                   <ul className="space-y-1 text-sm font-semibold">

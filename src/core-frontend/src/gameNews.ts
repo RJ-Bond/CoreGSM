@@ -5,7 +5,7 @@
 
 export const MAX_VISIBLE = 400;
 
-export interface NewsServerInfo { id: number; name: string; game: string; hasToken: boolean; lastSeen: number | null; online: boolean; pluginVersion: string }
+export interface NewsServerInfo { id: number; name: string; address: string; game: string; supported: boolean; hasToken: boolean; lastSeen: number | null; online: boolean; pluginVersion: string }
 export type NewsStatus = 'queued' | 'delivered' | 'expired' | 'failed';
 export interface NewsLogRow { id: number; serverId: number | null; serverName: string; text: string; status: NewsStatus; error: string; sentBy: string; sentAt: number; deliveredAt: number | null }
 export interface NewsSendResult { text: string; results: { serverId: number; serverName: string; queued: boolean; online: boolean; error: string }[] }
@@ -144,4 +144,17 @@ export function validateRule(r: RuleBody, now: number): 'name' | 'text' | 'every
   if (r.kind === 'once' && (r.runAt == null || r.runAt <= now)) return 'runAt';
   if (r.activeFrom != null && r.activeTo != null && r.activeTo < r.activeFrom) return 'period';
   return null;
+}
+
+/** true when version `a` is older than `b` (numeric dotted versions: 0.2.0 < 0.10.1); an unknown version counts as older */
+export function versionLess(a: string, b: string): boolean {
+  const pa = a.split('.').map((x) => parseInt(x, 10));
+  const pb = b.split('.').map((x) => parseInt(x, 10));
+  if (!a || pa.some(Number.isNaN)) return true;
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const x = pa[i] ?? 0;
+    const y = pb[i] ?? 0;
+    if (x !== y) return x < y;
+  }
+  return false;
 }

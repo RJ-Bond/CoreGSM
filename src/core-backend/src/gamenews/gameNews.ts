@@ -17,6 +17,10 @@ import { checkNews } from './gameNewsLogic.js';
 export const QUEUE_TTL_MS = 5 * 60_000;
 /** the plugin counts as «online» when it polled within this time */
 export const ONLINE_MS = 30_000;
+/** the version of the game plugin this panel was built for: an older plugin is shown as outdated */
+export const PLUGIN_VERSION = '0.2.0';
+/** the games the plugin exists for */
+export const SUPPORTED_GAMES = new Set(['vrising']);
 const PULL_MIN_GAP_MS = 800;
 const PULL_BATCH = 5;
 const MIN_GAP_MS = 2000;
@@ -78,13 +82,13 @@ export function queueNews(text: string, serverIds: number[], by: string, now: nu
 
 export function registerGameNews({ app, admin }: { app: Express; admin: RequestHandler }): void {
   const servers = () => {
-    const rows = db.prepare("SELECT id, COALESCE(NULLIF(name, ''), host || ':' || port) AS name, game FROM servers ORDER BY id").all() as { id: number; name: string; game: string }[];
+    const rows = db.prepare("SELECT s.id, COALESCE(NULLIF(s.name, ''), NULLIF(st.name, ''), s.host || ':' || s.port) AS name, s.host || ':' || s.port AS address, s.game FROM servers s LEFT JOIN status st ON st.server_id = s.id ORDER BY s.id").all() as { id: number; name: string; address: string; game: string }[];
     const targets = new Map((db.prepare('SELECT * FROM game_news_targets').all() as TargetRow[]).map((t) => [t.server_id, t]));
     const now = Date.now();
     return rows.map((s) => {
       const t = targets.get(s.id);
       return {
-        id: s.id, name: s.name, game: s.game,
+        id: s.id, name: s.name, address: s.address, game: s.game, supported: SUPPORTED_GAMES.has(s.game),
         hasToken: !!t?.token_hash,
         lastSeen: t?.last_seen || null,
         online: !!t && t.last_seen > 0 && now - t.last_seen < ONLINE_MS,
@@ -99,7 +103,7 @@ export function registerGameNews({ app, admin }: { app: Express; admin: RequestH
       id: r.id, serverId: r.server_id, serverName: r.server_name, text: r.text, status: r.status, error: r.error,
       sentBy: r.sent_by, sentAt: r.sent_at, deliveredAt: r.delivered_at,
     }));
-    res.json({ servers: servers(), log });
+    res.json({ servers: servers(), log, pluginLatest: PLUGIN_VERSION });
   });
 
   // a new token for the server's plugin: shown once, only the hash is stored (the old token stops working)
