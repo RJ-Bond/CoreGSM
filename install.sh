@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="c8d6f7e99cf8"
+COREGSM_BUILD="eea3920f7322"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.67"
+COREGSM_VERSION="1.1.68"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -24110,6 +24110,51 @@ export function applyVars(text: string, vars: Vars): string {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/gamenews"
+  cat > "$APP_DIR/core-backend/src/gamenews/gameNewsRestart.ts" << '__COREGSM_EOF__'
+/**
+ * A countdown in the game chat before a planned restart (the restart plans of monitoring/restarts.ts):
+ * «через 10 / 5 / 1 минуту». It goes to the servers that have the game plugin and only while someone is playing.
+ * The switch is the setting `gamenews_restart_countdown` ('0' = off, anything else = on).
+ */
+import { db, getSetting } from '../db.js';
+import { log } from '../logger.js';
+import { queueNews } from './gameNews.js';
+
+export const COUNTDOWN_STEPS = [10, 5, 1];
+const MIN = 60_000;
+const fired = new Set<string>();
+
+/** the step whose last minute `msLeft` is in (10 for 9-10 minutes left), or null */
+export function countdownStep(msLeft: number): number | null {
+  for (const s of COUNTDOWN_STEPS) if (msLeft <= s * MIN && msLeft > (s - 1) * MIN) return s;
+  return null;
+}
+
+export const countdownEnabled = (): boolean => getSetting('gamenews_restart_countdown') !== '0';
+
+const minutes = (n: number): string => (n === 1 ? '1 минуту' : `${n} минут`);
+export const countdownText = (n: number): string => `<color=#FFCC33><b>Перезапуск сервера через ${minutes(n)}.</b></color> Сохраните прогресс.`;
+
+/** called on every pass of the restart scheduler for a server whose next restart is at `nextTs` */
+export function announceRestart(serverId: number, nextTs: number, now: number): void {
+  if (!countdownEnabled()) return;
+  const step = countdownStep(nextTs - now);
+  if (step == null) return;
+  const key = `${serverId}:${nextTs}:${step}`;
+  if (fired.has(key)) return;
+  fired.add(key);
+  if (fired.size > 200) fired.clear();
+  try {
+    // no plugin on this server: nothing to say (and no «failed» row in the history)
+    if (!db.prepare("SELECT 1 FROM game_news_targets WHERE server_id = ? AND token_hash <> ''").get(serverId)) return;
+    queueNews(countdownText(step), [serverId], 'авто: рестарт', now, { onlyOnline: true });
+  } catch (e) {
+    // the announcement must never break the restart schedule
+    log.error('game news countdown failed', (e as Error).message);
+  }
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/gamenews"
   cat > "$APP_DIR/core-backend/src/gamenews/gameNewsRules.ts" << '__COREGSM_EOF__'
 /**
  * Automatic in-game announcements: the administrator writes a message once and a schedule (every N minutes, every day
@@ -24117,7 +24162,8 @@ __COREGSM_EOF__
  */
 import type { Express, Request, RequestHandler } from 'express';
 import { z } from 'zod';
-import { db, getSetting } from '../db.js';
+import { db, getSetting, setSetting } from '../db.js';
+import { countdownEnabled } from './gameNewsRestart.js';
 import { log } from '../logger.js';
 import { checkNews } from './gameNewsLogic.js';
 import { queueNews } from './gameNews.js';
@@ -24205,7 +24251,15 @@ export function registerGameNewsRules({ app, admin }: { app: Express; admin: Req
 
   app.get('/api/game-news/rules', admin, (_req, res) => {
     const rows = db.prepare('SELECT * FROM game_news_rules ORDER BY id').all() as RuleRow[];
-    res.json({ timezone: tz(), rules: rows.map(serialize) });
+    res.json({ timezone: tz(), restartCountdown: countdownEnabled(), rules: rows.map(serialize) });
+  });
+
+  // the countdown «через 10 / 5 / 1 минуту» before the planned restarts of monitoring/restarts.ts
+  app.put('/api/game-news/restart-countdown', admin, (req, res) => {
+    const b = z.object({ enabled: z.boolean() }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'Проверьте поля' });
+    setSetting('gamenews_restart_countdown', b.data.enabled ? '1' : '0');
+    res.json({ ok: true });
   });
 
   app.post('/api/game-news/rules', admin, (req, res) => {
@@ -29418,6 +29472,7 @@ import { rconCommand } from './rcon.js';
 import { decryptSecret, encryptSecret, reencrypt, usesLegacyKey } from '../security/secrets.js';
 import { analyticsFor } from '../routes/analytics.js';
 import { log } from '../logger.js';
+import { announceRestart } from '../gamenews/gameNewsRestart.js';
 
 export const router = express.Router();
 
@@ -29559,6 +29614,7 @@ export async function tickRestarts(now = Date.now()): Promise<void> {
       continue;
     }
     const next = nextRun(p, now, zone);
+    if (next) announceRestart(p.server_id, next, now); // «через 10 / 5 / 1 минуту» in the game chat (game plugin)
     if (!next || p.warn_min <= 0) continue;
     if (next - now <= p.warn_min * 60_000 && p.warned_for !== next) {
       db.prepare('UPDATE restart_plans SET warned_for = ? WHERE server_id = ?').run(next, p.server_id);
@@ -141461,7 +141517,8 @@ const en: Record<keyof typeof ru, string> = {
   'gn.h.expired': 'Not delivered',
   'gn.h.fail': 'Failed',
   'gn.reuse': 'Use again',  'adm.s.alerts': 'Alerts',
-  'gn.a.copy': 'Duplicate',
+  'gn.a.countdown': 'Warn about planned restarts',
+  'gn.a.countdownNote': 'When a server has a restart plan, the game chat gets «in 10 / 5 / 1 minute». Only while someone is playing and only on servers with the plugin.',  'gn.a.copy': 'Duplicate',
   'gn.a.copyName': '{name} (copy)',
   'gn.a.upcoming': 'Upcoming runs ({n})',  'gn.tpl.save': 'Save as template',
   'gn.tpl.saveTitle': 'Save the template',
@@ -145917,7 +145974,8 @@ const ru = {
   'gn.h.expired': 'Не доставлено',
   'gn.h.fail': 'Ошибка',
   'gn.reuse': 'Использовать снова',  'adm.s.alerts': 'Оповещения',
-  'gn.a.copy': 'Дублировать',
+  'gn.a.countdown': 'Предупреждать о плановых рестартах',
+  'gn.a.countdownNote': 'Если у сервера включён план рестартов, в игровой чат уходит «через 10 / 5 / 1 минуту». Только при игроках на сервере и только на серверах с плагином.',  'gn.a.copy': 'Дублировать',
   'gn.a.copyName': '{name} (копия)',
   'gn.a.upcoming': 'Ближайшие запуски ({n})',  'gn.tpl.save': 'Сохранить как шаблон',
   'gn.tpl.saveTitle': 'Сохранить шаблон',
@@ -154209,7 +154267,7 @@ import {
 import { fromLocalInput, toLocalInput } from '../maintenance';
 import { ErrorLine, Field, IconEdit, IconPlus, IconTrash, LoadError, Modal, Spinner, errText, toast, usePoll } from '../ui';
 
-interface RulesState { timezone: string; rules: RuleInfo[] }
+interface RulesState { timezone: string; restartCountdown: boolean; rules: RuleInfo[] }
 
 const when = (ts: number | null) => (ts ? new Date(ts).toLocaleString() : '—');
 
@@ -154255,6 +154313,9 @@ export default function GameNewsRules({ servers }: { servers: NewsServerInfo[] }
     if (!(await confirmDialog({ title: t('gn.a.delTitle', { name: r.name }), danger: true, confirmLabel: t('gn.a.del') }))) return;
     try { await api(`/game-news/rules/${r.id}`, 'DELETE'); void load(); } catch (e) { toast(errText(e), 'err'); }
   };
+  const setCountdown = async (enabled: boolean) => {
+    try { await api('/game-news/restart-countdown', 'PUT', { enabled }); void load(); } catch (e) { toast(errText(e), 'err'); }
+  };
   const openNew = () => setDraft({ id: null, body: emptyRule() });
   const openEdit = (r: RuleInfo) => { const { id, lastRun: _l, nextRun: _n, createdBy: _c, upcoming: _u, ...body } = r; setDraft({ id, body }); };
   // a copy opens as a new announcement: change what differs and save
@@ -154269,6 +154330,16 @@ export default function GameNewsRules({ servers }: { servers: NewsServerInfo[] }
         <p className="min-w-0 flex-1 basis-80 text-sm font-semibold text-mute">{t('gn.a.intro')}</p>
         <button type="button" className="btn" onClick={openNew}><IconPlus size={16} />{t('gn.a.add')}</button>
       </div>
+
+      {data && (
+        <label className="panel flex items-start gap-3 p-4 font-bold">
+          <input className="mt-1" type="checkbox" checked={data.restartCountdown} onChange={(e) => void setCountdown(e.target.checked)} />
+          <span>
+            {t('gn.a.countdown')}
+            <span className="block text-sm font-semibold text-mute">{t('gn.a.countdownNote')}</span>
+          </span>
+        </label>
+      )}
 
       {error && !data ? <LoadError error={error} onRetry={() => void load()} /> : <ErrorLine text={error} />}
       {!data && !error && <div className="skeleton panel h-32" aria-busy="true" />}
