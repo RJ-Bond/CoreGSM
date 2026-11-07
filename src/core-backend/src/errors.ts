@@ -49,6 +49,8 @@ export const ERRORS = {
   game_news_rule_missing: 'Автообъявление не найдено',
   game_news_bytes: 'Слишком длинное сообщение для игры: {n} из {max} байт (русские буквы занимают по 2 байта)',
   game_news_color: 'Цвет задаётся как #RRGGBB',
+  game_news_webhook: 'Это не адрес webhook Discord (https://discord.com/api/webhooks/…)',
+  game_news_webhook_missing: 'Сначала укажите webhook для этого чата',
   game_news_templates_limit: 'Не больше {n} шаблонов',
   captcha_required: 'Подтвердите, что вы не робот: страница решит небольшую задачу сама',
   ip_locked: 'Слишком много неудачных попыток входа с этого адреса. Повторите через {sec} с.',

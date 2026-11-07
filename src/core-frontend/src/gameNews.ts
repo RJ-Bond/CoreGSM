@@ -255,3 +255,8 @@ export interface RegisterSettings {
   pendingText: string;
   discordEveryHours: number;
 }
+
+/** the game chat in Discord: which chats go to which channel (the webhook addresses never leave the backend) */
+export const CHAT_KINDS = ['global', 'clan', 'local'] as const;
+export type ChatKind = (typeof CHAT_KINDS)[number];
+export interface ChatSettings { enabled: boolean; set: Record<ChatKind, boolean>; tail: Record<ChatKind, string> }

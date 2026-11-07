@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="c4182519c120"
+COREGSM_BUILD="d6abe7a98aa7"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.74"
+COREGSM_VERSION="1.1.75"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -23519,6 +23519,8 @@ export const ERRORS = {
   game_news_rule_missing: 'Автообъявление не найдено',
   game_news_bytes: 'Слишком длинное сообщение для игры: {n} из {max} байт (русские буквы занимают по 2 байта)',
   game_news_color: 'Цвет задаётся как #RRGGBB',
+  game_news_webhook: 'Это не адрес webhook Discord (https://discord.com/api/webhooks/…)',
+  game_news_webhook_missing: 'Сначала укажите webhook для этого чата',
   game_news_templates_limit: 'Не больше {n} шаблонов',
   captcha_required: 'Подтвердите, что вы не робот: страница решит небольшую задачу сама',
   ip_locked: 'Слишком много неудачных попыток входа с этого адреса. Повторите через {sec} с.',
@@ -23863,7 +23865,7 @@ import type { Express, Request, RequestHandler } from 'express';
 import { z } from 'zod';
 import { db } from '../db.js';
 import { applyVars, checkNews } from './gameNewsLogic.js';
-import { NAME_SQL, ONLINE_MS, liveState, registerEnabled, serverLabel, varsFor } from './gameNewsVars.js';
+import { NAME_SQL, ONLINE_MS, chatKindsConfigured, liveState, registerEnabled, serverLabel, varsFor } from './gameNewsVars.js';
 
 export { ONLINE_MS };
 import { joinLeaveFor } from './gameNewsJoinLeave.js';
@@ -23871,7 +23873,7 @@ import { welcomeFor } from './gameNewsWelcome.js';
 
 export const QUEUE_TTL_MS = 5 * 60_000;
 /** the version of the game plugin this panel was built for: an older plugin is shown as outdated */
-export const PLUGIN_VERSION = '0.7.0';
+export const PLUGIN_VERSION = '0.8.0';
 /** the games the plugin exists for */
 export const SUPPORTED_GAMES = new Set(['vrising']);
 const PULL_MIN_GAP_MS = 800;
@@ -24040,8 +24042,263 @@ export function registerGameNews({ app, admin }: { app: Express; admin: RequestH
       db.transaction(() => { for (const r of rows) done.run(now, r.id); })();
     }
     // latest = the newest plugin version this panel knows (the plugin logs when it is older); welcome = the greeting for joining players
-    res.json({ messages: rows.map((r) => ({ id: r.id, text: r.text })), latest: PLUGIN_VERSION, ...welcomeFor(t.server_id, now), ...joinLeaveFor(), register: registerEnabled() });
+    res.json({ messages: rows.map((r) => ({ id: r.id, text: r.text })), latest: PLUGIN_VERSION, ...welcomeFor(t.server_id, now), ...joinLeaveFor(), register: registerEnabled(), chat: chatKindsConfigured() });
   });
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/gamenews"
+  cat > "$APP_DIR/core-backend/src/gamenews/gameNewsChat.ts" << '__COREGSM_EOF__'
+/**
+ * The game chat for the administrators in Discord: the plugin reads the messages players write (the general chat, the
+ * clan chat, the chat of the players nearby; private whispers never) and sends them here; the panel posts them to a
+ * Discord webhook of the channel set for that kind of chat: «[Общий] WhiteLegioN: Привет».
+ *
+ *  - the webhook addresses are secrets: kept encrypted, only «set / not set» and the tail of the address are shown;
+ *  - only Discord addresses are accepted (the panel never calls an address an administrator could point inside the network);
+ *  - lines are collected and posted a few at a time (Discord allows about five posts in two seconds per webhook), a
+ *    flood is cut, a «rate limited» answer pauses the channel;
+ *  - nothing a player writes can ping anybody (allowed_mentions is empty) or break the formatting.
+ */
+import type { Express, RequestHandler } from 'express';
+import { z } from 'zod';
+import { db, getSetting, setSetting } from '../db.js';
+import { log } from '../logger.js';
+import { decryptSecret, encryptSecret } from '../security/secrets.js';
+import { pluginTarget } from './gameNews.js';
+import { CHAT_KINDS, chunkLines, formatChatLine, isDiscordWebhook, type ChatKind } from './gameNewsChatLogic.js';
+import { chatKindsConfigured } from './gameNewsVars.js';
+
+interface Stored { enabled: boolean; webhooks: Partial<Record<ChatKind, string>> }
+
+const read = (): Stored => {
+  try {
+    const v = JSON.parse(getSetting('gamenews_chat') || '{}') as Partial<Stored>;
+    return { enabled: !!v.enabled, webhooks: v.webhooks && typeof v.webhooks === 'object' ? v.webhooks : {} };
+  } catch {
+    return { enabled: false, webhooks: {} };
+  }
+};
+const write = (s: Stored): void => setSetting('gamenews_chat', JSON.stringify(s));
+
+function webhookOf(kind: ChatKind): string | null {
+  const enc = read().webhooks[kind];
+  if (!enc) return null;
+  try {
+    const url = decryptSecret(enc);
+    return isDiscordWebhook(url) ? url : null;
+  } catch {
+    return null;
+  }
+}
+
+/** the kinds of chat that are being forwarded (what the plugin has to read) */
+export const chatKinds = (): ChatKind[] => chatKindsConfigured();
+
+export function chatSettingsView(): { enabled: boolean; set: Record<ChatKind, boolean>; tail: Record<ChatKind, string> } {
+  const s = read();
+  const set = { global: false, clan: false, local: false } as Record<ChatKind, boolean>;
+  const tail = { global: '', clan: '', local: '' } as Record<ChatKind, string>;
+  for (const k of CHAT_KINDS) {
+    const u = webhookOf(k);
+    set[k] = !!u;
+    tail[k] = u ? `…${u.slice(-6)}` : '';
+  }
+  return { enabled: s.enabled, set, tail };
+}
+
+// ---- posting
+const MAX_QUEUE = 200;
+const queues = new Map<ChatKind, string[]>();
+const pausedUntil = new Map<ChatKind, number>();
+
+function enqueue(kind: ChatKind, line: string): void {
+  const q = queues.get(kind) ?? [];
+  q.push(line);
+  if (q.length > MAX_QUEUE) q.splice(0, q.length - MAX_QUEUE); // a flood: the oldest lines go
+  queues.set(kind, q);
+}
+
+async function post(url: string, content: string): Promise<{ ok: boolean; retryAfter: number }> {
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content, username: 'CoreGSM', allowed_mentions: { parse: [] } }),
+      signal: AbortSignal.timeout(8000),
+      redirect: 'error',
+    });
+    if (res.ok) return { ok: true, retryAfter: 0 };
+    if (res.status === 429) {
+      const j = (await res.json().catch(() => ({}))) as { retry_after?: number };
+      return { ok: false, retryAfter: Math.min(60, Math.max(1, Number(j.retry_after) || 2)) };
+    }
+    log.warn(`game chat to Discord: the webhook answered ${res.status}`);
+    return { ok: false, retryAfter: 0 };
+  } catch (e) {
+    log.warn(`game chat to Discord failed: ${(e as Error).name}`);
+    return { ok: false, retryAfter: 0 };
+  }
+}
+
+/** one pass of the sender: what has gathered goes out, in chunks that fit a Discord message */
+export async function flushChat(now = Date.now()): Promise<void> {
+  for (const kind of CHAT_KINDS) {
+    const q = queues.get(kind);
+    if (!q?.length || (pausedUntil.get(kind) ?? 0) > now) continue;
+    const url = webhookOf(kind);
+    queues.set(kind, []);
+    if (!url) continue;
+    for (const chunk of chunkLines(q)) {
+      const r = await post(url, chunk);
+      if (r.retryAfter) {
+        pausedUntil.set(kind, now + r.retryAfter * 1000);
+        // put the rest back at the front, the chunk that failed with it
+        const rest = q.slice(q.indexOf(chunk.split('\n')[0]));
+        queues.set(kind, [...rest, ...(queues.get(kind) ?? [])].slice(-MAX_QUEUE));
+        break;
+      }
+    }
+  }
+}
+
+let timer: NodeJS.Timeout | undefined;
+let busy = false;
+export function startChatTimer(): void {
+  timer = setInterval(() => {
+    if (busy) return;
+    busy = true;
+    void flushChat().catch((e) => log.error('game chat sender failed', (e as Error).message)).finally(() => { busy = false; });
+  }, 1500);
+  timer.unref();
+}
+export const stopChatTimer = () => clearInterval(timer);
+
+// ---- routes
+const perServer = new Map<number, { n: number; reset: number }>();
+function flood(serverId: number, count: number, now: number): boolean {
+  const e = perServer.get(serverId);
+  if (!e || e.reset < now) { perServer.set(serverId, { n: count, reset: now + 10_000 }); return false; }
+  e.n += count;
+  return e.n > 100;
+}
+
+const messageSchema = z.object({
+  type: z.enum(CHAT_KINDS),
+  name: z.string().max(100),
+  clan: z.string().max(100).optional(),
+  text: z.string().max(600),
+});
+
+export function registerGameNewsChat({ app, admin }: { app: Express; admin: RequestHandler }): void {
+  // from the plugin: a batch of what players wrote
+  app.post('/api/game-news/chat', (req, res) => {
+    const t = pluginTarget(req);
+    if (!t) return res.status(401).json({ error: 'unauthorized' });
+    const b = z.object({ messages: z.array(messageSchema).max(30) }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'Проверьте поля' });
+    const now = Date.now();
+    if (flood(t.server_id, b.data.messages.length, now)) return res.status(429).json({ error: 'too many requests' });
+    const kinds = new Set(chatKinds());
+    // the name of the server is shown only when several servers write to the same channel
+    const many = (db.prepare("SELECT COUNT(*) AS n FROM game_news_targets WHERE token_hash <> ''").get() as { n: number }).n > 1;
+    const server = many ? serverLabelOf(t.server_id) : '';
+    for (const m of b.data.messages) {
+      if (!kinds.has(m.type)) continue;
+      const line = formatChatLine(m.type, m.name, m.clan ?? '', m.text, server);
+      if (line) enqueue(m.type, line);
+    }
+    res.json({ ok: true });
+  });
+
+  // from the administrator: switch and webhooks (an empty field keeps the saved address, «clear» removes it)
+  app.put('/api/game-news/chat-settings', admin, (req, res) => {
+    const b = z.object({
+      enabled: z.boolean(),
+      global: z.string().max(300).optional(),
+      clan: z.string().max(300).optional(),
+      local: z.string().max(300).optional(),
+      clear: z.array(z.enum(CHAT_KINDS)).optional(),
+    }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'Проверьте поля' });
+    const s = read();
+    for (const k of CHAT_KINDS) {
+      const v = b.data[k]?.trim();
+      if (!v) continue;
+      if (!isDiscordWebhook(v)) return res.status(400).json({ error: 'Это не адрес webhook Discord (https://discord.com/api/webhooks/…)' });
+      s.webhooks[k] = encryptSecret(v);
+    }
+    for (const k of b.data.clear ?? []) delete s.webhooks[k];
+    s.enabled = b.data.enabled;
+    write(s);
+    res.json({ ok: true });
+  });
+
+  // «Проверить»: one line into the channel of that kind
+  app.post('/api/game-news/chat-test', admin, async (req, res) => {
+    const b = z.object({ kind: z.enum(CHAT_KINDS) }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'Проверьте поля' });
+    const url = webhookOf(b.data.kind);
+    if (!url) return res.status(400).json({ error: 'Сначала укажите webhook для этого чата' });
+    const r = await post(url, '✅ CoreGSM: канал подключён, сюда будет приходить чат игры.');
+    res.json({ ok: r.ok });
+  });
+}
+
+function serverLabelOf(id: number): string {
+  const r = db.prepare('SELECT COALESCE(NULLIF(s.name, \'\'), NULLIF(st.name, \'\'), s.host || \':\' || s.port) AS n FROM servers s LEFT JOIN status st ON st.server_id = s.id WHERE s.id = ?').get(id) as { n: string } | undefined;
+  return r?.n ?? '';
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/gamenews"
+  cat > "$APP_DIR/core-backend/src/gamenews/gameNewsChatLogic.ts" << '__COREGSM_EOF__'
+/**
+ * The game chat for Discord, the parts that need no database: the kinds of chat, the check of a webhook address, and how
+ * a line is written so that nothing a player types can ping anybody or break the formatting.
+ */
+
+export const CHAT_KINDS = ['global', 'clan', 'local'] as const;
+export type ChatKind = (typeof CHAT_KINDS)[number];
+
+/** only a real Discord webhook address is accepted */
+export const isDiscordWebhook = (u: string): boolean =>
+  /^https:\/\/(?:(?:ptb|canary)\.)?discord(?:app)?\.com\/api\/webhooks\/\d{15,25}\/[\w-]{20,120}$/.test(u.trim());
+
+/** a player's text made harmless for Discord: no markdown, no mentions, no control characters */
+export function escapeDiscord(text: string): string {
+  const flat = Array.from(text, (ch) => (ch.charCodeAt(0) < 32 || ch.charCodeAt(0) === 127 ? ' ' : ch)).join('');
+  return flat
+    .replace(/[\\*_~|`>#<]/g, (c) => `\\${c}`)
+    .replace(/@/g, '@​')
+    .replace(/ {2,}/g, ' ')
+    .trim();
+}
+
+const CHAT_LABEL: Record<ChatKind, string> = { global: 'Общий', clan: 'Клан', local: 'Рядом' };
+
+/** «**[Общий]** **WhiteLegioN**: Тест»; '' for what must not be forwarded (a command, an empty text) */
+export function formatChatLine(kind: ChatKind, name: string, clan: string, text: string, server = ''): string {
+  const t = text.trim();
+  if (!t || t.startsWith('.') || t.startsWith('/') || t.startsWith('!')) return '';
+  const tag = kind === 'clan' && clan.trim() ? `${CHAT_LABEL.clan} ${clan.trim()}` : CHAT_LABEL[kind];
+  const head = server ? `**[${escapeDiscord(server)}]** ` : '';
+  return `${head}**[${escapeDiscord(tag)}]** **${escapeDiscord(name.trim() || '?')}**: ${escapeDiscord(t).slice(0, 500)}`;
+}
+
+/** lines joined into messages that fit Discord (2000 characters, kept below it) */
+export function chunkLines(lines: string[], max = 1900): string[] {
+  const out: string[] = [];
+  let cur = '';
+  for (const raw of lines) {
+    const l = raw.length > max ? raw.slice(0, max) : raw;
+    if (cur && cur.length + 1 + l.length > max) {
+      out.push(cur);
+      cur = l;
+    } else {
+      cur = cur ? `${cur}\n${l}` : l;
+    }
+  }
+  if (cur) out.push(cur);
+  return out;
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/gamenews"
@@ -24458,6 +24715,7 @@ import { z } from 'zod';
 import { db, getSetting, setSetting } from '../db.js';
 import { countdownEnabled } from './gameNewsRestart.js';
 import { getJoinLeave, isHexColor, plainLine, setJoinLeave } from './gameNewsJoinLeave.js';
+import { chatSettingsView } from './gameNewsChat.js';
 import { getRegisterSettings, setRegisterSettings } from './gameNewsRegister.js';
 import { getWelcome, setWelcome } from './gameNewsWelcome.js';
 import { MAX_TIPS, getExtras, setExtras } from './gameNewsVars.js';
@@ -24548,7 +24806,7 @@ export function registerGameNewsRules({ app, admin }: { app: Express; admin: Req
 
   app.get('/api/game-news/rules', admin, (_req, res) => {
     const rows = db.prepare('SELECT * FROM game_news_rules ORDER BY id').all() as RuleRow[];
-    res.json({ timezone: tz(), restartCountdown: countdownEnabled(), welcome: getWelcome(), joinLeave: getJoinLeave(), extras: getExtras(), register: getRegisterSettings(), rules: rows.map(serialize) });
+    res.json({ timezone: tz(), restartCountdown: countdownEnabled(), welcome: getWelcome(), joinLeave: getJoinLeave(), extras: getExtras(), register: getRegisterSettings(), chat: chatSettingsView(), rules: rows.map(serialize) });
   });
 
   // the countdown «через 10 / 5 / 1 минуту» before the planned restarts of monitoring/restarts.ts
@@ -24768,6 +25026,7 @@ import { db, getSetting, setSetting } from '../db.js';
 import { localParts } from '../admin/localTime.js';
 import { nextRun } from '../monitoring/restartLogic.js';
 import { plainLine } from './gameNewsJoinLeave.js';
+import { CHAT_KINDS, type ChatKind } from './gameNewsChatLogic.js';
 import { VARIABLES, type Vars } from './gameNewsLogic.js';
 
 /** the plugin counts as «online» when it polled within this time */
@@ -24831,6 +25090,16 @@ function restartLeft(serverId: number, now: number): string {
 function nextWipe(serverId: number, now: number): string {
   const w = db.prepare("SELECT wipe_at FROM wipe_scenarios WHERE server_id = ? AND status = 'scheduled' AND wipe_at > ? ORDER BY wipe_at LIMIT 1").get(serverId, now) as { wipe_at: number } | undefined;
   return w ? fmt(w.wipe_at, { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—';
+}
+
+/** the kinds of game chat that are forwarded to Discord (switch on and a webhook set): what the plugin has to read */
+export function chatKindsConfigured(): ChatKind[] {
+  try {
+    const v = JSON.parse(getSetting('gamenews_chat') || '{}') as { enabled?: boolean; webhooks?: Record<string, string> };
+    return v.enabled ? CHAT_KINDS.filter((k) => !!v.webhooks?.[k]) : [];
+  } catch {
+    return [];
+  }
 }
 
 /** registration from the game is switched on (the setting is kept by gameNewsRegister.ts) */
@@ -27163,6 +27432,7 @@ import { registerMetrics } from './monitoring/metrics.js';
 import { wrap } from './http.js';
 import { registerMaintenance } from './maintenance.js';
 import { registerGameNews } from './gamenews/gameNews.js';
+import { registerGameNewsChat, startChatTimer, stopChatTimer } from './gamenews/gameNewsChat.js';
 import { registerGameNewsPlayers } from './gamenews/gameNewsRegister.js';
 import { registerGameNewsRules, startGameNewsTimer, stopGameNewsTimer } from './gamenews/gameNewsRules.js';
 import { registerStatusNotes } from './alerts/statusNotes.js';
@@ -27359,6 +27629,7 @@ registerStatusNotes({ app, admin: allow('maintenance') });
 registerGameNews({ app, admin });
 registerGameNewsRules({ app, admin });
 registerGameNewsPlayers({ app });
+registerGameNewsChat({ app, admin });
 registerHealth({ app, admin, bot: () => bot.status });
 startDbMaintenance();
 registerOverview({ app, viewer });
@@ -27399,12 +27670,14 @@ const server = app.listen(PORT, () => {
   startRestartTimer();
   startWipeTimer();
   startGameNewsTimer();
+  startChatTimer();
 });
 onShutdown('poller', stopPoller);
 onShutdown('backups', stopBackups);
 onShutdown('restarts', stopRestartTimer);
 onShutdown('wipes', stopWipeTimer);
 onShutdown('game-news', stopGameNewsTimer);
+onShutdown('game-news-chat', stopChatTimer);
 installShutdown(server);
 registerShutdownServer(server);
 
@@ -138902,6 +139175,11 @@ export interface RegisterSettings {
   pendingText: string;
   discordEveryHours: number;
 }
+
+/** the game chat in Discord: which chats go to which channel (the webhook addresses never leave the backend) */
+export const CHAT_KINDS = ['global', 'clan', 'local'] as const;
+export type ChatKind = (typeof CHAT_KINDS)[number];
+export interface ChatSettings { enabled: boolean; set: Record<ChatKind, boolean>; tail: Record<ChatKind, string> }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/gameProfiles.ts" << '__COREGSM_EOF__'
@@ -142264,7 +142542,22 @@ const en: Record<keyof typeof ru, string> = {
   'gn.h.expired': 'Not delivered',
   'gn.h.fail': 'Failed',
   'gn.reuse': 'Use again',  'adm.s.alerts': 'Alerts',
-  'gn.rg.title': 'Registration in the panel from the game',
+  'gn.ch.title': 'Server chat in Discord',
+  'gn.ch.note': 'Messages players write in the game chat arrive in a Discord channel as «[Global] nick: text» (for a clan «[Clan Name] nick: text»). Each chat has its own channel: create a webhook in it (Channel settings → Integrations → Webhooks) and paste the address here. Needs plugin 0.8.0.',
+  'gn.ch.enabled': 'Forward the game chat to Discord',
+  'gn.ch.kind.global': 'Global chat',
+  'gn.ch.kind.clan': 'Clan chat',
+  'gn.ch.kind.local': 'Nearby chat',
+  'gn.ch.set': 'Channel set ({tail})',
+  'gn.ch.unset': 'Not set',
+  'gn.ch.replace': 'Paste a new address to replace it',
+  'gn.ch.test': 'Test',
+  'gn.ch.clear': 'Remove',
+  'gn.ch.saved': 'Saved',
+  'gn.ch.testOk': 'A test message was sent to the channel',
+  'gn.ch.testFail': 'Could not send: check the webhook address',
+  'gn.ch.hint': 'Commands (messages that start with «.», «/» or «!») do not reach Discord. Mentions (@everyone, @here) in players\' messages ping nobody. Leave an address empty if you do not need that chat.',
+  'gn.ch.privacy': 'Private messages of players (whispers) are never forwarded. The other chats are read in the Discord of your server, not only in the game: tell your players in the rules.',  'gn.rg.title': 'Registration in the panel from the game',
   'gn.rg.note': 'A player without an account sees a hint on joining and registers with a chat command: .register password password_again. The login in the panel is the game nickname and the account is linked to it at once. Needs plugin 0.7.0 and VampireCommandFramework on the server.',
   'gn.rg.enabled': 'Allow registration from the game',
   'gn.rg.prompt': 'A hint for a player without an account (at every join)',
@@ -145611,6 +145904,8 @@ const errorsEn: Record<string, string> = {
   game_news_rule_missing: 'The announcement was not found',
   game_news_bytes: 'The message is too long for the game: {n} of {max} bytes (Russian letters take 2 bytes each)',
   game_news_color: 'A colour is written as #RRGGBB',
+  game_news_webhook: 'This is not a Discord webhook address (https://discord.com/api/webhooks/…)',
+  game_news_webhook_missing: 'Set the webhook for this chat first',
   game_news_templates_limit: 'No more than {n} templates',
   captcha_required: 'Confirm you are not a robot: the page solves a small puzzle by itself',
   ip_locked: 'Too many failed sign-ins from this address. Try again in {sec} s.',
@@ -146781,7 +147076,22 @@ const ru = {
   'gn.h.expired': 'Не доставлено',
   'gn.h.fail': 'Ошибка',
   'gn.reuse': 'Использовать снова',  'adm.s.alerts': 'Оповещения',
-  'gn.rg.title': 'Регистрация в панели из игры',
+  'gn.ch.title': 'Чат сервера в Discord',
+  'gn.ch.note': 'Сообщения игроков из игрового чата приходят в канал Discord в виде «[Общий] ник: текст» (для клана «[Клан Название] ник: текст»). Для каждого чата свой канал: создайте в нём webhook (Настройки канала → Интеграции → Webhooks) и вставьте адрес сюда. Нужен плагин 0.8.0.',
+  'gn.ch.enabled': 'Пересылать чат игры в Discord',
+  'gn.ch.kind.global': 'Общий чат',
+  'gn.ch.kind.clan': 'Чат клана',
+  'gn.ch.kind.local': 'Чат поблизости',
+  'gn.ch.set': 'Канал задан ({tail})',
+  'gn.ch.unset': 'Не задан',
+  'gn.ch.replace': 'Вставьте новый адрес, чтобы заменить',
+  'gn.ch.test': 'Проверить',
+  'gn.ch.clear': 'Убрать',
+  'gn.ch.saved': 'Сохранено',
+  'gn.ch.testOk': 'Тестовое сообщение отправлено в канал',
+  'gn.ch.testFail': 'Не удалось отправить: проверьте адрес webhook',
+  'gn.ch.hint': 'Команды (сообщения, начинающиеся с «.», «/» или «!») в Discord не попадают. Упоминания (@everyone, @here) в сообщениях игроков никого не вызывают. Если чат не нужен, оставьте адрес пустым.',
+  'gn.ch.privacy': 'Личные сообщения игроков (шёпот) никогда не пересылаются. Остальные чаты игроки видят в Discord вашего сервера, а не только в игре: предупредите их об этом в правилах.',  'gn.rg.title': 'Регистрация в панели из игры',
   'gn.rg.note': 'Игрок без аккаунта видит подсказку при входе и регистрируется командой в чате: .register пароль подтверждение_пароля. Логин в панели берётся из игрового ника, аккаунт сразу привязывается к нику. Нужны плагин 0.7.0 и VampireCommandFramework на сервере.',
   'gn.rg.enabled': 'Разрешить регистрацию из игры',
   'gn.rg.prompt': 'Подсказка игроку без аккаунта (при каждом входе)',
@@ -155134,12 +155444,12 @@ import { confirmDialog } from '../confirm';
 import { t, useI18n } from '../i18n';
 import {
   INTERVAL_PRESETS, SWATCHES, WELCOME_STYLES, WELCOME_VARIABLES, composeLine, emptyRule, isHex, isHHMM, validateNews, validateRule,
-  type Extras, type JoinLeave, type RegisterSettings, type Welcome, type WelcomeStyle, type NewsServerInfo, type RuleBody, type RuleInfo, type RuleKind,
+  CHAT_KINDS, type ChatKind, type ChatSettings, type Extras, type JoinLeave, type RegisterSettings, type Welcome, type WelcomeStyle, type NewsServerInfo, type RuleBody, type RuleInfo, type RuleKind,
 } from '../gameNews';
 import { fromLocalInput, toLocalInput } from '../maintenance';
 import { ErrorLine, Field, IconEdit, IconPlus, IconTrash, LoadError, Modal, SaveBadge, Spinner, errText, toast, useAutosave, usePoll } from '../ui';
 
-interface RulesState { timezone: string; restartCountdown: boolean; welcome: Welcome; joinLeave: JoinLeave; extras: Extras; register: RegisterSettings; rules: RuleInfo[] }
+interface RulesState { timezone: string; restartCountdown: boolean; welcome: Welcome; joinLeave: JoinLeave; extras: Extras; register: RegisterSettings; chat: ChatSettings; rules: RuleInfo[] }
 
 const when = (ts: number | null) => (ts ? new Date(ts).toLocaleString() : '—');
 
@@ -155218,6 +155528,8 @@ export default function GameNewsRules({ servers, part }: { servers: NewsServerIn
       {data && part === 'events' && <JoinLeaveCard initial={data.joinLeave} />}
 
       {data && part === 'events' && <WelcomeCard initial={data.welcome} />}
+
+      {data && part === 'events' && <ChatCard initial={data.chat} />}
 
       {data && part === 'events' && <RegisterCard initial={data.register} />}
 
@@ -155659,6 +155971,76 @@ function RegisterCard({ initial }: { initial: RegisterSettings }) {
       <p className="text-sm font-semibold text-mute">{t('gn.rg.vars')}</p>
       <p className="text-sm font-semibold text-danger">{t('gn.rg.warn')}</p>
       {auto.invalid && <p className="text-sm font-semibold text-danger">{auto.error}</p>}
+    </section>
+  );
+}
+
+/**
+ * The chat of the game server for the administrators in Discord: a channel (its webhook) for each kind of chat.
+ * The addresses are secrets: they are sent to the panel and never shown again (only «set» and the tail).
+ */
+function ChatCard({ initial }: { initial: ChatSettings }) {
+  useI18n();
+  const [st, setSt] = useState<ChatSettings>(initial);
+  const [busy, setBusy] = useState<ChatKind | 'switch' | null>(null);
+  const [input, setInput] = useState<Record<ChatKind, string>>({ global: '', clan: '', local: '' });
+
+  const refresh = () => api<{ chat: ChatSettings }>('/game-news/rules').then((d) => setSt(d.chat)).catch(() => undefined);
+  const send = async (body: Record<string, unknown>, who: ChatKind | 'switch') => {
+    setBusy(who);
+    try { await api('/game-news/chat-settings', 'PUT', { enabled: st.enabled, ...body }); await refresh(); toast(t('gn.ch.saved')); } catch (e) { toast(errText(e), 'err'); } finally { setBusy(null); }
+  };
+  const test = async (kind: ChatKind) => {
+    setBusy(kind);
+    try {
+      const r = await api<{ ok: boolean }>('/game-news/chat-test', 'POST', { kind });
+      toast(r.ok ? t('gn.ch.testOk') : t('gn.ch.testFail'), r.ok ? undefined : 'err');
+    } catch (e) { toast(errText(e), 'err'); } finally { setBusy(null); }
+  };
+
+  return (
+    <section className="panel space-y-4 p-5">
+      <div>
+        <h3 className="font-extrabold">{t('gn.ch.title')}</h3>
+        <p className="text-sm font-semibold text-mute">{t('gn.ch.note')}</p>
+      </div>
+
+      <label className="flex items-center gap-2.5 font-bold">
+        <input type="checkbox" checked={st.enabled} disabled={busy === 'switch'} onChange={(e) => void send({ enabled: e.target.checked }, 'switch')} />
+        {t('gn.ch.enabled')}
+      </label>
+
+      <ul className="divide-y divide-line">
+        {CHAT_KINDS.map((k) => (
+          <li key={k} className="space-y-2 py-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-extrabold">{t(`gn.ch.kind.${k}` as 'gn.ch.kind.global')}</span>
+              <span className={st.set[k] ? 'pill pill-ok' : 'pill pill-mute'}>{st.set[k] ? t('gn.ch.set', { tail: st.tail[k] }) : t('gn.ch.unset')}</span>
+              {st.set[k] && <button type="button" className="btn btn-soft btn-sm" disabled={busy === k} onClick={() => void test(k)}>{t('gn.ch.test')}</button>}
+              {st.set[k] && <button type="button" className="btn btn-ghost btn-sm" disabled={busy === k} onClick={() => void send({ clear: [k] }, k)}>{t('gn.ch.clear')}</button>}
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                className="input min-w-0 flex-1 basis-72 font-mono text-sm"
+                type="password"
+                autoComplete="off"
+                value={input[k]}
+                placeholder={st.set[k] ? t('gn.ch.replace') : 'https://discord.com/api/webhooks/…'}
+                aria-label={t(`gn.ch.kind.${k}` as 'gn.ch.kind.global')}
+                onChange={(e) => setInput((x) => ({ ...x, [k]: e.target.value }))}
+              />
+              <button
+                type="button"
+                className="btn btn-soft btn-sm"
+                disabled={!input[k].trim() || busy === k}
+                onClick={() => void send({ [k]: input[k].trim() }, k).then(() => setInput((x) => ({ ...x, [k]: '' })))}
+              >{t('common.save')}</button>
+            </div>
+          </li>
+        ))}
+      </ul>
+      <p className="text-sm font-semibold text-mute">{t('gn.ch.hint')}</p>
+      <p className="text-sm font-semibold text-danger">{t('gn.ch.privacy')}</p>
     </section>
   );
 }

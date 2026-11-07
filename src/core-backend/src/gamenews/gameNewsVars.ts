@@ -7,6 +7,7 @@ import { db, getSetting, setSetting } from '../db.js';
 import { localParts } from '../admin/localTime.js';
 import { nextRun } from '../monitoring/restartLogic.js';
 import { plainLine } from './gameNewsJoinLeave.js';
+import { CHAT_KINDS, type ChatKind } from './gameNewsChatLogic.js';
 import { VARIABLES, type Vars } from './gameNewsLogic.js';
 
 /** the plugin counts as «online» when it polled within this time */
@@ -70,6 +71,16 @@ function restartLeft(serverId: number, now: number): string {
 function nextWipe(serverId: number, now: number): string {
   const w = db.prepare("SELECT wipe_at FROM wipe_scenarios WHERE server_id = ? AND status = 'scheduled' AND wipe_at > ? ORDER BY wipe_at LIMIT 1").get(serverId, now) as { wipe_at: number } | undefined;
   return w ? fmt(w.wipe_at, { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—';
+}
+
+/** the kinds of game chat that are forwarded to Discord (switch on and a webhook set): what the plugin has to read */
+export function chatKindsConfigured(): ChatKind[] {
+  try {
+    const v = JSON.parse(getSetting('gamenews_chat') || '{}') as { enabled?: boolean; webhooks?: Record<string, string> };
+    return v.enabled ? CHAT_KINDS.filter((k) => !!v.webhooks?.[k]) : [];
+  } catch {
+    return [];
+  }
 }
 
 /** registration from the game is switched on (the setting is kept by gameNewsRegister.ts) */

@@ -6,12 +6,12 @@ import { confirmDialog } from '../confirm';
 import { t, useI18n } from '../i18n';
 import {
   INTERVAL_PRESETS, SWATCHES, WELCOME_STYLES, WELCOME_VARIABLES, composeLine, emptyRule, isHex, isHHMM, validateNews, validateRule,
-  type Extras, type JoinLeave, type RegisterSettings, type Welcome, type WelcomeStyle, type NewsServerInfo, type RuleBody, type RuleInfo, type RuleKind,
+  CHAT_KINDS, type ChatKind, type ChatSettings, type Extras, type JoinLeave, type RegisterSettings, type Welcome, type WelcomeStyle, type NewsServerInfo, type RuleBody, type RuleInfo, type RuleKind,
 } from '../gameNews';
 import { fromLocalInput, toLocalInput } from '../maintenance';
 import { ErrorLine, Field, IconEdit, IconPlus, IconTrash, LoadError, Modal, SaveBadge, Spinner, errText, toast, useAutosave, usePoll } from '../ui';
 
-interface RulesState { timezone: string; restartCountdown: boolean; welcome: Welcome; joinLeave: JoinLeave; extras: Extras; register: RegisterSettings; rules: RuleInfo[] }
+interface RulesState { timezone: string; restartCountdown: boolean; welcome: Welcome; joinLeave: JoinLeave; extras: Extras; register: RegisterSettings; chat: ChatSettings; rules: RuleInfo[] }
 
 const when = (ts: number | null) => (ts ? new Date(ts).toLocaleString() : '—');
 
@@ -90,6 +90,8 @@ export default function GameNewsRules({ servers, part }: { servers: NewsServerIn
       {data && part === 'events' && <JoinLeaveCard initial={data.joinLeave} />}
 
       {data && part === 'events' && <WelcomeCard initial={data.welcome} />}
+
+      {data && part === 'events' && <ChatCard initial={data.chat} />}
 
       {data && part === 'events' && <RegisterCard initial={data.register} />}
 
@@ -531,6 +533,76 @@ function RegisterCard({ initial }: { initial: RegisterSettings }) {
       <p className="text-sm font-semibold text-mute">{t('gn.rg.vars')}</p>
       <p className="text-sm font-semibold text-danger">{t('gn.rg.warn')}</p>
       {auto.invalid && <p className="text-sm font-semibold text-danger">{auto.error}</p>}
+    </section>
+  );
+}
+
+/**
+ * The chat of the game server for the administrators in Discord: a channel (its webhook) for each kind of chat.
+ * The addresses are secrets: they are sent to the panel and never shown again (only «set» and the tail).
+ */
+function ChatCard({ initial }: { initial: ChatSettings }) {
+  useI18n();
+  const [st, setSt] = useState<ChatSettings>(initial);
+  const [busy, setBusy] = useState<ChatKind | 'switch' | null>(null);
+  const [input, setInput] = useState<Record<ChatKind, string>>({ global: '', clan: '', local: '' });
+
+  const refresh = () => api<{ chat: ChatSettings }>('/game-news/rules').then((d) => setSt(d.chat)).catch(() => undefined);
+  const send = async (body: Record<string, unknown>, who: ChatKind | 'switch') => {
+    setBusy(who);
+    try { await api('/game-news/chat-settings', 'PUT', { enabled: st.enabled, ...body }); await refresh(); toast(t('gn.ch.saved')); } catch (e) { toast(errText(e), 'err'); } finally { setBusy(null); }
+  };
+  const test = async (kind: ChatKind) => {
+    setBusy(kind);
+    try {
+      const r = await api<{ ok: boolean }>('/game-news/chat-test', 'POST', { kind });
+      toast(r.ok ? t('gn.ch.testOk') : t('gn.ch.testFail'), r.ok ? undefined : 'err');
+    } catch (e) { toast(errText(e), 'err'); } finally { setBusy(null); }
+  };
+
+  return (
+    <section className="panel space-y-4 p-5">
+      <div>
+        <h3 className="font-extrabold">{t('gn.ch.title')}</h3>
+        <p className="text-sm font-semibold text-mute">{t('gn.ch.note')}</p>
+      </div>
+
+      <label className="flex items-center gap-2.5 font-bold">
+        <input type="checkbox" checked={st.enabled} disabled={busy === 'switch'} onChange={(e) => void send({ enabled: e.target.checked }, 'switch')} />
+        {t('gn.ch.enabled')}
+      </label>
+
+      <ul className="divide-y divide-line">
+        {CHAT_KINDS.map((k) => (
+          <li key={k} className="space-y-2 py-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-extrabold">{t(`gn.ch.kind.${k}` as 'gn.ch.kind.global')}</span>
+              <span className={st.set[k] ? 'pill pill-ok' : 'pill pill-mute'}>{st.set[k] ? t('gn.ch.set', { tail: st.tail[k] }) : t('gn.ch.unset')}</span>
+              {st.set[k] && <button type="button" className="btn btn-soft btn-sm" disabled={busy === k} onClick={() => void test(k)}>{t('gn.ch.test')}</button>}
+              {st.set[k] && <button type="button" className="btn btn-ghost btn-sm" disabled={busy === k} onClick={() => void send({ clear: [k] }, k)}>{t('gn.ch.clear')}</button>}
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                className="input min-w-0 flex-1 basis-72 font-mono text-sm"
+                type="password"
+                autoComplete="off"
+                value={input[k]}
+                placeholder={st.set[k] ? t('gn.ch.replace') : 'https://discord.com/api/webhooks/…'}
+                aria-label={t(`gn.ch.kind.${k}` as 'gn.ch.kind.global')}
+                onChange={(e) => setInput((x) => ({ ...x, [k]: e.target.value }))}
+              />
+              <button
+                type="button"
+                className="btn btn-soft btn-sm"
+                disabled={!input[k].trim() || busy === k}
+                onClick={() => void send({ [k]: input[k].trim() }, k).then(() => setInput((x) => ({ ...x, [k]: '' })))}
+              >{t('common.save')}</button>
+            </div>
+          </li>
+        ))}
+      </ul>
+      <p className="text-sm font-semibold text-mute">{t('gn.ch.hint')}</p>
+      <p className="text-sm font-semibold text-danger">{t('gn.ch.privacy')}</p>
     </section>
   );
 }
