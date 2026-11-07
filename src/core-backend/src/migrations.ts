@@ -193,6 +193,27 @@ CREATE TABLE IF NOT EXISTS favorite_push_prefs (
       addColumn(db, 'api_keys', 'last_used_ip', "TEXT NOT NULL DEFAULT ''");
     },
   },
+  {
+    version: 16,
+    name: 'game_news',
+    // game_news_targets: where the CoreGSM game plugin of a server listens (url + token); game_news_log: what was sent
+    up: (db) => db.exec(`
+CREATE TABLE IF NOT EXISTS game_news_targets (
+  server_id INTEGER PRIMARY KEY REFERENCES servers(id) ON DELETE CASCADE,
+  url TEXT NOT NULL DEFAULT '',
+  token TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS game_news_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  server_id INTEGER,
+  server_name TEXT NOT NULL DEFAULT '',
+  text TEXT NOT NULL DEFAULT '',
+  ok INTEGER NOT NULL DEFAULT 0,
+  error TEXT NOT NULL DEFAULT '',
+  sent_by TEXT NOT NULL DEFAULT '',
+  sent_at INTEGER NOT NULL
+);`),
+  },
 ];
 
 export const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;

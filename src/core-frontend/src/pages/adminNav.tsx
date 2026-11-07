@@ -36,6 +36,7 @@ const S = {
   servers: { id: 'servers', get label() { return t('adm.s.servers'); }, icon: IconServers, get desc() { return t('adm.d.servers'); }, keywords: 'игра адрес порт добавить сервер опрос' },
   discord: { id: 'discord', get label() { return t('adm.s.discord'); }, icon: IconDiscord, get desc() { return t('adm.d.discord'); }, keywords: 'привязка канал бот сообщение embed' },
   news: { id: 'news', get label() { return t('adm.s.news'); }, icon: IconNews, get desc() { return t('adm.d.news'); }, keywords: 'новость объявление публикация вайп шаблон запланировать' },
+  gamenews: { id: 'gamenews', get label() { return t('adm.s.gamenews'); }, icon: IconNews, get desc() { return t('adm.d.gamenews'); }, keywords: 'игровые новости сообщение чат игра сервер плагин цвет превью объявление в игре v rising bepinex' },
   alerts: { id: 'alerts', get label() { return t('adm.s.alerts'); }, icon: IconBell, get desc() { return t('adm.d.alerts'); }, keywords: 'упал недоступен уведомление падение упоминание here everyone' },
   maintenance: { id: 'maintenance', get label() { return t('adm.s.maintenance'); }, icon: IconWrench, get desc() { return t('adm.d.maintenance'); }, keywords: 'тех работы обслуживание окно перезагрузка обновление простой плановые расписание' },
   health: { id: 'health', get label() { return t('adm.s.health'); }, icon: IconHealth, get desc() { return t('adm.d.health'); }, keywords: 'здоровье графики опрос диск память база очередь бот нагрузка порог мониторинг health' },
@@ -54,7 +55,7 @@ export const SECTION_PERM: Partial<Record<string, Perm>> = { news: 'news', commu
 export interface AdminGroup { title: string; sections: AdminSection[] }
 
 export const ADMIN_GROUPS: AdminGroup[] = [
-  { get title() { return t('adm.g.main'); }, sections: [S.servers, S.discord, S.news] },
+  { get title() { return t('adm.g.main'); }, sections: [S.servers, S.discord, S.news, S.gamenews] },
   { get title() { return t('adm.g.mon'); }, sections: [S.alerts, S.health, S.maintenance, S.cards] },
   { get title() { return t('adm.g.people'); }, sections: [S.community, S.users, S.journal] },
   { get title() { return t('adm.g.sys'); }, sections: [S.integrations, S.system, S.settings] },

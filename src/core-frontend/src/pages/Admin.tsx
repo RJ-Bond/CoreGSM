@@ -23,6 +23,7 @@ import { AdminServersTable } from './AdminServersTable';
 import { moveId } from './adminServersLogic';
 import { SetupProgress } from './AdminStart';
 import JournalPage from './Journal';
+import GameNewsPage from './GameNews';
 import MaintenancePage from './Maintenance';
 import SettingsPage, { UsersTab } from './Settings';
 
@@ -289,6 +290,7 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
         {!home && current === 'servers' && <ServersManage sub={tail} />}
         {!home && current === 'discord' && <DiscordPage sub={tail} />}
         {!home && current === 'news' && <NewsPage sub={tail} />}
+        {!home && current === 'gamenews' && <GameNewsPage />}
         {!home && current === 'alerts' && <AlertsPage />}
         {!home && current === 'maintenance' && <MaintenancePage />}
         {!home && current === 'cards' && <CardsPage />}

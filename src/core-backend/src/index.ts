@@ -24,6 +24,7 @@ import { startDbMaintenance } from './admin/dbMaintenance.js';
 import { registerMetrics } from './monitoring/metrics.js';
 import { wrap } from './http.js';
 import { registerMaintenance } from './maintenance.js';
+import { registerGameNews } from './gamenews/gameNews.js';
 import { registerStatusNotes } from './alerts/statusNotes.js';
 import { registerNews } from './news/news.js';
 import { registerNickStatus } from './profile/nickOnboarding.js';
@@ -215,6 +216,7 @@ registerOps({ app, admin, getBot: () => bot.status, guildCount: () => bot.guilds
 registerBackups({ app, admin });
 registerMaintenance({ app, admin: allow('maintenance'), viewer });
 registerStatusNotes({ app, admin: allow('maintenance') });
+registerGameNews({ app, admin });
 registerHealth({ app, admin, bot: () => bot.status });
 startDbMaintenance();
 registerOverview({ app, viewer });

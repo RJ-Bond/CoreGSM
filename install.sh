@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="c586a3e6aaef"
+COREGSM_BUILD="7d8f404107cd"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.59"
+COREGSM_VERSION="1.1.60"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -23831,6 +23831,200 @@ declare module 'gamedig' {
   }
 }
 __COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/gamenews"
+  cat > "$APP_DIR/core-backend/src/gamenews/gameNews.ts" << '__COREGSM_EOF__'
+/**
+ * Game news: the panel writes a message and the CoreGSM game plugin (BepInEx, on the game server) shows it in the
+ * in-game chat. Per server we keep the plugin address and its token; the token never leaves the backend.
+ * The plugin speaks HTTP:  POST <url>/api/news  {"text": "..."}  with  Authorization: Bearer <token>,  GET <url>/health.
+ */
+import type { Express, Request, RequestHandler } from 'express';
+import { z } from 'zod';
+import { db } from '../db.js';
+import { checkNews, normalizePluginUrl } from './gameNewsLogic.js';
+
+interface TargetRow { server_id: number; url: string; token: string }
+interface LogRow { id: number; server_id: number | null; server_name: string; text: string; ok: number; error: string; sent_by: string; sent_at: number }
+
+const SEND_TIMEOUT_MS = 8000;
+const MIN_GAP_MS = 2000;
+let lastSend = 0;
+
+const actor = (req: Request) => (req as Request & { user?: { username?: string } }).user?.username ?? '';
+const serverLabel = (id: number) =>
+  (db.prepare("SELECT COALESCE(NULLIF(name, ''), host || ':' || port) AS n FROM servers WHERE id = ?").get(id) as { n: string } | undefined)?.n ?? `#${id}`;
+
+const targetSchema = z.object({
+  url: z.string().trim().max(300),
+  // undefined = keep the saved token, '' = clear it
+  token: z.string().trim().max(200).optional(),
+});
+const sendSchema = z.object({
+  serverIds: z.array(z.number().int().positive()).min(1).max(50),
+  text: z.string(),
+});
+
+async function callPlugin(t: TargetRow, path: string, init: { method: 'GET' | 'POST'; body?: string }): Promise<{ ok: boolean; status: number; error: string }> {
+  try {
+    const res = await fetch(`${t.url}${path}`, {
+      method: init.method,
+      headers: { Authorization: `Bearer ${t.token}`, 'Content-Type': 'application/json' },
+      body: init.body,
+      signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
+      redirect: 'error',
+    });
+    if (res.ok) return { ok: true, status: res.status, error: '' };
+    const map: Record<number, string> = { 401: 'Плагин не принял токен', 404: 'Плагин не найден по этому адресу', 413: 'Плагин отклонил слишком длинный текст', 429: 'Слишком часто: подождите пару секунд' };
+    return { ok: false, status: res.status, error: map[res.status] ?? `Плагин ответил кодом ${res.status}` };
+  } catch (e) {
+    const name = (e as Error).name;
+    return { ok: false, status: 0, error: name === 'TimeoutError' ? 'Плагин не ответил за 8 секунд' : 'Не удалось подключиться к плагину (адрес, порт, фаервол)' };
+  }
+}
+
+export function registerGameNews({ app, admin }: { app: Express; admin: RequestHandler }): void {
+  const serialize = () => {
+    const servers = db.prepare("SELECT id, COALESCE(NULLIF(name, ''), host || ':' || port) AS name, game FROM servers ORDER BY id").all() as { id: number; name: string; game: string }[];
+    const targets = new Map((db.prepare('SELECT * FROM game_news_targets').all() as TargetRow[]).map((t) => [t.server_id, t]));
+    return servers.map((s) => ({ id: s.id, name: s.name, game: s.game, url: targets.get(s.id)?.url ?? '', hasToken: !!targets.get(s.id)?.token }));
+  };
+
+  app.get('/api/game-news', admin, (_req, res) => {
+    const log = (db.prepare('SELECT * FROM game_news_log ORDER BY id DESC LIMIT 50').all() as LogRow[]).map((r) => ({
+      id: r.id, serverId: r.server_id, serverName: r.server_name, text: r.text, ok: !!r.ok, error: r.error, sentBy: r.sent_by, sentAt: r.sent_at,
+    }));
+    res.json({ servers: serialize(), log });
+  });
+
+  app.put('/api/game-news/targets/:id', admin, (req, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || !db.prepare('SELECT 1 FROM servers WHERE id = ?').get(id)) return res.status(404).json({ error: 'Сервер не найден' });
+    const b = targetSchema.safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'Проверьте поля' });
+    const url = normalizePluginUrl(b.data.url);
+    if (!url) return res.status(400).json({ error: 'Адрес плагина: http://адрес:порт (без логина и пути)' });
+    const old = db.prepare('SELECT token FROM game_news_targets WHERE server_id = ?').get(id) as { token: string } | undefined;
+    const token = b.data.token === undefined ? old?.token ?? '' : b.data.token;
+    db.prepare(
+      'INSERT INTO game_news_targets (server_id, url, token) VALUES (?, ?, ?) ON CONFLICT(server_id) DO UPDATE SET url = excluded.url, token = excluded.token',
+    ).run(id, url, token);
+    res.json({ ok: true });
+  });
+
+  app.delete('/api/game-news/targets/:id', admin, (req, res) => {
+    db.prepare('DELETE FROM game_news_targets WHERE server_id = ?').run(Number(req.params.id));
+    res.json({ ok: true });
+  });
+
+  // «Проверить связь»: the plugin's /health
+  app.post('/api/game-news/check/:id', admin, async (req, res) => {
+    const t = db.prepare('SELECT * FROM game_news_targets WHERE server_id = ?').get(Number(req.params.id)) as TargetRow | undefined;
+    if (!t || !t.url) return res.status(400).json({ error: 'Сначала укажите адрес плагина' });
+    const r = await callPlugin(t, '/health', { method: 'GET' });
+    res.json({ ok: r.ok, error: r.error });
+  });
+
+  app.post('/api/game-news/send', admin, async (req, res) => {
+    const b = sendSchema.safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'Выберите сервер и введите текст' });
+    const chk = checkNews(b.data.text);
+    if (!chk.ok) return res.status(400).json({ error: chk.error });
+    const now = Date.now();
+    if (now - lastSend < MIN_GAP_MS) return res.status(429).json({ error: 'Слишком часто: подождите пару секунд' });
+    lastSend = now;
+
+    const results: { serverId: number; serverName: string; ok: boolean; error: string }[] = [];
+    for (const id of [...new Set(b.data.serverIds)]) {
+      const name = serverLabel(id);
+      const t = db.prepare('SELECT * FROM game_news_targets WHERE server_id = ?').get(id) as TargetRow | undefined;
+      let r: { ok: boolean; error: string };
+      if (!t || !t.url || !t.token) r = { ok: false, error: 'Для сервера не настроен плагин (адрес и токен)' };
+      else r = await callPlugin(t, '/api/news', { method: 'POST', body: JSON.stringify({ text: chk.text }) });
+      db.prepare('INSERT INTO game_news_log (server_id, server_name, text, ok, error, sent_by, sent_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+        .run(id, name, chk.text, r.ok ? 1 : 0, r.error, actor(req), Date.now());
+      results.push({ serverId: id, serverName: name, ok: r.ok, error: r.error });
+    }
+    db.prepare('DELETE FROM game_news_log WHERE id NOT IN (SELECT id FROM game_news_log ORDER BY id DESC LIMIT 500)').run();
+    res.json({ text: chk.text, results });
+  });
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/gamenews"
+  cat > "$APP_DIR/core-backend/src/gamenews/gameNewsLogic.ts" << '__COREGSM_EOF__'
+/**
+ * Game news: the text that the CoreGSM game plugin shows in the in-game chat of a server.
+ * Only a few rich-text tags survive: <color=#RRGGBB>…</color>, <b>, <i>. Everything else is cut out, so nobody can
+ * break the chat with odd tags. The same rules are used by the editor preview in the panel (core-frontend/src/gameNews.ts).
+ */
+
+export const MAX_VISIBLE = 400;
+export const MAX_RAW = 700;
+
+const TAG = /<\/?(?:color(?:=#[0-9a-fA-F]{6})?|b|i)>/g;
+
+/** the text without any tags (what players read): used for the length check */
+export function visibleText(raw: string): string {
+  return raw.replace(/<[^>]*>/g, '');
+}
+
+/** removes control characters and not allowed tags, closes tags left open; returns '' for an empty result */
+export function cleanNews(input: string): string {
+  // control characters out, line breaks become spaces (the chat is one line)
+  const s = input.replace(/[\r\n\t]+/g, ' ').replace(/[\u0000-\u001f\u007f]/g, '');
+  let out = '';
+  let last = 0;
+  const open: string[] = [];
+  for (const m of s.matchAll(TAG)) {
+    out += stripAngles(s.slice(last, m.index));
+    last = m.index + m[0].length;
+    const tag = m[0].toLowerCase();
+    const name = /^<\/?(color|b|i)/.exec(tag)![1];
+    if (tag.startsWith('</')) {
+      const i = open.lastIndexOf(name);
+      if (i === -1) continue; // a closing tag without an opening one
+      // close everything opened after it, then it
+      for (let k = open.length - 1; k > i; k--) out += `</${open[k]}>`;
+      out += `</${name}>`;
+      open.length = i;
+    } else {
+      open.push(name);
+      out += tag.startsWith('<color') ? `<color=${tag.slice(7, 14)}>` : tag;
+    }
+  }
+  out += stripAngles(s.slice(last));
+  for (let k = open.length - 1; k >= 0; k--) out += `</${open[k]}>`;
+  return out.replace(/ {2,}/g, ' ').trim();
+}
+
+/** a whole tag that is not allowed (<size=500>, </x>) is cut out with its content kept; a stray < or > is dropped */
+function stripAngles(t: string): string {
+  return t.replace(/<[^<>]*>/g, '').replace(/[<>]/g, '');
+}
+
+export interface NewsCheck { ok: boolean; text: string; error?: string }
+
+export function checkNews(input: unknown): NewsCheck {
+  if (typeof input !== 'string') return { ok: false, text: '', error: 'Введите текст' };
+  if (input.length > MAX_RAW) return { ok: false, text: '', error: `Слишком длинный текст (больше ${MAX_RAW} знаков с тегами)` };
+  const text = cleanNews(input);
+  const vis = visibleText(text).trim();
+  if (!vis) return { ok: false, text: '', error: 'Введите текст' };
+  if (vis.length > MAX_VISIBLE) return { ok: false, text: '', error: `Слишком длинное сообщение: ${vis.length} из ${MAX_VISIBLE} знаков` };
+  return { ok: true, text };
+}
+
+/** a plugin address: http(s) only, no login in it, no trailing slash; '' when it is not usable */
+export function normalizePluginUrl(input: string): string {
+  try {
+    const u = new URL(input.trim());
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return '';
+    if (u.username || u.password) return '';
+    return `${u.protocol}//${u.host}`;
+  } catch {
+    return '';
+  }
+}
+__COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/http.ts" << '__COREGSM_EOF__'
 /** Small helpers for Express handlers. */
@@ -26072,6 +26266,7 @@ import { startDbMaintenance } from './admin/dbMaintenance.js';
 import { registerMetrics } from './monitoring/metrics.js';
 import { wrap } from './http.js';
 import { registerMaintenance } from './maintenance.js';
+import { registerGameNews } from './gamenews/gameNews.js';
 import { registerStatusNotes } from './alerts/statusNotes.js';
 import { registerNews } from './news/news.js';
 import { registerNickStatus } from './profile/nickOnboarding.js';
@@ -26263,6 +26458,7 @@ registerOps({ app, admin, getBot: () => bot.status, guildCount: () => bot.guilds
 registerBackups({ app, admin });
 registerMaintenance({ app, admin: allow('maintenance'), viewer });
 registerStatusNotes({ app, admin: allow('maintenance') });
+registerGameNews({ app, admin });
 registerHealth({ app, admin, bot: () => bot.status });
 startDbMaintenance();
 registerOverview({ app, viewer });
@@ -26759,6 +26955,27 @@ CREATE TABLE IF NOT EXISTS favorite_push_prefs (
       addColumn(db, 'api_keys', 'allow_ips', "TEXT NOT NULL DEFAULT ''");
       addColumn(db, 'api_keys', 'last_used_ip', "TEXT NOT NULL DEFAULT ''");
     },
+  },
+  {
+    version: 16,
+    name: 'game_news',
+    // game_news_targets: where the CoreGSM game plugin of a server listens (url + token); game_news_log: what was sent
+    up: (db) => db.exec(`
+CREATE TABLE IF NOT EXISTS game_news_targets (
+  server_id INTEGER PRIMARY KEY REFERENCES servers(id) ON DELETE CASCADE,
+  url TEXT NOT NULL DEFAULT '',
+  token TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS game_news_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  server_id INTEGER,
+  server_name TEXT NOT NULL DEFAULT '',
+  text TEXT NOT NULL DEFAULT '',
+  ok INTEGER NOT NULL DEFAULT 0,
+  error TEXT NOT NULL DEFAULT '',
+  sent_by TEXT NOT NULL DEFAULT '',
+  sent_at INTEGER NOT NULL
+);`),
   },
 ];
 
@@ -137197,6 +137414,103 @@ export const gameIconPath = (game: string): string | null => {
 };
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
+  cat > "$APP_DIR/core-frontend/src/gameNews.ts" << '__COREGSM_EOF__'
+/**
+ * Game news: the editor text, the colours and the preview of how it looks in the in-game chat.
+ * The same tag rules as the backend (core-backend/src/gamenews/gameNewsLogic.ts): only <color=#RRGGBB>, <b>, <i>.
+ */
+
+export const MAX_VISIBLE = 400;
+
+export interface NewsServerInfo { id: number; name: string; game: string; url: string; hasToken: boolean }
+export interface NewsLogRow { id: number; serverId: number | null; serverName: string; text: string; ok: boolean; error: string; sentBy: string; sentAt: number }
+export interface NewsSendResult { text: string; results: { serverId: number; serverName: string; ok: boolean; error: string }[] }
+
+export interface Swatch { id: string; hex: string }
+
+/** the colours of the toolbar; `id` picks the caption in the locale (gn.c.<id>) */
+export const SWATCHES: Swatch[] = [
+  { id: 'info', hex: '#6EC1FF' },
+  { id: 'good', hex: '#5FD068' },
+  { id: 'warn', hex: '#FFCC33' },
+  { id: 'danger', hex: '#FF5555' },
+  { id: 'event', hex: '#B86BFF' },
+  { id: 'gold', hex: '#FFB347' },
+  { id: 'white', hex: '#FFFFFF' },
+];
+
+export const TEMPLATES: { id: string; text: (time: string) => string }[] = [
+  { id: 'restart', text: (tm) => `<color=#FFCC33>Перезапуск сервера через ${tm}.</color> Сохраните прогресс и возвращайтесь через пару минут.` },
+  { id: 'wipe', text: (tm) => `<color=#FF5555><b>Вайп</b></color> ${tm}. Подробности на сайте.` },
+  { id: 'event', text: (tm) => `<color=#B86BFF><b>Событие</b></color> стартует ${tm}! Заходите на сервер.` },
+  { id: 'maintenance', text: (tm) => `<color=#6EC1FF>Технические работы</color> ${tm}. Сервер может быть недоступен.` },
+];
+
+export type Seg = { text: string; color: string | null; bold: boolean; italic: boolean };
+
+const TAG = /<(\/?)(color|b|i)(?:=(#[0-9a-fA-F]{6}))?>/gi;
+
+/** the text with the tags cut out */
+export function visibleText(raw: string): string {
+  return raw.replace(/<[^>]*>/g, '');
+}
+
+/** splits the text into styled pieces for the preview (unknown tags are shown as plain text without the angle brackets) */
+export function parseNews(raw: string): Seg[] {
+  const segs: Seg[] = [];
+  const colors: string[] = [];
+  let bold = 0;
+  let italic = 0;
+  let last = 0;
+  const push = (t: string) => {
+    // a tag the game would not draw is removed whole, like the backend does
+    const text = t.replace(/<[^<>]*>/g, '').replace(/[<>]/g, '');
+    if (text) segs.push({ text, color: colors.length ? colors[colors.length - 1] : null, bold: bold > 0, italic: italic > 0 });
+  };
+  for (const m of raw.matchAll(TAG)) {
+    push(raw.slice(last, m.index));
+    last = m.index + m[0].length;
+    const close = m[1] === '/';
+    const name = m[2].toLowerCase();
+    if (name === 'color') { if (close) colors.pop(); else if (m[3]) colors.push(m[3].toUpperCase()); }
+    else if (name === 'b') bold = Math.max(0, bold + (close ? -1 : 1));
+    else italic = Math.max(0, italic + (close ? -1 : 1));
+  }
+  push(raw.slice(last));
+  return segs;
+}
+
+/** wraps text[start, end) into a tag; returns the new text and where the selection should be */
+export function wrapSelection(text: string, start: number, end: number, open: string, close: string): { text: string; start: number; end: number } {
+  const a = Math.max(0, Math.min(start, end));
+  const b = Math.max(a, Math.max(start, end));
+  const sel = text.slice(a, b) || '…';
+  const out = text.slice(0, a) + open + sel + close + text.slice(b);
+  return { text: out, start: a + open.length, end: a + open.length + sel.length };
+}
+
+export const colorOpen = (hex: string): string => `<color=${hex.toUpperCase()}>`;
+export const isHex = (s: string): boolean => /^#[0-9a-fA-F]{6}$/.test(s);
+
+/** whether the author left a tag open (the backend closes it, the editor only warns) */
+export function unbalanced(raw: string): boolean {
+  const depth: Record<string, number> = { color: 0, b: 0, i: 0 };
+  for (const m of raw.matchAll(TAG)) {
+    const n = m[2].toLowerCase();
+    depth[n] += m[1] === '/' ? -1 : 1;
+    if (depth[n] < 0) return true;
+  }
+  return depth.color !== 0 || depth.b !== 0 || depth.i !== 0;
+}
+
+export function validateNews(raw: string): string | null {
+  const v = visibleText(raw).trim();
+  if (!v) return 'empty';
+  if (v.length > MAX_VISIBLE) return 'long';
+  return null;
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/gameProfiles.ts" << '__COREGSM_EOF__'
 import { useEffect, useState } from 'react';
 import { api } from './api';
@@ -140479,6 +140793,69 @@ const en: Record<keyof typeof ru, string> = {
   'adm.d.discord': 'The channel where the bot posts the server card.',
   'adm.s.news': 'News',
   'adm.d.news': 'Write an announcement and send it to Discord.',
+  'adm.s.gamenews': 'In-game news',
+  'adm.d.gamenews': 'A message to the in-game chat of a server through the CoreGSM plugin: with colours and a preview.',
+  'gn.title': 'In-game news',
+  'gn.subtitle': 'Write a message and send it to the game chat: the CoreGSM plugin on the game server shows it.',
+  'gn.hint': 'Every player who is on the server right now will see the message.',
+  'gn.help': 'Once per server, set the plugin address (http://address:port) and its token (the gear next to the server). The plugin prints the token to its log on the first start and keeps it in BepInEx/config/com.rjbond.coregsm.cfg.',
+  'gn.templates': 'Templates',
+  'gn.tpl.restart': 'Restart',
+  'gn.tpl.wipe': 'Wipe',
+  'gn.tpl.event': 'Event',
+  'gn.tpl.maintenance': 'Maintenance',
+  'gn.tpl.when': 'in 10 minutes',
+  'gn.message': 'Message',
+  'gn.placeholder': 'For example: The server restarts in 10 minutes. Select a word and press a colour.',
+  'gn.colors': 'Colours and style',
+  'gn.colorize': 'Colour the selection: {name}',
+  'gn.c.info': 'Info',
+  'gn.c.good': 'Good',
+  'gn.c.warn': 'Warning',
+  'gn.c.danger': 'Important',
+  'gn.c.event': 'Event',
+  'gn.c.gold': 'Gold',
+  'gn.c.white': 'White',
+  'gn.customHex': 'Custom colour (HEX)',
+  'gn.applyHex': 'Custom colour',
+  'gn.bold': 'Bold',
+  'gn.italic': 'Italic',
+  'gn.clearTags': 'Remove styling',
+  'gn.counter': '{n} of {max} characters',
+  'gn.unbalanced': 'A tag is left open: it will be closed automatically',
+  'gn.preview': 'How it will look in the game',
+  'gn.chatLabel': 'System message',
+  'gn.previewEmpty': 'Your message will appear here.',
+  'gn.previewNote': 'The preview is approximate: the font and background in the game may differ, colours are exact.',
+  'gn.servers': 'Send to',
+  'gn.noServers': 'Add a game server first.',
+  'gn.noPlugin': 'No server has the plugin set up. Press the gear next to a server.',
+  'gn.plugin.on': 'Plugin set up',
+  'gn.plugin.off': 'No plugin',
+  'gn.plugin.settings': 'Set up the plugin of {name}',
+  'gn.plugin.title': 'CoreGSM plugin: {name}',
+  'gn.plugin.help': 'The address and token of the CoreGSM plugin installed on the game server (BepInEx). The default plugin port is 25590. Open it to the panel only.',
+  'gn.plugin.url': 'Plugin address',
+  'gn.plugin.token': 'Token',
+  'gn.plugin.tokenEx': 'The token from the plugin log',
+  'gn.plugin.tokenKept': 'Saved, leave empty to keep it',
+  'gn.plugin.check': 'Check connection',
+  'gn.plugin.checkOk': 'Connected, the plugin answers.',
+  'gn.plugin.remove': 'Remove plugin',
+  'gn.plugin.removeTitle': 'Remove the plugin settings of «{name}»?',
+  'gn.pickAll': 'Select all',
+  'gn.pickNone': 'Clear selection',
+  'gn.send': 'Send to the game',
+  'gn.confirm.title': 'Send the message to players?',
+  'gn.confirm.text': 'Every player on {servers} will see it.',
+  'gn.t.sent': 'Message sent',
+  'gn.t.partial': 'Sent {ok} of {total}',
+  'gn.t.saved': 'Plugin settings saved',
+  'gn.history': 'History',
+  'gn.historyEmpty': 'Nothing has been sent yet.',
+  'gn.h.ok': 'Delivered',
+  'gn.h.fail': 'Failed',
+  'gn.reuse': 'Use again',
   'adm.s.alerts': 'Alerts',
   'adm.d.alerts': 'A Discord message when a game server goes down or comes back.',
   'adm.s.maintenance': 'Maintenance',
@@ -144773,6 +145150,69 @@ const ru = {
   'adm.d.discord': 'В какой канал бот публикует карточку сервера.',
   'adm.s.news': 'Новости',
   'adm.d.news': 'Написать объявление и отправить его в Discord.',
+  'adm.s.gamenews': 'Новости в игру',
+  'adm.d.gamenews': 'Сообщение в игровой чат сервера через плагин CoreGSM: с цветами и превью.',
+  'gn.title': 'Новости в игру',
+  'gn.subtitle': 'Напишите сообщение и отправьте его в игровой чат: его покажет плагин CoreGSM на игровом сервере.',
+  'gn.hint': 'Сообщение увидят все игроки, которые сейчас на сервере.',
+  'gn.help': 'Для каждого сервера один раз укажите адрес плагина (http://адрес:порт) и его токен (шестерёнка у сервера). Токен плагин пишет в лог при первом запуске и хранит в файле BepInEx/config/com.rjbond.coregsm.cfg.',
+  'gn.templates': 'Шаблоны',
+  'gn.tpl.restart': 'Рестарт',
+  'gn.tpl.wipe': 'Вайп',
+  'gn.tpl.event': 'Событие',
+  'gn.tpl.maintenance': 'Тех. работы',
+  'gn.tpl.when': 'через 10 минут',
+  'gn.message': 'Сообщение',
+  'gn.placeholder': 'Например: Перезапуск сервера через 10 минут. Выделите слово и нажмите цвет.',
+  'gn.colors': 'Цвета и оформление',
+  'gn.colorize': 'Покрасить выделенное: {name}',
+  'gn.c.info': 'Информация',
+  'gn.c.good': 'Хорошо',
+  'gn.c.warn': 'Внимание',
+  'gn.c.danger': 'Важно',
+  'gn.c.event': 'Событие',
+  'gn.c.gold': 'Золото',
+  'gn.c.white': 'Белый',
+  'gn.customHex': 'Свой цвет (HEX)',
+  'gn.applyHex': 'Свой цвет',
+  'gn.bold': 'Жирный',
+  'gn.italic': 'Курсив',
+  'gn.clearTags': 'Убрать оформление',
+  'gn.counter': '{n} из {max} знаков',
+  'gn.unbalanced': 'Незакрытый тег: он будет закрыт автоматически',
+  'gn.preview': 'Так это будет выглядеть в игре',
+  'gn.chatLabel': 'Системное сообщение',
+  'gn.previewEmpty': 'Здесь появится ваше сообщение.',
+  'gn.previewNote': 'Превью приблизительное: шрифт и фон в игре могут отличаться, цвета передаются точно.',
+  'gn.servers': 'Куда отправить',
+  'gn.noServers': 'Сначала добавьте игровой сервер.',
+  'gn.noPlugin': 'Ни у одного сервера не настроен плагин. Нажмите на шестерёнку у сервера.',
+  'gn.plugin.on': 'Плагин настроен',
+  'gn.plugin.off': 'Нет плагина',
+  'gn.plugin.settings': 'Настроить плагин сервера {name}',
+  'gn.plugin.title': 'Плагин CoreGSM: {name}',
+  'gn.plugin.help': 'Адрес и токен плагина CoreGSM, установленного на игровом сервере (BepInEx). Порт плагина по умолчанию 25590. Откройте его только для панели.',
+  'gn.plugin.url': 'Адрес плагина',
+  'gn.plugin.token': 'Токен',
+  'gn.plugin.tokenEx': 'Токен из лога плагина',
+  'gn.plugin.tokenKept': 'Сохранён, оставьте пустым, чтобы не менять',
+  'gn.plugin.check': 'Проверить связь',
+  'gn.plugin.checkOk': 'Связь есть, плагин отвечает.',
+  'gn.plugin.remove': 'Убрать плагин',
+  'gn.plugin.removeTitle': 'Убрать настройки плагина у сервера «{name}»?',
+  'gn.pickAll': 'Выбрать все',
+  'gn.pickNone': 'Снять выбор',
+  'gn.send': 'Отправить в игру',
+  'gn.confirm.title': 'Отправить сообщение игрокам?',
+  'gn.confirm.text': 'Его увидят все игроки на: {servers}.',
+  'gn.t.sent': 'Сообщение отправлено',
+  'gn.t.partial': 'Отправлено {ok} из {total}',
+  'gn.t.saved': 'Настройки плагина сохранены',
+  'gn.history': 'История отправок',
+  'gn.historyEmpty': 'Пока ничего не отправляли.',
+  'gn.h.ok': 'Доставлено',
+  'gn.h.fail': 'Ошибка',
+  'gn.reuse': 'Использовать снова',
   'adm.s.alerts': 'Оповещения',
   'adm.d.alerts': 'Сообщение в Discord, если игровой сервер упал или вернулся.',
   'adm.s.maintenance': 'Обслуживание',
@@ -148331,6 +148771,7 @@ import { AdminServersTable } from './AdminServersTable';
 import { moveId } from './adminServersLogic';
 import { SetupProgress } from './AdminStart';
 import JournalPage from './Journal';
+import GameNewsPage from './GameNews';
 import MaintenancePage from './Maintenance';
 import SettingsPage, { UsersTab } from './Settings';
 
@@ -148597,6 +149038,7 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
         {!home && current === 'servers' && <ServersManage sub={tail} />}
         {!home && current === 'discord' && <DiscordPage sub={tail} />}
         {!home && current === 'news' && <NewsPage sub={tail} />}
+        {!home && current === 'gamenews' && <GameNewsPage />}
         {!home && current === 'alerts' && <AlertsPage />}
         {!home && current === 'maintenance' && <MaintenancePage />}
         {!home && current === 'cards' && <CardsPage />}
@@ -152711,6 +153153,296 @@ export default function ForgotPassword() {
         <Button className="w-full" loading={busy}>{busy ? t('forgot.sending') : t('forgot.submit')}</Button>
       </form>
     </AuthFlow>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/pages"
+  cat > "$APP_DIR/core-frontend/src/pages/GameNews.tsx" << '__COREGSM_EOF__'
+import { useMemo, useRef, useState, type FormEvent } from 'react';
+import { api } from '../api';
+import { confirmDialog } from '../confirm';
+import { t, useI18n } from '../i18n';
+import {
+  MAX_VISIBLE, SWATCHES, TEMPLATES, colorOpen, isHex, parseNews, unbalanced, validateNews, visibleText, wrapSelection,
+  type NewsLogRow, type NewsSendResult, type NewsServerInfo,
+} from '../gameNews';
+import { AdminPage, ErrorLine, Field, IconNews, IconSettings, LoadError, Modal, PageHead, Spinner, errText, toast, usePoll } from '../ui';
+
+interface NewsState { servers: NewsServerInfo[]; log: NewsLogRow[] }
+
+const swatchName = (id: string) => t(`gn.c.${id}` as 'gn.c.info');
+
+/** «Игровые новости»: a message for the in-game chat of a server (the CoreGSM game plugin shows it), with a live preview. */
+export default function GameNewsPage() {
+  useI18n();
+  const [data, setData] = useState<NewsState | null>(null);
+  const [error, setError] = useState('');
+  const [text, setText] = useState('');
+  const [picked, setPicked] = useState<number[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [custom, setCustom] = useState('#FF8A00');
+  const [settingsFor, setSettingsFor] = useState<NewsServerInfo | null>(null);
+  const [lastResult, setLastResult] = useState<NewsSendResult | null>(null);
+  const area = useRef<HTMLTextAreaElement>(null);
+
+  const load = () =>
+    api<NewsState>('/game-news')
+      .then((d) => { setData(d); setError(''); })
+      .catch((e: Error) => setError(e.message));
+  usePoll(load, 30_000);
+
+  const segs = useMemo(() => parseNews(text), [text]);
+  const visible = visibleText(text).trim().length;
+  const problem = validateNews(text);
+  const ready = (data?.servers ?? []).filter((s) => s.url && s.hasToken);
+
+  const edit = (fn: (start: number, end: number) => { text: string; start: number; end: number }) => {
+    const el = area.current;
+    const r = fn(el?.selectionStart ?? text.length, el?.selectionEnd ?? text.length);
+    setText(r.text);
+    requestAnimationFrame(() => { el?.focus(); el?.setSelectionRange(r.start, r.end); });
+  };
+  const wrap = (open: string, close: string) => edit((a, b) => wrapSelection(text, a, b, open, close));
+  const useTemplate = (id: string) => {
+    const tpl = TEMPLATES.find((x) => x.id === id);
+    if (tpl) setText(tpl.text(t('gn.tpl.when')));
+  };
+  const toggle = (id: number) => setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
+
+  const send = async (e: FormEvent) => {
+    e.preventDefault();
+    if (problem || !picked.length || busy) return;
+    const names = (data?.servers ?? []).filter((s) => picked.includes(s.id)).map((s) => s.name).join(', ');
+    const ok = await confirmDialog({
+      title: t('gn.confirm.title'),
+      text: t('gn.confirm.text', { servers: names }),
+      confirmLabel: t('gn.send'),
+    });
+    if (!ok) return;
+    setBusy(true);
+    try {
+      const r = await api<NewsSendResult>('/game-news/send', 'POST', { serverIds: picked, text });
+      setLastResult(r);
+      const bad = r.results.filter((x) => !x.ok).length;
+      toast(bad ? t('gn.t.partial', { ok: r.results.length - bad, total: r.results.length }) : t('gn.t.sent'), bad ? 'err' : undefined);
+      void load();
+    } catch (err) {
+      toast(errText(err), 'err');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <AdminPage
+      head={(
+        <PageHead icon={<IconNews size={22} />} title={t('gn.title')} subtitle={t('gn.subtitle')} hint={t('gn.hint')} help={<p>{t('gn.help')}</p>} />
+      )}
+    >
+      {error && !data ? <LoadError error={error} onRetry={() => void load()} /> : <ErrorLine text={error} />}
+      {!data && !error && <div className="skeleton panel h-40" aria-busy="true" aria-label={t('d2.news.loading')} />}
+
+      {data && (
+        <form className="grid gap-5 lg:grid-cols-2" onSubmit={(e) => void send(e)} noValidate>
+          <section className="panel space-y-4 p-5">
+            <div className="flex flex-wrap gap-2" role="group" aria-label={t('gn.templates')}>
+              <span className="self-center text-sm font-bold text-mute">{t('gn.templates')}:</span>
+              {TEMPLATES.map((x) => (
+                <button key={x.id} type="button" className="chip-filter" onClick={() => useTemplate(x.id)}>{t(`gn.tpl.${x.id}` as 'gn.tpl.restart')}</button>
+              ))}
+            </div>
+
+            <Field label={t('gn.message')}>
+              <textarea
+                ref={area}
+                className="input min-h-32 font-mono text-sm"
+                value={text}
+                rows={5}
+                maxLength={700}
+                placeholder={t('gn.placeholder')}
+                onChange={(e) => setText(e.target.value)}
+              />
+            </Field>
+
+            <div className="flex flex-wrap items-center gap-2" role="group" aria-label={t('gn.colors')}>
+              {SWATCHES.map((s) => (
+                <button
+                  key={s.id}
+                  type="button"
+                  className="h-8 w-8 rounded-full border border-line"
+                  style={{ background: s.hex }}
+                  title={swatchName(s.id)}
+                  aria-label={t('gn.colorize', { name: swatchName(s.id) })}
+                  onClick={() => wrap(colorOpen(s.hex), '</color>')}
+                />
+              ))}
+              <input
+                className="input w-28 font-mono text-sm"
+                value={custom}
+                maxLength={7}
+                aria-label={t('gn.customHex')}
+                onChange={(e) => setCustom(e.target.value)}
+              />
+              <button type="button" className="btn btn-soft btn-sm" disabled={!isHex(custom)} onClick={() => wrap(colorOpen(custom), '</color>')}>{t('gn.applyHex')}</button>
+              <button type="button" className="btn btn-soft btn-sm font-black" onClick={() => wrap('<b>', '</b>')} aria-label={t('gn.bold')}>B</button>
+              <button type="button" className="btn btn-soft btn-sm italic" onClick={() => wrap('<i>', '</i>')} aria-label={t('gn.italic')}>I</button>
+              <button type="button" className="btn btn-ghost btn-sm" onClick={() => setText(visibleText(text))}>{t('gn.clearTags')}</button>
+            </div>
+
+            <div className="flex flex-wrap items-center justify-between gap-2 text-sm font-semibold text-mute">
+              <span className={visible > MAX_VISIBLE ? 'text-danger' : undefined}>{t('gn.counter', { n: visible, max: MAX_VISIBLE })}</span>
+              {unbalanced(text) && <span>{t('gn.unbalanced')}</span>}
+            </div>
+          </section>
+
+          <section className="space-y-5">
+            <div className="panel space-y-3 p-5">
+              <h3 className="font-extrabold">{t('gn.preview')}</h3>
+              <div className="rounded-xl p-4 font-semibold" style={{ background: '#15121c', color: '#e8e3f0' }} aria-live="polite">
+                <div className="mb-1 text-xs font-bold uppercase tracking-wide" style={{ color: '#8f86a3' }}>{t('gn.chatLabel')}</div>
+                {segs.length ? (
+                  <p className="wrap-break-word">
+                    {segs.map((s, i) => (
+                      <span key={i} style={{ color: s.color ?? undefined, fontWeight: s.bold ? 800 : undefined, fontStyle: s.italic ? 'italic' : undefined }}>{s.text}</span>
+                    ))}
+                  </p>
+                ) : <p style={{ color: '#8f86a3' }}>{t('gn.previewEmpty')}</p>}
+              </div>
+              <p className="text-sm font-semibold text-mute">{t('gn.previewNote')}</p>
+            </div>
+
+            <div className="panel space-y-3 p-5">
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="font-extrabold">{t('gn.servers')}</h3>
+              </div>
+              {data.servers.length === 0 && <p className="text-sm font-semibold text-mute">{t('gn.noServers')}</p>}
+              <ul className="divide-y divide-line">
+                {data.servers.map((s) => {
+                  const okTarget = !!(s.url && s.hasToken);
+                  return (
+                    <li key={s.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2.5">
+                      <label className="flex min-w-0 flex-1 basis-48 items-center gap-2.5 font-bold">
+                        <input type="checkbox" disabled={!okTarget} checked={picked.includes(s.id)} onChange={() => toggle(s.id)} />
+                        <span className="min-w-0 wrap-break-word">{s.name}</span>
+                      </label>
+                      <span className={okTarget ? 'pill pill-ok' : 'pill pill-mute'}>{okTarget ? t('gn.plugin.on') : t('gn.plugin.off')}</span>
+                      <button type="button" className="row-act" onClick={() => setSettingsFor(s)} aria-label={t('gn.plugin.settings', { name: s.name })}><IconSettings size={16} /></button>
+                    </li>
+                  );
+                })}
+              </ul>
+              {data.servers.length > 0 && ready.length === 0 && <p className="text-sm font-semibold text-mute">{t('gn.noPlugin')}</p>}
+              {ready.length > 1 && (
+                <button type="button" className="chip-filter" onClick={() => setPicked(picked.length === ready.length ? [] : ready.map((s) => s.id))}>
+                  {picked.length === ready.length ? t('gn.pickNone') : t('gn.pickAll')}
+                </button>
+              )}
+              <div className="flex justify-end">
+                <button type="submit" className="btn" disabled={!!problem || !picked.length || busy}>{busy && <Spinner />}{t('gn.send')}</button>
+              </div>
+              {lastResult && (
+                <ul className="space-y-1 text-sm font-semibold">
+                  {lastResult.results.map((r) => (
+                    <li key={r.serverId} className={r.ok ? 'text-ok' : 'text-danger'}>{r.ok ? '✓' : '✕'} {r.serverName}{r.ok ? '' : `: ${r.error}`}</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </section>
+        </form>
+      )}
+
+      {data && (
+        <section className="panel overflow-hidden">
+          <h3 className="px-5 pt-4 font-extrabold">{t('gn.history')}</h3>
+          {data.log.length === 0 && <p className="px-5 py-4 text-sm font-semibold text-mute">{t('gn.historyEmpty')}</p>}
+          <ul className="divide-y divide-line">
+            {data.log.map((r) => (
+              <li key={r.id} className="flex flex-wrap items-start gap-x-4 gap-y-1 px-5 py-3">
+                <div className="min-w-0 flex-1 basis-60">
+                  <div className="flex flex-wrap items-center gap-2 text-sm font-bold">
+                    <span className={r.ok ? 'pill pill-ok' : 'pill pill-warn'}>{r.ok ? t('gn.h.ok') : t('gn.h.fail')}</span>
+                    <span>{r.serverName}</span>
+                    <span className="font-semibold text-mute">{new Date(r.sentAt).toLocaleString()} · {r.sentBy || '—'}</span>
+                  </div>
+                  <p className="mt-1 wrap-break-word text-sm">
+                    {parseNews(r.text).map((s, i) => (
+                      <span key={i} style={{ color: s.color ?? undefined, fontWeight: s.bold ? 800 : undefined, fontStyle: s.italic ? 'italic' : undefined }}>{s.text}</span>
+                    ))}
+                  </p>
+                  {!r.ok && r.error && <p className="text-sm font-semibold text-danger">{r.error}</p>}
+                </div>
+                <button type="button" className="btn btn-soft btn-sm" onClick={() => setText(r.text)}>{t('gn.reuse')}</button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {settingsFor && <PluginModal server={settingsFor} onClose={() => setSettingsFor(null)} onSaved={() => { setSettingsFor(null); void load(); }} />}
+    </AdminPage>
+  );
+}
+
+function PluginModal({ server, onClose, onSaved }: { server: NewsServerInfo; onClose: () => void; onSaved: () => void }) {
+  useI18n();
+  const [url, setUrl] = useState(server.url || 'http://');
+  const [token, setToken] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [check, setCheck] = useState<{ ok: boolean; error: string } | null>(null);
+
+  const save = async (): Promise<boolean> => {
+    setBusy(true);
+    setError('');
+    try {
+      await api(`/game-news/targets/${server.id}`, 'PUT', token ? { url, token } : { url });
+      return true;
+    } catch (e) {
+      setError(errText(e));
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  };
+  const submit = async (e: FormEvent) => { e.preventDefault(); if (await save()) { toast(t('gn.t.saved')); onSaved(); } };
+  const test = async () => {
+    if (!(await save())) return;
+    setBusy(true);
+    try { setCheck(await api<{ ok: boolean; error: string }>(`/game-news/check/${server.id}`, 'POST')); }
+    catch (e) { setCheck({ ok: false, error: errText(e) }); }
+    finally { setBusy(false); }
+  };
+  const remove = async () => {
+    if (!(await confirmDialog({ title: t('gn.plugin.removeTitle', { name: server.name }), danger: true, confirmLabel: t('gn.plugin.remove') }))) return;
+    try { await api(`/game-news/targets/${server.id}`, 'DELETE'); onSaved(); } catch (e) { setError(errText(e)); }
+  };
+
+  return (
+    <Modal title={t('gn.plugin.title', { name: server.name })} onClose={onClose}>
+      <form className="space-y-4" onSubmit={(e) => void submit(e)} noValidate>
+        <p className="text-sm font-semibold text-mute">{t('gn.plugin.help')}</p>
+        <Field label={t('gn.plugin.url')}>
+          <input className="input font-mono text-sm" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="http://192.168.88.138:25590" />
+        </Field>
+        <Field label={t('gn.plugin.token')}>
+          <input className="input font-mono text-sm" type="password" autoComplete="off" value={token} onChange={(e) => setToken(e.target.value)}
+            placeholder={server.hasToken ? t('gn.plugin.tokenKept') : t('gn.plugin.tokenEx')} />
+        </Field>
+        <ErrorLine text={error} />
+        {check && <p className={`text-sm font-semibold ${check.ok ? 'text-ok' : 'text-danger'}`}>{check.ok ? t('gn.plugin.checkOk') : check.error}</p>}
+        <div className="flex flex-wrap justify-between gap-2">
+          <div className="flex gap-2">
+            {server.url && <button type="button" className="btn btn-ghost" onClick={() => void remove()}>{t('gn.plugin.remove')}</button>}
+            <button type="button" className="btn btn-soft" disabled={busy} onClick={() => void test()}>{t('gn.plugin.check')}</button>
+          </div>
+          <div className="flex gap-2">
+            <button type="button" className="btn btn-ghost" onClick={onClose}>{t('common.cancel')}</button>
+            <button type="submit" className="btn" disabled={busy}>{busy && <Spinner />}{t('common.save')}</button>
+          </div>
+        </div>
+      </form>
+    </Modal>
   );
 }
 __COREGSM_EOF__
@@ -158851,6 +159583,7 @@ const S = {
   servers: { id: 'servers', get label() { return t('adm.s.servers'); }, icon: IconServers, get desc() { return t('adm.d.servers'); }, keywords: 'игра адрес порт добавить сервер опрос' },
   discord: { id: 'discord', get label() { return t('adm.s.discord'); }, icon: IconDiscord, get desc() { return t('adm.d.discord'); }, keywords: 'привязка канал бот сообщение embed' },
   news: { id: 'news', get label() { return t('adm.s.news'); }, icon: IconNews, get desc() { return t('adm.d.news'); }, keywords: 'новость объявление публикация вайп шаблон запланировать' },
+  gamenews: { id: 'gamenews', get label() { return t('adm.s.gamenews'); }, icon: IconNews, get desc() { return t('adm.d.gamenews'); }, keywords: 'игровые новости сообщение чат игра сервер плагин цвет превью объявление в игре v rising bepinex' },
   alerts: { id: 'alerts', get label() { return t('adm.s.alerts'); }, icon: IconBell, get desc() { return t('adm.d.alerts'); }, keywords: 'упал недоступен уведомление падение упоминание here everyone' },
   maintenance: { id: 'maintenance', get label() { return t('adm.s.maintenance'); }, icon: IconWrench, get desc() { return t('adm.d.maintenance'); }, keywords: 'тех работы обслуживание окно перезагрузка обновление простой плановые расписание' },
   health: { id: 'health', get label() { return t('adm.s.health'); }, icon: IconHealth, get desc() { return t('adm.d.health'); }, keywords: 'здоровье графики опрос диск память база очередь бот нагрузка порог мониторинг health' },
@@ -158869,7 +159602,7 @@ export const SECTION_PERM: Partial<Record<string, Perm>> = { news: 'news', commu
 export interface AdminGroup { title: string; sections: AdminSection[] }
 
 export const ADMIN_GROUPS: AdminGroup[] = [
-  { get title() { return t('adm.g.main'); }, sections: [S.servers, S.discord, S.news] },
+  { get title() { return t('adm.g.main'); }, sections: [S.servers, S.discord, S.news, S.gamenews] },
   { get title() { return t('adm.g.mon'); }, sections: [S.alerts, S.health, S.maintenance, S.cards] },
   { get title() { return t('adm.g.people'); }, sections: [S.community, S.users, S.journal] },
   { get title() { return t('adm.g.sys'); }, sections: [S.integrations, S.system, S.settings] },
