@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="7ae4c920ebb3"
+COREGSM_BUILD="426711852b6c"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.81"
+COREGSM_VERSION="1.1.82"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -143341,9 +143341,6 @@ const en: Record<keyof typeof ru, string> = {
   'gn.h.expired': 'Not delivered',
   'gn.h.fail': 'Failed',
   'gn.reuse': 'Use again',
-  'gn.sc.title': 'Settings for:',
-  'gn.sc.all': 'All servers',
-  'gn.sc.hasOwn': 'Has its own settings',
   'gn.sc.noteAll': 'The general settings: every server that has none of its own uses them.',
   'gn.sc.noteOne': 'The settings of one server. Until you change something it uses the general ones; any change in a card makes that card its own.',
   'gn.sc.own': 'This server has its own settings here: the general ones do not apply to it.',
@@ -143429,6 +143426,7 @@ const en: Record<keyof typeof ru, string> = {
   'gn.wz.s3h': 'The block from the token window into BepInEx/config/CoreGSM.cfg, restart. «Online» will appear here.',
   'gn.wz.token': 'Create a token',
   'gn.wz.docs': 'Full guide',
+  'gn.tab.general': 'General',
   'gn.tab.players': 'Players',
   'gn.tab.discord': 'Discord',
   'gn.a.menu': 'Actions: {name}',
@@ -147991,9 +147989,6 @@ const ru = {
   'gn.h.expired': 'Не доставлено',
   'gn.h.fail': 'Ошибка',
   'gn.reuse': 'Использовать снова',
-  'gn.sc.title': 'Настройки для:',
-  'gn.sc.all': 'Все серверы',
-  'gn.sc.hasOwn': 'Есть свои настройки',
   'gn.sc.noteAll': 'Общие настройки: их используют все серверы, у которых нет своих.',
   'gn.sc.noteOne': 'Настройки одного сервера. Пока вы ничего не меняете, он использует общие; любое изменение в карточке делает настройки этой карточки своими.',
   'gn.sc.own': 'Свои настройки этого сервера: общие на него не действуют.',
@@ -148079,6 +148074,7 @@ const ru = {
   'gn.wz.s3h': 'Блок из окна токена в BepInEx/config/CoreGSM.cfg, перезапуск. Здесь появится «На связи».',
   'gn.wz.token': 'Создать токен',
   'gn.wz.docs': 'Подробная инструкция',
+  'gn.tab.general': 'Общие',
   'gn.tab.players': 'Игроки',
   'gn.tab.discord': 'Discord',
   'gn.a.menu': 'Действия: {name}',
@@ -156209,14 +156205,14 @@ import {
 } from '../gameNews';
 import { AdminPage, ErrorLine, IconNews, LoadError, Modal, PageHead, Spinner, errText, navigate, toast, usePoll } from '../ui';
 import { ChatCard, ExtrasCard, JoinLeaveCard, RegisterCard, RestartCard, WelcomeCard } from './GameNewsCards';
-import { ScopeBar, ScopeContext } from './GameNewsScope';
+import { ScopeContext } from './GameNewsScope';
 import { ServerRestartCard } from './GameNewsServerRestart';
 import GameNewsRules from './GameNewsRules';
 
 interface NewsState { servers: NewsServerInfo[]; log: NewsLogRow[]; pluginLatest: string }
 
-type Tab = 'send' | 'auto' | 'players' | 'discord' | 'history';
-const TABS: Tab[] = ['send', 'auto', 'players', 'discord', 'history'];
+/** 'send' | 'auto' | 'general' | 's<id>' (the settings of one server) | 'history' */
+type Tab = string;
 const DOCS = 'https://github.com/RJ-Bond/CoreGSM/blob/main/docs/game-plugin.md';
 
 /** «3 с назад», «5 мин назад», «2 ч назад» */
@@ -156251,7 +156247,8 @@ export default function GameNewsPage({ sub = '' }: { sub?: string }) {
   const [rd, setRd] = useState<RulesState | null>(null);
   const [error, setError] = useState('');
   // the tab is part of the address: /admin/gamenews, /auto, /players, /discord, /history («events» is the old name of «players»)
-  const tab: Tab = sub === 'events' ? 'players' : (TABS.find((x) => x === sub) ?? 'send');
+  // (/general holds the general settings; /s12 the settings of the server 12; «players», «discord» and «events» are the old names of /general)
+  const tab: Tab = ['players', 'discord', 'events'].includes(sub) ? 'general' : (/^(send|auto|general|history|s\d+)$/.test(sub) ? sub : 'send');
   const goTab = (x: Tab) => navigate(x === 'send' ? '/admin/gamenews' : `/admin/gamenews/${x}`);
   // the draft survives a switch of the page or a reload (kept in this browser only)
   const [text, setText] = useState(() => { try { return localStorage.getItem('coregsm.gamenews.draft') ?? ''; } catch { return ''; } });
@@ -156264,15 +156261,14 @@ export default function GameNewsPage({ sub = '' }: { sub?: string }) {
   const [wizardOff, setWizardOff] = useState(() => { try { return localStorage.getItem('coregsm.gn.wizard') === '0'; } catch { return false; } });
 
   const loadMain = () => api<NewsState>('/game-news').then((d) => { setData(d); setError(''); }).catch((e: Error) => setError(e.message));
-  // «all servers» (0) or one server: the cards of the tabs show and save the settings of that choice
-  const [scope, setScope] = useState(() => { try { return Number(localStorage.getItem('coregsm.gn.scope')) || 0; } catch { return 0; } });
+  // the settings of the tab: the general ones (0) or those of one server («s12» is the server 12)
   const [scopeRev, setScopeRev] = useState(0);
-  const pickScope = (id: number) => { setScope(id); try { localStorage.setItem('coregsm.gn.scope', String(id)); } catch { /* private mode */ } };
-  const effScope = !scope || !data || data.servers.some((x) => x.id === scope && x.hasToken) ? scope : 0;
+  const tabServer = /^s\d+$/.test(tab) ? Number(tab.slice(1)) : 0;
+  const effScope = !tabServer || !data || data.servers.some((x) => x.id === tabServer && x.hasToken) ? tabServer : 0;
   const q = effScope ? `?server=${effScope}` : '';
   const loadRules = () => api<RulesState>(`/game-news/rules${q}`).then(setRd).catch(() => undefined);
   usePoll(() => Promise.all([loadMain(), loadRules()]), 10_000);
-  // another choice: the old cards go at once, the settings of the new one are read
+  // another tab: the old cards go at once, the settings of the new one are read
   useEffect(() => { setRd(null); void loadRules(); }, [effScope]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const problem = validateNews(text);
@@ -156300,7 +156296,13 @@ export default function GameNewsPage({ sub = '' }: { sub?: string }) {
   const queued = (data?.log ?? []).filter((r) => r.status === 'queued').length;
   const eventsOn = rd ? [rd.welcome.enabled, rd.joinLeave.joinEnabled || rd.joinLeave.leaveEnabled, rd.register.enabled, rd.restartCountdown].filter(Boolean).length : 0;
   const chatOn = rd ? (rd.chat.enabled && rd.chat.set ? 1 : 0) : 0;
-  const counter: Record<Tab, number> = { send: 0, auto: activeRules.length, players: eventsOn, discord: chatOn, history: queued };
+  const counter: Record<string, number> = { auto: activeRules.length, general: tab === 'general' ? eventsOn + chatOn : 0, history: queued };
+  // with one server its settings are the general ones; with several each gets a tab of its own
+  const serverTabs = withToken.length > 1 ? withToken : [];
+  const tabList: { id: Tab; label: string }[] = [
+    { id: 'send', label: t('gn.tab.send') }, { id: 'auto', label: t('gn.tab.auto') }, { id: 'general', label: t('gn.tab.general') },
+    ...serverTabs.map((x) => ({ id: `s${x.id}`, label: x.name })), { id: 'history', label: t('gn.tab.history') },
+  ];
 
   // the setup guide: until a plugin is online
   const showWizard = !!data && supported.length > 0 && online.length === 0 && !wizardOff;
@@ -156414,10 +156416,10 @@ export default function GameNewsPage({ sub = '' }: { sub?: string }) {
 
       {data && (
         <div className="flex flex-wrap gap-2" role="tablist" aria-label={t('gn.title')}>
-          {TABS.map((x) => (
-            <button key={x} type="button" role="tab" aria-selected={tab === x} className={`chip-filter ${tab === x ? 'on' : ''}`} onClick={() => goTab(x)}>
-              {t(`gn.tab.${x}` as 'gn.tab.send')}
-              {counter[x] > 0 && <span className="ml-1.5 rounded-full bg-soft px-1.5 text-xs font-extrabold">{counter[x]}</span>}
+          {tabList.map((x) => (
+            <button key={x.id} type="button" role="tab" aria-selected={tab === x.id} className={`chip-filter ${tab === x.id ? 'on' : ''}`} onClick={() => goTab(x.id)}>
+              {x.label}
+              {(counter[x.id] ?? 0) > 0 && <span className="ml-1.5 rounded-full bg-soft px-1.5 text-xs font-extrabold">{counter[x.id]}</span>}
             </button>
           ))}
         </div>
@@ -156469,36 +156471,22 @@ export default function GameNewsPage({ sub = '' }: { sub?: string }) {
 
       {data && tab === 'auto' && rd && <GameNewsRules servers={data.servers} rules={rd.rules} timezone={rd.timezone} reload={() => void loadRules()} />}
 
-      {data && (tab === 'players' || tab === 'discord') && (
-        <ScopeBar
-          servers={data.servers.filter((x) => x.supported && x.hasToken).map((x) => ({ id: x.id, name: x.name }))}
-          value={effScope}
-          onChange={pickScope}
-          own={new Set(Object.values(rd?.overrides ?? {}).flat())}
-        />
-      )}
-
-      {data && (tab === 'players' || tab === 'discord') && rd && (
+      {data && (tab === 'general' || tabServer > 0) && rd && (
         <ScopeContext.Provider value={{
           server: effScope, q, mine: rd.mine,
           changed: () => void loadRules(),
           reset: (part) => { api(`/game-news/server-settings/${effScope}?part=${part}`, 'DELETE').then(() => { setScopeRev((n) => n + 1); return loadRules(); }).catch((e: Error) => toast(errText(e), 'err')); },
         }}>
-          {tab === 'players' && (
-            <div className="space-y-4" key={`p${effScope}-${scopeRev}`}>
-              <WelcomeCard initial={rd.welcome} />
-              <JoinLeaveCard initial={rd.joinLeave} />
-              <RegisterCard initial={rd.register} />
-              <ServerRestartCard />
-              <RestartCard enabled={rd.restartCountdown} onChange={(v) => { api('/game-news/restart-countdown', 'PUT', { enabled: v }).then(() => loadRules()).catch((e: Error) => toast(errText(e), 'err')); }} />
-            </div>
-          )}
-          {tab === 'discord' && (
-            <div className="space-y-4" key={`d${effScope}-${scopeRev}`}>
-              <ChatCard initial={rd.chat} joinText={rd.joinLeave.joinText} leaveText={rd.joinLeave.leaveText} />
-              <ExtrasCard initial={rd.extras} />
-            </div>
-          )}
+          <div className="space-y-4" key={`${tab}-${scopeRev}`}>
+            {serverTabs.length > 0 && <p className="text-sm font-semibold text-mute">{effScope ? t('gn.sc.noteOne') : t('gn.sc.noteAll')}</p>}
+            <WelcomeCard initial={rd.welcome} />
+            <JoinLeaveCard initial={rd.joinLeave} />
+            <RegisterCard initial={rd.register} />
+            <ServerRestartCard />
+            {!effScope && <RestartCard enabled={rd.restartCountdown} onChange={(v) => { api('/game-news/restart-countdown', 'PUT', { enabled: v }).then(() => loadRules()).catch((e: Error) => toast(errText(e), 'err')); }} />}
+            <ChatCard initial={rd.chat} joinText={rd.joinLeave.joinText} leaveText={rd.joinLeave.leaveText} />
+            {!effScope && <ExtrasCard initial={rd.extras} />}
+          </div>
         </ScopeContext.Provider>
       )}
 
@@ -157380,32 +157368,6 @@ export const useScope = () => useContext(ScopeContext);
 
 /** the keys of the settings of the server, by the name of the part */
 const KEY: Record<string, string> = { welcome: 'gamenews_welcome', joinleave: 'gamenews_joinleave', register: 'gamenews_register', chat: 'gamenews_chat', restart: 'gamenews_restart_texts' };
-
-/** «Все серверы · Сервер 1 · Сервер 2»: one choice for the whole page */
-export function ScopeBar({ servers, value, onChange, own }: {
-  servers: { id: number; name: string }[];
-  value: number;
-  onChange: (id: number) => void;
-  /** servers that have settings of their own (a dot on the button) */
-  own: Set<number>;
-}) {
-  useI18n();
-  if (servers.length < 1) return null;
-  return (
-    <div className="panel space-y-2 px-4 py-3">
-      <div className="flex flex-wrap items-center gap-2" role="group" aria-label={t('gn.sc.title')}>
-        <span className="text-sm font-bold text-mute">{t('gn.sc.title')}</span>
-        <button type="button" className={`chip-filter ${value === 0 ? 'on' : ''}`} aria-pressed={value === 0} onClick={() => onChange(0)}>{t('gn.sc.all')}</button>
-        {servers.map((s) => (
-          <button key={s.id} type="button" className={`chip-filter ${value === s.id ? 'on' : ''}`} aria-pressed={value === s.id} onClick={() => onChange(s.id)}>
-            {s.name}{own.has(s.id) && <span aria-label={t('gn.sc.hasOwn')} title={t('gn.sc.hasOwn')} className="ml-1.5 inline-block h-2 w-2 rounded-full bg-accent" />}
-          </button>
-        ))}
-      </div>
-      <p className="text-sm font-semibold text-mute">{value === 0 ? t('gn.sc.noteAll') : t('gn.sc.noteOne')}</p>
-    </div>
-  );
-}
 
 /** inside a card of a server: «uses the general settings» or «own settings» with a way back */
 export function ScopeNote({ part }: { part: keyof typeof KEY }) {
