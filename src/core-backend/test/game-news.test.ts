@@ -114,3 +114,28 @@ describe('new message variables', () => {
     assert.equal(leftText(50 * 3_600_000), '2 д 2 ч');
   });
 });
+
+import { loginFromNick } from '../src/gamenews/gameNewsLogic.ts';
+
+describe('login from a game nickname', () => {
+  const none = () => false;
+  it('keeps a good nickname as it is', () => {
+    assert.equal(loginFromNick('WhiteLegioN', '76561198000000001', none), 'WhiteLegioN');
+    assert.equal(loginFromNick('Белый Легион', '76561198000000001', none), 'Белый Легион');
+  });
+  it('replaces characters the site does not allow', () => {
+    assert.equal(loginFromNick('[RU] Vamp!re*', '76561198000000001', none), '_RU_ Vamp_re_');
+  });
+  it('gives a short or empty name a login made from the game id', () => {
+    assert.equal(loginFromNick('ab', '76561198000001234', none), 'Player_1234');
+    assert.equal(loginFromNick('   ', '76561198000001234', none), 'Player_1234');
+  });
+  it('adds a number while the login is taken, within 32 characters', () => {
+    const used = new Set(['Vamp', 'Vamp2']);
+    assert.equal(loginFromNick('Vamp', '76561198000000001', (l) => used.has(l)), 'Vamp3');
+    const long = 'x'.repeat(40);
+    const l = loginFromNick(long, '76561198000000001', (c) => c === 'x'.repeat(32));
+    assert.equal(l.length <= 32, true);
+    assert.equal(l.endsWith('2'), true);
+  });
+});

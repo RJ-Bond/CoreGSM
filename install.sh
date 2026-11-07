@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="55cb7e5c0ca7"
+COREGSM_BUILD="c4182519c120"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.73"
+COREGSM_VERSION="1.1.74"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -23863,7 +23863,7 @@ import type { Express, Request, RequestHandler } from 'express';
 import { z } from 'zod';
 import { db } from '../db.js';
 import { applyVars, checkNews } from './gameNewsLogic.js';
-import { NAME_SQL, ONLINE_MS, liveState, serverLabel, varsFor } from './gameNewsVars.js';
+import { NAME_SQL, ONLINE_MS, liveState, registerEnabled, serverLabel, varsFor } from './gameNewsVars.js';
 
 export { ONLINE_MS };
 import { joinLeaveFor } from './gameNewsJoinLeave.js';
@@ -23871,14 +23871,14 @@ import { welcomeFor } from './gameNewsWelcome.js';
 
 export const QUEUE_TTL_MS = 5 * 60_000;
 /** the version of the game plugin this panel was built for: an older plugin is shown as outdated */
-export const PLUGIN_VERSION = '0.6.0';
+export const PLUGIN_VERSION = '0.7.0';
 /** the games the plugin exists for */
 export const SUPPORTED_GAMES = new Set(['vrising']);
 const PULL_MIN_GAP_MS = 800;
 const PULL_BATCH = 5;
 const MIN_GAP_MS = 2000;
 
-interface TargetRow { server_id: number; token_hash: string; last_seen: number; plugin_version: string; plugin_name: string; plugin_players: number; plugin_max: number }
+export interface TargetRow { server_id: number; token_hash: string; last_seen: number; plugin_version: string; plugin_name: string; plugin_players: number; plugin_max: number }
 interface LogRow { id: number; server_id: number | null; server_name: string; text: string; status: string; error: string; sent_by: string; sent_at: number; delivered_at: number | null }
 
 let lastSend = 0;
@@ -23894,6 +23894,13 @@ const sendSchema = z.object({
 /** queued messages that waited too long stop being valid */
 function expireOld(now = Date.now()): void {
   db.prepare("UPDATE game_news_log SET status = 'expired', error = 'Плагин не забрал сообщение за 5 минут' WHERE status = 'queued' AND sent_at < ?").run(now - QUEUE_TTL_MS);
+}
+
+/** the server whose plugin sent this request (Authorization: Bearer <token>), or null */
+export function pluginTarget(req: Request): TargetRow | null {
+  const m = /^Bearer ([0-9a-f]{20,100})$/i.exec(String(req.headers.authorization ?? ''));
+  if (!m) return null;
+  return (db.prepare('SELECT * FROM game_news_targets WHERE token_hash = ?').get(sha256(m[1])) as TargetRow | undefined) ?? null;
 }
 
 export interface QueueResult { serverId: number; serverName: string; queued: boolean; online: boolean; error: string }
@@ -24009,9 +24016,7 @@ export function registerGameNews({ app, admin }: { app: Express; admin: RequestH
 
   // ---- for the game plugin: no session, a Bearer token of the server ----
   app.get('/api/game-news/pull', (req, res) => {
-    const m = /^Bearer ([0-9a-f]{20,100})$/i.exec(String(req.headers.authorization ?? ''));
-    if (!m) return res.status(401).json({ error: 'unauthorized' });
-    const t = db.prepare('SELECT * FROM game_news_targets WHERE token_hash = ?').get(sha256(m[1])) as TargetRow | undefined;
+    const t = pluginTarget(req);
     if (!t) return res.status(401).json({ error: 'unauthorized' });
 
     const now = Date.now();
@@ -24035,7 +24040,7 @@ export function registerGameNews({ app, admin }: { app: Express; admin: RequestH
       db.transaction(() => { for (const r of rows) done.run(now, r.id); })();
     }
     // latest = the newest plugin version this panel knows (the plugin logs when it is older); welcome = the greeting for joining players
-    res.json({ messages: rows.map((r) => ({ id: r.id, text: r.text })), latest: PLUGIN_VERSION, ...welcomeFor(t.server_id, now), ...joinLeaveFor() });
+    res.json({ messages: rows.map((r) => ({ id: r.id, text: r.text })), latest: PLUGIN_VERSION, ...welcomeFor(t.server_id, now), ...joinLeaveFor(), register: registerEnabled() });
   });
 }
 __COREGSM_EOF__
@@ -24201,6 +24206,201 @@ export function greenName(text: string): string {
     })
     .join('');
 }
+
+/**
+ * The login for an account made from a game nickname: letters, digits, `_ . -` and single spaces, 3-32 characters
+ * (the rule of the site). `taken` tells whether a login is used; a number is added until it is free.
+ */
+export function loginFromNick(nick: string, platformId: string, taken: (login: string) => boolean): string {
+  let base = plainText(nick)
+    .replace(/[^\p{L}\p{N}_. -]/gu, '_')
+    .replace(/ {2,}/g, ' ')
+    .replace(/^[ ]+|[ ]+$/g, '');
+  if (base.length < 3) base = `Player_${platformId.slice(-4)}`;
+  base = base.slice(0, 32).trim();
+  if (!taken(base)) return base;
+  for (let n = 2; n < 1000; n++) {
+    const suffix = String(n);
+    const cand = `${base.slice(0, 32 - suffix.length).trim()}${suffix}`;
+    if (!taken(cand)) return cand;
+  }
+  return `${base.slice(0, 24)}_${Date.now() % 100000}`;
+}
+
+
+/** one line of plain text: no tags, no control characters */
+function plainText(s: string): string {
+  return Array.from(s, (ch) => (ch.charCodeAt(0) < 32 || ch.charCodeAt(0) === 127 ? ' ' : ch)).join('').replace(/[<>]/g, '').replace(/ {2,}/g, ' ').trim();
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/gamenews"
+  cat > "$APP_DIR/core-backend/src/gamenews/gameNewsRegister.ts" << '__COREGSM_EOF__'
+/**
+ * Registration in the panel from inside the game.
+ *
+ *  - A player joins: the plugin asks  GET /api/game-news/player/status  (who the player is: the platform id of the game
+ *    account). A player who has no account is told how to register; a registered one without Discord gets a hint now and
+ *    then. Everything the player reads comes from here (texts are set in the panel), the plugin only shows it.
+ *  - The player types  .register <password> <password again>  and the plugin calls  POST /api/game-news/player/register.
+ *    The panel creates the account (the login is the game nickname, with a number added when it is taken), links it to the
+ *    nickname and to the platform id, and answers with the lines to show.
+ *
+ * The rules of the panel stay in force: a closed registration stays closed, a registration by request becomes a request,
+ * the password policy is the same as on the site, registering counts as agreeing with the community rules. The password
+ * is never logged and never stored in clear text.
+ */
+import bcrypt from 'bcryptjs';
+import type { Express, RequestHandler } from 'express';
+import { z } from 'zod';
+import { needsSetup, publicBase, registrationMode, rulesText } from '../admin/site.js';
+import { db, getSetting, setSetting } from '../db.js';
+import { recordConsent } from '../monitoring/rules.js';
+import { passwordError } from '../security/passwordPolicy.js';
+import { registrationOpen } from '../security/auth.js';
+import { pluginTarget } from './gameNews.js';
+import { plainLine } from './gameNewsJoinLeave.js';
+import { loginFromNick } from './gameNewsLogic.js';
+
+export interface RegisterSettings {
+  enabled: boolean;
+  /** shown to a player without an account at every join */
+  promptText: string;
+  /** after a successful registration: {login} {panel} */
+  doneText: string;
+  /** the Discord hint: {panel} */
+  discordText: string;
+  /** registration by request: the request is sent */
+  pendingText: string;
+  /** how often the Discord hint is repeated for the same player, hours */
+  discordEveryHours: number;
+}
+
+export const DEFAULT_REGISTER: RegisterSettings = {
+  enabled: false,
+  promptText: '* Вы ещё не зарегистрированы в панели. Для регистрации введите .register пароль подтверждение_пароля',
+  doneText: '* Готово! Вы зарегистрированы в панели, ваш логин: {login}',
+  discordText: '* Привяжите Discord в профиле панели ({panel}), чтобы управлять аккаунтом через Discord.',
+  pendingText: '* Заявка на регистрацию отправлена. Когда администратор её одобрит, вы сможете войти в панель.',
+  discordEveryHours: 24,
+};
+
+// the colours of the lines the player reads
+const C_INFO = '#FFCC33';
+const C_GOOD = '#5FD068';
+const C_BAD = '#FF5555';
+const C_HINT = '#6EC1FF';
+const tag = (color: string, text: string): string => `<color=${color}>${plainLine(text)}</color>`;
+
+export function getRegisterSettings(): RegisterSettings {
+  try {
+    const v = JSON.parse(getSetting('gamenews_register') || '{}') as Partial<RegisterSettings>;
+    const d = DEFAULT_REGISTER;
+    const text = (x: unknown, def: string) => (typeof x === 'string' && x.trim() ? x : def);
+    return {
+      enabled: !!v.enabled,
+      promptText: text(v.promptText, d.promptText),
+      doneText: text(v.doneText, d.doneText),
+      discordText: text(v.discordText, d.discordText),
+      pendingText: text(v.pendingText, d.pendingText),
+      discordEveryHours: Number.isFinite(v.discordEveryHours) ? Math.min(720, Math.max(1, Math.round(v.discordEveryHours as number))) : d.discordEveryHours,
+    };
+  } catch {
+    return { ...DEFAULT_REGISTER };
+  }
+}
+
+export function setRegisterSettings(v: RegisterSettings): void {
+  setSetting('gamenews_register', JSON.stringify(v));
+}
+
+const fill = (text: string, vars: { login?: string; panel: string }): string =>
+  text.replace(/\{login\}/g, vars.login ?? '').replace(/\{panel\}/g, vars.panel);
+
+const panelUrl = (): string => (publicBase() ?? '').replace(/^https?:\/\//, '');
+
+// ---- brute force: a few tries an hour for one game account
+const tries = new Map<string, { n: number; reset: number }>();
+function tooMany(id: string, now: number): boolean {
+  const e = tries.get(id);
+  if (!e || e.reset < now) { tries.set(id, { n: 1, reset: now + 3_600_000 }); return false; }
+  e.n++;
+  return e.n > 8;
+}
+
+interface IdentityRow { platform_id: string; user_id: number; last_hint_at: number }
+interface UserRow { id: number; status: string; discord_id: string | null }
+
+const idSchema = z.string().regex(/^\d{5,25}$/);
+
+export function registerGameNewsPlayers({ app }: { app: Express }): void {
+  const plugin: RequestHandler = (req, res, next) => {
+    const t = pluginTarget(req);
+    if (!t) return res.status(401).json({ error: 'unauthorized' });
+    (req as typeof req & { gameServerId?: number }).gameServerId = t.server_id;
+    next();
+  };
+
+  // who is this player: what should they read now
+  app.get('/api/game-news/player/status', plugin, (req, res) => {
+    const s = getRegisterSettings();
+    const id = idSchema.safeParse(String(req.query.id ?? ''));
+    if (!s.enabled || !id.success) return res.json({ registered: false, replies: [] });
+    const now = Date.now();
+    const who = db.prepare('SELECT * FROM game_identities WHERE platform_id = ?').get(id.data) as IdentityRow | undefined;
+    if (!who) {
+      // nobody can register while the panel is closed or not set up: no use to invite
+      if (needsSetup() || !registrationOpen()) return res.json({ registered: false, replies: [] });
+      return res.json({ registered: false, replies: [tag(C_INFO, fill(s.promptText, { panel: panelUrl() }))] });
+    }
+    const u = db.prepare('SELECT id, status, discord_id FROM users WHERE id = ?').get(who.user_id) as UserRow | undefined;
+    const due = now - who.last_hint_at >= s.discordEveryHours * 3_600_000;
+    if (u && u.status === 'active' && !u.discord_id && due) {
+      db.prepare('UPDATE game_identities SET last_hint_at = ? WHERE platform_id = ?').run(now, id.data);
+      return res.json({ registered: true, replies: [tag(C_HINT, fill(s.discordText, { panel: panelUrl() }))] });
+    }
+    res.json({ registered: true, replies: [] });
+  });
+
+  // .register <password> <password again>
+  app.post('/api/game-news/player/register', plugin, async (req, res) => {
+    const b = z.object({ id: idSchema, name: z.string().max(100), password: z.string().min(1).max(256) }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ replies: [tag(C_BAD, '* Не удалось разобрать команду. Введите: .register пароль подтверждение_пароля')] });
+    const s = getRegisterSettings();
+    const now = Date.now();
+    const say = (color: string, text: string) => res.json({ ok: false, replies: [tag(color, text)] });
+    if (!s.enabled) return say(C_BAD, '* Регистрация из игры отключена.');
+    if (tooMany(b.data.id, now)) return say(C_BAD, '* Слишком много попыток. Попробуйте позже.');
+    if (needsSetup() || !registrationOpen()) return say(C_BAD, '* Регистрация в панели сейчас закрыта.');
+    if (db.prepare('SELECT 1 FROM game_identities WHERE platform_id = ?').get(b.data.id)) return say(C_INFO, '* Вы уже зарегистрированы в панели.');
+
+    const taken = (login: string) => !!db.prepare('SELECT 1 FROM users WHERE ulower(username) = ?').get(login.toLowerCase());
+    const login = loginFromNick(b.data.name, b.data.id, taken);
+    // the same password policy as on the site
+    const weak = b.data.password.length < 8 ? 'Пароль должен быть не короче 8 символов' : passwordError(b.data.password, { username: login, role: 'player' });
+    if (weak) return say(C_BAD, `* ${weak}`);
+
+    const hash = await bcrypt.hash(b.data.password, 12);
+    const pending = registrationMode() === 'approval';
+    let userId: number;
+    try {
+      userId = Number(db.prepare("INSERT INTO users (username, password_hash, role, created_at, status) VALUES (?, ?, 'player', ?, ?)").run(login, hash, now, pending ? 'pending' : 'active').lastInsertRowid);
+    } catch {
+      return say(C_BAD, '* Не удалось создать аккаунт: логин занят. Попробуйте ещё раз.');
+    }
+    if (rulesText()) recordConsent(userId, 'game'); // registering counts as agreeing with the rules
+    db.prepare('INSERT INTO game_identities (platform_id, user_id, nick, created_at, last_hint_at) VALUES (?, ?, ?, ?, ?)').run(b.data.id, userId, b.data.name, now, now);
+    // the nickname is linked to the account unless another account has taken it already
+    const nick = plainLine(b.data.name).slice(0, 40);
+    if (nick && !db.prepare('SELECT 1 FROM user_player WHERE ulower(game_nick) = ulower(?)').get(nick)) {
+      db.prepare("INSERT INTO user_player (user_id, game_nick, bio, public_profile) VALUES (?, ?, '', 0) ON CONFLICT(user_id) DO NOTHING").run(userId, nick);
+    }
+    db.prepare('INSERT INTO audit (ts, actor, action, detail) VALUES (?, ?, ?, ?)').run(now, 'game-plugin', 'game_register', login);
+
+    const vars = { login, panel: panelUrl() };
+    if (pending) return res.json({ ok: true, pending: true, login, replies: [tag(C_GOOD, fill(s.pendingText, vars))] });
+    res.json({ ok: true, login, replies: [tag(C_GOOD, fill(s.doneText, vars)), tag(C_HINT, fill(s.discordText, vars))] });
+  });
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/gamenews"
   cat > "$APP_DIR/core-backend/src/gamenews/gameNewsRestart.ts" << '__COREGSM_EOF__'
@@ -24258,6 +24458,7 @@ import { z } from 'zod';
 import { db, getSetting, setSetting } from '../db.js';
 import { countdownEnabled } from './gameNewsRestart.js';
 import { getJoinLeave, isHexColor, plainLine, setJoinLeave } from './gameNewsJoinLeave.js';
+import { getRegisterSettings, setRegisterSettings } from './gameNewsRegister.js';
 import { getWelcome, setWelcome } from './gameNewsWelcome.js';
 import { MAX_TIPS, getExtras, setExtras } from './gameNewsVars.js';
 import { log } from '../logger.js';
@@ -24347,7 +24548,7 @@ export function registerGameNewsRules({ app, admin }: { app: Express; admin: Req
 
   app.get('/api/game-news/rules', admin, (_req, res) => {
     const rows = db.prepare('SELECT * FROM game_news_rules ORDER BY id').all() as RuleRow[];
-    res.json({ timezone: tz(), restartCountdown: countdownEnabled(), welcome: getWelcome(), joinLeave: getJoinLeave(), extras: getExtras(), rules: rows.map(serialize) });
+    res.json({ timezone: tz(), restartCountdown: countdownEnabled(), welcome: getWelcome(), joinLeave: getJoinLeave(), extras: getExtras(), register: getRegisterSettings(), rules: rows.map(serialize) });
   });
 
   // the countdown «через 10 / 5 / 1 минуту» before the planned restarts of monitoring/restarts.ts
@@ -24390,6 +24591,26 @@ export function registerGameNewsRules({ app, admin }: { app: Express; admin: Req
     out.text = t1;
     out.newText = t2;
     setWelcome(out);
+    res.json({ ok: true });
+  });
+
+  // registration from the game: switch and texts
+  app.put('/api/game-news/register-settings', admin, (req, res) => {
+    const b = z.object({
+      enabled: z.boolean(), promptText: z.string().max(300), doneText: z.string().max(300), discordText: z.string().max(300),
+      pendingText: z.string().max(300), discordEveryHours: z.number().int().min(1).max(720),
+    }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'Проверьте поля' });
+    const d = getRegisterSettings();
+    const keep = (x: string, old: string) => plainLine(x) || old;
+    setRegisterSettings({
+      enabled: b.data.enabled,
+      promptText: keep(b.data.promptText, d.promptText),
+      doneText: keep(b.data.doneText, d.doneText),
+      discordText: keep(b.data.discordText, d.discordText),
+      pendingText: keep(b.data.pendingText, d.pendingText),
+      discordEveryHours: b.data.discordEveryHours,
+    });
     res.json({ ok: true });
   });
 
@@ -24610,6 +24831,11 @@ function restartLeft(serverId: number, now: number): string {
 function nextWipe(serverId: number, now: number): string {
   const w = db.prepare("SELECT wipe_at FROM wipe_scenarios WHERE server_id = ? AND status = 'scheduled' AND wipe_at > ? ORDER BY wipe_at LIMIT 1").get(serverId, now) as { wipe_at: number } | undefined;
   return w ? fmt(w.wipe_at, { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—';
+}
+
+/** registration from the game is switched on (the setting is kept by gameNewsRegister.ts) */
+export function registerEnabled(): boolean {
+  try { return (JSON.parse(getSetting('gamenews_register') || '{}') as { enabled?: boolean }).enabled === true; } catch { return false; }
 }
 
 // ---- what the administrator keeps for {discord} and {tip}
@@ -26937,6 +27163,7 @@ import { registerMetrics } from './monitoring/metrics.js';
 import { wrap } from './http.js';
 import { registerMaintenance } from './maintenance.js';
 import { registerGameNews } from './gamenews/gameNews.js';
+import { registerGameNewsPlayers } from './gamenews/gameNewsRegister.js';
 import { registerGameNewsRules, startGameNewsTimer, stopGameNewsTimer } from './gamenews/gameNewsRules.js';
 import { registerStatusNotes } from './alerts/statusNotes.js';
 import { registerNews } from './news/news.js';
@@ -27131,6 +27358,7 @@ registerMaintenance({ app, admin: allow('maintenance'), viewer });
 registerStatusNotes({ app, admin: allow('maintenance') });
 registerGameNews({ app, admin });
 registerGameNewsRules({ app, admin });
+registerGameNewsPlayers({ app });
 registerHealth({ app, admin, bot: () => bot.status });
 startDbMaintenance();
 registerOverview({ app, viewer });
@@ -27715,6 +27943,20 @@ CREATE TABLE IF NOT EXISTS game_news_templates (
       addColumn(db, 'game_news_targets', 'plugin_players', 'INTEGER NOT NULL DEFAULT -1');
       addColumn(db, 'game_news_targets', 'plugin_max', 'INTEGER NOT NULL DEFAULT 0');
     },
+  },
+  {
+    version: 21,
+    name: 'game_identities',
+    // a player's game account (the platform id the game server verified) and the panel account made from the game
+    up: (db) => db.exec(`
+CREATE TABLE IF NOT EXISTS game_identities (
+  platform_id TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  nick TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL,
+  last_hint_at INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_game_identities_user ON game_identities(user_id);`),
   },
 ];
 
@@ -30092,7 +30334,7 @@ export function currentRules(): RulesVersion | null {
   return { version: n, text };
 }
 
-export function recordConsent(userId: number, via: 'web' | 'discord' | 'panel'): void {
+export function recordConsent(userId: number, via: 'web' | 'discord' | 'panel' | 'game'): void {
   const c = currentRules();
   if (!c) return;
   db.prepare('INSERT OR IGNORE INTO rules_consent (user_id, version, agreed_at, via) VALUES (?, ?, ?, ?)').run(userId, c.version, Date.now(), via);
@@ -138650,6 +138892,16 @@ export const WELCOME_STYLES: WelcomeStyle[] = [
     newText: '<color=#B86BFF><b>Добро пожаловать, {name}!</b></color> <color=#FFB347>Приятной игры на {server}!</color> <color=#6EC1FF>Совет: {tip}</color>',
   },
 ];
+
+/** registration in the panel from the game: switch, texts and how often the Discord hint is repeated */
+export interface RegisterSettings {
+  enabled: boolean;
+  promptText: string;
+  doneText: string;
+  discordText: string;
+  pendingText: string;
+  discordEveryHours: number;
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/gameProfiles.ts" << '__COREGSM_EOF__'
@@ -142012,7 +142264,17 @@ const en: Record<keyof typeof ru, string> = {
   'gn.h.expired': 'Not delivered',
   'gn.h.fail': 'Failed',
   'gn.reuse': 'Use again',  'adm.s.alerts': 'Alerts',
-  'gn.chatSystem': 'SYSTEM',
+  'gn.rg.title': 'Registration in the panel from the game',
+  'gn.rg.note': 'A player without an account sees a hint on joining and registers with a chat command: .register password password_again. The login in the panel is the game nickname and the account is linked to it at once. Needs plugin 0.7.0 and VampireCommandFramework on the server.',
+  'gn.rg.enabled': 'Allow registration from the game',
+  'gn.rg.prompt': 'A hint for a player without an account (at every join)',
+  'gn.rg.done': 'The message after registering ({login} is the login)',
+  'gn.rg.discord': 'The hint to link Discord ({panel} is the panel address)',
+  'gn.rg.pending': 'When registration is by request',
+  'gn.rg.hours': 'Remind about Discord no more often than every (hours)',
+  'gn.rg.badHours': 'From 1 to 720 hours',
+  'gn.rg.vars': 'The registration mode of the panel (open, by request, closed) and the community rules are respected: registering from the game counts as agreeing with the rules. The password is checked as on the site.',
+  'gn.rg.warn': 'The password is typed in the game chat: only the player sees the command, but the password goes through the game server. Tell players not to use a password from other services.',  'gn.chatSystem': 'SYSTEM',
   'gn.v.greeting': 'Good morning / afternoon / evening / night by the time of day',
   'gn.v.restart': 'How long is left until the planned restart',
   'gn.v.wipe': 'The date of the next wipe',
@@ -146519,7 +146781,17 @@ const ru = {
   'gn.h.expired': 'Не доставлено',
   'gn.h.fail': 'Ошибка',
   'gn.reuse': 'Использовать снова',  'adm.s.alerts': 'Оповещения',
-  'gn.chatSystem': 'СИСТЕМА',
+  'gn.rg.title': 'Регистрация в панели из игры',
+  'gn.rg.note': 'Игрок без аккаунта видит подсказку при входе и регистрируется командой в чате: .register пароль подтверждение_пароля. Логин в панели берётся из игрового ника, аккаунт сразу привязывается к нику. Нужны плагин 0.7.0 и VampireCommandFramework на сервере.',
+  'gn.rg.enabled': 'Разрешить регистрацию из игры',
+  'gn.rg.prompt': 'Подсказка игроку без аккаунта (при каждом входе)',
+  'gn.rg.done': 'Сообщение после регистрации ({login} — логин)',
+  'gn.rg.discord': 'Подсказка привязать Discord ({panel} — адрес панели)',
+  'gn.rg.pending': 'Если регистрация по заявкам',
+  'gn.rg.hours': 'Напоминать про Discord не чаще, чем раз в (часов)',
+  'gn.rg.badHours': 'От 1 до 720 часов',
+  'gn.rg.vars': 'Режим регистрации панели (открыта, по заявкам, закрыта) и правила сообщества соблюдаются: регистрация из игры считается согласием с правилами. Пароль проверяется так же, как на сайте.',
+  'gn.rg.warn': 'Пароль набирается в чате игры: команду видит только сам игрок, но пароль проходит через игровой сервер. Предупредите игроков не использовать пароль от других сервисов.',  'gn.chatSystem': 'СИСТЕМА',
   'gn.v.greeting': 'Доброе утро / день / вечер / ночь по времени суток',
   'gn.v.restart': 'Сколько осталось до планового рестарта',
   'gn.v.wipe': 'Дата ближайшего вайпа',
@@ -154862,12 +155134,12 @@ import { confirmDialog } from '../confirm';
 import { t, useI18n } from '../i18n';
 import {
   INTERVAL_PRESETS, SWATCHES, WELCOME_STYLES, WELCOME_VARIABLES, composeLine, emptyRule, isHex, isHHMM, validateNews, validateRule,
-  type Extras, type JoinLeave, type Welcome, type WelcomeStyle, type NewsServerInfo, type RuleBody, type RuleInfo, type RuleKind,
+  type Extras, type JoinLeave, type RegisterSettings, type Welcome, type WelcomeStyle, type NewsServerInfo, type RuleBody, type RuleInfo, type RuleKind,
 } from '../gameNews';
 import { fromLocalInput, toLocalInput } from '../maintenance';
 import { ErrorLine, Field, IconEdit, IconPlus, IconTrash, LoadError, Modal, SaveBadge, Spinner, errText, toast, useAutosave, usePoll } from '../ui';
 
-interface RulesState { timezone: string; restartCountdown: boolean; welcome: Welcome; joinLeave: JoinLeave; extras: Extras; rules: RuleInfo[] }
+interface RulesState { timezone: string; restartCountdown: boolean; welcome: Welcome; joinLeave: JoinLeave; extras: Extras; register: RegisterSettings; rules: RuleInfo[] }
 
 const when = (ts: number | null) => (ts ? new Date(ts).toLocaleString() : '—');
 
@@ -154946,6 +155218,8 @@ export default function GameNewsRules({ servers, part }: { servers: NewsServerIn
       {data && part === 'events' && <JoinLeaveCard initial={data.joinLeave} />}
 
       {data && part === 'events' && <WelcomeCard initial={data.welcome} />}
+
+      {data && part === 'events' && <RegisterCard initial={data.register} />}
 
       {data && part === 'events' && <ExtrasCard initial={data.extras} />}
 
@@ -155323,6 +155597,67 @@ function JoinLeaveCard({ initial }: { initial: JoinLeave }) {
 
       <ChatLines lines={[sample(f.joinText), sample(f.leaveText)]} />
       <p className="text-sm font-semibold text-mute">{t('gn.jl.nameHint')}</p>
+      {auto.invalid && <p className="text-sm font-semibold text-danger">{auto.error}</p>}
+    </section>
+  );
+}
+
+/**
+ * Registration in the panel from the game: a player without an account is told to type .register <password> <again>,
+ * the account is made with the game nickname as the login, and the player is reminded to link Discord. Saves by itself.
+ */
+function RegisterCard({ initial }: { initial: RegisterSettings }) {
+  useI18n();
+  const [f, setF] = useState<RegisterSettings>(initial);
+  const [saved, setSaved] = useState<RegisterSettings>(initial);
+  const set = <K extends keyof RegisterSettings>(k: K, v: RegisterSettings[K]) => setF((x) => ({ ...x, [k]: v }));
+  const auto = useAutosave({
+    value: f,
+    saved,
+    delay: 900,
+    validate: (v) => {
+      if (!Number.isInteger(v.discordEveryHours) || v.discordEveryHours < 1 || v.discordEveryHours > 720) return t('gn.rg.badHours');
+      return [v.promptText, v.doneText, v.discordText, v.pendingText].some((x) => !x.trim()) ? t('gn.hint.text') : null;
+    },
+    save: async (v) => { await api('/game-news/register-settings', 'PUT', v); setSaved(v); },
+  });
+  const sample = (text: string, color: string) => `<color=${color}>${text.replace(/[<>]/g, '').replace(/\{login\}/g, 'WhiteLegioN').replace(/\{panel\}/g, 'coregsm.example.com')}</color>`;
+
+  const field = (label: string, key: 'promptText' | 'doneText' | 'discordText' | 'pendingText') => (
+    <Field label={label}>
+      <input className="input" value={f[key]} maxLength={300} onChange={(e) => set(key, e.target.value)} />
+    </Field>
+  );
+
+  return (
+    <section className="panel space-y-4 p-5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0 flex-1 basis-72">
+          <h3 className="font-extrabold">{t('gn.rg.title')}</h3>
+          <p className="text-sm font-semibold text-mute">{t('gn.rg.note')}</p>
+        </div>
+        <SaveBadge status={auto.status} error={auto.error} retry={auto.retry} />
+      </div>
+
+      <label className="flex items-center gap-2.5 font-bold">
+        <input type="checkbox" checked={f.enabled} onChange={(e) => set('enabled', e.target.checked)} />
+        {t('gn.rg.enabled')}
+      </label>
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        {field(t('gn.rg.prompt'), 'promptText')}
+        {field(t('gn.rg.done'), 'doneText')}
+        {field(t('gn.rg.discord'), 'discordText')}
+        {field(t('gn.rg.pending'), 'pendingText')}
+      </div>
+
+      <Field label={t('gn.rg.hours')}>
+        <input className="input w-32" type="number" min={1} max={720} value={f.discordEveryHours} onChange={(e) => set('discordEveryHours', Number(e.target.value))} />
+      </Field>
+
+      <ChatLines lines={[sample(f.promptText, '#FFCC33'), sample(f.doneText, '#5FD068'), sample(f.discordText, '#6EC1FF')]} />
+      <p className="text-sm font-semibold text-mute">{t('gn.rg.vars')}</p>
+      <p className="text-sm font-semibold text-danger">{t('gn.rg.warn')}</p>
       {auto.invalid && <p className="text-sm font-semibold text-danger">{auto.error}</p>}
     </section>
   );

@@ -39,7 +39,7 @@ export function currentRules(): RulesVersion | null {
   return { version: n, text };
 }
 
-export function recordConsent(userId: number, via: 'web' | 'discord' | 'panel'): void {
+export function recordConsent(userId: number, via: 'web' | 'discord' | 'panel' | 'game'): void {
   const c = currentRules();
   if (!c) return;
   db.prepare('INSERT OR IGNORE INTO rules_consent (user_id, version, agreed_at, via) VALUES (?, ?, ?, ?)').run(userId, c.version, Date.now(), via);

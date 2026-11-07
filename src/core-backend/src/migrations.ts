@@ -279,6 +279,20 @@ CREATE TABLE IF NOT EXISTS game_news_templates (
       addColumn(db, 'game_news_targets', 'plugin_max', 'INTEGER NOT NULL DEFAULT 0');
     },
   },
+  {
+    version: 21,
+    name: 'game_identities',
+    // a player's game account (the platform id the game server verified) and the panel account made from the game
+    up: (db) => db.exec(`
+CREATE TABLE IF NOT EXISTS game_identities (
+  platform_id TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  nick TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL,
+  last_hint_at INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_game_identities_user ON game_identities(user_id);`),
+  },
 ];
 
 export const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;

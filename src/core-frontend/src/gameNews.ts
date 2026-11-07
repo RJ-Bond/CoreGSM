@@ -245,3 +245,13 @@ export const WELCOME_STYLES: WelcomeStyle[] = [
     newText: '<color=#B86BFF><b>Добро пожаловать, {name}!</b></color> <color=#FFB347>Приятной игры на {server}!</color> <color=#6EC1FF>Совет: {tip}</color>',
   },
 ];
+
+/** registration in the panel from the game: switch, texts and how often the Discord hint is repeated */
+export interface RegisterSettings {
+  enabled: boolean;
+  promptText: string;
+  doneText: string;
+  discordText: string;
+  pendingText: string;
+  discordEveryHours: number;
+}

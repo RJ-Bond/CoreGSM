@@ -13,7 +13,7 @@ import type { Express, Request, RequestHandler } from 'express';
 import { z } from 'zod';
 import { db } from '../db.js';
 import { applyVars, checkNews } from './gameNewsLogic.js';
-import { NAME_SQL, ONLINE_MS, liveState, serverLabel, varsFor } from './gameNewsVars.js';
+import { NAME_SQL, ONLINE_MS, liveState, registerEnabled, serverLabel, varsFor } from './gameNewsVars.js';
 
 export { ONLINE_MS };
 import { joinLeaveFor } from './gameNewsJoinLeave.js';
@@ -21,14 +21,14 @@ import { welcomeFor } from './gameNewsWelcome.js';
 
 export const QUEUE_TTL_MS = 5 * 60_000;
 /** the version of the game plugin this panel was built for: an older plugin is shown as outdated */
-export const PLUGIN_VERSION = '0.6.0';
+export const PLUGIN_VERSION = '0.7.0';
 /** the games the plugin exists for */
 export const SUPPORTED_GAMES = new Set(['vrising']);
 const PULL_MIN_GAP_MS = 800;
 const PULL_BATCH = 5;
 const MIN_GAP_MS = 2000;
 
-interface TargetRow { server_id: number; token_hash: string; last_seen: number; plugin_version: string; plugin_name: string; plugin_players: number; plugin_max: number }
+export interface TargetRow { server_id: number; token_hash: string; last_seen: number; plugin_version: string; plugin_name: string; plugin_players: number; plugin_max: number }
 interface LogRow { id: number; server_id: number | null; server_name: string; text: string; status: string; error: string; sent_by: string; sent_at: number; delivered_at: number | null }
 
 let lastSend = 0;
@@ -44,6 +44,13 @@ const sendSchema = z.object({
 /** queued messages that waited too long stop being valid */
 function expireOld(now = Date.now()): void {
   db.prepare("UPDATE game_news_log SET status = 'expired', error = 'Плагин не забрал сообщение за 5 минут' WHERE status = 'queued' AND sent_at < ?").run(now - QUEUE_TTL_MS);
+}
+
+/** the server whose plugin sent this request (Authorization: Bearer <token>), or null */
+export function pluginTarget(req: Request): TargetRow | null {
+  const m = /^Bearer ([0-9a-f]{20,100})$/i.exec(String(req.headers.authorization ?? ''));
+  if (!m) return null;
+  return (db.prepare('SELECT * FROM game_news_targets WHERE token_hash = ?').get(sha256(m[1])) as TargetRow | undefined) ?? null;
 }
 
 export interface QueueResult { serverId: number; serverName: string; queued: boolean; online: boolean; error: string }
@@ -159,9 +166,7 @@ export function registerGameNews({ app, admin }: { app: Express; admin: RequestH
 
   // ---- for the game plugin: no session, a Bearer token of the server ----
   app.get('/api/game-news/pull', (req, res) => {
-    const m = /^Bearer ([0-9a-f]{20,100})$/i.exec(String(req.headers.authorization ?? ''));
-    if (!m) return res.status(401).json({ error: 'unauthorized' });
-    const t = db.prepare('SELECT * FROM game_news_targets WHERE token_hash = ?').get(sha256(m[1])) as TargetRow | undefined;
+    const t = pluginTarget(req);
     if (!t) return res.status(401).json({ error: 'unauthorized' });
 
     const now = Date.now();
@@ -185,6 +190,6 @@ export function registerGameNews({ app, admin }: { app: Express; admin: RequestH
       db.transaction(() => { for (const r of rows) done.run(now, r.id); })();
     }
     // latest = the newest plugin version this panel knows (the plugin logs when it is older); welcome = the greeting for joining players
-    res.json({ messages: rows.map((r) => ({ id: r.id, text: r.text })), latest: PLUGIN_VERSION, ...welcomeFor(t.server_id, now), ...joinLeaveFor() });
+    res.json({ messages: rows.map((r) => ({ id: r.id, text: r.text })), latest: PLUGIN_VERSION, ...welcomeFor(t.server_id, now), ...joinLeaveFor(), register: registerEnabled() });
   });
 }

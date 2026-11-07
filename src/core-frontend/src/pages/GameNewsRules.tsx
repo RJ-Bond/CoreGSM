@@ -6,12 +6,12 @@ import { confirmDialog } from '../confirm';
 import { t, useI18n } from '../i18n';
 import {
   INTERVAL_PRESETS, SWATCHES, WELCOME_STYLES, WELCOME_VARIABLES, composeLine, emptyRule, isHex, isHHMM, validateNews, validateRule,
-  type Extras, type JoinLeave, type Welcome, type WelcomeStyle, type NewsServerInfo, type RuleBody, type RuleInfo, type RuleKind,
+  type Extras, type JoinLeave, type RegisterSettings, type Welcome, type WelcomeStyle, type NewsServerInfo, type RuleBody, type RuleInfo, type RuleKind,
 } from '../gameNews';
 import { fromLocalInput, toLocalInput } from '../maintenance';
 import { ErrorLine, Field, IconEdit, IconPlus, IconTrash, LoadError, Modal, SaveBadge, Spinner, errText, toast, useAutosave, usePoll } from '../ui';
 
-interface RulesState { timezone: string; restartCountdown: boolean; welcome: Welcome; joinLeave: JoinLeave; extras: Extras; rules: RuleInfo[] }
+interface RulesState { timezone: string; restartCountdown: boolean; welcome: Welcome; joinLeave: JoinLeave; extras: Extras; register: RegisterSettings; rules: RuleInfo[] }
 
 const when = (ts: number | null) => (ts ? new Date(ts).toLocaleString() : '—');
 
@@ -90,6 +90,8 @@ export default function GameNewsRules({ servers, part }: { servers: NewsServerIn
       {data && part === 'events' && <JoinLeaveCard initial={data.joinLeave} />}
 
       {data && part === 'events' && <WelcomeCard initial={data.welcome} />}
+
+      {data && part === 'events' && <RegisterCard initial={data.register} />}
 
       {data && part === 'events' && <ExtrasCard initial={data.extras} />}
 
@@ -467,6 +469,67 @@ function JoinLeaveCard({ initial }: { initial: JoinLeave }) {
 
       <ChatLines lines={[sample(f.joinText), sample(f.leaveText)]} />
       <p className="text-sm font-semibold text-mute">{t('gn.jl.nameHint')}</p>
+      {auto.invalid && <p className="text-sm font-semibold text-danger">{auto.error}</p>}
+    </section>
+  );
+}
+
+/**
+ * Registration in the panel from the game: a player without an account is told to type .register <password> <again>,
+ * the account is made with the game nickname as the login, and the player is reminded to link Discord. Saves by itself.
+ */
+function RegisterCard({ initial }: { initial: RegisterSettings }) {
+  useI18n();
+  const [f, setF] = useState<RegisterSettings>(initial);
+  const [saved, setSaved] = useState<RegisterSettings>(initial);
+  const set = <K extends keyof RegisterSettings>(k: K, v: RegisterSettings[K]) => setF((x) => ({ ...x, [k]: v }));
+  const auto = useAutosave({
+    value: f,
+    saved,
+    delay: 900,
+    validate: (v) => {
+      if (!Number.isInteger(v.discordEveryHours) || v.discordEveryHours < 1 || v.discordEveryHours > 720) return t('gn.rg.badHours');
+      return [v.promptText, v.doneText, v.discordText, v.pendingText].some((x) => !x.trim()) ? t('gn.hint.text') : null;
+    },
+    save: async (v) => { await api('/game-news/register-settings', 'PUT', v); setSaved(v); },
+  });
+  const sample = (text: string, color: string) => `<color=${color}>${text.replace(/[<>]/g, '').replace(/\{login\}/g, 'WhiteLegioN').replace(/\{panel\}/g, 'coregsm.example.com')}</color>`;
+
+  const field = (label: string, key: 'promptText' | 'doneText' | 'discordText' | 'pendingText') => (
+    <Field label={label}>
+      <input className="input" value={f[key]} maxLength={300} onChange={(e) => set(key, e.target.value)} />
+    </Field>
+  );
+
+  return (
+    <section className="panel space-y-4 p-5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0 flex-1 basis-72">
+          <h3 className="font-extrabold">{t('gn.rg.title')}</h3>
+          <p className="text-sm font-semibold text-mute">{t('gn.rg.note')}</p>
+        </div>
+        <SaveBadge status={auto.status} error={auto.error} retry={auto.retry} />
+      </div>
+
+      <label className="flex items-center gap-2.5 font-bold">
+        <input type="checkbox" checked={f.enabled} onChange={(e) => set('enabled', e.target.checked)} />
+        {t('gn.rg.enabled')}
+      </label>
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        {field(t('gn.rg.prompt'), 'promptText')}
+        {field(t('gn.rg.done'), 'doneText')}
+        {field(t('gn.rg.discord'), 'discordText')}
+        {field(t('gn.rg.pending'), 'pendingText')}
+      </div>
+
+      <Field label={t('gn.rg.hours')}>
+        <input className="input w-32" type="number" min={1} max={720} value={f.discordEveryHours} onChange={(e) => set('discordEveryHours', Number(e.target.value))} />
+      </Field>
+
+      <ChatLines lines={[sample(f.promptText, '#FFCC33'), sample(f.doneText, '#5FD068'), sample(f.discordText, '#6EC1FF')]} />
+      <p className="text-sm font-semibold text-mute">{t('gn.rg.vars')}</p>
+      <p className="text-sm font-semibold text-danger">{t('gn.rg.warn')}</p>
       {auto.invalid && <p className="text-sm font-semibold text-danger">{auto.error}</p>}
     </section>
   );

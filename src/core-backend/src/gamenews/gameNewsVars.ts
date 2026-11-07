@@ -72,6 +72,11 @@ function nextWipe(serverId: number, now: number): string {
   return w ? fmt(w.wipe_at, { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—';
 }
 
+/** registration from the game is switched on (the setting is kept by gameNewsRegister.ts) */
+export function registerEnabled(): boolean {
+  try { return (JSON.parse(getSetting('gamenews_register') || '{}') as { enabled?: boolean }).enabled === true; } catch { return false; }
+}
+
 // ---- what the administrator keeps for {discord} and {tip}
 export interface Extras { discord: string; tips: string[] }
 export const MAX_TIPS = 20;

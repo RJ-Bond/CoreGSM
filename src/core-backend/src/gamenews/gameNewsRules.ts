@@ -7,6 +7,7 @@ import { z } from 'zod';
 import { db, getSetting, setSetting } from '../db.js';
 import { countdownEnabled } from './gameNewsRestart.js';
 import { getJoinLeave, isHexColor, plainLine, setJoinLeave } from './gameNewsJoinLeave.js';
+import { getRegisterSettings, setRegisterSettings } from './gameNewsRegister.js';
 import { getWelcome, setWelcome } from './gameNewsWelcome.js';
 import { MAX_TIPS, getExtras, setExtras } from './gameNewsVars.js';
 import { log } from '../logger.js';
@@ -96,7 +97,7 @@ export function registerGameNewsRules({ app, admin }: { app: Express; admin: Req
 
   app.get('/api/game-news/rules', admin, (_req, res) => {
     const rows = db.prepare('SELECT * FROM game_news_rules ORDER BY id').all() as RuleRow[];
-    res.json({ timezone: tz(), restartCountdown: countdownEnabled(), welcome: getWelcome(), joinLeave: getJoinLeave(), extras: getExtras(), rules: rows.map(serialize) });
+    res.json({ timezone: tz(), restartCountdown: countdownEnabled(), welcome: getWelcome(), joinLeave: getJoinLeave(), extras: getExtras(), register: getRegisterSettings(), rules: rows.map(serialize) });
   });
 
   // the countdown «через 10 / 5 / 1 минуту» before the planned restarts of monitoring/restarts.ts
@@ -139,6 +140,26 @@ export function registerGameNewsRules({ app, admin }: { app: Express; admin: Req
     out.text = t1;
     out.newText = t2;
     setWelcome(out);
+    res.json({ ok: true });
+  });
+
+  // registration from the game: switch and texts
+  app.put('/api/game-news/register-settings', admin, (req, res) => {
+    const b = z.object({
+      enabled: z.boolean(), promptText: z.string().max(300), doneText: z.string().max(300), discordText: z.string().max(300),
+      pendingText: z.string().max(300), discordEveryHours: z.number().int().min(1).max(720),
+    }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'Проверьте поля' });
+    const d = getRegisterSettings();
+    const keep = (x: string, old: string) => plainLine(x) || old;
+    setRegisterSettings({
+      enabled: b.data.enabled,
+      promptText: keep(b.data.promptText, d.promptText),
+      doneText: keep(b.data.doneText, d.doneText),
+      discordText: keep(b.data.discordText, d.discordText),
+      pendingText: keep(b.data.pendingText, d.pendingText),
+      discordEveryHours: b.data.discordEveryHours,
+    });
     res.json({ ok: true });
   });
 

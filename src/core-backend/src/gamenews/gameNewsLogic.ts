@@ -87,3 +87,29 @@ export function greenName(text: string): string {
     })
     .join('');
 }
+
+/**
+ * The login for an account made from a game nickname: letters, digits, `_ . -` and single spaces, 3-32 characters
+ * (the rule of the site). `taken` tells whether a login is used; a number is added until it is free.
+ */
+export function loginFromNick(nick: string, platformId: string, taken: (login: string) => boolean): string {
+  let base = plainText(nick)
+    .replace(/[^\p{L}\p{N}_. -]/gu, '_')
+    .replace(/ {2,}/g, ' ')
+    .replace(/^[ ]+|[ ]+$/g, '');
+  if (base.length < 3) base = `Player_${platformId.slice(-4)}`;
+  base = base.slice(0, 32).trim();
+  if (!taken(base)) return base;
+  for (let n = 2; n < 1000; n++) {
+    const suffix = String(n);
+    const cand = `${base.slice(0, 32 - suffix.length).trim()}${suffix}`;
+    if (!taken(cand)) return cand;
+  }
+  return `${base.slice(0, 24)}_${Date.now() % 100000}`;
+}
+
+
+/** one line of plain text: no tags, no control characters */
+function plainText(s: string): string {
+  return Array.from(s, (ch) => (ch.charCodeAt(0) < 32 || ch.charCodeAt(0) === 127 ? ' ' : ch)).join('').replace(/[<>]/g, '').replace(/ {2,}/g, ' ').trim();
+}

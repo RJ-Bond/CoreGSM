@@ -42,6 +42,8 @@ const OPEN: Record<string, string> = {
   'GET /api/push/key': 'the public VAPID key',
   'GET /api/v1/openapi.json': 'documentation of the public API',
   'GET /api/setup/status': 'tells the first-run page whether setup is still open',
+  'GET /api/game-news/player/status': 'the CoreGSM game plugin: checks its own Bearer token inside',
+  'POST /api/game-news/player/register': 'the CoreGSM game plugin: checks its own Bearer token inside; limited per game account',
   'GET /api/game-news/pull': 'the CoreGSM game plugin: checks its own Bearer token (the hash of it) inside',
   'POST /api/setup': 'first-run setup: needs the setup code, closes itself',
   'POST /api/auth/login': 'sign-in (rate limited, locks out)',
@@ -103,6 +105,7 @@ describe('every route has a guard or a reason to be open', () => {
       'POST /api/auth/reset',
       'POST /api/auth/session',
       'POST /api/auth/verify-email',
+      'POST /api/game-news/player/register',
       'POST /api/probe/results',
       'POST /api/setup',
     ]);
