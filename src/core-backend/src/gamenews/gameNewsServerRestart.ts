@@ -16,9 +16,9 @@ import { internal } from '../security/auth.js';
 import { pluginTarget, queueNews } from './gameNews.js';
 import { plainLine } from './gameNewsJoinLeave.js';
 import {
-  DEFAULT_TEXTS, announceLine, cancelLine, formatLeft, nextNotice, noticeSeconds, nowLine, parseDuration, type RestartTexts,
+  DEFAULT_TEXTS, MAX_SECONDS, announceLine, cancelLine, formatLeft, nextNotice, noticeSeconds, nowLine, parseDuration, type RestartTexts,
 } from './gameNewsRestartLogic.js';
-import { DUE_GRACE_MS, getJob, jobsIn, saveJob, setLastNotice, setState, type Job } from './gameNewsRestartState.js';
+import { DUE_GRACE_MS, closeLog, getJob, jobsIn, logRunAt, logStart, recentLog, saveJob, setLastNotice, setState, type Job } from './gameNewsRestartState.js';
 import { serverLabel } from './gameNewsVars.js';
 
 // ---- the words of the notices (set in the panel)
@@ -51,6 +51,7 @@ export function startRestart(serverId: number, seconds: number, by: string, sour
     requested_by: by.slice(0, 80), source: source.slice(0, 40), state: 'counting',
   };
   saveJob(job);
+  logStart(job);
   tellChat(serverId, announceLine(getTexts(serverId), seconds), now);
   log.info(`game restart of server ${serverId} in ${seconds} s (${source})`);
   return job;
@@ -61,6 +62,7 @@ export function cancelRestart(serverId: number, now = Date.now()): boolean {
   const j = getJob(serverId);
   if (!j || (j.state !== 'counting' && j.state !== 'due')) return false;
   setState(serverId, 'cancelled');
+  closeLog(serverId, 'cancelled', now);
   tellChat(serverId, cancelLine(getTexts(serverId)), now);
   return true;
 }
@@ -80,7 +82,7 @@ export function tickRestartJobs(now = Date.now()): void {
       tellChat(j.server_id, announceLine(getTexts(j.server_id), noticeSeconds(p, r)), now);
     }
   }
-  for (const j of jobsIn('due')) if (now - j.run_at > DUE_GRACE_MS) setState(j.server_id, 'missed');
+  for (const j of jobsIn('due')) if (now - j.run_at > DUE_GRACE_MS) { setState(j.server_id, 'missed'); closeLog(j.server_id, 'missed', now); }
 }
 
 let timer: NodeJS.Timeout | undefined;
@@ -94,6 +96,19 @@ export function startRestartJobsTimer(): void {
   timer.unref();
 }
 export const stopRestartJobsTimer = () => clearInterval(timer);
+
+/** «+5 минут»: the running timer ends later by that time (a timer that is due and not yet taken starts counting again) */
+export function postponeRestart(serverId: number, seconds: number, now = Date.now()): { ok: boolean; text: string } {
+  const j = getJob(serverId);
+  if (!j || (j.state !== 'counting' && j.state !== 'due')) return { ok: false, text: 'Сейчас нет запущенного рестарта.' };
+  const left = Math.max(0, Math.ceil((j.run_at - now) / 1000));
+  const total = Math.min(MAX_SECONDS, left + seconds);
+  const runAt = now + total * 1000;
+  saveJob({ ...j, run_at: runAt, total_sec: total, last_notice: total, state: 'counting' });
+  logRunAt(serverId, runAt);
+  tellChat(serverId, announceLine(getTexts(serverId), total), now);
+  return { ok: true, text: `Рестарт сдвинут: через ${formatLeft(total)}.` };
+}
 
 /**
  * What a person typed after «restart»: a time («5m»), «cancel», or nothing (what is going on now).
@@ -128,9 +143,10 @@ export function registerGameNewsServerRestart({ app, admin }: { app: Express; ad
     const now = Date.now();
     const jobs = jobsIn('counting', 'due', 'sent').map((j) => ({
       serverId: j.server_id, serverName: serverLabel(j.server_id), runAt: j.run_at, by: j.requested_by, source: j.source, state: j.state,
-      left: Math.max(0, Math.ceil((j.run_at - now) / 1000)),
+      left: Math.max(0, Math.ceil((j.run_at - now) / 1000)), total: j.total_sec,
     }));
-    res.json({ jobs, texts: getTexts(serverOf(req)), servers: pluginServers() });
+    const history = recentLog().map((h) => ({ id: h.id, serverName: serverLabel(h.server_id), startedAt: h.started_at, runAt: h.run_at, totalSec: h.total_sec, by: h.requested_by, source: h.source, outcome: h.outcome, finishedAt: h.finished_at }));
+    res.json({ jobs, texts: getTexts(serverOf(req)), servers: pluginServers(), history });
   });
 
   app.post('/api/game-news/restart', admin, (req, res) => {
@@ -152,6 +168,14 @@ export function registerGameNewsServerRestart({ app, admin }: { app: Express; ad
     res.json({ ok: cancelRestart(Number(req.params.serverId)) });
   });
 
+  app.post('/api/game-news/restart/:serverId/postpone', admin, (req, res) => {
+    const b = z.object({ seconds: z.number().int().min(10).max(3600) }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'Проверьте поля' });
+    const r = postponeRestart(Number(req.params.serverId), b.data.seconds);
+    if (!r.ok) return res.status(400).json({ error: r.text });
+    res.json({ ok: true });
+  });
+
   app.put('/api/game-news/restart-texts', admin, (req, res) => {
     const b = z.object({ announce: z.string().max(300), now: z.string().max(300), cancel: z.string().max(300) }).safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Проверьте поля' });
@@ -170,6 +194,28 @@ export function registerGameNewsServerRestart({ app, admin }: { app: Express; ad
     if (!b.success) return res.status(400).json({ error: 'Проверьте поля' });
     const r = runRestartCommand(t.server_id, b.data.text, b.data.by || 'игра', 'игра');
     res.json({ ok: r.ok, text: r.text, replies: [`<color=${r.ok ? C_OK : C_BAD}>* ${plainLine(r.text)}</color>`] });
+  });
+
+  // ---- the Discord bot: «/say»: a line from Discord into the game chat (the same rights as «/restart»)
+  app.post('/internal/game-say', internal, (req, res) => {
+    const b = z.object({
+      text: z.string().min(1).max(300), server: z.string().max(100).optional(), name: z.string().max(80),
+      discordId: z.string().max(32), discordAdmin: z.boolean(),
+    }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ ok: false, text: 'Проверьте поля' });
+    const linked = db.prepare("SELECT username FROM users WHERE discord_id = ? AND role = 'admin' AND status = 'active'").get(b.data.discordId) as { username: string } | undefined;
+    if (!b.data.discordAdmin && !linked) return res.json({ ok: false, text: 'Эта команда только для администраторов.' });
+    const servers = pluginServers();
+    const q = (b.data.server ?? '').trim().toLowerCase();
+    const found = q ? servers.filter((s) => s.name.toLowerCase().includes(q)) : servers;
+    if (found.length === 0) return res.json({ ok: false, text: q ? 'Сервер не найден среди серверов с плагином.' : 'Нет серверов с плагином CoreGSM.' });
+    const who = plainLine(linked?.username ?? b.data.name) || 'Discord';
+    const body = plainLine(b.data.text);
+    if (!body) return res.json({ ok: false, text: 'Введите текст.' });
+    const line = `<color=#7289DA>* [Discord] ${who}:</color> <color=#FFFFFF>${body}</color>`;
+    const out = queueNews(line, found.map((s) => s.id), `Discord: ${who}`, Date.now(), { onlyOnline: true });
+    const sent = out.filter((r) => r.queued && r.online).length;
+    res.json({ ok: sent > 0, text: sent > 0 ? `Отправлено в игру (серверов: ${sent}).` : 'На выбранных серверах сейчас никого нет в игре.' });
   });
 
   // ---- the Discord bot (it is trusted; the person is checked here)

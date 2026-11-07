@@ -200,14 +200,16 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
   }, [isAdmin]);
   const [menu, setMenu] = useState(false);
   // the servers with the game plugin: each has its own page of settings under «Игровой плагин» (when there are several)
-  const [pluginServers, setPluginServers] = useState<{ id: number; name: string }[]>([]);
+  const [pluginServers, setPluginServers] = useState<{ id: number; name: string; online: boolean; players: number | null; max: number | null; lastSeen: number | null }[]>([]);
   useEffect(() => {
     if (!isAdmin || current !== 'gamenews') return;
     let alive = true;
-    api<{ servers: { id: number; name: string; supported: boolean; hasToken: boolean }[] }>('/game-news')
-      .then((d) => { if (alive) setPluginServers(d.servers.filter((x) => x.supported && x.hasToken).map((x) => ({ id: x.id, name: x.name }))); })
+    const load = () => api<{ servers: { id: number; name: string; supported: boolean; hasToken: boolean; online: boolean; players: number | null; maxPlayers: number | null; lastSeen: number | null }[] }>('/game-news')
+      .then((d) => { if (alive) setPluginServers(d.servers.filter((x) => x.supported && x.hasToken).map((x) => ({ id: x.id, name: x.name, online: x.online, players: x.players, max: x.maxPlayers, lastSeen: x.lastSeen }))); })
       .catch(() => undefined);
-    return () => { alive = false; };
+    void load();
+    const timer = window.setInterval(() => void load(), 15_000);
+    return () => { alive = false; window.clearInterval(timer); };
   }, [isAdmin, current]);
   const first = tail.split('/')[0];
   const crumb = !['servers', 'discord', 'news'].includes(current) || !first ? '' : first === 'new' ? t('adm.crumb.new') : /^\d+$/.test(first) ? t('adm.crumb.edit') : '';
@@ -254,8 +256,10 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
                         <div className="adm-sub flex flex-col gap-0.5 max-md:hidden" role="group" aria-label={t('gn.tab.servers')}>
                           {pluginServers.map((x) => (
                             <a key={x.id} href={`/admin/gamenews/s${x.id}`} aria-current={tail === `s${x.id}` ? 'page' : undefined} title={x.name}
-                              className={`block truncate rounded-ui-md py-1 pl-9 pr-3 text-sm font-bold transition hover:text-ink ${tail === `s${x.id}` ? 'bg-soft text-ink' : 'text-mute'}`}>
-                              {x.name}
+                              className={`flex items-start gap-2 rounded-ui-md py-1.5 pl-6 pr-2 text-sm font-bold leading-snug transition hover:text-ink ${tail === `s${x.id}` ? 'bg-soft text-ink' : 'text-mute'}`}>
+                              <span aria-hidden className={`mt-1.5 inline-block h-2 w-2 shrink-0 rounded-full ${x.online ? 'bg-ok' : 'bg-mute'}`} />
+                              <span className="min-w-0 flex-1 break-words">{x.name}</span>
+                              {x.online && x.players != null && <span className="shrink-0 rounded-full bg-soft px-1.5 text-xs font-extrabold">{x.players}</span>}
                             </a>
                           ))}
                         </div>

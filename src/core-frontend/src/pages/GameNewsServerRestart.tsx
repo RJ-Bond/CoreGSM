@@ -1,15 +1,24 @@
 import { useState } from 'react';
 import { api } from '../api';
-import { FoldCard } from '../components/GameNewsParts';
+import { FoldCard, VarChips, soon } from '../components/GameNewsParts';
+import { ChatLines } from '../components/NewsEditor';
 import { t, useI18n } from '../i18n';
 import { ScopeNote, useScope } from './GameNewsScope';
 import { Field, SaveBadge, errText, toast, useAutosave, usePoll } from '../ui';
 
-interface Job { serverId: number; serverName: string; runAt: number; by: string; source: string; state: string; left: number }
+interface Job { serverId: number; serverName: string; runAt: number; by: string; source: string; state: string; left: number; total: number }
 interface Texts { announce: string; now: string; cancel: string }
-interface State { jobs: Job[]; texts: Texts; servers: { id: number; name: string }[] }
+interface HistoryRow { id: number; serverName: string; startedAt: number; runAt: number; totalSec: number; by: string; source: string; outcome: 'counting' | 'done' | 'cancelled' | 'missed' | 'replaced'; finishedAt: number | null }
+interface State { jobs: Job[]; texts: Texts; servers: { id: number; name: string }[]; history: HistoryRow[] }
 
 const PRESETS = ['1m', '5m', '10m', '30m', '1h'];
+const OUTCOME: Record<HistoryRow['outcome'], { text: 'gn.rr.o.counting' | 'gn.rr.o.done' | 'gn.rr.o.cancelled' | 'gn.rr.o.missed' | 'gn.rr.o.replaced'; cls: string }> = {
+  counting: { text: 'gn.rr.o.counting', cls: 'pill pill-warn' },
+  done: { text: 'gn.rr.o.done', cls: 'pill pill-ok' },
+  cancelled: { text: 'gn.rr.o.cancelled', cls: 'pill pill-mute' },
+  missed: { text: 'gn.rr.o.missed', cls: 'pill pill-warn' },
+  replaced: { text: 'gn.rr.o.replaced', cls: 'pill pill-mute' },
+};
 
 /** «4:59» / «1:02:03» */
 function clock(sec: number): string {
@@ -18,6 +27,29 @@ function clock(sec: number): string {
   const m = Math.floor((s % 3600) / 60);
   const x = String(s % 60).padStart(2, '0');
   return h ? `${h}:${String(m).padStart(2, '0')}:${x}` : `${m}:${x}`;
+}
+
+/** the time in the sample line of the preview (in the chat the panel says the real one) */
+const SAMPLE_TIME = '5 минут';
+const plain = (s: string) => s.replace(/[<>]/g, '');
+
+/** the ring of the countdown: the part of the time that is left */
+function Ring({ left, total, red }: { left: number; total: number; red: boolean }) {
+  const r = 44;
+  const c = 2 * Math.PI * r;
+  const part = total > 0 ? Math.min(1, Math.max(0, left / total)) : 0;
+  return (
+    <svg viewBox="0 0 100 100" className="h-24 w-24 shrink-0" role="img" aria-label={clock(left)}>
+      <circle cx="50" cy="50" r={r} fill="none" strokeWidth="8" className="stroke-line" />
+      <circle
+        cx="50" cy="50" r={r} fill="none" strokeWidth="8" strokeLinecap="round"
+        stroke={red ? '#FF5555' : '#FFCC33'}
+        strokeDasharray={c} strokeDashoffset={c * (1 - part)}
+        transform="rotate(-90 50 50)" style={{ transition: 'stroke-dashoffset 1s linear' }}
+      />
+      <text x="50" y="56" textAnchor="middle" fontSize="20" fontWeight="800" fill="currentColor">{clock(left)}</text>
+    </svg>
+  );
 }
 
 /** A restart of a game server by a timer: the chat is told how long is left, then the plugin closes the server. */
@@ -30,6 +62,7 @@ export function ServerRestartCard() {
   const [busy, setBusy] = useState(false);
   const [texts, setTexts] = useState<Texts | null>(null);
   const [saved, setSaved] = useState<Texts | null>(null);
+  const [showLog, setShowLog] = useState(false);
   // the seconds left are counted from the moment of the answer, so the clock moves between polls
   const [at, setAt] = useState(Date.now());
   const [, tick] = useState(0);
@@ -39,7 +72,9 @@ export function ServerRestartCard() {
     setTexts((x) => x ?? d.texts); setSaved((x) => x ?? d.texts);
     setServer((s) => s || d.servers[0]?.id || 0);
   }).catch(() => undefined);
-  usePoll(() => { tick((n) => n + 1); return load(); }, 3000);
+  usePoll(load, 3000);
+  // the ring moves every second between the polls
+  usePoll(() => { tick((n) => n + 1); }, 1000);
 
   const auto = useAutosave({
     value: texts ?? { announce: '', now: '', cancel: '' },
@@ -50,27 +85,48 @@ export function ServerRestartCard() {
   });
 
   if (!st || st.servers.length === 0) return null;
-  const start = async () => {
+  const run = async (fn: () => Promise<unknown>, ok?: string) => {
     setBusy(true);
-    try { await api('/game-news/restart', 'POST', { serverId: server, time }); toast(t('gn.rr.started'), 'ok'); await load(); } catch (e) { toast(errText(e as Error), 'err'); } finally { setBusy(false); }
+    try { await fn(); if (ok) toast(ok, 'ok'); await load(); } catch (e) { toast(errText(e as Error), 'err'); } finally { setBusy(false); }
   };
-  const cancel = async (id: number) => {
-    try { await api(`/game-news/restart/${id}`, 'DELETE'); await load(); } catch (e) { toast(errText(e as Error), 'err'); }
-  };
+  const start = () => run(() => api('/game-news/restart', 'POST', { serverId: server, time }), t('gn.rr.started'));
+  const cancel = (id: number) => run(() => api(`/game-news/restart/${id}`, 'DELETE'));
+  const postpone = (id: number, seconds: number) => run(() => api(`/game-news/restart/${id}/postpone`, 'POST', { seconds }), t('gn.rr.postponed'));
   const elapsed = Math.round((Date.now() - at) / 1000);
+  const jobs = st.jobs.filter((j) => j.state !== 'sent' || j.left - elapsed > -60);
+  const history = st.history;
+
+  const announce = `<color=#FFCC33>${plain(texts?.announce ?? '').replace(/\{time\}/g, SAMPLE_TIME)}</color>`;
+  const now = `<color=#FF5555>${plain(texts?.now ?? '')}</color>`;
+  const cancelled = `<color=#5FD068>${plain(texts?.cancel ?? '')}</color>`;
 
   return (
     <FoldCard id="srvrestart" title={t('gn.rr.title')} summary={t('gn.rr.sum')} on={st.jobs.some((j) => j.state === 'counting')}>
       <p className="text-sm font-semibold text-mute">{t('gn.rr.note')}</p>
 
-      {st.jobs.filter((j) => j.state !== 'sent' || j.left > -60).map((j) => (
-        <div key={j.serverId} className="flex flex-wrap items-center gap-3 rounded-xl border border-line px-3 py-2">
-          <span className="font-extrabold">{j.serverName}</span>
-          <span className="pill pill-warn">{j.state === 'counting' ? clock(j.left - elapsed) : j.state === 'due' ? t('gn.rr.due') : t('gn.rr.sent')}</span>
-          <span className="text-sm font-semibold text-mute">{t('gn.rr.by', { by: j.by || '—', src: j.source })}</span>
-          {j.state !== 'sent' && <button type="button" className="btn btn-ghost btn-sm ml-auto" onClick={() => void cancel(j.serverId)}>{t('gn.rr.cancel')}</button>}
-        </div>
-      ))}
+      {jobs.map((j) => {
+        const left = j.state === 'counting' ? Math.max(0, j.left - elapsed) : 0;
+        return (
+          <div key={j.serverId} className="flex flex-wrap items-center gap-4 rounded-xl border border-line px-4 py-3">
+            <Ring left={left} total={j.total} red={left <= 60} />
+            <div className="min-w-0 flex-1 basis-56 space-y-1">
+              <div className="wrap-break-word font-extrabold">{j.serverName}</div>
+              <div className="text-sm font-semibold text-mute">
+                {j.state === 'counting' ? t('gn.rr.at', { time: new Date(j.runAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }) : j.state === 'due' ? t('gn.rr.due') : t('gn.rr.sent')}
+                {' · '}{t('gn.rr.by', { by: j.by || '—', src: j.source })}
+              </div>
+              {j.state !== 'sent' && (
+                <div className="flex flex-wrap gap-2 pt-1">
+                  {[60, 300, 900].map((sec) => (
+                    <button key={sec} type="button" className="btn btn-soft btn-sm" disabled={busy} onClick={() => void postpone(j.serverId, sec)}>+{sec / 60} {t('gn.rr.min')}</button>
+                  ))}
+                  <button type="button" className="btn btn-ghost btn-sm" disabled={busy} onClick={() => void cancel(j.serverId)}>{t('gn.rr.cancel')}</button>
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })}
 
       <div className="flex flex-wrap items-end gap-3">
         {st.servers.length > 1 && (
@@ -86,7 +142,7 @@ export function ServerRestartCard() {
         <button type="button" className="btn" disabled={busy || !time.trim()} onClick={() => void start()}>{t('gn.rr.start')}</button>
       </div>
       <div className="flex flex-wrap gap-2">
-        {PRESETS.map((p) => <button key={p} type="button" className="chip-filter" onClick={() => setTime(p)}>{p}</button>)}
+        {PRESETS.map((p) => <button key={p} type="button" className={`chip-filter ${time === p ? 'on' : ''}`} onClick={() => setTime(p)}>{p}</button>)}
       </div>
 
       {texts && (
@@ -96,15 +152,36 @@ export function ServerRestartCard() {
           <Field label={t('gn.rr.announce')}>
             <input className="input" value={texts.announce} maxLength={300} onChange={(e) => setTexts({ ...texts, announce: e.target.value })} />
           </Field>
+          <VarChips vars={[{ name: 'time', example: SAMPLE_TIME }]} onPick={(v) => setTexts({ ...texts, announce: `${texts.announce} ${v}`.trim() })} />
           <Field label={t('gn.rr.now')}>
             <input className="input" value={texts.now} maxLength={300} onChange={(e) => setTexts({ ...texts, now: e.target.value })} />
           </Field>
           <Field label={t('gn.rr.cancelText')}>
             <input className="input" value={texts.cancel} maxLength={300} onChange={(e) => setTexts({ ...texts, cancel: e.target.value })} />
           </Field>
+          <ChatLines lines={[announce, now, cancelled]} />
           <SaveBadge status={auto.status} error={auto.error} retry={auto.retry} />
         </div>
       )}
+
+      <div className="space-y-2">
+        <button type="button" className="btn btn-ghost btn-sm" aria-expanded={showLog} onClick={() => setShowLog((v) => !v)}>
+          {showLog ? t('gn.rr.hideLog') : t('gn.rr.showLog', { n: history.length })}
+        </button>
+        {showLog && (history.length === 0
+          ? <p className="text-sm font-semibold text-mute">{t('gn.rr.logEmpty')}</p>
+          : (
+            <ul className="divide-y divide-line">
+              {history.map((h) => (
+                <li key={h.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2 text-sm">
+                  <span className={OUTCOME[h.outcome].cls}>{t(OUTCOME[h.outcome].text)}</span>
+                  <span className="wrap-break-word font-bold">{h.serverName}</span>
+                  <span className="font-semibold text-mute">{soon(h.startedAt)} · {t('gn.rr.by', { by: h.by || '—', src: h.source })}</span>
+                </li>
+              ))}
+            </ul>
+          ))}
+      </div>
     </FoldCard>
   );
 }

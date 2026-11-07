@@ -39,6 +39,30 @@ export const setState = (serverId: number, state: JobState): void => {
   db.prepare('UPDATE game_restart_jobs SET state = ? WHERE server_id = ?').run(state, serverId);
 };
 
+// ---- the history: one row per started timer
+export type Outcome = 'counting' | 'done' | 'cancelled' | 'missed' | 'replaced';
+const KEEP_LOG = 200;
+
+export function logStart(j: Job): void {
+  closeLog(j.server_id, 'replaced', j.started_at);
+  db.prepare('INSERT INTO game_restart_log (server_id, started_at, run_at, total_sec, requested_by, source, outcome) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    .run(j.server_id, j.started_at, j.run_at, j.total_sec, j.requested_by, j.source, 'counting');
+  db.prepare('DELETE FROM game_restart_log WHERE id NOT IN (SELECT id FROM game_restart_log ORDER BY id DESC LIMIT ?)').run(KEEP_LOG);
+}
+
+/** the running row of the server ends with this outcome */
+export function closeLog(serverId: number, outcome: Outcome, now: number): void {
+  db.prepare("UPDATE game_restart_log SET outcome = ?, finished_at = ? WHERE server_id = ? AND outcome = 'counting'").run(outcome, now, serverId);
+}
+
+export function logRunAt(serverId: number, runAt: number): void {
+  db.prepare("UPDATE game_restart_log SET run_at = ? WHERE server_id = ? AND outcome = 'counting'").run(runAt, serverId);
+}
+
+export interface LogRow { id: number; server_id: number; started_at: number; run_at: number; total_sec: number; requested_by: string; source: string; outcome: Outcome; finished_at: number | null }
+export const recentLog = (limit = 12): LogRow[] =>
+  db.prepare('SELECT * FROM game_restart_log ORDER BY id DESC LIMIT ?').all(limit) as LogRow[];
+
 export const setLastNotice = (serverId: number, last: number): void => {
   db.prepare('UPDATE game_restart_jobs SET last_notice = ? WHERE server_id = ?').run(last, serverId);
 };
@@ -51,5 +75,6 @@ export function consumeDue(serverId: number): boolean {
   const j = getJob(serverId);
   if (!j || j.state !== 'due') return false;
   setState(serverId, 'sent');
+  closeLog(serverId, 'done', Date.now());
   return true;
 }

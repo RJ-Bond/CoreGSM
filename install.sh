@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="77e103bc2f9f"
+COREGSM_BUILD="4f986631f0d7"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.83"
+COREGSM_VERSION="1.1.84"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -25043,6 +25043,30 @@ export const setState = (serverId: number, state: JobState): void => {
   db.prepare('UPDATE game_restart_jobs SET state = ? WHERE server_id = ?').run(state, serverId);
 };
 
+// ---- the history: one row per started timer
+export type Outcome = 'counting' | 'done' | 'cancelled' | 'missed' | 'replaced';
+const KEEP_LOG = 200;
+
+export function logStart(j: Job): void {
+  closeLog(j.server_id, 'replaced', j.started_at);
+  db.prepare('INSERT INTO game_restart_log (server_id, started_at, run_at, total_sec, requested_by, source, outcome) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    .run(j.server_id, j.started_at, j.run_at, j.total_sec, j.requested_by, j.source, 'counting');
+  db.prepare('DELETE FROM game_restart_log WHERE id NOT IN (SELECT id FROM game_restart_log ORDER BY id DESC LIMIT ?)').run(KEEP_LOG);
+}
+
+/** the running row of the server ends with this outcome */
+export function closeLog(serverId: number, outcome: Outcome, now: number): void {
+  db.prepare("UPDATE game_restart_log SET outcome = ?, finished_at = ? WHERE server_id = ? AND outcome = 'counting'").run(outcome, now, serverId);
+}
+
+export function logRunAt(serverId: number, runAt: number): void {
+  db.prepare("UPDATE game_restart_log SET run_at = ? WHERE server_id = ? AND outcome = 'counting'").run(runAt, serverId);
+}
+
+export interface LogRow { id: number; server_id: number; started_at: number; run_at: number; total_sec: number; requested_by: string; source: string; outcome: Outcome; finished_at: number | null }
+export const recentLog = (limit = 12): LogRow[] =>
+  db.prepare('SELECT * FROM game_restart_log ORDER BY id DESC LIMIT ?').all(limit) as LogRow[];
+
 export const setLastNotice = (serverId: number, last: number): void => {
   db.prepare('UPDATE game_restart_jobs SET last_notice = ? WHERE server_id = ?').run(last, serverId);
 };
@@ -25055,6 +25079,7 @@ export function consumeDue(serverId: number): boolean {
   const j = getJob(serverId);
   if (!j || j.state !== 'due') return false;
   setState(serverId, 'sent');
+  closeLog(serverId, 'done', Date.now());
   return true;
 }
 __COREGSM_EOF__
@@ -25442,9 +25467,9 @@ import { internal } from '../security/auth.js';
 import { pluginTarget, queueNews } from './gameNews.js';
 import { plainLine } from './gameNewsJoinLeave.js';
 import {
-  DEFAULT_TEXTS, announceLine, cancelLine, formatLeft, nextNotice, noticeSeconds, nowLine, parseDuration, type RestartTexts,
+  DEFAULT_TEXTS, MAX_SECONDS, announceLine, cancelLine, formatLeft, nextNotice, noticeSeconds, nowLine, parseDuration, type RestartTexts,
 } from './gameNewsRestartLogic.js';
-import { DUE_GRACE_MS, getJob, jobsIn, saveJob, setLastNotice, setState, type Job } from './gameNewsRestartState.js';
+import { DUE_GRACE_MS, closeLog, getJob, jobsIn, logRunAt, logStart, recentLog, saveJob, setLastNotice, setState, type Job } from './gameNewsRestartState.js';
 import { serverLabel } from './gameNewsVars.js';
 
 // ---- the words of the notices (set in the panel)
@@ -25477,6 +25502,7 @@ export function startRestart(serverId: number, seconds: number, by: string, sour
     requested_by: by.slice(0, 80), source: source.slice(0, 40), state: 'counting',
   };
   saveJob(job);
+  logStart(job);
   tellChat(serverId, announceLine(getTexts(serverId), seconds), now);
   log.info(`game restart of server ${serverId} in ${seconds} s (${source})`);
   return job;
@@ -25487,6 +25513,7 @@ export function cancelRestart(serverId: number, now = Date.now()): boolean {
   const j = getJob(serverId);
   if (!j || (j.state !== 'counting' && j.state !== 'due')) return false;
   setState(serverId, 'cancelled');
+  closeLog(serverId, 'cancelled', now);
   tellChat(serverId, cancelLine(getTexts(serverId)), now);
   return true;
 }
@@ -25506,7 +25533,7 @@ export function tickRestartJobs(now = Date.now()): void {
       tellChat(j.server_id, announceLine(getTexts(j.server_id), noticeSeconds(p, r)), now);
     }
   }
-  for (const j of jobsIn('due')) if (now - j.run_at > DUE_GRACE_MS) setState(j.server_id, 'missed');
+  for (const j of jobsIn('due')) if (now - j.run_at > DUE_GRACE_MS) { setState(j.server_id, 'missed'); closeLog(j.server_id, 'missed', now); }
 }
 
 let timer: NodeJS.Timeout | undefined;
@@ -25520,6 +25547,19 @@ export function startRestartJobsTimer(): void {
   timer.unref();
 }
 export const stopRestartJobsTimer = () => clearInterval(timer);
+
+/** «+5 минут»: the running timer ends later by that time (a timer that is due and not yet taken starts counting again) */
+export function postponeRestart(serverId: number, seconds: number, now = Date.now()): { ok: boolean; text: string } {
+  const j = getJob(serverId);
+  if (!j || (j.state !== 'counting' && j.state !== 'due')) return { ok: false, text: 'Сейчас нет запущенного рестарта.' };
+  const left = Math.max(0, Math.ceil((j.run_at - now) / 1000));
+  const total = Math.min(MAX_SECONDS, left + seconds);
+  const runAt = now + total * 1000;
+  saveJob({ ...j, run_at: runAt, total_sec: total, last_notice: total, state: 'counting' });
+  logRunAt(serverId, runAt);
+  tellChat(serverId, announceLine(getTexts(serverId), total), now);
+  return { ok: true, text: `Рестарт сдвинут: через ${formatLeft(total)}.` };
+}
 
 /**
  * What a person typed after «restart»: a time («5m»), «cancel», or nothing (what is going on now).
@@ -25554,9 +25594,10 @@ export function registerGameNewsServerRestart({ app, admin }: { app: Express; ad
     const now = Date.now();
     const jobs = jobsIn('counting', 'due', 'sent').map((j) => ({
       serverId: j.server_id, serverName: serverLabel(j.server_id), runAt: j.run_at, by: j.requested_by, source: j.source, state: j.state,
-      left: Math.max(0, Math.ceil((j.run_at - now) / 1000)),
+      left: Math.max(0, Math.ceil((j.run_at - now) / 1000)), total: j.total_sec,
     }));
-    res.json({ jobs, texts: getTexts(serverOf(req)), servers: pluginServers() });
+    const history = recentLog().map((h) => ({ id: h.id, serverName: serverLabel(h.server_id), startedAt: h.started_at, runAt: h.run_at, totalSec: h.total_sec, by: h.requested_by, source: h.source, outcome: h.outcome, finishedAt: h.finished_at }));
+    res.json({ jobs, texts: getTexts(serverOf(req)), servers: pluginServers(), history });
   });
 
   app.post('/api/game-news/restart', admin, (req, res) => {
@@ -25578,6 +25619,14 @@ export function registerGameNewsServerRestart({ app, admin }: { app: Express; ad
     res.json({ ok: cancelRestart(Number(req.params.serverId)) });
   });
 
+  app.post('/api/game-news/restart/:serverId/postpone', admin, (req, res) => {
+    const b = z.object({ seconds: z.number().int().min(10).max(3600) }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'Проверьте поля' });
+    const r = postponeRestart(Number(req.params.serverId), b.data.seconds);
+    if (!r.ok) return res.status(400).json({ error: r.text });
+    res.json({ ok: true });
+  });
+
   app.put('/api/game-news/restart-texts', admin, (req, res) => {
     const b = z.object({ announce: z.string().max(300), now: z.string().max(300), cancel: z.string().max(300) }).safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Проверьте поля' });
@@ -25596,6 +25645,28 @@ export function registerGameNewsServerRestart({ app, admin }: { app: Express; ad
     if (!b.success) return res.status(400).json({ error: 'Проверьте поля' });
     const r = runRestartCommand(t.server_id, b.data.text, b.data.by || 'игра', 'игра');
     res.json({ ok: r.ok, text: r.text, replies: [`<color=${r.ok ? C_OK : C_BAD}>* ${plainLine(r.text)}</color>`] });
+  });
+
+  // ---- the Discord bot: «/say»: a line from Discord into the game chat (the same rights as «/restart»)
+  app.post('/internal/game-say', internal, (req, res) => {
+    const b = z.object({
+      text: z.string().min(1).max(300), server: z.string().max(100).optional(), name: z.string().max(80),
+      discordId: z.string().max(32), discordAdmin: z.boolean(),
+    }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ ok: false, text: 'Проверьте поля' });
+    const linked = db.prepare("SELECT username FROM users WHERE discord_id = ? AND role = 'admin' AND status = 'active'").get(b.data.discordId) as { username: string } | undefined;
+    if (!b.data.discordAdmin && !linked) return res.json({ ok: false, text: 'Эта команда только для администраторов.' });
+    const servers = pluginServers();
+    const q = (b.data.server ?? '').trim().toLowerCase();
+    const found = q ? servers.filter((s) => s.name.toLowerCase().includes(q)) : servers;
+    if (found.length === 0) return res.json({ ok: false, text: q ? 'Сервер не найден среди серверов с плагином.' : 'Нет серверов с плагином CoreGSM.' });
+    const who = plainLine(linked?.username ?? b.data.name) || 'Discord';
+    const body = plainLine(b.data.text);
+    if (!body) return res.json({ ok: false, text: 'Введите текст.' });
+    const line = `<color=#7289DA>* [Discord] ${who}:</color> <color=#FFFFFF>${body}</color>`;
+    const out = queueNews(line, found.map((s) => s.id), `Discord: ${who}`, Date.now(), { onlyOnline: true });
+    const sent = out.filter((r) => r.queued && r.online).length;
+    res.json({ ok: sent > 0, text: sent > 0 ? `Отправлено в игру (серверов: ${sent}).` : 'На выбранных серверах сейчас никого нет в игре.' });
   });
 
   // ---- the Discord bot (it is trusted; the person is checked here)
@@ -28858,6 +28929,24 @@ CREATE TABLE IF NOT EXISTS game_restart_jobs (
   source TEXT NOT NULL DEFAULT '',
   state TEXT NOT NULL DEFAULT 'counting'
 );`),
+  },
+  {
+    version: 23,
+    name: 'game_restart_log',
+    // the history of restarts by a timer: who asked, when, and how it ended (counting | done | cancelled | missed | replaced)
+    up: (db) => db.exec(`
+CREATE TABLE IF NOT EXISTS game_restart_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  server_id INTEGER NOT NULL,
+  started_at INTEGER NOT NULL,
+  run_at INTEGER NOT NULL,
+  total_sec INTEGER NOT NULL,
+  requested_by TEXT NOT NULL DEFAULT '',
+  source TEXT NOT NULL DEFAULT '',
+  outcome TEXT NOT NULL DEFAULT 'counting',
+  finished_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_game_restart_log_server ON game_restart_log(server_id, id);`),
   },
 ];
 
@@ -43414,9 +43503,23 @@ export const RESTART_COMMANDS = [
     ],
   },
 ];
+export const SAY_COMMAND = {
+  name: 'say',
+  description: '💬 Написать в игровой чат сервера · только админы',
+  description_localizations: { ru: '💬 Написать в игровой чат сервера · только админы', 'en-US': '💬 Write to the game chat of a server · admins only', 'en-GB': '💬 Write to the game chat of a server · admins only' },
+  dm_permission: false,
+  default_member_permissions: String(PermissionFlagsBits.Administrator),
+  options: [
+    { type: 3, name: 'text', description: '✍️ Что написать', description_localizations: { ru: '✍️ Что написать', 'en-US': '✍️ What to write', 'en-GB': '✍️ What to write' }, required: true, max_length: 250 },
+    SERVER,
+  ],
+};
+RESTART_COMMANDS.push(SAY_COMMAND as never);
+
 export const RESTART_NAMES = new Set(RESTART_COMMANDS.map((c) => c.name));
 
 export async function handleRestart(i: ChatInputCommandInteraction): Promise<void> {
+  if (i.commandName === 'say') return handleSay(i);
   try {
     await i.deferReply({ flags: EPHEMERAL });
   } catch (e) {
@@ -43438,6 +43541,31 @@ export async function handleRestart(i: ChatInputCommandInteraction): Promise<voi
     ? replyEmbed(r.data.ok ? 'Рестарт' : 'Не получилось', r.data.text, r.data.ok ? COLORS.ok : COLORS.warn)
     : replyEmbed('Не получилось', 'Панель сейчас не отвечает, попробуйте ещё раз чуть позже.', COLORS.bad);
   await i.editReply(out).catch((e) => log('restart reply failed:', (e as Error).message));
+}
+
+/** /say: a line from Discord into the game chat («* [Discord] Имя: текст») of one server or of all that have the plugin */
+async function handleSay(i: ChatInputCommandInteraction): Promise<void> {
+  try {
+    await i.deferReply({ flags: EPHEMERAL });
+  } catch (e) {
+    log('say: could not acknowledge:', (e as Error).message);
+    return;
+  }
+  const member = i.member as { displayName?: string } | null;
+  const r = await backendJson<{ ok: boolean; text: string }>('/internal/game-say', {
+    method: 'POST',
+    body: JSON.stringify({
+      text: i.options.getString('text', true),
+      server: i.options.getString('server') ?? undefined,
+      name: member?.displayName ?? i.user.username,
+      discordId: i.user.id,
+      discordAdmin: i.memberPermissions?.has(PermissionFlagsBits.Administrator) ?? false,
+    }),
+  }).catch(() => null);
+  const out = r?.data
+    ? replyEmbed(r.data.ok ? 'В игру' : 'Не получилось', r.data.text, r.data.ok ? COLORS.ok : COLORS.warn)
+    : replyEmbed('Не получилось', 'Панель сейчас не отвечает, попробуйте ещё раз чуть позже.', COLORS.bad);
+  await i.editReply(out).catch((e) => log('say reply failed:', (e as Error).message));
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-bot/src"
@@ -44043,6 +44171,7 @@ export const CMDS: CmdInfo[] = [
   { cmd: '/giveaway', text: { ru: 'розыгрыш призов: кнопка «Участвую», условия (роль, часы игры), честный выбор победителей', en: 'prize giveaway: a «Join» button, conditions (role, hours of play), a fair draw' }, usage: '/giveaway start prize:<приз> hours:<часы> [winners] [role] [min_hours] · end id · reroll id', examples: ['/giveaway start prize:Скин hours:24 winners:2 min_hours:10', '/giveaway end id:3'], needs: NONE },
   { cmd: '/clear', text: { ru: 'очистить чат в этом канале: с подтверждением, закреплённые остаются', en: 'wipe the chat of this channel: with a confirmation, pinned messages stay' }, usage: '/clear [count:<число>] [user:@участник]', examples: ['/clear', '/clear count:50', '/clear user:@Vasya'], needs: withBot('«Управлять сообщениями» и «Читать историю»', 'Manage Messages and Read Message History') },
   { cmd: '/restart', text: { ru: 'рестарт игрового сервера по таймеру: в чате игры идёт отсчёт, потом сервер перезапускается', en: 'restart a game server by a timer: the game chat gets a countdown, then the server restarts' }, usage: '/restart start time:<5m> | cancel | status', examples: ['/restart start time:5m', '/restart cancel'], needs: withBot('нужен плагин CoreGSM на игровом сервере', 'the CoreGSM plugin on the game server') },
+  { cmd: '/say', text: { ru: 'написать в игровой чат сервера от имени Discord: «* [Discord] Имя: текст»', en: 'write to the game chat of a server from Discord: «* [Discord] Name: text»' }, usage: '/say text:<текст> [server:<сервер>]', examples: ['/say text:Сервер перезапустится через 10 минут'], needs: withBot('нужен плагин CoreGSM на игровом сервере', 'the CoreGSM plugin on the game server') },
   { cmd: '/ban', text: { ru: 'заблокировать участника с причиной (удаляет его сообщения, пишет ему в ЛС)', en: 'ban a member with a reason (deletes their messages, writes to them privately)' }, usage: '/ban user:@участник reason:<причина> [delete_days:0|1|7]', examples: ['/ban user:@Vasya reason:спам'], needs: withBot('«Банить участников»', 'Ban Members') },
   { cmd: '/unban', text: { ru: 'снять блокировку: без параметра покажет список банов с меню, с параметром подскажет имя или ID', en: 'lift a ban: without a parameter shows the ban list with a menu, with one suggests a name or ID' }, usage: '/unban [user:<имя или ID>]', examples: ['/unban', '/unban user:Vasya'], needs: withBot('«Банить участников»', 'Ban Members') },
   { cmd: '/kick', text: { ru: 'исключить участника с причиной, он сможет вернуться по приглашению', en: 'kick a member with a reason, they can return by an invite' }, usage: '/kick user:@участник reason:<причина>', examples: ['/kick user:@Vasya reason:реклама'], needs: withBot('«Выгонять участников»', 'Kick Members') },
@@ -44070,7 +44199,7 @@ export const CATEGORIES: Category[] = [
   { id: 'stat', emoji: '📊', color: 0x8b5cf6, label: { ru: 'Статистика', en: 'Statistics' }, title: { ru: 'Статистика игроков', en: 'Player statistics' }, cmds: ['/player', '/top'] },
   {
     id: 'mod', emoji: '🛡️', color: 0xef4444, admin: true, label: { ru: 'Модерация', en: 'Moderation' }, title: { ru: 'Модерация (для администраторов)', en: 'Moderation (for administrators)' },
-    cmds: ['/clear', '/restart', '/giveaway', '/ban', '/unban', '/kick', '/warn', '/mute', '/unmute'],
+    cmds: ['/clear', '/restart', '/say', '/giveaway', '/ban', '/unban', '/kick', '/warn', '/mute', '/unmute'],
     extra: [{ cmd: '⚠️ Предупредить', text: { ru: 'правый клик по участнику или сообщению → «Приложения»: окно с причиной, к варну прикрепляется ссылка на сообщение', en: 'right-click a member or a message → «Apps»: a window with the reason, the message link is attached to the warning' } }],
   },
   { id: 'modclr', emoji: '🧹', color: 0xef4444, admin: true, label: { ru: 'Памятка /clear', en: '/clear guide' }, title: { ru: 'Команда /clear: как это работает', en: 'The /clear command: how it works' }, cmds: [] },
@@ -122953,7 +123082,7 @@ export function FoldCard({ id, title, summary, on, defaultOpen = false, status, 
   useEffect(() => { try { localStorage.setItem(KEY(id), open ? '1' : '0'); } catch { /* private mode */ } }, [id, open]);
 
   return (
-    <section className="panel overflow-hidden">
+    <section id={`gn-card-${id}`} className="panel overflow-hidden">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-5 py-3.5">
         <button
           type="button"
@@ -122973,6 +123102,21 @@ export function FoldCard({ id, title, summary, on, defaultOpen = false, status, 
       </div>
       {open && <div id={body} className="space-y-4 border-t border-line px-5 py-4">{children}</div>}
     </section>
+  );
+}
+
+/** the variables of a text: a click puts one into the text, the example shows what it turns into */
+export function VarChips({ vars, onPick }: { vars: { name: string; example: string }[]; onPick: (v: string) => void }) {
+  useI18n();
+  return (
+    <div className="flex flex-wrap items-center gap-2 text-sm">
+      <span className="font-bold text-mute">{t('gn.vh.label')}</span>
+      {vars.map((v) => (
+        <button key={v.name} type="button" className="chip-filter font-mono" title={`${v.name} → ${v.example}`} onClick={() => onPick(`{${v.name}}`)}>
+          {`{${v.name}}`}<span className="ml-1.5 font-sans font-semibold text-mute">→ {v.example}</span>
+        </button>
+      ))}
+    </div>
   );
 }
 __COREGSM_EOF__
@@ -139949,6 +140093,38 @@ export interface RegisterSettings {
 export const CHAT_KINDS = ['global', 'clan', 'local', 'join', 'leave'] as const;
 export type ChatKind = (typeof CHAT_KINDS)[number];
 /** the eight colours of an ansi block of Discord */
+/** ready looks of the chat in Discord: the colours of the game, calm, bright, or no colours at all */
+export const CHAT_PRESETS: { id: 'game' | 'calm' | 'bright' | 'plain'; style: 'ansi' | 'plain'; colors: Record<ChatKind, ChatColors> }[] = [
+  {
+    id: 'game', style: 'ansi',
+    colors: {
+      global: { tag: 'blue', name: 'yellow', text: 'blue' }, local: { tag: 'blue', name: 'yellow', text: 'blue' }, clan: { tag: 'green', name: 'yellow', text: 'green' },
+      join: { tag: 'green', name: 'pink', text: 'green' }, leave: { tag: 'green', name: 'pink', text: 'green' },
+    },
+  },
+  {
+    id: 'calm', style: 'ansi',
+    colors: {
+      global: { tag: 'gray', name: 'white', text: 'gray' }, local: { tag: 'gray', name: 'white', text: 'gray' }, clan: { tag: 'gray', name: 'white', text: 'gray' },
+      join: { tag: 'gray', name: 'white', text: 'gray' }, leave: { tag: 'gray', name: 'white', text: 'gray' },
+    },
+  },
+  {
+    id: 'bright', style: 'ansi',
+    colors: {
+      global: { tag: 'cyan', name: 'yellow', text: 'white' }, local: { tag: 'gray', name: 'yellow', text: 'gray' }, clan: { tag: 'green', name: 'yellow', text: 'white' },
+      join: { tag: 'green', name: 'pink', text: 'green' }, leave: { tag: 'red', name: 'pink', text: 'red' },
+    },
+  },
+  {
+    id: 'plain', style: 'plain',
+    colors: {
+      global: { tag: 'white', name: 'white', text: 'white' }, local: { tag: 'white', name: 'white', text: 'white' }, clan: { tag: 'white', name: 'white', text: 'white' },
+      join: { tag: 'white', name: 'white', text: 'white' }, leave: { tag: 'white', name: 'white', text: 'white' },
+    },
+  },
+];
+
 export const ANSI_COLORS = ['gray', 'red', 'green', 'yellow', 'blue', 'pink', 'cyan', 'white'] as const;
 export type AnsiColor = (typeof ANSI_COLORS)[number];
 export interface ChatColors { tag: AnsiColor; name: AnsiColor; text: AnsiColor }
@@ -143341,6 +143517,41 @@ const en: Record<keyof typeof ru, string> = {
   'gn.h.expired': 'Not delivered',
   'gn.h.fail': 'Failed',
   'gn.reuse': 'Use again',
+  'gn.col.game': 'As in the game',
+  'gn.col.recent': 'Recent:',
+  'gn.ch.presets': 'Ready styles:',
+  'gn.ch.preset.game': 'As in the game',
+  'gn.ch.preset.calm': 'Calm',
+  'gn.ch.preset.bright': 'Bright',
+  'gn.ch.preset.plain': 'No colours',
+  'gn.ch.webhookName': 'Webhook name',
+  'gn.ch.botMark': 'bot',
+  'gn.ch.today': 'Today at {time}',
+
+  'gn.sh.test': 'Test the connection',
+  'gn.sh.testText': 'Connection test from the CoreGSM panel.',
+  'gn.sh.testSent': 'A test message was sent to the game',
+  'gn.sh.testQueued': 'The server is not connected now: the message waits in the queue',
+  'gn.sh.old': 'A new plugin version is available: {v}',
+  'gn.sh.sum': 'What is on',
+  'gn.sh.welcome': 'Greeting',
+  'gn.sh.joinleave': 'Join and leave',
+  'gn.sh.register': 'Registration',
+  'gn.sh.chat': 'Chat in Discord',
+
+  'gn.vh.label': 'Insert:',
+  'gn.rr.at': 'at {time}',
+  'gn.rr.min': 'min',
+  'gn.rr.postponed': 'Restart moved',
+  'gn.rr.showLog': 'Restart history ({n})',
+  'gn.rr.hideLog': 'Hide the history',
+  'gn.rr.logEmpty': 'No restarts yet.',
+  'gn.rr.o.counting': 'Counting down',
+  'gn.rr.o.done': 'Done',
+  'gn.rr.o.cancelled': 'Cancelled',
+  'gn.rr.o.missed': 'Plugin did not answer',
+  'gn.rr.o.replaced': 'Replaced by a new one',
+
   'gn.sc.noteAll': 'The general settings: every server that has none of its own uses them.',
   'gn.sc.noteOne': 'The settings of one server. Until you change something it uses the general ones; any change in a card makes that card its own.',
   'gn.sc.own': 'This server has its own settings here: the general ones do not apply to it.',
@@ -147990,6 +148201,41 @@ const ru = {
   'gn.h.expired': 'Не доставлено',
   'gn.h.fail': 'Ошибка',
   'gn.reuse': 'Использовать снова',
+  'gn.col.game': 'Как в игре',
+  'gn.col.recent': 'Недавние:',
+  'gn.ch.presets': 'Готовые стили:',
+  'gn.ch.preset.game': 'Как в игре',
+  'gn.ch.preset.calm': 'Спокойный',
+  'gn.ch.preset.bright': 'Яркий',
+  'gn.ch.preset.plain': 'Без цветов',
+  'gn.ch.webhookName': 'Название webhook',
+  'gn.ch.botMark': 'бот',
+  'gn.ch.today': 'Сегодня, в {time}',
+
+  'gn.sh.test': 'Проверить связь',
+  'gn.sh.testText': 'Проверка связи с панелью CoreGSM.',
+  'gn.sh.testSent': 'Тестовое сообщение отправлено в игру',
+  'gn.sh.testQueued': 'Сервер сейчас не на связи: сообщение ждёт в очереди',
+  'gn.sh.old': 'Есть новая версия плагина: {v}',
+  'gn.sh.sum': 'Что включено',
+  'gn.sh.welcome': 'Приветствие',
+  'gn.sh.joinleave': 'Вход и выход',
+  'gn.sh.register': 'Регистрация',
+  'gn.sh.chat': 'Чат в Discord',
+
+  'gn.vh.label': 'Подставить:',
+  'gn.rr.at': 'в {time}',
+  'gn.rr.min': 'мин',
+  'gn.rr.postponed': 'Рестарт сдвинут',
+  'gn.rr.showLog': 'История рестартов ({n})',
+  'gn.rr.hideLog': 'Скрыть историю',
+  'gn.rr.logEmpty': 'Пока рестартов не было.',
+  'gn.rr.o.counting': 'Идёт отсчёт',
+  'gn.rr.o.done': 'Выполнен',
+  'gn.rr.o.cancelled': 'Отменён',
+  'gn.rr.o.missed': 'Плагин не ответил',
+  'gn.rr.o.replaced': 'Заменён новым',
+
   'gn.sc.noteAll': 'Общие настройки: их используют все серверы, у которых нет своих.',
   'gn.sc.noteOne': 'Настройки одного сервера. Пока вы ничего не меняете, он использует общие; любое изменение в карточке делает настройки этой карточки своими.',
   'gn.sc.own': 'Свои настройки этого сервера: общие на него не действуют.',
@@ -151985,14 +152231,16 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
   }, [isAdmin]);
   const [menu, setMenu] = useState(false);
   // the servers with the game plugin: each has its own page of settings under «Игровой плагин» (when there are several)
-  const [pluginServers, setPluginServers] = useState<{ id: number; name: string }[]>([]);
+  const [pluginServers, setPluginServers] = useState<{ id: number; name: string; online: boolean; players: number | null; max: number | null; lastSeen: number | null }[]>([]);
   useEffect(() => {
     if (!isAdmin || current !== 'gamenews') return;
     let alive = true;
-    api<{ servers: { id: number; name: string; supported: boolean; hasToken: boolean }[] }>('/game-news')
-      .then((d) => { if (alive) setPluginServers(d.servers.filter((x) => x.supported && x.hasToken).map((x) => ({ id: x.id, name: x.name }))); })
+    const load = () => api<{ servers: { id: number; name: string; supported: boolean; hasToken: boolean; online: boolean; players: number | null; maxPlayers: number | null; lastSeen: number | null }[] }>('/game-news')
+      .then((d) => { if (alive) setPluginServers(d.servers.filter((x) => x.supported && x.hasToken).map((x) => ({ id: x.id, name: x.name, online: x.online, players: x.players, max: x.maxPlayers, lastSeen: x.lastSeen }))); })
       .catch(() => undefined);
-    return () => { alive = false; };
+    void load();
+    const timer = window.setInterval(() => void load(), 15_000);
+    return () => { alive = false; window.clearInterval(timer); };
   }, [isAdmin, current]);
   const first = tail.split('/')[0];
   const crumb = !['servers', 'discord', 'news'].includes(current) || !first ? '' : first === 'new' ? t('adm.crumb.new') : /^\d+$/.test(first) ? t('adm.crumb.edit') : '';
@@ -152039,8 +152287,10 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
                         <div className="adm-sub flex flex-col gap-0.5 max-md:hidden" role="group" aria-label={t('gn.tab.servers')}>
                           {pluginServers.map((x) => (
                             <a key={x.id} href={`/admin/gamenews/s${x.id}`} aria-current={tail === `s${x.id}` ? 'page' : undefined} title={x.name}
-                              className={`block truncate rounded-ui-md py-1 pl-9 pr-3 text-sm font-bold transition hover:text-ink ${tail === `s${x.id}` ? 'bg-soft text-ink' : 'text-mute'}`}>
-                              {x.name}
+                              className={`flex items-start gap-2 rounded-ui-md py-1.5 pl-6 pr-2 text-sm font-bold leading-snug transition hover:text-ink ${tail === `s${x.id}` ? 'bg-soft text-ink' : 'text-mute'}`}>
+                              <span aria-hidden className={`mt-1.5 inline-block h-2 w-2 shrink-0 rounded-full ${x.online ? 'bg-ok' : 'bg-mute'}`} />
+                              <span className="min-w-0 flex-1 break-words">{x.name}</span>
+                              {x.online && x.players != null && <span className="shrink-0 rounded-full bg-soft px-1.5 text-xs font-extrabold">{x.players}</span>}
                             </a>
                           ))}
                         </div>
@@ -156231,6 +156481,7 @@ import {
 } from '../gameNews';
 import { AdminPage, ErrorLine, IconNews, LoadError, Modal, PageHead, Spinner, errText, navigate, toast, usePoll } from '../ui';
 import { ChatCard, ExtrasCard, JoinLeaveCard, RegisterCard, RestartCard, WelcomeCard } from './GameNewsCards';
+import { ServerHead } from './GameNewsServerHead';
 import { ScopeContext } from './GameNewsScope';
 import { ServerRestartCard } from './GameNewsServerRestart';
 import GameNewsRules from './GameNewsRules';
@@ -156504,6 +156755,7 @@ export default function GameNewsPage({ sub = '' }: { sub?: string }) {
           reset: (part) => { api(`/game-news/server-settings/${effScope}?part=${part}`, 'DELETE').then(() => { setScopeRev((n) => n + 1); return loadRules(); }).catch((e: Error) => toast(errText(e), 'err')); },
         }}>
           <div className="space-y-4" key={`${tab}-${scopeRev}`}>
+            {effScope > 0 && data.servers.find((x) => x.id === effScope) && <ServerHead server={data.servers.find((x) => x.id === effScope)!} rd={rd} latest={data.pluginLatest} />}
             {serverTabs.length > 0 && <p className="text-sm font-semibold text-mute">{effScope ? t('gn.sc.noteOne') : t('gn.sc.noteAll')}</p>}
             <WelcomeCard initial={rd.welcome} />
             <JoinLeaveCard initial={rd.joinLeave} />
@@ -156613,12 +156865,12 @@ __COREGSM_EOF__
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../api';
 import { Switch } from '../components/Switch';
-import { AutoText, FoldCard } from '../components/GameNewsParts';
+import { AutoText, FoldCard, VarChips } from '../components/GameNewsParts';
 import { ChatLines, NewsEditor, NewsPreview } from '../components/NewsEditor';
 import { confirmDialog } from '../confirm';
 import { t, useI18n } from '../i18n';
 import {
-  ANSI_COLORS, CHAT_KINDS, SWATCHES, WELCOME_STYLES, WELCOME_VARIABLES, composeLine, isHex, validateNews,
+  ANSI_COLORS, CHAT_KINDS, CHAT_PRESETS, SWATCHES, WELCOME_STYLES, WELCOME_VARIABLES, composeLine, isHex, validateNews,
   type AnsiColor, type ChatColors, type ChatKind, type ChatSettings, type Extras, type JoinLeave, type RegisterSettings, type Welcome, type WelcomeStyle,
 } from '../gameNews';
 import { ScopeNote, useScope } from './GameNewsScope';
@@ -156710,7 +156962,19 @@ export function WelcomeCard({ initial }: { initial: Welcome }) {
 }
 
 /** a colour: the palette, the system picker and a HEX box */
-function ColorField({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
+const RECENT_KEY = 'coregsm.gn.recentColors';
+const readRecent = (): string[] => { try { return (JSON.parse(localStorage.getItem(RECENT_KEY) ?? '[]') as string[]).filter(isHex).slice(0, 6); } catch { return []; } };
+const SWATCH_HEX = new Set(SWATCHES.map((c) => c.hex));
+
+function ColorField({ label, value, onChange, gameHex }: { label: string; value: string; onChange: (v: string) => void; gameHex?: string }) {
+  const [recent, setRecent] = useState<string[]>(readRecent);
+  // a colour that was picked stays in the «recent» row of every colour field (kept in this browser)
+  const remember = (v: string) => {
+    if (!isHex(v) || SWATCH_HEX.has(v.toUpperCase())) return;
+    const next = [v.toUpperCase(), ...readRecent().filter((x) => x.toUpperCase() !== v.toUpperCase())].slice(0, 6);
+    try { localStorage.setItem(RECENT_KEY, JSON.stringify(next)); } catch { /* private mode */ }
+    setRecent(next);
+  };
   return (
     <div className="space-y-1.5">
       <span className="text-sm font-bold">{label}</span>
@@ -156727,8 +156991,17 @@ function ColorField({ label, value, onChange }: { label: string; value: string; 
           />
         ))}
         <input type="color" className="h-8 w-10 cursor-pointer rounded border border-line bg-transparent p-0.5" value={isHex(value) ? value : '#FFFFFF'} aria-label={label} onChange={(e) => onChange(e.target.value.toUpperCase())} />
-        <input className="input w-28 font-mono text-sm" value={value} maxLength={7} aria-label={`${label} HEX`} onChange={(e) => onChange(e.target.value)} />
+        <input className="input w-28 font-mono text-sm" value={value} maxLength={7} aria-label={`${label} HEX`} onChange={(e) => onChange(e.target.value)} onBlur={() => remember(value)} />
+        {gameHex && value.toUpperCase() !== gameHex && <button type="button" className="btn btn-ghost btn-sm" onClick={() => onChange(gameHex)}>{t('gn.col.game')}</button>}
       </div>
+      {recent.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs font-bold text-mute">{t('gn.col.recent')}</span>
+          {recent.map((c) => (
+            <button key={c} type="button" className={`h-6 w-6 rounded-full border ${value.toUpperCase() === c ? 'border-ink ring-2 ring-ink/40' : 'border-line'}`} style={{ background: c }} aria-label={`${label}: ${c}`} onClick={() => onChange(c)} />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -156782,10 +157055,11 @@ export function JoinLeaveCard({ initial }: { initial: JoinLeave }) {
       </div>
 
       <div className="grid gap-4 lg:grid-cols-2">
-        <ColorField label={t('gn.jl.nameColor')} value={f.nameColor} onChange={(v) => set('nameColor', v)} />
-        <ColorField label={t('gn.jl.textColor')} value={f.textColor} onChange={(v) => set('textColor', v)} />
+        <ColorField label={t('gn.jl.nameColor')} value={f.nameColor} gameHex="#B86BFF" onChange={(v) => set('nameColor', v)} />
+        <ColorField label={t('gn.jl.textColor')} value={f.textColor} gameHex="#5FD068" onChange={(v) => set('textColor', v)} />
       </div>
 
+      <VarChips vars={[{ name: 'name', example: 'WhiteLegioN' }]} onPick={(v) => set('joinText', `${f.joinText} ${v}`.trim())} />
       <ChatLines lines={[sample(f.joinText), sample(f.leaveText)]} />
       <p className="text-sm font-semibold text-mute">{t('gn.jl.nameHint')}</p>
       {auto.invalid && <p className="text-sm font-semibold text-danger">{auto.error}</p>}
@@ -156848,6 +157122,7 @@ export function RegisterCard({ initial }: { initial: RegisterSettings }) {
         <input className="input w-32" type="number" min={1} max={720} value={f.discordEveryHours} onChange={(e) => set('discordEveryHours', Number(e.target.value))} />
       </Field>
 
+      <VarChips vars={[{ name: 'login', example: 'WhiteLegioN' }, { name: 'panel', example: 'coregsm.example.ru' }]} onPick={(v) => set('promptText', `${f.promptText} ${v}`.trim())} />
       <ChatLines lines={[sample(f.promptText, '#FFCC33'), sample(f.doneText, '#5FD068'), sample(f.discordText, '#6EC1FF')]} />
       <p className="text-sm font-semibold text-mute">{t('gn.rg.vars')}</p>
       <p className="text-sm font-semibold text-danger">{t('gn.rg.warn')}</p>
@@ -156890,9 +157165,10 @@ function AnsiSelect({ value, onChange, label }: { value: AnsiColor; onChange: (v
 }
 
 /** the sample lines of the chat as Discord will draw them (colours of the ansi block) */
-function DiscordPreview({ colors, joinText, leaveText, showTime }: { colors: Record<ChatKind, ChatColors>; joinText: string; leaveText: string; showTime: boolean }) {
+function DiscordPreview({ colors, joinText, leaveText, showTime, sender }: { colors: Record<ChatKind, ChatColors>; joinText: string; leaveText: string; showTime: boolean; sender: string }) {
   const nick = 'WhiteLegioN';
   const clock = new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+  const name = sender.trim() || t('gn.ch.webhookName');
   const chat = (k: 'global' | 'clan' | 'local', tag: string, text: string) => (
     <p key={k} className="wrap-break-word">
       {showTime && <span style={{ color: ANSI_CSS[colors[k].tag] }}>[{clock}] </span>}
@@ -156915,13 +157191,26 @@ function DiscordPreview({ colors, joinText, leaveText, showTime }: { colors: Rec
       </p>
     );
   };
+  // a message of a webhook as Discord draws it: a round picture, the name with the «БОТ» mark, the time, the code block
   return (
-    <div className="rounded-lg p-3 font-mono text-sm leading-relaxed" style={{ background: '#2b2d31', color: '#dbdee1' }} aria-label={t('gn.ch.look')}>
-      {chat('global', t('gn.ch.label.global'), 'Привет всем!')}
-      {chat('clan', `${t('gn.ch.label.clan')} Ночные`, 'Сбор у замка')}
-      {chat('local', t('gn.ch.label.local'), 'Кто рядом?')}
-      {event('join', joinText)}
-      {event('leave', leaveText)}
+    <div className="flex gap-3 rounded-lg p-3" style={{ background: '#313338', color: '#dbdee1' }} aria-label={t('gn.ch.look')}>
+      <span aria-hidden className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-sm font-extrabold" style={{ background: '#5865f2', color: '#fff' }}>
+        {name.slice(0, 1).toUpperCase()}
+      </span>
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-2 text-sm">
+          <span className="font-bold text-white">{name}</span>
+          <span className="rounded px-1 text-fs-2xs font-extrabold uppercase" style={{ background: '#5865f2', color: '#fff' }}>{t('gn.ch.botMark')}</span>
+          <span className="text-xs" style={{ color: '#949ba4' }}>{t('gn.ch.today', { time: clock })}</span>
+        </div>
+        <div className="mt-1 rounded-md border p-3 font-mono text-sm leading-relaxed" style={{ background: '#2b2d31', borderColor: '#1e1f22' }}>
+          {chat('global', t('gn.ch.label.global'), 'Привет всем!')}
+          {chat('clan', `${t('gn.ch.label.clan')} Ночные`, 'Сбор у замка')}
+          {chat('local', t('gn.ch.label.local'), 'Кто рядом?')}
+          {event('join', joinText)}
+          {event('leave', leaveText)}
+        </div>
+      </div>
     </div>
   );
 }
@@ -157029,6 +157318,14 @@ export function ChatCard({ initial, joinText, leaveText }: { initial: ChatSettin
 
       <div className="space-y-3">
         <h4 className="font-extrabold">{t('gn.ch.look')}</h4>
+        <div className="flex flex-wrap items-center gap-2" role="group" aria-label={t('gn.ch.presets')}>
+          <span className="text-sm font-bold text-mute">{t('gn.ch.presets')}</span>
+          {CHAT_PRESETS.map((p) => (
+            <button key={p.id} type="button" className="chip-filter" onClick={() => setLook((x) => ({ ...x, style: p.style, ...(p.style === 'ansi' ? { colors: p.colors } : {}) }))}>
+              {t(`gn.ch.preset.${p.id}` as 'gn.ch.preset.game')}
+            </button>
+          ))}
+        </div>
         <div className="grid gap-4 lg:grid-cols-2">
           <Field label={t('gn.ch.style')}>
             <select className="input" value={look.style} onChange={(e) => setLook((x) => ({ ...x, style: e.target.value as 'ansi' | 'plain' }))}>
@@ -157076,7 +157373,7 @@ export function ChatCard({ initial, joinText, leaveText }: { initial: ChatSettin
                 </tbody>
               </table>
             </div>
-            <DiscordPreview colors={look.colors} joinText={joinText} leaveText={leaveText} showTime={look.showTime} />
+            <DiscordPreview colors={look.colors} joinText={joinText} leaveText={leaveText} showTime={look.showTime} sender={look.senderName} />
             <p className="text-sm font-semibold text-mute">{t('gn.ch.ansiNote')}</p>
           </>
         )}
@@ -157410,19 +157707,98 @@ export function ScopeNote({ part }: { part: keyof typeof KEY }) {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
+  cat > "$APP_DIR/core-frontend/src/pages/GameNewsServerHead.tsx" << '__COREGSM_EOF__'
+import { useState } from 'react';
+import { api } from '../api';
+import { t, useI18n } from '../i18n';
+import { versionLess, type NewsServerInfo, type RulesState } from '../gameNews';
+import { errText, toast } from '../ui';
+
+/** «3 с назад» / «5 мин назад» / «2 ч назад» */
+function ago(ts: number): string {
+  const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
+  if (s < 90) return t('gn.ago.s', { n: s });
+  if (s < 5400) return t('gn.ago.m', { n: Math.round(s / 60) });
+  return t('gn.ago.h', { n: Math.round(s / 3600) });
+}
+
+/** opens a card (when it is folded) and brings it into view */
+function goTo(card: string): void {
+  const el = document.getElementById(`gn-card-${card}`);
+  if (!el) return;
+  const head = el.querySelector<HTMLButtonElement>('button[aria-expanded="false"]');
+  head?.click();
+  el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+/** the top of a server's page: who it is, is the plugin alive, what is on here (a click goes to the card) */
+export function ServerHead({ server, rd, latest }: { server: NewsServerInfo; rd: RulesState; latest: string }) {
+  useI18n();
+  const [busy, setBusy] = useState(false);
+  const old = server.online && versionLess(server.pluginVersion, latest);
+  const test = async () => {
+    setBusy(true);
+    try {
+      await api('/game-news/send', 'POST', { serverIds: [server.id], text: `<color=#6EC1FF>* ${t('gn.sh.testText')}</color>` });
+      toast(server.online ? t('gn.sh.testSent') : t('gn.sh.testQueued'));
+    } catch (e) { toast(errText(e), 'err'); } finally { setBusy(false); }
+  };
+  const chips: { card: string; label: string; on: boolean }[] = [
+    { card: 'welcome', label: t('gn.sh.welcome'), on: rd.welcome.enabled },
+    { card: 'joinleave', label: t('gn.sh.joinleave'), on: rd.joinLeave.joinEnabled || rd.joinLeave.leaveEnabled },
+    { card: 'register', label: t('gn.sh.register'), on: rd.register.enabled },
+    { card: 'chat', label: t('gn.sh.chat'), on: rd.chat.enabled && rd.chat.set },
+  ];
+  return (
+    <section className="panel space-y-3 p-5">
+      <div className="flex flex-wrap items-start gap-3">
+        <span aria-hidden className={`mt-2 inline-block h-3 w-3 shrink-0 rounded-full ${server.online ? 'bg-ok' : 'bg-mute'}`} />
+        <div className="min-w-0 flex-1 basis-64">
+          <h3 className="wrap-break-word text-lg font-extrabold">{server.name}</h3>
+          <p className="text-sm font-semibold text-mute">
+            {server.address}
+            {server.pluginVersion && ` · v${server.pluginVersion}`}
+            {server.lastSeen ? ` · ${t('gn.plugin.lastPoll', { time: ago(server.lastSeen) })}` : ''}
+            {server.players != null && ` · ${t('gn.players', { n: server.players, max: server.maxPlayers ?? 0 })}`}
+          </p>
+          {old && <p className="text-sm font-semibold text-warn">{t('gn.sh.old', { v: latest })}</p>}
+        </div>
+        <button type="button" className="btn btn-soft btn-sm" disabled={busy} onClick={() => void test()}>{t('gn.sh.test')}</button>
+      </div>
+      <div className="flex flex-wrap gap-2" role="group" aria-label={t('gn.sh.sum')}>
+        {chips.map((c) => (
+          <button key={c.card} type="button" className={`chip-filter ${c.on ? 'on' : ''}`} onClick={() => goTo(c.card)}>
+            <span aria-hidden>{c.on ? '●' : '○'}</span> {c.label}
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/GameNewsServerRestart.tsx" << '__COREGSM_EOF__'
 import { useState } from 'react';
 import { api } from '../api';
-import { FoldCard } from '../components/GameNewsParts';
+import { FoldCard, VarChips, soon } from '../components/GameNewsParts';
+import { ChatLines } from '../components/NewsEditor';
 import { t, useI18n } from '../i18n';
 import { ScopeNote, useScope } from './GameNewsScope';
 import { Field, SaveBadge, errText, toast, useAutosave, usePoll } from '../ui';
 
-interface Job { serverId: number; serverName: string; runAt: number; by: string; source: string; state: string; left: number }
+interface Job { serverId: number; serverName: string; runAt: number; by: string; source: string; state: string; left: number; total: number }
 interface Texts { announce: string; now: string; cancel: string }
-interface State { jobs: Job[]; texts: Texts; servers: { id: number; name: string }[] }
+interface HistoryRow { id: number; serverName: string; startedAt: number; runAt: number; totalSec: number; by: string; source: string; outcome: 'counting' | 'done' | 'cancelled' | 'missed' | 'replaced'; finishedAt: number | null }
+interface State { jobs: Job[]; texts: Texts; servers: { id: number; name: string }[]; history: HistoryRow[] }
 
 const PRESETS = ['1m', '5m', '10m', '30m', '1h'];
+const OUTCOME: Record<HistoryRow['outcome'], { text: 'gn.rr.o.counting' | 'gn.rr.o.done' | 'gn.rr.o.cancelled' | 'gn.rr.o.missed' | 'gn.rr.o.replaced'; cls: string }> = {
+  counting: { text: 'gn.rr.o.counting', cls: 'pill pill-warn' },
+  done: { text: 'gn.rr.o.done', cls: 'pill pill-ok' },
+  cancelled: { text: 'gn.rr.o.cancelled', cls: 'pill pill-mute' },
+  missed: { text: 'gn.rr.o.missed', cls: 'pill pill-warn' },
+  replaced: { text: 'gn.rr.o.replaced', cls: 'pill pill-mute' },
+};
 
 /** «4:59» / «1:02:03» */
 function clock(sec: number): string {
@@ -157431,6 +157807,29 @@ function clock(sec: number): string {
   const m = Math.floor((s % 3600) / 60);
   const x = String(s % 60).padStart(2, '0');
   return h ? `${h}:${String(m).padStart(2, '0')}:${x}` : `${m}:${x}`;
+}
+
+/** the time in the sample line of the preview (in the chat the panel says the real one) */
+const SAMPLE_TIME = '5 минут';
+const plain = (s: string) => s.replace(/[<>]/g, '');
+
+/** the ring of the countdown: the part of the time that is left */
+function Ring({ left, total, red }: { left: number; total: number; red: boolean }) {
+  const r = 44;
+  const c = 2 * Math.PI * r;
+  const part = total > 0 ? Math.min(1, Math.max(0, left / total)) : 0;
+  return (
+    <svg viewBox="0 0 100 100" className="h-24 w-24 shrink-0" role="img" aria-label={clock(left)}>
+      <circle cx="50" cy="50" r={r} fill="none" strokeWidth="8" className="stroke-line" />
+      <circle
+        cx="50" cy="50" r={r} fill="none" strokeWidth="8" strokeLinecap="round"
+        stroke={red ? '#FF5555' : '#FFCC33'}
+        strokeDasharray={c} strokeDashoffset={c * (1 - part)}
+        transform="rotate(-90 50 50)" style={{ transition: 'stroke-dashoffset 1s linear' }}
+      />
+      <text x="50" y="56" textAnchor="middle" fontSize="20" fontWeight="800" fill="currentColor">{clock(left)}</text>
+    </svg>
+  );
 }
 
 /** A restart of a game server by a timer: the chat is told how long is left, then the plugin closes the server. */
@@ -157443,6 +157842,7 @@ export function ServerRestartCard() {
   const [busy, setBusy] = useState(false);
   const [texts, setTexts] = useState<Texts | null>(null);
   const [saved, setSaved] = useState<Texts | null>(null);
+  const [showLog, setShowLog] = useState(false);
   // the seconds left are counted from the moment of the answer, so the clock moves between polls
   const [at, setAt] = useState(Date.now());
   const [, tick] = useState(0);
@@ -157452,7 +157852,9 @@ export function ServerRestartCard() {
     setTexts((x) => x ?? d.texts); setSaved((x) => x ?? d.texts);
     setServer((s) => s || d.servers[0]?.id || 0);
   }).catch(() => undefined);
-  usePoll(() => { tick((n) => n + 1); return load(); }, 3000);
+  usePoll(load, 3000);
+  // the ring moves every second between the polls
+  usePoll(() => { tick((n) => n + 1); }, 1000);
 
   const auto = useAutosave({
     value: texts ?? { announce: '', now: '', cancel: '' },
@@ -157463,27 +157865,48 @@ export function ServerRestartCard() {
   });
 
   if (!st || st.servers.length === 0) return null;
-  const start = async () => {
+  const run = async (fn: () => Promise<unknown>, ok?: string) => {
     setBusy(true);
-    try { await api('/game-news/restart', 'POST', { serverId: server, time }); toast(t('gn.rr.started'), 'ok'); await load(); } catch (e) { toast(errText(e as Error), 'err'); } finally { setBusy(false); }
+    try { await fn(); if (ok) toast(ok, 'ok'); await load(); } catch (e) { toast(errText(e as Error), 'err'); } finally { setBusy(false); }
   };
-  const cancel = async (id: number) => {
-    try { await api(`/game-news/restart/${id}`, 'DELETE'); await load(); } catch (e) { toast(errText(e as Error), 'err'); }
-  };
+  const start = () => run(() => api('/game-news/restart', 'POST', { serverId: server, time }), t('gn.rr.started'));
+  const cancel = (id: number) => run(() => api(`/game-news/restart/${id}`, 'DELETE'));
+  const postpone = (id: number, seconds: number) => run(() => api(`/game-news/restart/${id}/postpone`, 'POST', { seconds }), t('gn.rr.postponed'));
   const elapsed = Math.round((Date.now() - at) / 1000);
+  const jobs = st.jobs.filter((j) => j.state !== 'sent' || j.left - elapsed > -60);
+  const history = st.history;
+
+  const announce = `<color=#FFCC33>${plain(texts?.announce ?? '').replace(/\{time\}/g, SAMPLE_TIME)}</color>`;
+  const now = `<color=#FF5555>${plain(texts?.now ?? '')}</color>`;
+  const cancelled = `<color=#5FD068>${plain(texts?.cancel ?? '')}</color>`;
 
   return (
     <FoldCard id="srvrestart" title={t('gn.rr.title')} summary={t('gn.rr.sum')} on={st.jobs.some((j) => j.state === 'counting')}>
       <p className="text-sm font-semibold text-mute">{t('gn.rr.note')}</p>
 
-      {st.jobs.filter((j) => j.state !== 'sent' || j.left > -60).map((j) => (
-        <div key={j.serverId} className="flex flex-wrap items-center gap-3 rounded-xl border border-line px-3 py-2">
-          <span className="font-extrabold">{j.serverName}</span>
-          <span className="pill pill-warn">{j.state === 'counting' ? clock(j.left - elapsed) : j.state === 'due' ? t('gn.rr.due') : t('gn.rr.sent')}</span>
-          <span className="text-sm font-semibold text-mute">{t('gn.rr.by', { by: j.by || '—', src: j.source })}</span>
-          {j.state !== 'sent' && <button type="button" className="btn btn-ghost btn-sm ml-auto" onClick={() => void cancel(j.serverId)}>{t('gn.rr.cancel')}</button>}
-        </div>
-      ))}
+      {jobs.map((j) => {
+        const left = j.state === 'counting' ? Math.max(0, j.left - elapsed) : 0;
+        return (
+          <div key={j.serverId} className="flex flex-wrap items-center gap-4 rounded-xl border border-line px-4 py-3">
+            <Ring left={left} total={j.total} red={left <= 60} />
+            <div className="min-w-0 flex-1 basis-56 space-y-1">
+              <div className="wrap-break-word font-extrabold">{j.serverName}</div>
+              <div className="text-sm font-semibold text-mute">
+                {j.state === 'counting' ? t('gn.rr.at', { time: new Date(j.runAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }) : j.state === 'due' ? t('gn.rr.due') : t('gn.rr.sent')}
+                {' · '}{t('gn.rr.by', { by: j.by || '—', src: j.source })}
+              </div>
+              {j.state !== 'sent' && (
+                <div className="flex flex-wrap gap-2 pt-1">
+                  {[60, 300, 900].map((sec) => (
+                    <button key={sec} type="button" className="btn btn-soft btn-sm" disabled={busy} onClick={() => void postpone(j.serverId, sec)}>+{sec / 60} {t('gn.rr.min')}</button>
+                  ))}
+                  <button type="button" className="btn btn-ghost btn-sm" disabled={busy} onClick={() => void cancel(j.serverId)}>{t('gn.rr.cancel')}</button>
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })}
 
       <div className="flex flex-wrap items-end gap-3">
         {st.servers.length > 1 && (
@@ -157499,7 +157922,7 @@ export function ServerRestartCard() {
         <button type="button" className="btn" disabled={busy || !time.trim()} onClick={() => void start()}>{t('gn.rr.start')}</button>
       </div>
       <div className="flex flex-wrap gap-2">
-        {PRESETS.map((p) => <button key={p} type="button" className="chip-filter" onClick={() => setTime(p)}>{p}</button>)}
+        {PRESETS.map((p) => <button key={p} type="button" className={`chip-filter ${time === p ? 'on' : ''}`} onClick={() => setTime(p)}>{p}</button>)}
       </div>
 
       {texts && (
@@ -157509,15 +157932,36 @@ export function ServerRestartCard() {
           <Field label={t('gn.rr.announce')}>
             <input className="input" value={texts.announce} maxLength={300} onChange={(e) => setTexts({ ...texts, announce: e.target.value })} />
           </Field>
+          <VarChips vars={[{ name: 'time', example: SAMPLE_TIME }]} onPick={(v) => setTexts({ ...texts, announce: `${texts.announce} ${v}`.trim() })} />
           <Field label={t('gn.rr.now')}>
             <input className="input" value={texts.now} maxLength={300} onChange={(e) => setTexts({ ...texts, now: e.target.value })} />
           </Field>
           <Field label={t('gn.rr.cancelText')}>
             <input className="input" value={texts.cancel} maxLength={300} onChange={(e) => setTexts({ ...texts, cancel: e.target.value })} />
           </Field>
+          <ChatLines lines={[announce, now, cancelled]} />
           <SaveBadge status={auto.status} error={auto.error} retry={auto.retry} />
         </div>
       )}
+
+      <div className="space-y-2">
+        <button type="button" className="btn btn-ghost btn-sm" aria-expanded={showLog} onClick={() => setShowLog((v) => !v)}>
+          {showLog ? t('gn.rr.hideLog') : t('gn.rr.showLog', { n: history.length })}
+        </button>
+        {showLog && (history.length === 0
+          ? <p className="text-sm font-semibold text-mute">{t('gn.rr.logEmpty')}</p>
+          : (
+            <ul className="divide-y divide-line">
+              {history.map((h) => (
+                <li key={h.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2 text-sm">
+                  <span className={OUTCOME[h.outcome].cls}>{t(OUTCOME[h.outcome].text)}</span>
+                  <span className="wrap-break-word font-bold">{h.serverName}</span>
+                  <span className="font-semibold text-mute">{soon(h.startedAt)} · {t('gn.rr.by', { by: h.by || '—', src: h.source })}</span>
+                </li>
+              ))}
+            </ul>
+          ))}
+      </div>
     </FoldCard>
   );
 }

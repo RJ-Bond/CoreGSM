@@ -309,6 +309,24 @@ CREATE TABLE IF NOT EXISTS game_restart_jobs (
   state TEXT NOT NULL DEFAULT 'counting'
 );`),
   },
+  {
+    version: 23,
+    name: 'game_restart_log',
+    // the history of restarts by a timer: who asked, when, and how it ended (counting | done | cancelled | missed | replaced)
+    up: (db) => db.exec(`
+CREATE TABLE IF NOT EXISTS game_restart_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  server_id INTEGER NOT NULL,
+  started_at INTEGER NOT NULL,
+  run_at INTEGER NOT NULL,
+  total_sec INTEGER NOT NULL,
+  requested_by TEXT NOT NULL DEFAULT '',
+  source TEXT NOT NULL DEFAULT '',
+  outcome TEXT NOT NULL DEFAULT 'counting',
+  finished_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_game_restart_log_server ON game_restart_log(server_id, id);`),
+  },
 ];
 
 export const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;

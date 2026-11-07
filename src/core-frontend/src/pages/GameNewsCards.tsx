@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../api';
 import { Switch } from '../components/Switch';
-import { AutoText, FoldCard } from '../components/GameNewsParts';
+import { AutoText, FoldCard, VarChips } from '../components/GameNewsParts';
 import { ChatLines, NewsEditor, NewsPreview } from '../components/NewsEditor';
 import { confirmDialog } from '../confirm';
 import { t, useI18n } from '../i18n';
 import {
-  ANSI_COLORS, CHAT_KINDS, SWATCHES, WELCOME_STYLES, WELCOME_VARIABLES, composeLine, isHex, validateNews,
+  ANSI_COLORS, CHAT_KINDS, CHAT_PRESETS, SWATCHES, WELCOME_STYLES, WELCOME_VARIABLES, composeLine, isHex, validateNews,
   type AnsiColor, type ChatColors, type ChatKind, type ChatSettings, type Extras, type JoinLeave, type RegisterSettings, type Welcome, type WelcomeStyle,
 } from '../gameNews';
 import { ScopeNote, useScope } from './GameNewsScope';
@@ -98,7 +98,19 @@ export function WelcomeCard({ initial }: { initial: Welcome }) {
 }
 
 /** a colour: the palette, the system picker and a HEX box */
-function ColorField({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
+const RECENT_KEY = 'coregsm.gn.recentColors';
+const readRecent = (): string[] => { try { return (JSON.parse(localStorage.getItem(RECENT_KEY) ?? '[]') as string[]).filter(isHex).slice(0, 6); } catch { return []; } };
+const SWATCH_HEX = new Set(SWATCHES.map((c) => c.hex));
+
+function ColorField({ label, value, onChange, gameHex }: { label: string; value: string; onChange: (v: string) => void; gameHex?: string }) {
+  const [recent, setRecent] = useState<string[]>(readRecent);
+  // a colour that was picked stays in the «recent» row of every colour field (kept in this browser)
+  const remember = (v: string) => {
+    if (!isHex(v) || SWATCH_HEX.has(v.toUpperCase())) return;
+    const next = [v.toUpperCase(), ...readRecent().filter((x) => x.toUpperCase() !== v.toUpperCase())].slice(0, 6);
+    try { localStorage.setItem(RECENT_KEY, JSON.stringify(next)); } catch { /* private mode */ }
+    setRecent(next);
+  };
   return (
     <div className="space-y-1.5">
       <span className="text-sm font-bold">{label}</span>
@@ -115,8 +127,17 @@ function ColorField({ label, value, onChange }: { label: string; value: string; 
           />
         ))}
         <input type="color" className="h-8 w-10 cursor-pointer rounded border border-line bg-transparent p-0.5" value={isHex(value) ? value : '#FFFFFF'} aria-label={label} onChange={(e) => onChange(e.target.value.toUpperCase())} />
-        <input className="input w-28 font-mono text-sm" value={value} maxLength={7} aria-label={`${label} HEX`} onChange={(e) => onChange(e.target.value)} />
+        <input className="input w-28 font-mono text-sm" value={value} maxLength={7} aria-label={`${label} HEX`} onChange={(e) => onChange(e.target.value)} onBlur={() => remember(value)} />
+        {gameHex && value.toUpperCase() !== gameHex && <button type="button" className="btn btn-ghost btn-sm" onClick={() => onChange(gameHex)}>{t('gn.col.game')}</button>}
       </div>
+      {recent.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs font-bold text-mute">{t('gn.col.recent')}</span>
+          {recent.map((c) => (
+            <button key={c} type="button" className={`h-6 w-6 rounded-full border ${value.toUpperCase() === c ? 'border-ink ring-2 ring-ink/40' : 'border-line'}`} style={{ background: c }} aria-label={`${label}: ${c}`} onClick={() => onChange(c)} />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -170,10 +191,11 @@ export function JoinLeaveCard({ initial }: { initial: JoinLeave }) {
       </div>
 
       <div className="grid gap-4 lg:grid-cols-2">
-        <ColorField label={t('gn.jl.nameColor')} value={f.nameColor} onChange={(v) => set('nameColor', v)} />
-        <ColorField label={t('gn.jl.textColor')} value={f.textColor} onChange={(v) => set('textColor', v)} />
+        <ColorField label={t('gn.jl.nameColor')} value={f.nameColor} gameHex="#B86BFF" onChange={(v) => set('nameColor', v)} />
+        <ColorField label={t('gn.jl.textColor')} value={f.textColor} gameHex="#5FD068" onChange={(v) => set('textColor', v)} />
       </div>
 
+      <VarChips vars={[{ name: 'name', example: 'WhiteLegioN' }]} onPick={(v) => set('joinText', `${f.joinText} ${v}`.trim())} />
       <ChatLines lines={[sample(f.joinText), sample(f.leaveText)]} />
       <p className="text-sm font-semibold text-mute">{t('gn.jl.nameHint')}</p>
       {auto.invalid && <p className="text-sm font-semibold text-danger">{auto.error}</p>}
@@ -236,6 +258,7 @@ export function RegisterCard({ initial }: { initial: RegisterSettings }) {
         <input className="input w-32" type="number" min={1} max={720} value={f.discordEveryHours} onChange={(e) => set('discordEveryHours', Number(e.target.value))} />
       </Field>
 
+      <VarChips vars={[{ name: 'login', example: 'WhiteLegioN' }, { name: 'panel', example: 'coregsm.example.ru' }]} onPick={(v) => set('promptText', `${f.promptText} ${v}`.trim())} />
       <ChatLines lines={[sample(f.promptText, '#FFCC33'), sample(f.doneText, '#5FD068'), sample(f.discordText, '#6EC1FF')]} />
       <p className="text-sm font-semibold text-mute">{t('gn.rg.vars')}</p>
       <p className="text-sm font-semibold text-danger">{t('gn.rg.warn')}</p>
@@ -278,9 +301,10 @@ function AnsiSelect({ value, onChange, label }: { value: AnsiColor; onChange: (v
 }
 
 /** the sample lines of the chat as Discord will draw them (colours of the ansi block) */
-function DiscordPreview({ colors, joinText, leaveText, showTime }: { colors: Record<ChatKind, ChatColors>; joinText: string; leaveText: string; showTime: boolean }) {
+function DiscordPreview({ colors, joinText, leaveText, showTime, sender }: { colors: Record<ChatKind, ChatColors>; joinText: string; leaveText: string; showTime: boolean; sender: string }) {
   const nick = 'WhiteLegioN';
   const clock = new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+  const name = sender.trim() || t('gn.ch.webhookName');
   const chat = (k: 'global' | 'clan' | 'local', tag: string, text: string) => (
     <p key={k} className="wrap-break-word">
       {showTime && <span style={{ color: ANSI_CSS[colors[k].tag] }}>[{clock}] </span>}
@@ -303,13 +327,26 @@ function DiscordPreview({ colors, joinText, leaveText, showTime }: { colors: Rec
       </p>
     );
   };
+  // a message of a webhook as Discord draws it: a round picture, the name with the «БОТ» mark, the time, the code block
   return (
-    <div className="rounded-lg p-3 font-mono text-sm leading-relaxed" style={{ background: '#2b2d31', color: '#dbdee1' }} aria-label={t('gn.ch.look')}>
-      {chat('global', t('gn.ch.label.global'), 'Привет всем!')}
-      {chat('clan', `${t('gn.ch.label.clan')} Ночные`, 'Сбор у замка')}
-      {chat('local', t('gn.ch.label.local'), 'Кто рядом?')}
-      {event('join', joinText)}
-      {event('leave', leaveText)}
+    <div className="flex gap-3 rounded-lg p-3" style={{ background: '#313338', color: '#dbdee1' }} aria-label={t('gn.ch.look')}>
+      <span aria-hidden className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-sm font-extrabold" style={{ background: '#5865f2', color: '#fff' }}>
+        {name.slice(0, 1).toUpperCase()}
+      </span>
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-2 text-sm">
+          <span className="font-bold text-white">{name}</span>
+          <span className="rounded px-1 text-fs-2xs font-extrabold uppercase" style={{ background: '#5865f2', color: '#fff' }}>{t('gn.ch.botMark')}</span>
+          <span className="text-xs" style={{ color: '#949ba4' }}>{t('gn.ch.today', { time: clock })}</span>
+        </div>
+        <div className="mt-1 rounded-md border p-3 font-mono text-sm leading-relaxed" style={{ background: '#2b2d31', borderColor: '#1e1f22' }}>
+          {chat('global', t('gn.ch.label.global'), 'Привет всем!')}
+          {chat('clan', `${t('gn.ch.label.clan')} Ночные`, 'Сбор у замка')}
+          {chat('local', t('gn.ch.label.local'), 'Кто рядом?')}
+          {event('join', joinText)}
+          {event('leave', leaveText)}
+        </div>
+      </div>
     </div>
   );
 }
@@ -417,6 +454,14 @@ export function ChatCard({ initial, joinText, leaveText }: { initial: ChatSettin
 
       <div className="space-y-3">
         <h4 className="font-extrabold">{t('gn.ch.look')}</h4>
+        <div className="flex flex-wrap items-center gap-2" role="group" aria-label={t('gn.ch.presets')}>
+          <span className="text-sm font-bold text-mute">{t('gn.ch.presets')}</span>
+          {CHAT_PRESETS.map((p) => (
+            <button key={p.id} type="button" className="chip-filter" onClick={() => setLook((x) => ({ ...x, style: p.style, ...(p.style === 'ansi' ? { colors: p.colors } : {}) }))}>
+              {t(`gn.ch.preset.${p.id}` as 'gn.ch.preset.game')}
+            </button>
+          ))}
+        </div>
         <div className="grid gap-4 lg:grid-cols-2">
           <Field label={t('gn.ch.style')}>
             <select className="input" value={look.style} onChange={(e) => setLook((x) => ({ ...x, style: e.target.value as 'ansi' | 'plain' }))}>
@@ -464,7 +509,7 @@ export function ChatCard({ initial, joinText, leaveText }: { initial: ChatSettin
                 </tbody>
               </table>
             </div>
-            <DiscordPreview colors={look.colors} joinText={joinText} leaveText={leaveText} showTime={look.showTime} />
+            <DiscordPreview colors={look.colors} joinText={joinText} leaveText={leaveText} showTime={look.showTime} sender={look.senderName} />
             <p className="text-sm font-semibold text-mute">{t('gn.ch.ansiNote')}</p>
           </>
         )}

@@ -28,9 +28,23 @@ export const RESTART_COMMANDS = [
     ],
   },
 ];
+export const SAY_COMMAND = {
+  name: 'say',
+  description: '💬 Написать в игровой чат сервера · только админы',
+  description_localizations: { ru: '💬 Написать в игровой чат сервера · только админы', 'en-US': '💬 Write to the game chat of a server · admins only', 'en-GB': '💬 Write to the game chat of a server · admins only' },
+  dm_permission: false,
+  default_member_permissions: String(PermissionFlagsBits.Administrator),
+  options: [
+    { type: 3, name: 'text', description: '✍️ Что написать', description_localizations: { ru: '✍️ Что написать', 'en-US': '✍️ What to write', 'en-GB': '✍️ What to write' }, required: true, max_length: 250 },
+    SERVER,
+  ],
+};
+RESTART_COMMANDS.push(SAY_COMMAND as never);
+
 export const RESTART_NAMES = new Set(RESTART_COMMANDS.map((c) => c.name));
 
 export async function handleRestart(i: ChatInputCommandInteraction): Promise<void> {
+  if (i.commandName === 'say') return handleSay(i);
   try {
     await i.deferReply({ flags: EPHEMERAL });
   } catch (e) {
@@ -52,4 +66,29 @@ export async function handleRestart(i: ChatInputCommandInteraction): Promise<voi
     ? replyEmbed(r.data.ok ? 'Рестарт' : 'Не получилось', r.data.text, r.data.ok ? COLORS.ok : COLORS.warn)
     : replyEmbed('Не получилось', 'Панель сейчас не отвечает, попробуйте ещё раз чуть позже.', COLORS.bad);
   await i.editReply(out).catch((e) => log('restart reply failed:', (e as Error).message));
+}
+
+/** /say: a line from Discord into the game chat («* [Discord] Имя: текст») of one server or of all that have the plugin */
+async function handleSay(i: ChatInputCommandInteraction): Promise<void> {
+  try {
+    await i.deferReply({ flags: EPHEMERAL });
+  } catch (e) {
+    log('say: could not acknowledge:', (e as Error).message);
+    return;
+  }
+  const member = i.member as { displayName?: string } | null;
+  const r = await backendJson<{ ok: boolean; text: string }>('/internal/game-say', {
+    method: 'POST',
+    body: JSON.stringify({
+      text: i.options.getString('text', true),
+      server: i.options.getString('server') ?? undefined,
+      name: member?.displayName ?? i.user.username,
+      discordId: i.user.id,
+      discordAdmin: i.memberPermissions?.has(PermissionFlagsBits.Administrator) ?? false,
+    }),
+  }).catch(() => null);
+  const out = r?.data
+    ? replyEmbed(r.data.ok ? 'В игру' : 'Не получилось', r.data.text, r.data.ok ? COLORS.ok : COLORS.warn)
+    : replyEmbed('Не получилось', 'Панель сейчас не отвечает, попробуйте ещё раз чуть позже.', COLORS.bad);
+  await i.editReply(out).catch((e) => log('say reply failed:', (e as Error).message));
 }

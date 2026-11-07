@@ -52,7 +52,7 @@ export function FoldCard({ id, title, summary, on, defaultOpen = false, status, 
   useEffect(() => { try { localStorage.setItem(KEY(id), open ? '1' : '0'); } catch { /* private mode */ } }, [id, open]);
 
   return (
-    <section className="panel overflow-hidden">
+    <section id={`gn-card-${id}`} className="panel overflow-hidden">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-5 py-3.5">
         <button
           type="button"
@@ -72,5 +72,20 @@ export function FoldCard({ id, title, summary, on, defaultOpen = false, status, 
       </div>
       {open && <div id={body} className="space-y-4 border-t border-line px-5 py-4">{children}</div>}
     </section>
+  );
+}
+
+/** the variables of a text: a click puts one into the text, the example shows what it turns into */
+export function VarChips({ vars, onPick }: { vars: { name: string; example: string }[]; onPick: (v: string) => void }) {
+  useI18n();
+  return (
+    <div className="flex flex-wrap items-center gap-2 text-sm">
+      <span className="font-bold text-mute">{t('gn.vh.label')}</span>
+      {vars.map((v) => (
+        <button key={v.name} type="button" className="chip-filter font-mono" title={`${v.name} → ${v.example}`} onClick={() => onPick(`{${v.name}}`)}>
+          {`{${v.name}}`}<span className="ml-1.5 font-sans font-semibold text-mute">→ {v.example}</span>
+        </button>
+      ))}
+    </div>
   );
 }

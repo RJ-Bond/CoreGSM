@@ -260,6 +260,38 @@ export interface RegisterSettings {
 export const CHAT_KINDS = ['global', 'clan', 'local', 'join', 'leave'] as const;
 export type ChatKind = (typeof CHAT_KINDS)[number];
 /** the eight colours of an ansi block of Discord */
+/** ready looks of the chat in Discord: the colours of the game, calm, bright, or no colours at all */
+export const CHAT_PRESETS: { id: 'game' | 'calm' | 'bright' | 'plain'; style: 'ansi' | 'plain'; colors: Record<ChatKind, ChatColors> }[] = [
+  {
+    id: 'game', style: 'ansi',
+    colors: {
+      global: { tag: 'blue', name: 'yellow', text: 'blue' }, local: { tag: 'blue', name: 'yellow', text: 'blue' }, clan: { tag: 'green', name: 'yellow', text: 'green' },
+      join: { tag: 'green', name: 'pink', text: 'green' }, leave: { tag: 'green', name: 'pink', text: 'green' },
+    },
+  },
+  {
+    id: 'calm', style: 'ansi',
+    colors: {
+      global: { tag: 'gray', name: 'white', text: 'gray' }, local: { tag: 'gray', name: 'white', text: 'gray' }, clan: { tag: 'gray', name: 'white', text: 'gray' },
+      join: { tag: 'gray', name: 'white', text: 'gray' }, leave: { tag: 'gray', name: 'white', text: 'gray' },
+    },
+  },
+  {
+    id: 'bright', style: 'ansi',
+    colors: {
+      global: { tag: 'cyan', name: 'yellow', text: 'white' }, local: { tag: 'gray', name: 'yellow', text: 'gray' }, clan: { tag: 'green', name: 'yellow', text: 'white' },
+      join: { tag: 'green', name: 'pink', text: 'green' }, leave: { tag: 'red', name: 'pink', text: 'red' },
+    },
+  },
+  {
+    id: 'plain', style: 'plain',
+    colors: {
+      global: { tag: 'white', name: 'white', text: 'white' }, local: { tag: 'white', name: 'white', text: 'white' }, clan: { tag: 'white', name: 'white', text: 'white' },
+      join: { tag: 'white', name: 'white', text: 'white' }, leave: { tag: 'white', name: 'white', text: 'white' },
+    },
+  },
+];
+
 export const ANSI_COLORS = ['gray', 'red', 'green', 'yellow', 'blue', 'pink', 'cyan', 'white'] as const;
 export type AnsiColor = (typeof ANSI_COLORS)[number];
 export interface ChatColors { tag: AnsiColor; name: AnsiColor; text: AnsiColor }
