@@ -42,7 +42,7 @@ describe('message variables', () => {
     assert.equal(applyVars('{server}: {online}/{max}, {time}. {other}', vars), 'Мой сервер: 12/40, 20:05. {other}');
   });
   it('never lets a value bring tags', () => {
-    assert.equal(applyVars('{server}', { ...vars, server: '<color=#ff0000>x</color>' }), 'color=#ff0000xcolor');
+    assert.equal(applyVars('{server}', { ...vars, server: '<color=#ff0000>x</color>' }), 'color=#ff0000x/color');
   });
   it('cuts a very long value', () => {
     assert.equal(applyVars('{server}', { ...vars, server: 'a'.repeat(100) }).length, 60);
