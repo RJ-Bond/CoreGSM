@@ -57,7 +57,7 @@ export function ServerHead({ server, rd, latest }: { server: NewsServerInfo; rd:
       </div>
       <div className="flex flex-wrap gap-2" role="group" aria-label={t('gn.sh.sum')}>
         {chips.map((c) => (
-          <button key={c.card} type="button" className={`chip-filter ${c.on ? 'on' : ''}`} onClick={() => goTo(c.card)}>
+          <button key={c.card} type="button" className={`chip-filter gap-1.5 ${c.on ? 'on' : ''}`} onClick={() => goTo(c.card)}>
             <span aria-hidden>{c.on ? '●' : '○'}</span> {c.label}
           </button>
         ))}

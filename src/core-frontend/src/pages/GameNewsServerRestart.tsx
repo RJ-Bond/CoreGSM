@@ -3,13 +3,14 @@ import { api } from '../api';
 import { FoldCard, VarChips, soon } from '../components/GameNewsParts';
 import { ChatLines } from '../components/NewsEditor';
 import { t, useI18n } from '../i18n';
+import { Switch } from '../components/Switch';
 import { ScopeNote, useScope } from './GameNewsScope';
 import { Field, SaveBadge, errText, toast, useAutosave, usePoll } from '../ui';
 
 interface Job { serverId: number; serverName: string; runAt: number; by: string; source: string; state: string; left: number; total: number }
 interface Texts { announce: string; now: string; cancel: string }
 interface HistoryRow { id: number; serverName: string; startedAt: number; runAt: number; totalSec: number; by: string; source: string; outcome: 'counting' | 'done' | 'cancelled' | 'missed' | 'replaced'; finishedAt: number | null }
-interface State { jobs: Job[]; texts: Texts; servers: { id: number; name: string }[]; history: HistoryRow[] }
+interface State { emptyNow: boolean; jobs: Job[]; texts: Texts; servers: { id: number; name: string }[]; history: HistoryRow[] }
 
 const PRESETS = ['1m', '5m', '10m', '30m', '1h'];
 const OUTCOME: Record<HistoryRow['outcome'], { text: 'gn.rr.o.counting' | 'gn.rr.o.done' | 'gn.rr.o.cancelled' | 'gn.rr.o.missed' | 'gn.rr.o.replaced'; cls: string }> = {
@@ -89,7 +90,11 @@ export function ServerRestartCard() {
     setBusy(true);
     try { await fn(); if (ok) toast(ok, 'ok'); await load(); } catch (e) { toast(errText(e as Error), 'err'); } finally { setBusy(false); }
   };
-  const start = () => run(() => api('/game-news/restart', 'POST', { serverId: server, time }), t('gn.rr.started'));
+  const start = () => run(async () => {
+    const r = await api<{ immediate: boolean }>('/game-news/restart', 'POST', { serverId: server, time });
+    toast(r.immediate ? t('gn.rr.immediate') : t('gn.rr.started'), 'ok');
+  }, undefined);
+  const setEmpty = (v: boolean) => run(() => api('/game-news/restart-empty', 'PUT', { enabled: v }));
   const cancel = (id: number) => run(() => api(`/game-news/restart/${id}`, 'DELETE'));
   const postpone = (id: number, seconds: number) => run(() => api(`/game-news/restart/${id}/postpone`, 'POST', { seconds }), t('gn.rr.postponed'));
   const elapsed = Math.round((Date.now() - at) / 1000);
@@ -141,6 +146,13 @@ export function ServerRestartCard() {
         </Field>
         <button type="button" className="btn" disabled={busy || !time.trim()} onClick={() => void start()}>{t('gn.rr.start')}</button>
       </div>
+      <label className="flex items-start gap-3 font-bold">
+        <Switch className="mt-0.5" checked={st.emptyNow} disabled={busy} onChange={(v) => void setEmpty(v)} />
+        <span>
+          {t('gn.rr.empty0')}
+          <span className="block text-sm font-semibold text-mute">{t('gn.rr.empty0Note')}</span>
+        </span>
+      </label>
       <div className="flex flex-wrap gap-2">
         {PRESETS.map((p) => <button key={p} type="button" className={`chip-filter ${time === p ? 'on' : ''}`} onClick={() => setTime(p)}>{p}</button>)}
       </div>

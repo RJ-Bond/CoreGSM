@@ -113,7 +113,7 @@ export async function handleGameChatMessage(m: Message): Promise<void> {
   const text = m.cleanContent.replace(/\s+/g, ' ').trim().slice(0, 300);
   if (!text || text.startsWith('/')) return;
   if (!(await chatChannelIds()).has(m.channelId)) return;
-  const r = await backendJson<{ ok: boolean; silent?: boolean }>('/internal/game-say', {
+  const r = await backendJson<{ ok: boolean; silent?: boolean; rate?: boolean }>('/internal/game-say', {
     method: 'POST',
     body: JSON.stringify({
       text, channelId: m.channelId, name: m.member?.displayName ?? m.author.username, discordId: m.author.id,
@@ -121,5 +121,5 @@ export async function handleGameChatMessage(m: Message): Promise<void> {
     }),
   }).catch(() => null);
   if (!r?.data || r.data.silent) return;
-  await m.react(r.data.ok ? '✅' : '❌').catch(() => undefined);
+  await m.react(r.data.ok ? '✅' : r.data.rate ? '⏳' : '❌').catch(() => undefined);
 }

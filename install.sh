@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="296d4c531d14"
+COREGSM_BUILD="8e053c65f23b"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.85"
+COREGSM_VERSION="1.1.86"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -25504,7 +25504,7 @@ __COREGSM_EOF__
  */
 import type { Express, RequestHandler } from 'express';
 import { z } from 'zod';
-import { db } from '../db.js';
+import { db, getSetting, setSetting } from '../db.js';
 import { readScoped, serverOf, writeScoped } from './gameNewsScope.js';
 import { log } from '../logger.js';
 import { internal } from '../security/auth.js';
@@ -25516,6 +25516,7 @@ import {
 } from './gameNewsRestartLogic.js';
 import { DUE_GRACE_MS, closeLog, getJob, jobsIn, logRunAt, logStart, recentLog, saveJob, setLastNotice, setState, type Job } from './gameNewsRestartState.js';
 import { serverLabel } from './gameNewsVars.js';
+import { checkPluginSilence } from './gameNewsWatch.js';
 
 // ---- the words of the notices (set in the panel)
 export function getTexts(serverId?: number): RestartTexts {
@@ -25541,7 +25542,23 @@ const tellChat = (serverId: number, line: string, now: number): void => {
 };
 
 // ---- the timer
-export function startRestart(serverId: number, seconds: number, by: string, source: string, now = Date.now()): Job {
+/** nobody is playing now: the plugin itself said so a moment ago (the number of the panel's own query is not trusted for this) */
+export function serverIsEmpty(serverId: number, now: number): boolean {
+  const t = db.prepare('SELECT last_seen, plugin_players FROM game_news_targets WHERE server_id = ?').get(serverId) as { last_seen: number; plugin_players: number } | undefined;
+  return !!t && t.last_seen > 0 && now - t.last_seen < 30_000 && t.plugin_players === 0;
+}
+
+export const restartWhenEmpty = (): boolean => getSetting('gamenews_restart_empty') !== '0';
+
+export function startRestart(serverId: number, seconds: number, by: string, source: string, now = Date.now()): Job & { immediate: boolean } {
+  // an empty server needs no warning and no waiting: it restarts at once (the switch of the panel can turn this off)
+  if (restartWhenEmpty() && serverIsEmpty(serverId, now)) {
+    const job: Job = { server_id: serverId, run_at: now, started_at: now, total_sec: 0, last_notice: 0, requested_by: by.slice(0, 80), source: source.slice(0, 40), state: 'due' };
+    saveJob(job);
+    logStart(job);
+    log.info(`game restart of server ${serverId} at once: nobody is playing (${source})`);
+    return { ...job, immediate: true };
+  }
   const job: Job = {
     server_id: serverId, run_at: now + seconds * 1000, started_at: now, total_sec: seconds, last_notice: seconds,
     requested_by: by.slice(0, 80), source: source.slice(0, 40), state: 'counting',
@@ -25550,7 +25567,7 @@ export function startRestart(serverId: number, seconds: number, by: string, sour
   logStart(job);
   tellChat(serverId, announceLine(getTexts(serverId), seconds), now);
   log.info(`game restart of server ${serverId} in ${seconds} s (${source})`);
-  return job;
+  return { ...job, immediate: false };
 }
 
 /** true when a timer was running and is stopped */
@@ -25583,11 +25600,16 @@ export function tickRestartJobs(now = Date.now()): void {
 
 let timer: NodeJS.Timeout | undefined;
 let busy = false;
+let passes = 0;
 export function startRestartJobsTimer(): void {
   timer = setInterval(() => {
     if (busy) return;
     busy = true;
-    try { tickRestartJobs(); } catch (e) { log.error('game restart timer failed', (e as Error).message); } finally { busy = false; }
+    try {
+      tickRestartJobs();
+      // once a minute: has a plugin been silent for too long
+      if (++passes % 12 === 0) checkPluginSilence();
+    } catch (e) { log.error('game restart timer failed', (e as Error).message); } finally { busy = false; }
   }, 5000);
   timer.unref();
 }
@@ -25626,8 +25648,18 @@ export function runRestartCommand(serverId: number, raw: string, by: string, sou
   if ('error' in d) {
     return { ok: false, text: d.error === 'format' ? 'Не понял время. Примеры: 5m, 5м, 30s, 1h, 90' : d.error === 'short' ? 'Слишком мало: от 10 секунд.' : 'Слишком много: не больше 6 часов.' };
   }
-  startRestart(serverId, d.seconds, by, source, now);
-  return { ok: true, text: `Рестарт сервера через ${formatLeft(d.seconds)}.` };
+  const started = startRestart(serverId, d.seconds, by, source, now);
+  return { ok: true, text: started.immediate ? 'На сервере никого нет: перезапускаю сразу.' : `Рестарт сервера через ${formatLeft(d.seconds)}.` };
+}
+
+const lastSay = new Map<string, number>();
+/** false when this person wrote less than two seconds ago */
+function sayGate(who: string, now: number): boolean {
+  const prev = lastSay.get(who) ?? 0;
+  if (now - prev < 2000) return false;
+  lastSay.set(who, now);
+  if (lastSay.size > 500) for (const [k, t] of lastSay) if (now - t > 60_000) lastSay.delete(k);
+  return true;
 }
 
 const C_OK = '#5FD068';
@@ -25642,7 +25674,7 @@ export function registerGameNewsServerRestart({ app, admin }: { app: Express; ad
       left: Math.max(0, Math.ceil((j.run_at - now) / 1000)), total: j.total_sec,
     }));
     const history = recentLog().map((h) => ({ id: h.id, serverName: serverLabel(h.server_id), startedAt: h.started_at, runAt: h.run_at, totalSec: h.total_sec, by: h.requested_by, source: h.source, outcome: h.outcome, finishedAt: h.finished_at }));
-    res.json({ jobs, texts: getTexts(serverOf(req)), servers: pluginServers(), history });
+    res.json({ jobs, texts: getTexts(serverOf(req)), servers: pluginServers(), history, emptyNow: restartWhenEmpty() });
   });
 
   app.post('/api/game-news/restart', admin, (req, res) => {
@@ -25657,7 +25689,7 @@ export function registerGameNewsServerRestart({ app, admin }: { app: Express; ad
     }
     const user = (req as typeof req & { user?: { username?: string } }).user?.username ?? '';
     const job = startRestart(b.data.serverId, d.seconds, user, 'панель');
-    res.json({ ok: true, runAt: job.run_at });
+    res.json({ ok: true, runAt: job.run_at, immediate: job.immediate });
   });
 
   app.delete('/api/game-news/restart/:serverId', admin, (req, res) => {
@@ -25669,6 +25701,13 @@ export function registerGameNewsServerRestart({ app, admin }: { app: Express; ad
     if (!b.success) return res.status(400).json({ error: 'Проверьте поля' });
     const r = postponeRestart(Number(req.params.serverId), b.data.seconds);
     if (!r.ok) return res.status(400).json({ error: r.text });
+    res.json({ ok: true });
+  });
+
+  app.put('/api/game-news/restart-empty', admin, (req, res) => {
+    const b = z.object({ enabled: z.boolean() }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'Проверьте поля' });
+    setSetting('gamenews_restart_empty', b.data.enabled ? '1' : '0');
     res.json({ ok: true });
   });
 
@@ -25707,6 +25746,9 @@ export function registerGameNewsServerRestart({ app, admin }: { app: Express; ad
     const linked = db.prepare("SELECT username FROM users WHERE discord_id = ? AND role = 'admin' AND status = 'active'").get(b.data.discordId) as { username: string } | undefined;
     // a line written in the chat channel by somebody who is not an administrator is just talk: no answer
     if (!b.data.discordAdmin && !linked) return res.json({ ok: false, silent: !!b.data.channelId, text: 'Эта команда только для администраторов.' });
+    // one line in two seconds per person: a flood into the game chat helps nobody
+    const gate = sayGate(b.data.discordId, Date.now());
+    if (!gate) return res.json({ ok: false, rate: true, text: 'Слишком часто: подождите пару секунд.' });
     const servers = pluginServers();
     const q = (b.data.server ?? '').trim().toLowerCase();
     const ch = b.data.channelId ? chatChannels().find((c) => c.channelId === b.data.channelId) : undefined;
@@ -25874,6 +25916,69 @@ export function varsFor(serverId: number, now: number): Vars {
   };
   for (const k of VARIABLES) if (!v[k]) v[k] = '—';
   return v;
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/gamenews"
+  cat > "$APP_DIR/core-backend/src/gamenews/gameNewsWatch.ts" << '__COREGSM_EOF__'
+/**
+ * Tells the administrators (the alert channel of the panel) when the game plugin of a server has been silent for five minutes,
+ * and again when it is back. A server that is restarting on purpose (a timer of «Рестарт сервера по таймеру» ran out less than
+ * fifteen minutes ago) or is in a maintenance window is left alone.
+ */
+import { db, getSetting, setSetting } from '../db.js';
+import { alertSettings, enqueueAlert } from '../alerts/alerts.js';
+import { inMaintenance } from '../maintenance.js';
+import { ONLINE_MS, serverLabel } from './gameNewsVars.js';
+import { getJob } from './gameNewsRestartState.js';
+
+export const SILENT_MS = 5 * 60_000;
+const RESTART_GRACE_MS = 15 * 60_000;
+const KEY = 'gamenews_silent';
+
+const readAlerted = (): number[] => {
+  try { return (JSON.parse(getSetting(KEY) || '[]') as unknown[]).filter((x): x is number => Number.isInteger(x)); } catch { return []; }
+};
+
+/** what a server's plugin is doing now: 'silent' (was seen, not for five minutes), 'ok', or 'never' (not connected yet) */
+export function pluginState(lastSeen: number, now: number): 'never' | 'ok' | 'silent' {
+  if (!lastSeen) return 'never';
+  return now - lastSeen > SILENT_MS ? 'silent' : 'ok';
+}
+
+export function checkPluginSilence(now = Date.now()): number {
+  const rows = db.prepare("SELECT server_id, last_seen FROM game_news_targets WHERE token_hash <> '' AND last_seen > 0").all() as { server_id: number; last_seen: number }[];
+  const alerted = new Set(readAlerted());
+  let sent = 0;
+  const s = alertSettings();
+  const say = (id: number, back: boolean, since: number) => {
+    if (!s.enabled || !s.channelId) return;
+    const name = serverLabel(id);
+    enqueueAlert('update', name, {
+      content: '', mention: 'none',
+      embed: back
+        ? { title: '✅ Игровой плагин снова на связи', description: `Сервер **${name}**: плагин CoreGSM отвечает.`, color: 0x3ba55d, timestamp: new Date(now).toISOString() }
+        : { title: '⚠️ Игровой плагин не отвечает', description: `Сервер **${name}**: плагин CoreGSM не выходил на связь с ${new Date(since).toLocaleString('ru-RU')}. Сообщения в игру, чат в Discord и рестарт по таймеру не работают, пока он молчит. Проверьте, что сервер запущен и плагин установлен.`, color: 0xed4245, timestamp: new Date(now).toISOString() },
+    });
+    sent++;
+  };
+  for (const r of rows) {
+    const st = pluginState(r.last_seen, now);
+    if (st === 'silent' && !alerted.has(r.server_id)) {
+      const job = getJob(r.server_id);
+      if (job && (job.state === 'sent' || job.state === 'due') && now - job.run_at < RESTART_GRACE_MS) continue;
+      if (inMaintenance(r.server_id, now)) continue;
+      alerted.add(r.server_id);
+      say(r.server_id, false, r.last_seen);
+    } else if (st === 'ok' && alerted.has(r.server_id) && now - r.last_seen < ONLINE_MS * 2) {
+      alerted.delete(r.server_id);
+      say(r.server_id, true, r.last_seen);
+    }
+  }
+  // a server that lost its token or was removed must not stay in the list
+  const known = new Set(rows.map((r) => r.server_id));
+  for (const id of [...alerted]) if (!known.has(id)) alerted.delete(id);
+  setSetting(KEY, alerted.size ? JSON.stringify([...alerted]) : null);
+  return sent;
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/gamenews"
@@ -43646,7 +43751,7 @@ export async function handleGameChatMessage(m: Message): Promise<void> {
   const text = m.cleanContent.replace(/\s+/g, ' ').trim().slice(0, 300);
   if (!text || text.startsWith('/')) return;
   if (!(await chatChannelIds()).has(m.channelId)) return;
-  const r = await backendJson<{ ok: boolean; silent?: boolean }>('/internal/game-say', {
+  const r = await backendJson<{ ok: boolean; silent?: boolean; rate?: boolean }>('/internal/game-say', {
     method: 'POST',
     body: JSON.stringify({
       text, channelId: m.channelId, name: m.member?.displayName ?? m.author.username, discordId: m.author.id,
@@ -43654,7 +43759,7 @@ export async function handleGameChatMessage(m: Message): Promise<void> {
     }),
   }).catch(() => null);
   if (!r?.data || r.data.silent) return;
-  await m.react(r.data.ok ? '✅' : '❌').catch(() => undefined);
+  await m.react(r.data.ok ? '✅' : r.data.rate ? '⏳' : '❌').catch(() => undefined);
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-bot/src"
@@ -143610,6 +143715,10 @@ const en: Record<keyof typeof ru, string> = {
   'gn.h.expired': 'Not delivered',
   'gn.h.fail': 'Failed',
   'gn.reuse': 'Use again',
+  'gn.rr.immediate': 'Nobody is on the server: restarting at once',
+  'gn.rr.empty0': 'Restart at once when nobody is on the server',
+  'gn.rr.empty0Note': 'The plugin reports how many players are online. When there are none there is no use waiting for the timer: the server restarts without a countdown.',
+
   'gn.ch.fromDiscord': 'Write from Discord to the game',
   'gn.ch.fromDiscordNote': 'What a Discord administrator writes in this channel appears in the game chat: «* [Discord] Name: text». The bot puts ✅ under the message. Messages of other members are ignored. «Message Content Intent» has to be on in Developer Portal → Bot, and the bot needs the right to read the channel.',
   'gn.ch.fromDiscordNeed': 'Set the webhook of the channel first.',
@@ -143657,7 +143766,7 @@ const en: Record<keyof typeof ru, string> = {
 
   'gn.rr.title': 'Server restart by a timer',
   'gn.rr.sum': 'Warns the players in the chat and restarts the server',
-  'gn.rr.note': 'The chat says «Restart in 5 minutes», «in 4 minutes» and so on, then the plugin saves the world and closes the server. AMP has to start it again. The same can be done with «.restart 5m» in the game (administrators), «restart 5m» in the AMP console and «/restart» in Discord.',
+  'gn.rr.note': 'The chat says «Restart in 5 minutes», «in 4 minutes» and so on, then the plugin closes the server (the game saves the world when it quits). AMP has to start it again. The same can be done with «.restart 5m» in the game (administrators), «restart 5m» in the AMP console and «/restart» in Discord.',
   'gn.rr.server': 'Server',
   'gn.rr.time': 'In how long',
   'gn.rr.start': 'Start the timer',
@@ -148299,6 +148408,10 @@ const ru = {
   'gn.h.expired': 'Не доставлено',
   'gn.h.fail': 'Ошибка',
   'gn.reuse': 'Использовать снова',
+  'gn.rr.immediate': 'На сервере никого нет: перезапуск идёт сразу',
+  'gn.rr.empty0': 'Если на сервере никого нет, перезапускать сразу',
+  'gn.rr.empty0Note': 'Плагин сам сообщает, сколько игроков онлайн. Если их 0, ждать таймер незачем: сервер перезапускается без отсчёта.',
+
   'gn.ch.fromDiscord': 'Писать из Discord в игру',
   'gn.ch.fromDiscordNote': 'Всё, что администратор Discord пишет в этом канале, появится в игровом чате: «* [Discord] Имя: текст». Под сообщением бот ставит ✅. Сообщения остальных участников игнорируются. В Developer Portal → Bot должен быть включён «Message Content Intent», а у бота есть право читать канал.',
   'gn.ch.fromDiscordNeed': 'Сначала укажите webhook канала.',
@@ -148346,7 +148459,7 @@ const ru = {
 
   'gn.rr.title': 'Рестарт сервера по таймеру',
   'gn.rr.sum': 'Предупреждает игроков в чате и перезапускает сервер',
-  'gn.rr.note': 'В чате пишется «Рестарт через 5 минут», «через 4 минуты» и так до конца, потом плагин сохраняет мир и закрывает сервер. Панель AMP должна запускать его снова. То же умеют команда «.restart 5m» в игре (для администраторов), «restart 5m» в консоли AMP и «/restart» в Discord.',
+  'gn.rr.note': 'В чате пишется «Рестарт через 5 минут», «через 4 минуты» и так до конца, потом плагин закрывает сервер (игра при выходе сама сохраняет мир). Панель AMP должна запускать его снова. То же умеют команда «.restart 5m» в игре (для администраторов), «restart 5m» в консоли AMP и «/restart» в Discord.',
   'gn.rr.server': 'Сервер',
   'gn.rr.time': 'Через сколько',
   'gn.rr.start': 'Запустить таймер',
@@ -156796,10 +156909,12 @@ export default function GameNewsPage({ sub = '' }: { sub?: string }) {
       {data && (
         <div className="flex flex-wrap gap-2" role="tablist" aria-label={t('gn.title')}>
           {[...tabList.slice(0, -1), ...serverTabs.map((x) => ({ id: `s${x.id}`, label: x.name, phone: true })), ...tabList.slice(-1)].map((x) => (
-            <button key={x.id} type="button" role="tab" aria-selected={tab === x.id} className={`chip-filter ${tab === x.id ? 'on' : ''} ${'phone' in x ? 'md:hidden' : ''}`} onClick={() => goTab(x.id)}>
+            <span key={x.id} className={'phone' in x ? 'contents md:hidden' : 'contents'}>
+            <button type="button" role="tab" aria-selected={tab === x.id} className={`chip-filter ${tab === x.id ? 'on' : ''}`} onClick={() => goTab(x.id)}>
               {x.label}
               {(counter[x.id] ?? 0) > 0 && <span className="ml-1.5 rounded-full bg-soft px-1.5 text-xs font-extrabold">{counter[x.id]}</span>}
             </button>
+            </span>
           ))}
         </div>
       )}
@@ -157877,7 +157992,7 @@ export function ServerHead({ server, rd, latest }: { server: NewsServerInfo; rd:
       </div>
       <div className="flex flex-wrap gap-2" role="group" aria-label={t('gn.sh.sum')}>
         {chips.map((c) => (
-          <button key={c.card} type="button" className={`chip-filter ${c.on ? 'on' : ''}`} onClick={() => goTo(c.card)}>
+          <button key={c.card} type="button" className={`chip-filter gap-1.5 ${c.on ? 'on' : ''}`} onClick={() => goTo(c.card)}>
             <span aria-hidden>{c.on ? '●' : '○'}</span> {c.label}
           </button>
         ))}
@@ -157893,13 +158008,14 @@ import { api } from '../api';
 import { FoldCard, VarChips, soon } from '../components/GameNewsParts';
 import { ChatLines } from '../components/NewsEditor';
 import { t, useI18n } from '../i18n';
+import { Switch } from '../components/Switch';
 import { ScopeNote, useScope } from './GameNewsScope';
 import { Field, SaveBadge, errText, toast, useAutosave, usePoll } from '../ui';
 
 interface Job { serverId: number; serverName: string; runAt: number; by: string; source: string; state: string; left: number; total: number }
 interface Texts { announce: string; now: string; cancel: string }
 interface HistoryRow { id: number; serverName: string; startedAt: number; runAt: number; totalSec: number; by: string; source: string; outcome: 'counting' | 'done' | 'cancelled' | 'missed' | 'replaced'; finishedAt: number | null }
-interface State { jobs: Job[]; texts: Texts; servers: { id: number; name: string }[]; history: HistoryRow[] }
+interface State { emptyNow: boolean; jobs: Job[]; texts: Texts; servers: { id: number; name: string }[]; history: HistoryRow[] }
 
 const PRESETS = ['1m', '5m', '10m', '30m', '1h'];
 const OUTCOME: Record<HistoryRow['outcome'], { text: 'gn.rr.o.counting' | 'gn.rr.o.done' | 'gn.rr.o.cancelled' | 'gn.rr.o.missed' | 'gn.rr.o.replaced'; cls: string }> = {
@@ -157979,7 +158095,11 @@ export function ServerRestartCard() {
     setBusy(true);
     try { await fn(); if (ok) toast(ok, 'ok'); await load(); } catch (e) { toast(errText(e as Error), 'err'); } finally { setBusy(false); }
   };
-  const start = () => run(() => api('/game-news/restart', 'POST', { serverId: server, time }), t('gn.rr.started'));
+  const start = () => run(async () => {
+    const r = await api<{ immediate: boolean }>('/game-news/restart', 'POST', { serverId: server, time });
+    toast(r.immediate ? t('gn.rr.immediate') : t('gn.rr.started'), 'ok');
+  }, undefined);
+  const setEmpty = (v: boolean) => run(() => api('/game-news/restart-empty', 'PUT', { enabled: v }));
   const cancel = (id: number) => run(() => api(`/game-news/restart/${id}`, 'DELETE'));
   const postpone = (id: number, seconds: number) => run(() => api(`/game-news/restart/${id}/postpone`, 'POST', { seconds }), t('gn.rr.postponed'));
   const elapsed = Math.round((Date.now() - at) / 1000);
@@ -158031,6 +158151,13 @@ export function ServerRestartCard() {
         </Field>
         <button type="button" className="btn" disabled={busy || !time.trim()} onClick={() => void start()}>{t('gn.rr.start')}</button>
       </div>
+      <label className="flex items-start gap-3 font-bold">
+        <Switch className="mt-0.5" checked={st.emptyNow} disabled={busy} onChange={(v) => void setEmpty(v)} />
+        <span>
+          {t('gn.rr.empty0')}
+          <span className="block text-sm font-semibold text-mute">{t('gn.rr.empty0Note')}</span>
+        </span>
+      </label>
       <div className="flex flex-wrap gap-2">
         {PRESETS.map((p) => <button key={p} type="button" className={`chip-filter ${time === p ? 'on' : ''}`} onClick={() => setTime(p)}>{p}</button>)}
       </div>

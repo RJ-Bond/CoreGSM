@@ -9,7 +9,7 @@
  */
 import type { Express, RequestHandler } from 'express';
 import { z } from 'zod';
-import { db } from '../db.js';
+import { db, getSetting, setSetting } from '../db.js';
 import { readScoped, serverOf, writeScoped } from './gameNewsScope.js';
 import { log } from '../logger.js';
 import { internal } from '../security/auth.js';
@@ -21,6 +21,7 @@ import {
 } from './gameNewsRestartLogic.js';
 import { DUE_GRACE_MS, closeLog, getJob, jobsIn, logRunAt, logStart, recentLog, saveJob, setLastNotice, setState, type Job } from './gameNewsRestartState.js';
 import { serverLabel } from './gameNewsVars.js';
+import { checkPluginSilence } from './gameNewsWatch.js';
 
 // ---- the words of the notices (set in the panel)
 export function getTexts(serverId?: number): RestartTexts {
@@ -46,7 +47,23 @@ const tellChat = (serverId: number, line: string, now: number): void => {
 };
 
 // ---- the timer
-export function startRestart(serverId: number, seconds: number, by: string, source: string, now = Date.now()): Job {
+/** nobody is playing now: the plugin itself said so a moment ago (the number of the panel's own query is not trusted for this) */
+export function serverIsEmpty(serverId: number, now: number): boolean {
+  const t = db.prepare('SELECT last_seen, plugin_players FROM game_news_targets WHERE server_id = ?').get(serverId) as { last_seen: number; plugin_players: number } | undefined;
+  return !!t && t.last_seen > 0 && now - t.last_seen < 30_000 && t.plugin_players === 0;
+}
+
+export const restartWhenEmpty = (): boolean => getSetting('gamenews_restart_empty') !== '0';
+
+export function startRestart(serverId: number, seconds: number, by: string, source: string, now = Date.now()): Job & { immediate: boolean } {
+  // an empty server needs no warning and no waiting: it restarts at once (the switch of the panel can turn this off)
+  if (restartWhenEmpty() && serverIsEmpty(serverId, now)) {
+    const job: Job = { server_id: serverId, run_at: now, started_at: now, total_sec: 0, last_notice: 0, requested_by: by.slice(0, 80), source: source.slice(0, 40), state: 'due' };
+    saveJob(job);
+    logStart(job);
+    log.info(`game restart of server ${serverId} at once: nobody is playing (${source})`);
+    return { ...job, immediate: true };
+  }
   const job: Job = {
     server_id: serverId, run_at: now + seconds * 1000, started_at: now, total_sec: seconds, last_notice: seconds,
     requested_by: by.slice(0, 80), source: source.slice(0, 40), state: 'counting',
@@ -55,7 +72,7 @@ export function startRestart(serverId: number, seconds: number, by: string, sour
   logStart(job);
   tellChat(serverId, announceLine(getTexts(serverId), seconds), now);
   log.info(`game restart of server ${serverId} in ${seconds} s (${source})`);
-  return job;
+  return { ...job, immediate: false };
 }
 
 /** true when a timer was running and is stopped */
@@ -88,11 +105,16 @@ export function tickRestartJobs(now = Date.now()): void {
 
 let timer: NodeJS.Timeout | undefined;
 let busy = false;
+let passes = 0;
 export function startRestartJobsTimer(): void {
   timer = setInterval(() => {
     if (busy) return;
     busy = true;
-    try { tickRestartJobs(); } catch (e) { log.error('game restart timer failed', (e as Error).message); } finally { busy = false; }
+    try {
+      tickRestartJobs();
+      // once a minute: has a plugin been silent for too long
+      if (++passes % 12 === 0) checkPluginSilence();
+    } catch (e) { log.error('game restart timer failed', (e as Error).message); } finally { busy = false; }
   }, 5000);
   timer.unref();
 }
@@ -131,8 +153,18 @@ export function runRestartCommand(serverId: number, raw: string, by: string, sou
   if ('error' in d) {
     return { ok: false, text: d.error === 'format' ? 'Не понял время. Примеры: 5m, 5м, 30s, 1h, 90' : d.error === 'short' ? 'Слишком мало: от 10 секунд.' : 'Слишком много: не больше 6 часов.' };
   }
-  startRestart(serverId, d.seconds, by, source, now);
-  return { ok: true, text: `Рестарт сервера через ${formatLeft(d.seconds)}.` };
+  const started = startRestart(serverId, d.seconds, by, source, now);
+  return { ok: true, text: started.immediate ? 'На сервере никого нет: перезапускаю сразу.' : `Рестарт сервера через ${formatLeft(d.seconds)}.` };
+}
+
+const lastSay = new Map<string, number>();
+/** false when this person wrote less than two seconds ago */
+function sayGate(who: string, now: number): boolean {
+  const prev = lastSay.get(who) ?? 0;
+  if (now - prev < 2000) return false;
+  lastSay.set(who, now);
+  if (lastSay.size > 500) for (const [k, t] of lastSay) if (now - t > 60_000) lastSay.delete(k);
+  return true;
 }
 
 const C_OK = '#5FD068';
@@ -147,7 +179,7 @@ export function registerGameNewsServerRestart({ app, admin }: { app: Express; ad
       left: Math.max(0, Math.ceil((j.run_at - now) / 1000)), total: j.total_sec,
     }));
     const history = recentLog().map((h) => ({ id: h.id, serverName: serverLabel(h.server_id), startedAt: h.started_at, runAt: h.run_at, totalSec: h.total_sec, by: h.requested_by, source: h.source, outcome: h.outcome, finishedAt: h.finished_at }));
-    res.json({ jobs, texts: getTexts(serverOf(req)), servers: pluginServers(), history });
+    res.json({ jobs, texts: getTexts(serverOf(req)), servers: pluginServers(), history, emptyNow: restartWhenEmpty() });
   });
 
   app.post('/api/game-news/restart', admin, (req, res) => {
@@ -162,7 +194,7 @@ export function registerGameNewsServerRestart({ app, admin }: { app: Express; ad
     }
     const user = (req as typeof req & { user?: { username?: string } }).user?.username ?? '';
     const job = startRestart(b.data.serverId, d.seconds, user, 'панель');
-    res.json({ ok: true, runAt: job.run_at });
+    res.json({ ok: true, runAt: job.run_at, immediate: job.immediate });
   });
 
   app.delete('/api/game-news/restart/:serverId', admin, (req, res) => {
@@ -174,6 +206,13 @@ export function registerGameNewsServerRestart({ app, admin }: { app: Express; ad
     if (!b.success) return res.status(400).json({ error: 'Проверьте поля' });
     const r = postponeRestart(Number(req.params.serverId), b.data.seconds);
     if (!r.ok) return res.status(400).json({ error: r.text });
+    res.json({ ok: true });
+  });
+
+  app.put('/api/game-news/restart-empty', admin, (req, res) => {
+    const b = z.object({ enabled: z.boolean() }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'Проверьте поля' });
+    setSetting('gamenews_restart_empty', b.data.enabled ? '1' : '0');
     res.json({ ok: true });
   });
 
@@ -212,6 +251,9 @@ export function registerGameNewsServerRestart({ app, admin }: { app: Express; ad
     const linked = db.prepare("SELECT username FROM users WHERE discord_id = ? AND role = 'admin' AND status = 'active'").get(b.data.discordId) as { username: string } | undefined;
     // a line written in the chat channel by somebody who is not an administrator is just talk: no answer
     if (!b.data.discordAdmin && !linked) return res.json({ ok: false, silent: !!b.data.channelId, text: 'Эта команда только для администраторов.' });
+    // one line in two seconds per person: a flood into the game chat helps nobody
+    const gate = sayGate(b.data.discordId, Date.now());
+    if (!gate) return res.json({ ok: false, rate: true, text: 'Слишком часто: подождите пару секунд.' });
     const servers = pluginServers();
     const q = (b.data.server ?? '').trim().toLowerCase();
     const ch = b.data.channelId ? chatChannels().find((c) => c.channelId === b.data.channelId) : undefined;

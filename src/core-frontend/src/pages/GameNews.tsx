@@ -223,10 +223,12 @@ export default function GameNewsPage({ sub = '' }: { sub?: string }) {
       {data && (
         <div className="flex flex-wrap gap-2" role="tablist" aria-label={t('gn.title')}>
           {[...tabList.slice(0, -1), ...serverTabs.map((x) => ({ id: `s${x.id}`, label: x.name, phone: true })), ...tabList.slice(-1)].map((x) => (
-            <button key={x.id} type="button" role="tab" aria-selected={tab === x.id} className={`chip-filter ${tab === x.id ? 'on' : ''} ${'phone' in x ? 'md:hidden' : ''}`} onClick={() => goTab(x.id)}>
+            <span key={x.id} className={'phone' in x ? 'contents md:hidden' : 'contents'}>
+            <button type="button" role="tab" aria-selected={tab === x.id} className={`chip-filter ${tab === x.id ? 'on' : ''}`} onClick={() => goTab(x.id)}>
               {x.label}
               {(counter[x.id] ?? 0) > 0 && <span className="ml-1.5 rounded-full bg-soft px-1.5 text-xs font-extrabold">{counter[x.id]}</span>}
             </button>
+            </span>
           ))}
         </div>
       )}

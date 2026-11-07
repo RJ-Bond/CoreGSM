@@ -904,6 +904,10 @@ const en: Record<keyof typeof ru, string> = {
   'gn.h.expired': 'Not delivered',
   'gn.h.fail': 'Failed',
   'gn.reuse': 'Use again',
+  'gn.rr.immediate': 'Nobody is on the server: restarting at once',
+  'gn.rr.empty0': 'Restart at once when nobody is on the server',
+  'gn.rr.empty0Note': 'The plugin reports how many players are online. When there are none there is no use waiting for the timer: the server restarts without a countdown.',
+
   'gn.ch.fromDiscord': 'Write from Discord to the game',
   'gn.ch.fromDiscordNote': 'What a Discord administrator writes in this channel appears in the game chat: «* [Discord] Name: text». The bot puts ✅ under the message. Messages of other members are ignored. «Message Content Intent» has to be on in Developer Portal → Bot, and the bot needs the right to read the channel.',
   'gn.ch.fromDiscordNeed': 'Set the webhook of the channel first.',
@@ -951,7 +955,7 @@ const en: Record<keyof typeof ru, string> = {
 
   'gn.rr.title': 'Server restart by a timer',
   'gn.rr.sum': 'Warns the players in the chat and restarts the server',
-  'gn.rr.note': 'The chat says «Restart in 5 minutes», «in 4 minutes» and so on, then the plugin saves the world and closes the server. AMP has to start it again. The same can be done with «.restart 5m» in the game (administrators), «restart 5m» in the AMP console and «/restart» in Discord.',
+  'gn.rr.note': 'The chat says «Restart in 5 minutes», «in 4 minutes» and so on, then the plugin closes the server (the game saves the world when it quits). AMP has to start it again. The same can be done with «.restart 5m» in the game (administrators), «restart 5m» in the AMP console and «/restart» in Discord.',
   'gn.rr.server': 'Server',
   'gn.rr.time': 'In how long',
   'gn.rr.start': 'Start the timer',
