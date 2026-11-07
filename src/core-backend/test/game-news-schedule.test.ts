@@ -74,3 +74,22 @@ describe('upcoming runs', () => {
     assert.deepEqual(upcomingRuns(base, null, 5, MSK), []);
   });
 });
+
+import { countdownStep, countdownText } from '../src/gamenews/gameNewsRestart.ts';
+
+describe('restart countdown', () => {
+  const MIN = 60_000;
+  it('picks the step by the last minute before the restart', () => {
+    assert.equal(countdownStep(10 * MIN), 10);
+    assert.equal(countdownStep(9 * MIN + 1), 10);
+    assert.equal(countdownStep(9 * MIN), null);
+    assert.equal(countdownStep(5 * MIN - 5000), 5);
+    assert.equal(countdownStep(MIN), 1);
+    assert.equal(countdownStep(30_000), 1);
+    assert.equal(countdownStep(20 * MIN), null);
+  });
+  it('says one minute and many minutes', () => {
+    assert.match(countdownText(1), /через 1 минуту/);
+    assert.match(countdownText(10), /через 10 минут/);
+  });
+});

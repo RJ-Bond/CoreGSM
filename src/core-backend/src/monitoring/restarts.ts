@@ -23,6 +23,7 @@ import { rconCommand } from './rcon.js';
 import { decryptSecret, encryptSecret, reencrypt, usesLegacyKey } from '../security/secrets.js';
 import { analyticsFor } from '../routes/analytics.js';
 import { log } from '../logger.js';
+import { announceRestart } from '../gamenews/gameNewsRestart.js';
 
 export const router = express.Router();
 
@@ -164,6 +165,7 @@ export async function tickRestarts(now = Date.now()): Promise<void> {
       continue;
     }
     const next = nextRun(p, now, zone);
+    if (next) announceRestart(p.server_id, next, now); // «через 10 / 5 / 1 минуту» in the game chat (game plugin)
     if (!next || p.warn_min <= 0) continue;
     if (next - now <= p.warn_min * 60_000 && p.warned_for !== next) {
       db.prepare('UPDATE restart_plans SET warned_for = ? WHERE server_id = ?').run(next, p.server_id);

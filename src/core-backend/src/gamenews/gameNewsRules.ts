@@ -4,7 +4,8 @@
  */
 import type { Express, Request, RequestHandler } from 'express';
 import { z } from 'zod';
-import { db, getSetting } from '../db.js';
+import { db, getSetting, setSetting } from '../db.js';
+import { countdownEnabled } from './gameNewsRestart.js';
 import { log } from '../logger.js';
 import { checkNews } from './gameNewsLogic.js';
 import { queueNews } from './gameNews.js';
@@ -92,7 +93,15 @@ export function registerGameNewsRules({ app, admin }: { app: Express; admin: Req
 
   app.get('/api/game-news/rules', admin, (_req, res) => {
     const rows = db.prepare('SELECT * FROM game_news_rules ORDER BY id').all() as RuleRow[];
-    res.json({ timezone: tz(), rules: rows.map(serialize) });
+    res.json({ timezone: tz(), restartCountdown: countdownEnabled(), rules: rows.map(serialize) });
+  });
+
+  // the countdown «через 10 / 5 / 1 минуту» before the planned restarts of monitoring/restarts.ts
+  app.put('/api/game-news/restart-countdown', admin, (req, res) => {
+    const b = z.object({ enabled: z.boolean() }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'Проверьте поля' });
+    setSetting('gamenews_restart_countdown', b.data.enabled ? '1' : '0');
+    res.json({ ok: true });
   });
 
   app.post('/api/game-news/rules', admin, (req, res) => {

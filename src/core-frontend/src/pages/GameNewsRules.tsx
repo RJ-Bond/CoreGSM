@@ -11,7 +11,7 @@ import {
 import { fromLocalInput, toLocalInput } from '../maintenance';
 import { ErrorLine, Field, IconEdit, IconPlus, IconTrash, LoadError, Modal, Spinner, errText, toast, usePoll } from '../ui';
 
-interface RulesState { timezone: string; rules: RuleInfo[] }
+interface RulesState { timezone: string; restartCountdown: boolean; rules: RuleInfo[] }
 
 const when = (ts: number | null) => (ts ? new Date(ts).toLocaleString() : '—');
 
@@ -57,6 +57,9 @@ export default function GameNewsRules({ servers }: { servers: NewsServerInfo[] }
     if (!(await confirmDialog({ title: t('gn.a.delTitle', { name: r.name }), danger: true, confirmLabel: t('gn.a.del') }))) return;
     try { await api(`/game-news/rules/${r.id}`, 'DELETE'); void load(); } catch (e) { toast(errText(e), 'err'); }
   };
+  const setCountdown = async (enabled: boolean) => {
+    try { await api('/game-news/restart-countdown', 'PUT', { enabled }); void load(); } catch (e) { toast(errText(e), 'err'); }
+  };
   const openNew = () => setDraft({ id: null, body: emptyRule() });
   const openEdit = (r: RuleInfo) => { const { id, lastRun: _l, nextRun: _n, createdBy: _c, upcoming: _u, ...body } = r; setDraft({ id, body }); };
   // a copy opens as a new announcement: change what differs and save
@@ -71,6 +74,16 @@ export default function GameNewsRules({ servers }: { servers: NewsServerInfo[] }
         <p className="min-w-0 flex-1 basis-80 text-sm font-semibold text-mute">{t('gn.a.intro')}</p>
         <button type="button" className="btn" onClick={openNew}><IconPlus size={16} />{t('gn.a.add')}</button>
       </div>
+
+      {data && (
+        <label className="panel flex items-start gap-3 p-4 font-bold">
+          <input className="mt-1" type="checkbox" checked={data.restartCountdown} onChange={(e) => void setCountdown(e.target.checked)} />
+          <span>
+            {t('gn.a.countdown')}
+            <span className="block text-sm font-semibold text-mute">{t('gn.a.countdownNote')}</span>
+          </span>
+        </label>
+      )}
 
       {error && !data ? <LoadError error={error} onRetry={() => void load()} /> : <ErrorLine text={error} />}
       {!data && !error && <div className="skeleton panel h-32" aria-busy="true" />}
