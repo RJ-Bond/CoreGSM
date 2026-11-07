@@ -45,7 +45,7 @@ describe('message variables', () => {
     assert.equal(applyVars('{server}', { ...vars, server: '<color=#ff0000>x</color>' }), 'color=#ff0000x/color');
   });
   it('cuts a very long value', () => {
-    assert.equal(applyVars('{server}', { ...vars, server: 'a'.repeat(100) }).length, 60);
+    assert.equal(applyVars('{server}', { ...vars, server: 'a'.repeat(300) }).length, 200);
   });
 });
 
@@ -88,5 +88,29 @@ describe('size for the game chat', () => {
     assert.equal(r.ok, false);
     assert.match(r.error ?? '', /500 байт/);
     assert.equal(checkNews('я'.repeat(200)).ok, true);
+  });
+});
+
+import { greetingFor, leftText } from '../src/gamenews/gameNewsVars.ts';
+
+describe('new message variables', () => {
+  it('fills all nine and keeps unknown words', () => {
+    const v = { server: 'S', online: '3', max: '40', time: '20:05', greeting: 'Добрый вечер', restart: '3 ч 20 мин', wipe: '12.11, 20:00', discord: 'discord.gg/x', tip: 'Сохраняйтесь' };
+    assert.equal(applyVars('{greeting}! {server}: {online}/{max}. Рестарт: {restart}. Вайп: {wipe}. {discord} {tip} {x}', v),
+      'Добрый вечер! S: 3/40. Рестарт: 3 ч 20 мин. Вайп: 12.11, 20:00. discord.gg/x Сохраняйтесь {x}');
+  });
+  it('greets by the time of day', () => {
+    assert.equal(greetingFor(7), 'Доброе утро');
+    assert.equal(greetingFor(14), 'Добрый день');
+    assert.equal(greetingFor(20), 'Добрый вечер');
+    assert.equal(greetingFor(2), 'Доброй ночи');
+    assert.equal(greetingFor(23), 'Доброй ночи');
+  });
+  it('says how long is left', () => {
+    assert.equal(leftText(20_000), 'менее минуты');
+    assert.equal(leftText(45 * 60_000), '45 мин');
+    assert.equal(leftText((3 * 60 + 20) * 60_000), '3 ч 20 мин');
+    assert.equal(leftText(2 * 3_600_000), '2 ч');
+    assert.equal(leftText(50 * 3_600_000), '2 д 2 ч');
   });
 });

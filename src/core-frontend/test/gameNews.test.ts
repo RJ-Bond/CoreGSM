@@ -113,3 +113,21 @@ describe('game chat size and join/leave lines', () => {
     expect(composeLine('* Игрок {name} вошёл', '#b86bff', '#5fd068')).toBe('<color=#5FD068>* Игрок <color=#B86BFF>{name}</color> вошёл</color>');
   });
 });
+
+import { VARIABLES, WELCOME_STYLES, WELCOME_VARIABLES } from '../src/gameNews';
+
+describe('welcome styles and variables', () => {
+  it('every ready style is a valid message with known variables', () => {
+    for (const st of WELCOME_STYLES) {
+      expect(validateNews(st.text)).toBeNull();
+      expect(validateNews(st.newText)).toBeNull();
+      const names = [...(st.text + st.newText).matchAll(/\{(\w+)\}/g)].map((m) => m[1]);
+      for (const n of names) expect([...WELCOME_VARIABLES] as string[]).toContain(n);
+    }
+  });
+  it('the preview fills all variables and the greeting adds a green name', () => {
+    expect(VARIABLES).toHaveLength(9);
+    expect(fillSample('{greeting}! {restart} {wipe} {discord} {tip}')).toBe('Добрый вечер! 3 ч 20 мин 12.11, 20:00 discord.gg/coregsm Сохраняйтесь у сундука.');
+    expect(fillSample('{greeting}, {name}', true)).toBe('Добрый вечер, <color=#5FD068>Игрок</color>');
+  });
+});

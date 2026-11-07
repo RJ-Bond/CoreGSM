@@ -165,11 +165,15 @@ export function versionLess(a: string, b: string): boolean {
 }
 
 /** the variables the panel fills in for each server when it sends */
-export const VARIABLES = ['server', 'online', 'max', 'time'] as const;
-const SAMPLE: Record<(typeof VARIABLES)[number], string> = { server: 'Мой сервер', online: '12', max: '40', time: '20:00' };
+export const VARIABLES = ['server', 'online', 'max', 'time', 'greeting', 'restart', 'wipe', 'discord', 'tip'] as const;
+export type VarName = (typeof VARIABLES)[number];
+const SAMPLE: Record<VarName, string> = {
+  server: 'Мой сервер', online: '12', max: '40', time: '20:00', greeting: 'Добрый вечер', restart: '3 ч 20 мин',
+  wipe: '12.11, 20:00', discord: 'discord.gg/coregsm', tip: 'Сохраняйтесь у сундука.',
+};
 
 /** the variables of the greeting: {name} is the nickname of the joining player (the plugin fills it in) */
-export const WELCOME_VARIABLES = ['name', 'server'] as const;
+export const WELCOME_VARIABLES = ['name', ...VARIABLES] as const;
 
 /** the colour of a player's name in the greeting (the same as the backend uses) */
 export const NAME_COLOR = '#5FD068';
@@ -189,7 +193,7 @@ export function greenName(text: string): string {
 
 /** the preview shows sample values for the variables ({name} only in a greeting, in green as in the game) */
 export function fillSample(text: string, welcome = false): string {
-  const s = text.replace(/\{(server|online|max|time)\}/g, (_m, k: (typeof VARIABLES)[number]) => SAMPLE[k]);
+  const s = text.replace(/\{(server|online|max|time|greeting|restart|wipe|discord|tip)\}/g, (_m, k: VarName) => SAMPLE[k]);
   return welcome ? greenName(s).replace(/\{name\}/g, 'Игрок') : s;
 }
 
@@ -210,3 +214,34 @@ export function composeLine(text: string, nameColor: string, textColor: string):
   const plain = noCtl.replace(/[<>]/g, '').replace(/ {2,}/g, ' ').trim();
   return `<color=${textColor.toUpperCase()}>${plain.replace(/\{name\}/g, `<color=${nameColor.toUpperCase()}>{name}</color>`)}</color>`;
 }
+
+/** the greeting: one text for everybody, or one for a newcomer and one for a returning player */
+export interface Welcome { enabled: boolean; text: string; split: boolean; newText: string }
+
+/** what {discord} and {tip} stand for */
+export interface Extras { discord: string; tips: string[] }
+
+/** ready greetings: a click puts the texts into the editors (the administrator edits them after) */
+export interface WelcomeStyle { id: string; text: string; newText: string }
+export const WELCOME_STYLES: WelcomeStyle[] = [
+  {
+    id: 'classic',
+    text: '<color=#5FD068><b>{greeting}, {name}!</b></color> Добро пожаловать на <color=#FFCC33>{server}</color>. Сейчас на сервере {online} из {max} игроков.',
+    newText: '<color=#5FD068><b>Добро пожаловать, {name}!</b></color> Это <color=#FFCC33>{server}</color>. Загляните в наш Discord: <color=#6EC1FF>{discord}</color>',
+  },
+  {
+    id: 'gothic',
+    text: '<color=#FF5555><b>{name}</b></color><color=#FFB347>, ночь принадлежит вам. На {server} сейчас {online} из {max}.</color>',
+    newText: '<color=#FF5555><b>Тьма приветствует тебя, {name}.</b></color> <color=#FFB347>{server} ждёт.</color> До рестарта: {restart}.',
+  },
+  {
+    id: 'minimal',
+    text: '{greeting}, {name}. Онлайн: {online}/{max}.',
+    newText: 'Добро пожаловать на {server}, {name}. Discord: {discord}',
+  },
+  {
+    id: 'festive',
+    text: '<color=#B86BFF><b>{greeting}, {name}!</b></color> <color=#FFB347>Рады видеть вас на {server}!</color> <color=#6EC1FF>Совет: {tip}</color>',
+    newText: '<color=#B86BFF><b>Добро пожаловать, {name}!</b></color> <color=#FFB347>Приятной игры на {server}!</color> <color=#6EC1FF>Совет: {tip}</color>',
+  },
+];

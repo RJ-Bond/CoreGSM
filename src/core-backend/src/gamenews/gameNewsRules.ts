@@ -8,6 +8,7 @@ import { db, getSetting, setSetting } from '../db.js';
 import { countdownEnabled } from './gameNewsRestart.js';
 import { getJoinLeave, isHexColor, plainLine, setJoinLeave } from './gameNewsJoinLeave.js';
 import { getWelcome, setWelcome } from './gameNewsWelcome.js';
+import { MAX_TIPS, getExtras, setExtras } from './gameNewsVars.js';
 import { log } from '../logger.js';
 import { checkNews } from './gameNewsLogic.js';
 import { queueNews } from './gameNews.js';
@@ -95,7 +96,7 @@ export function registerGameNewsRules({ app, admin }: { app: Express; admin: Req
 
   app.get('/api/game-news/rules', admin, (_req, res) => {
     const rows = db.prepare('SELECT * FROM game_news_rules ORDER BY id').all() as RuleRow[];
-    res.json({ timezone: tz(), restartCountdown: countdownEnabled(), welcome: getWelcome(), joinLeave: getJoinLeave(), rules: rows.map(serialize) });
+    res.json({ timezone: tz(), restartCountdown: countdownEnabled(), welcome: getWelcome(), joinLeave: getJoinLeave(), extras: getExtras(), rules: rows.map(serialize) });
   });
 
   // the countdown «через 10 / 5 / 1 минуту» before the planned restarts of monitoring/restarts.ts
@@ -123,15 +124,29 @@ export function registerGameNewsRules({ app, admin }: { app: Express; admin: Req
 
   // the greeting for a player who joins (the plugin shows it to that player only)
   app.put('/api/game-news/welcome', admin, (req, res) => {
-    const b = z.object({ enabled: z.boolean(), text: z.string() }).safeParse(req.body);
+    const b = z.object({ enabled: z.boolean(), text: z.string(), split: z.boolean(), newText: z.string() }).safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Проверьте поля' });
-    let text = '';
-    if (b.data.text.trim() || b.data.enabled) {
-      const chk = checkNews(b.data.text);
-      if (!chk.ok) return res.status(400).json({ error: chk.error });
-      text = chk.text;
-    }
-    setWelcome({ enabled: b.data.enabled, text });
+    const out = { enabled: b.data.enabled, split: b.data.split, text: '', newText: '' };
+    const need = (raw: string, on: boolean): string | { error: string } => {
+      if (!raw.trim() && !on) return '';
+      const chk = checkNews(raw);
+      return chk.ok ? chk.text : { error: chk.error ?? 'Проверьте текст' };
+    };
+    const t1 = need(b.data.text, b.data.enabled);
+    const t2 = need(b.data.newText, b.data.enabled && b.data.split);
+    if (typeof t1 !== 'string') return res.status(400).json({ error: t1.error });
+    if (typeof t2 !== 'string') return res.status(400).json({ error: t2.error });
+    out.text = t1;
+    out.newText = t2;
+    setWelcome(out);
+    res.json({ ok: true });
+  });
+
+  // what {discord} and {tip} stand for
+  app.put('/api/game-news/extras', admin, (req, res) => {
+    const b = z.object({ discord: z.string().max(200), tips: z.array(z.string().max(300)).max(MAX_TIPS) }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'Проверьте поля' });
+    setExtras(b.data);
     res.json({ ok: true });
   });
 

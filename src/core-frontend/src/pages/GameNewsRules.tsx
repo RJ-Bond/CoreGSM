@@ -1,17 +1,17 @@
 import { useState, type FormEvent } from 'react';
 import { api } from '../api';
-import { NewsEditor, NewsPreview, Styled } from '../components/NewsEditor';
+import { ChatLines, NewsEditor, NewsPreview, Styled } from '../components/NewsEditor';
 import { StateView } from '../components/StateView';
 import { confirmDialog } from '../confirm';
 import { t, useI18n } from '../i18n';
 import {
-  INTERVAL_PRESETS, SWATCHES, WELCOME_VARIABLES, composeLine, emptyRule, isHex, isHHMM, validateNews, validateRule,
-  type JoinLeave, type NewsServerInfo, type RuleBody, type RuleInfo, type RuleKind,
+  INTERVAL_PRESETS, SWATCHES, WELCOME_STYLES, WELCOME_VARIABLES, composeLine, emptyRule, isHex, isHHMM, validateNews, validateRule,
+  type Extras, type JoinLeave, type Welcome, type WelcomeStyle, type NewsServerInfo, type RuleBody, type RuleInfo, type RuleKind,
 } from '../gameNews';
 import { fromLocalInput, toLocalInput } from '../maintenance';
 import { ErrorLine, Field, IconEdit, IconPlus, IconTrash, LoadError, Modal, SaveBadge, Spinner, errText, toast, useAutosave, usePoll } from '../ui';
 
-interface RulesState { timezone: string; restartCountdown: boolean; welcome: { enabled: boolean; text: string }; joinLeave: JoinLeave; rules: RuleInfo[] }
+interface RulesState { timezone: string; restartCountdown: boolean; welcome: Welcome; joinLeave: JoinLeave; extras: Extras; rules: RuleInfo[] }
 
 const when = (ts: number | null) => (ts ? new Date(ts).toLocaleString() : '—');
 
@@ -90,6 +90,8 @@ export default function GameNewsRules({ servers, part }: { servers: NewsServerIn
       {data && part === 'events' && <JoinLeaveCard initial={data.joinLeave} />}
 
       {data && part === 'events' && <WelcomeCard initial={data.welcome} />}
+
+      {data && part === 'events' && <ExtrasCard initial={data.extras} />}
 
       {error && !data ? <LoadError error={error} onRetry={() => void load()} /> : <ErrorLine text={error} />}
       {!data && !error && <div className="skeleton panel h-32" aria-busy="true" />}
@@ -278,22 +280,33 @@ function RuleModal({ id, initial, servers, timezone, onClose, onSaved }: {
   );
 }
 
-/** the greeting for a player who joins: written once, shown by the plugin to that player only. Saves by itself. */
-function WelcomeCard({ initial }: { initial: { enabled: boolean; text: string } }) {
+/**
+ * The greeting for a player who joins, shown by the plugin to that player only. One text for everybody or one for a
+ * newcomer and one for a returning player; ready styles to start from. Saves by itself.
+ */
+function WelcomeCard({ initial }: { initial: Welcome }) {
   useI18n();
-  const [f, setF] = useState(initial);
-  const [saved, setSaved] = useState(initial);
+  const [f, setF] = useState<Welcome>(initial);
+  const [saved, setSaved] = useState<Welcome>(initial);
+  const set = <K extends keyof Welcome>(k: K, v: Welcome[K]) => setF((x) => ({ ...x, [k]: v }));
   const auto = useAutosave({
     value: f,
     saved,
     delay: 900,
     validate: (v) => {
-      if (!v.enabled && !v.text.trim()) return null;
+      if (!v.enabled && !v.text.trim() && !v.newText.trim()) return null;
       const p = validateNews(v.text);
-      return p ? t(p === 'long' ? 'gn.hint.long' : 'gn.hint.text') : null;
+      if (p) return t(p === 'long' ? 'gn.hint.long' : 'gn.hint.text');
+      const q = v.split ? validateNews(v.newText) : null;
+      return q ? t(q === 'long' ? 'gn.hint.long' : 'gn.hint.text') : null;
     },
     save: async (v) => { await api('/game-news/welcome', 'PUT', v); setSaved(v); },
   });
+
+  const applyStyle = async (st: WelcomeStyle) => {
+    if ((f.text.trim() || f.newText.trim()) && !(await confirmDialog({ title: t('gn.w.styleTitle'), text: t('gn.w.styleText'), confirmLabel: t('gn.w.styleApply') }))) return;
+    setF((x) => ({ ...x, text: st.text, newText: st.newText, split: true }));
+  };
 
   return (
     <section className="panel space-y-4 p-5">
@@ -304,15 +317,75 @@ function WelcomeCard({ initial }: { initial: { enabled: boolean; text: string } 
         </div>
         <SaveBadge status={auto.status} error={auto.error} retry={auto.retry} />
       </div>
+
       <label className="flex items-center gap-2.5 font-bold">
-        <input type="checkbox" checked={f.enabled} onChange={(e) => setF((x) => ({ ...x, enabled: e.target.checked }))} />
+        <input type="checkbox" checked={f.enabled} onChange={(e) => set('enabled', e.target.checked)} />
         {t('gn.w.enabled')}
       </label>
+
+      <div className="flex flex-wrap items-center gap-2" role="group" aria-label={t('gn.w.styles')}>
+        <span className="text-sm font-bold text-mute">{t('gn.w.styles')}:</span>
+        {WELCOME_STYLES.map((st) => (
+          <button key={st.id} type="button" className="chip-filter" onClick={() => void applyStyle(st)}>{t(`gn.w.style.${st.id}` as 'gn.w.style.classic')}</button>
+        ))}
+      </div>
+
+      <label className="flex items-start gap-2.5 font-bold">
+        <input className="mt-1" type="checkbox" checked={f.split} onChange={(e) => set('split', e.target.checked)} />
+        <span>
+          {t('gn.w.split')}
+          <span className="block text-sm font-semibold text-mute">{t('gn.w.splitNote')}</span>
+        </span>
+      </label>
+
       <div className="grid gap-5 lg:grid-cols-2">
-        <NewsEditor value={f.text} onChange={(v) => setF((x) => ({ ...x, text: v }))} templates={false} vars={WELCOME_VARIABLES} label={t('gn.w.text')} />
-        <NewsPreview text={f.text} welcome />
+        <div className="space-y-4">
+          <NewsEditor value={f.text} onChange={(v) => set('text', v)} templates={false} vars={WELCOME_VARIABLES} label={f.split ? t('gn.w.textBack') : t('gn.w.text')} />
+          <NewsPreview text={f.text} welcome />
+        </div>
+        {f.split && (
+          <div className="space-y-4">
+            <NewsEditor value={f.newText} onChange={(v) => set('newText', v)} templates={false} vars={WELCOME_VARIABLES} label={t('gn.w.textNew')} />
+            <NewsPreview text={f.newText || f.text} welcome />
+          </div>
+        )}
       </div>
       {auto.invalid && f.enabled && <p className="text-sm font-semibold text-danger">{auto.error}</p>}
+    </section>
+  );
+}
+
+/** what {discord} and {tip} stand for: a link or a name, and a list of tips (one at random each time). Saves by itself. */
+function ExtrasCard({ initial }: { initial: Extras }) {
+  useI18n();
+  const [discord, setDiscord] = useState(initial.discord);
+  const [tips, setTips] = useState(initial.tips.join('\n'));
+  const value: Extras = { discord: discord.trim(), tips: tips.split('\n').map((x) => x.trim()).filter(Boolean) };
+  const [saved, setSaved] = useState<Extras>(value);
+  const auto = useAutosave({
+    value,
+    saved,
+    delay: 900,
+    validate: (v) => (v.tips.length > 20 ? t('gn.x.tooMany') : null),
+    save: async (v) => { await api('/game-news/extras', 'PUT', v); setSaved(v); },
+  });
+
+  return (
+    <section className="panel space-y-4 p-5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0 flex-1 basis-72">
+          <h3 className="font-extrabold">{t('gn.x.title')}</h3>
+          <p className="text-sm font-semibold text-mute">{t('gn.x.note')}</p>
+        </div>
+        <SaveBadge status={auto.status} error={auto.error} retry={auto.retry} />
+      </div>
+      <Field label={t('gn.x.discord')}>
+        <input className="input" value={discord} maxLength={100} placeholder="discord.gg/..." onChange={(e) => setDiscord(e.target.value)} />
+      </Field>
+      <Field label={t('gn.x.tips')}>
+        <textarea className="input min-h-24 text-sm" value={tips} rows={4} placeholder={t('gn.x.tipsEx')} onChange={(e) => setTips(e.target.value)} />
+      </Field>
+      {auto.invalid && <p className="text-sm font-semibold text-danger">{auto.error}</p>}
     </section>
   );
 }
@@ -392,11 +465,7 @@ function JoinLeaveCard({ initial }: { initial: JoinLeave }) {
         <ColorField label={t('gn.jl.textColor')} value={f.textColor} onChange={(v) => set('textColor', v)} />
       </div>
 
-      <div className="rounded-xl p-4 font-semibold" style={{ background: '#15121c', color: '#e8e3f0' }} aria-live="polite">
-        <div className="mb-1 text-xs font-bold uppercase tracking-wide" style={{ color: '#8f86a3' }}>{t('gn.chatLabel')}</div>
-        <p className="wrap-break-word"><Styled text={sample(f.joinText)} /></p>
-        <p className="wrap-break-word"><Styled text={sample(f.leaveText)} /></p>
-      </div>
+      <ChatLines lines={[sample(f.joinText), sample(f.leaveText)]} />
       <p className="text-sm font-semibold text-mute">{t('gn.jl.nameHint')}</p>
       {auto.invalid && <p className="text-sm font-semibold text-danger">{auto.error}</p>}
     </section>

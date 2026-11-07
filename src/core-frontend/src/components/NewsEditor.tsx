@@ -23,6 +23,27 @@ export function Styled({ text }: { text: string }) {
   );
 }
 
+/** the colour the game gives to a chat line that has no colour of its own (taken from a screenshot of the game) */
+export const GAME_ORANGE = '#E8982B';
+
+/** lines as the in-game chat draws them: «[15:14] [СИСТЕМА] text»; a text without a colour is orange */
+export function ChatLines({ lines }: { lines: string[] }) {
+  useI18n();
+  const time = useMemo(() => new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }), []);
+  return (
+    <div
+      className="rounded-xl p-4 text-base font-semibold leading-snug"
+      style={{ background: 'linear-gradient(180deg, #1f2d33, #0f171b)', color: GAME_ORANGE, textShadow: '0 1px 2px rgba(0, 0, 0, .85)' }}
+      aria-live="polite"
+    >
+      {lines.length === 0 && <p style={{ color: '#8f9aa0', textShadow: 'none' }}>{t('gn.previewEmpty')}</p>}
+      {lines.map((l, i) => (
+        <p key={i} className="wrap-break-word">[{time}] [{t('gn.chatSystem')}] <Styled text={l} /></p>
+      ))}
+    </div>
+  );
+}
+
 /** how a message looks in the in-game chat (approximate: the colours are exact, the font and background are not) */
 export function NewsPreview({ text, welcome = false }: { text: string; welcome?: boolean }) {
   useI18n();
@@ -31,10 +52,7 @@ export function NewsPreview({ text, welcome = false }: { text: string; welcome?:
   return (
     <div className="panel space-y-3 p-5 self-start">
       <h3 className="font-extrabold">{t('gn.preview')}</h3>
-      <div className="rounded-xl p-4 font-semibold" style={{ background: '#15121c', color: '#e8e3f0' }} aria-live="polite">
-        <div className="mb-1 text-xs font-bold uppercase tracking-wide" style={{ color: '#8f86a3' }}>{t('gn.chatLabel')}</div>
-        {has ? <p className="wrap-break-word"><Styled text={shown} /></p> : <p style={{ color: '#8f86a3' }}>{t('gn.previewEmpty')}</p>}
-      </div>
+      <ChatLines lines={has ? [shown] : []} />
       <p className="text-sm font-semibold text-mute">{t('gn.previewNote')}</p>
     </div>
   );
@@ -193,6 +211,19 @@ export function NewsEditor({ value, onChange, templates = true, label, vars = VA
         <button type="button" className="btn btn-ghost btn-sm" onMouseDown={keep} onClick={clearStyle}>{t('gn.clearTags')}</button>
         <button type="button" className="btn btn-ghost btn-sm ml-auto font-mono" aria-pressed={raw} onClick={toggleRaw}>{raw ? t('gn.rawOff') : t('gn.rawOn')}</button>
       </div>
+
+      <details className="text-sm font-semibold text-mute">
+        <summary className="cursor-pointer">{t('gn.cg.title')}</summary>
+        <ul className="mt-2 grid gap-1.5 min-[520px]:grid-cols-2">
+          {SWATCHES.map((c) => (
+            <li key={c.id} className="flex items-center gap-2">
+              <span className="inline-block h-3.5 w-3.5 shrink-0 rounded-full border border-line" style={{ background: c.hex }} aria-hidden />
+              <span><b>{swatchName(c.id)}</b>: {t(`gn.cg.${c.id}` as 'gn.cg.info')}</span>
+            </li>
+          ))}
+        </ul>
+        <p className="mt-2">{t('gn.cg.default')}</p>
+      </details>
 
       <div className="flex flex-wrap items-center gap-2" role="group" aria-label={t('gn.vars')}>
         <span className="text-sm font-bold text-mute">{t('gn.vars')}:</span>

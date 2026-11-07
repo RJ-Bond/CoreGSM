@@ -11,16 +11,17 @@
 import crypto from 'node:crypto';
 import type { Express, Request, RequestHandler } from 'express';
 import { z } from 'zod';
-import { db, getSetting } from '../db.js';
+import { db } from '../db.js';
 import { applyVars, checkNews } from './gameNewsLogic.js';
+import { NAME_SQL, ONLINE_MS, liveState, serverLabel, varsFor } from './gameNewsVars.js';
+
+export { ONLINE_MS };
 import { joinLeaveFor } from './gameNewsJoinLeave.js';
 import { welcomeFor } from './gameNewsWelcome.js';
 
 export const QUEUE_TTL_MS = 5 * 60_000;
-/** the plugin counts as «online» when it polled within this time */
-export const ONLINE_MS = 30_000;
 /** the version of the game plugin this panel was built for: an older plugin is shown as outdated */
-export const PLUGIN_VERSION = '0.5.0';
+export const PLUGIN_VERSION = '0.6.0';
 /** the games the plugin exists for */
 export const SUPPORTED_GAMES = new Set(['vrising']);
 const PULL_MIN_GAP_MS = 800;
@@ -35,32 +36,6 @@ const lastPull = new Map<number, number>();
 
 const sha256 = (s: string) => crypto.createHash('sha256').update(s).digest('hex');
 const actor = (req: Request) => (req as Request & { user?: { username?: string } }).user?.username ?? '';
-// the name of a server: the one typed in the panel, the one from the query, the one the game plugin reported, host:port
-const NAME_SQL = "COALESCE(NULLIF(s.name, ''), NULLIF(st.name, ''), NULLIF(t.plugin_name, ''), s.host || ':' || s.port)";
-const serverLabel = (id: number) =>
-  (db.prepare(`SELECT ${NAME_SQL} AS n FROM servers s LEFT JOIN status st ON st.server_id = s.id LEFT JOIN game_news_targets t ON t.server_id = s.id WHERE s.id = ?`).get(id) as { n: string } | undefined)?.n ?? `#${id}`;
-
-/**
- * Who is playing: what the game plugin reports while it is online (it sees the server from inside), else the last query
- * of the panel (a server in a home network is not reachable for a panel on the internet).
- */
-function liveState(id: number, now: number): { online: boolean; players: number; max: number } | undefined {
-  const t = db.prepare('SELECT last_seen, plugin_players, plugin_max FROM game_news_targets WHERE server_id = ?').get(id) as Pick<TargetRow, 'last_seen' | 'plugin_players' | 'plugin_max'> | undefined;
-  if (t && t.last_seen > 0 && now - t.last_seen < ONLINE_MS * 2 && t.plugin_players >= 0) return { online: true, players: t.plugin_players, max: t.plugin_max };
-  const s = db.prepare('SELECT online, players, max_players FROM status WHERE server_id = ?').get(id) as { online: number; players: number; max_players: number } | undefined;
-  return s ? { online: !!s.online, players: s.players, max: s.max_players } : undefined;
-}
-
-/** the current time of day in the panel's time zone, «20:05» */
-function clock(now: number): string {
-  const tz = getSetting('timezone') || process.env.TZ || 'Europe/Moscow';
-  try {
-    return new Intl.DateTimeFormat('ru-RU', { timeZone: tz, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(now));
-  } catch {
-    return new Intl.DateTimeFormat('ru-RU', { timeZone: 'UTC', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(now));
-  }
-}
-
 const sendSchema = z.object({
   serverIds: z.array(z.number().int().positive()).min(1).max(50),
   text: z.string(),
@@ -95,8 +70,8 @@ export function queueNews(text: string, serverIds: number[], by: string, now: nu
       }
       const s = liveState(id, now);
       if (opts.onlyOnline && (!s || !s.online || s.players <= 0)) continue; // nobody to read it
-      // {server} {online} {max} {time} are filled in for each server
-      const filled = applyVars(text, { server: name, online: String(s?.players ?? 0), max: String(s?.max ?? 0), time: clock(now) });
+      // the variables ({server} {online} {max} {time} {greeting} {restart} {wipe} {discord} {tip}) are filled in for each server
+      const filled = applyVars(text, varsFor(id, now));
       insert.run(id, name, filled, 'queued', '', by, now);
       results.push({ serverId: id, serverName: name, queued: true, online: t.last_seen > 0 && now - t.last_seen < ONLINE_MS, error: '' });
     }
@@ -210,6 +185,6 @@ export function registerGameNews({ app, admin }: { app: Express; admin: RequestH
       db.transaction(() => { for (const r of rows) done.run(now, r.id); })();
     }
     // latest = the newest plugin version this panel knows (the plugin logs when it is older); welcome = the greeting for joining players
-    res.json({ messages: rows.map((r) => ({ id: r.id, text: r.text })), latest: PLUGIN_VERSION, welcome: welcomeFor(serverLabel(t.server_id)), ...joinLeaveFor() });
+    res.json({ messages: rows.map((r) => ({ id: r.id, text: r.text })), latest: PLUGIN_VERSION, ...welcomeFor(t.server_id, now), ...joinLeaveFor() });
   });
 }

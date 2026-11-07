@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="589e74b092a2"
+COREGSM_BUILD="55cb7e5c0ca7"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.72"
+COREGSM_VERSION="1.1.73"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -23861,16 +23861,17 @@ __COREGSM_EOF__
 import crypto from 'node:crypto';
 import type { Express, Request, RequestHandler } from 'express';
 import { z } from 'zod';
-import { db, getSetting } from '../db.js';
+import { db } from '../db.js';
 import { applyVars, checkNews } from './gameNewsLogic.js';
+import { NAME_SQL, ONLINE_MS, liveState, serverLabel, varsFor } from './gameNewsVars.js';
+
+export { ONLINE_MS };
 import { joinLeaveFor } from './gameNewsJoinLeave.js';
 import { welcomeFor } from './gameNewsWelcome.js';
 
 export const QUEUE_TTL_MS = 5 * 60_000;
-/** the plugin counts as «online» when it polled within this time */
-export const ONLINE_MS = 30_000;
 /** the version of the game plugin this panel was built for: an older plugin is shown as outdated */
-export const PLUGIN_VERSION = '0.5.0';
+export const PLUGIN_VERSION = '0.6.0';
 /** the games the plugin exists for */
 export const SUPPORTED_GAMES = new Set(['vrising']);
 const PULL_MIN_GAP_MS = 800;
@@ -23885,32 +23886,6 @@ const lastPull = new Map<number, number>();
 
 const sha256 = (s: string) => crypto.createHash('sha256').update(s).digest('hex');
 const actor = (req: Request) => (req as Request & { user?: { username?: string } }).user?.username ?? '';
-// the name of a server: the one typed in the panel, the one from the query, the one the game plugin reported, host:port
-const NAME_SQL = "COALESCE(NULLIF(s.name, ''), NULLIF(st.name, ''), NULLIF(t.plugin_name, ''), s.host || ':' || s.port)";
-const serverLabel = (id: number) =>
-  (db.prepare(`SELECT ${NAME_SQL} AS n FROM servers s LEFT JOIN status st ON st.server_id = s.id LEFT JOIN game_news_targets t ON t.server_id = s.id WHERE s.id = ?`).get(id) as { n: string } | undefined)?.n ?? `#${id}`;
-
-/**
- * Who is playing: what the game plugin reports while it is online (it sees the server from inside), else the last query
- * of the panel (a server in a home network is not reachable for a panel on the internet).
- */
-function liveState(id: number, now: number): { online: boolean; players: number; max: number } | undefined {
-  const t = db.prepare('SELECT last_seen, plugin_players, plugin_max FROM game_news_targets WHERE server_id = ?').get(id) as Pick<TargetRow, 'last_seen' | 'plugin_players' | 'plugin_max'> | undefined;
-  if (t && t.last_seen > 0 && now - t.last_seen < ONLINE_MS * 2 && t.plugin_players >= 0) return { online: true, players: t.plugin_players, max: t.plugin_max };
-  const s = db.prepare('SELECT online, players, max_players FROM status WHERE server_id = ?').get(id) as { online: number; players: number; max_players: number } | undefined;
-  return s ? { online: !!s.online, players: s.players, max: s.max_players } : undefined;
-}
-
-/** the current time of day in the panel's time zone, «20:05» */
-function clock(now: number): string {
-  const tz = getSetting('timezone') || process.env.TZ || 'Europe/Moscow';
-  try {
-    return new Intl.DateTimeFormat('ru-RU', { timeZone: tz, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(now));
-  } catch {
-    return new Intl.DateTimeFormat('ru-RU', { timeZone: 'UTC', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(now));
-  }
-}
-
 const sendSchema = z.object({
   serverIds: z.array(z.number().int().positive()).min(1).max(50),
   text: z.string(),
@@ -23945,8 +23920,8 @@ export function queueNews(text: string, serverIds: number[], by: string, now: nu
       }
       const s = liveState(id, now);
       if (opts.onlyOnline && (!s || !s.online || s.players <= 0)) continue; // nobody to read it
-      // {server} {online} {max} {time} are filled in for each server
-      const filled = applyVars(text, { server: name, online: String(s?.players ?? 0), max: String(s?.max ?? 0), time: clock(now) });
+      // the variables ({server} {online} {max} {time} {greeting} {restart} {wipe} {discord} {tip}) are filled in for each server
+      const filled = applyVars(text, varsFor(id, now));
       insert.run(id, name, filled, 'queued', '', by, now);
       results.push({ serverId: id, serverName: name, queued: true, online: t.last_seen > 0 && now - t.last_seen < ONLINE_MS, error: '' });
     }
@@ -24060,7 +24035,7 @@ export function registerGameNews({ app, admin }: { app: Express; admin: RequestH
       db.transaction(() => { for (const r of rows) done.run(now, r.id); })();
     }
     // latest = the newest plugin version this panel knows (the plugin logs when it is older); welcome = the greeting for joining players
-    res.json({ messages: rows.map((r) => ({ id: r.id, text: r.text })), latest: PLUGIN_VERSION, welcome: welcomeFor(serverLabel(t.server_id)), ...joinLeaveFor() });
+    res.json({ messages: rows.map((r) => ({ id: r.id, text: r.text })), latest: PLUGIN_VERSION, ...welcomeFor(t.server_id, now), ...joinLeaveFor() });
   });
 }
 __COREGSM_EOF__
@@ -24203,12 +24178,12 @@ export function checkNews(input: unknown): NewsCheck {
   return { ok: true, text };
 }
 
-export const VARIABLES = ['server', 'online', 'max', 'time'] as const;
+export const VARIABLES = ['server', 'online', 'max', 'time', 'greeting', 'restart', 'wipe', 'discord', 'tip'] as const;
 export type Vars = Record<(typeof VARIABLES)[number], string>;
 
-/** {server} {online} {max} {time} become their values; unknown {words} stay as they are. The values never hold tags. */
+/** the variables become their values; unknown {words} stay as they are. The values never hold tags. */
 export function applyVars(text: string, vars: Vars): string {
-  return text.replace(/\{(server|online|max|time)\}/g, (_m, k: keyof Vars) => vars[k].replace(/[<>]/g, '').slice(0, 60));
+  return text.replace(/\{(server|online|max|time|greeting|restart|wipe|discord|tip)\}/g, (_m, k: keyof Vars) => vars[k].replace(/[<>]/g, '').slice(0, 200));
 }
 
 /** the colour of a player's name in the greeting */
@@ -24284,6 +24259,7 @@ import { db, getSetting, setSetting } from '../db.js';
 import { countdownEnabled } from './gameNewsRestart.js';
 import { getJoinLeave, isHexColor, plainLine, setJoinLeave } from './gameNewsJoinLeave.js';
 import { getWelcome, setWelcome } from './gameNewsWelcome.js';
+import { MAX_TIPS, getExtras, setExtras } from './gameNewsVars.js';
 import { log } from '../logger.js';
 import { checkNews } from './gameNewsLogic.js';
 import { queueNews } from './gameNews.js';
@@ -24371,7 +24347,7 @@ export function registerGameNewsRules({ app, admin }: { app: Express; admin: Req
 
   app.get('/api/game-news/rules', admin, (_req, res) => {
     const rows = db.prepare('SELECT * FROM game_news_rules ORDER BY id').all() as RuleRow[];
-    res.json({ timezone: tz(), restartCountdown: countdownEnabled(), welcome: getWelcome(), joinLeave: getJoinLeave(), rules: rows.map(serialize) });
+    res.json({ timezone: tz(), restartCountdown: countdownEnabled(), welcome: getWelcome(), joinLeave: getJoinLeave(), extras: getExtras(), rules: rows.map(serialize) });
   });
 
   // the countdown «через 10 / 5 / 1 минуту» before the planned restarts of monitoring/restarts.ts
@@ -24399,15 +24375,29 @@ export function registerGameNewsRules({ app, admin }: { app: Express; admin: Req
 
   // the greeting for a player who joins (the plugin shows it to that player only)
   app.put('/api/game-news/welcome', admin, (req, res) => {
-    const b = z.object({ enabled: z.boolean(), text: z.string() }).safeParse(req.body);
+    const b = z.object({ enabled: z.boolean(), text: z.string(), split: z.boolean(), newText: z.string() }).safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Проверьте поля' });
-    let text = '';
-    if (b.data.text.trim() || b.data.enabled) {
-      const chk = checkNews(b.data.text);
-      if (!chk.ok) return res.status(400).json({ error: chk.error });
-      text = chk.text;
-    }
-    setWelcome({ enabled: b.data.enabled, text });
+    const out = { enabled: b.data.enabled, split: b.data.split, text: '', newText: '' };
+    const need = (raw: string, on: boolean): string | { error: string } => {
+      if (!raw.trim() && !on) return '';
+      const chk = checkNews(raw);
+      return chk.ok ? chk.text : { error: chk.error ?? 'Проверьте текст' };
+    };
+    const t1 = need(b.data.text, b.data.enabled);
+    const t2 = need(b.data.newText, b.data.enabled && b.data.split);
+    if (typeof t1 !== 'string') return res.status(400).json({ error: t1.error });
+    if (typeof t2 !== 'string') return res.status(400).json({ error: t2.error });
+    out.text = t1;
+    out.newText = t2;
+    setWelcome(out);
+    res.json({ ok: true });
+  });
+
+  // what {discord} and {tip} stand for
+  app.put('/api/game-news/extras', admin, (req, res) => {
+    const b = z.object({ discord: z.string().max(200), tips: z.array(z.string().max(300)).max(MAX_TIPS) }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'Проверьте поля' });
+    setExtras(b.data);
     res.json({ ok: true });
   });
 
@@ -24547,24 +24537,146 @@ export function upcomingRuns(s: Schedule, first: number | null, n: number, tz: s
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/gamenews"
+  cat > "$APP_DIR/core-backend/src/gamenews/gameNewsVars.ts" << '__COREGSM_EOF__'
+/**
+ * The variables of a game message: {server} {online} {max} {time} {greeting} {restart} {wipe} {discord} {tip}.
+ * They are filled in for each server when a message is queued or when the plugin asks for the greeting.
+ * A value that is not known right now is «—» (a text like «До рестарта: —» still reads well).
+ */
+import { db, getSetting, setSetting } from '../db.js';
+import { localParts } from '../admin/localTime.js';
+import { nextRun } from '../monitoring/restartLogic.js';
+import { plainLine } from './gameNewsJoinLeave.js';
+import { VARIABLES, type Vars } from './gameNewsLogic.js';
+
+/** the plugin counts as «online» when it polled within this time */
+export const ONLINE_MS = 30_000;
+
+export const panelTz = (): string => getSetting('timezone') || process.env.TZ || 'Europe/Moscow';
+
+// the name of a server: the one typed in the panel, the one from the query, the one the game plugin reported, host:port
+export const NAME_SQL = "COALESCE(NULLIF(s.name, ''), NULLIF(st.name, ''), NULLIF(t.plugin_name, ''), s.host || ':' || s.port)";
+export const serverLabel = (id: number): string =>
+  (db.prepare(`SELECT ${NAME_SQL} AS n FROM servers s LEFT JOIN status st ON st.server_id = s.id LEFT JOIN game_news_targets t ON t.server_id = s.id WHERE s.id = ?`).get(id) as { n: string } | undefined)?.n ?? `#${id}`;
+
+interface TargetLive { last_seen: number; plugin_players: number; plugin_max: number }
+
+/**
+ * Who is playing: what the game plugin reports while it is online (it sees the server from inside), else the last query
+ * of the panel (a server in a home network is not reachable for a panel on the internet).
+ */
+export function liveState(id: number, now: number): { online: boolean; players: number; max: number } | undefined {
+  const t = db.prepare('SELECT last_seen, plugin_players, plugin_max FROM game_news_targets WHERE server_id = ?').get(id) as TargetLive | undefined;
+  if (t && t.last_seen > 0 && now - t.last_seen < ONLINE_MS * 2 && t.plugin_players >= 0) return { online: true, players: t.plugin_players, max: t.plugin_max };
+  const s = db.prepare('SELECT online, players, max_players FROM status WHERE server_id = ?').get(id) as { online: number; players: number; max_players: number } | undefined;
+  return s ? { online: !!s.online, players: s.players, max: s.max_players } : undefined;
+}
+
+function fmt(now: number, opts: Intl.DateTimeFormatOptions): string {
+  try {
+    return new Intl.DateTimeFormat('ru-RU', { timeZone: panelTz(), hourCycle: 'h23', ...opts }).format(new Date(now));
+  } catch {
+    return new Intl.DateTimeFormat('ru-RU', { timeZone: 'UTC', hourCycle: 'h23', ...opts }).format(new Date(now));
+  }
+}
+
+/** the current time of day in the panel's time zone, «20:05» */
+export const clock = (now: number): string => fmt(now, { hour: '2-digit', minute: '2-digit' });
+
+/** «Доброе утро» ... by the hour in the panel's time zone */
+export function greetingFor(hour: number): string {
+  if (hour >= 5 && hour < 12) return 'Доброе утро';
+  if (hour >= 12 && hour < 18) return 'Добрый день';
+  if (hour >= 18 && hour < 23) return 'Добрый вечер';
+  return 'Доброй ночи';
+}
+
+/** «3 ч 20 мин», «45 мин», «менее минуты» */
+export function leftText(ms: number): string {
+  const min = Math.max(0, Math.round(ms / 60_000));
+  if (min < 1) return 'менее минуты';
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  if (h >= 24) { const d = Math.floor(h / 24); return `${d} д${h % 24 ? ` ${h % 24} ч` : ''}`; }
+  return h ? `${h} ч${m ? ` ${m} мин` : ''}` : `${m} мин`;
+}
+
+function restartLeft(serverId: number, now: number): string {
+  const p = db.prepare('SELECT days, at_min FROM restart_plans WHERE server_id = ? AND enabled = 1').get(serverId) as { days: number; at_min: number } | undefined;
+  const at = p ? nextRun(p, now, panelTz()) : null;
+  return at ? leftText(at - now) : '—';
+}
+
+function nextWipe(serverId: number, now: number): string {
+  const w = db.prepare("SELECT wipe_at FROM wipe_scenarios WHERE server_id = ? AND status = 'scheduled' AND wipe_at > ? ORDER BY wipe_at LIMIT 1").get(serverId, now) as { wipe_at: number } | undefined;
+  return w ? fmt(w.wipe_at, { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—';
+}
+
+// ---- what the administrator keeps for {discord} and {tip}
+export interface Extras { discord: string; tips: string[] }
+export const MAX_TIPS = 20;
+
+export function getExtras(): Extras {
+  try {
+    const v = JSON.parse(getSetting('gamenews_extras') || '{}') as Partial<Extras>;
+    return { discord: typeof v.discord === 'string' ? v.discord : '', tips: Array.isArray(v.tips) ? v.tips.filter((x): x is string => typeof x === 'string').slice(0, MAX_TIPS) : [] };
+  } catch {
+    return { discord: '', tips: [] };
+  }
+}
+
+export function setExtras(e: Extras): void {
+  setSetting('gamenews_extras', JSON.stringify({ discord: plainLine(e.discord).slice(0, 100), tips: e.tips.map((t) => plainLine(t).slice(0, 200)).filter(Boolean).slice(0, MAX_TIPS) }));
+}
+
+/** every variable for one server at a moment (a random tip each time) */
+export function varsFor(serverId: number, now: number): Vars {
+  const live = liveState(serverId, now);
+  const ex = getExtras();
+  const tip = ex.tips.length ? ex.tips[Math.floor(Math.random() * ex.tips.length)] : '';
+  const v: Vars = {
+    server: serverLabel(serverId),
+    online: String(live?.players ?? 0),
+    max: String(live?.max ?? 0),
+    time: clock(now),
+    greeting: greetingFor(localParts(now, panelTz()).hour),
+    restart: restartLeft(serverId, now),
+    wipe: nextWipe(serverId, now),
+    discord: ex.discord || '—',
+    tip: tip || '—',
+  };
+  for (const k of VARIABLES) if (!v[k]) v[k] = '—';
+  return v;
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/gamenews"
   cat > "$APP_DIR/core-backend/src/gamenews/gameNewsWelcome.ts" << '__COREGSM_EOF__'
 /**
  * A greeting for a player who joins a server: the administrator writes it in the panel, the game plugin gets it with
  * every poll and shows it (to that player only) when someone connects. The setting is one JSON value:
- * `gamenews_welcome` = {"enabled": true, "text": "Привет, {name}! Добро пожаловать на {server}."}
- * {server} is filled in here, {name} (the nickname of the player) by the plugin.
+ * `gamenews_welcome` = {"enabled": true, "text": "...", "split": true, "newText": "..."}
+ *   text     for a player who has been here before (and for everybody when `split` is off)
+ *   newText  for a player who joins for the first time (used when `split` is on)
+ * The panel fills in the variables ({server}, {online}, {greeting}, {restart} ...) for the server that asks; {name}, the
+ * nickname of the player, is filled in by the plugin, which also knows whether the player has been here before.
  */
 import { getSetting, setSetting } from '../db.js';
-import { greenName } from './gameNewsLogic.js';
+import { applyVars, greenName } from './gameNewsLogic.js';
+import { varsFor } from './gameNewsVars.js';
 
-export interface Welcome { enabled: boolean; text: string }
+export interface Welcome { enabled: boolean; text: string; split: boolean; newText: string }
 
 export function getWelcome(): Welcome {
   try {
     const v = JSON.parse(getSetting('gamenews_welcome') || '{}') as Partial<Welcome>;
-    return { enabled: !!v.enabled, text: typeof v.text === 'string' ? v.text : '' };
+    return {
+      enabled: !!v.enabled,
+      text: typeof v.text === 'string' ? v.text : '',
+      split: !!v.split,
+      newText: typeof v.newText === 'string' ? v.newText : '',
+    };
   } catch {
-    return { enabled: false, text: '' };
+    return { enabled: false, text: '', split: false, newText: '' };
   }
 }
 
@@ -24573,11 +24685,14 @@ export function setWelcome(w: Welcome): void {
 }
 
 /** what the plugin of a server gets: '' when the greeting is off */
-export function welcomeFor(serverName: string): string {
+export function welcomeFor(serverId: number, now: number): { welcome: string; welcomeNew: string } {
   const w = getWelcome();
-  if (!w.enabled || !w.text.trim()) return '';
-  // the player's name is green unless the administrator coloured it; {server} is filled in here, {name} by the plugin
-  return greenName(w.text).replace(/\{server\}/g, serverName.replace(/[<>]/g, '').slice(0, 60));
+  if (!w.enabled || !w.text.trim()) return { welcome: '', welcomeNew: '' };
+  const vars = varsFor(serverId, now);
+  // the player's name is green unless the administrator coloured it
+  const fill = (t: string) => applyVars(greenName(t), vars);
+  const welcome = fill(w.text);
+  return { welcome, welcomeNew: w.split && w.newText.trim() ? fill(w.newText) : welcome };
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
@@ -122436,6 +122551,27 @@ export function Styled({ text }: { text: string }) {
   );
 }
 
+/** the colour the game gives to a chat line that has no colour of its own (taken from a screenshot of the game) */
+export const GAME_ORANGE = '#E8982B';
+
+/** lines as the in-game chat draws them: «[15:14] [СИСТЕМА] text»; a text without a colour is orange */
+export function ChatLines({ lines }: { lines: string[] }) {
+  useI18n();
+  const time = useMemo(() => new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }), []);
+  return (
+    <div
+      className="rounded-xl p-4 text-base font-semibold leading-snug"
+      style={{ background: 'linear-gradient(180deg, #1f2d33, #0f171b)', color: GAME_ORANGE, textShadow: '0 1px 2px rgba(0, 0, 0, .85)' }}
+      aria-live="polite"
+    >
+      {lines.length === 0 && <p style={{ color: '#8f9aa0', textShadow: 'none' }}>{t('gn.previewEmpty')}</p>}
+      {lines.map((l, i) => (
+        <p key={i} className="wrap-break-word">[{time}] [{t('gn.chatSystem')}] <Styled text={l} /></p>
+      ))}
+    </div>
+  );
+}
+
 /** how a message looks in the in-game chat (approximate: the colours are exact, the font and background are not) */
 export function NewsPreview({ text, welcome = false }: { text: string; welcome?: boolean }) {
   useI18n();
@@ -122444,10 +122580,7 @@ export function NewsPreview({ text, welcome = false }: { text: string; welcome?:
   return (
     <div className="panel space-y-3 p-5 self-start">
       <h3 className="font-extrabold">{t('gn.preview')}</h3>
-      <div className="rounded-xl p-4 font-semibold" style={{ background: '#15121c', color: '#e8e3f0' }} aria-live="polite">
-        <div className="mb-1 text-xs font-bold uppercase tracking-wide" style={{ color: '#8f86a3' }}>{t('gn.chatLabel')}</div>
-        {has ? <p className="wrap-break-word"><Styled text={shown} /></p> : <p style={{ color: '#8f86a3' }}>{t('gn.previewEmpty')}</p>}
-      </div>
+      <ChatLines lines={has ? [shown] : []} />
       <p className="text-sm font-semibold text-mute">{t('gn.previewNote')}</p>
     </div>
   );
@@ -122606,6 +122739,19 @@ export function NewsEditor({ value, onChange, templates = true, label, vars = VA
         <button type="button" className="btn btn-ghost btn-sm" onMouseDown={keep} onClick={clearStyle}>{t('gn.clearTags')}</button>
         <button type="button" className="btn btn-ghost btn-sm ml-auto font-mono" aria-pressed={raw} onClick={toggleRaw}>{raw ? t('gn.rawOff') : t('gn.rawOn')}</button>
       </div>
+
+      <details className="text-sm font-semibold text-mute">
+        <summary className="cursor-pointer">{t('gn.cg.title')}</summary>
+        <ul className="mt-2 grid gap-1.5 min-[520px]:grid-cols-2">
+          {SWATCHES.map((c) => (
+            <li key={c.id} className="flex items-center gap-2">
+              <span className="inline-block h-3.5 w-3.5 shrink-0 rounded-full border border-line" style={{ background: c.hex }} aria-hidden />
+              <span><b>{swatchName(c.id)}</b>: {t(`gn.cg.${c.id}` as 'gn.cg.info')}</span>
+            </li>
+          ))}
+        </ul>
+        <p className="mt-2">{t('gn.cg.default')}</p>
+      </details>
 
       <div className="flex flex-wrap items-center gap-2" role="group" aria-label={t('gn.vars')}>
         <span className="text-sm font-bold text-mute">{t('gn.vars')}:</span>
@@ -138424,11 +138570,15 @@ export function versionLess(a: string, b: string): boolean {
 }
 
 /** the variables the panel fills in for each server when it sends */
-export const VARIABLES = ['server', 'online', 'max', 'time'] as const;
-const SAMPLE: Record<(typeof VARIABLES)[number], string> = { server: 'Мой сервер', online: '12', max: '40', time: '20:00' };
+export const VARIABLES = ['server', 'online', 'max', 'time', 'greeting', 'restart', 'wipe', 'discord', 'tip'] as const;
+export type VarName = (typeof VARIABLES)[number];
+const SAMPLE: Record<VarName, string> = {
+  server: 'Мой сервер', online: '12', max: '40', time: '20:00', greeting: 'Добрый вечер', restart: '3 ч 20 мин',
+  wipe: '12.11, 20:00', discord: 'discord.gg/coregsm', tip: 'Сохраняйтесь у сундука.',
+};
 
 /** the variables of the greeting: {name} is the nickname of the joining player (the plugin fills it in) */
-export const WELCOME_VARIABLES = ['name', 'server'] as const;
+export const WELCOME_VARIABLES = ['name', ...VARIABLES] as const;
 
 /** the colour of a player's name in the greeting (the same as the backend uses) */
 export const NAME_COLOR = '#5FD068';
@@ -138448,7 +138598,7 @@ export function greenName(text: string): string {
 
 /** the preview shows sample values for the variables ({name} only in a greeting, in green as in the game) */
 export function fillSample(text: string, welcome = false): string {
-  const s = text.replace(/\{(server|online|max|time)\}/g, (_m, k: (typeof VARIABLES)[number]) => SAMPLE[k]);
+  const s = text.replace(/\{(server|online|max|time|greeting|restart|wipe|discord|tip)\}/g, (_m, k: VarName) => SAMPLE[k]);
   return welcome ? greenName(s).replace(/\{name\}/g, 'Игрок') : s;
 }
 
@@ -138469,6 +138619,37 @@ export function composeLine(text: string, nameColor: string, textColor: string):
   const plain = noCtl.replace(/[<>]/g, '').replace(/ {2,}/g, ' ').trim();
   return `<color=${textColor.toUpperCase()}>${plain.replace(/\{name\}/g, `<color=${nameColor.toUpperCase()}>{name}</color>`)}</color>`;
 }
+
+/** the greeting: one text for everybody, or one for a newcomer and one for a returning player */
+export interface Welcome { enabled: boolean; text: string; split: boolean; newText: string }
+
+/** what {discord} and {tip} stand for */
+export interface Extras { discord: string; tips: string[] }
+
+/** ready greetings: a click puts the texts into the editors (the administrator edits them after) */
+export interface WelcomeStyle { id: string; text: string; newText: string }
+export const WELCOME_STYLES: WelcomeStyle[] = [
+  {
+    id: 'classic',
+    text: '<color=#5FD068><b>{greeting}, {name}!</b></color> Добро пожаловать на <color=#FFCC33>{server}</color>. Сейчас на сервере {online} из {max} игроков.',
+    newText: '<color=#5FD068><b>Добро пожаловать, {name}!</b></color> Это <color=#FFCC33>{server}</color>. Загляните в наш Discord: <color=#6EC1FF>{discord}</color>',
+  },
+  {
+    id: 'gothic',
+    text: '<color=#FF5555><b>{name}</b></color><color=#FFB347>, ночь принадлежит вам. На {server} сейчас {online} из {max}.</color>',
+    newText: '<color=#FF5555><b>Тьма приветствует тебя, {name}.</b></color> <color=#FFB347>{server} ждёт.</color> До рестарта: {restart}.',
+  },
+  {
+    id: 'minimal',
+    text: '{greeting}, {name}. Онлайн: {online}/{max}.',
+    newText: 'Добро пожаловать на {server}, {name}. Discord: {discord}',
+  },
+  {
+    id: 'festive',
+    text: '<color=#B86BFF><b>{greeting}, {name}!</b></color> <color=#FFB347>Рады видеть вас на {server}!</color> <color=#6EC1FF>Совет: {tip}</color>',
+    newText: '<color=#B86BFF><b>Добро пожаловать, {name}!</b></color> <color=#FFB347>Приятной игры на {server}!</color> <color=#6EC1FF>Совет: {tip}</color>',
+  },
+];
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/gameProfiles.ts" << '__COREGSM_EOF__'
@@ -141790,7 +141971,7 @@ const en: Record<keyof typeof ru, string> = {
   'gn.preview': 'How it will look in the game',
   'gn.chatLabel': 'System message',
   'gn.previewEmpty': 'Your message will appear here.',
-  'gn.previewNote': 'The preview is approximate: the font and background in the game may differ, colours are exact.',
+  'gn.previewNote': 'The preview is approximate: the font and background in the game may differ, colours are exact. Text without a colour is orange in the game.',
   'gn.servers': 'Send to',
   'gn.noServers': 'Add a game server first.',
   'gn.noPlugin': 'No server has a plugin token yet. Press the gear next to a server.',
@@ -141831,7 +142012,39 @@ const en: Record<keyof typeof ru, string> = {
   'gn.h.expired': 'Not delivered',
   'gn.h.fail': 'Failed',
   'gn.reuse': 'Use again',  'adm.s.alerts': 'Alerts',
-  'gn.bytes': '{n} of {max} bytes',  'gn.jl.title': 'Players joining and leaving',
+  'gn.chatSystem': 'SYSTEM',
+  'gn.v.greeting': 'Good morning / afternoon / evening / night by the time of day',
+  'gn.v.restart': 'How long is left until the planned restart',
+  'gn.v.wipe': 'The date of the next wipe',
+  'gn.v.discord': 'The link or name of your Discord (set below)',
+  'gn.v.tip': 'A random tip from your list',
+  'gn.cg.title': 'Which colour for what',
+  'gn.cg.info': 'neutral information, links',
+  'gn.cg.good': 'greetings, good news',
+  'gn.cg.warn': 'attention, reminders',
+  'gn.cg.danger': 'restart, wipe, rules',
+  'gn.cg.event': 'events, player names',
+  'gn.cg.gold': 'names, rewards',
+  'gn.cg.white': 'a neutral accent',
+  'gn.cg.default': 'Text without a colour is orange in the game.',
+  'gn.w.styles': 'Ready styles',
+  'gn.w.style.classic': 'Classic',
+  'gn.w.style.gothic': 'Gothic',
+  'gn.w.style.minimal': 'Minimal',
+  'gn.w.style.festive': 'Festive',
+  'gn.w.styleTitle': 'Replace the greeting texts?',
+  'gn.w.styleText': 'The current texts will be replaced with the chosen style. You can edit them after that.',
+  'gn.w.styleApply': 'Replace',
+  'gn.w.split': 'Different greetings for a new and a returning player',
+  'gn.w.splitNote': 'A newcomer sees one, a regular sees the other. The plugin remembers who has been on the server.',
+  'gn.w.textBack': 'For a returning player',
+  'gn.w.textNew': 'For a new player',
+  'gn.x.title': 'For {discord} and {tip}',
+  'gn.x.note': 'These values go into any message: the greeting, auto announcements and the normal send.',
+  'gn.x.discord': 'Discord (a link or a name)',
+  'gn.x.tips': 'Tips (one per line, no more than 20)',
+  'gn.x.tipsEx': 'Save at a chest before you log out',
+  'gn.x.tooMany': 'No more than 20 tips',  'gn.bytes': '{n} of {max} bytes',  'gn.jl.title': 'Players joining and leaving',
   'gn.jl.note': 'When a player joins the server or leaves it, everybody gets a message. The texts and colours are set here and saved by themselves: the next player who joins (a few seconds later) sees the new ones. Needs plugin version 0.5.0 or newer.',
   'gn.jl.join': 'Announce joining',
   'gn.jl.leave': 'Announce leaving',
@@ -141842,7 +142055,7 @@ const en: Record<keyof typeof ru, string> = {
   'gn.jl.saved': 'Settings saved',  'gn.players': 'players {n} of {max}',  'gn.rawOn': 'Code',
   'gn.rawOff': 'Editor',  'gn.v.name': 'Player nickname',
   'gn.w.title': 'Greeting on join',
-  'gn.w.note': 'A player who joins the server sees this message in private (nobody else does). Changes are saved by themselves. Needs plugin version 0.3.0 or newer.',
+  'gn.w.note': 'A player who joins the server sees this message in private (nobody else does). Changes are saved by themselves. Different greetings for a newcomer and a regular need plugin 0.6.0 or newer, the rest works from 0.3.0.',
   'gn.w.enabled': 'Greet players',
   'gn.w.text': 'Greeting text',
   'gn.w.saved': 'Greeting saved',  'gn.a.countdown': 'Warn about planned restarts',
@@ -146265,7 +146478,7 @@ const ru = {
   'gn.preview': 'Так это будет выглядеть в игре',
   'gn.chatLabel': 'Системное сообщение',
   'gn.previewEmpty': 'Здесь появится ваше сообщение.',
-  'gn.previewNote': 'Превью приблизительное: шрифт и фон в игре могут отличаться, цвета передаются точно.',
+  'gn.previewNote': 'Превью приблизительное: фон и шрифт в игре могут отличаться, цвета передаются точно. Текст без цвета в игре оранжевый.',
   'gn.servers': 'Куда отправить',
   'gn.noServers': 'Сначала добавьте игровой сервер.',
   'gn.noPlugin': 'Ни у одного сервера нет токена плагина. Нажмите на шестерёнку у сервера.',
@@ -146306,7 +146519,39 @@ const ru = {
   'gn.h.expired': 'Не доставлено',
   'gn.h.fail': 'Ошибка',
   'gn.reuse': 'Использовать снова',  'adm.s.alerts': 'Оповещения',
-  'gn.bytes': '{n} из {max} байт',  'gn.jl.title': 'Вход и выход игроков',
+  'gn.chatSystem': 'СИСТЕМА',
+  'gn.v.greeting': 'Доброе утро / день / вечер / ночь по времени суток',
+  'gn.v.restart': 'Сколько осталось до планового рестарта',
+  'gn.v.wipe': 'Дата ближайшего вайпа',
+  'gn.v.discord': 'Ссылка или название Discord (задаётся ниже)',
+  'gn.v.tip': 'Случайный совет из вашего списка',
+  'gn.cg.title': 'Какой цвет для чего',
+  'gn.cg.info': 'нейтральная информация, ссылки',
+  'gn.cg.good': 'приветствия, хорошие новости',
+  'gn.cg.warn': 'внимание, напоминания',
+  'gn.cg.danger': 'рестарт, вайп, правила',
+  'gn.cg.event': 'события, имена игроков',
+  'gn.cg.gold': 'названия, награды',
+  'gn.cg.white': 'нейтральный акцент',
+  'gn.cg.default': 'Текст без цвета в игре оранжевый.',
+  'gn.w.styles': 'Готовые стили',
+  'gn.w.style.classic': 'Классика',
+  'gn.w.style.gothic': 'Готика',
+  'gn.w.style.minimal': 'Минимализм',
+  'gn.w.style.festive': 'Праздничный',
+  'gn.w.styleTitle': 'Заменить тексты приветствия?',
+  'gn.w.styleText': 'Текущие тексты будут заменены выбранным стилем. После этого их можно править.',
+  'gn.w.styleApply': 'Заменить',
+  'gn.w.split': 'Разные приветствия для нового и вернувшегося игрока',
+  'gn.w.splitNote': 'Новичок видит одно, постоянный игрок другое. Плагин запоминает, кто уже заходил на сервер.',
+  'gn.w.textBack': 'Для вернувшегося игрока',
+  'gn.w.textNew': 'Для нового игрока',
+  'gn.x.title': 'Для {discord} и {tip}',
+  'gn.x.note': 'Эти значения подставляются в любое сообщение: в приветствие, автообъявления и обычную отправку.',
+  'gn.x.discord': 'Discord (ссылка или название)',
+  'gn.x.tips': 'Советы (по одному в строке, не больше 20)',
+  'gn.x.tipsEx': 'Сохраняйтесь у сундука перед выходом',
+  'gn.x.tooMany': 'Не больше 20 советов',  'gn.bytes': '{n} из {max} байт',  'gn.jl.title': 'Вход и выход игроков',
   'gn.jl.note': 'Когда игрок заходит на сервер или выходит, всем игрокам показывается сообщение. Тексты и цвета настраиваются здесь и сохраняются сами: следующий вошедший игрок (через несколько секунд) увидит новые. Нужен плагин версии 0.5.0 и новее.',
   'gn.jl.join': 'Сообщать о входе',
   'gn.jl.leave': 'Сообщать о выходе',
@@ -146317,7 +146562,7 @@ const ru = {
   'gn.jl.saved': 'Настройки сохранены',  'gn.players': 'игроков {n} из {max}',  'gn.rawOn': 'Код',
   'gn.rawOff': 'Редактор',  'gn.v.name': 'Ник игрока',
   'gn.w.title': 'Приветствие при входе',
-  'gn.w.note': 'Игрок, который заходит на сервер, видит это сообщение лично (остальные его не видят). Изменения сохраняются сами. Нужен плагин версии 0.3.0 и новее.',
+  'gn.w.note': 'Игрок, который заходит на сервер, видит это сообщение лично (остальные его не видят). Изменения сохраняются сами. Нужен плагин версии 0.6.0 и новее для разных приветствий новичку и постоянному игроку, остальное работает с 0.3.0.',
   'gn.w.enabled': 'Приветствовать игроков',
   'gn.w.text': 'Текст приветствия',
   'gn.w.saved': 'Приветствие сохранено',  'gn.a.countdown': 'Предупреждать о плановых рестартах',
@@ -154611,18 +154856,18 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/pages/GameNewsRules.tsx" << '__COREGSM_EOF__'
 import { useState, type FormEvent } from 'react';
 import { api } from '../api';
-import { NewsEditor, NewsPreview, Styled } from '../components/NewsEditor';
+import { ChatLines, NewsEditor, NewsPreview, Styled } from '../components/NewsEditor';
 import { StateView } from '../components/StateView';
 import { confirmDialog } from '../confirm';
 import { t, useI18n } from '../i18n';
 import {
-  INTERVAL_PRESETS, SWATCHES, WELCOME_VARIABLES, composeLine, emptyRule, isHex, isHHMM, validateNews, validateRule,
-  type JoinLeave, type NewsServerInfo, type RuleBody, type RuleInfo, type RuleKind,
+  INTERVAL_PRESETS, SWATCHES, WELCOME_STYLES, WELCOME_VARIABLES, composeLine, emptyRule, isHex, isHHMM, validateNews, validateRule,
+  type Extras, type JoinLeave, type Welcome, type WelcomeStyle, type NewsServerInfo, type RuleBody, type RuleInfo, type RuleKind,
 } from '../gameNews';
 import { fromLocalInput, toLocalInput } from '../maintenance';
 import { ErrorLine, Field, IconEdit, IconPlus, IconTrash, LoadError, Modal, SaveBadge, Spinner, errText, toast, useAutosave, usePoll } from '../ui';
 
-interface RulesState { timezone: string; restartCountdown: boolean; welcome: { enabled: boolean; text: string }; joinLeave: JoinLeave; rules: RuleInfo[] }
+interface RulesState { timezone: string; restartCountdown: boolean; welcome: Welcome; joinLeave: JoinLeave; extras: Extras; rules: RuleInfo[] }
 
 const when = (ts: number | null) => (ts ? new Date(ts).toLocaleString() : '—');
 
@@ -154701,6 +154946,8 @@ export default function GameNewsRules({ servers, part }: { servers: NewsServerIn
       {data && part === 'events' && <JoinLeaveCard initial={data.joinLeave} />}
 
       {data && part === 'events' && <WelcomeCard initial={data.welcome} />}
+
+      {data && part === 'events' && <ExtrasCard initial={data.extras} />}
 
       {error && !data ? <LoadError error={error} onRetry={() => void load()} /> : <ErrorLine text={error} />}
       {!data && !error && <div className="skeleton panel h-32" aria-busy="true" />}
@@ -154889,22 +155136,33 @@ function RuleModal({ id, initial, servers, timezone, onClose, onSaved }: {
   );
 }
 
-/** the greeting for a player who joins: written once, shown by the plugin to that player only. Saves by itself. */
-function WelcomeCard({ initial }: { initial: { enabled: boolean; text: string } }) {
+/**
+ * The greeting for a player who joins, shown by the plugin to that player only. One text for everybody or one for a
+ * newcomer and one for a returning player; ready styles to start from. Saves by itself.
+ */
+function WelcomeCard({ initial }: { initial: Welcome }) {
   useI18n();
-  const [f, setF] = useState(initial);
-  const [saved, setSaved] = useState(initial);
+  const [f, setF] = useState<Welcome>(initial);
+  const [saved, setSaved] = useState<Welcome>(initial);
+  const set = <K extends keyof Welcome>(k: K, v: Welcome[K]) => setF((x) => ({ ...x, [k]: v }));
   const auto = useAutosave({
     value: f,
     saved,
     delay: 900,
     validate: (v) => {
-      if (!v.enabled && !v.text.trim()) return null;
+      if (!v.enabled && !v.text.trim() && !v.newText.trim()) return null;
       const p = validateNews(v.text);
-      return p ? t(p === 'long' ? 'gn.hint.long' : 'gn.hint.text') : null;
+      if (p) return t(p === 'long' ? 'gn.hint.long' : 'gn.hint.text');
+      const q = v.split ? validateNews(v.newText) : null;
+      return q ? t(q === 'long' ? 'gn.hint.long' : 'gn.hint.text') : null;
     },
     save: async (v) => { await api('/game-news/welcome', 'PUT', v); setSaved(v); },
   });
+
+  const applyStyle = async (st: WelcomeStyle) => {
+    if ((f.text.trim() || f.newText.trim()) && !(await confirmDialog({ title: t('gn.w.styleTitle'), text: t('gn.w.styleText'), confirmLabel: t('gn.w.styleApply') }))) return;
+    setF((x) => ({ ...x, text: st.text, newText: st.newText, split: true }));
+  };
 
   return (
     <section className="panel space-y-4 p-5">
@@ -154915,15 +155173,75 @@ function WelcomeCard({ initial }: { initial: { enabled: boolean; text: string } 
         </div>
         <SaveBadge status={auto.status} error={auto.error} retry={auto.retry} />
       </div>
+
       <label className="flex items-center gap-2.5 font-bold">
-        <input type="checkbox" checked={f.enabled} onChange={(e) => setF((x) => ({ ...x, enabled: e.target.checked }))} />
+        <input type="checkbox" checked={f.enabled} onChange={(e) => set('enabled', e.target.checked)} />
         {t('gn.w.enabled')}
       </label>
+
+      <div className="flex flex-wrap items-center gap-2" role="group" aria-label={t('gn.w.styles')}>
+        <span className="text-sm font-bold text-mute">{t('gn.w.styles')}:</span>
+        {WELCOME_STYLES.map((st) => (
+          <button key={st.id} type="button" className="chip-filter" onClick={() => void applyStyle(st)}>{t(`gn.w.style.${st.id}` as 'gn.w.style.classic')}</button>
+        ))}
+      </div>
+
+      <label className="flex items-start gap-2.5 font-bold">
+        <input className="mt-1" type="checkbox" checked={f.split} onChange={(e) => set('split', e.target.checked)} />
+        <span>
+          {t('gn.w.split')}
+          <span className="block text-sm font-semibold text-mute">{t('gn.w.splitNote')}</span>
+        </span>
+      </label>
+
       <div className="grid gap-5 lg:grid-cols-2">
-        <NewsEditor value={f.text} onChange={(v) => setF((x) => ({ ...x, text: v }))} templates={false} vars={WELCOME_VARIABLES} label={t('gn.w.text')} />
-        <NewsPreview text={f.text} welcome />
+        <div className="space-y-4">
+          <NewsEditor value={f.text} onChange={(v) => set('text', v)} templates={false} vars={WELCOME_VARIABLES} label={f.split ? t('gn.w.textBack') : t('gn.w.text')} />
+          <NewsPreview text={f.text} welcome />
+        </div>
+        {f.split && (
+          <div className="space-y-4">
+            <NewsEditor value={f.newText} onChange={(v) => set('newText', v)} templates={false} vars={WELCOME_VARIABLES} label={t('gn.w.textNew')} />
+            <NewsPreview text={f.newText || f.text} welcome />
+          </div>
+        )}
       </div>
       {auto.invalid && f.enabled && <p className="text-sm font-semibold text-danger">{auto.error}</p>}
+    </section>
+  );
+}
+
+/** what {discord} and {tip} stand for: a link or a name, and a list of tips (one at random each time). Saves by itself. */
+function ExtrasCard({ initial }: { initial: Extras }) {
+  useI18n();
+  const [discord, setDiscord] = useState(initial.discord);
+  const [tips, setTips] = useState(initial.tips.join('\n'));
+  const value: Extras = { discord: discord.trim(), tips: tips.split('\n').map((x) => x.trim()).filter(Boolean) };
+  const [saved, setSaved] = useState<Extras>(value);
+  const auto = useAutosave({
+    value,
+    saved,
+    delay: 900,
+    validate: (v) => (v.tips.length > 20 ? t('gn.x.tooMany') : null),
+    save: async (v) => { await api('/game-news/extras', 'PUT', v); setSaved(v); },
+  });
+
+  return (
+    <section className="panel space-y-4 p-5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0 flex-1 basis-72">
+          <h3 className="font-extrabold">{t('gn.x.title')}</h3>
+          <p className="text-sm font-semibold text-mute">{t('gn.x.note')}</p>
+        </div>
+        <SaveBadge status={auto.status} error={auto.error} retry={auto.retry} />
+      </div>
+      <Field label={t('gn.x.discord')}>
+        <input className="input" value={discord} maxLength={100} placeholder="discord.gg/..." onChange={(e) => setDiscord(e.target.value)} />
+      </Field>
+      <Field label={t('gn.x.tips')}>
+        <textarea className="input min-h-24 text-sm" value={tips} rows={4} placeholder={t('gn.x.tipsEx')} onChange={(e) => setTips(e.target.value)} />
+      </Field>
+      {auto.invalid && <p className="text-sm font-semibold text-danger">{auto.error}</p>}
     </section>
   );
 }
@@ -155003,11 +155321,7 @@ function JoinLeaveCard({ initial }: { initial: JoinLeave }) {
         <ColorField label={t('gn.jl.textColor')} value={f.textColor} onChange={(v) => set('textColor', v)} />
       </div>
 
-      <div className="rounded-xl p-4 font-semibold" style={{ background: '#15121c', color: '#e8e3f0' }} aria-live="polite">
-        <div className="mb-1 text-xs font-bold uppercase tracking-wide" style={{ color: '#8f86a3' }}>{t('gn.chatLabel')}</div>
-        <p className="wrap-break-word"><Styled text={sample(f.joinText)} /></p>
-        <p className="wrap-break-word"><Styled text={sample(f.leaveText)} /></p>
-      </div>
+      <ChatLines lines={[sample(f.joinText), sample(f.leaveText)]} />
       <p className="text-sm font-semibold text-mute">{t('gn.jl.nameHint')}</p>
       {auto.invalid && <p className="text-sm font-semibold text-danger">{auto.error}</p>}
     </section>

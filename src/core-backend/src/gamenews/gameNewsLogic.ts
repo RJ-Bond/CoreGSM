@@ -64,12 +64,12 @@ export function checkNews(input: unknown): NewsCheck {
   return { ok: true, text };
 }
 
-export const VARIABLES = ['server', 'online', 'max', 'time'] as const;
+export const VARIABLES = ['server', 'online', 'max', 'time', 'greeting', 'restart', 'wipe', 'discord', 'tip'] as const;
 export type Vars = Record<(typeof VARIABLES)[number], string>;
 
-/** {server} {online} {max} {time} become their values; unknown {words} stay as they are. The values never hold tags. */
+/** the variables become their values; unknown {words} stay as they are. The values never hold tags. */
 export function applyVars(text: string, vars: Vars): string {
-  return text.replace(/\{(server|online|max|time)\}/g, (_m, k: keyof Vars) => vars[k].replace(/[<>]/g, '').slice(0, 60));
+  return text.replace(/\{(server|online|max|time|greeting|restart|wipe|discord|tip)\}/g, (_m, k: keyof Vars) => vars[k].replace(/[<>]/g, '').slice(0, 200));
 }
 
 /** the colour of a player's name in the greeting */
