@@ -42,6 +42,40 @@ function expireOld(now = Date.now()): void {
   db.prepare("UPDATE game_news_log SET status = 'expired', error = 'Плагин не забрал сообщение за 5 минут' WHERE status = 'queued' AND sent_at < ?").run(now - QUEUE_TTL_MS);
 }
 
+export interface QueueResult { serverId: number; serverName: string; queued: boolean; online: boolean; error: string }
+
+/**
+ * Puts a message into the queue of the given servers ([] = every server that has a plugin token).
+ * onlyOnline: a server with nobody playing is skipped (an automatic announcement to an empty server is noise).
+ */
+export function queueNews(text: string, serverIds: number[], by: string, now: number, opts: { onlyOnline?: boolean } = {}): QueueResult[] {
+  const insert = db.prepare('INSERT INTO game_news_log (server_id, server_name, text, ok, status, error, sent_by, sent_at) VALUES (?, ?, ?, 0, ?, ?, ?, ?)');
+  const ids = serverIds.length
+    ? [...new Set(serverIds)]
+    : (db.prepare("SELECT server_id FROM game_news_targets WHERE token_hash <> ''").all() as { server_id: number }[]).map((r) => r.server_id);
+  const results: QueueResult[] = [];
+  db.transaction(() => {
+    for (const id of ids) {
+      const name = serverLabel(id);
+      const t = db.prepare('SELECT * FROM game_news_targets WHERE server_id = ?').get(id) as TargetRow | undefined;
+      if (!t?.token_hash) {
+        const error = 'Для сервера не создан токен плагина';
+        insert.run(id, name, text, 'failed', error, by, now);
+        results.push({ serverId: id, serverName: name, queued: false, online: false, error });
+        continue;
+      }
+      if (opts.onlyOnline) {
+        const s = db.prepare('SELECT online, players FROM status WHERE server_id = ?').get(id) as { online: number; players: number } | undefined;
+        if (!s || !s.online || s.players <= 0) continue; // nobody to read it
+      }
+      insert.run(id, name, text, 'queued', '', by, now);
+      results.push({ serverId: id, serverName: name, queued: true, online: t.last_seen > 0 && now - t.last_seen < ONLINE_MS, error: '' });
+    }
+    db.prepare('DELETE FROM game_news_log WHERE id NOT IN (SELECT id FROM game_news_log ORDER BY id DESC LIMIT 500)').run();
+  })();
+  return results;
+}
+
 export function registerGameNews({ app, admin }: { app: Express; admin: RequestHandler }): void {
   const servers = () => {
     const rows = db.prepare("SELECT id, COALESCE(NULLIF(name, ''), host || ':' || port) AS name, game FROM servers ORDER BY id").all() as { id: number; name: string; game: string }[];
@@ -94,23 +128,7 @@ export function registerGameNews({ app, admin }: { app: Express; admin: RequestH
     if (now - lastSend < MIN_GAP_MS) return res.status(429).json({ error: 'Слишком часто: подождите пару секунд' });
     lastSend = now;
 
-    const insert = db.prepare('INSERT INTO game_news_log (server_id, server_name, text, ok, status, error, sent_by, sent_at) VALUES (?, ?, ?, 0, ?, ?, ?, ?)');
-    const results: { serverId: number; serverName: string; queued: boolean; online: boolean; error: string }[] = [];
-    db.transaction(() => {
-      for (const id of [...new Set(b.data.serverIds)]) {
-        const name = serverLabel(id);
-        const t = db.prepare('SELECT * FROM game_news_targets WHERE server_id = ?').get(id) as TargetRow | undefined;
-        if (!t?.token_hash) {
-          const error = 'Для сервера не создан токен плагина';
-          insert.run(id, name, chk.text, 'failed', error, actor(req), now);
-          results.push({ serverId: id, serverName: name, queued: false, online: false, error });
-          continue;
-        }
-        insert.run(id, name, chk.text, 'queued', '', actor(req), now);
-        results.push({ serverId: id, serverName: name, queued: true, online: t.last_seen > 0 && now - t.last_seen < ONLINE_MS, error: '' });
-      }
-      db.prepare('DELETE FROM game_news_log WHERE id NOT IN (SELECT id FROM game_news_log ORDER BY id DESC LIMIT 500)').run();
-    })();
+    const results = queueNews(chk.text, b.data.serverIds, actor(req), now);
     res.json({ text: chk.text, results });
   });
 

@@ -230,6 +230,31 @@ CREATE TABLE IF NOT EXISTS game_news_log (
       db.exec('CREATE UNIQUE INDEX IF NOT EXISTS game_news_targets_hash ON game_news_targets (token_hash) WHERE token_hash <> \'\'');
     },
   },
+  {
+    version: 18,
+    name: 'game_news_rules',
+    // automatic announcements: kind interval | daily | once; server_ids is a JSON array ('[]' = every server with a plugin);
+    // times a JSON array of "HH:MM"; active_from/active_to limit the dates; next_run is when the scheduler sends it next
+    up: (db) => db.exec(`
+CREATE TABLE IF NOT EXISTS game_news_rules (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  text TEXT NOT NULL,
+  server_ids TEXT NOT NULL DEFAULT '[]',
+  kind TEXT NOT NULL DEFAULT 'interval',
+  every_min INTEGER NOT NULL DEFAULT 60,
+  times TEXT NOT NULL DEFAULT '[]',
+  run_at INTEGER,
+  active_from INTEGER,
+  active_to INTEGER,
+  only_online INTEGER NOT NULL DEFAULT 1,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  last_run INTEGER,
+  next_run INTEGER,
+  created_by TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL
+);`),
+  },
 ];
 
 export const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;

@@ -42,3 +42,26 @@ describe('game news preview', () => {
     expect(isHex('red')).toBe(false);
   });
 });
+
+import { emptyRule, validateRule } from '../src/gameNews';
+
+describe('automatic announcement form', () => {
+  const NOW = Date.UTC(2026, 10, 7, 10, 0);
+  const ok = { ...emptyRule(), name: 'Discord', text: 'Заходите в наш Discord' };
+
+  it('accepts a good one', () => {
+    expect(validateRule(ok, NOW)).toBeNull();
+  });
+
+  it('finds what is missing', () => {
+    expect(validateRule({ ...ok, name: ' ' }, NOW)).toBe('name');
+    expect(validateRule({ ...ok, text: '<b></b>' }, NOW)).toBe('text');
+    expect(validateRule({ ...ok, everyMin: 2 }, NOW)).toBe('every');
+    expect(validateRule({ ...ok, everyMin: 20_000 }, NOW)).toBe('every');
+    expect(validateRule({ ...ok, kind: 'daily', times: [] }, NOW)).toBe('times');
+    expect(validateRule({ ...ok, kind: 'daily', times: ['9:00'] }, NOW)).toBe('times');
+    expect(validateRule({ ...ok, kind: 'once', runAt: NOW - 1 }, NOW)).toBe('runAt');
+    expect(validateRule({ ...ok, kind: 'once', runAt: NOW + 1 }, NOW)).toBeNull();
+    expect(validateRule({ ...ok, activeFrom: 10, activeTo: 5 }, NOW)).toBe('period');
+  });
+});

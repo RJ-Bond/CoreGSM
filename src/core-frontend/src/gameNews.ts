@@ -99,3 +99,49 @@ export function validateNews(raw: string): string | null {
   if (v.length > MAX_VISIBLE) return 'long';
   return null;
 }
+
+export type RuleKind = 'interval' | 'daily' | 'once';
+
+/** an automatic announcement as the panel returns it */
+export interface RuleInfo {
+  id: number;
+  name: string;
+  text: string;
+  /** [] = every server that has a plugin */
+  serverIds: number[];
+  kind: RuleKind;
+  everyMin: number;
+  times: string[];
+  runAt: number | null;
+  activeFrom: number | null;
+  activeTo: number | null;
+  onlyOnline: boolean;
+  enabled: boolean;
+  lastRun: number | null;
+  nextRun: number | null;
+  createdBy: string;
+}
+
+export type RuleBody = Omit<RuleInfo, 'id' | 'lastRun' | 'nextRun' | 'createdBy'>;
+
+export const INTERVAL_PRESETS = [15, 30, 60, 120, 360];
+export const MIN_EVERY = 5;
+export const MAX_EVERY = 10_080;
+
+export const isHHMM = (s: string): boolean => /^([01]\d|2[0-3]):[0-5]\d$/.test(s);
+
+export const emptyRule = (): RuleBody => ({
+  name: '', text: '', serverIds: [], kind: 'interval', everyMin: 60, times: ['20:00'], runAt: null,
+  activeFrom: null, activeTo: null, onlyOnline: true, enabled: true,
+});
+
+/** what is wrong with a rule (a key part of the message), or null */
+export function validateRule(r: RuleBody, now: number): 'name' | 'text' | 'every' | 'times' | 'runAt' | 'period' | null {
+  if (!r.name.trim()) return 'name';
+  if (validateNews(r.text)) return 'text';
+  if (r.kind === 'interval' && (!Number.isInteger(r.everyMin) || r.everyMin < MIN_EVERY || r.everyMin > MAX_EVERY)) return 'every';
+  if (r.kind === 'daily' && (!r.times.length || !r.times.every(isHHMM))) return 'times';
+  if (r.kind === 'once' && (r.runAt == null || r.runAt <= now)) return 'runAt';
+  if (r.activeFrom != null && r.activeTo != null && r.activeTo < r.activeFrom) return 'period';
+  return null;
+}

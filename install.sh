@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="c969e0fc6bc7"
+COREGSM_BUILD="cb2f847f1b54"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.62"
+COREGSM_VERSION="1.1.63"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -23877,6 +23877,40 @@ function expireOld(now = Date.now()): void {
   db.prepare("UPDATE game_news_log SET status = 'expired', error = 'Плагин не забрал сообщение за 5 минут' WHERE status = 'queued' AND sent_at < ?").run(now - QUEUE_TTL_MS);
 }
 
+export interface QueueResult { serverId: number; serverName: string; queued: boolean; online: boolean; error: string }
+
+/**
+ * Puts a message into the queue of the given servers ([] = every server that has a plugin token).
+ * onlyOnline: a server with nobody playing is skipped (an automatic announcement to an empty server is noise).
+ */
+export function queueNews(text: string, serverIds: number[], by: string, now: number, opts: { onlyOnline?: boolean } = {}): QueueResult[] {
+  const insert = db.prepare('INSERT INTO game_news_log (server_id, server_name, text, ok, status, error, sent_by, sent_at) VALUES (?, ?, ?, 0, ?, ?, ?, ?)');
+  const ids = serverIds.length
+    ? [...new Set(serverIds)]
+    : (db.prepare("SELECT server_id FROM game_news_targets WHERE token_hash <> ''").all() as { server_id: number }[]).map((r) => r.server_id);
+  const results: QueueResult[] = [];
+  db.transaction(() => {
+    for (const id of ids) {
+      const name = serverLabel(id);
+      const t = db.prepare('SELECT * FROM game_news_targets WHERE server_id = ?').get(id) as TargetRow | undefined;
+      if (!t?.token_hash) {
+        const error = 'Для сервера не создан токен плагина';
+        insert.run(id, name, text, 'failed', error, by, now);
+        results.push({ serverId: id, serverName: name, queued: false, online: false, error });
+        continue;
+      }
+      if (opts.onlyOnline) {
+        const s = db.prepare('SELECT online, players FROM status WHERE server_id = ?').get(id) as { online: number; players: number } | undefined;
+        if (!s || !s.online || s.players <= 0) continue; // nobody to read it
+      }
+      insert.run(id, name, text, 'queued', '', by, now);
+      results.push({ serverId: id, serverName: name, queued: true, online: t.last_seen > 0 && now - t.last_seen < ONLINE_MS, error: '' });
+    }
+    db.prepare('DELETE FROM game_news_log WHERE id NOT IN (SELECT id FROM game_news_log ORDER BY id DESC LIMIT 500)').run();
+  })();
+  return results;
+}
+
 export function registerGameNews({ app, admin }: { app: Express; admin: RequestHandler }): void {
   const servers = () => {
     const rows = db.prepare("SELECT id, COALESCE(NULLIF(name, ''), host || ':' || port) AS name, game FROM servers ORDER BY id").all() as { id: number; name: string; game: string }[];
@@ -23929,23 +23963,7 @@ export function registerGameNews({ app, admin }: { app: Express; admin: RequestH
     if (now - lastSend < MIN_GAP_MS) return res.status(429).json({ error: 'Слишком часто: подождите пару секунд' });
     lastSend = now;
 
-    const insert = db.prepare('INSERT INTO game_news_log (server_id, server_name, text, ok, status, error, sent_by, sent_at) VALUES (?, ?, ?, 0, ?, ?, ?, ?)');
-    const results: { serverId: number; serverName: string; queued: boolean; online: boolean; error: string }[] = [];
-    db.transaction(() => {
-      for (const id of [...new Set(b.data.serverIds)]) {
-        const name = serverLabel(id);
-        const t = db.prepare('SELECT * FROM game_news_targets WHERE server_id = ?').get(id) as TargetRow | undefined;
-        if (!t?.token_hash) {
-          const error = 'Для сервера не создан токен плагина';
-          insert.run(id, name, chk.text, 'failed', error, actor(req), now);
-          results.push({ serverId: id, serverName: name, queued: false, online: false, error });
-          continue;
-        }
-        insert.run(id, name, chk.text, 'queued', '', actor(req), now);
-        results.push({ serverId: id, serverName: name, queued: true, online: t.last_seen > 0 && now - t.last_seen < ONLINE_MS, error: '' });
-      }
-      db.prepare('DELETE FROM game_news_log WHERE id NOT IN (SELECT id FROM game_news_log ORDER BY id DESC LIMIT 500)').run();
-    })();
+    const results = queueNews(chk.text, b.data.serverIds, actor(req), now);
     res.json({ text: chk.text, results });
   });
 
@@ -24035,6 +24053,228 @@ export function checkNews(input: unknown): NewsCheck {
   if (!vis) return { ok: false, text: '', error: 'Введите текст' };
   if (vis.length > MAX_VISIBLE) return { ok: false, text: '', error: `Слишком длинное сообщение: ${vis.length} из ${MAX_VISIBLE} знаков` };
   return { ok: true, text };
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/gamenews"
+  cat > "$APP_DIR/core-backend/src/gamenews/gameNewsRules.ts" << '__COREGSM_EOF__'
+/**
+ * Automatic in-game announcements: the administrator writes a message once and a schedule (every N minutes, every day
+ * at fixed times, or once) and the panel puts it into the plugin queue by itself (see gameNews.ts).
+ */
+import type { Express, Request, RequestHandler } from 'express';
+import { z } from 'zod';
+import { db, getSetting } from '../db.js';
+import { log } from '../logger.js';
+import { checkNews } from './gameNewsLogic.js';
+import { queueNews } from './gameNews.js';
+import { MAX_EVERY, MIN_EVERY, cleanTimes, dueState, inWindow, nextRunAfter, type RuleKind, type Schedule } from './gameNewsSchedule.js';
+
+const MAX_RULES = 50;
+
+interface RuleRow {
+  id: number; name: string; text: string; server_ids: string; kind: RuleKind; every_min: number; times: string; run_at: number | null;
+  active_from: number | null; active_to: number | null; only_online: number; enabled: number; last_run: number | null; next_run: number | null;
+  created_by: string; created_at: number;
+}
+
+const tz = () => getSetting('timezone') || process.env.TZ || 'Europe/Moscow';
+const parseArr = <T>(s: string, fallback: T[]): T[] => { try { const v = JSON.parse(s); return Array.isArray(v) ? v : fallback; } catch { return fallback; } };
+const schedOf = (r: RuleRow): Schedule => ({ kind: r.kind, everyMin: r.every_min, times: parseArr<string>(r.times, []), runAt: r.run_at });
+const actor = (req: Request) => (req as Request & { user?: { username?: string } }).user?.username ?? '';
+
+const bodySchema = z.object({
+  name: z.string().trim().min(1, 'Введите название').max(80),
+  text: z.string(),
+  serverIds: z.array(z.number().int().positive()).max(50),
+  kind: z.enum(['interval', 'daily', 'once']),
+  everyMin: z.number().int().optional(),
+  times: z.array(z.string()).max(12).optional(),
+  runAt: z.number().int().nullable().optional(),
+  activeFrom: z.number().int().nullable().optional(),
+  activeTo: z.number().int().nullable().optional(),
+  onlyOnline: z.boolean(),
+  enabled: z.boolean(),
+});
+
+/** what is wrong with the body, or null; also returns the cleaned values */
+function check(b: z.infer<typeof bodySchema>, now: number): { error: string } | { text: string; sched: Schedule } {
+  const chk = checkNews(b.text);
+  if (!chk.ok) return { error: chk.error ?? 'Проверьте текст' };
+  if (b.serverIds.length && b.serverIds.some((id) => !db.prepare('SELECT 1 FROM servers WHERE id = ?').get(id))) return { error: 'Сервер не найден' };
+  if (b.activeFrom != null && b.activeTo != null && b.activeTo < b.activeFrom) return { error: 'Конец периода раньше начала' };
+  const sched: Schedule = { kind: b.kind, everyMin: b.everyMin ?? 0, times: cleanTimes(b.times ?? []), runAt: b.runAt ?? null };
+  if (b.kind === 'interval' && (sched.everyMin < MIN_EVERY || sched.everyMin > MAX_EVERY)) return { error: `Интервал: от ${MIN_EVERY} минут до недели` };
+  if (b.kind === 'daily' && !sched.times.length) return { error: 'Укажите хотя бы одно время (ЧЧ:ММ)' };
+  if (b.kind === 'once' && (sched.runAt == null || sched.runAt <= now)) return { error: 'Время отправки должно быть в будущем' };
+  return { text: chk.text, sched };
+}
+
+/** one scheduler pass: sends what is due, moves next_run on */
+export function tickRules(now = Date.now()): number {
+  const rows = db.prepare('SELECT * FROM game_news_rules WHERE enabled = 1 AND next_run IS NOT NULL AND next_run <= ?').all(now) as RuleRow[];
+  let sent = 0;
+  const zone = tz();
+  for (const r of rows) {
+    const due = dueState(r.next_run, now);
+    const next = nextRunAfter(schedOf(r), now, zone);
+    if (due === 'fire' && inWindow(now, r.active_from, r.active_to)) {
+      const res = queueNews(r.text, parseArr<number>(r.server_ids, []), `авто: ${r.name}`, now, { onlyOnline: !!r.only_online });
+      sent += res.filter((x) => x.queued).length;
+      db.prepare('UPDATE game_news_rules SET last_run = ? WHERE id = ?').run(now, r.id);
+    }
+    // a once rule ends after its run (or after it was missed); the others go on
+    if (next == null) db.prepare('UPDATE game_news_rules SET next_run = NULL, enabled = 0 WHERE id = ?').run(r.id);
+    else db.prepare('UPDATE game_news_rules SET next_run = ? WHERE id = ?').run(next, r.id);
+  }
+  return sent;
+}
+
+let timer: NodeJS.Timeout | undefined;
+let busy = false;
+export function startGameNewsTimer(): void {
+  timer = setInterval(() => {
+    if (busy) return;
+    busy = true;
+    try { tickRules(); } catch (e) { log.error('game news scheduler failed', (e as Error).message); } finally { busy = false; }
+  }, 20_000);
+  timer.unref();
+}
+export const stopGameNewsTimer = () => clearInterval(timer);
+
+export function registerGameNewsRules({ app, admin }: { app: Express; admin: RequestHandler }): void {
+  const serialize = (r: RuleRow) => ({
+    id: r.id, name: r.name, text: r.text, serverIds: parseArr<number>(r.server_ids, []), kind: r.kind, everyMin: r.every_min,
+    times: parseArr<string>(r.times, []), runAt: r.run_at, activeFrom: r.active_from, activeTo: r.active_to, onlyOnline: !!r.only_online,
+    enabled: !!r.enabled, lastRun: r.last_run, nextRun: r.enabled ? r.next_run : null, createdBy: r.created_by,
+  });
+
+  app.get('/api/game-news/rules', admin, (_req, res) => {
+    const rows = db.prepare('SELECT * FROM game_news_rules ORDER BY id').all() as RuleRow[];
+    res.json({ timezone: tz(), rules: rows.map(serialize) });
+  });
+
+  app.post('/api/game-news/rules', admin, (req, res) => {
+    const b = bodySchema.safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: b.error.issues[0]?.message ?? 'Проверьте поля' });
+    const now = Date.now();
+    if ((db.prepare('SELECT COUNT(*) AS n FROM game_news_rules').get() as { n: number }).n >= MAX_RULES) return res.status(400).json({ error: `Не больше ${MAX_RULES} автообъявлений` });
+    const c = check(b.data, now);
+    if ('error' in c) return res.status(400).json({ error: c.error });
+    const next = b.data.enabled ? nextRunAfter(c.sched, now, tz()) : null;
+    const info = db.prepare(
+      `INSERT INTO game_news_rules (name, text, server_ids, kind, every_min, times, run_at, active_from, active_to, only_online, enabled, next_run, created_by, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(b.data.name, c.text, JSON.stringify(b.data.serverIds), b.data.kind, c.sched.everyMin, JSON.stringify(c.sched.times), c.sched.runAt,
+      b.data.activeFrom ?? null, b.data.activeTo ?? null, b.data.onlyOnline ? 1 : 0, b.data.enabled ? 1 : 0, next, actor(req), now);
+    res.json({ id: Number(info.lastInsertRowid) });
+  });
+
+  app.put('/api/game-news/rules/:id', admin, (req, res) => {
+    const id = Number(req.params.id);
+    const old = db.prepare('SELECT * FROM game_news_rules WHERE id = ?').get(id) as RuleRow | undefined;
+    if (!old) return res.status(404).json({ error: 'Автообъявление не найдено' });
+    const b = bodySchema.safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: b.error.issues[0]?.message ?? 'Проверьте поля' });
+    const now = Date.now();
+    const c = check(b.data, now);
+    if ('error' in c) return res.status(400).json({ error: c.error });
+    // the schedule restarts from now whenever it (or the on/off switch) changes
+    const scheduleChanged = old.kind !== b.data.kind || old.every_min !== c.sched.everyMin || old.times !== JSON.stringify(c.sched.times) || old.run_at !== c.sched.runAt || !!old.enabled !== b.data.enabled;
+    const next = !b.data.enabled ? null : scheduleChanged || old.next_run == null ? nextRunAfter(c.sched, now, tz()) : old.next_run;
+    db.prepare(
+      `UPDATE game_news_rules SET name = ?, text = ?, server_ids = ?, kind = ?, every_min = ?, times = ?, run_at = ?, active_from = ?, active_to = ?,
+       only_online = ?, enabled = ?, next_run = ? WHERE id = ?`,
+    ).run(b.data.name, c.text, JSON.stringify(b.data.serverIds), b.data.kind, c.sched.everyMin, JSON.stringify(c.sched.times), c.sched.runAt,
+      b.data.activeFrom ?? null, b.data.activeTo ?? null, b.data.onlyOnline ? 1 : 0, b.data.enabled ? 1 : 0, next, id);
+    res.json({ ok: true });
+  });
+
+  app.delete('/api/game-news/rules/:id', admin, (req, res) => {
+    db.prepare('DELETE FROM game_news_rules WHERE id = ?').run(Number(req.params.id));
+    res.json({ ok: true });
+  });
+
+  // «Отправить сейчас»: the same message right away, outside the schedule
+  app.post('/api/game-news/rules/:id/run', admin, (req, res) => {
+    const r = db.prepare('SELECT * FROM game_news_rules WHERE id = ?').get(Number(req.params.id)) as RuleRow | undefined;
+    if (!r) return res.status(404).json({ error: 'Автообъявление не найдено' });
+    const now = Date.now();
+    const results = queueNews(r.text, parseArr<number>(r.server_ids, []), `авто: ${r.name}`, now);
+    db.prepare('UPDATE game_news_rules SET last_run = ? WHERE id = ?').run(now, r.id);
+    res.json({ results });
+  });
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/gamenews"
+  cat > "$APP_DIR/core-backend/src/gamenews/gameNewsSchedule.ts" << '__COREGSM_EOF__'
+/**
+ * The schedule of an automatic in-game announcement (pure functions, no database).
+ *  - interval: every N minutes (the first one N minutes after it is switched on);
+ *  - daily: at fixed times of the day in the panel's time zone;
+ *  - once: at one moment.
+ */
+import { localParts, offsetAt } from '../admin/localTime.js';
+
+export type RuleKind = 'interval' | 'daily' | 'once';
+
+export interface Schedule {
+  kind: RuleKind;
+  everyMin: number;
+  times: string[];
+  runAt: number | null;
+}
+
+const MIN = 60_000;
+export const MIN_EVERY = 5;
+export const MAX_EVERY = 10_080; // a week
+/** a run that is later than this behind its time (the panel was off) is skipped, not sent late */
+export const GRACE_MS = 2 * MIN;
+
+export const isHHMM = (s: string): boolean => /^([01]\d|2[0-3]):[0-5]\d$/.test(s);
+
+/** valid, unique, sorted times */
+export function cleanTimes(times: string[]): string[] {
+  return [...new Set(times.filter(isHHMM))].sort();
+}
+
+/** the UTC moment of the wall-clock time `hh:mm` on the day y-m-d in a time zone */
+function wallToUtc(y: number, m: number, d: number, hh: number, mm: number, tz: string): number {
+  const naive = Date.UTC(y, m - 1, d, hh, mm);
+  const guess = naive - offsetAt(naive, tz);
+  return naive - offsetAt(guess, tz);
+}
+
+/** the first run strictly after `after`, or null when there is none (a once rule in the past) */
+export function nextRunAfter(s: Schedule, after: number, tz: string): number | null {
+  if (s.kind === 'interval') return after + Math.max(MIN_EVERY, s.everyMin) * MIN;
+  if (s.kind === 'once') return s.runAt != null && s.runAt > after ? s.runAt : null;
+  const times = cleanTimes(s.times);
+  if (!times.length) return null;
+  const [y, m, d] = localParts(after, tz).day.split('-').map(Number);
+  let best: number | null = null;
+  for (let add = 0; add <= 2; add++) {
+    for (const t of times) {
+      const [hh, mm] = t.split(':').map(Number);
+      const ts = wallToUtc(y, m, d + add, hh, mm, tz);
+      if (ts > after && (best == null || ts < best)) best = ts;
+    }
+  }
+  return best;
+}
+
+/** whether `now` is inside the optional [from, to] range of dates */
+export function inWindow(now: number, from: number | null, to: number | null): boolean {
+  if (from != null && now < from) return false;
+  if (to != null && now > to) return false;
+  return true;
+}
+
+export type Due = 'fire' | 'skip' | 'wait';
+
+/** what to do with a rule whose next run is `nextRun` */
+export function dueState(nextRun: number | null, now: number): Due {
+  if (nextRun == null || nextRun > now) return 'wait';
+  return now - nextRun <= GRACE_MS ? 'fire' : 'skip';
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
@@ -26279,6 +26519,7 @@ import { registerMetrics } from './monitoring/metrics.js';
 import { wrap } from './http.js';
 import { registerMaintenance } from './maintenance.js';
 import { registerGameNews } from './gamenews/gameNews.js';
+import { registerGameNewsRules, startGameNewsTimer, stopGameNewsTimer } from './gamenews/gameNewsRules.js';
 import { registerStatusNotes } from './alerts/statusNotes.js';
 import { registerNews } from './news/news.js';
 import { registerNickStatus } from './profile/nickOnboarding.js';
@@ -26471,6 +26712,7 @@ registerBackups({ app, admin });
 registerMaintenance({ app, admin: allow('maintenance'), viewer });
 registerStatusNotes({ app, admin: allow('maintenance') });
 registerGameNews({ app, admin });
+registerGameNewsRules({ app, admin });
 registerHealth({ app, admin, bot: () => bot.status });
 startDbMaintenance();
 registerOverview({ app, viewer });
@@ -26510,11 +26752,13 @@ const server = app.listen(PORT, () => {
   startDigestTimer();
   startRestartTimer();
   startWipeTimer();
+  startGameNewsTimer();
 });
 onShutdown('poller', stopPoller);
 onShutdown('backups', stopBackups);
 onShutdown('restarts', stopRestartTimer);
 onShutdown('wipes', stopWipeTimer);
+onShutdown('game-news', stopGameNewsTimer);
 installShutdown(server);
 registerShutdownServer(server);
 
@@ -27004,6 +27248,31 @@ CREATE TABLE IF NOT EXISTS game_news_log (
       db.exec('CREATE INDEX IF NOT EXISTS game_news_log_queue ON game_news_log (server_id, status)');
       db.exec('CREATE UNIQUE INDEX IF NOT EXISTS game_news_targets_hash ON game_news_targets (token_hash) WHERE token_hash <> \'\'');
     },
+  },
+  {
+    version: 18,
+    name: 'game_news_rules',
+    // automatic announcements: kind interval | daily | once; server_ids is a JSON array ('[]' = every server with a plugin);
+    // times a JSON array of "HH:MM"; active_from/active_to limit the dates; next_run is when the scheduler sends it next
+    up: (db) => db.exec(`
+CREATE TABLE IF NOT EXISTS game_news_rules (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  text TEXT NOT NULL,
+  server_ids TEXT NOT NULL DEFAULT '[]',
+  kind TEXT NOT NULL DEFAULT 'interval',
+  every_min INTEGER NOT NULL DEFAULT 60,
+  times TEXT NOT NULL DEFAULT '[]',
+  run_at INTEGER,
+  active_from INTEGER,
+  active_to INTEGER,
+  only_online INTEGER NOT NULL DEFAULT 1,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  last_run INTEGER,
+  next_run INTEGER,
+  created_by TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL
+);`),
   },
 ];
 
@@ -121812,6 +122081,108 @@ export function MotionToggle() {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/NewsEditor.tsx" << '__COREGSM_EOF__'
+import { useMemo, useRef, useState } from 'react';
+import { t, useI18n } from '../i18n';
+import {
+  MAX_VISIBLE, SWATCHES, TEMPLATES, colorOpen, isHex, parseNews, unbalanced, visibleText, wrapSelection,
+} from '../gameNews';
+import { Field } from '../ui';
+
+const swatchName = (id: string) => t(`gn.c.${id}` as 'gn.c.info');
+
+/** the text with its tags drawn as colour, bold and italic */
+export function Styled({ text }: { text: string }) {
+  return (
+    <>
+      {parseNews(text).map((s, i) => (
+        <span key={i} style={{ color: s.color ?? undefined, fontWeight: s.bold ? 800 : undefined, fontStyle: s.italic ? 'italic' : undefined }}>{s.text}</span>
+      ))}
+    </>
+  );
+}
+
+/** how a message looks in the in-game chat (approximate: the colours are exact, the font and background are not) */
+export function NewsPreview({ text }: { text: string }) {
+  useI18n();
+  const has = useMemo(() => parseNews(text).length > 0, [text]);
+  return (
+    <div className="panel space-y-3 p-5">
+      <h3 className="font-extrabold">{t('gn.preview')}</h3>
+      <div className="rounded-xl p-4 font-semibold" style={{ background: '#15121c', color: '#e8e3f0' }} aria-live="polite">
+        <div className="mb-1 text-xs font-bold uppercase tracking-wide" style={{ color: '#8f86a3' }}>{t('gn.chatLabel')}</div>
+        {has ? <p className="wrap-break-word"><Styled text={text} /></p> : <p style={{ color: '#8f86a3' }}>{t('gn.previewEmpty')}</p>}
+      </div>
+      <p className="text-sm font-semibold text-mute">{t('gn.previewNote')}</p>
+    </div>
+  );
+}
+
+/** a text box with a toolbar: colours, bold, italic, templates and a length counter */
+export function NewsEditor({ value, onChange, templates = true, label }: { value: string; onChange: (v: string) => void; templates?: boolean; label?: string }) {
+  useI18n();
+  const [custom, setCustom] = useState('#FF8A00');
+  const area = useRef<HTMLTextAreaElement>(null);
+  const visible = visibleText(value).trim().length;
+
+  const wrap = (open: string, close: string) => {
+    const el = area.current;
+    const r = wrapSelection(value, el?.selectionStart ?? value.length, el?.selectionEnd ?? value.length, open, close);
+    onChange(r.text);
+    requestAnimationFrame(() => { el?.focus(); el?.setSelectionRange(r.start, r.end); });
+  };
+
+  return (
+    <div className="space-y-4">
+      {templates && (
+        <div className="flex flex-wrap gap-2" role="group" aria-label={t('gn.templates')}>
+          <span className="self-center text-sm font-bold text-mute">{t('gn.templates')}:</span>
+          {TEMPLATES.map((x) => (
+            <button key={x.id} type="button" className="chip-filter" onClick={() => onChange(x.text(t('gn.tpl.when')))}>{t(`gn.tpl.${x.id}` as 'gn.tpl.restart')}</button>
+          ))}
+        </div>
+      )}
+
+      <Field label={label ?? t('gn.message')}>
+        <textarea
+          ref={area}
+          className="input min-h-32 font-mono text-sm"
+          value={value}
+          rows={5}
+          maxLength={700}
+          placeholder={t('gn.placeholder')}
+          onChange={(e) => onChange(e.target.value)}
+        />
+      </Field>
+
+      <div className="flex flex-wrap items-center gap-2" role="group" aria-label={t('gn.colors')}>
+        {SWATCHES.map((s) => (
+          <button
+            key={s.id}
+            type="button"
+            className="h-8 w-8 rounded-full border border-line"
+            style={{ background: s.hex }}
+            title={swatchName(s.id)}
+            aria-label={t('gn.colorize', { name: swatchName(s.id) })}
+            onClick={() => wrap(colorOpen(s.hex), '</color>')}
+          />
+        ))}
+        <input className="input w-28 font-mono text-sm" value={custom} maxLength={7} aria-label={t('gn.customHex')} onChange={(e) => setCustom(e.target.value)} />
+        <button type="button" className="btn btn-soft btn-sm" disabled={!isHex(custom)} onClick={() => wrap(colorOpen(custom), '</color>')}>{t('gn.applyHex')}</button>
+        <button type="button" className="btn btn-soft btn-sm font-black" onClick={() => wrap('<b>', '</b>')} aria-label={t('gn.bold')}>B</button>
+        <button type="button" className="btn btn-soft btn-sm italic" onClick={() => wrap('<i>', '</i>')} aria-label={t('gn.italic')}>I</button>
+        <button type="button" className="btn btn-ghost btn-sm" onClick={() => onChange(visibleText(value))}>{t('gn.clearTags')}</button>
+      </div>
+
+      <div className="flex flex-wrap items-center justify-between gap-2 text-sm font-semibold text-mute">
+        <span className={visible > MAX_VISIBLE ? 'text-danger' : undefined}>{t('gn.counter', { n: visible, max: MAX_VISIBLE })}</span>
+        {unbalanced(value) && <span>{t('gn.unbalanced')}</span>}
+      </div>
+    </div>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
   cat > "$APP_DIR/core-frontend/src/components/NickPic.tsx" << '__COREGSM_EOF__'
 import { useEffect, useState, type ReactNode } from 'react';
 import { useNickAvatar } from '../nickAvatars';
@@ -137544,6 +137915,52 @@ export function validateNews(raw: string): string | null {
   if (v.length > MAX_VISIBLE) return 'long';
   return null;
 }
+
+export type RuleKind = 'interval' | 'daily' | 'once';
+
+/** an automatic announcement as the panel returns it */
+export interface RuleInfo {
+  id: number;
+  name: string;
+  text: string;
+  /** [] = every server that has a plugin */
+  serverIds: number[];
+  kind: RuleKind;
+  everyMin: number;
+  times: string[];
+  runAt: number | null;
+  activeFrom: number | null;
+  activeTo: number | null;
+  onlyOnline: boolean;
+  enabled: boolean;
+  lastRun: number | null;
+  nextRun: number | null;
+  createdBy: string;
+}
+
+export type RuleBody = Omit<RuleInfo, 'id' | 'lastRun' | 'nextRun' | 'createdBy'>;
+
+export const INTERVAL_PRESETS = [15, 30, 60, 120, 360];
+export const MIN_EVERY = 5;
+export const MAX_EVERY = 10_080;
+
+export const isHHMM = (s: string): boolean => /^([01]\d|2[0-3]):[0-5]\d$/.test(s);
+
+export const emptyRule = (): RuleBody => ({
+  name: '', text: '', serverIds: [], kind: 'interval', everyMin: 60, times: ['20:00'], runAt: null,
+  activeFrom: null, activeTo: null, onlyOnline: true, enabled: true,
+});
+
+/** what is wrong with a rule (a key part of the message), or null */
+export function validateRule(r: RuleBody, now: number): 'name' | 'text' | 'every' | 'times' | 'runAt' | 'period' | null {
+  if (!r.name.trim()) return 'name';
+  if (validateNews(r.text)) return 'text';
+  if (r.kind === 'interval' && (!Number.isInteger(r.everyMin) || r.everyMin < MIN_EVERY || r.everyMin > MAX_EVERY)) return 'every';
+  if (r.kind === 'daily' && (!r.times.length || !r.times.every(isHHMM))) return 'times';
+  if (r.kind === 'once' && (r.runAt == null || r.runAt <= now)) return 'runAt';
+  if (r.activeFrom != null && r.activeTo != null && r.activeTo < r.activeFrom) return 'period';
+  return null;
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/gameProfiles.ts" << '__COREGSM_EOF__'
@@ -140902,7 +141319,61 @@ const en: Record<keyof typeof ru, string> = {
   'gn.h.expired': 'Not delivered',
   'gn.h.fail': 'Failed',
   'gn.reuse': 'Use again',  'adm.s.alerts': 'Alerts',
-  'adm.d.alerts': 'A Discord message when a game server goes down or comes back.',
+  'gn.tab.send': 'Send',
+  'gn.tab.auto': 'Auto announcements',
+  'gn.a.intro': 'Write an announcement once and set a schedule: the panel sends it to the game by itself, no «Send» button.',
+  'gn.a.add': 'Add an announcement',
+  'gn.a.empty': 'No automatic announcements yet',
+  'gn.a.emptyText': 'For example: «Join our Discord» every 30 minutes, or «Server restart at 4:00» every day at 3:50.',
+  'gn.a.on': 'On',
+  'gn.a.off': 'Off',
+  'gn.a.next': 'next: {time}',
+  'gn.a.noNext': 'no next run',
+  'gn.a.last': 'last: {time}',
+  'gn.a.pause': 'Turn off',
+  'gn.a.resume': 'Turn on',
+  'gn.a.run': 'Send now',
+  'gn.a.runTitle': 'Send «{name}» now?',
+  'gn.a.runText': 'The message goes to the chosen servers right away; the schedule does not change.',
+  'gn.a.nobody': 'Nobody to send to: no server has the plugin',
+  'gn.a.editAria': 'Edit {name}',
+  'gn.a.delAria': 'Delete {name}',
+  'gn.a.delTitle': 'Delete the announcement «{name}»?',
+  'gn.a.del': 'Delete',
+  'gn.a.allServers': 'Every server with the plugin',
+  'gn.a.everyMin': 'every {n} min',
+  'gn.a.everyHours': 'every {n} h',
+  'gn.a.everyDays': 'every {n} d',
+  'gn.a.dailyAt': 'every day at {times}',
+  'gn.a.onceAt': 'once: {time}',
+  'gn.a.newTitle': 'New automatic announcement',
+  'gn.a.editTitle': 'Automatic announcement',
+  'gn.a.name': 'Name (for you)',
+  'gn.a.nameEx': 'For example: Discord invite',
+  'gn.a.when': 'When to send',
+  'gn.a.kind.interval': 'At equal intervals',
+  'gn.a.kind.daily': 'Every day at set times',
+  'gn.a.kind.once': 'Once',
+  'gn.a.everyMinutes': 'Every, minutes (5 or more)',
+  'gn.a.intervalNote': 'The first message goes out that many minutes after saving.',
+  'gn.a.time': 'Time',
+  'gn.a.addTime': 'Add time',
+  'gn.a.removeTime': 'Remove the time {time}',
+  'gn.a.tzNote': 'Times use the time zone of the panel: {tz}.',
+  'gn.a.runAt': 'When to send',
+  'gn.a.servers': 'Send to',
+  'gn.a.onlyOnline': 'Only when someone is playing on the server',
+  'gn.a.onlyOnlineNote': 'An empty server gets nothing.',
+  'gn.a.from': 'Valid from (optional)',
+  'gn.a.to': 'Valid until (optional)',
+  'gn.a.enabled': 'On',
+  'gn.a.saved': 'Announcement saved',
+  'gn.a.p.name': 'Enter a name',
+  'gn.a.p.text': 'Enter the message text (up to 400 characters)',
+  'gn.a.p.every': 'Interval: from 5 minutes to a week',
+  'gn.a.p.times': 'Add at least one time',
+  'gn.a.p.runAt': 'The time must be in the future',
+  'gn.a.p.period': 'The end of the period is before its start',  'adm.d.alerts': 'A Discord message when a game server goes down or comes back.',
   'adm.s.maintenance': 'Maintenance',
   'adm.d.maintenance': 'Maintenance windows: a server going down during one is not counted as an outage.',
   'adm.s.cards': 'Cards',
@@ -145269,7 +145740,61 @@ const ru = {
   'gn.h.expired': 'Не доставлено',
   'gn.h.fail': 'Ошибка',
   'gn.reuse': 'Использовать снова',  'adm.s.alerts': 'Оповещения',
-  'adm.d.alerts': 'Сообщение в Discord, если игровой сервер упал или вернулся.',
+  'gn.tab.send': 'Отправить',
+  'gn.tab.auto': 'Автообъявления',
+  'gn.a.intro': 'Напишите объявление один раз и задайте расписание: панель сама будет отправлять его в игру, без кнопки «Отправить».',
+  'gn.a.add': 'Добавить автообъявление',
+  'gn.a.empty': 'Автообъявлений пока нет',
+  'gn.a.emptyText': 'Например: «Заходите в наш Discord» каждые 30 минут или «Рестарт сервера в 4:00» каждый день в 3:50.',
+  'gn.a.on': 'Включено',
+  'gn.a.off': 'Выключено',
+  'gn.a.next': 'следующее: {time}',
+  'gn.a.noNext': 'следующего нет',
+  'gn.a.last': 'последнее: {time}',
+  'gn.a.pause': 'Выключить',
+  'gn.a.resume': 'Включить',
+  'gn.a.run': 'Отправить сейчас',
+  'gn.a.runTitle': 'Отправить «{name}» сейчас?',
+  'gn.a.runText': 'Сообщение уйдёт на выбранные серверы немедленно, расписание не изменится.',
+  'gn.a.nobody': 'Некому отправлять: нет серверов с плагином',
+  'gn.a.editAria': 'Изменить {name}',
+  'gn.a.delAria': 'Удалить {name}',
+  'gn.a.delTitle': 'Удалить автообъявление «{name}»?',
+  'gn.a.del': 'Удалить',
+  'gn.a.allServers': 'Все серверы с плагином',
+  'gn.a.everyMin': 'каждые {n} мин',
+  'gn.a.everyHours': 'каждые {n} ч',
+  'gn.a.everyDays': 'каждые {n} дн.',
+  'gn.a.dailyAt': 'каждый день в {times}',
+  'gn.a.onceAt': 'один раз: {time}',
+  'gn.a.newTitle': 'Новое автообъявление',
+  'gn.a.editTitle': 'Автообъявление',
+  'gn.a.name': 'Название (для вас)',
+  'gn.a.nameEx': 'Например: Приглашение в Discord',
+  'gn.a.when': 'Когда отправлять',
+  'gn.a.kind.interval': 'Через равные промежутки',
+  'gn.a.kind.daily': 'Каждый день в заданное время',
+  'gn.a.kind.once': 'Один раз',
+  'gn.a.everyMinutes': 'Каждые, минут (от 5)',
+  'gn.a.intervalNote': 'Первое сообщение уйдёт через столько же минут после сохранения.',
+  'gn.a.time': 'Время',
+  'gn.a.addTime': 'Добавить время',
+  'gn.a.removeTime': 'Убрать время {time}',
+  'gn.a.tzNote': 'Время по часовому поясу панели: {tz}.',
+  'gn.a.runAt': 'Когда отправить',
+  'gn.a.servers': 'Куда отправлять',
+  'gn.a.onlyOnline': 'Только когда на сервере есть игроки',
+  'gn.a.onlyOnlineNote': 'Пустому серверу сообщение не отправляется.',
+  'gn.a.from': 'Действует с (необязательно)',
+  'gn.a.to': 'Действует до (необязательно)',
+  'gn.a.enabled': 'Включено',
+  'gn.a.saved': 'Автообъявление сохранено',
+  'gn.a.p.name': 'Введите название',
+  'gn.a.p.text': 'Введите текст сообщения (до 400 знаков)',
+  'gn.a.p.every': 'Интервал: от 5 минут до недели',
+  'gn.a.p.times': 'Добавьте хотя бы одно время',
+  'gn.a.p.runAt': 'Время отправки должно быть в будущем',
+  'gn.a.p.period': 'Конец периода раньше начала',  'adm.d.alerts': 'Сообщение в Discord, если игровой сервер упал или вернулся.',
   'adm.s.maintenance': 'Обслуживание',
   'adm.d.maintenance': 'Окна технических работ: во время них падение сервера не считается сбоем.',
   'adm.s.cards': 'Карточки',
@@ -153213,19 +153738,17 @@ export default function ForgotPassword() {
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/GameNews.tsx" << '__COREGSM_EOF__'
-import { useMemo, useRef, useState, type FormEvent } from 'react';
+import { useState, type FormEvent } from 'react';
 import { api } from '../api';
+import { NewsEditor, NewsPreview, Styled } from '../components/NewsEditor';
 import { confirmDialog } from '../confirm';
 import { t, useI18n } from '../i18n';
-import {
-  MAX_VISIBLE, SWATCHES, TEMPLATES, colorOpen, isHex, parseNews, pluginConfig, unbalanced, validateNews, visibleText, wrapSelection,
-  type NewsLogRow, type NewsSendResult, type NewsServerInfo, type NewsStatus,
-} from '../gameNews';
-import { AdminPage, ErrorLine, Field, IconNews, IconSettings, LoadError, Modal, PageHead, Spinner, errText, toast, usePoll } from '../ui';
+import { pluginConfig, validateNews, type NewsLogRow, type NewsSendResult, type NewsServerInfo, type NewsStatus } from '../gameNews';
+import { AdminPage, ErrorLine, IconNews, IconSettings, LoadError, Modal, PageHead, Spinner, errText, toast, usePoll } from '../ui';
+import GameNewsRules from './GameNewsRules';
 
 interface NewsState { servers: NewsServerInfo[]; log: NewsLogRow[] }
 
-const swatchName = (id: string) => t(`gn.c.${id}` as 'gn.c.info');
 const STATUS: Record<NewsStatus, { text: 'gn.h.queued' | 'gn.h.ok' | 'gn.h.expired' | 'gn.h.fail'; cls: string }> = {
   queued: { text: 'gn.h.queued', cls: 'pill pill-mute' },
   delivered: { text: 'gn.h.ok', cls: 'pill pill-ok' },
@@ -153233,28 +153756,17 @@ const STATUS: Record<NewsStatus, { text: 'gn.h.queued' | 'gn.h.ok' | 'gn.h.expir
   failed: { text: 'gn.h.fail', cls: 'pill pill-warn' },
 };
 
-function Styled({ text }: { text: string }) {
-  return (
-    <>
-      {parseNews(text).map((s, i) => (
-        <span key={i} style={{ color: s.color ?? undefined, fontWeight: s.bold ? 800 : undefined, fontStyle: s.italic ? 'italic' : undefined }}>{s.text}</span>
-      ))}
-    </>
-  );
-}
-
-/** «Новости в игру»: a message for the in-game chat of a server (the CoreGSM game plugin picks it up), with a live preview. */
+/** «Новости в игру»: a message for the in-game chat (the CoreGSM game plugin picks it up), sent now or by a schedule. */
 export default function GameNewsPage() {
   useI18n();
   const [data, setData] = useState<NewsState | null>(null);
   const [error, setError] = useState('');
+  const [tab, setTab] = useState<'send' | 'auto'>('send');
   const [text, setText] = useState('');
   const [picked, setPicked] = useState<number[]>([]);
   const [busy, setBusy] = useState(false);
-  const [custom, setCustom] = useState('#FF8A00');
   const [settingsFor, setSettingsFor] = useState<number | null>(null);
   const [lastResult, setLastResult] = useState<NewsSendResult | null>(null);
-  const area = useRef<HTMLTextAreaElement>(null);
 
   const load = () =>
     api<NewsState>('/game-news')
@@ -153262,34 +153774,16 @@ export default function GameNewsPage() {
       .catch((e: Error) => setError(e.message));
   usePoll(load, 10_000);
 
-  const segs = useMemo(() => parseNews(text), [text]);
-  const visible = visibleText(text).trim().length;
   const problem = validateNews(text);
   const ready = (data?.servers ?? []).filter((s) => s.hasToken);
   const settingsServer = data?.servers.find((s) => s.id === settingsFor) ?? null;
-
-  const edit = (fn: (start: number, end: number) => { text: string; start: number; end: number }) => {
-    const el = area.current;
-    const r = fn(el?.selectionStart ?? text.length, el?.selectionEnd ?? text.length);
-    setText(r.text);
-    requestAnimationFrame(() => { el?.focus(); el?.setSelectionRange(r.start, r.end); });
-  };
-  const wrap = (open: string, close: string) => edit((a, b) => wrapSelection(text, a, b, open, close));
-  const useTemplate = (id: string) => {
-    const tpl = TEMPLATES.find((x) => x.id === id);
-    if (tpl) setText(tpl.text(t('gn.tpl.when')));
-  };
   const toggle = (id: number) => setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
 
   const send = async (e: FormEvent) => {
     e.preventDefault();
     if (problem || !picked.length || busy) return;
     const names = (data?.servers ?? []).filter((s) => picked.includes(s.id)).map((s) => s.name).join(', ');
-    const ok = await confirmDialog({
-      title: t('gn.confirm.title'),
-      text: t('gn.confirm.text', { servers: names }),
-      confirmLabel: t('gn.send'),
-    });
+    const ok = await confirmDialog({ title: t('gn.confirm.title'), text: t('gn.confirm.text', { servers: names }), confirmLabel: t('gn.send') });
     if (!ok) return;
     setBusy(true);
     try {
@@ -153315,129 +153809,82 @@ export default function GameNewsPage() {
       {!data && !error && <div className="skeleton panel h-40" aria-busy="true" aria-label={t('d2.news.loading')} />}
 
       {data && (
-        <form className="grid gap-5 lg:grid-cols-2" onSubmit={(e) => void send(e)} noValidate>
-          <section className="panel space-y-4 p-5">
-            <div className="flex flex-wrap gap-2" role="group" aria-label={t('gn.templates')}>
-              <span className="self-center text-sm font-bold text-mute">{t('gn.templates')}:</span>
-              {TEMPLATES.map((x) => (
-                <button key={x.id} type="button" className="chip-filter" onClick={() => useTemplate(x.id)}>{t(`gn.tpl.${x.id}` as 'gn.tpl.restart')}</button>
-              ))}
-            </div>
+        <div className="flex flex-wrap gap-2" role="tablist" aria-label={t('gn.title')}>
+          <button type="button" role="tab" aria-selected={tab === 'send'} className={`chip-filter ${tab === 'send' ? 'on' : ''}`} onClick={() => setTab('send')}>{t('gn.tab.send')}</button>
+          <button type="button" role="tab" aria-selected={tab === 'auto'} className={`chip-filter ${tab === 'auto' ? 'on' : ''}`} onClick={() => setTab('auto')}>{t('gn.tab.auto')}</button>
+        </div>
+      )}
 
-            <Field label={t('gn.message')}>
-              <textarea
-                ref={area}
-                className="input min-h-32 font-mono text-sm"
-                value={text}
-                rows={5}
-                maxLength={700}
-                placeholder={t('gn.placeholder')}
-                onChange={(e) => setText(e.target.value)}
-              />
-            </Field>
+      {data && tab === 'auto' && <GameNewsRules servers={data.servers} />}
 
-            <div className="flex flex-wrap items-center gap-2" role="group" aria-label={t('gn.colors')}>
-              {SWATCHES.map((s) => (
-                <button
-                  key={s.id}
-                  type="button"
-                  className="h-8 w-8 rounded-full border border-line"
-                  style={{ background: s.hex }}
-                  title={swatchName(s.id)}
-                  aria-label={t('gn.colorize', { name: swatchName(s.id) })}
-                  onClick={() => wrap(colorOpen(s.hex), '</color>')}
-                />
-              ))}
-              <input
-                className="input w-28 font-mono text-sm"
-                value={custom}
-                maxLength={7}
-                aria-label={t('gn.customHex')}
-                onChange={(e) => setCustom(e.target.value)}
-              />
-              <button type="button" className="btn btn-soft btn-sm" disabled={!isHex(custom)} onClick={() => wrap(colorOpen(custom), '</color>')}>{t('gn.applyHex')}</button>
-              <button type="button" className="btn btn-soft btn-sm font-black" onClick={() => wrap('<b>', '</b>')} aria-label={t('gn.bold')}>B</button>
-              <button type="button" className="btn btn-soft btn-sm italic" onClick={() => wrap('<i>', '</i>')} aria-label={t('gn.italic')}>I</button>
-              <button type="button" className="btn btn-ghost btn-sm" onClick={() => setText(visibleText(text))}>{t('gn.clearTags')}</button>
-            </div>
+      {data && tab === 'send' && (
+        <>
+          <form className="grid gap-5 lg:grid-cols-2" onSubmit={(e) => void send(e)} noValidate>
+            <section className="panel p-5"><NewsEditor value={text} onChange={setText} /></section>
 
-            <div className="flex flex-wrap items-center justify-between gap-2 text-sm font-semibold text-mute">
-              <span className={visible > MAX_VISIBLE ? 'text-danger' : undefined}>{t('gn.counter', { n: visible, max: MAX_VISIBLE })}</span>
-              {unbalanced(text) && <span>{t('gn.unbalanced')}</span>}
-            </div>
-          </section>
+            <section className="space-y-5">
+              <NewsPreview text={text} />
 
-          <section className="space-y-5">
-            <div className="panel space-y-3 p-5">
-              <h3 className="font-extrabold">{t('gn.preview')}</h3>
-              <div className="rounded-xl p-4 font-semibold" style={{ background: '#15121c', color: '#e8e3f0' }} aria-live="polite">
-                <div className="mb-1 text-xs font-bold uppercase tracking-wide" style={{ color: '#8f86a3' }}>{t('gn.chatLabel')}</div>
-                {segs.length ? <p className="wrap-break-word"><Styled text={text} /></p> : <p style={{ color: '#8f86a3' }}>{t('gn.previewEmpty')}</p>}
-              </div>
-              <p className="text-sm font-semibold text-mute">{t('gn.previewNote')}</p>
-            </div>
-
-            <div className="panel space-y-3 p-5">
-              <h3 className="font-extrabold">{t('gn.servers')}</h3>
-              {data.servers.length === 0 && <p className="text-sm font-semibold text-mute">{t('gn.noServers')}</p>}
-              <ul className="divide-y divide-line">
-                {data.servers.map((s) => (
-                  <li key={s.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2.5">
-                    <label className="flex min-w-0 flex-1 basis-48 items-center gap-2.5 font-bold">
-                      <input type="checkbox" disabled={!s.hasToken} checked={picked.includes(s.id)} onChange={() => toggle(s.id)} />
-                      <span className="min-w-0 wrap-break-word">{s.name}</span>
-                    </label>
-                    <span className={!s.hasToken ? 'pill pill-mute' : s.online ? 'pill pill-ok' : 'pill pill-warn'}>
-                      {!s.hasToken ? t('gn.plugin.off') : s.online ? t('gn.plugin.online') : t('gn.plugin.silent')}
-                    </span>
-                    <button type="button" className="row-act" onClick={() => setSettingsFor(s.id)} aria-label={t('gn.plugin.settings', { name: s.name })}><IconSettings size={16} /></button>
-                  </li>
-                ))}
-              </ul>
-              {data.servers.length > 0 && ready.length === 0 && <p className="text-sm font-semibold text-mute">{t('gn.noPlugin')}</p>}
-              {ready.length > 1 && (
-                <button type="button" className="chip-filter" onClick={() => setPicked(picked.length === ready.length ? [] : ready.map((s) => s.id))}>
-                  {picked.length === ready.length ? t('gn.pickNone') : t('gn.pickAll')}
-                </button>
-              )}
-              <div className="flex justify-end">
-                <button type="submit" className="btn" disabled={!!problem || !picked.length || busy}>{busy && <Spinner />}{t('gn.send')}</button>
-              </div>
-              {lastResult && (
-                <ul className="space-y-1 text-sm font-semibold">
-                  {lastResult.results.map((r) => (
-                    <li key={r.serverId} className={r.queued ? (r.online ? 'text-ok' : undefined) : 'text-danger'}>
-                      {r.queued ? '✓' : '✕'} {r.serverName}: {r.queued ? (r.online ? t('gn.r.queued') : t('gn.r.queuedSilent')) : r.error}
+              <div className="panel space-y-3 p-5">
+                <h3 className="font-extrabold">{t('gn.servers')}</h3>
+                {data.servers.length === 0 && <p className="text-sm font-semibold text-mute">{t('gn.noServers')}</p>}
+                <ul className="divide-y divide-line">
+                  {data.servers.map((s) => (
+                    <li key={s.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2.5">
+                      <label className="flex min-w-0 flex-1 basis-48 items-center gap-2.5 font-bold">
+                        <input type="checkbox" disabled={!s.hasToken} checked={picked.includes(s.id)} onChange={() => toggle(s.id)} />
+                        <span className="min-w-0 wrap-break-word">{s.name}</span>
+                      </label>
+                      <span className={!s.hasToken ? 'pill pill-mute' : s.online ? 'pill pill-ok' : 'pill pill-warn'}>
+                        {!s.hasToken ? t('gn.plugin.off') : s.online ? t('gn.plugin.online') : t('gn.plugin.silent')}
+                      </span>
+                      <button type="button" className="row-act" onClick={() => setSettingsFor(s.id)} aria-label={t('gn.plugin.settings', { name: s.name })}><IconSettings size={16} /></button>
                     </li>
                   ))}
                 </ul>
-              )}
-            </div>
-          </section>
-        </form>
-      )}
-
-      {data && (
-        <section className="panel overflow-hidden">
-          <h3 className="px-5 pt-4 font-extrabold">{t('gn.history')}</h3>
-          {data.log.length === 0 && <p className="px-5 py-4 text-sm font-semibold text-mute">{t('gn.historyEmpty')}</p>}
-          <ul className="divide-y divide-line">
-            {data.log.map((r) => (
-              <li key={r.id} className="flex flex-wrap items-start gap-x-4 gap-y-1 px-5 py-3">
-                <div className="min-w-0 flex-1 basis-60">
-                  <div className="flex flex-wrap items-center gap-2 text-sm font-bold">
-                    <span className={STATUS[r.status].cls}>{t(STATUS[r.status].text)}</span>
-                    <span>{r.serverName}</span>
-                    <span className="font-semibold text-mute">{new Date(r.sentAt).toLocaleString()} · {r.sentBy || '—'}</span>
-                  </div>
-                  <p className="mt-1 wrap-break-word text-sm"><Styled text={r.text} /></p>
-                  {(r.status === 'failed' || r.status === 'expired') && r.error && <p className="text-sm font-semibold text-danger">{r.error}</p>}
+                {data.servers.length > 0 && ready.length === 0 && <p className="text-sm font-semibold text-mute">{t('gn.noPlugin')}</p>}
+                {ready.length > 1 && (
+                  <button type="button" className="chip-filter" onClick={() => setPicked(picked.length === ready.length ? [] : ready.map((s) => s.id))}>
+                    {picked.length === ready.length ? t('gn.pickNone') : t('gn.pickAll')}
+                  </button>
+                )}
+                <div className="flex justify-end">
+                  <button type="submit" className="btn" disabled={!!problem || !picked.length || busy}>{busy && <Spinner />}{t('gn.send')}</button>
                 </div>
-                <button type="button" className="btn btn-soft btn-sm" onClick={() => setText(r.text)}>{t('gn.reuse')}</button>
-              </li>
-            ))}
-          </ul>
-        </section>
+                {lastResult && (
+                  <ul className="space-y-1 text-sm font-semibold">
+                    {lastResult.results.map((r) => (
+                      <li key={r.serverId} className={r.queued ? (r.online ? 'text-ok' : undefined) : 'text-danger'}>
+                        {r.queued ? '✓' : '✕'} {r.serverName}: {r.queued ? (r.online ? t('gn.r.queued') : t('gn.r.queuedSilent')) : r.error}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </section>
+          </form>
+
+          <section className="panel overflow-hidden">
+            <h3 className="px-5 pt-4 font-extrabold">{t('gn.history')}</h3>
+            {data.log.length === 0 && <p className="px-5 py-4 text-sm font-semibold text-mute">{t('gn.historyEmpty')}</p>}
+            <ul className="divide-y divide-line">
+              {data.log.map((r) => (
+                <li key={r.id} className="flex flex-wrap items-start gap-x-4 gap-y-1 px-5 py-3">
+                  <div className="min-w-0 flex-1 basis-60">
+                    <div className="flex flex-wrap items-center gap-2 text-sm font-bold">
+                      <span className={STATUS[r.status].cls}>{t(STATUS[r.status].text)}</span>
+                      <span>{r.serverName}</span>
+                      <span className="font-semibold text-mute">{new Date(r.sentAt).toLocaleString()} · {r.sentBy || '—'}</span>
+                    </div>
+                    <p className="mt-1 wrap-break-word text-sm"><Styled text={r.text} /></p>
+                    {(r.status === 'failed' || r.status === 'expired') && r.error && <p className="text-sm font-semibold text-danger">{r.error}</p>}
+                  </div>
+                  <button type="button" className="btn btn-soft btn-sm" onClick={() => { setText(r.text); setTab('send'); }}>{t('gn.reuse')}</button>
+                </li>
+              ))}
+            </ul>
+          </section>
+        </>
       )}
 
       {settingsServer && <PluginModal server={settingsServer} onClose={() => setSettingsFor(null)} onChanged={() => void load()} />}
@@ -153505,6 +153952,257 @@ function PluginModal({ server, onClose, onChanged }: { server: NewsServerInfo; o
           </div>
         </div>
       </div>
+    </Modal>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/pages"
+  cat > "$APP_DIR/core-frontend/src/pages/GameNewsRules.tsx" << '__COREGSM_EOF__'
+import { useState, type FormEvent } from 'react';
+import { api } from '../api';
+import { NewsEditor, NewsPreview, Styled } from '../components/NewsEditor';
+import { StateView } from '../components/StateView';
+import { confirmDialog } from '../confirm';
+import { t, useI18n } from '../i18n';
+import {
+  INTERVAL_PRESETS, emptyRule, isHHMM, validateRule,
+  type NewsServerInfo, type RuleBody, type RuleInfo, type RuleKind,
+} from '../gameNews';
+import { fromLocalInput, toLocalInput } from '../maintenance';
+import { ErrorLine, Field, IconEdit, IconPlus, IconTrash, LoadError, Modal, Spinner, errText, toast, usePoll } from '../ui';
+
+interface RulesState { timezone: string; rules: RuleInfo[] }
+
+const when = (ts: number | null) => (ts ? new Date(ts).toLocaleString() : '—');
+
+function everyLabel(min: number): string {
+  if (min % 1440 === 0) return t('gn.a.everyDays', { n: min / 1440 });
+  if (min % 60 === 0) return t('gn.a.everyHours', { n: min / 60 });
+  return t('gn.a.everyMin', { n: min });
+}
+
+function scheduleLabel(r: RuleInfo): string {
+  if (r.kind === 'interval') return everyLabel(r.everyMin);
+  if (r.kind === 'daily') return t('gn.a.dailyAt', { times: r.times.join(', ') });
+  return t('gn.a.onceAt', { time: when(r.runAt) });
+}
+
+/** «Автообъявления»: a message written once and sent by a schedule, without pressing «Отправить». */
+export default function GameNewsRules({ servers }: { servers: NewsServerInfo[] }) {
+  useI18n();
+  const [data, setData] = useState<RulesState | null>(null);
+  const [error, setError] = useState('');
+  const [draft, setDraft] = useState<{ id: number | null; body: RuleBody } | null>(null);
+
+  const load = () =>
+    api<RulesState>('/game-news/rules')
+      .then((d) => { setData(d); setError(''); })
+      .catch((e: Error) => setError(e.message));
+  usePoll(load, 15_000);
+
+  const serverNames = (ids: number[]) => (ids.length ? servers.filter((s) => ids.includes(s.id)).map((s) => s.name).join(', ') || '—' : t('gn.a.allServers'));
+  const toggle = async (r: RuleInfo) => {
+    const { id, lastRun: _l, nextRun: _n, createdBy: _c, ...body } = r;
+    try { await api(`/game-news/rules/${id}`, 'PUT', { ...body, enabled: !r.enabled }); void load(); } catch (e) { toast(errText(e), 'err'); }
+  };
+  const runNow = async (r: RuleInfo) => {
+    if (!(await confirmDialog({ title: t('gn.a.runTitle', { name: r.name }), text: t('gn.a.runText'), confirmLabel: t('gn.a.run') }))) return;
+    try {
+      const res = await api<{ results: { queued: boolean }[] }>(`/game-news/rules/${r.id}/run`, 'POST');
+      toast(res.results.some((x) => x.queued) ? t('gn.t.queued') : t('gn.a.nobody'), res.results.some((x) => x.queued) ? undefined : 'err');
+      void load();
+    } catch (e) { toast(errText(e), 'err'); }
+  };
+  const remove = async (r: RuleInfo) => {
+    if (!(await confirmDialog({ title: t('gn.a.delTitle', { name: r.name }), danger: true, confirmLabel: t('gn.a.del') }))) return;
+    try { await api(`/game-news/rules/${r.id}`, 'DELETE'); void load(); } catch (e) { toast(errText(e), 'err'); }
+  };
+  const openNew = () => setDraft({ id: null, body: emptyRule() });
+  const openEdit = (r: RuleInfo) => { const { id, lastRun: _l, nextRun: _n, createdBy: _c, ...body } = r; setDraft({ id, body }); };
+
+  return (
+    <div className="space-y-5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="min-w-0 flex-1 basis-80 text-sm font-semibold text-mute">{t('gn.a.intro')}</p>
+        <button type="button" className="btn" onClick={openNew}><IconPlus size={16} />{t('gn.a.add')}</button>
+      </div>
+
+      {error && !data ? <LoadError error={error} onRetry={() => void load()} /> : <ErrorLine text={error} />}
+      {!data && !error && <div className="skeleton panel h-32" aria-busy="true" />}
+
+      {data && data.rules.length === 0 && (
+        <StateView title={t('gn.a.empty')} text={t('gn.a.emptyText')} action={<button type="button" className="btn" onClick={openNew}>{t('gn.a.add')}</button>} />
+      )}
+
+      {data && data.rules.length > 0 && (
+        <ul className="panel divide-y divide-line overflow-hidden">
+          {data.rules.map((r) => (
+            <li key={r.id} className="flex flex-wrap items-start gap-x-4 gap-y-2 px-5 py-4">
+              <div className="min-w-0 flex-1 basis-72">
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                  <span className="min-w-0 wrap-break-word font-extrabold">{r.name}</span>
+                  <span className={r.enabled ? 'pill pill-ok' : 'pill pill-mute'}>{r.enabled ? t('gn.a.on') : t('gn.a.off')}</span>
+                  <span className="pill pill-mute">{scheduleLabel(r)}</span>
+                </div>
+                <p className="mt-1 wrap-break-word text-sm"><Styled text={r.text} /></p>
+                <p className="mt-1 text-sm font-semibold text-mute">
+                  {serverNames(r.serverIds)}
+                  {' · '}{r.nextRun ? t('gn.a.next', { time: when(r.nextRun) }) : t('gn.a.noNext')}
+                  {' · '}{t('gn.a.last', { time: when(r.lastRun) })}
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <button type="button" className="btn btn-soft btn-sm" onClick={() => void toggle(r)}>{r.enabled ? t('gn.a.pause') : t('gn.a.resume')}</button>
+                <button type="button" className="btn btn-soft btn-sm" onClick={() => void runNow(r)}>{t('gn.a.run')}</button>
+                <button type="button" className="row-act" onClick={() => openEdit(r)} aria-label={t('gn.a.editAria', { name: r.name })}><IconEdit size={16} /></button>
+                <button type="button" className="row-act row-act-danger" onClick={() => void remove(r)} aria-label={t('gn.a.delAria', { name: r.name })}><IconTrash size={16} /></button>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {draft && (
+        <RuleModal
+          id={draft.id}
+          initial={draft.body}
+          servers={servers}
+          timezone={data?.timezone ?? ''}
+          onClose={() => setDraft(null)}
+          onSaved={() => { setDraft(null); void load(); }}
+        />
+      )}
+    </div>
+  );
+}
+
+function RuleModal({ id, initial, servers, timezone, onClose, onSaved }: {
+  id: number | null; initial: RuleBody; servers: NewsServerInfo[]; timezone: string; onClose: () => void; onSaved: () => void;
+}) {
+  useI18n();
+  const [f, setF] = useState<RuleBody>(initial);
+  const [time, setTime] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const set = <K extends keyof RuleBody>(k: K, v: RuleBody[K]) => setF((x) => ({ ...x, [k]: v }));
+  const problem = validateRule(f, Date.now());
+  const withPlugin = servers.filter((s) => s.hasToken);
+
+  const addTime = () => {
+    if (!isHHMM(time) || f.times.includes(time)) return;
+    set('times', [...f.times, time].sort());
+    setTime('');
+  };
+  const toggleServer = (sid: number) => set('serverIds', f.serverIds.includes(sid) ? f.serverIds.filter((x) => x !== sid) : [...f.serverIds, sid]);
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (problem || busy) return;
+    setBusy(true);
+    setError('');
+    try {
+      await (id == null ? api('/game-news/rules', 'POST', f) : api(`/game-news/rules/${id}`, 'PUT', f));
+      toast(t('gn.a.saved'));
+      onSaved();
+    } catch (err) {
+      setError(errText(err));
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal title={id == null ? t('gn.a.newTitle') : t('gn.a.editTitle')} onClose={onClose}>
+      <form className="space-y-4" onSubmit={(e) => void submit(e)} noValidate>
+        <Field label={t('gn.a.name')}>
+          <input className="input" value={f.name} maxLength={80} placeholder={t('gn.a.nameEx')} onChange={(e) => set('name', e.target.value)} />
+        </Field>
+
+        <NewsEditor value={f.text} onChange={(v) => set('text', v)} />
+        <NewsPreview text={f.text} />
+
+        <Field label={t('gn.a.when')}>
+          <select className="input" value={f.kind} onChange={(e) => set('kind', e.target.value as RuleKind)}>
+            <option value="interval">{t('gn.a.kind.interval')}</option>
+            <option value="daily">{t('gn.a.kind.daily')}</option>
+            <option value="once">{t('gn.a.kind.once')}</option>
+          </select>
+        </Field>
+
+        {f.kind === 'interval' && (
+          <div className="space-y-2">
+            <div className="flex flex-wrap gap-2">
+              {INTERVAL_PRESETS.map((m) => (
+                <button key={m} type="button" className={`chip-filter ${f.everyMin === m ? 'on' : ''}`} aria-pressed={f.everyMin === m} onClick={() => set('everyMin', m)}>{everyLabel(m)}</button>
+              ))}
+            </div>
+            <Field label={t('gn.a.everyMinutes')}>
+              <input className="input w-40" type="number" min={5} max={10080} value={f.everyMin} onChange={(e) => set('everyMin', Number(e.target.value))} />
+            </Field>
+            <p className="text-sm font-semibold text-mute">{t('gn.a.intervalNote')}</p>
+          </div>
+        )}
+
+        {f.kind === 'daily' && (
+          <div className="space-y-2">
+            <div className="flex flex-wrap items-center gap-2">
+              {f.times.map((x) => (
+                <button key={x} type="button" className="chip-filter on" onClick={() => set('times', f.times.filter((y) => y !== x))} aria-label={t('gn.a.removeTime', { time: x })}>{x} ✕</button>
+              ))}
+              <input className="input w-32" type="time" value={time} onChange={(e) => setTime(e.target.value)} aria-label={t('gn.a.time')} />
+              <button type="button" className="btn btn-soft btn-sm" disabled={!isHHMM(time) || f.times.includes(time)} onClick={addTime}>{t('gn.a.addTime')}</button>
+            </div>
+            <p className="text-sm font-semibold text-mute">{t('gn.a.tzNote', { tz: timezone || '—' })}</p>
+          </div>
+        )}
+
+        {f.kind === 'once' && (
+          <Field label={t('gn.a.runAt')}>
+            <input className="input" type="datetime-local" value={f.runAt ? toLocalInput(f.runAt) : ''} onChange={(e) => set('runAt', fromLocalInput(e.target.value))} />
+          </Field>
+        )}
+
+        <div className="space-y-2">
+          <span className="text-sm font-bold">{t('gn.a.servers')}</span>
+          <label className="flex items-center gap-2.5 font-bold">
+            <input type="checkbox" checked={f.serverIds.length === 0} onChange={() => set('serverIds', [])} />
+            {t('gn.a.allServers')}
+          </label>
+          {withPlugin.map((s) => (
+            <label key={s.id} className="flex items-center gap-2.5 font-bold">
+              <input type="checkbox" checked={f.serverIds.includes(s.id)} onChange={() => toggleServer(s.id)} />
+              <span className="min-w-0 wrap-break-word">{s.name}</span>
+            </label>
+          ))}
+        </div>
+
+        <label className="flex items-start gap-2.5 font-bold">
+          <input className="mt-1" type="checkbox" checked={f.onlyOnline} onChange={(e) => set('onlyOnline', e.target.checked)} />
+          <span>{t('gn.a.onlyOnline')}<span className="block text-sm font-semibold text-mute">{t('gn.a.onlyOnlineNote')}</span></span>
+        </label>
+
+        {f.kind !== 'once' && (
+          <div className="grid gap-4 min-[460px]:grid-cols-2">
+            <Field label={t('gn.a.from')}>
+              <input className="input" type="datetime-local" value={f.activeFrom ? toLocalInput(f.activeFrom) : ''} onChange={(e) => set('activeFrom', fromLocalInput(e.target.value))} />
+            </Field>
+            <Field label={t('gn.a.to')}>
+              <input className="input" type="datetime-local" value={f.activeTo ? toLocalInput(f.activeTo) : ''} onChange={(e) => set('activeTo', fromLocalInput(e.target.value))} />
+            </Field>
+          </div>
+        )}
+
+        <label className="flex items-center gap-2.5 font-bold">
+          <input type="checkbox" checked={f.enabled} onChange={(e) => set('enabled', e.target.checked)} />
+          {t('gn.a.enabled')}
+        </label>
+
+        {problem && f.name.trim() && <p className="text-sm font-semibold text-danger">{t(`gn.a.p.${problem}` as 'gn.a.p.name')}</p>}
+        <ErrorLine text={error} />
+        <div className="flex flex-wrap justify-end gap-2">
+          <button type="button" className="btn btn-ghost" onClick={onClose}>{t('common.cancel')}</button>
+          <button type="submit" className="btn" disabled={!!problem || busy}>{busy && <Spinner />}{t('common.save')}</button>
+        </div>
+      </form>
     </Modal>
   );
 }
