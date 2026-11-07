@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="d4de15d45864"
+COREGSM_BUILD="589e74b092a2"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.71"
+COREGSM_VERSION="1.1.72"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -141832,7 +141832,7 @@ const en: Record<keyof typeof ru, string> = {
   'gn.h.fail': 'Failed',
   'gn.reuse': 'Use again',  'adm.s.alerts': 'Alerts',
   'gn.bytes': '{n} of {max} bytes',  'gn.jl.title': 'Players joining and leaving',
-  'gn.jl.note': 'When a player joins the server or leaves it, everybody gets a message. The texts and colours are set here. Needs plugin version 0.5.0 or newer.',
+  'gn.jl.note': 'When a player joins the server or leaves it, everybody gets a message. The texts and colours are set here and saved by themselves: the next player who joins (a few seconds later) sees the new ones. Needs plugin version 0.5.0 or newer.',
   'gn.jl.join': 'Announce joining',
   'gn.jl.leave': 'Announce leaving',
   'gn.jl.nameColor': 'Colour of the player name',
@@ -141842,7 +141842,7 @@ const en: Record<keyof typeof ru, string> = {
   'gn.jl.saved': 'Settings saved',  'gn.players': 'players {n} of {max}',  'gn.rawOn': 'Code',
   'gn.rawOff': 'Editor',  'gn.v.name': 'Player nickname',
   'gn.w.title': 'Greeting on join',
-  'gn.w.note': 'A player who joins the server sees this message in private (nobody else does). Needs plugin version 0.3.0 or newer.',
+  'gn.w.note': 'A player who joins the server sees this message in private (nobody else does). Changes are saved by themselves. Needs plugin version 0.3.0 or newer.',
   'gn.w.enabled': 'Greet players',
   'gn.w.text': 'Greeting text',
   'gn.w.saved': 'Greeting saved',  'gn.a.countdown': 'Warn about planned restarts',
@@ -146307,7 +146307,7 @@ const ru = {
   'gn.h.fail': 'Ошибка',
   'gn.reuse': 'Использовать снова',  'adm.s.alerts': 'Оповещения',
   'gn.bytes': '{n} из {max} байт',  'gn.jl.title': 'Вход и выход игроков',
-  'gn.jl.note': 'Когда игрок заходит на сервер или выходит, всем игрокам показывается сообщение. Тексты и цвета настраиваются здесь. Нужен плагин версии 0.5.0 и новее.',
+  'gn.jl.note': 'Когда игрок заходит на сервер или выходит, всем игрокам показывается сообщение. Тексты и цвета настраиваются здесь и сохраняются сами: следующий вошедший игрок (через несколько секунд) увидит новые. Нужен плагин версии 0.5.0 и новее.',
   'gn.jl.join': 'Сообщать о входе',
   'gn.jl.leave': 'Сообщать о выходе',
   'gn.jl.nameColor': 'Цвет имени игрока',
@@ -146317,7 +146317,7 @@ const ru = {
   'gn.jl.saved': 'Настройки сохранены',  'gn.players': 'игроков {n} из {max}',  'gn.rawOn': 'Код',
   'gn.rawOff': 'Редактор',  'gn.v.name': 'Ник игрока',
   'gn.w.title': 'Приветствие при входе',
-  'gn.w.note': 'Игрок, который заходит на сервер, видит это сообщение лично (остальные его не видят). Нужен плагин версии 0.3.0 и новее.',
+  'gn.w.note': 'Игрок, который заходит на сервер, видит это сообщение лично (остальные его не видят). Изменения сохраняются сами. Нужен плагин версии 0.3.0 и новее.',
   'gn.w.enabled': 'Приветствовать игроков',
   'gn.w.text': 'Текст приветствия',
   'gn.w.saved': 'Приветствие сохранено',  'gn.a.countdown': 'Предупреждать о плановых рестартах',
@@ -154620,7 +154620,7 @@ import {
   type JoinLeave, type NewsServerInfo, type RuleBody, type RuleInfo, type RuleKind,
 } from '../gameNews';
 import { fromLocalInput, toLocalInput } from '../maintenance';
-import { ErrorLine, Field, IconEdit, IconPlus, IconTrash, LoadError, Modal, Spinner, errText, toast, usePoll } from '../ui';
+import { ErrorLine, Field, IconEdit, IconPlus, IconTrash, LoadError, Modal, SaveBadge, Spinner, errText, toast, useAutosave, usePoll } from '../ui';
 
 interface RulesState { timezone: string; restartCountdown: boolean; welcome: { enabled: boolean; text: string }; joinLeave: JoinLeave; rules: RuleInfo[] }
 
@@ -154889,39 +154889,41 @@ function RuleModal({ id, initial, servers, timezone, onClose, onSaved }: {
   );
 }
 
-/** the greeting for a player who joins: written once, shown by the plugin to that player only */
+/** the greeting for a player who joins: written once, shown by the plugin to that player only. Saves by itself. */
 function WelcomeCard({ initial }: { initial: { enabled: boolean; text: string } }) {
   useI18n();
-  const [enabled, setEnabled] = useState(initial.enabled);
-  const [text, setText] = useState(initial.text);
-  const [busy, setBusy] = useState(false);
-  const problem = enabled || text.trim() ? validateNews(text) : null;
-  const dirty = enabled !== initial.enabled || text !== initial.text;
-
-  const save = async () => {
-    if (problem || busy) return;
-    setBusy(true);
-    try { await api('/game-news/welcome', 'PUT', { enabled, text }); toast(t('gn.w.saved')); } catch (e) { toast(errText(e), 'err'); } finally { setBusy(false); }
-  };
+  const [f, setF] = useState(initial);
+  const [saved, setSaved] = useState(initial);
+  const auto = useAutosave({
+    value: f,
+    saved,
+    delay: 900,
+    validate: (v) => {
+      if (!v.enabled && !v.text.trim()) return null;
+      const p = validateNews(v.text);
+      return p ? t(p === 'long' ? 'gn.hint.long' : 'gn.hint.text') : null;
+    },
+    save: async (v) => { await api('/game-news/welcome', 'PUT', v); setSaved(v); },
+  });
 
   return (
     <section className="panel space-y-4 p-5">
-      <div>
-        <h3 className="font-extrabold">{t('gn.w.title')}</h3>
-        <p className="text-sm font-semibold text-mute">{t('gn.w.note')}</p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0 flex-1 basis-72">
+          <h3 className="font-extrabold">{t('gn.w.title')}</h3>
+          <p className="text-sm font-semibold text-mute">{t('gn.w.note')}</p>
+        </div>
+        <SaveBadge status={auto.status} error={auto.error} retry={auto.retry} />
       </div>
       <label className="flex items-center gap-2.5 font-bold">
-        <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
+        <input type="checkbox" checked={f.enabled} onChange={(e) => setF((x) => ({ ...x, enabled: e.target.checked }))} />
         {t('gn.w.enabled')}
       </label>
       <div className="grid gap-5 lg:grid-cols-2">
-        <NewsEditor value={text} onChange={setText} templates={false} vars={WELCOME_VARIABLES} label={t('gn.w.text')} />
-        <NewsPreview text={text} welcome />
+        <NewsEditor value={f.text} onChange={(v) => setF((x) => ({ ...x, text: v }))} templates={false} vars={WELCOME_VARIABLES} label={t('gn.w.text')} />
+        <NewsPreview text={f.text} welcome />
       </div>
-      {problem && enabled && <p className="text-sm font-semibold text-danger">{t(problem === 'long' ? 'gn.hint.long' : 'gn.hint.text')}</p>}
-      <div className="flex justify-end">
-        <button type="button" className="btn" disabled={!!problem || busy || !dirty} onClick={() => void save()}>{busy && <Spinner />}{t('common.save')}</button>
-      </div>
+      {auto.invalid && f.enabled && <p className="text-sm font-semibold text-danger">{auto.error}</p>}
     </section>
   );
 }
@@ -154950,28 +154952,33 @@ function ColorField({ label, value, onChange }: { label: string; value: string; 
   );
 }
 
-/** «* Игрок {name} подключился к серверу.»: shown to everybody when a player joins or leaves, with the colours chosen here */
+/** «* Игрок {name} подключился к серверу.»: shown to everybody when a player joins or leaves, with the colours chosen here. Saves by itself. */
 function JoinLeaveCard({ initial }: { initial: JoinLeave }) {
   useI18n();
   const [f, setF] = useState<JoinLeave>(initial);
-  const [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useState<JoinLeave>(initial);
   const set = <K extends keyof JoinLeave>(k: K, v: JoinLeave[K]) => setF((x) => ({ ...x, [k]: v }));
-  const colorsOk = isHex(f.nameColor) && isHex(f.textColor);
-  const textsOk = (!f.joinEnabled || f.joinText.trim().length > 0) && (!f.leaveEnabled || f.leaveText.trim().length > 0);
-  const dirty = JSON.stringify(f) !== JSON.stringify(initial);
+  const auto = useAutosave({
+    value: f,
+    saved,
+    delay: 800,
+    validate: (v) => {
+      if (!isHex(v.nameColor) || !isHex(v.textColor)) return t('gn.jl.badColor');
+      if ((v.joinEnabled && !v.joinText.trim()) || (v.leaveEnabled && !v.leaveText.trim())) return t('gn.hint.text');
+      return null;
+    },
+    save: async (v) => { await api('/game-news/joinleave', 'PUT', v); setSaved(v); },
+  });
   const sample = (text: string) => composeLine(text, isHex(f.nameColor) ? f.nameColor : '#B86BFF', isHex(f.textColor) ? f.textColor : '#5FD068').replace(/{name}/g, 'WhiteLegioN');
-
-  const save = async () => {
-    if (!colorsOk || !textsOk || busy) return;
-    setBusy(true);
-    try { await api('/game-news/joinleave', 'PUT', f); toast(t('gn.jl.saved')); } catch (e) { toast(errText(e), 'err'); } finally { setBusy(false); }
-  };
 
   return (
     <section className="panel space-y-4 p-5">
-      <div>
-        <h3 className="font-extrabold">{t('gn.jl.title')}</h3>
-        <p className="text-sm font-semibold text-mute">{t('gn.jl.note')}</p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0 flex-1 basis-72">
+          <h3 className="font-extrabold">{t('gn.jl.title')}</h3>
+          <p className="text-sm font-semibold text-mute">{t('gn.jl.note')}</p>
+        </div>
+        <SaveBadge status={auto.status} error={auto.error} retry={auto.retry} />
       </div>
 
       <div className="grid gap-4 lg:grid-cols-2">
@@ -155002,11 +155009,7 @@ function JoinLeaveCard({ initial }: { initial: JoinLeave }) {
         <p className="wrap-break-word"><Styled text={sample(f.leaveText)} /></p>
       </div>
       <p className="text-sm font-semibold text-mute">{t('gn.jl.nameHint')}</p>
-      {!colorsOk && <p className="text-sm font-semibold text-danger">{t('gn.jl.badColor')}</p>}
-
-      <div className="flex justify-end">
-        <button type="button" className="btn" disabled={!colorsOk || !textsOk || busy || !dirty} onClick={() => void save()}>{busy && <Spinner />}{t('common.save')}</button>
-      </div>
+      {auto.invalid && <p className="text-sm font-semibold text-danger">{auto.error}</p>}
     </section>
   );
 }
