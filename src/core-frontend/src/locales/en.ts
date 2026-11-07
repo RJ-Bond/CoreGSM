@@ -990,6 +990,7 @@ const en: Record<keyof typeof ru, string> = {
   'gn.wz.token': 'Create a token',
   'gn.wz.docs': 'Full guide',
   'gn.tab.general': 'General',
+  'gn.tab.servers': 'Servers with the plugin',
   'gn.tab.players': 'Players',
   'gn.tab.discord': 'Discord',
   'gn.a.menu': 'Actions: {name}',

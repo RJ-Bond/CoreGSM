@@ -1,6 +1,6 @@
 import { versionText } from './settings/updateLogic';
 import { UpdateBadge } from '../components/UpdateBadge';
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { api, type Binding, type CertInfo, type Server, type ServerInput, type StatusInfo, type UpdateInfo, type UserRow } from '../api';
 import { useAuth } from '../auth';
 import { t, useI18n } from '../i18n';
@@ -199,6 +199,16 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
     return () => window.removeEventListener('keydown', onKey);
   }, [isAdmin]);
   const [menu, setMenu] = useState(false);
+  // the servers with the game plugin: each has its own page of settings under «Игровой плагин» (when there are several)
+  const [pluginServers, setPluginServers] = useState<{ id: number; name: string }[]>([]);
+  useEffect(() => {
+    if (!isAdmin || current !== 'gamenews') return;
+    let alive = true;
+    api<{ servers: { id: number; name: string; supported: boolean; hasToken: boolean }[] }>('/game-news')
+      .then((d) => { if (alive) setPluginServers(d.servers.filter((x) => x.supported && x.hasToken).map((x) => ({ id: x.id, name: x.name }))); })
+      .catch(() => undefined);
+    return () => { alive = false; };
+  }, [isAdmin, current]);
   const first = tail.split('/')[0];
   const crumb = !['servers', 'discord', 'news'].includes(current) || !first ? '' : first === 'new' ? t('adm.crumb.new') : /^\d+$/.test(first) ? t('adm.crumb.edit') : '';
   const divider = <span aria-hidden className="mx-1 w-px shrink-0 self-stretch bg-line md:hidden" />;
@@ -237,7 +247,21 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
                 {divider}
                 <div id={`adm-g-${gi}`} className="adm-group-title hidden md:block">{g.title}</div>
                 <div role="group" aria-labelledby={`adm-g-${gi}`} className="flex gap-1 md:flex-col">
-                  {g.sections.map((s) => item(s))}
+                  {g.sections.map((s) => (s.id === 'gamenews' && current === 'gamenews' && pluginServers.length > 1
+                    ? (
+                      <Fragment key={s.id}>
+                        {item(s)}
+                        <div className="adm-sub flex flex-col gap-0.5 max-md:hidden" role="group" aria-label={t('gn.tab.servers')}>
+                          {pluginServers.map((x) => (
+                            <a key={x.id} href={`/admin/gamenews/s${x.id}`} aria-current={tail === `s${x.id}` ? 'page' : undefined} title={x.name}
+                              className={`block truncate rounded-ui-md py-1 pl-9 pr-3 text-sm font-bold transition hover:text-ink ${tail === `s${x.id}` ? 'bg-soft text-ink' : 'text-mute'}`}>
+                              {x.name}
+                            </a>
+                          ))}
+                        </div>
+                      </Fragment>
+                    )
+                    : item(s)))}
                 </div>
               </div>
             ))}

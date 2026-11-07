@@ -991,6 +991,7 @@ const ru = {
   'gn.wz.token': 'Создать токен',
   'gn.wz.docs': 'Подробная инструкция',
   'gn.tab.general': 'Общие',
+  'gn.tab.servers': 'Серверы с плагином',
   'gn.tab.players': 'Игроки',
   'gn.tab.discord': 'Discord',
   'gn.a.menu': 'Действия: {name}',

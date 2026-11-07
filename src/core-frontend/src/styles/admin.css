@@ -298,7 +298,7 @@ a.adm-tile:hover { box-shadow: var(--shadow-2); border-color: rgb(var(--brand) /
 /* the menu shrunk to icons (desktop only) */
 @media (min-width: 768px) {
   .adm-rail { padding-inline: 6px; }
-  .adm-rail .adm-lbl, .adm-rail .adm-group-title, .adm-rail .adm-pin, .adm-rail .adm-progress, .adm-rail .adm-find > :not(:first-child) { display: none; }
+  .adm-rail .adm-sub, .adm-rail .adm-lbl, .adm-rail .adm-group-title, .adm-rail .adm-pin, .adm-rail .adm-progress, .adm-rail .adm-find > :not(:first-child) { display: none; }
   .adm-rail .adm-link, .adm-rail .adm-density, .adm-rail .adm-find { justify-content: center; padding-inline: 0; }
   .adm-rail .adm-link.md\:w-full { padding-right: 0; }
   .adm-rail .adm-link { position: relative; }

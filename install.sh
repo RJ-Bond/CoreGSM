@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="426711852b6c"
+COREGSM_BUILD="77e103bc2f9f"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.82"
+COREGSM_VERSION="1.1.83"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -143427,6 +143427,7 @@ const en: Record<keyof typeof ru, string> = {
   'gn.wz.token': 'Create a token',
   'gn.wz.docs': 'Full guide',
   'gn.tab.general': 'General',
+  'gn.tab.servers': 'Servers with the plugin',
   'gn.tab.players': 'Players',
   'gn.tab.discord': 'Discord',
   'gn.a.menu': 'Actions: {name}',
@@ -148075,6 +148076,7 @@ const ru = {
   'gn.wz.token': 'Создать токен',
   'gn.wz.docs': 'Подробная инструкция',
   'gn.tab.general': 'Общие',
+  'gn.tab.servers': 'Серверы с плагином',
   'gn.tab.players': 'Игроки',
   'gn.tab.discord': 'Discord',
   'gn.a.menu': 'Действия: {name}',
@@ -151783,7 +151785,7 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/pages/Admin.tsx" << '__COREGSM_EOF__'
 import { versionText } from './settings/updateLogic';
 import { UpdateBadge } from '../components/UpdateBadge';
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { api, type Binding, type CertInfo, type Server, type ServerInput, type StatusInfo, type UpdateInfo, type UserRow } from '../api';
 import { useAuth } from '../auth';
 import { t, useI18n } from '../i18n';
@@ -151982,6 +151984,16 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
     return () => window.removeEventListener('keydown', onKey);
   }, [isAdmin]);
   const [menu, setMenu] = useState(false);
+  // the servers with the game plugin: each has its own page of settings under «Игровой плагин» (when there are several)
+  const [pluginServers, setPluginServers] = useState<{ id: number; name: string }[]>([]);
+  useEffect(() => {
+    if (!isAdmin || current !== 'gamenews') return;
+    let alive = true;
+    api<{ servers: { id: number; name: string; supported: boolean; hasToken: boolean }[] }>('/game-news')
+      .then((d) => { if (alive) setPluginServers(d.servers.filter((x) => x.supported && x.hasToken).map((x) => ({ id: x.id, name: x.name }))); })
+      .catch(() => undefined);
+    return () => { alive = false; };
+  }, [isAdmin, current]);
   const first = tail.split('/')[0];
   const crumb = !['servers', 'discord', 'news'].includes(current) || !first ? '' : first === 'new' ? t('adm.crumb.new') : /^\d+$/.test(first) ? t('adm.crumb.edit') : '';
   const divider = <span aria-hidden className="mx-1 w-px shrink-0 self-stretch bg-line md:hidden" />;
@@ -152020,7 +152032,21 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
                 {divider}
                 <div id={`adm-g-${gi}`} className="adm-group-title hidden md:block">{g.title}</div>
                 <div role="group" aria-labelledby={`adm-g-${gi}`} className="flex gap-1 md:flex-col">
-                  {g.sections.map((s) => item(s))}
+                  {g.sections.map((s) => (s.id === 'gamenews' && current === 'gamenews' && pluginServers.length > 1
+                    ? (
+                      <Fragment key={s.id}>
+                        {item(s)}
+                        <div className="adm-sub flex flex-col gap-0.5 max-md:hidden" role="group" aria-label={t('gn.tab.servers')}>
+                          {pluginServers.map((x) => (
+                            <a key={x.id} href={`/admin/gamenews/s${x.id}`} aria-current={tail === `s${x.id}` ? 'page' : undefined} title={x.name}
+                              className={`block truncate rounded-ui-md py-1 pl-9 pr-3 text-sm font-bold transition hover:text-ink ${tail === `s${x.id}` ? 'bg-soft text-ink' : 'text-mute'}`}>
+                              {x.name}
+                            </a>
+                          ))}
+                        </div>
+                      </Fragment>
+                    )
+                    : item(s)))}
                 </div>
               </div>
             ))}
@@ -156301,7 +156327,7 @@ export default function GameNewsPage({ sub = '' }: { sub?: string }) {
   const serverTabs = withToken.length > 1 ? withToken : [];
   const tabList: { id: Tab; label: string }[] = [
     { id: 'send', label: t('gn.tab.send') }, { id: 'auto', label: t('gn.tab.auto') }, { id: 'general', label: t('gn.tab.general') },
-    ...serverTabs.map((x) => ({ id: `s${x.id}`, label: x.name })), { id: 'history', label: t('gn.tab.history') },
+    { id: 'history', label: t('gn.tab.history') },
   ];
 
   // the setup guide: until a plugin is online
@@ -156416,8 +156442,8 @@ export default function GameNewsPage({ sub = '' }: { sub?: string }) {
 
       {data && (
         <div className="flex flex-wrap gap-2" role="tablist" aria-label={t('gn.title')}>
-          {tabList.map((x) => (
-            <button key={x.id} type="button" role="tab" aria-selected={tab === x.id} className={`chip-filter ${tab === x.id ? 'on' : ''}`} onClick={() => goTab(x.id)}>
+          {[...tabList.slice(0, -1), ...serverTabs.map((x) => ({ id: `s${x.id}`, label: x.name, phone: true })), ...tabList.slice(-1)].map((x) => (
+            <button key={x.id} type="button" role="tab" aria-selected={tab === x.id} className={`chip-filter ${tab === x.id ? 'on' : ''} ${'phone' in x ? 'md:hidden' : ''}`} onClick={() => goTab(x.id)}>
               {x.label}
               {(counter[x.id] ?? 0) > 0 && <span className="ml-1.5 rounded-full bg-soft px-1.5 text-xs font-extrabold">{counter[x.id]}</span>}
             </button>
@@ -166504,7 +166530,7 @@ a.adm-tile:hover { box-shadow: var(--shadow-2); border-color: rgb(var(--brand) /
 /* the menu shrunk to icons (desktop only) */
 @media (min-width: 768px) {
   .adm-rail { padding-inline: 6px; }
-  .adm-rail .adm-lbl, .adm-rail .adm-group-title, .adm-rail .adm-pin, .adm-rail .adm-progress, .adm-rail .adm-find > :not(:first-child) { display: none; }
+  .adm-rail .adm-sub, .adm-rail .adm-lbl, .adm-rail .adm-group-title, .adm-rail .adm-pin, .adm-rail .adm-progress, .adm-rail .adm-find > :not(:first-child) { display: none; }
   .adm-rail .adm-link, .adm-rail .adm-density, .adm-rail .adm-find { justify-content: center; padding-inline: 0; }
   .adm-rail .adm-link.md\:w-full { padding-right: 0; }
   .adm-rail .adm-link { position: relative; }
