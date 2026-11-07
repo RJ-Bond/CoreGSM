@@ -277,7 +277,7 @@ function DiscordPreview({ colors, joinText, leaveText, showTime }: { colors: Rec
   const chat = (k: 'global' | 'clan' | 'local', tag: string, text: string) => (
     <p key={k} className="wrap-break-word">
       {showTime && <span style={{ color: ANSI_CSS[colors[k].tag] }}>[{clock}] </span>}
-      <span style={{ color: ANSI_CSS[colors[k].tag], fontWeight: 800 }}>[{tag}]</span>{' '}
+      <span style={{ color: ANSI_CSS[colors[k].tag], fontWeight: 800 }}>[«{tag}»]</span>{' '}
       <span style={{ color: ANSI_CSS[colors[k].name], fontWeight: 800 }}>{nick}</span>
       <span style={{ color: ANSI_CSS[colors[k].text] }}>: {text}</span>
     </p>

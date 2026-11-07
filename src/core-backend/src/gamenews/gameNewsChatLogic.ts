@@ -124,13 +124,13 @@ const isCommand = (t: string): boolean => t.startsWith('.') || t.startsWith('/')
 /** «[16:07] » in front of a line, like the chat of the game; '' when no time is given */
 const stamp = (time: string): string => (time ? `[${noControl(time).trim()}] ` : '');
 
-/** «[16:07] **[Глобальный]** **WhiteLegioN**: Тест»; '' for what must not be forwarded (a command, an empty text) */
+/** «[16:07] **[«Глобальный»]** **WhiteLegioN**: Тест»; '' for what must not be forwarded (a command, an empty text) */
 export function formatChatLine(kind: 'global' | 'clan' | 'local', name: string, clan: string, text: string, server = '', time = ''): string {
   const t = text.trim();
   if (!t || isCommand(t)) return '';
   const tag = kind === 'clan' && clan.trim() ? `${CHAT_LABEL.clan} ${clan.trim()}` : CHAT_LABEL[kind];
   const head = server ? `**[${escapeDiscord(server)}]** ` : '';
-  return `${stamp(time)}${head}**[${escapeDiscord(tag)}]** **${escapeDiscord(name.trim() || '?')}**: ${escapeDiscord(t).slice(0, 500)}`;
+  return `${stamp(time)}${head}**[«${escapeDiscord(tag)}»]** **${escapeDiscord(name.trim() || '?')}**: ${escapeDiscord(t).slice(0, 500)}`;
 }
 
 /** «[16:07] * Игрок **WhiteLegioN** подключился к серверу.» for a join or a leave in the plain style */
@@ -144,13 +144,13 @@ export function formatEventLine(template: string, name: string, server = '', tim
 const ESC = String.fromCharCode(27);
 const seg = (color: AnsiColor, text: string, bold = false): string => (text ? `${ESC}[${bold ? 1 : 0};${ANSI_CODE[color]}m${text}${ESC}[0m` : '');
 
-/** a line of a chat in the colours of the game: «[16:07] [Глобальный] WhiteLegioN: Тест» (the time has the colour of the tag) */
+/** a line of a chat in the colours of the game: «[16:07] [«Глобальный»] WhiteLegioN: Тест» (the time has the colour of the tag) */
 export function ansiChatLine(kind: 'global' | 'clan' | 'local', name: string, clan: string, text: string, c: ChatColors, server = '', time = ''): string {
   const t = forBlock(text);
   if (!t || isCommand(t)) return '';
   const tag = kind === 'clan' && clan.trim() ? `${CHAT_LABEL.clan} ${forBlock(clan)}` : CHAT_LABEL[kind];
   const head = server ? seg('gray', `[${forBlock(server)}] `) : '';
-  return `${seg(c.tag, stamp(time))}${head}${seg(c.tag, `[${tag}]`, true)} ${seg(c.name, forBlock(name) || '?', true)}${seg(c.text, ': ')}${seg(c.text, t.slice(0, 500))}`;
+  return `${seg(c.tag, stamp(time))}${head}${seg(c.tag, `[«${tag}»]`, true)} ${seg(c.name, forBlock(name) || '?', true)}${seg(c.text, ': ')}${seg(c.text, t.slice(0, 500))}`;
 }
 
 /** «[16:07] * Игрок WhiteLegioN подключился к серверу.» in two colours: the nickname and the rest */

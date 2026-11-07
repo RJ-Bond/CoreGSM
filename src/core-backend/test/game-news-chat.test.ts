@@ -6,17 +6,17 @@ import {
 
 describe('game chat for Discord', () => {
   it('writes a line as «[Общий] ник: текст»', () => {
-    assert.equal(formatChatLine('global', 'WhiteLegioN', '', 'Тест'), '**[Глобальный]** **WhiteLegioN**: Тест');
-    assert.equal(formatChatLine('local', 'Vamp', '', 'привет'), '**[Локальный]** **Vamp**: привет');
+    assert.equal(formatChatLine('global', 'WhiteLegioN', '', 'Тест'), '**[«Глобальный»]** **WhiteLegioN**: Тест');
+    assert.equal(formatChatLine('local', 'Vamp', '', 'привет'), '**[«Локальный»]** **Vamp**: привет');
   });
 
   it('puts the clan name into the clan tag', () => {
-    assert.equal(formatChatLine('clan', 'Vamp', 'Ночные', 'сбор'), '**[Клан Ночные]** **Vamp**: сбор');
-    assert.equal(formatChatLine('clan', 'Vamp', '', 'сбор'), '**[Клан]** **Vamp**: сбор');
+    assert.equal(formatChatLine('clan', 'Vamp', 'Ночные', 'сбор'), '**[«Клан Ночные»]** **Vamp**: сбор');
+    assert.equal(formatChatLine('clan', 'Vamp', '', 'сбор'), '**[«Клан»]** **Vamp**: сбор');
   });
 
   it('names the server only when it is asked to', () => {
-    assert.equal(formatChatLine('global', 'A', '', 'x', 'Мой сервер'), '**[Мой сервер]** **[Глобальный]** **A**: x');
+    assert.equal(formatChatLine('global', 'A', '', 'x', 'Мой сервер'), '**[Мой сервер]** **[«Глобальный»]** **A**: x');
   });
 
   it('does not forward commands or empty texts', () => {
@@ -72,9 +72,9 @@ describe('game chat for Discord', () => {
   it('colours a chat line like the game: a blue tag, a yellow nickname', () => {
     const ESC = String.fromCharCode(27);
     const line = ansiChatLine('global', 'WhiteLegioN', '', 'тест', DEFAULT_COLORS.global);
-    assert.equal(line, `${ESC}[1;34m[Глобальный]${ESC}[0m ${ESC}[1;33mWhiteLegioN${ESC}[0m${ESC}[0;34m: ${ESC}[0m${ESC}[0;34mтест${ESC}[0m`);
+    assert.equal(line, `${ESC}[1;34m[«Глобальный»]${ESC}[0m ${ESC}[1;33mWhiteLegioN${ESC}[0m${ESC}[0;34m: ${ESC}[0m${ESC}[0;34mтест${ESC}[0m`);
     assert.equal(ansiChatLine('global', 'A', '', '.register x x', DEFAULT_COLORS.global), '');
-    assert.match(ansiChatLine('clan', 'A', 'Ночные', 'x', DEFAULT_COLORS.clan), /\[Клан Ночные\]/);
+    assert.match(ansiChatLine('clan', 'A', 'Ночные', 'x', DEFAULT_COLORS.clan), /\[«Клан Ночные»\]/);
   });
 
   it('writes a join with a purple nickname in green text', () => {
@@ -95,7 +95,7 @@ describe('game chat for Discord', () => {
 
   it('puts the time in front of a line like the game does, when it is asked to', () => {
     const ESC = String.fromCharCode(27);
-    assert.equal(formatChatLine('global', 'A', '', 'x', '', '16:07'), '[16:07] **[Глобальный]** **A**: x');
+    assert.equal(formatChatLine('global', 'A', '', 'x', '', '16:07'), '[16:07] **[«Глобальный»]** **A**: x');
     assert.equal(formatEventLine('* Игрок {name} вошёл', 'A', '', '16:07'), '[16:07] \\* Игрок **A** вошёл');
     assert.equal(ansiChatLine('clan', 'A', '', 'x', DEFAULT_COLORS.clan, '', '16:07').startsWith(`${ESC}[0;32m[16:07] ${ESC}[0m`), true);
     assert.equal(ansiChatLine('global', 'A', '', 'x', DEFAULT_COLORS.global).includes('['), true);

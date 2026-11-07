@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="fa7b6a3ea6af"
+COREGSM_BUILD="bb0254edad57"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.78"
+COREGSM_VERSION="1.1.79"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -24420,13 +24420,13 @@ const isCommand = (t: string): boolean => t.startsWith('.') || t.startsWith('/')
 /** «[16:07] » in front of a line, like the chat of the game; '' when no time is given */
 const stamp = (time: string): string => (time ? `[${noControl(time).trim()}] ` : '');
 
-/** «[16:07] **[Глобальный]** **WhiteLegioN**: Тест»; '' for what must not be forwarded (a command, an empty text) */
+/** «[16:07] **[«Глобальный»]** **WhiteLegioN**: Тест»; '' for what must not be forwarded (a command, an empty text) */
 export function formatChatLine(kind: 'global' | 'clan' | 'local', name: string, clan: string, text: string, server = '', time = ''): string {
   const t = text.trim();
   if (!t || isCommand(t)) return '';
   const tag = kind === 'clan' && clan.trim() ? `${CHAT_LABEL.clan} ${clan.trim()}` : CHAT_LABEL[kind];
   const head = server ? `**[${escapeDiscord(server)}]** ` : '';
-  return `${stamp(time)}${head}**[${escapeDiscord(tag)}]** **${escapeDiscord(name.trim() || '?')}**: ${escapeDiscord(t).slice(0, 500)}`;
+  return `${stamp(time)}${head}**[«${escapeDiscord(tag)}»]** **${escapeDiscord(name.trim() || '?')}**: ${escapeDiscord(t).slice(0, 500)}`;
 }
 
 /** «[16:07] * Игрок **WhiteLegioN** подключился к серверу.» for a join or a leave in the plain style */
@@ -24440,13 +24440,13 @@ export function formatEventLine(template: string, name: string, server = '', tim
 const ESC = String.fromCharCode(27);
 const seg = (color: AnsiColor, text: string, bold = false): string => (text ? `${ESC}[${bold ? 1 : 0};${ANSI_CODE[color]}m${text}${ESC}[0m` : '');
 
-/** a line of a chat in the colours of the game: «[16:07] [Глобальный] WhiteLegioN: Тест» (the time has the colour of the tag) */
+/** a line of a chat in the colours of the game: «[16:07] [«Глобальный»] WhiteLegioN: Тест» (the time has the colour of the tag) */
 export function ansiChatLine(kind: 'global' | 'clan' | 'local', name: string, clan: string, text: string, c: ChatColors, server = '', time = ''): string {
   const t = forBlock(text);
   if (!t || isCommand(t)) return '';
   const tag = kind === 'clan' && clan.trim() ? `${CHAT_LABEL.clan} ${forBlock(clan)}` : CHAT_LABEL[kind];
   const head = server ? seg('gray', `[${forBlock(server)}] `) : '';
-  return `${seg(c.tag, stamp(time))}${head}${seg(c.tag, `[${tag}]`, true)} ${seg(c.name, forBlock(name) || '?', true)}${seg(c.text, ': ')}${seg(c.text, t.slice(0, 500))}`;
+  return `${seg(c.tag, stamp(time))}${head}${seg(c.tag, `[«${tag}»]`, true)} ${seg(c.name, forBlock(name) || '?', true)}${seg(c.text, ': ')}${seg(c.text, t.slice(0, 500))}`;
 }
 
 /** «[16:07] * Игрок WhiteLegioN подключился к серверу.» in two colours: the nickname and the rest */
@@ -142826,7 +142826,7 @@ const en: Record<keyof typeof ru, string> = {
   'gn.h.fail': 'Failed',
   'gn.reuse': 'Use again',  'adm.s.alerts': 'Alerts',
   'gn.ch.time': 'Show the time',
-  'gn.ch.timeNote': 'The time at the start of every line, like in the game chat: «[16:07] [Global] nick: text». It uses the time zone of the panel.',  'gn.ch.label.global': 'Global',
+  'gn.ch.timeNote': 'The time at the start of every line, like in the game chat: «[16:07] [«Global»] nick: text». It uses the time zone of the panel.',  'gn.ch.label.global': 'Global',
   'gn.ch.label.clan': 'Clan',
   'gn.ch.label.local': 'Local',
   'gn.ch.look': 'How it looks in Discord',
@@ -142908,9 +142908,9 @@ const en: Record<keyof typeof ru, string> = {
   'gn.ch.short.global': 'global',
   'gn.ch.short.clan': 'clan',
   'gn.ch.short.local': 'local',
-  'gn.ch.kindNote.global': 'Messages to all players of the server: «[Global] nick: text».',
-  'gn.ch.kindNote.clan': 'The clan chat with the clan name: «[Clan Name] nick: text». This is private talk of a clan.',
-  'gn.ch.kindNote.local': 'Messages of players near each other: «[Local] nick: text». Very noisy.',
+  'gn.ch.kindNote.global': 'Messages to all players of the server: «[«Global»] nick: text».',
+  'gn.ch.kindNote.clan': 'The clan chat with the clan name: «[«Clan Name»] nick: text». This is private talk of a clan.',
+  'gn.ch.kindNote.local': 'Messages of players near each other: «[«Local»] nick: text». Very noisy.',
   'gn.x.sum': 'Discord: {discord} · tips: {n}',  'gn.ch.title': 'Server chat in Discord',
   'gn.ch.note': 'Messages players write in the game chat arrive in a Discord channel as «[Global] nick: text» (for a clan «[Clan Name] nick: text»). Everything goes to one channel: create a webhook in it (Channel settings → Integrations → Webhooks), paste the address here and choose below which chats are forwarded. Needs plugin 0.8.0.',
   'gn.ch.enabled': 'Forward the game chat to Discord',
@@ -147446,7 +147446,7 @@ const ru = {
   'gn.h.fail': 'Ошибка',
   'gn.reuse': 'Использовать снова',  'adm.s.alerts': 'Оповещения',
   'gn.ch.time': 'Показывать время',
-  'gn.ch.timeNote': 'Время в начале каждой строки, как в игровом чате: «[16:07] [Глобальный] ник: текст». Берётся по часовому поясу панели.',  'gn.ch.label.global': 'Глобальный',
+  'gn.ch.timeNote': 'Время в начале каждой строки, как в игровом чате: «[16:07] [«Глобальный»] ник: текст». Берётся по часовому поясу панели.',  'gn.ch.label.global': 'Глобальный',
   'gn.ch.label.clan': 'Клан',
   'gn.ch.label.local': 'Локальный',
   'gn.ch.look': 'Как это выглядит в Discord',
@@ -147528,9 +147528,9 @@ const ru = {
   'gn.ch.short.global': 'глобальный',
   'gn.ch.short.clan': 'клан',
   'gn.ch.short.local': 'локальный',
-  'gn.ch.kindNote.global': 'Сообщения всем игрокам сервера: «[Глобальный] ник: текст».',
-  'gn.ch.kindNote.clan': 'Чат клана с названием клана: «[Клан Название] ник: текст». Это закрытая переписка клана.',
-  'gn.ch.kindNote.local': 'Сообщения игроков поблизости друг от друга: «[Локальный] ник: текст». Много шума.',
+  'gn.ch.kindNote.global': 'Сообщения всем игрокам сервера: «[«Глобальный»] ник: текст».',
+  'gn.ch.kindNote.clan': 'Чат клана с названием клана: «[«Клан Название»] ник: текст». Это закрытая переписка клана.',
+  'gn.ch.kindNote.local': 'Сообщения игроков поблизости друг от друга: «[«Локальный»] ник: текст». Много шума.',
   'gn.x.sum': 'Discord: {discord} · советов: {n}',  'gn.ch.title': 'Чат сервера в Discord',
   'gn.ch.note': 'Сообщения игроков из игрового чата приходят в канал Discord в виде «[Глобальный] ник: текст» (для клана «[Клан Название] ник: текст»). Всё приходит в один канал: создайте в нём webhook (Настройки канала → Интеграции → Webhooks) и вставьте адрес сюда, а ниже выберите, какие чаты пересылать. Нужен плагин 0.8.0.',
   'gn.ch.enabled': 'Пересылать чат игры в Discord',
@@ -156276,7 +156276,7 @@ function DiscordPreview({ colors, joinText, leaveText, showTime }: { colors: Rec
   const chat = (k: 'global' | 'clan' | 'local', tag: string, text: string) => (
     <p key={k} className="wrap-break-word">
       {showTime && <span style={{ color: ANSI_CSS[colors[k].tag] }}>[{clock}] </span>}
-      <span style={{ color: ANSI_CSS[colors[k].tag], fontWeight: 800 }}>[{tag}]</span>{' '}
+      <span style={{ color: ANSI_CSS[colors[k].tag], fontWeight: 800 }}>[«{tag}»]</span>{' '}
       <span style={{ color: ANSI_CSS[colors[k].name], fontWeight: 800 }}>{nick}</span>
       <span style={{ color: ANSI_CSS[colors[k].text] }}>: {text}</span>
     </p>
