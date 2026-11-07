@@ -5,9 +5,16 @@
 
 export const MAX_VISIBLE = 400;
 
-export interface NewsServerInfo { id: number; name: string; game: string; url: string; hasToken: boolean }
-export interface NewsLogRow { id: number; serverId: number | null; serverName: string; text: string; ok: boolean; error: string; sentBy: string; sentAt: number }
-export interface NewsSendResult { text: string; results: { serverId: number; serverName: string; ok: boolean; error: string }[] }
+export interface NewsServerInfo { id: number; name: string; game: string; hasToken: boolean; lastSeen: number | null; online: boolean; pluginVersion: string }
+export type NewsStatus = 'queued' | 'delivered' | 'expired' | 'failed';
+export interface NewsLogRow { id: number; serverId: number | null; serverName: string; text: string; status: NewsStatus; error: string; sentBy: string; sentAt: number; deliveredAt: number | null }
+export interface NewsSendResult { text: string; results: { serverId: number; serverName: string; queued: boolean; online: boolean; error: string }[] }
+
+/** the lines to paste into BepInEx/config/com.rjbond.coregsm.cfg of the game server */
+export function pluginConfig(panelUrl: string, token: string): string {
+  const selfSigned = /^https:\/\/(\d{1,3}\.){3}\d{1,3}(:|\/|$)/.test(panelUrl);
+  return ['[Panel]', `Url = ${panelUrl}`, `Token = ${token}`, `AllowSelfSigned = ${selfSigned}`].join('\n');
+}
 
 export interface Swatch { id: string; hex: string }
 

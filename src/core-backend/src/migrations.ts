@@ -214,6 +214,22 @@ CREATE TABLE IF NOT EXISTS game_news_log (
   sent_at INTEGER NOT NULL
 );`),
   },
+  {
+    version: 17,
+    name: 'game_news.pull',
+    // the plugin polls the panel (no open port on the game server): token_hash = SHA-256 of the token the panel issued,
+    // last_seen/plugin_version = the last poll; the log doubles as the queue: status queued | delivered | expired | failed
+    up: (db) => {
+      addColumn(db, 'game_news_targets', 'token_hash', "TEXT NOT NULL DEFAULT ''");
+      addColumn(db, 'game_news_targets', 'last_seen', 'INTEGER NOT NULL DEFAULT 0');
+      addColumn(db, 'game_news_targets', 'plugin_version', "TEXT NOT NULL DEFAULT ''");
+      addColumn(db, 'game_news_log', 'status', "TEXT NOT NULL DEFAULT 'failed'");
+      addColumn(db, 'game_news_log', 'delivered_at', 'INTEGER');
+      db.exec("UPDATE game_news_log SET status = CASE WHEN ok = 1 THEN 'delivered' ELSE 'failed' END");
+      db.exec('CREATE INDEX IF NOT EXISTS game_news_log_queue ON game_news_log (server_id, status)');
+      db.exec('CREATE UNIQUE INDEX IF NOT EXISTS game_news_targets_hash ON game_news_targets (token_hash) WHERE token_hash <> \'\'');
+    },
+  },
 ];
 
 export const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;

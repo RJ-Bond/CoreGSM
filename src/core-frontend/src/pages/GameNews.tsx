@@ -3,16 +3,32 @@ import { api } from '../api';
 import { confirmDialog } from '../confirm';
 import { t, useI18n } from '../i18n';
 import {
-  MAX_VISIBLE, SWATCHES, TEMPLATES, colorOpen, isHex, parseNews, unbalanced, validateNews, visibleText, wrapSelection,
-  type NewsLogRow, type NewsSendResult, type NewsServerInfo,
+  MAX_VISIBLE, SWATCHES, TEMPLATES, colorOpen, isHex, parseNews, pluginConfig, unbalanced, validateNews, visibleText, wrapSelection,
+  type NewsLogRow, type NewsSendResult, type NewsServerInfo, type NewsStatus,
 } from '../gameNews';
 import { AdminPage, ErrorLine, Field, IconNews, IconSettings, LoadError, Modal, PageHead, Spinner, errText, toast, usePoll } from '../ui';
 
 interface NewsState { servers: NewsServerInfo[]; log: NewsLogRow[] }
 
 const swatchName = (id: string) => t(`gn.c.${id}` as 'gn.c.info');
+const STATUS: Record<NewsStatus, { text: 'gn.h.queued' | 'gn.h.ok' | 'gn.h.expired' | 'gn.h.fail'; cls: string }> = {
+  queued: { text: 'gn.h.queued', cls: 'pill pill-mute' },
+  delivered: { text: 'gn.h.ok', cls: 'pill pill-ok' },
+  expired: { text: 'gn.h.expired', cls: 'pill pill-warn' },
+  failed: { text: 'gn.h.fail', cls: 'pill pill-warn' },
+};
 
-/** «Игровые новости»: a message for the in-game chat of a server (the CoreGSM game plugin shows it), with a live preview. */
+function Styled({ text }: { text: string }) {
+  return (
+    <>
+      {parseNews(text).map((s, i) => (
+        <span key={i} style={{ color: s.color ?? undefined, fontWeight: s.bold ? 800 : undefined, fontStyle: s.italic ? 'italic' : undefined }}>{s.text}</span>
+      ))}
+    </>
+  );
+}
+
+/** «Новости в игру»: a message for the in-game chat of a server (the CoreGSM game plugin picks it up), with a live preview. */
 export default function GameNewsPage() {
   useI18n();
   const [data, setData] = useState<NewsState | null>(null);
@@ -21,7 +37,7 @@ export default function GameNewsPage() {
   const [picked, setPicked] = useState<number[]>([]);
   const [busy, setBusy] = useState(false);
   const [custom, setCustom] = useState('#FF8A00');
-  const [settingsFor, setSettingsFor] = useState<NewsServerInfo | null>(null);
+  const [settingsFor, setSettingsFor] = useState<number | null>(null);
   const [lastResult, setLastResult] = useState<NewsSendResult | null>(null);
   const area = useRef<HTMLTextAreaElement>(null);
 
@@ -29,12 +45,13 @@ export default function GameNewsPage() {
     api<NewsState>('/game-news')
       .then((d) => { setData(d); setError(''); })
       .catch((e: Error) => setError(e.message));
-  usePoll(load, 30_000);
+  usePoll(load, 10_000);
 
   const segs = useMemo(() => parseNews(text), [text]);
   const visible = visibleText(text).trim().length;
   const problem = validateNews(text);
-  const ready = (data?.servers ?? []).filter((s) => s.url && s.hasToken);
+  const ready = (data?.servers ?? []).filter((s) => s.hasToken);
+  const settingsServer = data?.servers.find((s) => s.id === settingsFor) ?? null;
 
   const edit = (fn: (start: number, end: number) => { text: string; start: number; end: number }) => {
     const el = area.current;
@@ -63,8 +80,8 @@ export default function GameNewsPage() {
     try {
       const r = await api<NewsSendResult>('/game-news/send', 'POST', { serverIds: picked, text });
       setLastResult(r);
-      const bad = r.results.filter((x) => !x.ok).length;
-      toast(bad ? t('gn.t.partial', { ok: r.results.length - bad, total: r.results.length }) : t('gn.t.sent'), bad ? 'err' : undefined);
+      const bad = r.results.filter((x) => !x.queued).length;
+      toast(bad ? t('gn.t.partial', { ok: r.results.length - bad, total: r.results.length }) : t('gn.t.queued'), bad ? 'err' : undefined);
       void load();
     } catch (err) {
       toast(errText(err), 'err');
@@ -140,36 +157,27 @@ export default function GameNewsPage() {
               <h3 className="font-extrabold">{t('gn.preview')}</h3>
               <div className="rounded-xl p-4 font-semibold" style={{ background: '#15121c', color: '#e8e3f0' }} aria-live="polite">
                 <div className="mb-1 text-xs font-bold uppercase tracking-wide" style={{ color: '#8f86a3' }}>{t('gn.chatLabel')}</div>
-                {segs.length ? (
-                  <p className="wrap-break-word">
-                    {segs.map((s, i) => (
-                      <span key={i} style={{ color: s.color ?? undefined, fontWeight: s.bold ? 800 : undefined, fontStyle: s.italic ? 'italic' : undefined }}>{s.text}</span>
-                    ))}
-                  </p>
-                ) : <p style={{ color: '#8f86a3' }}>{t('gn.previewEmpty')}</p>}
+                {segs.length ? <p className="wrap-break-word"><Styled text={text} /></p> : <p style={{ color: '#8f86a3' }}>{t('gn.previewEmpty')}</p>}
               </div>
               <p className="text-sm font-semibold text-mute">{t('gn.previewNote')}</p>
             </div>
 
             <div className="panel space-y-3 p-5">
-              <div className="flex items-center justify-between gap-2">
-                <h3 className="font-extrabold">{t('gn.servers')}</h3>
-              </div>
+              <h3 className="font-extrabold">{t('gn.servers')}</h3>
               {data.servers.length === 0 && <p className="text-sm font-semibold text-mute">{t('gn.noServers')}</p>}
               <ul className="divide-y divide-line">
-                {data.servers.map((s) => {
-                  const okTarget = !!(s.url && s.hasToken);
-                  return (
-                    <li key={s.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2.5">
-                      <label className="flex min-w-0 flex-1 basis-48 items-center gap-2.5 font-bold">
-                        <input type="checkbox" disabled={!okTarget} checked={picked.includes(s.id)} onChange={() => toggle(s.id)} />
-                        <span className="min-w-0 wrap-break-word">{s.name}</span>
-                      </label>
-                      <span className={okTarget ? 'pill pill-ok' : 'pill pill-mute'}>{okTarget ? t('gn.plugin.on') : t('gn.plugin.off')}</span>
-                      <button type="button" className="row-act" onClick={() => setSettingsFor(s)} aria-label={t('gn.plugin.settings', { name: s.name })}><IconSettings size={16} /></button>
-                    </li>
-                  );
-                })}
+                {data.servers.map((s) => (
+                  <li key={s.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2.5">
+                    <label className="flex min-w-0 flex-1 basis-48 items-center gap-2.5 font-bold">
+                      <input type="checkbox" disabled={!s.hasToken} checked={picked.includes(s.id)} onChange={() => toggle(s.id)} />
+                      <span className="min-w-0 wrap-break-word">{s.name}</span>
+                    </label>
+                    <span className={!s.hasToken ? 'pill pill-mute' : s.online ? 'pill pill-ok' : 'pill pill-warn'}>
+                      {!s.hasToken ? t('gn.plugin.off') : s.online ? t('gn.plugin.online') : t('gn.plugin.silent')}
+                    </span>
+                    <button type="button" className="row-act" onClick={() => setSettingsFor(s.id)} aria-label={t('gn.plugin.settings', { name: s.name })}><IconSettings size={16} /></button>
+                  </li>
+                ))}
               </ul>
               {data.servers.length > 0 && ready.length === 0 && <p className="text-sm font-semibold text-mute">{t('gn.noPlugin')}</p>}
               {ready.length > 1 && (
@@ -183,7 +191,9 @@ export default function GameNewsPage() {
               {lastResult && (
                 <ul className="space-y-1 text-sm font-semibold">
                   {lastResult.results.map((r) => (
-                    <li key={r.serverId} className={r.ok ? 'text-ok' : 'text-danger'}>{r.ok ? '✓' : '✕'} {r.serverName}{r.ok ? '' : `: ${r.error}`}</li>
+                    <li key={r.serverId} className={r.queued ? (r.online ? 'text-ok' : undefined) : 'text-danger'}>
+                      {r.queued ? '✓' : '✕'} {r.serverName}: {r.queued ? (r.online ? t('gn.r.queued') : t('gn.r.queuedSilent')) : r.error}
+                    </li>
                   ))}
                 </ul>
               )}
@@ -201,16 +211,12 @@ export default function GameNewsPage() {
               <li key={r.id} className="flex flex-wrap items-start gap-x-4 gap-y-1 px-5 py-3">
                 <div className="min-w-0 flex-1 basis-60">
                   <div className="flex flex-wrap items-center gap-2 text-sm font-bold">
-                    <span className={r.ok ? 'pill pill-ok' : 'pill pill-warn'}>{r.ok ? t('gn.h.ok') : t('gn.h.fail')}</span>
+                    <span className={STATUS[r.status].cls}>{t(STATUS[r.status].text)}</span>
                     <span>{r.serverName}</span>
                     <span className="font-semibold text-mute">{new Date(r.sentAt).toLocaleString()} · {r.sentBy || '—'}</span>
                   </div>
-                  <p className="mt-1 wrap-break-word text-sm">
-                    {parseNews(r.text).map((s, i) => (
-                      <span key={i} style={{ color: s.color ?? undefined, fontWeight: s.bold ? 800 : undefined, fontStyle: s.italic ? 'italic' : undefined }}>{s.text}</span>
-                    ))}
-                  </p>
-                  {!r.ok && r.error && <p className="text-sm font-semibold text-danger">{r.error}</p>}
+                  <p className="mt-1 wrap-break-word text-sm"><Styled text={r.text} /></p>
+                  {(r.status === 'failed' || r.status === 'expired') && r.error && <p className="text-sm font-semibold text-danger">{r.error}</p>}
                 </div>
                 <button type="button" className="btn btn-soft btn-sm" onClick={() => setText(r.text)}>{t('gn.reuse')}</button>
               </li>
@@ -219,69 +225,71 @@ export default function GameNewsPage() {
         </section>
       )}
 
-      {settingsFor && <PluginModal server={settingsFor} onClose={() => setSettingsFor(null)} onSaved={() => { setSettingsFor(null); void load(); }} />}
+      {settingsServer && <PluginModal server={settingsServer} onClose={() => setSettingsFor(null)} onChanged={() => void load()} />}
     </AdminPage>
   );
 }
 
-function PluginModal({ server, onClose, onSaved }: { server: NewsServerInfo; onClose: () => void; onSaved: () => void }) {
+/** the token of a server's plugin: created here, shown once, pasted into the plugin config */
+function PluginModal({ server, onClose, onChanged }: { server: NewsServerInfo; onClose: () => void; onChanged: () => void }) {
   useI18n();
-  const [url, setUrl] = useState(server.url || 'http://');
   const [token, setToken] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const [check, setCheck] = useState<{ ok: boolean; error: string } | null>(null);
+  const config = token ? pluginConfig(window.location.origin, token) : '';
 
-  const save = async (): Promise<boolean> => {
+  const create = async () => {
+    if (server.hasToken && !(await confirmDialog({ title: t('gn.plugin.renewTitle'), text: t('gn.plugin.renewText'), confirmLabel: t('gn.plugin.renew'), danger: true }))) return;
     setBusy(true);
     setError('');
     try {
-      await api(`/game-news/targets/${server.id}`, 'PUT', token ? { url, token } : { url });
-      return true;
+      const r = await api<{ token: string }>(`/game-news/targets/${server.id}/token`, 'POST');
+      setToken(r.token);
+      onChanged();
     } catch (e) {
       setError(errText(e));
-      return false;
     } finally {
       setBusy(false);
     }
   };
-  const submit = async (e: FormEvent) => { e.preventDefault(); if (await save()) { toast(t('gn.t.saved')); onSaved(); } };
-  const test = async () => {
-    if (!(await save())) return;
-    setBusy(true);
-    try { setCheck(await api<{ ok: boolean; error: string }>(`/game-news/check/${server.id}`, 'POST')); }
-    catch (e) { setCheck({ ok: false, error: errText(e) }); }
-    finally { setBusy(false); }
-  };
   const remove = async () => {
     if (!(await confirmDialog({ title: t('gn.plugin.removeTitle', { name: server.name }), danger: true, confirmLabel: t('gn.plugin.remove') }))) return;
-    try { await api(`/game-news/targets/${server.id}`, 'DELETE'); onSaved(); } catch (e) { setError(errText(e)); }
+    try { await api(`/game-news/targets/${server.id}`, 'DELETE'); onChanged(); onClose(); } catch (e) { setError(errText(e)); }
+  };
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(config); toast(t('gn.plugin.copied')); } catch { toast(t('gn.plugin.copyFail'), 'err'); }
   };
 
   return (
     <Modal title={t('gn.plugin.title', { name: server.name })} onClose={onClose}>
-      <form className="space-y-4" onSubmit={(e) => void submit(e)} noValidate>
+      <div className="space-y-4">
         <p className="text-sm font-semibold text-mute">{t('gn.plugin.help')}</p>
-        <Field label={t('gn.plugin.url')}>
-          <input className="input font-mono text-sm" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="http://192.168.88.138:25590" />
-        </Field>
-        <Field label={t('gn.plugin.token')}>
-          <input className="input font-mono text-sm" type="password" autoComplete="off" value={token} onChange={(e) => setToken(e.target.value)}
-            placeholder={server.hasToken ? t('gn.plugin.tokenKept') : t('gn.plugin.tokenEx')} />
-        </Field>
-        <ErrorLine text={error} />
-        {check && <p className={`text-sm font-semibold ${check.ok ? 'text-ok' : 'text-danger'}`}>{check.ok ? t('gn.plugin.checkOk') : check.error}</p>}
-        <div className="flex flex-wrap justify-between gap-2">
-          <div className="flex gap-2">
-            {server.url && <button type="button" className="btn btn-ghost" onClick={() => void remove()}>{t('gn.plugin.remove')}</button>}
-            <button type="button" className="btn btn-soft" disabled={busy} onClick={() => void test()}>{t('gn.plugin.check')}</button>
+        <p className="text-sm font-bold">
+          {!server.hasToken
+            ? t('gn.plugin.stateNone')
+            : server.online
+              ? t('gn.plugin.stateOnline', { v: server.pluginVersion || '?' })
+              : server.lastSeen
+                ? t('gn.plugin.stateSilent', { time: new Date(server.lastSeen).toLocaleString() })
+                : t('gn.plugin.stateNever')}
+        </p>
+        {token && (
+          <div className="space-y-2">
+            <p className="text-sm font-bold">{t('gn.plugin.once')}</p>
+            <pre className="panel overflow-x-auto p-3 font-mono text-sm" data-testid="plugin-config">{config}</pre>
+            <button type="button" className="btn btn-soft btn-sm" onClick={() => void copy()}>{t('gn.plugin.copy')}</button>
+            <p className="text-sm font-semibold text-mute">{t('gn.plugin.where')}</p>
           </div>
+        )}
+        <ErrorLine text={error} />
+        <div className="flex flex-wrap justify-between gap-2">
+          <div>{server.hasToken && <button type="button" className="btn btn-ghost" onClick={() => void remove()}>{t('gn.plugin.remove')}</button>}</div>
           <div className="flex gap-2">
-            <button type="button" className="btn btn-ghost" onClick={onClose}>{t('common.cancel')}</button>
-            <button type="submit" className="btn" disabled={busy}>{busy && <Spinner />}{t('common.save')}</button>
+            <button type="button" className="btn btn-ghost" onClick={onClose}>{t('common.close')}</button>
+            <button type="button" className="btn" disabled={busy} onClick={() => void create()}>{busy && <Spinner />}{server.hasToken ? t('gn.plugin.renew') : t('gn.plugin.create')}</button>
           </div>
         </div>
-      </form>
+      </div>
     </Modal>
   );
 }

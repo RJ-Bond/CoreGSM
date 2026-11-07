@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { checkNews, cleanNews, MAX_VISIBLE, normalizePluginUrl, visibleText } from '../src/gamenews/gameNewsLogic.ts';
+import { checkNews, cleanNews, MAX_VISIBLE, visibleText } from '../src/gamenews/gameNewsLogic.ts';
 
 describe('game news text', () => {
   it('keeps colour, bold and italic tags', () => {
@@ -31,18 +31,5 @@ describe('game news text', () => {
     assert.equal(checkNews('   ').ok, false);
     assert.equal(checkNews('<b></b>').ok, false);
     assert.equal(checkNews(42).ok, false);
-  });
-});
-
-describe('plugin address', () => {
-  it('accepts http(s) host:port and drops the path', () => {
-    assert.equal(normalizePluginUrl('http://192.168.88.138:25590/'), 'http://192.168.88.138:25590');
-    assert.equal(normalizePluginUrl('https://game.example.com/x?y=1'), 'https://game.example.com');
-  });
-
-  it('refuses other schemes, logins and garbage', () => {
-    assert.equal(normalizePluginUrl('ftp://host'), '');
-    assert.equal(normalizePluginUrl('http://user:pw@host:1'), '');
-    assert.equal(normalizePluginUrl('not a url'), '');
   });
 });

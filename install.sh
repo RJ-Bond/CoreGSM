@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="7d8f404107cd"
+COREGSM_BUILD="fd76ddce8214"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.60"
+COREGSM_VERSION="1.1.61"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -23835,80 +23835,84 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-backend/src/gamenews/gameNews.ts" << '__COREGSM_EOF__'
 /**
  * Game news: the panel writes a message and the CoreGSM game plugin (BepInEx, on the game server) shows it in the
- * in-game chat. Per server we keep the plugin address and its token; the token never leaves the backend.
- * The plugin speaks HTTP:  POST <url>/api/news  {"text": "..."}  with  Authorization: Bearer <token>,  GET <url>/health.
+ * in-game chat. Nothing listens on the game server: the plugin polls the panel.
+ *
+ *  - the panel issues a token per server (only its SHA-256 is kept) that the administrator pastes into the plugin config;
+ *  - «send» puts the message into the queue (game_news_log, status 'queued');
+ *  - the plugin calls  GET /api/game-news/pull  with  Authorization: Bearer <token>  every few seconds, gets the queued
+ *    messages and they become 'delivered' (at most once: a crash of the plugin never repeats a message);
+ *  - a message nobody picked up within QUEUE_TTL_MS becomes 'expired' (an old «restart in 5 minutes» must not arrive late).
  */
+import crypto from 'node:crypto';
 import type { Express, Request, RequestHandler } from 'express';
 import { z } from 'zod';
 import { db } from '../db.js';
-import { checkNews, normalizePluginUrl } from './gameNewsLogic.js';
+import { checkNews } from './gameNewsLogic.js';
 
-interface TargetRow { server_id: number; url: string; token: string }
-interface LogRow { id: number; server_id: number | null; server_name: string; text: string; ok: number; error: string; sent_by: string; sent_at: number }
-
-const SEND_TIMEOUT_MS = 8000;
+export const QUEUE_TTL_MS = 5 * 60_000;
+/** the plugin counts as «online» when it polled within this time */
+export const ONLINE_MS = 30_000;
+const PULL_MIN_GAP_MS = 800;
+const PULL_BATCH = 5;
 const MIN_GAP_MS = 2000;
-let lastSend = 0;
 
+interface TargetRow { server_id: number; token_hash: string; last_seen: number; plugin_version: string }
+interface LogRow { id: number; server_id: number | null; server_name: string; text: string; status: string; error: string; sent_by: string; sent_at: number; delivered_at: number | null }
+
+let lastSend = 0;
+const lastPull = new Map<number, number>();
+
+const sha256 = (s: string) => crypto.createHash('sha256').update(s).digest('hex');
 const actor = (req: Request) => (req as Request & { user?: { username?: string } }).user?.username ?? '';
 const serverLabel = (id: number) =>
   (db.prepare("SELECT COALESCE(NULLIF(name, ''), host || ':' || port) AS n FROM servers WHERE id = ?").get(id) as { n: string } | undefined)?.n ?? `#${id}`;
 
-const targetSchema = z.object({
-  url: z.string().trim().max(300),
-  // undefined = keep the saved token, '' = clear it
-  token: z.string().trim().max(200).optional(),
-});
 const sendSchema = z.object({
   serverIds: z.array(z.number().int().positive()).min(1).max(50),
   text: z.string(),
 });
 
-async function callPlugin(t: TargetRow, path: string, init: { method: 'GET' | 'POST'; body?: string }): Promise<{ ok: boolean; status: number; error: string }> {
-  try {
-    const res = await fetch(`${t.url}${path}`, {
-      method: init.method,
-      headers: { Authorization: `Bearer ${t.token}`, 'Content-Type': 'application/json' },
-      body: init.body,
-      signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
-      redirect: 'error',
-    });
-    if (res.ok) return { ok: true, status: res.status, error: '' };
-    const map: Record<number, string> = { 401: 'Плагин не принял токен', 404: 'Плагин не найден по этому адресу', 413: 'Плагин отклонил слишком длинный текст', 429: 'Слишком часто: подождите пару секунд' };
-    return { ok: false, status: res.status, error: map[res.status] ?? `Плагин ответил кодом ${res.status}` };
-  } catch (e) {
-    const name = (e as Error).name;
-    return { ok: false, status: 0, error: name === 'TimeoutError' ? 'Плагин не ответил за 8 секунд' : 'Не удалось подключиться к плагину (адрес, порт, фаервол)' };
-  }
+/** queued messages that waited too long stop being valid */
+function expireOld(now = Date.now()): void {
+  db.prepare("UPDATE game_news_log SET status = 'expired', error = 'Плагин не забрал сообщение за 5 минут' WHERE status = 'queued' AND sent_at < ?").run(now - QUEUE_TTL_MS);
 }
 
 export function registerGameNews({ app, admin }: { app: Express; admin: RequestHandler }): void {
-  const serialize = () => {
-    const servers = db.prepare("SELECT id, COALESCE(NULLIF(name, ''), host || ':' || port) AS name, game FROM servers ORDER BY id").all() as { id: number; name: string; game: string }[];
+  const servers = () => {
+    const rows = db.prepare("SELECT id, COALESCE(NULLIF(name, ''), host || ':' || port) AS name, game FROM servers ORDER BY id").all() as { id: number; name: string; game: string }[];
     const targets = new Map((db.prepare('SELECT * FROM game_news_targets').all() as TargetRow[]).map((t) => [t.server_id, t]));
-    return servers.map((s) => ({ id: s.id, name: s.name, game: s.game, url: targets.get(s.id)?.url ?? '', hasToken: !!targets.get(s.id)?.token }));
+    const now = Date.now();
+    return rows.map((s) => {
+      const t = targets.get(s.id);
+      return {
+        id: s.id, name: s.name, game: s.game,
+        hasToken: !!t?.token_hash,
+        lastSeen: t?.last_seen || null,
+        online: !!t && t.last_seen > 0 && now - t.last_seen < ONLINE_MS,
+        pluginVersion: t?.plugin_version ?? '',
+      };
+    });
   };
 
   app.get('/api/game-news', admin, (_req, res) => {
+    expireOld();
     const log = (db.prepare('SELECT * FROM game_news_log ORDER BY id DESC LIMIT 50').all() as LogRow[]).map((r) => ({
-      id: r.id, serverId: r.server_id, serverName: r.server_name, text: r.text, ok: !!r.ok, error: r.error, sentBy: r.sent_by, sentAt: r.sent_at,
+      id: r.id, serverId: r.server_id, serverName: r.server_name, text: r.text, status: r.status, error: r.error,
+      sentBy: r.sent_by, sentAt: r.sent_at, deliveredAt: r.delivered_at,
     }));
-    res.json({ servers: serialize(), log });
+    res.json({ servers: servers(), log });
   });
 
-  app.put('/api/game-news/targets/:id', admin, (req, res) => {
+  // a new token for the server's plugin: shown once, only the hash is stored (the old token stops working)
+  app.post('/api/game-news/targets/:id/token', admin, (req, res) => {
     const id = Number(req.params.id);
     if (!Number.isInteger(id) || !db.prepare('SELECT 1 FROM servers WHERE id = ?').get(id)) return res.status(404).json({ error: 'Сервер не найден' });
-    const b = targetSchema.safeParse(req.body);
-    if (!b.success) return res.status(400).json({ error: 'Проверьте поля' });
-    const url = normalizePluginUrl(b.data.url);
-    if (!url) return res.status(400).json({ error: 'Адрес плагина: http://адрес:порт (без логина и пути)' });
-    const old = db.prepare('SELECT token FROM game_news_targets WHERE server_id = ?').get(id) as { token: string } | undefined;
-    const token = b.data.token === undefined ? old?.token ?? '' : b.data.token;
+    const token = crypto.randomBytes(24).toString('hex');
     db.prepare(
-      'INSERT INTO game_news_targets (server_id, url, token) VALUES (?, ?, ?) ON CONFLICT(server_id) DO UPDATE SET url = excluded.url, token = excluded.token',
-    ).run(id, url, token);
-    res.json({ ok: true });
+      `INSERT INTO game_news_targets (server_id, token_hash, last_seen, plugin_version) VALUES (?, ?, 0, '')
+       ON CONFLICT(server_id) DO UPDATE SET token_hash = excluded.token_hash, last_seen = 0, plugin_version = ''`,
+    ).run(id, sha256(token));
+    res.json({ token });
   });
 
   app.delete('/api/game-news/targets/:id', admin, (req, res) => {
@@ -23916,15 +23920,7 @@ export function registerGameNews({ app, admin }: { app: Express; admin: RequestH
     res.json({ ok: true });
   });
 
-  // «Проверить связь»: the plugin's /health
-  app.post('/api/game-news/check/:id', admin, async (req, res) => {
-    const t = db.prepare('SELECT * FROM game_news_targets WHERE server_id = ?').get(Number(req.params.id)) as TargetRow | undefined;
-    if (!t || !t.url) return res.status(400).json({ error: 'Сначала укажите адрес плагина' });
-    const r = await callPlugin(t, '/health', { method: 'GET' });
-    res.json({ ok: r.ok, error: r.error });
-  });
-
-  app.post('/api/game-news/send', admin, async (req, res) => {
+  app.post('/api/game-news/send', admin, (req, res) => {
     const b = sendSchema.safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Выберите сервер и введите текст' });
     const chk = checkNews(b.data.text);
@@ -23933,19 +23929,47 @@ export function registerGameNews({ app, admin }: { app: Express; admin: RequestH
     if (now - lastSend < MIN_GAP_MS) return res.status(429).json({ error: 'Слишком часто: подождите пару секунд' });
     lastSend = now;
 
-    const results: { serverId: number; serverName: string; ok: boolean; error: string }[] = [];
-    for (const id of [...new Set(b.data.serverIds)]) {
-      const name = serverLabel(id);
-      const t = db.prepare('SELECT * FROM game_news_targets WHERE server_id = ?').get(id) as TargetRow | undefined;
-      let r: { ok: boolean; error: string };
-      if (!t || !t.url || !t.token) r = { ok: false, error: 'Для сервера не настроен плагин (адрес и токен)' };
-      else r = await callPlugin(t, '/api/news', { method: 'POST', body: JSON.stringify({ text: chk.text }) });
-      db.prepare('INSERT INTO game_news_log (server_id, server_name, text, ok, error, sent_by, sent_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
-        .run(id, name, chk.text, r.ok ? 1 : 0, r.error, actor(req), Date.now());
-      results.push({ serverId: id, serverName: name, ok: r.ok, error: r.error });
-    }
-    db.prepare('DELETE FROM game_news_log WHERE id NOT IN (SELECT id FROM game_news_log ORDER BY id DESC LIMIT 500)').run();
+    const insert = db.prepare('INSERT INTO game_news_log (server_id, server_name, text, ok, status, error, sent_by, sent_at) VALUES (?, ?, ?, 0, ?, ?, ?, ?)');
+    const results: { serverId: number; serverName: string; queued: boolean; online: boolean; error: string }[] = [];
+    db.transaction(() => {
+      for (const id of [...new Set(b.data.serverIds)]) {
+        const name = serverLabel(id);
+        const t = db.prepare('SELECT * FROM game_news_targets WHERE server_id = ?').get(id) as TargetRow | undefined;
+        if (!t?.token_hash) {
+          const error = 'Для сервера не создан токен плагина';
+          insert.run(id, name, chk.text, 'failed', error, actor(req), now);
+          results.push({ serverId: id, serverName: name, queued: false, online: false, error });
+          continue;
+        }
+        insert.run(id, name, chk.text, 'queued', '', actor(req), now);
+        results.push({ serverId: id, serverName: name, queued: true, online: t.last_seen > 0 && now - t.last_seen < ONLINE_MS, error: '' });
+      }
+      db.prepare('DELETE FROM game_news_log WHERE id NOT IN (SELECT id FROM game_news_log ORDER BY id DESC LIMIT 500)').run();
+    })();
     res.json({ text: chk.text, results });
+  });
+
+  // ---- for the game plugin: no session, a Bearer token of the server ----
+  app.get('/api/game-news/pull', (req, res) => {
+    const m = /^Bearer ([0-9a-f]{20,100})$/i.exec(String(req.headers.authorization ?? ''));
+    if (!m) return res.status(401).json({ error: 'unauthorized' });
+    const t = db.prepare('SELECT * FROM game_news_targets WHERE token_hash = ?').get(sha256(m[1])) as TargetRow | undefined;
+    if (!t) return res.status(401).json({ error: 'unauthorized' });
+
+    const now = Date.now();
+    if (now - (lastPull.get(t.server_id) ?? 0) < PULL_MIN_GAP_MS) return res.status(429).json({ error: 'too many requests' });
+    lastPull.set(t.server_id, now);
+
+    const version = String(req.headers['x-coregsm-version'] ?? '').replace(/[^0-9A-Za-z.+-]/g, '').slice(0, 20);
+    db.prepare('UPDATE game_news_targets SET last_seen = ?, plugin_version = ? WHERE server_id = ?').run(now, version, t.server_id);
+
+    expireOld(now);
+    const rows = db.prepare("SELECT id, text FROM game_news_log WHERE server_id = ? AND status = 'queued' ORDER BY id LIMIT ?").all(t.server_id, PULL_BATCH) as { id: number; text: string }[];
+    if (rows.length) {
+      const done = db.prepare("UPDATE game_news_log SET status = 'delivered', ok = 1, delivered_at = ? WHERE id = ? AND status = 'queued'");
+      db.transaction(() => { for (const r of rows) done.run(now, r.id); })();
+    }
+    res.json({ messages: rows.map((r) => ({ id: r.id, text: r.text })) });
   });
 }
 __COREGSM_EOF__
@@ -24011,18 +24035,6 @@ export function checkNews(input: unknown): NewsCheck {
   if (!vis) return { ok: false, text: '', error: 'Введите текст' };
   if (vis.length > MAX_VISIBLE) return { ok: false, text: '', error: `Слишком длинное сообщение: ${vis.length} из ${MAX_VISIBLE} знаков` };
   return { ok: true, text };
-}
-
-/** a plugin address: http(s) only, no login in it, no trailing slash; '' when it is not usable */
-export function normalizePluginUrl(input: string): string {
-  try {
-    const u = new URL(input.trim());
-    if (u.protocol !== 'http:' && u.protocol !== 'https:') return '';
-    if (u.username || u.password) return '';
-    return `${u.protocol}//${u.host}`;
-  } catch {
-    return '';
-  }
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
@@ -26976,6 +26988,22 @@ CREATE TABLE IF NOT EXISTS game_news_log (
   sent_by TEXT NOT NULL DEFAULT '',
   sent_at INTEGER NOT NULL
 );`),
+  },
+  {
+    version: 17,
+    name: 'game_news.pull',
+    // the plugin polls the panel (no open port on the game server): token_hash = SHA-256 of the token the panel issued,
+    // last_seen/plugin_version = the last poll; the log doubles as the queue: status queued | delivered | expired | failed
+    up: (db) => {
+      addColumn(db, 'game_news_targets', 'token_hash', "TEXT NOT NULL DEFAULT ''");
+      addColumn(db, 'game_news_targets', 'last_seen', 'INTEGER NOT NULL DEFAULT 0');
+      addColumn(db, 'game_news_targets', 'plugin_version', "TEXT NOT NULL DEFAULT ''");
+      addColumn(db, 'game_news_log', 'status', "TEXT NOT NULL DEFAULT 'failed'");
+      addColumn(db, 'game_news_log', 'delivered_at', 'INTEGER');
+      db.exec("UPDATE game_news_log SET status = CASE WHEN ok = 1 THEN 'delivered' ELSE 'failed' END");
+      db.exec('CREATE INDEX IF NOT EXISTS game_news_log_queue ON game_news_log (server_id, status)');
+      db.exec('CREATE UNIQUE INDEX IF NOT EXISTS game_news_targets_hash ON game_news_targets (token_hash) WHERE token_hash <> \'\'');
+    },
   },
 ];
 
@@ -137422,9 +137450,16 @@ __COREGSM_EOF__
 
 export const MAX_VISIBLE = 400;
 
-export interface NewsServerInfo { id: number; name: string; game: string; url: string; hasToken: boolean }
-export interface NewsLogRow { id: number; serverId: number | null; serverName: string; text: string; ok: boolean; error: string; sentBy: string; sentAt: number }
-export interface NewsSendResult { text: string; results: { serverId: number; serverName: string; ok: boolean; error: string }[] }
+export interface NewsServerInfo { id: number; name: string; game: string; hasToken: boolean; lastSeen: number | null; online: boolean; pluginVersion: string }
+export type NewsStatus = 'queued' | 'delivered' | 'expired' | 'failed';
+export interface NewsLogRow { id: number; serverId: number | null; serverName: string; text: string; status: NewsStatus; error: string; sentBy: string; sentAt: number; deliveredAt: number | null }
+export interface NewsSendResult { text: string; results: { serverId: number; serverName: string; queued: boolean; online: boolean; error: string }[] }
+
+/** the lines to paste into BepInEx/config/com.rjbond.coregsm.cfg of the game server */
+export function pluginConfig(panelUrl: string, token: string): string {
+  const selfSigned = /^https:\/\/(\d{1,3}\.){3}\d{1,3}(:|\/|$)/.test(panelUrl);
+  return ['[Panel]', `Url = ${panelUrl}`, `Token = ${token}`, `AllowSelfSigned = ${selfSigned}`].join('\n');
+}
 
 export interface Swatch { id: string; hex: string }
 
@@ -140796,9 +140831,9 @@ const en: Record<keyof typeof ru, string> = {
   'adm.s.gamenews': 'In-game news',
   'adm.d.gamenews': 'A message to the in-game chat of a server through the CoreGSM plugin: with colours and a preview.',
   'gn.title': 'In-game news',
-  'gn.subtitle': 'Write a message and send it to the game chat: the CoreGSM plugin on the game server shows it.',
+  'gn.subtitle': 'Write a message: the CoreGSM plugin on the game server picks it up and shows it in the game chat.',
   'gn.hint': 'Every player who is on the server right now will see the message.',
-  'gn.help': 'Once per server, set the plugin address (http://address:port) and its token (the gear next to the server). The plugin prints the token to its log on the first start and keeps it in BepInEx/config/com.rjbond.coregsm.cfg.',
+  'gn.help': 'No ports to open: the plugin asks the panel every few seconds whether there are new messages. Create a token once per server (the gear next to it) and paste it into the plugin config.',
   'gn.templates': 'Templates',
   'gn.tpl.restart': 'Restart',
   'gn.tpl.wipe': 'Wipe',
@@ -140829,34 +140864,44 @@ const en: Record<keyof typeof ru, string> = {
   'gn.previewNote': 'The preview is approximate: the font and background in the game may differ, colours are exact.',
   'gn.servers': 'Send to',
   'gn.noServers': 'Add a game server first.',
-  'gn.noPlugin': 'No server has the plugin set up. Press the gear next to a server.',
-  'gn.plugin.on': 'Plugin set up',
-  'gn.plugin.off': 'No plugin',
-  'gn.plugin.settings': 'Set up the plugin of {name}',
+  'gn.noPlugin': 'No server has a plugin token yet. Press the gear next to a server.',
+  'gn.plugin.off': 'No token',
+  'gn.plugin.online': 'Plugin online',
+  'gn.plugin.silent': 'Plugin silent',
+  'gn.plugin.settings': 'Plugin of {name}',
   'gn.plugin.title': 'CoreGSM plugin: {name}',
-  'gn.plugin.help': 'The address and token of the CoreGSM plugin installed on the game server (BepInEx). The default plugin port is 25590. Open it to the panel only.',
-  'gn.plugin.url': 'Plugin address',
-  'gn.plugin.token': 'Token',
-  'gn.plugin.tokenEx': 'The token from the plugin log',
-  'gn.plugin.tokenKept': 'Saved, leave empty to keep it',
-  'gn.plugin.check': 'Check connection',
-  'gn.plugin.checkOk': 'Connected, the plugin answers.',
+  'gn.plugin.help': 'The plugin on the game server (BepInEx) polls the panel itself. It needs the address of the panel and the token of this server.',
+  'gn.plugin.stateNone': 'No token yet.',
+  'gn.plugin.stateOnline': 'The plugin is online, version {v}.',
+  'gn.plugin.stateSilent': 'The plugin has not polled the panel for a while, last time: {time}. Messages wait up to 5 minutes.',
+  'gn.plugin.stateNever': 'A token exists, but the plugin has never connected.',
+  'gn.plugin.once': 'The token is shown once. Paste these lines into the plugin config:',
+  'gn.plugin.where': 'File on the game server: BepInEx/config/com.rjbond.coregsm.cfg. Restart the server after editing.',
+  'gn.plugin.copy': 'Copy',
+  'gn.plugin.copied': 'Copied',
+  'gn.plugin.copyFail': 'Could not copy: select the text by hand',
+  'gn.plugin.create': 'Create token',
+  'gn.plugin.renew': 'Create a new token',
+  'gn.plugin.renewTitle': 'Create a new token?',
+  'gn.plugin.renewText': 'The old token stops working: the plugin has to be set up again.',
   'gn.plugin.remove': 'Remove plugin',
-  'gn.plugin.removeTitle': 'Remove the plugin settings of «{name}»?',
+  'gn.plugin.removeTitle': 'Remove the plugin of «{name}»?',
   'gn.pickAll': 'Select all',
   'gn.pickNone': 'Clear selection',
   'gn.send': 'Send to the game',
   'gn.confirm.title': 'Send the message to players?',
   'gn.confirm.text': 'Every player on {servers} will see it.',
-  'gn.t.sent': 'Message sent',
-  'gn.t.partial': 'Sent {ok} of {total}',
-  'gn.t.saved': 'Plugin settings saved',
+  'gn.t.queued': 'The message is queued',
+  'gn.t.partial': 'Queued {ok} of {total}',
+  'gn.r.queued': 'queued, the plugin picks it up in a few seconds',
+  'gn.r.queuedSilent': 'queued, but the plugin is not connected right now (waits up to 5 minutes)',
   'gn.history': 'History',
   'gn.historyEmpty': 'Nothing has been sent yet.',
+  'gn.h.queued': 'Queued',
   'gn.h.ok': 'Delivered',
+  'gn.h.expired': 'Not delivered',
   'gn.h.fail': 'Failed',
-  'gn.reuse': 'Use again',
-  'adm.s.alerts': 'Alerts',
+  'gn.reuse': 'Use again',  'adm.s.alerts': 'Alerts',
   'adm.d.alerts': 'A Discord message when a game server goes down or comes back.',
   'adm.s.maintenance': 'Maintenance',
   'adm.d.maintenance': 'Maintenance windows: a server going down during one is not counted as an outage.',
@@ -145153,9 +145198,9 @@ const ru = {
   'adm.s.gamenews': 'Новости в игру',
   'adm.d.gamenews': 'Сообщение в игровой чат сервера через плагин CoreGSM: с цветами и превью.',
   'gn.title': 'Новости в игру',
-  'gn.subtitle': 'Напишите сообщение и отправьте его в игровой чат: его покажет плагин CoreGSM на игровом сервере.',
+  'gn.subtitle': 'Напишите сообщение: плагин CoreGSM на игровом сервере заберёт его и покажет в игровом чате.',
   'gn.hint': 'Сообщение увидят все игроки, которые сейчас на сервере.',
-  'gn.help': 'Для каждого сервера один раз укажите адрес плагина (http://адрес:порт) и его токен (шестерёнка у сервера). Токен плагин пишет в лог при первом запуске и хранит в файле BepInEx/config/com.rjbond.coregsm.cfg.',
+  'gn.help': 'Порты открывать не нужно: плагин сам раз в несколько секунд спрашивает у панели, есть ли новые сообщения. Для каждого сервера один раз создайте токен (шестерёнка у сервера) и вставьте его в конфиг плагина.',
   'gn.templates': 'Шаблоны',
   'gn.tpl.restart': 'Рестарт',
   'gn.tpl.wipe': 'Вайп',
@@ -145186,34 +145231,44 @@ const ru = {
   'gn.previewNote': 'Превью приблизительное: шрифт и фон в игре могут отличаться, цвета передаются точно.',
   'gn.servers': 'Куда отправить',
   'gn.noServers': 'Сначала добавьте игровой сервер.',
-  'gn.noPlugin': 'Ни у одного сервера не настроен плагин. Нажмите на шестерёнку у сервера.',
-  'gn.plugin.on': 'Плагин настроен',
-  'gn.plugin.off': 'Нет плагина',
-  'gn.plugin.settings': 'Настроить плагин сервера {name}',
+  'gn.noPlugin': 'Ни у одного сервера нет токена плагина. Нажмите на шестерёнку у сервера.',
+  'gn.plugin.off': 'Нет токена',
+  'gn.plugin.online': 'Плагин на связи',
+  'gn.plugin.silent': 'Плагин молчит',
+  'gn.plugin.settings': 'Плагин сервера {name}',
   'gn.plugin.title': 'Плагин CoreGSM: {name}',
-  'gn.plugin.help': 'Адрес и токен плагина CoreGSM, установленного на игровом сервере (BepInEx). Порт плагина по умолчанию 25590. Откройте его только для панели.',
-  'gn.plugin.url': 'Адрес плагина',
-  'gn.plugin.token': 'Токен',
-  'gn.plugin.tokenEx': 'Токен из лога плагина',
-  'gn.plugin.tokenKept': 'Сохранён, оставьте пустым, чтобы не менять',
-  'gn.plugin.check': 'Проверить связь',
-  'gn.plugin.checkOk': 'Связь есть, плагин отвечает.',
+  'gn.plugin.help': 'Плагин на игровом сервере (BepInEx) сам опрашивает панель. Ему нужен адрес панели и токен этого сервера.',
+  'gn.plugin.stateNone': 'Токен не создан.',
+  'gn.plugin.stateOnline': 'Плагин на связи, версия {v}.',
+  'gn.plugin.stateSilent': 'Плагин давно не опрашивал панель, последний раз: {time}. Сообщения подождут до 5 минут.',
+  'gn.plugin.stateNever': 'Токен создан, но плагин ещё ни разу не подключался.',
+  'gn.plugin.once': 'Токен показан один раз. Вставьте эти строки в конфиг плагина:',
+  'gn.plugin.where': 'Файл на игровом сервере: BepInEx/config/com.rjbond.coregsm.cfg. После правки перезапустите сервер.',
+  'gn.plugin.copy': 'Копировать',
+  'gn.plugin.copied': 'Скопировано',
+  'gn.plugin.copyFail': 'Не удалось скопировать: выделите текст вручную',
+  'gn.plugin.create': 'Создать токен',
+  'gn.plugin.renew': 'Создать новый токен',
+  'gn.plugin.renewTitle': 'Создать новый токен?',
+  'gn.plugin.renewText': 'Старый токен перестанет работать: плагин нужно будет настроить заново.',
   'gn.plugin.remove': 'Убрать плагин',
-  'gn.plugin.removeTitle': 'Убрать настройки плагина у сервера «{name}»?',
+  'gn.plugin.removeTitle': 'Убрать плагин у сервера «{name}»?',
   'gn.pickAll': 'Выбрать все',
   'gn.pickNone': 'Снять выбор',
   'gn.send': 'Отправить в игру',
   'gn.confirm.title': 'Отправить сообщение игрокам?',
   'gn.confirm.text': 'Его увидят все игроки на: {servers}.',
-  'gn.t.sent': 'Сообщение отправлено',
-  'gn.t.partial': 'Отправлено {ok} из {total}',
-  'gn.t.saved': 'Настройки плагина сохранены',
+  'gn.t.queued': 'Сообщение поставлено в очередь',
+  'gn.t.partial': 'В очередь поставлено {ok} из {total}',
+  'gn.r.queued': 'в очереди, плагин заберёт через несколько секунд',
+  'gn.r.queuedSilent': 'в очереди, но плагин сейчас не на связи (ждёт до 5 минут)',
   'gn.history': 'История отправок',
   'gn.historyEmpty': 'Пока ничего не отправляли.',
+  'gn.h.queued': 'В очереди',
   'gn.h.ok': 'Доставлено',
+  'gn.h.expired': 'Не доставлено',
   'gn.h.fail': 'Ошибка',
-  'gn.reuse': 'Использовать снова',
-  'adm.s.alerts': 'Оповещения',
+  'gn.reuse': 'Использовать снова',  'adm.s.alerts': 'Оповещения',
   'adm.d.alerts': 'Сообщение в Discord, если игровой сервер упал или вернулся.',
   'adm.s.maintenance': 'Обслуживание',
   'adm.d.maintenance': 'Окна технических работ: во время них падение сервера не считается сбоем.',
@@ -153163,16 +153218,32 @@ import { api } from '../api';
 import { confirmDialog } from '../confirm';
 import { t, useI18n } from '../i18n';
 import {
-  MAX_VISIBLE, SWATCHES, TEMPLATES, colorOpen, isHex, parseNews, unbalanced, validateNews, visibleText, wrapSelection,
-  type NewsLogRow, type NewsSendResult, type NewsServerInfo,
+  MAX_VISIBLE, SWATCHES, TEMPLATES, colorOpen, isHex, parseNews, pluginConfig, unbalanced, validateNews, visibleText, wrapSelection,
+  type NewsLogRow, type NewsSendResult, type NewsServerInfo, type NewsStatus,
 } from '../gameNews';
 import { AdminPage, ErrorLine, Field, IconNews, IconSettings, LoadError, Modal, PageHead, Spinner, errText, toast, usePoll } from '../ui';
 
 interface NewsState { servers: NewsServerInfo[]; log: NewsLogRow[] }
 
 const swatchName = (id: string) => t(`gn.c.${id}` as 'gn.c.info');
+const STATUS: Record<NewsStatus, { text: 'gn.h.queued' | 'gn.h.ok' | 'gn.h.expired' | 'gn.h.fail'; cls: string }> = {
+  queued: { text: 'gn.h.queued', cls: 'pill pill-mute' },
+  delivered: { text: 'gn.h.ok', cls: 'pill pill-ok' },
+  expired: { text: 'gn.h.expired', cls: 'pill pill-warn' },
+  failed: { text: 'gn.h.fail', cls: 'pill pill-warn' },
+};
 
-/** «Игровые новости»: a message for the in-game chat of a server (the CoreGSM game plugin shows it), with a live preview. */
+function Styled({ text }: { text: string }) {
+  return (
+    <>
+      {parseNews(text).map((s, i) => (
+        <span key={i} style={{ color: s.color ?? undefined, fontWeight: s.bold ? 800 : undefined, fontStyle: s.italic ? 'italic' : undefined }}>{s.text}</span>
+      ))}
+    </>
+  );
+}
+
+/** «Новости в игру»: a message for the in-game chat of a server (the CoreGSM game plugin picks it up), with a live preview. */
 export default function GameNewsPage() {
   useI18n();
   const [data, setData] = useState<NewsState | null>(null);
@@ -153181,7 +153252,7 @@ export default function GameNewsPage() {
   const [picked, setPicked] = useState<number[]>([]);
   const [busy, setBusy] = useState(false);
   const [custom, setCustom] = useState('#FF8A00');
-  const [settingsFor, setSettingsFor] = useState<NewsServerInfo | null>(null);
+  const [settingsFor, setSettingsFor] = useState<number | null>(null);
   const [lastResult, setLastResult] = useState<NewsSendResult | null>(null);
   const area = useRef<HTMLTextAreaElement>(null);
 
@@ -153189,12 +153260,13 @@ export default function GameNewsPage() {
     api<NewsState>('/game-news')
       .then((d) => { setData(d); setError(''); })
       .catch((e: Error) => setError(e.message));
-  usePoll(load, 30_000);
+  usePoll(load, 10_000);
 
   const segs = useMemo(() => parseNews(text), [text]);
   const visible = visibleText(text).trim().length;
   const problem = validateNews(text);
-  const ready = (data?.servers ?? []).filter((s) => s.url && s.hasToken);
+  const ready = (data?.servers ?? []).filter((s) => s.hasToken);
+  const settingsServer = data?.servers.find((s) => s.id === settingsFor) ?? null;
 
   const edit = (fn: (start: number, end: number) => { text: string; start: number; end: number }) => {
     const el = area.current;
@@ -153223,8 +153295,8 @@ export default function GameNewsPage() {
     try {
       const r = await api<NewsSendResult>('/game-news/send', 'POST', { serverIds: picked, text });
       setLastResult(r);
-      const bad = r.results.filter((x) => !x.ok).length;
-      toast(bad ? t('gn.t.partial', { ok: r.results.length - bad, total: r.results.length }) : t('gn.t.sent'), bad ? 'err' : undefined);
+      const bad = r.results.filter((x) => !x.queued).length;
+      toast(bad ? t('gn.t.partial', { ok: r.results.length - bad, total: r.results.length }) : t('gn.t.queued'), bad ? 'err' : undefined);
       void load();
     } catch (err) {
       toast(errText(err), 'err');
@@ -153300,36 +153372,27 @@ export default function GameNewsPage() {
               <h3 className="font-extrabold">{t('gn.preview')}</h3>
               <div className="rounded-xl p-4 font-semibold" style={{ background: '#15121c', color: '#e8e3f0' }} aria-live="polite">
                 <div className="mb-1 text-xs font-bold uppercase tracking-wide" style={{ color: '#8f86a3' }}>{t('gn.chatLabel')}</div>
-                {segs.length ? (
-                  <p className="wrap-break-word">
-                    {segs.map((s, i) => (
-                      <span key={i} style={{ color: s.color ?? undefined, fontWeight: s.bold ? 800 : undefined, fontStyle: s.italic ? 'italic' : undefined }}>{s.text}</span>
-                    ))}
-                  </p>
-                ) : <p style={{ color: '#8f86a3' }}>{t('gn.previewEmpty')}</p>}
+                {segs.length ? <p className="wrap-break-word"><Styled text={text} /></p> : <p style={{ color: '#8f86a3' }}>{t('gn.previewEmpty')}</p>}
               </div>
               <p className="text-sm font-semibold text-mute">{t('gn.previewNote')}</p>
             </div>
 
             <div className="panel space-y-3 p-5">
-              <div className="flex items-center justify-between gap-2">
-                <h3 className="font-extrabold">{t('gn.servers')}</h3>
-              </div>
+              <h3 className="font-extrabold">{t('gn.servers')}</h3>
               {data.servers.length === 0 && <p className="text-sm font-semibold text-mute">{t('gn.noServers')}</p>}
               <ul className="divide-y divide-line">
-                {data.servers.map((s) => {
-                  const okTarget = !!(s.url && s.hasToken);
-                  return (
-                    <li key={s.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2.5">
-                      <label className="flex min-w-0 flex-1 basis-48 items-center gap-2.5 font-bold">
-                        <input type="checkbox" disabled={!okTarget} checked={picked.includes(s.id)} onChange={() => toggle(s.id)} />
-                        <span className="min-w-0 wrap-break-word">{s.name}</span>
-                      </label>
-                      <span className={okTarget ? 'pill pill-ok' : 'pill pill-mute'}>{okTarget ? t('gn.plugin.on') : t('gn.plugin.off')}</span>
-                      <button type="button" className="row-act" onClick={() => setSettingsFor(s)} aria-label={t('gn.plugin.settings', { name: s.name })}><IconSettings size={16} /></button>
-                    </li>
-                  );
-                })}
+                {data.servers.map((s) => (
+                  <li key={s.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2.5">
+                    <label className="flex min-w-0 flex-1 basis-48 items-center gap-2.5 font-bold">
+                      <input type="checkbox" disabled={!s.hasToken} checked={picked.includes(s.id)} onChange={() => toggle(s.id)} />
+                      <span className="min-w-0 wrap-break-word">{s.name}</span>
+                    </label>
+                    <span className={!s.hasToken ? 'pill pill-mute' : s.online ? 'pill pill-ok' : 'pill pill-warn'}>
+                      {!s.hasToken ? t('gn.plugin.off') : s.online ? t('gn.plugin.online') : t('gn.plugin.silent')}
+                    </span>
+                    <button type="button" className="row-act" onClick={() => setSettingsFor(s.id)} aria-label={t('gn.plugin.settings', { name: s.name })}><IconSettings size={16} /></button>
+                  </li>
+                ))}
               </ul>
               {data.servers.length > 0 && ready.length === 0 && <p className="text-sm font-semibold text-mute">{t('gn.noPlugin')}</p>}
               {ready.length > 1 && (
@@ -153343,7 +153406,9 @@ export default function GameNewsPage() {
               {lastResult && (
                 <ul className="space-y-1 text-sm font-semibold">
                   {lastResult.results.map((r) => (
-                    <li key={r.serverId} className={r.ok ? 'text-ok' : 'text-danger'}>{r.ok ? '✓' : '✕'} {r.serverName}{r.ok ? '' : `: ${r.error}`}</li>
+                    <li key={r.serverId} className={r.queued ? (r.online ? 'text-ok' : undefined) : 'text-danger'}>
+                      {r.queued ? '✓' : '✕'} {r.serverName}: {r.queued ? (r.online ? t('gn.r.queued') : t('gn.r.queuedSilent')) : r.error}
+                    </li>
                   ))}
                 </ul>
               )}
@@ -153361,16 +153426,12 @@ export default function GameNewsPage() {
               <li key={r.id} className="flex flex-wrap items-start gap-x-4 gap-y-1 px-5 py-3">
                 <div className="min-w-0 flex-1 basis-60">
                   <div className="flex flex-wrap items-center gap-2 text-sm font-bold">
-                    <span className={r.ok ? 'pill pill-ok' : 'pill pill-warn'}>{r.ok ? t('gn.h.ok') : t('gn.h.fail')}</span>
+                    <span className={STATUS[r.status].cls}>{t(STATUS[r.status].text)}</span>
                     <span>{r.serverName}</span>
                     <span className="font-semibold text-mute">{new Date(r.sentAt).toLocaleString()} · {r.sentBy || '—'}</span>
                   </div>
-                  <p className="mt-1 wrap-break-word text-sm">
-                    {parseNews(r.text).map((s, i) => (
-                      <span key={i} style={{ color: s.color ?? undefined, fontWeight: s.bold ? 800 : undefined, fontStyle: s.italic ? 'italic' : undefined }}>{s.text}</span>
-                    ))}
-                  </p>
-                  {!r.ok && r.error && <p className="text-sm font-semibold text-danger">{r.error}</p>}
+                  <p className="mt-1 wrap-break-word text-sm"><Styled text={r.text} /></p>
+                  {(r.status === 'failed' || r.status === 'expired') && r.error && <p className="text-sm font-semibold text-danger">{r.error}</p>}
                 </div>
                 <button type="button" className="btn btn-soft btn-sm" onClick={() => setText(r.text)}>{t('gn.reuse')}</button>
               </li>
@@ -153379,69 +153440,71 @@ export default function GameNewsPage() {
         </section>
       )}
 
-      {settingsFor && <PluginModal server={settingsFor} onClose={() => setSettingsFor(null)} onSaved={() => { setSettingsFor(null); void load(); }} />}
+      {settingsServer && <PluginModal server={settingsServer} onClose={() => setSettingsFor(null)} onChanged={() => void load()} />}
     </AdminPage>
   );
 }
 
-function PluginModal({ server, onClose, onSaved }: { server: NewsServerInfo; onClose: () => void; onSaved: () => void }) {
+/** the token of a server's plugin: created here, shown once, pasted into the plugin config */
+function PluginModal({ server, onClose, onChanged }: { server: NewsServerInfo; onClose: () => void; onChanged: () => void }) {
   useI18n();
-  const [url, setUrl] = useState(server.url || 'http://');
   const [token, setToken] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const [check, setCheck] = useState<{ ok: boolean; error: string } | null>(null);
+  const config = token ? pluginConfig(window.location.origin, token) : '';
 
-  const save = async (): Promise<boolean> => {
+  const create = async () => {
+    if (server.hasToken && !(await confirmDialog({ title: t('gn.plugin.renewTitle'), text: t('gn.plugin.renewText'), confirmLabel: t('gn.plugin.renew'), danger: true }))) return;
     setBusy(true);
     setError('');
     try {
-      await api(`/game-news/targets/${server.id}`, 'PUT', token ? { url, token } : { url });
-      return true;
+      const r = await api<{ token: string }>(`/game-news/targets/${server.id}/token`, 'POST');
+      setToken(r.token);
+      onChanged();
     } catch (e) {
       setError(errText(e));
-      return false;
     } finally {
       setBusy(false);
     }
   };
-  const submit = async (e: FormEvent) => { e.preventDefault(); if (await save()) { toast(t('gn.t.saved')); onSaved(); } };
-  const test = async () => {
-    if (!(await save())) return;
-    setBusy(true);
-    try { setCheck(await api<{ ok: boolean; error: string }>(`/game-news/check/${server.id}`, 'POST')); }
-    catch (e) { setCheck({ ok: false, error: errText(e) }); }
-    finally { setBusy(false); }
-  };
   const remove = async () => {
     if (!(await confirmDialog({ title: t('gn.plugin.removeTitle', { name: server.name }), danger: true, confirmLabel: t('gn.plugin.remove') }))) return;
-    try { await api(`/game-news/targets/${server.id}`, 'DELETE'); onSaved(); } catch (e) { setError(errText(e)); }
+    try { await api(`/game-news/targets/${server.id}`, 'DELETE'); onChanged(); onClose(); } catch (e) { setError(errText(e)); }
+  };
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(config); toast(t('gn.plugin.copied')); } catch { toast(t('gn.plugin.copyFail'), 'err'); }
   };
 
   return (
     <Modal title={t('gn.plugin.title', { name: server.name })} onClose={onClose}>
-      <form className="space-y-4" onSubmit={(e) => void submit(e)} noValidate>
+      <div className="space-y-4">
         <p className="text-sm font-semibold text-mute">{t('gn.plugin.help')}</p>
-        <Field label={t('gn.plugin.url')}>
-          <input className="input font-mono text-sm" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="http://192.168.88.138:25590" />
-        </Field>
-        <Field label={t('gn.plugin.token')}>
-          <input className="input font-mono text-sm" type="password" autoComplete="off" value={token} onChange={(e) => setToken(e.target.value)}
-            placeholder={server.hasToken ? t('gn.plugin.tokenKept') : t('gn.plugin.tokenEx')} />
-        </Field>
-        <ErrorLine text={error} />
-        {check && <p className={`text-sm font-semibold ${check.ok ? 'text-ok' : 'text-danger'}`}>{check.ok ? t('gn.plugin.checkOk') : check.error}</p>}
-        <div className="flex flex-wrap justify-between gap-2">
-          <div className="flex gap-2">
-            {server.url && <button type="button" className="btn btn-ghost" onClick={() => void remove()}>{t('gn.plugin.remove')}</button>}
-            <button type="button" className="btn btn-soft" disabled={busy} onClick={() => void test()}>{t('gn.plugin.check')}</button>
+        <p className="text-sm font-bold">
+          {!server.hasToken
+            ? t('gn.plugin.stateNone')
+            : server.online
+              ? t('gn.plugin.stateOnline', { v: server.pluginVersion || '?' })
+              : server.lastSeen
+                ? t('gn.plugin.stateSilent', { time: new Date(server.lastSeen).toLocaleString() })
+                : t('gn.plugin.stateNever')}
+        </p>
+        {token && (
+          <div className="space-y-2">
+            <p className="text-sm font-bold">{t('gn.plugin.once')}</p>
+            <pre className="panel overflow-x-auto p-3 font-mono text-sm" data-testid="plugin-config">{config}</pre>
+            <button type="button" className="btn btn-soft btn-sm" onClick={() => void copy()}>{t('gn.plugin.copy')}</button>
+            <p className="text-sm font-semibold text-mute">{t('gn.plugin.where')}</p>
           </div>
+        )}
+        <ErrorLine text={error} />
+        <div className="flex flex-wrap justify-between gap-2">
+          <div>{server.hasToken && <button type="button" className="btn btn-ghost" onClick={() => void remove()}>{t('gn.plugin.remove')}</button>}</div>
           <div className="flex gap-2">
-            <button type="button" className="btn btn-ghost" onClick={onClose}>{t('common.cancel')}</button>
-            <button type="submit" className="btn" disabled={busy}>{busy && <Spinner />}{t('common.save')}</button>
+            <button type="button" className="btn btn-ghost" onClick={onClose}>{t('common.close')}</button>
+            <button type="button" className="btn" disabled={busy} onClick={() => void create()}>{busy && <Spinner />}{server.hasToken ? t('gn.plugin.renew') : t('gn.plugin.create')}</button>
           </div>
         </div>
-      </form>
+      </div>
     </Modal>
   );
 }

@@ -59,15 +59,3 @@ export function checkNews(input: unknown): NewsCheck {
   if (vis.length > MAX_VISIBLE) return { ok: false, text: '', error: `Слишком длинное сообщение: ${vis.length} из ${MAX_VISIBLE} знаков` };
   return { ok: true, text };
 }
-
-/** a plugin address: http(s) only, no login in it, no trailing slash; '' when it is not usable */
-export function normalizePluginUrl(input: string): string {
-  try {
-    const u = new URL(input.trim());
-    if (u.protocol !== 'http:' && u.protocol !== 'https:') return '';
-    if (u.username || u.password) return '';
-    return `${u.protocol}//${u.host}`;
-  } catch {
-    return '';
-  }
-}
