@@ -30,6 +30,7 @@ const errorsEn: Record<string, string> = {
   announcement_no_channel: 'Choose a Discord channel',
   announcement_bad_time: 'Set a time in the future, not later than a year',
   announcement_limit: 'No more than {n} scheduled announcements',
+  game_chat_channel: 'The channel of the webhook could not be found: save the address again',
   game_restart_server: 'Pick a server with the plugin',
   game_restart_short: 'At least 10 seconds',
   game_restart_long: 'No more than 6 hours',

@@ -50,6 +50,10 @@ export interface ChatStored {
   /** «[16:07]» in front of every line, like in the game */
   showTime: boolean;
   colors: Record<ChatKind, ChatColors>;
+  /** what an administrator writes in the channel of the webhook is shown in the game chat */
+  fromDiscord: boolean;
+  /** the channel of the webhook (found when the webhook is saved): where the bot listens */
+  channelId: string;
 }
 
 const isAnsi = (x: unknown): x is AnsiColor => typeof x === 'string' && (ANSI_COLORS as readonly string[]).includes(x);
@@ -61,7 +65,7 @@ const isAnsi = (x: unknown): x is AnsiColor => typeof x === 'string' && (ANSI_CO
 export function normalizeChat(raw: unknown): ChatStored {
   const v = (raw && typeof raw === 'object' ? raw : {}) as {
     enabled?: unknown; webhook?: unknown; kinds?: Partial<Record<ChatKind, unknown>>; webhooks?: Partial<Record<ChatKind, unknown>>;
-    style?: unknown; senderName?: unknown; showTime?: unknown; colors?: Partial<Record<ChatKind, Partial<Record<keyof ChatColors, unknown>>>>;
+    style?: unknown; senderName?: unknown; showTime?: unknown; fromDiscord?: unknown; channelId?: unknown; colors?: Partial<Record<ChatKind, Partial<Record<keyof ChatColors, unknown>>>>;
   };
   const legacy = v.webhooks && typeof v.webhooks === 'object' ? v.webhooks : {};
   const legacyFirst = (['global', 'clan', 'local'] as const).map((k) => legacy[k]).find((x): x is string => typeof x === 'string' && x.length > 0);
@@ -87,6 +91,8 @@ export function normalizeChat(raw: unknown): ChatStored {
     kinds,
     style: v.style === 'plain' ? 'plain' : 'ansi',
     showTime: v.showTime !== false,
+    fromDiscord: v.fromDiscord === true,
+    channelId: typeof v.channelId === 'string' && /^\d{5,30}$/.test(v.channelId) ? v.channelId : '',
     senderName: typeof v.senderName === 'string' ? v.senderName.replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, 80) : '',
     colors,
   };

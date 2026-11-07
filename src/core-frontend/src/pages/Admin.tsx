@@ -202,15 +202,15 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
   // the servers with the game plugin: each has its own page of settings under «Игровой плагин» (when there are several)
   const [pluginServers, setPluginServers] = useState<{ id: number; name: string; online: boolean; players: number | null; max: number | null; lastSeen: number | null }[]>([]);
   useEffect(() => {
-    if (!isAdmin || current !== 'gamenews') return;
+    if (!isAdmin) return;
     let alive = true;
     const load = () => api<{ servers: { id: number; name: string; supported: boolean; hasToken: boolean; online: boolean; players: number | null; maxPlayers: number | null; lastSeen: number | null }[] }>('/game-news')
       .then((d) => { if (alive) setPluginServers(d.servers.filter((x) => x.supported && x.hasToken).map((x) => ({ id: x.id, name: x.name, online: x.online, players: x.players, max: x.maxPlayers, lastSeen: x.lastSeen }))); })
       .catch(() => undefined);
     void load();
-    const timer = window.setInterval(() => void load(), 15_000);
+    const timer = window.setInterval(() => void load(), current === 'gamenews' ? 15_000 : 60_000);
     return () => { alive = false; window.clearInterval(timer); };
-  }, [isAdmin, current]);
+  }, [isAdmin, current === 'gamenews']); // eslint-disable-line react-hooks/exhaustive-deps
   const first = tail.split('/')[0];
   const crumb = !['servers', 'discord', 'news'].includes(current) || !first ? '' : first === 'new' ? t('adm.crumb.new') : /^\d+$/.test(first) ? t('adm.crumb.edit') : '';
   const divider = <span aria-hidden className="mx-1 w-px shrink-0 self-stretch bg-line md:hidden" />;
@@ -249,14 +249,14 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
                 {divider}
                 <div id={`adm-g-${gi}`} className="adm-group-title hidden md:block">{g.title}</div>
                 <div role="group" aria-labelledby={`adm-g-${gi}`} className="flex gap-1 md:flex-col">
-                  {g.sections.map((s) => (s.id === 'gamenews' && current === 'gamenews' && pluginServers.length > 1
+                  {g.sections.map((s) => (s.id === 'gamenews' && pluginServers.length > 1
                     ? (
                       <Fragment key={s.id}>
                         {item(s)}
                         <div className="adm-sub flex flex-col gap-0.5 max-md:hidden" role="group" aria-label={t('gn.tab.servers')}>
                           {pluginServers.map((x) => (
-                            <a key={x.id} href={`/admin/gamenews/s${x.id}`} aria-current={tail === `s${x.id}` ? 'page' : undefined} title={x.name}
-                              className={`flex items-start gap-2 rounded-ui-md py-1.5 pl-6 pr-2 text-sm font-bold leading-snug transition hover:text-ink ${tail === `s${x.id}` ? 'bg-soft text-ink' : 'text-mute'}`}>
+                            <a key={x.id} href={`/admin/gamenews/s${x.id}`} aria-current={current === 'gamenews' && tail === `s${x.id}` ? 'page' : undefined} title={x.name}
+                              className={`flex items-start gap-2 rounded-ui-md py-1.5 pl-6 pr-2 text-sm font-bold leading-snug transition hover:text-ink ${current === 'gamenews' && tail === `s${x.id}` ? 'bg-soft text-ink' : 'text-mute'}`}>
                               <span aria-hidden className={`mt-1.5 inline-block h-2 w-2 shrink-0 rounded-full ${x.online ? 'bg-ok' : 'bg-mute'}`} />
                               <span className="min-w-0 flex-1 break-words">{x.name}</span>
                               {x.online && x.players != null && <span className="shrink-0 rounded-full bg-soft px-1.5 text-xs font-extrabold">{x.players}</span>}

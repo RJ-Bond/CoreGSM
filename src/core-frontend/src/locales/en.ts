@@ -904,6 +904,10 @@ const en: Record<keyof typeof ru, string> = {
   'gn.h.expired': 'Not delivered',
   'gn.h.fail': 'Failed',
   'gn.reuse': 'Use again',
+  'gn.ch.fromDiscord': 'Write from Discord to the game',
+  'gn.ch.fromDiscordNote': 'What a Discord administrator writes in this channel appears in the game chat: «* [Discord] Name: text». The bot puts ✅ under the message. Messages of other members are ignored. «Message Content Intent» has to be on in Developer Portal → Bot, and the bot needs the right to read the channel.',
+  'gn.ch.fromDiscordNeed': 'Set the webhook of the channel first.',
+
   'gn.col.game': 'As in the game',
   'gn.col.recent': 'Recent:',
   'gn.ch.presets': 'Ready styles:',

@@ -439,6 +439,14 @@ export function ChatCard({ initial, joinText, leaveText }: { initial: ChatSettin
         )}
       </div>
 
+      <label className="flex items-start gap-3 font-bold">
+        <Switch className="mt-0.5" checked={st.fromDiscord} disabled={busy === 'fromDiscord' || !st.set} onChange={(v) => void send({ fromDiscord: v }, 'fromDiscord', true)} />
+        <span>
+          {t('gn.ch.fromDiscord')}
+          <span className="block text-sm font-semibold text-mute">{t(st.set ? 'gn.ch.fromDiscordNote' : 'gn.ch.fromDiscordNeed')}</span>
+        </span>
+      </label>
+
       <fieldset className="space-y-2">
         <legend className="mb-1 font-extrabold">{t('gn.ch.what')}</legend>
         {CHAT_KINDS.map((k) => (

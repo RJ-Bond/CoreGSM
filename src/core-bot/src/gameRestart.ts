@@ -3,7 +3,7 @@
  * Discord server (or an administrator of the panel linked to the Discord account). The panel does the work and answers
  * with the text to show; the game chat gets «Рестарт через 5 минут» ... as the timer runs.
  */
-import { PermissionFlagsBits, type ChatInputCommandInteraction } from 'discord.js';
+import { PermissionFlagsBits, type ChatInputCommandInteraction, type Message } from 'discord.js';
 import { backendJson } from './backend.js';
 import { log } from './log.js';
 import { COLORS, replyEmbed } from './replies.js';
@@ -91,4 +91,35 @@ async function handleSay(i: ChatInputCommandInteraction): Promise<void> {
     ? replyEmbed(r.data.ok ? 'В игру' : 'Не получилось', r.data.text, r.data.ok ? COLORS.ok : COLORS.warn)
     : replyEmbed('Не получилось', 'Панель сейчас не отвечает, попробуйте ещё раз чуть позже.', COLORS.bad);
   await i.editReply(out).catch((e) => log('say reply failed:', (e as Error).message));
+}
+
+// ---- what an administrator writes in the channel of the game chat goes to the game
+let channelCache = { at: 0, ids: new Set<string>() };
+
+async function chatChannelIds(): Promise<Set<string>> {
+  if (Date.now() - channelCache.at < 30_000) return channelCache.ids;
+  const r = await backendJson<{ channels: { channelId: string }[] }>('/internal/game-chat-channels', { signal: AbortSignal.timeout(4000) }).catch(() => null);
+  channelCache = { at: Date.now(), ids: new Set((r?.data?.channels ?? []).map((c) => c.channelId)) };
+  return channelCache.ids;
+}
+
+/**
+ * A message in a channel where the game chat is shown (the channel of the webhook, when «Писать из Discord в игру» is on):
+ * the panel decides whether the writer may (administrators only) and where it goes; the bot answers with a mark under the message.
+ * Messages of bots and webhooks (the chat itself) are never forwarded.
+ */
+export async function handleGameChatMessage(m: Message): Promise<void> {
+  if (m.author.bot || m.webhookId || !m.guildId || m.system) return;
+  const text = m.cleanContent.replace(/\s+/g, ' ').trim().slice(0, 300);
+  if (!text || text.startsWith('/')) return;
+  if (!(await chatChannelIds()).has(m.channelId)) return;
+  const r = await backendJson<{ ok: boolean; silent?: boolean }>('/internal/game-say', {
+    method: 'POST',
+    body: JSON.stringify({
+      text, channelId: m.channelId, name: m.member?.displayName ?? m.author.username, discordId: m.author.id,
+      discordAdmin: m.member?.permissions.has(PermissionFlagsBits.Administrator) ?? false,
+    }),
+  }).catch(() => null);
+  if (!r?.data || r.data.silent) return;
+  await m.react(r.data.ok ? '✅' : '❌').catch(() => undefined);
 }

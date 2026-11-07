@@ -905,6 +905,10 @@ const ru = {
   'gn.h.expired': 'Не доставлено',
   'gn.h.fail': 'Ошибка',
   'gn.reuse': 'Использовать снова',
+  'gn.ch.fromDiscord': 'Писать из Discord в игру',
+  'gn.ch.fromDiscordNote': 'Всё, что администратор Discord пишет в этом канале, появится в игровом чате: «* [Discord] Имя: текст». Под сообщением бот ставит ✅. Сообщения остальных участников игнорируются. В Developer Portal → Bot должен быть включён «Message Content Intent», а у бота есть право читать канал.',
+  'gn.ch.fromDiscordNeed': 'Сначала укажите webhook канала.',
+
   'gn.col.game': 'Как в игре',
   'gn.col.recent': 'Недавние:',
   'gn.ch.presets': 'Готовые стили:',

@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, Client, EmbedBuilder, GatewayIntentBits, type GuildMember } from 'discord.js';
 import { backend, report } from './backend.js';
 import { handleFaqMessage } from './faq.js';
+import { handleGameChatMessage } from './gameRestart.js';
 import { handleInteraction, registerCommands } from './commands.js';
 import { deliveryFailure, humanDiscordError, isMessageGone, newNonce, retryAfterOf, retrySocket, stableNonce } from './errors.js';
 import { setGatewayAgent } from './gateway.js';
@@ -27,6 +28,8 @@ interface BotConfig {
   proxyUrl: string;
   /** the welcome message is on: needs the «Server Members» intent */
   welcome?: boolean;
+  /** a game chat channel listens to administrators: needs the «Message Content» intent */
+  gameChat?: boolean;
   style?: unknown;
 }
 
@@ -153,7 +156,7 @@ async function applyConfig(): Promise<void> {
   if (!res.ok) throw new Error(`config HTTP ${res.status}`);
   const cfg = (await res.json()) as BotConfig;
   setStyle(cfg.style);
-  const key = `${cfg.discordToken}|${cfg.proxyUrl}|${cfg.welcome ? 'w' : ''}`;
+  const key = `${cfg.discordToken}|${cfg.proxyUrl}|${cfg.welcome ? 'w' : ''}${cfg.gameChat ? 'g' : ''}`;
   if (key === appliedKey) return;
   // after a failure wait before retrying the SAME config; a changed config is applied immediately
   if (key === failedKey && Date.now() < retryAt) return;
@@ -189,7 +192,7 @@ async function applyConfig(): Promise<void> {
   if (proxy) log('Using proxy for Discord:', proxy.label);
 
   const c = new Client({
-    intents: cfg.welcome ? [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.GuildMembers] : [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages],
+    intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, ...(cfg.welcome ? [GatewayIntentBits.GuildMembers] : []), ...(cfg.gameChat ? [GatewayIntentBits.MessageContent] : [])],
     rest: { timeout: 10_000, ...(proxy ? { agent: proxy.rest } : {}) },
   });
   c.on('error', (e) => log('client error', e));
@@ -208,6 +211,7 @@ async function applyConfig(): Promise<void> {
   c.on('messageCreate', (m) => {
     if (stopping) return;
     void handleFaqMessage(m).catch((e) => log('faq message failed:', (e as Error).message));
+    if (cfg.gameChat) void handleGameChatMessage(m).catch((e) => log('game chat message failed:', (e as Error).message));
   });
   c.on('guildCreate', guildsChanged);
   c.on('guildDelete', guildsChanged);

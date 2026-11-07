@@ -35,6 +35,7 @@ export const ERRORS = {
   announcement_no_channel: 'Выберите канал Discord',
   announcement_bad_time: 'Укажите время в будущем, не дальше года',
   announcement_limit: 'Не больше {n} запланированных объявлений',
+  game_chat_channel: 'Не удалось определить канал webhook: сохраните адрес заново',
   game_restart_server: 'Выберите сервер с плагином',
   game_restart_short: 'Минимум 10 секунд',
   game_restart_long: 'Не больше 6 часов',

@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="4f986631f0d7"
+COREGSM_BUILD="296d4c531d14"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.84"
+COREGSM_VERSION="1.1.85"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -23505,6 +23505,7 @@ export const ERRORS = {
   announcement_no_channel: 'Выберите канал Discord',
   announcement_bad_time: 'Укажите время в будущем, не дальше года',
   announcement_limit: 'Не больше {n} запланированных объявлений',
+  game_chat_channel: 'Не удалось определить канал webhook: сохраните адрес заново',
   game_restart_server: 'Выберите сервер с плагином',
   game_restart_short: 'Минимум 10 секунд',
   game_restart_long: 'Не больше 6 часов',
@@ -24072,7 +24073,7 @@ __COREGSM_EOF__
 import type { Express, RequestHandler } from 'express';
 import { z } from 'zod';
 import { db } from '../db.js';
-import { hasOverride, readScoped, serverOf, writeScoped } from './gameNewsScope.js';
+import { hasOverride, overrides, readScoped, serverOf, writeScoped } from './gameNewsScope.js';
 import { log } from '../logger.js';
 import { decryptSecret, encryptSecret } from '../security/secrets.js';
 import { pluginTarget } from './gameNews.js';
@@ -24104,10 +24105,38 @@ function webhookUrl(s: ChatStored): string | null {
 
 /** the kinds of chat that are being forwarded (what the plugin has to read) */
 
-export function chatSettingsView(serverId?: number): Pick<ChatStored, 'enabled' | 'kinds' | 'style' | 'senderName' | 'showTime' | 'colors'> & { set: boolean; tail: string } {
+export function chatSettingsView(serverId?: number): Pick<ChatStored, 'enabled' | 'kinds' | 'style' | 'senderName' | 'showTime' | 'colors' | 'fromDiscord'> & { set: boolean; tail: string; channel: boolean } {
   const s = read(serverId);
   const u = webhookUrl(s);
-  return { enabled: s.enabled, set: !!u, tail: u ? `…${u.slice(-6)}` : '', kinds: s.kinds, style: s.style, senderName: s.senderName, showTime: s.showTime, colors: s.colors };
+  return { enabled: s.enabled, set: !!u, tail: u ? `…${u.slice(-6)}` : '', kinds: s.kinds, style: s.style, senderName: s.senderName, showTime: s.showTime, colors: s.colors, fromDiscord: s.fromDiscord, channel: !!s.channelId };
+}
+
+/** the channel a webhook posts to (Discord tells it to anyone who holds the address) */
+async function channelOf(url: string): Promise<string> {
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(8000), redirect: 'error' });
+    if (!res.ok) return '';
+    const j = (await res.json()) as { channel_id?: unknown };
+    return typeof j.channel_id === 'string' && /^\d{5,30}$/.test(j.channel_id) ? j.channel_id : '';
+  } catch {
+    return '';
+  }
+}
+
+/** the channels where the bot listens: what an administrator writes there goes to the game chat of these servers */
+export function chatChannels(): { channelId: string; serverIds: number[] }[] {
+  const all = (db.prepare("SELECT server_id FROM game_news_targets WHERE token_hash <> ''").all() as { server_id: number }[]).map((r) => r.server_id);
+  const own = overrides().gamenews_chat ?? [];
+  const map = new Map<string, Set<number>>();
+  const add = (s: ChatStored, ids: number[]) => {
+    if (!s.enabled || !s.fromDiscord || !s.channelId || !s.webhook || ids.length === 0) return;
+    const set = map.get(s.channelId) ?? new Set<number>();
+    for (const id of ids) set.add(id);
+    map.set(s.channelId, set);
+  };
+  add(read(), all.filter((id) => !own.includes(id)));
+  for (const id of own) if (all.includes(id)) add(read(id), [id]);
+  return [...map].map(([channelId, ids]) => ({ channelId, serverIds: [...ids] }));
 }
 
 // ---- posting
@@ -24234,7 +24263,7 @@ export function registerGameNewsChat({ app, admin }: { app: Express; admin: Requ
   });
 
   // from the administrator: the switch, the webhook (empty keeps the saved one, clear removes it), what to forward, how it looks
-  app.put('/api/game-news/chat-settings', admin, (req, res) => {
+  app.put('/api/game-news/chat-settings', admin, async (req, res) => {
     const b = z.object({
       enabled: z.boolean().optional(),
       webhook: z.string().max(300).optional(),
@@ -24243,6 +24272,7 @@ export function registerGameNewsChat({ app, admin }: { app: Express; admin: Requ
       style: z.enum(['ansi', 'plain']).optional(),
       senderName: z.string().max(80).optional(),
       showTime: z.boolean().optional(),
+      fromDiscord: z.boolean().optional(),
       colors: colorsSchema.optional(),
     }).safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Проверьте поля' });
@@ -24252,8 +24282,16 @@ export function registerGameNewsChat({ app, admin }: { app: Express; admin: Requ
     if (w) {
       if (!isDiscordWebhook(w)) return res.status(400).json({ error: 'Это не адрес webhook Discord (https://discord.com/api/webhooks/…)' });
       s.webhook = encryptSecret(w);
+      s.channelId = await channelOf(w);
     }
-    if (b.data.clear) s.webhook = '';
+    if (b.data.clear) { s.webhook = ''; s.channelId = ''; s.fromDiscord = false; }
+    if (b.data.fromDiscord !== undefined) s.fromDiscord = b.data.fromDiscord;
+    // an old webhook saved before the channel was remembered: find it now
+    if (s.fromDiscord && !s.channelId) {
+      const url = webhookUrl(s);
+      if (url) s.channelId = await channelOf(url);
+      if (!s.channelId) return res.status(400).json({ error: 'Не удалось определить канал webhook: сохраните адрес заново' });
+    }
     if (b.data.enabled !== undefined) s.enabled = b.data.enabled;
     for (const k of CHAT_KINDS) {
       const on = (b.data.kinds as Partial<Record<ChatKind, boolean>> | undefined)?.[k];
@@ -24352,6 +24390,10 @@ export interface ChatStored {
   /** «[16:07]» in front of every line, like in the game */
   showTime: boolean;
   colors: Record<ChatKind, ChatColors>;
+  /** what an administrator writes in the channel of the webhook is shown in the game chat */
+  fromDiscord: boolean;
+  /** the channel of the webhook (found when the webhook is saved): where the bot listens */
+  channelId: string;
 }
 
 const isAnsi = (x: unknown): x is AnsiColor => typeof x === 'string' && (ANSI_COLORS as readonly string[]).includes(x);
@@ -24363,7 +24405,7 @@ const isAnsi = (x: unknown): x is AnsiColor => typeof x === 'string' && (ANSI_CO
 export function normalizeChat(raw: unknown): ChatStored {
   const v = (raw && typeof raw === 'object' ? raw : {}) as {
     enabled?: unknown; webhook?: unknown; kinds?: Partial<Record<ChatKind, unknown>>; webhooks?: Partial<Record<ChatKind, unknown>>;
-    style?: unknown; senderName?: unknown; showTime?: unknown; colors?: Partial<Record<ChatKind, Partial<Record<keyof ChatColors, unknown>>>>;
+    style?: unknown; senderName?: unknown; showTime?: unknown; fromDiscord?: unknown; channelId?: unknown; colors?: Partial<Record<ChatKind, Partial<Record<keyof ChatColors, unknown>>>>;
   };
   const legacy = v.webhooks && typeof v.webhooks === 'object' ? v.webhooks : {};
   const legacyFirst = (['global', 'clan', 'local'] as const).map((k) => legacy[k]).find((x): x is string => typeof x === 'string' && x.length > 0);
@@ -24389,6 +24431,8 @@ export function normalizeChat(raw: unknown): ChatStored {
     kinds,
     style: v.style === 'plain' ? 'plain' : 'ansi',
     showTime: v.showTime !== false,
+    fromDiscord: v.fromDiscord === true,
+    channelId: typeof v.channelId === 'string' && /^\d{5,30}$/.test(v.channelId) ? v.channelId : '',
     senderName: typeof v.senderName === 'string' ? v.senderName.replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, 80) : '',
     colors,
   };
@@ -25465,6 +25509,7 @@ import { readScoped, serverOf, writeScoped } from './gameNewsScope.js';
 import { log } from '../logger.js';
 import { internal } from '../security/auth.js';
 import { pluginTarget, queueNews } from './gameNews.js';
+import { chatChannels } from './gameNewsChat.js';
 import { plainLine } from './gameNewsJoinLeave.js';
 import {
   DEFAULT_TEXTS, MAX_SECONDS, announceLine, cancelLine, formatLeft, nextNotice, noticeSeconds, nowLine, parseDuration, type RestartTexts,
@@ -25647,18 +25692,26 @@ export function registerGameNewsServerRestart({ app, admin }: { app: Express; ad
     res.json({ ok: r.ok, text: r.text, replies: [`<color=${r.ok ? C_OK : C_BAD}>* ${plainLine(r.text)}</color>`] });
   });
 
+  // the bot asks which channels it listens to (and whether it needs the right to read messages at all)
+  app.get('/internal/game-chat-channels', internal, (_req, res) => {
+    res.json({ channels: chatChannels() });
+  });
+
   // ---- the Discord bot: «/say»: a line from Discord into the game chat (the same rights as «/restart»)
   app.post('/internal/game-say', internal, (req, res) => {
     const b = z.object({
-      text: z.string().min(1).max(300), server: z.string().max(100).optional(), name: z.string().max(80),
+      text: z.string().min(1).max(300), server: z.string().max(100).optional(), channelId: z.string().max(30).optional(), name: z.string().max(80),
       discordId: z.string().max(32), discordAdmin: z.boolean(),
     }).safeParse(req.body);
     if (!b.success) return res.status(400).json({ ok: false, text: 'Проверьте поля' });
     const linked = db.prepare("SELECT username FROM users WHERE discord_id = ? AND role = 'admin' AND status = 'active'").get(b.data.discordId) as { username: string } | undefined;
-    if (!b.data.discordAdmin && !linked) return res.json({ ok: false, text: 'Эта команда только для администраторов.' });
+    // a line written in the chat channel by somebody who is not an administrator is just talk: no answer
+    if (!b.data.discordAdmin && !linked) return res.json({ ok: false, silent: !!b.data.channelId, text: 'Эта команда только для администраторов.' });
     const servers = pluginServers();
     const q = (b.data.server ?? '').trim().toLowerCase();
-    const found = q ? servers.filter((s) => s.name.toLowerCase().includes(q)) : servers;
+    const ch = b.data.channelId ? chatChannels().find((c) => c.channelId === b.data.channelId) : undefined;
+    if (b.data.channelId && !ch) return res.json({ ok: false, silent: true, text: '' });
+    const found = ch ? servers.filter((s) => ch.serverIds.includes(s.id)) : q ? servers.filter((s) => s.name.toLowerCase().includes(q)) : servers;
     if (found.length === 0) return res.json({ ok: false, text: q ? 'Сервер не найден среди серверов с плагином.' : 'Нет серверов с плагином CoreGSM.' });
     const who = plainLine(linked?.username ?? b.data.name) || 'Discord';
     const body = plainLine(b.data.text);
@@ -36593,6 +36646,7 @@ import { supportUrl } from '../discord/botExtras.js';
 import { publicBase } from '../admin/site.js';
 import { parseLayout } from '../images/embedLayout.js';
 import { embedFor, intervalParam, serializeBinding, SELECT_SERVERS, SERVER_ORDER, serialize, type ServerJoin } from '../monitoring/serverData.js';
+import { chatChannels } from '../gamenews/gameNewsChat.js';
 
 export const router = express.Router();
 
@@ -36634,7 +36688,7 @@ router.post(
 );
 
 router.get('/internal/config', internal, (_req, res) => {
-  res.json({ discordToken: getSetting('discord_token') ?? '', proxyUrl: getSetting('proxy_url') ?? '', welcome: welcomeSettings().enabled, style: (() => { const s = currentStyle(); return { footer: s.footer, accent: s.accent, logoUrl: s.logoUrl, version: APP_VERSION_NAME || '', panelUrl: publicBase() ?? null, supportUrl: supportUrl() || null }; })() });
+  res.json({ discordToken: getSetting('discord_token') ?? '', proxyUrl: getSetting('proxy_url') ?? '', welcome: welcomeSettings().enabled, gameChat: chatChannels().length > 0, style: (() => { const s = currentStyle(); return { footer: s.footer, accent: s.accent, logoUrl: s.logoUrl, version: APP_VERSION_NAME || '', panelUrl: publicBase() ?? null, supportUrl: supportUrl() || null }; })() });
 });
 
 router.post('/internal/bot-guilds', internal, (req, res) => {
@@ -41583,6 +41637,7 @@ import fs from 'node:fs';
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, Client, EmbedBuilder, GatewayIntentBits, type GuildMember } from 'discord.js';
 import { backend, report } from './backend.js';
 import { handleFaqMessage } from './faq.js';
+import { handleGameChatMessage } from './gameRestart.js';
 import { handleInteraction, registerCommands } from './commands.js';
 import { deliveryFailure, humanDiscordError, isMessageGone, newNonce, retryAfterOf, retrySocket, stableNonce } from './errors.js';
 import { setGatewayAgent } from './gateway.js';
@@ -41604,6 +41659,8 @@ interface BotConfig {
   proxyUrl: string;
   /** the welcome message is on: needs the «Server Members» intent */
   welcome?: boolean;
+  /** a game chat channel listens to administrators: needs the «Message Content» intent */
+  gameChat?: boolean;
   style?: unknown;
 }
 
@@ -41730,7 +41787,7 @@ async function applyConfig(): Promise<void> {
   if (!res.ok) throw new Error(`config HTTP ${res.status}`);
   const cfg = (await res.json()) as BotConfig;
   setStyle(cfg.style);
-  const key = `${cfg.discordToken}|${cfg.proxyUrl}|${cfg.welcome ? 'w' : ''}`;
+  const key = `${cfg.discordToken}|${cfg.proxyUrl}|${cfg.welcome ? 'w' : ''}${cfg.gameChat ? 'g' : ''}`;
   if (key === appliedKey) return;
   // after a failure wait before retrying the SAME config; a changed config is applied immediately
   if (key === failedKey && Date.now() < retryAt) return;
@@ -41766,7 +41823,7 @@ async function applyConfig(): Promise<void> {
   if (proxy) log('Using proxy for Discord:', proxy.label);
 
   const c = new Client({
-    intents: cfg.welcome ? [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.GuildMembers] : [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages],
+    intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, ...(cfg.welcome ? [GatewayIntentBits.GuildMembers] : []), ...(cfg.gameChat ? [GatewayIntentBits.MessageContent] : [])],
     rest: { timeout: 10_000, ...(proxy ? { agent: proxy.rest } : {}) },
   });
   c.on('error', (e) => log('client error', e));
@@ -41785,6 +41842,7 @@ async function applyConfig(): Promise<void> {
   c.on('messageCreate', (m) => {
     if (stopping) return;
     void handleFaqMessage(m).catch((e) => log('faq message failed:', (e as Error).message));
+    if (cfg.gameChat) void handleGameChatMessage(m).catch((e) => log('game chat message failed:', (e as Error).message));
   });
   c.on('guildCreate', guildsChanged);
   c.on('guildDelete', guildsChanged);
@@ -43225,7 +43283,7 @@ export function humanDiscordError(e: unknown): string {
     case 10008: return 'Сообщение уже удалено в Discord.';
     case 'TokenInvalid': return 'Токен неверный или сброшен. Получите новый: Developer Portal → Bot → Reset Token.';
   }
-  if (/disallowed intents/i.test(m)) return 'Для приветствия новичков включите «Server Members Intent»: Developer Portal → Bot → Privileged Gateway Intents. Либо отключите приветствие в разделе «Discord».';
+  if (/disallowed intents/i.test(m)) return 'Включите нужные Privileged Gateway Intents в Developer Portal → Bot: «Server Members Intent» (приветствие новичков) и «Message Content Intent» (сообщения админов из Discord в игру). Либо отключите эти возможности в панели.';
   if (/invalid token|token.*invalid/i.test(m)) return 'Токен неверный или сброшен. Получите новый: Developer Portal → Bot → Reset Token.';
   if (/ENOTFOUND|ECONNREFUSED|ETIMEDOUT|ECONNRESET|EAI_AGAIN|fetch failed|timeout|socks|proxy/i.test(m)) {
     return 'Нет связи с Discord. Проверьте интернет сервера или настройте прокси в разделе «Настройки».';
@@ -43478,7 +43536,7 @@ __COREGSM_EOF__
  * Discord server (or an administrator of the panel linked to the Discord account). The panel does the work and answers
  * with the text to show; the game chat gets «Рестарт через 5 минут» ... as the timer runs.
  */
-import { PermissionFlagsBits, type ChatInputCommandInteraction } from 'discord.js';
+import { PermissionFlagsBits, type ChatInputCommandInteraction, type Message } from 'discord.js';
 import { backendJson } from './backend.js';
 import { log } from './log.js';
 import { COLORS, replyEmbed } from './replies.js';
@@ -43566,6 +43624,37 @@ async function handleSay(i: ChatInputCommandInteraction): Promise<void> {
     ? replyEmbed(r.data.ok ? 'В игру' : 'Не получилось', r.data.text, r.data.ok ? COLORS.ok : COLORS.warn)
     : replyEmbed('Не получилось', 'Панель сейчас не отвечает, попробуйте ещё раз чуть позже.', COLORS.bad);
   await i.editReply(out).catch((e) => log('say reply failed:', (e as Error).message));
+}
+
+// ---- what an administrator writes in the channel of the game chat goes to the game
+let channelCache = { at: 0, ids: new Set<string>() };
+
+async function chatChannelIds(): Promise<Set<string>> {
+  if (Date.now() - channelCache.at < 30_000) return channelCache.ids;
+  const r = await backendJson<{ channels: { channelId: string }[] }>('/internal/game-chat-channels', { signal: AbortSignal.timeout(4000) }).catch(() => null);
+  channelCache = { at: Date.now(), ids: new Set((r?.data?.channels ?? []).map((c) => c.channelId)) };
+  return channelCache.ids;
+}
+
+/**
+ * A message in a channel where the game chat is shown (the channel of the webhook, when «Писать из Discord в игру» is on):
+ * the panel decides whether the writer may (administrators only) and where it goes; the bot answers with a mark under the message.
+ * Messages of bots and webhooks (the chat itself) are never forwarded.
+ */
+export async function handleGameChatMessage(m: Message): Promise<void> {
+  if (m.author.bot || m.webhookId || !m.guildId || m.system) return;
+  const text = m.cleanContent.replace(/\s+/g, ' ').trim().slice(0, 300);
+  if (!text || text.startsWith('/')) return;
+  if (!(await chatChannelIds()).has(m.channelId)) return;
+  const r = await backendJson<{ ok: boolean; silent?: boolean }>('/internal/game-say', {
+    method: 'POST',
+    body: JSON.stringify({
+      text, channelId: m.channelId, name: m.member?.displayName ?? m.author.username, discordId: m.author.id,
+      discordAdmin: m.member?.permissions.has(PermissionFlagsBits.Administrator) ?? false,
+    }),
+  }).catch(() => null);
+  if (!r?.data || r.data.silent) return;
+  await m.react(r.data.ok ? '✅' : '❌').catch(() => undefined);
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-bot/src"
@@ -140138,6 +140227,10 @@ export interface ChatSettings {
   /** «[16:07]» in front of every line, like in the game */
   showTime: boolean;
   colors: Record<ChatKind, ChatColors>;
+  /** an administrator's message in the channel goes to the game */
+  fromDiscord: boolean;
+  /** the channel of the webhook is known (the bot can listen to it) */
+  channel: boolean;
 }
 
 /** everything the «rules» endpoint returns: automatic announcements and the settings of the events */
@@ -143517,6 +143610,10 @@ const en: Record<keyof typeof ru, string> = {
   'gn.h.expired': 'Not delivered',
   'gn.h.fail': 'Failed',
   'gn.reuse': 'Use again',
+  'gn.ch.fromDiscord': 'Write from Discord to the game',
+  'gn.ch.fromDiscordNote': 'What a Discord administrator writes in this channel appears in the game chat: «* [Discord] Name: text». The bot puts ✅ under the message. Messages of other members are ignored. «Message Content Intent» has to be on in Developer Portal → Bot, and the bot needs the right to read the channel.',
+  'gn.ch.fromDiscordNeed': 'Set the webhook of the channel first.',
+
   'gn.col.game': 'As in the game',
   'gn.col.recent': 'Recent:',
   'gn.ch.presets': 'Ready styles:',
@@ -147011,6 +147108,7 @@ const errorsEn: Record<string, string> = {
   announcement_no_channel: 'Choose a Discord channel',
   announcement_bad_time: 'Set a time in the future, not later than a year',
   announcement_limit: 'No more than {n} scheduled announcements',
+  game_chat_channel: 'The channel of the webhook could not be found: save the address again',
   game_restart_server: 'Pick a server with the plugin',
   game_restart_short: 'At least 10 seconds',
   game_restart_long: 'No more than 6 hours',
@@ -148201,6 +148299,10 @@ const ru = {
   'gn.h.expired': 'Не доставлено',
   'gn.h.fail': 'Ошибка',
   'gn.reuse': 'Использовать снова',
+  'gn.ch.fromDiscord': 'Писать из Discord в игру',
+  'gn.ch.fromDiscordNote': 'Всё, что администратор Discord пишет в этом канале, появится в игровом чате: «* [Discord] Имя: текст». Под сообщением бот ставит ✅. Сообщения остальных участников игнорируются. В Developer Portal → Bot должен быть включён «Message Content Intent», а у бота есть право читать канал.',
+  'gn.ch.fromDiscordNeed': 'Сначала укажите webhook канала.',
+
   'gn.col.game': 'Как в игре',
   'gn.col.recent': 'Недавние:',
   'gn.ch.presets': 'Готовые стили:',
@@ -152233,15 +152335,15 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
   // the servers with the game plugin: each has its own page of settings under «Игровой плагин» (when there are several)
   const [pluginServers, setPluginServers] = useState<{ id: number; name: string; online: boolean; players: number | null; max: number | null; lastSeen: number | null }[]>([]);
   useEffect(() => {
-    if (!isAdmin || current !== 'gamenews') return;
+    if (!isAdmin) return;
     let alive = true;
     const load = () => api<{ servers: { id: number; name: string; supported: boolean; hasToken: boolean; online: boolean; players: number | null; maxPlayers: number | null; lastSeen: number | null }[] }>('/game-news')
       .then((d) => { if (alive) setPluginServers(d.servers.filter((x) => x.supported && x.hasToken).map((x) => ({ id: x.id, name: x.name, online: x.online, players: x.players, max: x.maxPlayers, lastSeen: x.lastSeen }))); })
       .catch(() => undefined);
     void load();
-    const timer = window.setInterval(() => void load(), 15_000);
+    const timer = window.setInterval(() => void load(), current === 'gamenews' ? 15_000 : 60_000);
     return () => { alive = false; window.clearInterval(timer); };
-  }, [isAdmin, current]);
+  }, [isAdmin, current === 'gamenews']); // eslint-disable-line react-hooks/exhaustive-deps
   const first = tail.split('/')[0];
   const crumb = !['servers', 'discord', 'news'].includes(current) || !first ? '' : first === 'new' ? t('adm.crumb.new') : /^\d+$/.test(first) ? t('adm.crumb.edit') : '';
   const divider = <span aria-hidden className="mx-1 w-px shrink-0 self-stretch bg-line md:hidden" />;
@@ -152280,14 +152382,14 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
                 {divider}
                 <div id={`adm-g-${gi}`} className="adm-group-title hidden md:block">{g.title}</div>
                 <div role="group" aria-labelledby={`adm-g-${gi}`} className="flex gap-1 md:flex-col">
-                  {g.sections.map((s) => (s.id === 'gamenews' && current === 'gamenews' && pluginServers.length > 1
+                  {g.sections.map((s) => (s.id === 'gamenews' && pluginServers.length > 1
                     ? (
                       <Fragment key={s.id}>
                         {item(s)}
                         <div className="adm-sub flex flex-col gap-0.5 max-md:hidden" role="group" aria-label={t('gn.tab.servers')}>
                           {pluginServers.map((x) => (
-                            <a key={x.id} href={`/admin/gamenews/s${x.id}`} aria-current={tail === `s${x.id}` ? 'page' : undefined} title={x.name}
-                              className={`flex items-start gap-2 rounded-ui-md py-1.5 pl-6 pr-2 text-sm font-bold leading-snug transition hover:text-ink ${tail === `s${x.id}` ? 'bg-soft text-ink' : 'text-mute'}`}>
+                            <a key={x.id} href={`/admin/gamenews/s${x.id}`} aria-current={current === 'gamenews' && tail === `s${x.id}` ? 'page' : undefined} title={x.name}
+                              className={`flex items-start gap-2 rounded-ui-md py-1.5 pl-6 pr-2 text-sm font-bold leading-snug transition hover:text-ink ${current === 'gamenews' && tail === `s${x.id}` ? 'bg-soft text-ink' : 'text-mute'}`}>
                               <span aria-hidden className={`mt-1.5 inline-block h-2 w-2 shrink-0 rounded-full ${x.online ? 'bg-ok' : 'bg-mute'}`} />
                               <span className="min-w-0 flex-1 break-words">{x.name}</span>
                               {x.online && x.players != null && <span className="shrink-0 rounded-full bg-soft px-1.5 text-xs font-extrabold">{x.players}</span>}
@@ -157302,6 +157404,14 @@ export function ChatCard({ initial, joinText, leaveText }: { initial: ChatSettin
           </div>
         )}
       </div>
+
+      <label className="flex items-start gap-3 font-bold">
+        <Switch className="mt-0.5" checked={st.fromDiscord} disabled={busy === 'fromDiscord' || !st.set} onChange={(v) => void send({ fromDiscord: v }, 'fromDiscord', true)} />
+        <span>
+          {t('gn.ch.fromDiscord')}
+          <span className="block text-sm font-semibold text-mute">{t(st.set ? 'gn.ch.fromDiscordNote' : 'gn.ch.fromDiscordNeed')}</span>
+        </span>
+      </label>
 
       <fieldset className="space-y-2">
         <legend className="mb-1 font-extrabold">{t('gn.ch.what')}</legend>

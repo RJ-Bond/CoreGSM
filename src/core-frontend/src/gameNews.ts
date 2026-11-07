@@ -305,6 +305,10 @@ export interface ChatSettings {
   /** «[16:07]» in front of every line, like in the game */
   showTime: boolean;
   colors: Record<ChatKind, ChatColors>;
+  /** an administrator's message in the channel goes to the game */
+  fromDiscord: boolean;
+  /** the channel of the webhook is known (the bot can listen to it) */
+  channel: boolean;
 }
 
 /** everything the «rules» endpoint returns: automatic announcements and the settings of the events */

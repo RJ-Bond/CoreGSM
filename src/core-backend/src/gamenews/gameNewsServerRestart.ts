@@ -14,6 +14,7 @@ import { readScoped, serverOf, writeScoped } from './gameNewsScope.js';
 import { log } from '../logger.js';
 import { internal } from '../security/auth.js';
 import { pluginTarget, queueNews } from './gameNews.js';
+import { chatChannels } from './gameNewsChat.js';
 import { plainLine } from './gameNewsJoinLeave.js';
 import {
   DEFAULT_TEXTS, MAX_SECONDS, announceLine, cancelLine, formatLeft, nextNotice, noticeSeconds, nowLine, parseDuration, type RestartTexts,
@@ -196,18 +197,26 @@ export function registerGameNewsServerRestart({ app, admin }: { app: Express; ad
     res.json({ ok: r.ok, text: r.text, replies: [`<color=${r.ok ? C_OK : C_BAD}>* ${plainLine(r.text)}</color>`] });
   });
 
+  // the bot asks which channels it listens to (and whether it needs the right to read messages at all)
+  app.get('/internal/game-chat-channels', internal, (_req, res) => {
+    res.json({ channels: chatChannels() });
+  });
+
   // ---- the Discord bot: «/say»: a line from Discord into the game chat (the same rights as «/restart»)
   app.post('/internal/game-say', internal, (req, res) => {
     const b = z.object({
-      text: z.string().min(1).max(300), server: z.string().max(100).optional(), name: z.string().max(80),
+      text: z.string().min(1).max(300), server: z.string().max(100).optional(), channelId: z.string().max(30).optional(), name: z.string().max(80),
       discordId: z.string().max(32), discordAdmin: z.boolean(),
     }).safeParse(req.body);
     if (!b.success) return res.status(400).json({ ok: false, text: 'Проверьте поля' });
     const linked = db.prepare("SELECT username FROM users WHERE discord_id = ? AND role = 'admin' AND status = 'active'").get(b.data.discordId) as { username: string } | undefined;
-    if (!b.data.discordAdmin && !linked) return res.json({ ok: false, text: 'Эта команда только для администраторов.' });
+    // a line written in the chat channel by somebody who is not an administrator is just talk: no answer
+    if (!b.data.discordAdmin && !linked) return res.json({ ok: false, silent: !!b.data.channelId, text: 'Эта команда только для администраторов.' });
     const servers = pluginServers();
     const q = (b.data.server ?? '').trim().toLowerCase();
-    const found = q ? servers.filter((s) => s.name.toLowerCase().includes(q)) : servers;
+    const ch = b.data.channelId ? chatChannels().find((c) => c.channelId === b.data.channelId) : undefined;
+    if (b.data.channelId && !ch) return res.json({ ok: false, silent: true, text: '' });
+    const found = ch ? servers.filter((s) => ch.serverIds.includes(s.id)) : q ? servers.filter((s) => s.name.toLowerCase().includes(q)) : servers;
     if (found.length === 0) return res.json({ ok: false, text: q ? 'Сервер не найден среди серверов с плагином.' : 'Нет серверов с плагином CoreGSM.' });
     const who = plainLine(linked?.username ?? b.data.name) || 'Discord';
     const body = plainLine(b.data.text);

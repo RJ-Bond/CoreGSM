@@ -13,7 +13,7 @@ export function humanDiscordError(e: unknown): string {
     case 10008: return 'Сообщение уже удалено в Discord.';
     case 'TokenInvalid': return 'Токен неверный или сброшен. Получите новый: Developer Portal → Bot → Reset Token.';
   }
-  if (/disallowed intents/i.test(m)) return 'Для приветствия новичков включите «Server Members Intent»: Developer Portal → Bot → Privileged Gateway Intents. Либо отключите приветствие в разделе «Discord».';
+  if (/disallowed intents/i.test(m)) return 'Включите нужные Privileged Gateway Intents в Developer Portal → Bot: «Server Members Intent» (приветствие новичков) и «Message Content Intent» (сообщения админов из Discord в игру). Либо отключите эти возможности в панели.';
   if (/invalid token|token.*invalid/i.test(m)) return 'Токен неверный или сброшен. Получите новый: Developer Portal → Bot → Reset Token.';
   if (/ENOTFOUND|ECONNREFUSED|ETIMEDOUT|ECONNRESET|EAI_AGAIN|fetch failed|timeout|socks|proxy/i.test(m)) {
     return 'Нет связи с Discord. Проверьте интернет сервера или настройте прокси в разделе «Настройки».';
