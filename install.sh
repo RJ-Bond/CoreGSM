@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="d6abe7a98aa7"
+COREGSM_BUILD="ab0da167905e"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.75"
+COREGSM_VERSION="1.1.76"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -23520,7 +23520,7 @@ export const ERRORS = {
   game_news_bytes: 'Слишком длинное сообщение для игры: {n} из {max} байт (русские буквы занимают по 2 байта)',
   game_news_color: 'Цвет задаётся как #RRGGBB',
   game_news_webhook: 'Это не адрес webhook Discord (https://discord.com/api/webhooks/…)',
-  game_news_webhook_missing: 'Сначала укажите webhook для этого чата',
+  game_news_webhook_missing: 'Сначала укажите webhook',
   game_news_templates_limit: 'Не больше {n} шаблонов',
   captcha_required: 'Подтвердите, что вы не робот: страница решит небольшую задачу сама',
   ip_locked: 'Слишком много неудачных попыток входа с этого адреса. Повторите через {sec} с.',
@@ -24050,10 +24050,10 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-backend/src/gamenews/gameNewsChat.ts" << '__COREGSM_EOF__'
 /**
  * The game chat for the administrators in Discord: the plugin reads the messages players write (the general chat, the
- * clan chat, the chat of the players nearby; private whispers never) and sends them here; the panel posts them to a
- * Discord webhook of the channel set for that kind of chat: «[Общий] WhiteLegioN: Привет».
+ * clan chat, the chat of the players nearby; private whispers never) and sends them here; the panel posts them to one
+ * Discord webhook: «[Общий] WhiteLegioN: Привет». A switch for every kind of chat decides what goes to the channel.
  *
- *  - the webhook addresses are secrets: kept encrypted, only «set / not set» and the tail of the address are shown;
+ *  - the webhook address is a secret: kept encrypted, only «set / not set» and the tail of the address are shown;
  *  - only Discord addresses are accepted (the panel never calls an address an administrator could point inside the network);
  *  - lines are collected and posted a few at a time (Discord allows about five posts in two seconds per webhook), a
  *    flood is cut, a «rate limited» answer pauses the channel;
@@ -24065,23 +24065,21 @@ import { db, getSetting, setSetting } from '../db.js';
 import { log } from '../logger.js';
 import { decryptSecret, encryptSecret } from '../security/secrets.js';
 import { pluginTarget } from './gameNews.js';
-import { CHAT_KINDS, chunkLines, formatChatLine, isDiscordWebhook, type ChatKind } from './gameNewsChatLogic.js';
-import { chatKindsConfigured } from './gameNewsVars.js';
+import {
+  CHAT_KINDS, activeChatKinds, chunkLines, formatChatLine, isDiscordWebhook, normalizeChat, type ChatKind, type ChatStored,
+} from './gameNewsChatLogic.js';
 
-interface Stored { enabled: boolean; webhooks: Partial<Record<ChatKind, string>> }
-
-const read = (): Stored => {
+const read = (): ChatStored => {
   try {
-    const v = JSON.parse(getSetting('gamenews_chat') || '{}') as Partial<Stored>;
-    return { enabled: !!v.enabled, webhooks: v.webhooks && typeof v.webhooks === 'object' ? v.webhooks : {} };
+    return normalizeChat(JSON.parse(getSetting('gamenews_chat') || '{}'));
   } catch {
-    return { enabled: false, webhooks: {} };
+    return normalizeChat({});
   }
 };
-const write = (s: Stored): void => setSetting('gamenews_chat', JSON.stringify(s));
+const write = (s: ChatStored): void => setSetting('gamenews_chat', JSON.stringify(s));
 
-function webhookOf(kind: ChatKind): string | null {
-  const enc = read().webhooks[kind];
+function webhookUrl(): string | null {
+  const enc = read().webhook;
   if (!enc) return null;
   try {
     const url = decryptSecret(enc);
@@ -24092,30 +24090,22 @@ function webhookOf(kind: ChatKind): string | null {
 }
 
 /** the kinds of chat that are being forwarded (what the plugin has to read) */
-export const chatKinds = (): ChatKind[] => chatKindsConfigured();
+export const chatKinds = (): ChatKind[] => activeChatKinds(read());
 
-export function chatSettingsView(): { enabled: boolean; set: Record<ChatKind, boolean>; tail: Record<ChatKind, string> } {
+export function chatSettingsView(): { enabled: boolean; set: boolean; tail: string; kinds: Record<ChatKind, boolean> } {
   const s = read();
-  const set = { global: false, clan: false, local: false } as Record<ChatKind, boolean>;
-  const tail = { global: '', clan: '', local: '' } as Record<ChatKind, string>;
-  for (const k of CHAT_KINDS) {
-    const u = webhookOf(k);
-    set[k] = !!u;
-    tail[k] = u ? `…${u.slice(-6)}` : '';
-  }
-  return { enabled: s.enabled, set, tail };
+  const u = webhookUrl();
+  return { enabled: s.enabled, set: !!u, tail: u ? `…${u.slice(-6)}` : '', kinds: s.kinds };
 }
 
 // ---- posting
 const MAX_QUEUE = 200;
-const queues = new Map<ChatKind, string[]>();
-const pausedUntil = new Map<ChatKind, number>();
+let queue: string[] = [];
+let pausedUntil = 0;
 
-function enqueue(kind: ChatKind, line: string): void {
-  const q = queues.get(kind) ?? [];
-  q.push(line);
-  if (q.length > MAX_QUEUE) q.splice(0, q.length - MAX_QUEUE); // a flood: the oldest lines go
-  queues.set(kind, q);
+function enqueue(line: string): void {
+  queue.push(line);
+  if (queue.length > MAX_QUEUE) queue = queue.slice(-MAX_QUEUE); // a flood: the oldest lines go
 }
 
 async function post(url: string, content: string): Promise<{ ok: boolean; retryAfter: number }> {
@@ -24142,21 +24132,19 @@ async function post(url: string, content: string): Promise<{ ok: boolean; retryA
 
 /** one pass of the sender: what has gathered goes out, in chunks that fit a Discord message */
 export async function flushChat(now = Date.now()): Promise<void> {
-  for (const kind of CHAT_KINDS) {
-    const q = queues.get(kind);
-    if (!q?.length || (pausedUntil.get(kind) ?? 0) > now) continue;
-    const url = webhookOf(kind);
-    queues.set(kind, []);
-    if (!url) continue;
-    for (const chunk of chunkLines(q)) {
-      const r = await post(url, chunk);
-      if (r.retryAfter) {
-        pausedUntil.set(kind, now + r.retryAfter * 1000);
-        // put the rest back at the front, the chunk that failed with it
-        const rest = q.slice(q.indexOf(chunk.split('\n')[0]));
-        queues.set(kind, [...rest, ...(queues.get(kind) ?? [])].slice(-MAX_QUEUE));
-        break;
-      }
+  if (!queue.length || pausedUntil > now) return;
+  const url = webhookUrl();
+  const lines = queue;
+  queue = [];
+  if (!url) return;
+  const chunks = chunkLines(lines);
+  for (let i = 0; i < chunks.length; i++) {
+    const r = await post(url, chunks[i]);
+    if (r.retryAfter) {
+      pausedUntil = now + r.retryAfter * 1000;
+      // the chunk that was refused and the rest wait for the next pass
+      queue = [...chunks.slice(i).flatMap((c) => c.split('\n')), ...queue].slice(-MAX_QUEUE);
+      return;
     }
   }
 }
@@ -24189,6 +24177,11 @@ const messageSchema = z.object({
   text: z.string().max(600),
 });
 
+function serverLabelOf(id: number): string {
+  const r = db.prepare("SELECT COALESCE(NULLIF(s.name, ''), NULLIF(st.name, ''), s.host || ':' || s.port) AS n FROM servers s LEFT JOIN status st ON st.server_id = s.id WHERE s.id = ?").get(id) as { n: string } | undefined;
+  return r?.n ?? '';
+}
+
 export function registerGameNewsChat({ app, admin }: { app: Express; admin: RequestHandler }): void {
   // from the plugin: a batch of what players wrote
   app.post('/api/game-news/chat', (req, res) => {
@@ -24205,59 +24198,78 @@ export function registerGameNewsChat({ app, admin }: { app: Express; admin: Requ
     for (const m of b.data.messages) {
       if (!kinds.has(m.type)) continue;
       const line = formatChatLine(m.type, m.name, m.clan ?? '', m.text, server);
-      if (line) enqueue(m.type, line);
+      if (line) enqueue(line);
     }
     res.json({ ok: true });
   });
 
-  // from the administrator: switch and webhooks (an empty field keeps the saved address, «clear» removes it)
+  // from the administrator: the switch, the webhook (empty keeps the saved one, clear removes it) and the kinds of chat
   app.put('/api/game-news/chat-settings', admin, (req, res) => {
     const b = z.object({
-      enabled: z.boolean(),
-      global: z.string().max(300).optional(),
-      clan: z.string().max(300).optional(),
-      local: z.string().max(300).optional(),
-      clear: z.array(z.enum(CHAT_KINDS)).optional(),
+      enabled: z.boolean().optional(),
+      webhook: z.string().max(300).optional(),
+      clear: z.boolean().optional(),
+      kinds: z.object({ global: z.boolean(), clan: z.boolean(), local: z.boolean() }).partial().optional(),
     }).safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Проверьте поля' });
     const s = read();
-    for (const k of CHAT_KINDS) {
-      const v = b.data[k]?.trim();
-      if (!v) continue;
-      if (!isDiscordWebhook(v)) return res.status(400).json({ error: 'Это не адрес webhook Discord (https://discord.com/api/webhooks/…)' });
-      s.webhooks[k] = encryptSecret(v);
+    const w = b.data.webhook?.trim();
+    if (w) {
+      if (!isDiscordWebhook(w)) return res.status(400).json({ error: 'Это не адрес webhook Discord (https://discord.com/api/webhooks/…)' });
+      s.webhook = encryptSecret(w);
     }
-    for (const k of b.data.clear ?? []) delete s.webhooks[k];
-    s.enabled = b.data.enabled;
+    if (b.data.clear) s.webhook = '';
+    if (b.data.enabled !== undefined) s.enabled = b.data.enabled;
+    for (const k of CHAT_KINDS) if (b.data.kinds?.[k] !== undefined) s.kinds[k] = b.data.kinds[k] as boolean;
     write(s);
     res.json({ ok: true });
   });
 
-  // «Проверить»: one line into the channel of that kind
-  app.post('/api/game-news/chat-test', admin, async (req, res) => {
-    const b = z.object({ kind: z.enum(CHAT_KINDS) }).safeParse(req.body);
-    if (!b.success) return res.status(400).json({ error: 'Проверьте поля' });
-    const url = webhookOf(b.data.kind);
-    if (!url) return res.status(400).json({ error: 'Сначала укажите webhook для этого чата' });
+  // «Проверить»: one line into the channel
+  app.post('/api/game-news/chat-test', admin, async (_req, res) => {
+    const url = webhookUrl();
+    if (!url) return res.status(400).json({ error: 'Сначала укажите webhook' });
     const r = await post(url, '✅ CoreGSM: канал подключён, сюда будет приходить чат игры.');
     res.json({ ok: r.ok });
   });
-}
-
-function serverLabelOf(id: number): string {
-  const r = db.prepare('SELECT COALESCE(NULLIF(s.name, \'\'), NULLIF(st.name, \'\'), s.host || \':\' || s.port) AS n FROM servers s LEFT JOIN status st ON st.server_id = s.id WHERE s.id = ?').get(id) as { n: string } | undefined;
-  return r?.n ?? '';
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/gamenews"
   cat > "$APP_DIR/core-backend/src/gamenews/gameNewsChatLogic.ts" << '__COREGSM_EOF__'
 /**
- * The game chat for Discord, the parts that need no database: the kinds of chat, the check of a webhook address, and how
- * a line is written so that nothing a player types can ping anybody or break the formatting.
+ * The game chat for Discord, the parts that need no database: the kinds of chat, the stored settings, the check of a
+ * webhook address, and how a line is written so that nothing a player types can ping anybody or break the formatting.
  */
 
 export const CHAT_KINDS = ['global', 'clan', 'local'] as const;
 export type ChatKind = (typeof CHAT_KINDS)[number];
+
+/** one webhook for the whole chat (kept encrypted) and a switch for every kind of chat */
+export interface ChatStored { enabled: boolean; webhook: string; kinds: Record<ChatKind, boolean> }
+
+/**
+ * The stored setting as a ChatStored. An older setting had one webhook per kind of chat: the first webhook that was set
+ * becomes the only one and the kinds that had a webhook stay on.
+ */
+export function normalizeChat(raw: unknown): ChatStored {
+  const v = (raw && typeof raw === 'object' ? raw : {}) as {
+    enabled?: unknown; webhook?: unknown; kinds?: Partial<Record<ChatKind, unknown>>; webhooks?: Partial<Record<ChatKind, unknown>>;
+  };
+  const legacy = v.webhooks && typeof v.webhooks === 'object' ? v.webhooks : {};
+  const legacyFirst = CHAT_KINDS.map((k) => legacy[k]).find((x): x is string => typeof x === 'string' && x.length > 0);
+  const webhook = typeof v.webhook === 'string' && v.webhook ? v.webhook : legacyFirst ?? '';
+  const kinds = {} as Record<ChatKind, boolean>;
+  for (const k of CHAT_KINDS) {
+    if (v.kinds && typeof v.kinds[k] === 'boolean') kinds[k] = v.kinds[k] as boolean;
+    else kinds[k] = v.webhooks ? typeof legacy[k] === 'string' && !!legacy[k] : true;
+  }
+  return { enabled: !!v.enabled, webhook, kinds };
+}
+
+/** the kinds that are forwarded right now: the switch is on, a webhook is set and the kind is not turned off */
+export function activeChatKinds(s: ChatStored): ChatKind[] {
+  return s.enabled && s.webhook ? CHAT_KINDS.filter((k) => s.kinds[k]) : [];
+}
 
 /** only a real Discord webhook address is accepted */
 export const isDiscordWebhook = (u: string): boolean =>
@@ -25026,7 +25038,7 @@ import { db, getSetting, setSetting } from '../db.js';
 import { localParts } from '../admin/localTime.js';
 import { nextRun } from '../monitoring/restartLogic.js';
 import { plainLine } from './gameNewsJoinLeave.js';
-import { CHAT_KINDS, type ChatKind } from './gameNewsChatLogic.js';
+import { activeChatKinds, normalizeChat, type ChatKind } from './gameNewsChatLogic.js';
 import { VARIABLES, type Vars } from './gameNewsLogic.js';
 
 /** the plugin counts as «online» when it polled within this time */
@@ -25092,11 +25104,10 @@ function nextWipe(serverId: number, now: number): string {
   return w ? fmt(w.wipe_at, { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—';
 }
 
-/** the kinds of game chat that are forwarded to Discord (switch on and a webhook set): what the plugin has to read */
+/** the kinds of game chat that are forwarded to Discord (switch on, a webhook set, the kind not turned off): what the plugin reads */
 export function chatKindsConfigured(): ChatKind[] {
   try {
-    const v = JSON.parse(getSetting('gamenews_chat') || '{}') as { enabled?: boolean; webhooks?: Record<string, string> };
-    return v.enabled ? CHAT_KINDS.filter((k) => !!v.webhooks?.[k]) : [];
+    return activeChatKinds(normalizeChat(JSON.parse(getSetting('gamenews_chat') || '{}')));
   } catch {
     return [];
   }
@@ -122208,6 +122219,85 @@ export const FootCommunity = () => svg(<><circle cx="9" cy="8" r="3.2" /><path d
 export const FootTag = () => svg(<><path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8Z" /><path d="M7.5 7.5h.01" /></>);
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/GameNewsParts.tsx" << '__COREGSM_EOF__'
+import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode, type TextareaHTMLAttributes } from 'react';
+import { t, useI18n } from '../i18n';
+
+/** time as a person says it: «сегодня 16:02», «завтра 04:00», «через 15 мин», «5 мин назад» (no seconds, no year) */
+export function soon(ts: number | null, now = Date.now()): string {
+  if (!ts) return '—';
+  const diff = ts - now;
+  const abs = Math.abs(diff);
+  const clock = new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const amount = (ms: number) => {
+    const min = Math.max(1, Math.round(ms / 60_000));
+    return min < 90 ? t('gn.rt.min', { n: min }) : t('gn.rt.h', { n: Math.round(min / 60) });
+  };
+  if (abs < 6 * 3_600_000) return diff >= 0 ? t('gn.rt.in', { t: amount(abs) }) : t('gn.rt.ago', { t: amount(abs) });
+  const d = new Date(ts);
+  const n = new Date(now);
+  const day = (x: Date) => Date.UTC(x.getFullYear(), x.getMonth(), x.getDate());
+  const gap = Math.round((day(d) - day(n)) / 86_400_000);
+  if (gap === 0) return t('gn.rt.today', { time: clock });
+  if (gap === 1) return t('gn.rt.tomorrow', { time: clock });
+  if (gap === -1) return t('gn.rt.yesterday', { time: clock });
+  return `${d.toLocaleDateString([], { day: '2-digit', month: '2-digit' })} ${clock}`;
+}
+
+/** a text area that grows with its text, so nothing is cut off */
+export function AutoText({ value, className = '', ...rest }: TextareaHTMLAttributes<HTMLTextAreaElement> & { value: string }) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el || typeof value !== 'string') return;
+    el.style.height = 'auto';
+    el.style.height = `${el.scrollHeight + 2}px`;
+  }, [value]);
+  return <textarea ref={ref} rows={1} value={value} className={`input resize-none overflow-hidden ${className}`.trim()} {...rest} />;
+}
+
+const KEY = (id: string) => `coregsm.gn.fold.${id}`;
+const readOpen = (id: string, fallback: boolean): boolean => {
+  try { const v = localStorage.getItem(KEY(id)); return v == null ? fallback : v === '1'; } catch { return fallback; }
+};
+
+/**
+ * A settings card that folds: the header always shows what it is and whether it is on, the body opens on a click.
+ * The state of every card is remembered in this browser. `status` is the «Сохранено» badge, shown next to the header.
+ */
+export function FoldCard({ id, title, summary, on, defaultOpen = false, status, children }: {
+  id: string; title: string; summary?: ReactNode; on?: boolean; defaultOpen?: boolean; status?: ReactNode; children: ReactNode;
+}) {
+  useI18n();
+  const [open, setOpen] = useState(() => readOpen(id, defaultOpen));
+  const body = useId();
+  useEffect(() => { try { localStorage.setItem(KEY(id), open ? '1' : '0'); } catch { /* private mode */ } }, [id, open]);
+
+  return (
+    <section className="panel overflow-hidden">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-5 py-3.5">
+        <button
+          type="button"
+          className="flex min-w-0 flex-1 basis-64 items-center gap-3 text-left"
+          aria-expanded={open}
+          aria-controls={body}
+          onClick={() => setOpen((v) => !v)}
+        >
+          <span aria-hidden className={`inline-block text-mute transition-transform ${open ? 'rotate-90' : ''}`}>›</span>
+          <span className="min-w-0">
+            <span className="block font-extrabold">{title}</span>
+            {summary != null && <span className="block text-sm font-semibold text-mute">{summary}</span>}
+          </span>
+        </button>
+        {on != null && <span className={on ? 'pill pill-ok' : 'pill pill-mute'}>{on ? t('gn.f.on') : t('gn.f.off')}</span>}
+        {status}
+      </div>
+      {open && <div id={body} className="space-y-4 border-t border-line px-5 py-4">{children}</div>}
+    </section>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
   cat > "$APP_DIR/core-frontend/src/components/GamePicker.tsx" << '__COREGSM_EOF__'
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { GAMES } from '../games';
@@ -139176,10 +139266,22 @@ export interface RegisterSettings {
   discordEveryHours: number;
 }
 
-/** the game chat in Discord: which chats go to which channel (the webhook addresses never leave the backend) */
+/** the game chat in Discord: one webhook (its address never leaves the backend) and a switch for each kind of chat */
 export const CHAT_KINDS = ['global', 'clan', 'local'] as const;
 export type ChatKind = (typeof CHAT_KINDS)[number];
-export interface ChatSettings { enabled: boolean; set: Record<ChatKind, boolean>; tail: Record<ChatKind, string> }
+export interface ChatSettings { enabled: boolean; set: boolean; tail: string; kinds: Record<ChatKind, boolean> }
+
+/** everything the «rules» endpoint returns: automatic announcements and the settings of the events */
+export interface RulesState {
+  timezone: string;
+  restartCountdown: boolean;
+  welcome: Welcome;
+  joinLeave: JoinLeave;
+  extras: Extras;
+  register: RegisterSettings;
+  chat: ChatSettings;
+  rules: RuleInfo[];
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/gameProfiles.ts" << '__COREGSM_EOF__'
@@ -142542,8 +142644,65 @@ const en: Record<keyof typeof ru, string> = {
   'gn.h.expired': 'Not delivered',
   'gn.h.fail': 'Failed',
   'gn.reuse': 'Use again',  'adm.s.alerts': 'Alerts',
-  'gn.ch.title': 'Server chat in Discord',
-  'gn.ch.note': 'Messages players write in the game chat arrive in a Discord channel as «[Global] nick: text» (for a clan «[Clan Name] nick: text»). Each chat has its own channel: create a webhook in it (Channel settings → Integrations → Webhooks) and paste the address here. Needs plugin 0.8.0.',
+  'gn.rt.min': '{n} min',
+  'gn.rt.h': '{n} h',
+  'gn.rt.in': 'in {t}',
+  'gn.rt.ago': '{t} ago',
+  'gn.rt.today': 'today {time}',
+  'gn.rt.tomorrow': 'tomorrow {time}',
+  'gn.rt.yesterday': 'yesterday {time}',
+  'gn.f.on': 'On',
+  'gn.f.off': 'Off',
+  'gn.sv.setup': 'Set up',
+  'gn.sv.more': 'More servers without the plugin: {n}',
+  'gn.sv.less': 'Hide servers without the plugin',
+  'gn.s.plugin': 'Plugin',
+  'gn.s.pluginVal': '{on} of {all} online',
+  'gn.s.pluginNone': 'not connected',
+  'gn.s.players': 'Players online',
+  'gn.s.onServers': 'on {n} servers',
+  'gn.s.auto': 'Auto announcements',
+  'gn.s.autoVal': 'active: {n}',
+  'gn.s.next': 'next {time}',
+  'gn.s.sent': 'Sent in 24 hours',
+  'gn.s.queued': 'queued: {n}',
+  'gn.wz.title': 'Connect the plugin to a server',
+  'gn.wz.note': 'Until the plugin is online, nothing can be sent to the game. Three steps:',
+  'gn.wz.hide': 'Hide this guide',
+  'gn.wz.s1': 'Put the plugin on the server',
+  'gn.wz.s1h': 'The file CoreGSM.dll into the BepInEx/plugins folder of the game server (BepInEx is needed).',
+  'gn.wz.s2': 'Create a token',
+  'gn.wz.s2h': 'The «Set up» button next to a server, then «Create token».',
+  'gn.wz.s3': 'Paste the block into the config and start',
+  'gn.wz.s3h': 'The block from the token window into BepInEx/config/CoreGSM.cfg, restart. «Online» will appear here.',
+  'gn.wz.token': 'Create a token',
+  'gn.wz.docs': 'Full guide',
+  'gn.tab.players': 'Players',
+  'gn.tab.discord': 'Discord',
+  'gn.a.menu': 'Actions: {name}',
+  'gn.a.edit': 'Edit',
+  'gn.w.sumSplit': 'Different texts for a new and a returning player',
+  'gn.w.sumOne': 'One text for everybody',
+  'gn.w.sumOff': 'Players are not greeted',
+  'gn.jl.sum': 'Join: {join} · Leave: {leave}',
+  'gn.rg.sumOn': 'A player registers with the .register command',
+  'gn.rg.sumOff': 'Registration from the game is off',
+  'gn.rs.sum': '10, 5 and 1 minute before a planned restart',
+  'gn.ch.sumNoHook': 'No Discord channel set',
+  'gn.ch.sumKinds': 'Forwarded: {list}',
+  'gn.ch.sumNone': 'Nothing is forwarded',
+  'gn.ch.channel': 'Discord channel',
+  'gn.ch.add': 'Set',
+  'gn.ch.edit': 'Change',
+  'gn.ch.what': 'What to forward',
+  'gn.ch.short.global': 'global',
+  'gn.ch.short.clan': 'clan',
+  'gn.ch.short.local': 'nearby',
+  'gn.ch.kindNote.global': 'Messages to all players of the server: «[Global] nick: text».',
+  'gn.ch.kindNote.clan': 'The clan chat with the clan name: «[Clan Name] nick: text». This is private talk of a clan.',
+  'gn.ch.kindNote.local': 'Messages of players near each other: «[Nearby] nick: text». Very noisy.',
+  'gn.x.sum': 'Discord: {discord} · tips: {n}',  'gn.ch.title': 'Server chat in Discord',
+  'gn.ch.note': 'Messages players write in the game chat arrive in a Discord channel as «[Global] nick: text» (for a clan «[Clan Name] nick: text»). Everything goes to one channel: create a webhook in it (Channel settings → Integrations → Webhooks), paste the address here and choose below which chats are forwarded. Needs plugin 0.8.0.',
   'gn.ch.enabled': 'Forward the game chat to Discord',
   'gn.ch.kind.global': 'Global chat',
   'gn.ch.kind.clan': 'Clan chat',
@@ -142556,7 +142715,7 @@ const en: Record<keyof typeof ru, string> = {
   'gn.ch.saved': 'Saved',
   'gn.ch.testOk': 'A test message was sent to the channel',
   'gn.ch.testFail': 'Could not send: check the webhook address',
-  'gn.ch.hint': 'Commands (messages that start with «.», «/» or «!») do not reach Discord. Mentions (@everyone, @here) in players\' messages ping nobody. Leave an address empty if you do not need that chat.',
+  'gn.ch.hint': 'Commands (messages that start with «.», «/» or «!») do not reach Discord. Mentions (@everyone, @here) in players\' messages ping nobody. A kind of chat that is switched off is not sent to Discord.',
   'gn.ch.privacy': 'Private messages of players (whispers) are never forwarded. The other chats are read in the Discord of your server, not only in the game: tell your players in the rules.',  'gn.rg.title': 'Registration in the panel from the game',
   'gn.rg.note': 'A player without an account sees a hint on joining and registers with a chat command: .register password password_again. The login in the panel is the game nickname and the account is linked to it at once. Needs plugin 0.7.0 and VampireCommandFramework on the server.',
   'gn.rg.enabled': 'Allow registration from the game',
@@ -145905,7 +146064,7 @@ const errorsEn: Record<string, string> = {
   game_news_bytes: 'The message is too long for the game: {n} of {max} bytes (Russian letters take 2 bytes each)',
   game_news_color: 'A colour is written as #RRGGBB',
   game_news_webhook: 'This is not a Discord webhook address (https://discord.com/api/webhooks/…)',
-  game_news_webhook_missing: 'Set the webhook for this chat first',
+  game_news_webhook_missing: 'Set the webhook first',
   game_news_templates_limit: 'No more than {n} templates',
   captcha_required: 'Confirm you are not a robot: the page solves a small puzzle by itself',
   ip_locked: 'Too many failed sign-ins from this address. Try again in {sec} s.',
@@ -147076,8 +147235,65 @@ const ru = {
   'gn.h.expired': 'Не доставлено',
   'gn.h.fail': 'Ошибка',
   'gn.reuse': 'Использовать снова',  'adm.s.alerts': 'Оповещения',
-  'gn.ch.title': 'Чат сервера в Discord',
-  'gn.ch.note': 'Сообщения игроков из игрового чата приходят в канал Discord в виде «[Общий] ник: текст» (для клана «[Клан Название] ник: текст»). Для каждого чата свой канал: создайте в нём webhook (Настройки канала → Интеграции → Webhooks) и вставьте адрес сюда. Нужен плагин 0.8.0.',
+  'gn.rt.min': '{n} мин',
+  'gn.rt.h': '{n} ч',
+  'gn.rt.in': 'через {t}',
+  'gn.rt.ago': '{t} назад',
+  'gn.rt.today': 'сегодня {time}',
+  'gn.rt.tomorrow': 'завтра {time}',
+  'gn.rt.yesterday': 'вчера {time}',
+  'gn.f.on': 'Включено',
+  'gn.f.off': 'Выключено',
+  'gn.sv.setup': 'Настроить',
+  'gn.sv.more': 'Ещё серверов без плагина: {n}',
+  'gn.sv.less': 'Скрыть серверы без плагина',
+  'gn.s.plugin': 'Плагин',
+  'gn.s.pluginVal': '{on} из {all} на связи',
+  'gn.s.pluginNone': 'не подключён',
+  'gn.s.players': 'Игроков онлайн',
+  'gn.s.onServers': 'на серверов: {n}',
+  'gn.s.auto': 'Автообъявления',
+  'gn.s.autoVal': 'активно: {n}',
+  'gn.s.next': 'ближайшее {time}',
+  'gn.s.sent': 'Отправлено за 24 часа',
+  'gn.s.queued': 'в очереди: {n}',
+  'gn.wz.title': 'Подключите плагин к серверу',
+  'gn.wz.note': 'Пока плагин не вышел на связь, сообщения в игру отправить нельзя. Три шага:',
+  'gn.wz.hide': 'Скрыть подсказку',
+  'gn.wz.s1': 'Положите плагин на сервер',
+  'gn.wz.s1h': 'Файл CoreGSM.dll в папку BepInEx/plugins игрового сервера (нужен BepInEx).',
+  'gn.wz.s2': 'Создайте токен',
+  'gn.wz.s2h': 'Кнопка «Настроить» у сервера, затем «Создать токен».',
+  'gn.wz.s3': 'Вставьте блок в конфиг и запустите',
+  'gn.wz.s3h': 'Блок из окна токена в BepInEx/config/CoreGSM.cfg, перезапуск. Здесь появится «На связи».',
+  'gn.wz.token': 'Создать токен',
+  'gn.wz.docs': 'Подробная инструкция',
+  'gn.tab.players': 'Игроки',
+  'gn.tab.discord': 'Discord',
+  'gn.a.menu': 'Действия: {name}',
+  'gn.a.edit': 'Изменить',
+  'gn.w.sumSplit': 'Разные тексты для нового и вернувшегося игрока',
+  'gn.w.sumOne': 'Один текст для всех',
+  'gn.w.sumOff': 'Игроков не приветствуем',
+  'gn.jl.sum': 'Вход: {join} · Выход: {leave}',
+  'gn.rg.sumOn': 'Игрок регистрируется командой .register',
+  'gn.rg.sumOff': 'Регистрация из игры отключена',
+  'gn.rs.sum': 'За 10, 5 и 1 минуту до планового рестарта',
+  'gn.ch.sumNoHook': 'Канал Discord не задан',
+  'gn.ch.sumKinds': 'Пересылается: {list}',
+  'gn.ch.sumNone': 'Ничего не пересылается',
+  'gn.ch.channel': 'Канал Discord',
+  'gn.ch.add': 'Задать',
+  'gn.ch.edit': 'Изменить',
+  'gn.ch.what': 'Что пересылать',
+  'gn.ch.short.global': 'общий',
+  'gn.ch.short.clan': 'клан',
+  'gn.ch.short.local': 'рядом',
+  'gn.ch.kindNote.global': 'Сообщения всем игрокам сервера: «[Общий] ник: текст».',
+  'gn.ch.kindNote.clan': 'Чат клана с названием клана: «[Клан Название] ник: текст». Это закрытая переписка клана.',
+  'gn.ch.kindNote.local': 'Сообщения игроков поблизости друг от друга: «[Рядом] ник: текст». Много шума.',
+  'gn.x.sum': 'Discord: {discord} · советов: {n}',  'gn.ch.title': 'Чат сервера в Discord',
+  'gn.ch.note': 'Сообщения игроков из игрового чата приходят в канал Discord в виде «[Общий] ник: текст» (для клана «[Клан Название] ник: текст»). Всё приходит в один канал: создайте в нём webhook (Настройки канала → Интеграции → Webhooks) и вставьте адрес сюда, а ниже выберите, какие чаты пересылать. Нужен плагин 0.8.0.',
   'gn.ch.enabled': 'Пересылать чат игры в Discord',
   'gn.ch.kind.global': 'Общий чат',
   'gn.ch.kind.clan': 'Чат клана',
@@ -147090,7 +147306,7 @@ const ru = {
   'gn.ch.saved': 'Сохранено',
   'gn.ch.testOk': 'Тестовое сообщение отправлено в канал',
   'gn.ch.testFail': 'Не удалось отправить: проверьте адрес webhook',
-  'gn.ch.hint': 'Команды (сообщения, начинающиеся с «.», «/» или «!») в Discord не попадают. Упоминания (@everyone, @here) в сообщениях игроков никого не вызывают. Если чат не нужен, оставьте адрес пустым.',
+  'gn.ch.hint': 'Команды (сообщения, начинающиеся с «.», «/» или «!») в Discord не попадают. Упоминания (@everyone, @here) в сообщениях игроков никого не вызывают. Выключенный вид чата в Discord не отправляется.',
   'gn.ch.privacy': 'Личные сообщения игроков (шёпот) никогда не пересылаются. Остальные чаты игроки видят в Discord вашего сервера, а не только в игре: предупредите их об этом в правилах.',  'gn.rg.title': 'Регистрация в панели из игры',
   'gn.rg.note': 'Игрок без аккаунта видит подсказку при входе и регистрируется командой в чате: .register пароль подтверждение_пароля. Логин в панели берётся из игрового ника, аккаунт сразу привязывается к нику. Нужны плагин 0.7.0 и VampireCommandFramework на сервере.',
   'gn.rg.enabled': 'Разрешить регистрацию из игры',
@@ -155173,13 +155389,22 @@ __COREGSM_EOF__
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { api } from '../api';
 import { NewsEditor, NewsPreview, Styled } from '../components/NewsEditor';
+import { soon } from '../components/GameNewsParts';
 import { confirmDialog } from '../confirm';
 import { t, useI18n } from '../i18n';
-import { pluginConfig, validateNews, versionLess, type NewsLogRow, type NewsSendResult, type NewsServerInfo, type NewsStatus } from '../gameNews';
-import { AdminPage, ErrorLine, IconNews, IconSettings, LoadError, Modal, PageHead, Spinner, errText, navigate, toast, usePoll } from '../ui';
+import {
+  pluginConfig, validateNews, versionLess,
+  type NewsLogRow, type NewsSendResult, type NewsServerInfo, type NewsStatus, type RulesState,
+} from '../gameNews';
+import { AdminPage, ErrorLine, IconNews, LoadError, Modal, PageHead, Spinner, errText, navigate, toast, usePoll } from '../ui';
+import { ChatCard, ExtrasCard, JoinLeaveCard, RegisterCard, RestartCard, WelcomeCard } from './GameNewsCards';
 import GameNewsRules from './GameNewsRules';
 
 interface NewsState { servers: NewsServerInfo[]; log: NewsLogRow[]; pluginLatest: string }
+
+type Tab = 'send' | 'auto' | 'players' | 'discord' | 'history';
+const TABS: Tab[] = ['send', 'auto', 'players', 'discord', 'history'];
+const DOCS = 'https://github.com/RJ-Bond/CoreGSM/blob/main/docs/game-plugin.md';
 
 /** «3 с назад», «5 мин назад», «2 ч назад» */
 function ago(ts: number): string {
@@ -155196,14 +155421,25 @@ const STATUS: Record<NewsStatus, { text: 'gn.h.queued' | 'gn.h.ok' | 'gn.h.expir
   failed: { text: 'gn.h.fail', cls: 'pill pill-warn' },
 };
 
-/** «Новости в игру»: a message for the in-game chat (the CoreGSM game plugin picks it up), sent now or by a schedule. */
+function Tile({ label, value, sub }: { label: string; value: string; sub?: string }) {
+  return (
+    <div className="panel min-w-0 px-4 py-3">
+      <div className="text-xs font-bold uppercase tracking-wide text-mute">{label}</div>
+      <div className="mt-0.5 wrap-break-word text-lg font-extrabold">{value}</div>
+      {sub && <div className="wrap-break-word text-sm font-semibold text-mute">{sub}</div>}
+    </div>
+  );
+}
+
+/** «Игровой плагин»: messages to the in-game chat (the CoreGSM game plugin picks them up), schedules, events, the chat in Discord. */
 export default function GameNewsPage({ sub = '' }: { sub?: string }) {
   useI18n();
   const [data, setData] = useState<NewsState | null>(null);
+  const [rd, setRd] = useState<RulesState | null>(null);
   const [error, setError] = useState('');
-  // the tab is part of the address: /admin/gamenews, /admin/gamenews/auto, /events, /history
-  const tab = (['auto', 'events', 'history'] as const).find((x) => x === sub) ?? 'send';
-  const goTab = (x: 'send' | 'auto' | 'events' | 'history') => navigate(x === 'send' ? '/admin/gamenews' : `/admin/gamenews/${x}`);
+  // the tab is part of the address: /admin/gamenews, /auto, /players, /discord, /history («events» is the old name of «players»)
+  const tab: Tab = sub === 'events' ? 'players' : (TABS.find((x) => x === sub) ?? 'send');
+  const goTab = (x: Tab) => navigate(x === 'send' ? '/admin/gamenews' : `/admin/gamenews/${x}`);
   // the draft survives a switch of the page or a reload (kept in this browser only)
   const [text, setText] = useState(() => { try { return localStorage.getItem('coregsm.gamenews.draft') ?? ''; } catch { return ''; } });
   useEffect(() => { try { if (text) localStorage.setItem('coregsm.gamenews.draft', text); else localStorage.removeItem('coregsm.gamenews.draft'); } catch { /* private mode */ } }, [text]);
@@ -155211,26 +155447,43 @@ export default function GameNewsPage({ sub = '' }: { sub?: string }) {
   const [busy, setBusy] = useState(false);
   const [settingsFor, setSettingsFor] = useState<number | null>(null);
   const [lastResult, setLastResult] = useState<NewsSendResult | null>(null);
+  const [showBare, setShowBare] = useState(false);
+  const [wizardOff, setWizardOff] = useState(() => { try { return localStorage.getItem('coregsm.gn.wizard') === '0'; } catch { return false; } });
 
-  const load = () =>
-    api<NewsState>('/game-news')
-      .then((d) => { setData(d); setError(''); })
-      .catch((e: Error) => setError(e.message));
-  usePoll(load, 10_000);
+  const loadMain = () => api<NewsState>('/game-news').then((d) => { setData(d); setError(''); }).catch((e: Error) => setError(e.message));
+  const loadRules = () => api<RulesState>('/game-news/rules').then(setRd).catch(() => undefined);
+  usePoll(() => Promise.all([loadMain(), loadRules()]), 10_000);
 
   const problem = validateNews(text);
   // the plugin exists for some games only: servers of other games are not listed (their number is shown)
-  const shown = (data?.servers ?? []).filter((s) => s.supported);
-  const hiddenCount = (data?.servers.length ?? 0) - shown.length;
-  const ready = shown.filter((s) => s.hasToken);
+  const supported = (data?.servers ?? []).filter((s) => s.supported);
+  const hiddenOther = (data?.servers.length ?? 0) - supported.length;
+  const withToken = supported.filter((s) => s.hasToken);
+  const bare = supported.filter((s) => !s.hasToken);
   const settingsServer = data?.servers.find((s) => s.id === settingsFor) ?? null;
   const touched = useRef(false);
   const toggle = (id: number) => { touched.current = true; setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id])); };
   // a single server with a plugin is chosen right away (until the administrator picks by hand)
   useEffect(() => {
-    if (!touched.current && ready.length === 1 && picked.length === 0) setPicked([ready[0].id]);
-  }, [ready, picked.length]);
+    if (!touched.current && withToken.length === 1 && picked.length === 0) setPicked([withToken[0].id]);
+  }, [withToken, picked.length]);
   const sendHint = problem === 'empty' ? t('gn.hint.text') : problem === 'long' ? t('gn.hint.long') : !picked.length ? t('gn.hint.server') : '';
+
+  // the strip on top and the counters on the tabs
+  const online = withToken.filter((s) => s.online);
+  const players = online.reduce((n, s) => n + (s.players ?? 0), 0);
+  const activeRules = (rd?.rules ?? []).filter((r) => r.enabled);
+  const nextRun = activeRules.map((r) => r.nextRun).filter((x): x is number => !!x).sort((a, b) => a - b)[0] ?? null;
+  const day = Date.now() - 86_400_000;
+  const delivered24 = (data?.log ?? []).filter((r) => r.status === 'delivered' && r.sentAt > day).length;
+  const queued = (data?.log ?? []).filter((r) => r.status === 'queued').length;
+  const eventsOn = rd ? [rd.welcome.enabled, rd.joinLeave.joinEnabled || rd.joinLeave.leaveEnabled, rd.register.enabled, rd.restartCountdown].filter(Boolean).length : 0;
+  const chatOn = rd ? (rd.chat.enabled && rd.chat.set ? 1 : 0) : 0;
+  const counter: Record<Tab, number> = { send: 0, auto: activeRules.length, players: eventsOn, discord: chatOn, history: queued };
+
+  // the setup guide: until a plugin is online
+  const showWizard = !!data && supported.length > 0 && online.length === 0 && !wizardOff;
+  const firstBare = bare[0] ?? withToken[0] ?? null;
 
   const send = async (e?: FormEvent) => {
     e?.preventDefault();
@@ -155242,14 +155495,47 @@ export default function GameNewsPage({ sub = '' }: { sub?: string }) {
     try {
       const r = await api<NewsSendResult>('/game-news/send', 'POST', { serverIds: picked, text });
       setLastResult(r);
-      const bad = r.results.filter((x) => !x.queued).length;
-      toast(bad ? t('gn.t.partial', { ok: r.results.length - bad, total: r.results.length }) : t('gn.t.queued'), bad ? 'err' : undefined);
-      void load();
+      const badCount = r.results.filter((x) => !x.queued).length;
+      toast(badCount ? t('gn.t.partial', { ok: r.results.length - badCount, total: r.results.length }) : t('gn.t.queued'), badCount ? 'err' : undefined);
+      void loadMain();
     } catch (err) {
       toast(errText(err), 'err');
     } finally {
       setBusy(false);
     }
+  };
+
+  const serverRow = (s: NewsServerInfo) => {
+    const old = s.hasToken && s.online && versionLess(s.pluginVersion, data?.pluginLatest ?? '');
+    return (
+      <li key={s.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2.5">
+        <label className="flex min-w-0 flex-1 basis-48 items-center gap-2.5 font-bold">
+          <input type="checkbox" disabled={!s.hasToken} checked={picked.includes(s.id)} onChange={() => toggle(s.id)} />
+          <span className="min-w-0 wrap-break-word">
+            {s.name}
+            <span className="block text-xs font-semibold text-mute">
+              {s.name !== s.address && s.address}
+              {s.players != null && <>{s.name !== s.address && ' · '}{t('gn.players', { n: s.players, max: s.maxPlayers ?? 0 })}</>}
+            </span>
+          </span>
+        </label>
+        <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
+          <span
+            className={!s.hasToken ? 'pill pill-mute' : !s.online || old ? 'pill pill-warn' : 'pill pill-ok'}
+            title={s.lastSeen ? t('gn.plugin.lastPoll', { time: ago(s.lastSeen) }) : undefined}
+          >
+            {!s.hasToken
+              ? t('gn.plugin.off')
+              : !s.online
+                ? (s.pluginVersion ? `${t('gn.plugin.silent')} · v${s.pluginVersion}` : t('gn.plugin.silent'))
+                : old
+                  ? t('gn.plugin.outdated', { v: s.pluginVersion || '?', latest: data?.pluginLatest ?? '' })
+                  : `${t('gn.plugin.online')} · v${s.pluginVersion || '?'}`}
+          </span>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => setSettingsFor(s.id)} aria-label={t('gn.plugin.settings', { name: s.name })}>{t('gn.sv.setup')}</button>
+        </div>
+      </li>
+    );
   };
 
   return (
@@ -155258,114 +155544,150 @@ export default function GameNewsPage({ sub = '' }: { sub?: string }) {
         <PageHead icon={<IconNews size={22} />} title={t('gn.title')} subtitle={t('gn.subtitle')} hint={t('gn.hint')} help={<p>{t('gn.help')}</p>} />
       )}
     >
-      {error && !data ? <LoadError error={error} onRetry={() => void load()} /> : <ErrorLine text={error} />}
+      {error && !data ? <LoadError error={error} onRetry={() => void loadMain()} /> : <ErrorLine text={error} />}
       {!data && !error && <div className="skeleton panel h-40" aria-busy="true" aria-label={t('d2.news.loading')} />}
 
       {data && (
+        <div className="grid gap-3 min-[560px]:grid-cols-2 lg:grid-cols-4">
+          <Tile
+            label={t('gn.s.plugin')}
+            value={withToken.length ? t('gn.s.pluginVal', { on: online.length, all: withToken.length }) : t('gn.s.pluginNone')}
+            sub={online[0]?.pluginVersion ? `v${online[0].pluginVersion}` : undefined}
+          />
+          <Tile label={t('gn.s.players')} value={online.length ? String(players) : '—'} sub={online.length ? t('gn.s.onServers', { n: online.length }) : undefined} />
+          <Tile label={t('gn.s.auto')} value={t('gn.s.autoVal', { n: activeRules.length })} sub={nextRun ? t('gn.s.next', { time: soon(nextRun) }) : undefined} />
+          <Tile label={t('gn.s.sent')} value={String(delivered24)} sub={queued ? t('gn.s.queued', { n: queued }) : undefined} />
+        </div>
+      )}
+
+      {showWizard && (
+        <section className="panel space-y-3 p-5" aria-label={t('gn.wz.title')}>
+          <div className="flex flex-wrap items-start justify-between gap-2">
+            <div>
+              <h3 className="font-extrabold">{t('gn.wz.title')}</h3>
+              <p className="text-sm font-semibold text-mute">{t('gn.wz.note')}</p>
+            </div>
+            <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setWizardOff(true); try { localStorage.setItem('coregsm.gn.wizard', '0'); } catch { /* private mode */ } }}>{t('gn.wz.hide')}</button>
+          </div>
+          <ol className="grid gap-3 lg:grid-cols-3">
+            {[
+              { n: 1, done: withToken.length > 0, title: t('gn.wz.s1'), hint: t('gn.wz.s1h') },
+              { n: 2, done: withToken.length > 0, title: t('gn.wz.s2'), hint: t('gn.wz.s2h') },
+              { n: 3, done: online.length > 0, title: t('gn.wz.s3'), hint: t('gn.wz.s3h') },
+            ].map((st) => (
+              <li key={st.n} className="flex items-start gap-3">
+                <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-sm font-black ${st.done ? 'bg-ok text-white' : 'bg-soft text-mute'}`} aria-hidden>{st.done ? '✓' : st.n}</span>
+                <span className="min-w-0">
+                  <span className="block font-bold">{st.title}</span>
+                  <span className="block text-sm font-semibold text-mute">{st.hint}</span>
+                </span>
+              </li>
+            ))}
+          </ol>
+          <div className="flex flex-wrap gap-2">
+            {firstBare && !firstBare.hasToken && <button type="button" className="btn btn-sm" onClick={() => setSettingsFor(firstBare.id)}>{t('gn.wz.token')}</button>}
+            <a className="btn btn-soft btn-sm" href={DOCS} target="_blank" rel="noreferrer">{t('gn.wz.docs')}</a>
+          </div>
+        </section>
+      )}
+
+      {data && (
         <div className="flex flex-wrap gap-2" role="tablist" aria-label={t('gn.title')}>
-          {(['send', 'auto', 'events', 'history'] as const).map((x) => (
-            <button key={x} type="button" role="tab" aria-selected={tab === x} className={`chip-filter ${tab === x ? 'on' : ''}`} onClick={() => goTab(x)}>{t(`gn.tab.${x}` as 'gn.tab.send')}</button>
+          {TABS.map((x) => (
+            <button key={x} type="button" role="tab" aria-selected={tab === x} className={`chip-filter ${tab === x ? 'on' : ''}`} onClick={() => goTab(x)}>
+              {t(`gn.tab.${x}` as 'gn.tab.send')}
+              {counter[x] > 0 && <span className="ml-1.5 rounded-full bg-soft px-1.5 text-xs font-extrabold">{counter[x]}</span>}
+            </button>
           ))}
         </div>
       )}
 
-      {data && (tab === 'auto' || tab === 'events') && <GameNewsRules servers={data.servers} part={tab === 'auto' ? 'rules' : 'events'} />}
-
       {data && tab === 'send' && (
-        <>
-          <form className="grid gap-5 lg:grid-cols-2" onSubmit={(e) => void send(e)} noValidate>
-            <section className="panel p-5"><NewsEditor value={text} onChange={setText} onCtrlEnter={() => void send()} /></section>
+        <form className="grid items-start gap-5 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]" onSubmit={(e) => void send(e)} noValidate>
+          <section className="panel p-5"><NewsEditor value={text} onChange={setText} onCtrlEnter={() => void send()} /></section>
 
-            <section className="space-y-5">
-              <NewsPreview text={text} />
+          <div className="space-y-5 lg:sticky lg:top-4">
+            <NewsPreview text={text} />
 
-              <div className="panel space-y-3 p-5">
-                <h3 className="font-extrabold">{t('gn.servers')}</h3>
-                {shown.length === 0 && <p className="text-sm font-semibold text-mute">{t('gn.noServers')}</p>}
-                <ul className="divide-y divide-line">
-                  {shown.map((s) => {
-                    const old = s.hasToken && s.online && versionLess(s.pluginVersion, data.pluginLatest);
-                    return (
-                      <li key={s.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2.5">
-                        <label className="flex min-w-0 flex-1 basis-48 items-center gap-2.5 font-bold">
-                          <input type="checkbox" disabled={!s.hasToken} checked={picked.includes(s.id)} onChange={() => toggle(s.id)} />
-                          <span className="min-w-0 wrap-break-word">
-                            {s.name}
-                            <span className="block text-xs font-semibold text-mute">
-                              {s.name !== s.address && s.address}
-                              {s.players != null && <>{s.name !== s.address && ' · '}{t('gn.players', { n: s.players, max: s.maxPlayers ?? 0 })}</>}
-                            </span>
-                          </span>
-                        </label>
-                        <span
-                          className={!s.hasToken ? 'pill pill-mute' : !s.online ? 'pill pill-warn' : old ? 'pill pill-warn' : 'pill pill-ok'}
-                          title={s.lastSeen ? t('gn.plugin.lastPoll', { time: ago(s.lastSeen) }) : undefined}
-                        >
-                          {!s.hasToken
-                            ? t('gn.plugin.off')
-                            : !s.online
-                              ? (s.pluginVersion ? `${t('gn.plugin.silent')} · v${s.pluginVersion}` : t('gn.plugin.silent'))
-                              : old
-                                ? t('gn.plugin.outdated', { v: s.pluginVersion || '?', latest: data.pluginLatest })
-                                : `${t('gn.plugin.online')} · v${s.pluginVersion || '?'}`}
-                        </span>
-                        <button type="button" className="row-act" onClick={() => setSettingsFor(s.id)} aria-label={t('gn.plugin.settings', { name: s.name })}><IconSettings size={16} /></button>
-                      </li>
-                    );
-                  })}
-                </ul>
-                {hiddenCount > 0 && <p className="text-sm font-semibold text-mute">{t('gn.hiddenOther', { n: hiddenCount })}</p>}
-                {shown.length > 0 && ready.length === 0 && <p className="text-sm font-semibold text-mute">{t('gn.noPlugin')}</p>}
-                {ready.length > 1 && (
-                  <button type="button" className="chip-filter" onClick={() => setPicked(picked.length === ready.length ? [] : ready.map((s) => s.id))}>
-                    {picked.length === ready.length ? t('gn.pickNone') : t('gn.pickAll')}
+            <div className="panel space-y-3 p-5">
+              <h3 className="font-extrabold">{t('gn.servers')}</h3>
+              {supported.length === 0 && <p className="text-sm font-semibold text-mute">{t('gn.noServers')}</p>}
+              <ul className="divide-y divide-line">{withToken.map(serverRow)}</ul>
+              {bare.length > 0 && (
+                <>
+                  {showBare && <ul className="divide-y divide-line">{bare.map(serverRow)}</ul>}
+                  <button type="button" className="btn btn-ghost btn-sm" aria-expanded={showBare} onClick={() => setShowBare((v) => !v)}>
+                    {showBare ? t('gn.sv.less') : t('gn.sv.more', { n: bare.length })}
                   </button>
-                )}
-                <div className="sticky bottom-3 z-10 flex flex-wrap items-center justify-end gap-3">
-                  {sendHint && <span className="text-sm font-semibold text-mute">{sendHint}</span>}
-                  <button type="submit" className="btn" disabled={!!problem || !picked.length || busy} title={t('gn.sendKey')}>{busy && <Spinner />}{t('gn.send')}</button>
-                </div>
-                {lastResult && (
-                  <ul className="space-y-1 text-sm font-semibold">
-                    {lastResult.results.map((r) => (
-                      <li key={r.serverId} className={r.queued ? (r.online ? 'text-ok' : undefined) : 'text-danger'}>
-                        {r.queued ? '✓' : '✕'} {r.serverName}: {r.queued ? (r.online ? t('gn.r.queued') : t('gn.r.queuedSilent')) : r.error}
-                      </li>
-                    ))}
-                  </ul>
-                )}
+                </>
+              )}
+              {hiddenOther > 0 && <p className="text-sm font-semibold text-mute">{t('gn.hiddenOther', { n: hiddenOther })}</p>}
+              {supported.length > 0 && withToken.length === 0 && <p className="text-sm font-semibold text-mute">{t('gn.noPlugin')}</p>}
+              {withToken.length > 1 && (
+                <button type="button" className="chip-filter" onClick={() => setPicked(picked.length === withToken.length ? [] : withToken.map((s) => s.id))}>
+                  {picked.length === withToken.length ? t('gn.pickNone') : t('gn.pickAll')}
+                </button>
+              )}
+              <div className="flex flex-wrap items-center justify-end gap-3">
+                {sendHint && <span className="text-sm font-semibold text-mute">{sendHint}</span>}
+                <button type="submit" className="btn" disabled={!!problem || !picked.length || busy} title={t('gn.sendKey')}>{busy && <Spinner />}{t('gn.send')}</button>
               </div>
-            </section>
-          </form>
+              {lastResult && (
+                <ul className="space-y-1 text-sm font-semibold">
+                  {lastResult.results.map((r) => (
+                    <li key={r.serverId} className={r.queued ? (r.online ? 'text-ok' : undefined) : 'text-danger'}>
+                      {r.queued ? '✓' : '✕'} {r.serverName}: {r.queued ? (r.online ? t('gn.r.queued') : t('gn.r.queuedSilent')) : r.error}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
+        </form>
+      )}
 
+      {data && tab === 'auto' && rd && <GameNewsRules servers={data.servers} rules={rd.rules} timezone={rd.timezone} reload={() => void loadRules()} />}
 
-        </>
+      {data && tab === 'players' && rd && (
+        <div className="space-y-4">
+          <WelcomeCard initial={rd.welcome} />
+          <JoinLeaveCard initial={rd.joinLeave} />
+          <RegisterCard initial={rd.register} />
+          <RestartCard enabled={rd.restartCountdown} onChange={(v) => { api('/game-news/restart-countdown', 'PUT', { enabled: v }).then(() => loadRules()).catch((e: Error) => toast(errText(e), 'err')); }} />
+        </div>
+      )}
+
+      {data && tab === 'discord' && rd && (
+        <div className="space-y-4">
+          <ChatCard initial={rd.chat} />
+          <ExtrasCard initial={rd.extras} />
+        </div>
       )}
 
       {data && tab === 'history' && (
-     <section className="panel overflow-hidden">
-       <h3 className="px-5 pt-4 font-extrabold">{t('gn.history')}</h3>
-       {data.log.length === 0 && <p className="px-5 py-4 text-sm font-semibold text-mute">{t('gn.historyEmpty')}</p>}
-       <ul className="divide-y divide-line">
-         {data.log.map((r) => (
-           <li key={r.id} className="flex flex-wrap items-start gap-x-4 gap-y-1 px-5 py-3">
-             <div className="min-w-0 flex-1 basis-60">
-               <div className="flex flex-wrap items-center gap-2 text-sm font-bold">
-                 <span className={STATUS[r.status].cls}>{t(STATUS[r.status].text)}</span>
-                 <span>{r.serverName}</span>
-                 <span className="font-semibold text-mute">{new Date(r.sentAt).toLocaleString()} · {r.sentBy || '—'}</span>
-               </div>
-               <p className="mt-1 wrap-break-word text-sm"><Styled text={r.text} /></p>
-               {(r.status === 'failed' || r.status === 'expired') && r.error && <p className="text-sm font-semibold text-danger">{r.error}</p>}
-             </div>
-             <button type="button" className="btn btn-soft btn-sm" onClick={() => { setText(r.text); goTab('send'); }}>{t('gn.reuse')}</button>
-           </li>
-         ))}
-       </ul>
-     </section>
+        <section className="panel overflow-hidden">
+          <h3 className="px-5 pt-4 font-extrabold">{t('gn.history')}</h3>
+          {data.log.length === 0 && <p className="px-5 py-4 text-sm font-semibold text-mute">{t('gn.historyEmpty')}</p>}
+          <ul className="divide-y divide-line">
+            {data.log.map((r) => (
+              <li key={r.id} className="flex flex-wrap items-start gap-x-4 gap-y-1 px-5 py-3">
+                <div className="min-w-0 flex-1 basis-60">
+                  <div className="flex flex-wrap items-center gap-2 text-sm font-bold">
+                    <span className={STATUS[r.status].cls}>{t(STATUS[r.status].text)}</span>
+                    <span>{r.serverName}</span>
+                    <span className="font-semibold text-mute">{soon(r.sentAt)} · {r.sentBy || '—'}</span>
+                  </div>
+                  <p className="mt-1 wrap-break-word text-sm"><Styled text={r.text} /></p>
+                  {(r.status === 'failed' || r.status === 'expired') && r.error && <p className="text-sm font-semibold text-danger">{r.error}</p>}
+                </div>
+                <button type="button" className="btn btn-soft btn-sm" onClick={() => { setText(r.text); goTab('send'); }}>{t('gn.reuse')}</button>
+              </li>
+            ))}
+          </ul>
+        </section>
       )}
 
-      {settingsServer && <PluginModal server={settingsServer} onClose={() => setSettingsFor(null)} onChanged={() => void load()} />}
+      {settingsServer && <PluginModal server={settingsServer} onClose={() => setSettingsFor(null)} onChanged={() => void loadMain()} />}
     </AdminPage>
   );
 }
@@ -155435,23 +155757,395 @@ function PluginModal({ server, onClose, onChanged }: { server: NewsServerInfo; o
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
-  cat > "$APP_DIR/core-frontend/src/pages/GameNewsRules.tsx" << '__COREGSM_EOF__'
-import { useState, type FormEvent } from 'react';
+  cat > "$APP_DIR/core-frontend/src/pages/GameNewsCards.tsx" << '__COREGSM_EOF__'
+import { useEffect, useRef, useState } from 'react';
 import { api } from '../api';
-import { ChatLines, NewsEditor, NewsPreview, Styled } from '../components/NewsEditor';
-import { StateView } from '../components/StateView';
+import { Switch } from '../components/Switch';
+import { AutoText, FoldCard } from '../components/GameNewsParts';
+import { ChatLines, NewsEditor, NewsPreview } from '../components/NewsEditor';
 import { confirmDialog } from '../confirm';
 import { t, useI18n } from '../i18n';
 import {
-  INTERVAL_PRESETS, SWATCHES, WELCOME_STYLES, WELCOME_VARIABLES, composeLine, emptyRule, isHex, isHHMM, validateNews, validateRule,
-  CHAT_KINDS, type ChatKind, type ChatSettings, type Extras, type JoinLeave, type RegisterSettings, type Welcome, type WelcomeStyle, type NewsServerInfo, type RuleBody, type RuleInfo, type RuleKind,
+  CHAT_KINDS, SWATCHES, WELCOME_STYLES, WELCOME_VARIABLES, composeLine, isHex, validateNews,
+  type ChatSettings, type Extras, type JoinLeave, type RegisterSettings, type Welcome, type WelcomeStyle,
 } from '../gameNews';
+import { Field, SaveBadge, errText, toast, useAutosave } from '../ui';
+
+const onOff = (b: boolean) => (b ? t('gn.f.on') : t('gn.f.off'));
+
+/**
+ * The greeting for a player who joins, shown by the plugin to that player only. One text for everybody, or one for a
+ * newcomer and one for a returning player (switch between them above the editor); ready styles to start from.
+ */
+export function WelcomeCard({ initial }: { initial: Welcome }) {
+  useI18n();
+  const [f, setF] = useState<Welcome>(initial);
+  const [saved, setSaved] = useState<Welcome>(initial);
+  const [which, setWhich] = useState<'back' | 'new'>('back');
+  const set = <K extends keyof Welcome>(k: K, v: Welcome[K]) => setF((x) => ({ ...x, [k]: v }));
+  const auto = useAutosave({
+    value: f,
+    saved,
+    delay: 900,
+    validate: (v) => {
+      if (!v.enabled && !v.text.trim() && !v.newText.trim()) return null;
+      const p = validateNews(v.text);
+      if (p) return t(p === 'long' ? 'gn.hint.long' : 'gn.hint.text');
+      const q = v.split ? validateNews(v.newText) : null;
+      return q ? t(q === 'long' ? 'gn.hint.long' : 'gn.hint.text') : null;
+    },
+    save: async (v) => { await api('/game-news/welcome', 'PUT', v); setSaved(v); },
+  });
+
+  const editingNew = f.split && which === 'new';
+  const text = editingNew ? f.newText : f.text;
+  const setText = (v: string) => set(editingNew ? 'newText' : 'text', v);
+
+  const applyStyle = async (st: WelcomeStyle) => {
+    if ((f.text.trim() || f.newText.trim()) && !(await confirmDialog({ title: t('gn.w.styleTitle'), text: t('gn.w.styleText'), confirmLabel: t('gn.w.styleApply') }))) return;
+    setF((x) => ({ ...x, text: st.text, newText: st.newText, split: true }));
+  };
+
+  return (
+    <FoldCard
+      id="welcome"
+      defaultOpen
+      title={t('gn.w.title')}
+      summary={f.enabled ? (f.split ? t('gn.w.sumSplit') : t('gn.w.sumOne')) : t('gn.w.sumOff')}
+      on={f.enabled}
+      status={<SaveBadge status={auto.status} error={auto.error} retry={auto.retry} />}
+    >
+      <p className="text-sm font-semibold text-mute">{t('gn.w.note')}</p>
+
+      <label className="flex items-center gap-3 font-bold">
+        <Switch checked={f.enabled} onChange={(v) => set('enabled', v)} />
+        {t('gn.w.enabled')}
+      </label>
+
+      <div className="flex flex-wrap items-center gap-2" role="group" aria-label={t('gn.w.styles')}>
+        <span className="text-sm font-bold text-mute">{t('gn.w.styles')}:</span>
+        {WELCOME_STYLES.map((st) => (
+          <button key={st.id} type="button" className="chip-filter" onClick={() => void applyStyle(st)}>{t(`gn.w.style.${st.id}` as 'gn.w.style.classic')}</button>
+        ))}
+      </div>
+
+      <label className="flex items-start gap-3 font-bold">
+        <Switch className="mt-0.5" checked={f.split} onChange={(v) => set('split', v)} />
+        <span>
+          {t('gn.w.split')}
+          <span className="block text-sm font-semibold text-mute">{t('gn.w.splitNote')}</span>
+        </span>
+      </label>
+
+      {f.split && (
+        <div className="flex flex-wrap gap-2" role="tablist" aria-label={t('gn.w.split')}>
+          {(['back', 'new'] as const).map((w) => (
+            <button key={w} type="button" role="tab" aria-selected={which === w} className={`chip-filter ${which === w ? 'on' : ''}`} onClick={() => setWhich(w)}>
+              {t(w === 'back' ? 'gn.w.textBack' : 'gn.w.textNew')}
+            </button>
+          ))}
+        </div>
+      )}
+
+      <NewsEditor value={text} onChange={setText} templates={false} vars={WELCOME_VARIABLES} label={f.split ? t(which === 'new' ? 'gn.w.textNew' : 'gn.w.textBack') : t('gn.w.text')} />
+      <NewsPreview text={text || f.text} welcome />
+      {auto.invalid && f.enabled && <p className="text-sm font-semibold text-danger">{auto.error}</p>}
+    </FoldCard>
+  );
+}
+
+/** a colour: the palette, the system picker and a HEX box */
+function ColorField({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
+  return (
+    <div className="space-y-1.5">
+      <span className="text-sm font-bold">{label}</span>
+      <div className="flex flex-wrap items-center gap-2">
+        {SWATCHES.map((c) => (
+          <button
+            key={c.id}
+            type="button"
+            className={`h-7 w-7 rounded-full border ${value.toUpperCase() === c.hex ? 'border-ink ring-2 ring-ink/40' : 'border-line'}`}
+            style={{ background: c.hex }}
+            aria-label={`${label}: ${c.hex}`}
+            aria-pressed={value.toUpperCase() === c.hex}
+            onClick={() => onChange(c.hex)}
+          />
+        ))}
+        <input type="color" className="h-8 w-10 cursor-pointer rounded border border-line bg-transparent p-0.5" value={isHex(value) ? value : '#FFFFFF'} aria-label={label} onChange={(e) => onChange(e.target.value.toUpperCase())} />
+        <input className="input w-28 font-mono text-sm" value={value} maxLength={7} aria-label={`${label} HEX`} onChange={(e) => onChange(e.target.value)} />
+      </div>
+    </div>
+  );
+}
+
+/** «* Игрок {name} подключился к серверу.»: shown to everybody when a player joins or leaves, with the colours chosen here. */
+export function JoinLeaveCard({ initial }: { initial: JoinLeave }) {
+  useI18n();
+  const [f, setF] = useState<JoinLeave>(initial);
+  const [saved, setSaved] = useState<JoinLeave>(initial);
+  const set = <K extends keyof JoinLeave>(k: K, v: JoinLeave[K]) => setF((x) => ({ ...x, [k]: v }));
+  const auto = useAutosave({
+    value: f,
+    saved,
+    delay: 800,
+    validate: (v) => {
+      if (!isHex(v.nameColor) || !isHex(v.textColor)) return t('gn.jl.badColor');
+      if ((v.joinEnabled && !v.joinText.trim()) || (v.leaveEnabled && !v.leaveText.trim())) return t('gn.hint.text');
+      return null;
+    },
+    save: async (v) => { await api('/game-news/joinleave', 'PUT', v); setSaved(v); },
+  });
+  const sample = (text: string) => composeLine(text, isHex(f.nameColor) ? f.nameColor : '#B86BFF', isHex(f.textColor) ? f.textColor : '#5FD068').replace(/\{name\}/g, 'WhiteLegioN');
+
+  return (
+    <FoldCard
+      id="joinleave"
+      title={t('gn.jl.title')}
+      summary={t('gn.jl.sum', { join: onOff(f.joinEnabled), leave: onOff(f.leaveEnabled) })}
+      on={f.joinEnabled || f.leaveEnabled}
+      status={<SaveBadge status={auto.status} error={auto.error} retry={auto.retry} />}
+    >
+      <p className="text-sm font-semibold text-mute">{t('gn.jl.note')}</p>
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        <div className="space-y-2">
+          <label className="flex items-center gap-3 font-bold">
+            <Switch checked={f.joinEnabled} onChange={(v) => set('joinEnabled', v)} />
+            {t('gn.jl.join')}
+          </label>
+          <AutoText value={f.joinText} maxLength={200} aria-label={t('gn.jl.join')} onChange={(e) => set('joinText', e.target.value)} />
+        </div>
+        <div className="space-y-2">
+          <label className="flex items-center gap-3 font-bold">
+            <Switch checked={f.leaveEnabled} onChange={(v) => set('leaveEnabled', v)} />
+            {t('gn.jl.leave')}
+          </label>
+          <AutoText value={f.leaveText} maxLength={200} aria-label={t('gn.jl.leave')} onChange={(e) => set('leaveText', e.target.value)} />
+        </div>
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        <ColorField label={t('gn.jl.nameColor')} value={f.nameColor} onChange={(v) => set('nameColor', v)} />
+        <ColorField label={t('gn.jl.textColor')} value={f.textColor} onChange={(v) => set('textColor', v)} />
+      </div>
+
+      <ChatLines lines={[sample(f.joinText), sample(f.leaveText)]} />
+      <p className="text-sm font-semibold text-mute">{t('gn.jl.nameHint')}</p>
+      {auto.invalid && <p className="text-sm font-semibold text-danger">{auto.error}</p>}
+    </FoldCard>
+  );
+}
+
+/**
+ * Registration in the panel from the game: a player without an account is told to type .register <password> <again>,
+ * the account is made with the game nickname as the login, and the player is reminded to link Discord.
+ */
+export function RegisterCard({ initial }: { initial: RegisterSettings }) {
+  useI18n();
+  const [f, setF] = useState<RegisterSettings>(initial);
+  const [saved, setSaved] = useState<RegisterSettings>(initial);
+  const set = <K extends keyof RegisterSettings>(k: K, v: RegisterSettings[K]) => setF((x) => ({ ...x, [k]: v }));
+  const auto = useAutosave({
+    value: f,
+    saved,
+    delay: 900,
+    validate: (v) => {
+      if (!Number.isInteger(v.discordEveryHours) || v.discordEveryHours < 1 || v.discordEveryHours > 720) return t('gn.rg.badHours');
+      return [v.promptText, v.doneText, v.discordText, v.pendingText].some((x) => !x.trim()) ? t('gn.hint.text') : null;
+    },
+    save: async (v) => { await api('/game-news/register-settings', 'PUT', v); setSaved(v); },
+  });
+  const sample = (text: string, color: string) => `<color=${color}>${text.replace(/[<>]/g, '').replace(/\{login\}/g, 'WhiteLegioN').replace(/\{panel\}/g, 'coregsm.example.com')}</color>`;
+
+  const field = (label: string, key: 'promptText' | 'doneText' | 'discordText' | 'pendingText') => (
+    <Field label={label}>
+      <AutoText value={f[key]} maxLength={300} onChange={(e) => set(key, e.target.value)} />
+    </Field>
+  );
+
+  return (
+    <FoldCard
+      id="register"
+      title={t('gn.rg.title')}
+      summary={f.enabled ? t('gn.rg.sumOn') : t('gn.rg.sumOff')}
+      on={f.enabled}
+      status={<SaveBadge status={auto.status} error={auto.error} retry={auto.retry} />}
+    >
+      <p className="text-sm font-semibold text-mute">{t('gn.rg.note')}</p>
+
+      <label className="flex items-center gap-3 font-bold">
+        <Switch checked={f.enabled} onChange={(v) => set('enabled', v)} />
+        {t('gn.rg.enabled')}
+      </label>
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        {field(t('gn.rg.prompt'), 'promptText')}
+        {field(t('gn.rg.done'), 'doneText')}
+        {field(t('gn.rg.discord'), 'discordText')}
+        {field(t('gn.rg.pending'), 'pendingText')}
+      </div>
+
+      <Field label={t('gn.rg.hours')}>
+        <input className="input w-32" type="number" min={1} max={720} value={f.discordEveryHours} onChange={(e) => set('discordEveryHours', Number(e.target.value))} />
+      </Field>
+
+      <ChatLines lines={[sample(f.promptText, '#FFCC33'), sample(f.doneText, '#5FD068'), sample(f.discordText, '#6EC1FF')]} />
+      <p className="text-sm font-semibold text-mute">{t('gn.rg.vars')}</p>
+      <p className="text-sm font-semibold text-danger">{t('gn.rg.warn')}</p>
+      {auto.invalid && <p className="text-sm font-semibold text-danger">{auto.error}</p>}
+    </FoldCard>
+  );
+}
+
+/** «через 10 / 5 / 1 минуту» before a planned restart: one switch */
+export function RestartCard({ enabled, onChange }: { enabled: boolean; onChange: (v: boolean) => void }) {
+  useI18n();
+  return (
+    <FoldCard id="restart" title={t('gn.a.countdown')} summary={t('gn.rs.sum')} on={enabled}>
+      <label className="flex items-start gap-3 font-bold">
+        <Switch className="mt-0.5" checked={enabled} onChange={onChange} />
+        <span>
+          {t('gn.a.countdown')}
+          <span className="block text-sm font-semibold text-mute">{t('gn.a.countdownNote')}</span>
+        </span>
+      </label>
+    </FoldCard>
+  );
+}
+
+/**
+ * The chat of the game server for the administrators in Discord: one channel (its webhook) and a switch for each kind
+ * of chat that goes there. The address is a secret: it is sent to the panel and never shown again (only «set» and the tail).
+ */
+export function ChatCard({ initial }: { initial: ChatSettings }) {
+  useI18n();
+  const [st, setSt] = useState<ChatSettings>(initial);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState('');
+  const hookInput = useRef<HTMLInputElement>(null);
+  // the address box takes the focus when it opens
+  useEffect(() => { if (editing) hookInput.current?.focus(); }, [editing]);
+
+  const refresh = () => api<{ chat: ChatSettings }>('/game-news/rules').then((d) => setSt(d.chat)).catch(() => undefined);
+  const send = async (body: Record<string, unknown>, who: string, quiet = false): Promise<boolean> => {
+    setBusy(who);
+    try { await api('/game-news/chat-settings', 'PUT', body); await refresh(); if (!quiet) toast(t('gn.ch.saved')); return true; } catch (e) { toast(errText(e), 'err'); return false; } finally { setBusy(null); }
+  };
+  const test = async () => {
+    setBusy('test');
+    try {
+      const r = await api<{ ok: boolean }>('/game-news/chat-test', 'POST');
+      toast(r.ok ? t('gn.ch.testOk') : t('gn.ch.testFail'), r.ok ? undefined : 'err');
+    } catch (e) { toast(errText(e), 'err'); } finally { setBusy(null); }
+  };
+  const shown = CHAT_KINDS.filter((k) => st.kinds[k]);
+  const summary = !st.set
+    ? t('gn.ch.sumNoHook')
+    : shown.length ? t('gn.ch.sumKinds', { list: shown.map((k) => t(`gn.ch.short.${k}` as 'gn.ch.short.global')).join(', ') }) : t('gn.ch.sumNone');
+
+  return (
+    <FoldCard id="chat" defaultOpen title={t('gn.ch.title')} summary={summary} on={st.enabled && st.set && shown.length > 0}>
+      <p className="text-sm font-semibold text-mute">{t('gn.ch.note')}</p>
+
+      <label className="flex items-center gap-3 font-bold">
+        <Switch checked={st.enabled} disabled={busy === 'switch'} onChange={(v) => void send({ enabled: v }, 'switch', true)} />
+        {t('gn.ch.enabled')}
+      </label>
+
+      <div className="space-y-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="font-extrabold">{t('gn.ch.channel')}</span>
+          <span className={st.set ? 'pill pill-ok' : 'pill pill-mute'}>{st.set ? t('gn.ch.set', { tail: st.tail }) : t('gn.ch.unset')}</span>
+          {st.set && <button type="button" className="btn btn-soft btn-sm" disabled={busy === 'test'} onClick={() => void test()}>{t('gn.ch.test')}</button>}
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setEditing((v) => !v); setValue(''); }}>{st.set ? t('gn.ch.edit') : t('gn.ch.add')}</button>
+          {st.set && <button type="button" className="btn btn-ghost btn-sm" disabled={busy === 'clear'} onClick={() => void send({ clear: true }, 'clear')}>{t('gn.ch.clear')}</button>}
+        </div>
+        {editing && (
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              className="input min-w-0 flex-1 basis-64 font-mono text-sm"
+              type="password"
+              autoComplete="off"
+              ref={hookInput}
+              value={value}
+              placeholder="https://discord.com/api/webhooks/…"
+              aria-label={t('gn.ch.channel')}
+              onChange={(e) => setValue(e.target.value)}
+            />
+            <button type="button" className="btn btn-sm" disabled={!value.trim() || busy === 'webhook'} onClick={() => void send({ webhook: value.trim() }, 'webhook').then((ok) => { if (ok) { setEditing(false); setValue(''); } })}>{t('common.save')}</button>
+            <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setEditing(false); setValue(''); }}>{t('common.cancel')}</button>
+          </div>
+        )}
+      </div>
+
+      <fieldset className="space-y-2">
+        <legend className="mb-1 font-extrabold">{t('gn.ch.what')}</legend>
+        {CHAT_KINDS.map((k) => (
+          <label key={k} className="flex items-start gap-3 font-bold">
+            <Switch className="mt-0.5" checked={st.kinds[k]} disabled={busy === k} onChange={(v) => void send({ kinds: { [k]: v } }, k, true)} />
+            <span>
+              {t(`gn.ch.kind.${k}` as 'gn.ch.kind.global')}
+              <span className="block text-sm font-semibold text-mute">{t(`gn.ch.kindNote.${k}` as 'gn.ch.kindNote.global')}</span>
+            </span>
+          </label>
+        ))}
+      </fieldset>
+
+      <p className="text-sm font-semibold text-mute">{t('gn.ch.hint')}</p>
+      <p className="text-sm font-semibold text-danger">{t('gn.ch.privacy')}</p>
+    </FoldCard>
+  );
+}
+
+/** what {discord} and {tip} stand for: a link or a name, and a list of tips (one at random each time). */
+export function ExtrasCard({ initial }: { initial: Extras }) {
+  useI18n();
+  const [discord, setDiscord] = useState(initial.discord);
+  const [tips, setTips] = useState(initial.tips.join('\n'));
+  const value: Extras = { discord: discord.trim(), tips: tips.split('\n').map((x) => x.trim()).filter(Boolean) };
+  const [saved, setSaved] = useState<Extras>(value);
+  const auto = useAutosave({
+    value,
+    saved,
+    delay: 900,
+    validate: (v) => (v.tips.length > 20 ? t('gn.x.tooMany') : null),
+    save: async (v) => { await api('/game-news/extras', 'PUT', v); setSaved(v); },
+  });
+
+  return (
+    <FoldCard
+      id="extras"
+      title={t('gn.x.title')}
+      summary={t('gn.x.sum', { discord: value.discord || '—', n: value.tips.length })}
+      status={<SaveBadge status={auto.status} error={auto.error} retry={auto.retry} />}
+    >
+      <p className="text-sm font-semibold text-mute">{t('gn.x.note')}</p>
+      <Field label={t('gn.x.discord')}>
+        <input className="input" value={discord} maxLength={100} placeholder="discord.gg/..." onChange={(e) => setDiscord(e.target.value)} />
+      </Field>
+      <Field label={t('gn.x.tips')}>
+        <AutoText className="min-h-24 text-sm" value={tips} placeholder={t('gn.x.tipsEx')} onChange={(e) => setTips(e.target.value)} />
+      </Field>
+      {auto.invalid && <p className="text-sm font-semibold text-danger">{auto.error}</p>}
+    </FoldCard>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/pages"
+  cat > "$APP_DIR/core-frontend/src/pages/GameNewsRules.tsx" << '__COREGSM_EOF__'
+import { useState, type FormEvent } from 'react';
+import { api } from '../api';
+import { NewsEditor, NewsPreview, Styled } from '../components/NewsEditor';
+import { soon } from '../components/GameNewsParts';
+import RowMenu from '../components/RowMenu';
+import { StateView } from '../components/StateView';
+import { Switch } from '../components/Switch';
+import { confirmDialog } from '../confirm';
+import { t, useI18n } from '../i18n';
+import { INTERVAL_PRESETS, emptyRule, isHHMM, validateRule, type NewsServerInfo, type RuleBody, type RuleInfo, type RuleKind } from '../gameNews';
 import { fromLocalInput, toLocalInput } from '../maintenance';
-import { ErrorLine, Field, IconEdit, IconPlus, IconTrash, LoadError, Modal, SaveBadge, Spinner, errText, toast, useAutosave, usePoll } from '../ui';
-
-interface RulesState { timezone: string; restartCountdown: boolean; welcome: Welcome; joinLeave: JoinLeave; extras: Extras; register: RegisterSettings; chat: ChatSettings; rules: RuleInfo[] }
-
-const when = (ts: number | null) => (ts ? new Date(ts).toLocaleString() : '—');
+import { ErrorLine, Field, IconPlus, Modal, Spinner, errText, toast } from '../ui';
 
 function everyLabel(min: number): string {
   if (min % 1440 === 0) return t('gn.a.everyDays', { n: min / 1440 });
@@ -155462,116 +156156,81 @@ function everyLabel(min: number): string {
 function scheduleLabel(r: RuleInfo): string {
   if (r.kind === 'interval') return everyLabel(r.everyMin);
   if (r.kind === 'daily') return t('gn.a.dailyAt', { times: r.times.join(', ') });
-  return t('gn.a.onceAt', { time: when(r.runAt) });
+  return t('gn.a.onceAt', { time: soon(r.runAt) });
 }
 
 /** «Автообъявления»: a message written once and sent by a schedule, without pressing «Отправить». */
-export default function GameNewsRules({ servers, part }: { servers: NewsServerInfo[]; part: 'rules' | 'events' }) {
+export default function GameNewsRules({ servers, rules, timezone, reload }: { servers: NewsServerInfo[]; rules: RuleInfo[]; timezone: string; reload: () => void }) {
   useI18n();
-  const [data, setData] = useState<RulesState | null>(null);
-  const [error, setError] = useState('');
   const [draft, setDraft] = useState<{ id: number | null; body: RuleBody } | null>(null);
 
-  const load = () =>
-    api<RulesState>('/game-news/rules')
-      .then((d) => { setData(d); setError(''); })
-      .catch((e: Error) => setError(e.message));
-  usePoll(load, 15_000);
-
   const serverNames = (ids: number[]) => (ids.length ? servers.filter((s) => ids.includes(s.id)).map((s) => s.name).join(', ') || '—' : t('gn.a.allServers'));
-  const toggle = async (r: RuleInfo) => {
-    const { id, lastRun: _l, nextRun: _n, createdBy: _c, upcoming: _u, ...body } = r;
-    try { await api(`/game-news/rules/${id}`, 'PUT', { ...body, enabled: !r.enabled }); void load(); } catch (e) { toast(errText(e), 'err'); }
+  const bodyOf = (r: RuleInfo): RuleBody => {
+    const { id: _id, lastRun: _l, nextRun: _n, createdBy: _c, upcoming: _u, ...body } = r;
+    return body;
+  };
+  const toggle = async (r: RuleInfo, enabled: boolean) => {
+    try { await api(`/game-news/rules/${r.id}`, 'PUT', { ...bodyOf(r), enabled }); reload(); } catch (e) { toast(errText(e), 'err'); }
   };
   const runNow = async (r: RuleInfo) => {
     if (!(await confirmDialog({ title: t('gn.a.runTitle', { name: r.name }), text: t('gn.a.runText'), confirmLabel: t('gn.a.run') }))) return;
     try {
       const res = await api<{ results: { queued: boolean }[] }>(`/game-news/rules/${r.id}/run`, 'POST');
       toast(res.results.some((x) => x.queued) ? t('gn.t.queued') : t('gn.a.nobody'), res.results.some((x) => x.queued) ? undefined : 'err');
-      void load();
+      reload();
     } catch (e) { toast(errText(e), 'err'); }
   };
   const remove = async (r: RuleInfo) => {
     if (!(await confirmDialog({ title: t('gn.a.delTitle', { name: r.name }), danger: true, confirmLabel: t('gn.a.del') }))) return;
-    try { await api(`/game-news/rules/${r.id}`, 'DELETE'); void load(); } catch (e) { toast(errText(e), 'err'); }
-  };
-  const setCountdown = async (enabled: boolean) => {
-    try { await api('/game-news/restart-countdown', 'PUT', { enabled }); void load(); } catch (e) { toast(errText(e), 'err'); }
+    try { await api(`/game-news/rules/${r.id}`, 'DELETE'); reload(); } catch (e) { toast(errText(e), 'err'); }
   };
   const openNew = () => setDraft({ id: null, body: emptyRule() });
-  const openEdit = (r: RuleInfo) => { const { id, lastRun: _l, nextRun: _n, createdBy: _c, upcoming: _u, ...body } = r; setDraft({ id, body }); };
   // a copy opens as a new announcement: change what differs and save
-  const duplicate = (r: RuleInfo) => {
-    const { id: _id, lastRun: _l, nextRun: _n, createdBy: _c, upcoming: _u, ...body } = r;
-    setDraft({ id: null, body: { ...body, name: t('gn.a.copyName', { name: r.name }).slice(0, 80) } });
-  };
+  const duplicate = (r: RuleInfo) => setDraft({ id: null, body: { ...bodyOf(r), name: t('gn.a.copyName', { name: r.name }).slice(0, 80) } });
 
   return (
     <div className="space-y-5">
-      {part === 'rules' && (
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <p className="min-w-0 flex-1 basis-80 text-sm font-semibold text-mute">{t('gn.a.intro')}</p>
-          <button type="button" className="btn" onClick={openNew}><IconPlus size={16} />{t('gn.a.add')}</button>
-        </div>
-      )}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="min-w-0 flex-1 basis-80 text-sm font-semibold text-mute">{t('gn.a.intro')}</p>
+        <button type="button" className="btn" onClick={openNew}><IconPlus size={16} />{t('gn.a.add')}</button>
+      </div>
 
-      {data && part === 'events' && (
-        <label className="panel flex items-start gap-3 p-4 font-bold">
-          <input className="mt-1" type="checkbox" checked={data.restartCountdown} onChange={(e) => void setCountdown(e.target.checked)} />
-          <span>
-            {t('gn.a.countdown')}
-            <span className="block text-sm font-semibold text-mute">{t('gn.a.countdownNote')}</span>
-          </span>
-        </label>
-      )}
-
-      {data && part === 'events' && <JoinLeaveCard initial={data.joinLeave} />}
-
-      {data && part === 'events' && <WelcomeCard initial={data.welcome} />}
-
-      {data && part === 'events' && <ChatCard initial={data.chat} />}
-
-      {data && part === 'events' && <RegisterCard initial={data.register} />}
-
-      {data && part === 'events' && <ExtrasCard initial={data.extras} />}
-
-      {error && !data ? <LoadError error={error} onRetry={() => void load()} /> : <ErrorLine text={error} />}
-      {!data && !error && <div className="skeleton panel h-32" aria-busy="true" />}
-
-      {data && part === 'rules' && data.rules.length === 0 && (
+      {rules.length === 0 && (
         <StateView title={t('gn.a.empty')} text={t('gn.a.emptyText')} action={<button type="button" className="btn" onClick={openNew}>{t('gn.a.add')}</button>} />
       )}
 
-      {data && part === 'rules' && data.rules.length > 0 && (
-        <ul className="panel divide-y divide-line overflow-hidden">
-          {data.rules.map((r) => (
+      {rules.length > 0 && (
+        <ul className="panel divide-y divide-line">
+          {rules.map((r) => (
             <li key={r.id} className="flex flex-wrap items-start gap-x-4 gap-y-2 px-5 py-4">
-              <div className="min-w-0 flex-1 basis-72">
+              <Switch className="mt-1" checked={r.enabled} aria-label={`${r.name}: ${r.enabled ? t('gn.a.on') : t('gn.a.off')}`} onChange={(v) => void toggle(r, v)} />
+              <div className="min-w-0 flex-1 basis-60">
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                   <span className="min-w-0 wrap-break-word font-extrabold">{r.name}</span>
-                  <span className={r.enabled ? 'pill pill-ok' : 'pill pill-mute'}>{r.enabled ? t('gn.a.on') : t('gn.a.off')}</span>
                   <span className="pill pill-mute">{scheduleLabel(r)}</span>
                 </div>
                 <p className="mt-1 wrap-break-word text-sm"><Styled text={r.text} /></p>
                 <p className="mt-1 text-sm font-semibold text-mute">
                   {serverNames(r.serverIds)}
-                  {' · '}{r.nextRun ? t('gn.a.next', { time: when(r.nextRun) }) : t('gn.a.noNext')}
-                  {' · '}{t('gn.a.last', { time: when(r.lastRun) })}
+                  {' · '}{r.enabled ? (r.nextRun ? t('gn.a.next', { time: soon(r.nextRun) }) : t('gn.a.noNext')) : t('gn.a.off')}
+                  {r.lastRun ? ` · ${t('gn.a.last', { time: soon(r.lastRun) })}` : ''}
                 </p>
                 {r.upcoming.length > 1 && (
                   <details className="mt-1 text-sm font-semibold text-mute">
                     <summary className="cursor-pointer">{t('gn.a.upcoming', { n: r.upcoming.length })}</summary>
-                    <ul className="mt-1 list-disc pl-5">{r.upcoming.map((ts) => <li key={ts}>{when(ts)}</li>)}</ul>
+                    <ul className="mt-1 list-disc pl-5">{r.upcoming.map((ts) => <li key={ts}>{soon(ts)}</li>)}</ul>
                   </details>
                 )}
               </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <button type="button" className="btn btn-soft btn-sm" onClick={() => void toggle(r)}>{r.enabled ? t('gn.a.pause') : t('gn.a.resume')}</button>
-                <button type="button" className="btn btn-soft btn-sm" onClick={() => void runNow(r)}>{t('gn.a.run')}</button>
-                <button type="button" className="btn btn-ghost btn-sm" onClick={() => duplicate(r)}>{t('gn.a.copy')}</button>
-                <button type="button" className="row-act" onClick={() => openEdit(r)} aria-label={t('gn.a.editAria', { name: r.name })}><IconEdit size={16} /></button>
-                <button type="button" className="row-act row-act-danger" onClick={() => void remove(r)} aria-label={t('gn.a.delAria', { name: r.name })}><IconTrash size={16} /></button>
-              </div>
+              <RowMenu
+                label={t('gn.a.menu', { name: r.name })}
+                items={[
+                  { key: 'run', label: t('gn.a.run'), onSelect: () => void runNow(r) },
+                  { key: 'edit', label: t('gn.a.edit'), onSelect: () => setDraft({ id: r.id, body: bodyOf(r) }) },
+                  { key: 'copy', label: t('gn.a.copy'), onSelect: () => duplicate(r) },
+                  { key: 'del', label: t('gn.a.del'), danger: true, sep: true, onSelect: () => void remove(r) },
+                ]}
+              />
             </li>
           ))}
         </ul>
@@ -155582,9 +156241,9 @@ export default function GameNewsRules({ servers, part }: { servers: NewsServerIn
           id={draft.id}
           initial={draft.body}
           servers={servers}
-          timezone={data?.timezone ?? ''}
+          timezone={timezone}
           onClose={() => setDraft(null)}
-          onSaved={() => { setDraft(null); void load(); }}
+          onSaved={() => { setDraft(null); reload(); }}
         />
       )}
     </div>
@@ -155719,329 +156378,6 @@ function RuleModal({ id, initial, servers, timezone, onClose, onSaved }: {
         </div>
       </form>
     </Modal>
-  );
-}
-
-/**
- * The greeting for a player who joins, shown by the plugin to that player only. One text for everybody or one for a
- * newcomer and one for a returning player; ready styles to start from. Saves by itself.
- */
-function WelcomeCard({ initial }: { initial: Welcome }) {
-  useI18n();
-  const [f, setF] = useState<Welcome>(initial);
-  const [saved, setSaved] = useState<Welcome>(initial);
-  const set = <K extends keyof Welcome>(k: K, v: Welcome[K]) => setF((x) => ({ ...x, [k]: v }));
-  const auto = useAutosave({
-    value: f,
-    saved,
-    delay: 900,
-    validate: (v) => {
-      if (!v.enabled && !v.text.trim() && !v.newText.trim()) return null;
-      const p = validateNews(v.text);
-      if (p) return t(p === 'long' ? 'gn.hint.long' : 'gn.hint.text');
-      const q = v.split ? validateNews(v.newText) : null;
-      return q ? t(q === 'long' ? 'gn.hint.long' : 'gn.hint.text') : null;
-    },
-    save: async (v) => { await api('/game-news/welcome', 'PUT', v); setSaved(v); },
-  });
-
-  const applyStyle = async (st: WelcomeStyle) => {
-    if ((f.text.trim() || f.newText.trim()) && !(await confirmDialog({ title: t('gn.w.styleTitle'), text: t('gn.w.styleText'), confirmLabel: t('gn.w.styleApply') }))) return;
-    setF((x) => ({ ...x, text: st.text, newText: st.newText, split: true }));
-  };
-
-  return (
-    <section className="panel space-y-4 p-5">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0 flex-1 basis-72">
-          <h3 className="font-extrabold">{t('gn.w.title')}</h3>
-          <p className="text-sm font-semibold text-mute">{t('gn.w.note')}</p>
-        </div>
-        <SaveBadge status={auto.status} error={auto.error} retry={auto.retry} />
-      </div>
-
-      <label className="flex items-center gap-2.5 font-bold">
-        <input type="checkbox" checked={f.enabled} onChange={(e) => set('enabled', e.target.checked)} />
-        {t('gn.w.enabled')}
-      </label>
-
-      <div className="flex flex-wrap items-center gap-2" role="group" aria-label={t('gn.w.styles')}>
-        <span className="text-sm font-bold text-mute">{t('gn.w.styles')}:</span>
-        {WELCOME_STYLES.map((st) => (
-          <button key={st.id} type="button" className="chip-filter" onClick={() => void applyStyle(st)}>{t(`gn.w.style.${st.id}` as 'gn.w.style.classic')}</button>
-        ))}
-      </div>
-
-      <label className="flex items-start gap-2.5 font-bold">
-        <input className="mt-1" type="checkbox" checked={f.split} onChange={(e) => set('split', e.target.checked)} />
-        <span>
-          {t('gn.w.split')}
-          <span className="block text-sm font-semibold text-mute">{t('gn.w.splitNote')}</span>
-        </span>
-      </label>
-
-      <div className="grid gap-5 lg:grid-cols-2">
-        <div className="space-y-4">
-          <NewsEditor value={f.text} onChange={(v) => set('text', v)} templates={false} vars={WELCOME_VARIABLES} label={f.split ? t('gn.w.textBack') : t('gn.w.text')} />
-          <NewsPreview text={f.text} welcome />
-        </div>
-        {f.split && (
-          <div className="space-y-4">
-            <NewsEditor value={f.newText} onChange={(v) => set('newText', v)} templates={false} vars={WELCOME_VARIABLES} label={t('gn.w.textNew')} />
-            <NewsPreview text={f.newText || f.text} welcome />
-          </div>
-        )}
-      </div>
-      {auto.invalid && f.enabled && <p className="text-sm font-semibold text-danger">{auto.error}</p>}
-    </section>
-  );
-}
-
-/** what {discord} and {tip} stand for: a link or a name, and a list of tips (one at random each time). Saves by itself. */
-function ExtrasCard({ initial }: { initial: Extras }) {
-  useI18n();
-  const [discord, setDiscord] = useState(initial.discord);
-  const [tips, setTips] = useState(initial.tips.join('\n'));
-  const value: Extras = { discord: discord.trim(), tips: tips.split('\n').map((x) => x.trim()).filter(Boolean) };
-  const [saved, setSaved] = useState<Extras>(value);
-  const auto = useAutosave({
-    value,
-    saved,
-    delay: 900,
-    validate: (v) => (v.tips.length > 20 ? t('gn.x.tooMany') : null),
-    save: async (v) => { await api('/game-news/extras', 'PUT', v); setSaved(v); },
-  });
-
-  return (
-    <section className="panel space-y-4 p-5">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0 flex-1 basis-72">
-          <h3 className="font-extrabold">{t('gn.x.title')}</h3>
-          <p className="text-sm font-semibold text-mute">{t('gn.x.note')}</p>
-        </div>
-        <SaveBadge status={auto.status} error={auto.error} retry={auto.retry} />
-      </div>
-      <Field label={t('gn.x.discord')}>
-        <input className="input" value={discord} maxLength={100} placeholder="discord.gg/..." onChange={(e) => setDiscord(e.target.value)} />
-      </Field>
-      <Field label={t('gn.x.tips')}>
-        <textarea className="input min-h-24 text-sm" value={tips} rows={4} placeholder={t('gn.x.tipsEx')} onChange={(e) => setTips(e.target.value)} />
-      </Field>
-      {auto.invalid && <p className="text-sm font-semibold text-danger">{auto.error}</p>}
-    </section>
-  );
-}
-
-/** a colour: the palette, the system picker and a HEX box */
-function ColorField({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
-  return (
-    <div className="space-y-1.5">
-      <span className="text-sm font-bold">{label}</span>
-      <div className="flex flex-wrap items-center gap-2">
-        {SWATCHES.map((c) => (
-          <button
-            key={c.id}
-            type="button"
-            className={`h-7 w-7 rounded-full border ${value.toUpperCase() === c.hex ? 'border-ink ring-2 ring-ink/40' : 'border-line'}`}
-            style={{ background: c.hex }}
-            aria-label={`${label}: ${c.hex}`}
-            aria-pressed={value.toUpperCase() === c.hex}
-            onClick={() => onChange(c.hex)}
-          />
-        ))}
-        <input type="color" className="h-8 w-10 cursor-pointer rounded border border-line bg-transparent p-0.5" value={isHex(value) ? value : '#FFFFFF'} aria-label={label} onChange={(e) => onChange(e.target.value.toUpperCase())} />
-        <input className="input w-28 font-mono text-sm" value={value} maxLength={7} aria-label={`${label} HEX`} onChange={(e) => onChange(e.target.value)} />
-      </div>
-    </div>
-  );
-}
-
-/** «* Игрок {name} подключился к серверу.»: shown to everybody when a player joins or leaves, with the colours chosen here. Saves by itself. */
-function JoinLeaveCard({ initial }: { initial: JoinLeave }) {
-  useI18n();
-  const [f, setF] = useState<JoinLeave>(initial);
-  const [saved, setSaved] = useState<JoinLeave>(initial);
-  const set = <K extends keyof JoinLeave>(k: K, v: JoinLeave[K]) => setF((x) => ({ ...x, [k]: v }));
-  const auto = useAutosave({
-    value: f,
-    saved,
-    delay: 800,
-    validate: (v) => {
-      if (!isHex(v.nameColor) || !isHex(v.textColor)) return t('gn.jl.badColor');
-      if ((v.joinEnabled && !v.joinText.trim()) || (v.leaveEnabled && !v.leaveText.trim())) return t('gn.hint.text');
-      return null;
-    },
-    save: async (v) => { await api('/game-news/joinleave', 'PUT', v); setSaved(v); },
-  });
-  const sample = (text: string) => composeLine(text, isHex(f.nameColor) ? f.nameColor : '#B86BFF', isHex(f.textColor) ? f.textColor : '#5FD068').replace(/{name}/g, 'WhiteLegioN');
-
-  return (
-    <section className="panel space-y-4 p-5">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0 flex-1 basis-72">
-          <h3 className="font-extrabold">{t('gn.jl.title')}</h3>
-          <p className="text-sm font-semibold text-mute">{t('gn.jl.note')}</p>
-        </div>
-        <SaveBadge status={auto.status} error={auto.error} retry={auto.retry} />
-      </div>
-
-      <div className="grid gap-4 lg:grid-cols-2">
-        <div className="space-y-2">
-          <label className="flex items-center gap-2.5 font-bold">
-            <input type="checkbox" checked={f.joinEnabled} onChange={(e) => set('joinEnabled', e.target.checked)} />
-            {t('gn.jl.join')}
-          </label>
-          <input className="input" value={f.joinText} maxLength={200} aria-label={t('gn.jl.join')} onChange={(e) => set('joinText', e.target.value)} />
-        </div>
-        <div className="space-y-2">
-          <label className="flex items-center gap-2.5 font-bold">
-            <input type="checkbox" checked={f.leaveEnabled} onChange={(e) => set('leaveEnabled', e.target.checked)} />
-            {t('gn.jl.leave')}
-          </label>
-          <input className="input" value={f.leaveText} maxLength={200} aria-label={t('gn.jl.leave')} onChange={(e) => set('leaveText', e.target.value)} />
-        </div>
-      </div>
-
-      <div className="grid gap-4 lg:grid-cols-2">
-        <ColorField label={t('gn.jl.nameColor')} value={f.nameColor} onChange={(v) => set('nameColor', v)} />
-        <ColorField label={t('gn.jl.textColor')} value={f.textColor} onChange={(v) => set('textColor', v)} />
-      </div>
-
-      <ChatLines lines={[sample(f.joinText), sample(f.leaveText)]} />
-      <p className="text-sm font-semibold text-mute">{t('gn.jl.nameHint')}</p>
-      {auto.invalid && <p className="text-sm font-semibold text-danger">{auto.error}</p>}
-    </section>
-  );
-}
-
-/**
- * Registration in the panel from the game: a player without an account is told to type .register <password> <again>,
- * the account is made with the game nickname as the login, and the player is reminded to link Discord. Saves by itself.
- */
-function RegisterCard({ initial }: { initial: RegisterSettings }) {
-  useI18n();
-  const [f, setF] = useState<RegisterSettings>(initial);
-  const [saved, setSaved] = useState<RegisterSettings>(initial);
-  const set = <K extends keyof RegisterSettings>(k: K, v: RegisterSettings[K]) => setF((x) => ({ ...x, [k]: v }));
-  const auto = useAutosave({
-    value: f,
-    saved,
-    delay: 900,
-    validate: (v) => {
-      if (!Number.isInteger(v.discordEveryHours) || v.discordEveryHours < 1 || v.discordEveryHours > 720) return t('gn.rg.badHours');
-      return [v.promptText, v.doneText, v.discordText, v.pendingText].some((x) => !x.trim()) ? t('gn.hint.text') : null;
-    },
-    save: async (v) => { await api('/game-news/register-settings', 'PUT', v); setSaved(v); },
-  });
-  const sample = (text: string, color: string) => `<color=${color}>${text.replace(/[<>]/g, '').replace(/\{login\}/g, 'WhiteLegioN').replace(/\{panel\}/g, 'coregsm.example.com')}</color>`;
-
-  const field = (label: string, key: 'promptText' | 'doneText' | 'discordText' | 'pendingText') => (
-    <Field label={label}>
-      <input className="input" value={f[key]} maxLength={300} onChange={(e) => set(key, e.target.value)} />
-    </Field>
-  );
-
-  return (
-    <section className="panel space-y-4 p-5">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0 flex-1 basis-72">
-          <h3 className="font-extrabold">{t('gn.rg.title')}</h3>
-          <p className="text-sm font-semibold text-mute">{t('gn.rg.note')}</p>
-        </div>
-        <SaveBadge status={auto.status} error={auto.error} retry={auto.retry} />
-      </div>
-
-      <label className="flex items-center gap-2.5 font-bold">
-        <input type="checkbox" checked={f.enabled} onChange={(e) => set('enabled', e.target.checked)} />
-        {t('gn.rg.enabled')}
-      </label>
-
-      <div className="grid gap-4 lg:grid-cols-2">
-        {field(t('gn.rg.prompt'), 'promptText')}
-        {field(t('gn.rg.done'), 'doneText')}
-        {field(t('gn.rg.discord'), 'discordText')}
-        {field(t('gn.rg.pending'), 'pendingText')}
-      </div>
-
-      <Field label={t('gn.rg.hours')}>
-        <input className="input w-32" type="number" min={1} max={720} value={f.discordEveryHours} onChange={(e) => set('discordEveryHours', Number(e.target.value))} />
-      </Field>
-
-      <ChatLines lines={[sample(f.promptText, '#FFCC33'), sample(f.doneText, '#5FD068'), sample(f.discordText, '#6EC1FF')]} />
-      <p className="text-sm font-semibold text-mute">{t('gn.rg.vars')}</p>
-      <p className="text-sm font-semibold text-danger">{t('gn.rg.warn')}</p>
-      {auto.invalid && <p className="text-sm font-semibold text-danger">{auto.error}</p>}
-    </section>
-  );
-}
-
-/**
- * The chat of the game server for the administrators in Discord: a channel (its webhook) for each kind of chat.
- * The addresses are secrets: they are sent to the panel and never shown again (only «set» and the tail).
- */
-function ChatCard({ initial }: { initial: ChatSettings }) {
-  useI18n();
-  const [st, setSt] = useState<ChatSettings>(initial);
-  const [busy, setBusy] = useState<ChatKind | 'switch' | null>(null);
-  const [input, setInput] = useState<Record<ChatKind, string>>({ global: '', clan: '', local: '' });
-
-  const refresh = () => api<{ chat: ChatSettings }>('/game-news/rules').then((d) => setSt(d.chat)).catch(() => undefined);
-  const send = async (body: Record<string, unknown>, who: ChatKind | 'switch') => {
-    setBusy(who);
-    try { await api('/game-news/chat-settings', 'PUT', { enabled: st.enabled, ...body }); await refresh(); toast(t('gn.ch.saved')); } catch (e) { toast(errText(e), 'err'); } finally { setBusy(null); }
-  };
-  const test = async (kind: ChatKind) => {
-    setBusy(kind);
-    try {
-      const r = await api<{ ok: boolean }>('/game-news/chat-test', 'POST', { kind });
-      toast(r.ok ? t('gn.ch.testOk') : t('gn.ch.testFail'), r.ok ? undefined : 'err');
-    } catch (e) { toast(errText(e), 'err'); } finally { setBusy(null); }
-  };
-
-  return (
-    <section className="panel space-y-4 p-5">
-      <div>
-        <h3 className="font-extrabold">{t('gn.ch.title')}</h3>
-        <p className="text-sm font-semibold text-mute">{t('gn.ch.note')}</p>
-      </div>
-
-      <label className="flex items-center gap-2.5 font-bold">
-        <input type="checkbox" checked={st.enabled} disabled={busy === 'switch'} onChange={(e) => void send({ enabled: e.target.checked }, 'switch')} />
-        {t('gn.ch.enabled')}
-      </label>
-
-      <ul className="divide-y divide-line">
-        {CHAT_KINDS.map((k) => (
-          <li key={k} className="space-y-2 py-3">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="font-extrabold">{t(`gn.ch.kind.${k}` as 'gn.ch.kind.global')}</span>
-              <span className={st.set[k] ? 'pill pill-ok' : 'pill pill-mute'}>{st.set[k] ? t('gn.ch.set', { tail: st.tail[k] }) : t('gn.ch.unset')}</span>
-              {st.set[k] && <button type="button" className="btn btn-soft btn-sm" disabled={busy === k} onClick={() => void test(k)}>{t('gn.ch.test')}</button>}
-              {st.set[k] && <button type="button" className="btn btn-ghost btn-sm" disabled={busy === k} onClick={() => void send({ clear: [k] }, k)}>{t('gn.ch.clear')}</button>}
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <input
-                className="input min-w-0 flex-1 basis-72 font-mono text-sm"
-                type="password"
-                autoComplete="off"
-                value={input[k]}
-                placeholder={st.set[k] ? t('gn.ch.replace') : 'https://discord.com/api/webhooks/…'}
-                aria-label={t(`gn.ch.kind.${k}` as 'gn.ch.kind.global')}
-                onChange={(e) => setInput((x) => ({ ...x, [k]: e.target.value }))}
-              />
-              <button
-                type="button"
-                className="btn btn-soft btn-sm"
-                disabled={!input[k].trim() || busy === k}
-                onClick={() => void send({ [k]: input[k].trim() }, k).then(() => setInput((x) => ({ ...x, [k]: '' })))}
-              >{t('common.save')}</button>
-            </div>
-          </li>
-        ))}
-      </ul>
-      <p className="text-sm font-semibold text-mute">{t('gn.ch.hint')}</p>
-      <p className="text-sm font-semibold text-danger">{t('gn.ch.privacy')}</p>
-    </section>
   );
 }
 __COREGSM_EOF__

@@ -7,7 +7,7 @@ import { db, getSetting, setSetting } from '../db.js';
 import { localParts } from '../admin/localTime.js';
 import { nextRun } from '../monitoring/restartLogic.js';
 import { plainLine } from './gameNewsJoinLeave.js';
-import { CHAT_KINDS, type ChatKind } from './gameNewsChatLogic.js';
+import { activeChatKinds, normalizeChat, type ChatKind } from './gameNewsChatLogic.js';
 import { VARIABLES, type Vars } from './gameNewsLogic.js';
 
 /** the plugin counts as «online» when it polled within this time */
@@ -73,11 +73,10 @@ function nextWipe(serverId: number, now: number): string {
   return w ? fmt(w.wipe_at, { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—';
 }
 
-/** the kinds of game chat that are forwarded to Discord (switch on and a webhook set): what the plugin has to read */
+/** the kinds of game chat that are forwarded to Discord (switch on, a webhook set, the kind not turned off): what the plugin reads */
 export function chatKindsConfigured(): ChatKind[] {
   try {
-    const v = JSON.parse(getSetting('gamenews_chat') || '{}') as { enabled?: boolean; webhooks?: Record<string, string> };
-    return v.enabled ? CHAT_KINDS.filter((k) => !!v.webhooks?.[k]) : [];
+    return activeChatKinds(normalizeChat(JSON.parse(getSetting('gamenews_chat') || '{}')));
   } catch {
     return [];
   }

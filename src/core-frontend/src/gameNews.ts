@@ -256,7 +256,19 @@ export interface RegisterSettings {
   discordEveryHours: number;
 }
 
-/** the game chat in Discord: which chats go to which channel (the webhook addresses never leave the backend) */
+/** the game chat in Discord: one webhook (its address never leaves the backend) and a switch for each kind of chat */
 export const CHAT_KINDS = ['global', 'clan', 'local'] as const;
 export type ChatKind = (typeof CHAT_KINDS)[number];
-export interface ChatSettings { enabled: boolean; set: Record<ChatKind, boolean>; tail: Record<ChatKind, string> }
+export interface ChatSettings { enabled: boolean; set: boolean; tail: string; kinds: Record<ChatKind, boolean> }
+
+/** everything the «rules» endpoint returns: automatic announcements and the settings of the events */
+export interface RulesState {
+  timezone: string;
+  restartCountdown: boolean;
+  welcome: Welcome;
+  joinLeave: JoinLeave;
+  extras: Extras;
+  register: RegisterSettings;
+  chat: ChatSettings;
+  rules: RuleInfo[];
+}

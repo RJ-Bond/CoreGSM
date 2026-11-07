@@ -1,0 +1,373 @@
+import { useEffect, useRef, useState } from 'react';
+import { api } from '../api';
+import { Switch } from '../components/Switch';
+import { AutoText, FoldCard } from '../components/GameNewsParts';
+import { ChatLines, NewsEditor, NewsPreview } from '../components/NewsEditor';
+import { confirmDialog } from '../confirm';
+import { t, useI18n } from '../i18n';
+import {
+  CHAT_KINDS, SWATCHES, WELCOME_STYLES, WELCOME_VARIABLES, composeLine, isHex, validateNews,
+  type ChatSettings, type Extras, type JoinLeave, type RegisterSettings, type Welcome, type WelcomeStyle,
+} from '../gameNews';
+import { Field, SaveBadge, errText, toast, useAutosave } from '../ui';
+
+const onOff = (b: boolean) => (b ? t('gn.f.on') : t('gn.f.off'));
+
+/**
+ * The greeting for a player who joins, shown by the plugin to that player only. One text for everybody, or one for a
+ * newcomer and one for a returning player (switch between them above the editor); ready styles to start from.
+ */
+export function WelcomeCard({ initial }: { initial: Welcome }) {
+  useI18n();
+  const [f, setF] = useState<Welcome>(initial);
+  const [saved, setSaved] = useState<Welcome>(initial);
+  const [which, setWhich] = useState<'back' | 'new'>('back');
+  const set = <K extends keyof Welcome>(k: K, v: Welcome[K]) => setF((x) => ({ ...x, [k]: v }));
+  const auto = useAutosave({
+    value: f,
+    saved,
+    delay: 900,
+    validate: (v) => {
+      if (!v.enabled && !v.text.trim() && !v.newText.trim()) return null;
+      const p = validateNews(v.text);
+      if (p) return t(p === 'long' ? 'gn.hint.long' : 'gn.hint.text');
+      const q = v.split ? validateNews(v.newText) : null;
+      return q ? t(q === 'long' ? 'gn.hint.long' : 'gn.hint.text') : null;
+    },
+    save: async (v) => { await api('/game-news/welcome', 'PUT', v); setSaved(v); },
+  });
+
+  const editingNew = f.split && which === 'new';
+  const text = editingNew ? f.newText : f.text;
+  const setText = (v: string) => set(editingNew ? 'newText' : 'text', v);
+
+  const applyStyle = async (st: WelcomeStyle) => {
+    if ((f.text.trim() || f.newText.trim()) && !(await confirmDialog({ title: t('gn.w.styleTitle'), text: t('gn.w.styleText'), confirmLabel: t('gn.w.styleApply') }))) return;
+    setF((x) => ({ ...x, text: st.text, newText: st.newText, split: true }));
+  };
+
+  return (
+    <FoldCard
+      id="welcome"
+      defaultOpen
+      title={t('gn.w.title')}
+      summary={f.enabled ? (f.split ? t('gn.w.sumSplit') : t('gn.w.sumOne')) : t('gn.w.sumOff')}
+      on={f.enabled}
+      status={<SaveBadge status={auto.status} error={auto.error} retry={auto.retry} />}
+    >
+      <p className="text-sm font-semibold text-mute">{t('gn.w.note')}</p>
+
+      <label className="flex items-center gap-3 font-bold">
+        <Switch checked={f.enabled} onChange={(v) => set('enabled', v)} />
+        {t('gn.w.enabled')}
+      </label>
+
+      <div className="flex flex-wrap items-center gap-2" role="group" aria-label={t('gn.w.styles')}>
+        <span className="text-sm font-bold text-mute">{t('gn.w.styles')}:</span>
+        {WELCOME_STYLES.map((st) => (
+          <button key={st.id} type="button" className="chip-filter" onClick={() => void applyStyle(st)}>{t(`gn.w.style.${st.id}` as 'gn.w.style.classic')}</button>
+        ))}
+      </div>
+
+      <label className="flex items-start gap-3 font-bold">
+        <Switch className="mt-0.5" checked={f.split} onChange={(v) => set('split', v)} />
+        <span>
+          {t('gn.w.split')}
+          <span className="block text-sm font-semibold text-mute">{t('gn.w.splitNote')}</span>
+        </span>
+      </label>
+
+      {f.split && (
+        <div className="flex flex-wrap gap-2" role="tablist" aria-label={t('gn.w.split')}>
+          {(['back', 'new'] as const).map((w) => (
+            <button key={w} type="button" role="tab" aria-selected={which === w} className={`chip-filter ${which === w ? 'on' : ''}`} onClick={() => setWhich(w)}>
+              {t(w === 'back' ? 'gn.w.textBack' : 'gn.w.textNew')}
+            </button>
+          ))}
+        </div>
+      )}
+
+      <NewsEditor value={text} onChange={setText} templates={false} vars={WELCOME_VARIABLES} label={f.split ? t(which === 'new' ? 'gn.w.textNew' : 'gn.w.textBack') : t('gn.w.text')} />
+      <NewsPreview text={text || f.text} welcome />
+      {auto.invalid && f.enabled && <p className="text-sm font-semibold text-danger">{auto.error}</p>}
+    </FoldCard>
+  );
+}
+
+/** a colour: the palette, the system picker and a HEX box */
+function ColorField({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
+  return (
+    <div className="space-y-1.5">
+      <span className="text-sm font-bold">{label}</span>
+      <div className="flex flex-wrap items-center gap-2">
+        {SWATCHES.map((c) => (
+          <button
+            key={c.id}
+            type="button"
+            className={`h-7 w-7 rounded-full border ${value.toUpperCase() === c.hex ? 'border-ink ring-2 ring-ink/40' : 'border-line'}`}
+            style={{ background: c.hex }}
+            aria-label={`${label}: ${c.hex}`}
+            aria-pressed={value.toUpperCase() === c.hex}
+            onClick={() => onChange(c.hex)}
+          />
+        ))}
+        <input type="color" className="h-8 w-10 cursor-pointer rounded border border-line bg-transparent p-0.5" value={isHex(value) ? value : '#FFFFFF'} aria-label={label} onChange={(e) => onChange(e.target.value.toUpperCase())} />
+        <input className="input w-28 font-mono text-sm" value={value} maxLength={7} aria-label={`${label} HEX`} onChange={(e) => onChange(e.target.value)} />
+      </div>
+    </div>
+  );
+}
+
+/** «* Игрок {name} подключился к серверу.»: shown to everybody when a player joins or leaves, with the colours chosen here. */
+export function JoinLeaveCard({ initial }: { initial: JoinLeave }) {
+  useI18n();
+  const [f, setF] = useState<JoinLeave>(initial);
+  const [saved, setSaved] = useState<JoinLeave>(initial);
+  const set = <K extends keyof JoinLeave>(k: K, v: JoinLeave[K]) => setF((x) => ({ ...x, [k]: v }));
+  const auto = useAutosave({
+    value: f,
+    saved,
+    delay: 800,
+    validate: (v) => {
+      if (!isHex(v.nameColor) || !isHex(v.textColor)) return t('gn.jl.badColor');
+      if ((v.joinEnabled && !v.joinText.trim()) || (v.leaveEnabled && !v.leaveText.trim())) return t('gn.hint.text');
+      return null;
+    },
+    save: async (v) => { await api('/game-news/joinleave', 'PUT', v); setSaved(v); },
+  });
+  const sample = (text: string) => composeLine(text, isHex(f.nameColor) ? f.nameColor : '#B86BFF', isHex(f.textColor) ? f.textColor : '#5FD068').replace(/\{name\}/g, 'WhiteLegioN');
+
+  return (
+    <FoldCard
+      id="joinleave"
+      title={t('gn.jl.title')}
+      summary={t('gn.jl.sum', { join: onOff(f.joinEnabled), leave: onOff(f.leaveEnabled) })}
+      on={f.joinEnabled || f.leaveEnabled}
+      status={<SaveBadge status={auto.status} error={auto.error} retry={auto.retry} />}
+    >
+      <p className="text-sm font-semibold text-mute">{t('gn.jl.note')}</p>
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        <div className="space-y-2">
+          <label className="flex items-center gap-3 font-bold">
+            <Switch checked={f.joinEnabled} onChange={(v) => set('joinEnabled', v)} />
+            {t('gn.jl.join')}
+          </label>
+          <AutoText value={f.joinText} maxLength={200} aria-label={t('gn.jl.join')} onChange={(e) => set('joinText', e.target.value)} />
+        </div>
+        <div className="space-y-2">
+          <label className="flex items-center gap-3 font-bold">
+            <Switch checked={f.leaveEnabled} onChange={(v) => set('leaveEnabled', v)} />
+            {t('gn.jl.leave')}
+          </label>
+          <AutoText value={f.leaveText} maxLength={200} aria-label={t('gn.jl.leave')} onChange={(e) => set('leaveText', e.target.value)} />
+        </div>
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        <ColorField label={t('gn.jl.nameColor')} value={f.nameColor} onChange={(v) => set('nameColor', v)} />
+        <ColorField label={t('gn.jl.textColor')} value={f.textColor} onChange={(v) => set('textColor', v)} />
+      </div>
+
+      <ChatLines lines={[sample(f.joinText), sample(f.leaveText)]} />
+      <p className="text-sm font-semibold text-mute">{t('gn.jl.nameHint')}</p>
+      {auto.invalid && <p className="text-sm font-semibold text-danger">{auto.error}</p>}
+    </FoldCard>
+  );
+}
+
+/**
+ * Registration in the panel from the game: a player without an account is told to type .register <password> <again>,
+ * the account is made with the game nickname as the login, and the player is reminded to link Discord.
+ */
+export function RegisterCard({ initial }: { initial: RegisterSettings }) {
+  useI18n();
+  const [f, setF] = useState<RegisterSettings>(initial);
+  const [saved, setSaved] = useState<RegisterSettings>(initial);
+  const set = <K extends keyof RegisterSettings>(k: K, v: RegisterSettings[K]) => setF((x) => ({ ...x, [k]: v }));
+  const auto = useAutosave({
+    value: f,
+    saved,
+    delay: 900,
+    validate: (v) => {
+      if (!Number.isInteger(v.discordEveryHours) || v.discordEveryHours < 1 || v.discordEveryHours > 720) return t('gn.rg.badHours');
+      return [v.promptText, v.doneText, v.discordText, v.pendingText].some((x) => !x.trim()) ? t('gn.hint.text') : null;
+    },
+    save: async (v) => { await api('/game-news/register-settings', 'PUT', v); setSaved(v); },
+  });
+  const sample = (text: string, color: string) => `<color=${color}>${text.replace(/[<>]/g, '').replace(/\{login\}/g, 'WhiteLegioN').replace(/\{panel\}/g, 'coregsm.example.com')}</color>`;
+
+  const field = (label: string, key: 'promptText' | 'doneText' | 'discordText' | 'pendingText') => (
+    <Field label={label}>
+      <AutoText value={f[key]} maxLength={300} onChange={(e) => set(key, e.target.value)} />
+    </Field>
+  );
+
+  return (
+    <FoldCard
+      id="register"
+      title={t('gn.rg.title')}
+      summary={f.enabled ? t('gn.rg.sumOn') : t('gn.rg.sumOff')}
+      on={f.enabled}
+      status={<SaveBadge status={auto.status} error={auto.error} retry={auto.retry} />}
+    >
+      <p className="text-sm font-semibold text-mute">{t('gn.rg.note')}</p>
+
+      <label className="flex items-center gap-3 font-bold">
+        <Switch checked={f.enabled} onChange={(v) => set('enabled', v)} />
+        {t('gn.rg.enabled')}
+      </label>
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        {field(t('gn.rg.prompt'), 'promptText')}
+        {field(t('gn.rg.done'), 'doneText')}
+        {field(t('gn.rg.discord'), 'discordText')}
+        {field(t('gn.rg.pending'), 'pendingText')}
+      </div>
+
+      <Field label={t('gn.rg.hours')}>
+        <input className="input w-32" type="number" min={1} max={720} value={f.discordEveryHours} onChange={(e) => set('discordEveryHours', Number(e.target.value))} />
+      </Field>
+
+      <ChatLines lines={[sample(f.promptText, '#FFCC33'), sample(f.doneText, '#5FD068'), sample(f.discordText, '#6EC1FF')]} />
+      <p className="text-sm font-semibold text-mute">{t('gn.rg.vars')}</p>
+      <p className="text-sm font-semibold text-danger">{t('gn.rg.warn')}</p>
+      {auto.invalid && <p className="text-sm font-semibold text-danger">{auto.error}</p>}
+    </FoldCard>
+  );
+}
+
+/** «через 10 / 5 / 1 минуту» before a planned restart: one switch */
+export function RestartCard({ enabled, onChange }: { enabled: boolean; onChange: (v: boolean) => void }) {
+  useI18n();
+  return (
+    <FoldCard id="restart" title={t('gn.a.countdown')} summary={t('gn.rs.sum')} on={enabled}>
+      <label className="flex items-start gap-3 font-bold">
+        <Switch className="mt-0.5" checked={enabled} onChange={onChange} />
+        <span>
+          {t('gn.a.countdown')}
+          <span className="block text-sm font-semibold text-mute">{t('gn.a.countdownNote')}</span>
+        </span>
+      </label>
+    </FoldCard>
+  );
+}
+
+/**
+ * The chat of the game server for the administrators in Discord: one channel (its webhook) and a switch for each kind
+ * of chat that goes there. The address is a secret: it is sent to the panel and never shown again (only «set» and the tail).
+ */
+export function ChatCard({ initial }: { initial: ChatSettings }) {
+  useI18n();
+  const [st, setSt] = useState<ChatSettings>(initial);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState('');
+  const hookInput = useRef<HTMLInputElement>(null);
+  // the address box takes the focus when it opens
+  useEffect(() => { if (editing) hookInput.current?.focus(); }, [editing]);
+
+  const refresh = () => api<{ chat: ChatSettings }>('/game-news/rules').then((d) => setSt(d.chat)).catch(() => undefined);
+  const send = async (body: Record<string, unknown>, who: string, quiet = false): Promise<boolean> => {
+    setBusy(who);
+    try { await api('/game-news/chat-settings', 'PUT', body); await refresh(); if (!quiet) toast(t('gn.ch.saved')); return true; } catch (e) { toast(errText(e), 'err'); return false; } finally { setBusy(null); }
+  };
+  const test = async () => {
+    setBusy('test');
+    try {
+      const r = await api<{ ok: boolean }>('/game-news/chat-test', 'POST');
+      toast(r.ok ? t('gn.ch.testOk') : t('gn.ch.testFail'), r.ok ? undefined : 'err');
+    } catch (e) { toast(errText(e), 'err'); } finally { setBusy(null); }
+  };
+  const shown = CHAT_KINDS.filter((k) => st.kinds[k]);
+  const summary = !st.set
+    ? t('gn.ch.sumNoHook')
+    : shown.length ? t('gn.ch.sumKinds', { list: shown.map((k) => t(`gn.ch.short.${k}` as 'gn.ch.short.global')).join(', ') }) : t('gn.ch.sumNone');
+
+  return (
+    <FoldCard id="chat" defaultOpen title={t('gn.ch.title')} summary={summary} on={st.enabled && st.set && shown.length > 0}>
+      <p className="text-sm font-semibold text-mute">{t('gn.ch.note')}</p>
+
+      <label className="flex items-center gap-3 font-bold">
+        <Switch checked={st.enabled} disabled={busy === 'switch'} onChange={(v) => void send({ enabled: v }, 'switch', true)} />
+        {t('gn.ch.enabled')}
+      </label>
+
+      <div className="space-y-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="font-extrabold">{t('gn.ch.channel')}</span>
+          <span className={st.set ? 'pill pill-ok' : 'pill pill-mute'}>{st.set ? t('gn.ch.set', { tail: st.tail }) : t('gn.ch.unset')}</span>
+          {st.set && <button type="button" className="btn btn-soft btn-sm" disabled={busy === 'test'} onClick={() => void test()}>{t('gn.ch.test')}</button>}
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setEditing((v) => !v); setValue(''); }}>{st.set ? t('gn.ch.edit') : t('gn.ch.add')}</button>
+          {st.set && <button type="button" className="btn btn-ghost btn-sm" disabled={busy === 'clear'} onClick={() => void send({ clear: true }, 'clear')}>{t('gn.ch.clear')}</button>}
+        </div>
+        {editing && (
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              className="input min-w-0 flex-1 basis-64 font-mono text-sm"
+              type="password"
+              autoComplete="off"
+              ref={hookInput}
+              value={value}
+              placeholder="https://discord.com/api/webhooks/…"
+              aria-label={t('gn.ch.channel')}
+              onChange={(e) => setValue(e.target.value)}
+            />
+            <button type="button" className="btn btn-sm" disabled={!value.trim() || busy === 'webhook'} onClick={() => void send({ webhook: value.trim() }, 'webhook').then((ok) => { if (ok) { setEditing(false); setValue(''); } })}>{t('common.save')}</button>
+            <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setEditing(false); setValue(''); }}>{t('common.cancel')}</button>
+          </div>
+        )}
+      </div>
+
+      <fieldset className="space-y-2">
+        <legend className="mb-1 font-extrabold">{t('gn.ch.what')}</legend>
+        {CHAT_KINDS.map((k) => (
+          <label key={k} className="flex items-start gap-3 font-bold">
+            <Switch className="mt-0.5" checked={st.kinds[k]} disabled={busy === k} onChange={(v) => void send({ kinds: { [k]: v } }, k, true)} />
+            <span>
+              {t(`gn.ch.kind.${k}` as 'gn.ch.kind.global')}
+              <span className="block text-sm font-semibold text-mute">{t(`gn.ch.kindNote.${k}` as 'gn.ch.kindNote.global')}</span>
+            </span>
+          </label>
+        ))}
+      </fieldset>
+
+      <p className="text-sm font-semibold text-mute">{t('gn.ch.hint')}</p>
+      <p className="text-sm font-semibold text-danger">{t('gn.ch.privacy')}</p>
+    </FoldCard>
+  );
+}
+
+/** what {discord} and {tip} stand for: a link or a name, and a list of tips (one at random each time). */
+export function ExtrasCard({ initial }: { initial: Extras }) {
+  useI18n();
+  const [discord, setDiscord] = useState(initial.discord);
+  const [tips, setTips] = useState(initial.tips.join('\n'));
+  const value: Extras = { discord: discord.trim(), tips: tips.split('\n').map((x) => x.trim()).filter(Boolean) };
+  const [saved, setSaved] = useState<Extras>(value);
+  const auto = useAutosave({
+    value,
+    saved,
+    delay: 900,
+    validate: (v) => (v.tips.length > 20 ? t('gn.x.tooMany') : null),
+    save: async (v) => { await api('/game-news/extras', 'PUT', v); setSaved(v); },
+  });
+
+  return (
+    <FoldCard
+      id="extras"
+      title={t('gn.x.title')}
+      summary={t('gn.x.sum', { discord: value.discord || '—', n: value.tips.length })}
+      status={<SaveBadge status={auto.status} error={auto.error} retry={auto.retry} />}
+    >
+      <p className="text-sm font-semibold text-mute">{t('gn.x.note')}</p>
+      <Field label={t('gn.x.discord')}>
+        <input className="input" value={discord} maxLength={100} placeholder="discord.gg/..." onChange={(e) => setDiscord(e.target.value)} />
+      </Field>
+      <Field label={t('gn.x.tips')}>
+        <AutoText className="min-h-24 text-sm" value={tips} placeholder={t('gn.x.tipsEx')} onChange={(e) => setTips(e.target.value)} />
+      </Field>
+      {auto.invalid && <p className="text-sm font-semibold text-danger">{auto.error}</p>}
+    </FoldCard>
+  );
+}

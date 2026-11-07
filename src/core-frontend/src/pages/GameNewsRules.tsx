@@ -1,19 +1,15 @@
 import { useState, type FormEvent } from 'react';
 import { api } from '../api';
-import { ChatLines, NewsEditor, NewsPreview, Styled } from '../components/NewsEditor';
+import { NewsEditor, NewsPreview, Styled } from '../components/NewsEditor';
+import { soon } from '../components/GameNewsParts';
+import RowMenu from '../components/RowMenu';
 import { StateView } from '../components/StateView';
+import { Switch } from '../components/Switch';
 import { confirmDialog } from '../confirm';
 import { t, useI18n } from '../i18n';
-import {
-  INTERVAL_PRESETS, SWATCHES, WELCOME_STYLES, WELCOME_VARIABLES, composeLine, emptyRule, isHex, isHHMM, validateNews, validateRule,
-  CHAT_KINDS, type ChatKind, type ChatSettings, type Extras, type JoinLeave, type RegisterSettings, type Welcome, type WelcomeStyle, type NewsServerInfo, type RuleBody, type RuleInfo, type RuleKind,
-} from '../gameNews';
+import { INTERVAL_PRESETS, emptyRule, isHHMM, validateRule, type NewsServerInfo, type RuleBody, type RuleInfo, type RuleKind } from '../gameNews';
 import { fromLocalInput, toLocalInput } from '../maintenance';
-import { ErrorLine, Field, IconEdit, IconPlus, IconTrash, LoadError, Modal, SaveBadge, Spinner, errText, toast, useAutosave, usePoll } from '../ui';
-
-interface RulesState { timezone: string; restartCountdown: boolean; welcome: Welcome; joinLeave: JoinLeave; extras: Extras; register: RegisterSettings; chat: ChatSettings; rules: RuleInfo[] }
-
-const when = (ts: number | null) => (ts ? new Date(ts).toLocaleString() : '—');
+import { ErrorLine, Field, IconPlus, Modal, Spinner, errText, toast } from '../ui';
 
 function everyLabel(min: number): string {
   if (min % 1440 === 0) return t('gn.a.everyDays', { n: min / 1440 });
@@ -24,116 +20,81 @@ function everyLabel(min: number): string {
 function scheduleLabel(r: RuleInfo): string {
   if (r.kind === 'interval') return everyLabel(r.everyMin);
   if (r.kind === 'daily') return t('gn.a.dailyAt', { times: r.times.join(', ') });
-  return t('gn.a.onceAt', { time: when(r.runAt) });
+  return t('gn.a.onceAt', { time: soon(r.runAt) });
 }
 
 /** «Автообъявления»: a message written once and sent by a schedule, without pressing «Отправить». */
-export default function GameNewsRules({ servers, part }: { servers: NewsServerInfo[]; part: 'rules' | 'events' }) {
+export default function GameNewsRules({ servers, rules, timezone, reload }: { servers: NewsServerInfo[]; rules: RuleInfo[]; timezone: string; reload: () => void }) {
   useI18n();
-  const [data, setData] = useState<RulesState | null>(null);
-  const [error, setError] = useState('');
   const [draft, setDraft] = useState<{ id: number | null; body: RuleBody } | null>(null);
 
-  const load = () =>
-    api<RulesState>('/game-news/rules')
-      .then((d) => { setData(d); setError(''); })
-      .catch((e: Error) => setError(e.message));
-  usePoll(load, 15_000);
-
   const serverNames = (ids: number[]) => (ids.length ? servers.filter((s) => ids.includes(s.id)).map((s) => s.name).join(', ') || '—' : t('gn.a.allServers'));
-  const toggle = async (r: RuleInfo) => {
-    const { id, lastRun: _l, nextRun: _n, createdBy: _c, upcoming: _u, ...body } = r;
-    try { await api(`/game-news/rules/${id}`, 'PUT', { ...body, enabled: !r.enabled }); void load(); } catch (e) { toast(errText(e), 'err'); }
+  const bodyOf = (r: RuleInfo): RuleBody => {
+    const { id: _id, lastRun: _l, nextRun: _n, createdBy: _c, upcoming: _u, ...body } = r;
+    return body;
+  };
+  const toggle = async (r: RuleInfo, enabled: boolean) => {
+    try { await api(`/game-news/rules/${r.id}`, 'PUT', { ...bodyOf(r), enabled }); reload(); } catch (e) { toast(errText(e), 'err'); }
   };
   const runNow = async (r: RuleInfo) => {
     if (!(await confirmDialog({ title: t('gn.a.runTitle', { name: r.name }), text: t('gn.a.runText'), confirmLabel: t('gn.a.run') }))) return;
     try {
       const res = await api<{ results: { queued: boolean }[] }>(`/game-news/rules/${r.id}/run`, 'POST');
       toast(res.results.some((x) => x.queued) ? t('gn.t.queued') : t('gn.a.nobody'), res.results.some((x) => x.queued) ? undefined : 'err');
-      void load();
+      reload();
     } catch (e) { toast(errText(e), 'err'); }
   };
   const remove = async (r: RuleInfo) => {
     if (!(await confirmDialog({ title: t('gn.a.delTitle', { name: r.name }), danger: true, confirmLabel: t('gn.a.del') }))) return;
-    try { await api(`/game-news/rules/${r.id}`, 'DELETE'); void load(); } catch (e) { toast(errText(e), 'err'); }
-  };
-  const setCountdown = async (enabled: boolean) => {
-    try { await api('/game-news/restart-countdown', 'PUT', { enabled }); void load(); } catch (e) { toast(errText(e), 'err'); }
+    try { await api(`/game-news/rules/${r.id}`, 'DELETE'); reload(); } catch (e) { toast(errText(e), 'err'); }
   };
   const openNew = () => setDraft({ id: null, body: emptyRule() });
-  const openEdit = (r: RuleInfo) => { const { id, lastRun: _l, nextRun: _n, createdBy: _c, upcoming: _u, ...body } = r; setDraft({ id, body }); };
   // a copy opens as a new announcement: change what differs and save
-  const duplicate = (r: RuleInfo) => {
-    const { id: _id, lastRun: _l, nextRun: _n, createdBy: _c, upcoming: _u, ...body } = r;
-    setDraft({ id: null, body: { ...body, name: t('gn.a.copyName', { name: r.name }).slice(0, 80) } });
-  };
+  const duplicate = (r: RuleInfo) => setDraft({ id: null, body: { ...bodyOf(r), name: t('gn.a.copyName', { name: r.name }).slice(0, 80) } });
 
   return (
     <div className="space-y-5">
-      {part === 'rules' && (
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <p className="min-w-0 flex-1 basis-80 text-sm font-semibold text-mute">{t('gn.a.intro')}</p>
-          <button type="button" className="btn" onClick={openNew}><IconPlus size={16} />{t('gn.a.add')}</button>
-        </div>
-      )}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="min-w-0 flex-1 basis-80 text-sm font-semibold text-mute">{t('gn.a.intro')}</p>
+        <button type="button" className="btn" onClick={openNew}><IconPlus size={16} />{t('gn.a.add')}</button>
+      </div>
 
-      {data && part === 'events' && (
-        <label className="panel flex items-start gap-3 p-4 font-bold">
-          <input className="mt-1" type="checkbox" checked={data.restartCountdown} onChange={(e) => void setCountdown(e.target.checked)} />
-          <span>
-            {t('gn.a.countdown')}
-            <span className="block text-sm font-semibold text-mute">{t('gn.a.countdownNote')}</span>
-          </span>
-        </label>
-      )}
-
-      {data && part === 'events' && <JoinLeaveCard initial={data.joinLeave} />}
-
-      {data && part === 'events' && <WelcomeCard initial={data.welcome} />}
-
-      {data && part === 'events' && <ChatCard initial={data.chat} />}
-
-      {data && part === 'events' && <RegisterCard initial={data.register} />}
-
-      {data && part === 'events' && <ExtrasCard initial={data.extras} />}
-
-      {error && !data ? <LoadError error={error} onRetry={() => void load()} /> : <ErrorLine text={error} />}
-      {!data && !error && <div className="skeleton panel h-32" aria-busy="true" />}
-
-      {data && part === 'rules' && data.rules.length === 0 && (
+      {rules.length === 0 && (
         <StateView title={t('gn.a.empty')} text={t('gn.a.emptyText')} action={<button type="button" className="btn" onClick={openNew}>{t('gn.a.add')}</button>} />
       )}
 
-      {data && part === 'rules' && data.rules.length > 0 && (
-        <ul className="panel divide-y divide-line overflow-hidden">
-          {data.rules.map((r) => (
+      {rules.length > 0 && (
+        <ul className="panel divide-y divide-line">
+          {rules.map((r) => (
             <li key={r.id} className="flex flex-wrap items-start gap-x-4 gap-y-2 px-5 py-4">
-              <div className="min-w-0 flex-1 basis-72">
+              <Switch className="mt-1" checked={r.enabled} aria-label={`${r.name}: ${r.enabled ? t('gn.a.on') : t('gn.a.off')}`} onChange={(v) => void toggle(r, v)} />
+              <div className="min-w-0 flex-1 basis-60">
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                   <span className="min-w-0 wrap-break-word font-extrabold">{r.name}</span>
-                  <span className={r.enabled ? 'pill pill-ok' : 'pill pill-mute'}>{r.enabled ? t('gn.a.on') : t('gn.a.off')}</span>
                   <span className="pill pill-mute">{scheduleLabel(r)}</span>
                 </div>
                 <p className="mt-1 wrap-break-word text-sm"><Styled text={r.text} /></p>
                 <p className="mt-1 text-sm font-semibold text-mute">
                   {serverNames(r.serverIds)}
-                  {' · '}{r.nextRun ? t('gn.a.next', { time: when(r.nextRun) }) : t('gn.a.noNext')}
-                  {' · '}{t('gn.a.last', { time: when(r.lastRun) })}
+                  {' · '}{r.enabled ? (r.nextRun ? t('gn.a.next', { time: soon(r.nextRun) }) : t('gn.a.noNext')) : t('gn.a.off')}
+                  {r.lastRun ? ` · ${t('gn.a.last', { time: soon(r.lastRun) })}` : ''}
                 </p>
                 {r.upcoming.length > 1 && (
                   <details className="mt-1 text-sm font-semibold text-mute">
                     <summary className="cursor-pointer">{t('gn.a.upcoming', { n: r.upcoming.length })}</summary>
-                    <ul className="mt-1 list-disc pl-5">{r.upcoming.map((ts) => <li key={ts}>{when(ts)}</li>)}</ul>
+                    <ul className="mt-1 list-disc pl-5">{r.upcoming.map((ts) => <li key={ts}>{soon(ts)}</li>)}</ul>
                   </details>
                 )}
               </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <button type="button" className="btn btn-soft btn-sm" onClick={() => void toggle(r)}>{r.enabled ? t('gn.a.pause') : t('gn.a.resume')}</button>
-                <button type="button" className="btn btn-soft btn-sm" onClick={() => void runNow(r)}>{t('gn.a.run')}</button>
-                <button type="button" className="btn btn-ghost btn-sm" onClick={() => duplicate(r)}>{t('gn.a.copy')}</button>
-                <button type="button" className="row-act" onClick={() => openEdit(r)} aria-label={t('gn.a.editAria', { name: r.name })}><IconEdit size={16} /></button>
-                <button type="button" className="row-act row-act-danger" onClick={() => void remove(r)} aria-label={t('gn.a.delAria', { name: r.name })}><IconTrash size={16} /></button>
-              </div>
+              <RowMenu
+                label={t('gn.a.menu', { name: r.name })}
+                items={[
+                  { key: 'run', label: t('gn.a.run'), onSelect: () => void runNow(r) },
+                  { key: 'edit', label: t('gn.a.edit'), onSelect: () => setDraft({ id: r.id, body: bodyOf(r) }) },
+                  { key: 'copy', label: t('gn.a.copy'), onSelect: () => duplicate(r) },
+                  { key: 'del', label: t('gn.a.del'), danger: true, sep: true, onSelect: () => void remove(r) },
+                ]}
+              />
             </li>
           ))}
         </ul>
@@ -144,9 +105,9 @@ export default function GameNewsRules({ servers, part }: { servers: NewsServerIn
           id={draft.id}
           initial={draft.body}
           servers={servers}
-          timezone={data?.timezone ?? ''}
+          timezone={timezone}
           onClose={() => setDraft(null)}
-          onSaved={() => { setDraft(null); void load(); }}
+          onSaved={() => { setDraft(null); reload(); }}
         />
       )}
     </div>
@@ -281,328 +242,5 @@ function RuleModal({ id, initial, servers, timezone, onClose, onSaved }: {
         </div>
       </form>
     </Modal>
-  );
-}
-
-/**
- * The greeting for a player who joins, shown by the plugin to that player only. One text for everybody or one for a
- * newcomer and one for a returning player; ready styles to start from. Saves by itself.
- */
-function WelcomeCard({ initial }: { initial: Welcome }) {
-  useI18n();
-  const [f, setF] = useState<Welcome>(initial);
-  const [saved, setSaved] = useState<Welcome>(initial);
-  const set = <K extends keyof Welcome>(k: K, v: Welcome[K]) => setF((x) => ({ ...x, [k]: v }));
-  const auto = useAutosave({
-    value: f,
-    saved,
-    delay: 900,
-    validate: (v) => {
-      if (!v.enabled && !v.text.trim() && !v.newText.trim()) return null;
-      const p = validateNews(v.text);
-      if (p) return t(p === 'long' ? 'gn.hint.long' : 'gn.hint.text');
-      const q = v.split ? validateNews(v.newText) : null;
-      return q ? t(q === 'long' ? 'gn.hint.long' : 'gn.hint.text') : null;
-    },
-    save: async (v) => { await api('/game-news/welcome', 'PUT', v); setSaved(v); },
-  });
-
-  const applyStyle = async (st: WelcomeStyle) => {
-    if ((f.text.trim() || f.newText.trim()) && !(await confirmDialog({ title: t('gn.w.styleTitle'), text: t('gn.w.styleText'), confirmLabel: t('gn.w.styleApply') }))) return;
-    setF((x) => ({ ...x, text: st.text, newText: st.newText, split: true }));
-  };
-
-  return (
-    <section className="panel space-y-4 p-5">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0 flex-1 basis-72">
-          <h3 className="font-extrabold">{t('gn.w.title')}</h3>
-          <p className="text-sm font-semibold text-mute">{t('gn.w.note')}</p>
-        </div>
-        <SaveBadge status={auto.status} error={auto.error} retry={auto.retry} />
-      </div>
-
-      <label className="flex items-center gap-2.5 font-bold">
-        <input type="checkbox" checked={f.enabled} onChange={(e) => set('enabled', e.target.checked)} />
-        {t('gn.w.enabled')}
-      </label>
-
-      <div className="flex flex-wrap items-center gap-2" role="group" aria-label={t('gn.w.styles')}>
-        <span className="text-sm font-bold text-mute">{t('gn.w.styles')}:</span>
-        {WELCOME_STYLES.map((st) => (
-          <button key={st.id} type="button" className="chip-filter" onClick={() => void applyStyle(st)}>{t(`gn.w.style.${st.id}` as 'gn.w.style.classic')}</button>
-        ))}
-      </div>
-
-      <label className="flex items-start gap-2.5 font-bold">
-        <input className="mt-1" type="checkbox" checked={f.split} onChange={(e) => set('split', e.target.checked)} />
-        <span>
-          {t('gn.w.split')}
-          <span className="block text-sm font-semibold text-mute">{t('gn.w.splitNote')}</span>
-        </span>
-      </label>
-
-      <div className="grid gap-5 lg:grid-cols-2">
-        <div className="space-y-4">
-          <NewsEditor value={f.text} onChange={(v) => set('text', v)} templates={false} vars={WELCOME_VARIABLES} label={f.split ? t('gn.w.textBack') : t('gn.w.text')} />
-          <NewsPreview text={f.text} welcome />
-        </div>
-        {f.split && (
-          <div className="space-y-4">
-            <NewsEditor value={f.newText} onChange={(v) => set('newText', v)} templates={false} vars={WELCOME_VARIABLES} label={t('gn.w.textNew')} />
-            <NewsPreview text={f.newText || f.text} welcome />
-          </div>
-        )}
-      </div>
-      {auto.invalid && f.enabled && <p className="text-sm font-semibold text-danger">{auto.error}</p>}
-    </section>
-  );
-}
-
-/** what {discord} and {tip} stand for: a link or a name, and a list of tips (one at random each time). Saves by itself. */
-function ExtrasCard({ initial }: { initial: Extras }) {
-  useI18n();
-  const [discord, setDiscord] = useState(initial.discord);
-  const [tips, setTips] = useState(initial.tips.join('\n'));
-  const value: Extras = { discord: discord.trim(), tips: tips.split('\n').map((x) => x.trim()).filter(Boolean) };
-  const [saved, setSaved] = useState<Extras>(value);
-  const auto = useAutosave({
-    value,
-    saved,
-    delay: 900,
-    validate: (v) => (v.tips.length > 20 ? t('gn.x.tooMany') : null),
-    save: async (v) => { await api('/game-news/extras', 'PUT', v); setSaved(v); },
-  });
-
-  return (
-    <section className="panel space-y-4 p-5">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0 flex-1 basis-72">
-          <h3 className="font-extrabold">{t('gn.x.title')}</h3>
-          <p className="text-sm font-semibold text-mute">{t('gn.x.note')}</p>
-        </div>
-        <SaveBadge status={auto.status} error={auto.error} retry={auto.retry} />
-      </div>
-      <Field label={t('gn.x.discord')}>
-        <input className="input" value={discord} maxLength={100} placeholder="discord.gg/..." onChange={(e) => setDiscord(e.target.value)} />
-      </Field>
-      <Field label={t('gn.x.tips')}>
-        <textarea className="input min-h-24 text-sm" value={tips} rows={4} placeholder={t('gn.x.tipsEx')} onChange={(e) => setTips(e.target.value)} />
-      </Field>
-      {auto.invalid && <p className="text-sm font-semibold text-danger">{auto.error}</p>}
-    </section>
-  );
-}
-
-/** a colour: the palette, the system picker and a HEX box */
-function ColorField({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
-  return (
-    <div className="space-y-1.5">
-      <span className="text-sm font-bold">{label}</span>
-      <div className="flex flex-wrap items-center gap-2">
-        {SWATCHES.map((c) => (
-          <button
-            key={c.id}
-            type="button"
-            className={`h-7 w-7 rounded-full border ${value.toUpperCase() === c.hex ? 'border-ink ring-2 ring-ink/40' : 'border-line'}`}
-            style={{ background: c.hex }}
-            aria-label={`${label}: ${c.hex}`}
-            aria-pressed={value.toUpperCase() === c.hex}
-            onClick={() => onChange(c.hex)}
-          />
-        ))}
-        <input type="color" className="h-8 w-10 cursor-pointer rounded border border-line bg-transparent p-0.5" value={isHex(value) ? value : '#FFFFFF'} aria-label={label} onChange={(e) => onChange(e.target.value.toUpperCase())} />
-        <input className="input w-28 font-mono text-sm" value={value} maxLength={7} aria-label={`${label} HEX`} onChange={(e) => onChange(e.target.value)} />
-      </div>
-    </div>
-  );
-}
-
-/** «* Игрок {name} подключился к серверу.»: shown to everybody when a player joins or leaves, with the colours chosen here. Saves by itself. */
-function JoinLeaveCard({ initial }: { initial: JoinLeave }) {
-  useI18n();
-  const [f, setF] = useState<JoinLeave>(initial);
-  const [saved, setSaved] = useState<JoinLeave>(initial);
-  const set = <K extends keyof JoinLeave>(k: K, v: JoinLeave[K]) => setF((x) => ({ ...x, [k]: v }));
-  const auto = useAutosave({
-    value: f,
-    saved,
-    delay: 800,
-    validate: (v) => {
-      if (!isHex(v.nameColor) || !isHex(v.textColor)) return t('gn.jl.badColor');
-      if ((v.joinEnabled && !v.joinText.trim()) || (v.leaveEnabled && !v.leaveText.trim())) return t('gn.hint.text');
-      return null;
-    },
-    save: async (v) => { await api('/game-news/joinleave', 'PUT', v); setSaved(v); },
-  });
-  const sample = (text: string) => composeLine(text, isHex(f.nameColor) ? f.nameColor : '#B86BFF', isHex(f.textColor) ? f.textColor : '#5FD068').replace(/{name}/g, 'WhiteLegioN');
-
-  return (
-    <section className="panel space-y-4 p-5">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0 flex-1 basis-72">
-          <h3 className="font-extrabold">{t('gn.jl.title')}</h3>
-          <p className="text-sm font-semibold text-mute">{t('gn.jl.note')}</p>
-        </div>
-        <SaveBadge status={auto.status} error={auto.error} retry={auto.retry} />
-      </div>
-
-      <div className="grid gap-4 lg:grid-cols-2">
-        <div className="space-y-2">
-          <label className="flex items-center gap-2.5 font-bold">
-            <input type="checkbox" checked={f.joinEnabled} onChange={(e) => set('joinEnabled', e.target.checked)} />
-            {t('gn.jl.join')}
-          </label>
-          <input className="input" value={f.joinText} maxLength={200} aria-label={t('gn.jl.join')} onChange={(e) => set('joinText', e.target.value)} />
-        </div>
-        <div className="space-y-2">
-          <label className="flex items-center gap-2.5 font-bold">
-            <input type="checkbox" checked={f.leaveEnabled} onChange={(e) => set('leaveEnabled', e.target.checked)} />
-            {t('gn.jl.leave')}
-          </label>
-          <input className="input" value={f.leaveText} maxLength={200} aria-label={t('gn.jl.leave')} onChange={(e) => set('leaveText', e.target.value)} />
-        </div>
-      </div>
-
-      <div className="grid gap-4 lg:grid-cols-2">
-        <ColorField label={t('gn.jl.nameColor')} value={f.nameColor} onChange={(v) => set('nameColor', v)} />
-        <ColorField label={t('gn.jl.textColor')} value={f.textColor} onChange={(v) => set('textColor', v)} />
-      </div>
-
-      <ChatLines lines={[sample(f.joinText), sample(f.leaveText)]} />
-      <p className="text-sm font-semibold text-mute">{t('gn.jl.nameHint')}</p>
-      {auto.invalid && <p className="text-sm font-semibold text-danger">{auto.error}</p>}
-    </section>
-  );
-}
-
-/**
- * Registration in the panel from the game: a player without an account is told to type .register <password> <again>,
- * the account is made with the game nickname as the login, and the player is reminded to link Discord. Saves by itself.
- */
-function RegisterCard({ initial }: { initial: RegisterSettings }) {
-  useI18n();
-  const [f, setF] = useState<RegisterSettings>(initial);
-  const [saved, setSaved] = useState<RegisterSettings>(initial);
-  const set = <K extends keyof RegisterSettings>(k: K, v: RegisterSettings[K]) => setF((x) => ({ ...x, [k]: v }));
-  const auto = useAutosave({
-    value: f,
-    saved,
-    delay: 900,
-    validate: (v) => {
-      if (!Number.isInteger(v.discordEveryHours) || v.discordEveryHours < 1 || v.discordEveryHours > 720) return t('gn.rg.badHours');
-      return [v.promptText, v.doneText, v.discordText, v.pendingText].some((x) => !x.trim()) ? t('gn.hint.text') : null;
-    },
-    save: async (v) => { await api('/game-news/register-settings', 'PUT', v); setSaved(v); },
-  });
-  const sample = (text: string, color: string) => `<color=${color}>${text.replace(/[<>]/g, '').replace(/\{login\}/g, 'WhiteLegioN').replace(/\{panel\}/g, 'coregsm.example.com')}</color>`;
-
-  const field = (label: string, key: 'promptText' | 'doneText' | 'discordText' | 'pendingText') => (
-    <Field label={label}>
-      <input className="input" value={f[key]} maxLength={300} onChange={(e) => set(key, e.target.value)} />
-    </Field>
-  );
-
-  return (
-    <section className="panel space-y-4 p-5">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0 flex-1 basis-72">
-          <h3 className="font-extrabold">{t('gn.rg.title')}</h3>
-          <p className="text-sm font-semibold text-mute">{t('gn.rg.note')}</p>
-        </div>
-        <SaveBadge status={auto.status} error={auto.error} retry={auto.retry} />
-      </div>
-
-      <label className="flex items-center gap-2.5 font-bold">
-        <input type="checkbox" checked={f.enabled} onChange={(e) => set('enabled', e.target.checked)} />
-        {t('gn.rg.enabled')}
-      </label>
-
-      <div className="grid gap-4 lg:grid-cols-2">
-        {field(t('gn.rg.prompt'), 'promptText')}
-        {field(t('gn.rg.done'), 'doneText')}
-        {field(t('gn.rg.discord'), 'discordText')}
-        {field(t('gn.rg.pending'), 'pendingText')}
-      </div>
-
-      <Field label={t('gn.rg.hours')}>
-        <input className="input w-32" type="number" min={1} max={720} value={f.discordEveryHours} onChange={(e) => set('discordEveryHours', Number(e.target.value))} />
-      </Field>
-
-      <ChatLines lines={[sample(f.promptText, '#FFCC33'), sample(f.doneText, '#5FD068'), sample(f.discordText, '#6EC1FF')]} />
-      <p className="text-sm font-semibold text-mute">{t('gn.rg.vars')}</p>
-      <p className="text-sm font-semibold text-danger">{t('gn.rg.warn')}</p>
-      {auto.invalid && <p className="text-sm font-semibold text-danger">{auto.error}</p>}
-    </section>
-  );
-}
-
-/**
- * The chat of the game server for the administrators in Discord: a channel (its webhook) for each kind of chat.
- * The addresses are secrets: they are sent to the panel and never shown again (only «set» and the tail).
- */
-function ChatCard({ initial }: { initial: ChatSettings }) {
-  useI18n();
-  const [st, setSt] = useState<ChatSettings>(initial);
-  const [busy, setBusy] = useState<ChatKind | 'switch' | null>(null);
-  const [input, setInput] = useState<Record<ChatKind, string>>({ global: '', clan: '', local: '' });
-
-  const refresh = () => api<{ chat: ChatSettings }>('/game-news/rules').then((d) => setSt(d.chat)).catch(() => undefined);
-  const send = async (body: Record<string, unknown>, who: ChatKind | 'switch') => {
-    setBusy(who);
-    try { await api('/game-news/chat-settings', 'PUT', { enabled: st.enabled, ...body }); await refresh(); toast(t('gn.ch.saved')); } catch (e) { toast(errText(e), 'err'); } finally { setBusy(null); }
-  };
-  const test = async (kind: ChatKind) => {
-    setBusy(kind);
-    try {
-      const r = await api<{ ok: boolean }>('/game-news/chat-test', 'POST', { kind });
-      toast(r.ok ? t('gn.ch.testOk') : t('gn.ch.testFail'), r.ok ? undefined : 'err');
-    } catch (e) { toast(errText(e), 'err'); } finally { setBusy(null); }
-  };
-
-  return (
-    <section className="panel space-y-4 p-5">
-      <div>
-        <h3 className="font-extrabold">{t('gn.ch.title')}</h3>
-        <p className="text-sm font-semibold text-mute">{t('gn.ch.note')}</p>
-      </div>
-
-      <label className="flex items-center gap-2.5 font-bold">
-        <input type="checkbox" checked={st.enabled} disabled={busy === 'switch'} onChange={(e) => void send({ enabled: e.target.checked }, 'switch')} />
-        {t('gn.ch.enabled')}
-      </label>
-
-      <ul className="divide-y divide-line">
-        {CHAT_KINDS.map((k) => (
-          <li key={k} className="space-y-2 py-3">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="font-extrabold">{t(`gn.ch.kind.${k}` as 'gn.ch.kind.global')}</span>
-              <span className={st.set[k] ? 'pill pill-ok' : 'pill pill-mute'}>{st.set[k] ? t('gn.ch.set', { tail: st.tail[k] }) : t('gn.ch.unset')}</span>
-              {st.set[k] && <button type="button" className="btn btn-soft btn-sm" disabled={busy === k} onClick={() => void test(k)}>{t('gn.ch.test')}</button>}
-              {st.set[k] && <button type="button" className="btn btn-ghost btn-sm" disabled={busy === k} onClick={() => void send({ clear: [k] }, k)}>{t('gn.ch.clear')}</button>}
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <input
-                className="input min-w-0 flex-1 basis-72 font-mono text-sm"
-                type="password"
-                autoComplete="off"
-                value={input[k]}
-                placeholder={st.set[k] ? t('gn.ch.replace') : 'https://discord.com/api/webhooks/…'}
-                aria-label={t(`gn.ch.kind.${k}` as 'gn.ch.kind.global')}
-                onChange={(e) => setInput((x) => ({ ...x, [k]: e.target.value }))}
-              />
-              <button
-                type="button"
-                className="btn btn-soft btn-sm"
-                disabled={!input[k].trim() || busy === k}
-                onClick={() => void send({ [k]: input[k].trim() }, k).then(() => setInput((x) => ({ ...x, [k]: '' })))}
-              >{t('common.save')}</button>
-            </div>
-          </li>
-        ))}
-      </ul>
-      <p className="text-sm font-semibold text-mute">{t('gn.ch.hint')}</p>
-      <p className="text-sm font-semibold text-danger">{t('gn.ch.privacy')}</p>
-    </section>
   );
 }

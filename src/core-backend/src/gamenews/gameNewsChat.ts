@@ -1,9 +1,9 @@
 /**
  * The game chat for the administrators in Discord: the plugin reads the messages players write (the general chat, the
- * clan chat, the chat of the players nearby; private whispers never) and sends them here; the panel posts them to a
- * Discord webhook of the channel set for that kind of chat: «[Общий] WhiteLegioN: Привет».
+ * clan chat, the chat of the players nearby; private whispers never) and sends them here; the panel posts them to one
+ * Discord webhook: «[Общий] WhiteLegioN: Привет». A switch for every kind of chat decides what goes to the channel.
  *
- *  - the webhook addresses are secrets: kept encrypted, only «set / not set» and the tail of the address are shown;
+ *  - the webhook address is a secret: kept encrypted, only «set / not set» and the tail of the address are shown;
  *  - only Discord addresses are accepted (the panel never calls an address an administrator could point inside the network);
  *  - lines are collected and posted a few at a time (Discord allows about five posts in two seconds per webhook), a
  *    flood is cut, a «rate limited» answer pauses the channel;
@@ -15,23 +15,21 @@ import { db, getSetting, setSetting } from '../db.js';
 import { log } from '../logger.js';
 import { decryptSecret, encryptSecret } from '../security/secrets.js';
 import { pluginTarget } from './gameNews.js';
-import { CHAT_KINDS, chunkLines, formatChatLine, isDiscordWebhook, type ChatKind } from './gameNewsChatLogic.js';
-import { chatKindsConfigured } from './gameNewsVars.js';
+import {
+  CHAT_KINDS, activeChatKinds, chunkLines, formatChatLine, isDiscordWebhook, normalizeChat, type ChatKind, type ChatStored,
+} from './gameNewsChatLogic.js';
 
-interface Stored { enabled: boolean; webhooks: Partial<Record<ChatKind, string>> }
-
-const read = (): Stored => {
+const read = (): ChatStored => {
   try {
-    const v = JSON.parse(getSetting('gamenews_chat') || '{}') as Partial<Stored>;
-    return { enabled: !!v.enabled, webhooks: v.webhooks && typeof v.webhooks === 'object' ? v.webhooks : {} };
+    return normalizeChat(JSON.parse(getSetting('gamenews_chat') || '{}'));
   } catch {
-    return { enabled: false, webhooks: {} };
+    return normalizeChat({});
   }
 };
-const write = (s: Stored): void => setSetting('gamenews_chat', JSON.stringify(s));
+const write = (s: ChatStored): void => setSetting('gamenews_chat', JSON.stringify(s));
 
-function webhookOf(kind: ChatKind): string | null {
-  const enc = read().webhooks[kind];
+function webhookUrl(): string | null {
+  const enc = read().webhook;
   if (!enc) return null;
   try {
     const url = decryptSecret(enc);
@@ -42,30 +40,22 @@ function webhookOf(kind: ChatKind): string | null {
 }
 
 /** the kinds of chat that are being forwarded (what the plugin has to read) */
-export const chatKinds = (): ChatKind[] => chatKindsConfigured();
+export const chatKinds = (): ChatKind[] => activeChatKinds(read());
 
-export function chatSettingsView(): { enabled: boolean; set: Record<ChatKind, boolean>; tail: Record<ChatKind, string> } {
+export function chatSettingsView(): { enabled: boolean; set: boolean; tail: string; kinds: Record<ChatKind, boolean> } {
   const s = read();
-  const set = { global: false, clan: false, local: false } as Record<ChatKind, boolean>;
-  const tail = { global: '', clan: '', local: '' } as Record<ChatKind, string>;
-  for (const k of CHAT_KINDS) {
-    const u = webhookOf(k);
-    set[k] = !!u;
-    tail[k] = u ? `…${u.slice(-6)}` : '';
-  }
-  return { enabled: s.enabled, set, tail };
+  const u = webhookUrl();
+  return { enabled: s.enabled, set: !!u, tail: u ? `…${u.slice(-6)}` : '', kinds: s.kinds };
 }
 
 // ---- posting
 const MAX_QUEUE = 200;
-const queues = new Map<ChatKind, string[]>();
-const pausedUntil = new Map<ChatKind, number>();
+let queue: string[] = [];
+let pausedUntil = 0;
 
-function enqueue(kind: ChatKind, line: string): void {
-  const q = queues.get(kind) ?? [];
-  q.push(line);
-  if (q.length > MAX_QUEUE) q.splice(0, q.length - MAX_QUEUE); // a flood: the oldest lines go
-  queues.set(kind, q);
+function enqueue(line: string): void {
+  queue.push(line);
+  if (queue.length > MAX_QUEUE) queue = queue.slice(-MAX_QUEUE); // a flood: the oldest lines go
 }
 
 async function post(url: string, content: string): Promise<{ ok: boolean; retryAfter: number }> {
@@ -92,21 +82,19 @@ async function post(url: string, content: string): Promise<{ ok: boolean; retryA
 
 /** one pass of the sender: what has gathered goes out, in chunks that fit a Discord message */
 export async function flushChat(now = Date.now()): Promise<void> {
-  for (const kind of CHAT_KINDS) {
-    const q = queues.get(kind);
-    if (!q?.length || (pausedUntil.get(kind) ?? 0) > now) continue;
-    const url = webhookOf(kind);
-    queues.set(kind, []);
-    if (!url) continue;
-    for (const chunk of chunkLines(q)) {
-      const r = await post(url, chunk);
-      if (r.retryAfter) {
-        pausedUntil.set(kind, now + r.retryAfter * 1000);
-        // put the rest back at the front, the chunk that failed with it
-        const rest = q.slice(q.indexOf(chunk.split('\n')[0]));
-        queues.set(kind, [...rest, ...(queues.get(kind) ?? [])].slice(-MAX_QUEUE));
-        break;
-      }
+  if (!queue.length || pausedUntil > now) return;
+  const url = webhookUrl();
+  const lines = queue;
+  queue = [];
+  if (!url) return;
+  const chunks = chunkLines(lines);
+  for (let i = 0; i < chunks.length; i++) {
+    const r = await post(url, chunks[i]);
+    if (r.retryAfter) {
+      pausedUntil = now + r.retryAfter * 1000;
+      // the chunk that was refused and the rest wait for the next pass
+      queue = [...chunks.slice(i).flatMap((c) => c.split('\n')), ...queue].slice(-MAX_QUEUE);
+      return;
     }
   }
 }
@@ -139,6 +127,11 @@ const messageSchema = z.object({
   text: z.string().max(600),
 });
 
+function serverLabelOf(id: number): string {
+  const r = db.prepare("SELECT COALESCE(NULLIF(s.name, ''), NULLIF(st.name, ''), s.host || ':' || s.port) AS n FROM servers s LEFT JOIN status st ON st.server_id = s.id WHERE s.id = ?").get(id) as { n: string } | undefined;
+  return r?.n ?? '';
+}
+
 export function registerGameNewsChat({ app, admin }: { app: Express; admin: RequestHandler }): void {
   // from the plugin: a batch of what players wrote
   app.post('/api/game-news/chat', (req, res) => {
@@ -155,46 +148,38 @@ export function registerGameNewsChat({ app, admin }: { app: Express; admin: Requ
     for (const m of b.data.messages) {
       if (!kinds.has(m.type)) continue;
       const line = formatChatLine(m.type, m.name, m.clan ?? '', m.text, server);
-      if (line) enqueue(m.type, line);
+      if (line) enqueue(line);
     }
     res.json({ ok: true });
   });
 
-  // from the administrator: switch and webhooks (an empty field keeps the saved address, «clear» removes it)
+  // from the administrator: the switch, the webhook (empty keeps the saved one, clear removes it) and the kinds of chat
   app.put('/api/game-news/chat-settings', admin, (req, res) => {
     const b = z.object({
-      enabled: z.boolean(),
-      global: z.string().max(300).optional(),
-      clan: z.string().max(300).optional(),
-      local: z.string().max(300).optional(),
-      clear: z.array(z.enum(CHAT_KINDS)).optional(),
+      enabled: z.boolean().optional(),
+      webhook: z.string().max(300).optional(),
+      clear: z.boolean().optional(),
+      kinds: z.object({ global: z.boolean(), clan: z.boolean(), local: z.boolean() }).partial().optional(),
     }).safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Проверьте поля' });
     const s = read();
-    for (const k of CHAT_KINDS) {
-      const v = b.data[k]?.trim();
-      if (!v) continue;
-      if (!isDiscordWebhook(v)) return res.status(400).json({ error: 'Это не адрес webhook Discord (https://discord.com/api/webhooks/…)' });
-      s.webhooks[k] = encryptSecret(v);
+    const w = b.data.webhook?.trim();
+    if (w) {
+      if (!isDiscordWebhook(w)) return res.status(400).json({ error: 'Это не адрес webhook Discord (https://discord.com/api/webhooks/…)' });
+      s.webhook = encryptSecret(w);
     }
-    for (const k of b.data.clear ?? []) delete s.webhooks[k];
-    s.enabled = b.data.enabled;
+    if (b.data.clear) s.webhook = '';
+    if (b.data.enabled !== undefined) s.enabled = b.data.enabled;
+    for (const k of CHAT_KINDS) if (b.data.kinds?.[k] !== undefined) s.kinds[k] = b.data.kinds[k] as boolean;
     write(s);
     res.json({ ok: true });
   });
 
-  // «Проверить»: one line into the channel of that kind
-  app.post('/api/game-news/chat-test', admin, async (req, res) => {
-    const b = z.object({ kind: z.enum(CHAT_KINDS) }).safeParse(req.body);
-    if (!b.success) return res.status(400).json({ error: 'Проверьте поля' });
-    const url = webhookOf(b.data.kind);
-    if (!url) return res.status(400).json({ error: 'Сначала укажите webhook для этого чата' });
+  // «Проверить»: one line into the channel
+  app.post('/api/game-news/chat-test', admin, async (_req, res) => {
+    const url = webhookUrl();
+    if (!url) return res.status(400).json({ error: 'Сначала укажите webhook' });
     const r = await post(url, '✅ CoreGSM: канал подключён, сюда будет приходить чат игры.');
     res.json({ ok: r.ok });
   });
-}
-
-function serverLabelOf(id: number): string {
-  const r = db.prepare('SELECT COALESCE(NULLIF(s.name, \'\'), NULLIF(st.name, \'\'), s.host || \':\' || s.port) AS n FROM servers s LEFT JOIN status st ON st.server_id = s.id WHERE s.id = ?').get(id) as { n: string } | undefined;
-  return r?.n ?? '';
 }

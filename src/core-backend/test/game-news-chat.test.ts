@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { chunkLines, escapeDiscord, formatChatLine, isDiscordWebhook } from '../src/gamenews/gameNewsChatLogic.ts';
+import { activeChatKinds, chunkLines, escapeDiscord, formatChatLine, isDiscordWebhook, normalizeChat } from '../src/gamenews/gameNewsChatLogic.ts';
 
 describe('game chat for Discord', () => {
   it('writes a line as «[Общий] ник: текст»', () => {
@@ -45,5 +45,20 @@ describe('game chat for Discord', () => {
     assert.equal(isDiscordWebhook('https://evil.example/api/webhooks/1234567890123456789/abcdefghijklmnopqrstuvwxyz'), false);
     assert.equal(isDiscordWebhook('https://discord.com.evil.example/api/webhooks/1234567890123456789/abcdefghijklmnopqrstuvwxyz'), false);
     assert.equal(isDiscordWebhook('https://192.168.1.1/api/webhooks/1234567890123456789/abcdefghijklmnopqrstuvwxyz'), false);
+  });
+
+  it('keeps one webhook and a switch per kind of chat', () => {
+    const s = normalizeChat({ enabled: true, webhook: 'enc:x', kinds: { global: true, clan: false } });
+    assert.deepEqual(s.kinds, { global: true, clan: false, local: true });
+    assert.deepEqual(activeChatKinds(s), ['global', 'local']);
+    assert.deepEqual(activeChatKinds({ ...s, enabled: false }), []);
+    assert.deepEqual(activeChatKinds({ ...s, webhook: '' }), []);
+  });
+
+  it('turns an old setting with a webhook per chat into one webhook', () => {
+    const s = normalizeChat({ enabled: true, webhooks: { clan: 'enc:clan', local: 'enc:local' } });
+    assert.equal(s.webhook, 'enc:clan');
+    assert.deepEqual(s.kinds, { global: false, clan: true, local: true });
+    assert.deepEqual(normalizeChat(undefined), { enabled: false, webhook: '', kinds: { global: true, clan: true, local: true } });
   });
 });

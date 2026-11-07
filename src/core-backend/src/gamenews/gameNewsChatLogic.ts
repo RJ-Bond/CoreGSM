@@ -1,10 +1,37 @@
 /**
- * The game chat for Discord, the parts that need no database: the kinds of chat, the check of a webhook address, and how
- * a line is written so that nothing a player types can ping anybody or break the formatting.
+ * The game chat for Discord, the parts that need no database: the kinds of chat, the stored settings, the check of a
+ * webhook address, and how a line is written so that nothing a player types can ping anybody or break the formatting.
  */
 
 export const CHAT_KINDS = ['global', 'clan', 'local'] as const;
 export type ChatKind = (typeof CHAT_KINDS)[number];
+
+/** one webhook for the whole chat (kept encrypted) and a switch for every kind of chat */
+export interface ChatStored { enabled: boolean; webhook: string; kinds: Record<ChatKind, boolean> }
+
+/**
+ * The stored setting as a ChatStored. An older setting had one webhook per kind of chat: the first webhook that was set
+ * becomes the only one and the kinds that had a webhook stay on.
+ */
+export function normalizeChat(raw: unknown): ChatStored {
+  const v = (raw && typeof raw === 'object' ? raw : {}) as {
+    enabled?: unknown; webhook?: unknown; kinds?: Partial<Record<ChatKind, unknown>>; webhooks?: Partial<Record<ChatKind, unknown>>;
+  };
+  const legacy = v.webhooks && typeof v.webhooks === 'object' ? v.webhooks : {};
+  const legacyFirst = CHAT_KINDS.map((k) => legacy[k]).find((x): x is string => typeof x === 'string' && x.length > 0);
+  const webhook = typeof v.webhook === 'string' && v.webhook ? v.webhook : legacyFirst ?? '';
+  const kinds = {} as Record<ChatKind, boolean>;
+  for (const k of CHAT_KINDS) {
+    if (v.kinds && typeof v.kinds[k] === 'boolean') kinds[k] = v.kinds[k] as boolean;
+    else kinds[k] = v.webhooks ? typeof legacy[k] === 'string' && !!legacy[k] : true;
+  }
+  return { enabled: !!v.enabled, webhook, kinds };
+}
+
+/** the kinds that are forwarded right now: the switch is on, a webhook is set and the kind is not turned off */
+export function activeChatKinds(s: ChatStored): ChatKind[] {
+  return s.enabled && s.webhook ? CHAT_KINDS.filter((k) => s.kinds[k]) : [];
+}
 
 /** only a real Discord webhook address is accepted */
 export const isDiscordWebhook = (u: string): boolean =>

@@ -37,6 +37,8 @@ export const GUEST_PAGES = [
 export const ADMIN_PAGES = [
   { id: 'admin-start', path: '/admin' },
   ...['servers', 'discord', 'news', 'alerts', 'maintenance', 'cards', 'community', 'users', 'journal', 'system', 'integrations'].map((s) => ({ id: `admin-${s}`, path: `/admin/${s}` })),
+  // the game plugin: one page per tab
+  ...['', '/auto', '/players', '/discord', '/history'].map((s) => ({ id: `admin-gamenews${s.replace('/', '-')}`, path: `/admin/gamenews${s}` })),
   ...['bot', 'brand', 'security', 'updates'].map((s) => ({ id: `admin-settings-${s}`, path: `/admin/settings/${s}` })),
   { id: 'profile', path: '/profile' },
 ];

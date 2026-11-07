@@ -45,7 +45,7 @@ const errorsEn: Record<string, string> = {
   game_news_bytes: 'The message is too long for the game: {n} of {max} bytes (Russian letters take 2 bytes each)',
   game_news_color: 'A colour is written as #RRGGBB',
   game_news_webhook: 'This is not a Discord webhook address (https://discord.com/api/webhooks/…)',
-  game_news_webhook_missing: 'Set the webhook for this chat first',
+  game_news_webhook_missing: 'Set the webhook first',
   game_news_templates_limit: 'No more than {n} templates',
   captcha_required: 'Confirm you are not a robot: the page solves a small puzzle by itself',
   ip_locked: 'Too many failed sign-ins from this address. Try again in {sec} s.',
