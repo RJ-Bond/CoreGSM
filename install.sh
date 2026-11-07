@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="ab0da167905e"
+COREGSM_BUILD="ee141b286621"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.76"
+COREGSM_VERSION="1.1.77"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -23873,7 +23873,7 @@ import { welcomeFor } from './gameNewsWelcome.js';
 
 export const QUEUE_TTL_MS = 5 * 60_000;
 /** the version of the game plugin this panel was built for: an older plugin is shown as outdated */
-export const PLUGIN_VERSION = '0.8.0';
+export const PLUGIN_VERSION = '0.9.0';
 /** the games the plugin exists for */
 export const SUPPORTED_GAMES = new Set(['vrising']);
 const PULL_MIN_GAP_MS = 800;
@@ -24049,15 +24049,20 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/gamenews"
   cat > "$APP_DIR/core-backend/src/gamenews/gameNewsChat.ts" << '__COREGSM_EOF__'
 /**
- * The game chat for the administrators in Discord: the plugin reads the messages players write (the general chat, the
- * clan chat, the chat of the players nearby; private whispers never) and sends them here; the panel posts them to one
- * Discord webhook: «[Общий] WhiteLegioN: Привет». A switch for every kind of chat decides what goes to the channel.
+ * The game chat for the administrators in Discord: the plugin reads the messages players write (the global chat, the
+ * clan chat, the local chat; private whispers never) and tells when a player joins or leaves; it sends that here and the
+ * panel posts it to one Discord webhook, coloured like in the game:
+ *
+ *     [Глобальный] WhiteLegioN: Привет          * Игрок WhiteLegioN подключился к серверу.
+ *
+ * A switch for every kind decides what goes to the channel.
  *
  *  - the webhook address is a secret: kept encrypted, only «set / not set» and the tail of the address are shown;
  *  - only Discord addresses are accepted (the panel never calls an address an administrator could point inside the network);
  *  - lines are collected and posted a few at a time (Discord allows about five posts in two seconds per webhook), a
  *    flood is cut, a «rate limited» answer pauses the channel;
- *  - nothing a player writes can ping anybody (allowed_mentions is empty) or break the formatting.
+ *  - the messages are posted under the name and the picture of the webhook itself (a name can be set here to override it);
+ *  - nothing a player writes can ping anybody or break the formatting.
  */
 import type { Express, RequestHandler } from 'express';
 import { z } from 'zod';
@@ -24066,8 +24071,10 @@ import { log } from '../logger.js';
 import { decryptSecret, encryptSecret } from '../security/secrets.js';
 import { pluginTarget } from './gameNews.js';
 import {
-  CHAT_KINDS, activeChatKinds, chunkLines, formatChatLine, isDiscordWebhook, normalizeChat, type ChatKind, type ChatStored,
+  ANSI_COLORS, CHAT_KINDS, activeChatKinds, ansiChatLine, ansiEventLine, chunkLines, formatChatLine, formatEventLine, isDiscordWebhook,
+  normalizeChat, wrapForDiscord, type ChatKind, type ChatStored,
 } from './gameNewsChatLogic.js';
+import { getJoinLeave } from './gameNewsJoinLeave.js';
 
 const read = (): ChatStored => {
   try {
@@ -24078,11 +24085,10 @@ const read = (): ChatStored => {
 };
 const write = (s: ChatStored): void => setSetting('gamenews_chat', JSON.stringify(s));
 
-function webhookUrl(): string | null {
-  const enc = read().webhook;
-  if (!enc) return null;
+function webhookUrl(s: ChatStored = read()): string | null {
+  if (!s.webhook) return null;
   try {
-    const url = decryptSecret(enc);
+    const url = decryptSecret(s.webhook);
     return isDiscordWebhook(url) ? url : null;
   } catch {
     return null;
@@ -24092,10 +24098,10 @@ function webhookUrl(): string | null {
 /** the kinds of chat that are being forwarded (what the plugin has to read) */
 export const chatKinds = (): ChatKind[] => activeChatKinds(read());
 
-export function chatSettingsView(): { enabled: boolean; set: boolean; tail: string; kinds: Record<ChatKind, boolean> } {
+export function chatSettingsView(): Pick<ChatStored, 'enabled' | 'kinds' | 'style' | 'senderName' | 'colors'> & { set: boolean; tail: string } {
   const s = read();
-  const u = webhookUrl();
-  return { enabled: s.enabled, set: !!u, tail: u ? `…${u.slice(-6)}` : '', kinds: s.kinds };
+  const u = webhookUrl(s);
+  return { enabled: s.enabled, set: !!u, tail: u ? `…${u.slice(-6)}` : '', kinds: s.kinds, style: s.style, senderName: s.senderName, colors: s.colors };
 }
 
 // ---- posting
@@ -24108,12 +24114,13 @@ function enqueue(line: string): void {
   if (queue.length > MAX_QUEUE) queue = queue.slice(-MAX_QUEUE); // a flood: the oldest lines go
 }
 
-async function post(url: string, content: string): Promise<{ ok: boolean; retryAfter: number }> {
+async function post(url: string, content: string, sender: string): Promise<{ ok: boolean; retryAfter: number }> {
   try {
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content, username: 'CoreGSM', allowed_mentions: { parse: [] } }),
+      // no «username» unless one is set: the webhook's own name and picture are used
+      body: JSON.stringify({ content, ...(sender ? { username: sender } : {}), allowed_mentions: { parse: [] } }),
       signal: AbortSignal.timeout(8000),
       redirect: 'error',
     });
@@ -24133,13 +24140,15 @@ async function post(url: string, content: string): Promise<{ ok: boolean; retryA
 /** one pass of the sender: what has gathered goes out, in chunks that fit a Discord message */
 export async function flushChat(now = Date.now()): Promise<void> {
   if (!queue.length || pausedUntil > now) return;
-  const url = webhookUrl();
+  const s = read();
+  const url = webhookUrl(s);
   const lines = queue;
   queue = [];
   if (!url) return;
-  const chunks = chunkLines(lines);
+  // the fences of a code block take a few characters
+  const chunks = chunkLines(lines, s.style === 'ansi' ? 1850 : 1900);
   for (let i = 0; i < chunks.length; i++) {
-    const r = await post(url, chunks[i]);
+    const r = await post(url, wrapForDiscord(s.style, chunks[i]), s.senderName);
     if (r.retryAfter) {
       pausedUntil = now + r.retryAfter * 1000;
       // the chunk that was refused and the rest wait for the next pass
@@ -24174,7 +24183,7 @@ const messageSchema = z.object({
   type: z.enum(CHAT_KINDS),
   name: z.string().max(100),
   clan: z.string().max(100).optional(),
-  text: z.string().max(600),
+  text: z.string().max(600).optional(),
 });
 
 function serverLabelOf(id: number): string {
@@ -24182,8 +24191,11 @@ function serverLabelOf(id: number): string {
   return r?.n ?? '';
 }
 
+const ansiColor = z.enum(ANSI_COLORS);
+const colorsSchema = z.object(Object.fromEntries(CHAT_KINDS.map((k) => [k, z.object({ tag: ansiColor, name: ansiColor, text: ansiColor }).partial()]))).partial();
+
 export function registerGameNewsChat({ app, admin }: { app: Express; admin: RequestHandler }): void {
-  // from the plugin: a batch of what players wrote
+  // from the plugin: a batch of what players wrote and of who joined or left
   app.post('/api/game-news/chat', (req, res) => {
     const t = pluginTarget(req);
     if (!t) return res.status(401).json({ error: 'unauthorized' });
@@ -24191,25 +24203,40 @@ export function registerGameNewsChat({ app, admin }: { app: Express; admin: Requ
     if (!b.success) return res.status(400).json({ error: 'Проверьте поля' });
     const now = Date.now();
     if (flood(t.server_id, b.data.messages.length, now)) return res.status(429).json({ error: 'too many requests' });
-    const kinds = new Set(chatKinds());
+    const s = read();
+    const kinds = new Set(activeChatKinds(s));
     // the name of the server is shown only when several servers write to the same channel
     const many = (db.prepare("SELECT COUNT(*) AS n FROM game_news_targets WHERE token_hash <> ''").get() as { n: number }).n > 1;
     const server = many ? serverLabelOf(t.server_id) : '';
+    const jl = getJoinLeave();
     for (const m of b.data.messages) {
       if (!kinds.has(m.type)) continue;
-      const line = formatChatLine(m.type, m.name, m.clan ?? '', m.text, server);
+      const colors = s.colors[m.type];
+      let line: string;
+      if (m.type === 'join' || m.type === 'leave') {
+        // the same words as in the game (set in «Вход и выход игроков»)
+        const template = m.type === 'join' ? jl.joinText : jl.leaveText;
+        line = s.style === 'ansi' ? ansiEventLine(template, m.name, colors, server) : formatEventLine(template, m.name, server);
+      } else {
+        line = s.style === 'ansi'
+          ? ansiChatLine(m.type, m.name, m.clan ?? '', m.text ?? '', colors, server)
+          : formatChatLine(m.type, m.name, m.clan ?? '', m.text ?? '', server);
+      }
       if (line) enqueue(line);
     }
     res.json({ ok: true });
   });
 
-  // from the administrator: the switch, the webhook (empty keeps the saved one, clear removes it) and the kinds of chat
+  // from the administrator: the switch, the webhook (empty keeps the saved one, clear removes it), what to forward, how it looks
   app.put('/api/game-news/chat-settings', admin, (req, res) => {
     const b = z.object({
       enabled: z.boolean().optional(),
       webhook: z.string().max(300).optional(),
       clear: z.boolean().optional(),
-      kinds: z.object({ global: z.boolean(), clan: z.boolean(), local: z.boolean() }).partial().optional(),
+      kinds: z.object(Object.fromEntries(CHAT_KINDS.map((k) => [k, z.boolean()]))).partial().optional(),
+      style: z.enum(['ansi', 'plain']).optional(),
+      senderName: z.string().max(80).optional(),
+      colors: colorsSchema.optional(),
     }).safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Проверьте поля' });
     const s = read();
@@ -24220,16 +24247,41 @@ export function registerGameNewsChat({ app, admin }: { app: Express; admin: Requ
     }
     if (b.data.clear) s.webhook = '';
     if (b.data.enabled !== undefined) s.enabled = b.data.enabled;
-    for (const k of CHAT_KINDS) if (b.data.kinds?.[k] !== undefined) s.kinds[k] = b.data.kinds[k] as boolean;
+    for (const k of CHAT_KINDS) {
+      const on = (b.data.kinds as Partial<Record<ChatKind, boolean>> | undefined)?.[k];
+      if (on !== undefined) s.kinds[k] = on;
+      const c = (b.data.colors as Partial<Record<ChatKind, Partial<Record<'tag' | 'name' | 'text', (typeof ANSI_COLORS)[number]>>>> | undefined)?.[k];
+      if (c) s.colors[k] = { ...s.colors[k], ...Object.fromEntries(Object.entries(c).filter(([, v]) => v !== undefined)) };
+    }
+    if (b.data.style) s.style = b.data.style;
+    if (b.data.senderName !== undefined) s.senderName = normalizeChat({ senderName: b.data.senderName }).senderName;
     write(s);
     res.json({ ok: true });
   });
 
-  // «Проверить»: one line into the channel
+  // «Проверить»: a few sample lines into the channel, the way real ones will look
   app.post('/api/game-news/chat-test', admin, async (_req, res) => {
-    const url = webhookUrl();
+    const s = read();
+    const url = webhookUrl(s);
     if (!url) return res.status(400).json({ error: 'Сначала укажите webhook' });
-    const r = await post(url, '✅ CoreGSM: канал подключён, сюда будет приходить чат игры.');
+    const jl = getJoinLeave();
+    const lines = s.style === 'ansi'
+      ? [
+        ansiChatLine('global', 'WhiteLegioN', '', 'Привет всем!', s.colors.global),
+        ansiChatLine('clan', 'WhiteLegioN', 'Ночные', 'Сбор у замка', s.colors.clan),
+        ansiChatLine('local', 'WhiteLegioN', '', 'Кто рядом?', s.colors.local),
+        ansiEventLine(jl.joinText, 'WhiteLegioN', s.colors.join),
+        ansiEventLine(jl.leaveText, 'WhiteLegioN', s.colors.leave),
+      ]
+      : [
+        formatChatLine('global', 'WhiteLegioN', '', 'Привет всем!'),
+        formatChatLine('clan', 'WhiteLegioN', 'Ночные', 'Сбор у замка'),
+        formatChatLine('local', 'WhiteLegioN', '', 'Кто рядом?'),
+        formatEventLine(jl.joinText, 'WhiteLegioN'),
+        formatEventLine(jl.leaveText, 'WhiteLegioN'),
+      ];
+    const r = await post(url, '✅ CoreGSM: канал подключён. Так будет выглядеть чат игры:', s.senderName);
+    if (r.ok) await post(url, wrapForDiscord(s.style, lines.join('\n')), s.senderName);
     res.json({ ok: r.ok });
   });
 }
@@ -24238,32 +24290,82 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-backend/src/gamenews/gameNewsChatLogic.ts" << '__COREGSM_EOF__'
 /**
  * The game chat for Discord, the parts that need no database: the kinds of chat, the stored settings, the check of a
- * webhook address, and how a line is written so that nothing a player types can ping anybody or break the formatting.
+ * webhook address, and how a line is written (coloured like in the game, or plain) so that nothing a player types can
+ * ping anybody or break the formatting.
+ *
+ * Discord cannot colour ordinary text, but a code block marked «ansi» shows eight colours, so a line can look like in
+ * the game: a blue tag, a yellow nickname, a green clan chat.
  */
 
-export const CHAT_KINDS = ['global', 'clan', 'local'] as const;
+/** the kinds of line that can go to Discord: three chats and two events (a player joined / left) */
+export const CHAT_KINDS = ['global', 'clan', 'local', 'join', 'leave'] as const;
 export type ChatKind = (typeof CHAT_KINDS)[number];
 
-/** one webhook for the whole chat (kept encrypted) and a switch for every kind of chat */
-export interface ChatStored { enabled: boolean; webhook: string; kinds: Record<ChatKind, boolean> }
+/** the eight colours of an ansi block of Discord */
+export const ANSI_COLORS = ['gray', 'red', 'green', 'yellow', 'blue', 'pink', 'cyan', 'white'] as const;
+export type AnsiColor = (typeof ANSI_COLORS)[number];
+const ANSI_CODE: Record<AnsiColor, number> = { gray: 30, red: 31, green: 32, yellow: 33, blue: 34, pink: 35, cyan: 36, white: 37 };
+
+/** the colour of the tag («[Глобальный]»), of the nickname and of the text; for an event the tag is not used */
+export interface ChatColors { tag: AnsiColor; name: AnsiColor; text: AnsiColor }
+export type ChatStyle = 'ansi' | 'plain';
+
+/** like the chat of the game: a blue tag, a yellow nickname; the clan chat is green; a join is a purple nickname in green text */
+export const DEFAULT_COLORS: Record<ChatKind, ChatColors> = {
+  global: { tag: 'blue', name: 'yellow', text: 'cyan' },
+  local: { tag: 'blue', name: 'yellow', text: 'cyan' },
+  clan: { tag: 'green', name: 'green', text: 'green' },
+  join: { tag: 'green', name: 'pink', text: 'green' },
+  leave: { tag: 'green', name: 'pink', text: 'green' },
+};
+
+/** one webhook for the whole chat (kept encrypted), a switch for every kind, how lines look */
+export interface ChatStored {
+  enabled: boolean;
+  webhook: string;
+  kinds: Record<ChatKind, boolean>;
+  style: ChatStyle;
+  /** the name the messages are posted under; '' = the name and the picture of the webhook itself */
+  senderName: string;
+  colors: Record<ChatKind, ChatColors>;
+}
+
+const isAnsi = (x: unknown): x is AnsiColor => typeof x === 'string' && (ANSI_COLORS as readonly string[]).includes(x);
 
 /**
  * The stored setting as a ChatStored. An older setting had one webhook per kind of chat: the first webhook that was set
- * becomes the only one and the kinds that had a webhook stay on.
+ * becomes the only one and the chats that had a webhook stay on. The events (join, leave) are off until they are switched on.
  */
 export function normalizeChat(raw: unknown): ChatStored {
   const v = (raw && typeof raw === 'object' ? raw : {}) as {
     enabled?: unknown; webhook?: unknown; kinds?: Partial<Record<ChatKind, unknown>>; webhooks?: Partial<Record<ChatKind, unknown>>;
+    style?: unknown; senderName?: unknown; colors?: Partial<Record<ChatKind, Partial<Record<keyof ChatColors, unknown>>>>;
   };
   const legacy = v.webhooks && typeof v.webhooks === 'object' ? v.webhooks : {};
-  const legacyFirst = CHAT_KINDS.map((k) => legacy[k]).find((x): x is string => typeof x === 'string' && x.length > 0);
+  const legacyFirst = (['global', 'clan', 'local'] as const).map((k) => legacy[k]).find((x): x is string => typeof x === 'string' && x.length > 0);
   const webhook = typeof v.webhook === 'string' && v.webhook ? v.webhook : legacyFirst ?? '';
   const kinds = {} as Record<ChatKind, boolean>;
+  const colors = {} as Record<ChatKind, ChatColors>;
   for (const k of CHAT_KINDS) {
+    const event = k === 'join' || k === 'leave';
     if (v.kinds && typeof v.kinds[k] === 'boolean') kinds[k] = v.kinds[k] as boolean;
+    else if (event) kinds[k] = false;
     else kinds[k] = v.webhooks ? typeof legacy[k] === 'string' && !!legacy[k] : true;
+    const c = v.colors?.[k] ?? {};
+    colors[k] = {
+      tag: isAnsi(c.tag) ? c.tag : DEFAULT_COLORS[k].tag,
+      name: isAnsi(c.name) ? c.name : DEFAULT_COLORS[k].name,
+      text: isAnsi(c.text) ? c.text : DEFAULT_COLORS[k].text,
+    };
   }
-  return { enabled: !!v.enabled, webhook, kinds };
+  return {
+    enabled: !!v.enabled,
+    webhook,
+    kinds,
+    style: v.style === 'plain' ? 'plain' : 'ansi',
+    senderName: typeof v.senderName === 'string' ? v.senderName.replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, 80) : '',
+    colors,
+  };
 }
 
 /** the kinds that are forwarded right now: the switch is on, a webhook is set and the kind is not turned off */
@@ -24275,28 +24377,70 @@ export function activeChatKinds(s: ChatStored): ChatKind[] {
 export const isDiscordWebhook = (u: string): boolean =>
   /^https:\/\/(?:(?:ptb|canary)\.)?discord(?:app)?\.com\/api\/webhooks\/\d{15,25}\/[\w-]{20,120}$/.test(u.trim());
 
+const noControl = (text: string): string => Array.from(text, (ch) => (ch.charCodeAt(0) < 32 || ch.charCodeAt(0) === 127 ? ' ' : ch)).join('');
+
 /** a player's text made harmless for Discord: no markdown, no mentions, no control characters */
 export function escapeDiscord(text: string): string {
-  const flat = Array.from(text, (ch) => (ch.charCodeAt(0) < 32 || ch.charCodeAt(0) === 127 ? ' ' : ch)).join('');
-  return flat
+  return noControl(text)
     .replace(/[\\*_~|`>#<]/g, (c) => `\\${c}`)
     .replace(/@/g, '@​')
     .replace(/ {2,}/g, ' ')
     .trim();
 }
 
-const CHAT_LABEL: Record<ChatKind, string> = { global: 'Общий', clan: 'Клан', local: 'Рядом' };
+/** a player's text for inside a code block: nothing in a code block is formatted, only the block itself must not be closed */
+function forBlock(text: string): string {
+  return noControl(text).replace(/`{3,}/g, "'''").replace(/ {2,}/g, ' ').trim();
+}
 
-/** «**[Общий]** **WhiteLegioN**: Тест»; '' for what must not be forwarded (a command, an empty text) */
-export function formatChatLine(kind: ChatKind, name: string, clan: string, text: string, server = ''): string {
+export const CHAT_LABEL: Record<'global' | 'clan' | 'local', string> = { global: 'Глобальный', clan: 'Клан', local: 'Локальный' };
+
+const isCommand = (t: string): boolean => t.startsWith('.') || t.startsWith('/') || t.startsWith('!');
+
+/** «**[Глобальный]** **WhiteLegioN**: Тест»; '' for what must not be forwarded (a command, an empty text) */
+export function formatChatLine(kind: 'global' | 'clan' | 'local', name: string, clan: string, text: string, server = ''): string {
   const t = text.trim();
-  if (!t || t.startsWith('.') || t.startsWith('/') || t.startsWith('!')) return '';
+  if (!t || isCommand(t)) return '';
   const tag = kind === 'clan' && clan.trim() ? `${CHAT_LABEL.clan} ${clan.trim()}` : CHAT_LABEL[kind];
   const head = server ? `**[${escapeDiscord(server)}]** ` : '';
   return `${head}**[${escapeDiscord(tag)}]** **${escapeDiscord(name.trim() || '?')}**: ${escapeDiscord(t).slice(0, 500)}`;
 }
 
-/** lines joined into messages that fit Discord (2000 characters, kept below it) */
+/** «* Игрок **WhiteLegioN** подключился к серверу.» for a join or a leave in the plain style */
+export function formatEventLine(template: string, name: string, server = ''): string {
+  const head = server ? `**[${escapeDiscord(server)}]** ` : '';
+  const [before, ...rest] = escapeDiscord(template).split('{name}');
+  const after = rest.join(`**${escapeDiscord(name.trim() || '?')}**`);
+  return `${head}${before}${rest.length ? `**${escapeDiscord(name.trim() || '?')}**${after}` : ''}`.trim();
+}
+
+const ESC = String.fromCharCode(27);
+const seg = (color: AnsiColor, text: string, bold = false): string => (text ? `${ESC}[${bold ? 1 : 0};${ANSI_CODE[color]}m${text}${ESC}[0m` : '');
+
+/** a line of a chat in the colours of the game: «[Глобальный] WhiteLegioN: Тест» */
+export function ansiChatLine(kind: 'global' | 'clan' | 'local', name: string, clan: string, text: string, c: ChatColors, server = ''): string {
+  const t = forBlock(text);
+  if (!t || isCommand(t)) return '';
+  const tag = kind === 'clan' && clan.trim() ? `${CHAT_LABEL.clan} ${forBlock(clan)}` : CHAT_LABEL[kind];
+  const head = server ? seg('gray', `[${forBlock(server)}] `) : '';
+  return `${head}${seg(c.tag, `[${tag}]`, true)} ${seg(c.name, forBlock(name) || '?', true)}${seg(c.text, ': ')}${seg(c.text, t.slice(0, 500))}`;
+}
+
+/** «* Игрок WhiteLegioN подключился к серверу.» in two colours: the nickname and the rest */
+export function ansiEventLine(template: string, name: string, c: ChatColors, server = ''): string {
+  const head = server ? seg('gray', `[${forBlock(server)}] `) : '';
+  const parts = forBlock(template).split('{name}');
+  const nick = forBlock(name) || '?';
+  const body = parts.map((p, i) => seg(c.text, p) + (i < parts.length - 1 ? seg(c.name, nick, true) : '')).join('');
+  return `${head}${body}`;
+}
+
+/** the text of a Discord message for some lines: an ansi block, or the lines as they are */
+export function wrapForDiscord(style: ChatStyle, chunk: string): string {
+  return style === 'ansi' ? `\`\`\`ansi\n${chunk}\n\`\`\`` : chunk;
+}
+
+/** lines joined into messages that fit Discord (2000 characters, a little less for the fences of a code block) */
 export function chunkLines(lines: string[], max = 1900): string[] {
   const out: string[] = [];
   let cur = '';
@@ -139266,10 +139410,22 @@ export interface RegisterSettings {
   discordEveryHours: number;
 }
 
-/** the game chat in Discord: one webhook (its address never leaves the backend) and a switch for each kind of chat */
-export const CHAT_KINDS = ['global', 'clan', 'local'] as const;
+/** the game chat in Discord: one webhook (its address never leaves the backend), a switch for each kind of line and how they look */
+export const CHAT_KINDS = ['global', 'clan', 'local', 'join', 'leave'] as const;
 export type ChatKind = (typeof CHAT_KINDS)[number];
-export interface ChatSettings { enabled: boolean; set: boolean; tail: string; kinds: Record<ChatKind, boolean> }
+/** the eight colours of an ansi block of Discord */
+export const ANSI_COLORS = ['gray', 'red', 'green', 'yellow', 'blue', 'pink', 'cyan', 'white'] as const;
+export type AnsiColor = (typeof ANSI_COLORS)[number];
+export interface ChatColors { tag: AnsiColor; name: AnsiColor; text: AnsiColor }
+export interface ChatSettings {
+  enabled: boolean;
+  set: boolean;
+  tail: string;
+  kinds: Record<ChatKind, boolean>;
+  style: 'ansi' | 'plain';
+  senderName: string;
+  colors: Record<ChatKind, ChatColors>;
+}
 
 /** everything the «rules» endpoint returns: automatic announcements and the settings of the events */
 export interface RulesState {
@@ -142644,7 +142800,35 @@ const en: Record<keyof typeof ru, string> = {
   'gn.h.expired': 'Not delivered',
   'gn.h.fail': 'Failed',
   'gn.reuse': 'Use again',  'adm.s.alerts': 'Alerts',
-  'gn.rt.min': '{n} min',
+  'gn.ch.label.global': 'Global',
+  'gn.ch.label.clan': 'Clan',
+  'gn.ch.label.local': 'Local',
+  'gn.ch.look': 'How it looks in Discord',
+  'gn.ch.style': 'Style',
+  'gn.ch.style.ansi': 'Coloured, like in the game',
+  'gn.ch.style.plain': 'Plain (bold nickname)',
+  'gn.ch.sender': 'Sender name',
+  'gn.ch.senderEx': 'Default',
+  'gn.ch.senderNote': 'Empty: messages come under the name and with the picture of the webhook itself (as you set it in Discord). A name written here replaces the name of the webhook.',
+  'gn.ch.colors': 'Colours',
+  'gn.ch.col.tag': 'Tag',
+  'gn.ch.col.name': 'Nickname',
+  'gn.ch.col.text': 'Text',
+  'gn.ch.ansiNote': 'Discord colours text in 8 colours only (a colour block). On a phone the colours may not show: then pick the «Plain» style.',
+  'gn.ch.c.gray': 'Gray',
+  'gn.ch.c.red': 'Red',
+  'gn.ch.c.green': 'Green',
+  'gn.ch.c.yellow': 'Yellow',
+  'gn.ch.c.blue': 'Blue',
+  'gn.ch.c.pink': 'Purple',
+  'gn.ch.c.cyan': 'Cyan',
+  'gn.ch.c.white': 'White',
+  'gn.ch.kind.join': 'Player joined',
+  'gn.ch.kind.leave': 'Player left',
+  'gn.ch.short.join': 'joins',
+  'gn.ch.short.leave': 'leaves',
+  'gn.ch.kindNote.join': 'The line «* Player nick joined the server.» with the text from «Players joining and leaving».',
+  'gn.ch.kindNote.leave': 'The line «* Player nick left the server.» with the text from «Players joining and leaving».',  'gn.rt.min': '{n} min',
   'gn.rt.h': '{n} h',
   'gn.rt.in': 'in {t}',
   'gn.rt.ago': '{t} ago',
@@ -142697,16 +142881,16 @@ const en: Record<keyof typeof ru, string> = {
   'gn.ch.what': 'What to forward',
   'gn.ch.short.global': 'global',
   'gn.ch.short.clan': 'clan',
-  'gn.ch.short.local': 'nearby',
+  'gn.ch.short.local': 'local',
   'gn.ch.kindNote.global': 'Messages to all players of the server: «[Global] nick: text».',
   'gn.ch.kindNote.clan': 'The clan chat with the clan name: «[Clan Name] nick: text». This is private talk of a clan.',
-  'gn.ch.kindNote.local': 'Messages of players near each other: «[Nearby] nick: text». Very noisy.',
+  'gn.ch.kindNote.local': 'Messages of players near each other: «[Local] nick: text». Very noisy.',
   'gn.x.sum': 'Discord: {discord} · tips: {n}',  'gn.ch.title': 'Server chat in Discord',
   'gn.ch.note': 'Messages players write in the game chat arrive in a Discord channel as «[Global] nick: text» (for a clan «[Clan Name] nick: text»). Everything goes to one channel: create a webhook in it (Channel settings → Integrations → Webhooks), paste the address here and choose below which chats are forwarded. Needs plugin 0.8.0.',
   'gn.ch.enabled': 'Forward the game chat to Discord',
   'gn.ch.kind.global': 'Global chat',
   'gn.ch.kind.clan': 'Clan chat',
-  'gn.ch.kind.local': 'Nearby chat',
+  'gn.ch.kind.local': 'Local chat',
   'gn.ch.set': 'Channel set ({tail})',
   'gn.ch.unset': 'Not set',
   'gn.ch.replace': 'Paste a new address to replace it',
@@ -147235,7 +147419,35 @@ const ru = {
   'gn.h.expired': 'Не доставлено',
   'gn.h.fail': 'Ошибка',
   'gn.reuse': 'Использовать снова',  'adm.s.alerts': 'Оповещения',
-  'gn.rt.min': '{n} мин',
+  'gn.ch.label.global': 'Глобальный',
+  'gn.ch.label.clan': 'Клан',
+  'gn.ch.label.local': 'Локальный',
+  'gn.ch.look': 'Как это выглядит в Discord',
+  'gn.ch.style': 'Оформление',
+  'gn.ch.style.ansi': 'Цветное, как в игре',
+  'gn.ch.style.plain': 'Простое (жирный ник)',
+  'gn.ch.sender': 'Имя отправителя',
+  'gn.ch.senderEx': 'По умолчанию',
+  'gn.ch.senderNote': 'Пусто: сообщения приходят под именем и с картинкой самого webhook (как вы задали в Discord). Если вписать имя, оно заменит имя webhook.',
+  'gn.ch.colors': 'Цвета',
+  'gn.ch.col.tag': 'Метка',
+  'gn.ch.col.name': 'Ник',
+  'gn.ch.col.text': 'Текст',
+  'gn.ch.ansiNote': 'Discord красит текст только в 8 цветов (цветной блок). На телефоне цвета могут не отображаться: тогда выберите «Простое» оформление.',
+  'gn.ch.c.gray': 'Серый',
+  'gn.ch.c.red': 'Красный',
+  'gn.ch.c.green': 'Зелёный',
+  'gn.ch.c.yellow': 'Жёлтый',
+  'gn.ch.c.blue': 'Синий',
+  'gn.ch.c.pink': 'Фиолетовый',
+  'gn.ch.c.cyan': 'Голубой',
+  'gn.ch.c.white': 'Белый',
+  'gn.ch.kind.join': 'Вход игрока',
+  'gn.ch.kind.leave': 'Выход игрока',
+  'gn.ch.short.join': 'вход',
+  'gn.ch.short.leave': 'выход',
+  'gn.ch.kindNote.join': 'Строка «* Игрок ник подключился к серверу.» с текстом из «Вход и выход игроков».',
+  'gn.ch.kindNote.leave': 'Строка «* Игрок ник отключился от сервера.» с текстом из «Вход и выход игроков».',  'gn.rt.min': '{n} мин',
   'gn.rt.h': '{n} ч',
   'gn.rt.in': 'через {t}',
   'gn.rt.ago': '{t} назад',
@@ -147286,18 +147498,18 @@ const ru = {
   'gn.ch.add': 'Задать',
   'gn.ch.edit': 'Изменить',
   'gn.ch.what': 'Что пересылать',
-  'gn.ch.short.global': 'общий',
+  'gn.ch.short.global': 'глобальный',
   'gn.ch.short.clan': 'клан',
-  'gn.ch.short.local': 'рядом',
-  'gn.ch.kindNote.global': 'Сообщения всем игрокам сервера: «[Общий] ник: текст».',
+  'gn.ch.short.local': 'локальный',
+  'gn.ch.kindNote.global': 'Сообщения всем игрокам сервера: «[Глобальный] ник: текст».',
   'gn.ch.kindNote.clan': 'Чат клана с названием клана: «[Клан Название] ник: текст». Это закрытая переписка клана.',
-  'gn.ch.kindNote.local': 'Сообщения игроков поблизости друг от друга: «[Рядом] ник: текст». Много шума.',
+  'gn.ch.kindNote.local': 'Сообщения игроков поблизости друг от друга: «[Локальный] ник: текст». Много шума.',
   'gn.x.sum': 'Discord: {discord} · советов: {n}',  'gn.ch.title': 'Чат сервера в Discord',
-  'gn.ch.note': 'Сообщения игроков из игрового чата приходят в канал Discord в виде «[Общий] ник: текст» (для клана «[Клан Название] ник: текст»). Всё приходит в один канал: создайте в нём webhook (Настройки канала → Интеграции → Webhooks) и вставьте адрес сюда, а ниже выберите, какие чаты пересылать. Нужен плагин 0.8.0.',
+  'gn.ch.note': 'Сообщения игроков из игрового чата приходят в канал Discord в виде «[Глобальный] ник: текст» (для клана «[Клан Название] ник: текст»). Всё приходит в один канал: создайте в нём webhook (Настройки канала → Интеграции → Webhooks) и вставьте адрес сюда, а ниже выберите, какие чаты пересылать. Нужен плагин 0.8.0.',
   'gn.ch.enabled': 'Пересылать чат игры в Discord',
-  'gn.ch.kind.global': 'Общий чат',
+  'gn.ch.kind.global': 'Глобальный чат',
   'gn.ch.kind.clan': 'Чат клана',
-  'gn.ch.kind.local': 'Чат поблизости',
+  'gn.ch.kind.local': 'Локальный чат',
   'gn.ch.set': 'Канал задан ({tail})',
   'gn.ch.unset': 'Не задан',
   'gn.ch.replace': 'Вставьте новый адрес, чтобы заменить',
@@ -155659,7 +155871,7 @@ export default function GameNewsPage({ sub = '' }: { sub?: string }) {
 
       {data && tab === 'discord' && rd && (
         <div className="space-y-4">
-          <ChatCard initial={rd.chat} />
+          <ChatCard initial={rd.chat} joinText={rd.joinLeave.joinText} leaveText={rd.joinLeave.leaveText} />
           <ExtrasCard initial={rd.extras} />
         </div>
       )}
@@ -155766,8 +155978,8 @@ import { ChatLines, NewsEditor, NewsPreview } from '../components/NewsEditor';
 import { confirmDialog } from '../confirm';
 import { t, useI18n } from '../i18n';
 import {
-  CHAT_KINDS, SWATCHES, WELCOME_STYLES, WELCOME_VARIABLES, composeLine, isHex, validateNews,
-  type ChatSettings, type Extras, type JoinLeave, type RegisterSettings, type Welcome, type WelcomeStyle,
+  ANSI_COLORS, CHAT_KINDS, SWATCHES, WELCOME_STYLES, WELCOME_VARIABLES, composeLine, isHex, validateNews,
+  type AnsiColor, type ChatColors, type ChatKind, type ChatSettings, type Extras, type JoinLeave, type RegisterSettings, type Welcome, type WelcomeStyle,
 } from '../gameNews';
 import { Field, SaveBadge, errText, toast, useAutosave } from '../ui';
 
@@ -156013,11 +156225,63 @@ export function RestartCard({ enabled, onChange }: { enabled: boolean; onChange:
   );
 }
 
+/** the colours of an ansi block of Discord, as Discord draws them on a dark background */
+const ANSI_CSS: Record<AnsiColor, string> = {
+  gray: '#8a919a', red: '#dc322f', green: '#859900', yellow: '#b58900', blue: '#268bd2', pink: '#d33682', cyan: '#2aa198', white: '#ffffff',
+};
+
+/** one colour of the eight: a swatch and a list */
+function AnsiSelect({ value, onChange, label }: { value: AnsiColor; onChange: (v: AnsiColor) => void; label: string }) {
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <span aria-hidden className="inline-block h-3.5 w-3.5 shrink-0 rounded-full border border-line" style={{ background: ANSI_CSS[value] }} />
+      <select className="input w-32 py-1 text-sm" value={value} aria-label={label} onChange={(e) => onChange(e.target.value as AnsiColor)}>
+        {ANSI_COLORS.map((c) => <option key={c} value={c}>{t(`gn.ch.c.${c}` as 'gn.ch.c.gray')}</option>)}
+      </select>
+    </span>
+  );
+}
+
+/** the sample lines of the chat as Discord will draw them (colours of the ansi block) */
+function DiscordPreview({ colors, joinText, leaveText }: { colors: Record<ChatKind, ChatColors>; joinText: string; leaveText: string }) {
+  const nick = 'WhiteLegioN';
+  const chat = (k: 'global' | 'clan' | 'local', tag: string, text: string) => (
+    <p key={k} className="wrap-break-word">
+      <span style={{ color: ANSI_CSS[colors[k].tag], fontWeight: 800 }}>[{tag}]</span>{' '}
+      <span style={{ color: ANSI_CSS[colors[k].name], fontWeight: 800 }}>{nick}</span>
+      <span style={{ color: ANSI_CSS[colors[k].text] }}>: {text}</span>
+    </p>
+  );
+  const event = (k: 'join' | 'leave', template: string) => {
+    const parts = template.replace(/[<>]/g, '').split('{name}');
+    return (
+      <p key={k} className="wrap-break-word">
+        {parts.map((p, i) => (
+          <span key={i}>
+            <span style={{ color: ANSI_CSS[colors[k].text] }}>{p}</span>
+            {i < parts.length - 1 && <span style={{ color: ANSI_CSS[colors[k].name], fontWeight: 800 }}>{nick}</span>}
+          </span>
+        ))}
+      </p>
+    );
+  };
+  return (
+    <div className="rounded-lg p-3 font-mono text-sm leading-relaxed" style={{ background: '#2b2d31', color: '#dbdee1' }} aria-label={t('gn.ch.look')}>
+      {chat('global', t('gn.ch.label.global'), 'Привет всем!')}
+      {chat('clan', `${t('gn.ch.label.clan')} Ночные`, 'Сбор у замка')}
+      {chat('local', t('gn.ch.label.local'), 'Кто рядом?')}
+      {event('join', joinText)}
+      {event('leave', leaveText)}
+    </div>
+  );
+}
+
 /**
- * The chat of the game server for the administrators in Discord: one channel (its webhook) and a switch for each kind
- * of chat that goes there. The address is a secret: it is sent to the panel and never shown again (only «set» and the tail).
+ * The chat of the game server for the administrators in Discord: one channel (its webhook), a switch for each kind of
+ * line that goes there and how the lines look (the colours of the game, or plain). The address is a secret: it is sent
+ * to the panel and never shown again (only «set» and the tail).
  */
-export function ChatCard({ initial }: { initial: ChatSettings }) {
+export function ChatCard({ initial, joinText, leaveText }: { initial: ChatSettings; joinText: string; leaveText: string }) {
   useI18n();
   const [st, setSt] = useState<ChatSettings>(initial);
   const [busy, setBusy] = useState<string | null>(null);
@@ -156039,13 +156303,32 @@ export function ChatCard({ initial }: { initial: ChatSettings }) {
       toast(r.ok ? t('gn.ch.testOk') : t('gn.ch.testFail'), r.ok ? undefined : 'err');
     } catch (e) { toast(errText(e), 'err'); } finally { setBusy(null); }
   };
+
+  // how the lines look: saved by itself a moment after a change
+  const [look, setLook] = useState({ style: initial.style, senderName: initial.senderName, colors: initial.colors });
+  const [lookSaved, setLookSaved] = useState(look);
+  const auto = useAutosave({
+    value: look,
+    saved: lookSaved,
+    delay: 700,
+    save: async (v) => { await api('/game-news/chat-settings', 'PUT', v); setLookSaved(v); },
+  });
+  const setColor = (k: ChatKind, part: keyof ChatColors, v: AnsiColor) => setLook((x) => ({ ...x, colors: { ...x.colors, [k]: { ...x.colors[k], [part]: v } } }));
+
   const shown = CHAT_KINDS.filter((k) => st.kinds[k]);
   const summary = !st.set
     ? t('gn.ch.sumNoHook')
     : shown.length ? t('gn.ch.sumKinds', { list: shown.map((k) => t(`gn.ch.short.${k}` as 'gn.ch.short.global')).join(', ') }) : t('gn.ch.sumNone');
 
   return (
-    <FoldCard id="chat" defaultOpen title={t('gn.ch.title')} summary={summary} on={st.enabled && st.set && shown.length > 0}>
+    <FoldCard
+      id="chat"
+      defaultOpen
+      title={t('gn.ch.title')}
+      summary={summary}
+      on={st.enabled && st.set && shown.length > 0}
+      status={<SaveBadge status={auto.status} error={auto.error} retry={auto.retry} />}
+    >
       <p className="text-sm font-semibold text-mute">{t('gn.ch.note')}</p>
 
       <label className="flex items-center gap-3 font-bold">
@@ -156091,6 +156374,54 @@ export function ChatCard({ initial }: { initial: ChatSettings }) {
           </label>
         ))}
       </fieldset>
+
+      <div className="space-y-3">
+        <h4 className="font-extrabold">{t('gn.ch.look')}</h4>
+        <div className="grid gap-4 lg:grid-cols-2">
+          <Field label={t('gn.ch.style')}>
+            <select className="input" value={look.style} onChange={(e) => setLook((x) => ({ ...x, style: e.target.value as 'ansi' | 'plain' }))}>
+              <option value="ansi">{t('gn.ch.style.ansi')}</option>
+              <option value="plain">{t('gn.ch.style.plain')}</option>
+            </select>
+          </Field>
+          <Field label={t('gn.ch.sender')}>
+            <input className="input" value={look.senderName} maxLength={80} placeholder={t('gn.ch.senderEx')} onChange={(e) => setLook((x) => ({ ...x, senderName: e.target.value }))} />
+          </Field>
+        </div>
+        <p className="text-sm font-semibold text-mute">{t('gn.ch.senderNote')}</p>
+
+        {look.style === 'ansi' && (
+          <>
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[34rem] text-left text-sm">
+                <thead>
+                  <tr className="text-mute">
+                    <th className="py-1.5 pr-3 font-bold">{t('gn.ch.colors')}</th>
+                    <th className="py-1.5 pr-3 font-bold">{t('gn.ch.col.tag')}</th>
+                    <th className="py-1.5 pr-3 font-bold">{t('gn.ch.col.name')}</th>
+                    <th className="py-1.5 font-bold">{t('gn.ch.col.text')}</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-line">
+                  {CHAT_KINDS.map((k) => {
+                    const event = k === 'join' || k === 'leave';
+                    return (
+                      <tr key={k}>
+                        <td className="py-1.5 pr-3 font-bold">{t(`gn.ch.kind.${k}` as 'gn.ch.kind.global')}</td>
+                        <td className="py-1.5 pr-3">{event ? <span className="text-mute">—</span> : <AnsiSelect label={`${t(`gn.ch.kind.${k}` as 'gn.ch.kind.global')}: ${t('gn.ch.col.tag')}`} value={look.colors[k].tag} onChange={(v) => setColor(k, 'tag', v)} />}</td>
+                        <td className="py-1.5 pr-3"><AnsiSelect label={`${t(`gn.ch.kind.${k}` as 'gn.ch.kind.global')}: ${t('gn.ch.col.name')}`} value={look.colors[k].name} onChange={(v) => setColor(k, 'name', v)} /></td>
+                        <td className="py-1.5"><AnsiSelect label={`${t(`gn.ch.kind.${k}` as 'gn.ch.kind.global')}: ${t('gn.ch.col.text')}`} value={look.colors[k].text} onChange={(v) => setColor(k, 'text', v)} /></td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            <DiscordPreview colors={look.colors} joinText={joinText} leaveText={leaveText} />
+            <p className="text-sm font-semibold text-mute">{t('gn.ch.ansiNote')}</p>
+          </>
+        )}
+      </div>
 
       <p className="text-sm font-semibold text-mute">{t('gn.ch.hint')}</p>
       <p className="text-sm font-semibold text-danger">{t('gn.ch.privacy')}</p>

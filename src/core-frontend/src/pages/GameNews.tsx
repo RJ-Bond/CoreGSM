@@ -271,7 +271,7 @@ export default function GameNewsPage({ sub = '' }: { sub?: string }) {
 
       {data && tab === 'discord' && rd && (
         <div className="space-y-4">
-          <ChatCard initial={rd.chat} />
+          <ChatCard initial={rd.chat} joinText={rd.joinLeave.joinText} leaveText={rd.joinLeave.leaveText} />
           <ExtrasCard initial={rd.extras} />
         </div>
       )}

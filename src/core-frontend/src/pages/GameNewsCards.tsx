@@ -6,8 +6,8 @@ import { ChatLines, NewsEditor, NewsPreview } from '../components/NewsEditor';
 import { confirmDialog } from '../confirm';
 import { t, useI18n } from '../i18n';
 import {
-  CHAT_KINDS, SWATCHES, WELCOME_STYLES, WELCOME_VARIABLES, composeLine, isHex, validateNews,
-  type ChatSettings, type Extras, type JoinLeave, type RegisterSettings, type Welcome, type WelcomeStyle,
+  ANSI_COLORS, CHAT_KINDS, SWATCHES, WELCOME_STYLES, WELCOME_VARIABLES, composeLine, isHex, validateNews,
+  type AnsiColor, type ChatColors, type ChatKind, type ChatSettings, type Extras, type JoinLeave, type RegisterSettings, type Welcome, type WelcomeStyle,
 } from '../gameNews';
 import { Field, SaveBadge, errText, toast, useAutosave } from '../ui';
 
@@ -253,11 +253,63 @@ export function RestartCard({ enabled, onChange }: { enabled: boolean; onChange:
   );
 }
 
+/** the colours of an ansi block of Discord, as Discord draws them on a dark background */
+const ANSI_CSS: Record<AnsiColor, string> = {
+  gray: '#8a919a', red: '#dc322f', green: '#859900', yellow: '#b58900', blue: '#268bd2', pink: '#d33682', cyan: '#2aa198', white: '#ffffff',
+};
+
+/** one colour of the eight: a swatch and a list */
+function AnsiSelect({ value, onChange, label }: { value: AnsiColor; onChange: (v: AnsiColor) => void; label: string }) {
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <span aria-hidden className="inline-block h-3.5 w-3.5 shrink-0 rounded-full border border-line" style={{ background: ANSI_CSS[value] }} />
+      <select className="input w-32 py-1 text-sm" value={value} aria-label={label} onChange={(e) => onChange(e.target.value as AnsiColor)}>
+        {ANSI_COLORS.map((c) => <option key={c} value={c}>{t(`gn.ch.c.${c}` as 'gn.ch.c.gray')}</option>)}
+      </select>
+    </span>
+  );
+}
+
+/** the sample lines of the chat as Discord will draw them (colours of the ansi block) */
+function DiscordPreview({ colors, joinText, leaveText }: { colors: Record<ChatKind, ChatColors>; joinText: string; leaveText: string }) {
+  const nick = 'WhiteLegioN';
+  const chat = (k: 'global' | 'clan' | 'local', tag: string, text: string) => (
+    <p key={k} className="wrap-break-word">
+      <span style={{ color: ANSI_CSS[colors[k].tag], fontWeight: 800 }}>[{tag}]</span>{' '}
+      <span style={{ color: ANSI_CSS[colors[k].name], fontWeight: 800 }}>{nick}</span>
+      <span style={{ color: ANSI_CSS[colors[k].text] }}>: {text}</span>
+    </p>
+  );
+  const event = (k: 'join' | 'leave', template: string) => {
+    const parts = template.replace(/[<>]/g, '').split('{name}');
+    return (
+      <p key={k} className="wrap-break-word">
+        {parts.map((p, i) => (
+          <span key={i}>
+            <span style={{ color: ANSI_CSS[colors[k].text] }}>{p}</span>
+            {i < parts.length - 1 && <span style={{ color: ANSI_CSS[colors[k].name], fontWeight: 800 }}>{nick}</span>}
+          </span>
+        ))}
+      </p>
+    );
+  };
+  return (
+    <div className="rounded-lg p-3 font-mono text-sm leading-relaxed" style={{ background: '#2b2d31', color: '#dbdee1' }} aria-label={t('gn.ch.look')}>
+      {chat('global', t('gn.ch.label.global'), 'Привет всем!')}
+      {chat('clan', `${t('gn.ch.label.clan')} Ночные`, 'Сбор у замка')}
+      {chat('local', t('gn.ch.label.local'), 'Кто рядом?')}
+      {event('join', joinText)}
+      {event('leave', leaveText)}
+    </div>
+  );
+}
+
 /**
- * The chat of the game server for the administrators in Discord: one channel (its webhook) and a switch for each kind
- * of chat that goes there. The address is a secret: it is sent to the panel and never shown again (only «set» and the tail).
+ * The chat of the game server for the administrators in Discord: one channel (its webhook), a switch for each kind of
+ * line that goes there and how the lines look (the colours of the game, or plain). The address is a secret: it is sent
+ * to the panel and never shown again (only «set» and the tail).
  */
-export function ChatCard({ initial }: { initial: ChatSettings }) {
+export function ChatCard({ initial, joinText, leaveText }: { initial: ChatSettings; joinText: string; leaveText: string }) {
   useI18n();
   const [st, setSt] = useState<ChatSettings>(initial);
   const [busy, setBusy] = useState<string | null>(null);
@@ -279,13 +331,32 @@ export function ChatCard({ initial }: { initial: ChatSettings }) {
       toast(r.ok ? t('gn.ch.testOk') : t('gn.ch.testFail'), r.ok ? undefined : 'err');
     } catch (e) { toast(errText(e), 'err'); } finally { setBusy(null); }
   };
+
+  // how the lines look: saved by itself a moment after a change
+  const [look, setLook] = useState({ style: initial.style, senderName: initial.senderName, colors: initial.colors });
+  const [lookSaved, setLookSaved] = useState(look);
+  const auto = useAutosave({
+    value: look,
+    saved: lookSaved,
+    delay: 700,
+    save: async (v) => { await api('/game-news/chat-settings', 'PUT', v); setLookSaved(v); },
+  });
+  const setColor = (k: ChatKind, part: keyof ChatColors, v: AnsiColor) => setLook((x) => ({ ...x, colors: { ...x.colors, [k]: { ...x.colors[k], [part]: v } } }));
+
   const shown = CHAT_KINDS.filter((k) => st.kinds[k]);
   const summary = !st.set
     ? t('gn.ch.sumNoHook')
     : shown.length ? t('gn.ch.sumKinds', { list: shown.map((k) => t(`gn.ch.short.${k}` as 'gn.ch.short.global')).join(', ') }) : t('gn.ch.sumNone');
 
   return (
-    <FoldCard id="chat" defaultOpen title={t('gn.ch.title')} summary={summary} on={st.enabled && st.set && shown.length > 0}>
+    <FoldCard
+      id="chat"
+      defaultOpen
+      title={t('gn.ch.title')}
+      summary={summary}
+      on={st.enabled && st.set && shown.length > 0}
+      status={<SaveBadge status={auto.status} error={auto.error} retry={auto.retry} />}
+    >
       <p className="text-sm font-semibold text-mute">{t('gn.ch.note')}</p>
 
       <label className="flex items-center gap-3 font-bold">
@@ -331,6 +402,54 @@ export function ChatCard({ initial }: { initial: ChatSettings }) {
           </label>
         ))}
       </fieldset>
+
+      <div className="space-y-3">
+        <h4 className="font-extrabold">{t('gn.ch.look')}</h4>
+        <div className="grid gap-4 lg:grid-cols-2">
+          <Field label={t('gn.ch.style')}>
+            <select className="input" value={look.style} onChange={(e) => setLook((x) => ({ ...x, style: e.target.value as 'ansi' | 'plain' }))}>
+              <option value="ansi">{t('gn.ch.style.ansi')}</option>
+              <option value="plain">{t('gn.ch.style.plain')}</option>
+            </select>
+          </Field>
+          <Field label={t('gn.ch.sender')}>
+            <input className="input" value={look.senderName} maxLength={80} placeholder={t('gn.ch.senderEx')} onChange={(e) => setLook((x) => ({ ...x, senderName: e.target.value }))} />
+          </Field>
+        </div>
+        <p className="text-sm font-semibold text-mute">{t('gn.ch.senderNote')}</p>
+
+        {look.style === 'ansi' && (
+          <>
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[34rem] text-left text-sm">
+                <thead>
+                  <tr className="text-mute">
+                    <th className="py-1.5 pr-3 font-bold">{t('gn.ch.colors')}</th>
+                    <th className="py-1.5 pr-3 font-bold">{t('gn.ch.col.tag')}</th>
+                    <th className="py-1.5 pr-3 font-bold">{t('gn.ch.col.name')}</th>
+                    <th className="py-1.5 font-bold">{t('gn.ch.col.text')}</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-line">
+                  {CHAT_KINDS.map((k) => {
+                    const event = k === 'join' || k === 'leave';
+                    return (
+                      <tr key={k}>
+                        <td className="py-1.5 pr-3 font-bold">{t(`gn.ch.kind.${k}` as 'gn.ch.kind.global')}</td>
+                        <td className="py-1.5 pr-3">{event ? <span className="text-mute">—</span> : <AnsiSelect label={`${t(`gn.ch.kind.${k}` as 'gn.ch.kind.global')}: ${t('gn.ch.col.tag')}`} value={look.colors[k].tag} onChange={(v) => setColor(k, 'tag', v)} />}</td>
+                        <td className="py-1.5 pr-3"><AnsiSelect label={`${t(`gn.ch.kind.${k}` as 'gn.ch.kind.global')}: ${t('gn.ch.col.name')}`} value={look.colors[k].name} onChange={(v) => setColor(k, 'name', v)} /></td>
+                        <td className="py-1.5"><AnsiSelect label={`${t(`gn.ch.kind.${k}` as 'gn.ch.kind.global')}: ${t('gn.ch.col.text')}`} value={look.colors[k].text} onChange={(v) => setColor(k, 'text', v)} /></td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            <DiscordPreview colors={look.colors} joinText={joinText} leaveText={leaveText} />
+            <p className="text-sm font-semibold text-mute">{t('gn.ch.ansiNote')}</p>
+          </>
+        )}
+      </div>
 
       <p className="text-sm font-semibold text-mute">{t('gn.ch.hint')}</p>
       <p className="text-sm font-semibold text-danger">{t('gn.ch.privacy')}</p>

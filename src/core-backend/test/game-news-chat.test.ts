@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { activeChatKinds, chunkLines, escapeDiscord, formatChatLine, isDiscordWebhook, normalizeChat } from '../src/gamenews/gameNewsChatLogic.ts';
+import {
+  DEFAULT_COLORS, activeChatKinds, ansiChatLine, ansiEventLine, chunkLines, escapeDiscord, formatChatLine, formatEventLine, isDiscordWebhook, normalizeChat, wrapForDiscord,
+} from '../src/gamenews/gameNewsChatLogic.ts';
 
 describe('game chat for Discord', () => {
   it('writes a line as «[Общий] ник: текст»', () => {
-    assert.equal(formatChatLine('global', 'WhiteLegioN', '', 'Тест'), '**[Общий]** **WhiteLegioN**: Тест');
-    assert.equal(formatChatLine('local', 'Vamp', '', 'привет'), '**[Рядом]** **Vamp**: привет');
+    assert.equal(formatChatLine('global', 'WhiteLegioN', '', 'Тест'), '**[Глобальный]** **WhiteLegioN**: Тест');
+    assert.equal(formatChatLine('local', 'Vamp', '', 'привет'), '**[Локальный]** **Vamp**: привет');
   });
 
   it('puts the clan name into the clan tag', () => {
@@ -14,7 +16,7 @@ describe('game chat for Discord', () => {
   });
 
   it('names the server only when it is asked to', () => {
-    assert.equal(formatChatLine('global', 'A', '', 'x', 'Мой сервер'), '**[Мой сервер]** **[Общий]** **A**: x');
+    assert.equal(formatChatLine('global', 'A', '', 'x', 'Мой сервер'), '**[Мой сервер]** **[Глобальный]** **A**: x');
   });
 
   it('does not forward commands or empty texts', () => {
@@ -49,7 +51,7 @@ describe('game chat for Discord', () => {
 
   it('keeps one webhook and a switch per kind of chat', () => {
     const s = normalizeChat({ enabled: true, webhook: 'enc:x', kinds: { global: true, clan: false } });
-    assert.deepEqual(s.kinds, { global: true, clan: false, local: true });
+    assert.deepEqual(s.kinds, { global: true, clan: false, local: true, join: false, leave: false });
     assert.deepEqual(activeChatKinds(s), ['global', 'local']);
     assert.deepEqual(activeChatKinds({ ...s, enabled: false }), []);
     assert.deepEqual(activeChatKinds({ ...s, webhook: '' }), []);
@@ -58,7 +60,34 @@ describe('game chat for Discord', () => {
   it('turns an old setting with a webhook per chat into one webhook', () => {
     const s = normalizeChat({ enabled: true, webhooks: { clan: 'enc:clan', local: 'enc:local' } });
     assert.equal(s.webhook, 'enc:clan');
-    assert.deepEqual(s.kinds, { global: false, clan: true, local: true });
-    assert.deepEqual(normalizeChat(undefined), { enabled: false, webhook: '', kinds: { global: true, clan: true, local: true } });
+    assert.deepEqual(s.kinds, { global: false, clan: true, local: true, join: false, leave: false });
+    const d = normalizeChat(undefined);
+    assert.deepEqual(d.kinds, { global: true, clan: true, local: true, join: false, leave: false });
+    assert.equal(d.style, 'ansi');
+    assert.equal(d.senderName, '');
+  });
+
+  it('colours a chat line like the game: a blue tag, a yellow nickname', () => {
+    const ESC = String.fromCharCode(27);
+    const line = ansiChatLine('global', 'WhiteLegioN', '', 'тест', DEFAULT_COLORS.global);
+    assert.equal(line, `${ESC}[1;34m[Глобальный]${ESC}[0m ${ESC}[1;33mWhiteLegioN${ESC}[0m${ESC}[0;36m: ${ESC}[0m${ESC}[0;36mтест${ESC}[0m`);
+    assert.equal(ansiChatLine('global', 'A', '', '.register x x', DEFAULT_COLORS.global), '');
+    assert.match(ansiChatLine('clan', 'A', 'Ночные', 'x', DEFAULT_COLORS.clan), /\[Клан Ночные\]/);
+  });
+
+  it('writes a join with a purple nickname in green text', () => {
+    const ESC = String.fromCharCode(27);
+    const line = ansiEventLine('* Игрок {name} подключился к серверу.', 'WhiteLegioN', DEFAULT_COLORS.join);
+    assert.equal(line, `${ESC}[0;32m* Игрок ${ESC}[0m${ESC}[1;35mWhiteLegioN${ESC}[0m${ESC}[0;32m подключился к серверу.${ESC}[0m`);
+    assert.equal(formatEventLine('* Игрок {name} подключился к серверу.', 'WhiteLegioN'), '\\* Игрок **WhiteLegioN** подключился к серверу.');
+  });
+
+  it('keeps a player from closing the code block or injecting colours', () => {
+    const ESC = String.fromCharCode(27);
+    const line = ansiChatLine('global', 'A', '', 'x ```@everyone``` ' + ESC + '[31mred', DEFAULT_COLORS.global);
+    assert.equal(line.includes('```'), false);
+    assert.equal(line.includes(ESC + '[31m'), false);
+    assert.equal(wrapForDiscord('ansi', 'a'), '```ansi\na\n```');
+    assert.equal(wrapForDiscord('plain', 'a'), 'a');
   });
 });

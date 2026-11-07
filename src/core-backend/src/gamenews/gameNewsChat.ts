@@ -1,13 +1,18 @@
 /**
- * The game chat for the administrators in Discord: the plugin reads the messages players write (the general chat, the
- * clan chat, the chat of the players nearby; private whispers never) and sends them here; the panel posts them to one
- * Discord webhook: «[Общий] WhiteLegioN: Привет». A switch for every kind of chat decides what goes to the channel.
+ * The game chat for the administrators in Discord: the plugin reads the messages players write (the global chat, the
+ * clan chat, the local chat; private whispers never) and tells when a player joins or leaves; it sends that here and the
+ * panel posts it to one Discord webhook, coloured like in the game:
+ *
+ *     [Глобальный] WhiteLegioN: Привет          * Игрок WhiteLegioN подключился к серверу.
+ *
+ * A switch for every kind decides what goes to the channel.
  *
  *  - the webhook address is a secret: kept encrypted, only «set / not set» and the tail of the address are shown;
  *  - only Discord addresses are accepted (the panel never calls an address an administrator could point inside the network);
  *  - lines are collected and posted a few at a time (Discord allows about five posts in two seconds per webhook), a
  *    flood is cut, a «rate limited» answer pauses the channel;
- *  - nothing a player writes can ping anybody (allowed_mentions is empty) or break the formatting.
+ *  - the messages are posted under the name and the picture of the webhook itself (a name can be set here to override it);
+ *  - nothing a player writes can ping anybody or break the formatting.
  */
 import type { Express, RequestHandler } from 'express';
 import { z } from 'zod';
@@ -16,8 +21,10 @@ import { log } from '../logger.js';
 import { decryptSecret, encryptSecret } from '../security/secrets.js';
 import { pluginTarget } from './gameNews.js';
 import {
-  CHAT_KINDS, activeChatKinds, chunkLines, formatChatLine, isDiscordWebhook, normalizeChat, type ChatKind, type ChatStored,
+  ANSI_COLORS, CHAT_KINDS, activeChatKinds, ansiChatLine, ansiEventLine, chunkLines, formatChatLine, formatEventLine, isDiscordWebhook,
+  normalizeChat, wrapForDiscord, type ChatKind, type ChatStored,
 } from './gameNewsChatLogic.js';
+import { getJoinLeave } from './gameNewsJoinLeave.js';
 
 const read = (): ChatStored => {
   try {
@@ -28,11 +35,10 @@ const read = (): ChatStored => {
 };
 const write = (s: ChatStored): void => setSetting('gamenews_chat', JSON.stringify(s));
 
-function webhookUrl(): string | null {
-  const enc = read().webhook;
-  if (!enc) return null;
+function webhookUrl(s: ChatStored = read()): string | null {
+  if (!s.webhook) return null;
   try {
-    const url = decryptSecret(enc);
+    const url = decryptSecret(s.webhook);
     return isDiscordWebhook(url) ? url : null;
   } catch {
     return null;
@@ -42,10 +48,10 @@ function webhookUrl(): string | null {
 /** the kinds of chat that are being forwarded (what the plugin has to read) */
 export const chatKinds = (): ChatKind[] => activeChatKinds(read());
 
-export function chatSettingsView(): { enabled: boolean; set: boolean; tail: string; kinds: Record<ChatKind, boolean> } {
+export function chatSettingsView(): Pick<ChatStored, 'enabled' | 'kinds' | 'style' | 'senderName' | 'colors'> & { set: boolean; tail: string } {
   const s = read();
-  const u = webhookUrl();
-  return { enabled: s.enabled, set: !!u, tail: u ? `…${u.slice(-6)}` : '', kinds: s.kinds };
+  const u = webhookUrl(s);
+  return { enabled: s.enabled, set: !!u, tail: u ? `…${u.slice(-6)}` : '', kinds: s.kinds, style: s.style, senderName: s.senderName, colors: s.colors };
 }
 
 // ---- posting
@@ -58,12 +64,13 @@ function enqueue(line: string): void {
   if (queue.length > MAX_QUEUE) queue = queue.slice(-MAX_QUEUE); // a flood: the oldest lines go
 }
 
-async function post(url: string, content: string): Promise<{ ok: boolean; retryAfter: number }> {
+async function post(url: string, content: string, sender: string): Promise<{ ok: boolean; retryAfter: number }> {
   try {
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content, username: 'CoreGSM', allowed_mentions: { parse: [] } }),
+      // no «username» unless one is set: the webhook's own name and picture are used
+      body: JSON.stringify({ content, ...(sender ? { username: sender } : {}), allowed_mentions: { parse: [] } }),
       signal: AbortSignal.timeout(8000),
       redirect: 'error',
     });
@@ -83,13 +90,15 @@ async function post(url: string, content: string): Promise<{ ok: boolean; retryA
 /** one pass of the sender: what has gathered goes out, in chunks that fit a Discord message */
 export async function flushChat(now = Date.now()): Promise<void> {
   if (!queue.length || pausedUntil > now) return;
-  const url = webhookUrl();
+  const s = read();
+  const url = webhookUrl(s);
   const lines = queue;
   queue = [];
   if (!url) return;
-  const chunks = chunkLines(lines);
+  // the fences of a code block take a few characters
+  const chunks = chunkLines(lines, s.style === 'ansi' ? 1850 : 1900);
   for (let i = 0; i < chunks.length; i++) {
-    const r = await post(url, chunks[i]);
+    const r = await post(url, wrapForDiscord(s.style, chunks[i]), s.senderName);
     if (r.retryAfter) {
       pausedUntil = now + r.retryAfter * 1000;
       // the chunk that was refused and the rest wait for the next pass
@@ -124,7 +133,7 @@ const messageSchema = z.object({
   type: z.enum(CHAT_KINDS),
   name: z.string().max(100),
   clan: z.string().max(100).optional(),
-  text: z.string().max(600),
+  text: z.string().max(600).optional(),
 });
 
 function serverLabelOf(id: number): string {
@@ -132,8 +141,11 @@ function serverLabelOf(id: number): string {
   return r?.n ?? '';
 }
 
+const ansiColor = z.enum(ANSI_COLORS);
+const colorsSchema = z.object(Object.fromEntries(CHAT_KINDS.map((k) => [k, z.object({ tag: ansiColor, name: ansiColor, text: ansiColor }).partial()]))).partial();
+
 export function registerGameNewsChat({ app, admin }: { app: Express; admin: RequestHandler }): void {
-  // from the plugin: a batch of what players wrote
+  // from the plugin: a batch of what players wrote and of who joined or left
   app.post('/api/game-news/chat', (req, res) => {
     const t = pluginTarget(req);
     if (!t) return res.status(401).json({ error: 'unauthorized' });
@@ -141,25 +153,40 @@ export function registerGameNewsChat({ app, admin }: { app: Express; admin: Requ
     if (!b.success) return res.status(400).json({ error: 'Проверьте поля' });
     const now = Date.now();
     if (flood(t.server_id, b.data.messages.length, now)) return res.status(429).json({ error: 'too many requests' });
-    const kinds = new Set(chatKinds());
+    const s = read();
+    const kinds = new Set(activeChatKinds(s));
     // the name of the server is shown only when several servers write to the same channel
     const many = (db.prepare("SELECT COUNT(*) AS n FROM game_news_targets WHERE token_hash <> ''").get() as { n: number }).n > 1;
     const server = many ? serverLabelOf(t.server_id) : '';
+    const jl = getJoinLeave();
     for (const m of b.data.messages) {
       if (!kinds.has(m.type)) continue;
-      const line = formatChatLine(m.type, m.name, m.clan ?? '', m.text, server);
+      const colors = s.colors[m.type];
+      let line: string;
+      if (m.type === 'join' || m.type === 'leave') {
+        // the same words as in the game (set in «Вход и выход игроков»)
+        const template = m.type === 'join' ? jl.joinText : jl.leaveText;
+        line = s.style === 'ansi' ? ansiEventLine(template, m.name, colors, server) : formatEventLine(template, m.name, server);
+      } else {
+        line = s.style === 'ansi'
+          ? ansiChatLine(m.type, m.name, m.clan ?? '', m.text ?? '', colors, server)
+          : formatChatLine(m.type, m.name, m.clan ?? '', m.text ?? '', server);
+      }
       if (line) enqueue(line);
     }
     res.json({ ok: true });
   });
 
-  // from the administrator: the switch, the webhook (empty keeps the saved one, clear removes it) and the kinds of chat
+  // from the administrator: the switch, the webhook (empty keeps the saved one, clear removes it), what to forward, how it looks
   app.put('/api/game-news/chat-settings', admin, (req, res) => {
     const b = z.object({
       enabled: z.boolean().optional(),
       webhook: z.string().max(300).optional(),
       clear: z.boolean().optional(),
-      kinds: z.object({ global: z.boolean(), clan: z.boolean(), local: z.boolean() }).partial().optional(),
+      kinds: z.object(Object.fromEntries(CHAT_KINDS.map((k) => [k, z.boolean()]))).partial().optional(),
+      style: z.enum(['ansi', 'plain']).optional(),
+      senderName: z.string().max(80).optional(),
+      colors: colorsSchema.optional(),
     }).safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Проверьте поля' });
     const s = read();
@@ -170,16 +197,41 @@ export function registerGameNewsChat({ app, admin }: { app: Express; admin: Requ
     }
     if (b.data.clear) s.webhook = '';
     if (b.data.enabled !== undefined) s.enabled = b.data.enabled;
-    for (const k of CHAT_KINDS) if (b.data.kinds?.[k] !== undefined) s.kinds[k] = b.data.kinds[k] as boolean;
+    for (const k of CHAT_KINDS) {
+      const on = (b.data.kinds as Partial<Record<ChatKind, boolean>> | undefined)?.[k];
+      if (on !== undefined) s.kinds[k] = on;
+      const c = (b.data.colors as Partial<Record<ChatKind, Partial<Record<'tag' | 'name' | 'text', (typeof ANSI_COLORS)[number]>>>> | undefined)?.[k];
+      if (c) s.colors[k] = { ...s.colors[k], ...Object.fromEntries(Object.entries(c).filter(([, v]) => v !== undefined)) };
+    }
+    if (b.data.style) s.style = b.data.style;
+    if (b.data.senderName !== undefined) s.senderName = normalizeChat({ senderName: b.data.senderName }).senderName;
     write(s);
     res.json({ ok: true });
   });
 
-  // «Проверить»: one line into the channel
+  // «Проверить»: a few sample lines into the channel, the way real ones will look
   app.post('/api/game-news/chat-test', admin, async (_req, res) => {
-    const url = webhookUrl();
+    const s = read();
+    const url = webhookUrl(s);
     if (!url) return res.status(400).json({ error: 'Сначала укажите webhook' });
-    const r = await post(url, '✅ CoreGSM: канал подключён, сюда будет приходить чат игры.');
+    const jl = getJoinLeave();
+    const lines = s.style === 'ansi'
+      ? [
+        ansiChatLine('global', 'WhiteLegioN', '', 'Привет всем!', s.colors.global),
+        ansiChatLine('clan', 'WhiteLegioN', 'Ночные', 'Сбор у замка', s.colors.clan),
+        ansiChatLine('local', 'WhiteLegioN', '', 'Кто рядом?', s.colors.local),
+        ansiEventLine(jl.joinText, 'WhiteLegioN', s.colors.join),
+        ansiEventLine(jl.leaveText, 'WhiteLegioN', s.colors.leave),
+      ]
+      : [
+        formatChatLine('global', 'WhiteLegioN', '', 'Привет всем!'),
+        formatChatLine('clan', 'WhiteLegioN', 'Ночные', 'Сбор у замка'),
+        formatChatLine('local', 'WhiteLegioN', '', 'Кто рядом?'),
+        formatEventLine(jl.joinText, 'WhiteLegioN'),
+        formatEventLine(jl.leaveText, 'WhiteLegioN'),
+      ];
+    const r = await post(url, '✅ CoreGSM: канал подключён. Так будет выглядеть чат игры:', s.senderName);
+    if (r.ok) await post(url, wrapForDiscord(s.style, lines.join('\n')), s.senderName);
     res.json({ ok: r.ok });
   });
 }

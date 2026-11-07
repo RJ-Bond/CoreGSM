@@ -256,10 +256,22 @@ export interface RegisterSettings {
   discordEveryHours: number;
 }
 
-/** the game chat in Discord: one webhook (its address never leaves the backend) and a switch for each kind of chat */
-export const CHAT_KINDS = ['global', 'clan', 'local'] as const;
+/** the game chat in Discord: one webhook (its address never leaves the backend), a switch for each kind of line and how they look */
+export const CHAT_KINDS = ['global', 'clan', 'local', 'join', 'leave'] as const;
 export type ChatKind = (typeof CHAT_KINDS)[number];
-export interface ChatSettings { enabled: boolean; set: boolean; tail: string; kinds: Record<ChatKind, boolean> }
+/** the eight colours of an ansi block of Discord */
+export const ANSI_COLORS = ['gray', 'red', 'green', 'yellow', 'blue', 'pink', 'cyan', 'white'] as const;
+export type AnsiColor = (typeof ANSI_COLORS)[number];
+export interface ChatColors { tag: AnsiColor; name: AnsiColor; text: AnsiColor }
+export interface ChatSettings {
+  enabled: boolean;
+  set: boolean;
+  tail: string;
+  kinds: Record<ChatKind, boolean>;
+  style: 'ansi' | 'plain';
+  senderName: string;
+  colors: Record<ChatKind, ChatColors>;
+}
 
 /** everything the «rules» endpoint returns: automatic announcements and the settings of the events */
 export interface RulesState {
