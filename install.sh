@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="3ac593dc364e"
+COREGSM_BUILD="fbdd13d60d0d"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.65"
+COREGSM_VERSION="1.1.66"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -23517,6 +23517,7 @@ export const ERRORS = {
   game_news_future: 'Время отправки должно быть в будущем',
   game_news_rules_limit: 'Не больше {n} автообъявлений',
   game_news_rule_missing: 'Автообъявление не найдено',
+  game_news_templates_limit: 'Не больше {n} шаблонов',
   captcha_required: 'Подтвердите, что вы не робот: страница решит небольшую задачу сама',
   ip_locked: 'Слишком много неудачных попыток входа с этого адреса. Повторите через {sec} с.',
   bad_credentials: 'Неверный логин или пароль',
@@ -23858,8 +23859,8 @@ __COREGSM_EOF__
 import crypto from 'node:crypto';
 import type { Express, Request, RequestHandler } from 'express';
 import { z } from 'zod';
-import { db } from '../db.js';
-import { checkNews } from './gameNewsLogic.js';
+import { db, getSetting } from '../db.js';
+import { applyVars, checkNews } from './gameNewsLogic.js';
 
 export const QUEUE_TTL_MS = 5 * 60_000;
 /** the plugin counts as «online» when it polled within this time */
@@ -23881,7 +23882,17 @@ const lastPull = new Map<number, number>();
 const sha256 = (s: string) => crypto.createHash('sha256').update(s).digest('hex');
 const actor = (req: Request) => (req as Request & { user?: { username?: string } }).user?.username ?? '';
 const serverLabel = (id: number) =>
-  (db.prepare("SELECT COALESCE(NULLIF(name, ''), host || ':' || port) AS n FROM servers WHERE id = ?").get(id) as { n: string } | undefined)?.n ?? `#${id}`;
+  (db.prepare("SELECT COALESCE(NULLIF(s.name, ''), NULLIF(st.name, ''), s.host || ':' || s.port) AS n FROM servers s LEFT JOIN status st ON st.server_id = s.id WHERE s.id = ?").get(id) as { n: string } | undefined)?.n ?? `#${id}`;
+
+/** the current time of day in the panel's time zone, «20:05» */
+function clock(now: number): string {
+  const tz = getSetting('timezone') || process.env.TZ || 'Europe/Moscow';
+  try {
+    return new Intl.DateTimeFormat('ru-RU', { timeZone: tz, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(now));
+  } catch {
+    return new Intl.DateTimeFormat('ru-RU', { timeZone: 'UTC', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(now));
+  }
+}
 
 const sendSchema = z.object({
   serverIds: z.array(z.number().int().positive()).min(1).max(50),
@@ -23915,11 +23926,11 @@ export function queueNews(text: string, serverIds: number[], by: string, now: nu
         results.push({ serverId: id, serverName: name, queued: false, online: false, error });
         continue;
       }
-      if (opts.onlyOnline) {
-        const s = db.prepare('SELECT online, players FROM status WHERE server_id = ?').get(id) as { online: number; players: number } | undefined;
-        if (!s || !s.online || s.players <= 0) continue; // nobody to read it
-      }
-      insert.run(id, name, text, 'queued', '', by, now);
+      const s = db.prepare('SELECT online, players, max_players FROM status WHERE server_id = ?').get(id) as { online: number; players: number; max_players: number } | undefined;
+      if (opts.onlyOnline && (!s || !s.online || s.players <= 0)) continue; // nobody to read it
+      // {server} {online} {max} {time} are filled in for each server
+      const filled = applyVars(text, { server: name, online: String(s?.players ?? 0), max: String(s?.max_players ?? 0), time: clock(now) });
+      insert.run(id, name, filled, 'queued', '', by, now);
       results.push({ serverId: id, serverName: name, queued: true, online: t.last_seen > 0 && now - t.last_seen < ONLINE_MS, error: '' });
     }
     db.prepare('DELETE FROM game_news_log WHERE id NOT IN (SELECT id FROM game_news_log ORDER BY id DESC LIMIT 500)').run();
@@ -23981,6 +23992,25 @@ export function registerGameNews({ app, admin }: { app: Express; admin: RequestH
 
     const results = queueNews(chk.text, b.data.serverIds, actor(req), now);
     res.json({ text: chk.text, results });
+  });
+
+  // ---- the administrator's own message templates ----
+  const MAX_TEMPLATES = 30;
+  app.get('/api/game-news/templates', admin, (_req, res) => {
+    res.json(db.prepare('SELECT id, name, text FROM game_news_templates ORDER BY id').all());
+  });
+  app.post('/api/game-news/templates', admin, (req, res) => {
+    const b = z.object({ name: z.string().trim().min(1, 'Введите название').max(40), text: z.string() }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: b.error.issues[0]?.message ?? 'Проверьте поля' });
+    const chk = checkNews(b.data.text);
+    if (!chk.ok) return res.status(400).json({ error: chk.error });
+    if ((db.prepare('SELECT COUNT(*) AS n FROM game_news_templates').get() as { n: number }).n >= MAX_TEMPLATES) return res.status(400).json({ error: `Не больше ${MAX_TEMPLATES} шаблонов` });
+    const info = db.prepare('INSERT INTO game_news_templates (name, text, created_by, created_at) VALUES (?, ?, ?, ?)').run(b.data.name, chk.text, actor(req), Date.now());
+    res.json({ id: Number(info.lastInsertRowid) });
+  });
+  app.delete('/api/game-news/templates/:id', admin, (req, res) => {
+    db.prepare('DELETE FROM game_news_templates WHERE id = ?').run(Number(req.params.id));
+    res.json({ ok: true });
   });
 
   // ---- for the game plugin: no session, a Bearer token of the server ----
@@ -24069,6 +24099,14 @@ export function checkNews(input: unknown): NewsCheck {
   if (!vis) return { ok: false, text: '', error: 'Введите текст' };
   if (vis.length > MAX_VISIBLE) return { ok: false, text: '', error: `Слишком длинное сообщение: ${vis.length} из ${MAX_VISIBLE} знаков` };
   return { ok: true, text };
+}
+
+export const VARIABLES = ['server', 'online', 'max', 'time'] as const;
+export type Vars = Record<(typeof VARIABLES)[number], string>;
+
+/** {server} {online} {max} {time} become their values; unknown {words} stay as they are. The values never hold tags. */
+export function applyVars(text: string, vars: Vars): string {
+  return text.replace(/\{(server|online|max|time)\}/g, (_m, k: keyof Vars) => vars[k].replace(/[<>]/g, '').slice(0, 60));
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/gamenews"
@@ -27286,6 +27324,19 @@ CREATE TABLE IF NOT EXISTS game_news_rules (
   enabled INTEGER NOT NULL DEFAULT 1,
   last_run INTEGER,
   next_run INTEGER,
+  created_by TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL
+);`),
+  },
+  {
+    version: 19,
+    name: 'game_news_templates',
+    // the administrator's own message templates
+    up: (db) => db.exec(`
+CREATE TABLE IF NOT EXISTS game_news_templates (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  text TEXT NOT NULL,
   created_by TEXT NOT NULL DEFAULT '',
   created_at INTEGER NOT NULL
 );`),
@@ -122098,12 +122149,14 @@ export function MotionToggle() {
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components"
   cat > "$APP_DIR/core-frontend/src/components/NewsEditor.tsx" << '__COREGSM_EOF__'
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { api } from '../api';
+import { confirmDialog, promptDialog } from '../confirm';
 import { t, useI18n } from '../i18n';
 import {
-  MAX_VISIBLE, SWATCHES, TEMPLATES, colorOpen, isHex, parseNews, unbalanced, visibleText, wrapSelection,
+  MAX_VISIBLE, SWATCHES, TEMPLATES, VARIABLES, colorOpen, fillSample, isHex, parseNews, unbalanced, visibleText, wrapSelection,
 } from '../gameNews';
-import { Field } from '../ui';
+import { Field, errText, toast } from '../ui';
 
 const swatchName = (id: string) => t(`gn.c.${id}` as 'gn.c.info');
 
@@ -122121,13 +122174,14 @@ export function Styled({ text }: { text: string }) {
 /** how a message looks in the in-game chat (approximate: the colours are exact, the font and background are not) */
 export function NewsPreview({ text }: { text: string }) {
   useI18n();
-  const has = useMemo(() => parseNews(text).length > 0, [text]);
+  const shown = useMemo(() => fillSample(text), [text]);
+  const has = useMemo(() => parseNews(shown).length > 0, [shown]);
   return (
     <div className="panel space-y-3 p-5">
       <h3 className="font-extrabold">{t('gn.preview')}</h3>
       <div className="rounded-xl p-4 font-semibold" style={{ background: '#15121c', color: '#e8e3f0' }} aria-live="polite">
         <div className="mb-1 text-xs font-bold uppercase tracking-wide" style={{ color: '#8f86a3' }}>{t('gn.chatLabel')}</div>
-        {has ? <p className="wrap-break-word"><Styled text={text} /></p> : <p style={{ color: '#8f86a3' }}>{t('gn.previewEmpty')}</p>}
+        {has ? <p className="wrap-break-word"><Styled text={shown} /></p> : <p style={{ color: '#8f86a3' }}>{t('gn.previewEmpty')}</p>}
       </div>
       <p className="text-sm font-semibold text-mute">{t('gn.previewNote')}</p>
     </div>
@@ -122141,21 +122195,50 @@ export function NewsEditor({ value, onChange, templates = true, label }: { value
   const area = useRef<HTMLTextAreaElement>(null);
   const visible = visibleText(value).trim().length;
 
+  const [mine, setMine] = useState<{ id: number; name: string; text: string }[]>([]);
+
   const wrap = (open: string, close: string) => {
     const el = area.current;
     const r = wrapSelection(value, el?.selectionStart ?? value.length, el?.selectionEnd ?? value.length, open, close);
     onChange(r.text);
     requestAnimationFrame(() => { el?.focus(); el?.setSelectionRange(r.start, r.end); });
   };
+  // puts text at the cursor (or over the selection)
+  const insert = (s: string) => {
+    const el = area.current;
+    const a = el?.selectionStart ?? value.length;
+    const b = el?.selectionEnd ?? value.length;
+    onChange(value.slice(0, a) + s + value.slice(b));
+    requestAnimationFrame(() => { el?.focus(); el?.setSelectionRange(a + s.length, a + s.length); });
+  };
+
+  const loadMine = () => api<{ id: number; name: string; text: string }[]>('/game-news/templates').then(setMine).catch(() => undefined);
+  useEffect(() => { if (templates) void loadMine(); }, [templates]);
+  const saveAsTemplate = async () => {
+    const name = await promptDialog({ title: t('gn.tpl.saveTitle'), label: t('gn.tpl.name'), placeholder: t('gn.tpl.nameEx'), confirmLabel: t('common.save') });
+    if (!name?.trim()) return;
+    try { await api('/game-news/templates', 'POST', { name: name.trim(), text: value }); toast(t('gn.tpl.saved')); void loadMine(); } catch (e) { toast(errText(e), 'err'); }
+  };
+  const removeTemplate = async (x: { id: number; name: string }) => {
+    if (!(await confirmDialog({ title: t('gn.tpl.delTitle', { name: x.name }), danger: true, confirmLabel: t('gn.a.del') }))) return;
+    try { await api(`/game-news/templates/${x.id}`, 'DELETE'); void loadMine(); } catch (e) { toast(errText(e), 'err'); }
+  };
 
   return (
     <div className="space-y-4">
       {templates && (
-        <div className="flex flex-wrap gap-2" role="group" aria-label={t('gn.templates')}>
-          <span className="self-center text-sm font-bold text-mute">{t('gn.templates')}:</span>
+        <div className="flex flex-wrap items-center gap-2" role="group" aria-label={t('gn.templates')}>
+          <span className="text-sm font-bold text-mute">{t('gn.templates')}:</span>
           {TEMPLATES.map((x) => (
             <button key={x.id} type="button" className="chip-filter" onClick={() => onChange(x.text(t('gn.tpl.when')))}>{t(`gn.tpl.${x.id}` as 'gn.tpl.restart')}</button>
           ))}
+          {mine.map((x) => (
+            <span key={x.id} className="inline-flex items-center gap-1">
+              <button type="button" className="chip-filter" onClick={() => onChange(x.text)}>{x.name}</button>
+              <button type="button" className="row-act" aria-label={t('gn.tpl.delAria', { name: x.name })} onClick={() => void removeTemplate(x)}>✕</button>
+            </span>
+          ))}
+          <button type="button" className="btn btn-ghost btn-sm" disabled={!value.trim()} onClick={() => void saveAsTemplate()}>{t('gn.tpl.save')}</button>
         </div>
       )}
 
@@ -122188,6 +122271,13 @@ export function NewsEditor({ value, onChange, templates = true, label }: { value
         <button type="button" className="btn btn-soft btn-sm font-black" onClick={() => wrap('<b>', '</b>')} aria-label={t('gn.bold')}>B</button>
         <button type="button" className="btn btn-soft btn-sm italic" onClick={() => wrap('<i>', '</i>')} aria-label={t('gn.italic')}>I</button>
         <button type="button" className="btn btn-ghost btn-sm" onClick={() => onChange(visibleText(value))}>{t('gn.clearTags')}</button>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2" role="group" aria-label={t('gn.vars')}>
+        <span className="text-sm font-bold text-mute">{t('gn.vars')}:</span>
+        {VARIABLES.map((v) => (
+          <button key={v} type="button" className="chip-filter font-mono" title={t(`gn.v.${v}` as 'gn.v.server')} onClick={() => insert(`{${v}}`)}>{`{${v}}`}</button>
+        ))}
       </div>
 
       <div className="flex flex-wrap items-center justify-between gap-2 text-sm font-semibold text-mute">
@@ -137990,6 +138080,15 @@ export function versionLess(a: string, b: string): boolean {
   }
   return false;
 }
+
+/** the variables the panel fills in for each server when it sends */
+export const VARIABLES = ['server', 'online', 'max', 'time'] as const;
+const SAMPLE: Record<(typeof VARIABLES)[number], string> = { server: 'Мой сервер', online: '12', max: '40', time: '20:00' };
+
+/** the preview shows sample values for the variables */
+export function fillSample(text: string): string {
+  return text.replace(/\{(server|online|max|time)\}/g, (_m, k: (typeof VARIABLES)[number]) => SAMPLE[k]);
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/gameProfiles.ts" << '__COREGSM_EOF__'
@@ -141348,7 +141447,18 @@ const en: Record<keyof typeof ru, string> = {
   'gn.h.expired': 'Not delivered',
   'gn.h.fail': 'Failed',
   'gn.reuse': 'Use again',  'adm.s.alerts': 'Alerts',
-  'gn.plugin.lastPoll': 'Last poll: {time}',
+  'gn.tpl.save': 'Save as template',
+  'gn.tpl.saveTitle': 'Save the template',
+  'gn.tpl.name': 'Template name',
+  'gn.tpl.nameEx': 'For example: Discord invite',
+  'gn.tpl.saved': 'Template saved',
+  'gn.tpl.delTitle': 'Delete the template «{name}»?',
+  'gn.tpl.delAria': 'Delete the template {name}',
+  'gn.vars': 'Insert',
+  'gn.v.server': 'Server name',
+  'gn.v.online': 'Players online now',
+  'gn.v.max': 'Maximum players',
+  'gn.v.time': 'Current time (panel time zone)',  'gn.plugin.lastPoll': 'Last poll: {time}',
   'gn.plugin.outdated': 'Plugin v{v}, v{latest} is available',
   'gn.ago.s': '{n} s ago',
   'gn.ago.m': '{n} min ago',
@@ -144621,6 +144731,7 @@ const errorsEn: Record<string, string> = {
   game_news_future: 'The time to send must be in the future',
   game_news_rules_limit: 'No more than {n} automatic announcements',
   game_news_rule_missing: 'The announcement was not found',
+  game_news_templates_limit: 'No more than {n} templates',
   captcha_required: 'Confirm you are not a robot: the page solves a small puzzle by itself',
   ip_locked: 'Too many failed sign-ins from this address. Try again in {sec} s.',
   bad_credentials: 'Wrong login or password',
@@ -145790,7 +145901,18 @@ const ru = {
   'gn.h.expired': 'Не доставлено',
   'gn.h.fail': 'Ошибка',
   'gn.reuse': 'Использовать снова',  'adm.s.alerts': 'Оповещения',
-  'gn.plugin.lastPoll': 'Последний опрос: {time}',
+  'gn.tpl.save': 'Сохранить как шаблон',
+  'gn.tpl.saveTitle': 'Сохранить шаблон',
+  'gn.tpl.name': 'Название шаблона',
+  'gn.tpl.nameEx': 'Например: Приглашение в Discord',
+  'gn.tpl.saved': 'Шаблон сохранён',
+  'gn.tpl.delTitle': 'Удалить шаблон «{name}»?',
+  'gn.tpl.delAria': 'Удалить шаблон {name}',
+  'gn.vars': 'Подставить',
+  'gn.v.server': 'Название сервера',
+  'gn.v.online': 'Сколько игроков сейчас',
+  'gn.v.max': 'Максимум игроков',
+  'gn.v.time': 'Текущее время (по часовому поясу панели)',  'gn.plugin.lastPoll': 'Последний опрос: {time}',
   'gn.plugin.outdated': 'Плагин v{v}, есть v{latest}',
   'gn.ago.s': '{n} с назад',
   'gn.ago.m': '{n} мин назад',
@@ -153829,7 +153951,9 @@ export default function GameNewsPage() {
   const [data, setData] = useState<NewsState | null>(null);
   const [error, setError] = useState('');
   const [tab, setTab] = useState<'send' | 'auto'>('send');
-  const [text, setText] = useState('');
+  // the draft survives a switch of the page or a reload (kept in this browser only)
+  const [text, setText] = useState(() => { try { return localStorage.getItem('coregsm.gamenews.draft') ?? ''; } catch { return ''; } });
+  useEffect(() => { try { if (text) localStorage.setItem('coregsm.gamenews.draft', text); else localStorage.removeItem('coregsm.gamenews.draft'); } catch { /* private mode */ } }, [text]);
   const [picked, setPicked] = useState<number[]>([]);
   const [busy, setBusy] = useState(false);
   const [settingsFor, setSettingsFor] = useState<number | null>(null);

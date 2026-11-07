@@ -1,9 +1,11 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { api } from '../api';
+import { confirmDialog, promptDialog } from '../confirm';
 import { t, useI18n } from '../i18n';
 import {
-  MAX_VISIBLE, SWATCHES, TEMPLATES, colorOpen, isHex, parseNews, unbalanced, visibleText, wrapSelection,
+  MAX_VISIBLE, SWATCHES, TEMPLATES, VARIABLES, colorOpen, fillSample, isHex, parseNews, unbalanced, visibleText, wrapSelection,
 } from '../gameNews';
-import { Field } from '../ui';
+import { Field, errText, toast } from '../ui';
 
 const swatchName = (id: string) => t(`gn.c.${id}` as 'gn.c.info');
 
@@ -21,13 +23,14 @@ export function Styled({ text }: { text: string }) {
 /** how a message looks in the in-game chat (approximate: the colours are exact, the font and background are not) */
 export function NewsPreview({ text }: { text: string }) {
   useI18n();
-  const has = useMemo(() => parseNews(text).length > 0, [text]);
+  const shown = useMemo(() => fillSample(text), [text]);
+  const has = useMemo(() => parseNews(shown).length > 0, [shown]);
   return (
     <div className="panel space-y-3 p-5">
       <h3 className="font-extrabold">{t('gn.preview')}</h3>
       <div className="rounded-xl p-4 font-semibold" style={{ background: '#15121c', color: '#e8e3f0' }} aria-live="polite">
         <div className="mb-1 text-xs font-bold uppercase tracking-wide" style={{ color: '#8f86a3' }}>{t('gn.chatLabel')}</div>
-        {has ? <p className="wrap-break-word"><Styled text={text} /></p> : <p style={{ color: '#8f86a3' }}>{t('gn.previewEmpty')}</p>}
+        {has ? <p className="wrap-break-word"><Styled text={shown} /></p> : <p style={{ color: '#8f86a3' }}>{t('gn.previewEmpty')}</p>}
       </div>
       <p className="text-sm font-semibold text-mute">{t('gn.previewNote')}</p>
     </div>
@@ -41,21 +44,50 @@ export function NewsEditor({ value, onChange, templates = true, label }: { value
   const area = useRef<HTMLTextAreaElement>(null);
   const visible = visibleText(value).trim().length;
 
+  const [mine, setMine] = useState<{ id: number; name: string; text: string }[]>([]);
+
   const wrap = (open: string, close: string) => {
     const el = area.current;
     const r = wrapSelection(value, el?.selectionStart ?? value.length, el?.selectionEnd ?? value.length, open, close);
     onChange(r.text);
     requestAnimationFrame(() => { el?.focus(); el?.setSelectionRange(r.start, r.end); });
   };
+  // puts text at the cursor (or over the selection)
+  const insert = (s: string) => {
+    const el = area.current;
+    const a = el?.selectionStart ?? value.length;
+    const b = el?.selectionEnd ?? value.length;
+    onChange(value.slice(0, a) + s + value.slice(b));
+    requestAnimationFrame(() => { el?.focus(); el?.setSelectionRange(a + s.length, a + s.length); });
+  };
+
+  const loadMine = () => api<{ id: number; name: string; text: string }[]>('/game-news/templates').then(setMine).catch(() => undefined);
+  useEffect(() => { if (templates) void loadMine(); }, [templates]);
+  const saveAsTemplate = async () => {
+    const name = await promptDialog({ title: t('gn.tpl.saveTitle'), label: t('gn.tpl.name'), placeholder: t('gn.tpl.nameEx'), confirmLabel: t('common.save') });
+    if (!name?.trim()) return;
+    try { await api('/game-news/templates', 'POST', { name: name.trim(), text: value }); toast(t('gn.tpl.saved')); void loadMine(); } catch (e) { toast(errText(e), 'err'); }
+  };
+  const removeTemplate = async (x: { id: number; name: string }) => {
+    if (!(await confirmDialog({ title: t('gn.tpl.delTitle', { name: x.name }), danger: true, confirmLabel: t('gn.a.del') }))) return;
+    try { await api(`/game-news/templates/${x.id}`, 'DELETE'); void loadMine(); } catch (e) { toast(errText(e), 'err'); }
+  };
 
   return (
     <div className="space-y-4">
       {templates && (
-        <div className="flex flex-wrap gap-2" role="group" aria-label={t('gn.templates')}>
-          <span className="self-center text-sm font-bold text-mute">{t('gn.templates')}:</span>
+        <div className="flex flex-wrap items-center gap-2" role="group" aria-label={t('gn.templates')}>
+          <span className="text-sm font-bold text-mute">{t('gn.templates')}:</span>
           {TEMPLATES.map((x) => (
             <button key={x.id} type="button" className="chip-filter" onClick={() => onChange(x.text(t('gn.tpl.when')))}>{t(`gn.tpl.${x.id}` as 'gn.tpl.restart')}</button>
           ))}
+          {mine.map((x) => (
+            <span key={x.id} className="inline-flex items-center gap-1">
+              <button type="button" className="chip-filter" onClick={() => onChange(x.text)}>{x.name}</button>
+              <button type="button" className="row-act" aria-label={t('gn.tpl.delAria', { name: x.name })} onClick={() => void removeTemplate(x)}>✕</button>
+            </span>
+          ))}
+          <button type="button" className="btn btn-ghost btn-sm" disabled={!value.trim()} onClick={() => void saveAsTemplate()}>{t('gn.tpl.save')}</button>
         </div>
       )}
 
@@ -88,6 +120,13 @@ export function NewsEditor({ value, onChange, templates = true, label }: { value
         <button type="button" className="btn btn-soft btn-sm font-black" onClick={() => wrap('<b>', '</b>')} aria-label={t('gn.bold')}>B</button>
         <button type="button" className="btn btn-soft btn-sm italic" onClick={() => wrap('<i>', '</i>')} aria-label={t('gn.italic')}>I</button>
         <button type="button" className="btn btn-ghost btn-sm" onClick={() => onChange(visibleText(value))}>{t('gn.clearTags')}</button>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2" role="group" aria-label={t('gn.vars')}>
+        <span className="text-sm font-bold text-mute">{t('gn.vars')}:</span>
+        {VARIABLES.map((v) => (
+          <button key={v} type="button" className="chip-filter font-mono" title={t(`gn.v.${v}` as 'gn.v.server')} onClick={() => insert(`{${v}}`)}>{`{${v}}`}</button>
+        ))}
       </div>
 
       <div className="flex flex-wrap items-center justify-between gap-2 text-sm font-semibold text-mute">

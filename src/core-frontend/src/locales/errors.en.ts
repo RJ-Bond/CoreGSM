@@ -42,6 +42,7 @@ const errorsEn: Record<string, string> = {
   game_news_future: 'The time to send must be in the future',
   game_news_rules_limit: 'No more than {n} automatic announcements',
   game_news_rule_missing: 'The announcement was not found',
+  game_news_templates_limit: 'No more than {n} templates',
   captcha_required: 'Confirm you are not a robot: the page solves a small puzzle by itself',
   ip_locked: 'Too many failed sign-ins from this address. Try again in {sec} s.',
   bad_credentials: 'Wrong login or password',

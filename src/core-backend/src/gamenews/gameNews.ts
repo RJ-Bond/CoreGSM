@@ -11,8 +11,8 @@
 import crypto from 'node:crypto';
 import type { Express, Request, RequestHandler } from 'express';
 import { z } from 'zod';
-import { db } from '../db.js';
-import { checkNews } from './gameNewsLogic.js';
+import { db, getSetting } from '../db.js';
+import { applyVars, checkNews } from './gameNewsLogic.js';
 
 export const QUEUE_TTL_MS = 5 * 60_000;
 /** the plugin counts as «online» when it polled within this time */
@@ -34,7 +34,17 @@ const lastPull = new Map<number, number>();
 const sha256 = (s: string) => crypto.createHash('sha256').update(s).digest('hex');
 const actor = (req: Request) => (req as Request & { user?: { username?: string } }).user?.username ?? '';
 const serverLabel = (id: number) =>
-  (db.prepare("SELECT COALESCE(NULLIF(name, ''), host || ':' || port) AS n FROM servers WHERE id = ?").get(id) as { n: string } | undefined)?.n ?? `#${id}`;
+  (db.prepare("SELECT COALESCE(NULLIF(s.name, ''), NULLIF(st.name, ''), s.host || ':' || s.port) AS n FROM servers s LEFT JOIN status st ON st.server_id = s.id WHERE s.id = ?").get(id) as { n: string } | undefined)?.n ?? `#${id}`;
+
+/** the current time of day in the panel's time zone, «20:05» */
+function clock(now: number): string {
+  const tz = getSetting('timezone') || process.env.TZ || 'Europe/Moscow';
+  try {
+    return new Intl.DateTimeFormat('ru-RU', { timeZone: tz, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(now));
+  } catch {
+    return new Intl.DateTimeFormat('ru-RU', { timeZone: 'UTC', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(now));
+  }
+}
 
 const sendSchema = z.object({
   serverIds: z.array(z.number().int().positive()).min(1).max(50),
@@ -68,11 +78,11 @@ export function queueNews(text: string, serverIds: number[], by: string, now: nu
         results.push({ serverId: id, serverName: name, queued: false, online: false, error });
         continue;
       }
-      if (opts.onlyOnline) {
-        const s = db.prepare('SELECT online, players FROM status WHERE server_id = ?').get(id) as { online: number; players: number } | undefined;
-        if (!s || !s.online || s.players <= 0) continue; // nobody to read it
-      }
-      insert.run(id, name, text, 'queued', '', by, now);
+      const s = db.prepare('SELECT online, players, max_players FROM status WHERE server_id = ?').get(id) as { online: number; players: number; max_players: number } | undefined;
+      if (opts.onlyOnline && (!s || !s.online || s.players <= 0)) continue; // nobody to read it
+      // {server} {online} {max} {time} are filled in for each server
+      const filled = applyVars(text, { server: name, online: String(s?.players ?? 0), max: String(s?.max_players ?? 0), time: clock(now) });
+      insert.run(id, name, filled, 'queued', '', by, now);
       results.push({ serverId: id, serverName: name, queued: true, online: t.last_seen > 0 && now - t.last_seen < ONLINE_MS, error: '' });
     }
     db.prepare('DELETE FROM game_news_log WHERE id NOT IN (SELECT id FROM game_news_log ORDER BY id DESC LIMIT 500)').run();
@@ -134,6 +144,25 @@ export function registerGameNews({ app, admin }: { app: Express; admin: RequestH
 
     const results = queueNews(chk.text, b.data.serverIds, actor(req), now);
     res.json({ text: chk.text, results });
+  });
+
+  // ---- the administrator's own message templates ----
+  const MAX_TEMPLATES = 30;
+  app.get('/api/game-news/templates', admin, (_req, res) => {
+    res.json(db.prepare('SELECT id, name, text FROM game_news_templates ORDER BY id').all());
+  });
+  app.post('/api/game-news/templates', admin, (req, res) => {
+    const b = z.object({ name: z.string().trim().min(1, 'Введите название').max(40), text: z.string() }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: b.error.issues[0]?.message ?? 'Проверьте поля' });
+    const chk = checkNews(b.data.text);
+    if (!chk.ok) return res.status(400).json({ error: chk.error });
+    if ((db.prepare('SELECT COUNT(*) AS n FROM game_news_templates').get() as { n: number }).n >= MAX_TEMPLATES) return res.status(400).json({ error: `Не больше ${MAX_TEMPLATES} шаблонов` });
+    const info = db.prepare('INSERT INTO game_news_templates (name, text, created_by, created_at) VALUES (?, ?, ?, ?)').run(b.data.name, chk.text, actor(req), Date.now());
+    res.json({ id: Number(info.lastInsertRowid) });
+  });
+  app.delete('/api/game-news/templates/:id', admin, (req, res) => {
+    db.prepare('DELETE FROM game_news_templates WHERE id = ?').run(Number(req.params.id));
+    res.json({ ok: true });
   });
 
   // ---- for the game plugin: no session, a Bearer token of the server ----

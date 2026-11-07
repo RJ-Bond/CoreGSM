@@ -158,3 +158,12 @@ export function versionLess(a: string, b: string): boolean {
   }
   return false;
 }
+
+/** the variables the panel fills in for each server when it sends */
+export const VARIABLES = ['server', 'online', 'max', 'time'] as const;
+const SAMPLE: Record<(typeof VARIABLES)[number], string> = { server: 'Мой сервер', online: '12', max: '40', time: '20:00' };
+
+/** the preview shows sample values for the variables */
+export function fillSample(text: string): string {
+  return text.replace(/\{(server|online|max|time)\}/g, (_m, k: (typeof VARIABLES)[number]) => SAMPLE[k]);
+}

@@ -30,7 +30,9 @@ export default function GameNewsPage() {
   const [data, setData] = useState<NewsState | null>(null);
   const [error, setError] = useState('');
   const [tab, setTab] = useState<'send' | 'auto'>('send');
-  const [text, setText] = useState('');
+  // the draft survives a switch of the page or a reload (kept in this browser only)
+  const [text, setText] = useState(() => { try { return localStorage.getItem('coregsm.gamenews.draft') ?? ''; } catch { return ''; } });
+  useEffect(() => { try { if (text) localStorage.setItem('coregsm.gamenews.draft', text); else localStorage.removeItem('coregsm.gamenews.draft'); } catch { /* private mode */ } }, [text]);
   const [picked, setPicked] = useState<number[]>([]);
   const [busy, setBusy] = useState(false);
   const [settingsFor, setSettingsFor] = useState<number | null>(null);

@@ -47,6 +47,7 @@ export const ERRORS = {
   game_news_future: 'Время отправки должно быть в будущем',
   game_news_rules_limit: 'Не больше {n} автообъявлений',
   game_news_rule_missing: 'Автообъявление не найдено',
+  game_news_templates_limit: 'Не больше {n} шаблонов',
   captcha_required: 'Подтвердите, что вы не робот: страница решит небольшую задачу сама',
   ip_locked: 'Слишком много неудачных попыток входа с этого адреса. Повторите через {sec} с.',
   bad_credentials: 'Неверный логин или пароль',

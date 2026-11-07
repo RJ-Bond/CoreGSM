@@ -33,3 +33,18 @@ describe('game news text', () => {
     assert.equal(checkNews(42).ok, false);
   });
 });
+
+import { applyVars } from '../src/gamenews/gameNewsLogic.ts';
+
+describe('message variables', () => {
+  const vars = { server: 'Мой сервер', online: '12', max: '40', time: '20:05' };
+  it('fills in the known ones and leaves the rest', () => {
+    assert.equal(applyVars('{server}: {online}/{max}, {time}. {other}', vars), 'Мой сервер: 12/40, 20:05. {other}');
+  });
+  it('never lets a value bring tags', () => {
+    assert.equal(applyVars('{server}', { ...vars, server: '<color=#ff0000>x</color>' }), 'color=#ff0000xcolor');
+  });
+  it('cuts a very long value', () => {
+    assert.equal(applyVars('{server}', { ...vars, server: 'a'.repeat(100) }).length, 60);
+  });
+});

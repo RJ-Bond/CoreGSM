@@ -80,3 +80,12 @@ describe('plugin version', () => {
     expect(versionLess('x', '0.2.0')).toBe(true);
   });
 });
+
+import { fillSample } from '../src/gameNews';
+
+describe('preview variables', () => {
+  it('shows sample values', () => {
+    expect(fillSample('{server}: {online}/{max} в {time}')).toBe('Мой сервер: 12/40 в 20:00');
+    expect(fillSample('{x}')).toBe('{x}');
+  });
+});

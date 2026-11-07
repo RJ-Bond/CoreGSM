@@ -255,6 +255,19 @@ CREATE TABLE IF NOT EXISTS game_news_rules (
   created_at INTEGER NOT NULL
 );`),
   },
+  {
+    version: 19,
+    name: 'game_news_templates',
+    // the administrator's own message templates
+    up: (db) => db.exec(`
+CREATE TABLE IF NOT EXISTS game_news_templates (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  text TEXT NOT NULL,
+  created_by TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL
+);`),
+  },
 ];
 
 export const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;
