@@ -4,6 +4,9 @@
  */
 
 export const MAX_VISIBLE = 400;
+/** the game chat takes 512 bytes; Cyrillic letters are 2 bytes each, tags count too */
+export const MAX_BYTES = 500;
+export const byteLength = (s: string): number => new TextEncoder().encode(s).length;
 
 export interface NewsServerInfo { id: number; name: string; address: string; game: string; supported: boolean; hasToken: boolean; lastSeen: number | null; online: boolean; pluginVersion: string; players: number | null; maxPlayers: number | null }
 export type NewsStatus = 'queued' | 'delivered' | 'expired' | 'failed';
@@ -96,7 +99,7 @@ export function unbalanced(raw: string): boolean {
 export function validateNews(raw: string): string | null {
   const v = visibleText(raw).trim();
   if (!v) return 'empty';
-  if (v.length > MAX_VISIBLE) return 'long';
+  if (v.length > MAX_VISIBLE || byteLength(raw) > MAX_BYTES) return 'long';
   return null;
 }
 
@@ -188,4 +191,22 @@ export function greenName(text: string): string {
 export function fillSample(text: string, welcome = false): string {
   const s = text.replace(/\{(server|online|max|time)\}/g, (_m, k: (typeof VARIABLES)[number]) => SAMPLE[k]);
   return welcome ? greenName(s).replace(/\{name\}/g, 'Игрок') : s;
+}
+
+/** «* Игрок {name} подключился к серверу.» for everybody when a player joins or leaves */
+export interface JoinLeave {
+  joinEnabled: boolean;
+  leaveEnabled: boolean;
+  joinText: string;
+  leaveText: string;
+  nameColor: string;
+  textColor: string;
+}
+
+/** the line with {name} in the name colour and the rest in the text colour (the same as the backend builds it) */
+export function composeLine(text: string, nameColor: string, textColor: string): string {
+  // control characters become spaces (the chat is one line); angle brackets would be taken for tags
+  const noCtl = Array.from(text, (ch) => (ch.charCodeAt(0) < 32 || ch.charCodeAt(0) === 127 ? ' ' : ch)).join('');
+  const plain = noCtl.replace(/[<>]/g, '').replace(/ {2,}/g, ' ').trim();
+  return `<color=${textColor.toUpperCase()}>${plain.replace(/\{name\}/g, `<color=${nameColor.toUpperCase()}>{name}</color>`)}</color>`;
 }

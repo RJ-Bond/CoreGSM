@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="9161f6227ecf"
+COREGSM_BUILD="d4de15d45864"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.70"
+COREGSM_VERSION="1.1.71"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -23517,6 +23517,8 @@ export const ERRORS = {
   game_news_future: 'Время отправки должно быть в будущем',
   game_news_rules_limit: 'Не больше {n} автообъявлений',
   game_news_rule_missing: 'Автообъявление не найдено',
+  game_news_bytes: 'Слишком длинное сообщение для игры: {n} из {max} байт (русские буквы занимают по 2 байта)',
+  game_news_color: 'Цвет задаётся как #RRGGBB',
   game_news_templates_limit: 'Не больше {n} шаблонов',
   captcha_required: 'Подтвердите, что вы не робот: страница решит небольшую задачу сама',
   ip_locked: 'Слишком много неудачных попыток входа с этого адреса. Повторите через {sec} с.',
@@ -23861,13 +23863,14 @@ import type { Express, Request, RequestHandler } from 'express';
 import { z } from 'zod';
 import { db, getSetting } from '../db.js';
 import { applyVars, checkNews } from './gameNewsLogic.js';
+import { joinLeaveFor } from './gameNewsJoinLeave.js';
 import { welcomeFor } from './gameNewsWelcome.js';
 
 export const QUEUE_TTL_MS = 5 * 60_000;
 /** the plugin counts as «online» when it polled within this time */
 export const ONLINE_MS = 30_000;
 /** the version of the game plugin this panel was built for: an older plugin is shown as outdated */
-export const PLUGIN_VERSION = '0.4.0';
+export const PLUGIN_VERSION = '0.5.0';
 /** the games the plugin exists for */
 export const SUPPORTED_GAMES = new Set(['vrising']);
 const PULL_MIN_GAP_MS = 800;
@@ -24057,8 +24060,79 @@ export function registerGameNews({ app, admin }: { app: Express; admin: RequestH
       db.transaction(() => { for (const r of rows) done.run(now, r.id); })();
     }
     // latest = the newest plugin version this panel knows (the plugin logs when it is older); welcome = the greeting for joining players
-    res.json({ messages: rows.map((r) => ({ id: r.id, text: r.text })), latest: PLUGIN_VERSION, welcome: welcomeFor(serverLabel(t.server_id)) });
+    res.json({ messages: rows.map((r) => ({ id: r.id, text: r.text })), latest: PLUGIN_VERSION, welcome: welcomeFor(serverLabel(t.server_id)), ...joinLeaveFor() });
   });
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/gamenews"
+  cat > "$APP_DIR/core-backend/src/gamenews/gameNewsJoinLeave.ts" << '__COREGSM_EOF__'
+/**
+ * «* Игрок {name} подключился к серверу.» for everybody in the game chat when a player joins or leaves.
+ * The administrator sets, per message, whether it is shown, its text and the two colours: the one of the player's name
+ * and the one of the rest of the text. One JSON setting: `gamenews_joinleave`. The panel builds the tagged text and
+ * the plugin only puts the nickname into {name}.
+ */
+import { getSetting, setSetting } from '../db.js';
+
+export interface JoinLeave {
+  joinEnabled: boolean;
+  leaveEnabled: boolean;
+  joinText: string;
+  leaveText: string;
+  nameColor: string;
+  textColor: string;
+}
+
+export const DEFAULT_JOIN_LEAVE: JoinLeave = {
+  joinEnabled: false,
+  leaveEnabled: false,
+  joinText: '* Игрок {name} подключился к серверу.',
+  leaveText: '* Игрок {name} отключился от сервера.',
+  nameColor: '#B86BFF', // purple
+  textColor: '#5FD068', // green
+};
+
+export const isHexColor = (s: unknown): s is string => typeof s === 'string' && /^#[0-9a-fA-F]{6}$/.test(s);
+
+/** plain text for the line: no tags, no control characters, one line */
+export function plainLine(s: string): string {
+  return s.replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/[<>]/g, '').replace(/ {2,}/g, ' ').trim();
+}
+
+export function getJoinLeave(): JoinLeave {
+  try {
+    const v = JSON.parse(getSetting('gamenews_joinleave') || '{}') as Partial<JoinLeave>;
+    const d = DEFAULT_JOIN_LEAVE;
+    return {
+      joinEnabled: !!v.joinEnabled,
+      leaveEnabled: !!v.leaveEnabled,
+      joinText: typeof v.joinText === 'string' && v.joinText.trim() ? v.joinText : d.joinText,
+      leaveText: typeof v.leaveText === 'string' && v.leaveText.trim() ? v.leaveText : d.leaveText,
+      nameColor: isHexColor(v.nameColor) ? v.nameColor.toUpperCase() : d.nameColor,
+      textColor: isHexColor(v.textColor) ? v.textColor.toUpperCase() : d.textColor,
+    };
+  } catch {
+    return { ...DEFAULT_JOIN_LEAVE };
+  }
+}
+
+export function setJoinLeave(v: JoinLeave): void {
+  setSetting('gamenews_joinleave', JSON.stringify(v));
+}
+
+/** `text` with {name} in the name colour and everything else in the text colour: the tagged text the plugin shows */
+export function composeLine(text: string, nameColor: string, textColor: string): string {
+  const body = plainLine(text).replace(/\{name\}/g, `<color=${nameColor.toUpperCase()}>{name}</color>`);
+  return `<color=${textColor.toUpperCase()}>${body}</color>`;
+}
+
+/** what the plugin gets with a poll: '' when that message is off */
+export function joinLeaveFor(): { join: string; leave: string } {
+  const v = getJoinLeave();
+  return {
+    join: v.joinEnabled ? composeLine(v.joinText, v.nameColor, v.textColor) : '',
+    leave: v.leaveEnabled ? composeLine(v.leaveText, v.nameColor, v.textColor) : '',
+  };
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/gamenews"
@@ -24071,6 +24145,8 @@ __COREGSM_EOF__
 
 export const MAX_VISIBLE = 400;
 export const MAX_RAW = 700;
+/** the game chat takes 512 bytes; Cyrillic letters are 2 bytes each, tags count too */
+export const MAX_BYTES = 500;
 
 const TAG = /<\/?(?:color(?:=#[0-9a-fA-F]{6})?|b|i)>/g;
 
@@ -24122,6 +24198,8 @@ export function checkNews(input: unknown): NewsCheck {
   const vis = visibleText(text).trim();
   if (!vis) return { ok: false, text: '', error: 'Введите текст' };
   if (vis.length > MAX_VISIBLE) return { ok: false, text: '', error: `Слишком длинное сообщение: ${vis.length} из ${MAX_VISIBLE} знаков` };
+  const bytes = Buffer.byteLength(text, 'utf8');
+  if (bytes > MAX_BYTES) return { ok: false, text: '', error: `Слишком длинное сообщение для игры: ${bytes} из ${MAX_BYTES} байт (русские буквы занимают по 2 байта)` };
   return { ok: true, text };
 }
 
@@ -24204,6 +24282,7 @@ import type { Express, Request, RequestHandler } from 'express';
 import { z } from 'zod';
 import { db, getSetting, setSetting } from '../db.js';
 import { countdownEnabled } from './gameNewsRestart.js';
+import { getJoinLeave, isHexColor, plainLine, setJoinLeave } from './gameNewsJoinLeave.js';
 import { getWelcome, setWelcome } from './gameNewsWelcome.js';
 import { log } from '../logger.js';
 import { checkNews } from './gameNewsLogic.js';
@@ -24292,7 +24371,7 @@ export function registerGameNewsRules({ app, admin }: { app: Express; admin: Req
 
   app.get('/api/game-news/rules', admin, (_req, res) => {
     const rows = db.prepare('SELECT * FROM game_news_rules ORDER BY id').all() as RuleRow[];
-    res.json({ timezone: tz(), restartCountdown: countdownEnabled(), welcome: getWelcome(), rules: rows.map(serialize) });
+    res.json({ timezone: tz(), restartCountdown: countdownEnabled(), welcome: getWelcome(), joinLeave: getJoinLeave(), rules: rows.map(serialize) });
   });
 
   // the countdown «через 10 / 5 / 1 минуту» before the planned restarts of monitoring/restarts.ts
@@ -24300,6 +24379,21 @@ export function registerGameNewsRules({ app, admin }: { app: Express; admin: Req
     const b = z.object({ enabled: z.boolean() }).safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Проверьте поля' });
     setSetting('gamenews_restart_countdown', b.data.enabled ? '1' : '0');
+    res.json({ ok: true });
+  });
+
+  // «* Игрок {name} подключился к серверу.» for everybody when a player joins or leaves: texts and colours
+  app.put('/api/game-news/joinleave', admin, (req, res) => {
+    const b = z.object({
+      joinEnabled: z.boolean(), leaveEnabled: z.boolean(), joinText: z.string().max(200), leaveText: z.string().max(200),
+      nameColor: z.string(), textColor: z.string(),
+    }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'Проверьте поля' });
+    if (!isHexColor(b.data.nameColor) || !isHexColor(b.data.textColor)) return res.status(400).json({ error: 'Цвет задаётся как #RRGGBB' });
+    const joinText = plainLine(b.data.joinText);
+    const leaveText = plainLine(b.data.leaveText);
+    if ((b.data.joinEnabled && !joinText) || (b.data.leaveEnabled && !leaveText)) return res.status(400).json({ error: 'Введите текст' });
+    setJoinLeave({ ...b.data, joinText, leaveText, nameColor: b.data.nameColor.toUpperCase(), textColor: b.data.textColor.toUpperCase() });
     res.json({ ok: true });
   });
 
@@ -122322,7 +122416,7 @@ import { api } from '../api';
 import { confirmDialog, promptDialog } from '../confirm';
 import { t, useI18n } from '../i18n';
 import {
-  MAX_VISIBLE, SWATCHES, TEMPLATES, VARIABLES, colorOpen, fillSample, isHex, parseNews, unbalanced, visibleText, wrapSelection,
+  MAX_BYTES, MAX_VISIBLE, SWATCHES, TEMPLATES, VARIABLES, byteLength, colorOpen, fillSample, isHex, parseNews, unbalanced, visibleText, wrapSelection,
 } from '../gameNews';
 import { readFrom, renderInto } from '../richNews';
 import { Field, errText, toast } from '../ui';
@@ -122372,6 +122466,7 @@ export function NewsEditor({ value, onChange, templates = true, label, vars = VA
   // the last text the visual box produced: a different `value` comes from outside (a template, «use again») and is drawn
   const lastOut = useRef<string | null>(null);
   const visible = visibleText(value).trim().length;
+  const bytes = byteLength(value);
   const [mine, setMine] = useState<{ id: number; name: string; text: string }[]>([]);
 
   useLayoutEffect(() => {
@@ -122520,7 +122615,10 @@ export function NewsEditor({ value, onChange, templates = true, label, vars = VA
       </div>
 
       <div className="flex flex-wrap items-center justify-between gap-2 text-sm font-semibold text-mute">
-        <span className={visible > MAX_VISIBLE ? 'text-danger' : undefined}>{t('gn.counter', { n: visible, max: MAX_VISIBLE })}</span>
+        <span className={visible > MAX_VISIBLE || bytes > MAX_BYTES ? 'text-danger' : undefined}>
+          {t('gn.counter', { n: visible, max: MAX_VISIBLE })}
+          {bytes > MAX_BYTES * 0.6 && <> · {t('gn.bytes', { n: bytes, max: MAX_BYTES })}</>}
+        </span>
         {unbalanced(value) && <span>{t('gn.unbalanced')}</span>}
       </div>
     </div>
@@ -138165,6 +138263,9 @@ __COREGSM_EOF__
  */
 
 export const MAX_VISIBLE = 400;
+/** the game chat takes 512 bytes; Cyrillic letters are 2 bytes each, tags count too */
+export const MAX_BYTES = 500;
+export const byteLength = (s: string): number => new TextEncoder().encode(s).length;
 
 export interface NewsServerInfo { id: number; name: string; address: string; game: string; supported: boolean; hasToken: boolean; lastSeen: number | null; online: boolean; pluginVersion: string; players: number | null; maxPlayers: number | null }
 export type NewsStatus = 'queued' | 'delivered' | 'expired' | 'failed';
@@ -138257,7 +138358,7 @@ export function unbalanced(raw: string): boolean {
 export function validateNews(raw: string): string | null {
   const v = visibleText(raw).trim();
   if (!v) return 'empty';
-  if (v.length > MAX_VISIBLE) return 'long';
+  if (v.length > MAX_VISIBLE || byteLength(raw) > MAX_BYTES) return 'long';
   return null;
 }
 
@@ -138349,6 +138450,24 @@ export function greenName(text: string): string {
 export function fillSample(text: string, welcome = false): string {
   const s = text.replace(/\{(server|online|max|time)\}/g, (_m, k: (typeof VARIABLES)[number]) => SAMPLE[k]);
   return welcome ? greenName(s).replace(/\{name\}/g, 'Игрок') : s;
+}
+
+/** «* Игрок {name} подключился к серверу.» for everybody when a player joins or leaves */
+export interface JoinLeave {
+  joinEnabled: boolean;
+  leaveEnabled: boolean;
+  joinText: string;
+  leaveText: string;
+  nameColor: string;
+  textColor: string;
+}
+
+/** the line with {name} in the name colour and the rest in the text colour (the same as the backend builds it) */
+export function composeLine(text: string, nameColor: string, textColor: string): string {
+  // control characters become spaces (the chat is one line); angle brackets would be taken for tags
+  const noCtl = Array.from(text, (ch) => (ch.charCodeAt(0) < 32 || ch.charCodeAt(0) === 127 ? ' ' : ch)).join('');
+  const plain = noCtl.replace(/[<>]/g, '').replace(/ {2,}/g, ' ').trim();
+  return `<color=${textColor.toUpperCase()}>${plain.replace(/\{name\}/g, `<color=${nameColor.toUpperCase()}>{name}</color>`)}</color>`;
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
@@ -141712,7 +141831,15 @@ const en: Record<keyof typeof ru, string> = {
   'gn.h.expired': 'Not delivered',
   'gn.h.fail': 'Failed',
   'gn.reuse': 'Use again',  'adm.s.alerts': 'Alerts',
-  'gn.players': 'players {n} of {max}',  'gn.rawOn': 'Code',
+  'gn.bytes': '{n} of {max} bytes',  'gn.jl.title': 'Players joining and leaving',
+  'gn.jl.note': 'When a player joins the server or leaves it, everybody gets a message. The texts and colours are set here. Needs plugin version 0.5.0 or newer.',
+  'gn.jl.join': 'Announce joining',
+  'gn.jl.leave': 'Announce leaving',
+  'gn.jl.nameColor': 'Colour of the player name',
+  'gn.jl.textColor': 'Colour of the rest of the text',
+  'gn.jl.nameHint': '{name} in the text is replaced with the nickname of the player. The preview shows a sample nickname.',
+  'gn.jl.badColor': 'A colour is written as #RRGGBB',
+  'gn.jl.saved': 'Settings saved',  'gn.players': 'players {n} of {max}',  'gn.rawOn': 'Code',
   'gn.rawOff': 'Editor',  'gn.v.name': 'Player nickname',
   'gn.w.title': 'Greeting on join',
   'gn.w.note': 'A player who joins the server sees this message in private (nobody else does). Needs plugin version 0.3.0 or newer.',
@@ -145007,6 +145134,8 @@ const errorsEn: Record<string, string> = {
   game_news_future: 'The time to send must be in the future',
   game_news_rules_limit: 'No more than {n} automatic announcements',
   game_news_rule_missing: 'The announcement was not found',
+  game_news_bytes: 'The message is too long for the game: {n} of {max} bytes (Russian letters take 2 bytes each)',
+  game_news_color: 'A colour is written as #RRGGBB',
   game_news_templates_limit: 'No more than {n} templates',
   captcha_required: 'Confirm you are not a robot: the page solves a small puzzle by itself',
   ip_locked: 'Too many failed sign-ins from this address. Try again in {sec} s.',
@@ -146177,7 +146306,15 @@ const ru = {
   'gn.h.expired': 'Не доставлено',
   'gn.h.fail': 'Ошибка',
   'gn.reuse': 'Использовать снова',  'adm.s.alerts': 'Оповещения',
-  'gn.players': 'игроков {n} из {max}',  'gn.rawOn': 'Код',
+  'gn.bytes': '{n} из {max} байт',  'gn.jl.title': 'Вход и выход игроков',
+  'gn.jl.note': 'Когда игрок заходит на сервер или выходит, всем игрокам показывается сообщение. Тексты и цвета настраиваются здесь. Нужен плагин версии 0.5.0 и новее.',
+  'gn.jl.join': 'Сообщать о входе',
+  'gn.jl.leave': 'Сообщать о выходе',
+  'gn.jl.nameColor': 'Цвет имени игрока',
+  'gn.jl.textColor': 'Цвет остального текста',
+  'gn.jl.nameHint': 'В тексте {name} заменяется ником игрока. В превью показан пример ника.',
+  'gn.jl.badColor': 'Цвет задаётся как #RRGGBB',
+  'gn.jl.saved': 'Настройки сохранены',  'gn.players': 'игроков {n} из {max}',  'gn.rawOn': 'Код',
   'gn.rawOff': 'Редактор',  'gn.v.name': 'Ник игрока',
   'gn.w.title': 'Приветствие при входе',
   'gn.w.note': 'Игрок, который заходит на сервер, видит это сообщение лично (остальные его не видят). Нужен плагин версии 0.3.0 и новее.',
@@ -154479,13 +154616,13 @@ import { StateView } from '../components/StateView';
 import { confirmDialog } from '../confirm';
 import { t, useI18n } from '../i18n';
 import {
-  INTERVAL_PRESETS, WELCOME_VARIABLES, emptyRule, isHHMM, validateNews, validateRule,
-  type NewsServerInfo, type RuleBody, type RuleInfo, type RuleKind,
+  INTERVAL_PRESETS, SWATCHES, WELCOME_VARIABLES, composeLine, emptyRule, isHex, isHHMM, validateNews, validateRule,
+  type JoinLeave, type NewsServerInfo, type RuleBody, type RuleInfo, type RuleKind,
 } from '../gameNews';
 import { fromLocalInput, toLocalInput } from '../maintenance';
 import { ErrorLine, Field, IconEdit, IconPlus, IconTrash, LoadError, Modal, Spinner, errText, toast, usePoll } from '../ui';
 
-interface RulesState { timezone: string; restartCountdown: boolean; welcome: { enabled: boolean; text: string }; rules: RuleInfo[] }
+interface RulesState { timezone: string; restartCountdown: boolean; welcome: { enabled: boolean; text: string }; joinLeave: JoinLeave; rules: RuleInfo[] }
 
 const when = (ts: number | null) => (ts ? new Date(ts).toLocaleString() : '—');
 
@@ -154560,6 +154697,8 @@ export default function GameNewsRules({ servers, part }: { servers: NewsServerIn
           </span>
         </label>
       )}
+
+      {data && part === 'events' && <JoinLeaveCard initial={data.joinLeave} />}
 
       {data && part === 'events' && <WelcomeCard initial={data.welcome} />}
 
@@ -154782,6 +154921,91 @@ function WelcomeCard({ initial }: { initial: { enabled: boolean; text: string } 
       {problem && enabled && <p className="text-sm font-semibold text-danger">{t(problem === 'long' ? 'gn.hint.long' : 'gn.hint.text')}</p>}
       <div className="flex justify-end">
         <button type="button" className="btn" disabled={!!problem || busy || !dirty} onClick={() => void save()}>{busy && <Spinner />}{t('common.save')}</button>
+      </div>
+    </section>
+  );
+}
+
+/** a colour: the palette, the system picker and a HEX box */
+function ColorField({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
+  return (
+    <div className="space-y-1.5">
+      <span className="text-sm font-bold">{label}</span>
+      <div className="flex flex-wrap items-center gap-2">
+        {SWATCHES.map((c) => (
+          <button
+            key={c.id}
+            type="button"
+            className={`h-7 w-7 rounded-full border ${value.toUpperCase() === c.hex ? 'border-ink ring-2 ring-ink/40' : 'border-line'}`}
+            style={{ background: c.hex }}
+            aria-label={`${label}: ${c.hex}`}
+            aria-pressed={value.toUpperCase() === c.hex}
+            onClick={() => onChange(c.hex)}
+          />
+        ))}
+        <input type="color" className="h-8 w-10 cursor-pointer rounded border border-line bg-transparent p-0.5" value={isHex(value) ? value : '#FFFFFF'} aria-label={label} onChange={(e) => onChange(e.target.value.toUpperCase())} />
+        <input className="input w-28 font-mono text-sm" value={value} maxLength={7} aria-label={`${label} HEX`} onChange={(e) => onChange(e.target.value)} />
+      </div>
+    </div>
+  );
+}
+
+/** «* Игрок {name} подключился к серверу.»: shown to everybody when a player joins or leaves, with the colours chosen here */
+function JoinLeaveCard({ initial }: { initial: JoinLeave }) {
+  useI18n();
+  const [f, setF] = useState<JoinLeave>(initial);
+  const [busy, setBusy] = useState(false);
+  const set = <K extends keyof JoinLeave>(k: K, v: JoinLeave[K]) => setF((x) => ({ ...x, [k]: v }));
+  const colorsOk = isHex(f.nameColor) && isHex(f.textColor);
+  const textsOk = (!f.joinEnabled || f.joinText.trim().length > 0) && (!f.leaveEnabled || f.leaveText.trim().length > 0);
+  const dirty = JSON.stringify(f) !== JSON.stringify(initial);
+  const sample = (text: string) => composeLine(text, isHex(f.nameColor) ? f.nameColor : '#B86BFF', isHex(f.textColor) ? f.textColor : '#5FD068').replace(/{name}/g, 'WhiteLegioN');
+
+  const save = async () => {
+    if (!colorsOk || !textsOk || busy) return;
+    setBusy(true);
+    try { await api('/game-news/joinleave', 'PUT', f); toast(t('gn.jl.saved')); } catch (e) { toast(errText(e), 'err'); } finally { setBusy(false); }
+  };
+
+  return (
+    <section className="panel space-y-4 p-5">
+      <div>
+        <h3 className="font-extrabold">{t('gn.jl.title')}</h3>
+        <p className="text-sm font-semibold text-mute">{t('gn.jl.note')}</p>
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        <div className="space-y-2">
+          <label className="flex items-center gap-2.5 font-bold">
+            <input type="checkbox" checked={f.joinEnabled} onChange={(e) => set('joinEnabled', e.target.checked)} />
+            {t('gn.jl.join')}
+          </label>
+          <input className="input" value={f.joinText} maxLength={200} aria-label={t('gn.jl.join')} onChange={(e) => set('joinText', e.target.value)} />
+        </div>
+        <div className="space-y-2">
+          <label className="flex items-center gap-2.5 font-bold">
+            <input type="checkbox" checked={f.leaveEnabled} onChange={(e) => set('leaveEnabled', e.target.checked)} />
+            {t('gn.jl.leave')}
+          </label>
+          <input className="input" value={f.leaveText} maxLength={200} aria-label={t('gn.jl.leave')} onChange={(e) => set('leaveText', e.target.value)} />
+        </div>
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        <ColorField label={t('gn.jl.nameColor')} value={f.nameColor} onChange={(v) => set('nameColor', v)} />
+        <ColorField label={t('gn.jl.textColor')} value={f.textColor} onChange={(v) => set('textColor', v)} />
+      </div>
+
+      <div className="rounded-xl p-4 font-semibold" style={{ background: '#15121c', color: '#e8e3f0' }} aria-live="polite">
+        <div className="mb-1 text-xs font-bold uppercase tracking-wide" style={{ color: '#8f86a3' }}>{t('gn.chatLabel')}</div>
+        <p className="wrap-break-word"><Styled text={sample(f.joinText)} /></p>
+        <p className="wrap-break-word"><Styled text={sample(f.leaveText)} /></p>
+      </div>
+      <p className="text-sm font-semibold text-mute">{t('gn.jl.nameHint')}</p>
+      {!colorsOk && <p className="text-sm font-semibold text-danger">{t('gn.jl.badColor')}</p>}
+
+      <div className="flex justify-end">
+        <button type="button" className="btn" disabled={!colorsOk || !textsOk || busy || !dirty} onClick={() => void save()}>{busy && <Spinner />}{t('common.save')}</button>
       </div>
     </section>
   );

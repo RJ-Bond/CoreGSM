@@ -66,3 +66,27 @@ describe('green player name', () => {
     assert.equal(greenName('<color=#FF5555>{name}</color> ok {name}'), '<color=#FF5555>{name}</color> ok <color=#5FD068>{name}</color>');
   });
 });
+
+import { composeLine, joinLeaveFor, plainLine } from '../src/gamenews/gameNewsJoinLeave.ts';
+
+describe('join and leave messages', () => {
+  it('colours the name and the rest of the line separately', () => {
+    assert.equal(
+      composeLine('* Игрок {name} подключился к серверу.', '#b86bff', '#5fd068'),
+      '<color=#5FD068>* Игрок <color=#B86BFF>{name}</color> подключился к серверу.</color>',
+    );
+  });
+  it('keeps the administrator out of the tag syntax', () => {
+    assert.equal(plainLine('  <b>hi</b>\n {name}  '), 'bhi/b {name}');
+    assert.equal(composeLine('<color=#ff0000>{name}', '#B86BFF', '#5FD068').includes('<color=#ff0000>'), false);
+  });
+});
+
+describe('size for the game chat', () => {
+  it('refuses a message over 500 bytes even when it has fewer than 400 letters', () => {
+    const r = checkNews('я'.repeat(300));
+    assert.equal(r.ok, false);
+    assert.match(r.error ?? '', /500 байт/);
+    assert.equal(checkNews('я'.repeat(200)).ok, true);
+  });
+});

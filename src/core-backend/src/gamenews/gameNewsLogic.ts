@@ -6,6 +6,8 @@
 
 export const MAX_VISIBLE = 400;
 export const MAX_RAW = 700;
+/** the game chat takes 512 bytes; Cyrillic letters are 2 bytes each, tags count too */
+export const MAX_BYTES = 500;
 
 const TAG = /<\/?(?:color(?:=#[0-9a-fA-F]{6})?|b|i)>/g;
 
@@ -57,6 +59,8 @@ export function checkNews(input: unknown): NewsCheck {
   const vis = visibleText(text).trim();
   if (!vis) return { ok: false, text: '', error: 'Введите текст' };
   if (vis.length > MAX_VISIBLE) return { ok: false, text: '', error: `Слишком длинное сообщение: ${vis.length} из ${MAX_VISIBLE} знаков` };
+  const bytes = Buffer.byteLength(text, 'utf8');
+  if (bytes > MAX_BYTES) return { ok: false, text: '', error: `Слишком длинное сообщение для игры: ${bytes} из ${MAX_BYTES} байт (русские буквы занимают по 2 байта)` };
   return { ok: true, text };
 }
 

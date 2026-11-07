@@ -5,13 +5,13 @@ import { StateView } from '../components/StateView';
 import { confirmDialog } from '../confirm';
 import { t, useI18n } from '../i18n';
 import {
-  INTERVAL_PRESETS, WELCOME_VARIABLES, emptyRule, isHHMM, validateNews, validateRule,
-  type NewsServerInfo, type RuleBody, type RuleInfo, type RuleKind,
+  INTERVAL_PRESETS, SWATCHES, WELCOME_VARIABLES, composeLine, emptyRule, isHex, isHHMM, validateNews, validateRule,
+  type JoinLeave, type NewsServerInfo, type RuleBody, type RuleInfo, type RuleKind,
 } from '../gameNews';
 import { fromLocalInput, toLocalInput } from '../maintenance';
 import { ErrorLine, Field, IconEdit, IconPlus, IconTrash, LoadError, Modal, Spinner, errText, toast, usePoll } from '../ui';
 
-interface RulesState { timezone: string; restartCountdown: boolean; welcome: { enabled: boolean; text: string }; rules: RuleInfo[] }
+interface RulesState { timezone: string; restartCountdown: boolean; welcome: { enabled: boolean; text: string }; joinLeave: JoinLeave; rules: RuleInfo[] }
 
 const when = (ts: number | null) => (ts ? new Date(ts).toLocaleString() : '—');
 
@@ -86,6 +86,8 @@ export default function GameNewsRules({ servers, part }: { servers: NewsServerIn
           </span>
         </label>
       )}
+
+      {data && part === 'events' && <JoinLeaveCard initial={data.joinLeave} />}
 
       {data && part === 'events' && <WelcomeCard initial={data.welcome} />}
 
@@ -308,6 +310,91 @@ function WelcomeCard({ initial }: { initial: { enabled: boolean; text: string } 
       {problem && enabled && <p className="text-sm font-semibold text-danger">{t(problem === 'long' ? 'gn.hint.long' : 'gn.hint.text')}</p>}
       <div className="flex justify-end">
         <button type="button" className="btn" disabled={!!problem || busy || !dirty} onClick={() => void save()}>{busy && <Spinner />}{t('common.save')}</button>
+      </div>
+    </section>
+  );
+}
+
+/** a colour: the palette, the system picker and a HEX box */
+function ColorField({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
+  return (
+    <div className="space-y-1.5">
+      <span className="text-sm font-bold">{label}</span>
+      <div className="flex flex-wrap items-center gap-2">
+        {SWATCHES.map((c) => (
+          <button
+            key={c.id}
+            type="button"
+            className={`h-7 w-7 rounded-full border ${value.toUpperCase() === c.hex ? 'border-ink ring-2 ring-ink/40' : 'border-line'}`}
+            style={{ background: c.hex }}
+            aria-label={`${label}: ${c.hex}`}
+            aria-pressed={value.toUpperCase() === c.hex}
+            onClick={() => onChange(c.hex)}
+          />
+        ))}
+        <input type="color" className="h-8 w-10 cursor-pointer rounded border border-line bg-transparent p-0.5" value={isHex(value) ? value : '#FFFFFF'} aria-label={label} onChange={(e) => onChange(e.target.value.toUpperCase())} />
+        <input className="input w-28 font-mono text-sm" value={value} maxLength={7} aria-label={`${label} HEX`} onChange={(e) => onChange(e.target.value)} />
+      </div>
+    </div>
+  );
+}
+
+/** «* Игрок {name} подключился к серверу.»: shown to everybody when a player joins or leaves, with the colours chosen here */
+function JoinLeaveCard({ initial }: { initial: JoinLeave }) {
+  useI18n();
+  const [f, setF] = useState<JoinLeave>(initial);
+  const [busy, setBusy] = useState(false);
+  const set = <K extends keyof JoinLeave>(k: K, v: JoinLeave[K]) => setF((x) => ({ ...x, [k]: v }));
+  const colorsOk = isHex(f.nameColor) && isHex(f.textColor);
+  const textsOk = (!f.joinEnabled || f.joinText.trim().length > 0) && (!f.leaveEnabled || f.leaveText.trim().length > 0);
+  const dirty = JSON.stringify(f) !== JSON.stringify(initial);
+  const sample = (text: string) => composeLine(text, isHex(f.nameColor) ? f.nameColor : '#B86BFF', isHex(f.textColor) ? f.textColor : '#5FD068').replace(/{name}/g, 'WhiteLegioN');
+
+  const save = async () => {
+    if (!colorsOk || !textsOk || busy) return;
+    setBusy(true);
+    try { await api('/game-news/joinleave', 'PUT', f); toast(t('gn.jl.saved')); } catch (e) { toast(errText(e), 'err'); } finally { setBusy(false); }
+  };
+
+  return (
+    <section className="panel space-y-4 p-5">
+      <div>
+        <h3 className="font-extrabold">{t('gn.jl.title')}</h3>
+        <p className="text-sm font-semibold text-mute">{t('gn.jl.note')}</p>
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        <div className="space-y-2">
+          <label className="flex items-center gap-2.5 font-bold">
+            <input type="checkbox" checked={f.joinEnabled} onChange={(e) => set('joinEnabled', e.target.checked)} />
+            {t('gn.jl.join')}
+          </label>
+          <input className="input" value={f.joinText} maxLength={200} aria-label={t('gn.jl.join')} onChange={(e) => set('joinText', e.target.value)} />
+        </div>
+        <div className="space-y-2">
+          <label className="flex items-center gap-2.5 font-bold">
+            <input type="checkbox" checked={f.leaveEnabled} onChange={(e) => set('leaveEnabled', e.target.checked)} />
+            {t('gn.jl.leave')}
+          </label>
+          <input className="input" value={f.leaveText} maxLength={200} aria-label={t('gn.jl.leave')} onChange={(e) => set('leaveText', e.target.value)} />
+        </div>
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        <ColorField label={t('gn.jl.nameColor')} value={f.nameColor} onChange={(v) => set('nameColor', v)} />
+        <ColorField label={t('gn.jl.textColor')} value={f.textColor} onChange={(v) => set('textColor', v)} />
+      </div>
+
+      <div className="rounded-xl p-4 font-semibold" style={{ background: '#15121c', color: '#e8e3f0' }} aria-live="polite">
+        <div className="mb-1 text-xs font-bold uppercase tracking-wide" style={{ color: '#8f86a3' }}>{t('gn.chatLabel')}</div>
+        <p className="wrap-break-word"><Styled text={sample(f.joinText)} /></p>
+        <p className="wrap-break-word"><Styled text={sample(f.leaveText)} /></p>
+      </div>
+      <p className="text-sm font-semibold text-mute">{t('gn.jl.nameHint')}</p>
+      {!colorsOk && <p className="text-sm font-semibold text-danger">{t('gn.jl.badColor')}</p>}
+
+      <div className="flex justify-end">
+        <button type="button" className="btn" disabled={!colorsOk || !textsOk || busy || !dirty} onClick={() => void save()}>{busy && <Spinner />}{t('common.save')}</button>
       </div>
     </section>
   );

@@ -98,3 +98,18 @@ describe('green player name in the preview', () => {
     expect(greenName('<color=#FF5555>{name}</color>')).toBe('<color=#FF5555>{name}</color>');
   });
 });
+
+import { MAX_BYTES, byteLength, composeLine } from '../src/gameNews';
+
+describe('game chat size and join/leave lines', () => {
+  it('counts bytes: Cyrillic is two bytes a letter', () => {
+    expect(byteLength('abc')).toBe(3);
+    expect(byteLength('абв')).toBe(6);
+    expect(validateNews('я'.repeat(300))).toBe('long'); // 300 letters but 600 bytes
+    expect(validateNews('я'.repeat(200))).toBeNull(); // 400 bytes
+    expect(MAX_BYTES).toBe(500);
+  });
+  it('builds a join line with a coloured name', () => {
+    expect(composeLine('* Игрок {name} вошёл', '#b86bff', '#5fd068')).toBe('<color=#5FD068>* Игрок <color=#B86BFF>{name}</color> вошёл</color>');
+  });
+});

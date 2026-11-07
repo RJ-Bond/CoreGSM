@@ -3,7 +3,7 @@ import { api } from '../api';
 import { confirmDialog, promptDialog } from '../confirm';
 import { t, useI18n } from '../i18n';
 import {
-  MAX_VISIBLE, SWATCHES, TEMPLATES, VARIABLES, colorOpen, fillSample, isHex, parseNews, unbalanced, visibleText, wrapSelection,
+  MAX_BYTES, MAX_VISIBLE, SWATCHES, TEMPLATES, VARIABLES, byteLength, colorOpen, fillSample, isHex, parseNews, unbalanced, visibleText, wrapSelection,
 } from '../gameNews';
 import { readFrom, renderInto } from '../richNews';
 import { Field, errText, toast } from '../ui';
@@ -53,6 +53,7 @@ export function NewsEditor({ value, onChange, templates = true, label, vars = VA
   // the last text the visual box produced: a different `value` comes from outside (a template, «use again») and is drawn
   const lastOut = useRef<string | null>(null);
   const visible = visibleText(value).trim().length;
+  const bytes = byteLength(value);
   const [mine, setMine] = useState<{ id: number; name: string; text: string }[]>([]);
 
   useLayoutEffect(() => {
@@ -201,7 +202,10 @@ export function NewsEditor({ value, onChange, templates = true, label, vars = VA
       </div>
 
       <div className="flex flex-wrap items-center justify-between gap-2 text-sm font-semibold text-mute">
-        <span className={visible > MAX_VISIBLE ? 'text-danger' : undefined}>{t('gn.counter', { n: visible, max: MAX_VISIBLE })}</span>
+        <span className={visible > MAX_VISIBLE || bytes > MAX_BYTES ? 'text-danger' : undefined}>
+          {t('gn.counter', { n: visible, max: MAX_VISIBLE })}
+          {bytes > MAX_BYTES * 0.6 && <> · {t('gn.bytes', { n: bytes, max: MAX_BYTES })}</>}
+        </span>
         {unbalanced(value) && <span>{t('gn.unbalanced')}</span>}
       </div>
     </div>

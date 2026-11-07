@@ -6,6 +6,7 @@ import type { Express, Request, RequestHandler } from 'express';
 import { z } from 'zod';
 import { db, getSetting, setSetting } from '../db.js';
 import { countdownEnabled } from './gameNewsRestart.js';
+import { getJoinLeave, isHexColor, plainLine, setJoinLeave } from './gameNewsJoinLeave.js';
 import { getWelcome, setWelcome } from './gameNewsWelcome.js';
 import { log } from '../logger.js';
 import { checkNews } from './gameNewsLogic.js';
@@ -94,7 +95,7 @@ export function registerGameNewsRules({ app, admin }: { app: Express; admin: Req
 
   app.get('/api/game-news/rules', admin, (_req, res) => {
     const rows = db.prepare('SELECT * FROM game_news_rules ORDER BY id').all() as RuleRow[];
-    res.json({ timezone: tz(), restartCountdown: countdownEnabled(), welcome: getWelcome(), rules: rows.map(serialize) });
+    res.json({ timezone: tz(), restartCountdown: countdownEnabled(), welcome: getWelcome(), joinLeave: getJoinLeave(), rules: rows.map(serialize) });
   });
 
   // the countdown «через 10 / 5 / 1 минуту» before the planned restarts of monitoring/restarts.ts
@@ -102,6 +103,21 @@ export function registerGameNewsRules({ app, admin }: { app: Express; admin: Req
     const b = z.object({ enabled: z.boolean() }).safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Проверьте поля' });
     setSetting('gamenews_restart_countdown', b.data.enabled ? '1' : '0');
+    res.json({ ok: true });
+  });
+
+  // «* Игрок {name} подключился к серверу.» for everybody when a player joins or leaves: texts and colours
+  app.put('/api/game-news/joinleave', admin, (req, res) => {
+    const b = z.object({
+      joinEnabled: z.boolean(), leaveEnabled: z.boolean(), joinText: z.string().max(200), leaveText: z.string().max(200),
+      nameColor: z.string(), textColor: z.string(),
+    }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'Проверьте поля' });
+    if (!isHexColor(b.data.nameColor) || !isHexColor(b.data.textColor)) return res.status(400).json({ error: 'Цвет задаётся как #RRGGBB' });
+    const joinText = plainLine(b.data.joinText);
+    const leaveText = plainLine(b.data.leaveText);
+    if ((b.data.joinEnabled && !joinText) || (b.data.leaveEnabled && !leaveText)) return res.status(400).json({ error: 'Введите текст' });
+    setJoinLeave({ ...b.data, joinText, leaveText, nameColor: b.data.nameColor.toUpperCase(), textColor: b.data.textColor.toUpperCase() });
     res.json({ ok: true });
   });
 
