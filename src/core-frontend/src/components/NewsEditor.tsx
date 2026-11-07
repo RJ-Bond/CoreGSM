@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api';
 import { confirmDialog, promptDialog } from '../confirm';
 import { t, useI18n } from '../i18n';
@@ -21,9 +21,9 @@ export function Styled({ text }: { text: string }) {
 }
 
 /** how a message looks in the in-game chat (approximate: the colours are exact, the font and background are not) */
-export function NewsPreview({ text }: { text: string }) {
+export function NewsPreview({ text, welcome = false }: { text: string; welcome?: boolean }) {
   useI18n();
-  const shown = useMemo(() => fillSample(text), [text]);
+  const shown = useMemo(() => fillSample(text, welcome), [text, welcome]);
   const has = useMemo(() => parseNews(shown).length > 0, [shown]);
   return (
     <div className="panel space-y-3 p-5">
@@ -38,7 +38,7 @@ export function NewsPreview({ text }: { text: string }) {
 }
 
 /** a text box with a toolbar: colours, bold, italic, templates and a length counter */
-export function NewsEditor({ value, onChange, templates = true, label }: { value: string; onChange: (v: string) => void; templates?: boolean; label?: string }) {
+export function NewsEditor({ value, onChange, templates = true, label, vars = VARIABLES, onCtrlEnter }: { value: string; onChange: (v: string) => void; templates?: boolean; label?: string; vars?: readonly string[]; onCtrlEnter?: () => void }) {
   useI18n();
   const [custom, setCustom] = useState('#FF8A00');
   const area = useRef<HTMLTextAreaElement>(null);
@@ -61,8 +61,8 @@ export function NewsEditor({ value, onChange, templates = true, label }: { value
     requestAnimationFrame(() => { el?.focus(); el?.setSelectionRange(a + s.length, a + s.length); });
   };
 
-  const loadMine = () => api<{ id: number; name: string; text: string }[]>('/game-news/templates').then(setMine).catch(() => undefined);
-  useEffect(() => { if (templates) void loadMine(); }, [templates]);
+  const loadMine = useCallback(() => api<{ id: number; name: string; text: string }[]>('/game-news/templates').then(setMine).catch(() => undefined), []);
+  useEffect(() => { if (templates) void loadMine(); }, [templates, loadMine]);
   const saveAsTemplate = async () => {
     const name = await promptDialog({ title: t('gn.tpl.saveTitle'), label: t('gn.tpl.name'), placeholder: t('gn.tpl.nameEx'), confirmLabel: t('common.save') });
     if (!name?.trim()) return;
@@ -100,6 +100,7 @@ export function NewsEditor({ value, onChange, templates = true, label }: { value
           maxLength={700}
           placeholder={t('gn.placeholder')}
           onChange={(e) => onChange(e.target.value)}
+          onKeyDown={(e) => { if (onCtrlEnter && e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); onCtrlEnter(); } }}
         />
       </Field>
 
@@ -124,7 +125,7 @@ export function NewsEditor({ value, onChange, templates = true, label }: { value
 
       <div className="flex flex-wrap items-center gap-2" role="group" aria-label={t('gn.vars')}>
         <span className="text-sm font-bold text-mute">{t('gn.vars')}:</span>
-        {VARIABLES.map((v) => (
+        {vars.map((v) => (
           <button key={v} type="button" className="chip-filter font-mono" title={t(`gn.v.${v}` as 'gn.v.server')} onClick={() => insert(`{${v}}`)}>{`{${v}}`}</button>
         ))}
       </div>

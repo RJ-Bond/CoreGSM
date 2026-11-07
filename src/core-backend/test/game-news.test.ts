@@ -48,3 +48,9 @@ describe('message variables', () => {
     assert.equal(applyVars('{server}', { ...vars, server: 'a'.repeat(100) }).length, 60);
   });
 });
+
+describe('welcome text', () => {
+  it('keeps {name} for the plugin', () => {
+    assert.equal(checkNews('<color=#5FD068>Привет, {name}!</color>').text, '<color=#5fd068>Привет, {name}!</color>');
+  });
+});

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { api } from '../api';
 import { NewsEditor, NewsPreview, Styled } from '../components/NewsEditor';
 import { confirmDialog } from '../confirm';
@@ -57,12 +57,9 @@ export default function GameNewsPage() {
     if (!touched.current && ready.length === 1 && picked.length === 0) setPicked([ready[0].id]);
   }, [ready, picked.length]);
   const sendHint = problem === 'empty' ? t('gn.hint.text') : problem === 'long' ? t('gn.hint.long') : !picked.length ? t('gn.hint.server') : '';
-  const onKey = (e: KeyboardEvent<HTMLFormElement>) => {
-    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); void send(e); }
-  };
 
-  const send = async (e: FormEvent | KeyboardEvent) => {
-    e.preventDefault();
+  const send = async (e?: FormEvent) => {
+    e?.preventDefault();
     if (problem || !picked.length || busy) return;
     const names = (data?.servers ?? []).filter((s) => picked.includes(s.id)).map((s) => s.name).join(', ');
     const ok = await confirmDialog({ title: t('gn.confirm.title'), text: t('gn.confirm.text', { servers: names }), confirmLabel: t('gn.send') });
@@ -101,8 +98,8 @@ export default function GameNewsPage() {
 
       {data && tab === 'send' && (
         <>
-          <form className="grid gap-5 lg:grid-cols-2" onSubmit={(e) => void send(e)} onKeyDown={onKey} noValidate>
-            <section className="panel p-5"><NewsEditor value={text} onChange={setText} /></section>
+          <form className="grid gap-5 lg:grid-cols-2" onSubmit={(e) => void send(e)} noValidate>
+            <section className="panel p-5"><NewsEditor value={text} onChange={setText} onCtrlEnter={() => void send()} /></section>
 
             <section className="space-y-5">
               <NewsPreview text={text} />

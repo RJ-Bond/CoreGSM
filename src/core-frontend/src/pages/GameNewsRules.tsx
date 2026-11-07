@@ -5,13 +5,13 @@ import { StateView } from '../components/StateView';
 import { confirmDialog } from '../confirm';
 import { t, useI18n } from '../i18n';
 import {
-  INTERVAL_PRESETS, emptyRule, isHHMM, validateRule,
+  INTERVAL_PRESETS, WELCOME_VARIABLES, emptyRule, isHHMM, validateNews, validateRule,
   type NewsServerInfo, type RuleBody, type RuleInfo, type RuleKind,
 } from '../gameNews';
 import { fromLocalInput, toLocalInput } from '../maintenance';
 import { ErrorLine, Field, IconEdit, IconPlus, IconTrash, LoadError, Modal, Spinner, errText, toast, usePoll } from '../ui';
 
-interface RulesState { timezone: string; restartCountdown: boolean; rules: RuleInfo[] }
+interface RulesState { timezone: string; restartCountdown: boolean; welcome: { enabled: boolean; text: string }; rules: RuleInfo[] }
 
 const when = (ts: number | null) => (ts ? new Date(ts).toLocaleString() : '—');
 
@@ -84,6 +84,8 @@ export default function GameNewsRules({ servers }: { servers: NewsServerInfo[] }
           </span>
         </label>
       )}
+
+      {data && <WelcomeCard initial={data.welcome} />}
 
       {error && !data ? <LoadError error={error} onRetry={() => void load()} /> : <ErrorLine text={error} />}
       {!data && !error && <div className="skeleton panel h-32" aria-busy="true" />}
@@ -269,5 +271,42 @@ function RuleModal({ id, initial, servers, timezone, onClose, onSaved }: {
         </div>
       </form>
     </Modal>
+  );
+}
+
+/** the greeting for a player who joins: written once, shown by the plugin to that player only */
+function WelcomeCard({ initial }: { initial: { enabled: boolean; text: string } }) {
+  useI18n();
+  const [enabled, setEnabled] = useState(initial.enabled);
+  const [text, setText] = useState(initial.text);
+  const [busy, setBusy] = useState(false);
+  const problem = enabled || text.trim() ? validateNews(text) : null;
+  const dirty = enabled !== initial.enabled || text !== initial.text;
+
+  const save = async () => {
+    if (problem || busy) return;
+    setBusy(true);
+    try { await api('/game-news/welcome', 'PUT', { enabled, text }); toast(t('gn.w.saved')); } catch (e) { toast(errText(e), 'err'); } finally { setBusy(false); }
+  };
+
+  return (
+    <section className="panel space-y-4 p-5">
+      <div>
+        <h3 className="font-extrabold">{t('gn.w.title')}</h3>
+        <p className="text-sm font-semibold text-mute">{t('gn.w.note')}</p>
+      </div>
+      <label className="flex items-center gap-2.5 font-bold">
+        <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
+        {t('gn.w.enabled')}
+      </label>
+      <div className="grid gap-5 lg:grid-cols-2">
+        <NewsEditor value={text} onChange={setText} templates={false} vars={WELCOME_VARIABLES} label={t('gn.w.text')} />
+        <NewsPreview text={text} welcome />
+      </div>
+      {problem && enabled && <p className="text-sm font-semibold text-danger">{t(problem === 'long' ? 'gn.hint.long' : 'gn.hint.text')}</p>}
+      <div className="flex justify-end">
+        <button type="button" className="btn" disabled={!!problem || busy || !dirty} onClick={() => void save()}>{busy && <Spinner />}{t('common.save')}</button>
+      </div>
+    </section>
   );
 }

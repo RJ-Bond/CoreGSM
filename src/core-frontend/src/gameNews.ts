@@ -165,7 +165,11 @@ export function versionLess(a: string, b: string): boolean {
 export const VARIABLES = ['server', 'online', 'max', 'time'] as const;
 const SAMPLE: Record<(typeof VARIABLES)[number], string> = { server: 'Мой сервер', online: '12', max: '40', time: '20:00' };
 
-/** the preview shows sample values for the variables */
-export function fillSample(text: string): string {
-  return text.replace(/\{(server|online|max|time)\}/g, (_m, k: (typeof VARIABLES)[number]) => SAMPLE[k]);
+/** the variables of the greeting: {name} is the nickname of the joining player (the plugin fills it in) */
+export const WELCOME_VARIABLES = ['name', 'server'] as const;
+
+/** the preview shows sample values for the variables ({name} only in a greeting) */
+export function fillSample(text: string, welcome = false): string {
+  const s = text.replace(/\{(server|online|max|time)\}/g, (_m, k: (typeof VARIABLES)[number]) => SAMPLE[k]);
+  return welcome ? s.replace(/\{name\}/g, 'Игрок') : s;
 }

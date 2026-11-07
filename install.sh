@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="eea3920f7322"
+COREGSM_BUILD="d52c21f5f007"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.68"
+COREGSM_VERSION="1.1.69"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -23861,12 +23861,13 @@ import type { Express, Request, RequestHandler } from 'express';
 import { z } from 'zod';
 import { db, getSetting } from '../db.js';
 import { applyVars, checkNews } from './gameNewsLogic.js';
+import { welcomeFor } from './gameNewsWelcome.js';
 
 export const QUEUE_TTL_MS = 5 * 60_000;
 /** the plugin counts as «online» when it polled within this time */
 export const ONLINE_MS = 30_000;
 /** the version of the game plugin this panel was built for: an older plugin is shown as outdated */
-export const PLUGIN_VERSION = '0.2.0';
+export const PLUGIN_VERSION = '0.3.0';
 /** the games the plugin exists for */
 export const SUPPORTED_GAMES = new Set(['vrising']);
 const PULL_MIN_GAP_MS = 800;
@@ -24033,7 +24034,8 @@ export function registerGameNews({ app, admin }: { app: Express; admin: RequestH
       const done = db.prepare("UPDATE game_news_log SET status = 'delivered', ok = 1, delivered_at = ? WHERE id = ? AND status = 'queued'");
       db.transaction(() => { for (const r of rows) done.run(now, r.id); })();
     }
-    res.json({ messages: rows.map((r) => ({ id: r.id, text: r.text })) });
+    // latest = the newest plugin version this panel knows (the plugin logs when it is older); welcome = the greeting for joining players
+    res.json({ messages: rows.map((r) => ({ id: r.id, text: r.text })), latest: PLUGIN_VERSION, welcome: welcomeFor(serverLabel(t.server_id)) });
   });
 }
 __COREGSM_EOF__
@@ -24164,6 +24166,7 @@ import type { Express, Request, RequestHandler } from 'express';
 import { z } from 'zod';
 import { db, getSetting, setSetting } from '../db.js';
 import { countdownEnabled } from './gameNewsRestart.js';
+import { getWelcome, setWelcome } from './gameNewsWelcome.js';
 import { log } from '../logger.js';
 import { checkNews } from './gameNewsLogic.js';
 import { queueNews } from './gameNews.js';
@@ -24251,7 +24254,7 @@ export function registerGameNewsRules({ app, admin }: { app: Express; admin: Req
 
   app.get('/api/game-news/rules', admin, (_req, res) => {
     const rows = db.prepare('SELECT * FROM game_news_rules ORDER BY id').all() as RuleRow[];
-    res.json({ timezone: tz(), restartCountdown: countdownEnabled(), rules: rows.map(serialize) });
+    res.json({ timezone: tz(), restartCountdown: countdownEnabled(), welcome: getWelcome(), rules: rows.map(serialize) });
   });
 
   // the countdown «через 10 / 5 / 1 минуту» before the planned restarts of monitoring/restarts.ts
@@ -24259,6 +24262,20 @@ export function registerGameNewsRules({ app, admin }: { app: Express; admin: Req
     const b = z.object({ enabled: z.boolean() }).safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Проверьте поля' });
     setSetting('gamenews_restart_countdown', b.data.enabled ? '1' : '0');
+    res.json({ ok: true });
+  });
+
+  // the greeting for a player who joins (the plugin shows it to that player only)
+  app.put('/api/game-news/welcome', admin, (req, res) => {
+    const b = z.object({ enabled: z.boolean(), text: z.string() }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'Проверьте поля' });
+    let text = '';
+    if (b.data.text.trim() || b.data.enabled) {
+      const chk = checkNews(b.data.text);
+      if (!chk.ok) return res.status(400).json({ error: chk.error });
+      text = chk.text;
+    }
+    setWelcome({ enabled: b.data.enabled, text });
     res.json({ ok: true });
   });
 
@@ -24395,6 +24412,38 @@ export function upcomingRuns(s: Schedule, first: number | null, n: number, tz: s
     at = nextRunAfter(s, at, tz);
   }
   return out;
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/gamenews"
+  cat > "$APP_DIR/core-backend/src/gamenews/gameNewsWelcome.ts" << '__COREGSM_EOF__'
+/**
+ * A greeting for a player who joins a server: the administrator writes it in the panel, the game plugin gets it with
+ * every poll and shows it (to that player only) when someone connects. The setting is one JSON value:
+ * `gamenews_welcome` = {"enabled": true, "text": "Привет, {name}! Добро пожаловать на {server}."}
+ * {server} is filled in here, {name} (the nickname of the player) by the plugin.
+ */
+import { getSetting, setSetting } from '../db.js';
+
+export interface Welcome { enabled: boolean; text: string }
+
+export function getWelcome(): Welcome {
+  try {
+    const v = JSON.parse(getSetting('gamenews_welcome') || '{}') as Partial<Welcome>;
+    return { enabled: !!v.enabled, text: typeof v.text === 'string' ? v.text : '' };
+  } catch {
+    return { enabled: false, text: '' };
+  }
+}
+
+export function setWelcome(w: Welcome): void {
+  setSetting('gamenews_welcome', JSON.stringify(w));
+}
+
+/** what the plugin of a server gets: '' when the greeting is off */
+export function welcomeFor(serverName: string): string {
+  const w = getWelcome();
+  if (!w.enabled || !w.text.trim()) return '';
+  return w.text.replace(/\{server\}/g, serverName.replace(/[<>]/g, '').slice(0, 60));
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
@@ -122217,7 +122266,7 @@ export function MotionToggle() {
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components"
   cat > "$APP_DIR/core-frontend/src/components/NewsEditor.tsx" << '__COREGSM_EOF__'
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api';
 import { confirmDialog, promptDialog } from '../confirm';
 import { t, useI18n } from '../i18n';
@@ -122240,9 +122289,9 @@ export function Styled({ text }: { text: string }) {
 }
 
 /** how a message looks in the in-game chat (approximate: the colours are exact, the font and background are not) */
-export function NewsPreview({ text }: { text: string }) {
+export function NewsPreview({ text, welcome = false }: { text: string; welcome?: boolean }) {
   useI18n();
-  const shown = useMemo(() => fillSample(text), [text]);
+  const shown = useMemo(() => fillSample(text, welcome), [text, welcome]);
   const has = useMemo(() => parseNews(shown).length > 0, [shown]);
   return (
     <div className="panel space-y-3 p-5">
@@ -122257,7 +122306,7 @@ export function NewsPreview({ text }: { text: string }) {
 }
 
 /** a text box with a toolbar: colours, bold, italic, templates and a length counter */
-export function NewsEditor({ value, onChange, templates = true, label }: { value: string; onChange: (v: string) => void; templates?: boolean; label?: string }) {
+export function NewsEditor({ value, onChange, templates = true, label, vars = VARIABLES, onCtrlEnter }: { value: string; onChange: (v: string) => void; templates?: boolean; label?: string; vars?: readonly string[]; onCtrlEnter?: () => void }) {
   useI18n();
   const [custom, setCustom] = useState('#FF8A00');
   const area = useRef<HTMLTextAreaElement>(null);
@@ -122280,8 +122329,8 @@ export function NewsEditor({ value, onChange, templates = true, label }: { value
     requestAnimationFrame(() => { el?.focus(); el?.setSelectionRange(a + s.length, a + s.length); });
   };
 
-  const loadMine = () => api<{ id: number; name: string; text: string }[]>('/game-news/templates').then(setMine).catch(() => undefined);
-  useEffect(() => { if (templates) void loadMine(); }, [templates]);
+  const loadMine = useCallback(() => api<{ id: number; name: string; text: string }[]>('/game-news/templates').then(setMine).catch(() => undefined), []);
+  useEffect(() => { if (templates) void loadMine(); }, [templates, loadMine]);
   const saveAsTemplate = async () => {
     const name = await promptDialog({ title: t('gn.tpl.saveTitle'), label: t('gn.tpl.name'), placeholder: t('gn.tpl.nameEx'), confirmLabel: t('common.save') });
     if (!name?.trim()) return;
@@ -122319,6 +122368,7 @@ export function NewsEditor({ value, onChange, templates = true, label }: { value
           maxLength={700}
           placeholder={t('gn.placeholder')}
           onChange={(e) => onChange(e.target.value)}
+          onKeyDown={(e) => { if (onCtrlEnter && e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); onCtrlEnter(); } }}
         />
       </Field>
 
@@ -122343,7 +122393,7 @@ export function NewsEditor({ value, onChange, templates = true, label }: { value
 
       <div className="flex flex-wrap items-center gap-2" role="group" aria-label={t('gn.vars')}>
         <span className="text-sm font-bold text-mute">{t('gn.vars')}:</span>
-        {VARIABLES.map((v) => (
+        {vars.map((v) => (
           <button key={v} type="button" className="chip-filter font-mono" title={t(`gn.v.${v}` as 'gn.v.server')} onClick={() => insert(`{${v}}`)}>{`{${v}}`}</button>
         ))}
       </div>
@@ -138155,9 +138205,13 @@ export function versionLess(a: string, b: string): boolean {
 export const VARIABLES = ['server', 'online', 'max', 'time'] as const;
 const SAMPLE: Record<(typeof VARIABLES)[number], string> = { server: 'Мой сервер', online: '12', max: '40', time: '20:00' };
 
-/** the preview shows sample values for the variables */
-export function fillSample(text: string): string {
-  return text.replace(/\{(server|online|max|time)\}/g, (_m, k: (typeof VARIABLES)[number]) => SAMPLE[k]);
+/** the variables of the greeting: {name} is the nickname of the joining player (the plugin fills it in) */
+export const WELCOME_VARIABLES = ['name', 'server'] as const;
+
+/** the preview shows sample values for the variables ({name} only in a greeting) */
+export function fillSample(text: string, welcome = false): string {
+  const s = text.replace(/\{(server|online|max|time)\}/g, (_m, k: (typeof VARIABLES)[number]) => SAMPLE[k]);
+  return welcome ? s.replace(/\{name\}/g, 'Игрок') : s;
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
@@ -141517,7 +141571,12 @@ const en: Record<keyof typeof ru, string> = {
   'gn.h.expired': 'Not delivered',
   'gn.h.fail': 'Failed',
   'gn.reuse': 'Use again',  'adm.s.alerts': 'Alerts',
-  'gn.a.countdown': 'Warn about planned restarts',
+  'gn.v.name': 'Player nickname',
+  'gn.w.title': 'Greeting on join',
+  'gn.w.note': 'A player who joins the server sees this message in private (nobody else does). Needs plugin version 0.3.0 or newer.',
+  'gn.w.enabled': 'Greet players',
+  'gn.w.text': 'Greeting text',
+  'gn.w.saved': 'Greeting saved',  'gn.a.countdown': 'Warn about planned restarts',
   'gn.a.countdownNote': 'When a server has a restart plan, the game chat gets «in 10 / 5 / 1 minute». Only while someone is playing and only on servers with the plugin.',  'gn.a.copy': 'Duplicate',
   'gn.a.copyName': '{name} (copy)',
   'gn.a.upcoming': 'Upcoming runs ({n})',  'gn.tpl.save': 'Save as template',
@@ -145974,7 +146033,12 @@ const ru = {
   'gn.h.expired': 'Не доставлено',
   'gn.h.fail': 'Ошибка',
   'gn.reuse': 'Использовать снова',  'adm.s.alerts': 'Оповещения',
-  'gn.a.countdown': 'Предупреждать о плановых рестартах',
+  'gn.v.name': 'Ник игрока',
+  'gn.w.title': 'Приветствие при входе',
+  'gn.w.note': 'Игрок, который заходит на сервер, видит это сообщение лично (остальные его не видят). Нужен плагин версии 0.3.0 и новее.',
+  'gn.w.enabled': 'Приветствовать игроков',
+  'gn.w.text': 'Текст приветствия',
+  'gn.w.saved': 'Приветствие сохранено',  'gn.a.countdown': 'Предупреждать о плановых рестартах',
   'gn.a.countdownNote': 'Если у сервера включён план рестартов, в игровой чат уходит «через 10 / 5 / 1 минуту». Только при игроках на сервере и только на серверах с плагином.',  'gn.a.copy': 'Дублировать',
   'gn.a.copyName': '{name} (копия)',
   'gn.a.upcoming': 'Ближайшие запуски ({n})',  'gn.tpl.save': 'Сохранить как шаблон',
@@ -153995,7 +154059,7 @@ export default function ForgotPassword() {
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/GameNews.tsx" << '__COREGSM_EOF__'
-import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { api } from '../api';
 import { NewsEditor, NewsPreview, Styled } from '../components/NewsEditor';
 import { confirmDialog } from '../confirm';
@@ -154054,12 +154118,9 @@ export default function GameNewsPage() {
     if (!touched.current && ready.length === 1 && picked.length === 0) setPicked([ready[0].id]);
   }, [ready, picked.length]);
   const sendHint = problem === 'empty' ? t('gn.hint.text') : problem === 'long' ? t('gn.hint.long') : !picked.length ? t('gn.hint.server') : '';
-  const onKey = (e: KeyboardEvent<HTMLFormElement>) => {
-    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); void send(e); }
-  };
 
-  const send = async (e: FormEvent | KeyboardEvent) => {
-    e.preventDefault();
+  const send = async (e?: FormEvent) => {
+    e?.preventDefault();
     if (problem || !picked.length || busy) return;
     const names = (data?.servers ?? []).filter((s) => picked.includes(s.id)).map((s) => s.name).join(', ');
     const ok = await confirmDialog({ title: t('gn.confirm.title'), text: t('gn.confirm.text', { servers: names }), confirmLabel: t('gn.send') });
@@ -154098,8 +154159,8 @@ export default function GameNewsPage() {
 
       {data && tab === 'send' && (
         <>
-          <form className="grid gap-5 lg:grid-cols-2" onSubmit={(e) => void send(e)} onKeyDown={onKey} noValidate>
-            <section className="panel p-5"><NewsEditor value={text} onChange={setText} /></section>
+          <form className="grid gap-5 lg:grid-cols-2" onSubmit={(e) => void send(e)} noValidate>
+            <section className="panel p-5"><NewsEditor value={text} onChange={setText} onCtrlEnter={() => void send()} /></section>
 
             <section className="space-y-5">
               <NewsPreview text={text} />
@@ -154261,13 +154322,13 @@ import { StateView } from '../components/StateView';
 import { confirmDialog } from '../confirm';
 import { t, useI18n } from '../i18n';
 import {
-  INTERVAL_PRESETS, emptyRule, isHHMM, validateRule,
+  INTERVAL_PRESETS, WELCOME_VARIABLES, emptyRule, isHHMM, validateNews, validateRule,
   type NewsServerInfo, type RuleBody, type RuleInfo, type RuleKind,
 } from '../gameNews';
 import { fromLocalInput, toLocalInput } from '../maintenance';
 import { ErrorLine, Field, IconEdit, IconPlus, IconTrash, LoadError, Modal, Spinner, errText, toast, usePoll } from '../ui';
 
-interface RulesState { timezone: string; restartCountdown: boolean; rules: RuleInfo[] }
+interface RulesState { timezone: string; restartCountdown: boolean; welcome: { enabled: boolean; text: string }; rules: RuleInfo[] }
 
 const when = (ts: number | null) => (ts ? new Date(ts).toLocaleString() : '—');
 
@@ -154340,6 +154401,8 @@ export default function GameNewsRules({ servers }: { servers: NewsServerInfo[] }
           </span>
         </label>
       )}
+
+      {data && <WelcomeCard initial={data.welcome} />}
 
       {error && !data ? <LoadError error={error} onRetry={() => void load()} /> : <ErrorLine text={error} />}
       {!data && !error && <div className="skeleton panel h-32" aria-busy="true" />}
@@ -154525,6 +154588,43 @@ function RuleModal({ id, initial, servers, timezone, onClose, onSaved }: {
         </div>
       </form>
     </Modal>
+  );
+}
+
+/** the greeting for a player who joins: written once, shown by the plugin to that player only */
+function WelcomeCard({ initial }: { initial: { enabled: boolean; text: string } }) {
+  useI18n();
+  const [enabled, setEnabled] = useState(initial.enabled);
+  const [text, setText] = useState(initial.text);
+  const [busy, setBusy] = useState(false);
+  const problem = enabled || text.trim() ? validateNews(text) : null;
+  const dirty = enabled !== initial.enabled || text !== initial.text;
+
+  const save = async () => {
+    if (problem || busy) return;
+    setBusy(true);
+    try { await api('/game-news/welcome', 'PUT', { enabled, text }); toast(t('gn.w.saved')); } catch (e) { toast(errText(e), 'err'); } finally { setBusy(false); }
+  };
+
+  return (
+    <section className="panel space-y-4 p-5">
+      <div>
+        <h3 className="font-extrabold">{t('gn.w.title')}</h3>
+        <p className="text-sm font-semibold text-mute">{t('gn.w.note')}</p>
+      </div>
+      <label className="flex items-center gap-2.5 font-bold">
+        <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
+        {t('gn.w.enabled')}
+      </label>
+      <div className="grid gap-5 lg:grid-cols-2">
+        <NewsEditor value={text} onChange={setText} templates={false} vars={WELCOME_VARIABLES} label={t('gn.w.text')} />
+        <NewsPreview text={text} welcome />
+      </div>
+      {problem && enabled && <p className="text-sm font-semibold text-danger">{t(problem === 'long' ? 'gn.hint.long' : 'gn.hint.text')}</p>}
+      <div className="flex justify-end">
+        <button type="button" className="btn" disabled={!!problem || busy || !dirty} onClick={() => void save()}>{busy && <Spinner />}{t('common.save')}</button>
+      </div>
+    </section>
   );
 }
 __COREGSM_EOF__
