@@ -14,6 +14,7 @@ import { HELP_COMMANDS, HELP_NAMES, handleHelp, handleHelpButton, handleHelpSele
 import { COLORS, cardReply, replyEmbed, type ProfileData } from './replies.js';
 import { handleAppealButton, handleAppealModal } from './appeals.js';
 import { CONTEXT_NAMES, PUNISH_COMMANDS, PUNISH_NAMES, handleBanPick, handleContext, handlePunish, handlePunishButton, handleReasonModal, punishAutocomplete } from './punish.js';
+import { RESTART_COMMANDS, RESTART_NAMES, handleRestart } from './gameRestart.js';
 import { CLEAR_COMMANDS, CLEAR_NAMES, handleClearButton, handleClearCommand } from './clear.js';
 import { ROLE_COMMANDS, ROLE_NAMES, handleRoleSelect, handleRolesCommand } from './roles.js';
 
@@ -35,6 +36,7 @@ export const COMMANDS = [
   ...INFO_COMMANDS,
   ...ROLE_COMMANDS,
   ...CLEAR_COMMANDS,
+  ...RESTART_COMMANDS,
   ...PUNISH_COMMANDS,
   ...LINK_COMMANDS,
   ...HELP_COMMANDS,
@@ -130,6 +132,7 @@ export async function handleInteraction(i: Interaction): Promise<void> {
   if (INFO_NAMES.has(i.commandName)) return handleInfo(i);
   if (ROLE_NAMES.has(i.commandName)) return handleRolesCommand(i);
   if (CLEAR_NAMES.has(i.commandName)) return handleClearCommand(i);
+  if (RESTART_NAMES.has(i.commandName)) return handleRestart(i);
   if (PUNISH_NAMES.has(i.commandName)) return handlePunish(i);
   if (HELP_NAMES.has(i.commandName)) return handleHelp(i);
   if (FAQ_NAMES.has(i.commandName)) return handleFaq(i);

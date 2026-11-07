@@ -293,6 +293,22 @@ CREATE TABLE IF NOT EXISTS game_identities (
 );
 CREATE INDEX IF NOT EXISTS idx_game_identities_user ON game_identities(user_id);`),
   },
+  {
+    version: 22,
+    name: 'game_restart_jobs',
+    // a timer that restarts a game server: one row per server
+    up: (db) => db.exec(`
+CREATE TABLE IF NOT EXISTS game_restart_jobs (
+  server_id INTEGER PRIMARY KEY,
+  run_at INTEGER NOT NULL,
+  started_at INTEGER NOT NULL,
+  total_sec INTEGER NOT NULL,
+  last_notice INTEGER NOT NULL DEFAULT 0,
+  requested_by TEXT NOT NULL DEFAULT '',
+  source TEXT NOT NULL DEFAULT '',
+  state TEXT NOT NULL DEFAULT 'counting'
+);`),
+  },
 ];
 
 export const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;

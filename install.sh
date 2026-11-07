@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="bb0254edad57"
+COREGSM_BUILD="af8e190fccf6"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.79"
+COREGSM_VERSION="1.1.80"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -23505,6 +23505,10 @@ export const ERRORS = {
   announcement_no_channel: 'Выберите канал Discord',
   announcement_bad_time: 'Укажите время в будущем, не дальше года',
   announcement_limit: 'Не больше {n} запланированных объявлений',
+  game_restart_server: 'Выберите сервер с плагином',
+  game_restart_short: 'Минимум 10 секунд',
+  game_restart_long: 'Не больше 6 часов',
+  game_restart_format: 'Время не распознано: введите, например, 5m, 30s или 1h',
   game_news_pick: 'Выберите сервер и введите текст',
   game_news_too_fast: 'Слишком часто: подождите пару секунд',
   game_news_empty: 'Введите текст',
@@ -23870,10 +23874,11 @@ import { NAME_SQL, ONLINE_MS, chatKindsConfigured, liveState, registerEnabled, s
 export { ONLINE_MS };
 import { joinLeaveFor } from './gameNewsJoinLeave.js';
 import { welcomeFor } from './gameNewsWelcome.js';
+import { consumeDue } from './gameNewsRestartState.js';
 
 export const QUEUE_TTL_MS = 5 * 60_000;
 /** the version of the game plugin this panel was built for: an older plugin is shown as outdated */
-export const PLUGIN_VERSION = '0.9.0';
+export const PLUGIN_VERSION = '0.10.0';
 /** the games the plugin exists for */
 export const SUPPORTED_GAMES = new Set(['vrising']);
 const PULL_MIN_GAP_MS = 800;
@@ -24042,7 +24047,7 @@ export function registerGameNews({ app, admin }: { app: Express; admin: RequestH
       db.transaction(() => { for (const r of rows) done.run(now, r.id); })();
     }
     // latest = the newest plugin version this panel knows (the plugin logs when it is older); welcome = the greeting for joining players
-    res.json({ messages: rows.map((r) => ({ id: r.id, text: r.text })), latest: PLUGIN_VERSION, ...welcomeFor(t.server_id, now), ...joinLeaveFor(), register: registerEnabled(), chat: chatKindsConfigured() });
+    res.json({ messages: rows.map((r) => ({ id: r.id, text: r.text })), latest: PLUGIN_VERSION, ...welcomeFor(t.server_id, now), ...joinLeaveFor(), register: registerEnabled(), chat: chatKindsConfigured(), restart: consumeDue(t.server_id) });
   });
 }
 __COREGSM_EOF__
@@ -24884,6 +24889,174 @@ export function announceRestart(serverId: number, nextTs: number, now: number): 
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/gamenews"
+  cat > "$APP_DIR/core-backend/src/gamenews/gameNewsRestartLogic.ts" << '__COREGSM_EOF__'
+/**
+ * Restart of a game server by a timer: «.restart 5m» in the game, «restart 5m» in the console of AMP, a button in the
+ * panel, «/restart» in Discord. These are the parts that need no database: reading the time a person typed, saying the
+ * time left in Russian, and deciding when the next «через N минут» goes into the chat.
+ */
+
+export const MIN_SECONDS = 10;
+export const MAX_SECONDS = 6 * 3600;
+
+export type DurationResult = { seconds: number } | { error: 'format' | 'short' | 'long' };
+
+const UNIT: Array<[RegExp, number]> = [
+  [/^(?:s|sec|secs|second|seconds|с|сек|секунда|секунды|секунд|секунду)$/u, 1],
+  [/^(?:m|min|mins|minute|minutes|м|мин|минута|минуты|минут|минуту)$/u, 60],
+  [/^(?:h|hr|hrs|hour|hours|ч|час|часа|часов)$/u, 3600],
+];
+
+/**
+ * «5m», «5м», «5 мин», «30s», «30с», «1h», «1ч», «1h30m», «90» (a bare number is minutes) -> seconds.
+ * Not shorter than 10 seconds and not longer than 6 hours.
+ */
+export function parseDuration(input: string): DurationResult {
+  const s = input.trim().toLowerCase().replace(/,/g, '.');
+  if (!s) return { error: 'format' };
+  let total = 0;
+  let rest = s;
+  let any = false;
+  while (rest.length) {
+    const m = /^(\d+(?:\.\d+)?)\s*([a-zа-яё]*)\s*/u.exec(rest);
+    if (!m) return { error: 'format' };
+    const n = Number(m[1]);
+    const unit = m[2] === '' ? 60 : UNIT.find(([re]) => re.test(m[2]))?.[1];
+    if (unit === undefined || !Number.isFinite(n)) return { error: 'format' };
+    total += n * unit;
+    rest = rest.slice(m[0].length);
+    any = true;
+  }
+  if (!any) return { error: 'format' };
+  const seconds = Math.round(total);
+  if (seconds < MIN_SECONDS) return { error: 'short' };
+  if (seconds > MAX_SECONDS) return { error: 'long' };
+  return { seconds };
+}
+
+const plural = (n: number, one: string, few: string, many: string): string => {
+  const m100 = n % 100;
+  const m10 = n % 10;
+  if (m100 >= 11 && m100 <= 14) return `${n} ${many}`;
+  if (m10 === 1) return `${n} ${one}`;
+  if (m10 >= 2 && m10 <= 4) return `${n} ${few}`;
+  return `${n} ${many}`;
+};
+
+/** «5 минут», «1 минуту», «4 минуты», «30 секунд», «1 час 30 минут» (the form that follows «через») */
+export function formatLeft(totalSeconds: number): string {
+  const s = Math.max(0, Math.round(totalSeconds));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  const parts: string[] = [];
+  if (h) parts.push(plural(h, 'час', 'часа', 'часов'));
+  if (m) parts.push(plural(m, 'минуту', 'минуты', 'минут'));
+  if (sec || parts.length === 0) parts.push(plural(sec, 'секунду', 'секунды', 'секунд'));
+  return parts.join(' ');
+}
+
+/** the moments (seconds left) at which the chat is told: every minute at the end, rarer when there is long to wait */
+export const NOTICE_POINTS = [
+  5, 10, 15, 30, 60, 120, 180, 240, 300, 360, 420, 480, 540, 600, 900, 1200, 1800, 3600, 5400, 7200, 10800, 14400, 18000, 21600,
+];
+
+/**
+ * The notice to give now, or null. `remaining` is the seconds left, `last` the point already announced (at the start, the
+ * whole time). It is the smallest point not below what is left that has not been announced yet, so a late pass says the
+ * nearest «через …» instead of a stale one.
+ */
+export function nextNotice(remaining: number, last: number): number | null {
+  if (remaining <= 0) return null;
+  const p = NOTICE_POINTS.find((x) => x >= remaining && x < last);
+  return p === undefined ? null : p;
+}
+
+/** how the time is said in a notice: the point itself when we are close to it, else what is really left (rounded up to 5 s) */
+export function noticeSeconds(point: number, remaining: number): number {
+  return point - remaining <= 10 ? point : Math.ceil(remaining / 5) * 5;
+}
+
+export interface RestartTexts { announce: string; now: string; cancel: string }
+
+export const DEFAULT_TEXTS: RestartTexts = {
+  announce: '* Внимание! Рестарт сервера будет произведен через {time}.',
+  now: '* Внимание! Сервер перезапускается. Вернитесь через пару минут.',
+  cancel: '* Рестарт сервера отменён.',
+};
+
+const WARN = '#FFCC33';
+const ALERT = '#FF5555';
+const OK = '#5FD068';
+
+const clean = (s: string): string => Array.from(s, (ch) => (ch.charCodeAt(0) < 32 ? ' ' : ch)).join('').replace(/[<>]/g, '').trim();
+
+/** the line for the chat: yellow, red for the last minute */
+export function announceLine(texts: RestartTexts, seconds: number): string {
+  return `<color=${seconds <= 60 ? ALERT : WARN}>${clean(texts.announce).replace(/\{time\}/g, formatLeft(seconds))}</color>`;
+}
+export const nowLine = (texts: RestartTexts): string => `<color=${ALERT}>${clean(texts.now)}</color>`;
+export const cancelLine = (texts: RestartTexts): string => `<color=${OK}>${clean(texts.cancel)}</color>`;
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/gamenews"
+  cat > "$APP_DIR/core-backend/src/gamenews/gameNewsRestartState.ts" << '__COREGSM_EOF__'
+/**
+ * The restart timers of game servers, as rows of the database (one per server). A small module on purpose: the plugin
+ * poll in gameNews.ts has to ask «is a restart due?» without importing the module that talks to the chat.
+ *
+ * state: counting (the chat is told how long is left) -> due (the time is up, waiting for the plugin to ask) -> sent
+ *        (the plugin was told to restart); cancelled / missed (the plugin did not ask within three minutes) end a timer.
+ */
+import { db } from '../db.js';
+
+export type JobState = 'counting' | 'due' | 'sent' | 'cancelled' | 'missed';
+
+export interface Job {
+  server_id: number;
+  run_at: number;
+  started_at: number;
+  total_sec: number;
+  last_notice: number;
+  requested_by: string;
+  source: string;
+  state: JobState;
+}
+
+/** a due restart that the plugin has not asked for in this time is dropped (the plugin is off or the panel was away) */
+export const DUE_GRACE_MS = 3 * 60_000;
+
+export const getJob = (serverId: number): Job | undefined =>
+  db.prepare('SELECT * FROM game_restart_jobs WHERE server_id = ?').get(serverId) as Job | undefined;
+
+export function saveJob(j: Job): void {
+  db.prepare(
+    `INSERT INTO game_restart_jobs (server_id, run_at, started_at, total_sec, last_notice, requested_by, source, state)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(server_id) DO UPDATE SET run_at = excluded.run_at, started_at = excluded.started_at, total_sec = excluded.total_sec,
+       last_notice = excluded.last_notice, requested_by = excluded.requested_by, source = excluded.source, state = excluded.state`,
+  ).run(j.server_id, j.run_at, j.started_at, j.total_sec, j.last_notice, j.requested_by, j.source, j.state);
+}
+
+export const setState = (serverId: number, state: JobState): void => {
+  db.prepare('UPDATE game_restart_jobs SET state = ? WHERE server_id = ?').run(state, serverId);
+};
+
+export const setLastNotice = (serverId: number, last: number): void => {
+  db.prepare('UPDATE game_restart_jobs SET last_notice = ? WHERE server_id = ?').run(last, serverId);
+};
+
+export const jobsIn = (...states: JobState[]): Job[] =>
+  db.prepare(`SELECT * FROM game_restart_jobs WHERE state IN (${states.map(() => '?').join(',')})`).all(...states) as Job[];
+
+/** the plugin of this server asks: true once when the time is up (the job becomes «sent»), so that a restart is ordered only once */
+export function consumeDue(serverId: number): boolean {
+  const j = getJob(serverId);
+  if (!j || j.state !== 'due') return false;
+  setState(serverId, 'sent');
+  return true;
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/gamenews"
   cat > "$APP_DIR/core-backend/src/gamenews/gameNewsRules.ts" << '__COREGSM_EOF__'
 /**
  * Automatic in-game announcements: the administrator writes a message once and a schedule (every N minutes, every day
@@ -25192,6 +25365,205 @@ export function upcomingRuns(s: Schedule, first: number | null, n: number, tz: s
     at = nextRunAfter(s, at, tz);
   }
   return out;
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/gamenews"
+  cat > "$APP_DIR/core-backend/src/gamenews/gameNewsServerRestart.ts" << '__COREGSM_EOF__'
+/**
+ * Restart of a game server by a timer.
+ *
+ * A restart is asked for in four places: «.restart 5m» in the game (administrators of the game), «restart 5m» in the
+ * console of AMP, the panel and «/restart» of the Discord bot. All of them end here: a timer for the server is started,
+ * the game chat is told «через 5 минут», «через 4 минуты» ... through the usual queue of the plugin, and when the time is
+ * up the next poll of the plugin gets `restart: true`: the plugin saves the world and closes the server (AMP starts it again).
+ * «restart cancel» stops a timer that is running.
+ */
+import type { Express, RequestHandler } from 'express';
+import { z } from 'zod';
+import { db, getSetting, setSetting } from '../db.js';
+import { log } from '../logger.js';
+import { internal } from '../security/auth.js';
+import { pluginTarget, queueNews } from './gameNews.js';
+import { plainLine } from './gameNewsJoinLeave.js';
+import {
+  DEFAULT_TEXTS, announceLine, cancelLine, formatLeft, nextNotice, noticeSeconds, nowLine, parseDuration, type RestartTexts,
+} from './gameNewsRestartLogic.js';
+import { DUE_GRACE_MS, getJob, jobsIn, saveJob, setLastNotice, setState, type Job } from './gameNewsRestartState.js';
+import { serverLabel } from './gameNewsVars.js';
+
+// ---- the words of the notices (set in the panel)
+export function getTexts(): RestartTexts {
+  try {
+    const v = JSON.parse(getSetting('gamenews_restart_texts') || '{}') as Partial<RestartTexts>;
+    const pick = (x: unknown, d: string) => (typeof x === 'string' && x.trim() ? x : d);
+    return { announce: pick(v.announce, DEFAULT_TEXTS.announce), now: pick(v.now, DEFAULT_TEXTS.now), cancel: pick(v.cancel, DEFAULT_TEXTS.cancel) };
+  } catch {
+    return { ...DEFAULT_TEXTS };
+  }
+}
+const setTexts = (t: RestartTexts): void => setSetting('gamenews_restart_texts', JSON.stringify(t));
+
+/** servers that have a game plugin (a token): only they can be restarted this way */
+function pluginServers(): { id: number; name: string }[] {
+  const ids = (db.prepare("SELECT server_id FROM game_news_targets WHERE token_hash <> ''").all() as { server_id: number }[]).map((r) => r.server_id);
+  return ids.map((id) => ({ id, name: serverLabel(id) }));
+}
+
+const tellChat = (serverId: number, line: string, now: number): void => {
+  // nobody in the game: nobody to tell (the restart still happens)
+  queueNews(line, [serverId], 'авто: рестарт', now, { onlyOnline: true });
+};
+
+// ---- the timer
+export function startRestart(serverId: number, seconds: number, by: string, source: string, now = Date.now()): Job {
+  const job: Job = {
+    server_id: serverId, run_at: now + seconds * 1000, started_at: now, total_sec: seconds, last_notice: seconds,
+    requested_by: by.slice(0, 80), source: source.slice(0, 40), state: 'counting',
+  };
+  saveJob(job);
+  tellChat(serverId, announceLine(getTexts(), seconds), now);
+  log.info(`game restart of server ${serverId} in ${seconds} s (${source})`);
+  return job;
+}
+
+/** true when a timer was running and is stopped */
+export function cancelRestart(serverId: number, now = Date.now()): boolean {
+  const j = getJob(serverId);
+  if (!j || (j.state !== 'counting' && j.state !== 'due')) return false;
+  setState(serverId, 'cancelled');
+  tellChat(serverId, cancelLine(getTexts()), now);
+  return true;
+}
+
+/** one pass: the notices that are due, the timers that ran out */
+export function tickRestartJobs(now = Date.now()): void {
+  for (const j of jobsIn('counting')) {
+    const r = Math.ceil((j.run_at - now) / 1000);
+    if (r <= 0) {
+      setState(j.server_id, 'due');
+      tellChat(j.server_id, nowLine(getTexts()), now);
+      continue;
+    }
+    const p = nextNotice(r, j.last_notice);
+    if (p !== null) {
+      setLastNotice(j.server_id, p);
+      tellChat(j.server_id, announceLine(getTexts(), noticeSeconds(p, r)), now);
+    }
+  }
+  for (const j of jobsIn('due')) if (now - j.run_at > DUE_GRACE_MS) setState(j.server_id, 'missed');
+}
+
+let timer: NodeJS.Timeout | undefined;
+let busy = false;
+export function startRestartJobsTimer(): void {
+  timer = setInterval(() => {
+    if (busy) return;
+    busy = true;
+    try { tickRestartJobs(); } catch (e) { log.error('game restart timer failed', (e as Error).message); } finally { busy = false; }
+  }, 5000);
+  timer.unref();
+}
+export const stopRestartJobsTimer = () => clearInterval(timer);
+
+/**
+ * What a person typed after «restart»: a time («5m»), «cancel», or nothing (what is going on now).
+ * The answer is plain text for the person: the game, the console, Discord.
+ */
+export function runRestartCommand(serverId: number, raw: string, by: string, source: string, now = Date.now()): { ok: boolean; text: string } {
+  const arg = raw.trim().toLowerCase();
+  const job = getJob(serverId);
+  const running = job && (job.state === 'counting' || job.state === 'due') ? job : undefined;
+  if (!arg) {
+    return running
+      ? { ok: true, text: `Рестарт через ${formatLeft(Math.max(0, Math.ceil((running.run_at - now) / 1000)))} (запустил ${running.requested_by || '—'}). Отмена: restart cancel` }
+      : { ok: true, text: 'Введите время: restart 5m (минуты, секунды 30s, часы 1h) или restart cancel' };
+  }
+  if (['cancel', 'stop', 'отмена', 'отменить', 'стоп'].includes(arg)) {
+    return cancelRestart(serverId, now) ? { ok: true, text: 'Рестарт отменён.' } : { ok: false, text: 'Сейчас нет запущенного рестарта.' };
+  }
+  const d = parseDuration(arg);
+  if ('error' in d) {
+    return { ok: false, text: d.error === 'format' ? 'Не понял время. Примеры: 5m, 5м, 30s, 1h, 90' : d.error === 'short' ? 'Слишком мало: от 10 секунд.' : 'Слишком много: не больше 6 часов.' };
+  }
+  startRestart(serverId, d.seconds, by, source, now);
+  return { ok: true, text: `Рестарт сервера через ${formatLeft(d.seconds)}.` };
+}
+
+const C_OK = '#5FD068';
+const C_BAD = '#FF5555';
+
+export function registerGameNewsServerRestart({ app, admin }: { app: Express; admin: RequestHandler }): void {
+  // ---- the panel
+  app.get('/api/game-news/restart', admin, (_req, res) => {
+    const now = Date.now();
+    const jobs = jobsIn('counting', 'due', 'sent').map((j) => ({
+      serverId: j.server_id, serverName: serverLabel(j.server_id), runAt: j.run_at, by: j.requested_by, source: j.source, state: j.state,
+      left: Math.max(0, Math.ceil((j.run_at - now) / 1000)),
+    }));
+    res.json({ jobs, texts: getTexts(), servers: pluginServers() });
+  });
+
+  app.post('/api/game-news/restart', admin, (req, res) => {
+    const b = z.object({ serverId: z.number().int().positive(), time: z.string().max(40) }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'Проверьте поля' });
+    if (!pluginServers().some((s) => s.id === b.data.serverId)) return res.status(400).json({ error: 'Выберите сервер с плагином' });
+    const d = parseDuration(b.data.time);
+    if ('error' in d) {
+      if (d.error === 'short') return res.status(400).json({ error: 'Минимум 10 секунд' });
+      if (d.error === 'long') return res.status(400).json({ error: 'Не больше 6 часов' });
+      return res.status(400).json({ error: 'Время не распознано: введите, например, 5m, 30s или 1h' });
+    }
+    const user = (req as typeof req & { user?: { username?: string } }).user?.username ?? '';
+    const job = startRestart(b.data.serverId, d.seconds, user, 'панель');
+    res.json({ ok: true, runAt: job.run_at });
+  });
+
+  app.delete('/api/game-news/restart/:serverId', admin, (req, res) => {
+    res.json({ ok: cancelRestart(Number(req.params.serverId)) });
+  });
+
+  app.put('/api/game-news/restart-texts', admin, (req, res) => {
+    const b = z.object({ announce: z.string().max(300), now: z.string().max(300), cancel: z.string().max(300) }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'Проверьте поля' });
+    const d = getTexts();
+    const keep = (x: string, old: string) => plainLine(x) || old;
+    setTexts({ announce: keep(b.data.announce, d.announce), now: keep(b.data.now, d.now), cancel: keep(b.data.cancel, d.cancel) });
+    res.json({ ok: true });
+  });
+
+  // ---- the plugin: «.restart 5m» in the game or «restart 5m» in the console of AMP
+  app.post('/api/game-news/restart-request', (req, res) => {
+    const t = pluginTarget(req);
+    if (!t) return res.status(401).json({ error: 'unauthorized' });
+    const b = z.object({ text: z.string().max(60), by: z.string().max(80) }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'Проверьте поля' });
+    const r = runRestartCommand(t.server_id, b.data.text, b.data.by || 'игра', 'игра');
+    res.json({ ok: r.ok, text: r.text, replies: [`<color=${r.ok ? C_OK : C_BAD}>* ${plainLine(r.text)}</color>`] });
+  });
+
+  // ---- the Discord bot (it is trusted; the person is checked here)
+  app.post('/internal/game-restart', internal, (req, res) => {
+    const b = z.object({
+      action: z.enum(['start', 'cancel', 'status']),
+      time: z.string().max(40).optional(),
+      server: z.string().max(100).optional(),
+      discordId: z.string().max(32),
+      discordAdmin: z.boolean(),
+    }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ ok: false, text: 'Проверьте поля' });
+    // a server administrator of Discord, or a Discord account linked to an administrator of the panel
+    const linked = db.prepare("SELECT username FROM users WHERE discord_id = ? AND role = 'admin' AND status = 'active'").get(b.data.discordId) as { username: string } | undefined;
+    if (!b.data.discordAdmin && !linked) return res.json({ ok: false, text: 'Эта команда только для администраторов.' });
+
+    const servers = pluginServers();
+    const q = (b.data.server ?? '').trim().toLowerCase();
+    const found = q ? servers.filter((s) => s.name.toLowerCase().includes(q)) : servers;
+    if (found.length === 0) return res.json({ ok: false, text: q ? 'Сервер не найден среди серверов с плагином.' : 'Нет серверов с плагином CoreGSM.' });
+    if (found.length > 1) return res.json({ ok: false, text: `Укажите сервер: ${found.map((s) => s.name).join(', ')}` });
+    const text = b.data.action === 'cancel' ? 'cancel' : b.data.action === 'status' ? '' : (b.data.time ?? '');
+    const r = runRestartCommand(found[0].id, text, linked?.username ?? `Discord ${b.data.discordId}`, 'Discord');
+    res.json({ ok: r.ok, text: `${found[0].name}: ${r.text}` });
+  });
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/gamenews"
@@ -27611,6 +27983,7 @@ import { wrap } from './http.js';
 import { registerMaintenance } from './maintenance.js';
 import { registerGameNews } from './gamenews/gameNews.js';
 import { registerGameNewsChat, startChatTimer, stopChatTimer } from './gamenews/gameNewsChat.js';
+import { registerGameNewsServerRestart, startRestartJobsTimer, stopRestartJobsTimer } from './gamenews/gameNewsServerRestart.js';
 import { registerGameNewsPlayers } from './gamenews/gameNewsRegister.js';
 import { registerGameNewsRules, startGameNewsTimer, stopGameNewsTimer } from './gamenews/gameNewsRules.js';
 import { registerStatusNotes } from './alerts/statusNotes.js';
@@ -27808,6 +28181,7 @@ registerGameNews({ app, admin });
 registerGameNewsRules({ app, admin });
 registerGameNewsPlayers({ app });
 registerGameNewsChat({ app, admin });
+registerGameNewsServerRestart({ app, admin });
 registerHealth({ app, admin, bot: () => bot.status });
 startDbMaintenance();
 registerOverview({ app, viewer });
@@ -27849,6 +28223,7 @@ const server = app.listen(PORT, () => {
   startWipeTimer();
   startGameNewsTimer();
   startChatTimer();
+  startRestartJobsTimer();
 });
 onShutdown('poller', stopPoller);
 onShutdown('backups', stopBackups);
@@ -27856,6 +28231,7 @@ onShutdown('restarts', stopRestartTimer);
 onShutdown('wipes', stopWipeTimer);
 onShutdown('game-news', stopGameNewsTimer);
 onShutdown('game-news-chat', stopChatTimer);
+onShutdown('game-news-restart', stopRestartJobsTimer);
 installShutdown(server);
 registerShutdownServer(server);
 
@@ -28408,6 +28784,22 @@ CREATE TABLE IF NOT EXISTS game_identities (
   last_hint_at INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_game_identities_user ON game_identities(user_id);`),
+  },
+  {
+    version: 22,
+    name: 'game_restart_jobs',
+    // a timer that restarts a game server: one row per server
+    up: (db) => db.exec(`
+CREATE TABLE IF NOT EXISTS game_restart_jobs (
+  server_id INTEGER PRIMARY KEY,
+  run_at INTEGER NOT NULL,
+  started_at INTEGER NOT NULL,
+  total_sec INTEGER NOT NULL,
+  last_notice INTEGER NOT NULL DEFAULT 0,
+  requested_by TEXT NOT NULL DEFAULT '',
+  source TEXT NOT NULL DEFAULT '',
+  state TEXT NOT NULL DEFAULT 'counting'
+);`),
   },
 ];
 
@@ -42267,6 +42659,7 @@ import { HELP_COMMANDS, HELP_NAMES, handleHelp, handleHelpButton, handleHelpSele
 import { COLORS, cardReply, replyEmbed, type ProfileData } from './replies.js';
 import { handleAppealButton, handleAppealModal } from './appeals.js';
 import { CONTEXT_NAMES, PUNISH_COMMANDS, PUNISH_NAMES, handleBanPick, handleContext, handlePunish, handlePunishButton, handleReasonModal, punishAutocomplete } from './punish.js';
+import { RESTART_COMMANDS, RESTART_NAMES, handleRestart } from './gameRestart.js';
 import { CLEAR_COMMANDS, CLEAR_NAMES, handleClearButton, handleClearCommand } from './clear.js';
 import { ROLE_COMMANDS, ROLE_NAMES, handleRoleSelect, handleRolesCommand } from './roles.js';
 
@@ -42288,6 +42681,7 @@ export const COMMANDS = [
   ...INFO_COMMANDS,
   ...ROLE_COMMANDS,
   ...CLEAR_COMMANDS,
+  ...RESTART_COMMANDS,
   ...PUNISH_COMMANDS,
   ...LINK_COMMANDS,
   ...HELP_COMMANDS,
@@ -42383,6 +42777,7 @@ export async function handleInteraction(i: Interaction): Promise<void> {
   if (INFO_NAMES.has(i.commandName)) return handleInfo(i);
   if (ROLE_NAMES.has(i.commandName)) return handleRolesCommand(i);
   if (CLEAR_NAMES.has(i.commandName)) return handleClearCommand(i);
+  if (RESTART_NAMES.has(i.commandName)) return handleRestart(i);
   if (PUNISH_NAMES.has(i.commandName)) return handlePunish(i);
   if (HELP_NAMES.has(i.commandName)) return handleHelp(i);
   if (FAQ_NAMES.has(i.commandName)) return handleFaq(i);
@@ -42927,6 +43322,64 @@ export function followText(a: FollowAnswer, f: FollowId): { title: string; text:
   return a.on
     ? { title: `🔔 Вы следите за игроком ${name}`, text: 'Напишу в личные сообщения, когда он зайдёт на любой сервер (не чаще раза в 30 минут).', ok: true }
     : { title: `🔕 Вы больше не следите за ${name}`, text: 'Уведомления об этом игроке отключены.', ok: true };
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-bot/src"
+  cat > "$APP_DIR/core-bot/src/gameRestart.ts" << '__COREGSM_EOF__'
+/**
+ * /restart: restarts a game server by a timer («/restart start time:5m», «/restart cancel»). Only for administrators of the
+ * Discord server (or an administrator of the panel linked to the Discord account). The panel does the work and answers
+ * with the text to show; the game chat gets «Рестарт через 5 минут» ... as the timer runs.
+ */
+import { PermissionFlagsBits, type ChatInputCommandInteraction } from 'discord.js';
+import { backendJson } from './backend.js';
+import { log } from './log.js';
+import { COLORS, replyEmbed } from './replies.js';
+
+const EPHEMERAL = 64;
+const SERVER = { type: 3, name: 'server', description: '🎮 Сервер (если их несколько)', description_localizations: { ru: '🎮 Сервер (если их несколько)', 'en-US': '🎮 Server (when there are several)', 'en-GB': '🎮 Server (when there are several)' }, required: false };
+
+export const RESTART_COMMANDS = [
+  {
+    name: 'restart',
+    description: '♻️ Рестарт игрового сервера по таймеру · только админы',
+    description_localizations: { ru: '♻️ Рестарт игрового сервера по таймеру · только админы', 'en-US': '♻️ Restart a game server by a timer · admins only', 'en-GB': '♻️ Restart a game server by a timer · admins only' },
+    dm_permission: false,
+    default_member_permissions: String(PermissionFlagsBits.Administrator),
+    options: [
+      {
+        type: 1, name: 'start', description: '⏱ Запустить таймер', description_localizations: { ru: '⏱ Запустить таймер', 'en-US': '⏱ Start the timer', 'en-GB': '⏱ Start the timer' },
+        options: [{ type: 3, name: 'time', description: '⏳ Через сколько: 5m, 30s, 1h', description_localizations: { ru: '⏳ Через сколько: 5m, 30s, 1h', 'en-US': '⏳ In how long: 5m, 30s, 1h', 'en-GB': '⏳ In how long: 5m, 30s, 1h' }, required: true, max_length: 20 }, SERVER],
+      },
+      { type: 1, name: 'cancel', description: '🛑 Отменить рестарт', description_localizations: { ru: '🛑 Отменить рестарт', 'en-US': '🛑 Cancel the restart', 'en-GB': '🛑 Cancel the restart' }, options: [SERVER] },
+      { type: 1, name: 'status', description: 'ℹ️ Сколько осталось', description_localizations: { ru: 'ℹ️ Сколько осталось', 'en-US': 'ℹ️ Time left', 'en-GB': 'ℹ️ Time left' }, options: [SERVER] },
+    ],
+  },
+];
+export const RESTART_NAMES = new Set(RESTART_COMMANDS.map((c) => c.name));
+
+export async function handleRestart(i: ChatInputCommandInteraction): Promise<void> {
+  try {
+    await i.deferReply({ flags: EPHEMERAL });
+  } catch (e) {
+    log('restart: could not acknowledge:', (e as Error).message);
+    return;
+  }
+  const action = i.options.getSubcommand() as 'start' | 'cancel' | 'status';
+  const r = await backendJson<{ ok: boolean; text: string }>('/internal/game-restart', {
+    method: 'POST',
+    body: JSON.stringify({
+      action,
+      time: action === 'start' ? i.options.getString('time', true) : undefined,
+      server: i.options.getString('server') ?? undefined,
+      discordId: i.user.id,
+      discordAdmin: i.memberPermissions?.has(PermissionFlagsBits.Administrator) ?? false,
+    }),
+  }).catch(() => null);
+  const out = r?.data
+    ? replyEmbed(r.data.ok ? 'Рестарт' : 'Не получилось', r.data.text, r.data.ok ? COLORS.ok : COLORS.warn)
+    : replyEmbed('Не получилось', 'Панель сейчас не отвечает, попробуйте ещё раз чуть позже.', COLORS.bad);
+  await i.editReply(out).catch((e) => log('restart reply failed:', (e as Error).message));
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-bot/src"
@@ -43531,6 +43984,7 @@ export const CMDS: CmdInfo[] = [
   { cmd: '/top', text: { ru: 'самые активные игроки за неделю или месяц', en: 'the most active players of the week or the month' }, usage: '/top [period:неделя|месяц]', examples: ['/top', '/top period:месяц'], needs: NONE },
   { cmd: '/giveaway', text: { ru: 'розыгрыш призов: кнопка «Участвую», условия (роль, часы игры), честный выбор победителей', en: 'prize giveaway: a «Join» button, conditions (role, hours of play), a fair draw' }, usage: '/giveaway start prize:<приз> hours:<часы> [winners] [role] [min_hours] · end id · reroll id', examples: ['/giveaway start prize:Скин hours:24 winners:2 min_hours:10', '/giveaway end id:3'], needs: NONE },
   { cmd: '/clear', text: { ru: 'очистить чат в этом канале: с подтверждением, закреплённые остаются', en: 'wipe the chat of this channel: with a confirmation, pinned messages stay' }, usage: '/clear [count:<число>] [user:@участник]', examples: ['/clear', '/clear count:50', '/clear user:@Vasya'], needs: withBot('«Управлять сообщениями» и «Читать историю»', 'Manage Messages and Read Message History') },
+  { cmd: '/restart', text: { ru: 'рестарт игрового сервера по таймеру: в чате игры идёт отсчёт, потом сервер перезапускается', en: 'restart a game server by a timer: the game chat gets a countdown, then the server restarts' }, usage: '/restart start time:<5m> | cancel | status', examples: ['/restart start time:5m', '/restart cancel'], needs: withBot('нужен плагин CoreGSM на игровом сервере', 'the CoreGSM plugin on the game server') },
   { cmd: '/ban', text: { ru: 'заблокировать участника с причиной (удаляет его сообщения, пишет ему в ЛС)', en: 'ban a member with a reason (deletes their messages, writes to them privately)' }, usage: '/ban user:@участник reason:<причина> [delete_days:0|1|7]', examples: ['/ban user:@Vasya reason:спам'], needs: withBot('«Банить участников»', 'Ban Members') },
   { cmd: '/unban', text: { ru: 'снять блокировку: без параметра покажет список банов с меню, с параметром подскажет имя или ID', en: 'lift a ban: without a parameter shows the ban list with a menu, with one suggests a name or ID' }, usage: '/unban [user:<имя или ID>]', examples: ['/unban', '/unban user:Vasya'], needs: withBot('«Банить участников»', 'Ban Members') },
   { cmd: '/kick', text: { ru: 'исключить участника с причиной, он сможет вернуться по приглашению', en: 'kick a member with a reason, they can return by an invite' }, usage: '/kick user:@участник reason:<причина>', examples: ['/kick user:@Vasya reason:реклама'], needs: withBot('«Выгонять участников»', 'Kick Members') },
@@ -43558,7 +44012,7 @@ export const CATEGORIES: Category[] = [
   { id: 'stat', emoji: '📊', color: 0x8b5cf6, label: { ru: 'Статистика', en: 'Statistics' }, title: { ru: 'Статистика игроков', en: 'Player statistics' }, cmds: ['/player', '/top'] },
   {
     id: 'mod', emoji: '🛡️', color: 0xef4444, admin: true, label: { ru: 'Модерация', en: 'Moderation' }, title: { ru: 'Модерация (для администраторов)', en: 'Moderation (for administrators)' },
-    cmds: ['/clear', '/giveaway', '/ban', '/unban', '/kick', '/warn', '/mute', '/unmute'],
+    cmds: ['/clear', '/restart', '/giveaway', '/ban', '/unban', '/kick', '/warn', '/mute', '/unmute'],
     extra: [{ cmd: '⚠️ Предупредить', text: { ru: 'правый клик по участнику или сообщению → «Приложения»: окно с причиной, к варну прикрепляется ссылка на сообщение', en: 'right-click a member or a message → «Apps»: a window with the reason, the message link is attached to the warning' } }],
   },
   { id: 'modclr', emoji: '🧹', color: 0xef4444, admin: true, label: { ru: 'Памятка /clear', en: '/clear guide' }, title: { ru: 'Команда /clear: как это работает', en: 'The /clear command: how it works' }, cmds: [] },
@@ -142824,7 +143278,24 @@ const en: Record<keyof typeof ru, string> = {
   'gn.h.ok': 'Delivered',
   'gn.h.expired': 'Not delivered',
   'gn.h.fail': 'Failed',
-  'gn.reuse': 'Use again',  'adm.s.alerts': 'Alerts',
+  'gn.reuse': 'Use again',
+  'gn.rr.title': 'Server restart by a timer',
+  'gn.rr.sum': 'Warns the players in the chat and restarts the server',
+  'gn.rr.note': 'The chat says «Restart in 5 minutes», «in 4 minutes» and so on, then the plugin saves the world and closes the server. AMP has to start it again. The same can be done with «.restart 5m» in the game (administrators), «restart 5m» in the AMP console and «/restart» in Discord.',
+  'gn.rr.server': 'Server',
+  'gn.rr.time': 'In how long',
+  'gn.rr.start': 'Start the timer',
+  'gn.rr.cancel': 'Cancel',
+  'gn.rr.started': 'Timer started',
+  'gn.rr.due': 'Waiting for the plugin',
+  'gn.rr.sent': 'Restarting',
+  'gn.rr.by': '{by} · {src}',
+  'gn.rr.words': 'Words in the chat',
+  'gn.rr.announce': 'Warning ({time} is the time left)',
+  'gn.rr.now': 'When the time is up',
+  'gn.rr.cancelText': 'When the restart is cancelled',
+  'gn.rr.empty': 'Fill in all three lines',
+  'adm.s.alerts': 'Alerts',
   'gn.ch.time': 'Show the time',
   'gn.ch.timeNote': 'The time at the start of every line, like in the game chat: «[16:07] [«Global»] nick: text». It uses the time zone of the panel.',  'gn.ch.label.global': 'Global',
   'gn.ch.label.clan': 'Clan',
@@ -142853,8 +143324,8 @@ const en: Record<keyof typeof ru, string> = {
   'gn.ch.kind.leave': 'Player left',
   'gn.ch.short.join': 'joins',
   'gn.ch.short.leave': 'leaves',
-  'gn.ch.kindNote.join': 'The line «* Player nick joined the server.» with the text from «Players joining and leaving».',
-  'gn.ch.kindNote.leave': 'The line «* Player nick left the server.» with the text from «Players joining and leaving».',  'gn.rt.min': '{n} min',
+  'gn.ch.kindNote.join': 'The line * Player nick joined the server. with the text from «Players joining and leaving».',
+  'gn.ch.kindNote.leave': 'The line * Player nick left the server. with the text from «Players joining and leaving».',  'gn.rt.min': '{n} min',
   'gn.rt.h': '{n} h',
   'gn.rt.in': 'in {t}',
   'gn.rt.ago': '{t} ago',
@@ -146259,6 +146730,10 @@ const errorsEn: Record<string, string> = {
   announcement_no_channel: 'Choose a Discord channel',
   announcement_bad_time: 'Set a time in the future, not later than a year',
   announcement_limit: 'No more than {n} scheduled announcements',
+  game_restart_server: 'Pick a server with the plugin',
+  game_restart_short: 'At least 10 seconds',
+  game_restart_long: 'No more than 6 hours',
+  game_restart_format: 'Time not understood: enter, for example, 5m, 30s or 1h',
   game_news_pick: 'Pick a server and enter the text',
   game_news_too_fast: 'Too fast: wait a couple of seconds',
   game_news_empty: 'Enter the text',
@@ -147444,7 +147919,24 @@ const ru = {
   'gn.h.ok': 'Доставлено',
   'gn.h.expired': 'Не доставлено',
   'gn.h.fail': 'Ошибка',
-  'gn.reuse': 'Использовать снова',  'adm.s.alerts': 'Оповещения',
+  'gn.reuse': 'Использовать снова',
+  'gn.rr.title': 'Рестарт сервера по таймеру',
+  'gn.rr.sum': 'Предупреждает игроков в чате и перезапускает сервер',
+  'gn.rr.note': 'В чате пишется «Рестарт через 5 минут», «через 4 минуты» и так до конца, потом плагин сохраняет мир и закрывает сервер. Панель AMP должна запускать его снова. То же умеют команда «.restart 5m» в игре (для администраторов), «restart 5m» в консоли AMP и «/restart» в Discord.',
+  'gn.rr.server': 'Сервер',
+  'gn.rr.time': 'Через сколько',
+  'gn.rr.start': 'Запустить таймер',
+  'gn.rr.cancel': 'Отменить',
+  'gn.rr.started': 'Таймер запущен',
+  'gn.rr.due': 'Ждём плагин',
+  'gn.rr.sent': 'Перезапускается',
+  'gn.rr.by': '{by} · {src}',
+  'gn.rr.words': 'Слова в чате',
+  'gn.rr.announce': 'Предупреждение ({time} — сколько осталось)',
+  'gn.rr.now': 'Когда время вышло',
+  'gn.rr.cancelText': 'Когда рестарт отменён',
+  'gn.rr.empty': 'Заполните все три строки',
+  'adm.s.alerts': 'Оповещения',
   'gn.ch.time': 'Показывать время',
   'gn.ch.timeNote': 'Время в начале каждой строки, как в игровом чате: «[16:07] [«Глобальный»] ник: текст». Берётся по часовому поясу панели.',  'gn.ch.label.global': 'Глобальный',
   'gn.ch.label.clan': 'Клан',
@@ -147473,8 +147965,8 @@ const ru = {
   'gn.ch.kind.leave': 'Выход игрока',
   'gn.ch.short.join': 'вход',
   'gn.ch.short.leave': 'выход',
-  'gn.ch.kindNote.join': 'Строка «* Игрок ник подключился к серверу.» с текстом из «Вход и выход игроков».',
-  'gn.ch.kindNote.leave': 'Строка «* Игрок ник отключился от сервера.» с текстом из «Вход и выход игроков».',  'gn.rt.min': '{n} мин',
+  'gn.ch.kindNote.join': 'Строка * Игрок ник подключился к серверу. с текстом из «Вход и выход игроков».',
+  'gn.ch.kindNote.leave': 'Строка * Игрок ник отключился от сервера. с текстом из «Вход и выход игроков».',  'gn.rt.min': '{n} мин',
   'gn.rt.h': '{n} ч',
   'gn.rt.in': 'через {t}',
   'gn.rt.ago': '{t} назад',
@@ -155637,6 +156129,7 @@ import {
 } from '../gameNews';
 import { AdminPage, ErrorLine, IconNews, LoadError, Modal, PageHead, Spinner, errText, navigate, toast, usePoll } from '../ui';
 import { ChatCard, ExtrasCard, JoinLeaveCard, RegisterCard, RestartCard, WelcomeCard } from './GameNewsCards';
+import { ServerRestartCard } from './GameNewsServerRestart';
 import GameNewsRules from './GameNewsRules';
 
 interface NewsState { servers: NewsServerInfo[]; log: NewsLogRow[]; pluginLatest: string }
@@ -155884,6 +156377,8 @@ export default function GameNewsPage({ sub = '' }: { sub?: string }) {
           </div>
         </form>
       )}
+
+      {data && tab === 'auto' && <ServerRestartCard />}
 
       {data && tab === 'auto' && rd && <GameNewsRules servers={data.servers} rules={rd.rules} timezone={rd.timezone} reload={() => void loadRules()} />}
 
@@ -156746,6 +157241,116 @@ function RuleModal({ id, initial, servers, timezone, onClose, onSaved }: {
         </div>
       </form>
     </Modal>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/pages"
+  cat > "$APP_DIR/core-frontend/src/pages/GameNewsServerRestart.tsx" << '__COREGSM_EOF__'
+import { useState } from 'react';
+import { api } from '../api';
+import { FoldCard } from '../components/GameNewsParts';
+import { t, useI18n } from '../i18n';
+import { Field, SaveBadge, errText, toast, useAutosave, usePoll } from '../ui';
+
+interface Job { serverId: number; serverName: string; runAt: number; by: string; source: string; state: string; left: number }
+interface Texts { announce: string; now: string; cancel: string }
+interface State { jobs: Job[]; texts: Texts; servers: { id: number; name: string }[] }
+
+const PRESETS = ['1m', '5m', '10m', '30m', '1h'];
+
+/** «4:59» / «1:02:03» */
+function clock(sec: number): string {
+  const s = Math.max(0, sec);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const x = String(s % 60).padStart(2, '0');
+  return h ? `${h}:${String(m).padStart(2, '0')}:${x}` : `${m}:${x}`;
+}
+
+/** A restart of a game server by a timer: the chat is told how long is left, then the plugin closes the server. */
+export function ServerRestartCard() {
+  useI18n();
+  const [st, setSt] = useState<State | null>(null);
+  const [server, setServer] = useState(0);
+  const [time, setTime] = useState('5m');
+  const [busy, setBusy] = useState(false);
+  const [texts, setTexts] = useState<Texts | null>(null);
+  const [saved, setSaved] = useState<Texts | null>(null);
+  // the seconds left are counted from the moment of the answer, so the clock moves between polls
+  const [at, setAt] = useState(Date.now());
+  const [, tick] = useState(0);
+
+  const load = () => api<State>('/game-news/restart').then((d) => {
+    setSt(d); setAt(Date.now());
+    setTexts((x) => x ?? d.texts); setSaved((x) => x ?? d.texts);
+    setServer((s) => s || d.servers[0]?.id || 0);
+  }).catch(() => undefined);
+  usePoll(() => { tick((n) => n + 1); return load(); }, 3000);
+
+  const auto = useAutosave({
+    value: texts ?? { announce: '', now: '', cancel: '' },
+    saved: saved ?? { announce: '', now: '', cancel: '' },
+    delay: 900,
+    validate: (v) => (v.announce.trim() && v.now.trim() && v.cancel.trim() ? '' : t('gn.rr.empty')),
+    save: async (v) => { await api('/game-news/restart-texts', 'PUT', v); setSaved(v); },
+  });
+
+  if (!st || st.servers.length === 0) return null;
+  const start = async () => {
+    setBusy(true);
+    try { await api('/game-news/restart', 'POST', { serverId: server, time }); toast(t('gn.rr.started'), 'ok'); await load(); } catch (e) { toast(errText(e as Error), 'err'); } finally { setBusy(false); }
+  };
+  const cancel = async (id: number) => {
+    try { await api(`/game-news/restart/${id}`, 'DELETE'); await load(); } catch (e) { toast(errText(e as Error), 'err'); }
+  };
+  const elapsed = Math.round((Date.now() - at) / 1000);
+
+  return (
+    <FoldCard id="srvrestart" title={t('gn.rr.title')} summary={t('gn.rr.sum')} on={st.jobs.some((j) => j.state === 'counting')}>
+      <p className="text-sm font-semibold text-mute">{t('gn.rr.note')}</p>
+
+      {st.jobs.filter((j) => j.state !== 'sent' || j.left > -60).map((j) => (
+        <div key={j.serverId} className="flex flex-wrap items-center gap-3 rounded-xl border border-line px-3 py-2">
+          <span className="font-extrabold">{j.serverName}</span>
+          <span className="pill pill-warn">{j.state === 'counting' ? clock(j.left - elapsed) : j.state === 'due' ? t('gn.rr.due') : t('gn.rr.sent')}</span>
+          <span className="text-sm font-semibold text-mute">{t('gn.rr.by', { by: j.by || '—', src: j.source })}</span>
+          {j.state !== 'sent' && <button type="button" className="btn btn-ghost btn-sm ml-auto" onClick={() => void cancel(j.serverId)}>{t('gn.rr.cancel')}</button>}
+        </div>
+      ))}
+
+      <div className="flex flex-wrap items-end gap-3">
+        {st.servers.length > 1 && (
+          <Field label={t('gn.rr.server')}>
+            <select className="input" value={server} onChange={(e) => setServer(Number(e.target.value))}>
+              {st.servers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+          </Field>
+        )}
+        <Field label={t('gn.rr.time')}>
+          <input className="input w-32" value={time} maxLength={20} onChange={(e) => setTime(e.target.value)} />
+        </Field>
+        <button type="button" className="btn" disabled={busy || !time.trim()} onClick={() => void start()}>{t('gn.rr.start')}</button>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        {PRESETS.map((p) => <button key={p} type="button" className="chip-filter" onClick={() => setTime(p)}>{p}</button>)}
+      </div>
+
+      {texts && (
+        <div className="space-y-3">
+          <h4 className="font-extrabold">{t('gn.rr.words')}</h4>
+          <Field label={t('gn.rr.announce')}>
+            <input className="input" value={texts.announce} maxLength={300} onChange={(e) => setTexts({ ...texts, announce: e.target.value })} />
+          </Field>
+          <Field label={t('gn.rr.now')}>
+            <input className="input" value={texts.now} maxLength={300} onChange={(e) => setTexts({ ...texts, now: e.target.value })} />
+          </Field>
+          <Field label={t('gn.rr.cancelText')}>
+            <input className="input" value={texts.cancel} maxLength={300} onChange={(e) => setTexts({ ...texts, cancel: e.target.value })} />
+          </Field>
+          <SaveBadge status={auto.status} error={auto.error} retry={auto.retry} />
+        </div>
+      )}
+    </FoldCard>
   );
 }
 __COREGSM_EOF__
