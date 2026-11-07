@@ -5,6 +5,7 @@
  * {server} is filled in here, {name} (the nickname of the player) by the plugin.
  */
 import { getSetting, setSetting } from '../db.js';
+import { greenName } from './gameNewsLogic.js';
 
 export interface Welcome { enabled: boolean; text: string }
 
@@ -25,5 +26,6 @@ export function setWelcome(w: Welcome): void {
 export function welcomeFor(serverName: string): string {
   const w = getWelcome();
   if (!w.enabled || !w.text.trim()) return '';
-  return w.text.replace(/\{server\}/g, serverName.replace(/[<>]/g, '').slice(0, 60));
+  // the player's name is green unless the administrator coloured it; {server} is filled in here, {name} by the plugin
+  return greenName(w.text).replace(/\{server\}/g, serverName.replace(/[<>]/g, '').slice(0, 60));
 }

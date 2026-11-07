@@ -89,3 +89,12 @@ describe('preview variables', () => {
     expect(fillSample('{x}')).toBe('{x}');
   });
 });
+
+import { greenName } from '../src/gameNews';
+
+describe('green player name in the preview', () => {
+  it('draws {name} green in a greeting only', () => {
+    expect(fillSample('Привет, {name}', true)).toBe('Привет, <color=#5FD068>Игрок</color>');
+    expect(greenName('<color=#FF5555>{name}</color>')).toBe('<color=#FF5555>{name}</color>');
+  });
+});

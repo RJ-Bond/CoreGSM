@@ -1,13 +1,16 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent, type MouseEvent } from 'react';
 import { api } from '../api';
 import { confirmDialog, promptDialog } from '../confirm';
 import { t, useI18n } from '../i18n';
 import {
   MAX_VISIBLE, SWATCHES, TEMPLATES, VARIABLES, colorOpen, fillSample, isHex, parseNews, unbalanced, visibleText, wrapSelection,
 } from '../gameNews';
+import { readFrom, renderInto } from '../richNews';
 import { Field, errText, toast } from '../ui';
 
 const swatchName = (id: string) => t(`gn.c.${id}` as 'gn.c.info');
+// a click on a toolbar button must not take the selection out of the text
+const keep = (e: MouseEvent) => e.preventDefault();
 
 /** the text with its tags drawn as colour, bold and italic */
 export function Styled({ text }: { text: string }) {
@@ -26,7 +29,7 @@ export function NewsPreview({ text, welcome = false }: { text: string; welcome?:
   const shown = useMemo(() => fillSample(text, welcome), [text, welcome]);
   const has = useMemo(() => parseNews(shown).length > 0, [shown]);
   return (
-    <div className="panel space-y-3 p-5">
+    <div className="panel space-y-3 p-5 self-start">
       <h3 className="font-extrabold">{t('gn.preview')}</h3>
       <div className="rounded-xl p-4 font-semibold" style={{ background: '#15121c', color: '#e8e3f0' }} aria-live="polite">
         <div className="mb-1 text-xs font-bold uppercase tracking-wide" style={{ color: '#8f86a3' }}>{t('gn.chatLabel')}</div>
@@ -37,28 +40,75 @@ export function NewsPreview({ text, welcome = false }: { text: string; welcome?:
   );
 }
 
-/** a text box with a toolbar: colours, bold, italic, templates and a length counter */
+/**
+ * The editor of a game message. The box shows colours, bold and italic as they look (select a word, press a colour);
+ * the saved text keeps the tags. «Код» switches to the plain text with the tags for those who want them.
+ */
 export function NewsEditor({ value, onChange, templates = true, label, vars = VARIABLES, onCtrlEnter }: { value: string; onChange: (v: string) => void; templates?: boolean; label?: string; vars?: readonly string[]; onCtrlEnter?: () => void }) {
   useI18n();
   const [custom, setCustom] = useState('#FF8A00');
+  const [raw, setRaw] = useState(false);
   const area = useRef<HTMLTextAreaElement>(null);
+  const box = useRef<HTMLDivElement>(null);
+  // the last text the visual box produced: a different `value` comes from outside (a template, «use again») and is drawn
+  const lastOut = useRef<string | null>(null);
   const visible = visibleText(value).trim().length;
-
   const [mine, setMine] = useState<{ id: number; name: string; text: string }[]>([]);
 
+  useLayoutEffect(() => {
+    const el = box.current;
+    if (!el || raw || value === lastOut.current) return;
+    renderInto(el, value);
+    lastOut.current = value;
+  }, [value, raw]);
+
+  const emit = () => {
+    const el = box.current;
+    if (!el) return;
+    const s = readFrom(el);
+    if (!s) el.textContent = ''; // the browser leaves a stray <br> in an emptied box
+    lastOut.current = s;
+    onChange(s);
+  };
+  const run = (cmd: string, arg?: string) => {
+    const el = box.current;
+    if (!el) return;
+    el.focus();
+    try { document.execCommand('styleWithCSS', false, 'true'); } catch { /* old browser: <font> is read as well */ }
+    document.execCommand(cmd, false, arg);
+    emit();
+  };
+
+  // raw mode: tags around the selection of the text area
   const wrap = (open: string, close: string) => {
     const el = area.current;
     const r = wrapSelection(value, el?.selectionStart ?? value.length, el?.selectionEnd ?? value.length, open, close);
     onChange(r.text);
     requestAnimationFrame(() => { el?.focus(); el?.setSelectionRange(r.start, r.end); });
   };
-  // puts text at the cursor (or over the selection)
-  const insert = (s: string) => {
+  const insertRaw = (s: string) => {
     const el = area.current;
     const a = el?.selectionStart ?? value.length;
     const b = el?.selectionEnd ?? value.length;
     onChange(value.slice(0, a) + s + value.slice(b));
     requestAnimationFrame(() => { el?.focus(); el?.setSelectionRange(a + s.length, a + s.length); });
+  };
+
+  const colorize = (hex: string) => (raw ? wrap(colorOpen(hex), '</color>') : run('foreColor', hex));
+  const bold = () => (raw ? wrap('<b>', '</b>') : run('bold'));
+  const italic = () => (raw ? wrap('<i>', '</i>') : run('italic'));
+  const clearStyle = () => (raw ? onChange(visibleText(value)) : run('removeFormat'));
+  const insertVar = (s: string) => (raw ? insertRaw(s) : run('insertText', s));
+  const toggleRaw = () => { lastOut.current = null; setRaw((r) => !r); };
+
+  const onKeyDown = (e: KeyboardEvent) => {
+    if (e.key !== 'Enter') return;
+    e.preventDefault(); // the chat is one line
+    if (onCtrlEnter && (e.ctrlKey || e.metaKey)) onCtrlEnter();
+  };
+  const onPaste = (e: ClipboardEvent) => {
+    e.preventDefault();
+    document.execCommand('insertText', false, e.clipboardData.getData('text/plain').replace(/[\r\n]+/g, ' '));
   };
 
   const loadMine = useCallback(() => api<{ id: number; name: string; text: string }[]>('/game-news/templates').then(setMine).catch(() => undefined), []);
@@ -92,16 +142,34 @@ export function NewsEditor({ value, onChange, templates = true, label, vars = VA
       )}
 
       <Field label={label ?? t('gn.message')}>
-        <textarea
-          ref={area}
-          className="input min-h-32 font-mono text-sm"
-          value={value}
-          rows={5}
-          maxLength={700}
-          placeholder={t('gn.placeholder')}
-          onChange={(e) => onChange(e.target.value)}
-          onKeyDown={(e) => { if (onCtrlEnter && e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); onCtrlEnter(); } }}
-        />
+        {raw ? (
+          <textarea
+            ref={area}
+            className="input min-h-32 font-mono text-sm"
+            value={value}
+            rows={5}
+            maxLength={700}
+            placeholder={t('gn.placeholder')}
+            onChange={(e) => onChange(e.target.value)}
+            onKeyDown={(e) => { if (onCtrlEnter && e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); onCtrlEnter(); } }}
+          />
+        ) : (
+          <div
+            ref={box}
+            role="textbox"
+            tabIndex={0}
+            aria-multiline="false"
+            aria-label={label ?? t('gn.message')}
+            contentEditable
+            suppressContentEditableWarning
+            spellCheck={false}
+            data-placeholder={t('gn.placeholder')}
+            className="input rich-box min-h-32 text-sm"
+            onInput={emit}
+            onKeyDown={onKeyDown}
+            onPaste={onPaste}
+          />
+        )}
       </Field>
 
       <div className="flex flex-wrap items-center gap-2" role="group" aria-label={t('gn.colors')}>
@@ -113,20 +181,22 @@ export function NewsEditor({ value, onChange, templates = true, label, vars = VA
             style={{ background: s.hex }}
             title={swatchName(s.id)}
             aria-label={t('gn.colorize', { name: swatchName(s.id) })}
-            onClick={() => wrap(colorOpen(s.hex), '</color>')}
+            onMouseDown={keep}
+            onClick={() => colorize(s.hex)}
           />
         ))}
         <input className="input w-28 font-mono text-sm" value={custom} maxLength={7} aria-label={t('gn.customHex')} onChange={(e) => setCustom(e.target.value)} />
-        <button type="button" className="btn btn-soft btn-sm" disabled={!isHex(custom)} onClick={() => wrap(colorOpen(custom), '</color>')}>{t('gn.applyHex')}</button>
-        <button type="button" className="btn btn-soft btn-sm font-black" onClick={() => wrap('<b>', '</b>')} aria-label={t('gn.bold')}>B</button>
-        <button type="button" className="btn btn-soft btn-sm italic" onClick={() => wrap('<i>', '</i>')} aria-label={t('gn.italic')}>I</button>
-        <button type="button" className="btn btn-ghost btn-sm" onClick={() => onChange(visibleText(value))}>{t('gn.clearTags')}</button>
+        <button type="button" className="btn btn-soft btn-sm" disabled={!isHex(custom)} onMouseDown={keep} onClick={() => colorize(custom)}>{t('gn.applyHex')}</button>
+        <button type="button" className="btn btn-soft btn-sm font-black" onMouseDown={keep} onClick={bold} aria-label={t('gn.bold')}>B</button>
+        <button type="button" className="btn btn-soft btn-sm italic" onMouseDown={keep} onClick={italic} aria-label={t('gn.italic')}>I</button>
+        <button type="button" className="btn btn-ghost btn-sm" onMouseDown={keep} onClick={clearStyle}>{t('gn.clearTags')}</button>
+        <button type="button" className="btn btn-ghost btn-sm ml-auto font-mono" aria-pressed={raw} onClick={toggleRaw}>{raw ? t('gn.rawOff') : t('gn.rawOn')}</button>
       </div>
 
       <div className="flex flex-wrap items-center gap-2" role="group" aria-label={t('gn.vars')}>
         <span className="text-sm font-bold text-mute">{t('gn.vars')}:</span>
         {vars.map((v) => (
-          <button key={v} type="button" className="chip-filter font-mono" title={t(`gn.v.${v}` as 'gn.v.server')} onClick={() => insert(`{${v}}`)}>{`{${v}}`}</button>
+          <button key={v} type="button" className="chip-filter font-mono" title={t(`gn.v.${v}` as 'gn.v.server')} onMouseDown={keep} onClick={() => insertVar(`{${v}}`)}>{`{${v}}`}</button>
         ))}
       </div>
 

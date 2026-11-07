@@ -4,7 +4,7 @@ import { NewsEditor, NewsPreview, Styled } from '../components/NewsEditor';
 import { confirmDialog } from '../confirm';
 import { t, useI18n } from '../i18n';
 import { pluginConfig, validateNews, versionLess, type NewsLogRow, type NewsSendResult, type NewsServerInfo, type NewsStatus } from '../gameNews';
-import { AdminPage, ErrorLine, IconNews, IconSettings, LoadError, Modal, PageHead, Spinner, errText, toast, usePoll } from '../ui';
+import { AdminPage, ErrorLine, IconNews, IconSettings, LoadError, Modal, PageHead, Spinner, errText, navigate, toast, usePoll } from '../ui';
 import GameNewsRules from './GameNewsRules';
 
 interface NewsState { servers: NewsServerInfo[]; log: NewsLogRow[]; pluginLatest: string }
@@ -25,11 +25,13 @@ const STATUS: Record<NewsStatus, { text: 'gn.h.queued' | 'gn.h.ok' | 'gn.h.expir
 };
 
 /** «Новости в игру»: a message for the in-game chat (the CoreGSM game plugin picks it up), sent now or by a schedule. */
-export default function GameNewsPage() {
+export default function GameNewsPage({ sub = '' }: { sub?: string }) {
   useI18n();
   const [data, setData] = useState<NewsState | null>(null);
   const [error, setError] = useState('');
-  const [tab, setTab] = useState<'send' | 'auto'>('send');
+  // the tab is part of the address: /admin/gamenews, /admin/gamenews/auto, /events, /history
+  const tab = (['auto', 'events', 'history'] as const).find((x) => x === sub) ?? 'send';
+  const goTab = (x: 'send' | 'auto' | 'events' | 'history') => navigate(x === 'send' ? '/admin/gamenews' : `/admin/gamenews/${x}`);
   // the draft survives a switch of the page or a reload (kept in this browser only)
   const [text, setText] = useState(() => { try { return localStorage.getItem('coregsm.gamenews.draft') ?? ''; } catch { return ''; } });
   useEffect(() => { try { if (text) localStorage.setItem('coregsm.gamenews.draft', text); else localStorage.removeItem('coregsm.gamenews.draft'); } catch { /* private mode */ } }, [text]);
@@ -89,12 +91,13 @@ export default function GameNewsPage() {
 
       {data && (
         <div className="flex flex-wrap gap-2" role="tablist" aria-label={t('gn.title')}>
-          <button type="button" role="tab" aria-selected={tab === 'send'} className={`chip-filter ${tab === 'send' ? 'on' : ''}`} onClick={() => setTab('send')}>{t('gn.tab.send')}</button>
-          <button type="button" role="tab" aria-selected={tab === 'auto'} className={`chip-filter ${tab === 'auto' ? 'on' : ''}`} onClick={() => setTab('auto')}>{t('gn.tab.auto')}</button>
+          {(['send', 'auto', 'events', 'history'] as const).map((x) => (
+            <button key={x} type="button" role="tab" aria-selected={tab === x} className={`chip-filter ${tab === x ? 'on' : ''}`} onClick={() => goTab(x)}>{t(`gn.tab.${x}` as 'gn.tab.send')}</button>
+          ))}
         </div>
       )}
 
-      {data && tab === 'auto' && <GameNewsRules servers={data.servers} />}
+      {data && (tab === 'auto' || tab === 'events') && <GameNewsRules servers={data.servers} part={tab === 'auto' ? 'rules' : 'events'} />}
 
       {data && tab === 'send' && (
         <>
@@ -116,7 +119,10 @@ export default function GameNewsPage() {
                           <input type="checkbox" disabled={!s.hasToken} checked={picked.includes(s.id)} onChange={() => toggle(s.id)} />
                           <span className="min-w-0 wrap-break-word">
                             {s.name}
-                            {s.name !== s.address && <span className="block text-xs font-semibold text-mute">{s.address}</span>}
+                            <span className="block text-xs font-semibold text-mute">
+                              {s.name !== s.address && s.address}
+                              {s.players != null && <>{s.name !== s.address && ' · '}{t('gn.players', { n: s.players, max: s.maxPlayers ?? 0 })}</>}
+                            </span>
                           </span>
                         </label>
                         <span
@@ -160,27 +166,31 @@ export default function GameNewsPage() {
             </section>
           </form>
 
-          <section className="panel overflow-hidden">
-            <h3 className="px-5 pt-4 font-extrabold">{t('gn.history')}</h3>
-            {data.log.length === 0 && <p className="px-5 py-4 text-sm font-semibold text-mute">{t('gn.historyEmpty')}</p>}
-            <ul className="divide-y divide-line">
-              {data.log.map((r) => (
-                <li key={r.id} className="flex flex-wrap items-start gap-x-4 gap-y-1 px-5 py-3">
-                  <div className="min-w-0 flex-1 basis-60">
-                    <div className="flex flex-wrap items-center gap-2 text-sm font-bold">
-                      <span className={STATUS[r.status].cls}>{t(STATUS[r.status].text)}</span>
-                      <span>{r.serverName}</span>
-                      <span className="font-semibold text-mute">{new Date(r.sentAt).toLocaleString()} · {r.sentBy || '—'}</span>
-                    </div>
-                    <p className="mt-1 wrap-break-word text-sm"><Styled text={r.text} /></p>
-                    {(r.status === 'failed' || r.status === 'expired') && r.error && <p className="text-sm font-semibold text-danger">{r.error}</p>}
-                  </div>
-                  <button type="button" className="btn btn-soft btn-sm" onClick={() => { setText(r.text); setTab('send'); }}>{t('gn.reuse')}</button>
-                </li>
-              ))}
-            </ul>
-          </section>
+
         </>
+      )}
+
+      {data && tab === 'history' && (
+     <section className="panel overflow-hidden">
+       <h3 className="px-5 pt-4 font-extrabold">{t('gn.history')}</h3>
+       {data.log.length === 0 && <p className="px-5 py-4 text-sm font-semibold text-mute">{t('gn.historyEmpty')}</p>}
+       <ul className="divide-y divide-line">
+         {data.log.map((r) => (
+           <li key={r.id} className="flex flex-wrap items-start gap-x-4 gap-y-1 px-5 py-3">
+             <div className="min-w-0 flex-1 basis-60">
+               <div className="flex flex-wrap items-center gap-2 text-sm font-bold">
+                 <span className={STATUS[r.status].cls}>{t(STATUS[r.status].text)}</span>
+                 <span>{r.serverName}</span>
+                 <span className="font-semibold text-mute">{new Date(r.sentAt).toLocaleString()} · {r.sentBy || '—'}</span>
+               </div>
+               <p className="mt-1 wrap-break-word text-sm"><Styled text={r.text} /></p>
+               {(r.status === 'failed' || r.status === 'expired') && r.error && <p className="text-sm font-semibold text-danger">{r.error}</p>}
+             </div>
+             <button type="button" className="btn btn-soft btn-sm" onClick={() => { setText(r.text); goTab('send'); }}>{t('gn.reuse')}</button>
+           </li>
+         ))}
+       </ul>
+     </section>
       )}
 
       {settingsServer && <PluginModal server={settingsServer} onClose={() => setSettingsFor(null)} onChanged={() => void load()} />}

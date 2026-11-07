@@ -28,7 +28,7 @@ function scheduleLabel(r: RuleInfo): string {
 }
 
 /** «Автообъявления»: a message written once and sent by a schedule, without pressing «Отправить». */
-export default function GameNewsRules({ servers }: { servers: NewsServerInfo[] }) {
+export default function GameNewsRules({ servers, part }: { servers: NewsServerInfo[]; part: 'rules' | 'events' }) {
   useI18n();
   const [data, setData] = useState<RulesState | null>(null);
   const [error, setError] = useState('');
@@ -70,12 +70,14 @@ export default function GameNewsRules({ servers }: { servers: NewsServerInfo[] }
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <p className="min-w-0 flex-1 basis-80 text-sm font-semibold text-mute">{t('gn.a.intro')}</p>
-        <button type="button" className="btn" onClick={openNew}><IconPlus size={16} />{t('gn.a.add')}</button>
-      </div>
+      {part === 'rules' && (
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <p className="min-w-0 flex-1 basis-80 text-sm font-semibold text-mute">{t('gn.a.intro')}</p>
+          <button type="button" className="btn" onClick={openNew}><IconPlus size={16} />{t('gn.a.add')}</button>
+        </div>
+      )}
 
-      {data && (
+      {data && part === 'events' && (
         <label className="panel flex items-start gap-3 p-4 font-bold">
           <input className="mt-1" type="checkbox" checked={data.restartCountdown} onChange={(e) => void setCountdown(e.target.checked)} />
           <span>
@@ -85,16 +87,16 @@ export default function GameNewsRules({ servers }: { servers: NewsServerInfo[] }
         </label>
       )}
 
-      {data && <WelcomeCard initial={data.welcome} />}
+      {data && part === 'events' && <WelcomeCard initial={data.welcome} />}
 
       {error && !data ? <LoadError error={error} onRetry={() => void load()} /> : <ErrorLine text={error} />}
       {!data && !error && <div className="skeleton panel h-32" aria-busy="true" />}
 
-      {data && data.rules.length === 0 && (
+      {data && part === 'rules' && data.rules.length === 0 && (
         <StateView title={t('gn.a.empty')} text={t('gn.a.emptyText')} action={<button type="button" className="btn" onClick={openNew}>{t('gn.a.add')}</button>} />
       )}
 
-      {data && data.rules.length > 0 && (
+      {data && part === 'rules' && data.rules.length > 0 && (
         <ul className="panel divide-y divide-line overflow-hidden">
           {data.rules.map((r) => (
             <li key={r.id} className="flex flex-wrap items-start gap-x-4 gap-y-2 px-5 py-4">

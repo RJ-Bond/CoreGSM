@@ -268,6 +268,17 @@ CREATE TABLE IF NOT EXISTS game_news_templates (
   created_at INTEGER NOT NULL
 );`),
   },
+  {
+    version: 20,
+    name: 'game_news.heartbeat',
+    // what the plugin reports with every poll: the name of the server in the game, who is playing and the limit
+    // (the panel cannot always query the server itself, e.g. a server in a home network): plugin_players -1 = unknown
+    up: (db) => {
+      addColumn(db, 'game_news_targets', 'plugin_name', "TEXT NOT NULL DEFAULT ''");
+      addColumn(db, 'game_news_targets', 'plugin_players', 'INTEGER NOT NULL DEFAULT -1');
+      addColumn(db, 'game_news_targets', 'plugin_max', 'INTEGER NOT NULL DEFAULT 0');
+    },
+  },
 ];
 
 export const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;

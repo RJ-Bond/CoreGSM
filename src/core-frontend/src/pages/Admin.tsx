@@ -290,7 +290,7 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
         {!home && current === 'servers' && <ServersManage sub={tail} />}
         {!home && current === 'discord' && <DiscordPage sub={tail} />}
         {!home && current === 'news' && <NewsPage sub={tail} />}
-        {!home && current === 'gamenews' && <GameNewsPage />}
+        {!home && current === 'gamenews' && <GameNewsPage sub={tail} />}
         {!home && current === 'alerts' && <AlertsPage />}
         {!home && current === 'maintenance' && <MaintenancePage />}
         {!home && current === 'cards' && <CardsPage />}

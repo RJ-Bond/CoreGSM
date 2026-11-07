@@ -54,3 +54,15 @@ describe('welcome text', () => {
     assert.equal(checkNews('<color=#5FD068>Привет, {name}!</color>').text, '<color=#5fd068>Привет, {name}!</color>');
   });
 });
+
+import { greenName } from '../src/gamenews/gameNewsLogic.ts';
+
+describe('green player name', () => {
+  it('colours {name} that is not coloured yet', () => {
+    assert.equal(greenName('Привет, {name}!'), 'Привет, <color=#5FD068>{name}</color>!');
+    assert.equal(greenName('{name} и {name}'), '<color=#5FD068>{name}</color> и <color=#5FD068>{name}</color>');
+  });
+  it('leaves a name the administrator coloured', () => {
+    assert.equal(greenName('<color=#FF5555>{name}</color> ok {name}'), '<color=#FF5555>{name}</color> ok <color=#5FD068>{name}</color>');
+  });
+});

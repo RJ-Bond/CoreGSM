@@ -5,7 +5,7 @@
 
 export const MAX_VISIBLE = 400;
 
-export interface NewsServerInfo { id: number; name: string; address: string; game: string; supported: boolean; hasToken: boolean; lastSeen: number | null; online: boolean; pluginVersion: string }
+export interface NewsServerInfo { id: number; name: string; address: string; game: string; supported: boolean; hasToken: boolean; lastSeen: number | null; online: boolean; pluginVersion: string; players: number | null; maxPlayers: number | null }
 export type NewsStatus = 'queued' | 'delivered' | 'expired' | 'failed';
 export interface NewsLogRow { id: number; serverId: number | null; serverName: string; text: string; status: NewsStatus; error: string; sentBy: string; sentAt: number; deliveredAt: number | null }
 export interface NewsSendResult { text: string; results: { serverId: number; serverName: string; queued: boolean; online: boolean; error: string }[] }
@@ -168,8 +168,24 @@ const SAMPLE: Record<(typeof VARIABLES)[number], string> = { server: 'Мой с�
 /** the variables of the greeting: {name} is the nickname of the joining player (the plugin fills it in) */
 export const WELCOME_VARIABLES = ['name', 'server'] as const;
 
-/** the preview shows sample values for the variables ({name} only in a greeting) */
+/** the colour of a player's name in the greeting (the same as the backend uses) */
+export const NAME_COLOR = '#5FD068';
+
+/** {name} outside any colour tag becomes green (a name the administrator coloured by hand is left alone) */
+export function greenName(text: string): string {
+  let depth = 0;
+  return text
+    .split(/(<\/?color(?:=#[0-9a-fA-F]{6})?>)/i)
+    .map((part) => {
+      if (/^<color=/i.test(part)) { depth++; return part; }
+      if (/^<\/color>/i.test(part)) { depth = Math.max(0, depth - 1); return part; }
+      return depth === 0 ? part.replace(/\{name\}/g, `<color=${NAME_COLOR}>{name}</color>`) : part;
+    })
+    .join('');
+}
+
+/** the preview shows sample values for the variables ({name} only in a greeting, in green as in the game) */
 export function fillSample(text: string, welcome = false): string {
   const s = text.replace(/\{(server|online|max|time)\}/g, (_m, k: (typeof VARIABLES)[number]) => SAMPLE[k]);
-  return welcome ? s.replace(/\{name\}/g, 'Игрок') : s;
+  return welcome ? greenName(s).replace(/\{name\}/g, 'Игрок') : s;
 }

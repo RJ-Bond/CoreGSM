@@ -19,14 +19,14 @@ export const QUEUE_TTL_MS = 5 * 60_000;
 /** the plugin counts as «online» when it polled within this time */
 export const ONLINE_MS = 30_000;
 /** the version of the game plugin this panel was built for: an older plugin is shown as outdated */
-export const PLUGIN_VERSION = '0.3.0';
+export const PLUGIN_VERSION = '0.4.0';
 /** the games the plugin exists for */
 export const SUPPORTED_GAMES = new Set(['vrising']);
 const PULL_MIN_GAP_MS = 800;
 const PULL_BATCH = 5;
 const MIN_GAP_MS = 2000;
 
-interface TargetRow { server_id: number; token_hash: string; last_seen: number; plugin_version: string }
+interface TargetRow { server_id: number; token_hash: string; last_seen: number; plugin_version: string; plugin_name: string; plugin_players: number; plugin_max: number }
 interface LogRow { id: number; server_id: number | null; server_name: string; text: string; status: string; error: string; sent_by: string; sent_at: number; delivered_at: number | null }
 
 let lastSend = 0;
@@ -34,8 +34,21 @@ const lastPull = new Map<number, number>();
 
 const sha256 = (s: string) => crypto.createHash('sha256').update(s).digest('hex');
 const actor = (req: Request) => (req as Request & { user?: { username?: string } }).user?.username ?? '';
+// the name of a server: the one typed in the panel, the one from the query, the one the game plugin reported, host:port
+const NAME_SQL = "COALESCE(NULLIF(s.name, ''), NULLIF(st.name, ''), NULLIF(t.plugin_name, ''), s.host || ':' || s.port)";
 const serverLabel = (id: number) =>
-  (db.prepare("SELECT COALESCE(NULLIF(s.name, ''), NULLIF(st.name, ''), s.host || ':' || s.port) AS n FROM servers s LEFT JOIN status st ON st.server_id = s.id WHERE s.id = ?").get(id) as { n: string } | undefined)?.n ?? `#${id}`;
+  (db.prepare(`SELECT ${NAME_SQL} AS n FROM servers s LEFT JOIN status st ON st.server_id = s.id LEFT JOIN game_news_targets t ON t.server_id = s.id WHERE s.id = ?`).get(id) as { n: string } | undefined)?.n ?? `#${id}`;
+
+/**
+ * Who is playing: what the game plugin reports while it is online (it sees the server from inside), else the last query
+ * of the panel (a server in a home network is not reachable for a panel on the internet).
+ */
+function liveState(id: number, now: number): { online: boolean; players: number; max: number } | undefined {
+  const t = db.prepare('SELECT last_seen, plugin_players, plugin_max FROM game_news_targets WHERE server_id = ?').get(id) as Pick<TargetRow, 'last_seen' | 'plugin_players' | 'plugin_max'> | undefined;
+  if (t && t.last_seen > 0 && now - t.last_seen < ONLINE_MS * 2 && t.plugin_players >= 0) return { online: true, players: t.plugin_players, max: t.plugin_max };
+  const s = db.prepare('SELECT online, players, max_players FROM status WHERE server_id = ?').get(id) as { online: number; players: number; max_players: number } | undefined;
+  return s ? { online: !!s.online, players: s.players, max: s.max_players } : undefined;
+}
 
 /** the current time of day in the panel's time zone, «20:05» */
 function clock(now: number): string {
@@ -79,10 +92,10 @@ export function queueNews(text: string, serverIds: number[], by: string, now: nu
         results.push({ serverId: id, serverName: name, queued: false, online: false, error });
         continue;
       }
-      const s = db.prepare('SELECT online, players, max_players FROM status WHERE server_id = ?').get(id) as { online: number; players: number; max_players: number } | undefined;
+      const s = liveState(id, now);
       if (opts.onlyOnline && (!s || !s.online || s.players <= 0)) continue; // nobody to read it
       // {server} {online} {max} {time} are filled in for each server
-      const filled = applyVars(text, { server: name, online: String(s?.players ?? 0), max: String(s?.max_players ?? 0), time: clock(now) });
+      const filled = applyVars(text, { server: name, online: String(s?.players ?? 0), max: String(s?.max ?? 0), time: clock(now) });
       insert.run(id, name, filled, 'queued', '', by, now);
       results.push({ serverId: id, serverName: name, queued: true, online: t.last_seen > 0 && now - t.last_seen < ONLINE_MS, error: '' });
     }
@@ -93,7 +106,7 @@ export function queueNews(text: string, serverIds: number[], by: string, now: nu
 
 export function registerGameNews({ app, admin }: { app: Express; admin: RequestHandler }): void {
   const servers = () => {
-    const rows = db.prepare("SELECT s.id, COALESCE(NULLIF(s.name, ''), NULLIF(st.name, ''), s.host || ':' || s.port) AS name, s.host || ':' || s.port AS address, s.game FROM servers s LEFT JOIN status st ON st.server_id = s.id ORDER BY s.id").all() as { id: number; name: string; address: string; game: string }[];
+    const rows = db.prepare(`SELECT s.id, ${NAME_SQL} AS name, s.host || ':' || s.port AS address, s.game FROM servers s LEFT JOIN status st ON st.server_id = s.id LEFT JOIN game_news_targets t ON t.server_id = s.id ORDER BY s.id`).all() as { id: number; name: string; address: string; game: string }[];
     const targets = new Map((db.prepare('SELECT * FROM game_news_targets').all() as TargetRow[]).map((t) => [t.server_id, t]));
     const now = Date.now();
     return rows.map((s) => {
@@ -104,6 +117,8 @@ export function registerGameNews({ app, admin }: { app: Express; admin: RequestH
         lastSeen: t?.last_seen || null,
         online: !!t && t.last_seen > 0 && now - t.last_seen < ONLINE_MS,
         pluginVersion: t?.plugin_version ?? '',
+        players: liveState(s.id, now)?.players ?? null,
+        maxPlayers: liveState(s.id, now)?.max ?? null,
       };
     });
   };
@@ -178,7 +193,14 @@ export function registerGameNews({ app, admin }: { app: Express; admin: RequestH
     lastPull.set(t.server_id, now);
 
     const version = String(req.headers['x-coregsm-version'] ?? '').replace(/[^0-9A-Za-z.+-]/g, '').slice(0, 20);
-    db.prepare('UPDATE game_news_targets SET last_seen = ?, plugin_version = ? WHERE server_id = ?').run(now, version, t.server_id);
+    // what the plugin reports about its server (all optional: an older plugin sends nothing)
+    const num = (h: string, max: number) => { const n = Number.parseInt(String(req.headers[h] ?? ''), 10); return Number.isFinite(n) && n >= 0 && n <= max ? n : -1; };
+    let pname = '';
+    try { pname = decodeURIComponent(String(req.headers['x-coregsm-name'] ?? '')).replace(/[\u0000-\u001f<>]/g, '').trim().slice(0, 60); } catch { pname = ''; }
+    const players = num('x-coregsm-players', 10_000);
+    const pmax = Math.max(0, num('x-coregsm-max', 10_000));
+    db.prepare("UPDATE game_news_targets SET last_seen = ?, plugin_version = ?, plugin_name = CASE WHEN ? <> '' THEN ? ELSE plugin_name END, plugin_players = ?, plugin_max = CASE WHEN ? > 0 THEN ? ELSE plugin_max END WHERE server_id = ?")
+      .run(now, version, pname, pname, players, pmax, pmax, t.server_id);
 
     expireOld(now);
     const rows = db.prepare("SELECT id, text FROM game_news_log WHERE server_id = ? AND status = 'queued' ORDER BY id LIMIT ?").all(t.server_id, PULL_BATCH) as { id: number; text: string }[];

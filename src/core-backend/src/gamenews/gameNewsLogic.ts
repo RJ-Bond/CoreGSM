@@ -67,3 +67,19 @@ export type Vars = Record<(typeof VARIABLES)[number], string>;
 export function applyVars(text: string, vars: Vars): string {
   return text.replace(/\{(server|online|max|time)\}/g, (_m, k: keyof Vars) => vars[k].replace(/[<>]/g, '').slice(0, 60));
 }
+
+/** the colour of a player's name in the greeting */
+export const NAME_COLOR = '#5FD068';
+
+/** {name} outside any colour tag becomes green (a name the administrator coloured by hand is left alone) */
+export function greenName(text: string): string {
+  let depth = 0;
+  return text
+    .split(/(<\/?color(?:=#[0-9a-fA-F]{6})?>)/i)
+    .map((part) => {
+      if (/^<color=/i.test(part)) { depth++; return part; }
+      if (/^<\/color>/i.test(part)) { depth = Math.max(0, depth - 1); return part; }
+      return depth === 0 ? part.replace(/\{name\}/g, `<color=${NAME_COLOR}>{name}</color>`) : part;
+    })
+    .join('');
+}

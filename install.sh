@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="d52c21f5f007"
+COREGSM_BUILD="9161f6227ecf"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.69"
+COREGSM_VERSION="1.1.70"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -23867,14 +23867,14 @@ export const QUEUE_TTL_MS = 5 * 60_000;
 /** the plugin counts as «online» when it polled within this time */
 export const ONLINE_MS = 30_000;
 /** the version of the game plugin this panel was built for: an older plugin is shown as outdated */
-export const PLUGIN_VERSION = '0.3.0';
+export const PLUGIN_VERSION = '0.4.0';
 /** the games the plugin exists for */
 export const SUPPORTED_GAMES = new Set(['vrising']);
 const PULL_MIN_GAP_MS = 800;
 const PULL_BATCH = 5;
 const MIN_GAP_MS = 2000;
 
-interface TargetRow { server_id: number; token_hash: string; last_seen: number; plugin_version: string }
+interface TargetRow { server_id: number; token_hash: string; last_seen: number; plugin_version: string; plugin_name: string; plugin_players: number; plugin_max: number }
 interface LogRow { id: number; server_id: number | null; server_name: string; text: string; status: string; error: string; sent_by: string; sent_at: number; delivered_at: number | null }
 
 let lastSend = 0;
@@ -23882,8 +23882,21 @@ const lastPull = new Map<number, number>();
 
 const sha256 = (s: string) => crypto.createHash('sha256').update(s).digest('hex');
 const actor = (req: Request) => (req as Request & { user?: { username?: string } }).user?.username ?? '';
+// the name of a server: the one typed in the panel, the one from the query, the one the game plugin reported, host:port
+const NAME_SQL = "COALESCE(NULLIF(s.name, ''), NULLIF(st.name, ''), NULLIF(t.plugin_name, ''), s.host || ':' || s.port)";
 const serverLabel = (id: number) =>
-  (db.prepare("SELECT COALESCE(NULLIF(s.name, ''), NULLIF(st.name, ''), s.host || ':' || s.port) AS n FROM servers s LEFT JOIN status st ON st.server_id = s.id WHERE s.id = ?").get(id) as { n: string } | undefined)?.n ?? `#${id}`;
+  (db.prepare(`SELECT ${NAME_SQL} AS n FROM servers s LEFT JOIN status st ON st.server_id = s.id LEFT JOIN game_news_targets t ON t.server_id = s.id WHERE s.id = ?`).get(id) as { n: string } | undefined)?.n ?? `#${id}`;
+
+/**
+ * Who is playing: what the game plugin reports while it is online (it sees the server from inside), else the last query
+ * of the panel (a server in a home network is not reachable for a panel on the internet).
+ */
+function liveState(id: number, now: number): { online: boolean; players: number; max: number } | undefined {
+  const t = db.prepare('SELECT last_seen, plugin_players, plugin_max FROM game_news_targets WHERE server_id = ?').get(id) as Pick<TargetRow, 'last_seen' | 'plugin_players' | 'plugin_max'> | undefined;
+  if (t && t.last_seen > 0 && now - t.last_seen < ONLINE_MS * 2 && t.plugin_players >= 0) return { online: true, players: t.plugin_players, max: t.plugin_max };
+  const s = db.prepare('SELECT online, players, max_players FROM status WHERE server_id = ?').get(id) as { online: number; players: number; max_players: number } | undefined;
+  return s ? { online: !!s.online, players: s.players, max: s.max_players } : undefined;
+}
 
 /** the current time of day in the panel's time zone, «20:05» */
 function clock(now: number): string {
@@ -23927,10 +23940,10 @@ export function queueNews(text: string, serverIds: number[], by: string, now: nu
         results.push({ serverId: id, serverName: name, queued: false, online: false, error });
         continue;
       }
-      const s = db.prepare('SELECT online, players, max_players FROM status WHERE server_id = ?').get(id) as { online: number; players: number; max_players: number } | undefined;
+      const s = liveState(id, now);
       if (opts.onlyOnline && (!s || !s.online || s.players <= 0)) continue; // nobody to read it
       // {server} {online} {max} {time} are filled in for each server
-      const filled = applyVars(text, { server: name, online: String(s?.players ?? 0), max: String(s?.max_players ?? 0), time: clock(now) });
+      const filled = applyVars(text, { server: name, online: String(s?.players ?? 0), max: String(s?.max ?? 0), time: clock(now) });
       insert.run(id, name, filled, 'queued', '', by, now);
       results.push({ serverId: id, serverName: name, queued: true, online: t.last_seen > 0 && now - t.last_seen < ONLINE_MS, error: '' });
     }
@@ -23941,7 +23954,7 @@ export function queueNews(text: string, serverIds: number[], by: string, now: nu
 
 export function registerGameNews({ app, admin }: { app: Express; admin: RequestHandler }): void {
   const servers = () => {
-    const rows = db.prepare("SELECT s.id, COALESCE(NULLIF(s.name, ''), NULLIF(st.name, ''), s.host || ':' || s.port) AS name, s.host || ':' || s.port AS address, s.game FROM servers s LEFT JOIN status st ON st.server_id = s.id ORDER BY s.id").all() as { id: number; name: string; address: string; game: string }[];
+    const rows = db.prepare(`SELECT s.id, ${NAME_SQL} AS name, s.host || ':' || s.port AS address, s.game FROM servers s LEFT JOIN status st ON st.server_id = s.id LEFT JOIN game_news_targets t ON t.server_id = s.id ORDER BY s.id`).all() as { id: number; name: string; address: string; game: string }[];
     const targets = new Map((db.prepare('SELECT * FROM game_news_targets').all() as TargetRow[]).map((t) => [t.server_id, t]));
     const now = Date.now();
     return rows.map((s) => {
@@ -23952,6 +23965,8 @@ export function registerGameNews({ app, admin }: { app: Express; admin: RequestH
         lastSeen: t?.last_seen || null,
         online: !!t && t.last_seen > 0 && now - t.last_seen < ONLINE_MS,
         pluginVersion: t?.plugin_version ?? '',
+        players: liveState(s.id, now)?.players ?? null,
+        maxPlayers: liveState(s.id, now)?.max ?? null,
       };
     });
   };
@@ -24026,7 +24041,14 @@ export function registerGameNews({ app, admin }: { app: Express; admin: RequestH
     lastPull.set(t.server_id, now);
 
     const version = String(req.headers['x-coregsm-version'] ?? '').replace(/[^0-9A-Za-z.+-]/g, '').slice(0, 20);
-    db.prepare('UPDATE game_news_targets SET last_seen = ?, plugin_version = ? WHERE server_id = ?').run(now, version, t.server_id);
+    // what the plugin reports about its server (all optional: an older plugin sends nothing)
+    const num = (h: string, max: number) => { const n = Number.parseInt(String(req.headers[h] ?? ''), 10); return Number.isFinite(n) && n >= 0 && n <= max ? n : -1; };
+    let pname = '';
+    try { pname = decodeURIComponent(String(req.headers['x-coregsm-name'] ?? '')).replace(/[\u0000-\u001f<>]/g, '').trim().slice(0, 60); } catch { pname = ''; }
+    const players = num('x-coregsm-players', 10_000);
+    const pmax = Math.max(0, num('x-coregsm-max', 10_000));
+    db.prepare("UPDATE game_news_targets SET last_seen = ?, plugin_version = ?, plugin_name = CASE WHEN ? <> '' THEN ? ELSE plugin_name END, plugin_players = ?, plugin_max = CASE WHEN ? > 0 THEN ? ELSE plugin_max END WHERE server_id = ?")
+      .run(now, version, pname, pname, players, pmax, pmax, t.server_id);
 
     expireOld(now);
     const rows = db.prepare("SELECT id, text FROM game_news_log WHERE server_id = ? AND status = 'queued' ORDER BY id LIMIT ?").all(t.server_id, PULL_BATCH) as { id: number; text: string }[];
@@ -24109,6 +24131,22 @@ export type Vars = Record<(typeof VARIABLES)[number], string>;
 /** {server} {online} {max} {time} become their values; unknown {words} stay as they are. The values never hold tags. */
 export function applyVars(text: string, vars: Vars): string {
   return text.replace(/\{(server|online|max|time)\}/g, (_m, k: keyof Vars) => vars[k].replace(/[<>]/g, '').slice(0, 60));
+}
+
+/** the colour of a player's name in the greeting */
+export const NAME_COLOR = '#5FD068';
+
+/** {name} outside any colour tag becomes green (a name the administrator coloured by hand is left alone) */
+export function greenName(text: string): string {
+  let depth = 0;
+  return text
+    .split(/(<\/?color(?:=#[0-9a-fA-F]{6})?>)/i)
+    .map((part) => {
+      if (/^<color=/i.test(part)) { depth++; return part; }
+      if (/^<\/color>/i.test(part)) { depth = Math.max(0, depth - 1); return part; }
+      return depth === 0 ? part.replace(/\{name\}/g, `<color=${NAME_COLOR}>{name}</color>`) : part;
+    })
+    .join('');
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/gamenews"
@@ -24423,6 +24461,7 @@ __COREGSM_EOF__
  * {server} is filled in here, {name} (the nickname of the player) by the plugin.
  */
 import { getSetting, setSetting } from '../db.js';
+import { greenName } from './gameNewsLogic.js';
 
 export interface Welcome { enabled: boolean; text: string }
 
@@ -24443,7 +24482,8 @@ export function setWelcome(w: Welcome): void {
 export function welcomeFor(serverName: string): string {
   const w = getWelcome();
   if (!w.enabled || !w.text.trim()) return '';
-  return w.text.replace(/\{server\}/g, serverName.replace(/[<>]/g, '').slice(0, 60));
+  // the player's name is green unless the administrator coloured it; {server} is filled in here, {name} by the plugin
+  return greenName(w.text).replace(/\{server\}/g, serverName.replace(/[<>]/g, '').slice(0, 60));
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
@@ -27455,6 +27495,17 @@ CREATE TABLE IF NOT EXISTS game_news_templates (
   created_by TEXT NOT NULL DEFAULT '',
   created_at INTEGER NOT NULL
 );`),
+  },
+  {
+    version: 20,
+    name: 'game_news.heartbeat',
+    // what the plugin reports with every poll: the name of the server in the game, who is playing and the limit
+    // (the panel cannot always query the server itself, e.g. a server in a home network): plugin_players -1 = unknown
+    up: (db) => {
+      addColumn(db, 'game_news_targets', 'plugin_name', "TEXT NOT NULL DEFAULT ''");
+      addColumn(db, 'game_news_targets', 'plugin_players', 'INTEGER NOT NULL DEFAULT -1');
+      addColumn(db, 'game_news_targets', 'plugin_max', 'INTEGER NOT NULL DEFAULT 0');
+    },
   },
 ];
 
@@ -122266,16 +122317,19 @@ export function MotionToggle() {
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components"
   cat > "$APP_DIR/core-frontend/src/components/NewsEditor.tsx" << '__COREGSM_EOF__'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent, type MouseEvent } from 'react';
 import { api } from '../api';
 import { confirmDialog, promptDialog } from '../confirm';
 import { t, useI18n } from '../i18n';
 import {
   MAX_VISIBLE, SWATCHES, TEMPLATES, VARIABLES, colorOpen, fillSample, isHex, parseNews, unbalanced, visibleText, wrapSelection,
 } from '../gameNews';
+import { readFrom, renderInto } from '../richNews';
 import { Field, errText, toast } from '../ui';
 
 const swatchName = (id: string) => t(`gn.c.${id}` as 'gn.c.info');
+// a click on a toolbar button must not take the selection out of the text
+const keep = (e: MouseEvent) => e.preventDefault();
 
 /** the text with its tags drawn as colour, bold and italic */
 export function Styled({ text }: { text: string }) {
@@ -122294,7 +122348,7 @@ export function NewsPreview({ text, welcome = false }: { text: string; welcome?:
   const shown = useMemo(() => fillSample(text, welcome), [text, welcome]);
   const has = useMemo(() => parseNews(shown).length > 0, [shown]);
   return (
-    <div className="panel space-y-3 p-5">
+    <div className="panel space-y-3 p-5 self-start">
       <h3 className="font-extrabold">{t('gn.preview')}</h3>
       <div className="rounded-xl p-4 font-semibold" style={{ background: '#15121c', color: '#e8e3f0' }} aria-live="polite">
         <div className="mb-1 text-xs font-bold uppercase tracking-wide" style={{ color: '#8f86a3' }}>{t('gn.chatLabel')}</div>
@@ -122305,28 +122359,75 @@ export function NewsPreview({ text, welcome = false }: { text: string; welcome?:
   );
 }
 
-/** a text box with a toolbar: colours, bold, italic, templates and a length counter */
+/**
+ * The editor of a game message. The box shows colours, bold and italic as they look (select a word, press a colour);
+ * the saved text keeps the tags. «Код» switches to the plain text with the tags for those who want them.
+ */
 export function NewsEditor({ value, onChange, templates = true, label, vars = VARIABLES, onCtrlEnter }: { value: string; onChange: (v: string) => void; templates?: boolean; label?: string; vars?: readonly string[]; onCtrlEnter?: () => void }) {
   useI18n();
   const [custom, setCustom] = useState('#FF8A00');
+  const [raw, setRaw] = useState(false);
   const area = useRef<HTMLTextAreaElement>(null);
+  const box = useRef<HTMLDivElement>(null);
+  // the last text the visual box produced: a different `value` comes from outside (a template, «use again») and is drawn
+  const lastOut = useRef<string | null>(null);
   const visible = visibleText(value).trim().length;
-
   const [mine, setMine] = useState<{ id: number; name: string; text: string }[]>([]);
 
+  useLayoutEffect(() => {
+    const el = box.current;
+    if (!el || raw || value === lastOut.current) return;
+    renderInto(el, value);
+    lastOut.current = value;
+  }, [value, raw]);
+
+  const emit = () => {
+    const el = box.current;
+    if (!el) return;
+    const s = readFrom(el);
+    if (!s) el.textContent = ''; // the browser leaves a stray <br> in an emptied box
+    lastOut.current = s;
+    onChange(s);
+  };
+  const run = (cmd: string, arg?: string) => {
+    const el = box.current;
+    if (!el) return;
+    el.focus();
+    try { document.execCommand('styleWithCSS', false, 'true'); } catch { /* old browser: <font> is read as well */ }
+    document.execCommand(cmd, false, arg);
+    emit();
+  };
+
+  // raw mode: tags around the selection of the text area
   const wrap = (open: string, close: string) => {
     const el = area.current;
     const r = wrapSelection(value, el?.selectionStart ?? value.length, el?.selectionEnd ?? value.length, open, close);
     onChange(r.text);
     requestAnimationFrame(() => { el?.focus(); el?.setSelectionRange(r.start, r.end); });
   };
-  // puts text at the cursor (or over the selection)
-  const insert = (s: string) => {
+  const insertRaw = (s: string) => {
     const el = area.current;
     const a = el?.selectionStart ?? value.length;
     const b = el?.selectionEnd ?? value.length;
     onChange(value.slice(0, a) + s + value.slice(b));
     requestAnimationFrame(() => { el?.focus(); el?.setSelectionRange(a + s.length, a + s.length); });
+  };
+
+  const colorize = (hex: string) => (raw ? wrap(colorOpen(hex), '</color>') : run('foreColor', hex));
+  const bold = () => (raw ? wrap('<b>', '</b>') : run('bold'));
+  const italic = () => (raw ? wrap('<i>', '</i>') : run('italic'));
+  const clearStyle = () => (raw ? onChange(visibleText(value)) : run('removeFormat'));
+  const insertVar = (s: string) => (raw ? insertRaw(s) : run('insertText', s));
+  const toggleRaw = () => { lastOut.current = null; setRaw((r) => !r); };
+
+  const onKeyDown = (e: KeyboardEvent) => {
+    if (e.key !== 'Enter') return;
+    e.preventDefault(); // the chat is one line
+    if (onCtrlEnter && (e.ctrlKey || e.metaKey)) onCtrlEnter();
+  };
+  const onPaste = (e: ClipboardEvent) => {
+    e.preventDefault();
+    document.execCommand('insertText', false, e.clipboardData.getData('text/plain').replace(/[\r\n]+/g, ' '));
   };
 
   const loadMine = useCallback(() => api<{ id: number; name: string; text: string }[]>('/game-news/templates').then(setMine).catch(() => undefined), []);
@@ -122360,16 +122461,34 @@ export function NewsEditor({ value, onChange, templates = true, label, vars = VA
       )}
 
       <Field label={label ?? t('gn.message')}>
-        <textarea
-          ref={area}
-          className="input min-h-32 font-mono text-sm"
-          value={value}
-          rows={5}
-          maxLength={700}
-          placeholder={t('gn.placeholder')}
-          onChange={(e) => onChange(e.target.value)}
-          onKeyDown={(e) => { if (onCtrlEnter && e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); onCtrlEnter(); } }}
-        />
+        {raw ? (
+          <textarea
+            ref={area}
+            className="input min-h-32 font-mono text-sm"
+            value={value}
+            rows={5}
+            maxLength={700}
+            placeholder={t('gn.placeholder')}
+            onChange={(e) => onChange(e.target.value)}
+            onKeyDown={(e) => { if (onCtrlEnter && e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); onCtrlEnter(); } }}
+          />
+        ) : (
+          <div
+            ref={box}
+            role="textbox"
+            tabIndex={0}
+            aria-multiline="false"
+            aria-label={label ?? t('gn.message')}
+            contentEditable
+            suppressContentEditableWarning
+            spellCheck={false}
+            data-placeholder={t('gn.placeholder')}
+            className="input rich-box min-h-32 text-sm"
+            onInput={emit}
+            onKeyDown={onKeyDown}
+            onPaste={onPaste}
+          />
+        )}
       </Field>
 
       <div className="flex flex-wrap items-center gap-2" role="group" aria-label={t('gn.colors')}>
@@ -122381,20 +122500,22 @@ export function NewsEditor({ value, onChange, templates = true, label, vars = VA
             style={{ background: s.hex }}
             title={swatchName(s.id)}
             aria-label={t('gn.colorize', { name: swatchName(s.id) })}
-            onClick={() => wrap(colorOpen(s.hex), '</color>')}
+            onMouseDown={keep}
+            onClick={() => colorize(s.hex)}
           />
         ))}
         <input className="input w-28 font-mono text-sm" value={custom} maxLength={7} aria-label={t('gn.customHex')} onChange={(e) => setCustom(e.target.value)} />
-        <button type="button" className="btn btn-soft btn-sm" disabled={!isHex(custom)} onClick={() => wrap(colorOpen(custom), '</color>')}>{t('gn.applyHex')}</button>
-        <button type="button" className="btn btn-soft btn-sm font-black" onClick={() => wrap('<b>', '</b>')} aria-label={t('gn.bold')}>B</button>
-        <button type="button" className="btn btn-soft btn-sm italic" onClick={() => wrap('<i>', '</i>')} aria-label={t('gn.italic')}>I</button>
-        <button type="button" className="btn btn-ghost btn-sm" onClick={() => onChange(visibleText(value))}>{t('gn.clearTags')}</button>
+        <button type="button" className="btn btn-soft btn-sm" disabled={!isHex(custom)} onMouseDown={keep} onClick={() => colorize(custom)}>{t('gn.applyHex')}</button>
+        <button type="button" className="btn btn-soft btn-sm font-black" onMouseDown={keep} onClick={bold} aria-label={t('gn.bold')}>B</button>
+        <button type="button" className="btn btn-soft btn-sm italic" onMouseDown={keep} onClick={italic} aria-label={t('gn.italic')}>I</button>
+        <button type="button" className="btn btn-ghost btn-sm" onMouseDown={keep} onClick={clearStyle}>{t('gn.clearTags')}</button>
+        <button type="button" className="btn btn-ghost btn-sm ml-auto font-mono" aria-pressed={raw} onClick={toggleRaw}>{raw ? t('gn.rawOff') : t('gn.rawOn')}</button>
       </div>
 
       <div className="flex flex-wrap items-center gap-2" role="group" aria-label={t('gn.vars')}>
         <span className="text-sm font-bold text-mute">{t('gn.vars')}:</span>
         {vars.map((v) => (
-          <button key={v} type="button" className="chip-filter font-mono" title={t(`gn.v.${v}` as 'gn.v.server')} onClick={() => insert(`{${v}}`)}>{`{${v}}`}</button>
+          <button key={v} type="button" className="chip-filter font-mono" title={t(`gn.v.${v}` as 'gn.v.server')} onMouseDown={keep} onClick={() => insertVar(`{${v}}`)}>{`{${v}}`}</button>
         ))}
       </div>
 
@@ -138045,7 +138166,7 @@ __COREGSM_EOF__
 
 export const MAX_VISIBLE = 400;
 
-export interface NewsServerInfo { id: number; name: string; address: string; game: string; supported: boolean; hasToken: boolean; lastSeen: number | null; online: boolean; pluginVersion: string }
+export interface NewsServerInfo { id: number; name: string; address: string; game: string; supported: boolean; hasToken: boolean; lastSeen: number | null; online: boolean; pluginVersion: string; players: number | null; maxPlayers: number | null }
 export type NewsStatus = 'queued' | 'delivered' | 'expired' | 'failed';
 export interface NewsLogRow { id: number; serverId: number | null; serverName: string; text: string; status: NewsStatus; error: string; sentBy: string; sentAt: number; deliveredAt: number | null }
 export interface NewsSendResult { text: string; results: { serverId: number; serverName: string; queued: boolean; online: boolean; error: string }[] }
@@ -138208,10 +138329,26 @@ const SAMPLE: Record<(typeof VARIABLES)[number], string> = { server: 'Мой с�
 /** the variables of the greeting: {name} is the nickname of the joining player (the plugin fills it in) */
 export const WELCOME_VARIABLES = ['name', 'server'] as const;
 
-/** the preview shows sample values for the variables ({name} only in a greeting) */
+/** the colour of a player's name in the greeting (the same as the backend uses) */
+export const NAME_COLOR = '#5FD068';
+
+/** {name} outside any colour tag becomes green (a name the administrator coloured by hand is left alone) */
+export function greenName(text: string): string {
+  let depth = 0;
+  return text
+    .split(/(<\/?color(?:=#[0-9a-fA-F]{6})?>)/i)
+    .map((part) => {
+      if (/^<color=/i.test(part)) { depth++; return part; }
+      if (/^<\/color>/i.test(part)) { depth = Math.max(0, depth - 1); return part; }
+      return depth === 0 ? part.replace(/\{name\}/g, `<color=${NAME_COLOR}>{name}</color>`) : part;
+    })
+    .join('');
+}
+
+/** the preview shows sample values for the variables ({name} only in a greeting, in green as in the game) */
 export function fillSample(text: string, welcome = false): string {
   const s = text.replace(/\{(server|online|max|time)\}/g, (_m, k: (typeof VARIABLES)[number]) => SAMPLE[k]);
-  return welcome ? s.replace(/\{name\}/g, 'Игрок') : s;
+  return welcome ? greenName(s).replace(/\{name\}/g, 'Игрок') : s;
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
@@ -140593,6 +140730,10 @@ html[data-contrast='high'] main a:not([class]) { text-decoration-line: underline
 
 /* the tabs of the server page scroll on a phone: the right edge fades so that it is visible there are more */
 @media (max-width: 639px) { .srv-tabs { -webkit-mask-image: linear-gradient(90deg, #000 90%, transparent); mask-image: linear-gradient(90deg, #000 90%, transparent); } }
+
+/* the visual editor of a game message: a placeholder in the empty box, the text keeps its spaces */
+.rich-box { white-space: pre-wrap; overflow-wrap: anywhere; cursor: text; }
+.rich-box:empty::before { content: attr(data-placeholder); color: rgb(var(--mute)); pointer-events: none; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/lazyPage.tsx" << '__COREGSM_EOF__'
@@ -141497,9 +141638,9 @@ const en: Record<keyof typeof ru, string> = {
   'adm.d.discord': 'The channel where the bot posts the server card.',
   'adm.s.news': 'News',
   'adm.d.news': 'Write an announcement and send it to Discord.',
-  'adm.s.gamenews': 'In-game news',
+  'adm.s.gamenews': 'Game plugin',
   'adm.d.gamenews': 'A message to the in-game chat of a server through the CoreGSM plugin: with colours and a preview.',
-  'gn.title': 'In-game news',
+  'gn.title': 'Game plugin',
   'gn.subtitle': 'Write a message: the CoreGSM plugin on the game server picks it up and shows it in the game chat.',
   'gn.hint': 'Every player who is on the server right now will see the message.',
   'gn.help': 'No ports to open: the plugin asks the panel every few seconds whether there are new messages. Create a token once per server (the gear next to it) and paste it into the plugin config.',
@@ -141571,7 +141712,8 @@ const en: Record<keyof typeof ru, string> = {
   'gn.h.expired': 'Not delivered',
   'gn.h.fail': 'Failed',
   'gn.reuse': 'Use again',  'adm.s.alerts': 'Alerts',
-  'gn.v.name': 'Player nickname',
+  'gn.players': 'players {n} of {max}',  'gn.rawOn': 'Code',
+  'gn.rawOff': 'Editor',  'gn.v.name': 'Player nickname',
   'gn.w.title': 'Greeting on join',
   'gn.w.note': 'A player who joins the server sees this message in private (nobody else does). Needs plugin version 0.3.0 or newer.',
   'gn.w.enabled': 'Greet players',
@@ -141601,6 +141743,8 @@ const en: Record<keyof typeof ru, string> = {
   'gn.hint.server': 'Pick a server',
   'gn.sendKey': 'Ctrl+Enter',  'gn.tab.send': 'Send',
   'gn.tab.auto': 'Auto announcements',
+  'gn.tab.events': 'Events',
+  'gn.tab.history': 'History',
   'gn.a.intro': 'Write an announcement once and set a schedule: the panel sends it to the game by itself, no «Send» button.',
   'gn.a.add': 'Add an announcement',
   'gn.a.empty': 'No automatic announcements yet',
@@ -145959,9 +146103,9 @@ const ru = {
   'adm.d.discord': 'В какой канал бот публикует карточку сервера.',
   'adm.s.news': 'Новости',
   'adm.d.news': 'Написать объявление и отправить его в Discord.',
-  'adm.s.gamenews': 'Новости в игру',
+  'adm.s.gamenews': 'Игровой плагин',
   'adm.d.gamenews': 'Сообщение в игровой чат сервера через плагин CoreGSM: с цветами и превью.',
-  'gn.title': 'Новости в игру',
+  'gn.title': 'Игровой плагин',
   'gn.subtitle': 'Напишите сообщение: плагин CoreGSM на игровом сервере заберёт его и покажет в игровом чате.',
   'gn.hint': 'Сообщение увидят все игроки, которые сейчас на сервере.',
   'gn.help': 'Порты открывать не нужно: плагин сам раз в несколько секунд спрашивает у панели, есть ли новые сообщения. Для каждого сервера один раз создайте токен (шестерёнка у сервера) и вставьте его в конфиг плагина.',
@@ -146033,7 +146177,8 @@ const ru = {
   'gn.h.expired': 'Не доставлено',
   'gn.h.fail': 'Ошибка',
   'gn.reuse': 'Использовать снова',  'adm.s.alerts': 'Оповещения',
-  'gn.v.name': 'Ник игрока',
+  'gn.players': 'игроков {n} из {max}',  'gn.rawOn': 'Код',
+  'gn.rawOff': 'Редактор',  'gn.v.name': 'Ник игрока',
   'gn.w.title': 'Приветствие при входе',
   'gn.w.note': 'Игрок, который заходит на сервер, видит это сообщение лично (остальные его не видят). Нужен плагин версии 0.3.0 и новее.',
   'gn.w.enabled': 'Приветствовать игроков',
@@ -146063,6 +146208,8 @@ const ru = {
   'gn.hint.server': 'Выберите сервер',
   'gn.sendKey': 'Ctrl+Enter',  'gn.tab.send': 'Отправить',
   'gn.tab.auto': 'Автообъявления',
+  'gn.tab.events': 'События',
+  'gn.tab.history': 'История',
   'gn.a.intro': 'Напишите объявление один раз и задайте расписание: панель сама будет отправлять его в игру, без кнопки «Отправить».',
   'gn.a.add': 'Добавить автообъявление',
   'gn.a.empty': 'Автообъявлений пока нет',
@@ -149939,7 +150086,7 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
         {!home && current === 'servers' && <ServersManage sub={tail} />}
         {!home && current === 'discord' && <DiscordPage sub={tail} />}
         {!home && current === 'news' && <NewsPage sub={tail} />}
-        {!home && current === 'gamenews' && <GameNewsPage />}
+        {!home && current === 'gamenews' && <GameNewsPage sub={tail} />}
         {!home && current === 'alerts' && <AlertsPage />}
         {!home && current === 'maintenance' && <MaintenancePage />}
         {!home && current === 'cards' && <CardsPage />}
@@ -154065,7 +154212,7 @@ import { NewsEditor, NewsPreview, Styled } from '../components/NewsEditor';
 import { confirmDialog } from '../confirm';
 import { t, useI18n } from '../i18n';
 import { pluginConfig, validateNews, versionLess, type NewsLogRow, type NewsSendResult, type NewsServerInfo, type NewsStatus } from '../gameNews';
-import { AdminPage, ErrorLine, IconNews, IconSettings, LoadError, Modal, PageHead, Spinner, errText, toast, usePoll } from '../ui';
+import { AdminPage, ErrorLine, IconNews, IconSettings, LoadError, Modal, PageHead, Spinner, errText, navigate, toast, usePoll } from '../ui';
 import GameNewsRules from './GameNewsRules';
 
 interface NewsState { servers: NewsServerInfo[]; log: NewsLogRow[]; pluginLatest: string }
@@ -154086,11 +154233,13 @@ const STATUS: Record<NewsStatus, { text: 'gn.h.queued' | 'gn.h.ok' | 'gn.h.expir
 };
 
 /** «Новости в игру»: a message for the in-game chat (the CoreGSM game plugin picks it up), sent now or by a schedule. */
-export default function GameNewsPage() {
+export default function GameNewsPage({ sub = '' }: { sub?: string }) {
   useI18n();
   const [data, setData] = useState<NewsState | null>(null);
   const [error, setError] = useState('');
-  const [tab, setTab] = useState<'send' | 'auto'>('send');
+  // the tab is part of the address: /admin/gamenews, /admin/gamenews/auto, /events, /history
+  const tab = (['auto', 'events', 'history'] as const).find((x) => x === sub) ?? 'send';
+  const goTab = (x: 'send' | 'auto' | 'events' | 'history') => navigate(x === 'send' ? '/admin/gamenews' : `/admin/gamenews/${x}`);
   // the draft survives a switch of the page or a reload (kept in this browser only)
   const [text, setText] = useState(() => { try { return localStorage.getItem('coregsm.gamenews.draft') ?? ''; } catch { return ''; } });
   useEffect(() => { try { if (text) localStorage.setItem('coregsm.gamenews.draft', text); else localStorage.removeItem('coregsm.gamenews.draft'); } catch { /* private mode */ } }, [text]);
@@ -154150,12 +154299,13 @@ export default function GameNewsPage() {
 
       {data && (
         <div className="flex flex-wrap gap-2" role="tablist" aria-label={t('gn.title')}>
-          <button type="button" role="tab" aria-selected={tab === 'send'} className={`chip-filter ${tab === 'send' ? 'on' : ''}`} onClick={() => setTab('send')}>{t('gn.tab.send')}</button>
-          <button type="button" role="tab" aria-selected={tab === 'auto'} className={`chip-filter ${tab === 'auto' ? 'on' : ''}`} onClick={() => setTab('auto')}>{t('gn.tab.auto')}</button>
+          {(['send', 'auto', 'events', 'history'] as const).map((x) => (
+            <button key={x} type="button" role="tab" aria-selected={tab === x} className={`chip-filter ${tab === x ? 'on' : ''}`} onClick={() => goTab(x)}>{t(`gn.tab.${x}` as 'gn.tab.send')}</button>
+          ))}
         </div>
       )}
 
-      {data && tab === 'auto' && <GameNewsRules servers={data.servers} />}
+      {data && (tab === 'auto' || tab === 'events') && <GameNewsRules servers={data.servers} part={tab === 'auto' ? 'rules' : 'events'} />}
 
       {data && tab === 'send' && (
         <>
@@ -154177,7 +154327,10 @@ export default function GameNewsPage() {
                           <input type="checkbox" disabled={!s.hasToken} checked={picked.includes(s.id)} onChange={() => toggle(s.id)} />
                           <span className="min-w-0 wrap-break-word">
                             {s.name}
-                            {s.name !== s.address && <span className="block text-xs font-semibold text-mute">{s.address}</span>}
+                            <span className="block text-xs font-semibold text-mute">
+                              {s.name !== s.address && s.address}
+                              {s.players != null && <>{s.name !== s.address && ' · '}{t('gn.players', { n: s.players, max: s.maxPlayers ?? 0 })}</>}
+                            </span>
                           </span>
                         </label>
                         <span
@@ -154221,27 +154374,31 @@ export default function GameNewsPage() {
             </section>
           </form>
 
-          <section className="panel overflow-hidden">
-            <h3 className="px-5 pt-4 font-extrabold">{t('gn.history')}</h3>
-            {data.log.length === 0 && <p className="px-5 py-4 text-sm font-semibold text-mute">{t('gn.historyEmpty')}</p>}
-            <ul className="divide-y divide-line">
-              {data.log.map((r) => (
-                <li key={r.id} className="flex flex-wrap items-start gap-x-4 gap-y-1 px-5 py-3">
-                  <div className="min-w-0 flex-1 basis-60">
-                    <div className="flex flex-wrap items-center gap-2 text-sm font-bold">
-                      <span className={STATUS[r.status].cls}>{t(STATUS[r.status].text)}</span>
-                      <span>{r.serverName}</span>
-                      <span className="font-semibold text-mute">{new Date(r.sentAt).toLocaleString()} · {r.sentBy || '—'}</span>
-                    </div>
-                    <p className="mt-1 wrap-break-word text-sm"><Styled text={r.text} /></p>
-                    {(r.status === 'failed' || r.status === 'expired') && r.error && <p className="text-sm font-semibold text-danger">{r.error}</p>}
-                  </div>
-                  <button type="button" className="btn btn-soft btn-sm" onClick={() => { setText(r.text); setTab('send'); }}>{t('gn.reuse')}</button>
-                </li>
-              ))}
-            </ul>
-          </section>
+
         </>
+      )}
+
+      {data && tab === 'history' && (
+     <section className="panel overflow-hidden">
+       <h3 className="px-5 pt-4 font-extrabold">{t('gn.history')}</h3>
+       {data.log.length === 0 && <p className="px-5 py-4 text-sm font-semibold text-mute">{t('gn.historyEmpty')}</p>}
+       <ul className="divide-y divide-line">
+         {data.log.map((r) => (
+           <li key={r.id} className="flex flex-wrap items-start gap-x-4 gap-y-1 px-5 py-3">
+             <div className="min-w-0 flex-1 basis-60">
+               <div className="flex flex-wrap items-center gap-2 text-sm font-bold">
+                 <span className={STATUS[r.status].cls}>{t(STATUS[r.status].text)}</span>
+                 <span>{r.serverName}</span>
+                 <span className="font-semibold text-mute">{new Date(r.sentAt).toLocaleString()} · {r.sentBy || '—'}</span>
+               </div>
+               <p className="mt-1 wrap-break-word text-sm"><Styled text={r.text} /></p>
+               {(r.status === 'failed' || r.status === 'expired') && r.error && <p className="text-sm font-semibold text-danger">{r.error}</p>}
+             </div>
+             <button type="button" className="btn btn-soft btn-sm" onClick={() => { setText(r.text); goTab('send'); }}>{t('gn.reuse')}</button>
+           </li>
+         ))}
+       </ul>
+     </section>
       )}
 
       {settingsServer && <PluginModal server={settingsServer} onClose={() => setSettingsFor(null)} onChanged={() => void load()} />}
@@ -154345,7 +154502,7 @@ function scheduleLabel(r: RuleInfo): string {
 }
 
 /** «Автообъявления»: a message written once and sent by a schedule, without pressing «Отправить». */
-export default function GameNewsRules({ servers }: { servers: NewsServerInfo[] }) {
+export default function GameNewsRules({ servers, part }: { servers: NewsServerInfo[]; part: 'rules' | 'events' }) {
   useI18n();
   const [data, setData] = useState<RulesState | null>(null);
   const [error, setError] = useState('');
@@ -154387,12 +154544,14 @@ export default function GameNewsRules({ servers }: { servers: NewsServerInfo[] }
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <p className="min-w-0 flex-1 basis-80 text-sm font-semibold text-mute">{t('gn.a.intro')}</p>
-        <button type="button" className="btn" onClick={openNew}><IconPlus size={16} />{t('gn.a.add')}</button>
-      </div>
+      {part === 'rules' && (
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <p className="min-w-0 flex-1 basis-80 text-sm font-semibold text-mute">{t('gn.a.intro')}</p>
+          <button type="button" className="btn" onClick={openNew}><IconPlus size={16} />{t('gn.a.add')}</button>
+        </div>
+      )}
 
-      {data && (
+      {data && part === 'events' && (
         <label className="panel flex items-start gap-3 p-4 font-bold">
           <input className="mt-1" type="checkbox" checked={data.restartCountdown} onChange={(e) => void setCountdown(e.target.checked)} />
           <span>
@@ -154402,16 +154561,16 @@ export default function GameNewsRules({ servers }: { servers: NewsServerInfo[] }
         </label>
       )}
 
-      {data && <WelcomeCard initial={data.welcome} />}
+      {data && part === 'events' && <WelcomeCard initial={data.welcome} />}
 
       {error && !data ? <LoadError error={error} onRetry={() => void load()} /> : <ErrorLine text={error} />}
       {!data && !error && <div className="skeleton panel h-32" aria-busy="true" />}
 
-      {data && data.rules.length === 0 && (
+      {data && part === 'rules' && data.rules.length === 0 && (
         <StateView title={t('gn.a.empty')} text={t('gn.a.emptyText')} action={<button type="button" className="btn" onClick={openNew}>{t('gn.a.add')}</button>} />
       )}
 
-      {data && data.rules.length > 0 && (
+      {data && part === 'rules' && data.rules.length > 0 && (
         <ul className="panel divide-y divide-line overflow-hidden">
           {data.rules.map((r) => (
             <li key={r.id} className="flex flex-wrap items-start gap-x-4 gap-y-2 px-5 py-4">
@@ -162966,6 +163125,105 @@ export async function askReauth(): Promise<boolean> {
 }
 
 setReauthHandler(askReauth);
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src"
+  cat > "$APP_DIR/core-frontend/src/richNews.ts" << '__COREGSM_EOF__'
+/**
+ * The visual editor of a game message: the box shows colours, bold and italic as they look, and the text that is saved
+ * and sent keeps the tags (<color=#RRGGBB>, <b>, <i>). These two functions are the bridge:
+ *   renderInto(box, tags)  draws a tagged text into the editable box
+ *   readFrom(box)          reads the box back into a tagged text
+ */
+import { parseNews, type Seg } from './gameNews';
+
+type Style = Pick<Seg, 'color' | 'bold' | 'italic'>;
+
+/** "#f50", "#FF5555" or "rgb(255, 85, 85)" -> "#FF5555"; null when it is not a colour we know */
+export function normHex(input: string | null | undefined): string | null {
+  if (!input) return null;
+  const s = input.trim();
+  let m = /^#([0-9a-f]{3})$/i.exec(s);
+  if (m) return `#${m[1].split('').map((c) => c + c).join('')}`.toUpperCase();
+  m = /^#([0-9a-f]{6})$/i.exec(s);
+  if (m) return `#${m[1]}`.toUpperCase();
+  m = /^rgba?\(\s*(\d{1,3})\s*[, ]\s*(\d{1,3})\s*[, ]\s*(\d{1,3})/i.exec(s);
+  if (m) {
+    const h = [m[1], m[2], m[3]].map((n) => Math.min(255, Number(n)).toString(16).padStart(2, '0')).join('');
+    return `#${h}`.toUpperCase();
+  }
+  return null;
+}
+
+const same = (a: Style, b: Style) => a.color === b.color && a.bold === b.bold && a.italic === b.italic;
+
+/** pieces of one style next to each other become one piece */
+export function mergeSegs(segs: Seg[]): Seg[] {
+  const out: Seg[] = [];
+  for (const s of segs) {
+    if (!s.text) continue;
+    const last = out[out.length - 1];
+    if (last && same(last, s)) last.text += s.text;
+    else out.push({ ...s });
+  }
+  return out;
+}
+
+/** pieces -> tagged text */
+export function segsToTags(segs: Seg[]): string {
+  return mergeSegs(segs)
+    .map((s) => {
+      let t = s.text;
+      if (s.italic) t = `<i>${t}</i>`;
+      if (s.bold) t = `<b>${t}</b>`;
+      if (s.color) t = `<color=${s.color}>${t}</color>`;
+      return t;
+    })
+    .join('');
+}
+
+function walk(node: Node, style: Style, out: Seg[]): void {
+  if (node.nodeType === 3) {
+    // the chat is one line: a line break becomes a space, angle brackets would be taken for tags
+    const text = (node.nodeValue ?? '').replace(/[ \r\n]+/g, ' ').replace(/[<>]/g, '');
+    if (text) out.push({ text, ...style });
+    return;
+  }
+  if (node.nodeType !== 1) return;
+  const el = node as HTMLElement;
+  const tag = el.tagName.toLowerCase();
+  if (tag === 'br') return;
+  const s: Style = { ...style };
+  if (tag === 'b' || tag === 'strong') s.bold = true;
+  if (tag === 'i' || tag === 'em') s.italic = true;
+  if (tag === 'font') s.color = normHex(el.getAttribute('color')) ?? s.color;
+  const css = el.style;
+  if (css) {
+    s.color = normHex(css.color) ?? s.color;
+    if (css.fontWeight === 'bold' || Number(css.fontWeight) >= 600) s.bold = true;
+    if (css.fontStyle === 'italic') s.italic = true;
+  }
+  for (const child of Array.from(el.childNodes)) walk(child, s, out);
+}
+
+/** the tagged text of what is in the box */
+export function readFrom(box: HTMLElement): string {
+  const segs: Seg[] = [];
+  for (const child of Array.from(box.childNodes)) walk(child, { color: null, bold: false, italic: false }, segs);
+  return segsToTags(segs).trim();
+}
+
+/** draws a tagged text into the box (replaces what is there) */
+export function renderInto(box: HTMLElement, tags: string): void {
+  box.textContent = '';
+  for (const s of parseNews(tags)) {
+    const span = box.ownerDocument.createElement('span');
+    span.textContent = s.text;
+    if (s.color) span.style.color = s.color;
+    if (s.bold) span.style.fontWeight = '800';
+    if (s.italic) span.style.fontStyle = 'italic';
+    box.appendChild(span);
+  }
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/saveBar.tsx" << '__COREGSM_EOF__'
