@@ -271,10 +271,12 @@ function AnsiSelect({ value, onChange, label }: { value: AnsiColor; onChange: (v
 }
 
 /** the sample lines of the chat as Discord will draw them (colours of the ansi block) */
-function DiscordPreview({ colors, joinText, leaveText }: { colors: Record<ChatKind, ChatColors>; joinText: string; leaveText: string }) {
+function DiscordPreview({ colors, joinText, leaveText, showTime }: { colors: Record<ChatKind, ChatColors>; joinText: string; leaveText: string; showTime: boolean }) {
   const nick = 'WhiteLegioN';
+  const clock = new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
   const chat = (k: 'global' | 'clan' | 'local', tag: string, text: string) => (
     <p key={k} className="wrap-break-word">
+      {showTime && <span style={{ color: ANSI_CSS[colors[k].tag] }}>[{clock}] </span>}
       <span style={{ color: ANSI_CSS[colors[k].tag], fontWeight: 800 }}>[{tag}]</span>{' '}
       <span style={{ color: ANSI_CSS[colors[k].name], fontWeight: 800 }}>{nick}</span>
       <span style={{ color: ANSI_CSS[colors[k].text] }}>: {text}</span>
@@ -284,6 +286,7 @@ function DiscordPreview({ colors, joinText, leaveText }: { colors: Record<ChatKi
     const parts = template.replace(/[<>]/g, '').split('{name}');
     return (
       <p key={k} className="wrap-break-word">
+        {showTime && <span style={{ color: ANSI_CSS[colors[k].text] }}>[{clock}] </span>}
         {parts.map((p, i) => (
           <span key={i}>
             <span style={{ color: ANSI_CSS[colors[k].text] }}>{p}</span>
@@ -333,7 +336,7 @@ export function ChatCard({ initial, joinText, leaveText }: { initial: ChatSettin
   };
 
   // how the lines look: saved by itself a moment after a change
-  const [look, setLook] = useState({ style: initial.style, senderName: initial.senderName, colors: initial.colors });
+  const [look, setLook] = useState({ style: initial.style, senderName: initial.senderName, showTime: initial.showTime, colors: initial.colors });
   const [lookSaved, setLookSaved] = useState(look);
   const auto = useAutosave({
     value: look,
@@ -417,6 +420,13 @@ export function ChatCard({ initial, joinText, leaveText }: { initial: ChatSettin
           </Field>
         </div>
         <p className="text-sm font-semibold text-mute">{t('gn.ch.senderNote')}</p>
+        <label className="flex items-start gap-3 font-bold">
+          <Switch className="mt-0.5" checked={look.showTime} onChange={(v) => setLook((x) => ({ ...x, showTime: v }))} />
+          <span>
+            {t('gn.ch.time')}
+            <span className="block text-sm font-semibold text-mute">{t('gn.ch.timeNote')}</span>
+          </span>
+        </label>
 
         {look.style === 'ansi' && (
           <>
@@ -445,7 +455,7 @@ export function ChatCard({ initial, joinText, leaveText }: { initial: ChatSettin
                 </tbody>
               </table>
             </div>
-            <DiscordPreview colors={look.colors} joinText={joinText} leaveText={leaveText} />
+            <DiscordPreview colors={look.colors} joinText={joinText} leaveText={leaveText} showTime={look.showTime} />
             <p className="text-sm font-semibold text-mute">{t('gn.ch.ansiNote')}</p>
           </>
         )}

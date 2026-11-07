@@ -270,6 +270,8 @@ export interface ChatSettings {
   kinds: Record<ChatKind, boolean>;
   style: 'ansi' | 'plain';
   senderName: string;
+  /** «[16:07]» in front of every line, like in the game */
+  showTime: boolean;
   colors: Record<ChatKind, ChatColors>;
 }
 

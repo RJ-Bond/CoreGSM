@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="ee141b286621"
+COREGSM_BUILD="fa7b6a3ea6af"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.77"
+COREGSM_VERSION="1.1.78"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -24075,6 +24075,7 @@ import {
   normalizeChat, wrapForDiscord, type ChatKind, type ChatStored,
 } from './gameNewsChatLogic.js';
 import { getJoinLeave } from './gameNewsJoinLeave.js';
+import { clock } from './gameNewsVars.js';
 
 const read = (): ChatStored => {
   try {
@@ -24098,10 +24099,10 @@ function webhookUrl(s: ChatStored = read()): string | null {
 /** the kinds of chat that are being forwarded (what the plugin has to read) */
 export const chatKinds = (): ChatKind[] => activeChatKinds(read());
 
-export function chatSettingsView(): Pick<ChatStored, 'enabled' | 'kinds' | 'style' | 'senderName' | 'colors'> & { set: boolean; tail: string } {
+export function chatSettingsView(): Pick<ChatStored, 'enabled' | 'kinds' | 'style' | 'senderName' | 'showTime' | 'colors'> & { set: boolean; tail: string } {
   const s = read();
   const u = webhookUrl(s);
-  return { enabled: s.enabled, set: !!u, tail: u ? `…${u.slice(-6)}` : '', kinds: s.kinds, style: s.style, senderName: s.senderName, colors: s.colors };
+  return { enabled: s.enabled, set: !!u, tail: u ? `…${u.slice(-6)}` : '', kinds: s.kinds, style: s.style, senderName: s.senderName, showTime: s.showTime, colors: s.colors };
 }
 
 // ---- posting
@@ -24209,6 +24210,7 @@ export function registerGameNewsChat({ app, admin }: { app: Express; admin: Requ
     const many = (db.prepare("SELECT COUNT(*) AS n FROM game_news_targets WHERE token_hash <> ''").get() as { n: number }).n > 1;
     const server = many ? serverLabelOf(t.server_id) : '';
     const jl = getJoinLeave();
+    const time = s.showTime ? clock(now) : '';
     for (const m of b.data.messages) {
       if (!kinds.has(m.type)) continue;
       const colors = s.colors[m.type];
@@ -24216,11 +24218,11 @@ export function registerGameNewsChat({ app, admin }: { app: Express; admin: Requ
       if (m.type === 'join' || m.type === 'leave') {
         // the same words as in the game (set in «Вход и выход игроков»)
         const template = m.type === 'join' ? jl.joinText : jl.leaveText;
-        line = s.style === 'ansi' ? ansiEventLine(template, m.name, colors, server) : formatEventLine(template, m.name, server);
+        line = s.style === 'ansi' ? ansiEventLine(template, m.name, colors, server, time) : formatEventLine(template, m.name, server, time);
       } else {
         line = s.style === 'ansi'
-          ? ansiChatLine(m.type, m.name, m.clan ?? '', m.text ?? '', colors, server)
-          : formatChatLine(m.type, m.name, m.clan ?? '', m.text ?? '', server);
+          ? ansiChatLine(m.type, m.name, m.clan ?? '', m.text ?? '', colors, server, time)
+          : formatChatLine(m.type, m.name, m.clan ?? '', m.text ?? '', server, time);
       }
       if (line) enqueue(line);
     }
@@ -24236,6 +24238,7 @@ export function registerGameNewsChat({ app, admin }: { app: Express; admin: Requ
       kinds: z.object(Object.fromEntries(CHAT_KINDS.map((k) => [k, z.boolean()]))).partial().optional(),
       style: z.enum(['ansi', 'plain']).optional(),
       senderName: z.string().max(80).optional(),
+      showTime: z.boolean().optional(),
       colors: colorsSchema.optional(),
     }).safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Проверьте поля' });
@@ -24254,6 +24257,7 @@ export function registerGameNewsChat({ app, admin }: { app: Express; admin: Requ
       if (c) s.colors[k] = { ...s.colors[k], ...Object.fromEntries(Object.entries(c).filter(([, v]) => v !== undefined)) };
     }
     if (b.data.style) s.style = b.data.style;
+    if (b.data.showTime !== undefined) s.showTime = b.data.showTime;
     if (b.data.senderName !== undefined) s.senderName = normalizeChat({ senderName: b.data.senderName }).senderName;
     write(s);
     res.json({ ok: true });
@@ -24265,20 +24269,22 @@ export function registerGameNewsChat({ app, admin }: { app: Express; admin: Requ
     const url = webhookUrl(s);
     if (!url) return res.status(400).json({ error: 'Сначала укажите webhook' });
     const jl = getJoinLeave();
+    const now = clock(Date.now());
+    const tm = s.showTime ? now : '';
     const lines = s.style === 'ansi'
       ? [
-        ansiChatLine('global', 'WhiteLegioN', '', 'Привет всем!', s.colors.global),
-        ansiChatLine('clan', 'WhiteLegioN', 'Ночные', 'Сбор у замка', s.colors.clan),
-        ansiChatLine('local', 'WhiteLegioN', '', 'Кто рядом?', s.colors.local),
-        ansiEventLine(jl.joinText, 'WhiteLegioN', s.colors.join),
-        ansiEventLine(jl.leaveText, 'WhiteLegioN', s.colors.leave),
+        ansiChatLine('global', 'WhiteLegioN', '', 'Привет всем!', s.colors.global, '', tm),
+        ansiChatLine('clan', 'WhiteLegioN', 'Ночные', 'Сбор у замка', s.colors.clan, '', tm),
+        ansiChatLine('local', 'WhiteLegioN', '', 'Кто рядом?', s.colors.local, '', tm),
+        ansiEventLine(jl.joinText, 'WhiteLegioN', s.colors.join, '', tm),
+        ansiEventLine(jl.leaveText, 'WhiteLegioN', s.colors.leave, '', tm),
       ]
       : [
-        formatChatLine('global', 'WhiteLegioN', '', 'Привет всем!'),
-        formatChatLine('clan', 'WhiteLegioN', 'Ночные', 'Сбор у замка'),
-        formatChatLine('local', 'WhiteLegioN', '', 'Кто рядом?'),
-        formatEventLine(jl.joinText, 'WhiteLegioN'),
-        formatEventLine(jl.leaveText, 'WhiteLegioN'),
+        formatChatLine('global', 'WhiteLegioN', '', 'Привет всем!', '', tm),
+        formatChatLine('clan', 'WhiteLegioN', 'Ночные', 'Сбор у замка', '', tm),
+        formatChatLine('local', 'WhiteLegioN', '', 'Кто рядом?', '', tm),
+        formatEventLine(jl.joinText, 'WhiteLegioN', '', tm),
+        formatEventLine(jl.leaveText, 'WhiteLegioN', '', tm),
       ];
     const r = await post(url, '✅ CoreGSM: канал подключён. Так будет выглядеть чат игры:', s.senderName);
     if (r.ok) await post(url, wrapForDiscord(s.style, lines.join('\n')), s.senderName);
@@ -24310,14 +24316,24 @@ const ANSI_CODE: Record<AnsiColor, number> = { gray: 30, red: 31, green: 32, yel
 export interface ChatColors { tag: AnsiColor; name: AnsiColor; text: AnsiColor }
 export type ChatStyle = 'ansi' | 'plain';
 
-/** like the chat of the game: a blue tag, a yellow nickname; the clan chat is green; a join is a purple nickname in green text */
+/** like the chat of the game: blue, a yellow nickname; the clan chat is green; a join is a purple nickname in green text */
 export const DEFAULT_COLORS: Record<ChatKind, ChatColors> = {
+  global: { tag: 'blue', name: 'yellow', text: 'blue' },
+  local: { tag: 'blue', name: 'yellow', text: 'blue' },
+  clan: { tag: 'green', name: 'yellow', text: 'green' },
+  join: { tag: 'green', name: 'pink', text: 'green' },
+  leave: { tag: 'green', name: 'pink', text: 'green' },
+};
+
+/** the defaults of the first version: a setting that still holds exactly them has not been changed by anybody and moves to the new ones */
+const OLD_DEFAULTS: Record<ChatKind, ChatColors> = {
   global: { tag: 'blue', name: 'yellow', text: 'cyan' },
   local: { tag: 'blue', name: 'yellow', text: 'cyan' },
   clan: { tag: 'green', name: 'green', text: 'green' },
   join: { tag: 'green', name: 'pink', text: 'green' },
   leave: { tag: 'green', name: 'pink', text: 'green' },
 };
+const sameColors = (x: ChatColors, y: ChatColors): boolean => x.tag === y.tag && x.name === y.name && x.text === y.text;
 
 /** one webhook for the whole chat (kept encrypted), a switch for every kind, how lines look */
 export interface ChatStored {
@@ -24327,6 +24343,8 @@ export interface ChatStored {
   style: ChatStyle;
   /** the name the messages are posted under; '' = the name and the picture of the webhook itself */
   senderName: string;
+  /** «[16:07]» in front of every line, like in the game */
+  showTime: boolean;
   colors: Record<ChatKind, ChatColors>;
 }
 
@@ -24339,7 +24357,7 @@ const isAnsi = (x: unknown): x is AnsiColor => typeof x === 'string' && (ANSI_CO
 export function normalizeChat(raw: unknown): ChatStored {
   const v = (raw && typeof raw === 'object' ? raw : {}) as {
     enabled?: unknown; webhook?: unknown; kinds?: Partial<Record<ChatKind, unknown>>; webhooks?: Partial<Record<ChatKind, unknown>>;
-    style?: unknown; senderName?: unknown; colors?: Partial<Record<ChatKind, Partial<Record<keyof ChatColors, unknown>>>>;
+    style?: unknown; senderName?: unknown; showTime?: unknown; colors?: Partial<Record<ChatKind, Partial<Record<keyof ChatColors, unknown>>>>;
   };
   const legacy = v.webhooks && typeof v.webhooks === 'object' ? v.webhooks : {};
   const legacyFirst = (['global', 'clan', 'local'] as const).map((k) => legacy[k]).find((x): x is string => typeof x === 'string' && x.length > 0);
@@ -24352,17 +24370,19 @@ export function normalizeChat(raw: unknown): ChatStored {
     else if (event) kinds[k] = false;
     else kinds[k] = v.webhooks ? typeof legacy[k] === 'string' && !!legacy[k] : true;
     const c = v.colors?.[k] ?? {};
-    colors[k] = {
+    const mine: ChatColors = {
       tag: isAnsi(c.tag) ? c.tag : DEFAULT_COLORS[k].tag,
       name: isAnsi(c.name) ? c.name : DEFAULT_COLORS[k].name,
       text: isAnsi(c.text) ? c.text : DEFAULT_COLORS[k].text,
     };
+    colors[k] = sameColors(mine, OLD_DEFAULTS[k]) ? DEFAULT_COLORS[k] : mine;
   }
   return {
     enabled: !!v.enabled,
     webhook,
     kinds,
     style: v.style === 'plain' ? 'plain' : 'ansi',
+    showTime: v.showTime !== false,
     senderName: typeof v.senderName === 'string' ? v.senderName.replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, 80) : '',
     colors,
   };
@@ -24397,42 +24417,45 @@ export const CHAT_LABEL: Record<'global' | 'clan' | 'local', string> = { global:
 
 const isCommand = (t: string): boolean => t.startsWith('.') || t.startsWith('/') || t.startsWith('!');
 
-/** «**[Глобальный]** **WhiteLegioN**: Тест»; '' for what must not be forwarded (a command, an empty text) */
-export function formatChatLine(kind: 'global' | 'clan' | 'local', name: string, clan: string, text: string, server = ''): string {
+/** «[16:07] » in front of a line, like the chat of the game; '' when no time is given */
+const stamp = (time: string): string => (time ? `[${noControl(time).trim()}] ` : '');
+
+/** «[16:07] **[Глобальный]** **WhiteLegioN**: Тест»; '' for what must not be forwarded (a command, an empty text) */
+export function formatChatLine(kind: 'global' | 'clan' | 'local', name: string, clan: string, text: string, server = '', time = ''): string {
   const t = text.trim();
   if (!t || isCommand(t)) return '';
   const tag = kind === 'clan' && clan.trim() ? `${CHAT_LABEL.clan} ${clan.trim()}` : CHAT_LABEL[kind];
   const head = server ? `**[${escapeDiscord(server)}]** ` : '';
-  return `${head}**[${escapeDiscord(tag)}]** **${escapeDiscord(name.trim() || '?')}**: ${escapeDiscord(t).slice(0, 500)}`;
+  return `${stamp(time)}${head}**[${escapeDiscord(tag)}]** **${escapeDiscord(name.trim() || '?')}**: ${escapeDiscord(t).slice(0, 500)}`;
 }
 
-/** «* Игрок **WhiteLegioN** подключился к серверу.» for a join or a leave in the plain style */
-export function formatEventLine(template: string, name: string, server = ''): string {
+/** «[16:07] * Игрок **WhiteLegioN** подключился к серверу.» for a join or a leave in the plain style */
+export function formatEventLine(template: string, name: string, server = '', time = ''): string {
   const head = server ? `**[${escapeDiscord(server)}]** ` : '';
+  const nick = `**${escapeDiscord(name.trim() || '?')}**`;
   const [before, ...rest] = escapeDiscord(template).split('{name}');
-  const after = rest.join(`**${escapeDiscord(name.trim() || '?')}**`);
-  return `${head}${before}${rest.length ? `**${escapeDiscord(name.trim() || '?')}**${after}` : ''}`.trim();
+  return `${stamp(time)}${head}${before}${rest.length ? `${nick}${rest.join(nick)}` : ''}`.trim();
 }
 
 const ESC = String.fromCharCode(27);
 const seg = (color: AnsiColor, text: string, bold = false): string => (text ? `${ESC}[${bold ? 1 : 0};${ANSI_CODE[color]}m${text}${ESC}[0m` : '');
 
-/** a line of a chat in the colours of the game: «[Глобальный] WhiteLegioN: Тест» */
-export function ansiChatLine(kind: 'global' | 'clan' | 'local', name: string, clan: string, text: string, c: ChatColors, server = ''): string {
+/** a line of a chat in the colours of the game: «[16:07] [Глобальный] WhiteLegioN: Тест» (the time has the colour of the tag) */
+export function ansiChatLine(kind: 'global' | 'clan' | 'local', name: string, clan: string, text: string, c: ChatColors, server = '', time = ''): string {
   const t = forBlock(text);
   if (!t || isCommand(t)) return '';
   const tag = kind === 'clan' && clan.trim() ? `${CHAT_LABEL.clan} ${forBlock(clan)}` : CHAT_LABEL[kind];
   const head = server ? seg('gray', `[${forBlock(server)}] `) : '';
-  return `${head}${seg(c.tag, `[${tag}]`, true)} ${seg(c.name, forBlock(name) || '?', true)}${seg(c.text, ': ')}${seg(c.text, t.slice(0, 500))}`;
+  return `${seg(c.tag, stamp(time))}${head}${seg(c.tag, `[${tag}]`, true)} ${seg(c.name, forBlock(name) || '?', true)}${seg(c.text, ': ')}${seg(c.text, t.slice(0, 500))}`;
 }
 
-/** «* Игрок WhiteLegioN подключился к серверу.» in two colours: the nickname and the rest */
-export function ansiEventLine(template: string, name: string, c: ChatColors, server = ''): string {
+/** «[16:07] * Игрок WhiteLegioN подключился к серверу.» in two colours: the nickname and the rest */
+export function ansiEventLine(template: string, name: string, c: ChatColors, server = '', time = ''): string {
   const head = server ? seg('gray', `[${forBlock(server)}] `) : '';
   const parts = forBlock(template).split('{name}');
   const nick = forBlock(name) || '?';
   const body = parts.map((p, i) => seg(c.text, p) + (i < parts.length - 1 ? seg(c.name, nick, true) : '')).join('');
-  return `${head}${body}`;
+  return `${seg(c.text, stamp(time))}${head}${body}`;
 }
 
 /** the text of a Discord message for some lines: an ansi block, or the lines as they are */
@@ -139424,6 +139447,8 @@ export interface ChatSettings {
   kinds: Record<ChatKind, boolean>;
   style: 'ansi' | 'plain';
   senderName: string;
+  /** «[16:07]» in front of every line, like in the game */
+  showTime: boolean;
   colors: Record<ChatKind, ChatColors>;
 }
 
@@ -142800,7 +142825,8 @@ const en: Record<keyof typeof ru, string> = {
   'gn.h.expired': 'Not delivered',
   'gn.h.fail': 'Failed',
   'gn.reuse': 'Use again',  'adm.s.alerts': 'Alerts',
-  'gn.ch.label.global': 'Global',
+  'gn.ch.time': 'Show the time',
+  'gn.ch.timeNote': 'The time at the start of every line, like in the game chat: «[16:07] [Global] nick: text». It uses the time zone of the panel.',  'gn.ch.label.global': 'Global',
   'gn.ch.label.clan': 'Clan',
   'gn.ch.label.local': 'Local',
   'gn.ch.look': 'How it looks in Discord',
@@ -147419,7 +147445,8 @@ const ru = {
   'gn.h.expired': 'Не доставлено',
   'gn.h.fail': 'Ошибка',
   'gn.reuse': 'Использовать снова',  'adm.s.alerts': 'Оповещения',
-  'gn.ch.label.global': 'Глобальный',
+  'gn.ch.time': 'Показывать время',
+  'gn.ch.timeNote': 'Время в начале каждой строки, как в игровом чате: «[16:07] [Глобальный] ник: текст». Берётся по часовому поясу панели.',  'gn.ch.label.global': 'Глобальный',
   'gn.ch.label.clan': 'Клан',
   'gn.ch.label.local': 'Локальный',
   'gn.ch.look': 'Как это выглядит в Discord',
@@ -156243,10 +156270,12 @@ function AnsiSelect({ value, onChange, label }: { value: AnsiColor; onChange: (v
 }
 
 /** the sample lines of the chat as Discord will draw them (colours of the ansi block) */
-function DiscordPreview({ colors, joinText, leaveText }: { colors: Record<ChatKind, ChatColors>; joinText: string; leaveText: string }) {
+function DiscordPreview({ colors, joinText, leaveText, showTime }: { colors: Record<ChatKind, ChatColors>; joinText: string; leaveText: string; showTime: boolean }) {
   const nick = 'WhiteLegioN';
+  const clock = new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
   const chat = (k: 'global' | 'clan' | 'local', tag: string, text: string) => (
     <p key={k} className="wrap-break-word">
+      {showTime && <span style={{ color: ANSI_CSS[colors[k].tag] }}>[{clock}] </span>}
       <span style={{ color: ANSI_CSS[colors[k].tag], fontWeight: 800 }}>[{tag}]</span>{' '}
       <span style={{ color: ANSI_CSS[colors[k].name], fontWeight: 800 }}>{nick}</span>
       <span style={{ color: ANSI_CSS[colors[k].text] }}>: {text}</span>
@@ -156256,6 +156285,7 @@ function DiscordPreview({ colors, joinText, leaveText }: { colors: Record<ChatKi
     const parts = template.replace(/[<>]/g, '').split('{name}');
     return (
       <p key={k} className="wrap-break-word">
+        {showTime && <span style={{ color: ANSI_CSS[colors[k].text] }}>[{clock}] </span>}
         {parts.map((p, i) => (
           <span key={i}>
             <span style={{ color: ANSI_CSS[colors[k].text] }}>{p}</span>
@@ -156305,7 +156335,7 @@ export function ChatCard({ initial, joinText, leaveText }: { initial: ChatSettin
   };
 
   // how the lines look: saved by itself a moment after a change
-  const [look, setLook] = useState({ style: initial.style, senderName: initial.senderName, colors: initial.colors });
+  const [look, setLook] = useState({ style: initial.style, senderName: initial.senderName, showTime: initial.showTime, colors: initial.colors });
   const [lookSaved, setLookSaved] = useState(look);
   const auto = useAutosave({
     value: look,
@@ -156389,6 +156419,13 @@ export function ChatCard({ initial, joinText, leaveText }: { initial: ChatSettin
           </Field>
         </div>
         <p className="text-sm font-semibold text-mute">{t('gn.ch.senderNote')}</p>
+        <label className="flex items-start gap-3 font-bold">
+          <Switch className="mt-0.5" checked={look.showTime} onChange={(v) => setLook((x) => ({ ...x, showTime: v }))} />
+          <span>
+            {t('gn.ch.time')}
+            <span className="block text-sm font-semibold text-mute">{t('gn.ch.timeNote')}</span>
+          </span>
+        </label>
 
         {look.style === 'ansi' && (
           <>
@@ -156417,7 +156454,7 @@ export function ChatCard({ initial, joinText, leaveText }: { initial: ChatSettin
                 </tbody>
               </table>
             </div>
-            <DiscordPreview colors={look.colors} joinText={joinText} leaveText={leaveText} />
+            <DiscordPreview colors={look.colors} joinText={joinText} leaveText={leaveText} showTime={look.showTime} />
             <p className="text-sm font-semibold text-mute">{t('gn.ch.ansiNote')}</p>
           </>
         )}

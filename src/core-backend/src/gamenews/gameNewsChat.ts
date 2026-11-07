@@ -25,6 +25,7 @@ import {
   normalizeChat, wrapForDiscord, type ChatKind, type ChatStored,
 } from './gameNewsChatLogic.js';
 import { getJoinLeave } from './gameNewsJoinLeave.js';
+import { clock } from './gameNewsVars.js';
 
 const read = (): ChatStored => {
   try {
@@ -48,10 +49,10 @@ function webhookUrl(s: ChatStored = read()): string | null {
 /** the kinds of chat that are being forwarded (what the plugin has to read) */
 export const chatKinds = (): ChatKind[] => activeChatKinds(read());
 
-export function chatSettingsView(): Pick<ChatStored, 'enabled' | 'kinds' | 'style' | 'senderName' | 'colors'> & { set: boolean; tail: string } {
+export function chatSettingsView(): Pick<ChatStored, 'enabled' | 'kinds' | 'style' | 'senderName' | 'showTime' | 'colors'> & { set: boolean; tail: string } {
   const s = read();
   const u = webhookUrl(s);
-  return { enabled: s.enabled, set: !!u, tail: u ? `…${u.slice(-6)}` : '', kinds: s.kinds, style: s.style, senderName: s.senderName, colors: s.colors };
+  return { enabled: s.enabled, set: !!u, tail: u ? `…${u.slice(-6)}` : '', kinds: s.kinds, style: s.style, senderName: s.senderName, showTime: s.showTime, colors: s.colors };
 }
 
 // ---- posting
@@ -159,6 +160,7 @@ export function registerGameNewsChat({ app, admin }: { app: Express; admin: Requ
     const many = (db.prepare("SELECT COUNT(*) AS n FROM game_news_targets WHERE token_hash <> ''").get() as { n: number }).n > 1;
     const server = many ? serverLabelOf(t.server_id) : '';
     const jl = getJoinLeave();
+    const time = s.showTime ? clock(now) : '';
     for (const m of b.data.messages) {
       if (!kinds.has(m.type)) continue;
       const colors = s.colors[m.type];
@@ -166,11 +168,11 @@ export function registerGameNewsChat({ app, admin }: { app: Express; admin: Requ
       if (m.type === 'join' || m.type === 'leave') {
         // the same words as in the game (set in «Вход и выход игроков»)
         const template = m.type === 'join' ? jl.joinText : jl.leaveText;
-        line = s.style === 'ansi' ? ansiEventLine(template, m.name, colors, server) : formatEventLine(template, m.name, server);
+        line = s.style === 'ansi' ? ansiEventLine(template, m.name, colors, server, time) : formatEventLine(template, m.name, server, time);
       } else {
         line = s.style === 'ansi'
-          ? ansiChatLine(m.type, m.name, m.clan ?? '', m.text ?? '', colors, server)
-          : formatChatLine(m.type, m.name, m.clan ?? '', m.text ?? '', server);
+          ? ansiChatLine(m.type, m.name, m.clan ?? '', m.text ?? '', colors, server, time)
+          : formatChatLine(m.type, m.name, m.clan ?? '', m.text ?? '', server, time);
       }
       if (line) enqueue(line);
     }
@@ -186,6 +188,7 @@ export function registerGameNewsChat({ app, admin }: { app: Express; admin: Requ
       kinds: z.object(Object.fromEntries(CHAT_KINDS.map((k) => [k, z.boolean()]))).partial().optional(),
       style: z.enum(['ansi', 'plain']).optional(),
       senderName: z.string().max(80).optional(),
+      showTime: z.boolean().optional(),
       colors: colorsSchema.optional(),
     }).safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Проверьте поля' });
@@ -204,6 +207,7 @@ export function registerGameNewsChat({ app, admin }: { app: Express; admin: Requ
       if (c) s.colors[k] = { ...s.colors[k], ...Object.fromEntries(Object.entries(c).filter(([, v]) => v !== undefined)) };
     }
     if (b.data.style) s.style = b.data.style;
+    if (b.data.showTime !== undefined) s.showTime = b.data.showTime;
     if (b.data.senderName !== undefined) s.senderName = normalizeChat({ senderName: b.data.senderName }).senderName;
     write(s);
     res.json({ ok: true });
@@ -215,20 +219,22 @@ export function registerGameNewsChat({ app, admin }: { app: Express; admin: Requ
     const url = webhookUrl(s);
     if (!url) return res.status(400).json({ error: 'Сначала укажите webhook' });
     const jl = getJoinLeave();
+    const now = clock(Date.now());
+    const tm = s.showTime ? now : '';
     const lines = s.style === 'ansi'
       ? [
-        ansiChatLine('global', 'WhiteLegioN', '', 'Привет всем!', s.colors.global),
-        ansiChatLine('clan', 'WhiteLegioN', 'Ночные', 'Сбор у замка', s.colors.clan),
-        ansiChatLine('local', 'WhiteLegioN', '', 'Кто рядом?', s.colors.local),
-        ansiEventLine(jl.joinText, 'WhiteLegioN', s.colors.join),
-        ansiEventLine(jl.leaveText, 'WhiteLegioN', s.colors.leave),
+        ansiChatLine('global', 'WhiteLegioN', '', 'Привет всем!', s.colors.global, '', tm),
+        ansiChatLine('clan', 'WhiteLegioN', 'Ночные', 'Сбор у замка', s.colors.clan, '', tm),
+        ansiChatLine('local', 'WhiteLegioN', '', 'Кто рядом?', s.colors.local, '', tm),
+        ansiEventLine(jl.joinText, 'WhiteLegioN', s.colors.join, '', tm),
+        ansiEventLine(jl.leaveText, 'WhiteLegioN', s.colors.leave, '', tm),
       ]
       : [
-        formatChatLine('global', 'WhiteLegioN', '', 'Привет всем!'),
-        formatChatLine('clan', 'WhiteLegioN', 'Ночные', 'Сбор у замка'),
-        formatChatLine('local', 'WhiteLegioN', '', 'Кто рядом?'),
-        formatEventLine(jl.joinText, 'WhiteLegioN'),
-        formatEventLine(jl.leaveText, 'WhiteLegioN'),
+        formatChatLine('global', 'WhiteLegioN', '', 'Привет всем!', '', tm),
+        formatChatLine('clan', 'WhiteLegioN', 'Ночные', 'Сбор у замка', '', tm),
+        formatChatLine('local', 'WhiteLegioN', '', 'Кто рядом?', '', tm),
+        formatEventLine(jl.joinText, 'WhiteLegioN', '', tm),
+        formatEventLine(jl.leaveText, 'WhiteLegioN', '', tm),
       ];
     const r = await post(url, '✅ CoreGSM: канал подключён. Так будет выглядеть чат игры:', s.senderName);
     if (r.ok) await post(url, wrapForDiscord(s.style, lines.join('\n')), s.senderName);

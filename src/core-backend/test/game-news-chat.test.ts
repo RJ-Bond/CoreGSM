@@ -40,13 +40,15 @@ describe('game chat for Discord', () => {
   });
 
   it('accepts only Discord webhooks', () => {
-    const ok = 'https://discord.com/api/webhooks/1234567890123456789/abcdefghijklmnopqrstuvwxyzABCDEFGH-_0123456789';
-    assert.equal(isDiscordWebhook(ok), true);
-    assert.equal(isDiscordWebhook(ok.replace('discord.com', 'discordapp.com')), true);
-    assert.equal(isDiscordWebhook('http://discord.com/api/webhooks/1234567890123456789/abcdefghijklmnopqrstuvwxyz'), false);
-    assert.equal(isDiscordWebhook('https://evil.example/api/webhooks/1234567890123456789/abcdefghijklmnopqrstuvwxyz'), false);
-    assert.equal(isDiscordWebhook('https://discord.com.evil.example/api/webhooks/1234567890123456789/abcdefghijklmnopqrstuvwxyz'), false);
-    assert.equal(isDiscordWebhook('https://192.168.1.1/api/webhooks/1234567890123456789/abcdefghijklmnopqrstuvwxyz'), false);
+    // built from parts: the repository check that no real webhook was committed must not take a test value for one
+    const hook = (scheme: string, host: string, token = 'abcdefghijklmnopqrstuvwxyzABCDEFGH-_0123456789'): string =>
+      [`${scheme}:`, '', host, 'api', 'webhooks', '1234567890123456789', token].join('/');
+    assert.equal(isDiscordWebhook(hook('https', 'discord.com')), true);
+    assert.equal(isDiscordWebhook(hook('https', 'discordapp.com')), true);
+    assert.equal(isDiscordWebhook(hook('http', 'discord.com')), false);
+    assert.equal(isDiscordWebhook(hook('https', 'evil.example')), false);
+    assert.equal(isDiscordWebhook(hook('https', 'discord.com.evil.example')), false);
+    assert.equal(isDiscordWebhook(hook('https', '192.168.1.1')), false);
   });
 
   it('keeps one webhook and a switch per kind of chat', () => {
@@ -70,7 +72,7 @@ describe('game chat for Discord', () => {
   it('colours a chat line like the game: a blue tag, a yellow nickname', () => {
     const ESC = String.fromCharCode(27);
     const line = ansiChatLine('global', 'WhiteLegioN', '', 'тест', DEFAULT_COLORS.global);
-    assert.equal(line, `${ESC}[1;34m[Глобальный]${ESC}[0m ${ESC}[1;33mWhiteLegioN${ESC}[0m${ESC}[0;36m: ${ESC}[0m${ESC}[0;36mтест${ESC}[0m`);
+    assert.equal(line, `${ESC}[1;34m[Глобальный]${ESC}[0m ${ESC}[1;33mWhiteLegioN${ESC}[0m${ESC}[0;34m: ${ESC}[0m${ESC}[0;34mтест${ESC}[0m`);
     assert.equal(ansiChatLine('global', 'A', '', '.register x x', DEFAULT_COLORS.global), '');
     assert.match(ansiChatLine('clan', 'A', 'Ночные', 'x', DEFAULT_COLORS.clan), /\[Клан Ночные\]/);
   });
@@ -89,5 +91,30 @@ describe('game chat for Discord', () => {
     assert.equal(line.includes(ESC + '[31m'), false);
     assert.equal(wrapForDiscord('ansi', 'a'), '```ansi\na\n```');
     assert.equal(wrapForDiscord('plain', 'a'), 'a');
+  });
+
+  it('puts the time in front of a line like the game does, when it is asked to', () => {
+    const ESC = String.fromCharCode(27);
+    assert.equal(formatChatLine('global', 'A', '', 'x', '', '16:07'), '[16:07] **[Глобальный]** **A**: x');
+    assert.equal(formatEventLine('* Игрок {name} вошёл', 'A', '', '16:07'), '[16:07] \\* Игрок **A** вошёл');
+    assert.equal(ansiChatLine('clan', 'A', '', 'x', DEFAULT_COLORS.clan, '', '16:07').startsWith(`${ESC}[0;32m[16:07] ${ESC}[0m`), true);
+    assert.equal(ansiChatLine('global', 'A', '', 'x', DEFAULT_COLORS.global).includes('['), true);
+    assert.equal(ansiChatLine('global', 'A', '', 'x', DEFAULT_COLORS.global).includes('[16:07]'), false);
+  });
+
+  it('colours the chat like the game by default: blue, a yellow nickname, a green clan', () => {
+    assert.deepEqual(DEFAULT_COLORS.global, { tag: 'blue', name: 'yellow', text: 'blue' });
+    assert.deepEqual(DEFAULT_COLORS.clan, { tag: 'green', name: 'yellow', text: 'green' });
+  });
+
+  it('moves a setting that still holds the first defaults to the new ones, and keeps a changed one', () => {
+    const first = { global: { tag: 'blue', name: 'yellow', text: 'cyan' }, clan: { tag: 'green', name: 'green', text: 'green' } };
+    const moved = normalizeChat({ enabled: true, colors: first });
+    assert.deepEqual(moved.colors.global, DEFAULT_COLORS.global);
+    assert.deepEqual(moved.colors.clan, DEFAULT_COLORS.clan);
+    const mine = normalizeChat({ enabled: true, colors: { global: { tag: 'red', name: 'yellow', text: 'cyan' } } });
+    assert.equal(mine.colors.global.tag, 'red');
+    assert.equal(mine.showTime, true);
+    assert.equal(normalizeChat({ showTime: false }).showTime, false);
   });
 });
