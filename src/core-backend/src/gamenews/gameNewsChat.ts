@@ -16,7 +16,8 @@
  */
 import type { Express, RequestHandler } from 'express';
 import { z } from 'zod';
-import { db, getSetting, setSetting } from '../db.js';
+import { db } from '../db.js';
+import { hasOverride, readScoped, serverOf, writeScoped } from './gameNewsScope.js';
 import { log } from '../logger.js';
 import { decryptSecret, encryptSecret } from '../security/secrets.js';
 import { pluginTarget } from './gameNews.js';
@@ -27,16 +28,16 @@ import {
 import { getJoinLeave } from './gameNewsJoinLeave.js';
 import { clock } from './gameNewsVars.js';
 
-const read = (): ChatStored => {
+const read = (serverId?: number): ChatStored => {
   try {
-    return normalizeChat(JSON.parse(getSetting('gamenews_chat') || '{}'));
+    return normalizeChat(JSON.parse(readScoped('gamenews_chat', serverId) || '{}'));
   } catch {
     return normalizeChat({});
   }
 };
-const write = (s: ChatStored): void => setSetting('gamenews_chat', JSON.stringify(s));
+const write = (s: ChatStored, serverId?: number): void => writeScoped('gamenews_chat', JSON.stringify(s), serverId);
 
-function webhookUrl(s: ChatStored = read()): string | null {
+function webhookUrl(s: ChatStored): string | null {
   if (!s.webhook) return null;
   try {
     const url = decryptSecret(s.webhook);
@@ -47,22 +48,23 @@ function webhookUrl(s: ChatStored = read()): string | null {
 }
 
 /** the kinds of chat that are being forwarded (what the plugin has to read) */
-export const chatKinds = (): ChatKind[] => activeChatKinds(read());
 
-export function chatSettingsView(): Pick<ChatStored, 'enabled' | 'kinds' | 'style' | 'senderName' | 'showTime' | 'colors'> & { set: boolean; tail: string } {
-  const s = read();
+export function chatSettingsView(serverId?: number): Pick<ChatStored, 'enabled' | 'kinds' | 'style' | 'senderName' | 'showTime' | 'colors'> & { set: boolean; tail: string } {
+  const s = read(serverId);
   const u = webhookUrl(s);
   return { enabled: s.enabled, set: !!u, tail: u ? `…${u.slice(-6)}` : '', kinds: s.kinds, style: s.style, senderName: s.senderName, showTime: s.showTime, colors: s.colors };
 }
 
 // ---- posting
 const MAX_QUEUE = 200;
-let queue: string[] = [];
-let pausedUntil = 0;
+// one queue per set of chat settings: 0 = the general ones, a server id = that server's own (it may write to another channel)
+const queues = new Map<number, string[]>();
+const paused = new Map<number, number>();
 
-function enqueue(line: string): void {
-  queue.push(line);
-  if (queue.length > MAX_QUEUE) queue = queue.slice(-MAX_QUEUE); // a flood: the oldest lines go
+function enqueue(scope: number, line: string): void {
+  const q = queues.get(scope) ?? [];
+  q.push(line);
+  queues.set(scope, q.length > MAX_QUEUE ? q.slice(-MAX_QUEUE) : q); // a flood: the oldest lines go
 }
 
 async function post(url: string, content: string, sender: string): Promise<{ ok: boolean; retryAfter: number }> {
@@ -90,21 +92,22 @@ async function post(url: string, content: string, sender: string): Promise<{ ok:
 
 /** one pass of the sender: what has gathered goes out, in chunks that fit a Discord message */
 export async function flushChat(now = Date.now()): Promise<void> {
-  if (!queue.length || pausedUntil > now) return;
-  const s = read();
-  const url = webhookUrl(s);
-  const lines = queue;
-  queue = [];
-  if (!url) return;
-  // the fences of a code block take a few characters
-  const chunks = chunkLines(lines, s.style === 'ansi' ? 1850 : 1900);
-  for (let i = 0; i < chunks.length; i++) {
-    const r = await post(url, wrapForDiscord(s.style, chunks[i]), s.senderName);
-    if (r.retryAfter) {
-      pausedUntil = now + r.retryAfter * 1000;
-      // the chunk that was refused and the rest wait for the next pass
-      queue = [...chunks.slice(i).flatMap((c) => c.split('\n')), ...queue].slice(-MAX_QUEUE);
-      return;
+  for (const [scope, queue] of [...queues]) {
+    if (!queue.length || (paused.get(scope) ?? 0) > now) continue;
+    queues.set(scope, []);
+    const s = read(scope || undefined);
+    const url = webhookUrl(s);
+    if (!url) continue;
+    // the fences of a code block take a few characters
+    const chunks = chunkLines(queue, s.style === 'ansi' ? 1850 : 1900);
+    for (let i = 0; i < chunks.length; i++) {
+      const r = await post(url, wrapForDiscord(s.style, chunks[i]), s.senderName);
+      if (r.retryAfter) {
+        paused.set(scope, now + r.retryAfter * 1000);
+        // the chunk that was refused and the rest wait for the next pass
+        queues.set(scope, [...chunks.slice(i).flatMap((c) => c.split(String.fromCharCode(10))), ...(queues.get(scope) ?? [])].slice(-MAX_QUEUE));
+        break;
+      }
     }
   }
 }
@@ -137,11 +140,6 @@ const messageSchema = z.object({
   text: z.string().max(600).optional(),
 });
 
-function serverLabelOf(id: number): string {
-  const r = db.prepare("SELECT COALESCE(NULLIF(s.name, ''), NULLIF(st.name, ''), s.host || ':' || s.port) AS n FROM servers s LEFT JOIN status st ON st.server_id = s.id WHERE s.id = ?").get(id) as { n: string } | undefined;
-  return r?.n ?? '';
-}
-
 const ansiColor = z.enum(ANSI_COLORS);
 const colorsSchema = z.object(Object.fromEntries(CHAT_KINDS.map((k) => [k, z.object({ tag: ansiColor, name: ansiColor, text: ansiColor }).partial()]))).partial();
 
@@ -154,12 +152,13 @@ export function registerGameNewsChat({ app, admin }: { app: Express; admin: Requ
     if (!b.success) return res.status(400).json({ error: 'Проверьте поля' });
     const now = Date.now();
     if (flood(t.server_id, b.data.messages.length, now)) return res.status(429).json({ error: 'too many requests' });
-    const s = read();
+    // a server with its own chat settings writes by them (maybe to its own channel), the others by the general ones
+    const scope = hasOverride('gamenews_chat', t.server_id) ? t.server_id : 0;
+    const s = read(scope || undefined);
     const kinds = new Set(activeChatKinds(s));
-    // the name of the server is shown only when several servers write to the same channel
-    const many = (db.prepare("SELECT COUNT(*) AS n FROM game_news_targets WHERE token_hash <> ''").get() as { n: number }).n > 1;
-    const server = many ? serverLabelOf(t.server_id) : '';
-    const jl = getJoinLeave();
+    // the name of the server is not put into the lines: a server that needs its own channel gets its own settings
+    const server = '';
+    const jl = getJoinLeave(t.server_id);
     const time = s.showTime ? clock(now) : '';
     for (const m of b.data.messages) {
       if (!kinds.has(m.type)) continue;
@@ -174,7 +173,7 @@ export function registerGameNewsChat({ app, admin }: { app: Express; admin: Requ
           ? ansiChatLine(m.type, m.name, m.clan ?? '', m.text ?? '', colors, server, time)
           : formatChatLine(m.type, m.name, m.clan ?? '', m.text ?? '', server, time);
       }
-      if (line) enqueue(line);
+      if (line) enqueue(scope, line);
     }
     res.json({ ok: true });
   });
@@ -192,7 +191,8 @@ export function registerGameNewsChat({ app, admin }: { app: Express; admin: Requ
       colors: colorsSchema.optional(),
     }).safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Проверьте поля' });
-    const s = read();
+    const sid = serverOf(req);
+    const s = read(sid);
     const w = b.data.webhook?.trim();
     if (w) {
       if (!isDiscordWebhook(w)) return res.status(400).json({ error: 'Это не адрес webhook Discord (https://discord.com/api/webhooks/…)' });
@@ -209,16 +209,17 @@ export function registerGameNewsChat({ app, admin }: { app: Express; admin: Requ
     if (b.data.style) s.style = b.data.style;
     if (b.data.showTime !== undefined) s.showTime = b.data.showTime;
     if (b.data.senderName !== undefined) s.senderName = normalizeChat({ senderName: b.data.senderName }).senderName;
-    write(s);
+    write(s, sid);
     res.json({ ok: true });
   });
 
   // «Проверить»: a few sample lines into the channel, the way real ones will look
-  app.post('/api/game-news/chat-test', admin, async (_req, res) => {
-    const s = read();
+  app.post('/api/game-news/chat-test', admin, async (req, res) => {
+    const sid = serverOf(req);
+    const s = read(sid);
     const url = webhookUrl(s);
     if (!url) return res.status(400).json({ error: 'Сначала укажите webhook' });
-    const jl = getJoinLeave();
+    const jl = getJoinLeave(sid);
     const now = clock(Date.now());
     const tm = s.showTime ? now : '';
     const lines = s.style === 'ansi'

@@ -284,5 +284,9 @@ export interface RulesState {
   extras: Extras;
   register: RegisterSettings;
   chat: ChatSettings;
+  /** the servers that have settings of their own, by key */
+  overrides: Record<string, number[]>;
+  /** for one server: which parts have their own value */
+  mine: Record<string, boolean> | null;
   rules: RuleInfo[];
 }

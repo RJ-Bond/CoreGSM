@@ -8,6 +8,7 @@ import { db, getSetting, setSetting } from '../db.js';
 import { countdownEnabled } from './gameNewsRestart.js';
 import { getJoinLeave, isHexColor, plainLine, setJoinLeave } from './gameNewsJoinLeave.js';
 import { chatSettingsView } from './gameNewsChat.js';
+import { SCOPED_KEYS, clearOverride, hasOverride, overrides, serverOf } from './gameNewsScope.js';
 import { getRegisterSettings, setRegisterSettings } from './gameNewsRegister.js';
 import { getWelcome, setWelcome } from './gameNewsWelcome.js';
 import { MAX_TIPS, getExtras, setExtras } from './gameNewsVars.js';
@@ -96,9 +97,10 @@ export function registerGameNewsRules({ app, admin }: { app: Express; admin: Req
     upcoming: r.enabled ? upcomingRuns(schedOf(r), r.next_run, 5, tz()) : [],
   });
 
-  app.get('/api/game-news/rules', admin, (_req, res) => {
+  app.get('/api/game-news/rules', admin, (req, res) => {
+    const sid = serverOf(req);
     const rows = db.prepare('SELECT * FROM game_news_rules ORDER BY id').all() as RuleRow[];
-    res.json({ timezone: tz(), restartCountdown: countdownEnabled(), welcome: getWelcome(), joinLeave: getJoinLeave(), extras: getExtras(), register: getRegisterSettings(), chat: chatSettingsView(), rules: rows.map(serialize) });
+    res.json({ timezone: tz(), restartCountdown: countdownEnabled(), welcome: getWelcome(sid), joinLeave: getJoinLeave(sid), extras: getExtras(), register: getRegisterSettings(sid), chat: chatSettingsView(sid), overrides: overrides(), mine: sid ? Object.fromEntries(SCOPED_KEYS.map((k) => [k, hasOverride(k, sid)])) : null, rules: rows.map(serialize) });
   });
 
   // the countdown «через 10 / 5 / 1 минуту» before the planned restarts of monitoring/restarts.ts
@@ -120,7 +122,7 @@ export function registerGameNewsRules({ app, admin }: { app: Express; admin: Req
     const joinText = plainLine(b.data.joinText);
     const leaveText = plainLine(b.data.leaveText);
     if ((b.data.joinEnabled && !joinText) || (b.data.leaveEnabled && !leaveText)) return res.status(400).json({ error: 'Введите текст' });
-    setJoinLeave({ ...b.data, joinText, leaveText, nameColor: b.data.nameColor.toUpperCase(), textColor: b.data.textColor.toUpperCase() });
+    setJoinLeave({ ...b.data, joinText, leaveText, nameColor: b.data.nameColor.toUpperCase(), textColor: b.data.textColor.toUpperCase() }, serverOf(req));
     res.json({ ok: true });
   });
 
@@ -140,7 +142,7 @@ export function registerGameNewsRules({ app, admin }: { app: Express; admin: Req
     if (typeof t2 !== 'string') return res.status(400).json({ error: t2.error });
     out.text = t1;
     out.newText = t2;
-    setWelcome(out);
+    setWelcome(out, serverOf(req));
     res.json({ ok: true });
   });
 
@@ -151,7 +153,8 @@ export function registerGameNewsRules({ app, admin }: { app: Express; admin: Req
       pendingText: z.string().max(300), discordEveryHours: z.number().int().min(1).max(720),
     }).safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Проверьте поля' });
-    const d = getRegisterSettings();
+    const sid = serverOf(req);
+    const d = getRegisterSettings(sid);
     const keep = (x: string, old: string) => plainLine(x) || old;
     setRegisterSettings({
       enabled: b.data.enabled,
@@ -160,7 +163,17 @@ export function registerGameNewsRules({ app, admin }: { app: Express; admin: Req
       discordText: keep(b.data.discordText, d.discordText),
       pendingText: keep(b.data.pendingText, d.pendingText),
       discordEveryHours: b.data.discordEveryHours,
-    });
+    }, sid);
+    res.json({ ok: true });
+  });
+
+  // «Вернуть общие»: the server uses the general value of a setting again (part = welcome | joinleave | register | chat | restart, or all)
+  app.delete('/api/game-news/server-settings/:server', admin, (req, res) => {
+    const id = Number(req.params.server);
+    if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Проверьте поля' });
+    const part = String(req.query.part ?? 'all');
+    const keys = part === 'all' ? [...SCOPED_KEYS] : SCOPED_KEYS.filter((k) => k === `gamenews_${part === 'restart' ? 'restart_texts' : part}`);
+    for (const k of keys) clearOverride(k, id);
     res.json({ ok: true });
   });
 

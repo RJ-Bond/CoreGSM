@@ -4,6 +4,7 @@
  * A value that is not known right now is «—» (a text like «До рестарта: —» still reads well).
  */
 import { db, getSetting, setSetting } from '../db.js';
+import { readScoped } from './gameNewsScope.js';
 import { localParts } from '../admin/localTime.js';
 import { nextRun } from '../monitoring/restartLogic.js';
 import { plainLine } from './gameNewsJoinLeave.js';
@@ -74,17 +75,17 @@ function nextWipe(serverId: number, now: number): string {
 }
 
 /** the kinds of game chat that are forwarded to Discord (switch on, a webhook set, the kind not turned off): what the plugin reads */
-export function chatKindsConfigured(): ChatKind[] {
+export function chatKindsConfigured(serverId?: number): ChatKind[] {
   try {
-    return activeChatKinds(normalizeChat(JSON.parse(getSetting('gamenews_chat') || '{}')));
+    return activeChatKinds(normalizeChat(JSON.parse(readScoped('gamenews_chat', serverId) || '{}')));
   } catch {
     return [];
   }
 }
 
 /** registration from the game is switched on (the setting is kept by gameNewsRegister.ts) */
-export function registerEnabled(): boolean {
-  try { return (JSON.parse(getSetting('gamenews_register') || '{}') as { enabled?: boolean }).enabled === true; } catch { return false; }
+export function registerEnabled(serverId?: number): boolean {
+  try { return (JSON.parse(readScoped('gamenews_register', serverId) || '{}') as { enabled?: boolean }).enabled === true; } catch { return false; }
 }
 
 // ---- what the administrator keeps for {discord} and {tip}

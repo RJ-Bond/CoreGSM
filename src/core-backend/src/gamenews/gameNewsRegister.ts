@@ -16,7 +16,8 @@ import bcrypt from 'bcryptjs';
 import type { Express, RequestHandler } from 'express';
 import { z } from 'zod';
 import { needsSetup, publicBase, registrationMode, rulesText } from '../admin/site.js';
-import { db, getSetting, setSetting } from '../db.js';
+import { db } from '../db.js';
+import { readScoped, writeScoped } from './gameNewsScope.js';
 import { recordConsent } from '../monitoring/rules.js';
 import { passwordError } from '../security/passwordPolicy.js';
 import { registrationOpen } from '../security/auth.js';
@@ -54,9 +55,9 @@ const C_BAD = '#FF5555';
 const C_HINT = '#6EC1FF';
 const tag = (color: string, text: string): string => `<color=${color}>${plainLine(text)}</color>`;
 
-export function getRegisterSettings(): RegisterSettings {
+export function getRegisterSettings(serverId?: number): RegisterSettings {
   try {
-    const v = JSON.parse(getSetting('gamenews_register') || '{}') as Partial<RegisterSettings>;
+    const v = JSON.parse(readScoped('gamenews_register', serverId) || '{}') as Partial<RegisterSettings>;
     const d = DEFAULT_REGISTER;
     const text = (x: unknown, def: string) => (typeof x === 'string' && x.trim() ? x : def);
     return {
@@ -72,8 +73,8 @@ export function getRegisterSettings(): RegisterSettings {
   }
 }
 
-export function setRegisterSettings(v: RegisterSettings): void {
-  setSetting('gamenews_register', JSON.stringify(v));
+export function setRegisterSettings(v: RegisterSettings, serverId?: number): void {
+  writeScoped('gamenews_register', JSON.stringify(v), serverId);
 }
 
 const fill = (text: string, vars: { login?: string; panel: string }): string =>
@@ -105,7 +106,7 @@ export function registerGameNewsPlayers({ app }: { app: Express }): void {
 
   // who is this player: what should they read now
   app.get('/api/game-news/player/status', plugin, (req, res) => {
-    const s = getRegisterSettings();
+    const s = getRegisterSettings((req as typeof req & { gameServerId?: number }).gameServerId);
     const id = idSchema.safeParse(String(req.query.id ?? ''));
     if (!s.enabled || !id.success) return res.json({ registered: false, replies: [] });
     const now = Date.now();
@@ -128,7 +129,7 @@ export function registerGameNewsPlayers({ app }: { app: Express }): void {
   app.post('/api/game-news/player/register', plugin, async (req, res) => {
     const b = z.object({ id: idSchema, name: z.string().max(100), password: z.string().min(1).max(256) }).safeParse(req.body);
     if (!b.success) return res.status(400).json({ replies: [tag(C_BAD, '* Не удалось разобрать команду. Введите: .register пароль подтверждение_пароля')] });
-    const s = getRegisterSettings();
+    const s = getRegisterSettings((req as typeof req & { gameServerId?: number }).gameServerId);
     const now = Date.now();
     const say = (color: string, text: string) => res.json({ ok: false, replies: [tag(color, text)] });
     if (!s.enabled) return say(C_BAD, '* Регистрация из игры отключена.');

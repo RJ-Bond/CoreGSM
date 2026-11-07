@@ -10,6 +10,7 @@ import {
 } from '../gameNews';
 import { AdminPage, ErrorLine, IconNews, LoadError, Modal, PageHead, Spinner, errText, navigate, toast, usePoll } from '../ui';
 import { ChatCard, ExtrasCard, JoinLeaveCard, RegisterCard, RestartCard, WelcomeCard } from './GameNewsCards';
+import { ScopeBar, ScopeContext } from './GameNewsScope';
 import { ServerRestartCard } from './GameNewsServerRestart';
 import GameNewsRules from './GameNewsRules';
 
@@ -64,8 +65,16 @@ export default function GameNewsPage({ sub = '' }: { sub?: string }) {
   const [wizardOff, setWizardOff] = useState(() => { try { return localStorage.getItem('coregsm.gn.wizard') === '0'; } catch { return false; } });
 
   const loadMain = () => api<NewsState>('/game-news').then((d) => { setData(d); setError(''); }).catch((e: Error) => setError(e.message));
-  const loadRules = () => api<RulesState>('/game-news/rules').then(setRd).catch(() => undefined);
+  // «all servers» (0) or one server: the cards of the tabs show and save the settings of that choice
+  const [scope, setScope] = useState(() => { try { return Number(localStorage.getItem('coregsm.gn.scope')) || 0; } catch { return 0; } });
+  const [scopeRev, setScopeRev] = useState(0);
+  const pickScope = (id: number) => { setScope(id); try { localStorage.setItem('coregsm.gn.scope', String(id)); } catch { /* private mode */ } };
+  const effScope = !scope || !data || data.servers.some((x) => x.id === scope && x.hasToken) ? scope : 0;
+  const q = effScope ? `?server=${effScope}` : '';
+  const loadRules = () => api<RulesState>(`/game-news/rules${q}`).then(setRd).catch(() => undefined);
   usePoll(() => Promise.all([loadMain(), loadRules()]), 10_000);
+  // another choice: the old cards go at once, the settings of the new one are read
+  useEffect(() => { setRd(null); void loadRules(); }, [effScope]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const problem = validateNews(text);
   // the plugin exists for some games only: servers of other games are not listed (their number is shown)
@@ -259,24 +268,39 @@ export default function GameNewsPage({ sub = '' }: { sub?: string }) {
         </form>
       )}
 
-      {data && tab === 'auto' && <ServerRestartCard />}
-
       {data && tab === 'auto' && rd && <GameNewsRules servers={data.servers} rules={rd.rules} timezone={rd.timezone} reload={() => void loadRules()} />}
 
-      {data && tab === 'players' && rd && (
-        <div className="space-y-4">
-          <WelcomeCard initial={rd.welcome} />
-          <JoinLeaveCard initial={rd.joinLeave} />
-          <RegisterCard initial={rd.register} />
-          <RestartCard enabled={rd.restartCountdown} onChange={(v) => { api('/game-news/restart-countdown', 'PUT', { enabled: v }).then(() => loadRules()).catch((e: Error) => toast(errText(e), 'err')); }} />
-        </div>
+      {data && (tab === 'players' || tab === 'discord') && (
+        <ScopeBar
+          servers={data.servers.filter((x) => x.supported && x.hasToken).map((x) => ({ id: x.id, name: x.name }))}
+          value={effScope}
+          onChange={pickScope}
+          own={new Set(Object.values(rd?.overrides ?? {}).flat())}
+        />
       )}
 
-      {data && tab === 'discord' && rd && (
-        <div className="space-y-4">
-          <ChatCard initial={rd.chat} joinText={rd.joinLeave.joinText} leaveText={rd.joinLeave.leaveText} />
-          <ExtrasCard initial={rd.extras} />
-        </div>
+      {data && (tab === 'players' || tab === 'discord') && rd && (
+        <ScopeContext.Provider value={{
+          server: effScope, q, mine: rd.mine,
+          changed: () => void loadRules(),
+          reset: (part) => { api(`/game-news/server-settings/${effScope}?part=${part}`, 'DELETE').then(() => { setScopeRev((n) => n + 1); return loadRules(); }).catch((e: Error) => toast(errText(e), 'err')); },
+        }}>
+          {tab === 'players' && (
+            <div className="space-y-4" key={`p${effScope}-${scopeRev}`}>
+              <WelcomeCard initial={rd.welcome} />
+              <JoinLeaveCard initial={rd.joinLeave} />
+              <RegisterCard initial={rd.register} />
+              <ServerRestartCard />
+              <RestartCard enabled={rd.restartCountdown} onChange={(v) => { api('/game-news/restart-countdown', 'PUT', { enabled: v }).then(() => loadRules()).catch((e: Error) => toast(errText(e), 'err')); }} />
+            </div>
+          )}
+          {tab === 'discord' && (
+            <div className="space-y-4" key={`d${effScope}-${scopeRev}`}>
+              <ChatCard initial={rd.chat} joinText={rd.joinLeave.joinText} leaveText={rd.joinLeave.leaveText} />
+              <ExtrasCard initial={rd.extras} />
+            </div>
+          )}
+        </ScopeContext.Provider>
       )}
 
       {data && tab === 'history' && (

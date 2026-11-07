@@ -9,6 +9,7 @@ import {
   ANSI_COLORS, CHAT_KINDS, SWATCHES, WELCOME_STYLES, WELCOME_VARIABLES, composeLine, isHex, validateNews,
   type AnsiColor, type ChatColors, type ChatKind, type ChatSettings, type Extras, type JoinLeave, type RegisterSettings, type Welcome, type WelcomeStyle,
 } from '../gameNews';
+import { ScopeNote, useScope } from './GameNewsScope';
 import { Field, SaveBadge, errText, toast, useAutosave } from '../ui';
 
 const onOff = (b: boolean) => (b ? t('gn.f.on') : t('gn.f.off'));
@@ -19,6 +20,7 @@ const onOff = (b: boolean) => (b ? t('gn.f.on') : t('gn.f.off'));
  */
 export function WelcomeCard({ initial }: { initial: Welcome }) {
   useI18n();
+  const sc = useScope();
   const [f, setF] = useState<Welcome>(initial);
   const [saved, setSaved] = useState<Welcome>(initial);
   const [which, setWhich] = useState<'back' | 'new'>('back');
@@ -34,7 +36,7 @@ export function WelcomeCard({ initial }: { initial: Welcome }) {
       const q = v.split ? validateNews(v.newText) : null;
       return q ? t(q === 'long' ? 'gn.hint.long' : 'gn.hint.text') : null;
     },
-    save: async (v) => { await api('/game-news/welcome', 'PUT', v); setSaved(v); },
+    save: async (v) => { await api(`/game-news/welcome${sc.q}`, 'PUT', v); setSaved(v); sc.changed(); },
   });
 
   const editingNew = f.split && which === 'new';
@@ -55,6 +57,7 @@ export function WelcomeCard({ initial }: { initial: Welcome }) {
       on={f.enabled}
       status={<SaveBadge status={auto.status} error={auto.error} retry={auto.retry} />}
     >
+      <ScopeNote part="welcome" />
       <p className="text-sm font-semibold text-mute">{t('gn.w.note')}</p>
 
       <label className="flex items-center gap-3 font-bold">
@@ -121,6 +124,7 @@ function ColorField({ label, value, onChange }: { label: string; value: string; 
 /** «* Игрок {name} подключился к серверу.»: shown to everybody when a player joins or leaves, with the colours chosen here. */
 export function JoinLeaveCard({ initial }: { initial: JoinLeave }) {
   useI18n();
+  const sc = useScope();
   const [f, setF] = useState<JoinLeave>(initial);
   const [saved, setSaved] = useState<JoinLeave>(initial);
   const set = <K extends keyof JoinLeave>(k: K, v: JoinLeave[K]) => setF((x) => ({ ...x, [k]: v }));
@@ -133,7 +137,7 @@ export function JoinLeaveCard({ initial }: { initial: JoinLeave }) {
       if ((v.joinEnabled && !v.joinText.trim()) || (v.leaveEnabled && !v.leaveText.trim())) return t('gn.hint.text');
       return null;
     },
-    save: async (v) => { await api('/game-news/joinleave', 'PUT', v); setSaved(v); },
+    save: async (v) => { await api(`/game-news/joinleave${sc.q}`, 'PUT', v); setSaved(v); sc.changed(); },
   });
   const sample = (text: string) => composeLine(text, isHex(f.nameColor) ? f.nameColor : '#B86BFF', isHex(f.textColor) ? f.textColor : '#5FD068').replace(/\{name\}/g, 'WhiteLegioN');
 
@@ -145,6 +149,7 @@ export function JoinLeaveCard({ initial }: { initial: JoinLeave }) {
       on={f.joinEnabled || f.leaveEnabled}
       status={<SaveBadge status={auto.status} error={auto.error} retry={auto.retry} />}
     >
+      <ScopeNote part="joinleave" />
       <p className="text-sm font-semibold text-mute">{t('gn.jl.note')}</p>
 
       <div className="grid gap-4 lg:grid-cols-2">
@@ -182,6 +187,7 @@ export function JoinLeaveCard({ initial }: { initial: JoinLeave }) {
  */
 export function RegisterCard({ initial }: { initial: RegisterSettings }) {
   useI18n();
+  const sc = useScope();
   const [f, setF] = useState<RegisterSettings>(initial);
   const [saved, setSaved] = useState<RegisterSettings>(initial);
   const set = <K extends keyof RegisterSettings>(k: K, v: RegisterSettings[K]) => setF((x) => ({ ...x, [k]: v }));
@@ -193,7 +199,7 @@ export function RegisterCard({ initial }: { initial: RegisterSettings }) {
       if (!Number.isInteger(v.discordEveryHours) || v.discordEveryHours < 1 || v.discordEveryHours > 720) return t('gn.rg.badHours');
       return [v.promptText, v.doneText, v.discordText, v.pendingText].some((x) => !x.trim()) ? t('gn.hint.text') : null;
     },
-    save: async (v) => { await api('/game-news/register-settings', 'PUT', v); setSaved(v); },
+    save: async (v) => { await api(`/game-news/register-settings${sc.q}`, 'PUT', v); setSaved(v); sc.changed(); },
   });
   const sample = (text: string, color: string) => `<color=${color}>${text.replace(/[<>]/g, '').replace(/\{login\}/g, 'WhiteLegioN').replace(/\{panel\}/g, 'coregsm.example.com')}</color>`;
 
@@ -211,6 +217,7 @@ export function RegisterCard({ initial }: { initial: RegisterSettings }) {
       on={f.enabled}
       status={<SaveBadge status={auto.status} error={auto.error} retry={auto.retry} />}
     >
+      <ScopeNote part="register" />
       <p className="text-sm font-semibold text-mute">{t('gn.rg.note')}</p>
 
       <label className="flex items-center gap-3 font-bold">
@@ -314,6 +321,7 @@ function DiscordPreview({ colors, joinText, leaveText, showTime }: { colors: Rec
  */
 export function ChatCard({ initial, joinText, leaveText }: { initial: ChatSettings; joinText: string; leaveText: string }) {
   useI18n();
+  const sc = useScope();
   const [st, setSt] = useState<ChatSettings>(initial);
   const [busy, setBusy] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
@@ -322,15 +330,15 @@ export function ChatCard({ initial, joinText, leaveText }: { initial: ChatSettin
   // the address box takes the focus when it opens
   useEffect(() => { if (editing) hookInput.current?.focus(); }, [editing]);
 
-  const refresh = () => api<{ chat: ChatSettings }>('/game-news/rules').then((d) => setSt(d.chat)).catch(() => undefined);
+  const refresh = () => api<{ chat: ChatSettings }>(`/game-news/rules${sc.q}`).then((d) => setSt(d.chat)).catch(() => undefined);
   const send = async (body: Record<string, unknown>, who: string, quiet = false): Promise<boolean> => {
     setBusy(who);
-    try { await api('/game-news/chat-settings', 'PUT', body); await refresh(); if (!quiet) toast(t('gn.ch.saved')); return true; } catch (e) { toast(errText(e), 'err'); return false; } finally { setBusy(null); }
+    try { await api(`/game-news/chat-settings${sc.q}`, 'PUT', body); await refresh(); sc.changed(); if (!quiet) toast(t('gn.ch.saved')); return true; } catch (e) { toast(errText(e), 'err'); return false; } finally { setBusy(null); }
   };
   const test = async () => {
     setBusy('test');
     try {
-      const r = await api<{ ok: boolean }>('/game-news/chat-test', 'POST');
+      const r = await api<{ ok: boolean }>(`/game-news/chat-test${sc.q}`, 'POST');
       toast(r.ok ? t('gn.ch.testOk') : t('gn.ch.testFail'), r.ok ? undefined : 'err');
     } catch (e) { toast(errText(e), 'err'); } finally { setBusy(null); }
   };
@@ -342,7 +350,7 @@ export function ChatCard({ initial, joinText, leaveText }: { initial: ChatSettin
     value: look,
     saved: lookSaved,
     delay: 700,
-    save: async (v) => { await api('/game-news/chat-settings', 'PUT', v); setLookSaved(v); },
+    save: async (v) => { await api(`/game-news/chat-settings${sc.q}`, 'PUT', v); setLookSaved(v); sc.changed(); },
   });
   const setColor = (k: ChatKind, part: keyof ChatColors, v: AnsiColor) => setLook((x) => ({ ...x, colors: { ...x.colors, [k]: { ...x.colors[k], [part]: v } } }));
 
@@ -360,6 +368,7 @@ export function ChatCard({ initial, joinText, leaveText }: { initial: ChatSettin
       on={st.enabled && st.set && shown.length > 0}
       status={<SaveBadge status={auto.status} error={auto.error} retry={auto.retry} />}
     >
+      <ScopeNote part="chat" />
       <p className="text-sm font-semibold text-mute">{t('gn.ch.note')}</p>
 
       <label className="flex items-center gap-3 font-bold">

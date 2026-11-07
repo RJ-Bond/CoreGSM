@@ -9,7 +9,8 @@
  */
 import type { Express, RequestHandler } from 'express';
 import { z } from 'zod';
-import { db, getSetting, setSetting } from '../db.js';
+import { db } from '../db.js';
+import { readScoped, serverOf, writeScoped } from './gameNewsScope.js';
 import { log } from '../logger.js';
 import { internal } from '../security/auth.js';
 import { pluginTarget, queueNews } from './gameNews.js';
@@ -21,16 +22,16 @@ import { DUE_GRACE_MS, getJob, jobsIn, saveJob, setLastNotice, setState, type Jo
 import { serverLabel } from './gameNewsVars.js';
 
 // ---- the words of the notices (set in the panel)
-export function getTexts(): RestartTexts {
+export function getTexts(serverId?: number): RestartTexts {
   try {
-    const v = JSON.parse(getSetting('gamenews_restart_texts') || '{}') as Partial<RestartTexts>;
+    const v = JSON.parse(readScoped('gamenews_restart_texts', serverId) || '{}') as Partial<RestartTexts>;
     const pick = (x: unknown, d: string) => (typeof x === 'string' && x.trim() ? x : d);
     return { announce: pick(v.announce, DEFAULT_TEXTS.announce), now: pick(v.now, DEFAULT_TEXTS.now), cancel: pick(v.cancel, DEFAULT_TEXTS.cancel) };
   } catch {
     return { ...DEFAULT_TEXTS };
   }
 }
-const setTexts = (t: RestartTexts): void => setSetting('gamenews_restart_texts', JSON.stringify(t));
+const setTexts = (t: RestartTexts, serverId?: number): void => writeScoped('gamenews_restart_texts', JSON.stringify(t), serverId);
 
 /** servers that have a game plugin (a token): only they can be restarted this way */
 function pluginServers(): { id: number; name: string }[] {
@@ -50,7 +51,7 @@ export function startRestart(serverId: number, seconds: number, by: string, sour
     requested_by: by.slice(0, 80), source: source.slice(0, 40), state: 'counting',
   };
   saveJob(job);
-  tellChat(serverId, announceLine(getTexts(), seconds), now);
+  tellChat(serverId, announceLine(getTexts(serverId), seconds), now);
   log.info(`game restart of server ${serverId} in ${seconds} s (${source})`);
   return job;
 }
@@ -60,7 +61,7 @@ export function cancelRestart(serverId: number, now = Date.now()): boolean {
   const j = getJob(serverId);
   if (!j || (j.state !== 'counting' && j.state !== 'due')) return false;
   setState(serverId, 'cancelled');
-  tellChat(serverId, cancelLine(getTexts()), now);
+  tellChat(serverId, cancelLine(getTexts(serverId)), now);
   return true;
 }
 
@@ -70,13 +71,13 @@ export function tickRestartJobs(now = Date.now()): void {
     const r = Math.ceil((j.run_at - now) / 1000);
     if (r <= 0) {
       setState(j.server_id, 'due');
-      tellChat(j.server_id, nowLine(getTexts()), now);
+      tellChat(j.server_id, nowLine(getTexts(j.server_id)), now);
       continue;
     }
     const p = nextNotice(r, j.last_notice);
     if (p !== null) {
       setLastNotice(j.server_id, p);
-      tellChat(j.server_id, announceLine(getTexts(), noticeSeconds(p, r)), now);
+      tellChat(j.server_id, announceLine(getTexts(j.server_id), noticeSeconds(p, r)), now);
     }
   }
   for (const j of jobsIn('due')) if (now - j.run_at > DUE_GRACE_MS) setState(j.server_id, 'missed');
@@ -123,13 +124,13 @@ const C_BAD = '#FF5555';
 
 export function registerGameNewsServerRestart({ app, admin }: { app: Express; admin: RequestHandler }): void {
   // ---- the panel
-  app.get('/api/game-news/restart', admin, (_req, res) => {
+  app.get('/api/game-news/restart', admin, (req, res) => {
     const now = Date.now();
     const jobs = jobsIn('counting', 'due', 'sent').map((j) => ({
       serverId: j.server_id, serverName: serverLabel(j.server_id), runAt: j.run_at, by: j.requested_by, source: j.source, state: j.state,
       left: Math.max(0, Math.ceil((j.run_at - now) / 1000)),
     }));
-    res.json({ jobs, texts: getTexts(), servers: pluginServers() });
+    res.json({ jobs, texts: getTexts(serverOf(req)), servers: pluginServers() });
   });
 
   app.post('/api/game-news/restart', admin, (req, res) => {
@@ -154,9 +155,10 @@ export function registerGameNewsServerRestart({ app, admin }: { app: Express; ad
   app.put('/api/game-news/restart-texts', admin, (req, res) => {
     const b = z.object({ announce: z.string().max(300), now: z.string().max(300), cancel: z.string().max(300) }).safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Проверьте поля' });
-    const d = getTexts();
+    const sid = serverOf(req);
+    const d = getTexts(sid);
     const keep = (x: string, old: string) => plainLine(x) || old;
-    setTexts({ announce: keep(b.data.announce, d.announce), now: keep(b.data.now, d.now), cancel: keep(b.data.cancel, d.cancel) });
+    setTexts({ announce: keep(b.data.announce, d.announce), now: keep(b.data.now, d.now), cancel: keep(b.data.cancel, d.cancel) }, sid);
     res.json({ ok: true });
   });
 

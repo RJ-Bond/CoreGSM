@@ -7,15 +7,15 @@
  * The panel fills in the variables ({server}, {online}, {greeting}, {restart} ...) for the server that asks; {name}, the
  * nickname of the player, is filled in by the plugin, which also knows whether the player has been here before.
  */
-import { getSetting, setSetting } from '../db.js';
+import { readScoped, writeScoped } from './gameNewsScope.js';
 import { applyVars, greenName } from './gameNewsLogic.js';
 import { varsFor } from './gameNewsVars.js';
 
 export interface Welcome { enabled: boolean; text: string; split: boolean; newText: string }
 
-export function getWelcome(): Welcome {
+export function getWelcome(serverId?: number): Welcome {
   try {
-    const v = JSON.parse(getSetting('gamenews_welcome') || '{}') as Partial<Welcome>;
+    const v = JSON.parse(readScoped('gamenews_welcome', serverId) || '{}') as Partial<Welcome>;
     return {
       enabled: !!v.enabled,
       text: typeof v.text === 'string' ? v.text : '',
@@ -27,13 +27,13 @@ export function getWelcome(): Welcome {
   }
 }
 
-export function setWelcome(w: Welcome): void {
-  setSetting('gamenews_welcome', JSON.stringify(w));
+export function setWelcome(w: Welcome, serverId?: number): void {
+  writeScoped('gamenews_welcome', JSON.stringify(w), serverId);
 }
 
 /** what the plugin of a server gets: '' when the greeting is off */
 export function welcomeFor(serverId: number, now: number): { welcome: string; welcomeNew: string } {
-  const w = getWelcome();
+  const w = getWelcome(serverId);
   if (!w.enabled || !w.text.trim()) return { welcome: '', welcomeNew: '' };
   const vars = varsFor(serverId, now);
   // the player's name is green unless the administrator coloured it

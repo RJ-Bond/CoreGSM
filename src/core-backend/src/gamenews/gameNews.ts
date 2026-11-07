@@ -191,6 +191,6 @@ export function registerGameNews({ app, admin }: { app: Express; admin: RequestH
       db.transaction(() => { for (const r of rows) done.run(now, r.id); })();
     }
     // latest = the newest plugin version this panel knows (the plugin logs when it is older); welcome = the greeting for joining players
-    res.json({ messages: rows.map((r) => ({ id: r.id, text: r.text })), latest: PLUGIN_VERSION, ...welcomeFor(t.server_id, now), ...joinLeaveFor(), register: registerEnabled(), chat: chatKindsConfigured(), restart: consumeDue(t.server_id) });
+    res.json({ messages: rows.map((r) => ({ id: r.id, text: r.text })), latest: PLUGIN_VERSION, ...welcomeFor(t.server_id, now), ...joinLeaveFor(t.server_id), register: registerEnabled(t.server_id), chat: chatKindsConfigured(t.server_id), restart: consumeDue(t.server_id) });
   });
 }

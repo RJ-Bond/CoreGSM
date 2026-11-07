@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { api } from '../api';
 import { FoldCard } from '../components/GameNewsParts';
 import { t, useI18n } from '../i18n';
+import { ScopeNote, useScope } from './GameNewsScope';
 import { Field, SaveBadge, errText, toast, useAutosave, usePoll } from '../ui';
 
 interface Job { serverId: number; serverName: string; runAt: number; by: string; source: string; state: string; left: number }
@@ -22,6 +23,7 @@ function clock(sec: number): string {
 /** A restart of a game server by a timer: the chat is told how long is left, then the plugin closes the server. */
 export function ServerRestartCard() {
   useI18n();
+  const sc = useScope();
   const [st, setSt] = useState<State | null>(null);
   const [server, setServer] = useState(0);
   const [time, setTime] = useState('5m');
@@ -32,7 +34,7 @@ export function ServerRestartCard() {
   const [at, setAt] = useState(Date.now());
   const [, tick] = useState(0);
 
-  const load = () => api<State>('/game-news/restart').then((d) => {
+  const load = () => api<State>(`/game-news/restart${sc.q}`).then((d) => {
     setSt(d); setAt(Date.now());
     setTexts((x) => x ?? d.texts); setSaved((x) => x ?? d.texts);
     setServer((s) => s || d.servers[0]?.id || 0);
@@ -44,7 +46,7 @@ export function ServerRestartCard() {
     saved: saved ?? { announce: '', now: '', cancel: '' },
     delay: 900,
     validate: (v) => (v.announce.trim() && v.now.trim() && v.cancel.trim() ? '' : t('gn.rr.empty')),
-    save: async (v) => { await api('/game-news/restart-texts', 'PUT', v); setSaved(v); },
+    save: async (v) => { await api(`/game-news/restart-texts${sc.q}`, 'PUT', v); setSaved(v); sc.changed(); },
   });
 
   if (!st || st.servers.length === 0) return null;
@@ -90,6 +92,7 @@ export function ServerRestartCard() {
       {texts && (
         <div className="space-y-3">
           <h4 className="font-extrabold">{t('gn.rr.words')}</h4>
+          <ScopeNote part="restart" />
           <Field label={t('gn.rr.announce')}>
             <input className="input" value={texts.announce} maxLength={300} onChange={(e) => setTexts({ ...texts, announce: e.target.value })} />
           </Field>

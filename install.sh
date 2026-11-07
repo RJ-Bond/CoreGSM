@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="af8e190fccf6"
+COREGSM_BUILD="7ae4c920ebb3"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.80"
+COREGSM_VERSION="1.1.81"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -24047,7 +24047,7 @@ export function registerGameNews({ app, admin }: { app: Express; admin: RequestH
       db.transaction(() => { for (const r of rows) done.run(now, r.id); })();
     }
     // latest = the newest plugin version this panel knows (the plugin logs when it is older); welcome = the greeting for joining players
-    res.json({ messages: rows.map((r) => ({ id: r.id, text: r.text })), latest: PLUGIN_VERSION, ...welcomeFor(t.server_id, now), ...joinLeaveFor(), register: registerEnabled(), chat: chatKindsConfigured(), restart: consumeDue(t.server_id) });
+    res.json({ messages: rows.map((r) => ({ id: r.id, text: r.text })), latest: PLUGIN_VERSION, ...welcomeFor(t.server_id, now), ...joinLeaveFor(t.server_id), register: registerEnabled(t.server_id), chat: chatKindsConfigured(t.server_id), restart: consumeDue(t.server_id) });
   });
 }
 __COREGSM_EOF__
@@ -24071,7 +24071,8 @@ __COREGSM_EOF__
  */
 import type { Express, RequestHandler } from 'express';
 import { z } from 'zod';
-import { db, getSetting, setSetting } from '../db.js';
+import { db } from '../db.js';
+import { hasOverride, readScoped, serverOf, writeScoped } from './gameNewsScope.js';
 import { log } from '../logger.js';
 import { decryptSecret, encryptSecret } from '../security/secrets.js';
 import { pluginTarget } from './gameNews.js';
@@ -24082,16 +24083,16 @@ import {
 import { getJoinLeave } from './gameNewsJoinLeave.js';
 import { clock } from './gameNewsVars.js';
 
-const read = (): ChatStored => {
+const read = (serverId?: number): ChatStored => {
   try {
-    return normalizeChat(JSON.parse(getSetting('gamenews_chat') || '{}'));
+    return normalizeChat(JSON.parse(readScoped('gamenews_chat', serverId) || '{}'));
   } catch {
     return normalizeChat({});
   }
 };
-const write = (s: ChatStored): void => setSetting('gamenews_chat', JSON.stringify(s));
+const write = (s: ChatStored, serverId?: number): void => writeScoped('gamenews_chat', JSON.stringify(s), serverId);
 
-function webhookUrl(s: ChatStored = read()): string | null {
+function webhookUrl(s: ChatStored): string | null {
   if (!s.webhook) return null;
   try {
     const url = decryptSecret(s.webhook);
@@ -24102,22 +24103,23 @@ function webhookUrl(s: ChatStored = read()): string | null {
 }
 
 /** the kinds of chat that are being forwarded (what the plugin has to read) */
-export const chatKinds = (): ChatKind[] => activeChatKinds(read());
 
-export function chatSettingsView(): Pick<ChatStored, 'enabled' | 'kinds' | 'style' | 'senderName' | 'showTime' | 'colors'> & { set: boolean; tail: string } {
-  const s = read();
+export function chatSettingsView(serverId?: number): Pick<ChatStored, 'enabled' | 'kinds' | 'style' | 'senderName' | 'showTime' | 'colors'> & { set: boolean; tail: string } {
+  const s = read(serverId);
   const u = webhookUrl(s);
   return { enabled: s.enabled, set: !!u, tail: u ? `…${u.slice(-6)}` : '', kinds: s.kinds, style: s.style, senderName: s.senderName, showTime: s.showTime, colors: s.colors };
 }
 
 // ---- posting
 const MAX_QUEUE = 200;
-let queue: string[] = [];
-let pausedUntil = 0;
+// one queue per set of chat settings: 0 = the general ones, a server id = that server's own (it may write to another channel)
+const queues = new Map<number, string[]>();
+const paused = new Map<number, number>();
 
-function enqueue(line: string): void {
-  queue.push(line);
-  if (queue.length > MAX_QUEUE) queue = queue.slice(-MAX_QUEUE); // a flood: the oldest lines go
+function enqueue(scope: number, line: string): void {
+  const q = queues.get(scope) ?? [];
+  q.push(line);
+  queues.set(scope, q.length > MAX_QUEUE ? q.slice(-MAX_QUEUE) : q); // a flood: the oldest lines go
 }
 
 async function post(url: string, content: string, sender: string): Promise<{ ok: boolean; retryAfter: number }> {
@@ -24145,21 +24147,22 @@ async function post(url: string, content: string, sender: string): Promise<{ ok:
 
 /** one pass of the sender: what has gathered goes out, in chunks that fit a Discord message */
 export async function flushChat(now = Date.now()): Promise<void> {
-  if (!queue.length || pausedUntil > now) return;
-  const s = read();
-  const url = webhookUrl(s);
-  const lines = queue;
-  queue = [];
-  if (!url) return;
-  // the fences of a code block take a few characters
-  const chunks = chunkLines(lines, s.style === 'ansi' ? 1850 : 1900);
-  for (let i = 0; i < chunks.length; i++) {
-    const r = await post(url, wrapForDiscord(s.style, chunks[i]), s.senderName);
-    if (r.retryAfter) {
-      pausedUntil = now + r.retryAfter * 1000;
-      // the chunk that was refused and the rest wait for the next pass
-      queue = [...chunks.slice(i).flatMap((c) => c.split('\n')), ...queue].slice(-MAX_QUEUE);
-      return;
+  for (const [scope, queue] of [...queues]) {
+    if (!queue.length || (paused.get(scope) ?? 0) > now) continue;
+    queues.set(scope, []);
+    const s = read(scope || undefined);
+    const url = webhookUrl(s);
+    if (!url) continue;
+    // the fences of a code block take a few characters
+    const chunks = chunkLines(queue, s.style === 'ansi' ? 1850 : 1900);
+    for (let i = 0; i < chunks.length; i++) {
+      const r = await post(url, wrapForDiscord(s.style, chunks[i]), s.senderName);
+      if (r.retryAfter) {
+        paused.set(scope, now + r.retryAfter * 1000);
+        // the chunk that was refused and the rest wait for the next pass
+        queues.set(scope, [...chunks.slice(i).flatMap((c) => c.split(String.fromCharCode(10))), ...(queues.get(scope) ?? [])].slice(-MAX_QUEUE));
+        break;
+      }
     }
   }
 }
@@ -24192,11 +24195,6 @@ const messageSchema = z.object({
   text: z.string().max(600).optional(),
 });
 
-function serverLabelOf(id: number): string {
-  const r = db.prepare("SELECT COALESCE(NULLIF(s.name, ''), NULLIF(st.name, ''), s.host || ':' || s.port) AS n FROM servers s LEFT JOIN status st ON st.server_id = s.id WHERE s.id = ?").get(id) as { n: string } | undefined;
-  return r?.n ?? '';
-}
-
 const ansiColor = z.enum(ANSI_COLORS);
 const colorsSchema = z.object(Object.fromEntries(CHAT_KINDS.map((k) => [k, z.object({ tag: ansiColor, name: ansiColor, text: ansiColor }).partial()]))).partial();
 
@@ -24209,12 +24207,13 @@ export function registerGameNewsChat({ app, admin }: { app: Express; admin: Requ
     if (!b.success) return res.status(400).json({ error: 'Проверьте поля' });
     const now = Date.now();
     if (flood(t.server_id, b.data.messages.length, now)) return res.status(429).json({ error: 'too many requests' });
-    const s = read();
+    // a server with its own chat settings writes by them (maybe to its own channel), the others by the general ones
+    const scope = hasOverride('gamenews_chat', t.server_id) ? t.server_id : 0;
+    const s = read(scope || undefined);
     const kinds = new Set(activeChatKinds(s));
-    // the name of the server is shown only when several servers write to the same channel
-    const many = (db.prepare("SELECT COUNT(*) AS n FROM game_news_targets WHERE token_hash <> ''").get() as { n: number }).n > 1;
-    const server = many ? serverLabelOf(t.server_id) : '';
-    const jl = getJoinLeave();
+    // the name of the server is not put into the lines: a server that needs its own channel gets its own settings
+    const server = '';
+    const jl = getJoinLeave(t.server_id);
     const time = s.showTime ? clock(now) : '';
     for (const m of b.data.messages) {
       if (!kinds.has(m.type)) continue;
@@ -24229,7 +24228,7 @@ export function registerGameNewsChat({ app, admin }: { app: Express; admin: Requ
           ? ansiChatLine(m.type, m.name, m.clan ?? '', m.text ?? '', colors, server, time)
           : formatChatLine(m.type, m.name, m.clan ?? '', m.text ?? '', server, time);
       }
-      if (line) enqueue(line);
+      if (line) enqueue(scope, line);
     }
     res.json({ ok: true });
   });
@@ -24247,7 +24246,8 @@ export function registerGameNewsChat({ app, admin }: { app: Express; admin: Requ
       colors: colorsSchema.optional(),
     }).safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Проверьте поля' });
-    const s = read();
+    const sid = serverOf(req);
+    const s = read(sid);
     const w = b.data.webhook?.trim();
     if (w) {
       if (!isDiscordWebhook(w)) return res.status(400).json({ error: 'Это не адрес webhook Discord (https://discord.com/api/webhooks/…)' });
@@ -24264,16 +24264,17 @@ export function registerGameNewsChat({ app, admin }: { app: Express; admin: Requ
     if (b.data.style) s.style = b.data.style;
     if (b.data.showTime !== undefined) s.showTime = b.data.showTime;
     if (b.data.senderName !== undefined) s.senderName = normalizeChat({ senderName: b.data.senderName }).senderName;
-    write(s);
+    write(s, sid);
     res.json({ ok: true });
   });
 
   // «Проверить»: a few sample lines into the channel, the way real ones will look
-  app.post('/api/game-news/chat-test', admin, async (_req, res) => {
-    const s = read();
+  app.post('/api/game-news/chat-test', admin, async (req, res) => {
+    const sid = serverOf(req);
+    const s = read(sid);
     const url = webhookUrl(s);
     if (!url) return res.status(400).json({ error: 'Сначала укажите webhook' });
-    const jl = getJoinLeave();
+    const jl = getJoinLeave(sid);
     const now = clock(Date.now());
     const tm = s.showTime ? now : '';
     const lines = s.style === 'ansi'
@@ -24493,7 +24494,7 @@ __COREGSM_EOF__
  * and the one of the rest of the text. One JSON setting: `gamenews_joinleave`. The panel builds the tagged text and
  * the plugin only puts the nickname into {name}.
  */
-import { getSetting, setSetting } from '../db.js';
+import { readScoped, writeScoped } from './gameNewsScope.js';
 
 export interface JoinLeave {
   joinEnabled: boolean;
@@ -24520,9 +24521,9 @@ export function plainLine(s: string): string {
   return s.replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/[<>]/g, '').replace(/ {2,}/g, ' ').trim();
 }
 
-export function getJoinLeave(): JoinLeave {
+export function getJoinLeave(serverId?: number): JoinLeave {
   try {
-    const v = JSON.parse(getSetting('gamenews_joinleave') || '{}') as Partial<JoinLeave>;
+    const v = JSON.parse(readScoped('gamenews_joinleave', serverId) || '{}') as Partial<JoinLeave>;
     const d = DEFAULT_JOIN_LEAVE;
     return {
       joinEnabled: !!v.joinEnabled,
@@ -24537,8 +24538,8 @@ export function getJoinLeave(): JoinLeave {
   }
 }
 
-export function setJoinLeave(v: JoinLeave): void {
-  setSetting('gamenews_joinleave', JSON.stringify(v));
+export function setJoinLeave(v: JoinLeave, serverId?: number): void {
+  writeScoped('gamenews_joinleave', JSON.stringify(v), serverId);
 }
 
 /** `text` with {name} in the name colour and everything else in the text colour: the tagged text the plugin shows */
@@ -24548,8 +24549,8 @@ export function composeLine(text: string, nameColor: string, textColor: string):
 }
 
 /** what the plugin gets with a poll: '' when that message is off */
-export function joinLeaveFor(): { join: string; leave: string } {
-  const v = getJoinLeave();
+export function joinLeaveFor(serverId?: number): { join: string; leave: string } {
+  const v = getJoinLeave(serverId);
   return {
     join: v.joinEnabled ? composeLine(v.joinText, v.nameColor, v.textColor) : '',
     leave: v.leaveEnabled ? composeLine(v.leaveText, v.nameColor, v.textColor) : '',
@@ -24694,7 +24695,8 @@ import bcrypt from 'bcryptjs';
 import type { Express, RequestHandler } from 'express';
 import { z } from 'zod';
 import { needsSetup, publicBase, registrationMode, rulesText } from '../admin/site.js';
-import { db, getSetting, setSetting } from '../db.js';
+import { db } from '../db.js';
+import { readScoped, writeScoped } from './gameNewsScope.js';
 import { recordConsent } from '../monitoring/rules.js';
 import { passwordError } from '../security/passwordPolicy.js';
 import { registrationOpen } from '../security/auth.js';
@@ -24732,9 +24734,9 @@ const C_BAD = '#FF5555';
 const C_HINT = '#6EC1FF';
 const tag = (color: string, text: string): string => `<color=${color}>${plainLine(text)}</color>`;
 
-export function getRegisterSettings(): RegisterSettings {
+export function getRegisterSettings(serverId?: number): RegisterSettings {
   try {
-    const v = JSON.parse(getSetting('gamenews_register') || '{}') as Partial<RegisterSettings>;
+    const v = JSON.parse(readScoped('gamenews_register', serverId) || '{}') as Partial<RegisterSettings>;
     const d = DEFAULT_REGISTER;
     const text = (x: unknown, def: string) => (typeof x === 'string' && x.trim() ? x : def);
     return {
@@ -24750,8 +24752,8 @@ export function getRegisterSettings(): RegisterSettings {
   }
 }
 
-export function setRegisterSettings(v: RegisterSettings): void {
-  setSetting('gamenews_register', JSON.stringify(v));
+export function setRegisterSettings(v: RegisterSettings, serverId?: number): void {
+  writeScoped('gamenews_register', JSON.stringify(v), serverId);
 }
 
 const fill = (text: string, vars: { login?: string; panel: string }): string =>
@@ -24783,7 +24785,7 @@ export function registerGameNewsPlayers({ app }: { app: Express }): void {
 
   // who is this player: what should they read now
   app.get('/api/game-news/player/status', plugin, (req, res) => {
-    const s = getRegisterSettings();
+    const s = getRegisterSettings((req as typeof req & { gameServerId?: number }).gameServerId);
     const id = idSchema.safeParse(String(req.query.id ?? ''));
     if (!s.enabled || !id.success) return res.json({ registered: false, replies: [] });
     const now = Date.now();
@@ -24806,7 +24808,7 @@ export function registerGameNewsPlayers({ app }: { app: Express }): void {
   app.post('/api/game-news/player/register', plugin, async (req, res) => {
     const b = z.object({ id: idSchema, name: z.string().max(100), password: z.string().min(1).max(256) }).safeParse(req.body);
     if (!b.success) return res.status(400).json({ replies: [tag(C_BAD, '* Не удалось разобрать команду. Введите: .register пароль подтверждение_пароля')] });
-    const s = getRegisterSettings();
+    const s = getRegisterSettings((req as typeof req & { gameServerId?: number }).gameServerId);
     const now = Date.now();
     const say = (color: string, text: string) => res.json({ ok: false, replies: [tag(color, text)] });
     if (!s.enabled) return say(C_BAD, '* Регистрация из игры отключена.');
@@ -25068,6 +25070,7 @@ import { db, getSetting, setSetting } from '../db.js';
 import { countdownEnabled } from './gameNewsRestart.js';
 import { getJoinLeave, isHexColor, plainLine, setJoinLeave } from './gameNewsJoinLeave.js';
 import { chatSettingsView } from './gameNewsChat.js';
+import { SCOPED_KEYS, clearOverride, hasOverride, overrides, serverOf } from './gameNewsScope.js';
 import { getRegisterSettings, setRegisterSettings } from './gameNewsRegister.js';
 import { getWelcome, setWelcome } from './gameNewsWelcome.js';
 import { MAX_TIPS, getExtras, setExtras } from './gameNewsVars.js';
@@ -25156,9 +25159,10 @@ export function registerGameNewsRules({ app, admin }: { app: Express; admin: Req
     upcoming: r.enabled ? upcomingRuns(schedOf(r), r.next_run, 5, tz()) : [],
   });
 
-  app.get('/api/game-news/rules', admin, (_req, res) => {
+  app.get('/api/game-news/rules', admin, (req, res) => {
+    const sid = serverOf(req);
     const rows = db.prepare('SELECT * FROM game_news_rules ORDER BY id').all() as RuleRow[];
-    res.json({ timezone: tz(), restartCountdown: countdownEnabled(), welcome: getWelcome(), joinLeave: getJoinLeave(), extras: getExtras(), register: getRegisterSettings(), chat: chatSettingsView(), rules: rows.map(serialize) });
+    res.json({ timezone: tz(), restartCountdown: countdownEnabled(), welcome: getWelcome(sid), joinLeave: getJoinLeave(sid), extras: getExtras(), register: getRegisterSettings(sid), chat: chatSettingsView(sid), overrides: overrides(), mine: sid ? Object.fromEntries(SCOPED_KEYS.map((k) => [k, hasOverride(k, sid)])) : null, rules: rows.map(serialize) });
   });
 
   // the countdown «через 10 / 5 / 1 минуту» before the planned restarts of monitoring/restarts.ts
@@ -25180,7 +25184,7 @@ export function registerGameNewsRules({ app, admin }: { app: Express; admin: Req
     const joinText = plainLine(b.data.joinText);
     const leaveText = plainLine(b.data.leaveText);
     if ((b.data.joinEnabled && !joinText) || (b.data.leaveEnabled && !leaveText)) return res.status(400).json({ error: 'Введите текст' });
-    setJoinLeave({ ...b.data, joinText, leaveText, nameColor: b.data.nameColor.toUpperCase(), textColor: b.data.textColor.toUpperCase() });
+    setJoinLeave({ ...b.data, joinText, leaveText, nameColor: b.data.nameColor.toUpperCase(), textColor: b.data.textColor.toUpperCase() }, serverOf(req));
     res.json({ ok: true });
   });
 
@@ -25200,7 +25204,7 @@ export function registerGameNewsRules({ app, admin }: { app: Express; admin: Req
     if (typeof t2 !== 'string') return res.status(400).json({ error: t2.error });
     out.text = t1;
     out.newText = t2;
-    setWelcome(out);
+    setWelcome(out, serverOf(req));
     res.json({ ok: true });
   });
 
@@ -25211,7 +25215,8 @@ export function registerGameNewsRules({ app, admin }: { app: Express; admin: Req
       pendingText: z.string().max(300), discordEveryHours: z.number().int().min(1).max(720),
     }).safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Проверьте поля' });
-    const d = getRegisterSettings();
+    const sid = serverOf(req);
+    const d = getRegisterSettings(sid);
     const keep = (x: string, old: string) => plainLine(x) || old;
     setRegisterSettings({
       enabled: b.data.enabled,
@@ -25220,7 +25225,17 @@ export function registerGameNewsRules({ app, admin }: { app: Express; admin: Req
       discordText: keep(b.data.discordText, d.discordText),
       pendingText: keep(b.data.pendingText, d.pendingText),
       discordEveryHours: b.data.discordEveryHours,
-    });
+    }, sid);
+    res.json({ ok: true });
+  });
+
+  // «Вернуть общие»: the server uses the general value of a setting again (part = welcome | joinleave | register | chat | restart, or all)
+  app.delete('/api/game-news/server-settings/:server', admin, (req, res) => {
+    const id = Number(req.params.server);
+    if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Проверьте поля' });
+    const part = String(req.query.part ?? 'all');
+    const keys = part === 'all' ? [...SCOPED_KEYS] : SCOPED_KEYS.filter((k) => k === `gamenews_${part === 'restart' ? 'restart_texts' : part}`);
+    for (const k of keys) clearOverride(k, id);
     res.json({ ok: true });
   });
 
@@ -25368,6 +25383,46 @@ export function upcomingRuns(s: Schedule, first: number | null, n: number, tz: s
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/gamenews"
+  cat > "$APP_DIR/core-backend/src/gamenews/gameNewsScope.ts" << '__COREGSM_EOF__'
+/**
+ * Settings of the game plugin that can differ per server: the greeting, join/leave, registration, the chat in Discord, the
+ * words of the restart. Each has a general value (`key`) and, for a server that has its own, an override (`key@<id>`).
+ * A server without an override uses the general value, so changing it changes all of those servers.
+ */
+import type { Request } from 'express';
+import { db, getSetting, setSetting } from '../db.js';
+
+export const SCOPED_KEYS = ['gamenews_welcome', 'gamenews_joinleave', 'gamenews_register', 'gamenews_chat', 'gamenews_restart_texts'] as const;
+
+const key = (base: string, serverId?: number): string => (serverId ? `${base}@${serverId}` : base);
+
+/** the text of the setting for a server: its own when it has one, else the general one */
+export const readScoped = (base: string, serverId?: number): string =>
+  (serverId ? getSetting(key(base, serverId)) : null) || getSetting(base) || '';
+
+export const hasOverride = (base: string, serverId: number): boolean => !!getSetting(key(base, serverId));
+
+export const writeScoped = (base: string, value: string, serverId?: number): void => setSetting(key(base, serverId), value);
+
+export const clearOverride = (base: string, serverId: number): void => setSetting(key(base, serverId), null);
+
+/** `?server=<id>` of a request: the server whose own settings are meant (none = the general ones) */
+export function serverOf(req: Request): number | undefined {
+  const n = Number(req.query.server);
+  return Number.isInteger(n) && n > 0 ? n : undefined;
+}
+
+/** the servers that have their own value of each setting: { gamenews_welcome: [3], ... } */
+export function overrides(): Record<string, number[]> {
+  const out: Record<string, number[]> = {};
+  for (const k of SCOPED_KEYS) {
+    const rows = db.prepare('SELECT key FROM settings WHERE key LIKE ?').all(`${k}@%`) as { key: string }[];
+    out[k] = rows.map((r) => Number(r.key.slice(k.length + 1))).filter((n) => Number.isInteger(n) && n > 0);
+  }
+  return out;
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/gamenews"
   cat > "$APP_DIR/core-backend/src/gamenews/gameNewsServerRestart.ts" << '__COREGSM_EOF__'
 /**
  * Restart of a game server by a timer.
@@ -25380,7 +25435,8 @@ __COREGSM_EOF__
  */
 import type { Express, RequestHandler } from 'express';
 import { z } from 'zod';
-import { db, getSetting, setSetting } from '../db.js';
+import { db } from '../db.js';
+import { readScoped, serverOf, writeScoped } from './gameNewsScope.js';
 import { log } from '../logger.js';
 import { internal } from '../security/auth.js';
 import { pluginTarget, queueNews } from './gameNews.js';
@@ -25392,16 +25448,16 @@ import { DUE_GRACE_MS, getJob, jobsIn, saveJob, setLastNotice, setState, type Jo
 import { serverLabel } from './gameNewsVars.js';
 
 // ---- the words of the notices (set in the panel)
-export function getTexts(): RestartTexts {
+export function getTexts(serverId?: number): RestartTexts {
   try {
-    const v = JSON.parse(getSetting('gamenews_restart_texts') || '{}') as Partial<RestartTexts>;
+    const v = JSON.parse(readScoped('gamenews_restart_texts', serverId) || '{}') as Partial<RestartTexts>;
     const pick = (x: unknown, d: string) => (typeof x === 'string' && x.trim() ? x : d);
     return { announce: pick(v.announce, DEFAULT_TEXTS.announce), now: pick(v.now, DEFAULT_TEXTS.now), cancel: pick(v.cancel, DEFAULT_TEXTS.cancel) };
   } catch {
     return { ...DEFAULT_TEXTS };
   }
 }
-const setTexts = (t: RestartTexts): void => setSetting('gamenews_restart_texts', JSON.stringify(t));
+const setTexts = (t: RestartTexts, serverId?: number): void => writeScoped('gamenews_restart_texts', JSON.stringify(t), serverId);
 
 /** servers that have a game plugin (a token): only they can be restarted this way */
 function pluginServers(): { id: number; name: string }[] {
@@ -25421,7 +25477,7 @@ export function startRestart(serverId: number, seconds: number, by: string, sour
     requested_by: by.slice(0, 80), source: source.slice(0, 40), state: 'counting',
   };
   saveJob(job);
-  tellChat(serverId, announceLine(getTexts(), seconds), now);
+  tellChat(serverId, announceLine(getTexts(serverId), seconds), now);
   log.info(`game restart of server ${serverId} in ${seconds} s (${source})`);
   return job;
 }
@@ -25431,7 +25487,7 @@ export function cancelRestart(serverId: number, now = Date.now()): boolean {
   const j = getJob(serverId);
   if (!j || (j.state !== 'counting' && j.state !== 'due')) return false;
   setState(serverId, 'cancelled');
-  tellChat(serverId, cancelLine(getTexts()), now);
+  tellChat(serverId, cancelLine(getTexts(serverId)), now);
   return true;
 }
 
@@ -25441,13 +25497,13 @@ export function tickRestartJobs(now = Date.now()): void {
     const r = Math.ceil((j.run_at - now) / 1000);
     if (r <= 0) {
       setState(j.server_id, 'due');
-      tellChat(j.server_id, nowLine(getTexts()), now);
+      tellChat(j.server_id, nowLine(getTexts(j.server_id)), now);
       continue;
     }
     const p = nextNotice(r, j.last_notice);
     if (p !== null) {
       setLastNotice(j.server_id, p);
-      tellChat(j.server_id, announceLine(getTexts(), noticeSeconds(p, r)), now);
+      tellChat(j.server_id, announceLine(getTexts(j.server_id), noticeSeconds(p, r)), now);
     }
   }
   for (const j of jobsIn('due')) if (now - j.run_at > DUE_GRACE_MS) setState(j.server_id, 'missed');
@@ -25494,13 +25550,13 @@ const C_BAD = '#FF5555';
 
 export function registerGameNewsServerRestart({ app, admin }: { app: Express; admin: RequestHandler }): void {
   // ---- the panel
-  app.get('/api/game-news/restart', admin, (_req, res) => {
+  app.get('/api/game-news/restart', admin, (req, res) => {
     const now = Date.now();
     const jobs = jobsIn('counting', 'due', 'sent').map((j) => ({
       serverId: j.server_id, serverName: serverLabel(j.server_id), runAt: j.run_at, by: j.requested_by, source: j.source, state: j.state,
       left: Math.max(0, Math.ceil((j.run_at - now) / 1000)),
     }));
-    res.json({ jobs, texts: getTexts(), servers: pluginServers() });
+    res.json({ jobs, texts: getTexts(serverOf(req)), servers: pluginServers() });
   });
 
   app.post('/api/game-news/restart', admin, (req, res) => {
@@ -25525,9 +25581,10 @@ export function registerGameNewsServerRestart({ app, admin }: { app: Express; ad
   app.put('/api/game-news/restart-texts', admin, (req, res) => {
     const b = z.object({ announce: z.string().max(300), now: z.string().max(300), cancel: z.string().max(300) }).safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Проверьте поля' });
-    const d = getTexts();
+    const sid = serverOf(req);
+    const d = getTexts(sid);
     const keep = (x: string, old: string) => plainLine(x) || old;
-    setTexts({ announce: keep(b.data.announce, d.announce), now: keep(b.data.now, d.now), cancel: keep(b.data.cancel, d.cancel) });
+    setTexts({ announce: keep(b.data.announce, d.announce), now: keep(b.data.now, d.now), cancel: keep(b.data.cancel, d.cancel) }, sid);
     res.json({ ok: true });
   });
 
@@ -25574,6 +25631,7 @@ __COREGSM_EOF__
  * A value that is not known right now is «—» (a text like «До рестарта: —» still reads well).
  */
 import { db, getSetting, setSetting } from '../db.js';
+import { readScoped } from './gameNewsScope.js';
 import { localParts } from '../admin/localTime.js';
 import { nextRun } from '../monitoring/restartLogic.js';
 import { plainLine } from './gameNewsJoinLeave.js';
@@ -25644,17 +25702,17 @@ function nextWipe(serverId: number, now: number): string {
 }
 
 /** the kinds of game chat that are forwarded to Discord (switch on, a webhook set, the kind not turned off): what the plugin reads */
-export function chatKindsConfigured(): ChatKind[] {
+export function chatKindsConfigured(serverId?: number): ChatKind[] {
   try {
-    return activeChatKinds(normalizeChat(JSON.parse(getSetting('gamenews_chat') || '{}')));
+    return activeChatKinds(normalizeChat(JSON.parse(readScoped('gamenews_chat', serverId) || '{}')));
   } catch {
     return [];
   }
 }
 
 /** registration from the game is switched on (the setting is kept by gameNewsRegister.ts) */
-export function registerEnabled(): boolean {
-  try { return (JSON.parse(getSetting('gamenews_register') || '{}') as { enabled?: boolean }).enabled === true; } catch { return false; }
+export function registerEnabled(serverId?: number): boolean {
+  try { return (JSON.parse(readScoped('gamenews_register', serverId) || '{}') as { enabled?: boolean }).enabled === true; } catch { return false; }
 }
 
 // ---- what the administrator keeps for {discord} and {tip}
@@ -25705,15 +25763,15 @@ __COREGSM_EOF__
  * The panel fills in the variables ({server}, {online}, {greeting}, {restart} ...) for the server that asks; {name}, the
  * nickname of the player, is filled in by the plugin, which also knows whether the player has been here before.
  */
-import { getSetting, setSetting } from '../db.js';
+import { readScoped, writeScoped } from './gameNewsScope.js';
 import { applyVars, greenName } from './gameNewsLogic.js';
 import { varsFor } from './gameNewsVars.js';
 
 export interface Welcome { enabled: boolean; text: string; split: boolean; newText: string }
 
-export function getWelcome(): Welcome {
+export function getWelcome(serverId?: number): Welcome {
   try {
-    const v = JSON.parse(getSetting('gamenews_welcome') || '{}') as Partial<Welcome>;
+    const v = JSON.parse(readScoped('gamenews_welcome', serverId) || '{}') as Partial<Welcome>;
     return {
       enabled: !!v.enabled,
       text: typeof v.text === 'string' ? v.text : '',
@@ -25725,13 +25783,13 @@ export function getWelcome(): Welcome {
   }
 }
 
-export function setWelcome(w: Welcome): void {
-  setSetting('gamenews_welcome', JSON.stringify(w));
+export function setWelcome(w: Welcome, serverId?: number): void {
+  writeScoped('gamenews_welcome', JSON.stringify(w), serverId);
 }
 
 /** what the plugin of a server gets: '' when the greeting is off */
 export function welcomeFor(serverId: number, now: number): { welcome: string; welcomeNew: string } {
-  const w = getWelcome();
+  const w = getWelcome(serverId);
   if (!w.enabled || !w.text.trim()) return { welcome: '', welcomeNew: '' };
   const vars = varsFor(serverId, now);
   // the player's name is green unless the administrator coloured it
@@ -139915,6 +139973,10 @@ export interface RulesState {
   extras: Extras;
   register: RegisterSettings;
   chat: ChatSettings;
+  /** the servers that have settings of their own, by key */
+  overrides: Record<string, number[]>;
+  /** for one server: which parts have their own value */
+  mine: Record<string, boolean> | null;
   rules: RuleInfo[];
 }
 __COREGSM_EOF__
@@ -143279,6 +143341,15 @@ const en: Record<keyof typeof ru, string> = {
   'gn.h.expired': 'Not delivered',
   'gn.h.fail': 'Failed',
   'gn.reuse': 'Use again',
+  'gn.sc.title': 'Settings for:',
+  'gn.sc.all': 'All servers',
+  'gn.sc.hasOwn': 'Has its own settings',
+  'gn.sc.noteAll': 'The general settings: every server that has none of its own uses them.',
+  'gn.sc.noteOne': 'The settings of one server. Until you change something it uses the general ones; any change in a card makes that card its own.',
+  'gn.sc.own': 'This server has its own settings here: the general ones do not apply to it.',
+  'gn.sc.inherit': 'The general settings are used. Changing something here makes them own for this server.',
+  'gn.sc.reset': 'Back to the general ones',
+
   'gn.rr.title': 'Server restart by a timer',
   'gn.rr.sum': 'Warns the players in the chat and restarts the server',
   'gn.rr.note': 'The chat says «Restart in 5 minutes», «in 4 minutes» and so on, then the plugin saves the world and closes the server. AMP has to start it again. The same can be done with «.restart 5m» in the game (administrators), «restart 5m» in the AMP console and «/restart» in Discord.',
@@ -147920,6 +147991,15 @@ const ru = {
   'gn.h.expired': 'Не доставлено',
   'gn.h.fail': 'Ошибка',
   'gn.reuse': 'Использовать снова',
+  'gn.sc.title': 'Настройки для:',
+  'gn.sc.all': 'Все серверы',
+  'gn.sc.hasOwn': 'Есть свои настройки',
+  'gn.sc.noteAll': 'Общие настройки: их используют все серверы, у которых нет своих.',
+  'gn.sc.noteOne': 'Настройки одного сервера. Пока вы ничего не меняете, он использует общие; любое изменение в карточке делает настройки этой карточки своими.',
+  'gn.sc.own': 'Свои настройки этого сервера: общие на него не действуют.',
+  'gn.sc.inherit': 'Используются общие настройки. Если что-то изменить здесь, они станут своими для этого сервера.',
+  'gn.sc.reset': 'Вернуть общие',
+
   'gn.rr.title': 'Рестарт сервера по таймеру',
   'gn.rr.sum': 'Предупреждает игроков в чате и перезапускает сервер',
   'gn.rr.note': 'В чате пишется «Рестарт через 5 минут», «через 4 минуты» и так до конца, потом плагин сохраняет мир и закрывает сервер. Панель AMP должна запускать его снова. То же умеют команда «.restart 5m» в игре (для администраторов), «restart 5m» в консоли AMP и «/restart» в Discord.',
@@ -156129,6 +156209,7 @@ import {
 } from '../gameNews';
 import { AdminPage, ErrorLine, IconNews, LoadError, Modal, PageHead, Spinner, errText, navigate, toast, usePoll } from '../ui';
 import { ChatCard, ExtrasCard, JoinLeaveCard, RegisterCard, RestartCard, WelcomeCard } from './GameNewsCards';
+import { ScopeBar, ScopeContext } from './GameNewsScope';
 import { ServerRestartCard } from './GameNewsServerRestart';
 import GameNewsRules from './GameNewsRules';
 
@@ -156183,8 +156264,16 @@ export default function GameNewsPage({ sub = '' }: { sub?: string }) {
   const [wizardOff, setWizardOff] = useState(() => { try { return localStorage.getItem('coregsm.gn.wizard') === '0'; } catch { return false; } });
 
   const loadMain = () => api<NewsState>('/game-news').then((d) => { setData(d); setError(''); }).catch((e: Error) => setError(e.message));
-  const loadRules = () => api<RulesState>('/game-news/rules').then(setRd).catch(() => undefined);
+  // «all servers» (0) or one server: the cards of the tabs show and save the settings of that choice
+  const [scope, setScope] = useState(() => { try { return Number(localStorage.getItem('coregsm.gn.scope')) || 0; } catch { return 0; } });
+  const [scopeRev, setScopeRev] = useState(0);
+  const pickScope = (id: number) => { setScope(id); try { localStorage.setItem('coregsm.gn.scope', String(id)); } catch { /* private mode */ } };
+  const effScope = !scope || !data || data.servers.some((x) => x.id === scope && x.hasToken) ? scope : 0;
+  const q = effScope ? `?server=${effScope}` : '';
+  const loadRules = () => api<RulesState>(`/game-news/rules${q}`).then(setRd).catch(() => undefined);
   usePoll(() => Promise.all([loadMain(), loadRules()]), 10_000);
+  // another choice: the old cards go at once, the settings of the new one are read
+  useEffect(() => { setRd(null); void loadRules(); }, [effScope]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const problem = validateNews(text);
   // the plugin exists for some games only: servers of other games are not listed (their number is shown)
@@ -156378,24 +156467,39 @@ export default function GameNewsPage({ sub = '' }: { sub?: string }) {
         </form>
       )}
 
-      {data && tab === 'auto' && <ServerRestartCard />}
-
       {data && tab === 'auto' && rd && <GameNewsRules servers={data.servers} rules={rd.rules} timezone={rd.timezone} reload={() => void loadRules()} />}
 
-      {data && tab === 'players' && rd && (
-        <div className="space-y-4">
-          <WelcomeCard initial={rd.welcome} />
-          <JoinLeaveCard initial={rd.joinLeave} />
-          <RegisterCard initial={rd.register} />
-          <RestartCard enabled={rd.restartCountdown} onChange={(v) => { api('/game-news/restart-countdown', 'PUT', { enabled: v }).then(() => loadRules()).catch((e: Error) => toast(errText(e), 'err')); }} />
-        </div>
+      {data && (tab === 'players' || tab === 'discord') && (
+        <ScopeBar
+          servers={data.servers.filter((x) => x.supported && x.hasToken).map((x) => ({ id: x.id, name: x.name }))}
+          value={effScope}
+          onChange={pickScope}
+          own={new Set(Object.values(rd?.overrides ?? {}).flat())}
+        />
       )}
 
-      {data && tab === 'discord' && rd && (
-        <div className="space-y-4">
-          <ChatCard initial={rd.chat} joinText={rd.joinLeave.joinText} leaveText={rd.joinLeave.leaveText} />
-          <ExtrasCard initial={rd.extras} />
-        </div>
+      {data && (tab === 'players' || tab === 'discord') && rd && (
+        <ScopeContext.Provider value={{
+          server: effScope, q, mine: rd.mine,
+          changed: () => void loadRules(),
+          reset: (part) => { api(`/game-news/server-settings/${effScope}?part=${part}`, 'DELETE').then(() => { setScopeRev((n) => n + 1); return loadRules(); }).catch((e: Error) => toast(errText(e), 'err')); },
+        }}>
+          {tab === 'players' && (
+            <div className="space-y-4" key={`p${effScope}-${scopeRev}`}>
+              <WelcomeCard initial={rd.welcome} />
+              <JoinLeaveCard initial={rd.joinLeave} />
+              <RegisterCard initial={rd.register} />
+              <ServerRestartCard />
+              <RestartCard enabled={rd.restartCountdown} onChange={(v) => { api('/game-news/restart-countdown', 'PUT', { enabled: v }).then(() => loadRules()).catch((e: Error) => toast(errText(e), 'err')); }} />
+            </div>
+          )}
+          {tab === 'discord' && (
+            <div className="space-y-4" key={`d${effScope}-${scopeRev}`}>
+              <ChatCard initial={rd.chat} joinText={rd.joinLeave.joinText} leaveText={rd.joinLeave.leaveText} />
+              <ExtrasCard initial={rd.extras} />
+            </div>
+          )}
+        </ScopeContext.Provider>
       )}
 
       {data && tab === 'history' && (
@@ -156503,6 +156607,7 @@ import {
   ANSI_COLORS, CHAT_KINDS, SWATCHES, WELCOME_STYLES, WELCOME_VARIABLES, composeLine, isHex, validateNews,
   type AnsiColor, type ChatColors, type ChatKind, type ChatSettings, type Extras, type JoinLeave, type RegisterSettings, type Welcome, type WelcomeStyle,
 } from '../gameNews';
+import { ScopeNote, useScope } from './GameNewsScope';
 import { Field, SaveBadge, errText, toast, useAutosave } from '../ui';
 
 const onOff = (b: boolean) => (b ? t('gn.f.on') : t('gn.f.off'));
@@ -156513,6 +156618,7 @@ const onOff = (b: boolean) => (b ? t('gn.f.on') : t('gn.f.off'));
  */
 export function WelcomeCard({ initial }: { initial: Welcome }) {
   useI18n();
+  const sc = useScope();
   const [f, setF] = useState<Welcome>(initial);
   const [saved, setSaved] = useState<Welcome>(initial);
   const [which, setWhich] = useState<'back' | 'new'>('back');
@@ -156528,7 +156634,7 @@ export function WelcomeCard({ initial }: { initial: Welcome }) {
       const q = v.split ? validateNews(v.newText) : null;
       return q ? t(q === 'long' ? 'gn.hint.long' : 'gn.hint.text') : null;
     },
-    save: async (v) => { await api('/game-news/welcome', 'PUT', v); setSaved(v); },
+    save: async (v) => { await api(`/game-news/welcome${sc.q}`, 'PUT', v); setSaved(v); sc.changed(); },
   });
 
   const editingNew = f.split && which === 'new';
@@ -156549,6 +156655,7 @@ export function WelcomeCard({ initial }: { initial: Welcome }) {
       on={f.enabled}
       status={<SaveBadge status={auto.status} error={auto.error} retry={auto.retry} />}
     >
+      <ScopeNote part="welcome" />
       <p className="text-sm font-semibold text-mute">{t('gn.w.note')}</p>
 
       <label className="flex items-center gap-3 font-bold">
@@ -156615,6 +156722,7 @@ function ColorField({ label, value, onChange }: { label: string; value: string; 
 /** «* Игрок {name} подключился к серверу.»: shown to everybody when a player joins or leaves, with the colours chosen here. */
 export function JoinLeaveCard({ initial }: { initial: JoinLeave }) {
   useI18n();
+  const sc = useScope();
   const [f, setF] = useState<JoinLeave>(initial);
   const [saved, setSaved] = useState<JoinLeave>(initial);
   const set = <K extends keyof JoinLeave>(k: K, v: JoinLeave[K]) => setF((x) => ({ ...x, [k]: v }));
@@ -156627,7 +156735,7 @@ export function JoinLeaveCard({ initial }: { initial: JoinLeave }) {
       if ((v.joinEnabled && !v.joinText.trim()) || (v.leaveEnabled && !v.leaveText.trim())) return t('gn.hint.text');
       return null;
     },
-    save: async (v) => { await api('/game-news/joinleave', 'PUT', v); setSaved(v); },
+    save: async (v) => { await api(`/game-news/joinleave${sc.q}`, 'PUT', v); setSaved(v); sc.changed(); },
   });
   const sample = (text: string) => composeLine(text, isHex(f.nameColor) ? f.nameColor : '#B86BFF', isHex(f.textColor) ? f.textColor : '#5FD068').replace(/\{name\}/g, 'WhiteLegioN');
 
@@ -156639,6 +156747,7 @@ export function JoinLeaveCard({ initial }: { initial: JoinLeave }) {
       on={f.joinEnabled || f.leaveEnabled}
       status={<SaveBadge status={auto.status} error={auto.error} retry={auto.retry} />}
     >
+      <ScopeNote part="joinleave" />
       <p className="text-sm font-semibold text-mute">{t('gn.jl.note')}</p>
 
       <div className="grid gap-4 lg:grid-cols-2">
@@ -156676,6 +156785,7 @@ export function JoinLeaveCard({ initial }: { initial: JoinLeave }) {
  */
 export function RegisterCard({ initial }: { initial: RegisterSettings }) {
   useI18n();
+  const sc = useScope();
   const [f, setF] = useState<RegisterSettings>(initial);
   const [saved, setSaved] = useState<RegisterSettings>(initial);
   const set = <K extends keyof RegisterSettings>(k: K, v: RegisterSettings[K]) => setF((x) => ({ ...x, [k]: v }));
@@ -156687,7 +156797,7 @@ export function RegisterCard({ initial }: { initial: RegisterSettings }) {
       if (!Number.isInteger(v.discordEveryHours) || v.discordEveryHours < 1 || v.discordEveryHours > 720) return t('gn.rg.badHours');
       return [v.promptText, v.doneText, v.discordText, v.pendingText].some((x) => !x.trim()) ? t('gn.hint.text') : null;
     },
-    save: async (v) => { await api('/game-news/register-settings', 'PUT', v); setSaved(v); },
+    save: async (v) => { await api(`/game-news/register-settings${sc.q}`, 'PUT', v); setSaved(v); sc.changed(); },
   });
   const sample = (text: string, color: string) => `<color=${color}>${text.replace(/[<>]/g, '').replace(/\{login\}/g, 'WhiteLegioN').replace(/\{panel\}/g, 'coregsm.example.com')}</color>`;
 
@@ -156705,6 +156815,7 @@ export function RegisterCard({ initial }: { initial: RegisterSettings }) {
       on={f.enabled}
       status={<SaveBadge status={auto.status} error={auto.error} retry={auto.retry} />}
     >
+      <ScopeNote part="register" />
       <p className="text-sm font-semibold text-mute">{t('gn.rg.note')}</p>
 
       <label className="flex items-center gap-3 font-bold">
@@ -156808,6 +156919,7 @@ function DiscordPreview({ colors, joinText, leaveText, showTime }: { colors: Rec
  */
 export function ChatCard({ initial, joinText, leaveText }: { initial: ChatSettings; joinText: string; leaveText: string }) {
   useI18n();
+  const sc = useScope();
   const [st, setSt] = useState<ChatSettings>(initial);
   const [busy, setBusy] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
@@ -156816,15 +156928,15 @@ export function ChatCard({ initial, joinText, leaveText }: { initial: ChatSettin
   // the address box takes the focus when it opens
   useEffect(() => { if (editing) hookInput.current?.focus(); }, [editing]);
 
-  const refresh = () => api<{ chat: ChatSettings }>('/game-news/rules').then((d) => setSt(d.chat)).catch(() => undefined);
+  const refresh = () => api<{ chat: ChatSettings }>(`/game-news/rules${sc.q}`).then((d) => setSt(d.chat)).catch(() => undefined);
   const send = async (body: Record<string, unknown>, who: string, quiet = false): Promise<boolean> => {
     setBusy(who);
-    try { await api('/game-news/chat-settings', 'PUT', body); await refresh(); if (!quiet) toast(t('gn.ch.saved')); return true; } catch (e) { toast(errText(e), 'err'); return false; } finally { setBusy(null); }
+    try { await api(`/game-news/chat-settings${sc.q}`, 'PUT', body); await refresh(); sc.changed(); if (!quiet) toast(t('gn.ch.saved')); return true; } catch (e) { toast(errText(e), 'err'); return false; } finally { setBusy(null); }
   };
   const test = async () => {
     setBusy('test');
     try {
-      const r = await api<{ ok: boolean }>('/game-news/chat-test', 'POST');
+      const r = await api<{ ok: boolean }>(`/game-news/chat-test${sc.q}`, 'POST');
       toast(r.ok ? t('gn.ch.testOk') : t('gn.ch.testFail'), r.ok ? undefined : 'err');
     } catch (e) { toast(errText(e), 'err'); } finally { setBusy(null); }
   };
@@ -156836,7 +156948,7 @@ export function ChatCard({ initial, joinText, leaveText }: { initial: ChatSettin
     value: look,
     saved: lookSaved,
     delay: 700,
-    save: async (v) => { await api('/game-news/chat-settings', 'PUT', v); setLookSaved(v); },
+    save: async (v) => { await api(`/game-news/chat-settings${sc.q}`, 'PUT', v); setLookSaved(v); sc.changed(); },
   });
   const setColor = (k: ChatKind, part: keyof ChatColors, v: AnsiColor) => setLook((x) => ({ ...x, colors: { ...x.colors, [k]: { ...x.colors[k], [part]: v } } }));
 
@@ -156854,6 +156966,7 @@ export function ChatCard({ initial, joinText, leaveText }: { initial: ChatSettin
       on={st.enabled && st.set && shown.length > 0}
       status={<SaveBadge status={auto.status} error={auto.error} retry={auto.retry} />}
     >
+      <ScopeNote part="chat" />
       <p className="text-sm font-semibold text-mute">{t('gn.ch.note')}</p>
 
       <label className="flex items-center gap-3 font-bold">
@@ -157245,11 +157358,76 @@ function RuleModal({ id, initial, servers, timezone, onClose, onSaved }: {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
+  cat > "$APP_DIR/core-frontend/src/pages/GameNewsScope.tsx" << '__COREGSM_EOF__'
+import { createContext, useContext } from 'react';
+import { t, useI18n } from '../i18n';
+
+/** which settings the cards show: the general ones (server 0) or those of one server */
+export interface Scope {
+  server: number;
+  /** '' or '?server=3': added to the address of every call of a card */
+  q: string;
+  /** which parts have their own value for this server (null: the general settings are shown) */
+  mine: Record<string, boolean> | null;
+  /** a card saved something: the page reads the settings again */
+  changed: () => void;
+  /** the server uses the general value of a part again */
+  reset: (part: string) => void;
+}
+
+export const ScopeContext = createContext<Scope>({ server: 0, q: '', mine: null, changed: () => undefined, reset: () => undefined });
+export const useScope = () => useContext(ScopeContext);
+
+/** the keys of the settings of the server, by the name of the part */
+const KEY: Record<string, string> = { welcome: 'gamenews_welcome', joinleave: 'gamenews_joinleave', register: 'gamenews_register', chat: 'gamenews_chat', restart: 'gamenews_restart_texts' };
+
+/** «Все серверы · Сервер 1 · Сервер 2»: one choice for the whole page */
+export function ScopeBar({ servers, value, onChange, own }: {
+  servers: { id: number; name: string }[];
+  value: number;
+  onChange: (id: number) => void;
+  /** servers that have settings of their own (a dot on the button) */
+  own: Set<number>;
+}) {
+  useI18n();
+  if (servers.length < 1) return null;
+  return (
+    <div className="panel space-y-2 px-4 py-3">
+      <div className="flex flex-wrap items-center gap-2" role="group" aria-label={t('gn.sc.title')}>
+        <span className="text-sm font-bold text-mute">{t('gn.sc.title')}</span>
+        <button type="button" className={`chip-filter ${value === 0 ? 'on' : ''}`} aria-pressed={value === 0} onClick={() => onChange(0)}>{t('gn.sc.all')}</button>
+        {servers.map((s) => (
+          <button key={s.id} type="button" className={`chip-filter ${value === s.id ? 'on' : ''}`} aria-pressed={value === s.id} onClick={() => onChange(s.id)}>
+            {s.name}{own.has(s.id) && <span aria-label={t('gn.sc.hasOwn')} title={t('gn.sc.hasOwn')} className="ml-1.5 inline-block h-2 w-2 rounded-full bg-accent" />}
+          </button>
+        ))}
+      </div>
+      <p className="text-sm font-semibold text-mute">{value === 0 ? t('gn.sc.noteAll') : t('gn.sc.noteOne')}</p>
+    </div>
+  );
+}
+
+/** inside a card of a server: «uses the general settings» or «own settings» with a way back */
+export function ScopeNote({ part }: { part: keyof typeof KEY }) {
+  useI18n();
+  const s = useScope();
+  if (!s.server || !s.mine) return null;
+  const own = !!s.mine[KEY[part]];
+  return (
+    <div className={`flex flex-wrap items-center gap-3 rounded-xl border px-3 py-2 text-sm font-semibold ${own ? 'border-accent' : 'border-line text-mute'}`}>
+      <span className="min-w-0 flex-1 basis-60">{own ? t('gn.sc.own') : t('gn.sc.inherit')}</span>
+      {own && <button type="button" className="btn btn-ghost btn-sm" onClick={() => s.reset(part)}>{t('gn.sc.reset')}</button>}
+    </div>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/GameNewsServerRestart.tsx" << '__COREGSM_EOF__'
 import { useState } from 'react';
 import { api } from '../api';
 import { FoldCard } from '../components/GameNewsParts';
 import { t, useI18n } from '../i18n';
+import { ScopeNote, useScope } from './GameNewsScope';
 import { Field, SaveBadge, errText, toast, useAutosave, usePoll } from '../ui';
 
 interface Job { serverId: number; serverName: string; runAt: number; by: string; source: string; state: string; left: number }
@@ -157270,6 +157448,7 @@ function clock(sec: number): string {
 /** A restart of a game server by a timer: the chat is told how long is left, then the plugin closes the server. */
 export function ServerRestartCard() {
   useI18n();
+  const sc = useScope();
   const [st, setSt] = useState<State | null>(null);
   const [server, setServer] = useState(0);
   const [time, setTime] = useState('5m');
@@ -157280,7 +157459,7 @@ export function ServerRestartCard() {
   const [at, setAt] = useState(Date.now());
   const [, tick] = useState(0);
 
-  const load = () => api<State>('/game-news/restart').then((d) => {
+  const load = () => api<State>(`/game-news/restart${sc.q}`).then((d) => {
     setSt(d); setAt(Date.now());
     setTexts((x) => x ?? d.texts); setSaved((x) => x ?? d.texts);
     setServer((s) => s || d.servers[0]?.id || 0);
@@ -157292,7 +157471,7 @@ export function ServerRestartCard() {
     saved: saved ?? { announce: '', now: '', cancel: '' },
     delay: 900,
     validate: (v) => (v.announce.trim() && v.now.trim() && v.cancel.trim() ? '' : t('gn.rr.empty')),
-    save: async (v) => { await api('/game-news/restart-texts', 'PUT', v); setSaved(v); },
+    save: async (v) => { await api(`/game-news/restart-texts${sc.q}`, 'PUT', v); setSaved(v); sc.changed(); },
   });
 
   if (!st || st.servers.length === 0) return null;
@@ -157338,6 +157517,7 @@ export function ServerRestartCard() {
       {texts && (
         <div className="space-y-3">
           <h4 className="font-extrabold">{t('gn.rr.words')}</h4>
+          <ScopeNote part="restart" />
           <Field label={t('gn.rr.announce')}>
             <input className="input" value={texts.announce} maxLength={300} onChange={(e) => setTexts({ ...texts, announce: e.target.value })} />
           </Field>

@@ -4,7 +4,7 @@
  * and the one of the rest of the text. One JSON setting: `gamenews_joinleave`. The panel builds the tagged text and
  * the plugin only puts the nickname into {name}.
  */
-import { getSetting, setSetting } from '../db.js';
+import { readScoped, writeScoped } from './gameNewsScope.js';
 
 export interface JoinLeave {
   joinEnabled: boolean;
@@ -31,9 +31,9 @@ export function plainLine(s: string): string {
   return s.replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/[<>]/g, '').replace(/ {2,}/g, ' ').trim();
 }
 
-export function getJoinLeave(): JoinLeave {
+export function getJoinLeave(serverId?: number): JoinLeave {
   try {
-    const v = JSON.parse(getSetting('gamenews_joinleave') || '{}') as Partial<JoinLeave>;
+    const v = JSON.parse(readScoped('gamenews_joinleave', serverId) || '{}') as Partial<JoinLeave>;
     const d = DEFAULT_JOIN_LEAVE;
     return {
       joinEnabled: !!v.joinEnabled,
@@ -48,8 +48,8 @@ export function getJoinLeave(): JoinLeave {
   }
 }
 
-export function setJoinLeave(v: JoinLeave): void {
-  setSetting('gamenews_joinleave', JSON.stringify(v));
+export function setJoinLeave(v: JoinLeave, serverId?: number): void {
+  writeScoped('gamenews_joinleave', JSON.stringify(v), serverId);
 }
 
 /** `text` with {name} in the name colour and everything else in the text colour: the tagged text the plugin shows */
@@ -59,8 +59,8 @@ export function composeLine(text: string, nameColor: string, textColor: string):
 }
 
 /** what the plugin gets with a poll: '' when that message is off */
-export function joinLeaveFor(): { join: string; leave: string } {
-  const v = getJoinLeave();
+export function joinLeaveFor(serverId?: number): { join: string; leave: string } {
+  const v = getJoinLeave(serverId);
   return {
     join: v.joinEnabled ? composeLine(v.joinText, v.nameColor, v.textColor) : '',
     leave: v.leaveEnabled ? composeLine(v.leaveText, v.nameColor, v.textColor) : '',
