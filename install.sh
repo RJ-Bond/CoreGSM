@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="cb2f847f1b54"
+COREGSM_BUILD="ab3fba0b75f5"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.63"
+COREGSM_VERSION="1.1.64"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -23505,6 +23505,18 @@ export const ERRORS = {
   announcement_no_channel: 'Выберите канал Discord',
   announcement_bad_time: 'Укажите время в будущем, не дальше года',
   announcement_limit: 'Не больше {n} запланированных объявлений',
+  game_news_pick: 'Выберите сервер и введите текст',
+  game_news_too_fast: 'Слишком часто: подождите пару секунд',
+  game_news_empty: 'Введите текст',
+  game_news_raw_long: 'Слишком длинный текст (больше {n} знаков с тегами)',
+  game_news_long: 'Слишком длинное сообщение: {n} из {max} знаков',
+  game_news_rule_name: 'Введите название',
+  game_news_period: 'Конец периода раньше начала',
+  game_news_interval: 'Интервал: от {n} минут до недели',
+  game_news_times: 'Укажите хотя бы одно время (ЧЧ:ММ)',
+  game_news_future: 'Время отправки должно быть в будущем',
+  game_news_rules_limit: 'Не больше {n} автообъявлений',
+  game_news_rule_missing: 'Автообъявление не найдено',
   captcha_required: 'Подтвердите, что вы не робот: страница решит небольшую задачу сама',
   ip_locked: 'Слишком много неудачных попыток входа с этого адреса. Повторите через {sec} с.',
   bad_credentials: 'Неверный логин или пароль',
@@ -144571,6 +144583,18 @@ const errorsEn: Record<string, string> = {
   announcement_no_channel: 'Choose a Discord channel',
   announcement_bad_time: 'Set a time in the future, not later than a year',
   announcement_limit: 'No more than {n} scheduled announcements',
+  game_news_pick: 'Pick a server and enter the text',
+  game_news_too_fast: 'Too fast: wait a couple of seconds',
+  game_news_empty: 'Enter the text',
+  game_news_raw_long: 'The text is too long (more than {n} characters with tags)',
+  game_news_long: 'The message is too long: {n} of {max} characters',
+  game_news_rule_name: 'Enter a name',
+  game_news_period: 'The end of the period is before its start',
+  game_news_interval: 'Interval: from {n} minutes to a week',
+  game_news_times: 'Add at least one time (HH:MM)',
+  game_news_future: 'The time to send must be in the future',
+  game_news_rules_limit: 'No more than {n} automatic announcements',
+  game_news_rule_missing: 'The announcement was not found',
   captcha_required: 'Confirm you are not a robot: the page solves a small puzzle by itself',
   ip_locked: 'Too many failed sign-ins from this address. Try again in {sec} s.',
   bad_credentials: 'Wrong login or password',

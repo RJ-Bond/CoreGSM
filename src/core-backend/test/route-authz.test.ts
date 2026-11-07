@@ -42,6 +42,7 @@ const OPEN: Record<string, string> = {
   'GET /api/push/key': 'the public VAPID key',
   'GET /api/v1/openapi.json': 'documentation of the public API',
   'GET /api/setup/status': 'tells the first-run page whether setup is still open',
+  'GET /api/game-news/pull': 'the CoreGSM game plugin: checks its own Bearer token (the hash of it) inside',
   'POST /api/setup': 'first-run setup: needs the setup code, closes itself',
   'POST /api/auth/login': 'sign-in (rate limited, locks out)',
   'GET /api/auth/challenge': 'a puzzle for the sign-in form (rate limited, signed, works once)',
