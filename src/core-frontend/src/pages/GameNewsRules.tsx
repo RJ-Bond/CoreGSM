@@ -42,7 +42,7 @@ export default function GameNewsRules({ servers }: { servers: NewsServerInfo[] }
 
   const serverNames = (ids: number[]) => (ids.length ? servers.filter((s) => ids.includes(s.id)).map((s) => s.name).join(', ') || '—' : t('gn.a.allServers'));
   const toggle = async (r: RuleInfo) => {
-    const { id, lastRun: _l, nextRun: _n, createdBy: _c, ...body } = r;
+    const { id, lastRun: _l, nextRun: _n, createdBy: _c, upcoming: _u, ...body } = r;
     try { await api(`/game-news/rules/${id}`, 'PUT', { ...body, enabled: !r.enabled }); void load(); } catch (e) { toast(errText(e), 'err'); }
   };
   const runNow = async (r: RuleInfo) => {
@@ -58,7 +58,12 @@ export default function GameNewsRules({ servers }: { servers: NewsServerInfo[] }
     try { await api(`/game-news/rules/${r.id}`, 'DELETE'); void load(); } catch (e) { toast(errText(e), 'err'); }
   };
   const openNew = () => setDraft({ id: null, body: emptyRule() });
-  const openEdit = (r: RuleInfo) => { const { id, lastRun: _l, nextRun: _n, createdBy: _c, ...body } = r; setDraft({ id, body }); };
+  const openEdit = (r: RuleInfo) => { const { id, lastRun: _l, nextRun: _n, createdBy: _c, upcoming: _u, ...body } = r; setDraft({ id, body }); };
+  // a copy opens as a new announcement: change what differs and save
+  const duplicate = (r: RuleInfo) => {
+    const { id: _id, lastRun: _l, nextRun: _n, createdBy: _c, upcoming: _u, ...body } = r;
+    setDraft({ id: null, body: { ...body, name: t('gn.a.copyName', { name: r.name }).slice(0, 80) } });
+  };
 
   return (
     <div className="space-y-5">
@@ -90,10 +95,17 @@ export default function GameNewsRules({ servers }: { servers: NewsServerInfo[] }
                   {' · '}{r.nextRun ? t('gn.a.next', { time: when(r.nextRun) }) : t('gn.a.noNext')}
                   {' · '}{t('gn.a.last', { time: when(r.lastRun) })}
                 </p>
+                {r.upcoming.length > 1 && (
+                  <details className="mt-1 text-sm font-semibold text-mute">
+                    <summary className="cursor-pointer">{t('gn.a.upcoming', { n: r.upcoming.length })}</summary>
+                    <ul className="mt-1 list-disc pl-5">{r.upcoming.map((ts) => <li key={ts}>{when(ts)}</li>)}</ul>
+                  </details>
+                )}
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 <button type="button" className="btn btn-soft btn-sm" onClick={() => void toggle(r)}>{r.enabled ? t('gn.a.pause') : t('gn.a.resume')}</button>
                 <button type="button" className="btn btn-soft btn-sm" onClick={() => void runNow(r)}>{t('gn.a.run')}</button>
+                <button type="button" className="btn btn-ghost btn-sm" onClick={() => duplicate(r)}>{t('gn.a.copy')}</button>
                 <button type="button" className="row-act" onClick={() => openEdit(r)} aria-label={t('gn.a.editAria', { name: r.name })}><IconEdit size={16} /></button>
                 <button type="button" className="row-act row-act-danger" onClick={() => void remove(r)} aria-label={t('gn.a.delAria', { name: r.name })}><IconTrash size={16} /></button>
               </div>

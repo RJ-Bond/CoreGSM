@@ -59,3 +59,18 @@ describe('game news schedule', () => {
     assert.equal(dueState(now - GRACE_MS - 1, now), 'skip');
   });
 });
+
+import { upcomingRuns } from '../src/gamenews/gameNewsSchedule.ts';
+
+describe('upcoming runs', () => {
+  it('lists the next runs of an interval and of a daily rule', () => {
+    const t0 = Date.UTC(2026, 10, 7, 10, 0);
+    assert.deepEqual(upcomingRuns({ ...base, kind: 'interval', everyMin: 30 }, t0, 3, MSK), [t0, t0 + 30 * 60_000, t0 + 60 * 60_000]);
+    const d = upcomingRuns({ ...base, times: ['12:00', '20:00'] }, Date.UTC(2026, 10, 7, 9, 0), 3, MSK);
+    assert.deepEqual(d, [Date.UTC(2026, 10, 7, 9, 0), Date.UTC(2026, 10, 7, 17, 0), Date.UTC(2026, 10, 8, 9, 0)]);
+  });
+  it('a once rule has one run, a rule without a next run none', () => {
+    assert.deepEqual(upcomingRuns({ ...base, kind: 'once', runAt: 5 }, 5, 5, MSK), [5]);
+    assert.deepEqual(upcomingRuns(base, null, 5, MSK), []);
+  });
+});

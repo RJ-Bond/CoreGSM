@@ -67,3 +67,14 @@ export function dueState(nextRun: number | null, now: number): Due {
   if (nextRun == null || nextRun > now) return 'wait';
   return now - nextRun <= GRACE_MS ? 'fire' : 'skip';
 }
+
+/** the next `n` runs starting with `first` (the stored next run), for the «upcoming» list */
+export function upcomingRuns(s: Schedule, first: number | null, n: number, tz: string): number[] {
+  const out: number[] = [];
+  let at = first;
+  while (at != null && out.length < n) {
+    out.push(at);
+    at = nextRunAfter(s, at, tz);
+  }
+  return out;
+}

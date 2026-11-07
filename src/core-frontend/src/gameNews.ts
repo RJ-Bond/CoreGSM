@@ -120,9 +120,11 @@ export interface RuleInfo {
   lastRun: number | null;
   nextRun: number | null;
   createdBy: string;
+  /** the next runs (up to 5) of an enabled rule */
+  upcoming: number[];
 }
 
-export type RuleBody = Omit<RuleInfo, 'id' | 'lastRun' | 'nextRun' | 'createdBy'>;
+export type RuleBody = Omit<RuleInfo, 'id' | 'lastRun' | 'nextRun' | 'createdBy' | 'upcoming'>;
 
 export const INTERVAL_PRESETS = [15, 30, 60, 120, 360];
 export const MIN_EVERY = 5;

@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="fbdd13d60d0d"
+COREGSM_BUILD="c8d6f7e99cf8"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.66"
+COREGSM_VERSION="1.1.67"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -24121,7 +24121,7 @@ import { db, getSetting } from '../db.js';
 import { log } from '../logger.js';
 import { checkNews } from './gameNewsLogic.js';
 import { queueNews } from './gameNews.js';
-import { MAX_EVERY, MIN_EVERY, cleanTimes, dueState, inWindow, nextRunAfter, type RuleKind, type Schedule } from './gameNewsSchedule.js';
+import { MAX_EVERY, MIN_EVERY, cleanTimes, dueState, inWindow, nextRunAfter, upcomingRuns, type RuleKind, type Schedule } from './gameNewsSchedule.js';
 
 const MAX_RULES = 50;
 
@@ -24200,6 +24200,7 @@ export function registerGameNewsRules({ app, admin }: { app: Express; admin: Req
     id: r.id, name: r.name, text: r.text, serverIds: parseArr<number>(r.server_ids, []), kind: r.kind, everyMin: r.every_min,
     times: parseArr<string>(r.times, []), runAt: r.run_at, activeFrom: r.active_from, activeTo: r.active_to, onlyOnline: !!r.only_online,
     enabled: !!r.enabled, lastRun: r.last_run, nextRun: r.enabled ? r.next_run : null, createdBy: r.created_by,
+    upcoming: r.enabled ? upcomingRuns(schedOf(r), r.next_run, 5, tz()) : [],
   });
 
   app.get('/api/game-news/rules', admin, (_req, res) => {
@@ -24329,6 +24330,17 @@ export type Due = 'fire' | 'skip' | 'wait';
 export function dueState(nextRun: number | null, now: number): Due {
   if (nextRun == null || nextRun > now) return 'wait';
   return now - nextRun <= GRACE_MS ? 'fire' : 'skip';
+}
+
+/** the next `n` runs starting with `first` (the stored next run), for the «upcoming» list */
+export function upcomingRuns(s: Schedule, first: number | null, n: number, tz: string): number[] {
+  const out: number[] = [];
+  let at = first;
+  while (at != null && out.length < n) {
+    out.push(at);
+    at = nextRunAfter(s, at, tz);
+  }
+  return out;
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
@@ -138042,9 +138054,11 @@ export interface RuleInfo {
   lastRun: number | null;
   nextRun: number | null;
   createdBy: string;
+  /** the next runs (up to 5) of an enabled rule */
+  upcoming: number[];
 }
 
-export type RuleBody = Omit<RuleInfo, 'id' | 'lastRun' | 'nextRun' | 'createdBy'>;
+export type RuleBody = Omit<RuleInfo, 'id' | 'lastRun' | 'nextRun' | 'createdBy' | 'upcoming'>;
 
 export const INTERVAL_PRESETS = [15, 30, 60, 120, 360];
 export const MIN_EVERY = 5;
@@ -141447,7 +141461,9 @@ const en: Record<keyof typeof ru, string> = {
   'gn.h.expired': 'Not delivered',
   'gn.h.fail': 'Failed',
   'gn.reuse': 'Use again',  'adm.s.alerts': 'Alerts',
-  'gn.tpl.save': 'Save as template',
+  'gn.a.copy': 'Duplicate',
+  'gn.a.copyName': '{name} (copy)',
+  'gn.a.upcoming': 'Upcoming runs ({n})',  'gn.tpl.save': 'Save as template',
   'gn.tpl.saveTitle': 'Save the template',
   'gn.tpl.name': 'Template name',
   'gn.tpl.nameEx': 'For example: Discord invite',
@@ -145901,7 +145917,9 @@ const ru = {
   'gn.h.expired': 'Не доставлено',
   'gn.h.fail': 'Ошибка',
   'gn.reuse': 'Использовать снова',  'adm.s.alerts': 'Оповещения',
-  'gn.tpl.save': 'Сохранить как шаблон',
+  'gn.a.copy': 'Дублировать',
+  'gn.a.copyName': '{name} (копия)',
+  'gn.a.upcoming': 'Ближайшие запуски ({n})',  'gn.tpl.save': 'Сохранить как шаблон',
   'gn.tpl.saveTitle': 'Сохранить шаблон',
   'gn.tpl.name': 'Название шаблона',
   'gn.tpl.nameEx': 'Например: Приглашение в Discord',
@@ -154222,7 +154240,7 @@ export default function GameNewsRules({ servers }: { servers: NewsServerInfo[] }
 
   const serverNames = (ids: number[]) => (ids.length ? servers.filter((s) => ids.includes(s.id)).map((s) => s.name).join(', ') || '—' : t('gn.a.allServers'));
   const toggle = async (r: RuleInfo) => {
-    const { id, lastRun: _l, nextRun: _n, createdBy: _c, ...body } = r;
+    const { id, lastRun: _l, nextRun: _n, createdBy: _c, upcoming: _u, ...body } = r;
     try { await api(`/game-news/rules/${id}`, 'PUT', { ...body, enabled: !r.enabled }); void load(); } catch (e) { toast(errText(e), 'err'); }
   };
   const runNow = async (r: RuleInfo) => {
@@ -154238,7 +154256,12 @@ export default function GameNewsRules({ servers }: { servers: NewsServerInfo[] }
     try { await api(`/game-news/rules/${r.id}`, 'DELETE'); void load(); } catch (e) { toast(errText(e), 'err'); }
   };
   const openNew = () => setDraft({ id: null, body: emptyRule() });
-  const openEdit = (r: RuleInfo) => { const { id, lastRun: _l, nextRun: _n, createdBy: _c, ...body } = r; setDraft({ id, body }); };
+  const openEdit = (r: RuleInfo) => { const { id, lastRun: _l, nextRun: _n, createdBy: _c, upcoming: _u, ...body } = r; setDraft({ id, body }); };
+  // a copy opens as a new announcement: change what differs and save
+  const duplicate = (r: RuleInfo) => {
+    const { id: _id, lastRun: _l, nextRun: _n, createdBy: _c, upcoming: _u, ...body } = r;
+    setDraft({ id: null, body: { ...body, name: t('gn.a.copyName', { name: r.name }).slice(0, 80) } });
+  };
 
   return (
     <div className="space-y-5">
@@ -154270,10 +154293,17 @@ export default function GameNewsRules({ servers }: { servers: NewsServerInfo[] }
                   {' · '}{r.nextRun ? t('gn.a.next', { time: when(r.nextRun) }) : t('gn.a.noNext')}
                   {' · '}{t('gn.a.last', { time: when(r.lastRun) })}
                 </p>
+                {r.upcoming.length > 1 && (
+                  <details className="mt-1 text-sm font-semibold text-mute">
+                    <summary className="cursor-pointer">{t('gn.a.upcoming', { n: r.upcoming.length })}</summary>
+                    <ul className="mt-1 list-disc pl-5">{r.upcoming.map((ts) => <li key={ts}>{when(ts)}</li>)}</ul>
+                  </details>
+                )}
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 <button type="button" className="btn btn-soft btn-sm" onClick={() => void toggle(r)}>{r.enabled ? t('gn.a.pause') : t('gn.a.resume')}</button>
                 <button type="button" className="btn btn-soft btn-sm" onClick={() => void runNow(r)}>{t('gn.a.run')}</button>
+                <button type="button" className="btn btn-ghost btn-sm" onClick={() => duplicate(r)}>{t('gn.a.copy')}</button>
                 <button type="button" className="row-act" onClick={() => openEdit(r)} aria-label={t('gn.a.editAria', { name: r.name })}><IconEdit size={16} /></button>
                 <button type="button" className="row-act row-act-danger" onClick={() => void remove(r)} aria-label={t('gn.a.delAria', { name: r.name })}><IconTrash size={16} /></button>
               </div>

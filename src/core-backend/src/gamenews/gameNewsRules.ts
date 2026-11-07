@@ -8,7 +8,7 @@ import { db, getSetting } from '../db.js';
 import { log } from '../logger.js';
 import { checkNews } from './gameNewsLogic.js';
 import { queueNews } from './gameNews.js';
-import { MAX_EVERY, MIN_EVERY, cleanTimes, dueState, inWindow, nextRunAfter, type RuleKind, type Schedule } from './gameNewsSchedule.js';
+import { MAX_EVERY, MIN_EVERY, cleanTimes, dueState, inWindow, nextRunAfter, upcomingRuns, type RuleKind, type Schedule } from './gameNewsSchedule.js';
 
 const MAX_RULES = 50;
 
@@ -87,6 +87,7 @@ export function registerGameNewsRules({ app, admin }: { app: Express; admin: Req
     id: r.id, name: r.name, text: r.text, serverIds: parseArr<number>(r.server_ids, []), kind: r.kind, everyMin: r.every_min,
     times: parseArr<string>(r.times, []), runAt: r.run_at, activeFrom: r.active_from, activeTo: r.active_to, onlyOnline: !!r.only_online,
     enabled: !!r.enabled, lastRun: r.last_run, nextRun: r.enabled ? r.next_run : null, createdBy: r.created_by,
+    upcoming: r.enabled ? upcomingRuns(schedOf(r), r.next_run, 5, tz()) : [],
   });
 
   app.get('/api/game-news/rules', admin, (_req, res) => {
