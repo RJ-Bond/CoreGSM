@@ -878,7 +878,7 @@ const en: Record<keyof typeof ru, string> = {
   'gn.plugin.stateSilent': 'The plugin has not polled the panel for a while, last time: {time}. Messages wait up to 5 minutes.',
   'gn.plugin.stateNever': 'A token exists, but the plugin has never connected.',
   'gn.plugin.once': 'The token is shown once. Paste these lines into the plugin config:',
-  'gn.plugin.where': 'File on the game server: BepInEx/config/com.rjbond.coregsm.cfg. Restart the server after editing.',
+  'gn.plugin.where': 'File on the game server: BepInEx/config/CoreGSM.cfg. Restart the server after editing.',
   'gn.plugin.copy': 'Copy',
   'gn.plugin.copied': 'Copied',
   'gn.plugin.copyFail': 'Could not copy: select the text by hand',

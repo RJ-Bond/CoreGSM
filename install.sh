@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="fd76ddce8214"
+COREGSM_BUILD="c969e0fc6bc7"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.61"
+COREGSM_VERSION="1.1.62"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -137455,7 +137455,7 @@ export type NewsStatus = 'queued' | 'delivered' | 'expired' | 'failed';
 export interface NewsLogRow { id: number; serverId: number | null; serverName: string; text: string; status: NewsStatus; error: string; sentBy: string; sentAt: number; deliveredAt: number | null }
 export interface NewsSendResult { text: string; results: { serverId: number; serverName: string; queued: boolean; online: boolean; error: string }[] }
 
-/** the lines to paste into BepInEx/config/com.rjbond.coregsm.cfg of the game server */
+/** the lines to paste into BepInEx/config/CoreGSM.cfg of the game server */
 export function pluginConfig(panelUrl: string, token: string): string {
   const selfSigned = /^https:\/\/(\d{1,3}\.){3}\d{1,3}(:|\/|$)/.test(panelUrl);
   return ['[Panel]', `Url = ${panelUrl}`, `Token = ${token}`, `AllowSelfSigned = ${selfSigned}`].join('\n');
@@ -140876,7 +140876,7 @@ const en: Record<keyof typeof ru, string> = {
   'gn.plugin.stateSilent': 'The plugin has not polled the panel for a while, last time: {time}. Messages wait up to 5 minutes.',
   'gn.plugin.stateNever': 'A token exists, but the plugin has never connected.',
   'gn.plugin.once': 'The token is shown once. Paste these lines into the plugin config:',
-  'gn.plugin.where': 'File on the game server: BepInEx/config/com.rjbond.coregsm.cfg. Restart the server after editing.',
+  'gn.plugin.where': 'File on the game server: BepInEx/config/CoreGSM.cfg. Restart the server after editing.',
   'gn.plugin.copy': 'Copy',
   'gn.plugin.copied': 'Copied',
   'gn.plugin.copyFail': 'Could not copy: select the text by hand',
@@ -145243,7 +145243,7 @@ const ru = {
   'gn.plugin.stateSilent': 'Плагин давно не опрашивал панель, последний раз: {time}. Сообщения подождут до 5 минут.',
   'gn.plugin.stateNever': 'Токен создан, но плагин ещё ни разу не подключался.',
   'gn.plugin.once': 'Токен показан один раз. Вставьте эти строки в конфиг плагина:',
-  'gn.plugin.where': 'Файл на игровом сервере: BepInEx/config/com.rjbond.coregsm.cfg. После правки перезапустите сервер.',
+  'gn.plugin.where': 'Файл на игровом сервере: BepInEx/config/CoreGSM.cfg. После правки перезапустите сервер.',
   'gn.plugin.copy': 'Копировать',
   'gn.plugin.copied': 'Скопировано',
   'gn.plugin.copyFail': 'Не удалось скопировать: выделите текст вручную',
