@@ -6,7 +6,7 @@
 import type { Request } from 'express';
 import { db, getSetting, setSetting } from '../db.js';
 
-export const SCOPED_KEYS = ['gamenews_welcome', 'gamenews_joinleave', 'gamenews_register', 'gamenews_chat', 'gamenews_restart_texts'] as const;
+export const SCOPED_KEYS = ['gamenews_welcome', 'gamenews_joinleave', 'gamenews_register', 'gamenews_chat', 'gamenews_restart_texts', 'gamenews_kick'] as const;
 
 const key = (base: string, serverId?: number): string => (serverId ? `${base}@${serverId}` : base);
 

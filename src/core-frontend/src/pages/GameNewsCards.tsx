@@ -6,10 +6,12 @@ import { ChatLines, NewsEditor, NewsPreview } from '../components/NewsEditor';
 import { confirmDialog } from '../confirm';
 import { t, useI18n } from '../i18n';
 import {
-  ANSI_COLORS, CHAT_KINDS, CHAT_PRESETS, SWATCHES, commandLine, WELCOME_STYLES, WELCOME_VARIABLES, composeLine, isHex, validateNews,
-  type AnsiColor, type ChatColors, type ChatKind, type ChatSettings, type Extras, type JoinLeave, type RegisterSettings, type Welcome, type WelcomeStyle,
+  ANSI_COLORS, CHAT_KINDS, CHAT_PRESETS, SWATCHES, commandLine, kickLine, DEFAULT_KICK, WELCOME_STYLES, WELCOME_VARIABLES, composeLine, isHex, validateNews,
+  type AnsiColor, type ChatColors, type ChatKind, type ChatSettings, type Extras, type JoinLeave, type KickSettings, type RegisterSettings, type Welcome, type WelcomeStyle,
 } from '../gameNews';
 import { ScopeNote, useScope } from './GameNewsScope';
+import { WithPreview } from './GameNewsUi';
+import { ChannelName, ChannelPicker } from '../components/ChannelPicker';
 import { Field, SaveBadge, errText, toast, useAutosave } from '../ui';
 
 const onOff = (b: boolean) => (b ? t('gn.f.on') : t('gn.f.off'));
@@ -219,13 +221,13 @@ export function RegisterCard({ initial }: { initial: RegisterSettings }) {
     delay: 900,
     validate: (v) => {
       if (!Number.isInteger(v.discordEveryHours) || v.discordEveryHours < 1 || v.discordEveryHours > 720) return t('gn.rg.badHours');
-      return [v.promptText, v.doneText, v.discordText, v.pendingText, v.loginText, v.rankText].some((x) => !x.trim()) ? t('gn.hint.text') : null;
+      return [v.promptText, v.doneText, v.discordText, v.pendingText, v.loginText, v.nickTakenText, v.autoLoginText, v.lastSeenText, v.rankText].some((x) => !x.trim()) ? t('gn.hint.text') : null;
     },
     save: async (v) => { await api(`/game-news/register-settings${sc.q}`, 'PUT', v); setSaved(v); sc.changed(); },
   });
   const sample = (text: string, color: string) => commandLine(color, text.replace(/\{login\}/g, 'WhiteLegioN').replace(/\{panel\}/g, 'coregsm.example.com'));
 
-  const field = (label: string, key: 'promptText' | 'doneText' | 'discordText' | 'pendingText' | 'loginText') => (
+  const field = (label: string, key: 'promptText' | 'doneText' | 'discordText' | 'pendingText' | 'loginText' | 'nickTakenText' | 'autoLoginText' | 'lastSeenText') => (
     <Field label={label}>
       <AutoText value={f[key]} maxLength={300} onChange={(e) => set(key, e.target.value)} />
     </Field>
@@ -253,7 +255,19 @@ export function RegisterCard({ initial }: { initial: RegisterSettings }) {
         {field(t('gn.rg.discord'), 'discordText')}
         {field(t('gn.rg.pending'), 'pendingText')}
         {field(t('gn.rg.login'), 'loginText')}
+        {field(t('gn.rg.nickTaken'), 'nickTakenText')}
       </div>
+
+      <label className="flex items-center gap-3 font-bold">
+        <Switch checked={f.autoLoginEnabled} onChange={(v) => set('autoLoginEnabled', v)} />
+        {t('gn.rg.autoOn')}
+      </label>
+      {f.autoLoginEnabled && field(t('gn.rg.auto'), 'autoLoginText')}
+      <label className="flex items-center gap-3 font-bold">
+        <Switch checked={f.lastSeenEnabled} onChange={(v) => set('lastSeenEnabled', v)} />
+        {t('gn.rg.lastOn')}
+      </label>
+      {f.lastSeenEnabled && field(t('gn.rg.last'), 'lastSeenText')}
 
       <label className="flex items-center gap-3 font-bold">
         <Switch checked={f.rankEnabled} onChange={(v) => set('rankEnabled', v)} />
@@ -270,9 +284,110 @@ export function RegisterCard({ initial }: { initial: RegisterSettings }) {
       </Field>
 
       <VarChips vars={[{ name: 'login', example: 'WhiteLegioN' }, { name: 'panel', example: 'coregsm.example.ru' }]} onPick={(v) => set('promptText', `${f.promptText} ${v}`.trim())} />
-      <ChatLines lines={[sample(f.promptText, '#FFCC33'), sample(f.doneText, '#5FD068'), sample(f.loginText, '#5FD068'), ...(f.rankEnabled ? [`<color=#5FD068>${f.rankText.replace(/[<>]/g, '').replace(/\{name\}/g, 'WhiteLegioN').replace(/\{rank\}/g, 'Охотник на кровь').replace(/\{hours\}/g, '42').replace(/\{next\}/g, ' · до «Страж замка» ещё 28 ч')}</color>`] : []), sample(f.discordText, '#6EC1FF')]} />
+      <ChatLines lines={[sample(f.promptText, '#FFCC33'), sample(f.doneText, '#5FD068'), sample(f.loginText, '#5FD068'), sample(f.nickTakenText.replace(/\{name\}/g, 'WhiteLegioN'), '#FFCC33'), ...(f.autoLoginEnabled ? [sample(f.autoLoginText, '#5FD068')] : []), ...(f.lastSeenEnabled ? [sample(f.lastSeenText.replace(/\{name\}/g, 'WhiteLegioN').replace(/\{date\}/g, '10.12.2026').replace(/\{time\}/g, '10:00'), '#FFCC33')] : []), ...(f.rankEnabled ? [`<color=#5FD068>${f.rankText.replace(/[<>]/g, '').replace(/\{name\}/g, 'WhiteLegioN').replace(/\{rank\}/g, 'Охотник на кровь').replace(/\{hours\}/g, '42').replace(/\{next\}/g, ' · до «Страж замка» ещё 28 ч')}</color>`] : []), sample(f.discordText, '#6EC1FF')]} />
       <p className="text-sm font-semibold text-mute">{t('gn.rg.vars')}</p>
       <p className="text-sm font-semibold text-danger">{t('gn.rg.warn')}</p>
+      {auto.invalid && <p className="text-sm font-semibold text-danger">{auto.error}</p>}
+    </FoldCard>
+  );
+}
+
+/**
+ * The .kick command of the game: how it reads in the chat (words and colours of the nickname, the reason and the administrator),
+ * what it asks for (a reason, a pause between kicks) and what it refuses (to kick an administrator). Everything is set here.
+ */
+export function KickCard({ initial }: { initial: KickSettings }) {
+  useI18n();
+  const sc = useScope();
+  const [f, setF] = useState<KickSettings>(initial);
+  const [saved, setSaved] = useState<KickSettings>(initial);
+  const set = <K extends keyof KickSettings>(k: K, v: KickSettings[K]) => setF((x) => ({ ...x, [k]: v }));
+  const auto = useAutosave({
+    value: f,
+    saved,
+    delay: 900,
+    validate: (v) => {
+      if (!v.template.trim() || !v.defaultReason.trim()) return t('gn.hint.text');
+      if (![v.textColor, v.nameColor, v.reasonColor, v.adminColor].every(isHex)) return t('gn.jl.badColor');
+      return null;
+    },
+    save: async (v) => { await api(`/game-news/kick-settings${sc.q}`, 'PUT', v); setSaved(v); sc.changed(); },
+  });
+  const safe = (v: KickSettings): KickSettings => ({ ...v, textColor: isHex(v.textColor) ? v.textColor : DEFAULT_KICK.textColor, nameColor: isHex(v.nameColor) ? v.nameColor : DEFAULT_KICK.nameColor, reasonColor: isHex(v.reasonColor) ? v.reasonColor : DEFAULT_KICK.reasonColor, adminColor: isHex(v.adminColor) ? v.adminColor : DEFAULT_KICK.adminColor });
+  const sample = (reason: string) => kickLine(safe(f), 'WhiteLegioN', reason, 'Админ');
+  const [pickLog, setPickLog] = useState(false);
+
+  return (
+    <FoldCard
+      id="kick"
+      title={t('gn.kk.title')}
+      summary={f.enabled ? t('gn.kk.sumOn') : t('gn.kk.sumOff')}
+      on={f.enabled}
+      status={<SaveBadge status={auto.status} error={auto.error} retry={auto.retry} />}
+    >
+      <ScopeNote part="kick" />
+      <p className="text-sm font-semibold text-mute">{t('gn.kk.note')}</p>
+
+      <label className="flex items-center gap-3 font-bold">
+        <Switch checked={f.enabled} onChange={(v) => set('enabled', v)} />
+        {t('gn.kk.enabled')}
+      </label>
+
+      <WithPreview
+        preview={(
+          <>
+            <ChatLines lines={f.announce ? [sample('спам'), sample(f.defaultReason)] : []} />
+            {!f.announce && <p className="text-sm font-semibold text-mute">{t('gn.kk.quiet')}</p>}
+          </>
+        )}
+      >
+        <Field label={t('gn.kk.template')}>
+          <AutoText value={f.template} maxLength={300} onChange={(e) => set('template', e.target.value)} />
+        </Field>
+        <VarChips
+          vars={[{ name: 'name', example: 'WhiteLegioN' }, { name: 'reason', example: 'спам' }, { name: 'admin', example: 'Админ' }]}
+          onPick={(v) => set('template', `${f.template} ${v}`.trim())}
+        />
+        <div className="grid gap-4 sm:grid-cols-2">
+          <ColorField label={t('gn.kk.textColor')} value={f.textColor} gameHex={DEFAULT_KICK.textColor} onChange={(v) => set('textColor', v)} />
+          <ColorField label={t('gn.kk.nameColor')} value={f.nameColor} gameHex={DEFAULT_KICK.nameColor} onChange={(v) => set('nameColor', v)} />
+          <ColorField label={t('gn.kk.reasonColor')} value={f.reasonColor} gameHex={DEFAULT_KICK.reasonColor} onChange={(v) => set('reasonColor', v)} />
+          <ColorField label={t('gn.kk.adminColor')} value={f.adminColor} gameHex={DEFAULT_KICK.adminColor} onChange={(v) => set('adminColor', v)} />
+        </div>
+      </WithPreview>
+
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Field label={t('gn.kk.defaultReason')}>
+          <input className="input" value={f.defaultReason} maxLength={100} onChange={(e) => set('defaultReason', e.target.value)} />
+        </Field>
+        <Field label={t('gn.kk.cooldown')}>
+          <input className="input w-32" type="number" min={0} max={3600} value={f.cooldownSec} onChange={(e) => set('cooldownSec', Number(e.target.value))} />
+        </Field>
+      </div>
+
+      <div className="space-y-2 rounded-xl border border-line px-4 py-3">
+        <div className="font-extrabold">{t('gn.kk.logTitle')}</div>
+        <p className="text-sm font-semibold text-mute">{t('gn.kk.logNote')}</p>
+        <div className="flex flex-wrap items-center gap-2">
+          {f.logChannelId ? <ChannelName id={f.logChannelId} /> : <span className="pill pill-mute">{t('gn.kk.logNone')}</span>}
+          <button type="button" className="btn btn-soft btn-sm" onClick={() => setPickLog((v) => !v)}>{f.logChannelId ? t('gn.kk.logChange') : t('gn.kk.logPick')}</button>
+          {f.logChannelId && <button type="button" className="btn btn-ghost btn-sm" onClick={() => set('logChannelId', '')}>{t('gn.kk.logOff')}</button>}
+        </div>
+        {pickLog && <ChannelPicker id="kick-log" value={f.logChannelId} onChange={(v) => { if (/^\d{15,25}$/.test(v)) { set('logChannelId', v); setPickLog(false); } }} />}
+      </div>
+
+      <div className="space-y-2">
+        {([
+          ['requireReason', 'gn.kk.requireReason', 'gn.kk.requireReasonNote'],
+          ['protectAdmins', 'gn.kk.protect', 'gn.kk.protectNote'],
+          ['announce', 'gn.kk.announce', 'gn.kk.announceNote'],
+        ] as const).map(([key, label, note]) => (
+          <label key={key} className="flex items-start gap-3 font-bold">
+            <Switch className="mt-0.5" checked={f[key]} onChange={(v) => set(key, v)} />
+            <span>{t(label)}<span className="block text-sm font-semibold text-mute">{t(note)}</span></span>
+          </label>
+        ))}
+      </div>
       {auto.invalid && <p className="text-sm font-semibold text-danger">{auto.error}</p>}
     </FoldCard>
   );
@@ -312,7 +427,7 @@ function AnsiSelect({ value, onChange, label }: { value: AnsiColor; onChange: (v
 }
 
 /** the sample lines of the chat as Discord will draw them (colours of the ansi block) */
-function DiscordPreview({ colors, joinText, leaveText, showTime, sender }: { colors: Record<ChatKind, ChatColors>; joinText: string; leaveText: string; showTime: boolean; sender: string }) {
+function DiscordPreview({ colors, joinText, leaveText, kickText, showTime, sender }: { colors: Record<ChatKind, ChatColors>; joinText: string; leaveText: string; kickText: string; showTime: boolean; sender: string }) {
   const nick = 'WhiteLegioN';
   const clock = new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
   const name = sender.trim() || t('gn.ch.webhookName');
@@ -338,6 +453,18 @@ function DiscordPreview({ colors, joinText, leaveText, showTime, sender }: { col
       </p>
     );
   };
+  // a kick: the words red, the nickname green, the reason (the «tag» colour) yellow
+  const kick = () => (
+    <p key="kick" className="wrap-break-word">
+      {showTime && <span style={{ color: ANSI_CSS[colors.kick.text] }}>[{clock}] </span>}
+      {kickText.replace(/[<>]/g, '').split(/(\{(?:name|reason|admin)\})/).filter(Boolean).map((p, i) => (
+        p === '{name}' ? <span key={i} style={{ color: ANSI_CSS[colors.kick.name], fontWeight: 800 }}>{nick}</span>
+          : p === '{reason}' ? <span key={i} style={{ color: ANSI_CSS[colors.kick.tag], fontWeight: 800 }}>{t('gn.kk.sampleReason')}</span>
+            : p === '{admin}' ? <span key={i} style={{ color: ANSI_CSS.cyan, fontWeight: 800 }}>{t('gn.kk.sampleAdmin')}</span>
+              : <span key={i} style={{ color: ANSI_CSS[colors.kick.text] }}>{p}</span>
+      ))}
+    </p>
+  );
   // a message of a webhook as Discord draws it: a round picture, the name with the «БОТ» mark, the time, the code block
   return (
     <div className="flex gap-3 rounded-lg p-3" style={{ background: '#313338', color: '#dbdee1' }} aria-label={t('gn.ch.look')}>
@@ -356,6 +483,7 @@ function DiscordPreview({ colors, joinText, leaveText, showTime, sender }: { col
           {chat('local', t('gn.ch.label.local'), 'Кто рядом?')}
           {event('join', joinText)}
           {event('leave', leaveText)}
+          {kick()}
         </div>
       </div>
     </div>
@@ -367,7 +495,7 @@ function DiscordPreview({ colors, joinText, leaveText, showTime, sender }: { col
  * line that goes there and how the lines look (the colours of the game, or plain). The address is a secret: it is sent
  * to the panel and never shown again (only «set» and the tail).
  */
-export function ChatCard({ initial, joinText, leaveText }: { initial: ChatSettings; joinText: string; leaveText: string }) {
+export function ChatCard({ initial, joinText, leaveText, kickText }: { initial: ChatSettings; joinText: string; leaveText: string; kickText: string }) {
   useI18n();
   const sc = useScope();
   const [st, setSt] = useState<ChatSettings>(initial);
@@ -544,7 +672,7 @@ export function ChatCard({ initial, joinText, leaveText }: { initial: ChatSettin
                 </tbody>
               </table>
             </div>
-            <DiscordPreview colors={look.colors} joinText={joinText} leaveText={leaveText} showTime={look.showTime} sender={look.senderName} />
+            <DiscordPreview colors={look.colors} joinText={joinText} leaveText={leaveText} kickText={kickText} showTime={look.showTime} sender={look.senderName} />
             <p className="text-sm font-semibold text-mute">{t('gn.ch.ansiNote')}</p>
           </>
         )}

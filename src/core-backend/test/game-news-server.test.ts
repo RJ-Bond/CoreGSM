@@ -21,6 +21,9 @@ await import('../src/monitoring/restarts.ts'); // these make the tables that the
 await import('../src/monitoring/wipes.ts');
 const { getWelcome } = await import('../src/gamenews/gameNewsWelcome.ts');
 const register = await import('../src/gamenews/gameNewsRegister.ts');
+const sched = await import('../src/gamenews/gameNewsRestartSchedule.ts');
+const jr = await import('../src/gamenews/gameNewsJournal.ts');
+const kick = await import('../src/gamenews/gameNewsKick.ts');
 const { encryptSecret } = await import('../src/security/secrets.ts');
 
 const NOW = 1_900_000_000_000;
@@ -218,5 +221,148 @@ describe('the hint a player reads about .register and .login', () => {
     setSetting('gamenews_register', JSON.stringify({ enabled: true, promptText: 'мой текст' }));
     assert.equal(register.getRegisterSettings().promptText, 'мой текст');
     setSetting('gamenews_register', null);
+  });
+});
+
+describe('planned restarts through the plugin', () => {
+  const day = (h: number, m = 0) => Date.UTC(2026, 10, 8, h, m); // Sunday, 2026-11-08, UTC
+  setSetting('timezone', 'UTC');
+
+  it('knows the day of the week and the next moment on an allowed day', () => {
+    assert.equal(sched.weekdayOf(day(12), 'UTC'), 0);
+    assert.equal(sched.nextRestartAt('05:00', [], day(12), 'UTC'), Date.UTC(2026, 10, 9, 5, 0));
+    assert.equal(sched.nextRestartAt('05:00', [3], day(12), 'UTC'), Date.UTC(2026, 10, 11, 5, 0)); // Wednesday
+    assert.equal(sched.nextRestartAt('05:00', [], day(4), 'UTC'), day(5));
+  });
+
+  it('starts the timer at the warning moment, once, and not before', () => {
+    db.prepare('DELETE FROM game_restart_schedule').run();
+    db.prepare('DELETE FROM game_restart_jobs').run();
+    db.prepare("INSERT INTO game_restart_schedule (server_id, time, days, warn_sec, enabled) VALUES (1, '05:00', '[]', 600, 1)").run();
+    sched.tickRestartSchedule(day(4, 40)); // twenty minutes before
+    assert.equal(state.getJob(1), undefined);
+    sched.tickRestartSchedule(day(4, 50) + 5000); // a bit less than ten minutes before
+    const j = state.getJob(1)!;
+    assert.equal(j.state, 'counting');
+    assert.equal(j.source, 'расписание');
+    assert.equal(Math.abs(j.run_at - day(5)) < 1000, true);
+    state.setState(1, 'cancelled');
+    sched.tickRestartSchedule(day(4, 52)); // the same restart is not started again
+    assert.equal(state.getJob(1)?.state, 'cancelled');
+  });
+
+  it('can skip the next restart only', () => {
+    db.prepare('DELETE FROM game_restart_jobs').run();
+    db.prepare("UPDATE game_restart_schedule SET fired_r = 0, skip_r = ?").run(Date.UTC(2026, 10, 9, 5, 0));
+    sched.tickRestartSchedule(Date.UTC(2026, 10, 9, 4, 55));
+    assert.equal(state.getJob(1), undefined);
+    sched.tickRestartSchedule(Date.UTC(2026, 10, 10, 4, 55)); // the day after: it works again
+    assert.equal(state.getJob(1)?.state, 'counting');
+  });
+
+  it('does not start a schedule that is off', () => {
+    db.prepare('DELETE FROM game_restart_jobs').run();
+    db.prepare('UPDATE game_restart_schedule SET enabled = 0, fired_r = 0, skip_r = 0').run();
+    sched.tickRestartSchedule(Date.UTC(2026, 10, 11, 4, 55));
+    assert.equal(state.getJob(1), undefined);
+  });
+});
+
+describe('the journal', () => {
+  it('tells by whom a message was sent', () => {
+    assert.equal(jr.messageKind('Discord: Админ'), 'discord');
+    assert.equal(jr.messageKind('авто: рестарт'), 'auto');
+    assert.equal(jr.messageKind('admin'), 'message');
+  });
+
+  it('puts messages, restarts and links in one list, newest first, and filters by kind and server', () => {
+    db.prepare('DELETE FROM game_news_log').run();
+    const ins = db.prepare("INSERT INTO game_news_log (server_id, server_name, text, ok, status, error, sent_by, sent_at) VALUES (?, ?, ?, 0, 'delivered', '', ?, ?)");
+    ins.run(1, 'Alpha', 'a', 'admin', 1000);
+    ins.run(2, 'Beta', 'b', 'Discord: X', 3000);
+    ins.run(1, 'Alpha', 'c', 'авто: правило', 2000);
+    db.prepare("INSERT INTO audit (ts, actor, action, detail) VALUES (2000000000000, 'game-plugin', 'game_login', 'vasya')").run();
+    const all = jr.journal({});
+    assert.equal(all[0].kind, 'link');
+    assert.deepEqual(all.filter((e) => e.kind !== 'restart' && e.kind !== 'link').map((e) => e.text), ['b', 'c', 'a']);
+    assert.deepEqual(jr.journal({ kind: 'discord' }).map((e) => e.text), ['b']);
+    assert.deepEqual(jr.journal({ kind: 'auto', serverId: 1 }).map((e) => e.text), ['c']);
+    assert.equal(jr.journal({ kind: 'link', serverId: 1 }).length, 0);
+  });
+});
+
+describe('a nickname that is already in the panel', () => {
+  it('is found by the game nickname of an account or by a login equal to it, without regard to case', () => {
+    const cols = (db.prepare('PRAGMA table_info(users)').all() as { name: string }[]).map((c) => c.name);
+    db.prepare(`INSERT INTO users (username, password_hash${cols.includes('role') ? ', role' : ''}${cols.includes('status') ? ', status' : ''}) VALUES ('vasya', 'x'${cols.includes('role') ? ", 'player'" : ''}${cols.includes('status') ? ", 'active'" : ''})`).run();
+    const uid = (db.prepare("SELECT id FROM users WHERE username = 'vasya'").get() as { id: number }).id;
+    db.prepare("INSERT INTO user_player (user_id, game_nick, bio, public_profile) VALUES (?, 'WhiteLegioN', '', 0)").run(uid);
+    assert.equal(register.nickInPanel('whitelegion'), true);
+    assert.equal(register.nickInPanel('WHITELEGION'), true);
+    assert.equal(register.nickInPanel('Vasya'), true);
+    assert.equal(register.nickInPanel('Nobody'), false);
+    assert.equal(register.nickInPanel(''), false);
+  });
+
+  it('warns once: the same command repeated within ten minutes goes on', () => {
+    assert.equal(register.warnOnce('76561198000000001', NOW), true);
+    assert.equal(register.warnOnce('76561198000000001', NOW + 60_000), false);
+    assert.equal(register.warnOnce('76561198000000001', NOW + 11 * 60_000), true);
+    assert.equal(register.warnOnce('76561198000000002', NOW), true);
+  });
+});
+
+describe('the line about the last visit', () => {
+  it('writes the date and the time in the time zone of the panel', () => {
+    setSetting('timezone', 'UTC');
+    assert.deepEqual(register.visitStamp(Date.UTC(2026, 11, 10, 7, 5)), { date: '10.12.2026', time: '07:05' });
+    setSetting('timezone', 'Asia/Yekaterinburg');
+    assert.deepEqual(register.visitStamp(Date.UTC(2026, 11, 10, 7, 5)), { date: '10.12.2026', time: '12:05' });
+    setSetting('timezone', 'UTC');
+  });
+});
+
+describe('the .kick command', () => {
+  it('writes the line: red text, a green nickname, a yellow reason', () => {
+    const line = kick.kickLine(kick.DEFAULT_KICK, 'Vamp', 'спам', 'Админ');
+    assert.equal(line, '<color=#FF5555>* Игрок </color><color=#5FD068>Vamp</color><color=#FF5555> был кикнут с сервера. Причина: </color><color=#FFCC33>спам</color>');
+  });
+
+  it('lets the administrator change the words and the colours, and fills the administrator in', () => {
+    const s = { ...kick.DEFAULT_KICK, template: '{admin} убрал {name}: {reason}!', textColor: '#111111', adminColor: '#222222' };
+    assert.equal(kick.kickLine(s, 'A', 'b', 'C'), '<color=#222222>C</color><color=#111111> убрал </color><color=#5FD068>A</color><color=#111111>: </color><color=#FFCC33>b</color><color=#111111>!</color>');
+  });
+
+  it('keeps tags a person typed out of the line', () => {
+    const line = kick.kickLine(kick.DEFAULT_KICK, '<size=99>Vamp', '<color=#000000>x', 'A');
+    assert.equal(line.includes('<size'), false);
+    assert.equal((line.match(/<color/g) ?? []).length, (line.match(/<\/color>/g) ?? []).length);
+    assert.equal(line.includes('<color=#000000>'), false);
+  });
+
+  it('reads the settings with defaults and keeps what was changed', () => {
+    assert.equal(kick.getKick().enabled, true);
+    assert.equal(kick.getKick().protectAdmins, true);
+    scope.writeScoped('gamenews_kick', JSON.stringify({ enabled: false, requireReason: true, cooldownSec: 30, nameColor: '#abcdef' }), 1);
+    const k = kick.getKick(1);
+    assert.equal(k.enabled, false);
+    assert.equal(k.requireReason, true);
+    assert.equal(k.cooldownSec, 30);
+    assert.equal(k.nameColor, '#ABCDEF');
+    assert.equal(kick.getKick(2).enabled, true);
+    scope.clearOverride('gamenews_kick', 1);
+  });
+
+  it('makes an administrator wait between two kicks only when a pause is set', () => {
+    assert.equal(kick.kickWait('a1', 0, NOW), 0);
+    kick.kickDone('a1', NOW);
+    assert.equal(kick.kickWait('a1', 30, NOW + 10_000), 20);
+    assert.equal(kick.kickWait('a1', 30, NOW + 31_000), 0);
+    assert.equal(kick.kickWait('other', 30, NOW + 10_000), 0);
+  });
+
+  it('is in the journal', () => {
+    db.prepare("INSERT INTO audit (ts, actor, action, detail) VALUES (2100000000000, 'game-plugin', 'game_kick', 'Админ → Vamp: спам')").run();
+    assert.deepEqual(jr.journal({ kind: 'kick' }).map((e) => e.text), ['Админ → Vamp: спам']);
   });
 });

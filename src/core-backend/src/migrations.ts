@@ -327,6 +327,31 @@ CREATE TABLE IF NOT EXISTS game_restart_log (
 );
 CREATE INDEX IF NOT EXISTS idx_game_restart_log_server ON game_restart_log(server_id, id);`),
   },
+  {
+    version: 24,
+    name: 'game_restart_schedule',
+    // planned restarts through the game plugin: a time of day, the days of the week (empty = every day), the warning before
+    up: (db) => db.exec(`
+CREATE TABLE IF NOT EXISTS game_restart_schedule (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  server_id INTEGER NOT NULL DEFAULT 0,
+  time TEXT NOT NULL,
+  days TEXT NOT NULL DEFAULT '[]',
+  warn_sec INTEGER NOT NULL DEFAULT 600,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  skip_r INTEGER NOT NULL DEFAULT 0,
+  fired_r INTEGER NOT NULL DEFAULT 0
+);`),
+  },
+  {
+    version: 25,
+    name: 'game_identities.visits',
+    // when a linked player joined and left the server last: «Вы были на сервере 10.12.2026 в 10:00» at the next join
+    up: (db) => {
+      addColumn(db, 'game_identities', 'last_join_at', 'INTEGER NOT NULL DEFAULT 0');
+      addColumn(db, 'game_identities', 'last_leave_at', 'INTEGER NOT NULL DEFAULT 0');
+    },
+  },
 ];
 
 export const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;

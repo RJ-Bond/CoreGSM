@@ -18,14 +18,14 @@ export const ScopeContext = createContext<Scope>({ server: 0, q: '', mine: null,
 export const useScope = () => useContext(ScopeContext);
 
 /** the keys of the settings of the server, by the name of the part */
-const KEY: Record<string, string> = { welcome: 'gamenews_welcome', joinleave: 'gamenews_joinleave', register: 'gamenews_register', chat: 'gamenews_chat', restart: 'gamenews_restart_texts' };
+export const SCOPE_KEYS: Record<string, string> = { welcome: 'gamenews_welcome', joinleave: 'gamenews_joinleave', register: 'gamenews_register', chat: 'gamenews_chat', restart: 'gamenews_restart_texts', kick: 'gamenews_kick' };
 
 /** inside a card of a server: «uses the general settings» or «own settings» with a way back */
-export function ScopeNote({ part }: { part: keyof typeof KEY }) {
+export function ScopeNote({ part }: { part: keyof typeof SCOPE_KEYS }) {
   useI18n();
   const s = useScope();
   if (!s.server || !s.mine) return null;
-  const own = !!s.mine[KEY[part]];
+  const own = !!s.mine[SCOPE_KEYS[part]];
   return (
     <div className={`flex flex-wrap items-center gap-3 rounded-xl border px-3 py-2 text-sm font-semibold ${own ? 'border-accent' : 'border-line text-mute'}`}>
       <span className="min-w-0 flex-1 basis-60">{own ? t('gn.sc.own') : t('gn.sc.inherit')}</span>

@@ -7,8 +7,8 @@
  * the game: a blue tag, a yellow nickname, a green clan chat.
  */
 
-/** the kinds of line that can go to Discord: three chats and two events (a player joined / left) */
-export const CHAT_KINDS = ['global', 'clan', 'local', 'join', 'leave'] as const;
+/** the kinds of line that can go to Discord: three chats and three events (a player joined, left, was kicked) */
+export const CHAT_KINDS = ['global', 'clan', 'local', 'join', 'leave', 'kick'] as const;
 export type ChatKind = (typeof CHAT_KINDS)[number];
 
 /** the eight colours of an ansi block of Discord */
@@ -27,6 +27,8 @@ export const DEFAULT_COLORS: Record<ChatKind, ChatColors> = {
   clan: { tag: 'green', name: 'yellow', text: 'green' },
   join: { tag: 'green', name: 'pink', text: 'green' },
   leave: { tag: 'green', name: 'pink', text: 'green' },
+  // a kick: the text red, the nickname green, the reason (the «tag» colour) yellow
+  kick: { tag: 'yellow', name: 'green', text: 'red' },
 };
 
 /** the defaults of the first version: a setting that still holds exactly them has not been changed by anybody and moves to the new ones */
@@ -36,6 +38,7 @@ const OLD_DEFAULTS: Record<ChatKind, ChatColors> = {
   clan: { tag: 'green', name: 'green', text: 'green' },
   join: { tag: 'green', name: 'pink', text: 'green' },
   leave: { tag: 'green', name: 'pink', text: 'green' },
+  kick: { tag: 'yellow', name: 'green', text: 'red' },
 };
 const sameColors = (x: ChatColors, y: ChatColors): boolean => x.tag === y.tag && x.name === y.name && x.text === y.text;
 
@@ -79,6 +82,7 @@ export function normalizeChat(raw: unknown): ChatStored {
   for (const k of CHAT_KINDS) {
     const event = k === 'join' || k === 'leave';
     if (v.kinds && typeof v.kinds[k] === 'boolean') kinds[k] = v.kinds[k] as boolean;
+    else if (k === 'kick') kinds[k] = true; // a kick is shown by default, like a chat (an event of a player is opt-in)
     else if (event) kinds[k] = false;
     else kinds[k] = v.webhooks ? typeof legacy[k] === 'string' && !!legacy[k] : true;
     const c = v.colors?.[k] ?? {};
@@ -167,6 +171,29 @@ export function ansiDiscordLine(name: string, text: string, time = ''): string {
   const t = forBlock(text);
   if (!t) return '';
   return `${seg('cyan', stamp(time))}${seg('blue', '* [Discord]', true)} ${seg('yellow', forBlock(name) || '?', true)}${seg('white', ': ')}${seg('white', t.slice(0, 300))}`;
+}
+
+/** the words of a kick split at {name} {reason} {admin}: the template, with what stands for each */
+function kickParts(template: string): string[] {
+  return forBlock(template).split(/(\{(?:name|reason|admin)\})/).filter(Boolean);
+}
+
+/** «[16:07] * Игрок Vamp был кикнут с сервера. Причина: спам» in an ansi block: red words, a green nickname, a yellow reason */
+export function ansiKickLine(template: string, v: { name: string; reason: string; admin: string }, c: ChatColors, time = ''): string {
+  const body = kickParts(template).map((p) => {
+    if (p === '{name}') return seg(c.name, forBlock(v.name) || '?', true);
+    if (p === '{reason}') return seg(c.tag, forBlock(v.reason), true);
+    if (p === '{admin}') return seg('cyan', forBlock(v.admin) || '?', true);
+    return seg(c.text, p);
+  }).join('');
+  return `${seg(c.text, stamp(time))}${body}`;
+}
+
+/** the same in the plain style: the nickname and the reason in bold */
+export function formatKickLine(template: string, v: { name: string; reason: string; admin: string }, time = ''): string {
+  const bold = (x: string) => `**${escapeDiscord(x.trim() || '?')}**`;
+  const body = escapeDiscord(template).split(/(\{(?:name|reason|admin)\})/).filter(Boolean).map((p) => (p === '{name}' ? bold(v.name) : p === '{reason}' ? bold(v.reason) : p === '{admin}' ? bold(v.admin) : p)).join('');
+  return `${stamp(time)}${body}`.trim();
 }
 
 /** a line of a chat in the colours of the game: «[16:07] [«Глобальный»] WhiteLegioN: Тест» (the time has the colour of the tag) */

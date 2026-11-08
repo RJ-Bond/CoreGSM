@@ -22,7 +22,7 @@ import { log } from '../logger.js';
 import { decryptSecret, encryptSecret } from '../security/secrets.js';
 import { pluginTarget } from './gameNews.js';
 import {
-  ANSI_COLORS, CHAT_KINDS, activeChatKinds, ansiChatLine, ansiEventLine, chunkLines, formatChatLine, formatEventLine, isDiscordWebhook,
+  ANSI_COLORS, CHAT_KINDS, activeChatKinds, ansiChatLine, ansiKickLine, formatKickLine, ansiEventLine, chunkLines, formatChatLine, formatEventLine, isDiscordWebhook,
   normalizeChat, paletteBlock, wrapForDiscord, type ChatKind, type ChatStored,
 } from './gameNewsChatLogic.js';
 import { getJoinLeave } from './gameNewsJoinLeave.js';
@@ -65,6 +65,24 @@ async function channelOf(url: string): Promise<string> {
   } catch {
     return '';
   }
+}
+
+/** which queue (set of chat settings) a server writes to: its own when it has chat settings of its own, else the general one (0) */
+const scopeOf = (serverId: number): number => (hasOverride('gamenews_chat', serverId) ? serverId : 0);
+
+/**
+ * A kick goes to the chat in Discord like a line of the game chat (when the chat is on, has a webhook and «Кик» is switched on):
+ * the words are those of the .kick command, the colours those of the «Кик» row of the chat settings.
+ */
+export function postKickToDiscord(serverId: number, template: string, v: { name: string; reason: string; admin: string }, now = Date.now()): boolean {
+  const scope = scopeOf(serverId);
+  const s = read(scope || undefined);
+  if (!activeChatKinds(s).includes('kick')) return false;
+  const time = s.showTime ? clock(now) : '';
+  const line = s.style === 'ansi' ? ansiKickLine(template, v, s.colors.kick, time) : formatKickLine(template, v, time);
+  if (!line) return false;
+  enqueue(scope, line);
+  return true;
 }
 
 /** the channels where the bot listens: what an administrator writes there goes to the game chat of these servers */
@@ -189,7 +207,7 @@ export function registerGameNewsChat({ app, admin }: { app: Express; admin: Requ
     const jl = getJoinLeave(t.server_id);
     const time = s.showTime ? clock(now) : '';
     for (const m of b.data.messages) {
-      if (!kinds.has(m.type)) continue;
+      if (m.type === 'kick' || !kinds.has(m.type)) continue; // a kick is written by the panel itself (postKickToDiscord)
       const colors = s.colors[m.type];
       let line: string;
       if (m.type === 'join' || m.type === 'leave') {

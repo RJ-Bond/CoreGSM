@@ -15,6 +15,7 @@
 import bcrypt from 'bcryptjs';
 import type { Express, Request, RequestHandler } from 'express';
 import { z } from 'zod';
+import { panelTz } from './gameNewsVars.js';
 import { isRealDomain, needsSetup, publicBase, registrationMode, rulesText } from '../admin/site.js';
 import { db } from '../db.js';
 import { readScoped, writeScoped } from './gameNewsScope.js';
@@ -39,6 +40,16 @@ export interface RegisterSettings {
   pendingText: string;
   /** after .login: the game account is linked to an account of the panel: {login} {panel} */
   loginText: string;
+  /** the nickname of a player who joins (or registers) is already in the panel: suggest .login instead: {name} */
+  nickTakenText: string;
+  /** a linked player is recognised by the game account at the join (no command is needed): «Автоматический вход» */
+  autoLoginEnabled: boolean;
+  /** the line of the automatic login: {login} {name} */
+  autoLoginText: string;
+  /** a linked player reads when he was on the server last time */
+  lastSeenEnabled: boolean;
+  /** the line of the last visit: {name} {date} {time} */
+  lastSeenText: string;
   /** how often the Discord hint is repeated for the same player, hours */
   discordEveryHours: number;
   /** a registered player reads his rank at every join */
@@ -49,18 +60,27 @@ export interface RegisterSettings {
 
 export const DEFAULT_REGISTER: RegisterSettings = {
   enabled: false,
-  promptText: '* Вы ещё не зарегистрированы в панели. Новый аккаунт: .register (пароль) (подтверждение). Уже есть аккаунт на сайте: .login (логин) (пароль)',
+  promptText: '* Вы ещё не зарегистрированы в панели. Новый аккаунт: .register (пароль) (подтверждение). Уже есть аккаунт на сайте: .login (логин) (пароль), логин с пробелом пишите как есть.',
   doneText: '* Готово! Вы зарегистрированы в панели, ваш логин: {login}',
   discordText: '* Привяжите Discord в профиле панели ({panel}): аккаунт будет под рукой в Discord, а роли и ранг — на вашем сервере.',
   pendingText: '* Заявка на регистрацию отправлена. Когда администратор её одобрит, вы сможете войти в панель.',
   loginText: '* Готово! Игровой аккаунт привязан к аккаунту {login} в панели.',
+  nickTakenText: '* Ник {name} уже есть в панели. Это ваш аккаунт? Введите .login (пароль), логин не нужен. Или .login (логин) (пароль). Нет? Тогда .register (пароль) (подтверждение) ещё раз.',
+  autoLoginEnabled: true,
+  autoLoginText: '* Автоматический вход: вы авторизованы как {login}.',
+  lastSeenEnabled: true,
+  lastSeenText: '* С возвращением, {name}! Вы были на сервере {date} в {time}.',
   discordEveryHours: 24,
   rankEnabled: true,
   rankText: '* {name}, ваш ранг: {rank} · {hours} ч{next}',
 };
 
 /** the hint of the first version: a setting that still holds exactly it has not been changed by anybody */
-const OLD_PROMPT = '* Вы ещё не зарегистрированы в панели. Для регистрации введите .register пароль подтверждение_пароля';
+const OLD_PROMPTS = [
+  '* Вы ещё не зарегистрированы в панели. Для регистрации введите .register пароль подтверждение_пароля',
+  '* Вы ещё не зарегистрированы в панели. Новый аккаунт: .register (пароль) (подтверждение). Уже есть аккаунт на сайте: .login (логин) (пароль)',
+];
+const OLD_NICK_TAKEN = ['* Ник {name} уже есть в панели. Это ваш аккаунт? Введите .login (логин) (пароль). Нет? Тогда .register (пароль) (подтверждение) ещё раз.'];
 
 // the colours of the lines the player reads
 const C_INFO = '#FFCC33';
@@ -94,11 +114,16 @@ export function getRegisterSettings(serverId?: number): RegisterSettings {
     return {
       enabled: !!v.enabled,
       // the first wording of the hint (before .login and the brackets) moves to the new one; a text the administrator changed stays
-      promptText: v.promptText === OLD_PROMPT ? d.promptText : text(v.promptText, d.promptText),
+      promptText: typeof v.promptText === 'string' && OLD_PROMPTS.includes(v.promptText) ? d.promptText : text(v.promptText, d.promptText),
       doneText: text(v.doneText, d.doneText),
       discordText: text(v.discordText, d.discordText),
       pendingText: text(v.pendingText, d.pendingText),
       loginText: text(v.loginText, d.loginText),
+      autoLoginEnabled: typeof v.autoLoginEnabled === 'boolean' ? v.autoLoginEnabled : d.autoLoginEnabled,
+      autoLoginText: text(v.autoLoginText, d.autoLoginText),
+      lastSeenEnabled: typeof v.lastSeenEnabled === 'boolean' ? v.lastSeenEnabled : d.lastSeenEnabled,
+      lastSeenText: text(v.lastSeenText, d.lastSeenText),
+      nickTakenText: typeof v.nickTakenText === 'string' && OLD_NICK_TAKEN.includes(v.nickTakenText) ? d.nickTakenText : text(v.nickTakenText, d.nickTakenText),
       discordEveryHours: Number.isFinite(v.discordEveryHours) ? Math.min(720, Math.max(1, Math.round(v.discordEveryHours as number))) : d.discordEveryHours,
       rankEnabled: typeof v.rankEnabled === 'boolean' ? v.rankEnabled : d.rankEnabled,
       rankText: text(v.rankText, d.rankText),
@@ -112,8 +137,35 @@ export function setRegisterSettings(v: RegisterSettings, serverId?: number): voi
   writeScoped('gamenews_register', JSON.stringify(v), serverId);
 }
 
-const fill = (text: string, vars: { login?: string; panel: string }): string =>
-  text.replace(/\{login\}/g, vars.login ?? '').replace(/\{panel\}/g, vars.panel);
+const fill = (text: string, vars: { login?: string; panel: string; name?: string; date?: string; time?: string }): string =>
+  text.replace(/\{login\}/g, vars.login ?? '').replace(/\{panel\}/g, vars.panel).replace(/\{name\}/g, vars.name ?? '').replace(/\{date\}/g, vars.date ?? '').replace(/\{time\}/g, vars.time ?? '');
+
+/** «10.12.2026» and «10:00» in the time zone of the panel */
+export function visitStamp(ts: number): { date: string; time: string } {
+  const tz = panelTz();
+  const f = (o: Intl.DateTimeFormatOptions) => { try { return new Intl.DateTimeFormat('ru-RU', { timeZone: tz, hourCycle: 'h23', ...o }).format(new Date(ts)); } catch { return new Intl.DateTimeFormat('ru-RU', { timeZone: 'UTC', hourCycle: 'h23', ...o }).format(new Date(ts)); } };
+  return { date: f({ day: '2-digit', month: '2-digit', year: 'numeric' }), time: f({ hour: '2-digit', minute: '2-digit' }) };
+}
+
+/**
+ * Is this nickname already in the panel: an account that has it as its game nickname, or whose login is the nickname? Then the player
+ * most likely has an account and should log in, not register a second one (which would get a login with a number).
+ */
+export function nickInPanel(nick: string): boolean {
+  const n = plainLine(nick).slice(0, 40).toLowerCase();
+  if (!n) return false;
+  return !!(db.prepare('SELECT 1 FROM user_player WHERE ulower(game_nick) = ?').get(n) || db.prepare('SELECT 1 FROM users WHERE ulower(username) = ?').get(n));
+}
+
+// a player who was told «this nickname is in the panel» may register anyway by repeating the command within ten minutes
+const warned = new Map<string, number>();
+export function warnOnce(id: string, now: number): boolean {
+  const at = warned.get(id) ?? 0;
+  if (now - at < 600_000) return false;
+  warned.set(id, now);
+  if (warned.size > 500) for (const [k, t] of warned) if (now - t > 600_000) warned.delete(k);
+  return true;
+}
 
 /**
  * The address of the panel as the player should type it: the address the game plugin itself reaches the panel at (its Host header: the
@@ -134,7 +186,7 @@ function tooMany(id: string, now: number): boolean {
   return e.n > 8;
 }
 
-interface IdentityRow { platform_id: string; user_id: number; last_hint_at: number }
+interface IdentityRow { platform_id: string; user_id: number; last_hint_at: number; last_join_at: number; last_leave_at: number }
 interface UserRow { id: number; status: string; discord_id: string | null }
 
 const idSchema = z.string().regex(/^\d{5,25}$/);
@@ -157,11 +209,23 @@ export function registerGameNewsPlayers({ app }: { app: Express }): void {
     if (!who) {
       // nobody can register while the panel is closed or not set up: no use to invite
       if (needsSetup() || !registrationOpen()) return res.json({ registered: false, replies: [] });
-      return res.json({ registered: false, replies: [tag(C_INFO, fill(s.promptText, { panel: panelUrl(req) }))] });
+      const hint = nickInPanel(String(req.query.name ?? '')) ? s.nickTakenText : s.promptText;
+      return res.json({ registered: false, replies: [tag(C_INFO, fill(hint, { panel: panelUrl(req), name: plainLine(String(req.query.name ?? '')) }))] });
     }
     const u = db.prepare('SELECT id, status, discord_id FROM users WHERE id = ?').get(who.user_id) as UserRow | undefined;
     const due = now - who.last_hint_at >= s.discordEveryHours * 3_600_000;
     const replies: string[] = [];
+    // a linked player is known by the game account: no command is needed, the join is the login
+    const account = u ? (db.prepare('SELECT username FROM users WHERE id = ?').get(u.id) as { username: string } | undefined) : undefined;
+    const nickNow = plainLine(String(req.query.name ?? ''));
+    if (u && u.status === 'active' && account && s.autoLoginEnabled) replies.push(tag(C_GOOD, fill(s.autoLoginText, { login: account.username, name: nickNow, panel: panelUrl(req) })));
+    // when he was here last: the later of the last leave and the last join (a leave that was not reported leaves only the join)
+    const before = Math.max(who.last_leave_at, who.last_join_at);
+    if (u && u.status === 'active' && s.lastSeenEnabled && before > 0) {
+      const st = visitStamp(before);
+      replies.push(tag(C_INFO, fill(s.lastSeenText, { name: nickNow, date: st.date, time: st.time, panel: panelUrl(req) })));
+    }
+    if (u && u.status === 'active') db.prepare('UPDATE game_identities SET last_join_at = ? WHERE platform_id = ?').run(now, id.data);
     if (u && u.status === 'active' && s.rankEnabled) {
       const nick = (db.prepare('SELECT game_nick FROM user_player WHERE user_id = ?').get(u.id) as { game_nick: string } | undefined)?.game_nick || (db.prepare('SELECT nick FROM game_identities WHERE platform_id = ?').get(id.data) as { nick: string } | undefined)?.nick || '';
       replies.push(tag(C_GOOD, rankLine(s.rankText, nick, vrHoursOf(u.id, nick).hours)));
@@ -171,6 +235,13 @@ export function registerGameNewsPlayers({ app }: { app: Express }): void {
       replies.push(tag(C_HINT, fill(s.discordText, { panel: panelUrl(req) })));
     }
     res.json({ registered: true, replies });
+  });
+
+  // the plugin: a player left the server (the time is kept for «Вы были на сервере …»)
+  app.post('/api/game-news/player/left', plugin, (req, res) => {
+    const id = idSchema.safeParse(String((req.body as { id?: unknown } | undefined)?.id ?? ''));
+    if (id.success) db.prepare('UPDATE game_identities SET last_leave_at = ? WHERE platform_id = ?').run(Date.now(), id.data);
+    res.json({ ok: true });
   });
 
   // .register <password> <password again>
@@ -184,6 +255,9 @@ export function registerGameNewsPlayers({ app }: { app: Express }): void {
     if (tooMany(b.data.id, now)) return say(C_BAD, '* Слишком много попыток. Попробуйте позже.');
     if (needsSetup() || !registrationOpen()) return say(C_BAD, '* Регистрация в панели сейчас закрыта.');
     if (db.prepare('SELECT 1 FROM game_identities WHERE platform_id = ?').get(b.data.id)) return say(C_INFO, '* Вы уже зарегистрированы в панели.');
+
+    // the nickname is already in the panel: suggest .login first; the same command repeated within ten minutes registers anyway
+    if (nickInPanel(b.data.name) && warnOnce(b.data.id, now)) return say(C_INFO, fill(s.nickTakenText, { panel: panelUrl(req), name: plainLine(b.data.name) }));
 
     const taken = (login: string) => !!db.prepare('SELECT 1 FROM users WHERE ulower(username) = ?').get(login.toLowerCase());
     const login = loginFromNick(b.data.name, b.data.id, taken);
@@ -215,25 +289,33 @@ export function registerGameNewsPlayers({ app }: { app: Express }): void {
 
   // .login <login> <password>: the player already has an account in the panel; this game account is linked to it
   app.post('/api/game-news/player/login', plugin, async (req, res) => {
-    const b = z.object({ id: idSchema, name: z.string().max(100), login: z.string().min(1).max(64), password: z.string().min(1).max(256) }).safeParse(req.body);
+    const b = z.object({ id: idSchema, name: z.string().max(100), login: z.string().max(64), password: z.string().min(1).max(256) }).safeParse(req.body);
     if (!b.success) return res.status(400).json({ replies: [tag(C_BAD, '* Не удалось разобрать команду. Введите: .login (логин) (пароль)')] });
     const s = getRegisterSettings((req as typeof req & { gameServerId?: number }).gameServerId);
     const now = Date.now();
     const say = (color: string, text: string) => res.json({ ok: false, replies: [tag(color, text)] });
     if (!s.enabled) return say(C_BAD, '* Вход из игры отключён.');
+    // the login may be left out: then the account is the one whose game nickname (or login) is the nickname of the player
+    const login = b.data.login.trim() || plainLine(b.data.name).slice(0, 40);
     // a few tries an hour for one game account and for one login (somebody may try to guess a password of another person)
-    if (tooMany(b.data.id, now) || tooMany(`login:${b.data.login.toLowerCase()}`, now)) return say(C_BAD, '* Слишком много попыток. Попробуйте позже.');
+    if (tooMany(b.data.id, now) || tooMany(`login:${login.toLowerCase()}`, now)) return say(C_BAD, '* Слишком много попыток. Попробуйте позже.');
     if (needsSetup()) return say(C_BAD, '* Панель ещё не настроена.');
 
     const own = db.prepare('SELECT g.user_id, u.username FROM game_identities g JOIN users u ON u.id = g.user_id WHERE g.platform_id = ?').get(b.data.id) as { user_id: number; username: string } | undefined;
     if (own) return say(C_INFO, `* Этот игровой аккаунт уже привязан к аккаунту ${own.username}.`);
 
-    const u = db.prepare('SELECT id, username, password_hash, status, banned_at, banned_until, totp_enabled FROM users WHERE ulower(username) = ?').get(b.data.login.toLowerCase()) as
+    const byLogin = db.prepare('SELECT id, username, password_hash, status, banned_at, banned_until, totp_enabled FROM users WHERE ulower(username) = ?');
+    let u = byLogin.get(login.toLowerCase()) as
       | { id: number; username: string; password_hash: string; status: string; banned_at: number | null; banned_until: number | null; totp_enabled: number }
       | undefined;
+    // no such login: when none was given, the game nickname of an account may be the nickname of the player
+    if (!u && !b.data.login.trim()) {
+      const owner = db.prepare('SELECT user_id FROM user_player WHERE ulower(game_nick) = ?').get(login.toLowerCase()) as { user_id: number } | undefined;
+      if (owner) u = db.prepare('SELECT id, username, password_hash, status, banned_at, banned_until, totp_enabled FROM users WHERE id = ?').get(owner.user_id) as typeof u;
+    }
     // the same answer and the same work for a wrong login and a wrong password
     const ok = await bcrypt.compare(b.data.password, u?.password_hash ?? DUMMY_HASH);
-    if (!u || !ok) return say(C_BAD, '* Неверный логин или пароль.');
+    if (!u || !ok) return say(C_BAD, b.data.login.trim() ? '* Неверный логин или пароль. Логин с пробелом пишите как есть, пароль последним словом.' : '* Не удалось войти по нику. Введите логин: .login (логин) (пароль)');
     if (u.status === 'pending') return say(C_INFO, '* Аккаунт ещё ждёт одобрения администратора.');
     if (u.status !== 'active') return say(C_BAD, '* Этот аккаунт сейчас недоступен.');
     if (u.banned_at && (!u.banned_until || u.banned_until > now)) return say(C_BAD, '* Этот аккаунт заблокирован.');

@@ -247,6 +247,43 @@ export const WELCOME_STYLES: WelcomeStyle[] = [
 ];
 
 /** registration in the panel from the game: switch, texts and how often the Discord hint is repeated */
+/** the defaults of the .kick command (the same as in the panel's backend) */
+export const DEFAULT_KICK: KickSettings = {
+  enabled: true, template: '* Игрок {name} был кикнут с сервера. Причина: {reason}', textColor: '#FF5555', nameColor: '#5FD068', reasonColor: '#FFCC33', adminColor: '#6EC1FF',
+  defaultReason: 'не указана', requireReason: false, protectAdmins: true, announce: true, cooldownSec: 0, maxReason: 100, logChannelId: '',
+};
+
+export interface KickSettings {
+  enabled: boolean;
+  template: string;
+  textColor: string;
+  nameColor: string;
+  reasonColor: string;
+  adminColor: string;
+  defaultReason: string;
+  requireReason: boolean;
+  protectAdmins: boolean;
+  announce: boolean;
+  cooldownSec: number;
+  maxReason: number;
+  /** the channel of Discord for the log of kicks ('' = none) */
+  logChannelId: string;
+}
+
+/** the line of a kick for everybody in flat colour tags (the same as the panel builds for the game): the text, the nickname, the reason and the administrator each in its colour */
+export function kickLine(s: KickSettings, name: string, reason: string, admin: string): string {
+  const clean = (x: string) => x.replace(/[<>]/g, '');
+  const vars: Record<string, { text: string; color: string }> = {
+    name: { text: clean(name), color: s.nameColor },
+    reason: { text: clean(reason), color: s.reasonColor },
+    admin: { text: clean(admin), color: s.adminColor },
+  };
+  return clean(s.template).split(/(\{(?:name|reason|admin)\})/).filter(Boolean).map((part) => {
+    const m = /^\{(name|reason|admin)\}$/.exec(part);
+    return m ? `<color=${vars[m[1]].color}>${vars[m[1]].text}</color>` : `<color=${s.textColor}>${part}</color>`;
+  }).join('');
+}
+
 /** a line of the chat in one colour with the commands picked out (the same as the panel does for the player): «.register» white bold, «(пароль)» lilac */
 export function commandLine(color: string, text: string): string {
   const plain = text.replace(/[<>]/g, '');
@@ -270,13 +307,18 @@ export interface RegisterSettings {
   discordText: string;
   pendingText: string;
   loginText: string;
+  nickTakenText: string;
+  autoLoginEnabled: boolean;
+  autoLoginText: string;
+  lastSeenEnabled: boolean;
+  lastSeenText: string;
   discordEveryHours: number;
   rankEnabled: boolean;
   rankText: string;
 }
 
 /** the game chat in Discord: one webhook (its address never leaves the backend), a switch for each kind of line and how they look */
-export const CHAT_KINDS = ['global', 'clan', 'local', 'join', 'leave'] as const;
+export const CHAT_KINDS = ['global', 'clan', 'local', 'join', 'leave', 'kick'] as const;
 export type ChatKind = (typeof CHAT_KINDS)[number];
 /** the eight colours of an ansi block of Discord */
 /** ready looks of the chat in Discord: the colours of the game, calm, bright, or no colours at all */
@@ -285,28 +327,28 @@ export const CHAT_PRESETS: { id: 'game' | 'calm' | 'bright' | 'plain'; style: 'a
     id: 'game', style: 'ansi',
     colors: {
       global: { tag: 'blue', name: 'yellow', text: 'blue' }, local: { tag: 'blue', name: 'yellow', text: 'blue' }, clan: { tag: 'green', name: 'yellow', text: 'green' },
-      join: { tag: 'green', name: 'pink', text: 'green' }, leave: { tag: 'green', name: 'pink', text: 'green' },
+      join: { tag: 'green', name: 'pink', text: 'green' }, leave: { tag: 'green', name: 'pink', text: 'green' }, kick: { tag: 'yellow', name: 'green', text: 'red' },
     },
   },
   {
     id: 'calm', style: 'ansi',
     colors: {
       global: { tag: 'gray', name: 'white', text: 'gray' }, local: { tag: 'gray', name: 'white', text: 'gray' }, clan: { tag: 'gray', name: 'white', text: 'gray' },
-      join: { tag: 'gray', name: 'white', text: 'gray' }, leave: { tag: 'gray', name: 'white', text: 'gray' },
+      join: { tag: 'gray', name: 'white', text: 'gray' }, leave: { tag: 'gray', name: 'white', text: 'gray' }, kick: { tag: 'gray', name: 'white', text: 'gray' },
     },
   },
   {
     id: 'bright', style: 'ansi',
     colors: {
       global: { tag: 'cyan', name: 'yellow', text: 'white' }, local: { tag: 'gray', name: 'yellow', text: 'gray' }, clan: { tag: 'green', name: 'yellow', text: 'white' },
-      join: { tag: 'green', name: 'pink', text: 'green' }, leave: { tag: 'red', name: 'pink', text: 'red' },
+      join: { tag: 'green', name: 'pink', text: 'green' }, leave: { tag: 'red', name: 'pink', text: 'red' }, kick: { tag: 'yellow', name: 'green', text: 'red' },
     },
   },
   {
     id: 'plain', style: 'plain',
     colors: {
       global: { tag: 'white', name: 'white', text: 'white' }, local: { tag: 'white', name: 'white', text: 'white' }, clan: { tag: 'white', name: 'white', text: 'white' },
-      join: { tag: 'white', name: 'white', text: 'white' }, leave: { tag: 'white', name: 'white', text: 'white' },
+      join: { tag: 'white', name: 'white', text: 'white' }, leave: { tag: 'white', name: 'white', text: 'white' }, kick: { tag: 'white', name: 'white', text: 'white' },
     },
   },
 ];
@@ -342,6 +384,7 @@ export interface RulesState {
   extras: Extras;
   register: RegisterSettings;
   chat: ChatSettings;
+  kick: KickSettings;
   /** the servers that have settings of their own, by key */
   overrides: Record<string, number[]>;
   /** for one server: which parts have their own value */

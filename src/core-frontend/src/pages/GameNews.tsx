@@ -1,50 +1,28 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { api } from '../api';
-import { NewsEditor, NewsPreview, Styled } from '../components/NewsEditor';
 import { soon } from '../components/GameNewsParts';
 import { confirmDialog } from '../confirm';
 import { t, useI18n } from '../i18n';
 import {
-  pluginConfig, validateNews, versionLess,
-  type NewsLogRow, type NewsSendResult, type NewsServerInfo, type NewsStatus, type RulesState,
+  pluginConfig, validateNews,
+  type NewsLogRow, type NewsSendResult, type NewsServerInfo, type RulesState,
 } from '../gameNews';
 import { AdminPage, ErrorLine, IconNews, LoadError, Modal, PageHead, Spinner, errText, navigate, toast, usePoll } from '../ui';
-import { ChatCard, ExtrasCard, JoinLeaveCard, RegisterCard, RestartCard, WelcomeCard } from './GameNewsCards';
+import { ChatCard, ExtrasCard, JoinLeaveCard, KickCard, RegisterCard, WelcomeCard } from './GameNewsCards';
 import { ServerHead } from './GameNewsServerHead';
 import { ScopeContext } from './GameNewsScope';
 import { ServerRestartCard } from './GameNewsServerRestart';
 import GameNewsRules from './GameNewsRules';
+import { JournalTab } from './GameNewsJournal';
+import { LinksTab } from './GameNewsLinks';
+import { SendTab } from './GameNewsSend';
+import { ScopedCard, SubTabs } from './GameNewsUi';
 
 interface NewsState { servers: NewsServerInfo[]; log: NewsLogRow[]; pluginLatest: string }
 
-/** 'send' | 'auto' | 'general' | 's<id>' (the settings of one server) | 'history' */
+/** 'send' | 'auto' | 'general' | 's<id>' (the settings of one server) | 'players' (linked players) | 'journal' */
 type Tab = string;
 const DOCS = 'https://github.com/RJ-Bond/CoreGSM/blob/main/docs/game-plugin.md';
-
-/** «3 с назад», «5 мин назад», «2 ч назад» */
-function ago(ts: number): string {
-  const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
-  if (s < 90) return t('gn.ago.s', { n: s });
-  if (s < 5400) return t('gn.ago.m', { n: Math.round(s / 60) });
-  return t('gn.ago.h', { n: Math.round(s / 3600) });
-}
-
-const STATUS: Record<NewsStatus, { text: 'gn.h.queued' | 'gn.h.ok' | 'gn.h.expired' | 'gn.h.fail'; cls: string }> = {
-  queued: { text: 'gn.h.queued', cls: 'pill pill-mute' },
-  delivered: { text: 'gn.h.ok', cls: 'pill pill-ok' },
-  expired: { text: 'gn.h.expired', cls: 'pill pill-warn' },
-  failed: { text: 'gn.h.fail', cls: 'pill pill-warn' },
-};
-
-function Tile({ label, value, sub }: { label: string; value: string; sub?: string }) {
-  return (
-    <div className="panel min-w-0 px-4 py-3">
-      <div className="text-xs font-bold uppercase tracking-wide text-mute">{label}</div>
-      <div className="mt-0.5 wrap-break-word text-lg font-extrabold">{value}</div>
-      {sub && <div className="wrap-break-word text-sm font-semibold text-mute">{sub}</div>}
-    </div>
-  );
-}
 
 /** «Игровой плагин»: messages to the in-game chat (the CoreGSM game plugin picks them up), schedules, events, the chat in Discord. */
 export default function GameNewsPage({ sub = '' }: { sub?: string }) {
@@ -54,7 +32,8 @@ export default function GameNewsPage({ sub = '' }: { sub?: string }) {
   const [error, setError] = useState('');
   // the tab is part of the address: /admin/gamenews, /auto, /players, /discord, /history («events» is the old name of «players»)
   // (/general holds the general settings; /s12 the settings of the server 12; «players», «discord» and «events» are the old names of /general)
-  const tab: Tab = ['players', 'discord', 'events'].includes(sub) ? 'general' : (/^(send|auto|general|history|s\d+)$/.test(sub) ? sub : 'send');
+  // («discord» and «events» are old names of /general, «history» of /journal)
+  const tab: Tab = ['discord', 'events'].includes(sub) ? 'general' : sub === 'history' ? 'journal' : (/^(send|auto|general|players|journal|s\d+)$/.test(sub) ? sub : 'send');
   const goTab = (x: Tab) => navigate(x === 'send' ? '/admin/gamenews' : `/admin/gamenews/${x}`);
   // the draft survives a switch of the page or a reload (kept in this browser only)
   const [text, setText] = useState(() => { try { return localStorage.getItem('coregsm.gamenews.draft') ?? ''; } catch { return ''; } });
@@ -64,6 +43,9 @@ export default function GameNewsPage({ sub = '' }: { sub?: string }) {
   const [settingsFor, setSettingsFor] = useState<number | null>(null);
   const [lastResult, setLastResult] = useState<NewsSendResult | null>(null);
   const [showBare, setShowBare] = useState(false);
+  // inside the settings of the general page or of a server: players | restart | discord (remembered in this browser)
+  const [inner, setInner] = useState<'players' | 'restart' | 'discord'>(() => { try { const v = localStorage.getItem('coregsm.gn.inner'); return v === 'restart' || v === 'discord' ? v : 'players'; } catch { return 'players'; } });
+  const pickInner = (v: 'players' | 'restart' | 'discord') => { setInner(v); try { localStorage.setItem('coregsm.gn.inner', v); } catch { /* private mode */ } };
   const [wizardOff, setWizardOff] = useState(() => { try { return localStorage.getItem('coregsm.gn.wizard') === '0'; } catch { return false; } });
 
   const loadMain = () => api<NewsState>('/game-news').then((d) => { setData(d); setError(''); }).catch((e: Error) => setError(e.message));
@@ -100,14 +82,12 @@ export default function GameNewsPage({ sub = '' }: { sub?: string }) {
   const day = Date.now() - 86_400_000;
   const delivered24 = (data?.log ?? []).filter((r) => r.status === 'delivered' && r.sentAt > day).length;
   const queued = (data?.log ?? []).filter((r) => r.status === 'queued').length;
-  const eventsOn = rd ? [rd.welcome.enabled, rd.joinLeave.joinEnabled || rd.joinLeave.leaveEnabled, rd.register.enabled, rd.restartCountdown].filter(Boolean).length : 0;
-  const chatOn = rd ? (rd.chat.enabled && rd.chat.set ? 1 : 0) : 0;
-  const counter: Record<string, number> = { auto: activeRules.length, general: tab === 'general' ? eventsOn + chatOn : 0, history: queued };
-  // with one server its settings are the general ones; with several each gets a tab of its own
+  const counter: Record<string, number> = { auto: activeRules.length, journal: queued };
+  // with one server its settings are the general ones; with several each gets a page of its own (in the menu on the left, on a phone in the strip)
   const serverTabs = withToken.length > 1 ? withToken : [];
   const tabList: { id: Tab; label: string }[] = [
     { id: 'send', label: t('gn.tab.send') }, { id: 'auto', label: t('gn.tab.auto') }, { id: 'general', label: t('gn.tab.general') },
-    { id: 'history', label: t('gn.tab.history') },
+    { id: 'players', label: t('gn.tab.players') }, { id: 'journal', label: t('gn.tab.journal') },
   ];
 
   // the setup guide: until a plugin is online
@@ -134,37 +114,25 @@ export default function GameNewsPage({ sub = '' }: { sub?: string }) {
     }
   };
 
-  const serverRow = (s: NewsServerInfo) => {
-    const old = s.hasToken && s.online && versionLess(s.pluginVersion, data?.pluginLatest ?? '');
-    return (
-      <li key={s.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2.5">
-        <label className="flex min-w-0 flex-1 basis-48 items-center gap-2.5 font-bold">
-          <input type="checkbox" disabled={!s.hasToken} checked={picked.includes(s.id)} onChange={() => toggle(s.id)} />
-          <span className="min-w-0 wrap-break-word">
-            {s.name}
-            <span className="block text-xs font-semibold text-mute">
-              {s.name !== s.address && s.address}
-              {s.players != null && <>{s.name !== s.address && ' · '}{t('gn.players', { n: s.players, max: s.maxPlayers ?? 0 })}</>}
-            </span>
-          </span>
-        </label>
-        <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
-          <span
-            className={!s.hasToken ? 'pill pill-mute' : !s.online || old ? 'pill pill-warn' : 'pill pill-ok'}
-            title={s.lastSeen ? t('gn.plugin.lastPoll', { time: ago(s.lastSeen) }) : undefined}
-          >
-            {!s.hasToken
-              ? t('gn.plugin.off')
-              : !s.online
-                ? (s.pluginVersion ? `${t('gn.plugin.silent')} · v${s.pluginVersion}` : t('gn.plugin.silent'))
-                : old
-                  ? t('gn.plugin.outdated', { v: s.pluginVersion || '?', latest: data?.pluginLatest ?? '' })
-                  : `${t('gn.plugin.online')} · v${s.pluginVersion || '?'}`}
-          </span>
-          <button type="button" className="btn btn-ghost btn-sm" onClick={() => setSettingsFor(s.id)} aria-label={t('gn.plugin.settings', { name: s.name })}>{t('gn.sv.setup')}</button>
-        </div>
-      </li>
-    );
+  // quick actions of the «Отправить» tab: a test line, a restart in five minutes (both for the chosen servers)
+  const quickTest = async () => {
+    if (!picked.length || busy) return;
+    setBusy(true);
+    try {
+      await api('/game-news/send', 'POST', { serverIds: picked, text: `<color=#6EC1FF>* ${t('gn.sh.testText')}</color>` });
+      toast(t('gn.q.testSent'));
+      void loadMain();
+    } catch (err) { toast(errText(err), 'err'); } finally { setBusy(false); }
+  };
+  const quickRestart = async () => {
+    if (!picked.length || busy) return;
+    const names = (data?.servers ?? []).filter((x) => picked.includes(x.id)).map((x) => x.name).join(', ');
+    if (!(await confirmDialog({ title: t('gn.q.restartTitle'), text: t('gn.q.restartText', { servers: names }), confirmLabel: t('gn.q.restart'), danger: true }))) return;
+    setBusy(true);
+    try {
+      for (const id of picked) await api('/game-news/restart', 'POST', { serverId: id, time: '5m' });
+      toast(t('gn.rr.started'));
+    } catch (err) { toast(errText(err), 'err'); } finally { setBusy(false); }
   };
 
   return (
@@ -177,15 +145,15 @@ export default function GameNewsPage({ sub = '' }: { sub?: string }) {
       {!data && !error && <div className="skeleton panel h-40" aria-busy="true" aria-label={t('d2.news.loading')} />}
 
       {data && (
-        <div className="grid gap-3 min-[560px]:grid-cols-2 lg:grid-cols-4">
-          <Tile
-            label={t('gn.s.plugin')}
-            value={withToken.length ? t('gn.s.pluginVal', { on: online.length, all: withToken.length }) : t('gn.s.pluginNone')}
-            sub={online[0]?.pluginVersion ? `v${online[0].pluginVersion}` : undefined}
-          />
-          <Tile label={t('gn.s.players')} value={online.length ? String(players) : '—'} sub={online.length ? t('gn.s.onServers', { n: online.length }) : undefined} />
-          <Tile label={t('gn.s.auto')} value={t('gn.s.autoVal', { n: activeRules.length })} sub={nextRun ? t('gn.s.next', { time: soon(nextRun) }) : undefined} />
-          <Tile label={t('gn.s.sent')} value={String(delivered24)} sub={queued ? t('gn.s.queued', { n: queued }) : undefined} />
+        <div className="panel flex flex-wrap items-center gap-x-6 gap-y-2 px-5 py-3" role="status" aria-label={t('gn.s.plugin')}>
+          <span className="flex items-center gap-2 font-extrabold">
+            <span aria-hidden className={`inline-block h-2.5 w-2.5 rounded-full ${online.length === 0 ? 'bg-mute' : online.length < withToken.length ? 'bg-warn' : 'bg-ok'}`} />
+            {withToken.length ? t('gn.s.pluginVal', { on: online.length, all: withToken.length }) : t('gn.s.pluginNone')}
+            {online[0]?.pluginVersion && <span className="text-sm font-semibold text-mute">v{online[0].pluginVersion}</span>}
+          </span>
+          <span className="text-sm font-bold"><span aria-hidden>👥 </span>{online.length ? t('gn.st.players', { n: players }) : '—'}</span>
+          <span className="text-sm font-bold"><span aria-hidden>⟳ </span>{t('gn.s.autoVal', { n: activeRules.length })}{nextRun ? <span className="font-semibold text-mute"> · {t('gn.s.next', { time: soon(nextRun) })}</span> : null}</span>
+          <span className="text-sm font-bold"><span aria-hidden>✉ </span>{t('gn.st.sent', { n: delivered24 })}{queued ? <span className="font-semibold text-mute"> · {t('gn.s.queued', { n: queued })}</span> : null}</span>
         </div>
       )}
 
@@ -221,60 +189,27 @@ export default function GameNewsPage({ sub = '' }: { sub?: string }) {
       )}
 
       {data && (
-        <div className="flex flex-wrap gap-2" role="tablist" aria-label={t('gn.title')}>
-          {[...tabList.slice(0, -1), ...serverTabs.map((x) => ({ id: `s${x.id}`, label: x.name, phone: true })), ...tabList.slice(-1)].map((x) => (
+        <div className="-mx-1 overflow-x-auto px-1 pb-1" role="tablist" aria-label={t('gn.title')}>
+         <div className="flex min-w-max gap-2 md:min-w-0 md:flex-wrap">
+          {[...tabList.slice(0, 3), ...serverTabs.map((x) => ({ id: `s${x.id}`, label: x.name, phone: true })), ...tabList.slice(3)].map((x) => (
             <span key={x.id} className={'phone' in x ? 'contents md:hidden' : 'contents'}>
-            <button type="button" role="tab" aria-selected={tab === x.id} className={`chip-filter ${tab === x.id ? 'on' : ''}`} onClick={() => goTab(x.id)}>
+            <button type="button" role="tab" aria-selected={tab === x.id} className={`chip-filter whitespace-nowrap ${tab === x.id ? 'on' : ''}`} onClick={() => goTab(x.id)}>
               {x.label}
               {(counter[x.id] ?? 0) > 0 && <span className="ml-1.5 rounded-full bg-soft px-1.5 text-xs font-extrabold">{counter[x.id]}</span>}
             </button>
             </span>
           ))}
+         </div>
         </div>
       )}
 
       {data && tab === 'send' && (
-        <form className="grid items-start gap-5 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]" onSubmit={(e) => void send(e)} noValidate>
-          <section className="panel p-5"><NewsEditor value={text} onChange={setText} onCtrlEnter={() => void send()} /></section>
-
-          <div className="space-y-5 lg:sticky lg:top-4">
-            <NewsPreview text={text} />
-
-            <div className="panel space-y-3 p-5">
-              <h3 className="font-extrabold">{t('gn.servers')}</h3>
-              {supported.length === 0 && <p className="text-sm font-semibold text-mute">{t('gn.noServers')}</p>}
-              <ul className="divide-y divide-line">{withToken.map(serverRow)}</ul>
-              {bare.length > 0 && (
-                <>
-                  {showBare && <ul className="divide-y divide-line">{bare.map(serverRow)}</ul>}
-                  <button type="button" className="btn btn-ghost btn-sm" aria-expanded={showBare} onClick={() => setShowBare((v) => !v)}>
-                    {showBare ? t('gn.sv.less') : t('gn.sv.more', { n: bare.length })}
-                  </button>
-                </>
-              )}
-              {hiddenOther > 0 && <p className="text-sm font-semibold text-mute">{t('gn.hiddenOther', { n: hiddenOther })}</p>}
-              {supported.length > 0 && withToken.length === 0 && <p className="text-sm font-semibold text-mute">{t('gn.noPlugin')}</p>}
-              {withToken.length > 1 && (
-                <button type="button" className="chip-filter" onClick={() => setPicked(picked.length === withToken.length ? [] : withToken.map((s) => s.id))}>
-                  {picked.length === withToken.length ? t('gn.pickNone') : t('gn.pickAll')}
-                </button>
-              )}
-              <div className="flex flex-wrap items-center justify-end gap-3">
-                {sendHint && <span className="text-sm font-semibold text-mute">{sendHint}</span>}
-                <button type="submit" className="btn" disabled={!!problem || !picked.length || busy} title={t('gn.sendKey')}>{busy && <Spinner />}{t('gn.send')}</button>
-              </div>
-              {lastResult && (
-                <ul className="space-y-1 text-sm font-semibold">
-                  {lastResult.results.map((r) => (
-                    <li key={r.serverId} className={r.queued ? (r.online ? 'text-ok' : undefined) : 'text-danger'}>
-                      {r.queued ? '✓' : '✕'} {r.serverName}: {r.queued ? (r.online ? t('gn.r.queued') : t('gn.r.queuedSilent')) : r.error}
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          </div>
-        </form>
+        <SendTab
+          withToken={withToken} bare={bare} hiddenOther={hiddenOther} supportedCount={supported.length} latest={data.pluginLatest}
+          picked={picked} toggle={toggle} pickAll={() => setPicked(picked.length === withToken.length ? [] : withToken.map((x) => x.id))}
+          text={text} setText={setText} problem={problem} sendHint={sendHint} busy={busy} lastResult={lastResult}
+          showBare={showBare} setShowBare={setShowBare} onSend={(e) => void send(e)} onSetup={setSettingsFor} onTest={() => void quickTest()} onRestart={() => void quickRestart()}
+        />
       )}
 
       {data && tab === 'auto' && rd && <GameNewsRules servers={data.servers} rules={rd.rules} timezone={rd.timezone} reload={() => void loadRules()} />}
@@ -288,39 +223,32 @@ export default function GameNewsPage({ sub = '' }: { sub?: string }) {
           <div className="space-y-4" key={`${tab}-${scopeRev}`}>
             {effScope > 0 && data.servers.find((x) => x.id === effScope) && <ServerHead server={data.servers.find((x) => x.id === effScope)!} rd={rd} latest={data.pluginLatest} />}
             {serverTabs.length > 0 && <p className="text-sm font-semibold text-mute">{effScope ? t('gn.sc.noteOne') : t('gn.sc.noteAll')}</p>}
-            <WelcomeCard initial={rd.welcome} />
-            <JoinLeaveCard initial={rd.joinLeave} />
-            <RegisterCard initial={rd.register} />
-            <ServerRestartCard />
-            {!effScope && <RestartCard enabled={rd.restartCountdown} onChange={(v) => { api('/game-news/restart-countdown', 'PUT', { enabled: v }).then(() => loadRules()).catch((e: Error) => toast(errText(e), 'err')); }} />}
-            <ChatCard initial={rd.chat} joinText={rd.joinLeave.joinText} leaveText={rd.joinLeave.leaveText} />
-            {!effScope && <ExtrasCard initial={rd.extras} />}
+            <SubTabs
+              label={t('gn.in.title')}
+              value={inner}
+              onChange={pickInner}
+              items={[{ id: 'players', label: t('gn.in.players') }, { id: 'restart', label: t('gn.in.restart') }, { id: 'discord', label: t('gn.in.discord') }]}
+            />
+            {inner === 'players' && (
+              <div className="space-y-4">
+                <ScopedCard part="welcome" title={t('gn.w.title')}><WelcomeCard initial={rd.welcome} /></ScopedCard>
+                <ScopedCard part="joinleave" title={t('gn.jl.title')}><JoinLeaveCard initial={rd.joinLeave} /></ScopedCard>
+                <ScopedCard part="register" title={t('gn.rg.title')}><RegisterCard initial={rd.register} /></ScopedCard>
+                <ScopedCard part="kick" title={t('gn.kk.title')}><KickCard initial={rd.kick} /></ScopedCard>
+                {!effScope && <ExtrasCard initial={rd.extras} />}
+              </div>
+            )}
+            {inner === 'restart' && (
+              <ServerRestartCard countdown={!effScope ? { enabled: rd.restartCountdown, onChange: (v) => { api('/game-news/restart-countdown', 'PUT', { enabled: v }).then(() => loadRules()).catch((e: Error) => toast(errText(e), 'err')); } } : undefined} />
+            )}
+            {inner === 'discord' && <ScopedCard part="chat" title={t('gn.ch.title')}><ChatCard initial={rd.chat} joinText={rd.joinLeave.joinText} leaveText={rd.joinLeave.leaveText} kickText={rd.kick.template} /></ScopedCard>}
           </div>
         </ScopeContext.Provider>
       )}
 
-      {data && tab === 'history' && (
-        <section className="panel overflow-hidden">
-          <h3 className="px-5 pt-4 font-extrabold">{t('gn.history')}</h3>
-          {data.log.length === 0 && <p className="px-5 py-4 text-sm font-semibold text-mute">{t('gn.historyEmpty')}</p>}
-          <ul className="divide-y divide-line">
-            {data.log.map((r) => (
-              <li key={r.id} className="flex flex-wrap items-start gap-x-4 gap-y-1 px-5 py-3">
-                <div className="min-w-0 flex-1 basis-60">
-                  <div className="flex flex-wrap items-center gap-2 text-sm font-bold">
-                    <span className={STATUS[r.status].cls}>{t(STATUS[r.status].text)}</span>
-                    <span>{r.serverName}</span>
-                    <span className="font-semibold text-mute">{soon(r.sentAt)} · {r.sentBy || '—'}</span>
-                  </div>
-                  <p className="mt-1 wrap-break-word text-sm"><Styled text={r.text} /></p>
-                  {(r.status === 'failed' || r.status === 'expired') && r.error && <p className="text-sm font-semibold text-danger">{r.error}</p>}
-                </div>
-                <button type="button" className="btn btn-soft btn-sm" onClick={() => { setText(r.text); goTab('send'); }}>{t('gn.reuse')}</button>
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
+      {data && tab === 'players' && <LinksTab />}
+
+      {data && tab === 'journal' && <JournalTab onReuse={(x) => { setText(x); goTab('send'); }} />}
 
       {settingsServer && <PluginModal server={settingsServer} onClose={() => setSettingsFor(null)} onChanged={() => void loadMain()} />}
     </AdminPage>

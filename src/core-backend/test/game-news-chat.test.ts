@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
-  ansiDiscordLine, DEFAULT_COLORS, activeChatKinds, ansiChatLine, ansiEventLine, chunkLines, escapeDiscord, formatChatLine, formatEventLine, isDiscordWebhook, normalizeChat, wrapForDiscord,
+  ansiDiscordLine, ansiKickLine, formatKickLine, DEFAULT_COLORS, activeChatKinds, ansiChatLine, ansiEventLine, chunkLines, escapeDiscord, formatChatLine, formatEventLine, isDiscordWebhook, normalizeChat, wrapForDiscord,
 } from '../src/gamenews/gameNewsChatLogic.ts';
 
 describe('game chat for Discord', () => {
@@ -53,8 +53,8 @@ describe('game chat for Discord', () => {
 
   it('keeps one webhook and a switch per kind of chat', () => {
     const s = normalizeChat({ enabled: true, webhook: 'enc:x', kinds: { global: true, clan: false } });
-    assert.deepEqual(s.kinds, { global: true, clan: false, local: true, join: false, leave: false });
-    assert.deepEqual(activeChatKinds(s), ['global', 'local']);
+    assert.deepEqual(s.kinds, { global: true, clan: false, local: true, join: false, leave: false, kick: true });
+    assert.deepEqual(activeChatKinds(s), ['global', 'local', 'kick']);
     assert.deepEqual(activeChatKinds({ ...s, enabled: false }), []);
     assert.deepEqual(activeChatKinds({ ...s, webhook: '' }), []);
   });
@@ -62,9 +62,9 @@ describe('game chat for Discord', () => {
   it('turns an old setting with a webhook per chat into one webhook', () => {
     const s = normalizeChat({ enabled: true, webhooks: { clan: 'enc:clan', local: 'enc:local' } });
     assert.equal(s.webhook, 'enc:clan');
-    assert.deepEqual(s.kinds, { global: false, clan: true, local: true, join: false, leave: false });
+    assert.deepEqual(s.kinds, { global: false, clan: true, local: true, join: false, leave: false, kick: true });
     const d = normalizeChat(undefined);
-    assert.deepEqual(d.kinds, { global: true, clan: true, local: true, join: false, leave: false });
+    assert.deepEqual(d.kinds, { global: true, clan: true, local: true, join: false, leave: false, kick: true });
     assert.equal(d.style, 'ansi');
     assert.equal(d.senderName, '');
   });
@@ -101,6 +101,19 @@ describe('game chat for Discord', () => {
     assert.equal(ansiDiscordLine('A', '', '20:47'), '');
     assert.equal(ansiDiscordLine('A', 'x ```' + ESC + '[31mred', '').includes('```'), false);
     assert.equal(ansiDiscordLine('A', 'x ```' + ESC + '[31mred', '').includes(ESC + '[31m'), false);
+  });
+
+  it('writes a kick: red words, a green nickname, a yellow reason', () => {
+    const ESC = String.fromCharCode(27);
+    const t = '* Игрок {name} был кикнут с сервера. Причина: {reason}';
+    const line = ansiKickLine(t, { name: 'Vamp', reason: 'спам', admin: 'Админ' }, DEFAULT_COLORS.kick, '20:47');
+    assert.equal(line.includes(`${ESC}[1;32mVamp${ESC}[0m`), true);
+    assert.equal(line.includes(`${ESC}[1;33mспам${ESC}[0m`), true);
+    assert.equal(line.includes(`${ESC}[0;31m* Игрок ${ESC}[0m`), true);
+    assert.equal(line.startsWith(`${ESC}[0;31m[20:47] `), true);
+    const bs = String.fromCharCode(92);
+    assert.equal(formatKickLine(t, { name: 'Vamp', reason: '@everyone', admin: 'A' }, '20:47'), `[20:47] ${bs}* Игрок **Vamp** был кикнут с сервера. Причина: **@​everyone**`);
+    assert.equal(ansiKickLine(t, { name: 'x', reason: '```', admin: 'A' }, DEFAULT_COLORS.kick).includes('```'), false);
   });
 
   it('puts the time in front of a line like the game does, when it is asked to', () => {

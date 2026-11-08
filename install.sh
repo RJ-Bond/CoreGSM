@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="a43e16a1ee0d"
+COREGSM_BUILD="324472555415"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.89"
+COREGSM_VERSION="1.1.90"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -23506,6 +23506,9 @@ export const ERRORS = {
   announcement_bad_time: 'Укажите время в будущем, не дальше года',
   announcement_limit: 'Не больше {n} запланированных объявлений',
   game_chat_channel: 'Не удалось определить канал webhook: сохраните адрес заново',
+  game_link_missing: 'Привязка не найдена',
+  game_schedule_limit: 'Не больше 20 расписаний',
+  game_schedule_missing: 'Расписание не найдено',
   game_restart_server: 'Выберите сервер с плагином',
   game_restart_short: 'Минимум 10 секунд',
   game_restart_long: 'Не больше 6 часов',
@@ -23879,7 +23882,7 @@ import { consumeDue } from './gameNewsRestartState.js';
 
 export const QUEUE_TTL_MS = 5 * 60_000;
 /** the version of the game plugin this panel was built for: an older plugin is shown as outdated */
-export const PLUGIN_VERSION = '0.11.0';
+export const PLUGIN_VERSION = '0.13.0';
 /** the games the plugin exists for */
 export const SUPPORTED_GAMES = new Set(['vrising']);
 const PULL_MIN_GAP_MS = 800;
@@ -24078,7 +24081,7 @@ import { log } from '../logger.js';
 import { decryptSecret, encryptSecret } from '../security/secrets.js';
 import { pluginTarget } from './gameNews.js';
 import {
-  ANSI_COLORS, CHAT_KINDS, activeChatKinds, ansiChatLine, ansiEventLine, chunkLines, formatChatLine, formatEventLine, isDiscordWebhook,
+  ANSI_COLORS, CHAT_KINDS, activeChatKinds, ansiChatLine, ansiKickLine, formatKickLine, ansiEventLine, chunkLines, formatChatLine, formatEventLine, isDiscordWebhook,
   normalizeChat, paletteBlock, wrapForDiscord, type ChatKind, type ChatStored,
 } from './gameNewsChatLogic.js';
 import { getJoinLeave } from './gameNewsJoinLeave.js';
@@ -24121,6 +24124,24 @@ async function channelOf(url: string): Promise<string> {
   } catch {
     return '';
   }
+}
+
+/** which queue (set of chat settings) a server writes to: its own when it has chat settings of its own, else the general one (0) */
+const scopeOf = (serverId: number): number => (hasOverride('gamenews_chat', serverId) ? serverId : 0);
+
+/**
+ * A kick goes to the chat in Discord like a line of the game chat (when the chat is on, has a webhook and «Кик» is switched on):
+ * the words are those of the .kick command, the colours those of the «Кик» row of the chat settings.
+ */
+export function postKickToDiscord(serverId: number, template: string, v: { name: string; reason: string; admin: string }, now = Date.now()): boolean {
+  const scope = scopeOf(serverId);
+  const s = read(scope || undefined);
+  if (!activeChatKinds(s).includes('kick')) return false;
+  const time = s.showTime ? clock(now) : '';
+  const line = s.style === 'ansi' ? ansiKickLine(template, v, s.colors.kick, time) : formatKickLine(template, v, time);
+  if (!line) return false;
+  enqueue(scope, line);
+  return true;
 }
 
 /** the channels where the bot listens: what an administrator writes there goes to the game chat of these servers */
@@ -24245,7 +24266,7 @@ export function registerGameNewsChat({ app, admin }: { app: Express; admin: Requ
     const jl = getJoinLeave(t.server_id);
     const time = s.showTime ? clock(now) : '';
     for (const m of b.data.messages) {
-      if (!kinds.has(m.type)) continue;
+      if (m.type === 'kick' || !kinds.has(m.type)) continue; // a kick is written by the panel itself (postKickToDiscord)
       const colors = s.colors[m.type];
       let line: string;
       if (m.type === 'join' || m.type === 'leave') {
@@ -24356,8 +24377,8 @@ __COREGSM_EOF__
  * the game: a blue tag, a yellow nickname, a green clan chat.
  */
 
-/** the kinds of line that can go to Discord: three chats and two events (a player joined / left) */
-export const CHAT_KINDS = ['global', 'clan', 'local', 'join', 'leave'] as const;
+/** the kinds of line that can go to Discord: three chats and three events (a player joined, left, was kicked) */
+export const CHAT_KINDS = ['global', 'clan', 'local', 'join', 'leave', 'kick'] as const;
 export type ChatKind = (typeof CHAT_KINDS)[number];
 
 /** the eight colours of an ansi block of Discord */
@@ -24376,6 +24397,8 @@ export const DEFAULT_COLORS: Record<ChatKind, ChatColors> = {
   clan: { tag: 'green', name: 'yellow', text: 'green' },
   join: { tag: 'green', name: 'pink', text: 'green' },
   leave: { tag: 'green', name: 'pink', text: 'green' },
+  // a kick: the text red, the nickname green, the reason (the «tag» colour) yellow
+  kick: { tag: 'yellow', name: 'green', text: 'red' },
 };
 
 /** the defaults of the first version: a setting that still holds exactly them has not been changed by anybody and moves to the new ones */
@@ -24385,6 +24408,7 @@ const OLD_DEFAULTS: Record<ChatKind, ChatColors> = {
   clan: { tag: 'green', name: 'green', text: 'green' },
   join: { tag: 'green', name: 'pink', text: 'green' },
   leave: { tag: 'green', name: 'pink', text: 'green' },
+  kick: { tag: 'yellow', name: 'green', text: 'red' },
 };
 const sameColors = (x: ChatColors, y: ChatColors): boolean => x.tag === y.tag && x.name === y.name && x.text === y.text;
 
@@ -24428,6 +24452,7 @@ export function normalizeChat(raw: unknown): ChatStored {
   for (const k of CHAT_KINDS) {
     const event = k === 'join' || k === 'leave';
     if (v.kinds && typeof v.kinds[k] === 'boolean') kinds[k] = v.kinds[k] as boolean;
+    else if (k === 'kick') kinds[k] = true; // a kick is shown by default, like a chat (an event of a player is opt-in)
     else if (event) kinds[k] = false;
     else kinds[k] = v.webhooks ? typeof legacy[k] === 'string' && !!legacy[k] : true;
     const c = v.colors?.[k] ?? {};
@@ -24516,6 +24541,29 @@ export function ansiDiscordLine(name: string, text: string, time = ''): string {
   const t = forBlock(text);
   if (!t) return '';
   return `${seg('cyan', stamp(time))}${seg('blue', '* [Discord]', true)} ${seg('yellow', forBlock(name) || '?', true)}${seg('white', ': ')}${seg('white', t.slice(0, 300))}`;
+}
+
+/** the words of a kick split at {name} {reason} {admin}: the template, with what stands for each */
+function kickParts(template: string): string[] {
+  return forBlock(template).split(/(\{(?:name|reason|admin)\})/).filter(Boolean);
+}
+
+/** «[16:07] * Игрок Vamp был кикнут с сервера. Причина: спам» in an ansi block: red words, a green nickname, a yellow reason */
+export function ansiKickLine(template: string, v: { name: string; reason: string; admin: string }, c: ChatColors, time = ''): string {
+  const body = kickParts(template).map((p) => {
+    if (p === '{name}') return seg(c.name, forBlock(v.name) || '?', true);
+    if (p === '{reason}') return seg(c.tag, forBlock(v.reason), true);
+    if (p === '{admin}') return seg('cyan', forBlock(v.admin) || '?', true);
+    return seg(c.text, p);
+  }).join('');
+  return `${seg(c.text, stamp(time))}${body}`;
+}
+
+/** the same in the plain style: the nickname and the reason in bold */
+export function formatKickLine(template: string, v: { name: string; reason: string; admin: string }, time = ''): string {
+  const bold = (x: string) => `**${escapeDiscord(x.trim() || '?')}**`;
+  const body = escapeDiscord(template).split(/(\{(?:name|reason|admin)\})/).filter(Boolean).map((p) => (p === '{name}' ? bold(v.name) : p === '{reason}' ? bold(v.reason) : p === '{admin}' ? bold(v.admin) : p)).join('');
+  return `${stamp(time)}${body}`.trim();
 }
 
 /** a line of a chat in the colours of the game: «[16:07] [«Глобальный»] WhiteLegioN: Тест» (the time has the colour of the tag) */
@@ -24627,6 +24675,299 @@ export function joinLeaveFor(serverId?: number): { join: string; leave: string }
     join: v.joinEnabled ? composeLine(v.joinText, v.nameColor, v.textColor) : '',
     leave: v.leaveEnabled ? composeLine(v.leaveText, v.nameColor, v.textColor) : '',
   };
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/gamenews"
+  cat > "$APP_DIR/core-backend/src/gamenews/gameNewsJournal.ts" << '__COREGSM_EOF__'
+/**
+ * The journal of the game plugin in one place: what was sent to the game (by hand, by a rule, from Discord), the restarts and the
+ * players who linked a game account. And the list of linked players with a way to unlink one.
+ */
+import type { Express, RequestHandler } from 'express';
+import { db } from '../db.js';
+import { serverLabel } from './gameNewsVars.js';
+
+export type JournalKind = 'message' | 'auto' | 'discord' | 'restart' | 'link' | 'kick';
+
+export interface JournalEntry {
+  id: string;
+  ts: number;
+  kind: JournalKind;
+  serverId: number | null;
+  serverName: string;
+  text: string;
+  /** message: queued | delivered | expired | failed; restart: counting | done | cancelled | missed | replaced; link: the action */
+  status: string;
+  error: string;
+  by: string;
+}
+
+/** which kind a line of the sent-messages log is: by whom it was sent */
+export function messageKind(sentBy: string): 'message' | 'auto' | 'discord' {
+  if (sentBy.startsWith('Discord:')) return 'discord';
+  if (sentBy.startsWith('авто')) return 'auto';
+  return 'message';
+}
+
+export function journal(opts: { kind?: string; serverId?: number; limit?: number }): JournalEntry[] {
+  const limit = Math.min(200, Math.max(1, opts.limit ?? 100));
+  const out: JournalEntry[] = [];
+  const want = (k: JournalKind) => !opts.kind || opts.kind === 'all' || opts.kind === k;
+
+  if (want('message') || want('auto') || want('discord')) {
+    const rows = db.prepare('SELECT id, server_id, server_name, text, status, error, sent_by, sent_at FROM game_news_log ORDER BY id DESC LIMIT 300').all() as {
+      id: number; server_id: number | null; server_name: string; text: string; status: string; error: string; sent_by: string; sent_at: number;
+    }[];
+    for (const r of rows) {
+      const kind = messageKind(r.sent_by);
+      if (!want(kind) || (opts.serverId && r.server_id !== opts.serverId)) continue;
+      out.push({ id: `m${r.id}`, ts: r.sent_at, kind, serverId: r.server_id, serverName: r.server_name, text: r.text, status: r.status, error: r.error, by: r.sent_by });
+    }
+  }
+  if (want('restart')) {
+    const rows = db.prepare('SELECT * FROM game_restart_log ORDER BY id DESC LIMIT 100').all() as {
+      id: number; server_id: number; started_at: number; total_sec: number; requested_by: string; source: string; outcome: string;
+    }[];
+    for (const r of rows) {
+      if (opts.serverId && r.server_id !== opts.serverId) continue;
+      out.push({ id: `r${r.id}`, ts: r.started_at, kind: 'restart', serverId: r.server_id, serverName: serverLabel(r.server_id), text: `${Math.round(r.total_sec / 60)}`, status: r.outcome, error: '', by: `${r.requested_by || '—'} · ${r.source}` });
+    }
+  }
+  if (want('kick') && !opts.serverId) {
+    const rows = db.prepare("SELECT id, ts, detail FROM audit WHERE action = 'game_kick' ORDER BY id DESC LIMIT 100").all() as { id: number; ts: number; detail: string }[];
+    for (const r of rows) out.push({ id: `k${r.id}`, ts: r.ts, kind: 'kick', serverId: null, serverName: '', text: r.detail, status: 'game_kick', error: '', by: '' });
+  }
+  if (want('link') && !opts.serverId) {
+    const rows = db.prepare("SELECT id, ts, action, detail FROM audit WHERE action IN ('game_register', 'game_login', 'game_unlink') ORDER BY id DESC LIMIT 100").all() as { id: number; ts: number; action: string; detail: string }[];
+    for (const r of rows) out.push({ id: `l${r.id}`, ts: r.ts, kind: 'link', serverId: null, serverName: '', text: r.detail, status: r.action, error: '', by: '' });
+  }
+  return out.sort((a, b) => b.ts - a.ts).slice(0, limit);
+}
+
+const mask = (id: string): string => (id.length > 7 ? `${id.slice(0, 4)}…${id.slice(-3)}` : id);
+
+export function registerGameNewsJournal({ app, admin }: { app: Express; admin: RequestHandler }): void {
+  app.get('/api/game-news/journal', admin, (req, res) => {
+    const serverId = Number(req.query.server);
+    res.json({ items: journal({ kind: String(req.query.kind ?? 'all'), serverId: Number.isInteger(serverId) && serverId > 0 ? serverId : undefined, limit: Number(req.query.limit) || 100 }) });
+  });
+
+  // the players whose game account is linked to an account of the panel
+  app.get('/api/game-news/links', admin, (_req, res) => {
+    const rows = db.prepare(
+      `SELECT g.platform_id, g.nick, g.created_at, u.id AS user_id, u.username, u.status, u.discord_id
+       FROM game_identities g JOIN users u ON u.id = g.user_id ORDER BY g.created_at DESC LIMIT 500`,
+    ).all() as { platform_id: string; nick: string; created_at: number; user_id: number; username: string; status: string; discord_id: string | null }[];
+    res.json({
+      items: rows.map((r) => ({ platformId: r.platform_id, masked: mask(r.platform_id), nick: r.nick, username: r.username, status: r.status, discord: !!r.discord_id, linkedAt: r.created_at })),
+    });
+  });
+
+  // «Отвязать»: the game account is no longer linked (the account of the panel stays; the player can link again with .login)
+  app.delete('/api/game-news/links/:platformId', admin, (req, res) => {
+    const id = String(req.params.platformId);
+    if (!/^\d{5,25}$/.test(id)) return res.status(400).json({ error: 'Проверьте поля' });
+    const row = db.prepare('SELECT u.username FROM game_identities g JOIN users u ON u.id = g.user_id WHERE g.platform_id = ?').get(id) as { username: string } | undefined;
+    if (!row) return res.status(404).json({ error: 'Привязка не найдена' });
+    db.prepare('DELETE FROM game_identities WHERE platform_id = ?').run(id);
+    db.prepare('INSERT INTO audit (ts, actor, action, detail) VALUES (?, ?, ?, ?)').run(Date.now(), 'admin', 'game_unlink', row.username);
+    res.json({ ok: true });
+  });
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/gamenews"
+  cat > "$APP_DIR/core-backend/src/gamenews/gameNewsKick.ts" << '__COREGSM_EOF__'
+/**
+ * The .kick command of the game plugin. An administrator of the game types  .kick (ник) (причина);  the plugin asks the panel
+ * (POST /api/game-news/player/kick) and the panel decides: is the command on, may this player be kicked, is a reason needed, how the
+ * line for everybody reads («* Игрок Ник был кикнут с сервера. Причина: …» in the colours chosen here). The plugin then shows the line
+ * and removes the player. Everything about the command is set in the panel (Игроки → Кик).
+ */
+import type { Express, RequestHandler } from 'express';
+import { z } from 'zod';
+import { enqueueAlert } from '../alerts/alerts.js';
+import { db } from '../db.js';
+import { pluginTarget } from './gameNews.js';
+import { postKickToDiscord } from './gameNewsChat.js';
+import { isHexColor, plainLine } from './gameNewsJoinLeave.js';
+import { readScoped, serverOf, writeScoped } from './gameNewsScope.js';
+import { serverLabel } from './gameNewsVars.js';
+
+export interface KickSettings {
+  enabled: boolean;
+  /** the line for everybody: {name} the kicked player, {reason}, {admin} who kicked */
+  template: string;
+  textColor: string;
+  nameColor: string;
+  reasonColor: string;
+  adminColor: string;
+  /** used when the administrator gave no reason */
+  defaultReason: string;
+  /** a kick without a reason is refused */
+  requireReason: boolean;
+  /** administrators of the game cannot be kicked with the command */
+  protectAdmins: boolean;
+  /** the line is shown to everybody (off: the player is removed quietly) */
+  announce: boolean;
+  /** seconds between two kicks of one administrator (0 = no pause) */
+  cooldownSec: number;
+  /** the longest reason, characters */
+  maxReason: number;
+  /** the channel of Discord (the bot posts there) for the log of kicks: where, when, whom, who and why; '' = none */
+  logChannelId: string;
+}
+
+export const DEFAULT_KICK: KickSettings = {
+  enabled: true,
+  template: '* Игрок {name} был кикнут с сервера. Причина: {reason}',
+  textColor: '#FF5555',
+  nameColor: '#5FD068',
+  reasonColor: '#FFCC33',
+  adminColor: '#6EC1FF',
+  defaultReason: 'не указана',
+  requireReason: false,
+  protectAdmins: true,
+  announce: true,
+  cooldownSec: 0,
+  maxReason: 100,
+  logChannelId: '',
+};
+
+export function getKick(serverId?: number): KickSettings {
+  try {
+    const v = JSON.parse(readScoped('gamenews_kick', serverId) || '{}') as Partial<KickSettings>;
+    const d = DEFAULT_KICK;
+    const text = (x: unknown, def: string) => (typeof x === 'string' && x.trim() ? x : def);
+    const color = (x: unknown, def: string) => (isHexColor(x) ? (x as string).toUpperCase() : def);
+    const bool = (x: unknown, def: boolean) => (typeof x === 'boolean' ? x : def);
+    return {
+      enabled: bool(v.enabled, d.enabled),
+      template: text(v.template, d.template),
+      textColor: color(v.textColor, d.textColor),
+      nameColor: color(v.nameColor, d.nameColor),
+      reasonColor: color(v.reasonColor, d.reasonColor),
+      adminColor: color(v.adminColor, d.adminColor),
+      defaultReason: text(v.defaultReason, d.defaultReason),
+      requireReason: bool(v.requireReason, d.requireReason),
+      protectAdmins: bool(v.protectAdmins, d.protectAdmins),
+      announce: bool(v.announce, d.announce),
+      cooldownSec: Number.isFinite(v.cooldownSec) ? Math.min(3600, Math.max(0, Math.round(v.cooldownSec as number))) : d.cooldownSec,
+      logChannelId: typeof v.logChannelId === 'string' && /^\d{15,25}$/.test(v.logChannelId) ? v.logChannelId : d.logChannelId,
+      maxReason: Number.isFinite(v.maxReason) ? Math.min(200, Math.max(10, Math.round(v.maxReason as number))) : d.maxReason,
+    };
+  } catch {
+    return { ...DEFAULT_KICK };
+  }
+}
+
+/**
+ * The line for everybody, in flat colour tags: the text in its colour, the nickname, the reason and the administrator each in theirs.
+ * What a player typed (a reason, a nickname) cannot bring tags of its own.
+ */
+export function kickLine(s: KickSettings, name: string, reason: string, admin: string): string {
+  const vars: Record<string, { text: string; color: string }> = {
+    name: { text: plainLine(name), color: s.nameColor },
+    reason: { text: plainLine(reason), color: s.reasonColor },
+    admin: { text: plainLine(admin), color: s.adminColor },
+  };
+  const out: string[] = [];
+  for (const part of plainLine(s.template).split(/(\{(?:name|reason|admin)\})/)) {
+    if (!part) continue;
+    const m = /^\{(name|reason|admin)\}$/.exec(part);
+    if (m) out.push(`<color=${vars[m[1]].color}>${vars[m[1]].text}</color>`);
+    else out.push(`<color=${s.textColor}>${part}</color>`);
+  }
+  return out.join('');
+}
+
+// ---- a pause between two kicks of one administrator
+const last = new Map<string, number>();
+export function kickWait(adminId: string, cooldownSec: number, now: number): number {
+  if (cooldownSec <= 0) return 0;
+  const left = Math.ceil(((last.get(adminId) ?? 0) + cooldownSec * 1000 - now) / 1000);
+  return left > 0 ? left : 0;
+}
+export function kickDone(adminId: string, now: number): void {
+  last.set(adminId, now);
+  if (last.size > 300) for (const [k, t] of last) if (now - t > 3_600_000) last.delete(k);
+}
+
+const C_BAD = '#FF5555';
+const C_GOOD = '#5FD068';
+const say = (color: string, text: string): string => `<color=${color}>${plainLine(text)}</color>`;
+
+export function registerGameNewsKick({ app, admin }: { app: Express; admin: RequestHandler }): void {
+  // the plugin: .kick
+  app.post('/api/game-news/player/kick', (req, res) => {
+    const t = pluginTarget(req);
+    if (!t) return res.status(401).json({ error: 'unauthorized' });
+    const b = z.object({
+      adminId: z.string().max(25), adminName: z.string().max(100), targetId: z.string().max(25), name: z.string().max(100),
+      targetIsAdmin: z.boolean(), reason: z.string().max(400),
+    }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ ok: false, replies: [say(C_BAD, '* Не удалось разобрать команду. Введите: .kick (ник) (причина)')] });
+    const s = getKick(t.server_id);
+    const refuse = (text: string) => res.json({ ok: false, replies: [say(C_BAD, text)] });
+    if (!s.enabled) return refuse('* Команда .kick отключена в панели.');
+    if (s.protectAdmins && b.data.targetIsAdmin) return refuse('* Администратора кикнуть нельзя.');
+    const now = Date.now();
+    const wait = kickWait(b.data.adminId, s.cooldownSec, now);
+    if (wait > 0) return refuse(`* Подождите ещё ${wait} с перед следующим киком.`);
+    let reason = plainLine(b.data.reason).slice(0, s.maxReason);
+    if (!reason) {
+      if (s.requireReason) return refuse('* Укажите причину: .kick (ник) (причина)');
+      reason = plainLine(s.defaultReason).slice(0, s.maxReason);
+    }
+    kickDone(b.data.adminId, now);
+    db.prepare('INSERT INTO audit (ts, actor, action, detail) VALUES (?, ?, ?, ?)').run(now, 'game-plugin', 'game_kick', `${plainLine(b.data.adminName)} → ${plainLine(b.data.name)}: ${reason}`.slice(0, 300));
+    // the same line goes to the chat in Discord (when the «Кик» kind is on there)
+    try { postKickToDiscord(t.server_id, s.template, { name: b.data.name, reason, admin: b.data.adminName }, now); } catch { /* the kick itself must not depend on Discord */ }
+    // the log of kicks in the channel of the administrators: where, when, whom, who and why
+    if (s.logChannelId) {
+      try {
+        const unix = Math.floor(now / 1000);
+        enqueueAlert('update', serverLabel(t.server_id), {
+          content: '', mention: 'none',
+          embed: {
+            title: '🚪 Игрок кикнут',
+            color: 0xed4245,
+            fields: [
+              { name: 'Сервер', value: serverLabel(t.server_id).slice(0, 200) || '—', inline: true },
+              { name: 'Игрок', value: plainLine(b.data.name).slice(0, 100) || '—', inline: true },
+              { name: 'Кто кикнул', value: plainLine(b.data.adminName).slice(0, 100) || '—', inline: true },
+              { name: 'Причина', value: reason || '—' },
+              { name: 'Когда', value: `<t:${unix}:f> (<t:${unix}:R>)` },
+            ],
+            timestamp: new Date(now).toISOString(),
+          },
+        }, s.logChannelId);
+      } catch { /* the log must not stop the kick */ }
+    }
+    res.json({
+      ok: true,
+      line: s.announce ? kickLine(s, b.data.name, reason, b.data.adminName) : '',
+      replies: [say(C_GOOD, `* Игрок ${b.data.name} кикнут.${s.announce ? '' : ' (без объявления)'}`)],
+    });
+  });
+
+  // the panel: the settings of the command
+  app.put('/api/game-news/kick-settings', admin, (req, res) => {
+    const color = z.string().refine(isHexColor, 'color');
+    const b = z.object({
+      enabled: z.boolean(), template: z.string().min(1).max(300), textColor: color, nameColor: color, reasonColor: color, adminColor: color,
+      defaultReason: z.string().max(100), requireReason: z.boolean(), protectAdmins: z.boolean(), announce: z.boolean(),
+      cooldownSec: z.number().int().min(0).max(3600), logChannelId: z.string().regex(/^(\d{15,25})?$/), maxReason: z.number().int().min(10).max(200),
+    }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'Проверьте поля' });
+    const d = getKick(serverOf(req));
+    const template = plainLine(b.data.template);
+    if (!template) return res.status(400).json({ error: 'Введите текст' });
+    writeScoped('gamenews_kick', JSON.stringify({
+      ...b.data, template, defaultReason: plainLine(b.data.defaultReason) || d.defaultReason,
+      textColor: b.data.textColor.toUpperCase(), nameColor: b.data.nameColor.toUpperCase(), reasonColor: b.data.reasonColor.toUpperCase(), adminColor: b.data.adminColor.toUpperCase(),
+    }), serverOf(req));
+    res.json({ ok: true });
+  });
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/gamenews"
@@ -24780,6 +25121,7 @@ __COREGSM_EOF__
 import bcrypt from 'bcryptjs';
 import type { Express, Request, RequestHandler } from 'express';
 import { z } from 'zod';
+import { panelTz } from './gameNewsVars.js';
 import { isRealDomain, needsSetup, publicBase, registrationMode, rulesText } from '../admin/site.js';
 import { db } from '../db.js';
 import { readScoped, writeScoped } from './gameNewsScope.js';
@@ -24804,6 +25146,16 @@ export interface RegisterSettings {
   pendingText: string;
   /** after .login: the game account is linked to an account of the panel: {login} {panel} */
   loginText: string;
+  /** the nickname of a player who joins (or registers) is already in the panel: suggest .login instead: {name} */
+  nickTakenText: string;
+  /** a linked player is recognised by the game account at the join (no command is needed): «Автоматический вход» */
+  autoLoginEnabled: boolean;
+  /** the line of the automatic login: {login} {name} */
+  autoLoginText: string;
+  /** a linked player reads when he was on the server last time */
+  lastSeenEnabled: boolean;
+  /** the line of the last visit: {name} {date} {time} */
+  lastSeenText: string;
   /** how often the Discord hint is repeated for the same player, hours */
   discordEveryHours: number;
   /** a registered player reads his rank at every join */
@@ -24814,18 +25166,27 @@ export interface RegisterSettings {
 
 export const DEFAULT_REGISTER: RegisterSettings = {
   enabled: false,
-  promptText: '* Вы ещё не зарегистрированы в панели. Новый аккаунт: .register (пароль) (подтверждение). Уже есть аккаунт на сайте: .login (логин) (пароль)',
+  promptText: '* Вы ещё не зарегистрированы в панели. Новый аккаунт: .register (пароль) (подтверждение). Уже есть аккаунт на сайте: .login (логин) (пароль), логин с пробелом пишите как есть.',
   doneText: '* Готово! Вы зарегистрированы в панели, ваш логин: {login}',
   discordText: '* Привяжите Discord в профиле панели ({panel}): аккаунт будет под рукой в Discord, а роли и ранг — на вашем сервере.',
   pendingText: '* Заявка на регистрацию отправлена. Когда администратор её одобрит, вы сможете войти в панель.',
   loginText: '* Готово! Игровой аккаунт привязан к аккаунту {login} в панели.',
+  nickTakenText: '* Ник {name} уже есть в панели. Это ваш аккаунт? Введите .login (пароль), логин не нужен. Или .login (логин) (пароль). Нет? Тогда .register (пароль) (подтверждение) ещё раз.',
+  autoLoginEnabled: true,
+  autoLoginText: '* Автоматический вход: вы авторизованы как {login}.',
+  lastSeenEnabled: true,
+  lastSeenText: '* С возвращением, {name}! Вы были на сервере {date} в {time}.',
   discordEveryHours: 24,
   rankEnabled: true,
   rankText: '* {name}, ваш ранг: {rank} · {hours} ч{next}',
 };
 
 /** the hint of the first version: a setting that still holds exactly it has not been changed by anybody */
-const OLD_PROMPT = '* Вы ещё не зарегистрированы в панели. Для регистрации введите .register пароль подтверждение_пароля';
+const OLD_PROMPTS = [
+  '* Вы ещё не зарегистрированы в панели. Для регистрации введите .register пароль подтверждение_пароля',
+  '* Вы ещё не зарегистрированы в панели. Новый аккаунт: .register (пароль) (подтверждение). Уже есть аккаунт на сайте: .login (логин) (пароль)',
+];
+const OLD_NICK_TAKEN = ['* Ник {name} уже есть в панели. Это ваш аккаунт? Введите .login (логин) (пароль). Нет? Тогда .register (пароль) (подтверждение) ещё раз.'];
 
 // the colours of the lines the player reads
 const C_INFO = '#FFCC33';
@@ -24859,11 +25220,16 @@ export function getRegisterSettings(serverId?: number): RegisterSettings {
     return {
       enabled: !!v.enabled,
       // the first wording of the hint (before .login and the brackets) moves to the new one; a text the administrator changed stays
-      promptText: v.promptText === OLD_PROMPT ? d.promptText : text(v.promptText, d.promptText),
+      promptText: typeof v.promptText === 'string' && OLD_PROMPTS.includes(v.promptText) ? d.promptText : text(v.promptText, d.promptText),
       doneText: text(v.doneText, d.doneText),
       discordText: text(v.discordText, d.discordText),
       pendingText: text(v.pendingText, d.pendingText),
       loginText: text(v.loginText, d.loginText),
+      autoLoginEnabled: typeof v.autoLoginEnabled === 'boolean' ? v.autoLoginEnabled : d.autoLoginEnabled,
+      autoLoginText: text(v.autoLoginText, d.autoLoginText),
+      lastSeenEnabled: typeof v.lastSeenEnabled === 'boolean' ? v.lastSeenEnabled : d.lastSeenEnabled,
+      lastSeenText: text(v.lastSeenText, d.lastSeenText),
+      nickTakenText: typeof v.nickTakenText === 'string' && OLD_NICK_TAKEN.includes(v.nickTakenText) ? d.nickTakenText : text(v.nickTakenText, d.nickTakenText),
       discordEveryHours: Number.isFinite(v.discordEveryHours) ? Math.min(720, Math.max(1, Math.round(v.discordEveryHours as number))) : d.discordEveryHours,
       rankEnabled: typeof v.rankEnabled === 'boolean' ? v.rankEnabled : d.rankEnabled,
       rankText: text(v.rankText, d.rankText),
@@ -24877,8 +25243,35 @@ export function setRegisterSettings(v: RegisterSettings, serverId?: number): voi
   writeScoped('gamenews_register', JSON.stringify(v), serverId);
 }
 
-const fill = (text: string, vars: { login?: string; panel: string }): string =>
-  text.replace(/\{login\}/g, vars.login ?? '').replace(/\{panel\}/g, vars.panel);
+const fill = (text: string, vars: { login?: string; panel: string; name?: string; date?: string; time?: string }): string =>
+  text.replace(/\{login\}/g, vars.login ?? '').replace(/\{panel\}/g, vars.panel).replace(/\{name\}/g, vars.name ?? '').replace(/\{date\}/g, vars.date ?? '').replace(/\{time\}/g, vars.time ?? '');
+
+/** «10.12.2026» and «10:00» in the time zone of the panel */
+export function visitStamp(ts: number): { date: string; time: string } {
+  const tz = panelTz();
+  const f = (o: Intl.DateTimeFormatOptions) => { try { return new Intl.DateTimeFormat('ru-RU', { timeZone: tz, hourCycle: 'h23', ...o }).format(new Date(ts)); } catch { return new Intl.DateTimeFormat('ru-RU', { timeZone: 'UTC', hourCycle: 'h23', ...o }).format(new Date(ts)); } };
+  return { date: f({ day: '2-digit', month: '2-digit', year: 'numeric' }), time: f({ hour: '2-digit', minute: '2-digit' }) };
+}
+
+/**
+ * Is this nickname already in the panel: an account that has it as its game nickname, or whose login is the nickname? Then the player
+ * most likely has an account and should log in, not register a second one (which would get a login with a number).
+ */
+export function nickInPanel(nick: string): boolean {
+  const n = plainLine(nick).slice(0, 40).toLowerCase();
+  if (!n) return false;
+  return !!(db.prepare('SELECT 1 FROM user_player WHERE ulower(game_nick) = ?').get(n) || db.prepare('SELECT 1 FROM users WHERE ulower(username) = ?').get(n));
+}
+
+// a player who was told «this nickname is in the panel» may register anyway by repeating the command within ten minutes
+const warned = new Map<string, number>();
+export function warnOnce(id: string, now: number): boolean {
+  const at = warned.get(id) ?? 0;
+  if (now - at < 600_000) return false;
+  warned.set(id, now);
+  if (warned.size > 500) for (const [k, t] of warned) if (now - t > 600_000) warned.delete(k);
+  return true;
+}
 
 /**
  * The address of the panel as the player should type it: the address the game plugin itself reaches the panel at (its Host header: the
@@ -24899,7 +25292,7 @@ function tooMany(id: string, now: number): boolean {
   return e.n > 8;
 }
 
-interface IdentityRow { platform_id: string; user_id: number; last_hint_at: number }
+interface IdentityRow { platform_id: string; user_id: number; last_hint_at: number; last_join_at: number; last_leave_at: number }
 interface UserRow { id: number; status: string; discord_id: string | null }
 
 const idSchema = z.string().regex(/^\d{5,25}$/);
@@ -24922,11 +25315,23 @@ export function registerGameNewsPlayers({ app }: { app: Express }): void {
     if (!who) {
       // nobody can register while the panel is closed or not set up: no use to invite
       if (needsSetup() || !registrationOpen()) return res.json({ registered: false, replies: [] });
-      return res.json({ registered: false, replies: [tag(C_INFO, fill(s.promptText, { panel: panelUrl(req) }))] });
+      const hint = nickInPanel(String(req.query.name ?? '')) ? s.nickTakenText : s.promptText;
+      return res.json({ registered: false, replies: [tag(C_INFO, fill(hint, { panel: panelUrl(req), name: plainLine(String(req.query.name ?? '')) }))] });
     }
     const u = db.prepare('SELECT id, status, discord_id FROM users WHERE id = ?').get(who.user_id) as UserRow | undefined;
     const due = now - who.last_hint_at >= s.discordEveryHours * 3_600_000;
     const replies: string[] = [];
+    // a linked player is known by the game account: no command is needed, the join is the login
+    const account = u ? (db.prepare('SELECT username FROM users WHERE id = ?').get(u.id) as { username: string } | undefined) : undefined;
+    const nickNow = plainLine(String(req.query.name ?? ''));
+    if (u && u.status === 'active' && account && s.autoLoginEnabled) replies.push(tag(C_GOOD, fill(s.autoLoginText, { login: account.username, name: nickNow, panel: panelUrl(req) })));
+    // when he was here last: the later of the last leave and the last join (a leave that was not reported leaves only the join)
+    const before = Math.max(who.last_leave_at, who.last_join_at);
+    if (u && u.status === 'active' && s.lastSeenEnabled && before > 0) {
+      const st = visitStamp(before);
+      replies.push(tag(C_INFO, fill(s.lastSeenText, { name: nickNow, date: st.date, time: st.time, panel: panelUrl(req) })));
+    }
+    if (u && u.status === 'active') db.prepare('UPDATE game_identities SET last_join_at = ? WHERE platform_id = ?').run(now, id.data);
     if (u && u.status === 'active' && s.rankEnabled) {
       const nick = (db.prepare('SELECT game_nick FROM user_player WHERE user_id = ?').get(u.id) as { game_nick: string } | undefined)?.game_nick || (db.prepare('SELECT nick FROM game_identities WHERE platform_id = ?').get(id.data) as { nick: string } | undefined)?.nick || '';
       replies.push(tag(C_GOOD, rankLine(s.rankText, nick, vrHoursOf(u.id, nick).hours)));
@@ -24936,6 +25341,13 @@ export function registerGameNewsPlayers({ app }: { app: Express }): void {
       replies.push(tag(C_HINT, fill(s.discordText, { panel: panelUrl(req) })));
     }
     res.json({ registered: true, replies });
+  });
+
+  // the plugin: a player left the server (the time is kept for «Вы были на сервере …»)
+  app.post('/api/game-news/player/left', plugin, (req, res) => {
+    const id = idSchema.safeParse(String((req.body as { id?: unknown } | undefined)?.id ?? ''));
+    if (id.success) db.prepare('UPDATE game_identities SET last_leave_at = ? WHERE platform_id = ?').run(Date.now(), id.data);
+    res.json({ ok: true });
   });
 
   // .register <password> <password again>
@@ -24949,6 +25361,9 @@ export function registerGameNewsPlayers({ app }: { app: Express }): void {
     if (tooMany(b.data.id, now)) return say(C_BAD, '* Слишком много попыток. Попробуйте позже.');
     if (needsSetup() || !registrationOpen()) return say(C_BAD, '* Регистрация в панели сейчас закрыта.');
     if (db.prepare('SELECT 1 FROM game_identities WHERE platform_id = ?').get(b.data.id)) return say(C_INFO, '* Вы уже зарегистрированы в панели.');
+
+    // the nickname is already in the panel: suggest .login first; the same command repeated within ten minutes registers anyway
+    if (nickInPanel(b.data.name) && warnOnce(b.data.id, now)) return say(C_INFO, fill(s.nickTakenText, { panel: panelUrl(req), name: plainLine(b.data.name) }));
 
     const taken = (login: string) => !!db.prepare('SELECT 1 FROM users WHERE ulower(username) = ?').get(login.toLowerCase());
     const login = loginFromNick(b.data.name, b.data.id, taken);
@@ -24980,25 +25395,33 @@ export function registerGameNewsPlayers({ app }: { app: Express }): void {
 
   // .login <login> <password>: the player already has an account in the panel; this game account is linked to it
   app.post('/api/game-news/player/login', plugin, async (req, res) => {
-    const b = z.object({ id: idSchema, name: z.string().max(100), login: z.string().min(1).max(64), password: z.string().min(1).max(256) }).safeParse(req.body);
+    const b = z.object({ id: idSchema, name: z.string().max(100), login: z.string().max(64), password: z.string().min(1).max(256) }).safeParse(req.body);
     if (!b.success) return res.status(400).json({ replies: [tag(C_BAD, '* Не удалось разобрать команду. Введите: .login (логин) (пароль)')] });
     const s = getRegisterSettings((req as typeof req & { gameServerId?: number }).gameServerId);
     const now = Date.now();
     const say = (color: string, text: string) => res.json({ ok: false, replies: [tag(color, text)] });
     if (!s.enabled) return say(C_BAD, '* Вход из игры отключён.');
+    // the login may be left out: then the account is the one whose game nickname (or login) is the nickname of the player
+    const login = b.data.login.trim() || plainLine(b.data.name).slice(0, 40);
     // a few tries an hour for one game account and for one login (somebody may try to guess a password of another person)
-    if (tooMany(b.data.id, now) || tooMany(`login:${b.data.login.toLowerCase()}`, now)) return say(C_BAD, '* Слишком много попыток. Попробуйте позже.');
+    if (tooMany(b.data.id, now) || tooMany(`login:${login.toLowerCase()}`, now)) return say(C_BAD, '* Слишком много попыток. Попробуйте позже.');
     if (needsSetup()) return say(C_BAD, '* Панель ещё не настроена.');
 
     const own = db.prepare('SELECT g.user_id, u.username FROM game_identities g JOIN users u ON u.id = g.user_id WHERE g.platform_id = ?').get(b.data.id) as { user_id: number; username: string } | undefined;
     if (own) return say(C_INFO, `* Этот игровой аккаунт уже привязан к аккаунту ${own.username}.`);
 
-    const u = db.prepare('SELECT id, username, password_hash, status, banned_at, banned_until, totp_enabled FROM users WHERE ulower(username) = ?').get(b.data.login.toLowerCase()) as
+    const byLogin = db.prepare('SELECT id, username, password_hash, status, banned_at, banned_until, totp_enabled FROM users WHERE ulower(username) = ?');
+    let u = byLogin.get(login.toLowerCase()) as
       | { id: number; username: string; password_hash: string; status: string; banned_at: number | null; banned_until: number | null; totp_enabled: number }
       | undefined;
+    // no such login: when none was given, the game nickname of an account may be the nickname of the player
+    if (!u && !b.data.login.trim()) {
+      const owner = db.prepare('SELECT user_id FROM user_player WHERE ulower(game_nick) = ?').get(login.toLowerCase()) as { user_id: number } | undefined;
+      if (owner) u = db.prepare('SELECT id, username, password_hash, status, banned_at, banned_until, totp_enabled FROM users WHERE id = ?').get(owner.user_id) as typeof u;
+    }
     // the same answer and the same work for a wrong login and a wrong password
     const ok = await bcrypt.compare(b.data.password, u?.password_hash ?? DUMMY_HASH);
-    if (!u || !ok) return say(C_BAD, '* Неверный логин или пароль.');
+    if (!u || !ok) return say(C_BAD, b.data.login.trim() ? '* Неверный логин или пароль. Логин с пробелом пишите как есть, пароль последним словом.' : '* Не удалось войти по нику. Введите логин: .login (логин) (пароль)');
     if (u.status === 'pending') return say(C_INFO, '* Аккаунт ещё ждёт одобрения администратора.');
     if (u.status !== 'active') return say(C_BAD, '* Этот аккаунт сейчас недоступен.');
     if (u.banned_at && (!u.banned_until || u.banned_until > now)) return say(C_BAD, '* Этот аккаунт заблокирован.');
@@ -25176,6 +25599,154 @@ export const nowLine = (texts: RestartTexts): string => `<color=${ALERT}>${clean
 export const cancelLine = (texts: RestartTexts): string => `<color=${OK}>${clean(texts.cancel)}</color>`;
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/gamenews"
+  cat > "$APP_DIR/core-backend/src/gamenews/gameNewsRestartSchedule.ts" << '__COREGSM_EOF__'
+/**
+ * Planned restarts through the game plugin: «every day at 05:00» (or on chosen days). A schedule does not restart anything by
+ * itself: `warnSec` before the time it starts the usual restart timer (the chat counts down, then the plugin closes the server),
+ * so the players are warned exactly as for a restart that an administrator started by hand.
+ *
+ * Not to be mixed with the restart plans of monitoring/restarts.ts (those restart through RCON and have their own warning):
+ * this one needs the game plugin and is for servers without RCON.
+ */
+import type { Express, RequestHandler } from 'express';
+import { z } from 'zod';
+import { db } from '../db.js';
+import { log } from '../logger.js';
+import { startRestart } from './gameNewsServerRestart.js';
+import { isHHMM, nextRunAfter } from './gameNewsSchedule.js';
+import { panelTz, serverLabel } from './gameNewsVars.js';
+
+export interface ScheduleRow {
+  id: number;
+  server_id: number;
+  time: string;
+  days: string;
+  warn_sec: number;
+  enabled: number;
+  skip_r: number;
+  fired_r: number;
+}
+
+const DAY = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+/** the day of the week (0 = Sunday) of a moment in a time zone */
+export function weekdayOf(ts: number, tz: string): number {
+  let name: string;
+  try {
+    name = new Intl.DateTimeFormat('en-US', { timeZone: tz, weekday: 'short' }).format(new Date(ts));
+  } catch {
+    name = new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', weekday: 'short' }).format(new Date(ts));
+  }
+  return Math.max(0, DAY.indexOf(name));
+}
+
+const parseDays = (s: string): number[] => {
+  try { return (JSON.parse(s) as unknown[]).filter((x): x is number => Number.isInteger(x) && (x as number) >= 0 && (x as number) <= 6); } catch { return []; }
+};
+
+/** the next moment of the restart (not of the warning) on an allowed day, after `after`; null when there is none */
+export function nextRestartAt(time: string, days: number[], after: number, tz: string): number | null {
+  let t: number | null = after;
+  for (let i = 0; i < 9 && t != null; i++) {
+    t = nextRunAfter({ kind: 'daily', everyMin: 0, times: [time], runAt: null }, t, tz);
+    if (t != null && (days.length === 0 || days.includes(weekdayOf(t, tz)))) return t;
+  }
+  return null;
+}
+
+/** one pass: a schedule whose warning moment has come starts the timer (once per restart moment) */
+export function tickRestartSchedule(now = Date.now()): void {
+  const tz = panelTz();
+  const rows = db.prepare('SELECT * FROM game_restart_schedule WHERE enabled = 1').all() as ScheduleRow[];
+  for (const r of rows) {
+    const at = nextRestartAt(r.time, parseDays(r.days), now - 1000, tz);
+    if (at == null || at === r.fired_r || at === r.skip_r) continue;
+    const left = Math.ceil((at - now) / 1000);
+    if (left <= 0 || left > r.warn_sec) continue;
+    db.prepare('UPDATE game_restart_schedule SET fired_r = ? WHERE id = ?').run(at, r.id);
+    const ids = r.server_id
+      ? [r.server_id]
+      : (db.prepare("SELECT server_id FROM game_news_targets WHERE token_hash <> ''").all() as { server_id: number }[]).map((x) => x.server_id);
+    for (const id of ids) {
+      try { startRestart(id, Math.max(10, left), 'расписание', 'расписание', now); } catch (e) { log.error('game restart schedule failed', (e as Error).message); }
+    }
+  }
+}
+
+const bodySchema = z.object({
+  serverId: z.number().int().min(0),
+  time: z.string().refine(isHHMM, 'time'),
+  days: z.array(z.number().int().min(0).max(6)).max(7),
+  warnSec: z.number().int().min(60).max(3600),
+  enabled: z.boolean(),
+});
+
+export function registerGameNewsRestartSchedule({ app, admin }: { app: Express; admin: RequestHandler }): void {
+  const view = (r: ScheduleRow, now: number) => {
+    const days = parseDays(r.days);
+    const next = nextRestartAt(r.time, days, now, panelTz());
+    return {
+      id: r.id, serverId: r.server_id, serverName: r.server_id ? serverLabel(r.server_id) : '', time: r.time, days, warnSec: r.warn_sec,
+      enabled: !!r.enabled, next, skipped: next != null && next === r.skip_r,
+    };
+  };
+
+  app.get('/api/game-news/restart-schedule', admin, (_req, res) => {
+    const now = Date.now();
+    const rows = db.prepare('SELECT * FROM game_restart_schedule ORDER BY time, id').all() as ScheduleRow[];
+    res.json({ items: rows.map((r) => view(r, now)), timezone: panelTz() });
+  });
+
+  const check = (serverId: number): boolean => serverId === 0 || !!db.prepare("SELECT 1 FROM game_news_targets WHERE server_id = ? AND token_hash <> ''").get(serverId);
+
+  app.post('/api/game-news/restart-schedule', admin, (req, res) => {
+    const b = bodySchema.safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'Проверьте поля' });
+    if (!check(b.data.serverId)) return res.status(400).json({ error: 'Выберите сервер с плагином' });
+    if ((db.prepare('SELECT COUNT(*) AS n FROM game_restart_schedule').get() as { n: number }).n >= 20) return res.status(400).json({ error: 'Не больше 20 расписаний' });
+    const info = db.prepare('INSERT INTO game_restart_schedule (server_id, time, days, warn_sec, enabled) VALUES (?, ?, ?, ?, ?)')
+      .run(b.data.serverId, b.data.time, JSON.stringify([...new Set(b.data.days)].sort()), b.data.warnSec, b.data.enabled ? 1 : 0);
+    res.json({ id: Number(info.lastInsertRowid) });
+  });
+
+  app.put('/api/game-news/restart-schedule/:id', admin, (req, res) => {
+    const b = bodySchema.safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'Проверьте поля' });
+    if (!check(b.data.serverId)) return res.status(400).json({ error: 'Выберите сервер с плагином' });
+    const info = db.prepare('UPDATE game_restart_schedule SET server_id = ?, time = ?, days = ?, warn_sec = ?, enabled = ?, skip_r = 0 WHERE id = ?')
+      .run(b.data.serverId, b.data.time, JSON.stringify([...new Set(b.data.days)].sort()), b.data.warnSec, b.data.enabled ? 1 : 0, Number(req.params.id));
+    if (!info.changes) return res.status(404).json({ error: 'Расписание не найдено' });
+    res.json({ ok: true });
+  });
+
+  app.delete('/api/game-news/restart-schedule/:id', admin, (req, res) => {
+    db.prepare('DELETE FROM game_restart_schedule WHERE id = ?').run(Number(req.params.id));
+    res.json({ ok: true });
+  });
+
+  // «пропустить ближайший»: this one restart does not happen, the next ones do
+  app.post('/api/game-news/restart-schedule/:id/skip', admin, (req, res) => {
+    const r = db.prepare('SELECT * FROM game_restart_schedule WHERE id = ?').get(Number(req.params.id)) as ScheduleRow | undefined;
+    if (!r) return res.status(404).json({ error: 'Расписание не найдено' });
+    const now = Date.now();
+    const next = nextRestartAt(r.time, parseDays(r.days), now, panelTz());
+    const skip = z.object({ skip: z.boolean() }).safeParse(req.body);
+    const on = skip.success ? skip.data.skip : true;
+    db.prepare('UPDATE game_restart_schedule SET skip_r = ? WHERE id = ?').run(on && next ? next : 0, r.id);
+    res.json({ ok: true });
+  });
+}
+
+let timer: NodeJS.Timeout | undefined;
+export function startRestartScheduleTimer(): void {
+  timer = setInterval(() => {
+    try { tickRestartSchedule(); } catch (e) { log.error('game restart schedule timer failed', (e as Error).message); }
+  }, 15_000);
+  timer.unref();
+}
+export const stopRestartScheduleTimer = () => clearInterval(timer);
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/gamenews"
   cat > "$APP_DIR/core-backend/src/gamenews/gameNewsRestartState.ts" << '__COREGSM_EOF__'
 /**
  * The restart timers of game servers, as rows of the database (one per server). A small module on purpose: the plugin
@@ -25270,6 +25841,7 @@ import { db, getSetting, setSetting } from '../db.js';
 import { countdownEnabled } from './gameNewsRestart.js';
 import { getJoinLeave, isHexColor, plainLine, setJoinLeave } from './gameNewsJoinLeave.js';
 import { chatSettingsView } from './gameNewsChat.js';
+import { getKick } from './gameNewsKick.js';
 import { SCOPED_KEYS, clearOverride, hasOverride, overrides, serverOf } from './gameNewsScope.js';
 import { getRegisterSettings, setRegisterSettings } from './gameNewsRegister.js';
 import { getWelcome, setWelcome } from './gameNewsWelcome.js';
@@ -25362,7 +25934,7 @@ export function registerGameNewsRules({ app, admin }: { app: Express; admin: Req
   app.get('/api/game-news/rules', admin, (req, res) => {
     const sid = serverOf(req);
     const rows = db.prepare('SELECT * FROM game_news_rules ORDER BY id').all() as RuleRow[];
-    res.json({ timezone: tz(), restartCountdown: countdownEnabled(), welcome: getWelcome(sid), joinLeave: getJoinLeave(sid), extras: getExtras(), register: getRegisterSettings(sid), chat: chatSettingsView(sid), overrides: overrides(), mine: sid ? Object.fromEntries(SCOPED_KEYS.map((k) => [k, hasOverride(k, sid)])) : null, rules: rows.map(serialize) });
+    res.json({ timezone: tz(), restartCountdown: countdownEnabled(), welcome: getWelcome(sid), joinLeave: getJoinLeave(sid), kick: getKick(sid), extras: getExtras(), register: getRegisterSettings(sid), chat: chatSettingsView(sid), overrides: overrides(), mine: sid ? Object.fromEntries(SCOPED_KEYS.map((k) => [k, hasOverride(k, sid)])) : null, rules: rows.map(serialize) });
   });
 
   // the countdown «через 10 / 5 / 1 минуту» before the planned restarts of monitoring/restarts.ts
@@ -25412,7 +25984,7 @@ export function registerGameNewsRules({ app, admin }: { app: Express; admin: Req
   app.put('/api/game-news/register-settings', admin, (req, res) => {
     const b = z.object({
       enabled: z.boolean(), promptText: z.string().max(300), doneText: z.string().max(300), discordText: z.string().max(300),
-      pendingText: z.string().max(300), loginText: z.string().max(300).optional(), discordEveryHours: z.number().int().min(1).max(720),
+      pendingText: z.string().max(300), loginText: z.string().max(300).optional(), nickTakenText: z.string().max(300).optional(), autoLoginEnabled: z.boolean().optional(), autoLoginText: z.string().max(300).optional(), lastSeenEnabled: z.boolean().optional(), lastSeenText: z.string().max(300).optional(), discordEveryHours: z.number().int().min(1).max(720),
       rankEnabled: z.boolean().optional(), rankText: z.string().max(300).optional(),
     }).safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Проверьте поля' });
@@ -25426,6 +25998,11 @@ export function registerGameNewsRules({ app, admin }: { app: Express; admin: Req
       discordText: keep(b.data.discordText, d.discordText),
       pendingText: keep(b.data.pendingText, d.pendingText),
       loginText: keep(b.data.loginText ?? d.loginText, d.loginText),
+      nickTakenText: keep(b.data.nickTakenText ?? d.nickTakenText, d.nickTakenText),
+      autoLoginEnabled: b.data.autoLoginEnabled ?? d.autoLoginEnabled,
+      autoLoginText: keep(b.data.autoLoginText ?? d.autoLoginText, d.autoLoginText),
+      lastSeenEnabled: b.data.lastSeenEnabled ?? d.lastSeenEnabled,
+      lastSeenText: keep(b.data.lastSeenText ?? d.lastSeenText, d.lastSeenText),
       discordEveryHours: b.data.discordEveryHours,
       rankEnabled: b.data.rankEnabled ?? d.rankEnabled,
       rankText: keep(b.data.rankText ?? '', d.rankText),
@@ -25596,7 +26173,7 @@ __COREGSM_EOF__
 import type { Request } from 'express';
 import { db, getSetting, setSetting } from '../db.js';
 
-export const SCOPED_KEYS = ['gamenews_welcome', 'gamenews_joinleave', 'gamenews_register', 'gamenews_chat', 'gamenews_restart_texts'] as const;
+export const SCOPED_KEYS = ['gamenews_welcome', 'gamenews_joinleave', 'gamenews_register', 'gamenews_chat', 'gamenews_restart_texts', 'gamenews_kick'] as const;
 
 const key = (base: string, serverId?: number): string => (serverId ? `${base}@${serverId}` : base);
 
@@ -28424,6 +29001,9 @@ import { registerMaintenance } from './maintenance.js';
 import { registerGameNews } from './gamenews/gameNews.js';
 import { registerGameNewsChat, startChatTimer, stopChatTimer } from './gamenews/gameNewsChat.js';
 import { registerGameNewsServerRestart, startRestartJobsTimer, stopRestartJobsTimer } from './gamenews/gameNewsServerRestart.js';
+import { registerGameNewsKick } from './gamenews/gameNewsKick.js';
+import { registerGameNewsJournal } from './gamenews/gameNewsJournal.js';
+import { registerGameNewsRestartSchedule, startRestartScheduleTimer, stopRestartScheduleTimer } from './gamenews/gameNewsRestartSchedule.js';
 import { registerGameNewsPlayers } from './gamenews/gameNewsRegister.js';
 import { registerGameNewsRules, startGameNewsTimer, stopGameNewsTimer } from './gamenews/gameNewsRules.js';
 import { registerStatusNotes } from './alerts/statusNotes.js';
@@ -28622,6 +29202,9 @@ registerGameNewsRules({ app, admin });
 registerGameNewsPlayers({ app });
 registerGameNewsChat({ app, admin });
 registerGameNewsServerRestart({ app, admin });
+registerGameNewsRestartSchedule({ app, admin });
+registerGameNewsJournal({ app, admin });
+registerGameNewsKick({ app, admin });
 registerHealth({ app, admin, bot: () => bot.status });
 startDbMaintenance();
 registerOverview({ app, viewer });
@@ -28664,6 +29247,7 @@ const server = app.listen(PORT, () => {
   startGameNewsTimer();
   startChatTimer();
   startRestartJobsTimer();
+  startRestartScheduleTimer();
 });
 onShutdown('poller', stopPoller);
 onShutdown('backups', stopBackups);
@@ -28672,6 +29256,7 @@ onShutdown('wipes', stopWipeTimer);
 onShutdown('game-news', stopGameNewsTimer);
 onShutdown('game-news-chat', stopChatTimer);
 onShutdown('game-news-restart', stopRestartJobsTimer);
+onShutdown('game-news-restart-schedule', stopRestartScheduleTimer);
 installShutdown(server);
 registerShutdownServer(server);
 
@@ -29258,6 +29843,31 @@ CREATE TABLE IF NOT EXISTS game_restart_log (
   finished_at INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_game_restart_log_server ON game_restart_log(server_id, id);`),
+  },
+  {
+    version: 24,
+    name: 'game_restart_schedule',
+    // planned restarts through the game plugin: a time of day, the days of the week (empty = every day), the warning before
+    up: (db) => db.exec(`
+CREATE TABLE IF NOT EXISTS game_restart_schedule (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  server_id INTEGER NOT NULL DEFAULT 0,
+  time TEXT NOT NULL,
+  days TEXT NOT NULL DEFAULT '[]',
+  warn_sec INTEGER NOT NULL DEFAULT 600,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  skip_r INTEGER NOT NULL DEFAULT 0,
+  fired_r INTEGER NOT NULL DEFAULT 0
+);`),
+  },
+  {
+    version: 25,
+    name: 'game_identities.visits',
+    // when a linked player joined and left the server last: «Вы были на сервере 10.12.2026 в 10:00» at the next join
+    up: (db) => {
+      addColumn(db, 'game_identities', 'last_join_at', 'INTEGER NOT NULL DEFAULT 0');
+      addColumn(db, 'game_identities', 'last_leave_at', 'INTEGER NOT NULL DEFAULT 0');
+    },
   },
 ];
 
@@ -140519,6 +141129,43 @@ export const WELCOME_STYLES: WelcomeStyle[] = [
 ];
 
 /** registration in the panel from the game: switch, texts and how often the Discord hint is repeated */
+/** the defaults of the .kick command (the same as in the panel's backend) */
+export const DEFAULT_KICK: KickSettings = {
+  enabled: true, template: '* Игрок {name} был кикнут с сервера. Причина: {reason}', textColor: '#FF5555', nameColor: '#5FD068', reasonColor: '#FFCC33', adminColor: '#6EC1FF',
+  defaultReason: 'не указана', requireReason: false, protectAdmins: true, announce: true, cooldownSec: 0, maxReason: 100, logChannelId: '',
+};
+
+export interface KickSettings {
+  enabled: boolean;
+  template: string;
+  textColor: string;
+  nameColor: string;
+  reasonColor: string;
+  adminColor: string;
+  defaultReason: string;
+  requireReason: boolean;
+  protectAdmins: boolean;
+  announce: boolean;
+  cooldownSec: number;
+  maxReason: number;
+  /** the channel of Discord for the log of kicks ('' = none) */
+  logChannelId: string;
+}
+
+/** the line of a kick for everybody in flat colour tags (the same as the panel builds for the game): the text, the nickname, the reason and the administrator each in its colour */
+export function kickLine(s: KickSettings, name: string, reason: string, admin: string): string {
+  const clean = (x: string) => x.replace(/[<>]/g, '');
+  const vars: Record<string, { text: string; color: string }> = {
+    name: { text: clean(name), color: s.nameColor },
+    reason: { text: clean(reason), color: s.reasonColor },
+    admin: { text: clean(admin), color: s.adminColor },
+  };
+  return clean(s.template).split(/(\{(?:name|reason|admin)\})/).filter(Boolean).map((part) => {
+    const m = /^\{(name|reason|admin)\}$/.exec(part);
+    return m ? `<color=${vars[m[1]].color}>${vars[m[1]].text}</color>` : `<color=${s.textColor}>${part}</color>`;
+  }).join('');
+}
+
 /** a line of the chat in one colour with the commands picked out (the same as the panel does for the player): «.register» white bold, «(пароль)» lilac */
 export function commandLine(color: string, text: string): string {
   const plain = text.replace(/[<>]/g, '');
@@ -140542,13 +141189,18 @@ export interface RegisterSettings {
   discordText: string;
   pendingText: string;
   loginText: string;
+  nickTakenText: string;
+  autoLoginEnabled: boolean;
+  autoLoginText: string;
+  lastSeenEnabled: boolean;
+  lastSeenText: string;
   discordEveryHours: number;
   rankEnabled: boolean;
   rankText: string;
 }
 
 /** the game chat in Discord: one webhook (its address never leaves the backend), a switch for each kind of line and how they look */
-export const CHAT_KINDS = ['global', 'clan', 'local', 'join', 'leave'] as const;
+export const CHAT_KINDS = ['global', 'clan', 'local', 'join', 'leave', 'kick'] as const;
 export type ChatKind = (typeof CHAT_KINDS)[number];
 /** the eight colours of an ansi block of Discord */
 /** ready looks of the chat in Discord: the colours of the game, calm, bright, or no colours at all */
@@ -140557,28 +141209,28 @@ export const CHAT_PRESETS: { id: 'game' | 'calm' | 'bright' | 'plain'; style: 'a
     id: 'game', style: 'ansi',
     colors: {
       global: { tag: 'blue', name: 'yellow', text: 'blue' }, local: { tag: 'blue', name: 'yellow', text: 'blue' }, clan: { tag: 'green', name: 'yellow', text: 'green' },
-      join: { tag: 'green', name: 'pink', text: 'green' }, leave: { tag: 'green', name: 'pink', text: 'green' },
+      join: { tag: 'green', name: 'pink', text: 'green' }, leave: { tag: 'green', name: 'pink', text: 'green' }, kick: { tag: 'yellow', name: 'green', text: 'red' },
     },
   },
   {
     id: 'calm', style: 'ansi',
     colors: {
       global: { tag: 'gray', name: 'white', text: 'gray' }, local: { tag: 'gray', name: 'white', text: 'gray' }, clan: { tag: 'gray', name: 'white', text: 'gray' },
-      join: { tag: 'gray', name: 'white', text: 'gray' }, leave: { tag: 'gray', name: 'white', text: 'gray' },
+      join: { tag: 'gray', name: 'white', text: 'gray' }, leave: { tag: 'gray', name: 'white', text: 'gray' }, kick: { tag: 'gray', name: 'white', text: 'gray' },
     },
   },
   {
     id: 'bright', style: 'ansi',
     colors: {
       global: { tag: 'cyan', name: 'yellow', text: 'white' }, local: { tag: 'gray', name: 'yellow', text: 'gray' }, clan: { tag: 'green', name: 'yellow', text: 'white' },
-      join: { tag: 'green', name: 'pink', text: 'green' }, leave: { tag: 'red', name: 'pink', text: 'red' },
+      join: { tag: 'green', name: 'pink', text: 'green' }, leave: { tag: 'red', name: 'pink', text: 'red' }, kick: { tag: 'yellow', name: 'green', text: 'red' },
     },
   },
   {
     id: 'plain', style: 'plain',
     colors: {
       global: { tag: 'white', name: 'white', text: 'white' }, local: { tag: 'white', name: 'white', text: 'white' }, clan: { tag: 'white', name: 'white', text: 'white' },
-      join: { tag: 'white', name: 'white', text: 'white' }, leave: { tag: 'white', name: 'white', text: 'white' },
+      join: { tag: 'white', name: 'white', text: 'white' }, leave: { tag: 'white', name: 'white', text: 'white' }, kick: { tag: 'white', name: 'white', text: 'white' },
     },
   },
 ];
@@ -140614,6 +141266,7 @@ export interface RulesState {
   extras: Extras;
   register: RegisterSettings;
   chat: ChatSettings;
+  kick: KickSettings;
   /** the servers that have settings of their own, by key */
   overrides: Record<string, number[]>;
   /** for one server: which parts have their own value */
@@ -144001,6 +144654,127 @@ const en: Record<keyof typeof ru, string> = {
   'gn.ch.confirmLine': 'A «→ в игру» line in the channel',
   'gn.ch.confirmLineNote': 'The bot repeats the line in the style of the game chat, so the whole talk reads in one row. It stays in the channel.',
   'gn.rg.login': 'After .login: the game is linked to the account ({login} is the login)',
+  'gn.rg.nickTaken': 'When the nickname is already in the panel ({name} is the nickname)',
+  'gn.sc.inheritShort': 'The general settings are used',
+  'gn.sc.general': 'general',
+  'gn.sc.setup': 'Set up apart',
+  'gn.q.title': 'Quick:',
+  'gn.q.test': 'Test the connection',
+  'gn.q.testNote': 'Sends a short test line to the game on the chosen servers',
+  'gn.q.restart': 'Restart in 5 min',
+  'gn.q.restartNote': 'Starts the restart timer on the chosen servers: the chat counts down',
+  'gn.q.restartTitle': 'Restart the server in 5 minutes?',
+  'gn.q.restartText': 'The game chat counts down, then the plugin closes the server: {servers}. It can be cancelled on the «Restart» page.',
+  'gn.q.connectHint': 'Connect the plugin to a server: create a token and paste it into the plugin settings.',
+  'gn.q.offlineNote': 'The plugin is not connected now: the message waits in the queue',
+  'gn.q.connect': 'Connect: {name}',
+  'gn.q.testSent': 'The test line was sent',
+  'gn.sendCount': 'Send to {n} servers',
+  'gn.st.players': '{n} players online',
+  'gn.st.sent': '{n} sent in 24 hours',
+  'gn.tab.journal': 'Journal',
+  'gn.in.title': 'Settings section',
+  'gn.in.players': 'Players',
+  'gn.in.restart': 'Restart',
+  'gn.in.discord': 'Discord',
+  'gn.jn.title': 'Plugin journal',
+  'gn.jn.empty': 'Nothing has happened yet',
+  'gn.jn.emptyHint': 'Messages to the game (yours, automatic, from Discord), restarts and linked players will be listed here.',
+  'gn.jn.f.all': 'All',
+  'gn.jn.f.message': 'Messages',
+  'gn.jn.f.auto': 'Automatic',
+  'gn.jn.f.discord': 'From Discord',
+  'gn.jn.f.restart': 'Restarts',
+  'gn.jn.f.link': 'Links',
+  'gn.jn.restartLine': 'Restart in {n} min',
+  'gn.jn.reg': 'Registered',
+  'gn.jn.login': 'Linked',
+  'gn.jn.unlink': 'Unlinked',
+  'gn.lk.title': 'Linked players',
+  'gn.lk.note': 'Game accounts linked to accounts of the panel with the .register and .login commands.',
+  'gn.lk.search': 'Nickname or login',
+  'gn.lk.empty': 'Nobody is linked yet',
+  'gn.lk.emptyHint': 'Turn on «Registration in the panel from the game» on the General tab: players will be able to register and log in right in the chat.',
+  'gn.lk.none': 'Nobody found',
+  'gn.lk.discord': 'Discord linked',
+  'gn.lk.pending': 'waiting for approval',
+  'gn.lk.unlink': 'Unlink',
+  'gn.lk.unlinkTitle': 'Unlink the player {nick}?',
+  'gn.lk.unlinkText': 'The game account will no longer be linked to the account {user}. The account of the panel stays: the player can link again with .login.',
+  'gn.lk.unlinked': 'The player was unlinked',
+  'gn.rs.d0': 'Sun',
+  'gn.rs.d1': 'Mon',
+  'gn.rs.d2': 'Tue',
+  'gn.rs.d3': 'Wed',
+  'gn.rs.d4': 'Thu',
+  'gn.rs.d5': 'Fri',
+  'gn.rs.d6': 'Sat',
+  'gn.rs.everyDay': 'Every day',
+  'gn.rs.saved': 'The schedule was saved',
+  'gn.rs.deleteTitle': 'Delete the schedule at {time}?',
+  'gn.rs.delete': 'Delete',
+  'gn.rs.note': 'A schedule starts the restart itself: for the chosen time before it the chat counts down as usual, then the plugin closes the server. The time follows the time zone of the panel. This is separate from the planned restarts in «Maintenance» (those work through RCON).',
+  'gn.rs.empty': 'No scheduled restarts',
+  'gn.rs.emptyHint': 'For example, every day at 05:00 with a warning 10 minutes before.',
+  'gn.rs.add': 'Add a schedule',
+  'gn.rs.allServers': 'All servers',
+  'gn.rs.warn': '{n} min before',
+  'gn.rs.skipped': 'the next one is skipped',
+  'gn.rs.next': 'next {time}',
+  'gn.rs.unskip': 'Bring the next one back',
+  'gn.rs.skip': 'Skip the next one',
+  'gn.rs.edit': 'Edit',
+  'gn.rs.enabled': 'Schedule is on',
+  'gn.rs.time': 'Restart time',
+  'gn.rs.server': 'Server',
+  'gn.rs.warnLabel': 'Warn',
+  'gn.rs.daysLabel': 'Days of the week',
+  'gn.rs.daysHint': 'Nothing chosen: every day.',
+  'gn.rs.save': 'Save',
+  'gn.rr.sumRunning': 'Counting down',
+  'gn.rr.p.now': 'Now',
+  'gn.rr.p.planned': 'Planned',
+  'gn.rr.p.words': 'Chat words',
+  'gn.rr.p.history': 'History',
+  'gn.rr.noTimers': 'No restart is running',
+  'gn.rr.noTimersHint': 'Start a timer below, or come back when a player, the console, Discord or a schedule starts one.',
+  'gn.rr.startTitle': 'Start a restart',
+  'gn.rg.autoOn': 'Automatic login by the game account',
+  'gn.rg.auto': 'The automatic login line ({login} is the login in the panel)',
+  'gn.rg.lastOn': 'Tell when the player was on the server last time',
+  'gn.rg.last': 'The last visit line ({name} is the nickname, {date} the date, {time} the time)',
+  'gn.jn.f.kick': 'Kicks',
+  'gn.jn.kick': 'Kick',
+  'gn.kk.title': 'The .kick command',
+  'gn.kk.sumOn': 'Game administrators can kick players',
+  'gn.kk.sumOff': 'The command is off',
+  'gn.kk.note': 'A game administrator types .kick (nickname) (reason). The panel checks the rules below, writes a journal entry, shows everybody the line and removes the player. The nickname may have spaces, the reason may be several words.',
+  'gn.kk.enabled': 'Allow the .kick command',
+  'gn.kk.template': 'The line for all players ({name} the kicked player, {reason} the reason, {admin} who kicked)',
+  'gn.kk.textColor': 'Text colour',
+  'gn.kk.nameColor': 'Nickname colour',
+  'gn.kk.reasonColor': 'Reason colour',
+  'gn.kk.adminColor': 'Administrator name colour',
+  'gn.kk.defaultReason': 'Reason when none is given',
+  'gn.kk.cooldown': 'Pause between kicks of one administrator, seconds (0 = none)',
+  'gn.kk.requireReason': 'Require a reason',
+  'gn.kk.requireReasonNote': 'A kick without a reason is refused: the administrator sees a hint.',
+  'gn.kk.protect': 'Protect administrators',
+  'gn.kk.protectNote': 'An administrator of the game cannot be kicked with this command.',
+  'gn.kk.announce': 'Announce the kick to everybody',
+  'gn.kk.announceNote': 'Off: the player is removed quietly, no line in the chat (the journal entry stays).',
+  'gn.kk.quiet': 'A kick without an announcement: nothing appears in the chat.',
+  'gn.kk.logTitle': 'Kick log in Discord',
+  'gn.kk.logNote': 'A channel for administrators: where, when, whom, who and why. The bot posts there: it needs the right to write in the channel.',
+  'gn.kk.logNone': 'Not chosen',
+  'gn.kk.logPick': 'Choose a channel',
+  'gn.kk.logChange': 'Change',
+  'gn.kk.logOff': 'Remove',
+  'gn.ch.kind.kick': 'Kick of a player',
+  'gn.ch.kindNote.kick': 'The line «* Player nick was kicked from the server. Reason: …» with the words of the «.kick command» card. The reason takes the colour of the «Tag» column.',
+  'gn.ch.short.kick': 'kick',
+  'gn.kk.sampleReason': 'spam',
+  'gn.kk.sampleAdmin': 'Admin',
   'gn.ch.presets': 'Ready styles:',
   'gn.ch.preset.game': 'As in the game',
   'gn.ch.preset.calm': 'Calm',
@@ -147496,6 +148270,9 @@ const errorsEn: Record<string, string> = {
   announcement_bad_time: 'Set a time in the future, not later than a year',
   announcement_limit: 'No more than {n} scheduled announcements',
   game_chat_channel: 'The channel of the webhook could not be found: save the address again',
+  game_link_missing: 'The link was not found',
+  game_schedule_limit: 'No more than 20 schedules',
+  game_schedule_missing: 'The schedule was not found',
   game_restart_server: 'Pick a server with the plugin',
   game_restart_short: 'At least 10 seconds',
   game_restart_long: 'No more than 6 hours',
@@ -148705,6 +149482,127 @@ const ru = {
   'gn.ch.confirmLine': 'Строка «→ в игру» в канале',
   'gn.ch.confirmLineNote': 'Бот повторяет строку в стиле игрового чата, чтобы весь разговор читался в одном ряду. Остаётся в канале.',
   'gn.rg.login': 'После .login: игра привязана к аккаунту ({login} — логин)',
+  'gn.rg.nickTaken': 'Если ник уже есть в панели ({name} — ник игрока)',
+  'gn.sc.inheritShort': 'Используются общие настройки',
+  'gn.sc.general': 'общие',
+  'gn.sc.setup': 'Настроить отдельно',
+  'gn.q.title': 'Быстро:',
+  'gn.q.test': 'Проверить связь',
+  'gn.q.testNote': 'Отправит в игру короткую проверочную строку на выбранные серверы',
+  'gn.q.restart': 'Рестарт через 5 мин',
+  'gn.q.restartNote': 'Запустит таймер рестарта на выбранных серверах: в чате пойдёт отсчёт',
+  'gn.q.restartTitle': 'Перезапустить сервер через 5 минут?',
+  'gn.q.restartText': 'В игровом чате пойдёт отсчёт, потом плагин закроет сервер: {servers}. Отменить можно на странице «Рестарт».',
+  'gn.q.connectHint': 'Подключите плагин к серверу: создайте токен и вставьте его в настройки плагина.',
+  'gn.q.offlineNote': 'Плагин сейчас не на связи: сообщение подождёт в очереди',
+  'gn.q.connect': 'Подключить: {name}',
+  'gn.q.testSent': 'Проверочная строка отправлена',
+  'gn.sendCount': 'Отправить на серверов: {n}',
+  'gn.st.players': 'игроков онлайн: {n}',
+  'gn.st.sent': 'за сутки отправлено: {n}',
+  'gn.tab.journal': 'Журнал',
+  'gn.in.title': 'Раздел настроек',
+  'gn.in.players': 'Игроки',
+  'gn.in.restart': 'Рестарт',
+  'gn.in.discord': 'Discord',
+  'gn.jn.title': 'Журнал плагина',
+  'gn.jn.empty': 'Пока ничего не происходило',
+  'gn.jn.emptyHint': 'Здесь будут сообщения в игру (ваши, автообъявления, из Discord), рестарты и привязки игроков.',
+  'gn.jn.f.all': 'Всё',
+  'gn.jn.f.message': 'Сообщения',
+  'gn.jn.f.auto': 'Автообъявления',
+  'gn.jn.f.discord': 'Из Discord',
+  'gn.jn.f.restart': 'Рестарты',
+  'gn.jn.f.link': 'Привязки',
+  'gn.jn.restartLine': 'Рестарт через {n} мин',
+  'gn.jn.reg': 'Регистрация',
+  'gn.jn.login': 'Привязка',
+  'gn.jn.unlink': 'Отвязка',
+  'gn.lk.title': 'Привязанные игроки',
+  'gn.lk.note': 'Игровые аккаунты, привязанные к аккаунтам панели командами .register и .login.',
+  'gn.lk.search': 'Ник или логин',
+  'gn.lk.empty': 'Пока никто не привязан',
+  'gn.lk.emptyHint': 'Включите «Регистрация в панели из игры» на вкладке «Общие»: игроки смогут регистрироваться и входить прямо в чате.',
+  'gn.lk.none': 'Никого не нашли',
+  'gn.lk.discord': 'Discord привязан',
+  'gn.lk.pending': 'ждёт одобрения',
+  'gn.lk.unlink': 'Отвязать',
+  'gn.lk.unlinkTitle': 'Отвязать игрока {nick}?',
+  'gn.lk.unlinkText': 'Игровой аккаунт перестанет быть связан с аккаунтом {user}. Сам аккаунт панели останется: игрок сможет привязаться снова командой .login.',
+  'gn.lk.unlinked': 'Игрок отвязан',
+  'gn.rs.d0': 'Вс',
+  'gn.rs.d1': 'Пн',
+  'gn.rs.d2': 'Вт',
+  'gn.rs.d3': 'Ср',
+  'gn.rs.d4': 'Чт',
+  'gn.rs.d5': 'Пт',
+  'gn.rs.d6': 'Сб',
+  'gn.rs.everyDay': 'Каждый день',
+  'gn.rs.saved': 'Расписание сохранено',
+  'gn.rs.deleteTitle': 'Удалить расписание на {time}?',
+  'gn.rs.delete': 'Удалить',
+  'gn.rs.note': 'Расписание само запускает рестарт: за выбранное время в чате идёт обычный отсчёт, потом плагин закрывает сервер. Время считается по часовому поясу панели. Это отдельно от плановых рестартов в разделе «Обслуживание» (те работают через RCON).',
+  'gn.rs.empty': 'Рестартов по расписанию нет',
+  'gn.rs.emptyHint': 'Например, каждый день в 05:00 с предупреждением за 10 минут.',
+  'gn.rs.add': 'Добавить расписание',
+  'gn.rs.allServers': 'Все серверы',
+  'gn.rs.warn': 'за {n} мин',
+  'gn.rs.skipped': 'ближайший пропущен',
+  'gn.rs.next': 'ближайший {time}',
+  'gn.rs.unskip': 'Вернуть ближайший',
+  'gn.rs.skip': 'Пропустить ближайший',
+  'gn.rs.edit': 'Изменить',
+  'gn.rs.enabled': 'Расписание включено',
+  'gn.rs.time': 'Время рестарта',
+  'gn.rs.server': 'Сервер',
+  'gn.rs.warnLabel': 'Предупредить',
+  'gn.rs.daysLabel': 'Дни недели',
+  'gn.rs.daysHint': 'Ничего не выбрано: каждый день.',
+  'gn.rs.save': 'Сохранить',
+  'gn.rr.sumRunning': 'Идёт отсчёт',
+  'gn.rr.p.now': 'Сейчас',
+  'gn.rr.p.planned': 'Плановые',
+  'gn.rr.p.words': 'Слова в чате',
+  'gn.rr.p.history': 'История',
+  'gn.rr.noTimers': 'Рестарт сейчас не идёт',
+  'gn.rr.noTimersHint': 'Запустите таймер ниже или вернитесь сюда, когда его запустит игрок, консоль, Discord или расписание.',
+  'gn.rr.startTitle': 'Запустить рестарт',
+  'gn.rg.autoOn': 'Автоматический вход по игровому аккаунту',
+  'gn.rg.auto': 'Строка автоматического входа ({login} — логин в панели)',
+  'gn.rg.lastOn': 'Писать, когда игрок был на сервере в прошлый раз',
+  'gn.rg.last': 'Строка о прошлом визите ({name} — ник, {date} — дата, {time} — время)',
+  'gn.jn.f.kick': 'Кики',
+  'gn.jn.kick': 'Кик',
+  'gn.kk.title': 'Команда .kick',
+  'gn.kk.sumOn': 'Админы игры могут кикать игроков',
+  'gn.kk.sumOff': 'Команда отключена',
+  'gn.kk.note': 'Администратор игры вводит .kick (ник) (причина). Панель проверяет правила ниже, пишет запись в журнал, показывает всем строку и убирает игрока. Ник можно с пробелом, причина может быть из нескольких слов.',
+  'gn.kk.enabled': 'Разрешить команду .kick',
+  'gn.kk.template': 'Строка для всех игроков ({name} — кикнутый, {reason} — причина, {admin} — кто кикнул)',
+  'gn.kk.textColor': 'Цвет текста',
+  'gn.kk.nameColor': 'Цвет ника',
+  'gn.kk.reasonColor': 'Цвет причины',
+  'gn.kk.adminColor': 'Цвет имени администратора',
+  'gn.kk.defaultReason': 'Причина, если её не указали',
+  'gn.kk.cooldown': 'Пауза между киками одного админа, секунд (0 — без паузы)',
+  'gn.kk.requireReason': 'Требовать причину',
+  'gn.kk.requireReasonNote': 'Кик без причины будет отклонён: админ увидит подсказку.',
+  'gn.kk.protect': 'Защитить администраторов',
+  'gn.kk.protectNote': 'Администратора игры нельзя кикнуть этой командой.',
+  'gn.kk.announce': 'Объявлять кик всем',
+  'gn.kk.announceNote': 'Выключено: игрок убирается тихо, строки в чате не будет (запись в журнале остаётся).',
+  'gn.kk.quiet': 'Кик без объявления: в чате ничего не появится.',
+  'gn.kk.logTitle': 'Журнал киков в Discord',
+  'gn.kk.logNote': 'Канал для администраторов: где, когда, кого, кто и за что кикнул. Пишет бот: ему нужно право писать в этом канале.',
+  'gn.kk.logNone': 'Не выбран',
+  'gn.kk.logPick': 'Выбрать канал',
+  'gn.kk.logChange': 'Изменить',
+  'gn.kk.logOff': 'Убрать',
+  'gn.ch.kind.kick': 'Кик игрока',
+  'gn.ch.kindNote.kick': 'Строка «* Игрок ник был кикнут с сервера. Причина: …» с текстом из карточки «Команда .kick». Причина берёт цвет из колонки «Метка».',
+  'gn.ch.short.kick': 'кик',
+  'gn.kk.sampleReason': 'спам',
+  'gn.kk.sampleAdmin': 'Админ',
   'gn.ch.presets': 'Готовые стили:',
   'gn.ch.preset.game': 'Как в игре',
   'gn.ch.preset.calm': 'Спокойный',
@@ -156975,51 +157873,29 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/pages/GameNews.tsx" << '__COREGSM_EOF__'
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { api } from '../api';
-import { NewsEditor, NewsPreview, Styled } from '../components/NewsEditor';
 import { soon } from '../components/GameNewsParts';
 import { confirmDialog } from '../confirm';
 import { t, useI18n } from '../i18n';
 import {
-  pluginConfig, validateNews, versionLess,
-  type NewsLogRow, type NewsSendResult, type NewsServerInfo, type NewsStatus, type RulesState,
+  pluginConfig, validateNews,
+  type NewsLogRow, type NewsSendResult, type NewsServerInfo, type RulesState,
 } from '../gameNews';
 import { AdminPage, ErrorLine, IconNews, LoadError, Modal, PageHead, Spinner, errText, navigate, toast, usePoll } from '../ui';
-import { ChatCard, ExtrasCard, JoinLeaveCard, RegisterCard, RestartCard, WelcomeCard } from './GameNewsCards';
+import { ChatCard, ExtrasCard, JoinLeaveCard, KickCard, RegisterCard, WelcomeCard } from './GameNewsCards';
 import { ServerHead } from './GameNewsServerHead';
 import { ScopeContext } from './GameNewsScope';
 import { ServerRestartCard } from './GameNewsServerRestart';
 import GameNewsRules from './GameNewsRules';
+import { JournalTab } from './GameNewsJournal';
+import { LinksTab } from './GameNewsLinks';
+import { SendTab } from './GameNewsSend';
+import { ScopedCard, SubTabs } from './GameNewsUi';
 
 interface NewsState { servers: NewsServerInfo[]; log: NewsLogRow[]; pluginLatest: string }
 
-/** 'send' | 'auto' | 'general' | 's<id>' (the settings of one server) | 'history' */
+/** 'send' | 'auto' | 'general' | 's<id>' (the settings of one server) | 'players' (linked players) | 'journal' */
 type Tab = string;
 const DOCS = 'https://github.com/RJ-Bond/CoreGSM/blob/main/docs/game-plugin.md';
-
-/** «3 с назад», «5 мин назад», «2 ч назад» */
-function ago(ts: number): string {
-  const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
-  if (s < 90) return t('gn.ago.s', { n: s });
-  if (s < 5400) return t('gn.ago.m', { n: Math.round(s / 60) });
-  return t('gn.ago.h', { n: Math.round(s / 3600) });
-}
-
-const STATUS: Record<NewsStatus, { text: 'gn.h.queued' | 'gn.h.ok' | 'gn.h.expired' | 'gn.h.fail'; cls: string }> = {
-  queued: { text: 'gn.h.queued', cls: 'pill pill-mute' },
-  delivered: { text: 'gn.h.ok', cls: 'pill pill-ok' },
-  expired: { text: 'gn.h.expired', cls: 'pill pill-warn' },
-  failed: { text: 'gn.h.fail', cls: 'pill pill-warn' },
-};
-
-function Tile({ label, value, sub }: { label: string; value: string; sub?: string }) {
-  return (
-    <div className="panel min-w-0 px-4 py-3">
-      <div className="text-xs font-bold uppercase tracking-wide text-mute">{label}</div>
-      <div className="mt-0.5 wrap-break-word text-lg font-extrabold">{value}</div>
-      {sub && <div className="wrap-break-word text-sm font-semibold text-mute">{sub}</div>}
-    </div>
-  );
-}
 
 /** «Игровой плагин»: messages to the in-game chat (the CoreGSM game plugin picks them up), schedules, events, the chat in Discord. */
 export default function GameNewsPage({ sub = '' }: { sub?: string }) {
@@ -157029,7 +157905,8 @@ export default function GameNewsPage({ sub = '' }: { sub?: string }) {
   const [error, setError] = useState('');
   // the tab is part of the address: /admin/gamenews, /auto, /players, /discord, /history («events» is the old name of «players»)
   // (/general holds the general settings; /s12 the settings of the server 12; «players», «discord» and «events» are the old names of /general)
-  const tab: Tab = ['players', 'discord', 'events'].includes(sub) ? 'general' : (/^(send|auto|general|history|s\d+)$/.test(sub) ? sub : 'send');
+  // («discord» and «events» are old names of /general, «history» of /journal)
+  const tab: Tab = ['discord', 'events'].includes(sub) ? 'general' : sub === 'history' ? 'journal' : (/^(send|auto|general|players|journal|s\d+)$/.test(sub) ? sub : 'send');
   const goTab = (x: Tab) => navigate(x === 'send' ? '/admin/gamenews' : `/admin/gamenews/${x}`);
   // the draft survives a switch of the page or a reload (kept in this browser only)
   const [text, setText] = useState(() => { try { return localStorage.getItem('coregsm.gamenews.draft') ?? ''; } catch { return ''; } });
@@ -157039,6 +157916,9 @@ export default function GameNewsPage({ sub = '' }: { sub?: string }) {
   const [settingsFor, setSettingsFor] = useState<number | null>(null);
   const [lastResult, setLastResult] = useState<NewsSendResult | null>(null);
   const [showBare, setShowBare] = useState(false);
+  // inside the settings of the general page or of a server: players | restart | discord (remembered in this browser)
+  const [inner, setInner] = useState<'players' | 'restart' | 'discord'>(() => { try { const v = localStorage.getItem('coregsm.gn.inner'); return v === 'restart' || v === 'discord' ? v : 'players'; } catch { return 'players'; } });
+  const pickInner = (v: 'players' | 'restart' | 'discord') => { setInner(v); try { localStorage.setItem('coregsm.gn.inner', v); } catch { /* private mode */ } };
   const [wizardOff, setWizardOff] = useState(() => { try { return localStorage.getItem('coregsm.gn.wizard') === '0'; } catch { return false; } });
 
   const loadMain = () => api<NewsState>('/game-news').then((d) => { setData(d); setError(''); }).catch((e: Error) => setError(e.message));
@@ -157075,14 +157955,12 @@ export default function GameNewsPage({ sub = '' }: { sub?: string }) {
   const day = Date.now() - 86_400_000;
   const delivered24 = (data?.log ?? []).filter((r) => r.status === 'delivered' && r.sentAt > day).length;
   const queued = (data?.log ?? []).filter((r) => r.status === 'queued').length;
-  const eventsOn = rd ? [rd.welcome.enabled, rd.joinLeave.joinEnabled || rd.joinLeave.leaveEnabled, rd.register.enabled, rd.restartCountdown].filter(Boolean).length : 0;
-  const chatOn = rd ? (rd.chat.enabled && rd.chat.set ? 1 : 0) : 0;
-  const counter: Record<string, number> = { auto: activeRules.length, general: tab === 'general' ? eventsOn + chatOn : 0, history: queued };
-  // with one server its settings are the general ones; with several each gets a tab of its own
+  const counter: Record<string, number> = { auto: activeRules.length, journal: queued };
+  // with one server its settings are the general ones; with several each gets a page of its own (in the menu on the left, on a phone in the strip)
   const serverTabs = withToken.length > 1 ? withToken : [];
   const tabList: { id: Tab; label: string }[] = [
     { id: 'send', label: t('gn.tab.send') }, { id: 'auto', label: t('gn.tab.auto') }, { id: 'general', label: t('gn.tab.general') },
-    { id: 'history', label: t('gn.tab.history') },
+    { id: 'players', label: t('gn.tab.players') }, { id: 'journal', label: t('gn.tab.journal') },
   ];
 
   // the setup guide: until a plugin is online
@@ -157109,37 +157987,25 @@ export default function GameNewsPage({ sub = '' }: { sub?: string }) {
     }
   };
 
-  const serverRow = (s: NewsServerInfo) => {
-    const old = s.hasToken && s.online && versionLess(s.pluginVersion, data?.pluginLatest ?? '');
-    return (
-      <li key={s.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2.5">
-        <label className="flex min-w-0 flex-1 basis-48 items-center gap-2.5 font-bold">
-          <input type="checkbox" disabled={!s.hasToken} checked={picked.includes(s.id)} onChange={() => toggle(s.id)} />
-          <span className="min-w-0 wrap-break-word">
-            {s.name}
-            <span className="block text-xs font-semibold text-mute">
-              {s.name !== s.address && s.address}
-              {s.players != null && <>{s.name !== s.address && ' · '}{t('gn.players', { n: s.players, max: s.maxPlayers ?? 0 })}</>}
-            </span>
-          </span>
-        </label>
-        <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
-          <span
-            className={!s.hasToken ? 'pill pill-mute' : !s.online || old ? 'pill pill-warn' : 'pill pill-ok'}
-            title={s.lastSeen ? t('gn.plugin.lastPoll', { time: ago(s.lastSeen) }) : undefined}
-          >
-            {!s.hasToken
-              ? t('gn.plugin.off')
-              : !s.online
-                ? (s.pluginVersion ? `${t('gn.plugin.silent')} · v${s.pluginVersion}` : t('gn.plugin.silent'))
-                : old
-                  ? t('gn.plugin.outdated', { v: s.pluginVersion || '?', latest: data?.pluginLatest ?? '' })
-                  : `${t('gn.plugin.online')} · v${s.pluginVersion || '?'}`}
-          </span>
-          <button type="button" className="btn btn-ghost btn-sm" onClick={() => setSettingsFor(s.id)} aria-label={t('gn.plugin.settings', { name: s.name })}>{t('gn.sv.setup')}</button>
-        </div>
-      </li>
-    );
+  // quick actions of the «Отправить» tab: a test line, a restart in five minutes (both for the chosen servers)
+  const quickTest = async () => {
+    if (!picked.length || busy) return;
+    setBusy(true);
+    try {
+      await api('/game-news/send', 'POST', { serverIds: picked, text: `<color=#6EC1FF>* ${t('gn.sh.testText')}</color>` });
+      toast(t('gn.q.testSent'));
+      void loadMain();
+    } catch (err) { toast(errText(err), 'err'); } finally { setBusy(false); }
+  };
+  const quickRestart = async () => {
+    if (!picked.length || busy) return;
+    const names = (data?.servers ?? []).filter((x) => picked.includes(x.id)).map((x) => x.name).join(', ');
+    if (!(await confirmDialog({ title: t('gn.q.restartTitle'), text: t('gn.q.restartText', { servers: names }), confirmLabel: t('gn.q.restart'), danger: true }))) return;
+    setBusy(true);
+    try {
+      for (const id of picked) await api('/game-news/restart', 'POST', { serverId: id, time: '5m' });
+      toast(t('gn.rr.started'));
+    } catch (err) { toast(errText(err), 'err'); } finally { setBusy(false); }
   };
 
   return (
@@ -157152,15 +158018,15 @@ export default function GameNewsPage({ sub = '' }: { sub?: string }) {
       {!data && !error && <div className="skeleton panel h-40" aria-busy="true" aria-label={t('d2.news.loading')} />}
 
       {data && (
-        <div className="grid gap-3 min-[560px]:grid-cols-2 lg:grid-cols-4">
-          <Tile
-            label={t('gn.s.plugin')}
-            value={withToken.length ? t('gn.s.pluginVal', { on: online.length, all: withToken.length }) : t('gn.s.pluginNone')}
-            sub={online[0]?.pluginVersion ? `v${online[0].pluginVersion}` : undefined}
-          />
-          <Tile label={t('gn.s.players')} value={online.length ? String(players) : '—'} sub={online.length ? t('gn.s.onServers', { n: online.length }) : undefined} />
-          <Tile label={t('gn.s.auto')} value={t('gn.s.autoVal', { n: activeRules.length })} sub={nextRun ? t('gn.s.next', { time: soon(nextRun) }) : undefined} />
-          <Tile label={t('gn.s.sent')} value={String(delivered24)} sub={queued ? t('gn.s.queued', { n: queued }) : undefined} />
+        <div className="panel flex flex-wrap items-center gap-x-6 gap-y-2 px-5 py-3" role="status" aria-label={t('gn.s.plugin')}>
+          <span className="flex items-center gap-2 font-extrabold">
+            <span aria-hidden className={`inline-block h-2.5 w-2.5 rounded-full ${online.length === 0 ? 'bg-mute' : online.length < withToken.length ? 'bg-warn' : 'bg-ok'}`} />
+            {withToken.length ? t('gn.s.pluginVal', { on: online.length, all: withToken.length }) : t('gn.s.pluginNone')}
+            {online[0]?.pluginVersion && <span className="text-sm font-semibold text-mute">v{online[0].pluginVersion}</span>}
+          </span>
+          <span className="text-sm font-bold"><span aria-hidden>👥 </span>{online.length ? t('gn.st.players', { n: players }) : '—'}</span>
+          <span className="text-sm font-bold"><span aria-hidden>⟳ </span>{t('gn.s.autoVal', { n: activeRules.length })}{nextRun ? <span className="font-semibold text-mute"> · {t('gn.s.next', { time: soon(nextRun) })}</span> : null}</span>
+          <span className="text-sm font-bold"><span aria-hidden>✉ </span>{t('gn.st.sent', { n: delivered24 })}{queued ? <span className="font-semibold text-mute"> · {t('gn.s.queued', { n: queued })}</span> : null}</span>
         </div>
       )}
 
@@ -157196,60 +158062,27 @@ export default function GameNewsPage({ sub = '' }: { sub?: string }) {
       )}
 
       {data && (
-        <div className="flex flex-wrap gap-2" role="tablist" aria-label={t('gn.title')}>
-          {[...tabList.slice(0, -1), ...serverTabs.map((x) => ({ id: `s${x.id}`, label: x.name, phone: true })), ...tabList.slice(-1)].map((x) => (
+        <div className="-mx-1 overflow-x-auto px-1 pb-1" role="tablist" aria-label={t('gn.title')}>
+         <div className="flex min-w-max gap-2 md:min-w-0 md:flex-wrap">
+          {[...tabList.slice(0, 3), ...serverTabs.map((x) => ({ id: `s${x.id}`, label: x.name, phone: true })), ...tabList.slice(3)].map((x) => (
             <span key={x.id} className={'phone' in x ? 'contents md:hidden' : 'contents'}>
-            <button type="button" role="tab" aria-selected={tab === x.id} className={`chip-filter ${tab === x.id ? 'on' : ''}`} onClick={() => goTab(x.id)}>
+            <button type="button" role="tab" aria-selected={tab === x.id} className={`chip-filter whitespace-nowrap ${tab === x.id ? 'on' : ''}`} onClick={() => goTab(x.id)}>
               {x.label}
               {(counter[x.id] ?? 0) > 0 && <span className="ml-1.5 rounded-full bg-soft px-1.5 text-xs font-extrabold">{counter[x.id]}</span>}
             </button>
             </span>
           ))}
+         </div>
         </div>
       )}
 
       {data && tab === 'send' && (
-        <form className="grid items-start gap-5 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]" onSubmit={(e) => void send(e)} noValidate>
-          <section className="panel p-5"><NewsEditor value={text} onChange={setText} onCtrlEnter={() => void send()} /></section>
-
-          <div className="space-y-5 lg:sticky lg:top-4">
-            <NewsPreview text={text} />
-
-            <div className="panel space-y-3 p-5">
-              <h3 className="font-extrabold">{t('gn.servers')}</h3>
-              {supported.length === 0 && <p className="text-sm font-semibold text-mute">{t('gn.noServers')}</p>}
-              <ul className="divide-y divide-line">{withToken.map(serverRow)}</ul>
-              {bare.length > 0 && (
-                <>
-                  {showBare && <ul className="divide-y divide-line">{bare.map(serverRow)}</ul>}
-                  <button type="button" className="btn btn-ghost btn-sm" aria-expanded={showBare} onClick={() => setShowBare((v) => !v)}>
-                    {showBare ? t('gn.sv.less') : t('gn.sv.more', { n: bare.length })}
-                  </button>
-                </>
-              )}
-              {hiddenOther > 0 && <p className="text-sm font-semibold text-mute">{t('gn.hiddenOther', { n: hiddenOther })}</p>}
-              {supported.length > 0 && withToken.length === 0 && <p className="text-sm font-semibold text-mute">{t('gn.noPlugin')}</p>}
-              {withToken.length > 1 && (
-                <button type="button" className="chip-filter" onClick={() => setPicked(picked.length === withToken.length ? [] : withToken.map((s) => s.id))}>
-                  {picked.length === withToken.length ? t('gn.pickNone') : t('gn.pickAll')}
-                </button>
-              )}
-              <div className="flex flex-wrap items-center justify-end gap-3">
-                {sendHint && <span className="text-sm font-semibold text-mute">{sendHint}</span>}
-                <button type="submit" className="btn" disabled={!!problem || !picked.length || busy} title={t('gn.sendKey')}>{busy && <Spinner />}{t('gn.send')}</button>
-              </div>
-              {lastResult && (
-                <ul className="space-y-1 text-sm font-semibold">
-                  {lastResult.results.map((r) => (
-                    <li key={r.serverId} className={r.queued ? (r.online ? 'text-ok' : undefined) : 'text-danger'}>
-                      {r.queued ? '✓' : '✕'} {r.serverName}: {r.queued ? (r.online ? t('gn.r.queued') : t('gn.r.queuedSilent')) : r.error}
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          </div>
-        </form>
+        <SendTab
+          withToken={withToken} bare={bare} hiddenOther={hiddenOther} supportedCount={supported.length} latest={data.pluginLatest}
+          picked={picked} toggle={toggle} pickAll={() => setPicked(picked.length === withToken.length ? [] : withToken.map((x) => x.id))}
+          text={text} setText={setText} problem={problem} sendHint={sendHint} busy={busy} lastResult={lastResult}
+          showBare={showBare} setShowBare={setShowBare} onSend={(e) => void send(e)} onSetup={setSettingsFor} onTest={() => void quickTest()} onRestart={() => void quickRestart()}
+        />
       )}
 
       {data && tab === 'auto' && rd && <GameNewsRules servers={data.servers} rules={rd.rules} timezone={rd.timezone} reload={() => void loadRules()} />}
@@ -157263,39 +158096,32 @@ export default function GameNewsPage({ sub = '' }: { sub?: string }) {
           <div className="space-y-4" key={`${tab}-${scopeRev}`}>
             {effScope > 0 && data.servers.find((x) => x.id === effScope) && <ServerHead server={data.servers.find((x) => x.id === effScope)!} rd={rd} latest={data.pluginLatest} />}
             {serverTabs.length > 0 && <p className="text-sm font-semibold text-mute">{effScope ? t('gn.sc.noteOne') : t('gn.sc.noteAll')}</p>}
-            <WelcomeCard initial={rd.welcome} />
-            <JoinLeaveCard initial={rd.joinLeave} />
-            <RegisterCard initial={rd.register} />
-            <ServerRestartCard />
-            {!effScope && <RestartCard enabled={rd.restartCountdown} onChange={(v) => { api('/game-news/restart-countdown', 'PUT', { enabled: v }).then(() => loadRules()).catch((e: Error) => toast(errText(e), 'err')); }} />}
-            <ChatCard initial={rd.chat} joinText={rd.joinLeave.joinText} leaveText={rd.joinLeave.leaveText} />
-            {!effScope && <ExtrasCard initial={rd.extras} />}
+            <SubTabs
+              label={t('gn.in.title')}
+              value={inner}
+              onChange={pickInner}
+              items={[{ id: 'players', label: t('gn.in.players') }, { id: 'restart', label: t('gn.in.restart') }, { id: 'discord', label: t('gn.in.discord') }]}
+            />
+            {inner === 'players' && (
+              <div className="space-y-4">
+                <ScopedCard part="welcome" title={t('gn.w.title')}><WelcomeCard initial={rd.welcome} /></ScopedCard>
+                <ScopedCard part="joinleave" title={t('gn.jl.title')}><JoinLeaveCard initial={rd.joinLeave} /></ScopedCard>
+                <ScopedCard part="register" title={t('gn.rg.title')}><RegisterCard initial={rd.register} /></ScopedCard>
+                <ScopedCard part="kick" title={t('gn.kk.title')}><KickCard initial={rd.kick} /></ScopedCard>
+                {!effScope && <ExtrasCard initial={rd.extras} />}
+              </div>
+            )}
+            {inner === 'restart' && (
+              <ServerRestartCard countdown={!effScope ? { enabled: rd.restartCountdown, onChange: (v) => { api('/game-news/restart-countdown', 'PUT', { enabled: v }).then(() => loadRules()).catch((e: Error) => toast(errText(e), 'err')); } } : undefined} />
+            )}
+            {inner === 'discord' && <ScopedCard part="chat" title={t('gn.ch.title')}><ChatCard initial={rd.chat} joinText={rd.joinLeave.joinText} leaveText={rd.joinLeave.leaveText} kickText={rd.kick.template} /></ScopedCard>}
           </div>
         </ScopeContext.Provider>
       )}
 
-      {data && tab === 'history' && (
-        <section className="panel overflow-hidden">
-          <h3 className="px-5 pt-4 font-extrabold">{t('gn.history')}</h3>
-          {data.log.length === 0 && <p className="px-5 py-4 text-sm font-semibold text-mute">{t('gn.historyEmpty')}</p>}
-          <ul className="divide-y divide-line">
-            {data.log.map((r) => (
-              <li key={r.id} className="flex flex-wrap items-start gap-x-4 gap-y-1 px-5 py-3">
-                <div className="min-w-0 flex-1 basis-60">
-                  <div className="flex flex-wrap items-center gap-2 text-sm font-bold">
-                    <span className={STATUS[r.status].cls}>{t(STATUS[r.status].text)}</span>
-                    <span>{r.serverName}</span>
-                    <span className="font-semibold text-mute">{soon(r.sentAt)} · {r.sentBy || '—'}</span>
-                  </div>
-                  <p className="mt-1 wrap-break-word text-sm"><Styled text={r.text} /></p>
-                  {(r.status === 'failed' || r.status === 'expired') && r.error && <p className="text-sm font-semibold text-danger">{r.error}</p>}
-                </div>
-                <button type="button" className="btn btn-soft btn-sm" onClick={() => { setText(r.text); goTab('send'); }}>{t('gn.reuse')}</button>
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
+      {data && tab === 'players' && <LinksTab />}
+
+      {data && tab === 'journal' && <JournalTab onReuse={(x) => { setText(x); goTab('send'); }} />}
 
       {settingsServer && <PluginModal server={settingsServer} onClose={() => setSettingsFor(null)} onChanged={() => void loadMain()} />}
     </AdminPage>
@@ -157376,10 +158202,12 @@ import { ChatLines, NewsEditor, NewsPreview } from '../components/NewsEditor';
 import { confirmDialog } from '../confirm';
 import { t, useI18n } from '../i18n';
 import {
-  ANSI_COLORS, CHAT_KINDS, CHAT_PRESETS, SWATCHES, commandLine, WELCOME_STYLES, WELCOME_VARIABLES, composeLine, isHex, validateNews,
-  type AnsiColor, type ChatColors, type ChatKind, type ChatSettings, type Extras, type JoinLeave, type RegisterSettings, type Welcome, type WelcomeStyle,
+  ANSI_COLORS, CHAT_KINDS, CHAT_PRESETS, SWATCHES, commandLine, kickLine, DEFAULT_KICK, WELCOME_STYLES, WELCOME_VARIABLES, composeLine, isHex, validateNews,
+  type AnsiColor, type ChatColors, type ChatKind, type ChatSettings, type Extras, type JoinLeave, type KickSettings, type RegisterSettings, type Welcome, type WelcomeStyle,
 } from '../gameNews';
 import { ScopeNote, useScope } from './GameNewsScope';
+import { WithPreview } from './GameNewsUi';
+import { ChannelName, ChannelPicker } from '../components/ChannelPicker';
 import { Field, SaveBadge, errText, toast, useAutosave } from '../ui';
 
 const onOff = (b: boolean) => (b ? t('gn.f.on') : t('gn.f.off'));
@@ -157589,13 +158417,13 @@ export function RegisterCard({ initial }: { initial: RegisterSettings }) {
     delay: 900,
     validate: (v) => {
       if (!Number.isInteger(v.discordEveryHours) || v.discordEveryHours < 1 || v.discordEveryHours > 720) return t('gn.rg.badHours');
-      return [v.promptText, v.doneText, v.discordText, v.pendingText, v.loginText, v.rankText].some((x) => !x.trim()) ? t('gn.hint.text') : null;
+      return [v.promptText, v.doneText, v.discordText, v.pendingText, v.loginText, v.nickTakenText, v.autoLoginText, v.lastSeenText, v.rankText].some((x) => !x.trim()) ? t('gn.hint.text') : null;
     },
     save: async (v) => { await api(`/game-news/register-settings${sc.q}`, 'PUT', v); setSaved(v); sc.changed(); },
   });
   const sample = (text: string, color: string) => commandLine(color, text.replace(/\{login\}/g, 'WhiteLegioN').replace(/\{panel\}/g, 'coregsm.example.com'));
 
-  const field = (label: string, key: 'promptText' | 'doneText' | 'discordText' | 'pendingText' | 'loginText') => (
+  const field = (label: string, key: 'promptText' | 'doneText' | 'discordText' | 'pendingText' | 'loginText' | 'nickTakenText' | 'autoLoginText' | 'lastSeenText') => (
     <Field label={label}>
       <AutoText value={f[key]} maxLength={300} onChange={(e) => set(key, e.target.value)} />
     </Field>
@@ -157623,7 +158451,19 @@ export function RegisterCard({ initial }: { initial: RegisterSettings }) {
         {field(t('gn.rg.discord'), 'discordText')}
         {field(t('gn.rg.pending'), 'pendingText')}
         {field(t('gn.rg.login'), 'loginText')}
+        {field(t('gn.rg.nickTaken'), 'nickTakenText')}
       </div>
+
+      <label className="flex items-center gap-3 font-bold">
+        <Switch checked={f.autoLoginEnabled} onChange={(v) => set('autoLoginEnabled', v)} />
+        {t('gn.rg.autoOn')}
+      </label>
+      {f.autoLoginEnabled && field(t('gn.rg.auto'), 'autoLoginText')}
+      <label className="flex items-center gap-3 font-bold">
+        <Switch checked={f.lastSeenEnabled} onChange={(v) => set('lastSeenEnabled', v)} />
+        {t('gn.rg.lastOn')}
+      </label>
+      {f.lastSeenEnabled && field(t('gn.rg.last'), 'lastSeenText')}
 
       <label className="flex items-center gap-3 font-bold">
         <Switch checked={f.rankEnabled} onChange={(v) => set('rankEnabled', v)} />
@@ -157640,9 +158480,110 @@ export function RegisterCard({ initial }: { initial: RegisterSettings }) {
       </Field>
 
       <VarChips vars={[{ name: 'login', example: 'WhiteLegioN' }, { name: 'panel', example: 'coregsm.example.ru' }]} onPick={(v) => set('promptText', `${f.promptText} ${v}`.trim())} />
-      <ChatLines lines={[sample(f.promptText, '#FFCC33'), sample(f.doneText, '#5FD068'), sample(f.loginText, '#5FD068'), ...(f.rankEnabled ? [`<color=#5FD068>${f.rankText.replace(/[<>]/g, '').replace(/\{name\}/g, 'WhiteLegioN').replace(/\{rank\}/g, 'Охотник на кровь').replace(/\{hours\}/g, '42').replace(/\{next\}/g, ' · до «Страж замка» ещё 28 ч')}</color>`] : []), sample(f.discordText, '#6EC1FF')]} />
+      <ChatLines lines={[sample(f.promptText, '#FFCC33'), sample(f.doneText, '#5FD068'), sample(f.loginText, '#5FD068'), sample(f.nickTakenText.replace(/\{name\}/g, 'WhiteLegioN'), '#FFCC33'), ...(f.autoLoginEnabled ? [sample(f.autoLoginText, '#5FD068')] : []), ...(f.lastSeenEnabled ? [sample(f.lastSeenText.replace(/\{name\}/g, 'WhiteLegioN').replace(/\{date\}/g, '10.12.2026').replace(/\{time\}/g, '10:00'), '#FFCC33')] : []), ...(f.rankEnabled ? [`<color=#5FD068>${f.rankText.replace(/[<>]/g, '').replace(/\{name\}/g, 'WhiteLegioN').replace(/\{rank\}/g, 'Охотник на кровь').replace(/\{hours\}/g, '42').replace(/\{next\}/g, ' · до «Страж замка» ещё 28 ч')}</color>`] : []), sample(f.discordText, '#6EC1FF')]} />
       <p className="text-sm font-semibold text-mute">{t('gn.rg.vars')}</p>
       <p className="text-sm font-semibold text-danger">{t('gn.rg.warn')}</p>
+      {auto.invalid && <p className="text-sm font-semibold text-danger">{auto.error}</p>}
+    </FoldCard>
+  );
+}
+
+/**
+ * The .kick command of the game: how it reads in the chat (words and colours of the nickname, the reason and the administrator),
+ * what it asks for (a reason, a pause between kicks) and what it refuses (to kick an administrator). Everything is set here.
+ */
+export function KickCard({ initial }: { initial: KickSettings }) {
+  useI18n();
+  const sc = useScope();
+  const [f, setF] = useState<KickSettings>(initial);
+  const [saved, setSaved] = useState<KickSettings>(initial);
+  const set = <K extends keyof KickSettings>(k: K, v: KickSettings[K]) => setF((x) => ({ ...x, [k]: v }));
+  const auto = useAutosave({
+    value: f,
+    saved,
+    delay: 900,
+    validate: (v) => {
+      if (!v.template.trim() || !v.defaultReason.trim()) return t('gn.hint.text');
+      if (![v.textColor, v.nameColor, v.reasonColor, v.adminColor].every(isHex)) return t('gn.jl.badColor');
+      return null;
+    },
+    save: async (v) => { await api(`/game-news/kick-settings${sc.q}`, 'PUT', v); setSaved(v); sc.changed(); },
+  });
+  const safe = (v: KickSettings): KickSettings => ({ ...v, textColor: isHex(v.textColor) ? v.textColor : DEFAULT_KICK.textColor, nameColor: isHex(v.nameColor) ? v.nameColor : DEFAULT_KICK.nameColor, reasonColor: isHex(v.reasonColor) ? v.reasonColor : DEFAULT_KICK.reasonColor, adminColor: isHex(v.adminColor) ? v.adminColor : DEFAULT_KICK.adminColor });
+  const sample = (reason: string) => kickLine(safe(f), 'WhiteLegioN', reason, 'Админ');
+  const [pickLog, setPickLog] = useState(false);
+
+  return (
+    <FoldCard
+      id="kick"
+      title={t('gn.kk.title')}
+      summary={f.enabled ? t('gn.kk.sumOn') : t('gn.kk.sumOff')}
+      on={f.enabled}
+      status={<SaveBadge status={auto.status} error={auto.error} retry={auto.retry} />}
+    >
+      <ScopeNote part="kick" />
+      <p className="text-sm font-semibold text-mute">{t('gn.kk.note')}</p>
+
+      <label className="flex items-center gap-3 font-bold">
+        <Switch checked={f.enabled} onChange={(v) => set('enabled', v)} />
+        {t('gn.kk.enabled')}
+      </label>
+
+      <WithPreview
+        preview={(
+          <>
+            <ChatLines lines={f.announce ? [sample('спам'), sample(f.defaultReason)] : []} />
+            {!f.announce && <p className="text-sm font-semibold text-mute">{t('gn.kk.quiet')}</p>}
+          </>
+        )}
+      >
+        <Field label={t('gn.kk.template')}>
+          <AutoText value={f.template} maxLength={300} onChange={(e) => set('template', e.target.value)} />
+        </Field>
+        <VarChips
+          vars={[{ name: 'name', example: 'WhiteLegioN' }, { name: 'reason', example: 'спам' }, { name: 'admin', example: 'Админ' }]}
+          onPick={(v) => set('template', `${f.template} ${v}`.trim())}
+        />
+        <div className="grid gap-4 sm:grid-cols-2">
+          <ColorField label={t('gn.kk.textColor')} value={f.textColor} gameHex={DEFAULT_KICK.textColor} onChange={(v) => set('textColor', v)} />
+          <ColorField label={t('gn.kk.nameColor')} value={f.nameColor} gameHex={DEFAULT_KICK.nameColor} onChange={(v) => set('nameColor', v)} />
+          <ColorField label={t('gn.kk.reasonColor')} value={f.reasonColor} gameHex={DEFAULT_KICK.reasonColor} onChange={(v) => set('reasonColor', v)} />
+          <ColorField label={t('gn.kk.adminColor')} value={f.adminColor} gameHex={DEFAULT_KICK.adminColor} onChange={(v) => set('adminColor', v)} />
+        </div>
+      </WithPreview>
+
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Field label={t('gn.kk.defaultReason')}>
+          <input className="input" value={f.defaultReason} maxLength={100} onChange={(e) => set('defaultReason', e.target.value)} />
+        </Field>
+        <Field label={t('gn.kk.cooldown')}>
+          <input className="input w-32" type="number" min={0} max={3600} value={f.cooldownSec} onChange={(e) => set('cooldownSec', Number(e.target.value))} />
+        </Field>
+      </div>
+
+      <div className="space-y-2 rounded-xl border border-line px-4 py-3">
+        <div className="font-extrabold">{t('gn.kk.logTitle')}</div>
+        <p className="text-sm font-semibold text-mute">{t('gn.kk.logNote')}</p>
+        <div className="flex flex-wrap items-center gap-2">
+          {f.logChannelId ? <ChannelName id={f.logChannelId} /> : <span className="pill pill-mute">{t('gn.kk.logNone')}</span>}
+          <button type="button" className="btn btn-soft btn-sm" onClick={() => setPickLog((v) => !v)}>{f.logChannelId ? t('gn.kk.logChange') : t('gn.kk.logPick')}</button>
+          {f.logChannelId && <button type="button" className="btn btn-ghost btn-sm" onClick={() => set('logChannelId', '')}>{t('gn.kk.logOff')}</button>}
+        </div>
+        {pickLog && <ChannelPicker id="kick-log" value={f.logChannelId} onChange={(v) => { if (/^\d{15,25}$/.test(v)) { set('logChannelId', v); setPickLog(false); } }} />}
+      </div>
+
+      <div className="space-y-2">
+        {([
+          ['requireReason', 'gn.kk.requireReason', 'gn.kk.requireReasonNote'],
+          ['protectAdmins', 'gn.kk.protect', 'gn.kk.protectNote'],
+          ['announce', 'gn.kk.announce', 'gn.kk.announceNote'],
+        ] as const).map(([key, label, note]) => (
+          <label key={key} className="flex items-start gap-3 font-bold">
+            <Switch className="mt-0.5" checked={f[key]} onChange={(v) => set(key, v)} />
+            <span>{t(label)}<span className="block text-sm font-semibold text-mute">{t(note)}</span></span>
+          </label>
+        ))}
+      </div>
       {auto.invalid && <p className="text-sm font-semibold text-danger">{auto.error}</p>}
     </FoldCard>
   );
@@ -157682,7 +158623,7 @@ function AnsiSelect({ value, onChange, label }: { value: AnsiColor; onChange: (v
 }
 
 /** the sample lines of the chat as Discord will draw them (colours of the ansi block) */
-function DiscordPreview({ colors, joinText, leaveText, showTime, sender }: { colors: Record<ChatKind, ChatColors>; joinText: string; leaveText: string; showTime: boolean; sender: string }) {
+function DiscordPreview({ colors, joinText, leaveText, kickText, showTime, sender }: { colors: Record<ChatKind, ChatColors>; joinText: string; leaveText: string; kickText: string; showTime: boolean; sender: string }) {
   const nick = 'WhiteLegioN';
   const clock = new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
   const name = sender.trim() || t('gn.ch.webhookName');
@@ -157708,6 +158649,18 @@ function DiscordPreview({ colors, joinText, leaveText, showTime, sender }: { col
       </p>
     );
   };
+  // a kick: the words red, the nickname green, the reason (the «tag» colour) yellow
+  const kick = () => (
+    <p key="kick" className="wrap-break-word">
+      {showTime && <span style={{ color: ANSI_CSS[colors.kick.text] }}>[{clock}] </span>}
+      {kickText.replace(/[<>]/g, '').split(/(\{(?:name|reason|admin)\})/).filter(Boolean).map((p, i) => (
+        p === '{name}' ? <span key={i} style={{ color: ANSI_CSS[colors.kick.name], fontWeight: 800 }}>{nick}</span>
+          : p === '{reason}' ? <span key={i} style={{ color: ANSI_CSS[colors.kick.tag], fontWeight: 800 }}>{t('gn.kk.sampleReason')}</span>
+            : p === '{admin}' ? <span key={i} style={{ color: ANSI_CSS.cyan, fontWeight: 800 }}>{t('gn.kk.sampleAdmin')}</span>
+              : <span key={i} style={{ color: ANSI_CSS[colors.kick.text] }}>{p}</span>
+      ))}
+    </p>
+  );
   // a message of a webhook as Discord draws it: a round picture, the name with the «БОТ» mark, the time, the code block
   return (
     <div className="flex gap-3 rounded-lg p-3" style={{ background: '#313338', color: '#dbdee1' }} aria-label={t('gn.ch.look')}>
@@ -157726,6 +158679,7 @@ function DiscordPreview({ colors, joinText, leaveText, showTime, sender }: { col
           {chat('local', t('gn.ch.label.local'), 'Кто рядом?')}
           {event('join', joinText)}
           {event('leave', leaveText)}
+          {kick()}
         </div>
       </div>
     </div>
@@ -157737,7 +158691,7 @@ function DiscordPreview({ colors, joinText, leaveText, showTime, sender }: { col
  * line that goes there and how the lines look (the colours of the game, or plain). The address is a secret: it is sent
  * to the panel and never shown again (only «set» and the tail).
  */
-export function ChatCard({ initial, joinText, leaveText }: { initial: ChatSettings; joinText: string; leaveText: string }) {
+export function ChatCard({ initial, joinText, leaveText, kickText }: { initial: ChatSettings; joinText: string; leaveText: string; kickText: string }) {
   useI18n();
   const sc = useScope();
   const [st, setSt] = useState<ChatSettings>(initial);
@@ -157914,7 +158868,7 @@ export function ChatCard({ initial, joinText, leaveText }: { initial: ChatSettin
                 </tbody>
               </table>
             </div>
-            <DiscordPreview colors={look.colors} joinText={joinText} leaveText={leaveText} showTime={look.showTime} sender={look.senderName} />
+            <DiscordPreview colors={look.colors} joinText={joinText} leaveText={leaveText} kickText={kickText} showTime={look.showTime} sender={look.senderName} />
             <p className="text-sm font-semibold text-mute">{t('gn.ch.ansiNote')}</p>
           </>
         )}
@@ -157957,6 +158911,279 @@ export function ExtrasCard({ initial }: { initial: Extras }) {
       </Field>
       {auto.invalid && <p className="text-sm font-semibold text-danger">{auto.error}</p>}
     </FoldCard>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/pages"
+  cat > "$APP_DIR/core-frontend/src/pages/GameNewsJournal.tsx" << '__COREGSM_EOF__'
+import { useState } from 'react';
+import { api } from '../api';
+import { soon } from '../components/GameNewsParts';
+import { Styled } from '../components/NewsEditor';
+import { t, useI18n } from '../i18n';
+import { usePoll } from '../ui';
+import { EmptyState, SubTabs } from './GameNewsUi';
+
+type Kind = 'message' | 'auto' | 'discord' | 'restart' | 'link' | 'kick';
+interface Entry { id: string; ts: number; kind: Kind; serverId: number | null; serverName: string; text: string; status: string; error: string; by: string }
+
+const FILTERS = ['all', 'message', 'auto', 'discord', 'restart', 'link', 'kick'] as const;
+type Filter = (typeof FILTERS)[number];
+
+const KIND_ICON: Record<Kind, string> = { message: '✉', auto: '⟳', discord: '💬', restart: '♻', link: '🔗', kick: '🚪' };
+
+const MSG_STATUS: Record<string, { text: 'gn.h.queued' | 'gn.h.ok' | 'gn.h.expired' | 'gn.h.fail'; cls: string }> = {
+  queued: { text: 'gn.h.queued', cls: 'pill pill-mute' },
+  delivered: { text: 'gn.h.ok', cls: 'pill pill-ok' },
+  expired: { text: 'gn.h.expired', cls: 'pill pill-warn' },
+  failed: { text: 'gn.h.fail', cls: 'pill pill-warn' },
+};
+const RESTART_STATUS: Record<string, { text: 'gn.rr.o.counting' | 'gn.rr.o.done' | 'gn.rr.o.cancelled' | 'gn.rr.o.missed' | 'gn.rr.o.replaced'; cls: string }> = {
+  counting: { text: 'gn.rr.o.counting', cls: 'pill pill-warn' },
+  done: { text: 'gn.rr.o.done', cls: 'pill pill-ok' },
+  cancelled: { text: 'gn.rr.o.cancelled', cls: 'pill pill-mute' },
+  missed: { text: 'gn.rr.o.missed', cls: 'pill pill-warn' },
+  replaced: { text: 'gn.rr.o.replaced', cls: 'pill pill-mute' },
+};
+const LINK_TEXT: Record<string, 'gn.jn.reg' | 'gn.jn.login' | 'gn.jn.unlink'> = { game_register: 'gn.jn.reg', game_login: 'gn.jn.login', game_unlink: 'gn.jn.unlink' };
+
+/** everything the plugin did in one list: messages (by hand, by a rule, from Discord), restarts, linked players */
+export function JournalTab({ onReuse }: { onReuse: (text: string) => void }) {
+  useI18n();
+  const [filter, setFilter] = useState<Filter>('all');
+  const [items, setItems] = useState<Entry[] | null>(null);
+  usePoll(() => api<{ items: Entry[] }>(`/game-news/journal?kind=${filter}`).then((d) => setItems(d.items)).catch(() => undefined), 10_000);
+  // the first read of a new filter shows the old list for a moment: it is replaced at once
+  const pick = (f: Filter) => { setFilter(f); setItems(null); };
+
+  return (
+    <section className="panel space-y-3 p-5">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h3 className="font-extrabold">{t('gn.jn.title')}</h3>
+      </div>
+      <SubTabs label={t('gn.jn.title')} value={filter} onChange={pick} items={FILTERS.map((f) => ({ id: f, label: t(`gn.jn.f.${f}` as 'gn.jn.f.all') }))} />
+      {items == null && <div className="skeleton h-24 rounded-xl" aria-busy="true" />}
+      {items && items.length === 0 && <EmptyState icon="🗒" title={t('gn.jn.empty')} hint={t('gn.jn.emptyHint')} />}
+      {items && items.length > 0 && (
+        <ul className="divide-y divide-line">
+          {items.map((e) => (
+            <li key={e.id} className="flex flex-wrap items-start gap-x-4 gap-y-1 py-3">
+              <span aria-hidden className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-soft text-base" title={t(`gn.jn.f.${e.kind}` as 'gn.jn.f.all')}>{KIND_ICON[e.kind]}</span>
+              <div className="min-w-0 flex-1 basis-60">
+                <div className="flex flex-wrap items-center gap-2 text-sm font-bold">
+                  {e.kind === 'restart'
+                    ? <span className={RESTART_STATUS[e.status]?.cls ?? 'pill pill-mute'}>{RESTART_STATUS[e.status] ? t(RESTART_STATUS[e.status].text) : e.status}</span>
+                    : e.kind === 'kick'
+                      ? <span className="pill pill-warn">{t('gn.jn.kick')}</span>
+                      : e.kind === 'link'
+                      ? <span className="pill pill-ok">{LINK_TEXT[e.status] ? t(LINK_TEXT[e.status]) : e.status}</span>
+                      : <span className={MSG_STATUS[e.status]?.cls ?? 'pill pill-mute'}>{MSG_STATUS[e.status] ? t(MSG_STATUS[e.status].text) : e.status}</span>}
+                  {e.serverName && <span>{e.serverName}</span>}
+                  <span className="font-semibold text-mute">{soon(e.ts)}{e.by ? ` · ${e.by}` : ''}</span>
+                </div>
+                {e.kind === 'restart'
+                  ? <p className="mt-1 text-sm">{t('gn.jn.restartLine', { n: e.text })}</p>
+                  : e.kind === 'link' || e.kind === 'kick'
+                    ? <p className="mt-1 text-sm">{e.text}</p>
+                    : <p className="mt-1 wrap-break-word text-sm"><Styled text={e.text} /></p>}
+                {(e.status === 'failed' || e.status === 'expired') && e.error && <p className="text-sm font-semibold text-danger">{e.error}</p>}
+              </div>
+              {(e.kind === 'message' || e.kind === 'auto') && <button type="button" className="btn btn-soft btn-sm" onClick={() => onReuse(e.text)}>{t('gn.reuse')}</button>}
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/pages"
+  cat > "$APP_DIR/core-frontend/src/pages/GameNewsLinks.tsx" << '__COREGSM_EOF__'
+import { useState } from 'react';
+import { api } from '../api';
+import { soon } from '../components/GameNewsParts';
+import { confirmDialog } from '../confirm';
+import { t, useI18n } from '../i18n';
+import { errText, toast, usePoll } from '../ui';
+import { EmptyState } from './GameNewsUi';
+
+interface Link { platformId: string; masked: string; nick: string; username: string; status: string; discord: boolean; linkedAt: number }
+
+/** the players whose game account is linked to an account of the panel (by .register or .login), with a way to unlink one */
+export function LinksTab() {
+  useI18n();
+  const [items, setItems] = useState<Link[] | null>(null);
+  const [query, setQuery] = useState('');
+  const load = () => api<{ items: Link[] }>('/game-news/links').then((d) => setItems(d.items)).catch(() => undefined);
+  usePoll(load, 20_000);
+
+  const unlink = async (l: Link) => {
+    if (!(await confirmDialog({ title: t('gn.lk.unlinkTitle', { nick: l.nick || l.masked }), text: t('gn.lk.unlinkText', { user: l.username }), danger: true, confirmLabel: t('gn.lk.unlink') }))) return;
+    try { await api(`/game-news/links/${l.platformId}`, 'DELETE'); toast(t('gn.lk.unlinked')); await load(); } catch (e) { toast(errText(e as Error), 'err'); }
+  };
+  const q = query.trim().toLowerCase();
+  const list = (items ?? []).filter((l) => !q || l.nick.toLowerCase().includes(q) || l.username.toLowerCase().includes(q));
+
+  return (
+    <section className="panel space-y-3 p-5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h3 className="font-extrabold">{t('gn.lk.title')}</h3>
+          <p className="text-sm font-semibold text-mute">{t('gn.lk.note')}</p>
+        </div>
+        {items && items.length > 4 && <input className="input w-56" value={query} placeholder={t('gn.lk.search')} aria-label={t('gn.lk.search')} onChange={(e) => setQuery(e.target.value)} />}
+      </div>
+      {items == null && <div className="skeleton h-24 rounded-xl" aria-busy="true" />}
+      {items && items.length === 0 && <EmptyState icon="🔗" title={t('gn.lk.empty')} hint={t('gn.lk.emptyHint')} />}
+      {items && items.length > 0 && list.length === 0 && <p className="text-sm font-semibold text-mute">{t('gn.lk.none')}</p>}
+      {list.length > 0 && (
+        <ul className="divide-y divide-line">
+          {list.map((l) => (
+            <li key={l.platformId} className="flex flex-wrap items-center gap-x-4 gap-y-1 py-3">
+              <span aria-hidden className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-soft font-extrabold">{(l.nick || l.username).slice(0, 1).toUpperCase()}</span>
+              <div className="min-w-0 flex-1 basis-56">
+                <div className="wrap-break-word font-bold">{l.nick || '—'} <span className="font-semibold text-mute">→ {l.username}</span></div>
+                <div className="text-sm font-semibold text-mute">
+                  {l.masked} · {soon(l.linkedAt)}
+                  {l.discord && ` · ${t('gn.lk.discord')}`}
+                  {l.status !== 'active' && ` · ${t('gn.lk.pending')}`}
+                </div>
+              </div>
+              <button type="button" className="btn btn-ghost btn-sm" onClick={() => void unlink(l)}>{t('gn.lk.unlink')}</button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/pages"
+  cat > "$APP_DIR/core-frontend/src/pages/GameNewsRestartSchedule.tsx" << '__COREGSM_EOF__'
+import { useState } from 'react';
+import { api } from '../api';
+import { Switch } from '../components/Switch';
+import { soon } from '../components/GameNewsParts';
+import { confirmDialog } from '../confirm';
+import { t, useI18n } from '../i18n';
+import { Field, errText, toast, usePoll } from '../ui';
+import { EmptyState } from './GameNewsUi';
+
+export interface ScheduleItem { id: number; serverId: number; serverName: string; time: string; days: number[]; warnSec: number; enabled: boolean; next: number | null; skipped: boolean }
+interface Form { id: number | null; serverId: number; time: string; days: number[]; warnSec: number; enabled: boolean }
+
+/** Monday first, as a person reads a week: the numbers are those of the server (0 = Sunday) */
+const WEEK = [1, 2, 3, 4, 5, 6, 0] as const;
+const DAY_KEY = ['gn.rs.d0', 'gn.rs.d1', 'gn.rs.d2', 'gn.rs.d3', 'gn.rs.d4', 'gn.rs.d5', 'gn.rs.d6'] as const;
+const WARNS = [300, 600, 900, 1800];
+
+const daysText = (days: number[]): string => {
+  if (days.length === 0 || days.length === 7) return t('gn.rs.everyDay');
+  return WEEK.filter((d) => days.includes(d)).map((d) => t(DAY_KEY[d])).join(' · ');
+};
+
+/** Planned restarts through the plugin: «every day at 05:00». The warning in the chat is the same countdown as for a restart started by hand. */
+export function SchedulePanel({ servers, onlyServer }: { servers: { id: number; name: string }[]; onlyServer: number }) {
+  useI18n();
+  const [items, setItems] = useState<ScheduleItem[] | null>(null);
+  const [form, setForm] = useState<Form | null>(null);
+  const [busy, setBusy] = useState(false);
+  const load = () => api<{ items: ScheduleItem[] }>('/game-news/restart-schedule').then((d) => setItems(d.items)).catch(() => undefined);
+  usePoll(load, 15_000);
+
+  const blank = (): Form => ({ id: null, serverId: onlyServer, time: '05:00', days: [], warnSec: 600, enabled: true });
+  const run = async (fn: () => Promise<unknown>, ok?: string) => {
+    setBusy(true);
+    try { await fn(); if (ok) toast(ok, 'ok'); await load(); } catch (e) { toast(errText(e as Error), 'err'); } finally { setBusy(false); }
+  };
+  const save = () => {
+    if (!form) return;
+    const body = { serverId: form.serverId, time: form.time, days: form.days, warnSec: form.warnSec, enabled: form.enabled };
+    void run(async () => {
+      if (form.id == null) await api('/game-news/restart-schedule', 'POST', body); else await api(`/game-news/restart-schedule/${form.id}`, 'PUT', body);
+      setForm(null);
+    }, t('gn.rs.saved'));
+  };
+  const toggle = (i: ScheduleItem, enabled: boolean) => run(() => api(`/game-news/restart-schedule/${i.id}`, 'PUT', { serverId: i.serverId, time: i.time, days: i.days, warnSec: i.warnSec, enabled }));
+  const skip = (i: ScheduleItem) => run(() => api(`/game-news/restart-schedule/${i.id}/skip`, 'POST', { skip: !i.skipped }));
+  const remove = async (i: ScheduleItem) => {
+    if (!(await confirmDialog({ title: t('gn.rs.deleteTitle', { time: i.time }), danger: true, confirmLabel: t('gn.rs.delete') }))) return;
+    await run(() => api(`/game-news/restart-schedule/${i.id}`, 'DELETE'));
+  };
+
+  // on a server's page only its own schedules (and those for all servers) are shown
+  const list = (items ?? []).filter((i) => !onlyServer || i.serverId === 0 || i.serverId === onlyServer);
+
+  return (
+    <div className="space-y-3">
+      <p className="text-sm font-semibold text-mute">{t('gn.rs.note')}</p>
+
+      {items && list.length === 0 && !form && (
+        <EmptyState icon="⏰" title={t('gn.rs.empty')} hint={t('gn.rs.emptyHint')} action={<button type="button" className="btn btn-sm" onClick={() => setForm(blank())}>{t('gn.rs.add')}</button>} />
+      )}
+
+      <ul className="space-y-2">
+        {list.map((i) => (
+          <li key={i.id} className={`flex flex-wrap items-center gap-x-4 gap-y-2 rounded-xl border border-line px-4 py-3 ${i.enabled ? '' : 'opacity-70'}`}>
+            <span className="text-2xl font-extrabold tabular-nums">{i.time}</span>
+            <div className="min-w-0 flex-1 basis-52">
+              <div className="font-bold">{daysText(i.days)} · {i.serverId ? i.serverName : t('gn.rs.allServers')}</div>
+              <div className="text-sm font-semibold text-mute">
+                {t('gn.rs.warn', { n: i.warnSec / 60 })}
+                {i.enabled && i.next && ` · ${i.skipped ? t('gn.rs.skipped') : t('gn.rs.next', { time: soon(i.next) })}`}
+              </div>
+            </div>
+            <div className="ml-auto flex flex-wrap items-center gap-2">
+              {i.enabled && i.next && <button type="button" className="btn btn-ghost btn-sm" disabled={busy} onClick={() => void skip(i)}>{i.skipped ? t('gn.rs.unskip') : t('gn.rs.skip')}</button>}
+              <button type="button" className="btn btn-ghost btn-sm" onClick={() => setForm({ id: i.id, serverId: i.serverId, time: i.time, days: i.days, warnSec: i.warnSec, enabled: i.enabled })}>{t('gn.rs.edit')}</button>
+              <button type="button" className="btn btn-ghost btn-sm" disabled={busy} onClick={() => void remove(i)}>{t('gn.rs.delete')}</button>
+              <Switch checked={i.enabled} disabled={busy} onChange={(v) => void toggle(i, v)} aria-label={t('gn.rs.enabled')} />
+            </div>
+          </li>
+        ))}
+      </ul>
+
+      {form ? (
+        <div className="space-y-3 rounded-xl border border-line px-4 py-4">
+          <div className="flex flex-wrap items-end gap-3">
+            <Field label={t('gn.rs.time')}>
+              <input className="input w-32" type="time" value={form.time} onChange={(e) => setForm({ ...form, time: e.target.value })} />
+            </Field>
+            {!onlyServer && (
+              <Field label={t('gn.rs.server')}>
+                <select className="input" value={form.serverId} onChange={(e) => setForm({ ...form, serverId: Number(e.target.value) })}>
+                  <option value={0}>{t('gn.rs.allServers')}</option>
+                  {servers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                </select>
+              </Field>
+            )}
+            <Field label={t('gn.rs.warnLabel')}>
+              <select className="input" value={form.warnSec} onChange={(e) => setForm({ ...form, warnSec: Number(e.target.value) })}>
+                {WARNS.map((w) => <option key={w} value={w}>{t('gn.rs.warn', { n: w / 60 })}</option>)}
+              </select>
+            </Field>
+          </div>
+          <div className="space-y-1.5">
+            <span className="text-sm font-bold">{t('gn.rs.daysLabel')}</span>
+            <div className="flex flex-wrap gap-2" role="group" aria-label={t('gn.rs.daysLabel')}>
+              {WEEK.map((d) => (
+                <button key={d} type="button" aria-pressed={form.days.includes(d)} className={`chip-filter ${form.days.includes(d) ? 'on' : ''}`}
+                  onClick={() => setForm({ ...form, days: form.days.includes(d) ? form.days.filter((x) => x !== d) : [...form.days, d] })}>
+                  {t(DAY_KEY[d])}
+                </button>
+              ))}
+            </div>
+            <p className="text-sm font-semibold text-mute">{t('gn.rs.daysHint')}</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" className="btn btn-sm" disabled={busy || !/^\d{2}:\d{2}$/.test(form.time)} onClick={save}>{t('gn.rs.save')}</button>
+            <button type="button" className="btn btn-ghost btn-sm" onClick={() => setForm(null)}>{t('common.cancel')}</button>
+          </div>
+        </div>
+      ) : (
+        list.length > 0 && <button type="button" className="btn btn-soft btn-sm" onClick={() => setForm(blank())}>{t('gn.rs.add')}</button>
+      )}
+    </div>
   );
 }
 __COREGSM_EOF__
@@ -158231,19 +159458,146 @@ export const ScopeContext = createContext<Scope>({ server: 0, q: '', mine: null,
 export const useScope = () => useContext(ScopeContext);
 
 /** the keys of the settings of the server, by the name of the part */
-const KEY: Record<string, string> = { welcome: 'gamenews_welcome', joinleave: 'gamenews_joinleave', register: 'gamenews_register', chat: 'gamenews_chat', restart: 'gamenews_restart_texts' };
+export const SCOPE_KEYS: Record<string, string> = { welcome: 'gamenews_welcome', joinleave: 'gamenews_joinleave', register: 'gamenews_register', chat: 'gamenews_chat', restart: 'gamenews_restart_texts', kick: 'gamenews_kick' };
 
 /** inside a card of a server: «uses the general settings» or «own settings» with a way back */
-export function ScopeNote({ part }: { part: keyof typeof KEY }) {
+export function ScopeNote({ part }: { part: keyof typeof SCOPE_KEYS }) {
   useI18n();
   const s = useScope();
   if (!s.server || !s.mine) return null;
-  const own = !!s.mine[KEY[part]];
+  const own = !!s.mine[SCOPE_KEYS[part]];
   return (
     <div className={`flex flex-wrap items-center gap-3 rounded-xl border px-3 py-2 text-sm font-semibold ${own ? 'border-accent' : 'border-line text-mute'}`}>
       <span className="min-w-0 flex-1 basis-60">{own ? t('gn.sc.own') : t('gn.sc.inherit')}</span>
       {own && <button type="button" className="btn btn-ghost btn-sm" onClick={() => s.reset(part)}>{t('gn.sc.reset')}</button>}
     </div>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/pages"
+  cat > "$APP_DIR/core-frontend/src/pages/GameNewsSend.tsx" << '__COREGSM_EOF__'
+import type { FormEvent } from 'react';
+import { NewsEditor, NewsPreview } from '../components/NewsEditor';
+import { t, useI18n } from '../i18n';
+import { versionLess, type NewsSendResult, type NewsServerInfo } from '../gameNews';
+import { Spinner } from '../ui';
+import { EmptyState } from './GameNewsUi';
+
+export interface SendProps {
+  withToken: NewsServerInfo[];
+  bare: NewsServerInfo[];
+  hiddenOther: number;
+  supportedCount: number;
+  latest: string;
+  picked: number[];
+  toggle: (id: number) => void;
+  pickAll: () => void;
+  text: string;
+  setText: (v: string) => void;
+  problem: string | null;
+  sendHint: string;
+  busy: boolean;
+  lastResult: NewsSendResult | null;
+  showBare: boolean;
+  setShowBare: (v: boolean) => void;
+  onSend: (e?: FormEvent) => void;
+  onSetup: (id: number) => void;
+  onTest: () => void;
+  onRestart: () => void;
+}
+
+/** the «Отправить» tab: the editor and its preview, the servers as chips, quick actions and the send button that stays in reach on a phone */
+export function SendTab(p: SendProps) {
+  useI18n();
+  const allPicked = p.withToken.length > 0 && p.picked.length === p.withToken.length;
+
+  return (
+    <form className="grid items-start gap-5 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]" onSubmit={(e) => p.onSend(e)} noValidate>
+      <section className="panel space-y-4 p-5">
+        <div className="flex flex-wrap items-center gap-2" role="group" aria-label={t('gn.q.title')}>
+          <span className="text-sm font-bold text-mute">{t('gn.q.title')}</span>
+          <button type="button" className="chip-filter gap-1.5" disabled={p.picked.length === 0 || p.busy} onClick={p.onTest} title={t('gn.q.testNote')}><span aria-hidden>⚡</span>{t('gn.q.test')}</button>
+          <button type="button" className="chip-filter gap-1.5" disabled={p.picked.length === 0 || p.busy} onClick={p.onRestart} title={t('gn.q.restartNote')}><span aria-hidden>♻</span>{t('gn.q.restart')}</button>
+        </div>
+        <NewsEditor value={p.text} onChange={p.setText} onCtrlEnter={() => p.onSend()} />
+      </section>
+
+      <div className="space-y-5 lg:sticky lg:top-4">
+        <NewsPreview text={p.text} />
+
+        <div className="panel space-y-3 p-5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h3 className="font-extrabold">{t('gn.servers')}</h3>
+            {p.withToken.length > 1 && (
+              <button type="button" className="btn btn-ghost btn-sm" onClick={p.pickAll}>{allPicked ? t('gn.pickNone') : t('gn.pickAll')}</button>
+            )}
+          </div>
+
+          {p.supportedCount === 0 && <p className="text-sm font-semibold text-mute">{t('gn.noServers')}</p>}
+          {p.supportedCount > 0 && p.withToken.length === 0 && (
+            <EmptyState icon="🔌" title={t('gn.noPlugin')} hint={t('gn.q.connectHint')} />
+          )}
+
+          <div className="flex flex-wrap gap-2" role="group" aria-label={t('gn.servers')}>
+            {p.withToken.map((s) => {
+              const on = p.picked.includes(s.id);
+              const old = s.online && versionLess(s.pluginVersion, p.latest);
+              return (
+                <span key={s.id} className={`inline-flex max-w-full items-stretch overflow-hidden rounded-full border ${on ? 'border-ink' : 'border-line'}`}>
+                  <button
+                    type="button" aria-pressed={on}
+                    className={`flex min-w-0 items-center gap-2 px-3 py-1.5 text-sm font-bold ${on ? 'bg-soft' : ''}`}
+                    title={s.online ? (old ? t('gn.plugin.outdated', { v: s.pluginVersion || '?', latest: p.latest }) : t('gn.plugin.online')) : t('gn.q.offlineNote')}
+                    onClick={() => p.toggle(s.id)}
+                  >
+                    <span aria-hidden className={`inline-block h-2 w-2 shrink-0 rounded-full ${!s.online ? 'bg-mute' : old ? 'bg-warn' : 'bg-ok'}`} />
+                    <span className="min-w-0 wrap-break-word text-left">{s.name}</span>
+                    {s.players != null && <span className="shrink-0 rounded-full bg-soft px-1.5 text-xs font-extrabold">{s.players}</span>}
+                    {on && <span aria-hidden className="shrink-0">✓</span>}
+                  </button>
+                  <button type="button" className="border-l border-line px-2 text-mute hover:text-ink" aria-label={t('gn.plugin.settings', { name: s.name })} title={t('gn.sv.setup')} onClick={() => p.onSetup(s.id)}>⚙</button>
+                </span>
+              );
+            })}
+          </div>
+
+          {p.bare.length > 0 && (
+            <div className="space-y-2">
+              <button type="button" className="btn btn-ghost btn-sm" aria-expanded={p.showBare} onClick={() => p.setShowBare(!p.showBare)}>
+                {p.showBare ? t('gn.sv.less') : t('gn.sv.more', { n: p.bare.length })}
+              </button>
+              {p.showBare && (
+                <div className="flex flex-wrap gap-2">
+                  {p.bare.map((s) => (
+                    <button key={s.id} type="button" className="chip-filter gap-1.5" onClick={() => p.onSetup(s.id)}>
+                      <span aria-hidden>＋</span>{t('gn.q.connect', { name: s.name })}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+          {p.hiddenOther > 0 && <p className="text-sm font-semibold text-mute">{t('gn.hiddenOther', { n: p.hiddenOther })}</p>}
+
+          <div className="flex flex-wrap items-center justify-end gap-3 max-md:sticky max-md:bottom-20 max-md:z-10 max-md:rounded-xl max-md:border max-md:border-line max-md:bg-card max-md:p-3 max-md:shadow-lg">
+            {p.sendHint && <span className="min-w-0 flex-1 text-sm font-semibold text-mute">{p.sendHint}</span>}
+            <button type="submit" className="btn" disabled={!!p.problem || !p.picked.length || p.busy} title={t('gn.sendKey')}>
+              {p.busy && <Spinner />}{p.picked.length > 1 ? t('gn.sendCount', { n: p.picked.length }) : t('gn.send')}
+            </button>
+          </div>
+
+          {p.lastResult && (
+            <ul className="space-y-1 text-sm font-semibold">
+              {p.lastResult.results.map((r) => (
+                <li key={r.serverId} className={r.queued ? (r.online ? 'text-ok' : undefined) : 'text-danger'}>
+                  {r.queued ? '✓' : '✕'} {r.serverName}: {r.queued ? (r.online ? t('gn.r.queued') : t('gn.r.queuedSilent')) : r.error}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </div>
+    </form>
   );
 }
 __COREGSM_EOF__
@@ -158326,6 +159680,8 @@ import { ChatLines } from '../components/NewsEditor';
 import { t, useI18n } from '../i18n';
 import { Switch } from '../components/Switch';
 import { ScopeNote, useScope } from './GameNewsScope';
+import { SchedulePanel } from './GameNewsRestartSchedule';
+import { EmptyState, SubTabs, WithPreview } from './GameNewsUi';
 import { Field, SaveBadge, errText, toast, useAutosave, usePoll } from '../ui';
 
 interface Job { serverId: number; serverName: string; runAt: number; by: string; source: string; state: string; left: number; total: number }
@@ -158375,7 +159731,7 @@ function Ring({ left, total, red }: { left: number; total: number; red: boolean 
 }
 
 /** A restart of a game server by a timer: the chat is told how long is left, then the plugin closes the server. */
-export function ServerRestartCard() {
+export function ServerRestartCard({ countdown }: { countdown?: { enabled: boolean; onChange: (v: boolean) => void } }) {
   useI18n();
   const sc = useScope();
   const [st, setSt] = useState<State | null>(null);
@@ -158384,7 +159740,7 @@ export function ServerRestartCard() {
   const [busy, setBusy] = useState(false);
   const [texts, setTexts] = useState<Texts | null>(null);
   const [saved, setSaved] = useState<Texts | null>(null);
-  const [showLog, setShowLog] = useState(false);
+  const [part, setPart] = useState<'now' | 'planned' | 'words' | 'history'>('now');
   // the seconds left are counted from the moment of the answer, so the clock moves between polls
   const [at, setAt] = useState(Date.now());
   const [, tick] = useState(0);
@@ -158392,7 +159748,7 @@ export function ServerRestartCard() {
   const load = () => api<State>(`/game-news/restart${sc.q}`).then((d) => {
     setSt(d); setAt(Date.now());
     setTexts((x) => x ?? d.texts); setSaved((x) => x ?? d.texts);
-    setServer((s) => s || d.servers[0]?.id || 0);
+    setServer((s) => sc.server || s || d.servers[0]?.id || 0);
   }).catch(() => undefined);
   usePoll(load, 3000);
   // the ring moves every second between the polls
@@ -158419,103 +159775,215 @@ export function ServerRestartCard() {
   const cancel = (id: number) => run(() => api(`/game-news/restart/${id}`, 'DELETE'));
   const postpone = (id: number, seconds: number) => run(() => api(`/game-news/restart/${id}/postpone`, 'POST', { seconds }), t('gn.rr.postponed'));
   const elapsed = Math.round((Date.now() - at) / 1000);
-  const jobs = st.jobs.filter((j) => j.state !== 'sent' || j.left - elapsed > -60);
-  const history = st.history;
+  // on a server's page only its own timer is shown
+  const jobs = st.jobs.filter((j) => (j.state !== 'sent' || j.left - elapsed > -60) && (!sc.server || j.serverId === sc.server));
+  const history = st.history.filter((h) => !sc.server || h.serverName === st.servers.find((x) => x.id === sc.server)?.name);
 
   const announce = `<color=#FFCC33>${plain(texts?.announce ?? '').replace(/\{time\}/g, SAMPLE_TIME)}</color>`;
   const now = `<color=#FF5555>${plain(texts?.now ?? '')}</color>`;
   const cancelled = `<color=#5FD068>${plain(texts?.cancel ?? '')}</color>`;
 
+  const running = st.jobs.some((j) => j.state === 'counting' && (!sc.server || j.serverId === sc.server));
+
   return (
-    <FoldCard id="srvrestart" title={t('gn.rr.title')} summary={t('gn.rr.sum')} on={st.jobs.some((j) => j.state === 'counting')}>
-      <p className="text-sm font-semibold text-mute">{t('gn.rr.note')}</p>
+    <FoldCard id="srvrestart" title={t('gn.rr.title')} summary={running ? t('gn.rr.sumRunning') : t('gn.rr.sum')} on={running}>
+      <SubTabs
+        label={t('gn.rr.title')}
+        value={part}
+        onChange={setPart}
+        items={[
+          { id: 'now', label: t('gn.rr.p.now'), badge: jobs.filter((j) => j.state === 'counting').length },
+          { id: 'planned', label: t('gn.rr.p.planned') },
+          { id: 'words', label: t('gn.rr.p.words') },
+          { id: 'history', label: t('gn.rr.p.history') },
+        ]}
+      />
 
-      {jobs.map((j) => {
-        const left = j.state === 'counting' ? Math.max(0, j.left - elapsed) : 0;
-        return (
-          <div key={j.serverId} className="flex flex-wrap items-center gap-4 rounded-xl border border-line px-4 py-3">
-            <Ring left={left} total={j.total} red={left <= 60} />
-            <div className="min-w-0 flex-1 basis-56 space-y-1">
-              <div className="wrap-break-word font-extrabold">{j.serverName}</div>
-              <div className="text-sm font-semibold text-mute">
-                {j.state === 'counting' ? t('gn.rr.at', { time: new Date(j.runAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }) : j.state === 'due' ? t('gn.rr.due') : t('gn.rr.sent')}
-                {' · '}{t('gn.rr.by', { by: j.by || '—', src: j.source })}
-              </div>
-              {j.state !== 'sent' && (
-                <div className="flex flex-wrap gap-2 pt-1">
-                  {[60, 300, 900].map((sec) => (
-                    <button key={sec} type="button" className="btn btn-soft btn-sm" disabled={busy} onClick={() => void postpone(j.serverId, sec)}>+{sec / 60} {t('gn.rr.min')}</button>
-                  ))}
-                  <button type="button" className="btn btn-ghost btn-sm" disabled={busy} onClick={() => void cancel(j.serverId)}>{t('gn.rr.cancel')}</button>
+      {part === 'now' && (
+        <div className="space-y-4">
+          <p className="text-sm font-semibold text-mute">{t('gn.rr.note')}</p>
+
+          {jobs.length === 0 && <EmptyState icon="♻" title={t('gn.rr.noTimers')} hint={t('gn.rr.noTimersHint')} />}
+          {jobs.map((j) => {
+            const left = j.state === 'counting' ? Math.max(0, j.left - elapsed) : 0;
+            return (
+              <div key={j.serverId} className="flex flex-wrap items-center gap-4 rounded-xl border border-line px-4 py-3">
+                <Ring left={left} total={j.total} red={left <= 60} />
+                <div className="min-w-0 flex-1 basis-56 space-y-1">
+                  <div className="wrap-break-word font-extrabold">{j.serverName}</div>
+                  <div className="text-sm font-semibold text-mute">
+                    {j.state === 'counting' ? t('gn.rr.at', { time: new Date(j.runAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }) : j.state === 'due' ? t('gn.rr.due') : t('gn.rr.sent')}
+                    {' · '}{t('gn.rr.by', { by: j.by || '—', src: j.source })}
+                  </div>
+                  {j.state !== 'sent' && (
+                    <div className="flex flex-wrap gap-2 pt-1">
+                      {[60, 300, 900].map((sec) => (
+                        <button key={sec} type="button" className="btn btn-soft btn-sm" disabled={busy} onClick={() => void postpone(j.serverId, sec)}>+{sec / 60} {t('gn.rr.min')}</button>
+                      ))}
+                      <button type="button" className="btn btn-ghost btn-sm" disabled={busy} onClick={() => void cancel(j.serverId)}>{t('gn.rr.cancel')}</button>
+                    </div>
+                  )}
                 </div>
+              </div>
+            );
+          })}
+
+          <div className="space-y-3 rounded-xl border border-line px-4 py-4">
+            <h4 className="font-extrabold">{t('gn.rr.startTitle')}</h4>
+            <div className="flex flex-wrap items-end gap-3">
+              {!sc.server && st.servers.length > 1 && (
+                <Field label={t('gn.rr.server')}>
+                  <select className="input" value={server} onChange={(e) => setServer(Number(e.target.value))}>
+                    {st.servers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                  </select>
+                </Field>
               )}
+              <Field label={t('gn.rr.time')}>
+                <input className="input w-32" value={time} maxLength={20} onChange={(e) => setTime(e.target.value)} />
+              </Field>
+              <button type="button" className="btn" disabled={busy || !time.trim()} onClick={() => void start()}>{t('gn.rr.start')}</button>
             </div>
+            <div className="flex flex-wrap gap-2">
+              {PRESETS.map((p) => <button key={p} type="button" className={`chip-filter ${time === p ? 'on' : ''}`} onClick={() => setTime(p)}>{p}</button>)}
+            </div>
+            <label className="flex items-start gap-3 font-bold">
+              <Switch className="mt-0.5" checked={st.emptyNow} disabled={busy} onChange={(v) => void setEmpty(v)} />
+              <span>
+                {t('gn.rr.empty0')}
+                <span className="block text-sm font-semibold text-mute">{t('gn.rr.empty0Note')}</span>
+              </span>
+            </label>
           </div>
-        );
-      })}
-
-      <div className="flex flex-wrap items-end gap-3">
-        {st.servers.length > 1 && (
-          <Field label={t('gn.rr.server')}>
-            <select className="input" value={server} onChange={(e) => setServer(Number(e.target.value))}>
-              {st.servers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-            </select>
-          </Field>
-        )}
-        <Field label={t('gn.rr.time')}>
-          <input className="input w-32" value={time} maxLength={20} onChange={(e) => setTime(e.target.value)} />
-        </Field>
-        <button type="button" className="btn" disabled={busy || !time.trim()} onClick={() => void start()}>{t('gn.rr.start')}</button>
-      </div>
-      <label className="flex items-start gap-3 font-bold">
-        <Switch className="mt-0.5" checked={st.emptyNow} disabled={busy} onChange={(v) => void setEmpty(v)} />
-        <span>
-          {t('gn.rr.empty0')}
-          <span className="block text-sm font-semibold text-mute">{t('gn.rr.empty0Note')}</span>
-        </span>
-      </label>
-      <div className="flex flex-wrap gap-2">
-        {PRESETS.map((p) => <button key={p} type="button" className={`chip-filter ${time === p ? 'on' : ''}`} onClick={() => setTime(p)}>{p}</button>)}
-      </div>
-
-      {texts && (
-        <div className="space-y-3">
-          <h4 className="font-extrabold">{t('gn.rr.words')}</h4>
-          <ScopeNote part="restart" />
-          <Field label={t('gn.rr.announce')}>
-            <input className="input" value={texts.announce} maxLength={300} onChange={(e) => setTexts({ ...texts, announce: e.target.value })} />
-          </Field>
-          <VarChips vars={[{ name: 'time', example: SAMPLE_TIME }]} onPick={(v) => setTexts({ ...texts, announce: `${texts.announce} ${v}`.trim() })} />
-          <Field label={t('gn.rr.now')}>
-            <input className="input" value={texts.now} maxLength={300} onChange={(e) => setTexts({ ...texts, now: e.target.value })} />
-          </Field>
-          <Field label={t('gn.rr.cancelText')}>
-            <input className="input" value={texts.cancel} maxLength={300} onChange={(e) => setTexts({ ...texts, cancel: e.target.value })} />
-          </Field>
-          <ChatLines lines={[announce, now, cancelled]} />
-          <SaveBadge status={auto.status} error={auto.error} retry={auto.retry} />
         </div>
       )}
 
-      <div className="space-y-2">
-        <button type="button" className="btn btn-ghost btn-sm" aria-expanded={showLog} onClick={() => setShowLog((v) => !v)}>
-          {showLog ? t('gn.rr.hideLog') : t('gn.rr.showLog', { n: history.length })}
-        </button>
-        {showLog && (history.length === 0
-          ? <p className="text-sm font-semibold text-mute">{t('gn.rr.logEmpty')}</p>
-          : (
-            <ul className="divide-y divide-line">
-              {history.map((h) => (
-                <li key={h.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2 text-sm">
-                  <span className={OUTCOME[h.outcome].cls}>{t(OUTCOME[h.outcome].text)}</span>
-                  <span className="wrap-break-word font-bold">{h.serverName}</span>
-                  <span className="font-semibold text-mute">{soon(h.startedAt)} · {t('gn.rr.by', { by: h.by || '—', src: h.source })}</span>
-                </li>
-              ))}
-            </ul>
-          ))}
-      </div>
+      {part === 'planned' && (
+        <div className="space-y-5">
+          <SchedulePanel servers={st.servers} onlyServer={sc.server} />
+          {countdown && (
+            <label className="flex items-start gap-3 rounded-xl border border-line px-4 py-3 font-bold">
+              <Switch className="mt-0.5" checked={countdown.enabled} onChange={countdown.onChange} />
+              <span>
+                {t('gn.a.countdown')}
+                <span className="block text-sm font-semibold text-mute">{t('gn.a.countdownNote')}</span>
+              </span>
+            </label>
+          )}
+        </div>
+      )}
+
+      {part === 'words' && texts && (
+        <div className="space-y-3">
+          <ScopeNote part="restart" />
+          <WithPreview
+            preview={<ChatLines lines={[announce, now, cancelled]} />}
+          >
+            <Field label={t('gn.rr.announce')}>
+              <input className="input" value={texts.announce} maxLength={300} onChange={(e) => setTexts({ ...texts, announce: e.target.value })} />
+            </Field>
+            <VarChips vars={[{ name: 'time', example: SAMPLE_TIME }]} onPick={(v) => setTexts({ ...texts, announce: `${texts.announce} ${v}`.trim() })} />
+            <Field label={t('gn.rr.now')}>
+              <input className="input" value={texts.now} maxLength={300} onChange={(e) => setTexts({ ...texts, now: e.target.value })} />
+            </Field>
+            <Field label={t('gn.rr.cancelText')}>
+              <input className="input" value={texts.cancel} maxLength={300} onChange={(e) => setTexts({ ...texts, cancel: e.target.value })} />
+            </Field>
+            <SaveBadge status={auto.status} error={auto.error} retry={auto.retry} />
+          </WithPreview>
+        </div>
+      )}
+
+      {part === 'history' && (history.length === 0
+        ? <EmptyState icon="🗒" title={t('gn.rr.logEmpty')} />
+        : (
+          <ul className="divide-y divide-line">
+            {history.map((h) => (
+              <li key={h.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2 text-sm">
+                <span className={OUTCOME[h.outcome].cls}>{t(OUTCOME[h.outcome].text)}</span>
+                <span className="wrap-break-word font-bold">{h.serverName}</span>
+                <span className="font-semibold text-mute">{soon(h.startedAt)} · {t('gn.rr.by', { by: h.by || '—', src: h.source })}</span>
+              </li>
+            ))}
+          </ul>
+        ))}
     </FoldCard>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/pages"
+  cat > "$APP_DIR/core-frontend/src/pages/GameNewsUi.tsx" << '__COREGSM_EOF__'
+import { useState, type ReactNode } from 'react';
+import { t, useI18n } from '../i18n';
+import { SCOPE_KEYS, useScope } from './GameNewsScope';
+
+/** a quiet block for a list that has nothing in it yet: what it is for and the way to fill it */
+export function EmptyState({ icon = '○', title, hint, action }: { icon?: string; title: string; hint?: string; action?: ReactNode }) {
+  return (
+    <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed border-line px-5 py-8 text-center">
+      <span aria-hidden className="flex h-11 w-11 items-center justify-center rounded-full bg-soft text-xl text-mute">{icon}</span>
+      <p className="font-extrabold">{title}</p>
+      {hint && <p className="max-w-md text-sm font-semibold text-mute">{hint}</p>}
+      {action && <div className="pt-1">{action}</div>}
+    </div>
+  );
+}
+
+/** on / off in one look everywhere: a dot and a word */
+export function StateBadge({ on, onText, offText }: { on: boolean; onText?: string; offText?: string }) {
+  useI18n();
+  return (
+    <span className={on ? 'pill pill-ok' : 'pill pill-mute'}>
+      <span aria-hidden className={`mr-1.5 inline-block h-1.5 w-1.5 rounded-full ${on ? 'bg-ok' : 'bg-mute'}`} />
+      {on ? (onText ?? t('gn.f.on')) : (offText ?? t('gn.f.off'))}
+    </span>
+  );
+}
+
+/** tabs inside a page: a row of chips that scrolls sideways on a phone instead of wrapping into a pile */
+export function SubTabs<T extends string>({ items, value, onChange, label }: { items: { id: T; label: string; badge?: number }[]; value: T; onChange: (id: T) => void; label: string }) {
+  return (
+    <div className="-mx-1 overflow-x-auto px-1 pb-1" role="tablist" aria-label={label}>
+      <div className="flex min-w-max gap-2 md:min-w-0 md:flex-wrap">
+        {items.map((x) => (
+          <button key={x.id} type="button" role="tab" aria-selected={value === x.id} className={`chip-filter whitespace-nowrap ${value === x.id ? 'on' : ''}`} onClick={() => onChange(x.id)}>
+            {x.label}
+            {(x.badge ?? 0) > 0 && <span className="ml-1.5 rounded-full bg-soft px-1.5 text-xs font-extrabold">{x.badge}</span>}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** fields on the left, the preview of the game chat on the right (under the fields on a narrow screen) and kept in view while the fields are edited */
+export function WithPreview({ children, preview }: { children: ReactNode; preview: ReactNode }) {
+  return (
+    <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_21rem]">
+      <div className="min-w-0 space-y-4">{children}</div>
+      <div className="min-w-0 space-y-2 xl:sticky xl:top-4">{preview}</div>
+    </div>
+  );
+}
+
+/**
+ * A settings card of a server's page. A server that uses the general value shows one slim line («uses the general settings»
+ * with a button to set it up apart): so a page of a server does not repeat every card of the general page.
+ */
+export function ScopedCard({ part, title, children }: { part: keyof typeof SCOPE_KEYS; title: string; children: ReactNode }) {
+  useI18n();
+  const s = useScope();
+  const [open, setOpen] = useState(false);
+  if (!s.server || !s.mine) return <>{children}</>;
+  if (s.mine[SCOPE_KEYS[part]] || open) return <>{children}</>;
+  return (
+    <section className="panel flex flex-wrap items-center gap-3 px-5 py-3.5">
+      <span className="min-w-0 flex-1 basis-56">
+        <span className="block font-extrabold">{title}</span>
+        <span className="block text-sm font-semibold text-mute">{t('gn.sc.inheritShort')}</span>
+      </span>
+      <span className="pill pill-mute">{t('gn.sc.general')}</span>
+      <button type="button" className="btn btn-soft btn-sm" onClick={() => setOpen(true)}>{t('gn.sc.setup')}</button>
+    </section>
   );
 }
 __COREGSM_EOF__

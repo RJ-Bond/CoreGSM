@@ -8,6 +8,7 @@ import { db, getSetting, setSetting } from '../db.js';
 import { countdownEnabled } from './gameNewsRestart.js';
 import { getJoinLeave, isHexColor, plainLine, setJoinLeave } from './gameNewsJoinLeave.js';
 import { chatSettingsView } from './gameNewsChat.js';
+import { getKick } from './gameNewsKick.js';
 import { SCOPED_KEYS, clearOverride, hasOverride, overrides, serverOf } from './gameNewsScope.js';
 import { getRegisterSettings, setRegisterSettings } from './gameNewsRegister.js';
 import { getWelcome, setWelcome } from './gameNewsWelcome.js';
@@ -100,7 +101,7 @@ export function registerGameNewsRules({ app, admin }: { app: Express; admin: Req
   app.get('/api/game-news/rules', admin, (req, res) => {
     const sid = serverOf(req);
     const rows = db.prepare('SELECT * FROM game_news_rules ORDER BY id').all() as RuleRow[];
-    res.json({ timezone: tz(), restartCountdown: countdownEnabled(), welcome: getWelcome(sid), joinLeave: getJoinLeave(sid), extras: getExtras(), register: getRegisterSettings(sid), chat: chatSettingsView(sid), overrides: overrides(), mine: sid ? Object.fromEntries(SCOPED_KEYS.map((k) => [k, hasOverride(k, sid)])) : null, rules: rows.map(serialize) });
+    res.json({ timezone: tz(), restartCountdown: countdownEnabled(), welcome: getWelcome(sid), joinLeave: getJoinLeave(sid), kick: getKick(sid), extras: getExtras(), register: getRegisterSettings(sid), chat: chatSettingsView(sid), overrides: overrides(), mine: sid ? Object.fromEntries(SCOPED_KEYS.map((k) => [k, hasOverride(k, sid)])) : null, rules: rows.map(serialize) });
   });
 
   // the countdown «через 10 / 5 / 1 минуту» before the planned restarts of monitoring/restarts.ts
@@ -150,7 +151,7 @@ export function registerGameNewsRules({ app, admin }: { app: Express; admin: Req
   app.put('/api/game-news/register-settings', admin, (req, res) => {
     const b = z.object({
       enabled: z.boolean(), promptText: z.string().max(300), doneText: z.string().max(300), discordText: z.string().max(300),
-      pendingText: z.string().max(300), loginText: z.string().max(300).optional(), discordEveryHours: z.number().int().min(1).max(720),
+      pendingText: z.string().max(300), loginText: z.string().max(300).optional(), nickTakenText: z.string().max(300).optional(), autoLoginEnabled: z.boolean().optional(), autoLoginText: z.string().max(300).optional(), lastSeenEnabled: z.boolean().optional(), lastSeenText: z.string().max(300).optional(), discordEveryHours: z.number().int().min(1).max(720),
       rankEnabled: z.boolean().optional(), rankText: z.string().max(300).optional(),
     }).safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Проверьте поля' });
@@ -164,6 +165,11 @@ export function registerGameNewsRules({ app, admin }: { app: Express; admin: Req
       discordText: keep(b.data.discordText, d.discordText),
       pendingText: keep(b.data.pendingText, d.pendingText),
       loginText: keep(b.data.loginText ?? d.loginText, d.loginText),
+      nickTakenText: keep(b.data.nickTakenText ?? d.nickTakenText, d.nickTakenText),
+      autoLoginEnabled: b.data.autoLoginEnabled ?? d.autoLoginEnabled,
+      autoLoginText: keep(b.data.autoLoginText ?? d.autoLoginText, d.autoLoginText),
+      lastSeenEnabled: b.data.lastSeenEnabled ?? d.lastSeenEnabled,
+      lastSeenText: keep(b.data.lastSeenText ?? d.lastSeenText, d.lastSeenText),
       discordEveryHours: b.data.discordEveryHours,
       rankEnabled: b.data.rankEnabled ?? d.rankEnabled,
       rankText: keep(b.data.rankText ?? '', d.rankText),
