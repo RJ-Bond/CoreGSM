@@ -151,6 +151,7 @@ export function registerGameNewsRules({ app, admin }: { app: Express; admin: Req
     const b = z.object({
       enabled: z.boolean(), promptText: z.string().max(300), doneText: z.string().max(300), discordText: z.string().max(300),
       pendingText: z.string().max(300), discordEveryHours: z.number().int().min(1).max(720),
+      rankEnabled: z.boolean().optional(), rankText: z.string().max(300).optional(),
     }).safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Проверьте поля' });
     const sid = serverOf(req);
@@ -163,6 +164,8 @@ export function registerGameNewsRules({ app, admin }: { app: Express; admin: Req
       discordText: keep(b.data.discordText, d.discordText),
       pendingText: keep(b.data.pendingText, d.pendingText),
       discordEveryHours: b.data.discordEveryHours,
+      rankEnabled: b.data.rankEnabled ?? d.rankEnabled,
+      rankText: keep(b.data.rankText ?? '', d.rankText),
     }, sid);
     res.json({ ok: true });
   });

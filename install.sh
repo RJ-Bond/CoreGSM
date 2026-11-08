@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="8e053c65f23b"
+COREGSM_BUILD="6e99600fcb10"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.86"
+COREGSM_VERSION="1.1.87"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -24720,6 +24720,20 @@ function plainText(s: string): string {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/gamenews"
+  cat > "$APP_DIR/core-backend/src/gamenews/gameNewsRank.ts" << '__COREGSM_EOF__'
+import { nextRank, rankForHours } from '../profile/ranks.js';
+
+/** «Ник, ваш ранг: …»: the rank of a player by his hours of play, with the distance to the next one */
+export function rankLine(text: string, name: string, hours: number): string {
+  const r = rankForHours(hours);
+  const nx = nextRank(hours);
+  const next = nx ? ` · до «${nx.name}» ещё ${Math.max(1, Math.ceil(nx.minHours - hours))} ч` : ' · высший ранг';
+  const h = hours >= 10 ? String(Math.floor(hours)) : String(Math.floor(hours * 10) / 10);
+  const plain = name.replace(/[<>]/g, '').trim();
+  return text.replace(/\{name\}/g, plain).replace(/\{rank\}/g, r.name).replace(/\{hours\}/g, h).replace(/\{next\}/g, next);
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/gamenews"
   cat > "$APP_DIR/core-backend/src/gamenews/gameNewsRegister.ts" << '__COREGSM_EOF__'
 /**
  * Registration in the panel from inside the game.
@@ -24747,6 +24761,8 @@ import { registrationOpen } from '../security/auth.js';
 import { pluginTarget } from './gameNews.js';
 import { plainLine } from './gameNewsJoinLeave.js';
 import { loginFromNick } from './gameNewsLogic.js';
+import { rankLine } from './gameNewsRank.js';
+import { vrHoursOf } from '../profile/profileVr.js';
 
 export interface RegisterSettings {
   enabled: boolean;
@@ -24760,15 +24776,21 @@ export interface RegisterSettings {
   pendingText: string;
   /** how often the Discord hint is repeated for the same player, hours */
   discordEveryHours: number;
+  /** a registered player reads his rank at every join */
+  rankEnabled: boolean;
+  /** the rank line: {name} {rank} {hours} {next} */
+  rankText: string;
 }
 
 export const DEFAULT_REGISTER: RegisterSettings = {
   enabled: false,
   promptText: '* Вы ещё не зарегистрированы в панели. Для регистрации введите .register пароль подтверждение_пароля',
   doneText: '* Готово! Вы зарегистрированы в панели, ваш логин: {login}',
-  discordText: '* Привяжите Discord в профиле панели ({panel}), чтобы управлять аккаунтом через Discord.',
+  discordText: '* Привяжите Discord в профиле панели ({panel}): аккаунт будет под рукой в Discord, а роли и ранг — на вашем сервере.',
   pendingText: '* Заявка на регистрацию отправлена. Когда администратор её одобрит, вы сможете войти в панель.',
   discordEveryHours: 24,
+  rankEnabled: true,
+  rankText: '* {name}, ваш ранг: {rank} · {hours} ч{next}',
 };
 
 // the colours of the lines the player reads
@@ -24790,6 +24812,8 @@ export function getRegisterSettings(serverId?: number): RegisterSettings {
       discordText: text(v.discordText, d.discordText),
       pendingText: text(v.pendingText, d.pendingText),
       discordEveryHours: Number.isFinite(v.discordEveryHours) ? Math.min(720, Math.max(1, Math.round(v.discordEveryHours as number))) : d.discordEveryHours,
+      rankEnabled: typeof v.rankEnabled === 'boolean' ? v.rankEnabled : d.rankEnabled,
+      rankText: text(v.rankText, d.rankText),
     };
   } catch {
     return { ...DEFAULT_REGISTER };
@@ -24841,11 +24865,16 @@ export function registerGameNewsPlayers({ app }: { app: Express }): void {
     }
     const u = db.prepare('SELECT id, status, discord_id FROM users WHERE id = ?').get(who.user_id) as UserRow | undefined;
     const due = now - who.last_hint_at >= s.discordEveryHours * 3_600_000;
+    const replies: string[] = [];
+    if (u && u.status === 'active' && s.rankEnabled) {
+      const nick = (db.prepare('SELECT game_nick FROM user_player WHERE user_id = ?').get(u.id) as { game_nick: string } | undefined)?.game_nick || (db.prepare('SELECT nick FROM game_identities WHERE platform_id = ?').get(id.data) as { nick: string } | undefined)?.nick || '';
+      replies.push(tag(C_GOOD, rankLine(s.rankText, nick, vrHoursOf(u.id, nick).hours)));
+    }
     if (u && u.status === 'active' && !u.discord_id && due) {
       db.prepare('UPDATE game_identities SET last_hint_at = ? WHERE platform_id = ?').run(now, id.data);
-      return res.json({ registered: true, replies: [tag(C_HINT, fill(s.discordText, { panel: panelUrl() }))] });
+      replies.push(tag(C_HINT, fill(s.discordText, { panel: panelUrl() })));
     }
-    res.json({ registered: true, replies: [] });
+    res.json({ registered: true, replies });
   });
 
   // .register <password> <password again>
@@ -25282,6 +25311,7 @@ export function registerGameNewsRules({ app, admin }: { app: Express; admin: Req
     const b = z.object({
       enabled: z.boolean(), promptText: z.string().max(300), doneText: z.string().max(300), discordText: z.string().max(300),
       pendingText: z.string().max(300), discordEveryHours: z.number().int().min(1).max(720),
+      rankEnabled: z.boolean().optional(), rankText: z.string().max(300).optional(),
     }).safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Проверьте поля' });
     const sid = serverOf(req);
@@ -25294,6 +25324,8 @@ export function registerGameNewsRules({ app, admin }: { app: Express; admin: Req
       discordText: keep(b.data.discordText, d.discordText),
       pendingText: keep(b.data.pendingText, d.pendingText),
       discordEveryHours: b.data.discordEveryHours,
+      rankEnabled: b.data.rankEnabled ?? d.rankEnabled,
+      rankText: keep(b.data.rankText ?? '', d.rankText),
     }, sid);
     res.json({ ok: true });
   });
@@ -140281,6 +140313,8 @@ export interface RegisterSettings {
   discordText: string;
   pendingText: string;
   discordEveryHours: number;
+  rankEnabled: boolean;
+  rankText: string;
 }
 
 /** the game chat in Discord: one webhook (its address never leaves the backend), a switch for each kind of line and how they look */
@@ -143891,6 +143925,8 @@ const en: Record<keyof typeof ru, string> = {
   'gn.rg.done': 'The message after registering ({login} is the login)',
   'gn.rg.discord': 'The hint to link Discord ({panel} is the panel address)',
   'gn.rg.pending': 'When registration is by request',
+  'gn.rg.rankOn': 'Show a player his rank when he joins',
+  'gn.rg.rank': 'The rank line ({name}, {rank}, {hours}, {next})',
   'gn.rg.hours': 'Remind about Discord no more often than every (hours)',
   'gn.rg.badHours': 'From 1 to 720 hours',
   'gn.rg.vars': 'The registration mode of the panel (open, by request, closed) and the community rules are respected: registering from the game counts as agreeing with the rules. The password is checked as on the site.',
@@ -148584,6 +148620,8 @@ const ru = {
   'gn.rg.done': 'Сообщение после регистрации ({login} — логин)',
   'gn.rg.discord': 'Подсказка привязать Discord ({panel} — адрес панели)',
   'gn.rg.pending': 'Если регистрация по заявкам',
+  'gn.rg.rankOn': 'Показывать игроку его ранг при входе',
+  'gn.rg.rank': 'Строка с рангом ({name}, {rank}, {hours}, {next})',
   'gn.rg.hours': 'Напоминать про Discord не чаще, чем раз в (часов)',
   'gn.rg.badHours': 'От 1 до 720 часов',
   'gn.rg.vars': 'Режим регистрации панели (открыта, по заявкам, закрыта) и правила сообщества соблюдаются: регистрация из игры считается согласием с правилами. Пароль проверяется так же, как на сайте.',
@@ -157300,7 +157338,7 @@ export function RegisterCard({ initial }: { initial: RegisterSettings }) {
     delay: 900,
     validate: (v) => {
       if (!Number.isInteger(v.discordEveryHours) || v.discordEveryHours < 1 || v.discordEveryHours > 720) return t('gn.rg.badHours');
-      return [v.promptText, v.doneText, v.discordText, v.pendingText].some((x) => !x.trim()) ? t('gn.hint.text') : null;
+      return [v.promptText, v.doneText, v.discordText, v.pendingText, v.rankText].some((x) => !x.trim()) ? t('gn.hint.text') : null;
     },
     save: async (v) => { await api(`/game-news/register-settings${sc.q}`, 'PUT', v); setSaved(v); sc.changed(); },
   });
@@ -157335,12 +157373,22 @@ export function RegisterCard({ initial }: { initial: RegisterSettings }) {
         {field(t('gn.rg.pending'), 'pendingText')}
       </div>
 
+      <label className="flex items-center gap-3 font-bold">
+        <Switch checked={f.rankEnabled} onChange={(v) => set('rankEnabled', v)} />
+        {t('gn.rg.rankOn')}
+      </label>
+      {f.rankEnabled && (
+        <Field label={t('gn.rg.rank')}>
+          <AutoText value={f.rankText} maxLength={300} onChange={(e) => set('rankText', e.target.value)} />
+        </Field>
+      )}
+
       <Field label={t('gn.rg.hours')}>
         <input className="input w-32" type="number" min={1} max={720} value={f.discordEveryHours} onChange={(e) => set('discordEveryHours', Number(e.target.value))} />
       </Field>
 
       <VarChips vars={[{ name: 'login', example: 'WhiteLegioN' }, { name: 'panel', example: 'coregsm.example.ru' }]} onPick={(v) => set('promptText', `${f.promptText} ${v}`.trim())} />
-      <ChatLines lines={[sample(f.promptText, '#FFCC33'), sample(f.doneText, '#5FD068'), sample(f.discordText, '#6EC1FF')]} />
+      <ChatLines lines={[sample(f.promptText, '#FFCC33'), sample(f.doneText, '#5FD068'), ...(f.rankEnabled ? [`<color=#5FD068>${f.rankText.replace(/[<>]/g, '').replace(/\{name\}/g, 'WhiteLegioN').replace(/\{rank\}/g, 'Охотник на кровь').replace(/\{hours\}/g, '42').replace(/\{next\}/g, ' · до «Страж замка» ещё 28 ч')}</color>`] : []), sample(f.discordText, '#6EC1FF')]} />
       <p className="text-sm font-semibold text-mute">{t('gn.rg.vars')}</p>
       <p className="text-sm font-semibold text-danger">{t('gn.rg.warn')}</p>
       {auto.invalid && <p className="text-sm font-semibold text-danger">{auto.error}</p>}

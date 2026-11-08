@@ -254,6 +254,8 @@ export interface RegisterSettings {
   discordText: string;
   pendingText: string;
   discordEveryHours: number;
+  rankEnabled: boolean;
+  rankText: string;
 }
 
 /** the game chat in Discord: one webhook (its address never leaves the backend), a switch for each kind of line and how they look */

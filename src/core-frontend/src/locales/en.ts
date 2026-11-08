@@ -1080,6 +1080,8 @@ const en: Record<keyof typeof ru, string> = {
   'gn.rg.done': 'The message after registering ({login} is the login)',
   'gn.rg.discord': 'The hint to link Discord ({panel} is the panel address)',
   'gn.rg.pending': 'When registration is by request',
+  'gn.rg.rankOn': 'Show a player his rank when he joins',
+  'gn.rg.rank': 'The rank line ({name}, {rank}, {hours}, {next})',
   'gn.rg.hours': 'Remind about Discord no more often than every (hours)',
   'gn.rg.badHours': 'From 1 to 720 hours',
   'gn.rg.vars': 'The registration mode of the panel (open, by request, closed) and the community rules are respected: registering from the game counts as agreeing with the rules. The password is checked as on the site.',

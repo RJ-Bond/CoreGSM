@@ -24,6 +24,8 @@ import { registrationOpen } from '../security/auth.js';
 import { pluginTarget } from './gameNews.js';
 import { plainLine } from './gameNewsJoinLeave.js';
 import { loginFromNick } from './gameNewsLogic.js';
+import { rankLine } from './gameNewsRank.js';
+import { vrHoursOf } from '../profile/profileVr.js';
 
 export interface RegisterSettings {
   enabled: boolean;
@@ -37,15 +39,21 @@ export interface RegisterSettings {
   pendingText: string;
   /** how often the Discord hint is repeated for the same player, hours */
   discordEveryHours: number;
+  /** a registered player reads his rank at every join */
+  rankEnabled: boolean;
+  /** the rank line: {name} {rank} {hours} {next} */
+  rankText: string;
 }
 
 export const DEFAULT_REGISTER: RegisterSettings = {
   enabled: false,
   promptText: '* Вы ещё не зарегистрированы в панели. Для регистрации введите .register пароль подтверждение_пароля',
   doneText: '* Готово! Вы зарегистрированы в панели, ваш логин: {login}',
-  discordText: '* Привяжите Discord в профиле панели ({panel}), чтобы управлять аккаунтом через Discord.',
+  discordText: '* Привяжите Discord в профиле панели ({panel}): аккаунт будет под рукой в Discord, а роли и ранг — на вашем сервере.',
   pendingText: '* Заявка на регистрацию отправлена. Когда администратор её одобрит, вы сможете войти в панель.',
   discordEveryHours: 24,
+  rankEnabled: true,
+  rankText: '* {name}, ваш ранг: {rank} · {hours} ч{next}',
 };
 
 // the colours of the lines the player reads
@@ -67,6 +75,8 @@ export function getRegisterSettings(serverId?: number): RegisterSettings {
       discordText: text(v.discordText, d.discordText),
       pendingText: text(v.pendingText, d.pendingText),
       discordEveryHours: Number.isFinite(v.discordEveryHours) ? Math.min(720, Math.max(1, Math.round(v.discordEveryHours as number))) : d.discordEveryHours,
+      rankEnabled: typeof v.rankEnabled === 'boolean' ? v.rankEnabled : d.rankEnabled,
+      rankText: text(v.rankText, d.rankText),
     };
   } catch {
     return { ...DEFAULT_REGISTER };
@@ -118,11 +128,16 @@ export function registerGameNewsPlayers({ app }: { app: Express }): void {
     }
     const u = db.prepare('SELECT id, status, discord_id FROM users WHERE id = ?').get(who.user_id) as UserRow | undefined;
     const due = now - who.last_hint_at >= s.discordEveryHours * 3_600_000;
+    const replies: string[] = [];
+    if (u && u.status === 'active' && s.rankEnabled) {
+      const nick = (db.prepare('SELECT game_nick FROM user_player WHERE user_id = ?').get(u.id) as { game_nick: string } | undefined)?.game_nick || (db.prepare('SELECT nick FROM game_identities WHERE platform_id = ?').get(id.data) as { nick: string } | undefined)?.nick || '';
+      replies.push(tag(C_GOOD, rankLine(s.rankText, nick, vrHoursOf(u.id, nick).hours)));
+    }
     if (u && u.status === 'active' && !u.discord_id && due) {
       db.prepare('UPDATE game_identities SET last_hint_at = ? WHERE platform_id = ?').run(now, id.data);
-      return res.json({ registered: true, replies: [tag(C_HINT, fill(s.discordText, { panel: panelUrl() }))] });
+      replies.push(tag(C_HINT, fill(s.discordText, { panel: panelUrl() })));
     }
-    res.json({ registered: true, replies: [] });
+    res.json({ registered: true, replies });
   });
 
   // .register <password> <password again>
