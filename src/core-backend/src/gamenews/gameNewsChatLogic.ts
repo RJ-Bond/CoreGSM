@@ -54,6 +54,10 @@ export interface ChatStored {
   fromDiscord: boolean;
   /** the channel of the webhook (found when the webhook is saved): where the bot listens */
   channelId: string;
+  /** a short card under the line an administrator wrote (where it went, how many players are there, how it looks in the game) */
+  confirmCard: boolean;
+  /** the line is repeated in the channel in the style of the chat («→ в игру»), so the talk reads in one row */
+  confirmLine: boolean;
 }
 
 const isAnsi = (x: unknown): x is AnsiColor => typeof x === 'string' && (ANSI_COLORS as readonly string[]).includes(x);
@@ -65,7 +69,7 @@ const isAnsi = (x: unknown): x is AnsiColor => typeof x === 'string' && (ANSI_CO
 export function normalizeChat(raw: unknown): ChatStored {
   const v = (raw && typeof raw === 'object' ? raw : {}) as {
     enabled?: unknown; webhook?: unknown; kinds?: Partial<Record<ChatKind, unknown>>; webhooks?: Partial<Record<ChatKind, unknown>>;
-    style?: unknown; senderName?: unknown; showTime?: unknown; fromDiscord?: unknown; channelId?: unknown; colors?: Partial<Record<ChatKind, Partial<Record<keyof ChatColors, unknown>>>>;
+    style?: unknown; senderName?: unknown; showTime?: unknown; fromDiscord?: unknown; channelId?: unknown; confirmCard?: unknown; confirmLine?: unknown; colors?: Partial<Record<ChatKind, Partial<Record<keyof ChatColors, unknown>>>>;
   };
   const legacy = v.webhooks && typeof v.webhooks === 'object' ? v.webhooks : {};
   const legacyFirst = (['global', 'clan', 'local'] as const).map((k) => legacy[k]).find((x): x is string => typeof x === 'string' && x.length > 0);
@@ -92,6 +96,8 @@ export function normalizeChat(raw: unknown): ChatStored {
     style: v.style === 'plain' ? 'plain' : 'ansi',
     showTime: v.showTime !== false,
     fromDiscord: v.fromDiscord === true,
+    confirmCard: v.confirmCard !== false,
+    confirmLine: v.confirmLine !== false,
     channelId: typeof v.channelId === 'string' && /^\d{5,30}$/.test(v.channelId) ? v.channelId : '',
     senderName: typeof v.senderName === 'string' ? v.senderName.replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, 80) : '',
     colors,
@@ -154,6 +160,13 @@ const seg = (color: AnsiColor, text: string, bold = false): string => (text ? `$
 export function paletteBlock(): string {
   const names: Record<AnsiColor, string> = { gray: 'gray', red: 'red', green: 'green', yellow: 'yellow', blue: 'blue', pink: 'pink', cyan: 'cyan', white: 'white' };
   return ANSI_COLORS.map((c) => `${seg(c, `${names[c]} normal`)}  ${seg(c, `${names[c]} bold`, true)}`).join(String.fromCharCode(10));
+}
+
+/** what an administrator wrote in Discord as it stands in the game chat: «[16:07] * [Discord] Имя: текст» (blue label, white text) */
+export function ansiDiscordLine(name: string, text: string, time = ''): string {
+  const t = forBlock(text);
+  if (!t) return '';
+  return `${seg('cyan', stamp(time))}${seg('blue', '* [Discord]', true)} ${seg('yellow', forBlock(name) || '?', true)}${seg('white', ': ')}${seg('white', t.slice(0, 300))}`;
 }
 
 /** a line of a chat in the colours of the game: «[16:07] [«Глобальный»] WhiteLegioN: Тест» (the time has the colour of the tag) */

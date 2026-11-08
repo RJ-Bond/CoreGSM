@@ -150,7 +150,7 @@ export function registerGameNewsRules({ app, admin }: { app: Express; admin: Req
   app.put('/api/game-news/register-settings', admin, (req, res) => {
     const b = z.object({
       enabled: z.boolean(), promptText: z.string().max(300), doneText: z.string().max(300), discordText: z.string().max(300),
-      pendingText: z.string().max(300), discordEveryHours: z.number().int().min(1).max(720),
+      pendingText: z.string().max(300), loginText: z.string().max(300).optional(), discordEveryHours: z.number().int().min(1).max(720),
       rankEnabled: z.boolean().optional(), rankText: z.string().max(300).optional(),
     }).safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Проверьте поля' });
@@ -163,6 +163,7 @@ export function registerGameNewsRules({ app, admin }: { app: Express; admin: Req
       doneText: keep(b.data.doneText, d.doneText),
       discordText: keep(b.data.discordText, d.discordText),
       pendingText: keep(b.data.pendingText, d.pendingText),
+      loginText: keep(b.data.loginText ?? d.loginText, d.loginText),
       discordEveryHours: b.data.discordEveryHours,
       rankEnabled: b.data.rankEnabled ?? d.rankEnabled,
       rankText: keep(b.data.rankText ?? '', d.rankText),

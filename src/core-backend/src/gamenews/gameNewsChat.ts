@@ -49,10 +49,10 @@ function webhookUrl(s: ChatStored): string | null {
 
 /** the kinds of chat that are being forwarded (what the plugin has to read) */
 
-export function chatSettingsView(serverId?: number): Pick<ChatStored, 'enabled' | 'kinds' | 'style' | 'senderName' | 'showTime' | 'colors' | 'fromDiscord'> & { set: boolean; tail: string; channel: boolean } {
+export function chatSettingsView(serverId?: number): Pick<ChatStored, 'enabled' | 'kinds' | 'style' | 'senderName' | 'showTime' | 'colors' | 'fromDiscord'> & { set: boolean; tail: string; channel: boolean; confirmCard: boolean; confirmLine: boolean } {
   const s = read(serverId);
   const u = webhookUrl(s);
-  return { enabled: s.enabled, set: !!u, tail: u ? `…${u.slice(-6)}` : '', kinds: s.kinds, style: s.style, senderName: s.senderName, showTime: s.showTime, colors: s.colors, fromDiscord: s.fromDiscord, channel: !!s.channelId };
+  return { enabled: s.enabled, set: !!u, tail: u ? `…${u.slice(-6)}` : '', kinds: s.kinds, style: s.style, senderName: s.senderName, showTime: s.showTime, colors: s.colors, fromDiscord: s.fromDiscord, channel: !!s.channelId, confirmCard: s.confirmCard, confirmLine: s.confirmLine };
 }
 
 /** the channel a webhook posts to (Discord tells it to anyone who holds the address) */
@@ -68,19 +68,19 @@ async function channelOf(url: string): Promise<string> {
 }
 
 /** the channels where the bot listens: what an administrator writes there goes to the game chat of these servers */
-export function chatChannels(): { channelId: string; serverIds: number[] }[] {
+export function chatChannels(): { channelId: string; serverIds: number[]; confirmCard: boolean; confirmLine: boolean }[] {
   const all = (db.prepare("SELECT server_id FROM game_news_targets WHERE token_hash <> ''").all() as { server_id: number }[]).map((r) => r.server_id);
   const own = overrides().gamenews_chat ?? [];
-  const map = new Map<string, Set<number>>();
+  const map = new Map<string, { ids: Set<number>; card: boolean; line: boolean }>();
   const add = (s: ChatStored, ids: number[]) => {
     if (!s.enabled || !s.fromDiscord || !s.channelId || !s.webhook || ids.length === 0) return;
-    const set = map.get(s.channelId) ?? new Set<number>();
-    for (const id of ids) set.add(id);
-    map.set(s.channelId, set);
+    const e = map.get(s.channelId) ?? { ids: new Set<number>(), card: s.confirmCard, line: s.confirmLine };
+    for (const id of ids) e.ids.add(id);
+    map.set(s.channelId, e);
   };
   add(read(), all.filter((id) => !own.includes(id)));
   for (const id of own) if (all.includes(id)) add(read(id), [id]);
-  return [...map].map(([channelId, ids]) => ({ channelId, serverIds: [...ids] }));
+  return [...map].map(([channelId, e]) => ({ channelId, serverIds: [...e.ids], confirmCard: e.card, confirmLine: e.line }));
 }
 
 // ---- posting
@@ -217,6 +217,8 @@ export function registerGameNewsChat({ app, admin }: { app: Express; admin: Requ
       senderName: z.string().max(80).optional(),
       showTime: z.boolean().optional(),
       fromDiscord: z.boolean().optional(),
+      confirmCard: z.boolean().optional(),
+      confirmLine: z.boolean().optional(),
       colors: colorsSchema.optional(),
     }).safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Проверьте поля' });
@@ -230,6 +232,8 @@ export function registerGameNewsChat({ app, admin }: { app: Express; admin: Requ
     }
     if (b.data.clear) { s.webhook = ''; s.channelId = ''; s.fromDiscord = false; }
     if (b.data.fromDiscord !== undefined) s.fromDiscord = b.data.fromDiscord;
+    if (b.data.confirmCard !== undefined) s.confirmCard = b.data.confirmCard;
+    if (b.data.confirmLine !== undefined) s.confirmLine = b.data.confirmLine;
     // an old webhook saved before the channel was remembered: find it now
     if (s.fromDiscord && !s.channelId) {
       const url = webhookUrl(s);

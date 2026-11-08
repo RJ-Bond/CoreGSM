@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
-  DEFAULT_COLORS, activeChatKinds, ansiChatLine, ansiEventLine, chunkLines, escapeDiscord, formatChatLine, formatEventLine, isDiscordWebhook, normalizeChat, wrapForDiscord,
+  ansiDiscordLine, DEFAULT_COLORS, activeChatKinds, ansiChatLine, ansiEventLine, chunkLines, escapeDiscord, formatChatLine, formatEventLine, isDiscordWebhook, normalizeChat, wrapForDiscord,
 } from '../src/gamenews/gameNewsChatLogic.ts';
 
 describe('game chat for Discord', () => {
@@ -91,6 +91,16 @@ describe('game chat for Discord', () => {
     assert.equal(line.includes(ESC + '[31m'), false);
     assert.equal(wrapForDiscord('ansi', 'a'), '```ansi\na\n```');
     assert.equal(wrapForDiscord('plain', 'a'), 'a');
+  });
+
+  it('writes what an administrator wrote in Discord like the game chat, and keeps the text harmless', () => {
+    const ESC = String.fromCharCode(27);
+    const line = ansiDiscordLine('Админ', 'привет', '20:47');
+    assert.equal(line.includes('* [Discord]'), true);
+    assert.equal(line.includes('[20:47] '), true);
+    assert.equal(ansiDiscordLine('A', '', '20:47'), '');
+    assert.equal(ansiDiscordLine('A', 'x ```' + ESC + '[31mred', '').includes('```'), false);
+    assert.equal(ansiDiscordLine('A', 'x ```' + ESC + '[31mred', '').includes(ESC + '[31m'), false);
   });
 
   it('puts the time in front of a line like the game does, when it is asked to', () => {

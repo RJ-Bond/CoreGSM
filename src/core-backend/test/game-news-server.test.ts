@@ -20,6 +20,7 @@ const watch = await import('../src/gamenews/gameNewsWatch.ts');
 await import('../src/monitoring/restarts.ts'); // these make the tables that the lines of the chat read
 await import('../src/monitoring/wipes.ts');
 const { getWelcome } = await import('../src/gamenews/gameNewsWelcome.ts');
+const register = await import('../src/gamenews/gameNewsRegister.ts');
 const { encryptSecret } = await import('../src/security/secrets.ts');
 
 const NOW = 1_900_000_000_000;
@@ -142,7 +143,7 @@ describe('channels the bot listens to', () => {
 
   it('the general channel serves the servers that have no chat settings of their own', () => {
     setSetting('gamenews_chat', stored({}));
-    assert.deepEqual(chat.chatChannels(), [{ channelId: '111111111111111111', serverIds: [1, 2] }]);
+    assert.deepEqual(chat.chatChannels(), [{ channelId: '111111111111111111', serverIds: [1, 2], confirmCard: true, confirmLine: true }]);
   });
 
   it('a server with its own channel is served by that one only', () => {
@@ -150,6 +151,14 @@ describe('channels the bot listens to', () => {
     const list = chat.chatChannels();
     assert.deepEqual(list.find((c) => c.channelId === '111111111111111111')?.serverIds, [1]);
     assert.deepEqual(list.find((c) => c.channelId === '222222222222222222')?.serverIds, [2]);
+  });
+
+  it('carries the way the line is confirmed: a card and a line in the channel, each can be off', () => {
+    setSetting('gamenews_chat', stored({ confirmCard: false, confirmLine: false }));
+    const c = chat.chatChannels().find((x) => x.channelId === '111111111111111111');
+    assert.equal(c?.confirmCard, false);
+    assert.equal(c?.confirmLine, false);
+    setSetting('gamenews_chat', stored({}));
   });
 
   it('a channel that is not known is not listened to; a switched-off chat is not either', () => {
@@ -184,5 +193,30 @@ describe('the plugin has been silent', () => {
     state.saveJob({ server_id: 1, run_at: NOW - 6 * 60_000, started_at: NOW - 12 * 60_000, total_sec: 360, last_notice: 0, requested_by: 'x', source: 'панель', state: 'sent' });
     assert.equal(watch.checkPluginSilence(NOW), 0);
     assert.equal(getSetting('gamenews_silent'), null);
+  });
+});
+
+describe('the hint a player reads about .register and .login', () => {
+  it('picks the commands out: white bold, the arguments in lilac, the rest in the colour of the line', () => {
+    const line = register.tag('#FFCC33', '* Новый аккаунт: .register (пароль) (подтверждение). Есть аккаунт: .login (логин) (пароль)');
+    assert.equal(line.includes('<color=#FFFFFF><b>.register</b></color>'), true);
+    assert.equal(line.includes('<color=#B9A7FF> (пароль) (подтверждение)</color>'), true);
+    assert.equal(line.includes('<color=#FFFFFF><b>.login</b></color>'), true);
+    assert.equal(line.startsWith('<color=#FFCC33>* Новый аккаунт: </color>'), true);
+    assert.equal((line.match(/<color/g) ?? []).length, (line.match(/<\/color>/g) ?? []).length);
+  });
+
+  it('keeps a text without commands in one colour and strips tags a person typed', () => {
+    assert.equal(register.tag('#5FD068', '* Готово! <size=99>x'), '<color=#5FD068>* Готово! size=99x</color>');
+    assert.equal(register.tag('#5FD068', 'ну и точка.'), '<color=#5FD068>ну и точка.</color>');
+  });
+
+  it('moves the first wording of the hint to the new one, and keeps a changed text', () => {
+    const old = '* Вы ещё не зарегистрированы в панели. Для регистрации введите .register пароль подтверждение_пароля';
+    setSetting('gamenews_register', JSON.stringify({ enabled: true, promptText: old }));
+    assert.match(register.getRegisterSettings().promptText, /\.login \(логин\) \(пароль\)/);
+    setSetting('gamenews_register', JSON.stringify({ enabled: true, promptText: 'мой текст' }));
+    assert.equal(register.getRegisterSettings().promptText, 'мой текст');
+    setSetting('gamenews_register', null);
   });
 });

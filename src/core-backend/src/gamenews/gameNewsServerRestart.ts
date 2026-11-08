@@ -15,12 +15,13 @@ import { log } from '../logger.js';
 import { internal } from '../security/auth.js';
 import { pluginTarget, queueNews } from './gameNews.js';
 import { chatChannels } from './gameNewsChat.js';
+import { ansiDiscordLine } from './gameNewsChatLogic.js';
 import { plainLine } from './gameNewsJoinLeave.js';
 import {
   DEFAULT_TEXTS, MAX_SECONDS, announceLine, cancelLine, formatLeft, nextNotice, noticeSeconds, nowLine, parseDuration, type RestartTexts,
 } from './gameNewsRestartLogic.js';
 import { DUE_GRACE_MS, closeLog, getJob, jobsIn, logRunAt, logStart, recentLog, saveJob, setLastNotice, setState, type Job } from './gameNewsRestartState.js';
-import { serverLabel } from './gameNewsVars.js';
+import { clock, liveState, serverLabel } from './gameNewsVars.js';
 import { checkPluginSilence } from './gameNewsWatch.js';
 
 // ---- the words of the notices (set in the panel)
@@ -241,32 +242,49 @@ export function registerGameNewsServerRestart({ app, admin }: { app: Express; ad
     res.json({ channels: chatChannels() });
   });
 
-  // ---- the Discord bot: «/say»: a line from Discord into the game chat (the same rights as «/restart»)
+  // ---- the Discord bot: «/say» and the line an administrator writes in the chat channel: into the game chat
   app.post('/internal/game-say', internal, (req, res) => {
     const b = z.object({
       text: z.string().min(1).max(300), server: z.string().max(100).optional(), channelId: z.string().max(30).optional(), name: z.string().max(80),
       discordId: z.string().max(32), discordAdmin: z.boolean(),
     }).safeParse(req.body);
-    if (!b.success) return res.status(400).json({ ok: false, text: 'Проверьте поля' });
+    if (!b.success) return res.status(400).json({ ok: false, status: 'error', text: 'Проверьте поля' });
     const linked = db.prepare("SELECT username FROM users WHERE discord_id = ? AND role = 'admin' AND status = 'active'").get(b.data.discordId) as { username: string } | undefined;
     // a line written in the chat channel by somebody who is not an administrator is just talk: no answer
-    if (!b.data.discordAdmin && !linked) return res.json({ ok: false, silent: !!b.data.channelId, text: 'Эта команда только для администраторов.' });
+    if (!b.data.discordAdmin && !linked) return res.json({ ok: false, status: 'denied', silent: !!b.data.channelId, text: 'Эта команда только для администраторов.' });
     // one line in two seconds per person: a flood into the game chat helps nobody
-    const gate = sayGate(b.data.discordId, Date.now());
-    if (!gate) return res.json({ ok: false, rate: true, text: 'Слишком часто: подождите пару секунд.' });
+    if (!sayGate(b.data.discordId, Date.now())) return res.json({ ok: false, status: 'rate', rate: true, text: 'Слишком часто: подождите пару секунд.' });
     const servers = pluginServers();
     const q = (b.data.server ?? '').trim().toLowerCase();
     const ch = b.data.channelId ? chatChannels().find((c) => c.channelId === b.data.channelId) : undefined;
-    if (b.data.channelId && !ch) return res.json({ ok: false, silent: true, text: '' });
+    if (b.data.channelId && !ch) return res.json({ ok: false, status: 'denied', silent: true, text: '' });
     const found = ch ? servers.filter((s) => ch.serverIds.includes(s.id)) : q ? servers.filter((s) => s.name.toLowerCase().includes(q)) : servers;
-    if (found.length === 0) return res.json({ ok: false, text: q ? 'Сервер не найден среди серверов с плагином.' : 'Нет серверов с плагином CoreGSM.' });
+    if (found.length === 0) return res.json({ ok: false, status: 'error', text: q ? 'Сервер не найден среди серверов с плагином.' : 'Нет серверов с плагином CoreGSM.' });
     const who = plainLine(linked?.username ?? b.data.name) || 'Discord';
     const body = plainLine(b.data.text);
-    if (!body) return res.json({ ok: false, text: 'Введите текст.' });
+    if (!body) return res.json({ ok: false, status: 'error', text: 'Введите текст.' });
+    const now = Date.now();
     const line = `<color=#7289DA>* [Discord] ${who}:</color> <color=#FFFFFF>${body}</color>`;
-    const out = queueNews(line, found.map((s) => s.id), `Discord: ${who}`, Date.now(), { onlyOnline: true });
-    const sent = out.filter((r) => r.queued && r.online).length;
-    res.json({ ok: sent > 0, text: sent > 0 ? `Отправлено в игру (серверов: ${sent}).` : 'На выбранных серверах сейчас никого нет в игре.' });
+    const out = queueNews(line, found.map((s) => s.id), `Discord: ${who}`, now, { onlyOnline: true });
+    const queued = out.filter((r) => r.queued);
+    const time = clock(now);
+    res.json({
+      ok: queued.length > 0,
+      status: queued.length > 0 ? 'sent' : 'empty',
+      text: queued.length > 0 ? `Отправлено в игру (серверов: ${queued.length}).` : 'На выбранных серверах сейчас никого нет в игре.',
+      ids: queued.map((r) => r.logId).filter((x): x is number => typeof x === 'number'),
+      servers: queued.map((r) => ({ name: r.serverName, players: liveState(r.serverId, now)?.players ?? null })),
+      ansi: ansiDiscordLine(who, body, time),
+      confirm: { card: ch ? ch.confirmCard : true, line: ch ? ch.confirmLine : false },
+    });
+  });
+
+  // the bot asks whether the game has shown the lines (the plugin took them): to turn the mark under the message into 🎮
+  app.get('/internal/game-say-status', internal, (req, res) => {
+    const ids = String(req.query.ids ?? '').split(',').map(Number).filter((n) => Number.isInteger(n) && n > 0).slice(0, 20);
+    if (ids.length === 0) return res.json({ delivered: false, failed: false });
+    const rows = db.prepare(`SELECT status FROM game_news_log WHERE id IN (${ids.map(() => '?').join(',')})`).all(...ids) as { status: string }[];
+    res.json({ delivered: rows.length > 0 && rows.every((r) => r.status === 'delivered'), failed: rows.some((r) => r.status === 'expired' || r.status === 'failed') });
   });
 
   // ---- the Discord bot (it is trusted; the person is checked here)

@@ -37,6 +37,8 @@ export interface RegisterSettings {
   discordText: string;
   /** registration by request: the request is sent */
   pendingText: string;
+  /** after .login: the game account is linked to an account of the panel: {login} {panel} */
+  loginText: string;
   /** how often the Discord hint is repeated for the same player, hours */
   discordEveryHours: number;
   /** a registered player reads his rank at every join */
@@ -47,21 +49,42 @@ export interface RegisterSettings {
 
 export const DEFAULT_REGISTER: RegisterSettings = {
   enabled: false,
-  promptText: '* Вы ещё не зарегистрированы в панели. Для регистрации введите .register пароль подтверждение_пароля',
+  promptText: '* Вы ещё не зарегистрированы в панели. Новый аккаунт: .register (пароль) (подтверждение). Уже есть аккаунт на сайте: .login (логин) (пароль)',
   doneText: '* Готово! Вы зарегистрированы в панели, ваш логин: {login}',
   discordText: '* Привяжите Discord в профиле панели ({panel}): аккаунт будет под рукой в Discord, а роли и ранг — на вашем сервере.',
   pendingText: '* Заявка на регистрацию отправлена. Когда администратор её одобрит, вы сможете войти в панель.',
+  loginText: '* Готово! Игровой аккаунт привязан к аккаунту {login} в панели.',
   discordEveryHours: 24,
   rankEnabled: true,
   rankText: '* {name}, ваш ранг: {rank} · {hours} ч{next}',
 };
+
+/** the hint of the first version: a setting that still holds exactly it has not been changed by anybody */
+const OLD_PROMPT = '* Вы ещё не зарегистрированы в панели. Для регистрации введите .register пароль подтверждение_пароля';
 
 // the colours of the lines the player reads
 const C_INFO = '#FFCC33';
 const C_GOOD = '#5FD068';
 const C_BAD = '#FF5555';
 const C_HINT = '#6EC1FF';
-const tag = (color: string, text: string): string => `<color=${color}>${plainLine(text)}</color>`;
+/**
+ * A line the player reads: in one colour, with the commands picked out: «.register» in white bold and the arguments after it,
+ * «(пароль)», in lilac (like the usage line of the commands of the game). The tags are flat, so no client has to nest them.
+ */
+export function tag(color: string, text: string): string {
+  const plain = plainLine(text);
+  const parts: string[] = [];
+  let last = 0;
+  for (const m of plain.matchAll(/(^|\s)(\.[a-zа-я]+)((?:\s*\([^()]{1,40}\))*)/giu)) {
+    const start = (m.index ?? 0) + m[1].length;
+    if (start > last) parts.push(`<color=${color}>${plain.slice(last, start)}</color>`);
+    parts.push(`<color=#FFFFFF><b>${m[2]}</b></color>`);
+    if (m[3]) parts.push(`<color=#B9A7FF>${m[3]}</color>`);
+    last = start + m[2].length + m[3].length;
+  }
+  if (last < plain.length) parts.push(`<color=${color}>${plain.slice(last)}</color>`);
+  return parts.length ? parts.join('') : `<color=${color}></color>`;
+}
 
 export function getRegisterSettings(serverId?: number): RegisterSettings {
   try {
@@ -70,10 +93,12 @@ export function getRegisterSettings(serverId?: number): RegisterSettings {
     const text = (x: unknown, def: string) => (typeof x === 'string' && x.trim() ? x : def);
     return {
       enabled: !!v.enabled,
-      promptText: text(v.promptText, d.promptText),
+      // the first wording of the hint (before .login and the brackets) moves to the new one; a text the administrator changed stays
+      promptText: v.promptText === OLD_PROMPT ? d.promptText : text(v.promptText, d.promptText),
       doneText: text(v.doneText, d.doneText),
       discordText: text(v.discordText, d.discordText),
       pendingText: text(v.pendingText, d.pendingText),
+      loginText: text(v.loginText, d.loginText),
       discordEveryHours: Number.isFinite(v.discordEveryHours) ? Math.min(720, Math.max(1, Math.round(v.discordEveryHours as number))) : d.discordEveryHours,
       rankEnabled: typeof v.rankEnabled === 'boolean' ? v.rankEnabled : d.rankEnabled,
       rankText: text(v.rankText, d.rankText),
@@ -143,7 +168,7 @@ export function registerGameNewsPlayers({ app }: { app: Express }): void {
   // .register <password> <password again>
   app.post('/api/game-news/player/register', plugin, async (req, res) => {
     const b = z.object({ id: idSchema, name: z.string().max(100), password: z.string().min(1).max(256) }).safeParse(req.body);
-    if (!b.success) return res.status(400).json({ replies: [tag(C_BAD, '* Не удалось разобрать команду. Введите: .register пароль подтверждение_пароля')] });
+    if (!b.success) return res.status(400).json({ replies: [tag(C_BAD, '* Не удалось разобрать команду. Введите: .register (пароль) (подтверждение)')] });
     const s = getRegisterSettings((req as typeof req & { gameServerId?: number }).gameServerId);
     const now = Date.now();
     const say = (color: string, text: string) => res.json({ ok: false, replies: [tag(color, text)] });
@@ -179,4 +204,45 @@ export function registerGameNewsPlayers({ app }: { app: Express }): void {
     if (pending) return res.json({ ok: true, pending: true, login, replies: [tag(C_GOOD, fill(s.pendingText, vars))] });
     res.json({ ok: true, login, replies: [tag(C_GOOD, fill(s.doneText, vars)), tag(C_HINT, fill(s.discordText, vars))] });
   });
+
+  // .login <login> <password>: the player already has an account in the panel; this game account is linked to it
+  app.post('/api/game-news/player/login', plugin, async (req, res) => {
+    const b = z.object({ id: idSchema, name: z.string().max(100), login: z.string().min(1).max(64), password: z.string().min(1).max(256) }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ replies: [tag(C_BAD, '* Не удалось разобрать команду. Введите: .login (логин) (пароль)')] });
+    const s = getRegisterSettings((req as typeof req & { gameServerId?: number }).gameServerId);
+    const now = Date.now();
+    const say = (color: string, text: string) => res.json({ ok: false, replies: [tag(color, text)] });
+    if (!s.enabled) return say(C_BAD, '* Вход из игры отключён.');
+    // a few tries an hour for one game account and for one login (somebody may try to guess a password of another person)
+    if (tooMany(b.data.id, now) || tooMany(`login:${b.data.login.toLowerCase()}`, now)) return say(C_BAD, '* Слишком много попыток. Попробуйте позже.');
+    if (needsSetup()) return say(C_BAD, '* Панель ещё не настроена.');
+
+    const own = db.prepare('SELECT g.user_id, u.username FROM game_identities g JOIN users u ON u.id = g.user_id WHERE g.platform_id = ?').get(b.data.id) as { user_id: number; username: string } | undefined;
+    if (own) return say(C_INFO, `* Этот игровой аккаунт уже привязан к аккаунту ${own.username}.`);
+
+    const u = db.prepare('SELECT id, username, password_hash, status, banned_at, banned_until, totp_enabled FROM users WHERE ulower(username) = ?').get(b.data.login.toLowerCase()) as
+      | { id: number; username: string; password_hash: string; status: string; banned_at: number | null; banned_until: number | null; totp_enabled: number }
+      | undefined;
+    // the same answer and the same work for a wrong login and a wrong password
+    const ok = await bcrypt.compare(b.data.password, u?.password_hash ?? DUMMY_HASH);
+    if (!u || !ok) return say(C_BAD, '* Неверный логин или пароль.');
+    if (u.status === 'pending') return say(C_INFO, '* Аккаунт ещё ждёт одобрения администратора.');
+    if (u.status !== 'active') return say(C_BAD, '* Этот аккаунт сейчас недоступен.');
+    if (u.banned_at && (!u.banned_until || u.banned_until > now)) return say(C_BAD, '* Этот аккаунт заблокирован.');
+    // a second factor cannot be asked in the chat: the link is made in the panel instead
+    if (u.totp_enabled) return say(C_INFO, `* На аккаунте включена двухфакторная защита: привяжите игру в профиле панели (${panelUrl()}).`);
+
+    db.prepare('INSERT INTO game_identities (platform_id, user_id, nick, created_at, last_hint_at) VALUES (?, ?, ?, ?, ?)').run(b.data.id, u.id, b.data.name, now, now);
+    // the nickname is linked to the account when the account has none yet and no other account holds this nickname
+    const nick = plainLine(b.data.name).slice(0, 40);
+    const has = db.prepare('SELECT game_nick FROM user_player WHERE user_id = ?').get(u.id) as { game_nick: string } | undefined;
+    if (nick && !has?.game_nick && !db.prepare('SELECT 1 FROM user_player WHERE ulower(game_nick) = ulower(?)').get(nick)) {
+      db.prepare("INSERT INTO user_player (user_id, game_nick, bio, public_profile) VALUES (?, ?, '', 0) ON CONFLICT(user_id) DO UPDATE SET game_nick = excluded.game_nick").run(u.id, nick);
+    }
+    db.prepare('INSERT INTO audit (ts, actor, action, detail) VALUES (?, ?, ?, ?)').run(now, 'game-plugin', 'game_login', u.username);
+    res.json({ ok: true, login: u.username, replies: [tag(C_GOOD, fill(s.loginText, { login: u.username, panel: panelUrl() }))] });
+  });
 }
+
+/** compared against when no such login exists, so that the time does not tell whether it does */
+const DUMMY_HASH = bcrypt.hashSync('coregsm-no-such-user', 12);

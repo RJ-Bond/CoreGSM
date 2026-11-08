@@ -247,12 +247,29 @@ export const WELCOME_STYLES: WelcomeStyle[] = [
 ];
 
 /** registration in the panel from the game: switch, texts and how often the Discord hint is repeated */
+/** a line of the chat in one colour with the commands picked out (the same as the panel does for the player): «.register» white bold, «(пароль)» lilac */
+export function commandLine(color: string, text: string): string {
+  const plain = text.replace(/[<>]/g, '');
+  const parts: string[] = [];
+  let last = 0;
+  for (const m of plain.matchAll(/(^|\s)(\.[a-zа-я]+)((?:\s*\([^()]{1,40}\))*)/giu)) {
+    const start = (m.index ?? 0) + m[1].length;
+    if (start > last) parts.push(`<color=${color}>${plain.slice(last, start)}</color>`);
+    parts.push(`<color=#FFFFFF><b>${m[2]}</b></color>`);
+    if (m[3]) parts.push(`<color=#B9A7FF>${m[3]}</color>`);
+    last = start + m[2].length + m[3].length;
+  }
+  if (last < plain.length) parts.push(`<color=${color}>${plain.slice(last)}</color>`);
+  return parts.join('');
+}
+
 export interface RegisterSettings {
   enabled: boolean;
   promptText: string;
   doneText: string;
   discordText: string;
   pendingText: string;
+  loginText: string;
   discordEveryHours: number;
   rankEnabled: boolean;
   rankText: string;
@@ -311,6 +328,9 @@ export interface ChatSettings {
   fromDiscord: boolean;
   /** the channel of the webhook is known (the bot can listen to it) */
   channel: boolean;
+  /** how a line from Discord is confirmed: a card under it, a line in the channel */
+  confirmCard: boolean;
+  confirmLine: boolean;
 }
 
 /** everything the «rules» endpoint returns: automatic announcements and the settings of the events */

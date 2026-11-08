@@ -6,7 +6,7 @@ import { ChatLines, NewsEditor, NewsPreview } from '../components/NewsEditor';
 import { confirmDialog } from '../confirm';
 import { t, useI18n } from '../i18n';
 import {
-  ANSI_COLORS, CHAT_KINDS, CHAT_PRESETS, SWATCHES, WELCOME_STYLES, WELCOME_VARIABLES, composeLine, isHex, validateNews,
+  ANSI_COLORS, CHAT_KINDS, CHAT_PRESETS, SWATCHES, commandLine, WELCOME_STYLES, WELCOME_VARIABLES, composeLine, isHex, validateNews,
   type AnsiColor, type ChatColors, type ChatKind, type ChatSettings, type Extras, type JoinLeave, type RegisterSettings, type Welcome, type WelcomeStyle,
 } from '../gameNews';
 import { ScopeNote, useScope } from './GameNewsScope';
@@ -219,13 +219,13 @@ export function RegisterCard({ initial }: { initial: RegisterSettings }) {
     delay: 900,
     validate: (v) => {
       if (!Number.isInteger(v.discordEveryHours) || v.discordEveryHours < 1 || v.discordEveryHours > 720) return t('gn.rg.badHours');
-      return [v.promptText, v.doneText, v.discordText, v.pendingText, v.rankText].some((x) => !x.trim()) ? t('gn.hint.text') : null;
+      return [v.promptText, v.doneText, v.discordText, v.pendingText, v.loginText, v.rankText].some((x) => !x.trim()) ? t('gn.hint.text') : null;
     },
     save: async (v) => { await api(`/game-news/register-settings${sc.q}`, 'PUT', v); setSaved(v); sc.changed(); },
   });
-  const sample = (text: string, color: string) => `<color=${color}>${text.replace(/[<>]/g, '').replace(/\{login\}/g, 'WhiteLegioN').replace(/\{panel\}/g, 'coregsm.example.com')}</color>`;
+  const sample = (text: string, color: string) => commandLine(color, text.replace(/\{login\}/g, 'WhiteLegioN').replace(/\{panel\}/g, 'coregsm.example.com'));
 
-  const field = (label: string, key: 'promptText' | 'doneText' | 'discordText' | 'pendingText') => (
+  const field = (label: string, key: 'promptText' | 'doneText' | 'discordText' | 'pendingText' | 'loginText') => (
     <Field label={label}>
       <AutoText value={f[key]} maxLength={300} onChange={(e) => set(key, e.target.value)} />
     </Field>
@@ -252,6 +252,7 @@ export function RegisterCard({ initial }: { initial: RegisterSettings }) {
         {field(t('gn.rg.done'), 'doneText')}
         {field(t('gn.rg.discord'), 'discordText')}
         {field(t('gn.rg.pending'), 'pendingText')}
+        {field(t('gn.rg.login'), 'loginText')}
       </div>
 
       <label className="flex items-center gap-3 font-bold">
@@ -269,7 +270,7 @@ export function RegisterCard({ initial }: { initial: RegisterSettings }) {
       </Field>
 
       <VarChips vars={[{ name: 'login', example: 'WhiteLegioN' }, { name: 'panel', example: 'coregsm.example.ru' }]} onPick={(v) => set('promptText', `${f.promptText} ${v}`.trim())} />
-      <ChatLines lines={[sample(f.promptText, '#FFCC33'), sample(f.doneText, '#5FD068'), ...(f.rankEnabled ? [`<color=#5FD068>${f.rankText.replace(/[<>]/g, '').replace(/\{name\}/g, 'WhiteLegioN').replace(/\{rank\}/g, 'Охотник на кровь').replace(/\{hours\}/g, '42').replace(/\{next\}/g, ' · до «Страж замка» ещё 28 ч')}</color>`] : []), sample(f.discordText, '#6EC1FF')]} />
+      <ChatLines lines={[sample(f.promptText, '#FFCC33'), sample(f.doneText, '#5FD068'), sample(f.loginText, '#5FD068'), ...(f.rankEnabled ? [`<color=#5FD068>${f.rankText.replace(/[<>]/g, '').replace(/\{name\}/g, 'WhiteLegioN').replace(/\{rank\}/g, 'Охотник на кровь').replace(/\{hours\}/g, '42').replace(/\{next\}/g, ' · до «Страж замка» ещё 28 ч')}</color>`] : []), sample(f.discordText, '#6EC1FF')]} />
       <p className="text-sm font-semibold text-mute">{t('gn.rg.vars')}</p>
       <p className="text-sm font-semibold text-danger">{t('gn.rg.warn')}</p>
       {auto.invalid && <p className="text-sm font-semibold text-danger">{auto.error}</p>}
@@ -457,6 +458,21 @@ export function ChatCard({ initial, joinText, leaveText }: { initial: ChatSettin
           <span className="block text-sm font-semibold text-mute">{t(st.set ? 'gn.ch.fromDiscordNote' : 'gn.ch.fromDiscordNeed')}</span>
         </span>
       </label>
+
+      {st.fromDiscord && (
+        <div className="space-y-2 rounded-xl border border-line px-4 py-3">
+          <div className="font-extrabold">{t('gn.ch.confirm')}</div>
+          <p className="text-sm font-semibold text-mute">{t('gn.ch.confirmMarks')}</p>
+          <label className="flex items-start gap-3 font-bold">
+            <Switch className="mt-0.5" checked={st.confirmCard} disabled={busy === 'confirmCard'} onChange={(v) => void send({ confirmCard: v }, 'confirmCard', true)} />
+            <span>{t('gn.ch.confirmCard')}<span className="block text-sm font-semibold text-mute">{t('gn.ch.confirmCardNote')}</span></span>
+          </label>
+          <label className="flex items-start gap-3 font-bold">
+            <Switch className="mt-0.5" checked={st.confirmLine} disabled={busy === 'confirmLine'} onChange={(v) => void send({ confirmLine: v }, 'confirmLine', true)} />
+            <span>{t('gn.ch.confirmLine')}<span className="block text-sm font-semibold text-mute">{t('gn.ch.confirmLineNote')}</span></span>
+          </label>
+        </div>
+      )}
 
       <fieldset className="space-y-2">
         <legend className="mb-1 font-extrabold">{t('gn.ch.what')}</legend>

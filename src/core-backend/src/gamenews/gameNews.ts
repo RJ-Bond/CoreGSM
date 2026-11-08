@@ -22,7 +22,7 @@ import { consumeDue } from './gameNewsRestartState.js';
 
 export const QUEUE_TTL_MS = 5 * 60_000;
 /** the version of the game plugin this panel was built for: an older plugin is shown as outdated */
-export const PLUGIN_VERSION = '0.10.0';
+export const PLUGIN_VERSION = '0.11.0';
 /** the games the plugin exists for */
 export const SUPPORTED_GAMES = new Set(['vrising']);
 const PULL_MIN_GAP_MS = 800;
@@ -54,7 +54,7 @@ export function pluginTarget(req: Request): TargetRow | null {
   return (db.prepare('SELECT * FROM game_news_targets WHERE token_hash = ?').get(sha256(m[1])) as TargetRow | undefined) ?? null;
 }
 
-export interface QueueResult { serverId: number; serverName: string; queued: boolean; online: boolean; error: string }
+export interface QueueResult { serverId: number; serverName: string; queued: boolean; online: boolean; error: string; logId?: number }
 
 /**
  * Puts a message into the queue of the given servers ([] = every server that has a plugin token).
@@ -80,8 +80,8 @@ export function queueNews(text: string, serverIds: number[], by: string, now: nu
       if (opts.onlyOnline && (!s || !s.online || s.players <= 0)) continue; // nobody to read it
       // the variables ({server} {online} {max} {time} {greeting} {restart} {wipe} {discord} {tip}) are filled in for each server
       const filled = applyVars(text, varsFor(id, now));
-      insert.run(id, name, filled, 'queued', '', by, now);
-      results.push({ serverId: id, serverName: name, queued: true, online: t.last_seen > 0 && now - t.last_seen < ONLINE_MS, error: '' });
+      const row = insert.run(id, name, filled, 'queued', '', by, now);
+      results.push({ serverId: id, serverName: name, queued: true, online: t.last_seen > 0 && now - t.last_seen < ONLINE_MS, error: '', logId: Number(row.lastInsertRowid) });
     }
     db.prepare('DELETE FROM game_news_log WHERE id NOT IN (SELECT id FROM game_news_log ORDER BY id DESC LIMIT 500)').run();
   })();
