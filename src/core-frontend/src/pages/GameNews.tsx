@@ -57,7 +57,7 @@ export default function GameNewsPage({ sub = '' }: { sub?: string }) {
   const loadRules = () => api<RulesState>(`/game-news/rules${q}`).then(setRd).catch(() => undefined);
   usePoll(() => Promise.all([loadMain(), loadRules()]), 10_000);
   // another tab: the old cards go at once, the settings of the new one are read
-  useEffect(() => { setRd(null); void loadRules(); }, [effScope]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { setRd(null); void api<RulesState>(`/game-news/rules${q}`).then(setRd).catch(() => undefined); }, [q]);
 
   const problem = validateNews(text);
   // the plugin exists for some games only: servers of other games are not listed (their number is shown)

@@ -200,6 +200,7 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
   }, [isAdmin]);
   const [menu, setMenu] = useState(false);
   // the servers with the game plugin: each has its own page of settings under «Игровой плагин» (when there are several)
+  const onGameNews = current === 'gamenews';
   const [pluginServers, setPluginServers] = useState<{ id: number; name: string; online: boolean; players: number | null; max: number | null; lastSeen: number | null }[]>([]);
   useEffect(() => {
     if (!isAdmin) return;
@@ -208,9 +209,9 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
       .then((d) => { if (alive) setPluginServers(d.servers.filter((x) => x.supported && x.hasToken).map((x) => ({ id: x.id, name: x.name, online: x.online, players: x.players, max: x.maxPlayers, lastSeen: x.lastSeen }))); })
       .catch(() => undefined);
     void load();
-    const timer = window.setInterval(() => void load(), current === 'gamenews' ? 15_000 : 60_000);
+    const timer = window.setInterval(() => void load(), onGameNews ? 15_000 : 60_000);
     return () => { alive = false; window.clearInterval(timer); };
-  }, [isAdmin, current === 'gamenews']); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [isAdmin, onGameNews]); // eslint-disable-line react-hooks/exhaustive-deps
   const first = tail.split('/')[0];
   const crumb = !['servers', 'discord', 'news'].includes(current) || !first ? '' : first === 'new' ? t('adm.crumb.new') : /^\d+$/.test(first) ? t('adm.crumb.edit') : '';
   const divider = <span aria-hidden className="mx-1 w-px shrink-0 self-stretch bg-line md:hidden" />;
