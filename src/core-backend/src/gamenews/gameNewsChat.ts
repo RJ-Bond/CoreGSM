@@ -23,7 +23,7 @@ import { decryptSecret, encryptSecret } from '../security/secrets.js';
 import { pluginTarget } from './gameNews.js';
 import {
   ANSI_COLORS, CHAT_KINDS, activeChatKinds, ansiChatLine, ansiEventLine, chunkLines, formatChatLine, formatEventLine, isDiscordWebhook,
-  normalizeChat, wrapForDiscord, type ChatKind, type ChatStored,
+  normalizeChat, paletteBlock, wrapForDiscord, type ChatKind, type ChatStored,
 } from './gameNewsChatLogic.js';
 import { getJoinLeave } from './gameNewsJoinLeave.js';
 import { clock } from './gameNewsVars.js';
@@ -274,6 +274,11 @@ export function registerGameNewsChat({ app, admin }: { app: Express; admin: Requ
         formatEventLine(jl.joinText, 'WhiteLegioN', '', tm),
         formatEventLine(jl.leaveText, 'WhiteLegioN', '', tm),
       ];
+    // «Палитра»: the eight colours as Discord draws them (the panel's preview is checked against this)
+    if (req.query.palette) {
+      const p = await post(url, wrapForDiscord('ansi', paletteBlock()), s.senderName);
+      return res.json({ ok: p.ok });
+    }
     const r = await post(url, '✅ CoreGSM: канал подключён. Так будет выглядеть чат игры:', s.senderName);
     if (r.ok) await post(url, wrapForDiscord(s.style, lines.join('\n')), s.senderName);
     res.json({ ok: r.ok });

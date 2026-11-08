@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="6e99600fcb10"
+COREGSM_BUILD="c0d8913f8074"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.87"
+COREGSM_VERSION="1.1.88"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -24079,7 +24079,7 @@ import { decryptSecret, encryptSecret } from '../security/secrets.js';
 import { pluginTarget } from './gameNews.js';
 import {
   ANSI_COLORS, CHAT_KINDS, activeChatKinds, ansiChatLine, ansiEventLine, chunkLines, formatChatLine, formatEventLine, isDiscordWebhook,
-  normalizeChat, wrapForDiscord, type ChatKind, type ChatStored,
+  normalizeChat, paletteBlock, wrapForDiscord, type ChatKind, type ChatStored,
 } from './gameNewsChatLogic.js';
 import { getJoinLeave } from './gameNewsJoinLeave.js';
 import { clock } from './gameNewsVars.js';
@@ -24330,6 +24330,11 @@ export function registerGameNewsChat({ app, admin }: { app: Express; admin: Requ
         formatEventLine(jl.joinText, 'WhiteLegioN', '', tm),
         formatEventLine(jl.leaveText, 'WhiteLegioN', '', tm),
       ];
+    // «Палитра»: the eight colours as Discord draws them (the panel's preview is checked against this)
+    if (req.query.palette) {
+      const p = await post(url, wrapForDiscord('ansi', paletteBlock()), s.senderName);
+      return res.json({ ok: p.ok });
+    }
     const r = await post(url, '✅ CoreGSM: канал подключён. Так будет выглядеть чат игры:', s.senderName);
     if (r.ok) await post(url, wrapForDiscord(s.style, lines.join('\n')), s.senderName);
     res.json({ ok: r.ok });
@@ -24489,6 +24494,12 @@ export function formatEventLine(template: string, name: string, server = '', tim
 
 const ESC = String.fromCharCode(27);
 const seg = (color: AnsiColor, text: string, bold = false): string => (text ? `${ESC}[${bold ? 1 : 0};${ANSI_CODE[color]}m${text}${ESC}[0m` : '');
+
+/** the eight colours of an ansi block, each in a plain and a bold line: to see how Discord really draws them */
+export function paletteBlock(): string {
+  const names: Record<AnsiColor, string> = { gray: 'gray', red: 'red', green: 'green', yellow: 'yellow', blue: 'blue', pink: 'pink', cyan: 'cyan', white: 'white' };
+  return ANSI_COLORS.map((c) => `${seg(c, `${names[c]} normal`)}  ${seg(c, `${names[c]} bold`, true)}`).join(String.fromCharCode(10));
+}
 
 /** a line of a chat in the colours of the game: «[16:07] [«Глобальный»] WhiteLegioN: Тест» (the time has the colour of the tag) */
 export function ansiChatLine(kind: 'global' | 'clan' | 'local', name: string, clan: string, text: string, c: ChatColors, server = '', time = ''): string {
@@ -143759,6 +143770,8 @@ const en: Record<keyof typeof ru, string> = {
 
   'gn.col.game': 'As in the game',
   'gn.col.recent': 'Recent:',
+  'gn.ch.palette': 'Discord palette',
+  'gn.ch.paletteNote': 'Sends the 8 colours to the channel as Discord draws them, to compare with the preview',
   'gn.ch.presets': 'Ready styles:',
   'gn.ch.preset.game': 'As in the game',
   'gn.ch.preset.calm': 'Calm',
@@ -148454,6 +148467,8 @@ const ru = {
 
   'gn.col.game': 'Как в игре',
   'gn.col.recent': 'Недавние:',
+  'gn.ch.palette': 'Палитра Discord',
+  'gn.ch.paletteNote': 'Отправляет в канал 8 цветов, как их рисует Discord: чтобы сверить с предпросмотром',
   'gn.ch.presets': 'Готовые стили:',
   'gn.ch.preset.game': 'Как в игре',
   'gn.ch.preset.calm': 'Спокойный',
@@ -157501,10 +157516,10 @@ export function ChatCard({ initial, joinText, leaveText }: { initial: ChatSettin
     setBusy(who);
     try { await api(`/game-news/chat-settings${sc.q}`, 'PUT', body); await refresh(); sc.changed(); if (!quiet) toast(t('gn.ch.saved')); return true; } catch (e) { toast(errText(e), 'err'); return false; } finally { setBusy(null); }
   };
-  const test = async () => {
+  const test = async (palette = false) => {
     setBusy('test');
     try {
-      const r = await api<{ ok: boolean }>(`/game-news/chat-test${sc.q}`, 'POST');
+      const r = await api<{ ok: boolean }>(`/game-news/chat-test${sc.q}${palette ? `${sc.q ? '&' : '?'}palette=1` : ''}`, 'POST');
       toast(r.ok ? t('gn.ch.testOk') : t('gn.ch.testFail'), r.ok ? undefined : 'err');
     } catch (e) { toast(errText(e), 'err'); } finally { setBusy(null); }
   };
@@ -157547,6 +157562,7 @@ export function ChatCard({ initial, joinText, leaveText }: { initial: ChatSettin
           <span className="font-extrabold">{t('gn.ch.channel')}</span>
           <span className={st.set ? 'pill pill-ok' : 'pill pill-mute'}>{st.set ? t('gn.ch.set', { tail: st.tail }) : t('gn.ch.unset')}</span>
           {st.set && <button type="button" className="btn btn-soft btn-sm" disabled={busy === 'test'} onClick={() => void test()}>{t('gn.ch.test')}</button>}
+          {st.set && <button type="button" className="btn btn-ghost btn-sm" disabled={busy === 'test'} title={t('gn.ch.paletteNote')} onClick={() => void test(true)}>{t('gn.ch.palette')}</button>}
           <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setEditing((v) => !v); setValue(''); }}>{st.set ? t('gn.ch.edit') : t('gn.ch.add')}</button>
           {st.set && <button type="button" className="btn btn-ghost btn-sm" disabled={busy === 'clear'} onClick={() => void send({ clear: true }, 'clear')}>{t('gn.ch.clear')}</button>}
         </div>

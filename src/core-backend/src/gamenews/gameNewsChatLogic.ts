@@ -150,6 +150,12 @@ export function formatEventLine(template: string, name: string, server = '', tim
 const ESC = String.fromCharCode(27);
 const seg = (color: AnsiColor, text: string, bold = false): string => (text ? `${ESC}[${bold ? 1 : 0};${ANSI_CODE[color]}m${text}${ESC}[0m` : '');
 
+/** the eight colours of an ansi block, each in a plain and a bold line: to see how Discord really draws them */
+export function paletteBlock(): string {
+  const names: Record<AnsiColor, string> = { gray: 'gray', red: 'red', green: 'green', yellow: 'yellow', blue: 'blue', pink: 'pink', cyan: 'cyan', white: 'white' };
+  return ANSI_COLORS.map((c) => `${seg(c, `${names[c]} normal`)}  ${seg(c, `${names[c]} bold`, true)}`).join(String.fromCharCode(10));
+}
+
 /** a line of a chat in the colours of the game: «[16:07] [«Глобальный»] WhiteLegioN: Тест» (the time has the colour of the tag) */
 export function ansiChatLine(kind: 'global' | 'clan' | 'local', name: string, clan: string, text: string, c: ChatColors, server = '', time = ''): string {
   const t = forBlock(text);

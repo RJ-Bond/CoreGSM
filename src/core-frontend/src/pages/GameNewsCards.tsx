@@ -382,10 +382,10 @@ export function ChatCard({ initial, joinText, leaveText }: { initial: ChatSettin
     setBusy(who);
     try { await api(`/game-news/chat-settings${sc.q}`, 'PUT', body); await refresh(); sc.changed(); if (!quiet) toast(t('gn.ch.saved')); return true; } catch (e) { toast(errText(e), 'err'); return false; } finally { setBusy(null); }
   };
-  const test = async () => {
+  const test = async (palette = false) => {
     setBusy('test');
     try {
-      const r = await api<{ ok: boolean }>(`/game-news/chat-test${sc.q}`, 'POST');
+      const r = await api<{ ok: boolean }>(`/game-news/chat-test${sc.q}${palette ? `${sc.q ? '&' : '?'}palette=1` : ''}`, 'POST');
       toast(r.ok ? t('gn.ch.testOk') : t('gn.ch.testFail'), r.ok ? undefined : 'err');
     } catch (e) { toast(errText(e), 'err'); } finally { setBusy(null); }
   };
@@ -428,6 +428,7 @@ export function ChatCard({ initial, joinText, leaveText }: { initial: ChatSettin
           <span className="font-extrabold">{t('gn.ch.channel')}</span>
           <span className={st.set ? 'pill pill-ok' : 'pill pill-mute'}>{st.set ? t('gn.ch.set', { tail: st.tail }) : t('gn.ch.unset')}</span>
           {st.set && <button type="button" className="btn btn-soft btn-sm" disabled={busy === 'test'} onClick={() => void test()}>{t('gn.ch.test')}</button>}
+          {st.set && <button type="button" className="btn btn-ghost btn-sm" disabled={busy === 'test'} title={t('gn.ch.paletteNote')} onClick={() => void test(true)}>{t('gn.ch.palette')}</button>}
           <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setEditing((v) => !v); setValue(''); }}>{st.set ? t('gn.ch.edit') : t('gn.ch.add')}</button>
           {st.set && <button type="button" className="btn btn-ghost btn-sm" disabled={busy === 'clear'} onClick={() => void send({ clear: true }, 'clear')}>{t('gn.ch.clear')}</button>}
         </div>

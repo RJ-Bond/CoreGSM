@@ -915,6 +915,8 @@ const ru = {
 
   'gn.col.game': 'Как в игре',
   'gn.col.recent': 'Недавние:',
+  'gn.ch.palette': 'Палитра Discord',
+  'gn.ch.paletteNote': 'Отправляет в канал 8 цветов, как их рисует Discord: чтобы сверить с предпросмотром',
   'gn.ch.presets': 'Готовые стили:',
   'gn.ch.preset.game': 'Как в игре',
   'gn.ch.preset.calm': 'Спокойный',

@@ -914,6 +914,8 @@ const en: Record<keyof typeof ru, string> = {
 
   'gn.col.game': 'As in the game',
   'gn.col.recent': 'Recent:',
+  'gn.ch.palette': 'Discord palette',
+  'gn.ch.paletteNote': 'Sends the 8 colours to the channel as Discord draws them, to compare with the preview',
   'gn.ch.presets': 'Ready styles:',
   'gn.ch.preset.game': 'As in the game',
   'gn.ch.preset.calm': 'Calm',
