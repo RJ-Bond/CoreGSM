@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="c0d8913f8074"
+COREGSM_BUILD="a43e16a1ee0d"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.88"
+COREGSM_VERSION="1.1.89"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -23879,7 +23879,7 @@ import { consumeDue } from './gameNewsRestartState.js';
 
 export const QUEUE_TTL_MS = 5 * 60_000;
 /** the version of the game plugin this panel was built for: an older plugin is shown as outdated */
-export const PLUGIN_VERSION = '0.10.0';
+export const PLUGIN_VERSION = '0.11.0';
 /** the games the plugin exists for */
 export const SUPPORTED_GAMES = new Set(['vrising']);
 const PULL_MIN_GAP_MS = 800;
@@ -23911,7 +23911,7 @@ export function pluginTarget(req: Request): TargetRow | null {
   return (db.prepare('SELECT * FROM game_news_targets WHERE token_hash = ?').get(sha256(m[1])) as TargetRow | undefined) ?? null;
 }
 
-export interface QueueResult { serverId: number; serverName: string; queued: boolean; online: boolean; error: string }
+export interface QueueResult { serverId: number; serverName: string; queued: boolean; online: boolean; error: string; logId?: number }
 
 /**
  * Puts a message into the queue of the given servers ([] = every server that has a plugin token).
@@ -23937,8 +23937,8 @@ export function queueNews(text: string, serverIds: number[], by: string, now: nu
       if (opts.onlyOnline && (!s || !s.online || s.players <= 0)) continue; // nobody to read it
       // the variables ({server} {online} {max} {time} {greeting} {restart} {wipe} {discord} {tip}) are filled in for each server
       const filled = applyVars(text, varsFor(id, now));
-      insert.run(id, name, filled, 'queued', '', by, now);
-      results.push({ serverId: id, serverName: name, queued: true, online: t.last_seen > 0 && now - t.last_seen < ONLINE_MS, error: '' });
+      const row = insert.run(id, name, filled, 'queued', '', by, now);
+      results.push({ serverId: id, serverName: name, queued: true, online: t.last_seen > 0 && now - t.last_seen < ONLINE_MS, error: '', logId: Number(row.lastInsertRowid) });
     }
     db.prepare('DELETE FROM game_news_log WHERE id NOT IN (SELECT id FROM game_news_log ORDER BY id DESC LIMIT 500)').run();
   })();
@@ -24105,10 +24105,10 @@ function webhookUrl(s: ChatStored): string | null {
 
 /** the kinds of chat that are being forwarded (what the plugin has to read) */
 
-export function chatSettingsView(serverId?: number): Pick<ChatStored, 'enabled' | 'kinds' | 'style' | 'senderName' | 'showTime' | 'colors' | 'fromDiscord'> & { set: boolean; tail: string; channel: boolean } {
+export function chatSettingsView(serverId?: number): Pick<ChatStored, 'enabled' | 'kinds' | 'style' | 'senderName' | 'showTime' | 'colors' | 'fromDiscord'> & { set: boolean; tail: string; channel: boolean; confirmCard: boolean; confirmLine: boolean } {
   const s = read(serverId);
   const u = webhookUrl(s);
-  return { enabled: s.enabled, set: !!u, tail: u ? `…${u.slice(-6)}` : '', kinds: s.kinds, style: s.style, senderName: s.senderName, showTime: s.showTime, colors: s.colors, fromDiscord: s.fromDiscord, channel: !!s.channelId };
+  return { enabled: s.enabled, set: !!u, tail: u ? `…${u.slice(-6)}` : '', kinds: s.kinds, style: s.style, senderName: s.senderName, showTime: s.showTime, colors: s.colors, fromDiscord: s.fromDiscord, channel: !!s.channelId, confirmCard: s.confirmCard, confirmLine: s.confirmLine };
 }
 
 /** the channel a webhook posts to (Discord tells it to anyone who holds the address) */
@@ -24124,19 +24124,19 @@ async function channelOf(url: string): Promise<string> {
 }
 
 /** the channels where the bot listens: what an administrator writes there goes to the game chat of these servers */
-export function chatChannels(): { channelId: string; serverIds: number[] }[] {
+export function chatChannels(): { channelId: string; serverIds: number[]; confirmCard: boolean; confirmLine: boolean }[] {
   const all = (db.prepare("SELECT server_id FROM game_news_targets WHERE token_hash <> ''").all() as { server_id: number }[]).map((r) => r.server_id);
   const own = overrides().gamenews_chat ?? [];
-  const map = new Map<string, Set<number>>();
+  const map = new Map<string, { ids: Set<number>; card: boolean; line: boolean }>();
   const add = (s: ChatStored, ids: number[]) => {
     if (!s.enabled || !s.fromDiscord || !s.channelId || !s.webhook || ids.length === 0) return;
-    const set = map.get(s.channelId) ?? new Set<number>();
-    for (const id of ids) set.add(id);
-    map.set(s.channelId, set);
+    const e = map.get(s.channelId) ?? { ids: new Set<number>(), card: s.confirmCard, line: s.confirmLine };
+    for (const id of ids) e.ids.add(id);
+    map.set(s.channelId, e);
   };
   add(read(), all.filter((id) => !own.includes(id)));
   for (const id of own) if (all.includes(id)) add(read(id), [id]);
-  return [...map].map(([channelId, ids]) => ({ channelId, serverIds: [...ids] }));
+  return [...map].map(([channelId, e]) => ({ channelId, serverIds: [...e.ids], confirmCard: e.card, confirmLine: e.line }));
 }
 
 // ---- posting
@@ -24273,6 +24273,8 @@ export function registerGameNewsChat({ app, admin }: { app: Express; admin: Requ
       senderName: z.string().max(80).optional(),
       showTime: z.boolean().optional(),
       fromDiscord: z.boolean().optional(),
+      confirmCard: z.boolean().optional(),
+      confirmLine: z.boolean().optional(),
       colors: colorsSchema.optional(),
     }).safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Проверьте поля' });
@@ -24286,6 +24288,8 @@ export function registerGameNewsChat({ app, admin }: { app: Express; admin: Requ
     }
     if (b.data.clear) { s.webhook = ''; s.channelId = ''; s.fromDiscord = false; }
     if (b.data.fromDiscord !== undefined) s.fromDiscord = b.data.fromDiscord;
+    if (b.data.confirmCard !== undefined) s.confirmCard = b.data.confirmCard;
+    if (b.data.confirmLine !== undefined) s.confirmLine = b.data.confirmLine;
     // an old webhook saved before the channel was remembered: find it now
     if (s.fromDiscord && !s.channelId) {
       const url = webhookUrl(s);
@@ -24399,6 +24403,10 @@ export interface ChatStored {
   fromDiscord: boolean;
   /** the channel of the webhook (found when the webhook is saved): where the bot listens */
   channelId: string;
+  /** a short card under the line an administrator wrote (where it went, how many players are there, how it looks in the game) */
+  confirmCard: boolean;
+  /** the line is repeated in the channel in the style of the chat («→ в игру»), so the talk reads in one row */
+  confirmLine: boolean;
 }
 
 const isAnsi = (x: unknown): x is AnsiColor => typeof x === 'string' && (ANSI_COLORS as readonly string[]).includes(x);
@@ -24410,7 +24418,7 @@ const isAnsi = (x: unknown): x is AnsiColor => typeof x === 'string' && (ANSI_CO
 export function normalizeChat(raw: unknown): ChatStored {
   const v = (raw && typeof raw === 'object' ? raw : {}) as {
     enabled?: unknown; webhook?: unknown; kinds?: Partial<Record<ChatKind, unknown>>; webhooks?: Partial<Record<ChatKind, unknown>>;
-    style?: unknown; senderName?: unknown; showTime?: unknown; fromDiscord?: unknown; channelId?: unknown; colors?: Partial<Record<ChatKind, Partial<Record<keyof ChatColors, unknown>>>>;
+    style?: unknown; senderName?: unknown; showTime?: unknown; fromDiscord?: unknown; channelId?: unknown; confirmCard?: unknown; confirmLine?: unknown; colors?: Partial<Record<ChatKind, Partial<Record<keyof ChatColors, unknown>>>>;
   };
   const legacy = v.webhooks && typeof v.webhooks === 'object' ? v.webhooks : {};
   const legacyFirst = (['global', 'clan', 'local'] as const).map((k) => legacy[k]).find((x): x is string => typeof x === 'string' && x.length > 0);
@@ -24437,6 +24445,8 @@ export function normalizeChat(raw: unknown): ChatStored {
     style: v.style === 'plain' ? 'plain' : 'ansi',
     showTime: v.showTime !== false,
     fromDiscord: v.fromDiscord === true,
+    confirmCard: v.confirmCard !== false,
+    confirmLine: v.confirmLine !== false,
     channelId: typeof v.channelId === 'string' && /^\d{5,30}$/.test(v.channelId) ? v.channelId : '',
     senderName: typeof v.senderName === 'string' ? v.senderName.replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, 80) : '',
     colors,
@@ -24499,6 +24509,13 @@ const seg = (color: AnsiColor, text: string, bold = false): string => (text ? `$
 export function paletteBlock(): string {
   const names: Record<AnsiColor, string> = { gray: 'gray', red: 'red', green: 'green', yellow: 'yellow', blue: 'blue', pink: 'pink', cyan: 'cyan', white: 'white' };
   return ANSI_COLORS.map((c) => `${seg(c, `${names[c]} normal`)}  ${seg(c, `${names[c]} bold`, true)}`).join(String.fromCharCode(10));
+}
+
+/** what an administrator wrote in Discord as it stands in the game chat: «[16:07] * [Discord] Имя: текст» (blue label, white text) */
+export function ansiDiscordLine(name: string, text: string, time = ''): string {
+  const t = forBlock(text);
+  if (!t) return '';
+  return `${seg('cyan', stamp(time))}${seg('blue', '* [Discord]', true)} ${seg('yellow', forBlock(name) || '?', true)}${seg('white', ': ')}${seg('white', t.slice(0, 300))}`;
 }
 
 /** a line of a chat in the colours of the game: «[16:07] [«Глобальный»] WhiteLegioN: Тест» (the time has the colour of the tag) */
@@ -24761,9 +24778,9 @@ __COREGSM_EOF__
  * is never logged and never stored in clear text.
  */
 import bcrypt from 'bcryptjs';
-import type { Express, RequestHandler } from 'express';
+import type { Express, Request, RequestHandler } from 'express';
 import { z } from 'zod';
-import { needsSetup, publicBase, registrationMode, rulesText } from '../admin/site.js';
+import { isRealDomain, needsSetup, publicBase, registrationMode, rulesText } from '../admin/site.js';
 import { db } from '../db.js';
 import { readScoped, writeScoped } from './gameNewsScope.js';
 import { recordConsent } from '../monitoring/rules.js';
@@ -24785,6 +24802,8 @@ export interface RegisterSettings {
   discordText: string;
   /** registration by request: the request is sent */
   pendingText: string;
+  /** after .login: the game account is linked to an account of the panel: {login} {panel} */
+  loginText: string;
   /** how often the Discord hint is repeated for the same player, hours */
   discordEveryHours: number;
   /** a registered player reads his rank at every join */
@@ -24795,21 +24814,42 @@ export interface RegisterSettings {
 
 export const DEFAULT_REGISTER: RegisterSettings = {
   enabled: false,
-  promptText: '* Вы ещё не зарегистрированы в панели. Для регистрации введите .register пароль подтверждение_пароля',
+  promptText: '* Вы ещё не зарегистрированы в панели. Новый аккаунт: .register (пароль) (подтверждение). Уже есть аккаунт на сайте: .login (логин) (пароль)',
   doneText: '* Готово! Вы зарегистрированы в панели, ваш логин: {login}',
   discordText: '* Привяжите Discord в профиле панели ({panel}): аккаунт будет под рукой в Discord, а роли и ранг — на вашем сервере.',
   pendingText: '* Заявка на регистрацию отправлена. Когда администратор её одобрит, вы сможете войти в панель.',
+  loginText: '* Готово! Игровой аккаунт привязан к аккаунту {login} в панели.',
   discordEveryHours: 24,
   rankEnabled: true,
   rankText: '* {name}, ваш ранг: {rank} · {hours} ч{next}',
 };
+
+/** the hint of the first version: a setting that still holds exactly it has not been changed by anybody */
+const OLD_PROMPT = '* Вы ещё не зарегистрированы в панели. Для регистрации введите .register пароль подтверждение_пароля';
 
 // the colours of the lines the player reads
 const C_INFO = '#FFCC33';
 const C_GOOD = '#5FD068';
 const C_BAD = '#FF5555';
 const C_HINT = '#6EC1FF';
-const tag = (color: string, text: string): string => `<color=${color}>${plainLine(text)}</color>`;
+/**
+ * A line the player reads: in one colour, with the commands picked out: «.register» in white bold and the arguments after it,
+ * «(пароль)», in lilac (like the usage line of the commands of the game). The tags are flat, so no client has to nest them.
+ */
+export function tag(color: string, text: string): string {
+  const plain = plainLine(text);
+  const parts: string[] = [];
+  let last = 0;
+  for (const m of plain.matchAll(/(^|\s)(\.[a-zа-я]+)((?:\s*\([^()]{1,40}\))*)/giu)) {
+    const start = (m.index ?? 0) + m[1].length;
+    if (start > last) parts.push(`<color=${color}>${plain.slice(last, start)}</color>`);
+    parts.push(`<color=#FFFFFF><b>${m[2]}</b></color>`);
+    if (m[3]) parts.push(`<color=#B9A7FF>${m[3]}</color>`);
+    last = start + m[2].length + m[3].length;
+  }
+  if (last < plain.length) parts.push(`<color=${color}>${plain.slice(last)}</color>`);
+  return parts.length ? parts.join('') : `<color=${color}></color>`;
+}
 
 export function getRegisterSettings(serverId?: number): RegisterSettings {
   try {
@@ -24818,10 +24858,12 @@ export function getRegisterSettings(serverId?: number): RegisterSettings {
     const text = (x: unknown, def: string) => (typeof x === 'string' && x.trim() ? x : def);
     return {
       enabled: !!v.enabled,
-      promptText: text(v.promptText, d.promptText),
+      // the first wording of the hint (before .login and the brackets) moves to the new one; a text the administrator changed stays
+      promptText: v.promptText === OLD_PROMPT ? d.promptText : text(v.promptText, d.promptText),
       doneText: text(v.doneText, d.doneText),
       discordText: text(v.discordText, d.discordText),
       pendingText: text(v.pendingText, d.pendingText),
+      loginText: text(v.loginText, d.loginText),
       discordEveryHours: Number.isFinite(v.discordEveryHours) ? Math.min(720, Math.max(1, Math.round(v.discordEveryHours as number))) : d.discordEveryHours,
       rankEnabled: typeof v.rankEnabled === 'boolean' ? v.rankEnabled : d.rankEnabled,
       rankText: text(v.rankText, d.rankText),
@@ -24838,7 +24880,15 @@ export function setRegisterSettings(v: RegisterSettings, serverId?: number): voi
 const fill = (text: string, vars: { login?: string; panel: string }): string =>
   text.replace(/\{login\}/g, vars.login ?? '').replace(/\{panel\}/g, vars.panel);
 
-const panelUrl = (): string => (publicBase() ?? '').replace(/^https?:\/\//, '');
+/**
+ * The address of the panel as the player should type it: the address the game plugin itself reaches the panel at (its Host header: the
+ * request carries the token of a server, so it is trusted), else the one the panel knows about itself.
+ */
+function panelUrl(req?: Request): string {
+  const host = req ? String(req.headers['x-forwarded-host'] ?? req.headers.host ?? '').split(',')[0].trim().split(':')[0] : '';
+  if (isRealDomain(host)) return host;
+  return (publicBase() ?? '').replace(/^https?:\/\//, '');
+}
 
 // ---- brute force: a few tries an hour for one game account
 const tries = new Map<string, { n: number; reset: number }>();
@@ -24872,7 +24922,7 @@ export function registerGameNewsPlayers({ app }: { app: Express }): void {
     if (!who) {
       // nobody can register while the panel is closed or not set up: no use to invite
       if (needsSetup() || !registrationOpen()) return res.json({ registered: false, replies: [] });
-      return res.json({ registered: false, replies: [tag(C_INFO, fill(s.promptText, { panel: panelUrl() }))] });
+      return res.json({ registered: false, replies: [tag(C_INFO, fill(s.promptText, { panel: panelUrl(req) }))] });
     }
     const u = db.prepare('SELECT id, status, discord_id FROM users WHERE id = ?').get(who.user_id) as UserRow | undefined;
     const due = now - who.last_hint_at >= s.discordEveryHours * 3_600_000;
@@ -24883,7 +24933,7 @@ export function registerGameNewsPlayers({ app }: { app: Express }): void {
     }
     if (u && u.status === 'active' && !u.discord_id && due) {
       db.prepare('UPDATE game_identities SET last_hint_at = ? WHERE platform_id = ?').run(now, id.data);
-      replies.push(tag(C_HINT, fill(s.discordText, { panel: panelUrl() })));
+      replies.push(tag(C_HINT, fill(s.discordText, { panel: panelUrl(req) })));
     }
     res.json({ registered: true, replies });
   });
@@ -24891,7 +24941,7 @@ export function registerGameNewsPlayers({ app }: { app: Express }): void {
   // .register <password> <password again>
   app.post('/api/game-news/player/register', plugin, async (req, res) => {
     const b = z.object({ id: idSchema, name: z.string().max(100), password: z.string().min(1).max(256) }).safeParse(req.body);
-    if (!b.success) return res.status(400).json({ replies: [tag(C_BAD, '* Не удалось разобрать команду. Введите: .register пароль подтверждение_пароля')] });
+    if (!b.success) return res.status(400).json({ replies: [tag(C_BAD, '* Не удалось разобрать команду. Введите: .register (пароль) (подтверждение)')] });
     const s = getRegisterSettings((req as typeof req & { gameServerId?: number }).gameServerId);
     const now = Date.now();
     const say = (color: string, text: string) => res.json({ ok: false, replies: [tag(color, text)] });
@@ -24923,11 +24973,52 @@ export function registerGameNewsPlayers({ app }: { app: Express }): void {
     }
     db.prepare('INSERT INTO audit (ts, actor, action, detail) VALUES (?, ?, ?, ?)').run(now, 'game-plugin', 'game_register', login);
 
-    const vars = { login, panel: panelUrl() };
+    const vars = { login, panel: panelUrl(req) };
     if (pending) return res.json({ ok: true, pending: true, login, replies: [tag(C_GOOD, fill(s.pendingText, vars))] });
     res.json({ ok: true, login, replies: [tag(C_GOOD, fill(s.doneText, vars)), tag(C_HINT, fill(s.discordText, vars))] });
   });
+
+  // .login <login> <password>: the player already has an account in the panel; this game account is linked to it
+  app.post('/api/game-news/player/login', plugin, async (req, res) => {
+    const b = z.object({ id: idSchema, name: z.string().max(100), login: z.string().min(1).max(64), password: z.string().min(1).max(256) }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ replies: [tag(C_BAD, '* Не удалось разобрать команду. Введите: .login (логин) (пароль)')] });
+    const s = getRegisterSettings((req as typeof req & { gameServerId?: number }).gameServerId);
+    const now = Date.now();
+    const say = (color: string, text: string) => res.json({ ok: false, replies: [tag(color, text)] });
+    if (!s.enabled) return say(C_BAD, '* Вход из игры отключён.');
+    // a few tries an hour for one game account and for one login (somebody may try to guess a password of another person)
+    if (tooMany(b.data.id, now) || tooMany(`login:${b.data.login.toLowerCase()}`, now)) return say(C_BAD, '* Слишком много попыток. Попробуйте позже.');
+    if (needsSetup()) return say(C_BAD, '* Панель ещё не настроена.');
+
+    const own = db.prepare('SELECT g.user_id, u.username FROM game_identities g JOIN users u ON u.id = g.user_id WHERE g.platform_id = ?').get(b.data.id) as { user_id: number; username: string } | undefined;
+    if (own) return say(C_INFO, `* Этот игровой аккаунт уже привязан к аккаунту ${own.username}.`);
+
+    const u = db.prepare('SELECT id, username, password_hash, status, banned_at, banned_until, totp_enabled FROM users WHERE ulower(username) = ?').get(b.data.login.toLowerCase()) as
+      | { id: number; username: string; password_hash: string; status: string; banned_at: number | null; banned_until: number | null; totp_enabled: number }
+      | undefined;
+    // the same answer and the same work for a wrong login and a wrong password
+    const ok = await bcrypt.compare(b.data.password, u?.password_hash ?? DUMMY_HASH);
+    if (!u || !ok) return say(C_BAD, '* Неверный логин или пароль.');
+    if (u.status === 'pending') return say(C_INFO, '* Аккаунт ещё ждёт одобрения администратора.');
+    if (u.status !== 'active') return say(C_BAD, '* Этот аккаунт сейчас недоступен.');
+    if (u.banned_at && (!u.banned_until || u.banned_until > now)) return say(C_BAD, '* Этот аккаунт заблокирован.');
+    // a second factor cannot be asked in the chat: the link is made in the panel instead
+    if (u.totp_enabled) return say(C_INFO, `* На аккаунте включена двухфакторная защита: привяжите игру в профиле панели (${panelUrl(req)}).`);
+
+    db.prepare('INSERT INTO game_identities (platform_id, user_id, nick, created_at, last_hint_at) VALUES (?, ?, ?, ?, ?)').run(b.data.id, u.id, b.data.name, now, now);
+    // the nickname is linked to the account when the account has none yet and no other account holds this nickname
+    const nick = plainLine(b.data.name).slice(0, 40);
+    const has = db.prepare('SELECT game_nick FROM user_player WHERE user_id = ?').get(u.id) as { game_nick: string } | undefined;
+    if (nick && !has?.game_nick && !db.prepare('SELECT 1 FROM user_player WHERE ulower(game_nick) = ulower(?)').get(nick)) {
+      db.prepare("INSERT INTO user_player (user_id, game_nick, bio, public_profile) VALUES (?, ?, '', 0) ON CONFLICT(user_id) DO UPDATE SET game_nick = excluded.game_nick").run(u.id, nick);
+    }
+    db.prepare('INSERT INTO audit (ts, actor, action, detail) VALUES (?, ?, ?, ?)').run(now, 'game-plugin', 'game_login', u.username);
+    res.json({ ok: true, login: u.username, replies: [tag(C_GOOD, fill(s.loginText, { login: u.username, panel: panelUrl(req) }))] });
+  });
 }
+
+/** compared against when no such login exists, so that the time does not tell whether it does */
+const DUMMY_HASH = bcrypt.hashSync('coregsm-no-such-user', 12);
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/gamenews"
   cat > "$APP_DIR/core-backend/src/gamenews/gameNewsRestart.ts" << '__COREGSM_EOF__'
@@ -25321,7 +25412,7 @@ export function registerGameNewsRules({ app, admin }: { app: Express; admin: Req
   app.put('/api/game-news/register-settings', admin, (req, res) => {
     const b = z.object({
       enabled: z.boolean(), promptText: z.string().max(300), doneText: z.string().max(300), discordText: z.string().max(300),
-      pendingText: z.string().max(300), discordEveryHours: z.number().int().min(1).max(720),
+      pendingText: z.string().max(300), loginText: z.string().max(300).optional(), discordEveryHours: z.number().int().min(1).max(720),
       rankEnabled: z.boolean().optional(), rankText: z.string().max(300).optional(),
     }).safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Проверьте поля' });
@@ -25334,6 +25425,7 @@ export function registerGameNewsRules({ app, admin }: { app: Express; admin: Req
       doneText: keep(b.data.doneText, d.doneText),
       discordText: keep(b.data.discordText, d.discordText),
       pendingText: keep(b.data.pendingText, d.pendingText),
+      loginText: keep(b.data.loginText ?? d.loginText, d.loginText),
       discordEveryHours: b.data.discordEveryHours,
       rankEnabled: b.data.rankEnabled ?? d.rankEnabled,
       rankText: keep(b.data.rankText ?? '', d.rankText),
@@ -25553,12 +25645,13 @@ import { log } from '../logger.js';
 import { internal } from '../security/auth.js';
 import { pluginTarget, queueNews } from './gameNews.js';
 import { chatChannels } from './gameNewsChat.js';
+import { ansiDiscordLine } from './gameNewsChatLogic.js';
 import { plainLine } from './gameNewsJoinLeave.js';
 import {
   DEFAULT_TEXTS, MAX_SECONDS, announceLine, cancelLine, formatLeft, nextNotice, noticeSeconds, nowLine, parseDuration, type RestartTexts,
 } from './gameNewsRestartLogic.js';
 import { DUE_GRACE_MS, closeLog, getJob, jobsIn, logRunAt, logStart, recentLog, saveJob, setLastNotice, setState, type Job } from './gameNewsRestartState.js';
-import { serverLabel } from './gameNewsVars.js';
+import { clock, liveState, serverLabel } from './gameNewsVars.js';
 import { checkPluginSilence } from './gameNewsWatch.js';
 
 // ---- the words of the notices (set in the panel)
@@ -25779,32 +25872,49 @@ export function registerGameNewsServerRestart({ app, admin }: { app: Express; ad
     res.json({ channels: chatChannels() });
   });
 
-  // ---- the Discord bot: «/say»: a line from Discord into the game chat (the same rights as «/restart»)
+  // ---- the Discord bot: «/say» and the line an administrator writes in the chat channel: into the game chat
   app.post('/internal/game-say', internal, (req, res) => {
     const b = z.object({
       text: z.string().min(1).max(300), server: z.string().max(100).optional(), channelId: z.string().max(30).optional(), name: z.string().max(80),
       discordId: z.string().max(32), discordAdmin: z.boolean(),
     }).safeParse(req.body);
-    if (!b.success) return res.status(400).json({ ok: false, text: 'Проверьте поля' });
+    if (!b.success) return res.status(400).json({ ok: false, status: 'error', text: 'Проверьте поля' });
     const linked = db.prepare("SELECT username FROM users WHERE discord_id = ? AND role = 'admin' AND status = 'active'").get(b.data.discordId) as { username: string } | undefined;
     // a line written in the chat channel by somebody who is not an administrator is just talk: no answer
-    if (!b.data.discordAdmin && !linked) return res.json({ ok: false, silent: !!b.data.channelId, text: 'Эта команда только для администраторов.' });
+    if (!b.data.discordAdmin && !linked) return res.json({ ok: false, status: 'denied', silent: !!b.data.channelId, text: 'Эта команда только для администраторов.' });
     // one line in two seconds per person: a flood into the game chat helps nobody
-    const gate = sayGate(b.data.discordId, Date.now());
-    if (!gate) return res.json({ ok: false, rate: true, text: 'Слишком часто: подождите пару секунд.' });
+    if (!sayGate(b.data.discordId, Date.now())) return res.json({ ok: false, status: 'rate', rate: true, text: 'Слишком часто: подождите пару секунд.' });
     const servers = pluginServers();
     const q = (b.data.server ?? '').trim().toLowerCase();
     const ch = b.data.channelId ? chatChannels().find((c) => c.channelId === b.data.channelId) : undefined;
-    if (b.data.channelId && !ch) return res.json({ ok: false, silent: true, text: '' });
+    if (b.data.channelId && !ch) return res.json({ ok: false, status: 'denied', silent: true, text: '' });
     const found = ch ? servers.filter((s) => ch.serverIds.includes(s.id)) : q ? servers.filter((s) => s.name.toLowerCase().includes(q)) : servers;
-    if (found.length === 0) return res.json({ ok: false, text: q ? 'Сервер не найден среди серверов с плагином.' : 'Нет серверов с плагином CoreGSM.' });
+    if (found.length === 0) return res.json({ ok: false, status: 'error', text: q ? 'Сервер не найден среди серверов с плагином.' : 'Нет серверов с плагином CoreGSM.' });
     const who = plainLine(linked?.username ?? b.data.name) || 'Discord';
     const body = plainLine(b.data.text);
-    if (!body) return res.json({ ok: false, text: 'Введите текст.' });
+    if (!body) return res.json({ ok: false, status: 'error', text: 'Введите текст.' });
+    const now = Date.now();
     const line = `<color=#7289DA>* [Discord] ${who}:</color> <color=#FFFFFF>${body}</color>`;
-    const out = queueNews(line, found.map((s) => s.id), `Discord: ${who}`, Date.now(), { onlyOnline: true });
-    const sent = out.filter((r) => r.queued && r.online).length;
-    res.json({ ok: sent > 0, text: sent > 0 ? `Отправлено в игру (серверов: ${sent}).` : 'На выбранных серверах сейчас никого нет в игре.' });
+    const out = queueNews(line, found.map((s) => s.id), `Discord: ${who}`, now, { onlyOnline: true });
+    const queued = out.filter((r) => r.queued);
+    const time = clock(now);
+    res.json({
+      ok: queued.length > 0,
+      status: queued.length > 0 ? 'sent' : 'empty',
+      text: queued.length > 0 ? `Отправлено в игру (серверов: ${queued.length}).` : 'На выбранных серверах сейчас никого нет в игре.',
+      ids: queued.map((r) => r.logId).filter((x): x is number => typeof x === 'number'),
+      servers: queued.map((r) => ({ name: r.serverName, players: liveState(r.serverId, now)?.players ?? null })),
+      ansi: ansiDiscordLine(who, body, time),
+      confirm: { card: ch ? ch.confirmCard : true, line: ch ? ch.confirmLine : false },
+    });
+  });
+
+  // the bot asks whether the game has shown the lines (the plugin took them): to turn the mark under the message into 🎮
+  app.get('/internal/game-say-status', internal, (req, res) => {
+    const ids = String(req.query.ids ?? '').split(',').map(Number).filter((n) => Number.isInteger(n) && n > 0).slice(0, 20);
+    if (ids.length === 0) return res.json({ delivered: false, failed: false });
+    const rows = db.prepare(`SELECT status FROM game_news_log WHERE id IN (${ids.map(() => '?').join(',')})`).all(...ids) as { status: string }[];
+    res.json({ delivered: rows.length > 0 && rows.every((r) => r.status === 'delivered'), failed: rows.some((r) => r.status === 'expired' || r.status === 'failed') });
   });
 
   // ---- the Discord bot (it is trusted; the person is checked here)
@@ -43688,6 +43798,7 @@ import { PermissionFlagsBits, type ChatInputCommandInteraction, type Message } f
 import { backendJson } from './backend.js';
 import { log } from './log.js';
 import { COLORS, replyEmbed } from './replies.js';
+import { cardText, channelLine, doneMark, markFor, type SayAnswer } from './gameSayLogic.js';
 
 const EPHEMERAL = 64;
 const SERVER = { type: 3, name: 'server', description: '🎮 Сервер (если их несколько)', description_localizations: { ru: '🎮 Сервер (если их несколько)', 'en-US': '🎮 Server (when there are several)', 'en-GB': '🎮 Server (when there are several)' }, required: false };
@@ -43749,6 +43860,27 @@ export async function handleRestart(i: ChatInputCommandInteraction): Promise<voi
   await i.editReply(out).catch((e) => log('restart reply failed:', (e as Error).message));
 }
 
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/** waits (up to a minute) until the plugin of the game has taken the lines; true = shown, false = not shown (expired, failed, or no answer) */
+async function waitShown(ids: number[]): Promise<boolean> {
+  for (let i = 0; i < 20; i++) {
+    await sleep(3000);
+    const r = await backendJson<{ delivered: boolean; failed: boolean }>(`/internal/game-say-status?ids=${ids.join(',')}`, { signal: AbortSignal.timeout(4000) }).catch(() => null);
+    if (r?.data?.delivered) return true;
+    if (r?.data?.failed) return false;
+  }
+  return false;
+}
+
+/** the card: the line as it will look in the game, where it went and how many players are there */
+function sayCard(a: SayAnswer) {
+  const c = cardText(a);
+  const e = replyEmbed('Отправлено в игру', c.description, COLORS.ok);
+  e.embeds[0].addFields({ name: 'Куда', value: c.where.slice(0, 1000) });
+  return e;
+}
+
 /** /say: a line from Discord into the game chat («* [Discord] Имя: текст») of one server or of all that have the plugin */
 async function handleSay(i: ChatInputCommandInteraction): Promise<void> {
   try {
@@ -43758,7 +43890,7 @@ async function handleSay(i: ChatInputCommandInteraction): Promise<void> {
     return;
   }
   const member = i.member as { displayName?: string } | null;
-  const r = await backendJson<{ ok: boolean; text: string }>('/internal/game-say', {
+  const r = await backendJson<SayAnswer>('/internal/game-say', {
     method: 'POST',
     body: JSON.stringify({
       text: i.options.getString('text', true),
@@ -43768,10 +43900,24 @@ async function handleSay(i: ChatInputCommandInteraction): Promise<void> {
       discordAdmin: i.memberPermissions?.has(PermissionFlagsBits.Administrator) ?? false,
     }),
   }).catch(() => null);
-  const out = r?.data
-    ? replyEmbed(r.data.ok ? 'В игру' : 'Не получилось', r.data.text, r.data.ok ? COLORS.ok : COLORS.warn)
-    : replyEmbed('Не получилось', 'Панель сейчас не отвечает, попробуйте ещё раз чуть позже.', COLORS.bad);
-  await i.editReply(out).catch((e) => log('say reply failed:', (e as Error).message));
+  const a = r?.data;
+  if (!a) {
+    await i.editReply(replyEmbed('Не получилось', 'Панель сейчас не отвечает, попробуйте ещё раз чуть позже.', COLORS.bad)).catch(() => undefined);
+    return;
+  }
+  if (a.status !== 'sent') {
+    await i.editReply(replyEmbed(a.status === 'empty' ? '📭 В игре никого нет' : 'Не получилось', a.text, COLORS.warn)).catch(() => undefined);
+    return;
+  }
+  await i.editReply(sayCard(a)).catch((e) => log('say reply failed:', (e as Error).message));
+  // the card says «shown in the game» when the plugin has taken the line
+  if (a.ids?.length) {
+    const shown = await waitShown(a.ids);
+    const c = cardText(a);
+    const e = replyEmbed(shown ? '🎮 Показано в игре' : '⚠️ Игра пока не забрала сообщение', c.description, shown ? COLORS.ok : COLORS.warn);
+    e.embeds[0].addFields({ name: 'Куда', value: c.where.slice(0, 1000) });
+    await i.editReply(e).catch(() => undefined);
+  }
 }
 
 // ---- what an administrator writes in the channel of the game chat goes to the game
@@ -43794,15 +43940,71 @@ export async function handleGameChatMessage(m: Message): Promise<void> {
   const text = m.cleanContent.replace(/\s+/g, ' ').trim().slice(0, 300);
   if (!text || text.startsWith('/')) return;
   if (!(await chatChannelIds()).has(m.channelId)) return;
-  const r = await backendJson<{ ok: boolean; silent?: boolean; rate?: boolean }>('/internal/game-say', {
+  const r = await backendJson<SayAnswer>('/internal/game-say', {
     method: 'POST',
     body: JSON.stringify({
       text, channelId: m.channelId, name: m.member?.displayName ?? m.author.username, discordId: m.author.id,
       discordAdmin: m.member?.permissions.has(PermissionFlagsBits.Administrator) ?? false,
     }),
   }).catch(() => null);
-  if (!r?.data || r.data.silent) return;
-  await m.react(r.data.ok ? '✅' : r.data.rate ? '⏳' : '❌').catch(() => undefined);
+  const a = r?.data;
+  if (!a || a.silent || a.status === 'denied') return;
+  // at once: 👀 accepted, 📭 nobody in the game, ⏳ too often, ❌ did not work
+  await m.react(markFor(a.status)).catch(() => undefined);
+  if (a.status !== 'sent') return;
+  const ch = m.channel;
+  // the card under the message goes away by itself, the line in the style of the chat stays
+  if (a.confirm?.card && 'send' in ch) {
+    void m.reply({ ...sayCard(a), allowedMentions: { parse: [], repliedUser: false } })
+      .then((c) => sleep(12_000).then(() => c.delete()))
+      .catch(() => undefined);
+  }
+  if (a.confirm?.line && a.ansi && 'send' in ch) {
+    void ch.send({ content: channelLine(a.ansi), allowedMentions: { parse: [] } }).catch(() => undefined);
+  }
+  // 👀 becomes 🎮 when the game has shown the line
+  if (a.ids?.length) {
+    const shown = await waitShown(a.ids);
+    const mine = m.reactions.cache.get('👀');
+    await mine?.users.remove(m.client.user?.id).catch(() => undefined);
+    await m.react(doneMark(shown)).catch(() => undefined);
+  }
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-bot/src"
+  cat > "$APP_DIR/core-bot/src/gameSayLogic.ts" << '__COREGSM_EOF__'
+/** What the bot shows for a line that goes from Discord into the game chat: the mark under the message, the card, the line in the channel. */
+
+export type SayStatus = 'sent' | 'empty' | 'rate' | 'denied' | 'error';
+
+export interface SayAnswer {
+  ok: boolean;
+  status: SayStatus;
+  text: string;
+  silent?: boolean;
+  ids?: number[];
+  servers?: { name: string; players: number | null }[];
+  ansi?: string;
+  confirm?: { card: boolean; line: boolean };
+}
+
+/** the mark under the message at once: 👀 accepted (waits for the game), 📭 nobody is in the game, ⏳ too often, ❌ did not work */
+export const markFor = (s: SayStatus): string => (s === 'sent' ? '👀' : s === 'empty' ? '📭' : s === 'rate' ? '⏳' : '❌');
+
+/** the mark when the game has shown the line (🎮) or could not (❌) */
+export const doneMark = (delivered: boolean): string => (delivered ? '🎮' : '❌');
+
+const ESC = String.fromCharCode(27);
+const gray = (t: string): string => `${ESC}[0;30m${t}${ESC}[0m`;
+
+/** the line in the channel in the style of the chat: «→ в игру» in grey, then the line as it stands in the game */
+export const channelLine = (ansi: string): string => `\`\`\`ansi\n${gray('→ в игру ')}${ansi}\n\`\`\``;
+
+/** the card under the message: the line as it will look in the game, where it went, how many players are there */
+export function cardText(a: SayAnswer): { description: string; where: string } {
+  const servers = a.servers ?? [];
+  const where = servers.map((s) => (s.players != null ? `${s.name} · ${s.players}` : s.name)).join('\n') || '—';
+  return { description: a.ansi ? `\`\`\`ansi\n${a.ansi}\n\`\`\`` : a.text, where };
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-bot/src"
@@ -140317,12 +140519,29 @@ export const WELCOME_STYLES: WelcomeStyle[] = [
 ];
 
 /** registration in the panel from the game: switch, texts and how often the Discord hint is repeated */
+/** a line of the chat in one colour with the commands picked out (the same as the panel does for the player): «.register» white bold, «(пароль)» lilac */
+export function commandLine(color: string, text: string): string {
+  const plain = text.replace(/[<>]/g, '');
+  const parts: string[] = [];
+  let last = 0;
+  for (const m of plain.matchAll(/(^|\s)(\.[a-zа-я]+)((?:\s*\([^()]{1,40}\))*)/giu)) {
+    const start = (m.index ?? 0) + m[1].length;
+    if (start > last) parts.push(`<color=${color}>${plain.slice(last, start)}</color>`);
+    parts.push(`<color=#FFFFFF><b>${m[2]}</b></color>`);
+    if (m[3]) parts.push(`<color=#B9A7FF>${m[3]}</color>`);
+    last = start + m[2].length + m[3].length;
+  }
+  if (last < plain.length) parts.push(`<color=${color}>${plain.slice(last)}</color>`);
+  return parts.join('');
+}
+
 export interface RegisterSettings {
   enabled: boolean;
   promptText: string;
   doneText: string;
   discordText: string;
   pendingText: string;
+  loginText: string;
   discordEveryHours: number;
   rankEnabled: boolean;
   rankText: string;
@@ -140381,6 +140600,9 @@ export interface ChatSettings {
   fromDiscord: boolean;
   /** the channel of the webhook is known (the bot can listen to it) */
   channel: boolean;
+  /** how a line from Discord is confirmed: a card under it, a line in the channel */
+  confirmCard: boolean;
+  confirmLine: boolean;
 }
 
 /** everything the «rules» endpoint returns: automatic announcements and the settings of the events */
@@ -143772,6 +143994,13 @@ const en: Record<keyof typeof ru, string> = {
   'gn.col.recent': 'Recent:',
   'gn.ch.palette': 'Discord palette',
   'gn.ch.paletteNote': 'Sends the 8 colours to the channel as Discord draws them, to compare with the preview',
+  'gn.ch.confirm': 'Confirmation of sending',
+  'gn.ch.confirmMarks': 'The bot puts a mark under the message: 👀 accepted, 🎮 shown in the game, 📭 nobody in the game, ⏳ too often, ❌ did not work.',
+  'gn.ch.confirmCard': 'A card under the message',
+  'gn.ch.confirmCardNote': 'How the line looks in the game, which server it went to and how many players are there. Goes away by itself after 12 seconds.',
+  'gn.ch.confirmLine': 'A «→ в игру» line in the channel',
+  'gn.ch.confirmLineNote': 'The bot repeats the line in the style of the game chat, so the whole talk reads in one row. It stays in the channel.',
+  'gn.rg.login': 'After .login: the game is linked to the account ({login} is the login)',
   'gn.ch.presets': 'Ready styles:',
   'gn.ch.preset.game': 'As in the game',
   'gn.ch.preset.calm': 'Calm',
@@ -143932,7 +144161,7 @@ const en: Record<keyof typeof ru, string> = {
   'gn.ch.testFail': 'Could not send: check the webhook address',
   'gn.ch.hint': 'Commands (messages that start with «.», «/» or «!») do not reach Discord. Mentions (@everyone, @here) in players\' messages ping nobody. A kind of chat that is switched off is not sent to Discord.',
   'gn.ch.privacy': 'Private messages of players (whispers) are never forwarded. The other chats are read in the Discord of your server, not only in the game: tell your players in the rules.',  'gn.rg.title': 'Registration in the panel from the game',
-  'gn.rg.note': 'A player without an account sees a hint on joining and registers with a chat command: .register password password_again. The login in the panel is the game nickname and the account is linked to it at once. Needs plugin 0.7.0 and VampireCommandFramework on the server.',
+  'gn.rg.note': 'A player without an account sees a hint on joining and registers with a chat command: .register (password) (confirm). The login in the panel is the game nickname and the account is linked to it at once. Needs plugin 0.7.0 and VampireCommandFramework on the server.',
   'gn.rg.enabled': 'Allow registration from the game',
   'gn.rg.prompt': 'A hint for a player without an account (at every join)',
   'gn.rg.done': 'The message after registering ({login} is the login)',
@@ -148469,6 +148698,13 @@ const ru = {
   'gn.col.recent': 'Недавние:',
   'gn.ch.palette': 'Палитра Discord',
   'gn.ch.paletteNote': 'Отправляет в канал 8 цветов, как их рисует Discord: чтобы сверить с предпросмотром',
+  'gn.ch.confirm': 'Подтверждение отправки',
+  'gn.ch.confirmMarks': 'Под сообщением бот ставит отметку: 👀 принято, 🎮 показано в игре, 📭 в игре никого нет, ⏳ слишком часто, ❌ не получилось.',
+  'gn.ch.confirmCard': 'Карточка под сообщением',
+  'gn.ch.confirmCardNote': 'Как строка выглядит в игре, на какой сервер ушла и сколько там игроков. Исчезает сама через 12 секунд.',
+  'gn.ch.confirmLine': 'Строка «→ в игру» в канале',
+  'gn.ch.confirmLineNote': 'Бот повторяет строку в стиле игрового чата, чтобы весь разговор читался в одном ряду. Остаётся в канале.',
+  'gn.rg.login': 'После .login: игра привязана к аккаунту ({login} — логин)',
   'gn.ch.presets': 'Готовые стили:',
   'gn.ch.preset.game': 'Как в игре',
   'gn.ch.preset.calm': 'Спокойный',
@@ -148629,7 +148865,7 @@ const ru = {
   'gn.ch.testFail': 'Не удалось отправить: проверьте адрес webhook',
   'gn.ch.hint': 'Команды (сообщения, начинающиеся с «.», «/» или «!») в Discord не попадают. Упоминания (@everyone, @here) в сообщениях игроков никого не вызывают. Выключенный вид чата в Discord не отправляется.',
   'gn.ch.privacy': 'Личные сообщения игроков (шёпот) никогда не пересылаются. Остальные чаты игроки видят в Discord вашего сервера, а не только в игре: предупредите их об этом в правилах.',  'gn.rg.title': 'Регистрация в панели из игры',
-  'gn.rg.note': 'Игрок без аккаунта видит подсказку при входе и регистрируется командой в чате: .register пароль подтверждение_пароля. Логин в панели берётся из игрового ника, аккаунт сразу привязывается к нику. Нужны плагин 0.7.0 и VampireCommandFramework на сервере.',
+  'gn.rg.note': 'Игрок без аккаунта видит подсказку при входе и регистрируется командой в чате: .register (пароль) (подтверждение). Логин в панели берётся из игрового ника, аккаунт сразу привязывается к нику. Нужны плагин 0.7.0 и VampireCommandFramework на сервере.',
   'gn.rg.enabled': 'Разрешить регистрацию из игры',
   'gn.rg.prompt': 'Подсказка игроку без аккаунта (при каждом входе)',
   'gn.rg.done': 'Сообщение после регистрации ({login} — логин)',
@@ -157140,7 +157376,7 @@ import { ChatLines, NewsEditor, NewsPreview } from '../components/NewsEditor';
 import { confirmDialog } from '../confirm';
 import { t, useI18n } from '../i18n';
 import {
-  ANSI_COLORS, CHAT_KINDS, CHAT_PRESETS, SWATCHES, WELCOME_STYLES, WELCOME_VARIABLES, composeLine, isHex, validateNews,
+  ANSI_COLORS, CHAT_KINDS, CHAT_PRESETS, SWATCHES, commandLine, WELCOME_STYLES, WELCOME_VARIABLES, composeLine, isHex, validateNews,
   type AnsiColor, type ChatColors, type ChatKind, type ChatSettings, type Extras, type JoinLeave, type RegisterSettings, type Welcome, type WelcomeStyle,
 } from '../gameNews';
 import { ScopeNote, useScope } from './GameNewsScope';
@@ -157353,13 +157589,13 @@ export function RegisterCard({ initial }: { initial: RegisterSettings }) {
     delay: 900,
     validate: (v) => {
       if (!Number.isInteger(v.discordEveryHours) || v.discordEveryHours < 1 || v.discordEveryHours > 720) return t('gn.rg.badHours');
-      return [v.promptText, v.doneText, v.discordText, v.pendingText, v.rankText].some((x) => !x.trim()) ? t('gn.hint.text') : null;
+      return [v.promptText, v.doneText, v.discordText, v.pendingText, v.loginText, v.rankText].some((x) => !x.trim()) ? t('gn.hint.text') : null;
     },
     save: async (v) => { await api(`/game-news/register-settings${sc.q}`, 'PUT', v); setSaved(v); sc.changed(); },
   });
-  const sample = (text: string, color: string) => `<color=${color}>${text.replace(/[<>]/g, '').replace(/\{login\}/g, 'WhiteLegioN').replace(/\{panel\}/g, 'coregsm.example.com')}</color>`;
+  const sample = (text: string, color: string) => commandLine(color, text.replace(/\{login\}/g, 'WhiteLegioN').replace(/\{panel\}/g, 'coregsm.example.com'));
 
-  const field = (label: string, key: 'promptText' | 'doneText' | 'discordText' | 'pendingText') => (
+  const field = (label: string, key: 'promptText' | 'doneText' | 'discordText' | 'pendingText' | 'loginText') => (
     <Field label={label}>
       <AutoText value={f[key]} maxLength={300} onChange={(e) => set(key, e.target.value)} />
     </Field>
@@ -157386,6 +157622,7 @@ export function RegisterCard({ initial }: { initial: RegisterSettings }) {
         {field(t('gn.rg.done'), 'doneText')}
         {field(t('gn.rg.discord'), 'discordText')}
         {field(t('gn.rg.pending'), 'pendingText')}
+        {field(t('gn.rg.login'), 'loginText')}
       </div>
 
       <label className="flex items-center gap-3 font-bold">
@@ -157403,7 +157640,7 @@ export function RegisterCard({ initial }: { initial: RegisterSettings }) {
       </Field>
 
       <VarChips vars={[{ name: 'login', example: 'WhiteLegioN' }, { name: 'panel', example: 'coregsm.example.ru' }]} onPick={(v) => set('promptText', `${f.promptText} ${v}`.trim())} />
-      <ChatLines lines={[sample(f.promptText, '#FFCC33'), sample(f.doneText, '#5FD068'), ...(f.rankEnabled ? [`<color=#5FD068>${f.rankText.replace(/[<>]/g, '').replace(/\{name\}/g, 'WhiteLegioN').replace(/\{rank\}/g, 'Охотник на кровь').replace(/\{hours\}/g, '42').replace(/\{next\}/g, ' · до «Страж замка» ещё 28 ч')}</color>`] : []), sample(f.discordText, '#6EC1FF')]} />
+      <ChatLines lines={[sample(f.promptText, '#FFCC33'), sample(f.doneText, '#5FD068'), sample(f.loginText, '#5FD068'), ...(f.rankEnabled ? [`<color=#5FD068>${f.rankText.replace(/[<>]/g, '').replace(/\{name\}/g, 'WhiteLegioN').replace(/\{rank\}/g, 'Охотник на кровь').replace(/\{hours\}/g, '42').replace(/\{next\}/g, ' · до «Страж замка» ещё 28 ч')}</color>`] : []), sample(f.discordText, '#6EC1FF')]} />
       <p className="text-sm font-semibold text-mute">{t('gn.rg.vars')}</p>
       <p className="text-sm font-semibold text-danger">{t('gn.rg.warn')}</p>
       {auto.invalid && <p className="text-sm font-semibold text-danger">{auto.error}</p>}
@@ -157591,6 +157828,21 @@ export function ChatCard({ initial, joinText, leaveText }: { initial: ChatSettin
           <span className="block text-sm font-semibold text-mute">{t(st.set ? 'gn.ch.fromDiscordNote' : 'gn.ch.fromDiscordNeed')}</span>
         </span>
       </label>
+
+      {st.fromDiscord && (
+        <div className="space-y-2 rounded-xl border border-line px-4 py-3">
+          <div className="font-extrabold">{t('gn.ch.confirm')}</div>
+          <p className="text-sm font-semibold text-mute">{t('gn.ch.confirmMarks')}</p>
+          <label className="flex items-start gap-3 font-bold">
+            <Switch className="mt-0.5" checked={st.confirmCard} disabled={busy === 'confirmCard'} onChange={(v) => void send({ confirmCard: v }, 'confirmCard', true)} />
+            <span>{t('gn.ch.confirmCard')}<span className="block text-sm font-semibold text-mute">{t('gn.ch.confirmCardNote')}</span></span>
+          </label>
+          <label className="flex items-start gap-3 font-bold">
+            <Switch className="mt-0.5" checked={st.confirmLine} disabled={busy === 'confirmLine'} onChange={(v) => void send({ confirmLine: v }, 'confirmLine', true)} />
+            <span>{t('gn.ch.confirmLine')}<span className="block text-sm font-semibold text-mute">{t('gn.ch.confirmLineNote')}</span></span>
+          </label>
+        </div>
+      )}
 
       <fieldset className="space-y-2">
         <legend className="mb-1 font-extrabold">{t('gn.ch.what')}</legend>

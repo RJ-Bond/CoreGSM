@@ -13,9 +13,9 @@
  * is never logged and never stored in clear text.
  */
 import bcrypt from 'bcryptjs';
-import type { Express, RequestHandler } from 'express';
+import type { Express, Request, RequestHandler } from 'express';
 import { z } from 'zod';
-import { needsSetup, publicBase, registrationMode, rulesText } from '../admin/site.js';
+import { isRealDomain, needsSetup, publicBase, registrationMode, rulesText } from '../admin/site.js';
 import { db } from '../db.js';
 import { readScoped, writeScoped } from './gameNewsScope.js';
 import { recordConsent } from '../monitoring/rules.js';
@@ -115,7 +115,15 @@ export function setRegisterSettings(v: RegisterSettings, serverId?: number): voi
 const fill = (text: string, vars: { login?: string; panel: string }): string =>
   text.replace(/\{login\}/g, vars.login ?? '').replace(/\{panel\}/g, vars.panel);
 
-const panelUrl = (): string => (publicBase() ?? '').replace(/^https?:\/\//, '');
+/**
+ * The address of the panel as the player should type it: the address the game plugin itself reaches the panel at (its Host header: the
+ * request carries the token of a server, so it is trusted), else the one the panel knows about itself.
+ */
+function panelUrl(req?: Request): string {
+  const host = req ? String(req.headers['x-forwarded-host'] ?? req.headers.host ?? '').split(',')[0].trim().split(':')[0] : '';
+  if (isRealDomain(host)) return host;
+  return (publicBase() ?? '').replace(/^https?:\/\//, '');
+}
 
 // ---- brute force: a few tries an hour for one game account
 const tries = new Map<string, { n: number; reset: number }>();
@@ -149,7 +157,7 @@ export function registerGameNewsPlayers({ app }: { app: Express }): void {
     if (!who) {
       // nobody can register while the panel is closed or not set up: no use to invite
       if (needsSetup() || !registrationOpen()) return res.json({ registered: false, replies: [] });
-      return res.json({ registered: false, replies: [tag(C_INFO, fill(s.promptText, { panel: panelUrl() }))] });
+      return res.json({ registered: false, replies: [tag(C_INFO, fill(s.promptText, { panel: panelUrl(req) }))] });
     }
     const u = db.prepare('SELECT id, status, discord_id FROM users WHERE id = ?').get(who.user_id) as UserRow | undefined;
     const due = now - who.last_hint_at >= s.discordEveryHours * 3_600_000;
@@ -160,7 +168,7 @@ export function registerGameNewsPlayers({ app }: { app: Express }): void {
     }
     if (u && u.status === 'active' && !u.discord_id && due) {
       db.prepare('UPDATE game_identities SET last_hint_at = ? WHERE platform_id = ?').run(now, id.data);
-      replies.push(tag(C_HINT, fill(s.discordText, { panel: panelUrl() })));
+      replies.push(tag(C_HINT, fill(s.discordText, { panel: panelUrl(req) })));
     }
     res.json({ registered: true, replies });
   });
@@ -200,7 +208,7 @@ export function registerGameNewsPlayers({ app }: { app: Express }): void {
     }
     db.prepare('INSERT INTO audit (ts, actor, action, detail) VALUES (?, ?, ?, ?)').run(now, 'game-plugin', 'game_register', login);
 
-    const vars = { login, panel: panelUrl() };
+    const vars = { login, panel: panelUrl(req) };
     if (pending) return res.json({ ok: true, pending: true, login, replies: [tag(C_GOOD, fill(s.pendingText, vars))] });
     res.json({ ok: true, login, replies: [tag(C_GOOD, fill(s.doneText, vars)), tag(C_HINT, fill(s.discordText, vars))] });
   });
@@ -230,7 +238,7 @@ export function registerGameNewsPlayers({ app }: { app: Express }): void {
     if (u.status !== 'active') return say(C_BAD, '* Этот аккаунт сейчас недоступен.');
     if (u.banned_at && (!u.banned_until || u.banned_until > now)) return say(C_BAD, '* Этот аккаунт заблокирован.');
     // a second factor cannot be asked in the chat: the link is made in the panel instead
-    if (u.totp_enabled) return say(C_INFO, `* На аккаунте включена двухфакторная защита: привяжите игру в профиле панели (${panelUrl()}).`);
+    if (u.totp_enabled) return say(C_INFO, `* На аккаунте включена двухфакторная защита: привяжите игру в профиле панели (${panelUrl(req)}).`);
 
     db.prepare('INSERT INTO game_identities (platform_id, user_id, nick, created_at, last_hint_at) VALUES (?, ?, ?, ?, ?)').run(b.data.id, u.id, b.data.name, now, now);
     // the nickname is linked to the account when the account has none yet and no other account holds this nickname
@@ -240,7 +248,7 @@ export function registerGameNewsPlayers({ app }: { app: Express }): void {
       db.prepare("INSERT INTO user_player (user_id, game_nick, bio, public_profile) VALUES (?, ?, '', 0) ON CONFLICT(user_id) DO UPDATE SET game_nick = excluded.game_nick").run(u.id, nick);
     }
     db.prepare('INSERT INTO audit (ts, actor, action, detail) VALUES (?, ?, ?, ?)').run(now, 'game-plugin', 'game_login', u.username);
-    res.json({ ok: true, login: u.username, replies: [tag(C_GOOD, fill(s.loginText, { login: u.username, panel: panelUrl() }))] });
+    res.json({ ok: true, login: u.username, replies: [tag(C_GOOD, fill(s.loginText, { login: u.username, panel: panelUrl(req) }))] });
   });
 }
 
