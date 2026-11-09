@@ -6,13 +6,13 @@ import { t, useI18n } from '../i18n';
 import { usePoll } from '../ui';
 import { EmptyState, SubTabs } from './GameNewsUi';
 
-type Kind = 'message' | 'auto' | 'discord' | 'restart' | 'link' | 'kick';
+type Kind = 'message' | 'auto' | 'discord' | 'restart' | 'link' | 'mod';
 interface Entry { id: string; ts: number; kind: Kind; serverId: number | null; serverName: string; text: string; status: string; error: string; by: string }
 
-const FILTERS = ['all', 'message', 'auto', 'discord', 'restart', 'link', 'kick'] as const;
+const FILTERS = ['all', 'message', 'auto', 'discord', 'restart', 'link', 'mod'] as const;
 type Filter = (typeof FILTERS)[number];
 
-const KIND_ICON: Record<Kind, string> = { message: '✉', auto: '⟳', discord: '💬', restart: '♻', link: '🔗', kick: '🚪' };
+const KIND_ICON: Record<Kind, string> = { message: '✉', auto: '⟳', discord: '💬', restart: '♻', link: '🔗', mod: '🚪' };
 
 const MSG_STATUS: Record<string, { text: 'gn.h.queued' | 'gn.h.ok' | 'gn.h.expired' | 'gn.h.fail'; cls: string }> = {
   queued: { text: 'gn.h.queued', cls: 'pill pill-mute' },
@@ -30,7 +30,7 @@ const RESTART_STATUS: Record<string, { text: 'gn.rr.o.counting' | 'gn.rr.o.done'
 const LINK_TEXT: Record<string, 'gn.jn.reg' | 'gn.jn.login' | 'gn.jn.unlink'> = { game_register: 'gn.jn.reg', game_login: 'gn.jn.login', game_unlink: 'gn.jn.unlink' };
 
 /** everything the plugin did in one list: messages (by hand, by a rule, from Discord), restarts, linked players */
-export function JournalTab({ onReuse }: { onReuse: (text: string) => void }) {
+export function JournalTab({ onReuse, onPlayer }: { onReuse: (text: string) => void; onPlayer: (nick: string) => void }) {
   useI18n();
   const [filter, setFilter] = useState<Filter>('all');
   const [items, setItems] = useState<Entry[] | null>(null);
@@ -55,8 +55,8 @@ export function JournalTab({ onReuse }: { onReuse: (text: string) => void }) {
                 <div className="flex flex-wrap items-center gap-2 text-sm font-bold">
                   {e.kind === 'restart'
                     ? <span className={RESTART_STATUS[e.status]?.cls ?? 'pill pill-mute'}>{RESTART_STATUS[e.status] ? t(RESTART_STATUS[e.status].text) : e.status}</span>
-                    : e.kind === 'kick'
-                      ? <span className="pill pill-warn">{t('gn.jn.kick')}</span>
+                    : e.kind === 'mod'
+                      ? <span className={e.status === 'unban' ? 'pill pill-ok' : 'pill pill-warn'}>{t(`gn.md.k.${e.status}` as 'gn.md.k.kick')}</span>
                       : e.kind === 'link'
                       ? <span className="pill pill-ok">{LINK_TEXT[e.status] ? t(LINK_TEXT[e.status]) : e.status}</span>
                       : <span className={MSG_STATUS[e.status]?.cls ?? 'pill pill-mute'}>{MSG_STATUS[e.status] ? t(MSG_STATUS[e.status].text) : e.status}</span>}
@@ -65,10 +65,17 @@ export function JournalTab({ onReuse }: { onReuse: (text: string) => void }) {
                 </div>
                 {e.kind === 'restart'
                   ? <p className="mt-1 text-sm">{t('gn.jn.restartLine', { n: e.text })}</p>
-                  : e.kind === 'link' || e.kind === 'kick'
+                  : e.kind === 'mod'
+                    ? (
+                      <p className="mt-1 text-sm">
+                        <button type="button" className="font-bold underline decoration-dotted underline-offset-2 hover:text-link" title={t('gn.md.history')} onClick={() => onPlayer(e.text)}>{e.text}</button>
+                        {e.error && <span className="font-semibold text-mute"> · {e.error}</span>}
+                      </p>
+                    )
+                  : e.kind === 'link'
                     ? <p className="mt-1 text-sm">{e.text}</p>
                     : <p className="mt-1 wrap-break-word text-sm"><Styled text={e.text} /></p>}
-                {(e.status === 'failed' || e.status === 'expired') && e.error && <p className="text-sm font-semibold text-danger">{e.error}</p>}
+                {e.kind !== 'mod' && (e.status === 'failed' || e.status === 'expired') && e.error && <p className="text-sm font-semibold text-danger">{e.error}</p>}
               </div>
               {(e.kind === 'message' || e.kind === 'auto') && <button type="button" className="btn btn-soft btn-sm" onClick={() => onReuse(e.text)}>{t('gn.reuse')}</button>}
             </li>

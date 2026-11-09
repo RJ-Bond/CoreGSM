@@ -15,6 +15,7 @@ import { ServerRestartCard } from './GameNewsServerRestart';
 import GameNewsRules from './GameNewsRules';
 import { JournalTab } from './GameNewsJournal';
 import { LinksTab } from './GameNewsLinks';
+import { MOD_PLAYER_KEY, ModerationTab } from './GameNewsModeration';
 import { SendTab } from './GameNewsSend';
 import { ScopedCard, SubTabs } from './GameNewsUi';
 
@@ -33,7 +34,7 @@ export default function GameNewsPage({ sub = '' }: { sub?: string }) {
   // the tab is part of the address: /admin/gamenews, /auto, /players, /discord, /history («events» is the old name of «players»)
   // (/general holds the general settings; /s12 the settings of the server 12; «players», «discord» and «events» are the old names of /general)
   // («discord» and «events» are old names of /general, «history» of /journal)
-  const tab: Tab = ['discord', 'events'].includes(sub) ? 'general' : sub === 'history' ? 'journal' : (/^(send|auto|general|players|journal|s\d+)$/.test(sub) ? sub : 'send');
+  const tab: Tab = ['discord', 'events'].includes(sub) ? 'general' : sub === 'history' ? 'journal' : (/^(send|auto|general|players|mod|journal|s\d+)$/.test(sub) ? sub : 'send');
   const goTab = (x: Tab) => navigate(x === 'send' ? '/admin/gamenews' : `/admin/gamenews/${x}`);
   // the draft survives a switch of the page or a reload (kept in this browser only)
   const [text, setText] = useState(() => { try { return localStorage.getItem('coregsm.gamenews.draft') ?? ''; } catch { return ''; } });
@@ -87,7 +88,7 @@ export default function GameNewsPage({ sub = '' }: { sub?: string }) {
   const serverTabs = withToken.length > 1 ? withToken : [];
   const tabList: { id: Tab; label: string }[] = [
     { id: 'send', label: t('gn.tab.send') }, { id: 'auto', label: t('gn.tab.auto') }, { id: 'general', label: t('gn.tab.general') },
-    { id: 'players', label: t('gn.tab.players') }, { id: 'journal', label: t('gn.tab.journal') },
+    { id: 'players', label: t('gn.tab.players') }, { id: 'mod', label: t('gn.tab.mod') }, { id: 'journal', label: t('gn.tab.journal') },
   ];
 
   // the setup guide: until a plugin is online
@@ -248,7 +249,9 @@ export default function GameNewsPage({ sub = '' }: { sub?: string }) {
 
       {data && tab === 'players' && <LinksTab />}
 
-      {data && tab === 'journal' && <JournalTab onReuse={(x) => { setText(x); goTab('send'); }} />}
+      {data && tab === 'mod' && <ModerationTab />}
+
+      {data && tab === 'journal' && <JournalTab onReuse={(x) => { setText(x); goTab('send'); }} onPlayer={(nick) => { try { localStorage.setItem(MOD_PLAYER_KEY, nick); } catch { /* private mode */ } goTab('mod'); }} />}
 
       {settingsServer && <PluginModal server={settingsServer} onClose={() => setSettingsFor(null)} onChanged={() => void loadMain()} />}
     </AdminPage>

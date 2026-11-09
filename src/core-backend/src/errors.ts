@@ -39,6 +39,7 @@ export const ERRORS = {
   game_link_missing: 'Привязка не найдена',
   game_schedule_limit: 'Не больше 20 расписаний',
   game_schedule_missing: 'Расписание не найдено',
+  game_ban_missing: 'Бан не найден',
   game_restart_server: 'Выберите сервер с плагином',
   game_restart_short: 'Минимум 10 секунд',
   game_restart_long: 'Не больше 6 часов',

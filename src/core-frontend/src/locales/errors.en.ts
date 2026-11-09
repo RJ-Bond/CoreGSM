@@ -34,6 +34,7 @@ const errorsEn: Record<string, string> = {
   game_link_missing: 'The link was not found',
   game_schedule_limit: 'No more than 20 schedules',
   game_schedule_missing: 'The schedule was not found',
+  game_ban_missing: 'The ban was not found',
   game_restart_server: 'Pick a server with the plugin',
   game_restart_short: 'At least 10 seconds',
   game_restart_long: 'No more than 6 hours',

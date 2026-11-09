@@ -15,7 +15,9 @@
 import bcrypt from 'bcryptjs';
 import type { Express, Request, RequestHandler } from 'express';
 import { z } from 'zod';
-import { panelTz } from './gameNewsVars.js';
+import { joinBlock } from './gameNewsKick.js';
+import { visitStamp } from './gameNewsVars.js';
+export { visitStamp };
 import { isRealDomain, needsSetup, publicBase, registrationMode, rulesText } from '../admin/site.js';
 import { db } from '../db.js';
 import { readScoped, writeScoped } from './gameNewsScope.js';
@@ -140,12 +142,6 @@ export function setRegisterSettings(v: RegisterSettings, serverId?: number): voi
 const fill = (text: string, vars: { login?: string; panel: string; name?: string; date?: string; time?: string }): string =>
   text.replace(/\{login\}/g, vars.login ?? '').replace(/\{panel\}/g, vars.panel).replace(/\{name\}/g, vars.name ?? '').replace(/\{date\}/g, vars.date ?? '').replace(/\{time\}/g, vars.time ?? '');
 
-/** «10.12.2026» and «10:00» in the time zone of the panel */
-export function visitStamp(ts: number): { date: string; time: string } {
-  const tz = panelTz();
-  const f = (o: Intl.DateTimeFormatOptions) => { try { return new Intl.DateTimeFormat('ru-RU', { timeZone: tz, hourCycle: 'h23', ...o }).format(new Date(ts)); } catch { return new Intl.DateTimeFormat('ru-RU', { timeZone: 'UTC', hourCycle: 'h23', ...o }).format(new Date(ts)); } };
-  return { date: f({ day: '2-digit', month: '2-digit', year: 'numeric' }), time: f({ hour: '2-digit', minute: '2-digit' }) };
-}
 
 /**
  * Is this nickname already in the panel: an account that has it as its game nickname, or whose login is the nickname? Then the player
@@ -201,8 +197,14 @@ export function registerGameNewsPlayers({ app }: { app: Express }): void {
 
   // who is this player: what should they read now
   app.get('/api/game-news/player/status', plugin, (req, res) => {
-    const s = getRegisterSettings((req as typeof req & { gameServerId?: number }).gameServerId);
+    const serverId = (req as typeof req & { gameServerId?: number }).gameServerId;
+    const s = getRegisterSettings(serverId);
     const id = idSchema.safeParse(String(req.query.id ?? ''));
+    // a banned player (or one who is back too soon after a kick) is told why and removed, whatever the registration is set to
+    if (id.success) {
+      const block = joinBlock(serverId ?? 0, id.data);
+      if (block) return res.json({ registered: false, banned: true, replies: block.lines });
+    }
     if (!s.enabled || !id.success) return res.json({ registered: false, replies: [] });
     const now = Date.now();
     const who = db.prepare('SELECT * FROM game_identities WHERE platform_id = ?').get(id.data) as IdentityRow | undefined;

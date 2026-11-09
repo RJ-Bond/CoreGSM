@@ -40,12 +40,26 @@ export const SAY_COMMAND = {
     SERVER,
   ],
 };
+export const KICK_COMMAND = {
+  name: 'kick',
+  description: '🚪 Кикнуть игрока с игрового сервера · только админы',
+  description_localizations: { ru: '🚪 Кикнуть игрока с игрового сервера · только админы', 'en-US': '🚪 Kick a player from a game server · admins only', 'en-GB': '🚪 Kick a player from a game server · admins only' },
+  dm_permission: false,
+  default_member_permissions: String(PermissionFlagsBits.Administrator),
+  options: [
+    { type: 3, name: 'player', description: '👤 Ник игрока', description_localizations: { ru: '👤 Ник игрока', 'en-US': '👤 Nickname of the player', 'en-GB': '👤 Nickname of the player' }, required: true, max_length: 100 },
+    { type: 3, name: 'reason', description: '📝 Причина (можно номер из панели)', description_localizations: { ru: '📝 Причина (можно номер из панели)', 'en-US': '📝 Reason (or a number from the panel)', 'en-GB': '📝 Reason (or a number from the panel)' }, required: false, max_length: 200 },
+    SERVER,
+  ],
+};
 RESTART_COMMANDS.push(SAY_COMMAND as never);
+RESTART_COMMANDS.push(KICK_COMMAND as never);
 
 export const RESTART_NAMES = new Set(RESTART_COMMANDS.map((c) => c.name));
 
 export async function handleRestart(i: ChatInputCommandInteraction): Promise<void> {
   if (i.commandName === 'say') return handleSay(i);
+  if (i.commandName === 'kick') return handleKick(i);
   try {
     await i.deferReply({ flags: EPHEMERAL });
   } catch (e) {
@@ -178,4 +192,51 @@ export async function handleGameChatMessage(m: Message): Promise<void> {
     await mine?.users.remove(m.client.user?.id).catch(() => undefined);
     await m.react(doneMark(shown)).catch(() => undefined);
   }
+}
+
+/** /kick: the panel gives the command to the plugin of the server, which finds the player by the nickname and does it the usual way (the rules, the lines and the log are those of .kick) */
+async function handleKick(i: ChatInputCommandInteraction): Promise<void> {
+  try {
+    await i.deferReply({ flags: EPHEMERAL });
+  } catch (e) {
+    log('kick: could not acknowledge:', (e as Error).message);
+    return;
+  }
+  const member = i.member as { displayName?: string } | null;
+  const player = i.options.getString('player', true);
+  const r = await backendJson<{ ok: boolean; ids?: number[]; text: string }>('/internal/game-kick', {
+    method: 'POST',
+    body: JSON.stringify({
+      name: player,
+      reason: i.options.getString('reason') ?? undefined,
+      server: i.options.getString('server') ?? undefined,
+      adminName: member?.displayName ?? i.user.username,
+      discordId: i.user.id,
+      discordAdmin: i.memberPermissions?.has(PermissionFlagsBits.Administrator) ?? false,
+    }),
+  }).catch(() => null);
+  const a = r?.data;
+  if (!a) {
+    await i.editReply(replyEmbed('Не получилось', 'Панель сейчас не отвечает, попробуйте ещё раз чуть позже.', COLORS.bad)).catch(() => undefined);
+    return;
+  }
+  if (!a.ok || !a.ids?.length) {
+    await i.editReply(replyEmbed('Не получилось', a.text, COLORS.warn)).catch(() => undefined);
+    return;
+  }
+  await i.editReply(replyEmbed('🚪 Команда отправлена', `Ищу игрока **${player.replace(/[*_`~|>]/g, '')}** на сервере…`, COLORS.info)).catch(() => undefined);
+  // the plugin takes the command with its next poll (a few seconds) and reports what it did
+  for (let n = 0; n < 12; n++) {
+    await sleep(2500);
+    const st = await backendJson<{ done: boolean; failed: boolean; text: string }>(`/internal/game-command-status?ids=${a.ids.join(',')}`, { signal: AbortSignal.timeout(4000) }).catch(() => null);
+    if (st?.data?.done) {
+      await i.editReply(replyEmbed('🚪 Игрок кикнут', st.data.text || 'Готово.', COLORS.ok)).catch(() => undefined);
+      return;
+    }
+    if (st?.data?.failed) {
+      await i.editReply(replyEmbed('Не получилось', st.data.text || 'Игрок не найден.', COLORS.warn)).catch(() => undefined);
+      return;
+    }
+  }
+  await i.editReply(replyEmbed('⚠️ Нет ответа от игры', 'Плагин не ответил за полминуты: проверьте, что сервер запущен и плагин на связи.', COLORS.warn)).catch(() => undefined);
 }

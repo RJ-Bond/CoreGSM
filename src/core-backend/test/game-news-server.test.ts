@@ -362,7 +362,10 @@ describe('the .kick command', () => {
   });
 
   it('is in the journal', () => {
-    db.prepare("INSERT INTO audit (ts, actor, action, detail) VALUES (2100000000000, 'game-plugin', 'game_kick', 'Админ → Vamp: спам')").run();
-    assert.deepEqual(jr.journal({ kind: 'kick' }).map((e) => e.text), ['Админ → Vamp: спам']);
+    kick.runMod(1, { action: 'kick', adminId: 'j1', adminName: 'Админ', targetId: '76561198000000099', name: 'JournalVamp', targetIsAdmin: false, reason: 'спам' }, 2_100_000_000_000);
+    const e = jr.journal({ kind: 'mod' }).find((x) => x.text === 'JournalVamp');
+    assert.equal(e?.status, 'kick');
+    assert.equal(e?.error, 'спам');
+    assert.equal(e?.by, 'Админ');
   });
 });

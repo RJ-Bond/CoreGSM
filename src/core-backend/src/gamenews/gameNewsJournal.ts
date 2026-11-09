@@ -6,7 +6,7 @@ import type { Express, RequestHandler } from 'express';
 import { db } from '../db.js';
 import { serverLabel } from './gameNewsVars.js';
 
-export type JournalKind = 'message' | 'auto' | 'discord' | 'restart' | 'link' | 'kick';
+export type JournalKind = 'message' | 'auto' | 'discord' | 'restart' | 'link' | 'mod';
 
 export interface JournalEntry {
   id: string;
@@ -52,9 +52,12 @@ export function journal(opts: { kind?: string; serverId?: number; limit?: number
       out.push({ id: `r${r.id}`, ts: r.started_at, kind: 'restart', serverId: r.server_id, serverName: serverLabel(r.server_id), text: `${Math.round(r.total_sec / 60)}`, status: r.outcome, error: '', by: `${r.requested_by || '—'} · ${r.source}` });
     }
   }
-  if (want('kick') && !opts.serverId) {
-    const rows = db.prepare("SELECT id, ts, detail FROM audit WHERE action = 'game_kick' ORDER BY id DESC LIMIT 100").all() as { id: number; ts: number; detail: string }[];
-    for (const r of rows) out.push({ id: `k${r.id}`, ts: r.ts, kind: 'kick', serverId: null, serverName: '', text: r.detail, status: 'game_kick', error: '', by: '' });
+  if (want('mod')) {
+    const rows = db.prepare('SELECT * FROM game_mod_log ORDER BY id DESC LIMIT 200').all() as { id: number; ts: number; kind: string; platform_id: string; nick: string; admin: string; reason: string; server_id: number; until: number }[];
+    for (const r of rows) {
+      if (opts.serverId && r.server_id !== opts.serverId) continue;
+      out.push({ id: `k${r.id}`, ts: r.ts, kind: 'mod', serverId: r.server_id || null, serverName: r.server_id ? serverLabel(r.server_id) : '', text: r.nick, status: r.kind, error: r.reason, by: r.admin });
+    }
   }
   if (want('link') && !opts.serverId) {
     const rows = db.prepare("SELECT id, ts, action, detail FROM audit WHERE action IN ('game_register', 'game_login', 'game_unlink') ORDER BY id DESC LIMIT 100").all() as { id: number; ts: number; action: string; detail: string }[];

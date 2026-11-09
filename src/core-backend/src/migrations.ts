@@ -352,6 +352,44 @@ CREATE TABLE IF NOT EXISTS game_restart_schedule (
       addColumn(db, 'game_identities', 'last_leave_at', 'INTEGER NOT NULL DEFAULT 0');
     },
   },
+  {
+    version: 26,
+    name: 'game_moderation',
+    // what administrators did from the game (kick, ban, warning, unban), the bans in force, the commands the panel gives to the plugin
+    up: (db) => db.exec(`
+CREATE TABLE IF NOT EXISTS game_mod_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts INTEGER NOT NULL,
+  kind TEXT NOT NULL,
+  platform_id TEXT NOT NULL DEFAULT '',
+  nick TEXT NOT NULL DEFAULT '',
+  admin TEXT NOT NULL DEFAULT '',
+  reason TEXT NOT NULL DEFAULT '',
+  server_id INTEGER NOT NULL DEFAULT 0,
+  until INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_game_mod_log_player ON game_mod_log(platform_id, kind, ts);
+CREATE TABLE IF NOT EXISTS game_bans (
+  platform_id TEXT PRIMARY KEY,
+  nick TEXT NOT NULL DEFAULT '',
+  reason TEXT NOT NULL DEFAULT '',
+  admin TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL,
+  until INTEGER NOT NULL DEFAULT 0,
+  kind TEXT NOT NULL DEFAULT 'ban',
+  server_id INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS game_commands (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  server_id INTEGER NOT NULL,
+  type TEXT NOT NULL,
+  payload TEXT NOT NULL DEFAULT '{}',
+  created_at INTEGER NOT NULL,
+  state TEXT NOT NULL DEFAULT 'pending',
+  result TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_game_commands_server ON game_commands(server_id, state);`),
+  },
 ];
 
 export const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;

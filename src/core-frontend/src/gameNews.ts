@@ -247,11 +247,8 @@ export const WELCOME_STYLES: WelcomeStyle[] = [
 ];
 
 /** registration in the panel from the game: switch, texts and how often the Discord hint is repeated */
-/** the defaults of the .kick command (the same as in the panel's backend) */
-export const DEFAULT_KICK: KickSettings = {
-  enabled: true, template: '* Игрок {name} был кикнут с сервера. Причина: {reason}', textColor: '#FF5555', nameColor: '#5FD068', reasonColor: '#FFCC33', adminColor: '#6EC1FF',
-  defaultReason: 'не указана', requireReason: false, protectAdmins: true, announce: true, cooldownSec: 0, maxReason: 100, logChannelId: '',
-};
+/** a short name for a reason: «.kick Ник 1» means its text */
+export interface KickReason { key: string; text: string }
 
 export interface KickSettings {
   enabled: boolean;
@@ -268,21 +265,51 @@ export interface KickSettings {
   maxReason: number;
   /** the channel of Discord for the log of kicks ('' = none) */
   logChannelId: string;
+  banTemplate: string;
+  warnTemplate: string;
+  unbanTemplate: string;
+  banJoinText: string;
+  blockJoinText: string;
+  notifyPlayer: boolean;
+  notifyText: string;
+  warnLimit: number;
+  warnDays: number;
+  rejoinBlockMin: number;
+  reasons: KickReason[];
 }
 
-/** the line of a kick for everybody in flat colour tags (the same as the panel builds for the game): the text, the nickname, the reason and the administrator each in its colour */
-export function kickLine(s: KickSettings, name: string, reason: string, admin: string): string {
+/** the defaults of the moderation commands (the same as in the panel's backend) */
+export const DEFAULT_KICK: KickSettings = {
+  enabled: true, template: '* Игрок {name} был кикнут с сервера. Причина: {reason}', textColor: '#FF5555', nameColor: '#5FD068', reasonColor: '#FFCC33', adminColor: '#6EC1FF',
+  defaultReason: 'не указана', requireReason: false, protectAdmins: true, announce: true, cooldownSec: 0, maxReason: 100, logChannelId: '',
+  banTemplate: '* Игрок {name} был забанен на {time}. Причина: {reason}',
+  warnTemplate: '* Игрок {name} был предупреждён. Причина: {reason}',
+  unbanTemplate: '* Игрок {name} был разбанен.',
+  banJoinText: '* Вы забанены {until}. Причина: {reason}',
+  blockJoinText: '* Вы недавно были кикнуты. Подождите ещё {left}, прежде чем зайти.',
+  notifyPlayer: true, notifyText: '* Вас убирают с сервера. Причина: {reason}',
+  warnLimit: 3, warnDays: 30, rejoinBlockMin: 0,
+  reasons: [{ key: '1', text: 'Спам' }, { key: '2', text: 'Оскорбления' }, { key: '3', text: 'Читы или использование багов' }, { key: '4', text: 'Мешает другим игрокам' }],
+};
+
+/** a line of a command for everybody in flat colour tags (the same as the panel builds for the game): the text, the nickname, the reason and the administrator each in its colour */
+export function modLine(s: KickSettings, template: string, v: { name?: string; reason?: string; admin?: string; time?: string; n?: number; limit?: number }): string {
   const clean = (x: string) => x.replace(/[<>]/g, '');
   const vars: Record<string, { text: string; color: string }> = {
-    name: { text: clean(name), color: s.nameColor },
-    reason: { text: clean(reason), color: s.reasonColor },
-    admin: { text: clean(admin), color: s.adminColor },
+    name: { text: clean(v.name ?? ''), color: s.nameColor },
+    reason: { text: clean(v.reason ?? ''), color: s.reasonColor },
+    admin: { text: clean(v.admin ?? ''), color: s.adminColor },
+    time: { text: clean(v.time ?? ''), color: s.reasonColor },
+    n: { text: String(v.n ?? ''), color: s.reasonColor },
+    limit: { text: String(v.limit ?? ''), color: s.reasonColor },
   };
-  return clean(s.template).split(/(\{(?:name|reason|admin)\})/).filter(Boolean).map((part) => {
-    const m = /^\{(name|reason|admin)\}$/.exec(part);
+  return clean(template).split(/(\{(?:name|reason|admin|time|n|limit)\})/).filter(Boolean).map((part) => {
+    const m = /^\{(name|reason|admin|time|n|limit)\}$/.exec(part);
     return m ? `<color=${vars[m[1]].color}>${vars[m[1]].text}</color>` : `<color=${s.textColor}>${part}</color>`;
   }).join('');
 }
+
+export const kickLine = (s: KickSettings, name: string, reason: string, admin: string): string => modLine(s, s.template, { name, reason, admin });
 
 /** a line of the chat in one colour with the commands picked out (the same as the panel does for the player): «.register» white bold, «(пароль)» lilac */
 export function commandLine(color: string, text: string): string {
@@ -391,3 +418,7 @@ export interface RulesState {
   mine: Record<string, boolean> | null;
   rules: RuleInfo[];
 }
+
+export interface ModBan { platformId: string; masked: string; nick: string; reason: string; admin: string; createdAt: number; until: number; kind: 'ban' | 'block'; serverName: string }
+export interface ModEntry { id: number; ts: number; kind: 'kick' | 'ban' | 'warn' | 'unban'; nick: string; platformId: string; admin: string; reason: string; serverName: string; until: number }
+export interface ModTop { nick: string; platformId: string; kicks: number; warns: number; bans: number; last: number }

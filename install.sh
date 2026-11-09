@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="6b09bb8cbb55"
+COREGSM_BUILD="6026f2b7d10a"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.91"
+COREGSM_VERSION="1.1.92"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -23509,6 +23509,7 @@ export const ERRORS = {
   game_link_missing: 'Привязка не найдена',
   game_schedule_limit: 'Не больше 20 расписаний',
   game_schedule_missing: 'Расписание не найдено',
+  game_ban_missing: 'Бан не найден',
   game_restart_server: 'Выберите сервер с плагином',
   game_restart_short: 'Минимум 10 секунд',
   game_restart_long: 'Не больше 6 часов',
@@ -23879,10 +23880,11 @@ export { ONLINE_MS };
 import { joinLeaveFor } from './gameNewsJoinLeave.js';
 import { welcomeFor } from './gameNewsWelcome.js';
 import { consumeDue } from './gameNewsRestartState.js';
+import { takeCommands } from './gameNewsModLog.js';
 
 export const QUEUE_TTL_MS = 5 * 60_000;
 /** the version of the game plugin this panel was built for: an older plugin is shown as outdated */
-export const PLUGIN_VERSION = '0.13.0';
+export const PLUGIN_VERSION = '0.14.0';
 /** the games the plugin exists for */
 export const SUPPORTED_GAMES = new Set(['vrising']);
 const PULL_MIN_GAP_MS = 800;
@@ -24051,7 +24053,7 @@ export function registerGameNews({ app, admin }: { app: Express; admin: RequestH
       db.transaction(() => { for (const r of rows) done.run(now, r.id); })();
     }
     // latest = the newest plugin version this panel knows (the plugin logs when it is older); welcome = the greeting for joining players
-    res.json({ messages: rows.map((r) => ({ id: r.id, text: r.text })), latest: PLUGIN_VERSION, ...welcomeFor(t.server_id, now), ...joinLeaveFor(t.server_id), register: registerEnabled(t.server_id), chat: chatKindsConfigured(t.server_id), restart: consumeDue(t.server_id) });
+    res.json({ messages: rows.map((r) => ({ id: r.id, text: r.text })), latest: PLUGIN_VERSION, ...welcomeFor(t.server_id, now), ...joinLeaveFor(t.server_id), register: registerEnabled(t.server_id), chat: chatKindsConfigured(t.server_id), restart: consumeDue(t.server_id), commands: takeCommands(t.server_id, now) });
   });
 }
 __COREGSM_EOF__
@@ -24687,7 +24689,7 @@ import type { Express, RequestHandler } from 'express';
 import { db } from '../db.js';
 import { serverLabel } from './gameNewsVars.js';
 
-export type JournalKind = 'message' | 'auto' | 'discord' | 'restart' | 'link' | 'kick';
+export type JournalKind = 'message' | 'auto' | 'discord' | 'restart' | 'link' | 'mod';
 
 export interface JournalEntry {
   id: string;
@@ -24733,9 +24735,12 @@ export function journal(opts: { kind?: string; serverId?: number; limit?: number
       out.push({ id: `r${r.id}`, ts: r.started_at, kind: 'restart', serverId: r.server_id, serverName: serverLabel(r.server_id), text: `${Math.round(r.total_sec / 60)}`, status: r.outcome, error: '', by: `${r.requested_by || '—'} · ${r.source}` });
     }
   }
-  if (want('kick') && !opts.serverId) {
-    const rows = db.prepare("SELECT id, ts, detail FROM audit WHERE action = 'game_kick' ORDER BY id DESC LIMIT 100").all() as { id: number; ts: number; detail: string }[];
-    for (const r of rows) out.push({ id: `k${r.id}`, ts: r.ts, kind: 'kick', serverId: null, serverName: '', text: r.detail, status: 'game_kick', error: '', by: '' });
+  if (want('mod')) {
+    const rows = db.prepare('SELECT * FROM game_mod_log ORDER BY id DESC LIMIT 200').all() as { id: number; ts: number; kind: string; platform_id: string; nick: string; admin: string; reason: string; server_id: number; until: number }[];
+    for (const r of rows) {
+      if (opts.serverId && r.server_id !== opts.serverId) continue;
+      out.push({ id: `k${r.id}`, ts: r.ts, kind: 'mod', serverId: r.server_id || null, serverName: r.server_id ? serverLabel(r.server_id) : '', text: r.nick, status: r.kind, error: r.reason, by: r.admin });
+    }
   }
   if (want('link') && !opts.serverId) {
     const rows = db.prepare("SELECT id, ts, action, detail FROM audit WHERE action IN ('game_register', 'game_login', 'game_unlink') ORDER BY id DESC LIMIT 100").all() as { id: number; ts: number; action: string; detail: string }[];
@@ -24778,24 +24783,31 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/gamenews"
   cat > "$APP_DIR/core-backend/src/gamenews/gameNewsKick.ts" << '__COREGSM_EOF__'
 /**
- * The .kick command of the game plugin. An administrator of the game types  .kick (ник) (причина);  the plugin asks the panel
- * (POST /api/game-news/player/kick) and the panel decides: is the command on, may this player be kicked, is a reason needed, how the
- * line for everybody reads («* Игрок Ник был кикнут с сервера. Причина: …» in the colours chosen here). The plugin then shows the line
- * and removes the player. Everything about the command is set in the panel (Игроки → Кик).
+ * Moderation from the game: .kick, .ban, .unban, .warn (and /kick of the Discord bot). An administrator of the game types a command;
+ * the plugin asks the panel (POST /api/game-news/player/mod) and the panel decides: is it on, may this player be touched, is a reason
+ * needed, is a pause in force, how the line for everybody reads, what the player is told in private, for how long a ban lasts. The plugin
+ * then shows the lines and removes the player. Everything is set in the panel (Игроки → Команда .kick).
  */
 import type { Express, RequestHandler } from 'express';
 import { z } from 'zod';
 import { enqueueAlert } from '../alerts/alerts.js';
 import { db } from '../db.js';
+import { internal } from '../security/auth.js';
 import { pluginTarget } from './gameNews.js';
 import { postKickToDiscord } from './gameNewsChat.js';
 import { isHexColor, plainLine } from './gameNewsJoinLeave.js';
+import {
+  activeBan, commandState, countMod, finishCommand, findBanByNick, formatSpan, listBans, logMod, parseBanTime, putBan, queueCommand, recentMod,
+  removeBan, topPlayers, type BanRow,
+} from './gameNewsModLog.js';
 import { readScoped, serverOf, writeScoped } from './gameNewsScope.js';
-import { serverLabel } from './gameNewsVars.js';
+import { serverLabel, visitStamp } from './gameNewsVars.js';
+
+export interface KickReason { key: string; text: string }
 
 export interface KickSettings {
   enabled: boolean;
-  /** the line for everybody: {name} the kicked player, {reason}, {admin} who kicked */
+  /** the line for everybody after a kick: {name} the player, {reason}, {admin} who did it */
   template: string;
   textColor: string;
   nameColor: string;
@@ -24803,9 +24815,9 @@ export interface KickSettings {
   adminColor: string;
   /** used when the administrator gave no reason */
   defaultReason: string;
-  /** a kick without a reason is refused */
+  /** a command without a reason is refused */
   requireReason: boolean;
-  /** administrators of the game cannot be kicked with the command */
+  /** administrators of the game cannot be touched with the commands */
   protectAdmins: boolean;
   /** the line is shown to everybody (off: the player is removed quietly) */
   announce: boolean;
@@ -24813,8 +24825,30 @@ export interface KickSettings {
   cooldownSec: number;
   /** the longest reason, characters */
   maxReason: number;
-  /** the channel of Discord (the bot posts there) for the log of kicks: where, when, whom, who and why; '' = none */
+  /** the channel of Discord (the bot posts there) for the log: where, when, whom, who and why; '' = none */
   logChannelId: string;
+  /** the line after a ban: {name} {reason} {admin} {time} (how long) */
+  banTemplate: string;
+  /** the line after a warning: {name} {reason} {admin} {n} (how many) {limit} */
+  warnTemplate: string;
+  /** the line after an unban: {name} {admin} (no reason is needed) */
+  unbanTemplate: string;
+  /** what a banned player reads when he tries to come in: {reason} {until} */
+  banJoinText: string;
+  /** what a player reads when he comes back too soon after a kick: {left} */
+  blockJoinText: string;
+  /** the player is told in private before he is removed */
+  notifyPlayer: boolean;
+  /** the private words to the player: {reason} {admin} */
+  notifyText: string;
+  /** the number of warnings that makes a kick (0 = warnings never kick) */
+  warnLimit: number;
+  /** warnings older than this many days are not counted */
+  warnDays: number;
+  /** minutes after a kick during which the player cannot come back (0 = he can) */
+  rejoinBlockMin: number;
+  /** short names for reasons: «.kick Ник 1» means the text of reason «1» */
+  reasons: KickReason[];
 }
 
 export const DEFAULT_KICK: KickSettings = {
@@ -24831,6 +24865,22 @@ export const DEFAULT_KICK: KickSettings = {
   cooldownSec: 0,
   maxReason: 100,
   logChannelId: '',
+  banTemplate: '* Игрок {name} был забанен на {time}. Причина: {reason}',
+  warnTemplate: '* Игрок {name} был предупреждён. Причина: {reason}',
+  unbanTemplate: '* Игрок {name} был разбанен.',
+  banJoinText: '* Вы забанены {until}. Причина: {reason}',
+  blockJoinText: '* Вы недавно были кикнуты. Подождите ещё {left}, прежде чем зайти.',
+  notifyPlayer: true,
+  notifyText: '* Вас убирают с сервера. Причина: {reason}',
+  warnLimit: 3,
+  warnDays: 30,
+  rejoinBlockMin: 0,
+  reasons: [
+    { key: '1', text: 'Спам' },
+    { key: '2', text: 'Оскорбления' },
+    { key: '3', text: 'Читы или использование багов' },
+    { key: '4', text: 'Мешает другим игрокам' },
+  ],
 };
 
 export function getKick(serverId?: number): KickSettings {
@@ -24840,6 +24890,10 @@ export function getKick(serverId?: number): KickSettings {
     const text = (x: unknown, def: string) => (typeof x === 'string' && x.trim() ? x : def);
     const color = (x: unknown, def: string) => (isHexColor(x) ? (x as string).toUpperCase() : def);
     const bool = (x: unknown, def: boolean) => (typeof x === 'boolean' ? x : def);
+    const num = (x: unknown, def: number, lo: number, hi: number) => (typeof x === 'number' && Number.isFinite(x) ? Math.min(hi, Math.max(lo, Math.round(x))) : def);
+    const reasons = Array.isArray(v.reasons)
+      ? v.reasons.filter((r): r is KickReason => !!r && typeof r.key === 'string' && typeof r.text === 'string' && !!r.key.trim() && !!r.text.trim()).slice(0, 20).map((r) => ({ key: r.key.trim().slice(0, 12), text: r.text.trim().slice(0, 100) }))
+      : d.reasons.map((r) => ({ ...r }));
     return {
       enabled: bool(v.enabled, d.enabled),
       template: text(v.template, d.template),
@@ -24851,33 +24905,61 @@ export function getKick(serverId?: number): KickSettings {
       requireReason: bool(v.requireReason, d.requireReason),
       protectAdmins: bool(v.protectAdmins, d.protectAdmins),
       announce: bool(v.announce, d.announce),
-      cooldownSec: Number.isFinite(v.cooldownSec) ? Math.min(3600, Math.max(0, Math.round(v.cooldownSec as number))) : d.cooldownSec,
+      cooldownSec: num(v.cooldownSec, d.cooldownSec, 0, 3600),
+      maxReason: num(v.maxReason, d.maxReason, 10, 200),
       logChannelId: typeof v.logChannelId === 'string' && /^\d{15,25}$/.test(v.logChannelId) ? v.logChannelId : d.logChannelId,
-      maxReason: Number.isFinite(v.maxReason) ? Math.min(200, Math.max(10, Math.round(v.maxReason as number))) : d.maxReason,
+      banTemplate: text(v.banTemplate, d.banTemplate),
+      warnTemplate: text(v.warnTemplate, d.warnTemplate),
+      unbanTemplate: text(v.unbanTemplate, d.unbanTemplate),
+      banJoinText: text(v.banJoinText, d.banJoinText),
+      blockJoinText: text(v.blockJoinText, d.blockJoinText),
+      notifyPlayer: bool(v.notifyPlayer, d.notifyPlayer),
+      notifyText: text(v.notifyText, d.notifyText),
+      warnLimit: num(v.warnLimit, d.warnLimit, 0, 20),
+      warnDays: num(v.warnDays, d.warnDays, 1, 365),
+      rejoinBlockMin: num(v.rejoinBlockMin, d.rejoinBlockMin, 0, 1440),
+      reasons,
     };
   } catch {
-    return { ...DEFAULT_KICK };
+    return { ...DEFAULT_KICK, reasons: DEFAULT_KICK.reasons.map((r) => ({ ...r })) };
   }
 }
 
+type LineVars = { name?: string; reason?: string; admin?: string; time?: string; n?: number; limit?: number };
+
 /**
- * The line for everybody, in flat colour tags: the text in its colour, the nickname, the reason and the administrator each in theirs.
+ * A line for everybody in flat colour tags: the text in its colour, the nickname, the reason and the administrator each in theirs.
  * What a player typed (a reason, a nickname) cannot bring tags of its own.
  */
-export function kickLine(s: KickSettings, name: string, reason: string, admin: string): string {
+export function modLine(s: KickSettings, template: string, v: LineVars): string {
   const vars: Record<string, { text: string; color: string }> = {
-    name: { text: plainLine(name), color: s.nameColor },
-    reason: { text: plainLine(reason), color: s.reasonColor },
-    admin: { text: plainLine(admin), color: s.adminColor },
+    name: { text: plainLine(v.name ?? ''), color: s.nameColor },
+    reason: { text: plainLine(v.reason ?? ''), color: s.reasonColor },
+    admin: { text: plainLine(v.admin ?? ''), color: s.adminColor },
+    time: { text: plainLine(v.time ?? ''), color: s.reasonColor },
+    n: { text: String(v.n ?? ''), color: s.reasonColor },
+    limit: { text: String(v.limit ?? ''), color: s.reasonColor },
   };
   const out: string[] = [];
-  for (const part of plainLine(s.template).split(/(\{(?:name|reason|admin)\})/)) {
+  for (const part of plainLine(template).split(/(\{(?:name|reason|admin|time|n|limit)\})/)) {
     if (!part) continue;
-    const m = /^\{(name|reason|admin)\}$/.exec(part);
+    const m = /^\{(name|reason|admin|time|n|limit)\}$/.exec(part);
     if (m) out.push(`<color=${vars[m[1]].color}>${vars[m[1]].text}</color>`);
     else out.push(`<color=${s.textColor}>${part}</color>`);
   }
   return out.join('');
+}
+
+export const kickLine = (s: KickSettings, name: string, reason: string, admin: string): string => modLine(s, s.template, { name, reason, admin });
+
+/** a private line: the words in one colour, the reason in yellow, the variables filled in (no tags from outside) */
+const privateLine = (s: KickSettings, template: string, v: LineVars): string => modLine({ ...s, nameColor: s.textColor, adminColor: s.textColor, reasonColor: '#FFCC33' }, template, v);
+
+/** a short name for a reason («1») becomes its text; anything else stays as typed */
+export function expandReason(s: KickSettings, raw: string): string {
+  const r = raw.trim();
+  const hit = s.reasons.find((x) => x.key.toLowerCase() === r.toLowerCase());
+  return hit ? hit.text : r;
 }
 
 // ---- a pause between two kicks of one administrator
@@ -24896,74 +24978,277 @@ const C_BAD = '#FF5555';
 const C_GOOD = '#5FD068';
 const say = (color: string, text: string): string => `<color=${color}>${plainLine(text)}</color>`;
 
+export interface ModInput {
+  action: 'kick' | 'ban' | 'warn';
+  adminId: string;
+  adminName: string;
+  targetId: string;
+  name: string;
+  targetIsAdmin: boolean;
+  reason: string;
+  /** a ban: «7d», «2h», «перм» */
+  time?: string;
+}
+
+export interface ModResult {
+  ok: boolean;
+  /** the line for everybody ('' = none) */
+  line: string;
+  /** the private words to the player before he is removed ('' = none) */
+  notice: string;
+  /** the plugin removes the player */
+  kick: boolean;
+  replies: string[];
+}
+
+const refuse = (text: string): ModResult => ({ ok: false, line: '', notice: '', kick: false, replies: [say(C_BAD, text)] });
+
+/** what is told in the log channel of the administrators */
+function logToDiscord(s: KickSettings, serverId: number, title: string, color: number, f: { name: string; admin: string; reason: string; extra?: { name: string; value: string }[] }, now: number): void {
+  if (!s.logChannelId) return;
+  try {
+    const unix = Math.floor(now / 1000);
+    enqueueAlert('update', serverLabel(serverId), {
+      content: '', mention: 'none',
+      embed: {
+        title,
+        color,
+        fields: [
+          { name: 'Сервер', value: serverLabel(serverId).slice(0, 200) || '—', inline: true },
+          { name: 'Игрок', value: plainLine(f.name).slice(0, 100) || '—', inline: true },
+          { name: 'Кто', value: plainLine(f.admin).slice(0, 100) || '—', inline: true },
+          ...(f.extra ?? []),
+          { name: 'Причина', value: f.reason || '—' },
+          { name: 'Когда', value: `<t:${unix}:f> (<t:${unix}:R>)` },
+        ],
+        timestamp: new Date(now).toISOString(),
+      },
+    }, s.logChannelId);
+  } catch { /* the log must not stop the command */ }
+}
+
+/** the whole decision about a command of an administrator (kick, ban, warning); pure apart from the database and the chat in Discord */
+export function runMod(serverId: number, b: ModInput, now = Date.now()): ModResult {
+  const s = getKick(serverId);
+  const word = b.action === 'kick' ? '.kick' : b.action === 'ban' ? '.ban' : '.warn';
+  if (!s.enabled) return refuse(`* Команда ${word} отключена в панели.`);
+  if (s.protectAdmins && b.targetIsAdmin) return refuse('* Администратора трогать нельзя.');
+
+  if (b.action === 'kick') {
+    const wait = kickWait(b.adminId, s.cooldownSec, now);
+    if (wait > 0) return refuse(`* Подождите ещё ${wait} с перед следующим киком.`);
+  }
+  let reason = plainLine(expandReason(s, b.reason)).slice(0, s.maxReason);
+  if (!reason) {
+    if (s.requireReason) return refuse(`* Укажите причину: ${word} (ник) ${b.action === 'ban' ? '(срок) ' : ''}(причина)`);
+    reason = plainLine(s.defaultReason).slice(0, s.maxReason);
+  }
+  const base = { platformId: b.targetId, nick: plainLine(b.name), admin: plainLine(b.adminName), reason, serverId };
+  const notice = (template: string, extra: LineVars = {}): string => (s.notifyPlayer ? privateLine(s, template, { reason, admin: b.adminName, ...extra }) : '');
+
+  if (b.action === 'kick') {
+    kickDone(b.adminId, now);
+    logMod({ ...base, kind: 'kick' }, now);
+    // a short block against coming straight back
+    if (s.rejoinBlockMin > 0 && b.targetId && b.targetId !== '0') {
+      putBan({ platformId: b.targetId, nick: base.nick, reason, admin: base.admin, until: now + s.rejoinBlockMin * 60_000, kind: 'block', serverId }, now);
+    }
+    try { postKickToDiscord(serverId, s.template, { name: b.name, reason, admin: b.adminName }, now); } catch { /* Discord is not needed for the kick */ }
+    logToDiscord(s, serverId, '🚪 Игрок кикнут', 0xed4245, { name: b.name, admin: b.adminName, reason }, now);
+    return {
+      ok: true, kick: true,
+      line: s.announce ? kickLine(s, b.name, reason, b.adminName) : '',
+      notice: notice(s.notifyText),
+      replies: [say(C_GOOD, `* Игрок ${b.name} кикнут.${s.announce ? '' : ' (без объявления)'}`)],
+    };
+  }
+
+  if (b.action === 'ban') {
+    const t = parseBanTime(b.time ?? '');
+    if ('error' in t) return refuse(t.error === 'format' ? '* Укажите срок: .ban (ник) (срок) (причина). Срок: 30m, 2h, 7d, 2w или «перм».' : t.error === 'short' ? '* Срок бана не меньше минуты.' : '* Срок бана не больше года: для вечного бана напишите «перм».');
+    const forever = 'forever' in t;
+    const until = forever ? 0 : now + t.seconds * 1000;
+    const span = forever ? 'навсегда' : formatSpan(t.seconds);
+    if (b.targetId && b.targetId !== '0') putBan({ platformId: b.targetId, nick: base.nick, reason, admin: base.admin, until, kind: 'ban', serverId }, now);
+    logMod({ ...base, kind: 'ban', until }, now);
+    try { postKickToDiscord(serverId, s.banTemplate.replace(/\{time\}/g, span), { name: b.name, reason, admin: b.adminName }, now); } catch { /* Discord is not needed for the ban */ }
+    logToDiscord(s, serverId, '⛔ Игрок забанен', 0x992d22, { name: b.name, admin: b.adminName, reason, extra: [{ name: 'Срок', value: forever ? 'навсегда' : `${span} (до <t:${Math.floor(until / 1000)}:f>)` }] }, now);
+    const stamp = forever ? null : visitStamp(until);
+    return {
+      ok: true, kick: true,
+      line: s.announce ? modLine(s, s.banTemplate, { name: b.name, reason, admin: b.adminName, time: span }) : '',
+      notice: notice(s.banJoinText.replace(/\{until\}/g, stamp ? `до ${stamp.date} в ${stamp.time}` : 'навсегда')),
+      replies: [say(C_GOOD, `* Игрок ${b.name} забанен ${forever ? 'навсегда' : `на ${span}`}.`)],
+    };
+  }
+
+  // a warning; the one that reaches the limit is a kick
+  logMod({ ...base, kind: 'warn' }, now);
+  const since = now - s.warnDays * 86_400_000;
+  const n = b.targetId && b.targetId !== '0' ? countMod(b.targetId, 'warn', since) : 1;
+  const escalate = s.warnLimit > 0 && n >= s.warnLimit;
+  try { postKickToDiscord(serverId, s.warnTemplate.replace(/\{n\}/g, String(n)).replace(/\{limit\}/g, String(s.warnLimit)), { name: b.name, reason, admin: b.adminName }, now); } catch { /* Discord is not needed for the warning */ }
+  logToDiscord(s, serverId, '⚠️ Предупреждение игроку', 0xf5b01e, { name: b.name, admin: b.adminName, reason, extra: [{ name: 'Предупреждений', value: `${n}${s.warnLimit ? ` из ${s.warnLimit}` : ''}` }] }, now);
+  const warnLine = s.announce ? modLine(s, s.warnTemplate, { name: b.name, reason, admin: b.adminName, n, limit: s.warnLimit }) : '';
+  if (!escalate) {
+    return {
+      ok: true, kick: false, line: warnLine,
+      notice: notice('* Вам вынесено предупреждение ({n} из {limit}). Причина: {reason}', { n, limit: s.warnLimit }),
+      replies: [say(C_GOOD, `* Игроку ${b.name} вынесено предупреждение (${n}${s.warnLimit ? ` из ${s.warnLimit}` : ''}).`)],
+    };
+  }
+  // the limit is reached: the player is kicked and the count starts again
+  const kickReason = `лимит предупреждений (${n} из ${s.warnLimit})`;
+  logMod({ ...base, kind: 'kick', reason: kickReason, admin: 'авто' }, now);
+  try { postKickToDiscord(serverId, s.template, { name: b.name, reason: kickReason, admin: b.adminName }, now); } catch { /* Discord is not needed for the kick */ }
+  logToDiscord(s, serverId, '🚪 Игрок кикнут (лимит предупреждений)', 0xed4245, { name: b.name, admin: 'авто', reason: kickReason }, now);
+  db.prepare("DELETE FROM game_mod_log WHERE platform_id = ? AND kind = 'warn'").run(b.targetId);
+  return {
+    ok: true, kick: true,
+    line: warnLine,
+    notice: notice(s.notifyText, { reason: kickReason }),
+    replies: [say(C_GOOD, `* Игроку ${b.name} вынесено предупреждение (${n} из ${s.warnLimit}): лимит достигнут, игрок кикнут.`)],
+  };
+}
+
+/** what a banned (or blocked) player reads when he comes in; null when nothing stops him */
+export function joinBlock(serverId: number, platformId: string, now = Date.now()): { lines: string[]; ban: BanRow } | null {
+  const ban = activeBan(platformId, now);
+  if (!ban) return null;
+  const s = getKick(serverId);
+  if (ban.kind === 'block') {
+    const left = formatSpan(Math.ceil((ban.until - now) / 1000));
+    return { ban, lines: [privateLine(s, s.blockJoinText.replace(/\{left\}/g, left), { reason: ban.reason })] };
+  }
+  const stamp = ban.until === 0 ? null : visitStamp(ban.until);
+  const until = stamp ? `до ${stamp.date} в ${stamp.time}` : 'навсегда';
+  return { ban, lines: [privateLine(s, s.banJoinText.replace(/\{until\}/g, until), { reason: ban.reason })] };
+}
+
+const mask = (id: string): string => (id.length > 7 ? `${id.slice(0, 4)}…${id.slice(-3)}` : id);
+
 export function registerGameNewsKick({ app, admin }: { app: Express; admin: RequestHandler }): void {
-  // the plugin: .kick
-  app.post('/api/game-news/player/kick', (req, res) => {
+  const schema = z.object({
+    adminId: z.string().max(25), adminName: z.string().max(100), targetId: z.string().max(25), name: z.string().max(100),
+    targetIsAdmin: z.boolean(), reason: z.string().max(400), time: z.string().max(40).optional(),
+  });
+  const handle = (action: ModInput['action']): RequestHandler => (req, res) => {
+    const t = pluginTarget(req);
+    if (!t) return void res.status(401).json({ error: 'unauthorized' });
+    const b = schema.safeParse(req.body);
+    if (!b.success) return void res.status(400).json({ ok: false, replies: [say(C_BAD, '* Не удалось разобрать команду.')] });
+    res.json(runMod(t.server_id, { ...b.data, action }));
+  };
+  // the plugin: .kick (the first versions), and .kick / .ban / .warn in one place
+  app.post('/api/game-news/player/kick', handle('kick'));
+  app.post('/api/game-news/player/mod', (req, res, next) => {
+    const a = z.object({ action: z.enum(['kick', 'ban', 'warn']) }).safeParse(req.body);
+    if (!a.success) return void res.status(400).json({ ok: false, replies: [say(C_BAD, '* Не удалось разобрать команду.')] });
+    return handle(a.data.action)(req, res, next);
+  });
+
+  // .unban (ник): a banned player is let back
+  app.post('/api/game-news/player/unban', (req, res) => {
     const t = pluginTarget(req);
     if (!t) return res.status(401).json({ error: 'unauthorized' });
-    const b = z.object({
-      adminId: z.string().max(25), adminName: z.string().max(100), targetId: z.string().max(25), name: z.string().max(100),
-      targetIsAdmin: z.boolean(), reason: z.string().max(400),
-    }).safeParse(req.body);
-    if (!b.success) return res.status(400).json({ ok: false, replies: [say(C_BAD, '* Не удалось разобрать команду. Введите: .kick (ник) (причина)')] });
+    const b = z.object({ adminName: z.string().max(100), name: z.string().max(100) }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ ok: false, replies: [say(C_BAD, '* Введите: .unban (ник)')] });
     const s = getKick(t.server_id);
-    const refuse = (text: string) => res.json({ ok: false, replies: [say(C_BAD, text)] });
-    if (!s.enabled) return refuse('* Команда .kick отключена в панели.');
-    if (s.protectAdmins && b.data.targetIsAdmin) return refuse('* Администратора кикнуть нельзя.');
+    if (!s.enabled) return res.json(refuse('* Команда .unban отключена в панели.'));
+    const ban = findBanByNick(b.data.name);
+    if (!ban) return res.json(refuse(`* Бан для «${plainLine(b.data.name)}» не найден.`));
+    removeBan(ban.platform_id);
     const now = Date.now();
-    const wait = kickWait(b.data.adminId, s.cooldownSec, now);
-    if (wait > 0) return refuse(`* Подождите ещё ${wait} с перед следующим киком.`);
-    let reason = plainLine(b.data.reason).slice(0, s.maxReason);
-    if (!reason) {
-      if (s.requireReason) return refuse('* Укажите причину: .kick (ник) (причина)');
-      reason = plainLine(s.defaultReason).slice(0, s.maxReason);
-    }
-    kickDone(b.data.adminId, now);
-    db.prepare('INSERT INTO audit (ts, actor, action, detail) VALUES (?, ?, ?, ?)').run(now, 'game-plugin', 'game_kick', `${plainLine(b.data.adminName)} → ${plainLine(b.data.name)}: ${reason}`.slice(0, 300));
-    // the same line goes to the chat in Discord (when the «Кик» kind is on there)
-    try { postKickToDiscord(t.server_id, s.template, { name: b.data.name, reason, admin: b.data.adminName }, now); } catch { /* the kick itself must not depend on Discord */ }
-    // the log of kicks in the channel of the administrators: where, when, whom, who and why
-    if (s.logChannelId) {
-      try {
-        const unix = Math.floor(now / 1000);
-        enqueueAlert('update', serverLabel(t.server_id), {
-          content: '', mention: 'none',
-          embed: {
-            title: '🚪 Игрок кикнут',
-            color: 0xed4245,
-            fields: [
-              { name: 'Сервер', value: serverLabel(t.server_id).slice(0, 200) || '—', inline: true },
-              { name: 'Игрок', value: plainLine(b.data.name).slice(0, 100) || '—', inline: true },
-              { name: 'Кто кикнул', value: plainLine(b.data.adminName).slice(0, 100) || '—', inline: true },
-              { name: 'Причина', value: reason || '—' },
-              { name: 'Когда', value: `<t:${unix}:f> (<t:${unix}:R>)` },
-            ],
-            timestamp: new Date(now).toISOString(),
-          },
-        }, s.logChannelId);
-      } catch { /* the log must not stop the kick */ }
-    }
+    logMod({ kind: 'unban', platformId: ban.platform_id, nick: ban.nick, admin: plainLine(b.data.adminName), reason: '', serverId: t.server_id }, now);
+    logToDiscord(s, t.server_id, '✅ Игрок разбанен', 0x2ecc71, { name: ban.nick, admin: b.data.adminName, reason: ban.reason }, now);
+    // the same colours as a kick: «* Игрок Ник был разбанен.» for everybody and in the chat in Discord (no reason is needed)
+    try { postKickToDiscord(t.server_id, s.unbanTemplate, { name: ban.nick, reason: '', admin: b.data.adminName }, now); } catch { /* Discord is not needed for the unban */ }
+    res.json({ ok: true, line: s.announce ? modLine(s, s.unbanTemplate, { name: ban.nick, reason: '', admin: b.data.adminName }) : '', notice: '', kick: false, replies: [say(C_GOOD, `* ${ban.nick} разбанен.`)] });
+  });
+
+  // the plugin: the commands that it has to do (a kick from Discord) come in the answer to a poll; this is how it reports
+  app.post('/api/game-news/command-result', (req, res) => {
+    const t = pluginTarget(req);
+    if (!t) return res.status(401).json({ error: 'unauthorized' });
+    const b = z.object({ id: z.number().int().positive(), ok: z.boolean(), text: z.string().max(300) }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'bad' });
+    finishCommand(t.server_id, b.data.id, b.data.ok, b.data.text);
+    res.json({ ok: true });
+  });
+
+  // the bot: /kick (the same rights as /say and /restart)
+  app.post('/internal/game-kick', internal, (req, res) => {
+    const b = z.object({
+      name: z.string().min(1).max(100), reason: z.string().max(400).optional(), server: z.string().max(100).optional(),
+      discordId: z.string().max(32), discordAdmin: z.boolean(), adminName: z.string().max(80),
+    }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ ok: false, text: 'Проверьте поля' });
+    const linked = db.prepare("SELECT username FROM users WHERE discord_id = ? AND role = 'admin' AND status = 'active'").get(b.data.discordId) as { username: string } | undefined;
+    if (!b.data.discordAdmin && !linked) return res.json({ ok: false, text: 'Эта команда только для администраторов.' });
+    const all = (db.prepare("SELECT server_id FROM game_news_targets WHERE token_hash <> ''").all() as { server_id: number }[]).map((r) => ({ id: r.server_id, name: serverLabel(r.server_id) }));
+    const q = (b.data.server ?? '').trim().toLowerCase();
+    const found = q ? all.filter((s) => s.name.toLowerCase().includes(q)) : all;
+    if (found.length === 0) return res.json({ ok: false, text: q ? 'Сервер не найден среди серверов с плагином.' : 'Нет серверов с плагином CoreGSM.' });
+    const who = plainLine(linked?.username ?? b.data.adminName) || 'Discord';
+    const now = Date.now();
+    const ids = found.map((s) => queueCommand(s.id, 'kick', { name: plainLine(b.data.name), reason: plainLine(b.data.reason ?? ''), admin: `Discord: ${who}` }, now));
+    res.json({ ok: true, ids, text: 'Команда отправлена на сервер.' });
+  });
+
+  app.get('/internal/game-command-status', internal, (req, res) => {
+    const ids = String(req.query.ids ?? '').split(',').map(Number).filter((n) => Number.isInteger(n) && n > 0).slice(0, 20);
+    const rows = ids.map((id) => commandState(id)).filter((r): r is NonNullable<typeof r> => !!r);
+    const done = rows.find((r) => r.state === 'done');
+    const finished = rows.length > 0 && rows.every((r) => r.state === 'done' || r.state === 'failed');
+    res.json({ done: !!done, failed: finished && !done, text: done?.result ?? rows.find((r) => r.state === 'failed')?.result ?? '' });
+  });
+
+  // ---- the panel
+  app.get('/api/game-news/moderation', admin, (req, res) => {
+    const now = Date.now();
     res.json({
-      ok: true,
-      line: s.announce ? kickLine(s, b.data.name, reason, b.data.adminName) : '',
-      replies: [say(C_GOOD, `* Игрок ${b.data.name} кикнут.${s.announce ? '' : ' (без объявления)'}`)],
+      bans: listBans(now).map((r) => ({ platformId: r.platform_id, masked: mask(r.platform_id), nick: r.nick, reason: r.reason, admin: r.admin, createdAt: r.created_at, until: r.until, kind: r.kind, serverName: r.server_id ? serverLabel(r.server_id) : '' })),
+      log: recentMod({ player: String(req.query.player ?? ''), kind: String(req.query.kind ?? ''), limit: Number(req.query.limit) || 100 }).map((e) => ({
+        id: e.id, ts: e.ts, kind: e.kind, nick: e.nick, platformId: e.platform_id, admin: e.admin, reason: e.reason, serverName: e.server_id ? serverLabel(e.server_id) : '', until: e.until,
+      })),
+      top: topPlayers(),
     });
   });
 
-  // the panel: the settings of the command
+  // «Разбанить» in the panel
+  app.delete('/api/game-news/bans/:platformId', admin, (req, res) => {
+    const id = String(req.params.platformId);
+    if (!/^\d{3,25}$/.test(id)) return res.status(400).json({ error: 'Проверьте поля' });
+    const ban = removeBan(id);
+    if (!ban) return res.status(404).json({ error: 'Бан не найден' });
+    logMod({ kind: 'unban', platformId: id, nick: ban.nick, admin: (req as typeof req & { user?: { username?: string } }).user?.username ?? 'панель', reason: '', serverId: ban.server_id }, Date.now());
+    res.json({ ok: true });
+  });
+
+  // the settings of the commands
   app.put('/api/game-news/kick-settings', admin, (req, res) => {
     const color = z.string().refine(isHexColor, 'color');
+    const line = z.string().min(1).max(300);
     const b = z.object({
-      enabled: z.boolean(), template: z.string().min(1).max(300), textColor: color, nameColor: color, reasonColor: color, adminColor: color,
+      enabled: z.boolean(), template: line, textColor: color, nameColor: color, reasonColor: color, adminColor: color,
       defaultReason: z.string().max(100), requireReason: z.boolean(), protectAdmins: z.boolean(), announce: z.boolean(),
       cooldownSec: z.number().int().min(0).max(3600), logChannelId: z.string().regex(/^(\d{15,25})?$/), maxReason: z.number().int().min(10).max(200),
+      banTemplate: line, warnTemplate: line, unbanTemplate: line, banJoinText: line, blockJoinText: line, notifyPlayer: z.boolean(), notifyText: line,
+      warnLimit: z.number().int().min(0).max(20), warnDays: z.number().int().min(1).max(365), rejoinBlockMin: z.number().int().min(0).max(1440),
+      reasons: z.array(z.object({ key: z.string().max(12), text: z.string().max(100) })).max(20),
     }).safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Проверьте поля' });
     const d = getKick(serverOf(req));
-    const template = plainLine(b.data.template);
-    if (!template) return res.status(400).json({ error: 'Введите текст' });
+    const clean = (x: string, def: string) => plainLine(x) || def;
+    const keys = new Set<string>();
+    const reasons = b.data.reasons
+      .map((r) => ({ key: plainLine(r.key).replace(/\s+/g, ''), text: plainLine(r.text) }))
+      .filter((r) => r.key && r.text && !keys.has(r.key.toLowerCase()) && keys.add(r.key.toLowerCase()));
     writeScoped('gamenews_kick', JSON.stringify({
-      ...b.data, template, defaultReason: plainLine(b.data.defaultReason) || d.defaultReason,
+      ...b.data,
+      template: clean(b.data.template, d.template), banTemplate: clean(b.data.banTemplate, d.banTemplate), warnTemplate: clean(b.data.warnTemplate, d.warnTemplate), unbanTemplate: clean(b.data.unbanTemplate, d.unbanTemplate),
+      banJoinText: clean(b.data.banJoinText, d.banJoinText), blockJoinText: clean(b.data.blockJoinText, d.blockJoinText), notifyText: clean(b.data.notifyText, d.notifyText),
+      defaultReason: clean(b.data.defaultReason, d.defaultReason), reasons,
       textColor: b.data.textColor.toUpperCase(), nameColor: b.data.nameColor.toUpperCase(), reasonColor: b.data.reasonColor.toUpperCase(), adminColor: b.data.adminColor.toUpperCase(),
     }), serverOf(req));
     res.json({ ok: true });
@@ -25089,6 +25374,197 @@ function plainText(s: string): string {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/gamenews"
+  cat > "$APP_DIR/core-backend/src/gamenews/gameNewsModLog.ts" << '__COREGSM_EOF__'
+/**
+ * The moderation of the game plugin in the database: the log of what administrators did (kick, ban, warning, unban), the bans that are
+ * in force (also the short «do not come back for N minutes» after a kick) and the commands that the panel gives to the plugin.
+ * No answers for people here: only what is kept and counted.
+ */
+import { db } from '../db.js';
+import { formatLeft } from './gameNewsRestartLogic.js';
+
+export type ModKind = 'kick' | 'ban' | 'warn' | 'unban';
+
+export interface ModEntry {
+  id: number;
+  ts: number;
+  kind: ModKind;
+  platform_id: string;
+  nick: string;
+  admin: string;
+  reason: string;
+  server_id: number;
+  /** a ban: until when (0 = for ever) */
+  until: number;
+}
+
+export function logMod(e: { kind: ModKind; platformId: string; nick: string; admin: string; reason: string; serverId: number; until?: number }, now: number): number {
+  const info = db.prepare('INSERT INTO game_mod_log (ts, kind, platform_id, nick, admin, reason, server_id, until) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+    .run(now, e.kind, e.platformId, e.nick.slice(0, 100), e.admin.slice(0, 100), e.reason.slice(0, 300), e.serverId, e.until ?? 0);
+  db.prepare('DELETE FROM game_mod_log WHERE id NOT IN (SELECT id FROM game_mod_log ORDER BY id DESC LIMIT 2000)').run();
+  return Number(info.lastInsertRowid);
+}
+
+export function recentMod(opts: { player?: string; kind?: string; limit?: number }): ModEntry[] {
+  const limit = Math.min(300, Math.max(1, opts.limit ?? 100));
+  const where: string[] = [];
+  const args: (string | number)[] = [];
+  if (opts.kind && ['kick', 'ban', 'warn', 'unban'].includes(opts.kind)) { where.push('kind = ?'); args.push(opts.kind); }
+  const p = (opts.player ?? '').trim().toLowerCase();
+  if (p) { where.push('(ulower(nick) LIKE ? OR platform_id = ?)'); args.push(`%${p}%`, p); }
+  return db.prepare(`SELECT * FROM game_mod_log ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY id DESC LIMIT ?`).all(...args, limit) as ModEntry[];
+}
+
+/** who was kicked, warned and banned most: the counters of a player, for the page of moderation */
+export function topPlayers(limit = 12): { nick: string; platformId: string; kicks: number; warns: number; bans: number; last: number }[] {
+  const rows = db.prepare(
+    `SELECT platform_id, MAX(nick) AS nick, SUM(kind = 'kick') AS kicks, SUM(kind = 'warn') AS warns, SUM(kind = 'ban') AS bans, MAX(ts) AS last
+     FROM game_mod_log WHERE kind IN ('kick', 'warn', 'ban') GROUP BY platform_id ORDER BY (SUM(kind = 'kick') + SUM(kind = 'warn') + SUM(kind = 'ban')) DESC, last DESC LIMIT ?`,
+  ).all(limit) as { platform_id: string; nick: string; kicks: number; warns: number; bans: number; last: number }[];
+  return rows.map((r) => ({ nick: r.nick, platformId: r.platform_id, kicks: r.kicks, warns: r.warns, bans: r.bans, last: r.last }));
+}
+
+export function countMod(platformId: string, kind: ModKind, since = 0): number {
+  return (db.prepare('SELECT COUNT(*) AS n FROM game_mod_log WHERE platform_id = ? AND kind = ? AND ts >= ?').get(platformId, kind, since) as { n: number }).n;
+}
+
+// ---- bans
+export interface BanRow {
+  platform_id: string;
+  nick: string;
+  reason: string;
+  admin: string;
+  created_at: number;
+  until: number;
+  /** ban | block (a short block after a kick) */
+  kind: string;
+  server_id: number;
+}
+
+/** puts a ban in force (replaces the one the player has; a ban is not shortened by a short block) */
+export function putBan(b: { platformId: string; nick: string; reason: string; admin: string; until: number; kind: 'ban' | 'block'; serverId: number }, now: number): void {
+  const old = activeBan(b.platformId, now);
+  if (old && b.kind === 'block' && old.kind === 'ban') return;
+  db.prepare(
+    `INSERT INTO game_bans (platform_id, nick, reason, admin, created_at, until, kind, server_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(platform_id) DO UPDATE SET nick = excluded.nick, reason = excluded.reason, admin = excluded.admin, created_at = excluded.created_at,
+       until = excluded.until, kind = excluded.kind, server_id = excluded.server_id`,
+  ).run(b.platformId, b.nick.slice(0, 100), b.reason.slice(0, 300), b.admin.slice(0, 100), now, b.until, b.kind, b.serverId);
+}
+
+/** the ban of a player that is in force now (a ban that has run out is removed here) */
+export function activeBan(platformId: string, now: number): BanRow | undefined {
+  const r = db.prepare('SELECT * FROM game_bans WHERE platform_id = ?').get(platformId) as BanRow | undefined;
+  if (!r) return undefined;
+  if (r.until !== 0 && r.until <= now) {
+    db.prepare('DELETE FROM game_bans WHERE platform_id = ?').run(platformId);
+    return undefined;
+  }
+  return r;
+}
+
+export function listBans(now: number): BanRow[] {
+  db.prepare('DELETE FROM game_bans WHERE until <> 0 AND until <= ?').run(now);
+  return db.prepare('SELECT * FROM game_bans ORDER BY created_at DESC').all() as BanRow[];
+}
+
+export function removeBan(platformId: string): BanRow | undefined {
+  const r = db.prepare('SELECT * FROM game_bans WHERE platform_id = ?').get(platformId) as BanRow | undefined;
+  if (r) db.prepare('DELETE FROM game_bans WHERE platform_id = ?').run(platformId);
+  return r;
+}
+
+/** a banned player by the nickname (the nickname that he had when he was banned) */
+export function findBanByNick(nick: string): BanRow | undefined {
+  const n = nick.trim().toLowerCase();
+  if (!n) return undefined;
+  return (db.prepare('SELECT * FROM game_bans WHERE ulower(nick) = ?').get(n) as BanRow | undefined)
+    ?? (db.prepare('SELECT * FROM game_bans WHERE ulower(nick) LIKE ? LIMIT 1').get(`${n}%`) as BanRow | undefined);
+}
+
+// ---- the time of a ban
+export const MIN_BAN_SEC = 60;
+export const MAX_BAN_SEC = 365 * 86_400;
+const UNIT: Array<[RegExp, number]> = [
+  [/^(?:m|min|mins|minute|minutes|м|мин|минута|минуты|минут|минуту)$/u, 60],
+  [/^(?:h|hr|hrs|hour|hours|ч|час|часа|часов)$/u, 3600],
+  [/^(?:d|day|days|д|дн|день|дня|дней)$/u, 86_400],
+  [/^(?:w|week|weeks|н|нед|неделя|недели|недель|неделю)$/u, 7 * 86_400],
+];
+
+export type BanTime = { seconds: number } | { forever: true } | { error: 'format' | 'short' | 'long' };
+
+/** «30m», «2h», «7d», «2w», «1d12h», «перм» / «навсегда» / «perm» (for ever); a bare number is hours */
+export function parseBanTime(input: string): BanTime {
+  const s = input.trim().toLowerCase().replace(/,/g, '.');
+  if (!s) return { error: 'format' };
+  if (/^(?:perm|permanent|forever|навсегда|перм|вечно|навечно)$/u.test(s)) return { forever: true };
+  let total = 0;
+  let rest = s;
+  while (rest.length) {
+    const m = /^(\d+(?:\.\d+)?)\s*([a-zа-яё]*)\s*/u.exec(rest);
+    if (!m) return { error: 'format' };
+    const unit = m[2] === '' ? 3600 : UNIT.find(([re]) => re.test(m[2]))?.[1];
+    if (unit === undefined) return { error: 'format' };
+    total += Number(m[1]) * unit;
+    rest = rest.slice(m[0].length);
+  }
+  const seconds = Math.round(total);
+  if (seconds < MIN_BAN_SEC) return { error: 'short' };
+  if (seconds > MAX_BAN_SEC) return { error: 'long' };
+  return { seconds };
+}
+
+const plural = (n: number, one: string, few: string, many: string): string => {
+  const m100 = n % 100;
+  const m10 = n % 10;
+  if (m100 >= 11 && m100 <= 14) return `${n} ${many}`;
+  if (m10 === 1) return `${n} ${one}`;
+  if (m10 >= 2 && m10 <= 4) return `${n} ${few}`;
+  return `${n} ${many}`;
+};
+
+/** «7 дней», «1 день 12 часов», «30 минут»: the length of a ban or what is left of it */
+export function formatSpan(totalSeconds: number): string {
+  const s = Math.max(0, Math.round(totalSeconds));
+  if (s < 86_400) return formatLeft(s);
+  const d = Math.floor(s / 86_400);
+  const h = Math.floor((s % 86_400) / 3600);
+  return h ? `${plural(d, 'день', 'дня', 'дней')} ${plural(h, 'час', 'часа', 'часов')}` : plural(d, 'день', 'дня', 'дней');
+}
+
+// ---- the commands that the panel gives to the plugin (a kick from Discord)
+export interface CommandRow {
+  id: number;
+  server_id: number;
+  type: string;
+  payload: string;
+  created_at: number;
+  state: string;
+  result: string;
+}
+
+export function queueCommand(serverId: number, type: string, payload: Record<string, unknown>, now: number): number {
+  const info = db.prepare("INSERT INTO game_commands (server_id, type, payload, created_at, state, result) VALUES (?, ?, ?, ?, 'pending', '')").run(serverId, type, JSON.stringify(payload), now);
+  db.prepare('DELETE FROM game_commands WHERE id NOT IN (SELECT id FROM game_commands ORDER BY id DESC LIMIT 200)').run();
+  return Number(info.lastInsertRowid);
+}
+
+/** the commands of a server that the plugin has not taken yet (they are marked as taken); those older than a minute are dropped as failed */
+export function takeCommands(serverId: number, now: number): { id: number; type: string; payload: Record<string, unknown> }[] {
+  db.prepare("UPDATE game_commands SET state = 'failed', result = 'Плагин не забрал команду за минуту' WHERE server_id = ? AND state = 'pending' AND created_at < ?").run(serverId, now - 60_000);
+  const rows = db.prepare("SELECT * FROM game_commands WHERE server_id = ? AND state = 'pending' ORDER BY id LIMIT 5").all(serverId) as CommandRow[];
+  for (const r of rows) db.prepare("UPDATE game_commands SET state = 'sent' WHERE id = ?").run(r.id);
+  return rows.map((r) => ({ id: r.id, type: r.type, payload: JSON.parse(r.payload) as Record<string, unknown> }));
+}
+
+export function finishCommand(serverId: number, id: number, ok: boolean, result: string): void {
+  db.prepare("UPDATE game_commands SET state = ?, result = ? WHERE id = ? AND server_id = ?").run(ok ? 'done' : 'failed', result.slice(0, 300), id, serverId);
+}
+
+export const commandState = (id: number): CommandRow | undefined => db.prepare('SELECT * FROM game_commands WHERE id = ?').get(id) as CommandRow | undefined;
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/gamenews"
   cat > "$APP_DIR/core-backend/src/gamenews/gameNewsRank.ts" << '__COREGSM_EOF__'
 import { nextRank, rankForHours } from '../profile/ranks.js';
 
@@ -25121,7 +25597,9 @@ __COREGSM_EOF__
 import bcrypt from 'bcryptjs';
 import type { Express, Request, RequestHandler } from 'express';
 import { z } from 'zod';
-import { panelTz } from './gameNewsVars.js';
+import { joinBlock } from './gameNewsKick.js';
+import { visitStamp } from './gameNewsVars.js';
+export { visitStamp };
 import { isRealDomain, needsSetup, publicBase, registrationMode, rulesText } from '../admin/site.js';
 import { db } from '../db.js';
 import { readScoped, writeScoped } from './gameNewsScope.js';
@@ -25246,12 +25724,6 @@ export function setRegisterSettings(v: RegisterSettings, serverId?: number): voi
 const fill = (text: string, vars: { login?: string; panel: string; name?: string; date?: string; time?: string }): string =>
   text.replace(/\{login\}/g, vars.login ?? '').replace(/\{panel\}/g, vars.panel).replace(/\{name\}/g, vars.name ?? '').replace(/\{date\}/g, vars.date ?? '').replace(/\{time\}/g, vars.time ?? '');
 
-/** «10.12.2026» and «10:00» in the time zone of the panel */
-export function visitStamp(ts: number): { date: string; time: string } {
-  const tz = panelTz();
-  const f = (o: Intl.DateTimeFormatOptions) => { try { return new Intl.DateTimeFormat('ru-RU', { timeZone: tz, hourCycle: 'h23', ...o }).format(new Date(ts)); } catch { return new Intl.DateTimeFormat('ru-RU', { timeZone: 'UTC', hourCycle: 'h23', ...o }).format(new Date(ts)); } };
-  return { date: f({ day: '2-digit', month: '2-digit', year: 'numeric' }), time: f({ hour: '2-digit', minute: '2-digit' }) };
-}
 
 /**
  * Is this nickname already in the panel: an account that has it as its game nickname, or whose login is the nickname? Then the player
@@ -25307,8 +25779,14 @@ export function registerGameNewsPlayers({ app }: { app: Express }): void {
 
   // who is this player: what should they read now
   app.get('/api/game-news/player/status', plugin, (req, res) => {
-    const s = getRegisterSettings((req as typeof req & { gameServerId?: number }).gameServerId);
+    const serverId = (req as typeof req & { gameServerId?: number }).gameServerId;
+    const s = getRegisterSettings(serverId);
     const id = idSchema.safeParse(String(req.query.id ?? ''));
+    // a banned player (or one who is back too soon after a kick) is told why and removed, whatever the registration is set to
+    if (id.success) {
+      const block = joinBlock(serverId ?? 0, id.data);
+      if (block) return res.json({ registered: false, banned: true, replies: block.lines });
+    }
     if (!s.enabled || !id.success) return res.json({ registered: false, replies: [] });
     const now = Date.now();
     const who = db.prepare('SELECT * FROM game_identities WHERE platform_id = ?').get(id.data) as IdentityRow | undefined;
@@ -26646,6 +27124,13 @@ export function varsFor(serverId: number, now: number): Vars {
   };
   for (const k of VARIABLES) if (!v[k]) v[k] = '—';
   return v;
+}
+
+/** «10.12.2026» and «10:00» in the time zone of the panel */
+export function visitStamp(ts: number): { date: string; time: string } {
+  const tz = panelTz();
+  const f = (o: Intl.DateTimeFormatOptions) => { try { return new Intl.DateTimeFormat('ru-RU', { timeZone: tz, hourCycle: 'h23', ...o }).format(new Date(ts)); } catch { return new Intl.DateTimeFormat('ru-RU', { timeZone: 'UTC', hourCycle: 'h23', ...o }).format(new Date(ts)); } };
+  return { date: f({ day: '2-digit', month: '2-digit', year: 'numeric' }), time: f({ hour: '2-digit', minute: '2-digit' }) };
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/gamenews"
@@ -29868,6 +30353,44 @@ CREATE TABLE IF NOT EXISTS game_restart_schedule (
       addColumn(db, 'game_identities', 'last_join_at', 'INTEGER NOT NULL DEFAULT 0');
       addColumn(db, 'game_identities', 'last_leave_at', 'INTEGER NOT NULL DEFAULT 0');
     },
+  },
+  {
+    version: 26,
+    name: 'game_moderation',
+    // what administrators did from the game (kick, ban, warning, unban), the bans in force, the commands the panel gives to the plugin
+    up: (db) => db.exec(`
+CREATE TABLE IF NOT EXISTS game_mod_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts INTEGER NOT NULL,
+  kind TEXT NOT NULL,
+  platform_id TEXT NOT NULL DEFAULT '',
+  nick TEXT NOT NULL DEFAULT '',
+  admin TEXT NOT NULL DEFAULT '',
+  reason TEXT NOT NULL DEFAULT '',
+  server_id INTEGER NOT NULL DEFAULT 0,
+  until INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_game_mod_log_player ON game_mod_log(platform_id, kind, ts);
+CREATE TABLE IF NOT EXISTS game_bans (
+  platform_id TEXT PRIMARY KEY,
+  nick TEXT NOT NULL DEFAULT '',
+  reason TEXT NOT NULL DEFAULT '',
+  admin TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL,
+  until INTEGER NOT NULL DEFAULT 0,
+  kind TEXT NOT NULL DEFAULT 'ban',
+  server_id INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS game_commands (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  server_id INTEGER NOT NULL,
+  type TEXT NOT NULL,
+  payload TEXT NOT NULL DEFAULT '{}',
+  created_at INTEGER NOT NULL,
+  state TEXT NOT NULL DEFAULT 'pending',
+  result TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_game_commands_server ON game_commands(server_id, state);`),
   },
 ];
 
@@ -44441,12 +44964,26 @@ export const SAY_COMMAND = {
     SERVER,
   ],
 };
+export const KICK_COMMAND = {
+  name: 'kick',
+  description: '🚪 Кикнуть игрока с игрового сервера · только админы',
+  description_localizations: { ru: '🚪 Кикнуть игрока с игрового сервера · только админы', 'en-US': '🚪 Kick a player from a game server · admins only', 'en-GB': '🚪 Kick a player from a game server · admins only' },
+  dm_permission: false,
+  default_member_permissions: String(PermissionFlagsBits.Administrator),
+  options: [
+    { type: 3, name: 'player', description: '👤 Ник игрока', description_localizations: { ru: '👤 Ник игрока', 'en-US': '👤 Nickname of the player', 'en-GB': '👤 Nickname of the player' }, required: true, max_length: 100 },
+    { type: 3, name: 'reason', description: '📝 Причина (можно номер из панели)', description_localizations: { ru: '📝 Причина (можно номер из панели)', 'en-US': '📝 Reason (or a number from the panel)', 'en-GB': '📝 Reason (or a number from the panel)' }, required: false, max_length: 200 },
+    SERVER,
+  ],
+};
 RESTART_COMMANDS.push(SAY_COMMAND as never);
+RESTART_COMMANDS.push(KICK_COMMAND as never);
 
 export const RESTART_NAMES = new Set(RESTART_COMMANDS.map((c) => c.name));
 
 export async function handleRestart(i: ChatInputCommandInteraction): Promise<void> {
   if (i.commandName === 'say') return handleSay(i);
+  if (i.commandName === 'kick') return handleKick(i);
   try {
     await i.deferReply({ flags: EPHEMERAL });
   } catch (e) {
@@ -44579,6 +45116,53 @@ export async function handleGameChatMessage(m: Message): Promise<void> {
     await mine?.users.remove(m.client.user?.id).catch(() => undefined);
     await m.react(doneMark(shown)).catch(() => undefined);
   }
+}
+
+/** /kick: the panel gives the command to the plugin of the server, which finds the player by the nickname and does it the usual way (the rules, the lines and the log are those of .kick) */
+async function handleKick(i: ChatInputCommandInteraction): Promise<void> {
+  try {
+    await i.deferReply({ flags: EPHEMERAL });
+  } catch (e) {
+    log('kick: could not acknowledge:', (e as Error).message);
+    return;
+  }
+  const member = i.member as { displayName?: string } | null;
+  const player = i.options.getString('player', true);
+  const r = await backendJson<{ ok: boolean; ids?: number[]; text: string }>('/internal/game-kick', {
+    method: 'POST',
+    body: JSON.stringify({
+      name: player,
+      reason: i.options.getString('reason') ?? undefined,
+      server: i.options.getString('server') ?? undefined,
+      adminName: member?.displayName ?? i.user.username,
+      discordId: i.user.id,
+      discordAdmin: i.memberPermissions?.has(PermissionFlagsBits.Administrator) ?? false,
+    }),
+  }).catch(() => null);
+  const a = r?.data;
+  if (!a) {
+    await i.editReply(replyEmbed('Не получилось', 'Панель сейчас не отвечает, попробуйте ещё раз чуть позже.', COLORS.bad)).catch(() => undefined);
+    return;
+  }
+  if (!a.ok || !a.ids?.length) {
+    await i.editReply(replyEmbed('Не получилось', a.text, COLORS.warn)).catch(() => undefined);
+    return;
+  }
+  await i.editReply(replyEmbed('🚪 Команда отправлена', `Ищу игрока **${player.replace(/[*_`~|>]/g, '')}** на сервере…`, COLORS.info)).catch(() => undefined);
+  // the plugin takes the command with its next poll (a few seconds) and reports what it did
+  for (let n = 0; n < 12; n++) {
+    await sleep(2500);
+    const st = await backendJson<{ done: boolean; failed: boolean; text: string }>(`/internal/game-command-status?ids=${a.ids.join(',')}`, { signal: AbortSignal.timeout(4000) }).catch(() => null);
+    if (st?.data?.done) {
+      await i.editReply(replyEmbed('🚪 Игрок кикнут', st.data.text || 'Готово.', COLORS.ok)).catch(() => undefined);
+      return;
+    }
+    if (st?.data?.failed) {
+      await i.editReply(replyEmbed('Не получилось', st.data.text || 'Игрок не найден.', COLORS.warn)).catch(() => undefined);
+      return;
+    }
+  }
+  await i.editReply(replyEmbed('⚠️ Нет ответа от игры', 'Плагин не ответил за полминуты: проверьте, что сервер запущен и плагин на связи.', COLORS.warn)).catch(() => undefined);
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-bot/src"
@@ -45221,6 +45805,7 @@ export const CMDS: CmdInfo[] = [
   { cmd: '/clear', text: { ru: 'очистить чат в этом канале: с подтверждением, закреплённые остаются', en: 'wipe the chat of this channel: with a confirmation, pinned messages stay' }, usage: '/clear [count:<число>] [user:@участник]', examples: ['/clear', '/clear count:50', '/clear user:@Vasya'], needs: withBot('«Управлять сообщениями» и «Читать историю»', 'Manage Messages and Read Message History') },
   { cmd: '/restart', text: { ru: 'рестарт игрового сервера по таймеру: в чате игры идёт отсчёт, потом сервер перезапускается', en: 'restart a game server by a timer: the game chat gets a countdown, then the server restarts' }, usage: '/restart start time:<5m> | cancel | status', examples: ['/restart start time:5m', '/restart cancel'], needs: withBot('нужен плагин CoreGSM на игровом сервере', 'the CoreGSM plugin on the game server') },
   { cmd: '/say', text: { ru: 'написать в игровой чат сервера от имени Discord: «* [Discord] Имя: текст»', en: 'write to the game chat of a server from Discord: «* [Discord] Name: text»' }, usage: '/say text:<текст> [server:<сервер>]', examples: ['/say text:Сервер перезапустится через 10 минут'], needs: withBot('нужен плагин CoreGSM на игровом сервере', 'the CoreGSM plugin on the game server') },
+  { cmd: '/kick', text: { ru: 'кикнуть игрока с игрового сервера: правила, строка в чате и журнал те же, что у команды .kick в игре', en: 'kick a player from a game server: the rules, the chat line and the log are those of the .kick command in the game' }, usage: '/kick player:<ник> [reason:<причина>] [server:<сервер>]', examples: ['/kick player:Vamp reason:спам', '/kick player:Vamp reason:1'], needs: withBot('нужен плагин CoreGSM на игровом сервере', 'the CoreGSM plugin on the game server') },
   { cmd: '/ban', text: { ru: 'заблокировать участника с причиной (удаляет его сообщения, пишет ему в ЛС)', en: 'ban a member with a reason (deletes their messages, writes to them privately)' }, usage: '/ban user:@участник reason:<причина> [delete_days:0|1|7]', examples: ['/ban user:@Vasya reason:спам'], needs: withBot('«Банить участников»', 'Ban Members') },
   { cmd: '/unban', text: { ru: 'снять блокировку: без параметра покажет список банов с меню, с параметром подскажет имя или ID', en: 'lift a ban: without a parameter shows the ban list with a menu, with one suggests a name or ID' }, usage: '/unban [user:<имя или ID>]', examples: ['/unban', '/unban user:Vasya'], needs: withBot('«Банить участников»', 'Ban Members') },
   { cmd: '/kick', text: { ru: 'исключить участника с причиной, он сможет вернуться по приглашению', en: 'kick a member with a reason, they can return by an invite' }, usage: '/kick user:@участник reason:<причина>', examples: ['/kick user:@Vasya reason:реклама'], needs: withBot('«Выгонять участников»', 'Kick Members') },
@@ -45248,7 +45833,7 @@ export const CATEGORIES: Category[] = [
   { id: 'stat', emoji: '📊', color: 0x8b5cf6, label: { ru: 'Статистика', en: 'Statistics' }, title: { ru: 'Статистика игроков', en: 'Player statistics' }, cmds: ['/player', '/top'] },
   {
     id: 'mod', emoji: '🛡️', color: 0xef4444, admin: true, label: { ru: 'Модерация', en: 'Moderation' }, title: { ru: 'Модерация (для администраторов)', en: 'Moderation (for administrators)' },
-    cmds: ['/clear', '/restart', '/say', '/giveaway', '/ban', '/unban', '/kick', '/warn', '/mute', '/unmute'],
+    cmds: ['/clear', '/restart', '/say', '/kick', '/giveaway', '/ban', '/unban', '/kick', '/warn', '/mute', '/unmute'],
     extra: [{ cmd: '⚠️ Предупредить', text: { ru: 'правый клик по участнику или сообщению → «Приложения»: окно с причиной, к варну прикрепляется ссылка на сообщение', en: 'right-click a member or a message → «Apps»: a window with the reason, the message link is attached to the warning' } }],
   },
   { id: 'modclr', emoji: '🧹', color: 0xef4444, admin: true, label: { ru: 'Памятка /clear', en: '/clear guide' }, title: { ru: 'Команда /clear: как это работает', en: 'The /clear command: how it works' }, cmds: [] },
@@ -141129,11 +141714,8 @@ export const WELCOME_STYLES: WelcomeStyle[] = [
 ];
 
 /** registration in the panel from the game: switch, texts and how often the Discord hint is repeated */
-/** the defaults of the .kick command (the same as in the panel's backend) */
-export const DEFAULT_KICK: KickSettings = {
-  enabled: true, template: '* Игрок {name} был кикнут с сервера. Причина: {reason}', textColor: '#FF5555', nameColor: '#5FD068', reasonColor: '#FFCC33', adminColor: '#6EC1FF',
-  defaultReason: 'не указана', requireReason: false, protectAdmins: true, announce: true, cooldownSec: 0, maxReason: 100, logChannelId: '',
-};
+/** a short name for a reason: «.kick Ник 1» means its text */
+export interface KickReason { key: string; text: string }
 
 export interface KickSettings {
   enabled: boolean;
@@ -141150,21 +141732,51 @@ export interface KickSettings {
   maxReason: number;
   /** the channel of Discord for the log of kicks ('' = none) */
   logChannelId: string;
+  banTemplate: string;
+  warnTemplate: string;
+  unbanTemplate: string;
+  banJoinText: string;
+  blockJoinText: string;
+  notifyPlayer: boolean;
+  notifyText: string;
+  warnLimit: number;
+  warnDays: number;
+  rejoinBlockMin: number;
+  reasons: KickReason[];
 }
 
-/** the line of a kick for everybody in flat colour tags (the same as the panel builds for the game): the text, the nickname, the reason and the administrator each in its colour */
-export function kickLine(s: KickSettings, name: string, reason: string, admin: string): string {
+/** the defaults of the moderation commands (the same as in the panel's backend) */
+export const DEFAULT_KICK: KickSettings = {
+  enabled: true, template: '* Игрок {name} был кикнут с сервера. Причина: {reason}', textColor: '#FF5555', nameColor: '#5FD068', reasonColor: '#FFCC33', adminColor: '#6EC1FF',
+  defaultReason: 'не указана', requireReason: false, protectAdmins: true, announce: true, cooldownSec: 0, maxReason: 100, logChannelId: '',
+  banTemplate: '* Игрок {name} был забанен на {time}. Причина: {reason}',
+  warnTemplate: '* Игрок {name} был предупреждён. Причина: {reason}',
+  unbanTemplate: '* Игрок {name} был разбанен.',
+  banJoinText: '* Вы забанены {until}. Причина: {reason}',
+  blockJoinText: '* Вы недавно были кикнуты. Подождите ещё {left}, прежде чем зайти.',
+  notifyPlayer: true, notifyText: '* Вас убирают с сервера. Причина: {reason}',
+  warnLimit: 3, warnDays: 30, rejoinBlockMin: 0,
+  reasons: [{ key: '1', text: 'Спам' }, { key: '2', text: 'Оскорбления' }, { key: '3', text: 'Читы или использование багов' }, { key: '4', text: 'Мешает другим игрокам' }],
+};
+
+/** a line of a command for everybody in flat colour tags (the same as the panel builds for the game): the text, the nickname, the reason and the administrator each in its colour */
+export function modLine(s: KickSettings, template: string, v: { name?: string; reason?: string; admin?: string; time?: string; n?: number; limit?: number }): string {
   const clean = (x: string) => x.replace(/[<>]/g, '');
   const vars: Record<string, { text: string; color: string }> = {
-    name: { text: clean(name), color: s.nameColor },
-    reason: { text: clean(reason), color: s.reasonColor },
-    admin: { text: clean(admin), color: s.adminColor },
+    name: { text: clean(v.name ?? ''), color: s.nameColor },
+    reason: { text: clean(v.reason ?? ''), color: s.reasonColor },
+    admin: { text: clean(v.admin ?? ''), color: s.adminColor },
+    time: { text: clean(v.time ?? ''), color: s.reasonColor },
+    n: { text: String(v.n ?? ''), color: s.reasonColor },
+    limit: { text: String(v.limit ?? ''), color: s.reasonColor },
   };
-  return clean(s.template).split(/(\{(?:name|reason|admin)\})/).filter(Boolean).map((part) => {
-    const m = /^\{(name|reason|admin)\}$/.exec(part);
+  return clean(template).split(/(\{(?:name|reason|admin|time|n|limit)\})/).filter(Boolean).map((part) => {
+    const m = /^\{(name|reason|admin|time|n|limit)\}$/.exec(part);
     return m ? `<color=${vars[m[1]].color}>${vars[m[1]].text}</color>` : `<color=${s.textColor}>${part}</color>`;
   }).join('');
 }
+
+export const kickLine = (s: KickSettings, name: string, reason: string, admin: string): string => modLine(s, s.template, { name, reason, admin });
 
 /** a line of the chat in one colour with the commands picked out (the same as the panel does for the player): «.register» white bold, «(пароль)» lilac */
 export function commandLine(color: string, text: string): string {
@@ -141273,6 +141885,10 @@ export interface RulesState {
   mine: Record<string, boolean> | null;
   rules: RuleInfo[];
 }
+
+export interface ModBan { platformId: string; masked: string; nick: string; reason: string; admin: string; createdAt: number; until: number; kind: 'ban' | 'block'; serverName: string }
+export interface ModEntry { id: number; ts: number; kind: 'kick' | 'ban' | 'warn' | 'unban'; nick: string; platformId: string; admin: string; reason: string; serverName: string; until: number }
+export interface ModTop { nick: string; platformId: string; kicks: number; warns: number; bans: number; last: number }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/gameProfiles.ts" << '__COREGSM_EOF__'
@@ -144743,12 +145359,10 @@ const en: Record<keyof typeof ru, string> = {
   'gn.rg.auto': 'The automatic login line ({login} is the login in the panel)',
   'gn.rg.lastOn': 'Tell when the player was on the server last time',
   'gn.rg.last': 'The last visit line ({name} is the nickname, {date} the date, {time} the time)',
-  'gn.jn.f.kick': 'Kicks',
-  'gn.jn.kick': 'Kick',
-  'gn.kk.title': 'The .kick command',
-  'gn.kk.sumOn': 'Game administrators can kick players',
+  'gn.kk.title': 'Moderation: kick, ban, warnings',
+  'gn.kk.sumOn': 'Game administrators: .kick, .ban, .warn, .unban',
   'gn.kk.sumOff': 'The command is off',
-  'gn.kk.note': 'A game administrator types .kick (nickname) (reason). The panel checks the rules below, writes a journal entry, shows everybody the line and removes the player. The nickname may have spaces, the reason may be several words.',
+  'gn.kk.note': 'A game administrator types .kick, .ban, .warn or .unban. The panel checks the rules below, writes the journal, shows everybody a line, tells the player in private and removes him. The nickname may have spaces and the reason several words; when several players fit they are listed (#1, #2…).',
   'gn.kk.enabled': 'Allow the .kick command',
   'gn.kk.template': 'The line for all players ({name} the kicked player, {reason} the reason, {admin} who kicked)',
   'gn.kk.textColor': 'Text colour',
@@ -144775,6 +145389,64 @@ const en: Record<keyof typeof ru, string> = {
   'gn.ch.short.kick': 'kick',
   'gn.kk.sampleReason': 'spam',
   'gn.kk.sampleAdmin': 'Admin',
+  'gn.tab.mod': 'Moderation',
+  'gn.kk.reasonEmpty': 'Every reason needs a short name and a text',
+  'gn.kk.p.kick': 'Kick',
+  'gn.kk.p.ban': 'Ban',
+  'gn.kk.p.warn': 'Warnings',
+  'gn.kk.p.reasons': 'Reasons',
+  'gn.kk.notify': 'Tell the player in private before the removal',
+  'gn.kk.notifyNote': 'The player reads the reason in the chat a second before he is removed.',
+  'gn.kk.notifyText': 'The private words to the player ({reason} the reason, {admin} who)',
+  'gn.kk.block': 'Keep out after a kick, minutes (0 = he can come back at once)',
+  'gn.kk.blockText': 'What a player reads who comes back too early ({left} is how long to wait)',
+  'gn.kk.sampleTime': '7 days',
+  'gn.kk.sampleUntil': 'until 10.12.2026 at 10:00',
+  'gn.kk.banNote': '.ban (nickname) (time) (reason): the time is 30m, 2h, 7d, 2w or «перм». A banned player is removed at once and kept out until the ban ends. Lift it with .unban (nickname) or the «Unban» button on the Moderation tab.',
+  'gn.kk.banTemplate': 'The line for everybody after a ban ({time} is the length)',
+  'gn.kk.banJoin': 'What a banned player reads when he tries to come in ({until} is until when)',
+  'gn.kk.warnNote': '.warn (nickname) (reason): a warning to a player. When there are as many as you set, the player is kicked and the count starts again.',
+  'gn.kk.warnTemplate': 'The line for everybody after a warning ({n} which one, {limit} the limit)',
+  'gn.kk.warnLimit': 'How many warnings make a kick (0 = never)',
+  'gn.kk.warnDays': 'For how many days a warning counts',
+  'gn.kk.reasonsNote': 'Short names of reasons: an administrator types .kick Name 1 and the chat and the journal get the text of the reason. Works for .kick, .ban, .warn and /kick in Discord.',
+  'gn.kk.reasonsEmpty': 'No short reasons yet',
+  'gn.kk.reasonsEmptyHint': 'Add, for example, «1 → Spam»: the command is quicker to type.',
+  'gn.kk.reasonKey': 'Short name',
+  'gn.kk.reasonText': 'Text of the reason',
+  'gn.kk.reasonAdd': 'Add a reason',
+  'gn.kk.reasonsEx': 'Example: .kick Name {key} → the reason «{text}».',
+  'gn.md.title': 'Moderation',
+  'gn.md.bans': 'Banned now',
+  'gn.md.bansNote': 'Bans in force and the short blocks against coming back after a kick. Those that have ended go away by themselves.',
+  'gn.md.bansEmpty': 'Nobody is banned now',
+  'gn.md.bansEmptyHint': 'A ban is set with .ban (nickname) (time) (reason) in the game.',
+  'gn.md.unban': 'Unban',
+  'gn.md.unbanTitle': 'Unban {nick}?',
+  'gn.md.unbanText': 'The player will be able to join the server again.',
+  'gn.md.unbanned': 'The player was unbanned',
+  'gn.md.forever': 'for ever',
+  'gn.md.until': 'until {time}',
+  'gn.md.block': 'waits after a kick',
+  'gn.md.top': 'Most often',
+  'gn.md.counts': 'kicks {k} · warnings {w} · bans {b}',
+  'gn.md.search': 'Player nickname',
+  'gn.md.clear': 'Clear',
+  'gn.md.log': 'History of moderation',
+  'gn.md.history': 'Show the history of the player',
+  'gn.md.f.all': 'All',
+  'gn.md.f.kick': 'Kicks',
+  'gn.md.f.ban': 'Bans',
+  'gn.md.f.warn': 'Warnings',
+  'gn.md.f.unban': 'Unbans',
+  'gn.md.k.kick': 'Kick',
+  'gn.md.k.ban': 'Ban',
+  'gn.md.k.warn': 'Warning',
+  'gn.md.k.unban': 'Unban',
+  'gn.md.logEmpty': 'Nothing yet',
+  'gn.md.logEmptyHint': 'Kicks, bans and warnings will be listed here with the reason and the name of the administrator.',
+  'gn.jn.f.mod': 'Moderation',
+  'gn.kk.unbanTemplate': 'The line for everybody after an unban (no reason is needed)',
   'gn.ch.presets': 'Ready styles:',
   'gn.ch.preset.game': 'As in the game',
   'gn.ch.preset.calm': 'Calm',
@@ -148273,6 +148945,7 @@ const errorsEn: Record<string, string> = {
   game_link_missing: 'The link was not found',
   game_schedule_limit: 'No more than 20 schedules',
   game_schedule_missing: 'The schedule was not found',
+  game_ban_missing: 'The ban was not found',
   game_restart_server: 'Pick a server with the plugin',
   game_restart_short: 'At least 10 seconds',
   game_restart_long: 'No more than 6 hours',
@@ -149571,12 +150244,10 @@ const ru = {
   'gn.rg.auto': 'Строка автоматического входа ({login} — логин в панели)',
   'gn.rg.lastOn': 'Писать, когда игрок был на сервере в прошлый раз',
   'gn.rg.last': 'Строка о прошлом визите ({name} — ник, {date} — дата, {time} — время)',
-  'gn.jn.f.kick': 'Кики',
-  'gn.jn.kick': 'Кик',
-  'gn.kk.title': 'Команда .kick',
-  'gn.kk.sumOn': 'Админы игры могут кикать игроков',
+  'gn.kk.title': 'Модерация: кик, бан, предупреждения',
+  'gn.kk.sumOn': 'Админы игры: .kick, .ban, .warn, .unban',
   'gn.kk.sumOff': 'Команда отключена',
-  'gn.kk.note': 'Администратор игры вводит .kick (ник) (причина). Панель проверяет правила ниже, пишет запись в журнал, показывает всем строку и убирает игрока. Ник можно с пробелом, причина может быть из нескольких слов.',
+  'gn.kk.note': 'Администратор игры вводит .kick, .ban, .warn или .unban. Панель проверяет правила ниже, пишет в журнал, показывает всем строку, говорит игроку лично и убирает его. Ник можно с пробелом, причина может быть из нескольких слов; если подходит несколько игроков, они покажутся списком (#1, #2…).',
   'gn.kk.enabled': 'Разрешить команду .kick',
   'gn.kk.template': 'Строка для всех игроков ({name} — кикнутый, {reason} — причина, {admin} — кто кикнул)',
   'gn.kk.textColor': 'Цвет текста',
@@ -149603,6 +150274,64 @@ const ru = {
   'gn.ch.short.kick': 'кик',
   'gn.kk.sampleReason': 'спам',
   'gn.kk.sampleAdmin': 'Админ',
+  'gn.tab.mod': 'Модерация',
+  'gn.kk.reasonEmpty': 'У каждой причины должны быть короткое имя и текст',
+  'gn.kk.p.kick': 'Кик',
+  'gn.kk.p.ban': 'Бан',
+  'gn.kk.p.warn': 'Предупреждения',
+  'gn.kk.p.reasons': 'Причины',
+  'gn.kk.notify': 'Писать игроку лично перед удалением',
+  'gn.kk.notifyNote': 'Игрок читает причину в чате за секунду до того, как его уберут.',
+  'gn.kk.notifyText': 'Личное сообщение игроку ({reason} — причина, {admin} — кто)',
+  'gn.kk.block': 'Не пускать назад после кика, минут (0 — можно сразу)',
+  'gn.kk.blockText': 'Что читает игрок, который вернулся слишком рано ({left} — сколько ждать)',
+  'gn.kk.sampleTime': '7 дней',
+  'gn.kk.sampleUntil': 'до 10.12.2026 в 10:00',
+  'gn.kk.banNote': '.ban (ник) (срок) (причина): срок 30m, 2h, 7d, 2w или «перм». Забаненного убирают сразу и не пускают, пока бан не кончится. Снять бан: .unban (ник) или кнопка «Разбанить» на вкладке «Модерация».',
+  'gn.kk.banTemplate': 'Строка для всех после бана ({time} — срок)',
+  'gn.kk.banJoin': 'Что читает забаненный, когда пытается зайти ({until} — до какого времени)',
+  'gn.kk.warnNote': '.warn (ник) (причина): предупреждение игроку. Когда их набирается столько, сколько вы задали, игрока кикают, а счёт начинается заново.',
+  'gn.kk.warnTemplate': 'Строка для всех после предупреждения ({n} — какое по счёту, {limit} — лимит)',
+  'gn.kk.warnLimit': 'Сколько предупреждений ведут к кику (0 — никогда)',
+  'gn.kk.warnDays': 'Сколько дней предупреждение считается',
+  'gn.kk.reasonsNote': 'Короткие имена причин: админ вводит .kick Ник 1, а в чате и журнале будет текст причины. Работает для .kick, .ban, .warn и /kick в Discord.',
+  'gn.kk.reasonsEmpty': 'Коротких причин пока нет',
+  'gn.kk.reasonsEmptyHint': 'Добавьте, например, «1 → Спам»: так быстрее набирать команду.',
+  'gn.kk.reasonKey': 'Короткое имя',
+  'gn.kk.reasonText': 'Текст причины',
+  'gn.kk.reasonAdd': 'Добавить причину',
+  'gn.kk.reasonsEx': 'Пример: .kick Ник {key} → причина «{text}».',
+  'gn.md.title': 'Модерация',
+  'gn.md.bans': 'Сейчас в бане',
+  'gn.md.bansNote': 'Баны, которые действуют сейчас, и короткие блокировки возврата после кика. Закончившиеся убираются сами.',
+  'gn.md.bansEmpty': 'Сейчас никто не забанен',
+  'gn.md.bansEmptyHint': 'Бан ставится командой .ban (ник) (срок) (причина) в игре.',
+  'gn.md.unban': 'Разбанить',
+  'gn.md.unbanTitle': 'Разбанить {nick}?',
+  'gn.md.unbanText': 'Игрок снова сможет зайти на сервер.',
+  'gn.md.unbanned': 'Игрок разбанен',
+  'gn.md.forever': 'навсегда',
+  'gn.md.until': 'до {time}',
+  'gn.md.block': 'ждёт после кика',
+  'gn.md.top': 'Чаще всего',
+  'gn.md.counts': 'киков {k} · предупреждений {w} · банов {b}',
+  'gn.md.search': 'Ник игрока',
+  'gn.md.clear': 'Сбросить',
+  'gn.md.log': 'История модерации',
+  'gn.md.history': 'Показать историю игрока',
+  'gn.md.f.all': 'Всё',
+  'gn.md.f.kick': 'Кики',
+  'gn.md.f.ban': 'Баны',
+  'gn.md.f.warn': 'Предупреждения',
+  'gn.md.f.unban': 'Разбаны',
+  'gn.md.k.kick': 'Кик',
+  'gn.md.k.ban': 'Бан',
+  'gn.md.k.warn': 'Предупреждение',
+  'gn.md.k.unban': 'Разбан',
+  'gn.md.logEmpty': 'Пока ничего не было',
+  'gn.md.logEmptyHint': 'Здесь будут кики, баны и предупреждения с причиной и именем админа.',
+  'gn.jn.f.mod': 'Модерация',
+  'gn.kk.unbanTemplate': 'Строка для всех после разбана (причина не нужна)',
   'gn.ch.presets': 'Готовые стили:',
   'gn.ch.preset.game': 'Как в игре',
   'gn.ch.preset.calm': 'Спокойный',
@@ -157889,6 +158618,7 @@ import { ServerRestartCard } from './GameNewsServerRestart';
 import GameNewsRules from './GameNewsRules';
 import { JournalTab } from './GameNewsJournal';
 import { LinksTab } from './GameNewsLinks';
+import { MOD_PLAYER_KEY, ModerationTab } from './GameNewsModeration';
 import { SendTab } from './GameNewsSend';
 import { ScopedCard, SubTabs } from './GameNewsUi';
 
@@ -157907,7 +158637,7 @@ export default function GameNewsPage({ sub = '' }: { sub?: string }) {
   // the tab is part of the address: /admin/gamenews, /auto, /players, /discord, /history («events» is the old name of «players»)
   // (/general holds the general settings; /s12 the settings of the server 12; «players», «discord» and «events» are the old names of /general)
   // («discord» and «events» are old names of /general, «history» of /journal)
-  const tab: Tab = ['discord', 'events'].includes(sub) ? 'general' : sub === 'history' ? 'journal' : (/^(send|auto|general|players|journal|s\d+)$/.test(sub) ? sub : 'send');
+  const tab: Tab = ['discord', 'events'].includes(sub) ? 'general' : sub === 'history' ? 'journal' : (/^(send|auto|general|players|mod|journal|s\d+)$/.test(sub) ? sub : 'send');
   const goTab = (x: Tab) => navigate(x === 'send' ? '/admin/gamenews' : `/admin/gamenews/${x}`);
   // the draft survives a switch of the page or a reload (kept in this browser only)
   const [text, setText] = useState(() => { try { return localStorage.getItem('coregsm.gamenews.draft') ?? ''; } catch { return ''; } });
@@ -157961,7 +158691,7 @@ export default function GameNewsPage({ sub = '' }: { sub?: string }) {
   const serverTabs = withToken.length > 1 ? withToken : [];
   const tabList: { id: Tab; label: string }[] = [
     { id: 'send', label: t('gn.tab.send') }, { id: 'auto', label: t('gn.tab.auto') }, { id: 'general', label: t('gn.tab.general') },
-    { id: 'players', label: t('gn.tab.players') }, { id: 'journal', label: t('gn.tab.journal') },
+    { id: 'players', label: t('gn.tab.players') }, { id: 'mod', label: t('gn.tab.mod') }, { id: 'journal', label: t('gn.tab.journal') },
   ];
 
   // the setup guide: until a plugin is online
@@ -158122,7 +158852,9 @@ export default function GameNewsPage({ sub = '' }: { sub?: string }) {
 
       {data && tab === 'players' && <LinksTab />}
 
-      {data && tab === 'journal' && <JournalTab onReuse={(x) => { setText(x); goTab('send'); }} />}
+      {data && tab === 'mod' && <ModerationTab />}
+
+      {data && tab === 'journal' && <JournalTab onReuse={(x) => { setText(x); goTab('send'); }} onPlayer={(nick) => { try { localStorage.setItem(MOD_PLAYER_KEY, nick); } catch { /* private mode */ } goTab('mod'); }} />}
 
       {settingsServer && <PluginModal server={settingsServer} onClose={() => setSettingsFor(null)} onChanged={() => void loadMain()} />}
     </AdminPage>
@@ -158203,11 +158935,11 @@ import { ChatLines, NewsEditor, NewsPreview } from '../components/NewsEditor';
 import { confirmDialog } from '../confirm';
 import { t, useI18n } from '../i18n';
 import {
-  ANSI_COLORS, CHAT_KINDS, CHAT_PRESETS, SWATCHES, commandLine, kickLine, DEFAULT_KICK, WELCOME_STYLES, WELCOME_VARIABLES, composeLine, isHex, validateNews,
+  ANSI_COLORS, CHAT_KINDS, CHAT_PRESETS, SWATCHES, commandLine, kickLine, modLine, DEFAULT_KICK, WELCOME_STYLES, WELCOME_VARIABLES, composeLine, isHex, validateNews,
   type AnsiColor, type ChatColors, type ChatKind, type ChatSettings, type Extras, type JoinLeave, type KickSettings, type RegisterSettings, type Welcome, type WelcomeStyle,
 } from '../gameNews';
 import { ScopeNote, useScope } from './GameNewsScope';
-import { WithPreview } from './GameNewsUi';
+import { EmptyState, SubTabs, WithPreview } from './GameNewsUi';
 import { ChannelName, ChannelPicker } from '../components/ChannelPicker';
 import { Field, SaveBadge, errText, toast, useAutosave } from '../ui';
 
@@ -158490,29 +159222,43 @@ export function RegisterCard({ initial }: { initial: RegisterSettings }) {
 }
 
 /**
- * The .kick command of the game: how it reads in the chat (words and colours of the nickname, the reason and the administrator),
- * what it asks for (a reason, a pause between kicks) and what it refuses (to kick an administrator). Everything is set here.
+ * Moderation from the game (.kick, .ban, .warn, .unban): how it reads in the chat (words and colours of the nickname, the reason and the
+ * administrator), what it asks for and refuses, what the player is told in private, how long a warning counts, the short names of reasons.
+ * Everything is set here; one card, one setting, four parts.
  */
 export function KickCard({ initial }: { initial: KickSettings }) {
   useI18n();
   const sc = useScope();
   const [f, setF] = useState<KickSettings>(initial);
   const [saved, setSaved] = useState<KickSettings>(initial);
+  const [part, setPart] = useState<'kick' | 'ban' | 'warn' | 'reasons'>('kick');
   const set = <K extends keyof KickSettings>(k: K, v: KickSettings[K]) => setF((x) => ({ ...x, [k]: v }));
   const auto = useAutosave({
     value: f,
     saved,
     delay: 900,
     validate: (v) => {
-      if (!v.template.trim() || !v.defaultReason.trim()) return t('gn.hint.text');
+      if ([v.template, v.banTemplate, v.warnTemplate, v.unbanTemplate, v.banJoinText, v.blockJoinText, v.notifyText, v.defaultReason].some((x) => !x.trim())) return t('gn.hint.text');
       if (![v.textColor, v.nameColor, v.reasonColor, v.adminColor].every(isHex)) return t('gn.jl.badColor');
+      if (v.reasons.some((r) => !r.key.trim() || !r.text.trim())) return t('gn.kk.reasonEmpty');
       return null;
     },
     save: async (v) => { await api(`/game-news/kick-settings${sc.q}`, 'PUT', v); setSaved(v); sc.changed(); },
   });
   const safe = (v: KickSettings): KickSettings => ({ ...v, textColor: isHex(v.textColor) ? v.textColor : DEFAULT_KICK.textColor, nameColor: isHex(v.nameColor) ? v.nameColor : DEFAULT_KICK.nameColor, reasonColor: isHex(v.reasonColor) ? v.reasonColor : DEFAULT_KICK.reasonColor, adminColor: isHex(v.adminColor) ? v.adminColor : DEFAULT_KICK.adminColor });
-  const sample = (reason: string) => kickLine(safe(f), 'WhiteLegioN', reason, 'Админ');
+  const sv = safe(f);
+  const reasonText = f.reasons[0]?.text ?? f.defaultReason;
+  const priv = (text: string, vars: { reason?: string; n?: number; limit?: number; until?: string; left?: string }) =>
+    modLine({ ...sv, nameColor: sv.textColor, adminColor: sv.textColor, reasonColor: '#FFCC33' }, text.replace(/\{until\}/g, vars.until ?? '').replace(/\{left\}/g, vars.left ?? ''), { reason: vars.reason, n: vars.n, limit: vars.limit });
   const [pickLog, setPickLog] = useState(false);
+  const varsAll = [{ name: 'name', example: 'WhiteLegioN' }, { name: 'reason', example: reasonText }, { name: 'admin', example: 'Админ' }];
+
+  const switchRow = (key: 'requireReason' | 'protectAdmins' | 'announce' | 'notifyPlayer', label: Parameters<typeof t>[0], note: Parameters<typeof t>[0]) => (
+    <label key={key} className="flex items-start gap-3 font-bold">
+      <Switch className="mt-0.5" checked={f[key]} onChange={(v) => set(key, v)} />
+      <span>{t(label)}<span className="block text-sm font-semibold text-mute">{t(note)}</span></span>
+    </label>
+  );
 
   return (
     <FoldCard
@@ -158530,61 +159276,142 @@ export function KickCard({ initial }: { initial: KickSettings }) {
         {t('gn.kk.enabled')}
       </label>
 
-      <WithPreview
-        preview={(
-          <>
-            <ChatLines lines={f.announce ? [sample('спам'), sample(f.defaultReason)] : []} />
-            {!f.announce && <p className="text-sm font-semibold text-mute">{t('gn.kk.quiet')}</p>}
-          </>
-        )}
-      >
-        <Field label={t('gn.kk.template')}>
-          <AutoText value={f.template} maxLength={300} onChange={(e) => set('template', e.target.value)} />
-        </Field>
-        <VarChips
-          vars={[{ name: 'name', example: 'WhiteLegioN' }, { name: 'reason', example: 'спам' }, { name: 'admin', example: 'Админ' }]}
-          onPick={(v) => set('template', `${f.template} ${v}`.trim())}
-        />
-        <div className="grid gap-4 sm:grid-cols-2">
-          <ColorField label={t('gn.kk.textColor')} value={f.textColor} gameHex={DEFAULT_KICK.textColor} onChange={(v) => set('textColor', v)} />
-          <ColorField label={t('gn.kk.nameColor')} value={f.nameColor} gameHex={DEFAULT_KICK.nameColor} onChange={(v) => set('nameColor', v)} />
-          <ColorField label={t('gn.kk.reasonColor')} value={f.reasonColor} gameHex={DEFAULT_KICK.reasonColor} onChange={(v) => set('reasonColor', v)} />
-          <ColorField label={t('gn.kk.adminColor')} value={f.adminColor} gameHex={DEFAULT_KICK.adminColor} onChange={(v) => set('adminColor', v)} />
+      <SubTabs
+        label={t('gn.kk.title')}
+        value={part}
+        onChange={setPart}
+        items={[{ id: 'kick', label: t('gn.kk.p.kick') }, { id: 'ban', label: t('gn.kk.p.ban') }, { id: 'warn', label: t('gn.kk.p.warn') }, { id: 'reasons', label: t('gn.kk.p.reasons'), badge: f.reasons.length }]}
+      />
+
+      {part === 'kick' && (
+        <div className="space-y-4">
+          <WithPreview
+            preview={(
+              <>
+                <ChatLines lines={f.announce ? [kickLine(sv, 'WhiteLegioN', reasonText, 'Админ'), kickLine(sv, 'WhiteLegioN', f.defaultReason, 'Админ')] : []} />
+                {f.notifyPlayer && <ChatLines lines={[priv(f.notifyText, { reason: reasonText })]} />}
+                {!f.announce && <p className="text-sm font-semibold text-mute">{t('gn.kk.quiet')}</p>}
+              </>
+            )}
+          >
+            <Field label={t('gn.kk.template')}>
+              <AutoText value={f.template} maxLength={300} onChange={(e) => set('template', e.target.value)} />
+            </Field>
+            <VarChips vars={varsAll} onPick={(v) => set('template', `${f.template} ${v}`.trim())} />
+            <div className="grid gap-4 sm:grid-cols-2">
+              <ColorField label={t('gn.kk.textColor')} value={f.textColor} gameHex={DEFAULT_KICK.textColor} onChange={(v) => set('textColor', v)} />
+              <ColorField label={t('gn.kk.nameColor')} value={f.nameColor} gameHex={DEFAULT_KICK.nameColor} onChange={(v) => set('nameColor', v)} />
+              <ColorField label={t('gn.kk.reasonColor')} value={f.reasonColor} gameHex={DEFAULT_KICK.reasonColor} onChange={(v) => set('reasonColor', v)} />
+              <ColorField label={t('gn.kk.adminColor')} value={f.adminColor} gameHex={DEFAULT_KICK.adminColor} onChange={(v) => set('adminColor', v)} />
+            </div>
+          </WithPreview>
+
+          <div className="space-y-2">
+            {switchRow('announce', 'gn.kk.announce', 'gn.kk.announceNote')}
+            {switchRow('notifyPlayer', 'gn.kk.notify', 'gn.kk.notifyNote')}
+          </div>
+          {f.notifyPlayer && (
+            <Field label={t('gn.kk.notifyText')}>
+              <AutoText value={f.notifyText} maxLength={300} onChange={(e) => set('notifyText', e.target.value)} />
+            </Field>
+          )}
+
+          <div className="grid gap-4 sm:grid-cols-3">
+            <Field label={t('gn.kk.defaultReason')}>
+              <input className="input" value={f.defaultReason} maxLength={100} onChange={(e) => set('defaultReason', e.target.value)} />
+            </Field>
+            <Field label={t('gn.kk.cooldown')}>
+              <input className="input w-32" type="number" min={0} max={3600} value={f.cooldownSec} onChange={(e) => set('cooldownSec', Number(e.target.value))} />
+            </Field>
+            <Field label={t('gn.kk.block')}>
+              <input className="input w-32" type="number" min={0} max={1440} value={f.rejoinBlockMin} onChange={(e) => set('rejoinBlockMin', Number(e.target.value))} />
+            </Field>
+          </div>
+          {f.rejoinBlockMin > 0 && (
+            <Field label={t('gn.kk.blockText')}>
+              <AutoText value={f.blockJoinText} maxLength={300} onChange={(e) => set('blockJoinText', e.target.value)} />
+            </Field>
+          )}
+
+          <div className="space-y-2">
+            {switchRow('requireReason', 'gn.kk.requireReason', 'gn.kk.requireReasonNote')}
+            {switchRow('protectAdmins', 'gn.kk.protect', 'gn.kk.protectNote')}
+          </div>
+
+          <div className="space-y-2 rounded-xl border border-line px-4 py-3">
+            <div className="font-extrabold">{t('gn.kk.logTitle')}</div>
+            <p className="text-sm font-semibold text-mute">{t('gn.kk.logNote')}</p>
+            <div className="flex flex-wrap items-center gap-2">
+              {f.logChannelId ? <ChannelName id={f.logChannelId} /> : <span className="pill pill-mute">{t('gn.kk.logNone')}</span>}
+              <button type="button" className="btn btn-soft btn-sm" onClick={() => setPickLog((v) => !v)}>{f.logChannelId ? t('gn.kk.logChange') : t('gn.kk.logPick')}</button>
+              {f.logChannelId && <button type="button" className="btn btn-ghost btn-sm" onClick={() => set('logChannelId', '')}>{t('gn.kk.logOff')}</button>}
+            </div>
+            {pickLog && <ChannelPicker id="kick-log" value={f.logChannelId} onChange={(v) => { if (/^\d{15,25}$/.test(v)) { set('logChannelId', v); setPickLog(false); } }} />}
+          </div>
         </div>
-      </WithPreview>
+      )}
 
-      <div className="grid gap-4 sm:grid-cols-2">
-        <Field label={t('gn.kk.defaultReason')}>
-          <input className="input" value={f.defaultReason} maxLength={100} onChange={(e) => set('defaultReason', e.target.value)} />
-        </Field>
-        <Field label={t('gn.kk.cooldown')}>
-          <input className="input w-32" type="number" min={0} max={3600} value={f.cooldownSec} onChange={(e) => set('cooldownSec', Number(e.target.value))} />
-        </Field>
-      </div>
+      {part === 'ban' && (
+        <WithPreview
+          preview={(
+            <>
+              <ChatLines lines={f.announce ? [modLine(sv, f.banTemplate, { name: 'WhiteLegioN', reason: reasonText, admin: 'Админ', time: t('gn.kk.sampleTime') }), modLine(sv, f.unbanTemplate, { name: 'WhiteLegioN', admin: 'Админ' })] : []} />
+              <ChatLines lines={[priv(f.banJoinText, { reason: reasonText, until: t('gn.kk.sampleUntil') })]} />
+            </>
+          )}
+        >
+          <p className="text-sm font-semibold text-mute">{t('gn.kk.banNote')}</p>
+          <Field label={t('gn.kk.banTemplate')}>
+            <AutoText value={f.banTemplate} maxLength={300} onChange={(e) => set('banTemplate', e.target.value)} />
+          </Field>
+          <VarChips vars={[...varsAll, { name: 'time', example: t('gn.kk.sampleTime') }]} onPick={(v) => set('banTemplate', `${f.banTemplate} ${v}`.trim())} />
+          <Field label={t('gn.kk.unbanTemplate')}>
+            <AutoText value={f.unbanTemplate} maxLength={300} onChange={(e) => set('unbanTemplate', e.target.value)} />
+          </Field>
+          <VarChips vars={[{ name: 'name', example: 'WhiteLegioN' }, { name: 'admin', example: 'Админ' }]} onPick={(v) => set('unbanTemplate', `${f.unbanTemplate} ${v}`.trim())} />
+          <Field label={t('gn.kk.banJoin')}>
+            <AutoText value={f.banJoinText} maxLength={300} onChange={(e) => set('banJoinText', e.target.value)} />
+          </Field>
+          <VarChips vars={[{ name: 'reason', example: reasonText }, { name: 'until', example: t('gn.kk.sampleUntil') }]} onPick={(v) => set('banJoinText', `${f.banJoinText} ${v}`.trim())} />
+        </WithPreview>
+      )}
 
-      <div className="space-y-2 rounded-xl border border-line px-4 py-3">
-        <div className="font-extrabold">{t('gn.kk.logTitle')}</div>
-        <p className="text-sm font-semibold text-mute">{t('gn.kk.logNote')}</p>
-        <div className="flex flex-wrap items-center gap-2">
-          {f.logChannelId ? <ChannelName id={f.logChannelId} /> : <span className="pill pill-mute">{t('gn.kk.logNone')}</span>}
-          <button type="button" className="btn btn-soft btn-sm" onClick={() => setPickLog((v) => !v)}>{f.logChannelId ? t('gn.kk.logChange') : t('gn.kk.logPick')}</button>
-          {f.logChannelId && <button type="button" className="btn btn-ghost btn-sm" onClick={() => set('logChannelId', '')}>{t('gn.kk.logOff')}</button>}
+      {part === 'warn' && (
+        <WithPreview preview={<ChatLines lines={f.announce ? [modLine(sv, f.warnTemplate, { name: 'WhiteLegioN', reason: reasonText, admin: 'Админ', n: 2, limit: f.warnLimit })] : []} />}>
+          <p className="text-sm font-semibold text-mute">{t('gn.kk.warnNote')}</p>
+          <Field label={t('gn.kk.warnTemplate')}>
+            <AutoText value={f.warnTemplate} maxLength={300} onChange={(e) => set('warnTemplate', e.target.value)} />
+          </Field>
+          <VarChips vars={[...varsAll, { name: 'n', example: '2' }, { name: 'limit', example: String(f.warnLimit) }]} onPick={(v) => set('warnTemplate', `${f.warnTemplate} ${v}`.trim())} />
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field label={t('gn.kk.warnLimit')}>
+              <input className="input w-32" type="number" min={0} max={20} value={f.warnLimit} onChange={(e) => set('warnLimit', Number(e.target.value))} />
+            </Field>
+            <Field label={t('gn.kk.warnDays')}>
+              <input className="input w-32" type="number" min={1} max={365} value={f.warnDays} onChange={(e) => set('warnDays', Number(e.target.value))} />
+            </Field>
+          </div>
+        </WithPreview>
+      )}
+
+      {part === 'reasons' && (
+        <div className="space-y-3">
+          <p className="text-sm font-semibold text-mute">{t('gn.kk.reasonsNote')}</p>
+          {f.reasons.length === 0 && <EmptyState icon="📝" title={t('gn.kk.reasonsEmpty')} hint={t('gn.kk.reasonsEmptyHint')} />}
+          <ul className="space-y-2">
+            {f.reasons.map((r, i) => (
+              <li key={i} className="flex flex-wrap items-center gap-2">
+                <input className="input w-20 font-mono" value={r.key} maxLength={12} aria-label={t('gn.kk.reasonKey')} placeholder="1" onChange={(e) => set('reasons', f.reasons.map((x, j) => (j === i ? { ...x, key: e.target.value } : x)))} />
+                <span aria-hidden className="text-mute">→</span>
+                <input className="input min-w-0 flex-1 basis-56" value={r.text} maxLength={100} aria-label={t('gn.kk.reasonText')} placeholder={t('gn.kk.reasonText')} onChange={(e) => set('reasons', f.reasons.map((x, j) => (j === i ? { ...x, text: e.target.value } : x)))} />
+                <button type="button" className="btn btn-ghost btn-sm" onClick={() => set('reasons', f.reasons.filter((_, j) => j !== i))}>{t('gn.rs.delete')}</button>
+              </li>
+            ))}
+          </ul>
+          <button type="button" className="btn btn-soft btn-sm" disabled={f.reasons.length >= 20} onClick={() => set('reasons', [...f.reasons, { key: String(f.reasons.length + 1), text: '' }])}>{t('gn.kk.reasonAdd')}</button>
+          <p className="text-sm font-semibold text-mute">{t('gn.kk.reasonsEx', { key: f.reasons[0]?.key ?? '1', text: reasonText })}</p>
         </div>
-        {pickLog && <ChannelPicker id="kick-log" value={f.logChannelId} onChange={(v) => { if (/^\d{15,25}$/.test(v)) { set('logChannelId', v); setPickLog(false); } }} />}
-      </div>
-
-      <div className="space-y-2">
-        {([
-          ['requireReason', 'gn.kk.requireReason', 'gn.kk.requireReasonNote'],
-          ['protectAdmins', 'gn.kk.protect', 'gn.kk.protectNote'],
-          ['announce', 'gn.kk.announce', 'gn.kk.announceNote'],
-        ] as const).map(([key, label, note]) => (
-          <label key={key} className="flex items-start gap-3 font-bold">
-            <Switch className="mt-0.5" checked={f[key]} onChange={(v) => set(key, v)} />
-            <span>{t(label)}<span className="block text-sm font-semibold text-mute">{t(note)}</span></span>
-          </label>
-        ))}
-      </div>
+      )}
       {auto.invalid && <p className="text-sm font-semibold text-danger">{auto.error}</p>}
     </FoldCard>
   );
@@ -158925,13 +159752,13 @@ import { t, useI18n } from '../i18n';
 import { usePoll } from '../ui';
 import { EmptyState, SubTabs } from './GameNewsUi';
 
-type Kind = 'message' | 'auto' | 'discord' | 'restart' | 'link' | 'kick';
+type Kind = 'message' | 'auto' | 'discord' | 'restart' | 'link' | 'mod';
 interface Entry { id: string; ts: number; kind: Kind; serverId: number | null; serverName: string; text: string; status: string; error: string; by: string }
 
-const FILTERS = ['all', 'message', 'auto', 'discord', 'restart', 'link', 'kick'] as const;
+const FILTERS = ['all', 'message', 'auto', 'discord', 'restart', 'link', 'mod'] as const;
 type Filter = (typeof FILTERS)[number];
 
-const KIND_ICON: Record<Kind, string> = { message: '✉', auto: '⟳', discord: '💬', restart: '♻', link: '🔗', kick: '🚪' };
+const KIND_ICON: Record<Kind, string> = { message: '✉', auto: '⟳', discord: '💬', restart: '♻', link: '🔗', mod: '🚪' };
 
 const MSG_STATUS: Record<string, { text: 'gn.h.queued' | 'gn.h.ok' | 'gn.h.expired' | 'gn.h.fail'; cls: string }> = {
   queued: { text: 'gn.h.queued', cls: 'pill pill-mute' },
@@ -158949,7 +159776,7 @@ const RESTART_STATUS: Record<string, { text: 'gn.rr.o.counting' | 'gn.rr.o.done'
 const LINK_TEXT: Record<string, 'gn.jn.reg' | 'gn.jn.login' | 'gn.jn.unlink'> = { game_register: 'gn.jn.reg', game_login: 'gn.jn.login', game_unlink: 'gn.jn.unlink' };
 
 /** everything the plugin did in one list: messages (by hand, by a rule, from Discord), restarts, linked players */
-export function JournalTab({ onReuse }: { onReuse: (text: string) => void }) {
+export function JournalTab({ onReuse, onPlayer }: { onReuse: (text: string) => void; onPlayer: (nick: string) => void }) {
   useI18n();
   const [filter, setFilter] = useState<Filter>('all');
   const [items, setItems] = useState<Entry[] | null>(null);
@@ -158974,8 +159801,8 @@ export function JournalTab({ onReuse }: { onReuse: (text: string) => void }) {
                 <div className="flex flex-wrap items-center gap-2 text-sm font-bold">
                   {e.kind === 'restart'
                     ? <span className={RESTART_STATUS[e.status]?.cls ?? 'pill pill-mute'}>{RESTART_STATUS[e.status] ? t(RESTART_STATUS[e.status].text) : e.status}</span>
-                    : e.kind === 'kick'
-                      ? <span className="pill pill-warn">{t('gn.jn.kick')}</span>
+                    : e.kind === 'mod'
+                      ? <span className={e.status === 'unban' ? 'pill pill-ok' : 'pill pill-warn'}>{t(`gn.md.k.${e.status}` as 'gn.md.k.kick')}</span>
                       : e.kind === 'link'
                       ? <span className="pill pill-ok">{LINK_TEXT[e.status] ? t(LINK_TEXT[e.status]) : e.status}</span>
                       : <span className={MSG_STATUS[e.status]?.cls ?? 'pill pill-mute'}>{MSG_STATUS[e.status] ? t(MSG_STATUS[e.status].text) : e.status}</span>}
@@ -158984,10 +159811,17 @@ export function JournalTab({ onReuse }: { onReuse: (text: string) => void }) {
                 </div>
                 {e.kind === 'restart'
                   ? <p className="mt-1 text-sm">{t('gn.jn.restartLine', { n: e.text })}</p>
-                  : e.kind === 'link' || e.kind === 'kick'
+                  : e.kind === 'mod'
+                    ? (
+                      <p className="mt-1 text-sm">
+                        <button type="button" className="font-bold underline decoration-dotted underline-offset-2 hover:text-link" title={t('gn.md.history')} onClick={() => onPlayer(e.text)}>{e.text}</button>
+                        {e.error && <span className="font-semibold text-mute"> · {e.error}</span>}
+                      </p>
+                    )
+                  : e.kind === 'link'
                     ? <p className="mt-1 text-sm">{e.text}</p>
                     : <p className="mt-1 wrap-break-word text-sm"><Styled text={e.text} /></p>}
-                {(e.status === 'failed' || e.status === 'expired') && e.error && <p className="text-sm font-semibold text-danger">{e.error}</p>}
+                {e.kind !== 'mod' && (e.status === 'failed' || e.status === 'expired') && e.error && <p className="text-sm font-semibold text-danger">{e.error}</p>}
               </div>
               {(e.kind === 'message' || e.kind === 'auto') && <button type="button" className="btn btn-soft btn-sm" onClick={() => onReuse(e.text)}>{t('gn.reuse')}</button>}
             </li>
@@ -159056,6 +159890,127 @@ export function LinksTab() {
         </ul>
       )}
     </section>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/pages"
+  cat > "$APP_DIR/core-frontend/src/pages/GameNewsModeration.tsx" << '__COREGSM_EOF__'
+import { useEffect, useState } from 'react';
+import { api } from '../api';
+import { soon } from '../components/GameNewsParts';
+import { confirmDialog } from '../confirm';
+import { t, useI18n } from '../i18n';
+import type { ModBan, ModEntry, ModTop } from '../gameNews';
+import { errText, toast, usePoll } from '../ui';
+import { EmptyState, SubTabs } from './GameNewsUi';
+
+const FILTERS = ['all', 'kick', 'ban', 'warn', 'unban'] as const;
+type Filter = (typeof FILTERS)[number];
+
+export const MOD_PLAYER_KEY = 'coregsm.gn.modplayer';
+const KIND_CLS: Record<ModEntry['kind'], string> = { kick: 'pill pill-warn', ban: 'pill pill-warn', warn: 'pill pill-mute', unban: 'pill pill-ok' };
+
+/** «до 10.12 10:00» or «навсегда» */
+const untilText = (until: number): string => (until === 0 ? t('gn.md.forever') : t('gn.md.until', { time: new Date(until).toLocaleString([], { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) }));
+
+/**
+ * What administrators did from the game: the bans in force (with «Разбанить»), who was kicked, warned and banned most, and the log with a
+ * search by nickname. A click on a nickname anywhere (here or in the journal) shows that player's history.
+ */
+export function ModerationTab() {
+  useI18n();
+  const [filter, setFilter] = useState<Filter>('all');
+  const [player, setPlayer] = useState(() => { try { return localStorage.getItem(MOD_PLAYER_KEY) ?? ''; } catch { return ''; } });
+  const [data, setData] = useState<{ bans: ModBan[]; log: ModEntry[]; top: ModTop[] } | null>(null);
+  // a nickname chosen elsewhere is used once
+  useEffect(() => { try { localStorage.removeItem(MOD_PLAYER_KEY); } catch { /* private mode */ } }, []);
+
+  const load = () => api<{ bans: ModBan[]; log: ModEntry[]; top: ModTop[] }>(`/game-news/moderation?kind=${filter === 'all' ? '' : filter}&player=${encodeURIComponent(player.trim())}`).then(setData).catch(() => undefined);
+  usePoll(load, 10_000);
+  useEffect(() => { void load(); }, [filter, player]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const unban = async (b: ModBan) => {
+    if (!(await confirmDialog({ title: t('gn.md.unbanTitle', { nick: b.nick || b.masked }), text: t('gn.md.unbanText'), confirmLabel: t('gn.md.unban') }))) return;
+    try { await api(`/game-news/bans/${b.platformId}`, 'DELETE'); toast(t('gn.md.unbanned')); await load(); } catch (e) { toast(errText(e as Error), 'err'); }
+  };
+  const name = (nick: string) => (
+    <button type="button" className="font-bold underline decoration-dotted underline-offset-2 hover:text-link" title={t('gn.md.history')} onClick={() => setPlayer(nick)}>{nick || '—'}</button>
+  );
+
+  return (
+    <div className="space-y-5">
+      <section className="panel space-y-3 p-5">
+        <div>
+          <h3 className="font-extrabold">{t('gn.md.bans')}</h3>
+          <p className="text-sm font-semibold text-mute">{t('gn.md.bansNote')}</p>
+        </div>
+        {data == null && <div className="skeleton h-16 rounded-xl" aria-busy="true" />}
+        {data && data.bans.length === 0 && <EmptyState icon="⛔" title={t('gn.md.bansEmpty')} hint={t('gn.md.bansEmptyHint')} />}
+        {data && data.bans.length > 0 && (
+          <ul className="divide-y divide-line">
+            {data.bans.map((b) => (
+              <li key={b.platformId} className="flex flex-wrap items-center gap-x-4 gap-y-1 py-3">
+                <div className="min-w-0 flex-1 basis-56">
+                  <div className="flex flex-wrap items-center gap-2">
+                    {name(b.nick)}
+                    <span className={b.kind === 'block' ? 'pill pill-mute' : 'pill pill-warn'}>{b.kind === 'block' ? t('gn.md.block') : untilText(b.until)}</span>
+                  </div>
+                  <div className="text-sm font-semibold text-mute">{b.masked} · {b.reason || '—'} · {b.admin || '—'} · {soon(b.createdAt)}</div>
+                </div>
+                <button type="button" className="btn btn-soft btn-sm" onClick={() => void unban(b)}>{t('gn.md.unban')}</button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      {data && data.top.length > 0 && (
+        <section className="panel space-y-3 p-5">
+          <h3 className="font-extrabold">{t('gn.md.top')}</h3>
+          <ul className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+            {data.top.map((p) => (
+              <li key={p.platformId} className="flex items-center gap-3 rounded-xl border border-line px-3 py-2">
+                <span aria-hidden className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-soft text-sm font-extrabold">{(p.nick || '?').slice(0, 1).toUpperCase()}</span>
+                <div className="min-w-0 flex-1">
+                  <div className="truncate">{name(p.nick)}</div>
+                  <div className="text-xs font-semibold text-mute">{t('gn.md.counts', { k: p.kicks, w: p.warns, b: p.bans })} · {soon(p.last)}</div>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      <section className="panel space-y-3 p-5">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h3 className="font-extrabold">{t('gn.md.log')}</h3>
+          <div className="flex items-center gap-2">
+            <input className="input w-56" value={player} placeholder={t('gn.md.search')} aria-label={t('gn.md.search')} onChange={(e) => setPlayer(e.target.value)} />
+            {player && <button type="button" className="btn btn-ghost btn-sm" onClick={() => setPlayer('')}>{t('gn.md.clear')}</button>}
+          </div>
+        </div>
+        <SubTabs label={t('gn.md.log')} value={filter} onChange={setFilter} items={FILTERS.map((f) => ({ id: f, label: t(`gn.md.f.${f}` as 'gn.md.f.all') }))} />
+        {data == null && <div className="skeleton h-24 rounded-xl" aria-busy="true" />}
+        {data && data.log.length === 0 && <EmptyState icon="🗒" title={t('gn.md.logEmpty')} hint={t('gn.md.logEmptyHint')} />}
+        {data && data.log.length > 0 && (
+          <ul className="divide-y divide-line">
+            {data.log.map((e) => (
+              <li key={e.id} className="flex flex-wrap items-start gap-x-3 gap-y-1 py-3">
+                <span className={KIND_CLS[e.kind]}>{t(`gn.md.k.${e.kind}` as 'gn.md.k.kick')}</span>
+                <div className="min-w-0 flex-1 basis-56">
+                  <div className="flex flex-wrap items-center gap-2 text-sm">
+                    {name(e.nick)}
+                    {e.kind === 'ban' && <span className="font-semibold text-mute">{untilText(e.until)}</span>}
+                    <span className="font-semibold text-mute">{e.serverName && `${e.serverName} · `}{soon(e.ts)} · {e.admin || '—'}</span>
+                  </div>
+                  {e.reason && <p className="wrap-break-word text-sm">{e.reason}</p>}
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+    </div>
   );
 }
 __COREGSM_EOF__

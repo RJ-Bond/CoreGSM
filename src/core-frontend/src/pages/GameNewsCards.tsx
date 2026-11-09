@@ -6,11 +6,11 @@ import { ChatLines, NewsEditor, NewsPreview } from '../components/NewsEditor';
 import { confirmDialog } from '../confirm';
 import { t, useI18n } from '../i18n';
 import {
-  ANSI_COLORS, CHAT_KINDS, CHAT_PRESETS, SWATCHES, commandLine, kickLine, DEFAULT_KICK, WELCOME_STYLES, WELCOME_VARIABLES, composeLine, isHex, validateNews,
+  ANSI_COLORS, CHAT_KINDS, CHAT_PRESETS, SWATCHES, commandLine, kickLine, modLine, DEFAULT_KICK, WELCOME_STYLES, WELCOME_VARIABLES, composeLine, isHex, validateNews,
   type AnsiColor, type ChatColors, type ChatKind, type ChatSettings, type Extras, type JoinLeave, type KickSettings, type RegisterSettings, type Welcome, type WelcomeStyle,
 } from '../gameNews';
 import { ScopeNote, useScope } from './GameNewsScope';
-import { WithPreview } from './GameNewsUi';
+import { EmptyState, SubTabs, WithPreview } from './GameNewsUi';
 import { ChannelName, ChannelPicker } from '../components/ChannelPicker';
 import { Field, SaveBadge, errText, toast, useAutosave } from '../ui';
 
@@ -293,29 +293,43 @@ export function RegisterCard({ initial }: { initial: RegisterSettings }) {
 }
 
 /**
- * The .kick command of the game: how it reads in the chat (words and colours of the nickname, the reason and the administrator),
- * what it asks for (a reason, a pause between kicks) and what it refuses (to kick an administrator). Everything is set here.
+ * Moderation from the game (.kick, .ban, .warn, .unban): how it reads in the chat (words and colours of the nickname, the reason and the
+ * administrator), what it asks for and refuses, what the player is told in private, how long a warning counts, the short names of reasons.
+ * Everything is set here; one card, one setting, four parts.
  */
 export function KickCard({ initial }: { initial: KickSettings }) {
   useI18n();
   const sc = useScope();
   const [f, setF] = useState<KickSettings>(initial);
   const [saved, setSaved] = useState<KickSettings>(initial);
+  const [part, setPart] = useState<'kick' | 'ban' | 'warn' | 'reasons'>('kick');
   const set = <K extends keyof KickSettings>(k: K, v: KickSettings[K]) => setF((x) => ({ ...x, [k]: v }));
   const auto = useAutosave({
     value: f,
     saved,
     delay: 900,
     validate: (v) => {
-      if (!v.template.trim() || !v.defaultReason.trim()) return t('gn.hint.text');
+      if ([v.template, v.banTemplate, v.warnTemplate, v.unbanTemplate, v.banJoinText, v.blockJoinText, v.notifyText, v.defaultReason].some((x) => !x.trim())) return t('gn.hint.text');
       if (![v.textColor, v.nameColor, v.reasonColor, v.adminColor].every(isHex)) return t('gn.jl.badColor');
+      if (v.reasons.some((r) => !r.key.trim() || !r.text.trim())) return t('gn.kk.reasonEmpty');
       return null;
     },
     save: async (v) => { await api(`/game-news/kick-settings${sc.q}`, 'PUT', v); setSaved(v); sc.changed(); },
   });
   const safe = (v: KickSettings): KickSettings => ({ ...v, textColor: isHex(v.textColor) ? v.textColor : DEFAULT_KICK.textColor, nameColor: isHex(v.nameColor) ? v.nameColor : DEFAULT_KICK.nameColor, reasonColor: isHex(v.reasonColor) ? v.reasonColor : DEFAULT_KICK.reasonColor, adminColor: isHex(v.adminColor) ? v.adminColor : DEFAULT_KICK.adminColor });
-  const sample = (reason: string) => kickLine(safe(f), 'WhiteLegioN', reason, 'Админ');
+  const sv = safe(f);
+  const reasonText = f.reasons[0]?.text ?? f.defaultReason;
+  const priv = (text: string, vars: { reason?: string; n?: number; limit?: number; until?: string; left?: string }) =>
+    modLine({ ...sv, nameColor: sv.textColor, adminColor: sv.textColor, reasonColor: '#FFCC33' }, text.replace(/\{until\}/g, vars.until ?? '').replace(/\{left\}/g, vars.left ?? ''), { reason: vars.reason, n: vars.n, limit: vars.limit });
   const [pickLog, setPickLog] = useState(false);
+  const varsAll = [{ name: 'name', example: 'WhiteLegioN' }, { name: 'reason', example: reasonText }, { name: 'admin', example: 'Админ' }];
+
+  const switchRow = (key: 'requireReason' | 'protectAdmins' | 'announce' | 'notifyPlayer', label: Parameters<typeof t>[0], note: Parameters<typeof t>[0]) => (
+    <label key={key} className="flex items-start gap-3 font-bold">
+      <Switch className="mt-0.5" checked={f[key]} onChange={(v) => set(key, v)} />
+      <span>{t(label)}<span className="block text-sm font-semibold text-mute">{t(note)}</span></span>
+    </label>
+  );
 
   return (
     <FoldCard
@@ -333,61 +347,142 @@ export function KickCard({ initial }: { initial: KickSettings }) {
         {t('gn.kk.enabled')}
       </label>
 
-      <WithPreview
-        preview={(
-          <>
-            <ChatLines lines={f.announce ? [sample('спам'), sample(f.defaultReason)] : []} />
-            {!f.announce && <p className="text-sm font-semibold text-mute">{t('gn.kk.quiet')}</p>}
-          </>
-        )}
-      >
-        <Field label={t('gn.kk.template')}>
-          <AutoText value={f.template} maxLength={300} onChange={(e) => set('template', e.target.value)} />
-        </Field>
-        <VarChips
-          vars={[{ name: 'name', example: 'WhiteLegioN' }, { name: 'reason', example: 'спам' }, { name: 'admin', example: 'Админ' }]}
-          onPick={(v) => set('template', `${f.template} ${v}`.trim())}
-        />
-        <div className="grid gap-4 sm:grid-cols-2">
-          <ColorField label={t('gn.kk.textColor')} value={f.textColor} gameHex={DEFAULT_KICK.textColor} onChange={(v) => set('textColor', v)} />
-          <ColorField label={t('gn.kk.nameColor')} value={f.nameColor} gameHex={DEFAULT_KICK.nameColor} onChange={(v) => set('nameColor', v)} />
-          <ColorField label={t('gn.kk.reasonColor')} value={f.reasonColor} gameHex={DEFAULT_KICK.reasonColor} onChange={(v) => set('reasonColor', v)} />
-          <ColorField label={t('gn.kk.adminColor')} value={f.adminColor} gameHex={DEFAULT_KICK.adminColor} onChange={(v) => set('adminColor', v)} />
+      <SubTabs
+        label={t('gn.kk.title')}
+        value={part}
+        onChange={setPart}
+        items={[{ id: 'kick', label: t('gn.kk.p.kick') }, { id: 'ban', label: t('gn.kk.p.ban') }, { id: 'warn', label: t('gn.kk.p.warn') }, { id: 'reasons', label: t('gn.kk.p.reasons'), badge: f.reasons.length }]}
+      />
+
+      {part === 'kick' && (
+        <div className="space-y-4">
+          <WithPreview
+            preview={(
+              <>
+                <ChatLines lines={f.announce ? [kickLine(sv, 'WhiteLegioN', reasonText, 'Админ'), kickLine(sv, 'WhiteLegioN', f.defaultReason, 'Админ')] : []} />
+                {f.notifyPlayer && <ChatLines lines={[priv(f.notifyText, { reason: reasonText })]} />}
+                {!f.announce && <p className="text-sm font-semibold text-mute">{t('gn.kk.quiet')}</p>}
+              </>
+            )}
+          >
+            <Field label={t('gn.kk.template')}>
+              <AutoText value={f.template} maxLength={300} onChange={(e) => set('template', e.target.value)} />
+            </Field>
+            <VarChips vars={varsAll} onPick={(v) => set('template', `${f.template} ${v}`.trim())} />
+            <div className="grid gap-4 sm:grid-cols-2">
+              <ColorField label={t('gn.kk.textColor')} value={f.textColor} gameHex={DEFAULT_KICK.textColor} onChange={(v) => set('textColor', v)} />
+              <ColorField label={t('gn.kk.nameColor')} value={f.nameColor} gameHex={DEFAULT_KICK.nameColor} onChange={(v) => set('nameColor', v)} />
+              <ColorField label={t('gn.kk.reasonColor')} value={f.reasonColor} gameHex={DEFAULT_KICK.reasonColor} onChange={(v) => set('reasonColor', v)} />
+              <ColorField label={t('gn.kk.adminColor')} value={f.adminColor} gameHex={DEFAULT_KICK.adminColor} onChange={(v) => set('adminColor', v)} />
+            </div>
+          </WithPreview>
+
+          <div className="space-y-2">
+            {switchRow('announce', 'gn.kk.announce', 'gn.kk.announceNote')}
+            {switchRow('notifyPlayer', 'gn.kk.notify', 'gn.kk.notifyNote')}
+          </div>
+          {f.notifyPlayer && (
+            <Field label={t('gn.kk.notifyText')}>
+              <AutoText value={f.notifyText} maxLength={300} onChange={(e) => set('notifyText', e.target.value)} />
+            </Field>
+          )}
+
+          <div className="grid gap-4 sm:grid-cols-3">
+            <Field label={t('gn.kk.defaultReason')}>
+              <input className="input" value={f.defaultReason} maxLength={100} onChange={(e) => set('defaultReason', e.target.value)} />
+            </Field>
+            <Field label={t('gn.kk.cooldown')}>
+              <input className="input w-32" type="number" min={0} max={3600} value={f.cooldownSec} onChange={(e) => set('cooldownSec', Number(e.target.value))} />
+            </Field>
+            <Field label={t('gn.kk.block')}>
+              <input className="input w-32" type="number" min={0} max={1440} value={f.rejoinBlockMin} onChange={(e) => set('rejoinBlockMin', Number(e.target.value))} />
+            </Field>
+          </div>
+          {f.rejoinBlockMin > 0 && (
+            <Field label={t('gn.kk.blockText')}>
+              <AutoText value={f.blockJoinText} maxLength={300} onChange={(e) => set('blockJoinText', e.target.value)} />
+            </Field>
+          )}
+
+          <div className="space-y-2">
+            {switchRow('requireReason', 'gn.kk.requireReason', 'gn.kk.requireReasonNote')}
+            {switchRow('protectAdmins', 'gn.kk.protect', 'gn.kk.protectNote')}
+          </div>
+
+          <div className="space-y-2 rounded-xl border border-line px-4 py-3">
+            <div className="font-extrabold">{t('gn.kk.logTitle')}</div>
+            <p className="text-sm font-semibold text-mute">{t('gn.kk.logNote')}</p>
+            <div className="flex flex-wrap items-center gap-2">
+              {f.logChannelId ? <ChannelName id={f.logChannelId} /> : <span className="pill pill-mute">{t('gn.kk.logNone')}</span>}
+              <button type="button" className="btn btn-soft btn-sm" onClick={() => setPickLog((v) => !v)}>{f.logChannelId ? t('gn.kk.logChange') : t('gn.kk.logPick')}</button>
+              {f.logChannelId && <button type="button" className="btn btn-ghost btn-sm" onClick={() => set('logChannelId', '')}>{t('gn.kk.logOff')}</button>}
+            </div>
+            {pickLog && <ChannelPicker id="kick-log" value={f.logChannelId} onChange={(v) => { if (/^\d{15,25}$/.test(v)) { set('logChannelId', v); setPickLog(false); } }} />}
+          </div>
         </div>
-      </WithPreview>
+      )}
 
-      <div className="grid gap-4 sm:grid-cols-2">
-        <Field label={t('gn.kk.defaultReason')}>
-          <input className="input" value={f.defaultReason} maxLength={100} onChange={(e) => set('defaultReason', e.target.value)} />
-        </Field>
-        <Field label={t('gn.kk.cooldown')}>
-          <input className="input w-32" type="number" min={0} max={3600} value={f.cooldownSec} onChange={(e) => set('cooldownSec', Number(e.target.value))} />
-        </Field>
-      </div>
+      {part === 'ban' && (
+        <WithPreview
+          preview={(
+            <>
+              <ChatLines lines={f.announce ? [modLine(sv, f.banTemplate, { name: 'WhiteLegioN', reason: reasonText, admin: 'Админ', time: t('gn.kk.sampleTime') }), modLine(sv, f.unbanTemplate, { name: 'WhiteLegioN', admin: 'Админ' })] : []} />
+              <ChatLines lines={[priv(f.banJoinText, { reason: reasonText, until: t('gn.kk.sampleUntil') })]} />
+            </>
+          )}
+        >
+          <p className="text-sm font-semibold text-mute">{t('gn.kk.banNote')}</p>
+          <Field label={t('gn.kk.banTemplate')}>
+            <AutoText value={f.banTemplate} maxLength={300} onChange={(e) => set('banTemplate', e.target.value)} />
+          </Field>
+          <VarChips vars={[...varsAll, { name: 'time', example: t('gn.kk.sampleTime') }]} onPick={(v) => set('banTemplate', `${f.banTemplate} ${v}`.trim())} />
+          <Field label={t('gn.kk.unbanTemplate')}>
+            <AutoText value={f.unbanTemplate} maxLength={300} onChange={(e) => set('unbanTemplate', e.target.value)} />
+          </Field>
+          <VarChips vars={[{ name: 'name', example: 'WhiteLegioN' }, { name: 'admin', example: 'Админ' }]} onPick={(v) => set('unbanTemplate', `${f.unbanTemplate} ${v}`.trim())} />
+          <Field label={t('gn.kk.banJoin')}>
+            <AutoText value={f.banJoinText} maxLength={300} onChange={(e) => set('banJoinText', e.target.value)} />
+          </Field>
+          <VarChips vars={[{ name: 'reason', example: reasonText }, { name: 'until', example: t('gn.kk.sampleUntil') }]} onPick={(v) => set('banJoinText', `${f.banJoinText} ${v}`.trim())} />
+        </WithPreview>
+      )}
 
-      <div className="space-y-2 rounded-xl border border-line px-4 py-3">
-        <div className="font-extrabold">{t('gn.kk.logTitle')}</div>
-        <p className="text-sm font-semibold text-mute">{t('gn.kk.logNote')}</p>
-        <div className="flex flex-wrap items-center gap-2">
-          {f.logChannelId ? <ChannelName id={f.logChannelId} /> : <span className="pill pill-mute">{t('gn.kk.logNone')}</span>}
-          <button type="button" className="btn btn-soft btn-sm" onClick={() => setPickLog((v) => !v)}>{f.logChannelId ? t('gn.kk.logChange') : t('gn.kk.logPick')}</button>
-          {f.logChannelId && <button type="button" className="btn btn-ghost btn-sm" onClick={() => set('logChannelId', '')}>{t('gn.kk.logOff')}</button>}
+      {part === 'warn' && (
+        <WithPreview preview={<ChatLines lines={f.announce ? [modLine(sv, f.warnTemplate, { name: 'WhiteLegioN', reason: reasonText, admin: 'Админ', n: 2, limit: f.warnLimit })] : []} />}>
+          <p className="text-sm font-semibold text-mute">{t('gn.kk.warnNote')}</p>
+          <Field label={t('gn.kk.warnTemplate')}>
+            <AutoText value={f.warnTemplate} maxLength={300} onChange={(e) => set('warnTemplate', e.target.value)} />
+          </Field>
+          <VarChips vars={[...varsAll, { name: 'n', example: '2' }, { name: 'limit', example: String(f.warnLimit) }]} onPick={(v) => set('warnTemplate', `${f.warnTemplate} ${v}`.trim())} />
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field label={t('gn.kk.warnLimit')}>
+              <input className="input w-32" type="number" min={0} max={20} value={f.warnLimit} onChange={(e) => set('warnLimit', Number(e.target.value))} />
+            </Field>
+            <Field label={t('gn.kk.warnDays')}>
+              <input className="input w-32" type="number" min={1} max={365} value={f.warnDays} onChange={(e) => set('warnDays', Number(e.target.value))} />
+            </Field>
+          </div>
+        </WithPreview>
+      )}
+
+      {part === 'reasons' && (
+        <div className="space-y-3">
+          <p className="text-sm font-semibold text-mute">{t('gn.kk.reasonsNote')}</p>
+          {f.reasons.length === 0 && <EmptyState icon="📝" title={t('gn.kk.reasonsEmpty')} hint={t('gn.kk.reasonsEmptyHint')} />}
+          <ul className="space-y-2">
+            {f.reasons.map((r, i) => (
+              <li key={i} className="flex flex-wrap items-center gap-2">
+                <input className="input w-20 font-mono" value={r.key} maxLength={12} aria-label={t('gn.kk.reasonKey')} placeholder="1" onChange={(e) => set('reasons', f.reasons.map((x, j) => (j === i ? { ...x, key: e.target.value } : x)))} />
+                <span aria-hidden className="text-mute">→</span>
+                <input className="input min-w-0 flex-1 basis-56" value={r.text} maxLength={100} aria-label={t('gn.kk.reasonText')} placeholder={t('gn.kk.reasonText')} onChange={(e) => set('reasons', f.reasons.map((x, j) => (j === i ? { ...x, text: e.target.value } : x)))} />
+                <button type="button" className="btn btn-ghost btn-sm" onClick={() => set('reasons', f.reasons.filter((_, j) => j !== i))}>{t('gn.rs.delete')}</button>
+              </li>
+            ))}
+          </ul>
+          <button type="button" className="btn btn-soft btn-sm" disabled={f.reasons.length >= 20} onClick={() => set('reasons', [...f.reasons, { key: String(f.reasons.length + 1), text: '' }])}>{t('gn.kk.reasonAdd')}</button>
+          <p className="text-sm font-semibold text-mute">{t('gn.kk.reasonsEx', { key: f.reasons[0]?.key ?? '1', text: reasonText })}</p>
         </div>
-        {pickLog && <ChannelPicker id="kick-log" value={f.logChannelId} onChange={(v) => { if (/^\d{15,25}$/.test(v)) { set('logChannelId', v); setPickLog(false); } }} />}
-      </div>
-
-      <div className="space-y-2">
-        {([
-          ['requireReason', 'gn.kk.requireReason', 'gn.kk.requireReasonNote'],
-          ['protectAdmins', 'gn.kk.protect', 'gn.kk.protectNote'],
-          ['announce', 'gn.kk.announce', 'gn.kk.announceNote'],
-        ] as const).map(([key, label, note]) => (
-          <label key={key} className="flex items-start gap-3 font-bold">
-            <Switch className="mt-0.5" checked={f[key]} onChange={(v) => set(key, v)} />
-            <span>{t(label)}<span className="block text-sm font-semibold text-mute">{t(note)}</span></span>
-          </label>
-        ))}
-      </div>
+      )}
       {auto.invalid && <p className="text-sm font-semibold text-danger">{auto.error}</p>}
     </FoldCard>
   );

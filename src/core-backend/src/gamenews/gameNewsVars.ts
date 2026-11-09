@@ -124,3 +124,10 @@ export function varsFor(serverId: number, now: number): Vars {
   for (const k of VARIABLES) if (!v[k]) v[k] = '—';
   return v;
 }
+
+/** «10.12.2026» and «10:00» in the time zone of the panel */
+export function visitStamp(ts: number): { date: string; time: string } {
+  const tz = panelTz();
+  const f = (o: Intl.DateTimeFormatOptions) => { try { return new Intl.DateTimeFormat('ru-RU', { timeZone: tz, hourCycle: 'h23', ...o }).format(new Date(ts)); } catch { return new Intl.DateTimeFormat('ru-RU', { timeZone: 'UTC', hourCycle: 'h23', ...o }).format(new Date(ts)); } };
+  return { date: f({ day: '2-digit', month: '2-digit', year: 'numeric' }), time: f({ hour: '2-digit', minute: '2-digit' }) };
+}
