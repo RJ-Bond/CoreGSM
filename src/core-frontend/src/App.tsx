@@ -437,7 +437,7 @@ export default function App() {
           {/* desktop navigation; on phones the same sections live in the bottom bar */}
           <nav className="seg hdr-nav hidden md:inline-flex" aria-label={t('nav.sections')}>
             {visible.map((p) => (
-              <a key={p.id} href={p.id === 'admin' ? adminHref : `/${p.id}`} aria-current={page === p.id ? 'page' : undefined} className="seg-item py-1.5!">
+              <a key={p.id} href={p.id === 'admin' ? adminHref : `/${p.id}`} aria-current={page === p.id ? 'page' : undefined} title={t(p.label)} className="seg-item py-1.5!">
                 {p.icon()}<span>{t(p.label)}</span>
                 {p.id === 'news' && page !== 'news' && <NewsUnreadDot />}
                 {p.id === 'admin' && dot}
