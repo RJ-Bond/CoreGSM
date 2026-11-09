@@ -321,6 +321,8 @@ export default function App() {
   const livePlayers = usePanelPulse(shellOk.current && access.publicPanel !== false);
   const [titleDetail, setTitleDetail] = useState<string | null>(null);
   useEffect(() => onPageTitleDetail(setTitleDetail), []);
+  // the page is on the root element: a look may lay out the shell differently for the admin area
+  useEffect(() => { document.documentElement.dataset.page = page; }, [page]);
   useEffect(() => {
     const title = boot.ready && sectionTitle ? tabTitle(sectionTitle, page === 'servers' ? titleDetail : null, access.brand.name) : access.brand.name;
     document.title = livePlayers > 0 && shellOk.current ? `(${livePlayers}) ${title}` : title;
@@ -426,7 +428,7 @@ export default function App() {
       </a>
       <RouteProgress routeKey={routeKey} />
       <Tooltips />
-      <div className={`mx-auto min-h-full ${page === 'admin' ? 'max-w-[100rem]' : 'max-w-6xl'} px-3 pb-[calc(6.5rem+env(safe-area-inset-bottom,0px))] pt-3 sm:px-6 sm:pt-4 md:pb-16`}>
+      <div className={`app-wrap mx-auto min-h-full ${page === 'admin' ? 'max-w-[100rem]' : 'max-w-6xl'} px-3 pb-[calc(6.5rem+env(safe-area-inset-bottom,0px))] pt-3 sm:px-6 sm:pt-4 md:pb-16`}>
         <header className="hdr glass sticky top-2 z-30 mb-5 flex items-center gap-x-2 rounded-ui-xl py-2 pl-3 pr-2 sm:top-3 md:mb-7 md:gap-x-3 md:pl-4">
           <a href="/servers" aria-label={access.brand.name} className="flex min-w-0 items-center gap-2.5 text-xl font-black tracking-tight max-md:flex-1 sm:text-[22px] md:max-w-60 md:shrink-0">
             <Logo size={34} alt="" />

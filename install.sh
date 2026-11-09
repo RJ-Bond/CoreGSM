@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="09e059242070"
+COREGSM_BUILD="420ba4390ccb"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.99"
+COREGSM_VERSION="1.2.0"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -48570,6 +48570,7 @@ __COREGSM_EOF__
         "@fontsource-variable/golos-text": "^5.3.0",
         "@fontsource-variable/jetbrains-mono": "^5.3.0",
         "@fontsource-variable/literata": "^5.3.0",
+        "@fontsource-variable/manrope": "^5.3.0",
         "@radix-ui/react-dialog": "^1.3.1",
         "@radix-ui/react-dropdown-menu": "^2.2.1",
         "@radix-ui/react-popover": "^1.3.1",
@@ -48758,6 +48759,15 @@ __COREGSM_EOF__
       "version": "5.3.0",
       "resolved": "https://registry.npmjs.org/@fontsource-variable/literata/-/literata-5.3.0.tgz",
       "integrity": "sha512-1Jw7xvOcoGyB83lxB2nG4bfNbqtX2/TTbdh9sHAOmU064SvmSdulDtA5RBu5JYWf64fdaKX7xU+z3GO1T2bCHA==",
+      "license": "OFL-1.1",
+      "funding": {
+        "url": "https://github.com/sponsors/ayuhito"
+      }
+    },
+    "node_modules/@fontsource-variable/manrope": {
+      "version": "5.3.0",
+      "resolved": "https://registry.npmjs.org/@fontsource-variable/manrope/-/manrope-5.3.0.tgz",
+      "integrity": "sha512-6D5dgokHsWDDMtmXHznKa0hK229NN+1a4BLPmUCLqcO1Pw5EEhWY5RFt0AcXnVRAljFFPfRtLkJePQj6LSsV6g==",
       "license": "OFL-1.1",
       "funding": {
         "url": "https://github.com/sponsors/ayuhito"
@@ -52929,6 +52939,7 @@ __COREGSM_EOF__
     "@fontsource-variable/golos-text": "^5.3.0",
     "@fontsource-variable/jetbrains-mono": "^5.3.0",
     "@fontsource-variable/literata": "^5.3.0",
+    "@fontsource-variable/manrope": "^5.3.0",
     "@radix-ui/react-dialog": "^1.3.1",
     "@radix-ui/react-dropdown-menu": "^2.2.1",
     "@radix-ui/react-popover": "^1.3.1",
@@ -120644,6 +120655,8 @@ export default function App() {
   const livePlayers = usePanelPulse(shellOk.current && access.publicPanel !== false);
   const [titleDetail, setTitleDetail] = useState<string | null>(null);
   useEffect(() => onPageTitleDetail(setTitleDetail), []);
+  // the page is on the root element: a look may lay out the shell differently for the admin area
+  useEffect(() => { document.documentElement.dataset.page = page; }, [page]);
   useEffect(() => {
     const title = boot.ready && sectionTitle ? tabTitle(sectionTitle, page === 'servers' ? titleDetail : null, access.brand.name) : access.brand.name;
     document.title = livePlayers > 0 && shellOk.current ? `(${livePlayers}) ${title}` : title;
@@ -120749,7 +120762,7 @@ export default function App() {
       </a>
       <RouteProgress routeKey={routeKey} />
       <Tooltips />
-      <div className={`mx-auto min-h-full ${page === 'admin' ? 'max-w-[100rem]' : 'max-w-6xl'} px-3 pb-[calc(6.5rem+env(safe-area-inset-bottom,0px))] pt-3 sm:px-6 sm:pt-4 md:pb-16`}>
+      <div className={`app-wrap mx-auto min-h-full ${page === 'admin' ? 'max-w-[100rem]' : 'max-w-6xl'} px-3 pb-[calc(6.5rem+env(safe-area-inset-bottom,0px))] pt-3 sm:px-6 sm:pt-4 md:pb-16`}>
         <header className="hdr glass sticky top-2 z-30 mb-5 flex items-center gap-x-2 rounded-ui-xl py-2 pl-3 pr-2 sm:top-3 md:mb-7 md:gap-x-3 md:pl-4">
           <a href="/servers" aria-label={access.brand.name} className="flex min-w-0 items-center gap-2.5 text-xl font-black tracking-tight max-md:flex-1 sm:text-[22px] md:max-w-60 md:shrink-0">
             <Logo size={34} alt="" />
@@ -121975,6 +121988,7 @@ export function applyAppearance(a: Appearance, root: HTMLElement = document.docu
   set('data-lite', a.liteData || networkWantsLite() ? '1' : null);
   set('data-oled', a.oled ? '1' : null);
   set('data-ember', a.ember ? '1' : null);
+  if (a.ember) void import('@fontsource-variable/manrope/wght.css').catch(() => undefined);
 }
 
 let current: Appearance = typeof window === 'undefined' ? DEFAULT_APPEARANCE : read();
@@ -137335,6 +137349,51 @@ export default function Passport({ d }: { d: PassportData }) {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/server"
+  cat > "$APP_DIR/core-frontend/src/components/server/PlayersBars.tsx" << '__COREGSM_EOF__'
+import { useMemo } from 'react';
+import { t, useI18n } from '../../i18n';
+import { bucketPeaks, highestBar, type BarPoint } from './barsLogic';
+
+const clock = (ts: number) => new Date(ts).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+const day = (ts: number) => new Date(ts).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
+
+/**
+ * The «Ember» chart of the players: a column for every hour (or six hours, or a day), the highest one in the accent colour
+ * with a glow, the rest in graphite. A column says its time and its peak when the pointer is on it.
+ */
+export default function PlayersBars({ points, hours, max, now }: { points: BarPoint[]; hours: number; max: number; now: number }) {
+  useI18n();
+  const bars = useMemo(() => bucketPeaks(points, hours, now), [points, hours, now]);
+  const top = highestBar(bars);
+  const scale = Math.max(1, max, ...bars.map((b) => b.peak ?? 0));
+  const label = (ts: number) => (hours <= 24 ? clock(ts) : day(ts));
+  const where = (b: { from: number; to: number }) => (hours <= 24 ? `${clock(b.from)}–${clock(b.to)}` : `${day(b.from)}`);
+  const summary = top >= 0 ? t('srv.bars.summary', { n: bars[top].peak ?? 0, when: where(bars[top]) }) : t('srv.bars.none');
+  return (
+    <div className="pb">
+      <div className="pb-cols" role="img" aria-label={summary}>
+        {bars.map((b, i) => (
+          <i
+            key={b.from}
+            className={`pb-bar ${i === top ? 'is-top' : ''} ${b.peak == null ? 'is-empty' : ''}`}
+            style={{ height: `${b.peak == null ? 4 : Math.max(6, Math.round((b.peak / scale) * 100))}%` }}
+            title={b.peak == null ? `${where(b)} · ${t('srv.bars.noData')}` : `${where(b)} · ${t('srv.bars.peak', { n: b.peak })}`}
+          />
+        ))}
+      </div>
+      <div className="pb-ax" aria-hidden>
+        <span>{label(bars[0].from)}</span>
+        <span>{label(bars[Math.floor(bars.length / 4)].from)}</span>
+        <span>{label(bars[Math.floor(bars.length / 2)].from)}</span>
+        <span>{label(bars[Math.floor((bars.length * 3) / 4)].from)}</span>
+        <span>{t('srv.bars.now')}</span>
+      </div>
+      <p className="pb-note">{summary}</p>
+    </div>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/server"
   cat > "$APP_DIR/core-frontend/src/components/server/PlayersList.tsx" << '__COREGSM_EOF__'
 import { FollowButton } from '../profile/Follows';
 import { Fragment, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
@@ -138286,7 +138345,8 @@ export default function ServerTabs({ id, tab, counts, toc, mini }: { id: number;
   useLayoutEffect(() => {
     const hdr = document.querySelector<HTMLElement>('header.glass');
     if (!hdr) return;
-    const measure = () => setTop(Math.round(parseFloat(getComputedStyle(hdr).top || '0') + hdr.offsetHeight + 8));
+    // a header laid out as a side column (the Ember look) takes no height from the top of the page
+    const measure = () => setTop(getComputedStyle(hdr).position === 'fixed' && hdr.offsetHeight > window.innerHeight * 0.6 ? 12 : Math.round(parseFloat(getComputedStyle(hdr).top || '0') + hdr.offsetHeight + 8));
     measure();
     const ro = new ResizeObserver(measure);
     ro.observe(hdr);
@@ -138579,6 +138639,70 @@ export default function SubscribeMenu({
       )}
     </>
   );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/server"
+  cat > "$APP_DIR/core-frontend/src/components/server/barsLogic.test.ts" << '__COREGSM_EOF__'
+import { describe, expect, it } from 'vitest';
+import { barCount, bucketPeaks, highestBar } from './barsLogic';
+
+const H = 3_600_000;
+
+describe('the bars of the players chart', () => {
+  it('has a bar an hour for a day, and more bars for longer periods', () => {
+    expect(barCount(24)).toBe(24);
+    expect(barCount(168)).toBe(28);
+    expect(barCount(720)).toBe(30);
+  });
+  it('takes the peak of every bucket and ignores offline samples and samples outside of the period', () => {
+    const now = 100 * H;
+    const bars = bucketPeaks([
+      { ts: now - 23.5 * H, players: 5 },
+      { ts: now - 23.2 * H, players: 9 },
+      { ts: now - 23.1 * H, players: 20, online: false },
+      { ts: now - 0.5 * H, players: 14 },
+      { ts: now - 30 * H, players: 99 },
+    ], 24, now);
+    expect(bars).toHaveLength(24);
+    expect(bars[0].peak).toBe(9);
+    expect(bars[23].peak).toBe(14);
+    expect(bars.filter((b) => b.peak != null)).toHaveLength(2);
+  });
+  it('finds the highest bar, the latest one on a tie, and none without data', () => {
+    expect(highestBar([{ from: 0, to: 1, peak: 3 }, { from: 1, to: 2, peak: 8 }, { from: 2, to: 3, peak: 8 }, { from: 3, to: 4, peak: null }])).toBe(2);
+    expect(highestBar([{ from: 0, to: 1, peak: null }])).toBe(-1);
+  });
+});
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/server"
+  cat > "$APP_DIR/core-frontend/src/components/server/barsLogic.ts" << '__COREGSM_EOF__'
+/** The bars of the «Players» chart: the period cut into equal buckets, the peak of every bucket, the highest one marked. */
+export interface BarPoint { ts: number; players: number | null; online?: boolean | number }
+export interface Bar { from: number; to: number; peak: number | null }
+
+/** 24 bars for a day (one an hour), 28 for a week, 30 for a month */
+export const barCount = (hours: number): number => (hours <= 24 ? 24 : hours <= 168 ? 28 : 30);
+
+export function bucketPeaks(points: BarPoint[], hours: number, now: number): Bar[] {
+  const n = barCount(hours);
+  const span = hours * 3_600_000;
+  const start = now - span;
+  const step = span / n;
+  const bars: Bar[] = Array.from({ length: n }, (_, i) => ({ from: start + i * step, to: start + (i + 1) * step, peak: null }));
+  for (const p of points) {
+    if (p.players == null || p.online === false || p.online === 0 || p.ts < start || p.ts > now) continue;
+    const i = Math.min(n - 1, Math.floor((p.ts - start) / step));
+    const b = bars[i];
+    if (b.peak == null || p.players > b.peak) b.peak = p.players;
+  }
+  return bars;
+}
+
+/** the index of the highest bar (the latest one when several are equal), -1 when there is no data */
+export function highestBar(bars: Bar[]): number {
+  let at = -1;
+  bars.forEach((b, i) => { if (b.peak != null && (at < 0 || b.peak >= (bars[at].peak as number))) at = i; });
+  return at;
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/server"
@@ -145165,6 +145289,11 @@ const en: Record<keyof typeof ru, string> = {
   'srv.chart.titlePing': 'Ping',
   'srv.chart.axisPlayers': 'Players on the server',
   'srv.chart.axisPing': 'Ping, ms',
+  'srv.bars.summary': 'Peak {n}, {when}',
+  'srv.bars.none': 'No data for the period',
+  'srv.bars.noData': 'no data',
+  'srv.bars.peak': 'peak {n}',
+  'srv.bars.now': 'now',
   'srv.chart.axisX': 'Horizontal: time (your local time), {period}',
   'srv.chart.p24': 'last 24 hours',
   'srv.chart.p7': 'last 7 days',
@@ -150071,6 +150200,11 @@ const ru = {
   'srv.chart.titlePing': 'Пинг',
   'srv.chart.axisPlayers': 'Игроков на сервере, чел.',
   'srv.chart.axisPing': 'Пинг, мс',
+  'srv.bars.summary': 'Пик {n}, {when}',
+  'srv.bars.none': 'Нет данных за период',
+  'srv.bars.noData': 'нет данных',
+  'srv.bars.peak': 'пик {n}',
+  'srv.bars.now': 'сейчас',
   'srv.chart.axisX': 'По горизонтали: время (ваше локальное), {period}',
   'srv.chart.p24': 'последние 24 часа',
   'srv.chart.p7': 'последние 7 дней',
@@ -164038,6 +164172,7 @@ export default function ResetPassword({ token }: { token: string }) {
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/ServerDetail.tsx" << '__COREGSM_EOF__'
+import PlayersBars from '../components/server/PlayersBars';
 import { useAppearance } from '../appearance';
 import { setPageTitleDetail } from '../pageTitle';
 import ServerReviews from '../components/server/Reviews';
@@ -164497,7 +164632,9 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
   // a server that is down: instead of a chart of zeros, since when and why plus the availability strip
   const down = !s.online && s.hasStatus;
   const outage = down ? offlineSince(events, points) : null;
-  const chartEl = (withSeries: boolean) => (
+  const chartEl = (withSeries: boolean) => ember && !withSeries ? (
+    <PlayersBars points={points} hours={data.hours} max={s.maxPlayers} now={nowTs} />
+  ) : (
     <HistoryChart points={points} hours={data.hours} events={events} title={s.name} game={gameLabel(s.game)} max={s.maxPlayers} color={series === 'ping' ? 'rgb(var(--link))' : ember ? 'rgb(var(--brand-2))' : calmSeriesColor(accent)} series={withSeries ? series : 'players'} loading={chartLoading} baseline={data.baseline ?? null} />
   );
   const chartTile = (i: number, withSeries: boolean) => (
@@ -171580,7 +171717,7 @@ __COREGSM_EOF__
   --field: 150 146 140;
   --ink: 23 22 26;
   --mute: 82 79 88;
-  --bad: 168 30 30;
+  --bad: 150 24 24;
   --warn: 130 82 0;
   --brand: 214 66 10 !important;
   --brand-hover: 176 52 6 !important;
@@ -171610,6 +171747,8 @@ __COREGSM_EOF__
   --field: 112 112 122;
   --ink: 244 243 241;
   --mute: 172 171 180;
+  --bad: 248 113 113;
+  --warn: 251 191 36;
   --brand: 214 66 10 !important;
   --brand-hover: 236 84 26 !important;
   --brand-2: 176 52 6 !important;
@@ -171632,6 +171771,8 @@ __COREGSM_EOF__
     --field: 112 112 122;
     --ink: 244 243 241;
     --mute: 172 171 180;
+    --bad: 248 113 113;
+    --warn: 251 191 36;
     --brand: 214 66 10 !important;
     --brand-hover: 236 84 26 !important;
     --brand-2: 176 52 6 !important;
@@ -171674,6 +171815,79 @@ __COREGSM_EOF__
 
 /* small captions are not made fainter by opacity: they sit on the tinted band of the hero and keep their contrast */
 :root[data-ember='1'] .pulse-ticks { opacity: 1; }
+
+/* ---------- the font ---------- */
+:root[data-ember='1'] { --font-sans: 'Manrope Variable', 'Golos Text Variable', system-ui, sans-serif; }
+
+/* ---------- the default logo takes the accent (the violet picture is turned to orange) ---------- */
+:root[data-ember='1'] img.logo-default { filter: hue-rotate(135deg) saturate(1.15); }
+
+/* ---------- the chart of the players: columns, the highest one is lit ---------- */
+.pb { display: flex; flex-direction: column; gap: 6px; }
+.pb-cols { display: flex; align-items: flex-end; gap: 5px; height: 220px; padding: 0 2px; border-bottom: 1px solid rgb(var(--line)); }
+.pb-bar { flex: 1 1 0; min-width: 0; border-radius: 6px 6px 0 0; background: rgb(var(--ink) / .14); transition: background-color var(--t-fast, .16s); }
+.pb-bar:hover { background: rgb(var(--ink) / .28); }
+.pb-bar.is-empty { background: rgb(var(--ink) / .06); }
+.pb-bar.is-top { background: linear-gradient(180deg, rgb(var(--brand-2)), rgb(var(--brand))); box-shadow: 0 0 24px -4px rgb(var(--brand) / .7); }
+.pb-ax { display: flex; justify-content: space-between; font-size: var(--fs-xs); font-weight: 600; color: rgb(var(--mute)); }
+.pb-note { margin: 0; font-size: var(--fs-sm); font-weight: 650; color: rgb(var(--mute)); }
+@media (max-width: 639px) { .pb-cols { height: 170px; gap: 3px; } }
+
+/* the hero of the community is tinted with the accent: a falling number is a step deeper red there in the light theme (the utility reads the colour at the root, so the colour itself is set) */
+:root[data-ember='1'][data-theme='light'] .cm-hero .text-bad { color: rgb(130 18 18); }
+@media (prefers-color-scheme: light) { :root[data-ember='1']:not([data-theme='dark']) .cm-hero .text-bad { color: rgb(130 18 18); } }
+
+/* ---------- the shell: the sections are a column on the left (wide screens, not the admin area, which has its own) ---------- */
+@media (min-width: 1100px) {
+  :root[data-ember='1']:not([data-page='admin']) { --emb-side: 248px; }
+  :root[data-ember='1']:not([data-page='admin']) header.hdr {
+    position: fixed; inset: 0 auto 0 0; width: var(--emb-side); z-index: 40;
+    display: flex; flex-direction: column; align-items: stretch; gap: 18px;
+    margin: 0; padding: 22px 14px 16px; border-radius: 0;
+    background: rgb(var(--card)); border: 0; border-right: 1px solid rgb(var(--line));
+    box-shadow: none; -webkit-backdrop-filter: none; backdrop-filter: none;
+  }
+  :root[data-ember='1']:not([data-page='admin']) header.hdr > a { max-width: none; padding: 0 8px; }
+  :root[data-ember='1']:not([data-page='admin']) .hdr-word { display: inline; }
+  :root[data-ember='1']:not([data-page='admin']) .hdr .seg.hdr-nav {
+    display: flex; flex-direction: column; align-items: stretch; gap: 4px;
+    width: 100%; max-width: none; padding: 0; overflow: visible; background: transparent; box-shadow: none;
+  }
+  /* the sliding pill of the old header becomes the caption of the group (the name of the navigation, in the language of the panel) */
+  :root[data-ember='1']:not([data-page='admin']) .hdr-nav::before {
+    position: static; display: block; width: auto; height: auto; transform: none; background: none; box-shadow: none;
+    content: attr(aria-label); padding: 2px 12px 8px; font-size: var(--fs-xs); font-weight: 700; color: rgb(var(--mute)); letter-spacing: .02em;
+  }
+  :root[data-ember='1']:not([data-page='admin']) .hdr-actions > a.btn { flex: 1 1 100%; justify-content: center; }
+  :root[data-ember='1']:not([data-page='admin']) .hdr-nav .seg-item {
+    justify-content: flex-start; width: 100%; padding: 10px 12px; border-radius: 12px; font-size: var(--fs-md); font-weight: 650; color: rgb(var(--mute)); box-shadow: none; background: transparent;
+  }
+  :root[data-ember='1']:not([data-page='admin']) .hdr-nav .seg-item:hover { background: rgb(var(--soft)); color: rgb(var(--ink)); }
+  :root[data-ember='1']:not([data-page='admin']) .hdr-nav .seg-item[aria-current='page'] { background: rgb(var(--soft)); color: rgb(var(--ink)); box-shadow: inset 0 0 0 1px rgb(var(--line)); }
+  :root[data-ember='1']:not([data-page='admin']) .hdr-nav .seg-item[aria-current='page'] > svg { color: rgb(var(--brand-hover)); opacity: 1; }
+  :root[data-ember='1']:not([data-page='admin']) .hdr > .hdr-actions { margin-top: auto; justify-self: stretch; flex-wrap: wrap; justify-content: flex-start; gap: 6px; padding-top: 14px; border-top: 1px solid rgb(var(--line)); }
+  :root[data-ember='1']:not([data-page='admin']) .hdr-sep { display: none; }
+  :root[data-ember='1']:not([data-page='admin']) .app-wrap { max-width: none; margin: 0; padding: 28px max(32px, calc((100vw - var(--emb-side) - 1320px) / 2)) 4rem calc(var(--emb-side) + 36px); }
+  :root[data-ember='1']:not([data-page='admin']) .srv-shell > .srv-banner { top: 24px; }
+}
+
+/* ---------- the figures of the server list: four cards, the first one is the hot one, the chart is a card under them ---------- */
+:root[data-ember='1'] .pulse { background: none; box-shadow: none; padding: 0; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; align-items: stretch; }
+:root[data-ember='1'] .pulse-state { grid-column: 1 / -1; }
+:root[data-ember='1'] .pulse-nums { display: contents; }
+:root[data-ember='1'] .pulse-nums > div { min-width: 0; padding: 14px 16px; border-radius: var(--r-xl); background: rgb(var(--card)); box-shadow: var(--shadow-2); }
+:root[data-ember='1'] .pulse-nums dt { text-transform: none; letter-spacing: 0; font-size: var(--fs-sm); font-weight: 650; }
+:root[data-ember='1'] .pulse-nums dd { margin-top: 6px; font-size: 30px; font-weight: 800; }
+:root[data-ember='1'] .pulse-nums > div:first-child { background: linear-gradient(155deg, rgb(var(--brand)), rgb(var(--brand-2))); box-shadow: none; color: #fff; }
+:root[data-ember='1'] .pulse-nums > div:first-child :is(dt, small) { color: rgb(255 255 255 / .88); }
+:root[data-ember='1'] .pulse-chart { grid-column: 1 / -1; padding: 14px 18px 12px; border-radius: var(--r-xl); background: rgb(var(--card)); box-shadow: var(--shadow-2); color: rgb(var(--brand-hover)); }
+:root[data-ember='1'] .pulse-plot { height: 96px; }
+@media (max-width: 767px) { :root[data-ember='1'] .pulse { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+/* the open section of the side column: no underline of the old header */
+:root[data-ember='1'] .hdr-nav .seg-item::after { display: none; }
+
+:root[data-ember='1'] .pulse-wrap { display: grid; gap: 12px; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/mobile.css" << '__COREGSM_EOF__'
@@ -174873,7 +175087,7 @@ export function Logo({ size = 32, alt }: { size?: number; alt?: string }) {
       height={size}
       // pass alt="" when the name is written next to the logo; alone it is described by the community name
       alt={alt ?? brand.name}
-      className={`shrink-0 ${brand.hasLogo ? 'rounded-[22%] object-cover' : ''}`}
+      className={`shrink-0 ${brand.hasLogo ? 'rounded-[22%] object-cover' : 'logo-default'}`}
       draggable={false}
     />
   );

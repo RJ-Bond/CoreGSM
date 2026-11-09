@@ -277,7 +277,7 @@ export function Logo({ size = 32, alt }: { size?: number; alt?: string }) {
       height={size}
       // pass alt="" when the name is written next to the logo; alone it is described by the community name
       alt={alt ?? brand.name}
-      className={`shrink-0 ${brand.hasLogo ? 'rounded-[22%] object-cover' : ''}`}
+      className={`shrink-0 ${brand.hasLogo ? 'rounded-[22%] object-cover' : 'logo-default'}`}
       draggable={false}
     />
   );

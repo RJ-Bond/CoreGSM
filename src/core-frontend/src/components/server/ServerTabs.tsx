@@ -31,7 +31,8 @@ export default function ServerTabs({ id, tab, counts, toc, mini }: { id: number;
   useLayoutEffect(() => {
     const hdr = document.querySelector<HTMLElement>('header.glass');
     if (!hdr) return;
-    const measure = () => setTop(Math.round(parseFloat(getComputedStyle(hdr).top || '0') + hdr.offsetHeight + 8));
+    // a header laid out as a side column (the Ember look) takes no height from the top of the page
+    const measure = () => setTop(getComputedStyle(hdr).position === 'fixed' && hdr.offsetHeight > window.innerHeight * 0.6 ? 12 : Math.round(parseFloat(getComputedStyle(hdr).top || '0') + hdr.offsetHeight + 8));
     measure();
     const ro = new ResizeObserver(measure);
     ro.observe(hdr);

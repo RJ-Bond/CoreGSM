@@ -1,3 +1,4 @@
+import PlayersBars from '../components/server/PlayersBars';
 import { useAppearance } from '../appearance';
 import { setPageTitleDetail } from '../pageTitle';
 import ServerReviews from '../components/server/Reviews';
@@ -457,7 +458,9 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
   // a server that is down: instead of a chart of zeros, since when and why plus the availability strip
   const down = !s.online && s.hasStatus;
   const outage = down ? offlineSince(events, points) : null;
-  const chartEl = (withSeries: boolean) => (
+  const chartEl = (withSeries: boolean) => ember && !withSeries ? (
+    <PlayersBars points={points} hours={data.hours} max={s.maxPlayers} now={nowTs} />
+  ) : (
     <HistoryChart points={points} hours={data.hours} events={events} title={s.name} game={gameLabel(s.game)} max={s.maxPlayers} color={series === 'ping' ? 'rgb(var(--link))' : ember ? 'rgb(var(--brand-2))' : calmSeriesColor(accent)} series={withSeries ? series : 'players'} loading={chartLoading} baseline={data.baseline ?? null} />
   );
   const chartTile = (i: number, withSeries: boolean) => (

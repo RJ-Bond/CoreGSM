@@ -17,7 +17,7 @@
   --field: 150 146 140;
   --ink: 23 22 26;
   --mute: 82 79 88;
-  --bad: 168 30 30;
+  --bad: 150 24 24;
   --warn: 130 82 0;
   --brand: 214 66 10 !important;
   --brand-hover: 176 52 6 !important;
@@ -47,6 +47,8 @@
   --field: 112 112 122;
   --ink: 244 243 241;
   --mute: 172 171 180;
+  --bad: 248 113 113;
+  --warn: 251 191 36;
   --brand: 214 66 10 !important;
   --brand-hover: 236 84 26 !important;
   --brand-2: 176 52 6 !important;
@@ -69,6 +71,8 @@
     --field: 112 112 122;
     --ink: 244 243 241;
     --mute: 172 171 180;
+    --bad: 248 113 113;
+    --warn: 251 191 36;
     --brand: 214 66 10 !important;
     --brand-hover: 236 84 26 !important;
     --brand-2: 176 52 6 !important;
@@ -111,3 +115,76 @@
 
 /* small captions are not made fainter by opacity: they sit on the tinted band of the hero and keep their contrast */
 :root[data-ember='1'] .pulse-ticks { opacity: 1; }
+
+/* ---------- the font ---------- */
+:root[data-ember='1'] { --font-sans: 'Manrope Variable', 'Golos Text Variable', system-ui, sans-serif; }
+
+/* ---------- the default logo takes the accent (the violet picture is turned to orange) ---------- */
+:root[data-ember='1'] img.logo-default { filter: hue-rotate(135deg) saturate(1.15); }
+
+/* ---------- the chart of the players: columns, the highest one is lit ---------- */
+.pb { display: flex; flex-direction: column; gap: 6px; }
+.pb-cols { display: flex; align-items: flex-end; gap: 5px; height: 220px; padding: 0 2px; border-bottom: 1px solid rgb(var(--line)); }
+.pb-bar { flex: 1 1 0; min-width: 0; border-radius: 6px 6px 0 0; background: rgb(var(--ink) / .14); transition: background-color var(--t-fast, .16s); }
+.pb-bar:hover { background: rgb(var(--ink) / .28); }
+.pb-bar.is-empty { background: rgb(var(--ink) / .06); }
+.pb-bar.is-top { background: linear-gradient(180deg, rgb(var(--brand-2)), rgb(var(--brand))); box-shadow: 0 0 24px -4px rgb(var(--brand) / .7); }
+.pb-ax { display: flex; justify-content: space-between; font-size: var(--fs-xs); font-weight: 600; color: rgb(var(--mute)); }
+.pb-note { margin: 0; font-size: var(--fs-sm); font-weight: 650; color: rgb(var(--mute)); }
+@media (max-width: 639px) { .pb-cols { height: 170px; gap: 3px; } }
+
+/* the hero of the community is tinted with the accent: a falling number is a step deeper red there in the light theme (the utility reads the colour at the root, so the colour itself is set) */
+:root[data-ember='1'][data-theme='light'] .cm-hero .text-bad { color: rgb(130 18 18); }
+@media (prefers-color-scheme: light) { :root[data-ember='1']:not([data-theme='dark']) .cm-hero .text-bad { color: rgb(130 18 18); } }
+
+/* ---------- the shell: the sections are a column on the left (wide screens, not the admin area, which has its own) ---------- */
+@media (min-width: 1100px) {
+  :root[data-ember='1']:not([data-page='admin']) { --emb-side: 248px; }
+  :root[data-ember='1']:not([data-page='admin']) header.hdr {
+    position: fixed; inset: 0 auto 0 0; width: var(--emb-side); z-index: 40;
+    display: flex; flex-direction: column; align-items: stretch; gap: 18px;
+    margin: 0; padding: 22px 14px 16px; border-radius: 0;
+    background: rgb(var(--card)); border: 0; border-right: 1px solid rgb(var(--line));
+    box-shadow: none; -webkit-backdrop-filter: none; backdrop-filter: none;
+  }
+  :root[data-ember='1']:not([data-page='admin']) header.hdr > a { max-width: none; padding: 0 8px; }
+  :root[data-ember='1']:not([data-page='admin']) .hdr-word { display: inline; }
+  :root[data-ember='1']:not([data-page='admin']) .hdr .seg.hdr-nav {
+    display: flex; flex-direction: column; align-items: stretch; gap: 4px;
+    width: 100%; max-width: none; padding: 0; overflow: visible; background: transparent; box-shadow: none;
+  }
+  /* the sliding pill of the old header becomes the caption of the group (the name of the navigation, in the language of the panel) */
+  :root[data-ember='1']:not([data-page='admin']) .hdr-nav::before {
+    position: static; display: block; width: auto; height: auto; transform: none; background: none; box-shadow: none;
+    content: attr(aria-label); padding: 2px 12px 8px; font-size: var(--fs-xs); font-weight: 700; color: rgb(var(--mute)); letter-spacing: .02em;
+  }
+  :root[data-ember='1']:not([data-page='admin']) .hdr-actions > a.btn { flex: 1 1 100%; justify-content: center; }
+  :root[data-ember='1']:not([data-page='admin']) .hdr-nav .seg-item {
+    justify-content: flex-start; width: 100%; padding: 10px 12px; border-radius: 12px; font-size: var(--fs-md); font-weight: 650; color: rgb(var(--mute)); box-shadow: none; background: transparent;
+  }
+  :root[data-ember='1']:not([data-page='admin']) .hdr-nav .seg-item:hover { background: rgb(var(--soft)); color: rgb(var(--ink)); }
+  :root[data-ember='1']:not([data-page='admin']) .hdr-nav .seg-item[aria-current='page'] { background: rgb(var(--soft)); color: rgb(var(--ink)); box-shadow: inset 0 0 0 1px rgb(var(--line)); }
+  :root[data-ember='1']:not([data-page='admin']) .hdr-nav .seg-item[aria-current='page'] > svg { color: rgb(var(--brand-hover)); opacity: 1; }
+  :root[data-ember='1']:not([data-page='admin']) .hdr > .hdr-actions { margin-top: auto; justify-self: stretch; flex-wrap: wrap; justify-content: flex-start; gap: 6px; padding-top: 14px; border-top: 1px solid rgb(var(--line)); }
+  :root[data-ember='1']:not([data-page='admin']) .hdr-sep { display: none; }
+  :root[data-ember='1']:not([data-page='admin']) .app-wrap { max-width: none; margin: 0; padding: 28px max(32px, calc((100vw - var(--emb-side) - 1320px) / 2)) 4rem calc(var(--emb-side) + 36px); }
+  :root[data-ember='1']:not([data-page='admin']) .srv-shell > .srv-banner { top: 24px; }
+}
+
+/* ---------- the figures of the server list: four cards, the first one is the hot one, the chart is a card under them ---------- */
+:root[data-ember='1'] .pulse { background: none; box-shadow: none; padding: 0; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; align-items: stretch; }
+:root[data-ember='1'] .pulse-state { grid-column: 1 / -1; }
+:root[data-ember='1'] .pulse-nums { display: contents; }
+:root[data-ember='1'] .pulse-nums > div { min-width: 0; padding: 14px 16px; border-radius: var(--r-xl); background: rgb(var(--card)); box-shadow: var(--shadow-2); }
+:root[data-ember='1'] .pulse-nums dt { text-transform: none; letter-spacing: 0; font-size: var(--fs-sm); font-weight: 650; }
+:root[data-ember='1'] .pulse-nums dd { margin-top: 6px; font-size: 30px; font-weight: 800; }
+:root[data-ember='1'] .pulse-nums > div:first-child { background: linear-gradient(155deg, rgb(var(--brand)), rgb(var(--brand-2))); box-shadow: none; color: #fff; }
+:root[data-ember='1'] .pulse-nums > div:first-child :is(dt, small) { color: rgb(255 255 255 / .88); }
+:root[data-ember='1'] .pulse-chart { grid-column: 1 / -1; padding: 14px 18px 12px; border-radius: var(--r-xl); background: rgb(var(--card)); box-shadow: var(--shadow-2); color: rgb(var(--brand-hover)); }
+:root[data-ember='1'] .pulse-plot { height: 96px; }
+@media (max-width: 767px) { :root[data-ember='1'] .pulse { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+/* the open section of the side column: no underline of the old header */
+:root[data-ember='1'] .hdr-nav .seg-item::after { display: none; }
+
+:root[data-ember='1'] .pulse-wrap { display: grid; gap: 12px; }

@@ -85,6 +85,7 @@ export function applyAppearance(a: Appearance, root: HTMLElement = document.docu
   set('data-lite', a.liteData || networkWantsLite() ? '1' : null);
   set('data-oled', a.oled ? '1' : null);
   set('data-ember', a.ember ? '1' : null);
+  if (a.ember) void import('@fontsource-variable/manrope/wght.css').catch(() => undefined);
 }
 
 let current: Appearance = typeof window === 'undefined' ? DEFAULT_APPEARANCE : read();
