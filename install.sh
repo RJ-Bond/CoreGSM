@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="abc5e40632a5"
+COREGSM_BUILD="ba317247ce08"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.2.1"
+COREGSM_VERSION="1.2.2"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -120392,7 +120392,7 @@ add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/App.tsx" << '__COREGSM_EOF__'
-import { applyDefaultLook } from './appearance';
+import { applyDefaultLook, setEmberAllowed } from './appearance';
 import { onPageTitleDetail, tabTitle } from './pageTitle';
 import { NewsUnreadDot } from './components/news/newsSeen';
 import { UpdateBadge, shownUpdate, useUpdatePolling, useUpdateState } from './components/UpdateBadge';
@@ -120716,7 +120716,7 @@ export default function App() {
   const [titleDetail, setTitleDetail] = useState<string | null>(null);
   useEffect(() => onPageTitleDetail(setTitleDetail), []);
   // the page is on the root element: a look may lay out the shell differently for the admin area
-  useEffect(() => { document.documentElement.dataset.page = page; }, [page]);
+  useEffect(() => { document.documentElement.dataset.page = page; setEmberAllowed(page !== 'status'); }, [page]);
   useEffect(() => {
     const title = boot.ready && sectionTitle ? tabTitle(sectionTitle, page === 'servers' ? titleDetail : null, access.brand.name) : access.brand.name;
     document.title = livePlayers > 0 && shellOk.current ? `(${livePlayers}) ${title}` : title;
@@ -122047,8 +122047,18 @@ export function applyAppearance(a: Appearance, root: HTMLElement = document.docu
   set('data-contrast', a.highContrast ? 'high' : null);
   set('data-lite', a.liteData || networkWantsLite() ? '1' : null);
   set('data-oled', a.oled ? '1' : null);
-  set('data-ember', a.ember ? '1' : null);
+  // the Status page is left as it was designed: no new look there
+  const showEmber = a.ember && emberAllowed;
+  set('data-ember', showEmber ? '1' : null);
   if (a.ember) void import('@fontsource-variable/manrope/wght.css').catch(() => undefined);
+}
+
+/** pages that keep the classic look whatever the visitor chose (set by the app on every route change) */
+let emberAllowed = true;
+export function setEmberAllowed(allowed: boolean) {
+  if (allowed === emberAllowed) return;
+  emberAllowed = allowed;
+  applyAppearance(current);
 }
 
 let current: Appearance = typeof window === 'undefined' ? DEFAULT_APPEARANCE : read();
@@ -171974,6 +171984,62 @@ __COREGSM_EOF__
 :root[data-ember='1'] .hdr-nav .seg-item::after { display: none; }
 
 :root[data-ember='1'] .pulse-wrap { display: grid; gap: 12px; }
+
+/* an offline server in the community list is dimmed, but the words «не в сети» keep their colour and contrast */
+:root[data-ember='1'] .cm-srv.is-off { opacity: 1; }
+:root[data-ember='1'] .cm-srv.is-off :is(.cm-srv-bar, .cm-srv-spark, .game-av, img) { opacity: .5; }
+:root[data-ember='1'] .cm-srv.is-off .font-extrabold { color: rgb(var(--mute)); }
+
+/* ---------- the admin area: a narrow column of icons on the left, and the sections of the admin area next to it, as they are ---------- */
+@media (min-width: 1100px) {
+  :root[data-ember='1'][data-page='admin'] { --emb-rail: 72px; }
+  :root[data-ember='1'][data-page='admin'] header.hdr {
+    position: fixed; inset: 0 auto 0 0; width: var(--emb-rail); z-index: 40;
+    display: flex; flex-direction: column; align-items: center; gap: 14px;
+    margin: 0; padding: 18px 8px 14px; border-radius: 0;
+    background: rgb(var(--card)); border: 0; border-right: 1px solid rgb(var(--line));
+    box-shadow: none; -webkit-backdrop-filter: none; backdrop-filter: none;
+  }
+  :root[data-ember='1'][data-page='admin'] header.hdr > a { max-width: none; padding: 0; }
+  :root[data-ember='1'][data-page='admin'] .hdr-word { display: none; }
+  :root[data-ember='1'][data-page='admin'] .hdr .seg.hdr-nav {
+    display: flex; flex-direction: column; align-items: center; gap: 6px; width: 100%; max-width: none; padding: 0; overflow: visible; background: transparent; box-shadow: none;
+  }
+  :root[data-ember='1'][data-page='admin'] .hdr-nav::before { display: none; }
+  :root[data-ember='1'][data-page='admin'] .hdr-nav .seg-item {
+    position: relative; justify-content: center; width: 48px; height: 48px; padding: 0; border-radius: 14px; box-shadow: none; background: transparent; color: rgb(var(--mute));
+  }
+  :root[data-ember='1'][data-page='admin'] .hdr-nav .seg-item > span:not(.nw-unread):not(.adm-dot):not(.adm-badge) {
+    position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
+  }
+  :root[data-ember='1'][data-page='admin'] .hdr-nav .seg-item > svg { width: 20px; height: 20px; opacity: 1; }
+  :root[data-ember='1'][data-page='admin'] .hdr-nav .seg-item:hover { background: rgb(var(--soft)); color: rgb(var(--ink)); }
+  :root[data-ember='1'][data-page='admin'] .hdr-nav .seg-item[aria-current='page'] { background: rgb(var(--brand) / .16); color: rgb(var(--brand-hover)); box-shadow: inset 0 0 0 1px rgb(var(--brand) / .4); }
+  :root[data-ember='1'][data-page='admin'] .hdr > .hdr-actions { margin-top: auto; flex-direction: column; align-items: center; gap: 6px; padding-top: 12px; border-top: 1px solid rgb(var(--line)); width: 100%; }
+  :root[data-ember='1'][data-page='admin'] .hdr-sep { display: none; }
+  :root[data-ember='1'][data-page='admin'] .app-wrap { max-width: none; margin: 0; padding: 24px 28px 4rem calc(var(--emb-rail) + 24px); }
+}
+
+/* ---------- the inside of the pages: firmer shapes, a quieter page header ---------- */
+/* buttons and fields are rounded rectangles, not capsules; chips and statuses stay round */
+:root[data-ember='1'] :where(.btn, .btn-soft, .btn-outline, .btn-ghost, .btn-danger, .btn-danger-solid, .btn-solid-danger, .btn-success, .btn-success-solid, .btn-warn, .btn-cta, .btn-glass, .btn-on-grad, .btn-ghost-on-grad) { border-radius: 12px; }
+:root[data-ember='1'] .seg { border-radius: 14px; }
+:root[data-ember='1'] .seg-item { border-radius: 10px; }
+:root[data-ember='1'] .hdr-nav .seg-item { border-radius: 12px; }
+
+/* the title of a page: no coloured tile, a quiet icon beside a strong name */
+:root[data-ember='1'] .ph-ico { width: 40px; height: 40px; border-radius: 12px; background: rgb(var(--soft)); color: rgb(var(--brand-hover)); box-shadow: inset 0 0 0 1px rgb(var(--line)); }
+:root[data-ember='1'] .ph-ico svg { width: 20px; height: 20px; }
+:root[data-ember='1'] h1.text-2xl { letter-spacing: -.02em; }
+
+/* the figures and captions of a card: the caption is small and quiet, the figure big */
+:root[data-ember='1'] .stat-k, :root[data-ember='1'] .label { font-weight: 650; }
+
+/* the cards of the community are flat graphite or white, without the coloured washes of the old look */
+:root[data-ember='1'] .cm-bento .tile, :root[data-ember='1'] section.tile.cm-hero, :root[data-ember='1'] .tile.cm-hero { background-image: none; background-color: rgb(var(--card)); }
+
+/* small captions inside a coloured figure keep their full colour (the dimmed ones fell under the contrast limit on white) */
+:root[data-ember='1'] .srv-trend small { opacity: 1; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/mobile.css" << '__COREGSM_EOF__'
@@ -175065,7 +175131,7 @@ export function PageHead({ title, subtitle, icon, hint, help, children }: { titl
     <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-3.5">
-          {icon && <span className="grid h-11 w-11 shrink-0 place-items-center rounded-ui-lg bg-linear-to-br from-brand to-brand-2 text-white shadow-pop sm:h-12 sm:w-12">{icon}</span>}
+          {icon && <span className="ph-ico grid h-11 w-11 shrink-0 place-items-center rounded-ui-lg bg-linear-to-br from-brand to-brand-2 text-white shadow-pop sm:h-12 sm:w-12">{icon}</span>}
           <div className="min-w-0">
             <h1 className="text-2xl font-black tracking-tight sm:text-[34px]" style={{ letterSpacing: '-0.025em' }}>{title}</h1>
             {subtitle && <p className="mt-1 hidden text-fs-md font-semibold text-mute sm:block">{subtitle}</p>}

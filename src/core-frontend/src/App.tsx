@@ -1,4 +1,4 @@
-import { applyDefaultLook } from './appearance';
+import { applyDefaultLook, setEmberAllowed } from './appearance';
 import { onPageTitleDetail, tabTitle } from './pageTitle';
 import { NewsUnreadDot } from './components/news/newsSeen';
 import { UpdateBadge, shownUpdate, useUpdatePolling, useUpdateState } from './components/UpdateBadge';
@@ -322,7 +322,7 @@ export default function App() {
   const [titleDetail, setTitleDetail] = useState<string | null>(null);
   useEffect(() => onPageTitleDetail(setTitleDetail), []);
   // the page is on the root element: a look may lay out the shell differently for the admin area
-  useEffect(() => { document.documentElement.dataset.page = page; }, [page]);
+  useEffect(() => { document.documentElement.dataset.page = page; setEmberAllowed(page !== 'status'); }, [page]);
   useEffect(() => {
     const title = boot.ready && sectionTitle ? tabTitle(sectionTitle, page === 'servers' ? titleDetail : null, access.brand.name) : access.brand.name;
     document.title = livePlayers > 0 && shellOk.current ? `(${livePlayers}) ${title}` : title;
