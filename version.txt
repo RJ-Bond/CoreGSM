@@ -1,3 +1,3 @@
-build=ca28e47247aa
-sha256=80dbd1a0e26393faf202bd4641ee05ad3af46343a1d8f37b3f74c206d0845bfb
-version=1.2.3
+build=b4f821cca1fc
+sha256=ea08578feaa4d29025d26f1e8be3ea3fb0c3f21904b9dd1efb965d22b891bc1f
+version=1.2.4

@@ -289,7 +289,7 @@ export const DEFAULT_KICK: KickSettings = {
   unbanTemplate: '* Игрок {name} был разбанен.',
   banJoinText: '* Вы забанены {until}. Причина: {reason}',
   blockJoinText: '* Вы недавно были кикнуты. Подождите ещё {left}, прежде чем зайти.',
-  notifyPlayer: true, notifyText: '* Вас убирают с сервера. Причина: {reason}',
+  notifyPlayer: true, notifyText: '* Вы были кикнуты. Причина: {reason}',
   warnLimit: 3, warnDays: 30, rejoinBlockMin: 0,
   reasons: [{ key: '1', text: 'Спам' }, { key: '2', text: 'Оскорбления' }, { key: '3', text: 'Читы или использование багов' }, { key: '4', text: 'Мешает другим игрокам' }],
 };

@@ -153,7 +153,7 @@ describe('.kick, .ban, .warn, .unban', () => {
     scope.writeScoped('gamenews_kick', JSON.stringify({ notifyPlayer: false }), 1);
     assert.equal(kick.runMod(1, input({ name: 'Quiet' }), NOW + 5000).notice, '');
     scope.clearOverride('gamenews_kick', 1);
-    assert.equal(kick.runMod(1, input({ name: 'Loud' }), NOW + 9000).notice.includes('Вас убирают с сервера'), true);
+    assert.equal(kick.runMod(1, input({ name: 'Loud' }), NOW + 9000).notice.includes('Вы были кикнуты'), true);
   });
 
   it('counts kicks, warnings and bans of a player and shows them in the journal', () => {

@@ -94,7 +94,7 @@ export const DEFAULT_KICK: KickSettings = {
   banJoinText: '* Вы забанены {until}. Причина: {reason}',
   blockJoinText: '* Вы недавно были кикнуты. Подождите ещё {left}, прежде чем зайти.',
   notifyPlayer: true,
-  notifyText: '* Вас убирают с сервера. Причина: {reason}',
+  notifyText: '* Вы были кикнуты. Причина: {reason}',
   warnLimit: 3,
   warnDays: 30,
   rejoinBlockMin: 0,
@@ -139,7 +139,8 @@ export function getKick(serverId?: number): KickSettings {
       banJoinText: text(v.banJoinText, d.banJoinText),
       blockJoinText: text(v.blockJoinText, d.blockJoinText),
       notifyPlayer: bool(v.notifyPlayer, d.notifyPlayer),
-      notifyText: text(v.notifyText, d.notifyText),
+      // the first wording moves to the new one; a text the administrator changed stays
+      notifyText: v.notifyText === '* Вас убирают с сервера. Причина: {reason}' ? d.notifyText : text(v.notifyText, d.notifyText),
       warnLimit: num(v.warnLimit, d.warnLimit, 0, 20),
       warnDays: num(v.warnDays, d.warnDays, 1, 365),
       rejoinBlockMin: num(v.rejoinBlockMin, d.rejoinBlockMin, 0, 1440),

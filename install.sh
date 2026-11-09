@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="ca28e47247aa"
+COREGSM_BUILD="b4f821cca1fc"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.2.3"
+COREGSM_VERSION="1.2.4"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -24913,7 +24913,7 @@ export const DEFAULT_KICK: KickSettings = {
   banJoinText: '* Вы забанены {until}. Причина: {reason}',
   blockJoinText: '* Вы недавно были кикнуты. Подождите ещё {left}, прежде чем зайти.',
   notifyPlayer: true,
-  notifyText: '* Вас убирают с сервера. Причина: {reason}',
+  notifyText: '* Вы были кикнуты. Причина: {reason}',
   warnLimit: 3,
   warnDays: 30,
   rejoinBlockMin: 0,
@@ -24958,7 +24958,8 @@ export function getKick(serverId?: number): KickSettings {
       banJoinText: text(v.banJoinText, d.banJoinText),
       blockJoinText: text(v.blockJoinText, d.blockJoinText),
       notifyPlayer: bool(v.notifyPlayer, d.notifyPlayer),
-      notifyText: text(v.notifyText, d.notifyText),
+      // the first wording moves to the new one; a text the administrator changed stays
+      notifyText: v.notifyText === '* Вас убирают с сервера. Причина: {reason}' ? d.notifyText : text(v.notifyText, d.notifyText),
       warnLimit: num(v.warnLimit, d.warnLimit, 0, 20),
       warnDays: num(v.warnDays, d.warnDays, 1, 365),
       rejoinBlockMin: num(v.rejoinBlockMin, d.rejoinBlockMin, 0, 1440),
@@ -142127,7 +142128,7 @@ export const DEFAULT_KICK: KickSettings = {
   unbanTemplate: '* Игрок {name} был разбанен.',
   banJoinText: '* Вы забанены {until}. Причина: {reason}',
   blockJoinText: '* Вы недавно были кикнуты. Подождите ещё {left}, прежде чем зайти.',
-  notifyPlayer: true, notifyText: '* Вас убирают с сервера. Причина: {reason}',
+  notifyPlayer: true, notifyText: '* Вы были кикнуты. Причина: {reason}',
   warnLimit: 3, warnDays: 30, rejoinBlockMin: 0,
   reasons: [{ key: '1', text: 'Спам' }, { key: '2', text: 'Оскорбления' }, { key: '3', text: 'Читы или использование багов' }, { key: '4', text: 'Мешает другим игрокам' }],
 };
