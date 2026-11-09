@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="b4f821cca1fc"
+COREGSM_BUILD="3ce6b5e10357"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.2.4"
+COREGSM_VERSION="1.2.5"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -25021,7 +25021,7 @@ export function kickDone(adminId: string, now: number): void {
 
 const C_BAD = '#FF5555';
 const C_GOOD = '#5FD068';
-/** a line for the administrator: the commands picked out, the nickname (and what else is given) in bold */
+/** a line for the administrator (when the line for everybody is shown, the administrator reads that one and gets no second line about the same): the commands picked out, the nickname (and what else is given) in bold */
 const say = (color: string, text: string, names: Accent[] = []): string => tag(color, text, names);
 
 export interface ModInput {
@@ -25107,7 +25107,7 @@ export function runMod(serverId: number, b: ModInput, now = Date.now()): ModResu
       ok: true, kick: true,
       line: s.announce ? kickLine(s, b.name, reason, b.adminName) : '',
       notice: notice(s.notifyText),
-      replies: [say(C_GOOD, `* Игрок ${b.name} кикнут.${s.announce ? '' : ' (без объявления)'}`, [b.name])],
+      replies: s.announce ? [] : [say(C_GOOD, `* Игрок ${b.name} кикнут.${s.announce ? '' : ' (без объявления)'}`, [b.name])],
     };
   }
 
@@ -25126,7 +25126,7 @@ export function runMod(serverId: number, b: ModInput, now = Date.now()): ModResu
       ok: true, kick: true,
       line: s.announce ? modLine(s, s.banTemplate, { name: b.name, reason, admin: b.adminName, time: span }) : '',
       notice: notice(s.banJoinText.replace(/\{until\}/g, stamp ? `до ${stamp.date} в ${stamp.time}` : 'навсегда')),
-      replies: [say(C_GOOD, `* Игрок ${b.name} забанен ${forever ? 'навсегда' : `на ${span}`}.`, [b.name, ...(forever ? [] : [[span, '#FFFFFF'] as Accent])])],
+      replies: s.announce ? [] : [say(C_GOOD, `* Игрок ${b.name} забанен ${forever ? 'навсегда' : `на ${span}`}.`, [b.name, ...(forever ? [] : [[span, '#FFFFFF'] as Accent])])],
     };
   }
 
@@ -25142,7 +25142,7 @@ export function runMod(serverId: number, b: ModInput, now = Date.now()): ModResu
     return {
       ok: true, kick: false, line: warnLine,
       notice: notice('* Вам вынесено предупреждение ({n} из {limit}). Причина: {reason}', { n, limit: s.warnLimit }),
-      replies: [say(C_GOOD, `* Игроку ${b.name} вынесено предупреждение (${n}${s.warnLimit ? ` из ${s.warnLimit}` : ''}).`, [b.name])],
+      replies: s.announce ? [] : [say(C_GOOD, `* Игроку ${b.name} вынесено предупреждение (${n}${s.warnLimit ? ` из ${s.warnLimit}` : ''}).`, [b.name])],
     };
   }
   // the limit is reached: the player is kicked and the count starts again
@@ -25211,7 +25211,7 @@ export function registerGameNewsKick({ app, admin }: { app: Express; admin: Requ
     logToDiscord(s, t.server_id, '✅ Игрок разбанен', 0x2ecc71, { name: ban.nick, admin: b.data.adminName, reason: ban.reason }, now);
     // the same colours as a kick: «* Игрок Ник был разбанен.» for everybody and in the chat in Discord (no reason is needed)
     try { postKickToDiscord(t.server_id, s.unbanTemplate, { name: ban.nick, reason: '', admin: b.data.adminName }, now); } catch { /* Discord is not needed for the unban */ }
-    res.json({ ok: true, line: s.announce ? modLine(s, s.unbanTemplate, { name: ban.nick, reason: '', admin: b.data.adminName }) : '', notice: '', kick: false, replies: [say(C_GOOD, `* ${ban.nick} разбанен.`, [ban.nick])] });
+    res.json({ ok: true, line: s.announce ? modLine(s, s.unbanTemplate, { name: ban.nick, reason: '', admin: b.data.adminName }) : '', notice: '', kick: false, replies: s.announce ? [] : [say(C_GOOD, `* ${ban.nick} разбанен.`, [ban.nick])] });
   });
 
   // the plugin: the commands that it has to do (a kick from Discord) come in the answer to a poll; this is how it reports

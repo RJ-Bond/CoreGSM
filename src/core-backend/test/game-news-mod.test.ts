@@ -198,3 +198,16 @@ describe('an administrator who touches himself', () => {
     assert.equal(kick.runMod(8, me, NOW).ok, true);
   });
 });
+
+describe('the answer to an administrator', () => {
+  it('is not repeated when everybody reads the same line, and is given when nothing is announced', () => {
+    scope.writeScoped('gamenews_kick', JSON.stringify({ announce: true }), 9);
+    const loud = kick.runMod(9, input({ reason: 'x', adminId: 'a9' }), NOW);
+    assert.equal(loud.ok, true);
+    assert.deepEqual(loud.replies, []);
+    assert.notEqual(loud.line, '');
+    scope.writeScoped('gamenews_kick', JSON.stringify({ announce: false }), 9);
+    const quiet = kick.runMod(9, input({ reason: 'x', adminId: 'a10' }), NOW);
+    assert.equal(quiet.replies.length, 1);
+  });
+});
