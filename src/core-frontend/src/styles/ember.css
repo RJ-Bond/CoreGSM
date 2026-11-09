@@ -400,3 +400,41 @@
 :root[data-ember='1'] .srv-bar .seg-item { min-height: 34px; }
 :root[data-ember='1'] .srv-bar .seg-item[aria-pressed='true'] { background: rgb(var(--soft)); color: rgb(var(--ink)); box-shadow: inset 0 0 0 1px rgb(var(--line)); }
 :root[data-ember='1'] .srv-bar .seg::before { display: none; }
+
+/* ---------- more of the same ---------- */
+/* the favourites are pinned: a heading for each group of the cards */
+:root[data-ember='1'] .srv-sec { grid-column: 1 / -1; margin: 6px 2px -2px; font-size: var(--fs-md); font-weight: 800; letter-spacing: -.01em; color: rgb(var(--mute)); }
+
+/* the server that has people on it breathes: a green dot before the figure (it stands still with «reduce motion») */
+:root[data-ember='1'] .srv-tile .srv-count:not(.srv-zero)::before {
+  content: ''; flex: none; align-self: center; width: 7px; height: 7px; margin-right: -1px; border-radius: 50%; background: rgb(var(--ok));
+  box-shadow: 0 0 0 0 rgb(var(--ok) / .55);
+}
+@keyframes emb-live { 0% { box-shadow: 0 0 0 0 rgb(var(--ok) / .5); } 70%, 100% { box-shadow: 0 0 0 8px rgb(var(--ok) / 0); } }
+@media (prefers-reduced-motion: no-preference) {
+  :root[data-ember='1'] .srv-tile .srv-count:not(.srv-zero)::before { animation: emb-live 2.2s ease-out infinite; }
+}
+
+/* the connect button in the tab bar that stays in sight */
+:root[data-ember='1'] .srv-mini-go { flex: none; margin-left: 4px; background: linear-gradient(135deg, rgb(255 126 60), rgb(var(--brand))); color: #fff; }
+:root[data-ember='1'] .srv-mini { padding-block: 3px; padding-right: 4px; }
+
+/* the empty screens: the ember picture takes the accent */
+:root[data-ember='1'] .state-ember { color: rgb(var(--brand-hover)); }
+
+/* one weight of the line for all the icons: a little finer than the default */
+:root[data-ember='1'] svg[stroke='currentColor'][viewBox='0 0 24 24'] { stroke-width: 1.75; }
+
+/* a phone: the tabs of a server are icons, only the open one carries its name, so all of them fit without a swipe */
+@media (max-width: 639px) {
+  :root[data-ember='1'] .srv-tabs { width: 100%; justify-content: space-between; overflow: visible; }
+  :root[data-ember='1'] .srv-tabs > .seg-item { flex: 1 1 0; justify-content: center; gap: 0; min-width: 44px; padding-inline: 8px; }
+  :root[data-ember='1'] .srv-tabs > .seg-item:not(.on) { font-size: 0; }
+  :root[data-ember='1'] .srv-tabs > .seg-item.on { flex: 0 0 auto; gap: 6px; }
+  :root[data-ember='1'] .srv-tabs > .seg-item .tab-count { font-size: var(--fs-xs); margin-left: 4px; }
+  :root[data-ember='1'] .adm-search { margin-left: 0; width: 100%; }
+  :root[data-ember='1'] .adm-search input { width: 100%; }
+}
+
+/* the figure of a card is a step smaller so the ping stays whole beside the live dot */
+:root[data-ember='1'] .srv-tile .srv-count [class*='text-[38px]'] { font-size: 34px; }

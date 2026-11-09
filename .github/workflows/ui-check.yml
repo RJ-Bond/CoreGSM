@@ -35,6 +35,14 @@ jobs:
         run: node tools/shots/run.mjs --pages=all --viewports=phone,desktop --themes=dark,light --out=shots-out
       - name: Shoot the main pages in the Ember look
         run: SHOTS_LOOK=ember node tools/shots/run.mjs --pages=servers,servers-list,server,news,status,community,login,profile,admin-start,admin-servers --viewports=phone,desktop --themes=dark,light --out=shots-out-ember
+      - name: Keep the pictures of the Ember look
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ember-pictures
+          path: shots-out-ember/**/*.png
+          retention-days: 14
+          if-no-files-found: ignore
       - name: Show the report of the Ember look
         if: always()
         run: cat shots-out-ember/report.md >> "$GITHUB_STEP_SUMMARY" || true

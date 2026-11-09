@@ -713,6 +713,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
             <b className="truncate">{s.name}</b>
             <span className="tabular-nums">{s.online ? `${s.players}${s.maxPlayers ? ` / ${s.maxPlayers}` : ''}` : t('d2.sd.offline')}</span>
             <AddrCopy address={s.address} className="truncate font-mono text-xs font-semibold" />
+            <a className="btn btn-sm srv-mini-go" href={connectHref} onClick={onConnect}>{connectLabel}</a>
           </span>
         )}
       />

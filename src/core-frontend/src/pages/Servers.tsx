@@ -1,5 +1,5 @@
 import { useAppearance } from '../appearance';
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent } from 'react';
 import { HomeBlocksMenu, useHomeBlocks } from '../components/servers/HomeBlocks';
 import { api, type Server, type StatusInfo } from '../api';
 import { useAuth } from '../auth';
@@ -279,6 +279,16 @@ function ServerList() {
   // servers with a problem sit in a compact strip above the tiles (unless the hero is itself the problem: then every server is)
   // (the problem servers are named in the alert row of the pulse strip and sit first among the tiles)
   const rest = sorted.filter((s) => s.id !== hero?.id).sort((a, b) => Number(needsAttention(b)) - Number(needsAttention(a)));
+  // Ember: the favourites are pinned above the rest, each group with its own heading
+  const pinFavs = ember && !!me && rest.some((s) => favs.includes(s.id)) && rest.some((s) => !favs.includes(s.id));
+  const restShown = pinFavs ? [...rest].sort((a, b) => Number(favs.includes(b.id)) - Number(favs.includes(a.id))) : rest;
+  const secHead = (i: number) => {
+    if (!pinFavs) return null;
+    const f = favs.includes(restShown[i].id);
+    if (i === 0 && f) return <h2 className="srv-sec">{t('srv.fav.title')}</h2>;
+    if (!f && (i === 0 || favs.includes(restShown[i - 1].id))) return <h2 className="srv-sec">{t('srv.fav.rest')}</h2>;
+    return null;
+  };
   const offlineCount = servers.filter((s) => !s.online).length;
   const liveLine = servers.length ? t('srv.sub.live', { n: online.reduce((a, s) => a + s.players, 0), s: online.length, total: servers.length }) : t('srv.sub.empty');
   const favCount = servers.filter((s) => favs.includes(s.id)).length;
@@ -426,7 +436,7 @@ function ServerList() {
             {effView === 'tiles' && effFilter === 'all' && (
               <div className="fade-in srv-grid" data-size={size}>
                 {hero && <HeroTile key={hero.id} {...tileProps(hero, 0)} reason={heroReason} />}
-                {rest.map((s, i) => <Tile key={s.id} {...tileProps(s, i + 1)} />)}
+                {restShown.map((s, i) => <Fragment key={s.id}>{secHead(i)}<Tile {...tileProps(s, i + 1)} /></Fragment>)}
               </div>
             )}
           </div>

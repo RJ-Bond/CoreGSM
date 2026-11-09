@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { ApiError } from '../api';
 import { t } from '../i18n';
 import { Icon, IconError, IconInfo, IconSearch, IconShield } from '../icons';
+import { useAppearance } from '../appearance';
 
 /**
  * One family of «nothing here» screens: empty list, load error (with «Повторить»), no access, not found, no connection.
@@ -13,6 +14,20 @@ export type StateKind = 'empty' | 'error' | 'forbidden' | 'notfound' | 'offline'
 const IconOffline = ({ size = 28 }: { size?: number }) => (
   <Icon size={size}><path d="M3 3l18 18M5 12.5a10 10 0 0 1 3.3-2.2M10.6 6.2A14 14 0 0 1 22 10M8.5 16a5 5 0 0 1 5.6-1.2M12 20h.01" /></Icon>
 );
+
+/** the Ember look: a warm ember in a soft round, instead of the icon tile (empty lists and not-found pages) */
+function EmberArt() {
+  return (
+    <svg className="state-ember" width="84" height="84" viewBox="0 0 84 84" fill="none" aria-hidden>
+      <circle cx="42" cy="44" r="34" fill="currentColor" opacity=".1" />
+      <circle cx="42" cy="44" r="23" fill="currentColor" opacity=".14" />
+      <path d="M42 20c3 9 12 13 12 25a12 12 0 0 1-24 0c0-6 3-9 6-13 1 4 3 6 5 7-1-7-1-13 1-19z" fill="currentColor" />
+      <circle cx="20" cy="26" r="2.500" fill="currentColor" opacity=".5" />
+      <circle cx="66" cy="20" r="2" fill="currentColor" opacity=".4" />
+      <circle cx="68" cy="58" r="3" fill="currentColor" opacity=".3" />
+    </svg>
+  );
+}
 
 const TILE: Record<StateKind, string> = {
   empty: 'bg-soft text-link',
@@ -51,6 +66,7 @@ export function StateView({
   heading?: 'h1' | 'h2' | 'h3';
   children?: ReactNode;
 }) {
+  const [{ ember }] = useAppearance();
   const head = title ?? t(`state.${kind}.title`);
   const body = text ?? t(`state.${kind}.text`);
   const alert = kind === 'error' || kind === 'forbidden';
@@ -61,7 +77,7 @@ export function StateView({
       role={alert ? 'alert' : 'status'}
       data-state={kind}
     >
-      {art ?? <div className={`mb-1 grid h-14 w-14 place-items-center rounded-3xl ${TILE[kind]}`}><KindIcon kind={kind} /></div>}
+      {art ?? (ember && (kind === 'empty' || kind === 'notfound') ? <div className="mb-1 text-link"><EmberArt /></div> : <div className={`mb-1 grid h-14 w-14 place-items-center rounded-3xl ${TILE[kind]}`}><KindIcon kind={kind} /></div>)}
       <H className={heading === 'h1' ? 'text-2xl font-extrabold tracking-[-0.02em]' : 'text-lg font-black'}>{head}</H>
       {body && <p className="max-w-sm font-semibold text-mute">{body}</p>}
       {(onRetry || action || children) && (

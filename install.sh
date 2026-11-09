@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="458d40a47e44"
+COREGSM_BUILD="6c44e7d12608"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.2.14"
+COREGSM_VERSION="1.2.15"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -128003,6 +128003,7 @@ import type { ReactNode } from 'react';
 import { ApiError } from '../api';
 import { t } from '../i18n';
 import { Icon, IconError, IconInfo, IconSearch, IconShield } from '../icons';
+import { useAppearance } from '../appearance';
 
 /**
  * One family of «nothing here» screens: empty list, load error (with «Повторить»), no access, not found, no connection.
@@ -128014,6 +128015,20 @@ export type StateKind = 'empty' | 'error' | 'forbidden' | 'notfound' | 'offline'
 const IconOffline = ({ size = 28 }: { size?: number }) => (
   <Icon size={size}><path d="M3 3l18 18M5 12.5a10 10 0 0 1 3.3-2.2M10.6 6.2A14 14 0 0 1 22 10M8.5 16a5 5 0 0 1 5.6-1.2M12 20h.01" /></Icon>
 );
+
+/** the Ember look: a warm ember in a soft round, instead of the icon tile (empty lists and not-found pages) */
+function EmberArt() {
+  return (
+    <svg className="state-ember" width="84" height="84" viewBox="0 0 84 84" fill="none" aria-hidden>
+      <circle cx="42" cy="44" r="34" fill="currentColor" opacity=".1" />
+      <circle cx="42" cy="44" r="23" fill="currentColor" opacity=".14" />
+      <path d="M42 20c3 9 12 13 12 25a12 12 0 0 1-24 0c0-6 3-9 6-13 1 4 3 6 5 7-1-7-1-13 1-19z" fill="currentColor" />
+      <circle cx="20" cy="26" r="2.500" fill="currentColor" opacity=".5" />
+      <circle cx="66" cy="20" r="2" fill="currentColor" opacity=".4" />
+      <circle cx="68" cy="58" r="3" fill="currentColor" opacity=".3" />
+    </svg>
+  );
+}
 
 const TILE: Record<StateKind, string> = {
   empty: 'bg-soft text-link',
@@ -128052,6 +128067,7 @@ export function StateView({
   heading?: 'h1' | 'h2' | 'h3';
   children?: ReactNode;
 }) {
+  const [{ ember }] = useAppearance();
   const head = title ?? t(`state.${kind}.title`);
   const body = text ?? t(`state.${kind}.text`);
   const alert = kind === 'error' || kind === 'forbidden';
@@ -128062,7 +128078,7 @@ export function StateView({
       role={alert ? 'alert' : 'status'}
       data-state={kind}
     >
-      {art ?? <div className={`mb-1 grid h-14 w-14 place-items-center rounded-3xl ${TILE[kind]}`}><KindIcon kind={kind} /></div>}
+      {art ?? (ember && (kind === 'empty' || kind === 'notfound') ? <div className="mb-1 text-link"><EmberArt /></div> : <div className={`mb-1 grid h-14 w-14 place-items-center rounded-3xl ${TILE[kind]}`}><KindIcon kind={kind} /></div>)}
       <H className={heading === 'h1' ? 'text-2xl font-extrabold tracking-[-0.02em]' : 'text-lg font-black'}>{head}</H>
       {body && <p className="max-w-sm font-semibold text-mute">{body}</p>}
       {(onRetry || action || children) && (
@@ -140166,13 +140182,13 @@ export function PulseStrip({ servers, overview, uptime, now, onOpen }: { servers
         </div>
       )}
       <dl className="pulse-nums">
-        <div>
+        <div title={t('srv.pulse.tip.players')}>
           <dt>{t('srv.pulse.players')}</dt>
           <dd><AnimatedNumber value={players} pulse />{trend != null && trend !== 0 && <small className={`pulse-trend ${trend > 0 ? 'up' : 'down'}`} title={t('srv.trend.hour')}>{trend > 0 ? '▲' : '▼'} {Math.abs(trend)}</small>}</dd>
         </div>
-        <div>
+        <div title={t('srv.pulse.tip.servers')}>
           <dt>{t('srv.pulse.servers')}</dt>
-          <dd className={servers.length === 0 ? '' : online.length === servers.length ? 'text-ok' : online.length === 0 ? 'text-bad' : 'text-warn'}>{online.length}<small>/{servers.length}</small></dd>
+          <dd className={servers.length === 0 ? '' : online.length === servers.length ? 'text-ok' : online.length === 0 ? 'text-bad' : 'text-warn'}>{online.length}<small>/{servers.length}</small>
           {ember && alert && first && (
             <a
               className={`pulse-problem pulse-problem-${state}`}
@@ -140185,12 +140201,13 @@ export function PulseStrip({ servers, overview, uptime, now, onOpen }: { servers
               }}
             >{title}</a>
           )}
+          </dd>
         </div>
-        <div>
+        <div title={t('srv.pulse.tip.ping')}>
           <dt>{t('srv.pulse.ping')}</dt>
           <dd className={avg == null ? '' : avg > 200 ? 'text-bad' : avg > LAG_PING ? 'text-warn' : avg <= 60 ? 'text-ok' : ''}>{avg == null ? '–' : <>{avg}<small> {t('srv.unit.ms')}</small></>}</dd>
         </div>
-        <div>
+        <div title={t('srv.pulse.tip.uptime')}>
           <dt>{t('srv.pulse.uptime')}</dt>
           <dd className={uptime == null ? '' : uptime >= 99 ? 'text-ok' : uptime >= 95 ? 'text-warn' : 'text-bad'}>{uptime == null ? '–' : <>{num(uptime)}<small>%</small></>}</dd>
         </div>
@@ -145425,7 +145442,13 @@ const en: Record<keyof typeof ru, string> = {
   'srv.pulse.players': 'Players now',
   'srv.pulse.servers': 'Servers online',
   'srv.pulse.ping': 'Average ping',
+  'srv.fav.title': 'Favourites',
+  'srv.fav.rest': 'Others',
+  'srv.pulse.tip.players': 'How many people play right now on all the servers together; the arrow shows the change over the last hour',
+  'srv.pulse.tip.servers': 'How many of the added servers answer the panel',
+  'srv.pulse.tip.ping': 'The average answer time of the servers; under 60 ms is great, over 150 ms shows as lag',
   'srv.pulse.uptime': '30-day uptime',
+  'srv.pulse.tip.uptime': 'The share of the last 30 days when the server answered the panel',
   'srv.pulse.noChart': 'The chart appears once history is collected',
   'srv.pulse.chart': 'Total players on all servers over the last day',
   'srv.pulse.hours': 'Last {n} h',
@@ -150348,7 +150371,13 @@ const ru = {
   'srv.pulse.players': 'Игроков сейчас',
   'srv.pulse.servers': 'Серверов онлайн',
   'srv.pulse.ping': 'Средний пинг',
+  'srv.fav.title': 'Избранные',
+  'srv.fav.rest': 'Остальные',
+  'srv.pulse.tip.players': 'Сколько человек играет сейчас на всех серверах вместе; стрелка показывает изменение за час',
+  'srv.pulse.tip.servers': 'Сколько серверов отвечает панели из всех добавленных',
+  'srv.pulse.tip.ping': 'Средний ответ серверов панели; ниже 60 мс отлично, выше 150 мс заметны задержки',
   'srv.pulse.uptime': 'Аптайм 30 дн',
+  'srv.pulse.tip.uptime': 'Доля времени за 30 дней, когда сервер отвечал панели',
   'srv.pulse.noChart': 'График появится, когда накопится история',
   'srv.pulse.chart': 'Игроков на всех серверах за сутки',
   'srv.pulse.hours': 'За {n} ч',
@@ -165139,6 +165168,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
             <b className="truncate">{s.name}</b>
             <span className="tabular-nums">{s.online ? `${s.players}${s.maxPlayers ? ` / ${s.maxPlayers}` : ''}` : t('d2.sd.offline')}</span>
             <AddrCopy address={s.address} className="truncate font-mono text-xs font-semibold" />
+            <a className="btn btn-sm srv-mini-go" href={connectHref} onClick={onConnect}>{connectLabel}</a>
           </span>
         )}
       />
@@ -165435,7 +165465,7 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/Servers.tsx" << '__COREGSM_EOF__'
 import { useAppearance } from '../appearance';
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent } from 'react';
 import { HomeBlocksMenu, useHomeBlocks } from '../components/servers/HomeBlocks';
 import { api, type Server, type StatusInfo } from '../api';
 import { useAuth } from '../auth';
@@ -165715,6 +165745,16 @@ function ServerList() {
   // servers with a problem sit in a compact strip above the tiles (unless the hero is itself the problem: then every server is)
   // (the problem servers are named in the alert row of the pulse strip and sit first among the tiles)
   const rest = sorted.filter((s) => s.id !== hero?.id).sort((a, b) => Number(needsAttention(b)) - Number(needsAttention(a)));
+  // Ember: the favourites are pinned above the rest, each group with its own heading
+  const pinFavs = ember && !!me && rest.some((s) => favs.includes(s.id)) && rest.some((s) => !favs.includes(s.id));
+  const restShown = pinFavs ? [...rest].sort((a, b) => Number(favs.includes(b.id)) - Number(favs.includes(a.id))) : rest;
+  const secHead = (i: number) => {
+    if (!pinFavs) return null;
+    const f = favs.includes(restShown[i].id);
+    if (i === 0 && f) return <h2 className="srv-sec">{t('srv.fav.title')}</h2>;
+    if (!f && (i === 0 || favs.includes(restShown[i - 1].id))) return <h2 className="srv-sec">{t('srv.fav.rest')}</h2>;
+    return null;
+  };
   const offlineCount = servers.filter((s) => !s.online).length;
   const liveLine = servers.length ? t('srv.sub.live', { n: online.reduce((a, s) => a + s.players, 0), s: online.length, total: servers.length }) : t('srv.sub.empty');
   const favCount = servers.filter((s) => favs.includes(s.id)).length;
@@ -165862,7 +165902,7 @@ function ServerList() {
             {effView === 'tiles' && effFilter === 'all' && (
               <div className="fade-in srv-grid" data-size={size}>
                 {hero && <HeroTile key={hero.id} {...tileProps(hero, 0)} reason={heroReason} />}
-                {rest.map((s, i) => <Tile key={s.id} {...tileProps(s, i + 1)} />)}
+                {restShown.map((s, i) => <Fragment key={s.id}>{secHead(i)}<Tile {...tileProps(s, i + 1)} /></Fragment>)}
               </div>
             )}
           </div>
@@ -172355,6 +172395,44 @@ __COREGSM_EOF__
 :root[data-ember='1'] .srv-bar .seg-item { min-height: 34px; }
 :root[data-ember='1'] .srv-bar .seg-item[aria-pressed='true'] { background: rgb(var(--soft)); color: rgb(var(--ink)); box-shadow: inset 0 0 0 1px rgb(var(--line)); }
 :root[data-ember='1'] .srv-bar .seg::before { display: none; }
+
+/* ---------- more of the same ---------- */
+/* the favourites are pinned: a heading for each group of the cards */
+:root[data-ember='1'] .srv-sec { grid-column: 1 / -1; margin: 6px 2px -2px; font-size: var(--fs-md); font-weight: 800; letter-spacing: -.01em; color: rgb(var(--mute)); }
+
+/* the server that has people on it breathes: a green dot before the figure (it stands still with «reduce motion») */
+:root[data-ember='1'] .srv-tile .srv-count:not(.srv-zero)::before {
+  content: ''; flex: none; align-self: center; width: 7px; height: 7px; margin-right: -1px; border-radius: 50%; background: rgb(var(--ok));
+  box-shadow: 0 0 0 0 rgb(var(--ok) / .55);
+}
+@keyframes emb-live { 0% { box-shadow: 0 0 0 0 rgb(var(--ok) / .5); } 70%, 100% { box-shadow: 0 0 0 8px rgb(var(--ok) / 0); } }
+@media (prefers-reduced-motion: no-preference) {
+  :root[data-ember='1'] .srv-tile .srv-count:not(.srv-zero)::before { animation: emb-live 2.2s ease-out infinite; }
+}
+
+/* the connect button in the tab bar that stays in sight */
+:root[data-ember='1'] .srv-mini-go { flex: none; margin-left: 4px; background: linear-gradient(135deg, rgb(255 126 60), rgb(var(--brand))); color: #fff; }
+:root[data-ember='1'] .srv-mini { padding-block: 3px; padding-right: 4px; }
+
+/* the empty screens: the ember picture takes the accent */
+:root[data-ember='1'] .state-ember { color: rgb(var(--brand-hover)); }
+
+/* one weight of the line for all the icons: a little finer than the default */
+:root[data-ember='1'] svg[stroke='currentColor'][viewBox='0 0 24 24'] { stroke-width: 1.75; }
+
+/* a phone: the tabs of a server are icons, only the open one carries its name, so all of them fit without a swipe */
+@media (max-width: 639px) {
+  :root[data-ember='1'] .srv-tabs { width: 100%; justify-content: space-between; overflow: visible; }
+  :root[data-ember='1'] .srv-tabs > .seg-item { flex: 1 1 0; justify-content: center; gap: 0; min-width: 44px; padding-inline: 8px; }
+  :root[data-ember='1'] .srv-tabs > .seg-item:not(.on) { font-size: 0; }
+  :root[data-ember='1'] .srv-tabs > .seg-item.on { flex: 0 0 auto; gap: 6px; }
+  :root[data-ember='1'] .srv-tabs > .seg-item .tab-count { font-size: var(--fs-xs); margin-left: 4px; }
+  :root[data-ember='1'] .adm-search { margin-left: 0; width: 100%; }
+  :root[data-ember='1'] .adm-search input { width: 100%; }
+}
+
+/* the figure of a card is a step smaller so the ping stays whole beside the live dot */
+:root[data-ember='1'] .srv-tile .srv-count [class*='text-[38px]'] { font-size: 34px; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/mobile.css" << '__COREGSM_EOF__'

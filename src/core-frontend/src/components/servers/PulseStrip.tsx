@@ -147,13 +147,13 @@ export function PulseStrip({ servers, overview, uptime, now, onOpen }: { servers
         </div>
       )}
       <dl className="pulse-nums">
-        <div>
+        <div title={t('srv.pulse.tip.players')}>
           <dt>{t('srv.pulse.players')}</dt>
           <dd><AnimatedNumber value={players} pulse />{trend != null && trend !== 0 && <small className={`pulse-trend ${trend > 0 ? 'up' : 'down'}`} title={t('srv.trend.hour')}>{trend > 0 ? '▲' : '▼'} {Math.abs(trend)}</small>}</dd>
         </div>
-        <div>
+        <div title={t('srv.pulse.tip.servers')}>
           <dt>{t('srv.pulse.servers')}</dt>
-          <dd className={servers.length === 0 ? '' : online.length === servers.length ? 'text-ok' : online.length === 0 ? 'text-bad' : 'text-warn'}>{online.length}<small>/{servers.length}</small></dd>
+          <dd className={servers.length === 0 ? '' : online.length === servers.length ? 'text-ok' : online.length === 0 ? 'text-bad' : 'text-warn'}>{online.length}<small>/{servers.length}</small>
           {ember && alert && first && (
             <a
               className={`pulse-problem pulse-problem-${state}`}
@@ -166,12 +166,13 @@ export function PulseStrip({ servers, overview, uptime, now, onOpen }: { servers
               }}
             >{title}</a>
           )}
+          </dd>
         </div>
-        <div>
+        <div title={t('srv.pulse.tip.ping')}>
           <dt>{t('srv.pulse.ping')}</dt>
           <dd className={avg == null ? '' : avg > 200 ? 'text-bad' : avg > LAG_PING ? 'text-warn' : avg <= 60 ? 'text-ok' : ''}>{avg == null ? '–' : <>{avg}<small> {t('srv.unit.ms')}</small></>}</dd>
         </div>
-        <div>
+        <div title={t('srv.pulse.tip.uptime')}>
           <dt>{t('srv.pulse.uptime')}</dt>
           <dd className={uptime == null ? '' : uptime >= 99 ? 'text-ok' : uptime >= 95 ? 'text-warn' : 'text-bad'}>{uptime == null ? '–' : <>{num(uptime)}<small>%</small></>}</dd>
         </div>
