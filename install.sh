@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="ba317247ce08"
+COREGSM_BUILD="ca28e47247aa"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.2.2"
+COREGSM_VERSION="1.2.3"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -172040,6 +172040,20 @@ __COREGSM_EOF__
 
 /* small captions inside a coloured figure keep their full colour (the dimmed ones fell under the contrast limit on white) */
 :root[data-ember='1'] .srv-trend small { opacity: 1; }
+
+/* ---------- the admin area: the menu of its sections is a full column beside the icons, like the main side column ---------- */
+@media (min-width: 1100px) {
+  :root[data-ember='1'][data-page='admin'] { --emb-adm: 252px; }
+  :root[data-ember='1'][data-page='admin'] div:has(> nav.adm-nav) { display: block; }
+  :root[data-ember='1'][data-page='admin'] nav.adm-nav {
+    position: fixed; top: 0; bottom: 0; left: var(--emb-rail); width: var(--emb-adm); max-height: none; z-index: 39;
+    margin: 0; padding: 18px 12px 24px; border-radius: 0; box-shadow: none; border: 0; border-right: 1px solid rgb(var(--line));
+    background: rgb(var(--card)); overflow-y: auto; align-self: auto;
+  }
+  :root[data-ember='1'][data-page='admin'] nav.adm-nav.adm-rail { width: 72px; padding-inline: 8px; }
+  :root[data-ember='1'][data-page='admin'] .app-wrap { padding-left: calc(var(--emb-rail) + var(--emb-adm) + 32px); }
+  :root[data-ember='1'][data-page='admin']:has(nav.adm-rail) .app-wrap { padding-left: calc(var(--emb-rail) + 72px + 32px); }
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/mobile.css" << '__COREGSM_EOF__'
