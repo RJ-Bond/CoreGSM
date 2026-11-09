@@ -71,7 +71,8 @@ describe('.kick, .ban, .warn, .unban', () => {
     assert.equal(r.notice.includes('Вы забанены до '), true);
     const block = kick.joinBlock(1, P1, NOW + 3600_000);
     assert.equal(block?.ban.kind, 'ban');
-    assert.equal(block?.lines[0].includes('Вы забанены до '), true);
+    assert.equal(block?.lines[0].includes('Вы забанены '), true);
+    assert.match(block?.lines[0] ?? '', /<color=#5FD068>до \d{2}\.\d{2}\.\d{4} в \d{2}:\d{2}<\/color>/); // the date and the time are green
     assert.equal(kick.joinBlock(1, P1, NOW + 8 * 86_400_000), null); // the ban has run out
   });
 

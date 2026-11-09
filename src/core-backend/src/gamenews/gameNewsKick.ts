@@ -161,12 +161,12 @@ type LineVars = { name?: string; reason?: string; admin?: string; time?: string;
  * A line for everybody in flat colour tags: the text in its colour, the nickname, the reason and the administrator each in theirs.
  * What a player typed (a reason, a nickname) cannot bring tags of its own.
  */
-export function modLine(s: KickSettings, template: string, v: LineVars): string {
+export function modLine(s: KickSettings, template: string, v: LineVars, timeColor?: string): string {
   const vars: Record<string, { text: string; color: string }> = {
     name: { text: plainLine(v.name ?? ''), color: s.nameColor },
     reason: { text: plainLine(v.reason ?? ''), color: s.reasonColor },
     admin: { text: plainLine(v.admin ?? ''), color: s.adminColor },
-    time: { text: plainLine(v.time ?? ''), color: s.reasonColor },
+    time: { text: plainLine(v.time ?? ''), color: timeColor ?? s.reasonColor },
     n: { text: String(v.n ?? ''), color: s.reasonColor },
     limit: { text: String(v.limit ?? ''), color: s.reasonColor },
   };
@@ -349,13 +349,15 @@ export function joinBlock(serverId: number, platformId: string, now = Date.now()
   const ban = activeBan(platformId, now);
   if (!ban) return null;
   const s = getKick(serverId);
+  // the date, the time and the time left are green
+  const green = (template: string, v: LineVars): string => modLine({ ...s, nameColor: s.textColor, adminColor: s.textColor, reasonColor: '#FFCC33' }, template, v, '#5FD068');
   if (ban.kind === 'block') {
     const left = formatSpan(Math.ceil((ban.until - now) / 1000));
-    return { ban, lines: [privateLine(s, s.blockJoinText.replace(/\{left\}/g, left), { reason: ban.reason })] };
+    return { ban, lines: [green(s.blockJoinText.replace(/\{left\}/g, '{time}'), { reason: ban.reason, time: left })] };
   }
   const stamp = ban.until === 0 ? null : visitStamp(ban.until);
   const until = stamp ? `до ${stamp.date} в ${stamp.time}` : 'навсегда';
-  return { ban, lines: [privateLine(s, s.banJoinText.replace(/\{until\}/g, until), { reason: ban.reason })] };
+  return { ban, lines: [green(s.banJoinText.replace(/\{until\}/g, '{time}'), { reason: ban.reason, time: until })] };
 }
 
 const mask = (id: string): string => (id.length > 7 ? `${id.slice(0, 4)}…${id.slice(-3)}` : id);
