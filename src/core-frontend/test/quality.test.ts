@@ -78,8 +78,8 @@ describe('admin shortcuts', () => {
 
 describe('appearance', () => {
   it('normalises stored values', () => {
-    expect(normalizeAppearance(null)).toEqual({ reduceMotion: false, largeText: false, highContrast: false, liteData: false, oled: false });
-    expect(normalizeAppearance({ reduceMotion: true, largeText: 'yes' })).toEqual({ reduceMotion: true, largeText: false, highContrast: false, liteData: false, oled: false });
+    expect(normalizeAppearance(null)).toEqual({ reduceMotion: false, largeText: false, highContrast: false, liteData: false, oled: false, ember: false });
+    expect(normalizeAppearance({ reduceMotion: true, largeText: 'yes' })).toEqual({ reduceMotion: true, largeText: false, highContrast: false, liteData: false, oled: false, ember: false });
   });
 
   it('a preset is recognised by its options, a custom mix is not', () => {

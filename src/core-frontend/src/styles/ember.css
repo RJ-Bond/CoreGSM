@@ -1,0 +1,113 @@
+/*
+ * «Ember»: graphite and an orange accent, firmer shapes, solid cards. An option of the appearance (data-ember="1"),
+ * loaded after polish.css, it only re-tunes the tokens of the panel and adds a few rules for the server page.
+ * The four accent tokens carry !important: accent.ts writes the community colour inline, and the look wins over it.
+ * Orange is used as a fill (buttons, the hot tile, the chart); text links take the lighter or darker step of it so
+ * they keep their contrast on both themes.
+ */
+
+/* ---------- light ---------- */
+:root[data-ember='1'] {
+  --page: 241 239 235;
+  --card: 255 255 255;
+  --raised: 255 255 255;
+  --overlay: 255 255 255;
+  --soft: 243 241 237;
+  --line: 226 223 216;
+  --field: 150 146 140;
+  --ink: 23 22 26;
+  --mute: 82 79 88;
+  --bad: 168 30 30;
+  --warn: 130 82 0;
+  --brand: 214 66 10 !important;
+  --brand-hover: 176 52 6 !important;
+  --brand-2: 170 48 4 !important;
+  --link: 168 48 4 !important;
+  --tile-border: rgb(226 223 216);
+  --wash-a: rgb(var(--brand) / .05);
+  --wash-b: rgb(255 154 92 / .06);
+  --au1: .05;
+  --au2: 0;
+  --hex-a: 0;
+  --glass-a: 1;
+  --r-md: 10px;
+  --r-lg: 12px;
+  --r-xl: 18px;
+  --shadow-2: 0 0 0 1px rgba(40, 30, 20, .05), 0 1px 2px rgba(20, 16, 10, .05);
+}
+
+/* ---------- dark ---------- */
+:root[data-ember='1'][data-theme='dark'] {
+  --page: 12 12 14;
+  --card: 23 23 27;
+  --raised: 31 31 37;
+  --overlay: 38 38 45;
+  --soft: 31 31 37;
+  --line: 40 40 46;
+  --field: 112 112 122;
+  --ink: 244 243 241;
+  --mute: 172 171 180;
+  --brand: 214 66 10 !important;
+  --brand-hover: 236 84 26 !important;
+  --brand-2: 176 52 6 !important;
+  --link: 255 138 76 !important;
+  --tile-border: rgb(40 40 46);
+  --au1: .07;
+  --glass-a: 1;
+  --wash-a: rgb(var(--brand) / .06);
+  --wash-b: rgb(255 154 92 / .05);
+  --shadow-2: 0 0 0 1px rgba(255, 255, 255, .04), 0 1px 2px rgba(0, 0, 0, .4);
+}
+@media (prefers-color-scheme: dark) {
+  :root[data-ember='1']:not([data-theme='light']) {
+    --page: 12 12 14;
+    --card: 23 23 27;
+    --raised: 31 31 37;
+    --overlay: 38 38 45;
+    --soft: 31 31 37;
+    --line: 40 40 46;
+    --field: 112 112 122;
+    --ink: 244 243 241;
+    --mute: 172 171 180;
+    --brand: 214 66 10 !important;
+    --brand-hover: 236 84 26 !important;
+    --brand-2: 176 52 6 !important;
+    --link: 255 138 76 !important;
+    --tile-border: rgb(40 40 46);
+    --au1: .07;
+    --glass-a: 1;
+    --wash-a: rgb(var(--brand) / .06);
+    --wash-b: rgb(255 154 92 / .05);
+    --shadow-2: 0 0 0 1px rgba(255, 255, 255, .04), 0 1px 2px rgba(0, 0, 0, .4);
+  }
+}
+
+/* the pictures keep their own colours, the page behind them is flat */
+:root[data-ember='1'] body { background-image: radial-gradient(60% 30% at 50% -6%, rgb(var(--brand) / var(--au1)), transparent 100%); }
+:root[data-ember='1'] body::before { display: none; }
+
+/* ---------- the server page ---------- */
+:root[data-ember='1'] .srv-page { --srv-accent: rgb(var(--brand)) !important; }
+
+/* the first indicator is the hot tile of the page */
+:root[data-ember='1'] .srv-metrics > .srv-metric:first-child {
+  background: linear-gradient(155deg, rgb(var(--brand)), rgb(var(--brand-2)));
+  color: #fff;
+  box-shadow: none;
+}
+:root[data-ember='1'] .srv-metrics > .srv-metric:first-child :is(.stat-k, .srv-metric-h, .srv-metric-per) { color: rgb(255 255 255 / .86); }
+:root[data-ember='1'] .srv-metrics > .srv-metric:first-child .srv-metric-bar { background: rgb(255 255 255 / .28); }
+:root[data-ember='1'] .srv-metrics > .srv-metric:first-child .srv-metric-bar > i { background: #fff; }
+
+/* the open tab and the counters in the accent of the panel */
+:root[data-ember='1'] .srv-tabs.seg[data-ind]::before,
+:root[data-ember='1'] .srv-tabs:not([data-ind]) > .seg-item.on { background: rgb(var(--brand) / .16); box-shadow: inset 0 0 0 1px rgb(var(--brand) / .4); }
+:root[data-ember='1'] .srv-tabs > .seg-item.on .tab-count { background: rgb(var(--brand) / .28); }
+
+/* cards: flat, one hairline, no halo */
+:root[data-ember='1'] .tile,
+:root[data-ember='1'] .panel { box-shadow: var(--shadow-2); }
+:root[data-ember='1'] .srv-glow { box-shadow: 0 0 0 1px rgb(var(--g) / .3); }
+
+/* small captions are not made fainter by opacity: they sit on the tinted band of the hero and keep their contrast */
+:root[data-ember='1'] .pulse-ticks { opacity: 1; }

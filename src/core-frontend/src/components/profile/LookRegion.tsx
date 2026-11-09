@@ -25,6 +25,7 @@ export function AppearanceCard() {
     ['highContrast', 'pf.a11y.contrast', 'pf.a11y.contrastHint'],
     ['liteData', 'pf.a11y.lite', 'pf.a11y.liteHint'],
     ['oled', 'pf.a11y.oled', 'pf.a11y.oledHint'],
+    ['ember', 'pf.a11y.ember', 'pf.a11y.emberHint'],
   ];
   const active = presetOf(look);
   const options: [Density, TKey, TKey][] = [

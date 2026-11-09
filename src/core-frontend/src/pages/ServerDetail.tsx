@@ -1,3 +1,4 @@
+import { useAppearance } from '../appearance';
 import { setPageTitleDetail } from '../pageTitle';
 import ServerReviews from '../components/server/Reviews';
 import { eventFacts, whenShort } from '../components/server/serverLogic';
@@ -228,6 +229,8 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
     return () => io.disconnect();
   });
   const [prefs] = useState(readPrefs);
+  const [look] = useAppearance();
+  const ember = look.ember;
   const [hours, setHours] = useState(prefs.hours);
   const [series, setSeries] = useState<Series>(prefs.series);
   useEffect(() => {
@@ -455,7 +458,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
   const down = !s.online && s.hasStatus;
   const outage = down ? offlineSince(events, points) : null;
   const chartEl = (withSeries: boolean) => (
-    <HistoryChart points={points} hours={data.hours} events={events} title={s.name} game={gameLabel(s.game)} max={s.maxPlayers} color={series === 'ping' ? 'rgb(var(--link))' : calmSeriesColor(accent)} series={withSeries ? series : 'players'} loading={chartLoading} baseline={data.baseline ?? null} />
+    <HistoryChart points={points} hours={data.hours} events={events} title={s.name} game={gameLabel(s.game)} max={s.maxPlayers} color={series === 'ping' ? 'rgb(var(--link))' : ember ? 'rgb(var(--brand-2))' : calmSeriesColor(accent)} series={withSeries ? series : 'players'} loading={chartLoading} baseline={data.baseline ?? null} />
   );
   const chartTile = (i: number, withSeries: boolean) => (
     <SectionCard

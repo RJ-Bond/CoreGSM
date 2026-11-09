@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="6026f2b7d10a"
+COREGSM_BUILD="609dacdf6e79"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.92"
+COREGSM_VERSION="1.1.93"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -121769,15 +121769,18 @@ export interface Appearance {
   liteData: boolean;
   /** pure black page and darker cards in the dark theme (saves an OLED screen, rests the eyes at night) */
   oled: boolean;
+  /** the «Ember» look: graphite and an orange accent, firmer shapes (data-ember) */
+  ember: boolean;
 }
 
 /** presets: a few options at once; the ones not named are switched off */
-export type PresetId = 'classic' | 'contrast' | 'soft' | 'oled';
+export type PresetId = 'classic' | 'ember' | 'contrast' | 'soft' | 'oled';
 export const PRESETS: Record<PresetId, Appearance> = {
-  classic: { reduceMotion: false, largeText: false, highContrast: false, liteData: false, oled: false },
-  contrast: { reduceMotion: false, largeText: true, highContrast: true, liteData: false, oled: false },
-  soft: { reduceMotion: true, largeText: false, highContrast: false, liteData: true, oled: false },
-  oled: { reduceMotion: false, largeText: false, highContrast: false, liteData: false, oled: true },
+  classic: { reduceMotion: false, largeText: false, highContrast: false, liteData: false, oled: false, ember: false },
+  ember: { reduceMotion: false, largeText: false, highContrast: false, liteData: false, oled: false, ember: true },
+  contrast: { reduceMotion: false, largeText: true, highContrast: true, liteData: false, oled: false, ember: false },
+  soft: { reduceMotion: true, largeText: false, highContrast: false, liteData: true, oled: false, ember: false },
+  oled: { reduceMotion: false, largeText: false, highContrast: false, liteData: false, oled: true, ember: false },
 };
 export const PRESET_IDS = Object.keys(PRESETS) as PresetId[];
 /** the preset the options match exactly, or null (a custom mix) */
@@ -121786,12 +121789,12 @@ export function presetOf(a: Appearance): PresetId | null {
 }
 
 export const APPEARANCE_KEY = 'coregsm_appearance';
-export const DEFAULT_APPEARANCE: Appearance = { reduceMotion: false, largeText: false, highContrast: false, liteData: false, oled: false };
+export const DEFAULT_APPEARANCE: Appearance = { reduceMotion: false, largeText: false, highContrast: false, liteData: false, oled: false, ember: false };
 
 /** anything (a stored string, a broken value) -> a complete Appearance */
 export function normalizeAppearance(raw: unknown): Appearance {
   const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
-  return { reduceMotion: r.reduceMotion === true, largeText: r.largeText === true, highContrast: r.highContrast === true, liteData: r.liteData === true, oled: r.oled === true };
+  return { reduceMotion: r.reduceMotion === true, largeText: r.largeText === true, highContrast: r.highContrast === true, liteData: r.liteData === true, oled: r.oled === true, ember: r.ember === true };
 }
 
 function read(): Appearance {
@@ -121820,6 +121823,7 @@ export function applyAppearance(a: Appearance, root: HTMLElement = document.docu
   set('data-contrast', a.highContrast ? 'high' : null);
   set('data-lite', a.liteData || networkWantsLite() ? '1' : null);
   set('data-oled', a.oled ? '1' : null);
+  set('data-ember', a.ember ? '1' : null);
 }
 
 let current: Appearance = typeof window === 'undefined' ? DEFAULT_APPEARANCE : read();
@@ -121829,7 +121833,7 @@ export const getAppearance = () => current;
 
 export function setAppearance(patch: Partial<Appearance>) {
   const next = normalizeAppearance({ ...current, ...patch });
-  if (next.reduceMotion === current.reduceMotion && next.largeText === current.largeText && next.highContrast === current.highContrast && next.liteData === current.liteData && next.oled === current.oled) return;
+  if (next.reduceMotion === current.reduceMotion && next.largeText === current.largeText && next.highContrast === current.highContrast && next.liteData === current.liteData && next.oled === current.oled && next.ember === current.ember) return;
   current = next;
   try {
     localStorage.setItem(APPEARANCE_KEY, JSON.stringify(next));
@@ -133444,6 +133448,7 @@ export function AppearanceCard() {
     ['highContrast', 'pf.a11y.contrast', 'pf.a11y.contrastHint'],
     ['liteData', 'pf.a11y.lite', 'pf.a11y.liteHint'],
     ['oled', 'pf.a11y.oled', 'pf.a11y.oledHint'],
+    ['ember', 'pf.a11y.ember', 'pf.a11y.emberHint'],
   ];
   const active = presetOf(look);
   const options: [Density, TKey, TKey][] = [
@@ -144800,6 +144805,10 @@ const en: Record<keyof typeof ru, string> = {
   'pf.preset.softHint': 'No animations and saving traffic: calmer and lighter for weak devices.',
   'pf.preset.oledHint': 'A pure black page in the dark theme: saves an OLED screen and glares less at night.',
   'pf.preset.customHint': 'A custom mix: the switches below are set one by one.',
+  'pf.preset.ember': 'Ember',
+  'pf.preset.emberHint': 'Graphite and an orange accent instead of violet, firmer shapes, denser cards. The new look in trial mode.',
+  'pf.a11y.ember': 'Ember look',
+  'pf.a11y.emberHint': 'Graphite and an orange accent, firmer shapes.',
   'pf.a11y.oled': 'Black background (OLED)',
   'pf.a11y.oledHint': 'In the dark theme the page is pure black and the cards are darker.',
   'hdr.motionOff': 'Turn animations off',
@@ -149685,6 +149694,10 @@ const ru = {
   'pf.preset.softHint': 'Без анимаций и с экономией трафика: спокойнее и легче для слабых устройств.',
   'pf.preset.oledHint': 'Чисто чёрный фон в тёмной теме: экономит экран OLED и меньше слепит ночью.',
   'pf.preset.customHint': 'Свой набор: переключатели ниже настроены по отдельности.',
+  'pf.preset.ember': 'Ember',
+  'pf.preset.emberHint': 'Графит и оранжевый акцент вместо фиолетового, строже формы, плотнее карточки. Новое оформление в пробном режиме.',
+  'pf.a11y.ember': 'Оформление Ember',
+  'pf.a11y.emberHint': 'Графит и оранжевый акцент, строже формы.',
   'pf.a11y.oled': 'Чёрный фон (OLED)',
   'pf.a11y.oledHint': 'В тёмной теме страница чисто чёрная, карточки темнее.',
   'hdr.motionOff': 'Выключить анимации',
@@ -153811,6 +153824,7 @@ import './styles/news-page.css';
 import './styles/profile.css';
 // depth, headings, background, tooltips, header and footer, reaction of link cards
 import './styles/polish.css';
+import './styles/ember.css';
 // the button system last: one source of truth for every .btn* class
 import './styles/buttons.css';
 // phone layout fixes: loaded after the others, so it wins at equal specificity
@@ -159925,9 +159939,10 @@ export function ModerationTab() {
   // a nickname chosen elsewhere is used once
   useEffect(() => { try { localStorage.removeItem(MOD_PLAYER_KEY); } catch { /* private mode */ } }, []);
 
-  const load = () => api<{ bans: ModBan[]; log: ModEntry[]; top: ModTop[] }>(`/game-news/moderation?kind=${filter === 'all' ? '' : filter}&player=${encodeURIComponent(player.trim())}`).then(setData).catch(() => undefined);
+  const url = `/game-news/moderation?kind=${filter === 'all' ? '' : filter}&player=${encodeURIComponent(player.trim())}`;
+  const load = () => api<{ bans: ModBan[]; log: ModEntry[]; top: ModTop[] }>(url).then(setData).catch(() => undefined);
   usePoll(load, 10_000);
-  useEffect(() => { void load(); }, [filter, player]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { void api<{ bans: ModBan[]; log: ModEntry[]; top: ModTop[] }>(url).then(setData).catch(() => undefined); }, [url]);
 
   const unban = async (b: ModBan) => {
     if (!(await confirmDialog({ title: t('gn.md.unbanTitle', { nick: b.nick || b.masked }), text: t('gn.md.unbanText'), confirmLabel: t('gn.md.unban') }))) return;
@@ -163774,6 +163789,7 @@ export default function ResetPassword({ token }: { token: string }) {
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/ServerDetail.tsx" << '__COREGSM_EOF__'
+import { useAppearance } from '../appearance';
 import { setPageTitleDetail } from '../pageTitle';
 import ServerReviews from '../components/server/Reviews';
 import { eventFacts, whenShort } from '../components/server/serverLogic';
@@ -164004,6 +164020,8 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
     return () => io.disconnect();
   });
   const [prefs] = useState(readPrefs);
+  const [look] = useAppearance();
+  const ember = look.ember;
   const [hours, setHours] = useState(prefs.hours);
   const [series, setSeries] = useState<Series>(prefs.series);
   useEffect(() => {
@@ -164231,7 +164249,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
   const down = !s.online && s.hasStatus;
   const outage = down ? offlineSince(events, points) : null;
   const chartEl = (withSeries: boolean) => (
-    <HistoryChart points={points} hours={data.hours} events={events} title={s.name} game={gameLabel(s.game)} max={s.maxPlayers} color={series === 'ping' ? 'rgb(var(--link))' : calmSeriesColor(accent)} series={withSeries ? series : 'players'} loading={chartLoading} baseline={data.baseline ?? null} />
+    <HistoryChart points={points} hours={data.hours} events={events} title={s.name} game={gameLabel(s.game)} max={s.maxPlayers} color={series === 'ping' ? 'rgb(var(--link))' : ember ? 'rgb(var(--brand-2))' : calmSeriesColor(accent)} series={withSeries ? series : 'players'} loading={chartLoading} baseline={data.baseline ?? null} />
   );
   const chartTile = (i: number, withSeries: boolean) => (
     <SectionCard
@@ -171274,6 +171292,122 @@ html[data-motion='reduce'] :is(.srv-record, .srv-swipe-hint, .srv-slots-bar > i.
 .pl-top { background: linear-gradient(90deg, rgb(var(--brand) / .09), transparent 70%); border-radius: var(--r-md); }
 .pl-group { padding: 12px 4px 4px; font-size: var(--fs-xs); font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: rgb(var(--mute)); }
 ul > .pl-group:first-child { padding-top: 2px; }
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/styles"
+  cat > "$APP_DIR/core-frontend/src/styles/ember.css" << '__COREGSM_EOF__'
+/*
+ * «Ember»: graphite and an orange accent, firmer shapes, solid cards. An option of the appearance (data-ember="1"),
+ * loaded after polish.css, it only re-tunes the tokens of the panel and adds a few rules for the server page.
+ * The four accent tokens carry !important: accent.ts writes the community colour inline, and the look wins over it.
+ * Orange is used as a fill (buttons, the hot tile, the chart); text links take the lighter or darker step of it so
+ * they keep their contrast on both themes.
+ */
+
+/* ---------- light ---------- */
+:root[data-ember='1'] {
+  --page: 241 239 235;
+  --card: 255 255 255;
+  --raised: 255 255 255;
+  --overlay: 255 255 255;
+  --soft: 243 241 237;
+  --line: 226 223 216;
+  --field: 150 146 140;
+  --ink: 23 22 26;
+  --mute: 82 79 88;
+  --bad: 168 30 30;
+  --warn: 130 82 0;
+  --brand: 214 66 10 !important;
+  --brand-hover: 176 52 6 !important;
+  --brand-2: 170 48 4 !important;
+  --link: 168 48 4 !important;
+  --tile-border: rgb(226 223 216);
+  --wash-a: rgb(var(--brand) / .05);
+  --wash-b: rgb(255 154 92 / .06);
+  --au1: .05;
+  --au2: 0;
+  --hex-a: 0;
+  --glass-a: 1;
+  --r-md: 10px;
+  --r-lg: 12px;
+  --r-xl: 18px;
+  --shadow-2: 0 0 0 1px rgba(40, 30, 20, .05), 0 1px 2px rgba(20, 16, 10, .05);
+}
+
+/* ---------- dark ---------- */
+:root[data-ember='1'][data-theme='dark'] {
+  --page: 12 12 14;
+  --card: 23 23 27;
+  --raised: 31 31 37;
+  --overlay: 38 38 45;
+  --soft: 31 31 37;
+  --line: 40 40 46;
+  --field: 112 112 122;
+  --ink: 244 243 241;
+  --mute: 172 171 180;
+  --brand: 214 66 10 !important;
+  --brand-hover: 236 84 26 !important;
+  --brand-2: 176 52 6 !important;
+  --link: 255 138 76 !important;
+  --tile-border: rgb(40 40 46);
+  --au1: .07;
+  --glass-a: 1;
+  --wash-a: rgb(var(--brand) / .06);
+  --wash-b: rgb(255 154 92 / .05);
+  --shadow-2: 0 0 0 1px rgba(255, 255, 255, .04), 0 1px 2px rgba(0, 0, 0, .4);
+}
+@media (prefers-color-scheme: dark) {
+  :root[data-ember='1']:not([data-theme='light']) {
+    --page: 12 12 14;
+    --card: 23 23 27;
+    --raised: 31 31 37;
+    --overlay: 38 38 45;
+    --soft: 31 31 37;
+    --line: 40 40 46;
+    --field: 112 112 122;
+    --ink: 244 243 241;
+    --mute: 172 171 180;
+    --brand: 214 66 10 !important;
+    --brand-hover: 236 84 26 !important;
+    --brand-2: 176 52 6 !important;
+    --link: 255 138 76 !important;
+    --tile-border: rgb(40 40 46);
+    --au1: .07;
+    --glass-a: 1;
+    --wash-a: rgb(var(--brand) / .06);
+    --wash-b: rgb(255 154 92 / .05);
+    --shadow-2: 0 0 0 1px rgba(255, 255, 255, .04), 0 1px 2px rgba(0, 0, 0, .4);
+  }
+}
+
+/* the pictures keep their own colours, the page behind them is flat */
+:root[data-ember='1'] body { background-image: radial-gradient(60% 30% at 50% -6%, rgb(var(--brand) / var(--au1)), transparent 100%); }
+:root[data-ember='1'] body::before { display: none; }
+
+/* ---------- the server page ---------- */
+:root[data-ember='1'] .srv-page { --srv-accent: rgb(var(--brand)) !important; }
+
+/* the first indicator is the hot tile of the page */
+:root[data-ember='1'] .srv-metrics > .srv-metric:first-child {
+  background: linear-gradient(155deg, rgb(var(--brand)), rgb(var(--brand-2)));
+  color: #fff;
+  box-shadow: none;
+}
+:root[data-ember='1'] .srv-metrics > .srv-metric:first-child :is(.stat-k, .srv-metric-h, .srv-metric-per) { color: rgb(255 255 255 / .86); }
+:root[data-ember='1'] .srv-metrics > .srv-metric:first-child .srv-metric-bar { background: rgb(255 255 255 / .28); }
+:root[data-ember='1'] .srv-metrics > .srv-metric:first-child .srv-metric-bar > i { background: #fff; }
+
+/* the open tab and the counters in the accent of the panel */
+:root[data-ember='1'] .srv-tabs.seg[data-ind]::before,
+:root[data-ember='1'] .srv-tabs:not([data-ind]) > .seg-item.on { background: rgb(var(--brand) / .16); box-shadow: inset 0 0 0 1px rgb(var(--brand) / .4); }
+:root[data-ember='1'] .srv-tabs > .seg-item.on .tab-count { background: rgb(var(--brand) / .28); }
+
+/* cards: flat, one hairline, no halo */
+:root[data-ember='1'] .tile,
+:root[data-ember='1'] .panel { box-shadow: var(--shadow-2); }
+:root[data-ember='1'] .srv-glow { box-shadow: 0 0 0 1px rgb(var(--g) / .3); }
+
+/* small captions are not made fainter by opacity: they sit on the tinted band of the hero and keep their contrast */
+:root[data-ember='1'] .pulse-ticks { opacity: 1; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/mobile.css" << '__COREGSM_EOF__'

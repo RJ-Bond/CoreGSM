@@ -28,9 +28,10 @@ export function ModerationTab() {
   // a nickname chosen elsewhere is used once
   useEffect(() => { try { localStorage.removeItem(MOD_PLAYER_KEY); } catch { /* private mode */ } }, []);
 
-  const load = () => api<{ bans: ModBan[]; log: ModEntry[]; top: ModTop[] }>(`/game-news/moderation?kind=${filter === 'all' ? '' : filter}&player=${encodeURIComponent(player.trim())}`).then(setData).catch(() => undefined);
+  const url = `/game-news/moderation?kind=${filter === 'all' ? '' : filter}&player=${encodeURIComponent(player.trim())}`;
+  const load = () => api<{ bans: ModBan[]; log: ModEntry[]; top: ModTop[] }>(url).then(setData).catch(() => undefined);
   usePoll(load, 10_000);
-  useEffect(() => { void load(); }, [filter, player]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { void api<{ bans: ModBan[]; log: ModEntry[]; top: ModTop[] }>(url).then(setData).catch(() => undefined); }, [url]);
 
   const unban = async (b: ModBan) => {
     if (!(await confirmDialog({ title: t('gn.md.unbanTitle', { nick: b.nick || b.masked }), text: t('gn.md.unbanText'), confirmLabel: t('gn.md.unban') }))) return;
