@@ -24,6 +24,10 @@ export interface KickReason { key: string; text: string }
 
 export interface KickSettings {
   enabled: boolean;
+  /** .ban and .unban are allowed (only when the commands as a whole are on) */
+  banEnabled: boolean;
+  /** .warn is allowed */
+  warnEnabled: boolean;
   /** the line for everybody after a kick: {name} the player, {reason}, {admin} who did it */
   template: string;
   textColor: string;
@@ -70,6 +74,8 @@ export interface KickSettings {
 
 export const DEFAULT_KICK: KickSettings = {
   enabled: true,
+  banEnabled: true,
+  warnEnabled: true,
   template: '* Игрок {name} был кикнут с сервера. Причина: {reason}',
   textColor: '#FF5555',
   nameColor: '#5FD068',
@@ -113,6 +119,8 @@ export function getKick(serverId?: number): KickSettings {
       : d.reasons.map((r) => ({ ...r }));
     return {
       enabled: bool(v.enabled, d.enabled),
+      banEnabled: bool(v.banEnabled, d.banEnabled),
+      warnEnabled: bool(v.warnEnabled, d.warnEnabled),
       template: text(v.template, d.template),
       textColor: color(v.textColor, d.textColor),
       nameColor: color(v.nameColor, d.nameColor),
@@ -249,7 +257,7 @@ function logToDiscord(s: KickSettings, serverId: number, title: string, color: n
 export function runMod(serverId: number, b: ModInput, now = Date.now()): ModResult {
   const s = getKick(serverId);
   const word = b.action === 'kick' ? '.kick' : b.action === 'ban' ? '.ban' : '.warn';
-  if (!s.enabled) return refuse(`* Команда ${word} отключена в панели.`);
+  if (!s.enabled || (b.action === 'ban' && !s.banEnabled) || (b.action === 'warn' && !s.warnEnabled)) return refuse(`* Команда ${word} отключена в панели.`);
   if (s.protectAdmins && b.targetIsAdmin) return refuse('* Администратора трогать нельзя.');
 
   if (b.action === 'kick') {
@@ -372,7 +380,7 @@ export function registerGameNewsKick({ app, admin }: { app: Express; admin: Requ
     const b = z.object({ adminName: z.string().max(100), name: z.string().max(100) }).safeParse(req.body);
     if (!b.success) return res.status(400).json({ ok: false, replies: [say(C_BAD, '* Введите: .unban (ник)')] });
     const s = getKick(t.server_id);
-    if (!s.enabled) return res.json(refuse('* Команда .unban отключена в панели.'));
+    if (!s.enabled || !s.banEnabled) return res.json(refuse('* Команда .unban отключена в панели.'));
     const ban = findBanByNick(b.data.name);
     if (!ban) return res.json(refuse(`* Бан для «${plainLine(b.data.name)}» не найден.`, [b.data.name]));
     removeBan(ban.platform_id);
@@ -448,7 +456,7 @@ export function registerGameNewsKick({ app, admin }: { app: Express; admin: Requ
     const color = z.string().refine(isHexColor, 'color');
     const line = z.string().min(1).max(300);
     const b = z.object({
-      enabled: z.boolean(), template: line, textColor: color, nameColor: color, reasonColor: color, adminColor: color,
+      enabled: z.boolean(), banEnabled: z.boolean().optional(), warnEnabled: z.boolean().optional(), template: line, textColor: color, nameColor: color, reasonColor: color, adminColor: color,
       defaultReason: z.string().max(100), requireReason: z.boolean(), protectAdmins: z.boolean(), announce: z.boolean(),
       cooldownSec: z.number().int().min(0).max(3600), logChannelId: z.string().regex(/^(\d{15,25})?$/), maxReason: z.number().int().min(10).max(200),
       banTemplate: line, warnTemplate: line, unbanTemplate: line, banJoinText: line, blockJoinText: line, notifyPlayer: z.boolean(), notifyText: line,
@@ -464,6 +472,7 @@ export function registerGameNewsKick({ app, admin }: { app: Express; admin: Requ
       .filter((r) => r.key && r.text && !keys.has(r.key.toLowerCase()) && keys.add(r.key.toLowerCase()));
     writeScoped('gamenews_kick', JSON.stringify({
       ...b.data,
+      banEnabled: b.data.banEnabled ?? d.banEnabled, warnEnabled: b.data.warnEnabled ?? d.warnEnabled,
       template: clean(b.data.template, d.template), banTemplate: clean(b.data.banTemplate, d.banTemplate), warnTemplate: clean(b.data.warnTemplate, d.warnTemplate), unbanTemplate: clean(b.data.unbanTemplate, d.unbanTemplate),
       banJoinText: clean(b.data.banJoinText, d.banJoinText), blockJoinText: clean(b.data.blockJoinText, d.blockJoinText), notifyText: clean(b.data.notifyText, d.notifyText),
       defaultReason: clean(b.data.defaultReason, d.defaultReason), reasons,

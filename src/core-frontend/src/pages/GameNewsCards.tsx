@@ -222,13 +222,13 @@ export function RegisterCard({ initial }: { initial: RegisterSettings }) {
     validate: (v) => {
       if (!Number.isInteger(v.remindMinutes) || v.remindMinutes < 0 || v.remindMinutes > 1440) return t('gn.rg.badRemind');
       if (!Number.isInteger(v.discordEveryHours) || v.discordEveryHours < 1 || v.discordEveryHours > 720) return t('gn.rg.badHours');
-      return [v.promptText, v.doneText, v.discordText, v.pendingText, v.loginText, v.nickTakenText, v.autoLoginText, v.lastSeenText, v.rankText].some((x) => !x.trim()) ? t('gn.hint.text') : null;
+      return [v.promptText, v.doneText, v.discordText, v.pendingText, v.loginText, v.nickTakenText, v.remindText, v.autoLoginText, v.lastSeenText, v.rankText].some((x) => !x.trim()) ? t('gn.hint.text') : null;
     },
     save: async (v) => { await api(`/game-news/register-settings${sc.q}`, 'PUT', v); setSaved(v); sc.changed(); },
   });
   const sample = (text: string, color: string) => commandLine(color, text.replace(/\{login\}/g, 'WhiteLegioN').replace(/\{panel\}/g, 'coregsm.example.com'));
 
-  const field = (label: string, key: 'promptText' | 'doneText' | 'discordText' | 'pendingText' | 'loginText' | 'nickTakenText' | 'autoLoginText' | 'lastSeenText') => (
+  const field = (label: string, key: 'promptText' | 'doneText' | 'discordText' | 'pendingText' | 'loginText' | 'nickTakenText' | 'remindText' | 'autoLoginText' | 'lastSeenText') => (
     <Field label={label}>
       <AutoText value={f[key]} maxLength={300} onChange={(e) => set(key, e.target.value)} />
     </Field>
@@ -257,6 +257,7 @@ export function RegisterCard({ initial }: { initial: RegisterSettings }) {
         {field(t('gn.rg.pending'), 'pendingText')}
         {field(t('gn.rg.login'), 'loginText')}
         {field(t('gn.rg.nickTaken'), 'nickTakenText')}
+        {field(t('gn.rg.remindText'), 'remindText')}
       </div>
 
       <label className="flex items-center gap-3 font-bold">
@@ -437,6 +438,10 @@ export function KickCard({ initial }: { initial: KickSettings }) {
             </>
           )}
         >
+          <label className="flex items-center gap-3 font-bold">
+            <Switch checked={f.banEnabled} onChange={(v) => set('banEnabled', v)} />
+            {t('gn.kk.banEnabled')}
+          </label>
           <p className="text-sm font-semibold text-mute">{t('gn.kk.banNote')}</p>
           <Field label={t('gn.kk.banTemplate')}>
             <AutoText value={f.banTemplate} maxLength={300} onChange={(e) => set('banTemplate', e.target.value)} />
@@ -455,6 +460,10 @@ export function KickCard({ initial }: { initial: KickSettings }) {
 
       {part === 'warn' && (
         <WithPreview preview={<ChatLines lines={f.announce ? [modLine(sv, f.warnTemplate, { name: 'WhiteLegioN', reason: reasonText, admin: 'Админ', n: 2, limit: f.warnLimit })] : []} />}>
+          <label className="flex items-center gap-3 font-bold">
+            <Switch checked={f.warnEnabled} onChange={(v) => set('warnEnabled', v)} />
+            {t('gn.kk.warnEnabled')}
+          </label>
           <p className="text-sm font-semibold text-mute">{t('gn.kk.warnNote')}</p>
           <Field label={t('gn.kk.warnTemplate')}>
             <AutoText value={f.warnTemplate} maxLength={300} onChange={(e) => set('warnTemplate', e.target.value)} />

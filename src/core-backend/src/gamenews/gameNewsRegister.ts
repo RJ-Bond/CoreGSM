@@ -45,6 +45,8 @@ export interface RegisterSettings {
   loginText: string;
   /** the nickname of a player who joins (or registers) is already in the panel: suggest .login instead: {name} */
   nickTakenText: string;
+  /** the reminder for a player who is still not registered (the periodic one, not the first hint at the join) */
+  remindText: string;
   /** a linked player is recognised by the game account at the join (no command is needed): «Автоматический вход» */
   autoLoginEnabled: boolean;
   /** the line of the automatic login: {login} {name} */
@@ -71,6 +73,7 @@ export const DEFAULT_REGISTER: RegisterSettings = {
   pendingText: '* Заявка на регистрацию отправлена. Когда администратор её одобрит, вы сможете войти в панель.',
   loginText: '* Готово! Игровой аккаунт привязан к аккаунту {login} в панели.',
   nickTakenText: '* Ник {name} уже есть в панели. Это ваш аккаунт? Введите .login (пароль), логин не нужен. Или .login (логин) (пароль). Нет? Тогда .register (пароль) (подтверждение) ещё раз.',
+  remindText: '* Напоминание: вы всё ещё не зарегистрированы в панели. Введите .register (пароль) (подтверждение) или, если аккаунт уже есть, .login (логин) (пароль).',
   autoLoginEnabled: true,
   autoLoginText: '* Автоматический вход: вы авторизованы как {login}.',
   lastSeenEnabled: true,
@@ -115,6 +118,7 @@ export function getRegisterSettings(serverId?: number): RegisterSettings {
       lastSeenText: text(v.lastSeenText, d.lastSeenText),
       nickTakenText: typeof v.nickTakenText === 'string' && OLD_NICK_TAKEN.includes(v.nickTakenText) ? d.nickTakenText : text(v.nickTakenText, d.nickTakenText),
       remindMinutes: Number.isFinite(v.remindMinutes) ? Math.min(1440, Math.max(0, Math.round(v.remindMinutes as number))) : d.remindMinutes,
+      remindText: text(v.remindText, d.remindText),
       discordEveryHours: Number.isFinite(v.discordEveryHours) ? Math.min(720, Math.max(1, Math.round(v.discordEveryHours as number))) : d.discordEveryHours,
       rankEnabled: typeof v.rankEnabled === 'boolean' ? v.rankEnabled : d.rankEnabled,
       rankText: text(v.rankText, d.rankText),
@@ -202,7 +206,7 @@ export function registerGameNewsPlayers({ app }: { app: Express }): void {
     if (!who) {
       // nobody can register while the panel is closed or not set up: no use to invite
       if (needsSetup() || !registrationOpen()) return res.json({ registered: false, replies: [] });
-      const hint = nickInPanel(String(req.query.name ?? '')) ? s.nickTakenText : s.promptText;
+      const hint = nickInPanel(String(req.query.name ?? '')) ? s.nickTakenText : periodic ? s.remindText : s.promptText;
       return res.json({ registered: false, replies: [tag(nickInPanel(String(req.query.name ?? '')) ? C_HINT : C_INFO, fill(hint, { panel: panelUrl(req), name: plainLine(String(req.query.name ?? '')) }), [String(req.query.name ?? '')])] });
     }
     const u = db.prepare('SELECT id, status, discord_id FROM users WHERE id = ?').get(who.user_id) as UserRow | undefined;

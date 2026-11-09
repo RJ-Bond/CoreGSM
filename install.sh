@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="ade8c1e22af5"
+COREGSM_BUILD="09e059242070"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.98"
+COREGSM_VERSION="1.1.99"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -24843,6 +24843,10 @@ export interface KickReason { key: string; text: string }
 
 export interface KickSettings {
   enabled: boolean;
+  /** .ban and .unban are allowed (only when the commands as a whole are on) */
+  banEnabled: boolean;
+  /** .warn is allowed */
+  warnEnabled: boolean;
   /** the line for everybody after a kick: {name} the player, {reason}, {admin} who did it */
   template: string;
   textColor: string;
@@ -24889,6 +24893,8 @@ export interface KickSettings {
 
 export const DEFAULT_KICK: KickSettings = {
   enabled: true,
+  banEnabled: true,
+  warnEnabled: true,
   template: '* Игрок {name} был кикнут с сервера. Причина: {reason}',
   textColor: '#FF5555',
   nameColor: '#5FD068',
@@ -24932,6 +24938,8 @@ export function getKick(serverId?: number): KickSettings {
       : d.reasons.map((r) => ({ ...r }));
     return {
       enabled: bool(v.enabled, d.enabled),
+      banEnabled: bool(v.banEnabled, d.banEnabled),
+      warnEnabled: bool(v.warnEnabled, d.warnEnabled),
       template: text(v.template, d.template),
       textColor: color(v.textColor, d.textColor),
       nameColor: color(v.nameColor, d.nameColor),
@@ -25068,7 +25076,7 @@ function logToDiscord(s: KickSettings, serverId: number, title: string, color: n
 export function runMod(serverId: number, b: ModInput, now = Date.now()): ModResult {
   const s = getKick(serverId);
   const word = b.action === 'kick' ? '.kick' : b.action === 'ban' ? '.ban' : '.warn';
-  if (!s.enabled) return refuse(`* Команда ${word} отключена в панели.`);
+  if (!s.enabled || (b.action === 'ban' && !s.banEnabled) || (b.action === 'warn' && !s.warnEnabled)) return refuse(`* Команда ${word} отключена в панели.`);
   if (s.protectAdmins && b.targetIsAdmin) return refuse('* Администратора трогать нельзя.');
 
   if (b.action === 'kick') {
@@ -25191,7 +25199,7 @@ export function registerGameNewsKick({ app, admin }: { app: Express; admin: Requ
     const b = z.object({ adminName: z.string().max(100), name: z.string().max(100) }).safeParse(req.body);
     if (!b.success) return res.status(400).json({ ok: false, replies: [say(C_BAD, '* Введите: .unban (ник)')] });
     const s = getKick(t.server_id);
-    if (!s.enabled) return res.json(refuse('* Команда .unban отключена в панели.'));
+    if (!s.enabled || !s.banEnabled) return res.json(refuse('* Команда .unban отключена в панели.'));
     const ban = findBanByNick(b.data.name);
     if (!ban) return res.json(refuse(`* Бан для «${plainLine(b.data.name)}» не найден.`, [b.data.name]));
     removeBan(ban.platform_id);
@@ -25267,7 +25275,7 @@ export function registerGameNewsKick({ app, admin }: { app: Express; admin: Requ
     const color = z.string().refine(isHexColor, 'color');
     const line = z.string().min(1).max(300);
     const b = z.object({
-      enabled: z.boolean(), template: line, textColor: color, nameColor: color, reasonColor: color, adminColor: color,
+      enabled: z.boolean(), banEnabled: z.boolean().optional(), warnEnabled: z.boolean().optional(), template: line, textColor: color, nameColor: color, reasonColor: color, adminColor: color,
       defaultReason: z.string().max(100), requireReason: z.boolean(), protectAdmins: z.boolean(), announce: z.boolean(),
       cooldownSec: z.number().int().min(0).max(3600), logChannelId: z.string().regex(/^(\d{15,25})?$/), maxReason: z.number().int().min(10).max(200),
       banTemplate: line, warnTemplate: line, unbanTemplate: line, banJoinText: line, blockJoinText: line, notifyPlayer: z.boolean(), notifyText: line,
@@ -25283,6 +25291,7 @@ export function registerGameNewsKick({ app, admin }: { app: Express; admin: Requ
       .filter((r) => r.key && r.text && !keys.has(r.key.toLowerCase()) && keys.add(r.key.toLowerCase()));
     writeScoped('gamenews_kick', JSON.stringify({
       ...b.data,
+      banEnabled: b.data.banEnabled ?? d.banEnabled, warnEnabled: b.data.warnEnabled ?? d.warnEnabled,
       template: clean(b.data.template, d.template), banTemplate: clean(b.data.banTemplate, d.banTemplate), warnTemplate: clean(b.data.warnTemplate, d.warnTemplate), unbanTemplate: clean(b.data.unbanTemplate, d.unbanTemplate),
       banJoinText: clean(b.data.banJoinText, d.banJoinText), blockJoinText: clean(b.data.blockJoinText, d.blockJoinText), notifyText: clean(b.data.notifyText, d.notifyText),
       defaultReason: clean(b.data.defaultReason, d.defaultReason), reasons,
@@ -25664,6 +25673,8 @@ export interface RegisterSettings {
   loginText: string;
   /** the nickname of a player who joins (or registers) is already in the panel: suggest .login instead: {name} */
   nickTakenText: string;
+  /** the reminder for a player who is still not registered (the periodic one, not the first hint at the join) */
+  remindText: string;
   /** a linked player is recognised by the game account at the join (no command is needed): «Автоматический вход» */
   autoLoginEnabled: boolean;
   /** the line of the automatic login: {login} {name} */
@@ -25690,6 +25701,7 @@ export const DEFAULT_REGISTER: RegisterSettings = {
   pendingText: '* Заявка на регистрацию отправлена. Когда администратор её одобрит, вы сможете войти в панель.',
   loginText: '* Готово! Игровой аккаунт привязан к аккаунту {login} в панели.',
   nickTakenText: '* Ник {name} уже есть в панели. Это ваш аккаунт? Введите .login (пароль), логин не нужен. Или .login (логин) (пароль). Нет? Тогда .register (пароль) (подтверждение) ещё раз.',
+  remindText: '* Напоминание: вы всё ещё не зарегистрированы в панели. Введите .register (пароль) (подтверждение) или, если аккаунт уже есть, .login (логин) (пароль).',
   autoLoginEnabled: true,
   autoLoginText: '* Автоматический вход: вы авторизованы как {login}.',
   lastSeenEnabled: true,
@@ -25734,6 +25746,7 @@ export function getRegisterSettings(serverId?: number): RegisterSettings {
       lastSeenText: text(v.lastSeenText, d.lastSeenText),
       nickTakenText: typeof v.nickTakenText === 'string' && OLD_NICK_TAKEN.includes(v.nickTakenText) ? d.nickTakenText : text(v.nickTakenText, d.nickTakenText),
       remindMinutes: Number.isFinite(v.remindMinutes) ? Math.min(1440, Math.max(0, Math.round(v.remindMinutes as number))) : d.remindMinutes,
+      remindText: text(v.remindText, d.remindText),
       discordEveryHours: Number.isFinite(v.discordEveryHours) ? Math.min(720, Math.max(1, Math.round(v.discordEveryHours as number))) : d.discordEveryHours,
       rankEnabled: typeof v.rankEnabled === 'boolean' ? v.rankEnabled : d.rankEnabled,
       rankText: text(v.rankText, d.rankText),
@@ -25821,7 +25834,7 @@ export function registerGameNewsPlayers({ app }: { app: Express }): void {
     if (!who) {
       // nobody can register while the panel is closed or not set up: no use to invite
       if (needsSetup() || !registrationOpen()) return res.json({ registered: false, replies: [] });
-      const hint = nickInPanel(String(req.query.name ?? '')) ? s.nickTakenText : s.promptText;
+      const hint = nickInPanel(String(req.query.name ?? '')) ? s.nickTakenText : periodic ? s.remindText : s.promptText;
       return res.json({ registered: false, replies: [tag(nickInPanel(String(req.query.name ?? '')) ? C_HINT : C_INFO, fill(hint, { panel: panelUrl(req), name: plainLine(String(req.query.name ?? '')) }), [String(req.query.name ?? '')])] });
     }
     const u = db.prepare('SELECT id, status, discord_id FROM users WHERE id = ?').get(who.user_id) as UserRow | undefined;
@@ -26502,7 +26515,7 @@ export function registerGameNewsRules({ app, admin }: { app: Express; admin: Req
   app.put('/api/game-news/register-settings', admin, (req, res) => {
     const b = z.object({
       enabled: z.boolean(), promptText: z.string().max(300), doneText: z.string().max(300), discordText: z.string().max(300),
-      pendingText: z.string().max(300), loginText: z.string().max(300).optional(), nickTakenText: z.string().max(300).optional(), autoLoginEnabled: z.boolean().optional(), autoLoginText: z.string().max(300).optional(), lastSeenEnabled: z.boolean().optional(), lastSeenText: z.string().max(300).optional(), remindMinutes: z.number().int().min(0).max(1440).optional(), discordEveryHours: z.number().int().min(1).max(720),
+      pendingText: z.string().max(300), loginText: z.string().max(300).optional(), nickTakenText: z.string().max(300).optional(), remindText: z.string().max(300).optional(), autoLoginEnabled: z.boolean().optional(), autoLoginText: z.string().max(300).optional(), lastSeenEnabled: z.boolean().optional(), lastSeenText: z.string().max(300).optional(), remindMinutes: z.number().int().min(0).max(1440).optional(), discordEveryHours: z.number().int().min(1).max(720),
       rankEnabled: z.boolean().optional(), rankText: z.string().max(300).optional(),
     }).safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Проверьте поля' });
@@ -26517,6 +26530,7 @@ export function registerGameNewsRules({ app, admin }: { app: Express; admin: Req
       pendingText: keep(b.data.pendingText, d.pendingText),
       loginText: keep(b.data.loginText ?? d.loginText, d.loginText),
       nickTakenText: keep(b.data.nickTakenText ?? d.nickTakenText, d.nickTakenText),
+      remindText: keep(b.data.remindText ?? d.remindText, d.remindText),
       autoLoginEnabled: b.data.autoLoginEnabled ?? d.autoLoginEnabled,
       autoLoginText: keep(b.data.autoLoginText ?? d.autoLoginText, d.autoLoginText),
       lastSeenEnabled: b.data.lastSeenEnabled ?? d.lastSeenEnabled,
@@ -141882,6 +141896,8 @@ export interface KickReason { key: string; text: string }
 
 export interface KickSettings {
   enabled: boolean;
+  banEnabled: boolean;
+  warnEnabled: boolean;
   template: string;
   textColor: string;
   nameColor: string;
@@ -141910,7 +141926,7 @@ export interface KickSettings {
 
 /** the defaults of the moderation commands (the same as in the panel's backend) */
 export const DEFAULT_KICK: KickSettings = {
-  enabled: true, template: '* Игрок {name} был кикнут с сервера. Причина: {reason}', textColor: '#FF5555', nameColor: '#5FD068', reasonColor: '#FFCC33', adminColor: '#6EC1FF',
+  enabled: true, banEnabled: true, warnEnabled: true, template: '* Игрок {name} был кикнут с сервера. Причина: {reason}', textColor: '#FF5555', nameColor: '#5FD068', reasonColor: '#FFCC33', adminColor: '#6EC1FF',
   defaultReason: 'не указана', requireReason: false, protectAdmins: true, announce: true, cooldownSec: 0, maxReason: 100, logChannelId: '',
   banTemplate: '* Игрок {name} был забанен на {time}. Причина: {reason}',
   warnTemplate: '* Игрок {name} был предупреждён. Причина: {reason}',
@@ -141965,6 +141981,7 @@ export interface RegisterSettings {
   pendingText: string;
   loginText: string;
   nickTakenText: string;
+  remindText: string;
   autoLoginEnabled: boolean;
   autoLoginText: string;
   lastSeenEnabled: boolean;
@@ -145438,6 +145455,7 @@ const en: Record<keyof typeof ru, string> = {
   'gn.ch.confirmLine': 'A «→ в игру» line in the channel',
   'gn.ch.confirmLineNote': 'The bot repeats the line in the style of the game chat, so the whole talk reads in one row. It stays in the channel.',
   'gn.rg.login': 'After .login: the game is linked to the account ({login} is the login)',
+  'gn.rg.remindText': 'Reminder for a player who still has not registered (every N minutes)',
   'gn.rg.nickTaken': 'When the nickname is already in the panel ({name} is the nickname)',
   'gn.sc.inheritShort': 'The general settings are used',
   'gn.sc.general': 'general',
@@ -145560,6 +145578,8 @@ const en: Record<keyof typeof ru, string> = {
   'gn.tab.mod': 'Moderation',
   'gn.kk.reasonEmpty': 'Every reason needs a short name and a text',
   'gn.kk.p.kick': 'Kick',
+  'gn.kk.banEnabled': 'Allow the .ban and .unban commands',
+  'gn.kk.warnEnabled': 'Allow the .warn command',
   'gn.kk.p.ban': 'Ban',
   'gn.kk.p.warn': 'Warnings',
   'gn.kk.p.reasons': 'Reasons',
@@ -150341,6 +150361,7 @@ const ru = {
   'gn.ch.confirmLine': 'Строка «→ в игру» в канале',
   'gn.ch.confirmLineNote': 'Бот повторяет строку в стиле игрового чата, чтобы весь разговор читался в одном ряду. Остаётся в канале.',
   'gn.rg.login': 'После .login: игра привязана к аккаунту ({login} — логин)',
+  'gn.rg.remindText': 'Напоминание тому, кто так и не зарегистрировался (раз в N минут)',
   'gn.rg.nickTaken': 'Если ник уже есть в панели ({name} — ник игрока)',
   'gn.sc.inheritShort': 'Используются общие настройки',
   'gn.sc.general': 'общие',
@@ -150463,6 +150484,8 @@ const ru = {
   'gn.tab.mod': 'Модерация',
   'gn.kk.reasonEmpty': 'У каждой причины должны быть короткое имя и текст',
   'gn.kk.p.kick': 'Кик',
+  'gn.kk.banEnabled': 'Разрешить команды .ban и .unban',
+  'gn.kk.warnEnabled': 'Разрешить команду .warn',
   'gn.kk.p.ban': 'Бан',
   'gn.kk.p.warn': 'Предупреждения',
   'gn.kk.p.reasons': 'Причины',
@@ -159376,13 +159399,13 @@ export function RegisterCard({ initial }: { initial: RegisterSettings }) {
     validate: (v) => {
       if (!Number.isInteger(v.remindMinutes) || v.remindMinutes < 0 || v.remindMinutes > 1440) return t('gn.rg.badRemind');
       if (!Number.isInteger(v.discordEveryHours) || v.discordEveryHours < 1 || v.discordEveryHours > 720) return t('gn.rg.badHours');
-      return [v.promptText, v.doneText, v.discordText, v.pendingText, v.loginText, v.nickTakenText, v.autoLoginText, v.lastSeenText, v.rankText].some((x) => !x.trim()) ? t('gn.hint.text') : null;
+      return [v.promptText, v.doneText, v.discordText, v.pendingText, v.loginText, v.nickTakenText, v.remindText, v.autoLoginText, v.lastSeenText, v.rankText].some((x) => !x.trim()) ? t('gn.hint.text') : null;
     },
     save: async (v) => { await api(`/game-news/register-settings${sc.q}`, 'PUT', v); setSaved(v); sc.changed(); },
   });
   const sample = (text: string, color: string) => commandLine(color, text.replace(/\{login\}/g, 'WhiteLegioN').replace(/\{panel\}/g, 'coregsm.example.com'));
 
-  const field = (label: string, key: 'promptText' | 'doneText' | 'discordText' | 'pendingText' | 'loginText' | 'nickTakenText' | 'autoLoginText' | 'lastSeenText') => (
+  const field = (label: string, key: 'promptText' | 'doneText' | 'discordText' | 'pendingText' | 'loginText' | 'nickTakenText' | 'remindText' | 'autoLoginText' | 'lastSeenText') => (
     <Field label={label}>
       <AutoText value={f[key]} maxLength={300} onChange={(e) => set(key, e.target.value)} />
     </Field>
@@ -159411,6 +159434,7 @@ export function RegisterCard({ initial }: { initial: RegisterSettings }) {
         {field(t('gn.rg.pending'), 'pendingText')}
         {field(t('gn.rg.login'), 'loginText')}
         {field(t('gn.rg.nickTaken'), 'nickTakenText')}
+        {field(t('gn.rg.remindText'), 'remindText')}
       </div>
 
       <label className="flex items-center gap-3 font-bold">
@@ -159591,6 +159615,10 @@ export function KickCard({ initial }: { initial: KickSettings }) {
             </>
           )}
         >
+          <label className="flex items-center gap-3 font-bold">
+            <Switch checked={f.banEnabled} onChange={(v) => set('banEnabled', v)} />
+            {t('gn.kk.banEnabled')}
+          </label>
           <p className="text-sm font-semibold text-mute">{t('gn.kk.banNote')}</p>
           <Field label={t('gn.kk.banTemplate')}>
             <AutoText value={f.banTemplate} maxLength={300} onChange={(e) => set('banTemplate', e.target.value)} />
@@ -159609,6 +159637,10 @@ export function KickCard({ initial }: { initial: KickSettings }) {
 
       {part === 'warn' && (
         <WithPreview preview={<ChatLines lines={f.announce ? [modLine(sv, f.warnTemplate, { name: 'WhiteLegioN', reason: reasonText, admin: 'Админ', n: 2, limit: f.warnLimit })] : []} />}>
+          <label className="flex items-center gap-3 font-bold">
+            <Switch checked={f.warnEnabled} onChange={(v) => set('warnEnabled', v)} />
+            {t('gn.kk.warnEnabled')}
+          </label>
           <p className="text-sm font-semibold text-mute">{t('gn.kk.warnNote')}</p>
           <Field label={t('gn.kk.warnTemplate')}>
             <AutoText value={f.warnTemplate} maxLength={300} onChange={(e) => set('warnTemplate', e.target.value)} />

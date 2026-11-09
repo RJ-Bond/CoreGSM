@@ -176,3 +176,13 @@ describe('the commands for the plugin (a kick from Discord)', () => {
     assert.equal(mod.commandState(late)?.state, 'failed');
   });
 });
+
+describe('a switch for each command', () => {
+  it('turns .ban and .warn off alone, and .kick keeps working', () => {
+    scope.writeScoped('gamenews_kick', JSON.stringify({ banEnabled: false, warnEnabled: false }), 7);
+    assert.equal(kick.runMod(7, input({ action: 'ban', time: '7d', reason: 'x' }), NOW).ok, false);
+    assert.equal(kick.runMod(7, input({ action: 'warn', reason: 'x' }), NOW).ok, false);
+    assert.equal(kick.runMod(7, input({ action: 'kick', reason: 'x', adminId: 'sw1' }), NOW).ok, true);
+    assert.match(kick.runMod(7, input({ action: 'ban', time: '7d', reason: 'x' }), NOW).replies[0], /отключена/);
+  });
+});

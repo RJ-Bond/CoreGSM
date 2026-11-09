@@ -252,6 +252,8 @@ export interface KickReason { key: string; text: string }
 
 export interface KickSettings {
   enabled: boolean;
+  banEnabled: boolean;
+  warnEnabled: boolean;
   template: string;
   textColor: string;
   nameColor: string;
@@ -280,7 +282,7 @@ export interface KickSettings {
 
 /** the defaults of the moderation commands (the same as in the panel's backend) */
 export const DEFAULT_KICK: KickSettings = {
-  enabled: true, template: '* Игрок {name} был кикнут с сервера. Причина: {reason}', textColor: '#FF5555', nameColor: '#5FD068', reasonColor: '#FFCC33', adminColor: '#6EC1FF',
+  enabled: true, banEnabled: true, warnEnabled: true, template: '* Игрок {name} был кикнут с сервера. Причина: {reason}', textColor: '#FF5555', nameColor: '#5FD068', reasonColor: '#FFCC33', adminColor: '#6EC1FF',
   defaultReason: 'не указана', requireReason: false, protectAdmins: true, announce: true, cooldownSec: 0, maxReason: 100, logChannelId: '',
   banTemplate: '* Игрок {name} был забанен на {time}. Причина: {reason}',
   warnTemplate: '* Игрок {name} был предупреждён. Причина: {reason}',
@@ -335,6 +337,7 @@ export interface RegisterSettings {
   pendingText: string;
   loginText: string;
   nickTakenText: string;
+  remindText: string;
   autoLoginEnabled: boolean;
   autoLoginText: string;
   lastSeenEnabled: boolean;
