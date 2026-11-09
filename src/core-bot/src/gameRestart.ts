@@ -40,8 +40,9 @@ export const SAY_COMMAND = {
     SERVER,
   ],
 };
+/** named game-kick: /kick is the moderation command that removes a member from the Discord server (punish.ts); Discord refuses two commands with one name */
 export const KICK_COMMAND = {
-  name: 'kick',
+  name: 'game-kick',
   description: '🚪 Кикнуть игрока с игрового сервера · только админы',
   description_localizations: { ru: '🚪 Кикнуть игрока с игрового сервера · только админы', 'en-US': '🚪 Kick a player from a game server · admins only', 'en-GB': '🚪 Kick a player from a game server · admins only' },
   dm_permission: false,
@@ -59,7 +60,7 @@ export const RESTART_NAMES = new Set(RESTART_COMMANDS.map((c) => c.name));
 
 export async function handleRestart(i: ChatInputCommandInteraction): Promise<void> {
   if (i.commandName === 'say') return handleSay(i);
-  if (i.commandName === 'kick') return handleKick(i);
+  if (i.commandName === 'game-kick') return handleKick(i);
   try {
     await i.deferReply({ flags: EPHEMERAL });
   } catch (e) {

@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="609dacdf6e79"
+COREGSM_BUILD="d98e10d9a19b"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.93"
+COREGSM_VERSION="1.1.94"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -44964,8 +44964,9 @@ export const SAY_COMMAND = {
     SERVER,
   ],
 };
+/** named game-kick: /kick is the moderation command that removes a member from the Discord server (punish.ts); Discord refuses two commands with one name */
 export const KICK_COMMAND = {
-  name: 'kick',
+  name: 'game-kick',
   description: '🚪 Кикнуть игрока с игрового сервера · только админы',
   description_localizations: { ru: '🚪 Кикнуть игрока с игрового сервера · только админы', 'en-US': '🚪 Kick a player from a game server · admins only', 'en-GB': '🚪 Kick a player from a game server · admins only' },
   dm_permission: false,
@@ -44983,7 +44984,7 @@ export const RESTART_NAMES = new Set(RESTART_COMMANDS.map((c) => c.name));
 
 export async function handleRestart(i: ChatInputCommandInteraction): Promise<void> {
   if (i.commandName === 'say') return handleSay(i);
-  if (i.commandName === 'kick') return handleKick(i);
+  if (i.commandName === 'game-kick') return handleKick(i);
   try {
     await i.deferReply({ flags: EPHEMERAL });
   } catch (e) {
@@ -45805,7 +45806,7 @@ export const CMDS: CmdInfo[] = [
   { cmd: '/clear', text: { ru: 'очистить чат в этом канале: с подтверждением, закреплённые остаются', en: 'wipe the chat of this channel: with a confirmation, pinned messages stay' }, usage: '/clear [count:<число>] [user:@участник]', examples: ['/clear', '/clear count:50', '/clear user:@Vasya'], needs: withBot('«Управлять сообщениями» и «Читать историю»', 'Manage Messages and Read Message History') },
   { cmd: '/restart', text: { ru: 'рестарт игрового сервера по таймеру: в чате игры идёт отсчёт, потом сервер перезапускается', en: 'restart a game server by a timer: the game chat gets a countdown, then the server restarts' }, usage: '/restart start time:<5m> | cancel | status', examples: ['/restart start time:5m', '/restart cancel'], needs: withBot('нужен плагин CoreGSM на игровом сервере', 'the CoreGSM plugin on the game server') },
   { cmd: '/say', text: { ru: 'написать в игровой чат сервера от имени Discord: «* [Discord] Имя: текст»', en: 'write to the game chat of a server from Discord: «* [Discord] Name: text»' }, usage: '/say text:<текст> [server:<сервер>]', examples: ['/say text:Сервер перезапустится через 10 минут'], needs: withBot('нужен плагин CoreGSM на игровом сервере', 'the CoreGSM plugin on the game server') },
-  { cmd: '/kick', text: { ru: 'кикнуть игрока с игрового сервера: правила, строка в чате и журнал те же, что у команды .kick в игре', en: 'kick a player from a game server: the rules, the chat line and the log are those of the .kick command in the game' }, usage: '/kick player:<ник> [reason:<причина>] [server:<сервер>]', examples: ['/kick player:Vamp reason:спам', '/kick player:Vamp reason:1'], needs: withBot('нужен плагин CoreGSM на игровом сервере', 'the CoreGSM plugin on the game server') },
+  { cmd: '/game-kick', text: { ru: 'кикнуть игрока с игрового сервера: правила, строка в чате и журнал те же, что у команды .kick в игре', en: 'kick a player from a game server: the rules, the chat line and the log are those of the .kick command in the game' }, usage: '/game-kick player:<ник> [reason:<причина>] [server:<сервер>]', examples: ['/game-kick player:Vamp reason:спам', '/game-kick player:Vamp reason:1'], needs: withBot('нужен плагин CoreGSM на игровом сервере', 'the CoreGSM plugin on the game server') },
   { cmd: '/ban', text: { ru: 'заблокировать участника с причиной (удаляет его сообщения, пишет ему в ЛС)', en: 'ban a member with a reason (deletes their messages, writes to them privately)' }, usage: '/ban user:@участник reason:<причина> [delete_days:0|1|7]', examples: ['/ban user:@Vasya reason:спам'], needs: withBot('«Банить участников»', 'Ban Members') },
   { cmd: '/unban', text: { ru: 'снять блокировку: без параметра покажет список банов с меню, с параметром подскажет имя или ID', en: 'lift a ban: without a parameter shows the ban list with a menu, with one suggests a name or ID' }, usage: '/unban [user:<имя или ID>]', examples: ['/unban', '/unban user:Vasya'], needs: withBot('«Банить участников»', 'Ban Members') },
   { cmd: '/kick', text: { ru: 'исключить участника с причиной, он сможет вернуться по приглашению', en: 'kick a member with a reason, they can return by an invite' }, usage: '/kick user:@участник reason:<причина>', examples: ['/kick user:@Vasya reason:реклама'], needs: withBot('«Выгонять участников»', 'Kick Members') },
@@ -45833,7 +45834,7 @@ export const CATEGORIES: Category[] = [
   { id: 'stat', emoji: '📊', color: 0x8b5cf6, label: { ru: 'Статистика', en: 'Statistics' }, title: { ru: 'Статистика игроков', en: 'Player statistics' }, cmds: ['/player', '/top'] },
   {
     id: 'mod', emoji: '🛡️', color: 0xef4444, admin: true, label: { ru: 'Модерация', en: 'Moderation' }, title: { ru: 'Модерация (для администраторов)', en: 'Moderation (for administrators)' },
-    cmds: ['/clear', '/restart', '/say', '/kick', '/giveaway', '/ban', '/unban', '/kick', '/warn', '/mute', '/unmute'],
+    cmds: ['/clear', '/restart', '/say', '/game-kick', '/giveaway', '/ban', '/unban', '/kick', '/warn', '/mute', '/unmute'],
     extra: [{ cmd: '⚠️ Предупредить', text: { ru: 'правый клик по участнику или сообщению → «Приложения»: окно с причиной, к варну прикрепляется ссылка на сообщение', en: 'right-click a member or a message → «Apps»: a window with the reason, the message link is attached to the warning' } }],
   },
   { id: 'modclr', emoji: '🧹', color: 0xef4444, admin: true, label: { ru: 'Памятка /clear', en: '/clear guide' }, title: { ru: 'Команда /clear: как это работает', en: 'The /clear command: how it works' }, cmds: [] },
@@ -145418,7 +145419,7 @@ const en: Record<keyof typeof ru, string> = {
   'gn.kk.warnTemplate': 'The line for everybody after a warning ({n} which one, {limit} the limit)',
   'gn.kk.warnLimit': 'How many warnings make a kick (0 = never)',
   'gn.kk.warnDays': 'For how many days a warning counts',
-  'gn.kk.reasonsNote': 'Short names of reasons: an administrator types .kick Name 1 and the chat and the journal get the text of the reason. Works for .kick, .ban, .warn and /kick in Discord.',
+  'gn.kk.reasonsNote': 'Short names of reasons: an administrator types .kick Name 1 and the chat and the journal get the text of the reason. Works for .kick, .ban, .warn and /game-kick in Discord.',
   'gn.kk.reasonsEmpty': 'No short reasons yet',
   'gn.kk.reasonsEmptyHint': 'Add, for example, «1 → Spam»: the command is quicker to type.',
   'gn.kk.reasonKey': 'Short name',
@@ -150307,7 +150308,7 @@ const ru = {
   'gn.kk.warnTemplate': 'Строка для всех после предупреждения ({n} — какое по счёту, {limit} — лимит)',
   'gn.kk.warnLimit': 'Сколько предупреждений ведут к кику (0 — никогда)',
   'gn.kk.warnDays': 'Сколько дней предупреждение считается',
-  'gn.kk.reasonsNote': 'Короткие имена причин: админ вводит .kick Ник 1, а в чате и журнале будет текст причины. Работает для .kick, .ban, .warn и /kick в Discord.',
+  'gn.kk.reasonsNote': 'Короткие имена причин: админ вводит .kick Ник 1, а в чате и журнале будет текст причины. Работает для .kick, .ban, .warn и /game-kick в Discord.',
   'gn.kk.reasonsEmpty': 'Коротких причин пока нет',
   'gn.kk.reasonsEmptyHint': 'Добавьте, например, «1 → Спам»: так быстрее набирать команду.',
   'gn.kk.reasonKey': 'Короткое имя',

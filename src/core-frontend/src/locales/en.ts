@@ -1066,7 +1066,7 @@ const en: Record<keyof typeof ru, string> = {
   'gn.kk.warnTemplate': 'The line for everybody after a warning ({n} which one, {limit} the limit)',
   'gn.kk.warnLimit': 'How many warnings make a kick (0 = never)',
   'gn.kk.warnDays': 'For how many days a warning counts',
-  'gn.kk.reasonsNote': 'Short names of reasons: an administrator types .kick Name 1 and the chat and the journal get the text of the reason. Works for .kick, .ban, .warn and /kick in Discord.',
+  'gn.kk.reasonsNote': 'Short names of reasons: an administrator types .kick Name 1 and the chat and the journal get the text of the reason. Works for .kick, .ban, .warn and /game-kick in Discord.',
   'gn.kk.reasonsEmpty': 'No short reasons yet',
   'gn.kk.reasonsEmptyHint': 'Add, for example, «1 → Spam»: the command is quicker to type.',
   'gn.kk.reasonKey': 'Short name',
