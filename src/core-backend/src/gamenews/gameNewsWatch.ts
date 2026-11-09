@@ -3,6 +3,7 @@
  * and again when it is back. A server that is restarting on purpose (a timer of «Рестарт сервера по таймеру» ran out less than
  * fifteen minutes ago) or is in a maintenance window is left alone.
  */
+import { systemTarget } from '../alerts/alertRoute.js';
 import { db, getSetting, setSetting } from '../db.js';
 import { alertSettings, enqueueAlert } from '../alerts/alerts.js';
 import { inMaintenance } from '../maintenance.js';
@@ -29,7 +30,7 @@ export function checkPluginSilence(now = Date.now()): number {
   let sent = 0;
   const s = alertSettings();
   const say = (id: number, back: boolean, since: number) => {
-    if (!s.enabled || !s.channelId) return;
+    if (!systemTarget(s)) return;
     const name = serverLabel(id);
     enqueueAlert('update', name, {
       content: '', mention: 'none',

@@ -61,6 +61,7 @@ const RULES: Rule[] = [
   { m: 'PUT', re: /^\/api\/access$/, label: 'Изменён доступ к панели', detail: (r) => [r.body?.publicPanel !== undefined ? `открыта: ${r.body.publicPanel ? 'да' : 'нет'}` : '', r.body?.registration !== undefined ? `регистрация: ${r.body.registration ? 'да' : 'нет'}` : ''].filter(Boolean).join(', ') },
   { m: 'PUT', re: /^\/api\/branding$/, label: 'Изменено оформление', detail: (r) => s(r.body?.name, 32) },
   { m: 'PUT', re: /^\/api\/branding\/logo$/, label: 'Загружен логотип' },
+  { m: 'PUT', re: /^\/api\/branding\/look$/, label: 'Изменено оформление по умолчанию', detail: (r) => s(r.body?.look, 12) },
   { m: 'DELETE', re: /^\/api\/branding\/logo$/, label: 'Сброшен логотип' },
   { m: 'POST', re: /^\/api\/update\/apply$/, label: 'Запущено обновление панели' },
   { m: 'POST', re: /^\/api\/update\/rollback$/, label: 'Запущен откат панели' },

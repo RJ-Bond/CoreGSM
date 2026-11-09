@@ -12,6 +12,10 @@ interface AlertsInfo {
   channelId: string;
   channelName: string | null;
   guildName: string | null;
+  /** the channel of the service messages (a silent game plugin, the disk, the updates); empty: the alerts channel */
+  systemChannelId: string;
+  systemChannelName: string | null;
+  systemGuildName: string | null;
   afterMin: number;
   mention: 'none' | 'here' | 'everyone';
   smart?: { low: boolean; ping: boolean; full: boolean };
@@ -135,6 +139,7 @@ export default function AlertsPage() {
   const [info, setInfo] = useState<AlertsInfo | null>(null);
   const [error, setError] = useState('');
   const [changing, setChanging] = useState(false);
+  const [changingSys, setChangingSys] = useState(false);
   const [tokenSet, setTokenSet] = useState<boolean | null>(null);
 
   const load = () => {
@@ -143,7 +148,7 @@ export default function AlertsPage() {
   };
   usePoll(load, 10_000);
 
-  const save = async (patch: Partial<Pick<AlertsInfo, 'enabled' | 'channelId' | 'afterMin' | 'mention' | 'smart'>> & { quiet?: { enabled: boolean; from: number; to: number } }, done?: string) => {
+  const save = async (patch: Partial<Pick<AlertsInfo, 'enabled' | 'channelId' | 'systemChannelId' | 'afterMin' | 'mention' | 'smart'>> & { quiet?: { enabled: boolean; from: number; to: number } }, done?: string) => {
     await api<AlertsInfo>('/alerts', 'PUT', patch)
       .then((a) => { setInfo(a); setError(''); if (done) toast(done); })
       .catch((e: Error) => setError(e.message));
@@ -215,6 +220,25 @@ export default function AlertsPage() {
               <p className="mt-1 text-sm font-semibold text-mute">{t('al.mentionText')}</p>
             </div>
           </div>
+        </Section>
+      )}
+
+      {info && (
+        <Section title={t('al.sys.title')} description={t('al.sys.text')}>
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="font-black">
+              {info.systemChannelId
+                ? (info.systemChannelName ? `# ${info.systemChannelName}${info.systemGuildName ? ` · ${info.systemGuildName}` : ''}` : <ChannelName id={info.systemChannelId} />)
+                : t('al.sys.none')}
+            </span>
+            <button className="btn btn-soft btn-sm" onClick={() => setChangingSys((v) => !v)} aria-expanded={changingSys}>{info.systemChannelId ? t('al.change') : t('al.pick')}</button>
+            {info.systemChannelId && <button className="btn-link text-sm" onClick={() => void save({ systemChannelId: '' }, t('al.sys.cleared'))}>{t('al.sys.clear')}</button>}
+          </div>
+          {changingSys && (
+            <div className="mt-3">
+              <ChannelPicker id="alerts-system-channel" value={info.systemChannelId} onChange={(v) => { if (/^\d{15,25}$/.test(v)) { void save({ systemChannelId: v }, t('al.sys.saved')); setChangingSys(false); } }} />
+            </div>
+          )}
         </Section>
       )}
 

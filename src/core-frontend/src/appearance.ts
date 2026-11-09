@@ -35,6 +35,21 @@ export function presetOf(a: Appearance): PresetId | null {
 }
 
 export const APPEARANCE_KEY = 'coregsm_appearance';
+/** the visitor's own choice of the look ('1' Ember, '0' classic): written only when they pick one */
+export const LOOK_KEY = 'coregsm_look';
+/** the look the administrator set for everyone who has not picked one ('ember' | 'classic') */
+export const LOOK_DEFAULT_KEY = 'coregsm_look_default';
+
+/** the look in force: the own choice, else the default of the administrator, else classic */
+function readEmber(): boolean {
+  try {
+    const own = localStorage.getItem(LOOK_KEY);
+    if (own === '1' || own === '0') return own === '1';
+    return localStorage.getItem(LOOK_DEFAULT_KEY) === 'ember';
+  } catch {
+    return false;
+  }
+}
 export const DEFAULT_APPEARANCE: Appearance = { reduceMotion: false, largeText: false, highContrast: false, liteData: false, oled: false, ember: false };
 
 /** anything (a stored string, a broken value) -> a complete Appearance */
@@ -46,9 +61,9 @@ export function normalizeAppearance(raw: unknown): Appearance {
 function read(): Appearance {
   try {
     const s = localStorage.getItem(APPEARANCE_KEY);
-    return s ? normalizeAppearance(JSON.parse(s)) : DEFAULT_APPEARANCE;
+    return { ...(s ? normalizeAppearance(JSON.parse(s)) : DEFAULT_APPEARANCE), ember: readEmber() };
   } catch {
-    return DEFAULT_APPEARANCE;
+    return { ...DEFAULT_APPEARANCE, ember: readEmber() };
   }
 }
 
@@ -79,14 +94,35 @@ export const getAppearance = () => current;
 
 export function setAppearance(patch: Partial<Appearance>) {
   const next = normalizeAppearance({ ...current, ...patch });
-  if (next.reduceMotion === current.reduceMotion && next.largeText === current.largeText && next.highContrast === current.highContrast && next.liteData === current.liteData && next.oled === current.oled && next.ember === current.ember) return;
+  if (patch.ember === undefined && next.reduceMotion === current.reduceMotion && next.largeText === current.largeText && next.highContrast === current.highContrast && next.liteData === current.liteData && next.oled === current.oled && next.ember === current.ember) return;
   current = next;
   try {
-    localStorage.setItem(APPEARANCE_KEY, JSON.stringify(next));
+    // the look is stored on its own, and only when the visitor picks it: the administrator's default stays in force until then
+    if (patch.ember !== undefined) localStorage.setItem(LOOK_KEY, next.ember ? '1' : '0');
+    const { ember: _look, ...rest } = next;
+    localStorage.setItem(APPEARANCE_KEY, JSON.stringify(rest));
   } catch {
     /* private mode: applied for this visit only */
   }
   applyAppearance(next);
+  listeners.forEach((l) => l());
+}
+
+/** the default look of the administrator: applies to everyone who has not picked a look in their profile */
+export function applyDefaultLook(def: 'classic' | 'ember') {
+  try {
+    localStorage.setItem(LOOK_DEFAULT_KEY, def);
+  } catch {
+    /* not remembered: applied for this visit only */
+  }
+  try {
+    const own = localStorage.getItem(LOOK_KEY);
+    if (own === '1' || own === '0') return;
+  } catch { /* private mode */ }
+  const ember = def === 'ember';
+  if (ember === current.ember) return;
+  current = { ...current, ember };
+  applyAppearance(current);
   listeners.forEach((l) => l());
 }
 
@@ -95,7 +131,7 @@ export function initAppearance() {
   current = read();
   applyAppearance(current);
   window.addEventListener('storage', (e) => {
-    if (e.key !== APPEARANCE_KEY) return;
+    if (e.key !== APPEARANCE_KEY && e.key !== LOOK_KEY) return;
     current = read();
     applyAppearance(current);
     listeners.forEach((l) => l());

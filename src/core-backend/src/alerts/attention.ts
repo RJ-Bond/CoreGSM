@@ -3,6 +3,7 @@
  *   GET /api/admin/attention   the list (servers down, dead deliveries, backups, certificate, update, bot, disk, queues)
  * and a check of the free disk space every 30 minutes that sends a Discord alert (once per level per day).
  */
+import { systemTarget } from './alertRoute.js';
 import { COLORS } from '../discord/palette.js';
 import fs from 'node:fs';
 import type { Express, RequestHandler } from 'express';
@@ -59,7 +60,7 @@ export function checkDisk(now = Date.now()): boolean {
   setSetting('disk_alert_level', level);
   setSetting('disk_alert_at', String(now));
   const s = alertSettings();
-  if (!s.enabled || !s.channelId) return false;
+  if (!systemTarget(s)) return false;
   enqueueAlert('disk', 'CoreGSM', {
     content: level === 'bad' ? (s.mention === 'everyone' ? '@everyone' : s.mention === 'here' ? '@here' : '') : '',
     mention: level === 'bad' ? s.mention : 'none',

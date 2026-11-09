@@ -741,6 +741,8 @@ export interface Brand {
   preset?: string;
   /** the theme of visitors who have not picked one (set by the administrator) */
   theme?: 'auto' | 'light' | 'dark';
+  /** the look of visitors who have not chosen one (set by the administrator) */
+  look?: 'classic' | 'ember';
   hasLogo: boolean;
   logoV: number;
 }

@@ -1,3 +1,4 @@
+import { applyDefaultLook } from './appearance';
 import { onPageTitleDetail, tabTitle } from './pageTitle';
 import { NewsUnreadDot } from './components/news/newsSeen';
 import { UpdateBadge, shownUpdate, useUpdatePolling, useUpdateState } from './components/UpdateBadge';
@@ -87,6 +88,8 @@ const DEFAULT_ACCESS: Access = { publicPanel: true, registration: true, registra
 function useBrand(b: Access['brand']) {
   // the community's default theme, for visitors who have not picked one
   useEffect(() => { applyDefaultTheme(b.theme ?? 'dark'); }, [b.theme]);
+  // the community's default look, for visitors who have not chosen one in their profile
+  useEffect(() => { applyDefaultLook(b.look ?? 'classic'); }, [b.look]);
   // a game theme also tints the page glow and lays the game's picture across the top
   useEffect(() => { paintGameTheme(b.preset); }, [b.preset]);
   useEffect(() => {

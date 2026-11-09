@@ -1,4 +1,5 @@
 /** Updates of the panel: version check, changelog and requests to the host updater. */
+import { systemTarget } from '../alerts/alertRoute.js';
 import express from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -200,7 +201,7 @@ function readJob(): { state: string; message: string; time: number; progress?: n
 function announce(title: string, description: string, color: number): void {
   if (getSetting('update_notify') === '0') return;
   const s = alertSettings();
-  if (!s.enabled || !s.channelId) return;
+  if (!systemTarget(s)) return;
   try {
     enqueueAlert('update', '', { content: '', mention: 'none', embed: { title, description, color, timestamp: new Date().toISOString() } });
   } catch (e) {
@@ -225,8 +226,9 @@ function sendNotice(n: Notice): void {
     const s = alertSettings();
     // the channel chosen for these notices; without one — the alerts channel (when the alerts are on)
     const own = getSetting('update_notify_channel') ?? '';
-    if (/^\d{15,25}$/.test(own)) enqueueAlert('update', '', payload, own);
-    else if (s.enabled && s.channelId) enqueueAlert('update', '', payload);
+    // the service channel of the panel wins: all the messages about the panel are in one place
+    if (!s.systemChannelId && /^\d{15,25}$/.test(own)) enqueueAlert('update', '', payload, own);
+    else if (systemTarget(s)) enqueueAlert('update', '', payload);
   } catch (e) {
     log.warn('update notice failed:', (e as Error).message);
   }

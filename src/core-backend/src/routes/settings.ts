@@ -140,6 +140,12 @@ router.put('/api/branding/theme', admin, (req, res) => {
   setSetting('default_theme', b.data.theme);
   res.json(brand());
 });
+router.put('/api/branding/look', admin, (req, res) => {
+  const b = z.object({ look: z.enum(['classic', 'ember']) }).safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: 'Неверные данные' });
+  setSetting('default_look', b.data.look);
+  res.json(brand());
+});
 router.delete('/api/branding/logo', admin, (_req, res) => {
   const old = logoFile();
   if (old) fs.rmSync(old, { force: true });

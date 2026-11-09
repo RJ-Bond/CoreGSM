@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="d98e10d9a19b"
+COREGSM_BUILD="b5a5c098ff6c"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.94"
+COREGSM_VERSION="1.1.95"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -15716,7 +15716,7 @@ export const router = express.Router();
 
 /** settings that travel with the file: never a secret, never a counter or a timestamp of this panel */
 export const PORTABLE_SETTINGS = [
-  'alerts_enabled', 'alerts_channel', 'alerts_after_min', 'alerts_mention', 'alerts_smart_low', 'alerts_smart_ping', 'alerts_smart_full',
+  'alerts_enabled', 'alerts_channel', 'alerts_system_channel', 'default_look', 'alerts_after_min', 'alerts_mention', 'alerts_smart_low', 'alerts_smart_ping', 'alerts_smart_full',
   'digest_enabled', 'digest_channel', 'digest_weekday', 'digest_hour', 'digest_theme',
   'brand_name', 'brand_color', 'brand_preset', 'default_theme', 'game_theme',
   'news_channel_id', 'news_test_channel_id', 'embed_players_shown',
@@ -16134,6 +16134,7 @@ const RULES: Rule[] = [
   { m: 'PUT', re: /^\/api\/access$/, label: 'Изменён доступ к панели', detail: (r) => [r.body?.publicPanel !== undefined ? `открыта: ${r.body.publicPanel ? 'да' : 'нет'}` : '', r.body?.registration !== undefined ? `регистрация: ${r.body.registration ? 'да' : 'нет'}` : ''].filter(Boolean).join(', ') },
   { m: 'PUT', re: /^\/api\/branding$/, label: 'Изменено оформление', detail: (r) => s(r.body?.name, 32) },
   { m: 'PUT', re: /^\/api\/branding\/logo$/, label: 'Загружен логотип' },
+  { m: 'PUT', re: /^\/api\/branding\/look$/, label: 'Изменено оформление по умолчанию', detail: (r) => s(r.body?.look, 12) },
   { m: 'DELETE', re: /^\/api\/branding\/logo$/, label: 'Сброшен логотип' },
   { m: 'POST', re: /^\/api\/update\/apply$/, label: 'Запущено обновление панели' },
   { m: 'POST', re: /^\/api\/update\/rollback$/, label: 'Запущен откат панели' },
@@ -16666,6 +16667,8 @@ export const brand = () => ({
   preset: getSetting('brand_preset') || '',
   // the theme for visitors who have not picked one themselves
   theme: (['auto', 'light', 'dark'].includes(getSetting('default_theme') ?? '') ? getSetting('default_theme') : 'dark') as 'auto' | 'light' | 'dark',
+  // the look for visitors who have not chosen one themselves
+  look: (getSetting('default_look') === 'ember' ? 'ember' : 'classic') as 'classic' | 'ember',
   hasLogo: !!logoFile(),
   logoV: logoFile() ? Math.floor(fs.statSync(logoFile()!).mtimeMs) : 0,
 });
@@ -17478,11 +17481,35 @@ export function botIsDown(s: { state: string; updatedAt: number }, token: boolea
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/alerts"
+  cat > "$APP_DIR/core-backend/src/alerts/alertRoute.ts" << '__COREGSM_EOF__'
+/**
+ * Where a message of the panel goes. Messages about the server game state (down, back, a place freed) go to the alerts
+ * channel. The service messages (the plugin of a game is silent or back, the disk is filling, the panel was updated)
+ * go to the service channel when the administrator has chosen one, so all the problems with the panel are in one place.
+ */
+export const SYSTEM_KINDS: ReadonlySet<string> = new Set(['update', 'disk']);
+
+export interface RouteSettings { enabled: boolean; channelId: string; systemChannelId: string }
+
+/** the channel of one message: the one it was sent to explicitly, else the service channel for a service kind, else the alerts channel */
+export function alertTarget(kind: string, explicit: string | undefined, s: RouteSettings): string {
+  if (explicit) return explicit;
+  if (SYSTEM_KINDS.has(kind) && s.systemChannelId) return s.systemChannelId;
+  return s.channelId;
+}
+
+/** where a service message can go now: the service channel (whether or not the alerts are on), else the alerts channel when they are on; '' = nowhere */
+export function systemTarget(s: RouteSettings): string {
+  return s.systemChannelId || (s.enabled ? s.channelId : '');
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/alerts"
   cat > "$APP_DIR/core-backend/src/alerts/alerts.ts" << '__COREGSM_EOF__'
 /**
  * Alerts: a message to an administrators' Discord channel when a game server stops answering
  * (after a grace period) and another one when it is back. The bot delivers the queued messages.
  */
+import { alertTarget } from './alertRoute.js';
 import { COLORS } from '../discord/palette.js';
 import { currentStyle } from '../discord/discordStyleState.js';
 import { styleAlertEmbed } from '../discord/discordStyleLogic.js';
@@ -17519,6 +17546,8 @@ CREATE TABLE IF NOT EXISTS alerts (
 export const alertSettings = () => ({
   enabled: getSetting('alerts_enabled') === '1',
   channelId: getSetting('alerts_channel') ?? '',
+  /** the channel of the service messages (a silent plugin, the disk, the updates); empty: they go to the alerts channel */
+  systemChannelId: getSetting('alerts_system_channel') ?? '',
   afterMin: Math.min(120, Math.max(1, Number(getSetting('alerts_after_min')) || 3)),
   mention: (['none', 'here', 'everyone'].includes(getSetting('alerts_mention') ?? '') ? getSetting('alerts_mention') : 'none') as 'none' | 'here' | 'everyone',
 });
@@ -17582,7 +17611,7 @@ export function enqueueAlert(kind: AlertKind, serverName: string, payload0: Payl
   const payload: Payload = kind !== 'test' && payload0.mention !== 'none' && isQuietNow()
     ? { ...payload0, mention: 'none', content: payload0.content.replace(/@(everyone|here)/g, '').trim() }
     : payload0;
-  const target = channelId || s.channelId;
+  const target = alertTarget(kind, channelId, s);
   const now = Date.now();
   // one look for everything: the footer with the brand, the accent colour
   const styled: Payload = { ...payload, embed: styleAlertEmbed(payload.embed, kind, currentStyle()) };
@@ -17682,6 +17711,7 @@ export function registerAlerts(deps: {
   const payload = () => {
     const s = alertSettings();
     const ch = s.channelId ? channelInfo(s.channelId) : { channelName: null, guildName: null };
+    const sys = s.systemChannelId ? channelInfo(s.systemChannelId) : { channelName: null, guildName: null };
     const recent = db.prepare('SELECT id, kind, server_name, status, error, created_at, sent_at FROM alerts ORDER BY id DESC LIMIT 30').all() as {
       id: number;
       kind: string;
@@ -17697,6 +17727,8 @@ export function registerAlerts(deps: {
       smart: Object.fromEntries(SMART_KINDS.map((k) => [k, smartEnabled(k)])) as Record<(typeof SMART_KINDS)[number], boolean>,
       channelName: ch.channelName,
       guildName: ch.guildName,
+      systemChannelName: sys.channelName,
+      systemGuildName: sys.guildName,
       recent: recent.map((r) => ({ id: r.id, kind: r.kind, serverName: r.server_name, status: r.status, error: r.error, createdAt: r.created_at, sentAt: r.sent_at })),
     };
   };
@@ -17708,6 +17740,7 @@ export function registerAlerts(deps: {
       .object({
         enabled: z.boolean().optional(),
         channelId: z.string().regex(/^(\d{15,25})?$/, 'Неверный ID канала').optional(),
+        systemChannelId: z.string().regex(/^(\d{15,25})?$/, 'Неверный ID канала').optional(),
         afterMin: z.number().int().min(1).max(120).optional(),
         mention: z.enum(['none', 'here', 'everyone']).optional(),
         quiet: z.object({ enabled: z.boolean(), from: z.number().int().min(0).max(23), to: z.number().int().min(0).max(23) }).optional(),
@@ -17720,6 +17753,7 @@ export function registerAlerts(deps: {
       setSetting('alerts_enabled', b.data.enabled ? '1' : '0');
     }
     if (b.data.channelId !== undefined) setSetting('alerts_channel', b.data.channelId);
+    if (b.data.systemChannelId !== undefined) setSetting('alerts_system_channel', b.data.systemChannelId);
     if (b.data.afterMin !== undefined) setSetting('alerts_after_min', String(b.data.afterMin));
     if (b.data.mention !== undefined) setSetting('alerts_mention', b.data.mention);
     if (b.data.quiet) {
@@ -17881,6 +17915,7 @@ __COREGSM_EOF__
  *   GET /api/admin/attention   the list (servers down, dead deliveries, backups, certificate, update, bot, disk, queues)
  * and a check of the free disk space every 30 minutes that sends a Discord alert (once per level per day).
  */
+import { systemTarget } from './alertRoute.js';
 import { COLORS } from '../discord/palette.js';
 import fs from 'node:fs';
 import type { Express, RequestHandler } from 'express';
@@ -17937,7 +17972,7 @@ export function checkDisk(now = Date.now()): boolean {
   setSetting('disk_alert_level', level);
   setSetting('disk_alert_at', String(now));
   const s = alertSettings();
-  if (!s.enabled || !s.channelId) return false;
+  if (!systemTarget(s)) return false;
   enqueueAlert('disk', 'CoreGSM', {
     content: level === 'bad' ? (s.mention === 'everyone' ? '@everyone' : s.mention === 'here' ? '@here' : '') : '',
     mention: level === 'bad' ? s.mention : 'none',
@@ -27140,6 +27175,7 @@ __COREGSM_EOF__
  * and again when it is back. A server that is restarting on purpose (a timer of «Рестарт сервера по таймеру» ran out less than
  * fifteen minutes ago) or is in a maintenance window is left alone.
  */
+import { systemTarget } from '../alerts/alertRoute.js';
 import { db, getSetting, setSetting } from '../db.js';
 import { alertSettings, enqueueAlert } from '../alerts/alerts.js';
 import { inMaintenance } from '../maintenance.js';
@@ -27166,7 +27202,7 @@ export function checkPluginSilence(now = Date.now()): number {
   let sent = 0;
   const s = alertSettings();
   const say = (id: number, back: boolean, since: number) => {
-    if (!s.enabled || !s.channelId) return;
+    if (!systemTarget(s)) return;
     const name = serverLabel(id);
     enqueueAlert('update', name, {
       content: '', mention: 'none',
@@ -38789,6 +38825,12 @@ router.put('/api/branding/theme', admin, (req, res) => {
   setSetting('default_theme', b.data.theme);
   res.json(brand());
 });
+router.put('/api/branding/look', admin, (req, res) => {
+  const b = z.object({ look: z.enum(['classic', 'ember']) }).safeParse(req.body);
+  if (!b.success) return res.status(400).json({ error: 'Неверные данные' });
+  setSetting('default_look', b.data.look);
+  res.json(brand());
+});
 router.delete('/api/branding/logo', admin, (_req, res) => {
   const old = logoFile();
   if (old) fs.rmSync(old, { force: true });
@@ -38835,6 +38877,7 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/routes"
   cat > "$APP_DIR/core-backend/src/routes/updates.ts" << '__COREGSM_EOF__'
 /** Updates of the panel: version check, changelog and requests to the host updater. */
+import { systemTarget } from '../alerts/alertRoute.js';
 import express from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -39036,7 +39079,7 @@ function readJob(): { state: string; message: string; time: number; progress?: n
 function announce(title: string, description: string, color: number): void {
   if (getSetting('update_notify') === '0') return;
   const s = alertSettings();
-  if (!s.enabled || !s.channelId) return;
+  if (!systemTarget(s)) return;
   try {
     enqueueAlert('update', '', { content: '', mention: 'none', embed: { title, description, color, timestamp: new Date().toISOString() } });
   } catch (e) {
@@ -39061,8 +39104,9 @@ function sendNotice(n: Notice): void {
     const s = alertSettings();
     // the channel chosen for these notices; without one — the alerts channel (when the alerts are on)
     const own = getSetting('update_notify_channel') ?? '';
-    if (/^\d{15,25}$/.test(own)) enqueueAlert('update', '', payload, own);
-    else if (s.enabled && s.channelId) enqueueAlert('update', '', payload);
+    // the service channel of the panel wins: all the messages about the panel are in one place
+    if (!s.systemChannelId && /^\d{15,25}$/.test(own)) enqueueAlert('update', '', payload, own);
+    else if (systemTarget(s)) enqueueAlert('update', '', payload);
   } catch (e) {
     log.warn('update notice failed:', (e as Error).message);
   }
@@ -120191,6 +120235,7 @@ add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/App.tsx" << '__COREGSM_EOF__'
+import { applyDefaultLook } from './appearance';
 import { onPageTitleDetail, tabTitle } from './pageTitle';
 import { NewsUnreadDot } from './components/news/newsSeen';
 import { UpdateBadge, shownUpdate, useUpdatePolling, useUpdateState } from './components/UpdateBadge';
@@ -120280,6 +120325,8 @@ const DEFAULT_ACCESS: Access = { publicPanel: true, registration: true, registra
 function useBrand(b: Access['brand']) {
   // the community's default theme, for visitors who have not picked one
   useEffect(() => { applyDefaultTheme(b.theme ?? 'dark'); }, [b.theme]);
+  // the community's default look, for visitors who have not chosen one in their profile
+  useEffect(() => { applyDefaultLook(b.look ?? 'classic'); }, [b.look]);
   // a game theme also tints the page glow and lays the game's picture across the top
   useEffect(() => { paintGameTheme(b.preset); }, [b.preset]);
   useEffect(() => {
@@ -121644,6 +121691,8 @@ export interface Brand {
   preset?: string;
   /** the theme of visitors who have not picked one (set by the administrator) */
   theme?: 'auto' | 'light' | 'dark';
+  /** the look of visitors who have not chosen one (set by the administrator) */
+  look?: 'classic' | 'ember';
   hasLogo: boolean;
   logoV: number;
 }
@@ -121790,6 +121839,21 @@ export function presetOf(a: Appearance): PresetId | null {
 }
 
 export const APPEARANCE_KEY = 'coregsm_appearance';
+/** the visitor's own choice of the look ('1' Ember, '0' classic): written only when they pick one */
+export const LOOK_KEY = 'coregsm_look';
+/** the look the administrator set for everyone who has not picked one ('ember' | 'classic') */
+export const LOOK_DEFAULT_KEY = 'coregsm_look_default';
+
+/** the look in force: the own choice, else the default of the administrator, else classic */
+function readEmber(): boolean {
+  try {
+    const own = localStorage.getItem(LOOK_KEY);
+    if (own === '1' || own === '0') return own === '1';
+    return localStorage.getItem(LOOK_DEFAULT_KEY) === 'ember';
+  } catch {
+    return false;
+  }
+}
 export const DEFAULT_APPEARANCE: Appearance = { reduceMotion: false, largeText: false, highContrast: false, liteData: false, oled: false, ember: false };
 
 /** anything (a stored string, a broken value) -> a complete Appearance */
@@ -121801,9 +121865,9 @@ export function normalizeAppearance(raw: unknown): Appearance {
 function read(): Appearance {
   try {
     const s = localStorage.getItem(APPEARANCE_KEY);
-    return s ? normalizeAppearance(JSON.parse(s)) : DEFAULT_APPEARANCE;
+    return { ...(s ? normalizeAppearance(JSON.parse(s)) : DEFAULT_APPEARANCE), ember: readEmber() };
   } catch {
-    return DEFAULT_APPEARANCE;
+    return { ...DEFAULT_APPEARANCE, ember: readEmber() };
   }
 }
 
@@ -121834,14 +121898,35 @@ export const getAppearance = () => current;
 
 export function setAppearance(patch: Partial<Appearance>) {
   const next = normalizeAppearance({ ...current, ...patch });
-  if (next.reduceMotion === current.reduceMotion && next.largeText === current.largeText && next.highContrast === current.highContrast && next.liteData === current.liteData && next.oled === current.oled && next.ember === current.ember) return;
+  if (patch.ember === undefined && next.reduceMotion === current.reduceMotion && next.largeText === current.largeText && next.highContrast === current.highContrast && next.liteData === current.liteData && next.oled === current.oled && next.ember === current.ember) return;
   current = next;
   try {
-    localStorage.setItem(APPEARANCE_KEY, JSON.stringify(next));
+    // the look is stored on its own, and only when the visitor picks it: the administrator's default stays in force until then
+    if (patch.ember !== undefined) localStorage.setItem(LOOK_KEY, next.ember ? '1' : '0');
+    const { ember: _look, ...rest } = next;
+    localStorage.setItem(APPEARANCE_KEY, JSON.stringify(rest));
   } catch {
     /* private mode: applied for this visit only */
   }
   applyAppearance(next);
+  listeners.forEach((l) => l());
+}
+
+/** the default look of the administrator: applies to everyone who has not picked a look in their profile */
+export function applyDefaultLook(def: 'classic' | 'ember') {
+  try {
+    localStorage.setItem(LOOK_DEFAULT_KEY, def);
+  } catch {
+    /* not remembered: applied for this visit only */
+  }
+  try {
+    const own = localStorage.getItem(LOOK_KEY);
+    if (own === '1' || own === '0') return;
+  } catch { /* private mode */ }
+  const ember = def === 'ember';
+  if (ember === current.ember) return;
+  current = { ...current, ember };
+  applyAppearance(current);
   listeners.forEach((l) => l());
 }
 
@@ -121850,7 +121935,7 @@ export function initAppearance() {
   current = read();
   applyAppearance(current);
   window.addEventListener('storage', (e) => {
-    if (e.key !== APPEARANCE_KEY) return;
+    if (e.key !== APPEARANCE_KEY && e.key !== LOOK_KEY) return;
     current = read();
     applyAppearance(current);
     listeners.forEach((l) => l());
@@ -146629,6 +146714,12 @@ const en: Record<keyof typeof ru, string> = {
   'al.mention.none': 'Nobody',
   'al.mention.here': '@here (who is online)',
   'al.mentionText': 'The “server is back” message never mentions anyone.',
+  'al.sys.title': 'Service channel',
+  'al.sys.text': 'All the messages about the panel itself come here: a game plugin that is silent or back, low disk space, panel updates. Without a channel they go to the alerts channel.',
+  'al.sys.none': 'Not chosen: service messages go to the alerts channel',
+  'al.sys.saved': 'Service channel saved',
+  'al.sys.clear': 'Remove',
+  'al.sys.cleared': 'Service messages go to the alerts channel again',
   'al.smart': 'Smart alerts',
   'al.smartText': 'The server works, but something is off. Each rule fires only when its condition holds for a while, then stays quiet for several hours.',
   'al.smart.on': 'On',
@@ -147727,6 +147818,11 @@ const en: Record<keyof typeof ru, string> = {
   'd2.brand.dark': 'Dark (game covers look best)',
   'd2.brand.light': 'Light',
   'd2.brand.auto': 'Same as the visitor\'s system',
+  'd2.brand.look': 'Default look',
+  'd2.brand.look.classic': 'Classic (violet accent)',
+  'd2.brand.look.ember': 'Ember (graphite and orange)',
+  'd2.brand.lookNote': 'Applies to those who have not chosen a look in their profile. The own choice of a person in «Profile → Look» wins.',
+  'd2.brand.t.look': 'Default look saved',
   'd2.brand.themeNote': 'Applies to those who have not chosen a theme with the button in the header.',
   'd2.brand.theme': 'Theme',
   'd2.brand.gameThemes': 'Game themes',
@@ -151518,6 +151614,12 @@ const ru = {
   'al.mention.none': 'Никого',
   'al.mention.here': '@here (кто в сети)',
   'al.mentionText': 'Сообщение о возвращении сервера всегда без упоминания.',
+  'al.sys.title': 'Служебный канал',
+  'al.sys.text': 'Сюда приходят все сообщения о самой панели: игровой плагин не отвечает или снова на связи, мало места на диске, обновления панели. Если канал не выбран, они идут в канал оповещений.',
+  'al.sys.none': 'Не выбран: служебные сообщения идут в канал оповещений',
+  'al.sys.saved': 'Служебный канал сохранён',
+  'al.sys.clear': 'Убрать',
+  'al.sys.cleared': 'Служебные сообщения снова идут в канал оповещений',
   'al.smart': 'Умные оповещения',
   'al.smartText': 'Сервер работает, но что-то не так. Каждое правило срабатывает, только если условие держится какое-то время, и потом молчит несколько часов.',
   'al.smart.on': 'Включено',
@@ -152616,6 +152718,11 @@ const ru = {
   'd2.brand.dark': 'Тёмная (обложки игр смотрятся лучше всего)',
   'd2.brand.light': 'Светлая',
   'd2.brand.auto': 'Как в системе посетителя',
+  'd2.brand.look': 'Оформление по умолчанию',
+  'd2.brand.look.classic': 'Классика (фиолетовый акцент)',
+  'd2.brand.look.ember': 'Ember (графит и оранжевый)',
+  'd2.brand.lookNote': 'Действует для тех, кто сам не выбирал оформление в профиле. Выбор человека в «Профиль → Оформление» важнее.',
+  'd2.brand.t.look': 'Оформление по умолчанию сохранено',
   'd2.brand.themeNote': 'Действует для тех, кто сам не выбирал тему кнопкой в шапке.',
   'd2.brand.theme': 'Тема',
   'd2.brand.gameThemes': 'Темы игр',
@@ -156417,6 +156524,10 @@ interface AlertsInfo {
   channelId: string;
   channelName: string | null;
   guildName: string | null;
+  /** the channel of the service messages (a silent game plugin, the disk, the updates); empty: the alerts channel */
+  systemChannelId: string;
+  systemChannelName: string | null;
+  systemGuildName: string | null;
   afterMin: number;
   mention: 'none' | 'here' | 'everyone';
   smart?: { low: boolean; ping: boolean; full: boolean };
@@ -156540,6 +156651,7 @@ export default function AlertsPage() {
   const [info, setInfo] = useState<AlertsInfo | null>(null);
   const [error, setError] = useState('');
   const [changing, setChanging] = useState(false);
+  const [changingSys, setChangingSys] = useState(false);
   const [tokenSet, setTokenSet] = useState<boolean | null>(null);
 
   const load = () => {
@@ -156548,7 +156660,7 @@ export default function AlertsPage() {
   };
   usePoll(load, 10_000);
 
-  const save = async (patch: Partial<Pick<AlertsInfo, 'enabled' | 'channelId' | 'afterMin' | 'mention' | 'smart'>> & { quiet?: { enabled: boolean; from: number; to: number } }, done?: string) => {
+  const save = async (patch: Partial<Pick<AlertsInfo, 'enabled' | 'channelId' | 'systemChannelId' | 'afterMin' | 'mention' | 'smart'>> & { quiet?: { enabled: boolean; from: number; to: number } }, done?: string) => {
     await api<AlertsInfo>('/alerts', 'PUT', patch)
       .then((a) => { setInfo(a); setError(''); if (done) toast(done); })
       .catch((e: Error) => setError(e.message));
@@ -156620,6 +156732,25 @@ export default function AlertsPage() {
               <p className="mt-1 text-sm font-semibold text-mute">{t('al.mentionText')}</p>
             </div>
           </div>
+        </Section>
+      )}
+
+      {info && (
+        <Section title={t('al.sys.title')} description={t('al.sys.text')}>
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="font-black">
+              {info.systemChannelId
+                ? (info.systemChannelName ? `# ${info.systemChannelName}${info.systemGuildName ? ` · ${info.systemGuildName}` : ''}` : <ChannelName id={info.systemChannelId} />)
+                : t('al.sys.none')}
+            </span>
+            <button className="btn btn-soft btn-sm" onClick={() => setChangingSys((v) => !v)} aria-expanded={changingSys}>{info.systemChannelId ? t('al.change') : t('al.pick')}</button>
+            {info.systemChannelId && <button className="btn-link text-sm" onClick={() => void save({ systemChannelId: '' }, t('al.sys.cleared'))}>{t('al.sys.clear')}</button>}
+          </div>
+          {changingSys && (
+            <div className="mt-3">
+              <ChannelPicker id="alerts-system-channel" value={info.systemChannelId} onChange={(v) => { if (/^\d{15,25}$/.test(v)) { void save({ systemChannelId: v }, t('al.sys.saved')); setChangingSys(false); } }} />
+            </div>
+          )}
         </Section>
       )}
 
@@ -167716,6 +167847,23 @@ export function BrandCard() {
           <option value="auto">{t('d2.brand.auto')}</option>
         </select>
         <p className="mt-1 text-sm font-semibold text-mute">{t('d2.brand.themeNote')}</p>
+      </div>
+      <div>
+        <label htmlFor="brand-look" className="label">{t('d2.brand.look')}</label>
+        <select
+          id="brand-look"
+          className="input"
+          value={b.look ?? 'classic'}
+          onChange={(e) => {
+            void api('/branding/look', 'PUT', { look: e.target.value })
+              .then(() => { toast(t('d2.brand.t.look')); return reload(); })
+              .catch((err: Error) => toast(err.message, 'err'));
+          }}
+        >
+          <option value="classic">{t('d2.brand.look.classic')}</option>
+          <option value="ember">{t('d2.brand.look.ember')}</option>
+        </select>
+        <p className="mt-1 text-sm font-semibold text-mute">{t('d2.brand.lookNote')}</p>
       </div>
       <TextField
         id="brand-name"

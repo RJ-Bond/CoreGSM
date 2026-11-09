@@ -2,6 +2,7 @@
  * Alerts: a message to an administrators' Discord channel when a game server stops answering
  * (after a grace period) and another one when it is back. The bot delivers the queued messages.
  */
+import { alertTarget } from './alertRoute.js';
 import { COLORS } from '../discord/palette.js';
 import { currentStyle } from '../discord/discordStyleState.js';
 import { styleAlertEmbed } from '../discord/discordStyleLogic.js';
@@ -38,6 +39,8 @@ CREATE TABLE IF NOT EXISTS alerts (
 export const alertSettings = () => ({
   enabled: getSetting('alerts_enabled') === '1',
   channelId: getSetting('alerts_channel') ?? '',
+  /** the channel of the service messages (a silent plugin, the disk, the updates); empty: they go to the alerts channel */
+  systemChannelId: getSetting('alerts_system_channel') ?? '',
   afterMin: Math.min(120, Math.max(1, Number(getSetting('alerts_after_min')) || 3)),
   mention: (['none', 'here', 'everyone'].includes(getSetting('alerts_mention') ?? '') ? getSetting('alerts_mention') : 'none') as 'none' | 'here' | 'everyone',
 });
@@ -101,7 +104,7 @@ export function enqueueAlert(kind: AlertKind, serverName: string, payload0: Payl
   const payload: Payload = kind !== 'test' && payload0.mention !== 'none' && isQuietNow()
     ? { ...payload0, mention: 'none', content: payload0.content.replace(/@(everyone|here)/g, '').trim() }
     : payload0;
-  const target = channelId || s.channelId;
+  const target = alertTarget(kind, channelId, s);
   const now = Date.now();
   // one look for everything: the footer with the brand, the accent colour
   const styled: Payload = { ...payload, embed: styleAlertEmbed(payload.embed, kind, currentStyle()) };
@@ -201,6 +204,7 @@ export function registerAlerts(deps: {
   const payload = () => {
     const s = alertSettings();
     const ch = s.channelId ? channelInfo(s.channelId) : { channelName: null, guildName: null };
+    const sys = s.systemChannelId ? channelInfo(s.systemChannelId) : { channelName: null, guildName: null };
     const recent = db.prepare('SELECT id, kind, server_name, status, error, created_at, sent_at FROM alerts ORDER BY id DESC LIMIT 30').all() as {
       id: number;
       kind: string;
@@ -216,6 +220,8 @@ export function registerAlerts(deps: {
       smart: Object.fromEntries(SMART_KINDS.map((k) => [k, smartEnabled(k)])) as Record<(typeof SMART_KINDS)[number], boolean>,
       channelName: ch.channelName,
       guildName: ch.guildName,
+      systemChannelName: sys.channelName,
+      systemGuildName: sys.guildName,
       recent: recent.map((r) => ({ id: r.id, kind: r.kind, serverName: r.server_name, status: r.status, error: r.error, createdAt: r.created_at, sentAt: r.sent_at })),
     };
   };
@@ -227,6 +233,7 @@ export function registerAlerts(deps: {
       .object({
         enabled: z.boolean().optional(),
         channelId: z.string().regex(/^(\d{15,25})?$/, 'Неверный ID канала').optional(),
+        systemChannelId: z.string().regex(/^(\d{15,25})?$/, 'Неверный ID канала').optional(),
         afterMin: z.number().int().min(1).max(120).optional(),
         mention: z.enum(['none', 'here', 'everyone']).optional(),
         quiet: z.object({ enabled: z.boolean(), from: z.number().int().min(0).max(23), to: z.number().int().min(0).max(23) }).optional(),
@@ -239,6 +246,7 @@ export function registerAlerts(deps: {
       setSetting('alerts_enabled', b.data.enabled ? '1' : '0');
     }
     if (b.data.channelId !== undefined) setSetting('alerts_channel', b.data.channelId);
+    if (b.data.systemChannelId !== undefined) setSetting('alerts_system_channel', b.data.systemChannelId);
     if (b.data.afterMin !== undefined) setSetting('alerts_after_min', String(b.data.afterMin));
     if (b.data.mention !== undefined) setSetting('alerts_mention', b.data.mention);
     if (b.data.quiet) {

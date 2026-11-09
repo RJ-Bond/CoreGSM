@@ -40,6 +40,8 @@ export const brand = () => ({
   preset: getSetting('brand_preset') || '',
   // the theme for visitors who have not picked one themselves
   theme: (['auto', 'light', 'dark'].includes(getSetting('default_theme') ?? '') ? getSetting('default_theme') : 'dark') as 'auto' | 'light' | 'dark',
+  // the look for visitors who have not chosen one themselves
+  look: (getSetting('default_look') === 'ember' ? 'ember' : 'classic') as 'classic' | 'ember',
   hasLogo: !!logoFile(),
   logoV: logoFile() ? Math.floor(fs.statSync(logoFile()!).mtimeMs) : 0,
 });

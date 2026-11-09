@@ -107,6 +107,23 @@ export function BrandCard() {
         </select>
         <p className="mt-1 text-sm font-semibold text-mute">{t('d2.brand.themeNote')}</p>
       </div>
+      <div>
+        <label htmlFor="brand-look" className="label">{t('d2.brand.look')}</label>
+        <select
+          id="brand-look"
+          className="input"
+          value={b.look ?? 'classic'}
+          onChange={(e) => {
+            void api('/branding/look', 'PUT', { look: e.target.value })
+              .then(() => { toast(t('d2.brand.t.look')); return reload(); })
+              .catch((err: Error) => toast(err.message, 'err'));
+          }}
+        >
+          <option value="classic">{t('d2.brand.look.classic')}</option>
+          <option value="ember">{t('d2.brand.look.ember')}</option>
+        </select>
+        <p className="mt-1 text-sm font-semibold text-mute">{t('d2.brand.lookNote')}</p>
+      </div>
       <TextField
         id="brand-name"
         label={t('d2.sf.name')}
