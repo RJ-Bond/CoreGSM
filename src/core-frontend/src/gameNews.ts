@@ -272,7 +272,8 @@ export interface KickSettings {
   unbanTemplate: string;
   banJoinText: string;
   blockJoinText: string;
-  banStaySec: number;
+  banScope: 'all' | 'server';
+  banDm: boolean;
   notifyPlayer: boolean;
   notifyText: string;
   warnLimit: number;
@@ -289,7 +290,7 @@ export const DEFAULT_KICK: KickSettings = {
   warnTemplate: '* Игрок {name} был предупреждён. Причина: {reason}',
   unbanTemplate: '* Игрок {name} был разбанен.',
   banJoinText: '* Вы забанены {until}. Причина: {reason}',
-  blockJoinText: '* Вы недавно были кикнуты. Подождите ещё {left}, прежде чем зайти.', banStaySec: 20,
+  blockJoinText: '* Вы недавно были кикнуты. Подождите ещё {left}, прежде чем зайти.', banScope: 'all', banDm: true,
   notifyPlayer: true, notifyText: '* Вы были кикнуты. Причина: {reason}',
   warnLimit: 3, warnDays: 30, rejoinBlockMin: 0,
   reasons: [{ key: '1', text: 'Спам' }, { key: '2', text: 'Оскорбления' }, { key: '3', text: 'Читы или использование багов' }, { key: '4', text: 'Мешает другим игрокам' }],
@@ -327,6 +328,32 @@ export function commandLine(color: string, text: string): string {
     last = start + m[2].length + m[3].length;
   }
   if (last < plain.length) parts.push(`<color=${color}>${plain.slice(last)}</color>`);
+  return parts.join('');
+}
+
+export type Accent = string | [string, string] | [string, string, boolean];
+
+/** a line in one colour with words picked out (the same as the panel does for the player): a plain string is bold in `bold`, a pair is [word, colour], a triple [word, colour, bold] */
+export function accentLine(color: string, text: string, names: Accent[], nickColor = '#FFCC33'): string {
+  const plain = text.replace(/[<>]/g, '');
+  const style = new Map<string, { color: string; bold: boolean }>();
+  for (const n of names) {
+    const [w, c, b] = typeof n === 'string' ? [n, nickColor, true] : [n[0], n[1], n.length === 3 ? n[2] : true];
+    if (w && !style.has(w)) style.set(w, { color: c, bold: b });
+  }
+  const words = [...style.keys()].sort((x, y) => y.length - x.length);
+  if (words.length === 0) return commandLine(color, plain);
+  const re = new RegExp(words.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), 'gu');
+  const parts: string[] = [];
+  let last = 0;
+  for (const m of plain.matchAll(re)) {
+    const i = m.index ?? 0;
+    if (i > last) parts.push(commandLine(color, plain.slice(last, i)));
+    const st = style.get(m[0]) ?? { color: nickColor, bold: true };
+    parts.push(`<color=${st.color}>${st.bold ? '<b>' : ''}${m[0]}${st.bold ? '</b>' : ''}</color>`);
+    last = i + m[0].length;
+  }
+  if (last < plain.length) parts.push(commandLine(color, plain.slice(last)));
   return parts.join('');
 }
 
@@ -428,6 +455,6 @@ export interface RulesState {
   rules: RuleInfo[];
 }
 
-export interface ModBan { platformId: string; masked: string; nick: string; reason: string; admin: string; createdAt: number; until: number; kind: 'ban' | 'block'; serverName: string }
+export interface ModBan { platformId: string; masked: string; nick: string; reason: string; admin: string; createdAt: number; until: number; kind: 'ban' | 'block'; serverName: string; scope?: string }
 export interface ModEntry { id: number; ts: number; kind: 'kick' | 'ban' | 'warn' | 'unban'; nick: string; platformId: string; admin: string; reason: string; serverName: string; until: number }
 export interface ModTop { nick: string; platformId: string; kicks: number; warns: number; bans: number; last: number }

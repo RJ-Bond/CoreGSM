@@ -62,28 +62,33 @@ export interface BanRow {
   /** ban | block (a short block after a kick) */
   kind: string;
   server_id: number;
+  /** all | server: where the ban holds */
+  scope: string;
 }
 
 /** puts a ban in force (replaces the one the player has; a ban is not shortened by a short block) */
-export function putBan(b: { platformId: string; nick: string; reason: string; admin: string; until: number; kind: 'ban' | 'block'; serverId: number }, now: number): void {
+export function putBan(b: { platformId: string; nick: string; reason: string; admin: string; until: number; kind: 'ban' | 'block'; serverId: number; scope?: 'all' | 'server' }, now: number): void {
   const old = activeBan(b.platformId, now);
   if (old && b.kind === 'block' && old.kind === 'ban') return;
   db.prepare(
-    `INSERT INTO game_bans (platform_id, nick, reason, admin, created_at, until, kind, server_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO game_bans (platform_id, nick, reason, admin, created_at, until, kind, server_id, scope) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(platform_id) DO UPDATE SET nick = excluded.nick, reason = excluded.reason, admin = excluded.admin, created_at = excluded.created_at,
-       until = excluded.until, kind = excluded.kind, server_id = excluded.server_id`,
-  ).run(b.platformId, b.nick.slice(0, 100), b.reason.slice(0, 300), b.admin.slice(0, 100), now, b.until, b.kind, b.serverId);
+       until = excluded.until, kind = excluded.kind, server_id = excluded.server_id, scope = excluded.scope`,
+  ).run(b.platformId, b.nick.slice(0, 100), b.reason.slice(0, 300), b.admin.slice(0, 100), now, b.until, b.kind, b.serverId, b.scope ?? 'all');
 }
 
-/** the ban of a player that is in force now (a ban that has run out is removed here) */
-export function activeBan(platformId: string, now: number): BanRow | undefined {
+/** does a ban hold on this server (a ban of one server does not hold on the others; serverId undefined = look at all) */
+export const holdsOn = (r: BanRow, serverId?: number): boolean => serverId === undefined || r.scope !== 'server' || r.server_id === serverId;
+
+/** the ban of a player that is in force now (a ban that has run out is removed here); with a server: only a ban that holds there */
+export function activeBan(platformId: string, now: number, serverId?: number): BanRow | undefined {
   const r = db.prepare('SELECT * FROM game_bans WHERE platform_id = ?').get(platformId) as BanRow | undefined;
   if (!r) return undefined;
   if (r.until !== 0 && r.until <= now) {
     db.prepare('DELETE FROM game_bans WHERE platform_id = ?').run(platformId);
     return undefined;
   }
-  return r;
+  return holdsOn(r, serverId) ? r : undefined;
 }
 
 export function listBans(now: number): BanRow[] {

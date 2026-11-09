@@ -58,6 +58,7 @@ export function ModerationTab() {
                   <div className="flex flex-wrap items-center gap-2">
                     {name(b.nick)}
                     <span className={b.kind === 'block' ? 'pill pill-mute' : 'pill pill-warn'}>{b.kind === 'block' ? t('gn.md.block') : untilText(b.until)}</span>
+                    {b.kind === 'ban' && b.scope === 'server' && <span className="pill pill-mute">{t('gn.md.scopeServer')}</span>}
                   </div>
                   <div className="text-sm font-semibold text-mute">{b.masked} · {b.reason || '—'} · {b.admin || '—'} · {soon(b.createdAt)}</div>
                 </div>

@@ -7,6 +7,7 @@
 import type { Express, RequestHandler } from 'express';
 import { z } from 'zod';
 import { enqueueAlert } from '../alerts/alerts.js';
+import { enqueueDelivery } from '../alerts/deliveries.js';
 import { db } from '../db.js';
 import { internal } from '../security/auth.js';
 import { pluginTarget } from './gameNews.js';
@@ -14,7 +15,7 @@ import { postKickToDiscord } from './gameNewsChat.js';
 import { isHexColor, plainLine } from './gameNewsJoinLeave.js';
 import { tag, type Accent } from './gameNewsStyle.js';
 import {
-  activeBan, commandState, countMod, finishCommand, findBanByNick, formatSpan, listBans, logMod, parseBanTime, putBan, queueCommand, recentMod,
+  activeBan, holdsOn, commandState, countMod, finishCommand, findBanByNick, formatSpan, listBans, logMod, parseBanTime, putBan, queueCommand, recentMod,
   removeBan, topPlayers, type BanRow,
 } from './gameNewsModLog.js';
 import { readScoped, serverOf, writeScoped } from './gameNewsScope.js';
@@ -58,8 +59,10 @@ export interface KickSettings {
   banJoinText: string;
   /** what a player reads when he comes back too soon after a kick: {left} */
   blockJoinText: string;
-  /** how long (seconds) a banned player may stay on the server to read why; then he is removed (0 = at once) */
-  banStaySec: number;
+  /** a ban holds on all servers of the panel (all) or only on the one where it was given (server) */
+  banScope: 'all' | 'server';
+  /** a banned player who has linked Discord gets the term and the reason in a private message */
+  banDm: boolean;
   /** the player is told in private before he is removed */
   notifyPlayer: boolean;
   /** the private words to the player: {reason} {admin} */
@@ -94,7 +97,8 @@ export const DEFAULT_KICK: KickSettings = {
   warnTemplate: '* Игрок {name} был предупреждён. Причина: {reason}',
   unbanTemplate: '* Игрок {name} был разбанен.',
   banJoinText: '* Вы забанены {until}. Причина: {reason}',
-  banStaySec: 20,
+  banScope: 'all',
+  banDm: true,
   blockJoinText: '* Вы недавно были кикнуты. Подождите ещё {left}, прежде чем зайти.',
   notifyPlayer: true,
   notifyText: '* Вы были кикнуты. Причина: {reason}',
@@ -141,7 +145,8 @@ export function getKick(serverId?: number): KickSettings {
       unbanTemplate: text(v.unbanTemplate, d.unbanTemplate),
       banJoinText: text(v.banJoinText, d.banJoinText),
       blockJoinText: text(v.blockJoinText, d.blockJoinText),
-      banStaySec: num(v.banStaySec, d.banStaySec, 0, 120),
+      banScope: v.banScope === 'server' ? 'server' : 'all',
+      banDm: bool(v.banDm, d.banDm),
       notifyPlayer: bool(v.notifyPlayer, d.notifyPlayer),
       // the first wording moves to the new one; a text the administrator changed stays
       notifyText: v.notifyText === '* Вас убирают с сервера. Причина: {reason}' ? d.notifyText : text(v.notifyText, d.notifyText),
@@ -258,6 +263,33 @@ function logToDiscord(s: KickSettings, serverId: number, title: string, color: n
   } catch { /* the log must not stop the command */ }
 }
 
+/** a private message in Discord for a banned player who has linked his account: for how long and why */
+function dmBanned(serverId: number, platformId: string, f: { nick: string; reason: string; until: number; span: string }, now: number): void {
+  try {
+    if (!platformId || platformId === '0') return;
+    const r = db.prepare('SELECT u.discord_id FROM game_identities g JOIN users u ON u.id = g.user_id WHERE g.platform_id = ?').get(platformId) as { discord_id: string | null } | undefined;
+    if (!r?.discord_id) return;
+    const unix = Math.floor(f.until / 1000);
+    enqueueDelivery({
+      kind: 'dm', refId: null, target: r.discord_id,
+      payload: {
+        embed: {
+          title: '⛔ Вы забанены на игровом сервере',
+          color: 0x992d22,
+          fields: [
+            { name: 'Сервер', value: serverLabel(serverId).slice(0, 200) || '—', inline: true },
+            { name: 'Срок', value: f.until === 0 ? 'навсегда' : `${f.span} (до <t:${unix}:f>)`, inline: true },
+            { name: 'Причина', value: f.reason || '—' },
+          ],
+          footer: { text: 'CoreGSM' },
+          timestamp: new Date(now).toISOString(),
+        },
+        actions: [], buttons: [], summary: `Бан: ${f.nick}`,
+      },
+    });
+  } catch { /* a message must not stop the ban */ }
+}
+
 /** the whole decision about a command of an administrator (kick, ban, warning); pure apart from the database and the chat in Discord */
 export function runMod(serverId: number, b: ModInput, now = Date.now()): ModResult {
   const s = getKick(serverId);
@@ -302,8 +334,9 @@ export function runMod(serverId: number, b: ModInput, now = Date.now()): ModResu
     const forever = 'forever' in t;
     const until = forever ? 0 : now + t.seconds * 1000;
     const span = forever ? 'навсегда' : formatSpan(t.seconds);
-    if (b.targetId && b.targetId !== '0') putBan({ platformId: b.targetId, nick: base.nick, reason, admin: base.admin, until, kind: 'ban', serverId }, now);
+    if (b.targetId && b.targetId !== '0') putBan({ platformId: b.targetId, nick: base.nick, reason, admin: base.admin, until, kind: 'ban', serverId, scope: s.banScope }, now);
     logMod({ ...base, kind: 'ban', until }, now);
+    if (s.banDm) dmBanned(serverId, b.targetId, { nick: base.nick, reason, until, span: forever ? 'навсегда' : span }, now);
     try { postKickToDiscord(serverId, s.banTemplate.replace(/\{time\}/g, span), { name: b.name, reason, admin: b.adminName }, now); } catch { /* Discord is not needed for the ban */ }
     logToDiscord(s, serverId, '⛔ Игрок забанен', 0x992d22, { name: b.name, admin: b.adminName, reason, extra: [{ name: 'Срок', value: forever ? 'навсегда' : `${span} (до <t:${Math.floor(until / 1000)}:f>)` }] }, now);
     const stamp = forever ? null : visitStamp(until);
@@ -346,7 +379,7 @@ export function runMod(serverId: number, b: ModInput, now = Date.now()): ModResu
 
 /** what a banned (or blocked) player reads when he comes in; null when nothing stops him */
 export function joinBlock(serverId: number, platformId: string, now = Date.now()): { lines: string[]; ban: BanRow } | null {
-  const ban = activeBan(platformId, now);
+  const ban = activeBan(platformId, now, serverId);
   if (!ban) return null;
   const s = getKick(serverId);
   // the date, the time and the time left are green
@@ -401,6 +434,27 @@ export function registerGameNewsKick({ app, admin }: { app: Express; admin: Requ
     res.json({ ok: true, line: s.announce ? modLine(s, s.unbanTemplate, { name: ban.nick, reason: '', admin: b.data.adminName }) : '', notice: '', kick: false, replies: s.announce ? [] : [say(C_GOOD, `* ${ban.nick} разбанен.`, [ban.nick])] });
   });
 
+  // .bans: the bans in force on this server, as lines for an administrator
+  app.post('/api/game-news/player/bans', (req, res) => {
+    const t = pluginTarget(req);
+    if (!t) return res.status(401).json({ error: 'unauthorized' });
+    const s = getKick(t.server_id);
+    if (!s.enabled || !s.banEnabled) return res.json(refuse('* Команда .bans отключена в панели.'));
+    const now = Date.now();
+    const all = listBans(now).filter((r) => r.kind === 'ban' && holdsOn(r, t.server_id));
+    if (all.length === 0) return res.json({ ok: true, replies: [say(C_GOOD, '* Активных банов нет.')] });
+    const replies = [say(C_GOOD, `* Активных банов: ${all.length}.`, [[String(all.length), '#FFFFFF']])];
+    for (const r of all.slice(0, 10)) {
+      const stamp = r.until === 0 ? null : visitStamp(r.until);
+      const until = stamp ? `до ${stamp.date} в ${stamp.time}` : 'навсегда';
+      const nick = plainLine(r.nick).slice(0, 30);
+      const why = plainLine(r.reason).slice(0, 50);
+      replies.push(say('#9AA3AE', `* ${nick} · ${until} · ${why}`, [nick, [until, C_GOOD, false], [why, '#FFCC33', false]]));
+    }
+    if (all.length > 10) replies.push(say('#9AA3AE', `* …и ещё ${all.length - 10}. Остальные в панели.`));
+    res.json({ ok: true, replies });
+  });
+
   // the plugin: the commands that it has to do (a kick from Discord) come in the answer to a poll; this is how it reports
   app.post('/api/game-news/command-result', (req, res) => {
     const t = pluginTarget(req);
@@ -442,7 +496,7 @@ export function registerGameNewsKick({ app, admin }: { app: Express; admin: Requ
   app.get('/api/game-news/moderation', admin, (req, res) => {
     const now = Date.now();
     res.json({
-      bans: listBans(now).map((r) => ({ platformId: r.platform_id, masked: mask(r.platform_id), nick: r.nick, reason: r.reason, admin: r.admin, createdAt: r.created_at, until: r.until, kind: r.kind, serverName: r.server_id ? serverLabel(r.server_id) : '' })),
+      bans: listBans(now).map((r) => ({ platformId: r.platform_id, masked: mask(r.platform_id), nick: r.nick, reason: r.reason, admin: r.admin, createdAt: r.created_at, until: r.until, kind: r.kind, serverName: r.server_id ? serverLabel(r.server_id) : '', scope: r.scope })),
       log: recentMod({ player: String(req.query.player ?? ''), kind: String(req.query.kind ?? ''), limit: Number(req.query.limit) || 100 }).map((e) => ({
         id: e.id, ts: e.ts, kind: e.kind, nick: e.nick, platformId: e.platform_id, admin: e.admin, reason: e.reason, serverName: e.server_id ? serverLabel(e.server_id) : '', until: e.until,
       })),
@@ -468,7 +522,7 @@ export function registerGameNewsKick({ app, admin }: { app: Express; admin: Requ
       enabled: z.boolean(), banEnabled: z.boolean().optional(), warnEnabled: z.boolean().optional(), template: line, textColor: color, nameColor: color, reasonColor: color, adminColor: color,
       defaultReason: z.string().max(100), requireReason: z.boolean(), protectAdmins: z.boolean(), announce: z.boolean(),
       cooldownSec: z.number().int().min(0).max(3600), logChannelId: z.string().regex(/^(\d{15,25})?$/), maxReason: z.number().int().min(10).max(200),
-      banTemplate: line, warnTemplate: line, unbanTemplate: line, banJoinText: line, blockJoinText: line, banStaySec: z.number().int().min(0).max(120).optional(), notifyPlayer: z.boolean(), notifyText: line,
+      banTemplate: line, warnTemplate: line, unbanTemplate: line, banJoinText: line, blockJoinText: line, banScope: z.enum(['all', 'server']).optional(), banDm: z.boolean().optional(), notifyPlayer: z.boolean(), notifyText: line,
       warnLimit: z.number().int().min(0).max(20), warnDays: z.number().int().min(1).max(365), rejoinBlockMin: z.number().int().min(0).max(1440),
       reasons: z.array(z.object({ key: z.string().max(12), text: z.string().max(100) })).max(20),
     }).safeParse(req.body);
@@ -481,7 +535,7 @@ export function registerGameNewsKick({ app, admin }: { app: Express; admin: Requ
       .filter((r) => r.key && r.text && !keys.has(r.key.toLowerCase()) && keys.add(r.key.toLowerCase()));
     writeScoped('gamenews_kick', JSON.stringify({
       ...b.data,
-      banStaySec: b.data.banStaySec ?? d.banStaySec,
+      banScope: b.data.banScope ?? d.banScope, banDm: b.data.banDm ?? d.banDm,
       banEnabled: b.data.banEnabled ?? d.banEnabled, warnEnabled: b.data.warnEnabled ?? d.warnEnabled,
       template: clean(b.data.template, d.template), banTemplate: clean(b.data.banTemplate, d.banTemplate), warnTemplate: clean(b.data.warnTemplate, d.warnTemplate), unbanTemplate: clean(b.data.unbanTemplate, d.unbanTemplate),
       banJoinText: clean(b.data.banJoinText, d.banJoinText), blockJoinText: clean(b.data.blockJoinText, d.blockJoinText), notifyText: clean(b.data.notifyText, d.notifyText),

@@ -390,6 +390,12 @@ CREATE TABLE IF NOT EXISTS game_commands (
 );
 CREATE INDEX IF NOT EXISTS idx_game_commands_server ON game_commands(server_id, state);`),
   },
+  {
+    version: 27,
+    name: 'game_bans_scope',
+    // a ban holds on all servers (all) or only on the one where it was given (server)
+    up: (db) => db.exec("ALTER TABLE game_bans ADD COLUMN scope TEXT NOT NULL DEFAULT 'all'"),
+  },
 ];
 
 export const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;

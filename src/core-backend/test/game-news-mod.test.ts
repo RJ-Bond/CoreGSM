@@ -213,12 +213,29 @@ describe('the answer to an administrator', () => {
   });
 });
 
-describe('how long a banned player may stay', () => {
-  it('is 20 seconds by default and can be set from 0 to 120', () => {
-    assert.equal(kick.getKick(11).banStaySec, 20);
-    scope.writeScoped('gamenews_kick', JSON.stringify({ banStaySec: 45 }), 11);
-    assert.equal(kick.getKick(11).banStaySec, 45);
-    scope.writeScoped('gamenews_kick', JSON.stringify({ banStaySec: 9999 }), 11);
-    assert.equal(kick.getKick(11).banStaySec, 120);
+describe('where a ban holds', () => {
+  it('is on all servers by default, and only on one when the panel says so', () => {
+    assert.equal(kick.getKick(21).banScope, 'all');
+    kick.runMod(1, input({ action: 'ban', time: '1d', reason: 'x', targetId: '76561198000000021', adminId: 'sa1' }), NOW);
+    assert.notEqual(kick.joinBlock(2, '76561198000000021', NOW + 1000), null); // a ban of all servers holds on the other one too
+    scope.writeScoped('gamenews_kick', JSON.stringify({ banScope: 'server' }), 1);
+    kick.runMod(1, input({ action: 'ban', time: '1d', reason: 'x', targetId: '76561198000000022', adminId: 'sa2' }), NOW);
+    assert.notEqual(kick.joinBlock(1, '76561198000000022', NOW + 1000), null);
+    assert.equal(kick.joinBlock(2, '76561198000000022', NOW + 1000), null); // not on the other server
+  });
+});
+
+describe('a message to a banned player in Discord', () => {
+  it('goes to a player who linked Discord, and not to one who did not', () => {
+    const uid = Number(db.prepare("INSERT INTO users (username, password_hash, role, status, discord_id) VALUES ('linked-p', 'x', 'player', 'active', '555000111')").run().lastInsertRowid);
+    db.prepare('INSERT INTO game_identities (platform_id, user_id, nick, created_at, last_hint_at) VALUES (?, ?, ?, ?, ?)').run('76561198000000031', uid, 'Linked', NOW, NOW);
+    const count = () => (db.prepare("SELECT COUNT(*) AS n FROM deliveries WHERE kind = 'dm' AND target = '555000111'").get() as { n: number }).n;
+    kick.runMod(2, input({ action: 'ban', time: '1d', reason: 'cheats', targetId: '76561198000000031', adminId: 'dm1' }), NOW);
+    assert.equal(count(), 1);
+    kick.runMod(2, input({ action: 'ban', time: '1d', reason: 'cheats', targetId: '76561198000000032', adminId: 'dm2' }), NOW);
+    assert.equal(count(), 1); // the second player has no Discord
+    scope.writeScoped('gamenews_kick', JSON.stringify({ banDm: false }), 2);
+    kick.runMod(2, input({ action: 'ban', time: '1d', reason: 'cheats', targetId: '76561198000000031', adminId: 'dm3' }), NOW);
+    assert.equal(count(), 1); // switched off in the panel
   });
 });

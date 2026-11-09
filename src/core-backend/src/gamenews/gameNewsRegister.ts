@@ -213,7 +213,7 @@ export function registerGameNewsPlayers({ app }: { app: Express }): void {
     // a banned player (or one who is back too soon after a kick) is told why and removed, whatever the registration is set to
     if (id.success) {
       const block = joinBlock(serverId ?? 0, id.data);
-      if (block) return res.json({ registered: false, banned: true, kickAfter: getKick(serverId ?? 0).banStaySec, replies: block.lines });
+      if (block) return res.json({ registered: false, banned: true, replies: block.lines });
     }
     if (!s.enabled || !id.success) return res.json({ registered: false, replies: [] });
     // the reminder that the plugin asks for every few minutes while the player is in the game: only the hints, nothing of the greeting

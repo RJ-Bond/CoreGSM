@@ -6,7 +6,7 @@ import { ChatLines, NewsEditor, NewsPreview } from '../components/NewsEditor';
 import { confirmDialog } from '../confirm';
 import { t, useI18n } from '../i18n';
 import {
-  ANSI_COLORS, CHAT_KINDS, CHAT_PRESETS, SWATCHES, commandLine, kickLine, modLine, DEFAULT_KICK, WELCOME_STYLES, WELCOME_VARIABLES, composeLine, isHex, validateNews,
+  ANSI_COLORS, CHAT_KINDS, CHAT_PRESETS, SWATCHES, accentLine, commandLine, kickLine, modLine, DEFAULT_KICK, WELCOME_STYLES, WELCOME_VARIABLES, composeLine, isHex, validateNews,
   type AnsiColor, type ChatColors, type ChatKind, type ChatSettings, type Extras, type JoinLeave, type KickSettings, type RegisterSettings, type Welcome, type WelcomeStyle,
 } from '../gameNews';
 import { ScopeNote, useScope } from './GameNewsScope';
@@ -228,6 +228,8 @@ export function RegisterCard({ initial }: { initial: RegisterSettings }) {
     save: async (v) => { await api(`/game-news/register-settings${sc.q}`, 'PUT', v); setSaved(v); sc.changed(); },
   });
   const sample = (text: string, color: string) => commandLine(color, text.replace(/\{login\}/g, 'WhiteLegioN').replace(/\{panel\}/g, 'coregsm.example.com'));
+  const nickC = isHex(f.nickColor) ? f.nickColor : '#FFCC33';
+  const numC = isHex(f.numberColor) ? f.numberColor : '#4DE0E0';
 
   const field = (label: string, key: 'promptText' | 'doneText' | 'discordText' | 'pendingText' | 'loginText' | 'nickTakenText' | 'remindText' | 'autoLoginText' | 'lastSeenText') => (
     <Field label={label}>
@@ -303,7 +305,7 @@ export function RegisterCard({ initial }: { initial: RegisterSettings }) {
       </Field>
 
       <VarChips vars={[{ name: 'login', example: 'WhiteLegioN' }, { name: 'panel', example: 'coregsm.example.ru' }]} onPick={(v) => set('promptText', `${f.promptText} ${v}`.trim())} />
-      <ChatLines lines={[sample(f.promptText, '#FFCC33'), sample(f.doneText, '#5FD068'), sample(f.loginText, '#5FD068'), sample(f.nickTakenText.replace(/\{name\}/g, 'WhiteLegioN'), '#FFCC33'), ...(f.autoLoginEnabled ? [sample(f.autoLoginText, '#5FD068')] : []), ...(f.lastSeenEnabled ? [sample(f.lastSeenText.replace(/\{name\}/g, 'WhiteLegioN').replace(/\{date\}/g, '10.12.2026').replace(/\{time\}/g, '10:00'), '#FFCC33')] : []), ...(f.rankEnabled ? [`<color=#5FD068>${f.rankText.replace(/[<>]/g, '').replace(/\{name\}/g, 'WhiteLegioN').replace(/\{rank\}/g, 'Охотник на кровь').replace(/\{hours\}/g, '42').replace(/\{next\}/g, ' · до «Страж замка» ещё 28 ч')}</color>`] : []), sample(f.discordText, '#6EC1FF')]} />
+      <ChatLines lines={[sample(f.promptText, '#FFCC33'), sample(f.doneText, '#5FD068'), sample(f.loginText, '#5FD068'), accentLine('#FFCC33', f.nickTakenText.replace(/\{name\}/g, 'WhiteLegioN'), [['WhiteLegioN', nickC]]), ...(f.autoLoginEnabled ? [sample(f.autoLoginText, '#5FD068')] : []), ...(f.lastSeenEnabled ? [accentLine('#D7CCF5', f.lastSeenText.replace(/\{name\}/g, 'WhiteLegioN').replace(/\{date\}/g, '10.12.2026').replace(/\{time\}/g, '10:00'), [['WhiteLegioN', nickC], ['10.12.2026', numC], ['10:00', numC]])] : []), ...(f.rankEnabled ? [accentLine('#A9B8C9', f.rankText.replace(/\{name\}/g, 'WhiteLegioN').replace(/\{rank\}/g, 'Охотник на кровь').replace(/\{hours\}/g, '42').replace(/\{next\}/g, ' · до «Страж замка» ещё 28 ч'), [['WhiteLegioN', nickC], ['Охотник на кровь', f.rankByTier ? '#D8C9FF' : (isHex(f.rankColor) ? f.rankColor : '#B9A7FF')], ['42', numC], [' · до «Страж замка» ещё 28 ч', '#8A94A3', false]])] : []), sample(f.discordText, '#6EC1FF')]} />
       <p className="text-sm font-semibold text-mute">{t('gn.rg.vars')}</p>
       <p className="text-sm font-semibold text-danger">{t('gn.rg.warn')}</p>
       {auto.invalid && <p className="text-sm font-semibold text-danger">{auto.error}</p>}
@@ -467,10 +469,17 @@ export function KickCard({ initial }: { initial: KickSettings }) {
             <AutoText value={f.banJoinText} maxLength={300} onChange={(e) => set('banJoinText', e.target.value)} />
           </Field>
           <VarChips vars={[{ name: 'reason', example: reasonText }, { name: 'until', example: t('gn.kk.sampleUntil') }]} onPick={(v) => set('banJoinText', `${f.banJoinText} ${v}`.trim())} />
-          <Field label={t('gn.kk.banStay')}>
-            <p className="mb-1 text-xs text-mute">{t('gn.kk.banStayHint')}</p>
-            <input className="input w-32" type="number" min={0} max={120} value={f.banStaySec} onChange={(e) => set('banStaySec', Number(e.target.value))} />
+          <Field label={t('gn.kk.banScope')}>
+            <p className="mb-1 text-xs text-mute">{t('gn.kk.banScopeHint')}</p>
+            <select className="input w-64" value={f.banScope} onChange={(e) => set('banScope', e.target.value === 'server' ? 'server' : 'all')}>
+              <option value="all">{t('gn.kk.banScopeAll')}</option>
+              <option value="server">{t('gn.kk.banScopeServer')}</option>
+            </select>
           </Field>
+          <label className="flex items-start gap-3 font-bold">
+            <Switch className="mt-0.5" checked={f.banDm} onChange={(v) => set('banDm', v)} />
+            <span>{t('gn.kk.banDm')}<span className="block text-sm font-semibold text-mute">{t('gn.kk.banDmNote')}</span></span>
+          </label>
         </WithPreview>
       )}
 
