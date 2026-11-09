@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="36871d638870"
+COREGSM_BUILD="98bb1127c611"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.2.10"
+COREGSM_VERSION="1.2.11"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -172099,7 +172099,7 @@ __COREGSM_EOF__
 }
 :root[data-ember='1'] .srv-tile > .px-1\.5 { padding-inline: 18px; }
 :root[data-ember='1'] .srv-tile > .mx-1\.5 { margin-inline: 18px; }
-:root[data-ember='1'] .srv-tile .srv-name { font-size: 17px; font-weight: 800; letter-spacing: -.01em; }
+:root[data-ember='1'] .srv-tile .srv-name { font-size: var(--fs-xl); font-weight: 800; letter-spacing: -.01em; }
 :root[data-ember='1'] .srv-tile .srv-cap { height: 8px; border-radius: 99px; background: rgb(var(--ink) / .1); overflow: hidden; }
 :root[data-ember='1'] .srv-tile .srv-cap > i { background: linear-gradient(90deg, rgb(var(--brand-2)), rgb(var(--brand))); border-radius: 99px; }
 :root[data-ember='1'] .srv-tile > div:last-child { margin-top: auto; padding-top: 12px; border-top: 1px solid rgb(var(--line)); }

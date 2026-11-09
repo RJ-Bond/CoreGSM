@@ -295,7 +295,7 @@
 }
 :root[data-ember='1'] .srv-tile > .px-1\.5 { padding-inline: 18px; }
 :root[data-ember='1'] .srv-tile > .mx-1\.5 { margin-inline: 18px; }
-:root[data-ember='1'] .srv-tile .srv-name { font-size: 17px; font-weight: 800; letter-spacing: -.01em; }
+:root[data-ember='1'] .srv-tile .srv-name { font-size: var(--fs-xl); font-weight: 800; letter-spacing: -.01em; }
 :root[data-ember='1'] .srv-tile .srv-cap { height: 8px; border-radius: 99px; background: rgb(var(--ink) / .1); overflow: hidden; }
 :root[data-ember='1'] .srv-tile .srv-cap > i { background: linear-gradient(90deg, rgb(var(--brand-2)), rgb(var(--brand))); border-radius: 99px; }
 :root[data-ember='1'] .srv-tile > div:last-child { margin-top: auto; padding-top: 12px; border-top: 1px solid rgb(var(--line)); }
