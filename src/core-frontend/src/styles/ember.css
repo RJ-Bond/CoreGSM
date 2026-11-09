@@ -33,6 +33,7 @@
   --r-md: 10px;
   --r-lg: 12px;
   --r-xl: 18px;
+  --emb-r-btn: 12px; --emb-r-card: 18px; --emb-r-big: 24px;
   --shadow-2: 0 0 0 1px rgba(40, 30, 20, .05), 0 1px 2px rgba(20, 16, 10, .05);
 }
 
@@ -168,18 +169,26 @@
   :root[data-ember='1']:not([data-page='admin']) .srv-shell > .srv-banner { top: 24px; }
 }
 
-/* ---------- the figures of the server list: four cards, the first one is the hot one, the chart is a card under them ---------- */
-:root[data-ember='1'] .pulse { background: none; box-shadow: none; padding: 0; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; align-items: stretch; }
-:root[data-ember='1'] .pulse-state { grid-column: 1 / -1; }
-:root[data-ember='1'] .pulse-nums { display: contents; }
-:root[data-ember='1'] .pulse-nums > div { min-width: 0; padding: 14px 16px; border-radius: var(--r-xl); background: rgb(var(--card)); box-shadow: var(--shadow-2); }
+/* ---------- the figures of the server list: ONE card, the four figures on the left (the first one is the hot one), the chart on the right ---------- */
+:root[data-ember='1'] .pulse {
+  display: grid; grid-template-columns: minmax(260px, 360px) minmax(0, 1fr); gap: 8px 22px; align-items: stretch;
+  padding: 18px; border-radius: var(--emb-r-big); background: rgb(var(--card)); box-shadow: var(--shadow-2);
+}
+:root[data-ember='1'] .pulse-nums { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 0; align-content: start; }
+:root[data-ember='1'] .pulse-nums > div { min-width: 0; padding: 12px 14px; border-radius: 14px; background: rgb(var(--soft)); box-shadow: inset 0 0 0 1px rgb(var(--line)); }
 :root[data-ember='1'] .pulse-nums dt { text-transform: none; letter-spacing: 0; font-size: var(--fs-sm); font-weight: 650; }
-:root[data-ember='1'] .pulse-nums dd { margin-top: 6px; font-size: 30px; font-weight: 800; }
+:root[data-ember='1'] .pulse-nums dd { margin-top: 4px; font-size: 28px; font-weight: 800; }
 :root[data-ember='1'] .pulse-nums > div:first-child { background: linear-gradient(155deg, rgb(var(--brand)), rgb(var(--brand-2))); box-shadow: none; color: #fff; }
 :root[data-ember='1'] .pulse-nums > div:first-child :is(dt, small) { color: rgb(255 255 255 / .88); }
-:root[data-ember='1'] .pulse-chart { grid-column: 1 / -1; padding: 14px 18px 12px; border-radius: var(--r-xl); background: rgb(var(--card)); box-shadow: var(--shadow-2); color: rgb(var(--brand-hover)); }
-:root[data-ember='1'] .pulse-plot { height: 96px; }
-@media (max-width: 767px) { :root[data-ember='1'] .pulse { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+:root[data-ember='1'] .pulse-chart { grid-column: 2; grid-row: 1; margin: 0; padding: 0; border-radius: 0; background: none; box-shadow: none; color: rgb(var(--brand-hover)); align-self: stretch; display: flex; flex-direction: column; justify-content: space-between; }
+:root[data-ember='1'] .pulse-plot { height: 132px; }
+/* a problem is one line inside the figure of the servers, not a wide strip above everything */
+:root[data-ember='1'] .pulse-problem { display: block; margin-top: 4px; font-size: var(--fs-xs); font-weight: 700; line-height: 1.3; color: rgb(var(--bad)); text-decoration: underline; text-underline-offset: 2px; }
+:root[data-ember='1'] .pulse-problem-warn { color: rgb(var(--warn)); }
+@media (max-width: 899px) {
+  :root[data-ember='1'] .pulse { grid-template-columns: minmax(0, 1fr); }
+  :root[data-ember='1'] .pulse-chart { grid-column: 1; grid-row: auto; }
+}
 
 /* the open section of the side column: no underline of the old header */
 :root[data-ember='1'] .hdr-nav .seg-item::after { display: none; }
@@ -279,7 +288,7 @@
 
 /* ---------- the cards of the servers: a picture on top that melts into a graphite card, a big figure, an orange bar ---------- */
 :root[data-ember='1'] .srv-tile {
-  padding: 0; gap: 12px; border-radius: 20px; overflow: hidden;
+  padding: 0; gap: 12px; border-radius: var(--emb-r-card); overflow: hidden;
   background: rgb(var(--card)); box-shadow: var(--shadow-2);
   transition: transform var(--t-base, .2s) var(--ease-out, ease), box-shadow var(--t-base, .2s) var(--ease-out, ease);
 }
@@ -312,7 +321,7 @@
 }
 
 /* ---------- the big card of the home page: a deeper dark column, a bigger figure, an orange bar ---------- */
-:root[data-ember='1'] .hero3 { border-radius: 24px; --h3-bg: color-mix(in srgb, var(--gc, #d6420a) 9%, #0f0f13); box-shadow: var(--shadow-2), inset 0 0 0 1px rgb(255 255 255 / .06); }
+:root[data-ember='1'] .hero3 { border-radius: var(--emb-r-big); min-height: 300px; --h3-bg: color-mix(in srgb, var(--gc, #d6420a) 9%, #0f0f13); box-shadow: var(--shadow-2), inset 0 0 0 1px rgb(255 255 255 / .06); }
 :root[data-ember='1'] .hero3 .srv-cap { height: 10px; background: rgb(255 255 255 / .14); border-radius: 99px; overflow: hidden; }
 :root[data-ember='1'] .hero3 .srv-cap > i { background: linear-gradient(90deg, rgb(var(--brand-2)), rgb(255 138 76)); border-radius: 99px; }
 :root[data-ember='1'] .hero3 .hero-reason { color: rgb(255 168 112); }
@@ -322,7 +331,7 @@
 /* ---------- the list: one card per server, with a gap between them ---------- */
 :root[data-ember='1'] .srv-tbl { overflow: visible; background: none; box-shadow: none; display: grid; gap: 8px; }
 :root[data-ember='1'] .srv-tbl > .srv-tr:not(.srv-th) {
-  min-height: 60px; padding: 8px 18px; border: 0; border-radius: 16px; background: rgb(var(--card)); box-shadow: var(--shadow-2);
+  min-height: 60px; padding: 8px 18px; border: 0; border-radius: var(--emb-r-card); background: rgb(var(--card)); box-shadow: var(--shadow-2);
   transition: transform var(--t-base, .2s) var(--ease-out, ease), box-shadow var(--t-base, .2s) var(--ease-out, ease);
 }
 :root[data-ember='1'] .srv-tbl > .srv-tr:not(.srv-th):hover { background: rgb(var(--card)); transform: translateY(-1px); box-shadow: var(--shadow-3), 0 0 0 1px rgb(var(--brand) / .45); }
@@ -337,15 +346,15 @@
 :root[data-ember='1'] .srv-banner .srv-cta::after { opacity: .35; }
 
 /* ---------- the news: the cover melts into a card, one rounding with the cards of the servers ---------- */
-:root[data-ember='1'] .nw-main article, :root[data-ember='1'] .nw-main .tile { border-radius: 22px; overflow: hidden; background: rgb(var(--card)); box-shadow: var(--shadow-2); transition: transform var(--t-base, .2s) var(--ease-out, ease), box-shadow var(--t-base, .2s) var(--ease-out, ease); }
+:root[data-ember='1'] .nw-main article, :root[data-ember='1'] .nw-main .tile { border-radius: var(--emb-r-card); overflow: hidden; background: rgb(var(--card)); box-shadow: var(--shadow-2); transition: transform var(--t-base, .2s) var(--ease-out, ease), box-shadow var(--t-base, .2s) var(--ease-out, ease); }
 :root[data-ember='1'] .nw-main article:hover { transform: translateY(-2px); box-shadow: var(--shadow-3), 0 0 0 1px rgb(var(--brand) / .4); }
 :root[data-ember='1'] .nw-cover-title { letter-spacing: -.025em; }
-:root[data-ember='1'] .nw-aside > * { border-radius: 20px; }
+:root[data-ember='1'] .nw-aside > * { border-radius: var(--emb-r-card); }
 :root[data-ember='1'] .nw-rub { border-radius: 12px; }
 
 /* ---------- the profile: the same rounding and hairlines as the rest ---------- */
 :root[data-ember='1'] .pf-banner { border-radius: 24px; }
-:root[data-ember='1'] .pf-ach-mini { border-radius: 16px; }
+:root[data-ember='1'] .pf-ach-mini { border-radius: 12px; }
 :root[data-ember='1'] .pf-bar > i { background: linear-gradient(90deg, rgb(var(--brand-2)), rgb(var(--brand))); }
 :root[data-ember='1'] .pf-chip { border-radius: 10px; }
 
@@ -355,7 +364,7 @@
 :root[data-ember='1'] .adm-nav :is(a, button) { border-radius: 12px; }
 
 /* ---------- the sign-in screens ---------- */
-:root[data-ember='1'] .auth-card { border-radius: 24px; background: rgb(var(--card)); box-shadow: var(--shadow-2), 0 24px 60px -30px rgb(0 0 0 / .5); }
+:root[data-ember='1'] .auth-card { border-radius: var(--emb-r-big); background: rgb(var(--card)); box-shadow: var(--shadow-2), 0 24px 60px -30px rgb(0 0 0 / .5); }
 
 /* ---------- one gentle entrance: the columns grow and the cards rise when a page opens ---------- */
 @keyframes emb-grow { from { transform: scaleY(.06); } to { transform: none; } }
@@ -368,3 +377,26 @@
   :root[data-ember='1'] .srv-grid > :nth-child(4) { animation-delay: 120ms; }
   :root[data-ember='1'] .srv-grid > :nth-child(n+5) { animation-delay: 160ms; }
 }
+
+/* ---------- a quieter home page ---------- */
+/* the card of a server: the name, the game, the players, the bar, the ping; the map, the version, the «free places» line and the small curve are on the page of the server */
+:root[data-ember='1'] .srv-tile .srv-chip,
+:root[data-ember='1'] .srv-tile .srv-spark-wrap,
+:root[data-ember='1'] .srv-tile > .flex-col > :nth-child(n+2) { display: none; }
+/* a server that does not answer: a calm grey card with one red line, no dashed frame and no huge «no answer» */
+:root[data-ember='1'] .srv-tile.is-down { background: rgb(var(--soft)); }
+:root[data-ember='1'] .srv-tile.is-down .srv-off-fig { display: none; }
+:root[data-ember='1'] .srv-tile.is-down > div:has(> .cover-scrim)::after { background: linear-gradient(180deg, transparent, rgb(var(--soft))); }
+
+/* the big card: the faces of the players and the row of small facts are not repeated, a calmer height */
+:root[data-ember='1'] .hero3 .srv-names { display: none; }
+:root[data-ember='1'] .hero3 .h3-foot .h3-fact:nth-child(n+3) { display: none; }
+:root[data-ember='1'] .hero3.is-down { min-height: 240px; }
+:root[data-ember='1'] .hero3 .h3-count [class*='text-[72px]'] { font-size: 72px; }
+
+/* the filters and the switches of the view are one family: the same height, the same hairline */
+:root[data-ember='1'] .srv-bar { align-items: center; gap: 10px; }
+:root[data-ember='1'] .srv-bar .seg { padding: 3px; border-radius: 14px; background: rgb(var(--card)); box-shadow: inset 0 0 0 1px rgb(var(--line)); }
+:root[data-ember='1'] .srv-bar .seg-item { min-height: 34px; }
+:root[data-ember='1'] .srv-bar .seg-item[aria-pressed='true'] { background: rgb(var(--soft)); color: rgb(var(--ink)); box-shadow: inset 0 0 0 1px rgb(var(--line)); }
+:root[data-ember='1'] .srv-bar .seg::before { display: none; }

@@ -1,4 +1,4 @@
-import { applyDefaultLook } from './appearance';
+import { applyDefaultLook, useAppearance } from './appearance';
 import { onPageTitleDetail, tabTitle } from './pageTitle';
 import { NewsUnreadDot } from './components/news/newsSeen';
 import { UpdateBadge, shownUpdate, useUpdatePolling, useUpdateState } from './components/UpdateBadge';
@@ -121,6 +121,7 @@ const IconSearch = () => (
 );
 
 export default function App() {
+  const [{ ember }] = useAppearance();
   const { page: rawPage, sub } = useRoute();
   // re-renders the whole shell when the language or a regional setting changes
   useI18n();
@@ -497,7 +498,7 @@ export default function App() {
           {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} isStaff={isStaff} isAdmin={!!isAdmin} />}
         </Suspense>
 
-        <AppFooter brand={access.brand.name} version={access.version} compact={page === 'admin'} />
+        <AppFooter brand={access.brand.name} version={access.version} compact={page === 'admin' || ember} />
 
         <nav
           className={`nav-bottom glass fixed inset-x-3 z-40 mx-auto max-w-md rounded-ui-xl md:hidden ${navHidden ? 'is-hidden' : ''}`}

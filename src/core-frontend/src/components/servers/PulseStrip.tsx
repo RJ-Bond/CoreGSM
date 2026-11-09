@@ -3,6 +3,7 @@ import { useId, useState, type JSX, type PointerEvent } from 'react';
 import { AnimatedNumber, fmtTime, LAG_PING, num } from '../../ui';
 import { IconError, IconOk, IconWarn, IconWrench, IconClock } from '../../icons';
 import { t, useI18n } from '../../i18n';
+import { useAppearance } from '../../appearance';
 import type { Server } from '../../api';
 import { chartPoints, chartStart, hasEnoughHistory, pulseOf, type OverviewData, type PulseState } from './overviewLogic';
 
@@ -84,6 +85,7 @@ function PlayersChart({ data, now }: { data: OverviewData | null; now: number })
 
 export function PulseStrip({ servers, overview, uptime, now, onOpen }: { servers: Server[]; overview: OverviewData | null; uptime: number | null; now: number; onOpen?: (s: Server) => void }) {
   useI18n();
+  const [{ ember }] = useAppearance();
   const { state, problems } = pulseOf(servers);
   const online = servers.filter((s) => s.online);
   const players = online.reduce((n, s) => n + s.players, 0);
@@ -119,7 +121,7 @@ export function PulseStrip({ servers, overview, uptime, now, onOpen }: { servers
   const first = problems[0];
   return (
     <div className="pulse-wrap">
-      {alert && first && (
+      {alert && first && !ember && (
         <a
           className={`pulse-alert pulse-alert-${state}`}
           href={problems.length === 1 ? `/servers/${first.id}` : '#srv-list'}
@@ -137,7 +139,7 @@ export function PulseStrip({ servers, overview, uptime, now, onOpen }: { servers
         </a>
       )}
     <section className={`pulse pulse-${state}`} aria-label={t('srv.pulse.label')}>
-      {!alert && (
+      {!alert && !ember && (
         <div className="pulse-state" role="status">
           <span className="pulse-icon" aria-hidden>{ICON[state]}</span>
           <span className="pulse-title">{title}</span>
@@ -152,6 +154,18 @@ export function PulseStrip({ servers, overview, uptime, now, onOpen }: { servers
         <div>
           <dt>{t('srv.pulse.servers')}</dt>
           <dd className={servers.length === 0 ? '' : online.length === servers.length ? 'text-ok' : online.length === 0 ? 'text-bad' : 'text-warn'}>{online.length}<small>/{servers.length}</small></dd>
+          {ember && alert && first && (
+            <a
+              className={`pulse-problem pulse-problem-${state}`}
+              href={problems.length === 1 ? `/servers/${first.id}` : '#srv-list'}
+              onClick={(e) => {
+                if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+                e.preventDefault();
+                if (problems.length === 1) onOpen?.(first);
+                else document.getElementById('srv-list')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+              }}
+            >{title}</a>
+          )}
         </div>
         <div>
           <dt>{t('srv.pulse.ping')}</dt>

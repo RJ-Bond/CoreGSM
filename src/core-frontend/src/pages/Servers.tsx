@@ -331,7 +331,7 @@ function ServerList() {
     <div className="space-y-5">
       <PageHead
         title={ember && me ? greeting(me.username) : t('nav.servers')}
-        subtitle={me && !ember ? `${greeting(me.username)}. ${liveLine}` : liveLine}
+        subtitle={ember ? undefined : me ? `${greeting(me.username)}. ${liveLine}` : liveLine}
         icon={<IconServers />}
       >
         <span className="srv-head-actions">
@@ -649,7 +649,7 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince }
           {who && <PlayerNames className="px-1.5" names={s.playerNames ?? []} max={12} />}
           {s.players === 0
             ? <p className="srv-empty-now"><i aria-hidden />{t('srv.empty.now')}</p>
-            : <div className="px-1.5"><Spark serverId={s.id} color={accent} /></div>}
+            : <div className="srv-spark-wrap px-1.5"><Spark serverId={s.id} color={accent} /></div>}
         </>
       ) : (
         s.hasStatus ? (

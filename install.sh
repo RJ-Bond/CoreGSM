@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="ac8aa7c5323b"
+COREGSM_BUILD="458d40a47e44"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.2.13"
+COREGSM_VERSION="1.2.14"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -120481,7 +120481,7 @@ add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/App.tsx" << '__COREGSM_EOF__'
-import { applyDefaultLook } from './appearance';
+import { applyDefaultLook, useAppearance } from './appearance';
 import { onPageTitleDetail, tabTitle } from './pageTitle';
 import { NewsUnreadDot } from './components/news/newsSeen';
 import { UpdateBadge, shownUpdate, useUpdatePolling, useUpdateState } from './components/UpdateBadge';
@@ -120604,6 +120604,7 @@ const IconSearch = () => (
 );
 
 export default function App() {
+  const [{ ember }] = useAppearance();
   const { page: rawPage, sub } = useRoute();
   // re-renders the whole shell when the language or a regional setting changes
   useI18n();
@@ -120980,7 +120981,7 @@ export default function App() {
           {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} isStaff={isStaff} isAdmin={!!isAdmin} />}
         </Suspense>
 
-        <AppFooter brand={access.brand.name} version={access.version} compact={page === 'admin'} />
+        <AppFooter brand={access.brand.name} version={access.version} compact={page === 'admin' || ember} />
 
         <nav
           className={`nav-bottom glass fixed inset-x-3 z-40 mx-auto max-w-md rounded-ui-xl md:hidden ${navHidden ? 'is-hidden' : ''}`}
@@ -140021,6 +140022,7 @@ import { useId, useState, type JSX, type PointerEvent } from 'react';
 import { AnimatedNumber, fmtTime, LAG_PING, num } from '../../ui';
 import { IconError, IconOk, IconWarn, IconWrench, IconClock } from '../../icons';
 import { t, useI18n } from '../../i18n';
+import { useAppearance } from '../../appearance';
 import type { Server } from '../../api';
 import { chartPoints, chartStart, hasEnoughHistory, pulseOf, type OverviewData, type PulseState } from './overviewLogic';
 
@@ -140102,6 +140104,7 @@ function PlayersChart({ data, now }: { data: OverviewData | null; now: number })
 
 export function PulseStrip({ servers, overview, uptime, now, onOpen }: { servers: Server[]; overview: OverviewData | null; uptime: number | null; now: number; onOpen?: (s: Server) => void }) {
   useI18n();
+  const [{ ember }] = useAppearance();
   const { state, problems } = pulseOf(servers);
   const online = servers.filter((s) => s.online);
   const players = online.reduce((n, s) => n + s.players, 0);
@@ -140137,7 +140140,7 @@ export function PulseStrip({ servers, overview, uptime, now, onOpen }: { servers
   const first = problems[0];
   return (
     <div className="pulse-wrap">
-      {alert && first && (
+      {alert && first && !ember && (
         <a
           className={`pulse-alert pulse-alert-${state}`}
           href={problems.length === 1 ? `/servers/${first.id}` : '#srv-list'}
@@ -140155,7 +140158,7 @@ export function PulseStrip({ servers, overview, uptime, now, onOpen }: { servers
         </a>
       )}
     <section className={`pulse pulse-${state}`} aria-label={t('srv.pulse.label')}>
-      {!alert && (
+      {!alert && !ember && (
         <div className="pulse-state" role="status">
           <span className="pulse-icon" aria-hidden>{ICON[state]}</span>
           <span className="pulse-title">{title}</span>
@@ -140170,6 +140173,18 @@ export function PulseStrip({ servers, overview, uptime, now, onOpen }: { servers
         <div>
           <dt>{t('srv.pulse.servers')}</dt>
           <dd className={servers.length === 0 ? '' : online.length === servers.length ? 'text-ok' : online.length === 0 ? 'text-bad' : 'text-warn'}>{online.length}<small>/{servers.length}</small></dd>
+          {ember && alert && first && (
+            <a
+              className={`pulse-problem pulse-problem-${state}`}
+              href={problems.length === 1 ? `/servers/${first.id}` : '#srv-list'}
+              onClick={(e) => {
+                if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+                e.preventDefault();
+                if (problems.length === 1) onOpen?.(first);
+                else document.getElementById('srv-list')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+              }}
+            >{title}</a>
+          )}
         </div>
         <div>
           <dt>{t('srv.pulse.ping')}</dt>
@@ -140499,6 +140514,7 @@ import { t, useI18n } from '../../i18n';
 import { fmtDateTime, fmtTime, usePoll } from '../../ui';
 import { NewsBanner, cardOf } from '../news/PublicFeed';
 import { IconChevronDown } from '../../icons';
+import { useAppearance } from '../../appearance';
 import { StateView } from '../StateView';
 import type { OverviewData } from './overviewLogic';
 
@@ -140510,7 +140526,10 @@ const markSeen = (at: number) => { try { localStorage.setItem(SEEN_KEY, String(a
 
 export function readOpen(): boolean {
   try {
-    return localStorage.getItem(OPEN_KEY) !== '0';
+    const v = localStorage.getItem(OPEN_KEY);
+    // nothing chosen yet: the Ember look keeps the block folded
+    if (v === null) return document.documentElement.dataset.ember !== '1';
+    return v !== '0';
   } catch {
     return true;
   }
@@ -140603,6 +140622,9 @@ export function WhatsNew({ open, onToggle, overview }: { open: boolean; onToggle
     if (open && news?.sentAt && news.sentAt > seen) { markSeen(news.sentAt); const id = setTimeout(() => setSeen(news.sentAt as number), 4000); return () => clearTimeout(id); }
   }, [open, news, seen]);
   const card = news ? cardOf(news) : null;
+  const [{ ember }] = useAppearance();
+  // Ember: a block with nothing in it is not shown; an empty half of it is not shown either
+  if (ember && news === null && maint.length === 0) return null;
   return (
     <aside className={`panel srv-new ${open && news === null && maint.length === 0 ? 'srv-new-compact' : ''}`} aria-label={t('srv.new.title')}>
       <h2 className="m-0">
@@ -140617,7 +140639,7 @@ export function WhatsNew({ open, onToggle, overview }: { open: boolean; onToggle
       )}
       {open && !(news === null && maint.length === 0) && (
         <div id={bodyId} className="srv-new-body">
-          <section>
+          {!(ember && news === null) && <section>
             <h3 className="srv-new-h">{t('srv.new.news')}</h3>
             {news === undefined ? (
               <div className="skeleton h-16 rounded-2xl" aria-busy="true" />
@@ -140633,9 +140655,9 @@ export function WhatsNew({ open, onToggle, overview }: { open: boolean; onToggle
             ) : (
               <StateView bare compact title={t('srv.new.noNews')} text="" />
             )}
-          </section>
+          </section>}
 
-          <section>
+          {!(ember && maint.length === 0) && <section>
             <h3 className="srv-new-h">{t('srv.new.maint')}</h3>
             {maint.length === 0 ? (
               <StateView bare compact title={t('srv.new.noMaint')} text="" />
@@ -140654,7 +140676,7 @@ export function WhatsNew({ open, onToggle, overview }: { open: boolean; onToggle
                 ))}
               </ul>
             )}
-          </section>
+          </section>}
 
         </div>
       )}
@@ -140665,8 +140687,7 @@ export function WhatsNew({ open, onToggle, overview }: { open: boolean; onToggle
 /** the folded state is remembered; kept here so the page does not touch localStorage itself */
 export function useWhatsNewOpen(): [boolean, () => void] {
   const [open, setOpen] = useState(readOpen);
-  useEffect(() => saveOpen(open), [open]);
-  return [open, () => setOpen((v) => !v)];
+  return [open, () => setOpen((v) => { saveOpen(!v); return !v; })];
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/servers"
@@ -165746,7 +165767,7 @@ function ServerList() {
     <div className="space-y-5">
       <PageHead
         title={ember && me ? greeting(me.username) : t('nav.servers')}
-        subtitle={me && !ember ? `${greeting(me.username)}. ${liveLine}` : liveLine}
+        subtitle={ember ? undefined : me ? `${greeting(me.username)}. ${liveLine}` : liveLine}
         icon={<IconServers />}
       >
         <span className="srv-head-actions">
@@ -166064,7 +166085,7 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince }
           {who && <PlayerNames className="px-1.5" names={s.playerNames ?? []} max={12} />}
           {s.players === 0
             ? <p className="srv-empty-now"><i aria-hidden />{t('srv.empty.now')}</p>
-            : <div className="px-1.5"><Spark serverId={s.id} color={accent} /></div>}
+            : <div className="srv-spark-wrap px-1.5"><Spark serverId={s.id} color={accent} /></div>}
         </>
       ) : (
         s.hasStatus ? (
@@ -171967,6 +171988,7 @@ __COREGSM_EOF__
   --r-md: 10px;
   --r-lg: 12px;
   --r-xl: 18px;
+  --emb-r-btn: 12px; --emb-r-card: 18px; --emb-r-big: 24px;
   --shadow-2: 0 0 0 1px rgba(40, 30, 20, .05), 0 1px 2px rgba(20, 16, 10, .05);
 }
 
@@ -172102,18 +172124,26 @@ __COREGSM_EOF__
   :root[data-ember='1']:not([data-page='admin']) .srv-shell > .srv-banner { top: 24px; }
 }
 
-/* ---------- the figures of the server list: four cards, the first one is the hot one, the chart is a card under them ---------- */
-:root[data-ember='1'] .pulse { background: none; box-shadow: none; padding: 0; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; align-items: stretch; }
-:root[data-ember='1'] .pulse-state { grid-column: 1 / -1; }
-:root[data-ember='1'] .pulse-nums { display: contents; }
-:root[data-ember='1'] .pulse-nums > div { min-width: 0; padding: 14px 16px; border-radius: var(--r-xl); background: rgb(var(--card)); box-shadow: var(--shadow-2); }
+/* ---------- the figures of the server list: ONE card, the four figures on the left (the first one is the hot one), the chart on the right ---------- */
+:root[data-ember='1'] .pulse {
+  display: grid; grid-template-columns: minmax(260px, 360px) minmax(0, 1fr); gap: 8px 22px; align-items: stretch;
+  padding: 18px; border-radius: var(--emb-r-big); background: rgb(var(--card)); box-shadow: var(--shadow-2);
+}
+:root[data-ember='1'] .pulse-nums { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 0; align-content: start; }
+:root[data-ember='1'] .pulse-nums > div { min-width: 0; padding: 12px 14px; border-radius: 14px; background: rgb(var(--soft)); box-shadow: inset 0 0 0 1px rgb(var(--line)); }
 :root[data-ember='1'] .pulse-nums dt { text-transform: none; letter-spacing: 0; font-size: var(--fs-sm); font-weight: 650; }
-:root[data-ember='1'] .pulse-nums dd { margin-top: 6px; font-size: 30px; font-weight: 800; }
+:root[data-ember='1'] .pulse-nums dd { margin-top: 4px; font-size: 28px; font-weight: 800; }
 :root[data-ember='1'] .pulse-nums > div:first-child { background: linear-gradient(155deg, rgb(var(--brand)), rgb(var(--brand-2))); box-shadow: none; color: #fff; }
 :root[data-ember='1'] .pulse-nums > div:first-child :is(dt, small) { color: rgb(255 255 255 / .88); }
-:root[data-ember='1'] .pulse-chart { grid-column: 1 / -1; padding: 14px 18px 12px; border-radius: var(--r-xl); background: rgb(var(--card)); box-shadow: var(--shadow-2); color: rgb(var(--brand-hover)); }
-:root[data-ember='1'] .pulse-plot { height: 96px; }
-@media (max-width: 767px) { :root[data-ember='1'] .pulse { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+:root[data-ember='1'] .pulse-chart { grid-column: 2; grid-row: 1; margin: 0; padding: 0; border-radius: 0; background: none; box-shadow: none; color: rgb(var(--brand-hover)); align-self: stretch; display: flex; flex-direction: column; justify-content: space-between; }
+:root[data-ember='1'] .pulse-plot { height: 132px; }
+/* a problem is one line inside the figure of the servers, not a wide strip above everything */
+:root[data-ember='1'] .pulse-problem { display: block; margin-top: 4px; font-size: var(--fs-xs); font-weight: 700; line-height: 1.3; color: rgb(var(--bad)); text-decoration: underline; text-underline-offset: 2px; }
+:root[data-ember='1'] .pulse-problem-warn { color: rgb(var(--warn)); }
+@media (max-width: 899px) {
+  :root[data-ember='1'] .pulse { grid-template-columns: minmax(0, 1fr); }
+  :root[data-ember='1'] .pulse-chart { grid-column: 1; grid-row: auto; }
+}
 
 /* the open section of the side column: no underline of the old header */
 :root[data-ember='1'] .hdr-nav .seg-item::after { display: none; }
@@ -172213,7 +172243,7 @@ __COREGSM_EOF__
 
 /* ---------- the cards of the servers: a picture on top that melts into a graphite card, a big figure, an orange bar ---------- */
 :root[data-ember='1'] .srv-tile {
-  padding: 0; gap: 12px; border-radius: 20px; overflow: hidden;
+  padding: 0; gap: 12px; border-radius: var(--emb-r-card); overflow: hidden;
   background: rgb(var(--card)); box-shadow: var(--shadow-2);
   transition: transform var(--t-base, .2s) var(--ease-out, ease), box-shadow var(--t-base, .2s) var(--ease-out, ease);
 }
@@ -172246,7 +172276,7 @@ __COREGSM_EOF__
 }
 
 /* ---------- the big card of the home page: a deeper dark column, a bigger figure, an orange bar ---------- */
-:root[data-ember='1'] .hero3 { border-radius: 24px; --h3-bg: color-mix(in srgb, var(--gc, #d6420a) 9%, #0f0f13); box-shadow: var(--shadow-2), inset 0 0 0 1px rgb(255 255 255 / .06); }
+:root[data-ember='1'] .hero3 { border-radius: var(--emb-r-big); min-height: 300px; --h3-bg: color-mix(in srgb, var(--gc, #d6420a) 9%, #0f0f13); box-shadow: var(--shadow-2), inset 0 0 0 1px rgb(255 255 255 / .06); }
 :root[data-ember='1'] .hero3 .srv-cap { height: 10px; background: rgb(255 255 255 / .14); border-radius: 99px; overflow: hidden; }
 :root[data-ember='1'] .hero3 .srv-cap > i { background: linear-gradient(90deg, rgb(var(--brand-2)), rgb(255 138 76)); border-radius: 99px; }
 :root[data-ember='1'] .hero3 .hero-reason { color: rgb(255 168 112); }
@@ -172256,7 +172286,7 @@ __COREGSM_EOF__
 /* ---------- the list: one card per server, with a gap between them ---------- */
 :root[data-ember='1'] .srv-tbl { overflow: visible; background: none; box-shadow: none; display: grid; gap: 8px; }
 :root[data-ember='1'] .srv-tbl > .srv-tr:not(.srv-th) {
-  min-height: 60px; padding: 8px 18px; border: 0; border-radius: 16px; background: rgb(var(--card)); box-shadow: var(--shadow-2);
+  min-height: 60px; padding: 8px 18px; border: 0; border-radius: var(--emb-r-card); background: rgb(var(--card)); box-shadow: var(--shadow-2);
   transition: transform var(--t-base, .2s) var(--ease-out, ease), box-shadow var(--t-base, .2s) var(--ease-out, ease);
 }
 :root[data-ember='1'] .srv-tbl > .srv-tr:not(.srv-th):hover { background: rgb(var(--card)); transform: translateY(-1px); box-shadow: var(--shadow-3), 0 0 0 1px rgb(var(--brand) / .45); }
@@ -172271,15 +172301,15 @@ __COREGSM_EOF__
 :root[data-ember='1'] .srv-banner .srv-cta::after { opacity: .35; }
 
 /* ---------- the news: the cover melts into a card, one rounding with the cards of the servers ---------- */
-:root[data-ember='1'] .nw-main article, :root[data-ember='1'] .nw-main .tile { border-radius: 22px; overflow: hidden; background: rgb(var(--card)); box-shadow: var(--shadow-2); transition: transform var(--t-base, .2s) var(--ease-out, ease), box-shadow var(--t-base, .2s) var(--ease-out, ease); }
+:root[data-ember='1'] .nw-main article, :root[data-ember='1'] .nw-main .tile { border-radius: var(--emb-r-card); overflow: hidden; background: rgb(var(--card)); box-shadow: var(--shadow-2); transition: transform var(--t-base, .2s) var(--ease-out, ease), box-shadow var(--t-base, .2s) var(--ease-out, ease); }
 :root[data-ember='1'] .nw-main article:hover { transform: translateY(-2px); box-shadow: var(--shadow-3), 0 0 0 1px rgb(var(--brand) / .4); }
 :root[data-ember='1'] .nw-cover-title { letter-spacing: -.025em; }
-:root[data-ember='1'] .nw-aside > * { border-radius: 20px; }
+:root[data-ember='1'] .nw-aside > * { border-radius: var(--emb-r-card); }
 :root[data-ember='1'] .nw-rub { border-radius: 12px; }
 
 /* ---------- the profile: the same rounding and hairlines as the rest ---------- */
 :root[data-ember='1'] .pf-banner { border-radius: 24px; }
-:root[data-ember='1'] .pf-ach-mini { border-radius: 16px; }
+:root[data-ember='1'] .pf-ach-mini { border-radius: 12px; }
 :root[data-ember='1'] .pf-bar > i { background: linear-gradient(90deg, rgb(var(--brand-2)), rgb(var(--brand))); }
 :root[data-ember='1'] .pf-chip { border-radius: 10px; }
 
@@ -172289,7 +172319,7 @@ __COREGSM_EOF__
 :root[data-ember='1'] .adm-nav :is(a, button) { border-radius: 12px; }
 
 /* ---------- the sign-in screens ---------- */
-:root[data-ember='1'] .auth-card { border-radius: 24px; background: rgb(var(--card)); box-shadow: var(--shadow-2), 0 24px 60px -30px rgb(0 0 0 / .5); }
+:root[data-ember='1'] .auth-card { border-radius: var(--emb-r-big); background: rgb(var(--card)); box-shadow: var(--shadow-2), 0 24px 60px -30px rgb(0 0 0 / .5); }
 
 /* ---------- one gentle entrance: the columns grow and the cards rise when a page opens ---------- */
 @keyframes emb-grow { from { transform: scaleY(.06); } to { transform: none; } }
@@ -172302,6 +172332,29 @@ __COREGSM_EOF__
   :root[data-ember='1'] .srv-grid > :nth-child(4) { animation-delay: 120ms; }
   :root[data-ember='1'] .srv-grid > :nth-child(n+5) { animation-delay: 160ms; }
 }
+
+/* ---------- a quieter home page ---------- */
+/* the card of a server: the name, the game, the players, the bar, the ping; the map, the version, the «free places» line and the small curve are on the page of the server */
+:root[data-ember='1'] .srv-tile .srv-chip,
+:root[data-ember='1'] .srv-tile .srv-spark-wrap,
+:root[data-ember='1'] .srv-tile > .flex-col > :nth-child(n+2) { display: none; }
+/* a server that does not answer: a calm grey card with one red line, no dashed frame and no huge «no answer» */
+:root[data-ember='1'] .srv-tile.is-down { background: rgb(var(--soft)); }
+:root[data-ember='1'] .srv-tile.is-down .srv-off-fig { display: none; }
+:root[data-ember='1'] .srv-tile.is-down > div:has(> .cover-scrim)::after { background: linear-gradient(180deg, transparent, rgb(var(--soft))); }
+
+/* the big card: the faces of the players and the row of small facts are not repeated, a calmer height */
+:root[data-ember='1'] .hero3 .srv-names { display: none; }
+:root[data-ember='1'] .hero3 .h3-foot .h3-fact:nth-child(n+3) { display: none; }
+:root[data-ember='1'] .hero3.is-down { min-height: 240px; }
+:root[data-ember='1'] .hero3 .h3-count [class*='text-[72px]'] { font-size: 72px; }
+
+/* the filters and the switches of the view are one family: the same height, the same hairline */
+:root[data-ember='1'] .srv-bar { align-items: center; gap: 10px; }
+:root[data-ember='1'] .srv-bar .seg { padding: 3px; border-radius: 14px; background: rgb(var(--card)); box-shadow: inset 0 0 0 1px rgb(var(--line)); }
+:root[data-ember='1'] .srv-bar .seg-item { min-height: 34px; }
+:root[data-ember='1'] .srv-bar .seg-item[aria-pressed='true'] { background: rgb(var(--soft)); color: rgb(var(--ink)); box-shadow: inset 0 0 0 1px rgb(var(--line)); }
+:root[data-ember='1'] .srv-bar .seg::before { display: none; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/mobile.css" << '__COREGSM_EOF__'

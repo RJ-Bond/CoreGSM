@@ -5,6 +5,7 @@ import { t, useI18n } from '../../i18n';
 import { fmtDateTime, fmtTime, usePoll } from '../../ui';
 import { NewsBanner, cardOf } from '../news/PublicFeed';
 import { IconChevronDown } from '../../icons';
+import { useAppearance } from '../../appearance';
 import { StateView } from '../StateView';
 import type { OverviewData } from './overviewLogic';
 
@@ -16,7 +17,10 @@ const markSeen = (at: number) => { try { localStorage.setItem(SEEN_KEY, String(a
 
 export function readOpen(): boolean {
   try {
-    return localStorage.getItem(OPEN_KEY) !== '0';
+    const v = localStorage.getItem(OPEN_KEY);
+    // nothing chosen yet: the Ember look keeps the block folded
+    if (v === null) return document.documentElement.dataset.ember !== '1';
+    return v !== '0';
   } catch {
     return true;
   }
@@ -109,6 +113,9 @@ export function WhatsNew({ open, onToggle, overview }: { open: boolean; onToggle
     if (open && news?.sentAt && news.sentAt > seen) { markSeen(news.sentAt); const id = setTimeout(() => setSeen(news.sentAt as number), 4000); return () => clearTimeout(id); }
   }, [open, news, seen]);
   const card = news ? cardOf(news) : null;
+  const [{ ember }] = useAppearance();
+  // Ember: a block with nothing in it is not shown; an empty half of it is not shown either
+  if (ember && news === null && maint.length === 0) return null;
   return (
     <aside className={`panel srv-new ${open && news === null && maint.length === 0 ? 'srv-new-compact' : ''}`} aria-label={t('srv.new.title')}>
       <h2 className="m-0">
@@ -123,7 +130,7 @@ export function WhatsNew({ open, onToggle, overview }: { open: boolean; onToggle
       )}
       {open && !(news === null && maint.length === 0) && (
         <div id={bodyId} className="srv-new-body">
-          <section>
+          {!(ember && news === null) && <section>
             <h3 className="srv-new-h">{t('srv.new.news')}</h3>
             {news === undefined ? (
               <div className="skeleton h-16 rounded-2xl" aria-busy="true" />
@@ -139,9 +146,9 @@ export function WhatsNew({ open, onToggle, overview }: { open: boolean; onToggle
             ) : (
               <StateView bare compact title={t('srv.new.noNews')} text="" />
             )}
-          </section>
+          </section>}
 
-          <section>
+          {!(ember && maint.length === 0) && <section>
             <h3 className="srv-new-h">{t('srv.new.maint')}</h3>
             {maint.length === 0 ? (
               <StateView bare compact title={t('srv.new.noMaint')} text="" />
@@ -160,7 +167,7 @@ export function WhatsNew({ open, onToggle, overview }: { open: boolean; onToggle
                 ))}
               </ul>
             )}
-          </section>
+          </section>}
 
         </div>
       )}
@@ -171,6 +178,5 @@ export function WhatsNew({ open, onToggle, overview }: { open: boolean; onToggle
 /** the folded state is remembered; kept here so the page does not touch localStorage itself */
 export function useWhatsNewOpen(): [boolean, () => void] {
   const [open, setOpen] = useState(readOpen);
-  useEffect(() => saveOpen(open), [open]);
-  return [open, () => setOpen((v) => !v)];
+  return [open, () => setOpen((v) => { saveOpen(!v); return !v; })];
 }
