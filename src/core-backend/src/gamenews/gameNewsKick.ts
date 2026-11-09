@@ -12,6 +12,7 @@ import { internal } from '../security/auth.js';
 import { pluginTarget } from './gameNews.js';
 import { postKickToDiscord } from './gameNewsChat.js';
 import { isHexColor, plainLine } from './gameNewsJoinLeave.js';
+import { tag, type Accent } from './gameNewsStyle.js';
 import {
   activeBan, commandState, countMod, finishCommand, findBanByNick, formatSpan, listBans, logMod, parseBanTime, putBan, queueCommand, recentMod,
   removeBan, topPlayers, type BanRow,
@@ -192,7 +193,8 @@ export function kickDone(adminId: string, now: number): void {
 
 const C_BAD = '#FF5555';
 const C_GOOD = '#5FD068';
-const say = (color: string, text: string): string => `<color=${color}>${plainLine(text)}</color>`;
+/** a line for the administrator: the commands picked out, the nickname (and what else is given) in bold */
+const say = (color: string, text: string, names: Accent[] = []): string => tag(color, text, names);
 
 export interface ModInput {
   action: 'kick' | 'ban' | 'warn';
@@ -217,7 +219,7 @@ export interface ModResult {
   replies: string[];
 }
 
-const refuse = (text: string): ModResult => ({ ok: false, line: '', notice: '', kick: false, replies: [say(C_BAD, text)] });
+const refuse = (text: string, names: Accent[] = []): ModResult => ({ ok: false, line: '', notice: '', kick: false, replies: [say(C_BAD, text, names)] });
 
 /** what is told in the log channel of the administrators */
 function logToDiscord(s: KickSettings, serverId: number, title: string, color: number, f: { name: string; admin: string; reason: string; extra?: { name: string; value: string }[] }, now: number): void {
@@ -275,7 +277,7 @@ export function runMod(serverId: number, b: ModInput, now = Date.now()): ModResu
       ok: true, kick: true,
       line: s.announce ? kickLine(s, b.name, reason, b.adminName) : '',
       notice: notice(s.notifyText),
-      replies: [say(C_GOOD, `* Игрок ${b.name} кикнут.${s.announce ? '' : ' (без объявления)'}`)],
+      replies: [say(C_GOOD, `* Игрок ${b.name} кикнут.${s.announce ? '' : ' (без объявления)'}`, [b.name])],
     };
   }
 
@@ -294,7 +296,7 @@ export function runMod(serverId: number, b: ModInput, now = Date.now()): ModResu
       ok: true, kick: true,
       line: s.announce ? modLine(s, s.banTemplate, { name: b.name, reason, admin: b.adminName, time: span }) : '',
       notice: notice(s.banJoinText.replace(/\{until\}/g, stamp ? `до ${stamp.date} в ${stamp.time}` : 'навсегда')),
-      replies: [say(C_GOOD, `* Игрок ${b.name} забанен ${forever ? 'навсегда' : `на ${span}`}.`)],
+      replies: [say(C_GOOD, `* Игрок ${b.name} забанен ${forever ? 'навсегда' : `на ${span}`}.`, [b.name, ...(forever ? [] : [[span, '#FFFFFF'] as Accent])])],
     };
   }
 
@@ -310,7 +312,7 @@ export function runMod(serverId: number, b: ModInput, now = Date.now()): ModResu
     return {
       ok: true, kick: false, line: warnLine,
       notice: notice('* Вам вынесено предупреждение ({n} из {limit}). Причина: {reason}', { n, limit: s.warnLimit }),
-      replies: [say(C_GOOD, `* Игроку ${b.name} вынесено предупреждение (${n}${s.warnLimit ? ` из ${s.warnLimit}` : ''}).`)],
+      replies: [say(C_GOOD, `* Игроку ${b.name} вынесено предупреждение (${n}${s.warnLimit ? ` из ${s.warnLimit}` : ''}).`, [b.name])],
     };
   }
   // the limit is reached: the player is kicked and the count starts again
@@ -323,7 +325,7 @@ export function runMod(serverId: number, b: ModInput, now = Date.now()): ModResu
     ok: true, kick: true,
     line: warnLine,
     notice: notice(s.notifyText, { reason: kickReason }),
-    replies: [say(C_GOOD, `* Игроку ${b.name} вынесено предупреждение (${n} из ${s.warnLimit}): лимит достигнут, игрок кикнут.`)],
+    replies: [say(C_GOOD, `* Игроку ${b.name} вынесено предупреждение (${n} из ${s.warnLimit}): лимит достигнут, игрок кикнут.`, [b.name])],
   };
 }
 
@@ -372,14 +374,14 @@ export function registerGameNewsKick({ app, admin }: { app: Express; admin: Requ
     const s = getKick(t.server_id);
     if (!s.enabled) return res.json(refuse('* Команда .unban отключена в панели.'));
     const ban = findBanByNick(b.data.name);
-    if (!ban) return res.json(refuse(`* Бан для «${plainLine(b.data.name)}» не найден.`));
+    if (!ban) return res.json(refuse(`* Бан для «${plainLine(b.data.name)}» не найден.`, [b.data.name]));
     removeBan(ban.platform_id);
     const now = Date.now();
     logMod({ kind: 'unban', platformId: ban.platform_id, nick: ban.nick, admin: plainLine(b.data.adminName), reason: '', serverId: t.server_id }, now);
     logToDiscord(s, t.server_id, '✅ Игрок разбанен', 0x2ecc71, { name: ban.nick, admin: b.data.adminName, reason: ban.reason }, now);
     // the same colours as a kick: «* Игрок Ник был разбанен.» for everybody and in the chat in Discord (no reason is needed)
     try { postKickToDiscord(t.server_id, s.unbanTemplate, { name: ban.nick, reason: '', admin: b.data.adminName }, now); } catch { /* Discord is not needed for the unban */ }
-    res.json({ ok: true, line: s.announce ? modLine(s, s.unbanTemplate, { name: ban.nick, reason: '', admin: b.data.adminName }) : '', notice: '', kick: false, replies: [say(C_GOOD, `* ${ban.nick} разбанен.`)] });
+    res.json({ ok: true, line: s.announce ? modLine(s, s.unbanTemplate, { name: ban.nick, reason: '', admin: b.data.adminName }) : '', notice: '', kick: false, replies: [say(C_GOOD, `* ${ban.nick} разбанен.`, [ban.nick])] });
   });
 
   // the plugin: the commands that it has to do (a kick from Discord) come in the answer to a poll; this is how it reports

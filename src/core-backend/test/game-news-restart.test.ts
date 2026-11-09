@@ -75,13 +75,13 @@ describe('restart timer: when the chat is told', () => {
 
 describe('restart timer: the lines', () => {
   it('is yellow, and red for the last minute', () => {
-    assert.match(announceLine(DEFAULT_TEXTS, 300), /^<color=#FFCC33>\* Внимание! Рестарт сервера будет произведен через 5 минут\.<\/color>$/);
+    assert.equal(announceLine(DEFAULT_TEXTS, 300), '<color=#FFCC33>* Внимание! Рестарт сервера будет произведен через </color><color=#FFFFFF><b>5 минут</b></color><color=#FFCC33>.</color>');
     assert.match(announceLine(DEFAULT_TEXTS, 30), /^<color=#FF5555>/);
     assert.match(cancelLine(DEFAULT_TEXTS), /отменён/);
   });
   it('lets the administrator change the words but not the tags', () => {
     const line = announceLine({ ...DEFAULT_TEXTS, announce: '<size=99>Через {time}!' }, 120);
     assert.equal(line.includes('<size'), false);
-    assert.match(line, /Через 2 минуты!/);
+    assert.match(line.replace(/<[^>]*>/g, ''), /Через 2 минуты!/);
   });
 });

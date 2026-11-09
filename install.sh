@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="49b44a9d3d16"
+COREGSM_BUILD="ade8c1e22af5"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.97"
+COREGSM_VERSION="1.1.98"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -24831,6 +24831,7 @@ import { internal } from '../security/auth.js';
 import { pluginTarget } from './gameNews.js';
 import { postKickToDiscord } from './gameNewsChat.js';
 import { isHexColor, plainLine } from './gameNewsJoinLeave.js';
+import { tag, type Accent } from './gameNewsStyle.js';
 import {
   activeBan, commandState, countMod, finishCommand, findBanByNick, formatSpan, listBans, logMod, parseBanTime, putBan, queueCommand, recentMod,
   removeBan, topPlayers, type BanRow,
@@ -25011,7 +25012,8 @@ export function kickDone(adminId: string, now: number): void {
 
 const C_BAD = '#FF5555';
 const C_GOOD = '#5FD068';
-const say = (color: string, text: string): string => `<color=${color}>${plainLine(text)}</color>`;
+/** a line for the administrator: the commands picked out, the nickname (and what else is given) in bold */
+const say = (color: string, text: string, names: Accent[] = []): string => tag(color, text, names);
 
 export interface ModInput {
   action: 'kick' | 'ban' | 'warn';
@@ -25036,7 +25038,7 @@ export interface ModResult {
   replies: string[];
 }
 
-const refuse = (text: string): ModResult => ({ ok: false, line: '', notice: '', kick: false, replies: [say(C_BAD, text)] });
+const refuse = (text: string, names: Accent[] = []): ModResult => ({ ok: false, line: '', notice: '', kick: false, replies: [say(C_BAD, text, names)] });
 
 /** what is told in the log channel of the administrators */
 function logToDiscord(s: KickSettings, serverId: number, title: string, color: number, f: { name: string; admin: string; reason: string; extra?: { name: string; value: string }[] }, now: number): void {
@@ -25094,7 +25096,7 @@ export function runMod(serverId: number, b: ModInput, now = Date.now()): ModResu
       ok: true, kick: true,
       line: s.announce ? kickLine(s, b.name, reason, b.adminName) : '',
       notice: notice(s.notifyText),
-      replies: [say(C_GOOD, `* Игрок ${b.name} кикнут.${s.announce ? '' : ' (без объявления)'}`)],
+      replies: [say(C_GOOD, `* Игрок ${b.name} кикнут.${s.announce ? '' : ' (без объявления)'}`, [b.name])],
     };
   }
 
@@ -25113,7 +25115,7 @@ export function runMod(serverId: number, b: ModInput, now = Date.now()): ModResu
       ok: true, kick: true,
       line: s.announce ? modLine(s, s.banTemplate, { name: b.name, reason, admin: b.adminName, time: span }) : '',
       notice: notice(s.banJoinText.replace(/\{until\}/g, stamp ? `до ${stamp.date} в ${stamp.time}` : 'навсегда')),
-      replies: [say(C_GOOD, `* Игрок ${b.name} забанен ${forever ? 'навсегда' : `на ${span}`}.`)],
+      replies: [say(C_GOOD, `* Игрок ${b.name} забанен ${forever ? 'навсегда' : `на ${span}`}.`, [b.name, ...(forever ? [] : [[span, '#FFFFFF'] as Accent])])],
     };
   }
 
@@ -25129,7 +25131,7 @@ export function runMod(serverId: number, b: ModInput, now = Date.now()): ModResu
     return {
       ok: true, kick: false, line: warnLine,
       notice: notice('* Вам вынесено предупреждение ({n} из {limit}). Причина: {reason}', { n, limit: s.warnLimit }),
-      replies: [say(C_GOOD, `* Игроку ${b.name} вынесено предупреждение (${n}${s.warnLimit ? ` из ${s.warnLimit}` : ''}).`)],
+      replies: [say(C_GOOD, `* Игроку ${b.name} вынесено предупреждение (${n}${s.warnLimit ? ` из ${s.warnLimit}` : ''}).`, [b.name])],
     };
   }
   // the limit is reached: the player is kicked and the count starts again
@@ -25142,7 +25144,7 @@ export function runMod(serverId: number, b: ModInput, now = Date.now()): ModResu
     ok: true, kick: true,
     line: warnLine,
     notice: notice(s.notifyText, { reason: kickReason }),
-    replies: [say(C_GOOD, `* Игроку ${b.name} вынесено предупреждение (${n} из ${s.warnLimit}): лимит достигнут, игрок кикнут.`)],
+    replies: [say(C_GOOD, `* Игроку ${b.name} вынесено предупреждение (${n} из ${s.warnLimit}): лимит достигнут, игрок кикнут.`, [b.name])],
   };
 }
 
@@ -25191,14 +25193,14 @@ export function registerGameNewsKick({ app, admin }: { app: Express; admin: Requ
     const s = getKick(t.server_id);
     if (!s.enabled) return res.json(refuse('* Команда .unban отключена в панели.'));
     const ban = findBanByNick(b.data.name);
-    if (!ban) return res.json(refuse(`* Бан для «${plainLine(b.data.name)}» не найден.`));
+    if (!ban) return res.json(refuse(`* Бан для «${plainLine(b.data.name)}» не найден.`, [b.data.name]));
     removeBan(ban.platform_id);
     const now = Date.now();
     logMod({ kind: 'unban', platformId: ban.platform_id, nick: ban.nick, admin: plainLine(b.data.adminName), reason: '', serverId: t.server_id }, now);
     logToDiscord(s, t.server_id, '✅ Игрок разбанен', 0x2ecc71, { name: ban.nick, admin: b.data.adminName, reason: ban.reason }, now);
     // the same colours as a kick: «* Игрок Ник был разбанен.» for everybody and in the chat in Discord (no reason is needed)
     try { postKickToDiscord(t.server_id, s.unbanTemplate, { name: ban.nick, reason: '', admin: b.data.adminName }, now); } catch { /* Discord is not needed for the unban */ }
-    res.json({ ok: true, line: s.announce ? modLine(s, s.unbanTemplate, { name: ban.nick, reason: '', admin: b.data.adminName }) : '', notice: '', kick: false, replies: [say(C_GOOD, `* ${ban.nick} разбанен.`)] });
+    res.json({ ok: true, line: s.announce ? modLine(s, s.unbanTemplate, { name: ban.nick, reason: '', admin: b.data.adminName }) : '', notice: '', kick: false, replies: [say(C_GOOD, `* ${ban.nick} разбанен.`, [ban.nick])] });
   });
 
   // the plugin: the commands that it has to do (a kick from Discord) come in the answer to a poll; this is how it reports
@@ -25710,56 +25712,8 @@ const C_INFO = '#FFCC33';
 const C_GOOD = '#5FD068';
 const C_BAD = '#FF5555';
 const C_HINT = '#6EC1FF';
-/**
- * A line the player reads: in one colour, with the commands picked out: «.register» in white bold and the arguments after it,
- * «(пароль)», in lilac (like the usage line of the commands of the game). The tags are flat, so no client has to nest them.
- */
-/** the nickname in a line: bold yellow, so that it stands out from the text */
-const C_NICK = '#FFCC33';
-
-function pieces(color: string, plain: string): string[] {
-  const parts: string[] = [];
-  let last = 0;
-  for (const m of plain.matchAll(/(^|\s)(\.[a-zа-я]+)((?:\s*\([^()]{1,40}\))*)/giu)) {
-    const start = (m.index ?? 0) + m[1].length;
-    if (start > last) parts.push(`<color=${color}>${plain.slice(last, start)}</color>`);
-    parts.push(`<color=#FFFFFF><b>${m[2]}</b></color>`);
-    if (m[3]) parts.push(`<color=#B9A7FF>${m[3]}</color>`);
-    last = start + m[2].length + m[3].length;
-  }
-  if (last < plain.length) parts.push(`<color=${color}>${plain.slice(last)}</color>`);
-  return parts;
-}
-
-/** a word picked out in a line: a plain string is a nickname or a login (bold yellow), a pair is [word, colour] */
-export type Accent = string | [string, string];
-
-/** `names`: the words that are picked out in bold wherever they stand in the line (a nickname, a login, a date, a rank) */
-export function tag(color: string, text: string, names: Accent[] = []): string {
-  const plain = plainLine(text);
-  const colours = new Map<string, string>();
-  for (const n of names) {
-    const [w, c] = typeof n === 'string' ? [n, C_NICK] : n;
-    const word = plainLine(w);
-    if (word.length > 0 && !colours.has(word)) colours.set(word, c);
-  }
-  const words = [...colours.keys()].sort((x, y) => y.length - x.length);
-  let parts: string[];
-  if (words.length === 0) parts = pieces(color, plain);
-  else {
-    const re = new RegExp(words.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), 'gu');
-    parts = [];
-    let last = 0;
-    for (const m of plain.matchAll(re)) {
-      const i = m.index ?? 0;
-      if (i > last) parts.push(...pieces(color, plain.slice(last, i)));
-      parts.push(`<color=${colours.get(m[0]) ?? C_NICK}><b>${m[0]}</b></color>`);
-      last = i + m[0].length;
-    }
-    if (last < plain.length) parts.push(...pieces(color, plain.slice(last)));
-  }
-  return parts.length ? parts.join('') : `<color=${color}></color>`;
-}
+export { tag, type Accent } from './gameNewsStyle.js';
+import { tag } from './gameNewsStyle.js';
 
 export function getRegisterSettings(serverId?: number): RegisterSettings {
   try {
@@ -26152,7 +26106,12 @@ const clean = (s: string): string => Array.from(s, (ch) => (ch.charCodeAt(0) < 3
 
 /** the line for the chat: yellow, red for the last minute */
 export function announceLine(texts: RestartTexts, seconds: number): string {
-  return `<color=${seconds <= 60 ? ALERT : WARN}>${clean(texts.announce).replace(/\{time\}/g, formatLeft(seconds))}</color>`;
+  const color = seconds <= 60 ? ALERT : WARN;
+  const left = formatLeft(seconds);
+  const [before, ...rest] = clean(texts.announce).split('{time}');
+  if (rest.length === 0) return `<color=${color}>${before}</color>`;
+  // the time is picked out in white bold, the rest keeps the colour of the line
+  return `<color=${color}>${before}</color><color=#FFFFFF><b>${left}</b></color><color=${color}>${rest.join(left)}</color>`;
 }
 export const nowLine = (texts: RestartTexts): string => `<color=${ALERT}>${clean(texts.now)}</color>`;
 export const cancelLine = (texts: RestartTexts): string => `<color=${OK}>${clean(texts.cancel)}</color>`;
@@ -27078,6 +27037,63 @@ export function registerGameNewsServerRestart({ app, admin }: { app: Express; ad
     res.json({ ok: r.ok, text: `${found[0].name}: ${r.text}` });
   });
 }
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/gamenews"
+  cat > "$APP_DIR/core-backend/src/gamenews/gameNewsStyle.ts" << '__COREGSM_EOF__'
+/** How the lines that a player reads are painted (the same for the registration, the moderation and the reminders). */
+import { plainLine } from './gameNewsJoinLeave.js';
+
+/**
+ * A line the player reads: in one colour, with the commands picked out: «.register» in white bold and the arguments after it,
+ * «(пароль)», in lilac (like the usage line of the commands of the game). The tags are flat, so no client has to nest them.
+ */
+/** the nickname in a line: bold yellow, so that it stands out from the text */
+const C_NICK = '#FFCC33';
+
+function pieces(color: string, plain: string): string[] {
+  const parts: string[] = [];
+  let last = 0;
+  for (const m of plain.matchAll(/(^|\s)(\.[a-zа-я]+)((?:\s*\([^()]{1,40}\))*)/giu)) {
+    const start = (m.index ?? 0) + m[1].length;
+    if (start > last) parts.push(`<color=${color}>${plain.slice(last, start)}</color>`);
+    parts.push(`<color=#FFFFFF><b>${m[2]}</b></color>`);
+    if (m[3]) parts.push(`<color=#B9A7FF>${m[3]}</color>`);
+    last = start + m[2].length + m[3].length;
+  }
+  if (last < plain.length) parts.push(`<color=${color}>${plain.slice(last)}</color>`);
+  return parts;
+}
+
+/** a word picked out in a line: a plain string is a nickname or a login (bold yellow), a pair is [word, colour] */
+export type Accent = string | [string, string];
+
+/** `names`: the words that are picked out in bold wherever they stand in the line (a nickname, a login, a date, a rank) */
+export function tag(color: string, text: string, names: Accent[] = []): string {
+  const plain = plainLine(text);
+  const colours = new Map<string, string>();
+  for (const n of names) {
+    const [w, c] = typeof n === 'string' ? [n, C_NICK] : n;
+    const word = plainLine(w);
+    if (word.length > 0 && !colours.has(word)) colours.set(word, c);
+  }
+  const words = [...colours.keys()].sort((x, y) => y.length - x.length);
+  let parts: string[];
+  if (words.length === 0) parts = pieces(color, plain);
+  else {
+    const re = new RegExp(words.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), 'gu');
+    parts = [];
+    let last = 0;
+    for (const m of plain.matchAll(re)) {
+      const i = m.index ?? 0;
+      if (i > last) parts.push(...pieces(color, plain.slice(last, i)));
+      parts.push(`<color=${colours.get(m[0]) ?? C_NICK}><b>${m[0]}</b></color>`);
+      last = i + m[0].length;
+    }
+    if (last < plain.length) parts.push(...pieces(color, plain.slice(last)));
+  }
+  return parts.length ? parts.join('') : `<color=${color}></color>`;
+}
+
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/gamenews"
   cat > "$APP_DIR/core-backend/src/gamenews/gameNewsVars.ts" << '__COREGSM_EOF__'

@@ -101,7 +101,12 @@ const clean = (s: string): string => Array.from(s, (ch) => (ch.charCodeAt(0) < 3
 
 /** the line for the chat: yellow, red for the last minute */
 export function announceLine(texts: RestartTexts, seconds: number): string {
-  return `<color=${seconds <= 60 ? ALERT : WARN}>${clean(texts.announce).replace(/\{time\}/g, formatLeft(seconds))}</color>`;
+  const color = seconds <= 60 ? ALERT : WARN;
+  const left = formatLeft(seconds);
+  const [before, ...rest] = clean(texts.announce).split('{time}');
+  if (rest.length === 0) return `<color=${color}>${before}</color>`;
+  // the time is picked out in white bold, the rest keeps the colour of the line
+  return `<color=${color}>${before}</color><color=#FFFFFF><b>${left}</b></color><color=${color}>${rest.join(left)}</color>`;
 }
 export const nowLine = (texts: RestartTexts): string => `<color=${ALERT}>${clean(texts.now)}</color>`;
 export const cancelLine = (texts: RestartTexts): string => `<color=${OK}>${clean(texts.cancel)}</color>`;
