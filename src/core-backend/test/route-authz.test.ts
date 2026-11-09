@@ -47,6 +47,7 @@ const OPEN: Record<string, string> = {
   'POST /api/game-news/player/register': 'the CoreGSM game plugin: checks its own Bearer token inside; limited per game account',
   'POST /api/game-news/player/mod': 'the CoreGSM game plugin: checks its own Bearer token inside; only administrators of the game can type the command',
   'POST /api/game-news/player/unban': 'the CoreGSM game plugin: checks its own Bearer token inside; only administrators of the game can type the command',
+  'POST /api/game-news/player/bans': 'the CoreGSM game plugin: checks its own Bearer token inside; only administrators of the game can type the command',
   'POST /api/game-news/command-result': 'the CoreGSM game plugin: checks its own Bearer token inside',
   'POST /api/game-news/player/kick': 'the CoreGSM game plugin: checks its own Bearer token inside; only administrators of the game can type the command',
   'POST /api/game-news/player/bans': 'the CoreGSM game plugin: checks its own Bearer token inside; only administrators of the game can type the command',
