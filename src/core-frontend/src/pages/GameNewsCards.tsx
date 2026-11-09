@@ -220,6 +220,7 @@ export function RegisterCard({ initial }: { initial: RegisterSettings }) {
     saved,
     delay: 900,
     validate: (v) => {
+      if (![v.nickColor, v.numberColor, v.rankColor].every(isHex)) return t('gn.jl.badColor');
       if (!Number.isInteger(v.remindMinutes) || v.remindMinutes < 0 || v.remindMinutes > 1440) return t('gn.rg.badRemind');
       if (!Number.isInteger(v.discordEveryHours) || v.discordEveryHours < 1 || v.discordEveryHours > 720) return t('gn.rg.badHours');
       return [v.promptText, v.doneText, v.discordText, v.pendingText, v.loginText, v.nickTakenText, v.remindText, v.autoLoginText, v.lastSeenText, v.rankText].some((x) => !x.trim()) ? t('gn.hint.text') : null;
@@ -280,6 +281,17 @@ export function RegisterCard({ initial }: { initial: RegisterSettings }) {
           <AutoText value={f.rankText} maxLength={300} onChange={(e) => set('rankText', e.target.value)} />
         </Field>
       )}
+
+      <p className="text-sm font-semibold text-mute">{t('gn.rg.colors')}</p>
+      <div className="grid gap-4 lg:grid-cols-3">
+        <ColorField label={t('gn.rg.nickColor')} value={f.nickColor} gameHex="#FFCC33" onChange={(v) => set('nickColor', v)} />
+        <ColorField label={t('gn.rg.numberColor')} value={f.numberColor} gameHex="#4DE0E0" onChange={(v) => set('numberColor', v)} />
+        {!f.rankByTier && <ColorField label={t('gn.rg.rankColor')} value={f.rankColor} gameHex="#B9A7FF" onChange={(v) => set('rankColor', v)} />}
+      </div>
+      <label className="flex items-center gap-3 font-bold">
+        <Switch checked={f.rankByTier} onChange={(v) => set('rankByTier', v)} />
+        {t('gn.rg.rankByTier')}
+      </label>
 
       <Field label={t('gn.rg.remind')}>
         <p className="mb-1 text-xs text-mute">{t('gn.rg.remindHint')}</p>

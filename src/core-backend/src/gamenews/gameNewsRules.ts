@@ -151,7 +151,7 @@ export function registerGameNewsRules({ app, admin }: { app: Express; admin: Req
   app.put('/api/game-news/register-settings', admin, (req, res) => {
     const b = z.object({
       enabled: z.boolean(), promptText: z.string().max(300), doneText: z.string().max(300), discordText: z.string().max(300),
-      pendingText: z.string().max(300), loginText: z.string().max(300).optional(), nickTakenText: z.string().max(300).optional(), remindText: z.string().max(300).optional(), autoLoginEnabled: z.boolean().optional(), autoLoginText: z.string().max(300).optional(), lastSeenEnabled: z.boolean().optional(), lastSeenText: z.string().max(300).optional(), remindMinutes: z.number().int().min(0).max(1440).optional(), discordEveryHours: z.number().int().min(1).max(720),
+      pendingText: z.string().max(300), loginText: z.string().max(300).optional(), nickTakenText: z.string().max(300).optional(), remindText: z.string().max(300).optional(), nickColor: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(), numberColor: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(), rankColor: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(), rankByTier: z.boolean().optional(), autoLoginEnabled: z.boolean().optional(), autoLoginText: z.string().max(300).optional(), lastSeenEnabled: z.boolean().optional(), lastSeenText: z.string().max(300).optional(), remindMinutes: z.number().int().min(0).max(1440).optional(), discordEveryHours: z.number().int().min(1).max(720),
       rankEnabled: z.boolean().optional(), rankText: z.string().max(300).optional(),
     }).safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Проверьте поля' });
@@ -167,6 +167,10 @@ export function registerGameNewsRules({ app, admin }: { app: Express; admin: Req
       loginText: keep(b.data.loginText ?? d.loginText, d.loginText),
       nickTakenText: keep(b.data.nickTakenText ?? d.nickTakenText, d.nickTakenText),
       remindText: keep(b.data.remindText ?? d.remindText, d.remindText),
+      nickColor: (b.data.nickColor ?? d.nickColor).toUpperCase(),
+      numberColor: (b.data.numberColor ?? d.numberColor).toUpperCase(),
+      rankColor: (b.data.rankColor ?? d.rankColor).toUpperCase(),
+      rankByTier: b.data.rankByTier ?? d.rankByTier,
       autoLoginEnabled: b.data.autoLoginEnabled ?? d.autoLoginEnabled,
       autoLoginText: keep(b.data.autoLoginText ?? d.autoLoginText, d.autoLoginText),
       lastSeenEnabled: b.data.lastSeenEnabled ?? d.lastSeenEnabled,

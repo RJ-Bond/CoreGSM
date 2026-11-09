@@ -338,6 +338,10 @@ export interface RegisterSettings {
   loginText: string;
   nickTakenText: string;
   remindText: string;
+  nickColor: string;
+  numberColor: string;
+  rankColor: string;
+  rankByTier: boolean;
   autoLoginEnabled: boolean;
   autoLoginText: string;
   lastSeenEnabled: boolean;

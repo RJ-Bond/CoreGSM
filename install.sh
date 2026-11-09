@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="420ba4390ccb"
+COREGSM_BUILD="abc5e40632a5"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.2.0"
+COREGSM_VERSION="1.2.1"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -23919,7 +23919,7 @@ import { takeCommands } from './gameNewsModLog.js';
 
 export const QUEUE_TTL_MS = 5 * 60_000;
 /** the version of the game plugin this panel was built for: an older plugin is shown as outdated */
-export const PLUGIN_VERSION = '0.15.0';
+export const PLUGIN_VERSION = '0.15.1';
 /** the games the plugin exists for */
 export const SUPPORTED_GAMES = new Set(['vrising']);
 const PULL_MIN_GAP_MS = 800;
@@ -25077,6 +25077,8 @@ export function runMod(serverId: number, b: ModInput, now = Date.now()): ModResu
   const s = getKick(serverId);
   const word = b.action === 'kick' ? '.kick' : b.action === 'ban' ? '.ban' : '.warn';
   if (!s.enabled || (b.action === 'ban' && !s.banEnabled) || (b.action === 'warn' && !s.warnEnabled)) return refuse(`* Команда ${word} отключена в панели.`);
+  // oneself is an administrator too: with the protection on it is refused in its own words, with it off an administrator may do it
+  if (s.protectAdmins && b.targetId && b.targetId !== '0' && b.targetId === b.adminId) return refuse(`* Вы не можете ${b.action === 'kick' ? 'кикнуть' : b.action === 'ban' ? 'забанить' : 'предупредить'} себя.`);
   if (s.protectAdmins && b.targetIsAdmin) return refuse('* Администратора трогать нельзя.');
 
   if (b.action === 'kick') {
@@ -25614,14 +25616,22 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-backend/src/gamenews/gameNewsRank.ts" << '__COREGSM_EOF__'
 import { nextRank, rankForHours } from '../profile/ranks.js';
 
-/** «Ник, ваш ранг: …»: the rank of a player by his hours of play, with the distance to the next one */
-export function rankLine(text: string, name: string, hours: number): string {
+export interface RankParts { rank: string; color: string; hours: string; next: string }
+
+/** the parts of the rank line of a player by his hours of play: the rank (and its colour), the hours, the way to the next one */
+export function rankParts(hours: number): RankParts {
   const r = rankForHours(hours);
   const nx = nextRank(hours);
   const next = nx ? ` · до «${nx.name}» ещё ${Math.max(1, Math.ceil(nx.minHours - hours))} ч` : ' · высший ранг';
   const h = hours >= 10 ? String(Math.floor(hours)) : String(Math.floor(hours * 10) / 10);
+  return { rank: r.name, color: r.color, hours: h, next };
+}
+
+/** «Ник, ваш ранг: …»: the rank of a player by his hours of play, with the distance to the next one */
+export function rankLine(text: string, name: string, hours: number): string {
+  const p = rankParts(hours);
   const plain = name.replace(/[<>]/g, '').trim();
-  return text.replace(/\{name\}/g, plain).replace(/\{rank\}/g, r.name).replace(/\{hours\}/g, h).replace(/\{next\}/g, next);
+  return text.replace(/\{name\}/g, plain).replace(/\{rank\}/g, p.rank).replace(/\{hours\}/g, p.hours).replace(/\{next\}/g, p.next);
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/gamenews"
@@ -25653,10 +25663,10 @@ import { recordConsent } from '../monitoring/rules.js';
 import { passwordError } from '../security/passwordPolicy.js';
 import { registrationOpen } from '../security/auth.js';
 import { pluginTarget } from './gameNews.js';
-import { plainLine } from './gameNewsJoinLeave.js';
+import { isHexColor, plainLine } from './gameNewsJoinLeave.js';
 import { loginFromNick } from './gameNewsLogic.js';
-import { rankLine } from './gameNewsRank.js';
-import { rankForHours } from '../profile/ranks.js';
+import { rankLine, rankParts } from './gameNewsRank.js';
+import { C_DIM, lift } from './gameNewsStyle.js';
 import { vrHoursOf } from '../profile/profileVr.js';
 
 export interface RegisterSettings {
@@ -25675,6 +25685,12 @@ export interface RegisterSettings {
   nickTakenText: string;
   /** the reminder for a player who is still not registered (the periodic one, not the first hint at the join) */
   remindText: string;
+  /** the colours of the words picked out in the lines: the nickname, the numbers (date, time, hours), the name of the rank */
+  nickColor: string;
+  numberColor: string;
+  rankColor: string;
+  /** the name of the rank in the colour of the rank (lifted, so that it is readable in the chat) instead of rankColor */
+  rankByTier: boolean;
   /** a linked player is recognised by the game account at the join (no command is needed): «Автоматический вход» */
   autoLoginEnabled: boolean;
   /** the line of the automatic login: {login} {name} */
@@ -25702,6 +25718,10 @@ export const DEFAULT_REGISTER: RegisterSettings = {
   loginText: '* Готово! Игровой аккаунт привязан к аккаунту {login} в панели.',
   nickTakenText: '* Ник {name} уже есть в панели. Это ваш аккаунт? Введите .login (пароль), логин не нужен. Или .login (логин) (пароль). Нет? Тогда .register (пароль) (подтверждение) ещё раз.',
   remindText: '* Напоминание: вы всё ещё не зарегистрированы в панели. Введите .register (пароль) (подтверждение) или, если аккаунт уже есть, .login (логин) (пароль).',
+  nickColor: '#FFCC33',
+  numberColor: '#4DE0E0',
+  rankColor: '#B9A7FF',
+  rankByTier: true,
   autoLoginEnabled: true,
   autoLoginText: '* Автоматический вход: вы авторизованы как {login}.',
   lastSeenEnabled: true,
@@ -25724,6 +25744,9 @@ const C_INFO = '#FFCC33';
 const C_GOOD = '#5FD068';
 const C_BAD = '#FF5555';
 const C_HINT = '#6EC1FF';
+// every kind of line has its own colour of the text, so that they do not run into one another
+const C_BACK = '#D7CCF5'; // the welcome back: soft lilac
+const C_RANK = '#A9B8C9'; // the rank: steel
 export { tag, type Accent } from './gameNewsStyle.js';
 import { tag } from './gameNewsStyle.js';
 
@@ -25747,6 +25770,10 @@ export function getRegisterSettings(serverId?: number): RegisterSettings {
       nickTakenText: typeof v.nickTakenText === 'string' && OLD_NICK_TAKEN.includes(v.nickTakenText) ? d.nickTakenText : text(v.nickTakenText, d.nickTakenText),
       remindMinutes: Number.isFinite(v.remindMinutes) ? Math.min(1440, Math.max(0, Math.round(v.remindMinutes as number))) : d.remindMinutes,
       remindText: text(v.remindText, d.remindText),
+      nickColor: isHexColor(v.nickColor) ? v.nickColor.toUpperCase() : d.nickColor,
+      numberColor: isHexColor(v.numberColor) ? v.numberColor.toUpperCase() : d.numberColor,
+      rankColor: isHexColor(v.rankColor) ? v.rankColor.toUpperCase() : d.rankColor,
+      rankByTier: typeof v.rankByTier === 'boolean' ? v.rankByTier : d.rankByTier,
       discordEveryHours: Number.isFinite(v.discordEveryHours) ? Math.min(720, Math.max(1, Math.round(v.discordEveryHours as number))) : d.discordEveryHours,
       rankEnabled: typeof v.rankEnabled === 'boolean' ? v.rankEnabled : d.rankEnabled,
       rankText: text(v.rankText, d.rankText),
@@ -25835,7 +25862,7 @@ export function registerGameNewsPlayers({ app }: { app: Express }): void {
       // nobody can register while the panel is closed or not set up: no use to invite
       if (needsSetup() || !registrationOpen()) return res.json({ registered: false, replies: [] });
       const hint = nickInPanel(String(req.query.name ?? '')) ? s.nickTakenText : periodic ? s.remindText : s.promptText;
-      return res.json({ registered: false, replies: [tag(nickInPanel(String(req.query.name ?? '')) ? C_HINT : C_INFO, fill(hint, { panel: panelUrl(req), name: plainLine(String(req.query.name ?? '')) }), [String(req.query.name ?? '')])] });
+      return res.json({ registered: false, replies: [tag(nickInPanel(String(req.query.name ?? '')) ? C_HINT : C_INFO, fill(hint, { panel: panelUrl(req), name: plainLine(String(req.query.name ?? '')) }), [[String(req.query.name ?? ''), s.nickColor]])] });
     }
     const u = db.prepare('SELECT id, status, discord_id FROM users WHERE id = ?').get(who.user_id) as UserRow | undefined;
     if (periodic) {
@@ -25849,18 +25876,19 @@ export function registerGameNewsPlayers({ app }: { app: Express }): void {
     // a linked player is known by the game account: no command is needed, the join is the login
     const account = u ? (db.prepare('SELECT username FROM users WHERE id = ?').get(u.id) as { username: string } | undefined) : undefined;
     const nickNow = plainLine(String(req.query.name ?? ''));
-    if (u && u.status === 'active' && account && s.autoLoginEnabled) replies.push(tag(C_GOOD, fill(s.autoLoginText, { login: account.username, name: nickNow, panel: panelUrl(req) }), [account.username, nickNow]));
+    if (u && u.status === 'active' && account && s.autoLoginEnabled) replies.push(tag(C_GOOD, fill(s.autoLoginText, { login: account.username, name: nickNow, panel: panelUrl(req) }), [[account.username, s.nickColor], [nickNow, s.nickColor]]));
     // when he was here last: the later of the last leave and the last join (a leave that was not reported leaves only the join)
     const before = Math.max(who.last_leave_at, who.last_join_at);
     if (u && u.status === 'active' && s.lastSeenEnabled && before > 0) {
       const st = visitStamp(before);
-      replies.push(tag(C_GOOD, fill(s.lastSeenText, { name: nickNow, date: st.date, time: st.time, panel: panelUrl(req) }), [nickNow, [st.date, '#FFFFFF'], [st.time, '#FFFFFF']]));
+      replies.push(tag(C_BACK, fill(s.lastSeenText, { name: nickNow, date: st.date, time: st.time, panel: panelUrl(req) }), [[nickNow, s.nickColor], [st.date, s.numberColor], [st.time, s.numberColor]]));
     }
     if (u && u.status === 'active') db.prepare('UPDATE game_identities SET last_join_at = ? WHERE platform_id = ?').run(now, id.data);
     if (u && u.status === 'active' && s.rankEnabled) {
       const nick = (db.prepare('SELECT game_nick FROM user_player WHERE user_id = ?').get(u.id) as { game_nick: string } | undefined)?.game_nick || (db.prepare('SELECT nick FROM game_identities WHERE platform_id = ?').get(id.data) as { nick: string } | undefined)?.nick || '';
       const hoursPlayed = vrHoursOf(u.id, nick).hours;
-      replies.push(tag(C_GOOD, rankLine(s.rankText, nick, hoursPlayed), [nick, [rankForHours(hoursPlayed).name, '#B9A7FF']]));
+      const rp = rankParts(hoursPlayed);
+      replies.push(tag(C_RANK, rankLine(s.rankText, nick, hoursPlayed), [[nick, s.nickColor], [rp.rank, s.rankByTier ? lift(rp.color) : s.rankColor], [`${rp.hours} ч`, s.numberColor], [rp.next, C_DIM, false]]));
     }
     if (u && u.status === 'active' && !u.discord_id && due) {
       db.prepare('UPDATE game_identities SET last_hint_at = ? WHERE platform_id = ?').run(now, id.data);
@@ -25889,7 +25917,7 @@ export function registerGameNewsPlayers({ app }: { app: Express }): void {
     if (db.prepare('SELECT 1 FROM game_identities WHERE platform_id = ?').get(b.data.id)) return say(C_INFO, '* Вы уже зарегистрированы в панели.');
 
     // the nickname is already in the panel: suggest .login first; the same command repeated within ten minutes registers anyway
-    if (nickInPanel(b.data.name) && warnOnce(b.data.id, now)) return res.json({ ok: false, replies: [tag(C_HINT, fill(s.nickTakenText, { panel: panelUrl(req), name: plainLine(b.data.name) }), [b.data.name])] });
+    if (nickInPanel(b.data.name) && warnOnce(b.data.id, now)) return res.json({ ok: false, replies: [tag(C_HINT, fill(s.nickTakenText, { panel: panelUrl(req), name: plainLine(b.data.name) }), [[b.data.name, s.nickColor]])] });
 
     const taken = (login: string) => !!db.prepare('SELECT 1 FROM users WHERE ulower(username) = ?').get(login.toLowerCase());
     const login = loginFromNick(b.data.name, b.data.id, taken);
@@ -26515,7 +26543,7 @@ export function registerGameNewsRules({ app, admin }: { app: Express; admin: Req
   app.put('/api/game-news/register-settings', admin, (req, res) => {
     const b = z.object({
       enabled: z.boolean(), promptText: z.string().max(300), doneText: z.string().max(300), discordText: z.string().max(300),
-      pendingText: z.string().max(300), loginText: z.string().max(300).optional(), nickTakenText: z.string().max(300).optional(), remindText: z.string().max(300).optional(), autoLoginEnabled: z.boolean().optional(), autoLoginText: z.string().max(300).optional(), lastSeenEnabled: z.boolean().optional(), lastSeenText: z.string().max(300).optional(), remindMinutes: z.number().int().min(0).max(1440).optional(), discordEveryHours: z.number().int().min(1).max(720),
+      pendingText: z.string().max(300), loginText: z.string().max(300).optional(), nickTakenText: z.string().max(300).optional(), remindText: z.string().max(300).optional(), nickColor: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(), numberColor: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(), rankColor: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(), rankByTier: z.boolean().optional(), autoLoginEnabled: z.boolean().optional(), autoLoginText: z.string().max(300).optional(), lastSeenEnabled: z.boolean().optional(), lastSeenText: z.string().max(300).optional(), remindMinutes: z.number().int().min(0).max(1440).optional(), discordEveryHours: z.number().int().min(1).max(720),
       rankEnabled: z.boolean().optional(), rankText: z.string().max(300).optional(),
     }).safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Проверьте поля' });
@@ -26531,6 +26559,10 @@ export function registerGameNewsRules({ app, admin }: { app: Express; admin: Req
       loginText: keep(b.data.loginText ?? d.loginText, d.loginText),
       nickTakenText: keep(b.data.nickTakenText ?? d.nickTakenText, d.nickTakenText),
       remindText: keep(b.data.remindText ?? d.remindText, d.remindText),
+      nickColor: (b.data.nickColor ?? d.nickColor).toUpperCase(),
+      numberColor: (b.data.numberColor ?? d.numberColor).toUpperCase(),
+      rankColor: (b.data.rankColor ?? d.rankColor).toUpperCase(),
+      rankByTier: b.data.rankByTier ?? d.rankByTier,
       autoLoginEnabled: b.data.autoLoginEnabled ?? d.autoLoginEnabled,
       autoLoginText: keep(b.data.autoLoginText ?? d.autoLoginText, d.autoLoginText),
       lastSeenEnabled: b.data.lastSeenEnabled ?? d.lastSeenEnabled,
@@ -27057,40 +27089,58 @@ __COREGSM_EOF__
 /** How the lines that a player reads are painted (the same for the registration, the moderation and the reminders). */
 import { plainLine } from './gameNewsJoinLeave.js';
 
-/**
- * A line the player reads: in one colour, with the commands picked out: «.register» in white bold and the arguments after it,
- * «(пароль)», in lilac (like the usage line of the commands of the game). The tags are flat, so no client has to nest them.
- */
 /** the nickname in a line: bold yellow, so that it stands out from the text */
-const C_NICK = '#FFCC33';
+export const C_NICK = '#FFCC33';
+/** the quiet parts of a line: separators, «to the next rank» */
+export const C_DIM = '#8A94A3';
 
+/**
+ * A word picked out in a line. A plain string is a nickname or a login (bold, the colour of the nickname).
+ * A pair is [word, colour] (bold); a triple is [word, colour, bold]: «false» paints it without bold (for quiet parts).
+ */
+export type Accent = string | [string, string] | [string, string, boolean];
+
+/** a piece of text in one colour; the dot between the parts of a line («·») is always quiet */
+function paint(color: string, text: string, bold = false): string {
+  if (!text) return '';
+  const open = bold ? '<b>' : '';
+  const close = bold ? '</b>' : '';
+  const out: string[] = [];
+  text.split(/(·)/u).forEach((p) => {
+    if (!p) return;
+    out.push(p === '·' ? `<color=${C_DIM}>·</color>` : `<color=${color}>${open}${p}${close}</color>`);
+  });
+  return out.join('');
+}
+
+/**
+ * The commands of a line: «.register» in white bold and the arguments after it, «(пароль)», in lilac (like the usage line of
+ * the commands of the game). The tags are flat, so no client has to nest them.
+ */
 function pieces(color: string, plain: string): string[] {
   const parts: string[] = [];
   let last = 0;
   for (const m of plain.matchAll(/(^|\s)(\.[a-zа-я]+)((?:\s*\([^()]{1,40}\))*)/giu)) {
     const start = (m.index ?? 0) + m[1].length;
-    if (start > last) parts.push(`<color=${color}>${plain.slice(last, start)}</color>`);
+    if (start > last) parts.push(paint(color, plain.slice(last, start)));
     parts.push(`<color=#FFFFFF><b>${m[2]}</b></color>`);
     if (m[3]) parts.push(`<color=#B9A7FF>${m[3]}</color>`);
     last = start + m[2].length + m[3].length;
   }
-  if (last < plain.length) parts.push(`<color=${color}>${plain.slice(last)}</color>`);
+  if (last < plain.length) parts.push(paint(color, plain.slice(last)));
   return parts;
 }
 
-/** a word picked out in a line: a plain string is a nickname or a login (bold yellow), a pair is [word, colour] */
-export type Accent = string | [string, string];
-
-/** `names`: the words that are picked out in bold wherever they stand in the line (a nickname, a login, a date, a rank) */
+/** `names`: the words that are picked out wherever they stand in the line (a nickname, a login, a date, a rank) */
 export function tag(color: string, text: string, names: Accent[] = []): string {
   const plain = plainLine(text);
-  const colours = new Map<string, string>();
+  const style = new Map<string, { color: string; bold: boolean }>();
   for (const n of names) {
-    const [w, c] = typeof n === 'string' ? [n, C_NICK] : n;
+    const [w, c, b] = typeof n === 'string' ? [n, C_NICK, true] : [n[0], n[1], n.length === 3 ? n[2] : true];
     const word = plainLine(w);
-    if (word.length > 0 && !colours.has(word)) colours.set(word, c);
+    if (word.length > 0 && !style.has(word)) style.set(word, { color: c, bold: b });
   }
-  const words = [...colours.keys()].sort((x, y) => y.length - x.length);
+  const words = [...style.keys()].sort((x, y) => y.length - x.length);
   let parts: string[];
   if (words.length === 0) parts = pieces(color, plain);
   else {
@@ -27100,7 +27150,8 @@ export function tag(color: string, text: string, names: Accent[] = []): string {
     for (const m of plain.matchAll(re)) {
       const i = m.index ?? 0;
       if (i > last) parts.push(...pieces(color, plain.slice(last, i)));
-      parts.push(`<color=${colours.get(m[0]) ?? C_NICK}><b>${m[0]}</b></color>`);
+      const st = style.get(m[0]) ?? { color: C_NICK, bold: true };
+      parts.push(paint(st.color, m[0], st.bold));
       last = i + m[0].length;
     }
     if (last < plain.length) parts.push(...pieces(color, plain.slice(last)));
@@ -27108,6 +27159,15 @@ export function tag(color: string, text: string, names: Accent[] = []): string {
   return parts.length ? parts.join('') : `<color=${color}></color>`;
 }
 
+/** a colour lifted towards white: the dark colours of the ranks are hard to read in the game chat */
+export function lift(hex: string, amount = 0.4): string {
+  const n = /^#([0-9a-f]{6})$/i.exec(hex);
+  if (!n) return '#FFFFFF';
+  const v = parseInt(n[1], 16);
+  const mix = (c: number) => Math.round(c + (255 - c) * amount);
+  const r = mix((v >> 16) & 255), g = mix((v >> 8) & 255), b = mix(v & 255);
+  return `#${((1 << 24) | (r << 16) | (g << 8) | b).toString(16).slice(1).toUpperCase()}`;
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/gamenews"
   cat > "$APP_DIR/core-backend/src/gamenews/gameNewsVars.ts" << '__COREGSM_EOF__'
@@ -142106,6 +142166,10 @@ export interface RegisterSettings {
   loginText: string;
   nickTakenText: string;
   remindText: string;
+  nickColor: string;
+  numberColor: string;
+  rankColor: string;
+  rankByTier: boolean;
   autoLoginEnabled: boolean;
   autoLoginText: string;
   lastSeenEnabled: boolean;
@@ -145584,6 +145648,11 @@ const en: Record<keyof typeof ru, string> = {
   'gn.ch.confirmLine': 'A «→ в игру» line in the channel',
   'gn.ch.confirmLineNote': 'The bot repeats the line in the style of the game chat, so the whole talk reads in one row. It stays in the channel.',
   'gn.rg.login': 'After .login: the game is linked to the account ({login} is the login)',
+  'gn.rg.colors': 'Colours of the picked-out words in the lines for the player (every kind of line has its own colour for the rest)',
+  'gn.rg.nickColor': 'Nickname and login',
+  'gn.rg.numberColor': 'Date, time and hours',
+  'gn.rg.rankColor': 'Name of the rank',
+  'gn.rg.rankByTier': 'The name of the rank in the colour of the rank itself (grey, red, purple, gold)',
   'gn.rg.remindText': 'Reminder for a player who still has not registered (every N minutes)',
   'gn.rg.nickTaken': 'When the nickname is already in the panel ({name} is the nickname)',
   'gn.sc.inheritShort': 'The general settings are used',
@@ -150495,6 +150564,11 @@ const ru = {
   'gn.ch.confirmLine': 'Строка «→ в игру» в канале',
   'gn.ch.confirmLineNote': 'Бот повторяет строку в стиле игрового чата, чтобы весь разговор читался в одном ряду. Остаётся в канале.',
   'gn.rg.login': 'После .login: игра привязана к аккаунту ({login} — логин)',
+  'gn.rg.colors': 'Цвета выделенных слов в строках для игрока (остальные цвета строк у каждого вида свои)',
+  'gn.rg.nickColor': 'Ник и логин',
+  'gn.rg.numberColor': 'Дата, время и часы',
+  'gn.rg.rankColor': 'Название ранга',
+  'gn.rg.rankByTier': 'Название ранга цветом самого ранга (серый, красный, фиолетовый, золотой)',
   'gn.rg.remindText': 'Напоминание тому, кто так и не зарегистрировался (раз в N минут)',
   'gn.rg.nickTaken': 'Если ник уже есть в панели ({name} — ник игрока)',
   'gn.sc.inheritShort': 'Используются общие настройки',
@@ -159531,6 +159605,7 @@ export function RegisterCard({ initial }: { initial: RegisterSettings }) {
     saved,
     delay: 900,
     validate: (v) => {
+      if (![v.nickColor, v.numberColor, v.rankColor].every(isHex)) return t('gn.jl.badColor');
       if (!Number.isInteger(v.remindMinutes) || v.remindMinutes < 0 || v.remindMinutes > 1440) return t('gn.rg.badRemind');
       if (!Number.isInteger(v.discordEveryHours) || v.discordEveryHours < 1 || v.discordEveryHours > 720) return t('gn.rg.badHours');
       return [v.promptText, v.doneText, v.discordText, v.pendingText, v.loginText, v.nickTakenText, v.remindText, v.autoLoginText, v.lastSeenText, v.rankText].some((x) => !x.trim()) ? t('gn.hint.text') : null;
@@ -159591,6 +159666,17 @@ export function RegisterCard({ initial }: { initial: RegisterSettings }) {
           <AutoText value={f.rankText} maxLength={300} onChange={(e) => set('rankText', e.target.value)} />
         </Field>
       )}
+
+      <p className="text-sm font-semibold text-mute">{t('gn.rg.colors')}</p>
+      <div className="grid gap-4 lg:grid-cols-3">
+        <ColorField label={t('gn.rg.nickColor')} value={f.nickColor} gameHex="#FFCC33" onChange={(v) => set('nickColor', v)} />
+        <ColorField label={t('gn.rg.numberColor')} value={f.numberColor} gameHex="#4DE0E0" onChange={(v) => set('numberColor', v)} />
+        {!f.rankByTier && <ColorField label={t('gn.rg.rankColor')} value={f.rankColor} gameHex="#B9A7FF" onChange={(v) => set('rankColor', v)} />}
+      </div>
+      <label className="flex items-center gap-3 font-bold">
+        <Switch checked={f.rankByTier} onChange={(v) => set('rankByTier', v)} />
+        {t('gn.rg.rankByTier')}
+      </label>
 
       <Field label={t('gn.rg.remind')}>
         <p className="mb-1 text-xs text-mute">{t('gn.rg.remindHint')}</p>

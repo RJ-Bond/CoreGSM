@@ -25,10 +25,10 @@ import { recordConsent } from '../monitoring/rules.js';
 import { passwordError } from '../security/passwordPolicy.js';
 import { registrationOpen } from '../security/auth.js';
 import { pluginTarget } from './gameNews.js';
-import { plainLine } from './gameNewsJoinLeave.js';
+import { isHexColor, plainLine } from './gameNewsJoinLeave.js';
 import { loginFromNick } from './gameNewsLogic.js';
-import { rankLine } from './gameNewsRank.js';
-import { rankForHours } from '../profile/ranks.js';
+import { rankLine, rankParts } from './gameNewsRank.js';
+import { C_DIM, lift } from './gameNewsStyle.js';
 import { vrHoursOf } from '../profile/profileVr.js';
 
 export interface RegisterSettings {
@@ -47,6 +47,12 @@ export interface RegisterSettings {
   nickTakenText: string;
   /** the reminder for a player who is still not registered (the periodic one, not the first hint at the join) */
   remindText: string;
+  /** the colours of the words picked out in the lines: the nickname, the numbers (date, time, hours), the name of the rank */
+  nickColor: string;
+  numberColor: string;
+  rankColor: string;
+  /** the name of the rank in the colour of the rank (lifted, so that it is readable in the chat) instead of rankColor */
+  rankByTier: boolean;
   /** a linked player is recognised by the game account at the join (no command is needed): «Автоматический вход» */
   autoLoginEnabled: boolean;
   /** the line of the automatic login: {login} {name} */
@@ -74,6 +80,10 @@ export const DEFAULT_REGISTER: RegisterSettings = {
   loginText: '* Готово! Игровой аккаунт привязан к аккаунту {login} в панели.',
   nickTakenText: '* Ник {name} уже есть в панели. Это ваш аккаунт? Введите .login (пароль), логин не нужен. Или .login (логин) (пароль). Нет? Тогда .register (пароль) (подтверждение) ещё раз.',
   remindText: '* Напоминание: вы всё ещё не зарегистрированы в панели. Введите .register (пароль) (подтверждение) или, если аккаунт уже есть, .login (логин) (пароль).',
+  nickColor: '#FFCC33',
+  numberColor: '#4DE0E0',
+  rankColor: '#B9A7FF',
+  rankByTier: true,
   autoLoginEnabled: true,
   autoLoginText: '* Автоматический вход: вы авторизованы как {login}.',
   lastSeenEnabled: true,
@@ -96,6 +106,9 @@ const C_INFO = '#FFCC33';
 const C_GOOD = '#5FD068';
 const C_BAD = '#FF5555';
 const C_HINT = '#6EC1FF';
+// every kind of line has its own colour of the text, so that they do not run into one another
+const C_BACK = '#D7CCF5'; // the welcome back: soft lilac
+const C_RANK = '#A9B8C9'; // the rank: steel
 export { tag, type Accent } from './gameNewsStyle.js';
 import { tag } from './gameNewsStyle.js';
 
@@ -119,6 +132,10 @@ export function getRegisterSettings(serverId?: number): RegisterSettings {
       nickTakenText: typeof v.nickTakenText === 'string' && OLD_NICK_TAKEN.includes(v.nickTakenText) ? d.nickTakenText : text(v.nickTakenText, d.nickTakenText),
       remindMinutes: Number.isFinite(v.remindMinutes) ? Math.min(1440, Math.max(0, Math.round(v.remindMinutes as number))) : d.remindMinutes,
       remindText: text(v.remindText, d.remindText),
+      nickColor: isHexColor(v.nickColor) ? v.nickColor.toUpperCase() : d.nickColor,
+      numberColor: isHexColor(v.numberColor) ? v.numberColor.toUpperCase() : d.numberColor,
+      rankColor: isHexColor(v.rankColor) ? v.rankColor.toUpperCase() : d.rankColor,
+      rankByTier: typeof v.rankByTier === 'boolean' ? v.rankByTier : d.rankByTier,
       discordEveryHours: Number.isFinite(v.discordEveryHours) ? Math.min(720, Math.max(1, Math.round(v.discordEveryHours as number))) : d.discordEveryHours,
       rankEnabled: typeof v.rankEnabled === 'boolean' ? v.rankEnabled : d.rankEnabled,
       rankText: text(v.rankText, d.rankText),
@@ -207,7 +224,7 @@ export function registerGameNewsPlayers({ app }: { app: Express }): void {
       // nobody can register while the panel is closed or not set up: no use to invite
       if (needsSetup() || !registrationOpen()) return res.json({ registered: false, replies: [] });
       const hint = nickInPanel(String(req.query.name ?? '')) ? s.nickTakenText : periodic ? s.remindText : s.promptText;
-      return res.json({ registered: false, replies: [tag(nickInPanel(String(req.query.name ?? '')) ? C_HINT : C_INFO, fill(hint, { panel: panelUrl(req), name: plainLine(String(req.query.name ?? '')) }), [String(req.query.name ?? '')])] });
+      return res.json({ registered: false, replies: [tag(nickInPanel(String(req.query.name ?? '')) ? C_HINT : C_INFO, fill(hint, { panel: panelUrl(req), name: plainLine(String(req.query.name ?? '')) }), [[String(req.query.name ?? ''), s.nickColor]])] });
     }
     const u = db.prepare('SELECT id, status, discord_id FROM users WHERE id = ?').get(who.user_id) as UserRow | undefined;
     if (periodic) {
@@ -221,18 +238,19 @@ export function registerGameNewsPlayers({ app }: { app: Express }): void {
     // a linked player is known by the game account: no command is needed, the join is the login
     const account = u ? (db.prepare('SELECT username FROM users WHERE id = ?').get(u.id) as { username: string } | undefined) : undefined;
     const nickNow = plainLine(String(req.query.name ?? ''));
-    if (u && u.status === 'active' && account && s.autoLoginEnabled) replies.push(tag(C_GOOD, fill(s.autoLoginText, { login: account.username, name: nickNow, panel: panelUrl(req) }), [account.username, nickNow]));
+    if (u && u.status === 'active' && account && s.autoLoginEnabled) replies.push(tag(C_GOOD, fill(s.autoLoginText, { login: account.username, name: nickNow, panel: panelUrl(req) }), [[account.username, s.nickColor], [nickNow, s.nickColor]]));
     // when he was here last: the later of the last leave and the last join (a leave that was not reported leaves only the join)
     const before = Math.max(who.last_leave_at, who.last_join_at);
     if (u && u.status === 'active' && s.lastSeenEnabled && before > 0) {
       const st = visitStamp(before);
-      replies.push(tag(C_GOOD, fill(s.lastSeenText, { name: nickNow, date: st.date, time: st.time, panel: panelUrl(req) }), [nickNow, [st.date, '#FFFFFF'], [st.time, '#FFFFFF']]));
+      replies.push(tag(C_BACK, fill(s.lastSeenText, { name: nickNow, date: st.date, time: st.time, panel: panelUrl(req) }), [[nickNow, s.nickColor], [st.date, s.numberColor], [st.time, s.numberColor]]));
     }
     if (u && u.status === 'active') db.prepare('UPDATE game_identities SET last_join_at = ? WHERE platform_id = ?').run(now, id.data);
     if (u && u.status === 'active' && s.rankEnabled) {
       const nick = (db.prepare('SELECT game_nick FROM user_player WHERE user_id = ?').get(u.id) as { game_nick: string } | undefined)?.game_nick || (db.prepare('SELECT nick FROM game_identities WHERE platform_id = ?').get(id.data) as { nick: string } | undefined)?.nick || '';
       const hoursPlayed = vrHoursOf(u.id, nick).hours;
-      replies.push(tag(C_GOOD, rankLine(s.rankText, nick, hoursPlayed), [nick, [rankForHours(hoursPlayed).name, '#B9A7FF']]));
+      const rp = rankParts(hoursPlayed);
+      replies.push(tag(C_RANK, rankLine(s.rankText, nick, hoursPlayed), [[nick, s.nickColor], [rp.rank, s.rankByTier ? lift(rp.color) : s.rankColor], [`${rp.hours} ч`, s.numberColor], [rp.next, C_DIM, false]]));
     }
     if (u && u.status === 'active' && !u.discord_id && due) {
       db.prepare('UPDATE game_identities SET last_hint_at = ? WHERE platform_id = ?').run(now, id.data);
@@ -261,7 +279,7 @@ export function registerGameNewsPlayers({ app }: { app: Express }): void {
     if (db.prepare('SELECT 1 FROM game_identities WHERE platform_id = ?').get(b.data.id)) return say(C_INFO, '* Вы уже зарегистрированы в панели.');
 
     // the nickname is already in the panel: suggest .login first; the same command repeated within ten minutes registers anyway
-    if (nickInPanel(b.data.name) && warnOnce(b.data.id, now)) return res.json({ ok: false, replies: [tag(C_HINT, fill(s.nickTakenText, { panel: panelUrl(req), name: plainLine(b.data.name) }), [b.data.name])] });
+    if (nickInPanel(b.data.name) && warnOnce(b.data.id, now)) return res.json({ ok: false, replies: [tag(C_HINT, fill(s.nickTakenText, { panel: panelUrl(req), name: plainLine(b.data.name) }), [[b.data.name, s.nickColor]])] });
 
     const taken = (login: string) => !!db.prepare('SELECT 1 FROM users WHERE ulower(username) = ?').get(login.toLowerCase());
     const login = loginFromNick(b.data.name, b.data.id, taken);

@@ -21,6 +21,7 @@ await import('../src/monitoring/restarts.ts'); // these make the tables that the
 await import('../src/monitoring/wipes.ts');
 const { getWelcome } = await import('../src/gamenews/gameNewsWelcome.ts');
 const register = await import('../src/gamenews/gameNewsRegister.ts');
+const style = await import('../src/gamenews/gameNewsStyle.ts');
 const sched = await import('../src/gamenews/gameNewsRestartSchedule.ts');
 const jr = await import('../src/gamenews/gameNewsJournal.ts');
 const kick = await import('../src/gamenews/gameNewsKick.ts');
@@ -215,6 +216,14 @@ describe('the hint a player reads about .register and .login', () => {
     assert.equal((line.match(/<color=#FFCC33><b>Wh\.Legion<\/b><\/color>/g) ?? []).length, 2);
     assert.equal(line.includes('<color=#FFFFFF><b>.login</b></color>'), true);
     assert.equal((line.match(/<color/g) ?? []).length, (line.match(/<\/color>/g) ?? []).length);
+  });
+
+  it('paints a date, a rank and the way to the next rank apart, and lifts dark colours', () => {
+    const line = register.tag('#A9B8C9', '* Vamp, ваш ранг: Пробуждённый · 0.4 ч · до «Скиталец» ещё 10 ч', [['Vamp', '#FFCC33'], ['Пробуждённый', '#B9A7FF'], ['0.4 ч', '#4DE0E0'], [' · до «Скиталец» ещё 10 ч', '#8A94A3', false]]);
+    assert.equal(line.includes('<color=#4DE0E0><b>0.4 ч</b></color>'), true);
+    assert.equal(line.includes('<color=#8A94A3>·</color>'), true);
+    assert.equal(line.includes('<b>до'), false);
+    assert.equal(style.lift('#000000', 0.5), '#808080');
   });
 
   it('keeps a text without commands in one colour and strips tags a person typed', () => {

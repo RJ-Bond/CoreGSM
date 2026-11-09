@@ -258,6 +258,8 @@ export function runMod(serverId: number, b: ModInput, now = Date.now()): ModResu
   const s = getKick(serverId);
   const word = b.action === 'kick' ? '.kick' : b.action === 'ban' ? '.ban' : '.warn';
   if (!s.enabled || (b.action === 'ban' && !s.banEnabled) || (b.action === 'warn' && !s.warnEnabled)) return refuse(`* Команда ${word} отключена в панели.`);
+  // oneself is an administrator too: with the protection on it is refused in its own words, with it off an administrator may do it
+  if (s.protectAdmins && b.targetId && b.targetId !== '0' && b.targetId === b.adminId) return refuse(`* Вы не можете ${b.action === 'kick' ? 'кикнуть' : b.action === 'ban' ? 'забанить' : 'предупредить'} себя.`);
   if (s.protectAdmins && b.targetIsAdmin) return refuse('* Администратора трогать нельзя.');
 
   if (b.action === 'kick') {

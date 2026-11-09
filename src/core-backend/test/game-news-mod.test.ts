@@ -186,3 +186,15 @@ describe('a switch for each command', () => {
     assert.match(kick.runMod(7, input({ action: 'ban', time: '7d', reason: 'x' }), NOW).replies[0], /отключена/);
   });
 });
+
+describe('an administrator who touches himself', () => {
+  it('is refused while the protection is on, and allowed when it is off', () => {
+    scope.writeScoped('gamenews_kick', JSON.stringify({ protectAdmins: true }), 8);
+    const me = input({ adminId: P1, targetId: P1, targetIsAdmin: true, reason: 'x' });
+    const no = kick.runMod(8, me, NOW);
+    assert.equal(no.ok, false);
+    assert.match(no.replies[0], /не можете/);
+    scope.writeScoped('gamenews_kick', JSON.stringify({ protectAdmins: false }), 8);
+    assert.equal(kick.runMod(8, me, NOW).ok, true);
+  });
+});
