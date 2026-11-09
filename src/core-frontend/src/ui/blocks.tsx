@@ -7,6 +7,7 @@ import { promptDialog } from '../confirm';
 import { gameIconPath } from '../gameIcons';
 import { GAME_IMAGE, gameAbbr, gameGradient } from '../games';
 import { t, useI18n } from '../i18n';
+import { useAppearance } from '../appearance';
 import { IconClose, IconCopy } from '../icons';
 import { Burst } from './motion';
 import { noAutofill } from './noAutofill';
@@ -270,9 +271,11 @@ export function CopyButton({ text, label: labelProp, className = '', tone = 'sof
 /** The CoreGSM mark (a "C" whose three lights use the status colours). Source art lives in public/. */
 export function Logo({ size = 32, alt }: { size?: number; alt?: string }) {
   const { brand } = useAuth().access;
+  // the Ember look has its own colour of the mark (the community's own logo stays as it is)
+  const [{ ember }] = useAppearance();
   return (
     <img
-      src={brand.hasLogo ? `/api/branding/logo?v=${brand.logoV}` : '/logo-128.png'}
+      src={brand.hasLogo ? `/api/branding/logo?v=${brand.logoV}` : ember ? '/logo-ember.svg' : '/logo-128.png'}
       width={size}
       height={size}
       // pass alt="" when the name is written next to the logo; alone it is described by the community name

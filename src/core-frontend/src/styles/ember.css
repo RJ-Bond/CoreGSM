@@ -119,9 +119,6 @@
 /* ---------- the font ---------- */
 :root[data-ember='1'] { --font-sans: 'Manrope Variable', 'Golos Text Variable', system-ui, sans-serif; }
 
-/* ---------- the default logo takes the accent (the violet picture is turned to orange) ---------- */
-:root[data-ember='1'] img.logo-default { filter: hue-rotate(135deg) saturate(1.15); }
-
 /* ---------- the chart of the players: columns, the highest one is lit ---------- */
 .pb { display: flex; flex-direction: column; gap: 6px; }
 .pb-cols { display: flex; align-items: flex-end; gap: 5px; height: 220px; padding: 0 2px; border-bottom: 1px solid rgb(var(--line)); }
@@ -300,3 +297,74 @@
 :root[data-ember='1'] .srv-tile .srv-cap > i { background: linear-gradient(90deg, rgb(var(--brand-2)), rgb(var(--brand))); border-radius: 99px; }
 :root[data-ember='1'] .srv-tile > div:last-child { margin-top: auto; padding-top: 12px; border-top: 1px solid rgb(var(--line)); }
 @media (prefers-reduced-motion: reduce) { :root[data-ember='1'] .srv-tile:hover { transform: none; } }
+
+/* ---------- the top bar: the tools of the panel sit in a card in the top right corner, the page starts under it ---------- */
+@media (min-width: 1100px) {
+  :root[data-ember='1']:not([data-page='admin']) .hdr > .hdr-actions {
+    position: fixed; top: 16px; right: max(32px, calc((100vw - var(--emb-side) - 1320px) / 2)); z-index: 41;
+    margin: 0; padding: 5px 6px; flex-wrap: nowrap; justify-content: flex-end; gap: 4px; width: auto; border-top: 0;
+    border-radius: 16px; background: rgb(var(--card)); box-shadow: var(--shadow-2), inset 0 0 0 1px rgb(var(--line));
+  }
+  :root[data-ember='1']:not([data-page='admin']) .hdr-sep { display: block; width: 1px; height: 22px; margin: 0 4px; background: rgb(var(--line)); }
+  :root[data-ember='1']:not([data-page='admin']) .hdr > .hdr-actions > a.btn { flex: 0 0 auto; }
+  :root[data-ember='1']:not([data-page='admin']) .app-wrap { padding-top: 84px; }
+  :root[data-ember='1']:not([data-page='admin']) .srv-shell > .srv-banner { top: 84px; }
+}
+
+/* ---------- the big card of the home page: a deeper dark column, a bigger figure, an orange bar ---------- */
+:root[data-ember='1'] .hero3 { border-radius: 24px; --h3-bg: color-mix(in srgb, var(--gc, #d6420a) 9%, #0f0f13); box-shadow: var(--shadow-2), inset 0 0 0 1px rgb(255 255 255 / .06); }
+:root[data-ember='1'] .hero3 .srv-cap { height: 10px; background: rgb(255 255 255 / .14); border-radius: 99px; overflow: hidden; }
+:root[data-ember='1'] .hero3 .srv-cap > i { background: linear-gradient(90deg, rgb(var(--brand-2)), rgb(255 138 76)); border-radius: 99px; }
+:root[data-ember='1'] .hero3 .hero-reason { color: rgb(255 168 112); }
+:root[data-ember='1'] .hero3 .h3-head h2 { font-size: var(--fs-2xl, 1.7rem); font-weight: 800; letter-spacing: -.02em; }
+:root[data-ember='1'] .hero3 .h3-l { background: linear-gradient(90deg, var(--h3-bg) 90%, transparent); }
+
+/* ---------- the list: one card per server, with a gap between them ---------- */
+:root[data-ember='1'] .srv-tbl { overflow: visible; background: none; box-shadow: none; display: grid; gap: 8px; }
+:root[data-ember='1'] .srv-tbl > .srv-tr:not(.srv-th) {
+  min-height: 60px; padding: 8px 18px; border: 0; border-radius: 16px; background: rgb(var(--card)); box-shadow: var(--shadow-2);
+  transition: transform var(--t-base, .2s) var(--ease-out, ease), box-shadow var(--t-base, .2s) var(--ease-out, ease);
+}
+:root[data-ember='1'] .srv-tbl > .srv-tr:not(.srv-th):hover { background: rgb(var(--card)); transform: translateY(-1px); box-shadow: var(--shadow-3), 0 0 0 1px rgb(var(--brand) / .45); }
+:root[data-ember='1'] .srv-tbl > .srv-tr.selected { box-shadow: var(--shadow-2), 0 0 0 1.5px rgb(var(--brand)); }
+:root[data-ember='1'] .srv-tbl > .srv-tr.off { box-shadow: var(--shadow-2), inset 3px 0 0 rgb(var(--bad) / .8); }
+:root[data-ember='1'] .srv-tbl > .srv-th { background: none; border: 0; min-height: 28px; padding-block: 0; }
+:root[data-ember='1'] .srv-tr-count { font-weight: 800; }
+
+/* ---------- the page of a server: the connect button is the one orange button of the screen ---------- */
+:root[data-ember='1'] .srv-banner .srv-cta { --b-img: linear-gradient(135deg, rgb(255 126 60), rgb(var(--brand))); --b-fg: #fff; color: #fff; box-shadow: 0 8px 24px -10px rgb(var(--brand) / .8); }
+:root[data-ember='1'] .srv-banner .srv-cta .srv-cta-addr { color: rgb(255 255 255 / .92); opacity: 1; }
+:root[data-ember='1'] .srv-banner .srv-cta::after { opacity: .35; }
+
+/* ---------- the news: the cover melts into a card, one rounding with the cards of the servers ---------- */
+:root[data-ember='1'] .nw-main article, :root[data-ember='1'] .nw-main .tile { border-radius: 22px; overflow: hidden; background: rgb(var(--card)); box-shadow: var(--shadow-2); transition: transform var(--t-base, .2s) var(--ease-out, ease), box-shadow var(--t-base, .2s) var(--ease-out, ease); }
+:root[data-ember='1'] .nw-main article:hover { transform: translateY(-2px); box-shadow: var(--shadow-3), 0 0 0 1px rgb(var(--brand) / .4); }
+:root[data-ember='1'] .nw-cover-title { letter-spacing: -.025em; }
+:root[data-ember='1'] .nw-aside > * { border-radius: 20px; }
+:root[data-ember='1'] .nw-rub { border-radius: 12px; }
+
+/* ---------- the profile: the same rounding and hairlines as the rest ---------- */
+:root[data-ember='1'] .pf-banner { border-radius: 24px; }
+:root[data-ember='1'] .pf-ach-mini { border-radius: 16px; }
+:root[data-ember='1'] .pf-bar > i { background: linear-gradient(90deg, rgb(var(--brand-2)), rgb(var(--brand))); }
+:root[data-ember='1'] .pf-chip { border-radius: 10px; }
+
+/* ---------- all the cards: one rounding; the fields are rounded rectangles like the buttons ---------- */
+:root[data-ember='1'] :is(.tile, .panel) { border-radius: var(--r-xl); }
+:root[data-ember='1'] .input { border-radius: 12px; }
+:root[data-ember='1'] .adm-nav :is(a, button) { border-radius: 12px; }
+
+/* ---------- the sign-in screens ---------- */
+:root[data-ember='1'] .auth-card { border-radius: 24px; background: rgb(var(--card)); box-shadow: var(--shadow-2), 0 24px 60px -30px rgb(0 0 0 / .5); }
+
+/* ---------- one gentle entrance: the columns grow and the cards rise when a page opens ---------- */
+@keyframes emb-grow { from { transform: scaleY(.06); } to { transform: none; } }
+@keyframes emb-rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: no-preference) {
+  :root[data-ember='1'] .pb-bar { transform-origin: bottom; animation: emb-grow .6s var(--ease-out, ease-out) both; }
+  :root[data-ember='1'] .srv-grid > * { animation: emb-rise .45s var(--ease-out, ease-out) both; }
+  :root[data-ember='1'] .srv-grid > :nth-child(2) { animation-delay: 40ms; }
+  :root[data-ember='1'] .srv-grid > :nth-child(3) { animation-delay: 80ms; }
+  :root[data-ember='1'] .srv-grid > :nth-child(4) { animation-delay: 120ms; }
+  :root[data-ember='1'] .srv-grid > :nth-child(n+5) { animation-delay: 160ms; }
+}

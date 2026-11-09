@@ -32,7 +32,7 @@ export default function ServerTabs({ id, tab, counts, toc, mini }: { id: number;
     const hdr = document.querySelector<HTMLElement>('header.glass');
     if (!hdr) return;
     // a header laid out as a side column (the Ember look) takes no height from the top of the page
-    const measure = () => setTop(getComputedStyle(hdr).position === 'fixed' && hdr.offsetHeight > window.innerHeight * 0.6 ? 12 : Math.round(parseFloat(getComputedStyle(hdr).top || '0') + hdr.offsetHeight + 8));
+    const measure = () => setTop(getComputedStyle(hdr).position === 'fixed' && hdr.offsetHeight > window.innerHeight * 0.6 ? (document.documentElement.dataset.ember === '1' && document.documentElement.dataset.page !== 'admin' ? 72 : 12) : Math.round(parseFloat(getComputedStyle(hdr).top || '0') + hdr.offsetHeight + 8));
     measure();
     const ro = new ResizeObserver(measure);
     ro.observe(hdr);

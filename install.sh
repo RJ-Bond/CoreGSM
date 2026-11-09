@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="a4b2c1d38024"
+COREGSM_BUILD="ac8aa7c5323b"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.2.12"
+COREGSM_VERSION="1.2.13"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -109904,6 +109904,22 @@ LLAZdLOiLSCPQyVXqIuo2Nn+dra/ne1vZ/uvh7P9FVGBLuoLhAIoVGUG2Cuie5X+UPao6q6U5OIK
 /WfI/QVnnvna/2BZsvwf4DVudVpex0QAAAAASUVORK5CYII=
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/public"
+  cat > "$APP_DIR/core-frontend/public/logo-ember.svg" << '__COREGSM_EOF__'
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 1320 1320">
+  <defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="rgb(255,150,84)"/><stop offset="0.5" stop-color="rgb(226,84,22)"/><stop offset="1" stop-color="rgb(120,36,6)"/></linearGradient></defs>
+  <rect width="1320" height="1320" rx="252" fill="url(#bg)"/>
+  <rect x="9" y="9" width="1302" height="1302" rx="243" fill="none" stroke="#fff" stroke-opacity="0.16" stroke-width="10"/>
+  <g>
+    <path d="M 671.500 194.001 C 537.713 201.280, 417.617 262.694, 334.035 366.571 C 317.224 387.464, 312.947 404.284, 320.340 420.431 C 325.880 432.532, 330.861 436.604, 370.500 461.445 C 385.350 470.750, 404.245 482.631, 412.489 487.847 C 453.261 513.639, 465.998 511.805, 498.239 475.500 C 552.572 414.317, 640.618 380.679, 722 390.009 C 762.297 394.630, 781.940 400.688, 820.617 420.426 C 853.802 437.361, 870.622 434.766, 888.511 409.949 C 891.805 405.380, 901.228 392.609, 909.451 381.570 C 956.939 317.824, 961.352 309.611, 957.711 291.757 C 953.474 270.982, 943.943 262.131, 905.812 243.559 C 829.636 206.457, 750.435 189.706, 671.500 194.001" fill="rgb(254,254,254)" fill-rule="evenodd"/>
+    <path d="M 442.500 811.404 C 436.894 813.185, 429.144 817.243, 417.500 824.497 C 412 827.923, 400.750 834.898, 392.500 839.996 C 323.787 882.461, 318.415 887.548, 318.562 910 C 318.665 925.645, 323.275 934.348, 344.518 959 C 419.362 1045.855, 514.231 1098.543, 630 1117.549 C 665.650 1123.402, 727.257 1122.931, 769 1116.486 C 843.181 1105.034, 940.584 1061.903, 954.053 1034.544 C 965.221 1011.858, 958.918 996.798, 913.018 936.500 C 907.157 928.800, 899.027 917.775, 894.952 912 C 871.475 878.729, 856.166 875.736, 818 896.954 C 775.362 920.660, 717.217 933.012, 673.801 927.588 C 667.586 926.812, 659.575 925.879, 656 925.515 C 601.127 919.936, 535.415 883.163, 493.790 834.742 C 475.034 812.923, 459.695 805.943, 442.500 811.404" fill="rgb(236,235,249)" fill-rule="evenodd"/>
+    <path d="M 269.138 534.950 C 248.773 542.469, 240.333 561.107, 236.965 606 C 236.408 613.425, 235.528 622.650, 235.009 626.500 C 233.785 635.583, 233.764 674.911, 234.977 686.500 C 235.495 691.450, 236.389 701.350, 236.964 708.500 C 241.660 766.915, 258.893 786.580, 298 778.150 C 379.014 760.686, 405.487 754.013, 412.194 749.366 C 428.083 738.354, 431.045 726.631, 426.609 692.315 C 422.696 662.046, 423.302 644.607, 429.484 609.500 C 432.328 593.352, 427.592 578.312, 416.462 568.139 C 409.103 561.413, 405.799 560.307, 362 549.906 C 341.375 545.008, 318.650 539.356, 311.500 537.346 C 294.815 532.654, 277.941 531.700, 269.138 534.950" fill="rgb(235,234,250)" fill-rule="evenodd"/>
+    <circle cx="1002.3" cy="443.1" r="45.7" fill="rgb(40,160,100)"/>
+    <circle cx="1037.3" cy="657.9" r="46.9" fill="rgb(239,181,66)"/>
+    <circle cx="1002.3" cy="869.6" r="47.4" fill="rgb(234,70,82)"/>
+  </g>
+</svg>
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/public"
   base64 -d > "$APP_DIR/core-frontend/public/logo-maskable-512.png" << '__COREGSM_EOF__'
 iVBORw0KGgoAAAANSUhEUgAAAgAAAAIACAIAAAB7GkOtAAAAAXNSR0IArs4c6QAAUvxJREFUeNq0
 k9cBAjEMxcK+TMDUbCBa/njPovr6OZH74XQ8ry3sB+tJ8q99ZSE8tlA2MCmdm2hhCf2j0QjbhC6x
@@ -138479,7 +138495,7 @@ export default function ServerTabs({ id, tab, counts, toc, mini }: { id: number;
     const hdr = document.querySelector<HTMLElement>('header.glass');
     if (!hdr) return;
     // a header laid out as a side column (the Ember look) takes no height from the top of the page
-    const measure = () => setTop(getComputedStyle(hdr).position === 'fixed' && hdr.offsetHeight > window.innerHeight * 0.6 ? 12 : Math.round(parseFloat(getComputedStyle(hdr).top || '0') + hdr.offsetHeight + 8));
+    const measure = () => setTop(getComputedStyle(hdr).position === 'fixed' && hdr.offsetHeight > window.innerHeight * 0.6 ? (document.documentElement.dataset.ember === '1' && document.documentElement.dataset.page !== 'admin' ? 72 : 12) : Math.round(parseFloat(getComputedStyle(hdr).top || '0') + hdr.offsetHeight + 8));
     measure();
     const ro = new ResizeObserver(measure);
     ro.observe(hdr);
@@ -172037,9 +172053,6 @@ __COREGSM_EOF__
 /* ---------- the font ---------- */
 :root[data-ember='1'] { --font-sans: 'Manrope Variable', 'Golos Text Variable', system-ui, sans-serif; }
 
-/* ---------- the default logo takes the accent (the violet picture is turned to orange) ---------- */
-:root[data-ember='1'] img.logo-default { filter: hue-rotate(135deg) saturate(1.15); }
-
 /* ---------- the chart of the players: columns, the highest one is lit ---------- */
 .pb { display: flex; flex-direction: column; gap: 6px; }
 .pb-cols { display: flex; align-items: flex-end; gap: 5px; height: 220px; padding: 0 2px; border-bottom: 1px solid rgb(var(--line)); }
@@ -172218,6 +172231,77 @@ __COREGSM_EOF__
 :root[data-ember='1'] .srv-tile .srv-cap > i { background: linear-gradient(90deg, rgb(var(--brand-2)), rgb(var(--brand))); border-radius: 99px; }
 :root[data-ember='1'] .srv-tile > div:last-child { margin-top: auto; padding-top: 12px; border-top: 1px solid rgb(var(--line)); }
 @media (prefers-reduced-motion: reduce) { :root[data-ember='1'] .srv-tile:hover { transform: none; } }
+
+/* ---------- the top bar: the tools of the panel sit in a card in the top right corner, the page starts under it ---------- */
+@media (min-width: 1100px) {
+  :root[data-ember='1']:not([data-page='admin']) .hdr > .hdr-actions {
+    position: fixed; top: 16px; right: max(32px, calc((100vw - var(--emb-side) - 1320px) / 2)); z-index: 41;
+    margin: 0; padding: 5px 6px; flex-wrap: nowrap; justify-content: flex-end; gap: 4px; width: auto; border-top: 0;
+    border-radius: 16px; background: rgb(var(--card)); box-shadow: var(--shadow-2), inset 0 0 0 1px rgb(var(--line));
+  }
+  :root[data-ember='1']:not([data-page='admin']) .hdr-sep { display: block; width: 1px; height: 22px; margin: 0 4px; background: rgb(var(--line)); }
+  :root[data-ember='1']:not([data-page='admin']) .hdr > .hdr-actions > a.btn { flex: 0 0 auto; }
+  :root[data-ember='1']:not([data-page='admin']) .app-wrap { padding-top: 84px; }
+  :root[data-ember='1']:not([data-page='admin']) .srv-shell > .srv-banner { top: 84px; }
+}
+
+/* ---------- the big card of the home page: a deeper dark column, a bigger figure, an orange bar ---------- */
+:root[data-ember='1'] .hero3 { border-radius: 24px; --h3-bg: color-mix(in srgb, var(--gc, #d6420a) 9%, #0f0f13); box-shadow: var(--shadow-2), inset 0 0 0 1px rgb(255 255 255 / .06); }
+:root[data-ember='1'] .hero3 .srv-cap { height: 10px; background: rgb(255 255 255 / .14); border-radius: 99px; overflow: hidden; }
+:root[data-ember='1'] .hero3 .srv-cap > i { background: linear-gradient(90deg, rgb(var(--brand-2)), rgb(255 138 76)); border-radius: 99px; }
+:root[data-ember='1'] .hero3 .hero-reason { color: rgb(255 168 112); }
+:root[data-ember='1'] .hero3 .h3-head h2 { font-size: var(--fs-2xl, 1.7rem); font-weight: 800; letter-spacing: -.02em; }
+:root[data-ember='1'] .hero3 .h3-l { background: linear-gradient(90deg, var(--h3-bg) 90%, transparent); }
+
+/* ---------- the list: one card per server, with a gap between them ---------- */
+:root[data-ember='1'] .srv-tbl { overflow: visible; background: none; box-shadow: none; display: grid; gap: 8px; }
+:root[data-ember='1'] .srv-tbl > .srv-tr:not(.srv-th) {
+  min-height: 60px; padding: 8px 18px; border: 0; border-radius: 16px; background: rgb(var(--card)); box-shadow: var(--shadow-2);
+  transition: transform var(--t-base, .2s) var(--ease-out, ease), box-shadow var(--t-base, .2s) var(--ease-out, ease);
+}
+:root[data-ember='1'] .srv-tbl > .srv-tr:not(.srv-th):hover { background: rgb(var(--card)); transform: translateY(-1px); box-shadow: var(--shadow-3), 0 0 0 1px rgb(var(--brand) / .45); }
+:root[data-ember='1'] .srv-tbl > .srv-tr.selected { box-shadow: var(--shadow-2), 0 0 0 1.5px rgb(var(--brand)); }
+:root[data-ember='1'] .srv-tbl > .srv-tr.off { box-shadow: var(--shadow-2), inset 3px 0 0 rgb(var(--bad) / .8); }
+:root[data-ember='1'] .srv-tbl > .srv-th { background: none; border: 0; min-height: 28px; padding-block: 0; }
+:root[data-ember='1'] .srv-tr-count { font-weight: 800; }
+
+/* ---------- the page of a server: the connect button is the one orange button of the screen ---------- */
+:root[data-ember='1'] .srv-banner .srv-cta { --b-img: linear-gradient(135deg, rgb(255 126 60), rgb(var(--brand))); --b-fg: #fff; color: #fff; box-shadow: 0 8px 24px -10px rgb(var(--brand) / .8); }
+:root[data-ember='1'] .srv-banner .srv-cta .srv-cta-addr { color: rgb(255 255 255 / .92); opacity: 1; }
+:root[data-ember='1'] .srv-banner .srv-cta::after { opacity: .35; }
+
+/* ---------- the news: the cover melts into a card, one rounding with the cards of the servers ---------- */
+:root[data-ember='1'] .nw-main article, :root[data-ember='1'] .nw-main .tile { border-radius: 22px; overflow: hidden; background: rgb(var(--card)); box-shadow: var(--shadow-2); transition: transform var(--t-base, .2s) var(--ease-out, ease), box-shadow var(--t-base, .2s) var(--ease-out, ease); }
+:root[data-ember='1'] .nw-main article:hover { transform: translateY(-2px); box-shadow: var(--shadow-3), 0 0 0 1px rgb(var(--brand) / .4); }
+:root[data-ember='1'] .nw-cover-title { letter-spacing: -.025em; }
+:root[data-ember='1'] .nw-aside > * { border-radius: 20px; }
+:root[data-ember='1'] .nw-rub { border-radius: 12px; }
+
+/* ---------- the profile: the same rounding and hairlines as the rest ---------- */
+:root[data-ember='1'] .pf-banner { border-radius: 24px; }
+:root[data-ember='1'] .pf-ach-mini { border-radius: 16px; }
+:root[data-ember='1'] .pf-bar > i { background: linear-gradient(90deg, rgb(var(--brand-2)), rgb(var(--brand))); }
+:root[data-ember='1'] .pf-chip { border-radius: 10px; }
+
+/* ---------- all the cards: one rounding; the fields are rounded rectangles like the buttons ---------- */
+:root[data-ember='1'] :is(.tile, .panel) { border-radius: var(--r-xl); }
+:root[data-ember='1'] .input { border-radius: 12px; }
+:root[data-ember='1'] .adm-nav :is(a, button) { border-radius: 12px; }
+
+/* ---------- the sign-in screens ---------- */
+:root[data-ember='1'] .auth-card { border-radius: 24px; background: rgb(var(--card)); box-shadow: var(--shadow-2), 0 24px 60px -30px rgb(0 0 0 / .5); }
+
+/* ---------- one gentle entrance: the columns grow and the cards rise when a page opens ---------- */
+@keyframes emb-grow { from { transform: scaleY(.06); } to { transform: none; } }
+@keyframes emb-rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: no-preference) {
+  :root[data-ember='1'] .pb-bar { transform-origin: bottom; animation: emb-grow .6s var(--ease-out, ease-out) both; }
+  :root[data-ember='1'] .srv-grid > * { animation: emb-rise .45s var(--ease-out, ease-out) both; }
+  :root[data-ember='1'] .srv-grid > :nth-child(2) { animation-delay: 40ms; }
+  :root[data-ember='1'] .srv-grid > :nth-child(3) { animation-delay: 80ms; }
+  :root[data-ember='1'] .srv-grid > :nth-child(4) { animation-delay: 120ms; }
+  :root[data-ember='1'] .srv-grid > :nth-child(n+5) { animation-delay: 160ms; }
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/mobile.css" << '__COREGSM_EOF__'
@@ -175147,6 +175231,7 @@ import { promptDialog } from '../confirm';
 import { gameIconPath } from '../gameIcons';
 import { GAME_IMAGE, gameAbbr, gameGradient } from '../games';
 import { t, useI18n } from '../i18n';
+import { useAppearance } from '../appearance';
 import { IconClose, IconCopy } from '../icons';
 import { Burst } from './motion';
 import { noAutofill } from './noAutofill';
@@ -175410,9 +175495,11 @@ export function CopyButton({ text, label: labelProp, className = '', tone = 'sof
 /** The CoreGSM mark (a "C" whose three lights use the status colours). Source art lives in public/. */
 export function Logo({ size = 32, alt }: { size?: number; alt?: string }) {
   const { brand } = useAuth().access;
+  // the Ember look has its own colour of the mark (the community's own logo stays as it is)
+  const [{ ember }] = useAppearance();
   return (
     <img
-      src={brand.hasLogo ? `/api/branding/logo?v=${brand.logoV}` : '/logo-128.png'}
+      src={brand.hasLogo ? `/api/branding/logo?v=${brand.logoV}` : ember ? '/logo-ember.svg' : '/logo-128.png'}
       width={size}
       height={size}
       // pass alt="" when the name is written next to the logo; alone it is described by the community name

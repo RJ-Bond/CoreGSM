@@ -33,6 +33,11 @@ jobs:
           npm ci --no-audit --no-fund --prefix src/core-frontend
       - name: Shoot the pages
         run: node tools/shots/run.mjs --pages=all --viewports=phone,desktop --themes=dark,light --out=shots-out
+      - name: Shoot the main pages in the Ember look
+        run: SHOTS_LOOK=ember node tools/shots/run.mjs --pages=servers,servers-list,server,news,status,community,login,profile,admin-start,admin-servers --viewports=phone,desktop --themes=dark,light --out=shots-out-ember
+      - name: Show the report of the Ember look
+        if: always()
+        run: cat shots-out-ember/report.md >> "$GITHUB_STEP_SUMMARY" || true
       - name: Show the report
         if: always()
         run: cat shots-out/report.md >> "$GITHUB_STEP_SUMMARY" || true
