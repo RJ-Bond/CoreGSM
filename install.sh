@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="12a3222a3bd0"
+COREGSM_BUILD="8ddab47c2697"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.2.6"
+COREGSM_VERSION="1.2.7"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -120832,7 +120832,7 @@ export default function App() {
           {/* desktop navigation; on phones the same sections live in the bottom bar */}
           <nav className="seg hdr-nav hidden md:inline-flex" aria-label={t('nav.sections')}>
             {visible.map((p) => (
-              <a key={p.id} href={p.id === 'admin' ? adminHref : `/${p.id}`} aria-current={page === p.id ? 'page' : undefined} className="seg-item py-1.5!">
+              <a key={p.id} href={p.id === 'admin' ? adminHref : `/${p.id}`} aria-current={page === p.id ? 'page' : undefined} title={t(p.label)} className="seg-item py-1.5!">
                 {p.icon()}<span>{t(p.label)}</span>
                 {p.id === 'news' && page !== 'news' && <NewsUnreadDot />}
                 {p.id === 'admin' && dot}
