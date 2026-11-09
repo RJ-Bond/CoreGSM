@@ -88,6 +88,15 @@ export function registerEnabled(serverId?: number): boolean {
   try { return (JSON.parse(readScoped('gamenews_register', serverId) || '{}') as { enabled?: boolean }).enabled === true; } catch { return false; }
 }
 
+/** how often (minutes) the plugin reminds a player who is in the game; 0 when registration from the game is off */
+export function remindMinutesFor(serverId?: number): number {
+  try {
+    const v = JSON.parse(readScoped('gamenews_register', serverId) || '{}') as { enabled?: boolean; remindMinutes?: number };
+    if (v.enabled !== true) return 0;
+    return Number.isFinite(v.remindMinutes) ? Math.min(1440, Math.max(0, Math.round(v.remindMinutes as number))) : 15;
+  } catch { return 0; }
+}
+
 // ---- what the administrator keeps for {discord} and {tip}
 export interface Extras { discord: string; tips: string[] }
 export const MAX_TIPS = 20;

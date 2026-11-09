@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="24612fe95c86"
+COREGSM_BUILD="49b44a9d3d16"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.1.96"
+COREGSM_VERSION="1.1.97"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -23909,7 +23909,7 @@ import type { Express, Request, RequestHandler } from 'express';
 import { z } from 'zod';
 import { db } from '../db.js';
 import { applyVars, checkNews } from './gameNewsLogic.js';
-import { NAME_SQL, ONLINE_MS, chatKindsConfigured, liveState, registerEnabled, serverLabel, varsFor } from './gameNewsVars.js';
+import { NAME_SQL, ONLINE_MS, chatKindsConfigured, liveState, registerEnabled, remindMinutesFor, serverLabel, varsFor } from './gameNewsVars.js';
 
 export { ONLINE_MS };
 import { joinLeaveFor } from './gameNewsJoinLeave.js';
@@ -23919,7 +23919,7 @@ import { takeCommands } from './gameNewsModLog.js';
 
 export const QUEUE_TTL_MS = 5 * 60_000;
 /** the version of the game plugin this panel was built for: an older plugin is shown as outdated */
-export const PLUGIN_VERSION = '0.14.1';
+export const PLUGIN_VERSION = '0.15.0';
 /** the games the plugin exists for */
 export const SUPPORTED_GAMES = new Set(['vrising']);
 const PULL_MIN_GAP_MS = 800;
@@ -24088,7 +24088,7 @@ export function registerGameNews({ app, admin }: { app: Express; admin: RequestH
       db.transaction(() => { for (const r of rows) done.run(now, r.id); })();
     }
     // latest = the newest plugin version this panel knows (the plugin logs when it is older); welcome = the greeting for joining players
-    res.json({ messages: rows.map((r) => ({ id: r.id, text: r.text })), latest: PLUGIN_VERSION, ...welcomeFor(t.server_id, now), ...joinLeaveFor(t.server_id), register: registerEnabled(t.server_id), chat: chatKindsConfigured(t.server_id), restart: consumeDue(t.server_id), commands: takeCommands(t.server_id, now) });
+    res.json({ messages: rows.map((r) => ({ id: r.id, text: r.text })), latest: PLUGIN_VERSION, ...welcomeFor(t.server_id, now), ...joinLeaveFor(t.server_id), register: registerEnabled(t.server_id), remindMinutes: remindMinutesFor(t.server_id), chat: chatKindsConfigured(t.server_id), restart: consumeDue(t.server_id), commands: takeCommands(t.server_id, now) });
   });
 }
 __COREGSM_EOF__
@@ -25645,6 +25645,7 @@ import { pluginTarget } from './gameNews.js';
 import { plainLine } from './gameNewsJoinLeave.js';
 import { loginFromNick } from './gameNewsLogic.js';
 import { rankLine } from './gameNewsRank.js';
+import { rankForHours } from '../profile/ranks.js';
 import { vrHoursOf } from '../profile/profileVr.js';
 
 export interface RegisterSettings {
@@ -25671,6 +25672,8 @@ export interface RegisterSettings {
   lastSeenText: string;
   /** how often the Discord hint is repeated for the same player, hours */
   discordEveryHours: number;
+  /** how often (minutes) a connected player who is not registered, or has no Discord linked, is reminded; 0 = only at the join */
+  remindMinutes: number;
   /** a registered player reads his rank at every join */
   rankEnabled: boolean;
   /** the rank line: {name} {rank} {hours} {next} */
@@ -25690,6 +25693,7 @@ export const DEFAULT_REGISTER: RegisterSettings = {
   lastSeenEnabled: true,
   lastSeenText: '* С возвращением, {name}! Вы были на сервере {date} в {time}.',
   discordEveryHours: 24,
+  remindMinutes: 15,
   rankEnabled: true,
   rankText: '* {name}, ваш ранг: {rank} · {hours} ч{next}',
 };
@@ -25727,10 +25731,19 @@ function pieces(color: string, plain: string): string[] {
   return parts;
 }
 
-/** `names`: the words (a nickname, a login) that are picked out in bold yellow wherever they stand in the line */
-export function tag(color: string, text: string, names: string[] = []): string {
+/** a word picked out in a line: a plain string is a nickname or a login (bold yellow), a pair is [word, colour] */
+export type Accent = string | [string, string];
+
+/** `names`: the words that are picked out in bold wherever they stand in the line (a nickname, a login, a date, a rank) */
+export function tag(color: string, text: string, names: Accent[] = []): string {
   const plain = plainLine(text);
-  const words = [...new Set(names.map((n) => plainLine(n)).filter((n) => n.length > 0))].sort((x, y) => y.length - x.length);
+  const colours = new Map<string, string>();
+  for (const n of names) {
+    const [w, c] = typeof n === 'string' ? [n, C_NICK] : n;
+    const word = plainLine(w);
+    if (word.length > 0 && !colours.has(word)) colours.set(word, c);
+  }
+  const words = [...colours.keys()].sort((x, y) => y.length - x.length);
   let parts: string[];
   if (words.length === 0) parts = pieces(color, plain);
   else {
@@ -25740,7 +25753,7 @@ export function tag(color: string, text: string, names: string[] = []): string {
     for (const m of plain.matchAll(re)) {
       const i = m.index ?? 0;
       if (i > last) parts.push(...pieces(color, plain.slice(last, i)));
-      parts.push(`<color=${C_NICK}><b>${m[0]}</b></color>`);
+      parts.push(`<color=${colours.get(m[0]) ?? C_NICK}><b>${m[0]}</b></color>`);
       last = i + m[0].length;
     }
     if (last < plain.length) parts.push(...pieces(color, plain.slice(last)));
@@ -25766,6 +25779,7 @@ export function getRegisterSettings(serverId?: number): RegisterSettings {
       lastSeenEnabled: typeof v.lastSeenEnabled === 'boolean' ? v.lastSeenEnabled : d.lastSeenEnabled,
       lastSeenText: text(v.lastSeenText, d.lastSeenText),
       nickTakenText: typeof v.nickTakenText === 'string' && OLD_NICK_TAKEN.includes(v.nickTakenText) ? d.nickTakenText : text(v.nickTakenText, d.nickTakenText),
+      remindMinutes: Number.isFinite(v.remindMinutes) ? Math.min(1440, Math.max(0, Math.round(v.remindMinutes as number))) : d.remindMinutes,
       discordEveryHours: Number.isFinite(v.discordEveryHours) ? Math.min(720, Math.max(1, Math.round(v.discordEveryHours as number))) : d.discordEveryHours,
       rankEnabled: typeof v.rankEnabled === 'boolean' ? v.rankEnabled : d.rankEnabled,
       rankText: text(v.rankText, d.rankText),
@@ -25846,6 +25860,8 @@ export function registerGameNewsPlayers({ app }: { app: Express }): void {
       if (block) return res.json({ registered: false, banned: true, replies: block.lines });
     }
     if (!s.enabled || !id.success) return res.json({ registered: false, replies: [] });
+    // the reminder that the plugin asks for every few minutes while the player is in the game: only the hints, nothing of the greeting
+    const periodic = String(req.query.periodic ?? '') === '1';
     const now = Date.now();
     const who = db.prepare('SELECT * FROM game_identities WHERE platform_id = ?').get(id.data) as IdentityRow | undefined;
     if (!who) {
@@ -25855,6 +25871,12 @@ export function registerGameNewsPlayers({ app }: { app: Express }): void {
       return res.json({ registered: false, replies: [tag(nickInPanel(String(req.query.name ?? '')) ? C_HINT : C_INFO, fill(hint, { panel: panelUrl(req), name: plainLine(String(req.query.name ?? '')) }), [String(req.query.name ?? '')])] });
     }
     const u = db.prepare('SELECT id, status, discord_id FROM users WHERE id = ?').get(who.user_id) as UserRow | undefined;
+    if (periodic) {
+      // registered, but no Discord yet: remind (no matter when the last hint was); registered with Discord: nothing
+      if (!u || u.status !== 'active' || u.discord_id) return res.json({ registered: true, replies: [] });
+      db.prepare('UPDATE game_identities SET last_hint_at = ? WHERE platform_id = ?').run(now, id.data);
+      return res.json({ registered: true, replies: [tag(C_HINT, fill(s.discordText, { panel: panelUrl(req) }))] });
+    }
     const due = now - who.last_hint_at >= s.discordEveryHours * 3_600_000;
     const replies: string[] = [];
     // a linked player is known by the game account: no command is needed, the join is the login
@@ -25865,12 +25887,13 @@ export function registerGameNewsPlayers({ app }: { app: Express }): void {
     const before = Math.max(who.last_leave_at, who.last_join_at);
     if (u && u.status === 'active' && s.lastSeenEnabled && before > 0) {
       const st = visitStamp(before);
-      replies.push(tag(C_GOOD, fill(s.lastSeenText, { name: nickNow, date: st.date, time: st.time, panel: panelUrl(req) }), [nickNow]));
+      replies.push(tag(C_GOOD, fill(s.lastSeenText, { name: nickNow, date: st.date, time: st.time, panel: panelUrl(req) }), [nickNow, [st.date, '#FFFFFF'], [st.time, '#FFFFFF']]));
     }
     if (u && u.status === 'active') db.prepare('UPDATE game_identities SET last_join_at = ? WHERE platform_id = ?').run(now, id.data);
     if (u && u.status === 'active' && s.rankEnabled) {
       const nick = (db.prepare('SELECT game_nick FROM user_player WHERE user_id = ?').get(u.id) as { game_nick: string } | undefined)?.game_nick || (db.prepare('SELECT nick FROM game_identities WHERE platform_id = ?').get(id.data) as { nick: string } | undefined)?.nick || '';
-      replies.push(tag(C_GOOD, rankLine(s.rankText, nick, vrHoursOf(u.id, nick).hours)));
+      const hoursPlayed = vrHoursOf(u.id, nick).hours;
+      replies.push(tag(C_GOOD, rankLine(s.rankText, nick, hoursPlayed), [nick, [rankForHours(hoursPlayed).name, '#B9A7FF']]));
     }
     if (u && u.status === 'active' && !u.discord_id && due) {
       db.prepare('UPDATE game_identities SET last_hint_at = ? WHERE platform_id = ?').run(now, id.data);
@@ -26520,7 +26543,7 @@ export function registerGameNewsRules({ app, admin }: { app: Express; admin: Req
   app.put('/api/game-news/register-settings', admin, (req, res) => {
     const b = z.object({
       enabled: z.boolean(), promptText: z.string().max(300), doneText: z.string().max(300), discordText: z.string().max(300),
-      pendingText: z.string().max(300), loginText: z.string().max(300).optional(), nickTakenText: z.string().max(300).optional(), autoLoginEnabled: z.boolean().optional(), autoLoginText: z.string().max(300).optional(), lastSeenEnabled: z.boolean().optional(), lastSeenText: z.string().max(300).optional(), discordEveryHours: z.number().int().min(1).max(720),
+      pendingText: z.string().max(300), loginText: z.string().max(300).optional(), nickTakenText: z.string().max(300).optional(), autoLoginEnabled: z.boolean().optional(), autoLoginText: z.string().max(300).optional(), lastSeenEnabled: z.boolean().optional(), lastSeenText: z.string().max(300).optional(), remindMinutes: z.number().int().min(0).max(1440).optional(), discordEveryHours: z.number().int().min(1).max(720),
       rankEnabled: z.boolean().optional(), rankText: z.string().max(300).optional(),
     }).safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Проверьте поля' });
@@ -26540,6 +26563,7 @@ export function registerGameNewsRules({ app, admin }: { app: Express; admin: Req
       lastSeenEnabled: b.data.lastSeenEnabled ?? d.lastSeenEnabled,
       lastSeenText: keep(b.data.lastSeenText ?? d.lastSeenText, d.lastSeenText),
       discordEveryHours: b.data.discordEveryHours,
+      remindMinutes: b.data.remindMinutes ?? d.remindMinutes,
       rankEnabled: b.data.rankEnabled ?? d.rankEnabled,
       rankText: keep(b.data.rankText ?? '', d.rankText),
     }, sid);
@@ -27145,6 +27169,15 @@ export function chatKindsConfigured(serverId?: number): ChatKind[] {
 /** registration from the game is switched on (the setting is kept by gameNewsRegister.ts) */
 export function registerEnabled(serverId?: number): boolean {
   try { return (JSON.parse(readScoped('gamenews_register', serverId) || '{}') as { enabled?: boolean }).enabled === true; } catch { return false; }
+}
+
+/** how often (minutes) the plugin reminds a player who is in the game; 0 when registration from the game is off */
+export function remindMinutesFor(serverId?: number): number {
+  try {
+    const v = JSON.parse(readScoped('gamenews_register', serverId) || '{}') as { enabled?: boolean; remindMinutes?: number };
+    if (v.enabled !== true) return 0;
+    return Number.isFinite(v.remindMinutes) ? Math.min(1440, Math.max(0, Math.round(v.remindMinutes as number))) : 15;
+  } catch { return 0; }
 }
 
 // ---- what the administrator keeps for {discord} and {tip}
@@ -141921,6 +141954,7 @@ export interface RegisterSettings {
   lastSeenEnabled: boolean;
   lastSeenText: string;
   discordEveryHours: number;
+  remindMinutes: number;
   rankEnabled: boolean;
   rankText: string;
 }
@@ -145479,9 +145513,9 @@ const en: Record<keyof typeof ru, string> = {
   'gn.rg.last': 'The last visit line ({name} is the nickname, {date} the date, {time} the time)',
   'gn.kk.title': 'Moderation: kick, ban, warnings',
   'gn.kk.sumOn': 'Game administrators: .kick, .ban, .warn, .unban',
-  'gn.kk.sumOff': 'The command is off',
+  'gn.kk.sumOff': 'The moderation commands are off',
   'gn.kk.note': 'A game administrator types .kick, .ban, .warn or .unban. The panel checks the rules below, writes the journal, shows everybody a line, tells the player in private and removes him. The nickname may have spaces and the reason several words; when several players fit they are listed (#1, #2…).',
-  'gn.kk.enabled': 'Allow the .kick command',
+  'gn.kk.enabled': 'Allow the moderation commands (.kick, .ban, .warn, .unban)',
   'gn.kk.template': 'The line for all players ({name} the kicked player, {reason} the reason, {admin} who kicked)',
   'gn.kk.textColor': 'Text colour',
   'gn.kk.nameColor': 'Nickname colour',
@@ -145733,6 +145767,9 @@ const en: Record<keyof typeof ru, string> = {
   'gn.rg.pending': 'When registration is by request',
   'gn.rg.rankOn': 'Show a player his rank when he joins',
   'gn.rg.rank': 'The rank line ({name}, {rank}, {hours}, {next})',
+  'gn.rg.remind': 'Remind a player who is in the game every (minutes, 0 = only at the join)',
+  'gn.rg.remindHint': 'A player without a panel account, or without a linked Discord, gets the hint again every so many minutes while on the server',
+  'gn.rg.badRemind': 'From 0 to 1440 minutes',
   'gn.rg.hours': 'Remind about Discord no more often than every (hours)',
   'gn.rg.badHours': 'From 1 to 720 hours',
   'gn.rg.vars': 'The registration mode of the panel (open, by request, closed) and the community rules are respected: registering from the game counts as agreeing with the rules. The password is checked as on the site.',
@@ -150379,9 +150416,9 @@ const ru = {
   'gn.rg.last': 'Строка о прошлом визите ({name} — ник, {date} — дата, {time} — время)',
   'gn.kk.title': 'Модерация: кик, бан, предупреждения',
   'gn.kk.sumOn': 'Админы игры: .kick, .ban, .warn, .unban',
-  'gn.kk.sumOff': 'Команда отключена',
+  'gn.kk.sumOff': 'Команды модерации отключены',
   'gn.kk.note': 'Администратор игры вводит .kick, .ban, .warn или .unban. Панель проверяет правила ниже, пишет в журнал, показывает всем строку, говорит игроку лично и убирает его. Ник можно с пробелом, причина может быть из нескольких слов; если подходит несколько игроков, они покажутся списком (#1, #2…).',
-  'gn.kk.enabled': 'Разрешить команду .kick',
+  'gn.kk.enabled': 'Разрешить команды модерации (.kick, .ban, .warn, .unban)',
   'gn.kk.template': 'Строка для всех игроков ({name} — кикнутый, {reason} — причина, {admin} — кто кикнул)',
   'gn.kk.textColor': 'Цвет текста',
   'gn.kk.nameColor': 'Цвет ника',
@@ -150633,6 +150670,9 @@ const ru = {
   'gn.rg.pending': 'Если регистрация по заявкам',
   'gn.rg.rankOn': 'Показывать игроку его ранг при входе',
   'gn.rg.rank': 'Строка с рангом ({name}, {rank}, {hours}, {next})',
+  'gn.rg.remind': 'Напоминать игроку, пока он в игре, раз в (минут, 0 = только при входе)',
+  'gn.rg.remindHint': 'Игроку без аккаунта в панели и игроку без привязанного Discord подсказка повторяется каждые столько минут, пока он на сервере',
+  'gn.rg.badRemind': 'От 0 до 1440 минут',
   'gn.rg.hours': 'Напоминать про Discord не чаще, чем раз в (часов)',
   'gn.rg.badHours': 'От 1 до 720 часов',
   'gn.rg.vars': 'Режим регистрации панели (открыта, по заявкам, закрыта) и правила сообщества соблюдаются: регистрация из игры считается согласием с правилами. Пароль проверяется так же, как на сайте.',
@@ -159318,6 +159358,7 @@ export function RegisterCard({ initial }: { initial: RegisterSettings }) {
     saved,
     delay: 900,
     validate: (v) => {
+      if (!Number.isInteger(v.remindMinutes) || v.remindMinutes < 0 || v.remindMinutes > 1440) return t('gn.rg.badRemind');
       if (!Number.isInteger(v.discordEveryHours) || v.discordEveryHours < 1 || v.discordEveryHours > 720) return t('gn.rg.badHours');
       return [v.promptText, v.doneText, v.discordText, v.pendingText, v.loginText, v.nickTakenText, v.autoLoginText, v.lastSeenText, v.rankText].some((x) => !x.trim()) ? t('gn.hint.text') : null;
     },
@@ -159376,6 +159417,11 @@ export function RegisterCard({ initial }: { initial: RegisterSettings }) {
           <AutoText value={f.rankText} maxLength={300} onChange={(e) => set('rankText', e.target.value)} />
         </Field>
       )}
+
+      <Field label={t('gn.rg.remind')}>
+        <p className="mb-1 text-xs text-mute">{t('gn.rg.remindHint')}</p>
+        <input className="input w-32" type="number" min={0} max={1440} value={f.remindMinutes} onChange={(e) => set('remindMinutes', Number(e.target.value))} />
+      </Field>
 
       <Field label={t('gn.rg.hours')}>
         <input className="input w-32" type="number" min={1} max={720} value={f.discordEveryHours} onChange={(e) => set('discordEveryHours', Number(e.target.value))} />

@@ -340,6 +340,7 @@ export interface RegisterSettings {
   lastSeenEnabled: boolean;
   lastSeenText: string;
   discordEveryHours: number;
+  remindMinutes: number;
   rankEnabled: boolean;
   rankText: string;
 }

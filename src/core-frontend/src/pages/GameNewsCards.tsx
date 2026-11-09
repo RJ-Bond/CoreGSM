@@ -220,6 +220,7 @@ export function RegisterCard({ initial }: { initial: RegisterSettings }) {
     saved,
     delay: 900,
     validate: (v) => {
+      if (!Number.isInteger(v.remindMinutes) || v.remindMinutes < 0 || v.remindMinutes > 1440) return t('gn.rg.badRemind');
       if (!Number.isInteger(v.discordEveryHours) || v.discordEveryHours < 1 || v.discordEveryHours > 720) return t('gn.rg.badHours');
       return [v.promptText, v.doneText, v.discordText, v.pendingText, v.loginText, v.nickTakenText, v.autoLoginText, v.lastSeenText, v.rankText].some((x) => !x.trim()) ? t('gn.hint.text') : null;
     },
@@ -278,6 +279,11 @@ export function RegisterCard({ initial }: { initial: RegisterSettings }) {
           <AutoText value={f.rankText} maxLength={300} onChange={(e) => set('rankText', e.target.value)} />
         </Field>
       )}
+
+      <Field label={t('gn.rg.remind')}>
+        <p className="mb-1 text-xs text-mute">{t('gn.rg.remindHint')}</p>
+        <input className="input w-32" type="number" min={0} max={1440} value={f.remindMinutes} onChange={(e) => set('remindMinutes', Number(e.target.value))} />
+      </Field>
 
       <Field label={t('gn.rg.hours')}>
         <input className="input w-32" type="number" min={1} max={720} value={f.discordEveryHours} onChange={(e) => set('discordEveryHours', Number(e.target.value))} />
