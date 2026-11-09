@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="b3421847bc3c"
+COREGSM_BUILD="36871d638870"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.2.9"
+COREGSM_VERSION="1.2.10"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -165283,6 +165283,7 @@ export default function ServerForm({ initial, id, coverUrl, onCoverChanged, onCl
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/Servers.tsx" << '__COREGSM_EOF__'
+import { useAppearance } from '../appearance';
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent } from 'react';
 import { HomeBlocksMenu, useHomeBlocks } from '../components/servers/HomeBlocks';
 import { api, type Server, type StatusInfo } from '../api';
@@ -165457,6 +165458,8 @@ function ServerList() {
   useI18n();
   const phone = useIsPhone();
   const { me, isAdmin } = useAuth();
+  const [look] = useAppearance();
+  const ember = look.ember;
   const [favs, setFavs] = useState<number[]>([]);
   const [favsLoaded, setFavsLoaded] = useState(false);
   const [filterPicked, setFilterPicked] = useState(false);
@@ -165612,8 +165615,8 @@ function ServerList() {
   return (
     <div className="space-y-5">
       <PageHead
-        title={t('nav.servers')}
-        subtitle={me ? `${greeting(me.username)}. ${liveLine}` : liveLine}
+        title={ember && me ? greeting(me.username) : t('nav.servers')}
+        subtitle={me && !ember ? `${greeting(me.username)}. ${liveLine}` : liveLine}
         icon={<IconServers />}
       >
         <span className="srv-head-actions">
@@ -172080,6 +172083,27 @@ __COREGSM_EOF__
 :root[data-ember='1'] .st-day.is-today { box-shadow: 0 0 0 2px rgb(var(--card)), 0 0 0 3.5px rgb(var(--brand-hover)); }
 :root[data-ember='1'] .st-up-v { font-weight: 800; }
 :root[data-ember='1'] .st-meter > i { background: linear-gradient(90deg, rgb(var(--brand-2)), rgb(var(--brand))); }
+
+/* ---------- the cards of the servers: a picture on top that melts into a graphite card, a big figure, an orange bar ---------- */
+:root[data-ember='1'] .srv-tile {
+  padding: 0; gap: 12px; border-radius: 20px; overflow: hidden;
+  background: rgb(var(--card)); box-shadow: var(--shadow-2);
+  transition: transform var(--t-base, .2s) var(--ease-out, ease), box-shadow var(--t-base, .2s) var(--ease-out, ease);
+}
+:root[data-ember='1'] .srv-tile:hover { transform: translateY(-3px); box-shadow: var(--shadow-3), 0 0 0 1px rgb(var(--brand) / .5); }
+:root[data-ember='1'] .srv-tile.is-busy { box-shadow: var(--shadow-2), 0 0 0 1px rgb(var(--warn) / .5); }
+:root[data-ember='1'] .srv-tile > div:has(> .cover-scrim) { height: 136px; border-radius: 0; padding: 14px 16px; }
+:root[data-ember='1'] .srv-tile > div:has(> .cover-scrim)::after {
+  content: ''; position: absolute; inset: auto 0 0 0; height: 64px; pointer-events: none;
+  background: linear-gradient(180deg, transparent, rgb(var(--card)));
+}
+:root[data-ember='1'] .srv-tile > .px-1\.5 { padding-inline: 18px; }
+:root[data-ember='1'] .srv-tile > .mx-1\.5 { margin-inline: 18px; }
+:root[data-ember='1'] .srv-tile .srv-name { font-size: 17px; font-weight: 800; letter-spacing: -.01em; }
+:root[data-ember='1'] .srv-tile .srv-cap { height: 8px; border-radius: 99px; background: rgb(var(--ink) / .1); overflow: hidden; }
+:root[data-ember='1'] .srv-tile .srv-cap > i { background: linear-gradient(90deg, rgb(var(--brand-2)), rgb(var(--brand))); border-radius: 99px; }
+:root[data-ember='1'] .srv-tile > div:last-child { margin-top: auto; padding-top: 12px; border-top: 1px solid rgb(var(--line)); }
+@media (prefers-reduced-motion: reduce) { :root[data-ember='1'] .srv-tile:hover { transform: none; } }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/mobile.css" << '__COREGSM_EOF__'

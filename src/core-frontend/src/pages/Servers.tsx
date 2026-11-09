@@ -1,3 +1,4 @@
+import { useAppearance } from '../appearance';
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent } from 'react';
 import { HomeBlocksMenu, useHomeBlocks } from '../components/servers/HomeBlocks';
 import { api, type Server, type StatusInfo } from '../api';
@@ -172,6 +173,8 @@ function ServerList() {
   useI18n();
   const phone = useIsPhone();
   const { me, isAdmin } = useAuth();
+  const [look] = useAppearance();
+  const ember = look.ember;
   const [favs, setFavs] = useState<number[]>([]);
   const [favsLoaded, setFavsLoaded] = useState(false);
   const [filterPicked, setFilterPicked] = useState(false);
@@ -327,8 +330,8 @@ function ServerList() {
   return (
     <div className="space-y-5">
       <PageHead
-        title={t('nav.servers')}
-        subtitle={me ? `${greeting(me.username)}. ${liveLine}` : liveLine}
+        title={ember && me ? greeting(me.username) : t('nav.servers')}
+        subtitle={me && !ember ? `${greeting(me.username)}. ${liveLine}` : liveLine}
         icon={<IconServers />}
       >
         <span className="srv-head-actions">
