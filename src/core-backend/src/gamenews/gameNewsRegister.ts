@@ -93,8 +93,10 @@ const C_HINT = '#6EC1FF';
  * A line the player reads: in one colour, with the commands picked out: «.register» in white bold and the arguments after it,
  * «(пароль)», in lilac (like the usage line of the commands of the game). The tags are flat, so no client has to nest them.
  */
-export function tag(color: string, text: string): string {
-  const plain = plainLine(text);
+/** the nickname in a line: bold yellow, so that it stands out from the text */
+const C_NICK = '#FFCC33';
+
+function pieces(color: string, plain: string): string[] {
   const parts: string[] = [];
   let last = 0;
   for (const m of plain.matchAll(/(^|\s)(\.[a-zа-я]+)((?:\s*\([^()]{1,40}\))*)/giu)) {
@@ -105,6 +107,27 @@ export function tag(color: string, text: string): string {
     last = start + m[2].length + m[3].length;
   }
   if (last < plain.length) parts.push(`<color=${color}>${plain.slice(last)}</color>`);
+  return parts;
+}
+
+/** `names`: the words (a nickname, a login) that are picked out in bold yellow wherever they stand in the line */
+export function tag(color: string, text: string, names: string[] = []): string {
+  const plain = plainLine(text);
+  const words = [...new Set(names.map((n) => plainLine(n)).filter((n) => n.length > 0))].sort((x, y) => y.length - x.length);
+  let parts: string[];
+  if (words.length === 0) parts = pieces(color, plain);
+  else {
+    const re = new RegExp(words.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), 'gu');
+    parts = [];
+    let last = 0;
+    for (const m of plain.matchAll(re)) {
+      const i = m.index ?? 0;
+      if (i > last) parts.push(...pieces(color, plain.slice(last, i)));
+      parts.push(`<color=${C_NICK}><b>${m[0]}</b></color>`);
+      last = i + m[0].length;
+    }
+    if (last < plain.length) parts.push(...pieces(color, plain.slice(last)));
+  }
   return parts.length ? parts.join('') : `<color=${color}></color>`;
 }
 
@@ -212,7 +235,7 @@ export function registerGameNewsPlayers({ app }: { app: Express }): void {
       // nobody can register while the panel is closed or not set up: no use to invite
       if (needsSetup() || !registrationOpen()) return res.json({ registered: false, replies: [] });
       const hint = nickInPanel(String(req.query.name ?? '')) ? s.nickTakenText : s.promptText;
-      return res.json({ registered: false, replies: [tag(C_INFO, fill(hint, { panel: panelUrl(req), name: plainLine(String(req.query.name ?? '')) }))] });
+      return res.json({ registered: false, replies: [tag(nickInPanel(String(req.query.name ?? '')) ? C_HINT : C_INFO, fill(hint, { panel: panelUrl(req), name: plainLine(String(req.query.name ?? '')) }), [String(req.query.name ?? '')])] });
     }
     const u = db.prepare('SELECT id, status, discord_id FROM users WHERE id = ?').get(who.user_id) as UserRow | undefined;
     const due = now - who.last_hint_at >= s.discordEveryHours * 3_600_000;
@@ -220,12 +243,12 @@ export function registerGameNewsPlayers({ app }: { app: Express }): void {
     // a linked player is known by the game account: no command is needed, the join is the login
     const account = u ? (db.prepare('SELECT username FROM users WHERE id = ?').get(u.id) as { username: string } | undefined) : undefined;
     const nickNow = plainLine(String(req.query.name ?? ''));
-    if (u && u.status === 'active' && account && s.autoLoginEnabled) replies.push(tag(C_GOOD, fill(s.autoLoginText, { login: account.username, name: nickNow, panel: panelUrl(req) })));
+    if (u && u.status === 'active' && account && s.autoLoginEnabled) replies.push(tag(C_GOOD, fill(s.autoLoginText, { login: account.username, name: nickNow, panel: panelUrl(req) }), [account.username, nickNow]));
     // when he was here last: the later of the last leave and the last join (a leave that was not reported leaves only the join)
     const before = Math.max(who.last_leave_at, who.last_join_at);
     if (u && u.status === 'active' && s.lastSeenEnabled && before > 0) {
       const st = visitStamp(before);
-      replies.push(tag(C_INFO, fill(s.lastSeenText, { name: nickNow, date: st.date, time: st.time, panel: panelUrl(req) })));
+      replies.push(tag(C_GOOD, fill(s.lastSeenText, { name: nickNow, date: st.date, time: st.time, panel: panelUrl(req) }), [nickNow]));
     }
     if (u && u.status === 'active') db.prepare('UPDATE game_identities SET last_join_at = ? WHERE platform_id = ?').run(now, id.data);
     if (u && u.status === 'active' && s.rankEnabled) {
@@ -259,7 +282,7 @@ export function registerGameNewsPlayers({ app }: { app: Express }): void {
     if (db.prepare('SELECT 1 FROM game_identities WHERE platform_id = ?').get(b.data.id)) return say(C_INFO, '* Вы уже зарегистрированы в панели.');
 
     // the nickname is already in the panel: suggest .login first; the same command repeated within ten minutes registers anyway
-    if (nickInPanel(b.data.name) && warnOnce(b.data.id, now)) return say(C_INFO, fill(s.nickTakenText, { panel: panelUrl(req), name: plainLine(b.data.name) }));
+    if (nickInPanel(b.data.name) && warnOnce(b.data.id, now)) return res.json({ ok: false, replies: [tag(C_HINT, fill(s.nickTakenText, { panel: panelUrl(req), name: plainLine(b.data.name) }), [b.data.name])] });
 
     const taken = (login: string) => !!db.prepare('SELECT 1 FROM users WHERE ulower(username) = ?').get(login.toLowerCase());
     const login = loginFromNick(b.data.name, b.data.id, taken);

@@ -209,6 +209,14 @@ describe('the hint a player reads about .register and .login', () => {
     assert.equal((line.match(/<color/g) ?? []).length, (line.match(/<\/color>/g) ?? []).length);
   });
 
+  it('picks the nickname out in bold yellow, in any place of the line', () => {
+    const line = register.tag('#6EC1FF', '* Ник Wh.Legion уже есть в панели. Введите .login (пароль). Wh.Legion, это вы?', ['Wh.Legion']);
+    assert.equal(line.startsWith('<color=#6EC1FF>* Ник </color><color=#FFCC33><b>Wh.Legion</b></color>'), true);
+    assert.equal((line.match(/<color=#FFCC33><b>Wh\.Legion<\/b><\/color>/g) ?? []).length, 2);
+    assert.equal(line.includes('<color=#FFFFFF><b>.login</b></color>'), true);
+    assert.equal((line.match(/<color/g) ?? []).length, (line.match(/<\/color>/g) ?? []).length);
+  });
+
   it('keeps a text without commands in one colour and strips tags a person typed', () => {
     assert.equal(register.tag('#5FD068', '* Готово! <size=99>x'), '<color=#5FD068>* Готово! size=99x</color>');
     assert.equal(register.tag('#5FD068', 'ну и точка.'), '<color=#5FD068>ну и точка.</color>');
