@@ -211,3 +211,13 @@ describe('the answer to an administrator', () => {
     assert.equal(quiet.replies.length, 1);
   });
 });
+
+describe('how long a banned player may stay', () => {
+  it('is 20 seconds by default and can be set from 0 to 120', () => {
+    assert.equal(kick.getKick(11).banStaySec, 20);
+    scope.writeScoped('gamenews_kick', JSON.stringify({ banStaySec: 45 }), 11);
+    assert.equal(kick.getKick(11).banStaySec, 45);
+    scope.writeScoped('gamenews_kick', JSON.stringify({ banStaySec: 9999 }), 11);
+    assert.equal(kick.getKick(11).banStaySec, 120);
+  });
+});

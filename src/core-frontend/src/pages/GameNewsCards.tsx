@@ -467,6 +467,10 @@ export function KickCard({ initial }: { initial: KickSettings }) {
             <AutoText value={f.banJoinText} maxLength={300} onChange={(e) => set('banJoinText', e.target.value)} />
           </Field>
           <VarChips vars={[{ name: 'reason', example: reasonText }, { name: 'until', example: t('gn.kk.sampleUntil') }]} onPick={(v) => set('banJoinText', `${f.banJoinText} ${v}`.trim())} />
+          <Field label={t('gn.kk.banStay')}>
+            <p className="mb-1 text-xs text-mute">{t('gn.kk.banStayHint')}</p>
+            <input className="input w-32" type="number" min={0} max={120} value={f.banStaySec} onChange={(e) => set('banStaySec', Number(e.target.value))} />
+          </Field>
         </WithPreview>
       )}
 

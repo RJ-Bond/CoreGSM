@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="8ddab47c2697"
+COREGSM_BUILD="e03541470023"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.2.7"
+COREGSM_VERSION="1.2.8"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -23919,7 +23919,7 @@ import { takeCommands } from './gameNewsModLog.js';
 
 export const QUEUE_TTL_MS = 5 * 60_000;
 /** the version of the game plugin this panel was built for: an older plugin is shown as outdated */
-export const PLUGIN_VERSION = '0.15.2';
+export const PLUGIN_VERSION = '0.15.3';
 /** the games the plugin exists for */
 export const SUPPORTED_GAMES = new Set(['vrising']);
 const PULL_MIN_GAP_MS = 800;
@@ -24877,6 +24877,8 @@ export interface KickSettings {
   banJoinText: string;
   /** what a player reads when he comes back too soon after a kick: {left} */
   blockJoinText: string;
+  /** how long (seconds) a banned player may stay on the server to read why; then he is removed (0 = at once) */
+  banStaySec: number;
   /** the player is told in private before he is removed */
   notifyPlayer: boolean;
   /** the private words to the player: {reason} {admin} */
@@ -24911,6 +24913,7 @@ export const DEFAULT_KICK: KickSettings = {
   warnTemplate: '* Игрок {name} был предупреждён. Причина: {reason}',
   unbanTemplate: '* Игрок {name} был разбанен.',
   banJoinText: '* Вы забанены {until}. Причина: {reason}',
+  banStaySec: 20,
   blockJoinText: '* Вы недавно были кикнуты. Подождите ещё {left}, прежде чем зайти.',
   notifyPlayer: true,
   notifyText: '* Вы были кикнуты. Причина: {reason}',
@@ -24957,6 +24960,7 @@ export function getKick(serverId?: number): KickSettings {
       unbanTemplate: text(v.unbanTemplate, d.unbanTemplate),
       banJoinText: text(v.banJoinText, d.banJoinText),
       blockJoinText: text(v.blockJoinText, d.blockJoinText),
+      banStaySec: num(v.banStaySec, d.banStaySec, 0, 120),
       notifyPlayer: bool(v.notifyPlayer, d.notifyPlayer),
       // the first wording moves to the new one; a text the administrator changed stays
       notifyText: v.notifyText === '* Вас убирают с сервера. Причина: {reason}' ? d.notifyText : text(v.notifyText, d.notifyText),
@@ -25281,7 +25285,7 @@ export function registerGameNewsKick({ app, admin }: { app: Express; admin: Requ
       enabled: z.boolean(), banEnabled: z.boolean().optional(), warnEnabled: z.boolean().optional(), template: line, textColor: color, nameColor: color, reasonColor: color, adminColor: color,
       defaultReason: z.string().max(100), requireReason: z.boolean(), protectAdmins: z.boolean(), announce: z.boolean(),
       cooldownSec: z.number().int().min(0).max(3600), logChannelId: z.string().regex(/^(\d{15,25})?$/), maxReason: z.number().int().min(10).max(200),
-      banTemplate: line, warnTemplate: line, unbanTemplate: line, banJoinText: line, blockJoinText: line, notifyPlayer: z.boolean(), notifyText: line,
+      banTemplate: line, warnTemplate: line, unbanTemplate: line, banJoinText: line, blockJoinText: line, banStaySec: z.number().int().min(0).max(120).optional(), notifyPlayer: z.boolean(), notifyText: line,
       warnLimit: z.number().int().min(0).max(20), warnDays: z.number().int().min(1).max(365), rejoinBlockMin: z.number().int().min(0).max(1440),
       reasons: z.array(z.object({ key: z.string().max(12), text: z.string().max(100) })).max(20),
     }).safeParse(req.body);
@@ -25294,6 +25298,7 @@ export function registerGameNewsKick({ app, admin }: { app: Express; admin: Requ
       .filter((r) => r.key && r.text && !keys.has(r.key.toLowerCase()) && keys.add(r.key.toLowerCase()));
     writeScoped('gamenews_kick', JSON.stringify({
       ...b.data,
+      banStaySec: b.data.banStaySec ?? d.banStaySec,
       banEnabled: b.data.banEnabled ?? d.banEnabled, warnEnabled: b.data.warnEnabled ?? d.warnEnabled,
       template: clean(b.data.template, d.template), banTemplate: clean(b.data.banTemplate, d.banTemplate), warnTemplate: clean(b.data.warnTemplate, d.warnTemplate), unbanTemplate: clean(b.data.unbanTemplate, d.unbanTemplate),
       banJoinText: clean(b.data.banJoinText, d.banJoinText), blockJoinText: clean(b.data.blockJoinText, d.blockJoinText), notifyText: clean(b.data.notifyText, d.notifyText),
@@ -25654,7 +25659,7 @@ __COREGSM_EOF__
 import bcrypt from 'bcryptjs';
 import type { Express, Request, RequestHandler } from 'express';
 import { z } from 'zod';
-import { joinBlock } from './gameNewsKick.js';
+import { getKick, joinBlock } from './gameNewsKick.js';
 import { visitStamp } from './gameNewsVars.js';
 export { visitStamp };
 import { isRealDomain, needsSetup, publicBase, registrationMode, rulesText } from '../admin/site.js';
@@ -25852,7 +25857,7 @@ export function registerGameNewsPlayers({ app }: { app: Express }): void {
     // a banned player (or one who is back too soon after a kick) is told why and removed, whatever the registration is set to
     if (id.success) {
       const block = joinBlock(serverId ?? 0, id.data);
-      if (block) return res.json({ registered: false, banned: true, replies: block.lines });
+      if (block) return res.json({ registered: false, banned: true, kickAfter: getKick(serverId ?? 0).banStaySec, replies: block.lines });
     }
     if (!s.enabled || !id.success) return res.json({ registered: false, replies: [] });
     // the reminder that the plugin asks for every few minutes while the player is in the game: only the hints, nothing of the greeting
@@ -142111,6 +142116,7 @@ export interface KickSettings {
   unbanTemplate: string;
   banJoinText: string;
   blockJoinText: string;
+  banStaySec: number;
   notifyPlayer: boolean;
   notifyText: string;
   warnLimit: number;
@@ -142127,7 +142133,7 @@ export const DEFAULT_KICK: KickSettings = {
   warnTemplate: '* Игрок {name} был предупреждён. Причина: {reason}',
   unbanTemplate: '* Игрок {name} был разбанен.',
   banJoinText: '* Вы забанены {until}. Причина: {reason}',
-  blockJoinText: '* Вы недавно были кикнуты. Подождите ещё {left}, прежде чем зайти.',
+  blockJoinText: '* Вы недавно были кикнуты. Подождите ещё {left}, прежде чем зайти.', banStaySec: 20,
   notifyPlayer: true, notifyText: '* Вы были кикнуты. Причина: {reason}',
   warnLimit: 3, warnDays: 30, rejoinBlockMin: 0,
   reasons: [{ key: '1', text: 'Спам' }, { key: '2', text: 'Оскорбления' }, { key: '3', text: 'Читы или использование багов' }, { key: '4', text: 'Мешает другим игрокам' }],
@@ -145801,6 +145807,8 @@ const en: Record<keyof typeof ru, string> = {
   'gn.kk.sampleUntil': 'until 10.12.2026 at 10:00',
   'gn.kk.banNote': '.ban (nickname) (time) (reason): the time is 30m, 2h, 7d, 2w or «перм». A banned player is removed at once and kept out until the ban ends. Lift it with .unban (nickname) or the «Unban» button on the Moderation tab.',
   'gn.kk.banTemplate': 'The line for everybody after a ban ({time} is the length)',
+  'gn.kk.banStay': 'How many seconds a banned player may stay on the server (0 = remove at once)',
+  'gn.kk.banStayHint': 'He joins, reads why and for how long (the line repeats every few seconds), then he is removed',
   'gn.kk.banJoin': 'What a banned player reads when he tries to come in ({until} is until when)',
   'gn.kk.warnNote': '.warn (nickname) (reason): a warning to a player. When there are as many as you set, the player is kicked and the count starts again.',
   'gn.kk.warnTemplate': 'The line for everybody after a warning ({n} which one, {limit} the limit)',
@@ -150717,6 +150725,8 @@ const ru = {
   'gn.kk.sampleUntil': 'до 10.12.2026 в 10:00',
   'gn.kk.banNote': '.ban (ник) (срок) (причина): срок 30m, 2h, 7d, 2w или «перм». Забаненного убирают сразу и не пускают, пока бан не кончится. Снять бан: .unban (ник) или кнопка «Разбанить» на вкладке «Модерация».',
   'gn.kk.banTemplate': 'Строка для всех после бана ({time} — срок)',
+  'gn.kk.banStay': 'Сколько секунд забаненный может пробыть на сервере (0 — убрать сразу)',
+  'gn.kk.banStayHint': 'Он заходит, читает причину и срок бана (строка повторяется каждые несколько секунд), потом его убирают',
   'gn.kk.banJoin': 'Что читает забаненный, когда пытается зайти ({until} — до какого времени)',
   'gn.kk.warnNote': '.warn (ник) (причина): предупреждение игроку. Когда их набирается столько, сколько вы задали, игрока кикают, а счёт начинается заново.',
   'gn.kk.warnTemplate': 'Строка для всех после предупреждения ({n} — какое по счёту, {limit} — лимит)',
@@ -159863,6 +159873,10 @@ export function KickCard({ initial }: { initial: KickSettings }) {
             <AutoText value={f.banJoinText} maxLength={300} onChange={(e) => set('banJoinText', e.target.value)} />
           </Field>
           <VarChips vars={[{ name: 'reason', example: reasonText }, { name: 'until', example: t('gn.kk.sampleUntil') }]} onPick={(v) => set('banJoinText', `${f.banJoinText} ${v}`.trim())} />
+          <Field label={t('gn.kk.banStay')}>
+            <p className="mb-1 text-xs text-mute">{t('gn.kk.banStayHint')}</p>
+            <input className="input w-32" type="number" min={0} max={120} value={f.banStaySec} onChange={(e) => set('banStaySec', Number(e.target.value))} />
+          </Field>
         </WithPreview>
       )}
 

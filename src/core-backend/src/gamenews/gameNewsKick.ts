@@ -58,6 +58,8 @@ export interface KickSettings {
   banJoinText: string;
   /** what a player reads when he comes back too soon after a kick: {left} */
   blockJoinText: string;
+  /** how long (seconds) a banned player may stay on the server to read why; then he is removed (0 = at once) */
+  banStaySec: number;
   /** the player is told in private before he is removed */
   notifyPlayer: boolean;
   /** the private words to the player: {reason} {admin} */
@@ -92,6 +94,7 @@ export const DEFAULT_KICK: KickSettings = {
   warnTemplate: '* Игрок {name} был предупреждён. Причина: {reason}',
   unbanTemplate: '* Игрок {name} был разбанен.',
   banJoinText: '* Вы забанены {until}. Причина: {reason}',
+  banStaySec: 20,
   blockJoinText: '* Вы недавно были кикнуты. Подождите ещё {left}, прежде чем зайти.',
   notifyPlayer: true,
   notifyText: '* Вы были кикнуты. Причина: {reason}',
@@ -138,6 +141,7 @@ export function getKick(serverId?: number): KickSettings {
       unbanTemplate: text(v.unbanTemplate, d.unbanTemplate),
       banJoinText: text(v.banJoinText, d.banJoinText),
       blockJoinText: text(v.blockJoinText, d.blockJoinText),
+      banStaySec: num(v.banStaySec, d.banStaySec, 0, 120),
       notifyPlayer: bool(v.notifyPlayer, d.notifyPlayer),
       // the first wording moves to the new one; a text the administrator changed stays
       notifyText: v.notifyText === '* Вас убирают с сервера. Причина: {reason}' ? d.notifyText : text(v.notifyText, d.notifyText),
@@ -462,7 +466,7 @@ export function registerGameNewsKick({ app, admin }: { app: Express; admin: Requ
       enabled: z.boolean(), banEnabled: z.boolean().optional(), warnEnabled: z.boolean().optional(), template: line, textColor: color, nameColor: color, reasonColor: color, adminColor: color,
       defaultReason: z.string().max(100), requireReason: z.boolean(), protectAdmins: z.boolean(), announce: z.boolean(),
       cooldownSec: z.number().int().min(0).max(3600), logChannelId: z.string().regex(/^(\d{15,25})?$/), maxReason: z.number().int().min(10).max(200),
-      banTemplate: line, warnTemplate: line, unbanTemplate: line, banJoinText: line, blockJoinText: line, notifyPlayer: z.boolean(), notifyText: line,
+      banTemplate: line, warnTemplate: line, unbanTemplate: line, banJoinText: line, blockJoinText: line, banStaySec: z.number().int().min(0).max(120).optional(), notifyPlayer: z.boolean(), notifyText: line,
       warnLimit: z.number().int().min(0).max(20), warnDays: z.number().int().min(1).max(365), rejoinBlockMin: z.number().int().min(0).max(1440),
       reasons: z.array(z.object({ key: z.string().max(12), text: z.string().max(100) })).max(20),
     }).safeParse(req.body);
@@ -475,6 +479,7 @@ export function registerGameNewsKick({ app, admin }: { app: Express; admin: Requ
       .filter((r) => r.key && r.text && !keys.has(r.key.toLowerCase()) && keys.add(r.key.toLowerCase()));
     writeScoped('gamenews_kick', JSON.stringify({
       ...b.data,
+      banStaySec: b.data.banStaySec ?? d.banStaySec,
       banEnabled: b.data.banEnabled ?? d.banEnabled, warnEnabled: b.data.warnEnabled ?? d.warnEnabled,
       template: clean(b.data.template, d.template), banTemplate: clean(b.data.banTemplate, d.banTemplate), warnTemplate: clean(b.data.warnTemplate, d.warnTemplate), unbanTemplate: clean(b.data.unbanTemplate, d.unbanTemplate),
       banJoinText: clean(b.data.banJoinText, d.banJoinText), blockJoinText: clean(b.data.blockJoinText, d.blockJoinText), notifyText: clean(b.data.notifyText, d.notifyText),
