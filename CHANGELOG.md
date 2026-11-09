@@ -14,7 +14,7 @@ interface language; the GitHub release text is built from the section of the ver
 - Пометки в конце русской части: `[migration]` — меняется база данных, `[env]` — нужны новые настройки сервера, `⚠` в начале — несовместимое изменение.
 - Новые пункты идут в раздел «Не выпущено». Релиз выпускается только по команде владельца: тогда раздел переименовывается в `## <версия> · <дата>` (версия из `version.txt`).
 
-## Не выпущено | Unreleased
+## 1.2.12 · 09.11.2026
 
 ### ✨ Новое | New
 - 🚪 Забаненный игрок при входе получает одну строку с причиной и сроком (дата и время зелёным) и сразу удаляется с сервера; перед удалением плагин ещё раз спрашивает панель, и если бан за эти секунды сняли, игрок остаётся; нужен плагин 0.16.0 | 🚪 A banned player who joins gets one line with the reason and the term (the date and time are green) and is removed at once; just before the removal the plugin asks the panel again, and if the ban was lifted in these seconds the player stays; needs plugin 0.16.0
