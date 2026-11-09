@@ -84,18 +84,8 @@ export function applyAppearance(a: Appearance, root: HTMLElement = document.docu
   set('data-contrast', a.highContrast ? 'high' : null);
   set('data-lite', a.liteData || networkWantsLite() ? '1' : null);
   set('data-oled', a.oled ? '1' : null);
-  // the Status page is left as it was designed: no new look there
-  const showEmber = a.ember && emberAllowed;
-  set('data-ember', showEmber ? '1' : null);
+  set('data-ember', a.ember ? '1' : null);
   if (a.ember) void import('@fontsource-variable/manrope/wght.css').catch(() => undefined);
-}
-
-/** pages that keep the classic look whatever the visitor chose (set by the app on every route change) */
-let emberAllowed = true;
-export function setEmberAllowed(allowed: boolean) {
-  if (allowed === emberAllowed) return;
-  emberAllowed = allowed;
-  applyAppearance(current);
 }
 
 let current: Appearance = typeof window === 'undefined' ? DEFAULT_APPEARANCE : read();

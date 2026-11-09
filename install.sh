@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="e03541470023"
+COREGSM_BUILD="b3421847bc3c"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.2.8"
+COREGSM_VERSION="1.2.9"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -120398,7 +120398,7 @@ add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/App.tsx" << '__COREGSM_EOF__'
-import { applyDefaultLook, setEmberAllowed } from './appearance';
+import { applyDefaultLook } from './appearance';
 import { onPageTitleDetail, tabTitle } from './pageTitle';
 import { NewsUnreadDot } from './components/news/newsSeen';
 import { UpdateBadge, shownUpdate, useUpdatePolling, useUpdateState } from './components/UpdateBadge';
@@ -120722,7 +120722,7 @@ export default function App() {
   const [titleDetail, setTitleDetail] = useState<string | null>(null);
   useEffect(() => onPageTitleDetail(setTitleDetail), []);
   // the page is on the root element: a look may lay out the shell differently for the admin area
-  useEffect(() => { document.documentElement.dataset.page = page; setEmberAllowed(page !== 'status'); }, [page]);
+  useEffect(() => { document.documentElement.dataset.page = page; }, [page]);
   useEffect(() => {
     const title = boot.ready && sectionTitle ? tabTitle(sectionTitle, page === 'servers' ? titleDetail : null, access.brand.name) : access.brand.name;
     document.title = livePlayers > 0 && shellOk.current ? `(${livePlayers}) ${title}` : title;
@@ -122053,18 +122053,8 @@ export function applyAppearance(a: Appearance, root: HTMLElement = document.docu
   set('data-contrast', a.highContrast ? 'high' : null);
   set('data-lite', a.liteData || networkWantsLite() ? '1' : null);
   set('data-oled', a.oled ? '1' : null);
-  // the Status page is left as it was designed: no new look there
-  const showEmber = a.ember && emberAllowed;
-  set('data-ember', showEmber ? '1' : null);
+  set('data-ember', a.ember ? '1' : null);
   if (a.ember) void import('@fontsource-variable/manrope/wght.css').catch(() => undefined);
-}
-
-/** pages that keep the classic look whatever the visitor chose (set by the app on every route change) */
-let emberAllowed = true;
-export function setEmberAllowed(allowed: boolean) {
-  if (allowed === emberAllowed) return;
-  emberAllowed = allowed;
-  applyAppearance(current);
 }
 
 let current: Appearance = typeof window === 'undefined' ? DEFAULT_APPEARANCE : read();
@@ -172069,6 +172059,27 @@ __COREGSM_EOF__
   :root[data-ember='1'][data-page='admin'] .app-wrap { padding-left: calc(var(--emb-rail) + var(--emb-adm) + 32px); }
   :root[data-ember='1'][data-page='admin']:has(nav.adm-rail) .app-wrap { padding-left: calc(var(--emb-rail) + 72px + 32px); }
 }
+
+/* ---------- the status page ---------- */
+/* the state of all the servers: a flat card with the colour of the state as a soft tint, a square sign, the figures as four cards */
+:root[data-ember='1'] .st-banner {
+  background: linear-gradient(rgb(var(--tone) / .1), rgb(var(--tone) / .1)), rgb(var(--card));
+  box-shadow: var(--shadow-2), inset 0 0 0 1px rgb(var(--tone) / .3);
+  border-radius: var(--r-xl);
+}
+:root[data-ember='1'] .st-banner-ico { border-radius: 18px; }
+:root[data-ember='1'] .st-banner-ico::after { border-radius: 22px; }
+:root[data-ember='1'] .st-banner-stats > div { border-radius: var(--r-lg); background: rgb(var(--soft)); border: 0; box-shadow: inset 0 0 0 1px rgb(var(--line)); padding: 10px 14px; }
+:root[data-ember='1'] .st-banner-stats > div.is-alert { background: rgb(var(--badbg)); box-shadow: inset 0 0 0 1px rgb(var(--bad) / .4); }
+:root[data-ember='1'] .st-banner-stats dd { font-size: 24px; font-weight: 800; }
+
+/* the servers: one card each, the day cells are solid columns, the days without data are a quiet block, not a dashed outline */
+:root[data-ember='1'] .st-server::before { width: 4px; border-radius: 0 4px 4px 0; top: 14px; bottom: 14px; }
+:root[data-ember='1'] .st-day { border: 0; border-radius: 5px; }
+:root[data-ember='1'] .st-day:not(.is-ok):not(.is-blip):not(.is-warn):not(.is-bad):not(.is-planned) { background: rgb(var(--ink) / .1); background-image: none; }
+:root[data-ember='1'] .st-day.is-today { box-shadow: 0 0 0 2px rgb(var(--card)), 0 0 0 3.5px rgb(var(--brand-hover)); }
+:root[data-ember='1'] .st-up-v { font-weight: 800; }
+:root[data-ember='1'] .st-meter > i { background: linear-gradient(90deg, rgb(var(--brand-2)), rgb(var(--brand))); }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/mobile.css" << '__COREGSM_EOF__'
