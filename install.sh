@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="6c44e7d12608"
+COREGSM_BUILD="775889e1be49"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.2.15"
+COREGSM_VERSION="1.2.16"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -172003,12 +172003,12 @@ __COREGSM_EOF__
 
 /* ---------- light ---------- */
 :root[data-ember='1'] {
-  --page: 241 239 235;
+  --page: 244 240 233;
   --card: 255 255 255;
   --raised: 255 255 255;
   --overlay: 255 255 255;
-  --soft: 243 241 237;
-  --line: 226 223 216;
+  --soft: 246 242 236;
+  --line: 229 223 214;
   --field: 150 146 140;
   --ink: 23 22 26;
   --mute: 82 79 88;
@@ -172018,7 +172018,7 @@ __COREGSM_EOF__
   --brand-hover: 176 52 6 !important;
   --brand-2: 170 48 4 !important;
   --link: 168 48 4 !important;
-  --tile-border: rgb(226 223 216);
+  --tile-border: rgb(229 223 214);
   --wash-a: rgb(var(--brand) / .05);
   --wash-b: rgb(255 154 92 / .06);
   --au1: .05;
@@ -172034,22 +172034,22 @@ __COREGSM_EOF__
 
 /* ---------- dark ---------- */
 :root[data-ember='1'][data-theme='dark'] {
-  --page: 12 12 14;
-  --card: 23 23 27;
-  --raised: 31 31 37;
-  --overlay: 38 38 45;
-  --soft: 31 31 37;
-  --line: 40 40 46;
-  --field: 112 112 122;
+  --page: 14 12 11;
+  --card: 25 22 21;
+  --raised: 33 30 28;
+  --overlay: 41 37 35;
+  --soft: 33 30 28;
+  --line: 45 41 38;
+  --field: 120 112 106;
   --ink: 244 243 241;
-  --mute: 172 171 180;
+  --mute: 178 172 167;
   --bad: 248 113 113;
   --warn: 251 191 36;
   --brand: 214 66 10 !important;
   --brand-hover: 236 84 26 !important;
   --brand-2: 176 52 6 !important;
   --link: 255 138 76 !important;
-  --tile-border: rgb(40 40 46);
+  --tile-border: rgb(45 41 38);
   --au1: .07;
   --glass-a: 1;
   --wash-a: rgb(var(--brand) / .06);
@@ -172058,22 +172058,22 @@ __COREGSM_EOF__
 }
 @media (prefers-color-scheme: dark) {
   :root[data-ember='1']:not([data-theme='light']) {
-    --page: 12 12 14;
-    --card: 23 23 27;
-    --raised: 31 31 37;
-    --overlay: 38 38 45;
-    --soft: 31 31 37;
-    --line: 40 40 46;
-    --field: 112 112 122;
+    --page: 14 12 11;
+    --card: 25 22 21;
+    --raised: 33 30 28;
+    --overlay: 41 37 35;
+    --soft: 33 30 28;
+    --line: 45 41 38;
+    --field: 120 112 106;
     --ink: 244 243 241;
-    --mute: 172 171 180;
+    --mute: 178 172 167;
     --bad: 248 113 113;
     --warn: 251 191 36;
     --brand: 214 66 10 !important;
     --brand-hover: 236 84 26 !important;
     --brand-2: 176 52 6 !important;
     --link: 255 138 76 !important;
-    --tile-border: rgb(40 40 46);
+    --tile-border: rgb(45 41 38);
     --au1: .07;
     --glass-a: 1;
     --wash-a: rgb(var(--brand) / .06);
@@ -172433,6 +172433,77 @@ __COREGSM_EOF__
 
 /* the figure of a card is a step smaller so the ping stays whole beside the live dot */
 :root[data-ember='1'] .srv-tile .srv-count [class*='text-[38px]'] { font-size: 34px; }
+
+/* ---------- the character of the look ---------- */
+/* numbers keep their width, so a column of figures does not jump when it refreshes */
+:root[data-ember='1'] body { font-variant-numeric: tabular-nums; }
+:root[data-ember='1'] :is(.pulse-nums dd, .srv-count, .h3-count, .srv-tr-count, .st-banner-stats dd) { letter-spacing: -.025em; }
+:root[data-ember='1'] .roll-col { transition-duration: .55s; transition-timing-function: cubic-bezier(.2, .9, .25, 1); }
+
+/* a glow of embers instead of a shadow: the open tab, the hot figure, the focus (visible on the dark theme, a quiet halo on the light one) */
+:root[data-ember='1'] :where(.seg-item[aria-pressed='true'], .seg-item[aria-current='page'], .seg-item.on) { box-shadow: inset 0 0 0 1px rgb(var(--line)), 0 0 20px -8px rgb(var(--brand) / .7); }
+:root[data-ember='1'] .pulse-nums > div:first-child, :root[data-ember='1'] .srv-metrics > .srv-metric:first-child { box-shadow: 0 14px 30px -16px rgb(var(--brand) / .8); }
+:root[data-ember='1'] :focus-visible { outline: 2px solid rgb(var(--brand-hover)); outline-offset: 2px; }
+
+/* the top line of the main cards: a thin ember-to-amber stroke */
+:root[data-ember='1'] .hero3::before,
+:root[data-ember='1'] .pulse::before { content: ''; position: absolute; z-index: 2; inset: 0 32px auto 32px; height: 2px; border-radius: 0 0 3px 3px; pointer-events: none; background: linear-gradient(90deg, rgb(var(--brand-2)), rgb(255 170 80) 55%, transparent); }
+:root[data-ember='1'] .pulse { position: relative; }
+
+/* a page comes in quickly and quietly (the old entrance scaled it, this one only lifts it) */
+@keyframes emb-page { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: no-preference) {
+  :root[data-ember='1'] main.pop { animation: emb-page .18s ease-out both; }
+}
+
+/* the waiting blocks are warm, with a faint ember passing through */
+@keyframes emb-shimmer { from { background-position: 120% 0; } to { background-position: -120% 0; } }
+:root[data-ember='1'] .skeleton { background: linear-gradient(100deg, rgb(var(--soft)) 35%, rgb(var(--brand) / .12) 50%, rgb(var(--soft)) 65%) 0 0 / 220% 100%; border-radius: var(--emb-r-card); }
+@media (prefers-reduced-motion: no-preference) {
+  :root[data-ember='1'] .skeleton { animation: emb-shimmer 1.6s linear infinite; }
+}
+
+/* ---------- the parts ---------- */
+/* switches and ticks: the orange is «on»; the rail is clearer when it is off */
+:root[data-ember='1'] .switch:not(:checked) { background-color: rgb(var(--ink) / .22); }
+:root[data-ember='1'] input[type='checkbox']:not(.switch) { border-radius: 7px; }
+
+/* the toasts and the windows of confirmation */
+:root[data-ember='1'] .toast-in, :root[data-ember='1'] .toast-out { border-radius: 16px; box-shadow: var(--shadow-3); }
+@media (min-width: 640px) {
+  :root[data-ember='1'] :is(form[role='dialog'], form[role='alertdialog']).panel { border-radius: var(--emb-r-big); }
+}
+:root[data-ember='1'] :is(form[role='dialog'], form[role='alertdialog']).panel > div:first-child > span[aria-hidden] { border-radius: 14px; }
+
+/* the menus that open from a button: one rounding, one hover */
+:root[data-ember='1'] :is(.pm-menu, .upd-more-menu, .split-menu) { border-radius: 16px; padding: 6px; box-shadow: var(--shadow-3), 0 0 0 1px rgb(var(--line)); }
+:root[data-ember='1'] :is(.pm-menu, .upd-more-menu, .split-menu) :is(button, a, [role='menuitem']) { border-radius: 10px; }
+:root[data-ember='1'] :is(.pm-menu, .upd-more-menu, .split-menu) :is(button, a, [role='menuitem']):hover { background: rgb(var(--soft)); }
+
+/* the tables of the admin area: quiet headings, a tinted row under the pointer */
+:root[data-ember='1'] .adm-table th { text-transform: none; letter-spacing: 0; font-size: var(--fs-sm); font-weight: 700; color: rgb(var(--mute)); }
+:root[data-ember='1'] .adm-table tbody tr:hover { background: rgb(var(--brand) / .06); }
+
+/* the fields: a clear ember line when one is open, the caption of a field a step stronger */
+:root[data-ember='1'] .input:focus, :root[data-ember='1'] .input:focus-visible { outline: none; box-shadow: inset 0 0 0 2px rgb(var(--brand)), 0 0 0 4px rgb(var(--brand) / .2); }
+:root[data-ember='1'] .label { font-size: var(--fs-sm); font-weight: 700; color: rgb(var(--ink)); }
+
+/* ---------- the pages ---------- */
+/* the status page: the uptime is the big figure of the state card */
+:root[data-ember='1'] .st-banner-stats > div:nth-child(3) { background: linear-gradient(155deg, rgb(var(--brand) / .16), rgb(var(--brand) / .06)); box-shadow: inset 0 0 0 1px rgb(var(--brand) / .35); }
+:root[data-ember='1'] .st-banner-stats > div:nth-child(3) dd { font-size: 34px; letter-spacing: -.03em; }
+
+/* reading a news item: a narrower column, a bigger title */
+:root[data-ember='1'] .nw-article-wrap { max-width: 46rem; }
+:root[data-ember='1'] .nw-article-in { padding-inline: clamp(1.25rem, 4vw, 2.5rem); }
+:root[data-ember='1'] .nw-article .nw-cover-title { font-size: clamp(1.9rem, 4.6vw, 2.8rem); letter-spacing: -.03em; }
+:root[data-ember='1'] .nw-article { border-radius: var(--emb-r-big); }
+
+/* the head of a profile: a taller banner that fades into the card, the level is a badge of an ember */
+@media (min-width: 640px) { :root[data-ember='1'] .pf-banner { height: 13rem; } }
+:root[data-ember='1'] .pf-banner::after { height: 70%; }
+:root[data-ember='1'] .pf-level-badge { background: linear-gradient(135deg, rgb(255 126 60), rgb(var(--brand-2))); box-shadow: 0 4px 12px -2px rgb(var(--brand) / .7); border-radius: 8px; padding: 2px 10px; }
+:root[data-ember='1'] .pf-hero h1, :root[data-ember='1'] .pf-hero h2 { letter-spacing: -.02em; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/mobile.css" << '__COREGSM_EOF__'
