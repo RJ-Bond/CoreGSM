@@ -194,6 +194,7 @@ export function ProfileMenu({ me, isStaff, logout, active }: { me: Me; isStaff: 
           {isStaff && <a role="menuitem" className={`${link} pm-ico`} href="/admin"><MenuAdmin />{t('nav.admin')}</a>}
           <div className="pm-sep" role="separator" />
           {/* one tap, and the menu stays open so both can be set at once */}
+          <button type="button" role="menuitemcheckbox" aria-checked={look.ember} className={`${link} pm-toggle`} onClick={(e) => { e.stopPropagation(); setLook({ ember: !look.ember }); }}>{t('pf.a11y.ember')}</button>
           <button type="button" role="menuitemcheckbox" aria-checked={look.largeText} className={`${link} pm-toggle`} onClick={(e) => { e.stopPropagation(); setLook({ largeText: !look.largeText }); }}>{t('pf.a11y.text')}</button>
           <button type="button" role="menuitemcheckbox" aria-checked={look.liteData} className={`${link} pm-toggle`} onClick={(e) => { e.stopPropagation(); setLook({ liteData: !look.liteData }); }}>{t('pf.a11y.lite')}</button>
           <div className="pm-sep" role="separator" />

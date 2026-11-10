@@ -6,7 +6,7 @@
 import type { Express, NextFunction, Request, RequestHandler, Response } from 'express';
 import skia from 'skia-canvas';
 import { db } from '../db.js';
-import { brand } from '../admin/site.js';
+import { brand, emberLook } from '../admin/site.js';
 import { computeStats, playerOf } from '../profile/profileCore.js';
 import { rankForHours } from '../profile/ranks.js';
 import { vrHoursOf } from '../profile/profileVr.js';
@@ -72,8 +72,8 @@ export async function renderProfileCard(d: ProfileCardData): Promise<Buffer> {
   const canvas = new Canvas(W, H);
   const ctx: any = canvas.getContext('2d');
   const bg = ctx.createLinearGradient(0, 0, W, H);
-  bg.addColorStop(0, '#17142c');
-  bg.addColorStop(1, '#0b0a16');
+  bg.addColorStop(0, emberLook() ? '#1a1715' : '#17142c');
+  bg.addColorStop(1, emberLook() ? '#0e0c0b' : '#0b0a16');
   ctx.fillStyle = bg;
   ctx.fillRect(0, 0, W, H);
   // a soft glow of the brand colour in the corner
@@ -186,7 +186,7 @@ export function registerProfileCard(app: Express, limiter: (max: number) => Requ
       const d = profileCardData(String(req.params.username ?? ''));
       if (!d) return void res.status(404).end();
       const b = brand();
-      const key = `${b.name}|${b.color}|${JSON.stringify(d)}`;
+      const key = `${b.name}|${b.color}|${emberLook() ? 'e' : 'c'}|${JSON.stringify(d)}`;
       const hit = cache.get(key);
       let buf: Buffer;
       if (hit && Date.now() - hit.at < CACHE_MS) buf = hit.buf;

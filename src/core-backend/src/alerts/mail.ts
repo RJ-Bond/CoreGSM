@@ -91,7 +91,7 @@ const escHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').re
 /** the accent colour of the community (the setting of the brand), or the default one; only a plain #rrggbb is let into the markup */
 const accentColor = (): string => {
   const c = (getSetting('brand_color') ?? '').trim();
-  return /^#[0-9a-f]{6}$/i.test(c) ? c : '#4f46e5';
+  return /^#[0-9a-f]{6}$/i.test(c) ? c : getSetting('default_look') === 'ember' ? '#d6420a' : '#4f46e5';
 };
 
 /** where the logo of the panel is: its public address, or null when the panel has none (a letter cannot show a picture then) */

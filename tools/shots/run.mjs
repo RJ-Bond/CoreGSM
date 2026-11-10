@@ -172,6 +172,7 @@ async function shoot(cdp, base, row, outDir) {
   if (c.clipped.length) warnings.push(`text cut off without an ellipsis: ${c.clipped.slice(0, 3).join(' | ')}`);
   if (c.tiny.length) warnings.push(`small tap targets: ${c.tiny.slice(0, 3).join(' | ')}`);
   if (c.noName.length) warnings.push(`controls without a name: ${c.noName.slice(0, 3).join(' | ')}`);
+  if (c.violet && c.violet.length) warnings.push(`the classic violet is still in the Ember look: ${c.violet.slice(0, 4).join(' | ')}`);
   if (c.busy) warnings.push(`${c.busy} loading placeholders still on screen`);
   if (c.height > MAX_H) warnings.push(`the picture is cut at ${MAX_H}px of ${c.height}px`);
 

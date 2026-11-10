@@ -18,7 +18,7 @@ import { incidentsSince } from './incidents.js';
 import { avatarColor, initialOf } from '../images/cardLogic.js';
 import { busiestDay, changePct, dailyPeaks, sparkPoints, splitServers, stripCommonPrefix, trendText, uptimeBar, weekEvents, type WeekEvent, wrapName } from './digestLogic.js';
 import { localParts } from '../admin/localTime.js';
-import { brand, publicBase } from '../admin/site.js';
+import { brand, emberLook, publicBase } from '../admin/site.js';
 import { param } from '../http.js';
 import { log } from '../logger.js';
 
@@ -146,6 +146,12 @@ const PALETTES: Record<DigestTheme, { bgA: string; bgB: string; ink: string; ink
   light: { bgA: '#f7f5ff', bgB: '#e6e3f6', ink: '#17142b', ink2: 'rgba(23,20,43,.78)', ink3: 'rgba(23,20,43,.62)', ink4: 'rgba(23,20,43,.5)', card: 'rgba(23,20,43,.06)', ok: '#0f7a52', bad: '#c0392b', warn: '#946200', glow: '33' },
 };
 
+// the Ember look of the community: graphite and warm paper instead of the violet night
+const EMBER_PALETTES: typeof PALETTES = {
+  dark: { ...PALETTES.dark, bgA: '#1a1715', bgB: '#0e0c0b' },
+  light: { ...PALETTES.light, bgA: '#fbf7f1', bgB: '#efe8dd', ink: '#17161a', ink2: 'rgba(23,22,26,.78)', ink3: 'rgba(23,22,26,.62)', ink4: 'rgba(23,22,26,.5)', card: 'rgba(40,30,20,.06)' },
+};
+
 const SANS = '"DejaVu Sans", "Liberation Sans", sans-serif';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -157,7 +163,7 @@ function fitText(ctx: any, text: string, max: number): string {
 }
 
 export async function renderDigest(d: Digest, theme: DigestTheme = digestSettings().theme): Promise<Buffer> {
-  const P = PALETTES[theme];
+  const P = emberLook() ? EMBER_PALETTES[theme] : PALETTES[theme];
   const W = 1200;
   const H = 675;
   const canvas = new Canvas(W, H);

@@ -56,6 +56,29 @@
     const p = pill.getBoundingClientRect(), c = cur.getBoundingClientRect();
     if (Math.abs(p.left - c.left) > 3 || Math.abs(p.top - c.top) > 3 || Math.abs(p.width - c.width) > 3) out.pillOff = `pill at ${Math.round(p.left)},${Math.round(p.top)} ${Math.round(p.width)}px, current tab at ${Math.round(c.left)},${Math.round(c.top)} ${Math.round(c.width)}px`;
   }
+  // the Ember look: elements still painted in the violet of the classic look (game colours, pictures and charts are content, not leftovers)
+  const violet = [];
+  if (doc.dataset.ember === '1') {
+    const hue = (c) => {
+      const m = /rgba?\((\d+)[ ,]+(\d+)[ ,]+(\d+)(?:[ ,/]+([\d.]+))?/.exec(c);
+      if (!m || (m[4] !== undefined && Number(m[4]) < 0.35)) return false;
+      const [r, g, b] = [m[1], m[2], m[3]].map((n) => Number(n) / 255);
+      const mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn, l = (mx + mn) / 2;
+      if (d < 0.05) return false;
+      const sat = d / (1 - Math.abs(2 * l - 1));
+      let h = mx === r ? ((g - b) / d) % 6 : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
+      h = (h * 60 + 360) % 360;
+      return h >= 238 && h <= 275 && sat > 0.35 && l > 0.2 && l < 0.85;
+    };
+    const content = '.game-av, .srv-tile, .hero3, .cm-srv, .cm-bento, .nw-cover, .nb-card, .avatar-hue, .pf-ach-ico, [data-game], svg, canvas, img, .emblem-host, .accent-dot, [style*="background"]';
+    for (const el of document.querySelectorAll('body *')) {
+      if (violet.length >= 6) break;
+      const cs = getComputedStyle(el);
+      if (!shown(el, cs, el.getBoundingClientRect()) || el.closest(content)) continue;
+      if (hue(cs.color) && (el.textContent || '').trim() || hue(cs.backgroundColor) || (cs.borderTopWidth !== '0px' && hue(cs.borderTopColor))) violet.push(name(el));
+    }
+  }
+  out.violet = violet;
   out.wide = wide.slice(0, 8);
   out.clipped = clipped.slice(0, 8);
   out.cut = cut.slice(0, 6);

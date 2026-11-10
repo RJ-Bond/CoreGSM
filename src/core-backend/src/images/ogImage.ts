@@ -3,7 +3,7 @@ import type { Express } from 'express';
 import skia from 'skia-canvas';
 import { db } from '../db.js';
 import { monogramColor, ogLine } from './ogLogic.js';
-import { brand, logoFile } from '../admin/site.js';
+import { brand, emberLook, logoFile } from '../admin/site.js';
 
 const { Canvas, loadImage } = skia;
 const SANS = '"DejaVu Sans", "Liberation Sans", sans-serif';
@@ -17,7 +17,7 @@ export async function renderOgDefault(): Promise<Buffer> {
     .prepare('SELECT COUNT(*) AS servers, COALESCE(SUM(st.online), 0) AS online, COALESCE(SUM(CASE WHEN st.online = 1 THEN st.players ELSE 0 END), 0) AS players FROM servers s LEFT JOIN status st ON st.server_id = s.id')
     .get() as { servers: number; online: number; players: number };
   const line = ogLine(row);
-  const key = `${b.name}|${b.color}|${b.logoV}|${line}`;
+  const key = `${b.name}|${b.color}|${b.logoV}|${line}|${emberLook() ? 'e' : 'c'}`;
   if (cache && cache.key === key && Date.now() - cache.at < 10 * 60_000) return cache.buf;
 
   const W = 1200;
@@ -26,8 +26,8 @@ export async function renderOgDefault(): Promise<Buffer> {
   const canvas = new Canvas(W, H);
   const ctx: any = canvas.getContext('2d');
   const bg = ctx.createLinearGradient(0, 0, W, H);
-  bg.addColorStop(0, '#15122b');
-  bg.addColorStop(1, '#0b0a16');
+  bg.addColorStop(0, emberLook() ? '#1a1715' : '#15122b');
+  bg.addColorStop(1, emberLook() ? '#0e0c0b' : '#0b0a16');
   ctx.fillStyle = bg;
   ctx.fillRect(0, 0, W, H);
   const glow = ctx.createRadialGradient(240, 80, 10, 240, 80, 820);

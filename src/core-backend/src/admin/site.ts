@@ -33,9 +33,13 @@ export const rulesText = () => getSetting('rules_text') ?? '';
 export const LOGO_PATH = path.join(path.dirname(process.env.DB_PATH ?? './data/coregsm.db'), 'brand-logo');
 export const LOGO_TYPES: Record<string, string> = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp' };
 export const logoFile = () => Object.values(LOGO_TYPES).map((e) => `${LOGO_PATH}.${e}`).find((f) => fs.existsSync(f)) ?? null;
+/** does the community use the Ember look by default (graphite and orange): then its pictures and messages are drawn in it */
+export const emberLook = (): boolean => getSetting('default_look') === 'ember';
+/** the accent of a community that has not chosen a colour of its own: violet, or orange in the Ember look */
+export const defaultBrandColor = (): string => (emberLook() ? '#d6420a' : '#4f46e5');
 export const brand = () => ({
   name: getSetting('brand_name') || 'CoreGSM',
-  color: getSetting('brand_color') || '#4f46e5',
+  color: getSetting('brand_color') || defaultBrandColor(),
   color2: getSetting('brand_color2') || '',
   preset: getSetting('brand_preset') || '',
   // the theme for visitors who have not picked one themselves

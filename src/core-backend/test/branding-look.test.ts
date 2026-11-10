@@ -17,4 +17,11 @@ describe('api: the default look of the panel', () => {
     assert.equal((ok.body as { look: string }).look, 'ember');
     assert.equal(((await api.call('GET', '/api/access')).body as { brand: { look: string } }).brand.look, 'ember');
   });
+  it('a community without a colour of its own gets the orange accent in the Ember look and the violet one in the classic look', async () => {
+    const color = async () => ((await api.call('GET', '/api/access')).body as { brand: { color: string } }).brand.color;
+    assert.equal((await api.call('PUT', '/api/branding/look', { token, body: { look: 'ember' } })).status, 200);
+    assert.equal(await color(), '#d6420a');
+    assert.equal((await api.call('PUT', '/api/branding/look', { token, body: { look: 'classic' } })).status, 200);
+    assert.equal(await color(), '#4f46e5');
+  });
 });

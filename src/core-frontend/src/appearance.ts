@@ -86,6 +86,11 @@ export function applyAppearance(a: Appearance, root: HTMLElement = document.docu
   set('data-oled', a.oled ? '1' : null);
   set('data-ember', a.ember ? '1' : null);
   if (a.ember) void import('@fontsource-variable/manrope/wght.css').catch(() => undefined);
+  // the icon of the tab and of the home screen takes the colour of the look
+  const icon = (sel: string, href: string) => { const el = root.ownerDocument.querySelector<HTMLLinkElement>(sel); if (el) el.href = href; };
+  icon("link[rel='icon'][type='image/svg+xml']", a.ember ? '/logo-ember.svg' : '/logo.svg');
+  icon("link[rel='icon'][sizes='192x192']", a.ember ? '/logo-ember-192.png' : '/logo-192.png');
+  icon("link[rel='apple-touch-icon']", a.ember ? '/apple-touch-icon-ember.png' : '/apple-touch-icon.png');
 }
 
 let current: Appearance = typeof window === 'undefined' ? DEFAULT_APPEARANCE : read();
