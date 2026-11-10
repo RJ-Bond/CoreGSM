@@ -463,11 +463,11 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
   ) : (
     <HistoryChart points={points} hours={data.hours} events={events} title={s.name} game={gameLabel(s.game)} max={s.maxPlayers} color={series === 'ping' ? 'rgb(var(--link))' : ember ? 'rgb(var(--brand-2))' : calmSeriesColor(accent)} series={withSeries ? series : 'players'} loading={chartLoading} baseline={data.baseline ?? null} />
   );
-  const chartTile = (i: number, withSeries: boolean) => (
+  const chartTile = (i: number, withSeries: boolean, span = 'lg:col-span-12') => (
     <SectionCard
       id={withSeries ? 'hi-chart' : 'ov-chart'}
       state={sections}
-      className="lg:col-span-12"
+      className={span}
       style={stagger(i)}
       title={withSeries ? (series === 'ping' ? t('srv.chart.titlePing') : t('srv.chart.titlePlayers')) : t('srv.chart.titlePlayers')}
     >
@@ -546,11 +546,19 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
     panel = (
       <div className="space-y-3.5">
         <PinnedNotice serverId={id} notice={data.notice ?? null} canEdit={canEdit} onChange={(n) => setData((d) => (d ? { ...d, notice: n } : d))} />
-        <SectionCard id="ov-stats" state={sections} style={stagger(0)} title={t('d2.sd.sec.stats')}>
-          {metrics(false)}
-        </SectionCard>
+        {!ember && (
+          <SectionCard id="ov-stats" state={sections} style={stagger(0)} title={t('d2.sd.sec.stats')}>
+            {metrics(false)}
+          </SectionCard>
+        )}
         <div className="grid gap-3.5 lg:grid-cols-12">
-          {chartTile(1, false)}
+          {/* Ember: the figures stand beside the chart in one row, not above it */}
+          {ember && (
+            <SectionCard id="ov-stats" state={sections} className="lg:col-span-4" style={stagger(0)} title={t('d2.sd.sec.stats')}>
+              {metrics(false)}
+            </SectionCard>
+          )}
+          {chartTile(1, false, ember ? 'lg:col-span-8' : 'lg:col-span-12')}
           <div className="space-y-3.5 lg:col-span-5 lg:col-start-1 lg:flex lg:flex-col lg:gap-3.5 lg:space-y-0 lg:self-stretch max-lg:contents">
           <SectionCard id="ov-events" state={sections} className={`max-lg:order-1 ${events.length === 0 ? 'max-lg:hidden' : ''}`} style={stagger(2)} title={t('d2.sd.recent')}>
             <EventsFeed events={events} online={s.online} limit={6} moreHref={tabHref(id, 'events')} />

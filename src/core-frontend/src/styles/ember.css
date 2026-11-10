@@ -403,7 +403,7 @@
 
 /* ---------- more of the same ---------- */
 /* the favourites are pinned: a heading for each group of the cards */
-:root[data-ember='1'] .srv-sec { grid-column: 1 / -1; margin: 6px 2px -2px; font-size: var(--fs-md); font-weight: 800; letter-spacing: -.01em; color: rgb(var(--mute)); }
+:root[data-ember='1'] .srv-grp { grid-column: 1 / -1; margin: 6px 2px -2px; font-size: var(--fs-md); font-weight: 800; letter-spacing: -.01em; color: rgb(var(--mute)); }
 
 /* the server that has people on it breathes: a green dot before the figure (it stands still with «reduce motion») */
 :root[data-ember='1'] .srv-tile .srv-count:not(.srv-zero)::before {
@@ -524,7 +524,7 @@
 :root[data-ember='1'] { --seg-on: 255 255 255; }
 :root[data-ember='1'][data-theme='dark'] { --seg-on: 49 44 41; }
 @media (prefers-color-scheme: dark) { :root[data-ember='1']:not([data-theme='light']) { --seg-on: 49 44 41; } }
-:root[data-ember='1'] .seg[data-ind]::before,
+:root[data-ember='1'] .seg[data-ind]:not(.hdr-nav)::before,
 :root[data-ember='1'] .srv-tabs.seg[data-ind]::before { background: rgb(var(--seg-on)); box-shadow: inset 0 0 0 1px rgb(var(--line)), 0 0 20px -8px rgb(var(--brand) / .7); }
 :root[data-ember='1'] .seg:not([data-ind]) > .seg-item:is([aria-pressed='true'], [aria-current='page'], .on),
 :root[data-ember='1'] .srv-tabs:not([data-ind]) > .seg-item.on,
@@ -560,3 +560,91 @@
 
 /* ---------- the bars of the list: the orange scale; the colour of the game stays on its icon ---------- */
 :root[data-ember='1'] .srv-tr .srv-cap:not(.hot) > i { background: linear-gradient(90deg, rgb(var(--brand-2)), rgb(var(--brand))); }
+
+/* ======================================================================
+   the admin area: the tools in the top bar like on the other pages, the lists as cards, the setup as a ring
+   ====================================================================== */
+@media (min-width: 1100px) {
+  /* the search, the bells, the theme and the profile: the same card in the top right corner, the rail keeps the sections only */
+  :root[data-ember='1'][data-page='admin'] .hdr > .hdr-actions {
+    position: fixed; top: 16px; right: 28px; z-index: 41; width: auto; margin: 0; padding: 5px 6px;
+    flex-direction: row; flex-wrap: nowrap; align-items: center; justify-content: flex-end; gap: 4px; border-top: 0;
+    border-radius: 16px; background: rgb(var(--card)); box-shadow: var(--shadow-2), inset 0 0 0 1px rgb(var(--line));
+  }
+  :root[data-ember='1'][data-page='admin'] .hdr-sep { display: block; width: 1px; height: 22px; margin: 0 4px; background: rgb(var(--line)); }
+  :root[data-ember='1'][data-page='admin'] .app-wrap { padding-top: 84px; }
+}
+
+/* the lists of the admin area: a card per row, a stripe of the state on the left */
+:root[data-ember='1'] .adm-tablewrap { background: none; box-shadow: none; border: 0; padding: 0; }
+:root[data-ember='1'] .adm-table { border-collapse: separate; border-spacing: 0 8px; }
+:root[data-ember='1'] .adm-table td { border-top: 0; background: rgb(var(--card)); box-shadow: inset 0 1px 0 rgb(var(--line)), inset 0 -1px 0 rgb(var(--line)); transition: background-color .15s ease; }
+:root[data-ember='1'] .adm-table td:first-child { border-radius: 16px 0 0 16px; box-shadow: inset 0 1px 0 rgb(var(--line)), inset 0 -1px 0 rgb(var(--line)), inset 1px 0 0 rgb(var(--line)); }
+:root[data-ember='1'] .adm-table td:last-child { border-radius: 0 16px 16px 0; box-shadow: inset 0 1px 0 rgb(var(--line)), inset 0 -1px 0 rgb(var(--line)), inset -1px 0 0 rgb(var(--line)); }
+:root[data-ember='1'] .adm-table tbody tr:hover td { background: rgb(var(--raised)); }
+:root[data-ember='1'] .adm-table tbody tr:hover { background: none; }
+:root[data-ember='1'] .adm-table tbody tr[data-state='off'], :root[data-ember='1'] .adm-table tbody tr[data-state='lag'] { background: none; }
+:root[data-ember='1'] .adm-table tbody tr[data-state='off'] td { background: linear-gradient(rgb(var(--bad) / .07), rgb(var(--bad) / .07)), rgb(var(--card)); }
+:root[data-ember='1'] .adm-table tbody tr[data-state='lag'] td { background: linear-gradient(rgb(var(--warn) / .07), rgb(var(--warn) / .07)), rgb(var(--card)); }
+:root[data-ember='1'] .adm-table tr[data-selected='true'] td { background: linear-gradient(rgb(var(--brand) / .1), rgb(var(--brand) / .1)), rgb(var(--card)); }
+:root[data-ember='1'] .adm-table tbody tr[data-state] td:first-child { box-shadow: inset 4px 0 0 rgb(var(--ok)), inset 0 1px 0 rgb(var(--line)), inset 0 -1px 0 rgb(var(--line)); }
+:root[data-ember='1'] .adm-table tbody tr[data-state='lag'] td:first-child { box-shadow: inset 4px 0 0 rgb(var(--warn)), inset 0 1px 0 rgb(var(--line)), inset 0 -1px 0 rgb(var(--line)); }
+:root[data-ember='1'] .adm-table tbody tr[data-state='off'] td:first-child { box-shadow: inset 4px 0 0 rgb(var(--bad)), inset 0 1px 0 rgb(var(--line)), inset 0 -1px 0 rgb(var(--line)); }
+:root[data-ember='1'] .adm-table tbody tr[data-state='maint'] td:first-child { box-shadow: inset 4px 0 0 rgb(var(--link)), inset 0 1px 0 rgb(var(--line)), inset 0 -1px 0 rgb(var(--line)); }
+:root[data-ember='1'] .adm-table thead th { background: none; box-shadow: none; }
+
+/* the progress of the setup in the menu of the admin area: a ring and two lines */
+:root[data-ember='1'] .adm-progress { grid-template-columns: 44px minmax(0, 1fr); align-items: center; column-gap: 12px; padding: 10px 12px; border-radius: 14px; }
+:root[data-ember='1'] .adm-progress::before {
+  content: ''; grid-row: 1 / span 2; width: 44px; height: 44px; border-radius: 50%;
+  background: conic-gradient(rgb(var(--brand)) var(--pct, 0%), rgb(var(--line)) 0);
+  -webkit-mask: radial-gradient(circle 14px at center, transparent 97%, #000 100%); mask: radial-gradient(circle 14px at center, transparent 97%, #000 100%);
+}
+:root[data-ember='1'] .adm-progress > :nth-child(1) { grid-column: 2; }
+:root[data-ember='1'] .adm-progress-bar { display: none; }
+:root[data-ember='1'] .adm-progress-left { grid-column: 2; }
+
+/* the figures of the summary: the same cards as the figures of the home page */
+:root[data-ember='1'] .adm-tile { border-radius: var(--emb-r-card); }
+
+/* ======================================================================
+   the structure of the pages
+   ====================================================================== */
+/* the forms of the admin area (settings, alerts): wider, and a card has its title and words on the left and its fields on the right */
+@media (min-width: 1280px) {
+  :root[data-ember='1'] .adm-narrow { max-width: 1120px; }
+  :root[data-ember='1'] .adm-narrow section.panel:has(> div:first-child > .min-w-0 > h2):has(> :nth-child(2)) {
+    display: grid; grid-template-columns: 240px minmax(0, 1fr); column-gap: 36px; row-gap: 0; align-items: start;
+  }
+  :root[data-ember='1'] .adm-narrow section.panel:has(> div:first-child > .min-w-0 > h2):has(> :nth-child(2)) > :first-child { grid-column: 1; grid-row: 1 / span 60; position: sticky; top: 24px; flex-direction: column; flex-wrap: nowrap; align-items: stretch; }
+  :root[data-ember='1'] .adm-narrow section.panel:has(> div:first-child > .min-w-0 > h2):has(> :nth-child(2)) > :first-child > .min-w-0 { flex: none; }
+  :root[data-ember='1'] .adm-narrow section.panel:has(> div:first-child > .min-w-0 > h2):has(> :nth-child(2)) > :nth-child(n+2) { grid-column: 2; margin: 0 0 16px; min-width: 0; }
+}
+
+/* the status page on a wide screen: one row per server (the name, the days, the uptime), the ping curve gives way to one line */
+@media (min-width: 900px) {
+  :root[data-ember='1'] .st-server { display: grid; grid-template-columns: minmax(230px, 300px) minmax(0, 1fr) auto; align-items: center; column-gap: 24px; padding: 12px 18px 12px 24px; }
+  :root[data-ember='1'] .st-server-body { display: contents; }
+  :root[data-ember='1'] .st-server .st-players { display: none; }
+  :root[data-ember='1'] .st-server .st-lat { display: none; }
+  :root[data-ember='1'] .st-server .st-ping-inline { display: block; }
+  :root[data-ember='1'] .st-server .st-bars { height: 28px; }
+  :root[data-ember='1'] .st-server-side { align-items: center; gap: 22px; min-width: 150px; justify-content: flex-end; }
+  :root[data-ember='1'] .st-server a.text-fs-xl { font-size: var(--fs-lg); display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; }
+}
+
+/* the profile: three columns on a wide screen, the cards of a column keep together */
+@media (min-width: 1200px) {
+  :root[data-ember='1'] .pf-masonry { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) minmax(0, 1fr); gap: 1.25rem; align-items: start; column-count: auto; }
+  :root[data-ember='1'] .pf-masonry > * { margin-bottom: 0; }
+}
+
+/* the page of a player: the head is a deep card like the head of a profile */
+:root[data-ember='1'] .pl-hero { border-radius: var(--emb-r-big); position: relative; }
+:root[data-ember='1'] .pl-hero::before { content: ''; position: absolute; inset: 0 32px auto 32px; height: 2px; border-radius: 0 0 3px 3px; background: linear-gradient(90deg, rgb(var(--brand-2)), rgb(255 170 80) 55%, transparent); pointer-events: none; }
+:root[data-ember='1'] .pl-rank { background: linear-gradient(135deg, rgb(255 126 60), rgb(var(--brand-2))); color: #fff; }
+
+/* the server page: the figures stand beside the chart; in the narrow card they are one under another */
+@media (min-width: 1024px) {
+  :root[data-ember='1'] [id$='ov-stats'] .srv-metrics { grid-template-columns: minmax(0, 1fr); }
+}

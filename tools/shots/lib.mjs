@@ -28,6 +28,8 @@ export const GUEST_PAGES = [
   { id: 'news-item', path: '/news/1' },
   { id: 'status', path: '/status' },
   { id: 'community', path: '/community' },
+  { id: 'player', path: '/player/ShotsHero' },
+  { id: 'public-profile', path: '/u/admin' },
   { id: 'login', path: '/login' },
   { id: 'register', path: '/register' },
   { id: 'not-found', path: '/404' },
@@ -36,6 +38,7 @@ export const GUEST_PAGES = [
 /** pages of a signed-in administrator */
 export const ADMIN_PAGES = [
   { id: 'admin-start', path: '/admin' },
+  { id: 'admin-overview', path: '/admin/overview' },
   ...['servers', 'discord', 'news', 'alerts', 'maintenance', 'cards', 'community', 'users', 'journal', 'system', 'integrations'].map((s) => ({ id: `admin-${s}`, path: `/admin/${s}` })),
   // the game plugin: one page per tab
   ...['', '/auto', '/players', '/discord', '/history'].map((s) => ({ id: `admin-gamenews${s.replace('/', '-')}`, path: `/admin/gamenews${s}` })),

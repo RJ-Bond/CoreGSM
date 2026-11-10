@@ -285,8 +285,8 @@ function ServerList() {
   const secHead = (i: number) => {
     if (!pinFavs) return null;
     const f = favs.includes(restShown[i].id);
-    if (i === 0 && f) return <h2 className="srv-sec">{t('srv.fav.title')}</h2>;
-    if (!f && (i === 0 || favs.includes(restShown[i - 1].id))) return <h2 className="srv-sec">{t('srv.fav.rest')}</h2>;
+    if (i === 0 && f) return <h2 className="srv-grp">{t('srv.fav.title')}</h2>;
+    if (!f && (i === 0 || favs.includes(restShown[i - 1].id))) return <h2 className="srv-grp">{t('srv.fav.rest')}</h2>;
     return null;
   };
   const offlineCount = servers.filter((s) => !s.online).length;

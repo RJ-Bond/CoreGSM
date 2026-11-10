@@ -14,7 +14,7 @@ import { noAutofill } from './noAutofill';
  */
 export function AdminPage({ head, narrow = false, children }: { head: ReactNode; narrow?: boolean; children: ReactNode }) {
   return (
-    <div className={`space-y-5 ${narrow ? 'max-w-4xl' : ''}`}>
+    <div className={`space-y-5 ${narrow ? 'adm-narrow max-w-4xl' : ''}`}>
       {head}
       <div className="adm-stage space-y-5">{children}</div>
     </div>

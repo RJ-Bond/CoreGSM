@@ -112,7 +112,7 @@ export function SetupProgress() {
   const pct = Math.round((s.doneCount / s.total) * 100);
   return (
     <div className="hidden md:block">
-      <a href="/admin/start" className="adm-progress" aria-label={t('start.progress', { a: s.doneCount, b: s.total })}>
+      <a href="/admin/start" className="adm-progress" style={{ ['--pct' as string]: `${pct}%` }} aria-label={t('start.progress', { a: s.doneCount, b: s.total })}>
         <span className="flex items-baseline justify-between gap-2"><b>{t('start.setup')}</b><span>{t('start.ofTotal', { a: s.doneCount, b: s.total })}</span></span>
         <span className="adm-progress-bar" aria-hidden><i style={{ width: `${pct}%` }} /></span>
         {left && <span className="adm-progress-left">{t('start.next')} {left.short}</span>}
