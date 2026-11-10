@@ -17,6 +17,7 @@ concurrency:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   ui-check:
@@ -33,8 +34,15 @@ jobs:
           npm ci --no-audit --no-fund --prefix src/core-frontend
       - name: Shoot the pages
         run: node tools/shots/run.mjs --pages=all --viewports=phone,desktop --themes=dark,light --out=shots-out
+      - name: The pictures of the last good run on main (what the Ember look is compared with)
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          id=$(gh run list --workflow ui-check --branch main --status success --limit 1 --json databaseId --jq '.[0].databaseId')
+          if [ -n "$id" ]; then gh run download "$id" -n ember-pictures -D baseline-ember || true; fi
       - name: Shoot the main pages in the Ember look
-        run: SHOTS_LOOK=ember node tools/shots/run.mjs --pages=servers,servers-list,server,news,status,community,login,profile,admin-start,admin-servers --viewports=phone,desktop --themes=dark,light --out=shots-out-ember
+        run: SHOTS_LOOK=ember node tools/shots/run.mjs --pages=servers,servers-list,server,news,status,community,login,profile,ui-kit,admin-start,admin-servers --viewports=phone,desktop --themes=dark,light --compare=baseline-ember --out=shots-out-ember
       - name: Keep the pictures of the Ember look
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

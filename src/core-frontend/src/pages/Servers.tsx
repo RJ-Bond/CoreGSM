@@ -1,3 +1,5 @@
+import { useLive } from '../ui/live';
+import { haptic } from '../ui/haptic';
 import { useAppearance } from '../appearance';
 import { Fragment, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent } from 'react';
 import { HomeBlocksMenu, useHomeBlocks } from '../components/servers/HomeBlocks';
@@ -6,7 +8,7 @@ import { useAuth } from '../auth';
 import { gameColor, gameGradient, gameLabel } from '../games';
 import { coverBackground, emblemStyle, gameBackdrop, coverUrlOf } from '../cover';
 import MaintenanceChip from '../components/MaintenanceChip';
-import { AnimatedNumber, Burst, ErrorLine, GameAvatar, LoadError, IconServers, PageHead, Spark, StatusPill, ago, isLag, spanCaption, useSparkSpanMin, usePoll, navigate, routeQuery } from '../ui';
+import { AnimatedNumber, Burst, ErrorLine, GameAvatar, LoadError, IconServers, PageHead, Spark, StatusPill, ago, isLag, spanCaption, useSparkSpanMin, usePoll, toast, navigate, routeQuery } from '../ui';
 import { t, useI18n, type TKey } from '../i18n';
 import { calmSeriesColor, useCoverAccent } from '../components/server/coverAccent';
 import { pingTone, TONE_TEXT } from '../components/server/helpers';
@@ -184,8 +186,10 @@ function ServerList() {
   }, [me]);
   const toggleFav = async (id: number) => {
     const on = favs.includes(id);
+    haptic('tap');
     setFavs(on ? favs.filter((x) => x !== id) : [...favs, id]);
-    await api(`/favorites/${id}`, on ? 'DELETE' : 'PUT').catch(() => undefined);
+    // the star changes at once; when the server refuses, it goes back and says so
+    await api(`/favorites/${id}`, on ? 'DELETE' : 'PUT').catch(() => { setFavs(favs); toast(t('srv.fav.failed'), 'err'); });
   };
   const [servers, setServers] = useState<Server[]>([]);
   const [loaded, setLoaded] = useState(false);
@@ -229,8 +233,9 @@ function ServerList() {
       .then((s) => { setServers(s); setError(''); setUpdatedAt(Date.now()); })
       .catch((e) => setError(e.message))
       .finally(() => setLoaded(true));
-  // the TV mode refreshes twice as often
-  usePoll(load, 10_000);
+  // the server tells the panel when something was polled; the timer is then only a safety net
+  const live = useLive(load);
+  usePoll(load, live ? 60_000 : 10_000);
   // a tap on «обновлено …» or a pull down from the top of the page refreshes at once
   const [refreshing, setRefreshing] = useState(false);
   const refreshNow = async () => {

@@ -1,4 +1,5 @@
 // Pieces of the servers page: reactions to changes, capacity bar, empty states, skeletons.
+import { useAppearance } from '../../appearance';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import type { Server } from '../../api';
 import { StateView } from '../StateView';
@@ -185,6 +186,16 @@ function SkeletonHero() {
 }
 
 function SkeletonPulse() {
+  const [{ ember }] = useAppearance();
+  // the Ember look: one card, four figures on the left and the curve on the right
+  if (ember) {
+    return (
+      <div className="tile col-span-full grid gap-4 p-4 sm:grid-cols-[minmax(240px,340px)_1fr] sm:p-5">
+        <div className="grid grid-cols-2 gap-2.5">{[0, 1, 2, 3].map((i) => <div key={i} className="skeleton h-[78px] rounded-2xl" />)}</div>
+        <div className="skeleton h-[140px] rounded-2xl max-sm:hidden" />
+      </div>
+    );
+  }
   return (
     <div className="tile col-span-full flex min-h-[112px] flex-wrap items-center gap-4 p-4">
       <div className="skeleton h-11 w-11 shrink-0 rounded-2xl" />
@@ -195,6 +206,19 @@ function SkeletonPulse() {
 }
 
 function SkeletonSmall() {
+  const [{ ember }] = useAppearance();
+  // the Ember look: a picture across the whole top of the card, then the name, the figure, the bar
+  if (ember) {
+    return (
+      <div className="tile flex min-h-[300px] flex-col gap-3 overflow-hidden p-0 pb-4">
+        <div className="skeleton h-[136px] rounded-none" />
+        <div className="space-y-2 px-[18px]"><Bar w="70%" h={16} /><Bar w="35%" /></div>
+        <div className="flex items-end gap-2 px-[18px]"><Bar w={64} h={34} className="rounded-lg!" /><Bar w={40} /></div>
+        <div className="px-[18px]"><Bar w="100%" h={8} /></div>
+        <div className="mt-auto flex justify-between px-[18px]"><Bar w="45%" /><Bar w="18%" /></div>
+      </div>
+    );
+  }
   return (
     <div className="tile flex min-h-[270px] flex-col gap-2 p-3 pb-4">
       <div className="skeleton h-[88px] rounded-ui-lg" />
@@ -219,6 +243,21 @@ export function TilesSkeleton() {
 
 export function ListSkeleton() {
   useI18n();
+  const [{ ember }] = useAppearance();
+  if (ember) {
+    return (
+      <div className="space-y-2" aria-busy="true" aria-label={t('d2.news.loading')}>
+        {[0, 1, 2, 3, 4].map((i) => (
+          <div key={i} className="tile flex items-center gap-3 px-4 py-3">
+            <div className="skeleton h-9 w-9 shrink-0 rounded-xl" />
+            <div className="flex-1 space-y-2"><Bar w="45%" h={14} /><Bar w="22%" h={10} /></div>
+            <Bar w={110} h={8} className="max-sm:hidden" />
+            <Bar w={44} h={18} />
+          </div>
+        ))}
+      </div>
+    );
+  }
   return (
     <div className="panel space-y-0 overflow-hidden p-0" aria-busy="true" aria-label={t('d2.news.loading')}>
       {[0, 1, 2, 3, 4].map((i) => (

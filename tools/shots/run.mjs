@@ -9,6 +9,7 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { comparePng } from './png.mjs';
 import { ADMIN_PAGES, GUEST_PAGES, HELP, buildMatrix, formatReport, isExpectedFailure, parseArgs, viewportOf } from './lib.mjs';
 import { ADMIN, seed } from './seed.mjs';
 
@@ -188,6 +189,20 @@ async function shoot(cdp, base, row, outDir) {
   fs.mkdirSync(dir, { recursive: true });
   const file = path.join(dir, `${page.id}.png`);
   fs.writeFileSync(file, Buffer.from(shot.data, 'base64'));
+  // against the pictures of an earlier run: a page that changed by more than a few per cent is named in the report
+  if (opts.compare) {
+    const before = path.join(path.resolve(String(opts.compare)), `${theme}-${viewport}`, `${page.id}.png`);
+    if (fs.existsSync(before)) {
+      try {
+        const d = comparePng(fs.readFileSync(before), fs.readFileSync(file));
+        const limit = Number(opts['compare-limit'] ?? 2) / 100;
+        if (d.sizeChanged) warnings.push(`changed since the last run: the width is now ${d.b[0]} px, was ${d.a[0]} px`);
+        else if (d.ratio > limit) warnings.push(`changed since the last run: ${(d.ratio * 100).toFixed(1)}% of the picture${d.heightDelta ? `, the page is ${d.heightDelta > 0 ? '+' : ''}${d.heightDelta} px taller` : ''}`);
+      } catch (e) {
+        warnings.push(`could not compare with the last run: ${e.message}`);
+      }
+    }
+  }
   return { id: page.id, path: page.path, viewport, theme, file: path.relative(process.cwd(), file).replaceAll('\\', '/'), errors: [...new Set(errors)].slice(0, 8), warnings, title: c.title, h1: c.h1 };
 }
 

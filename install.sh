@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="56bf590a6d0c"
+COREGSM_BUILD="1b9dc55044dc"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.2.20"
+COREGSM_VERSION="1.2.21"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -23535,6 +23535,7 @@ export const ERRORS = {
   csrf_header_missing: 'Запрос отклонён: не хватает заголовка X-CoreGSM',
   rate_limited: 'Слишком много запросов. Подождите минуту.',
   rate_limited_later: 'Слишком много запросов. Попробуйте позже.',
+  too_many_connections: 'Слишком много открытых подключений',
   too_many_attempts: 'Слишком много попыток. Подождите 10 минут.',
   bad_data: 'Неверные данные',
   bad_data_lower: 'неверные данные',
@@ -30083,6 +30084,72 @@ registerShutdownServer(server);
 
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/live.ts" << '__COREGSM_EOF__'
+/**
+ * Live updates: the panel opens one long GET /api/live (Server-Sent Events) and is told, as soon as a server has been
+ * polled, that its list is out of date; it then reloads the list at once instead of waiting for its own timer.
+ * Only a «something changed» signal travels, never data, so what a visitor may see is still decided by /api/servers.
+ */
+import type { Request, Response } from 'express';
+import { log } from './logger.js';
+import { onShutdown } from './shutdown.js';
+
+const MAX_CLIENTS = 300;
+const MAX_PER_IP = 8;
+const KEEPALIVE_MS = 25_000;
+/** several servers answer within a second: one signal for all of them */
+const THROTTLE_MS = 1000;
+
+const clients = new Map<Response, string>();
+let timer: NodeJS.Timeout | undefined;
+let lastSent = 0;
+
+const send = (chunk: string) => {
+  for (const res of clients.keys()) {
+    try { res.write(chunk); } catch { clients.delete(res); }
+  }
+};
+
+/** a server has a new state: tell the open panels (at most once a second) */
+export function emitLive(): void {
+  if (clients.size === 0 || timer) return;
+  const wait = Math.max(0, lastSent + THROTTLE_MS - Date.now());
+  timer = setTimeout(() => {
+    timer = undefined;
+    lastSent = Date.now();
+    send(`event: status\ndata: ${lastSent}\n\n`);
+  }, wait);
+  timer.unref();
+}
+
+export const liveClients = (): number => clients.size;
+
+/** GET /api/live */
+export function liveHandler(req: Request, res: Response): void {
+  const ip = req.ip ?? '';
+  let same = 0;
+  for (const v of clients.values()) if (v === ip) same++;
+  if (clients.size >= MAX_CLIENTS || same >= MAX_PER_IP) {
+    res.status(429).json({ error: 'Слишком много открытых подключений' });
+    return;
+  }
+  res.set({ 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache, no-transform', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
+  res.flushHeaders();
+  res.write('retry: 5000\n: ok\n\n');
+  clients.set(res, ip);
+  const beat = setInterval(() => { try { res.write(': keepalive\n\n'); } catch { /* the close handler removes it */ } }, KEEPALIVE_MS);
+  beat.unref();
+  req.on('close', () => { clearInterval(beat); clients.delete(res); });
+}
+
+// a long connection must not hold the server open when it is stopped
+onShutdown('live connections', () => {
+  for (const res of clients.keys()) { try { res.end(); } catch { /* already gone */ } }
+  clients.clear();
+  log.info('live connections closed');
+});
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/logger.ts" << '__COREGSM_EOF__'
 import pino from 'pino';
 import { redact } from './security/redact.js';
@@ -31239,6 +31306,7 @@ export function countryLabel(code: string): string {
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/monitoring"
   cat > "$APP_DIR/core-backend/src/monitoring/gsm.ts" << '__COREGSM_EOF__'
+import { emitLive } from '../live.js';
 import { trackAlerts } from '../alerts/alerts.js';
 import { trackSmart } from '../alerts/smartAlerts.js';
 import { onPollResult } from '../community/subscriptions.js';
@@ -31458,7 +31526,10 @@ export async function refreshServer(s: ServerRow, opts: { debounce?: boolean } =
   // the server may have been deleted while the query was running
   const still = db.prepare('SELECT 1 FROM servers WHERE id = ?').get(s.id);
   if (!still) return null;
-  return applyPollResult(s, r, ts, opts);
+  const out = applyPollResult(s, r, ts, opts);
+  // the open panels reload their list at once (see live.ts)
+  emitLive();
+  return out;
 }
 
 // ---------- scheduler ----------
@@ -38506,6 +38577,7 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/routes"
   cat > "$APP_DIR/core-backend/src/routes/servers.ts" << '__COREGSM_EOF__'
 /** Game servers: list and CRUD, server page data, history, PNG card, share page, status page. */
+import { liveHandler } from '../live.js';
 import { stepUp } from '../security/stepUp.js';
 import express from 'express';
 import { z } from 'zod';
@@ -38559,6 +38631,9 @@ const serverSchema = z.object({
   // two-letter country code shown in the Discord message; empty = detect from the address
   country: z.string().trim().regex(/^([A-Za-z]{2})?$/, 'Страна: двухбуквенный код').optional(),
 });
+
+// live updates: a signal, not data (see live.ts)
+router.get('/api/live', viewer, liveHandler);
 
 router.get('/api/servers', viewer, (req, res) => {
   const rows = db.prepare(`${SELECT_SERVERS} ORDER BY ${SERVER_ORDER}`).all() as ServerJoin[];
@@ -48659,7 +48734,7 @@ __COREGSM_EOF__
 #  - img-src: own images, data:/blob: (previews) and Discord avatars.
 #  - connect-src 'self': the panel only talks to its own /api. worker-src 'self': /sw.js. manifest-src 'self': /api/manifest.json.
 #  - frame-ancestors 'none' also forbids embedding the panel in a frame (X-Frame-Options DENY for old browsers).
-add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'sha256-QuOcY6kvE99fCve8ULZR7eQ3QpPUfVmI2fPJGAw25FI='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://cdn.discordapp.com; font-src 'self' data:; connect-src 'self'; worker-src 'self'; manifest-src 'self'; object-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'self'" always;
+add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'sha256-KmpuCeAENUtn/huxycNi864LOszpsNaBVTWiRDrD+2E='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://cdn.discordapp.com; font-src 'self' data:; connect-src 'self'; worker-src 'self'; manifest-src 'self'; object-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'self'" always;
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend"
   cat > "$APP_DIR/core-frontend/index.html" << '__COREGSM_EOF__'
@@ -48690,6 +48765,13 @@ __COREGSM_EOF__
         // the admin area has its own theme when one was chosen there
         if (location.pathname.indexOf('/admin') === 0) t = localStorage.getItem('coregsm_admin_theme') || t;
         if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+        // the look (the own choice, else the community's default) and its accent: no flash from the classic look to Ember
+        var own = localStorage.getItem('coregsm_look');
+        if (own === '1' || (own !== '0' && localStorage.getItem('coregsm_look_default') === 'ember')) {
+          document.documentElement.setAttribute('data-ember', '1');
+          var acc = localStorage.getItem('coregsm_look_accent');
+          if (acc === 'amber' || acc === 'coral' || acc === 'emerald') document.documentElement.setAttribute('data-ember-accent', acc);
+        }
       } catch (e) {}
     </script>
   </head>
@@ -120915,6 +120997,37 @@ D7aGEx8CoIjvAiTDLa5e0i/a94kxabzjASw0PLzzZvTEmShpo+1okiC+VKhAs18H8TdJ+LteTp38
 IwAAAABJRU5ErkJggg==
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/scripts"
+  cat > "$APP_DIR/core-frontend/scripts/bundle-budget.mjs" << '__COREGSM_EOF__'
+// A budget for the weight of the panel: what a first visit downloads (the files named in dist/index.html, gzipped)
+// and the biggest single chunk of a page. A change that makes the panel heavier fails here, not on a phone.
+//   node scripts/bundle-budget.mjs            after `npm run build`
+import fs from 'node:fs';
+import path from 'node:path';
+import zlib from 'node:zlib';
+
+const dist = path.resolve(process.argv[2] ?? 'dist');
+const BUDGET_INITIAL_KB = Number(process.env.BUDGET_INITIAL_KB ?? 470);
+const BUDGET_CHUNK_KB = Number(process.env.BUDGET_CHUNK_KB ?? 170);
+
+const html = fs.readFileSync(path.join(dist, 'index.html'), 'utf8');
+const files = [...new Set([...html.matchAll(/(?:src|href)="(\/assets\/[^"]+\.(?:js|css))"/g)].map((m) => m[1]))];
+const gz = (f) => zlib.gzipSync(fs.readFileSync(path.join(dist, f))).length;
+
+const initial = files.map((f) => ({ f, kb: gz(f) / 1024 }));
+const initialKb = initial.reduce((n, x) => n + x.kb, 0);
+const chunks = fs.readdirSync(path.join(dist, 'assets')).filter((f) => /\.js$/.test(f)).map((f) => ({ f, kb: gz(path.join('assets', f)) / 1024 })).sort((a, b) => b.kb - a.kb);
+
+console.log(`first visit: ${initialKb.toFixed(0)} KB gzip in ${files.length} files (budget ${BUDGET_INITIAL_KB} KB)`);
+for (const x of initial.sort((a, b) => b.kb - a.kb).slice(0, 4)) console.log(`  ${x.f.replace('/assets/', '').padEnd(34)} ${x.kb.toFixed(0)} KB`);
+console.log(`the biggest chunk: ${chunks[0].f} ${chunks[0].kb.toFixed(0)} KB (budget ${BUDGET_CHUNK_KB} KB)`);
+
+let bad = 0;
+if (initialKb > BUDGET_INITIAL_KB) { console.error(`::error title=bundle budget::the first visit weighs ${initialKb.toFixed(0)} KB gzip, the budget is ${BUDGET_INITIAL_KB} KB`); bad++; }
+const over = chunks.filter((c) => c.kb > BUDGET_CHUNK_KB);
+if (over.length) { console.error(`::error title=bundle budget::chunks over ${BUDGET_CHUNK_KB} KB gzip: ${over.map((c) => `${c.f} ${c.kb.toFixed(0)} KB`).join(', ')}`); bad++; }
+process.exit(bad ? 1 : 0);
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/scripts"
   cat > "$APP_DIR/core-frontend/scripts/lint-ratchet.mjs" << '__COREGSM_EOF__'
 // Lint "ratchet": oxlint still reports old findings (the static a11y rules flag patterns that axe accepts), so the
 // check does not demand zero. It fails when any rule reports MORE findings than lint-baseline.json allows, so the
@@ -120972,7 +121085,7 @@ import { onAccentChange, paintBrand, useAutoAccent } from './accent';
 import NotificationBell from './components/NotificationBell';
 import AttentionBell from './components/AttentionBell';
 import RulesBanner from './components/RulesBanner';
-import { AppFooter, ProfileMenu, RouteProgress, Tooltips, restoreScroll, useHideOnScroll, usePanelPulse, useScrollMemory } from './components/ShellExtras';
+import { AppFooter, ProfileMenu, RecentServers, RouteProgress, Tooltips, restoreScroll, useHideOnScroll, usePanelPulse, useScrollMemory } from './components/ShellExtras';
 import NotFound from './components/NotFound';
 import { ConfirmHost } from './confirm';
 import Login from './pages/Login';
@@ -121407,6 +121520,7 @@ export default function App() {
               </a>
             ))}
           </nav>
+          {page !== 'admin' && <RecentServers currentId={page === 'servers' ? Number(sub.split('/')[0]) || undefined : undefined} />}
           <div className="hdr-actions flex shrink-0 items-center gap-1 sm:gap-1.5">
             <button
               type="button"
@@ -124046,6 +124160,7 @@ export function ChannelPicker({ value, onChange, id = 'channel' }: { value: stri
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components"
   cat > "$APP_DIR/core-frontend/src/components/CommandPalette.tsx" << '__COREGSM_EOF__'
+import { readPaletteRecent, rememberPaletteRecent } from '../ui/recent';
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
 import { api, type Server } from '../api';
 import { useAuth } from '../auth';
@@ -124059,13 +124174,8 @@ import { GameAvatar, IconCopy, IconMoon, IconNews, IconRefresh, IconServers, Ico
 
 type Group = 'Недавние' | 'Серверы' | 'Разделы' | 'Действия';
 
-const RECENT_KEY = 'coregsm_palette_recent';
-const readRecent = (): string[] => {
-  try { const v = JSON.parse(localStorage.getItem(RECENT_KEY) ?? '[]') as unknown; return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string').slice(0, 5) : []; } catch { return []; }
-};
-const rememberRecent = (key: string) => {
-  try { localStorage.setItem(RECENT_KEY, JSON.stringify([key, ...readRecent().filter((k) => k !== key)].slice(0, 5))); } catch { /* not remembered */ }
-};
+const readRecent = readPaletteRecent;
+const rememberRecent = rememberPaletteRecent;
 
 interface Item {
   key: string;
@@ -127891,7 +128001,8 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { api, onBusy, type Me } from '../api';
 import { useAppearance } from '../appearance';
 import { t, useI18n } from '../i18n';
-import { UserAvatar } from '../ui';
+import { GameAvatar, UserAvatar } from '../ui';
+import { useRecentServers } from '../ui/recent';
 import { FootCommunity, FootNews, FootServers, FootStatus, FootTag } from './FooterIcons';
 import { MenuAdmin, MenuLogout, MenuUser } from './HeaderIcons';
 import '../styles/shell.css';
@@ -128023,17 +128134,65 @@ export function AppFooter({ brand, version, compact = false }: { brand: string; 
 }
 
 // ---------- breadcrumbs ----------
-export function Crumbs({ items }: { items: [href: string, label: ReactNode][] }) {
+export type CrumbMenuItem = { href: string; label: string };
+/** [address, name, optional: a loader of the neighbours; the last crumb then opens a menu to jump to them] */
+export function Crumbs({ items }: { items: [href: string, label: ReactNode, menu?: () => Promise<CrumbMenuItem[]>][] }) {
   useI18n();
+  const [open, setOpen] = useState<CrumbMenuItem[] | 'loading' | null>(null);
+  const box = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const down = (e: PointerEvent) => { if (!box.current?.contains(e.target as Node)) setOpen(null); };
+    const key = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(null); };
+    document.addEventListener('pointerdown', down);
+    document.addEventListener('keydown', key);
+    return () => { document.removeEventListener('pointerdown', down); document.removeEventListener('keydown', key); };
+  }, [open]);
+  const toggle = (load: () => Promise<CrumbMenuItem[]>) => {
+    if (open) { setOpen(null); return; }
+    setOpen('loading');
+    load().then((l) => setOpen(l), () => setOpen(null));
+  };
   return (
     <nav className="crumbs" aria-label={t('d2.sh.crumbs')}>
       <ol>
-        {items.map(([href, label], i) => (
+        {items.map(([href, label, menu], i) => (
           <li key={href + i}>
-            {i < items.length - 1 ? <a href={href}>{label}</a> : <span aria-current="page">{label}</span>}
+            {i < items.length - 1 ? <a href={href}>{label}</a> : menu ? (
+              <span className="crumbs-menu" ref={box}>
+                <button type="button" aria-haspopup="menu" aria-expanded={!!open} onClick={() => toggle(menu)}>
+                  <span aria-current="page">{label}</span> <span aria-hidden>▾</span>
+                </button>
+                {open && (
+                  <div className="crumbs-pop panel panel-raised" role="menu">
+                    {open === 'loading' ? <span className="crumbs-wait">{t('hdr.loading')}</span> : open.map((m) => (
+                      <a key={m.href} role="menuitem" href={m.href} aria-current={m.href === href ? 'page' : undefined} onClick={() => setOpen(null)}>{m.label}</a>
+                    ))}
+                  </div>
+                )}
+              </span>
+            ) : <span aria-current="page">{label}</span>}
           </li>
         ))}
       </ol>
+    </nav>
+  );
+}
+
+// ---------- the servers opened last: a short list in the side column (the Ember look, wide screens) ----------
+export function RecentServers({ currentId }: { currentId?: number }) {
+  useI18n();
+  const list = useRecentServers();
+  if (list.length === 0) return null;
+  return (
+    <nav className="hdr-recent" aria-label={t('hdr.recent')}>
+      <span className="hdr-recent-k">{t('hdr.recent')}</span>
+      {list.map((s) => (
+        <a key={s.id} href={`/servers/${s.id}`} className="hdr-recent-i" aria-current={currentId === s.id ? 'page' : undefined} title={s.name}>
+          <GameAvatar game={s.game} size={24} />
+          <span className="truncate">{s.name}</span>
+        </a>
+      ))}
     </nav>
   );
 }
@@ -128565,7 +128724,8 @@ export function StateView({
       role={alert ? 'alert' : 'status'}
       data-state={kind}
     >
-      {art ?? (ember && (kind === 'empty' || kind === 'notfound') ? <div className="mb-1 text-link"><EmberArt /></div> : <div className={`mb-1 grid h-14 w-14 place-items-center rounded-3xl ${TILE[kind]}`}><KindIcon kind={kind} /></div>)}
+      {/* the Ember look: every empty list has the same picture (an ember), the pages that bring their own art (404) keep it */}
+      {(ember && kind === 'empty' ? null : art) ?? (ember && (kind === 'empty' || kind === 'notfound') ? <div className="mb-1 text-link"><EmberArt /></div> : <div className={`mb-1 grid h-14 w-14 place-items-center rounded-3xl ${TILE[kind]}`}><KindIcon kind={kind} /></div>)}
       <H className={heading === 'h1' ? 'text-2xl font-extrabold tracking-[-0.02em]' : 'text-lg font-black'}>{head}</H>
       {body && <p className="max-w-sm font-semibold text-mute">{body}</p>}
       {(onRetry || action || children) && (
@@ -128741,6 +128901,7 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components"
   cat > "$APP_DIR/core-frontend/src/components/Switch.tsx" << '__COREGSM_EOF__'
 import type { InputHTMLAttributes } from 'react';
+import { haptic } from '../ui/haptic';
 
 interface SwitchProps extends Omit<InputHTMLAttributes<HTMLInputElement>, 'onChange' | 'checked' | 'type' | 'role'> {
   checked: boolean;
@@ -128761,7 +128922,7 @@ export function Switch({ checked, onChange, className = '', ...rest }: SwitchPro
       aria-checked={checked}
       className={`switch ${className}`.trim()}
       checked={checked}
-      onChange={(e) => onChange(e.target.checked)}
+      onChange={(e) => { haptic('tap'); onChange(e.target.checked); }}
     />
   );
 }
@@ -134264,6 +134425,7 @@ import { useMemo, useState, type CSSProperties } from 'react';
 import { ACCENT_MODES, useAccentMode, type AccentMode } from '../../accent';
 import { PRESET_IDS, PRESETS, presetOf, useAppearance, type Appearance, type PresetId } from '../../appearance';
 import { gameColor } from '../../games';
+import { EMBER_ACCENTS, EMBER_ACCENT_SWATCH, useEmberAccent } from '../../emberAccent';
 import { type Prefs, type TKey, t, updatePrefs, useI18n } from '../../i18n';
 import { fmtDateTime, Section, Switch, toast, useDensity, type Density } from '../../ui';
 
@@ -134281,6 +134443,7 @@ export function AppearanceCard() {
   const [density, setDensity] = useDensity();
   const [mode, setMode] = useAccentMode();
   const [look, setLook] = useAppearance();
+  const [emberAccent, setEmberAccent] = useEmberAccent();
   const a11y: [keyof Appearance, TKey, TKey][] = [
     ['reduceMotion', 'pf.a11y.motion', 'pf.a11y.motionHint'],
     ['largeText', 'pf.a11y.text', 'pf.a11y.textHint'],
@@ -134326,6 +134489,20 @@ export function AppearanceCard() {
         </div>
         <p className="mt-2 text-sm font-semibold text-mute">{t(ACCENT_TEXT[mode].hint)} {t('pf.thisBrowser')}</p>
       </div>
+      {look.ember && (
+        <div>
+          <span id="ember-accent-label" className="label">{t('pf.emberAccent.label')}</span>
+          <div className="seg flex-wrap" role="group" aria-labelledby="ember-accent-label">
+            {EMBER_ACCENTS.map((id) => (
+              <button key={id} type="button" className="seg-item" aria-pressed={emberAccent === id} onClick={() => setEmberAccent(id)}>
+                <span className="accent-dot" style={{ '--sw': EMBER_ACCENT_SWATCH[id] } as CSSProperties} aria-hidden />
+                {t(`pf.emberAccent.${id}` as TKey)}
+              </button>
+            ))}
+          </div>
+          <p className="mt-2 text-sm font-semibold text-mute">{t('pf.emberAccent.hint')} {t('pf.thisBrowser')}</p>
+        </div>
+      )}
       <div role="group" aria-labelledby="a11y-label">
         <span id="a11y-label" className="label">{t('pf.a11y.label')}</span>
         <ul className="space-y-1">
@@ -141328,6 +141505,7 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/servers"
   cat > "$APP_DIR/core-frontend/src/components/servers/serverUi.tsx" << '__COREGSM_EOF__'
 // Pieces of the servers page: reactions to changes, capacity bar, empty states, skeletons.
+import { useAppearance } from '../../appearance';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import type { Server } from '../../api';
 import { StateView } from '../StateView';
@@ -141514,6 +141692,16 @@ function SkeletonHero() {
 }
 
 function SkeletonPulse() {
+  const [{ ember }] = useAppearance();
+  // the Ember look: one card, four figures on the left and the curve on the right
+  if (ember) {
+    return (
+      <div className="tile col-span-full grid gap-4 p-4 sm:grid-cols-[minmax(240px,340px)_1fr] sm:p-5">
+        <div className="grid grid-cols-2 gap-2.5">{[0, 1, 2, 3].map((i) => <div key={i} className="skeleton h-[78px] rounded-2xl" />)}</div>
+        <div className="skeleton h-[140px] rounded-2xl max-sm:hidden" />
+      </div>
+    );
+  }
   return (
     <div className="tile col-span-full flex min-h-[112px] flex-wrap items-center gap-4 p-4">
       <div className="skeleton h-11 w-11 shrink-0 rounded-2xl" />
@@ -141524,6 +141712,19 @@ function SkeletonPulse() {
 }
 
 function SkeletonSmall() {
+  const [{ ember }] = useAppearance();
+  // the Ember look: a picture across the whole top of the card, then the name, the figure, the bar
+  if (ember) {
+    return (
+      <div className="tile flex min-h-[300px] flex-col gap-3 overflow-hidden p-0 pb-4">
+        <div className="skeleton h-[136px] rounded-none" />
+        <div className="space-y-2 px-[18px]"><Bar w="70%" h={16} /><Bar w="35%" /></div>
+        <div className="flex items-end gap-2 px-[18px]"><Bar w={64} h={34} className="rounded-lg!" /><Bar w={40} /></div>
+        <div className="px-[18px]"><Bar w="100%" h={8} /></div>
+        <div className="mt-auto flex justify-between px-[18px]"><Bar w="45%" /><Bar w="18%" /></div>
+      </div>
+    );
+  }
   return (
     <div className="tile flex min-h-[270px] flex-col gap-2 p-3 pb-4">
       <div className="skeleton h-[88px] rounded-ui-lg" />
@@ -141548,6 +141749,21 @@ export function TilesSkeleton() {
 
 export function ListSkeleton() {
   useI18n();
+  const [{ ember }] = useAppearance();
+  if (ember) {
+    return (
+      <div className="space-y-2" aria-busy="true" aria-label={t('d2.news.loading')}>
+        {[0, 1, 2, 3, 4].map((i) => (
+          <div key={i} className="tile flex items-center gap-3 px-4 py-3">
+            <div className="skeleton h-9 w-9 shrink-0 rounded-xl" />
+            <div className="flex-1 space-y-2"><Bar w="45%" h={14} /><Bar w="22%" h={10} /></div>
+            <Bar w={110} h={8} className="max-sm:hidden" />
+            <Bar w={44} h={18} />
+          </div>
+        ))}
+      </div>
+    );
+  }
   return (
     <div className="panel space-y-0 overflow-hidden p-0" aria-busy="true" aria-label={t('d2.news.loading')}>
       {[0, 1, 2, 3, 4].map((i) => (
@@ -141694,6 +141910,7 @@ export function updateStateOf(r: UpdateInfo): UpdateState {
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/confirm.tsx" << '__COREGSM_EOF__'
+import { haptic } from './ui/haptic';
 import { useEffect, useRef, useState, type FormEvent, type MouseEvent, type RefObject } from 'react';
 import * as RDialog from '@radix-ui/react-dialog';
 import { IconInfo, IconWarn } from './icons';
@@ -141880,6 +142097,7 @@ function Dialog({ req, onDone }: { req: Req; onDone: () => void }) {
       const msg = req.opts.validate(value);
       if (msg) { setError(msg); input.current?.focus(); return; }
     }
+    haptic(o.danger ? 'warn' : 'ok');
     finish(true);
   };
 
@@ -142348,6 +142566,61 @@ export function countdownText(nextTryAt: number | null, now = Date.now()): strin
 export const canRetry = (s: DeliveryStatus) => s === 'dead' || s === 'error';
 
 export const attemptsText = (n: number, max = MAX_ATTEMPTS) => `${Math.min(n, max)}/${max}`;
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src"
+  cat > "$APP_DIR/core-frontend/src/emberAccent.ts" << '__COREGSM_EOF__'
+import { useSyncExternalStore } from 'react';
+
+/** the accent colour of the Ember look (data-ember-accent on <html>): the visitor's own choice, kept in this browser */
+export const EMBER_ACCENTS = ['ember', 'amber', 'coral', 'emerald'] as const;
+export type EmberAccent = (typeof EMBER_ACCENTS)[number];
+export const EMBER_ACCENT_KEY = 'coregsm_look_accent';
+/** the colour of the swatch of each accent (the same as the brand token of the look) */
+export const EMBER_ACCENT_SWATCH: Record<EmberAccent, string> = { ember: '#d6420a', amber: '#c26400', coral: '#d52850', emerald: '#047857' };
+
+export const isEmberAccent = (v: unknown): v is EmberAccent => typeof v === 'string' && (EMBER_ACCENTS as readonly string[]).includes(v);
+
+function read(): EmberAccent {
+  try {
+    const v = localStorage.getItem(EMBER_ACCENT_KEY);
+    return isEmberAccent(v) ? v : 'ember';
+  } catch {
+    return 'ember';
+  }
+}
+
+let current: EmberAccent = typeof window === 'undefined' ? 'ember' : read();
+const listeners = new Set<() => void>();
+
+function paint(a: EmberAccent) {
+  if (a === 'ember') document.documentElement.removeAttribute('data-ember-accent');
+  else document.documentElement.setAttribute('data-ember-accent', a);
+}
+
+/** call once before React renders */
+export function initEmberAccent() {
+  current = read();
+  paint(current);
+  window.addEventListener('storage', (e) => {
+    if (e.key !== EMBER_ACCENT_KEY) return;
+    current = read();
+    paint(current);
+    listeners.forEach((l) => l());
+  });
+}
+
+export function setEmberAccent(a: EmberAccent) {
+  current = a;
+  try { localStorage.setItem(EMBER_ACCENT_KEY, a); } catch { /* applied for this visit only */ }
+  paint(a);
+  listeners.forEach((l) => l());
+}
+
+const subscribe = (l: () => void) => { listeners.add(l); return () => { listeners.delete(l); }; };
+export function useEmberAccent(): [EmberAccent, (a: EmberAccent) => void] {
+  const a = useSyncExternalStore(subscribe, () => current, () => 'ember' as EmberAccent);
+  return [a, setEmberAccent];
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/flashDebug.ts" << '__COREGSM_EOF__'
@@ -145438,6 +145711,7 @@ const en: Record<keyof typeof ru, string> = {
   'hdr.searchTitle': 'Search (Ctrl K)',
   'hdr.profile': 'Profile',
   'hdr.profileOf': 'Profile: {name}',
+  'hdr.recent': 'Recent',
   'hdr.logout': 'Sign out',
   'hdr.login': 'Sign in',
   'hdr.register': 'Sign up',
@@ -145661,6 +145935,12 @@ const en: Record<keyof typeof ru, string> = {
   'pf.density.normalHint': 'More air, larger tiles.',
   'pf.density.compact': 'Compact',
   'pf.density.compactHint': 'Tighter spacing: more servers on screen.',
+  'pf.emberAccent.label': 'Ember colour',
+  'pf.emberAccent.ember': 'Ember',
+  'pf.emberAccent.amber': 'Amber',
+  'pf.emberAccent.coral': 'Coral',
+  'pf.emberAccent.emerald': 'Emerald',
+  'pf.emberAccent.hint': 'The accent of the Ember look: buttons, selection, chart. The contrast of the text is kept.',
   'pf.accent.label': 'Game accent',
   'pf.accent.auto': 'Auto',
   'pf.accent.autoHint': 'The colour of the open server\'s game, or of the community\'s main game.',
@@ -145931,6 +146211,7 @@ const en: Record<keyof typeof ru, string> = {
   'srv.pulse.players': 'Players now',
   'srv.pulse.servers': 'Servers online',
   'srv.pulse.ping': 'Average ping',
+  'srv.fav.failed': 'Could not change the favourites. Try again.',
   'srv.fav.title': 'Favourites',
   'srv.fav.rest': 'Others',
   'srv.pulse.tip.players': 'How many people play right now on all the servers together; the arrow shows the change over the last hour',
@@ -149990,6 +150271,7 @@ const errorsEn: Record<string, string> = {
   csrf_header_missing: 'Request rejected: the X-CoreGSM header is missing',
   rate_limited: 'Too many requests. Wait a minute.',
   rate_limited_later: 'Too many requests. Try again later.',
+  too_many_connections: 'Too many open connections',
   too_many_attempts: 'Too many attempts. Wait 10 minutes.',
   bad_data: 'Invalid data',
   bad_data_lower: 'invalid data',
@@ -150374,6 +150656,7 @@ const ru = {
   'hdr.searchTitle': 'Поиск (Ctrl K)',
   'hdr.profile': 'Профиль',
   'hdr.profileOf': 'Профиль: {name}',
+  'hdr.recent': 'Недавние',
   'hdr.logout': 'Выйти',
   'hdr.login': 'Войти',
   'hdr.register': 'Регистрация',
@@ -150597,6 +150880,12 @@ const ru = {
   'pf.density.normalHint': 'Больше воздуха, крупные плитки.',
   'pf.density.compact': 'Компактная',
   'pf.density.compactHint': 'Меньше отступов: больше серверов на экране.',
+  'pf.emberAccent.label': 'Цвет Ember',
+  'pf.emberAccent.ember': 'Уголёк',
+  'pf.emberAccent.amber': 'Янтарь',
+  'pf.emberAccent.coral': 'Коралл',
+  'pf.emberAccent.emerald': 'Изумруд',
+  'pf.emberAccent.hint': 'Акцент вида Ember: кнопки, выделение, график. Контраст текста сохраняется.',
   'pf.accent.label': 'Акцент по игре',
   'pf.accent.auto': 'Авто',
   'pf.accent.autoHint': 'Цвет игры открытого сервера или основной игры сообщества.',
@@ -150867,6 +151156,7 @@ const ru = {
   'srv.pulse.players': 'Игроков сейчас',
   'srv.pulse.servers': 'Серверов онлайн',
   'srv.pulse.ping': 'Средний пинг',
+  'srv.fav.failed': 'Не удалось изменить избранное. Попробуйте ещё раз.',
   'srv.fav.title': 'Избранные',
   'srv.fav.rest': 'Остальные',
   'srv.pulse.tip.players': 'Сколько человек играет сейчас на всех серверах вместе; стрелка показывает изменение за час',
@@ -154937,6 +155227,7 @@ import { RootBoundary } from './RootBoundary';
 import { api, getToken } from './api';
 import { toast } from './ui/toast';
 import { initAppearance } from './appearance';
+import { initEmberAccent } from './emberAccent';
 import { QueryProvider } from './ui/query';
 import { ready as i18nReady } from './i18n';
 import { installViewport } from './ui/viewport';
@@ -154944,6 +155235,7 @@ import { initDensity, installMagnetic, installSegIndicator } from './useMotion';
 
 // before the first paint: the accessibility options (less motion, large text, high contrast), the saved density, the magnetic call-to-action buttons and the sliding tab pill
 initAppearance();
+initEmberAccent();
 initDensity();
 installMagnetic();
 installSegIndicator();
@@ -164968,6 +165260,8 @@ export default function ResetPassword({ token }: { token: string }) {
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/ServerDetail.tsx" << '__COREGSM_EOF__'
+import { rememberPaletteRecent, rememberServer } from '../ui/recent';
+import { haptic } from '../ui/haptic';
 import PlayersBars from '../components/server/PlayersBars';
 import { useAppearance } from '../appearance';
 import { setPageTitleDetail } from '../pageTitle';
@@ -165264,8 +165558,9 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
   const toggleFav = async () => {
     const cur = favs ?? [];
     const on = cur.includes(id);
+    haptic('tap');
     setFavs(on ? cur.filter((x) => x !== id) : [...cur, id]);
-    await api(`/favorites/${id}`, on ? 'DELETE' : 'PUT').catch(() => undefined);
+    await api(`/favorites/${id}`, on ? 'DELETE' : 'PUT').catch(() => { setFavs(cur); toast(t('srv.fav.failed'), 'err'); });
   };
 
   const subs = useSubscriptions(!!me);
@@ -165341,11 +165636,22 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
   // the tab of the browser carries the name of the server
   const serverName = data?.server.name ?? null;
   useEffect(() => { setPageTitleDetail(serverName); return () => setPageTitleDetail(null); }, [serverName]);
+  // the server is remembered as a recently opened one (the side column and the palette show it)
+  const gameOfServer = data?.server.game ?? null;
+  useEffect(() => { if (serverName && gameOfServer) { rememberServer({ id, name: serverName, game: gameOfServer }); rememberPaletteRecent(`s${id}`); } }, [id, serverName, gameOfServer]);
   const coverAccentOrGame = useCoverAccent(data ? coverUrlOf(data.server.coverUrl, data.server.game) : null, data ? gameAccent(data.server.game) : 'rgb(var(--brand))');
 
   if (missing) return <NotFound kind="server" />;
 
-  const back = <Crumbs items={[['/servers', t('nav.servers')], [`/servers/${id}`, data?.server.name ?? '…']]} />;
+  const back = (
+    <Crumbs
+      items={[
+        ['/servers', t('nav.servers')],
+        // the last crumb opens the list of the servers, to jump to a neighbour without going back
+        [`/servers/${id}`, data?.server.name ?? '…', () => api<Server[]>('/servers').then((l) => l.map((x) => ({ href: `/servers/${x.id}`, label: x.name })))],
+      ]}
+    />
+  );
 
   if (!data) {
     return (
@@ -165987,6 +166293,8 @@ export default function ServerForm({ initial, id, coverUrl, onCoverChanged, onCl
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/Servers.tsx" << '__COREGSM_EOF__'
+import { useLive } from '../ui/live';
+import { haptic } from '../ui/haptic';
 import { useAppearance } from '../appearance';
 import { Fragment, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent } from 'react';
 import { HomeBlocksMenu, useHomeBlocks } from '../components/servers/HomeBlocks';
@@ -165995,7 +166303,7 @@ import { useAuth } from '../auth';
 import { gameColor, gameGradient, gameLabel } from '../games';
 import { coverBackground, emblemStyle, gameBackdrop, coverUrlOf } from '../cover';
 import MaintenanceChip from '../components/MaintenanceChip';
-import { AnimatedNumber, Burst, ErrorLine, GameAvatar, LoadError, IconServers, PageHead, Spark, StatusPill, ago, isLag, spanCaption, useSparkSpanMin, usePoll, navigate, routeQuery } from '../ui';
+import { AnimatedNumber, Burst, ErrorLine, GameAvatar, LoadError, IconServers, PageHead, Spark, StatusPill, ago, isLag, spanCaption, useSparkSpanMin, usePoll, toast, navigate, routeQuery } from '../ui';
 import { t, useI18n, type TKey } from '../i18n';
 import { calmSeriesColor, useCoverAccent } from '../components/server/coverAccent';
 import { pingTone, TONE_TEXT } from '../components/server/helpers';
@@ -166173,8 +166481,10 @@ function ServerList() {
   }, [me]);
   const toggleFav = async (id: number) => {
     const on = favs.includes(id);
+    haptic('tap');
     setFavs(on ? favs.filter((x) => x !== id) : [...favs, id]);
-    await api(`/favorites/${id}`, on ? 'DELETE' : 'PUT').catch(() => undefined);
+    // the star changes at once; when the server refuses, it goes back and says so
+    await api(`/favorites/${id}`, on ? 'DELETE' : 'PUT').catch(() => { setFavs(favs); toast(t('srv.fav.failed'), 'err'); });
   };
   const [servers, setServers] = useState<Server[]>([]);
   const [loaded, setLoaded] = useState(false);
@@ -166218,8 +166528,9 @@ function ServerList() {
       .then((s) => { setServers(s); setError(''); setUpdatedAt(Date.now()); })
       .catch((e) => setError(e.message))
       .finally(() => setLoaded(true));
-  // the TV mode refreshes twice as often
-  usePoll(load, 10_000);
+  // the server tells the panel when something was polled; the timer is then only a safety net
+  const live = useLive(load);
+  usePoll(load, live ? 60_000 : 10_000);
   // a tap on «обновлено …» or a pull down from the top of the page refreshes at once
   const [refreshing, setRefreshing] = useState(false);
   const refreshNow = async () => {
@@ -171148,7 +171459,10 @@ a.adm-tile:hover { box-shadow: var(--shadow-2); border-color: rgb(var(--brand) /
 /* alerts: kinds of messages, the delivery bar */
 .al-kinds { display: grid; grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); gap: 10px; }
 .al-kind { display: grid; gap: 6px; padding: 12px 14px; border-radius: var(--r-lg); background: rgb(var(--card)); border: 1px solid rgb(var(--line)); box-shadow: var(--shadow-1); }
-.al-kind.is-off { opacity: .6; box-shadow: none; background: rgb(var(--soft) / .6); }
+/* a kind that is off is quieter, but not faded: a faded pill fell under the contrast limit */
+.al-kind.is-off { box-shadow: none; background: rgb(var(--soft) / .6); }
+.al-kind.is-off .al-msg { color: rgb(var(--mute)); }
+.al-kind.is-off .pill { filter: grayscale(.55); }
 .al-msg { padding: 8px 10px; border-radius: var(--r-md); border-left: 3px solid rgb(var(--brand)); background: rgb(var(--soft)); font-size: var(--fs-sm); font-weight: 650; }
 .al-queue { display: flex; height: 8px; border-radius: var(--r-pill); overflow: hidden; background: rgb(var(--line)); }
 .al-queue i { display: block; height: 100%; transition: width .4s ease; }
@@ -171215,6 +171529,8 @@ a.adm-tile:hover { box-shadow: var(--shadow-2); border-color: rgb(var(--brand) /
   .adm-split { grid-template-columns: minmax(0, 1fr) minmax(0, 26rem); align-items: start; gap: 24px; }
   .adm-split-side { position: sticky; top: 6.5rem; }
 }
+
+@media (max-width: 639px) { .adm-chip { min-height: 44px; } }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/analytics.css" << '__COREGSM_EOF__'
@@ -172794,14 +173110,14 @@ __COREGSM_EOF__
   border-radius: var(--r-xl);
 }
 :root[data-ember='1'] .st-banner-ico { border-radius: 18px; }
-:root[data-ember='1'] .st-banner-ico::after { border-radius: 22px; }
+:root[data-ember='1'] .st-banner-ico::after { border-radius: 24px; }
 :root[data-ember='1'] .st-banner-stats > div { border-radius: var(--r-lg); background: rgb(var(--soft)); border: 0; box-shadow: inset 0 0 0 1px rgb(var(--line)); padding: 10px 14px; }
 :root[data-ember='1'] .st-banner-stats > div.is-alert { background: rgb(var(--badbg)); box-shadow: inset 0 0 0 1px rgb(var(--bad) / .4); }
 :root[data-ember='1'] .st-banner-stats dd { font-size: 24px; font-weight: 800; }
 
 /* the servers: one card each, the day cells are solid columns, the days without data are a quiet block, not a dashed outline */
 :root[data-ember='1'] .st-server::before { width: 4px; border-radius: 0 4px 4px 0; top: 14px; bottom: 14px; }
-:root[data-ember='1'] .st-day { border: 0; border-radius: 5px; }
+:root[data-ember='1'] .st-day { border: 0; border-radius: 6px; }
 :root[data-ember='1'] .st-day:not(.is-ok):not(.is-blip):not(.is-warn):not(.is-bad):not(.is-planned) { background: rgb(var(--ink) / .1); background-image: none; }
 :root[data-ember='1'] .st-day.is-today { box-shadow: 0 0 0 2px rgb(var(--card)), 0 0 0 3.5px rgb(var(--brand-hover)); }
 :root[data-ember='1'] .st-up-v { font-weight: 800; }
@@ -172948,8 +173264,8 @@ __COREGSM_EOF__
 
 /* a phone: the tabs of a server are icons, only the open one carries its name, so all of them fit without a swipe */
 @media (max-width: 639px) {
-  :root[data-ember='1'] .srv-tabs { width: 100%; justify-content: space-between; overflow: visible; }
-  :root[data-ember='1'] .srv-tabs > .seg-item { flex: 1 1 0; justify-content: center; gap: 0; min-width: 44px; padding-inline: 8px; }
+  :root[data-ember='1'] .srv-tabs { width: 100%; justify-content: space-between; }
+  :root[data-ember='1'] .srv-tabs > .seg-item { flex: 1 1 0; justify-content: center; gap: 0; min-width: 40px; padding-inline: 6px; }
   :root[data-ember='1'] .srv-tabs > .seg-item:not(.on) { font-size: 0; }
   :root[data-ember='1'] .srv-tabs > .seg-item.on { flex: 0 0 auto; gap: 6px; }
   :root[data-ember='1'] .srv-tabs > .seg-item .tab-count { font-size: var(--fs-xs); margin-left: 4px; }
@@ -173169,6 +173485,83 @@ __COREGSM_EOF__
 @media (min-width: 1024px) {
   :root[data-ember='1'] [id$='ov-stats'] .srv-metrics { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* ======================================================================
+   accents of the look: amber, coral, emerald (a choice of the visitor); the text on a coloured fill keeps its contrast
+   ====================================================================== */
+:root[data-ember='1'][data-ember-accent='amber'] { --brand: 194 100 0 !important; --brand-hover: 160 80 0 !important; --brand-2: 130 62 0 !important; --link: 140 70 0 !important; --wash-b: rgb(255 190 92 / .06); }
+:root[data-ember='1'][data-ember-accent='amber'][data-theme='dark'] { --brand: 194 100 0 !important; --brand-hover: 222 120 8 !important; --brand-2: 150 74 0 !important; --link: 252 176 64 !important; }
+:root[data-ember='1'][data-ember-accent='coral'] { --brand: 213 40 80 !important; --brand-hover: 176 28 62 !important; --brand-2: 150 22 52 !important; --link: 176 28 62 !important; --wash-b: rgb(255 120 150 / .06); }
+:root[data-ember='1'][data-ember-accent='coral'][data-theme='dark'] { --brand: 213 40 80 !important; --brand-hover: 236 62 100 !important; --brand-2: 160 26 56 !important; --link: 255 120 150 !important; }
+:root[data-ember='1'][data-ember-accent='emerald'] { --brand: 4 120 87 !important; --brand-hover: 6 95 70 !important; --brand-2: 4 78 56 !important; --link: 4 100 72 !important; --wash-b: rgb(52 211 153 / .06); }
+:root[data-ember='1'][data-ember-accent='emerald'][data-theme='dark'] { --brand: 4 120 87 !important; --brand-hover: 16 150 110 !important; --brand-2: 4 90 64 !important; --link: 52 211 153 !important; }
+@media (prefers-color-scheme: dark) {
+  :root[data-ember='1'][data-ember-accent='amber']:not([data-theme='light']) { --brand: 194 100 0 !important; --brand-hover: 222 120 8 !important; --brand-2: 150 74 0 !important; --link: 252 176 64 !important; }
+  :root[data-ember='1'][data-ember-accent='coral']:not([data-theme='light']) { --brand: 213 40 80 !important; --brand-hover: 236 62 100 !important; --brand-2: 160 26 56 !important; --link: 255 120 150 !important; }
+  :root[data-ember='1'][data-ember-accent='emerald']:not([data-theme='light']) { --brand: 4 120 87 !important; --brand-hover: 16 150 110 !important; --brand-2: 4 90 64 !important; --link: 52 211 153 !important; }
+}
+/* the gradients that were written with the orange by hand follow the accent */
+:root[data-ember='1'][data-ember-accent] :is(.srv-banner .srv-cta, .srv-mini-go, .pf-level-badge) { background: linear-gradient(135deg, rgb(var(--brand-hover)), rgb(var(--brand))); }
+
+/* ======================================================================
+   the scale: spaces and roundings are tokens; the type of the headings is one set
+   ====================================================================== */
+:root[data-ember='1'] {
+  --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 24px; --sp-6: 32px; --sp-7: 48px;
+  --t-h1: 34px; --t-h2: var(--fs-xl); --t-h3: var(--fs-lg); --t-label: var(--fs-sm);
+}
+:root[data-ember='1'] h1.text-2xl, :root[data-ember='1'] h1.text-3xl { letter-spacing: -.03em; }
+:root[data-ember='1'] :is(.tile, .panel) > h2:first-child, :root[data-ember='1'] :is(.tile, .panel) > header > h2 { font-size: var(--t-h2); line-height: 1.2; }
+:root[data-ember='1'] .font-mono, :root[data-ember='1'] :is(code, kbd, pre) { font-variant-ligatures: none; letter-spacing: -.01em; }
+
+/* the icons: 18 px in buttons and tabs, 20 px in the menus; the weight of the line is the same everywhere */
+:root[data-ember='1'] :is(.btn, .btn-soft, .btn-outline, .btn-ghost, .seg-item) > svg[viewBox='0 0 24 24'] { width: 18px; height: 18px; }
+:root[data-ember='1'] :is(.hdr-nav .seg-item, .adm-nav a, .pm-item) > svg[viewBox='0 0 24 24'] { width: 20px; height: 20px; }
+
+/* a grain on the dark surfaces: the flat gradients stop looking like plastic */
+:root[data-ember='1'] :is(.hero3, .srv-banner, .pl-hero) { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 .55 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.07'/%3E%3C/svg%3E"); }
+:root[data-ember='1'][data-theme='dark'] :is(.pulse, .st-banner) { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 .55 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.07'/%3E%3C/svg%3E"); }
+@media (prefers-color-scheme: dark) { :root[data-ember='1']:not([data-theme='light']) :is(.pulse, .st-banner) { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 .55 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.07'/%3E%3C/svg%3E"); } }
+
+/* the menus open with a short spring */
+@keyframes emb-menu { from { opacity: 0; transform: translateY(-6px) scale(.96); } 60% { opacity: 1; transform: translateY(0) scale(1.012); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: no-preference) {
+  :root[data-ember='1'] :is(.pm-menu, .upd-more-menu, .split-menu, .adm-cols-pop) { transform-origin: top right; animation: emb-menu .26s cubic-bezier(.34, 1.4, .64, 1) both; }
+}
+
+/* ---------- the servers opened last: a short list under the sections (wide screens, not the admin area) ---------- */
+:root[data-ember='1'] .hdr-recent { display: none; }
+@media (min-width: 1100px) {
+  :root[data-ember='1']:not([data-page='admin']) .hdr-recent { display: grid; gap: 2px; width: 100%; margin-top: 6px; }
+  :root[data-ember='1'] .hdr-recent-k { padding: 2px 12px 6px; font-size: var(--fs-xs); font-weight: 700; color: rgb(var(--mute)); letter-spacing: .02em; }
+  :root[data-ember='1'] .hdr-recent-i { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 7px 12px; border-radius: 12px; font-size: var(--fs-sm); font-weight: 650; color: rgb(var(--mute)); }
+  :root[data-ember='1'] .hdr-recent-i:hover { background: rgb(var(--soft)); color: rgb(var(--ink)); }
+  :root[data-ember='1'] .hdr-recent-i[aria-current='page'] { color: rgb(var(--ink)); background: rgb(var(--soft)); box-shadow: inset 0 0 0 1px rgb(var(--line)); }
+}
+
+/* the tips of the charts (the home page, the status page, the history): one look */
+:root[data-ember='1'] :is(.pulse-tip, .st-tip) { background: rgb(var(--ink)); color: rgb(var(--page)); border-radius: 12px; font-size: var(--fs-sm); font-weight: 700; box-shadow: var(--shadow-3); border: 0; }
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/styles"
+  cat > "$APP_DIR/core-frontend/src/styles/emberScale.test.ts" << '__COREGSM_EOF__'
+import { readFileSync } from 'node:fs';
+import { describe, expect, it } from 'vitest';
+
+/** the Ember look keeps to one scale of roundings: new rules cannot bring in a 13 px or a 19 px by accident */
+const css = readFileSync(new URL('./ember.css', import.meta.url), 'utf8');
+const SCALE = new Set([0, 6, 7, 8, 10, 12, 14, 16, 18, 24, 99]);
+
+describe('ember.css scale', () => {
+  it('every rounding in pixels is on the scale', () => {
+    const bad = [...css.matchAll(/border-radius:\s*(\d+)px/g)].map((m) => Number(m[1])).filter((n) => !SCALE.has(n));
+    expect(bad, `off the scale: ${[...new Set(bad)].join(', ')}px; use one of ${[...SCALE].join(', ')}`).toEqual([]);
+  });
+
+  it('no font size is written in pixels below the scale of the panel (use the tokens --fs-*)', () => {
+    const small = [...css.matchAll(/font-size:\s*(\d+)px/g)].map((m) => Number(m[1])).filter((n) => n < 19);
+    expect(small).toEqual([]);
+  });
+});
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/mobile.css" << '__COREGSM_EOF__'
@@ -175284,6 +175677,18 @@ html[data-motion='reduce'] .bell-ring svg { animation: none; }
   a { color: inherit; text-decoration: none; }
   * { animation: none !important; transition: none !important; }
 }
+
+.crumbs-menu { position: relative; display: inline-block; }
+.crumbs-menu > button { display: inline-flex; align-items: center; gap: 4px; font: inherit; color: rgb(var(--ink)); border-radius: 8px; padding: 2px 6px; margin: -2px -6px; }
+.crumbs-menu > button:hover { background: rgb(var(--soft)); }
+.crumbs-pop { position: absolute; left: 0; top: calc(100% + 6px); z-index: 50; min-width: 14rem; max-width: min(24rem, 86vw); max-height: 18rem; overflow-y: auto; display: grid; gap: 2px; padding: 6px; }
+.crumbs-pop a { display: block; padding: 7px 10px; border-radius: 10px; font-weight: 700; color: rgb(var(--ink)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.crumbs-pop a:hover { background: rgb(var(--soft)); text-decoration: none; }
+.crumbs-pop a[aria-current='page'] { color: rgb(var(--link)); }
+.crumbs-wait { padding: 8px 10px; font-weight: 600; color: rgb(var(--mute)); }
+
+/* a phone: the crumb that opens a menu is a tap target */
+@media (max-width: 639px) { .crumbs-menu > button { min-height: 44px; } }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/status.css" << '__COREGSM_EOF__'
@@ -176839,6 +177244,68 @@ export const num = (n: number | null | undefined, digits = 1): string => {
 };
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/ui"
+  cat > "$APP_DIR/core-frontend/src/ui/haptic.ts" << '__COREGSM_EOF__'
+/**
+ * A short tap of the vibration motor on a phone: a confirmation, a switch, a favourite. Only where the device has a
+ * motor and a touch screen, and never with «reduce motion» (the setting of the panel or of the system).
+ */
+const PATTERNS = { tap: 8, ok: [10, 40, 14], warn: [24, 50, 24] } as const;
+export function haptic(kind: keyof typeof PATTERNS = 'tap'): void {
+  try {
+    if (typeof navigator === 'undefined' || typeof navigator.vibrate !== 'function') return;
+    if (document.documentElement.dataset.motion === 'reduce') return;
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
+    if (!window.matchMedia?.('(pointer: coarse)').matches) return;
+    navigator.vibrate(PATTERNS[kind] as number | number[]);
+  } catch {
+    /* a device without the motor: nothing to do */
+  }
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/ui"
+  cat > "$APP_DIR/core-frontend/src/ui/live.ts" << '__COREGSM_EOF__'
+import { useEffect, useRef, useState } from 'react';
+
+/**
+ * Live updates: one long GET /api/live (Server-Sent Events). The panel is told that a server was polled and runs `onSignal`
+ * (a reload of its list) at once. Only while the tab is visible, not in the data-saving mode, and the connection closes
+ * itself when the browser or the server refuses it; the caller then keeps its ordinary timer. Returns «connected».
+ */
+export function useLive(onSignal: () => unknown): boolean {
+  const ref = useRef(onSignal);
+  ref.current = onSignal;
+  const [live, setLive] = useState(false);
+  useEffect(() => {
+    if (typeof EventSource === 'undefined') return undefined;
+    let es: EventSource | null = null;
+    let last = 0;
+    let alive = true;
+    const open = () => {
+      if (!alive || es || document.hidden || document.documentElement.hasAttribute('data-lite')) return;
+      es = new EventSource('/api/live');
+      es.onopen = () => setLive(true);
+      es.addEventListener('status', () => {
+        // a burst of polls is one reload
+        if (Date.now() - last < 800) return;
+        last = Date.now();
+        void ref.current();
+      });
+      es.onerror = () => {
+        // the browser reconnects by itself after a break; a refusal (4xx, a closed panel) ends it for good
+        setLive(false);
+        if (es && es.readyState === EventSource.CLOSED) { es.close(); es = null; }
+      };
+    };
+    const close = () => { es?.close(); es = null; setLive(false); };
+    const onVisible = () => { if (document.hidden) close(); else open(); };
+    document.addEventListener('visibilitychange', onVisible);
+    open();
+    return () => { alive = false; document.removeEventListener('visibilitychange', onVisible); close(); };
+  }, []);
+  return live;
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/ui"
   cat > "$APP_DIR/core-frontend/src/ui/motion.tsx" << '__COREGSM_EOF__'
 /** Animated numbers and small CSS-only flourishes; all respect reduced motion. */
 import { type CSSProperties, useEffect, useRef, useState } from 'react';
@@ -177058,6 +177525,56 @@ export function QueryProvider({ children }: { children: ReactNode }) {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/ui"
+  cat > "$APP_DIR/core-frontend/src/ui/recent.ts" << '__COREGSM_EOF__'
+import { useSyncExternalStore } from 'react';
+
+/** the last servers the visitor opened (a few names, kept in this browser): shown in the side column and in the palette */
+export interface RecentServer { id: number; name: string; game: string }
+const KEY = 'coregsm_recent_servers';
+const MAX = 3;
+const EVENT = 'coregsm:recent';
+
+const parse = (raw: string | null): RecentServer[] => {
+  try {
+    const v = JSON.parse(raw ?? '[]') as unknown;
+    if (!Array.isArray(v)) return [];
+    return v.filter((x): x is RecentServer => !!x && typeof x === 'object' && Number.isInteger((x as RecentServer).id) && typeof (x as RecentServer).name === 'string' && typeof (x as RecentServer).game === 'string').slice(0, MAX);
+  } catch {
+    return [];
+  }
+};
+
+let cache: { raw: string | null; list: RecentServer[] } = { raw: null, list: [] };
+export function readRecentServers(): RecentServer[] {
+  let raw: string | null = null;
+  try { raw = localStorage.getItem(KEY); } catch { /* private mode */ }
+  if (raw !== cache.raw) cache = { raw, list: parse(raw) };
+  return cache.list;
+}
+
+export function rememberServer(s: RecentServer): void {
+  const list = [{ id: s.id, name: s.name, game: s.game }, ...readRecentServers().filter((x) => x.id !== s.id)].slice(0, MAX);
+  try { localStorage.setItem(KEY, JSON.stringify(list)); } catch { /* not remembered */ }
+  window.dispatchEvent(new Event(EVENT));
+}
+
+const subscribe = (cb: () => void) => {
+  window.addEventListener(EVENT, cb);
+  window.addEventListener('storage', cb);
+  return () => { window.removeEventListener(EVENT, cb); window.removeEventListener('storage', cb); };
+};
+export const useRecentServers = (): RecentServer[] => useSyncExternalStore(subscribe, readRecentServers, () => []);
+
+// ---------- the keys of the command palette («Недавние»): the last things picked or opened ----------
+const PALETTE_KEY = 'coregsm_palette_recent';
+export const readPaletteRecent = (): string[] => {
+  try { const v = JSON.parse(localStorage.getItem(PALETTE_KEY) ?? '[]') as unknown; return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string').slice(0, 5) : []; } catch { return []; }
+};
+export const rememberPaletteRecent = (key: string): void => {
+  try { localStorage.setItem(PALETTE_KEY, JSON.stringify([key, ...readPaletteRecent().filter((k) => k !== key)].slice(0, 5))); } catch { /* not remembered */ }
+};
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/ui"
   cat > "$APP_DIR/core-frontend/src/ui/route.ts" << '__COREGSM_EOF__'
 /**
  * The current route, shared by every component that needs it. Addresses are plain paths ("/servers/12/players");
@@ -177066,6 +177583,7 @@ __COREGSM_EOF__
  * of request lines and access logs.
  */
 import { useEffect, useState } from 'react';
+import { withViewTransition } from '../useMotion';
 
 export type Route = { page: string; sub: string };
 
@@ -177096,13 +177614,42 @@ const toPath = (to: string) => `/${to.replace(/^#?\/*/, '')}`;
 const listeners = new Set<(r: Route) => void>();
 let now: Route | null = null;
 
+/**
+ * The Ember look on a wide screen changes a page inside a View Transition: the old page fades up, the new one rises, and the
+ * avatar of a server travels between its card and its page. Not on a phone and not in the classic look: there the glass header
+ * and the bottom bar (backdrop-filter) were captured as separate layers and flashed as a black rectangle.
+ */
+const wantsTransition = () => {
+  if (typeof document === 'undefined') return false;
+  const root = document.documentElement;
+  return root.dataset.ember === '1' && !root.hasAttribute('data-lite') && window.matchMedia?.('(min-width: 1100px)').matches === true;
+};
+const VT_AVATAR = 'srv-avatar';
+/** the server whose avatar travels: the one opened (list -> page) or the one left (page -> list) */
+const travellingServer = (from: Route | null, to: Route): string | null => {
+  const id = (r: Route | null) => (r?.page === 'servers' && /^\d+(\/|$)/.test(r.sub) ? r.sub.split('/')[0] : null);
+  return id(to) ?? id(from);
+};
+const nameAvatar = (id: string | null) => {
+  if (!id) return;
+  document.querySelectorAll<HTMLElement>(`[data-vt-avatar="${id}"]`).forEach((el, i) => { if (i === 0) el.style.viewTransitionName = VT_AVATAR; });
+};
+const clearAvatar = () => document.querySelectorAll<HTMLElement>(`[data-vt-avatar]`).forEach((el) => { el.style.viewTransitionName = ''; });
+
 function notify() {
   const next = parseRoute();
   if (now && now.page === next.page && now.sub === next.sub) return;
-  // No View Transition here: the glass header and the bottom bar (backdrop-filter) were captured as separate
-  // layers and flashed as a black rectangle while switching sections. The page itself fades in via .pop / .fade-in.
-  now = next;
-  listeners.forEach((l) => l(next));
+  const from = now;
+  const apply = () => {
+    now = next;
+    listeners.forEach((l) => l(next));
+  };
+  if (!now || !wantsTransition()) {
+    apply();
+    return;
+  }
+  const id = travellingServer(from, next);
+  withViewTransition(apply, { before: () => nameAvatar(id), after: () => nameAvatar(id), done: clearAvatar });
 }
 
 /** opens a route of the panel without reloading; `replace` does not add a history entry */

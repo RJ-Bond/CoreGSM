@@ -1,4 +1,5 @@
 import type { InputHTMLAttributes } from 'react';
+import { haptic } from '../ui/haptic';
 
 interface SwitchProps extends Omit<InputHTMLAttributes<HTMLInputElement>, 'onChange' | 'checked' | 'type' | 'role'> {
   checked: boolean;
@@ -19,7 +20,7 @@ export function Switch({ checked, onChange, className = '', ...rest }: SwitchPro
       aria-checked={checked}
       className={`switch ${className}`.trim()}
       checked={checked}
-      onChange={(e) => onChange(e.target.checked)}
+      onChange={(e) => { haptic('tap'); onChange(e.target.checked); }}
     />
   );
 }

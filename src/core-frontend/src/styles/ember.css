@@ -273,14 +273,14 @@
   border-radius: var(--r-xl);
 }
 :root[data-ember='1'] .st-banner-ico { border-radius: 18px; }
-:root[data-ember='1'] .st-banner-ico::after { border-radius: 22px; }
+:root[data-ember='1'] .st-banner-ico::after { border-radius: 24px; }
 :root[data-ember='1'] .st-banner-stats > div { border-radius: var(--r-lg); background: rgb(var(--soft)); border: 0; box-shadow: inset 0 0 0 1px rgb(var(--line)); padding: 10px 14px; }
 :root[data-ember='1'] .st-banner-stats > div.is-alert { background: rgb(var(--badbg)); box-shadow: inset 0 0 0 1px rgb(var(--bad) / .4); }
 :root[data-ember='1'] .st-banner-stats dd { font-size: 24px; font-weight: 800; }
 
 /* the servers: one card each, the day cells are solid columns, the days without data are a quiet block, not a dashed outline */
 :root[data-ember='1'] .st-server::before { width: 4px; border-radius: 0 4px 4px 0; top: 14px; bottom: 14px; }
-:root[data-ember='1'] .st-day { border: 0; border-radius: 5px; }
+:root[data-ember='1'] .st-day { border: 0; border-radius: 6px; }
 :root[data-ember='1'] .st-day:not(.is-ok):not(.is-blip):not(.is-warn):not(.is-bad):not(.is-planned) { background: rgb(var(--ink) / .1); background-image: none; }
 :root[data-ember='1'] .st-day.is-today { box-shadow: 0 0 0 2px rgb(var(--card)), 0 0 0 3.5px rgb(var(--brand-hover)); }
 :root[data-ember='1'] .st-up-v { font-weight: 800; }
@@ -427,8 +427,8 @@
 
 /* a phone: the tabs of a server are icons, only the open one carries its name, so all of them fit without a swipe */
 @media (max-width: 639px) {
-  :root[data-ember='1'] .srv-tabs { width: 100%; justify-content: space-between; overflow: visible; }
-  :root[data-ember='1'] .srv-tabs > .seg-item { flex: 1 1 0; justify-content: center; gap: 0; min-width: 44px; padding-inline: 8px; }
+  :root[data-ember='1'] .srv-tabs { width: 100%; justify-content: space-between; }
+  :root[data-ember='1'] .srv-tabs > .seg-item { flex: 1 1 0; justify-content: center; gap: 0; min-width: 40px; padding-inline: 6px; }
   :root[data-ember='1'] .srv-tabs > .seg-item:not(.on) { font-size: 0; }
   :root[data-ember='1'] .srv-tabs > .seg-item.on { flex: 0 0 auto; gap: 6px; }
   :root[data-ember='1'] .srv-tabs > .seg-item .tab-count { font-size: var(--fs-xs); margin-left: 4px; }
@@ -648,3 +648,59 @@
 @media (min-width: 1024px) {
   :root[data-ember='1'] [id$='ov-stats'] .srv-metrics { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* ======================================================================
+   accents of the look: amber, coral, emerald (a choice of the visitor); the text on a coloured fill keeps its contrast
+   ====================================================================== */
+:root[data-ember='1'][data-ember-accent='amber'] { --brand: 194 100 0 !important; --brand-hover: 160 80 0 !important; --brand-2: 130 62 0 !important; --link: 140 70 0 !important; --wash-b: rgb(255 190 92 / .06); }
+:root[data-ember='1'][data-ember-accent='amber'][data-theme='dark'] { --brand: 194 100 0 !important; --brand-hover: 222 120 8 !important; --brand-2: 150 74 0 !important; --link: 252 176 64 !important; }
+:root[data-ember='1'][data-ember-accent='coral'] { --brand: 213 40 80 !important; --brand-hover: 176 28 62 !important; --brand-2: 150 22 52 !important; --link: 176 28 62 !important; --wash-b: rgb(255 120 150 / .06); }
+:root[data-ember='1'][data-ember-accent='coral'][data-theme='dark'] { --brand: 213 40 80 !important; --brand-hover: 236 62 100 !important; --brand-2: 160 26 56 !important; --link: 255 120 150 !important; }
+:root[data-ember='1'][data-ember-accent='emerald'] { --brand: 4 120 87 !important; --brand-hover: 6 95 70 !important; --brand-2: 4 78 56 !important; --link: 4 100 72 !important; --wash-b: rgb(52 211 153 / .06); }
+:root[data-ember='1'][data-ember-accent='emerald'][data-theme='dark'] { --brand: 4 120 87 !important; --brand-hover: 16 150 110 !important; --brand-2: 4 90 64 !important; --link: 52 211 153 !important; }
+@media (prefers-color-scheme: dark) {
+  :root[data-ember='1'][data-ember-accent='amber']:not([data-theme='light']) { --brand: 194 100 0 !important; --brand-hover: 222 120 8 !important; --brand-2: 150 74 0 !important; --link: 252 176 64 !important; }
+  :root[data-ember='1'][data-ember-accent='coral']:not([data-theme='light']) { --brand: 213 40 80 !important; --brand-hover: 236 62 100 !important; --brand-2: 160 26 56 !important; --link: 255 120 150 !important; }
+  :root[data-ember='1'][data-ember-accent='emerald']:not([data-theme='light']) { --brand: 4 120 87 !important; --brand-hover: 16 150 110 !important; --brand-2: 4 90 64 !important; --link: 52 211 153 !important; }
+}
+/* the gradients that were written with the orange by hand follow the accent */
+:root[data-ember='1'][data-ember-accent] :is(.srv-banner .srv-cta, .srv-mini-go, .pf-level-badge) { background: linear-gradient(135deg, rgb(var(--brand-hover)), rgb(var(--brand))); }
+
+/* ======================================================================
+   the scale: spaces and roundings are tokens; the type of the headings is one set
+   ====================================================================== */
+:root[data-ember='1'] {
+  --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 24px; --sp-6: 32px; --sp-7: 48px;
+  --t-h1: 34px; --t-h2: var(--fs-xl); --t-h3: var(--fs-lg); --t-label: var(--fs-sm);
+}
+:root[data-ember='1'] h1.text-2xl, :root[data-ember='1'] h1.text-3xl { letter-spacing: -.03em; }
+:root[data-ember='1'] :is(.tile, .panel) > h2:first-child, :root[data-ember='1'] :is(.tile, .panel) > header > h2 { font-size: var(--t-h2); line-height: 1.2; }
+:root[data-ember='1'] .font-mono, :root[data-ember='1'] :is(code, kbd, pre) { font-variant-ligatures: none; letter-spacing: -.01em; }
+
+/* the icons: 18 px in buttons and tabs, 20 px in the menus; the weight of the line is the same everywhere */
+:root[data-ember='1'] :is(.btn, .btn-soft, .btn-outline, .btn-ghost, .seg-item) > svg[viewBox='0 0 24 24'] { width: 18px; height: 18px; }
+:root[data-ember='1'] :is(.hdr-nav .seg-item, .adm-nav a, .pm-item) > svg[viewBox='0 0 24 24'] { width: 20px; height: 20px; }
+
+/* a grain on the dark surfaces: the flat gradients stop looking like plastic */
+:root[data-ember='1'] :is(.hero3, .srv-banner, .pl-hero) { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 .55 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.07'/%3E%3C/svg%3E"); }
+:root[data-ember='1'][data-theme='dark'] :is(.pulse, .st-banner) { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 .55 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.07'/%3E%3C/svg%3E"); }
+@media (prefers-color-scheme: dark) { :root[data-ember='1']:not([data-theme='light']) :is(.pulse, .st-banner) { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 .55 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.07'/%3E%3C/svg%3E"); } }
+
+/* the menus open with a short spring */
+@keyframes emb-menu { from { opacity: 0; transform: translateY(-6px) scale(.96); } 60% { opacity: 1; transform: translateY(0) scale(1.012); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: no-preference) {
+  :root[data-ember='1'] :is(.pm-menu, .upd-more-menu, .split-menu, .adm-cols-pop) { transform-origin: top right; animation: emb-menu .26s cubic-bezier(.34, 1.4, .64, 1) both; }
+}
+
+/* ---------- the servers opened last: a short list under the sections (wide screens, not the admin area) ---------- */
+:root[data-ember='1'] .hdr-recent { display: none; }
+@media (min-width: 1100px) {
+  :root[data-ember='1']:not([data-page='admin']) .hdr-recent { display: grid; gap: 2px; width: 100%; margin-top: 6px; }
+  :root[data-ember='1'] .hdr-recent-k { padding: 2px 12px 6px; font-size: var(--fs-xs); font-weight: 700; color: rgb(var(--mute)); letter-spacing: .02em; }
+  :root[data-ember='1'] .hdr-recent-i { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 7px 12px; border-radius: 12px; font-size: var(--fs-sm); font-weight: 650; color: rgb(var(--mute)); }
+  :root[data-ember='1'] .hdr-recent-i:hover { background: rgb(var(--soft)); color: rgb(var(--ink)); }
+  :root[data-ember='1'] .hdr-recent-i[aria-current='page'] { color: rgb(var(--ink)); background: rgb(var(--soft)); box-shadow: inset 0 0 0 1px rgb(var(--line)); }
+}
+
+/* the tips of the charts (the home page, the status page, the history): one look */
+:root[data-ember='1'] :is(.pulse-tip, .st-tip) { background: rgb(var(--ink)); color: rgb(var(--page)); border-radius: 12px; font-size: var(--fs-sm); font-weight: 700; box-shadow: var(--shadow-3); border: 0; }

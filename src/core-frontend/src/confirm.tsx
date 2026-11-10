@@ -1,3 +1,4 @@
+import { haptic } from './ui/haptic';
 import { useEffect, useRef, useState, type FormEvent, type MouseEvent, type RefObject } from 'react';
 import * as RDialog from '@radix-ui/react-dialog';
 import { IconInfo, IconWarn } from './icons';
@@ -184,6 +185,7 @@ function Dialog({ req, onDone }: { req: Req; onDone: () => void }) {
       const msg = req.opts.validate(value);
       if (msg) { setError(msg); input.current?.focus(); return; }
     }
+    haptic(o.danger ? 'warn' : 'ok');
     finish(true);
   };
 

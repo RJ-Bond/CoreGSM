@@ -60,6 +60,8 @@ jobs:
         run: npm run lint:ratchet
       - name: Build
         run: npx vite build
+      - name: The weight of the panel stays in its budget
+        run: node scripts/bundle-budget.mjs
 
   bot:
     runs-on: ubuntu-latest

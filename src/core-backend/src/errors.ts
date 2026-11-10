@@ -20,6 +20,7 @@ export const ERRORS = {
   csrf_header_missing: 'Запрос отклонён: не хватает заголовка X-CoreGSM',
   rate_limited: 'Слишком много запросов. Подождите минуту.',
   rate_limited_later: 'Слишком много запросов. Попробуйте позже.',
+  too_many_connections: 'Слишком много открытых подключений',
   too_many_attempts: 'Слишком много попыток. Подождите 10 минут.',
   bad_data: 'Неверные данные',
   bad_data_lower: 'неверные данные',

@@ -1,3 +1,5 @@
+import { rememberPaletteRecent, rememberServer } from '../ui/recent';
+import { haptic } from '../ui/haptic';
 import PlayersBars from '../components/server/PlayersBars';
 import { useAppearance } from '../appearance';
 import { setPageTitleDetail } from '../pageTitle';
@@ -294,8 +296,9 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
   const toggleFav = async () => {
     const cur = favs ?? [];
     const on = cur.includes(id);
+    haptic('tap');
     setFavs(on ? cur.filter((x) => x !== id) : [...cur, id]);
-    await api(`/favorites/${id}`, on ? 'DELETE' : 'PUT').catch(() => undefined);
+    await api(`/favorites/${id}`, on ? 'DELETE' : 'PUT').catch(() => { setFavs(cur); toast(t('srv.fav.failed'), 'err'); });
   };
 
   const subs = useSubscriptions(!!me);
@@ -371,11 +374,22 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
   // the tab of the browser carries the name of the server
   const serverName = data?.server.name ?? null;
   useEffect(() => { setPageTitleDetail(serverName); return () => setPageTitleDetail(null); }, [serverName]);
+  // the server is remembered as a recently opened one (the side column and the palette show it)
+  const gameOfServer = data?.server.game ?? null;
+  useEffect(() => { if (serverName && gameOfServer) { rememberServer({ id, name: serverName, game: gameOfServer }); rememberPaletteRecent(`s${id}`); } }, [id, serverName, gameOfServer]);
   const coverAccentOrGame = useCoverAccent(data ? coverUrlOf(data.server.coverUrl, data.server.game) : null, data ? gameAccent(data.server.game) : 'rgb(var(--brand))');
 
   if (missing) return <NotFound kind="server" />;
 
-  const back = <Crumbs items={[['/servers', t('nav.servers')], [`/servers/${id}`, data?.server.name ?? '…']]} />;
+  const back = (
+    <Crumbs
+      items={[
+        ['/servers', t('nav.servers')],
+        // the last crumb opens the list of the servers, to jump to a neighbour without going back
+        [`/servers/${id}`, data?.server.name ?? '…', () => api<Server[]>('/servers').then((l) => l.map((x) => ({ href: `/servers/${x.id}`, label: x.name })))],
+      ]}
+    />
+  );
 
   if (!data) {
     return (

@@ -25,6 +25,13 @@
         // the admin area has its own theme when one was chosen there
         if (location.pathname.indexOf('/admin') === 0) t = localStorage.getItem('coregsm_admin_theme') || t;
         if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+        // the look (the own choice, else the community's default) and its accent: no flash from the classic look to Ember
+        var own = localStorage.getItem('coregsm_look');
+        if (own === '1' || (own !== '0' && localStorage.getItem('coregsm_look_default') === 'ember')) {
+          document.documentElement.setAttribute('data-ember', '1');
+          var acc = localStorage.getItem('coregsm_look_accent');
+          if (acc === 'amber' || acc === 'coral' || acc === 'emerald') document.documentElement.setAttribute('data-ember-accent', acc);
+        }
       } catch (e) {}
     </script>
   </head>

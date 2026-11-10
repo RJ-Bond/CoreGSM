@@ -1,3 +1,4 @@
+import { emitLive } from '../live.js';
 import { trackAlerts } from '../alerts/alerts.js';
 import { trackSmart } from '../alerts/smartAlerts.js';
 import { onPollResult } from '../community/subscriptions.js';
@@ -217,7 +218,10 @@ export async function refreshServer(s: ServerRow, opts: { debounce?: boolean } =
   // the server may have been deleted while the query was running
   const still = db.prepare('SELECT 1 FROM servers WHERE id = ?').get(s.id);
   if (!still) return null;
-  return applyPollResult(s, r, ts, opts);
+  const out = applyPollResult(s, r, ts, opts);
+  // the open panels reload their list at once (see live.ts)
+  emitLive();
+  return out;
 }
 
 // ---------- scheduler ----------

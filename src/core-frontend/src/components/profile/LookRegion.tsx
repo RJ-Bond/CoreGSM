@@ -2,6 +2,7 @@ import { useMemo, useState, type CSSProperties } from 'react';
 import { ACCENT_MODES, useAccentMode, type AccentMode } from '../../accent';
 import { PRESET_IDS, PRESETS, presetOf, useAppearance, type Appearance, type PresetId } from '../../appearance';
 import { gameColor } from '../../games';
+import { EMBER_ACCENTS, EMBER_ACCENT_SWATCH, useEmberAccent } from '../../emberAccent';
 import { type Prefs, type TKey, t, updatePrefs, useI18n } from '../../i18n';
 import { fmtDateTime, Section, Switch, toast, useDensity, type Density } from '../../ui';
 
@@ -19,6 +20,7 @@ export function AppearanceCard() {
   const [density, setDensity] = useDensity();
   const [mode, setMode] = useAccentMode();
   const [look, setLook] = useAppearance();
+  const [emberAccent, setEmberAccent] = useEmberAccent();
   const a11y: [keyof Appearance, TKey, TKey][] = [
     ['reduceMotion', 'pf.a11y.motion', 'pf.a11y.motionHint'],
     ['largeText', 'pf.a11y.text', 'pf.a11y.textHint'],
@@ -64,6 +66,20 @@ export function AppearanceCard() {
         </div>
         <p className="mt-2 text-sm font-semibold text-mute">{t(ACCENT_TEXT[mode].hint)} {t('pf.thisBrowser')}</p>
       </div>
+      {look.ember && (
+        <div>
+          <span id="ember-accent-label" className="label">{t('pf.emberAccent.label')}</span>
+          <div className="seg flex-wrap" role="group" aria-labelledby="ember-accent-label">
+            {EMBER_ACCENTS.map((id) => (
+              <button key={id} type="button" className="seg-item" aria-pressed={emberAccent === id} onClick={() => setEmberAccent(id)}>
+                <span className="accent-dot" style={{ '--sw': EMBER_ACCENT_SWATCH[id] } as CSSProperties} aria-hidden />
+                {t(`pf.emberAccent.${id}` as TKey)}
+              </button>
+            ))}
+          </div>
+          <p className="mt-2 text-sm font-semibold text-mute">{t('pf.emberAccent.hint')} {t('pf.thisBrowser')}</p>
+        </div>
+      )}
       <div role="group" aria-labelledby="a11y-label">
         <span id="a11y-label" className="label">{t('pf.a11y.label')}</span>
         <ul className="space-y-1">

@@ -7,7 +7,8 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { api, onBusy, type Me } from '../api';
 import { useAppearance } from '../appearance';
 import { t, useI18n } from '../i18n';
-import { UserAvatar } from '../ui';
+import { GameAvatar, UserAvatar } from '../ui';
+import { useRecentServers } from '../ui/recent';
 import { FootCommunity, FootNews, FootServers, FootStatus, FootTag } from './FooterIcons';
 import { MenuAdmin, MenuLogout, MenuUser } from './HeaderIcons';
 import '../styles/shell.css';
@@ -139,17 +140,65 @@ export function AppFooter({ brand, version, compact = false }: { brand: string; 
 }
 
 // ---------- breadcrumbs ----------
-export function Crumbs({ items }: { items: [href: string, label: ReactNode][] }) {
+export type CrumbMenuItem = { href: string; label: string };
+/** [address, name, optional: a loader of the neighbours; the last crumb then opens a menu to jump to them] */
+export function Crumbs({ items }: { items: [href: string, label: ReactNode, menu?: () => Promise<CrumbMenuItem[]>][] }) {
   useI18n();
+  const [open, setOpen] = useState<CrumbMenuItem[] | 'loading' | null>(null);
+  const box = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const down = (e: PointerEvent) => { if (!box.current?.contains(e.target as Node)) setOpen(null); };
+    const key = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(null); };
+    document.addEventListener('pointerdown', down);
+    document.addEventListener('keydown', key);
+    return () => { document.removeEventListener('pointerdown', down); document.removeEventListener('keydown', key); };
+  }, [open]);
+  const toggle = (load: () => Promise<CrumbMenuItem[]>) => {
+    if (open) { setOpen(null); return; }
+    setOpen('loading');
+    load().then((l) => setOpen(l), () => setOpen(null));
+  };
   return (
     <nav className="crumbs" aria-label={t('d2.sh.crumbs')}>
       <ol>
-        {items.map(([href, label], i) => (
+        {items.map(([href, label, menu], i) => (
           <li key={href + i}>
-            {i < items.length - 1 ? <a href={href}>{label}</a> : <span aria-current="page">{label}</span>}
+            {i < items.length - 1 ? <a href={href}>{label}</a> : menu ? (
+              <span className="crumbs-menu" ref={box}>
+                <button type="button" aria-haspopup="menu" aria-expanded={!!open} onClick={() => toggle(menu)}>
+                  <span aria-current="page">{label}</span> <span aria-hidden>▾</span>
+                </button>
+                {open && (
+                  <div className="crumbs-pop panel panel-raised" role="menu">
+                    {open === 'loading' ? <span className="crumbs-wait">{t('hdr.loading')}</span> : open.map((m) => (
+                      <a key={m.href} role="menuitem" href={m.href} aria-current={m.href === href ? 'page' : undefined} onClick={() => setOpen(null)}>{m.label}</a>
+                    ))}
+                  </div>
+                )}
+              </span>
+            ) : <span aria-current="page">{label}</span>}
           </li>
         ))}
       </ol>
+    </nav>
+  );
+}
+
+// ---------- the servers opened last: a short list in the side column (the Ember look, wide screens) ----------
+export function RecentServers({ currentId }: { currentId?: number }) {
+  useI18n();
+  const list = useRecentServers();
+  if (list.length === 0) return null;
+  return (
+    <nav className="hdr-recent" aria-label={t('hdr.recent')}>
+      <span className="hdr-recent-k">{t('hdr.recent')}</span>
+      {list.map((s) => (
+        <a key={s.id} href={`/servers/${s.id}`} className="hdr-recent-i" aria-current={currentId === s.id ? 'page' : undefined} title={s.name}>
+          <GameAvatar game={s.game} size={24} />
+          <span className="truncate">{s.name}</span>
+        </a>
+      ))}
     </nav>
   );
 }

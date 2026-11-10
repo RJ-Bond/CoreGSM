@@ -10,7 +10,7 @@ import { onAccentChange, paintBrand, useAutoAccent } from './accent';
 import NotificationBell from './components/NotificationBell';
 import AttentionBell from './components/AttentionBell';
 import RulesBanner from './components/RulesBanner';
-import { AppFooter, ProfileMenu, RouteProgress, Tooltips, restoreScroll, useHideOnScroll, usePanelPulse, useScrollMemory } from './components/ShellExtras';
+import { AppFooter, ProfileMenu, RecentServers, RouteProgress, Tooltips, restoreScroll, useHideOnScroll, usePanelPulse, useScrollMemory } from './components/ShellExtras';
 import NotFound from './components/NotFound';
 import { ConfirmHost } from './confirm';
 import Login from './pages/Login';
@@ -445,6 +445,7 @@ export default function App() {
               </a>
             ))}
           </nav>
+          {page !== 'admin' && <RecentServers currentId={page === 'servers' ? Number(sub.split('/')[0]) || undefined : undefined} />}
           <div className="hdr-actions flex shrink-0 items-center gap-1 sm:gap-1.5">
             <button
               type="button"

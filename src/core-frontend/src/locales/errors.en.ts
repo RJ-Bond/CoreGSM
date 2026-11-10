@@ -15,6 +15,7 @@ const errorsEn: Record<string, string> = {
   csrf_header_missing: 'Request rejected: the X-CoreGSM header is missing',
   rate_limited: 'Too many requests. Wait a minute.',
   rate_limited_later: 'Too many requests. Try again later.',
+  too_many_connections: 'Too many open connections',
   too_many_attempts: 'Too many attempts. Wait 10 minutes.',
   bad_data: 'Invalid data',
   bad_data_lower: 'invalid data',

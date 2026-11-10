@@ -1,3 +1,4 @@
+import { readPaletteRecent, rememberPaletteRecent } from '../ui/recent';
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
 import { api, type Server } from '../api';
 import { useAuth } from '../auth';
@@ -11,13 +12,8 @@ import { GameAvatar, IconCopy, IconMoon, IconNews, IconRefresh, IconServers, Ico
 
 type Group = 'Недавние' | 'Серверы' | 'Разделы' | 'Действия';
 
-const RECENT_KEY = 'coregsm_palette_recent';
-const readRecent = (): string[] => {
-  try { const v = JSON.parse(localStorage.getItem(RECENT_KEY) ?? '[]') as unknown; return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string').slice(0, 5) : []; } catch { return []; }
-};
-const rememberRecent = (key: string) => {
-  try { localStorage.setItem(RECENT_KEY, JSON.stringify([key, ...readRecent().filter((k) => k !== key)].slice(0, 5))); } catch { /* not remembered */ }
-};
+const readRecent = readPaletteRecent;
+const rememberRecent = rememberPaletteRecent;
 
 interface Item {
   key: string;

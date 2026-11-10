@@ -1,4 +1,5 @@
 /** Game servers: list and CRUD, server page data, history, PNG card, share page, status page. */
+import { liveHandler } from '../live.js';
 import { stepUp } from '../security/stepUp.js';
 import express from 'express';
 import { z } from 'zod';
@@ -52,6 +53,9 @@ const serverSchema = z.object({
   // two-letter country code shown in the Discord message; empty = detect from the address
   country: z.string().trim().regex(/^([A-Za-z]{2})?$/, 'Страна: двухбуквенный код').optional(),
 });
+
+// live updates: a signal, not data (see live.ts)
+router.get('/api/live', viewer, liveHandler);
 
 router.get('/api/servers', viewer, (req, res) => {
   const rows = db.prepare(`${SELECT_SERVERS} ORDER BY ${SERVER_ORDER}`).all() as ServerJoin[];

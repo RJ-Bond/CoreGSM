@@ -39,6 +39,7 @@ export const GUEST_PAGES = [
 export const ADMIN_PAGES = [
   { id: 'admin-start', path: '/admin' },
   { id: 'admin-overview', path: '/admin/overview' },
+  { id: 'ui-kit', path: '/_ui' },
   ...['servers', 'discord', 'news', 'alerts', 'maintenance', 'cards', 'community', 'users', 'journal', 'system', 'integrations'].map((s) => ({ id: `admin-${s}`, path: `/admin/${s}` })),
   // the game plugin: one page per tab
   ...['', '/auto', '/players', '/discord', '/history'].map((s) => ({ id: `admin-gamenews${s.replace('/', '-')}`, path: `/admin/gamenews${s}` })),
@@ -60,6 +61,8 @@ export const HELP = `Screenshots and automatic UI checks of the panel (Chrome on
   --no-axe         skip the accessibility scan (axe-core, WCAG A/AA, serious and critical only)
   --strict         warnings fail the run too
   --list           print the page ids and stop
+  --compare=DIR    compare every picture with the same one in DIR (an earlier run); a page that changed is a warning
+  --compare-limit=N  how many per cent of the picture may change before it is named (default 2)
   --keep           leave the demo stack running (prints its address)
 `;
 

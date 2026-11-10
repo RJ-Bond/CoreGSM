@@ -253,7 +253,10 @@ a.adm-tile:hover { box-shadow: var(--shadow-2); border-color: rgb(var(--brand) /
 /* alerts: kinds of messages, the delivery bar */
 .al-kinds { display: grid; grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); gap: 10px; }
 .al-kind { display: grid; gap: 6px; padding: 12px 14px; border-radius: var(--r-lg); background: rgb(var(--card)); border: 1px solid rgb(var(--line)); box-shadow: var(--shadow-1); }
-.al-kind.is-off { opacity: .6; box-shadow: none; background: rgb(var(--soft) / .6); }
+/* a kind that is off is quieter, but not faded: a faded pill fell under the contrast limit */
+.al-kind.is-off { box-shadow: none; background: rgb(var(--soft) / .6); }
+.al-kind.is-off .al-msg { color: rgb(var(--mute)); }
+.al-kind.is-off .pill { filter: grayscale(.55); }
 .al-msg { padding: 8px 10px; border-radius: var(--r-md); border-left: 3px solid rgb(var(--brand)); background: rgb(var(--soft)); font-size: var(--fs-sm); font-weight: 650; }
 .al-queue { display: flex; height: 8px; border-radius: var(--r-pill); overflow: hidden; background: rgb(var(--line)); }
 .al-queue i { display: block; height: 100%; transition: width .4s ease; }
@@ -320,3 +323,5 @@ a.adm-tile:hover { box-shadow: var(--shadow-2); border-color: rgb(var(--brand) /
   .adm-split { grid-template-columns: minmax(0, 1fr) minmax(0, 26rem); align-items: start; gap: 24px; }
   .adm-split-side { position: sticky; top: 6.5rem; }
 }
+
+@media (max-width: 639px) { .adm-chip { min-height: 44px; } }
