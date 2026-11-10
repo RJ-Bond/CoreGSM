@@ -1,8 +1,9 @@
 /** How the lines that a player reads are painted (the same for the registration, the moderation and the reminders). */
 import { plainLine } from './gameNewsJoinLeave.js';
+import { PALETTE } from './gameNewsPalette.js';
 
 /** the nickname in a line: bold yellow, so that it stands out from the text */
-export const C_NICK = '#FFCC33';
+export const C_NICK: string = PALETTE.info;
 /** the quiet parts of a line: separators, «to the next rank» */
 export const C_DIM = '#8A94A3';
 

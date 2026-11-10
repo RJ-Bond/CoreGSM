@@ -4,6 +4,8 @@
  * time left in Russian, and deciding when the next «через N минут» goes into the chat.
  */
 
+import { PALETTE } from './gameNewsPalette.js';
+
 export const MIN_SECONDS = 10;
 export const MAX_SECONDS = 6 * 3600;
 
@@ -93,9 +95,9 @@ export const DEFAULT_TEXTS: RestartTexts = {
   cancel: '* Рестарт сервера отменён.',
 };
 
-const WARN = '#FFCC33';
-const ALERT = '#FF5555';
-const OK = '#5FD068';
+const WARN: string = PALETTE.info;
+const ALERT: string = PALETTE.bad;
+const OK: string = PALETTE.good;
 
 const clean = (s: string): string => Array.from(s, (ch) => (ch.charCodeAt(0) < 32 ? ' ' : ch)).join('').replace(/[<>]/g, '').trim();
 

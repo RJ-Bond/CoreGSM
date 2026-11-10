@@ -16,6 +16,7 @@ import bcrypt from 'bcryptjs';
 import type { Express, Request, RequestHandler } from 'express';
 import { z } from 'zod';
 import { getKick, joinBlock } from './gameNewsKick.js';
+import { PALETTE } from './gameNewsPalette.js';
 import { visitStamp } from './gameNewsVars.js';
 export { visitStamp };
 import { isRealDomain, needsSetup, publicBase, registrationMode, rulesText } from '../admin/site.js';
@@ -102,10 +103,10 @@ const OLD_PROMPTS = [
 const OLD_NICK_TAKEN = ['* Ник {name} уже есть в панели. Это ваш аккаунт? Введите .login (логин) (пароль). Нет? Тогда .register (пароль) (подтверждение) ещё раз.'];
 
 // the colours of the lines the player reads
-const C_INFO = '#FFCC33';
-const C_GOOD = '#5FD068';
-const C_BAD = '#FF5555';
-const C_HINT = '#6EC1FF';
+const C_INFO: string = PALETTE.info;
+const C_GOOD: string = PALETTE.good;
+const C_BAD: string = PALETTE.bad;
+const C_HINT: string = PALETTE.hint;
 // every kind of line has its own colour of the text, so that they do not run into one another
 const C_BACK = '#D7CCF5'; // the welcome back: soft lilac
 const C_RANK = '#A9B8C9'; // the rank: steel

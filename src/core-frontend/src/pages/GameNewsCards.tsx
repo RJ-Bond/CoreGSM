@@ -501,6 +501,18 @@ export function KickCard({ initial }: { initial: KickSettings }) {
             <Field label={t('gn.kk.warnDays')}>
               <input className="input w-32" type="number" min={1} max={365} value={f.warnDays} onChange={(e) => set('warnDays', Number(e.target.value))} />
             </Field>
+            <Field label={t('gn.kk.warnAction')}>
+              <select className="input w-48" value={f.warnAction} onChange={(e) => set('warnAction', e.target.value === 'ban' ? 'ban' : 'kick')}>
+                <option value="kick">{t('gn.kk.warnActionKick')}</option>
+                <option value="ban">{t('gn.kk.warnActionBan')}</option>
+              </select>
+            </Field>
+            {f.warnAction === 'ban' && (
+              <Field label={t('gn.kk.warnBanTime')}>
+                <p className="mb-1 text-xs text-mute">{t('gn.kk.warnBanTimeHint')}</p>
+                <input className="input w-32 font-mono" value={f.warnBanTime} maxLength={12} onChange={(e) => set('warnBanTime', e.target.value)} />
+              </Field>
+            )}
           </div>
         </WithPreview>
       )}

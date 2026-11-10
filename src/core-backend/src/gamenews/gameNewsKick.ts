@@ -8,6 +8,7 @@ import type { Express, RequestHandler } from 'express';
 import { z } from 'zod';
 import { enqueueAlert } from '../alerts/alerts.js';
 import { enqueueDelivery } from '../alerts/deliveries.js';
+import { PALETTE } from './gameNewsPalette.js';
 import { db } from '../db.js';
 import { internal } from '../security/auth.js';
 import { pluginTarget } from './gameNews.js';
@@ -15,7 +16,7 @@ import { postKickToDiscord } from './gameNewsChat.js';
 import { isHexColor, plainLine } from './gameNewsJoinLeave.js';
 import { tag, type Accent } from './gameNewsStyle.js';
 import {
-  activeBan, holdsOn, commandState, countMod, finishCommand, findBanByNick, formatSpan, listBans, logMod, parseBanTime, putBan, queueCommand, recentMod,
+  activeBan, holdsOn, commandState, countMod, lastMod, finishCommand, findBanByNick, formatSpan, listBans, logMod, parseBanTime, putBan, queueCommand, recentMod,
   removeBan, topPlayers, type BanRow,
 } from './gameNewsModLog.js';
 import { readScoped, serverOf, writeScoped } from './gameNewsScope.js';
@@ -71,6 +72,10 @@ export interface KickSettings {
   warnLimit: number;
   /** warnings older than this many days are not counted */
   warnDays: number;
+  /** what the limit of warnings does: a kick, or a ban for warnBanTime */
+  warnAction: 'kick' | 'ban';
+  /** the time of that ban: «1d», «7d», «перм» */
+  warnBanTime: string;
   /** minutes after a kick during which the player cannot come back (0 = he can) */
   rejoinBlockMin: number;
   /** short names for reasons: «.kick Ник 1» means the text of reason «1» */
@@ -104,6 +109,8 @@ export const DEFAULT_KICK: KickSettings = {
   notifyText: '* Вы были кикнуты. Причина: {reason}',
   warnLimit: 3,
   warnDays: 30,
+  warnAction: 'kick',
+  warnBanTime: '1d',
   rejoinBlockMin: 0,
   reasons: [
     { key: '1', text: 'Спам' },
@@ -152,6 +159,8 @@ export function getKick(serverId?: number): KickSettings {
       notifyText: v.notifyText === '* Вас убирают с сервера. Причина: {reason}' ? d.notifyText : text(v.notifyText, d.notifyText),
       warnLimit: num(v.warnLimit, d.warnLimit, 0, 20),
       warnDays: num(v.warnDays, d.warnDays, 1, 365),
+      warnAction: v.warnAction === 'ban' ? 'ban' : 'kick',
+      warnBanTime: typeof v.warnBanTime === 'string' && v.warnBanTime.trim() ? v.warnBanTime.trim().slice(0, 12) : d.warnBanTime,
       rejoinBlockMin: num(v.rejoinBlockMin, d.rejoinBlockMin, 0, 1440),
       reasons,
     };
@@ -209,8 +218,8 @@ export function kickDone(adminId: string, now: number): void {
   if (last.size > 300) for (const [k, t] of last) if (now - t > 3_600_000) last.delete(k);
 }
 
-const C_BAD = '#FF5555';
-const C_GOOD = '#5FD068';
+const C_BAD: string = PALETTE.bad;
+const C_GOOD: string = PALETTE.good;
 /** a line for the administrator (when the line for everybody is shown, the administrator reads that one and gets no second line about the same): the commands picked out, the nickname (and what else is given) in bold */
 const say = (color: string, text: string, names: Accent[] = []): string => tag(color, text, names);
 
@@ -263,7 +272,7 @@ function logToDiscord(s: KickSettings, serverId: number, title: string, color: n
   } catch { /* the log must not stop the command */ }
 }
 
-/** a private message in Discord for a banned player who has linked his account: for how long and why */
+/** a private message in Discord for a banned player who has linked his account: for how long and why. It goes straight to the delivery queue, so the quiet hours of the person (they hold only the cards of dmQueue) do not delay it. */
 function dmBanned(serverId: number, platformId: string, f: { nick: string; reason: string; until: number; span: string }, now: number): void {
   try {
     if (!platformId || platformId === '0') return;
@@ -350,7 +359,9 @@ export function runMod(serverId: number, b: ModInput, now = Date.now()): ModResu
 
   // a warning; the one that reaches the limit is a kick
   logMod({ ...base, kind: 'warn' }, now);
-  const since = now - s.warnDays * 86_400_000;
+  // a ban starts the count anew: warnings given before the last ban do not count
+  const lastBan = b.targetId && b.targetId !== '0' ? lastMod(b.targetId, 'ban') : 0;
+  const since = Math.max(now - s.warnDays * 86_400_000, lastBan + 1);
   const n = b.targetId && b.targetId !== '0' ? countMod(b.targetId, 'warn', since) : 1;
   const escalate = s.warnLimit > 0 && n >= s.warnLimit;
   try { postKickToDiscord(serverId, s.warnTemplate.replace(/\{n\}/g, String(n)).replace(/\{limit\}/g, String(s.warnLimit)), { name: b.name, reason, admin: b.adminName }, now); } catch { /* Discord is not needed for the warning */ }
@@ -361,6 +372,28 @@ export function runMod(serverId: number, b: ModInput, now = Date.now()): ModResu
       ok: true, kick: false, line: warnLine,
       notice: notice('* Вам вынесено предупреждение ({n} из {limit}). Причина: {reason}', { n, limit: s.warnLimit }),
       replies: s.announce ? [] : [say(C_GOOD, `* Игроку ${b.name} вынесено предупреждение (${n}${s.warnLimit ? ` из ${s.warnLimit}` : ''}).`, [b.name])],
+    };
+  }
+  // the limit is reached and the panel is set to ban: the player is banned for the set time (the count starts anew with the ban)
+  if (s.warnAction === 'ban' && s.banEnabled) {
+    const parsed = parseBanTime(s.warnBanTime);
+    const t = 'error' in parsed ? { seconds: 86_400 } : parsed;
+    const forever = 'forever' in t;
+    const until = forever ? 0 : now + t.seconds * 1000;
+    const span = forever ? 'навсегда' : formatSpan(t.seconds);
+    const banReason = `лимит предупреждений (${n} из ${s.warnLimit})`;
+    if (b.targetId && b.targetId !== '0') putBan({ platformId: b.targetId, nick: base.nick, reason: banReason, admin: 'авто', until, kind: 'ban', serverId, scope: s.banScope }, now);
+    logMod({ ...base, kind: 'ban', reason: banReason, admin: 'авто', until }, now);
+    try { postKickToDiscord(serverId, s.banTemplate.replace(/\{time\}/g, span), { name: b.name, reason: banReason, admin: b.adminName }, now); } catch { /* Discord is not needed for the ban */ }
+    logToDiscord(s, serverId, '⛔ Игрок забанен (лимит предупреждений)', 0x992d22, { name: b.name, admin: 'авто', reason: banReason, extra: [{ name: 'Срок', value: forever ? 'навсегда' : `${span} (до <t:${Math.floor(until / 1000)}:f>)` }] }, now);
+    // not through the quiet hours of the person: a ban is told at once
+    if (s.banDm) dmBanned(serverId, b.targetId, { nick: base.nick, reason: banReason, until, span }, now);
+    const stamp = forever ? null : visitStamp(until);
+    return {
+      ok: true, kick: true,
+      line: warnLine,
+      notice: notice(s.banJoinText.replace(/\{until\}/g, stamp ? `до ${stamp.date} в ${stamp.time}` : 'навсегда'), { reason: banReason }),
+      replies: [say(C_GOOD, `* Игроку ${b.name} вынесено предупреждение (${n} из ${s.warnLimit}): лимит достигнут, игрок забанен ${forever ? 'навсегда' : `на ${span}`}.`, [b.name])],
     };
   }
   // the limit is reached: the player is kicked and the count starts again
@@ -523,7 +556,7 @@ export function registerGameNewsKick({ app, admin }: { app: Express; admin: Requ
       defaultReason: z.string().max(100), requireReason: z.boolean(), protectAdmins: z.boolean(), announce: z.boolean(),
       cooldownSec: z.number().int().min(0).max(3600), logChannelId: z.string().regex(/^(\d{15,25})?$/), maxReason: z.number().int().min(10).max(200),
       banTemplate: line, warnTemplate: line, unbanTemplate: line, banJoinText: line, blockJoinText: line, banScope: z.enum(['all', 'server']).optional(), banDm: z.boolean().optional(), notifyPlayer: z.boolean(), notifyText: line,
-      warnLimit: z.number().int().min(0).max(20), warnDays: z.number().int().min(1).max(365), rejoinBlockMin: z.number().int().min(0).max(1440),
+      warnLimit: z.number().int().min(0).max(20), warnDays: z.number().int().min(1).max(365), warnAction: z.enum(['kick', 'ban']).optional(), warnBanTime: z.string().max(12).optional(), rejoinBlockMin: z.number().int().min(0).max(1440),
       reasons: z.array(z.object({ key: z.string().max(12), text: z.string().max(100) })).max(20),
     }).safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Проверьте поля' });
@@ -536,6 +569,8 @@ export function registerGameNewsKick({ app, admin }: { app: Express; admin: Requ
     writeScoped('gamenews_kick', JSON.stringify({
       ...b.data,
       banScope: b.data.banScope ?? d.banScope, banDm: b.data.banDm ?? d.banDm,
+      warnAction: b.data.warnAction ?? d.warnAction,
+      warnBanTime: (() => { const x = plainLine(b.data.warnBanTime ?? ''); return x && !('error' in parseBanTime(x)) ? x : d.warnBanTime; })(),
       banEnabled: b.data.banEnabled ?? d.banEnabled, warnEnabled: b.data.warnEnabled ?? d.warnEnabled,
       template: clean(b.data.template, d.template), banTemplate: clean(b.data.banTemplate, d.banTemplate), warnTemplate: clean(b.data.warnTemplate, d.warnTemplate), unbanTemplate: clean(b.data.unbanTemplate, d.unbanTemplate),
       banJoinText: clean(b.data.banJoinText, d.banJoinText), blockJoinText: clean(b.data.blockJoinText, d.blockJoinText), notifyText: clean(b.data.notifyText, d.notifyText),

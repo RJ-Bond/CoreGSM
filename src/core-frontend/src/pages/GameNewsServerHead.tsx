@@ -51,7 +51,7 @@ export function ServerHead({ server, rd, latest }: { server: NewsServerInfo; rd:
             {server.lastSeen ? ` · ${t('gn.plugin.lastPoll', { time: ago(server.lastSeen) })}` : ''}
             {server.players != null && ` · ${t('gn.players', { n: server.players, max: server.maxPlayers ?? 0 })}`}
           </p>
-          {old && <p className="text-sm font-semibold text-warn">{t('gn.sh.old', { v: latest })}</p>}
+          {old && <p className="text-sm font-semibold text-warn">{t('gn.sh.old', { v: latest })} · <a className="text-link hover:underline" href="https://github.com/RJ-Bond/CoreGSM-Plugin/releases/latest" target="_blank" rel="noreferrer noopener">{t('gn.sh.download')}</a></p>}
         </div>
         <button type="button" className="btn btn-soft btn-sm" disabled={busy} onClick={() => void test()}>{t('gn.sh.test')}</button>
       </div>

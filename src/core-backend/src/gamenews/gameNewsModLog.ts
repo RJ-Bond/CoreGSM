@@ -51,6 +51,11 @@ export function countMod(platformId: string, kind: ModKind, since = 0): number {
   return (db.prepare('SELECT COUNT(*) AS n FROM game_mod_log WHERE platform_id = ? AND kind = ? AND ts >= ?').get(platformId, kind, since) as { n: number }).n;
 }
 
+/** when the last entry of this kind was made for the player (0 = never) */
+export function lastMod(platformId: string, kind: ModKind): number {
+  return (db.prepare('SELECT MAX(ts) AS t FROM game_mod_log WHERE platform_id = ? AND kind = ?').get(platformId, kind) as { t: number | null }).t ?? 0;
+}
+
 // ---- bans
 export interface BanRow {
   platform_id: string;

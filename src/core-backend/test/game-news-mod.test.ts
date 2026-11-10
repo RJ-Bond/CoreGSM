@@ -239,3 +239,39 @@ describe('a message to a banned player in Discord', () => {
     assert.equal(count(), 1); // switched off in the panel
   });
 });
+
+describe('what the limit of warnings does', () => {
+  const P = '76561198000000041';
+  const warn = (server: number, t: number, id = P) => kick.runMod(server, input({ action: 'warn', targetId: id, name: 'Rude', reason: 'спам', adminId: `w${t}` }), NOW + t);
+
+  it('is a kick by default and a ban for the set time when the panel says so', () => {
+    assert.equal(kick.getKick(31).warnAction, 'kick');
+    scope.writeScoped('gamenews_kick', JSON.stringify({ warnAction: 'ban', warnBanTime: '2d', warnLimit: 2 }), 31);
+    warn(31, 1);
+    const r = warn(31, 2);
+    assert.equal(r.kick, true);
+    const ban = kick.joinBlock(31, P, NOW + 3600_000);
+    assert.equal(ban?.ban.kind, 'ban');
+    assert.equal(ban?.ban.until, NOW + 2 + 2 * 86_400_000);
+    assert.match(ban?.lines[0] ?? '', /<color=#5FD068>до /);
+  });
+
+  it('starts counting anew after a ban, so the next warning is the first one', () => {
+    const q = '76561198000000042';
+    scope.writeScoped('gamenews_kick', JSON.stringify({ warnLimit: 3 }), 32);
+    warn(32, 1, q);
+    warn(32, 2, q);
+    kick.runMod(32, input({ action: 'ban', time: '1h', reason: 'x', targetId: q, adminId: 'b1' }), NOW + 3);
+    const r = warn(32, 4, q);
+    assert.equal(r.kick, false); // the third warning of the old count would have been a kick
+  });
+
+  it('falls back to a kick when bans are off, and a bad time to a day', () => {
+    scope.writeScoped('gamenews_kick', JSON.stringify({ warnAction: 'ban', warnBanTime: 'нечто', warnLimit: 1, banEnabled: false }), 33);
+    warn(33, 1, '76561198000000043');
+    assert.equal(kick.joinBlock(33, '76561198000000043', NOW + 1000), null);
+    scope.writeScoped('gamenews_kick', JSON.stringify({ warnAction: 'ban', warnBanTime: 'нечто', warnLimit: 1 }), 34);
+    warn(34, 1, '76561198000000044');
+    assert.equal(kick.joinBlock(34, '76561198000000044', NOW + 1000)?.ban.until, NOW + 1 + 86_400_000);
+  });
+});

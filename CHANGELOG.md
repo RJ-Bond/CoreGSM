@@ -14,6 +14,13 @@ interface language; the GitHub release text is built from the section of the ver
 - Пометки в конце русской части: `[migration]` — меняется база данных, `[env]` — нужны новые настройки сервера, `⚠` в начале — несовместимое изменение.
 - Новые пункты идут в раздел «Не выпущено». Релиз выпускается только по команде владельца: тогда раздел переименовывается в `## <версия> · <дата>` (версия из `version.txt`).
 
+## Не выпущено | Unreleased
+
+### ✨ Новое | New
+- 🛡️ «Игровой плагин» → «Игроки» → модерация → «Предупреждение»: «Что делает лимит предупреждений» — кик (как раньше) или бан на заданный срок (30m, 2h, 7d, 2w, перм); после бана предупреждения считаются заново, и следующее — снова первое; если команды .ban выключены, будет кик | 🛡️ Game plugin → Players → moderation → Warning: «What the limit of warnings does» — a kick (as before) or a ban for the set time (30m, 2h, 7d, 2w, перм); after a ban the warnings count anew, so the next one is the first again; if the .ban commands are off, it is a kick
+- 🎨 Цвета строк игрового плагина хранятся в панели в одном месте и приходят в ответе опроса: строки плагина (справка команд, ошибки, «Проверяю аккаунт…») всегда того же цвета, что строки панели; нужен плагин 0.17.0 | 🎨 The colours of the lines of the game plugin are kept in one place in the panel and come in the answer of the poll: the lines of the plugin (help of the commands, errors, «Checking the account…») always have the same colour as the lines of the panel; needs plugin 0.17.0
+- 🔔 Страница сервера в «Игровом плагине»: рядом с «Есть новая версия плагина» ссылка на скачивание последнего релиза | 🔔 The server page of the game plugin: next to «A new plugin version is available» a link to download the latest release
+
 ## 1.2.13 · 09.11.2026
 
 ### ✨ Новое | New
