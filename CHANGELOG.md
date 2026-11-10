@@ -14,16 +14,12 @@ interface language; the GitHub release text is built from the section of the ver
 - Пометки в конце русской части: `[migration]` — меняется база данных, `[env]` — нужны новые настройки сервера, `⚠` в начале — несовместимое изменение.
 - Новые пункты идут в раздел «Не выпущено». Релиз выпускается только по команде владельца: тогда раздел переименовывается в `## <версия> · <дата>` (версия из `version.txt`).
 
-## Не выпущено | Unreleased
+## 1.2.20 · 10.11.2026
 
 ### ✨ Новое | New
 - 🛡️ «Игровой плагин» → «Игроки» → модерация → «Предупреждение»: «Что делает лимит предупреждений» — кик (как раньше) или бан на заданный срок (30m, 2h, 7d, 2w, перм); после бана предупреждения считаются заново, и следующее — снова первое; если команды .ban выключены, будет кик | 🛡️ Game plugin → Players → moderation → Warning: «What the limit of warnings does» — a kick (as before) or a ban for the set time (30m, 2h, 7d, 2w, перм); after a ban the warnings count anew, so the next one is the first again; if the .ban commands are off, it is a kick
 - 🎨 Цвета строк игрового плагина хранятся в панели в одном месте и приходят в ответе опроса: строки плагина (справка команд, ошибки, «Проверяю аккаунт…») всегда того же цвета, что строки панели; нужен плагин 0.17.0 | 🎨 The colours of the lines of the game plugin are kept in one place in the panel and come in the answer of the poll: the lines of the plugin (help of the commands, errors, «Checking the account…») always have the same colour as the lines of the panel; needs plugin 0.17.0
 - 🔔 Страница сервера в «Игровом плагине»: рядом с «Есть новая версия плагина» ссылка на скачивание последнего релиза | 🔔 The server page of the game plugin: next to «A new plugin version is available» a link to download the latest release
-
-## 1.2.13 · 09.11.2026
-
-### ✨ Новое | New
 - 🚪 Забаненный игрок при входе получает одну строку с причиной и сроком (дата и время зелёным) и сразу удаляется с сервера; перед удалением плагин ещё раз спрашивает панель, и если бан за эти секунды сняли, игрок остаётся; нужен плагин 0.16.0 | 🚪 A banned player who joins gets one line with the reason and the term (the date and time are green) and is removed at once; just before the removal the plugin asks the panel again, and if the ban was lifted in these seconds the player stays; needs plugin 0.16.0
 - 🛡️ «Игровой плагин» → «Игроки» → модерация → «Бан»: «Где действует бан» (на всех серверах панели или только на том, где выдан) и «Написать забаненному в Discord» (если Discord привязан, бот присылает срок и причину в личные сообщения); в списке банов на вкладке «Модерация» бан одного сервера помечен [migration] | 🛡️ Game plugin → Players → moderation → Ban: «Where a ban holds» (on all servers of the panel or only on the one where it was given) and «Message the banned player in Discord» (when Discord is linked, the bot sends the term and the reason in a private message); a ban of one server is marked in the list of bans on the Moderation tab
 - 🛡️ Команда `.bans` в игре: список действующих банов этого сервера (до 10 строк: ник, срок, причина); нужен плагин 0.16.0 | 🛡️ The `.bans` command in the game: the bans in force on this server (up to 10 lines: nickname, term, reason); needs plugin 0.16.0
