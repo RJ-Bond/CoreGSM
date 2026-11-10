@@ -509,3 +509,54 @@
 :root[data-ember='1'] .pf-banner::after { height: 70%; }
 :root[data-ember='1'] .pf-level-badge { background: linear-gradient(135deg, rgb(255 126 60), rgb(var(--brand-2))); box-shadow: 0 4px 12px -2px rgb(var(--brand) / .7); border-radius: 8px; padding: 2px 10px; }
 :root[data-ember='1'] .pf-hero h1, :root[data-ember='1'] .pf-hero h2 { letter-spacing: -.02em; }
+
+/* ======================================================================
+   the audit: one hierarchy of buttons, one kind of tab, quiet fields and hints, no leftovers of the old look
+   ====================================================================== */
+
+/* ---------- the buttons: the orange one is the main action; the second one is graphite with a hairline (orange only when the pointer is on it); a link is orange text ---------- */
+:root[data-ember='1'] .btn-soft {
+  --b-fg: rgb(var(--ink)); --b-bg: rgb(var(--soft)); --b-bg-h: rgb(var(--raised));
+  --b-ring: inset 0 0 0 1px rgb(var(--line)); --b-ring-h: inset 0 0 0 1px rgb(var(--brand) / .5);
+}
+
+/* ---------- the tabs: ONE look for all of them: a graphite chip with a hairline and a faint glow of an ember ---------- */
+:root[data-ember='1'] { --seg-on: 255 255 255; }
+:root[data-ember='1'][data-theme='dark'] { --seg-on: 49 44 41; }
+@media (prefers-color-scheme: dark) { :root[data-ember='1']:not([data-theme='light']) { --seg-on: 49 44 41; } }
+:root[data-ember='1'] .seg[data-ind]::before,
+:root[data-ember='1'] .srv-tabs.seg[data-ind]::before { background: rgb(var(--seg-on)); box-shadow: inset 0 0 0 1px rgb(var(--line)), 0 0 20px -8px rgb(var(--brand) / .7); }
+:root[data-ember='1'] .seg:not([data-ind]) > .seg-item:is([aria-pressed='true'], [aria-current='page'], .on),
+:root[data-ember='1'] .srv-tabs:not([data-ind]) > .seg-item.on,
+:root[data-ember='1'] .chip-filter.on,
+:root[data-ember='1'] .nw-rub[aria-pressed='true'],
+:root[data-ember='1'] .cm-nav-i[aria-current='true'],
+:root[data-ember='1'] .cm-chip[aria-pressed='true'],
+:root[data-ember='1'] .pf-chip[aria-pressed='true'],
+:root[data-ember='1'] [class*='bg-brand'][aria-current='page'] {
+  background: rgb(var(--seg-on)); color: rgb(var(--ink)); border-color: transparent;
+  box-shadow: inset 0 0 0 1px rgb(var(--line)), 0 0 20px -8px rgb(var(--brand) / .7);
+}
+:root[data-ember='1'] .nw-rub[aria-pressed='true'] .nw-rub-n { background: rgb(var(--brand) / .2); color: rgb(var(--link)); }
+:root[data-ember='1'] .srv-tabs > .seg-item.on > svg { color: rgb(var(--brand-hover)); }
+
+/* ---------- the fields: a hairline and a soft fill, the ember line only when the field is open ---------- */
+:root[data-ember='1'] .input { border-width: 1px; border-color: rgb(var(--line)); background-color: rgb(var(--soft)); }
+:root[data-ember='1'] .input:hover:not(:focus) { border-color: rgb(var(--field) / .7); }
+
+/* ---------- the hints at the top of the admin pages: a quiet card, not a wide orange band ---------- */
+:root[data-ember='1'] .hint-strip { background: rgb(var(--card)); box-shadow: var(--shadow-2); border-radius: var(--emb-r-card); font-weight: 550; color: rgb(var(--mute)); }
+:root[data-ember='1'] .hint-strip :is(a, .hint-more) { color: rgb(var(--link)); }
+
+/* ---------- the sign-in screens: the cards of the showcase stand straight and still ---------- */
+:root[data-ember='1'] .showcase-tile { rotate: none !important; transform: none !important; border-radius: var(--emb-r-card); }
+:root[data-ember='1'] .auth-float { opacity: .3; }
+
+/* ---------- the banner of a server: the same deep column as the big card of the home page ---------- */
+:root[data-ember='1'] .srv-banner { border-radius: var(--emb-r-big); background-color: color-mix(in srgb, var(--srv-acc, rgb(var(--brand))) 8%, #100f0e); box-shadow: var(--shadow-2); }
+:root[data-ember='1'] .srv-banner > span[aria-hidden].absolute { border-radius: var(--emb-r-big); }
+:root[data-ember='1'] .srv-banner .srv-scrim { border-radius: var(--emb-r-big); background: linear-gradient(180deg, rgb(16 14 13 / .3) 0%, rgb(16 14 13 / .8) 55%, rgb(16 14 13 / .96) 100%); }
+:root[data-ember='1'] .srv-banner :is(.srv-tod, .depth-l1, .depth-l2) { display: none; }
+
+/* ---------- the bars of the list: the orange scale; the colour of the game stays on its icon ---------- */
+:root[data-ember='1'] .srv-tr .srv-cap:not(.hot) > i { background: linear-gradient(90deg, rgb(var(--brand-2)), rgb(var(--brand))); }

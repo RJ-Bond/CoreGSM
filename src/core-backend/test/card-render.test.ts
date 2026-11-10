@@ -62,4 +62,15 @@ describe('the picture cards', () => {
     assert.equal(r.status, 200);
     assert.deepEqual(pngSize(Buffer.from(await r.arrayBuffer())), { w: 1200, h: 240 });
   });
+  it('the Ember look of the community draws the cards in its own colours (and goes back with the classic look)', async () => {
+    const classic = (await get(`/api/card/${id}.png?style=strip`)).buf;
+    assert.equal((await api.call('PUT', '/api/branding/look', { token, body: { look: 'ember' } })).status, 200);
+    const ember = await get(`/api/card/${id}.png?style=strip`);
+    assert.equal(ember.status, 200);
+    assert.deepEqual(pngSize(ember.buf), { w: 1200, h: 240 });
+    assert.notDeepEqual(ember.buf, classic, 'the picture is not the same as in the classic look');
+    assert.equal((await get('/api/card/all.png')).status, 200);
+    assert.equal((await api.call('PUT', '/api/branding/look', { token, body: { look: 'classic' } })).status, 200);
+    assert.deepEqual((await get(`/api/card/${id}.png?style=strip`)).buf, classic);
+  });
 });

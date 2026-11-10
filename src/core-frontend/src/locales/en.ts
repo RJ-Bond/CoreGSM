@@ -3409,6 +3409,7 @@ const en: Record<keyof typeof ru, string> = {
   'd2.brand.dark': 'Dark (game covers look best)',
   'd2.brand.light': 'Light',
   'd2.brand.auto': 'Same as the visitor\'s system',
+  'd2.brand.emberNote': 'The Ember look is on for you: it has its own orange accent, so the colour and the themes below are not visible in the panel. They apply in the classic look and for everyone who uses it.',
   'd2.brand.look': 'Default look',
   'd2.brand.look.classic': 'Classic (violet accent)',
   'd2.brand.look.ember': 'Ember (graphite and orange)',

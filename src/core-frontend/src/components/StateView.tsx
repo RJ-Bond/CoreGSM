@@ -16,7 +16,7 @@ const IconOffline = ({ size = 28 }: { size?: number }) => (
 );
 
 /** the Ember look: a warm ember in a soft round, instead of the icon tile (empty lists and not-found pages) */
-function EmberArt() {
+export function EmberArt() {
   return (
     <svg className="state-ember" width="84" height="84" viewBox="0 0 84 84" fill="none" aria-hidden>
       <circle cx="42" cy="44" r="34" fill="currentColor" opacity=".1" />

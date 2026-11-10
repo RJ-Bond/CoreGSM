@@ -1,11 +1,13 @@
 import { IconArrow } from '../ui';
 import { t, useI18n } from '../i18n';
 import { NotFoundArt } from './Illustrations';
-import { StateView } from './StateView';
+import { EmberArt, StateView } from './StateView';
+import { useAppearance } from '../appearance';
 
 /** Unknown route or unknown server id. `kind` only changes the wording; both buttons are always there. */
 export default function NotFound({ kind = 'page' }: { kind?: 'page' | 'server' }) {
   useI18n();
+  const [{ ember }] = useAppearance();
   return (
     <StateView
       kind="notfound"
@@ -13,7 +15,7 @@ export default function NotFound({ kind = 'page' }: { kind?: 'page' | 'server' }
       className="mx-auto max-w-xl gap-3! sm:py-14!"
       art={(
         <>
-          <NotFoundArt />
+          {ember ? <div className="text-link"><EmberArt /></div> : <NotFoundArt />}
           <p className="nf-code text-6xl font-black leading-none tracking-tighter sm:text-7xl" aria-hidden>404</p>
         </>
       )}

@@ -53,6 +53,13 @@ const LIGHT: typeof C = {
   veil: 'rgba(244, 244, 250, 0.6)',
 };
 const PALETTES = { dark: C, light: LIGHT };
+// the «Ember» look of the community (the default look in the admin settings): graphite and an orange accent
+const EMBER_DARK: typeof C = { ...C, bg: '#0e0c0b', bg2: '#1a1715', ink: '#f6f2ee', mute: '#b2aca6', dim: '#7d766f', line: 'rgba(255, 240, 230, 0.09)', soft: 'rgba(255, 240, 230, 0.06)', brand: '#ff7a3c', veil: 'rgba(14, 12, 11, 0.5)' };
+const EMBER_LIGHT: typeof C = { ...LIGHT, bg: '#f4f0e9', bg2: '#ffffff', ink: '#17161a', mute: '#524f58', dim: '#8a847c', line: 'rgba(40, 30, 20, 0.1)', soft: 'rgba(40, 30, 20, 0.06)', brand: '#d6420a', veil: 'rgba(244, 240, 233, 0.6)' };
+/** does the community use the Ember look by default (then its pictures are drawn in it) */
+const emberLook = (): boolean => getSetting('default_look') === 'ember';
+/** the palette of a theme in the look of the community */
+const paletteOf = (theme: 'dark' | 'light'): typeof C => (emberLook() ? (theme === 'dark' ? EMBER_DARK : EMBER_LIGHT) : PALETTES[theme]);
 
 const COVERS_DIR = fileURLToPath(new URL('../../assets/covers/', import.meta.url));
 /** the picture of a game that ships a default cover (a smaller copy of the panel's one), or null */
@@ -141,8 +148,8 @@ function last24h(serverId: number, now: number): { players: number; down: boolea
 }
 
 async function renderCardNow(serverId: number, opts: CardOpts): Promise<Buffer | null> {
-  const C = PALETTES[opts.theme];
-  const key = `${serverId}:${opts.style}:${opts.theme}`;
+  const C = paletteOf(opts.theme);
+  const key = `${serverId}:${opts.style}:${opts.theme}:${emberLook() ? 'e' : 'c'}`;
   const hit = cache.get(key);
   if (hit && Date.now() - hit.at < 10_000) return hit.buf;
 
@@ -659,9 +666,10 @@ const allCache = new Map<string, { at: number; buf: Buffer }>();
 
 /** one picture with every server: a header with the totals and a row per server */
 export async function renderAllCard(theme: CardOpts['theme'] = 'dark'): Promise<Buffer> {
-  const hit = allCache.get(theme);
+  const allKey = `${theme}:${emberLook() ? 'e' : 'c'}`;
+  const hit = allCache.get(allKey);
   if (hit && Date.now() - hit.at < 10_000) return hit.buf;
-  const C = PALETTES[theme];
+  const C = paletteOf(theme);
   const rows = db.prepare('SELECT s.*, st.online AS st_online, st.players AS st_players, st.max_players AS st_max FROM servers s LEFT JOIN status st ON st.server_id = s.id ORDER BY s.id LIMIT 8').all() as (ServerRow & { st_online: number | null; st_players: number | null; st_max: number | null })[];
   const total = rows.reduce((n, r) => n + (r.st_online ? r.st_players ?? 0 : 0), 0);
   const up = rows.filter((r) => r.st_online).length;
@@ -726,7 +734,7 @@ export async function renderAllCard(theme: CardOpts['theme'] = 'dark'): Promise<
   rr(ctx, 1, 1, W - 2, SH - 2, 27);
   ctx.stroke();
   const buf = (await canvas.toBuffer('png')) as Buffer;
-  allCache.set(theme, { at: Date.now(), buf });
+  allCache.set(allKey, { at: Date.now(), buf });
   return buf;
 }
 

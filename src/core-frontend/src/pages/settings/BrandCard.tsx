@@ -11,12 +11,14 @@ import { ErrorLine, FieldError, GameAvatar, IconCheck, Logo, SaveBadge, Section,
 import { useSaveBar, useSaveBarActive } from '../../saveBar';
 import { errorText } from '../../apiErrors';
 import { t, useI18n } from '../../i18n';
+import { useAppearance } from '../../appearance';
 
 
 
 /** название, цвет и логотип сообщества: изменения сохраняются сами */
 export function BrandCard() {
   useI18n();
+  const [{ ember }] = useAppearance();
   const { access, reload } = useAuth();
   const b = access.brand;
   const [name, setName] = useState(b.name);
@@ -136,6 +138,7 @@ export function BrandCard() {
       />
       <div>
         <span className="label">{t('d2.brand.theme')}</span>
+        {ember && <p className="mb-2 text-sm font-semibold text-mute">{t('d2.brand.emberNote')}</p>}
         <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
           {THEME_PRESETS.map((p) => {
             const on = preset === p.id;

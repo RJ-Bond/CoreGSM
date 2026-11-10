@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="775889e1be49"
+COREGSM_BUILD="df53f75ca321"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.2.16"
+COREGSM_VERSION="1.2.17"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -27715,6 +27715,13 @@ const LIGHT: typeof C = {
   veil: 'rgba(244, 244, 250, 0.6)',
 };
 const PALETTES = { dark: C, light: LIGHT };
+// the «Ember» look of the community (the default look in the admin settings): graphite and an orange accent
+const EMBER_DARK: typeof C = { ...C, bg: '#0e0c0b', bg2: '#1a1715', ink: '#f6f2ee', mute: '#b2aca6', dim: '#7d766f', line: 'rgba(255, 240, 230, 0.09)', soft: 'rgba(255, 240, 230, 0.06)', brand: '#ff7a3c', veil: 'rgba(14, 12, 11, 0.5)' };
+const EMBER_LIGHT: typeof C = { ...LIGHT, bg: '#f4f0e9', bg2: '#ffffff', ink: '#17161a', mute: '#524f58', dim: '#8a847c', line: 'rgba(40, 30, 20, 0.1)', soft: 'rgba(40, 30, 20, 0.06)', brand: '#d6420a', veil: 'rgba(244, 240, 233, 0.6)' };
+/** does the community use the Ember look by default (then its pictures are drawn in it) */
+const emberLook = (): boolean => getSetting('default_look') === 'ember';
+/** the palette of a theme in the look of the community */
+const paletteOf = (theme: 'dark' | 'light'): typeof C => (emberLook() ? (theme === 'dark' ? EMBER_DARK : EMBER_LIGHT) : PALETTES[theme]);
 
 const COVERS_DIR = fileURLToPath(new URL('../../assets/covers/', import.meta.url));
 /** the picture of a game that ships a default cover (a smaller copy of the panel's one), or null */
@@ -27803,8 +27810,8 @@ function last24h(serverId: number, now: number): { players: number; down: boolea
 }
 
 async function renderCardNow(serverId: number, opts: CardOpts): Promise<Buffer | null> {
-  const C = PALETTES[opts.theme];
-  const key = `${serverId}:${opts.style}:${opts.theme}`;
+  const C = paletteOf(opts.theme);
+  const key = `${serverId}:${opts.style}:${opts.theme}:${emberLook() ? 'e' : 'c'}`;
   const hit = cache.get(key);
   if (hit && Date.now() - hit.at < 10_000) return hit.buf;
 
@@ -28321,9 +28328,10 @@ const allCache = new Map<string, { at: number; buf: Buffer }>();
 
 /** one picture with every server: a header with the totals and a row per server */
 export async function renderAllCard(theme: CardOpts['theme'] = 'dark'): Promise<Buffer> {
-  const hit = allCache.get(theme);
+  const allKey = `${theme}:${emberLook() ? 'e' : 'c'}`;
+  const hit = allCache.get(allKey);
   if (hit && Date.now() - hit.at < 10_000) return hit.buf;
-  const C = PALETTES[theme];
+  const C = paletteOf(theme);
   const rows = db.prepare('SELECT s.*, st.online AS st_online, st.players AS st_players, st.max_players AS st_max FROM servers s LEFT JOIN status st ON st.server_id = s.id ORDER BY s.id LIMIT 8').all() as (ServerRow & { st_online: number | null; st_players: number | null; st_max: number | null })[];
   const total = rows.reduce((n, r) => n + (r.st_online ? r.st_players ?? 0 : 0), 0);
   const up = rows.filter((r) => r.st_online).length;
@@ -28388,7 +28396,7 @@ export async function renderAllCard(theme: CardOpts['theme'] = 'dark'): Promise<
   rr(ctx, 1, 1, W - 2, SH - 2, 27);
   ctx.stroke();
   const buf = (await canvas.toBuffer('png')) as Buffer;
-  allCache.set(theme, { at: Date.now(), buf });
+  allCache.set(allKey, { at: Date.now(), buf });
   return buf;
 }
 
@@ -126205,11 +126213,13 @@ __COREGSM_EOF__
 import { IconArrow } from '../ui';
 import { t, useI18n } from '../i18n';
 import { NotFoundArt } from './Illustrations';
-import { StateView } from './StateView';
+import { EmberArt, StateView } from './StateView';
+import { useAppearance } from '../appearance';
 
 /** Unknown route or unknown server id. `kind` only changes the wording; both buttons are always there. */
 export default function NotFound({ kind = 'page' }: { kind?: 'page' | 'server' }) {
   useI18n();
+  const [{ ember }] = useAppearance();
   return (
     <StateView
       kind="notfound"
@@ -126217,7 +126227,7 @@ export default function NotFound({ kind = 'page' }: { kind?: 'page' | 'server' }
       className="mx-auto max-w-xl gap-3! sm:py-14!"
       art={(
         <>
-          <NotFoundArt />
+          {ember ? <div className="text-link"><EmberArt /></div> : <NotFoundArt />}
           <p className="nf-code text-6xl font-black leading-none tracking-tighter sm:text-7xl" aria-hidden>404</p>
         </>
       )}
@@ -128017,7 +128027,7 @@ const IconOffline = ({ size = 28 }: { size?: number }) => (
 );
 
 /** the Ember look: a warm ember in a soft round, instead of the icon tile (empty lists and not-found pages) */
-function EmberArt() {
+export function EmberArt() {
   return (
     <svg className="state-ember" width="84" height="84" viewBox="0 0 84 84" fill="none" aria-hidden>
       <circle cx="42" cy="44" r="34" fill="currentColor" opacity=".1" />
@@ -148280,6 +148290,7 @@ const en: Record<keyof typeof ru, string> = {
   'd2.brand.dark': 'Dark (game covers look best)',
   'd2.brand.light': 'Light',
   'd2.brand.auto': 'Same as the visitor\'s system',
+  'd2.brand.emberNote': 'The Ember look is on for you: it has its own orange accent, so the colour and the themes below are not visible in the panel. They apply in the classic look and for everyone who uses it.',
   'd2.brand.look': 'Default look',
   'd2.brand.look.classic': 'Classic (violet accent)',
   'd2.brand.look.ember': 'Ember (graphite and orange)',
@@ -153209,6 +153220,7 @@ const ru = {
   'd2.brand.dark': 'Тёмная (обложки игр смотрятся лучше всего)',
   'd2.brand.light': 'Светлая',
   'd2.brand.auto': 'Как в системе посетителя',
+  'd2.brand.emberNote': 'Сейчас у вас включён вид Ember: у него свой оранжевый акцент, поэтому цвет и темы ниже в панели не видны. Они действуют в классическом виде и для всех, кто его выбрал.',
   'd2.brand.look': 'Оформление по умолчанию',
   'd2.brand.look.classic': 'Классика (фиолетовый акцент)',
   'd2.brand.look.ember': 'Ember (графит и оранжевый)',
@@ -168301,12 +168313,14 @@ import { ErrorLine, FieldError, GameAvatar, IconCheck, Logo, SaveBadge, Section,
 import { useSaveBar, useSaveBarActive } from '../../saveBar';
 import { errorText } from '../../apiErrors';
 import { t, useI18n } from '../../i18n';
+import { useAppearance } from '../../appearance';
 
 
 
 /** название, цвет и логотип сообщества: изменения сохраняются сами */
 export function BrandCard() {
   useI18n();
+  const [{ ember }] = useAppearance();
   const { access, reload } = useAuth();
   const b = access.brand;
   const [name, setName] = useState(b.name);
@@ -168426,6 +168440,7 @@ export function BrandCard() {
       />
       <div>
         <span className="label">{t('d2.brand.theme')}</span>
+        {ember && <p className="mb-2 text-sm font-semibold text-mute">{t('d2.brand.emberNote')}</p>}
         <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
           {THEME_PRESETS.map((p) => {
             const on = preset === p.id;
@@ -172504,6 +172519,57 @@ __COREGSM_EOF__
 :root[data-ember='1'] .pf-banner::after { height: 70%; }
 :root[data-ember='1'] .pf-level-badge { background: linear-gradient(135deg, rgb(255 126 60), rgb(var(--brand-2))); box-shadow: 0 4px 12px -2px rgb(var(--brand) / .7); border-radius: 8px; padding: 2px 10px; }
 :root[data-ember='1'] .pf-hero h1, :root[data-ember='1'] .pf-hero h2 { letter-spacing: -.02em; }
+
+/* ======================================================================
+   the audit: one hierarchy of buttons, one kind of tab, quiet fields and hints, no leftovers of the old look
+   ====================================================================== */
+
+/* ---------- the buttons: the orange one is the main action; the second one is graphite with a hairline (orange only when the pointer is on it); a link is orange text ---------- */
+:root[data-ember='1'] .btn-soft {
+  --b-fg: rgb(var(--ink)); --b-bg: rgb(var(--soft)); --b-bg-h: rgb(var(--raised));
+  --b-ring: inset 0 0 0 1px rgb(var(--line)); --b-ring-h: inset 0 0 0 1px rgb(var(--brand) / .5);
+}
+
+/* ---------- the tabs: ONE look for all of them: a graphite chip with a hairline and a faint glow of an ember ---------- */
+:root[data-ember='1'] { --seg-on: 255 255 255; }
+:root[data-ember='1'][data-theme='dark'] { --seg-on: 49 44 41; }
+@media (prefers-color-scheme: dark) { :root[data-ember='1']:not([data-theme='light']) { --seg-on: 49 44 41; } }
+:root[data-ember='1'] .seg[data-ind]::before,
+:root[data-ember='1'] .srv-tabs.seg[data-ind]::before { background: rgb(var(--seg-on)); box-shadow: inset 0 0 0 1px rgb(var(--line)), 0 0 20px -8px rgb(var(--brand) / .7); }
+:root[data-ember='1'] .seg:not([data-ind]) > .seg-item:is([aria-pressed='true'], [aria-current='page'], .on),
+:root[data-ember='1'] .srv-tabs:not([data-ind]) > .seg-item.on,
+:root[data-ember='1'] .chip-filter.on,
+:root[data-ember='1'] .nw-rub[aria-pressed='true'],
+:root[data-ember='1'] .cm-nav-i[aria-current='true'],
+:root[data-ember='1'] .cm-chip[aria-pressed='true'],
+:root[data-ember='1'] .pf-chip[aria-pressed='true'],
+:root[data-ember='1'] [class*='bg-brand'][aria-current='page'] {
+  background: rgb(var(--seg-on)); color: rgb(var(--ink)); border-color: transparent;
+  box-shadow: inset 0 0 0 1px rgb(var(--line)), 0 0 20px -8px rgb(var(--brand) / .7);
+}
+:root[data-ember='1'] .nw-rub[aria-pressed='true'] .nw-rub-n { background: rgb(var(--brand) / .2); color: rgb(var(--link)); }
+:root[data-ember='1'] .srv-tabs > .seg-item.on > svg { color: rgb(var(--brand-hover)); }
+
+/* ---------- the fields: a hairline and a soft fill, the ember line only when the field is open ---------- */
+:root[data-ember='1'] .input { border-width: 1px; border-color: rgb(var(--line)); background-color: rgb(var(--soft)); }
+:root[data-ember='1'] .input:hover:not(:focus) { border-color: rgb(var(--field) / .7); }
+
+/* ---------- the hints at the top of the admin pages: a quiet card, not a wide orange band ---------- */
+:root[data-ember='1'] .hint-strip { background: rgb(var(--card)); box-shadow: var(--shadow-2); border-radius: var(--emb-r-card); font-weight: 550; color: rgb(var(--mute)); }
+:root[data-ember='1'] .hint-strip :is(a, .hint-more) { color: rgb(var(--link)); }
+
+/* ---------- the sign-in screens: the cards of the showcase stand straight and still ---------- */
+:root[data-ember='1'] .showcase-tile { rotate: none !important; transform: none !important; border-radius: var(--emb-r-card); }
+:root[data-ember='1'] .auth-float { opacity: .3; }
+
+/* ---------- the banner of a server: the same deep column as the big card of the home page ---------- */
+:root[data-ember='1'] .srv-banner { border-radius: var(--emb-r-big); background-color: color-mix(in srgb, var(--srv-acc, rgb(var(--brand))) 8%, #100f0e); box-shadow: var(--shadow-2); }
+:root[data-ember='1'] .srv-banner > span[aria-hidden].absolute { border-radius: var(--emb-r-big); }
+:root[data-ember='1'] .srv-banner .srv-scrim { border-radius: var(--emb-r-big); background: linear-gradient(180deg, rgb(16 14 13 / .3) 0%, rgb(16 14 13 / .8) 55%, rgb(16 14 13 / .96) 100%); }
+:root[data-ember='1'] .srv-banner :is(.srv-tod, .depth-l1, .depth-l2) { display: none; }
+
+/* ---------- the bars of the list: the orange scale; the colour of the game stays on its icon ---------- */
+:root[data-ember='1'] .srv-tr .srv-cap:not(.hot) > i { background: linear-gradient(90deg, rgb(var(--brand-2)), rgb(var(--brand))); }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/mobile.css" << '__COREGSM_EOF__'
