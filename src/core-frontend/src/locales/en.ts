@@ -897,6 +897,7 @@ const en: Record<keyof typeof ru, string> = {
   'nw.openLink': 'Open link →',
   'nw.untitled': 'News',
   'nw.back': 'Back to news',
+  'nw.backShort': 'News',
   'nw.copyLink': 'Copy link',
   'nw.readTime': '{n} min read',
   'nw.toc': 'Contents',

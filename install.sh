@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="f7f8327d4ec9"
+COREGSM_BUILD="ae008ed16778"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.2.24"
+COREGSM_VERSION="1.2.25"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -130840,8 +130840,14 @@ export function Comments({ newsId }: { newsId: number }) {
       <ErrorLine text={error} />
       {data?.locked && <p className="cm-note">{t('nw.cm.locked')}</p>}
       {data?.canPost && <Compose draftKey={`news-${newsId}`} label={t('nw.cm.write')} placeholder={t('nw.cm.holder')} submit={(text) => write(text)} />}
-      {data && !data.canPost && !data.locked && !me && <p className="cm-note"><a href="/login">{t('nw.cm.login')}</a></p>}
-      {data && tree.length === 0 && <p className="cm-empty">{t('nw.cm.empty')}</p>}
+      {data && tree.length === 0 && (
+        <div className="cm-blank">
+          <span className="cm-blank-ico" aria-hidden>💬</span>
+          <p className="cm-empty">{t('nw.cm.empty')}</p>
+          {!data.canPost && !data.locked && !me && <a className="btn btn-soft btn-sm" href="/login">{t('nw.cm.login')}</a>}
+        </div>
+      )}
+      {data && tree.length > 0 && !data.canPost && !data.locked && !me && <p className="cm-note"><a href="/login">{t('nw.cm.login')}</a></p>}
       <div className="cm-list">
         {tree.map(({ top, replies }) => (
           <div key={top.id} className="cm-thread">
@@ -131822,7 +131828,8 @@ import { useEffect, useRef, useState } from 'react';
 import { api, type NewsReaction, type PublicNews, type PublicNewsFull, type Server } from '../../api';
 import { t } from '../../i18n';
 import { ago, fmtDateTime, toast } from '../../ui';
-import { cardOf, NewsCover, Row } from './PublicFeed';
+import { IconShare } from '../../icons';
+import { cardOf, newsWhen, NewsCover, Row } from './PublicFeed';
 import { IconCopyLink } from './NewsIcons';
 import { Comments } from './Comments';
 import { extractHeadings, readingMinutes, wasEdited } from './newsLogic';
@@ -131932,22 +131939,26 @@ export function NewsArticle({
   };
 
   return (
+    <>
+    {!preview && <a className="nw-backlink" href="/news"><span aria-hidden>←</span> {t('nw.backShort')}</a>}
     <article className="nw-article" ref={root}>
       {!preview && <ReadProgress target={root} />}
       <div className="nw-cover-zoomable">
-        <NewsCover c={c} servers={servers} as="h1" tall />
+        <NewsCover c={c} servers={servers} as="h1" tall withDate={false} />
         {c.image && !preview && <button type="button" className="nw-zoom" onClick={() => setCoverOpen(true)} aria-label={t('nw.zoomCover')} title={t('nw.zoomCover')}><span aria-hidden>⤢</span></button>}
       </div>
       <div className="nw-article-in">
-        {(c.author || c.countdownAt || minutes > 0 || (c.views > 0 && !preview)) && (
+        {(c.author || c.at || c.countdownAt || minutes > 0 || (c.views > 0 && !preview)) && (
           <div className="nf-meta">
             {c.author && <AuthorLine name={c.author.name} icon={c.author.icon} role={c.role} />}
+            {c.at && <time className="nw-when" dateTime={new Date(c.at).toISOString()} title={fmtDateTime(c.at)}>{newsWhen(c.at)}</time>}
             {minutes > 0 && <span className="nw-read">{t('nw.readTime', { n: minutes })}</span>}
             {!preview && c.views > 0 && <span className="nw-read" title={t('nw.views', { n: c.views })}>👁 {c.views}</span>}
             {c.countdownAt && <Countdown at={c.countdownAt} label={c.countdownLabel} />}
             {edited && item.editedAt && <span className="nw-read" title={t('nw.updatedTip', { date: fmtDateTime(item.editedAt), n: item.edits ?? 0 })}>{t('nw.updated', { when: ago(item.editedAt) })}</span>}
           </div>
         )}
+        <div className={headings.length >= 3 ? 'nw-split' : 'nw-plain'}>
         {headings.length >= 3 && (
           <nav className="nw-toc" aria-label={t('nw.toc')}>
             <h2 className="nw-toc-h">{t('nw.toc')}</h2>
@@ -131960,6 +131971,7 @@ export function NewsArticle({
             </ol>
           </nav>
         )}
+        <div className="nw-split-main">
         {(c.text || c.fields.length > 0) && <NewsText className="nw-prose-lg" text={c.text} fields={c.fields} />}
         <ChangesBlock changes={c.changes} />
         <StatusCards ids={c.statusIds} servers={servers} />
@@ -131970,16 +131982,16 @@ export function NewsArticle({
             {c.link && <a className="btn btn-soft" href={c.link} target="_blank" rel="noopener noreferrer">{t('nw.openLink')}</a>}
           </div>
         )}
+        </div>
+        </div>
         {!preview && (
           <>
-            <Reactions id={item.id} reactions={item.reactions} canReact={canReact} onChange={onReactions} />
-            <div className="nw-toolbar">
-              <a className="btn btn-soft" href="/news">{t('nw.back')}</a>
-              {canShare && <button type="button" className="btn btn-soft" onClick={() => void share()}>{t('nw.share')}</button>}
-              <button type="button" className="btn btn-soft" onClick={() => void copy()}>
-                <IconCopyLink />
-                {t('nw.copyLink')}
-              </button>
+            <div className="nw-reactbar">
+              <Reactions id={item.id} reactions={item.reactions} canReact={canReact} onChange={onReactions} />
+              <div className="nw-icons">
+                {canShare && <button type="button" className="nw-icon-btn" onClick={() => void share()} title={t('nw.share')} aria-label={t('nw.share')}><IconShare /></button>}
+                <button type="button" className="nw-icon-btn" onClick={() => void copy()} title={t('nw.copyLink')} aria-label={t('nw.copyLink')}><IconCopyLink /></button>
+              </div>
             </div>
           </>
         )}
@@ -131997,7 +132009,7 @@ export function NewsArticle({
       {!preview && related.length > 0 && (
         <section className="nw-related" aria-label={t('nw.related')}>
           <h2 className="nw-h2">{t('nw.related')}</h2>
-          <div className="nf-list">{related.map((n) => <Row key={n.id} c={cardOf(n)} servers={servers} />)}</div>
+          <div className="nf-list nw-related-list">{related.slice(0, 3).map((n) => <Row key={n.id} c={cardOf(n)} servers={servers} />)}</div>
         </section>
       )}
       {!preview && (item.prev || item.next) && (
@@ -132020,6 +132032,7 @@ export function NewsArticle({
       {coverOpen && c.image && <GalleryViewer urls={[c.image]} index={0} onIndex={() => undefined} onClose={() => setCoverOpen(false)} />}
       {viewer != null && c.gallery.length > 0 && <GalleryViewer urls={c.gallery} index={Math.min(viewer, c.gallery.length - 1)} onIndex={setViewer} onClose={() => setViewer(null)} />}
     </article>
+    </>
   );
 }
 __COREGSM_EOF__
@@ -132089,7 +132102,7 @@ __COREGSM_EOF__
 import { useEffect, useRef, useState } from 'react';
 import { api, type NewsAction, type NewsCategory, type NewsChange, type NewsReaction, type Server } from '../../api';
 import { t, useI18n } from '../../i18n';
-import { Burst, GameAvatar, StatusPill, UserAvatar, toast, usePoll } from '../../ui';
+import { Burst, GameAvatar, StatusPill, UserAvatar, navigate, toast, usePoll } from '../../ui';
 import { IconClose } from '../../icons';
 import { DiscordMd, ThemeCtx, type DTheme } from './DiscordMd';
 import { CategoryIcon, ChangeIcon, PinIcon } from './NewsIcons';
@@ -132350,8 +132363,8 @@ export function StatusCards({ ids, servers }: { ids: number[]; servers: Server[]
   const shown = ids.map((id) => servers?.find((s) => s.id === id)).filter((s): s is Server => !!s);
   if (servers && shown.length === 0) return null;
   return (
-    <section aria-label={t('nw.servers')}>
-      <h2 className="nw-h2">{t('nw.servers')}</h2>
+    <section aria-label={t('nw.liveNow')}>
+      <h2 className="nw-h2">{t('nw.liveNow')}</h2>
       <ul className="nw-srv-list">
         {!servers && ids.slice(0, 5).map((id) => <li key={id} className="skeleton nw-srv-skel" aria-hidden />)}
         {shown.map((s) => (
@@ -132364,6 +132377,7 @@ export function StatusCards({ ids, servers }: { ids: number[]; servers: Server[]
                   <span className="tabular-nums">{s.online ? t('nw.srv.players', { n: s.players, max: s.maxPlayers }) : t('nw.srv.offline')}</span>
                   {s.online && s.ping != null && <span className="tabular-nums">{s.ping} {t('nw.srv.ms')}</span>}
                 </span>
+                {s.online && s.maxPlayers > 0 && <span className="nw-srv-bar" aria-hidden><i style={{ width: `${Math.min(100, Math.round((s.players / s.maxPlayers) * 100))}%` }} /></span>}
               </span>
               <StatusPill online={s.online} known={s.hasStatus} maintenance={!!s.maintenance} />
             </a>
@@ -132387,7 +132401,9 @@ export function Reactions({
   const [pop, setPop] = useState<{ e: string; k: number } | null>(null);
   const list = fullReactions(reactions);
   const click = async (emoji: string) => {
-    if (!canReact || busy) return;
+    // a guest is sent to the sign-in instead of meeting a dead button
+    if (!canReact) { navigate('/login'); return; }
+    if (busy) return;
     const prev = list;
     if (!prev.find((r) => r.emoji === emoji)?.mine) setPop({ e: emoji, k: Date.now() });
     const { list: opt, next } = toggleReaction(prev, emoji);
@@ -132408,14 +132424,13 @@ export function Reactions({
     <div className="nw-react">
       <div className="nw-react-row" role="group" aria-label={t('nw.react.title')}>
         {list.map((r) => (
-          <button key={r.emoji} type="button" className="nw-react-btn" aria-pressed={r.mine} disabled={!canReact} onClick={() => void click(r.emoji)}>
+          <button key={r.emoji} type="button" className="nw-react-btn" aria-pressed={r.mine} title={canReact ? undefined : t('nw.react.login')} onClick={() => void click(r.emoji)}>
             <span aria-hidden className="nw-react-emoji">{r.emoji}</span>
-            <span className="tabular-nums">{r.count}</span>
+            {r.count > 0 && <span className="tabular-nums">{r.count}</span>}
             {pop?.e === r.emoji && <Burst key={pop.k} count={6} radius={20} />}
           </button>
         ))}
       </div>
-      {!canReact && <p className="nw-react-hint">{t('nw.react.login')}</p>}
     </div>
   );
 }
@@ -132655,7 +132670,7 @@ export function NewsListPage() {
   const liveServers = (servers ?? []).slice(0, 6);
 
   const chip = (id: RubricFilter) => (
-    <button key={id} type="button" className="nw-rub" aria-pressed={filter === id} onClick={() => setRubric(id)}>
+    <button key={id} type="button" className="nw-rub" aria-pressed={filter === id} style={id === 'all' ? undefined : { ['--nw-cat' as string]: CATEGORY_HEX[id] }} onClick={() => setRubric(id)}>
       {id !== 'all' && <CategoryIcon category={id} size={15} />}
       {categoryLabel(id)}
       <span className="nw-rub-n tabular-nums">{counts[id]}</span>
@@ -132717,7 +132732,7 @@ export function NewsListPage() {
               action={<button type="button" className="btn btn-soft" onClick={() => setRubric('all')}>{t('nw.showAll')}</button>}
             />
           )}
-          {shown.length > 0 && <div className="fade-in"><PublicFeed items={shown} servers={servers} seen={seen} dense={dense} plain={sort !== 'new'} /></div>}
+          {shown.length > 0 && <div className="fade-in" key={`${filter}-${sort}-${dense ? 'd' : 'c'}`}><PublicFeed items={shown} servers={servers} seen={seen} dense={dense} plain={sort !== 'new'} /></div>}
           {hasMore && (
             <div className="ne-more" ref={more}>
               <button type="button" className="btn btn-soft" disabled={loadingMore} aria-busy={loadingMore || undefined} onClick={showMore}>
@@ -133050,7 +133065,7 @@ __COREGSM_EOF__
 import type { CSSProperties, ReactNode } from 'react';
 import type { NewsAction, NewsCategory, NewsChange, NewsReaction, PublicNews, Server } from '../../api';
 import { useI18n, t } from '../../i18n';
-import { fmtDate, fmtTime, toast } from '../../ui';
+import { ago, fmtDate, fmtDateTime, fmtTime, toast } from '../../ui';
 import { useAuth } from '../../auth';
 import { AuthorLine, CategoryChip, Countdown, NewsText, PinChip } from './NewsParts';
 import { CategoryIcon, IconCopyLink, IconEditPen } from './NewsIcons';
@@ -133162,7 +133177,7 @@ export const hasGeneratedCover = (c: Card, servers: Server[] | null | undefined)
 const genVars = (c: Card): CSSProperties => ({ ['--gen' as string]: CATEGORY_HEX[c.category] });
 
 /** big cover with the title over a bottom gradient; used by the feed hero and by the news page */
-export function NewsCover({ c, servers, as: H = 'h2', href, tall = false }: { c: Card; servers: Server[] | null | undefined; as?: 'h1' | 'h2'; href?: string; tall?: boolean }) {
+export function NewsCover({ c, servers, as: H = 'h2', href, tall = false, withDate = true }: { c: Card; servers: Server[] | null | undefined; as?: 'h1' | 'h2'; href?: string; tall?: boolean; withDate?: boolean }) {
   const gen = hasGeneratedCover(c, servers);
   return (
     <div className={`nw-cover ${tall ? 'is-tall' : ''} ${gen ? 'is-gen' : ''}`} style={{ ['--nf-accent' as string]: c.accent, ...(gen ? genVars(c) : {}) }}>
@@ -133174,7 +133189,7 @@ export function NewsCover({ c, servers, as: H = 'h2', href, tall = false }: { c:
         <div className="nw-cover-chips">
           {c.pinned && <PinChip />}
           <CategoryChip category={c.category} />
-          {c.at && <span className="nw-chip nw-chip-date">{newsWhen(c.at)}</span>}
+          {withDate && c.at && <span className="nw-chip nw-chip-date">{newsWhen(c.at)}</span>}
         </div>
         <H className="nw-cover-title">{href ? <a href={href}>{breakable(c.title)}</a> : breakable(c.title)}</H>
       </div>
@@ -133222,41 +133237,49 @@ export function NewsBanner({ c, children }: { c: Card; children?: ReactNode }) {
  * One news as a small article: a banner (the picture, or a cover drawn by the panel) with the rubric, the date and the
  * headline on it, and the whole text below (a list stays a list), the author and a link.
  */
-function Entry({ c, servers, seen }: { c: Card; servers: Server[] | null | undefined; lang: 'ru' | 'en'; seen: number | null }) {
+function Entry({ c, servers, seen, lead = false }: { c: Card; servers: Server[] | null | undefined; lang: 'ru' | 'en'; seen: number | null; lead?: boolean }) {
   const href = `/news/${c.id}`;
   const gen = hasGeneratedCover(c, servers);
   const { me } = useAuth();
   const canEdit = me?.role === 'admin' || !!me?.perms?.includes('news');
   const minutes = readingMinutes(c.text);
   const long = c.text.length > 700 || c.text.split('\n').length > 9;
+  const fresh = isFresh(c.at, seen);
+  // a visitor who has been here before finds what he has already seen quieter
+  const read = seen != null && !fresh;
+  const likes = c.reactions.reduce((a, r) => a + r.count, 0);
   const copy = async () => {
     try { await navigator.clipboard.writeText(`${window.location.origin}/n/${c.id}`); toast(t('nw.copied')); } catch { toast(t('nw.copyFail'), 'err'); }
   };
   return (
-    <article className={`nb ${c.pinned ? 'is-pinned' : ''}`} style={{ ['--nf-accent' as string]: c.accent }}>
+    <article className={`nb ${c.pinned ? 'is-pinned' : ''} ${lead ? 'is-lead' : ''} ${read ? 'is-read' : ''}`} style={{ ['--nf-accent' as string]: c.accent, ['--nw-cat' as string]: CATEGORY_HEX[c.category] }}>
       {/* the whole card is the link; the buttons and links inside the text stay clickable above it */}
       <a className="nb-stretch" href={href} tabIndex={-1} aria-label={c.title} />
       <a className={`nb-banner ${gen ? 'nw-gen' : ''}`} data-v={gen ? c.id % 4 : undefined} href={href} style={gen ? genVars(c) : coverStyle(c, servers)} aria-label={c.title}>
         {gen && <span className="nw-gen-ico"><CategoryIcon category={c.category} size={96} /></span>}
         <span className="nb-banner-in">
           <span className="nb-chips">
-            {isFresh(c.at, seen) && <span className="nw-new">{t('nw.new')}</span>}
+            {fresh && <span className="nw-new">{t('nw.new')}</span>}
             {c.pinned && <PinChip />}
             <CategoryChip category={c.category} />
-            {c.at && <time className="nb-date" dateTime={new Date(c.at).toISOString()} title={fmtDate(c.at)}>{newsWhen(c.at)}</time>}
           </span>
-          <h3 className="nb-title">{c.title}</h3>
+          <h3 className="nb-title">{breakable(c.title)}</h3>
         </span>
       </a>
       <div className="nb-body">
         {(c.text || c.fields.length > 0) && <div className={`nb-text ${long ? 'is-long' : ''}`}><NewsText text={c.text} fields={c.fields} /></div>}
         {c.countdownAt && <Countdown at={c.countdownAt} label={c.countdownLabel} compact />}
         <div className="nb-foot">
-          {c.author && <AuthorLine name={c.author.name} icon={c.author.icon} role={c.role} />}
+          <span className="nb-who">
+            {c.author && <AuthorLine name={c.author.name} icon={c.author.icon} role={c.role} />}
+            {c.at && <time className="nb-ago" dateTime={new Date(c.at).toISOString()} title={fmtDateTime(c.at)}>{ago(c.at)}</time>}
+          </span>
           <span className="nb-tools">
             {minutes > 0 && <span className="nw-read">{t('nw.readTime', { n: minutes })}</span>}
+            {likes > 0 && <span className="nw-read" title={c.reactions.filter((r) => r.count > 0).map((r) => `${r.emoji} ${r.count}`).join('  ')}>♥ {likes}</span>}
             {c.views > 0 && <span className="nw-read" title={t('nw.views', { n: c.views })}>👁 {c.views}</span>}
             {c.comments > 0 && <a className="nw-cmcount" href={`${href}#comments`} aria-label={t('nw.cm.count', { n: c.comments })}>💬 {c.comments}</a>}
+            <a className="nb-more" href={href}>{t('nw.readShort')}<span aria-hidden> →</span></a>
             <button type="button" className="nb-tool" onClick={() => void copy()} title={t('nw.copyLink')} aria-label={t('nw.copyLink')}><IconCopyLink /></button>
             {canEdit && <a className="nb-tool" href={`/admin/news/${c.id}`} title={t('nw.edit')} aria-label={t('nw.edit')}><IconEditPen /></a>}
           </span>
@@ -133313,6 +133336,8 @@ export function PublicFeed({ items, servers, flat = false, seen = null, dense = 
   const cards = items.map(cardOf);
   const pinned = plain ? [] : cards.filter((c) => c.pinned);
   const normal = plain ? cards : cards.filter((c) => !c.pinned);
+  // the first card is the lead one: a bigger cover and more of the text
+  const leadId = !dense && cards.length >= 2 ? (pinned[0] ?? normal[0])?.id : undefined;
   const groups = flat || plain ? [{ key: 'all', label: '', items: normal }] : groupByMonth(normal.map((c) => ({ ...c, sentAt: c.at })), monthFormatter(lang));
 
   return (
@@ -133320,13 +133345,13 @@ export function PublicFeed({ items, servers, flat = false, seen = null, dense = 
       {pinned.length > 0 && (
         <section className="nw-group">
           <h2 className="ne-h"><span>{t('nw.pinned')}</span><span className="ne-h-n">{pinned.length}</span></h2>
-          {pinned.map((c) => (dense ? <Row key={c.id} c={c} servers={servers} /> : <Entry key={c.id} c={c} servers={servers} lang={lang} seen={seen} />))}
+          {pinned.map((c) => (dense ? <Row key={c.id} c={c} servers={servers} /> : <Entry key={c.id} c={c} servers={servers} lang={lang} seen={seen} lead={c.id === leadId} />))}
         </section>
       )}
       {groups.map((g) => (
         <section key={g.key} className="nw-group">
           {(g.label || pinned.length > 0) && <h2 className="ne-h"><span>{g.label || t('nw.earlier')}</span><span className="ne-h-n">{g.items.length}</span></h2>}
-          {g.items.map((c) => (dense ? <Row key={c.id} c={c} servers={servers} /> : <Entry key={c.id} c={c} servers={servers} lang={lang} seen={seen} />))}
+          {g.items.map((c) => (dense ? <Row key={c.id} c={c} servers={servers} /> : <Entry key={c.id} c={c} servers={servers} lang={lang} seen={seen} lead={c.id === leadId} />))}
         </section>
       ))}
     </div>
@@ -147229,6 +147254,7 @@ const en: Record<keyof typeof ru, string> = {
   'nw.openLink': 'Open link →',
   'nw.untitled': 'News',
   'nw.back': 'Back to news',
+  'nw.backShort': 'News',
   'nw.copyLink': 'Copy link',
   'nw.readTime': '{n} min read',
   'nw.toc': 'Contents',
@@ -152278,6 +152304,7 @@ const ru = {
   'nw.openLink': 'Открыть ссылку →',
   'nw.untitled': 'Новость',
   'nw.back': 'К списку новостей',
+  'nw.backShort': 'Новости',
   'nw.copyLink': 'Скопировать ссылку',
   'nw.readTime': '{n} мин чтения',
   'nw.toc': 'Содержание',
@@ -175476,6 +175503,73 @@ a.cm-time:hover { color: rgb(var(--link)); }
 .nw-feed.is-dense .nf-thumb { width: 3.5rem; min-width: 3.5rem; aspect-ratio: 1; }
 .nw-authorbox { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem 1rem; margin-top: 2rem; padding: .85rem 1rem; border-radius: var(--r-lg, 16px); background: rgb(var(--soft)); }
 .nw-authorbox-n { flex: 1 1 8rem; font-size: .85rem; font-weight: 700; color: rgb(var(--mute)); }
+
+/* ---------- the feed cards: a lead card, the rubric's stripe, read news a little quieter, a read link in the footer ---------- */
+.nb .nb-banner { height: auto; min-height: 9.5rem; }
+.nb.is-pinned .nb-banner { min-height: 11.5rem; }
+.nb.is-lead .nb-banner { min-height: 16rem; }
+.nb.is-lead .nb-title { font-size: clamp(1.9rem, 3.4vw, 2.6rem); }
+.nb.is-lead .nb-text { -webkit-line-clamp: 6; font-size: 1.125rem; }
+.nb::before { content: ''; position: absolute; inset: 0 auto 0 0; width: 4px; z-index: 3; background: var(--nw-cat, rgb(var(--brand))); pointer-events: none; }
+.nb.is-read::before { opacity: .45; }
+.nb.is-read .nb-text { opacity: .88; }
+.nb.is-read .nb-banner:not(.nw-gen) { filter: saturate(.85); }
+.nb-who { display: inline-flex; flex-wrap: wrap; align-items: center; gap: .15rem .9rem; min-width: 0; }
+.nb-ago { font-size: .8125rem; font-weight: 600; color: rgb(var(--mute)); white-space: nowrap; }
+.nb-more { display: inline-flex; align-items: center; min-height: 32px; margin-inline: .35rem; font-weight: 650; color: rgb(var(--link)); text-decoration: none; white-space: nowrap; }
+.nb:hover .nb-more { text-decoration: underline; }
+@media (max-width: 560px) { .nb-more { min-height: 44px; } .nb.is-lead .nb-banner { min-height: 12rem; } }
+@media (prefers-reduced-motion: no-preference) {
+  .nb .nw-gen-ico { transition: transform .35s ease; }
+  .nb:hover .nw-gen-ico { transform: scale(1.08) rotate(-4deg); }
+}
+
+/* the tabs of the rubrics carry the colour of the rubric */
+.nw-rub[style*='--nw-cat'] svg { color: var(--nw-cat); }
+.nw-rub[aria-pressed='true'][style*='--nw-cat'] { box-shadow: inset 0 0 0 1.5px var(--nw-cat); }
+@media (max-width: 639px) { .nw-rubrics { -webkit-mask-image: linear-gradient(90deg, #000 88%, transparent); mask-image: linear-gradient(90deg, #000 88%, transparent); } }
+
+/* ---------- the article: a way back above the card, the date in the meta row, the contents beside the text, icon buttons ---------- */
+.nw-backlink { display: inline-flex; align-items: center; gap: .35rem; min-height: 44px; margin: 0 0 .25rem; font-weight: 650; color: rgb(var(--mute)); text-decoration: none; }
+.nw-backlink:hover { color: rgb(var(--ink)); }
+.nw-article .nw-cover-shade { background: linear-gradient(180deg, rgb(8 10 20 / .1) 10%, rgb(8 10 20 / .9) 100%); }
+.nw-article .nw-cover-in { gap: .9rem; }
+.nw-when { font-weight: 650; color: rgb(var(--ink)); }
+.nw-prose-lg { font-size: 1.1875rem; line-height: 1.7; max-width: 66ch; }
+.nw-plain, .nw-split-main, .nw-split { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1.5rem; min-width: 0; }
+@media (min-width: 1180px) {
+  .nw-split { grid-template-columns: minmax(0, 1fr) 15rem; gap: 2.5rem; align-items: start; }
+  .nw-split > .nw-split-main { grid-column: 1; grid-row: 1; }
+  .nw-split > .nw-toc { grid-column: 2; grid-row: 1; position: sticky; top: 5.5rem; padding: .25rem 0 .25rem 1rem; border: 0; border-left: 2px solid rgb(var(--line)); border-radius: 0; background: none; }
+  .nw-article-wrap:has(.nw-split) { max-width: 66rem; }
+  :root[data-ember='1'] .nw-article-wrap:has(.nw-split) { max-width: 66rem; }
+}
+.nw-reactbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .75rem 1rem; }
+.nw-icons { display: inline-flex; gap: .4rem; }
+.nw-icon-btn { display: grid; place-items: center; width: 44px; height: 44px; padding: 0; border-radius: var(--r-pill); border: 1px solid rgb(var(--line)); background: rgb(var(--card)); color: rgb(var(--mute)); cursor: pointer; transition: color .15s, border-color .15s, box-shadow .15s; }
+.nw-icon-btn:hover { color: rgb(var(--ink)); border-color: rgb(var(--field)); box-shadow: var(--shadow-1); }
+.nw-srv-bar { display: block; height: 4px; margin-top: .3rem; overflow: hidden; border-radius: var(--r-pill); background: rgb(var(--soft)); }
+.nw-srv-bar i { display: block; height: 100%; border-radius: inherit; background: rgb(var(--ok)); }
+.cm-blank { display: grid; justify-items: center; gap: .5rem; padding: 1.5rem 1rem; border: 1px dashed rgb(var(--line)); border-radius: var(--r-lg); text-align: center; }
+.cm-blank-ico { font-size: 1.6rem; }
+
+/* read next: three cards of one height, without the text */
+.nw-related .nw-related-list { grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: stretch; }
+.nw-related-list .nf-item { height: 100%; }
+.nw-related-list .nf-text, .nw-related-list .nw-cmcount { display: none; }
+.nw-related-list .nf-item-in { grid-template-rows: auto auto 1fr; }
+.nw-related-list .nf-actions { align-self: end; }
+.nw-related-list .nf-item-title { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+@media (max-width: 860px) { .nw-related .nw-related-list { grid-template-columns: minmax(0, 1fr); } }
+.nw-pn-prev { grid-column: 1; }
+
+/* the Ember feed has two columns: the lead card takes the whole row, the cards do not stretch to the height of a neighbour */
+@media (min-width: 1100px) {
+  :root[data-ember='1'] .nw-group { align-items: start; }
+  :root[data-ember='1'] .nw-group > .nb.is-lead { grid-column: 1 / -1; }
+}
+/* three lines of a headline before the dots (polish.css allows two) */
+.nb .nb-title { -webkit-line-clamp: 3; line-clamp: 3; overflow-wrap: anywhere; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/news.css" << '__COREGSM_EOF__'

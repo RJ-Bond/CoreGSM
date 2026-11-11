@@ -236,8 +236,14 @@ export function Comments({ newsId }: { newsId: number }) {
       <ErrorLine text={error} />
       {data?.locked && <p className="cm-note">{t('nw.cm.locked')}</p>}
       {data?.canPost && <Compose draftKey={`news-${newsId}`} label={t('nw.cm.write')} placeholder={t('nw.cm.holder')} submit={(text) => write(text)} />}
-      {data && !data.canPost && !data.locked && !me && <p className="cm-note"><a href="/login">{t('nw.cm.login')}</a></p>}
-      {data && tree.length === 0 && <p className="cm-empty">{t('nw.cm.empty')}</p>}
+      {data && tree.length === 0 && (
+        <div className="cm-blank">
+          <span className="cm-blank-ico" aria-hidden>💬</span>
+          <p className="cm-empty">{t('nw.cm.empty')}</p>
+          {!data.canPost && !data.locked && !me && <a className="btn btn-soft btn-sm" href="/login">{t('nw.cm.login')}</a>}
+        </div>
+      )}
+      {data && tree.length > 0 && !data.canPost && !data.locked && !me && <p className="cm-note"><a href="/login">{t('nw.cm.login')}</a></p>}
       <div className="cm-list">
         {tree.map(({ top, replies }) => (
           <div key={top.id} className="cm-thread">

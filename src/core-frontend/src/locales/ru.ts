@@ -898,6 +898,7 @@ const ru = {
   'nw.openLink': 'Открыть ссылку →',
   'nw.untitled': 'Новость',
   'nw.back': 'К списку новостей',
+  'nw.backShort': 'Новости',
   'nw.copyLink': 'Скопировать ссылку',
   'nw.readTime': '{n} мин чтения',
   'nw.toc': 'Содержание',

@@ -362,3 +362,70 @@ a.cm-time:hover { color: rgb(var(--link)); }
 .nw-feed.is-dense .nf-thumb { width: 3.5rem; min-width: 3.5rem; aspect-ratio: 1; }
 .nw-authorbox { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem 1rem; margin-top: 2rem; padding: .85rem 1rem; border-radius: var(--r-lg, 16px); background: rgb(var(--soft)); }
 .nw-authorbox-n { flex: 1 1 8rem; font-size: .85rem; font-weight: 700; color: rgb(var(--mute)); }
+
+/* ---------- the feed cards: a lead card, the rubric's stripe, read news a little quieter, a read link in the footer ---------- */
+.nb .nb-banner { height: auto; min-height: 9.5rem; }
+.nb.is-pinned .nb-banner { min-height: 11.5rem; }
+.nb.is-lead .nb-banner { min-height: 16rem; }
+.nb.is-lead .nb-title { font-size: clamp(1.9rem, 3.4vw, 2.6rem); }
+.nb.is-lead .nb-text { -webkit-line-clamp: 6; font-size: 1.125rem; }
+.nb::before { content: ''; position: absolute; inset: 0 auto 0 0; width: 4px; z-index: 3; background: var(--nw-cat, rgb(var(--brand))); pointer-events: none; }
+.nb.is-read::before { opacity: .45; }
+.nb.is-read .nb-text { opacity: .88; }
+.nb.is-read .nb-banner:not(.nw-gen) { filter: saturate(.85); }
+.nb-who { display: inline-flex; flex-wrap: wrap; align-items: center; gap: .15rem .9rem; min-width: 0; }
+.nb-ago { font-size: .8125rem; font-weight: 600; color: rgb(var(--mute)); white-space: nowrap; }
+.nb-more { display: inline-flex; align-items: center; min-height: 32px; margin-inline: .35rem; font-weight: 650; color: rgb(var(--link)); text-decoration: none; white-space: nowrap; }
+.nb:hover .nb-more { text-decoration: underline; }
+@media (max-width: 560px) { .nb-more { min-height: 44px; } .nb.is-lead .nb-banner { min-height: 12rem; } }
+@media (prefers-reduced-motion: no-preference) {
+  .nb .nw-gen-ico { transition: transform .35s ease; }
+  .nb:hover .nw-gen-ico { transform: scale(1.08) rotate(-4deg); }
+}
+
+/* the tabs of the rubrics carry the colour of the rubric */
+.nw-rub[style*='--nw-cat'] svg { color: var(--nw-cat); }
+.nw-rub[aria-pressed='true'][style*='--nw-cat'] { box-shadow: inset 0 0 0 1.5px var(--nw-cat); }
+@media (max-width: 639px) { .nw-rubrics { -webkit-mask-image: linear-gradient(90deg, #000 88%, transparent); mask-image: linear-gradient(90deg, #000 88%, transparent); } }
+
+/* ---------- the article: a way back above the card, the date in the meta row, the contents beside the text, icon buttons ---------- */
+.nw-backlink { display: inline-flex; align-items: center; gap: .35rem; min-height: 44px; margin: 0 0 .25rem; font-weight: 650; color: rgb(var(--mute)); text-decoration: none; }
+.nw-backlink:hover { color: rgb(var(--ink)); }
+.nw-article .nw-cover-shade { background: linear-gradient(180deg, rgb(8 10 20 / .1) 10%, rgb(8 10 20 / .9) 100%); }
+.nw-article .nw-cover-in { gap: .9rem; }
+.nw-when { font-weight: 650; color: rgb(var(--ink)); }
+.nw-prose-lg { font-size: 1.1875rem; line-height: 1.7; max-width: 66ch; }
+.nw-plain, .nw-split-main, .nw-split { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1.5rem; min-width: 0; }
+@media (min-width: 1180px) {
+  .nw-split { grid-template-columns: minmax(0, 1fr) 15rem; gap: 2.5rem; align-items: start; }
+  .nw-split > .nw-split-main { grid-column: 1; grid-row: 1; }
+  .nw-split > .nw-toc { grid-column: 2; grid-row: 1; position: sticky; top: 5.5rem; padding: .25rem 0 .25rem 1rem; border: 0; border-left: 2px solid rgb(var(--line)); border-radius: 0; background: none; }
+  .nw-article-wrap:has(.nw-split) { max-width: 66rem; }
+  :root[data-ember='1'] .nw-article-wrap:has(.nw-split) { max-width: 66rem; }
+}
+.nw-reactbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .75rem 1rem; }
+.nw-icons { display: inline-flex; gap: .4rem; }
+.nw-icon-btn { display: grid; place-items: center; width: 44px; height: 44px; padding: 0; border-radius: var(--r-pill); border: 1px solid rgb(var(--line)); background: rgb(var(--card)); color: rgb(var(--mute)); cursor: pointer; transition: color .15s, border-color .15s, box-shadow .15s; }
+.nw-icon-btn:hover { color: rgb(var(--ink)); border-color: rgb(var(--field)); box-shadow: var(--shadow-1); }
+.nw-srv-bar { display: block; height: 4px; margin-top: .3rem; overflow: hidden; border-radius: var(--r-pill); background: rgb(var(--soft)); }
+.nw-srv-bar i { display: block; height: 100%; border-radius: inherit; background: rgb(var(--ok)); }
+.cm-blank { display: grid; justify-items: center; gap: .5rem; padding: 1.5rem 1rem; border: 1px dashed rgb(var(--line)); border-radius: var(--r-lg); text-align: center; }
+.cm-blank-ico { font-size: 1.6rem; }
+
+/* read next: three cards of one height, without the text */
+.nw-related .nw-related-list { grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: stretch; }
+.nw-related-list .nf-item { height: 100%; }
+.nw-related-list .nf-text, .nw-related-list .nw-cmcount { display: none; }
+.nw-related-list .nf-item-in { grid-template-rows: auto auto 1fr; }
+.nw-related-list .nf-actions { align-self: end; }
+.nw-related-list .nf-item-title { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+@media (max-width: 860px) { .nw-related .nw-related-list { grid-template-columns: minmax(0, 1fr); } }
+.nw-pn-prev { grid-column: 1; }
+
+/* the Ember feed has two columns: the lead card takes the whole row, the cards do not stretch to the height of a neighbour */
+@media (min-width: 1100px) {
+  :root[data-ember='1'] .nw-group { align-items: start; }
+  :root[data-ember='1'] .nw-group > .nb.is-lead { grid-column: 1 / -1; }
+}
+/* three lines of a headline before the dots (polish.css allows two) */
+.nb .nb-title { -webkit-line-clamp: 3; line-clamp: 3; overflow-wrap: anywhere; }

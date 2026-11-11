@@ -231,7 +231,7 @@ export function NewsListPage() {
   const liveServers = (servers ?? []).slice(0, 6);
 
   const chip = (id: RubricFilter) => (
-    <button key={id} type="button" className="nw-rub" aria-pressed={filter === id} onClick={() => setRubric(id)}>
+    <button key={id} type="button" className="nw-rub" aria-pressed={filter === id} style={id === 'all' ? undefined : { ['--nw-cat' as string]: CATEGORY_HEX[id] }} onClick={() => setRubric(id)}>
       {id !== 'all' && <CategoryIcon category={id} size={15} />}
       {categoryLabel(id)}
       <span className="nw-rub-n tabular-nums">{counts[id]}</span>
@@ -293,7 +293,7 @@ export function NewsListPage() {
               action={<button type="button" className="btn btn-soft" onClick={() => setRubric('all')}>{t('nw.showAll')}</button>}
             />
           )}
-          {shown.length > 0 && <div className="fade-in"><PublicFeed items={shown} servers={servers} seen={seen} dense={dense} plain={sort !== 'new'} /></div>}
+          {shown.length > 0 && <div className="fade-in" key={`${filter}-${sort}-${dense ? 'd' : 'c'}`}><PublicFeed items={shown} servers={servers} seen={seen} dense={dense} plain={sort !== 'new'} /></div>}
           {hasMore && (
             <div className="ne-more" ref={more}>
               <button type="button" className="btn btn-soft" disabled={loadingMore} aria-busy={loadingMore || undefined} onClick={showMore}>

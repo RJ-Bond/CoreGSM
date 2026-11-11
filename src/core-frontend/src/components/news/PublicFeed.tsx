@@ -1,7 +1,7 @@
 import type { CSSProperties, ReactNode } from 'react';
 import type { NewsAction, NewsCategory, NewsChange, NewsReaction, PublicNews, Server } from '../../api';
 import { useI18n, t } from '../../i18n';
-import { fmtDate, fmtTime, toast } from '../../ui';
+import { ago, fmtDate, fmtDateTime, fmtTime, toast } from '../../ui';
 import { useAuth } from '../../auth';
 import { AuthorLine, CategoryChip, Countdown, NewsText, PinChip } from './NewsParts';
 import { CategoryIcon, IconCopyLink, IconEditPen } from './NewsIcons';
@@ -113,7 +113,7 @@ export const hasGeneratedCover = (c: Card, servers: Server[] | null | undefined)
 const genVars = (c: Card): CSSProperties => ({ ['--gen' as string]: CATEGORY_HEX[c.category] });
 
 /** big cover with the title over a bottom gradient; used by the feed hero and by the news page */
-export function NewsCover({ c, servers, as: H = 'h2', href, tall = false }: { c: Card; servers: Server[] | null | undefined; as?: 'h1' | 'h2'; href?: string; tall?: boolean }) {
+export function NewsCover({ c, servers, as: H = 'h2', href, tall = false, withDate = true }: { c: Card; servers: Server[] | null | undefined; as?: 'h1' | 'h2'; href?: string; tall?: boolean; withDate?: boolean }) {
   const gen = hasGeneratedCover(c, servers);
   return (
     <div className={`nw-cover ${tall ? 'is-tall' : ''} ${gen ? 'is-gen' : ''}`} style={{ ['--nf-accent' as string]: c.accent, ...(gen ? genVars(c) : {}) }}>
@@ -125,7 +125,7 @@ export function NewsCover({ c, servers, as: H = 'h2', href, tall = false }: { c:
         <div className="nw-cover-chips">
           {c.pinned && <PinChip />}
           <CategoryChip category={c.category} />
-          {c.at && <span className="nw-chip nw-chip-date">{newsWhen(c.at)}</span>}
+          {withDate && c.at && <span className="nw-chip nw-chip-date">{newsWhen(c.at)}</span>}
         </div>
         <H className="nw-cover-title">{href ? <a href={href}>{breakable(c.title)}</a> : breakable(c.title)}</H>
       </div>
@@ -173,41 +173,49 @@ export function NewsBanner({ c, children }: { c: Card; children?: ReactNode }) {
  * One news as a small article: a banner (the picture, or a cover drawn by the panel) with the rubric, the date and the
  * headline on it, and the whole text below (a list stays a list), the author and a link.
  */
-function Entry({ c, servers, seen }: { c: Card; servers: Server[] | null | undefined; lang: 'ru' | 'en'; seen: number | null }) {
+function Entry({ c, servers, seen, lead = false }: { c: Card; servers: Server[] | null | undefined; lang: 'ru' | 'en'; seen: number | null; lead?: boolean }) {
   const href = `/news/${c.id}`;
   const gen = hasGeneratedCover(c, servers);
   const { me } = useAuth();
   const canEdit = me?.role === 'admin' || !!me?.perms?.includes('news');
   const minutes = readingMinutes(c.text);
   const long = c.text.length > 700 || c.text.split('\n').length > 9;
+  const fresh = isFresh(c.at, seen);
+  // a visitor who has been here before finds what he has already seen quieter
+  const read = seen != null && !fresh;
+  const likes = c.reactions.reduce((a, r) => a + r.count, 0);
   const copy = async () => {
     try { await navigator.clipboard.writeText(`${window.location.origin}/n/${c.id}`); toast(t('nw.copied')); } catch { toast(t('nw.copyFail'), 'err'); }
   };
   return (
-    <article className={`nb ${c.pinned ? 'is-pinned' : ''}`} style={{ ['--nf-accent' as string]: c.accent }}>
+    <article className={`nb ${c.pinned ? 'is-pinned' : ''} ${lead ? 'is-lead' : ''} ${read ? 'is-read' : ''}`} style={{ ['--nf-accent' as string]: c.accent, ['--nw-cat' as string]: CATEGORY_HEX[c.category] }}>
       {/* the whole card is the link; the buttons and links inside the text stay clickable above it */}
       <a className="nb-stretch" href={href} tabIndex={-1} aria-label={c.title} />
       <a className={`nb-banner ${gen ? 'nw-gen' : ''}`} data-v={gen ? c.id % 4 : undefined} href={href} style={gen ? genVars(c) : coverStyle(c, servers)} aria-label={c.title}>
         {gen && <span className="nw-gen-ico"><CategoryIcon category={c.category} size={96} /></span>}
         <span className="nb-banner-in">
           <span className="nb-chips">
-            {isFresh(c.at, seen) && <span className="nw-new">{t('nw.new')}</span>}
+            {fresh && <span className="nw-new">{t('nw.new')}</span>}
             {c.pinned && <PinChip />}
             <CategoryChip category={c.category} />
-            {c.at && <time className="nb-date" dateTime={new Date(c.at).toISOString()} title={fmtDate(c.at)}>{newsWhen(c.at)}</time>}
           </span>
-          <h3 className="nb-title">{c.title}</h3>
+          <h3 className="nb-title">{breakable(c.title)}</h3>
         </span>
       </a>
       <div className="nb-body">
         {(c.text || c.fields.length > 0) && <div className={`nb-text ${long ? 'is-long' : ''}`}><NewsText text={c.text} fields={c.fields} /></div>}
         {c.countdownAt && <Countdown at={c.countdownAt} label={c.countdownLabel} compact />}
         <div className="nb-foot">
-          {c.author && <AuthorLine name={c.author.name} icon={c.author.icon} role={c.role} />}
+          <span className="nb-who">
+            {c.author && <AuthorLine name={c.author.name} icon={c.author.icon} role={c.role} />}
+            {c.at && <time className="nb-ago" dateTime={new Date(c.at).toISOString()} title={fmtDateTime(c.at)}>{ago(c.at)}</time>}
+          </span>
           <span className="nb-tools">
             {minutes > 0 && <span className="nw-read">{t('nw.readTime', { n: minutes })}</span>}
+            {likes > 0 && <span className="nw-read" title={c.reactions.filter((r) => r.count > 0).map((r) => `${r.emoji} ${r.count}`).join('  ')}>♥ {likes}</span>}
             {c.views > 0 && <span className="nw-read" title={t('nw.views', { n: c.views })}>👁 {c.views}</span>}
             {c.comments > 0 && <a className="nw-cmcount" href={`${href}#comments`} aria-label={t('nw.cm.count', { n: c.comments })}>💬 {c.comments}</a>}
+            <a className="nb-more" href={href}>{t('nw.readShort')}<span aria-hidden> →</span></a>
             <button type="button" className="nb-tool" onClick={() => void copy()} title={t('nw.copyLink')} aria-label={t('nw.copyLink')}><IconCopyLink /></button>
             {canEdit && <a className="nb-tool" href={`/admin/news/${c.id}`} title={t('nw.edit')} aria-label={t('nw.edit')}><IconEditPen /></a>}
           </span>
@@ -264,6 +272,8 @@ export function PublicFeed({ items, servers, flat = false, seen = null, dense = 
   const cards = items.map(cardOf);
   const pinned = plain ? [] : cards.filter((c) => c.pinned);
   const normal = plain ? cards : cards.filter((c) => !c.pinned);
+  // the first card is the lead one: a bigger cover and more of the text
+  const leadId = !dense && cards.length >= 2 ? (pinned[0] ?? normal[0])?.id : undefined;
   const groups = flat || plain ? [{ key: 'all', label: '', items: normal }] : groupByMonth(normal.map((c) => ({ ...c, sentAt: c.at })), monthFormatter(lang));
 
   return (
@@ -271,13 +281,13 @@ export function PublicFeed({ items, servers, flat = false, seen = null, dense = 
       {pinned.length > 0 && (
         <section className="nw-group">
           <h2 className="ne-h"><span>{t('nw.pinned')}</span><span className="ne-h-n">{pinned.length}</span></h2>
-          {pinned.map((c) => (dense ? <Row key={c.id} c={c} servers={servers} /> : <Entry key={c.id} c={c} servers={servers} lang={lang} seen={seen} />))}
+          {pinned.map((c) => (dense ? <Row key={c.id} c={c} servers={servers} /> : <Entry key={c.id} c={c} servers={servers} lang={lang} seen={seen} lead={c.id === leadId} />))}
         </section>
       )}
       {groups.map((g) => (
         <section key={g.key} className="nw-group">
           {(g.label || pinned.length > 0) && <h2 className="ne-h"><span>{g.label || t('nw.earlier')}</span><span className="ne-h-n">{g.items.length}</span></h2>}
-          {g.items.map((c) => (dense ? <Row key={c.id} c={c} servers={servers} /> : <Entry key={c.id} c={c} servers={servers} lang={lang} seen={seen} />))}
+          {g.items.map((c) => (dense ? <Row key={c.id} c={c} servers={servers} /> : <Entry key={c.id} c={c} servers={servers} lang={lang} seen={seen} lead={c.id === leadId} />))}
         </section>
       ))}
     </div>

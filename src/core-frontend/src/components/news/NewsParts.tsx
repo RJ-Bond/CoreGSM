@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { api, type NewsAction, type NewsCategory, type NewsChange, type NewsReaction, type Server } from '../../api';
 import { t, useI18n } from '../../i18n';
-import { Burst, GameAvatar, StatusPill, UserAvatar, toast, usePoll } from '../../ui';
+import { Burst, GameAvatar, StatusPill, UserAvatar, navigate, toast, usePoll } from '../../ui';
 import { IconClose } from '../../icons';
 import { DiscordMd, ThemeCtx, type DTheme } from './DiscordMd';
 import { CategoryIcon, ChangeIcon, PinIcon } from './NewsIcons';
@@ -262,8 +262,8 @@ export function StatusCards({ ids, servers }: { ids: number[]; servers: Server[]
   const shown = ids.map((id) => servers?.find((s) => s.id === id)).filter((s): s is Server => !!s);
   if (servers && shown.length === 0) return null;
   return (
-    <section aria-label={t('nw.servers')}>
-      <h2 className="nw-h2">{t('nw.servers')}</h2>
+    <section aria-label={t('nw.liveNow')}>
+      <h2 className="nw-h2">{t('nw.liveNow')}</h2>
       <ul className="nw-srv-list">
         {!servers && ids.slice(0, 5).map((id) => <li key={id} className="skeleton nw-srv-skel" aria-hidden />)}
         {shown.map((s) => (
@@ -276,6 +276,7 @@ export function StatusCards({ ids, servers }: { ids: number[]; servers: Server[]
                   <span className="tabular-nums">{s.online ? t('nw.srv.players', { n: s.players, max: s.maxPlayers }) : t('nw.srv.offline')}</span>
                   {s.online && s.ping != null && <span className="tabular-nums">{s.ping} {t('nw.srv.ms')}</span>}
                 </span>
+                {s.online && s.maxPlayers > 0 && <span className="nw-srv-bar" aria-hidden><i style={{ width: `${Math.min(100, Math.round((s.players / s.maxPlayers) * 100))}%` }} /></span>}
               </span>
               <StatusPill online={s.online} known={s.hasStatus} maintenance={!!s.maintenance} />
             </a>
@@ -299,7 +300,9 @@ export function Reactions({
   const [pop, setPop] = useState<{ e: string; k: number } | null>(null);
   const list = fullReactions(reactions);
   const click = async (emoji: string) => {
-    if (!canReact || busy) return;
+    // a guest is sent to the sign-in instead of meeting a dead button
+    if (!canReact) { navigate('/login'); return; }
+    if (busy) return;
     const prev = list;
     if (!prev.find((r) => r.emoji === emoji)?.mine) setPop({ e: emoji, k: Date.now() });
     const { list: opt, next } = toggleReaction(prev, emoji);
@@ -320,14 +323,13 @@ export function Reactions({
     <div className="nw-react">
       <div className="nw-react-row" role="group" aria-label={t('nw.react.title')}>
         {list.map((r) => (
-          <button key={r.emoji} type="button" className="nw-react-btn" aria-pressed={r.mine} disabled={!canReact} onClick={() => void click(r.emoji)}>
+          <button key={r.emoji} type="button" className="nw-react-btn" aria-pressed={r.mine} title={canReact ? undefined : t('nw.react.login')} onClick={() => void click(r.emoji)}>
             <span aria-hidden className="nw-react-emoji">{r.emoji}</span>
-            <span className="tabular-nums">{r.count}</span>
+            {r.count > 0 && <span className="tabular-nums">{r.count}</span>}
             {pop?.e === r.emoji && <Burst key={pop.k} count={6} radius={20} />}
           </button>
         ))}
       </div>
-      {!canReact && <p className="nw-react-hint">{t('nw.react.login')}</p>}
     </div>
   );
 }

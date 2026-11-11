@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { api, type NewsReaction, type PublicNews, type PublicNewsFull, type Server } from '../../api';
 import { t } from '../../i18n';
 import { ago, fmtDateTime, toast } from '../../ui';
-import { cardOf, NewsCover, Row } from './PublicFeed';
+import { IconShare } from '../../icons';
+import { cardOf, newsWhen, NewsCover, Row } from './PublicFeed';
 import { IconCopyLink } from './NewsIcons';
 import { Comments } from './Comments';
 import { extractHeadings, readingMinutes, wasEdited } from './newsLogic';
@@ -112,22 +113,26 @@ export function NewsArticle({
   };
 
   return (
+    <>
+    {!preview && <a className="nw-backlink" href="/news"><span aria-hidden>←</span> {t('nw.backShort')}</a>}
     <article className="nw-article" ref={root}>
       {!preview && <ReadProgress target={root} />}
       <div className="nw-cover-zoomable">
-        <NewsCover c={c} servers={servers} as="h1" tall />
+        <NewsCover c={c} servers={servers} as="h1" tall withDate={false} />
         {c.image && !preview && <button type="button" className="nw-zoom" onClick={() => setCoverOpen(true)} aria-label={t('nw.zoomCover')} title={t('nw.zoomCover')}><span aria-hidden>⤢</span></button>}
       </div>
       <div className="nw-article-in">
-        {(c.author || c.countdownAt || minutes > 0 || (c.views > 0 && !preview)) && (
+        {(c.author || c.at || c.countdownAt || minutes > 0 || (c.views > 0 && !preview)) && (
           <div className="nf-meta">
             {c.author && <AuthorLine name={c.author.name} icon={c.author.icon} role={c.role} />}
+            {c.at && <time className="nw-when" dateTime={new Date(c.at).toISOString()} title={fmtDateTime(c.at)}>{newsWhen(c.at)}</time>}
             {minutes > 0 && <span className="nw-read">{t('nw.readTime', { n: minutes })}</span>}
             {!preview && c.views > 0 && <span className="nw-read" title={t('nw.views', { n: c.views })}>👁 {c.views}</span>}
             {c.countdownAt && <Countdown at={c.countdownAt} label={c.countdownLabel} />}
             {edited && item.editedAt && <span className="nw-read" title={t('nw.updatedTip', { date: fmtDateTime(item.editedAt), n: item.edits ?? 0 })}>{t('nw.updated', { when: ago(item.editedAt) })}</span>}
           </div>
         )}
+        <div className={headings.length >= 3 ? 'nw-split' : 'nw-plain'}>
         {headings.length >= 3 && (
           <nav className="nw-toc" aria-label={t('nw.toc')}>
             <h2 className="nw-toc-h">{t('nw.toc')}</h2>
@@ -140,6 +145,7 @@ export function NewsArticle({
             </ol>
           </nav>
         )}
+        <div className="nw-split-main">
         {(c.text || c.fields.length > 0) && <NewsText className="nw-prose-lg" text={c.text} fields={c.fields} />}
         <ChangesBlock changes={c.changes} />
         <StatusCards ids={c.statusIds} servers={servers} />
@@ -150,16 +156,16 @@ export function NewsArticle({
             {c.link && <a className="btn btn-soft" href={c.link} target="_blank" rel="noopener noreferrer">{t('nw.openLink')}</a>}
           </div>
         )}
+        </div>
+        </div>
         {!preview && (
           <>
-            <Reactions id={item.id} reactions={item.reactions} canReact={canReact} onChange={onReactions} />
-            <div className="nw-toolbar">
-              <a className="btn btn-soft" href="/news">{t('nw.back')}</a>
-              {canShare && <button type="button" className="btn btn-soft" onClick={() => void share()}>{t('nw.share')}</button>}
-              <button type="button" className="btn btn-soft" onClick={() => void copy()}>
-                <IconCopyLink />
-                {t('nw.copyLink')}
-              </button>
+            <div className="nw-reactbar">
+              <Reactions id={item.id} reactions={item.reactions} canReact={canReact} onChange={onReactions} />
+              <div className="nw-icons">
+                {canShare && <button type="button" className="nw-icon-btn" onClick={() => void share()} title={t('nw.share')} aria-label={t('nw.share')}><IconShare /></button>}
+                <button type="button" className="nw-icon-btn" onClick={() => void copy()} title={t('nw.copyLink')} aria-label={t('nw.copyLink')}><IconCopyLink /></button>
+              </div>
             </div>
           </>
         )}
@@ -177,7 +183,7 @@ export function NewsArticle({
       {!preview && related.length > 0 && (
         <section className="nw-related" aria-label={t('nw.related')}>
           <h2 className="nw-h2">{t('nw.related')}</h2>
-          <div className="nf-list">{related.map((n) => <Row key={n.id} c={cardOf(n)} servers={servers} />)}</div>
+          <div className="nf-list nw-related-list">{related.slice(0, 3).map((n) => <Row key={n.id} c={cardOf(n)} servers={servers} />)}</div>
         </section>
       )}
       {!preview && (item.prev || item.next) && (
@@ -200,5 +206,6 @@ export function NewsArticle({
       {coverOpen && c.image && <GalleryViewer urls={[c.image]} index={0} onIndex={() => undefined} onClose={() => setCoverOpen(false)} />}
       {viewer != null && c.gallery.length > 0 && <GalleryViewer urls={c.gallery} index={Math.min(viewer, c.gallery.length - 1)} onIndex={setViewer} onClose={() => setViewer(null)} />}
     </article>
+    </>
   );
 }
