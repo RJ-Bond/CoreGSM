@@ -71,7 +71,7 @@ export default function MaintenancePage() {
   };
 
   return (
-    <AdminPage
+    <AdminPage narrow
       head={(
         <PageHead
           icon={<IconWrench size={22} />}

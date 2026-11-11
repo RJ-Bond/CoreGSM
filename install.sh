@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="0c65413fffa0"
+COREGSM_BUILD="be42c4d80142"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.2.22"
+COREGSM_VERSION="1.2.23"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -127045,10 +127045,16 @@ export function OfflineBar() {
     window.addEventListener('online', on);
     return () => { window.clearTimeout(timer); window.removeEventListener('offline', off); window.removeEventListener('online', on); };
   }, []);
+  const [testing, setTesting] = useState(false);
+  const test = () => {
+    setTesting(true);
+    void fetch('/api/health', { cache: 'no-store' }).then((r) => { if (r.ok) { setState('back'); window.setTimeout(() => setState('on'), 2500); } }).catch(() => undefined).finally(() => setTesting(false));
+  };
   if (state === 'on') return null;
   return (
     <div role="status" aria-live="polite" className={`net-bar ${state === 'back' ? 'is-back' : ''}`}>
       {state === 'off' ? t('net.offline') : t('net.back')}
+      {state === 'off' && <button type="button" className="net-retry" onClick={test} disabled={testing}>{t('net.retry')}</button>}
     </div>
   );
 }
@@ -136471,6 +136477,8 @@ function DailyBars({ daily }: { daily: Analytics['daily'] }) {
   const [hover, setHover] = useState<number | null>(null);
   const max = Math.max(1, ...daily.map((d) => d.players));
   const d = hover != null ? daily[hover] : null;
+  // nobody was seen in the period: say so (and when it will fill) instead of an empty frame
+  if (daily.every((x) => x.players === 0)) return <p className="an-empty">{t('d2.an.noDaily')}</p>;
   const step = Math.ceil(daily.length / 8);
   return (
     <div>
@@ -136502,6 +136510,7 @@ function DailyBars({ daily }: { daily: Analytics['daily'] }) {
 function SessionBars({ sessions }: { sessions: Analytics['sessions'] }) {
   const total = sessions.reduce((a, b) => a + b.count, 0);
   const max = Math.max(1, ...sessions.map((s) => s.count));
+  if (total === 0) return <p className="an-empty">{t('d2.an.noSessions')}</p>;
   return (
     <ul className="space-y-2">
       {sessions.map((s) => (
@@ -136876,7 +136885,10 @@ export default function EventsFeed({ events, online, limit, moreHref, uptimePct,
         <div className="space-y-4">
           {groups.map((g) => (
             <section key={g.key} aria-label={g.title}>
-              <h3 className="mb-1.5 text-fs-sm font-extrabold uppercase tracking-wide text-mute">{g.title}</h3>
+              <h3 className="mb-1.5 flex flex-wrap items-baseline gap-x-2 text-fs-sm font-extrabold uppercase tracking-wide text-mute">
+                {g.title}
+                <span className="ev-day-sum">{t('d2.ef.dayN', { n: g.items.length })}{g.items.some((x) => x.type === 'down') && <b className="is-down"> · {t('d2.ef.dayDown', { n: g.items.filter((x) => x.type === 'down').length })}</b>}</span>
+              </h3>
               <ol className="relative space-y-1 before:absolute before:bottom-3 before:left-[17px] before:top-3 before:w-px before:bg-line">
                 {g.items.map((e) => {
                   const ic = ICON[e.type];
@@ -138492,7 +138504,7 @@ export default function PlayersList({
           })}
         </ul>
       ) : (
-        <ul className="divide-y divide-line">
+        <ul className="pl-rows divide-y divide-line">
           {shown.map((p, idx) => {
             const dur = p.since != null ? now - p.since : null;
             const rank = rankById(p.rankId);
@@ -141954,6 +141966,7 @@ import { haptic } from './ui/haptic';
 import { useEffect, useRef, useState, type FormEvent, type MouseEvent, type RefObject } from 'react';
 import * as RDialog from '@radix-ui/react-dialog';
 import { IconInfo, IconWarn } from './icons';
+import { t } from './i18n';
 
 /**
  * Styled replacements for window.confirm / window.prompt.
@@ -141970,6 +141983,8 @@ export interface ConfirmOptions {
   cancelLabel?: string;
   /** red confirm button, focus starts on "Отмена" */
   danger?: boolean;
+  /** a word that has to be typed before the confirm button works (for the things that cannot be brought back) */
+  typeWord?: string;
 }
 export interface PromptOptions extends ConfirmOptions {
   label: string;
@@ -142109,6 +142124,8 @@ function Dialog({ req, onDone }: { req: Req; onDone: () => void }) {
   const closed = useRef(false);
   const o = req.opts;
   const readOnly = req.kind === 'prompt' && !!req.opts.readOnly;
+  const word = req.kind === 'confirm' ? o.typeWord : undefined;
+  const typed = !word || value.trim().toLowerCase() === word.toLowerCase();
 
   const finish = (ok: boolean) => {
     if (closed.current) return;
@@ -142123,7 +142140,7 @@ function Dialog({ req, onDone }: { req: Req; onDone: () => void }) {
     e.preventDefault();
     const el = e.currentTarget as HTMLElement | null;
     if (!el) return;
-    if (input.current) {
+    if (input.current && !word) {
       if (readOnly) input.current.select();
       input.current.focus();
       return;
@@ -142133,6 +142150,7 @@ function Dialog({ req, onDone }: { req: Req; onDone: () => void }) {
 
   const submit = (e: FormEvent) => {
     e.preventDefault();
+    if (!typed) return;
     if (req.kind === 'prompt' && req.opts.validate) {
       const msg = req.opts.validate(value);
       if (msg) { setError(msg); input.current?.focus(); return; }
@@ -142184,11 +142202,17 @@ function Dialog({ req, onDone }: { req: Req; onDone: () => void }) {
             {error && <p id="cd-err" className="mt-1.5 text-sm font-bold text-bad" role="alert">{error}</p>}
           </div>
         )}
+        {word && (
+          <div>
+            <label htmlFor="cd-word" className="label">{t('confirm.typeWord', { word })}</label>
+            <input id="cd-word" ref={input} className="input font-mono" value={value} autoComplete="off" autoCapitalize="none" spellCheck={false} onChange={(e) => setValue(e.target.value)} />
+          </div>
+        )}
         <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
           {!readOnly && (
             <button type="button" data-cancel className="btn btn-ghost" onClick={() => finish(false)}>{o.cancelLabel ?? 'Отмена'}</button>
           )}
-          <button data-ok className={`btn ${o.danger ? 'btn-danger-solid' : ''}`}>
+          <button data-ok disabled={!typed} className={`btn ${o.danger ? 'btn-danger-solid' : ''}`}>
             {o.confirmLabel ?? (readOnly ? 'Готово' : o.danger ? 'Удалить' : 'Подтвердить')}
           </button>
         </div>
@@ -146357,6 +146381,22 @@ const en: Record<keyof typeof ru, string> = {
   'srv.pl.joined': 'joined {time}',
   'd2.sd.t.addrCopiedGo': 'Address copied · paste it in the game',
   'srv.ticker.last': 'Last event',
+  'd2.ef.dayN': '{n} events',
+  'd2.ef.dayDown': 'outages: {n}',
+  'intg.tab.aria': 'What to put on a site',
+  'intg.tab.badge': 'Badge',
+  'intg.tab.widget': 'Widget',
+  'intg.tab.card': 'Card',
+  'pw.chk.aria': 'What the password still needs',
+  'pw.chk.len': 'at least 8 signs',
+  'pw.chk.digit': 'a digit',
+  'pw.chk.case': 'a capital and a small letter',
+  'pw.chk.sign': 'a sign (!, ?, -)',
+  'confirm.typeWord': 'To confirm, type “{word}”',
+  'adm.srv.deleteWord': 'DELETE',
+  'net.retry': 'Check the connection',
+  'd2.an.noDaily': 'No players in this period. The chart appears when the server sees its first players.',
+  'd2.an.noSessions': 'No sessions yet: the length of the visits is counted from the players who have left the game.',
   'srv.pl.copied': 'Nickname copied',
   'srv.pl.noMatch': 'Nobody found for "{q}"',
   'srv.pl.noMatchText': 'Check the spelling or clear the search.',
@@ -151305,6 +151345,22 @@ const ru = {
   'srv.pl.joined': 'зашёл {time}',
   'd2.sd.t.addrCopiedGo': 'Адрес скопирован · вставьте его в игру',
   'srv.ticker.last': 'Последнее событие',
+  'd2.ef.dayN': '{n} событий',
+  'd2.ef.dayDown': 'сбоев: {n}',
+  'intg.tab.aria': 'Что вставить на сайт',
+  'intg.tab.badge': 'Бейдж',
+  'intg.tab.widget': 'Виджет',
+  'intg.tab.card': 'Карточка',
+  'pw.chk.aria': 'Что ещё нужно паролю',
+  'pw.chk.len': 'не короче 8 знаков',
+  'pw.chk.digit': 'цифра',
+  'pw.chk.case': 'большая и маленькая буква',
+  'pw.chk.sign': 'знак (!, ?, -)',
+  'confirm.typeWord': 'Чтобы подтвердить, введите «{word}»',
+  'adm.srv.deleteWord': 'УДАЛИТЬ',
+  'net.retry': 'Проверить связь',
+  'd2.an.noDaily': 'За этот период игроков не было. График появится, когда сервер увидит первых игроков.',
+  'd2.an.noSessions': 'Сессий пока нет: длительность визитов считается по тем, кто уже вышел из игры.',
   'srv.pl.copied': 'Ник скопирован',
   'srv.pl.noMatch': 'Никого не нашли по запросу «{q}»',
   'srv.pl.noMatchText': 'Проверьте написание или очистите поиск.',
@@ -156709,6 +156765,7 @@ function SnippetsSection({ servers }: { servers: Server[] }) {
   const [size, setSize] = useState<WidgetSize>('m');
   const [radius, setRadius] = useState(8);
   const [font, setFont] = useState<'sans' | 'serif' | 'mono'>('sans');
+  const [snipTab, setSnipTab] = useState<'badge' | 'widget' | 'card'>('badge');
   const [cardStyle, setCardStyle] = useState<'split' | 'strip'>('split');
   const [cardTheme, setCardTheme] = useState<'dark' | 'light'>('dark');
   const sn = s ? badgeSnippets(window.location.origin, s.id, s.customName || s.name, { theme, size, radius, font, cardStyle, cardTheme }) : null;
@@ -156764,18 +156821,25 @@ function SnippetsSection({ servers }: { servers: Server[] }) {
             </Field>
           </div>
           {sn && (
+            <div className="seg flex-wrap" role="group" aria-label={t('intg.tab.aria')}>
+              {(['badge', 'widget', 'card'] as const).map((k) => (
+                <button key={k} type="button" className="seg-item" aria-pressed={snipTab === k} onClick={() => setSnipTab(k)}>{t(`intg.tab.${k}` as const)}</button>
+              ))}
+            </div>
+          )}
+          {sn && (
             <div className="grid items-start gap-4 md:grid-cols-2">
-              <div className="space-y-3">
+              <div className={`space-y-3 ${snipTab === 'badge' ? '' : 'hidden'}`}>
                 <div className="flex min-h-12 items-center rounded-2xl bg-soft px-4"><img src={sn.badge} alt={t('intg.snip.badgeAlt')} height={20} /></div>
                 <Snippet label={t('intg.snip.md')} text={sn.markdown} />
                 <Snippet label="HTML" text={sn.html} />
                 <Snippet label="BBCode" text={sn.bbcode} />
               </div>
-              <div className="space-y-3">
+              <div className={`space-y-3 ${snipTab === 'widget' ? '' : 'hidden'}`}>
                 <iframe key={sn.widget} title={t('intg.snip.widgetTitle')} src={sn.widget} style={{ width: `min(100%, ${WIDGET_PX[size].w}px)`, height: WIDGET_PX[size].h }} className="block rounded-2xl border-0" loading="lazy" />
                 <Snippet label={t('intg.snip.widget')} text={sn.iframe} />
               </div>
-              <div className="space-y-3 md:col-span-2">
+              <div className={`space-y-3 md:col-span-2 ${snipTab === 'card' ? '' : 'hidden'}`}>
                 <img key={sn.card} src={sn.card} alt={t('intg.snip.cardAlt')} className="block h-auto max-w-full rounded-2xl" loading="lazy" />
                 <div className="grid gap-3 md:grid-cols-2">
                   <Snippet label={t('intg.snip.cardHtml')} text={sn.cardHtml} />
@@ -157291,7 +157355,7 @@ export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableA
     try { await fn(picked); setSel([]); } finally { setBusy(false); }
   };
   const removeMany = async () => {
-    if (!(await confirmDialog({ title: t('adm.tbl.deleteQ', { n: picked.length }), text: t('adm.tbl.deleteText'), confirmLabel: t('adm.srv.delete'), danger: true }))) return;
+    if (!(await confirmDialog({ title: t('adm.tbl.deleteQ', { n: picked.length }), text: t('adm.tbl.deleteText'), confirmLabel: t('adm.srv.delete'), danger: true, typeWord: picked.length > 1 ? t('adm.srv.deleteWord') : undefined }))) return;
     await many(a.onRemoveMany);
   };
 
@@ -162598,7 +162662,7 @@ import { api } from '../api';
 import { t, useI18n, type TKey } from '../i18n';
 import { Icon } from '../icons';
 import { JournalArt } from '../components/Illustrations';
-import { AdminPage, Empty, ErrorLine, IconJournal, LoadError, PageHead, fmtDateTime, fmtTime, usePoll, SkeletonRows } from '../ui';
+import { AdminPage, Empty, ErrorLine, IconJournal, LoadError, PageHead, fmtDateTime, fmtTime, usePoll, SkeletonRows, UserAvatar } from '../ui';
 
 interface Row { id: number; ts: number; actor: string; action: string; detail: string }
 
@@ -162714,7 +162778,7 @@ export default function JournalPage() {
                   <span className="w-14 shrink-0 text-sm font-semibold tabular-nums text-mute" title={fmtDateTime(r.ts)}>{fmtTime(r.ts)}</span>
                   <span className="font-extrabold">{r.action}</span>
                   {r.detail && <span className="min-w-0 wrap-break-word font-semibold text-mute">{r.detail}</span>}
-                  <span className="ml-auto rounded-full bg-soft px-2.5 py-0.5 text-sm font-bold text-link">{r.actor}</span>
+                  <span className="ml-auto inline-flex items-center gap-1.5 rounded-full bg-soft py-0.5 pl-1 pr-2.5 text-sm font-bold text-link"><UserAvatar name={r.actor} size={20} />{r.actor}</span>
                 </li>
               );
             })}
@@ -163034,7 +163098,7 @@ export default function MaintenancePage() {
   };
 
   return (
-    <AdminPage
+    <AdminPage narrow
       head={(
         <PageHead
           icon={<IconWrench size={22} />}
@@ -165017,7 +165081,7 @@ import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { api, ApiError, setToken } from '../api';
 import { useAuth } from '../auth';
 import { t } from '../i18n';
-import { Button, DiscordButton, ErrorLine, FieldError, OrDivider, PasswordField, PasswordStrength, toast, useShake, errText } from '../ui';
+import { Button, DiscordButton, ErrorLine, FieldError, OrDivider, PasswordField, PasswordStrength, PasswordChecklist, toast, useShake, errText } from '../ui';
 
 // same rule as on the server: letters of any alphabet, digits, _ . - and single spaces between words
 const LOGIN_RE = /^(?=.{3,32}$)[\p{L}\p{N}_.-]+(?: [\p{L}\p{N}_.-]+)*$/u;
@@ -165170,6 +165234,7 @@ export default function Register({ onDone }: { onDone: () => void }) {
         error={errs.pass}
       >
         <PasswordStrength password={password} />
+        <PasswordChecklist password={password} />
       </PasswordField>
 
       <PasswordField
@@ -166699,13 +166764,27 @@ function ServerList() {
     setMyOrder(ids);
     saveOrder(ids);
   };
-  const dnd = (id: number) => (phone || selOn || effView !== 'tiles' || effFilter !== 'all' ? undefined : {
+  const dnd = (id: number): TileDnd | undefined => (phone || selOn || effView !== 'tiles' || effFilter !== 'all' ? undefined : {
     draggable: true,
     onDragStart: (e: React.DragEvent) => { dragId.current = id; e.dataTransfer.effectAllowed = 'move'; try { e.dataTransfer.setData('text/plain', String(id)); } catch { /* a browser without it */ } },
     onDragOver: (e: React.DragEvent) => { if (dragId.current != null && dragId.current !== id) e.preventDefault(); },
     onDrop: (e: React.DragEvent) => { e.preventDefault(); const from = dragId.current; dragId.current = null; if (from != null) moveTile(from, id); },
     onDragEnd: () => { dragId.current = null; },
-  });
+    // the same without a mouse: Alt and an arrow move the focused tile one place
+    tabIndex: 0,
+    'aria-keyshortcuts': 'Alt+ArrowLeft Alt+ArrowRight',
+    'data-tile-id': id,
+    onKeyDown: (e: React.KeyboardEvent<HTMLElement>) => {
+      if (!e.altKey || e.target !== e.currentTarget || !['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) return;
+      e.preventDefault();
+      const ids = restShown.map((x) => x.id);
+      const a = ids.indexOf(id);
+      const b = a + (e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : 1);
+      if (a < 0 || b < 0 || b >= ids.length) return;
+      moveTile(id, ids[b]);
+      requestAnimationFrame(() => document.querySelector<HTMLElement>(`[data-tile-id="${id}"]`)?.focus());
+    },
+  } as TileDnd);
   const tileProps = (s: Server, idx: number) => ({
     dnd: dnd(s.id),
     rx,
@@ -166846,6 +166925,7 @@ function ServerList() {
   );
 }
 
+type TileDnd = React.HTMLAttributes<HTMLElement> & { 'data-tile-id'?: number };
 const ORDER_KEY = 'coregsm_srv_order';
 const readOrder = (): number[] => {
   try { const v = JSON.parse(localStorage.getItem(ORDER_KEY) ?? '[]') as unknown; return Array.isArray(v) ? v.filter((x): x is number => Number.isInteger(x)) : []; } catch { return []; }
@@ -166999,7 +167079,7 @@ function PhoneRow({ s, idx, fav, onFav, onOpen, select }: { rx: Reactions; s: Se
   );
 }
 
-function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince, dnd }: { dnd?: React.HTMLAttributes<HTMLElement>; rx: Reactions; s: Server; idx: number; fav: boolean | null; onFav: () => void; onOpen: () => void; select?: SelectProps; uptime?: number; downSince?: number }) {
+function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince, dnd }: { dnd?: TileDnd; rx: Reactions; s: Server; idx: number; fav: boolean | null; onFav: () => void; onOpen: () => void; select?: SelectProps; uptime?: number; downSince?: number }) {
   useI18n();
   const [who, setWho] = useState(false);
   const [c1] = gameGradient(s.game);
@@ -168036,6 +168116,16 @@ const SURFACES: [string, string, string][] = [
 const TEXTS: [string, string][] = [['text-ink', 'Основной текст'], ['text-mute', 'Вторичный текст'], ['text-link', 'Ссылка и акцент'], ['text-ok', 'Успех'], ['text-warn', 'Внимание'], ['text-bad', 'Ошибка']];
 
 /** captions of the game-icon and list-state blocks (a reference page: Russian only, like the arrays above) */
+const DESIGN_LOG = {
+  title: 'Журнал дизайна',
+  note: 'Что менялось в оформлении и в какой версии: чтобы видеть, откуда взялся цвет, отступ или значок. Подробности в CHANGELOG.md.',
+  items: [
+    ['1.2.20', 'Вид Ember: графит и оранжевый, боковое меню, карточки показателей, столбчатый график'],
+    ['1.2.21', 'Цвет Ember на выбор, переходы между страницами, недавние серверы, шкала скруглений 12 / 18 / 24'],
+    ['1.2.22', 'Заголовок состояния, свой порядок плиток, график с «обычным часом», кольца в статусе и сообществе'],
+    ['1.2.23', 'Игроки колонками, подтверждение словом, таймер уведомлений, мозаика обложек на входе'],
+  ] as [string, string][],
+};
 const PALETTE_TEXT = {
   title: 'Палитра',
   note: 'Цвета панели по именам токенов: в светлой и тёмной теме, в классике и в Ember (вид выбирается в профиле). Цвет текста и фона берётся из токена, не из HEX.',
@@ -168252,6 +168342,14 @@ export default function UiKitPage() {
         <Row label="Текст (контраст не ниже 4.5:1 на карточке и подложке)">
           {TEXTS.map(([cls, t]) => <span key={cls} className={`rounded-ui-md bg-soft px-3 py-1.5 font-bold ${cls}`}>{t}</span>)}
         </Row>
+      </Block>
+
+      <Block title={DESIGN_LOG.title} note={DESIGN_LOG.note}>
+        <ul className="space-y-1.5">
+          {DESIGN_LOG.items.map(([v, what]) => (
+            <li key={v} className="flex flex-wrap gap-x-3"><b className="w-16 shrink-0 font-mono text-sm text-link">{v}</b><span className="font-semibold">{what}</span></li>
+          ))}
+        </ul>
       </Block>
 
       <Block title={PALETTE_TEXT.title} note={PALETTE_TEXT.note}>
@@ -173836,6 +173934,72 @@ __COREGSM_EOF__
     radial-gradient(70% 100% at 105% 110%, color-mix(in srgb, var(--gen) 45%, #d6420a) 0%, transparent 62%),
     linear-gradient(155deg, color-mix(in srgb, var(--gen) 28%, #17120f), #0e0c0b 85%);
 }
+
+/* ======================================================================
+   the third round: players in columns, empty cards, notices, forms, the sign-in
+   ====================================================================== */
+/* ---------- the players of a server in two or three columns ---------- */
+@media (min-width: 900px) {
+  :root[data-ember='1'] .pl-rows { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 6px 14px; }
+  :root[data-ember='1'] .pl-rows > li { border: 0; border-radius: 14px; background: rgb(var(--soft)); }
+  :root[data-ember='1'] .pl-rows > li:has(> .pl-detail), :root[data-ember='1'] .pl-rows > li:has([aria-expanded='true']) { grid-column: 1 / -1; }
+  :root[data-ember='1'] .pl-rows > .pl-group { grid-column: 1 / -1; background: none; }
+}
+
+/* ---------- the day of the events: a count and the outages beside the date ---------- */
+.ev-day-sum { font-size: var(--fs-xs); font-weight: 650; letter-spacing: 0; text-transform: none; color: rgb(var(--mute)); }
+.ev-day-sum .is-down { color: rgb(var(--bad)); font-weight: 750; }
+
+/* ---------- an empty card of the analytics: a sentence, not a frame of zeros ---------- */
+.an-empty { margin: 0; padding: 22px 8px; text-align: center; font-weight: 600; color: rgb(var(--mute)); }
+:root[data-ember='1'] .an-empty { border-radius: var(--emb-r-card); background: rgb(var(--soft)); box-shadow: inset 0 0 0 1px rgb(var(--line)); }
+
+/* ---------- the toasts: a thin line shows how long a toast stays ---------- */
+@keyframes emb-timer { from { transform: scaleX(1); } to { transform: scaleX(0); } }
+:root[data-ember='1'] .toast-in { position: relative; overflow: hidden; }
+:root[data-ember='1'] .toast-in::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: currentColor; opacity: .35; transform-origin: left; animation: emb-timer var(--dur, 3500ms) linear forwards; }
+:root[data-ember='1'] .toast-in:hover::after, :root[data-ember='1'] .toast-in:focus-within::after { animation-play-state: paused; }
+@media (prefers-reduced-motion: reduce) { :root[data-ember='1'] .toast-in::after { display: none; } }
+
+/* ---------- the strip of a lost connection: a button to test it ---------- */
+.net-retry { margin-left: 12px; padding: 2px 12px; border-radius: 99px; font-weight: 800; background: rgb(255 255 255 / .2); color: inherit; }
+.net-retry:hover:not(:disabled) { background: rgb(255 255 255 / .32); }
+.net-retry:disabled { opacity: .6; }
+
+/* ---------- the forms: an error stands under its field with a sign and a calm weight ---------- */
+:root[data-ember='1'] p.text-bad[role='alert'].mt-1\.5, :root[data-ember='1'] #cd-err { display: flex; align-items: flex-start; gap: 6px; font-weight: 650; font-size: var(--fs-sm); line-height: 1.35; }
+:root[data-ember='1'] p.text-bad[role='alert'].mt-1\.5::before, :root[data-ember='1'] #cd-err::before { content: '!'; flex: none; display: inline-grid; place-items: center; width: 16px; height: 16px; margin-top: 1px; border-radius: 50%; background: rgb(var(--bad)); color: rgb(var(--card)); font-size: var(--fs-2xs); font-weight: 800; }
+:root[data-ember='1'] .input[aria-invalid='true'] { border-color: rgb(var(--bad)); box-shadow: 0 0 0 3px rgb(var(--bad) / .16); }
+
+/* ---------- the list of what a password still needs ---------- */
+.pw-chk li { color: rgb(var(--mute)); }
+.pw-chk li.is-ok { color: rgb(var(--ok)); }
+.pw-chk li span { display: inline-block; width: 1.1em; font-weight: 800; }
+
+/* ---------- the sign-in: the covers of the games, blurred and faint, behind the card ---------- */
+.auth-mosaic { display: none; }
+:root[data-ember='1'] .auth-mosaic { display: grid; position: absolute; inset: -8% -4%; grid-template-columns: repeat(3, 1fr); grid-auto-rows: 1fr; gap: 18px; opacity: .2; filter: blur(14px) saturate(.9); transform: rotate(-4deg) scale(1.1);
+  -webkit-mask: radial-gradient(70% 70% at 50% 50%, transparent 8%, #000 90%); mask: radial-gradient(70% 70% at 50% 50%, transparent 8%, #000 90%); }
+:root[data-ember='1'] .auth-mosaic i { border-radius: 24px; background: center / cover no-repeat; }
+@media (max-width: 639px) { :root[data-ember='1'] .auth-mosaic { grid-template-columns: repeat(2, 1fr); opacity: .16; } }
+
+/* ---------- a focus on a picture: a white ring with a dark edge, readable on any cover ---------- */
+:root[data-ember='1'] :is(.srv-tile, .hero3, .srv-banner, .nw-cover, .pf-banner) :focus-visible { outline: 2px solid #fff; outline-offset: 2px; box-shadow: 0 0 0 5px rgb(0 0 0 / .65); border-radius: 12px; }
+:root[data-ember='1'] .srv-tile:focus-visible { outline: 2px solid rgb(var(--brand-hover)); outline-offset: 3px; }
+
+/* ---------- OLED: pure black page and graphite cards in the Ember look too ---------- */
+:root[data-ember='1'][data-oled='1'][data-theme='dark'] { --page: 0 0 0; --card: 14 12 11; --raised: 22 19 17; --soft: 22 19 17; --line: 36 32 29; }
+@media (prefers-color-scheme: dark) { :root[data-ember='1'][data-oled='1']:not([data-theme='light']) { --page: 0 0 0; --card: 14 12 11; --raised: 22 19 17; --soft: 22 19 17; --line: 36 32 29; } }
+:root[data-ember='1'][data-oled='1'] body { background-image: none; }
+
+/* ---------- a page on paper: the status and the profile print without the menus ---------- */
+@media print {
+  :root[data-ember='1'] :is(header.hdr, .nav-bottom, .emb-topline, .hdr-recent, .toaster, .app-foot, .net-bar) { display: none !important; }
+  :root[data-ember='1'] .app-wrap { padding: 0 !important; max-width: none !important; }
+  :root[data-ember='1'] body { background: #fff !important; }
+  :root[data-ember='1'] :is(.tile, .panel, .st-server, .st-banner) { box-shadow: none !important; break-inside: avoid; border: 1px solid #d9d4cc; background: #fff !important; color: #17161a !important; }
+  :root[data-ember='1'] :is(.st-bars, .st-day) { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/emberScale.test.ts" << '__COREGSM_EOF__'
@@ -176214,7 +176378,7 @@ export { toast, dismissToast, undoable, Toaster } from './ui/toast';
 export type { ToastAction, ToastOptions } from './ui/toast';
 export { errText, fail, useAction } from './ui/action';
 export { LineChart } from './ui/LineChart';
-export { AuthShell, AuthBrand, AuthCard, useShake, Spinner, FieldError, PasswordField, passwordScore, PasswordStrength, UserAvatar, DiscordButton, DiscordBadge, OrDivider } from './ui/authParts';
+export { AuthShell, AuthBrand, AuthCard, useShake, Spinner, FieldError, PasswordField, passwordScore, PasswordStrength, PasswordChecklist, UserAvatar, DiscordButton, DiscordBadge, OrDivider } from './ui/authParts';
 export { AdminPage, Section, Strip, SaveBadge, TextField } from './ui/admin';
 export { noAutofill } from './ui/noAutofill';
 __COREGSM_EOF__
@@ -176485,6 +176649,8 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/ui"
   cat > "$APP_DIR/core-frontend/src/ui/authParts.tsx" << '__COREGSM_EOF__'
 /** Sign-in and first-run screens: backdrop, card, password fields, Discord button. */
+import { api, type StatusInfo } from '../api';
+import { coverUrlOf } from '../cover';
 import AuthShowcase, { AuthSummary } from '../components/AuthShowcase';
 import { type CSSProperties, forwardRef, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, useEffect, useRef, useState } from 'react';
 import { useAuth } from '../auth';
@@ -176508,10 +176674,34 @@ const FLOATERS: { icon: string; x: string; y: string; s: string; r: string; d: s
   { icon: 'leaf', x: '68%', y: '30%', s: '40px', r: '-8deg', d: '26s' },
 ];
 
+/** the Ember look: the covers of the games of the community, blurred and faint, behind the card */
+function AuthMosaic() {
+  const [covers, setCovers] = useState<string[]>([]);
+  useEffect(() => {
+    let alive = true;
+    api<StatusInfo>('/status').then((s) => {
+      if (!alive) return;
+      const seen = new Set<string>();
+      const list: string[] = [];
+      for (const sv of s.servers) {
+        if (seen.has(sv.game)) continue;
+        seen.add(sv.game);
+        const u = coverUrlOf(null, sv.game);
+        if (u) list.push(u);
+      }
+      setCovers(list.slice(0, 6));
+    }).catch(() => undefined);
+    return () => { alive = false; };
+  }, []);
+  if (covers.length === 0) return null;
+  return <div className="auth-mosaic">{covers.map((u) => <i key={u} style={{ backgroundImage: `url("${u}")` }} />)}</div>;
+}
+
 function AuthDecor() {
   return (
     <div aria-hidden className="pointer-events-none absolute inset-0 overflow-hidden">
       <div className="auth-glow" />
+      <AuthMosaic />
       {FLOATERS.map((f) => (
         <svg
           key={f.icon}
@@ -176724,6 +176914,24 @@ export function PasswordStrength({ password }: { password: string }) {
       </div>
       <span className="w-20 text-right text-sm font-extrabold text-mute">{st.label()}</span>
     </div>
+  );
+}
+
+/** what a good password still lacks, as a short list that ticks off as it is typed (8+ signs, a digit, a capital letter, a sign) */
+export function PasswordChecklist({ password }: { password: string }) {
+  if (!password) return null;
+  const items: [boolean, string][] = [
+    [password.length >= 8, t('pw.chk.len')],
+    [/\d/.test(password), t('pw.chk.digit')],
+    [/[a-zа-я]/.test(password) && /[A-ZА-Я]/.test(password), t('pw.chk.case')],
+    [/[^\p{L}\p{N}]/u.test(password), t('pw.chk.sign')],
+  ];
+  return (
+    <ul className="pw-chk mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-sm font-semibold" aria-label={t('pw.chk.aria')}>
+      {items.map(([ok, text]) => (
+        <li key={text} className={ok ? 'is-ok' : ''}><span aria-hidden>{ok ? '✓' : '○'}</span> {text}</li>
+      ))}
+    </ul>
   );
 }
 
@@ -178250,6 +178458,7 @@ export function Toaster() {
       onPointerLeave={() => release(t)}
       onFocusCapture={() => hold(t)}
       onBlurCapture={() => release(t)}
+      style={{ ['--dur' as string]: `${t.duration}ms` }}
       className={`${t.leaving ? 'toast-out' : 'toast-in'} pointer-events-auto flex max-w-sm items-center gap-2.5 rounded-ui-lg py-2 pl-3.5 pr-2 text-sm font-bold shadow-3 ring-1 max-sm:max-w-full ${tone[t.kind]}`}
     >
       <span aria-hidden className="shrink-0">{kindIcon[t.kind]}</span>

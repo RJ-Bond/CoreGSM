@@ -170,6 +170,7 @@ function SnippetsSection({ servers }: { servers: Server[] }) {
   const [size, setSize] = useState<WidgetSize>('m');
   const [radius, setRadius] = useState(8);
   const [font, setFont] = useState<'sans' | 'serif' | 'mono'>('sans');
+  const [snipTab, setSnipTab] = useState<'badge' | 'widget' | 'card'>('badge');
   const [cardStyle, setCardStyle] = useState<'split' | 'strip'>('split');
   const [cardTheme, setCardTheme] = useState<'dark' | 'light'>('dark');
   const sn = s ? badgeSnippets(window.location.origin, s.id, s.customName || s.name, { theme, size, radius, font, cardStyle, cardTheme }) : null;
@@ -225,18 +226,25 @@ function SnippetsSection({ servers }: { servers: Server[] }) {
             </Field>
           </div>
           {sn && (
+            <div className="seg flex-wrap" role="group" aria-label={t('intg.tab.aria')}>
+              {(['badge', 'widget', 'card'] as const).map((k) => (
+                <button key={k} type="button" className="seg-item" aria-pressed={snipTab === k} onClick={() => setSnipTab(k)}>{t(`intg.tab.${k}` as const)}</button>
+              ))}
+            </div>
+          )}
+          {sn && (
             <div className="grid items-start gap-4 md:grid-cols-2">
-              <div className="space-y-3">
+              <div className={`space-y-3 ${snipTab === 'badge' ? '' : 'hidden'}`}>
                 <div className="flex min-h-12 items-center rounded-2xl bg-soft px-4"><img src={sn.badge} alt={t('intg.snip.badgeAlt')} height={20} /></div>
                 <Snippet label={t('intg.snip.md')} text={sn.markdown} />
                 <Snippet label="HTML" text={sn.html} />
                 <Snippet label="BBCode" text={sn.bbcode} />
               </div>
-              <div className="space-y-3">
+              <div className={`space-y-3 ${snipTab === 'widget' ? '' : 'hidden'}`}>
                 <iframe key={sn.widget} title={t('intg.snip.widgetTitle')} src={sn.widget} style={{ width: `min(100%, ${WIDGET_PX[size].w}px)`, height: WIDGET_PX[size].h }} className="block rounded-2xl border-0" loading="lazy" />
                 <Snippet label={t('intg.snip.widget')} text={sn.iframe} />
               </div>
-              <div className="space-y-3 md:col-span-2">
+              <div className={`space-y-3 md:col-span-2 ${snipTab === 'card' ? '' : 'hidden'}`}>
                 <img key={sn.card} src={sn.card} alt={t('intg.snip.cardAlt')} className="block h-auto max-w-full rounded-2xl" loading="lazy" />
                 <div className="grid gap-3 md:grid-cols-2">
                   <Snippet label={t('intg.snip.cardHtml')} text={sn.cardHtml} />

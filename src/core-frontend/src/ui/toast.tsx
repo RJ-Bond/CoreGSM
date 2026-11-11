@@ -107,6 +107,7 @@ export function Toaster() {
       onPointerLeave={() => release(t)}
       onFocusCapture={() => hold(t)}
       onBlurCapture={() => release(t)}
+      style={{ ['--dur' as string]: `${t.duration}ms` }}
       className={`${t.leaving ? 'toast-out' : 'toast-in'} pointer-events-auto flex max-w-sm items-center gap-2.5 rounded-ui-lg py-2 pl-3.5 pr-2 text-sm font-bold shadow-3 ring-1 max-sm:max-w-full ${tone[t.kind]}`}
     >
       <span aria-hidden className="shrink-0">{kindIcon[t.kind]}</span>

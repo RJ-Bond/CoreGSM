@@ -3,7 +3,7 @@ import { api } from '../api';
 import { t, useI18n, type TKey } from '../i18n';
 import { Icon } from '../icons';
 import { JournalArt } from '../components/Illustrations';
-import { AdminPage, Empty, ErrorLine, IconJournal, LoadError, PageHead, fmtDateTime, fmtTime, usePoll, SkeletonRows } from '../ui';
+import { AdminPage, Empty, ErrorLine, IconJournal, LoadError, PageHead, fmtDateTime, fmtTime, usePoll, SkeletonRows, UserAvatar } from '../ui';
 
 interface Row { id: number; ts: number; actor: string; action: string; detail: string }
 
@@ -119,7 +119,7 @@ export default function JournalPage() {
                   <span className="w-14 shrink-0 text-sm font-semibold tabular-nums text-mute" title={fmtDateTime(r.ts)}>{fmtTime(r.ts)}</span>
                   <span className="font-extrabold">{r.action}</span>
                   {r.detail && <span className="min-w-0 wrap-break-word font-semibold text-mute">{r.detail}</span>}
-                  <span className="ml-auto rounded-full bg-soft px-2.5 py-0.5 text-sm font-bold text-link">{r.actor}</span>
+                  <span className="ml-auto inline-flex items-center gap-1.5 rounded-full bg-soft py-0.5 pl-1 pr-2.5 text-sm font-bold text-link"><UserAvatar name={r.actor} size={20} />{r.actor}</span>
                 </li>
               );
             })}

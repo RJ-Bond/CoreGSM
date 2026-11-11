@@ -342,13 +342,27 @@ function ServerList() {
     setMyOrder(ids);
     saveOrder(ids);
   };
-  const dnd = (id: number) => (phone || selOn || effView !== 'tiles' || effFilter !== 'all' ? undefined : {
+  const dnd = (id: number): TileDnd | undefined => (phone || selOn || effView !== 'tiles' || effFilter !== 'all' ? undefined : {
     draggable: true,
     onDragStart: (e: React.DragEvent) => { dragId.current = id; e.dataTransfer.effectAllowed = 'move'; try { e.dataTransfer.setData('text/plain', String(id)); } catch { /* a browser without it */ } },
     onDragOver: (e: React.DragEvent) => { if (dragId.current != null && dragId.current !== id) e.preventDefault(); },
     onDrop: (e: React.DragEvent) => { e.preventDefault(); const from = dragId.current; dragId.current = null; if (from != null) moveTile(from, id); },
     onDragEnd: () => { dragId.current = null; },
-  });
+    // the same without a mouse: Alt and an arrow move the focused tile one place
+    tabIndex: 0,
+    'aria-keyshortcuts': 'Alt+ArrowLeft Alt+ArrowRight',
+    'data-tile-id': id,
+    onKeyDown: (e: React.KeyboardEvent<HTMLElement>) => {
+      if (!e.altKey || e.target !== e.currentTarget || !['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) return;
+      e.preventDefault();
+      const ids = restShown.map((x) => x.id);
+      const a = ids.indexOf(id);
+      const b = a + (e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : 1);
+      if (a < 0 || b < 0 || b >= ids.length) return;
+      moveTile(id, ids[b]);
+      requestAnimationFrame(() => document.querySelector<HTMLElement>(`[data-tile-id="${id}"]`)?.focus());
+    },
+  } as TileDnd);
   const tileProps = (s: Server, idx: number) => ({
     dnd: dnd(s.id),
     rx,
@@ -489,6 +503,7 @@ function ServerList() {
   );
 }
 
+type TileDnd = React.HTMLAttributes<HTMLElement> & { 'data-tile-id'?: number };
 const ORDER_KEY = 'coregsm_srv_order';
 const readOrder = (): number[] => {
   try { const v = JSON.parse(localStorage.getItem(ORDER_KEY) ?? '[]') as unknown; return Array.isArray(v) ? v.filter((x): x is number => Number.isInteger(x)) : []; } catch { return []; }
@@ -642,7 +657,7 @@ function PhoneRow({ s, idx, fav, onFav, onOpen, select }: { rx: Reactions; s: Se
   );
 }
 
-function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince, dnd }: { dnd?: React.HTMLAttributes<HTMLElement>; rx: Reactions; s: Server; idx: number; fav: boolean | null; onFav: () => void; onOpen: () => void; select?: SelectProps; uptime?: number; downSince?: number }) {
+function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince, dnd }: { dnd?: TileDnd; rx: Reactions; s: Server; idx: number; fav: boolean | null; onFav: () => void; onOpen: () => void; select?: SelectProps; uptime?: number; downSince?: number }) {
   useI18n();
   const [who, setWho] = useState(false);
   const [c1] = gameGradient(s.game);

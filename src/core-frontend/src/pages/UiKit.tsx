@@ -25,6 +25,16 @@ const SURFACES: [string, string, string][] = [
 const TEXTS: [string, string][] = [['text-ink', 'Основной текст'], ['text-mute', 'Вторичный текст'], ['text-link', 'Ссылка и акцент'], ['text-ok', 'Успех'], ['text-warn', 'Внимание'], ['text-bad', 'Ошибка']];
 
 /** captions of the game-icon and list-state blocks (a reference page: Russian only, like the arrays above) */
+const DESIGN_LOG = {
+  title: 'Журнал дизайна',
+  note: 'Что менялось в оформлении и в какой версии: чтобы видеть, откуда взялся цвет, отступ или значок. Подробности в CHANGELOG.md.',
+  items: [
+    ['1.2.20', 'Вид Ember: графит и оранжевый, боковое меню, карточки показателей, столбчатый график'],
+    ['1.2.21', 'Цвет Ember на выбор, переходы между страницами, недавние серверы, шкала скруглений 12 / 18 / 24'],
+    ['1.2.22', 'Заголовок состояния, свой порядок плиток, график с «обычным часом», кольца в статусе и сообществе'],
+    ['1.2.23', 'Игроки колонками, подтверждение словом, таймер уведомлений, мозаика обложек на входе'],
+  ] as [string, string][],
+};
 const PALETTE_TEXT = {
   title: 'Палитра',
   note: 'Цвета панели по именам токенов: в светлой и тёмной теме, в классике и в Ember (вид выбирается в профиле). Цвет текста и фона берётся из токена, не из HEX.',
@@ -241,6 +251,14 @@ export default function UiKitPage() {
         <Row label="Текст (контраст не ниже 4.5:1 на карточке и подложке)">
           {TEXTS.map(([cls, t]) => <span key={cls} className={`rounded-ui-md bg-soft px-3 py-1.5 font-bold ${cls}`}>{t}</span>)}
         </Row>
+      </Block>
+
+      <Block title={DESIGN_LOG.title} note={DESIGN_LOG.note}>
+        <ul className="space-y-1.5">
+          {DESIGN_LOG.items.map(([v, what]) => (
+            <li key={v} className="flex flex-wrap gap-x-3"><b className="w-16 shrink-0 font-mono text-sm text-link">{v}</b><span className="font-semibold">{what}</span></li>
+          ))}
+        </ul>
       </Block>
 
       <Block title={PALETTE_TEXT.title} note={PALETTE_TEXT.note}>

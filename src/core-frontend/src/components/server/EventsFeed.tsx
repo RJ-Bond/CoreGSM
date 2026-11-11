@@ -86,7 +86,10 @@ export default function EventsFeed({ events, online, limit, moreHref, uptimePct,
         <div className="space-y-4">
           {groups.map((g) => (
             <section key={g.key} aria-label={g.title}>
-              <h3 className="mb-1.5 text-fs-sm font-extrabold uppercase tracking-wide text-mute">{g.title}</h3>
+              <h3 className="mb-1.5 flex flex-wrap items-baseline gap-x-2 text-fs-sm font-extrabold uppercase tracking-wide text-mute">
+                {g.title}
+                <span className="ev-day-sum">{t('d2.ef.dayN', { n: g.items.length })}{g.items.some((x) => x.type === 'down') && <b className="is-down"> · {t('d2.ef.dayDown', { n: g.items.filter((x) => x.type === 'down').length })}</b>}</span>
+              </h3>
               <ol className="relative space-y-1 before:absolute before:bottom-3 before:left-[17px] before:top-3 before:w-px before:bg-line">
                 {g.items.map((e) => {
                   const ic = ICON[e.type];

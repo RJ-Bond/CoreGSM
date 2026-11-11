@@ -61,6 +61,7 @@ export const HELP = `Screenshots and automatic UI checks of the panel (Chrome on
   --no-axe         skip the accessibility scan (axe-core, WCAG A/AA, serious and critical only)
   --strict         warnings fail the run too
   --list           print the page ids and stop
+  --lang=en        look at the panel in English (long words wrap and cut in other places than in Russian)
   --compare=DIR    compare every picture with the same one in DIR (an earlier run); a page that changed is a warning
   --compare-limit=N  how many per cent of the picture may change before it is named (default 2)
   --keep           leave the demo stack running (prints its address)

@@ -97,7 +97,7 @@ export function AdminServersTable({ servers, a }: { servers: Server[]; a: TableA
     try { await fn(picked); setSel([]); } finally { setBusy(false); }
   };
   const removeMany = async () => {
-    if (!(await confirmDialog({ title: t('adm.tbl.deleteQ', { n: picked.length }), text: t('adm.tbl.deleteText'), confirmLabel: t('adm.srv.delete'), danger: true }))) return;
+    if (!(await confirmDialog({ title: t('adm.tbl.deleteQ', { n: picked.length }), text: t('adm.tbl.deleteText'), confirmLabel: t('adm.srv.delete'), danger: true, typeWord: picked.length > 1 ? t('adm.srv.deleteWord') : undefined }))) return;
     await many(a.onRemoveMany);
   };
 

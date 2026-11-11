@@ -888,3 +888,69 @@
     radial-gradient(70% 100% at 105% 110%, color-mix(in srgb, var(--gen) 45%, #d6420a) 0%, transparent 62%),
     linear-gradient(155deg, color-mix(in srgb, var(--gen) 28%, #17120f), #0e0c0b 85%);
 }
+
+/* ======================================================================
+   the third round: players in columns, empty cards, notices, forms, the sign-in
+   ====================================================================== */
+/* ---------- the players of a server in two or three columns ---------- */
+@media (min-width: 900px) {
+  :root[data-ember='1'] .pl-rows { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 6px 14px; }
+  :root[data-ember='1'] .pl-rows > li { border: 0; border-radius: 14px; background: rgb(var(--soft)); }
+  :root[data-ember='1'] .pl-rows > li:has(> .pl-detail), :root[data-ember='1'] .pl-rows > li:has([aria-expanded='true']) { grid-column: 1 / -1; }
+  :root[data-ember='1'] .pl-rows > .pl-group { grid-column: 1 / -1; background: none; }
+}
+
+/* ---------- the day of the events: a count and the outages beside the date ---------- */
+.ev-day-sum { font-size: var(--fs-xs); font-weight: 650; letter-spacing: 0; text-transform: none; color: rgb(var(--mute)); }
+.ev-day-sum .is-down { color: rgb(var(--bad)); font-weight: 750; }
+
+/* ---------- an empty card of the analytics: a sentence, not a frame of zeros ---------- */
+.an-empty { margin: 0; padding: 22px 8px; text-align: center; font-weight: 600; color: rgb(var(--mute)); }
+:root[data-ember='1'] .an-empty { border-radius: var(--emb-r-card); background: rgb(var(--soft)); box-shadow: inset 0 0 0 1px rgb(var(--line)); }
+
+/* ---------- the toasts: a thin line shows how long a toast stays ---------- */
+@keyframes emb-timer { from { transform: scaleX(1); } to { transform: scaleX(0); } }
+:root[data-ember='1'] .toast-in { position: relative; overflow: hidden; }
+:root[data-ember='1'] .toast-in::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: currentColor; opacity: .35; transform-origin: left; animation: emb-timer var(--dur, 3500ms) linear forwards; }
+:root[data-ember='1'] .toast-in:hover::after, :root[data-ember='1'] .toast-in:focus-within::after { animation-play-state: paused; }
+@media (prefers-reduced-motion: reduce) { :root[data-ember='1'] .toast-in::after { display: none; } }
+
+/* ---------- the strip of a lost connection: a button to test it ---------- */
+.net-retry { margin-left: 12px; padding: 2px 12px; border-radius: 99px; font-weight: 800; background: rgb(255 255 255 / .2); color: inherit; }
+.net-retry:hover:not(:disabled) { background: rgb(255 255 255 / .32); }
+.net-retry:disabled { opacity: .6; }
+
+/* ---------- the forms: an error stands under its field with a sign and a calm weight ---------- */
+:root[data-ember='1'] p.text-bad[role='alert'].mt-1\.5, :root[data-ember='1'] #cd-err { display: flex; align-items: flex-start; gap: 6px; font-weight: 650; font-size: var(--fs-sm); line-height: 1.35; }
+:root[data-ember='1'] p.text-bad[role='alert'].mt-1\.5::before, :root[data-ember='1'] #cd-err::before { content: '!'; flex: none; display: inline-grid; place-items: center; width: 16px; height: 16px; margin-top: 1px; border-radius: 50%; background: rgb(var(--bad)); color: rgb(var(--card)); font-size: var(--fs-2xs); font-weight: 800; }
+:root[data-ember='1'] .input[aria-invalid='true'] { border-color: rgb(var(--bad)); box-shadow: 0 0 0 3px rgb(var(--bad) / .16); }
+
+/* ---------- the list of what a password still needs ---------- */
+.pw-chk li { color: rgb(var(--mute)); }
+.pw-chk li.is-ok { color: rgb(var(--ok)); }
+.pw-chk li span { display: inline-block; width: 1.1em; font-weight: 800; }
+
+/* ---------- the sign-in: the covers of the games, blurred and faint, behind the card ---------- */
+.auth-mosaic { display: none; }
+:root[data-ember='1'] .auth-mosaic { display: grid; position: absolute; inset: -8% -4%; grid-template-columns: repeat(3, 1fr); grid-auto-rows: 1fr; gap: 18px; opacity: .2; filter: blur(14px) saturate(.9); transform: rotate(-4deg) scale(1.1);
+  -webkit-mask: radial-gradient(70% 70% at 50% 50%, transparent 8%, #000 90%); mask: radial-gradient(70% 70% at 50% 50%, transparent 8%, #000 90%); }
+:root[data-ember='1'] .auth-mosaic i { border-radius: 24px; background: center / cover no-repeat; }
+@media (max-width: 639px) { :root[data-ember='1'] .auth-mosaic { grid-template-columns: repeat(2, 1fr); opacity: .16; } }
+
+/* ---------- a focus on a picture: a white ring with a dark edge, readable on any cover ---------- */
+:root[data-ember='1'] :is(.srv-tile, .hero3, .srv-banner, .nw-cover, .pf-banner) :focus-visible { outline: 2px solid #fff; outline-offset: 2px; box-shadow: 0 0 0 5px rgb(0 0 0 / .65); border-radius: 12px; }
+:root[data-ember='1'] .srv-tile:focus-visible { outline: 2px solid rgb(var(--brand-hover)); outline-offset: 3px; }
+
+/* ---------- OLED: pure black page and graphite cards in the Ember look too ---------- */
+:root[data-ember='1'][data-oled='1'][data-theme='dark'] { --page: 0 0 0; --card: 14 12 11; --raised: 22 19 17; --soft: 22 19 17; --line: 36 32 29; }
+@media (prefers-color-scheme: dark) { :root[data-ember='1'][data-oled='1']:not([data-theme='light']) { --page: 0 0 0; --card: 14 12 11; --raised: 22 19 17; --soft: 22 19 17; --line: 36 32 29; } }
+:root[data-ember='1'][data-oled='1'] body { background-image: none; }
+
+/* ---------- a page on paper: the status and the profile print without the menus ---------- */
+@media print {
+  :root[data-ember='1'] :is(header.hdr, .nav-bottom, .emb-topline, .hdr-recent, .toaster, .app-foot, .net-bar) { display: none !important; }
+  :root[data-ember='1'] .app-wrap { padding: 0 !important; max-width: none !important; }
+  :root[data-ember='1'] body { background: #fff !important; }
+  :root[data-ember='1'] :is(.tile, .panel, .st-server, .st-banner) { box-shadow: none !important; break-inside: avoid; border: 1px solid #d9d4cc; background: #fff !important; color: #17161a !important; }
+  :root[data-ember='1'] :is(.st-bars, .st-day) { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+}

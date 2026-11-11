@@ -1,4 +1,6 @@
 /** Sign-in and first-run screens: backdrop, card, password fields, Discord button. */
+import { api, type StatusInfo } from '../api';
+import { coverUrlOf } from '../cover';
 import AuthShowcase, { AuthSummary } from '../components/AuthShowcase';
 import { type CSSProperties, forwardRef, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, useEffect, useRef, useState } from 'react';
 import { useAuth } from '../auth';
@@ -22,10 +24,34 @@ const FLOATERS: { icon: string; x: string; y: string; s: string; r: string; d: s
   { icon: 'leaf', x: '68%', y: '30%', s: '40px', r: '-8deg', d: '26s' },
 ];
 
+/** the Ember look: the covers of the games of the community, blurred and faint, behind the card */
+function AuthMosaic() {
+  const [covers, setCovers] = useState<string[]>([]);
+  useEffect(() => {
+    let alive = true;
+    api<StatusInfo>('/status').then((s) => {
+      if (!alive) return;
+      const seen = new Set<string>();
+      const list: string[] = [];
+      for (const sv of s.servers) {
+        if (seen.has(sv.game)) continue;
+        seen.add(sv.game);
+        const u = coverUrlOf(null, sv.game);
+        if (u) list.push(u);
+      }
+      setCovers(list.slice(0, 6));
+    }).catch(() => undefined);
+    return () => { alive = false; };
+  }, []);
+  if (covers.length === 0) return null;
+  return <div className="auth-mosaic">{covers.map((u) => <i key={u} style={{ backgroundImage: `url("${u}")` }} />)}</div>;
+}
+
 function AuthDecor() {
   return (
     <div aria-hidden className="pointer-events-none absolute inset-0 overflow-hidden">
       <div className="auth-glow" />
+      <AuthMosaic />
       {FLOATERS.map((f) => (
         <svg
           key={f.icon}
@@ -238,6 +264,24 @@ export function PasswordStrength({ password }: { password: string }) {
       </div>
       <span className="w-20 text-right text-sm font-extrabold text-mute">{st.label()}</span>
     </div>
+  );
+}
+
+/** what a good password still lacks, as a short list that ticks off as it is typed (8+ signs, a digit, a capital letter, a sign) */
+export function PasswordChecklist({ password }: { password: string }) {
+  if (!password) return null;
+  const items: [boolean, string][] = [
+    [password.length >= 8, t('pw.chk.len')],
+    [/\d/.test(password), t('pw.chk.digit')],
+    [/[a-zа-я]/.test(password) && /[A-ZА-Я]/.test(password), t('pw.chk.case')],
+    [/[^\p{L}\p{N}]/u.test(password), t('pw.chk.sign')],
+  ];
+  return (
+    <ul className="pw-chk mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-sm font-semibold" aria-label={t('pw.chk.aria')}>
+      {items.map(([ok, text]) => (
+        <li key={text} className={ok ? 'is-ok' : ''}><span aria-hidden>{ok ? '✓' : '○'}</span> {text}</li>
+      ))}
+    </ul>
   );
 }
 

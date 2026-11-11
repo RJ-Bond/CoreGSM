@@ -111,6 +111,8 @@ function DailyBars({ daily }: { daily: Analytics['daily'] }) {
   const [hover, setHover] = useState<number | null>(null);
   const max = Math.max(1, ...daily.map((d) => d.players));
   const d = hover != null ? daily[hover] : null;
+  // nobody was seen in the period: say so (and when it will fill) instead of an empty frame
+  if (daily.every((x) => x.players === 0)) return <p className="an-empty">{t('d2.an.noDaily')}</p>;
   const step = Math.ceil(daily.length / 8);
   return (
     <div>
@@ -142,6 +144,7 @@ function DailyBars({ daily }: { daily: Analytics['daily'] }) {
 function SessionBars({ sessions }: { sessions: Analytics['sessions'] }) {
   const total = sessions.reduce((a, b) => a + b.count, 0);
   const max = Math.max(1, ...sessions.map((s) => s.count));
+  if (total === 0) return <p className="an-empty">{t('d2.an.noSessions')}</p>;
   return (
     <ul className="space-y-2">
       {sessions.map((s) => (

@@ -2,6 +2,7 @@ import { haptic } from './ui/haptic';
 import { useEffect, useRef, useState, type FormEvent, type MouseEvent, type RefObject } from 'react';
 import * as RDialog from '@radix-ui/react-dialog';
 import { IconInfo, IconWarn } from './icons';
+import { t } from './i18n';
 
 /**
  * Styled replacements for window.confirm / window.prompt.
@@ -18,6 +19,8 @@ export interface ConfirmOptions {
   cancelLabel?: string;
   /** red confirm button, focus starts on "Отмена" */
   danger?: boolean;
+  /** a word that has to be typed before the confirm button works (for the things that cannot be brought back) */
+  typeWord?: string;
 }
 export interface PromptOptions extends ConfirmOptions {
   label: string;
@@ -157,6 +160,8 @@ function Dialog({ req, onDone }: { req: Req; onDone: () => void }) {
   const closed = useRef(false);
   const o = req.opts;
   const readOnly = req.kind === 'prompt' && !!req.opts.readOnly;
+  const word = req.kind === 'confirm' ? o.typeWord : undefined;
+  const typed = !word || value.trim().toLowerCase() === word.toLowerCase();
 
   const finish = (ok: boolean) => {
     if (closed.current) return;
@@ -171,7 +176,7 @@ function Dialog({ req, onDone }: { req: Req; onDone: () => void }) {
     e.preventDefault();
     const el = e.currentTarget as HTMLElement | null;
     if (!el) return;
-    if (input.current) {
+    if (input.current && !word) {
       if (readOnly) input.current.select();
       input.current.focus();
       return;
@@ -181,6 +186,7 @@ function Dialog({ req, onDone }: { req: Req; onDone: () => void }) {
 
   const submit = (e: FormEvent) => {
     e.preventDefault();
+    if (!typed) return;
     if (req.kind === 'prompt' && req.opts.validate) {
       const msg = req.opts.validate(value);
       if (msg) { setError(msg); input.current?.focus(); return; }
@@ -232,11 +238,17 @@ function Dialog({ req, onDone }: { req: Req; onDone: () => void }) {
             {error && <p id="cd-err" className="mt-1.5 text-sm font-bold text-bad" role="alert">{error}</p>}
           </div>
         )}
+        {word && (
+          <div>
+            <label htmlFor="cd-word" className="label">{t('confirm.typeWord', { word })}</label>
+            <input id="cd-word" ref={input} className="input font-mono" value={value} autoComplete="off" autoCapitalize="none" spellCheck={false} onChange={(e) => setValue(e.target.value)} />
+          </div>
+        )}
         <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
           {!readOnly && (
             <button type="button" data-cancel className="btn btn-ghost" onClick={() => finish(false)}>{o.cancelLabel ?? 'Отмена'}</button>
           )}
-          <button data-ok className={`btn ${o.danger ? 'btn-danger-solid' : ''}`}>
+          <button data-ok disabled={!typed} className={`btn ${o.danger ? 'btn-danger-solid' : ''}`}>
             {o.confirmLabel ?? (readOnly ? 'Готово' : o.danger ? 'Удалить' : 'Подтвердить')}
           </button>
         </div>
