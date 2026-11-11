@@ -69,6 +69,12 @@ export async function seed({ base, dbPath }) {
   const sess = db.prepare('INSERT INTO player_sessions (server_id, name, joined_at, left_at) VALUES (?,?,?,?)');
   for (const d of [13, 12, 10, 9, 8, 6, 5, 4, 2, 1]) sess.run(ids[1], 'ShotsHero', now - d * 86_400_000 - 3 * 3_600_000, now - d * 86_400_000 - 1 * 3_600_000);
   sess.run(ids[1], 'ShotsHero', now - 40 * 60_000, null);
+  // the bans that the game plugin has put in force (the «Баны» page): for ever, for days, for hours, of one server, without a reason
+  const ban = db.prepare("INSERT OR REPLACE INTO game_bans (platform_id, nick, reason, admin, created_at, until, kind, server_id, scope) VALUES (?,?,?,?,?,?,'ban',?,?)");
+  ban.run('76561198000000101', 'xX_Raider_Xx', 'Читы: аимбот', 'Moderator', now - 2 * 86_400_000, 0, ids[1], 'all');
+  ban.run('76561198000000102', 'ToxicTom', 'Оскорбления в чате', 'Moderator', now - 3 * 3_600_000, now + 4 * 86_400_000, ids[1], 'server');
+  ban.run('76561198000000103', 'SpamBot42', 'Реклама сторонних серверов', 'Admin', now - 20 * 60_000, now + 5 * 3_600_000, ids[0], 'all');
+  ban.run('76561198000000104', 'Quiet_One', '', 'Admin', now - 9 * 86_400_000, 0, ids[0], 'server');
   db.close();
   await call('PUT', '/api/me/player', { gameNick: 'ShotsHero', bio: 'Играю по вечерам', publicProfile: true }, token);
 

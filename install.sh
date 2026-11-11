@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="ae008ed16778"
+COREGSM_BUILD="62cb8fe5b7de"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.2.25"
+COREGSM_VERSION="1.2.26"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -24201,6 +24201,88 @@ declare module 'gamedig' {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/gamenews"
+  cat > "$APP_DIR/core-backend/src/gamenews/bansPublic.ts" << '__COREGSM_EOF__'
+/**
+ * The «Баны» page: the bans that the game plugin has put in force, as a list for the panel.
+ *   GET /api/bans?server=<id>&q=<nick>   whoever may open the panel (a closed panel: signed-in people only)
+ * A guest and a player see the nickname, the reason, the server, the day and until when. The game account (platform id) and the name of the
+ * administrator who gave the ban are shown to the staff only. A short block after a kick is not a ban and is not listed.
+ */
+import type { Express, Request } from 'express';
+import { isStaff, viewer } from '../security/auth.js';
+import { holdsOn, listBans, type BanRow } from './gameNewsModLog.js';
+import { serverLabel } from './gameNewsVars.js';
+import { db } from '../db.js';
+
+export interface PublicBan {
+  nick: string;
+  reason: string;
+  serverId: number;
+  server: string;
+  /** all | server: where the ban holds */
+  scope: 'all' | 'server';
+  createdAt: number;
+  /** until when (0 = for ever) */
+  until: number;
+  /** staff only */
+  admin?: string;
+  platformId?: string;
+}
+
+export interface BansAnswer {
+  total: number;
+  forever: number;
+  last7d: number;
+  servers: { id: number; name: string; count: number }[];
+  items: PublicBan[];
+}
+
+/** the list in the shape that is given out: the staff sees more */
+export function shapeBans(rows: BanRow[], opts: { staff: boolean; server?: number; q?: string; label?: (id: number) => string }): PublicBan[] {
+  const label = opts.label ?? serverLabel;
+  const q = (opts.q ?? '').trim().toLowerCase();
+  return rows
+    .filter((r) => r.kind === 'ban')
+    .filter((r) => opts.server === undefined || holdsOn(r, opts.server))
+    .filter((r) => !q || r.nick.toLowerCase().includes(q) || r.reason.toLowerCase().includes(q))
+    .map((r): PublicBan => ({
+      nick: r.nick,
+      reason: r.reason,
+      serverId: r.server_id,
+      server: r.server_id ? label(r.server_id) : '',
+      scope: r.scope === 'server' ? 'server' : 'all',
+      createdAt: r.created_at,
+      until: r.until,
+      ...(opts.staff ? { admin: r.admin, platformId: r.platform_id } : {}),
+    }));
+}
+
+export function registerBans(app: Express): void {
+  app.get('/api/bans', viewer, (req: Request, res) => {
+    const now = Date.now();
+    const all = listBans(now).filter((r) => r.kind === 'ban');
+    const serverQ = Number(req.query.server);
+    const server = Number.isInteger(serverQ) && serverQ > 0 ? serverQ : undefined;
+    const q = typeof req.query.q === 'string' ? req.query.q.slice(0, 60) : '';
+    const staff = isStaff(req);
+    const items = shapeBans(all, { staff, server, q }).slice(0, 500);
+    // the servers that have bans (the filter) and the figures over all of them, whatever the filter says
+    const counts = new Map<number, number>();
+    for (const r of all) if (r.server_id) counts.set(r.server_id, (counts.get(r.server_id) ?? 0) + 1);
+    const week = (db.prepare("SELECT COUNT(*) AS n FROM game_mod_log WHERE kind = 'ban' AND ts >= ?").get(now - 7 * 86_400_000) as { n: number }).n;
+    const out: BansAnswer = {
+      total: all.length,
+      forever: all.filter((r) => r.until === 0).length,
+      last7d: week,
+      servers: [...counts.entries()].map(([id, count]) => ({ id, name: serverLabel(id), count })).sort((a, b) => b.count - a.count),
+      items,
+    };
+    res.set('Cache-Control', 'private, max-age=15');
+    res.json(out);
+  });
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/gamenews"
   cat > "$APP_DIR/core-backend/src/gamenews/gameNews.ts" << '__COREGSM_EOF__'
 /**
  * Game news: the panel writes a message and the CoreGSM game plugin (BepInEx, on the game server) shows it in the
@@ -30116,6 +30198,7 @@ import { registerHealth } from './monitoring/health.js';
 import { startDbMaintenance } from './admin/dbMaintenance.js';
 import { registerMetrics } from './monitoring/metrics.js';
 import { registerRum } from './monitoring/rum.js';
+import { registerBans } from './gamenews/bansPublic.js';
 import { actorMiddleware } from './actor.js';
 import { router as settingsHistoryRouter } from './admin/settingsHistory.js';
 import { wrap } from './http.js';
@@ -30220,6 +30303,7 @@ installAudit(app);
 
 registerMetrics(app);
 registerRum(app);
+registerBans(app);
 app.use(settingsHistoryRouter);
 
 app.get('/api/health', (_req, res) => {
@@ -33594,7 +33678,7 @@ import { db, getSetting, setSetting } from '../db.js';
 
 const KEEP_DAYS = 14;
 /** the pages the panel has; anything else is not stored */
-export const RUM_ROUTES = ['servers', 'server', 'news', 'status', 'community', 'profile', 'player', 'login', 'register', 'admin', 'other'] as const;
+export const RUM_ROUTES = ['servers', 'server', 'news', 'status', 'community', 'bans', 'profile', 'player', 'login', 'register', 'admin', 'other'] as const;
 export { RUM_LIMITS, RUM_METRICS };
 type Metric = RumMetric;
 
@@ -121594,6 +121678,7 @@ const StatusPage = lazyPage(() => import('./pages/Status'));
 const UiKitPage = lazyPage(() => import('./pages/UiKit'));
 const CommunityPage = lazyPage(() => import('./pages/Community'));
 const PlayerPage = lazyPage(() => import('./pages/Player'));
+const BansPage = lazyPage(() => import('./pages/Bans'));
 // rare screens: the first-run wizard, the e-mail flows, the tour and the command palette
 const Setup = lazyPage(() => import('./pages/Setup'));
 const ForgotPassword = lazyPage(() => import('./pages/ForgotPassword'));
@@ -121606,6 +121691,12 @@ const CommandPalette = lazyPage(() => import('./components/CommandPalette'));
 const IconCommunity = () => (
   <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
     <circle cx="9" cy="8" r="3.2" /><path d="M3 20c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5" /><circle cx="17" cy="9" r="2.4" /><path d="M16.5 14.6c2.6.2 4.5 2 4.5 4.9" />
+  </svg>
+);
+
+const IconBans = () => (
+  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+    <circle cx="12" cy="12" r="9" /><path d="m5.7 5.7 12.6 12.6" />
   </svg>
 );
 
@@ -121623,6 +121714,7 @@ const PAGES: PageDef[] = [
   { id: 'news', label: 'nav.news', icon: IconNews },
   { id: 'status', label: 'nav.status', icon: IconStatus },
   { id: 'community', label: 'nav.community', icon: IconCommunity },
+  { id: 'bans', label: 'nav.bans', icon: IconBans },
   { id: 'admin', label: 'nav.admin', icon: IconSettings, admin: true },
 ];
 
@@ -121797,7 +121889,7 @@ export default function App() {
         toast(t('app.sessionEnded'), 'info');
         setBoot((p) => ({ ...p, me: null }));
         const { page } = parseRoute();
-        const publicRoute = accessRef.current.publicPanel && (page === '' || page === 'servers' || page === 'news' || page === 'status' || page === 'community' || page === 'player' || page === 'u');
+        const publicRoute = accessRef.current.publicPanel && (page === '' || page === 'servers' || page === 'news' || page === 'status' || page === 'community' || page === 'bans' || page === 'player' || page === 'u');
         if (!publicRoute) navigate('/login');
         void load();
       }, 300);
@@ -122046,6 +122138,7 @@ export default function App() {
             {page === 'news' && <NewsFeed sub={sub} />}
             {page === 'status' && <StatusPage />}
             {page === 'community' && <CommunityPage />}
+            {page === 'bans' && <BansPage />}
             {page === 'player' && <PlayerPage name={publicName} />}
             {page === 'admin' && <AdminPage sub={sub} updateAvailable={updateAvailable} />}
             {page === 'profile' && <ProfilePage />}
@@ -124752,6 +124845,7 @@ export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose:
       sectionItem('p-news', 'Новости', 'Лента новостей', '/news', <IconNews />),
       sectionItem('p-status', 'Статус', 'Доступность за 30 дней', '/status', <IconPulse />),
       sectionItem('p-community', 'Сообщество', 'Кто играет, сезон, зал славы', '/community', <IconTrophy />, 'игроки рейтинг топ сезон'),
+      sectionItem('p-bans', 'Баны', 'Заблокированные игроки на серверах', '/bans', <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden><circle cx="12" cy="12" r="9" /><path d="m5.7 5.7 12.6 12.6" /></svg>, 'бан блокировка игроки забанен ban'),
     );
     if (isAdmin) out.push(sectionItem('p-design', 'Дизайн-система', 'Цвета, кнопки, поля и пустые состояния панели', '/_ui', <IconWrench />, 'тема дизайн компоненты ui кит', true));
     if (isStaff) {
@@ -146419,6 +146513,29 @@ const en: Record<keyof typeof ru, string> = {
   'nav.news': 'News',
   'nav.status': 'Status',
   'nav.community': 'Community',
+  'nav.bans': 'Bans',
+  'bans.subtitle': 'Players banned on the servers of the community',
+  'bans.loading': 'Loading the bans',
+  'bans.stat.active': 'Bans in force',
+  'bans.stat.forever': 'Permanent',
+  'bans.stat.week': 'Given in 7 days',
+  'bans.search': 'Search by nickname or reason',
+  'bans.servers': 'Servers',
+  'bans.allServers': 'All servers',
+  'bans.noReason': 'No reason given',
+  'bans.scope.server': 'This server only',
+  'bans.scope.all': 'On all servers',
+  'bans.by': 'By {name}',
+  'bans.account': 'Game account',
+  'bans.forever': 'Permanent',
+  'bans.until': 'until {date}',
+  'bans.left.m': '{n} min left',
+  'bans.left.h': '{n} h left',
+  'bans.left.d': '{n} d left',
+  'bans.empty.title': 'No bans',
+  'bans.empty.text': 'Nobody is banned right now.',
+  'bans.none.title': 'Nothing found',
+  'bans.none.text': 'Change the search or pick another server.',
   'nav.admin': 'Admin',
   'nav.sections': 'Sections',
   'net.offline': 'You are offline. Showing the last data received.',
@@ -151469,6 +151586,29 @@ const ru = {
   'nav.news': 'Новости',
   'nav.status': 'Статус',
   'nav.community': 'Сообщество',
+  'nav.bans': 'Баны',
+  'bans.subtitle': 'Игроки, которых заблокировали на серверах сообщества',
+  'bans.loading': 'Загружаем баны',
+  'bans.stat.active': 'Действующих банов',
+  'bans.stat.forever': 'Навсегда',
+  'bans.stat.week': 'Выдано за 7 дней',
+  'bans.search': 'Поиск по нику или причине',
+  'bans.servers': 'Серверы',
+  'bans.allServers': 'Все серверы',
+  'bans.noReason': 'Причина не указана',
+  'bans.scope.server': 'Только на этом сервере',
+  'bans.scope.all': 'На всех серверах',
+  'bans.by': 'Выдал: {name}',
+  'bans.account': 'Игровой аккаунт',
+  'bans.forever': 'Навсегда',
+  'bans.until': 'до {date}',
+  'bans.left.m': 'ещё {n} мин',
+  'bans.left.h': 'ещё {n} ч',
+  'bans.left.d': 'ещё {n} дн.',
+  'bans.empty.title': 'Банов нет',
+  'bans.empty.text': 'Сейчас никто не заблокирован.',
+  'bans.none.title': 'Ничего не найдено',
+  'bans.none.text': 'Измените запрос или выберите другой сервер.',
   'nav.admin': 'Админка',
   'nav.sections': 'Разделы',
   'net.offline': 'Нет сети. Показаны последние полученные данные.',
@@ -159429,6 +159569,149 @@ export default function BackupsCard() {
         )}
       </div>
     </Section>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/pages"
+  cat > "$APP_DIR/core-frontend/src/pages/Bans.tsx" << '__COREGSM_EOF__'
+import { useMemo, useState } from 'react';
+import { api } from '../api';
+import { t, useI18n } from '../i18n';
+import { Empty, ErrorLine, LoadError, PageHead, ago, fmtDateTime, usePoll } from '../ui';
+import { useAuth } from '../auth';
+import ArtPic from '../components/ArtPic';
+import '../styles/bans.css';
+
+export interface PublicBan {
+  nick: string;
+  reason: string;
+  serverId: number;
+  server: string;
+  scope: 'all' | 'server';
+  createdAt: number;
+  until: number;
+  admin?: string;
+  platformId?: string;
+}
+
+export interface BansData {
+  total: number;
+  forever: number;
+  last7d: number;
+  servers: { id: number; name: string; count: number }[];
+  items: PublicBan[];
+}
+
+const IconBan = () => (
+  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+    <circle cx="12" cy="12" r="9" /><path d="m5.7 5.7 12.6 12.6" />
+  </svg>
+);
+export { IconBan };
+
+/** «ещё 3 дн.» / «ещё 5 ч» / «ещё 20 мин»: what is left of a ban */
+export function leftText(untilMs: number, now: number): string {
+  const ms = Math.max(0, untilMs - now);
+  const min = Math.ceil(ms / 60_000);
+  if (min < 60) return t('bans.left.m', { n: Math.max(1, min) });
+  const h = Math.ceil(min / 60);
+  if (h < 48) return t('bans.left.h', { n: h });
+  return t('bans.left.d', { n: Math.ceil(h / 24) });
+}
+
+/** the filter of the list: a server (0 = all) and a piece of the nickname or of the reason */
+export function filterBans(items: PublicBan[], server: number, q: string): PublicBan[] {
+  const s = q.trim().toLowerCase();
+  return items.filter((b) => (server === 0 || b.scope === 'all' || b.serverId === server) && (!s || b.nick.toLowerCase().includes(s) || b.reason.toLowerCase().includes(s)));
+}
+
+function Stat({ n, label }: { n: number; label: string }) {
+  return (
+    <div className="bn-stat">
+      <b className="tabular-nums">{n}</b>
+      <span>{label}</span>
+    </div>
+  );
+}
+
+function Row({ b, now, staff }: { b: PublicBan; now: number; staff: boolean }) {
+  const forever = b.until === 0;
+  return (
+    <li className="bn-row">
+      <span className="bn-ava" aria-hidden>{(Array.from(b.nick)[0] ?? '?').toUpperCase()}</span>
+      <div className="bn-main">
+        <div className="bn-head">
+          <b className="bn-nick">{b.nick || '—'}</b>
+          <time className="bn-when" dateTime={new Date(b.createdAt).toISOString()} title={fmtDateTime(b.createdAt)}>{ago(b.createdAt)}</time>
+        </div>
+        <p className={`bn-reason ${b.reason ? '' : 'is-none'}`}>{b.reason || t('bans.noReason')}</p>
+        <div className="bn-meta">
+          {b.server && <span className="bn-chip">{b.server}</span>}
+          <span className="bn-chip">{b.scope === 'server' ? t('bans.scope.server') : t('bans.scope.all')}</span>
+          {staff && b.admin && <span className="bn-chip">{t('bans.by', { name: b.admin })}</span>}
+          {staff && b.platformId && <span className="bn-chip tabular-nums" title={t('bans.account')}>{b.platformId}</span>}
+        </div>
+      </div>
+      <div className="bn-state">
+        {forever ? <span className="pill pill-bad">{t('bans.forever')}</span> : <span className="pill pill-warn" title={fmtDateTime(b.until)}>{leftText(b.until, now)}</span>}
+        {!forever && <span className="bn-until">{t('bans.until', { date: fmtDateTime(b.until) })}</span>}
+      </div>
+    </li>
+  );
+}
+
+/** /bans: the bans that the game plugin has put in force */
+export default function BansPage() {
+  useI18n();
+  const { me } = useAuth();
+  const staff = me?.role === 'admin' || me?.role === 'moderator';
+  const [data, setData] = useState<BansData | null>(null);
+  const [error, setError] = useState('');
+  const [server, setServer] = useState(0);
+  const [q, setQ] = useState('');
+  const [now, setNow] = useState(() => Date.now());
+  const load = () => api<BansData>('/bans').then((d) => { setData(d); setNow(Date.now()); setError(''); }).catch((e: Error) => setError(e.message));
+  usePoll(load, 60_000);
+
+  const shown = useMemo(() => (data ? filterBans(data.items, server, q) : []), [data, server, q]);
+
+  return (
+    <div className="bn-page">
+      <PageHead icon={<IconBan />} title={t('nav.bans')} subtitle={t('bans.subtitle')} />
+      {error && !data ? <LoadError error={error} onRetry={() => void load()} /> : <ErrorLine text={error} />}
+      {!data && !error && <div className="skeleton bn-skel" aria-busy="true" aria-label={t('bans.loading')} />}
+      {data && (
+        <>
+          <div className="bn-stats">
+            <Stat n={data.total} label={t('bans.stat.active')} />
+            <Stat n={data.forever} label={t('bans.stat.forever')} />
+            <Stat n={data.last7d} label={t('bans.stat.week')} />
+          </div>
+          {data.total > 0 && (
+            <div className="bn-bar">
+              <input type="search" className="input bn-search" value={q} onChange={(e) => setQ(e.target.value)} placeholder={t('bans.search')} aria-label={t('bans.search')} maxLength={60} />
+              {data.servers.length > 1 && (
+                <div className="bn-servers" role="group" aria-label={t('bans.servers')}>
+                  <button type="button" className="nw-rub" aria-pressed={server === 0} onClick={() => setServer(0)}>{t('bans.allServers')}</button>
+                  {data.servers.map((s) => (
+                    <button key={s.id} type="button" className="nw-rub" aria-pressed={server === s.id} onClick={() => setServer(s.id)}>
+                      {s.name}<span className="nw-rub-n tabular-nums">{s.count}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+          {data.total === 0 && <Empty art={<ArtPic src="empty/empty-players" size={132} />} title={t('bans.empty.title')} text={t('bans.empty.text')} />}
+          {data.total > 0 && shown.length === 0 && <Empty art={<ArtPic src="empty/empty-players" size={132} />} title={t('bans.none.title')} text={t('bans.none.text')} />}
+          {shown.length > 0 && (
+            <ul className="bn-list fade-in" key={`${server}-${q}`} aria-label={t('nav.bans')}>
+              {shown.map((b) => <Row key={`${b.platformId ?? b.nick}-${b.createdAt}`} b={b} now={now} staff={staff} />)}
+            </ul>
+          )}
+        </>
+      )}
+    </div>
   );
 }
 __COREGSM_EOF__
@@ -169845,6 +170128,32 @@ export function writeIds(key: string, ids: string[]) {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
+  cat > "$APP_DIR/core-frontend/src/pages/bans.test.ts" << '__COREGSM_EOF__'
+import { describe, expect, it } from 'vitest';
+import { filterBans, leftText, type PublicBan } from './Bans';
+
+const ban = (o: Partial<PublicBan>): PublicBan => ({ nick: 'Alpha', reason: 'cheats', serverId: 1, server: 'S1', scope: 'all', createdAt: 1, until: 0, ...o });
+
+describe('the page of bans', () => {
+  it('says what is left of a ban in minutes, hours or days', () => {
+    const now = 1_000_000_000;
+    expect(leftText(now + 30_000, now)).toContain('1');
+    expect(leftText(now + 20 * 60_000, now)).toContain('20');
+    expect(leftText(now + 5 * 3_600_000, now)).toContain('5');
+    expect(leftText(now + 4 * 86_400_000, now)).toContain('4');
+    expect(leftText(now - 5, now)).toContain('1');
+  });
+
+  it('filters by a server (a ban of all servers holds on every one) and by a piece of the nickname or the reason', () => {
+    const list = [ban({}), ban({ nick: 'Beta', reason: 'Insults', scope: 'server', serverId: 2 }), ban({ nick: 'Gamma', scope: 'server', serverId: 3 })];
+    expect(filterBans(list, 0, '').length).toBe(3);
+    expect(filterBans(list, 2, '').map((b) => b.nick)).toEqual(['Alpha', 'Beta']);
+    expect(filterBans(list, 0, ' insult ').map((b) => b.nick)).toEqual(['Beta']);
+    expect(filterBans(list, 0, 'GAM').map((b) => b.nick)).toEqual(['Gamma']);
+  });
+});
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/integrationsLogic.test.ts" << '__COREGSM_EOF__'
 import { describe, expect, it } from 'vitest';
 import { badgeSnippets, WIDGET_SIZES } from './integrationsLogic';
@@ -172030,7 +172339,7 @@ type Metric = 'LCP' | 'INP' | 'CLS' | 'TTFB' | 'FCP';
 export function rumRoute(path: string): string {
   const [first = '', second = ''] = path.replace(/^\/+/, '').split('/');
   if (first === '' || first === 'servers') return second && /^\d+$/.test(second) ? 'server' : 'servers';
-  if (['news', 'status', 'community', 'profile', 'login', 'register', 'admin'].includes(first)) return first;
+  if (['news', 'status', 'community', 'bans', 'profile', 'login', 'register', 'admin'].includes(first)) return first;
   if (first === 'player' || first === 'u') return 'player';
   return 'other';
 }
@@ -172778,6 +173087,39 @@ __COREGSM_EOF__
 .an-top-bar > span { display: block; height: 100%; border-radius: inherit; background: var(--an); }
 
 @media (prefers-reduced-motion: reduce) { .an-bar > span, .an-hbar-track > span, .an-heat-cell { transition: none; } }
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/styles"
+  cat > "$APP_DIR/core-frontend/src/styles/bans.css" << '__COREGSM_EOF__'
+/* the «Баны» page: three figures, a search and the servers, a list of rows (a nickname, the reason, where, until when) */
+.bn-page { display: grid; gap: 1rem; min-width: 0; }
+.bn-skel { height: 14rem; border-radius: var(--r-xl); }
+.bn-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .75rem; }
+.bn-stat { display: grid; gap: .1rem; padding: .9rem 1rem; border-radius: var(--r-lg); background: rgb(var(--card)); border: 1px solid rgb(var(--line)); }
+.bn-stat b { font-size: 1.75rem; line-height: 1.1; font-weight: 800; letter-spacing: -.02em; }
+.bn-stat span { font-size: .875rem; font-weight: 600; color: rgb(var(--mute)); }
+.bn-bar { display: grid; gap: .6rem; }
+.bn-search { width: 100%; max-width: 28rem; }
+.bn-servers { display: flex; flex-wrap: wrap; gap: .5rem; }
+.bn-list { list-style: none; margin: 0; padding: 0; display: grid; gap: .6rem; }
+.bn-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: .9rem; align-items: start; padding: 1rem 1.1rem; border-radius: var(--r-lg); background: rgb(var(--card)); border: 1px solid rgb(var(--line)); box-shadow: var(--shadow-1); }
+.bn-row::before { content: none; }
+.bn-ava { display: grid; place-items: center; width: 2.6rem; height: 2.6rem; border-radius: 50%; background: rgb(var(--badbg)); color: rgb(var(--bad)); font-weight: 800; }
+.bn-main { display: grid; gap: .35rem; min-width: 0; }
+.bn-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: .15rem .75rem; }
+.bn-nick { font-size: 1.125rem; font-weight: 800; overflow-wrap: anywhere; }
+.bn-when { font-size: .8125rem; font-weight: 600; color: rgb(var(--mute)); }
+.bn-reason { margin: 0; line-height: 1.5; overflow-wrap: anywhere; }
+.bn-reason.is-none { color: rgb(var(--mute)); font-style: italic; }
+.bn-meta { display: flex; flex-wrap: wrap; gap: .35rem .5rem; }
+.bn-chip { padding: .15rem .6rem; border-radius: var(--r-pill); background: rgb(var(--soft)); color: rgb(var(--mute)); font-size: .8125rem; font-weight: 650; overflow-wrap: anywhere; }
+.bn-state { display: grid; justify-items: end; gap: .3rem; text-align: right; }
+.bn-until { font-size: .8125rem; font-weight: 600; color: rgb(var(--mute)); }
+@media (max-width: 640px) {
+  .bn-row { grid-template-columns: auto minmax(0, 1fr); }
+  .bn-state { grid-column: 2; justify-items: start; text-align: left; display: flex; flex-wrap: wrap; align-items: center; gap: .3rem .6rem; }
+  .bn-stat b { font-size: 1.4rem; }
+}
+:root[data-ember='1'] .bn-row, :root[data-ember='1'] .bn-stat { border-radius: var(--emb-r-card); border: 0; box-shadow: var(--shadow-2); }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/buttons.css" << '__COREGSM_EOF__'

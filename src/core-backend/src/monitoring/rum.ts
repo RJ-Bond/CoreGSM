@@ -17,7 +17,7 @@ import { db, getSetting, setSetting } from '../db.js';
 
 const KEEP_DAYS = 14;
 /** the pages the panel has; anything else is not stored */
-export const RUM_ROUTES = ['servers', 'server', 'news', 'status', 'community', 'profile', 'player', 'login', 'register', 'admin', 'other'] as const;
+export const RUM_ROUTES = ['servers', 'server', 'news', 'status', 'community', 'bans', 'profile', 'player', 'login', 'register', 'admin', 'other'] as const;
 export { RUM_LIMITS, RUM_METRICS };
 type Metric = RumMetric;
 

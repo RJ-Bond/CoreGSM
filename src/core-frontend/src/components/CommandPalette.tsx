@@ -101,6 +101,7 @@ export default function CommandPalette({ onClose, isStaff, isAdmin }: { onClose:
       sectionItem('p-news', 'Новости', 'Лента новостей', '/news', <IconNews />),
       sectionItem('p-status', 'Статус', 'Доступность за 30 дней', '/status', <IconPulse />),
       sectionItem('p-community', 'Сообщество', 'Кто играет, сезон, зал славы', '/community', <IconTrophy />, 'игроки рейтинг топ сезон'),
+      sectionItem('p-bans', 'Баны', 'Заблокированные игроки на серверах', '/bans', <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden><circle cx="12" cy="12" r="9" /><path d="m5.7 5.7 12.6 12.6" /></svg>, 'бан блокировка игроки забанен ban'),
     );
     if (isAdmin) out.push(sectionItem('p-design', 'Дизайн-система', 'Цвета, кнопки, поля и пустые состояния панели', '/_ui', <IconWrench />, 'тема дизайн компоненты ui кит', true));
     if (isStaff) {

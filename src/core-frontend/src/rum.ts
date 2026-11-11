@@ -9,7 +9,7 @@ type Metric = 'LCP' | 'INP' | 'CLS' | 'TTFB' | 'FCP';
 export function rumRoute(path: string): string {
   const [first = '', second = ''] = path.replace(/^\/+/, '').split('/');
   if (first === '' || first === 'servers') return second && /^\d+$/.test(second) ? 'server' : 'servers';
-  if (['news', 'status', 'community', 'profile', 'login', 'register', 'admin'].includes(first)) return first;
+  if (['news', 'status', 'community', 'bans', 'profile', 'login', 'register', 'admin'].includes(first)) return first;
   if (first === 'player' || first === 'u') return 'player';
   return 'other';
 }

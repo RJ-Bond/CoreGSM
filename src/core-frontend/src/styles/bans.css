@@ -1,0 +1,30 @@
+/* the «Баны» page: three figures, a search and the servers, a list of rows (a nickname, the reason, where, until when) */
+.bn-page { display: grid; gap: 1rem; min-width: 0; }
+.bn-skel { height: 14rem; border-radius: var(--r-xl); }
+.bn-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .75rem; }
+.bn-stat { display: grid; gap: .1rem; padding: .9rem 1rem; border-radius: var(--r-lg); background: rgb(var(--card)); border: 1px solid rgb(var(--line)); }
+.bn-stat b { font-size: 1.75rem; line-height: 1.1; font-weight: 800; letter-spacing: -.02em; }
+.bn-stat span { font-size: .875rem; font-weight: 600; color: rgb(var(--mute)); }
+.bn-bar { display: grid; gap: .6rem; }
+.bn-search { width: 100%; max-width: 28rem; }
+.bn-servers { display: flex; flex-wrap: wrap; gap: .5rem; }
+.bn-list { list-style: none; margin: 0; padding: 0; display: grid; gap: .6rem; }
+.bn-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: .9rem; align-items: start; padding: 1rem 1.1rem; border-radius: var(--r-lg); background: rgb(var(--card)); border: 1px solid rgb(var(--line)); box-shadow: var(--shadow-1); }
+.bn-row::before { content: none; }
+.bn-ava { display: grid; place-items: center; width: 2.6rem; height: 2.6rem; border-radius: 50%; background: rgb(var(--badbg)); color: rgb(var(--bad)); font-weight: 800; }
+.bn-main { display: grid; gap: .35rem; min-width: 0; }
+.bn-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: .15rem .75rem; }
+.bn-nick { font-size: 1.125rem; font-weight: 800; overflow-wrap: anywhere; }
+.bn-when { font-size: .8125rem; font-weight: 600; color: rgb(var(--mute)); }
+.bn-reason { margin: 0; line-height: 1.5; overflow-wrap: anywhere; }
+.bn-reason.is-none { color: rgb(var(--mute)); font-style: italic; }
+.bn-meta { display: flex; flex-wrap: wrap; gap: .35rem .5rem; }
+.bn-chip { padding: .15rem .6rem; border-radius: var(--r-pill); background: rgb(var(--soft)); color: rgb(var(--mute)); font-size: .8125rem; font-weight: 650; overflow-wrap: anywhere; }
+.bn-state { display: grid; justify-items: end; gap: .3rem; text-align: right; }
+.bn-until { font-size: .8125rem; font-weight: 600; color: rgb(var(--mute)); }
+@media (max-width: 640px) {
+  .bn-row { grid-template-columns: auto minmax(0, 1fr); }
+  .bn-state { grid-column: 2; justify-items: start; text-align: left; display: flex; flex-wrap: wrap; align-items: center; gap: .3rem .6rem; }
+  .bn-stat b { font-size: 1.4rem; }
+}
+:root[data-ember='1'] .bn-row, :root[data-ember='1'] .bn-stat { border-radius: var(--emb-r-card); border: 0; box-shadow: var(--shadow-2); }

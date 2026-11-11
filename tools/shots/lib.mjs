@@ -28,6 +28,7 @@ export const GUEST_PAGES = [
   { id: 'news-item', path: '/news/1' },
   { id: 'status', path: '/status' },
   { id: 'community', path: '/community' },
+  { id: 'bans', path: '/bans' },
   { id: 'player', path: '/player/ShotsHero' },
   { id: 'public-profile', path: '/u/admin' },
   { id: 'login', path: '/login' },

@@ -23,6 +23,7 @@ import { registerHealth } from './monitoring/health.js';
 import { startDbMaintenance } from './admin/dbMaintenance.js';
 import { registerMetrics } from './monitoring/metrics.js';
 import { registerRum } from './monitoring/rum.js';
+import { registerBans } from './gamenews/bansPublic.js';
 import { actorMiddleware } from './actor.js';
 import { router as settingsHistoryRouter } from './admin/settingsHistory.js';
 import { wrap } from './http.js';
@@ -127,6 +128,7 @@ installAudit(app);
 
 registerMetrics(app);
 registerRum(app);
+registerBans(app);
 app.use(settingsHistoryRouter);
 
 app.get('/api/health', (_req, res) => {
