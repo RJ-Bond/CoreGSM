@@ -1,3 +1,6 @@
+import { currentActor } from './actor.js';
+import { isHistoryKey } from './admin/portableSettings.js';
+import { bus } from './events.js';
 import Database from 'better-sqlite3';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -266,8 +269,26 @@ export function getSetting(key: string): string | null {
   }
 }
 
+const HISTORY_KEEP = 2000;
+/** the history of the settings a person sets: who, which, from what to what (the first 400 signs of a value) */
+function recordSettingChange(key: string, next: string | null): void {
+  if (!isHistoryKey(key)) return;
+  try {
+    const prev = (db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined)?.value ?? null;
+    const after = next === '' ? null : next;
+    if (prev === after) return;
+    const cut = (v: string | null) => (v == null ? null : v.slice(0, 400));
+    db.prepare('INSERT INTO settings_history (ts, actor, key, old_value, new_value) VALUES (?, ?, ?, ?, ?)').run(Date.now(), currentActor(), key, cut(prev), cut(after));
+    db.prepare('DELETE FROM settings_history WHERE id <= (SELECT MAX(id) - ? FROM settings_history)').run(HISTORY_KEEP);
+    bus.emit('settings.changed', { key, actor: currentActor() });
+  } catch (e) {
+    log.error('history of the settings failed', (e as Error).message);
+  }
+}
+
 /** value === null (or empty string) deletes the setting; secret keys are stored encrypted */
 export function setSetting(key: string, value: string | null): void {
+  recordSettingChange(key, value);
   if (value === null || value === '') db.prepare('DELETE FROM settings WHERE key = ?').run(key);
   else {
     warnedSecrets.delete(key);

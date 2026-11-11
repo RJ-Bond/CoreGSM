@@ -1,0 +1,66 @@
+# Правила оповещений для метрик CoreGSM (GET /api/metrics). Подключите файл в prometheus.yml:
+#   rule_files: [ "coregsm-rules.yml" ]
+groups:
+  - name: coregsm
+    rules:
+      - alert: CoreGSMNoMetrics
+        expr: absent(coregsm_info) or up{job="coregsm"} == 0
+        for: 5m
+        labels: { severity: critical }
+        annotations:
+          summary: "CoreGSM не отдаёт метрики"
+          description: "Панель не отвечает или неверен METRICS_TOKEN. Проверьте `coregsm status` и `coregsm logs backend`."
+
+      - alert: CoreGSMServerDown
+        expr: coregsm_server_online == 0
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "Сервер {{ $labels.name }} не отвечает панели"
+          description: "Игра {{ $labels.game }}, сервер {{ $labels.id }} не отвечает больше пяти минут."
+
+      - alert: CoreGSMPollTooSlow
+        # замените 30000 на ваш интервал опроса в миллисекундах (POLL_INTERVAL_SEC × 1000)
+        expr: coregsm_poll_duration_ms > 0.8 * 30000
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "Цикл опроса почти не укладывается в интервал"
+          description: "Поднимите POLL_CONCURRENCY или опрашивайте реже (docs/limits.md)."
+
+      - alert: CoreGSMPollFailures
+        expr: coregsm_poll_failures > 0
+        for: 15m
+        labels: { severity: warning }
+        annotations:
+          summary: "В цикле опроса есть серверы, которые не ответили"
+          description: "Проверьте сеть между панелью и игровыми серверами."
+
+      - alert: CoreGSMBotDown
+        expr: coregsm_bot_up == 0
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "Discord-бот не работает"
+          description: "Сообщения в Discord не обновляются. Админка → Discord, `coregsm logs bot`."
+
+      - alert: CoreGSMQueueGrowing
+        expr: coregsm_queue_length > 50
+        for: 15m
+        labels: { severity: warning }
+        annotations:
+          summary: "Очередь сообщений для бота не разбирается"
+
+      - alert: CoreGSMDiskLow
+        expr: coregsm_disk_free_bytes < 2e9
+        for: 10m
+        labels: { severity: critical }
+        annotations:
+          summary: "Мало места на диске панели"
+          description: "Меньше 2 ГБ. Удалите старые копии, уменьшите HISTORY_DAYS (docs/limits.md)."
+
+      - alert: CoreGSMBackendRestarted
+        expr: coregsm_uptime_seconds < 300
+        labels: { severity: info }
+        annotations:
+          summary: "Backend CoreGSM только что запустился"

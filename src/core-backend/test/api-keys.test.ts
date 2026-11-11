@@ -122,7 +122,7 @@ describe('openapi', () => {
   it('describes the endpoints', () => {
     const spec = openApiSpec({ version: '1.2.3', baseUrl: 'https://e.x', title: 'T' });
     assert.equal(spec.openapi, '3.0.3');
-    assert.deepEqual(Object.keys(spec.paths).sort(), ['/api/v1/openapi.json', '/api/v1/servers', '/api/v1/servers/{id}', '/api/v1/status']);
+    assert.deepEqual(Object.keys(spec.paths).sort(), ['/api/v1/community', '/api/v1/openapi.json', '/api/v1/servers', '/api/v1/servers/{id}', '/api/v1/servers/{id}/events', '/api/v1/servers/{id}/history', '/api/v1/servers/{id}/players', '/api/v1/status']);
   });
 });
 

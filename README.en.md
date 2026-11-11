@@ -126,6 +126,12 @@ cd src/core-frontend && npm ci && npm run dev
 
 The **«Game plugin»** item of the admin area connects the panel with the in-game chat of a V Rising server through a small BepInEx plugin: messages to players with colours and a preview, automatic announcements on a schedule, a greeting for a player who joins, «player joined / left» messages and a countdown before a planned restart. The plugin polls the panel itself, so **nothing has to be opened** on the game server. Installation, settings and troubleshooting (Russian): [docs/game-plugin.md](docs/game-plugin.md).
 
+## Documentation
+
+Written in Russian, like the panel's first language: [how it is built](docs/architecture.md), [operations](docs/operations.md), [data model](docs/data-model.md),
+[public API](docs/api.md) (the OpenAPI description is at `/api/v1/openapi.json`), [limits](docs/limits.md), [monitoring with Prometheus and Grafana](docs/monitoring/README.md),
+[accessibility](docs/accessibility.md), [game plugin](docs/game-plugin.md).
+
 ## License
 
 MIT

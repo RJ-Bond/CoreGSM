@@ -21,6 +21,8 @@ export const ERRORS = {
   rate_limited: 'Слишком много запросов. Подождите минуту.',
   rate_limited_later: 'Слишком много запросов. Попробуйте позже.',
   too_many_connections: 'Слишком много открытых подключений',
+  history_entry_not_found: 'Запись не найдена',
+  history_not_revertible: 'Эту настройку вернуть нельзя',
   too_many_attempts: 'Слишком много попыток. Подождите 10 минут.',
   bad_data: 'Неверные данные',
   bad_data_lower: 'неверные данные',

@@ -1,7 +1,7 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { api, getToken } from '../../api';
 import { useAuth } from '../../auth';
-import { t } from '../../i18n';
+import { t, type TKey } from '../../i18n';
 import { Button, ErrorLine, Section, TextField, toast, errText } from '../../ui';
 
 /** «Ваши данные»: download everything the panel keeps about the account, or delete the account for good */
@@ -11,6 +11,10 @@ export function AccountDataCard() {
   const [asking, setAsking] = useState(false);
   const [secret, setSecret] = useState('');
   const [error, setError] = useState('');
+  const [kinds, setKinds] = useState<{ key: string; count: number; days: number | null }[] | null>(null);
+  useEffect(() => {
+    if (me) api<{ key: string; count: number; days: number | null }[]>('/me/data-summary').then(setKinds).catch(() => setKinds(null));
+  }, [me]);
   if (!me) return null;
 
   const download = async () => {
@@ -52,6 +56,17 @@ export function AccountDataCard() {
 
   return (
     <Section title={t('pf.data.title')} description={t('pf.data.desc')}>
+      {kinds && (
+        <ul className="pf-know" aria-label={t('pf.know.title')}>
+          {kinds.map((k) => (
+            <li key={k.key}>
+              <span className="pf-know-k">{t(`pf.know.${k.key}` as TKey)}</span>
+              <b className="tabular-nums">{k.count}</b>
+              <span className="pf-know-d">{k.days ? t('pf.know.days', { n: k.days }) : t('pf.know.always')}</span>
+            </li>
+          ))}
+        </ul>
+      )}
       <div className="flex flex-wrap items-center gap-3">
         <Button type="button" variant="soft" loading={busy && !asking} onClick={() => void download()}>{t('pf.data.export')}</Button>
         {!asking && <button type="button" className="btn-link-danger" onClick={() => { setAsking(true); setError(''); }}>{t('pf.data.delete')}</button>}

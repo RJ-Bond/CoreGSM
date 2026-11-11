@@ -42,6 +42,7 @@ const OPEN: Record<string, string> = {
   'GET /api/push/key': 'the public VAPID key',
   'GET /api/v1/openapi.json': 'documentation of the public API',
   'GET /api/setup/status': 'tells the first-run page whether setup is still open',
+  'POST /api/rum': 'the beacon of the speed of a page: public, no data about the person, rate limited, answers 204',
   'POST /api/game-news/chat': 'the CoreGSM game plugin: checks its own Bearer token inside; limited per server',
   'GET /api/game-news/player/status': 'the CoreGSM game plugin: checks its own Bearer token inside',
   'POST /api/game-news/player/register': 'the CoreGSM game plugin: checks its own Bearer token inside; limited per game account',
@@ -125,6 +126,7 @@ describe('every route has a guard or a reason to be open', () => {
       'POST /api/game-news/player/unban',
       'POST /api/game-news/restart-request',
       'POST /api/probe/results',
+      'POST /api/rum',
       'POST /api/setup',
     ]);
   });

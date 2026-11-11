@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="be42c4d80142"
+COREGSM_BUILD="f7f8327d4ec9"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.2.23"
+COREGSM_VERSION="1.2.24"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -14730,6 +14730,29 @@ __COREGSM_EOF__
   }
 }
 __COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/actor.ts" << '__COREGSM_EOF__'
+/**
+ * Who is acting in this request: set by the guards once the person is known, read where a change is recorded
+ * (the history of the settings) without passing the name through every function.
+ */
+import { AsyncLocalStorage } from 'node:async_hooks';
+import type { NextFunction, Request, Response } from 'express';
+
+const als = new AsyncLocalStorage<{ actor: string | null }>();
+
+/** one holder per request; the guards fill it in */
+export const actorMiddleware = (_req: Request, _res: Response, next: NextFunction): void => {
+  als.run({ actor: null }, next);
+};
+
+export const setActor = (name: string | null): void => {
+  const s = als.getStore();
+  if (s) s.actor = name;
+};
+
+export const currentActor = (): string | null => als.getStore()?.actor ?? null;
+__COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/admin"
   cat > "$APP_DIR/core-backend/src/admin/backup.ts" << '__COREGSM_EOF__'
 /**
@@ -15714,17 +15737,9 @@ import { db, getSetting, setSetting } from '../db.js';
 
 export const router = express.Router();
 
-/** settings that travel with the file: never a secret, never a counter or a timestamp of this panel */
-export const PORTABLE_SETTINGS = [
-  'alerts_enabled', 'alerts_channel', 'alerts_system_channel', 'default_look', 'alerts_after_min', 'alerts_mention', 'alerts_smart_low', 'alerts_smart_ping', 'alerts_smart_full',
-  'digest_enabled', 'digest_channel', 'digest_weekday', 'digest_hour', 'digest_theme',
-  'brand_name', 'brand_color', 'brand_preset', 'default_theme', 'game_theme',
-  'news_channel_id', 'news_test_channel_id', 'embed_players_shown',
-  'poll_concurrency', 'poll_fail_threshold', 'poll_fail_n', 'poll_fail_m', 'poll_probe_veto', 'timezone',
-  'public_panel', 'registration_open', 'registration_mode', 'rules_text',
-  'backup_schedule', 'backup_keep',
-  'smtp_host', 'smtp_port', 'smtp_secure', 'smtp_user', 'smtp_from',
-] as const;
+import { PORTABLE_SETTINGS } from './portableSettings.js';
+
+export { PORTABLE_SETTINGS };
 
 interface ServerRow { id: number; name: string; game: string; host: string; port: number; query_port: number | null; display_address: string; country: string }
 
@@ -16018,6 +16033,44 @@ export function openApiSpec(opts: { version: string; baseUrl: string; title: str
           },
         },
       },
+      '/api/v1/servers/{id}/history': {
+        get: {
+          summary: 'Players and ping over time',
+          operationId: 'getServerHistory',
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'integer' } },
+            { name: 'hours', in: 'query', required: false, schema: { type: 'integer', minimum: 1, maximum: 168, default: 24 } },
+          ],
+          responses: { '200': { description: 'At most 180 points', content: { 'application/json': { schema: { $ref: '#/components/schemas/History' } } } }, '404': errorResponse('No such server'), ...common },
+        },
+      },
+      '/api/v1/servers/{id}/events': {
+        get: {
+          summary: 'Went down, came back, the peak',
+          operationId: 'getServerEvents',
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'integer' } },
+            { name: 'hours', in: 'query', required: false, schema: { type: 'integer', minimum: 1, maximum: 168, default: 168 } },
+          ],
+          responses: { '200': { description: 'Newest first', content: { 'application/json': { schema: { $ref: '#/components/schemas/Events' } } } }, '404': errorResponse('No such server'), ...common },
+        },
+      },
+      '/api/v1/servers/{id}/players': {
+        get: {
+          summary: 'Who is in the game now',
+          operationId: 'getServerPlayers',
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'integer' } }],
+          responses: { '200': { description: 'The count always; names only while the panel is open to guests', content: { 'application/json': { schema: { $ref: '#/components/schemas/PlayersNow' } } } }, '404': errorResponse('No such server'), ...common },
+        },
+      },
+      '/api/v1/community': {
+        get: {
+          summary: 'The community in numbers',
+          operationId: 'getCommunity',
+          parameters: [{ name: 'days', in: 'query', required: false, schema: { type: 'integer', minimum: 1, maximum: 30, default: 7 } }],
+          responses: { '200': { description: 'Players now and the most active players of the period', content: { 'application/json': { schema: { $ref: '#/components/schemas/Community' } } } }, ...common },
+        },
+      },
       '/api/v1/openapi.json': {
         get: { summary: 'This description', operationId: 'getOpenApi', security: [], responses: { '200': { description: 'OpenAPI 3 document' } } },
       },
@@ -16051,6 +16104,40 @@ export function openApiSpec(opts: { version: string; baseUrl: string; title: str
             stateSince: { type: 'integer', nullable: true, description: 'unix time in ms since the server is in its current state' },
             updatedAt: { type: 'integer', nullable: true, description: 'unix time in ms of the last poll' },
             maintenance: { type: 'boolean', description: 'a maintenance window is running' },
+          },
+        },
+        History: {
+          type: 'object',
+          properties: {
+            serverId: { type: 'integer' },
+            hours: { type: 'integer' },
+            points: { type: 'array', items: { type: 'object', properties: { ts: { type: 'integer' }, players: { type: 'integer' }, ping: { type: 'integer', nullable: true }, online: { type: 'boolean' } } } },
+          },
+        },
+        Events: {
+          type: 'object',
+          properties: {
+            serverId: { type: 'integer' },
+            hours: { type: 'integer' },
+            events: { type: 'array', items: { type: 'object', properties: { ts: { type: 'integer' }, type: { type: 'string', enum: ['up', 'down', 'peak'] }, players: { type: 'integer', nullable: true } } } },
+          },
+        },
+        PlayersNow: {
+          type: 'object',
+          properties: {
+            serverId: { type: 'integer' },
+            online: { type: 'boolean' },
+            count: { type: 'integer' },
+            players: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, since: { type: 'integer' } } } },
+          },
+        },
+        Community: {
+          type: 'object',
+          properties: {
+            days: { type: 'integer' },
+            playersNow: { type: 'integer' },
+            serversOnline: { type: 'integer' },
+            top: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, hours: { type: 'number' } } } },
           },
         },
         Status: {
@@ -16448,6 +16535,26 @@ export function registerOps({ app, admin, getBot, guildCount, version, versionNa
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/admin"
+  cat > "$APP_DIR/core-backend/src/admin/portableSettings.ts" << '__COREGSM_EOF__'
+/**
+ * The settings a person sets in the panel: they travel with the exported file and their changes are written to the
+ * history of the settings. Never a secret, never a counter or a timestamp of this panel. (No imports here: db.ts uses it.)
+ */
+export const PORTABLE_SETTINGS = [
+  'alerts_enabled', 'alerts_channel', 'alerts_system_channel', 'default_look', 'alerts_after_min', 'alerts_mention', 'alerts_smart_low', 'alerts_smart_ping', 'alerts_smart_full',
+  'digest_enabled', 'digest_channel', 'digest_weekday', 'digest_hour', 'digest_theme',
+  'brand_name', 'brand_color', 'brand_preset', 'default_theme', 'game_theme',
+  'news_channel_id', 'news_test_channel_id', 'embed_players_shown',
+  'poll_concurrency', 'poll_fail_threshold', 'poll_fail_n', 'poll_fail_m', 'poll_probe_veto', 'timezone',
+  'public_panel', 'registration_open', 'registration_mode', 'rules_text',
+  'backup_schedule', 'backup_keep',
+  'smtp_host', 'smtp_port', 'smtp_secure', 'smtp_user', 'smtp_from',
+] as const;
+
+const SET = new Set<string>(PORTABLE_SETTINGS);
+export const isHistoryKey = (key: string): boolean => SET.has(key);
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/admin"
   cat > "$APP_DIR/core-backend/src/admin/publicApi.ts" << '__COREGSM_EOF__'
 /**
  * The public read-only API, version 1. Every call (except the description) needs an API key (apiKeys.ts):
@@ -16455,6 +16562,10 @@ __COREGSM_EOF__
  *   GET /api/v1/status         totals: servers, how many are up, players
  *   GET /api/v1/servers        the servers (?game=, ?online=true|false)
  *   GET /api/v1/servers/:id    one server
+ *   GET /api/v1/servers/:id/history?hours=24     the curve of players and ping (up to 168 hours, at most 180 points)
+ *   GET /api/v1/servers/:id/events?hours=168     went down / came back / the peak, newest first
+ *   GET /api/v1/servers/:id/players              who is in the game now (names only while the panel is open to guests)
+ *   GET /api/v1/community?days=7                 the most active players of the period (only while the panel is open to guests)
  *   GET /api/v1/openapi.json   the OpenAPI 3 description (no key needed)
  *
  * Only public data: never the host and port used for polling. The display address is given only while the panel is
@@ -16546,6 +16657,80 @@ export function registerPublicApi(app: Express): void {
     res.json(apiServer(serialize(row), up.get(id) ?? null, publicPanel()));
   });
 
+  const serverId = (v: unknown): number => (/^\d+$/.test(String(v)) ? Number(v) : 0);
+  const exists = (id: number): boolean => !!id && !!db.prepare('SELECT 1 FROM servers WHERE id = ?').get(id);
+  const hoursOf = (v: unknown, def: number): number => Math.min(168, Math.max(1, Number(v ?? def) || def));
+
+  app.get('/api/v1/servers/:id/history', apiKeyAuth, (req, res) => {
+    const id = serverId(req.params.id);
+    if (!exists(id)) return void apiError(res, 404, 'not_found', 'No such server.');
+    const hours = hoursOf(req.query.hours, 24);
+    const since = Date.now() - hours * 3600_000;
+    const bucketMs = Math.max(30_000, Math.ceil((hours * 3600_000) / 180));
+    const points = db
+      .prepare(
+        `SELECT MIN(ts) AS ts, MAX(players) AS players, MIN(online) AS online,
+                CAST(ROUND(AVG(CASE WHEN online = 1 THEN ping END)) AS INTEGER) AS ping
+         FROM history WHERE server_id = ? AND ts > ? GROUP BY ts / CAST(? AS INTEGER) ORDER BY ts`,
+      )
+      .all(id, since, bucketMs) as { ts: number; players: number; online: number; ping: number | null }[];
+    res.set('Cache-Control', 'private, max-age=30');
+    res.json({ serverId: id, hours, points: points.map((p) => ({ ts: p.ts, players: p.players, ping: p.ping, online: !!p.online })) });
+  });
+
+  app.get('/api/v1/servers/:id/events', apiKeyAuth, (req, res) => {
+    const id = serverId(req.params.id);
+    if (!exists(id)) return void apiError(res, 404, 'not_found', 'No such server.');
+    const hours = hoursOf(req.query.hours, 168);
+    const since = Date.now() - hours * 3600_000;
+    const changes = db
+      .prepare(
+        `SELECT ts, online FROM (
+           SELECT ts, online, LAG(online) OVER (ORDER BY ts) AS prev FROM history WHERE server_id = ? AND ts > ?
+         ) WHERE prev IS NOT NULL AND prev <> online ORDER BY ts DESC LIMIT 100`,
+      )
+      .all(id, since) as { ts: number; online: number }[];
+    const events: { ts: number; type: 'up' | 'down' | 'peak'; players: number | null }[] = changes.map((e) => ({ ts: e.ts, type: e.online ? 'up' : 'down', players: null }));
+    const peak = db.prepare('SELECT players, ts FROM history WHERE server_id = ? AND ts > ? ORDER BY players DESC, ts DESC LIMIT 1').get(id, since) as { players: number; ts: number } | undefined;
+    if (peak && peak.players > 0) events.push({ ts: peak.ts, type: 'peak', players: peak.players });
+    events.sort((a, b) => b.ts - a.ts);
+    res.set('Cache-Control', 'private, max-age=30');
+    res.json({ serverId: id, hours, events });
+  });
+
+  app.get('/api/v1/servers/:id/players', apiKeyAuth, (req, res) => {
+    const id = serverId(req.params.id);
+    if (!exists(id)) return void apiError(res, 404, 'not_found', 'No such server.');
+    const st = db.prepare('SELECT online, players FROM status WHERE server_id = ?').get(id) as { online: number; players: number } | undefined;
+    const online = !!st?.online;
+    const names = publicPanel() && online ? (db.prepare('SELECT name, since FROM player_now WHERE server_id = ? ORDER BY since, name LIMIT 200').all(id) as { name: string; since: number }[]) : [];
+    res.set('Cache-Control', 'private, max-age=10');
+    res.json({ serverId: id, online, count: online ? st?.players ?? 0 : 0, players: names.map((p) => ({ name: p.name, since: p.since })) });
+  });
+
+  app.get('/api/v1/community', apiKeyAuth, (req, res) => {
+    const days = Math.min(30, Math.max(1, Number(req.query.days ?? 7) || 7));
+    const now = Date.now();
+    const since = now - days * 86400_000;
+    // names of players are shown only where the panel itself shows them to a guest
+    const top = publicPanel()
+      ? (db
+          .prepare(
+            `SELECT MIN(name) AS name, SUM(MIN(COALESCE(left_at, ?), ?) - MAX(joined_at, ?)) AS ms
+             FROM player_sessions WHERE COALESCE(left_at, ?) > ? GROUP BY ulower(name) HAVING ms > 0 ORDER BY ms DESC LIMIT 20`,
+          )
+          .all(now, now, since, now, since) as { name: string; ms: number }[])
+      : [];
+    const all = list();
+    res.set('Cache-Control', 'private, max-age=60');
+    res.json({
+      days,
+      playersNow: all.reduce((n, s) => n + (s.online ? s.players : 0), 0),
+      serversOnline: all.filter((s) => s.online).length,
+      top: top.map((t) => ({ name: t.name, hours: Math.round((t.ms / 3600_000) * 10) / 10 })),
+    });
+  });
+
   // everything else under /api/v1: one error format instead of the panel's 404
   app.use('/api/v1', (_req, res) => apiError(res, 404, 'not_found', 'No such endpoint. See /api/v1/openapi.json.'));
 }
@@ -16622,6 +16807,47 @@ export function s3Problem(t: Partial<S3Target>): string | null {
   if (!t.accessKey || !t.secretKey) return 'Нужны ключ доступа и секретный ключ';
   return null;
 }
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/admin"
+  cat > "$APP_DIR/core-backend/src/admin/settingsHistory.ts" << '__COREGSM_EOF__'
+/**
+ * The history of the settings a person sets, and a way back.
+ *
+ *   GET  /api/settings/history?limit=50    who changed which setting, from what to what (administrator)
+ *   POST /api/settings/history/:id/revert  puts the value the setting had before that change (administrator)
+ *
+ * Only the settings in portableSettings.ts are written here: no secrets, no counters. A revert is itself a change,
+ * so it appears in the history and can be reverted again.
+ */
+import express from 'express';
+import { admin, type AuthedRequest } from '../security/auth.js';
+import { db, setSetting } from '../db.js';
+import { param, wrap } from '../http.js';
+import { isHistoryKey } from './portableSettings.js';
+
+export const router = express.Router();
+
+interface Row { id: number; ts: number; actor: string | null; key: string; old_value: string | null; new_value: string | null }
+
+router.get('/api/settings/history', admin, (req, res) => {
+  const limit = Math.min(200, Math.max(1, Number(req.query.limit ?? 50) || 50));
+  const rows = db.prepare('SELECT id, ts, actor, key, old_value, new_value FROM settings_history ORDER BY id DESC LIMIT ?').all(limit) as Row[];
+  res.json(rows.map((r) => ({ id: r.id, ts: r.ts, actor: r.actor, key: r.key, from: r.old_value, to: r.new_value })));
+});
+
+router.post(
+  '/api/settings/history/:id/revert',
+  admin,
+  param('id'),
+  wrap((req: AuthedRequest, res) => {
+    const row = db.prepare('SELECT id, key, old_value FROM settings_history WHERE id = ?').get(Number(req.params.id)) as Pick<Row, 'id' | 'key' | 'old_value'> | undefined;
+    if (!row) return res.status(404).json({ error: 'Запись не найдена' });
+    if (!isHistoryKey(row.key)) return res.status(400).json({ error: 'Эту настройку вернуть нельзя' });
+    // empty = the setting did not exist before the change: it is removed again
+    setSetting(row.key, row.old_value);
+    res.json({ ok: true, key: row.key, value: row.old_value });
+  }),
+);
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/admin"
   cat > "$APP_DIR/core-backend/src/admin/site.ts" << '__COREGSM_EOF__'
@@ -22326,6 +22552,9 @@ export const APP_VERSION_NAME = process.env.APP_VERSION_NAME ?? '';
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/db.ts" << '__COREGSM_EOF__'
+import { currentActor } from './actor.js';
+import { isHistoryKey } from './admin/portableSettings.js';
+import { bus } from './events.js';
 import Database from 'better-sqlite3';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -22594,8 +22823,26 @@ export function getSetting(key: string): string | null {
   }
 }
 
+const HISTORY_KEEP = 2000;
+/** the history of the settings a person sets: who, which, from what to what (the first 400 signs of a value) */
+function recordSettingChange(key: string, next: string | null): void {
+  if (!isHistoryKey(key)) return;
+  try {
+    const prev = (db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined)?.value ?? null;
+    const after = next === '' ? null : next;
+    if (prev === after) return;
+    const cut = (v: string | null) => (v == null ? null : v.slice(0, 400));
+    db.prepare('INSERT INTO settings_history (ts, actor, key, old_value, new_value) VALUES (?, ?, ?, ?, ?)').run(Date.now(), currentActor(), key, cut(prev), cut(after));
+    db.prepare('DELETE FROM settings_history WHERE id <= (SELECT MAX(id) - ? FROM settings_history)').run(HISTORY_KEEP);
+    bus.emit('settings.changed', { key, actor: currentActor() });
+  } catch (e) {
+    log.error('history of the settings failed', (e as Error).message);
+  }
+}
+
 /** value === null (or empty string) deletes the setting; secret keys are stored encrypted */
 export function setSetting(key: string, value: string | null): void {
+  recordSettingChange(key, value);
   if (value === null || value === '') db.prepare('DELETE FROM settings WHERE key = ?').run(key);
   else {
     warnedSecrets.delete(key);
@@ -23536,6 +23783,8 @@ export const ERRORS = {
   rate_limited: 'Слишком много запросов. Подождите минуту.',
   rate_limited_later: 'Слишком много запросов. Попробуйте позже.',
   too_many_connections: 'Слишком много открытых подключений',
+  history_entry_not_found: 'Запись не найдена',
+  history_not_revertible: 'Эту настройку вернуть нельзя',
   too_many_attempts: 'Слишком много попыток. Подождите 10 минут.',
   bad_data: 'Неверные данные',
   bad_data_lower: 'неверные данные',
@@ -23885,6 +24134,54 @@ export const errorCodes: RequestHandler = (_req, res, next) => {
   };
   next();
 };
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src"
+  cat > "$APP_DIR/core-backend/src/events.ts" << '__COREGSM_EOF__'
+/**
+ * The bus of events inside the backend: something happened, whoever is interested hears it. Nobody has to know who
+ * else listens, so the live updates (live.ts), and later the alerts and the webhooks, hang on one place instead of on
+ * timers and direct calls. A listener that throws is logged and never stops the others or the thing that happened.
+ */
+import { EventEmitter } from 'node:events';
+import { log } from './logger.js';
+
+export interface BusEvents {
+  /** a server has been polled (the state may be the same as before) */
+  'server.polled': { id: number; online: boolean; players: number };
+  /** a server went online or offline (not for the first poll of a new server) */
+  'server.state': { id: number; online: boolean; previous: boolean; at: number };
+  /** a setting of the panel was changed (the key, not the value) */
+  'settings.changed': { key: string; actor: string | null };
+}
+export type BusName = keyof BusEvents;
+
+class Bus {
+  private readonly em = new EventEmitter();
+  constructor() {
+    this.em.setMaxListeners(50);
+  }
+
+  on<K extends BusName>(name: K, fn: (e: BusEvents[K]) => void): () => void {
+    this.em.on(name, fn as (...a: unknown[]) => void);
+    return () => this.em.off(name, fn as (...a: unknown[]) => void);
+  }
+
+  emit<K extends BusName>(name: K, e: BusEvents[K]): void {
+    for (const fn of this.em.listeners(name) as ((e: BusEvents[K]) => void)[]) {
+      try {
+        fn(e);
+      } catch (err) {
+        log.error(`listener of «${name}» failed`, (err as Error).message);
+      }
+    }
+  }
+
+  listenerCount(name: BusName): number {
+    return this.em.listenerCount(name);
+  }
+}
+
+export const bus = new Bus();
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
   cat > "$APP_DIR/core-backend/src/gamedig.d.ts" << '__COREGSM_EOF__'
@@ -29818,6 +30115,9 @@ import { startPoller, stopPoller } from './monitoring/gsm.js';
 import { registerHealth } from './monitoring/health.js';
 import { startDbMaintenance } from './admin/dbMaintenance.js';
 import { registerMetrics } from './monitoring/metrics.js';
+import { registerRum } from './monitoring/rum.js';
+import { actorMiddleware } from './actor.js';
+import { router as settingsHistoryRouter } from './admin/settingsHistory.js';
 import { wrap } from './http.js';
 import { registerMaintenance } from './maintenance.js';
 import { registerGameNews } from './gamenews/gameNews.js';
@@ -29912,12 +30212,15 @@ app.use('/api', csrfGuard);
 app.use('/api/u', windowLimiter(120, 60_000));
 app.use('/internal/bot-guilds', express.json({ limit: '2mb' }));
 app.use('/api/config/import', express.json({ limit: '2mb' }));
+app.use(actorMiddleware);
 app.use(express.json({ limit: '50kb' }));
 // Express 5 leaves req.body undefined when a request has no body (4 gave {}): the handlers parse it with zod objects
 app.use((req, _res, next) => { if (req.body === undefined) req.body = {}; next(); });
 installAudit(app);
 
 registerMetrics(app);
+registerRum(app);
+app.use(settingsHistoryRouter);
 
 app.get('/api/health', (_req, res) => {
   res.json({ ok: true });
@@ -30091,6 +30394,7 @@ __COREGSM_EOF__
  * Only a «something changed» signal travels, never data, so what a visitor may see is still decided by /api/servers.
  */
 import type { Request, Response } from 'express';
+import { bus } from './events.js';
 import { log } from './logger.js';
 import { onShutdown } from './shutdown.js';
 
@@ -30141,6 +30445,9 @@ export function liveHandler(req: Request, res: Response): void {
   beat.unref();
   req.on('close', () => { clearInterval(beat); clients.delete(res); });
 }
+
+// the panels are told by the bus: a poll of any server is a reason to reload the list
+bus.on('server.polled', () => emitLive());
 
 // a long connection must not hold the server open when it is stopped
 onShutdown('live connections', () => {
@@ -30801,6 +31108,36 @@ CREATE INDEX IF NOT EXISTS idx_game_commands_server ON game_commands(server_id, 
     // a ban holds on all servers (all) or only on the one where it was given (server)
     up: (db) => db.exec("ALTER TABLE game_bans ADD COLUMN scope TEXT NOT NULL DEFAULT 'all'"),
   },
+  {
+    version: 28,
+    name: 'settings_history',
+    // who changed which setting, from what to what (settings a person sets only; secrets and counters are not written)
+    up: (db) =>
+      db.exec(`
+CREATE TABLE IF NOT EXISTS settings_history (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts INTEGER NOT NULL,
+  actor TEXT,
+  key TEXT NOT NULL,
+  old_value TEXT,
+  new_value TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_settings_history_ts ON settings_history(ts DESC);`),
+  },
+  {
+    version: 29,
+    name: 'rum_samples',
+    // the speed the visitors really see: one value of one metric of one page, nothing about the person
+    up: (db) =>
+      db.exec(`
+CREATE TABLE IF NOT EXISTS rum_samples (
+  ts INTEGER NOT NULL,
+  route TEXT NOT NULL,
+  metric TEXT NOT NULL,
+  value REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_rum_samples ON rum_samples(route, metric, ts);`),
+  },
 ];
 
 export const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;
@@ -31306,7 +31643,7 @@ export function countryLabel(code: string): string {
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/monitoring"
   cat > "$APP_DIR/core-backend/src/monitoring/gsm.ts" << '__COREGSM_EOF__'
-import { emitLive } from '../live.js';
+import { bus } from '../events.js';
 import { trackAlerts } from '../alerts/alerts.js';
 import { trackSmart } from '../alerts/smartAlerts.js';
 import { onPollResult } from '../community/subscriptions.js';
@@ -31526,9 +31863,14 @@ export async function refreshServer(s: ServerRow, opts: { debounce?: boolean } =
   // the server may have been deleted while the query was running
   const still = db.prepare('SELECT 1 FROM servers WHERE id = ?').get(s.id);
   if (!still) return null;
+  const before = (db.prepare('SELECT online FROM status WHERE server_id = ?').get(s.id) as { online: number } | undefined)?.online;
   const out = applyPollResult(s, r, ts, opts);
-  // the open panels reload their list at once (see live.ts)
-  emitLive();
+  const after = (db.prepare('SELECT online, players FROM status WHERE server_id = ?').get(s.id) as { online: number; players: number } | undefined);
+  // who is interested hears it from the bus: the open panels (live.ts), and later the alerts and the webhooks
+  if (after) {
+    bus.emit('server.polled', { id: s.id, online: !!after.online, players: after.players ?? 0 });
+    if (before != null && !!before !== !!after.online) bus.emit('server.state', { id: s.id, online: !!after.online, previous: !!before, at: ts });
+  }
   return out;
 }
 
@@ -33230,6 +33572,122 @@ export function nextRulesVersion(latest: RulesVersion | null, text: string): num
 
 /** a player has to agree (again) when there are rules and the agreed version is not the current one */
 export const needsAgreement = (current: number | null, agreed: number | null): boolean => current !== null && agreed !== current;
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/monitoring"
+  cat > "$APP_DIR/core-backend/src/monitoring/rum.ts" << '__COREGSM_EOF__'
+/**
+ * The speed the visitors really see (real user monitoring), without anything about the person: the page sends the
+ * numbers of its own load once (LCP, INP, CLS, TTFB, FCP) when it is closed or hidden; here they are kept as plain
+ * samples for 14 days and summarised per page for the administrator.
+ *
+ *   POST /api/rum          the page's numbers; public, tiny, rate limited; 204 and nothing else
+ *   GET  /api/rum/summary  per page and metric: how many samples, the 75th percentile, the share that is good (administrator)
+ *
+ * No address, no user agent, no account is stored. The setting rum_enabled = 0 turns the collecting off.
+ */
+import { percentile, rating, RUM_LIMITS, RUM_METRICS, type RumMetric } from './rumLogic.js';
+import type { Express } from 'express';
+import { z } from 'zod';
+import { admin } from '../security/auth.js';
+import { windowLimiter } from '../security/security.js';
+import { db, getSetting, setSetting } from '../db.js';
+
+const KEEP_DAYS = 14;
+/** the pages the panel has; anything else is not stored */
+export const RUM_ROUTES = ['servers', 'server', 'news', 'status', 'community', 'profile', 'player', 'login', 'register', 'admin', 'other'] as const;
+export { RUM_LIMITS, RUM_METRICS };
+type Metric = RumMetric;
+
+const bodySchema = z.object({
+  route: z.enum(RUM_ROUTES),
+  m: z.object({
+    LCP: z.number().min(0).max(120_000).optional(),
+    INP: z.number().min(0).max(60_000).optional(),
+    CLS: z.number().min(0).max(10).optional(),
+    TTFB: z.number().min(0).max(60_000).optional(),
+    FCP: z.number().min(0).max(120_000).optional(),
+  }),
+});
+
+export const rumEnabled = (): boolean => getSetting('rum_enabled') !== '0';
+
+export function summarize(days: number, now = Date.now()) {
+  const since = now - days * 86400_000;
+  const rows = db.prepare('SELECT route, metric, value FROM rum_samples WHERE ts > ? ORDER BY route, metric, value').all(since) as { route: string; metric: Metric; value: number }[];
+  const by = new Map<string, number[]>();
+  for (const r of rows) {
+    const k = `${r.route}|${r.metric}`;
+    const a = by.get(k);
+    if (a) a.push(r.value);
+    else by.set(k, [r.value]);
+  }
+  const out: { route: string; metric: Metric; n: number; p75: number; good: number; rating: 'good' | 'needs' | 'poor' }[] = [];
+  for (const [k, values] of by) {
+    const [route, metric] = k.split('|') as [string, Metric];
+    const p75 = percentile(values, 75) as number;
+    out.push({ route, metric, n: values.length, p75, good: Math.round((values.filter((v) => rating(metric, v) === 'good').length / values.length) * 100), rating: rating(metric, p75) });
+  }
+  return out;
+}
+
+let lastPrune = 0;
+function prune(now: number): void {
+  if (now - lastPrune < 3600_000) return;
+  lastPrune = now;
+  db.prepare('DELETE FROM rum_samples WHERE ts < ?').run(now - KEEP_DAYS * 86400_000);
+}
+
+export function registerRum(app: Express): void {
+  app.post('/api/rum', windowLimiter(30, 60_000), (req, res) => {
+    // nothing is said back: a beacon has nobody to read the answer
+    res.status(204).end();
+    if (!rumEnabled()) return;
+    const b = bodySchema.safeParse(req.body);
+    if (!b.success) return;
+    const now = Date.now();
+    prune(now);
+    const ins = db.prepare('INSERT INTO rum_samples (ts, route, metric, value) VALUES (?, ?, ?, ?)');
+    db.transaction(() => {
+      for (const metric of RUM_METRICS) {
+        const v = b.data.m[metric];
+        if (typeof v === 'number' && Number.isFinite(v)) ins.run(now, b.data.route, metric, v);
+      }
+    })();
+  });
+
+  app.put('/api/rum/settings', admin, (req, res) => {
+    const b = z.object({ enabled: z.boolean() }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'Некорректный запрос' });
+    setSetting('rum_enabled', b.data.enabled ? '1' : '0');
+    res.json({ enabled: rumEnabled() });
+  });
+
+  app.get('/api/rum/summary', admin, (req, res) => {
+    const days = Math.min(14, Math.max(1, Number(req.query.days ?? 7) || 7));
+    res.json({ enabled: rumEnabled(), days, limits: RUM_LIMITS, rows: summarize(days) });
+  });
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/monitoring"
+  cat > "$APP_DIR/core-backend/src/monitoring/rumLogic.ts" << '__COREGSM_EOF__'
+/** The arithmetic of the speed of the pages (no imports: tested alone). */
+export const RUM_METRICS = ['LCP', 'INP', 'CLS', 'TTFB', 'FCP'] as const;
+export type RumMetric = (typeof RUM_METRICS)[number];
+
+/** the thresholds of web.dev: good up to the first number, poor above the second */
+export const RUM_LIMITS: Record<RumMetric, [number, number]> = { LCP: [2500, 4000], INP: [200, 500], CLS: [0.1, 0.25], TTFB: [800, 1800], FCP: [1800, 3000] };
+
+/** nearest-rank percentile of a sorted list */
+export function percentile(sorted: number[], p: number): number | null {
+  if (!sorted.length) return null;
+  const i = Math.min(sorted.length - 1, Math.max(0, Math.ceil((p / 100) * sorted.length) - 1));
+  return sorted[i];
+}
+
+export function rating(metric: RumMetric, v: number): 'good' | 'needs' | 'poor' {
+  const [good, poor] = RUM_LIMITS[metric];
+  return v <= good ? 'good' : v <= poor ? 'needs' : 'poor';
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/monitoring"
   cat > "$APP_DIR/core-backend/src/monitoring/serverData.ts" << '__COREGSM_EOF__'
@@ -37462,6 +37920,7 @@ import { z } from 'zod';
 import { auth, type AuthedRequest } from '../security/auth.js';
 import { clearSessionCookie, windowLimiter } from '../security/security.js';
 import { db } from '../db.js';
+import { retentionDays } from '../monitoring/gsm.js';
 import { hasTable } from '../schema.js';
 import { wrap } from '../http.js';
 import { removeAvatar } from '../images/avatars.js';
@@ -37495,6 +37954,29 @@ export function exportAccount(id: number): Record<string, unknown> {
   }
   return out;
 }
+
+/** what the panel keeps about the account, in kinds, with how many and for how long (the page «what the panel knows about you») */
+export function dataSummary(id: number): { key: string; count: number; days: number | null }[] {
+  const n = (sql: string, ...a: unknown[]) => (db.prepare(sql).get(...a) as { c: number }).c;
+  const keep = retentionDays();
+  const nick = (db.prepare('SELECT game_nick FROM user_player WHERE user_id = ?').get(id) as { game_nick: string } | undefined)?.game_nick;
+  const out: { key: string; count: number; days: number | null }[] = [
+    { key: 'account', count: 1, days: null },
+    { key: 'preferences', count: n('SELECT COUNT(*) AS c FROM user_prefs WHERE user_id = ?', id), days: null },
+    { key: 'player', count: n('SELECT COUNT(*) AS c FROM user_player WHERE user_id = ?', id), days: null },
+    { key: 'favourites', count: n('SELECT COUNT(*) AS c FROM favorites WHERE user_id = ?', id), days: null },
+    { key: 'devices', count: n('SELECT COUNT(*) AS c FROM sessions WHERE user_id = ?', id), days: 8 },
+    { key: 'journal', count: n('SELECT COUNT(*) AS c FROM account_events WHERE user_id = ?', id), days: keep.accountEvents },
+  ];
+  if (hasTable(db, 'player_follows')) out.push({ key: 'follows', count: n('SELECT COUNT(*) AS c FROM player_follows WHERE user_id = ?', id), days: null });
+  if (nick) out.push({ key: 'sessions', count: n('SELECT COUNT(*) AS c FROM player_sessions WHERE ulower(name) = ulower(?)', nick), days: keep.playerSessions });
+  return out;
+}
+
+router.get('/api/me/data-summary', auth, (req: AuthedRequest, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.json(dataSummary(req.user!.id));
+});
 
 router.get('/api/me/export', auth, windowLimiter(10, 3600_000), (req: AuthedRequest, res) => {
   const name = String(req.user!.username ?? 'account').replace(/[^\w.-]+/g, '_').slice(0, 40) || 'account';
@@ -40151,6 +40633,7 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/security"
   cat > "$APP_DIR/core-backend/src/security/auth.ts" << '__COREGSM_EOF__'
 /** Sessions, roles and the access middleware; login rate limits and lockout. */
+import { setActor } from '../actor.js';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import crypto from 'node:crypto';
@@ -40214,7 +40697,10 @@ export function staffIdleMs(): number {
 /** Bearer header first (API clients, the bot), then the HttpOnly session cookie of the web panel. */
 export function loadUser(req: Request) {
   const h = req.headers.authorization ?? '';
-  return userFromToken(h.startsWith('Bearer ') ? h.slice(7) : '') ?? userFromToken(readSessionCookie(req));
+  const u = userFromToken(h.startsWith('Bearer ') ? h.slice(7) : '') ?? userFromToken(readSessionCookie(req));
+  // the history of the settings names the person who changed one
+  if (u) setActor(String((u as { username?: unknown }).username ?? '') || null);
+  return u;
 }
 
 /** Starts a session and returns the signed token for it. */
@@ -40995,6 +41481,8 @@ export function clearSessionCookie(req: Request, res: Response): void {
 export const csrfGuard: RequestHandler = (req, res, next) => {
   if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return next();
   if (!req.headers.cookie || !readSessionCookie(req)) return next();
+  // the beacon of the speed of the page cannot add a header (sendBeacon), and it changes nothing of the person's
+  if (req.path === '/api/rum') return next();
   if (req.headers.authorization || req.headers['x-coregsm']) return next();
   res.status(403).json({ error: 'Запрос отклонён: не хватает заголовка X-CoreGSM' });
 };
@@ -127998,6 +128486,138 @@ export default function RulesHistoryCard({ rulesKey, onRestore }: { rulesKey: st
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/RumCard.tsx" << '__COREGSM_EOF__'
+import { useCallback, useEffect, useState } from 'react';
+import { api } from '../api';
+import { t, type TKey, useI18n } from '../i18n';
+import { ErrorLine, Section, Switch, errText } from '../ui';
+
+type Rating = 'good' | 'needs' | 'poor';
+interface Row { route: string; metric: 'LCP' | 'INP' | 'CLS' | 'TTFB' | 'FCP'; n: number; p75: number; good: number; rating: Rating }
+interface Summary { enabled: boolean; days: number; rows: Row[] }
+
+const METRICS: Row['metric'][] = ['LCP', 'INP', 'CLS', 'TTFB'];
+const show = (metric: Row['metric'], v: number): string => (metric === 'CLS' ? v.toFixed(2) : v >= 1000 ? `${(v / 1000).toFixed(1)} ${t('rum.s')}` : `${Math.round(v)} ${t('rum.ms')}`);
+
+/** «Скорость у посетителей»: the 75th percentile of what real visitors saw, per page and metric, coloured by web.dev limits */
+export default function RumCard() {
+  useI18n();
+  const [s, setS] = useState<Summary | null>(null);
+  const [error, setError] = useState('');
+  const load = useCallback(() => api<Summary>('/rum/summary?days=7').then((r) => { setS(r); setError(''); }).catch((e) => setError(errText(e))), []);
+  useEffect(() => { void load(); }, [load]);
+  const toggle = async (enabled: boolean) => {
+    try {
+      await api('/rum/settings', 'PUT', { enabled });
+      await load();
+    } catch (e) {
+      setError(errText(e));
+    }
+  };
+  const routes = s ? [...new Set(s.rows.map((r) => r.route))].sort() : [];
+  const cell = (route: string, metric: Row['metric']) => s?.rows.find((r) => r.route === route && r.metric === metric);
+  return (
+    <Section title={t('rum.title')} description={t('rum.desc')} actions={s && <label className="flex items-center gap-2 text-sm font-bold"><Switch checked={s.enabled} onChange={(on) => void toggle(on)} />{t('rum.collect')}</label>}>
+      <ErrorLine text={error} />
+      {s && s.rows.length === 0 && <p className="font-semibold text-mute">{s.enabled ? t('rum.none') : t('rum.off')}</p>}
+      {s && s.rows.length > 0 && (
+        <div className="overflow-x-auto">
+          <table className="rum-table w-full text-left">
+            <thead>
+              <tr><th scope="col">{t('rum.page')}</th>{METRICS.map((m) => <th key={m} scope="col">{m}</th>)}<th scope="col">{t('rum.visits')}</th></tr>
+            </thead>
+            <tbody>
+              {routes.map((r) => {
+                const visits = Math.max(...METRICS.map((m) => cell(r, m)?.n ?? 0));
+                return (
+                  <tr key={r}>
+                    <th scope="row">{t(`rum.r.${r}` as TKey)}</th>
+                    {METRICS.map((m) => {
+                      const c = cell(r, m);
+                      return <td key={m}>{c ? <span className={`rum-v is-${c.rating}`} title={t('rum.good', { n: c.good })}>{show(m, c.p75)}</span> : '–'}</td>;
+                    })}
+                    <td className="tabular-nums text-mute">{visits}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <p className="text-sm font-semibold text-mute">{t('rum.note', { d: s?.days ?? 7 })}</p>
+    </Section>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/SettingsHistoryCard.tsx" << '__COREGSM_EOF__'
+import { useCallback, useEffect, useState } from 'react';
+import { api } from '../api';
+import { confirmDialog } from '../confirm';
+import { t, type TKey, useI18n } from '../i18n';
+import { Button, ErrorLine, Section, ago, fmtDateTime, toast, errText } from '../ui';
+
+interface Row { id: number; ts: number; actor: string | null; key: string; from: string | null; to: string | null }
+
+/** the name of a setting in the words of the panel (the key itself when there is no name for it) */
+const keyName = (key: string): string => {
+  const id = `hist.key.${key}` as TKey;
+  const v = t(id);
+  return v === id ? key : v;
+};
+const valueText = (v: string | null): string => (v === null || v === '' ? t('hist.empty') : v === '1' ? t('hist.on') : v === '0' ? t('hist.off') : v);
+
+/** «История настроек»: who changed which setting, from what to what, and a button to put it back */
+export default function SettingsHistoryCard() {
+  useI18n();
+  const [rows, setRows] = useState<Row[] | null>(null);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState<number | null>(null);
+  const load = useCallback(() => api<Row[]>('/settings/history?limit=30').then((r) => { setRows(r); setError(''); }).catch((e) => setError(errText(e))), []);
+  useEffect(() => { void load(); }, [load]);
+
+  const revert = async (r: Row) => {
+    if (!(await confirmDialog({ title: t('hist.revertQ', { name: keyName(r.key) }), text: t('hist.revertText', { value: valueText(r.from) }), confirmLabel: t('hist.revert') }))) return;
+    setBusy(r.id);
+    try {
+      await api(`/settings/history/${r.id}/revert`, 'POST');
+      toast(t('hist.reverted'));
+      await load();
+    } catch (e) {
+      toast(errText(e), 'err');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <Section title={t('hist.title')} description={t('hist.desc')}>
+      <ErrorLine text={error} />
+      {rows === null && !error && <div className="skeleton h-24 rounded-2xl" aria-busy="true" />}
+      {rows && rows.length === 0 && <p className="font-semibold text-mute">{t('hist.none')}</p>}
+      {rows && rows.length > 0 && (
+        <ul className="divide-y divide-line">
+          {rows.map((r) => (
+            <li key={r.id} className="hist-row flex flex-wrap items-center gap-x-3 gap-y-1 py-2.5">
+              <span className="min-w-0 flex-1">
+                <span className="block font-extrabold">{keyName(r.key)}</span>
+                <span className="hist-change block text-sm font-semibold text-mute">
+                  <span className="hist-from">{valueText(r.from)}</span>
+                  <span aria-hidden> → </span>
+                  <span className="hist-to">{valueText(r.to)}</span>
+                </span>
+              </span>
+              <span className="text-sm font-semibold text-mute" title={fmtDateTime(r.ts)}>{r.actor ?? t('hist.system')} · {ago(r.ts)}</span>
+              <Button type="button" variant="soft" size="sm" loading={busy === r.id} onClick={() => void revert(r)}>{t('hist.revert')}</Button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Section>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
   cat > "$APP_DIR/core-frontend/src/components/ShellExtras.tsx" << '__COREGSM_EOF__'
 /**
  * The extras of the app shell: the progress strip under the header, the live title and favicon, the footer, the
@@ -133632,10 +134252,10 @@ export function NewsUnreadDot({ className = '' }: { className?: string }) {
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/profile"
   cat > "$APP_DIR/core-frontend/src/components/profile/AccountDataCard.tsx" << '__COREGSM_EOF__'
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { api, getToken } from '../../api';
 import { useAuth } from '../../auth';
-import { t } from '../../i18n';
+import { t, type TKey } from '../../i18n';
 import { Button, ErrorLine, Section, TextField, toast, errText } from '../../ui';
 
 /** «Ваши данные»: download everything the panel keeps about the account, or delete the account for good */
@@ -133645,6 +134265,10 @@ export function AccountDataCard() {
   const [asking, setAsking] = useState(false);
   const [secret, setSecret] = useState('');
   const [error, setError] = useState('');
+  const [kinds, setKinds] = useState<{ key: string; count: number; days: number | null }[] | null>(null);
+  useEffect(() => {
+    if (me) api<{ key: string; count: number; days: number | null }[]>('/me/data-summary').then(setKinds).catch(() => setKinds(null));
+  }, [me]);
   if (!me) return null;
 
   const download = async () => {
@@ -133686,6 +134310,17 @@ export function AccountDataCard() {
 
   return (
     <Section title={t('pf.data.title')} description={t('pf.data.desc')}>
+      {kinds && (
+        <ul className="pf-know" aria-label={t('pf.know.title')}>
+          {kinds.map((k) => (
+            <li key={k.key}>
+              <span className="pf-know-k">{t(`pf.know.${k.key}` as TKey)}</span>
+              <b className="tabular-nums">{k.count}</b>
+              <span className="pf-know-d">{k.days ? t('pf.know.days', { n: k.days }) : t('pf.know.always')}</span>
+            </li>
+          ))}
+        </ul>
+      )}
       <div className="flex flex-wrap items-center gap-3">
         <Button type="button" variant="soft" loading={busy && !asking} onClick={() => void download()}>{t('pf.data.export')}</Button>
         {!asking && <button type="button" className="btn-link-danger" onClick={() => { setAsking(true); setError(''); }}>{t('pf.data.delete')}</button>}
@@ -146397,6 +147032,89 @@ const en: Record<keyof typeof ru, string> = {
   'net.retry': 'Check the connection',
   'd2.an.noDaily': 'No players in this period. The chart appears when the server sees its first players.',
   'd2.an.noSessions': 'No sessions yet: the length of the visits is counted from the players who have left the game.',
+  'hist.key.alerts_enabled': "Alerts about outages",
+  'hist.key.alerts_channel': "Alerts channel",
+  'hist.key.alerts_system_channel': "Service channel",
+  'hist.key.default_look': "Default look",
+  'hist.key.alerts_after_min': "Count a server as down after (min)",
+  'hist.key.alerts_mention': "Who to mention on an outage",
+  'hist.key.alerts_smart_low': "Smart: few players",
+  'hist.key.alerts_smart_ping': "Smart: ping grew",
+  'hist.key.alerts_smart_full': "Smart: server almost full",
+  'hist.key.digest_enabled': "Week in review",
+  'hist.key.digest_channel': "Week-in-review channel",
+  'hist.key.digest_weekday': "Day of the week in review",
+  'hist.key.digest_hour': "Hour of the week in review",
+  'hist.key.digest_theme': "Theme of the review picture",
+  'hist.key.brand_name': "Community name",
+  'hist.key.brand_color': "Community colour",
+  'hist.key.brand_preset': "Look preset",
+  'hist.key.default_theme': "Theme for visitors",
+  'hist.key.game_theme': "Game theme",
+  'hist.key.news_channel_id': "News channel",
+  'hist.key.news_test_channel_id': "News test channel",
+  'hist.key.embed_players_shown': "How many players to show",
+  'hist.key.poll_concurrency': "Poll: servers at once",
+  'hist.key.poll_fail_threshold': "Poll: failures in a row before an outage",
+  'hist.key.poll_fail_n': "The «N of M» rule: N",
+  'hist.key.poll_fail_m': "The «N of M» rule: M",
+  'hist.key.poll_probe_veto': "Probes can veto an outage",
+  'hist.key.timezone': "Time zone",
+  'hist.key.public_panel': "Panel open to guests",
+  'hist.key.registration_open': "Registration open",
+  'hist.key.registration_mode': "Registration mode",
+  'hist.key.rules_text': "Rules",
+  'hist.key.backup_schedule': "Backup schedule",
+  'hist.key.backup_keep': "How many backups to keep",
+  'hist.key.smtp_host': "Mail: host",
+  'hist.key.smtp_port': "Mail: port",
+  'hist.key.smtp_secure': "Mail: secure connection",
+  'hist.key.smtp_user': "Mail: user",
+  'hist.key.smtp_from': "Mail: sender address",
+  'hist.title': 'History of the settings',
+  'hist.desc': 'Who changed what in the settings of the panel: from what to what. Any change can be put back with one button; the return itself goes into the history too. Passwords, tokens and keys are not written here.',
+  'hist.none': 'Nothing has been changed yet.',
+  'hist.empty': 'empty',
+  'hist.on': 'on',
+  'hist.off': 'off',
+  'hist.system': 'the panel',
+  'hist.revert': 'Put back',
+  'hist.revertQ': 'Put back «{name}»?',
+  'hist.revertText': 'The setting becomes what it was before this change: {value}.',
+  'hist.reverted': 'The setting is put back',
+  'rum.title': 'Speed for the visitors',
+  'rum.desc': 'How fast the panel really opens: the 75th percentile of the real visits of the week. Green: good, yellow: could be better, red: slow (the limits of web.dev). Nothing about the person is stored.',
+  'rum.collect': 'Collect',
+  'rum.none': 'No data yet: it appears after the first visits.',
+  'rum.off': 'Collecting is off.',
+  'rum.page': 'Page',
+  'rum.visits': 'Visits',
+  'rum.good': 'Good for {n}% of the visits',
+  'rum.s': 's',
+  'rum.ms': 'ms',
+  'rum.note': 'LCP: when the main thing of the page appeared (good up to 2.5 s). INP: the answer to a tap (up to 200 ms). CLS: does the page jump while loading (up to 0.1). TTFB: the answer of the server (up to 0.8 s). For {d} days.',
+  'rum.r.servers': 'Servers',
+  'rum.r.server': 'Server page',
+  'rum.r.news': 'News',
+  'rum.r.status': 'Status',
+  'rum.r.community': 'Community',
+  'rum.r.profile': 'Profile',
+  'rum.r.player': 'Player',
+  'rum.r.login': 'Sign in',
+  'rum.r.register': 'Registration',
+  'rum.r.admin': 'Admin',
+  'rum.r.other': 'Other',
+  'pf.know.title': 'What the panel knows about you',
+  'pf.know.account': 'Account (name, role, e-mail)',
+  'pf.know.preferences': 'Preferences (language, time zone)',
+  'pf.know.player': 'Game profile',
+  'pf.know.favourites': 'Favourite servers',
+  'pf.know.devices': 'Sign-ins from devices',
+  'pf.know.journal': 'Journal of sign-ins and actions',
+  'pf.know.follows': 'Followed players',
+  'pf.know.sessions': 'Game sessions',
+  'pf.know.days': 'kept for {n} days',
+  'pf.know.always': 'as long as the account exists',
   'srv.pl.copied': 'Nickname copied',
   'srv.pl.noMatch': 'Nobody found for "{q}"',
   'srv.pl.noMatchText': 'Check the spelling or clear the search.',
@@ -150355,6 +151073,8 @@ const errorsEn: Record<string, string> = {
   rate_limited: 'Too many requests. Wait a minute.',
   rate_limited_later: 'Too many requests. Try again later.',
   too_many_connections: 'Too many open connections',
+  history_entry_not_found: 'The entry was not found',
+  history_not_revertible: 'This setting cannot be put back',
   too_many_attempts: 'Too many attempts. Wait 10 minutes.',
   bad_data: 'Invalid data',
   bad_data_lower: 'invalid data',
@@ -151361,6 +152081,89 @@ const ru = {
   'net.retry': 'Проверить связь',
   'd2.an.noDaily': 'За этот период игроков не было. График появится, когда сервер увидит первых игроков.',
   'd2.an.noSessions': 'Сессий пока нет: длительность визитов считается по тем, кто уже вышел из игры.',
+  'hist.key.alerts_enabled': 'Оповещения о сбоях',
+  'hist.key.alerts_channel': 'Канал оповещений',
+  'hist.key.alerts_system_channel': 'Служебный канал',
+  'hist.key.default_look': 'Оформление по умолчанию',
+  'hist.key.alerts_after_min': 'Считать сервер упавшим через (мин)',
+  'hist.key.alerts_mention': 'Кого упоминать при падении',
+  'hist.key.alerts_smart_low': 'Умное: мало игроков',
+  'hist.key.alerts_smart_ping': 'Умное: вырос пинг',
+  'hist.key.alerts_smart_full': 'Умное: сервер почти заполнен',
+  'hist.key.digest_enabled': 'Итоги недели',
+  'hist.key.digest_channel': 'Канал итогов недели',
+  'hist.key.digest_weekday': 'День итогов недели',
+  'hist.key.digest_hour': 'Час итогов недели',
+  'hist.key.digest_theme': 'Тема картинки итогов',
+  'hist.key.brand_name': 'Название сообщества',
+  'hist.key.brand_color': 'Цвет сообщества',
+  'hist.key.brand_preset': 'Тема оформления',
+  'hist.key.default_theme': 'Тема для посетителей',
+  'hist.key.game_theme': 'Тема игры',
+  'hist.key.news_channel_id': 'Канал новостей',
+  'hist.key.news_test_channel_id': 'Тестовый канал новостей',
+  'hist.key.embed_players_shown': 'Сколько игроков показывать',
+  'hist.key.poll_concurrency': 'Опрос: одновременно серверов',
+  'hist.key.poll_fail_threshold': 'Опрос: неудачных подряд до сбоя',
+  'hist.key.poll_fail_n': 'Правило «N из M»: N',
+  'hist.key.poll_fail_m': 'Правило «N из M»: M',
+  'hist.key.poll_probe_veto': 'Точки проверки могут отменить сбой',
+  'hist.key.timezone': 'Часовой пояс',
+  'hist.key.public_panel': 'Панель открыта для гостей',
+  'hist.key.registration_open': 'Регистрация открыта',
+  'hist.key.registration_mode': 'Режим регистрации',
+  'hist.key.rules_text': 'Правила',
+  'hist.key.backup_schedule': 'Расписание копий',
+  'hist.key.backup_keep': 'Сколько копий хранить',
+  'hist.key.smtp_host': 'Почта: сервер',
+  'hist.key.smtp_port': 'Почта: порт',
+  'hist.key.smtp_secure': 'Почта: защищённое соединение',
+  'hist.key.smtp_user': 'Почта: пользователь',
+  'hist.key.smtp_from': 'Почта: адрес отправителя',
+  'hist.title': 'История настроек',
+  'hist.desc': 'Кто и что менял в настройках панели: из чего в что. Любое изменение можно вернуть одной кнопкой; сам возврат тоже попадает в историю. Пароли, токены и ключи сюда не пишутся.',
+  'hist.none': 'Пока ничего не менялось.',
+  'hist.empty': 'пусто',
+  'hist.on': 'включено',
+  'hist.off': 'выключено',
+  'hist.system': 'панель',
+  'hist.revert': 'Вернуть',
+  'hist.revertQ': 'Вернуть «{name}»?',
+  'hist.revertText': 'Настройка станет такой, какой была до этого изменения: {value}.',
+  'hist.reverted': 'Настройка возвращена',
+  'rum.title': 'Скорость у посетителей',
+  'rum.desc': 'Как быстро панель открывается на самом деле: 75-й процентиль по реальным заходам за неделю. Зелёный: хорошо, жёлтый: можно лучше, красный: медленно (пороги web.dev). О человеке не хранится ничего.',
+  'rum.collect': 'Собирать',
+  'rum.none': 'Данных пока нет: они появятся после первых заходов.',
+  'rum.off': 'Сбор отключён.',
+  'rum.page': 'Страница',
+  'rum.visits': 'Заходов',
+  'rum.good': 'Хорошо у {n}% заходов',
+  'rum.s': 'с',
+  'rum.ms': 'мс',
+  'rum.note': 'LCP: когда появилось главное на странице (хорошо до 2,5 с). INP: отклик на нажатие (до 200 мс). CLS: «прыгает» ли страница при загрузке (до 0,1). TTFB: ответ сервера (до 0,8 с). За {d} дн.',
+  'rum.r.servers': 'Серверы',
+  'rum.r.server': 'Страница сервера',
+  'rum.r.news': 'Новости',
+  'rum.r.status': 'Статус',
+  'rum.r.community': 'Сообщество',
+  'rum.r.profile': 'Профиль',
+  'rum.r.player': 'Игрок',
+  'rum.r.login': 'Вход',
+  'rum.r.register': 'Регистрация',
+  'rum.r.admin': 'Админка',
+  'rum.r.other': 'Другое',
+  'pf.know.title': 'Что панель знает о вас',
+  'pf.know.account': 'Аккаунт (имя, роль, почта)',
+  'pf.know.preferences': 'Настройки (язык, часовой пояс)',
+  'pf.know.player': 'Игровой профиль',
+  'pf.know.favourites': 'Избранные серверы',
+  'pf.know.devices': 'Входы с устройств',
+  'pf.know.journal': 'Журнал входов и действий',
+  'pf.know.follows': 'Подписки на игроков',
+  'pf.know.sessions': 'Игровые сессии',
+  'pf.know.days': 'хранится {n} дн.',
+  'pf.know.always': 'пока есть аккаунт',
   'srv.pl.copied': 'Ник скопирован',
   'srv.pl.noMatch': 'Никого не нашли по запросу «{q}»',
   'srv.pl.noMatchText': 'Проверьте написание или очистите поиск.',
@@ -155330,6 +156133,7 @@ import { api, getToken } from './api';
 import { toast } from './ui/toast';
 import { initAppearance } from './appearance';
 import { initEmberAccent } from './emberAccent';
+import { initRum } from './rum';
 import { QueryProvider } from './ui/query';
 import { ready as i18nReady } from './i18n';
 import { installViewport } from './ui/viewport';
@@ -155338,6 +156142,7 @@ import { initDensity, installMagnetic, installSegIndicator } from './useMotion';
 // before the first paint: the accessibility options (less motion, large text, high contrast), the saved density, the magnetic call-to-action buttons and the sliding tab pill
 initAppearance();
 initEmberAccent();
+initRum();
 initDensity();
 installMagnetic();
 installSegIndicator();
@@ -167158,6 +167963,7 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince, 
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/Settings.tsx" << '__COREGSM_EOF__'
+import SettingsHistoryCard from '../components/SettingsHistoryCard';
 import BackupsCard from './Backups';
 import { UpdateBadge } from '../components/UpdateBadge';
 import ConfigTransfer from '../components/ConfigTransfer';
@@ -167255,6 +168061,7 @@ export default function SettingsPage({ sub }: { sub: string; updateAvailable?: b
           <UpdateCard />
           <BackupsCard />
           <ConfigTransfer />
+          <SettingsHistoryCard />
         </>
       )}
       </SaveBarProvider>
@@ -167881,6 +168688,7 @@ import StorageCard from '../components/StorageCard';
 import { Gauge, usageTone, type GaugeTone } from '../components/Gauge';
 import HealthHistoryCard, { type HealthFlag } from '../components/HealthHistoryCard';
 import ProbesSection from '../components/ProbesSection';
+import RumCard from '../components/RumCard';
 import { AdminPage, ErrorLine, GoLink, LoadError, IconDatabase, IconDisk, IconMemory, IconSystem, Notice, PageHead, Section, Strip, ago, fmtDateTime, fmtTime, usePoll } from '../ui';
 
 interface Health {
@@ -168074,6 +168882,7 @@ export default function SystemPage() {
 
       <StorageCard />
 
+      <RumCard />
       <ProbesSection />
 
       <Strip>
@@ -171144,6 +171953,127 @@ export function renderInto(box: HTMLElement, tags: string): void {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
+  cat > "$APP_DIR/core-frontend/src/rum.test.ts" << '__COREGSM_EOF__'
+import { describe, expect, it } from 'vitest';
+import { rumRoute, worstShiftWindow } from './rum';
+
+describe('rumRoute: the page a visit began on', () => {
+  it('names the pages of the panel with the same short list as the backend', () => {
+    expect(rumRoute('/')).toBe('servers');
+    expect(rumRoute('/servers')).toBe('servers');
+    expect(rumRoute('/servers/12')).toBe('server');
+    expect(rumRoute('/servers/12/players')).toBe('server');
+    expect(rumRoute('/servers/abc')).toBe('servers');
+    for (const p of ['news', 'status', 'community', 'profile', 'login', 'register', 'admin']) expect(rumRoute(`/${p}`)).toBe(p);
+    expect(rumRoute('/admin/settings/brand')).toBe('admin');
+    expect(rumRoute('/player/Bravo')).toBe('player');
+    expect(rumRoute('/u/admin')).toBe('player');
+    expect(rumRoute('/nope')).toBe('other');
+  });
+});
+
+describe('worstShiftWindow: the layout shifts count in windows', () => {
+  it('is nothing without shifts and adds the shifts that come close together', () => {
+    expect(worstShiftWindow([])).toBe(0);
+    expect(worstShiftWindow([{ at: 100, value: 0.02 }, { at: 600, value: 0.03 }])).toBeCloseTo(0.05, 5);
+  });
+
+  it('starts a new window after a second of quiet and keeps the worst one', () => {
+    const shifts = [{ at: 0, value: 0.04 }, { at: 3000, value: 0.01 }, { at: 3500, value: 0.02 }];
+    expect(worstShiftWindow(shifts)).toBeCloseTo(0.04, 5);
+  });
+
+  it('closes a window that lasts five seconds even when the shifts keep coming', () => {
+    const shifts = Array.from({ length: 8 }, (_, i) => ({ at: i * 900, value: 0.01 }));
+    // 0 .. 4500 ms in the first window (6 shifts), then a new one
+    expect(worstShiftWindow(shifts)).toBeCloseTo(0.06, 5);
+  });
+});
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src"
+  cat > "$APP_DIR/core-frontend/src/rum.ts" << '__COREGSM_EOF__'
+/**
+ * The speed the visitors really see: the numbers of the load of a page (LCP, INP, CLS, TTFB, FCP) are sent once, when the page
+ * is hidden or closed, to POST /api/rum (see monitoring/rum.ts on the backend). Nothing about the person goes with them: only the
+ * name of the page where the visit began and the numbers. Not sent when the browser says «do not track».
+ */
+type Metric = 'LCP' | 'INP' | 'CLS' | 'TTFB' | 'FCP';
+
+/** the page of the panel a path belongs to (the same short list as on the backend) */
+export function rumRoute(path: string): string {
+  const [first = '', second = ''] = path.replace(/^\/+/, '').split('/');
+  if (first === '' || first === 'servers') return second && /^\d+$/.test(second) ? 'server' : 'servers';
+  if (['news', 'status', 'community', 'profile', 'login', 'register', 'admin'].includes(first)) return first;
+  if (first === 'player' || first === 'u') return 'player';
+  return 'other';
+}
+
+/** a layout shift counts in windows (as web.dev does): a window ends after 1 s of quiet or 5 s in all; the worst window is the number */
+export function worstShiftWindow(shifts: { at: number; value: number }[]): number {
+  let worst = 0;
+  let sum = 0;
+  let start = 0;
+  let last = 0;
+  for (const s of shifts) {
+    if (sum === 0 || s.at - last > 1000 || s.at - start > 5000) {
+      sum = 0;
+      start = s.at;
+    }
+    sum += s.value;
+    last = s.at;
+    worst = Math.max(worst, sum);
+  }
+  return worst;
+}
+
+export function initRum(): void {
+  if (typeof window === 'undefined' || typeof PerformanceObserver === 'undefined' || typeof navigator.sendBeacon !== 'function') return;
+  if (navigator.doNotTrack === '1') return;
+  const landing = rumRoute(window.location.pathname);
+  const m: Partial<Record<Metric, number>> = {};
+  const shifts: { at: number; value: number }[] = [];
+  let slowest = 0;
+  let sent = false;
+
+  const nav = performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming | undefined;
+  if (nav && nav.responseStart > 0) m.TTFB = nav.responseStart;
+
+  const observe = (type: string, fn: (entries: PerformanceEntry[]) => void, extra: Record<string, unknown> = {}) => {
+    try {
+      const po = new PerformanceObserver((list) => fn(list.getEntries()));
+      po.observe({ type, buffered: true, ...extra } as PerformanceObserverInit);
+    } catch {
+      /* the browser does not know this kind of entry */
+    }
+  };
+  observe('paint', (es) => { for (const e of es) if (e.name === 'first-contentful-paint') m.FCP = e.startTime; });
+  observe('largest-contentful-paint', (es) => { const e = es[es.length - 1]; if (e) m.LCP = e.startTime; });
+  observe('layout-shift', (es) => {
+    for (const e of es as (PerformanceEntry & { value: number; hadRecentInput: boolean })[]) if (!e.hadRecentInput) shifts.push({ at: e.startTime, value: e.value });
+    m.CLS = worstShiftWindow(shifts);
+  });
+  observe('event', (es) => {
+    for (const e of es as (PerformanceEntry & { interactionId?: number })[]) if ((e.interactionId ?? 0) > 0) slowest = Math.max(slowest, e.duration);
+    if (slowest > 0) m.INP = slowest;
+  }, { durationThreshold: 40 });
+
+  const send = () => {
+    if (sent) return;
+    const body: Partial<Record<Metric, number>> = {};
+    for (const [k, v] of Object.entries(m) as [Metric, number][]) if (Number.isFinite(v) && v >= 0) body[k] = k === 'CLS' ? Math.round(v * 1000) / 1000 : Math.round(v);
+    if (Object.keys(body).length === 0) return;
+    sent = true;
+    try {
+      navigator.sendBeacon('/api/rum', new Blob([JSON.stringify({ route: landing, m: body })], { type: 'application/json' }));
+    } catch {
+      /* a beacon that cannot be sent is not worth anything */
+    }
+  };
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') send(); });
+  window.addEventListener('pagehide', send);
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/saveBar.tsx" << '__COREGSM_EOF__'
 // A common «Есть несохранённые изменения: Отмена / Сохранить» bar for pages with several forms (settings, users).
 // A form joins it with useSaveBar(); without a provider around it a form keeps saving by itself (useAutosave).
@@ -171740,6 +172670,17 @@ a.adm-tile:hover { box-shadow: var(--shadow-2); border-color: rgb(var(--brand) /
 }
 
 @media (max-width: 639px) { .adm-chip { min-height: 44px; } }
+
+/* ---------- the history of the settings and the speed of the pages ---------- */
+.hist-from { text-decoration: line-through; text-decoration-color: rgb(var(--bad) / .6); }
+.hist-to { color: rgb(var(--ink)); font-weight: 750; }
+.hist-change { overflow-wrap: anywhere; }
+.rum-table th, .rum-table td { padding: 8px 10px; border-top: 1px solid rgb(var(--line)); white-space: nowrap; }
+.rum-table thead th { border-top: 0; font-size: var(--fs-xs); font-weight: 700; color: rgb(var(--mute)); }
+.rum-v { display: inline-block; padding: 2px 10px; border-radius: 99px; font-weight: 750; font-variant-numeric: tabular-nums; }
+.rum-v.is-good { background: rgb(var(--okbg)); color: rgb(var(--ok)); }
+.rum-v.is-needs { background: rgb(var(--warnbg)); color: rgb(var(--warn)); }
+.rum-v.is-poor { background: rgb(var(--badbg)); color: rgb(var(--bad)); }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/analytics.css" << '__COREGSM_EOF__'
@@ -175384,6 +176325,13 @@ __COREGSM_EOF__
 .pf-spark-line { stroke-dasharray: 1; stroke-dashoffset: 0; animation: pf-draw .9s ease-out both; }
 @keyframes pf-draw { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
 .pf-strip > i[title] { cursor: help; }
+
+/* ---------- what the panel knows about a person ---------- */
+.pf-know { display: grid; gap: 6px; margin: 0 0 14px; padding: 0; list-style: none; }
+.pf-know li { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: baseline; gap: 4px 14px; padding: 8px 12px; border-radius: 12px; background: rgb(var(--soft)); }
+.pf-know-k { font-weight: 700; }
+.pf-know-d { font-size: var(--fs-sm); font-weight: 600; color: rgb(var(--mute)); min-width: 9rem; text-align: right; }
+@media (max-width: 639px) { .pf-know li { grid-template-columns: minmax(0, 1fr) auto; } .pf-know-d { grid-column: 1 / -1; text-align: left; } }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/servers.css" << '__COREGSM_EOF__'
@@ -178028,6 +178976,45 @@ export function QueryProvider({ children }: { children: ReactNode }) {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/ui"
+  cat > "$APP_DIR/core-frontend/src/ui/recent.test.ts" << '__COREGSM_EOF__'
+// @vitest-environment happy-dom
+import { beforeEach, describe, expect, it } from 'vitest';
+import { readPaletteRecent, readRecentServers, rememberPaletteRecent, rememberServer } from './recent';
+
+describe('the servers opened last', () => {
+  beforeEach(() => localStorage.clear());
+
+  it('puts the newest first, keeps three and moves a server that is opened again to the front', () => {
+    expect(readRecentServers()).toEqual([]);
+    rememberServer({ id: 1, name: 'A', game: 'rust' });
+    rememberServer({ id: 2, name: 'B', game: 'rust' });
+    rememberServer({ id: 3, name: 'C', game: 'rust' });
+    rememberServer({ id: 4, name: 'D', game: 'rust' });
+    expect(readRecentServers().map((s) => s.id)).toEqual([4, 3, 2]);
+    rememberServer({ id: 2, name: 'B2', game: 'rust' });
+    expect(readRecentServers().map((s) => `${s.id}:${s.name}`)).toEqual(['2:B2', '4:D', '3:C']);
+  });
+
+  it('does not trust what the storage holds', () => {
+    localStorage.setItem('coregsm_recent_servers', '{"not":"a list"}');
+    expect(readRecentServers()).toEqual([]);
+    localStorage.setItem('coregsm_recent_servers', JSON.stringify([{ id: 'x', name: 1 }, { id: 5, name: 'ok', game: 'm2o' }]));
+    expect(readRecentServers().map((s) => s.id)).toEqual([5]);
+    localStorage.setItem('coregsm_recent_servers', 'not json');
+    expect(readRecentServers()).toEqual([]);
+  });
+});
+
+describe('the keys of the command palette', () => {
+  beforeEach(() => localStorage.clear());
+
+  it('keeps five, newest first, without repeats', () => {
+    for (const k of ['a', 'b', 'c', 'd', 'e', 'f', 'c']) rememberPaletteRecent(k);
+    expect(readPaletteRecent()).toEqual(['c', 'f', 'e', 'd', 'b']);
+  });
+});
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/ui"
   cat > "$APP_DIR/core-frontend/src/ui/recent.ts" << '__COREGSM_EOF__'
 import { useSyncExternalStore } from 'react';
 
@@ -178911,9 +179898,11 @@ import react from '@vitejs/plugin-react';
 export default defineConfig({
   plugins: [react()],
   server: { proxy: { '/api': process.env.COREGSM_API ?? 'http://localhost:3000', '/badge': process.env.COREGSM_API ?? 'http://localhost:3000', '/widget': process.env.COREGSM_API ?? 'http://localhost:3000' } },
+  // `vite preview` serves the built panel with the same proxy to the backend (the speed audit of tools/lighthouse uses it)
+  preview: { proxy: { '/api': process.env.COREGSM_API ?? 'http://localhost:3000', '/badge': process.env.COREGSM_API ?? 'http://localhost:3000', '/widget': process.env.COREGSM_API ?? 'http://localhost:3000' } },
   test: {
     // `npm run coverage` (and CI) fail when the coverage of the files the tests load falls below the floor: it may only be raised
-    coverage: { reporter: ['text-summary', 'text'], thresholds: { statements: 40, branches: 33, functions: 34, lines: 44 } },
+    coverage: { reporter: ['text-summary', 'text'], thresholds: { statements: 43, branches: 35, functions: 36, lines: 46 } },
   },
   build: {
     rollupOptions: {
@@ -179241,6 +180230,22 @@ server {
     location ~ ^/api/backups?(/|$) {
         proxy_read_timeout 300s;
         proxy_buffering off;
+        set $backend http://backend:3000;
+        proxy_pass $backend;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # live updates: one long answer (Server-Sent Events) per open panel; no buffering, no timeout shorter than the heartbeat
+    location = /api/live {
+        proxy_http_version 1.1;
+        proxy_set_header Connection '';
+        proxy_buffering off;
+        proxy_cache off;
+        gzip off;
+        proxy_read_timeout 1h;
         set $backend http://backend:3000;
         proxy_pass $backend;
         proxy_set_header Host $host;

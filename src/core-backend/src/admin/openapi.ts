@@ -60,6 +60,44 @@ export function openApiSpec(opts: { version: string; baseUrl: string; title: str
           },
         },
       },
+      '/api/v1/servers/{id}/history': {
+        get: {
+          summary: 'Players and ping over time',
+          operationId: 'getServerHistory',
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'integer' } },
+            { name: 'hours', in: 'query', required: false, schema: { type: 'integer', minimum: 1, maximum: 168, default: 24 } },
+          ],
+          responses: { '200': { description: 'At most 180 points', content: { 'application/json': { schema: { $ref: '#/components/schemas/History' } } } }, '404': errorResponse('No such server'), ...common },
+        },
+      },
+      '/api/v1/servers/{id}/events': {
+        get: {
+          summary: 'Went down, came back, the peak',
+          operationId: 'getServerEvents',
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'integer' } },
+            { name: 'hours', in: 'query', required: false, schema: { type: 'integer', minimum: 1, maximum: 168, default: 168 } },
+          ],
+          responses: { '200': { description: 'Newest first', content: { 'application/json': { schema: { $ref: '#/components/schemas/Events' } } } }, '404': errorResponse('No such server'), ...common },
+        },
+      },
+      '/api/v1/servers/{id}/players': {
+        get: {
+          summary: 'Who is in the game now',
+          operationId: 'getServerPlayers',
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'integer' } }],
+          responses: { '200': { description: 'The count always; names only while the panel is open to guests', content: { 'application/json': { schema: { $ref: '#/components/schemas/PlayersNow' } } } }, '404': errorResponse('No such server'), ...common },
+        },
+      },
+      '/api/v1/community': {
+        get: {
+          summary: 'The community in numbers',
+          operationId: 'getCommunity',
+          parameters: [{ name: 'days', in: 'query', required: false, schema: { type: 'integer', minimum: 1, maximum: 30, default: 7 } }],
+          responses: { '200': { description: 'Players now and the most active players of the period', content: { 'application/json': { schema: { $ref: '#/components/schemas/Community' } } } }, ...common },
+        },
+      },
       '/api/v1/openapi.json': {
         get: { summary: 'This description', operationId: 'getOpenApi', security: [], responses: { '200': { description: 'OpenAPI 3 document' } } },
       },
@@ -93,6 +131,40 @@ export function openApiSpec(opts: { version: string; baseUrl: string; title: str
             stateSince: { type: 'integer', nullable: true, description: 'unix time in ms since the server is in its current state' },
             updatedAt: { type: 'integer', nullable: true, description: 'unix time in ms of the last poll' },
             maintenance: { type: 'boolean', description: 'a maintenance window is running' },
+          },
+        },
+        History: {
+          type: 'object',
+          properties: {
+            serverId: { type: 'integer' },
+            hours: { type: 'integer' },
+            points: { type: 'array', items: { type: 'object', properties: { ts: { type: 'integer' }, players: { type: 'integer' }, ping: { type: 'integer', nullable: true }, online: { type: 'boolean' } } } },
+          },
+        },
+        Events: {
+          type: 'object',
+          properties: {
+            serverId: { type: 'integer' },
+            hours: { type: 'integer' },
+            events: { type: 'array', items: { type: 'object', properties: { ts: { type: 'integer' }, type: { type: 'string', enum: ['up', 'down', 'peak'] }, players: { type: 'integer', nullable: true } } } },
+          },
+        },
+        PlayersNow: {
+          type: 'object',
+          properties: {
+            serverId: { type: 'integer' },
+            online: { type: 'boolean' },
+            count: { type: 'integer' },
+            players: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, since: { type: 'integer' } } } },
+          },
+        },
+        Community: {
+          type: 'object',
+          properties: {
+            days: { type: 'integer' },
+            playersNow: { type: 'integer' },
+            serversOnline: { type: 'integer' },
+            top: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, hours: { type: 'number' } } } },
           },
         },
         Status: {

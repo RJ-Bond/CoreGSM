@@ -325,3 +325,14 @@ a.adm-tile:hover { box-shadow: var(--shadow-2); border-color: rgb(var(--brand) /
 }
 
 @media (max-width: 639px) { .adm-chip { min-height: 44px; } }
+
+/* ---------- the history of the settings and the speed of the pages ---------- */
+.hist-from { text-decoration: line-through; text-decoration-color: rgb(var(--bad) / .6); }
+.hist-to { color: rgb(var(--ink)); font-weight: 750; }
+.hist-change { overflow-wrap: anywhere; }
+.rum-table th, .rum-table td { padding: 8px 10px; border-top: 1px solid rgb(var(--line)); white-space: nowrap; }
+.rum-table thead th { border-top: 0; font-size: var(--fs-xs); font-weight: 700; color: rgb(var(--mute)); }
+.rum-v { display: inline-block; padding: 2px 10px; border-radius: 99px; font-weight: 750; font-variant-numeric: tabular-nums; }
+.rum-v.is-good { background: rgb(var(--okbg)); color: rgb(var(--ok)); }
+.rum-v.is-needs { background: rgb(var(--warnbg)); color: rgb(var(--warn)); }
+.rum-v.is-poor { background: rgb(var(--badbg)); color: rgb(var(--bad)); }

@@ -125,6 +125,22 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 
+    # live updates: one long answer (Server-Sent Events) per open panel; no buffering, no timeout shorter than the heartbeat
+    location = /api/live {
+        proxy_http_version 1.1;
+        proxy_set_header Connection '';
+        proxy_buffering off;
+        proxy_cache off;
+        gzip off;
+        proxy_read_timeout 1h;
+        set $backend http://backend:3000;
+        proxy_pass $backend;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
     # shareable server (/s/) and news (/n/) pages with link-preview meta tags (redirect to the SPA)
     location ~ ^/(s|n)/\d+$ {
         set $backend http://backend:3000;

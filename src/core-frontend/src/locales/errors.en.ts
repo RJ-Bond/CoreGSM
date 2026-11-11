@@ -16,6 +16,8 @@ const errorsEn: Record<string, string> = {
   rate_limited: 'Too many requests. Wait a minute.',
   rate_limited_later: 'Too many requests. Try again later.',
   too_many_connections: 'Too many open connections',
+  history_entry_not_found: 'The entry was not found',
+  history_not_revertible: 'This setting cannot be put back',
   too_many_attempts: 'Too many attempts. Wait 10 minutes.',
   bad_data: 'Invalid data',
   bad_data_lower: 'invalid data',

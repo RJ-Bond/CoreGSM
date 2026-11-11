@@ -22,6 +22,9 @@ import { startPoller, stopPoller } from './monitoring/gsm.js';
 import { registerHealth } from './monitoring/health.js';
 import { startDbMaintenance } from './admin/dbMaintenance.js';
 import { registerMetrics } from './monitoring/metrics.js';
+import { registerRum } from './monitoring/rum.js';
+import { actorMiddleware } from './actor.js';
+import { router as settingsHistoryRouter } from './admin/settingsHistory.js';
 import { wrap } from './http.js';
 import { registerMaintenance } from './maintenance.js';
 import { registerGameNews } from './gamenews/gameNews.js';
@@ -116,12 +119,15 @@ app.use('/api', csrfGuard);
 app.use('/api/u', windowLimiter(120, 60_000));
 app.use('/internal/bot-guilds', express.json({ limit: '2mb' }));
 app.use('/api/config/import', express.json({ limit: '2mb' }));
+app.use(actorMiddleware);
 app.use(express.json({ limit: '50kb' }));
 // Express 5 leaves req.body undefined when a request has no body (4 gave {}): the handlers parse it with zod objects
 app.use((req, _res, next) => { if (req.body === undefined) req.body = {}; next(); });
 installAudit(app);
 
 registerMetrics(app);
+registerRum(app);
+app.use(settingsHistoryRouter);
 
 app.get('/api/health', (_req, res) => {
   res.json({ ok: true });

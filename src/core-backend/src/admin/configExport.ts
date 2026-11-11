@@ -16,17 +16,9 @@ import { db, getSetting, setSetting } from '../db.js';
 
 export const router = express.Router();
 
-/** settings that travel with the file: never a secret, never a counter or a timestamp of this panel */
-export const PORTABLE_SETTINGS = [
-  'alerts_enabled', 'alerts_channel', 'alerts_system_channel', 'default_look', 'alerts_after_min', 'alerts_mention', 'alerts_smart_low', 'alerts_smart_ping', 'alerts_smart_full',
-  'digest_enabled', 'digest_channel', 'digest_weekday', 'digest_hour', 'digest_theme',
-  'brand_name', 'brand_color', 'brand_preset', 'default_theme', 'game_theme',
-  'news_channel_id', 'news_test_channel_id', 'embed_players_shown',
-  'poll_concurrency', 'poll_fail_threshold', 'poll_fail_n', 'poll_fail_m', 'poll_probe_veto', 'timezone',
-  'public_panel', 'registration_open', 'registration_mode', 'rules_text',
-  'backup_schedule', 'backup_keep',
-  'smtp_host', 'smtp_port', 'smtp_secure', 'smtp_user', 'smtp_from',
-] as const;
+import { PORTABLE_SETTINGS } from './portableSettings.js';
+
+export { PORTABLE_SETTINGS };
 
 interface ServerRow { id: number; name: string; game: string; host: string; port: number; query_port: number | null; display_address: string; country: string }
 

@@ -268,3 +268,10 @@
 .pf-spark-line { stroke-dasharray: 1; stroke-dashoffset: 0; animation: pf-draw .9s ease-out both; }
 @keyframes pf-draw { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
 .pf-strip > i[title] { cursor: help; }
+
+/* ---------- what the panel knows about a person ---------- */
+.pf-know { display: grid; gap: 6px; margin: 0 0 14px; padding: 0; list-style: none; }
+.pf-know li { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: baseline; gap: 4px 14px; padding: 8px 12px; border-radius: 12px; background: rgb(var(--soft)); }
+.pf-know-k { font-weight: 700; }
+.pf-know-d { font-size: var(--fs-sm); font-weight: 600; color: rgb(var(--mute)); min-width: 9rem; text-align: right; }
+@media (max-width: 639px) { .pf-know li { grid-template-columns: minmax(0, 1fr) auto; } .pf-know-d { grid-column: 1 / -1; text-align: left; } }

@@ -1,3 +1,4 @@
+import SettingsHistoryCard from '../components/SettingsHistoryCard';
 import BackupsCard from './Backups';
 import { UpdateBadge } from '../components/UpdateBadge';
 import ConfigTransfer from '../components/ConfigTransfer';
@@ -95,6 +96,7 @@ export default function SettingsPage({ sub }: { sub: string; updateAvailable?: b
           <UpdateCard />
           <BackupsCard />
           <ConfigTransfer />
+          <SettingsHistoryCard />
         </>
       )}
       </SaveBarProvider>

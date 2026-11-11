@@ -1,4 +1,4 @@
-import { emitLive } from '../live.js';
+import { bus } from '../events.js';
 import { trackAlerts } from '../alerts/alerts.js';
 import { trackSmart } from '../alerts/smartAlerts.js';
 import { onPollResult } from '../community/subscriptions.js';
@@ -218,9 +218,14 @@ export async function refreshServer(s: ServerRow, opts: { debounce?: boolean } =
   // the server may have been deleted while the query was running
   const still = db.prepare('SELECT 1 FROM servers WHERE id = ?').get(s.id);
   if (!still) return null;
+  const before = (db.prepare('SELECT online FROM status WHERE server_id = ?').get(s.id) as { online: number } | undefined)?.online;
   const out = applyPollResult(s, r, ts, opts);
-  // the open panels reload their list at once (see live.ts)
-  emitLive();
+  const after = (db.prepare('SELECT online, players FROM status WHERE server_id = ?').get(s.id) as { online: number; players: number } | undefined);
+  // who is interested hears it from the bus: the open panels (live.ts), and later the alerts and the webhooks
+  if (after) {
+    bus.emit('server.polled', { id: s.id, online: !!after.online, players: after.players ?? 0 });
+    if (before != null && !!before !== !!after.online) bus.emit('server.state', { id: s.id, online: !!after.online, previous: !!before, at: ts });
+  }
   return out;
 }
 

@@ -27,6 +27,7 @@ import { api, getToken } from './api';
 import { toast } from './ui/toast';
 import { initAppearance } from './appearance';
 import { initEmberAccent } from './emberAccent';
+import { initRum } from './rum';
 import { QueryProvider } from './ui/query';
 import { ready as i18nReady } from './i18n';
 import { installViewport } from './ui/viewport';
@@ -35,6 +36,7 @@ import { initDensity, installMagnetic, installSegIndicator } from './useMotion';
 // before the first paint: the accessibility options (less motion, large text, high contrast), the saved density, the magnetic call-to-action buttons and the sliding tab pill
 initAppearance();
 initEmberAccent();
+initRum();
 initDensity();
 installMagnetic();
 installSegIndicator();

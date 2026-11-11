@@ -1,4 +1,5 @@
 /** Sessions, roles and the access middleware; login rate limits and lockout. */
+import { setActor } from '../actor.js';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import crypto from 'node:crypto';
@@ -62,7 +63,10 @@ export function staffIdleMs(): number {
 /** Bearer header first (API clients, the bot), then the HttpOnly session cookie of the web panel. */
 export function loadUser(req: Request) {
   const h = req.headers.authorization ?? '';
-  return userFromToken(h.startsWith('Bearer ') ? h.slice(7) : '') ?? userFromToken(readSessionCookie(req));
+  const u = userFromToken(h.startsWith('Bearer ') ? h.slice(7) : '') ?? userFromToken(readSessionCookie(req));
+  // the history of the settings names the person who changed one
+  if (u) setActor(String((u as { username?: unknown }).username ?? '') || null);
+  return u;
 }
 
 /** Starts a session and returns the signed token for it. */

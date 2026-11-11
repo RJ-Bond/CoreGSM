@@ -115,6 +115,8 @@ export function clearSessionCookie(req: Request, res: Response): void {
 export const csrfGuard: RequestHandler = (req, res, next) => {
   if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return next();
   if (!req.headers.cookie || !readSessionCookie(req)) return next();
+  // the beacon of the speed of the page cannot add a header (sendBeacon), and it changes nothing of the person's
+  if (req.path === '/api/rum') return next();
   if (req.headers.authorization || req.headers['x-coregsm']) return next();
   res.status(403).json({ error: 'Запрос отклонён: не хватает заголовка X-CoreGSM' });
 };

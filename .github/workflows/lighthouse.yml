@@ -1,0 +1,45 @@
+name: lighthouse
+
+# The speed of the BUILT panel as Lighthouse sees it (performance, accessibility, best practices, SEO, LCP, TBT, CLS, weight) on the main
+# pages, in the summary of the run. It reports and does not block: the numbers come from a slow simulated phone and a preview server
+# without compression, so they are for comparing runs with each other. The real speed of the visitors is in the panel itself
+# (Admin → System → Speed for the visitors). tools/lighthouse/run.mjs starts a demo panel on a database of its own.
+on:
+  push:
+    branches: [main]
+    paths: ['src/core-frontend/**', 'tools/lighthouse/**', '.github/workflows/lighthouse.yml']
+  schedule:
+    - cron: '17 5 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  group: lighthouse-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lighthouse:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 24
+      - name: Install the backend and the frontend
+        run: |
+          npm ci --no-audit --no-fund --prefix src/core-backend
+          npm ci --no-audit --no-fund --prefix src/core-frontend
+      - name: Build the panel
+        run: npx vite build
+        working-directory: src/core-frontend
+      - name: Audit the pages
+        continue-on-error: true
+        env:
+          CHROME_PATH: /usr/bin/google-chrome
+        run: node tools/lighthouse/run.mjs --pages=servers,server,status,news,community,login --out=lighthouse-out
+      - name: Show the numbers
+        if: always()
+        run: cat lighthouse-out/report.md >> "$GITHUB_STEP_SUMMARY" || true

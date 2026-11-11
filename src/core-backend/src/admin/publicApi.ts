@@ -4,6 +4,10 @@
  *   GET /api/v1/status         totals: servers, how many are up, players
  *   GET /api/v1/servers        the servers (?game=, ?online=true|false)
  *   GET /api/v1/servers/:id    one server
+ *   GET /api/v1/servers/:id/history?hours=24     the curve of players and ping (up to 168 hours, at most 180 points)
+ *   GET /api/v1/servers/:id/events?hours=168     went down / came back / the peak, newest first
+ *   GET /api/v1/servers/:id/players              who is in the game now (names only while the panel is open to guests)
+ *   GET /api/v1/community?days=7                 the most active players of the period (only while the panel is open to guests)
  *   GET /api/v1/openapi.json   the OpenAPI 3 description (no key needed)
  *
  * Only public data: never the host and port used for polling. The display address is given only while the panel is
@@ -93,6 +97,80 @@ export function registerPublicApi(app: Express): void {
     const up = uptimes(Date.now() - 86_400_000);
     res.set('Cache-Control', 'private, max-age=10');
     res.json(apiServer(serialize(row), up.get(id) ?? null, publicPanel()));
+  });
+
+  const serverId = (v: unknown): number => (/^\d+$/.test(String(v)) ? Number(v) : 0);
+  const exists = (id: number): boolean => !!id && !!db.prepare('SELECT 1 FROM servers WHERE id = ?').get(id);
+  const hoursOf = (v: unknown, def: number): number => Math.min(168, Math.max(1, Number(v ?? def) || def));
+
+  app.get('/api/v1/servers/:id/history', apiKeyAuth, (req, res) => {
+    const id = serverId(req.params.id);
+    if (!exists(id)) return void apiError(res, 404, 'not_found', 'No such server.');
+    const hours = hoursOf(req.query.hours, 24);
+    const since = Date.now() - hours * 3600_000;
+    const bucketMs = Math.max(30_000, Math.ceil((hours * 3600_000) / 180));
+    const points = db
+      .prepare(
+        `SELECT MIN(ts) AS ts, MAX(players) AS players, MIN(online) AS online,
+                CAST(ROUND(AVG(CASE WHEN online = 1 THEN ping END)) AS INTEGER) AS ping
+         FROM history WHERE server_id = ? AND ts > ? GROUP BY ts / CAST(? AS INTEGER) ORDER BY ts`,
+      )
+      .all(id, since, bucketMs) as { ts: number; players: number; online: number; ping: number | null }[];
+    res.set('Cache-Control', 'private, max-age=30');
+    res.json({ serverId: id, hours, points: points.map((p) => ({ ts: p.ts, players: p.players, ping: p.ping, online: !!p.online })) });
+  });
+
+  app.get('/api/v1/servers/:id/events', apiKeyAuth, (req, res) => {
+    const id = serverId(req.params.id);
+    if (!exists(id)) return void apiError(res, 404, 'not_found', 'No such server.');
+    const hours = hoursOf(req.query.hours, 168);
+    const since = Date.now() - hours * 3600_000;
+    const changes = db
+      .prepare(
+        `SELECT ts, online FROM (
+           SELECT ts, online, LAG(online) OVER (ORDER BY ts) AS prev FROM history WHERE server_id = ? AND ts > ?
+         ) WHERE prev IS NOT NULL AND prev <> online ORDER BY ts DESC LIMIT 100`,
+      )
+      .all(id, since) as { ts: number; online: number }[];
+    const events: { ts: number; type: 'up' | 'down' | 'peak'; players: number | null }[] = changes.map((e) => ({ ts: e.ts, type: e.online ? 'up' : 'down', players: null }));
+    const peak = db.prepare('SELECT players, ts FROM history WHERE server_id = ? AND ts > ? ORDER BY players DESC, ts DESC LIMIT 1').get(id, since) as { players: number; ts: number } | undefined;
+    if (peak && peak.players > 0) events.push({ ts: peak.ts, type: 'peak', players: peak.players });
+    events.sort((a, b) => b.ts - a.ts);
+    res.set('Cache-Control', 'private, max-age=30');
+    res.json({ serverId: id, hours, events });
+  });
+
+  app.get('/api/v1/servers/:id/players', apiKeyAuth, (req, res) => {
+    const id = serverId(req.params.id);
+    if (!exists(id)) return void apiError(res, 404, 'not_found', 'No such server.');
+    const st = db.prepare('SELECT online, players FROM status WHERE server_id = ?').get(id) as { online: number; players: number } | undefined;
+    const online = !!st?.online;
+    const names = publicPanel() && online ? (db.prepare('SELECT name, since FROM player_now WHERE server_id = ? ORDER BY since, name LIMIT 200').all(id) as { name: string; since: number }[]) : [];
+    res.set('Cache-Control', 'private, max-age=10');
+    res.json({ serverId: id, online, count: online ? st?.players ?? 0 : 0, players: names.map((p) => ({ name: p.name, since: p.since })) });
+  });
+
+  app.get('/api/v1/community', apiKeyAuth, (req, res) => {
+    const days = Math.min(30, Math.max(1, Number(req.query.days ?? 7) || 7));
+    const now = Date.now();
+    const since = now - days * 86400_000;
+    // names of players are shown only where the panel itself shows them to a guest
+    const top = publicPanel()
+      ? (db
+          .prepare(
+            `SELECT MIN(name) AS name, SUM(MIN(COALESCE(left_at, ?), ?) - MAX(joined_at, ?)) AS ms
+             FROM player_sessions WHERE COALESCE(left_at, ?) > ? GROUP BY ulower(name) HAVING ms > 0 ORDER BY ms DESC LIMIT 20`,
+          )
+          .all(now, now, since, now, since) as { name: string; ms: number }[])
+      : [];
+    const all = list();
+    res.set('Cache-Control', 'private, max-age=60');
+    res.json({
+      days,
+      playersNow: all.reduce((n, s) => n + (s.online ? s.players : 0), 0),
+      serversOnline: all.filter((s) => s.online).length,
+      top: top.map((t) => ({ name: t.name, hours: Math.round((t.ms / 3600_000) * 10) / 10 })),
+    });
   });
 
   // everything else under /api/v1: one error format instead of the panel's 404

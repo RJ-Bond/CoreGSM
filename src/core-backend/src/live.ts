@@ -4,6 +4,7 @@
  * Only a «something changed» signal travels, never data, so what a visitor may see is still decided by /api/servers.
  */
 import type { Request, Response } from 'express';
+import { bus } from './events.js';
 import { log } from './logger.js';
 import { onShutdown } from './shutdown.js';
 
@@ -54,6 +55,9 @@ export function liveHandler(req: Request, res: Response): void {
   beat.unref();
   req.on('close', () => { clearInterval(beat); clients.delete(res); });
 }
+
+// the panels are told by the bus: a poll of any server is a reason to reload the list
+bus.on('server.polled', () => emitLive());
 
 // a long connection must not hold the server open when it is stopped
 onShutdown('live connections', () => {

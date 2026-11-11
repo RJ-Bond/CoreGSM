@@ -5,6 +5,7 @@ import StorageCard from '../components/StorageCard';
 import { Gauge, usageTone, type GaugeTone } from '../components/Gauge';
 import HealthHistoryCard, { type HealthFlag } from '../components/HealthHistoryCard';
 import ProbesSection from '../components/ProbesSection';
+import RumCard from '../components/RumCard';
 import { AdminPage, ErrorLine, GoLink, LoadError, IconDatabase, IconDisk, IconMemory, IconSystem, Notice, PageHead, Section, Strip, ago, fmtDateTime, fmtTime, usePoll } from '../ui';
 
 interface Health {
@@ -198,6 +199,7 @@ export default function SystemPage() {
 
       <StorageCard />
 
+      <RumCard />
       <ProbesSection />
 
       <Strip>

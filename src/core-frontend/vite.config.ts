@@ -4,9 +4,11 @@ import react from '@vitejs/plugin-react';
 export default defineConfig({
   plugins: [react()],
   server: { proxy: { '/api': process.env.COREGSM_API ?? 'http://localhost:3000', '/badge': process.env.COREGSM_API ?? 'http://localhost:3000', '/widget': process.env.COREGSM_API ?? 'http://localhost:3000' } },
+  // `vite preview` serves the built panel with the same proxy to the backend (the speed audit of tools/lighthouse uses it)
+  preview: { proxy: { '/api': process.env.COREGSM_API ?? 'http://localhost:3000', '/badge': process.env.COREGSM_API ?? 'http://localhost:3000', '/widget': process.env.COREGSM_API ?? 'http://localhost:3000' } },
   test: {
     // `npm run coverage` (and CI) fail when the coverage of the files the tests load falls below the floor: it may only be raised
-    coverage: { reporter: ['text-summary', 'text'], thresholds: { statements: 40, branches: 33, functions: 34, lines: 44 } },
+    coverage: { reporter: ['text-summary', 'text'], thresholds: { statements: 43, branches: 35, functions: 36, lines: 46 } },
   },
   build: {
     rollupOptions: {

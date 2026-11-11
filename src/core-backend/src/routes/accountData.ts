@@ -11,6 +11,7 @@ import { z } from 'zod';
 import { auth, type AuthedRequest } from '../security/auth.js';
 import { clearSessionCookie, windowLimiter } from '../security/security.js';
 import { db } from '../db.js';
+import { retentionDays } from '../monitoring/gsm.js';
 import { hasTable } from '../schema.js';
 import { wrap } from '../http.js';
 import { removeAvatar } from '../images/avatars.js';
@@ -44,6 +45,29 @@ export function exportAccount(id: number): Record<string, unknown> {
   }
   return out;
 }
+
+/** what the panel keeps about the account, in kinds, with how many and for how long (the page «what the panel knows about you») */
+export function dataSummary(id: number): { key: string; count: number; days: number | null }[] {
+  const n = (sql: string, ...a: unknown[]) => (db.prepare(sql).get(...a) as { c: number }).c;
+  const keep = retentionDays();
+  const nick = (db.prepare('SELECT game_nick FROM user_player WHERE user_id = ?').get(id) as { game_nick: string } | undefined)?.game_nick;
+  const out: { key: string; count: number; days: number | null }[] = [
+    { key: 'account', count: 1, days: null },
+    { key: 'preferences', count: n('SELECT COUNT(*) AS c FROM user_prefs WHERE user_id = ?', id), days: null },
+    { key: 'player', count: n('SELECT COUNT(*) AS c FROM user_player WHERE user_id = ?', id), days: null },
+    { key: 'favourites', count: n('SELECT COUNT(*) AS c FROM favorites WHERE user_id = ?', id), days: null },
+    { key: 'devices', count: n('SELECT COUNT(*) AS c FROM sessions WHERE user_id = ?', id), days: 8 },
+    { key: 'journal', count: n('SELECT COUNT(*) AS c FROM account_events WHERE user_id = ?', id), days: keep.accountEvents },
+  ];
+  if (hasTable(db, 'player_follows')) out.push({ key: 'follows', count: n('SELECT COUNT(*) AS c FROM player_follows WHERE user_id = ?', id), days: null });
+  if (nick) out.push({ key: 'sessions', count: n('SELECT COUNT(*) AS c FROM player_sessions WHERE ulower(name) = ulower(?)', nick), days: keep.playerSessions });
+  return out;
+}
+
+router.get('/api/me/data-summary', auth, (req: AuthedRequest, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.json(dataSummary(req.user!.id));
+});
 
 router.get('/api/me/export', auth, windowLimiter(10, 3600_000), (req: AuthedRequest, res) => {
   const name = String(req.user!.username ?? 'account').replace(/[^\w.-]+/g, '_').slice(0, 40) || 'account';

@@ -396,6 +396,36 @@ CREATE INDEX IF NOT EXISTS idx_game_commands_server ON game_commands(server_id, 
     // a ban holds on all servers (all) or only on the one where it was given (server)
     up: (db) => db.exec("ALTER TABLE game_bans ADD COLUMN scope TEXT NOT NULL DEFAULT 'all'"),
   },
+  {
+    version: 28,
+    name: 'settings_history',
+    // who changed which setting, from what to what (settings a person sets only; secrets and counters are not written)
+    up: (db) =>
+      db.exec(`
+CREATE TABLE IF NOT EXISTS settings_history (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts INTEGER NOT NULL,
+  actor TEXT,
+  key TEXT NOT NULL,
+  old_value TEXT,
+  new_value TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_settings_history_ts ON settings_history(ts DESC);`),
+  },
+  {
+    version: 29,
+    name: 'rum_samples',
+    // the speed the visitors really see: one value of one metric of one page, nothing about the person
+    up: (db) =>
+      db.exec(`
+CREATE TABLE IF NOT EXISTS rum_samples (
+  ts INTEGER NOT NULL,
+  route TEXT NOT NULL,
+  metric TEXT NOT NULL,
+  value REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_rum_samples ON rum_samples(route, metric, ts);`),
+  },
 ];
 
 export const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;
