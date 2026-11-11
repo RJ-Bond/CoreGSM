@@ -20,7 +20,7 @@ export const GUEST_PAGES = [
   { id: 'server', path: '/servers/1' },
   { id: 'server-players', path: '/servers/1/players' },
   { id: 'server-history', path: '/servers/1/history' },
-  { id: 'server-analytics', path: '/servers/1/analytics' },
+  { id: 'server-analytics', path: '/servers/1/stats' },
   { id: 'server-events', path: '/servers/1/events' },
   { id: 'server-connect', path: '/servers/1/connect' },
   { id: 'server-offline', path: '/servers/8' },
