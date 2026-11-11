@@ -56,6 +56,18 @@ export function newsWhen(at: number): string {
 
 const hex = (n: number | undefined) => `#${(n ?? 0x5b4fe0).toString(16).padStart(6, '0')}`;
 
+/** the Ember look: the picture in front of a title is the rubric's job, not the title's */
+const isPicture = (c: string) => /^\p{Extended_Pictographic}$/u.test(c);
+const isGlue = (c: string) => c === '‍' || c === '️' || /^\p{Emoji_Modifier}$/u.test(c) || /^\s$/u.test(c);
+const plainTitle = (title: string): string => {
+  if (typeof document === 'undefined' || document.documentElement.dataset.ember !== '1') return title;
+  const chars = Array.from(title);
+  if (!chars.length || !isPicture(chars[0])) return title;
+  let i = 0;
+  while (i < chars.length && (isPicture(chars[i]) || isGlue(chars[i]))) i++;
+  return chars.slice(i).join('').trim() || title;
+};
+
 export function cardOf(n: PublicNews): Card {
   const p = n.payload ?? { content: '', mention: 'none' as const };
   const e = p.embed;
@@ -63,7 +75,7 @@ export function cardOf(n: PublicNews): Card {
   const at = typeof p.countdownAt === 'number' && Number.isFinite(p.countdownAt) && p.countdownAt > 0 ? p.countdownAt : null;
   return {
     id: n.id,
-    title: e?.title || n.title || t('nw.untitled'),
+    title: plainTitle(e?.title || n.title || t('nw.untitled')),
     text: (e?.description || p.content || '').trim(),
     author: e?.author?.name ? { name: e.author.name, icon: e.author.iconUrl } : null,
     role: n.authorRole ?? null,

@@ -283,7 +283,9 @@ function ServerList() {
   const heroReason: HeroReason = picked?.reason ?? null;
   // servers with a problem sit in a compact strip above the tiles (unless the hero is itself the problem: then every server is)
   // (the problem servers are named in the alert row of the pulse strip and sit first among the tiles)
-  const rest = sorted.filter((s) => s.id !== hero?.id).sort((a, b) => Number(needsAttention(b)) - Number(needsAttention(a)));
+  const [myOrder, setMyOrder] = useState<number[]>(readOrder);
+  const orderIdx = (id: number) => { const i = myOrder.indexOf(id); return i < 0 ? Number.MAX_SAFE_INTEGER : i; };
+  const rest = sorted.filter((s) => s.id !== hero?.id).sort((a, b) => Number(needsAttention(b)) - Number(needsAttention(a)) || orderIdx(a.id) - orderIdx(b.id));
   // Ember: the favourites are pinned above the rest, each group with its own heading
   const pinFavs = ember && !!me && rest.some((s) => favs.includes(s.id)) && rest.some((s) => !favs.includes(s.id));
   const restShown = pinFavs ? [...rest].sort((a, b) => Number(favs.includes(b.id)) - Number(favs.includes(a.id))) : rest;
@@ -329,7 +331,26 @@ function ServerList() {
   const open = (s: Server) => { navigate(`/servers/${s.id}`); };
 
   const Tile = phone ? PhoneRow : SmallTile;
+  // a tile is dragged onto another one: the visitor's own order of the servers (kept in this browser)
+  const dragId = useRef<number | null>(null);
+  const moveTile = (from: number, to: number) => {
+    const ids = restShown.map((x) => x.id);
+    const a = ids.indexOf(from), b = ids.indexOf(to);
+    if (a < 0 || b < 0 || a === b) return;
+    ids.splice(a, 1);
+    ids.splice(b, 0, from);
+    setMyOrder(ids);
+    saveOrder(ids);
+  };
+  const dnd = (id: number) => (phone || selOn || effView !== 'tiles' || effFilter !== 'all' ? undefined : {
+    draggable: true,
+    onDragStart: (e: React.DragEvent) => { dragId.current = id; e.dataTransfer.effectAllowed = 'move'; try { e.dataTransfer.setData('text/plain', String(id)); } catch { /* a browser without it */ } },
+    onDragOver: (e: React.DragEvent) => { if (dragId.current != null && dragId.current !== id) e.preventDefault(); },
+    onDrop: (e: React.DragEvent) => { e.preventDefault(); const from = dragId.current; dragId.current = null; if (from != null) moveTile(from, id); },
+    onDragEnd: () => { dragId.current = null; },
+  });
   const tileProps = (s: Server, idx: number) => ({
+    dnd: dnd(s.id),
     rx,
     s,
     idx,
@@ -385,7 +406,7 @@ function ServerList() {
             {effView === 'tiles' && (
               <div className="seg max-sm:hidden" role="group" aria-label={t('d2.srv.tileSize')}>
                 {([['s', 'S', 'd2.srv.sz.s'], ['m', 'M', 'd2.srv.sz.m'], ['l', 'L', 'd2.srv.sz.l']] as const).map(([id, mark, label]) => (
-                  <button key={id} type="button" className="seg-item" aria-pressed={size === id} title={t(label)} aria-label={t(label)} onClick={() => setSize(id)}>{mark}</button>
+                  <button key={id} type="button" className="seg-item" aria-pressed={size === id} title={t(label)} aria-label={t(label)} onClick={() => setSize(id)}><span className="sz-mark" data-sz={id} aria-hidden>{mark}<i /><i /><i /><i /></span></button>
                 ))}
               </div>
             )}
@@ -467,6 +488,12 @@ function ServerList() {
     </div>
   );
 }
+
+const ORDER_KEY = 'coregsm_srv_order';
+const readOrder = (): number[] => {
+  try { const v = JSON.parse(localStorage.getItem(ORDER_KEY) ?? '[]') as unknown; return Array.isArray(v) ? v.filter((x): x is number => Number.isInteger(x)) : []; } catch { return []; }
+};
+const saveOrder = (ids: number[]) => { try { localStorage.setItem(ORDER_KEY, JSON.stringify(ids)); } catch { /* not remembered */ } };
 
 /** the checkbox of the selection mode in a corner of a card */
 function CardCheck({ s, select, className = '' }: { s: Server; select: SelectProps; className?: string }) {
@@ -615,7 +642,7 @@ function PhoneRow({ s, idx, fav, onFav, onOpen, select }: { rx: Reactions; s: Se
   );
 }
 
-function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince }: { rx: Reactions; s: Server; idx: number; fav: boolean | null; onFav: () => void; onOpen: () => void; select?: SelectProps; uptime?: number; downSince?: number }) {
+function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince, dnd }: { dnd?: React.HTMLAttributes<HTMLElement>; rx: Reactions; s: Server; idx: number; fav: boolean | null; onFav: () => void; onOpen: () => void; select?: SelectProps; uptime?: number; downSince?: number }) {
   useI18n();
   const [who, setWho] = useState(false);
   const [c1] = gameGradient(s.game);
@@ -627,6 +654,7 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince }
   const nearFull = s.online && s.maxPlayers > 0 && s.players / s.maxPlayers >= 0.8;
   return (
     <article
+      {...dnd}
       className={`srv-tile tile tile-in tile-hover relative flex cursor-pointer flex-col gap-2 p-3 pb-4 ${select?.has(s.id) ? 'srv-selected' : ''} ${s.online ? '' : 'is-down'} ${nearFull ? 'is-busy' : ''} ${s.online && lag ? 'is-lag' : ''}`}
       // the fuller the server, the stronger its glow in the game's colour
       style={{ ...stagger(idx), ['--gc' as string]: accent, ['--fill' as string]: s.online && s.maxPlayers > 0 ? Math.min(1, s.players / s.maxPlayers).toFixed(2) : '0' }}

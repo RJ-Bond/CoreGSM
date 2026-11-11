@@ -233,6 +233,9 @@ function GamesShare({ servers }: { servers: Community['servers'] }) {
       <h2 className="mb-3 text-lg font-extrabold">{t('cm.who')}</h2>
       {total === 0 ? <p className="cm-sub">{t('cm.who.none')}</p> : (
         <>
+          <div className="cm-ring" aria-hidden style={{ background: `conic-gradient(${(() => { let a = 0; return list.map(([g, v]) => { const from = a; a += (v / total) * 100; return `${gameColor(g)} ${from}% ${a}%`; }).join(', '); })()})` }}>
+            <b>{total}</b>
+          </div>
           <div className="cm-share" role="img" aria-label={list.map(([g, v]) => `${gameLabel(g)}: ${v}`).join(', ')}>
             {list.map(([g, v]) => <span key={g} style={{ width: `${(v / total) * 100}%`, background: gameColor(g) }} title={`${gameLabel(g)}: ${v}`} />)}
           </div>

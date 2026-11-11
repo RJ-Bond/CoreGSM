@@ -185,6 +185,14 @@ export function Crumbs({ items }: { items: [href: string, label: ReactNode, menu
   );
 }
 
+// ---------- the date in the top left corner of the content (the Ember look, wide screens) ----------
+export function TopLine() {
+  const { lang } = useI18n();
+  const d = new Date();
+  const text = d.toLocaleDateString(lang === 'en' ? 'en-GB' : 'ru-RU', { weekday: 'long', day: 'numeric', month: 'long' });
+  return <div className="emb-topline" aria-hidden>{text.charAt(0).toUpperCase() + text.slice(1)}</div>;
+}
+
 // ---------- the servers opened last: a short list in the side column (the Ember look, wide screens) ----------
 export function RecentServers({ currentId }: { currentId?: number }) {
   useI18n();

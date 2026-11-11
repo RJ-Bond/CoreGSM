@@ -463,7 +463,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
   const copyAddress = async () => {
     try {
       await navigator.clipboard.writeText(s.address);
-      toast(t('d2.sd.t.addrCopied'));
+      toast(t('d2.sd.t.addrCopiedGo'));
     } catch {
       toast(t('d2.sd.t.addr', { addr: s.address }), 'info', 8000);
     }
@@ -473,7 +473,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
   const down = !s.online && s.hasStatus;
   const outage = down ? offlineSince(events, points) : null;
   const chartEl = (withSeries: boolean) => ember && !withSeries ? (
-    <PlayersBars points={points} hours={data.hours} max={s.maxPlayers} now={nowTs} />
+    <PlayersBars points={points} hours={data.hours} max={s.maxPlayers} now={nowTs} baseline={data.baseline ?? null} />
   ) : (
     <HistoryChart points={points} hours={data.hours} events={events} title={s.name} game={gameLabel(s.game)} max={s.maxPlayers} color={series === 'ping' ? 'rgb(var(--link))' : ember ? 'rgb(var(--brand-2))' : calmSeriesColor(accent)} series={withSeries ? series : 'players'} loading={chartLoading} baseline={data.baseline ?? null} />
   );
@@ -725,6 +725,19 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
       <div className="srv-main min-w-0 space-y-3.5">
       <ErrorLine text={error} />
 
+      {ember && events.length > 0 && (() => {
+        const e = events[0];
+        const text = e.type === 'up' ? t('d2.ef.up') : e.type === 'peak' ? t('d2.ef.peak', { n: e.players ?? '–' }) : e.type === 'maintenance' ? (e.name ? t('d2.ef.maintName', { name: e.name }) : t('d2.ef.maint')) : t('d2.ef.down');
+        return (
+          <a className={`srv-ticker is-${e.type}`} href={tabHref(id, 'events')}>
+            <i aria-hidden />
+            <span className="srv-ticker-k">{t('srv.ticker.last')}</span>
+            <b className="truncate">{text}</b>
+            <span className="srv-ticker-t">{ago(e.ts)}</span>
+            <span className="srv-ticker-go" aria-hidden>→</span>
+          </a>
+        );
+      })()}
       <ServerTabs
         id={id}
         tab={tab}

@@ -25,6 +25,14 @@ const SURFACES: [string, string, string][] = [
 const TEXTS: [string, string][] = [['text-ink', 'Основной текст'], ['text-mute', 'Вторичный текст'], ['text-link', 'Ссылка и акцент'], ['text-ok', 'Успех'], ['text-warn', 'Внимание'], ['text-bad', 'Ошибка']];
 
 /** captions of the game-icon and list-state blocks (a reference page: Russian only, like the arrays above) */
+const PALETTE_TEXT = {
+  title: 'Палитра',
+  note: 'Цвета панели по именам токенов: в светлой и тёмной теме, в классике и в Ember (вид выбирается в профиле). Цвет текста и фона берётся из токена, не из HEX.',
+  surfaces: 'Поверхности и линии',
+  tones: 'Акцент и состояния',
+};
+const PALETTE_SURFACES: [string, string][] = [['page', 'фон страницы'], ['card', 'карточка'], ['raised', 'приподнятое'], ['soft', 'мягкая подложка'], ['line', 'линия'], ['field', 'граница поля'], ['ink', 'текст'], ['mute', 'вторичный текст']];
+const PALETTE_TONES: [string, string][] = [['brand', 'главная кнопка'], ['brand-hover', 'наведение'], ['brand-2', 'глубокий акцент'], ['link', 'ссылка'], ['ok', 'в порядке'], ['warn', 'внимание'], ['bad', 'сбой']];
 const KIT = { avatars: 'Значки игр', glass: 'glass на цвете', states: 'Состояния списка: загрузка · пусто · ошибка', emptyTitle: 'Здесь пока пусто', emptyText: 'Объясните, что это за раздел.' };
 
 function Block({ title, note, children }: { title: string; note?: ReactNode; children: ReactNode }) {
@@ -232,6 +240,19 @@ export default function UiKitPage() {
         </Row>
         <Row label="Текст (контраст не ниже 4.5:1 на карточке и подложке)">
           {TEXTS.map(([cls, t]) => <span key={cls} className={`rounded-ui-md bg-soft px-3 py-1.5 font-bold ${cls}`}>{t}</span>)}
+        </Row>
+      </Block>
+
+      <Block title={PALETTE_TEXT.title} note={PALETTE_TEXT.note}>
+        <Row label={PALETTE_TEXT.surfaces}>
+          {PALETTE_SURFACES.map(([k, d]) => (
+            <div key={k} className="grid h-16 w-32 content-end rounded-ui-md border border-line p-2 text-xs font-extrabold" style={{ background: `rgb(var(--${k}))` }}>{k}<span className="block font-semibold text-mute">{d}</span></div>
+          ))}
+        </Row>
+        <Row label={PALETTE_TEXT.tones}>
+          {PALETTE_TONES.map(([k, d]) => (
+            <div key={k} className="grid h-16 w-32 content-end rounded-ui-md p-2 text-xs font-extrabold text-white" style={{ background: `rgb(var(--${k}))`, textShadow: '0 1px 2px rgb(0 0 0 / .45)' }}>{k}<span className="block font-semibold opacity-90">{d}</span></div>
+          ))}
         </Row>
       </Block>
 

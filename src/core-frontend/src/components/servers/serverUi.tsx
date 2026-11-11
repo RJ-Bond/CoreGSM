@@ -108,7 +108,7 @@ export function CapacityBar({ players, max, color, onDark = false, big = false, 
       <div className="flex items-center gap-2">
         <div
           className={`srv-cap ${onDark ? 'on-dark' : ''} ${level} ${big ? 'big' : ''}`}
-          style={{ ['--cap' as string]: color }}
+          style={{ ['--cap' as string]: color, ...(max > 1 && max <= 40 ? { ['--slots' as string]: max } : {}) }}
           role="meter"
           aria-label={t('srv.cap.label')}
           aria-valuemin={0}

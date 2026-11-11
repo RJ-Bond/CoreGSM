@@ -255,7 +255,7 @@ function Banner({ data, fetchedAt }: { data: StatusInfo; fetchedAt: number }) {
       <dl className="st-banner-stats">
         <div><dt><IconServer />{t('st.stat.online')}</dt><dd>{t('st.stat.of', { a: upN, b: total })}</dd></div>
         <div><dt><IconUsers />{t('st.stat.players')}</dt><dd>{playersN}</dd></div>
-        <div><dt><IconAct />{t('st.stat.uptime', { d: data.range ?? 30 })}</dt><dd>{avg == null ? '–' : fmtPct(avgN)}</dd></div>
+        <div style={{ ['--up' as string]: `${Math.max(0, Math.min(100, avgN)).toFixed(1)}%` }}><dt><IconAct />{t('st.stat.uptime', { d: data.range ?? 30 })}</dt><dd>{avg == null ? '–' : fmtPct(avgN)}</dd></div>
         {ongoing > 0 && <div className="is-alert"><dt><IconAlert />{t('st.stat.now')}</dt><dd>{ongoing}</dd></div>}
       </dl>
     </section>

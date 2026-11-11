@@ -139,6 +139,24 @@ export function PulseStrip({ servers, overview, uptime, now, onOpen }: { servers
         </a>
       )}
     <section className={`pulse pulse-${state}`} aria-label={t('srv.pulse.label')}>
+      {ember && (
+        <div className="pulse-state" role="status">
+          <span className="pulse-icon" aria-hidden>{ICON[state]}</span>
+          {alert && first ? (
+            <a
+              className="pulse-title pulse-title-link"
+              href={problems.length === 1 ? `/servers/${first.id}` : '#srv-list'}
+              onClick={(e) => {
+                if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+                e.preventDefault();
+                if (problems.length === 1) onOpen?.(first);
+                else document.getElementById('srv-list')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+              }}
+            >{title}</a>
+          ) : <span className="pulse-title">{title}</span>}
+          {sub && <span className="pulse-sub">{sub}</span>}
+        </div>
+      )}
       {!alert && !ember && (
         <div className="pulse-state" role="status">
           <span className="pulse-icon" aria-hidden>{ICON[state]}</span>
@@ -154,18 +172,6 @@ export function PulseStrip({ servers, overview, uptime, now, onOpen }: { servers
         <div title={t('srv.pulse.tip.servers')}>
           <dt>{t('srv.pulse.servers')}</dt>
           <dd className={servers.length === 0 ? '' : online.length === servers.length ? 'text-ok' : online.length === 0 ? 'text-bad' : 'text-warn'}>{online.length}<small>/{servers.length}</small>
-          {ember && alert && first && (
-            <a
-              className={`pulse-problem pulse-problem-${state}`}
-              href={problems.length === 1 ? `/servers/${first.id}` : '#srv-list'}
-              onClick={(e) => {
-                if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
-                e.preventDefault();
-                if (problems.length === 1) onOpen?.(first);
-                else document.getElementById('srv-list')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-              }}
-            >{title}</a>
-          )}
           </dd>
         </div>
         <div title={t('srv.pulse.tip.ping')}>

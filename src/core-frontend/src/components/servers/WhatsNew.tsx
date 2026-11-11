@@ -121,6 +121,7 @@ export function WhatsNew({ open, onToggle, overview }: { open: boolean; onToggle
       <h2 className="m-0">
         <button type="button" className="srv-new-head" aria-expanded={open} aria-controls={bodyId} onClick={onToggle}>
           <span className="font-black">{t('srv.new.title')}</span>
+          {ember && (news ? 1 : 0) + maint.length > 0 && <span className="srv-new-count">{(news ? 1 : 0) + maint.length}</span>}
           {fresh && <span className="srv-new-badge">{t('srv.new.fresh')}</span>}
           <span aria-hidden className={`srv-new-chev ${open ? 'open' : ''}`}><IconChevronDown /></span>
         </button>

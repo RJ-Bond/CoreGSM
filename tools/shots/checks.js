@@ -70,7 +70,7 @@
       h = (h * 60 + 360) % 360;
       return h >= 238 && h <= 275 && sat > 0.35 && l > 0.2 && l < 0.85;
     };
-    const content = '.game-av, .srv-tile, .hero3, .cm-srv, .cm-bento, .nw-cover, .nb-card, .avatar-hue, .pf-ach-ico, [data-game], svg, canvas, img, .emblem-host, .accent-dot, [style*="background"]';
+    const content = '.game-av, .srv-tile, .hero3, .cm-srv, .cm-bento, .nw-cover, .nb-card, .avatar-hue, .pf-ach-ico, [data-game], svg, canvas, img, .emblem-host, .accent-dot, [data-kit-theme], [style*="background"]';
     for (const el of document.querySelectorAll('body *')) {
       if (violet.length >= 6) break;
       const cs = getComputedStyle(el);

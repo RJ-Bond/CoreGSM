@@ -10,7 +10,7 @@ import { onAccentChange, paintBrand, useAutoAccent } from './accent';
 import NotificationBell from './components/NotificationBell';
 import AttentionBell from './components/AttentionBell';
 import RulesBanner from './components/RulesBanner';
-import { AppFooter, ProfileMenu, RecentServers, RouteProgress, Tooltips, restoreScroll, useHideOnScroll, usePanelPulse, useScrollMemory } from './components/ShellExtras';
+import { AppFooter, ProfileMenu, RecentServers, TopLine, RouteProgress, Tooltips, restoreScroll, useHideOnScroll, usePanelPulse, useScrollMemory } from './components/ShellExtras';
 import NotFound from './components/NotFound';
 import { ConfirmHost } from './confirm';
 import Login from './pages/Login';
@@ -430,6 +430,7 @@ export default function App() {
       <RouteProgress routeKey={routeKey} />
       <Tooltips />
       <div className={`app-wrap mx-auto min-h-full ${page === 'admin' ? 'max-w-[100rem]' : 'max-w-6xl'} px-3 pb-[calc(6.5rem+env(safe-area-inset-bottom,0px))] pt-3 sm:px-6 sm:pt-4 md:pb-16`}>
+        {ember && <TopLine />}
         <header className="hdr glass sticky top-2 z-30 mb-5 flex items-center gap-x-2 rounded-ui-xl py-2 pl-3 pr-2 sm:top-3 md:mb-7 md:gap-x-3 md:pl-4">
           <a href="/servers" aria-label={access.brand.name} className="flex min-w-0 items-center gap-2.5 text-xl font-black tracking-tight max-md:flex-1 sm:text-[22px] md:max-w-60 md:shrink-0">
             <Logo size={34} alt="" />

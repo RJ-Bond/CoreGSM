@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="1b9dc55044dc"
+COREGSM_BUILD="0c65413fffa0"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.2.21"
+COREGSM_VERSION="1.2.22"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -121085,7 +121085,7 @@ import { onAccentChange, paintBrand, useAutoAccent } from './accent';
 import NotificationBell from './components/NotificationBell';
 import AttentionBell from './components/AttentionBell';
 import RulesBanner from './components/RulesBanner';
-import { AppFooter, ProfileMenu, RecentServers, RouteProgress, Tooltips, restoreScroll, useHideOnScroll, usePanelPulse, useScrollMemory } from './components/ShellExtras';
+import { AppFooter, ProfileMenu, RecentServers, TopLine, RouteProgress, Tooltips, restoreScroll, useHideOnScroll, usePanelPulse, useScrollMemory } from './components/ShellExtras';
 import NotFound from './components/NotFound';
 import { ConfirmHost } from './confirm';
 import Login from './pages/Login';
@@ -121505,6 +121505,7 @@ export default function App() {
       <RouteProgress routeKey={routeKey} />
       <Tooltips />
       <div className={`app-wrap mx-auto min-h-full ${page === 'admin' ? 'max-w-[100rem]' : 'max-w-6xl'} px-3 pb-[calc(6.5rem+env(safe-area-inset-bottom,0px))] pt-3 sm:px-6 sm:pt-4 md:pb-16`}>
+        {ember && <TopLine />}
         <header className="hdr glass sticky top-2 z-30 mb-5 flex items-center gap-x-2 rounded-ui-xl py-2 pl-3 pr-2 sm:top-3 md:mb-7 md:gap-x-3 md:pl-4">
           <a href="/servers" aria-label={access.brand.name} className="flex min-w-0 items-center gap-2.5 text-xl font-black tracking-tight max-md:flex-1 sm:text-[22px] md:max-w-60 md:shrink-0">
             <Logo size={34} alt="" />
@@ -128179,6 +128180,14 @@ export function Crumbs({ items }: { items: [href: string, label: ReactNode, menu
   );
 }
 
+// ---------- the date in the top left corner of the content (the Ember look, wide screens) ----------
+export function TopLine() {
+  const { lang } = useI18n();
+  const d = new Date();
+  const text = d.toLocaleDateString(lang === 'en' ? 'en-GB' : 'ru-RU', { weekday: 'long', day: 'numeric', month: 'long' });
+  return <div className="emb-topline" aria-hidden>{text.charAt(0).toUpperCase() + text.slice(1)}</div>;
+}
+
 // ---------- the servers opened last: a short list in the side column (the Ember look, wide screens) ----------
 export function RecentServers({ currentId }: { currentId?: number }) {
   useI18n();
@@ -132470,6 +132479,18 @@ export function newsWhen(at: number): string {
 
 const hex = (n: number | undefined) => `#${(n ?? 0x5b4fe0).toString(16).padStart(6, '0')}`;
 
+/** the Ember look: the picture in front of a title is the rubric's job, not the title's */
+const isPicture = (c: string) => /^\p{Extended_Pictographic}$/u.test(c);
+const isGlue = (c: string) => c === '‍' || c === '️' || /^\p{Emoji_Modifier}$/u.test(c) || /^\s$/u.test(c);
+const plainTitle = (title: string): string => {
+  if (typeof document === 'undefined' || document.documentElement.dataset.ember !== '1') return title;
+  const chars = Array.from(title);
+  if (!chars.length || !isPicture(chars[0])) return title;
+  let i = 0;
+  while (i < chars.length && (isPicture(chars[i]) || isGlue(chars[i]))) i++;
+  return chars.slice(i).join('').trim() || title;
+};
+
 export function cardOf(n: PublicNews): Card {
   const p = n.payload ?? { content: '', mention: 'none' as const };
   const e = p.embed;
@@ -132477,7 +132498,7 @@ export function cardOf(n: PublicNews): Card {
   const at = typeof p.countdownAt === 'number' && Number.isFinite(p.countdownAt) && p.countdownAt > 0 ? p.countdownAt : null;
   return {
     id: n.id,
-    title: e?.title || n.title || t('nw.untitled'),
+    title: plainTitle(e?.title || n.title || t('nw.untitled')),
     text: (e?.description || p.content || '').trim(),
     author: e?.author?.name ? { name: e.author.name, icon: e.author.iconUrl } : null,
     role: n.authorRole ?? null,
@@ -138191,11 +138212,20 @@ const day = (ts: number) => new Date(ts).toLocaleDateString('ru-RU', { day: 'num
  * The «Ember» chart of the players: a column for every hour (or six hours, or a day), the highest one in the accent colour
  * with a glow, the rest in graphite. A column says its time and its peak when the pointer is on it.
  */
-export default function PlayersBars({ points, hours, max, now }: { points: BarPoint[]; hours: number; max: number; now: number }) {
+/** the usual number of players at this hour of this day of the week (the baseline of the server: 7 x 24 values, UTC) */
+const usualAt = (baseline: (number | null)[] | null | undefined, ts: number): number | null => {
+  if (!baseline) return null;
+  const d = new Date(ts);
+  return baseline[d.getUTCDay() * 24 + d.getUTCHours()] ?? null;
+};
+
+export default function PlayersBars({ points, hours, max, now, baseline = null }: { points: BarPoint[]; hours: number; max: number; now: number; baseline?: (number | null)[] | null }) {
   useI18n();
   const bars = useMemo(() => bucketPeaks(points, hours, now), [points, hours, now]);
   const top = highestBar(bars);
-  const scale = Math.max(1, max, ...bars.map((b) => b.peak ?? 0));
+  const usual = hours <= 24 ? bars.map((b) => usualAt(baseline, (b.from + b.to) / 2)) : bars.map(() => null);
+  const scale = Math.max(1, max, ...bars.map((b) => b.peak ?? 0), ...usual.map((u) => u ?? 0));
+  const hasUsual = usual.some((u) => u != null);
   const label = (ts: number) => (hours <= 24 ? clock(ts) : day(ts));
   const where = (b: { from: number; to: number }) => (hours <= 24 ? `${clock(b.from)}–${clock(b.to)}` : `${day(b.from)}`);
   const summary = top >= 0 ? t('srv.bars.summary', { n: bars[top].peak ?? 0, when: where(bars[top]) }) : t('srv.bars.none');
@@ -138203,12 +138233,15 @@ export default function PlayersBars({ points, hours, max, now }: { points: BarPo
     <div className="pb">
       <div className="pb-cols" role="img" aria-label={summary}>
         {bars.map((b, i) => (
-          <i
-            key={b.from}
-            className={`pb-bar ${i === top ? 'is-top' : ''} ${b.peak == null ? 'is-empty' : ''}`}
-            style={{ height: `${b.peak == null ? 4 : Math.max(6, Math.round((b.peak / scale) * 100))}%` }}
-            title={b.peak == null ? `${where(b)} · ${t('srv.bars.noData')}` : `${where(b)} · ${t('srv.bars.peak', { n: b.peak })}`}
-          />
+          <span key={b.from} className="pb-col" title={b.peak == null ? `${where(b)} · ${t('srv.bars.noData')}` : `${where(b)} · ${t('srv.bars.peak', { n: b.peak })}`}>
+            {usual[i] != null && <s className="pb-ghost" style={{ bottom: `${Math.max(2, Math.round(((usual[i] as number) / scale) * 100))}%` }} aria-hidden />}
+            <i
+              className={`pb-bar ${i === top ? 'is-top' : ''} ${b.peak == null ? 'is-empty' : ''}`}
+              style={{ height: `${b.peak == null ? 4 : Math.max(6, Math.round((b.peak / scale) * 100))}%` }}
+            >
+              {i === top && b.peak != null && <b className="pb-peak">{b.peak}</b>}
+            </i>
+          </span>
         ))}
       </div>
       <div className="pb-ax" aria-hidden>
@@ -138218,7 +138251,7 @@ export default function PlayersBars({ points, hours, max, now }: { points: BarPo
         <span>{label(bars[Math.floor((bars.length * 3) / 4)].from)}</span>
         <span>{t('srv.bars.now')}</span>
       </div>
-      <p className="pb-note">{summary}</p>
+      <p className="pb-note">{summary}{hasUsual && <span className="pb-key"><s aria-hidden />{t('srv.bars.usual')}</span>}</p>
     </div>
   );
 }
@@ -140838,6 +140871,24 @@ export function PulseStrip({ servers, overview, uptime, now, onOpen }: { servers
         </a>
       )}
     <section className={`pulse pulse-${state}`} aria-label={t('srv.pulse.label')}>
+      {ember && (
+        <div className="pulse-state" role="status">
+          <span className="pulse-icon" aria-hidden>{ICON[state]}</span>
+          {alert && first ? (
+            <a
+              className="pulse-title pulse-title-link"
+              href={problems.length === 1 ? `/servers/${first.id}` : '#srv-list'}
+              onClick={(e) => {
+                if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+                e.preventDefault();
+                if (problems.length === 1) onOpen?.(first);
+                else document.getElementById('srv-list')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+              }}
+            >{title}</a>
+          ) : <span className="pulse-title">{title}</span>}
+          {sub && <span className="pulse-sub">{sub}</span>}
+        </div>
+      )}
       {!alert && !ember && (
         <div className="pulse-state" role="status">
           <span className="pulse-icon" aria-hidden>{ICON[state]}</span>
@@ -140853,18 +140904,6 @@ export function PulseStrip({ servers, overview, uptime, now, onOpen }: { servers
         <div title={t('srv.pulse.tip.servers')}>
           <dt>{t('srv.pulse.servers')}</dt>
           <dd className={servers.length === 0 ? '' : online.length === servers.length ? 'text-ok' : online.length === 0 ? 'text-bad' : 'text-warn'}>{online.length}<small>/{servers.length}</small>
-          {ember && alert && first && (
-            <a
-              className={`pulse-problem pulse-problem-${state}`}
-              href={problems.length === 1 ? `/servers/${first.id}` : '#srv-list'}
-              onClick={(e) => {
-                if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
-                e.preventDefault();
-                if (problems.length === 1) onOpen?.(first);
-                else document.getElementById('srv-list')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-              }}
-            >{title}</a>
-          )}
           </dd>
         </div>
         <div title={t('srv.pulse.tip.ping')}>
@@ -141311,6 +141350,7 @@ export function WhatsNew({ open, onToggle, overview }: { open: boolean; onToggle
       <h2 className="m-0">
         <button type="button" className="srv-new-head" aria-expanded={open} aria-controls={bodyId} onClick={onToggle}>
           <span className="font-black">{t('srv.new.title')}</span>
+          {ember && (news ? 1 : 0) + maint.length > 0 && <span className="srv-new-count">{(news ? 1 : 0) + maint.length}</span>}
           {fresh && <span className="srv-new-badge">{t('srv.new.fresh')}</span>}
           <span aria-hidden className={`srv-new-chev ${open ? 'open' : ''}`}><IconChevronDown /></span>
         </button>
@@ -141614,7 +141654,7 @@ export function CapacityBar({ players, max, color, onDark = false, big = false, 
       <div className="flex items-center gap-2">
         <div
           className={`srv-cap ${onDark ? 'on-dark' : ''} ${level} ${big ? 'big' : ''}`}
-          style={{ ['--cap' as string]: color }}
+          style={{ ['--cap' as string]: color, ...(max > 1 && max <= 40 ? { ['--slots' as string]: max } : {}) }}
           role="meter"
           aria-label={t('srv.cap.label')}
           aria-valuemin={0}
@@ -146288,6 +146328,7 @@ const en: Record<keyof typeof ru, string> = {
   'srv.bars.none': 'No data for the period',
   'srv.bars.noData': 'no data',
   'srv.bars.peak': 'peak {n}',
+  'srv.bars.usual': 'usual at this hour',
   'srv.bars.now': 'now',
   'srv.chart.axisX': 'Horizontal: time (your local time), {period}',
   'srv.chart.p24': 'last 24 hours',
@@ -146314,6 +146355,8 @@ const en: Record<keyof typeof ru, string> = {
   'srv.pl.newest': 'Newest',
   'srv.pl.alpha': 'A to Z',
   'srv.pl.joined': 'joined {time}',
+  'd2.sd.t.addrCopiedGo': 'Address copied · paste it in the game',
+  'srv.ticker.last': 'Last event',
   'srv.pl.copied': 'Nickname copied',
   'srv.pl.noMatch': 'Nobody found for "{q}"',
   'srv.pl.noMatchText': 'Check the spelling or clear the search.',
@@ -151233,6 +151276,7 @@ const ru = {
   'srv.bars.none': 'Нет данных за период',
   'srv.bars.noData': 'нет данных',
   'srv.bars.peak': 'пик {n}',
+  'srv.bars.usual': 'обычно в это время',
   'srv.bars.now': 'сейчас',
   'srv.chart.axisX': 'По горизонтали: время (ваше локальное), {period}',
   'srv.chart.p24': 'последние 24 часа',
@@ -151259,6 +151303,8 @@ const ru = {
   'srv.pl.newest': 'Новые',
   'srv.pl.alpha': 'По алфавиту',
   'srv.pl.joined': 'зашёл {time}',
+  'd2.sd.t.addrCopiedGo': 'Адрес скопирован · вставьте его в игру',
+  'srv.ticker.last': 'Последнее событие',
   'srv.pl.copied': 'Ник скопирован',
   'srv.pl.noMatch': 'Никого не нашли по запросу «{q}»',
   'srv.pl.noMatchText': 'Проверьте написание или очистите поиск.',
@@ -158878,6 +158924,9 @@ function GamesShare({ servers }: { servers: Community['servers'] }) {
       <h2 className="mb-3 text-lg font-extrabold">{t('cm.who')}</h2>
       {total === 0 ? <p className="cm-sub">{t('cm.who.none')}</p> : (
         <>
+          <div className="cm-ring" aria-hidden style={{ background: `conic-gradient(${(() => { let a = 0; return list.map(([g, v]) => { const from = a; a += (v / total) * 100; return `${gameColor(g)} ${from}% ${a}%`; }).join(', '); })()})` }}>
+            <b>{total}</b>
+          </div>
           <div className="cm-share" role="img" aria-label={list.map(([g, v]) => `${gameLabel(g)}: ${v}`).join(', ')}>
             {list.map(([g, v]) => <span key={g} style={{ width: `${(v / total) * 100}%`, background: gameColor(g) }} title={`${gameLabel(g)}: ${v}`} />)}
           </div>
@@ -165725,7 +165774,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
   const copyAddress = async () => {
     try {
       await navigator.clipboard.writeText(s.address);
-      toast(t('d2.sd.t.addrCopied'));
+      toast(t('d2.sd.t.addrCopiedGo'));
     } catch {
       toast(t('d2.sd.t.addr', { addr: s.address }), 'info', 8000);
     }
@@ -165735,7 +165784,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
   const down = !s.online && s.hasStatus;
   const outage = down ? offlineSince(events, points) : null;
   const chartEl = (withSeries: boolean) => ember && !withSeries ? (
-    <PlayersBars points={points} hours={data.hours} max={s.maxPlayers} now={nowTs} />
+    <PlayersBars points={points} hours={data.hours} max={s.maxPlayers} now={nowTs} baseline={data.baseline ?? null} />
   ) : (
     <HistoryChart points={points} hours={data.hours} events={events} title={s.name} game={gameLabel(s.game)} max={s.maxPlayers} color={series === 'ping' ? 'rgb(var(--link))' : ember ? 'rgb(var(--brand-2))' : calmSeriesColor(accent)} series={withSeries ? series : 'players'} loading={chartLoading} baseline={data.baseline ?? null} />
   );
@@ -165987,6 +166036,19 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
       <div className="srv-main min-w-0 space-y-3.5">
       <ErrorLine text={error} />
 
+      {ember && events.length > 0 && (() => {
+        const e = events[0];
+        const text = e.type === 'up' ? t('d2.ef.up') : e.type === 'peak' ? t('d2.ef.peak', { n: e.players ?? '–' }) : e.type === 'maintenance' ? (e.name ? t('d2.ef.maintName', { name: e.name }) : t('d2.ef.maint')) : t('d2.ef.down');
+        return (
+          <a className={`srv-ticker is-${e.type}`} href={tabHref(id, 'events')}>
+            <i aria-hidden />
+            <span className="srv-ticker-k">{t('srv.ticker.last')}</span>
+            <b className="truncate">{text}</b>
+            <span className="srv-ticker-t">{ago(e.ts)}</span>
+            <span className="srv-ticker-go" aria-hidden>→</span>
+          </a>
+        );
+      })()}
       <ServerTabs
         id={id}
         tab={tab}
@@ -166578,7 +166640,9 @@ function ServerList() {
   const heroReason: HeroReason = picked?.reason ?? null;
   // servers with a problem sit in a compact strip above the tiles (unless the hero is itself the problem: then every server is)
   // (the problem servers are named in the alert row of the pulse strip and sit first among the tiles)
-  const rest = sorted.filter((s) => s.id !== hero?.id).sort((a, b) => Number(needsAttention(b)) - Number(needsAttention(a)));
+  const [myOrder, setMyOrder] = useState<number[]>(readOrder);
+  const orderIdx = (id: number) => { const i = myOrder.indexOf(id); return i < 0 ? Number.MAX_SAFE_INTEGER : i; };
+  const rest = sorted.filter((s) => s.id !== hero?.id).sort((a, b) => Number(needsAttention(b)) - Number(needsAttention(a)) || orderIdx(a.id) - orderIdx(b.id));
   // Ember: the favourites are pinned above the rest, each group with its own heading
   const pinFavs = ember && !!me && rest.some((s) => favs.includes(s.id)) && rest.some((s) => !favs.includes(s.id));
   const restShown = pinFavs ? [...rest].sort((a, b) => Number(favs.includes(b.id)) - Number(favs.includes(a.id))) : rest;
@@ -166624,7 +166688,26 @@ function ServerList() {
   const open = (s: Server) => { navigate(`/servers/${s.id}`); };
 
   const Tile = phone ? PhoneRow : SmallTile;
+  // a tile is dragged onto another one: the visitor's own order of the servers (kept in this browser)
+  const dragId = useRef<number | null>(null);
+  const moveTile = (from: number, to: number) => {
+    const ids = restShown.map((x) => x.id);
+    const a = ids.indexOf(from), b = ids.indexOf(to);
+    if (a < 0 || b < 0 || a === b) return;
+    ids.splice(a, 1);
+    ids.splice(b, 0, from);
+    setMyOrder(ids);
+    saveOrder(ids);
+  };
+  const dnd = (id: number) => (phone || selOn || effView !== 'tiles' || effFilter !== 'all' ? undefined : {
+    draggable: true,
+    onDragStart: (e: React.DragEvent) => { dragId.current = id; e.dataTransfer.effectAllowed = 'move'; try { e.dataTransfer.setData('text/plain', String(id)); } catch { /* a browser without it */ } },
+    onDragOver: (e: React.DragEvent) => { if (dragId.current != null && dragId.current !== id) e.preventDefault(); },
+    onDrop: (e: React.DragEvent) => { e.preventDefault(); const from = dragId.current; dragId.current = null; if (from != null) moveTile(from, id); },
+    onDragEnd: () => { dragId.current = null; },
+  });
   const tileProps = (s: Server, idx: number) => ({
+    dnd: dnd(s.id),
     rx,
     s,
     idx,
@@ -166680,7 +166763,7 @@ function ServerList() {
             {effView === 'tiles' && (
               <div className="seg max-sm:hidden" role="group" aria-label={t('d2.srv.tileSize')}>
                 {([['s', 'S', 'd2.srv.sz.s'], ['m', 'M', 'd2.srv.sz.m'], ['l', 'L', 'd2.srv.sz.l']] as const).map(([id, mark, label]) => (
-                  <button key={id} type="button" className="seg-item" aria-pressed={size === id} title={t(label)} aria-label={t(label)} onClick={() => setSize(id)}>{mark}</button>
+                  <button key={id} type="button" className="seg-item" aria-pressed={size === id} title={t(label)} aria-label={t(label)} onClick={() => setSize(id)}><span className="sz-mark" data-sz={id} aria-hidden>{mark}<i /><i /><i /><i /></span></button>
                 ))}
               </div>
             )}
@@ -166762,6 +166845,12 @@ function ServerList() {
     </div>
   );
 }
+
+const ORDER_KEY = 'coregsm_srv_order';
+const readOrder = (): number[] => {
+  try { const v = JSON.parse(localStorage.getItem(ORDER_KEY) ?? '[]') as unknown; return Array.isArray(v) ? v.filter((x): x is number => Number.isInteger(x)) : []; } catch { return []; }
+};
+const saveOrder = (ids: number[]) => { try { localStorage.setItem(ORDER_KEY, JSON.stringify(ids)); } catch { /* not remembered */ } };
 
 /** the checkbox of the selection mode in a corner of a card */
 function CardCheck({ s, select, className = '' }: { s: Server; select: SelectProps; className?: string }) {
@@ -166910,7 +166999,7 @@ function PhoneRow({ s, idx, fav, onFav, onOpen, select }: { rx: Reactions; s: Se
   );
 }
 
-function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince }: { rx: Reactions; s: Server; idx: number; fav: boolean | null; onFav: () => void; onOpen: () => void; select?: SelectProps; uptime?: number; downSince?: number }) {
+function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince, dnd }: { dnd?: React.HTMLAttributes<HTMLElement>; rx: Reactions; s: Server; idx: number; fav: boolean | null; onFav: () => void; onOpen: () => void; select?: SelectProps; uptime?: number; downSince?: number }) {
   useI18n();
   const [who, setWho] = useState(false);
   const [c1] = gameGradient(s.game);
@@ -166922,6 +167011,7 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince }
   const nearFull = s.online && s.maxPlayers > 0 && s.players / s.maxPlayers >= 0.8;
   return (
     <article
+      {...dnd}
       className={`srv-tile tile tile-in tile-hover relative flex cursor-pointer flex-col gap-2 p-3 pb-4 ${select?.has(s.id) ? 'srv-selected' : ''} ${s.online ? '' : 'is-down'} ${nearFull ? 'is-busy' : ''} ${s.online && lag ? 'is-lag' : ''}`}
       // the fuller the server, the stronger its glow in the game's colour
       style={{ ...stagger(idx), ['--gc' as string]: accent, ['--fill' as string]: s.online && s.maxPlayers > 0 ? Math.min(1, s.players / s.maxPlayers).toFixed(2) : '0' }}
@@ -167493,7 +167583,7 @@ function Banner({ data, fetchedAt }: { data: StatusInfo; fetchedAt: number }) {
       <dl className="st-banner-stats">
         <div><dt><IconServer />{t('st.stat.online')}</dt><dd>{t('st.stat.of', { a: upN, b: total })}</dd></div>
         <div><dt><IconUsers />{t('st.stat.players')}</dt><dd>{playersN}</dd></div>
-        <div><dt><IconAct />{t('st.stat.uptime', { d: data.range ?? 30 })}</dt><dd>{avg == null ? '–' : fmtPct(avgN)}</dd></div>
+        <div style={{ ['--up' as string]: `${Math.max(0, Math.min(100, avgN)).toFixed(1)}%` }}><dt><IconAct />{t('st.stat.uptime', { d: data.range ?? 30 })}</dt><dd>{avg == null ? '–' : fmtPct(avgN)}</dd></div>
         {ongoing > 0 && <div className="is-alert"><dt><IconAlert />{t('st.stat.now')}</dt><dd>{ongoing}</dd></div>}
       </dl>
     </section>
@@ -167946,6 +168036,14 @@ const SURFACES: [string, string, string][] = [
 const TEXTS: [string, string][] = [['text-ink', 'Основной текст'], ['text-mute', 'Вторичный текст'], ['text-link', 'Ссылка и акцент'], ['text-ok', 'Успех'], ['text-warn', 'Внимание'], ['text-bad', 'Ошибка']];
 
 /** captions of the game-icon and list-state blocks (a reference page: Russian only, like the arrays above) */
+const PALETTE_TEXT = {
+  title: 'Палитра',
+  note: 'Цвета панели по именам токенов: в светлой и тёмной теме, в классике и в Ember (вид выбирается в профиле). Цвет текста и фона берётся из токена, не из HEX.',
+  surfaces: 'Поверхности и линии',
+  tones: 'Акцент и состояния',
+};
+const PALETTE_SURFACES: [string, string][] = [['page', 'фон страницы'], ['card', 'карточка'], ['raised', 'приподнятое'], ['soft', 'мягкая подложка'], ['line', 'линия'], ['field', 'граница поля'], ['ink', 'текст'], ['mute', 'вторичный текст']];
+const PALETTE_TONES: [string, string][] = [['brand', 'главная кнопка'], ['brand-hover', 'наведение'], ['brand-2', 'глубокий акцент'], ['link', 'ссылка'], ['ok', 'в порядке'], ['warn', 'внимание'], ['bad', 'сбой']];
 const KIT = { avatars: 'Значки игр', glass: 'glass на цвете', states: 'Состояния списка: загрузка · пусто · ошибка', emptyTitle: 'Здесь пока пусто', emptyText: 'Объясните, что это за раздел.' };
 
 function Block({ title, note, children }: { title: string; note?: ReactNode; children: ReactNode }) {
@@ -168153,6 +168251,19 @@ export default function UiKitPage() {
         </Row>
         <Row label="Текст (контраст не ниже 4.5:1 на карточке и подложке)">
           {TEXTS.map(([cls, t]) => <span key={cls} className={`rounded-ui-md bg-soft px-3 py-1.5 font-bold ${cls}`}>{t}</span>)}
+        </Row>
+      </Block>
+
+      <Block title={PALETTE_TEXT.title} note={PALETTE_TEXT.note}>
+        <Row label={PALETTE_TEXT.surfaces}>
+          {PALETTE_SURFACES.map(([k, d]) => (
+            <div key={k} className="grid h-16 w-32 content-end rounded-ui-md border border-line p-2 text-xs font-extrabold" style={{ background: `rgb(var(--${k}))` }}>{k}<span className="block font-semibold text-mute">{d}</span></div>
+          ))}
+        </Row>
+        <Row label={PALETTE_TEXT.tones}>
+          {PALETTE_TONES.map(([k, d]) => (
+            <div key={k} className="grid h-16 w-32 content-end rounded-ui-md p-2 text-xs font-extrabold text-white" style={{ background: `rgb(var(--${k}))`, textShadow: '0 1px 2px rgb(0 0 0 / .45)' }}>{k}<span className="block font-semibold opacity-90">{d}</span></div>
+          ))}
         </Row>
       </Block>
 
@@ -172960,7 +173071,7 @@ __COREGSM_EOF__
 /* ---------- the chart of the players: columns, the highest one is lit ---------- */
 .pb { display: flex; flex-direction: column; gap: 6px; }
 .pb-cols { display: flex; align-items: flex-end; gap: 5px; height: 220px; padding: 0 2px; border-bottom: 1px solid rgb(var(--line)); }
-.pb-bar { flex: 1 1 0; min-width: 0; border-radius: 6px 6px 0 0; background: rgb(var(--ink) / .14); transition: background-color var(--t-fast, .16s); }
+.pb-bar { position: relative; flex: none; width: 100%; border-radius: 6px 6px 0 0; background: rgb(var(--ink) / .14); transition: background-color var(--t-fast, .16s); }
 .pb-bar:hover { background: rgb(var(--ink) / .28); }
 .pb-bar.is-empty { background: rgb(var(--ink) / .06); }
 .pb-bar.is-top { background: linear-gradient(180deg, rgb(var(--brand-2)), rgb(var(--brand))); box-shadow: 0 0 24px -4px rgb(var(--brand) / .7); }
@@ -173011,13 +173122,13 @@ __COREGSM_EOF__
   display: grid; grid-template-columns: minmax(260px, 360px) minmax(0, 1fr); gap: 8px 22px; align-items: stretch;
   padding: 18px; border-radius: var(--emb-r-big); background: rgb(var(--card)); box-shadow: var(--shadow-2);
 }
-:root[data-ember='1'] .pulse-nums { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 0; align-content: start; }
+:root[data-ember='1'] .pulse-nums { grid-column: 1; grid-row: 2; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 0; align-content: start; }
 :root[data-ember='1'] .pulse-nums > div { min-width: 0; padding: 12px 14px; border-radius: 14px; background: rgb(var(--soft)); box-shadow: inset 0 0 0 1px rgb(var(--line)); }
 :root[data-ember='1'] .pulse-nums dt { text-transform: none; letter-spacing: 0; font-size: var(--fs-sm); font-weight: 650; }
 :root[data-ember='1'] .pulse-nums dd { margin-top: 4px; font-size: 28px; font-weight: 800; }
 :root[data-ember='1'] .pulse-nums > div:first-child { background: linear-gradient(155deg, rgb(var(--brand)), rgb(var(--brand-2))); box-shadow: none; color: #fff; }
 :root[data-ember='1'] .pulse-nums > div:first-child :is(dt, small) { color: rgb(255 255 255 / .88); }
-:root[data-ember='1'] .pulse-chart { grid-column: 2; grid-row: 1; margin: 0; padding: 0; border-radius: 0; background: none; box-shadow: none; color: rgb(var(--brand-hover)); align-self: stretch; display: flex; flex-direction: column; justify-content: space-between; }
+:root[data-ember='1'] .pulse-chart { grid-column: 2; grid-row: 2; margin: 0; padding: 0; border-radius: 0; background: none; box-shadow: none; color: rgb(var(--brand-hover)); align-self: stretch; display: flex; flex-direction: column; justify-content: space-between; }
 :root[data-ember='1'] .pulse-plot { height: 132px; }
 /* a problem is one line inside the figure of the servers, not a wide strip above everything */
 :root[data-ember='1'] .pulse-problem { display: block; margin-top: 4px; font-size: var(--fs-xs); font-weight: 700; line-height: 1.3; color: rgb(var(--bad)); text-decoration: underline; text-underline-offset: 2px; }
@@ -173025,6 +173136,7 @@ __COREGSM_EOF__
 @media (max-width: 899px) {
   :root[data-ember='1'] .pulse { grid-template-columns: minmax(0, 1fr); }
   :root[data-ember='1'] .pulse-chart { grid-column: 1; grid-row: auto; }
+  :root[data-ember='1'] .pulse-nums, :root[data-ember='1'] .pulse-state { grid-row: auto; }
 }
 
 /* the open section of the side column: no underline of the old header */
@@ -173541,6 +173653,189 @@ __COREGSM_EOF__
 
 /* the tips of the charts (the home page, the status page, the history): one look */
 :root[data-ember='1'] :is(.pulse-tip, .st-tip) { background: rgb(var(--ink)); color: rgb(var(--page)); border-radius: 12px; font-size: var(--fs-sm); font-weight: 700; box-shadow: var(--shadow-3); border: 0; }
+
+/* ======================================================================
+   fifty small things: the chart, the figures, the pills, the tiles, the profile
+   ====================================================================== */
+/* ---------- the chart of the players: a column holds its bar, the ghost of the usual hour and the peak ---------- */
+.pb-col { position: relative; flex: 1 1 0; min-width: 0; height: 100%; display: flex; align-items: flex-end; }
+.pb-ghost { position: absolute; left: 1px; right: 1px; height: 0; z-index: 2; pointer-events: none; text-decoration: none; border-top: 2px dashed rgb(var(--ink) / .5); }
+.pb-peak { position: absolute; left: 50%; bottom: 100%; transform: translate(-50%, -6px); font-style: normal; font-size: var(--fs-sm); font-weight: 800; white-space: nowrap; color: rgb(var(--brand-hover)); }
+.pb-key { display: inline-flex; align-items: center; gap: 6px; margin-left: 14px; font-weight: 600; }
+.pb-key s { display: inline-block; width: 18px; height: 0; text-decoration: none; border-top: 2px dashed rgb(var(--ink) / .5); }
+:root[data-ember='1'] .pb-cols { padding-top: 24px; box-sizing: content-box; height: 196px; }
+@media (max-width: 639px) { :root[data-ember='1'] .pb-cols { height: 150px; } }
+
+/* ---------- the capacity in slots: a division for each place of the server (up to 40) ---------- */
+:root[data-ember='1'] .srv-cap[style*='--slots'] {
+  -webkit-mask: repeating-linear-gradient(90deg, #000 0, #000 calc(100% / var(--slots) - 2px), transparent calc(100% / var(--slots) - 2px), transparent calc(100% / var(--slots)));
+  mask: repeating-linear-gradient(90deg, #000 0, #000 calc(100% / var(--slots) - 2px), transparent calc(100% / var(--slots) - 2px), transparent calc(100% / var(--slots)));
+}
+
+/* ---------- the size of the tiles: three small pictures instead of the letters S, M, L ---------- */
+.sz-mark i { display: none; }
+:root[data-ember='1'] .sz-mark { display: inline-grid; grid-template-columns: repeat(2, auto); gap: 2px; font-size: 0; line-height: 0; place-content: center; width: 18px; height: 18px; }
+:root[data-ember='1'] .sz-mark i { display: block; border-radius: 2px; background: currentColor; }
+:root[data-ember='1'] .sz-mark[data-sz='s'] { grid-template-columns: repeat(3, auto); gap: 2px; }
+:root[data-ember='1'] .sz-mark[data-sz='s'] i { width: 4px; height: 4px; }
+:root[data-ember='1'] .sz-mark[data-sz='s'] i:nth-child(n+4) { display: none; }
+:root[data-ember='1'] .sz-mark[data-sz='m'] i { width: 7px; height: 7px; }
+:root[data-ember='1'] .sz-mark[data-sz='l'] { grid-template-columns: 1fr; }
+:root[data-ember='1'] .sz-mark[data-sz='l'] i { width: 16px; height: 7px; }
+:root[data-ember='1'] .sz-mark[data-sz='l'] i:nth-child(n+3) { display: none; }
+
+/* ---------- the pills of the states: one shape, one height, one dot ---------- */
+:root[data-ember='1'] :is(.pill, .pill-glass) { display: inline-flex; align-items: center; gap: 6px; min-height: 24px; padding: 2px 10px 2px 9px; border-radius: 99px; font-size: var(--fs-sm); font-weight: 700; line-height: 1.2; white-space: nowrap; }
+:root[data-ember='1'] .pill::before { width: 7px; height: 7px; flex: none; }
+:root[data-ember='1'] .pill-glass::before { width: 7px; height: 7px; flex: none; }
+
+/* ---------- the figures a step bigger on a wide screen: the 12 px captions were small ---------- */
+@media (min-width: 1100px) {
+  :root[data-ember='1'] { --fs-2xs: 12px; --fs-xs: 13px; --fs-sm: 14px; --fs-md: 15px; --fs-base: 16px; --fs-lg: 17px; }
+}
+
+/* ---------- the card of a server: the picture comes closer when the pointer is on the card ---------- */
+:root[data-ember='1'] .srv-tile > div:has(> .cover-scrim) { position: relative; overflow: hidden; isolation: isolate; }
+:root[data-ember='1'] .srv-tile > div:has(> .cover-scrim)::before { content: ''; position: absolute; inset: 0; z-index: -1; background: inherit; transition: transform .7s cubic-bezier(.2, .8, .2, 1); }
+:root[data-ember='1'] .srv-tile:hover > div:has(> .cover-scrim)::before { transform: scale(1.07); }
+@media (prefers-reduced-motion: reduce) { :root[data-ember='1'] .srv-tile:hover > div:has(> .cover-scrim)::before { transform: none; } }
+
+/* ---------- the headline of the state in the card of the figures ---------- */
+:root[data-ember='1'] .pulse-state { grid-column: 1 / -1; grid-row: 1; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 0 2px 2px; font-size: var(--fs-lg); font-weight: 800; letter-spacing: -.01em; }
+:root[data-ember='1'] .pulse-state .pulse-icon { width: 26px; height: 26px; border-radius: 8px; box-shadow: none; }
+:root[data-ember='1'] .pulse-title-link { color: rgb(var(--pulse, var(--ink))); text-decoration: underline; text-underline-offset: 3px; }
+:root[data-ember='1'] .pulse-sub { font-size: var(--fs-sm); font-weight: 600; color: rgb(var(--mute)); }
+:root[data-ember='1'] .pulse:not(.pulse-ok):not(.pulse-wait) { box-shadow: var(--shadow-2), inset 3px 0 0 rgb(var(--pulse)); }
+
+/* ---------- the date in the top left corner (a wide screen) ---------- */
+.emb-topline { display: none; }
+@media (min-width: 1100px) {
+  :root[data-ember='1']:not([data-page='admin']) .emb-topline { display: block; position: fixed; z-index: 41; top: 26px; left: calc(var(--emb-side) + 36px); font-size: var(--fs-md); font-weight: 650; color: rgb(var(--mute)); }
+  :root[data-ember='1'][data-page='admin'] .emb-topline { display: block; position: fixed; z-index: 41; top: 26px; left: calc(var(--emb-rail) + var(--emb-adm) + 32px); font-size: var(--fs-md); font-weight: 650; color: rgb(var(--mute)); }
+}
+
+/* ---------- the news: a long title wraps over more lines, two columns on a wide screen, the side column stays in sight ---------- */
+:root[data-ember='1'] .nw-cover-title { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4; line-clamp: 4; overflow: hidden; }
+@media (min-width: 1280px) {
+  :root[data-ember='1'] .nw-group { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+  :root[data-ember='1'] .nw-group > :first-child { grid-column: 1 / -1; }
+  :root[data-ember='1'] .nw-aside { position: sticky; top: 84px; align-self: start; }
+}
+
+/* ---------- the profile: the card «the main thing today» is a call, not a background ---------- */
+:root[data-ember='1'] .pf-focus { padding: 18px 22px; border-radius: var(--emb-r-card); box-shadow: var(--shadow-2), inset 4px 0 0 rgb(var(--brand)); background: linear-gradient(135deg, rgb(var(--brand) / .2), rgb(var(--brand) / .04)), rgb(var(--card)); }
+:root[data-ember='1'] .pf-focus.is-playing, :root[data-ember='1'] .pf-focus.is-fav { background: linear-gradient(135deg, rgb(var(--ok) / .26), rgb(var(--ok) / .05)), rgb(var(--card)); box-shadow: var(--shadow-2), inset 4px 0 0 rgb(var(--ok)); }
+:root[data-ember='1'] .pf-focus-t { font-size: 1.3rem; letter-spacing: -.01em; }
+:root[data-ember='1'] .pf-focus-ico { width: 54px; height: 54px; background: rgb(var(--soft)); box-shadow: inset 0 0 0 1px rgb(var(--line)); }
+
+/* ---------- the sign-in on a phone: a bigger mark and a soft glow under the card ---------- */
+@media (max-width: 639px) {
+  :root[data-ember='1'] .auth-card { box-shadow: var(--shadow-2), 0 0 90px -28px rgb(var(--brand) / .55); }
+  :root[data-ember='1'] .auth-card img[class*='logo'], :root[data-ember='1'] .auth-card > :first-child img { width: 76px; height: 76px; }
+}
+
+/* ---------- the bottom bar of a phone: the open section has a glow of an ember ---------- */
+:root[data-ember='1'] .bn-item[aria-current='page'] > span:first-child { box-shadow: 0 8px 20px -8px rgb(var(--brand) / .9); }
+
+/* ======================================================================
+   the second round: the server page, the status, the community, the profile, the admin tiles
+   ====================================================================== */
+/* ---------- the server page: the last event on one line above the tabs; a ring of the state around the game icon ---------- */
+.srv-ticker { display: none; }
+:root[data-ember='1'] .srv-ticker { display: flex; align-items: center; gap: 10px; min-width: 0; margin-bottom: 10px; padding: 8px 14px; border-radius: 14px; background: rgb(var(--card)); box-shadow: var(--shadow-2); font-size: var(--fs-sm); font-weight: 650; color: rgb(var(--mute)); }
+:root[data-ember='1'] .srv-ticker:hover { box-shadow: var(--shadow-3), 0 0 0 1px rgb(var(--brand) / .4); }
+:root[data-ember='1'] .srv-ticker > i { width: 8px; height: 8px; flex: none; border-radius: 50%; background: rgb(var(--mute)); }
+:root[data-ember='1'] .srv-ticker.is-up > i { background: rgb(var(--ok)); }
+:root[data-ember='1'] .srv-ticker.is-down > i { background: rgb(var(--bad)); }
+:root[data-ember='1'] .srv-ticker.is-peak > i { background: rgb(var(--brand)); }
+:root[data-ember='1'] .srv-ticker b { color: rgb(var(--ink)); font-weight: 750; }
+:root[data-ember='1'] .srv-ticker-t { margin-left: auto; flex: none; }
+:root[data-ember='1'] .srv-ticker-go { color: rgb(var(--link)); flex: none; }
+:root[data-ember='1'] .srv-banner .srv-ico { box-shadow: 0 0 0 3px rgb(16 14 13), 0 0 0 5px rgb(var(--mute) / .6); }
+:root[data-ember='1'] .srv-banner.srv-ok .srv-ico { box-shadow: 0 0 0 3px rgb(16 14 13), 0 0 0 5px rgb(var(--ok)); }
+:root[data-ember='1'] .srv-banner.srv-warn .srv-ico { box-shadow: 0 0 0 3px rgb(16 14 13), 0 0 0 5px rgb(var(--warn)); }
+:root[data-ember='1'] .srv-banner.srv-bad .srv-ico { box-shadow: 0 0 0 3px rgb(16 14 13), 0 0 0 5px rgb(var(--bad)); }
+
+/* ---------- the players of a server: the groups «for long» and «just joined» have their colours ---------- */
+:root[data-ember='1'] .pl-group { display: flex; align-items: center; gap: 8px; letter-spacing: .02em; text-transform: none; font-size: var(--fs-sm); }
+:root[data-ember='1'] .pl-group::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: rgb(var(--brand)); }
+:root[data-ember='1'] .pl-group:nth-of-type(2)::before, :root[data-ember='1'] ul > .pl-group ~ .pl-group::before { background: rgb(var(--ok)); }
+
+/* ---------- the connect tab: the steps come one after another; the QR code is warm graphite on white ---------- */
+@keyframes emb-step { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: no-preference) {
+  :root[data-ember='1'] .cn-step { animation: emb-step .5s cubic-bezier(.2, .8, .2, 1) both; }
+  :root[data-ember='1'] .cn-step:nth-child(2) { animation-delay: .12s; }
+  :root[data-ember='1'] .cn-step:nth-child(3) { animation-delay: .24s; }
+}
+:root[data-ember='1'] .cn-qr { border-radius: var(--emb-r-card); box-shadow: 0 0 0 1px rgb(var(--line)), 0 18px 40px -24px rgb(var(--brand) / .7); }
+:root[data-ember='1'] .cn-qr svg path { fill: #2a1208; }
+
+/* ---------- the status page: the uptime has a ring; on a phone only the last two weeks ---------- */
+:root[data-ember='1'] .st-banner-stats > div:nth-child(3) { position: relative; padding-right: 66px; }
+:root[data-ember='1'] .st-banner-stats > div:nth-child(3)::after {
+  content: ''; position: absolute; right: 12px; top: 50%; width: 42px; height: 42px; transform: translateY(-50%); border-radius: 50%;
+  background: conic-gradient(rgb(var(--ok)) var(--up, 0%), rgb(var(--bad) / .55) 0);
+  -webkit-mask: radial-gradient(circle 13px at center, transparent 97%, #000 100%); mask: radial-gradient(circle 13px at center, transparent 97%, #000 100%);
+}
+@media (max-width: 639px) {
+  :root[data-ember='1'] .st-bars > :nth-child(-n+16), :root[data-ember='1'] .st-ticks > :nth-child(-n+16) { display: none; }
+  :root[data-ember='1'] .st-bars { height: 36px; gap: 3px; }
+}
+
+/* ---------- the community: a ring beside the legend of «who plays what» ---------- */
+.cm-ring { display: none; }
+:root[data-ember='1'] .cm-ring { display: grid; place-items: center; width: 132px; height: 132px; margin: 4px auto 14px; border-radius: 50%; position: relative; }
+:root[data-ember='1'] .cm-ring::after { content: ''; position: absolute; inset: 22px; border-radius: 50%; background: rgb(var(--card)); }
+:root[data-ember='1'] .cm-ring b { position: relative; z-index: 1; font-size: 28px; font-weight: 800; letter-spacing: -.03em; }
+:root[data-ember='1'] .cm-share { display: none; }
+:root[data-ember='1'] .cm-pod { border-radius: var(--emb-r-card); }
+:root[data-ember='1'] .cm-pod.is-1 { box-shadow: 0 0 0 1px rgb(var(--brand) / .5), 0 18px 40px -24px rgb(var(--brand) / .8); }
+:root[data-ember='1'] .cm-feed-i { padding: 6px 4px; border-radius: 12px; }
+:root[data-ember='1'] .cm-feed-i:hover { background: rgb(var(--soft)); }
+
+/* ---------- the profile: a calmer banner (a graphite fade into the accent), not a flat orange field ---------- */
+:root[data-ember='1'] .pf-banner:not([style*='url']) { background-image: radial-gradient(120% 140% at 85% 0%, rgb(var(--brand) / .9), rgb(var(--brand-2) / .75) 45%, rgb(var(--card)) 100%); }
+:root[data-ember='1'] .pf-banner.has-pattern::before { opacity: .5; }
+@media (min-width: 640px) { :root[data-ember='1'] .pf-banner { height: 11.5rem; } }
+
+/* ---------- the figures of the admin summary: a stripe of the state on the left ---------- */
+:root[data-ember='1'] .adm-tile { position: relative; overflow: hidden; }
+:root[data-ember='1'] .adm-tile::before { content: ''; position: absolute; left: 0; top: 12px; bottom: 12px; width: 3px; border-radius: 0 3px 3px 0; background: rgb(var(--line)); }
+:root[data-ember='1'] .adm-tile:has(.is-ok)::before { background: rgb(var(--ok)); }
+:root[data-ember='1'] .adm-tile:has(.is-warn)::before { background: rgb(var(--warn)); }
+:root[data-ember='1'] .adm-tile:has(.is-bad)::before { background: rgb(var(--bad)); }
+:root[data-ember='1'] .adm-act-k, :root[data-ember='1'] .adm-feed b { font-weight: 800; }
+
+/* ---------- a tile that is dragged: a hint of its place ---------- */
+:root[data-ember='1'] .srv-tile[draggable='true'] { cursor: grab; }
+:root[data-ember='1'] .srv-tile[draggable='true']:active { cursor: grabbing; opacity: .85; }
+
+/* ---------- a phone: the three small icons of the head are one row; the one that is rarely needed waits in the menu ---------- */
+@media (max-width: 639px) {
+  :root[data-ember='1'] .hdr .hdr-motion { display: none; }
+  :root[data-ember='1'] .hdr { padding-block: 6px; }
+}
+
+/* ---------- the settings: the sections are a column on the left (a wide screen), the cards on the right ---------- */
+@media (min-width: 1280px) {
+  :root[data-ember='1'] .adm-narrow:has(.adm-stage > div > nav[class*='rounded-full']) { max-width: 1240px; }
+  :root[data-ember='1'] .adm-stage > div:has(> nav[class*='rounded-full']) { display: grid; grid-template-columns: 200px minmax(0, 1fr); column-gap: 28px; row-gap: 0; align-items: start; }
+  :root[data-ember='1'] .adm-stage > div:has(> nav[class*='rounded-full']) > nav { grid-column: 1; grid-row: 1 / span 60; position: sticky; top: 24px; margin: 0; flex-direction: column; gap: 2px; width: 100%; max-width: none; padding: 6px; border-radius: var(--emb-r-card); overflow: visible; background: rgb(var(--card)); box-shadow: var(--shadow-2); }
+  :root[data-ember='1'] .adm-stage > div:has(> nav[class*='rounded-full']) > nav > a { flex: none; text-align: left; border-radius: 12px; padding: 10px 14px; }
+  :root[data-ember='1'] .adm-stage > div:has(> nav[class*='rounded-full']) > :not(nav) { grid-column: 2; margin: 0 0 20px; min-width: 0; }
+}
+
+.srv-new-count { display: none; }
+:root[data-ember='1'] .srv-new-count { display: inline-grid; place-items: center; min-width: 22px; height: 22px; padding: 0 7px; border-radius: 99px; background: rgb(var(--brand)); color: #fff; font-size: var(--fs-xs); font-weight: 800; }
+
+/* ---------- the covers of the news without a picture: the colour of the rubric on warm graphite (no violet, no blue) ---------- */
+:root[data-ember='1'] .nw-gen, :root[data-ember='1'] .nw-gen[data-v] {
+  background:
+    radial-gradient(90% 130% at 8% -15%, color-mix(in srgb, var(--gen) 72%, #ffb27a) 0%, transparent 60%),
+    radial-gradient(70% 100% at 105% 110%, color-mix(in srgb, var(--gen) 45%, #d6420a) 0%, transparent 62%),
+    linear-gradient(155deg, color-mix(in srgb, var(--gen) 28%, #17120f), #0e0c0b 85%);
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/emberScale.test.ts" << '__COREGSM_EOF__'
@@ -173549,7 +173844,7 @@ import { describe, expect, it } from 'vitest';
 
 /** the Ember look keeps to one scale of roundings: new rules cannot bring in a 13 px or a 19 px by accident */
 const css = readFileSync(new URL('./ember.css', import.meta.url), 'utf8');
-const SCALE = new Set([0, 6, 7, 8, 10, 12, 14, 16, 18, 24, 99]);
+const SCALE = new Set([0, 2, 3, 4, 6, 7, 8, 10, 12, 14, 16, 18, 24, 99]);
 
 describe('ember.css scale', () => {
   it('every rounding in pixels is on the scale', () => {
