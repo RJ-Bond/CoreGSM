@@ -232,7 +232,7 @@ export default function PlayersList({
           })}
         </ul>
       ) : (
-        <ul className="pl-rows divide-y divide-line">
+        <ul className={`pl-rows divide-y divide-line ${limit ? '' : 'is-wide'}`}>
           {shown.map((p, idx) => {
             const dur = p.since != null ? now - p.since : null;
             const rank = rankById(p.rankId);

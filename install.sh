@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="62cb8fe5b7de"
+COREGSM_BUILD="1ff075cc223b"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.2.26"
+COREGSM_VERSION="1.2.27"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -122156,7 +122156,7 @@ export default function App() {
           {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} isStaff={isStaff} isAdmin={!!isAdmin} />}
         </Suspense>
 
-        <AppFooter brand={access.brand.name} version={access.version} compact={page === 'admin' || ember} />
+        <AppFooter brand={access.brand.name} version={isStaff ? access.version : null} compact={page === 'admin' || ember} />
 
         <nav
           className={`nav-bottom glass fixed inset-x-3 z-40 mx-auto max-w-md rounded-ui-xl md:hidden ${navHidden ? 'is-hidden' : ''}`}
@@ -137653,7 +137653,7 @@ export default function EventsFeed({ events, online, limit, moreHref, uptimePct,
                       </span>
                       <span className="min-w-0 flex-1">
                         <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-                          <span className={`ev-type ev-${e.type}`}>{t(MARK_RU[e.type])}</span>
+                          {!limit && <span className={`ev-type ev-${e.type}`}>{t(MARK_RU[e.type])}</span>}
                           <span className="block font-bold leading-snug">{title(e, downFor.get(e.ts) ?? null, !online && newestDown === e)}</span>
                         </span>
                         <time dateTime={new Date(e.ts).toISOString()} title={absTime(e.ts)} className="text-sm font-semibold text-mute">
@@ -138992,17 +138992,22 @@ export default function PlayersBars({ points, hours, max, now, baseline = null }
   const usual = hours <= 24 ? bars.map((b) => usualAt(baseline, (b.from + b.to) / 2)) : bars.map(() => null);
   const scale = Math.max(1, max, ...bars.map((b) => b.peak ?? 0), ...usual.map((u) => u ?? 0));
   const hasUsual = usual.some((u) => u != null);
+  const seen = bars.map((b) => b.peak).filter((p): p is number => p != null);
+  const avg = seen.length > 2 ? Math.round(seen.reduce((a, b) => a + b, 0) / seen.length) : null;
   const label = (ts: number) => (hours <= 24 ? clock(ts) : day(ts));
   const where = (b: { from: number; to: number }) => (hours <= 24 ? `${clock(b.from)}–${clock(b.to)}` : `${day(b.from)}`);
   const summary = top >= 0 ? t('srv.bars.summary', { n: bars[top].peak ?? 0, when: where(bars[top]) }) : t('srv.bars.none');
   return (
     <div className="pb">
       <div className="pb-cols" role="img" aria-label={summary}>
+        <span className="pb-grid" style={{ bottom: '50%' }} aria-hidden><em>{Math.round(scale / 2)}</em></span>
+        <span className="pb-grid" style={{ bottom: '100%' }} aria-hidden><em>{scale}</em></span>
+        {avg != null && <span className="pb-avg" style={{ bottom: `${Math.max(2, Math.round((avg / scale) * 100))}%` }} aria-hidden><em>{t('srv.bars.avg', { n: avg })}</em></span>}
         {bars.map((b, i) => (
           <span key={b.from} className="pb-col" title={b.peak == null ? `${where(b)} · ${t('srv.bars.noData')}` : `${where(b)} · ${t('srv.bars.peak', { n: b.peak })}`}>
             {usual[i] != null && <s className="pb-ghost" style={{ bottom: `${Math.max(2, Math.round(((usual[i] as number) / scale) * 100))}%` }} aria-hidden />}
             <i
-              className={`pb-bar ${i === top ? 'is-top' : ''} ${b.peak == null ? 'is-empty' : ''}`}
+              className={`pb-bar ${i === top ? 'is-top' : ''} ${i === bars.length - 1 ? 'is-now' : ''} ${b.peak == null ? 'is-empty' : ''}`}
               style={{ height: `${b.peak == null ? 4 : Math.max(6, Math.round((b.peak / scale) * 100))}%` }}
             >
               {i === top && b.peak != null && <b className="pb-peak">{b.peak}</b>}
@@ -139258,7 +139263,7 @@ export default function PlayersList({
           })}
         </ul>
       ) : (
-        <ul className="pl-rows divide-y divide-line">
+        <ul className={`pl-rows divide-y divide-line ${limit ? '' : 'is-wide'}`}>
           {shown.map((p, idx) => {
             const dur = p.since != null ? now - p.since : null;
             const rank = rankById(p.rankId);
@@ -141092,13 +141097,15 @@ export function PlayerAvatar({ name, size = 30, online = false }: { name: string
 }
 
 /** weekday x hour of the whole community, small */
-export function MiniHeat({ cells, big = false, now }: { cells: (number | null)[][]; big?: boolean; now?: { dow: number; hour: number } }) {
+export function MiniHeat({ cells, big = false, now, pick, active }: { cells: (number | null)[][]; big?: boolean; now?: { dow: number; hour: number }; pick?: (dow: number) => void; active?: number }) {
   const max = Math.max(1, ...cells.flat().map((v) => v ?? 0));
   return (
-    <div className={`cm-heat ${big ? 'is-big' : ''}`} role="img" aria-label={t('cm.heat.aria')}>
+    <div className={`cm-heat ${big ? 'is-big' : ''}`} role={pick ? 'group' : 'img'} aria-label={t('cm.heat.aria')}>
       {cells.map((row, d) => (
         <div key={d} className="contents">
-          <span className="cm-heat-d">{dowShort()[d]}</span>
+          {pick
+            ? <button type="button" className={`cm-heat-d cm-heat-btn ${active === d ? 'is-on' : ''}`} aria-pressed={active === d} onClick={() => pick(d)}>{dowShort()[d]}</button>
+            : <span className="cm-heat-d">{dowShort()[d]}</span>}
           {row.map((v, h) => (
             <span key={h} className={`cm-heat-c ${now && now.dow === d && now.hour === h ? 'is-now' : ''} ${v != null && v > 0 && v === max ? 'is-peak' : ''}`} style={v == null ? undefined : { ['--a' as string]: (0.12 + 0.88 * (v / max)).toFixed(3) }} title={v == null ? undefined : t('cm.heat.cell', { d: dowShort()[d], time: `${String(h).padStart(2, '0')}:00`, n: num(v) })} />
           ))}
@@ -141560,6 +141567,8 @@ function PlayersChart({ data, now }: { data: OverviewData | null; now: number })
           <path d={area} fill={`url(#pg${gid})`} />
           <path d={line} fill="none" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
         </svg>
+        <span className="pulse-y pulse-y-top" aria-hidden>{max}</span>
+        <span className="pulse-y pulse-y-bottom" aria-hidden>0</span>
         {hp && (
           <>
             <span className="pulse-cursor" style={{ left: `${hp.x * 100}%` }} aria-hidden />
@@ -142229,6 +142238,60 @@ export function collapseRuns<T>(list: T[], same: (a: T, b: T) => boolean): Run<T
     if (prev && same(prev.last, item)) { prev.count++; prev.last = item; } else out.push({ item, count: 1, last: item });
   }
   return out;
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/servers"
+  cat > "$APP_DIR/core-frontend/src/components/servers/gridLogic.test.ts" << '__COREGSM_EOF__'
+import { describe, expect, it } from 'vitest';
+import { lonelyTile } from './gridLogic';
+
+describe('the tile that closes an unfinished row', () => {
+  it('takes the empty places of the last row', () => {
+    expect(lonelyTile([1, 2, 3], [], 3)).toBeNull();
+    expect(lonelyTile([1, 2, 3, 4], [], 3)).toEqual({ id: 4, span: 3 });
+    expect(lonelyTile([1, 2, 3, 4, 5], [], 3)).toEqual({ id: 5, span: 2 });
+    expect(lonelyTile([1, 2, 3], [], 2)).toEqual({ id: 3, span: 2 });
+  });
+  it('does nothing in one column, and counts the favourites as a group of their own', () => {
+    expect(lonelyTile([1, 2, 3, 4], [], 1)).toBeNull();
+    expect(lonelyTile([1, 2, 3, 4, 5], [1, 2], 3)).toBeNull();
+    expect(lonelyTile([1, 2, 3, 4, 5, 6], [1], 3)).toEqual({ id: 6, span: 2 });
+  });
+});
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/servers"
+  cat > "$APP_DIR/core-frontend/src/components/servers/gridLogic.ts" << '__COREGSM_EOF__'
+import { useEffect, useState } from 'react';
+
+/**
+ * The tile that closes an unfinished row: the one that would stand in the last row with empty places next to it takes them.
+ * `ids` are in the order of the grid, `favs` the pinned favourites (they form a group of their own, with a heading, so a row never goes across groups).
+ * Returns the id and the number of columns the tile takes, or null when every row is full.
+ */
+export function lonelyTile(ids: number[], favs: number[], cols: number): { id: number; span: number } | null {
+  if (cols < 2 || ids.length === 0) return null;
+  const fav = ids.filter((id) => favs.includes(id));
+  const last = fav.length > 0 && fav.length < ids.length ? ids.filter((id) => !favs.includes(id)) : ids;
+  const r = last.length % cols;
+  if (r === 0) return null;
+  return { id: last[last.length - 1], span: cols - r + 1 };
+}
+
+/** how many columns the grid has now (read from the layout, so it follows the width and the size S / M / L); the second value goes into the  of the grid */
+/** how many columns the grid has now (read from the layout, so it follows the width and the size S / M / L); the second value goes into the ref of the grid */
+export function useGridColumns(): [number, (el: HTMLElement | null) => void] {
+  const [el, setEl] = useState<HTMLElement | null>(null);
+  const [cols, setCols] = useState(1);
+  useEffect(() => {
+    if (!el) return undefined;
+    const read = () => setCols(getComputedStyle(el).gridTemplateColumns.split(' ').filter(Boolean).length || 1);
+    read();
+    if (typeof ResizeObserver === 'undefined') return undefined;
+    const ro = new ResizeObserver(read);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [el]);
+  return [cols, setEl];
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/servers"
@@ -147075,6 +147138,8 @@ const en: Record<keyof typeof ru, string> = {
   'srv.off.fig': 'No answer',
   'srv.top': 'Back to top',
   'srv.down.for': 'Down for {d}',
+  'srv.down.k': 'No answer',
+  'srv.down.last': 'Last check: {ago}',
   'srv.new.fresh': 'new',
   'srv.new.title': "What's new",
   'srv.new.openLink': 'Open link →',
@@ -147131,6 +147196,7 @@ const en: Record<keyof typeof ru, string> = {
   'srv.bars.peak': 'peak {n}',
   'srv.bars.usual': 'usual at this hour',
   'srv.bars.now': 'now',
+  'srv.bars.avg': 'average {n}',
   'srv.chart.axisX': 'Horizontal: time (your local time), {period}',
   'srv.chart.p24': 'last 24 hours',
   'srv.chart.p7': 'last 7 days',
@@ -148492,6 +148558,9 @@ const en: Record<keyof typeof ru, string> = {
   'adm.ov.botErr': 'The Discord bot is not connected',
   'adm.ov.noBackups': 'There are no backups yet',
   'adm.ov.oldBackup': 'The last backup is over a week old',
+  'adm.ov.fold': 'Fold',
+  'adm.ov.unfold': 'Unfold',
+  'adm.ov.versionLine': 'Panel version: {v}',
   'adm.ov.fix': 'Open',
   'adm.ov.chart': 'Players over 24 hours',
   'adm.ov.chartPeak': 'Peak: {k}',
@@ -148653,6 +148722,8 @@ const en: Record<keyof typeof ru, string> = {
   'cm.when.today': 'Today the best time to join:',
   'cm.when.peak': '. Right now is the peak.',
   'cm.when.dow': 'On {d} the most people play around',
+  'cm.when.sparse': 'Not enough data yet: the map fills in over a few days of watching.',
+  'cm.when.pick': 'Tap a day to see its curve.',
   'cm.when.note': '30-day averages across all servers. The current hour is outlined.',
   'cm.when.typical': 'A typical day',
   'cm.busiest': 'Most players {when} around {time}',
@@ -149309,6 +149380,11 @@ const en: Record<keyof typeof ru, string> = {
   'us.f.mod': 'Moderators',
   'us.f.player': 'Players',
   'us.loading': 'Loading',
+  'us.invite.t': 'You are the only one in the panel so far',
+  'us.invite.open': 'Registration is open: send players the link and they will appear in this list.',
+  'us.invite.closed': 'Registration is closed. Open it on the «Access» tab so players can sign up.',
+  'us.invite.copy': 'Copy the registration link',
+  'us.invite.access': 'Open «Access»',
   'us.none': 'Nobody found.',
   'us.onlineTip': 'Online',
   'us.you': ' (you)',
@@ -152148,6 +152224,8 @@ const ru = {
   'srv.off.fig': 'Нет ответа',
   'srv.top': 'Наверх',
   'srv.down.for': 'Простой {d}',
+  'srv.down.k': 'Не отвечает',
+  'srv.down.last': 'Последний опрос: {ago}',
   'srv.new.fresh': 'новое',
   'srv.new.title': 'Что нового',
   'srv.new.openLink': 'Открыть ссылку →',
@@ -152204,6 +152282,7 @@ const ru = {
   'srv.bars.peak': 'пик {n}',
   'srv.bars.usual': 'обычно в это время',
   'srv.bars.now': 'сейчас',
+  'srv.bars.avg': 'в среднем {n}',
   'srv.chart.axisX': 'По горизонтали: время (ваше локальное), {period}',
   'srv.chart.p24': 'последние 24 часа',
   'srv.chart.p7': 'последние 7 дней',
@@ -153565,6 +153644,9 @@ const ru = {
   'adm.ov.botErr': 'Discord-бот не подключён',
   'adm.ov.noBackups': 'Резервных копий ещё нет',
   'adm.ov.oldBackup': 'Последней копии больше недели',
+  'adm.ov.fold': 'Свернуть',
+  'adm.ov.unfold': 'Развернуть',
+  'adm.ov.versionLine': 'Версия панели: {v}',
   'adm.ov.fix': 'Открыть',
   'adm.ov.chart': 'Игроки за 24 часа',
   'adm.ov.chartPeak': 'Пик: {k}',
@@ -153726,6 +153808,8 @@ const ru = {
   'cm.when.today': 'Сегодня лучшее время зайти:',
   'cm.when.peak': '. Сейчас как раз пик.',
   'cm.when.dow': 'В {d} людей больше всего около',
+  'cm.when.sparse': 'Пока мало данных: карта заполнится за несколько дней наблюдений.',
+  'cm.when.pick': 'Нажмите на день, чтобы увидеть его кривую.',
   'cm.when.note': 'Средние за 30 дней по всем серверам. Рамкой отмечен текущий час.',
   'cm.when.typical': 'Типичный день',
   'cm.busiest': 'Больше всего игроков {when} около {time}',
@@ -154382,6 +154466,11 @@ const ru = {
   'us.f.mod': 'Модераторы',
   'us.f.player': 'Игроки',
   'us.loading': 'Загрузка',
+  'us.invite.t': 'Пока в панели только вы',
+  'us.invite.open': 'Регистрация открыта: отправьте игрокам ссылку, и они появятся в этом списке.',
+  'us.invite.closed': 'Регистрация закрыта. Откройте её на вкладке «Доступ», чтобы игроки могли зарегистрироваться.',
+  'us.invite.copy': 'Скопировать ссылку на регистрацию',
+  'us.invite.access': 'Открыть «Доступ»',
   'us.none': 'Никого не найдено.',
   'us.onlineTip': 'В сети',
   'us.you': ' (вы)',
@@ -156289,6 +156378,7 @@ import './styles/profile.css';
 // depth, headings, background, tooltips, header and footer, reaction of link cards
 import './styles/polish.css';
 import './styles/ember.css';
+import './styles/ember2.css';
 // the button system last: one source of truth for every .btn* class
 import './styles/buttons.css';
 // phone layout fixes: loaded after the others, so it wins at equal specificity
@@ -157911,9 +158001,9 @@ export default function AdminMobileNav({ groups, current, badges, fallbackLabel 
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/AdminOverview.tsx" << '__COREGSM_EOF__'
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { useAuth } from '../auth';
-import { delta, dayKey, healthScore } from './adminLogic';
+import { delta, dayKey, groupAudit, healthScore } from './adminLogic';
 import { api, type BackupInfo, type BotStatus, type CertInfo, type Server, type UpdateInfo, type UserRow } from '../api';
 import type { OverviewData } from '../components/servers/overviewLogic';
 import { t, useI18n, type TKey } from '../i18n';
@@ -157939,7 +158029,7 @@ interface Attention { id: string; tone: 'bad' | 'warn' | 'info'; text: string; h
 const ok = <T,>(r: PromiseSettledResult<T>): T | null => (r.status === 'fulfilled' ? r.value : null);
 const WEEK = 7 * 86_400_000;
 
-function Tile({ label, value, sub, tone, href, change, spark }: { label: string; value: string; sub?: string; tone?: 'ok' | 'warn' | 'bad'; href?: string; change?: { text: string; tone: 'up' | 'down' } | null; spark?: number[] }) {
+function Tile({ label, value, sub, tone, href, change, spark, action }: { label: string; value: string; sub?: string; tone?: 'ok' | 'warn' | 'bad'; href?: string; change?: { text: string; tone: 'up' | 'down' } | null; spark?: number[]; action?: ReactNode }) {
   useI18n();
   const body = (
     <>
@@ -157952,8 +158042,15 @@ function Tile({ label, value, sub, tone, href, change, spark }: { label: string;
       {sub && <span className="adm-tile-s">{sub}</span>}
     </>
   );
-  return href ? <a href={href} className="adm-tile">{body}</a> : <div className="adm-tile">{body}</div>;
+  // a tile with a button is not a link as a whole (a button inside a link is not allowed)
+  const cls = `adm-tile ${tone ? `is-${tone}` : ''}`;
+  if (action) return <div className={cls}>{href ? <a href={href} className="adm-tile-body">{body}</a> : body}{action}</div>;
+  return href ? <a href={href} className={cls}>{body}</a> : <div className={cls}>{body}</div>;
 }
+
+const REASON_HREF: Record<string, string> = {
+  down: '/admin/servers', bot: '/admin/settings/bot', cert: '/admin/system', backup: '/admin/settings/updates', pending: '/admin/users', update: '/admin/settings/updates',
+};
 
 const REASON_TEXT: Record<string, TKey> = {
   down: 'd2.ao.r.down',
@@ -157983,7 +158080,13 @@ function HealthRing({ score, reasons }: { score: number; reasons: { id: string; 
           <p className="text-sm font-semibold text-mute">{t('d2.ao.h.allOk')}</p>
         ) : (
           <ul className="mt-1 flex flex-wrap gap-1.5">
-            {reasons.map((r) => <li key={r.id} className={`adm-reason is-${r.tone}`}>{REASON_TEXT[r.id] ? t(REASON_TEXT[r.id]) : r.id} <b>−{r.cost}</b></li>)}
+            {reasons.map((r) => (
+              <li key={r.id}>
+                {REASON_HREF[r.id]
+                  ? <a href={REASON_HREF[r.id]} className={`adm-reason is-${r.tone}`}>{REASON_TEXT[r.id] ? t(REASON_TEXT[r.id]) : r.id} <b>−{r.cost}</b><span className="adm-reason-go">{t('adm.ov.fix')} →</span></a>
+                  : <span className={`adm-reason is-${r.tone}`}>{REASON_TEXT[r.id] ? t(REASON_TEXT[r.id]) : r.id} <b>−{r.cost}</b></span>}
+              </li>
+            ))}
           </ul>
         )}
       </div>
@@ -158091,7 +158194,10 @@ export default function AdminOverview() {
     pending, updateAvailable: !!raw?.update?.available, backupAgeMs: lastBackup ? Date.now() - lastBackup : null, backupsKnown: !!raw?.backups,
   });
   const avatarOf = (name: string) => raw?.users?.find((u) => u.username === name)?.avatarUrl ?? null;
-  const auditRows = (raw?.audit ?? []).filter((r) => !mine || r.actor === me?.username).slice(0, 10);
+  const versionLabel = raw?.update?.currentLabel || (raw?.update?.current ? raw.update.current.slice(0, 7) : '');
+  // the same action again and again (six servers added in a row) is one line with a count
+  const auditGroups = groupAudit((raw?.audit ?? []).filter((r) => !mine || r.actor === me?.username)).slice(0, 8);
+  const [openGroups, setOpenGroups] = useState<number[]>([]);
 
   const pollAll = async () => {
     setBusy('poll');
@@ -158126,8 +158232,13 @@ export default function AdminOverview() {
             <Tile label={t('adm.ov.servers')} value={servers.length ? `${online} / ${servers.length}` : '–'} tone={servers.length === 0 ? undefined : down.length ? 'bad' : 'ok'} href="/admin/servers" />
             <Tile label={t('adm.ov.players')} value={String(players)} change={delta(players, series[0])} spark={series} href="/admin/servers" />
             <Tile label={t('adm.ov.pending')} value={raw.users ? String(pending) : '–'} tone={pending > 0 ? 'warn' : undefined} href="/admin/users" />
-            <Tile label={t('adm.ov.backup')} value={raw.backups ? (lastBackup ? ago(lastBackup) : t('adm.ov.noBackup')) : '–'} tone={raw.backups && (!lastBackup || Date.now() - lastBackup > WEEK) ? 'warn' : undefined} href="/admin/settings/updates" />
-            <Tile label={t('adm.ov.version')} value={raw.update?.currentLabel || (raw.update?.current ? raw.update.current.slice(0, 7) : '–')} sub={raw.update?.available ? t('adm.ov.upd') : undefined} tone={raw.update?.available ? 'warn' : undefined} href="/admin/settings/updates" />
+            <Tile
+              label={t('adm.ov.backup')}
+              value={raw.backups ? (lastBackup ? ago(lastBackup) : t('adm.ov.noBackup')) : '–'}
+              tone={raw.backups && !lastBackup ? 'bad' : raw.backups && Date.now() - lastBackup > WEEK ? 'warn' : undefined}
+              href="/admin/settings/updates"
+              action={raw.backups && (!lastBackup || Date.now() - lastBackup > WEEK) ? <Button type="button" variant="soft" loading={busy === 'backup'} onClick={() => void backupNow()}>{t('adm.ov.backupNow')}</Button> : undefined}
+            />
           </div>
 
           {servers.length > 0 && (
@@ -158175,7 +158286,7 @@ export default function AdminOverview() {
               )}
             </Section>
 
-            <Section title={t('adm.ov.quick')}>
+            <Section title={t('adm.ov.quick')} description={versionLabel ? t('adm.ov.versionLine', { v: versionLabel }) : undefined}>
               <div className="flex flex-wrap gap-2">
                 <a href="/admin/servers/new" className="btn">{t('adm.ov.addServer')}</a>
                 <a href="/admin/news/new" className="btn btn-soft">{t('adm.ov.writeNews')}</a>
@@ -158195,21 +158306,37 @@ export default function AdminOverview() {
                 </span>
               }
             >
-              {auditRows.length > 0 ? (
+              {auditGroups.length > 0 ? (
                 <ul className="divide-y divide-line">
-                  {auditRows.map((r) => {
+                  {auditGroups.map((g) => {
+                    const r = g.rows[0];
                     const pic = avatarOf(r.actor);
+                    const many = g.rows.length > 1;
+                    const open = openGroups.includes(r.id);
+                    const detail = many ? g.rows.map((x) => x.detail).filter(Boolean).slice(0, 2).join(', ') + (g.rows.length > 2 ? '…' : '') : r.detail;
                     return (
-                      <li key={r.id} className="flex items-center gap-3 py-2">
-                        {pic ? (
-                          <img src={pic} alt="" width={28} height={28} loading="lazy" referrerPolicy="no-referrer" className="adm-av" />
-                        ) : (
-                          <span className="adm-av" aria-hidden>{r.actor.slice(0, 1).toUpperCase()}</span>
-                        )}
-                        <div className="min-w-0 flex-1">
-                          <p className="truncate"><span className={`adm-act ${auditTone(r.action)}`}>{r.action}</span>{r.detail && <span className="ml-2 font-semibold text-mute">{r.detail}</span>}</p>
-                          <p className="text-xs font-semibold text-mute" title={fmtDateTime(r.ts)}>{r.actor} · {ago(r.ts)}</p>
+                      <li key={r.id} className="py-2">
+                        <div className="flex items-center gap-3">
+                          {pic ? (
+                            <img src={pic} alt="" width={28} height={28} loading="lazy" referrerPolicy="no-referrer" className="adm-av" />
+                          ) : (
+                            <span className="adm-av" aria-hidden>{r.actor.slice(0, 1).toUpperCase()}</span>
+                          )}
+                          <div className="min-w-0 flex-1">
+                            <p className="adm-act-line">
+                              <span className={`adm-act shrink-0 ${auditTone(r.action)}`}>{r.action}</span>
+                              {many && <span className="adm-count">×{g.rows.length}</span>}
+                              {detail && <span className="min-w-0 truncate font-semibold text-mute" title={g.rows.map((x) => x.detail).filter(Boolean).join(', ')}>{detail}</span>}
+                            </p>
+                            <p className="text-xs font-semibold text-mute" title={fmtDateTime(r.ts)}>{r.actor} · {ago(r.ts)}</p>
+                          </div>
+                          {many && <button type="button" className="adm-chip" aria-expanded={open} onClick={() => setOpenGroups((l) => (l.includes(r.id) ? l.filter((x) => x !== r.id) : [...l, r.id]))}>{open ? t('adm.ov.fold') : t('adm.ov.unfold')}</button>}
                         </div>
+                        {many && open && (
+                          <ul className="adm-group-list">
+                            {g.rows.map((x) => <li key={x.id}><span className="truncate" title={x.detail}>{x.detail || x.action}</span><time title={fmtDateTime(x.ts)}>{ago(x.ts)}</time></li>)}
+                          </ul>
+                        )}
                       </li>
                     );
                   })}
@@ -160069,6 +160196,17 @@ function WhenBlock({ c }: { c: Community }) {
     if (a != null && b != null && (!best || a + b > best.sum)) best = { h, sum: a + b };
   }
   const peak = best ? `${hh(best.h)}–${hh(best.h + 2)}` : null;
+  // a few hours of data in all: a map of empty squares says nothing, so it waits for more days
+  // on a phone the rows of the map are too thin to touch: the days stay a row of buttons there
+  const [wide, setWide] = useState(() => typeof window === 'undefined' || !window.matchMedia || window.matchMedia('(min-width: 700px)').matches);
+  useEffect(() => {
+    const m = window.matchMedia?.('(min-width: 700px)');
+    if (!m) return undefined;
+    const on = () => setWide(m.matches);
+    m.addEventListener('change', on);
+    return () => m.removeEventListener('change', on);
+  }, []);
+  const sparse = c.heatmap.cells.flat().filter((v) => v != null && v > 0).length < 12;
   const inPeak = !!best && dow === here.dow && here.hour >= best.h && here.hour <= best.h + 1;
   return (
     <section id="cm-when" className="tile p-4 sm:p-5">
@@ -160079,15 +160217,21 @@ function WhenBlock({ c }: { c: Community }) {
           {dow === here.dow ? <>{t('cm.when.today')} <b>{peak}</b>{inPeak ? t('cm.when.peak') : ''}</> : <>{t('cm.when.dow', { d: dowShort()[dow] })} <b>{peak}</b></>}
         </p>
       ) : null}
-      <MiniHeat cells={c.heatmap.cells} big now={here} />
-      <HeatLegend />
-      <p className="cm-sub">{busiestText(c.heatmap.busiest)}. {t('cm.when.note')}</p>
-      <h3 className="cm-subh">{t('cm.when.curve', { d: dowShort()[dow] })}</h3>
-      <div className="cm-days" role="group" aria-label={t('cm.when.typical')}>
-        {dowShort().map((d, i) => <button key={d} type="button" className="seg-item" aria-pressed={dow === i} onClick={() => setDow(i)}>{d}</button>)}
-      </div>
-      <TinyChart values={row} label={(i) => `${dowShort()[dow]} ${hh(i)}`} mark={dow === here.dow ? here.hour : null} className="cm-chart-day" />
-      <div className="cm-chart-ticks" aria-hidden><span>0:00</span><span>6:00</span><span>12:00</span><span>18:00</span><span>24:00</span></div>
+      {sparse ? <p className="cm-sub cm-sparse">{t('cm.when.sparse')}</p> : (
+        <>
+          <MiniHeat cells={c.heatmap.cells} big now={here} pick={wide ? setDow : undefined} active={dow} />
+          <HeatLegend />
+          <p className="cm-sub">{busiestText(c.heatmap.busiest)}. {t('cm.when.note')} {t('cm.when.pick')}</p>
+        </>
+      )}
+      {!sparse && <h3 className="cm-subh">{t('cm.when.curve', { d: dowShort()[dow] })}</h3>}
+      {!sparse && !wide && (
+        <div className="cm-days" role="group" aria-label={t('cm.when.typical')}>
+          {dowShort().map((d, i) => <button key={d} type="button" className="seg-item" aria-pressed={dow === i} onClick={() => setDow(i)}>{d}</button>)}
+        </div>
+      )}
+      {!sparse && <TinyChart values={row} label={(i) => `${dowShort()[dow]} ${hh(i)}`} mark={dow === here.dow ? here.hour : null} className="cm-chart-day" />}
+      {!sparse && <div className="cm-chart-ticks" aria-hidden><span>0:00</span><span>6:00</span><span>12:00</span><span>18:00</span><span>24:00</span></div>}
     </section>
   );
 }
@@ -167539,6 +167683,7 @@ import { useLive } from '../ui/live';
 import { haptic } from '../ui/haptic';
 import { useAppearance } from '../appearance';
 import { Fragment, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent } from 'react';
+import { lonelyTile, useGridColumns } from '../components/servers/gridLogic';
 import { HomeBlocksMenu, useHomeBlocks } from '../components/servers/HomeBlocks';
 import { api, type Server, type StatusInfo } from '../api';
 import { useAuth } from '../auth';
@@ -167911,9 +168056,13 @@ function ServerList() {
     select,
     uptime: uptime.get(s.id),
     downSince: downSince.get(s.id),
+    wide: s.id === orphan?.id ? orphan.span : 0,
   });
 
   const [home, setHome] = useHomeBlocks();
+  // the last tile that would stand alone in its row takes two places
+  const [cols, gridRef] = useGridColumns();
+  const orphan = effView === 'tiles' && effFilter === 'all' && !phone ? lonelyTile(restShown.map((x) => x.id), favs, cols) : null;
   return (
     <div className="space-y-5">
       <PageHead
@@ -168011,7 +168160,7 @@ function ServerList() {
             )}
 
             {effView === 'tiles' && effFilter === 'all' && (
-              <div className="fade-in srv-grid" data-size={size}>
+              <div className="fade-in srv-grid" data-size={size} ref={gridRef}>
                 {hero && <HeroTile key={hero.id} {...tileProps(hero, 0)} reason={heroReason} />}
                 {restShown.map((s, i) => <Fragment key={s.id}>{secHead(i)}<Tile {...tileProps(s, i + 1)} /></Fragment>)}
               </div>
@@ -168194,7 +168343,7 @@ function PhoneRow({ s, idx, fav, onFav, onOpen, select }: { rx: Reactions; s: Se
   );
 }
 
-function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince, dnd }: { dnd?: TileDnd; rx: Reactions; s: Server; idx: number; fav: boolean | null; onFav: () => void; onOpen: () => void; select?: SelectProps; uptime?: number; downSince?: number }) {
+function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince, dnd, wide }: { dnd?: TileDnd; wide?: number; rx: Reactions; s: Server; idx: number; fav: boolean | null; onFav: () => void; onOpen: () => void; select?: SelectProps; uptime?: number; downSince?: number }) {
   useI18n();
   const [who, setWho] = useState(false);
   const [c1] = gameGradient(s.game);
@@ -168207,16 +168356,16 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince, 
   return (
     <article
       {...dnd}
-      className={`srv-tile tile tile-in tile-hover relative flex cursor-pointer flex-col gap-2 p-3 pb-4 ${select?.has(s.id) ? 'srv-selected' : ''} ${s.online ? '' : 'is-down'} ${nearFull ? 'is-busy' : ''} ${s.online && lag ? 'is-lag' : ''}`}
+      className={`srv-tile tile tile-in tile-hover relative flex cursor-pointer flex-col gap-2 p-3 pb-4 ${select?.has(s.id) ? 'srv-selected' : ''} ${s.online ? '' : 'is-down'} ${nearFull ? 'is-busy' : ''} ${s.online && lag ? 'is-lag' : ''} ${wide && wide > 1 ? 'srv-wide' : ''}`}
       // the fuller the server, the stronger its glow in the game's colour
-      style={{ ...stagger(idx), ['--gc' as string]: accent, ['--fill' as string]: s.online && s.maxPlayers > 0 ? Math.min(1, s.players / s.maxPlayers).toFixed(2) : '0' }}
+      style={{ ...stagger(idx), ...(wide && wide > 1 ? { gridColumn: `span ${wide}` } : {}), ['--gc' as string]: accent, ['--fill' as string]: s.online && s.maxPlayers > 0 ? Math.min(1, s.players / s.maxPlayers).toFixed(2) : '0' }}
       onClick={select?.on ? () => select.toggle(s.id) : onOpen}
     >
       {select?.on && <CardCheck s={s} select={select} className="left-1 top-1" />}
       <div className={`${emb.className} relative flex h-[124px] items-start justify-between rounded-ui-lg p-3 ${s.online ? '' : 'offline-cover'}`} style={{ ...emb.style, background: coverBackground(s.coverUrl, gameBackdrop(c1, 135), { small: true, game: s.game }) }}>
         <span aria-hidden className="cover-scrim" />
         <GameAvatar game={s.game} size={46} glass vtId={s.id} />
-        <div className="flex items-center gap-0.5">
+        <div className="srv-cover-actions flex items-center gap-0.5">
           <StatusFlash r={r}><StatusPill glass online={s.online} known={s.hasStatus} lag={lag} maintenance={!!s.maintenance} /></StatusFlash>
           {fav != null && <FavButton on={fav} name={s.name} onClick={onFav} className={fav ? 'text-white' : 'text-white/85'} glass />}
           <QuickMenu s={s} glass />
@@ -168227,7 +168376,7 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince, 
         <h3 className="srv-name text-fs-lg font-extrabold leading-tight" title={s.name}>
           <a href={`/servers/${s.id}`} onClick={linkClick(s, select)} className="hover:text-link">{s.name}</a>
         </h3>
-        <div className="srv-chips">{nearFull && <span className="srv-badge-full" title={t('srv.cap.nearFull', { pct: Math.round((s.players / s.maxPlayers) * 100) })}>{t('srv.tile.full')}</span>}<span className="truncate">{gameLabel(s.game)}</span>{s.online && s.map && <span className="srv-chip" title={t('d2.srv.mapTitle', { map: s.map })}><CardMap />{s.map}</span>}{s.version && <span className="srv-chip" title={t('d2.srv.version')}><CardTag />v{s.version}</span>}</div>
+        <div className="srv-chips">{nearFull && <span className="srv-badge-full" title={t('srv.cap.nearFull', { pct: Math.round((s.players / s.maxPlayers) * 100) })}>{t('srv.tile.full')}</span>}<span className="srv-game truncate">{gameLabel(s.game)}</span>{s.online && s.map && <span className="srv-chip" title={t('d2.srv.mapTitle', { map: s.map })}><CardMap />{s.map}</span>}{s.version && <span className="srv-chip" title={t('d2.srv.version')}><CardTag />v{s.version}</span>}</div>
         {s.maintenance && <MaintenanceChip m={s.maintenance} className="mt-1" />}
       </div>
 
@@ -168249,9 +168398,10 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince, 
       ) : (
         s.hasStatus ? (
           <>
-            <div className="mx-1.5 flex items-center gap-2 rounded-xl bg-badbg px-3 py-2" title={s.error ?? undefined}>
-              <span className="h-2 w-2 shrink-0 rounded-full bg-bad" aria-hidden />
-              <p className="truncate text-fs-sm font-bold leading-snug text-bad">{downSince ? t('srv.down.for', { d: durText(Date.now() - downSince) }) : t('d2.srv.noReplyAgo', { ago: ago(s.updatedAt) })}</p>
+            <div className="srv-down mx-1.5" title={s.error ?? undefined}>
+              <span className="srv-down-k"><i aria-hidden />{t('srv.down.k')}</span>
+              <b className="srv-down-v">{downSince ? durText(Date.now() - downSince) : ago(s.updatedAt)}</b>
+              <span className="srv-down-s">{t('srv.down.last', { ago: ago(s.updatedAt) })}</span>
             </div>
             <div className="srv-off-fig px-1.5" aria-hidden><b>{t('srv.off.fig')}</b><i /></div>
           </>
@@ -168263,7 +168413,7 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince, 
       <div className="mt-auto flex items-center justify-between gap-2 px-1.5 pt-1 text-xs font-bold text-mute">
         <AddrCopy address={s.address} className="truncate font-mono" />
         <span className="flex shrink-0 items-center gap-2">
-          {uptime != null && <span className="srv-up" title={t('d2.srv.uptime30')}>{(Math.round(uptime * 10) / 10).toLocaleString('ru-RU')}%</span>}
+          {uptime != null && <span className={`srv-up ${uptime >= 99 ? 'ok' : uptime >= 95 ? 'warn' : 'bad'}`} title={t('d2.srv.uptime30')}>{(Math.round(uptime * 10) / 10).toLocaleString('ru-RU')}%</span>}
           {s.online ? (s.updatedAt != null && Date.now() - s.updatedAt > 120_000 ? ago(s.updatedAt) : '') : ago(s.updatedAt)}
         </span>
       </div>
@@ -169776,7 +169926,7 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/adminLogic.test.ts" << '__COREGSM_EOF__'
 import { describe, expect, it } from 'vitest';
-import { delta, dayKey, healthScore, type HealthInput } from './adminLogic';
+import { delta, dayKey, groupAudit, healthScore, type HealthInput } from './adminLogic';
 import { moveId, parseColumns } from './adminServersLogic';
 
 const fine: HealthInput = { servers: 4, down: 0, botError: false, certDays: 60, pending: 0, updateAvailable: false, backupAgeMs: 1000, backupsKnown: true };
@@ -169850,6 +170000,16 @@ describe('parseColumns', () => {
     expect(parseColumns('5')).toEqual(['uptime', 'h24']);
   });
 });
+
+describe('the groups of the journal', () => {
+  const row = (id: number, minAgo: number, action = 'Добавлен сервер', actor = 'admin') => ({ id, ts: 1_000_000_000 - minAgo * 60_000, actor, action, detail: `s${id}` });
+  it('folds the same action of one person that follows within minutes, and nothing else', () => {
+    const g = groupAudit([row(1, 1), row(2, 2), row(3, 3), row(4, 4, 'Вход'), row(5, 5), row(6, 40)]);
+    expect(g.map((x) => x.rows.map((r) => r.id))).toEqual([[1, 2, 3], [4], [5], [6]]);
+    expect(groupAudit([row(1, 1, 'A', 'x'), row(2, 2, 'A', 'y')]).length).toBe(2);
+    expect(groupAudit([])).toEqual([]);
+  });
+});
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/adminLogic.ts" << '__COREGSM_EOF__'
@@ -169900,6 +170060,20 @@ export const CHORDS: Record<string, string> = { o: 'overview', s: 'servers', d: 
 
 /** the letter of a section's chord, if it has one */
 export const chordOf = (section: string): string | null => Object.entries(CHORDS).find(([, id]) => id === section)?.[0] ?? null;
+
+/** a run of the same action by one person, a few minutes apart (six servers added in a row): one group */
+export interface AuditLike { id: number; ts: number; actor: string; action: string; detail: string }
+export function groupAudit<T extends AuditLike>(rows: T[], gapMs = 10 * 60_000): { rows: T[] }[] {
+  const out: { rows: T[] }[] = [];
+  for (const r of rows) {
+    const g = out[out.length - 1];
+    const last = g?.rows[g.rows.length - 1];
+    // the list is newest first, so the next row is older than the last one of the group
+    if (g && last && last.actor === r.actor && last.action === r.action && Math.abs(last.ts - r.ts) <= gapMs) g.rows.push(r);
+    else out.push({ rows: [r] });
+  }
+  return out;
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/adminNav.tsx" << '__COREGSM_EOF__'
@@ -171095,7 +171269,7 @@ import { useAuth } from '../../auth';
 import { Switch as ToggleSwitch } from '../../components/Switch';
 import { promptDialog } from '../../confirm';
 import { getPrefs, t, useI18n, type TKey } from '../../i18n';
-import { AdminPage, DiscordBadge, ErrorLine, GoLink, IconKey, IconTrash, IconUsers, PageHead, SaveBadge, Section, TextField, UserAvatar, ago, toast, undoable, useAutosave } from '../../ui';
+import { AdminPage, CopyButton, DiscordBadge, ErrorLine, GoLink, IconKey, IconTrash, IconUsers, PageHead, SaveBadge, Section, TextField, UserAvatar, ago, toast, undoable, useAutosave } from '../../ui';
 import { SaveBarProvider, useSaveBar, useSaveBarActive } from '../../saveBar';
 
 function Switch({ on, onChange, label, hint }: { on: boolean; onChange: (v: boolean) => void; label: string; hint: string }) {
@@ -171470,6 +171644,15 @@ function UsersTabInner() {
             </li>
           ))}
         </ul>
+        {loaded && users.length <= 1 && !q && roleFilter === 'all' && (
+          <div className="us-invite">
+            <b>{t('us.invite.t')}</b>
+            <p>{access?.registration ? t('us.invite.open') : t('us.invite.closed')}</p>
+            {access?.registration
+              ? <CopyButton text={`${window.location.origin}/register`} label={t('us.invite.copy')} />
+              : <button type="button" className="btn btn-soft btn-sm" onClick={() => pickTab('access')}>{t('us.invite.access')}</button>}
+          </div>
+        )}
         <p className="text-sm font-semibold text-mute">{t('us.pwNote')} <GoLink href="/admin/settings/security">{t('us.pwLink')}</GoLink>.</p>
       </Section>
       </div>
@@ -175310,6 +175493,140 @@ __COREGSM_EOF__
   :root[data-ember='1'] :is(.tile, .panel, .st-server, .st-banner) { box-shadow: none !important; break-inside: avoid; border: 1px solid #d9d4cc; background: #fff !important; color: #17161a !important; }
   :root[data-ember='1'] :is(.st-bars, .st-day) { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 }
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/styles"
+  cat > "$APP_DIR/core-frontend/src/styles/ember2.css" << '__COREGSM_EOF__'
+/* The second visual pass of Ember (12.11): servers, the page of a server, the community, the admin overview and what all of them share.
+   Loaded after ember.css, every rule is under [data-ember='1'] unless it is for both looks. Radii come from the scale of ember.css. */
+
+/* ---------- servers: the tile ---------- */
+/* a server that does not answer: a low cover, and the length of the downtime is the figure of the card */
+:root[data-ember='1'] .srv-tile.is-down > div:has(> .cover-scrim) { height: 84px; }
+.srv-down { display: grid; gap: 2px; padding: 2px 0; }
+.srv-down-k { display: inline-flex; align-items: center; gap: .4rem; font-size: .8125rem; font-weight: 700; color: rgb(var(--bad)); }
+.srv-down-k i { width: .5rem; height: .5rem; border-radius: 50%; background: rgb(var(--bad)); }
+.srv-down-v { font-size: 1.75rem; line-height: 1.1; font-weight: 800; letter-spacing: -.02em; }
+.srv-down-s { font-size: .8125rem; font-weight: 600; color: rgb(var(--mute)); }
+
+/* the tile that closes an unfinished row takes the empty places: the cover is wider and the players sit beside the name */
+:root[data-ember='1'] .srv-tile.srv-wide > div:has(> .cover-scrim) { height: 160px; }
+
+/* the foot of a tile: the address (the copy sign shows under the pointer), the uptime in the colour of its level */
+:root[data-ember='1'] .srv-tile > div:last-child { font-size: .8125rem; }
+.srv-up { font-weight: 800; font-variant-numeric: tabular-nums; }
+.srv-up.ok { color: rgb(var(--ok)); }
+.srv-up.warn { color: rgb(var(--warn)); }
+.srv-up.bad { color: rgb(var(--bad)); }
+.srv-tile .srv-addr-copy svg { opacity: 0; transition: opacity .15s ease; }
+.srv-tile:hover .srv-addr-copy svg, .srv-tile .srv-addr-copy:focus-visible svg { opacity: .85; }
+@media (hover: none) { .srv-tile .srv-addr-copy svg { opacity: .6; } }
+
+/* the buttons over the picture sit on one pane of dark glass, so they read on a light cover too */
+:root[data-ember='1'] .srv-cover-actions { padding: 3px; border-radius: 999px; background: rgb(12 10 9 / .45); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); box-shadow: inset 0 0 0 1px rgb(255 255 255 / .12); }
+
+/* the game is a chip in its own colour, the name is the first thing to read */
+:root[data-ember='1'] .srv-tile .srv-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 4px; }
+:root[data-ember='1'] .srv-tile .srv-game { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 2px 10px; border-radius: 999px; background: color-mix(in srgb, var(--gc) 18%, transparent); color: rgb(var(--ink)); font-size: .8125rem; font-weight: 700; }
+:root[data-ember='1'] .srv-tile .srv-game::before { content: ''; flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--gc); }
+
+/* «almost full» is said once, on the bar: a small label under it, not a badge beside the game */
+:root[data-ember='1'] .srv-tile .srv-badge-full { display: none; }
+:root[data-ember='1'] .srv-tile > .flex-col > .srv-slots:is(.almost, .full) { display: inline-flex; align-items: center; gap: 4px; align-self: flex-start; padding: 1px 9px; border-radius: 999px; font-size: .75rem; font-weight: 750; }
+:root[data-ember='1'] .srv-tile > .flex-col > .srv-slots.almost { background: rgb(var(--warnbg)); color: rgb(var(--warn)); }
+:root[data-ember='1'] .srv-tile > .flex-col > .srv-slots.full { background: rgb(var(--badbg)); color: rgb(var(--bad)); }
+
+/* the chart of the pulse: the top and the bottom of the scale and a faint line in the middle */
+.pulse-y { position: absolute; left: 0; z-index: 1; font-size: .6875rem; font-weight: 700; line-height: 1; color: rgb(var(--mute)); font-variant-numeric: tabular-nums; pointer-events: none; }
+.pulse-y-top { top: 2px; }
+.pulse-y-bottom { bottom: 2px; }
+.pulse-plot::before { content: ''; position: absolute; inset: 50% 0 auto 0; border-top: 1px dashed rgb(var(--line)); pointer-events: none; }
+
+/* ---------- the page of a server ---------- */
+/* the chart of the players: a scale (the top and the middle), the average as a dashed line, the column of now has a light edge */
+.pb-cols { position: relative; }
+.pb-grid, .pb-avg { position: absolute; left: 0; right: 0; height: 0; pointer-events: none; }
+.pb-grid { border-top: 1px solid rgb(var(--line) / .6); }
+.pb-avg { border-top: 1px dashed rgb(var(--brand) / .7); z-index: 1; }
+.pb-grid em, .pb-avg em { position: absolute; right: 0; top: -1.1em; font-style: normal; font-size: .6875rem; font-weight: 700; line-height: 1; color: rgb(var(--mute)); font-variant-numeric: tabular-nums; }
+.pb-avg em { color: rgb(var(--link)); }
+.pb-col { position: relative; z-index: 2; }
+.pb-bar.is-now:not(.is-top) { box-shadow: inset 0 2px 0 rgb(var(--brand)); }
+
+/* the passport of a server: one quiet row of facts with a sign in front of each, not boxes of different sizes */
+:root[data-ember='1'] .pp-ribbon { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 0; padding: 0; list-style: none; }
+:root[data-ember='1'] .pp-ribbon .pp-chip { display: inline-flex; align-items: center; gap: 6px; min-width: 0; padding: 0; border: 0; background: none; box-shadow: none; font-size: .875rem; font-weight: 650; }
+:root[data-ember='1'] .pp-ribbon .pp-chip > svg { opacity: .7; }
+:root[data-ember='1'] .pp-more-btn { margin-top: 8px; }
+
+
+/* the events of the overview: the sign of the kind stands before the line, no word in capitals beside it */
+:root[data-ember='1'] .srv-page li:has(> .ev-type) { padding-block: 4px; }
+
+/* the reviews while there are none: one row of text and a link, not a card of its own height */
+.rv:not(:has(> :not(p))) { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem .9rem; }
+.rv:not(:has(> :not(p))) > p { margin: 0; }
+
+/* the list of the players: closer rows; on the tab of the players in two columns on a wide screen */
+:root[data-ember='1'] .pl-rows .pl-row { padding-block: 6px; }
+@media (min-width: 1100px) {
+  :root[data-ember='1'] .pl-rows.is-wide { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 20px; }
+}
+.pl-rows.is-wide > .pl-group { grid-column: 1 / -1; }
+
+/* ---------- the community ---------- */
+/* the busiest server and the most active players are short cards: they keep their own height, no empty field under the text */
+.cm-bento > .b-hot, .cm-bento > .b-top { align-self: start; }
+.cm-bento > .b-hot > .tile, .cm-bento > .b-top > .tile { height: auto; }
+.cm-sparse { margin: 0; padding: 14px 16px; border-radius: var(--emb-r-card, 18px); background: rgb(var(--soft)); }
+/* the days are the rows of the map itself */
+.cm-heat-btn { padding: 0; border: 0; background: none; font: inherit; font-size: var(--fs-xs); font-weight: 650; text-align: left; color: rgb(var(--mute)); cursor: pointer; }
+.cm-heat-btn:hover { color: rgb(var(--ink)); }
+.cm-heat-btn.is-on { color: rgb(var(--link)); font-weight: 800; }
+
+/* ---------- the admin area ---------- */
+.adm-tile.is-bad { box-shadow: inset 3px 0 0 rgb(var(--bad)), var(--shadow-1); }
+.adm-tile.is-warn { box-shadow: inset 3px 0 0 rgb(var(--warn)), var(--shadow-1); }
+.adm-tile-body { display: grid; gap: 2px; color: inherit; text-decoration: none; }
+.adm-tile > .btn, .adm-tile > button { margin-top: 8px; justify-self: start; }
+/* the cause of a lower score is a link to the place where it is mended */
+a.adm-reason { display: inline-flex; align-items: center; gap: 6px; text-decoration: none; }
+a.adm-reason:hover { filter: brightness(1.1); }
+.adm-reason-go { margin-left: 4px; padding-left: 8px; border-left: 1px solid currentColor; font-weight: 800; opacity: .9; }
+/* the journal: the action, a count when it repeats, and the detail that is cut on its own */
+.adm-act-line { display: flex; align-items: baseline; gap: 8px; min-width: 0; margin: 0; }
+.adm-count { flex: none; padding: 0 8px; border-radius: 999px; background: rgb(var(--soft)); color: rgb(var(--mute)); font-size: .75rem; font-weight: 800; font-variant-numeric: tabular-nums; }
+.adm-group-list { list-style: none; margin: 8px 0 0 40px; padding: 0 0 0 12px; display: grid; gap: 4px; border-left: 2px solid rgb(var(--line)); }
+.adm-group-list > li { display: flex; justify-content: space-between; gap: 12px; font-size: .8125rem; font-weight: 600; color: rgb(var(--mute)); }
+.adm-group-list > li > span { min-width: 0; }
+.us-invite { display: grid; justify-items: start; gap: 6px; padding: 16px 18px; border-radius: var(--emb-r-card, 18px); background: rgb(var(--soft)); }
+.us-invite p { margin: 0; font-weight: 600; color: rgb(var(--mute)); }
+/* the two columns on the left do not take more than a third of a narrow screen */
+@media (min-width: 1100px) and (max-width: 1279px) {
+  :root[data-ember='1'][data-page='admin'] { --emb-rail: 60px; --emb-adm: 208px; }
+  :root[data-ember='1'][data-page='admin'] nav.adm-nav.adm-rail { width: 60px; }
+}
+
+/* ---------- what all the pages share ---------- */
+/* a number that changes: the digits roll and the small «+1» says how much; the cell does not flash */
+:root[data-ember='1'] :is(.srv-num-up, .srv-num-down) { animation: none; }
+/* menus, toasts and tips of the charts: one pane of glass, one shadow */
+:root[data-ember='1'] {
+  --emb-float-bg: rgb(var(--overlay) / .94);
+  --emb-float-shadow: 0 14px 36px -12px rgb(0 0 0 / .5), inset 0 0 0 1px rgb(var(--line));
+}
+:root[data-ember='1'] :is(.toast-in, .toast-out, .srv-more-pop, .pulse-tip, .cm-chart-tip, .cm-hint) {
+  background: var(--emb-float-bg); border: 0; box-shadow: var(--emb-float-shadow);
+  -webkit-backdrop-filter: blur(14px) saturate(1.2); backdrop-filter: blur(14px) saturate(1.2);
+}
+:root[data-ember='1'] :is(.srv-more-pop, .cm-hint) { border-radius: var(--emb-r-card, 18px); }
+:root[data-ember='1'] :is(.pulse-tip, .cm-chart-tip) { border-radius: var(--emb-r-btn, 12px); }
+/* the focus: an orange ring with a halo of the page colour, so it reads on a dark picture and on an orange button alike */
+:root[data-ember='1'] :focus-visible { box-shadow: 0 0 0 5px rgb(var(--page) / .9); }
+:root[data-ember='1'] :is(.btn:not(.btn-soft):not(.btn-ghost):not(.btn-outline), .nw-rub[aria-pressed='true']):focus-visible { outline-color: rgb(var(--ink)); }
+/* the chart that has no history yet keeps the place it will take */
+:root[data-ember='1'] .pulse-chart-empty { min-height: 160px; display: grid; place-items: center; }
+:root[data-ember='1'] .cm-hero { min-height: 240px; }
+.pb-avg em { right: auto; left: 0; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/emberScale.test.ts" << '__COREGSM_EOF__'

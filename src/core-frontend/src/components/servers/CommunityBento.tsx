@@ -55,13 +55,15 @@ export function PlayerAvatar({ name, size = 30, online = false }: { name: string
 }
 
 /** weekday x hour of the whole community, small */
-export function MiniHeat({ cells, big = false, now }: { cells: (number | null)[][]; big?: boolean; now?: { dow: number; hour: number } }) {
+export function MiniHeat({ cells, big = false, now, pick, active }: { cells: (number | null)[][]; big?: boolean; now?: { dow: number; hour: number }; pick?: (dow: number) => void; active?: number }) {
   const max = Math.max(1, ...cells.flat().map((v) => v ?? 0));
   return (
-    <div className={`cm-heat ${big ? 'is-big' : ''}`} role="img" aria-label={t('cm.heat.aria')}>
+    <div className={`cm-heat ${big ? 'is-big' : ''}`} role={pick ? 'group' : 'img'} aria-label={t('cm.heat.aria')}>
       {cells.map((row, d) => (
         <div key={d} className="contents">
-          <span className="cm-heat-d">{dowShort()[d]}</span>
+          {pick
+            ? <button type="button" className={`cm-heat-d cm-heat-btn ${active === d ? 'is-on' : ''}`} aria-pressed={active === d} onClick={() => pick(d)}>{dowShort()[d]}</button>
+            : <span className="cm-heat-d">{dowShort()[d]}</span>}
           {row.map((v, h) => (
             <span key={h} className={`cm-heat-c ${now && now.dow === d && now.hour === h ? 'is-now' : ''} ${v != null && v > 0 && v === max ? 'is-peak' : ''}`} style={v == null ? undefined : { ['--a' as string]: (0.12 + 0.88 * (v / max)).toFixed(3) }} title={v == null ? undefined : t('cm.heat.cell', { d: dowShort()[d], time: `${String(h).padStart(2, '0')}:00`, n: num(v) })} />
           ))}

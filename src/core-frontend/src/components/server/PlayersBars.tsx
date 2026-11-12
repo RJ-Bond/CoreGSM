@@ -23,17 +23,22 @@ export default function PlayersBars({ points, hours, max, now, baseline = null }
   const usual = hours <= 24 ? bars.map((b) => usualAt(baseline, (b.from + b.to) / 2)) : bars.map(() => null);
   const scale = Math.max(1, max, ...bars.map((b) => b.peak ?? 0), ...usual.map((u) => u ?? 0));
   const hasUsual = usual.some((u) => u != null);
+  const seen = bars.map((b) => b.peak).filter((p): p is number => p != null);
+  const avg = seen.length > 2 ? Math.round(seen.reduce((a, b) => a + b, 0) / seen.length) : null;
   const label = (ts: number) => (hours <= 24 ? clock(ts) : day(ts));
   const where = (b: { from: number; to: number }) => (hours <= 24 ? `${clock(b.from)}–${clock(b.to)}` : `${day(b.from)}`);
   const summary = top >= 0 ? t('srv.bars.summary', { n: bars[top].peak ?? 0, when: where(bars[top]) }) : t('srv.bars.none');
   return (
     <div className="pb">
       <div className="pb-cols" role="img" aria-label={summary}>
+        <span className="pb-grid" style={{ bottom: '50%' }} aria-hidden><em>{Math.round(scale / 2)}</em></span>
+        <span className="pb-grid" style={{ bottom: '100%' }} aria-hidden><em>{scale}</em></span>
+        {avg != null && <span className="pb-avg" style={{ bottom: `${Math.max(2, Math.round((avg / scale) * 100))}%` }} aria-hidden><em>{t('srv.bars.avg', { n: avg })}</em></span>}
         {bars.map((b, i) => (
           <span key={b.from} className="pb-col" title={b.peak == null ? `${where(b)} · ${t('srv.bars.noData')}` : `${where(b)} · ${t('srv.bars.peak', { n: b.peak })}`}>
             {usual[i] != null && <s className="pb-ghost" style={{ bottom: `${Math.max(2, Math.round(((usual[i] as number) / scale) * 100))}%` }} aria-hidden />}
             <i
-              className={`pb-bar ${i === top ? 'is-top' : ''} ${b.peak == null ? 'is-empty' : ''}`}
+              className={`pb-bar ${i === top ? 'is-top' : ''} ${i === bars.length - 1 ? 'is-now' : ''} ${b.peak == null ? 'is-empty' : ''}`}
               style={{ height: `${b.peak == null ? 4 : Math.max(6, Math.round((b.peak / scale) * 100))}%` }}
             >
               {i === top && b.peak != null && <b className="pb-peak">{b.peak}</b>}

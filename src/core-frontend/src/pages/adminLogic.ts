@@ -45,3 +45,17 @@ export const CHORDS: Record<string, string> = { o: 'overview', s: 'servers', d: 
 
 /** the letter of a section's chord, if it has one */
 export const chordOf = (section: string): string | null => Object.entries(CHORDS).find(([, id]) => id === section)?.[0] ?? null;
+
+/** a run of the same action by one person, a few minutes apart (six servers added in a row): one group */
+export interface AuditLike { id: number; ts: number; actor: string; action: string; detail: string }
+export function groupAudit<T extends AuditLike>(rows: T[], gapMs = 10 * 60_000): { rows: T[] }[] {
+  const out: { rows: T[] }[] = [];
+  for (const r of rows) {
+    const g = out[out.length - 1];
+    const last = g?.rows[g.rows.length - 1];
+    // the list is newest first, so the next row is older than the last one of the group
+    if (g && last && last.actor === r.actor && last.action === r.action && Math.abs(last.ts - r.ts) <= gapMs) g.rows.push(r);
+    else out.push({ rows: [r] });
+  }
+  return out;
+}

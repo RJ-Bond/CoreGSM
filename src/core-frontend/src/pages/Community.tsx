@@ -199,6 +199,17 @@ function WhenBlock({ c }: { c: Community }) {
     if (a != null && b != null && (!best || a + b > best.sum)) best = { h, sum: a + b };
   }
   const peak = best ? `${hh(best.h)}–${hh(best.h + 2)}` : null;
+  // a few hours of data in all: a map of empty squares says nothing, so it waits for more days
+  // on a phone the rows of the map are too thin to touch: the days stay a row of buttons there
+  const [wide, setWide] = useState(() => typeof window === 'undefined' || !window.matchMedia || window.matchMedia('(min-width: 700px)').matches);
+  useEffect(() => {
+    const m = window.matchMedia?.('(min-width: 700px)');
+    if (!m) return undefined;
+    const on = () => setWide(m.matches);
+    m.addEventListener('change', on);
+    return () => m.removeEventListener('change', on);
+  }, []);
+  const sparse = c.heatmap.cells.flat().filter((v) => v != null && v > 0).length < 12;
   const inPeak = !!best && dow === here.dow && here.hour >= best.h && here.hour <= best.h + 1;
   return (
     <section id="cm-when" className="tile p-4 sm:p-5">
@@ -209,15 +220,21 @@ function WhenBlock({ c }: { c: Community }) {
           {dow === here.dow ? <>{t('cm.when.today')} <b>{peak}</b>{inPeak ? t('cm.when.peak') : ''}</> : <>{t('cm.when.dow', { d: dowShort()[dow] })} <b>{peak}</b></>}
         </p>
       ) : null}
-      <MiniHeat cells={c.heatmap.cells} big now={here} />
-      <HeatLegend />
-      <p className="cm-sub">{busiestText(c.heatmap.busiest)}. {t('cm.when.note')}</p>
-      <h3 className="cm-subh">{t('cm.when.curve', { d: dowShort()[dow] })}</h3>
-      <div className="cm-days" role="group" aria-label={t('cm.when.typical')}>
-        {dowShort().map((d, i) => <button key={d} type="button" className="seg-item" aria-pressed={dow === i} onClick={() => setDow(i)}>{d}</button>)}
-      </div>
-      <TinyChart values={row} label={(i) => `${dowShort()[dow]} ${hh(i)}`} mark={dow === here.dow ? here.hour : null} className="cm-chart-day" />
-      <div className="cm-chart-ticks" aria-hidden><span>0:00</span><span>6:00</span><span>12:00</span><span>18:00</span><span>24:00</span></div>
+      {sparse ? <p className="cm-sub cm-sparse">{t('cm.when.sparse')}</p> : (
+        <>
+          <MiniHeat cells={c.heatmap.cells} big now={here} pick={wide ? setDow : undefined} active={dow} />
+          <HeatLegend />
+          <p className="cm-sub">{busiestText(c.heatmap.busiest)}. {t('cm.when.note')} {t('cm.when.pick')}</p>
+        </>
+      )}
+      {!sparse && <h3 className="cm-subh">{t('cm.when.curve', { d: dowShort()[dow] })}</h3>}
+      {!sparse && !wide && (
+        <div className="cm-days" role="group" aria-label={t('cm.when.typical')}>
+          {dowShort().map((d, i) => <button key={d} type="button" className="seg-item" aria-pressed={dow === i} onClick={() => setDow(i)}>{d}</button>)}
+        </div>
+      )}
+      {!sparse && <TinyChart values={row} label={(i) => `${dowShort()[dow]} ${hh(i)}`} mark={dow === here.dow ? here.hour : null} className="cm-chart-day" />}
+      {!sparse && <div className="cm-chart-ticks" aria-hidden><span>0:00</span><span>6:00</span><span>12:00</span><span>18:00</span><span>24:00</span></div>}
     </section>
   );
 }

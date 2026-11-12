@@ -100,7 +100,7 @@ export default function EventsFeed({ events, online, limit, moreHref, uptimePct,
                       </span>
                       <span className="min-w-0 flex-1">
                         <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-                          <span className={`ev-type ev-${e.type}`}>{t(MARK_RU[e.type])}</span>
+                          {!limit && <span className={`ev-type ev-${e.type}`}>{t(MARK_RU[e.type])}</span>}
                           <span className="block font-bold leading-snug">{title(e, downFor.get(e.ts) ?? null, !online && newestDown === e)}</span>
                         </span>
                         <time dateTime={new Date(e.ts).toISOString()} title={absTime(e.ts)} className="text-sm font-semibold text-mute">

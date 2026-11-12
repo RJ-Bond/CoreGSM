@@ -7,7 +7,7 @@ import { useAuth } from '../../auth';
 import { Switch as ToggleSwitch } from '../../components/Switch';
 import { promptDialog } from '../../confirm';
 import { getPrefs, t, useI18n, type TKey } from '../../i18n';
-import { AdminPage, DiscordBadge, ErrorLine, GoLink, IconKey, IconTrash, IconUsers, PageHead, SaveBadge, Section, TextField, UserAvatar, ago, toast, undoable, useAutosave } from '../../ui';
+import { AdminPage, CopyButton, DiscordBadge, ErrorLine, GoLink, IconKey, IconTrash, IconUsers, PageHead, SaveBadge, Section, TextField, UserAvatar, ago, toast, undoable, useAutosave } from '../../ui';
 import { SaveBarProvider, useSaveBar, useSaveBarActive } from '../../saveBar';
 
 function Switch({ on, onChange, label, hint }: { on: boolean; onChange: (v: boolean) => void; label: string; hint: string }) {
@@ -382,6 +382,15 @@ function UsersTabInner() {
             </li>
           ))}
         </ul>
+        {loaded && users.length <= 1 && !q && roleFilter === 'all' && (
+          <div className="us-invite">
+            <b>{t('us.invite.t')}</b>
+            <p>{access?.registration ? t('us.invite.open') : t('us.invite.closed')}</p>
+            {access?.registration
+              ? <CopyButton text={`${window.location.origin}/register`} label={t('us.invite.copy')} />
+              : <button type="button" className="btn btn-soft btn-sm" onClick={() => pickTab('access')}>{t('us.invite.access')}</button>}
+          </div>
+        )}
         <p className="text-sm font-semibold text-mute">{t('us.pwNote')} <GoLink href="/admin/settings/security">{t('us.pwLink')}</GoLink>.</p>
       </Section>
       </div>

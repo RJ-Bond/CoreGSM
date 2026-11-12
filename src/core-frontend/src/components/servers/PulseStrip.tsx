@@ -62,6 +62,8 @@ function PlayersChart({ data, now }: { data: OverviewData | null; now: number })
           <path d={area} fill={`url(#pg${gid})`} />
           <path d={line} fill="none" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
         </svg>
+        <span className="pulse-y pulse-y-top" aria-hidden>{max}</span>
+        <span className="pulse-y pulse-y-bottom" aria-hidden>0</span>
         {hp && (
           <>
             <span className="pulse-cursor" style={{ left: `${hp.x * 100}%` }} aria-hidden />

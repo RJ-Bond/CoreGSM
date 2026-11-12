@@ -1,0 +1,131 @@
+/* The second visual pass of Ember (12.11): servers, the page of a server, the community, the admin overview and what all of them share.
+   Loaded after ember.css, every rule is under [data-ember='1'] unless it is for both looks. Radii come from the scale of ember.css. */
+
+/* ---------- servers: the tile ---------- */
+/* a server that does not answer: a low cover, and the length of the downtime is the figure of the card */
+:root[data-ember='1'] .srv-tile.is-down > div:has(> .cover-scrim) { height: 84px; }
+.srv-down { display: grid; gap: 2px; padding: 2px 0; }
+.srv-down-k { display: inline-flex; align-items: center; gap: .4rem; font-size: .8125rem; font-weight: 700; color: rgb(var(--bad)); }
+.srv-down-k i { width: .5rem; height: .5rem; border-radius: 50%; background: rgb(var(--bad)); }
+.srv-down-v { font-size: 1.75rem; line-height: 1.1; font-weight: 800; letter-spacing: -.02em; }
+.srv-down-s { font-size: .8125rem; font-weight: 600; color: rgb(var(--mute)); }
+
+/* the tile that closes an unfinished row takes the empty places: the cover is wider and the players sit beside the name */
+:root[data-ember='1'] .srv-tile.srv-wide > div:has(> .cover-scrim) { height: 160px; }
+
+/* the foot of a tile: the address (the copy sign shows under the pointer), the uptime in the colour of its level */
+:root[data-ember='1'] .srv-tile > div:last-child { font-size: .8125rem; }
+.srv-up { font-weight: 800; font-variant-numeric: tabular-nums; }
+.srv-up.ok { color: rgb(var(--ok)); }
+.srv-up.warn { color: rgb(var(--warn)); }
+.srv-up.bad { color: rgb(var(--bad)); }
+.srv-tile .srv-addr-copy svg { opacity: 0; transition: opacity .15s ease; }
+.srv-tile:hover .srv-addr-copy svg, .srv-tile .srv-addr-copy:focus-visible svg { opacity: .85; }
+@media (hover: none) { .srv-tile .srv-addr-copy svg { opacity: .6; } }
+
+/* the buttons over the picture sit on one pane of dark glass, so they read on a light cover too */
+:root[data-ember='1'] .srv-cover-actions { padding: 3px; border-radius: 999px; background: rgb(12 10 9 / .45); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); box-shadow: inset 0 0 0 1px rgb(255 255 255 / .12); }
+
+/* the game is a chip in its own colour, the name is the first thing to read */
+:root[data-ember='1'] .srv-tile .srv-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 4px; }
+:root[data-ember='1'] .srv-tile .srv-game { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 2px 10px; border-radius: 999px; background: color-mix(in srgb, var(--gc) 18%, transparent); color: rgb(var(--ink)); font-size: .8125rem; font-weight: 700; }
+:root[data-ember='1'] .srv-tile .srv-game::before { content: ''; flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--gc); }
+
+/* «almost full» is said once, on the bar: a small label under it, not a badge beside the game */
+:root[data-ember='1'] .srv-tile .srv-badge-full { display: none; }
+:root[data-ember='1'] .srv-tile > .flex-col > .srv-slots:is(.almost, .full) { display: inline-flex; align-items: center; gap: 4px; align-self: flex-start; padding: 1px 9px; border-radius: 999px; font-size: .75rem; font-weight: 750; }
+:root[data-ember='1'] .srv-tile > .flex-col > .srv-slots.almost { background: rgb(var(--warnbg)); color: rgb(var(--warn)); }
+:root[data-ember='1'] .srv-tile > .flex-col > .srv-slots.full { background: rgb(var(--badbg)); color: rgb(var(--bad)); }
+
+/* the chart of the pulse: the top and the bottom of the scale and a faint line in the middle */
+.pulse-y { position: absolute; left: 0; z-index: 1; font-size: .6875rem; font-weight: 700; line-height: 1; color: rgb(var(--mute)); font-variant-numeric: tabular-nums; pointer-events: none; }
+.pulse-y-top { top: 2px; }
+.pulse-y-bottom { bottom: 2px; }
+.pulse-plot::before { content: ''; position: absolute; inset: 50% 0 auto 0; border-top: 1px dashed rgb(var(--line)); pointer-events: none; }
+
+/* ---------- the page of a server ---------- */
+/* the chart of the players: a scale (the top and the middle), the average as a dashed line, the column of now has a light edge */
+.pb-cols { position: relative; }
+.pb-grid, .pb-avg { position: absolute; left: 0; right: 0; height: 0; pointer-events: none; }
+.pb-grid { border-top: 1px solid rgb(var(--line) / .6); }
+.pb-avg { border-top: 1px dashed rgb(var(--brand) / .7); z-index: 1; }
+.pb-grid em, .pb-avg em { position: absolute; right: 0; top: -1.1em; font-style: normal; font-size: .6875rem; font-weight: 700; line-height: 1; color: rgb(var(--mute)); font-variant-numeric: tabular-nums; }
+.pb-avg em { color: rgb(var(--link)); }
+.pb-col { position: relative; z-index: 2; }
+.pb-bar.is-now:not(.is-top) { box-shadow: inset 0 2px 0 rgb(var(--brand)); }
+
+/* the passport of a server: one quiet row of facts with a sign in front of each, not boxes of different sizes */
+:root[data-ember='1'] .pp-ribbon { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 0; padding: 0; list-style: none; }
+:root[data-ember='1'] .pp-ribbon .pp-chip { display: inline-flex; align-items: center; gap: 6px; min-width: 0; padding: 0; border: 0; background: none; box-shadow: none; font-size: .875rem; font-weight: 650; }
+:root[data-ember='1'] .pp-ribbon .pp-chip > svg { opacity: .7; }
+:root[data-ember='1'] .pp-more-btn { margin-top: 8px; }
+
+
+/* the events of the overview: the sign of the kind stands before the line, no word in capitals beside it */
+:root[data-ember='1'] .srv-page li:has(> .ev-type) { padding-block: 4px; }
+
+/* the reviews while there are none: one row of text and a link, not a card of its own height */
+.rv:not(:has(> :not(p))) { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem .9rem; }
+.rv:not(:has(> :not(p))) > p { margin: 0; }
+
+/* the list of the players: closer rows; on the tab of the players in two columns on a wide screen */
+:root[data-ember='1'] .pl-rows .pl-row { padding-block: 6px; }
+@media (min-width: 1100px) {
+  :root[data-ember='1'] .pl-rows.is-wide { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 20px; }
+}
+.pl-rows.is-wide > .pl-group { grid-column: 1 / -1; }
+
+/* ---------- the community ---------- */
+/* the busiest server and the most active players are short cards: they keep their own height, no empty field under the text */
+.cm-bento > .b-hot, .cm-bento > .b-top { align-self: start; }
+.cm-bento > .b-hot > .tile, .cm-bento > .b-top > .tile { height: auto; }
+.cm-sparse { margin: 0; padding: 14px 16px; border-radius: var(--emb-r-card, 18px); background: rgb(var(--soft)); }
+/* the days are the rows of the map itself */
+.cm-heat-btn { padding: 0; border: 0; background: none; font: inherit; font-size: var(--fs-xs); font-weight: 650; text-align: left; color: rgb(var(--mute)); cursor: pointer; }
+.cm-heat-btn:hover { color: rgb(var(--ink)); }
+.cm-heat-btn.is-on { color: rgb(var(--link)); font-weight: 800; }
+
+/* ---------- the admin area ---------- */
+.adm-tile.is-bad { box-shadow: inset 3px 0 0 rgb(var(--bad)), var(--shadow-1); }
+.adm-tile.is-warn { box-shadow: inset 3px 0 0 rgb(var(--warn)), var(--shadow-1); }
+.adm-tile-body { display: grid; gap: 2px; color: inherit; text-decoration: none; }
+.adm-tile > .btn, .adm-tile > button { margin-top: 8px; justify-self: start; }
+/* the cause of a lower score is a link to the place where it is mended */
+a.adm-reason { display: inline-flex; align-items: center; gap: 6px; text-decoration: none; }
+a.adm-reason:hover { filter: brightness(1.1); }
+.adm-reason-go { margin-left: 4px; padding-left: 8px; border-left: 1px solid currentColor; font-weight: 800; opacity: .9; }
+/* the journal: the action, a count when it repeats, and the detail that is cut on its own */
+.adm-act-line { display: flex; align-items: baseline; gap: 8px; min-width: 0; margin: 0; }
+.adm-count { flex: none; padding: 0 8px; border-radius: 999px; background: rgb(var(--soft)); color: rgb(var(--mute)); font-size: .75rem; font-weight: 800; font-variant-numeric: tabular-nums; }
+.adm-group-list { list-style: none; margin: 8px 0 0 40px; padding: 0 0 0 12px; display: grid; gap: 4px; border-left: 2px solid rgb(var(--line)); }
+.adm-group-list > li { display: flex; justify-content: space-between; gap: 12px; font-size: .8125rem; font-weight: 600; color: rgb(var(--mute)); }
+.adm-group-list > li > span { min-width: 0; }
+.us-invite { display: grid; justify-items: start; gap: 6px; padding: 16px 18px; border-radius: var(--emb-r-card, 18px); background: rgb(var(--soft)); }
+.us-invite p { margin: 0; font-weight: 600; color: rgb(var(--mute)); }
+/* the two columns on the left do not take more than a third of a narrow screen */
+@media (min-width: 1100px) and (max-width: 1279px) {
+  :root[data-ember='1'][data-page='admin'] { --emb-rail: 60px; --emb-adm: 208px; }
+  :root[data-ember='1'][data-page='admin'] nav.adm-nav.adm-rail { width: 60px; }
+}
+
+/* ---------- what all the pages share ---------- */
+/* a number that changes: the digits roll and the small «+1» says how much; the cell does not flash */
+:root[data-ember='1'] :is(.srv-num-up, .srv-num-down) { animation: none; }
+/* menus, toasts and tips of the charts: one pane of glass, one shadow */
+:root[data-ember='1'] {
+  --emb-float-bg: rgb(var(--overlay) / .94);
+  --emb-float-shadow: 0 14px 36px -12px rgb(0 0 0 / .5), inset 0 0 0 1px rgb(var(--line));
+}
+:root[data-ember='1'] :is(.toast-in, .toast-out, .srv-more-pop, .pulse-tip, .cm-chart-tip, .cm-hint) {
+  background: var(--emb-float-bg); border: 0; box-shadow: var(--emb-float-shadow);
+  -webkit-backdrop-filter: blur(14px) saturate(1.2); backdrop-filter: blur(14px) saturate(1.2);
+}
+:root[data-ember='1'] :is(.srv-more-pop, .cm-hint) { border-radius: var(--emb-r-card, 18px); }
+:root[data-ember='1'] :is(.pulse-tip, .cm-chart-tip) { border-radius: var(--emb-r-btn, 12px); }
+/* the focus: an orange ring with a halo of the page colour, so it reads on a dark picture and on an orange button alike */
+:root[data-ember='1'] :focus-visible { box-shadow: 0 0 0 5px rgb(var(--page) / .9); }
+:root[data-ember='1'] :is(.btn:not(.btn-soft):not(.btn-ghost):not(.btn-outline), .nw-rub[aria-pressed='true']):focus-visible { outline-color: rgb(var(--ink)); }
+/* the chart that has no history yet keeps the place it will take */
+:root[data-ember='1'] .pulse-chart-empty { min-height: 160px; display: grid; place-items: center; }
+:root[data-ember='1'] .cm-hero { min-height: 240px; }
+.pb-avg em { right: auto; left: 0; }

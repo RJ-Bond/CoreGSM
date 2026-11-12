@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { useAuth } from '../auth';
-import { delta, dayKey, healthScore } from './adminLogic';
+import { delta, dayKey, groupAudit, healthScore } from './adminLogic';
 import { api, type BackupInfo, type BotStatus, type CertInfo, type Server, type UpdateInfo, type UserRow } from '../api';
 import type { OverviewData } from '../components/servers/overviewLogic';
 import { t, useI18n, type TKey } from '../i18n';
@@ -26,7 +26,7 @@ interface Attention { id: string; tone: 'bad' | 'warn' | 'info'; text: string; h
 const ok = <T,>(r: PromiseSettledResult<T>): T | null => (r.status === 'fulfilled' ? r.value : null);
 const WEEK = 7 * 86_400_000;
 
-function Tile({ label, value, sub, tone, href, change, spark }: { label: string; value: string; sub?: string; tone?: 'ok' | 'warn' | 'bad'; href?: string; change?: { text: string; tone: 'up' | 'down' } | null; spark?: number[] }) {
+function Tile({ label, value, sub, tone, href, change, spark, action }: { label: string; value: string; sub?: string; tone?: 'ok' | 'warn' | 'bad'; href?: string; change?: { text: string; tone: 'up' | 'down' } | null; spark?: number[]; action?: ReactNode }) {
   useI18n();
   const body = (
     <>
@@ -39,8 +39,15 @@ function Tile({ label, value, sub, tone, href, change, spark }: { label: string;
       {sub && <span className="adm-tile-s">{sub}</span>}
     </>
   );
-  return href ? <a href={href} className="adm-tile">{body}</a> : <div className="adm-tile">{body}</div>;
+  // a tile with a button is not a link as a whole (a button inside a link is not allowed)
+  const cls = `adm-tile ${tone ? `is-${tone}` : ''}`;
+  if (action) return <div className={cls}>{href ? <a href={href} className="adm-tile-body">{body}</a> : body}{action}</div>;
+  return href ? <a href={href} className={cls}>{body}</a> : <div className={cls}>{body}</div>;
 }
+
+const REASON_HREF: Record<string, string> = {
+  down: '/admin/servers', bot: '/admin/settings/bot', cert: '/admin/system', backup: '/admin/settings/updates', pending: '/admin/users', update: '/admin/settings/updates',
+};
 
 const REASON_TEXT: Record<string, TKey> = {
   down: 'd2.ao.r.down',
@@ -70,7 +77,13 @@ function HealthRing({ score, reasons }: { score: number; reasons: { id: string; 
           <p className="text-sm font-semibold text-mute">{t('d2.ao.h.allOk')}</p>
         ) : (
           <ul className="mt-1 flex flex-wrap gap-1.5">
-            {reasons.map((r) => <li key={r.id} className={`adm-reason is-${r.tone}`}>{REASON_TEXT[r.id] ? t(REASON_TEXT[r.id]) : r.id} <b>−{r.cost}</b></li>)}
+            {reasons.map((r) => (
+              <li key={r.id}>
+                {REASON_HREF[r.id]
+                  ? <a href={REASON_HREF[r.id]} className={`adm-reason is-${r.tone}`}>{REASON_TEXT[r.id] ? t(REASON_TEXT[r.id]) : r.id} <b>−{r.cost}</b><span className="adm-reason-go">{t('adm.ov.fix')} →</span></a>
+                  : <span className={`adm-reason is-${r.tone}`}>{REASON_TEXT[r.id] ? t(REASON_TEXT[r.id]) : r.id} <b>−{r.cost}</b></span>}
+              </li>
+            ))}
           </ul>
         )}
       </div>
@@ -178,7 +191,10 @@ export default function AdminOverview() {
     pending, updateAvailable: !!raw?.update?.available, backupAgeMs: lastBackup ? Date.now() - lastBackup : null, backupsKnown: !!raw?.backups,
   });
   const avatarOf = (name: string) => raw?.users?.find((u) => u.username === name)?.avatarUrl ?? null;
-  const auditRows = (raw?.audit ?? []).filter((r) => !mine || r.actor === me?.username).slice(0, 10);
+  const versionLabel = raw?.update?.currentLabel || (raw?.update?.current ? raw.update.current.slice(0, 7) : '');
+  // the same action again and again (six servers added in a row) is one line with a count
+  const auditGroups = groupAudit((raw?.audit ?? []).filter((r) => !mine || r.actor === me?.username)).slice(0, 8);
+  const [openGroups, setOpenGroups] = useState<number[]>([]);
 
   const pollAll = async () => {
     setBusy('poll');
@@ -213,8 +229,13 @@ export default function AdminOverview() {
             <Tile label={t('adm.ov.servers')} value={servers.length ? `${online} / ${servers.length}` : '–'} tone={servers.length === 0 ? undefined : down.length ? 'bad' : 'ok'} href="/admin/servers" />
             <Tile label={t('adm.ov.players')} value={String(players)} change={delta(players, series[0])} spark={series} href="/admin/servers" />
             <Tile label={t('adm.ov.pending')} value={raw.users ? String(pending) : '–'} tone={pending > 0 ? 'warn' : undefined} href="/admin/users" />
-            <Tile label={t('adm.ov.backup')} value={raw.backups ? (lastBackup ? ago(lastBackup) : t('adm.ov.noBackup')) : '–'} tone={raw.backups && (!lastBackup || Date.now() - lastBackup > WEEK) ? 'warn' : undefined} href="/admin/settings/updates" />
-            <Tile label={t('adm.ov.version')} value={raw.update?.currentLabel || (raw.update?.current ? raw.update.current.slice(0, 7) : '–')} sub={raw.update?.available ? t('adm.ov.upd') : undefined} tone={raw.update?.available ? 'warn' : undefined} href="/admin/settings/updates" />
+            <Tile
+              label={t('adm.ov.backup')}
+              value={raw.backups ? (lastBackup ? ago(lastBackup) : t('adm.ov.noBackup')) : '–'}
+              tone={raw.backups && !lastBackup ? 'bad' : raw.backups && Date.now() - lastBackup > WEEK ? 'warn' : undefined}
+              href="/admin/settings/updates"
+              action={raw.backups && (!lastBackup || Date.now() - lastBackup > WEEK) ? <Button type="button" variant="soft" loading={busy === 'backup'} onClick={() => void backupNow()}>{t('adm.ov.backupNow')}</Button> : undefined}
+            />
           </div>
 
           {servers.length > 0 && (
@@ -262,7 +283,7 @@ export default function AdminOverview() {
               )}
             </Section>
 
-            <Section title={t('adm.ov.quick')}>
+            <Section title={t('adm.ov.quick')} description={versionLabel ? t('adm.ov.versionLine', { v: versionLabel }) : undefined}>
               <div className="flex flex-wrap gap-2">
                 <a href="/admin/servers/new" className="btn">{t('adm.ov.addServer')}</a>
                 <a href="/admin/news/new" className="btn btn-soft">{t('adm.ov.writeNews')}</a>
@@ -282,21 +303,37 @@ export default function AdminOverview() {
                 </span>
               }
             >
-              {auditRows.length > 0 ? (
+              {auditGroups.length > 0 ? (
                 <ul className="divide-y divide-line">
-                  {auditRows.map((r) => {
+                  {auditGroups.map((g) => {
+                    const r = g.rows[0];
                     const pic = avatarOf(r.actor);
+                    const many = g.rows.length > 1;
+                    const open = openGroups.includes(r.id);
+                    const detail = many ? g.rows.map((x) => x.detail).filter(Boolean).slice(0, 2).join(', ') + (g.rows.length > 2 ? '…' : '') : r.detail;
                     return (
-                      <li key={r.id} className="flex items-center gap-3 py-2">
-                        {pic ? (
-                          <img src={pic} alt="" width={28} height={28} loading="lazy" referrerPolicy="no-referrer" className="adm-av" />
-                        ) : (
-                          <span className="adm-av" aria-hidden>{r.actor.slice(0, 1).toUpperCase()}</span>
-                        )}
-                        <div className="min-w-0 flex-1">
-                          <p className="truncate"><span className={`adm-act ${auditTone(r.action)}`}>{r.action}</span>{r.detail && <span className="ml-2 font-semibold text-mute">{r.detail}</span>}</p>
-                          <p className="text-xs font-semibold text-mute" title={fmtDateTime(r.ts)}>{r.actor} · {ago(r.ts)}</p>
+                      <li key={r.id} className="py-2">
+                        <div className="flex items-center gap-3">
+                          {pic ? (
+                            <img src={pic} alt="" width={28} height={28} loading="lazy" referrerPolicy="no-referrer" className="adm-av" />
+                          ) : (
+                            <span className="adm-av" aria-hidden>{r.actor.slice(0, 1).toUpperCase()}</span>
+                          )}
+                          <div className="min-w-0 flex-1">
+                            <p className="adm-act-line">
+                              <span className={`adm-act shrink-0 ${auditTone(r.action)}`}>{r.action}</span>
+                              {many && <span className="adm-count">×{g.rows.length}</span>}
+                              {detail && <span className="min-w-0 truncate font-semibold text-mute" title={g.rows.map((x) => x.detail).filter(Boolean).join(', ')}>{detail}</span>}
+                            </p>
+                            <p className="text-xs font-semibold text-mute" title={fmtDateTime(r.ts)}>{r.actor} · {ago(r.ts)}</p>
+                          </div>
+                          {many && <button type="button" className="adm-chip" aria-expanded={open} onClick={() => setOpenGroups((l) => (l.includes(r.id) ? l.filter((x) => x !== r.id) : [...l, r.id]))}>{open ? t('adm.ov.fold') : t('adm.ov.unfold')}</button>}
                         </div>
+                        {many && open && (
+                          <ul className="adm-group-list">
+                            {g.rows.map((x) => <li key={x.id}><span className="truncate" title={x.detail}>{x.detail || x.action}</span><time title={fmtDateTime(x.ts)}>{ago(x.ts)}</time></li>)}
+                          </ul>
+                        )}
                       </li>
                     );
                   })}
