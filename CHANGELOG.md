@@ -16,7 +16,7 @@ interface language; the GitHub release text is built from the section of the ver
 
 ## Не выпущено | Unreleased
 
-## 1.2.32 · 13.11.2026
+## 1.2.33 · 13.11.2026
 
 ### ✨ Новое | New
 - 🔧 Внутри: общие типы ответов API (`src/shared/types`, копируются в бэкенд и панель командой `node tools/sync-shared.mjs`, расхождение копий ломает тест; пока так описаны баны); при выпуске версии те же исходники собираются в четыре образа в реестре GitHub (`ghcr.io/…/coregsm-backend|bot|frontend|nginx`, подписаны без ключей), установщик их пока не использует; в сквозных проверках (Playwright) пять новых сценариев: заявка на разбан, подписка на сбои, подсказки новому игроку, возврат нижней панели в раздел, новость на странице сервера | Inside: shared types of the answers of the API (`src/shared/types`, copied into the backend and the panel by `node tools/sync-shared.mjs`, a difference of the copies fails a test; bans are described this way so far); at a release the same sources are built into four images in the registry of GitHub (`ghcr.io/…/coregsm-backend|bot|frontend|nginx`, signed keyless), the installer does not use them yet; the end-to-end checks (Playwright) have five new scenarios: a ban appeal, a subscription to outages, the hints for a new player, the bottom bar returning to a section, a news item on the page of a server
