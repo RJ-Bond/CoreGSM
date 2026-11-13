@@ -275,3 +275,13 @@ describe('what the limit of warnings does', () => {
     assert.equal(kick.joinBlock(34, '76561198000000044', NOW + 1000)?.ban.until, NOW + 1 + 86_400_000);
   });
 });
+
+describe('the block after a kick', () => {
+  it('holds only on the server where the player was kicked', () => {
+    const id = '76561198000000051';
+    scope.writeScoped('gamenews_kick', JSON.stringify({ rejoinBlockMin: 10 }), 1);
+    kick.runMod(1, input({ action: 'kick', reason: 'x', targetId: id, adminId: 'blk1' }), NOW);
+    assert.equal(kick.joinBlock(1, id, NOW + 1000)?.ban.kind, 'block');
+    assert.equal(kick.joinBlock(2, id, NOW + 1000), null);
+  });
+});

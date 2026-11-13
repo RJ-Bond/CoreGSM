@@ -16,6 +16,12 @@ interface language; the GitHub release text is built from the section of the ver
 
 ## Не выпущено | Unreleased
 
+### 🐛 Исправлено | Fixed
+- 🚪 Игроков больше не выкидывает «без причины»: забаненный или недавно кикнутый получал строку с причиной в первые секунды входа, пока игра ещё грузится, и видел только вылет — теперь строка приходит через 10 секунд, когда чат уже виден, и сразу после неё игрока снимают; короткий запрет после кика действует только на сервере, где был кик (раньше на всех серверах панели); кик из Discord без указания сервера снимает только игрока с точно таким ником (раньше мог снять игрока, чей ник начинается так же); нужен плагин 0.17.1 | 🚪 Players are no longer thrown out «for nothing»: a banned or recently kicked player got the line with the reason in the first seconds of the join, while the game was still loading, and saw only the drop — now the line comes after 10 seconds, when the chat is visible, and the player is removed right after it; the short block after a kick holds only on the server of the kick (it held on all servers of the panel); a kick from Discord without a server removes only the player with exactly that nickname (it could remove a player whose nickname starts the same); needs plugin 0.17.1
+
+### ✨ Новое | New
+- 🔎 Плагин 0.17.1 записывает каждый вход и выход в `BepInEx/config/CoreGSM.connections.log`: что сказала игра (обычный выход, таймаут, кик), сколько игрок был в игре и снял ли его CoreGSM и за что («CoreGSM: не трогал» значит, что плагин тут ни при чём) | 🔎 Plugin 0.17.1 writes every join and departure to `BepInEx/config/CoreGSM.connections.log`: what the game said (a normal quit, a timeout, a kick), how long the player was in, and whether CoreGSM removed him and why («CoreGSM: не трогал» means the plugin had nothing to do with it)
+
 ## 1.2.36 · 13.11.2026
 
 ### ✨ Новое | New

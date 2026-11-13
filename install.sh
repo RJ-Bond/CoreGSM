@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="8a84c0575868"
+COREGSM_BUILD="289b5bd3a78e"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.2.36"
+COREGSM_VERSION="1.2.37"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -24514,7 +24514,7 @@ import { takeCommands } from './gameNewsModLog.js';
 
 export const QUEUE_TTL_MS = 5 * 60_000;
 /** the version of the game plugin this panel was built for: an older plugin is shown as outdated */
-export const PLUGIN_VERSION = '0.17.0';
+export const PLUGIN_VERSION = '0.17.1';
 /** the games the plugin exists for */
 export const SUPPORTED_GAMES = new Set(['vrising']);
 const PULL_MIN_GAP_MS = 800;
@@ -25739,7 +25739,7 @@ export function runMod(serverId: number, b: ModInput, now = Date.now()): ModResu
     logMod({ ...base, kind: 'kick' }, now);
     // a short block against coming straight back
     if (s.rejoinBlockMin > 0 && b.targetId && b.targetId !== '0') {
-      putBan({ platformId: b.targetId, nick: base.nick, reason, admin: base.admin, until: now + s.rejoinBlockMin * 60_000, kind: 'block', serverId }, now);
+      putBan({ platformId: b.targetId, nick: base.nick, reason, admin: base.admin, until: now + s.rejoinBlockMin * 60_000, kind: 'block', serverId, scope: 'server' }, now); // only where he was kicked: a kick on one server does not keep him off the others
     }
     try { postKickToDiscord(serverId, s.template, { name: b.name, reason, admin: b.adminName }, now); } catch { /* Discord is not needed for the kick */ }
     logToDiscord(s, serverId, '🚪 Игрок кикнут', 0xed4245, { name: b.name, admin: b.adminName, reason }, now);
