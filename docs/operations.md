@@ -73,3 +73,16 @@
 | `UPDATE_CHANNEL`, `UPDATE_BASE_URL` | канал обновлений (`main` или релиз) и свой источник |
 | `PROBE_TOKEN`, `PROBE_INTERVAL_SEC` | точки проверки на другой машине |
 | `LOG_LEVEL` | подробность журнала |
+
+## Образы контейнеров
+
+При выпуске версии (workflow `release`, только по команде владельца) те же исходники собираются в четыре образа и кладутся в реестр GitHub:
+`ghcr.io/<владелец>/coregsm-backend`, `coregsm-bot`, `coregsm-frontend`, `coregsm-nginx`. Теги: номер версии и `build-<id сборки>`; каждый образ подписан
+без ключей (cosign, личность этого workflow), дайджест виден в журнале шага. Установщик пока их **не использует**: сервер по-прежнему собирает образы сам из
+`install.sh`. Образы нужны, чтобы следующий установщик мог скачать готовое и не тянуть 12 МБ исходников; сбой этого шага выпуск не ломает.
+Проверка подписи: `cosign verify ghcr.io/<владелец>/coregsm-backend:<версия> --certificate-identity-regexp 'https://github.com/<владелец>/CoreGSM/.github/workflows/release.yml@.*' --certificate-oidc-issuer https://token.actions.githubusercontent.com`.
+
+## Общие типы API
+
+Формы ответов, которые знают и бэкенд, и панель, лежат в `src/shared/types` и копируются в оба пакета командой `node tools/sync-shared.mjs`
+(см. `src/shared/README.md`). Копия, которая отличается от оригинала, ломает тест бэкенда. Сейчас так описаны баны; остальные типы переезжают по мере правок.

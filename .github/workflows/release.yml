@@ -26,6 +26,10 @@ concurrency:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    outputs:
+      build: ${{ steps.plan.outputs.build }}
+      version: ${{ steps.plan.outputs.version }}
+      publish: ${{ steps.plan.outputs.publish }}
     env:
       GH_TOKEN: ${{ github.token }}
       SHA: ${{ github.sha }}
@@ -85,3 +89,45 @@ jobs:
           set -e
           gh release create "build-${{ steps.plan.outputs.build }}" install.sh version.txt install.sh.bundle sbom.cdx.json sbom.cdx.json.bundle \
             --target "$SHA" --title "Версия ${{ steps.plan.outputs.version }}" --notes-file notes.md --latest
+
+  # The same sources as container images in the registry of GitHub: ghcr.io/<owner>/coregsm-<backend|bot|frontend|nginx>, tagged with
+  # the version and with the build id, signed keyless (cosign, the identity of this workflow). The installer does not use them yet: they
+  # are there so that a later installer can pull ready images instead of building on the server. A failure here never fails the release
+  # (the installer above is what servers update from).
+  images:
+    needs: publish
+    if: needs.publish.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    env:
+      SHA: ${{ github.sha }}
+      VERSION: ${{ needs.publish.outputs.version }}
+      BUILD: ${{ needs.publish.outputs.build }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ env.SHA }}
+
+      - uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
+
+      - name: Build, push and sign the four images
+        run: |
+          set -e
+          owner="$(echo "$GITHUB_REPOSITORY_OWNER" | tr 'A-Z' 'a-z')"
+          echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          for pair in backend:core-backend bot:core-bot frontend:core-frontend nginx:nginx; do
+            name="${pair%%:*}"
+            dir="src/${pair##*:}"
+            img="ghcr.io/$owner/coregsm-$name"
+            docker buildx build "$dir" --push               --tag "$img:$VERSION" --tag "$img:build-$BUILD"               --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY"               --label "org.opencontainers.image.revision=$SHA"               --label "org.opencontainers.image.version=$VERSION"               --metadata-file "meta-$name.json"
+            digest="$(node -p "require('./meta-$name.json')['containerimage.digest']")"
+            test -n "$digest"
+            cosign sign --yes "$img@$digest"
+            echo "$img@$digest" >> images.txt
+          done
+          cat images.txt

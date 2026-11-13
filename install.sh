@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="be2c9d54d5c9"
+COREGSM_BUILD="e9ff5176493d"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.2.31"
+COREGSM_VERSION="1.2.32"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -24220,30 +24220,10 @@ import { activeBanByNick, holdsOn, listBans, logMod, removeBan, type BanRow } fr
 import { bus } from '../events.js';
 import { pushLater } from '../alerts/push.js';
 import { serverLabel } from './gameNewsVars.js';
+import type { BanHistoryItem, BansData as BansAnswer, PublicBan } from '../shared/bans.js';
+
+export type { BanHistoryItem, BansAnswer, PublicBan };
 import { db } from '../db.js';
-
-export interface PublicBan {
-  nick: string;
-  reason: string;
-  serverId: number;
-  server: string;
-  /** all | server: where the ban holds */
-  scope: 'all' | 'server';
-  createdAt: number;
-  /** until when (0 = for ever) */
-  until: number;
-  /** staff only */
-  admin?: string;
-  platformId?: string;
-}
-
-export interface BansAnswer {
-  total: number;
-  forever: number;
-  last7d: number;
-  servers: { id: number; name: string; count: number }[];
-  items: PublicBan[];
-}
 
 /** the list in the shape that is given out: the staff sees more */
 export function shapeBans(rows: BanRow[], opts: { staff: boolean; server?: number; q?: string; label?: (id: number) => string }): PublicBan[] {
@@ -24293,21 +24273,6 @@ export function registerBans(app: Express): void {
 
 // ---------------------------------------------------------------------------------------------------------------------------------
 // the history of the bans, the appeals of the banned and the push of the staff about both
-
-export interface BanHistoryItem {
-  /** ban | unban */
-  kind: 'ban' | 'unban';
-  nick: string;
-  reason: string;
-  serverId: number;
-  server: string;
-  at: number;
-  /** a ban: until when (0 = for ever) */
-  until: number;
-  /** a ban that has run out by itself */
-  expired: boolean;
-  admin?: string;
-}
 
 interface LogRow { ts: number; kind: string; nick: string; reason: string; server_id: number; until: number; admin: string }
 
@@ -42485,6 +42450,69 @@ export function safeLookup(allowPrivate: boolean) {
       cb(null, list[0]!.address, list[0]!.family);
     });
   };
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/shared"
+  cat > "$APP_DIR/core-backend/src/shared/bans.ts" << '__COREGSM_EOF__'
+// GENERATED from src/shared/types/bans.ts by tools/sync-shared.mjs: do not edit here.
+/**
+ * The shapes of the answers of /api/bans, /api/bans/history and /api/bans/appeals: one definition for the backend (what it sends) and the
+ * panel (what it reads). Edit it HERE, then run `node tools/sync-shared.mjs`: the file is copied into both packages (each Docker build
+ * sees only its own folder), and CI fails when a copy differs from this one.
+ */
+
+/** one ban in force; `admin` and `platformId` are given to the staff only */
+export interface PublicBan {
+  nick: string;
+  reason: string;
+  serverId: number;
+  server: string;
+  /** all | server: where the ban holds */
+  scope: 'all' | 'server';
+  createdAt: number;
+  /** until when (0 = for ever) */
+  until: number;
+  admin?: string;
+  platformId?: string;
+}
+
+/** GET /api/bans */
+export interface BansData {
+  total: number;
+  forever: number;
+  last7d: number;
+  servers: { id: number; name: string; count: number }[];
+  items: PublicBan[];
+}
+
+/** GET /api/bans/history: a ban or an unban of the log of the moderation */
+export interface BanHistoryItem {
+  kind: 'ban' | 'unban';
+  nick: string;
+  reason: string;
+  serverId: number;
+  server: string;
+  at: number;
+  /** a ban: until when (0 = for ever) */
+  until: number;
+  /** a ban that has run out by itself */
+  expired: boolean;
+  /** staff only */
+  admin?: string;
+}
+
+/** GET /api/bans/appeals (staff) */
+export interface Appeal {
+  id: number;
+  at: number;
+  nick: string;
+  platformId: string;
+  text: string;
+  contact: string;
+  status: 'open' | 'accepted' | 'rejected';
+  note: string;
+  decidedBy: string | null;
+  decidedAt: number | null;
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
@@ -160403,52 +160431,10 @@ import { Empty, ErrorLine, LoadError, PageHead, ago, errText, fmtDateTime, toast
 import { useAuth } from '../auth';
 import { Switch } from '../components/Switch';
 import ArtPic from '../components/ArtPic';
+import type { Appeal, BanHistoryItem, BansData, PublicBan } from '../shared/bans';
 import '../styles/bans.css';
 
-export interface PublicBan {
-  nick: string;
-  reason: string;
-  serverId: number;
-  server: string;
-  scope: 'all' | 'server';
-  createdAt: number;
-  until: number;
-  admin?: string;
-  platformId?: string;
-}
-
-export interface BansData {
-  total: number;
-  forever: number;
-  last7d: number;
-  servers: { id: number; name: string; count: number }[];
-  items: PublicBan[];
-}
-
-export interface BanHistoryItem {
-  kind: 'ban' | 'unban';
-  nick: string;
-  reason: string;
-  serverId: number;
-  server: string;
-  at: number;
-  until: number;
-  expired: boolean;
-  admin?: string;
-}
-
-export interface Appeal {
-  id: number;
-  at: number;
-  nick: string;
-  platformId: string;
-  text: string;
-  contact: string;
-  status: 'open' | 'accepted' | 'rejected';
-  note: string;
-  decidedBy: string | null;
-  decidedAt: number | null;
-}
+export type { Appeal, BanHistoryItem, BansData, PublicBan };
 
 const IconBan = () => (
   <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
@@ -173708,6 +173694,69 @@ export function loadUnreadableSecrets(): string[] {
   } catch { return []; }
 }
 __COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/shared"
+  cat > "$APP_DIR/core-frontend/src/shared/bans.ts" << '__COREGSM_EOF__'
+// GENERATED from src/shared/types/bans.ts by tools/sync-shared.mjs: do not edit here.
+/**
+ * The shapes of the answers of /api/bans, /api/bans/history and /api/bans/appeals: one definition for the backend (what it sends) and the
+ * panel (what it reads). Edit it HERE, then run `node tools/sync-shared.mjs`: the file is copied into both packages (each Docker build
+ * sees only its own folder), and CI fails when a copy differs from this one.
+ */
+
+/** one ban in force; `admin` and `platformId` are given to the staff only */
+export interface PublicBan {
+  nick: string;
+  reason: string;
+  serverId: number;
+  server: string;
+  /** all | server: where the ban holds */
+  scope: 'all' | 'server';
+  createdAt: number;
+  /** until when (0 = for ever) */
+  until: number;
+  admin?: string;
+  platformId?: string;
+}
+
+/** GET /api/bans */
+export interface BansData {
+  total: number;
+  forever: number;
+  last7d: number;
+  servers: { id: number; name: string; count: number }[];
+  items: PublicBan[];
+}
+
+/** GET /api/bans/history: a ban or an unban of the log of the moderation */
+export interface BanHistoryItem {
+  kind: 'ban' | 'unban';
+  nick: string;
+  reason: string;
+  serverId: number;
+  server: string;
+  at: number;
+  /** a ban: until when (0 = for ever) */
+  until: number;
+  /** a ban that has run out by itself */
+  expired: boolean;
+  /** staff only */
+  admin?: string;
+}
+
+/** GET /api/bans/appeals (staff) */
+export interface Appeal {
+  id: number;
+  at: number;
+  nick: string;
+  platformId: string;
+  text: string;
+  contact: string;
+  status: 'open' | 'accepted' | 'rejected';
+  note: string;
+  decidedBy: string | null;
+  decidedAt: number | null;
+}
+__COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/sparkline.ts" << '__COREGSM_EOF__'
 /** A tiny static sparkline: pure geometry, no drawing code. */
@@ -182146,6 +182195,82 @@ server {
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-Proto $scheme;
     }
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/shared"
+  cat > "$APP_DIR/shared/README.md" << '__COREGSM_EOF__'
+# Общие типы ответов API | Shared API types
+
+Здесь определения форм ответов, которые знают и бэкенд, и панель. Правьте файл в `types/`, затем запустите `node tools/sync-shared.mjs`:
+файл копируется в `core-backend/src/shared/` и `core-frontend/src/shared/` (сборка каждого образа видит только свою папку, поэтому общая папка
+снаружи не подходит). Проверка `node tools/sync-shared.mjs --check` идёт в тесте бэкенда (он входит в CI): копия, которая отличается от оригинала, ломает сборку.
+
+Types of the answers that both the backend and the panel know. Edit the file in `types/`, then run `node tools/sync-shared.mjs`: it is copied into
+`core-backend/src/shared/` and `core-frontend/src/shared/` (each image build sees only its own folder, so a shared folder outside does not work).
+`node tools/sync-shared.mjs --check` runs in a backend test (so in CI): a copy that differs from the original fails.
+
+Сейчас здесь формы банов; остальные типы переезжают сюда по мере правок. | Bans so far; other types move here as they are touched.
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/shared/types"
+  cat > "$APP_DIR/shared/types/bans.ts" << '__COREGSM_EOF__'
+/**
+ * The shapes of the answers of /api/bans, /api/bans/history and /api/bans/appeals: one definition for the backend (what it sends) and the
+ * panel (what it reads). Edit it HERE, then run `node tools/sync-shared.mjs`: the file is copied into both packages (each Docker build
+ * sees only its own folder), and CI fails when a copy differs from this one.
+ */
+
+/** one ban in force; `admin` and `platformId` are given to the staff only */
+export interface PublicBan {
+  nick: string;
+  reason: string;
+  serverId: number;
+  server: string;
+  /** all | server: where the ban holds */
+  scope: 'all' | 'server';
+  createdAt: number;
+  /** until when (0 = for ever) */
+  until: number;
+  admin?: string;
+  platformId?: string;
+}
+
+/** GET /api/bans */
+export interface BansData {
+  total: number;
+  forever: number;
+  last7d: number;
+  servers: { id: number; name: string; count: number }[];
+  items: PublicBan[];
+}
+
+/** GET /api/bans/history: a ban or an unban of the log of the moderation */
+export interface BanHistoryItem {
+  kind: 'ban' | 'unban';
+  nick: string;
+  reason: string;
+  serverId: number;
+  server: string;
+  at: number;
+  /** a ban: until when (0 = for ever) */
+  until: number;
+  /** a ban that has run out by itself */
+  expired: boolean;
+  /** staff only */
+  admin?: string;
+}
+
+/** GET /api/bans/appeals (staff) */
+export interface Appeal {
+  id: number;
+  at: number;
+  nick: string;
+  platformId: string;
+  text: string;
+  contact: string;
+  status: 'open' | 'accepted' | 'rejected';
+  note: string;
+  decidedBy: string | null;
+  decidedAt: number | null;
 }
 __COREGSM_EOF__
 }

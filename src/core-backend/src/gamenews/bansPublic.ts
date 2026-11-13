@@ -11,30 +11,10 @@ import { activeBanByNick, holdsOn, listBans, logMod, removeBan, type BanRow } fr
 import { bus } from '../events.js';
 import { pushLater } from '../alerts/push.js';
 import { serverLabel } from './gameNewsVars.js';
+import type { BanHistoryItem, BansData as BansAnswer, PublicBan } from '../shared/bans.js';
+
+export type { BanHistoryItem, BansAnswer, PublicBan };
 import { db } from '../db.js';
-
-export interface PublicBan {
-  nick: string;
-  reason: string;
-  serverId: number;
-  server: string;
-  /** all | server: where the ban holds */
-  scope: 'all' | 'server';
-  createdAt: number;
-  /** until when (0 = for ever) */
-  until: number;
-  /** staff only */
-  admin?: string;
-  platformId?: string;
-}
-
-export interface BansAnswer {
-  total: number;
-  forever: number;
-  last7d: number;
-  servers: { id: number; name: string; count: number }[];
-  items: PublicBan[];
-}
 
 /** the list in the shape that is given out: the staff sees more */
 export function shapeBans(rows: BanRow[], opts: { staff: boolean; server?: number; q?: string; label?: (id: number) => string }): PublicBan[] {
@@ -84,21 +64,6 @@ export function registerBans(app: Express): void {
 
 // ---------------------------------------------------------------------------------------------------------------------------------
 // the history of the bans, the appeals of the banned and the push of the staff about both
-
-export interface BanHistoryItem {
-  /** ban | unban */
-  kind: 'ban' | 'unban';
-  nick: string;
-  reason: string;
-  serverId: number;
-  server: string;
-  at: number;
-  /** a ban: until when (0 = for ever) */
-  until: number;
-  /** a ban that has run out by itself */
-  expired: boolean;
-  admin?: string;
-}
 
 interface LogRow { ts: number; kind: string; nick: string; reason: string; server_id: number; until: number; admin: string }
 

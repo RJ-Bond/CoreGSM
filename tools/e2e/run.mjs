@@ -31,7 +31,8 @@ const ok = (r, what) => { if (r.status >= 300) throw new Error(`${what}: ${r.sta
 const check = (cond, msg) => { if (!cond) throw new Error(msg); };
 
 await ok(await call('/api/setup', { method: 'POST', body: { ...ADMIN, code: 'shots-code' } }), 'setup');
-const browser = await chromium.launch();
+// E2E_CHROME: a Chrome that is already installed (no download of a browser for Playwright)
+const browser = await chromium.launch(process.env.E2E_CHROME ? { executablePath: process.env.E2E_CHROME } : {});
 const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 }, locale: 'ru-RU' });
 await ctx.addInitScript(() => { try { localStorage.setItem('coregsm_tour_done', '1'); localStorage.setItem('coregsm_theme', 'light'); } catch { /* ignore */ } });
 const page = await ctx.newPage();
@@ -133,9 +134,94 @@ await scenario('6 report a player: the complaint reaches the moderators', async 
   check(rows.some((r) => String(r.nick).toLowerCase() === 'griefer42'), 'the report is not in /api/reports');
 });
 
-await scenario('7 the public and admin pages open without script errors', async () => {
+await scenario('8 bans: a banned player appeals, a moderator accepts and the ban is lifted', async () => {
+  const db = new Database(dbFile);
+  db.prepare("INSERT OR REPLACE INTO game_bans (platform_id, nick, reason, admin, created_at, until, kind, server_id, scope) VALUES ('e2e-1', 'E2E_Cheater', 'aimbot', 'Boss', ?, 0, 'ban', 0, 'all')").run(Date.now());
+  db.close();
+  // a player who is signed out sees the list and the form
+  const guest = await browser.newContext({ viewport: { width: 1366, height: 900 }, locale: 'ru-RU' });
+  const gp = await guest.newPage();
+  await gp.goto(panel + '/bans', { waitUntil: 'networkidle' });
+  await gp.getByText('E2E_Cheater').first().waitFor({ timeout: 10000 });
+  await gp.getByRole('button', { name: /Вас заблокировали/ }).click();
+  await gp.locator('#bn-nick').fill('e2e_cheater');
+  await gp.locator('#bn-text').fill('I was not cheating, please check the log again');
+  await gp.getByRole('button', { name: 'Отправить заявку' }).click();
+  await gp.getByText(/Заявка отправлена/).first().waitFor({ timeout: 10000 });
+  await guest.close();
+  const list = ok(await call('/api/bans/appeals', { token: state.adminToken }), 'appeals');
+  check(list.some((a) => a.nick === 'E2E_Cheater' && a.status === 'open'), 'the appeal is not in the list of the staff');
+  // the moderator decides in the tab of the panel
+  await page.goto(panel + '/bans', { waitUntil: 'networkidle' });
+  await page.getByRole('button', { name: /^Заявки/ }).click();
+  await page.getByRole('button', { name: 'Принять и снять бан' }).first().click();
+  await page.getByText('Принята').first().waitFor({ timeout: 10000 });
+  const left = ok(await call('/api/bans'), 'bans');
+  check(!left.items.some((b) => b.nick === 'E2E_Cheater'), 'the ban is still in force after the appeal was accepted');
+});
+
+await scenario('9 status: a signed-in person subscribes to the outages of all servers', async () => {
+  await page.goto(panel + '/status', { waitUntil: 'networkidle' });
+  await page.getByRole('button', { name: 'Уведомлять о сбоях' }).click();
+  await page.getByRole('button', { name: /Уведомления о сбоях включены/ }).waitFor({ timeout: 10000 });
+  const subs = ok(await call('/api/me/subscriptions', { token: state.adminToken }), 'subscriptions');
+  check(Array.isArray(subs) && subs.some((x) => (x.kinds ?? []).includes('went_down')), 'no outage subscription was saved');
+});
+
+await scenario('10 a new player sees the three hints once', async () => {
+  const ctx2 = await browser.newContext({ viewport: { width: 1366, height: 900 }, locale: 'ru-RU' });
+  await ctx2.addInitScript(() => { try { localStorage.setItem('coregsm_theme', 'light'); } catch { /* ignore */ } });
+  const p2 = await ctx2.newPage();
+  await p2.goto(panel + '/login', { waitUntil: 'networkidle' });
+  await p2.locator('input[autocomplete="username"], input[name="username"], input[type="text"]').first().fill(PLAYER.username);
+  const pw = p2.locator('input[type="password"]').first();
+  await pw.fill(PLAYER.password);
+  await pw.press('Enter');
+  await p2.waitForURL((u) => !u.pathname.startsWith('/login'), { timeout: 15000 });
+  await p2.getByRole('dialog', { name: /Добро пожаловать/ }).waitFor({ timeout: 10000 });
+  await p2.getByRole('button', { name: 'Понятно' }).click();
+  await p2.reload({ waitUntil: 'networkidle' });
+  await p2.waitForTimeout(500);
+  check((await p2.getByRole('dialog', { name: /Добро пожаловать/ }).count()) === 0, 'the hints came back after they were closed');
+  await ctx2.close();
+});
+
+await scenario('11 phone: the bottom bar returns to the place left in a section', async () => {
+  const servers = ok(await call('/api/servers'), 'servers');
+  check(servers.length > 0, 'no server from scenario 2');
+  const phone = await browser.newContext({ viewport: { width: 390, height: 800 }, locale: 'ru-RU', hasTouch: true });
+  await phone.addInitScript(() => { try { localStorage.setItem('coregsm_tour_done', '1'); } catch { /* ignore */ } });
+  const pp = await phone.newPage();
+  await pp.goto(panel + '/servers/' + servers[0].id + '/players', { waitUntil: 'networkidle' });
+  const bar = pp.locator('nav.nav-bottom');
+  await bar.getByRole('link', { name: 'Новости' }).click();
+  await pp.waitForURL((u) => u.pathname.startsWith('/news'), { timeout: 10000 });
+  await bar.getByRole('link', { name: 'Серверы' }).click();
+  await pp.waitForURL((u) => u.pathname === '/servers/' + servers[0].id + '/players', { timeout: 10000 });
+  await bar.getByRole('link', { name: 'Серверы' }).click();
+  await pp.waitForURL((u) => u.pathname === '/servers', { timeout: 10000 });
+  await phone.close();
+});
+
+await scenario('12 a news item that names a server shows on the page of that server', async () => {
+  const servers = ok(await call('/api/servers'), 'servers');
+  const sid = servers[0].id;
+  const payload = { content: '', embed: { title: 'E2E about a server', description: 'text' }, statusServerIds: [sid] };
+  const made = ok(await call('/api/news', { method: 'POST', token: state.adminToken, body: { channelId: CHANNEL, payload, action: 'now' } }), 'create news');
+  const db = new Database(dbFile);
+  db.prepare("UPDATE news SET status = 'sent', sent_at = ?, message_id = '2' WHERE id = ?").run(Date.now(), made.id);
+  db.close();
+  await page.goto(panel + '/servers/' + sid, { waitUntil: 'networkidle' });
+  await page.locator('a.sv-news', { hasText: 'E2E about a server' }).first().waitFor({ timeout: 10000 });
+  await page.goto(panel + '/news', { waitUntil: 'networkidle' });
+  await page.getByRole('button', { name: 'Список' }).first().click();
+  await page.waitForTimeout(300);
+  await page.getByRole('button', { name: 'Карточки' }).first().click();
+});
+
+await scenario('13 the public and admin pages open without script errors', async () => {
   pageErrors.length = 0;
-  for (const p of ['/servers', '/status', '/community', '/news', '/news/' + state.newsId, '/admin', '/admin/servers', '/admin/news', '/profile']) {
+  for (const p of ['/servers', '/status', '/community', '/bans', '/news', '/news/' + state.newsId, '/admin', '/admin/servers', '/admin/news', '/profile']) {
     await page.goto(panel + p, { waitUntil: 'networkidle' });
     await page.waitForTimeout(400);
     check(!pageErrors.length, `script error on ${p}: ${pageErrors[0]}`);

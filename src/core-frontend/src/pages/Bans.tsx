@@ -5,52 +5,10 @@ import { Empty, ErrorLine, LoadError, PageHead, ago, errText, fmtDateTime, toast
 import { useAuth } from '../auth';
 import { Switch } from '../components/Switch';
 import ArtPic from '../components/ArtPic';
+import type { Appeal, BanHistoryItem, BansData, PublicBan } from '../shared/bans';
 import '../styles/bans.css';
 
-export interface PublicBan {
-  nick: string;
-  reason: string;
-  serverId: number;
-  server: string;
-  scope: 'all' | 'server';
-  createdAt: number;
-  until: number;
-  admin?: string;
-  platformId?: string;
-}
-
-export interface BansData {
-  total: number;
-  forever: number;
-  last7d: number;
-  servers: { id: number; name: string; count: number }[];
-  items: PublicBan[];
-}
-
-export interface BanHistoryItem {
-  kind: 'ban' | 'unban';
-  nick: string;
-  reason: string;
-  serverId: number;
-  server: string;
-  at: number;
-  until: number;
-  expired: boolean;
-  admin?: string;
-}
-
-export interface Appeal {
-  id: number;
-  at: number;
-  nick: string;
-  platformId: string;
-  text: string;
-  contact: string;
-  status: 'open' | 'accepted' | 'rejected';
-  note: string;
-  decidedBy: string | null;
-  decidedAt: number | null;
-}
+export type { Appeal, BanHistoryItem, BansData, PublicBan };
 
 const IconBan = () => (
   <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
