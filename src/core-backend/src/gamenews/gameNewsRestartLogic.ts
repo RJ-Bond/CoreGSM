@@ -95,20 +95,19 @@ export const DEFAULT_TEXTS: RestartTexts = {
   cancel: '* Рестарт сервера отменён.',
 };
 
-const WARN: string = PALETTE.info;
 const ALERT: string = PALETTE.bad;
 const OK: string = PALETTE.good;
 
 const clean = (s: string): string => Array.from(s, (ch) => (ch.charCodeAt(0) < 32 ? ' ' : ch)).join('').replace(/[<>]/g, '').trim();
 
-/** the line for the chat: yellow, red for the last minute */
+/** the line for the chat: red, the time in it green and bold */
 export function announceLine(texts: RestartTexts, seconds: number): string {
-  const color = seconds <= 60 ? ALERT : WARN;
+  const color = ALERT;
   const left = formatLeft(seconds);
   const [before, ...rest] = clean(texts.announce).split('{time}');
   if (rest.length === 0) return `<color=${color}>${before}</color>`;
-  // the time is picked out in white bold, the rest keeps the colour of the line
-  return `<color=${color}>${before}</color><color=#FFFFFF><b>${left}</b></color><color=${color}>${rest.join(left)}</color>`;
+  // the time is picked out in green bold, the rest keeps the colour of the line
+  return `<color=${color}>${before}</color><color=${OK}><b>${left}</b></color><color=${color}>${rest.join(left)}</color>`;
 }
 export const nowLine = (texts: RestartTexts): string => `<color=${ALERT}>${clean(texts.now)}</color>`;
 export const cancelLine = (texts: RestartTexts): string => `<color=${OK}>${clean(texts.cancel)}</color>`;

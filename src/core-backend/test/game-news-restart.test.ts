@@ -75,7 +75,7 @@ describe('restart timer: when the chat is told', () => {
 
 describe('restart timer: the lines', () => {
   it('is yellow, and red for the last minute', () => {
-    assert.equal(announceLine(DEFAULT_TEXTS, 300), '<color=#FFCC33>* Внимание! Рестарт сервера будет произведен через </color><color=#FFFFFF><b>5 минут</b></color><color=#FFCC33>.</color>');
+    assert.equal(announceLine(DEFAULT_TEXTS, 300), '<color=#FF5555>* Внимание! Рестарт сервера будет произведен через </color><color=#5FD068><b>5 минут</b></color><color=#FF5555>.</color>');
     assert.match(announceLine(DEFAULT_TEXTS, 30), /^<color=#FF5555>/);
     assert.match(cancelLine(DEFAULT_TEXTS), /отменён/);
   });

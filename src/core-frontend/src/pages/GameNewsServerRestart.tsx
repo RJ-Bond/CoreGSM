@@ -104,7 +104,8 @@ export function ServerRestartCard({ countdown }: { countdown?: { enabled: boolea
   const jobs = st.jobs.filter((j) => (j.state !== 'sent' || j.left - elapsed > -60) && (!sc.server || j.serverId === sc.server));
   const history = st.history.filter((h) => !sc.server || h.serverName === st.servers.find((x) => x.id === sc.server)?.name);
 
-  const announce = `<color=#FFCC33>${plain(texts?.announce ?? '').replace(/\{time\}/g, SAMPLE_TIME)}</color>`;
+  // as in the game: the line red, the time green and bold
+  const announce = plain(texts?.announce ?? '').split('{time}').map((p) => `<color=#FF5555>${p}</color>`).join(`<color=#5FD068><b>${SAMPLE_TIME}</b></color>`);
   const now = `<color=#FF5555>${plain(texts?.now ?? '')}</color>`;
   const cancelled = `<color=#5FD068>${plain(texts?.cancel ?? '')}</color>`;
 
