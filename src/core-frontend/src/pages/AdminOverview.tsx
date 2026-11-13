@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useAuth } from '../auth';
 import { delta, dayKey, groupAudit, healthScore } from './adminLogic';
 import { api, type BackupInfo, type BotStatus, type CertInfo, type Server, type UpdateInfo, type UserRow } from '../api';
@@ -43,6 +43,21 @@ function Tile({ label, value, sub, tone, href, change, spark, action }: { label:
   const cls = `adm-tile ${tone ? `is-${tone}` : ''}`;
   if (action) return <div className={cls}>{href ? <a href={href} className="adm-tile-body">{body}</a> : body}{action}</div>;
   return href ? <a href={href} className={cls}>{body}</a> : <div className={cls}>{body}</div>;
+}
+
+const VISIT_KEY = 'coregsm_admin_visit';
+/** the time of the previous visit to this page (null: the first one); the moment of this visit is written when the page is left */
+function usePreviousVisit(): number | null {
+  const prev = useRef<number | null>(null);
+  if (prev.current === null) {
+    try { const v = Number(localStorage.getItem(VISIT_KEY)); prev.current = Number.isFinite(v) && v > 0 ? v : 0; } catch { prev.current = 0; }
+  }
+  useEffect(() => {
+    const save = () => { try { localStorage.setItem(VISIT_KEY, String(Date.now())); } catch { /* not remembered */ } };
+    window.addEventListener('pagehide', save);
+    return () => { window.removeEventListener('pagehide', save); save(); };
+  }, []);
+  return prev.current || null;
 }
 
 const REASON_HREF: Record<string, string> = {
@@ -195,6 +210,10 @@ export default function AdminOverview() {
   // the same action again and again (six servers added in a row) is one line with a count
   const auditGroups = groupAudit((raw?.audit ?? []).filter((r) => !mine || r.actor === me?.username)).slice(0, 8);
   const [openGroups, setOpenGroups] = useState<number[]>([]);
+  // what others did since the last visit (only when the last visit was a while ago)
+  const lastVisit = usePreviousVisit();
+  const sinceRows = lastVisit && Date.now() - lastVisit > 10 * 60_000 ? (raw?.audit ?? []).filter((r) => r.ts > lastVisit && r.actor !== me?.username) : [];
+  const sinceGroups = groupAudit(sinceRows).slice(0, 6);
 
   const pollAll = async () => {
     setBusy('poll');
@@ -250,6 +269,21 @@ export default function AdminOverview() {
                 </a>
               ))}
             </div>
+          )}
+
+          {lastVisit && sinceGroups.length > 0 && (
+            <Section title={t('adm.ov.since')} description={t('adm.ov.sinceText', { when: fmtDateTime(lastVisit), n: sinceRows.length })}>
+              <ul className="adm-since">
+                {sinceGroups.map((g) => (
+                  <li key={g.rows[0].id}>
+                    <span className="adm-av" aria-hidden>{g.rows[0].actor.slice(0, 1).toUpperCase()}</span>
+                    <span className="min-w-0 flex-1 truncate"><b>{g.rows[0].actor}</b> · {g.rows[0].action}{g.rows.length > 1 ? ` ×${g.rows.length}` : ''}{g.rows[0].detail ? <span className="text-mute"> · {g.rows[0].detail}</span> : null}</span>
+                    <time className="text-xs font-semibold text-mute" title={fmtDateTime(g.rows[0].ts)}>{ago(g.rows[0].ts)}</time>
+                  </li>
+                ))}
+              </ul>
+              <a href="/admin/journal" className="text-sm font-extrabold text-link hover:underline">{t('adm.ov.journal')}</a>
+            </Section>
           )}
 
           <Section title={t('adm.ov.attn')}>

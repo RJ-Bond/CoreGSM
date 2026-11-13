@@ -1,6 +1,7 @@
 import { rememberPaletteRecent, rememberServer } from '../ui/recent';
 import { haptic } from '../ui/haptic';
 import PlayersBars from '../components/server/PlayersBars';
+import ChartTable, { bucketFor, bucketRows } from '../components/ChartTable';
 import { useAppearance } from '../appearance';
 import { setPageTitleDetail } from '../pageTitle';
 import ServerReviews from '../components/server/Reviews';
@@ -507,6 +508,11 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
       {!down && points.some((p) => !p.online) && stats.samples >= 2 && (
         <p className="mt-2 flex items-center gap-2 text-sm font-semibold text-mute"><span className="inline-block h-3 w-3 rounded-sm bg-bad/30" /> {t('d2.sd.redNote')}</p>
       )}
+      {stats.samples >= 2 && (() => {
+        const ping = withSeries && series === 'ping';
+        const bucket = bucketFor(data.hours);
+        return <ChartTable rows={bucketRows(points.map((p) => ({ ts: p.ts, value: p.online ? (ping ? p.ping : p.players) : null })), bucket, ping ? 'mean' : 'max')} valueLabel={ping ? t('d2.sd.ping') : t('chart.data.players')} bucketMs={bucket} />;
+      })()}
     </SectionCard>
   );
 

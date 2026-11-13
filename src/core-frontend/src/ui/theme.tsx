@@ -5,11 +5,16 @@ import { IconAuto, IconMoon, IconSun } from '../icons';
 import { revealTransition } from '../useMotion';
 
 // ---------- theme ----------
-type Theme = 'auto' | 'light' | 'dark';
+// 'night' is for the admin area only: dark in the evening and at night, light by day (by the clock of the device)
+type Theme = 'auto' | 'light' | 'dark' | 'night';
+export const NIGHT_FROM = 20;
+export const NIGHT_TO = 7;
+/** is it night by the schedule: from 20:00 to 07:00 */
+export const isNightHour = (hour: number): boolean => hour >= NIGHT_FROM || hour < NIGHT_TO;
 const THEME_KEY = 'coregsm_theme';
 // the community's default, remembered so that the inline script of index.html can apply it before the first paint
 const DEFAULT_KEY = 'coregsm_theme_default';
-const valid = (t: string | null): t is Theme => t === 'auto' || t === 'light' || t === 'dark';
+const valid = (t: string | null): t is Theme => t === 'auto' || t === 'light' || t === 'dark' || t === 'night';
 const read = (key: string): Theme | null => {
   try {
     const t = localStorage.getItem(key);
@@ -46,11 +51,15 @@ function syncBarColor() {
   const hex = rgbTokenToHex(getComputedStyle(root).getPropertyValue('--page'));
   if (hex) document.querySelector('meta[name=theme-color]')?.setAttribute('content', hex);
 }
+let nightTimer = 0;
 const paint = (t: Theme) => {
   const root = document.documentElement;
   if (t === 'auto') root.removeAttribute('data-theme');
-  else root.setAttribute('data-theme', t);
+  else root.setAttribute('data-theme', t === 'night' ? (isNightHour(new Date().getHours()) ? 'dark' : 'light') : t);
   syncBarColor();
+  // the schedule is looked at again every minute while it is the theme in use
+  window.clearInterval(nightTimer);
+  if (t === 'night') nightTimer = window.setInterval(() => { if (readScoped() === 'night') paint('night'); }, 60_000);
 };
 function applyTheme(t: Theme) {
   paint(t);
@@ -109,8 +118,9 @@ export function ThemeToggle() {
     subs.add(setTheme);
     return () => { subs.delete(setTheme); };
   }, []);
-  const next: Record<Theme, Theme> = { auto: 'light', light: 'dark', dark: 'auto' };
-  const label: Record<Theme, string> = { auto: t('theme.auto'), light: t('theme.light'), dark: t('theme.dark') };
+  // the schedule is a fourth step in the admin area only
+  const next: Record<Theme, Theme> = { auto: 'light', light: 'dark', dark: adminScope ? 'night' : 'auto', night: 'auto' };
+  const label: Record<Theme, string> = { auto: t('theme.auto'), light: t('theme.light'), dark: t('theme.dark'), night: t('theme.night') };
   return (
     <button
       type="button"
@@ -127,7 +137,7 @@ export function ThemeToggle() {
         }, r.left + r.width / 2, r.top + r.height / 2);
       }}
     >
-      {theme === 'light' ? <IconSun /> : theme === 'dark' ? <IconMoon /> : <IconAuto />}
+      {theme === 'light' ? <IconSun /> : theme === 'dark' || theme === 'night' ? <IconMoon /> : <IconAuto />}
     </button>
   );
 }

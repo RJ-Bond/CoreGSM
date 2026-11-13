@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="b502aec2c56f"
+COREGSM_BUILD="be2c9d54d5c9"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.2.30"
+COREGSM_VERSION="1.2.31"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -49463,7 +49463,7 @@ __COREGSM_EOF__
 #  - img-src: own images, data:/blob: (previews) and Discord avatars.
 #  - connect-src 'self': the panel only talks to its own /api. worker-src 'self': /sw.js. manifest-src 'self': /api/manifest.json.
 #  - frame-ancestors 'none' also forbids embedding the panel in a frame (X-Frame-Options DENY for old browsers).
-add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'sha256-KmpuCeAENUtn/huxycNi864LOszpsNaBVTWiRDrD+2E='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://cdn.discordapp.com; font-src 'self' data:; connect-src 'self'; worker-src 'self'; manifest-src 'self'; object-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'self'" always;
+add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'sha256-HJXbFyOqow42mCUfLZ8eWch09gR+ZvjxDftgMZhMVLk='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://cdn.discordapp.com; font-src 'self' data:; connect-src 'self'; worker-src 'self'; manifest-src 'self'; object-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'self'" always;
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend"
   cat > "$APP_DIR/core-frontend/index.html" << '__COREGSM_EOF__'
@@ -49493,6 +49493,8 @@ __COREGSM_EOF__
         var t = localStorage.getItem('coregsm_theme') || localStorage.getItem('coregsm_theme_default') || 'dark';
         // the admin area has its own theme when one was chosen there
         if (location.pathname.indexOf('/admin') === 0) t = localStorage.getItem('coregsm_admin_theme') || t;
+        // the schedule of the admin area: dark from 20:00 to 07:00 (NIGHT_FROM / NIGHT_TO in ui/theme.tsx)
+        if (t === 'night') { var h = new Date().getHours(); t = h >= 20 || h < 7 ? 'dark' : 'light'; }
         if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
         // the look (the own choice, else the community's default) and its accent: no flash from the classic look to Ember
         var own = localStorage.getItem('coregsm_look');
@@ -124980,6 +124982,68 @@ export function ChannelPicker({ value, onChange, id = 'channel' }: { value: stri
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/ChartTable.test.ts" << '__COREGSM_EOF__'
+import { describe, expect, it } from 'vitest';
+import { bucketFor, bucketRows } from './ChartTable';
+
+describe('the table under a chart', () => {
+  const H = 3_600_000;
+  it('takes the highest value of an hour, or the mean, and leaves the hours without data out', () => {
+    const pts = [{ ts: 0, value: 3 }, { ts: 10 * 60_000, value: 9 }, { ts: 20 * 60_000, value: null }, { ts: 2 * H, value: 4 }, { ts: 2 * H + 1000, value: 6 }];
+    expect(bucketRows(pts, H)).toEqual([{ from: 0, value: 9 }, { from: 2 * H, value: 6 }]);
+    expect(bucketRows(pts, H, 'mean')).toEqual([{ from: 0, value: 6 }, { from: 2 * H, value: 5 }]);
+    expect(bucketRows([], H)).toEqual([]);
+  });
+  it('picks an hour, six hours or a day by the period', () => {
+    expect([bucketFor(24), bucketFor(168), bucketFor(720)]).toEqual([H, 6 * H, 24 * H]);
+  });
+});
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/ChartTable.tsx" << '__COREGSM_EOF__'
+import { t, useI18n } from '../i18n';
+
+/** one row of the table under a chart: when, and the number */
+export interface ChartRow { from: number; value: number }
+
+/** the points of a chart reduced to a row per bucket: the highest value in it (players) or the mean (ping); buckets without data are left out */
+export function bucketRows(points: { ts: number; value: number | null }[], bucketMs: number, how: 'max' | 'mean' = 'max'): ChartRow[] {
+  const by = new Map<number, number[]>();
+  for (const p of points) {
+    if (p.value == null || !Number.isFinite(p.value)) continue;
+    const k = Math.floor(p.ts / bucketMs) * bucketMs;
+    const l = by.get(k);
+    if (l) l.push(p.value); else by.set(k, [p.value]);
+  }
+  return [...by.entries()].sort((a, b) => a[0] - b[0]).map(([from, v]) => ({ from, value: how === 'max' ? Math.max(...v) : Math.round(v.reduce((a, b) => a + b, 0) / v.length) }));
+}
+
+/** the bucket that suits a period: an hour for a day, six hours for a week, a day for longer */
+export const bucketFor = (hours: number): number => (hours <= 24 ? 3_600_000 : hours <= 168 ? 6 * 3_600_000 : 86_400_000);
+
+/** «Показать данные»: the same numbers as the chart, as a table (for a screen reader, for copying, for those who prefer figures) */
+export default function ChartTable({ rows, valueLabel, bucketMs }: { rows: ChartRow[]; valueLabel: string; bucketMs: number }) {
+  useI18n();
+  if (rows.length === 0) return null;
+  const fmt = (ts: number) => (bucketMs >= 86_400_000
+    ? new Date(ts).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
+    : new Date(ts).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }));
+  return (
+    <details className="ct">
+      <summary>{t('chart.data.show')}</summary>
+      {/* a scrolling region has to be reachable with the keyboard (axe: scrollable-region-focusable) */}
+      {/* oxlint-disable-next-line jsx-a11y/no-noninteractive-tabindex */}
+      <div className="ct-wrap" tabIndex={0} role="region" aria-label={t('chart.data.aria')}>
+        <table>
+          <thead><tr><th scope="col">{t('chart.data.time')}</th><th scope="col">{valueLabel}</th></tr></thead>
+          <tbody>{[...rows].reverse().map((r) => <tr key={r.from}><td>{fmt(r.from)}</td><td className="tabular-nums">{r.value}</td></tr>)}</tbody>
+        </table>
+      </div>
+    </details>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
   cat > "$APP_DIR/core-frontend/src/components/CommandPalette.tsx" << '__COREGSM_EOF__'
 import { readPaletteRecent, rememberPaletteRecent } from '../ui/recent';
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
@@ -141275,6 +141339,7 @@ import { api, type Server } from '../../api';
 import { t, useI18n, type TKey } from '../../i18n';
 import { Field, Modal, toast, ErrorLine } from '../../ui';
 import { fromLocalInput, toLocalInput, validateWindow } from '../../maintenance';
+import { ChannelPicker } from '../ChannelPicker';
 
 type Dur = '30' | '60' | '120' | 'until';
 
@@ -141346,6 +141411,48 @@ function MaintenanceDialog({ servers, onClose, onDone }: { servers: Server[]; on
   );
 }
 
+/** one channel of Discord for the status messages of all the selected servers (a server that already has a message there is skipped) */
+function BindDialog({ servers, onClose, onDone }: { servers: Server[]; onClose: () => void; onDone: () => void }) {
+  useI18n();
+  const [channel, setChannel] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!/^d{15,25}$/.test(channel) || busy) return;
+    setBusy(true);
+    setError('');
+    try {
+      const have = await api<{ serverId: number; channelId: string }[]>('/bindings');
+      let made = 0;
+      let skipped = 0;
+      for (const sv of servers) {
+        if (have.some((b) => b.serverId === sv.id && b.channelId === channel)) { skipped++; continue; }
+        await api('/bindings', 'POST', { serverId: sv.id, channelId: channel, intervalSec: 60, enabled: true });
+        made++;
+      }
+      toast(t('d2.bb.bound', { made, skipped }));
+      onDone();
+    } catch (err) {
+      setError((err as Error).message);
+      setBusy(false);
+    }
+  };
+  return (
+    <Modal title={t('d2.bb.bindTitle')} onClose={onClose}>
+      <form className="space-y-4" onSubmit={(e) => void submit(e)} noValidate>
+        <p className="text-sm font-semibold text-mute">{t('d2.bb.bindText', { n: servers.length })}</p>
+        <ChannelPicker id="bulk-bind-channel" value={channel} onChange={setChannel} />
+        <ErrorLine text={error} />
+        <div className="flex flex-wrap justify-end gap-2.5">
+          <button type="button" className="btn btn-ghost" onClick={onClose}>{t('common.cancel')}</button>
+          <button type="submit" className="btn" disabled={!/^d{15,25}$/.test(channel) || busy}>{busy ? t('d2.bb.creating') : t('d2.bb.bindGo')}</button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
 export function BulkBar({ selected, visible, favs, onSelectAll, onClear, onExit, onReload, onFavs }: {
   selected: Server[];
   visible: Server[];
@@ -141359,6 +141466,7 @@ export function BulkBar({ selected, visible, favs, onSelectAll, onClear, onExit,
   useI18n();
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [dialog, setDialog] = useState(false);
+  const [bind, setBind] = useState(false);
   const alive = useRef(true);
   useEffect(() => () => { alive.current = false; }, []);
   const n = selected.length;
@@ -141402,11 +141510,13 @@ export function BulkBar({ selected, visible, favs, onSelectAll, onClear, onExit,
           <button type="button" className="btn btn-soft" onClick={onClear} disabled={busy || n === 0}>{t('d2.news.reset')}</button>
           <button type="button" className="btn" onClick={() => void refreshAll()} disabled={busy || n === 0}>{t('d2.bb.pollNow')}</button>
           <button type="button" className="btn btn-soft" onClick={() => setDialog(true)} disabled={busy || n === 0}>{t('d2.bb.maintenance')}</button>
+          <button type="button" className="btn btn-soft" onClick={() => setBind(true)} disabled={busy || n === 0}>{t('d2.bb.bind')}</button>
           <button type="button" className="btn btn-soft" onClick={() => void setFav(true)} disabled={busy || n === 0}>{t('d2.bb.addFav')}</button>
           <button type="button" className="btn btn-soft" onClick={() => void setFav(false)} disabled={busy || n === 0}>{t('common.remove')}</button>
           <button type="button" className="btn btn-soft" onClick={onExit}>{t('d2.bb.done')}</button>
         </div>
       </div>
+      {bind && <BindDialog servers={selected} onClose={() => setBind(false)} onDone={() => { setBind(false); onReload(); }} />}
       {dialog && <MaintenanceDialog servers={selected} onClose={() => setDialog(false)} onDone={() => { setDialog(false); onReload(); }} />}
     </>
   );
@@ -146981,6 +147091,7 @@ const en: Record<keyof typeof ru, string> = {
   'theme.auto': 'system',
   'theme.light': 'light',
   'theme.dark': 'dark',
+  'theme.night': 'by the clock (dark from 20:00 to 7:00)',
   'theme.title': 'Theme: {name}. Click to switch',
   'theme.titleAdmin': 'Admin theme: {name}. Click to switch (the site keeps its own)',
   'wn.title': "What's new",
@@ -147058,6 +147169,10 @@ const en: Record<keyof typeof ru, string> = {
   'nav.admin': 'Admin',
   'nav.sections': 'Sections',
   'net.offline': 'You are offline. Showing the last data received.',
+  'chart.data.show': 'Show the data',
+  'chart.data.aria': 'The data of the chart',
+  'chart.data.time': 'Time',
+  'chart.data.players': 'Players (peak)',
   'net.stale': 'Data from {time}',
   'net.back': 'Back online. Refreshing the data.',
   'nav.skip': 'Skip to content',
@@ -149015,6 +149130,8 @@ const en: Record<keyof typeof ru, string> = {
   'adm.ov.botErr': 'The Discord bot is not connected',
   'adm.ov.noBackups': 'There are no backups yet',
   'adm.ov.oldBackup': 'The last backup is over a week old',
+  'adm.ov.since': 'What changed since your last visit',
+  'adm.ov.sinceText': 'You were here {when}. Since then others did {n} actions.',
   'adm.ov.fold': 'Fold',
   'adm.ov.unfold': 'Unfold',
   'adm.ov.versionLine': 'Panel version: {v}',
@@ -151042,6 +151159,11 @@ const en: Record<keyof typeof ru, string> = {
   'd2.bb.none': 'Nothing selected',
   'd2.bb.pollNow': 'Poll now',
   'd2.bb.maintenance': 'Maintenance window…',
+  'd2.bb.bind': 'Status in Discord',
+  'd2.bb.bindTitle': 'One Discord channel for the selected servers',
+  'd2.bb.bindText': 'The chosen channel gets a status message for each of the {n} servers; those that already have one there are skipped.',
+  'd2.bb.bindGo': 'Bind',
+  'd2.bb.bound': 'Bound: {made}, skipped: {skipped}',
   'd2.bb.addFav': 'Add to favourites',
   'd2.bb.done': 'Done (Esc)',
   'd2.pr.copied': 'Copied',
@@ -152117,6 +152239,7 @@ const ru = {
   'theme.auto': 'как в системе',
   'theme.light': 'светлая',
   'theme.dark': 'тёмная',
+  'theme.night': 'по расписанию (тёмная с 20:00 до 7:00)',
   'theme.title': 'Тема: {name}. Нажмите, чтобы переключить',
   'theme.titleAdmin': 'Тема админки: {name}. Нажмите, чтобы переключить (на сайте тема своя)',
   'wn.title': 'Что нового',
@@ -152194,6 +152317,10 @@ const ru = {
   'nav.admin': 'Админка',
   'nav.sections': 'Разделы',
   'net.offline': 'Нет сети. Показаны последние полученные данные.',
+  'chart.data.show': 'Показать данные',
+  'chart.data.aria': 'Данные графика',
+  'chart.data.time': 'Время',
+  'chart.data.players': 'Игроков (максимум)',
   'net.stale': 'Данные от {time}',
   'net.back': 'Сеть вернулась. Данные обновляются.',
   'nav.skip': 'Перейти к содержимому',
@@ -154151,6 +154278,8 @@ const ru = {
   'adm.ov.botErr': 'Discord-бот не подключён',
   'adm.ov.noBackups': 'Резервных копий ещё нет',
   'adm.ov.oldBackup': 'Последней копии больше недели',
+  'adm.ov.since': 'Что изменилось с прошлого визита',
+  'adm.ov.sinceText': 'Вы были здесь {when}. С тех пор другие сделали {n} действий.',
   'adm.ov.fold': 'Свернуть',
   'adm.ov.unfold': 'Развернуть',
   'adm.ov.versionLine': 'Версия панели: {v}',
@@ -156178,6 +156307,11 @@ const ru = {
   'd2.bb.none': 'Ничего не выбрано',
   'd2.bb.pollNow': 'Опросить сейчас',
   'd2.bb.maintenance': 'Окно обслуживания…',
+  'd2.bb.bind': 'Статус в Discord',
+  'd2.bb.bindTitle': 'Один канал Discord для выбранных серверов',
+  'd2.bb.bindText': 'В выбранный канал придёт сообщение со статусом каждого из {n} серверов; у кого оно там уже есть, того пропустим.',
+  'd2.bb.bindGo': 'Привязать',
+  'd2.bb.bound': 'Привязано: {made}, пропущено: {skipped}',
   'd2.bb.addFav': 'Добавить в избранное',
   'd2.bb.done': 'Готово (Esc)',
   'd2.pr.copied': 'Скопировано',
@@ -158528,7 +158662,7 @@ export default function AdminMobileNav({ groups, current, badges, fallbackLabel 
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/AdminOverview.tsx" << '__COREGSM_EOF__'
-import { useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useAuth } from '../auth';
 import { delta, dayKey, groupAudit, healthScore } from './adminLogic';
 import { api, type BackupInfo, type BotStatus, type CertInfo, type Server, type UpdateInfo, type UserRow } from '../api';
@@ -158573,6 +158707,21 @@ function Tile({ label, value, sub, tone, href, change, spark, action }: { label:
   const cls = `adm-tile ${tone ? `is-${tone}` : ''}`;
   if (action) return <div className={cls}>{href ? <a href={href} className="adm-tile-body">{body}</a> : body}{action}</div>;
   return href ? <a href={href} className={cls}>{body}</a> : <div className={cls}>{body}</div>;
+}
+
+const VISIT_KEY = 'coregsm_admin_visit';
+/** the time of the previous visit to this page (null: the first one); the moment of this visit is written when the page is left */
+function usePreviousVisit(): number | null {
+  const prev = useRef<number | null>(null);
+  if (prev.current === null) {
+    try { const v = Number(localStorage.getItem(VISIT_KEY)); prev.current = Number.isFinite(v) && v > 0 ? v : 0; } catch { prev.current = 0; }
+  }
+  useEffect(() => {
+    const save = () => { try { localStorage.setItem(VISIT_KEY, String(Date.now())); } catch { /* not remembered */ } };
+    window.addEventListener('pagehide', save);
+    return () => { window.removeEventListener('pagehide', save); save(); };
+  }, []);
+  return prev.current || null;
 }
 
 const REASON_HREF: Record<string, string> = {
@@ -158725,6 +158874,10 @@ export default function AdminOverview() {
   // the same action again and again (six servers added in a row) is one line with a count
   const auditGroups = groupAudit((raw?.audit ?? []).filter((r) => !mine || r.actor === me?.username)).slice(0, 8);
   const [openGroups, setOpenGroups] = useState<number[]>([]);
+  // what others did since the last visit (only when the last visit was a while ago)
+  const lastVisit = usePreviousVisit();
+  const sinceRows = lastVisit && Date.now() - lastVisit > 10 * 60_000 ? (raw?.audit ?? []).filter((r) => r.ts > lastVisit && r.actor !== me?.username) : [];
+  const sinceGroups = groupAudit(sinceRows).slice(0, 6);
 
   const pollAll = async () => {
     setBusy('poll');
@@ -158780,6 +158933,21 @@ export default function AdminOverview() {
                 </a>
               ))}
             </div>
+          )}
+
+          {lastVisit && sinceGroups.length > 0 && (
+            <Section title={t('adm.ov.since')} description={t('adm.ov.sinceText', { when: fmtDateTime(lastVisit), n: sinceRows.length })}>
+              <ul className="adm-since">
+                {sinceGroups.map((g) => (
+                  <li key={g.rows[0].id}>
+                    <span className="adm-av" aria-hidden>{g.rows[0].actor.slice(0, 1).toUpperCase()}</span>
+                    <span className="min-w-0 flex-1 truncate"><b>{g.rows[0].actor}</b> · {g.rows[0].action}{g.rows.length > 1 ? ` ×${g.rows.length}` : ''}{g.rows[0].detail ? <span className="text-mute"> · {g.rows[0].detail}</span> : null}</span>
+                    <time className="text-xs font-semibold text-mute" title={fmtDateTime(g.rows[0].ts)}>{ago(g.rows[0].ts)}</time>
+                  </li>
+                ))}
+              </ul>
+              <a href="/admin/journal" className="text-sm font-extrabold text-link hover:underline">{t('adm.ov.journal')}</a>
+            </Section>
           )}
 
           <Section title={t('adm.ov.attn')}>
@@ -167396,6 +167564,7 @@ __COREGSM_EOF__
 import { rememberPaletteRecent, rememberServer } from '../ui/recent';
 import { haptic } from '../ui/haptic';
 import PlayersBars from '../components/server/PlayersBars';
+import ChartTable, { bucketFor, bucketRows } from '../components/ChartTable';
 import { useAppearance } from '../appearance';
 import { setPageTitleDetail } from '../pageTitle';
 import ServerReviews from '../components/server/Reviews';
@@ -167902,6 +168071,11 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
       {!down && points.some((p) => !p.online) && stats.samples >= 2 && (
         <p className="mt-2 flex items-center gap-2 text-sm font-semibold text-mute"><span className="inline-block h-3 w-3 rounded-sm bg-bad/30" /> {t('d2.sd.redNote')}</p>
       )}
+      {stats.samples >= 2 && (() => {
+        const ping = withSeries && series === 'ping';
+        const bucket = bucketFor(data.hours);
+        return <ChartTable rows={bucketRows(points.map((p) => ({ ts: p.ts, value: p.online ? (ping ? p.ping : p.players) : null })), bucket, ping ? 'mean' : 'max')} valueLabel={ping ? t('d2.sd.ping') : t('chart.data.players')} bucketMs={bucket} />;
+      })()}
     </SectionCard>
   );
 
@@ -176438,6 +176612,18 @@ a.adm-reason:hover { filter: brightness(1.1); }
 
 /* the menu of a phone row, opened by a long touch: out of sight, at the right edge of the row */
 .srv-row-qm { position: absolute; right: 8px; top: 50%; width: 1px; height: 1px; overflow: visible; visibility: hidden; }
+
+/* the table under a chart */
+.ct { margin-top: .6rem; font-size: .875rem; }
+.ct > summary { display: inline-flex; align-items: center; min-height: 32px; cursor: pointer; font-weight: 700; color: rgb(var(--link)); }
+.ct-wrap { max-height: 16rem; margin-top: .4rem; overflow: auto; border-radius: var(--r-md); background: rgb(var(--soft)); }
+.ct table { width: 100%; border-collapse: collapse; }
+.ct th, .ct td { padding: .35rem .8rem; text-align: left; }
+.ct th { position: sticky; top: 0; background: rgb(var(--soft)); font-size: .75rem; color: rgb(var(--mute)); }
+.ct td:last-child, .ct th:last-child { text-align: right; }
+.ct tbody tr + tr td { border-top: 1px solid rgb(var(--line)); }
+.adm-since { list-style: none; margin: 0 0 .6rem; padding: 0; display: grid; gap: .4rem; }
+.adm-since > li { display: flex; align-items: center; gap: .7rem; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/emberScale.test.ts" << '__COREGSM_EOF__'
@@ -180823,6 +181009,20 @@ export function useRoute(): Route {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/ui"
+  cat > "$APP_DIR/core-frontend/src/ui/theme.test.ts" << '__COREGSM_EOF__'
+import { describe, expect, it } from 'vitest';
+import { isNightHour, NIGHT_FROM, NIGHT_TO } from './theme';
+
+describe('the theme of the admin area by the clock', () => {
+  it('is dark in the evening and at night and light by day', () => {
+    expect(NIGHT_FROM).toBe(20);
+    expect(NIGHT_TO).toBe(7);
+    for (const h of [20, 21, 23, 0, 3, 6]) expect(isNightHour(h), `${h}:00`).toBe(true);
+    for (const h of [7, 8, 12, 17, 19]) expect(isNightHour(h), `${h}:00`).toBe(false);
+  });
+});
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/ui"
   cat > "$APP_DIR/core-frontend/src/ui/theme.tsx" << '__COREGSM_EOF__'
 /** Light / dark / auto theme. */
 import { useEffect, useState } from 'react';
@@ -180831,11 +181031,16 @@ import { IconAuto, IconMoon, IconSun } from '../icons';
 import { revealTransition } from '../useMotion';
 
 // ---------- theme ----------
-type Theme = 'auto' | 'light' | 'dark';
+// 'night' is for the admin area only: dark in the evening and at night, light by day (by the clock of the device)
+type Theme = 'auto' | 'light' | 'dark' | 'night';
+export const NIGHT_FROM = 20;
+export const NIGHT_TO = 7;
+/** is it night by the schedule: from 20:00 to 07:00 */
+export const isNightHour = (hour: number): boolean => hour >= NIGHT_FROM || hour < NIGHT_TO;
 const THEME_KEY = 'coregsm_theme';
 // the community's default, remembered so that the inline script of index.html can apply it before the first paint
 const DEFAULT_KEY = 'coregsm_theme_default';
-const valid = (t: string | null): t is Theme => t === 'auto' || t === 'light' || t === 'dark';
+const valid = (t: string | null): t is Theme => t === 'auto' || t === 'light' || t === 'dark' || t === 'night';
 const read = (key: string): Theme | null => {
   try {
     const t = localStorage.getItem(key);
@@ -180872,11 +181077,15 @@ function syncBarColor() {
   const hex = rgbTokenToHex(getComputedStyle(root).getPropertyValue('--page'));
   if (hex) document.querySelector('meta[name=theme-color]')?.setAttribute('content', hex);
 }
+let nightTimer = 0;
 const paint = (t: Theme) => {
   const root = document.documentElement;
   if (t === 'auto') root.removeAttribute('data-theme');
-  else root.setAttribute('data-theme', t);
+  else root.setAttribute('data-theme', t === 'night' ? (isNightHour(new Date().getHours()) ? 'dark' : 'light') : t);
   syncBarColor();
+  // the schedule is looked at again every minute while it is the theme in use
+  window.clearInterval(nightTimer);
+  if (t === 'night') nightTimer = window.setInterval(() => { if (readScoped() === 'night') paint('night'); }, 60_000);
 };
 function applyTheme(t: Theme) {
   paint(t);
@@ -180935,8 +181144,9 @@ export function ThemeToggle() {
     subs.add(setTheme);
     return () => { subs.delete(setTheme); };
   }, []);
-  const next: Record<Theme, Theme> = { auto: 'light', light: 'dark', dark: 'auto' };
-  const label: Record<Theme, string> = { auto: t('theme.auto'), light: t('theme.light'), dark: t('theme.dark') };
+  // the schedule is a fourth step in the admin area only
+  const next: Record<Theme, Theme> = { auto: 'light', light: 'dark', dark: adminScope ? 'night' : 'auto', night: 'auto' };
+  const label: Record<Theme, string> = { auto: t('theme.auto'), light: t('theme.light'), dark: t('theme.dark'), night: t('theme.night') };
   return (
     <button
       type="button"
@@ -180953,7 +181163,7 @@ export function ThemeToggle() {
         }, r.left + r.width / 2, r.top + r.height / 2);
       }}
     >
-      {theme === 'light' ? <IconSun /> : theme === 'dark' ? <IconMoon /> : <IconAuto />}
+      {theme === 'light' ? <IconSun /> : theme === 'dark' || theme === 'night' ? <IconMoon /> : <IconAuto />}
     </button>
   );
 }

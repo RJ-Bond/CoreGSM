@@ -4,6 +4,7 @@ import { api, type Server } from '../../api';
 import { t, useI18n, type TKey } from '../../i18n';
 import { Field, Modal, toast, ErrorLine } from '../../ui';
 import { fromLocalInput, toLocalInput, validateWindow } from '../../maintenance';
+import { ChannelPicker } from '../ChannelPicker';
 
 type Dur = '30' | '60' | '120' | 'until';
 
@@ -75,6 +76,48 @@ function MaintenanceDialog({ servers, onClose, onDone }: { servers: Server[]; on
   );
 }
 
+/** one channel of Discord for the status messages of all the selected servers (a server that already has a message there is skipped) */
+function BindDialog({ servers, onClose, onDone }: { servers: Server[]; onClose: () => void; onDone: () => void }) {
+  useI18n();
+  const [channel, setChannel] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!/^d{15,25}$/.test(channel) || busy) return;
+    setBusy(true);
+    setError('');
+    try {
+      const have = await api<{ serverId: number; channelId: string }[]>('/bindings');
+      let made = 0;
+      let skipped = 0;
+      for (const sv of servers) {
+        if (have.some((b) => b.serverId === sv.id && b.channelId === channel)) { skipped++; continue; }
+        await api('/bindings', 'POST', { serverId: sv.id, channelId: channel, intervalSec: 60, enabled: true });
+        made++;
+      }
+      toast(t('d2.bb.bound', { made, skipped }));
+      onDone();
+    } catch (err) {
+      setError((err as Error).message);
+      setBusy(false);
+    }
+  };
+  return (
+    <Modal title={t('d2.bb.bindTitle')} onClose={onClose}>
+      <form className="space-y-4" onSubmit={(e) => void submit(e)} noValidate>
+        <p className="text-sm font-semibold text-mute">{t('d2.bb.bindText', { n: servers.length })}</p>
+        <ChannelPicker id="bulk-bind-channel" value={channel} onChange={setChannel} />
+        <ErrorLine text={error} />
+        <div className="flex flex-wrap justify-end gap-2.5">
+          <button type="button" className="btn btn-ghost" onClick={onClose}>{t('common.cancel')}</button>
+          <button type="submit" className="btn" disabled={!/^d{15,25}$/.test(channel) || busy}>{busy ? t('d2.bb.creating') : t('d2.bb.bindGo')}</button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
 export function BulkBar({ selected, visible, favs, onSelectAll, onClear, onExit, onReload, onFavs }: {
   selected: Server[];
   visible: Server[];
@@ -88,6 +131,7 @@ export function BulkBar({ selected, visible, favs, onSelectAll, onClear, onExit,
   useI18n();
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [dialog, setDialog] = useState(false);
+  const [bind, setBind] = useState(false);
   const alive = useRef(true);
   useEffect(() => () => { alive.current = false; }, []);
   const n = selected.length;
@@ -131,11 +175,13 @@ export function BulkBar({ selected, visible, favs, onSelectAll, onClear, onExit,
           <button type="button" className="btn btn-soft" onClick={onClear} disabled={busy || n === 0}>{t('d2.news.reset')}</button>
           <button type="button" className="btn" onClick={() => void refreshAll()} disabled={busy || n === 0}>{t('d2.bb.pollNow')}</button>
           <button type="button" className="btn btn-soft" onClick={() => setDialog(true)} disabled={busy || n === 0}>{t('d2.bb.maintenance')}</button>
+          <button type="button" className="btn btn-soft" onClick={() => setBind(true)} disabled={busy || n === 0}>{t('d2.bb.bind')}</button>
           <button type="button" className="btn btn-soft" onClick={() => void setFav(true)} disabled={busy || n === 0}>{t('d2.bb.addFav')}</button>
           <button type="button" className="btn btn-soft" onClick={() => void setFav(false)} disabled={busy || n === 0}>{t('common.remove')}</button>
           <button type="button" className="btn btn-soft" onClick={onExit}>{t('d2.bb.done')}</button>
         </div>
       </div>
+      {bind && <BindDialog servers={selected} onClose={() => setBind(false)} onDone={() => { setBind(false); onReload(); }} />}
       {dialog && <MaintenanceDialog servers={selected} onClose={() => setDialog(false)} onDone={() => { setDialog(false); onReload(); }} />}
     </>
   );

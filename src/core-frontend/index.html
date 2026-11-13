@@ -24,6 +24,8 @@
         var t = localStorage.getItem('coregsm_theme') || localStorage.getItem('coregsm_theme_default') || 'dark';
         // the admin area has its own theme when one was chosen there
         if (location.pathname.indexOf('/admin') === 0) t = localStorage.getItem('coregsm_admin_theme') || t;
+        // the schedule of the admin area: dark from 20:00 to 07:00 (NIGHT_FROM / NIGHT_TO in ui/theme.tsx)
+        if (t === 'night') { var h = new Date().getHours(); t = h >= 20 || h < 7 ? 'dark' : 'light'; }
         if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
         // the look (the own choice, else the community's default) and its accent: no flash from the classic look to Ember
         var own = localStorage.getItem('coregsm_look');
