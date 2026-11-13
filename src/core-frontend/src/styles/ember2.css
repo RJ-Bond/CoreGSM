@@ -170,3 +170,37 @@ a.adm-reason:hover { filter: brightness(1.1); }
   --h3-bg: color-mix(in srgb, rgb(var(--brand)) 11%, #130f0d);
   box-shadow: var(--shadow-2), 0 22px 48px -22px rgb(var(--brand) / .45), inset 0 0 0 1px rgb(255 255 255 / .07) !important;
 }
+
+/* ---------- the big card: what is usual now, the state in its colour, the people, the way in, the phone ---------- */
+/* the usual peak of the next hours, a quiet line under the figures */
+.hero3 .hero-peak { display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px; border-radius: 999px; background: rgb(255 255 255 / .1); font-weight: 700; font-size: .8125rem; color: rgb(255 255 255 / .92); }
+.hero3 .hero-peak::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: rgb(var(--brand-2)); }
+/* the card says how it is by its colour: nearly full (amber) and a slow answer (red) */
+:root[data-ember='1'] .hero3.is-full { --h3-bg: color-mix(in srgb, rgb(var(--warn)) 12%, #130f0d); box-shadow: var(--shadow-2), 0 22px 48px -22px rgb(var(--warn) / .5), inset 0 0 0 1px rgb(var(--warn) / .35) !important; }
+:root[data-ember='1'] .hero3.is-lag { --h3-bg: color-mix(in srgb, rgb(var(--bad)) 11%, #130f0d); box-shadow: var(--shadow-2), 0 22px 48px -22px rgb(var(--bad) / .45), inset 0 0 0 1px rgb(var(--bad) / .35) !important; }
+.hero3.is-full .srv-cap > i { background: linear-gradient(90deg, rgb(var(--warn)), rgb(255 200 90)); }
+/* who is playing: the faces and names come back (a few of them, then «+N») */
+:root[data-ember='1'] .hero3 .srv-names { display: flex; }
+/* the way in: «play» and the address that copies */
+.h3-cta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin-top: auto; padding-top: 4px; }
+/* a server that does not answer: the pane on the right shows how long and a button instead of an empty chart */
+.h3-downpane { position: relative; z-index: 1; display: grid; justify-items: start; gap: 4px; margin-top: auto; padding: 14px 16px; border-radius: var(--emb-r-card, 18px); background: rgb(0 0 0 / .45); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
+.h3-down-k { font-size: .8125rem; font-weight: 700; color: rgb(255 255 255 / .8); }
+.h3-down-v { font-size: 2.4rem; line-height: 1.05; font-weight: 800; letter-spacing: -.03em; }
+.h3-down-s { margin-bottom: 6px; font-size: .8125rem; font-weight: 600; color: rgb(255 255 255 / .75); }
+/* the live dot before the figure, as on the tiles */
+:root[data-ember='1'] .hero3 .h3-count:not(.is-zero)::before { content: ''; align-self: center; width: 9px; height: 9px; margin-right: -2px; border-radius: 50%; background: rgb(var(--ok)); box-shadow: 0 0 0 0 rgb(var(--ok) / .55); }
+@media (prefers-reduced-motion: no-preference) { :root[data-ember='1'] .hero3 .h3-count:not(.is-zero)::before { animation: emb-live 2.2s ease-out infinite; } }
+/* the chart of the card: a cursor and a tip under the pointer */
+.spark-cursor { position: absolute; top: 0; bottom: 18px; width: 1px; background: rgb(255 255 255 / .55); pointer-events: none; }
+.spark-tip { position: absolute; top: -6px; transform: translate(-50%, -100%); padding: 2px 9px; border-radius: 10px; background: rgb(12 10 9 / .85); color: #fff; font-size: .75rem; font-weight: 700; white-space: nowrap; pointer-events: none; }
+.home-blocks-h { margin: 8px 0 2px; font-size: .75rem; font-weight: 800; color: rgb(var(--mute)); }
+/* a phone: the picture on top with the chart on it, the figures under it (not a chart squeezed to the side) */
+@media (max-width: 639px) {
+  .hero3 .h3-r { display: flex; flex-direction: column; justify-content: space-between; min-height: 200px; }
+  .hero3 .h3-chart { display: block; }
+  .hero3 .h3-chart [class*='h-[130px]'] { height: 84px; }
+  .hero3 .h3-chart .spark-axis { display: none; }
+  .hero3 .h3-foot { display: flex; }
+  .h3-cta { margin-top: 4px; }
+}

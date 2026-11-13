@@ -3,13 +3,16 @@ import { haptic } from '../ui/haptic';
 import { useAppearance } from '../appearance';
 import { Fragment, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent } from 'react';
 import { lonelyTile, useGridColumns } from '../components/servers/gridLogic';
+import { nextUsualPeak, pickHeroBy, readHeroMode, saveHeroMode, type HeroMode } from '../components/servers/heroLogic';
+import { useBaseline } from '../components/servers/useBaseline';
 import { HomeBlocksMenu, useHomeBlocks } from '../components/servers/HomeBlocks';
 import { api, type Server, type StatusInfo } from '../api';
 import { useAuth } from '../auth';
 import { gameColor, gameGradient, gameLabel } from '../games';
 import { coverBackground, emblemStyle, gameBackdrop, coverUrlOf } from '../cover';
 import MaintenanceChip from '../components/MaintenanceChip';
-import { AnimatedNumber, Burst, ErrorLine, GameAvatar, LoadError, IconServers, PageHead, Spark, StatusPill, ago, isLag, spanCaption, useSparkSpanMin, usePoll, toast, navigate, routeQuery } from '../ui';
+import { AnimatedNumber, Burst, ErrorLine, GameAvatar, LoadError, IconServers, PageHead, Spark, StatusPill, ago, isLag, spanCaption, useSparkSpanMin, usePoll, toast, navigate, routeQuery, fmtTime, errText } from '../ui';
+import { connectGuide } from '../connectGuides';
 import { t, useI18n, type TKey } from '../i18n';
 import { calmSeriesColor, useCoverAccent } from '../components/server/coverAccent';
 import { pingTone, TONE_TEXT } from '../components/server/helpers';
@@ -20,7 +23,7 @@ import { QuickMenu } from '../components/servers/QuickMenu';
 import { PulseStrip } from '../components/servers/PulseStrip';
 import { WhatsNew, useWhatsNewOpen } from '../components/servers/WhatsNew';
 import { BulkBar } from '../components/servers/BulkBar';
-import { needsAttention, pickHero, type HeroReason, type OverviewData } from '../components/servers/overviewLogic';
+import { needsAttention, type HeroReason, type OverviewData } from '../components/servers/overviewLogic';
 import NotFound from '../components/NotFound';
 import ServerDetail, { SERVER_TABS } from './ServerDetail';
 import { CardClock, CardMap, CardRefresh, CardTag, CardUptime } from '../components/servers/CardIcons';
@@ -279,7 +282,9 @@ function ServerList() {
   const upAvg = upVals.length ? upVals.reduce((a, b) => a + b, 0) / upVals.length : null;
 
   // the hero by meaning: a server that needs attention, else the busiest favourite, else the busiest server
-  const picked = useMemo(() => pickHero(sorted, me ? favs : []), [sorted, favs, me]);
+  const [heroMode, setHeroModeState] = useState<HeroMode>(readHeroMode);
+  const setHeroMode = (m: HeroMode) => { setHeroModeState(m); saveHeroMode(m); };
+  const picked = useMemo(() => pickHeroBy(sorted, me ? favs : [], heroMode), [sorted, favs, me, heroMode]);
   const hero = picked?.server ?? null;
   const heroReason: HeroReason = picked?.reason ?? null;
   // servers with a problem sit in a compact strip above the tiles (unless the hero is itself the problem: then every server is)
@@ -391,7 +396,7 @@ function ServerList() {
       >
         <span className="srv-head-actions">
           <LiveBadge at={updatedAt} onRefresh={() => void refreshNow()} busy={refreshing} />
-          <HomeBlocksMenu blocks={home} onChange={setHome} />
+          <HomeBlocksMenu blocks={home} onChange={setHome} heroMode={heroMode} onHeroMode={setHeroMode} />
           {isAdmin && <a className="btn btn-soft btn-sm" href="/admin/servers" data-magnetic>{t('d2.srv.manage')}</a>}
         </span>
       </PageHead>
@@ -548,10 +553,22 @@ function HeroTile({ s, idx, uptime, downSince, fav, onFav, onOpen, rx, reason, s
   const emb = emblemStyle(s.coverUrl, s.game);
   const cover = coverUrlOf(s.coverUrl, s.game, false);
   const { swallow, ...lp } = useQuickLongPress();
+  const { isAdmin } = useAuth();
+  const baseline = useBaseline(s.id);
+  const peak = s.online ? nextUsualPeak(baseline, Date.now()) : null;
+  const play = connectGuide(s.game, s.address).link;
+  const full = s.online && s.maxPlayers > 0 && s.players / s.maxPlayers >= 0.9;
+  const [polling, setPolling] = useState(false);
+  const pollNow = async (e: MouseEvent<HTMLElement>) => {
+    e.stopPropagation();
+    setPolling(true);
+    try { await api(`/servers/${s.id}/refresh`, 'POST'); toast(t('srv.hero.polled')); } catch (err) { toast(errText(err), 'err'); }
+    setPolling(false);
+  };
   return (
     <article
       {...lp}
-      className={`hero3 tile-in tile-hover relative cursor-pointer overflow-hidden rounded-ui-xl text-white shadow-soft ${s.online ? '' : 'is-down'} ${reason === 'attention' ? 'hero-attn' : ''}`}
+      className={`hero3 tile-in tile-hover relative cursor-pointer overflow-hidden rounded-ui-xl text-white shadow-soft ${s.online ? '' : 'is-down'} ${reason === 'attention' ? 'hero-attn' : ''} ${full ? 'is-full' : ''} ${s.online && lag ? 'is-lag' : ''}`}
       style={{
         ...stagger(idx),
         ['--gc' as string]: gameColor(s.game),
@@ -580,16 +597,22 @@ function HeroTile({ s, idx, uptime, downSince, fav, onFav, onOpen, rx, reason, s
 
         {s.online ? (
           <>
-            <div className="h3-count flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
+            <div className={`h3-count flex flex-wrap items-baseline gap-x-2.5 gap-y-1 ${s.players === 0 ? 'is-zero' : ''}`}>
               <CountReact r={r} onDark><AnimatedNumber value={s.players} className="text-[72px] font-extrabold leading-none tracking-[-0.05em] sm:text-[88px]" /></CountReact>
               <span className="text-lg font-bold text-white/85">/ {t('d2.srv.nPlayers', { n: s.maxPlayers })}</span>
             </div>
             <div className="h3-sub flex flex-wrap items-center gap-x-4 gap-y-1">
               <TrendChip serverId={s.id} onDark />
               {s.ping != null && <span className="inline-flex items-center gap-1.5 font-bold text-white/90"><PingBars ping={s.ping} tone={pingTone(s.ping).tone} />{t('d2.srv.ping', { ms: s.ping })}</span>}
+              {peak && <span className="hero-peak" title={t('srv.hero.peakTip', { n: peak.value })}>{peak.now ? t('srv.hero.peakNow') : t('srv.hero.peakAt', { time: fmtTime(peak.at), h: peak.hoursAhead })}</span>}
             </div>
             <CapacityBar className="h3-bar" players={s.players} max={s.maxPlayers} color="#fff" onDark />
             <PlayerNames names={s.playerNames ?? []} max={4} onDark />
+            {play && (
+              <div className="h3-cta">
+                <a className="btn btn-glass btn-sm" href={play.href} onClick={(e) => e.stopPropagation()}>{play.label}</a>
+              </div>
+            )}
           </>
         ) : (
           // a server that is down: what is wrong and since when, instead of the figures
@@ -624,9 +647,18 @@ function HeroTile({ s, idx, uptime, downSince, fav, onFav, onOpen, rx, reason, s
           {fav != null && <FavButton on={fav} name={s.name} onClick={onFav} className={fav ? 'text-white' : 'text-white/80'} glass />}
           <QuickMenu s={s} glass />
         </div>
-        <div className="h3-chart">
-          <Spark serverId={s.id} color="#ffffff" variant="hero" />
-        </div>
+        {s.online ? (
+          <div className="h3-chart">
+            <Spark serverId={s.id} color="#ffffff" variant="hero" />
+          </div>
+        ) : (
+          <div className="h3-downpane">
+            <span className="h3-down-k">{t('srv.down.k')}</span>
+            <b className="h3-down-v">{downSince ? durText(Date.now() - downSince) : ago(s.updatedAt)}</b>
+            <span className="h3-down-s">{t('srv.down.last', { ago: ago(s.updatedAt) })}</span>
+            {isAdmin && <button type="button" className="btn btn-glass btn-sm" disabled={polling} onClick={(e) => void pollNow(e)}>{polling ? t('d2.sd.polling') : t('srv.hero.poll')}</button>}
+          </div>
+        )}
       </div>
     </article>
   );

@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="706c0f2de7d2"
+COREGSM_BUILD="0e715f39f7d3"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.2.42"
+COREGSM_VERSION="1.2.43"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -142144,6 +142144,7 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/components/servers/HomeBlocks.tsx" << '__COREGSM_EOF__'
 import { useEffect, useRef, useState } from 'react';
 import { t, useI18n } from '../../i18n';
+import { HERO_MODES, type HeroMode } from './heroLogic';
 
 /** which blocks of the servers page are shown: remembered in this browser; both are on until the person turns one off */
 export interface HomeBlocks { pulse: boolean; news: boolean }
@@ -142170,7 +142171,7 @@ export function useHomeBlocks(): [HomeBlocks, (patch: Partial<HomeBlocks>) => vo
 }
 
 /** «Customise»: a small menu with a switch for every block of the page; closes on Esc and on a click outside */
-export function HomeBlocksMenu({ blocks, onChange }: { blocks: HomeBlocks; onChange: (patch: Partial<HomeBlocks>) => void }) {
+export function HomeBlocksMenu({ blocks, onChange, heroMode, onHeroMode }: { blocks: HomeBlocks; onChange: (patch: Partial<HomeBlocks>) => void; heroMode?: HeroMode; onHeroMode?: (m: HeroMode) => void }) {
   useI18n();
   const [open, setOpen] = useState(false);
   const box = useRef<HTMLDivElement>(null);
@@ -142194,6 +142195,17 @@ export function HomeBlocksMenu({ blocks, onChange }: { blocks: HomeBlocks; onCha
               <span>{label}</span>
             </label>
           ))}
+          {heroMode && onHeroMode && (
+            <div className="home-blocks-hero" role="radiogroup" aria-label={t('home.hero')}>
+              <p className="home-blocks-h">{t('home.hero')}</p>
+              {HERO_MODES.map((m) => (
+                <label key={m} className="home-blocks-row">
+                  <input type="radio" name="hero-mode" className="srv-check" checked={heroMode === m} onChange={() => onHeroMode(m)} />
+                  <span>{t(`home.hero.${m}` as const)}</span>
+                </label>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -142994,6 +143006,123 @@ export function useGridColumns(): [number, (el: HTMLElement | null) => void] {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/servers"
+  cat > "$APP_DIR/core-frontend/src/components/servers/heroLogic.test.ts" << '__COREGSM_EOF__'
+import { describe, expect, it } from 'vitest';
+import type { Server } from '../../api';
+import { nextUsualPeak, pickHeroBy } from './heroLogic';
+
+// a baseline whose value at an hour is its UTC hour of the day, every day: it grows from 0 to 23
+const ramp = Array.from({ length: 168 }, (_, i) => i % 24);
+const at = (utcHour: number) => Date.UTC(2026, 10, 12, utcHour, 20);
+
+const srv = (id: number, players: number, max: number, over: Partial<Server> = {}): Server => ({
+  id, name: `S${id}`, customName: '', nameAuto: true, game: 'rust', host: 'h', port: 1, queryPort: null, displayAddress: '', country: '', coverUrl: null, address: 'h:1',
+  hasStatus: true, online: true, players, maxPlayers: max, map: null, version: null, ping: 30, playerNames: [], error: null, updatedAt: 1, ...over,
+});
+
+describe('the usual peak of the next hours', () => {
+  it('finds the busiest hour ahead and says how far it is', () => {
+    const p = nextUsualPeak(ramp, at(10));
+    expect(p).toMatchObject({ hoursAhead: 11, value: 21, now: false });
+    expect(p?.at).toBe(Date.UTC(2026, 10, 12, 21, 0));
+  });
+  it('says «now» when the current hour is the busiest of the window', () => {
+    const falling = ramp.map((_, i) => 23 - (i % 24));
+    expect(nextUsualPeak(falling, at(5))?.now).toBe(true);
+  });
+  it('says nothing for a flat, empty or missing baseline', () => {
+    expect(nextUsualPeak(Array(168).fill(5), at(8))).toBeNull();
+    expect(nextUsualPeak(Array(168).fill(0), at(8))).toBeNull();
+    expect(nextUsualPeak(null, at(8))).toBeNull();
+    expect(nextUsualPeak([1, 2], at(8))).toBeNull();
+  });
+});
+
+describe('the server of the big card by the chosen mode', () => {
+  const list = [srv(1, 40, 100), srv(2, 20, 25), srv(3, 5, 10)];
+  it('busiest keeps the old choice, fullest takes the fullest by places, favourite the favourite with most players', () => {
+    expect(pickHeroBy(list, [], 'busiest')?.server.id).toBe(1);
+    expect(pickHeroBy(list, [], 'fullest')?.server.id).toBe(2);
+    expect(pickHeroBy(list, [3], 'favourite')?.server.id).toBe(3);
+    expect(pickHeroBy(list, [], 'favourite')?.server.id).toBe(1);
+  });
+  it('a server with a problem is not chosen unless every server has one', () => {
+    const bad = [srv(1, 0, 10, { online: false }), srv(2, 3, 10)];
+    expect(pickHeroBy(bad, [], 'fullest')?.server.id).toBe(2);
+    expect(pickHeroBy([bad[0]], [], 'fullest')?.reason).toBe('attention');
+  });
+});
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/servers"
+  cat > "$APP_DIR/core-frontend/src/components/servers/heroLogic.ts" << '__COREGSM_EOF__'
+import type { Server } from '../../api';
+import { needsAttention, pickHero, type HeroReason } from './overviewLogic';
+
+/** the usual number of players at an hour of the week: 7 x 24 values, UTC, Sunday first (as the baseline of the server page) */
+export const usualAtHour = (baseline: (number | null)[], ts: number): number | null => {
+  const d = new Date(ts);
+  return baseline[d.getUTCDay() * 24 + d.getUTCHours()] ?? null;
+};
+
+export interface UsualPeak {
+  /** the start of the busiest hour among the next twelve (this hour included) */
+  at: number;
+  /** whole hours from now: 0 = it is the hour of the peak now */
+  hoursAhead: number;
+  value: number;
+  /** the current hour is already as busy as the peak (or nearly) */
+  now: boolean;
+}
+
+/**
+ * When the server is usually the busiest in the next twelve hours, by its baseline of the week.
+ * null when the baseline is flat or too small to say anything (a young server, an empty one).
+ */
+export function nextUsualPeak(baseline: (number | null)[] | null | undefined, nowTs: number, horizon = 12): UsualPeak | null {
+  if (!baseline || baseline.length < 168) return null;
+  const hour = Math.floor(nowTs / 3_600_000) * 3_600_000;
+  let best: { i: number; v: number } | null = null;
+  let low = Infinity;
+  for (let i = 0; i < horizon; i++) {
+    const v = usualAtHour(baseline, hour + i * 3_600_000);
+    if (v == null) continue;
+    low = Math.min(low, v);
+    if (!best || v > best.v) best = { i, v };
+  }
+  if (!best || best.v < 2 || best.v - low < Math.max(1, best.v * 0.15)) return null;
+  const cur = usualAtHour(baseline, hour);
+  return { at: hour + best.i * 3_600_000, hoursAhead: best.i, value: Math.round(best.v), now: best.i === 0 || (cur != null && cur >= best.v * 0.92) };
+}
+
+export type HeroMode = 'busiest' | 'fullest' | 'favourite';
+export const HERO_MODES: HeroMode[] = ['busiest', 'fullest', 'favourite'];
+const MODE_KEY = 'coregsm_hero_mode';
+export const isHeroMode = (v: unknown): v is HeroMode => v === 'busiest' || v === 'fullest' || v === 'favourite';
+export function readHeroMode(): HeroMode {
+  try { const v = localStorage.getItem(MODE_KEY); return isHeroMode(v) ? v : 'busiest'; } catch { return 'busiest'; }
+}
+export function saveHeroMode(m: HeroMode): void {
+  try { localStorage.setItem(MODE_KEY, m); } catch { /* not remembered */ }
+}
+
+/**
+ * The server of the big card. A server that needs a look still comes first when every server has a problem (pickHero);
+ * otherwise «busiest» is the old choice (the busiest favourite, else the busiest server), «fullest» is the one whose
+ * places are taken the most, «favourite» is the favourite that has the most players (none: the old choice).
+ */
+export function pickHeroBy(servers: Server[], favs: number[], mode: HeroMode): { server: Server; reason: HeroReason } | null {
+  const base = pickHero(servers, favs);
+  if (!base || base.reason === 'attention' || mode === 'busiest') return base;
+  const calm = servers.filter((s) => !needsAttention(s) && s.online);
+  if (mode === 'fullest') {
+    const full = calm.filter((s) => s.maxPlayers > 0).sort((a, b) => b.players / b.maxPlayers - a.players / a.maxPlayers || b.players - a.players || a.id - b.id)[0];
+    return full ? { server: full, reason: 'busiest' } : base;
+  }
+  const fav = calm.filter((s) => favs.includes(s.id)).sort((a, b) => b.players - a.players || a.id - b.id)[0];
+  return fav ? { server: fav, reason: 'fav' } : base;
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/servers"
   cat > "$APP_DIR/core-frontend/src/components/servers/overviewLogic.ts" << '__COREGSM_EOF__'
 // Pure logic of the main page: the hero pick, the state of the pulse strip. Covered by tests.
 import type { Server } from '../../api';
@@ -143454,6 +143583,19 @@ export function useQuickLongPress() {
     // a click that still comes within a moment of the long touch is not a tap (the menu button's own click is one of them)
     swallow: () => firedAt.current !== 0 && Date.now() - firedAt.current < 1500,
   };
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/servers"
+  cat > "$APP_DIR/core-frontend/src/components/servers/useBaseline.ts" << '__COREGSM_EOF__'
+import { useState } from 'react';
+import { api } from '../../api';
+import { usePoll } from '../../ui';
+
+/** the baseline of the week of a server (the usual players per hour, UTC), from the details of the server; null until it is known */
+export function useBaseline(serverId: number): (number | null)[] | null {
+  const [b, setB] = useState<(number | null)[] | null>(null);
+  usePoll(() => api<{ baseline?: (number | null)[] | null }>(`/servers/${serverId}/details?hours=24`).then((d) => setB(Array.isArray(d?.baseline) ? d.baseline : null)).catch(() => undefined), 300_000);
+  return b;
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components"
@@ -147257,6 +147399,15 @@ const en: Record<keyof typeof ru, string> = {
   // ---- shared ----
   'common.cancel': 'Cancel',
   'home.customize': 'Customise',
+  'home.hero': 'Big card',
+  'home.hero.busiest': 'The busiest',
+  'home.hero.fullest': 'The fullest',
+  'home.hero.favourite': 'My favourite',
+  'srv.hero.peakNow': 'The usual peak is now',
+  'srv.hero.peakAt': 'Usually peaks at {time}',
+  'srv.hero.peakTip': 'Usually up to {n} players at this hour',
+  'srv.hero.poll': 'Check now',
+  'srv.hero.polled': 'The server was checked',
   'home.b.pulse': 'The summary with a chart',
   'home.b.news': 'The «What is new» block',
   'su.title': 'Confirm the action',
@@ -152450,6 +152601,15 @@ const ru = {
   // ---- shared ----
   'common.cancel': 'Отмена',
   'home.customize': 'Настроить',
+  'home.hero': 'Большая карточка',
+  'home.hero.busiest': 'Самый загруженный',
+  'home.hero.fullest': 'Самый заполненный',
+  'home.hero.favourite': 'Мой любимый',
+  'srv.hero.peakNow': 'Сейчас обычный пик',
+  'srv.hero.peakAt': 'Обычно пик в {time}',
+  'srv.hero.peakTip': 'Обычно в этот час до {n} игроков',
+  'srv.hero.poll': 'Опросить',
+  'srv.hero.polled': 'Сервер опрошен',
   'home.b.pulse': 'Сводка с графиком',
   'home.b.news': 'Блок «Что нового»',
   'su.title': 'Подтвердите действие',
@@ -168983,13 +169143,16 @@ import { haptic } from '../ui/haptic';
 import { useAppearance } from '../appearance';
 import { Fragment, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent } from 'react';
 import { lonelyTile, useGridColumns } from '../components/servers/gridLogic';
+import { nextUsualPeak, pickHeroBy, readHeroMode, saveHeroMode, type HeroMode } from '../components/servers/heroLogic';
+import { useBaseline } from '../components/servers/useBaseline';
 import { HomeBlocksMenu, useHomeBlocks } from '../components/servers/HomeBlocks';
 import { api, type Server, type StatusInfo } from '../api';
 import { useAuth } from '../auth';
 import { gameColor, gameGradient, gameLabel } from '../games';
 import { coverBackground, emblemStyle, gameBackdrop, coverUrlOf } from '../cover';
 import MaintenanceChip from '../components/MaintenanceChip';
-import { AnimatedNumber, Burst, ErrorLine, GameAvatar, LoadError, IconServers, PageHead, Spark, StatusPill, ago, isLag, spanCaption, useSparkSpanMin, usePoll, toast, navigate, routeQuery } from '../ui';
+import { AnimatedNumber, Burst, ErrorLine, GameAvatar, LoadError, IconServers, PageHead, Spark, StatusPill, ago, isLag, spanCaption, useSparkSpanMin, usePoll, toast, navigate, routeQuery, fmtTime, errText } from '../ui';
+import { connectGuide } from '../connectGuides';
 import { t, useI18n, type TKey } from '../i18n';
 import { calmSeriesColor, useCoverAccent } from '../components/server/coverAccent';
 import { pingTone, TONE_TEXT } from '../components/server/helpers';
@@ -169000,7 +169163,7 @@ import { QuickMenu } from '../components/servers/QuickMenu';
 import { PulseStrip } from '../components/servers/PulseStrip';
 import { WhatsNew, useWhatsNewOpen } from '../components/servers/WhatsNew';
 import { BulkBar } from '../components/servers/BulkBar';
-import { needsAttention, pickHero, type HeroReason, type OverviewData } from '../components/servers/overviewLogic';
+import { needsAttention, type HeroReason, type OverviewData } from '../components/servers/overviewLogic';
 import NotFound from '../components/NotFound';
 import ServerDetail, { SERVER_TABS } from './ServerDetail';
 import { CardClock, CardMap, CardRefresh, CardTag, CardUptime } from '../components/servers/CardIcons';
@@ -169259,7 +169422,9 @@ function ServerList() {
   const upAvg = upVals.length ? upVals.reduce((a, b) => a + b, 0) / upVals.length : null;
 
   // the hero by meaning: a server that needs attention, else the busiest favourite, else the busiest server
-  const picked = useMemo(() => pickHero(sorted, me ? favs : []), [sorted, favs, me]);
+  const [heroMode, setHeroModeState] = useState<HeroMode>(readHeroMode);
+  const setHeroMode = (m: HeroMode) => { setHeroModeState(m); saveHeroMode(m); };
+  const picked = useMemo(() => pickHeroBy(sorted, me ? favs : [], heroMode), [sorted, favs, me, heroMode]);
   const hero = picked?.server ?? null;
   const heroReason: HeroReason = picked?.reason ?? null;
   // servers with a problem sit in a compact strip above the tiles (unless the hero is itself the problem: then every server is)
@@ -169371,7 +169536,7 @@ function ServerList() {
       >
         <span className="srv-head-actions">
           <LiveBadge at={updatedAt} onRefresh={() => void refreshNow()} busy={refreshing} />
-          <HomeBlocksMenu blocks={home} onChange={setHome} />
+          <HomeBlocksMenu blocks={home} onChange={setHome} heroMode={heroMode} onHeroMode={setHeroMode} />
           {isAdmin && <a className="btn btn-soft btn-sm" href="/admin/servers" data-magnetic>{t('d2.srv.manage')}</a>}
         </span>
       </PageHead>
@@ -169528,10 +169693,22 @@ function HeroTile({ s, idx, uptime, downSince, fav, onFav, onOpen, rx, reason, s
   const emb = emblemStyle(s.coverUrl, s.game);
   const cover = coverUrlOf(s.coverUrl, s.game, false);
   const { swallow, ...lp } = useQuickLongPress();
+  const { isAdmin } = useAuth();
+  const baseline = useBaseline(s.id);
+  const peak = s.online ? nextUsualPeak(baseline, Date.now()) : null;
+  const play = connectGuide(s.game, s.address).link;
+  const full = s.online && s.maxPlayers > 0 && s.players / s.maxPlayers >= 0.9;
+  const [polling, setPolling] = useState(false);
+  const pollNow = async (e: MouseEvent<HTMLElement>) => {
+    e.stopPropagation();
+    setPolling(true);
+    try { await api(`/servers/${s.id}/refresh`, 'POST'); toast(t('srv.hero.polled')); } catch (err) { toast(errText(err), 'err'); }
+    setPolling(false);
+  };
   return (
     <article
       {...lp}
-      className={`hero3 tile-in tile-hover relative cursor-pointer overflow-hidden rounded-ui-xl text-white shadow-soft ${s.online ? '' : 'is-down'} ${reason === 'attention' ? 'hero-attn' : ''}`}
+      className={`hero3 tile-in tile-hover relative cursor-pointer overflow-hidden rounded-ui-xl text-white shadow-soft ${s.online ? '' : 'is-down'} ${reason === 'attention' ? 'hero-attn' : ''} ${full ? 'is-full' : ''} ${s.online && lag ? 'is-lag' : ''}`}
       style={{
         ...stagger(idx),
         ['--gc' as string]: gameColor(s.game),
@@ -169560,16 +169737,22 @@ function HeroTile({ s, idx, uptime, downSince, fav, onFav, onOpen, rx, reason, s
 
         {s.online ? (
           <>
-            <div className="h3-count flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
+            <div className={`h3-count flex flex-wrap items-baseline gap-x-2.5 gap-y-1 ${s.players === 0 ? 'is-zero' : ''}`}>
               <CountReact r={r} onDark><AnimatedNumber value={s.players} className="text-[72px] font-extrabold leading-none tracking-[-0.05em] sm:text-[88px]" /></CountReact>
               <span className="text-lg font-bold text-white/85">/ {t('d2.srv.nPlayers', { n: s.maxPlayers })}</span>
             </div>
             <div className="h3-sub flex flex-wrap items-center gap-x-4 gap-y-1">
               <TrendChip serverId={s.id} onDark />
               {s.ping != null && <span className="inline-flex items-center gap-1.5 font-bold text-white/90"><PingBars ping={s.ping} tone={pingTone(s.ping).tone} />{t('d2.srv.ping', { ms: s.ping })}</span>}
+              {peak && <span className="hero-peak" title={t('srv.hero.peakTip', { n: peak.value })}>{peak.now ? t('srv.hero.peakNow') : t('srv.hero.peakAt', { time: fmtTime(peak.at), h: peak.hoursAhead })}</span>}
             </div>
             <CapacityBar className="h3-bar" players={s.players} max={s.maxPlayers} color="#fff" onDark />
             <PlayerNames names={s.playerNames ?? []} max={4} onDark />
+            {play && (
+              <div className="h3-cta">
+                <a className="btn btn-glass btn-sm" href={play.href} onClick={(e) => e.stopPropagation()}>{play.label}</a>
+              </div>
+            )}
           </>
         ) : (
           // a server that is down: what is wrong and since when, instead of the figures
@@ -169604,9 +169787,18 @@ function HeroTile({ s, idx, uptime, downSince, fav, onFav, onOpen, rx, reason, s
           {fav != null && <FavButton on={fav} name={s.name} onClick={onFav} className={fav ? 'text-white' : 'text-white/80'} glass />}
           <QuickMenu s={s} glass />
         </div>
-        <div className="h3-chart">
-          <Spark serverId={s.id} color="#ffffff" variant="hero" />
-        </div>
+        {s.online ? (
+          <div className="h3-chart">
+            <Spark serverId={s.id} color="#ffffff" variant="hero" />
+          </div>
+        ) : (
+          <div className="h3-downpane">
+            <span className="h3-down-k">{t('srv.down.k')}</span>
+            <b className="h3-down-v">{downSince ? durText(Date.now() - downSince) : ago(s.updatedAt)}</b>
+            <span className="h3-down-s">{t('srv.down.last', { ago: ago(s.updatedAt) })}</span>
+            {isAdmin && <button type="button" className="btn btn-glass btn-sm" disabled={polling} onClick={(e) => void pollNow(e)}>{polling ? t('d2.sd.polling') : t('srv.hero.poll')}</button>}
+          </div>
+        )}
       </div>
     </article>
   );
@@ -177087,6 +177279,40 @@ a.adm-reason:hover { filter: brightness(1.1); }
   --h3-bg: color-mix(in srgb, rgb(var(--brand)) 11%, #130f0d);
   box-shadow: var(--shadow-2), 0 22px 48px -22px rgb(var(--brand) / .45), inset 0 0 0 1px rgb(255 255 255 / .07) !important;
 }
+
+/* ---------- the big card: what is usual now, the state in its colour, the people, the way in, the phone ---------- */
+/* the usual peak of the next hours, a quiet line under the figures */
+.hero3 .hero-peak { display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px; border-radius: 999px; background: rgb(255 255 255 / .1); font-weight: 700; font-size: .8125rem; color: rgb(255 255 255 / .92); }
+.hero3 .hero-peak::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: rgb(var(--brand-2)); }
+/* the card says how it is by its colour: nearly full (amber) and a slow answer (red) */
+:root[data-ember='1'] .hero3.is-full { --h3-bg: color-mix(in srgb, rgb(var(--warn)) 12%, #130f0d); box-shadow: var(--shadow-2), 0 22px 48px -22px rgb(var(--warn) / .5), inset 0 0 0 1px rgb(var(--warn) / .35) !important; }
+:root[data-ember='1'] .hero3.is-lag { --h3-bg: color-mix(in srgb, rgb(var(--bad)) 11%, #130f0d); box-shadow: var(--shadow-2), 0 22px 48px -22px rgb(var(--bad) / .45), inset 0 0 0 1px rgb(var(--bad) / .35) !important; }
+.hero3.is-full .srv-cap > i { background: linear-gradient(90deg, rgb(var(--warn)), rgb(255 200 90)); }
+/* who is playing: the faces and names come back (a few of them, then «+N») */
+:root[data-ember='1'] .hero3 .srv-names { display: flex; }
+/* the way in: «play» and the address that copies */
+.h3-cta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin-top: auto; padding-top: 4px; }
+/* a server that does not answer: the pane on the right shows how long and a button instead of an empty chart */
+.h3-downpane { position: relative; z-index: 1; display: grid; justify-items: start; gap: 4px; margin-top: auto; padding: 14px 16px; border-radius: var(--emb-r-card, 18px); background: rgb(0 0 0 / .45); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
+.h3-down-k { font-size: .8125rem; font-weight: 700; color: rgb(255 255 255 / .8); }
+.h3-down-v { font-size: 2.4rem; line-height: 1.05; font-weight: 800; letter-spacing: -.03em; }
+.h3-down-s { margin-bottom: 6px; font-size: .8125rem; font-weight: 600; color: rgb(255 255 255 / .75); }
+/* the live dot before the figure, as on the tiles */
+:root[data-ember='1'] .hero3 .h3-count:not(.is-zero)::before { content: ''; align-self: center; width: 9px; height: 9px; margin-right: -2px; border-radius: 50%; background: rgb(var(--ok)); box-shadow: 0 0 0 0 rgb(var(--ok) / .55); }
+@media (prefers-reduced-motion: no-preference) { :root[data-ember='1'] .hero3 .h3-count:not(.is-zero)::before { animation: emb-live 2.2s ease-out infinite; } }
+/* the chart of the card: a cursor and a tip under the pointer */
+.spark-cursor { position: absolute; top: 0; bottom: 18px; width: 1px; background: rgb(255 255 255 / .55); pointer-events: none; }
+.spark-tip { position: absolute; top: -6px; transform: translate(-50%, -100%); padding: 2px 9px; border-radius: 10px; background: rgb(12 10 9 / .85); color: #fff; font-size: .75rem; font-weight: 700; white-space: nowrap; pointer-events: none; }
+.home-blocks-h { margin: 8px 0 2px; font-size: .75rem; font-weight: 800; color: rgb(var(--mute)); }
+/* a phone: the picture on top with the chart on it, the figures under it (not a chart squeezed to the side) */
+@media (max-width: 639px) {
+  .hero3 .h3-r { display: flex; flex-direction: column; justify-content: space-between; min-height: 200px; }
+  .hero3 .h3-chart { display: block; }
+  .hero3 .h3-chart [class*='h-[130px]'] { height: 84px; }
+  .hero3 .h3-chart .spark-axis { display: none; }
+  .hero3 .h3-foot { display: flex; }
+  .h3-cta { margin-top: 4px; }
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/emberScale.test.ts" << '__COREGSM_EOF__'
@@ -180538,7 +180764,7 @@ __COREGSM_EOF__
 /** Small charts: the 24 h sparkline, smooth area paths and the fleet status bar. */
 import { useEffect, useId, useState } from 'react';
 import { getToken } from '../api';
-import { t, useI18n } from '../i18n';
+import { getPrefs, t, useI18n } from '../i18n';
 
 /**
  * The 24 h curves of all servers come in one request (/api/servers/sparks) shared by every sparkline on the page:
@@ -180682,15 +180908,7 @@ export function Spark({ serverId, color, variant = 'tile' }: { serverId: number;
   const avg = pts.reduce((x, y) => x + y, 0) / pts.length;
   const spanMin = Math.round(((raw.players.length - first) * 24 * 60) / raw.players.length);
   return hero
-    ? (
-      <div className="relative">
-        <SmoothArea values={pts} down={downs24} color={color} w={560} h={130} grid fill={0.3} strokeWidth={2} className="h-[130px]" label={label} />
-        {/* the scale: the top of the day and the zero line (the curve starts at zero) */}
-        <span aria-hidden className="spark-axis" style={{ top: `${(1 - 1 / 1.12) * 100 + 1}%` }}>{t('d2.ch.peak', { n: Math.round(top) })}</span>
-        <span aria-hidden className="spark-axis" style={{ bottom: '3%' }}>0</span>
-        <span aria-hidden className="spark-times"><span>{ageLabel(spanMin)}</span>{spanMin >= 60 && <span>{ageLabel(spanMin / 2)}</span>}<span>{t('spark.now')}</span></span>
-      </div>
-    )
+    ? <HeroSpark pts={pts} down={downs24} color={color} label={label} top={top} spanMin={spanMin} />
     : (
       <div className="relative">
         <SmoothArea values={pts} down={downs24} color={color} w={240} h={40} fill={0.25} strokeWidth={2} className="h-10" label={label} />
@@ -180700,6 +180918,34 @@ export function Spark({ serverId, color, variant = 'tile' }: { serverId: number;
         )}
       </div>
     );
+}
+
+/** the big chart of the hero card: the curve, the scale, and the value with its time under the pointer (a vertical line and a small tip) */
+function HeroSpark({ pts, down, color, label, top, spanMin }: { pts: number[]; down: boolean[]; color: string; label: string; top: number; spanMin: number }) {
+  const [hover, setHover] = useState<number | null>(null);
+  const near = (e: React.PointerEvent<HTMLDivElement>) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    const x = Math.max(0, Math.min(1, (e.clientX - r.left) / Math.max(1, r.width)));
+    setHover(Math.round(x * (pts.length - 1)));
+  };
+  // the time of a point: the curve ends now and covers `spanMin` minutes
+  const when = (i: number) => new Date(Date.now() - ((pts.length - 1 - i) / Math.max(1, pts.length - 1)) * spanMin * 60_000);
+  const hh = hover != null ? when(hover).toLocaleTimeString(getPrefs().lang === 'en' ? 'en-US' : 'ru-RU', { hour: '2-digit', minute: '2-digit' }) : '';
+  return (
+    <div className="relative" onPointerMove={near} onPointerDown={near} onPointerLeave={() => setHover(null)}>
+      <SmoothArea values={pts} down={down} color={color} w={560} h={130} grid fill={0.3} strokeWidth={2} className="h-[130px]" label={label} />
+      {/* the scale: the top of the day and the zero line (the curve starts at zero) */}
+      <span aria-hidden className="spark-axis" style={{ top: `${(1 - 1 / 1.12) * 100 + 1}%` }}>{t('d2.ch.peak', { n: Math.round(top) })}</span>
+      <span aria-hidden className="spark-axis" style={{ bottom: '3%' }}>0</span>
+      <span aria-hidden className="spark-times"><span>{ageLabel(spanMin)}</span>{spanMin >= 60 && <span>{ageLabel(spanMin / 2)}</span>}<span>{t('spark.now')}</span></span>
+      {hover != null && (
+        <>
+          <span aria-hidden className="spark-cursor" style={{ left: `${(hover / Math.max(1, pts.length - 1)) * 100}%` }} />
+          <span className="spark-tip" role="status" style={{ left: `${Math.max(12, Math.min(88, (hover / Math.max(1, pts.length - 1)) * 100))}%` }}><b>{Math.round(pts[hover])}</b> · {hh}</span>
+        </>
+      )}
+    </div>
+  );
 }
 
 /** «−24 ч» / «−90 мин»: how long ago a point of the chart is */

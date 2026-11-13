@@ -1,7 +1,7 @@
 /** Small charts: the 24 h sparkline, smooth area paths and the fleet status bar. */
 import { useEffect, useId, useState } from 'react';
 import { getToken } from '../api';
-import { t, useI18n } from '../i18n';
+import { getPrefs, t, useI18n } from '../i18n';
 
 /**
  * The 24 h curves of all servers come in one request (/api/servers/sparks) shared by every sparkline on the page:
@@ -145,15 +145,7 @@ export function Spark({ serverId, color, variant = 'tile' }: { serverId: number;
   const avg = pts.reduce((x, y) => x + y, 0) / pts.length;
   const spanMin = Math.round(((raw.players.length - first) * 24 * 60) / raw.players.length);
   return hero
-    ? (
-      <div className="relative">
-        <SmoothArea values={pts} down={downs24} color={color} w={560} h={130} grid fill={0.3} strokeWidth={2} className="h-[130px]" label={label} />
-        {/* the scale: the top of the day and the zero line (the curve starts at zero) */}
-        <span aria-hidden className="spark-axis" style={{ top: `${(1 - 1 / 1.12) * 100 + 1}%` }}>{t('d2.ch.peak', { n: Math.round(top) })}</span>
-        <span aria-hidden className="spark-axis" style={{ bottom: '3%' }}>0</span>
-        <span aria-hidden className="spark-times"><span>{ageLabel(spanMin)}</span>{spanMin >= 60 && <span>{ageLabel(spanMin / 2)}</span>}<span>{t('spark.now')}</span></span>
-      </div>
-    )
+    ? <HeroSpark pts={pts} down={downs24} color={color} label={label} top={top} spanMin={spanMin} />
     : (
       <div className="relative">
         <SmoothArea values={pts} down={downs24} color={color} w={240} h={40} fill={0.25} strokeWidth={2} className="h-10" label={label} />
@@ -163,6 +155,34 @@ export function Spark({ serverId, color, variant = 'tile' }: { serverId: number;
         )}
       </div>
     );
+}
+
+/** the big chart of the hero card: the curve, the scale, and the value with its time under the pointer (a vertical line and a small tip) */
+function HeroSpark({ pts, down, color, label, top, spanMin }: { pts: number[]; down: boolean[]; color: string; label: string; top: number; spanMin: number }) {
+  const [hover, setHover] = useState<number | null>(null);
+  const near = (e: React.PointerEvent<HTMLDivElement>) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    const x = Math.max(0, Math.min(1, (e.clientX - r.left) / Math.max(1, r.width)));
+    setHover(Math.round(x * (pts.length - 1)));
+  };
+  // the time of a point: the curve ends now and covers `spanMin` minutes
+  const when = (i: number) => new Date(Date.now() - ((pts.length - 1 - i) / Math.max(1, pts.length - 1)) * spanMin * 60_000);
+  const hh = hover != null ? when(hover).toLocaleTimeString(getPrefs().lang === 'en' ? 'en-US' : 'ru-RU', { hour: '2-digit', minute: '2-digit' }) : '';
+  return (
+    <div className="relative" onPointerMove={near} onPointerDown={near} onPointerLeave={() => setHover(null)}>
+      <SmoothArea values={pts} down={down} color={color} w={560} h={130} grid fill={0.3} strokeWidth={2} className="h-[130px]" label={label} />
+      {/* the scale: the top of the day and the zero line (the curve starts at zero) */}
+      <span aria-hidden className="spark-axis" style={{ top: `${(1 - 1 / 1.12) * 100 + 1}%` }}>{t('d2.ch.peak', { n: Math.round(top) })}</span>
+      <span aria-hidden className="spark-axis" style={{ bottom: '3%' }}>0</span>
+      <span aria-hidden className="spark-times"><span>{ageLabel(spanMin)}</span>{spanMin >= 60 && <span>{ageLabel(spanMin / 2)}</span>}<span>{t('spark.now')}</span></span>
+      {hover != null && (
+        <>
+          <span aria-hidden className="spark-cursor" style={{ left: `${(hover / Math.max(1, pts.length - 1)) * 100}%` }} />
+          <span className="spark-tip" role="status" style={{ left: `${Math.max(12, Math.min(88, (hover / Math.max(1, pts.length - 1)) * 100))}%` }}><b>{Math.round(pts[hover])}</b> · {hh}</span>
+        </>
+      )}
+    </div>
+  );
 }
 
 /** «−24 ч» / «−90 мин»: how long ago a point of the chart is */
