@@ -53,6 +53,7 @@ interface language; the GitHub release text is built from the section of the ver
 - 🔥 При обновлении страницы в виде Ember на секунду мелькал другой шрифт: Manrope подгружался только после запуска скрипта, теперь он идёт вместе со стилями | On a reload in the Ember look another typeface showed for a second: Manrope was fetched only after the script had run, now it comes with the styles
 
 ### 🔧 Прочее | Other
+- 🛠 Тесты: страница «Баны» (список, история, заявка, решение модератора) и подсказки новому игроку; порог покрытия функций снова выдержан | Tests: the «Bans» page (the list, the history, an appeal, a moderator's decision) and the hints for a new player; the coverage floor of functions holds again
 - 📦 Зависимости обновлены в пределах своих версий: better-sqlite3 13.1, nodemailer 10.5, gamedig 5.3, tar 7.5.23 (бэкенд); discord.js 14.28, ws 8.23 (бот); vite 8.3.8, vitest 5.1, tailwindcss 4.3.5, react-query 5.107, oxlint 1.93 (панель); крупные скачки (undici 8, @types/node 26, действия cosign-installer 4 и attest-build-provenance 4) отложены до отдельной проверки | Dependencies updated within their ranges: better-sqlite3 13.1, nodemailer 10.5, gamedig 5.3, tar 7.5.23 (backend); discord.js 14.28, ws 8.23 (bot); vite 8.3.8, vitest 5.1, tailwindcss 4.3.5, react-query 5.107, oxlint 1.93 (panel); the big jumps (undici 8, @types/node 26, the actions cosign-installer 4 and attest-build-provenance 4) wait for a check of their own
 
 ## 1.2.20 · 10.11.2026
