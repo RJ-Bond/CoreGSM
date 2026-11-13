@@ -20,6 +20,8 @@ import '../styles/profile.css';
 interface PlayerCard {
   /** a ban in force (the reason and the end) */
   ban?: { reason: string; until: number; createdAt: number } | null;
+  /** the other nicknames of the same person (a public profile with statistics only) */
+  aliases?: string[];
   name: string;
   firstSeen: number;
   lastSeen: number | null;
@@ -92,6 +94,7 @@ export default function PlayerPage({ name }: { name: string }) {
             ) : p.lastSeen ? <span>{t('d2.pl.was', { ago: ago(p.lastSeen) })}</span> : null}
             {rank && <span className="pl-rank">{rank.name}</span>}
             <span>{t('d2.pl.first', { when: fmtDateTime(p.firstSeen) })}</span>
+            {(p.aliases?.length ?? 0) > 0 && <span>{t('pl.aliases')}{' '}{(p.aliases ?? []).map((n, i) => <span key={n}>{i > 0 ? ', ' : ''}<a href={`/player/${encodeURIComponent(n)}`} className="underline decoration-dotted underline-offset-2">{n}</a></span>)}</span>}
           </p>
           {p.ban && (
             <p className="pl-banned" role="status">

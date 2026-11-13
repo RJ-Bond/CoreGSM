@@ -350,12 +350,12 @@ export function durText(ms: number): string {
  */
 export function useQuickLongPress() {
   const timer = useRef(0);
-  const fired = useRef(false);
+  const firedAt = useRef(0);
   const from = useRef<{ x: number; y: number } | null>(null);
   const clear = () => window.clearTimeout(timer.current);
   return {
     onTouchStart: (e: React.TouchEvent<HTMLElement>) => {
-      fired.current = false;
+      firedAt.current = 0;
       const el = e.currentTarget;
       const p = e.touches[0];
       from.current = p ? { x: p.clientX, y: p.clientY } : null;
@@ -363,7 +363,7 @@ export function useQuickLongPress() {
       timer.current = window.setTimeout(() => {
         const b = el.querySelector<HTMLElement>('[data-quick-menu] button');
         if (!b) return;
-        fired.current = true;
+        firedAt.current = Date.now();
         haptic('ok');
         b.click();
       }, 520);
@@ -373,9 +373,11 @@ export function useQuickLongPress() {
       const s = from.current;
       if (p && s && Math.hypot(p.clientX - s.x, p.clientY - s.y) > 10) clear();
     },
-    onTouchEnd: clear,
+    // the release after a long touch must not become a click (it would open the server and close the menu that has just opened)
+    onTouchEnd: (e: React.TouchEvent<HTMLElement>) => { clear(); if (firedAt.current && e.cancelable) e.preventDefault(); },
     onTouchCancel: clear,
-    onContextMenu: (e: React.MouseEvent) => { if (fired.current) e.preventDefault(); },
-    swallow: () => { const f = fired.current; fired.current = false; return f; },
+    onContextMenu: (e: React.MouseEvent) => { if (firedAt.current) e.preventDefault(); },
+    // a click that still comes within a moment of the long touch is not a tap (the menu button's own click is one of them)
+    swallow: () => firedAt.current !== 0 && Date.now() - firedAt.current < 1500,
   };
 }

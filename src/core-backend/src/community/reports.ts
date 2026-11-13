@@ -12,6 +12,7 @@ import { z } from 'zod';
 import { allow, auth, type AuthedRequest } from '../security/auth.js';
 import { db } from '../db.js';
 import { param } from '../http.js';
+import { logMod, putBan } from '../gamenews/gameNewsModLog.js';
 
 export const router = express.Router();
 const staff = allow('moderation');
@@ -110,14 +111,31 @@ router.get('/api/reports/count', staff, (_req, res) => {
   res.json({ open: (db.prepare("SELECT COUNT(*) AS n FROM player_reports WHERE status = 'open'").get() as { n: number }).n });
 });
 
+/** the game account of a nickname: a linked account first, then the last entry of the log of the moderation that knew it */
+export function platformIdOfNick(nick: string): string | null {
+  const a = db.prepare("SELECT platform_id FROM game_identities WHERE ulower(nick) = ulower(?) LIMIT 1").get(nick) as { platform_id: string } | undefined;
+  if (a?.platform_id) return a.platform_id;
+  const l = db.prepare("SELECT platform_id FROM game_mod_log WHERE ulower(nick) = ulower(?) AND platform_id <> '' ORDER BY id DESC LIMIT 1").get(nick) as { platform_id: string } | undefined;
+  return l?.platform_id || null;
+}
+
 router.patch('/api/reports/:id', param('id'), staff, (req: AuthedRequest, res) => {
-  const b = z.object({ status: z.enum(['resolved', 'dismissed']), note: z.string().trim().max(300).default('') }).safeParse(req.body);
+  // `banHours`: the decision is also a ban (hours; 0 = for ever); it needs the game account of the player, which the panel may not know
+  const b = z.object({ status: z.enum(['resolved', 'dismissed']), note: z.string().trim().max(300).default(''), banHours: z.number().int().min(0).max(8760).optional() }).safeParse(req.body);
   if (!b.success) return res.status(400).json({ error: 'Укажите решение; комментарий — до 300 символов' });
   const id = Number(req.params.id);
   const row = db.prepare('SELECT reporter_id, nick, status FROM player_reports WHERE id = ?').get(id) as { reporter_id: number; nick: string; status: string } | undefined;
   if (!row) return res.status(404).json({ error: 'Жалоба не найдена' });
   if (row.status !== 'open') return res.status(409).json({ error: 'Жалоба уже рассмотрена' });
   const now = Date.now();
+  if (b.data.banHours !== undefined && b.data.status === 'resolved') {
+    const pid = platformIdOfNick(row.nick);
+    if (!pid) return res.status(409).json({ error: 'Игровой аккаунт игрока панели неизвестен: выдайте бан в игре командой .ban' });
+    const until = b.data.banHours === 0 ? 0 : now + b.data.banHours * 3_600_000;
+    const reason = b.data.note || 'по жалобе';
+    putBan({ platformId: pid, nick: row.nick, reason, admin: req.user!.username, until, kind: 'ban', serverId: 0, scope: 'all' }, now);
+    logMod({ kind: 'ban', platformId: pid, nick: row.nick, admin: req.user!.username, reason, serverId: 0, until }, now);
+  }
   db.prepare('UPDATE player_reports SET status = ?, handled_by = ?, handled_at = ?, note = ? WHERE id = ?').run(b.data.status, req.user!.username, now, b.data.note, id);
   db.prepare('INSERT INTO user_notifications (user_id, ts, kind, server_id, text) VALUES (?, ?, ?, NULL, ?)').run(row.reporter_id, now, 'report_done', verdictText(b.data.status, row.nick, b.data.note));
   res.json({ ok: true });

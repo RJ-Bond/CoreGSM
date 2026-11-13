@@ -86,7 +86,7 @@ export function banHistory(opts: { staff: boolean; now: number; limit?: number; 
     }));
 }
 
-interface AppealRow { id: number; ts: number; nick: string; platform_id: string; text: string; contact: string; status: string; note: string; decided_by: string | null; decided_at: number | null }
+interface AppealRow { user_id?: number | null; id: number; ts: number; nick: string; platform_id: string; text: string; contact: string; status: string; note: string; decided_by: string | null; decided_at: number | null }
 
 const appealOut = (r: AppealRow) => ({ id: r.id, at: r.ts, nick: r.nick, platformId: r.platform_id, text: r.text, contact: r.contact, status: r.status, note: r.note, decidedBy: r.decided_by, decidedAt: r.decided_at });
 
@@ -111,7 +111,8 @@ export function registerBanExtras(app: Express): void {
     if (!ban) return res.status(404).json({ error: 'Для этого ника нет действующего бана' });
     const open = db.prepare("SELECT id FROM ban_appeals WHERE ulower(nick) = ulower(?) AND status = 'open'").get(ban.nick);
     if (open) return res.status(409).json({ error: 'Заявка на этот ник уже отправлена и ждёт ответа' });
-    const info = db.prepare('INSERT INTO ban_appeals (ts, nick, platform_id, text, contact) VALUES (?, ?, ?, ?, ?)').run(now, ban.nick, ban.platform_id, b.data.text, b.data.contact ?? '');
+    const uid = (req as AuthedRequest).user?.id ?? null;
+    const info = db.prepare('INSERT INTO ban_appeals (ts, nick, platform_id, text, contact, user_id) VALUES (?, ?, ?, ?, ?, ?)').run(now, ban.nick, ban.platform_id, b.data.text, b.data.contact ?? '', uid);
     for (const id of alertUsers()) pushLater(id, { title: 'Заявка на разбан', body: `${ban.nick}: ${b.data.text.slice(0, 120)}`, url: '/admin/gamenews/players', tag: 'ban-appeal' });
     res.status(201).json({ ok: true, id: Number(info.lastInsertRowid) });
   });
@@ -134,6 +135,13 @@ export function registerBanExtras(app: Express): void {
     if (b.data.status === 'accepted' && b.data.unban && row.platform_id) {
       const gone = removeBan(row.platform_id);
       if (gone) logMod({ kind: 'unban', platformId: gone.platform_id, nick: gone.nick, admin: who, reason: 'по заявке', serverId: gone.server_id }, now);
+    }
+    // a signed-in author hears the answer: the bell and the devices
+    if (row.user_id) {
+      const lifted = b.data.status === 'accepted' && b.data.unban && !!row.platform_id;
+      const text = b.data.status === 'accepted' ? `Заявка на разбан принята${lifted ? ': бан снят' : ''}.` : `Заявка на разбан отклонена${b.data.note ? `: ${b.data.note}` : '.'}`;
+      db.prepare('INSERT INTO user_notifications (user_id, ts, kind, server_id, text, url) VALUES (?, ?, ?, NULL, ?, ?)').run(row.user_id, now, 'ban_appeal', text, '/bans');
+      pushLater(row.user_id, { title: 'Заявка на разбан', body: text, url: '/bans', tag: `ban-appeal-${row.id}` });
     }
     res.json({ ok: true });
   });

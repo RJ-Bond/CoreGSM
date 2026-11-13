@@ -135,3 +135,57 @@ describe('api: the history, the appeals and the alerts of the bans', () => {
     assert.equal((r.body as { ban: { reason: string } | null }).ban?.reason, 'aimbot');
   });
 });
+
+describe('api: the answer to an appeal reaches a signed-in author', () => {
+  let api: Api;
+  let admin = '';
+  before(async () => {
+    api = await startBackend();
+    admin = await setupAdmin(api);
+    const { default: Database } = await import('better-sqlite3');
+    const d = new Database(api.dbPath);
+    d.prepare("INSERT INTO game_bans (platform_id, nick, reason, admin, created_at, until, kind, server_id, scope) VALUES ('p7', 'Sorry', 'spam', 'Boss', ?, 0, 'ban', 0, 'all')").run(Date.now());
+    d.close();
+  });
+  after(async () => { await api.stop(); });
+
+  it('puts the decision into the bell of the person who sent the appeal while signed in', async () => {
+    const reg = await api.call('POST', '/api/auth/register', { body: { username: 'appealer', password: 'Passw0rd!long', acceptRules: true } });
+    const me = (reg.body as { token: string }).token;
+    assert.equal((await api.call('POST', '/api/bans/appeals', { token: me, body: { nick: 'Sorry', text: 'It will not happen again, I promise' } })).status, 201);
+    const list = (await api.call('GET', '/api/bans/appeals', { token: admin })).body as { id: number }[];
+    assert.equal((await api.call('PATCH', `/api/bans/appeals/${list[0].id}`, { token: admin, body: { status: 'accepted', unban: true } })).status, 200);
+    const inbox = (await api.call('GET', '/api/me/notifications', { token: me })).body as { items?: { kind: string; text: string }[] } | { kind: string; text: string }[];
+    const items = Array.isArray(inbox) ? inbox : inbox.items ?? [];
+    assert.ok(items.some((n) => n.kind === 'ban_appeal' && /бан снят/.test(n.text)), JSON.stringify(items));
+  });
+});
+
+describe('api: a decision on a report can also be a ban', () => {
+  let api: Api;
+  let admin = '';
+  let player = '';
+  before(async () => {
+    api = await startBackend();
+    admin = await setupAdmin(api);
+    player = ((await api.call('POST', '/api/auth/register', { body: { username: 'reporter_x', password: 'Passw0rd!long', acceptRules: true } })).body as { token: string }).token;
+    const { default: Database } = await import('better-sqlite3');
+    const d = new Database(api.dbPath);
+    d.prepare("INSERT INTO game_mod_log (ts, kind, platform_id, nick, admin, reason, server_id, until) VALUES (?, 'kick', 'pg-1', 'Griefer', 'Boss', 'afk', 0, 0)").run(Date.now() - 5000);
+    d.close();
+  });
+  after(async () => { await api.stop(); });
+
+  it('bans a player whose game account is known, and says so when it is not', async () => {
+    for (const nick of ['Griefer', 'Stranger']) assert.equal((await api.call('POST', `/api/players/${nick}/report`, { token: player, body: { reason: 'griefing', text: 'broke my base' } })).status < 300, true);
+    const rows = (await api.call('GET', '/api/reports', { token: admin })).body as { id: number; nick: string }[];
+    const idOf = (n: string) => rows.find((r) => r.nick === n)!.id;
+    const unknown = await api.call('PATCH', `/api/reports/${idOf('Stranger')}`, { token: admin, body: { status: 'resolved', banHours: 24 } });
+    assert.equal(unknown.status, 409);
+    const ok = await api.call('PATCH', `/api/reports/${idOf('Griefer')}`, { token: admin, body: { status: 'resolved', note: 'griefing', banHours: 24 } });
+    assert.equal(ok.status, 200);
+    const list = (await api.call('GET', '/api/bans')).body as { items: { nick: string; reason: string; until: number }[] };
+    const b = list.items.find((x) => x.nick === 'Griefer');
+    assert.ok(b && b.reason === 'griefing' && b.until > Date.now(), JSON.stringify(list.items));
+  });
+});

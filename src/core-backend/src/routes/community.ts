@@ -20,7 +20,7 @@ import { activeBanByNick } from '../gamenews/gameNewsModLog.js';
 import { avatarFor } from '../images/avatars.js';
 import { db, EFFECTIVE_NAME, getSetting } from '../db.js';
 import { localParts } from '../admin/localTime.js';
-import { playAchievements, vrRankIdFor } from '../profile/profile.js';
+import { aliasesOfNick, playAchievements, vrRankIdFor } from '../profile/profile.js';
 import { seasonAchievements } from '../profile/seasons.js';
 
 export const router = express.Router();
@@ -213,7 +213,7 @@ router.get('/api/players/:name', viewer, (req, res) => {
   if (!card) return res.status(404).json({ error: 'Игрок не найден' });
   // a ban in force is shown on the card (the reason and the end, as on the page of bans)
   const b = activeBanByNick(nick, Date.now());
-  res.json({ ...card, ban: b ? { reason: b.reason, until: b.until, createdAt: b.created_at } : null });
+  res.json({ ...card, ban: b ? { reason: b.reason, until: b.until, createdAt: b.created_at } : null, aliases: aliasesOfNick(nick) });
 });
 
 /**

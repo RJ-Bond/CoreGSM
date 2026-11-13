@@ -429,3 +429,5 @@ a.cm-time:hover { color: rgb(var(--link)); }
 }
 /* three lines of a headline before the dots (polish.css allows two) */
 .nb .nb-title { -webkit-line-clamp: 3; line-clamp: 3; overflow-wrap: anywhere; }
+.nw-cal-text { margin: 0 0 .5rem; font-size: .875rem; font-weight: 600; color: rgb(var(--mute)); }
+.nw-cal-links { display: flex; flex-wrap: wrap; gap: .5rem; padding-bottom: .5rem; }

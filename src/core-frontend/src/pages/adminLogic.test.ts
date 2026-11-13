@@ -83,3 +83,13 @@ describe('the groups of the journal', () => {
     expect(groupAudit([])).toEqual([]);
   });
 });
+
+describe('the warnings of the health page in the score', () => {
+  it('cost a few points each, at most fifteen, and nothing without them', () => {
+    expect(healthScore({ ...fine, flags: 0 }).score).toBe(100);
+    const one = healthScore({ ...fine, flags: 1 });
+    expect(one.score).toBe(93);
+    expect(one.reasons.map((r) => r.id)).toContain('flags');
+    expect(healthScore({ ...fine, flags: 5 }).score).toBe(85);
+  });
+});

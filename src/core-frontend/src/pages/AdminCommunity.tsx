@@ -173,10 +173,12 @@ function ReportsAdmin() {
   const [list, setList] = useState<ReportRow[] | null>(null);
   const [error, setError] = useState('');
   const [notes, setNotes] = useState<Record<number, string>>({});
+  // the ban that goes with the decision: '' = none, else hours (0 = for ever)
+  const [bans, setBans] = useState<Record<number, string>>({});
   const load = () => api<ReportRow[]>(`/reports?status=${closed ? 'closed' : 'open'}`).then((l) => { setList(l); setError(''); }).catch((e: Error) => setError(e.message));
   useEffect(() => { setList(null); void load(); }, [closed]);
   const close = (id: number, status: 'resolved' | 'dismissed') =>
-    api(`/reports/${id}`, 'PATCH', { status, note: (notes[id] ?? '').trim() })
+    api(`/reports/${id}`, 'PATCH', { status, note: (notes[id] ?? '').trim(), ...(status === 'resolved' && (bans[id] ?? '') !== '' ? { banHours: Number(bans[id]) } : {}) })
       .then(() => { toast(status === 'resolved' ? t('d2.ac.rep.resolved') : t('d2.ac.rep.dismissed')); void load(); })
       .catch((e: Error) => setError(e.message));
   return (
@@ -201,7 +203,14 @@ function ReportsAdmin() {
               {r.status === 'open' ? (
                 <div className="mt-2.5 flex flex-wrap items-center gap-2">
                   <input className="input min-w-48 flex-1" maxLength={300} placeholder={t('d2.ac.rep.notePh')} aria-label={t('d2.ac.rep.note')} value={notes[r.id] ?? ''} onChange={(e) => setNotes((n) => ({ ...n, [r.id]: e.target.value }))} />
-                  <button type="button" className="btn btn-success btn-sm" onClick={() => void close(r.id, 'resolved')}>{t('d2.ac.rep.actionTaken')}</button>
+                  <select className="input w-auto! py-1.5!" aria-label={t('d2.ac.rep.banAria')} value={bans[r.id] ?? ''} onChange={(e) => setBans((b) => ({ ...b, [r.id]: e.target.value }))}>
+                    <option value="">{t('d2.ac.rep.noBan')}</option>
+                    <option value="24">{t('d2.ac.rep.ban1d')}</option>
+                    <option value="168">{t('d2.ac.rep.ban7d')}</option>
+                    <option value="720">{t('d2.ac.rep.ban30d')}</option>
+                    <option value="0">{t('d2.ac.rep.banEver')}</option>
+                  </select>
+                  <button type="button" className="btn btn-success btn-sm" onClick={() => void close(r.id, 'resolved')}>{(bans[r.id] ?? '') !== '' ? t('d2.ac.rep.actionBan') : t('d2.ac.rep.actionTaken')}</button>
                   <button type="button" className="btn btn-soft btn-sm" onClick={() => void close(r.id, 'dismissed')}>{t('d2.ac.dismiss')}</button>
                 </div>
               ) : (

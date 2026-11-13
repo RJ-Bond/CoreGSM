@@ -547,15 +547,17 @@ function HeroTile({ s, idx, uptime, downSince, fav, onFav, onOpen, rx, reason, s
   const r = reactionOf(rx, s.id);
   const emb = emblemStyle(s.coverUrl, s.game);
   const cover = coverUrlOf(s.coverUrl, s.game, false);
+  const { swallow, ...lp } = useQuickLongPress();
   return (
     <article
+      {...lp}
       className={`hero3 tile-in tile-hover relative cursor-pointer overflow-hidden rounded-ui-xl text-white shadow-soft ${s.online ? '' : 'is-down'} ${reason === 'attention' ? 'hero-attn' : ''}`}
       style={{
         ...stagger(idx),
         ['--gc' as string]: gameColor(s.game),
         boxShadow: `${select?.has(s.id) ? '0 0 0 3px rgb(var(--brand)), ' : reason === 'attention' ? `0 0 0 3px rgb(var(${s.online ? '--warn' : '--bad'}) / .85), ` : ''}0 1px 2px rgba(20,24,40,.06), 0 18px 40px -16px ${c1}66`,
       }}
-      onClick={select?.on ? () => select.toggle(s.id) : onOpen}
+      onClick={select?.on ? () => select.toggle(s.id) : () => { if (!swallow()) onOpen(); }}
     >
       {select?.on && <CardCheck s={s} select={select} className="left-2 top-2" />}
 

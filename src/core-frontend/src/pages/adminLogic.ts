@@ -9,6 +9,8 @@ export interface HealthInput {
   updateAvailable: boolean;
   backupAgeMs: number | null; // null — no copies at all
   backupsKnown: boolean;
+  /** how many warnings the health page shows now */
+  flags?: number;
 }
 
 export interface HealthReason { id: string; cost: number; tone: 'bad' | 'warn' | 'info' }
@@ -23,6 +25,8 @@ export function healthScore(h: HealthInput): { score: number; reasons: HealthRea
   if (h.certDays != null && h.certDays <= 14) reasons.push({ id: 'cert', cost: h.certDays <= 0 ? 25 : 10, tone: h.certDays <= 0 ? 'bad' : 'warn' });
   if (h.backupsKnown && (h.backupAgeMs == null || h.backupAgeMs > WEEK)) reasons.push({ id: 'backup', cost: 10, tone: 'warn' });
   if (h.pending > 0) reasons.push({ id: 'pending', cost: Math.min(10, 3 + h.pending), tone: 'warn' });
+  // the warnings of the health page (a slow polling round, a low disk, a growing database, an offline bot)
+  if (h.flags && h.flags > 0) reasons.push({ id: 'flags', cost: Math.min(15, 7 * h.flags), tone: 'warn' });
   if (h.updateAvailable) reasons.push({ id: 'update', cost: 3, tone: 'info' });
   const score = Math.max(0, 100 - reasons.reduce((n, r) => n + r.cost, 0));
   return { score, reasons };

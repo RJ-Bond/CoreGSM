@@ -203,6 +203,29 @@ await scenario('11 phone: the bottom bar returns to the place left in a section'
   await phone.close();
 });
 
+await scenario('15 phone: a long touch on a server row opens its menu and does not open the server', async () => {
+  const phone = await browser.newContext({ viewport: { width: 390, height: 800 }, locale: 'ru-RU', hasTouch: true, isMobile: true });
+  await phone.addInitScript(() => { try { localStorage.setItem('coregsm_tour_done', '1'); } catch { /* ignore */ } });
+  const pp = await phone.newPage();
+  // a list of rows (not the single big card) needs a second server
+  ok(await call('/api/servers', { method: 'POST', token: state.adminToken, body: { name: 'Second e2e server', game: 'rust', host: '127.0.0.1', port: 28016 } }), 'second server');
+  await pp.goto(panel + '/servers', { waitUntil: 'networkidle' });
+  const row = pp.locator('article.srv-row').first();
+  await row.waitFor({ timeout: 10000 });
+  // the row is below the big card: it has to be on the screen for a touch to reach it
+  await row.scrollIntoViewIfNeeded();
+  const box = await row.boundingBox();
+  check(box, 'the row has no box');
+  const cdp = await phone.newCDPSession(pp);
+  const point = { x: Math.round(box.x + box.width / 2), y: Math.round(box.y + box.height / 2), id: 1 };
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [point] });
+  await pp.waitForTimeout(800);
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  await pp.getByText('Скопировать адрес').first().waitFor({ timeout: 5000 });
+  check(new URL(pp.url()).pathname === '/servers', 'the long touch also opened the server: ' + pp.url());
+  await phone.close();
+});
+
 await scenario('12 a news item that names a server shows on the page of that server', async () => {
   const servers = ok(await call('/api/servers'), 'servers');
   const sid = servers[0].id;

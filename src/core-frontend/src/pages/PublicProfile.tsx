@@ -108,6 +108,7 @@ export default function PublicProfilePage({ username }: { username: string }) {
                 </a>
               )}
               {p.gameNick && <span className="pf-meta"><IcoGamepad />{t('pub.nick', { nick: p.gameNick })}</span>}
+              {(p.formerNicks?.length ?? 0) > 0 && <span className="pf-meta">{t('pub.formerNicks', { nicks: (p.formerNicks ?? []).join(', ') })}</span>}
               {Number.isFinite(since) && <span className="pf-meta"><IcoCalendar />{t('pub.since', { date: fmtDate(since) })}</span>}
             </div>
           </div>

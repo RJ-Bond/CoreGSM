@@ -19,6 +19,7 @@ interface Raw {
   bot: BotStatus | null;
   cert: CertInfo | null;
   audit: AuditRow[] | null;
+  flags: { kind: string; text: string }[] | null;
 }
 
 interface Attention { id: string; tone: 'bad' | 'warn' | 'info'; text: string; href: string }
@@ -61,10 +62,11 @@ function usePreviousVisit(): number | null {
 }
 
 const REASON_HREF: Record<string, string> = {
-  down: '/admin/servers', bot: '/admin/settings/bot', cert: '/admin/system', backup: '/admin/settings/updates', pending: '/admin/users', update: '/admin/settings/updates',
+  flags: '/admin/health', down: '/admin/servers', bot: '/admin/settings/bot', cert: '/admin/system', backup: '/admin/settings/updates', pending: '/admin/users', update: '/admin/settings/updates',
 };
 
 const REASON_TEXT: Record<string, TKey> = {
+  flags: 'd2.ao.r.flags',
   down: 'd2.ao.r.down',
   bot: 'd2.ao.r.bot',
   cert: 'd2.ao.r.cert',
@@ -166,12 +168,12 @@ export default function AdminOverview() {
       api<BackupInfo>('/backups'),
       api<UpdateInfo>('/update/status'),
       api<BotStatus>('/bot/status'),
-      api<{ cert?: CertInfo }>('/system'),
+      api<{ cert?: CertInfo; flags?: { kind: string; text: string }[] }>('/system'),
       api<AuditRow[]>('/audit?limit=30'),
     ]);
     setRaw({
       servers: ok(servers), overview: ok(overview), users: ok(users), backups: ok(backups), update: ok(update), bot: ok(bot),
-      cert: ok(sys)?.cert ?? null, audit: ok(audit),
+      cert: ok(sys)?.cert ?? null, audit: ok(audit), flags: ok(sys)?.flags ?? null,
     });
   };
   usePoll(load, 30_000);
@@ -188,6 +190,7 @@ export default function AdminOverview() {
     const names = down.slice(0, 3).map((s) => s.name).join(', ');
     attention.push({ id: 'down', tone: 'bad', text: t('adm.ov.down', { names }) + (down.length > 3 ? t('adm.ov.downMore', { k: down.length - 3 }) : ''), href: '/admin/servers' });
   }
+  for (const f of raw?.flags ?? []) attention.push({ id: `flag-${f.kind}`, tone: 'warn', text: f.text, href: '/admin/health' });
   if (raw?.bot?.state === 'error') attention.push({ id: 'bot', tone: 'bad', text: t('adm.ov.botErr'), href: '/admin/settings/bot' });
   if (raw?.cert && raw.cert.daysLeft != null && raw.cert.daysLeft <= 14) {
     attention.push({ id: 'cert', tone: raw.cert.daysLeft <= 0 ? 'bad' : 'warn', text: raw.cert.daysLeft <= 0 ? t('adm.ov.certGone') : t('adm.ov.certSoon', { k: raw.cert.daysLeft }), href: '/admin/system' });
@@ -203,7 +206,7 @@ export default function AdminOverview() {
   const series = points.map((p) => p.players);
   const health = healthScore({
     servers: servers.length, down: down.length, botError: raw?.bot?.state === 'error', certDays: raw?.cert?.daysLeft ?? null,
-    pending, updateAvailable: !!raw?.update?.available, backupAgeMs: lastBackup ? Date.now() - lastBackup : null, backupsKnown: !!raw?.backups,
+    pending, flags: raw?.flags?.length ?? 0, updateAvailable: !!raw?.update?.available, backupAgeMs: lastBackup ? Date.now() - lastBackup : null, backupsKnown: !!raw?.backups,
   });
   const avatarOf = (name: string) => raw?.users?.find((u) => u.username === name)?.avatarUrl ?? null;
   const versionLabel = raw?.update?.currentLabel || (raw?.update?.current ? raw.update.current.slice(0, 7) : '');

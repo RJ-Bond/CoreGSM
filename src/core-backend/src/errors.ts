@@ -24,6 +24,7 @@ export const ERRORS = {
   history_entry_not_found: 'Запись не найдена',
   history_not_revertible: 'Эту настройку вернуть нельзя',
   no_active_ban: 'Для этого ника нет действующего бана',
+  game_account_unknown: 'Игровой аккаунт игрока панели неизвестен: выдайте бан в игре командой .ban',
   appeal_exists: 'Заявка на этот ник уже отправлена и ждёт ответа',
   appeal_not_found: 'Заявка на разбан не найдена',
   too_many_attempts: 'Слишком много попыток. Подождите 10 минут.',

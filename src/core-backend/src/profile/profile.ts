@@ -184,7 +184,11 @@ export function registerProfile(deps: {
        ON CONFLICT(user_id) DO UPDATE SET game_nick = excluded.game_nick, bio = excluded.bio, public_profile = excluded.public_profile, privacy = excluded.privacy`,
     ).run(userId(req), next.gameNick, next.bio, next.publicProfile ? 1 : 0, JSON.stringify(next.privacy));
     if (JSON.stringify(cur) !== JSON.stringify(next)) logAccount(req, userId(req), 'profile_changed');
-    if (next.gameNick !== cur.gameNick) checkNickNow(userId(req), next.gameNick);
+    if (next.gameNick !== cur.gameNick) {
+      // the nickname that was left stays in the history of the account (the page of a player names it as «also played as»)
+      if (cur.gameNick) db.prepare('INSERT OR REPLACE INTO nick_history (user_id, nick, last_at) VALUES (?, ?, ?)').run(userId(req), cur.gameNick, Date.now());
+      checkNickNow(userId(req), next.gameNick);
+    }
     res.json(next);
   });
 
@@ -308,6 +312,7 @@ export function registerProfile(deps: {
       bannerUrl: bannerUrlOf(u.id),
       bannerPreset: bannerPresetOf(u.id),
       gameNick: p.gameNick,
+      formerNicks: p.privacy.stats ? formerNicksOf(u.id, p.gameNick) : [],
       bio: p.bio,
       memberSince: u.created_at,
       privacy: p.privacy,
@@ -336,4 +341,29 @@ export function registerProfile(deps: {
             .map((a) => ({ id: a.id, title: a.title, image: a.image })),
     });
   });
+}
+
+/** the nicknames an account had before the current one, the latest change first */
+export function formerNicksOf(userId: number, current: string): string[] {
+  return (db.prepare('SELECT nick FROM nick_history WHERE user_id = ? ORDER BY last_at DESC LIMIT 8').all(userId) as { nick: string }[])
+    .map((r) => r.nick)
+    .filter((n) => n.toLowerCase() !== current.toLowerCase());
+}
+
+/**
+ * The other names of the person who plays under `nick` (now or before): only when their profile is public and shows the statistics.
+ * Empty for a nickname that no account has claimed.
+ */
+export function aliasesOfNick(nick: string): string[] {
+  const owner = db
+    .prepare(
+      `SELECT p.user_id AS id, p.game_nick AS nick, p.privacy FROM user_player p JOIN users u ON u.id = p.user_id
+       WHERE u.status = 'active' AND p.public_profile = 1 AND (ulower(p.game_nick) = ulower(?) OR p.user_id IN (SELECT user_id FROM nick_history WHERE nick = ? COLLATE NOCASE)) LIMIT 1`,
+    )
+    .get(nick, nick) as { id: number; nick: string; privacy: string } | undefined;
+  if (!owner) return [];
+  try {
+    if ((JSON.parse(owner.privacy) as { stats?: boolean }).stats === false) return [];
+  } catch { /* an unreadable setting counts as the default: shown */ }
+  return [owner.nick, ...formerNicksOf(owner.id, owner.nick)].filter((n) => n && n.toLowerCase() !== nick.toLowerCase());
 }

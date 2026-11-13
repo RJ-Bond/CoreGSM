@@ -45,3 +45,17 @@
 :root[data-ember='1'] .bn-appeal { border: 0; border-radius: var(--emb-r-card); box-shadow: var(--shadow-2); }
 .pl-banned { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem .8rem; margin: .6rem 0 0; padding: .55rem .9rem; border-radius: var(--r-md); background: rgb(var(--badbg)); color: rgb(var(--bad)); font-weight: 650; }
 .pl-banned a { margin-left: auto; text-decoration: underline; }
+
+/* a phone: compact cards, the reason in two lines, smaller marks */
+@media (max-width: 560px) {
+  .bn-list { gap: .45rem; }
+  .bn-row { gap: .6rem; padding: .7rem .8rem; }
+  .bn-ava { width: 2rem; height: 2rem; font-size: .875rem; }
+  .bn-nick { font-size: 1rem; }
+  .bn-when, .bn-until { font-size: .75rem; }
+  .bn-reason { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-size: .9375rem; line-height: 1.4; }
+  .bn-chip { padding: .1rem .5rem; font-size: .75rem; }
+  .bn-stats { gap: .5rem; }
+  .bn-stat { padding: .6rem .75rem; }
+  .bn-appeal-head { padding: .75rem .9rem; }
+}

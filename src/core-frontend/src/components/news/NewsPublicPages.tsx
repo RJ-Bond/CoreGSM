@@ -361,6 +361,15 @@ export function NewsListPage() {
                 </a>
               </AsideSection>
             )}
+            {(soon || upcoming.length > 0) && (
+              <AsideSection id="cal" title={t('nw.cal')} wide={wide}>
+                <p className="nw-cal-text">{t('nw.cal.text')}</p>
+                <div className="nw-cal-links">
+                  <a className="btn btn-soft btn-sm" href={`webcal://${window.location.host}/api/events.ics`}>{t('nw.cal.subscribe')}</a>
+                  <a className="btn btn-ghost btn-sm" href="/api/events.ics" download="coregsm-events.ics">{t('nw.cal.download')}</a>
+                </div>
+              </AsideSection>
+            )}
             {upcoming.length > 0 && (
               <AsideSection id="works" title={t('nw.works')} wide={wide}>
                 <ul className="nw-side-list nw-works">

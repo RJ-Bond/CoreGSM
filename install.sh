@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="ec59d0708606"
+COREGSM_BUILD="5cf4cfe35638"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.2.34"
+COREGSM_VERSION="1.2.35"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -20880,6 +20880,92 @@ export async function sendPush(t: PushTarget, message: Record<string, unknown>, 
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/community"
+  cat > "$APP_DIR/core-backend/src/community/calendar.ts" << '__COREGSM_EOF__'
+/**
+ * The calendar of the community as a feed for any calendar program (Google Calendar, Apple, Thunderbird):
+ *   GET /api/events.ics   the news with a countdown that is still ahead (events, wipes) and the planned maintenance
+ * Whoever may open the panel may subscribe (a closed panel: the feed needs a sign-in, which a calendar program cannot give).
+ * Repeating maintenance windows are not unrolled: only windows that have no repeat are listed.
+ */
+import type { Express } from 'express';
+import { db } from '../db.js';
+import { viewer } from '../security/auth.js';
+import { publicBase } from '../admin/site.js';
+
+export interface CalEvent { uid: string; start: number; end: number; summary: string; description?: string; url?: string }
+
+const esc = (s: string) => s.replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\r?\n/g, '\\n');
+const stamp = (ms: number) => new Date(ms).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
+
+/** a content line cut into pieces of at most 75 bytes; a continuation starts with a space (RFC 5545) */
+export function fold(line: string): string {
+  const out: string[] = [];
+  let cur = '';
+  let bytes = 0;
+  for (const ch of line) {
+    const n = Buffer.byteLength(ch);
+    if (bytes + n > (out.length ? 74 : 75)) { out.push(cur); cur = ''; bytes = 0; }
+    cur += ch;
+    bytes += n;
+  }
+  out.push(cur);
+  return out.join('\r\n ');
+}
+
+/** the text of the calendar: events in the order of their start */
+export function buildIcs(events: CalEvent[], now: number, name: string): string {
+  const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//CoreGSM//events//EN', 'CALSCALE:GREGORIAN', `X-WR-CALNAME:${esc(name)}`];
+  for (const e of [...events].sort((a, b) => a.start - b.start)) {
+    lines.push('BEGIN:VEVENT', `UID:${e.uid}`, `DTSTAMP:${stamp(now)}`, `DTSTART:${stamp(e.start)}`, `DTEND:${stamp(Math.max(e.end, e.start + 60_000))}`, `SUMMARY:${esc(e.summary)}`);
+    if (e.description) lines.push(`DESCRIPTION:${esc(e.description)}`);
+    if (e.url) lines.push(`URL:${e.url}`);
+    lines.push('END:VEVENT');
+  }
+  lines.push('END:VCALENDAR');
+  return `${lines.map(fold).join('\r\n')}\r\n`;
+}
+
+export function upcomingEvents(now: number): CalEvent[] {
+  const base = publicBase() ?? '';
+  const out: CalEvent[] = [];
+  const news = db
+    .prepare(
+      `SELECT id, payload FROM news WHERE test = 0 AND status IN ('sent', 'edit_queued')
+       AND CAST(json_extract(payload, '$.countdownAt') AS INTEGER) > ? LIMIT 100`,
+    )
+    .all(now) as { id: number; payload: string }[];
+  for (const n of news) {
+    try {
+      const p = JSON.parse(n.payload) as { countdownAt?: number; countdownLabel?: string; embed?: { title?: string; description?: string } };
+      if (typeof p.countdownAt !== 'number') continue;
+      out.push({
+        uid: `news-${n.id}@coregsm`,
+        start: p.countdownAt,
+        end: p.countdownAt + 3_600_000,
+        summary: p.countdownLabel || p.embed?.title || 'Событие',
+        description: (p.embed?.description ?? '').slice(0, 300),
+        url: base ? `${base}/news/${n.id}` : undefined,
+      });
+    } catch { /* a broken payload is skipped */ }
+  }
+  const works = db
+    .prepare(
+      `SELECT m.id, m.name, m.start_ts, m.end_ts, s.name AS server FROM maintenance_windows m LEFT JOIN servers s ON s.id = m.server_id
+       WHERE m.repeat = 'none' AND m.end_ts > ? LIMIT 100`,
+    )
+    .all(now) as { id: number; name: string; start_ts: number; end_ts: number; server: string | null }[];
+  for (const w of works) out.push({ uid: `maint-${w.id}@coregsm`, start: w.start_ts, end: w.end_ts, summary: `Работы: ${w.name || 'обслуживание'}${w.server ? ` (${w.server})` : ''}`, url: base ? `${base}/news` : undefined });
+  return out;
+}
+
+export function registerCalendar(app: Express): void {
+  app.get('/api/events.ics', viewer, (_req, res) => {
+    const now = Date.now();
+    res.set('Content-Type', 'text/calendar; charset=utf-8').set('Cache-Control', 'public, max-age=300').send(buildIcs(upcomingEvents(now), now, 'CoreGSM: события'));
+  });
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/community"
   cat > "$APP_DIR/core-backend/src/community/communityPollLogic.ts" << '__COREGSM_EOF__'
 /** Community polls: validation, counting and text. Pure, covered by tests. */
 export const MAX_OPTIONS = 10;
@@ -21830,6 +21916,7 @@ import { z } from 'zod';
 import { allow, auth, type AuthedRequest } from '../security/auth.js';
 import { db } from '../db.js';
 import { param } from '../http.js';
+import { logMod, putBan } from '../gamenews/gameNewsModLog.js';
 
 export const router = express.Router();
 const staff = allow('moderation');
@@ -21928,14 +22015,31 @@ router.get('/api/reports/count', staff, (_req, res) => {
   res.json({ open: (db.prepare("SELECT COUNT(*) AS n FROM player_reports WHERE status = 'open'").get() as { n: number }).n });
 });
 
+/** the game account of a nickname: a linked account first, then the last entry of the log of the moderation that knew it */
+export function platformIdOfNick(nick: string): string | null {
+  const a = db.prepare("SELECT platform_id FROM game_identities WHERE ulower(nick) = ulower(?) LIMIT 1").get(nick) as { platform_id: string } | undefined;
+  if (a?.platform_id) return a.platform_id;
+  const l = db.prepare("SELECT platform_id FROM game_mod_log WHERE ulower(nick) = ulower(?) AND platform_id <> '' ORDER BY id DESC LIMIT 1").get(nick) as { platform_id: string } | undefined;
+  return l?.platform_id || null;
+}
+
 router.patch('/api/reports/:id', param('id'), staff, (req: AuthedRequest, res) => {
-  const b = z.object({ status: z.enum(['resolved', 'dismissed']), note: z.string().trim().max(300).default('') }).safeParse(req.body);
+  // `banHours`: the decision is also a ban (hours; 0 = for ever); it needs the game account of the player, which the panel may not know
+  const b = z.object({ status: z.enum(['resolved', 'dismissed']), note: z.string().trim().max(300).default(''), banHours: z.number().int().min(0).max(8760).optional() }).safeParse(req.body);
   if (!b.success) return res.status(400).json({ error: 'Укажите решение; комментарий — до 300 символов' });
   const id = Number(req.params.id);
   const row = db.prepare('SELECT reporter_id, nick, status FROM player_reports WHERE id = ?').get(id) as { reporter_id: number; nick: string; status: string } | undefined;
   if (!row) return res.status(404).json({ error: 'Жалоба не найдена' });
   if (row.status !== 'open') return res.status(409).json({ error: 'Жалоба уже рассмотрена' });
   const now = Date.now();
+  if (b.data.banHours !== undefined && b.data.status === 'resolved') {
+    const pid = platformIdOfNick(row.nick);
+    if (!pid) return res.status(409).json({ error: 'Игровой аккаунт игрока панели неизвестен: выдайте бан в игре командой .ban' });
+    const until = b.data.banHours === 0 ? 0 : now + b.data.banHours * 3_600_000;
+    const reason = b.data.note || 'по жалобе';
+    putBan({ platformId: pid, nick: row.nick, reason, admin: req.user!.username, until, kind: 'ban', serverId: 0, scope: 'all' }, now);
+    logMod({ kind: 'ban', platformId: pid, nick: row.nick, admin: req.user!.username, reason, serverId: 0, until }, now);
+  }
   db.prepare('UPDATE player_reports SET status = ?, handled_by = ?, handled_at = ?, note = ? WHERE id = ?').run(b.data.status, req.user!.username, now, b.data.note, id);
   db.prepare('INSERT INTO user_notifications (user_id, ts, kind, server_id, text) VALUES (?, ?, ?, NULL, ?)').run(row.reporter_id, now, 'report_done', verdictText(b.data.status, row.nick, b.data.note));
   res.json({ ok: true });
@@ -23803,6 +23907,7 @@ export const ERRORS = {
   history_entry_not_found: 'Запись не найдена',
   history_not_revertible: 'Эту настройку вернуть нельзя',
   no_active_ban: 'Для этого ника нет действующего бана',
+  game_account_unknown: 'Игровой аккаунт игрока панели неизвестен: выдайте бан в игре командой .ban',
   appeal_exists: 'Заявка на этот ник уже отправлена и ждёт ответа',
   appeal_not_found: 'Заявка на разбан не найдена',
   too_many_attempts: 'Слишком много попыток. Подождите 10 минут.',
@@ -24312,7 +24417,7 @@ export function banHistory(opts: { staff: boolean; now: number; limit?: number; 
     }));
 }
 
-interface AppealRow { id: number; ts: number; nick: string; platform_id: string; text: string; contact: string; status: string; note: string; decided_by: string | null; decided_at: number | null }
+interface AppealRow { user_id?: number | null; id: number; ts: number; nick: string; platform_id: string; text: string; contact: string; status: string; note: string; decided_by: string | null; decided_at: number | null }
 
 const appealOut = (r: AppealRow) => ({ id: r.id, at: r.ts, nick: r.nick, platformId: r.platform_id, text: r.text, contact: r.contact, status: r.status, note: r.note, decidedBy: r.decided_by, decidedAt: r.decided_at });
 
@@ -24337,7 +24442,8 @@ export function registerBanExtras(app: Express): void {
     if (!ban) return res.status(404).json({ error: 'Для этого ника нет действующего бана' });
     const open = db.prepare("SELECT id FROM ban_appeals WHERE ulower(nick) = ulower(?) AND status = 'open'").get(ban.nick);
     if (open) return res.status(409).json({ error: 'Заявка на этот ник уже отправлена и ждёт ответа' });
-    const info = db.prepare('INSERT INTO ban_appeals (ts, nick, platform_id, text, contact) VALUES (?, ?, ?, ?, ?)').run(now, ban.nick, ban.platform_id, b.data.text, b.data.contact ?? '');
+    const uid = (req as AuthedRequest).user?.id ?? null;
+    const info = db.prepare('INSERT INTO ban_appeals (ts, nick, platform_id, text, contact, user_id) VALUES (?, ?, ?, ?, ?, ?)').run(now, ban.nick, ban.platform_id, b.data.text, b.data.contact ?? '', uid);
     for (const id of alertUsers()) pushLater(id, { title: 'Заявка на разбан', body: `${ban.nick}: ${b.data.text.slice(0, 120)}`, url: '/admin/gamenews/players', tag: 'ban-appeal' });
     res.status(201).json({ ok: true, id: Number(info.lastInsertRowid) });
   });
@@ -24360,6 +24466,13 @@ export function registerBanExtras(app: Express): void {
     if (b.data.status === 'accepted' && b.data.unban && row.platform_id) {
       const gone = removeBan(row.platform_id);
       if (gone) logMod({ kind: 'unban', platformId: gone.platform_id, nick: gone.nick, admin: who, reason: 'по заявке', serverId: gone.server_id }, now);
+    }
+    // a signed-in author hears the answer: the bell and the devices
+    if (row.user_id) {
+      const lifted = b.data.status === 'accepted' && b.data.unban && !!row.platform_id;
+      const text = b.data.status === 'accepted' ? `Заявка на разбан принята${lifted ? ': бан снят' : ''}.` : `Заявка на разбан отклонена${b.data.note ? `: ${b.data.note}` : '.'}`;
+      db.prepare('INSERT INTO user_notifications (user_id, ts, kind, server_id, text, url) VALUES (?, ?, ?, NULL, ?, ?)').run(row.user_id, now, 'ban_appeal', text, '/bans');
+      pushLater(row.user_id, { title: 'Заявка на разбан', body: text, url: '/bans', tag: `ban-appeal-${row.id}` });
     }
     res.json({ ok: true });
   });
@@ -30309,6 +30422,7 @@ import { startDbMaintenance } from './admin/dbMaintenance.js';
 import { registerMetrics } from './monitoring/metrics.js';
 import { registerRum } from './monitoring/rum.js';
 import { registerBans } from './gamenews/bansPublic.js';
+import { registerCalendar } from './community/calendar.js';
 import { actorMiddleware } from './actor.js';
 import { router as settingsHistoryRouter } from './admin/settingsHistory.js';
 import { wrap } from './http.js';
@@ -30414,6 +30528,7 @@ installAudit(app);
 registerMetrics(app);
 registerRum(app);
 registerBans(app);
+registerCalendar(app);
 app.use(settingsHistoryRouter);
 
 app.get('/api/health', (_req, res) => {
@@ -31354,6 +31469,26 @@ CREATE INDEX IF NOT EXISTS idx_ban_appeals ON ban_appeals(status, ts);
 CREATE TABLE IF NOT EXISTS ban_alerts (
   user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE
 );`),
+  },
+  {
+    version: 31,
+    name: 'ban_appeals_user',
+    // an appeal sent by a signed-in person remembers who: the answer reaches them in the bell and on their devices
+    up: (db) => db.exec('ALTER TABLE ban_appeals ADD COLUMN user_id INTEGER'),
+  },
+  {
+    version: 32,
+    name: 'nick_history',
+    // the nicknames an account has had: the page of a player can say that the same person played under another name
+    up: (db) =>
+      db.exec(`
+CREATE TABLE IF NOT EXISTS nick_history (
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  nick TEXT NOT NULL,
+  last_at INTEGER NOT NULL,
+  PRIMARY KEY (user_id, nick)
+);
+CREATE INDEX IF NOT EXISTS idx_nick_history_nick ON nick_history(nick COLLATE NOCASE);`),
   },
 ];
 
@@ -36786,7 +36921,11 @@ export function registerProfile(deps: {
        ON CONFLICT(user_id) DO UPDATE SET game_nick = excluded.game_nick, bio = excluded.bio, public_profile = excluded.public_profile, privacy = excluded.privacy`,
     ).run(userId(req), next.gameNick, next.bio, next.publicProfile ? 1 : 0, JSON.stringify(next.privacy));
     if (JSON.stringify(cur) !== JSON.stringify(next)) logAccount(req, userId(req), 'profile_changed');
-    if (next.gameNick !== cur.gameNick) checkNickNow(userId(req), next.gameNick);
+    if (next.gameNick !== cur.gameNick) {
+      // the nickname that was left stays in the history of the account (the page of a player names it as «also played as»)
+      if (cur.gameNick) db.prepare('INSERT OR REPLACE INTO nick_history (user_id, nick, last_at) VALUES (?, ?, ?)').run(userId(req), cur.gameNick, Date.now());
+      checkNickNow(userId(req), next.gameNick);
+    }
     res.json(next);
   });
 
@@ -36910,6 +37049,7 @@ export function registerProfile(deps: {
       bannerUrl: bannerUrlOf(u.id),
       bannerPreset: bannerPresetOf(u.id),
       gameNick: p.gameNick,
+      formerNicks: p.privacy.stats ? formerNicksOf(u.id, p.gameNick) : [],
       bio: p.bio,
       memberSince: u.created_at,
       privacy: p.privacy,
@@ -36938,6 +37078,31 @@ export function registerProfile(deps: {
             .map((a) => ({ id: a.id, title: a.title, image: a.image })),
     });
   });
+}
+
+/** the nicknames an account had before the current one, the latest change first */
+export function formerNicksOf(userId: number, current: string): string[] {
+  return (db.prepare('SELECT nick FROM nick_history WHERE user_id = ? ORDER BY last_at DESC LIMIT 8').all(userId) as { nick: string }[])
+    .map((r) => r.nick)
+    .filter((n) => n.toLowerCase() !== current.toLowerCase());
+}
+
+/**
+ * The other names of the person who plays under `nick` (now or before): only when their profile is public and shows the statistics.
+ * Empty for a nickname that no account has claimed.
+ */
+export function aliasesOfNick(nick: string): string[] {
+  const owner = db
+    .prepare(
+      `SELECT p.user_id AS id, p.game_nick AS nick, p.privacy FROM user_player p JOIN users u ON u.id = p.user_id
+       WHERE u.status = 'active' AND p.public_profile = 1 AND (ulower(p.game_nick) = ulower(?) OR p.user_id IN (SELECT user_id FROM nick_history WHERE nick = ? COLLATE NOCASE)) LIMIT 1`,
+    )
+    .get(nick, nick) as { id: number; nick: string; privacy: string } | undefined;
+  if (!owner) return [];
+  try {
+    if ((JSON.parse(owner.privacy) as { stats?: boolean }).stats === false) return [];
+  } catch { /* an unreadable setting counts as the default: shown */ }
+  return [owner.nick, ...formerNicksOf(owner.id, owner.nick)].filter((n) => n && n.toLowerCase() !== nick.toLowerCase());
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/profile"
@@ -38541,7 +38706,7 @@ import { activeBanByNick } from '../gamenews/gameNewsModLog.js';
 import { avatarFor } from '../images/avatars.js';
 import { db, EFFECTIVE_NAME, getSetting } from '../db.js';
 import { localParts } from '../admin/localTime.js';
-import { playAchievements, vrRankIdFor } from '../profile/profile.js';
+import { aliasesOfNick, playAchievements, vrRankIdFor } from '../profile/profile.js';
 import { seasonAchievements } from '../profile/seasons.js';
 
 export const router = express.Router();
@@ -38734,7 +38899,7 @@ router.get('/api/players/:name', viewer, (req, res) => {
   if (!card) return res.status(404).json({ error: 'Игрок не найден' });
   // a ban in force is shown on the card (the reason and the end, as on the page of bans)
   const b = activeBanByNick(nick, Date.now());
-  res.json({ ...card, ban: b ? { reason: b.reason, until: b.until, createdAt: b.created_at } : null });
+  res.json({ ...card, ban: b ? { reason: b.reason, until: b.until, createdAt: b.created_at } : null, aliases: aliasesOfNick(nick) });
 });
 
 /**
@@ -123173,6 +123338,8 @@ export interface JournalItem {
 
 /** GET /u/:username (no sign-in; 404 when the profile is private) */
 export interface PublicProfile {
+  /** the nicknames the account had before the current one (only with public statistics) */
+  formerNicks?: string[];
   username: string;
   role: 'admin' | 'moderator' | 'player';
   avatarUrl: string | null;
@@ -133139,6 +133306,15 @@ export function NewsListPage() {
                 </a>
               </AsideSection>
             )}
+            {(soon || upcoming.length > 0) && (
+              <AsideSection id="cal" title={t('nw.cal')} wide={wide}>
+                <p className="nw-cal-text">{t('nw.cal.text')}</p>
+                <div className="nw-cal-links">
+                  <a className="btn btn-soft btn-sm" href={`webcal://${window.location.host}/api/events.ics`}>{t('nw.cal.subscribe')}</a>
+                  <a className="btn btn-ghost btn-sm" href="/api/events.ics" download="coregsm-events.ics">{t('nw.cal.download')}</a>
+                </div>
+              </AsideSection>
+            )}
             {upcoming.length > 0 && (
               <AsideSection id="works" title={t('nw.works')} wide={wide}>
                 <ul className="nw-side-list nw-works">
@@ -143079,12 +143255,12 @@ export function durText(ms: number): string {
  */
 export function useQuickLongPress() {
   const timer = useRef(0);
-  const fired = useRef(false);
+  const firedAt = useRef(0);
   const from = useRef<{ x: number; y: number } | null>(null);
   const clear = () => window.clearTimeout(timer.current);
   return {
     onTouchStart: (e: React.TouchEvent<HTMLElement>) => {
-      fired.current = false;
+      firedAt.current = 0;
       const el = e.currentTarget;
       const p = e.touches[0];
       from.current = p ? { x: p.clientX, y: p.clientY } : null;
@@ -143092,7 +143268,7 @@ export function useQuickLongPress() {
       timer.current = window.setTimeout(() => {
         const b = el.querySelector<HTMLElement>('[data-quick-menu] button');
         if (!b) return;
-        fired.current = true;
+        firedAt.current = Date.now();
         haptic('ok');
         b.click();
       }, 520);
@@ -143102,10 +143278,12 @@ export function useQuickLongPress() {
       const s = from.current;
       if (p && s && Math.hypot(p.clientX - s.x, p.clientY - s.y) > 10) clear();
     },
-    onTouchEnd: clear,
+    // the release after a long touch must not become a click (it would open the server and close the menu that has just opened)
+    onTouchEnd: (e: React.TouchEvent<HTMLElement>) => { clear(); if (firedAt.current && e.cancelable) e.preventDefault(); },
     onTouchCancel: clear,
-    onContextMenu: (e: React.MouseEvent) => { if (fired.current) e.preventDefault(); },
-    swallow: () => { const f = fired.current; fired.current = false; return f; },
+    onContextMenu: (e: React.MouseEvent) => { if (firedAt.current) e.preventDefault(); },
+    // a click that still comes within a moment of the long touch is not a tap (the menu button's own click is one of them)
+    swallow: () => firedAt.current !== 0 && Date.now() - firedAt.current < 1500,
   };
 }
 __COREGSM_EOF__
@@ -147383,6 +147561,8 @@ const en: Record<keyof typeof ru, string> = {
   'pub.missingText': 'There is no such player, or they have made their profile private.',
   'pub.errorTitle': 'Could not load the profile',
   'pub.back': 'Go back',
+  'pl.aliases': 'Also played as:',
+  'pub.formerNicks': 'Before: {nicks}',
   'pub.nick': 'Nick: {nick}',
   'pub.since': 'Member since {date}',
   'pub.about': 'About',
@@ -147850,6 +148030,10 @@ const en: Record<keyof typeof ru, string> = {
   'nw.pinned': 'Pinned',
   'nw.pinnedList': 'Pinned',
   'nw.works': 'Upcoming maintenance',
+  'nw.cal': 'Event calendar',
+  'nw.cal.text': 'Events and planned maintenance in your calendar: Google, Apple, Outlook, Thunderbird.',
+  'nw.cal.subscribe': 'Subscribe',
+  'nw.cal.download': 'Download .ics',
   'nw.soon': 'Coming up',
   'nw.more': 'Show more',
   'nw.loadingMore': 'Loading…',
@@ -150446,6 +150630,13 @@ const en: Record<keyof typeof ru, string> = {
   'd2.ac.rep.notePh': 'A comment for the author of the report (optional)',
   'd2.ac.rep.note': 'Comment',
   'd2.ac.rep.actionTaken': 'Action taken',
+  'd2.ac.rep.banAria': 'A ban with the decision',
+  'd2.ac.rep.noBan': 'No ban',
+  'd2.ac.rep.ban1d': 'Ban for 1 day',
+  'd2.ac.rep.ban7d': 'Ban for 7 days',
+  'd2.ac.rep.ban30d': 'Ban for 30 days',
+  'd2.ac.rep.banEver': 'Ban for ever',
+  'd2.ac.rep.actionBan': 'Action taken and ban',
   'd2.ac.dismiss': 'Dismiss',
   'd2.ac.rep.doneMark': '✅ Action taken',
   'd2.ac.rep.dismissedMark': 'ℹ️ Dismissed',
@@ -151382,6 +151573,7 @@ const en: Record<keyof typeof ru, string> = {
   'd2.tour.show': 'Show in a minute',
   'd2.tour.dismiss': 'Do not show',
   'd2.ao.24h': 'over 24 hours',
+  'd2.ao.r.flags': 'Health warnings',
   'd2.ao.r.down': 'Some servers are unavailable',
   'd2.ao.r.bot': 'The Discord bot has an error',
   'd2.ao.r.cert': 'The certificate expires soon',
@@ -151745,6 +151937,7 @@ const errorsEn: Record<string, string> = {
   history_entry_not_found: 'The entry was not found',
   history_not_revertible: 'This setting cannot be put back',
   no_active_ban: 'There is no ban in force for this nickname',
+  game_account_unknown: 'The panel does not know the game account of the player: give the ban in the game with the .ban command',
   appeal_exists: 'An appeal for this nickname has already been sent and waits for an answer',
   appeal_not_found: 'The ban appeal was not found',
   too_many_attempts: 'Too many attempts. Wait 10 minutes.',
@@ -152531,6 +152724,8 @@ const ru = {
   'pub.missingText': 'Такого игрока нет или он закрыл свой профиль.',
   'pub.errorTitle': 'Не удалось загрузить профиль',
   'pub.back': 'Вернуться',
+  'pl.aliases': 'Также играл как:',
+  'pub.formerNicks': 'Раньше: {nicks}',
   'pub.nick': 'Ник: {nick}',
   'pub.since': 'С нами с {date}',
   'pub.about': 'О себе',
@@ -152998,6 +153193,10 @@ const ru = {
   'nw.pinned': 'Закреплено',
   'nw.pinnedList': 'Закреплённое',
   'nw.works': 'Ближайшие работы',
+  'nw.cal': 'Календарь событий',
+  'nw.cal.text': 'События и плановые работы в вашем календаре: Google, Apple, Outlook, Thunderbird.',
+  'nw.cal.subscribe': 'Подписаться',
+  'nw.cal.download': 'Скачать .ics',
   'nw.soon': 'Ближайшее',
   'nw.more': 'Показать ещё',
   'nw.loadingMore': 'Загрузка…',
@@ -155594,6 +155793,13 @@ const ru = {
   'd2.ac.rep.notePh': 'Комментарий для автора жалобы (необязательно)',
   'd2.ac.rep.note': 'Комментарий',
   'd2.ac.rep.actionTaken': 'Меры приняты',
+  'd2.ac.rep.banAria': 'Бан вместе с решением',
+  'd2.ac.rep.noBan': 'Без бана',
+  'd2.ac.rep.ban1d': 'Бан на 1 день',
+  'd2.ac.rep.ban7d': 'Бан на 7 дней',
+  'd2.ac.rep.ban30d': 'Бан на 30 дней',
+  'd2.ac.rep.banEver': 'Бан навсегда',
+  'd2.ac.rep.actionBan': 'Меры приняты и бан',
   'd2.ac.dismiss': 'Отклонить',
   'd2.ac.rep.doneMark': '✅ Меры приняты',
   'd2.ac.rep.dismissedMark': 'ℹ️ Отклонена',
@@ -156530,6 +156736,7 @@ const ru = {
   'd2.tour.show': 'Показать за минуту',
   'd2.tour.dismiss': 'Не показывать',
   'd2.ao.24h': 'за 24 часа',
+  'd2.ao.r.flags': 'Предупреждения здоровья',
   'd2.ao.r.down': 'Есть недоступные серверы',
   'd2.ao.r.bot': 'Бот Discord в ошибке',
   'd2.ao.r.cert': 'Сертификат скоро истечёт',
@@ -158058,10 +158265,12 @@ function ReportsAdmin() {
   const [list, setList] = useState<ReportRow[] | null>(null);
   const [error, setError] = useState('');
   const [notes, setNotes] = useState<Record<number, string>>({});
+  // the ban that goes with the decision: '' = none, else hours (0 = for ever)
+  const [bans, setBans] = useState<Record<number, string>>({});
   const load = () => api<ReportRow[]>(`/reports?status=${closed ? 'closed' : 'open'}`).then((l) => { setList(l); setError(''); }).catch((e: Error) => setError(e.message));
   useEffect(() => { setList(null); void load(); }, [closed]);
   const close = (id: number, status: 'resolved' | 'dismissed') =>
-    api(`/reports/${id}`, 'PATCH', { status, note: (notes[id] ?? '').trim() })
+    api(`/reports/${id}`, 'PATCH', { status, note: (notes[id] ?? '').trim(), ...(status === 'resolved' && (bans[id] ?? '') !== '' ? { banHours: Number(bans[id]) } : {}) })
       .then(() => { toast(status === 'resolved' ? t('d2.ac.rep.resolved') : t('d2.ac.rep.dismissed')); void load(); })
       .catch((e: Error) => setError(e.message));
   return (
@@ -158086,7 +158295,14 @@ function ReportsAdmin() {
               {r.status === 'open' ? (
                 <div className="mt-2.5 flex flex-wrap items-center gap-2">
                   <input className="input min-w-48 flex-1" maxLength={300} placeholder={t('d2.ac.rep.notePh')} aria-label={t('d2.ac.rep.note')} value={notes[r.id] ?? ''} onChange={(e) => setNotes((n) => ({ ...n, [r.id]: e.target.value }))} />
-                  <button type="button" className="btn btn-success btn-sm" onClick={() => void close(r.id, 'resolved')}>{t('d2.ac.rep.actionTaken')}</button>
+                  <select className="input w-auto! py-1.5!" aria-label={t('d2.ac.rep.banAria')} value={bans[r.id] ?? ''} onChange={(e) => setBans((b) => ({ ...b, [r.id]: e.target.value }))}>
+                    <option value="">{t('d2.ac.rep.noBan')}</option>
+                    <option value="24">{t('d2.ac.rep.ban1d')}</option>
+                    <option value="168">{t('d2.ac.rep.ban7d')}</option>
+                    <option value="720">{t('d2.ac.rep.ban30d')}</option>
+                    <option value="0">{t('d2.ac.rep.banEver')}</option>
+                  </select>
+                  <button type="button" className="btn btn-success btn-sm" onClick={() => void close(r.id, 'resolved')}>{(bans[r.id] ?? '') !== '' ? t('d2.ac.rep.actionBan') : t('d2.ac.rep.actionTaken')}</button>
                   <button type="button" className="btn btn-soft btn-sm" onClick={() => void close(r.id, 'dismissed')}>{t('d2.ac.dismiss')}</button>
                 </div>
               ) : (
@@ -158537,6 +158753,7 @@ interface Raw {
   bot: BotStatus | null;
   cert: CertInfo | null;
   audit: AuditRow[] | null;
+  flags: { kind: string; text: string }[] | null;
 }
 
 interface Attention { id: string; tone: 'bad' | 'warn' | 'info'; text: string; href: string }
@@ -158579,10 +158796,11 @@ function usePreviousVisit(): number | null {
 }
 
 const REASON_HREF: Record<string, string> = {
-  down: '/admin/servers', bot: '/admin/settings/bot', cert: '/admin/system', backup: '/admin/settings/updates', pending: '/admin/users', update: '/admin/settings/updates',
+  flags: '/admin/health', down: '/admin/servers', bot: '/admin/settings/bot', cert: '/admin/system', backup: '/admin/settings/updates', pending: '/admin/users', update: '/admin/settings/updates',
 };
 
 const REASON_TEXT: Record<string, TKey> = {
+  flags: 'd2.ao.r.flags',
   down: 'd2.ao.r.down',
   bot: 'd2.ao.r.bot',
   cert: 'd2.ao.r.cert',
@@ -158684,12 +158902,12 @@ export default function AdminOverview() {
       api<BackupInfo>('/backups'),
       api<UpdateInfo>('/update/status'),
       api<BotStatus>('/bot/status'),
-      api<{ cert?: CertInfo }>('/system'),
+      api<{ cert?: CertInfo; flags?: { kind: string; text: string }[] }>('/system'),
       api<AuditRow[]>('/audit?limit=30'),
     ]);
     setRaw({
       servers: ok(servers), overview: ok(overview), users: ok(users), backups: ok(backups), update: ok(update), bot: ok(bot),
-      cert: ok(sys)?.cert ?? null, audit: ok(audit),
+      cert: ok(sys)?.cert ?? null, audit: ok(audit), flags: ok(sys)?.flags ?? null,
     });
   };
   usePoll(load, 30_000);
@@ -158706,6 +158924,7 @@ export default function AdminOverview() {
     const names = down.slice(0, 3).map((s) => s.name).join(', ');
     attention.push({ id: 'down', tone: 'bad', text: t('adm.ov.down', { names }) + (down.length > 3 ? t('adm.ov.downMore', { k: down.length - 3 }) : ''), href: '/admin/servers' });
   }
+  for (const f of raw?.flags ?? []) attention.push({ id: `flag-${f.kind}`, tone: 'warn', text: f.text, href: '/admin/health' });
   if (raw?.bot?.state === 'error') attention.push({ id: 'bot', tone: 'bad', text: t('adm.ov.botErr'), href: '/admin/settings/bot' });
   if (raw?.cert && raw.cert.daysLeft != null && raw.cert.daysLeft <= 14) {
     attention.push({ id: 'cert', tone: raw.cert.daysLeft <= 0 ? 'bad' : 'warn', text: raw.cert.daysLeft <= 0 ? t('adm.ov.certGone') : t('adm.ov.certSoon', { k: raw.cert.daysLeft }), href: '/admin/system' });
@@ -158721,7 +158940,7 @@ export default function AdminOverview() {
   const series = points.map((p) => p.players);
   const health = healthScore({
     servers: servers.length, down: down.length, botError: raw?.bot?.state === 'error', certDays: raw?.cert?.daysLeft ?? null,
-    pending, updateAvailable: !!raw?.update?.available, backupAgeMs: lastBackup ? Date.now() - lastBackup : null, backupsKnown: !!raw?.backups,
+    pending, flags: raw?.flags?.length ?? 0, updateAvailable: !!raw?.update?.available, backupAgeMs: lastBackup ? Date.now() - lastBackup : null, backupsKnown: !!raw?.backups,
   });
   const avatarOf = (name: string) => raw?.users?.find((u) => u.username === name)?.avatarUrl ?? null;
   const versionLabel = raw?.update?.currentLabel || (raw?.update?.current ? raw.update.current.slice(0, 7) : '');
@@ -166312,6 +166531,8 @@ import '../styles/profile.css';
 interface PlayerCard {
   /** a ban in force (the reason and the end) */
   ban?: { reason: string; until: number; createdAt: number } | null;
+  /** the other nicknames of the same person (a public profile with statistics only) */
+  aliases?: string[];
   name: string;
   firstSeen: number;
   lastSeen: number | null;
@@ -166384,6 +166605,7 @@ export default function PlayerPage({ name }: { name: string }) {
             ) : p.lastSeen ? <span>{t('d2.pl.was', { ago: ago(p.lastSeen) })}</span> : null}
             {rank && <span className="pl-rank">{rank.name}</span>}
             <span>{t('d2.pl.first', { when: fmtDateTime(p.firstSeen) })}</span>
+            {(p.aliases?.length ?? 0) > 0 && <span>{t('pl.aliases')}{' '}{(p.aliases ?? []).map((n, i) => <span key={n}>{i > 0 ? ', ' : ''}<a href={`/player/${encodeURIComponent(n)}`} className="underline decoration-dotted underline-offset-2">{n}</a></span>)}</span>}
           </p>
           {p.ban && (
             <p className="pl-banned" role="status">
@@ -167021,6 +167243,7 @@ export default function PublicProfilePage({ username }: { username: string }) {
                 </a>
               )}
               {p.gameNick && <span className="pf-meta"><IcoGamepad />{t('pub.nick', { nick: p.gameNick })}</span>}
+              {(p.formerNicks?.length ?? 0) > 0 && <span className="pf-meta">{t('pub.formerNicks', { nicks: (p.formerNicks ?? []).join(', ') })}</span>}
               {Number.isFinite(since) && <span className="pf-meta"><IcoCalendar />{t('pub.since', { date: fmtDate(since) })}</span>}
             </div>
           </div>
@@ -168979,15 +169202,17 @@ function HeroTile({ s, idx, uptime, downSince, fav, onFav, onOpen, rx, reason, s
   const r = reactionOf(rx, s.id);
   const emb = emblemStyle(s.coverUrl, s.game);
   const cover = coverUrlOf(s.coverUrl, s.game, false);
+  const { swallow, ...lp } = useQuickLongPress();
   return (
     <article
+      {...lp}
       className={`hero3 tile-in tile-hover relative cursor-pointer overflow-hidden rounded-ui-xl text-white shadow-soft ${s.online ? '' : 'is-down'} ${reason === 'attention' ? 'hero-attn' : ''}`}
       style={{
         ...stagger(idx),
         ['--gc' as string]: gameColor(s.game),
         boxShadow: `${select?.has(s.id) ? '0 0 0 3px rgb(var(--brand)), ' : reason === 'attention' ? `0 0 0 3px rgb(var(${s.online ? '--warn' : '--bad'}) / .85), ` : ''}0 1px 2px rgba(20,24,40,.06), 0 18px 40px -16px ${c1}66`,
       }}
-      onClick={select?.on ? () => select.toggle(s.id) : onOpen}
+      onClick={select?.on ? () => select.toggle(s.id) : () => { if (!swallow()) onOpen(); }}
     >
       {select?.on && <CardCheck s={s} select={select} className="left-2 top-2" />}
 
@@ -170771,6 +170996,16 @@ describe('the groups of the journal', () => {
     expect(groupAudit([])).toEqual([]);
   });
 });
+
+describe('the warnings of the health page in the score', () => {
+  it('cost a few points each, at most fifteen, and nothing without them', () => {
+    expect(healthScore({ ...fine, flags: 0 }).score).toBe(100);
+    const one = healthScore({ ...fine, flags: 1 });
+    expect(one.score).toBe(93);
+    expect(one.reasons.map((r) => r.id)).toContain('flags');
+    expect(healthScore({ ...fine, flags: 5 }).score).toBe(85);
+  });
+});
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/adminLogic.ts" << '__COREGSM_EOF__'
@@ -170785,6 +171020,8 @@ export interface HealthInput {
   updateAvailable: boolean;
   backupAgeMs: number | null; // null — no copies at all
   backupsKnown: boolean;
+  /** how many warnings the health page shows now */
+  flags?: number;
 }
 
 export interface HealthReason { id: string; cost: number; tone: 'bad' | 'warn' | 'info' }
@@ -170799,6 +171036,8 @@ export function healthScore(h: HealthInput): { score: number; reasons: HealthRea
   if (h.certDays != null && h.certDays <= 14) reasons.push({ id: 'cert', cost: h.certDays <= 0 ? 25 : 10, tone: h.certDays <= 0 ? 'bad' : 'warn' });
   if (h.backupsKnown && (h.backupAgeMs == null || h.backupAgeMs > WEEK)) reasons.push({ id: 'backup', cost: 10, tone: 'warn' });
   if (h.pending > 0) reasons.push({ id: 'pending', cost: Math.min(10, 3 + h.pending), tone: 'warn' });
+  // the warnings of the health page (a slow polling round, a low disk, a growing database, an offline bot)
+  if (h.flags && h.flags > 0) reasons.push({ id: 'flags', cost: Math.min(15, 7 * h.flags), tone: 'warn' });
   if (h.updateAvailable) reasons.push({ id: 'update', cost: 3, tone: 'info' });
   const score = Math.max(0, 100 - reasons.reduce((n, r) => n + r.cost, 0));
   return { score, reasons };
@@ -174144,6 +174383,20 @@ __COREGSM_EOF__
 :root[data-ember='1'] .bn-appeal { border: 0; border-radius: var(--emb-r-card); box-shadow: var(--shadow-2); }
 .pl-banned { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem .8rem; margin: .6rem 0 0; padding: .55rem .9rem; border-radius: var(--r-md); background: rgb(var(--badbg)); color: rgb(var(--bad)); font-weight: 650; }
 .pl-banned a { margin-left: auto; text-decoration: underline; }
+
+/* a phone: compact cards, the reason in two lines, smaller marks */
+@media (max-width: 560px) {
+  .bn-list { gap: .45rem; }
+  .bn-row { gap: .6rem; padding: .7rem .8rem; }
+  .bn-ava { width: 2rem; height: 2rem; font-size: .875rem; }
+  .bn-nick { font-size: 1rem; }
+  .bn-when, .bn-until { font-size: .75rem; }
+  .bn-reason { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-size: .9375rem; line-height: 1.4; }
+  .bn-chip { padding: .1rem .5rem; font-size: .75rem; }
+  .bn-stats { gap: .5rem; }
+  .bn-stat { padding: .6rem .75rem; }
+  .bn-appeal-head { padding: .75rem .9rem; }
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/buttons.css" << '__COREGSM_EOF__'
@@ -177104,6 +177357,8 @@ a.cm-time:hover { color: rgb(var(--link)); }
 }
 /* three lines of a headline before the dots (polish.css allows two) */
 .nb .nb-title { -webkit-line-clamp: 3; line-clamp: 3; overflow-wrap: anywhere; }
+.nw-cal-text { margin: 0 0 .5rem; font-size: .875rem; font-weight: 600; color: rgb(var(--mute)); }
+.nw-cal-links { display: flex; flex-wrap: wrap; gap: .5rem; padding-bottom: .5rem; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/news.css" << '__COREGSM_EOF__'

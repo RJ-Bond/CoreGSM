@@ -449,6 +449,26 @@ CREATE TABLE IF NOT EXISTS ban_alerts (
   user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE
 );`),
   },
+  {
+    version: 31,
+    name: 'ban_appeals_user',
+    // an appeal sent by a signed-in person remembers who: the answer reaches them in the bell and on their devices
+    up: (db) => db.exec('ALTER TABLE ban_appeals ADD COLUMN user_id INTEGER'),
+  },
+  {
+    version: 32,
+    name: 'nick_history',
+    // the nicknames an account has had: the page of a player can say that the same person played under another name
+    up: (db) =>
+      db.exec(`
+CREATE TABLE IF NOT EXISTS nick_history (
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  nick TEXT NOT NULL,
+  last_at INTEGER NOT NULL,
+  PRIMARY KEY (user_id, nick)
+);
+CREATE INDEX IF NOT EXISTS idx_nick_history_nick ON nick_history(nick COLLATE NOCASE);`),
+  },
 ];
 
 export const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;

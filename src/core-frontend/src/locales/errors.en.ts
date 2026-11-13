@@ -19,6 +19,7 @@ const errorsEn: Record<string, string> = {
   history_entry_not_found: 'The entry was not found',
   history_not_revertible: 'This setting cannot be put back',
   no_active_ban: 'There is no ban in force for this nickname',
+  game_account_unknown: 'The panel does not know the game account of the player: give the ban in the game with the .ban command',
   appeal_exists: 'An appeal for this nickname has already been sent and waits for an answer',
   appeal_not_found: 'The ban appeal was not found',
   too_many_attempts: 'Too many attempts. Wait 10 minutes.',

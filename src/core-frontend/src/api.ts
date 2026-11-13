@@ -744,6 +744,8 @@ export interface JournalItem {
 
 /** GET /u/:username (no sign-in; 404 when the profile is private) */
 export interface PublicProfile {
+  /** the nicknames the account had before the current one (only with public statistics) */
+  formerNicks?: string[];
   username: string;
   role: 'admin' | 'moderator' | 'player';
   avatarUrl: string | null;
