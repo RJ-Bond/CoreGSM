@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="1ff075cc223b"
+COREGSM_BUILD="6fbd635c16ff"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.2.27"
+COREGSM_VERSION="1.2.28"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -23785,6 +23785,9 @@ export const ERRORS = {
   too_many_connections: 'Слишком много открытых подключений',
   history_entry_not_found: 'Запись не найдена',
   history_not_revertible: 'Эту настройку вернуть нельзя',
+  no_active_ban: 'Для этого ника нет действующего бана',
+  appeal_exists: 'Заявка на этот ник уже отправлена и ждёт ответа',
+  appeal_not_found: 'Заявка на разбан не найдена',
   too_many_attempts: 'Слишком много попыток. Подождите 10 минут.',
   bad_data: 'Неверные данные',
   bad_data_lower: 'неверные данные',
@@ -24152,6 +24155,8 @@ export interface BusEvents {
   'server.state': { id: number; online: boolean; previous: boolean; at: number };
   /** a setting of the panel was changed (the key, not the value) */
   'settings.changed': { key: string; actor: string | null };
+  /** a ban was put in force (not the short block after a kick) */
+  'ban.created': { nick: string; reason: string; admin: string; until: number; serverId: number };
 }
 export type BusName = keyof BusEvents;
 
@@ -24209,8 +24214,11 @@ __COREGSM_EOF__
  * administrator who gave the ban are shown to the staff only. A short block after a kick is not a ban and is not listed.
  */
 import type { Express, Request } from 'express';
-import { isStaff, viewer } from '../security/auth.js';
-import { holdsOn, listBans, type BanRow } from './gameNewsModLog.js';
+import { z } from 'zod';
+import { type AuthedRequest, rateLimit, staff, viewer, isStaff } from '../security/auth.js';
+import { activeBanByNick, holdsOn, listBans, logMod, removeBan, type BanRow } from './gameNewsModLog.js';
+import { bus } from '../events.js';
+import { pushLater } from '../alerts/push.js';
 import { serverLabel } from './gameNewsVars.js';
 import { db } from '../db.js';
 
@@ -24258,6 +24266,7 @@ export function shapeBans(rows: BanRow[], opts: { staff: boolean; server?: numbe
 }
 
 export function registerBans(app: Express): void {
+  registerBanExtras(app);
   app.get('/api/bans', viewer, (req: Request, res) => {
     const now = Date.now();
     const all = listBans(now).filter((r) => r.kind === 'ban');
@@ -24279,6 +24288,115 @@ export function registerBans(app: Express): void {
     };
     res.set('Cache-Control', 'private, max-age=15');
     res.json(out);
+  });
+}
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// the history of the bans, the appeals of the banned and the push of the staff about both
+
+export interface BanHistoryItem {
+  /** ban | unban */
+  kind: 'ban' | 'unban';
+  nick: string;
+  reason: string;
+  serverId: number;
+  server: string;
+  at: number;
+  /** a ban: until when (0 = for ever) */
+  until: number;
+  /** a ban that has run out by itself */
+  expired: boolean;
+  admin?: string;
+}
+
+interface LogRow { ts: number; kind: string; nick: string; reason: string; server_id: number; until: number; admin: string }
+
+/** the log of the moderation reduced to bans and unbans, newest first; the administrator is named to the staff only */
+export function banHistory(opts: { staff: boolean; now: number; limit?: number; server?: number; label?: (id: number) => string }): BanHistoryItem[] {
+  const label = opts.label ?? serverLabel;
+  const rows = db.prepare("SELECT ts, kind, nick, reason, server_id, until, admin FROM game_mod_log WHERE kind IN ('ban', 'unban') ORDER BY id DESC LIMIT ?").all(Math.min(300, Math.max(1, opts.limit ?? 100))) as LogRow[];
+  return rows
+    .filter((r) => opts.server === undefined || r.server_id === opts.server)
+    .map((r): BanHistoryItem => ({
+      kind: r.kind === 'unban' ? 'unban' : 'ban',
+      nick: r.nick,
+      reason: r.reason,
+      serverId: r.server_id,
+      server: r.server_id ? label(r.server_id) : '',
+      at: r.ts,
+      until: r.until,
+      expired: r.kind === 'ban' && r.until !== 0 && r.until <= opts.now,
+      ...(opts.staff ? { admin: r.admin } : {}),
+    }));
+}
+
+interface AppealRow { id: number; ts: number; nick: string; platform_id: string; text: string; contact: string; status: string; note: string; decided_by: string | null; decided_at: number | null }
+
+const appealOut = (r: AppealRow) => ({ id: r.id, at: r.ts, nick: r.nick, platformId: r.platform_id, text: r.text, contact: r.contact, status: r.status, note: r.note, decidedBy: r.decided_by, decidedAt: r.decided_at });
+
+/** the staff that wants a push about new bans and appeals: the signed-in people who switched it on and still are staff */
+function alertUsers(): number[] {
+  return (db.prepare("SELECT a.user_id AS id FROM ban_alerts a JOIN users u ON u.id = a.user_id WHERE u.status = 'active' AND u.role IN ('admin', 'moderator')").all() as { id: number }[]).map((r) => r.id);
+}
+
+export function registerBanExtras(app: Express): void {
+  app.get('/api/bans/history', viewer, (req: Request, res) => {
+    const serverQ = Number(req.query.server);
+    const items = banHistory({ staff: isStaff(req), now: Date.now(), server: Number.isInteger(serverQ) && serverQ > 0 ? serverQ : undefined });
+    res.set('Cache-Control', 'private, max-age=15').json({ items });
+  });
+
+  // an appeal: a banned player says why the ban should go. Only for a nickname that has a ban in force; one open appeal per nickname.
+  app.post('/api/bans/appeals', viewer, rateLimit(5), (req: Request, res) => {
+    const b = z.object({ nick: z.string().trim().min(1).max(100), text: z.string().trim().min(10).max(1000), contact: z.string().trim().max(100).optional() }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'Неверные данные' });
+    const now = Date.now();
+    const ban = activeBanByNick(b.data.nick, now);
+    if (!ban) return res.status(404).json({ error: 'Для этого ника нет действующего бана' });
+    const open = db.prepare("SELECT id FROM ban_appeals WHERE ulower(nick) = ulower(?) AND status = 'open'").get(ban.nick);
+    if (open) return res.status(409).json({ error: 'Заявка на этот ник уже отправлена и ждёт ответа' });
+    const info = db.prepare('INSERT INTO ban_appeals (ts, nick, platform_id, text, contact) VALUES (?, ?, ?, ?, ?)').run(now, ban.nick, ban.platform_id, b.data.text, b.data.contact ?? '');
+    for (const id of alertUsers()) pushLater(id, { title: 'Заявка на разбан', body: `${ban.nick}: ${b.data.text.slice(0, 120)}`, url: '/admin/gamenews/players', tag: 'ban-appeal' });
+    res.status(201).json({ ok: true, id: Number(info.lastInsertRowid) });
+  });
+
+  app.get('/api/bans/appeals', staff, (req, res) => {
+    const status = typeof req.query.status === 'string' && ['open', 'accepted', 'rejected'].includes(req.query.status) ? req.query.status : '';
+    const rows = db.prepare(`SELECT * FROM ban_appeals ${status ? 'WHERE status = ?' : ''} ORDER BY (status = 'open') DESC, ts DESC LIMIT 200`).all(...(status ? [status] : [])) as AppealRow[];
+    res.json(rows.map(appealOut));
+  });
+
+  // the decision: accepted (and the ban is lifted at once if the staff says so) or rejected, with a note for the log
+  app.patch('/api/bans/appeals/:id', staff, (req: AuthedRequest, res) => {
+    const b = z.object({ status: z.enum(['accepted', 'rejected']), note: z.string().trim().max(300).optional(), unban: z.boolean().optional() }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'Неверные данные' });
+    const row = db.prepare('SELECT * FROM ban_appeals WHERE id = ?').get(Number(req.params.id)) as AppealRow | undefined;
+    if (!row) return res.status(404).json({ error: 'Заявка на разбан не найдена' });
+    const now = Date.now();
+    const who = req.user?.username ?? '';
+    db.prepare('UPDATE ban_appeals SET status = ?, note = ?, decided_by = ?, decided_at = ? WHERE id = ?').run(b.data.status, b.data.note ?? '', who, now, row.id);
+    if (b.data.status === 'accepted' && b.data.unban && row.platform_id) {
+      const gone = removeBan(row.platform_id);
+      if (gone) logMod({ kind: 'unban', platformId: gone.platform_id, nick: gone.nick, admin: who, reason: 'по заявке', serverId: gone.server_id }, now);
+    }
+    res.json({ ok: true });
+  });
+
+  // «a push to me about new bans and appeals»: a switch of every member of the staff
+  app.get('/api/bans/alerts', staff, (req: AuthedRequest, res) => {
+    res.json({ on: !!db.prepare('SELECT 1 FROM ban_alerts WHERE user_id = ?').get(req.user!.id) });
+  });
+  app.put('/api/bans/alerts', staff, (req: AuthedRequest, res) => {
+    const b = z.object({ on: z.boolean() }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'Неверные данные' });
+    if (b.data.on) db.prepare('INSERT OR IGNORE INTO ban_alerts (user_id) VALUES (?)').run(req.user!.id);
+    else db.prepare('DELETE FROM ban_alerts WHERE user_id = ?').run(req.user!.id);
+    res.json({ on: b.data.on });
+  });
+
+  bus.on('ban.created', (e) => {
+    const until = e.until === 0 ? 'навсегда' : `до ${new Date(e.until).toLocaleDateString('ru-RU')}`;
+    for (const id of alertUsers()) pushLater(id, { title: `Бан: ${e.nick}`, body: `${until}${e.reason ? ` · ${e.reason.slice(0, 100)}` : ''}`, url: '/bans', tag: 'ban-new' });
   });
 }
 __COREGSM_EOF__
@@ -25917,6 +26035,7 @@ __COREGSM_EOF__
  * No answers for people here: only what is kept and counted.
  */
 import { db } from '../db.js';
+import { bus } from '../events.js';
 import { formatLeft } from './gameNewsRestartLogic.js';
 
 export type ModKind = 'kick' | 'ban' | 'warn' | 'unban';
@@ -25993,6 +26112,15 @@ export function putBan(b: { platformId: string; nick: string; reason: string; ad
      ON CONFLICT(platform_id) DO UPDATE SET nick = excluded.nick, reason = excluded.reason, admin = excluded.admin, created_at = excluded.created_at,
        until = excluded.until, kind = excluded.kind, server_id = excluded.server_id, scope = excluded.scope`,
   ).run(b.platformId, b.nick.slice(0, 100), b.reason.slice(0, 300), b.admin.slice(0, 100), now, b.until, b.kind, b.serverId, b.scope ?? 'all');
+  if (b.kind === 'ban') bus.emit('ban.created', { nick: b.nick, reason: b.reason, admin: b.admin, until: b.until, serverId: b.serverId });
+}
+
+/** the ban in force of a player by the exact nick (the card of a player shows it); a short block after a kick is not a ban */
+export function activeBanByNick(nick: string, now: number): BanRow | undefined {
+  const n = nick.trim().toLowerCase();
+  if (!n) return undefined;
+  const r = db.prepare("SELECT * FROM game_bans WHERE ulower(nick) = ? AND kind = 'ban'").get(n) as BanRow | undefined;
+  return r && (r.until === 0 || r.until > now) ? r : undefined;
 }
 
 /** does a ban hold on this server (a ban of one server does not hold on the others; serverId undefined = look at all) */
@@ -31221,6 +31349,29 @@ CREATE TABLE IF NOT EXISTS rum_samples (
   value REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_rum_samples ON rum_samples(route, metric, ts);`),
+  },
+  {
+    version: 30,
+    name: 'ban_appeals',
+    // an appeal of a banned player (the staff reads and decides) and who of the staff wants a push about new bans and appeals
+    up: (db) =>
+      db.exec(`
+CREATE TABLE IF NOT EXISTS ban_appeals (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts INTEGER NOT NULL,
+  nick TEXT NOT NULL,
+  platform_id TEXT NOT NULL DEFAULT '',
+  text TEXT NOT NULL,
+  contact TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'open',
+  note TEXT NOT NULL DEFAULT '',
+  decided_by TEXT,
+  decided_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_ban_appeals ON ban_appeals(status, ts);
+CREATE TABLE IF NOT EXISTS ban_alerts (
+  user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE
+);`),
   },
 ];
 
@@ -38401,6 +38552,7 @@ __COREGSM_EOF__
  */
 import express from 'express';
 import { viewer } from '../security/auth.js';
+import { activeBanByNick } from '../gamenews/gameNewsModLog.js';
 import { avatarFor } from '../images/avatars.js';
 import { db, EFFECTIVE_NAME, getSetting } from '../db.js';
 import { localParts } from '../admin/localTime.js';
@@ -38595,7 +38747,9 @@ router.get('/api/players/:name', viewer, (req, res) => {
   const nick = String(req.params.name).slice(0, 64);
   const card = playerCard(nick);
   if (!card) return res.status(404).json({ error: 'Игрок не найден' });
-  res.json(card);
+  // a ban in force is shown on the card (the reason and the end, as on the page of bans)
+  const b = activeBanByNick(nick, Date.now());
+  res.json({ ...card, ban: b ? { reason: b.reason, until: b.until, createdAt: b.created_at } : null });
 });
 
 /**
@@ -137425,6 +137579,22 @@ export default function AnalyticsTab({ id }: { id: number }) {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/server"
+  cat > "$APP_DIR/core-frontend/src/components/server/BansTab.tsx" << '__COREGSM_EOF__'
+import { t, useI18n } from '../../i18n';
+import { BansView } from '../../pages/Bans';
+
+/** the tab «Баны» of a server: the bans that hold on it (and the history of this server) */
+export default function BansTab({ serverId }: { serverId: number }) {
+  useI18n();
+  return (
+    <section className="tile tile-in p-4 sm:p-5">
+      <h2 className="mb-3 text-base font-extrabold">{t('d2.sd.bans')}</h2>
+      <BansView serverId={serverId} />
+    </section>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/server"
   cat > "$APP_DIR/core-frontend/src/components/server/ConnectTab.tsx" << '__COREGSM_EOF__'
 import { useEffect, useId, useRef, useState } from 'react';
 import { applyConnectTemplates, connectGuide, fillConnectTemplate } from '../../connectGuides';
@@ -139952,6 +140122,10 @@ import { navigate } from '../../ui/route';
 import { t, useI18n, type TKey } from '../../i18n';
 import { tabHref, type TabId } from './helpers';
 
+const IconBanTab = ({ size = 18, className }: IconProps) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden><circle cx="12" cy="12" r="9" /><path d="m5.7 5.7 12.6 12.6" /></svg>
+);
+
 export const TAB_LIST: { id: TabId; label: TKey; icon: ComponentType<IconProps> }[] = [
   { id: '', label: 'd2.tabs.overview', icon: IconGrid },
   { id: 'players', label: 'd2.pl.players', icon: IconUsers },
@@ -139959,6 +140133,7 @@ export const TAB_LIST: { id: TabId; label: TKey; icon: ComponentType<IconProps> 
   { id: 'stats', label: 'd2.tabs.stats', icon: IconBars },
   { id: 'events', label: 'd2.sd.sec.events', icon: IconBolt },
   { id: 'connect', label: 'd2.tabs.connect', icon: IconPlug },
+  { id: 'bans', label: 'd2.tabs.bans', icon: IconBanTab },
 ];
 
 export const tabDomId = (id: TabId) => `srv-tab-${id || 'overview'}`;
@@ -140115,7 +140290,7 @@ export function TabSkeleton({ tab }: { tab: TabId }) {
       </div>
     );
   }
-  if (tab === 'events') return <div className={`${sk} h-[360px]`} />;
+  if (tab === 'events' || tab === 'bans') return <div className={`${sk} h-[360px]`} />;
   if (tab === 'connect') {
     return (
       <div className="grid gap-3.5 lg:grid-cols-12">
@@ -140466,7 +140641,7 @@ import { useEffect, useLayoutEffect, useState, type CSSProperties } from 'react'
 import { COUNTRIES } from '../../countries';
 import { getPrefs } from '../../i18n';
 
-export const SERVER_TABS = ['players', 'history', 'stats', 'events', 'connect'] as const;
+export const SERVER_TABS = ['players', 'history', 'stats', 'events', 'connect', 'bans'] as const;
 export type TabId = '' | (typeof SERVER_TABS)[number];
 
 /** hash of a server page tab: '' = overview */
@@ -146599,6 +146774,32 @@ const en: Record<keyof typeof ru, string> = {
   'bans.empty.text': 'Nobody is banned right now.',
   'bans.none.title': 'Nothing found',
   'bans.none.text': 'Change the search or pick another server.',
+  'bans.player.banned': 'Banned',
+  'bans.tabs': 'Section',
+  'bans.tab.active': 'In force',
+  'bans.tab.history': 'History',
+  'bans.tab.appeals': 'Appeals',
+  'bans.h.lifted': 'Ban lifted',
+  'bans.h.expired': 'Expired',
+  'bans.h.empty': 'The history is empty',
+  'bans.h.emptyText': 'Bans that were given and lifted appear here.',
+  'bans.appeal.title': 'Were you banned?',
+  'bans.appeal.hint': 'Send an appeal, the moderators will read it',
+  'bans.appeal.nick': 'Nickname in the game',
+  'bans.appeal.text': 'What happened and why the ban should be lifted',
+  'bans.appeal.contact': 'How to reach you (optional)',
+  'bans.appeal.send': 'Send the appeal',
+  'bans.appeal.sent': 'The appeal is sent. The answer comes the way you gave, or you will see that the ban is lifted.',
+  'bans.appeal.accepted': 'Accepted',
+  'bans.appeal.rejected': 'Rejected',
+  'bans.appeal.acceptUnban': 'Accept and lift the ban',
+  'bans.appeal.reject': 'Reject',
+  'bans.appeal.contactOf': 'Contact: {c}',
+  'bans.appeal.by': 'Decided by {name}',
+  'bans.appeals.none': 'No appeals',
+  'bans.appeals.noneText': 'The appeals of banned players appear here.',
+  'bans.alerts': 'Send me a push about new bans and appeals',
+  'bans.alerts.hint': 'Works when notifications are on in the profile on this device.',
   'nav.admin': 'Admin',
   'nav.sections': 'Sections',
   'net.offline': 'You are offline. Showing the last data received.',
@@ -151158,6 +151359,8 @@ const en: Record<keyof typeof ru, string> = {
   'd2.tabs.history': 'History',
   'd2.tabs.stats': 'Analytics',
   'd2.tabs.connect': 'Connect',
+  'd2.tabs.bans': 'Bans',
+  'd2.sd.bans': 'Bans on this server',
   'd2.tabs.label': 'Server sections',
   'd2.gp.custom': 'Another game (enter a GameDig ID)…',
   'd2.gp.customShort': 'Another game (GameDig ID)',
@@ -151294,6 +151497,9 @@ const errorsEn: Record<string, string> = {
   too_many_connections: 'Too many open connections',
   history_entry_not_found: 'The entry was not found',
   history_not_revertible: 'This setting cannot be put back',
+  no_active_ban: 'There is no ban in force for this nickname',
+  appeal_exists: 'An appeal for this nickname has already been sent and waits for an answer',
+  appeal_not_found: 'The ban appeal was not found',
   too_many_attempts: 'Too many attempts. Wait 10 minutes.',
   bad_data: 'Invalid data',
   bad_data_lower: 'invalid data',
@@ -151685,6 +151891,32 @@ const ru = {
   'bans.empty.text': 'Сейчас никто не заблокирован.',
   'bans.none.title': 'Ничего не найдено',
   'bans.none.text': 'Измените запрос или выберите другой сервер.',
+  'bans.player.banned': 'Заблокирован',
+  'bans.tabs': 'Раздел',
+  'bans.tab.active': 'Действующие',
+  'bans.tab.history': 'История',
+  'bans.tab.appeals': 'Заявки',
+  'bans.h.lifted': 'Бан снят',
+  'bans.h.expired': 'Срок вышел',
+  'bans.h.empty': 'История пуста',
+  'bans.h.emptyText': 'Здесь появятся выданные и снятые баны.',
+  'bans.appeal.title': 'Вас заблокировали?',
+  'bans.appeal.hint': 'Подайте заявку, модераторы её прочтут',
+  'bans.appeal.nick': 'Ник в игре',
+  'bans.appeal.text': 'Что произошло и почему бан стоит снять',
+  'bans.appeal.contact': 'Как с вами связаться (необязательно)',
+  'bans.appeal.send': 'Отправить заявку',
+  'bans.appeal.sent': 'Заявка отправлена. Ответ придёт тем способом, который вы указали, или вы увидите, что бан снят.',
+  'bans.appeal.accepted': 'Принята',
+  'bans.appeal.rejected': 'Отклонена',
+  'bans.appeal.acceptUnban': 'Принять и снять бан',
+  'bans.appeal.reject': 'Отклонить',
+  'bans.appeal.contactOf': 'Связь: {c}',
+  'bans.appeal.by': 'Решил: {name}',
+  'bans.appeals.none': 'Заявок нет',
+  'bans.appeals.noneText': 'Заявки забаненных игроков появятся здесь.',
+  'bans.alerts': 'Присылать push о новых банах и заявках',
+  'bans.alerts.hint': 'Работает, если в профиле включены уведомления на этом устройстве.',
   'nav.admin': 'Админка',
   'nav.sections': 'Разделы',
   'net.offline': 'Нет сети. Показаны последние полученные данные.',
@@ -156244,6 +156476,8 @@ const ru = {
   'd2.tabs.history': 'История',
   'd2.tabs.stats': 'Аналитика',
   'd2.tabs.connect': 'Подключение',
+  'd2.tabs.bans': 'Баны',
+  'd2.sd.bans': 'Баны на сервере',
   'd2.tabs.label': 'Разделы сервера',
   'd2.gp.custom': 'Другая игра (ввести GameDig ID)…',
   'd2.gp.customShort': 'Другая игра (GameDig ID)',
@@ -159701,11 +159935,12 @@ export default function BackupsCard() {
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/Bans.tsx" << '__COREGSM_EOF__'
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api';
 import { t, useI18n } from '../i18n';
-import { Empty, ErrorLine, LoadError, PageHead, ago, fmtDateTime, usePoll } from '../ui';
+import { Empty, ErrorLine, LoadError, PageHead, ago, errText, fmtDateTime, toast, usePoll } from '../ui';
 import { useAuth } from '../auth';
+import { Switch } from '../components/Switch';
 import ArtPic from '../components/ArtPic';
 import '../styles/bans.css';
 
@@ -159727,6 +159962,31 @@ export interface BansData {
   last7d: number;
   servers: { id: number; name: string; count: number }[];
   items: PublicBan[];
+}
+
+export interface BanHistoryItem {
+  kind: 'ban' | 'unban';
+  nick: string;
+  reason: string;
+  serverId: number;
+  server: string;
+  at: number;
+  until: number;
+  expired: boolean;
+  admin?: string;
+}
+
+export interface Appeal {
+  id: number;
+  at: number;
+  nick: string;
+  platformId: string;
+  text: string;
+  contact: string;
+  status: 'open' | 'accepted' | 'rejected';
+  note: string;
+  decidedBy: string | null;
+  decidedAt: number | null;
 }
 
 const IconBan = () => (
@@ -159768,7 +160028,7 @@ function Row({ b, now, staff }: { b: PublicBan; now: number; staff: boolean }) {
       <span className="bn-ava" aria-hidden>{(Array.from(b.nick)[0] ?? '?').toUpperCase()}</span>
       <div className="bn-main">
         <div className="bn-head">
-          <b className="bn-nick">{b.nick || '—'}</b>
+          <a className="bn-nick" href={`/player/${encodeURIComponent(b.nick)}`}>{b.nick || '—'}</a>
           <time className="bn-when" dateTime={new Date(b.createdAt).toISOString()} title={fmtDateTime(b.createdAt)}>{ago(b.createdAt)}</time>
         </div>
         <p className={`bn-reason ${b.reason ? '' : 'is-none'}`}>{b.reason || t('bans.noReason')}</p>
@@ -159787,37 +160047,199 @@ function Row({ b, now, staff }: { b: PublicBan; now: number; staff: boolean }) {
   );
 }
 
-/** /bans: the bans that the game plugin has put in force */
-export default function BansPage() {
+function HistoryRow({ h, staff }: { h: BanHistoryItem; staff: boolean }) {
+  const lifted = h.kind === 'unban';
+  return (
+    <li className="bn-row">
+      <span className={`bn-ava ${lifted ? 'is-ok' : ''}`} aria-hidden>{lifted ? '✓' : (Array.from(h.nick)[0] ?? '?').toUpperCase()}</span>
+      <div className="bn-main">
+        <div className="bn-head">
+          <a className="bn-nick" href={`/player/${encodeURIComponent(h.nick)}`}>{h.nick || '—'}</a>
+          <time className="bn-when" dateTime={new Date(h.at).toISOString()} title={fmtDateTime(h.at)}>{ago(h.at)}</time>
+        </div>
+        {!lifted && <p className={`bn-reason ${h.reason ? '' : 'is-none'}`}>{h.reason || t('bans.noReason')}</p>}
+        <div className="bn-meta">
+          {h.server && <span className="bn-chip">{h.server}</span>}
+          {staff && h.admin && <span className="bn-chip">{t('bans.by', { name: h.admin })}</span>}
+        </div>
+      </div>
+      <div className="bn-state">
+        {lifted ? <span className="pill pill-ok">{t('bans.h.lifted')}</span> : h.expired ? <span className="pill pill-mute">{t('bans.h.expired')}</span> : h.until === 0 ? <span className="pill pill-bad">{t('bans.forever')}</span> : <span className="pill pill-warn">{t('bans.until', { date: fmtDateTime(h.until) })}</span>}
+      </div>
+    </li>
+  );
+}
+
+/** «Вас заблокировали?»: a form of an appeal; the staff reads it in the «Заявки» tab */
+function AppealForm() {
+  useI18n();
+  const [open, setOpen] = useState(false);
+  const [nick, setNick] = useState('');
+  const [text, setText] = useState('');
+  const [contact, setContact] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [sent, setSent] = useState(false);
+  const submit = async (e: { preventDefault: () => void }) => {
+    e.preventDefault();
+    setBusy(true);
+    setError('');
+    try {
+      await api('/bans/appeals', 'POST', { nick: nick.trim(), text: text.trim(), contact: contact.trim() || undefined });
+      setSent(true);
+    } catch (err) {
+      setError(errText(err));
+    }
+    setBusy(false);
+  };
+  if (sent) return <p className="bn-appeal bn-appeal-done" role="status">{t('bans.appeal.sent')}</p>;
+  return (
+    <section className="bn-appeal" aria-label={t('bans.appeal.title')}>
+      <button type="button" className="bn-appeal-head" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
+        <b>{t('bans.appeal.title')}</b>
+        <span>{t('bans.appeal.hint')}</span>
+        <span aria-hidden>{open ? '−' : '+'}</span>
+      </button>
+      {open && (
+        <form className="bn-appeal-form" onSubmit={(e) => void submit(e)}>
+          <label className="label" htmlFor="bn-nick">{t('bans.appeal.nick')}</label>
+          <input id="bn-nick" className="input" value={nick} onChange={(e) => setNick(e.target.value)} maxLength={100} required />
+          <label className="label" htmlFor="bn-text">{t('bans.appeal.text')}</label>
+          <textarea id="bn-text" className="input" rows={4} value={text} onChange={(e) => setText(e.target.value)} minLength={10} maxLength={1000} required />
+          <label className="label" htmlFor="bn-contact">{t('bans.appeal.contact')}</label>
+          <input id="bn-contact" className="input" value={contact} onChange={(e) => setContact(e.target.value)} maxLength={100} />
+          <ErrorLine text={error} />
+          <button type="submit" className="btn" disabled={busy || nick.trim().length === 0 || text.trim().length < 10}>{t('bans.appeal.send')}</button>
+        </form>
+      )}
+    </section>
+  );
+}
+
+const fetchAppeals = () => api<Appeal[]>('/bans/appeals');
+
+/** the staff: the appeals; a decision, with the ban lifted at once if asked */
+function AppealsPanel({ onChanged }: { onChanged: () => void }) {
+  useI18n();
+  const [list, setList] = useState<Appeal[] | null>(null);
+  const [error, setError] = useState('');
+  const load = () => fetchAppeals().then(setList).catch((e: Error) => setError(e.message));
+  useEffect(() => {
+    let off = false;
+    fetchAppeals().then((l) => { if (!off) setList(l); }).catch((e: Error) => { if (!off) setError(e.message); });
+    return () => { off = true; };
+  }, []);
+  const decide = async (a: Appeal, status: 'accepted' | 'rejected', unban: boolean) => {
+    try {
+      await api(`/bans/appeals/${a.id}`, 'PATCH', { status, unban });
+      toast(status === 'accepted' ? t('bans.appeal.accepted') : t('bans.appeal.rejected'));
+      await load();
+      onChanged();
+    } catch (e) {
+      setError(errText(e));
+    }
+  };
+  if (error && !list) return <LoadError error={error} onRetry={() => void load()} />;
+  if (!list) return <div className="skeleton bn-skel" aria-busy="true" />;
+  if (list.length === 0) return <Empty art={<ArtPic src="empty/empty-players" size={132} />} title={t('bans.appeals.none')} text={t('bans.appeals.noneText')} />;
+  return (
+    <>
+      <ErrorLine text={error} />
+      <ul className="bn-list">
+        {list.map((a) => (
+          <li key={a.id} className={`bn-row bn-appeal-row is-${a.status}`}>
+            <span className="bn-ava" aria-hidden>{(Array.from(a.nick)[0] ?? '?').toUpperCase()}</span>
+            <div className="bn-main">
+              <div className="bn-head">
+                <a className="bn-nick" href={`/player/${encodeURIComponent(a.nick)}`}>{a.nick}</a>
+                <time className="bn-when" dateTime={new Date(a.at).toISOString()} title={fmtDateTime(a.at)}>{ago(a.at)}</time>
+              </div>
+              <p className="bn-reason">{a.text}</p>
+              <div className="bn-meta">
+                {a.contact && <span className="bn-chip">{t('bans.appeal.contactOf', { c: a.contact })}</span>}
+                {a.decidedBy && <span className="bn-chip">{t('bans.appeal.by', { name: a.decidedBy })}</span>}
+              </div>
+            </div>
+            <div className="bn-state">
+              {a.status === 'open' ? (
+                <>
+                  <button type="button" className="btn btn-sm" onClick={() => void decide(a, 'accepted', true)}>{t('bans.appeal.acceptUnban')}</button>
+                  <button type="button" className="btn btn-soft btn-sm" onClick={() => void decide(a, 'rejected', false)}>{t('bans.appeal.reject')}</button>
+                </>
+              ) : <span className={`pill ${a.status === 'accepted' ? 'pill-ok' : 'pill-mute'}`}>{a.status === 'accepted' ? t('bans.appeal.accepted') : t('bans.appeal.rejected')}</span>}
+            </div>
+          </li>
+        ))}
+      </ul>
+    </>
+  );
+}
+
+/** «a push to me about new bans and appeals»: a switch of the staff */
+function AlertsToggle() {
+  useI18n();
+  const [on, setOn] = useState<boolean | null>(null);
+  useEffect(() => { api<{ on: boolean }>('/bans/alerts').then((r) => setOn(r.on)).catch(() => setOn(null)); }, []);
+  if (on === null) return null;
+  const set = async (v: boolean) => {
+    setOn(v);
+    try { await api('/bans/alerts', 'PUT', { on: v }); } catch (e) { setOn(!v); toast(errText(e), 'err'); }
+  };
+  return (
+    <label className="bn-alerts">
+      <Switch id="bans-alerts" checked={on} onChange={(v) => void set(v)} />
+      <span>{t('bans.alerts')}<small>{t('bans.alerts.hint')}</small></span>
+    </label>
+  );
+}
+
+type Tab = 'active' | 'history' | 'appeals';
+
+/** the bans: the ones in force, the history, for the staff the appeals; `serverId` narrows it to one server (its tab) */
+export function BansView({ serverId = 0 }: { serverId?: number }) {
   useI18n();
   const { me } = useAuth();
   const staff = me?.role === 'admin' || me?.role === 'moderator';
+  const [tab, setTab] = useState<Tab>('active');
   const [data, setData] = useState<BansData | null>(null);
+  const [history, setHistory] = useState<BanHistoryItem[] | null>(null);
   const [error, setError] = useState('');
-  const [server, setServer] = useState(0);
+  const [server, setServer] = useState(serverId);
   const [q, setQ] = useState('');
   const [now, setNow] = useState(() => Date.now());
   const load = () => api<BansData>('/bans').then((d) => { setData(d); setNow(Date.now()); setError(''); }).catch((e: Error) => setError(e.message));
   usePoll(load, 60_000);
+  useEffect(() => {
+    if (tab !== 'history') return;
+    api<{ items: BanHistoryItem[] }>(`/bans/history${serverId ? `?server=${serverId}` : ''}`).then((r) => setHistory(r.items)).catch((e: Error) => setError(e.message));
+  }, [tab, serverId]);
 
   const shown = useMemo(() => (data ? filterBans(data.items, server, q) : []), [data, server, q]);
+  const histShown = useMemo(() => (history ?? []).filter((h) => !q.trim() || h.nick.toLowerCase().includes(q.trim().toLowerCase()) || h.reason.toLowerCase().includes(q.trim().toLowerCase())), [history, q]);
+  const tabs: [Tab, string][] = [['active', t('bans.tab.active')], ['history', t('bans.tab.history')], ...(staff ? [['appeals', t('bans.tab.appeals')] as [Tab, string]] : [])];
 
   return (
     <div className="bn-page">
-      <PageHead icon={<IconBan />} title={t('nav.bans')} subtitle={t('bans.subtitle')} />
       {error && !data ? <LoadError error={error} onRetry={() => void load()} /> : <ErrorLine text={error} />}
       {!data && !error && <div className="skeleton bn-skel" aria-busy="true" aria-label={t('bans.loading')} />}
       {data && (
         <>
-          <div className="bn-stats">
-            <Stat n={data.total} label={t('bans.stat.active')} />
-            <Stat n={data.forever} label={t('bans.stat.forever')} />
-            <Stat n={data.last7d} label={t('bans.stat.week')} />
+          {!serverId && (
+            <div className="bn-stats">
+              <Stat n={data.total} label={t('bans.stat.active')} />
+              <Stat n={data.forever} label={t('bans.stat.forever')} />
+              <Stat n={data.last7d} label={t('bans.stat.week')} />
+            </div>
+          )}
+          <div className="bn-tabs seg" role="group" aria-label={t('bans.tabs')}>
+            {tabs.map(([id, label]) => <button key={id} type="button" className="seg-item" aria-pressed={tab === id} onClick={() => setTab(id)}>{label}</button>)}
           </div>
-          {data.total > 0 && (
+          {staff && !serverId && <AlertsToggle />}
+
+          {tab !== 'appeals' && (data.total > 0 || tab === 'history') && (
             <div className="bn-bar">
               <input type="search" className="input bn-search" value={q} onChange={(e) => setQ(e.target.value)} placeholder={t('bans.search')} aria-label={t('bans.search')} maxLength={60} />
-              {data.servers.length > 1 && (
+              {tab === 'active' && !serverId && data.servers.length > 1 && (
                 <div className="bn-servers" role="group" aria-label={t('bans.servers')}>
                   <button type="button" className="nw-rub" aria-pressed={server === 0} onClick={() => setServer(0)}>{t('bans.allServers')}</button>
                   {data.servers.map((s) => (
@@ -159829,15 +160251,38 @@ export default function BansPage() {
               )}
             </div>
           )}
-          {data.total === 0 && <Empty art={<ArtPic src="empty/empty-players" size={132} />} title={t('bans.empty.title')} text={t('bans.empty.text')} />}
-          {data.total > 0 && shown.length === 0 && <Empty art={<ArtPic src="empty/empty-players" size={132} />} title={t('bans.none.title')} text={t('bans.none.text')} />}
-          {shown.length > 0 && (
-            <ul className="bn-list fade-in" key={`${server}-${q}`} aria-label={t('nav.bans')}>
-              {shown.map((b) => <Row key={`${b.platformId ?? b.nick}-${b.createdAt}`} b={b} now={now} staff={staff} />)}
-            </ul>
+
+          {tab === 'active' && (
+            <>
+              {data.total === 0 && <Empty art={<ArtPic src="empty/empty-players" size={132} />} title={t('bans.empty.title')} text={t('bans.empty.text')} />}
+              {data.total > 0 && shown.length === 0 && <Empty art={<ArtPic src="empty/empty-players" size={132} />} title={t('bans.none.title')} text={t('bans.none.text')} />}
+              {shown.length > 0 && (
+                <ul className="bn-list fade-in" key={`${server}-${q}`} aria-label={t('nav.bans')}>
+                  {shown.map((b) => <Row key={`${b.platformId ?? b.nick}-${b.createdAt}`} b={b} now={now} staff={staff} />)}
+                </ul>
+              )}
+              {!serverId && <AppealForm />}
+            </>
           )}
+          {tab === 'history' && (
+            history === null ? <div className="skeleton bn-skel" aria-busy="true" /> : histShown.length === 0
+              ? <Empty art={<ArtPic src="empty/empty-players" size={132} />} title={t('bans.h.empty')} text={t('bans.h.emptyText')} />
+              : <ul className="bn-list fade-in" aria-label={t('bans.tab.history')}>{histShown.map((h) => <HistoryRow key={`${h.kind}-${h.nick}-${h.at}`} h={h} staff={staff} />)}</ul>
+          )}
+          {tab === 'appeals' && staff && <AppealsPanel onChanged={() => void load()} />}
         </>
       )}
+    </div>
+  );
+}
+
+/** /bans: the bans that the game plugin has put in force */
+export default function BansPage() {
+  useI18n();
+  return (
+    <div className="bn-page">
+      <PageHead icon={<IconBan />} title={t('nav.bans')} subtitle={t('bans.subtitle')} />
+      <BansView />
     </div>
   );
 }
@@ -165580,6 +166025,8 @@ import '../styles/community.css';
 import '../styles/profile.css';
 
 interface PlayerCard {
+  /** a ban in force (the reason and the end) */
+  ban?: { reason: string; until: number; createdAt: number } | null;
   name: string;
   firstSeen: number;
   lastSeen: number | null;
@@ -165653,6 +166100,14 @@ export default function PlayerPage({ name }: { name: string }) {
             {rank && <span className="pl-rank">{rank.name}</span>}
             <span>{t('d2.pl.first', { when: fmtDateTime(p.firstSeen) })}</span>
           </p>
+          {p.ban && (
+            <p className="pl-banned" role="status">
+              <b>{t('bans.player.banned')}</b>
+              <span>{p.ban.until === 0 ? t('bans.forever') : t('bans.until', { date: fmtDateTime(p.ban.until) })}</span>
+              {p.ban.reason && <span>{p.ban.reason}</span>}
+              <a href="/bans">{t('nav.bans')}</a>
+            </p>
+          )}
           <div className="mt-2 flex flex-wrap items-center gap-2"><FollowButton nick={p.name} /><ReportButton nick={p.name} /></div>
         </div>
         {(p.ranks.week != null || p.ranks.month != null || p.ranks.all != null) && (
@@ -166679,6 +167134,7 @@ import { lazyPage, PageFrame } from '../lazyPage';
 
 // the analytics tab and its charts load when it is opened
 const AnalyticsTab = lazyPage(() => import('../components/server/AnalyticsTab'));
+const BansTab = lazyPage(() => import('../components/server/BansTab'));
 
 export { SERVER_TABS } from '../components/server/helpers';
 
@@ -167189,6 +167645,8 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
         <EventsFeed events={events} online={s.online} uptimePct={stats.uptimePct ?? null} windowLabel={windowLabel} />
       </section>
     );
+  } else if (tab === 'bans') {
+    panel = <PageFrame><BansTab serverId={id} /></PageFrame>;
   } else if (tab === 'connect') {
     panel = <ConnectTab game={s.game} address={s.address} sections={sections} />;
   } else {
@@ -173303,6 +173761,23 @@ __COREGSM_EOF__
   .bn-stat b { font-size: 1.4rem; }
 }
 :root[data-ember='1'] .bn-row, :root[data-ember='1'] .bn-stat { border-radius: var(--emb-r-card); border: 0; box-shadow: var(--shadow-2); }
+.bn-nick { font-size: 1.125rem; font-weight: 800; overflow-wrap: anywhere; color: inherit; text-decoration: none; }
+.bn-nick:hover { text-decoration: underline; }
+.bn-ava.is-ok { background: rgb(var(--okbg)); color: rgb(var(--ok)); }
+.bn-tabs { width: fit-content; max-width: 100%; overflow-x: auto; }
+.bn-alerts { display: flex; align-items: flex-start; gap: .75rem; font-weight: 700; cursor: pointer; }
+.bn-alerts small { display: block; font-size: .8125rem; font-weight: 600; color: rgb(var(--mute)); }
+.bn-appeal { border-radius: var(--r-lg); background: rgb(var(--card)); border: 1px solid rgb(var(--line)); }
+.bn-appeal-head { display: grid; grid-template-columns: 1fr auto; gap: .1rem .75rem; width: 100%; min-height: 44px; padding: .9rem 1.1rem; border: 0; background: none; color: inherit; text-align: left; cursor: pointer; }
+.bn-appeal-head > span:nth-child(2) { grid-column: 1; font-size: .875rem; font-weight: 600; color: rgb(var(--mute)); }
+.bn-appeal-head > span:last-child { grid-column: 2; grid-row: 1 / span 2; align-self: center; font-size: 1.4rem; }
+.bn-appeal-form { display: grid; gap: .5rem; padding: 0 1.1rem 1.1rem; max-width: 36rem; }
+.bn-appeal-done { padding: .9rem 1.1rem; font-weight: 650; color: rgb(var(--ok)); }
+.bn-appeal-row.is-open { box-shadow: inset 3px 0 0 rgb(var(--warn)), var(--shadow-1); }
+.bn-appeal-row .bn-state { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: .4rem; }
+:root[data-ember='1'] .bn-appeal { border: 0; border-radius: var(--emb-r-card); box-shadow: var(--shadow-2); }
+.pl-banned { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem .8rem; margin: .6rem 0 0; padding: .55rem .9rem; border-radius: var(--r-md); background: rgb(var(--badbg)); color: rgb(var(--bad)); font-weight: 650; }
+.pl-banned a { margin-left: auto; text-decoration: underline; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/buttons.css" << '__COREGSM_EOF__'

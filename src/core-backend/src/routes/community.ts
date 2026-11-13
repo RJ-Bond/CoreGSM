@@ -16,6 +16,7 @@
  */
 import express from 'express';
 import { viewer } from '../security/auth.js';
+import { activeBanByNick } from '../gamenews/gameNewsModLog.js';
 import { avatarFor } from '../images/avatars.js';
 import { db, EFFECTIVE_NAME, getSetting } from '../db.js';
 import { localParts } from '../admin/localTime.js';
@@ -210,7 +211,9 @@ router.get('/api/players/:name', viewer, (req, res) => {
   const nick = String(req.params.name).slice(0, 64);
   const card = playerCard(nick);
   if (!card) return res.status(404).json({ error: 'Игрок не найден' });
-  res.json(card);
+  // a ban in force is shown on the card (the reason and the end, as on the page of bans)
+  const b = activeBanByNick(nick, Date.now());
+  res.json({ ...card, ban: b ? { reason: b.reason, until: b.until, createdAt: b.created_at } : null });
 });
 
 /**

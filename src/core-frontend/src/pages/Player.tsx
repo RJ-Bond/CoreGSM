@@ -18,6 +18,8 @@ import '../styles/community.css';
 import '../styles/profile.css';
 
 interface PlayerCard {
+  /** a ban in force (the reason and the end) */
+  ban?: { reason: string; until: number; createdAt: number } | null;
   name: string;
   firstSeen: number;
   lastSeen: number | null;
@@ -91,6 +93,14 @@ export default function PlayerPage({ name }: { name: string }) {
             {rank && <span className="pl-rank">{rank.name}</span>}
             <span>{t('d2.pl.first', { when: fmtDateTime(p.firstSeen) })}</span>
           </p>
+          {p.ban && (
+            <p className="pl-banned" role="status">
+              <b>{t('bans.player.banned')}</b>
+              <span>{p.ban.until === 0 ? t('bans.forever') : t('bans.until', { date: fmtDateTime(p.ban.until) })}</span>
+              {p.ban.reason && <span>{p.ban.reason}</span>}
+              <a href="/bans">{t('nav.bans')}</a>
+            </p>
+          )}
           <div className="mt-2 flex flex-wrap items-center gap-2"><FollowButton nick={p.name} /><ReportButton nick={p.name} /></div>
         </div>
         {(p.ranks.week != null || p.ranks.month != null || p.ranks.all != null) && (

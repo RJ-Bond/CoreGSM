@@ -13,6 +13,8 @@ export interface BusEvents {
   'server.state': { id: number; online: boolean; previous: boolean; at: number };
   /** a setting of the panel was changed (the key, not the value) */
   'settings.changed': { key: string; actor: string | null };
+  /** a ban was put in force (not the short block after a kick) */
+  'ban.created': { nick: string; reason: string; admin: string; until: number; serverId: number };
 }
 export type BusName = keyof BusEvents;
 

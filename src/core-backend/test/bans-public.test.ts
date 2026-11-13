@@ -67,3 +67,71 @@ describe('api: /api/bans', () => {
     assert.equal((await api.call('GET', '/api/bans', { token })).status, 200);
   });
 });
+
+describe('api: the history, the appeals and the alerts of the bans', () => {
+  let api: Api;
+  let token = '';
+  before(async () => {
+    api = await startBackend();
+    token = await setupAdmin(api);
+    // the plugin has put two bans in force and the log knows a ban, an unban and a kick
+    const { default: Database } = await import('better-sqlite3');
+    const d = new Database(api.dbPath);
+    const now = Date.now();
+    d.prepare("INSERT INTO game_bans (platform_id, nick, reason, admin, created_at, until, kind, server_id, scope) VALUES ('p1', 'Cheater', 'aimbot', 'Boss', ?, 0, 'ban', 0, 'all')").run(now);
+    d.prepare("INSERT INTO game_bans (platform_id, nick, reason, admin, created_at, until, kind, server_id, scope) VALUES ('p2', 'Rude', 'insults', 'Boss', ?, ?, 'ban', 0, 'all')").run(now, now + 86_400_000);
+    const log = d.prepare("INSERT INTO game_mod_log (ts, kind, platform_id, nick, admin, reason, server_id, until) VALUES (?, ?, ?, ?, ?, ?, 0, ?)");
+    log.run(now - 3000, 'ban', 'p1', 'Cheater', 'Boss', 'aimbot', 0);
+    log.run(now - 2000, 'unban', 'p9', 'Forgiven', 'Boss', '', 0);
+    log.run(now - 1000, 'kick', 'p8', 'Kicked', 'Boss', 'afk', 0);
+    d.close();
+  });
+  after(async () => { await api.stop(); });
+
+  it('tells the history of bans and unbans without the kicks and without the names of the staff for a guest', async () => {
+    const g = (await api.call('GET', '/api/bans/history')).body as { items: { kind: string; nick: string; admin?: string }[] };
+    assert.deepEqual(g.items.map((i) => `${i.kind}:${i.nick}`), ['unban:Forgiven', 'ban:Cheater']);
+    assert.ok(g.items.every((i) => !('admin' in i)));
+    const s = (await api.call('GET', '/api/bans/history', { token })).body as { items: { admin?: string }[] };
+    assert.equal(s.items[0].admin, 'Boss');
+  });
+
+  it('takes an appeal only for a nickname with a ban in force, once, and lets only the staff read and decide', async () => {
+    const send = (nick: string, text = 'I did nothing wrong, please check the log') => api.call('POST', '/api/bans/appeals', { body: { nick, text } });
+    assert.equal((await send('Nobody')).status, 404, 'no ban, no appeal');
+    assert.equal((await api.call('POST', '/api/bans/appeals', { body: { nick: 'Rude', text: 'short' } })).status, 400);
+    const ok = await send('rude');
+    assert.equal(ok.status, 201, 'the nickname is taken in any case');
+    assert.equal((await send('Rude')).status, 409, 'one open appeal per nickname');
+    assert.equal((await api.call('GET', '/api/bans/appeals')).status, 401);
+    const list = (await api.call('GET', '/api/bans/appeals', { token })).body as { id: number; nick: string; status: string; platformId: string }[];
+    assert.equal(list.length, 1);
+    assert.equal(list[0].nick, 'Rude');
+    assert.equal(list[0].platformId, 'p2');
+    assert.equal((await api.call('PATCH', `/api/bans/appeals/${list[0].id}`, { body: { status: 'accepted', unban: true } })).status, 401);
+    assert.equal((await api.call('PATCH', `/api/bans/appeals/${list[0].id}`, { token, body: { status: 'accepted', unban: true, note: 'first time' } })).status, 200);
+    const left = (await api.call('GET', '/api/bans')).body as { items: { nick: string }[] };
+    assert.deepEqual(left.items.map((b) => b.nick), ['Cheater'], 'the ban is lifted with the decision');
+    const hist = (await api.call('GET', '/api/bans/history')).body as { items: { kind: string; nick: string }[] };
+    assert.equal(hist.items[0].kind, 'unban');
+    assert.equal((await api.call('PATCH', '/api/bans/appeals/9999', { token, body: { status: 'rejected' } })).status, 404);
+  });
+
+  it('keeps the switch of the push about bans for each member of the staff', async () => {
+    assert.equal((await api.call('GET', '/api/bans/alerts')).status, 401);
+    assert.deepEqual((await api.call('GET', '/api/bans/alerts', { token })).body, { on: false });
+    assert.deepEqual((await api.call('PUT', '/api/bans/alerts', { token, body: { on: true } })).body, { on: true });
+    assert.deepEqual((await api.call('GET', '/api/bans/alerts', { token })).body, { on: true });
+  });
+
+  it('shows the ban on the card of the player', async () => {
+    const sid = ((await api.call('POST', '/api/servers', { token, body: { name: 'Card test', game: 'vrising', host: '127.0.0.1', port: 25597 } })).body as { id: number }).id;
+    const d = (await import('better-sqlite3')).default;
+    const db = new d(api.dbPath);
+    db.prepare("INSERT INTO player_sessions (server_id, name, joined_at, left_at) VALUES (?, 'Cheater', ?, ?)").run(sid, Date.now() - 7200_000, Date.now() - 3600_000);
+    db.close();
+    const r = await api.call('GET', '/api/players/Cheater');
+    assert.equal(r.status, 200);
+    assert.equal((r.body as { ban: { reason: string } | null }).ban?.reason, 'aimbot');
+  });
+});

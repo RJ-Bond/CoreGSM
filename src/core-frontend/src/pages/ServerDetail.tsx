@@ -44,6 +44,7 @@ import { lazyPage, PageFrame } from '../lazyPage';
 
 // the analytics tab and its charts load when it is opened
 const AnalyticsTab = lazyPage(() => import('../components/server/AnalyticsTab'));
+const BansTab = lazyPage(() => import('../components/server/BansTab'));
 
 export { SERVER_TABS } from '../components/server/helpers';
 
@@ -554,6 +555,8 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
         <EventsFeed events={events} online={s.online} uptimePct={stats.uptimePct ?? null} windowLabel={windowLabel} />
       </section>
     );
+  } else if (tab === 'bans') {
+    panel = <PageFrame><BansTab serverId={id} /></PageFrame>;
   } else if (tab === 'connect') {
     panel = <ConnectTab game={s.game} address={s.address} sections={sections} />;
   } else {

@@ -426,6 +426,29 @@ CREATE TABLE IF NOT EXISTS rum_samples (
 );
 CREATE INDEX IF NOT EXISTS idx_rum_samples ON rum_samples(route, metric, ts);`),
   },
+  {
+    version: 30,
+    name: 'ban_appeals',
+    // an appeal of a banned player (the staff reads and decides) and who of the staff wants a push about new bans and appeals
+    up: (db) =>
+      db.exec(`
+CREATE TABLE IF NOT EXISTS ban_appeals (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts INTEGER NOT NULL,
+  nick TEXT NOT NULL,
+  platform_id TEXT NOT NULL DEFAULT '',
+  text TEXT NOT NULL,
+  contact TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'open',
+  note TEXT NOT NULL DEFAULT '',
+  decided_by TEXT,
+  decided_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_ban_appeals ON ban_appeals(status, ts);
+CREATE TABLE IF NOT EXISTS ban_alerts (
+  user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE
+);`),
+  },
 ];
 
 export const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;

@@ -4,6 +4,10 @@ import { navigate } from '../../ui/route';
 import { t, useI18n, type TKey } from '../../i18n';
 import { tabHref, type TabId } from './helpers';
 
+const IconBanTab = ({ size = 18, className }: IconProps) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden><circle cx="12" cy="12" r="9" /><path d="m5.7 5.7 12.6 12.6" /></svg>
+);
+
 export const TAB_LIST: { id: TabId; label: TKey; icon: ComponentType<IconProps> }[] = [
   { id: '', label: 'd2.tabs.overview', icon: IconGrid },
   { id: 'players', label: 'd2.pl.players', icon: IconUsers },
@@ -11,6 +15,7 @@ export const TAB_LIST: { id: TabId; label: TKey; icon: ComponentType<IconProps> 
   { id: 'stats', label: 'd2.tabs.stats', icon: IconBars },
   { id: 'events', label: 'd2.sd.sec.events', icon: IconBolt },
   { id: 'connect', label: 'd2.tabs.connect', icon: IconPlug },
+  { id: 'bans', label: 'd2.tabs.bans', icon: IconBanTab },
 ];
 
 export const tabDomId = (id: TabId) => `srv-tab-${id || 'overview'}`;

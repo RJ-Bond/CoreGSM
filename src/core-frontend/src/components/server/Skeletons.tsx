@@ -36,7 +36,7 @@ export function TabSkeleton({ tab }: { tab: TabId }) {
       </div>
     );
   }
-  if (tab === 'events') return <div className={`${sk} h-[360px]`} />;
+  if (tab === 'events' || tab === 'bans') return <div className={`${sk} h-[360px]`} />;
   if (tab === 'connect') {
     return (
       <div className="grid gap-3.5 lg:grid-cols-12">

@@ -4,6 +4,7 @@
  * No answers for people here: only what is kept and counted.
  */
 import { db } from '../db.js';
+import { bus } from '../events.js';
 import { formatLeft } from './gameNewsRestartLogic.js';
 
 export type ModKind = 'kick' | 'ban' | 'warn' | 'unban';
@@ -80,6 +81,15 @@ export function putBan(b: { platformId: string; nick: string; reason: string; ad
      ON CONFLICT(platform_id) DO UPDATE SET nick = excluded.nick, reason = excluded.reason, admin = excluded.admin, created_at = excluded.created_at,
        until = excluded.until, kind = excluded.kind, server_id = excluded.server_id, scope = excluded.scope`,
   ).run(b.platformId, b.nick.slice(0, 100), b.reason.slice(0, 300), b.admin.slice(0, 100), now, b.until, b.kind, b.serverId, b.scope ?? 'all');
+  if (b.kind === 'ban') bus.emit('ban.created', { nick: b.nick, reason: b.reason, admin: b.admin, until: b.until, serverId: b.serverId });
+}
+
+/** the ban in force of a player by the exact nick (the card of a player shows it); a short block after a kick is not a ban */
+export function activeBanByNick(nick: string, now: number): BanRow | undefined {
+  const n = nick.trim().toLowerCase();
+  if (!n) return undefined;
+  const r = db.prepare("SELECT * FROM game_bans WHERE ulower(nick) = ? AND kind = 'ban'").get(n) as BanRow | undefined;
+  return r && (r.until === 0 || r.until > now) ? r : undefined;
 }
 
 /** does a ban hold on this server (a ban of one server does not hold on the others; serverId undefined = look at all) */
