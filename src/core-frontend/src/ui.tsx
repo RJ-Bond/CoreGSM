@@ -23,7 +23,7 @@ export { ago, fmtDate, fmtTime, fmtDateTime, fmtDay, num, plural } from './ui/fo
 export { ThemeToggle, adminThemeIsOwn, applyDefaultTheme, currentTheme, resetAdminTheme, setThemeChoice, setThemeScope } from './ui/theme';
 export { Modal, Field, StatusPill, GameAvatar, FillBar, PageHead, GoLink, Notice, ErrorLine, Empty, CopyButton, Logo, ProxyField, InviteButton, SkeletonRows, Wordmark } from './ui/blocks';
 export type { ProxyType } from './ui/blocks';
-export { Spark, MiniSpark, smoothPath, smoothValues, SmoothArea, FleetBar, useSparkSpanMin, useHourTrend, spanCaption } from './ui/charts';
+export { Spark, MiniSpark, smoothPath, smoothValues, SmoothArea, FleetBar, useSparkSpanMin, useHourTrend, useDayStats, spanCaption } from './ui/charts';
 export { toast, dismissToast, undoable, Toaster } from './ui/toast';
 export type { ToastAction, ToastOptions } from './ui/toast';
 export { errText, fail, useAction } from './ui/action';

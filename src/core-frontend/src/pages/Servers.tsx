@@ -11,7 +11,7 @@ import { useAuth } from '../auth';
 import { gameColor, gameGradient, gameLabel } from '../games';
 import { coverBackground, emblemStyle, gameBackdrop, coverUrlOf } from '../cover';
 import MaintenanceChip from '../components/MaintenanceChip';
-import { AnimatedNumber, Burst, ErrorLine, GameAvatar, LoadError, IconServers, PageHead, Spark, StatusPill, ago, isLag, spanCaption, useSparkSpanMin, usePoll, toast, navigate, routeQuery, fmtTime, errText } from '../ui';
+import { AnimatedNumber, Burst, ErrorLine, GameAvatar, LoadError, IconServers, PageHead, Spark, StatusPill, ago, isLag, spanCaption, useSparkSpanMin, usePoll, toast, navigate, routeQuery, fmtTime, errText, useDayStats } from '../ui';
 import { connectGuide } from '../connectGuides';
 import { t, useI18n, type TKey } from '../i18n';
 import { calmSeriesColor, useCoverAccent } from '../components/server/coverAccent';
@@ -291,7 +291,7 @@ function ServerList() {
   // (the problem servers are named in the alert row of the pulse strip and sit first among the tiles)
   const [myOrder, setMyOrder] = useState<number[]>(readOrder);
   const orderIdx = (id: number) => { const i = myOrder.indexOf(id); return i < 0 ? Number.MAX_SAFE_INTEGER : i; };
-  const rest = sorted.filter((s) => s.id !== hero?.id).sort((a, b) => Number(needsAttention(b)) - Number(needsAttention(a)) || orderIdx(a.id) - orderIdx(b.id));
+  const rest = sorted.filter((s) => s.id !== hero?.id).sort((a, b) => Number(needsAttention(b)) - Number(needsAttention(a)) || orderIdx(a.id) - orderIdx(b.id) || Number(a.online && a.players === 0) - Number(b.online && b.players === 0) || b.players - a.players);
   // Ember: the favourites are pinned above the rest, each group with its own heading
   const pinFavs = ember && !!me && rest.some((s) => favs.includes(s.id)) && rest.some((s) => !favs.includes(s.id));
   const restShown = pinFavs ? [...rest].sort((a, b) => Number(favs.includes(b.id)) - Number(favs.includes(a.id))) : rest;
@@ -700,6 +700,27 @@ function PhoneRow({ s, idx, fav, onFav, onOpen, select }: { rx: Reactions; s: Se
   );
 }
 
+/** a server with nobody on it: not a grey zero and an empty bar, but when somebody was last there, the peak of the day and when it usually fills up */
+function EmptyNow({ s }: { s: Server }) {
+  useI18n();
+  const day = useDayStats(s.id);
+  const baseline = useBaseline(s.id);
+  const usual = nextUsualPeak(baseline, Date.now(), 24);
+  return (
+    <div className="srv-empty px-1.5">
+      <div className="srv-empty-head">
+        <b><i aria-hidden />{t('srv.empty.title')}<small>/ {s.maxPlayers}</small></b>
+        {s.ping != null && <span className={`inline-flex items-center gap-1.5 text-fs-sm font-bold ${TONE_TEXT[pingTone(s.ping).tone]}`}><i className={`ping-dot ${pingTone(s.ping).tone}`} aria-hidden />{t('d2.bot.ms', { n: s.ping })}</span>}
+      </div>
+      <ul>
+        {day.known && <li>{day.lastActiveMin == null ? t('srv.empty.noneDay') : t('srv.empty.last', { d: durText(Math.max(1, day.lastActiveMin) * 60_000) })}</li>}
+        {day.known && day.peak > 0 && <li>{t('srv.empty.peak', { n: day.peak })}</li>}
+        {usual && !usual.now && <li>{t('srv.empty.usual', { time: fmtTime(usual.at) })}</li>}
+      </ul>
+    </div>
+  );
+}
+
 function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince, dnd, wide }: { dnd?: TileDnd; wide?: number; rx: Reactions; s: Server; idx: number; fav: boolean | null; onFav: () => void; onOpen: () => void; select?: SelectProps; uptime?: number; downSince?: number }) {
   useI18n();
   const [who, setWho] = useState(false);
@@ -711,6 +732,20 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince, 
   const emb = emblemStyle(s.coverUrl, s.game);
   const nearFull = s.online && s.maxPlayers > 0 && s.players / s.maxPlayers >= 0.8;
   const { swallow, ...lp } = useQuickLongPress();
+  const { isAdmin } = useAuth();
+  const unnamed = s.name === s.address || s.name === `${s.host}:${s.port}`;
+  const play = connectGuide(s.game, s.address).link;
+  const [polling, setPolling] = useState(false);
+  const pollNow = async (e: MouseEvent<HTMLElement>) => {
+    e.stopPropagation();
+    setPolling(true);
+    try { await api(`/servers/${s.id}/refresh`, 'POST'); toast(t('srv.hero.polled')); } catch (err) { toast(errText(err), 'err'); }
+    setPolling(false);
+  };
+  const copyAddr = async (e: MouseEvent<HTMLElement>) => {
+    e.stopPropagation();
+    try { await navigator.clipboard.writeText(s.address); toast(t('srv.addr.copied')); } catch { /* the address stays on the tile */ }
+  };
   return (
     <article
       {...dnd}
@@ -729,24 +764,31 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince, 
           {fav != null && <FavButton on={fav} name={s.name} onClick={onFav} className={fav ? 'text-white' : 'text-white/85'} glass />}
           <QuickMenu s={s} glass />
         </div>
+        {/* the way in without opening the server: shown under the pointer (and by the keyboard), not on a phone */}
+        <div className="srv-hover-actions">
+          {s.online && play && <a className="btn btn-glass btn-sm" href={play.href} onClick={(e) => e.stopPropagation()}>{play.label}</a>}
+          <button type="button" className="btn btn-glass btn-sm" onClick={(e) => void copyAddr(e)}>{t('srv.tile.copy')}</button>
+        </div>
       </div>
 
       <div className="px-1.5">
         <h3 className="srv-name text-fs-lg font-extrabold leading-tight" title={s.name}>
-          <a href={`/servers/${s.id}`} onClick={linkClick(s, select)} className="hover:text-link">{s.name}</a>
+          <a href={`/servers/${s.id}`} onClick={linkClick(s, select)} className={unnamed ? 'srv-unnamed hover:text-link' : 'hover:text-link'} title={unnamed && isAdmin ? t('srv.unnamed.tip') : undefined}>{unnamed ? t('srv.unnamed') : s.name}</a>
         </h3>
         <div className="srv-chips">{nearFull && <span className="srv-badge-full" title={t('srv.cap.nearFull', { pct: Math.round((s.players / s.maxPlayers) * 100) })}>{t('srv.tile.full')}</span>}<span className="srv-game truncate">{gameLabel(s.game)}</span>{s.online && s.map && <span className="srv-chip" title={t('d2.srv.mapTitle', { map: s.map })}><CardMap />{s.map}</span>}{s.version && <span className="srv-chip" title={t('d2.srv.version')}><CardTag />v{s.version}</span>}</div>
         {s.maintenance && <MaintenanceChip m={s.maintenance} className="mt-1" />}
       </div>
 
-      {s.online ? (
+      {s.online && s.players === 0 ? (
+        <EmptyNow s={s} />
+      ) : s.online ? (
         <>
           <div className={`srv-count flex items-baseline gap-1.5 px-1.5 ${s.players === 0 ? 'srv-zero' : ''}`}>
             <CountReact r={r}><AnimatedNumber value={s.players} className="text-[38px] font-extrabold leading-none tracking-[-0.03em]" /></CountReact>
             <span className="text-fs-xl font-bold text-mute">/ {s.maxPlayers}</span>
             <TrendChip serverId={s.id} />
             {(s.playerNames?.length ?? 0) > 0 && <button type="button" className="srv-who" aria-label={t('srv.who')} title={t('srv.who')} aria-expanded={who} onClick={(e) => { e.stopPropagation(); setWho((v) => !v); }}><PlayerStack names={s.playerNames ?? []} /></button>}
-            <span className={`ml-auto inline-flex items-center gap-1.5 text-fs-sm font-bold ${s.ping != null ? TONE_TEXT[pingTone(s.ping).tone] : 'text-mute'}`}>{s.ping != null && <><PingBars ping={s.ping} tone={pingTone(s.ping).tone} />{t('d2.bot.ms', { n: s.ping })}</>}</span>
+            <span className={`ml-auto inline-flex items-center gap-1.5 text-fs-sm font-bold ${s.ping != null ? TONE_TEXT[pingTone(s.ping).tone] : 'text-mute'}`} title={s.ping != null ? t('d2.srv.ping', { ms: s.ping }) : undefined}>{s.ping != null && <><i className={`ping-dot ${pingTone(s.ping).tone}`} aria-hidden />{t('d2.bot.ms', { n: s.ping })}</>}</span>
           </div>
           <CapacityBar className="px-1.5" players={s.players} max={s.maxPlayers} color="rgb(var(--ink) / .5)" />
           {who && <PlayerNames className="px-1.5" names={s.playerNames ?? []} max={12} />}
@@ -760,7 +802,8 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince, 
             <div className="srv-down mx-1.5" title={s.error ?? undefined}>
               <span className="srv-down-k"><i aria-hidden />{t('srv.down.k')}</span>
               <b className="srv-down-v">{downSince ? durText(Date.now() - downSince) : ago(s.updatedAt)}</b>
-              <span className="srv-down-s">{t('srv.down.last', { ago: ago(s.updatedAt) })}</span>
+              <span className="srv-down-s">{downSince ? t('srv.down.since', { when: new Date(downSince).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) }) + ' · ' : ''}{t('srv.down.last', { ago: ago(s.updatedAt) })}</span>
+              {isAdmin && <button type="button" className="btn btn-soft btn-sm srv-down-btn" disabled={polling} onClick={(e) => void pollNow(e)}>{polling ? t('d2.sd.polling') : t('srv.hero.poll')}</button>}
             </div>
             <div className="srv-off-fig px-1.5" aria-hidden><b>{t('srv.off.fig')}</b><i /></div>
           </>
@@ -770,7 +813,7 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince, 
       )}
 
       <div className="mt-auto flex items-center justify-between gap-2 px-1.5 pt-1 text-xs font-bold text-mute">
-        <AddrCopy address={s.address} className="truncate font-mono" />
+        <AddrCopy address={s.address} className="min-w-0 font-mono" split />
         <span className="flex shrink-0 items-center gap-2">
           {uptime != null && <span className={`srv-up ${uptime >= 99 ? 'ok' : uptime >= 95 ? 'warn' : 'bad'}`} title={t('d2.srv.uptime30')}>{(Math.round(uptime * 10) / 10).toLocaleString('ru-RU')}%</span>}
           {s.online ? (s.updatedAt != null && Date.now() - s.updatedAt > 120_000 ? ago(s.updatedAt) : '') : ago(s.updatedAt)}

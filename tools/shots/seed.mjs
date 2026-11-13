@@ -22,6 +22,9 @@ const DEFS = [
   // a very long name with no spaces to break on: the usual way a layout breaks
   ['Valheim_Co-op_Very_Long_Server_Name_Without_Spaces_To_Break_On_Midgard_Season_12', 'valheim', 2456, 10, 3, 67, 'Midgard', 1],
   ['Terraria Hardcore', 'terraria', 7777, 16, 0, 0, '', 0],
+  // online and empty (the calm «nobody here» tile) and a server that has no name of its own (the address is its name)
+  ['Quiet Valheim Hall', 'valheim', 2457, 10, 0, 41, 'Meadows', 1],
+  ['203.0.113.19:7779', 'terraria', 7779, 16, 0, 57, '', 1],
 ];
 
 // SHOTS_HERO=1 makes the server with that id the busiest one, so that the big card of the servers page shows its cover

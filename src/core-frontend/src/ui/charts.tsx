@@ -96,6 +96,19 @@ export function useHourTrend(serverId: number): number | null {
   return cur != null && before != null ? Math.round(cur - before) : null;
 }
 
+/** the figures of the last day of a server from its 24 h buckets: the peak, and how many minutes ago somebody was last on it (null: nobody all day) */
+export function useDayStats(serverId: number): { known: boolean; peak: number; lastActiveMin: number | null } {
+  const set = useSparkSet();
+  const raw = set?.servers[serverId];
+  if (!raw) return { known: false, peak: 0, lastActiveMin: null };
+  const vals = raw.players;
+  const known = vals.filter((v) => v != null).length;
+  let peak = 0;
+  let last = -1;
+  vals.forEach((v, i) => { if (v != null) { peak = Math.max(peak, v); if (v > 0) last = i; } });
+  return { known: known >= 3, peak: Math.round(peak), lastActiveMin: last < 0 ? null : Math.round(((vals.length - 1 - last) * 24 * 60) / vals.length) };
+}
+
 /** minutes of history behind the sparkline of a server (the 24 h window, or less on a young panel); null until loaded */
 export function useSparkSpanMin(serverId: number): number | null {
   const set = useSparkSet();

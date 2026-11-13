@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="0e715f39f7d3"
+COREGSM_BUILD="a4d41caff438"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.2.43"
+COREGSM_VERSION="1.2.44"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -143477,7 +143477,7 @@ export function ListSkeleton() {
 }
 
 /** the address of a server as a button: one tap copies it (the card around it is a link, so the click stays here) */
-export function AddrCopy({ address, className = '' }: { address: string; className?: string }) {
+export function AddrCopy({ address, className = '', split = false }: { address: string; className?: string; split?: boolean }) {
   useI18n();
   const copy = async (e: { stopPropagation: () => void; preventDefault: () => void }) => {
     e.stopPropagation();
@@ -143486,7 +143486,9 @@ export function AddrCopy({ address, className = '' }: { address: string; classNa
   };
   return (
     <button type="button" className="srv-addr-copy" title={t('srv.addr.copy')} aria-label={`${t('srv.addr.copy')}: ${address}`} onClick={(e) => void copy(e)}>
-      <span className={className}>{address}</span>
+      {split && /:\d+$/.test(address)
+        ? <span className={`${className} srv-addr-split`}><span className="srv-addr-host">{address.replace(/:\d+$/, '')}</span><span className="srv-addr-port">{/:\d+$/.exec(address)?.[0]}</span></span>
+        : <span className={className}>{address}</span>}
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V6a2 2 0 0 1 2-2h9" /></svg>
     </button>
   );
@@ -149317,6 +149319,15 @@ const en: Record<keyof typeof ru, string> = {
   'adm.com.toBest': '☆ Add to the best',
   'adm.com.take': 'Unpublish',
   'srv.empty.now': 'Nobody online right now',
+  'srv.empty.title': 'Empty',
+  'srv.empty.noneDay': 'Nobody played in the last day',
+  'srv.empty.last': 'The last player was {d} ago',
+  'srv.empty.peak': 'Peak of the day: {n}',
+  'srv.empty.usual': 'Usually fills up around {time}',
+  'srv.unnamed': 'A server without a name',
+  'srv.unnamed.tip': 'Set a name in «Admin → Servers»',
+  'srv.down.since': 'since {when}',
+  'srv.tile.copy': 'Copy the address',
   'srv.addr.copy': 'Copy the address',
   'srv.addr.copied': 'Address copied',
   'srv.quick.copy': 'Copy address',
@@ -154519,6 +154530,15 @@ const ru = {
   'adm.com.toBest': '☆ В лучшие',
   'adm.com.take': 'Снять',
   'srv.empty.now': 'Сейчас никого',
+  'srv.empty.title': 'Пусто',
+  'srv.empty.noneDay': 'За сутки игроков не было',
+  'srv.empty.last': 'Последний игрок был {d} назад',
+  'srv.empty.peak': 'Пик за сутки: {n}',
+  'srv.empty.usual': 'Обычно оживает около {time}',
+  'srv.unnamed': 'Сервер без названия',
+  'srv.unnamed.tip': 'Задайте название в «Админка → Серверы»',
+  'srv.down.since': 'с {when}',
+  'srv.tile.copy': 'Копировать адрес',
   'srv.addr.copy': 'Скопировать адрес',
   'srv.addr.copied': 'Адрес скопирован',
   'srv.quick.copy': 'Скопировать адрес',
@@ -169151,7 +169171,7 @@ import { useAuth } from '../auth';
 import { gameColor, gameGradient, gameLabel } from '../games';
 import { coverBackground, emblemStyle, gameBackdrop, coverUrlOf } from '../cover';
 import MaintenanceChip from '../components/MaintenanceChip';
-import { AnimatedNumber, Burst, ErrorLine, GameAvatar, LoadError, IconServers, PageHead, Spark, StatusPill, ago, isLag, spanCaption, useSparkSpanMin, usePoll, toast, navigate, routeQuery, fmtTime, errText } from '../ui';
+import { AnimatedNumber, Burst, ErrorLine, GameAvatar, LoadError, IconServers, PageHead, Spark, StatusPill, ago, isLag, spanCaption, useSparkSpanMin, usePoll, toast, navigate, routeQuery, fmtTime, errText, useDayStats } from '../ui';
 import { connectGuide } from '../connectGuides';
 import { t, useI18n, type TKey } from '../i18n';
 import { calmSeriesColor, useCoverAccent } from '../components/server/coverAccent';
@@ -169431,7 +169451,7 @@ function ServerList() {
   // (the problem servers are named in the alert row of the pulse strip and sit first among the tiles)
   const [myOrder, setMyOrder] = useState<number[]>(readOrder);
   const orderIdx = (id: number) => { const i = myOrder.indexOf(id); return i < 0 ? Number.MAX_SAFE_INTEGER : i; };
-  const rest = sorted.filter((s) => s.id !== hero?.id).sort((a, b) => Number(needsAttention(b)) - Number(needsAttention(a)) || orderIdx(a.id) - orderIdx(b.id));
+  const rest = sorted.filter((s) => s.id !== hero?.id).sort((a, b) => Number(needsAttention(b)) - Number(needsAttention(a)) || orderIdx(a.id) - orderIdx(b.id) || Number(a.online && a.players === 0) - Number(b.online && b.players === 0) || b.players - a.players);
   // Ember: the favourites are pinned above the rest, each group with its own heading
   const pinFavs = ember && !!me && rest.some((s) => favs.includes(s.id)) && rest.some((s) => !favs.includes(s.id));
   const restShown = pinFavs ? [...rest].sort((a, b) => Number(favs.includes(b.id)) - Number(favs.includes(a.id))) : rest;
@@ -169840,6 +169860,27 @@ function PhoneRow({ s, idx, fav, onFav, onOpen, select }: { rx: Reactions; s: Se
   );
 }
 
+/** a server with nobody on it: not a grey zero and an empty bar, but when somebody was last there, the peak of the day and when it usually fills up */
+function EmptyNow({ s }: { s: Server }) {
+  useI18n();
+  const day = useDayStats(s.id);
+  const baseline = useBaseline(s.id);
+  const usual = nextUsualPeak(baseline, Date.now(), 24);
+  return (
+    <div className="srv-empty px-1.5">
+      <div className="srv-empty-head">
+        <b><i aria-hidden />{t('srv.empty.title')}<small>/ {s.maxPlayers}</small></b>
+        {s.ping != null && <span className={`inline-flex items-center gap-1.5 text-fs-sm font-bold ${TONE_TEXT[pingTone(s.ping).tone]}`}><i className={`ping-dot ${pingTone(s.ping).tone}`} aria-hidden />{t('d2.bot.ms', { n: s.ping })}</span>}
+      </div>
+      <ul>
+        {day.known && <li>{day.lastActiveMin == null ? t('srv.empty.noneDay') : t('srv.empty.last', { d: durText(Math.max(1, day.lastActiveMin) * 60_000) })}</li>}
+        {day.known && day.peak > 0 && <li>{t('srv.empty.peak', { n: day.peak })}</li>}
+        {usual && !usual.now && <li>{t('srv.empty.usual', { time: fmtTime(usual.at) })}</li>}
+      </ul>
+    </div>
+  );
+}
+
 function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince, dnd, wide }: { dnd?: TileDnd; wide?: number; rx: Reactions; s: Server; idx: number; fav: boolean | null; onFav: () => void; onOpen: () => void; select?: SelectProps; uptime?: number; downSince?: number }) {
   useI18n();
   const [who, setWho] = useState(false);
@@ -169851,6 +169892,20 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince, 
   const emb = emblemStyle(s.coverUrl, s.game);
   const nearFull = s.online && s.maxPlayers > 0 && s.players / s.maxPlayers >= 0.8;
   const { swallow, ...lp } = useQuickLongPress();
+  const { isAdmin } = useAuth();
+  const unnamed = s.name === s.address || s.name === `${s.host}:${s.port}`;
+  const play = connectGuide(s.game, s.address).link;
+  const [polling, setPolling] = useState(false);
+  const pollNow = async (e: MouseEvent<HTMLElement>) => {
+    e.stopPropagation();
+    setPolling(true);
+    try { await api(`/servers/${s.id}/refresh`, 'POST'); toast(t('srv.hero.polled')); } catch (err) { toast(errText(err), 'err'); }
+    setPolling(false);
+  };
+  const copyAddr = async (e: MouseEvent<HTMLElement>) => {
+    e.stopPropagation();
+    try { await navigator.clipboard.writeText(s.address); toast(t('srv.addr.copied')); } catch { /* the address stays on the tile */ }
+  };
   return (
     <article
       {...dnd}
@@ -169869,24 +169924,31 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince, 
           {fav != null && <FavButton on={fav} name={s.name} onClick={onFav} className={fav ? 'text-white' : 'text-white/85'} glass />}
           <QuickMenu s={s} glass />
         </div>
+        {/* the way in without opening the server: shown under the pointer (and by the keyboard), not on a phone */}
+        <div className="srv-hover-actions">
+          {s.online && play && <a className="btn btn-glass btn-sm" href={play.href} onClick={(e) => e.stopPropagation()}>{play.label}</a>}
+          <button type="button" className="btn btn-glass btn-sm" onClick={(e) => void copyAddr(e)}>{t('srv.tile.copy')}</button>
+        </div>
       </div>
 
       <div className="px-1.5">
         <h3 className="srv-name text-fs-lg font-extrabold leading-tight" title={s.name}>
-          <a href={`/servers/${s.id}`} onClick={linkClick(s, select)} className="hover:text-link">{s.name}</a>
+          <a href={`/servers/${s.id}`} onClick={linkClick(s, select)} className={unnamed ? 'srv-unnamed hover:text-link' : 'hover:text-link'} title={unnamed && isAdmin ? t('srv.unnamed.tip') : undefined}>{unnamed ? t('srv.unnamed') : s.name}</a>
         </h3>
         <div className="srv-chips">{nearFull && <span className="srv-badge-full" title={t('srv.cap.nearFull', { pct: Math.round((s.players / s.maxPlayers) * 100) })}>{t('srv.tile.full')}</span>}<span className="srv-game truncate">{gameLabel(s.game)}</span>{s.online && s.map && <span className="srv-chip" title={t('d2.srv.mapTitle', { map: s.map })}><CardMap />{s.map}</span>}{s.version && <span className="srv-chip" title={t('d2.srv.version')}><CardTag />v{s.version}</span>}</div>
         {s.maintenance && <MaintenanceChip m={s.maintenance} className="mt-1" />}
       </div>
 
-      {s.online ? (
+      {s.online && s.players === 0 ? (
+        <EmptyNow s={s} />
+      ) : s.online ? (
         <>
           <div className={`srv-count flex items-baseline gap-1.5 px-1.5 ${s.players === 0 ? 'srv-zero' : ''}`}>
             <CountReact r={r}><AnimatedNumber value={s.players} className="text-[38px] font-extrabold leading-none tracking-[-0.03em]" /></CountReact>
             <span className="text-fs-xl font-bold text-mute">/ {s.maxPlayers}</span>
             <TrendChip serverId={s.id} />
             {(s.playerNames?.length ?? 0) > 0 && <button type="button" className="srv-who" aria-label={t('srv.who')} title={t('srv.who')} aria-expanded={who} onClick={(e) => { e.stopPropagation(); setWho((v) => !v); }}><PlayerStack names={s.playerNames ?? []} /></button>}
-            <span className={`ml-auto inline-flex items-center gap-1.5 text-fs-sm font-bold ${s.ping != null ? TONE_TEXT[pingTone(s.ping).tone] : 'text-mute'}`}>{s.ping != null && <><PingBars ping={s.ping} tone={pingTone(s.ping).tone} />{t('d2.bot.ms', { n: s.ping })}</>}</span>
+            <span className={`ml-auto inline-flex items-center gap-1.5 text-fs-sm font-bold ${s.ping != null ? TONE_TEXT[pingTone(s.ping).tone] : 'text-mute'}`} title={s.ping != null ? t('d2.srv.ping', { ms: s.ping }) : undefined}>{s.ping != null && <><i className={`ping-dot ${pingTone(s.ping).tone}`} aria-hidden />{t('d2.bot.ms', { n: s.ping })}</>}</span>
           </div>
           <CapacityBar className="px-1.5" players={s.players} max={s.maxPlayers} color="rgb(var(--ink) / .5)" />
           {who && <PlayerNames className="px-1.5" names={s.playerNames ?? []} max={12} />}
@@ -169900,7 +169962,8 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince, 
             <div className="srv-down mx-1.5" title={s.error ?? undefined}>
               <span className="srv-down-k"><i aria-hidden />{t('srv.down.k')}</span>
               <b className="srv-down-v">{downSince ? durText(Date.now() - downSince) : ago(s.updatedAt)}</b>
-              <span className="srv-down-s">{t('srv.down.last', { ago: ago(s.updatedAt) })}</span>
+              <span className="srv-down-s">{downSince ? t('srv.down.since', { when: new Date(downSince).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) }) + ' · ' : ''}{t('srv.down.last', { ago: ago(s.updatedAt) })}</span>
+              {isAdmin && <button type="button" className="btn btn-soft btn-sm srv-down-btn" disabled={polling} onClick={(e) => void pollNow(e)}>{polling ? t('d2.sd.polling') : t('srv.hero.poll')}</button>}
             </div>
             <div className="srv-off-fig px-1.5" aria-hidden><b>{t('srv.off.fig')}</b><i /></div>
           </>
@@ -169910,7 +169973,7 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince, 
       )}
 
       <div className="mt-auto flex items-center justify-between gap-2 px-1.5 pt-1 text-xs font-bold text-mute">
-        <AddrCopy address={s.address} className="truncate font-mono" />
+        <AddrCopy address={s.address} className="min-w-0 font-mono" split />
         <span className="flex shrink-0 items-center gap-2">
           {uptime != null && <span className={`srv-up ${uptime >= 99 ? 'ok' : uptime >= 95 ? 'warn' : 'bad'}`} title={t('d2.srv.uptime30')}>{(Math.round(uptime * 10) / 10).toLocaleString('ru-RU')}%</span>}
           {s.online ? (s.updatedAt != null && Date.now() - s.updatedAt > 120_000 ? ago(s.updatedAt) : '') : ago(s.updatedAt)}
@@ -177313,6 +177376,49 @@ a.adm-reason:hover { filter: brightness(1.1); }
   .hero3 .h3-foot { display: flex; }
   .h3-cta { margin-top: 4px; }
 }
+
+/* ---------- the tiles of the servers: empty ones, a name that is not there, the address, the way in, the state, compact ---------- */
+/* a server with nobody on it: a calm note instead of a grey zero and an empty bar */
+.srv-empty { display: grid; gap: 6px; }
+.srv-empty-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.srv-empty-head > b { display: inline-flex; align-items: center; gap: 8px; font-size: 1.25rem; font-weight: 800; letter-spacing: -.02em; color: rgb(var(--mute)); }
+.srv-empty-head > b > i { width: 8px; height: 8px; border-radius: 50%; background: rgb(var(--field)); }
+.srv-empty-head > b small { font-size: .9375rem; font-weight: 700; opacity: .8; }
+.srv-empty ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; font-size: .8125rem; font-weight: 600; color: rgb(var(--mute)); }
+/* a server that has no name: the address is the name, so the title says so quietly and the address stays in the foot */
+.srv-tile .srv-unnamed { color: rgb(var(--mute)); font-style: italic; font-weight: 700; }
+.srv-down-btn { margin-top: 6px; justify-self: start; }
+/* the address in the foot: the host is cut, the port stays */
+.srv-tile .srv-addr-copy { min-width: 0; max-width: 100%; }
+.srv-addr-split { display: inline-flex; min-width: 0; }
+.srv-addr-host { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.srv-addr-port { flex: none; }
+/* the ping is a coloured dot and a number (the bars are in the tip of the big card) */
+.ping-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+/* the curve of the day is back on the tiles that have people (it is grey on a quiet one) */
+:root[data-ember='1'] .srv-tile .srv-spark-wrap { display: block; }
+/* the state in the colour of the tile: nearly full is amber, a slow answer is red */
+:root[data-ember='1'] .srv-tile.is-busy { background-image: linear-gradient(rgb(var(--warn) / .06), rgb(var(--warn) / .02)); }
+:root[data-ember='1'] .srv-tile.is-lag { box-shadow: var(--shadow-2), 0 0 0 1px rgb(var(--bad) / .55); background-image: linear-gradient(rgb(var(--bad) / .07), rgb(var(--bad) / .02)); }
+/* the way in without opening the server: on the cover under the pointer or the keyboard, never on a touch screen */
+.srv-hover-actions { position: absolute; left: 12px; right: 12px; bottom: 10px; z-index: 3; display: flex; flex-wrap: wrap; gap: 6px; opacity: 0; transform: translateY(4px); pointer-events: none; transition: opacity .15s ease, transform .15s ease; }
+.srv-tile:hover .srv-hover-actions, .srv-tile:focus-within .srv-hover-actions { opacity: 1; transform: none; pointer-events: auto; }
+@media (hover: none) { .srv-hover-actions { display: none; } }
+@media (prefers-reduced-motion: reduce) { .srv-hover-actions { transition: none; transform: none; } }
+/* the tile that closes an unfinished row: the picture on the left, the facts on the right, so it is not taller than its neighbours */
+@media (min-width: 640px) {
+  :root[data-ember='1'] .srv-tile.srv-wide { display: grid; grid-template-columns: minmax(150px, 34%) minmax(0, 1fr); column-gap: 12px; align-content: start; }
+  :root[data-ember='1'] .srv-tile.srv-wide > * { grid-column: 2; }
+  :root[data-ember='1'] .srv-tile.srv-wide > div:has(> .cover-scrim) { grid-column: 1; grid-row: 1 / span 6; height: auto; min-height: 100%; border-radius: var(--emb-r-card, 18px) 0 0 var(--emb-r-card, 18px); }
+  :root[data-ember='1'] .srv-tile.srv-wide > div:has(> .cover-scrim)::after { display: none; }
+}
+/* the size S is the compact one: a low picture, the facts in a row, four or five tiles in a line */
+:root[data-ember='1'] .srv-grid[data-size='s'] .srv-tile > div:has(> .cover-scrim) { height: 64px; padding: 8px 10px; }
+:root[data-ember='1'] .srv-grid[data-size='s'] .srv-tile > div:has(> .cover-scrim) .game-av, :root[data-ember='1'] .srv-grid[data-size='s'] .srv-tile > div:has(> .cover-scrim) > :first-child { transform: scale(.78); transform-origin: left top; }
+:root[data-ember='1'] .srv-grid[data-size='s'] .srv-tile .srv-chips, :root[data-ember='1'] .srv-grid[data-size='s'] .srv-tile .srv-spark-wrap, :root[data-ember='1'] .srv-grid[data-size='s'] .srv-tile .srv-empty ul { display: none; }
+:root[data-ember='1'] .srv-grid[data-size='s'] .srv-tile .srv-name { font-size: var(--fs-md); }
+:root[data-ember='1'] .srv-grid[data-size='s'] .srv-tile .srv-count :is(.srv-who, .srv-trend) { display: none; }
+:root[data-ember='1'] .srv-grid[data-size='s'] .srv-hover-actions { display: none; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/emberScale.test.ts" << '__COREGSM_EOF__'
@@ -179765,7 +179871,7 @@ export { ago, fmtDate, fmtTime, fmtDateTime, fmtDay, num, plural } from './ui/fo
 export { ThemeToggle, adminThemeIsOwn, applyDefaultTheme, currentTheme, resetAdminTheme, setThemeChoice, setThemeScope } from './ui/theme';
 export { Modal, Field, StatusPill, GameAvatar, FillBar, PageHead, GoLink, Notice, ErrorLine, Empty, CopyButton, Logo, ProxyField, InviteButton, SkeletonRows, Wordmark } from './ui/blocks';
 export type { ProxyType } from './ui/blocks';
-export { Spark, MiniSpark, smoothPath, smoothValues, SmoothArea, FleetBar, useSparkSpanMin, useHourTrend, spanCaption } from './ui/charts';
+export { Spark, MiniSpark, smoothPath, smoothValues, SmoothArea, FleetBar, useSparkSpanMin, useHourTrend, useDayStats, spanCaption } from './ui/charts';
 export { toast, dismissToast, undoable, Toaster } from './ui/toast';
 export type { ToastAction, ToastOptions } from './ui/toast';
 export { errText, fail, useAction } from './ui/action';
@@ -180857,6 +180963,19 @@ export function useHourTrend(serverId: number): number | null {
   const cur = raw.players[last];
   const before = raw.players[last - per];
   return cur != null && before != null ? Math.round(cur - before) : null;
+}
+
+/** the figures of the last day of a server from its 24 h buckets: the peak, and how many minutes ago somebody was last on it (null: nobody all day) */
+export function useDayStats(serverId: number): { known: boolean; peak: number; lastActiveMin: number | null } {
+  const set = useSparkSet();
+  const raw = set?.servers[serverId];
+  if (!raw) return { known: false, peak: 0, lastActiveMin: null };
+  const vals = raw.players;
+  const known = vals.filter((v) => v != null).length;
+  let peak = 0;
+  let last = -1;
+  vals.forEach((v, i) => { if (v != null) { peak = Math.max(peak, v); if (v > 0) last = i; } });
+  return { known: known >= 3, peak: Math.round(peak), lastActiveMin: last < 0 ? null : Math.round(((vals.length - 1 - last) * 24 * 60) / vals.length) };
 }
 
 /** minutes of history behind the sparkline of a server (the 24 h window, or less on a young panel); null until loaded */

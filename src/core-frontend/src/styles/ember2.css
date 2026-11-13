@@ -204,3 +204,46 @@ a.adm-reason:hover { filter: brightness(1.1); }
   .hero3 .h3-foot { display: flex; }
   .h3-cta { margin-top: 4px; }
 }
+
+/* ---------- the tiles of the servers: empty ones, a name that is not there, the address, the way in, the state, compact ---------- */
+/* a server with nobody on it: a calm note instead of a grey zero and an empty bar */
+.srv-empty { display: grid; gap: 6px; }
+.srv-empty-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.srv-empty-head > b { display: inline-flex; align-items: center; gap: 8px; font-size: 1.25rem; font-weight: 800; letter-spacing: -.02em; color: rgb(var(--mute)); }
+.srv-empty-head > b > i { width: 8px; height: 8px; border-radius: 50%; background: rgb(var(--field)); }
+.srv-empty-head > b small { font-size: .9375rem; font-weight: 700; opacity: .8; }
+.srv-empty ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; font-size: .8125rem; font-weight: 600; color: rgb(var(--mute)); }
+/* a server that has no name: the address is the name, so the title says so quietly and the address stays in the foot */
+.srv-tile .srv-unnamed { color: rgb(var(--mute)); font-style: italic; font-weight: 700; }
+.srv-down-btn { margin-top: 6px; justify-self: start; }
+/* the address in the foot: the host is cut, the port stays */
+.srv-tile .srv-addr-copy { min-width: 0; max-width: 100%; }
+.srv-addr-split { display: inline-flex; min-width: 0; }
+.srv-addr-host { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.srv-addr-port { flex: none; }
+/* the ping is a coloured dot and a number (the bars are in the tip of the big card) */
+.ping-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+/* the curve of the day is back on the tiles that have people (it is grey on a quiet one) */
+:root[data-ember='1'] .srv-tile .srv-spark-wrap { display: block; }
+/* the state in the colour of the tile: nearly full is amber, a slow answer is red */
+:root[data-ember='1'] .srv-tile.is-busy { background-image: linear-gradient(rgb(var(--warn) / .06), rgb(var(--warn) / .02)); }
+:root[data-ember='1'] .srv-tile.is-lag { box-shadow: var(--shadow-2), 0 0 0 1px rgb(var(--bad) / .55); background-image: linear-gradient(rgb(var(--bad) / .07), rgb(var(--bad) / .02)); }
+/* the way in without opening the server: on the cover under the pointer or the keyboard, never on a touch screen */
+.srv-hover-actions { position: absolute; left: 12px; right: 12px; bottom: 10px; z-index: 3; display: flex; flex-wrap: wrap; gap: 6px; opacity: 0; transform: translateY(4px); pointer-events: none; transition: opacity .15s ease, transform .15s ease; }
+.srv-tile:hover .srv-hover-actions, .srv-tile:focus-within .srv-hover-actions { opacity: 1; transform: none; pointer-events: auto; }
+@media (hover: none) { .srv-hover-actions { display: none; } }
+@media (prefers-reduced-motion: reduce) { .srv-hover-actions { transition: none; transform: none; } }
+/* the tile that closes an unfinished row: the picture on the left, the facts on the right, so it is not taller than its neighbours */
+@media (min-width: 640px) {
+  :root[data-ember='1'] .srv-tile.srv-wide { display: grid; grid-template-columns: minmax(150px, 34%) minmax(0, 1fr); column-gap: 12px; align-content: start; }
+  :root[data-ember='1'] .srv-tile.srv-wide > * { grid-column: 2; }
+  :root[data-ember='1'] .srv-tile.srv-wide > div:has(> .cover-scrim) { grid-column: 1; grid-row: 1 / span 6; height: auto; min-height: 100%; border-radius: var(--emb-r-card, 18px) 0 0 var(--emb-r-card, 18px); }
+  :root[data-ember='1'] .srv-tile.srv-wide > div:has(> .cover-scrim)::after { display: none; }
+}
+/* the size S is the compact one: a low picture, the facts in a row, four or five tiles in a line */
+:root[data-ember='1'] .srv-grid[data-size='s'] .srv-tile > div:has(> .cover-scrim) { height: 64px; padding: 8px 10px; }
+:root[data-ember='1'] .srv-grid[data-size='s'] .srv-tile > div:has(> .cover-scrim) .game-av, :root[data-ember='1'] .srv-grid[data-size='s'] .srv-tile > div:has(> .cover-scrim) > :first-child { transform: scale(.78); transform-origin: left top; }
+:root[data-ember='1'] .srv-grid[data-size='s'] .srv-tile .srv-chips, :root[data-ember='1'] .srv-grid[data-size='s'] .srv-tile .srv-spark-wrap, :root[data-ember='1'] .srv-grid[data-size='s'] .srv-tile .srv-empty ul { display: none; }
+:root[data-ember='1'] .srv-grid[data-size='s'] .srv-tile .srv-name { font-size: var(--fs-md); }
+:root[data-ember='1'] .srv-grid[data-size='s'] .srv-tile .srv-count :is(.srv-who, .srv-trend) { display: none; }
+:root[data-ember='1'] .srv-grid[data-size='s'] .srv-hover-actions { display: none; }

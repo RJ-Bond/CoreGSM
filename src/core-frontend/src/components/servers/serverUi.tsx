@@ -274,7 +274,7 @@ export function ListSkeleton() {
 }
 
 /** the address of a server as a button: one tap copies it (the card around it is a link, so the click stays here) */
-export function AddrCopy({ address, className = '' }: { address: string; className?: string }) {
+export function AddrCopy({ address, className = '', split = false }: { address: string; className?: string; split?: boolean }) {
   useI18n();
   const copy = async (e: { stopPropagation: () => void; preventDefault: () => void }) => {
     e.stopPropagation();
@@ -283,7 +283,9 @@ export function AddrCopy({ address, className = '' }: { address: string; classNa
   };
   return (
     <button type="button" className="srv-addr-copy" title={t('srv.addr.copy')} aria-label={`${t('srv.addr.copy')}: ${address}`} onClick={(e) => void copy(e)}>
-      <span className={className}>{address}</span>
+      {split && /:\d+$/.test(address)
+        ? <span className={`${className} srv-addr-split`}><span className="srv-addr-host">{address.replace(/:\d+$/, '')}</span><span className="srv-addr-port">{/:\d+$/.exec(address)?.[0]}</span></span>
+        : <span className={className}>{address}</span>}
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V6a2 2 0 0 1 2-2h9" /></svg>
     </button>
   );
