@@ -16,6 +16,9 @@ interface language; the GitHub release text is built from the section of the ver
 
 ## Не выпущено | Unreleased
 
+### ✨ Новое | New
+- 📁 Свои файлы плагин хранит в отдельной папке `BepInEx/CoreGSM` (`players.txt`, `connections.log`); из `BepInEx/config` они переносятся сами при первом запуске; настройки остаются в `BepInEx/config/CoreGSM.cfg`; нужен плагин 0.18.1 | 📁 The plugin keeps its own files in a separate folder `BepInEx/CoreGSM` (`players.txt`, `connections.log`); they are moved from `BepInEx/config` at the first start; the settings stay in `BepInEx/config/CoreGSM.cfg`; needs plugin 0.18.1
+
 ## 1.2.44 · 13.11.2026
 
 ### ✨ Новое | New

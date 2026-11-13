@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="a4d41caff438"
+COREGSM_BUILD="6a9c7f57611a"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.2.44"
+COREGSM_VERSION="1.2.45"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -24515,7 +24515,7 @@ import { savePluginProblems } from './gameNewsConnections.js';
 
 export const QUEUE_TTL_MS = 5 * 60_000;
 /** the version of the game plugin this panel was built for: an older plugin is shown as outdated */
-export const PLUGIN_VERSION = '0.18.0';
+export const PLUGIN_VERSION = '0.18.1';
 /** the games the plugin exists for */
 export const SUPPORTED_GAMES = new Set(['vrising']);
 const PULL_MIN_GAP_MS = 800;
