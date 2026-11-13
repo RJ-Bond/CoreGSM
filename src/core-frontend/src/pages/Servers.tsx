@@ -13,7 +13,7 @@ import { AnimatedNumber, Burst, ErrorLine, GameAvatar, LoadError, IconServers, P
 import { t, useI18n, type TKey } from '../i18n';
 import { calmSeriesColor, useCoverAccent } from '../components/server/coverAccent';
 import { pingTone, TONE_TEXT } from '../components/server/helpers';
-import { AddrCopy, PlayerStack, CapacityBar, CountReact, ListSkeleton, NoFavsState, NoMatchState, NoServersState, PingBars, PlayerNames, StatusFlash, TilesSkeleton, TrendChip, durText, reactionOf, useServerReactions, type Reactions } from '../components/servers/serverUi';
+import { AddrCopy, PlayerStack, CapacityBar, useQuickLongPress, CountReact, ListSkeleton, NoFavsState, NoMatchState, NoServersState, PingBars, PlayerNames, StatusFlash, TilesSkeleton, TrendChip, durText, reactionOf, useServerReactions, type Reactions } from '../components/servers/serverUi';
 import { ServersList, readView, saveView, type ListSort, type SelectProps, type ServersView } from '../components/servers/ServerViews';
 import CompareChart from '../components/servers/CompareChart';
 import { QuickMenu } from '../components/servers/QuickMenu';
@@ -635,11 +635,13 @@ function PhoneRow({ s, idx, fav, onFav, onOpen, select }: { rx: Reactions; s: Se
   useI18n();
   const lag = isLag(s);
   const tone = !s.hasStatus ? 'bg-mute' : !s.online ? 'bg-bad' : lag || s.maintenance ? 'bg-warn' : 'bg-ok';
+  const { swallow, ...lp } = useQuickLongPress();
   return (
     <article
+      {...lp}
       className={`srv-row tile-in relative ${select?.has(s.id) ? 'srv-selected' : ''} ${s.online ? '' : 'is-down'}`}
       style={stagger(idx)}
-      onClick={select?.on ? () => select.toggle(s.id) : onOpen}
+      onClick={select?.on ? () => select.toggle(s.id) : () => { if (!swallow()) onOpen(); }}
     >
       {select?.on && <CardCheck s={s} select={select} className="left-1 top-1" />}
       <GameAvatar game={s.game} size={40} vtId={s.id} />
@@ -658,6 +660,8 @@ function PhoneRow({ s, idx, fav, onFav, onOpen, select }: { rx: Reactions; s: Se
       </div>
       <span className={`srv-row-dot ${tone}`} aria-hidden />
       {fav != null && <FavButton on={fav} name={s.name} onClick={onFav} className={fav ? 'text-warn' : 'text-mute'} />}
+      {/* the menu that a long touch opens: out of sight, its button is pressed by the touch handler */}
+      <span className="srv-row-qm" aria-hidden><QuickMenu s={s} /></span>
     </article>
   );
 }
@@ -672,13 +676,15 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince, 
   const r = reactionOf(rx, s.id);
   const emb = emblemStyle(s.coverUrl, s.game);
   const nearFull = s.online && s.maxPlayers > 0 && s.players / s.maxPlayers >= 0.8;
+  const { swallow, ...lp } = useQuickLongPress();
   return (
     <article
       {...dnd}
+      {...lp}
       className={`srv-tile tile tile-in tile-hover relative flex cursor-pointer flex-col gap-2 p-3 pb-4 ${select?.has(s.id) ? 'srv-selected' : ''} ${s.online ? '' : 'is-down'} ${nearFull ? 'is-busy' : ''} ${s.online && lag ? 'is-lag' : ''} ${wide && wide > 1 ? 'srv-wide' : ''}`}
       // the fuller the server, the stronger its glow in the game's colour
       style={{ ...stagger(idx), ...(wide && wide > 1 ? { gridColumn: `span ${wide}` } : {}), ['--gc' as string]: accent, ['--fill' as string]: s.online && s.maxPlayers > 0 ? Math.min(1, s.players / s.maxPlayers).toFixed(2) : '0' }}
-      onClick={select?.on ? () => select.toggle(s.id) : onOpen}
+      onClick={select?.on ? () => select.toggle(s.id) : () => { if (!swallow()) onOpen(); }}
     >
       {select?.on && <CardCheck s={s} select={select} className="left-1 top-1" />}
       <div className={`${emb.className} relative flex h-[124px] items-start justify-between rounded-ui-lg p-3 ${s.online ? '' : 'offline-cover'}`} style={{ ...emb.style, background: coverBackground(s.coverUrl, gameBackdrop(c1, 135), { small: true, game: s.game }) }}>

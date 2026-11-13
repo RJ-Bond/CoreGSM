@@ -6,6 +6,7 @@ import { StateView } from '../StateView';
 import { t, useI18n } from '../../i18n';
 import { capLevel, capacityPct, slotsInfo } from './capacity';
 import { toast, useHourTrend } from '../../ui';
+import { haptic } from '../../ui/haptic';
 import { EmptyRackArt, NoFavsArt, NoMatchArt } from './ServersArt';
 import { CardSeat, CardUsers } from './CardIcons';
 import { PlayerAvatar } from './CommunityBento';
@@ -341,4 +342,40 @@ export function durText(ms: number): string {
   const h = Math.floor(m / 60);
   if (h < 48) return m % 60 ? t('dur.hm', { h, m: m % 60 }) : t('dur.h', { n: h });
   return t('d2.an.dShort', { n: Math.floor(h / 24) });
+}
+
+/**
+ * A touch held for half a second on a card opens its «⋯» menu (copy the address, start the game, share): the touch handlers go
+ * on the card, `swallow()` tells the click that follows the release to stay quiet. The menu button is found by `data-quick-menu`.
+ */
+export function useQuickLongPress() {
+  const timer = useRef(0);
+  const fired = useRef(false);
+  const from = useRef<{ x: number; y: number } | null>(null);
+  const clear = () => window.clearTimeout(timer.current);
+  return {
+    onTouchStart: (e: React.TouchEvent<HTMLElement>) => {
+      fired.current = false;
+      const el = e.currentTarget;
+      const p = e.touches[0];
+      from.current = p ? { x: p.clientX, y: p.clientY } : null;
+      clear();
+      timer.current = window.setTimeout(() => {
+        const b = el.querySelector<HTMLElement>('[data-quick-menu] button');
+        if (!b) return;
+        fired.current = true;
+        haptic('ok');
+        b.click();
+      }, 520);
+    },
+    onTouchMove: (e: React.TouchEvent<HTMLElement>) => {
+      const p = e.touches[0];
+      const s = from.current;
+      if (p && s && Math.hypot(p.clientX - s.x, p.clientY - s.y) > 10) clear();
+    },
+    onTouchEnd: clear,
+    onTouchCancel: clear,
+    onContextMenu: (e: React.MouseEvent) => { if (fired.current) e.preventDefault(); },
+    swallow: () => { const f = fired.current; fired.current = false; return f; },
+  };
 }

@@ -142,3 +142,4 @@ html[data-lite] img[loading='lazy'] { content-visibility: auto; }
   .srv-addr-copy, .hint-more { position: relative; }
   .srv-addr-copy::before, .hint-more::before { content: ''; position: absolute; inset: -.55rem -.4rem; }
 }
+.net-stale { margin-left: .6rem; opacity: .85; font-weight: 700; }

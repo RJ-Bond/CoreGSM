@@ -147,3 +147,6 @@ a.adm-reason:hover { filter: brightness(1.1); }
 .sv-news-k { padding: .1rem .6rem; border-radius: 999px; background: rgb(var(--brand) / .18); color: rgb(var(--link)); font-size: .75rem; font-weight: 800; }
 .sv-news-t { min-width: 0; flex: 1 1 12rem; overflow-wrap: anywhere; }
 .sv-news-w { font-size: .8125rem; font-weight: 650; color: rgb(var(--mute)); }
+
+/* the menu of a phone row, opened by a long touch: out of sight, at the right edge of the row */
+.srv-row-qm { position: absolute; right: 8px; top: 50%; width: 1px; height: 1px; overflow: visible; visibility: hidden; }

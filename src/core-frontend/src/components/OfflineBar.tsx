@@ -1,6 +1,8 @@
 /** A strip at the top while the device has no network: the data on screen is the last that arrived. It says so when the network is back. */
 import { useEffect, useState } from 'react';
+import { onStale } from '../api';
 import { t } from '../i18n';
+import { fmtTime } from '../ui';
 
 export function OfflineBar() {
   const [state, setState] = useState<'on' | 'off' | 'back'>(() => (typeof navigator !== 'undefined' && navigator.onLine === false ? 'off' : 'on'));
@@ -16,6 +18,8 @@ export function OfflineBar() {
     window.addEventListener('online', on);
     return () => { window.clearTimeout(timer); window.removeEventListener('offline', off); window.removeEventListener('online', on); };
   }, []);
+  const [stale, setStale] = useState<number | null>(null);
+  useEffect(() => onStale(setStale), []);
   const [testing, setTesting] = useState(false);
   const test = () => {
     setTesting(true);
@@ -25,6 +29,7 @@ export function OfflineBar() {
   return (
     <div role="status" aria-live="polite" className={`net-bar ${state === 'back' ? 'is-back' : ''}`}>
       {state === 'off' ? t('net.offline') : t('net.back')}
+      {state === 'off' && stale != null && <span className="net-stale">{t('net.stale', { time: fmtTime(stale) })}</span>}
       {state === 'off' && <button type="button" className="net-retry" onClick={test} disabled={testing}>{t('net.retry')}</button>}
     </div>
   );

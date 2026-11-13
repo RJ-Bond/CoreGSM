@@ -184,18 +184,56 @@ export async function fetchStepUp(input: string, init?: RequestInit): Promise<Re
   return (await reauthAsk()) ? fetch(input, init) : res;
 }
 
+// ---------- the last answers, for the moments without a network ----------
+// A few lists of the panel (servers, the overview, the community, the status, the news, the bans) are kept in this browser after
+// every good answer. When the network is gone the page shows the last of them and the strip at the top says from when they are.
+const CACHEABLE = /^\/(servers|overview|community|status|news|bans)(?:[/?].*)?$/;
+const CACHE_PREFIX = 'coregsm_cache:';
+const CACHE_MAX = 300_000;
+type Cached = { ts: number; data: unknown };
+const staleListeners = new Set<(at: number | null) => void>();
+let staleNow: number | null = null;
+const setStale = (at: number | null) => { if (at !== staleNow) { staleNow = at; staleListeners.forEach((f) => f(at)); } };
+/** from when the data on the screen is, while the network is gone (null: it is fresh) */
+export function onStale(f: (at: number | null) => void): () => void { staleListeners.add(f); f(staleNow); return () => { staleListeners.delete(f); }; }
+function readCache(path: string): Cached | null {
+  try { const v = JSON.parse(localStorage.getItem(CACHE_PREFIX + path) ?? 'null') as Cached | null; return v && typeof v.ts === 'number' ? v : null; } catch { return null; }
+}
+function writeCache(path: string, data: unknown) {
+  try {
+    const text = JSON.stringify({ ts: Date.now(), data });
+    if (text.length <= CACHE_MAX) localStorage.setItem(CACHE_PREFIX + path, text);
+  } catch { /* a full or blocked storage: no cache */ }
+}
+/** whoever signs out takes nothing of the panel with them */
+export function clearCache() {
+  try { for (const k of Object.keys(localStorage)) if (k.startsWith(CACHE_PREFIX)) localStorage.removeItem(k); } catch { /* nothing to clear */ }
+  setStale(null);
+}
+
 async function request<T>(path: string, method: string, body?: unknown): Promise<T> {
-  const res = await fetchStepUp('/api' + path, {
-    method,
-    headers: {
-      'Content-Type': 'application/json',
-      // only a real in-memory token (legacy migration); the cookie session needs no header
-      ...(memToken ? { Authorization: `Bearer ${memToken}` } : {}),
-    },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
+  const cacheable = method === 'GET' && CACHEABLE.test(path);
+  let res: Response;
+  try {
+    res = await fetchStepUp('/api' + path, {
+      method,
+      headers: {
+        'Content-Type': 'application/json',
+        // only a real in-memory token (legacy migration); the cookie session needs no header
+        ...(memToken ? { Authorization: `Bearer ${memToken}` } : {}),
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  } catch (e) {
+    // no network (not an answer of the server): the last good answer of a list, if there is one
+    const c = cacheable ? readCache(path) : null;
+    if (c) { setStale(c.ts); return c.data as T; }
+    throw e;
+  }
   const data = await res.json().catch(() => ({}));
+  if (cacheable && res.ok) { writeCache(path, data); setStale(null); }
   if (res.status === 401 && path !== '/auth/login') {
+    clearCache();
     setToken('');
     window.dispatchEvent(new Event('coregsm:logout'));
   }

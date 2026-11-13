@@ -22,5 +22,5 @@ export function QuickMenu({ s, glass = false }: { s: Server; glass?: boolean }) 
     ...(link ? [{ key: 'play', label: link.label, onSelect: () => { window.location.href = link.href; } }] : []),
     { key: 'share', label: t('srv.quick.share'), onSelect: () => void share() },
   ];
-  return <MoreMenu items={items} iconOnly label={t('srv.quick.label', { name: s.name })} className={`${glass ? 'btn-icon-glass' : 'btn-icon-ghost'} btn-icon-sm`} />;
+  return <span data-quick-menu style={{ display: 'contents' }}><MoreMenu items={items} iconOnly label={t('srv.quick.label', { name: s.name })} className={`${glass ? 'btn-icon-glass' : 'btn-icon-ghost'} btn-icon-sm`} /></span>;
 }

@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="91ac1d9c48b0"
+COREGSM_BUILD="b502aec2c56f"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.2.29"
+COREGSM_VERSION="1.2.30"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -121808,7 +121808,7 @@ import { NewsUnreadDot } from './components/news/newsSeen';
 import { UpdateBadge, shownUpdate, useUpdatePolling, useUpdateState } from './components/UpdateBadge';
 import { paintGameTheme } from './gameThemes';
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { api, ApiError, getToken, setToken, type Access, type Me } from './api';
+import { api, ApiError, clearCache, getToken, setToken, type Access, type Me } from './api';
 import { AuthContext } from './auth';
 import { onAccentChange, paintBrand, useAutoAccent } from './accent';
 import NotificationBell from './components/NotificationBell';
@@ -121821,6 +121821,7 @@ import Login from './pages/Login';
 import Register from './pages/Register';
 import ServersPage from './pages/Servers';
 import { applyServerPrefs, t, useI18n, type TKey } from './i18n';
+import { lastPathOf, rememberPath } from './ui/lastPath';
 import { lazyPage, PageFrame } from './lazyPage';
 import { OfflineBar } from './components/OfflineBar';
 import { MotionToggle } from './components/MotionToggle';
@@ -121936,6 +121937,9 @@ const IconSearch = () => (
 export default function App() {
   const [{ ember }] = useAppearance();
   const { page: rawPage, sub } = useRoute();
+  // the bottom bar of a phone returns to the place you left in a section
+  const here = sub ? `/${rawPage}/${sub}` : `/${rawPage}`;
+  useEffect(() => { rememberPath(rawPage, here); }, [rawPage, here]);
   // re-renders the whole shell when the language or a regional setting changes
   useI18n();
   // the admin area keeps a theme of its own (the header button then changes only that one)
@@ -122077,6 +122081,7 @@ export default function App() {
       /* ignore */
     }
     setToken('');
+    clearCache();
     navigate('/servers');
     await load();
     loggingOut.current = false;
@@ -122328,7 +122333,7 @@ export default function App() {
               return (
                 <li key={p.id} className="flex-1">
                   <a
-                    href={p.id === 'admin' ? adminHref : `/${p.id}`}
+                    href={p.id === 'admin' ? adminHref : lastPathOf(p.id, active)}
                     aria-current={active ? 'page' : undefined}
                     className={`bn-item relative flex min-h-[58px] flex-col items-center gap-0.5 px-1 pb-1.5 pt-2 text-xs font-extrabold ${active ? 'text-link' : 'text-mute'}`}
                   >
@@ -122530,6 +122535,43 @@ export function useAutoAccent(active: boolean, route: { page: string; sub: strin
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
+  cat > "$APP_DIR/core-frontend/src/api.cache.test.ts" << '__COREGSM_EOF__'
+// @vitest-environment happy-dom
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { api, clearCache, onStale } from './api';
+
+afterEach(() => { vi.restoreAllMocks(); clearCache(); });
+
+describe('the last answers when the network is gone', () => {
+  it('gives a list from the last good answer and says from when it is; other paths still fail', async () => {
+    const f = vi.spyOn(globalThis, 'fetch');
+    f.mockResolvedValueOnce(new Response(JSON.stringify([{ id: 1 }]), { status: 200 }));
+    expect(await api('/servers')).toEqual([{ id: 1 }]);
+    let stale: number | null = 0;
+    onStale((v) => { stale = v; });
+    expect(stale).toBeNull();
+    f.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    expect(await api('/servers')).toEqual([{ id: 1 }]);
+    expect(stale).toBeGreaterThan(0);
+    f.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    await expect(api('/me/notifications')).rejects.toThrow();
+    // the network is back: the data is fresh again
+    f.mockResolvedValueOnce(new Response(JSON.stringify([{ id: 2 }]), { status: 200 }));
+    expect(await api('/servers')).toEqual([{ id: 2 }]);
+    expect(stale).toBeNull();
+  });
+
+  it('keeps nothing after the sign-out', async () => {
+    const f = vi.spyOn(globalThis, 'fetch');
+    f.mockResolvedValueOnce(new Response('[]', { status: 200 }));
+    await api('/news');
+    clearCache();
+    f.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    await expect(api('/news')).rejects.toThrow();
+  });
+});
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/api.ts" << '__COREGSM_EOF__'
 /**
  * Session handling. The session lives in an HttpOnly cookie (coregsm_session) that the server sets on sign-in; the page
@@ -122717,18 +122759,56 @@ export async function fetchStepUp(input: string, init?: RequestInit): Promise<Re
   return (await reauthAsk()) ? fetch(input, init) : res;
 }
 
+// ---------- the last answers, for the moments without a network ----------
+// A few lists of the panel (servers, the overview, the community, the status, the news, the bans) are kept in this browser after
+// every good answer. When the network is gone the page shows the last of them and the strip at the top says from when they are.
+const CACHEABLE = /^\/(servers|overview|community|status|news|bans)(?:[/?].*)?$/;
+const CACHE_PREFIX = 'coregsm_cache:';
+const CACHE_MAX = 300_000;
+type Cached = { ts: number; data: unknown };
+const staleListeners = new Set<(at: number | null) => void>();
+let staleNow: number | null = null;
+const setStale = (at: number | null) => { if (at !== staleNow) { staleNow = at; staleListeners.forEach((f) => f(at)); } };
+/** from when the data on the screen is, while the network is gone (null: it is fresh) */
+export function onStale(f: (at: number | null) => void): () => void { staleListeners.add(f); f(staleNow); return () => { staleListeners.delete(f); }; }
+function readCache(path: string): Cached | null {
+  try { const v = JSON.parse(localStorage.getItem(CACHE_PREFIX + path) ?? 'null') as Cached | null; return v && typeof v.ts === 'number' ? v : null; } catch { return null; }
+}
+function writeCache(path: string, data: unknown) {
+  try {
+    const text = JSON.stringify({ ts: Date.now(), data });
+    if (text.length <= CACHE_MAX) localStorage.setItem(CACHE_PREFIX + path, text);
+  } catch { /* a full or blocked storage: no cache */ }
+}
+/** whoever signs out takes nothing of the panel with them */
+export function clearCache() {
+  try { for (const k of Object.keys(localStorage)) if (k.startsWith(CACHE_PREFIX)) localStorage.removeItem(k); } catch { /* nothing to clear */ }
+  setStale(null);
+}
+
 async function request<T>(path: string, method: string, body?: unknown): Promise<T> {
-  const res = await fetchStepUp('/api' + path, {
-    method,
-    headers: {
-      'Content-Type': 'application/json',
-      // only a real in-memory token (legacy migration); the cookie session needs no header
-      ...(memToken ? { Authorization: `Bearer ${memToken}` } : {}),
-    },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
+  const cacheable = method === 'GET' && CACHEABLE.test(path);
+  let res: Response;
+  try {
+    res = await fetchStepUp('/api' + path, {
+      method,
+      headers: {
+        'Content-Type': 'application/json',
+        // only a real in-memory token (legacy migration); the cookie session needs no header
+        ...(memToken ? { Authorization: `Bearer ${memToken}` } : {}),
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  } catch (e) {
+    // no network (not an answer of the server): the last good answer of a list, if there is one
+    const c = cacheable ? readCache(path) : null;
+    if (c) { setStale(c.ts); return c.data as T; }
+    throw e;
+  }
   const data = await res.json().catch(() => ({}));
+  if (cacheable && res.ok) { writeCache(path, data); setStale(null); }
   if (res.status === 401 && path !== '/auth/login') {
+    clearCache();
     setToken('');
     window.dispatchEvent(new Event('coregsm:logout'));
   }
@@ -127770,7 +127850,9 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/components/OfflineBar.tsx" << '__COREGSM_EOF__'
 /** A strip at the top while the device has no network: the data on screen is the last that arrived. It says so when the network is back. */
 import { useEffect, useState } from 'react';
+import { onStale } from '../api';
 import { t } from '../i18n';
+import { fmtTime } from '../ui';
 
 export function OfflineBar() {
   const [state, setState] = useState<'on' | 'off' | 'back'>(() => (typeof navigator !== 'undefined' && navigator.onLine === false ? 'off' : 'on'));
@@ -127786,6 +127868,8 @@ export function OfflineBar() {
     window.addEventListener('online', on);
     return () => { window.clearTimeout(timer); window.removeEventListener('offline', off); window.removeEventListener('online', on); };
   }, []);
+  const [stale, setStale] = useState<number | null>(null);
+  useEffect(() => onStale(setStale), []);
   const [testing, setTesting] = useState(false);
   const test = () => {
     setTesting(true);
@@ -127795,6 +127879,7 @@ export function OfflineBar() {
   return (
     <div role="status" aria-live="polite" className={`net-bar ${state === 'back' ? 'is-back' : ''}`}>
       {state === 'off' ? t('net.offline') : t('net.back')}
+      {state === 'off' && stale != null && <span className="net-stale">{t('net.stale', { time: fmtTime(stale) })}</span>}
       {state === 'off' && <button type="button" className="net-retry" onClick={test} disabled={testing}>{t('net.retry')}</button>}
     </div>
   );
@@ -142030,7 +142115,7 @@ export function QuickMenu({ s, glass = false }: { s: Server; glass?: boolean }) 
     ...(link ? [{ key: 'play', label: link.label, onSelect: () => { window.location.href = link.href; } }] : []),
     { key: 'share', label: t('srv.quick.share'), onSelect: () => void share() },
   ];
-  return <MoreMenu items={items} iconOnly label={t('srv.quick.label', { name: s.name })} className={`${glass ? 'btn-icon-glass' : 'btn-icon-ghost'} btn-icon-sm`} />;
+  return <span data-quick-menu style={{ display: 'contents' }}><MoreMenu items={items} iconOnly label={t('srv.quick.label', { name: s.name })} className={`${glass ? 'btn-icon-glass' : 'btn-icon-ghost'} btn-icon-sm`} /></span>;
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/servers"
@@ -142689,6 +142774,7 @@ import { StateView } from '../StateView';
 import { t, useI18n } from '../../i18n';
 import { capLevel, capacityPct, slotsInfo } from './capacity';
 import { toast, useHourTrend } from '../../ui';
+import { haptic } from '../../ui/haptic';
 import { EmptyRackArt, NoFavsArt, NoMatchArt } from './ServersArt';
 import { CardSeat, CardUsers } from './CardIcons';
 import { PlayerAvatar } from './CommunityBento';
@@ -143024,6 +143110,42 @@ export function durText(ms: number): string {
   const h = Math.floor(m / 60);
   if (h < 48) return m % 60 ? t('dur.hm', { h, m: m % 60 }) : t('dur.h', { n: h });
   return t('d2.an.dShort', { n: Math.floor(h / 24) });
+}
+
+/**
+ * A touch held for half a second on a card opens its «⋯» menu (copy the address, start the game, share): the touch handlers go
+ * on the card, `swallow()` tells the click that follows the release to stay quiet. The menu button is found by `data-quick-menu`.
+ */
+export function useQuickLongPress() {
+  const timer = useRef(0);
+  const fired = useRef(false);
+  const from = useRef<{ x: number; y: number } | null>(null);
+  const clear = () => window.clearTimeout(timer.current);
+  return {
+    onTouchStart: (e: React.TouchEvent<HTMLElement>) => {
+      fired.current = false;
+      const el = e.currentTarget;
+      const p = e.touches[0];
+      from.current = p ? { x: p.clientX, y: p.clientY } : null;
+      clear();
+      timer.current = window.setTimeout(() => {
+        const b = el.querySelector<HTMLElement>('[data-quick-menu] button');
+        if (!b) return;
+        fired.current = true;
+        haptic('ok');
+        b.click();
+      }, 520);
+    },
+    onTouchMove: (e: React.TouchEvent<HTMLElement>) => {
+      const p = e.touches[0];
+      const s = from.current;
+      if (p && s && Math.hypot(p.clientX - s.x, p.clientY - s.y) > 10) clear();
+    },
+    onTouchEnd: clear,
+    onTouchCancel: clear,
+    onContextMenu: (e: React.MouseEvent) => { if (fired.current) e.preventDefault(); },
+    swallow: () => { const f = fired.current; fired.current = false; return f; },
+  };
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components"
@@ -146936,6 +147058,7 @@ const en: Record<keyof typeof ru, string> = {
   'nav.admin': 'Admin',
   'nav.sections': 'Sections',
   'net.offline': 'You are offline. Showing the last data received.',
+  'net.stale': 'Data from {time}',
   'net.back': 'Back online. Refreshing the data.',
   'nav.skip': 'Skip to content',
   'foot.version': 'Panel version {v}',
@@ -152071,6 +152194,7 @@ const ru = {
   'nav.admin': 'Админка',
   'nav.sections': 'Разделы',
   'net.offline': 'Нет сети. Показаны последние полученные данные.',
+  'net.stale': 'Данные от {time}',
   'net.back': 'Сеть вернулась. Данные обновляются.',
   'nav.skip': 'Перейти к содержимому',
   'foot.version': 'Версия панели {v}',
@@ -168335,7 +168459,7 @@ import { AnimatedNumber, Burst, ErrorLine, GameAvatar, LoadError, IconServers, P
 import { t, useI18n, type TKey } from '../i18n';
 import { calmSeriesColor, useCoverAccent } from '../components/server/coverAccent';
 import { pingTone, TONE_TEXT } from '../components/server/helpers';
-import { AddrCopy, PlayerStack, CapacityBar, CountReact, ListSkeleton, NoFavsState, NoMatchState, NoServersState, PingBars, PlayerNames, StatusFlash, TilesSkeleton, TrendChip, durText, reactionOf, useServerReactions, type Reactions } from '../components/servers/serverUi';
+import { AddrCopy, PlayerStack, CapacityBar, useQuickLongPress, CountReact, ListSkeleton, NoFavsState, NoMatchState, NoServersState, PingBars, PlayerNames, StatusFlash, TilesSkeleton, TrendChip, durText, reactionOf, useServerReactions, type Reactions } from '../components/servers/serverUi';
 import { ServersList, readView, saveView, type ListSort, type SelectProps, type ServersView } from '../components/servers/ServerViews';
 import CompareChart from '../components/servers/CompareChart';
 import { QuickMenu } from '../components/servers/QuickMenu';
@@ -168957,11 +169081,13 @@ function PhoneRow({ s, idx, fav, onFav, onOpen, select }: { rx: Reactions; s: Se
   useI18n();
   const lag = isLag(s);
   const tone = !s.hasStatus ? 'bg-mute' : !s.online ? 'bg-bad' : lag || s.maintenance ? 'bg-warn' : 'bg-ok';
+  const { swallow, ...lp } = useQuickLongPress();
   return (
     <article
+      {...lp}
       className={`srv-row tile-in relative ${select?.has(s.id) ? 'srv-selected' : ''} ${s.online ? '' : 'is-down'}`}
       style={stagger(idx)}
-      onClick={select?.on ? () => select.toggle(s.id) : onOpen}
+      onClick={select?.on ? () => select.toggle(s.id) : () => { if (!swallow()) onOpen(); }}
     >
       {select?.on && <CardCheck s={s} select={select} className="left-1 top-1" />}
       <GameAvatar game={s.game} size={40} vtId={s.id} />
@@ -168980,6 +169106,8 @@ function PhoneRow({ s, idx, fav, onFav, onOpen, select }: { rx: Reactions; s: Se
       </div>
       <span className={`srv-row-dot ${tone}`} aria-hidden />
       {fav != null && <FavButton on={fav} name={s.name} onClick={onFav} className={fav ? 'text-warn' : 'text-mute'} />}
+      {/* the menu that a long touch opens: out of sight, its button is pressed by the touch handler */}
+      <span className="srv-row-qm" aria-hidden><QuickMenu s={s} /></span>
     </article>
   );
 }
@@ -168994,13 +169122,15 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince, 
   const r = reactionOf(rx, s.id);
   const emb = emblemStyle(s.coverUrl, s.game);
   const nearFull = s.online && s.maxPlayers > 0 && s.players / s.maxPlayers >= 0.8;
+  const { swallow, ...lp } = useQuickLongPress();
   return (
     <article
       {...dnd}
+      {...lp}
       className={`srv-tile tile tile-in tile-hover relative flex cursor-pointer flex-col gap-2 p-3 pb-4 ${select?.has(s.id) ? 'srv-selected' : ''} ${s.online ? '' : 'is-down'} ${nearFull ? 'is-busy' : ''} ${s.online && lag ? 'is-lag' : ''} ${wide && wide > 1 ? 'srv-wide' : ''}`}
       // the fuller the server, the stronger its glow in the game's colour
       style={{ ...stagger(idx), ...(wide && wide > 1 ? { gridColumn: `span ${wide}` } : {}), ['--gc' as string]: accent, ['--fill' as string]: s.online && s.maxPlayers > 0 ? Math.min(1, s.players / s.maxPlayers).toFixed(2) : '0' }}
-      onClick={select?.on ? () => select.toggle(s.id) : onOpen}
+      onClick={select?.on ? () => select.toggle(s.id) : () => { if (!swallow()) onOpen(); }}
     >
       {select?.on && <CardCheck s={s} select={select} className="left-1 top-1" />}
       <div className={`${emb.className} relative flex h-[124px] items-start justify-between rounded-ui-lg p-3 ${s.online ? '' : 'offline-cover'}`} style={{ ...emb.style, background: coverBackground(s.coverUrl, gameBackdrop(c1, 135), { small: true, game: s.game }) }}>
@@ -176305,6 +176435,9 @@ a.adm-reason:hover { filter: brightness(1.1); }
 .sv-news-k { padding: .1rem .6rem; border-radius: 999px; background: rgb(var(--brand) / .18); color: rgb(var(--link)); font-size: .75rem; font-weight: 800; }
 .sv-news-t { min-width: 0; flex: 1 1 12rem; overflow-wrap: anywhere; }
 .sv-news-w { font-size: .8125rem; font-weight: 650; color: rgb(var(--mute)); }
+
+/* the menu of a phone row, opened by a long touch: out of sight, at the right edge of the row */
+.srv-row-qm { position: absolute; right: 8px; top: 50%; width: 1px; height: 1px; overflow: visible; visibility: hidden; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/emberScale.test.ts" << '__COREGSM_EOF__'
@@ -176473,6 +176606,7 @@ html[data-lite] img[loading='lazy'] { content-visibility: auto; }
   .srv-addr-copy, .hint-more { position: relative; }
   .srv-addr-copy::before, .hint-more::before { content: ''; position: absolute; inset: -.55rem -.4rem; }
 }
+.net-stale { margin-left: .6rem; opacity: .85; font-weight: 700; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/news-page.css" << '__COREGSM_EOF__'
@@ -180143,6 +180277,63 @@ export function haptic(kind: keyof typeof PATTERNS = 'tap'): void {
     navigator.vibrate(PATTERNS[kind] as number | number[]);
   } catch {
     /* a device without the motor: nothing to do */
+  }
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/ui"
+  cat > "$APP_DIR/core-frontend/src/ui/lastPath.test.ts" << '__COREGSM_EOF__'
+// @vitest-environment happy-dom
+import { beforeEach, describe, expect, it } from 'vitest';
+import { isDeepPath, lastPathOf, rememberPath } from './lastPath';
+
+describe('where the bottom bar sends to a section', () => {
+  beforeEach(() => sessionStorage.clear());
+  it('remembers a deep place of a section and sends there, but the open section goes to its start', () => {
+    rememberPath('servers', '/servers/5/players');
+    expect(lastPathOf('servers', false)).toBe('/servers/5/players');
+    expect(lastPathOf('servers', true)).toBe('/servers');
+    expect(lastPathOf('news', false)).toBe('/news');
+  });
+  it('forgets it when the section is back at its start, and ignores other sections and other paths', () => {
+    rememberPath('news', '/news/3');
+    rememberPath('news', '/news');
+    expect(lastPathOf('news', false)).toBe('/news');
+    rememberPath('admin', '/admin/servers');
+    expect(lastPathOf('admin', false)).toBe('/admin');
+    expect(isDeepPath('servers', '/news/3')).toBe(false);
+    expect(isDeepPath('servers', '/servers/')).toBe(false);
+  });
+});
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/ui"
+  cat > "$APP_DIR/core-frontend/src/ui/lastPath.ts" << '__COREGSM_EOF__'
+/**
+ * The bottom bar of a phone remembers where you were in each section: tap «Серверы» from another section and you land on the
+ * server you had open, not on the list. Tapping the section you are already in goes to its start. Kept for the tab only.
+ */
+const SECTIONS = ['servers', 'news', 'status', 'community', 'bans'] as const;
+const key = (page: string) => `coregsm_last_${page}`;
+
+/** the path is worth remembering when it is deeper than the start of its section and belongs to it */
+export function isDeepPath(page: string, path: string): boolean {
+  return (SECTIONS as readonly string[]).includes(page) && path.startsWith(`/${page}/`) && path.length > page.length + 2;
+}
+
+export function rememberPath(page: string, path: string): void {
+  try {
+    if (isDeepPath(page, path)) sessionStorage.setItem(key(page), path);
+    else if ((SECTIONS as readonly string[]).includes(page)) sessionStorage.removeItem(key(page));
+  } catch { /* not remembered */ }
+}
+
+/** where the bar sends to a section: the remembered place, else the start (and the start for the section that is open now) */
+export function lastPathOf(page: string, active: boolean): string {
+  if (active) return `/${page}`;
+  try {
+    const v = sessionStorage.getItem(key(page));
+    return v && isDeepPath(page, v) ? v : `/${page}`;
+  } catch {
+    return `/${page}`;
   }
 }
 __COREGSM_EOF__

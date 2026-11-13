@@ -114,6 +114,7 @@ const en: Record<keyof typeof ru, string> = {
   'nav.admin': 'Admin',
   'nav.sections': 'Sections',
   'net.offline': 'You are offline. Showing the last data received.',
+  'net.stale': 'Data from {time}',
   'net.back': 'Back online. Refreshing the data.',
   'nav.skip': 'Skip to content',
   'foot.version': 'Panel version {v}',

@@ -4,7 +4,7 @@ import { NewsUnreadDot } from './components/news/newsSeen';
 import { UpdateBadge, shownUpdate, useUpdatePolling, useUpdateState } from './components/UpdateBadge';
 import { paintGameTheme } from './gameThemes';
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { api, ApiError, getToken, setToken, type Access, type Me } from './api';
+import { api, ApiError, clearCache, getToken, setToken, type Access, type Me } from './api';
 import { AuthContext } from './auth';
 import { onAccentChange, paintBrand, useAutoAccent } from './accent';
 import NotificationBell from './components/NotificationBell';
@@ -17,6 +17,7 @@ import Login from './pages/Login';
 import Register from './pages/Register';
 import ServersPage from './pages/Servers';
 import { applyServerPrefs, t, useI18n, type TKey } from './i18n';
+import { lastPathOf, rememberPath } from './ui/lastPath';
 import { lazyPage, PageFrame } from './lazyPage';
 import { OfflineBar } from './components/OfflineBar';
 import { MotionToggle } from './components/MotionToggle';
@@ -132,6 +133,9 @@ const IconSearch = () => (
 export default function App() {
   const [{ ember }] = useAppearance();
   const { page: rawPage, sub } = useRoute();
+  // the bottom bar of a phone returns to the place you left in a section
+  const here = sub ? `/${rawPage}/${sub}` : `/${rawPage}`;
+  useEffect(() => { rememberPath(rawPage, here); }, [rawPage, here]);
   // re-renders the whole shell when the language or a regional setting changes
   useI18n();
   // the admin area keeps a theme of its own (the header button then changes only that one)
@@ -273,6 +277,7 @@ export default function App() {
       /* ignore */
     }
     setToken('');
+    clearCache();
     navigate('/servers');
     await load();
     loggingOut.current = false;
@@ -524,7 +529,7 @@ export default function App() {
               return (
                 <li key={p.id} className="flex-1">
                   <a
-                    href={p.id === 'admin' ? adminHref : `/${p.id}`}
+                    href={p.id === 'admin' ? adminHref : lastPathOf(p.id, active)}
                     aria-current={active ? 'page' : undefined}
                     className={`bn-item relative flex min-h-[58px] flex-col items-center gap-0.5 px-1 pb-1.5 pt-2 text-xs font-extrabold ${active ? 'text-link' : 'text-mute'}`}
                   >
