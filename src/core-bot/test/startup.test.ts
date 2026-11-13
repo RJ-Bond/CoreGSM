@@ -11,7 +11,8 @@ test('modules loaded before the gateway patch do not import discord.js', () => {
   for (const f of ['src/gateway.ts', 'src/proxy.ts', 'src/log.ts']) assert.doesNotMatch(readFileSync(f, 'utf8'), /from 'discord\.js'/, f);
 });
 
-test('SIGTERM stops the bot cleanly even when the panel is unreachable', async () => {
+// Windows has no SIGTERM for a child process: kill() ends it at once (exit code null), so the shutdown path cannot be watched there
+test('SIGTERM stops the bot cleanly even when the panel is unreachable', { skip: process.platform === 'win32' ? 'no SIGTERM on Windows' : false }, async () => {
   // without the test runner's own variables, which would turn the child into a test process
   const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith('NODE_TEST')));
   const child = spawn(process.execPath, ['--import', 'tsx', 'src/index.ts'], {

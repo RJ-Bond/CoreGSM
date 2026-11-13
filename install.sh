@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="d6df4cfd5154"
+COREGSM_BUILD="ec59d0708606"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.2.33"
+COREGSM_VERSION="1.2.34"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -11978,9 +11978,9 @@ __COREGSM_EOF__
       }
     },
     "node_modules/@nodable/entities": {
-      "version": "2.2.0",
-      "resolved": "https://registry.npmjs.org/@nodable/entities/-/entities-2.2.0.tgz",
-      "integrity": "sha512-9uGyhaQavEUMC8AIddIjau4NsnsXhou+j5sBAGojCM1oxmQpVKTWR/9JxABD6UAv12vpIms55fPZKFQEhG6uBg==",
+      "version": "3.1.0",
+      "resolved": "https://registry.npmjs.org/@nodable/entities/-/entities-3.1.0.tgz",
+      "integrity": "sha512-LsS/DjHr+uDM647Gru/cA8+J3a3HfhttwCKLyuoyN7yXTFCxKBtSgMQBvrW9yNPa2/zDRUNuGPaH5QUFoa4arQ==",
       "funding": [
         {
           "type": "github",
@@ -13140,25 +13140,10 @@ __COREGSM_EOF__
         "xml-naming": "^0.3.0"
       }
     },
-    "node_modules/fast-xml-builder/node_modules/xml-naming": {
-      "version": "0.3.0",
-      "resolved": "https://registry.npmjs.org/xml-naming/-/xml-naming-0.3.0.tgz",
-      "integrity": "sha512-ghig2TBE/H11aOVgmahA3MhimvkBr6JIYknH/Dhdk10nXwdbIqBJsbfMxpvFPG8bAw77gN29aQWvKpmVoPlvPQ==",
-      "funding": [
-        {
-          "type": "github",
-          "url": "https://github.com/sponsors/NaturalIntelligence"
-        }
-      ],
-      "license": "MIT",
-      "engines": {
-        "node": ">=16.0.0"
-      }
-    },
     "node_modules/fast-xml-parser": {
-      "version": "5.8.0",
-      "resolved": "https://registry.npmjs.org/fast-xml-parser/-/fast-xml-parser-5.8.0.tgz",
-      "integrity": "sha512-6bIM7fsJxeo3uXv7OncQYsBAMPJ7V16Slahl/6M98C/i2q+vB1+4a0MtrvYwDFEUrwDSbAmeLDRXsOBwrL7yAg==",
+      "version": "5.12.0",
+      "resolved": "https://registry.npmjs.org/fast-xml-parser/-/fast-xml-parser-5.12.0.tgz",
+      "integrity": "sha512-/pXxRBtwxY9w8z7YbgsvIPPcPvFDsTbIkWwTQJhzNJPokj+TbN6ftmcv4j/pEQDvOCNnKGDzuk5Bo2oogIOiFg==",
       "funding": [
         {
           "type": "github",
@@ -13167,11 +13152,12 @@ __COREGSM_EOF__
       ],
       "license": "MIT",
       "dependencies": {
-        "@nodable/entities": "^2.1.0",
-        "fast-xml-builder": "^1.2.0",
-        "path-expression-matcher": "^1.5.0",
-        "strnum": "^2.3.0",
-        "xml-naming": "^0.1.0"
+        "@nodable/entities": "^3.1.0",
+        "fast-xml-builder": "^1.3.1",
+        "is-unsafe": "^2.0.3",
+        "path-expression-matcher": "^1.6.2",
+        "strnum": "^2.5.1",
+        "xml-naming": "^0.3.0"
       },
       "bin": {
         "fxparser": "src/cli/cli.js"
@@ -13549,6 +13535,18 @@ __COREGSM_EOF__
       "version": "4.0.0",
       "resolved": "https://registry.npmjs.org/is-promise/-/is-promise-4.0.0.tgz",
       "integrity": "sha512-hvpoI6korhJMnej285dSg6nu1+e6uxs7zG3BYAm5byqDsgJNWwxzM6z6iZiAgQR4TJ30JmBTOwqZUw3WlyH3AQ==",
+      "license": "MIT"
+    },
+    "node_modules/is-unsafe": {
+      "version": "2.0.3",
+      "resolved": "https://registry.npmjs.org/is-unsafe/-/is-unsafe-2.0.3.tgz",
+      "integrity": "sha512-ZBllczCCO267vgdFb6Tq3pv+LhHaCiGMdr+ZsuL+OopruAg7S+3ZDs1vD0RPC0uSrkjzbraxaGjtX1YBxjPeFQ==",
+      "funding": [
+        {
+          "type": "github",
+          "url": "https://github.com/sponsors/NaturalIntelligence"
+        }
+      ],
       "license": "MIT"
     },
     "node_modules/isarray": {
@@ -14649,9 +14647,9 @@ __COREGSM_EOF__
       "license": "ISC"
     },
     "node_modules/xml-naming": {
-      "version": "0.1.0",
-      "resolved": "https://registry.npmjs.org/xml-naming/-/xml-naming-0.1.0.tgz",
-      "integrity": "sha512-k8KO9hrMyNk6tUWqUfkTEZbezRRpONVOzUTnc97VnCvyj6Tf9lyUR9EDAIeiVLv56jsMcoXEwjW8Kv5yPY52lw==",
+      "version": "0.3.0",
+      "resolved": "https://registry.npmjs.org/xml-naming/-/xml-naming-0.3.0.tgz",
+      "integrity": "sha512-ghig2TBE/H11aOVgmahA3MhimvkBr6JIYknH/Dhdk10nXwdbIqBJsbfMxpvFPG8bAw77gN29aQWvKpmVoPlvPQ==",
       "funding": [
         {
           "type": "github",
@@ -14743,6 +14741,9 @@ __COREGSM_EOF__
     "@types/nodemailer": "^8.0.2",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2"
+  },
+  "overrides": {
+    "fast-xml-parser": "^5.12.0"
   }
 }
 __COREGSM_EOF__
@@ -49507,7 +49508,7 @@ __COREGSM_EOF__
 #  - img-src: own images, data:/blob: (previews) and Discord avatars.
 #  - connect-src 'self': the panel only talks to its own /api. worker-src 'self': /sw.js. manifest-src 'self': /api/manifest.json.
 #  - frame-ancestors 'none' also forbids embedding the panel in a frame (X-Frame-Options DENY for old browsers).
-add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'sha256-HJXbFyOqow42mCUfLZ8eWch09gR+ZvjxDftgMZhMVLk='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://cdn.discordapp.com; font-src 'self' data:; connect-src 'self'; worker-src 'self'; manifest-src 'self'; object-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'self'" always;
+add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'sha256-wa5eq/mh09XkUlonbxviuS6W/khPrmz2dBt7e9OsAlk='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://cdn.discordapp.com; font-src 'self' data:; connect-src 'self'; worker-src 'self'; manifest-src 'self'; object-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'self'" always;
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend"
   cat > "$APP_DIR/core-frontend/index.html" << '__COREGSM_EOF__'
@@ -49531,6 +49532,7 @@ __COREGSM_EOF__
     <link rel="icon" type="image/png" sizes="192x192" href="/logo-192.png" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <title>CoreGSM</title>
+    <style>html[data-look-pending] body { visibility: hidden; }</style>
     <script>
       // apply the visitor's theme (or the community's default) before first paint to avoid a flash
       try {
@@ -49542,6 +49544,12 @@ __COREGSM_EOF__
         if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
         // the look (the own choice, else the community's default) and its accent: no flash from the classic look to Ember
         var own = localStorage.getItem('coregsm_look');
+        // a first visit knows neither the look nor the theme of the community until the panel answers: the page waits for the answer (at most 3 s)
+        // instead of showing the classic look and then changing it
+        if (own === null && localStorage.getItem('coregsm_look_default') === null) {
+          document.documentElement.setAttribute('data-look-pending', '1');
+          setTimeout(function () { document.documentElement.removeAttribute('data-look-pending'); }, 3000);
+        }
         if (own === '1' || (own !== '0' && localStorage.getItem('coregsm_look_default') === 'ember')) {
           document.documentElement.setAttribute('data-ember', '1');
           var acc = localStorage.getItem('coregsm_look_accent');
@@ -121739,14 +121747,20 @@ const DEFAULT_ACCESS: Access = { publicPanel: true, registration: true, registra
  * Safeguards: white text on filled buttons keeps >= 4.5:1 (the fill is darkened, hue kept); brand-coloured text (--link)
  * keeps >= 4.5:1 on the card and soft surfaces of the current theme (darkened in light, lightened in dark).
  */
-function useBrand(b: Access['brand']) {
+/**
+ * `known`: the answer of the panel about itself has arrived. Until then `b` is only a placeholder with no theme and no look, and applying it
+ * would turn a page that the inline script of index.html has just painted in the Ember look back to the classic one (and write that
+ * into the remembered defaults) until the answer came: a second of the old design on every reload.
+ */
+function useBrand(b: Access['brand'], known: boolean) {
   // the community's default theme, for visitors who have not picked one
-  useEffect(() => { applyDefaultTheme(b.theme ?? 'dark'); }, [b.theme]);
+  useEffect(() => { if (known) applyDefaultTheme(b.theme ?? 'dark'); }, [b.theme, known]);
   // the community's default look, for visitors who have not chosen one in their profile
-  useEffect(() => { applyDefaultLook(b.look ?? 'classic'); }, [b.look]);
+  useEffect(() => { if (known) { applyDefaultLook(b.look ?? 'classic'); document.documentElement.removeAttribute('data-look-pending'); } }, [b.look, known]);
   // a game theme also tints the page glow and lays the game's picture across the top
-  useEffect(() => { paintGameTheme(b.preset); }, [b.preset]);
+  useEffect(() => { if (known) paintGameTheme(b.preset); }, [b.preset, known]);
   useEffect(() => {
+    if (!known) return undefined;
     const root = document.documentElement;
     // paintBrand (accent.ts) applies the community colour, or the game accent chosen in «Внешний вид»
     const apply = () => paintBrand(b.color, b.color2);
@@ -121762,7 +121776,7 @@ function useBrand(b: Access['brand']) {
       off();
       mq.removeEventListener?.('change', apply);
     };
-  }, [b.color, b.color2]);
+  }, [b.color, b.color2, known]);
 }
 
 interface Boot { ready: boolean; offline: boolean; needsSetup: boolean; me: Me | null; access: Access }
@@ -121927,7 +121941,7 @@ export default function App() {
     loggingOut.current = false;
   }, [load]);
 
-  useBrand(access.brand);
+  useBrand(access.brand, boot.ready && !boot.offline);
   useAutoAccent(boot.ready && !boot.offline && !boot.needsSetup, { page: rawPage, sub });
 
   // Ctrl/Cmd+K: the command palette (not over another dialog, not on the sign-in screens)
@@ -181599,7 +181613,7 @@ export default defineConfig({
   preview: { proxy: { '/api': process.env.COREGSM_API ?? 'http://localhost:3000', '/badge': process.env.COREGSM_API ?? 'http://localhost:3000', '/widget': process.env.COREGSM_API ?? 'http://localhost:3000' } },
   test: {
     // `npm run coverage` (and CI) fail when the coverage of the files the tests load falls below the floor: it may only be raised
-    coverage: { reporter: ['text-summary', 'text'], thresholds: { statements: 43, branches: 35, functions: 36, lines: 46 } },
+    coverage: { reporter: ['text-summary', 'text'], thresholds: { statements: 43, branches: 35, functions: 37, lines: 46 } },
   },
   build: {
     rollupOptions: {

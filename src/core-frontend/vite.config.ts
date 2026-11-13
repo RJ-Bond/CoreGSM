@@ -8,7 +8,7 @@ export default defineConfig({
   preview: { proxy: { '/api': process.env.COREGSM_API ?? 'http://localhost:3000', '/badge': process.env.COREGSM_API ?? 'http://localhost:3000', '/widget': process.env.COREGSM_API ?? 'http://localhost:3000' } },
   test: {
     // `npm run coverage` (and CI) fail when the coverage of the files the tests load falls below the floor: it may only be raised
-    coverage: { reporter: ['text-summary', 'text'], thresholds: { statements: 43, branches: 35, functions: 36, lines: 46 } },
+    coverage: { reporter: ['text-summary', 'text'], thresholds: { statements: 43, branches: 35, functions: 37, lines: 46 } },
   },
   build: {
     rollupOptions: {

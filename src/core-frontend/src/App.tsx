@@ -95,14 +95,20 @@ const DEFAULT_ACCESS: Access = { publicPanel: true, registration: true, registra
  * Safeguards: white text on filled buttons keeps >= 4.5:1 (the fill is darkened, hue kept); brand-coloured text (--link)
  * keeps >= 4.5:1 on the card and soft surfaces of the current theme (darkened in light, lightened in dark).
  */
-function useBrand(b: Access['brand']) {
+/**
+ * `known`: the answer of the panel about itself has arrived. Until then `b` is only a placeholder with no theme and no look, and applying it
+ * would turn a page that the inline script of index.html has just painted in the Ember look back to the classic one (and write that
+ * into the remembered defaults) until the answer came: a second of the old design on every reload.
+ */
+function useBrand(b: Access['brand'], known: boolean) {
   // the community's default theme, for visitors who have not picked one
-  useEffect(() => { applyDefaultTheme(b.theme ?? 'dark'); }, [b.theme]);
+  useEffect(() => { if (known) applyDefaultTheme(b.theme ?? 'dark'); }, [b.theme, known]);
   // the community's default look, for visitors who have not chosen one in their profile
-  useEffect(() => { applyDefaultLook(b.look ?? 'classic'); }, [b.look]);
+  useEffect(() => { if (known) { applyDefaultLook(b.look ?? 'classic'); document.documentElement.removeAttribute('data-look-pending'); } }, [b.look, known]);
   // a game theme also tints the page glow and lays the game's picture across the top
-  useEffect(() => { paintGameTheme(b.preset); }, [b.preset]);
+  useEffect(() => { if (known) paintGameTheme(b.preset); }, [b.preset, known]);
   useEffect(() => {
+    if (!known) return undefined;
     const root = document.documentElement;
     // paintBrand (accent.ts) applies the community colour, or the game accent chosen in «Внешний вид»
     const apply = () => paintBrand(b.color, b.color2);
@@ -118,7 +124,7 @@ function useBrand(b: Access['brand']) {
       off();
       mq.removeEventListener?.('change', apply);
     };
-  }, [b.color, b.color2]);
+  }, [b.color, b.color2, known]);
 }
 
 interface Boot { ready: boolean; offline: boolean; needsSetup: boolean; me: Me | null; access: Access }
@@ -283,7 +289,7 @@ export default function App() {
     loggingOut.current = false;
   }, [load]);
 
-  useBrand(access.brand);
+  useBrand(access.brand, boot.ready && !boot.offline);
   useAutoAccent(boot.ready && !boot.offline && !boot.needsSetup, { page: rawPage, sub });
 
   // Ctrl/Cmd+K: the command palette (not over another dialog, not on the sign-in screens)

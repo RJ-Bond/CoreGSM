@@ -219,6 +219,27 @@ await scenario('12 a news item that names a server shows on the page of that ser
   await page.getByRole('button', { name: 'Карточки' }).first().click();
 });
 
+await scenario('14 a reload keeps the look of the community from the first paint (no second of the classic one)', async () => {
+  ok(await call('/api/branding/look', { method: 'PUT', token: state.adminToken, body: { look: 'ember' } }), 'default look');
+  const fresh = await browser.newContext({ viewport: { width: 1366, height: 900 }, locale: 'ru-RU' });
+  // the visitor has been here: the default look is remembered, nothing else; the script records every change of the attribute
+  await fresh.addInitScript(() => {
+    try { localStorage.setItem('coregsm_look_default', 'ember'); localStorage.setItem('coregsm_theme', 'dark'); } catch { /* ignore */ }
+    window.__lookLog = [];
+    new MutationObserver(() => window.__lookLog.push(document.documentElement.getAttribute('data-ember'))).observe(document, { attributes: true, subtree: true, attributeFilter: ['data-ember'] });
+  });
+  const fp = await fresh.newPage();
+  await fp.goto(panel + '/servers', { waitUntil: 'networkidle' });
+  await fp.reload({ waitUntil: 'networkidle' });
+  await fp.waitForTimeout(500);
+  const log = await fp.evaluate(() => window.__lookLog);
+  const now = await fp.evaluate(() => document.documentElement.getAttribute('data-ember'));
+  check(now === '1', 'the page is not in the Ember look after the load');
+  check(!log.includes(null), 'the Ember look was taken off for a while during the load: ' + JSON.stringify(log));
+  await fresh.close();
+  ok(await call('/api/branding/look', { method: 'PUT', token: state.adminToken, body: { look: 'classic' } }), 'default look back');
+});
+
 await scenario('13 the public and admin pages open without script errors', async () => {
   pageErrors.length = 0;
   for (const p of ['/servers', '/status', '/community', '/bans', '/news', '/news/' + state.newsId, '/admin', '/admin/servers', '/admin/news', '/profile']) {

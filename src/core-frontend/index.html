@@ -18,6 +18,7 @@
     <link rel="icon" type="image/png" sizes="192x192" href="/logo-192.png" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <title>CoreGSM</title>
+    <style>html[data-look-pending] body { visibility: hidden; }</style>
     <script>
       // apply the visitor's theme (or the community's default) before first paint to avoid a flash
       try {
@@ -29,6 +30,12 @@
         if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
         // the look (the own choice, else the community's default) and its accent: no flash from the classic look to Ember
         var own = localStorage.getItem('coregsm_look');
+        // a first visit knows neither the look nor the theme of the community until the panel answers: the page waits for the answer (at most 3 s)
+        // instead of showing the classic look and then changing it
+        if (own === null && localStorage.getItem('coregsm_look_default') === null) {
+          document.documentElement.setAttribute('data-look-pending', '1');
+          setTimeout(function () { document.documentElement.removeAttribute('data-look-pending'); }, 3000);
+        }
         if (own === '1' || (own !== '0' && localStorage.getItem('coregsm_look_default') === 'ember')) {
           document.documentElement.setAttribute('data-ember', '1');
           var acc = localStorage.getItem('coregsm_look_accent');
