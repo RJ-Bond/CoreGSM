@@ -412,11 +412,13 @@ export default function StatusPage() {
   const rangeRef = useRef(range);
   rangeRef.current = range;
   const pickRange = (r: 30 | 90) => { setRange(r); try { localStorage.setItem('coregsm_status_range', String(r)); } catch { /* not remembered */ } };
-  useEffect(() => { void load(); }, [range]);
   const load = () =>
     api<StatusInfo>(`/status${rangeRef.current === 90 ? '?days=90' : ''}`)
       .then((r) => { setData(r); setFetchedAt(Date.now()); setError(''); })
       .catch((e: Error) => setError(e.message));
+  // the period changed: load at once (the poll below only repeats it)
+  useEffect(() => { void load(); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [range]);
   usePoll(load, POLL_MS);
   const month = data ? (data.incidents ?? []).filter((i) => !i.planned).length : 0;
   const subtitle = data && data.servers.length > 0

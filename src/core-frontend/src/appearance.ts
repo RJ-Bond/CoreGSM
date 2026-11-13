@@ -85,7 +85,6 @@ export function applyAppearance(a: Appearance, root: HTMLElement = document.docu
   set('data-lite', a.liteData || networkWantsLite() ? '1' : null);
   set('data-oled', a.oled ? '1' : null);
   set('data-ember', a.ember ? '1' : null);
-  if (a.ember) void import('@fontsource-variable/manrope/wght.css').catch(() => undefined);
   // the icon of the tab and of the home screen takes the colour of the look
   const icon = (sel: string, href: string) => { const el = root.ownerDocument.querySelector<HTMLLinkElement>(sel); if (el) el.href = href; };
   icon("link[rel='icon'][type='image/svg+xml']", a.ember ? '/logo-ember.svg' : '/logo.svg');

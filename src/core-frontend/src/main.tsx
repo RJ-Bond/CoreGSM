@@ -1,6 +1,9 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-// variable Manrope: has Latin and Cyrillic subsets, one file per subset covers weights 200-800 (font-black maps to 800)
+// variable Manrope (the Ember look): Latin and Cyrillic subsets, one file per subset covers weights 200-800 (font-black maps to 800).
+// Loaded with the main styles, not after the script has run: the rules only name the files, a font is fetched when text uses it, so the
+// classic look pays for a few kilobytes of CSS and the Ember look gets its typeface with the first paint instead of swapping to it a second later
+import '@fontsource-variable/manrope/wght.css';
 import '@fontsource-variable/golos-text/wght.css';
 // the serif of the news headlines (Cyrillic)
 import '@fontsource-variable/literata/wght.css';
