@@ -162,3 +162,11 @@ a.adm-reason:hover { filter: brightness(1.1); }
 .ct tbody tr + tr td { border-top: 1px solid rgb(var(--line)); }
 .adm-since { list-style: none; margin: 0 0 .6rem; padding: 0; display: grid; gap: .4rem; }
 .adm-since > li { display: flex; align-items: center; gap: .7rem; }
+
+/* ---------- the big card of a server in the colours of the design, not of the game ---------- */
+/* the game keeps its picture on the right; the card itself, its glow and its accents are warm graphite with the orange of the look */
+:root[data-ember='1'] .hero3 {
+  --gc: rgb(var(--brand)) !important;
+  --h3-bg: color-mix(in srgb, rgb(var(--brand)) 11%, #130f0d);
+  box-shadow: var(--shadow-2), 0 22px 48px -22px rgb(var(--brand) / .45), inset 0 0 0 1px rgb(255 255 255 / .07) !important;
+}
