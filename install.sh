@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="49c0fdfb41c3"
+COREGSM_BUILD="706c0f2de7d2"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.2.41"
+COREGSM_VERSION="1.2.42"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -177079,6 +177079,14 @@ a.adm-reason:hover { filter: brightness(1.1); }
 .ct tbody tr + tr td { border-top: 1px solid rgb(var(--line)); }
 .adm-since { list-style: none; margin: 0 0 .6rem; padding: 0; display: grid; gap: .4rem; }
 .adm-since > li { display: flex; align-items: center; gap: .7rem; }
+
+/* ---------- the big card of a server in the colours of the design, not of the game ---------- */
+/* the game keeps its picture on the right; the card itself, its glow and its accents are warm graphite with the orange of the look */
+:root[data-ember='1'] .hero3 {
+  --gc: rgb(var(--brand)) !important;
+  --h3-bg: color-mix(in srgb, rgb(var(--brand)) 11%, #130f0d);
+  box-shadow: var(--shadow-2), 0 22px 48px -22px rgb(var(--brand) / .45), inset 0 0 0 1px rgb(255 255 255 / .07) !important;
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/emberScale.test.ts" << '__COREGSM_EOF__'
