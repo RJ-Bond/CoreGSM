@@ -25,6 +25,27 @@ function goTo(card: string): void {
 export function ServerHead({ server, rd, latest }: { server: NewsServerInfo; rd: RulesState; latest: string }) {
   useI18n();
   const [busy, setBusy] = useState(false);
+  const [updating, setUpdating] = useState(false);
+  const [lang, setLang] = useState<'ru' | 'en'>(server.lang ?? 'ru');
+  // «Обновить плагин»: the plugin downloads the newest release, it takes effect at the next restart; the answer is waited for a minute
+  const update = async () => {
+    setUpdating(true);
+    try {
+      const { id } = await api<{ id: number }>(`/game-news/targets/${server.id}/update`, 'POST');
+      toast(t('gn.sh.updateSent'));
+      for (let i = 0; i < 30; i++) {
+        await new Promise((r) => setTimeout(r, 2000));
+        const c = await api<{ state: string; result: string }>(`/game-news/commands/${id}`);
+        if (c.state === 'done') { toast(c.result || t('gn.sh.updateDone')); return; }
+        if (c.state === 'failed') { toast(c.result || t('gn.sh.updateFailed'), 'err'); return; }
+      }
+      toast(t('gn.sh.updateSlow'), 'err');
+    } catch (e) { toast(errText(e), 'err'); } finally { setUpdating(false); }
+  };
+  const saveLang = async (v: 'ru' | 'en') => {
+    setLang(v);
+    try { await api(`/game-news/targets/${server.id}/lang`, 'PUT', { lang: v }); toast(t('gn.sh.langSaved')); } catch (e) { toast(errText(e), 'err'); }
+  };
   const old = server.online && versionLess(server.pluginVersion, latest);
   const test = async () => {
     setBusy(true);
@@ -51,9 +72,19 @@ export function ServerHead({ server, rd, latest }: { server: NewsServerInfo; rd:
             {server.lastSeen ? ` · ${t('gn.plugin.lastPoll', { time: ago(server.lastSeen) })}` : ''}
             {server.players != null && ` · ${t('gn.players', { n: server.players, max: server.maxPlayers ?? 0 })}`}
           </p>
+          {server.pluginProblems && <p className="text-sm font-semibold text-danger">{t('gn.sh.problems', { list: server.pluginProblems })}</p>}
           {old && <p className="text-sm font-semibold text-warn">{t('gn.sh.old', { v: latest })} · <a className="text-link hover:underline" href="https://github.com/RJ-Bond/CoreGSM-Plugin/releases/latest" target="_blank" rel="noreferrer noopener">{t('gn.sh.download')}</a></p>}
         </div>
-        <button type="button" className="btn btn-soft btn-sm" disabled={busy} onClick={() => void test()}>{t('gn.sh.test')}</button>
+        <div className="flex flex-wrap items-center gap-2">
+          <select className="input w-auto py-1 text-sm" value={lang} aria-label={t('gn.sh.lang')} title={t('gn.sh.langHint')} onChange={(e) => void saveLang(e.target.value === 'en' ? 'en' : 'ru')}>
+            <option value="ru">RU</option>
+            <option value="en">EN</option>
+          </select>
+          {server.online && (
+            <button type="button" className={old || server.pluginProblems ? 'btn btn-sm' : 'btn btn-soft btn-sm'} disabled={updating} title={t('gn.sh.updateHint')} onClick={() => void update()}>{t('gn.sh.update')}</button>
+          )}
+          <button type="button" className="btn btn-soft btn-sm" disabled={busy} onClick={() => void test()}>{t('gn.sh.test')}</button>
+        </div>
       </div>
       <div className="flex flex-wrap gap-2" role="group" aria-label={t('gn.sh.sum')}>
         {chips.map((c) => (

@@ -14,24 +14,25 @@ import { z } from 'zod';
 import { db } from '../db.js';
 import { applyVars, checkNews } from './gameNewsLogic.js';
 import { PALETTE } from './gameNewsPalette.js';
-import { NAME_SQL, ONLINE_MS, chatKindsConfigured, liveState, registerEnabled, remindMinutesFor, serverLabel, varsFor } from './gameNewsVars.js';
+import { NAME_SQL, ONLINE_MS, chatKindsConfigured, liveState, registerEnabled, langFor, remindMinutesFor, serverLabel, varsFor } from './gameNewsVars.js';
 
 export { ONLINE_MS };
 import { joinLeaveFor } from './gameNewsJoinLeave.js';
 import { welcomeFor } from './gameNewsWelcome.js';
 import { consumeDue } from './gameNewsRestartState.js';
 import { takeCommands } from './gameNewsModLog.js';
+import { savePluginProblems } from './gameNewsConnections.js';
 
 export const QUEUE_TTL_MS = 5 * 60_000;
 /** the version of the game plugin this panel was built for: an older plugin is shown as outdated */
-export const PLUGIN_VERSION = '0.17.4';
+export const PLUGIN_VERSION = '0.18.0';
 /** the games the plugin exists for */
 export const SUPPORTED_GAMES = new Set(['vrising']);
 const PULL_MIN_GAP_MS = 800;
 const PULL_BATCH = 5;
 const MIN_GAP_MS = 2000;
 
-export interface TargetRow { server_id: number; token_hash: string; last_seen: number; plugin_version: string; plugin_name: string; plugin_players: number; plugin_max: number }
+export interface TargetRow { server_id: number; token_hash: string; last_seen: number; plugin_version: string; plugin_problems?: string; plugin_name: string; plugin_players: number; plugin_max: number }
 interface LogRow { id: number; server_id: number | null; server_name: string; text: string; status: string; error: string; sent_by: string; sent_at: number; delivered_at: number | null }
 
 let lastSend = 0;
@@ -103,6 +104,8 @@ export function registerGameNews({ app, admin }: { app: Express; admin: RequestH
         lastSeen: t?.last_seen || null,
         online: !!t && t.last_seen > 0 && now - t.last_seen < ONLINE_MS,
         pluginVersion: t?.plugin_version ?? '',
+        pluginProblems: t?.plugin_problems ?? '',
+        lang: langFor(s.id),
         players: liveState(s.id, now)?.players ?? null,
         maxPlayers: liveState(s.id, now)?.max ?? null,
       };
@@ -185,6 +188,8 @@ export function registerGameNews({ app, admin }: { app: Express; admin: RequestH
     const pmax = Math.max(0, num('x-coregsm-max', 10_000));
     db.prepare("UPDATE game_news_targets SET last_seen = ?, plugin_version = ?, plugin_name = CASE WHEN ? <> '' THEN ? ELSE plugin_name END, plugin_players = ?, plugin_max = CASE WHEN ? > 0 THEN ? ELSE plugin_max END WHERE server_id = ?")
       .run(now, version, pname, pname, players, pmax, pmax, t.server_id);
+    // a plugin from 0.18 says what it could not patch (empty = all is well); an older one says nothing and changes nothing
+    if (req.headers['x-coregsm-problems'] !== undefined) savePluginProblems(t.server_id, String(req.headers['x-coregsm-problems']), now);
 
     expireOld(now);
     const rows = db.prepare("SELECT id, text FROM game_news_log WHERE server_id = ? AND status = 'queued' ORDER BY id LIMIT ?").all(t.server_id, PULL_BATCH) as { id: number; text: string }[];
@@ -193,6 +198,6 @@ export function registerGameNews({ app, admin }: { app: Express; admin: RequestH
       db.transaction(() => { for (const r of rows) done.run(now, r.id); })();
     }
     // latest = the newest plugin version this panel knows (the plugin logs when it is older); welcome = the greeting for joining players
-    res.json({ messages: rows.map((r) => ({ id: r.id, text: r.text })), latest: PLUGIN_VERSION, ...welcomeFor(t.server_id, now), ...joinLeaveFor(t.server_id), register: registerEnabled(t.server_id), remindMinutes: remindMinutesFor(t.server_id), palette: PALETTE, chat: chatKindsConfigured(t.server_id), restart: consumeDue(t.server_id), commands: takeCommands(t.server_id, now) });
+    res.json({ messages: rows.map((r) => ({ id: r.id, text: r.text })), latest: PLUGIN_VERSION, ...welcomeFor(t.server_id, now), ...joinLeaveFor(t.server_id), register: registerEnabled(t.server_id), remindMinutes: remindMinutesFor(t.server_id), palette: PALETTE, lang: langFor(t.server_id), chat: chatKindsConfigured(t.server_id), restart: consumeDue(t.server_id), commands: takeCommands(t.server_id, now) });
   });
 }

@@ -8,7 +8,7 @@ export const MAX_VISIBLE = 400;
 export const MAX_BYTES = 500;
 export const byteLength = (s: string): number => new TextEncoder().encode(s).length;
 
-export interface NewsServerInfo { id: number; name: string; address: string; game: string; supported: boolean; hasToken: boolean; lastSeen: number | null; online: boolean; pluginVersion: string; players: number | null; maxPlayers: number | null }
+export interface NewsServerInfo { id: number; name: string; address: string; game: string; supported: boolean; hasToken: boolean; lastSeen: number | null; online: boolean; pluginVersion: string; pluginProblems?: string; lang?: 'ru' | 'en'; players: number | null; maxPlayers: number | null }
 export type NewsStatus = 'queued' | 'delivered' | 'expired' | 'failed';
 export interface NewsLogRow { id: number; serverId: number | null; serverName: string; text: string; status: NewsStatus; error: string; sentBy: string; sentAt: number; deliveredAt: number | null }
 export interface NewsSendResult { text: string; results: { serverId: number; serverName: string; queued: boolean; online: boolean; error: string }[] }

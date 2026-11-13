@@ -469,6 +469,12 @@ CREATE TABLE IF NOT EXISTS nick_history (
 );
 CREATE INDEX IF NOT EXISTS idx_nick_history_nick ON nick_history(nick COLLATE NOCASE);`),
   },
+  {
+    version: 33,
+    name: 'plugin_problems',
+    // what the game plugin could not do (a patch that no longer fits the game after an update), as it reports with every poll
+    up: (db) => addColumn(db, 'game_news_targets', 'plugin_problems', "TEXT NOT NULL DEFAULT ''"),
+  },
 ];
 
 export const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;

@@ -16,6 +16,14 @@ interface language; the GitHub release text is built from the section of the ver
 
 ## Не выпущено | Unreleased
 
+### ✨ Новое | New
+- 🚪 «Игровой плагин» → «Модерация» → «Входы и выходы»: кто зашёл и вышел, что сказала игра (сам вышел, таймаут, кик, выключение сервера…), сколько был в игре и снимал ли его CoreGSM и за что («CoreGSM не трогал» — плагин ни при чём); поиск по нику общий с журналом модерации, хранится 30 дней; нужен плагин 0.18.0 [migration] | 🚪 Game plugin → Moderation → Joins and departures: who came and went, what the game said (left, timeout, kick, server shutdown…), how long the player was in and whether CoreGSM removed him and why («Not touched by CoreGSM» — the plugin had nothing to do with it); the nickname search is shared with the moderation log, kept for 30 days; needs plugin 0.18.0
+- 📶 Служебный канал: «Игроки массово отваливаются по таймауту», если за минуту на одном сервере по таймауту отключились трое и больше (сеть или подвисший сервер); не чаще раза в 10 минут на сервер | 📶 Service channel: «Players drop out by timeout», when three or more players on one server time out within a minute (the network or a frozen server); at most once in 10 minutes per server
+- 🧩 Если плагин после обновления игры не смог подключиться к части игры, страница сервера в «Игровом плагине» показывает это красным, а в служебный канал приходит «Игровой плагин работает не полностью» | 🧩 When the plugin could not hook into part of the game after a game update, the server page of the game plugin shows it in red and the service channel gets «The game plugin works only partly»
+- ⬆️ Кнопка «Обновить плагин» на странице сервера: плагин сам скачивает последний релиз с GitHub, сверяет контрольную сумму и подменяет себя; новая версия работает после рестарта сервера; нужен плагин 0.18.0 | ⬆️ An «Update the plugin» button on the server page: the plugin downloads the newest release from GitHub, checks the checksum and replaces itself; the new version works after a restart of the server; needs plugin 0.18.0
+- 🌐 Переключатель RU / EN на странице сервера: язык справки команд, ошибок и .online, которые пишет сам плагин (тексты из панели не меняются); нужен плагин 0.18.0 | 🌐 An RU / EN switch on the server page: the language of the command help, errors and .online that the plugin writes itself (the texts from the panel do not change); needs plugin 0.18.0
+- 👥 Команда .online в игре: кто сейчас на сервере и сколько в игре; администратор видит ещё и ID игроков; нужен плагин 0.18.0 | 👥 The .online command in the game: who is on the server now and for how long; an administrator also sees the player ids; needs plugin 0.18.0
+
 ## 1.2.40 · 13.11.2026
 
 ### ✨ Новое | New

@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="acfa4eefd8b0"
+COREGSM_BUILD="49c0fdfb41c3"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.2.40"
+COREGSM_VERSION="1.2.41"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -24504,24 +24504,25 @@ import { z } from 'zod';
 import { db } from '../db.js';
 import { applyVars, checkNews } from './gameNewsLogic.js';
 import { PALETTE } from './gameNewsPalette.js';
-import { NAME_SQL, ONLINE_MS, chatKindsConfigured, liveState, registerEnabled, remindMinutesFor, serverLabel, varsFor } from './gameNewsVars.js';
+import { NAME_SQL, ONLINE_MS, chatKindsConfigured, liveState, registerEnabled, langFor, remindMinutesFor, serverLabel, varsFor } from './gameNewsVars.js';
 
 export { ONLINE_MS };
 import { joinLeaveFor } from './gameNewsJoinLeave.js';
 import { welcomeFor } from './gameNewsWelcome.js';
 import { consumeDue } from './gameNewsRestartState.js';
 import { takeCommands } from './gameNewsModLog.js';
+import { savePluginProblems } from './gameNewsConnections.js';
 
 export const QUEUE_TTL_MS = 5 * 60_000;
 /** the version of the game plugin this panel was built for: an older plugin is shown as outdated */
-export const PLUGIN_VERSION = '0.17.4';
+export const PLUGIN_VERSION = '0.18.0';
 /** the games the plugin exists for */
 export const SUPPORTED_GAMES = new Set(['vrising']);
 const PULL_MIN_GAP_MS = 800;
 const PULL_BATCH = 5;
 const MIN_GAP_MS = 2000;
 
-export interface TargetRow { server_id: number; token_hash: string; last_seen: number; plugin_version: string; plugin_name: string; plugin_players: number; plugin_max: number }
+export interface TargetRow { server_id: number; token_hash: string; last_seen: number; plugin_version: string; plugin_problems?: string; plugin_name: string; plugin_players: number; plugin_max: number }
 interface LogRow { id: number; server_id: number | null; server_name: string; text: string; status: string; error: string; sent_by: string; sent_at: number; delivered_at: number | null }
 
 let lastSend = 0;
@@ -24593,6 +24594,8 @@ export function registerGameNews({ app, admin }: { app: Express; admin: RequestH
         lastSeen: t?.last_seen || null,
         online: !!t && t.last_seen > 0 && now - t.last_seen < ONLINE_MS,
         pluginVersion: t?.plugin_version ?? '',
+        pluginProblems: t?.plugin_problems ?? '',
+        lang: langFor(s.id),
         players: liveState(s.id, now)?.players ?? null,
         maxPlayers: liveState(s.id, now)?.max ?? null,
       };
@@ -24675,6 +24678,8 @@ export function registerGameNews({ app, admin }: { app: Express; admin: RequestH
     const pmax = Math.max(0, num('x-coregsm-max', 10_000));
     db.prepare("UPDATE game_news_targets SET last_seen = ?, plugin_version = ?, plugin_name = CASE WHEN ? <> '' THEN ? ELSE plugin_name END, plugin_players = ?, plugin_max = CASE WHEN ? > 0 THEN ? ELSE plugin_max END WHERE server_id = ?")
       .run(now, version, pname, pname, players, pmax, pmax, t.server_id);
+    // a plugin from 0.18 says what it could not patch (empty = all is well); an older one says nothing and changes nothing
+    if (req.headers['x-coregsm-problems'] !== undefined) savePluginProblems(t.server_id, String(req.headers['x-coregsm-problems']), now);
 
     expireOld(now);
     const rows = db.prepare("SELECT id, text FROM game_news_log WHERE server_id = ? AND status = 'queued' ORDER BY id LIMIT ?").all(t.server_id, PULL_BATCH) as { id: number; text: string }[];
@@ -24683,7 +24688,7 @@ export function registerGameNews({ app, admin }: { app: Express; admin: RequestH
       db.transaction(() => { for (const r of rows) done.run(now, r.id); })();
     }
     // latest = the newest plugin version this panel knows (the plugin logs when it is older); welcome = the greeting for joining players
-    res.json({ messages: rows.map((r) => ({ id: r.id, text: r.text })), latest: PLUGIN_VERSION, ...welcomeFor(t.server_id, now), ...joinLeaveFor(t.server_id), register: registerEnabled(t.server_id), remindMinutes: remindMinutesFor(t.server_id), palette: PALETTE, chat: chatKindsConfigured(t.server_id), restart: consumeDue(t.server_id), commands: takeCommands(t.server_id, now) });
+    res.json({ messages: rows.map((r) => ({ id: r.id, text: r.text })), latest: PLUGIN_VERSION, ...welcomeFor(t.server_id, now), ...joinLeaveFor(t.server_id), register: registerEnabled(t.server_id), remindMinutes: remindMinutesFor(t.server_id), palette: PALETTE, lang: langFor(t.server_id), chat: chatKindsConfigured(t.server_id), restart: consumeDue(t.server_id), commands: takeCommands(t.server_id, now) });
   });
 }
 __COREGSM_EOF__
@@ -25236,6 +25241,167 @@ export function chunkLines(lines: string[], max = 1900): string[] {
   }
   if (cur) out.push(cur);
   return out;
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/gamenews"
+  cat > "$APP_DIR/core-backend/src/gamenews/gameNewsConnections.ts" << '__COREGSM_EOF__'
+/**
+ * Who came to a game server and who went, and why (plugin 0.18+): the plugin sends what the game said about each departure
+ * (a quit, a timeout, a kick…), how long the player was in and whether CoreGSM removed him. The panel keeps it for 30 days and shows
+ * it on the Moderation tab, so a complaint «I was kicked for nothing» can be checked from the panel.
+ * Also here: several timeouts on one server within a minute (the network or a frozen server) and a plugin that could not patch the
+ * game (after an update of the game) are told in the service channel; the button «Обновить плагин»; the language of the plugin.
+ */
+import type { Express, RequestHandler } from 'express';
+import { z } from 'zod';
+import { systemTarget } from '../alerts/alertRoute.js';
+import { alertSettings, enqueueAlert } from '../alerts/alerts.js';
+import { db } from '../db.js';
+import { pluginTarget } from './gameNews.js';
+import { plainLine } from './gameNewsJoinLeave.js';
+import { commandState, queueCommand } from './gameNewsModLog.js';
+import { writeScoped } from './gameNewsScope.js';
+import { serverLabel } from './gameNewsVars.js';
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS game_connections (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  server_id INTEGER NOT NULL,
+  ts INTEGER NOT NULL,
+  kind TEXT NOT NULL,
+  platform_id TEXT NOT NULL DEFAULT '',
+  nick TEXT NOT NULL DEFAULT '',
+  reason TEXT NOT NULL DEFAULT '',
+  removed_by TEXT NOT NULL DEFAULT '',
+  minutes INTEGER NOT NULL DEFAULT -1
+);
+CREATE INDEX IF NOT EXISTS idx_game_connections_ts ON game_connections(server_id, ts);
+CREATE INDEX IF NOT EXISTS idx_game_connections_nick ON game_connections(nick COLLATE NOCASE);
+`);
+
+const KEEP_MS = 30 * 86_400_000;
+/** this many timeouts on one server within the window make an alert */
+export const TIMEOUT_ALERT_COUNT = 3;
+const TIMEOUT_WINDOW_MS = 60_000;
+/** not more often than this for one server */
+const ALERT_PAUSE_MS = 10 * 60_000;
+const lastAlert = new Map<string, number>();
+
+export interface ConnectionEvent { kind: 'join' | 'leave'; id: string; name: string; reason: string; by: string; minutes: number; at: number }
+
+function alertOnce(key: string, now: number, send: () => void): boolean {
+  if (now - (lastAlert.get(key) ?? 0) < ALERT_PAUSE_MS) return false;
+  lastAlert.set(key, now);
+  try { send(); } catch { /* an alert must not stop the journal */ }
+  return true;
+}
+
+/** keeps the events of a server; true when they made a «many timeouts» alert */
+export function saveConnections(serverId: number, events: ConnectionEvent[], now = Date.now()): boolean {
+  const insert = db.prepare('INSERT INTO game_connections (server_id, ts, kind, platform_id, nick, reason, removed_by, minutes) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+  db.transaction(() => {
+    for (const e of events) {
+      // the time of the plugin, unless it is far off (a wrong clock on the game server)
+      const ts = Math.abs(e.at - now) < 3_600_000 ? e.at : now;
+      insert.run(serverId, ts, e.kind, e.id.slice(0, 25), plainLine(e.name).slice(0, 100), plainLine(e.reason).slice(0, 100), plainLine(e.by).slice(0, 200), Math.round(e.minutes));
+    }
+  })();
+  db.prepare('DELETE FROM game_connections WHERE ts < ?').run(now - KEEP_MS);
+
+  if (!events.some((e) => e.kind === 'leave' && /^timeout/i.test(e.reason))) return false;
+  const n = (db.prepare("SELECT COUNT(*) AS n FROM game_connections WHERE server_id = ? AND kind = 'leave' AND reason LIKE 'Timeout%' AND ts >= ?").get(serverId, now - TIMEOUT_WINDOW_MS) as { n: number }).n;
+  if (n < TIMEOUT_ALERT_COUNT) return false;
+  return alertOnce(`timeout:${serverId}`, now, () => {
+    if (!systemTarget(alertSettings())) return;
+    const name = serverLabel(serverId);
+    enqueueAlert('update', name, {
+      content: '', mention: 'none',
+      embed: {
+        title: '📶 Игроки массово отваливаются по таймауту',
+        description: `Сервер **${name}**: за последнюю минуту по таймауту отключились ${n} игроков. Обычно это сеть или подвисший сервер (нагрузка, сохранение мира, нехватка памяти). Журнал входов и выходов: «Игровой плагин» → «Модерация».`,
+        color: 0xf5b01e,
+        timestamp: new Date(now).toISOString(),
+      },
+    });
+  });
+}
+
+/** what the plugin could not do (a patch that no longer fits the game): kept with the server, told once when it changes */
+export function savePluginProblems(serverId: number, header: string, now = Date.now()): void {
+  const problems = header.trim().toLowerCase() === 'none' ? '' : header.split(',').map((x) => x.replace(/[^\w.-]/g, '').slice(0, 40)).filter(Boolean).slice(0, 10).join(', ');
+  const row = db.prepare('SELECT plugin_problems FROM game_news_targets WHERE server_id = ?').get(serverId) as { plugin_problems: string } | undefined;
+  if (!row || row.plugin_problems === problems) return;
+  db.prepare('UPDATE game_news_targets SET plugin_problems = ? WHERE server_id = ?').run(problems, serverId);
+  if (!problems) return;
+  alertOnce(`problems:${serverId}:${problems}`, now, () => {
+    if (!systemTarget(alertSettings())) return;
+    const name = serverLabel(serverId);
+    enqueueAlert('update', name, {
+      content: '', mention: 'none',
+      embed: {
+        title: '🧩 Игровой плагин работает не полностью',
+        description: `Сервер **${name}**: плагин CoreGSM не смог подключиться к части игры (${problems}). Так бывает после обновления V Rising. Обновите плагин: «Игровой плагин» → сервер → «Обновить плагин».`,
+        color: 0xed4245,
+        timestamp: new Date(now).toISOString(),
+      },
+    });
+  });
+}
+
+export function registerGameNewsConnections({ app, admin }: { app: Express; admin: RequestHandler }): void {
+  // the plugin: a batch of joins and departures
+  app.post('/api/game-news/connections', (req, res) => {
+    const t = pluginTarget(req);
+    if (!t) return res.status(401).json({ error: 'unauthorized' });
+    const b = z.object({
+      events: z.array(z.object({
+        kind: z.enum(['join', 'leave']), id: z.string().max(25), name: z.string().max(100), reason: z.string().max(100).default(''),
+        by: z.string().max(300).default(''), minutes: z.number().int().min(-1).max(100_000).default(-1), at: z.number().int().positive(),
+      })).max(100),
+    }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'bad' });
+    saveConnections(t.server_id, b.data.events);
+    res.json({ ok: true });
+  });
+
+  // the panel: the journal (by nickname and server), newest first
+  app.get('/api/game-news/connections', admin, (req, res) => {
+    const nick = String(req.query.player ?? '').trim().toLowerCase();
+    const server = Number(req.query.server);
+    const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 200));
+    const where: string[] = [];
+    const args: (string | number)[] = [];
+    if (nick) { where.push('ulower(nick) LIKE ?'); args.push(`%${nick}%`); }
+    if (Number.isInteger(server) && server > 0) { where.push('server_id = ?'); args.push(server); }
+    const rows = db.prepare(`SELECT * FROM game_connections ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY ts DESC, id DESC LIMIT ?`).all(...args, limit) as {
+      id: number; server_id: number; ts: number; kind: string; platform_id: string; nick: string; reason: string; removed_by: string; minutes: number;
+    }[];
+    res.json({ items: rows.map((r) => ({ id: r.id, serverName: serverLabel(r.server_id), ts: r.ts, kind: r.kind, platformId: r.platform_id, nick: r.nick, reason: r.reason, removedBy: r.removed_by, minutes: r.minutes })) });
+  });
+
+  // «Обновить плагин»: the plugin downloads the newest release; it takes effect at the next restart of the server
+  app.post('/api/game-news/targets/:id/update', admin, (req, res) => {
+    const id = Number(req.params.id);
+    const t = db.prepare("SELECT server_id FROM game_news_targets WHERE server_id = ? AND token_hash <> ''").get(id);
+    if (!t) return res.status(404).json({ error: 'Сервер не найден' });
+    res.json({ id: queueCommand(id, 'update', {}, Date.now()) });
+  });
+
+  // how a command given from the panel went
+  app.get('/api/game-news/commands/:id', admin, (req, res) => {
+    const c = commandState(Number(req.params.id));
+    if (!c) return res.status(404).json({ error: 'Не найдено' });
+    res.json({ state: c.state, result: c.result });
+  });
+
+  // the language of the lines that the plugin writes itself (help of the commands, errors)
+  app.put('/api/game-news/targets/:id/lang', admin, (req, res) => {
+    const id = Number(req.params.id);
+    const b = z.object({ lang: z.enum(['ru', 'en']) }).safeParse(req.body);
+    if (!Number.isInteger(id) || id <= 0 || !b.success) return res.status(400).json({ error: 'Проверьте поля' });
+    writeScoped('gamenews_lang', b.data.lang, id);
+    res.json({ ok: true });
+  });
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/gamenews"
@@ -26878,20 +27044,19 @@ export const DEFAULT_TEXTS: RestartTexts = {
   cancel: '* Рестарт сервера отменён.',
 };
 
-const WARN: string = PALETTE.info;
 const ALERT: string = PALETTE.bad;
 const OK: string = PALETTE.good;
 
 const clean = (s: string): string => Array.from(s, (ch) => (ch.charCodeAt(0) < 32 ? ' ' : ch)).join('').replace(/[<>]/g, '').trim();
 
-/** the line for the chat: yellow, red for the last minute */
+/** the line for the chat: red, the time in it green and bold */
 export function announceLine(texts: RestartTexts, seconds: number): string {
-  const color = seconds <= 60 ? ALERT : WARN;
+  const color = ALERT;
   const left = formatLeft(seconds);
   const [before, ...rest] = clean(texts.announce).split('{time}');
   if (rest.length === 0) return `<color=${color}>${before}</color>`;
-  // the time is picked out in white bold, the rest keeps the colour of the line
-  return `<color=${color}>${before}</color><color=#FFFFFF><b>${left}</b></color><color=${color}>${rest.join(left)}</color>`;
+  // the time is picked out in green bold, the rest keeps the colour of the line
+  return `<color=${color}>${before}</color><color=${OK}><b>${left}</b></color><color=${color}>${rest.join(left)}</color>`;
 }
 export const nowLine = (texts: RestartTexts): string => `<color=${ALERT}>${clean(texts.now)}</color>`;
 export const cancelLine = (texts: RestartTexts): string => `<color=${OK}>${clean(texts.cancel)}</color>`;
@@ -28008,6 +28173,11 @@ export function remindMinutesFor(serverId?: number): number {
     if (v.enabled !== true) return 0;
     return Number.isFinite(v.remindMinutes) ? Math.min(1440, Math.max(0, Math.round(v.remindMinutes as number))) : 15;
   } catch { return 0; }
+}
+
+/** the language of the lines that the plugin writes itself (help of the commands, errors): ru unless the server is set to en */
+export function langFor(serverId?: number): 'ru' | 'en' {
+  return readScoped('gamenews_lang', serverId) === 'en' ? 'en' : 'ru';
 }
 
 // ---- what the administrator keeps for {discord} and {tip}
@@ -30422,6 +30592,7 @@ import { registerGameNews } from './gamenews/gameNews.js';
 import { registerGameNewsChat, startChatTimer, stopChatTimer } from './gamenews/gameNewsChat.js';
 import { registerGameNewsServerRestart, startRestartJobsTimer, stopRestartJobsTimer } from './gamenews/gameNewsServerRestart.js';
 import { registerGameNewsKick } from './gamenews/gameNewsKick.js';
+import { registerGameNewsConnections } from './gamenews/gameNewsConnections.js';
 import { registerGameNewsJournal } from './gamenews/gameNewsJournal.js';
 import { registerGameNewsRestartSchedule, startRestartScheduleTimer, stopRestartScheduleTimer } from './gamenews/gameNewsRestartSchedule.js';
 import { registerGameNewsPlayers } from './gamenews/gameNewsRegister.js';
@@ -30630,6 +30801,7 @@ registerGameNewsServerRestart({ app, admin });
 registerGameNewsRestartSchedule({ app, admin });
 registerGameNewsJournal({ app, admin });
 registerGameNewsKick({ app, admin });
+registerGameNewsConnections({ app, admin });
 registerHealth({ app, admin, bot: () => bot.status });
 startDbMaintenance();
 registerOverview({ app, viewer });
@@ -31480,6 +31652,12 @@ CREATE TABLE IF NOT EXISTS nick_history (
   PRIMARY KEY (user_id, nick)
 );
 CREATE INDEX IF NOT EXISTS idx_nick_history_nick ON nick_history(nick COLLATE NOCASE);`),
+  },
+  {
+    version: 33,
+    name: 'plugin_problems',
+    // what the game plugin could not do (a patch that no longer fits the game after an update), as it reports with every poll
+    up: (db) => addColumn(db, 'game_news_targets', 'plugin_problems', "TEXT NOT NULL DEFAULT ''"),
   },
 ];
 
@@ -144164,7 +144342,7 @@ export const MAX_VISIBLE = 400;
 export const MAX_BYTES = 500;
 export const byteLength = (s: string): number => new TextEncoder().encode(s).length;
 
-export interface NewsServerInfo { id: number; name: string; address: string; game: string; supported: boolean; hasToken: boolean; lastSeen: number | null; online: boolean; pluginVersion: string; players: number | null; maxPlayers: number | null }
+export interface NewsServerInfo { id: number; name: string; address: string; game: string; supported: boolean; hasToken: boolean; lastSeen: number | null; online: boolean; pluginVersion: string; pluginProblems?: string; lang?: 'ru' | 'en'; players: number | null; maxPlayers: number | null }
 export type NewsStatus = 'queued' | 'delivered' | 'expired' | 'failed';
 export interface NewsLogRow { id: number; serverId: number | null; serverName: string; text: string; status: NewsStatus; error: string; sentBy: string; sentAt: number; deliveredAt: number | null }
 export interface NewsSendResult { text: string; results: { serverId: number; serverName: string; queued: boolean; online: boolean; error: string }[] }
@@ -148399,6 +148577,36 @@ const en: Record<keyof typeof ru, string> = {
   'gn.sh.testQueued': 'The server is not connected now: the message waits in the queue',
   'gn.sh.old': 'A new plugin version is available: {v}',
   'gn.sh.download': 'Download on GitHub',
+  'gn.sh.update': 'Update the plugin',
+  'gn.sh.updateHint': 'The plugin downloads the newest version from GitHub and checks its checksum; the new version works after a restart of the server',
+  'gn.sh.updateSent': 'The command went to the plugin, waiting for the answer…',
+  'gn.sh.updateDone': 'The plugin is updated: the new version works after a restart of the server',
+  'gn.sh.updateFailed': 'The plugin could not update',
+  'gn.sh.updateSlow': 'The plugin did not answer within a minute: the server may be off or the plugin older than 0.18',
+  'gn.sh.problems': 'The plugin works only partly: {list} did not connect. This happens after a game update — update the plugin',
+  'gn.sh.lang': 'Language of the plugin lines',
+  'gn.sh.langHint': 'The language of the command help and errors that the plugin writes itself (the texts from the panel do not change)',
+  'gn.sh.langSaved': 'The language of the plugin is saved: it applies within a few seconds',
+  'gn.cn.title': 'Joins and departures',
+  'gn.cn.note': 'What the game said at the departure, how long the player was in and whether CoreGSM removed him. «Not touched by CoreGSM» means the plugin had nothing to do with it. Needs plugin 0.18; kept for 30 days.',
+  'gn.cn.empty': 'Nothing yet',
+  'gn.cn.emptyHint': 'Entries appear when players come and go (plugin 0.18 or newer).',
+  'gn.cn.join': 'Joined',
+  'gn.cn.minutes': '{n} min in the game',
+  'gn.cn.removed': 'Removed by CoreGSM: {why}',
+  'gn.cn.notUs': 'Not touched by CoreGSM',
+  'gn.cn.r.LeftGame': 'Left',
+  'gn.cn.r.Timeout': 'Timeout',
+  'gn.cn.r.Kicked': 'Kicked',
+  'gn.cn.r.Banned': 'Banned',
+  'gn.cn.r.ServerShutdown': 'Server shutdown',
+  'gn.cn.r.ServerError': 'Server error',
+  'gn.cn.r.AuthSessionCancelled': 'Join cancelled',
+  'gn.cn.r.AuthenticationError': 'Sign-in error',
+  'gn.cn.r.ClientError': 'Client error',
+  'gn.cn.r.IncorrectVersion': 'Other game version',
+  'gn.cn.r.IncorrectPassword': 'Wrong password',
+  'gn.cn.r.ServerFull': 'Server full',
   'gn.sh.sum': 'What is on',
   'gn.sh.welcome': 'Greeting',
   'gn.sh.joinleave': 'Join and leave',
@@ -153562,6 +153770,36 @@ const ru = {
   'gn.sh.testQueued': 'Сервер сейчас не на связи: сообщение ждёт в очереди',
   'gn.sh.old': 'Есть новая версия плагина: {v}',
   'gn.sh.download': 'Скачать на GitHub',
+  'gn.sh.update': 'Обновить плагин',
+  'gn.sh.updateHint': 'Плагин скачает последнюю версию с GitHub и проверит её контрольную сумму; новая версия заработает после рестарта сервера',
+  'gn.sh.updateSent': 'Команда отправлена плагину, ждём ответа…',
+  'gn.sh.updateDone': 'Плагин обновлён: новая версия заработает после рестарта сервера',
+  'gn.sh.updateFailed': 'Плагин не смог обновиться',
+  'gn.sh.updateSlow': 'Плагин не ответил за минуту: возможно, сервер выключен или плагин старше 0.18',
+  'gn.sh.problems': 'Плагин работает не полностью: не подключилось {list}. Так бывает после обновления игры — обновите плагин',
+  'gn.sh.lang': 'Язык строк плагина',
+  'gn.sh.langHint': 'Язык справки команд и ошибок, которые пишет сам плагин (тексты из панели не меняются)',
+  'gn.sh.langSaved': 'Язык плагина сохранён: применится в течение нескольких секунд',
+  'gn.cn.title': 'Входы и выходы',
+  'gn.cn.note': 'Что сказала игра при выходе, сколько игрок был на сервере и снимал ли его CoreGSM. «CoreGSM не трогал» — плагин тут ни при чём. Нужен плагин 0.18; хранится 30 дней.',
+  'gn.cn.empty': 'Пока пусто',
+  'gn.cn.emptyHint': 'Записи появятся, когда игроки начнут заходить и выходить (плагин 0.18 и новее).',
+  'gn.cn.join': 'Вошёл',
+  'gn.cn.minutes': 'в игре {n} мин',
+  'gn.cn.removed': 'Снял CoreGSM: {why}',
+  'gn.cn.notUs': 'CoreGSM не трогал',
+  'gn.cn.r.LeftGame': 'Вышел сам',
+  'gn.cn.r.Timeout': 'Таймаут',
+  'gn.cn.r.Kicked': 'Кикнут',
+  'gn.cn.r.Banned': 'Забанен',
+  'gn.cn.r.ServerShutdown': 'Выключение сервера',
+  'gn.cn.r.ServerError': 'Ошибка сервера',
+  'gn.cn.r.AuthSessionCancelled': 'Отмена входа',
+  'gn.cn.r.AuthenticationError': 'Ошибка входа',
+  'gn.cn.r.ClientError': 'Ошибка клиента',
+  'gn.cn.r.IncorrectVersion': 'Другая версия игры',
+  'gn.cn.r.IncorrectPassword': 'Неверный пароль',
+  'gn.cn.r.ServerFull': 'Сервер полон',
   'gn.sh.sum': 'Что включено',
   'gn.sh.welcome': 'Приветствие',
   'gn.sh.joinleave': 'Вход и выход',
@@ -163527,6 +163765,67 @@ export function ExtrasCard({ initial }: { initial: Extras }) {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
+  cat > "$APP_DIR/core-frontend/src/pages/GameNewsConnections.tsx" << '__COREGSM_EOF__'
+import { useEffect, useState } from 'react';
+import { api } from '../api';
+import { soon } from '../components/GameNewsParts';
+import { t, useI18n } from '../i18n';
+import { usePoll } from '../ui';
+import { EmptyState } from './GameNewsUi';
+
+export interface ConnectionItem { id: number; serverName: string; ts: number; kind: 'join' | 'leave'; platformId: string; nick: string; reason: string; removedBy: string; minutes: number }
+
+/** the reasons of the game in plain words; an unknown one is shown as the game wrote it */
+const REASONS = ['LeftGame', 'Timeout', 'Kicked', 'Banned', 'ServerShutdown', 'ServerError', 'AuthSessionCancelled', 'AuthenticationError', 'ClientError', 'IncorrectVersion', 'IncorrectPassword', 'ServerFull'] as const;
+const reasonText = (r: string): string => {
+  const key = REASONS.find((x) => r.startsWith(x));
+  return key ? t(`gn.cn.r.${key}` as 'gn.cn.r.LeftGame') : r || '—';
+};
+const reasonCls = (c: ConnectionItem): string => (c.removedBy ? 'pill pill-warn' : /^Timeout/.test(c.reason) ? 'pill pill-warn' : c.kind === 'join' ? 'pill pill-ok' : 'pill pill-mute');
+
+/**
+ * Who came and who went, and why (plugin 0.18+): what the game said, how long the player was in and whether CoreGSM removed him.
+ * «CoreGSM не трогал» means the plugin had nothing to do with the departure. Follows the nickname typed in the search of the log.
+ */
+export function ConnectionsSection({ player, onPick }: { player: string; onPick: (nick: string) => void }) {
+  useI18n();
+  const [items, setItems] = useState<ConnectionItem[] | null>(null);
+  const url = `/game-news/connections?player=${encodeURIComponent(player.trim())}&limit=150`;
+  const load = () => api<{ items: ConnectionItem[] }>(url).then((r) => setItems(r.items)).catch(() => undefined);
+  usePoll(load, 15_000);
+  useEffect(() => { void api<{ items: ConnectionItem[] }>(url).then((r) => setItems(r.items)).catch(() => undefined); }, [url]);
+
+  return (
+    <section className="panel space-y-3 p-5">
+      <div>
+        <h3 className="font-extrabold">{t('gn.cn.title')}</h3>
+        <p className="text-sm font-semibold text-mute">{t('gn.cn.note')}</p>
+      </div>
+      {items == null && <div className="skeleton h-24 rounded-xl" aria-busy="true" />}
+      {items && items.length === 0 && <EmptyState icon="🚪" title={t('gn.cn.empty')} hint={t('gn.cn.emptyHint')} />}
+      {items && items.length > 0 && (
+        <ul className="divide-y divide-line">
+          {items.map((c) => (
+            <li key={c.id} className="flex flex-wrap items-start gap-x-3 gap-y-1 py-2.5">
+              <span className={reasonCls(c)}>{c.kind === 'join' ? t('gn.cn.join') : reasonText(c.reason)}</span>
+              <div className="min-w-0 flex-1 basis-56 text-sm">
+                <div className="flex flex-wrap items-center gap-2">
+                  <button type="button" className="font-bold underline decoration-dotted underline-offset-2 hover:text-link" onClick={() => onPick(c.nick)}>{c.nick || '—'}</button>
+                  <span className="font-semibold text-mute">{c.serverName && `${c.serverName} · `}{soon(c.ts)}{c.kind === 'leave' && c.minutes >= 0 ? ` · ${t('gn.cn.minutes', { n: c.minutes })}` : ''}</span>
+                </div>
+                {c.kind === 'leave' && (
+                  <p className={c.removedBy ? 'font-semibold text-warn' : 'font-semibold text-mute'}>{c.removedBy ? t('gn.cn.removed', { why: c.removedBy }) : t('gn.cn.notUs')}</p>
+                )}
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/GameNewsJournal.tsx" << '__COREGSM_EOF__'
 import { useState } from 'react';
 import { api } from '../api';
@@ -163687,6 +163986,7 @@ import { t, useI18n } from '../i18n';
 import type { ModBan, ModEntry, ModTop } from '../gameNews';
 import { errText, toast, usePoll } from '../ui';
 import { EmptyState, SubTabs } from './GameNewsUi';
+import { ConnectionsSection } from './GameNewsConnections';
 
 const FILTERS = ['all', 'kick', 'ban', 'warn', 'unban'] as const;
 type Filter = (typeof FILTERS)[number];
@@ -163796,6 +164096,8 @@ export function ModerationTab() {
           </ul>
         )}
       </section>
+
+      <ConnectionsSection player={player} onPick={setPlayer} />
     </div>
   );
 }
@@ -164372,6 +164674,27 @@ function goTo(card: string): void {
 export function ServerHead({ server, rd, latest }: { server: NewsServerInfo; rd: RulesState; latest: string }) {
   useI18n();
   const [busy, setBusy] = useState(false);
+  const [updating, setUpdating] = useState(false);
+  const [lang, setLang] = useState<'ru' | 'en'>(server.lang ?? 'ru');
+  // «Обновить плагин»: the plugin downloads the newest release, it takes effect at the next restart; the answer is waited for a minute
+  const update = async () => {
+    setUpdating(true);
+    try {
+      const { id } = await api<{ id: number }>(`/game-news/targets/${server.id}/update`, 'POST');
+      toast(t('gn.sh.updateSent'));
+      for (let i = 0; i < 30; i++) {
+        await new Promise((r) => setTimeout(r, 2000));
+        const c = await api<{ state: string; result: string }>(`/game-news/commands/${id}`);
+        if (c.state === 'done') { toast(c.result || t('gn.sh.updateDone')); return; }
+        if (c.state === 'failed') { toast(c.result || t('gn.sh.updateFailed'), 'err'); return; }
+      }
+      toast(t('gn.sh.updateSlow'), 'err');
+    } catch (e) { toast(errText(e), 'err'); } finally { setUpdating(false); }
+  };
+  const saveLang = async (v: 'ru' | 'en') => {
+    setLang(v);
+    try { await api(`/game-news/targets/${server.id}/lang`, 'PUT', { lang: v }); toast(t('gn.sh.langSaved')); } catch (e) { toast(errText(e), 'err'); }
+  };
   const old = server.online && versionLess(server.pluginVersion, latest);
   const test = async () => {
     setBusy(true);
@@ -164398,9 +164721,19 @@ export function ServerHead({ server, rd, latest }: { server: NewsServerInfo; rd:
             {server.lastSeen ? ` · ${t('gn.plugin.lastPoll', { time: ago(server.lastSeen) })}` : ''}
             {server.players != null && ` · ${t('gn.players', { n: server.players, max: server.maxPlayers ?? 0 })}`}
           </p>
+          {server.pluginProblems && <p className="text-sm font-semibold text-danger">{t('gn.sh.problems', { list: server.pluginProblems })}</p>}
           {old && <p className="text-sm font-semibold text-warn">{t('gn.sh.old', { v: latest })} · <a className="text-link hover:underline" href="https://github.com/RJ-Bond/CoreGSM-Plugin/releases/latest" target="_blank" rel="noreferrer noopener">{t('gn.sh.download')}</a></p>}
         </div>
-        <button type="button" className="btn btn-soft btn-sm" disabled={busy} onClick={() => void test()}>{t('gn.sh.test')}</button>
+        <div className="flex flex-wrap items-center gap-2">
+          <select className="input w-auto py-1 text-sm" value={lang} aria-label={t('gn.sh.lang')} title={t('gn.sh.langHint')} onChange={(e) => void saveLang(e.target.value === 'en' ? 'en' : 'ru')}>
+            <option value="ru">RU</option>
+            <option value="en">EN</option>
+          </select>
+          {server.online && (
+            <button type="button" className={old || server.pluginProblems ? 'btn btn-sm' : 'btn btn-soft btn-sm'} disabled={updating} title={t('gn.sh.updateHint')} onClick={() => void update()}>{t('gn.sh.update')}</button>
+          )}
+          <button type="button" className="btn btn-soft btn-sm" disabled={busy} onClick={() => void test()}>{t('gn.sh.test')}</button>
+        </div>
       </div>
       <div className="flex flex-wrap gap-2" role="group" aria-label={t('gn.sh.sum')}>
         {chips.map((c) => (
@@ -164521,7 +164854,8 @@ export function ServerRestartCard({ countdown }: { countdown?: { enabled: boolea
   const jobs = st.jobs.filter((j) => (j.state !== 'sent' || j.left - elapsed > -60) && (!sc.server || j.serverId === sc.server));
   const history = st.history.filter((h) => !sc.server || h.serverName === st.servers.find((x) => x.id === sc.server)?.name);
 
-  const announce = `<color=#FFCC33>${plain(texts?.announce ?? '').replace(/\{time\}/g, SAMPLE_TIME)}</color>`;
+  // as in the game: the line red, the time green and bold
+  const announce = plain(texts?.announce ?? '').split('{time}').map((p) => `<color=#FF5555>${p}</color>`).join(`<color=#5FD068><b>${SAMPLE_TIME}</b></color>`);
   const now = `<color=#FF5555>${plain(texts?.now ?? '')}</color>`;
   const cancelled = `<color=#5FD068>${plain(texts?.cancel ?? '')}</color>`;
 

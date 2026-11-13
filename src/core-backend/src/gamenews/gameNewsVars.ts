@@ -97,6 +97,11 @@ export function remindMinutesFor(serverId?: number): number {
   } catch { return 0; }
 }
 
+/** the language of the lines that the plugin writes itself (help of the commands, errors): ru unless the server is set to en */
+export function langFor(serverId?: number): 'ru' | 'en' {
+  return readScoped('gamenews_lang', serverId) === 'en' ? 'en' : 'ru';
+}
+
 // ---- what the administrator keeps for {discord} and {tip}
 export interface Extras { discord: string; tips: string[] }
 export const MAX_TIPS = 20;

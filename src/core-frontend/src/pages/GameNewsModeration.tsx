@@ -6,6 +6,7 @@ import { t, useI18n } from '../i18n';
 import type { ModBan, ModEntry, ModTop } from '../gameNews';
 import { errText, toast, usePoll } from '../ui';
 import { EmptyState, SubTabs } from './GameNewsUi';
+import { ConnectionsSection } from './GameNewsConnections';
 
 const FILTERS = ['all', 'kick', 'ban', 'warn', 'unban'] as const;
 type Filter = (typeof FILTERS)[number];
@@ -115,6 +116,8 @@ export function ModerationTab() {
           </ul>
         )}
       </section>
+
+      <ConnectionsSection player={player} onPick={setPlayer} />
     </div>
   );
 }
