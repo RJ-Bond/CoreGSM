@@ -765,11 +765,38 @@ issue_certificate() {
 }
 
 # ---------- 9. launch ----------
+# Ready images instead of a build of several minutes. Opt-in (COREGSM_PULL_IMAGES=1 in .env), because the images are a separate
+# artifact from the installer: each one is checked with cosign against the identity of the release workflow, and it is taken
+# by its digest, not by the tag. No cosign, no image of this very build in the registry (the tag is build-<id>) or a failed
+# check: nothing is used and the usual build runs. All four images are verified before any of them gets a local name.
+pull_images() {
+  [ "$(env_get COREGSM_PULL_IMAGES)" = 1 ] || return 1
+  command -v cosign >/dev/null 2>&1 || { info "Готовые образы не используются: для проверки подписи нужен cosign"; return 1; }
+  local owner pair svc name img ref
+  local refs=()
+  owner="$(env_get COREGSM_IMAGE_OWNER)"; owner="${owner:-rj-bond}"
+  for pair in backend:backend bot:bot frontend:frontend nginx-proxy:nginx; do
+    svc="${pair%%:*}"; name="${pair##*:}"
+    img="ghcr.io/$owner/coregsm-$name:build-$COREGSM_BUILD"
+    docker pull -q "$img" >/dev/null 2>&1 || { info "Образа $name этой сборки нет в реестре: собираю сам"; return 1; }
+    ref="$(docker image inspect --format '{{index .RepoDigests 0}}' "$img" 2>/dev/null)" || ref=""
+    [ -n "$ref" ] || { info "У образа $name нет дайджеста: собираю сам"; return 1; }
+    cosign verify "$ref" \
+      --certificate-identity-regexp '^https://github\.com/RJ-Bond/CoreGSM/\.github/workflows/release\.yml@refs/heads/main$' \
+      --certificate-oidc-issuer https://token.actions.githubusercontent.com >/dev/null 2>&1 \
+      || { warn "Подпись образа $name не прошла проверку: собираю сам"; return 1; }
+    refs+=("$svc=$ref")
+  done
+  for pair in "${refs[@]}"; do docker tag "${pair#*=}" "coregsm-${pair%%=*}:latest" || return 1; done
+  return 0
+}
+
 # Images are built first, while the old containers keep serving. A failed build stops the installer here
 # (die) and leaves the running version untouched.
 build_images() {
   step "Сборка образов"
   cd "$APP_DIR"
+  if pull_images; then progress 80 "Готовые образы получены и проверены"; ok "Готовые образы получены и проверены (сборка не нужна)"; return 0; fi
   if stack_running; then info "Панель продолжает работать на прежней версии, пока идёт сборка."; fi
   # the build is the longest part and prints nothing useful: creep the bar from 44 % towards 80 % with the time
   local parent=$$ tick=0
