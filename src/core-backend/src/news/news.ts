@@ -436,7 +436,10 @@ export function registerNews(deps: {
     const cat = typeof req.query.category === 'string' && (NEWS_CATEGORIES as readonly string[]).includes(req.query.category) ? req.query.category : '';
     const author = Number(req.query.author);
     const byAuthor = Number.isInteger(author) && author > 0;
-    const rows = db.prepare(`SELECT * FROM news WHERE test = 0 AND ${PUBLISHED_SQL}${cat ? " AND COALESCE(json_extract(payload, '$.category'), 'announcement') = ?" : ''}${byAuthor ? ' AND created_by = ?' : ''}`).all(...(cat ? [cat] : []), ...(byAuthor ? [author] : [])) as NewsRow[];
+    // ?server=<id>: the news that name this server («Серверы» of the news item), for the strip on the page of the server
+    const srv = Number(req.query.server);
+    const bySrv = Number.isInteger(srv) && srv > 0;
+    const rows = db.prepare(`SELECT * FROM news WHERE test = 0 AND ${PUBLISHED_SQL}${cat ? " AND COALESCE(json_extract(payload, '$.category'), 'announcement') = ?" : ''}${byAuthor ? ' AND created_by = ?' : ''}${bySrv ? " AND EXISTS (SELECT 1 FROM json_each(COALESCE(json_extract(payload, '$.statusServerIds'), '[]')) WHERE value = ?)" : ''}`).all(...(cat ? [cat] : []), ...(byAuthor ? [author] : []), ...(bySrv ? [srv] : [])) as NewsRow[];
     // ?sort=top (most reactions) / discussed (most comments) / viewed (most views): by that number, then the newest; without it: pinned first, then the newest
     const sort = req.query.sort;
     const score = sort === 'top' ? reactionTotals() : sort === 'discussed' ? commentTotals() : sort === 'viewed' ? viewTotals() : null;

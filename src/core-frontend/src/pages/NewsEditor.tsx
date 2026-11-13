@@ -15,6 +15,7 @@ import {
   newKey, sampleVars, toLocalInput, toPayload, totalLength, uploadImage, type Draft, type EmbedDraft, type TemplateApply, type VarServer,
 } from '../components/news/model';
 import { Preview } from '../components/news/Preview';
+import { NewsArticle } from '../components/news/NewsArticle';
 import { PublicFeed } from '../components/news/PublicFeed';
 import { CATEGORY_LABEL_RU, CHANGE_LABEL_RU, CHANGE_ORDER, NEWS_CATEGORIES, isChangeKind, isHttpsUrl } from '../components/news/newsLogic';
 import { GAMES } from '../games';
@@ -103,7 +104,7 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
   const [pickTest, setPickTest] = useState(false);
   const [restore, setRestore] = useState<{ payload: NewsPayload; channelId?: string; ts?: number } | null>(null);
   const [savedAt, setSavedAt] = useState<number | null>(null);
-  const [pvTab, setPvTab] = useState<'discord' | 'site'>('discord');
+  const [pvTab, setPvTab] = useState<'discord' | 'site' | 'page'>('discord');
 
   const baseline = useRef('');
   const autosaveOff = useRef(false);
@@ -691,9 +692,20 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
             <div className="seg" role="group" aria-label={t('ne.pvView')}>
               <button type="button" className="seg-item" aria-pressed={pvTab === 'discord'} onClick={() => setPvTab('discord')}>{t('ne.pvDiscord')}</button>
               <button type="button" className="seg-item" aria-pressed={pvTab === 'site'} onClick={() => setPvTab('site')}>{t('ne.pvSite')}</button>
+              <button type="button" className="seg-item" aria-pressed={pvTab === 'page'} onClick={() => setPvTab('page')}>{t('ne.pvPage')}</button>
             </div>
             {pvTab === 'discord' ? (
               <Preview draft={d} vars={vars} servers={servers} channelNames={channelNames} onPick={focusPart} total={total} />
+            ) : pvTab === 'page' ? (
+              <div className="ne-pv-page">
+                <NewsArticle
+                  preview
+                  canReact={false}
+                  onReactions={() => undefined}
+                  servers={servers}
+                  item={{ id: id ?? 0, status: 'draft', title: d.embeds[0]?.title ?? '', payload: toPayload(d), sentAt: item?.sentAt ?? Date.now(), category: d.category, pinned: d.pinned, authorRole: null, reactions: [] }}
+                />
+              </div>
             ) : (
               <div className="panel p-3">
                 <PublicFeed

@@ -254,6 +254,16 @@ export function NewsListPage() {
                   {rubrics.map((r) => chip(r))}
                 </div>
               ) : <span className="flex-1" />}
+              {loaded && counts.all > 1 && (
+                <div className="seg nw-viewseg" role="group" aria-label={t('nw.view')}>
+                  <button type="button" className="seg-item" aria-pressed={!dense} title={t('nw.view.cards')} aria-label={t('nw.view.cards')} onClick={() => setDense(false)}>
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><rect x="3" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="3" width="7" height="7" rx="1.5" /><rect x="3" y="14" width="7" height="7" rx="1.5" /><rect x="14" y="14" width="7" height="7" rx="1.5" /></svg>
+                  </button>
+                  <button type="button" className="seg-item" aria-pressed={dense} title={t('nw.view.dense')} aria-label={t('nw.view.dense')} onClick={() => setDense(true)}>
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M4 6h16M4 12h16M4 18h16" /></svg>
+                  </button>
+                </div>
+              )}
               {loaded && counts.all > 1 && <FeedMenu sort={sort} dense={dense} onSort={setSort} onDense={setDense} />}
             </div>
           ) : null}

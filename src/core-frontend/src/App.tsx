@@ -38,6 +38,7 @@ const ForgotPassword = lazyPage(() => import('./pages/ForgotPassword'));
 const ResetPassword = lazyPage(() => import('./pages/ResetPassword'));
 const VerifyEmail = lazyPage(() => import('./pages/VerifyEmail'));
 const Tour = lazyPage(() => import('./components/Tour'));
+const PlayerWelcome = lazyPage(() => import('./components/PlayerWelcome'));
 const WhatsNew = lazyPage(() => import('./components/WhatsNew'));
 const CommandPalette = lazyPage(() => import('./components/CommandPalette'));
 
@@ -505,6 +506,7 @@ export default function App() {
         <ConfirmHost />
         <Suspense fallback={null}>
           {isAdmin && <Tour />}
+          {me && !isStaff && <PlayerWelcome />}
           {isAdmin && <WhatsNew />}
           {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} isStaff={isStaff} isAdmin={!!isAdmin} />}
         </Suspense>

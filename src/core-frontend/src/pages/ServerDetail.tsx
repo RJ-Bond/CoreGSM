@@ -30,6 +30,7 @@ import Hero, { type FreeSlotState } from '../components/server/Hero';
 import Metrics from '../components/server/Metrics';
 import OfflineState from '../components/server/OfflineState';
 import PinnedNotice, { type ServerNotice } from '../components/server/Notice';
+import ServerNews from '../components/server/ServerNews';
 import MoreMenu, { type MoreItem } from '../components/server/MoreMenu';
 import { gameAccent, isFullNow, offlineSince } from '../components/server/serverLogic';
 import { calmSeriesColor, useCoverAccent } from '../components/server/coverAccent';
@@ -562,6 +563,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
   } else {
     panel = (
       <div className="space-y-3.5">
+        <ServerNews serverId={id} />
         <PinnedNotice serverId={id} notice={data.notice ?? null} canEdit={canEdit} onChange={(n) => setData((d) => (d ? { ...d, notice: n } : d))} />
         {!ember && (
           <SectionCard id="ov-stats" state={sections} style={stagger(0)} title={t('d2.sd.sec.stats')}>

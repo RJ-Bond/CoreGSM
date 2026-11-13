@@ -4,6 +4,7 @@ import { Icon } from '../icons';
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react';
 import { api, type StatusDay, type StatusIncident, type StatusInfo, type StatusNote, type StatusServer } from '../api';
 import { CopyButton, Empty, ErrorLine, GameAvatar, LoadError, PageHead, SmoothArea, StatusPill, ago, fmtDateTime, fmtTime, usePoll } from '../ui';
+import StatusSubscribe from '../components/StatusSubscribe';
 import '../styles/status.css';
 
 const loc = () => (getPrefs().lang === 'en' ? 'en-US' : 'ru-RU');
@@ -425,6 +426,7 @@ export default function StatusPage() {
   return (
     <div className="space-y-5">
       <PageHead icon={<IconPulse />} title={t('st.title')} subtitle={subtitle} />
+      {data && data.servers.length > 0 && <StatusSubscribe servers={data.servers} />}
       {error && !data ? <LoadError error={error} onRetry={() => void load()} /> : <ErrorLine text={error} />}
 
       {!data && !error && (

@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="6fbd635c16ff"
+COREGSM_BUILD="91ac1d9c48b0"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.2.28"
+COREGSM_VERSION="1.2.29"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -34851,7 +34851,10 @@ export function registerNews(deps: {
     const cat = typeof req.query.category === 'string' && (NEWS_CATEGORIES as readonly string[]).includes(req.query.category) ? req.query.category : '';
     const author = Number(req.query.author);
     const byAuthor = Number.isInteger(author) && author > 0;
-    const rows = db.prepare(`SELECT * FROM news WHERE test = 0 AND ${PUBLISHED_SQL}${cat ? " AND COALESCE(json_extract(payload, '$.category'), 'announcement') = ?" : ''}${byAuthor ? ' AND created_by = ?' : ''}`).all(...(cat ? [cat] : []), ...(byAuthor ? [author] : [])) as NewsRow[];
+    // ?server=<id>: the news that name this server («Серверы» of the news item), for the strip on the page of the server
+    const srv = Number(req.query.server);
+    const bySrv = Number.isInteger(srv) && srv > 0;
+    const rows = db.prepare(`SELECT * FROM news WHERE test = 0 AND ${PUBLISHED_SQL}${cat ? " AND COALESCE(json_extract(payload, '$.category'), 'announcement') = ?" : ''}${byAuthor ? ' AND created_by = ?' : ''}${bySrv ? " AND EXISTS (SELECT 1 FROM json_each(COALESCE(json_extract(payload, '$.statusServerIds'), '[]')) WHERE value = ?)" : ''}`).all(...(cat ? [cat] : []), ...(byAuthor ? [author] : []), ...(bySrv ? [srv] : [])) as NewsRow[];
     // ?sort=top (most reactions) / discussed (most comments) / viewed (most views): by that number, then the newest; without it: pinned first, then the newest
     const sort = req.query.sort;
     const score = sort === 'top' ? reactionTotals() : sort === 'discussed' ? commentTotals() : sort === 'viewed' ? viewTotals() : null;
@@ -121839,6 +121842,7 @@ const ForgotPassword = lazyPage(() => import('./pages/ForgotPassword'));
 const ResetPassword = lazyPage(() => import('./pages/ResetPassword'));
 const VerifyEmail = lazyPage(() => import('./pages/VerifyEmail'));
 const Tour = lazyPage(() => import('./components/Tour'));
+const PlayerWelcome = lazyPage(() => import('./components/PlayerWelcome'));
 const WhatsNew = lazyPage(() => import('./components/WhatsNew'));
 const CommandPalette = lazyPage(() => import('./components/CommandPalette'));
 
@@ -122306,6 +122310,7 @@ export default function App() {
         <ConfirmHost />
         <Suspense fallback={null}>
           {isAdmin && <Tour />}
+          {me && !isStaff && <PlayerWelcome />}
           {isAdmin && <WhatsNew />}
           {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} isStaff={isStaff} isAdmin={!!isAdmin} />}
         </Suspense>
@@ -127796,6 +127801,46 @@ export function OfflineBar() {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/PlayerWelcome.tsx" << '__COREGSM_EOF__'
+import { useState } from 'react';
+import { useAuth } from '../auth';
+import { t, useI18n } from '../i18n';
+
+const keyOf = (name: string) => `coregsm_welcome_${name}`;
+const seen = (name: string): boolean => { try { return localStorage.getItem(keyOf(name)) === '1'; } catch { return true; } };
+
+/** the first sign-in of a player: three things the panel can do for them, once, instead of a long tour */
+export default function PlayerWelcome() {
+  useI18n();
+  const { me } = useAuth();
+  const [gone, setGone] = useState(false);
+  if (!me || me.role !== 'player' || gone || seen(me.username)) return null;
+  const close = () => { setGone(true); try { localStorage.setItem(keyOf(me.username), '1'); } catch { /* shown again next time */ } };
+  const steps = [
+    { icon: '★', title: t('welcome.fav'), text: t('welcome.favText') },
+    { icon: '🔔', title: t('welcome.sub'), text: t('welcome.subText') },
+    { icon: '🎮', title: t('welcome.nick'), text: t('welcome.nickText') },
+  ];
+  return (
+    <aside className="pw" role="dialog" aria-label={t('welcome.title')}>
+      <h2>{t('welcome.title', { name: me.username })}</h2>
+      <ol>
+        {steps.map((s) => (
+          <li key={s.title}>
+            <span className="pw-ico" aria-hidden>{s.icon}</span>
+            <span><b>{s.title}</b><small>{s.text}</small></span>
+          </li>
+        ))}
+      </ol>
+      <div className="pw-act">
+        <a className="btn btn-sm" href="/profile" onClick={close}>{t('welcome.toProfile')}</a>
+        <button type="button" className="btn btn-soft btn-sm" onClick={close}>{t('welcome.ok')}</button>
+      </div>
+    </aside>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
   cat > "$APP_DIR/core-frontend/src/components/PlayersShownCard.tsx" << '__COREGSM_EOF__'
 import { useEffect, useState } from 'react';
 import { api } from '../api';
@@ -129735,6 +129780,52 @@ export default function StatusNotesCard({ servers }: { servers: Server[] }) {
         </ul>
       )}
     </Section>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/StatusSubscribe.tsx" << '__COREGSM_EOF__'
+import { useState } from 'react';
+import { api } from '../api';
+import { useAuth } from '../auth';
+import { t, useI18n } from '../i18n';
+import { normalizeKinds, useSubscriptions, type SubKind } from '../notifications';
+import { errText, toast } from '../ui';
+
+const OUTAGE: SubKind[] = ['went_down', 'back_online'];
+
+/** a line under the heading of the status page: «tell me when any server goes down and comes back» for all the servers of the page at once */
+export default function StatusSubscribe({ servers }: { servers: { id: number }[] }) {
+  useI18n();
+  const { me } = useAuth();
+  const subs = useSubscriptions(!!me);
+  const [busy, setBusy] = useState(false);
+  if (!me) return <p className="st-sub-line"><a href="/login">{t('st.sub.login')}</a></p>;
+  if (subs.unavailable || subs.list === null || servers.length === 0) return null;
+  const kindsOf = (id: number): SubKind[] => normalizeKinds(subs.list?.find((s) => s.serverId === id)?.kinds);
+  const on = servers.every((s) => kindsOf(s.id).includes('went_down'));
+  const toggle = async () => {
+    setBusy(true);
+    try {
+      for (const s of servers) {
+        const cur = kindsOf(s.id);
+        const next = normalizeKinds(on ? cur.filter((k) => !OUTAGE.includes(k)) : [...cur, ...OUTAGE]);
+        const r = await api<{ serverId?: number; kinds?: SubKind[] }>(`/servers/${s.id}/subscription`, 'PUT', { kinds: next });
+        subs.set({ serverId: s.id, kinds: normalizeKinds(r?.kinds ?? next) });
+      }
+      toast(on ? t('st.sub.off') : t('st.sub.on'));
+    } catch (e) {
+      toast(errText(e), 'err');
+    }
+    setBusy(false);
+  };
+  return (
+    <div className="st-sub-line">
+      <button type="button" className={`btn ${on ? 'btn-soft' : ''} btn-sm`} aria-pressed={on} disabled={busy} onClick={() => void toggle()}>
+        {on ? t('st.sub.btnOn') : t('st.sub.btn')}
+      </button>
+      <span>{on ? t('st.sub.hintOn', { n: servers.length }) : t('st.sub.hint')}</span>
+    </div>
   );
 }
 __COREGSM_EOF__
@@ -132941,6 +133032,16 @@ export function NewsListPage() {
                   {rubrics.map((r) => chip(r))}
                 </div>
               ) : <span className="flex-1" />}
+              {loaded && counts.all > 1 && (
+                <div className="seg nw-viewseg" role="group" aria-label={t('nw.view')}>
+                  <button type="button" className="seg-item" aria-pressed={!dense} title={t('nw.view.cards')} aria-label={t('nw.view.cards')} onClick={() => setDense(false)}>
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><rect x="3" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="3" width="7" height="7" rx="1.5" /><rect x="3" y="14" width="7" height="7" rx="1.5" /><rect x="14" y="14" width="7" height="7" rx="1.5" /></svg>
+                  </button>
+                  <button type="button" className="seg-item" aria-pressed={dense} title={t('nw.view.dense')} aria-label={t('nw.view.dense')} onClick={() => setDense(true)}>
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M4 6h16M4 12h16M4 18h16" /></svg>
+                  </button>
+                </div>
+              )}
               {loaded && counts.all > 1 && <FeedMenu sort={sort} dense={dense} onSort={setSort} onDense={setDense} />}
             </div>
           ) : null}
@@ -140111,6 +140212,38 @@ export function SectionChips({ defs, state }: { defs: SectionDef[]; state: Secti
         </button>
       ))}
     </nav>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/server"
+  cat > "$APP_DIR/core-frontend/src/components/server/ServerNews.tsx" << '__COREGSM_EOF__'
+import { useEffect, useState } from 'react';
+import { api, type PublicNews } from '../../api';
+import { t, useI18n } from '../../i18n';
+import { ago } from '../../ui';
+
+const FRESH_MS = 14 * 86_400_000;
+
+/** a line on the page of a server: the news that names this server, if there is a fresh one («Объявление сервера») */
+export default function ServerNews({ serverId }: { serverId: number }) {
+  useI18n();
+  const [item, setItem] = useState<PublicNews | null>(null);
+  useEffect(() => {
+    let off = false;
+    setItem(null);
+    api<PublicNews[]>(`/news?server=${serverId}&limit=1`)
+      .then((l) => { if (!off) setItem(Array.isArray(l) && l[0] ? l[0] : null); })
+      .catch(() => undefined);
+    return () => { off = true; };
+  }, [serverId]);
+  if (!item || !item.sentAt || Date.now() - item.sentAt > FRESH_MS) return null;
+  const title = item.payload?.embed?.title || item.title || t('nw.untitled');
+  return (
+    <a className="sv-news" href={`/news/${item.id}`}>
+      <span className="sv-news-k">{t('sd.news')}</span>
+      <b className="sv-news-t">{title}</b>
+      <span className="sv-news-w">{ago(item.sentAt)} →</span>
+    </a>
   );
 }
 __COREGSM_EOF__
@@ -148875,6 +149008,23 @@ const en: Record<keyof typeof ru, string> = {
   'st.servers': '{n} server|{n} servers',
   'st.sub.none': 'Server availability and outage history for {d} days',
   'st.title': 'Status',
+  'st.sub.login': 'Sign in to get notified about server outages',
+  'sd.news': 'News',
+  'welcome.title': 'Welcome, {name}',
+  'welcome.fav': 'Favourites',
+  'welcome.favText': 'Tap the star of a server and it rises to the top of your list.',
+  'welcome.sub': 'Subscriptions',
+  'welcome.subText': 'The bell on the page of a server: we tell you when it goes down, comes back or has a free place.',
+  'welcome.nick': 'Your nickname',
+  'welcome.nickText': 'Set your game nickname in the profile: statistics, a place in the ranking and a public page appear.',
+  'welcome.toProfile': 'Set the nickname',
+  'welcome.ok': 'Got it',
+  'st.sub.btn': 'Notify me about outages',
+  'st.sub.btnOn': 'Outage notifications are on',
+  'st.sub.hint': 'We tell you when a server goes down and when it is back: the bell, push and Discord, as set in your profile.',
+  'st.sub.hintOn': 'Watching {n} servers. Single servers are set on their own pages.',
+  'st.sub.on': 'Outage notifications are on',
+  'st.sub.off': 'Outage notifications are off',
   'st.loading': 'Loading',
   'st.empty': 'No servers yet',
   'st.emptyText': 'Their availability will show up here once servers are added.',
@@ -149668,6 +149818,7 @@ const en: Record<keyof typeof ru, string> = {
   'ne.https': 'The link must start with https://',
   'ne.pvDiscord': 'In Discord',
   'ne.pvSite': 'How it looks on the site',
+  'ne.pvPage': 'The news page',
   'ne.pvEmpty': 'Start writing: the news card will appear here.',
   'ne.pvLive': 'Server cards are shown as a sample: real data appears when sent.',
   'ne.allNews': '← All news',
@@ -153992,6 +154143,23 @@ const ru = {
   'st.servers': '{n} сервер|{n} сервера|{n} серверов',
   'st.sub.none': 'Доступность серверов и история сбоев за {d} дн.',
   'st.title': 'Статус',
+  'st.sub.login': 'Войдите, чтобы получать уведомления о сбоях серверов',
+  'sd.news': 'Новость',
+  'welcome.title': 'Добро пожаловать, {name}',
+  'welcome.fav': 'Избранное',
+  'welcome.favText': 'Нажмите на звёздочку у сервера, и он поднимется наверх вашего списка.',
+  'welcome.sub': 'Подписки',
+  'welcome.subText': 'Колокольчик на странице сервера: скажем, когда он упадёт, вернётся или освободится место.',
+  'welcome.nick': 'Ваш ник',
+  'welcome.nickText': 'Укажите игровой ник в профиле: появятся статистика, место в рейтинге и публичная страница.',
+  'welcome.toProfile': 'Указать ник',
+  'welcome.ok': 'Понятно',
+  'st.sub.btn': 'Уведомлять о сбоях',
+  'st.sub.btnOn': 'Уведомления о сбоях включены',
+  'st.sub.hint': 'Скажем, когда сервер упадёт и когда вернётся: в колокольчик, push и Discord, как вы настроили в профиле.',
+  'st.sub.hintOn': 'Следим за {n} серверами. Отдельные серверы настраиваются на их страницах.',
+  'st.sub.on': 'Уведомления о сбоях включены',
+  'st.sub.off': 'Уведомления о сбоях выключены',
   'st.loading': 'Загрузка',
   'st.empty': 'Серверов пока нет',
   'st.emptyText': 'Когда серверы будут добавлены, здесь появится их доступность.',
@@ -154785,6 +154953,7 @@ const ru = {
   'ne.https': 'Ссылка должна начинаться с https://',
   'ne.pvDiscord': 'В Discord',
   'ne.pvSite': 'Как будет на сайте',
+  'ne.pvPage': 'Страница новости',
   'ne.pvEmpty': 'Начните писать: здесь появится карточка новости.',
   'ne.pvLive': 'Карточки серверов показаны образцом: настоящие данные появятся при отправке.',
   'ne.allNews': '← Все новости',
@@ -165281,6 +165450,7 @@ import {
   newKey, sampleVars, toLocalInput, toPayload, totalLength, uploadImage, type Draft, type EmbedDraft, type TemplateApply, type VarServer,
 } from '../components/news/model';
 import { Preview } from '../components/news/Preview';
+import { NewsArticle } from '../components/news/NewsArticle';
 import { PublicFeed } from '../components/news/PublicFeed';
 import { CATEGORY_LABEL_RU, CHANGE_LABEL_RU, CHANGE_ORDER, NEWS_CATEGORIES, isChangeKind, isHttpsUrl } from '../components/news/newsLogic';
 import { GAMES } from '../games';
@@ -165369,7 +165539,7 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
   const [pickTest, setPickTest] = useState(false);
   const [restore, setRestore] = useState<{ payload: NewsPayload; channelId?: string; ts?: number } | null>(null);
   const [savedAt, setSavedAt] = useState<number | null>(null);
-  const [pvTab, setPvTab] = useState<'discord' | 'site'>('discord');
+  const [pvTab, setPvTab] = useState<'discord' | 'site' | 'page'>('discord');
 
   const baseline = useRef('');
   const autosaveOff = useRef(false);
@@ -165957,9 +166127,20 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
             <div className="seg" role="group" aria-label={t('ne.pvView')}>
               <button type="button" className="seg-item" aria-pressed={pvTab === 'discord'} onClick={() => setPvTab('discord')}>{t('ne.pvDiscord')}</button>
               <button type="button" className="seg-item" aria-pressed={pvTab === 'site'} onClick={() => setPvTab('site')}>{t('ne.pvSite')}</button>
+              <button type="button" className="seg-item" aria-pressed={pvTab === 'page'} onClick={() => setPvTab('page')}>{t('ne.pvPage')}</button>
             </div>
             {pvTab === 'discord' ? (
               <Preview draft={d} vars={vars} servers={servers} channelNames={channelNames} onPick={focusPart} total={total} />
+            ) : pvTab === 'page' ? (
+              <div className="ne-pv-page">
+                <NewsArticle
+                  preview
+                  canReact={false}
+                  onReactions={() => undefined}
+                  servers={servers}
+                  item={{ id: id ?? 0, status: 'draft', title: d.embeds[0]?.title ?? '', payload: toPayload(d), sentAt: item?.sentAt ?? Date.now(), category: d.category, pinned: d.pinned, authorRole: null, reactions: [] }}
+                />
+              </div>
             ) : (
               <div className="panel p-3">
                 <PublicFeed
@@ -167120,6 +167301,7 @@ import Hero, { type FreeSlotState } from '../components/server/Hero';
 import Metrics from '../components/server/Metrics';
 import OfflineState from '../components/server/OfflineState';
 import PinnedNotice, { type ServerNotice } from '../components/server/Notice';
+import ServerNews from '../components/server/ServerNews';
 import MoreMenu, { type MoreItem } from '../components/server/MoreMenu';
 import { gameAccent, isFullNow, offlineSince } from '../components/server/serverLogic';
 import { calmSeriesColor, useCoverAccent } from '../components/server/coverAccent';
@@ -167652,6 +167834,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
   } else {
     panel = (
       <div className="space-y-3.5">
+        <ServerNews serverId={id} />
         <PinnedNotice serverId={id} notice={data.notice ?? null} canEdit={canEdit} onChange={(n) => setData((d) => (d ? { ...d, notice: n } : d))} />
         {!ember && (
           <SectionCard id="ov-stats" state={sections} style={stagger(0)} title={t('d2.sd.sec.stats')}>
@@ -169137,6 +169320,7 @@ import { Icon } from '../icons';
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react';
 import { api, type StatusDay, type StatusIncident, type StatusInfo, type StatusNote, type StatusServer } from '../api';
 import { CopyButton, Empty, ErrorLine, GameAvatar, LoadError, PageHead, SmoothArea, StatusPill, ago, fmtDateTime, fmtTime, usePoll } from '../ui';
+import StatusSubscribe from '../components/StatusSubscribe';
 import '../styles/status.css';
 
 const loc = () => (getPrefs().lang === 'en' ? 'en-US' : 'ru-RU');
@@ -169558,6 +169742,7 @@ export default function StatusPage() {
   return (
     <div className="space-y-5">
       <PageHead icon={<IconPulse />} title={t('st.title')} subtitle={subtitle} />
+      {data && data.servers.length > 0 && <StatusSubscribe servers={data.servers} />}
       {error && !data ? <LoadError error={error} onRetry={() => void load()} /> : <ErrorLine text={error} />}
 
       {!data && !error && (
@@ -176102,6 +176287,24 @@ a.adm-reason:hover { filter: brightness(1.1); }
 :root[data-ember='1'] .pulse-chart-empty { min-height: 160px; display: grid; place-items: center; }
 :root[data-ember='1'] .cm-hero { min-height: 240px; }
 .pb-avg em { right: auto; left: 0; }
+
+/* ---------- the first sign-in of a player ---------- */
+.pw { position: fixed; right: max(16px, env(safe-area-inset-right, 0px)); bottom: calc(5.5rem + env(safe-area-inset-bottom, 0px)); z-index: 45; width: min(22rem, calc(100vw - 32px)); padding: 1rem 1.1rem; border-radius: var(--r-xl); background: rgb(var(--card)); box-shadow: var(--shadow-3), inset 0 0 0 1px rgb(var(--line)); }
+@media (min-width: 768px) { .pw { bottom: 1.5rem; } }
+.pw h2 { margin: 0 0 .6rem; font-size: 1.0625rem; font-weight: 800; }
+.pw ol { list-style: none; margin: 0 0 .8rem; padding: 0; display: grid; gap: .6rem; }
+.pw li { display: grid; grid-template-columns: 2rem minmax(0, 1fr); gap: .6rem; align-items: start; }
+.pw-ico { display: grid; place-items: center; width: 2rem; height: 2rem; border-radius: 10px; background: rgb(var(--soft)); font-size: 1rem; }
+.pw li b { display: block; font-weight: 750; }
+.pw li small { display: block; font-size: .8125rem; font-weight: 600; color: rgb(var(--mute)); line-height: 1.4; }
+.pw-act { display: flex; flex-wrap: wrap; gap: .5rem; }
+
+/* the announcement of a server on its page */
+.sv-news { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem .8rem; padding: .7rem 1rem; border-radius: var(--emb-r-card, 18px); background: rgb(var(--soft)); color: inherit; text-decoration: none; }
+.sv-news:hover { box-shadow: inset 0 0 0 1px rgb(var(--brand) / .5); }
+.sv-news-k { padding: .1rem .6rem; border-radius: 999px; background: rgb(var(--brand) / .18); color: rgb(var(--link)); font-size: .75rem; font-weight: 800; }
+.sv-news-t { min-width: 0; flex: 1 1 12rem; overflow-wrap: anywhere; }
+.sv-news-w { font-size: .8125rem; font-weight: 650; color: rgb(var(--mute)); }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/emberScale.test.ts" << '__COREGSM_EOF__'
@@ -178457,6 +178660,8 @@ html[data-motion='reduce'] .st-banner-ico::after, html[data-motion='reduce'] .st
 .st-note.is-warn { box-shadow: inset 4px 0 0 rgb(var(--warn)); background: rgb(var(--warnbg)); }
 .st-note.is-bad { box-shadow: inset 4px 0 0 rgb(var(--bad)); background: rgb(var(--badbg)); }
 .st-note.is-ok { box-shadow: inset 4px 0 0 rgb(var(--ok)); }
+.st-sub-line { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem .9rem; font-weight: 600; color: rgb(var(--mute)); }
+.st-sub-line a { color: rgb(var(--link)); font-weight: 700; text-decoration: underline; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/system.css" << '__COREGSM_EOF__'
