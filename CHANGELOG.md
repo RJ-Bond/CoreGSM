@@ -16,6 +16,12 @@ interface language; the GitHub release text is built from the section of the ver
 
 ## Не выпущено | Unreleased
 
+### ✨ Новое | New
+- 🔎 Плагин 0.18.2+ пишет в `BepInEx/CoreGSM/connections.log` рядом со входами и выходами: замирания сервера дольше 2 секунд, пока на нём есть игроки («ЗАМИРАНИЕ»), раз в 10 минут состояние (игроки, память, кадры в секунду, самый долгий кадр) и каждое автосохранение (размер, сколько писалось); новичок без персонажа объявляется и приветствуется, когда создаст персонажа (раньше «Игрок  подключился» с пустым ником); настраивается в разделе `[Diagnostics]` файла `CoreGSM.cfg` | 🔎 Plugin 0.18.2+ writes next to the joins and departures in `BepInEx/CoreGSM/connections.log`: freezes of the server longer than 2 seconds while players are on, every 10 minutes the state (players, memory, frames per second, the longest frame) and every autosave (size, how long it was written); a newcomer without a character is announced and greeted once he has made one (it was «Player  joined» with an empty name); set in `[Diagnostics]` of `CoreGSM.cfg`
+
+### 🐛 Исправлено | Fixed
+- 🚪 «Входы и выходы»: слишком длинное поле от игры больше не останавливает весь журнал (поле обрезается, а не отклоняется вся пачка); новичок попадает в журнал панели со своим ником; нужен плагин 0.18.3 | 🚪 Joins and departures: a too long field from the game no longer stops the whole journal (the field is cut instead of refusing the batch); a newcomer gets into the panel journal with his nickname; needs plugin 0.18.3
+
 ## 1.2.45 · 13.11.2026
 
 ### ✨ Новое | New

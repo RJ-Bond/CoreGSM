@@ -102,14 +102,15 @@ export function savePluginProblems(serverId: number, header: string, now = Date.
 }
 
 export function registerGameNewsConnections({ app, admin }: { app: Express; admin: RequestHandler }): void {
-  // the plugin: a batch of joins and departures
+  // the plugin: a batch of joins and departures; a field that is too long is cut, not a reason to refuse the batch
+  const cut = (n: number) => z.string().max(2000).transform((s) => s.slice(0, n));
   app.post('/api/game-news/connections', (req, res) => {
     const t = pluginTarget(req);
     if (!t) return res.status(401).json({ error: 'unauthorized' });
     const b = z.object({
       events: z.array(z.object({
-        kind: z.enum(['join', 'leave']), id: z.string().max(25), name: z.string().max(100), reason: z.string().max(100).default(''),
-        by: z.string().max(300).default(''), minutes: z.number().int().min(-1).max(100_000).default(-1), at: z.number().int().positive(),
+        kind: z.enum(['join', 'leave']), id: z.string().max(25), name: cut(100), reason: cut(100).default(''),
+        by: cut(300).default(''), minutes: z.number().int().min(-1).max(100_000).default(-1), at: z.number().int().positive(),
       })).max(100),
     }).safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'bad' });
