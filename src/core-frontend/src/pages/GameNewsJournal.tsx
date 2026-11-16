@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api } from '../api';
 import { soon } from '../components/GameNewsParts';
 import { Styled } from '../components/NewsEditor';
@@ -29,14 +29,25 @@ const RESTART_STATUS: Record<string, { text: 'gn.rr.o.counting' | 'gn.rr.o.done'
 };
 const LINK_TEXT: Record<string, 'gn.jn.reg' | 'gn.jn.login' | 'gn.jn.unlink'> = { game_register: 'gn.jn.reg', game_login: 'gn.jn.login', game_unlink: 'gn.jn.unlink' };
 
+const fetchJournal = (f: Filter) => api<{ items: Entry[] }>(`/game-news/journal?kind=${f}`).then((d) => d.items).catch(() => null);
+
 /** everything the plugin did in one list: messages (by hand, by a rule, from Discord), restarts, linked players */
 export function JournalTab({ onReuse, onPlayer }: { onReuse: (text: string) => void; onPlayer: (nick: string) => void }) {
   useI18n();
   const [filter, setFilter] = useState<Filter>('all');
   const [items, setItems] = useState<Entry[] | null>(null);
-  usePoll(() => api<{ items: Entry[] }>(`/game-news/journal?kind=${filter}`).then((d) => setItems(d.items)).catch(() => undefined), 10_000);
-  // the first read of a new filter shows the old list for a moment: it is replaced at once
-  const pick = (f: Filter) => { setFilter(f); setItems(null); };
+  // the filter the person looks at now: an answer for another one (a slow request of the tab left a moment ago) is dropped
+  const current = useRef<Filter>(filter);
+  current.current = filter;
+  // a new filter is read at once (the poll below only repeats it: waiting for its next turn left the list empty for ten seconds)
+  useEffect(() => {
+    let off = false;
+    setItems(null);
+    void fetchJournal(filter).then((list) => { if (!off && list) setItems(list); });
+    return () => { off = true; };
+  }, [filter]);
+  usePoll(() => { const f = current.current; return fetchJournal(f).then((list) => { if (list && current.current === f) setItems(list); }); }, 10_000);
+  const pick = (f: Filter) => setFilter(f);
 
   return (
     <section className="panel space-y-3 p-5">

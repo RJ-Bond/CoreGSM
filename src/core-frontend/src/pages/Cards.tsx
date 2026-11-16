@@ -99,7 +99,7 @@ export default function CardsPage() {
       )}
       {bot && (
         <div className="panel flex flex-wrap items-center gap-3 p-4">
-          <div className="min-w-0 flex-1"><b>{t('cards.bot')}</b><p className="text-sm text-mute">{t('cards.botText')}</p></div>
+          <div className="min-w-0 flex-1 max-sm:basis-full"><b>{t('cards.bot')}</b><p className="text-sm text-mute">{t('cards.botText')}</p></div>
           <div className="seg" role="group" aria-label={t('cards.style')}>
             <button type="button" className="seg-item" aria-pressed={bot.style === 'split'} onClick={() => saveBot({ style: 'split' })}>{t('cards.split')}</button>
             <button type="button" className="seg-item" aria-pressed={bot.style === 'strip'} onClick={() => saveBot({ style: 'strip' })}>{t('cards.strip')}</button>

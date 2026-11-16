@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="7f9b6d1dde96"
+COREGSM_BUILD="885614d9134e"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.2.46"
+COREGSM_VERSION="1.2.47"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -161292,7 +161292,7 @@ export default function CardsPage() {
       )}
       {bot && (
         <div className="panel flex flex-wrap items-center gap-3 p-4">
-          <div className="min-w-0 flex-1"><b>{t('cards.bot')}</b><p className="text-sm text-mute">{t('cards.botText')}</p></div>
+          <div className="min-w-0 flex-1 max-sm:basis-full"><b>{t('cards.bot')}</b><p className="text-sm text-mute">{t('cards.botText')}</p></div>
           <div className="seg" role="group" aria-label={t('cards.style')}>
             <button type="button" className="seg-item" aria-pressed={bot.style === 'split'} onClick={() => saveBot({ style: 'split' })}>{t('cards.split')}</button>
             <button type="button" className="seg-item" aria-pressed={bot.style === 'strip'} onClick={() => saveBot({ style: 'strip' })}>{t('cards.strip')}</button>
@@ -164008,7 +164008,7 @@ export function ConnectionsSection({ player, onPick }: { player: string; onPick:
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/GameNewsJournal.tsx" << '__COREGSM_EOF__'
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api } from '../api';
 import { soon } from '../components/GameNewsParts';
 import { Styled } from '../components/NewsEditor';
@@ -164039,14 +164039,25 @@ const RESTART_STATUS: Record<string, { text: 'gn.rr.o.counting' | 'gn.rr.o.done'
 };
 const LINK_TEXT: Record<string, 'gn.jn.reg' | 'gn.jn.login' | 'gn.jn.unlink'> = { game_register: 'gn.jn.reg', game_login: 'gn.jn.login', game_unlink: 'gn.jn.unlink' };
 
+const fetchJournal = (f: Filter) => api<{ items: Entry[] }>(`/game-news/journal?kind=${f}`).then((d) => d.items).catch(() => null);
+
 /** everything the plugin did in one list: messages (by hand, by a rule, from Discord), restarts, linked players */
 export function JournalTab({ onReuse, onPlayer }: { onReuse: (text: string) => void; onPlayer: (nick: string) => void }) {
   useI18n();
   const [filter, setFilter] = useState<Filter>('all');
   const [items, setItems] = useState<Entry[] | null>(null);
-  usePoll(() => api<{ items: Entry[] }>(`/game-news/journal?kind=${filter}`).then((d) => setItems(d.items)).catch(() => undefined), 10_000);
-  // the first read of a new filter shows the old list for a moment: it is replaced at once
-  const pick = (f: Filter) => { setFilter(f); setItems(null); };
+  // the filter the person looks at now: an answer for another one (a slow request of the tab left a moment ago) is dropped
+  const current = useRef<Filter>(filter);
+  current.current = filter;
+  // a new filter is read at once (the poll below only repeats it: waiting for its next turn left the list empty for ten seconds)
+  useEffect(() => {
+    let off = false;
+    setItems(null);
+    void fetchJournal(filter).then((list) => { if (!off && list) setItems(list); });
+    return () => { off = true; };
+  }, [filter]);
+  usePoll(() => { const f = current.current; return fetchJournal(f).then((list) => { if (list && current.current === f) setItems(list); }); }, 10_000);
+  const pick = (f: Filter) => setFilter(f);
 
   return (
     <section className="panel space-y-3 p-5">
@@ -174844,6 +174855,12 @@ a.adm-tile:hover { box-shadow: var(--shadow-2); border-color: rgb(var(--brand) /
 .rum-v.is-good { background: rgb(var(--okbg)); color: rgb(var(--ok)); }
 .rum-v.is-needs { background: rgb(var(--warnbg)); color: rgb(var(--warn)); }
 .rum-v.is-poor { background: rgb(var(--badbg)); color: rgb(var(--bad)); }
+
+/* phone: the page title and the section picker already say where we are, so the breadcrumb row and a tall status strip only eat the screen */
+@media (max-width: 640px) {
+  .adm-crumbs { display: none; }
+  .adm-status { padding: 4px 6px 4px 12px; font-size: var(--fs-xs, 12px); }
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/analytics.css" << '__COREGSM_EOF__'

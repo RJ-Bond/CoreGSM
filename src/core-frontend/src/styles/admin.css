@@ -336,3 +336,9 @@ a.adm-tile:hover { box-shadow: var(--shadow-2); border-color: rgb(var(--brand) /
 .rum-v.is-good { background: rgb(var(--okbg)); color: rgb(var(--ok)); }
 .rum-v.is-needs { background: rgb(var(--warnbg)); color: rgb(var(--warn)); }
 .rum-v.is-poor { background: rgb(var(--badbg)); color: rgb(var(--bad)); }
+
+/* phone: the page title and the section picker already say where we are, so the breadcrumb row and a tall status strip only eat the screen */
+@media (max-width: 640px) {
+  .adm-crumbs { display: none; }
+  .adm-status { padding: 4px 6px 4px 12px; font-size: var(--fs-xs, 12px); }
+}
