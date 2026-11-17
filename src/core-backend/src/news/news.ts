@@ -85,15 +85,18 @@ export function registerNews(deps: {
     const out: { token: string; description: string }[] = [
       { token: '{players}', description: 'Всего игроков онлайн на всех серверах' },
       { token: '{online}', description: 'Сколько серверов сейчас онлайн' },
-      { token: '{servers}', description: 'Сколько всего серверов' },
+      { token: '{servers}', description: 'Названия всех серверов через запятую (в тексте — ссылками на страницы серверов)' },
+      { token: '{servers.count}', description: 'Сколько всего серверов (число)' },
       { token: '{date}', description: 'Текущая дата (по часовому поясу панели)' },
       { token: '{time}', description: 'Текущее время (по часовому поясу панели)' },
     ];
     for (const s of servers()) for (const [f, d] of SERVER_FIELDS) out.push({ token: `{server.${s.id}.${f}}`, description: `${s.name}: ${d}` });
     return out;
   }
-  function makeResolver() {
+  function makeResolver(links = false) {
     const list = servers();
+    const base = links ? deps.publicBase() : null;
+    const link = (name: string, id: number) => (base ? `[${name.replace(/[[\]]/g, '')}](${base}/servers/${id})` : name);
     const byId = new Map(list.map((s) => [s.id, s]));
     const tz = TZ();
     const now = new Date();
@@ -111,6 +114,8 @@ export function registerNews(deps: {
         case 'online':
           return String(list.filter((s) => s.online).length);
         case 'servers':
+          return list.length ? list.map((s) => link(s.name, s.id)).join(', ') : '—';
+        case 'servers.count':
           return String(list.length);
         case 'date':
           return fmt({ day: '2-digit', month: '2-digit', year: 'numeric' });
@@ -144,15 +149,16 @@ export function registerNews(deps: {
   /** the payload as it goes to Discord: variables substituted, status cards appended */
   function resolvePayload(p: NewsPayload, test: boolean, newsId?: number) {
     const r = makeResolver();
+    const rl = makeResolver(true);
     const embed = (e: EmbedIn): EmbedIn => ({
       ...e,
       ...(e.title ? { title: cut(r(e.title), 256) } : {}),
-      ...(e.description ? { description: cut(r(e.description), 4096) } : {}),
+      ...(e.description ? { description: cut(rl(e.description), 4096) } : {}),
       ...(e.author ? { author: { ...e.author, name: cut(r(e.author.name), 256) } } : {}),
       ...(e.footer ? { footer: { text: cut(r(e.footer.text), 2048) } } : {}),
-      ...(e.fields ? { fields: e.fields.map((f) => ({ ...f, name: cut(r(f.name), 256), value: cut(r(f.value), 1024) })) } : {}),
+      ...(e.fields ? { fields: e.fields.map((f) => ({ ...f, name: cut(r(f.name), 256), value: cut(rl(f.value), 1024) })) } : {}),
     });
-    let content = cut(r(p.content ?? ''), 2000);
+    let content = cut(rl(p.content ?? ''), 2000);
     let mention = p.mention;
     // a mention typed into the text counts as the choice "ping" (an embed alone never pings)
     if (mention === 'none') {
