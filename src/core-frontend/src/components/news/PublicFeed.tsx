@@ -69,7 +69,7 @@ const plainTitle = (title: string): string => {
 };
 
 export function cardOf(n: PublicNews): Card {
-  const p = n.payload ?? { content: '', mention: 'none' as const };
+  const p = n.shown ?? n.payload ?? { content: '', mention: 'none' as const };
   const e = p.embed;
   const url = e?.url && /^https?:\/\//i.test(e.url) ? e.url : null;
   const at = typeof p.countdownAt === 'number' && Number.isFinite(p.countdownAt) && p.countdownAt > 0 ? p.countdownAt : null;

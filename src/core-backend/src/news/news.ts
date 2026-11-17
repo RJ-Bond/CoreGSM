@@ -221,6 +221,21 @@ export function registerNews(deps: {
     return u && (u.role === 'admin' || u.role === 'moderator' || u.role === 'player') ? u.role : null;
   }
 
+  /** the text of a news item for the site: variables substituted, server names as links */
+  const shownOf = (p: NewsPayload): NewsPayload => {
+    if (!JSON.stringify(p).includes('{')) return p;
+    const r = makeResolver();
+    const rl = makeResolver(true);
+    const fix = (e: EmbedIn): EmbedIn => ({
+      ...e,
+      ...(e.title ? { title: r(e.title) } : {}),
+      ...(e.description ? { description: rl(e.description) } : {}),
+      ...(e.author ? { author: { ...e.author, name: r(e.author.name) } } : {}),
+      ...(e.footer ? { footer: { text: r(e.footer.text) } } : {}),
+      ...(e.fields ? { fields: e.fields.map((f) => ({ ...f, name: r(f.name), value: rl(f.value) })) } : {}),
+    });
+    return { ...p, ...(p.content ? { content: rl(p.content) } : {}), ...(p.embed ? { embed: fix(p.embed) } : {}), ...(p.extraEmbeds ? { extraEmbeds: p.extraEmbeds.map(fix) } : {}) };
+  };
   const serialize = (r: NewsRow, uid: number | null = null) => {
     const payload = JSON.parse(r.payload) as NewsPayload;
     const ch = channelInfo(r.channel_id);
@@ -238,6 +253,8 @@ export function registerNews(deps: {
       // a link that opens the posted message in Discord
       messageUrl: r.message_id && ch.guildId ? `https://discord.com/channels/${ch.guildId}/${r.channel_id}/${r.message_id}` : null,
       payload,
+      // what the site shows: the same text with {variables} filled in (the editor keeps working with `payload`)
+      shown: shownOf(payload),
       scheduledAt: r.scheduled_at,
       repeat: r.repeat,
       sentAt: r.sent_at,
@@ -399,6 +416,7 @@ export function registerNews(deps: {
       status: full.status,
       title: full.title,
       payload: full.payload,
+      shown: full.shown,
       sentAt: full.sentAt,
       category: full.category,
       pinned: full.pinned,

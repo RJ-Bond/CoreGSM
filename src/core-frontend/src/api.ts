@@ -833,6 +833,8 @@ export interface PublicNews {
   status: NewsStatus;
   title: string;
   payload: NewsPayload;
+  /** the same text with {variables} filled in (missing on an older backend) */
+  shown?: NewsPayload;
   sentAt: number | null;
   /** all of the below may be missing on an older backend */
   category?: NewsCategory;
