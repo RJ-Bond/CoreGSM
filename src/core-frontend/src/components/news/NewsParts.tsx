@@ -325,6 +325,23 @@ export function WorkPlaque({ at, title, fields, newsId, preview }: { at: number;
   );
 }
 
+/** works in a feed card: when it starts, how long it lasts and how long is left */
+export function WorkLine({ at, fields }: { at: number; fields: { name: string; value: string }[] }) {
+  useI18n();
+  const now = useNow();
+  const minutes = durationMinutes(fields.find((f) => /длит|duration|how long/i.test(f.name))?.value ?? '');
+  if (at + Math.max(15, minutes || 30) * 60_000 < now) return null;
+  const running = at <= now;
+  return (
+    <div className={`nb-work ${running ? 'is-on' : ''}`}>
+      <span aria-hidden>🛠️</span>
+      <b>{running ? t('nw.work.now') : new Date(at).toLocaleString(undefined, { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</b>
+      {minutes > 0 && <span>{t('nw.work.len', { n: minutes })}</span>}
+      <Countdown at={at} compact />
+    </div>
+  );
+}
+
 /** the servers a news item is about: a chip each with the live state, a link to the page of the server */
 export function AffectedServers({ ids, servers }: { ids: number[]; servers: Server[] | null }) {
   useI18n();
@@ -350,21 +367,26 @@ export function AffectedServers({ ids, servers }: { ids: number[]; servers: Serv
 
 // ---------- reactions ----------
 export function Reactions({
-  id, reactions, canReact, onChange,
+  id, reactions, canReact, onChange, compact = false,
 }: {
   id: number;
   reactions: NewsReaction[] | undefined;
   canReact: boolean;
   onChange: (r: NewsReaction[]) => void;
+  /** in a feed card: only the reactions people have used (and mine) and a «+» that shows the rest */
+  compact?: boolean;
 }) {
   const [busy, setBusy] = useState(false);
+  const [more, setMore] = useState(false);
   const [pop, setPop] = useState<{ e: string; k: number } | null>(null);
-  const list = fullReactions(reactions);
+  const all = fullReactions(reactions);
+  const used = all.filter((r) => r.count > 0 || r.mine);
+  const list = compact && !more ? used : all;
   const click = async (emoji: string) => {
     // a guest is sent to the sign-in instead of meeting a dead button
     if (!canReact) { navigate('/login'); return; }
     if (busy) return;
-    const prev = list;
+    const prev = all;
     if (!prev.find((r) => r.emoji === emoji)?.mine) setPop({ e: emoji, k: Date.now() });
     const { list: opt, next } = toggleReaction(prev, emoji);
     onChange(opt);
@@ -381,7 +403,7 @@ export function Reactions({
     }
   };
   return (
-    <div className="nw-react">
+    <div className={`nw-react ${compact ? 'is-compact' : ''}`}>
       <div className="nw-react-row" role="group" aria-label={t('nw.react.title')}>
         {list.map((r) => (
           <button key={r.emoji} type="button" className="nw-react-btn" aria-pressed={r.mine} title={canReact ? undefined : t('nw.react.login')} onClick={() => void click(r.emoji)}>
@@ -390,6 +412,11 @@ export function Reactions({
             {pop?.e === r.emoji && <Burst key={pop.k} count={6} radius={20} />}
           </button>
         ))}
+        {compact && (
+          <button type="button" className="nw-react-btn nw-react-plus" aria-expanded={more} aria-label={t('nw.react.more')} title={t('nw.react.more')} onClick={() => setMore((v) => !v)}>
+            <span aria-hidden>{more ? '−' : '＋'}</span>
+          </button>
+        )}
       </div>
     </div>
   );

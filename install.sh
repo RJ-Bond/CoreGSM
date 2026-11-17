@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="09d66616cfca"
+COREGSM_BUILD="39abe31a806c"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.2.50"
+COREGSM_VERSION="1.2.51"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -133130,6 +133130,23 @@ export function WorkPlaque({ at, title, fields, newsId, preview }: { at: number;
   );
 }
 
+/** works in a feed card: when it starts, how long it lasts and how long is left */
+export function WorkLine({ at, fields }: { at: number; fields: { name: string; value: string }[] }) {
+  useI18n();
+  const now = useNow();
+  const minutes = durationMinutes(fields.find((f) => /длит|duration|how long/i.test(f.name))?.value ?? '');
+  if (at + Math.max(15, minutes || 30) * 60_000 < now) return null;
+  const running = at <= now;
+  return (
+    <div className={`nb-work ${running ? 'is-on' : ''}`}>
+      <span aria-hidden>🛠️</span>
+      <b>{running ? t('nw.work.now') : new Date(at).toLocaleString(undefined, { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</b>
+      {minutes > 0 && <span>{t('nw.work.len', { n: minutes })}</span>}
+      <Countdown at={at} compact />
+    </div>
+  );
+}
+
 /** the servers a news item is about: a chip each with the live state, a link to the page of the server */
 export function AffectedServers({ ids, servers }: { ids: number[]; servers: Server[] | null }) {
   useI18n();
@@ -133155,21 +133172,26 @@ export function AffectedServers({ ids, servers }: { ids: number[]; servers: Serv
 
 // ---------- reactions ----------
 export function Reactions({
-  id, reactions, canReact, onChange,
+  id, reactions, canReact, onChange, compact = false,
 }: {
   id: number;
   reactions: NewsReaction[] | undefined;
   canReact: boolean;
   onChange: (r: NewsReaction[]) => void;
+  /** in a feed card: only the reactions people have used (and mine) and a «+» that shows the rest */
+  compact?: boolean;
 }) {
   const [busy, setBusy] = useState(false);
+  const [more, setMore] = useState(false);
   const [pop, setPop] = useState<{ e: string; k: number } | null>(null);
-  const list = fullReactions(reactions);
+  const all = fullReactions(reactions);
+  const used = all.filter((r) => r.count > 0 || r.mine);
+  const list = compact && !more ? used : all;
   const click = async (emoji: string) => {
     // a guest is sent to the sign-in instead of meeting a dead button
     if (!canReact) { navigate('/login'); return; }
     if (busy) return;
-    const prev = list;
+    const prev = all;
     if (!prev.find((r) => r.emoji === emoji)?.mine) setPop({ e: emoji, k: Date.now() });
     const { list: opt, next } = toggleReaction(prev, emoji);
     onChange(opt);
@@ -133186,7 +133208,7 @@ export function Reactions({
     }
   };
   return (
-    <div className="nw-react">
+    <div className={`nw-react ${compact ? 'is-compact' : ''}`}>
       <div className="nw-react-row" role="group" aria-label={t('nw.react.title')}>
         {list.map((r) => (
           <button key={r.emoji} type="button" className="nw-react-btn" aria-pressed={r.mine} title={canReact ? undefined : t('nw.react.login')} onClick={() => void click(r.emoji)}>
@@ -133195,6 +133217,11 @@ export function Reactions({
             {pop?.e === r.emoji && <Burst key={pop.k} count={6} radius={20} />}
           </button>
         ))}
+        {compact && (
+          <button type="button" className="nw-react-btn nw-react-plus" aria-expanded={more} aria-label={t('nw.react.more')} title={t('nw.react.more')} onClick={() => setMore((v) => !v)}>
+            <span aria-hidden>{more ? '−' : '＋'}</span>
+          </button>
+        )}
       </div>
     </div>
   );
@@ -133846,12 +133873,12 @@ export function Preview({
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/news"
   cat > "$APP_DIR/core-frontend/src/components/news/PublicFeed.tsx" << '__COREGSM_EOF__'
-import type { CSSProperties, ReactNode } from 'react';
+import { useEffect, useState, type CSSProperties, type ReactNode } from 'react';
 import type { NewsAction, NewsCategory, NewsChange, NewsReaction, PublicNews, Server } from '../../api';
 import { useI18n, t } from '../../i18n';
 import { ago, fmtDate, fmtDateTime, fmtTime, toast } from '../../ui';
 import { useAuth } from '../../auth';
-import { AuthorLine, CategoryChip, Countdown, NewsText, PinChip } from './NewsParts';
+import { AuthorLine, CategoryChip, Countdown, NewsText, PinChip, Reactions, WorkLine } from './NewsParts';
 import { CategoryIcon, IconCopyLink, IconEditPen } from './NewsIcons';
 import {
   CATEGORY_HEX, categoryOf, defaultCoverBackground, galleryUrls, groupByMonth, isFresh, isGeneratedCover, isPinned, newsImage, plainExcerpt, readingMinutes,
@@ -134031,7 +134058,9 @@ function Entry({ c, servers, seen, lead = false }: { c: Card; servers: Server[] 
   const fresh = isFresh(c.at, seen);
   // a visitor who has been here before finds what he has already seen quieter
   const read = seen != null && !fresh;
-  const likes = c.reactions.reduce((a, r) => a + r.count, 0);
+  const [rx, setRx] = useState(c.reactions);
+  useEffect(() => setRx(c.reactions), [c.reactions]);
+  const [open, setOpen] = useState(false);
   const copy = async () => {
     try { await navigator.clipboard.writeText(`${window.location.origin}/n/${c.id}`); toast(t('nw.copied')); } catch { toast(t('nw.copyFail'), 'err'); }
   };
@@ -134051,21 +134080,24 @@ function Entry({ c, servers, seen, lead = false }: { c: Card; servers: Server[] 
         </span>
       </a>
       <div className="nb-body">
-        {(c.text || c.fields.length > 0) && <div className={`nb-text ${long ? 'is-long' : ''}`}><NewsText text={c.text} fields={c.fields} /></div>}
-        {c.countdownAt && <Countdown at={c.countdownAt} label={c.countdownLabel} compact />}
+        {c.countdownAt != null && c.category === 'maintenance' && <WorkLine at={c.countdownAt} fields={c.fields} />}
+        {(c.text || c.fields.length > 0) && <div className={`nb-text ${long ? 'is-long' : ''} ${open ? 'is-open' : ''}`}><NewsText text={c.text} fields={c.fields} /></div>}
+        {long && <button type="button" className="nb-expand" aria-expanded={open} onClick={() => setOpen((v) => !v)}>{open ? t('nw.collapse') : t('nw.expand')}</button>}
+        {c.countdownAt != null && c.category !== 'maintenance' && <Countdown at={c.countdownAt} label={c.countdownLabel} compact />}
         <div className="nb-foot">
           <span className="nb-who">
             {c.author && <AuthorLine name={c.author.name} icon={c.author.icon} role={c.role} />}
             {c.at && <time className="nb-ago" dateTime={new Date(c.at).toISOString()} title={fmtDateTime(c.at)}>{ago(c.at)}</time>}
+            {(minutes > 0 || c.views > 0) && <span className="nb-ago">{[minutes > 0 ? t('nw.readTime', { n: minutes }) : '', c.views > 0 ? `👁 ${c.views}` : ''].filter(Boolean).join(' · ')}</span>}
           </span>
           <span className="nb-tools">
-            {minutes > 0 && <span className="nw-read">{t('nw.readTime', { n: minutes })}</span>}
-            {likes > 0 && <span className="nw-read" title={c.reactions.filter((r) => r.count > 0).map((r) => `${r.emoji} ${r.count}`).join('  ')}>♥ {likes}</span>}
-            {c.views > 0 && <span className="nw-read" title={t('nw.views', { n: c.views })}>👁 {c.views}</span>}
+            <span className="nb-react"><Reactions id={c.id} reactions={rx} canReact={!!me} onChange={setRx} compact /></span>
             {c.comments > 0 && <a className="nw-cmcount" href={`${href}#comments`} aria-label={t('nw.cm.count', { n: c.comments })}>💬 {c.comments}</a>}
             <a className="nb-more" href={href}>{t('nw.readShort')}<span aria-hidden> →</span></a>
-            <button type="button" className="nb-tool" onClick={() => void copy()} title={t('nw.copyLink')} aria-label={t('nw.copyLink')}><IconCopyLink /></button>
-            {canEdit && <a className="nb-tool" href={`/admin/news/${c.id}`} title={t('nw.edit')} aria-label={t('nw.edit')}><IconEditPen /></a>}
+            <span className="nb-hover">
+              <button type="button" className="nb-tool" onClick={() => void copy()} title={t('nw.copyLink')} aria-label={t('nw.copyLink')}><IconCopyLink /></button>
+              {canEdit && <a className="nb-tool" href={`/admin/news/${c.id}`} title={t('nw.edit')} aria-label={t('nw.edit')}><IconEditPen /></a>}
+            </span>
           </span>
         </div>
       </div>
@@ -148497,6 +148529,9 @@ const en: Record<keyof typeof ru, string> = {
   'nw.share': 'Share',
   'nw.related': 'Read next',
   'nw.progress': 'Read so far',
+  'nw.expand': 'Show more',
+  'nw.collapse': 'Show less',
+  'nw.react.more': 'More reactions',
   'nw.work.title': 'Maintenance',
   'nw.work.now': 'Maintenance is under way',
   'nw.work.len': 'about {n} min',
@@ -153713,6 +153748,9 @@ const ru = {
   'nw.share': 'Поделиться',
   'nw.related': 'Читайте также',
   'nw.progress': 'Прочитано',
+  'nw.expand': 'Развернуть',
+  'nw.collapse': 'Свернуть',
+  'nw.react.more': 'Другие реакции',
   'nw.work.title': 'Технические работы',
   'nw.work.now': 'Работы идут',
   'nw.work.len': 'около {n} мин',
@@ -178224,6 +178262,55 @@ a.cm-time:hover { color: rgb(var(--link)); }
 /* the editor: «as it will look on a phone» */
 .ne-pv-phone { max-width: 390px; margin-inline: auto; padding: 10px; border-radius: 34px; background: rgb(var(--ink) / .85); box-shadow: var(--shadow-3); }
 .ne-pv-phone > .ne-pv-page { border-radius: 26px; overflow: hidden; background: rgb(var(--page)); max-height: 70vh; overflow-y: auto; }
+
+/* ---------- the feed card, calmer: who and when on the left, a few quick reactions, a comment count and «read» on the right ---------- */
+.nb-foot { align-items: center; }
+.nb-react { position: relative; z-index: 2; display: inline-flex; }
+.nb-react .nw-react-row { gap: .3rem; }
+.nb-react .nw-react-btn { min-height: 34px; min-width: 0; padding: 0 .55rem; gap: .3rem; font-size: .8125rem; font-weight: 700; }
+.nb-react .nw-react-emoji { font-size: 1rem; }
+.nb-react .nw-react-plus { min-width: 34px; padding: 0; color: rgb(var(--mute)); border-style: dashed; }
+.nb-react .nw-react-hint { display: none; }
+/* link and edit show up on hover (always on a touch screen, where there is no hover) */
+.nb-hover { display: inline-flex; gap: 2px; }
+@media (hover: hover) and (pointer: fine) {
+  .nb-hover { opacity: 0; transition: opacity .15s ease; }
+  .nb:hover .nb-hover, .nb:focus-within .nb-hover { opacity: 1; }
+}
+@media (hover: none), (pointer: coarse) { .nb-tool { width: 40px; height: 40px; } }
+.nb-tool:focus-visible, .nb-more:focus-visible, .nb-expand:focus-visible, .nw-react-btn:focus-visible, .nw-cmcount:focus-visible { outline: 2px solid rgb(var(--brand)); outline-offset: 2px; border-radius: 8px; }
+
+/* a long text: the fade is there already, now a button opens it in place */
+.nb-text.is-open { display: block; -webkit-line-clamp: unset; overflow: visible; }
+.nb-text.is-open.is-long::after { display: none; }
+.nb-expand { position: relative; z-index: 2; justify-self: start; min-height: 36px; padding: 0 .9rem; border-radius: var(--r-pill); border: 1px solid rgb(var(--line)); background: rgb(var(--soft)); color: rgb(var(--ink)); font-weight: 700; font-size: .875rem; cursor: pointer; }
+.nb-expand:hover { border-color: rgb(var(--brand)); }
+
+/* works: the start and what is left, right in the card */
+.nb-work { display: flex; flex-wrap: wrap; align-items: center; gap: .35rem .7rem; padding: .55rem .85rem; border-radius: var(--r-md); background: rgb(var(--warn) / .12); box-shadow: inset 3px 0 0 rgb(var(--warn)); font-size: .9rem; }
+.nb-work.is-on { background: rgb(var(--bad) / .1); box-shadow: inset 3px 0 0 rgb(var(--bad)); }
+.nb-work > span:not(.nw-countdown) { color: rgb(var(--mute)); font-weight: 600; }
+.nb-work .nw-countdown { margin-left: auto; font-weight: 800; }
+
+/* a pinned card: the whole row on a wide screen, a soft glow in the colour of its rubric */
+@media (min-width: 1100px) {
+  :root[data-ember='1'] .nw-group > .nb.is-pinned { grid-column: 1 / -1; }
+}
+.nb.is-pinned { box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--nw-cat, rgb(var(--brand))) 60%, transparent), 0 10px 30px -14px color-mix(in srgb, var(--nw-cat, rgb(var(--brand))) 55%, transparent), var(--shadow-2); }
+
+/* a calm appearance: the card and the article come in with a short fade (not with reduced motion) */
+@keyframes nw-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: no-preference) {
+  html:not([data-motion='reduce']) .nw-article { animation: nw-in .28s ease-out both; }
+  html:not([data-motion='reduce']) .nw-group > .nb { animation: nw-in .3s ease-out both; }
+  html:not([data-motion='reduce']) .nw-group > .nb:nth-child(2) { animation-delay: .04s; }
+  html:not([data-motion='reduce']) .nw-group > .nb:nth-child(3) { animation-delay: .08s; }
+  html:not([data-motion='reduce']) .nw-group > .nb:nth-child(n + 4) { animation-delay: .12s; }
+}
+
+/* dark theme: a cover drawn by the panel is a step quieter so it does not outshine the text */
+:root[data-theme='dark'] .nw-gen:not(.nw-gen-ico) { filter: saturate(.88) brightness(.88); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme='light']) .nw-gen:not(.nw-gen-ico) { filter: saturate(.88) brightness(.88); } }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/news.css" << '__COREGSM_EOF__'

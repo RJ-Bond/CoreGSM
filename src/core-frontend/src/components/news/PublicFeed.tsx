@@ -1,9 +1,9 @@
-import type { CSSProperties, ReactNode } from 'react';
+import { useEffect, useState, type CSSProperties, type ReactNode } from 'react';
 import type { NewsAction, NewsCategory, NewsChange, NewsReaction, PublicNews, Server } from '../../api';
 import { useI18n, t } from '../../i18n';
 import { ago, fmtDate, fmtDateTime, fmtTime, toast } from '../../ui';
 import { useAuth } from '../../auth';
-import { AuthorLine, CategoryChip, Countdown, NewsText, PinChip } from './NewsParts';
+import { AuthorLine, CategoryChip, Countdown, NewsText, PinChip, Reactions, WorkLine } from './NewsParts';
 import { CategoryIcon, IconCopyLink, IconEditPen } from './NewsIcons';
 import {
   CATEGORY_HEX, categoryOf, defaultCoverBackground, galleryUrls, groupByMonth, isFresh, isGeneratedCover, isPinned, newsImage, plainExcerpt, readingMinutes,
@@ -183,7 +183,9 @@ function Entry({ c, servers, seen, lead = false }: { c: Card; servers: Server[] 
   const fresh = isFresh(c.at, seen);
   // a visitor who has been here before finds what he has already seen quieter
   const read = seen != null && !fresh;
-  const likes = c.reactions.reduce((a, r) => a + r.count, 0);
+  const [rx, setRx] = useState(c.reactions);
+  useEffect(() => setRx(c.reactions), [c.reactions]);
+  const [open, setOpen] = useState(false);
   const copy = async () => {
     try { await navigator.clipboard.writeText(`${window.location.origin}/n/${c.id}`); toast(t('nw.copied')); } catch { toast(t('nw.copyFail'), 'err'); }
   };
@@ -203,21 +205,24 @@ function Entry({ c, servers, seen, lead = false }: { c: Card; servers: Server[] 
         </span>
       </a>
       <div className="nb-body">
-        {(c.text || c.fields.length > 0) && <div className={`nb-text ${long ? 'is-long' : ''}`}><NewsText text={c.text} fields={c.fields} /></div>}
-        {c.countdownAt && <Countdown at={c.countdownAt} label={c.countdownLabel} compact />}
+        {c.countdownAt != null && c.category === 'maintenance' && <WorkLine at={c.countdownAt} fields={c.fields} />}
+        {(c.text || c.fields.length > 0) && <div className={`nb-text ${long ? 'is-long' : ''} ${open ? 'is-open' : ''}`}><NewsText text={c.text} fields={c.fields} /></div>}
+        {long && <button type="button" className="nb-expand" aria-expanded={open} onClick={() => setOpen((v) => !v)}>{open ? t('nw.collapse') : t('nw.expand')}</button>}
+        {c.countdownAt != null && c.category !== 'maintenance' && <Countdown at={c.countdownAt} label={c.countdownLabel} compact />}
         <div className="nb-foot">
           <span className="nb-who">
             {c.author && <AuthorLine name={c.author.name} icon={c.author.icon} role={c.role} />}
             {c.at && <time className="nb-ago" dateTime={new Date(c.at).toISOString()} title={fmtDateTime(c.at)}>{ago(c.at)}</time>}
+            {(minutes > 0 || c.views > 0) && <span className="nb-ago">{[minutes > 0 ? t('nw.readTime', { n: minutes }) : '', c.views > 0 ? `👁 ${c.views}` : ''].filter(Boolean).join(' · ')}</span>}
           </span>
           <span className="nb-tools">
-            {minutes > 0 && <span className="nw-read">{t('nw.readTime', { n: minutes })}</span>}
-            {likes > 0 && <span className="nw-read" title={c.reactions.filter((r) => r.count > 0).map((r) => `${r.emoji} ${r.count}`).join('  ')}>♥ {likes}</span>}
-            {c.views > 0 && <span className="nw-read" title={t('nw.views', { n: c.views })}>👁 {c.views}</span>}
+            <span className="nb-react"><Reactions id={c.id} reactions={rx} canReact={!!me} onChange={setRx} compact /></span>
             {c.comments > 0 && <a className="nw-cmcount" href={`${href}#comments`} aria-label={t('nw.cm.count', { n: c.comments })}>💬 {c.comments}</a>}
             <a className="nb-more" href={href}>{t('nw.readShort')}<span aria-hidden> →</span></a>
-            <button type="button" className="nb-tool" onClick={() => void copy()} title={t('nw.copyLink')} aria-label={t('nw.copyLink')}><IconCopyLink /></button>
-            {canEdit && <a className="nb-tool" href={`/admin/news/${c.id}`} title={t('nw.edit')} aria-label={t('nw.edit')}><IconEditPen /></a>}
+            <span className="nb-hover">
+              <button type="button" className="nb-tool" onClick={() => void copy()} title={t('nw.copyLink')} aria-label={t('nw.copyLink')}><IconCopyLink /></button>
+              {canEdit && <a className="nb-tool" href={`/admin/news/${c.id}`} title={t('nw.edit')} aria-label={t('nw.edit')}><IconEditPen /></a>}
+            </span>
           </span>
         </div>
       </div>

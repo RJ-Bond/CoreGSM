@@ -476,3 +476,52 @@ a.cm-time:hover { color: rgb(var(--link)); }
 /* the editor: «as it will look on a phone» */
 .ne-pv-phone { max-width: 390px; margin-inline: auto; padding: 10px; border-radius: 34px; background: rgb(var(--ink) / .85); box-shadow: var(--shadow-3); }
 .ne-pv-phone > .ne-pv-page { border-radius: 26px; overflow: hidden; background: rgb(var(--page)); max-height: 70vh; overflow-y: auto; }
+
+/* ---------- the feed card, calmer: who and when on the left, a few quick reactions, a comment count and «read» on the right ---------- */
+.nb-foot { align-items: center; }
+.nb-react { position: relative; z-index: 2; display: inline-flex; }
+.nb-react .nw-react-row { gap: .3rem; }
+.nb-react .nw-react-btn { min-height: 34px; min-width: 0; padding: 0 .55rem; gap: .3rem; font-size: .8125rem; font-weight: 700; }
+.nb-react .nw-react-emoji { font-size: 1rem; }
+.nb-react .nw-react-plus { min-width: 34px; padding: 0; color: rgb(var(--mute)); border-style: dashed; }
+.nb-react .nw-react-hint { display: none; }
+/* link and edit show up on hover (always on a touch screen, where there is no hover) */
+.nb-hover { display: inline-flex; gap: 2px; }
+@media (hover: hover) and (pointer: fine) {
+  .nb-hover { opacity: 0; transition: opacity .15s ease; }
+  .nb:hover .nb-hover, .nb:focus-within .nb-hover { opacity: 1; }
+}
+@media (hover: none), (pointer: coarse) { .nb-tool { width: 40px; height: 40px; } }
+.nb-tool:focus-visible, .nb-more:focus-visible, .nb-expand:focus-visible, .nw-react-btn:focus-visible, .nw-cmcount:focus-visible { outline: 2px solid rgb(var(--brand)); outline-offset: 2px; border-radius: 8px; }
+
+/* a long text: the fade is there already, now a button opens it in place */
+.nb-text.is-open { display: block; -webkit-line-clamp: unset; overflow: visible; }
+.nb-text.is-open.is-long::after { display: none; }
+.nb-expand { position: relative; z-index: 2; justify-self: start; min-height: 36px; padding: 0 .9rem; border-radius: var(--r-pill); border: 1px solid rgb(var(--line)); background: rgb(var(--soft)); color: rgb(var(--ink)); font-weight: 700; font-size: .875rem; cursor: pointer; }
+.nb-expand:hover { border-color: rgb(var(--brand)); }
+
+/* works: the start and what is left, right in the card */
+.nb-work { display: flex; flex-wrap: wrap; align-items: center; gap: .35rem .7rem; padding: .55rem .85rem; border-radius: var(--r-md); background: rgb(var(--warn) / .12); box-shadow: inset 3px 0 0 rgb(var(--warn)); font-size: .9rem; }
+.nb-work.is-on { background: rgb(var(--bad) / .1); box-shadow: inset 3px 0 0 rgb(var(--bad)); }
+.nb-work > span:not(.nw-countdown) { color: rgb(var(--mute)); font-weight: 600; }
+.nb-work .nw-countdown { margin-left: auto; font-weight: 800; }
+
+/* a pinned card: the whole row on a wide screen, a soft glow in the colour of its rubric */
+@media (min-width: 1100px) {
+  :root[data-ember='1'] .nw-group > .nb.is-pinned { grid-column: 1 / -1; }
+}
+.nb.is-pinned { box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--nw-cat, rgb(var(--brand))) 60%, transparent), 0 10px 30px -14px color-mix(in srgb, var(--nw-cat, rgb(var(--brand))) 55%, transparent), var(--shadow-2); }
+
+/* a calm appearance: the card and the article come in with a short fade (not with reduced motion) */
+@keyframes nw-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: no-preference) {
+  html:not([data-motion='reduce']) .nw-article { animation: nw-in .28s ease-out both; }
+  html:not([data-motion='reduce']) .nw-group > .nb { animation: nw-in .3s ease-out both; }
+  html:not([data-motion='reduce']) .nw-group > .nb:nth-child(2) { animation-delay: .04s; }
+  html:not([data-motion='reduce']) .nw-group > .nb:nth-child(3) { animation-delay: .08s; }
+  html:not([data-motion='reduce']) .nw-group > .nb:nth-child(n + 4) { animation-delay: .12s; }
+}
+
+/* dark theme: a cover drawn by the panel is a step quieter so it does not outshine the text */
+:root[data-theme='dark'] .nw-gen:not(.nw-gen-ico) { filter: saturate(.88) brightness(.88); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme='light']) .nw-gen:not(.nw-gen-ico) { filter: saturate(.88) brightness(.88); } }
