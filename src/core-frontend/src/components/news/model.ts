@@ -165,25 +165,27 @@ export const embedHasContent = (e: EmbedDraft) =>
 // ---------- ready-made starting points ----------
 export interface TemplateApply extends Partial<Omit<EmbedDraft, 'fields'>> {
   mention?: Draft['mention'];
+  /** the rubric of the news item: a template for works files it under «Технические работы» */
+  category?: Draft['category'];
   fields?: { name: string; value: string; inline: boolean }[];
 }
 
 export const TEMPLATES: { id: string; label: string; apply: TemplateApply }[] = [
   { id: 'announce', label: '📢 Объявление', apply: { title: '📢 Важное объявление', description: 'Здесь текст объявления.\n\nМожно использовать **жирный**, *курсив* и списки:\n- первый пункт\n- второй пункт', color: 0x5865f2, mention: 'none', fields: [], footer: '', timestamp: true } },
   { id: 'restart', label: '🔄 Перезапуск', apply: { title: '🔄 Перезапуск сервера', description: 'Сервер будет перезапущен **ВРЕМЯ** (МСК). Это займёт несколько минут. Сохраните прогресс заранее.', color: 0x3b82f6, mention: 'none', fields: [], footer: '', timestamp: true } },
-  { id: 'wipe', label: '🧹 Вайп', apply: { title: '🧹 Вайп сервера', description: 'Вайп состоится **ДАТА** в **ВРЕМЯ** (МСК).\nСервер будет недоступен около часа.', color: 0xf97316, mention: 'here', fields: [{ name: '🗑️ Что сбросится', value: 'Карта, постройки, ресурсы', inline: true }, { name: '✅ Что останется', value: 'Донат, ранги, привилегии', inline: true }], footer: 'Спасибо, что играете с нами', timestamp: true } },
-  { id: 'maint', label: '🛠️ Тех. работы', apply: { title: '🛠️ Технические работы', description: 'Сервер временно недоступен: мы проводим плановые работы.', color: 0xf0b232, mention: 'none', fields: [{ name: '🕒 Начало', value: 'ДАТА, ВРЕМЯ', inline: true }, { name: '⏳ Длительность', value: 'около 30 минут', inline: true }], footer: '', timestamp: true } },
-  { id: 'update', label: '🚀 Обновление', apply: { title: '🚀 Обновление сервера', description: '**Что нового:**\n- ✨ Новая функция\n- 🐛 Исправлены ошибки\n- ⚡ Улучшена производительность', color: 0x23a55a, mention: 'none', fields: [], footer: '', timestamp: true } },
-  { id: 'event', label: '🎉 Ивент', apply: { title: '🎉 Ивент: НАЗВАНИЕ', description: 'Приглашаем всех на ивент! Будет весело.', color: 0xeb459e, mention: 'here', fields: [{ name: '📅 Когда', value: 'ДАТА, ВРЕМЯ', inline: true }, { name: '📍 Где', value: 'Сервер / локация', inline: true }, { name: '🏆 Награда', value: 'Призы победителям', inline: true }], footer: '', timestamp: false } },
+  { id: 'wipe', label: '🧹 Вайп', apply: { title: '🧹 Вайп сервера', description: 'Вайп на {servers} состоится **ДАТА** в **ВРЕМЯ** (МСК).\nСерверы будут недоступны около часа.', color: 0xf97316, mention: 'here', category: 'wipe', fields: [{ name: '🗑️ Что сбросится', value: 'Карта, постройки, ресурсы', inline: true }, { name: '✅ Что останется', value: 'Донат, ранги, привилегии', inline: true }], footer: 'Спасибо, что играете с нами', timestamp: true } },
+  { id: 'maint', label: '🛠️ Тех. работы', apply: { title: '🛠️ Технические работы', description: 'Всем привет! Завтра в ВРЕМЯ по МСК серверы {servers} будут недоступны около 30 минут. Мы проводим плановые работы.', color: 0xf0b232, mention: 'none', category: 'maintenance', fields: [{ name: '🕒 Начало', value: 'ДАТА, ВРЕМЯ', inline: true }, { name: '⏳ Длительность', value: 'около 30 минут', inline: true }], footer: '', timestamp: true } },
+  { id: 'update', label: '🚀 Обновление', apply: { title: '🚀 Обновление сервера', description: '**Что нового:**\n- ✨ Новая функция\n- 🐛 Исправлены ошибки\n- ⚡ Улучшена производительность', color: 0x23a55a, mention: 'none', category: 'update', fields: [], footer: '', timestamp: true } },
+  { id: 'event', label: '🎉 Ивент', apply: { title: '🎉 Ивент: НАЗВАНИЕ', description: 'Приглашаем всех на ивент! Будет весело.', color: 0xeb459e, mention: 'here', category: 'event', fields: [{ name: '📅 Когда', value: 'ДАТА, ВРЕМЯ', inline: true }, { name: '📍 Где', value: 'Сервер / локация', inline: true }, { name: '🏆 Награда', value: 'Призы победителям', inline: true }], footer: '', timestamp: false } },
   { id: 'tournament', label: '🏆 Турнир', apply: { title: '🏆 Турнир: НАЗВАНИЕ', description: 'Открываем регистрацию на турнир! Собирайте команды.', color: 0xf0b232, mention: 'here', fields: [{ name: '📅 Старт', value: 'ДАТА, ВРЕМЯ', inline: true }, { name: '👥 Формат', value: 'Команды по N человек', inline: true }, { name: '🏅 Призы', value: 'Места и награды', inline: false }, { name: '📝 Как записаться', value: 'Где и до какого числа', inline: false }], footer: '', timestamp: true } },
   { id: 'giveaway', label: '🎁 Розыгрыш', apply: { title: '🎁 Розыгрыш', description: 'Разыгрываем **ПРИЗ**! Условия ниже.', color: 0xf0b232, mention: 'everyone', fields: [{ name: '📝 Как участвовать', value: 'Поставьте реакцию 🎉 под этим сообщением', inline: false }, { name: '⏰ Итоги', value: 'ДАТА, ВРЕМЯ', inline: false }], footer: 'Удачи!', timestamp: false } },
 ];
 
 /** apply a template to the first embed (and mention) of a draft, keeping the channel */
 export function applyTemplate(d: Draft, t: TemplateApply): Draft {
-  const { mention, fields, ...rest } = t;
+  const { mention, fields, category, ...rest } = t;
   const e: EmbedDraft = { ...blankEmbed(), ...rest, fields: (fields ?? []).map((f) => ({ ...f, k: newKey() })) };
-  return { ...blank(d.channelId), mention: mention ?? 'none', embeds: [e], category: d.category, pinned: d.pinned, game: d.game, gallery: d.gallery, changes: d.changes, countdownAt: d.countdownAt, countdownLabel: d.countdownLabel, actions: d.actions };
+  return { ...blank(d.channelId), mention: mention ?? 'none', embeds: [e], category: category ?? d.category, pinned: d.pinned, game: d.game, gallery: d.gallery, changes: d.changes, countdownAt: d.countdownAt, countdownLabel: d.countdownLabel, actions: d.actions };
 }
 
 // ---------- message types: colour + icon + title prefix ----------
@@ -250,7 +252,7 @@ export async function uploadImage(file: File): Promise<string> {
 
 // ---------- variables ----------
 export interface VarServer { id: number; name: string; online: boolean; players: number; maxPlayers: number; address: string; map: string | null; ping: number | null }
-export interface VarSample { players: number; online: number; servers: number; date: string; time: string; byId: Map<number, VarServer> }
+export interface VarSample { players: number; online: number; servers: number; /** names of all servers, comma separated */ names: string; date: string; time: string; byId: Map<number, VarServer> }
 
 export function sampleVars(servers: VarServer[] | null, now = new Date()): VarSample {
   const list = servers ?? [];
@@ -259,6 +261,7 @@ export function sampleVars(servers: VarServer[] | null, now = new Date()): VarSa
     players: list.reduce((n, s) => n + (s.online ? s.players : 0), 0),
     online: list.filter((s) => s.online).length,
     servers: list.length,
+    names: list.map((s) => s.name).join(', ') || '—',
     date: `${p(now.getDate())}.${p(now.getMonth() + 1)}.${now.getFullYear()}`,
     time: `${p(now.getHours())}:${p(now.getMinutes())}`,
     byId: new Map(list.map((s) => [s.id, s])),
@@ -268,7 +271,9 @@ export function sampleVars(servers: VarServer[] | null, now = new Date()): VarSa
 export function resolveVars(text: string, v: VarSample): string {
   if (!text || !text.includes('{')) return text;
   return text
-    .replace(/\{(players|online|servers|date|time)\}/g, (_m, k: 'players' | 'online' | 'servers' | 'date' | 'time') => String(v[k]))
+    .replace(/\{servers\}/g, v.names)
+    .replace(/\{servers\.count\}/g, String(v.servers))
+    .replace(/\{(players|online|date|time)\}/g, (_m, k: 'players' | 'online' | 'date' | 'time') => String(v[k]))
     .replace(/\{server\.(\d+)\.(name|players|max|online|address|map|ping)\}/g, (m, id: string, k: string) => {
       const s = v.byId.get(Number(id));
       if (!s) return m;
@@ -369,4 +374,33 @@ export function runChecks(d: Draft): Check[] {
   if (words.size) out.push({ level: 'warn', text: `В тексте остались слова шаблона: ${[...words].join(', ')}. Замените их на свои.` });
 
   return out;
+}
+
+/** a payload as the site would show it: {variables} filled in with the numbers known to the editor (server names without links) */
+export function previewPayload(p: NewsPayload, v: VarSample): NewsPayload {
+  const r = (s: string) => resolveVars(s, v);
+  const e = (x: NewsEmbed): NewsEmbed => ({
+    ...x,
+    ...(x.title ? { title: r(x.title) } : {}),
+    ...(x.description ? { description: r(x.description) } : {}),
+    ...(x.fields ? { fields: x.fields.map((f) => ({ ...f, name: r(f.name), value: r(f.value) })) } : {}),
+  });
+  return { ...p, ...(p.content ? { content: r(p.content) } : {}), ...(p.embed ? { embed: e(p.embed) } : {}) };
+}
+
+/** «15 минут», «1 час», «2 ч 30 мин», «около 30 minutes»: the length in minutes, or 0 when there is none */
+export function durationMinutes(text: string): number {
+  const s = text.toLowerCase();
+  const h = /(\d+(?:[.,]\d+)?)\s*(?:ч(?![а-яё])|час|hour|hr|h\b)/.exec(s);
+  const m = /(\d+)\s*(?:мин|min|m\b)/.exec(s);
+  const total = (h ? Math.round(Number(h[1].replace(',', '.')) * 60) : 0) + (m ? Number(m[1]) : 0);
+  return Math.min(total, 24 * 60);
+}
+
+/** the text of an .ics file (one event) that any calendar app opens */
+export function icsText(o: { title: string; start: number; minutes: number; url: string; description?: string }): string {
+  const z = (ms: number) => new Date(ms).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
+  const esc = (x: string) => x.replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\r?\n/g, '\\n');
+  const end = o.start + Math.max(15, o.minutes || 30) * 60_000;
+  return ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//CoreGSM//News//RU', 'BEGIN:VEVENT', `UID:${o.start}-${esc(o.title).length}@coregsm`, `DTSTAMP:${z(Date.now())}`, `DTSTART:${z(o.start)}`, `DTEND:${z(end)}`, `SUMMARY:${esc(o.title)}`, `DESCRIPTION:${esc(o.description ?? '')}`, `URL:${o.url}`, 'END:VEVENT', 'END:VCALENDAR'].join('\r\n');
 }

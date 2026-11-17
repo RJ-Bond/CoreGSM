@@ -8,7 +8,7 @@ import { IconCopyLink } from './NewsIcons';
 import { Comments } from './Comments';
 import { extractHeadings, readingMinutes, wasEdited } from './newsLogic';
 import {
-  ActionButtons, AuthorLine, ChangesBlock, Countdown, GalleryGrid, GalleryViewer, NewsText, Reactions, StatusCards,
+  ActionButtons, AffectedServers, AuthorLine, ChangesBlock, Countdown, GalleryGrid, GalleryViewer, NewsText, Reactions, StatusCards, WorkPlaque,
 } from './NewsParts';
 
 /** a thin bar under the top edge that fills while the article is read */
@@ -132,6 +132,7 @@ export function NewsArticle({
             {edited && item.editedAt && <span className="nw-read" title={t('nw.updatedTip', { date: fmtDateTime(item.editedAt), n: item.edits ?? 0 })}>{t('nw.updated', { when: ago(item.editedAt) })}</span>}
           </div>
         )}
+        {c.countdownAt != null && c.category === 'maintenance' && <WorkPlaque at={c.countdownAt} title={c.title} fields={c.fields} newsId={item.id} preview={preview} />}
         <div className={headings.length >= 3 ? 'nw-split' : 'nw-plain'}>
         {headings.length >= 3 && (
           <nav className="nw-toc" aria-label={t('nw.toc')}>
@@ -148,6 +149,7 @@ export function NewsArticle({
         <div className="nw-split-main">
         {(c.text || c.fields.length > 0) && <NewsText className="nw-prose-lg" text={c.text} fields={c.fields} />}
         <ChangesBlock changes={c.changes} />
+        <AffectedServers ids={c.statusIds} servers={servers} />
         <StatusCards ids={c.statusIds} servers={servers} />
         <GalleryGrid urls={c.gallery} onOpen={setViewer} />
         {(c.actions.length > 0 || c.link) && (

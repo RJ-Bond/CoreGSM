@@ -3,7 +3,7 @@ import {
   categoryOf, countByCategory, countdownText, coverGame, coverGradient, filterByCategory, galleryUrls, groupByMonth, groupChanges,
   extractHeadings, isFresh, isGeneratedCover, normCategory, orderFeed, pickHero, relatedNews, toggleReaction, unreadCount, validActions, visibleRubrics, wasEdited,
 } from '../src/components/news/newsLogic';
-import { blank, fromPayload, linkProblems, runChecks, toPayload } from '../src/components/news/model';
+import { applyTemplate, blank, durationMinutes, fromPayload, icsText, linkProblems, previewPayload, resolveVars, runChecks, sampleVars, TEMPLATES, toPayload } from '../src/components/news/model';
 import type { PublicNews } from '../src/api';
 
 const item = (id: number, sentAt: number | null, extra: Partial<PublicNews> = {}): PublicNews => ({
@@ -187,5 +187,42 @@ describe('pre-publish link checks', () => {
     const texts = runChecks(d).map((c) => c.text);
     expect(texts.some((t) => t.includes('внешней ссылке'))).toBe(true);
     expect(texts.some((t) => t.includes('нет заголовка'))).toBe(true);
+  });
+});
+
+describe('news: variables, works, calendar', () => {
+  const servers = [
+    { id: 1, name: 'Alpha', players: 3, maxPlayers: 10, online: true, address: 'a:1', map: null, ping: 20 },
+    { id: 2, name: 'Beta', players: 0, maxPlayers: 10, online: false, address: 'b:1', map: null, ping: null },
+  ];
+  it('{servers} is the list of names, {servers.count} the number', () => {
+    const v = sampleVars(servers);
+    expect(resolveVars('Сервера: {servers}', v)).toBe('Сервера: Alpha, Beta');
+    expect(resolveVars('Всего {servers.count}', v)).toBe('Всего 2');
+    expect(resolveVars('{servers}', sampleVars([]))).toBe('—');
+  });
+  it('the page preview fills the variables in', () => {
+    const p = previewPayload({ content: '', mention: 'none', embed: { description: 'на {servers}', fields: [{ name: 'a', value: '{players}', inline: true }] } }, sampleVars(servers));
+    expect(p.embed?.description).toBe('на Alpha, Beta');
+    expect(p.embed?.fields?.[0]?.value).toBe('3');
+  });
+  it('reads the length of works from a text', () => {
+    expect(durationMinutes('15 минут')).toBe(15);
+    expect(durationMinutes('около 30 минут')).toBe(30);
+    expect(durationMinutes('1 час')).toBe(60);
+    expect(durationMinutes('2 ч 30 мин')).toBe(150);
+    expect(durationMinutes('скоро')).toBe(0);
+  });
+  it('the calendar file has the start, the end and escaped text', () => {
+    const ics = icsText({ title: 'Работы; сервер, 1', start: Date.UTC(2026, 10, 18, 6, 0, 0), minutes: 15, url: 'https://x/news/1' });
+    expect(ics).toContain('DTSTART:20261118T060000Z');
+    expect(ics).toContain('DTEND:20261118T061500Z');
+    expect(ics).toContain('SUMMARY:Работы\\; сервер\\, 1');
+    expect(ics.startsWith('BEGIN:VCALENDAR')).toBe(true);
+  });
+  it('a template can set the rubric', () => {
+    const maint = TEMPLATES.find((x) => x.id === 'maint')!;
+    expect(applyTemplate(blank(''), maint.apply).category).toBe('maintenance');
+    expect(maint.apply.description).toContain('{servers}');
   });
 });

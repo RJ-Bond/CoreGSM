@@ -5,6 +5,7 @@ import { Burst, GameAvatar, StatusPill, UserAvatar, navigate, toast, usePoll } f
 import { IconClose } from '../../icons';
 import { DiscordMd, ThemeCtx, type DTheme } from './DiscordMd';
 import { CategoryIcon, ChangeIcon, PinIcon } from './NewsIcons';
+import { durationMinutes, icsText } from './model';
 import { CHANGE_ORDER, countdownText, fullReactions, groupChanges, toggleReaction, validActions, type RubricFilter } from './newsLogic';
 
 /** the news text uses the panel's own colours (light and dark), not Discord's */
@@ -279,6 +280,66 @@ export function StatusCards({ ids, servers }: { ids: number[]; servers: Server[]
                 {s.online && s.maxPlayers > 0 && <span className="nw-srv-bar" aria-hidden><i style={{ width: `${Math.min(100, Math.round((s.players / s.maxPlayers) * 100))}%` }} /></span>}
               </span>
               <StatusPill online={s.online} known={s.hasStatus} maintenance={!!s.maintenance} />
+            </a>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+/** «Тех. работы»: the start with a live countdown, the length, and a button that puts it into a calendar (.ics) */
+export function WorkPlaque({ at, title, fields, newsId, preview }: { at: number; title: string; fields: { name: string; value: string }[]; newsId: number; preview: boolean }) {
+  useI18n();
+  const now = useNow();
+  const lenText = fields.find((f) => /длит|duration|how long/i.test(f.name))?.value ?? '';
+  const minutes = durationMinutes(lenText);
+  const left = at - now;
+  const done = left <= -Math.max(15, minutes || 30) * 60_000;
+  if (done) return null;
+  const running = left <= 0;
+  const addToCalendar = () => {
+    const url = `${window.location.origin}/news/${newsId}`;
+    const blob = new Blob([icsText({ title, start: at, minutes, url })], { type: 'text/calendar;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `coregsm-${newsId}.ics`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  };
+  return (
+    <div className={`nw-work ${running ? 'is-on' : ''}`} role="group" aria-label={t('nw.work.title')}>
+      <span className="nw-work-ico" aria-hidden>🛠️</span>
+      <span className="nw-work-main">
+        <b>{running ? t('nw.work.now') : t('nw.work.title')}</b>
+        <span className="nw-work-sub">
+          {new Date(at).toLocaleString(undefined, { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })}
+          {minutes > 0 && <> · {t('nw.work.len', { n: minutes })}</>}
+        </span>
+      </span>
+      <Countdown at={at} compact />
+      {!preview && !running && <button type="button" className="btn btn-soft btn-sm" onClick={addToCalendar}>{t('nw.work.cal')}</button>}
+    </div>
+  );
+}
+
+/** the servers a news item is about: a chip each with the live state, a link to the page of the server */
+export function AffectedServers({ ids, servers }: { ids: number[]; servers: Server[] | null }) {
+  useI18n();
+  const shown = ids.map((id) => servers?.find((s) => s.id === id)).filter((s): s is Server => !!s);
+  if (shown.length === 0) return null;
+  return (
+    <section className="nw-affected" aria-label={t('nw.affected')}>
+      <h2 className="nw-h2">{t('nw.affected')}</h2>
+      <ul>
+        {shown.map((s) => (
+          <li key={s.id}>
+            <a className="nw-chip-srv" href={`/servers/${s.id}`}>
+              <i className={s.online ? 'is-on' : 'is-off'} aria-hidden />
+              <span>{s.name}</span>
+              <small className="tabular-nums">{s.online ? `${s.players}/${s.maxPlayers}` : t('nw.srv.offline')}</small>
             </a>
           </li>
         ))}

@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="f5fbaa698c42"
+COREGSM_BUILD="09d66616cfca"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.2.49"
+COREGSM_VERSION="1.2.50"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -132536,7 +132536,7 @@ import { IconCopyLink } from './NewsIcons';
 import { Comments } from './Comments';
 import { extractHeadings, readingMinutes, wasEdited } from './newsLogic';
 import {
-  ActionButtons, AuthorLine, ChangesBlock, Countdown, GalleryGrid, GalleryViewer, NewsText, Reactions, StatusCards,
+  ActionButtons, AffectedServers, AuthorLine, ChangesBlock, Countdown, GalleryGrid, GalleryViewer, NewsText, Reactions, StatusCards, WorkPlaque,
 } from './NewsParts';
 
 /** a thin bar under the top edge that fills while the article is read */
@@ -132660,6 +132660,7 @@ export function NewsArticle({
             {edited && item.editedAt && <span className="nw-read" title={t('nw.updatedTip', { date: fmtDateTime(item.editedAt), n: item.edits ?? 0 })}>{t('nw.updated', { when: ago(item.editedAt) })}</span>}
           </div>
         )}
+        {c.countdownAt != null && c.category === 'maintenance' && <WorkPlaque at={c.countdownAt} title={c.title} fields={c.fields} newsId={item.id} preview={preview} />}
         <div className={headings.length >= 3 ? 'nw-split' : 'nw-plain'}>
         {headings.length >= 3 && (
           <nav className="nw-toc" aria-label={t('nw.toc')}>
@@ -132676,6 +132677,7 @@ export function NewsArticle({
         <div className="nw-split-main">
         {(c.text || c.fields.length > 0) && <NewsText className="nw-prose-lg" text={c.text} fields={c.fields} />}
         <ChangesBlock changes={c.changes} />
+        <AffectedServers ids={c.statusIds} servers={servers} />
         <StatusCards ids={c.statusIds} servers={servers} />
         <GalleryGrid urls={c.gallery} onOpen={setViewer} />
         {(c.actions.length > 0 || c.link) && (
@@ -132808,6 +132810,7 @@ import { Burst, GameAvatar, StatusPill, UserAvatar, navigate, toast, usePoll } f
 import { IconClose } from '../../icons';
 import { DiscordMd, ThemeCtx, type DTheme } from './DiscordMd';
 import { CategoryIcon, ChangeIcon, PinIcon } from './NewsIcons';
+import { durationMinutes, icsText } from './model';
 import { CHANGE_ORDER, countdownText, fullReactions, groupChanges, toggleReaction, validActions, type RubricFilter } from './newsLogic';
 
 /** the news text uses the panel's own colours (light and dark), not Discord's */
@@ -133082,6 +133085,66 @@ export function StatusCards({ ids, servers }: { ids: number[]; servers: Server[]
                 {s.online && s.maxPlayers > 0 && <span className="nw-srv-bar" aria-hidden><i style={{ width: `${Math.min(100, Math.round((s.players / s.maxPlayers) * 100))}%` }} /></span>}
               </span>
               <StatusPill online={s.online} known={s.hasStatus} maintenance={!!s.maintenance} />
+            </a>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+/** «Тех. работы»: the start with a live countdown, the length, and a button that puts it into a calendar (.ics) */
+export function WorkPlaque({ at, title, fields, newsId, preview }: { at: number; title: string; fields: { name: string; value: string }[]; newsId: number; preview: boolean }) {
+  useI18n();
+  const now = useNow();
+  const lenText = fields.find((f) => /длит|duration|how long/i.test(f.name))?.value ?? '';
+  const minutes = durationMinutes(lenText);
+  const left = at - now;
+  const done = left <= -Math.max(15, minutes || 30) * 60_000;
+  if (done) return null;
+  const running = left <= 0;
+  const addToCalendar = () => {
+    const url = `${window.location.origin}/news/${newsId}`;
+    const blob = new Blob([icsText({ title, start: at, minutes, url })], { type: 'text/calendar;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `coregsm-${newsId}.ics`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  };
+  return (
+    <div className={`nw-work ${running ? 'is-on' : ''}`} role="group" aria-label={t('nw.work.title')}>
+      <span className="nw-work-ico" aria-hidden>🛠️</span>
+      <span className="nw-work-main">
+        <b>{running ? t('nw.work.now') : t('nw.work.title')}</b>
+        <span className="nw-work-sub">
+          {new Date(at).toLocaleString(undefined, { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })}
+          {minutes > 0 && <> · {t('nw.work.len', { n: minutes })}</>}
+        </span>
+      </span>
+      <Countdown at={at} compact />
+      {!preview && !running && <button type="button" className="btn btn-soft btn-sm" onClick={addToCalendar}>{t('nw.work.cal')}</button>}
+    </div>
+  );
+}
+
+/** the servers a news item is about: a chip each with the live state, a link to the page of the server */
+export function AffectedServers({ ids, servers }: { ids: number[]; servers: Server[] | null }) {
+  useI18n();
+  const shown = ids.map((id) => servers?.find((s) => s.id === id)).filter((s): s is Server => !!s);
+  if (shown.length === 0) return null;
+  return (
+    <section className="nw-affected" aria-label={t('nw.affected')}>
+      <h2 className="nw-h2">{t('nw.affected')}</h2>
+      <ul>
+        {shown.map((s) => (
+          <li key={s.id}>
+            <a className="nw-chip-srv" href={`/servers/${s.id}`}>
+              <i className={s.online ? 'is-on' : 'is-off'} aria-hidden />
+              <span>{s.name}</span>
+              <small className="tabular-nums">{s.online ? `${s.players}/${s.maxPlayers}` : t('nw.srv.offline')}</small>
             </a>
           </li>
         ))}
@@ -134414,25 +134477,27 @@ export const embedHasContent = (e: EmbedDraft) =>
 // ---------- ready-made starting points ----------
 export interface TemplateApply extends Partial<Omit<EmbedDraft, 'fields'>> {
   mention?: Draft['mention'];
+  /** the rubric of the news item: a template for works files it under «Технические работы» */
+  category?: Draft['category'];
   fields?: { name: string; value: string; inline: boolean }[];
 }
 
 export const TEMPLATES: { id: string; label: string; apply: TemplateApply }[] = [
   { id: 'announce', label: '📢 Объявление', apply: { title: '📢 Важное объявление', description: 'Здесь текст объявления.\n\nМожно использовать **жирный**, *курсив* и списки:\n- первый пункт\n- второй пункт', color: 0x5865f2, mention: 'none', fields: [], footer: '', timestamp: true } },
   { id: 'restart', label: '🔄 Перезапуск', apply: { title: '🔄 Перезапуск сервера', description: 'Сервер будет перезапущен **ВРЕМЯ** (МСК). Это займёт несколько минут. Сохраните прогресс заранее.', color: 0x3b82f6, mention: 'none', fields: [], footer: '', timestamp: true } },
-  { id: 'wipe', label: '🧹 Вайп', apply: { title: '🧹 Вайп сервера', description: 'Вайп состоится **ДАТА** в **ВРЕМЯ** (МСК).\nСервер будет недоступен около часа.', color: 0xf97316, mention: 'here', fields: [{ name: '🗑️ Что сбросится', value: 'Карта, постройки, ресурсы', inline: true }, { name: '✅ Что останется', value: 'Донат, ранги, привилегии', inline: true }], footer: 'Спасибо, что играете с нами', timestamp: true } },
-  { id: 'maint', label: '🛠️ Тех. работы', apply: { title: '🛠️ Технические работы', description: 'Сервер временно недоступен: мы проводим плановые работы.', color: 0xf0b232, mention: 'none', fields: [{ name: '🕒 Начало', value: 'ДАТА, ВРЕМЯ', inline: true }, { name: '⏳ Длительность', value: 'около 30 минут', inline: true }], footer: '', timestamp: true } },
-  { id: 'update', label: '🚀 Обновление', apply: { title: '🚀 Обновление сервера', description: '**Что нового:**\n- ✨ Новая функция\n- 🐛 Исправлены ошибки\n- ⚡ Улучшена производительность', color: 0x23a55a, mention: 'none', fields: [], footer: '', timestamp: true } },
-  { id: 'event', label: '🎉 Ивент', apply: { title: '🎉 Ивент: НАЗВАНИЕ', description: 'Приглашаем всех на ивент! Будет весело.', color: 0xeb459e, mention: 'here', fields: [{ name: '📅 Когда', value: 'ДАТА, ВРЕМЯ', inline: true }, { name: '📍 Где', value: 'Сервер / локация', inline: true }, { name: '🏆 Награда', value: 'Призы победителям', inline: true }], footer: '', timestamp: false } },
+  { id: 'wipe', label: '🧹 Вайп', apply: { title: '🧹 Вайп сервера', description: 'Вайп на {servers} состоится **ДАТА** в **ВРЕМЯ** (МСК).\nСерверы будут недоступны около часа.', color: 0xf97316, mention: 'here', category: 'wipe', fields: [{ name: '🗑️ Что сбросится', value: 'Карта, постройки, ресурсы', inline: true }, { name: '✅ Что останется', value: 'Донат, ранги, привилегии', inline: true }], footer: 'Спасибо, что играете с нами', timestamp: true } },
+  { id: 'maint', label: '🛠️ Тех. работы', apply: { title: '🛠️ Технические работы', description: 'Всем привет! Завтра в ВРЕМЯ по МСК серверы {servers} будут недоступны около 30 минут. Мы проводим плановые работы.', color: 0xf0b232, mention: 'none', category: 'maintenance', fields: [{ name: '🕒 Начало', value: 'ДАТА, ВРЕМЯ', inline: true }, { name: '⏳ Длительность', value: 'около 30 минут', inline: true }], footer: '', timestamp: true } },
+  { id: 'update', label: '🚀 Обновление', apply: { title: '🚀 Обновление сервера', description: '**Что нового:**\n- ✨ Новая функция\n- 🐛 Исправлены ошибки\n- ⚡ Улучшена производительность', color: 0x23a55a, mention: 'none', category: 'update', fields: [], footer: '', timestamp: true } },
+  { id: 'event', label: '🎉 Ивент', apply: { title: '🎉 Ивент: НАЗВАНИЕ', description: 'Приглашаем всех на ивент! Будет весело.', color: 0xeb459e, mention: 'here', category: 'event', fields: [{ name: '📅 Когда', value: 'ДАТА, ВРЕМЯ', inline: true }, { name: '📍 Где', value: 'Сервер / локация', inline: true }, { name: '🏆 Награда', value: 'Призы победителям', inline: true }], footer: '', timestamp: false } },
   { id: 'tournament', label: '🏆 Турнир', apply: { title: '🏆 Турнир: НАЗВАНИЕ', description: 'Открываем регистрацию на турнир! Собирайте команды.', color: 0xf0b232, mention: 'here', fields: [{ name: '📅 Старт', value: 'ДАТА, ВРЕМЯ', inline: true }, { name: '👥 Формат', value: 'Команды по N человек', inline: true }, { name: '🏅 Призы', value: 'Места и награды', inline: false }, { name: '📝 Как записаться', value: 'Где и до какого числа', inline: false }], footer: '', timestamp: true } },
   { id: 'giveaway', label: '🎁 Розыгрыш', apply: { title: '🎁 Розыгрыш', description: 'Разыгрываем **ПРИЗ**! Условия ниже.', color: 0xf0b232, mention: 'everyone', fields: [{ name: '📝 Как участвовать', value: 'Поставьте реакцию 🎉 под этим сообщением', inline: false }, { name: '⏰ Итоги', value: 'ДАТА, ВРЕМЯ', inline: false }], footer: 'Удачи!', timestamp: false } },
 ];
 
 /** apply a template to the first embed (and mention) of a draft, keeping the channel */
 export function applyTemplate(d: Draft, t: TemplateApply): Draft {
-  const { mention, fields, ...rest } = t;
+  const { mention, fields, category, ...rest } = t;
   const e: EmbedDraft = { ...blankEmbed(), ...rest, fields: (fields ?? []).map((f) => ({ ...f, k: newKey() })) };
-  return { ...blank(d.channelId), mention: mention ?? 'none', embeds: [e], category: d.category, pinned: d.pinned, game: d.game, gallery: d.gallery, changes: d.changes, countdownAt: d.countdownAt, countdownLabel: d.countdownLabel, actions: d.actions };
+  return { ...blank(d.channelId), mention: mention ?? 'none', embeds: [e], category: category ?? d.category, pinned: d.pinned, game: d.game, gallery: d.gallery, changes: d.changes, countdownAt: d.countdownAt, countdownLabel: d.countdownLabel, actions: d.actions };
 }
 
 // ---------- message types: colour + icon + title prefix ----------
@@ -134499,7 +134564,7 @@ export async function uploadImage(file: File): Promise<string> {
 
 // ---------- variables ----------
 export interface VarServer { id: number; name: string; online: boolean; players: number; maxPlayers: number; address: string; map: string | null; ping: number | null }
-export interface VarSample { players: number; online: number; servers: number; date: string; time: string; byId: Map<number, VarServer> }
+export interface VarSample { players: number; online: number; servers: number; /** names of all servers, comma separated */ names: string; date: string; time: string; byId: Map<number, VarServer> }
 
 export function sampleVars(servers: VarServer[] | null, now = new Date()): VarSample {
   const list = servers ?? [];
@@ -134508,6 +134573,7 @@ export function sampleVars(servers: VarServer[] | null, now = new Date()): VarSa
     players: list.reduce((n, s) => n + (s.online ? s.players : 0), 0),
     online: list.filter((s) => s.online).length,
     servers: list.length,
+    names: list.map((s) => s.name).join(', ') || '—',
     date: `${p(now.getDate())}.${p(now.getMonth() + 1)}.${now.getFullYear()}`,
     time: `${p(now.getHours())}:${p(now.getMinutes())}`,
     byId: new Map(list.map((s) => [s.id, s])),
@@ -134517,7 +134583,9 @@ export function sampleVars(servers: VarServer[] | null, now = new Date()): VarSa
 export function resolveVars(text: string, v: VarSample): string {
   if (!text || !text.includes('{')) return text;
   return text
-    .replace(/\{(players|online|servers|date|time)\}/g, (_m, k: 'players' | 'online' | 'servers' | 'date' | 'time') => String(v[k]))
+    .replace(/\{servers\}/g, v.names)
+    .replace(/\{servers\.count\}/g, String(v.servers))
+    .replace(/\{(players|online|date|time)\}/g, (_m, k: 'players' | 'online' | 'date' | 'time') => String(v[k]))
     .replace(/\{server\.(\d+)\.(name|players|max|online|address|map|ping)\}/g, (m, id: string, k: string) => {
       const s = v.byId.get(Number(id));
       if (!s) return m;
@@ -134618,6 +134686,35 @@ export function runChecks(d: Draft): Check[] {
   if (words.size) out.push({ level: 'warn', text: `В тексте остались слова шаблона: ${[...words].join(', ')}. Замените их на свои.` });
 
   return out;
+}
+
+/** a payload as the site would show it: {variables} filled in with the numbers known to the editor (server names without links) */
+export function previewPayload(p: NewsPayload, v: VarSample): NewsPayload {
+  const r = (s: string) => resolveVars(s, v);
+  const e = (x: NewsEmbed): NewsEmbed => ({
+    ...x,
+    ...(x.title ? { title: r(x.title) } : {}),
+    ...(x.description ? { description: r(x.description) } : {}),
+    ...(x.fields ? { fields: x.fields.map((f) => ({ ...f, name: r(f.name), value: r(f.value) })) } : {}),
+  });
+  return { ...p, ...(p.content ? { content: r(p.content) } : {}), ...(p.embed ? { embed: e(p.embed) } : {}) };
+}
+
+/** «15 минут», «1 час», «2 ч 30 мин», «около 30 minutes»: the length in minutes, or 0 when there is none */
+export function durationMinutes(text: string): number {
+  const s = text.toLowerCase();
+  const h = /(\d+(?:[.,]\d+)?)\s*(?:ч(?![а-яё])|час|hour|hr|h\b)/.exec(s);
+  const m = /(\d+)\s*(?:мин|min|m\b)/.exec(s);
+  const total = (h ? Math.round(Number(h[1].replace(',', '.')) * 60) : 0) + (m ? Number(m[1]) : 0);
+  return Math.min(total, 24 * 60);
+}
+
+/** the text of an .ics file (one event) that any calendar app opens */
+export function icsText(o: { title: string; start: number; minutes: number; url: string; description?: string }): string {
+  const z = (ms: number) => new Date(ms).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
+  const esc = (x: string) => x.replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\r?\n/g, '\\n');
+  const end = o.start + Math.max(15, o.minutes || 30) * 60_000;
+  return ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//CoreGSM//News//RU', 'BEGIN:VEVENT', `UID:${o.start}-${esc(o.title).length}@coregsm`, `DTSTAMP:${z(Date.now())}`, `DTSTART:${z(o.start)}`, `DTEND:${z(end)}`, `SUMMARY:${esc(o.title)}`, `DESCRIPTION:${esc(o.description ?? '')}`, `URL:${o.url}`, 'END:VEVENT', 'END:VCALENDAR'].join('\r\n');
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/news"
@@ -148400,6 +148497,11 @@ const en: Record<keyof typeof ru, string> = {
   'nw.share': 'Share',
   'nw.related': 'Read next',
   'nw.progress': 'Read so far',
+  'nw.work.title': 'Maintenance',
+  'nw.work.now': 'Maintenance is under way',
+  'nw.work.len': 'about {n} min',
+  'nw.work.cal': '📅 Add to calendar',
+  'nw.affected': 'Affected servers',
   'nw.liveNow': 'On the servers now',
   'nw.offline': 'offline',
   'nw.new': 'New',
@@ -153611,6 +153713,11 @@ const ru = {
   'nw.share': 'Поделиться',
   'nw.related': 'Читайте также',
   'nw.progress': 'Прочитано',
+  'nw.work.title': 'Технические работы',
+  'nw.work.now': 'Работы идут',
+  'nw.work.len': 'около {n} мин',
+  'nw.work.cal': '📅 В календарь',
+  'nw.affected': 'Затронутые серверы',
   'nw.liveNow': 'Сейчас на серверах',
   'nw.offline': 'офлайн',
   'nw.new': 'Новое',
@@ -166313,7 +166420,7 @@ import { LimitsPanel } from '../components/news/LimitsPanel';
 import { Counter, MarkdownField } from '../components/news/MarkdownField';
 import {
   LIMITS, PALETTE, PRESETS, TEMPLATES, applyPreset, applyTemplate as applyTpl, blank, blankEmbed, embedHasContent, fromPayload, gameColors, hex, parseHex, payloadKey, presetOf,
-  newKey, sampleVars, toLocalInput, toPayload, totalLength, uploadImage, type Draft, type EmbedDraft, type TemplateApply, type VarServer,
+  newKey, previewPayload, sampleVars, toLocalInput, toPayload, totalLength, uploadImage, type Draft, type EmbedDraft, type TemplateApply, type VarServer,
 } from '../components/news/model';
 import { Preview } from '../components/news/Preview';
 import { NewsArticle } from '../components/news/NewsArticle';
@@ -166406,6 +166513,7 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
   const [restore, setRestore] = useState<{ payload: NewsPayload; channelId?: string; ts?: number } | null>(null);
   const [savedAt, setSavedAt] = useState<number | null>(null);
   const [pvTab, setPvTab] = useState<'discord' | 'site' | 'page'>('discord');
+  const [pvPhone, setPvPhone] = useState(false);
 
   const baseline = useRef('');
   const autosaveOff = useRef(false);
@@ -166998,21 +167106,24 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
             {pvTab === 'discord' ? (
               <Preview draft={d} vars={vars} servers={servers} channelNames={channelNames} onPick={focusPart} total={total} />
             ) : pvTab === 'page' ? (
+              <div className={pvPhone ? 'ne-pv-phone' : undefined}>
+              <button type="button" className="btn btn-soft btn-sm mb-2" aria-pressed={pvPhone} onClick={() => setPvPhone((v) => !v)}>{pvPhone ? t('d2.pv.desktop') : t('d2.pv.phone')}</button>
               <div className="ne-pv-page">
                 <NewsArticle
                   preview
                   canReact={false}
                   onReactions={() => undefined}
                   servers={servers}
-                  item={{ id: id ?? 0, status: 'draft', title: d.embeds[0]?.title ?? '', payload: toPayload(d), sentAt: item?.sentAt ?? Date.now(), category: d.category, pinned: d.pinned, authorRole: null, reactions: [] }}
+                  item={{ id: id ?? 0, status: 'draft', title: d.embeds[0]?.title ?? '', payload: previewPayload(toPayload(d), vars), sentAt: item?.sentAt ?? Date.now(), category: d.category, pinned: d.pinned, authorRole: null, reactions: [] }}
                 />
+              </div>
               </div>
             ) : (
               <div className="panel p-3">
                 <PublicFeed
                   flat
                   servers={servers}
-                  items={[{ id: id ?? 0, status: 'draft', title: d.embeds[0]?.title ?? '', payload: toPayload(d), sentAt: item?.sentAt ?? Date.now(), category: d.category, pinned: d.pinned, authorRole: null, reactions: [] }]}
+                  items={[{ id: id ?? 0, status: 'draft', title: d.embeds[0]?.title ?? '', payload: previewPayload(toPayload(d), vars), sentAt: item?.sentAt ?? Date.now(), category: d.category, pinned: d.pinned, authorRole: null, reactions: [] }]}
                 />
                 {!embedHasContent(d.embeds[0] ?? blankEmbed()) && !d.content && <p className="py-6 text-center font-semibold text-mute">{t('ne.pvEmpty')}</p>}
               </div>
@@ -178068,6 +178179,51 @@ a.cm-time:hover { color: rgb(var(--link)); }
 .nb .nb-title { -webkit-line-clamp: 3; line-clamp: 3; overflow-wrap: anywhere; }
 .nw-cal-text { margin: 0 0 .5rem; font-size: .875rem; font-weight: 600; color: rgb(var(--mute)); }
 .nw-cal-links { display: flex; flex-wrap: wrap; gap: .5rem; padding-bottom: .5rem; }
+
+/* ---------- the news page on a phone: calmer text, solid bars, compact tiles, reactions that stay in reach ---------- */
+/* the floating bars sat 55% see-through over the text: on the news pages they are solid */
+:root[data-page='news'] :is(header.glass, nav.glass) { background-image: linear-gradient(rgb(var(--card) / .97), rgb(var(--card) / .97)); }
+.nw-backlink { margin-top: .25rem; }
+@media (max-width: 639px) {
+  .nw-article { margin-bottom: 6rem; }
+  .nw-article .nw-cover-in { padding-top: 3.25rem; } /* the title never hides under the header */
+  .nw-prose, .nw-prose-lg { font-size: 1rem; }
+  .nw-prose .leading-snug, .nw-prose p, .nw-prose-lg .leading-snug { line-height: 1.6; }
+  .nw-article-in { gap: 1.1rem; }
+  /* «Начало» and «Длительность»: two small tiles in a row instead of two screens */
+  .nf-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .4rem; }
+  .nf-fields > div { padding: .45rem .65rem; }
+  .nf-fields dt { font-size: .75rem; }
+  .nf-fields dd { font-size: .95rem; line-height: 1.3; }
+  .nf-fields > div:only-child { grid-column: 1 / -1; }
+  /* reactions and share stay under the thumb while the text is read, above the bottom bar */
+  .nw-reactbar { position: sticky; bottom: calc(5.3rem + env(safe-area-inset-bottom, 0px)); z-index: 6; padding: .45rem .6rem; border-radius: var(--r-xl); background: rgb(var(--card) / .97); border: 1px solid rgb(var(--line)); box-shadow: var(--shadow-2); flex-wrap: nowrap; }
+  .nw-react-btn { min-width: 0; min-height: 40px; padding: 0 .7rem; }
+  .nw-react-hint { display: none; }
+  .nw-react-row { gap: .35rem; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+}
+
+/* maintenance: the start, the length and a countdown in one strip */
+.nw-work { display: flex; align-items: center; gap: .75rem; flex-wrap: wrap; padding: .75rem 1rem; border-radius: var(--r-lg); background: rgb(var(--warn) / .12); box-shadow: inset 0 0 0 1px rgb(var(--warn) / .4); }
+.nw-work.is-on { background: rgb(var(--bad) / .1); box-shadow: inset 0 0 0 1px rgb(var(--bad) / .4); }
+.nw-work-ico { font-size: 1.5rem; line-height: 1; }
+.nw-work-main { display: grid; gap: .1rem; min-width: 0; flex: 1 1 10rem; }
+.nw-work-sub { font-size: .875rem; font-weight: 600; color: rgb(var(--mute)); }
+.nw-work .nw-countdown { font-weight: 800; }
+@media (max-width: 639px) { .nw-work { padding: .65rem .8rem; } .nw-work .btn { flex: 1 1 100%; } }
+
+/* the servers a news item is about */
+.nw-affected ul { display: flex; flex-wrap: wrap; gap: .45rem; margin: 0; padding: 0; list-style: none; }
+.nw-chip-srv { display: inline-flex; align-items: center; gap: .45rem; min-height: 36px; padding: .25rem .8rem; border-radius: var(--r-pill); background: rgb(var(--soft)); box-shadow: inset 0 0 0 1px rgb(var(--line)); color: rgb(var(--ink)); font-weight: 700; font-size: .9rem; text-decoration: none; }
+.nw-chip-srv:hover { box-shadow: inset 0 0 0 1px rgb(var(--brand)); }
+.nw-chip-srv i { width: 8px; height: 8px; border-radius: 50%; background: rgb(var(--mute)); }
+.nw-chip-srv i.is-on { background: rgb(var(--ok)); }
+.nw-chip-srv i.is-off { background: rgb(var(--bad)); }
+.nw-chip-srv small { color: rgb(var(--mute)); font-weight: 650; }
+
+/* the editor: «as it will look on a phone» */
+.ne-pv-phone { max-width: 390px; margin-inline: auto; padding: 10px; border-radius: 34px; background: rgb(var(--ink) / .85); box-shadow: var(--shadow-3); }
+.ne-pv-phone > .ne-pv-page { border-radius: 26px; overflow: hidden; background: rgb(var(--page)); max-height: 70vh; overflow-y: auto; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/news.css" << '__COREGSM_EOF__'

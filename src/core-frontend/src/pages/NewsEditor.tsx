@@ -12,7 +12,7 @@ import { LimitsPanel } from '../components/news/LimitsPanel';
 import { Counter, MarkdownField } from '../components/news/MarkdownField';
 import {
   LIMITS, PALETTE, PRESETS, TEMPLATES, applyPreset, applyTemplate as applyTpl, blank, blankEmbed, embedHasContent, fromPayload, gameColors, hex, parseHex, payloadKey, presetOf,
-  newKey, sampleVars, toLocalInput, toPayload, totalLength, uploadImage, type Draft, type EmbedDraft, type TemplateApply, type VarServer,
+  newKey, previewPayload, sampleVars, toLocalInput, toPayload, totalLength, uploadImage, type Draft, type EmbedDraft, type TemplateApply, type VarServer,
 } from '../components/news/model';
 import { Preview } from '../components/news/Preview';
 import { NewsArticle } from '../components/news/NewsArticle';
@@ -105,6 +105,7 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
   const [restore, setRestore] = useState<{ payload: NewsPayload; channelId?: string; ts?: number } | null>(null);
   const [savedAt, setSavedAt] = useState<number | null>(null);
   const [pvTab, setPvTab] = useState<'discord' | 'site' | 'page'>('discord');
+  const [pvPhone, setPvPhone] = useState(false);
 
   const baseline = useRef('');
   const autosaveOff = useRef(false);
@@ -697,21 +698,24 @@ export default function NewsEditor({ id, template }: { id: number | null; templa
             {pvTab === 'discord' ? (
               <Preview draft={d} vars={vars} servers={servers} channelNames={channelNames} onPick={focusPart} total={total} />
             ) : pvTab === 'page' ? (
+              <div className={pvPhone ? 'ne-pv-phone' : undefined}>
+              <button type="button" className="btn btn-soft btn-sm mb-2" aria-pressed={pvPhone} onClick={() => setPvPhone((v) => !v)}>{pvPhone ? t('d2.pv.desktop') : t('d2.pv.phone')}</button>
               <div className="ne-pv-page">
                 <NewsArticle
                   preview
                   canReact={false}
                   onReactions={() => undefined}
                   servers={servers}
-                  item={{ id: id ?? 0, status: 'draft', title: d.embeds[0]?.title ?? '', payload: toPayload(d), sentAt: item?.sentAt ?? Date.now(), category: d.category, pinned: d.pinned, authorRole: null, reactions: [] }}
+                  item={{ id: id ?? 0, status: 'draft', title: d.embeds[0]?.title ?? '', payload: previewPayload(toPayload(d), vars), sentAt: item?.sentAt ?? Date.now(), category: d.category, pinned: d.pinned, authorRole: null, reactions: [] }}
                 />
+              </div>
               </div>
             ) : (
               <div className="panel p-3">
                 <PublicFeed
                   flat
                   servers={servers}
-                  items={[{ id: id ?? 0, status: 'draft', title: d.embeds[0]?.title ?? '', payload: toPayload(d), sentAt: item?.sentAt ?? Date.now(), category: d.category, pinned: d.pinned, authorRole: null, reactions: [] }]}
+                  items={[{ id: id ?? 0, status: 'draft', title: d.embeds[0]?.title ?? '', payload: previewPayload(toPayload(d), vars), sentAt: item?.sentAt ?? Date.now(), category: d.category, pinned: d.pinned, authorRole: null, reactions: [] }]}
                 />
                 {!embedHasContent(d.embeds[0] ?? blankEmbed()) && !d.content && <p className="py-6 text-center font-semibold text-mute">{t('ne.pvEmpty')}</p>}
               </div>
