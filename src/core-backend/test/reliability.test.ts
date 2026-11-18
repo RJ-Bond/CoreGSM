@@ -9,7 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import Database from 'better-sqlite3';
 import bcrypt from 'bcryptjs';
-import { clampConcurrency, clampDays, clampThreshold, decideStatus, pruneDue, RETENTION_DEFAULTS, runPool } from '../src/community/pollLogic.ts';
+import { shouldResetUdp, clampConcurrency, clampDays, clampThreshold, decideStatus, pruneDue, RETENTION_DEFAULTS, runPool } from '../src/community/pollLogic.ts';
 import { ADMIN, setupAdmin, startBackend, type Api } from './harness.ts';
 
 // ---------------------------------------------------------------- pure logic
@@ -560,5 +560,14 @@ describe('database maintenance', () => {
     const wal = `${process.env.DB_PATH}-wal`;
     assert.equal(fs.existsSync(wal) ? fs.statSync(wal).size : 0, 0);
     assert.equal(dbMaint.optimizeDb(), true);
+  });
+});
+
+describe('shouldResetUdp', () => {
+  it('three cycles with failures in a row, and not more often than every five minutes', () => {
+    assert.equal(shouldResetUdp(2, 0, 1e12), false);
+    assert.equal(shouldResetUdp(3, 0, 1e12), true);
+    assert.equal(shouldResetUdp(9, 1e12 - 60_000, 1e12), false);
+    assert.equal(shouldResetUdp(9, 1e12 - 301_000, 1e12), true);
   });
 });

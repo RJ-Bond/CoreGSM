@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="48e7ac2100f9"
+COREGSM_BUILD="56d3677bd7a0"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.2.52"
+COREGSM_VERSION="1.2.53"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -21720,6 +21720,9 @@ export async function runPool<T>(items: T[], limit: number, worker: (item: T, in
   };
   await Promise.all(Array.from({ length: Math.min(n, items.length) }, lane));
 }
+
+/** Several poll cycles in a row with failed servers: recreate the UDP socket of the queries (at most once in five minutes). */
+export const shouldResetUdp = (failStreak: number, lastResetAt: number, now: number): boolean => failStreak >= 3 && now - lastResetAt >= 5 * 60_000;
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/community"
   cat > "$APP_DIR/core-backend/src/community/polls.ts" << '__COREGSM_EOF__'
@@ -32175,10 +32178,10 @@ import { notifyFollowers } from '../profile/playerFollows.js';
 import { maintenanceFor as maintenanceNow } from '../maintenance.js';
 import { db, getSetting, type ServerRow } from '../db.js';
 import { inMaintenance, pruneMaintenance } from '../maintenance.js';
-import { clampConcurrency, clampDays, clampThreshold, decideStatus, DEFAULT_CONCURRENCY, pruneDue, RETENTION_DEFAULTS, runPool } from '../community/pollLogic.js';
+import { shouldResetUdp, clampConcurrency, clampDays, clampThreshold, decideStatus, DEFAULT_CONCURRENCY, pruneDue, RETENTION_DEFAULTS, runPool } from '../community/pollLogic.js';
 
 export { humanizeQueryError, queryServer, type QueryResult } from './query.js';
-import { queryServer, type QueryResult } from './query.js';
+import { queryServer, resetUdpSocket, type QueryResult } from './query.js';
 import { log } from '../logger.js';
 import { judgeDown, MAX_WINDOW, resolveRule, type DownRule } from '../alerts/downVerdict.js';
 
@@ -32436,6 +32439,8 @@ let stopping = false;
 let pollTimer: NodeJS.Timeout | undefined;
 let jitterMaxMs = 1500;
 let pollCount = 0;
+let failStreak = 0;
+let lastUdpReset = 0;
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 export async function pollAll(): Promise<void> {
@@ -32462,6 +32467,13 @@ export async function pollAll(): Promise<void> {
     const durationMs = Date.now() - t0;
     lastStats = { at: Date.now(), durationMs, servers: servers.length, failures, concurrency };
     pollCount++;
+    // failures cycle after cycle: maybe the UDP socket is stuck, not the servers; a fresh one costs nothing
+    failStreak = failures > 0 ? failStreak + 1 : 0;
+    if (shouldResetUdp(failStreak, lastUdpReset, Date.now())) {
+      lastUdpReset = Date.now();
+      resetUdpSocket();
+      log.info(`poll: ${failStreak} cycles in a row with failures, the UDP socket of the queries was recreated`);
+    }
     // quiet when all is well: the first poll, slow polls, polls with failures and every 20th
     if (servers.length && (pollCount === 1 || failures > 0 || durationMs > 5000 || pollCount % 20 === 0)) {
       log.info(`poll #${pollCount}: ${servers.length} servers, ${failures} failed, ${durationMs} ms (concurrency ${concurrency})`);
@@ -33480,10 +33492,25 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-backend/src/monitoring/query.ts" << '__COREGSM_EOF__'
 /** One query of a game server over its game protocol (GameDig). No database: the poller and the probes share it. */
 import { GameDig } from 'gamedig';
+
 import type { ServerRow } from '../db.js';
 import { fetchM2oInfo } from './m2oInfo.js';
 import { FRESH_MS, findInMasterlist } from './m2oMasterlist.js';
 
+// GameDig keeps ONE UDP socket per instance and never recreates it. If a router or an ISP keeps a stale entry for its
+// source port (after a restart of the game host, say), every query goes unanswered until the process is restarted.
+// So the poller can drop the instance and the socket with it: the next query binds a fresh one.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type Digger = { query(o: unknown): Promise<any>; queryRunner?: { udpSocket?: { socket?: { close(): void } | null } } };
+const makeDigger = (): Digger => new (GameDig as unknown as new () => Digger)();
+let digger = makeDigger();
+export function resetUdpSocket(): void {
+  const old = digger;
+  digger = makeDigger();
+  try {
+    old.queryRunner?.udpSocket?.socket?.close();
+  } catch { /* already closed */ }
+}
 export interface QueryResult {
   online: boolean;
   name: string | null;
@@ -33545,7 +33572,7 @@ export async function queryServer(s: Pick<ServerRow, 'game' | 'host' | 'port' | 
   }
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const r: any = await GameDig.query({
+    const r: any = await digger.query({
       type: s.game,
       host: s.host,
       port: s.query_port ?? s.port,

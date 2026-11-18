@@ -79,3 +79,6 @@ export async function runPool<T>(items: T[], limit: number, worker: (item: T, in
   };
   await Promise.all(Array.from({ length: Math.min(n, items.length) }, lane));
 }
+
+/** Several poll cycles in a row with failed servers: recreate the UDP socket of the queries (at most once in five minutes). */
+export const shouldResetUdp = (failStreak: number, lastResetAt: number, now: number): boolean => failStreak >= 3 && now - lastResetAt >= 5 * 60_000;

@@ -8,10 +8,10 @@ import { notifyFollowers } from '../profile/playerFollows.js';
 import { maintenanceFor as maintenanceNow } from '../maintenance.js';
 import { db, getSetting, type ServerRow } from '../db.js';
 import { inMaintenance, pruneMaintenance } from '../maintenance.js';
-import { clampConcurrency, clampDays, clampThreshold, decideStatus, DEFAULT_CONCURRENCY, pruneDue, RETENTION_DEFAULTS, runPool } from '../community/pollLogic.js';
+import { shouldResetUdp, clampConcurrency, clampDays, clampThreshold, decideStatus, DEFAULT_CONCURRENCY, pruneDue, RETENTION_DEFAULTS, runPool } from '../community/pollLogic.js';
 
 export { humanizeQueryError, queryServer, type QueryResult } from './query.js';
-import { queryServer, type QueryResult } from './query.js';
+import { queryServer, resetUdpSocket, type QueryResult } from './query.js';
 import { log } from '../logger.js';
 import { judgeDown, MAX_WINDOW, resolveRule, type DownRule } from '../alerts/downVerdict.js';
 
@@ -269,6 +269,8 @@ let stopping = false;
 let pollTimer: NodeJS.Timeout | undefined;
 let jitterMaxMs = 1500;
 let pollCount = 0;
+let failStreak = 0;
+let lastUdpReset = 0;
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 export async function pollAll(): Promise<void> {
@@ -295,6 +297,13 @@ export async function pollAll(): Promise<void> {
     const durationMs = Date.now() - t0;
     lastStats = { at: Date.now(), durationMs, servers: servers.length, failures, concurrency };
     pollCount++;
+    // failures cycle after cycle: maybe the UDP socket is stuck, not the servers; a fresh one costs nothing
+    failStreak = failures > 0 ? failStreak + 1 : 0;
+    if (shouldResetUdp(failStreak, lastUdpReset, Date.now())) {
+      lastUdpReset = Date.now();
+      resetUdpSocket();
+      log.info(`poll: ${failStreak} cycles in a row with failures, the UDP socket of the queries was recreated`);
+    }
     // quiet when all is well: the first poll, slow polls, polls with failures and every 20th
     if (servers.length && (pollCount === 1 || failures > 0 || durationMs > 5000 || pollCount % 20 === 0)) {
       log.info(`poll #${pollCount}: ${servers.length} servers, ${failures} failed, ${durationMs} ms (concurrency ${concurrency})`);

@@ -1,9 +1,24 @@
 /** One query of a game server over its game protocol (GameDig). No database: the poller and the probes share it. */
 import { GameDig } from 'gamedig';
+
 import type { ServerRow } from '../db.js';
 import { fetchM2oInfo } from './m2oInfo.js';
 import { FRESH_MS, findInMasterlist } from './m2oMasterlist.js';
 
+// GameDig keeps ONE UDP socket per instance and never recreates it. If a router or an ISP keeps a stale entry for its
+// source port (after a restart of the game host, say), every query goes unanswered until the process is restarted.
+// So the poller can drop the instance and the socket with it: the next query binds a fresh one.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type Digger = { query(o: unknown): Promise<any>; queryRunner?: { udpSocket?: { socket?: { close(): void } | null } } };
+const makeDigger = (): Digger => new (GameDig as unknown as new () => Digger)();
+let digger = makeDigger();
+export function resetUdpSocket(): void {
+  const old = digger;
+  digger = makeDigger();
+  try {
+    old.queryRunner?.udpSocket?.socket?.close();
+  } catch { /* already closed */ }
+}
 export interface QueryResult {
   online: boolean;
   name: string | null;
@@ -65,7 +80,7 @@ export async function queryServer(s: Pick<ServerRow, 'game' | 'host' | 'port' | 
   }
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const r: any = await GameDig.query({
+    const r: any = await digger.query({
       type: s.game,
       host: s.host,
       port: s.query_port ?? s.port,
