@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="39abe31a806c"
+COREGSM_BUILD="48e7ac2100f9"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.2.51"
+COREGSM_VERSION="1.2.52"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -147565,6 +147565,10 @@ const en: Record<keyof typeof ru, string> = {
   'srv.hero.peakAt': 'Usually peaks at {time}',
   'srv.hero.peakTip': 'Usually up to {n} players at this hour',
   'srv.hero.poll': 'Check now',
+  'srv.planned.btn': 'Planned work',
+  'srv.planned.done': 'Maintenance window for 1 hour created',
+  'srv.planned.name': 'Planned work',
+  'srv.planned.hint': 'The server shows «Maintenance» instead of «Offline» for an hour and no alerts are sent',
   'srv.hero.polled': 'The server was checked',
   'home.b.pulse': 'The summary with a chart',
   'home.b.news': 'The «What is new» block',
@@ -152784,6 +152788,10 @@ const ru = {
   'srv.hero.peakAt': 'Обычно пик в {time}',
   'srv.hero.peakTip': 'Обычно в этот час до {n} игроков',
   'srv.hero.poll': 'Опросить',
+  'srv.planned.btn': 'Плановые работы',
+  'srv.planned.done': 'Окно обслуживания на 1 час создано',
+  'srv.planned.name': 'Плановые работы',
+  'srv.planned.hint': 'Сервер на час станет «Обслуживание», а не «Офлайн»; оповещения не придут',
   'srv.hero.polled': 'Сервер опрошен',
   'home.b.pulse': 'Сводка с графиком',
   'home.b.news': 'Блок «Что нового»',
@@ -170089,6 +170097,13 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince, 
     try { await api(`/servers/${s.id}/refresh`, 'POST'); toast(t('srv.hero.polled')); } catch (err) { toast(errText(err), 'err'); }
     setPolling(false);
   };
+  const planned = async (e: MouseEvent<HTMLElement>) => {
+    e.stopPropagation();
+    setPolling(true);
+    const now = Date.now();
+    try { await api('/maintenance', 'POST', { serverId: s.id, name: t('srv.planned.name'), startTs: now, endTs: now + 3_600_000, repeat: 'none' }); toast(t('srv.planned.done')); } catch (err) { toast(errText(err), 'err'); }
+    setPolling(false);
+  };
   const copyAddr = async (e: MouseEvent<HTMLElement>) => {
     e.stopPropagation();
     try { await navigator.clipboard.writeText(s.address); toast(t('srv.addr.copied')); } catch { /* the address stays on the tile */ }
@@ -170151,6 +170166,7 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince, 
               <b className="srv-down-v">{downSince ? durText(Date.now() - downSince) : ago(s.updatedAt)}</b>
               <span className="srv-down-s">{downSince ? t('srv.down.since', { when: new Date(downSince).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) }) + ' · ' : ''}{t('srv.down.last', { ago: ago(s.updatedAt) })}</span>
               {isAdmin && <button type="button" className="btn btn-soft btn-sm srv-down-btn" disabled={polling} onClick={(e) => void pollNow(e)}>{polling ? t('d2.sd.polling') : t('srv.hero.poll')}</button>}
+              {isAdmin && <button type="button" className="btn btn-soft btn-sm srv-down-btn" disabled={polling} title={t('srv.planned.hint')} onClick={(e) => void planned(e)}>{t('srv.planned.btn')}</button>}
             </div>
             <div className="srv-off-fig px-1.5" aria-hidden><b>{t('srv.off.fig')}</b><i /></div>
           </>

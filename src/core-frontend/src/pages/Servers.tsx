@@ -742,6 +742,13 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince, 
     try { await api(`/servers/${s.id}/refresh`, 'POST'); toast(t('srv.hero.polled')); } catch (err) { toast(errText(err), 'err'); }
     setPolling(false);
   };
+  const planned = async (e: MouseEvent<HTMLElement>) => {
+    e.stopPropagation();
+    setPolling(true);
+    const now = Date.now();
+    try { await api('/maintenance', 'POST', { serverId: s.id, name: t('srv.planned.name'), startTs: now, endTs: now + 3_600_000, repeat: 'none' }); toast(t('srv.planned.done')); } catch (err) { toast(errText(err), 'err'); }
+    setPolling(false);
+  };
   const copyAddr = async (e: MouseEvent<HTMLElement>) => {
     e.stopPropagation();
     try { await navigator.clipboard.writeText(s.address); toast(t('srv.addr.copied')); } catch { /* the address stays on the tile */ }
@@ -804,6 +811,7 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince, 
               <b className="srv-down-v">{downSince ? durText(Date.now() - downSince) : ago(s.updatedAt)}</b>
               <span className="srv-down-s">{downSince ? t('srv.down.since', { when: new Date(downSince).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) }) + ' · ' : ''}{t('srv.down.last', { ago: ago(s.updatedAt) })}</span>
               {isAdmin && <button type="button" className="btn btn-soft btn-sm srv-down-btn" disabled={polling} onClick={(e) => void pollNow(e)}>{polling ? t('d2.sd.polling') : t('srv.hero.poll')}</button>}
+              {isAdmin && <button type="button" className="btn btn-soft btn-sm srv-down-btn" disabled={polling} title={t('srv.planned.hint')} onClick={(e) => void planned(e)}>{t('srv.planned.btn')}</button>}
             </div>
             <div className="srv-off-fig px-1.5" aria-hidden><b>{t('srv.off.fig')}</b><i /></div>
           </>
