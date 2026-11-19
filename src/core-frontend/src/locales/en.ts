@@ -1617,6 +1617,7 @@ const en: Record<keyof typeof ru, string> = {
   'gn.a.off': 'Off',
   'gn.a.next': 'next: {time}',
   'gn.a.noNext': 'no next run',
+  'gn.a.expired': 'The period is over',
   'gn.a.last': 'last: {time}',
   'gn.a.pause': 'Turn off',
   'gn.a.resume': 'Turn on',

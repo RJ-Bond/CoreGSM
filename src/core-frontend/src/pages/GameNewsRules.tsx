@@ -30,7 +30,7 @@ export default function GameNewsRules({ servers, rules, timezone, reload }: { se
 
   const serverNames = (ids: number[]) => (ids.length ? servers.filter((s) => ids.includes(s.id)).map((s) => s.name).join(', ') || '—' : t('gn.a.allServers'));
   const bodyOf = (r: RuleInfo): RuleBody => {
-    const { id: _id, lastRun: _l, nextRun: _n, createdBy: _c, upcoming: _u, ...body } = r;
+    const { id: _id, lastRun: _l, nextRun: _n, createdBy: _c, upcoming: _u, expired: _e, ...body } = r;
     return body;
   };
   const toggle = async (r: RuleInfo, enabled: boolean) => {
@@ -76,7 +76,7 @@ export default function GameNewsRules({ servers, rules, timezone, reload }: { se
                 <p className="mt-1 wrap-break-word text-sm"><Styled text={r.text} /></p>
                 <p className="mt-1 text-sm font-semibold text-mute">
                   {serverNames(r.serverIds)}
-                  {' · '}{r.enabled ? (r.nextRun ? t('gn.a.next', { time: soon(r.nextRun) }) : t('gn.a.noNext')) : t('gn.a.off')}
+                  {' · '}{r.enabled ? (r.expired ? t('gn.a.expired') : r.nextRun ? t('gn.a.next', { time: soon(r.nextRun) }) : t('gn.a.noNext')) : t('gn.a.off')}
                   {r.lastRun ? ` · ${t('gn.a.last', { time: soon(r.lastRun) })}` : ''}
                 </p>
                 {r.upcoming.length > 1 && (

@@ -1618,6 +1618,7 @@ const ru = {
   'gn.a.off': 'Выключено',
   'gn.a.next': 'следующее: {time}',
   'gn.a.noNext': 'следующего нет',
+  'gn.a.expired': 'Срок действия истёк',
   'gn.a.last': 'последнее: {time}',
   'gn.a.pause': 'Выключить',
   'gn.a.resume': 'Включить',

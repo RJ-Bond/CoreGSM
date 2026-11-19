@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="56d3677bd7a0"
+COREGSM_BUILD="a7a0b6f222c1"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.2.53"
+COREGSM_VERSION="1.2.54"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -27360,6 +27360,8 @@ function check(b: z.infer<typeof bodySchema>, now: number): { error: string } | 
 
 /** one scheduler pass: sends what is due, moves next_run on */
 export function tickRules(now = Date.now()): number {
+  // the period is over: nothing to schedule any more (the rule stays, so extending the period brings it back)
+  db.prepare('UPDATE game_news_rules SET next_run = NULL WHERE enabled = 1 AND next_run IS NOT NULL AND active_to IS NOT NULL AND active_to < ?').run(now);
   const rows = db.prepare('SELECT * FROM game_news_rules WHERE enabled = 1 AND next_run IS NOT NULL AND next_run <= ?').all(now) as RuleRow[];
   let sent = 0;
   const zone = tz();
@@ -27391,11 +27393,13 @@ export function startGameNewsTimer(): void {
 export const stopGameNewsTimer = () => clearInterval(timer);
 
 export function registerGameNewsRules({ app, admin }: { app: Express; admin: RequestHandler }): void {
+  const expired = (r: RuleRow) => r.active_to != null && Date.now() > r.active_to;
   const serialize = (r: RuleRow) => ({
     id: r.id, name: r.name, text: r.text, serverIds: parseArr<number>(r.server_ids, []), kind: r.kind, everyMin: r.every_min,
     times: parseArr<string>(r.times, []), runAt: r.run_at, activeFrom: r.active_from, activeTo: r.active_to, onlyOnline: !!r.only_online,
-    enabled: !!r.enabled, lastRun: r.last_run, nextRun: r.enabled ? r.next_run : null, createdBy: r.created_by,
-    upcoming: r.enabled ? upcomingRuns(schedOf(r), r.next_run, 5, tz()) : [],
+    enabled: !!r.enabled, lastRun: r.last_run, nextRun: r.enabled && !expired(r) ? r.next_run : null, createdBy: r.created_by,
+    expired: !!r.enabled && expired(r),
+    upcoming: r.enabled && !expired(r) ? upcomingRuns(schedOf(r), r.next_run, 5, tz()).filter((ts) => r.active_to == null || ts <= r.active_to) : [],
   });
 
   app.get('/api/game-news/rules', admin, (req, res) => {
@@ -144786,6 +144790,7 @@ export interface RuleInfo {
   createdBy: string;
   /** the next runs (up to 5) of an enabled rule */
   upcoming: number[];
+  expired?: boolean;
 }
 
 export type RuleBody = Omit<RuleInfo, 'id' | 'lastRun' | 'nextRun' | 'createdBy' | 'upcoming'>;
@@ -149196,6 +149201,7 @@ const en: Record<keyof typeof ru, string> = {
   'gn.a.off': 'Off',
   'gn.a.next': 'next: {time}',
   'gn.a.noNext': 'no next run',
+  'gn.a.expired': 'The period is over',
   'gn.a.last': 'last: {time}',
   'gn.a.pause': 'Turn off',
   'gn.a.resume': 'Turn on',
@@ -154419,6 +154425,7 @@ const ru = {
   'gn.a.off': 'Выключено',
   'gn.a.next': 'следующее: {time}',
   'gn.a.noNext': 'следующего нет',
+  'gn.a.expired': 'Срок действия истёк',
   'gn.a.last': 'последнее: {time}',
   'gn.a.pause': 'Выключить',
   'gn.a.resume': 'Включить',
@@ -164663,7 +164670,7 @@ export default function GameNewsRules({ servers, rules, timezone, reload }: { se
 
   const serverNames = (ids: number[]) => (ids.length ? servers.filter((s) => ids.includes(s.id)).map((s) => s.name).join(', ') || '—' : t('gn.a.allServers'));
   const bodyOf = (r: RuleInfo): RuleBody => {
-    const { id: _id, lastRun: _l, nextRun: _n, createdBy: _c, upcoming: _u, ...body } = r;
+    const { id: _id, lastRun: _l, nextRun: _n, createdBy: _c, upcoming: _u, expired: _e, ...body } = r;
     return body;
   };
   const toggle = async (r: RuleInfo, enabled: boolean) => {
@@ -164709,7 +164716,7 @@ export default function GameNewsRules({ servers, rules, timezone, reload }: { se
                 <p className="mt-1 wrap-break-word text-sm"><Styled text={r.text} /></p>
                 <p className="mt-1 text-sm font-semibold text-mute">
                   {serverNames(r.serverIds)}
-                  {' · '}{r.enabled ? (r.nextRun ? t('gn.a.next', { time: soon(r.nextRun) }) : t('gn.a.noNext')) : t('gn.a.off')}
+                  {' · '}{r.enabled ? (r.expired ? t('gn.a.expired') : r.nextRun ? t('gn.a.next', { time: soon(r.nextRun) }) : t('gn.a.noNext')) : t('gn.a.off')}
                   {r.lastRun ? ` · ${t('gn.a.last', { time: soon(r.lastRun) })}` : ''}
                 </p>
                 {r.upcoming.length > 1 && (

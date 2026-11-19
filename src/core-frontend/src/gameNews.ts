@@ -125,6 +125,7 @@ export interface RuleInfo {
   createdBy: string;
   /** the next runs (up to 5) of an enabled rule */
   upcoming: number[];
+  expired?: boolean;
 }
 
 export type RuleBody = Omit<RuleInfo, 'id' | 'lastRun' | 'nextRun' | 'createdBy' | 'upcoming'>;

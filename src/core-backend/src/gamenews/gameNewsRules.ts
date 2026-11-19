@@ -60,6 +60,8 @@ function check(b: z.infer<typeof bodySchema>, now: number): { error: string } | 
 
 /** one scheduler pass: sends what is due, moves next_run on */
 export function tickRules(now = Date.now()): number {
+  // the period is over: nothing to schedule any more (the rule stays, so extending the period brings it back)
+  db.prepare('UPDATE game_news_rules SET next_run = NULL WHERE enabled = 1 AND next_run IS NOT NULL AND active_to IS NOT NULL AND active_to < ?').run(now);
   const rows = db.prepare('SELECT * FROM game_news_rules WHERE enabled = 1 AND next_run IS NOT NULL AND next_run <= ?').all(now) as RuleRow[];
   let sent = 0;
   const zone = tz();
@@ -91,11 +93,13 @@ export function startGameNewsTimer(): void {
 export const stopGameNewsTimer = () => clearInterval(timer);
 
 export function registerGameNewsRules({ app, admin }: { app: Express; admin: RequestHandler }): void {
+  const expired = (r: RuleRow) => r.active_to != null && Date.now() > r.active_to;
   const serialize = (r: RuleRow) => ({
     id: r.id, name: r.name, text: r.text, serverIds: parseArr<number>(r.server_ids, []), kind: r.kind, everyMin: r.every_min,
     times: parseArr<string>(r.times, []), runAt: r.run_at, activeFrom: r.active_from, activeTo: r.active_to, onlyOnline: !!r.only_online,
-    enabled: !!r.enabled, lastRun: r.last_run, nextRun: r.enabled ? r.next_run : null, createdBy: r.created_by,
-    upcoming: r.enabled ? upcomingRuns(schedOf(r), r.next_run, 5, tz()) : [],
+    enabled: !!r.enabled, lastRun: r.last_run, nextRun: r.enabled && !expired(r) ? r.next_run : null, createdBy: r.created_by,
+    expired: !!r.enabled && expired(r),
+    upcoming: r.enabled && !expired(r) ? upcomingRuns(schedOf(r), r.next_run, 5, tz()).filter((ts) => r.active_to == null || ts <= r.active_to) : [],
   });
 
   app.get('/api/game-news/rules', admin, (req, res) => {
