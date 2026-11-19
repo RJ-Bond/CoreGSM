@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="a7a0b6f222c1"
+COREGSM_BUILD="4104a14f0921"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.2.54"
+COREGSM_VERSION="1.2.55"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -25372,15 +25372,17 @@ export function registerGameNewsConnections({ app, admin }: { app: Express; admi
   app.get('/api/game-news/connections', admin, (req, res) => {
     const nick = String(req.query.player ?? '').trim().toLowerCase();
     const server = Number(req.query.server);
-    const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 200));
+    const limit = Math.min(1000, Math.max(1, Number(req.query.limit) || 200));
+    const since = Number(req.query.since);
     const where: string[] = [];
     const args: (string | number)[] = [];
     if (nick) { where.push('ulower(nick) LIKE ?'); args.push(`%${nick}%`); }
     if (Number.isInteger(server) && server > 0) { where.push('server_id = ?'); args.push(server); }
+    if (Number.isFinite(since) && since > 0) { where.push('ts >= ?'); args.push(Math.floor(since)); }
     const rows = db.prepare(`SELECT * FROM game_connections ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY ts DESC, id DESC LIMIT ?`).all(...args, limit) as {
       id: number; server_id: number; ts: number; kind: string; platform_id: string; nick: string; reason: string; removed_by: string; minutes: number;
     }[];
-    res.json({ items: rows.map((r) => ({ id: r.id, serverName: serverLabel(r.server_id), ts: r.ts, kind: r.kind, platformId: r.platform_id, nick: r.nick, reason: r.reason, removedBy: r.removed_by, minutes: r.minutes })) });
+    res.json({ items: rows.map((r) => ({ id: r.id, serverId: r.server_id, serverName: serverLabel(r.server_id), ts: r.ts, kind: r.kind, platformId: r.platform_id, nick: r.nick, reason: r.reason, removedBy: r.removed_by, minutes: r.minutes })) });
   });
 
   // «Обновить плагин»: the plugin downloads the newest release; it takes effect at the next restart of the server
@@ -148941,13 +148943,36 @@ const en: Record<keyof typeof ru, string> = {
   'gn.sh.langHint': 'The language of the command help and errors that the plugin writes itself (the texts from the panel do not change)',
   'gn.sh.langSaved': 'The language of the plugin is saved: it applies within a few seconds',
   'gn.cn.title': 'Joins and departures',
-  'gn.cn.note': 'What the game said at the departure, how long the player was in and whether CoreGSM removed him. «Not touched by CoreGSM» means the plugin had nothing to do with it. Needs plugin 0.18; kept for 30 days.',
+  'gn.cn.note': 'One visit, one line: when the player came, when they left and how long they stayed. The game names the reason of the departure; a note about CoreGSM appears only when it removed the player. Needs plugin 0.18; kept for 30 days.',
+  'gn.cn.inGame': 'In game',
+  'gn.cn.now': 'now',
+  'gn.cn.min': '{n} min',
+  'gn.cn.status': 'State',
+  'gn.cn.server': 'Server',
+  'gn.cn.allServers': 'All servers',
+  'gn.cn.period': 'Period',
+  'gn.cn.dropPlayer': 'Drop the filter by player {name}',
+  'gn.cn.compact': 'Compact',
+  'gn.cn.nothing': 'Nothing matches these filters',
+  'gn.cn.more': 'Show more',
+  'gn.cn.repeat': 'keeps rejoining',
+  'gn.cn.repeatHint': 'Joined {n} times or more within an hour: a bad connection or crashes on entering',
+  'gn.cn.short': 'short visit',
+  'gn.cn.shortHint': 'Stayed less than {n} minutes',
+  'gn.cn.day.today': 'Today',
+  'gn.cn.day.yesterday': 'Yesterday',
+  'gn.cn.st.all': 'All',
+  'gn.cn.st.inGame': 'In game now',
+  'gn.cn.st.self': 'Left on their own',
+  'gn.cn.st.timeout': 'Timeout',
+  'gn.cn.st.kicked': 'Kicked / banned',
+  'gn.cn.p.day': '24 hours',
+  'gn.cn.p.week': '7 days',
+  'gn.cn.p.all': 'Whole journal',
   'gn.cn.empty': 'Nothing yet',
   'gn.cn.emptyHint': 'Entries appear when players come and go (plugin 0.18 or newer).',
   'gn.cn.join': 'Joined',
-  'gn.cn.minutes': '{n} min in the game',
   'gn.cn.removed': 'Removed by CoreGSM: {why}',
-  'gn.cn.notUs': 'Not touched by CoreGSM',
   'gn.cn.r.LeftGame': 'Left',
   'gn.cn.r.Timeout': 'Timeout',
   'gn.cn.r.Kicked': 'Kicked',
@@ -154165,13 +154190,36 @@ const ru = {
   'gn.sh.langHint': 'Язык справки команд и ошибок, которые пишет сам плагин (тексты из панели не меняются)',
   'gn.sh.langSaved': 'Язык плагина сохранён: применится в течение нескольких секунд',
   'gn.cn.title': 'Входы и выходы',
-  'gn.cn.note': 'Что сказала игра при выходе, сколько игрок был на сервере и снимал ли его CoreGSM. «CoreGSM не трогал» — плагин тут ни при чём. Нужен плагин 0.18; хранится 30 дней.',
+  'gn.cn.note': 'Один визит — одна строка: когда зашёл, когда вышел и сколько пробыл. Причину выхода называет игра; пометка про CoreGSM — только если игрока убрал он. Нужен плагин 0.18; хранится 30 дней.',
+  'gn.cn.inGame': 'В игре',
+  'gn.cn.now': 'сейчас',
+  'gn.cn.min': '{n} мин',
+  'gn.cn.status': 'Состояние',
+  'gn.cn.server': 'Сервер',
+  'gn.cn.allServers': 'Все серверы',
+  'gn.cn.period': 'Период',
+  'gn.cn.dropPlayer': 'Убрать фильтр по игроку {name}',
+  'gn.cn.compact': 'Компактно',
+  'gn.cn.nothing': 'По этим фильтрам ничего нет',
+  'gn.cn.more': 'Показать ещё',
+  'gn.cn.repeat': 'перезаходит',
+  'gn.cn.repeatHint': 'Заходил {n} раза и больше за час: плохая связь или вылеты при входе',
+  'gn.cn.short': 'короткий визит',
+  'gn.cn.shortHint': 'Пробыл меньше {n} минут',
+  'gn.cn.day.today': 'Сегодня',
+  'gn.cn.day.yesterday': 'Вчера',
+  'gn.cn.st.all': 'Все',
+  'gn.cn.st.inGame': 'Сейчас в игре',
+  'gn.cn.st.self': 'Вышли сами',
+  'gn.cn.st.timeout': 'Таймаут',
+  'gn.cn.st.kicked': 'Кик и бан',
+  'gn.cn.p.day': '24 часа',
+  'gn.cn.p.week': '7 дней',
+  'gn.cn.p.all': 'Весь журнал',
   'gn.cn.empty': 'Пока пусто',
   'gn.cn.emptyHint': 'Записи появятся, когда игроки начнут заходить и выходить (плагин 0.18 и новее).',
   'gn.cn.join': 'Вошёл',
-  'gn.cn.minutes': 'в игре {n} мин',
   'gn.cn.removed': 'Снял CoreGSM: {why}',
-  'gn.cn.notUs': 'CoreGSM не трогал',
   'gn.cn.r.LeftGame': 'Вышел сам',
   'gn.cn.r.Timeout': 'Таймаут',
   'gn.cn.r.Kicked': 'Кикнут',
@@ -164160,14 +164208,18 @@ export function ExtrasCard({ initial }: { initial: Extras }) {
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/GameNewsConnections.tsx" << '__COREGSM_EOF__'
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api';
 import { soon } from '../components/GameNewsParts';
 import { t, useI18n } from '../i18n';
 import { usePoll } from '../ui';
-import { EmptyState } from './GameNewsUi';
+import { EmptyState, SubTabs } from './GameNewsUi';
+import {
+  PERIODS, REPEAT_JOINS, SHORT_VISIT_MIN, STATUSES, buildRows, dayWord, groupByDay, isKicked, isTimeout, matchesStatus, periodSince, repeaters, visitMinutes,
+  type ConnectionItem, type Period, type Row, type Status,
+} from './connectionsLogic';
 
-export interface ConnectionItem { id: number; serverName: string; ts: number; kind: 'join' | 'leave'; platformId: string; nick: string; reason: string; removedBy: string; minutes: number }
+export type { ConnectionItem } from './connectionsLogic';
 
 /** the reasons of the game in plain words; an unknown one is shown as the game wrote it */
 const REASONS = ['LeftGame', 'Timeout', 'Kicked', 'Banned', 'ServerShutdown', 'ServerError', 'AuthSessionCancelled', 'AuthenticationError', 'ClientError', 'IncorrectVersion', 'IncorrectPassword', 'ServerFull'] as const;
@@ -164175,19 +164227,59 @@ const reasonText = (r: string): string => {
   const key = REASONS.find((x) => r.startsWith(x));
   return key ? t(`gn.cn.r.${key}` as 'gn.cn.r.LeftGame') : r || '—';
 };
-const reasonCls = (c: ConnectionItem): string => (c.removedBy ? 'pill pill-warn' : /^Timeout/.test(c.reason) ? 'pill pill-warn' : c.kind === 'join' ? 'pill pill-ok' : 'pill pill-mute');
+const clock = (ts: number) => new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+const fullTime = (ts: number) => `${new Date(ts).toLocaleString([], { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit', second: '2-digit' })} · ${soon(ts)}`;
+const dayTitle = (day: string): string => {
+  const w = dayWord(day);
+  if (w) return t(`gn.cn.day.${w}` as 'gn.cn.day.today');
+  return new Date(`${day}T12:00:00`).toLocaleDateString([], { weekday: 'long', day: 'numeric', month: 'long' });
+};
+const pillOf = (r: Row): { cls: string; text: string } => {
+  if (r.inGame) return { cls: 'pill pill-ok', text: t('gn.cn.inGame') };
+  if (!r.leave) return { cls: 'pill pill-ok', text: t('gn.cn.join') };
+  const warn = !!r.leave.removedBy || isTimeout(r) || isKicked(r);
+  return { cls: warn ? 'pill pill-warn' : 'pill pill-mute', text: reasonText(r.leave.reason) };
+};
+
+const PAGE = 200;
+const compactKey = 'coregsm_cn_compact';
+const readCompact = (): boolean => { try { return localStorage.getItem(compactKey) === '1'; } catch { return false; } };
 
 /**
- * Who came and who went, and why (plugin 0.18+): what the game said, how long the player was in and whether CoreGSM removed him.
- * «CoreGSM не трогал» means the plugin had nothing to do with the departure. Follows the nickname typed in the search of the log.
+ * Who came and who went, and why (plugin 0.18+): one line per visit («came → left · how long»), grouped by day, with the reason of the
+ * game and a note only when CoreGSM itself removed the player. Follows the nickname typed in the search of the log.
  */
 export function ConnectionsSection({ player, onPick }: { player: string; onPick: (nick: string) => void }) {
   useI18n();
   const [items, setItems] = useState<ConnectionItem[] | null>(null);
-  const url = `/game-news/connections?player=${encodeURIComponent(player.trim())}&limit=150`;
+  const [status, setStatus] = useState<Status>('all');
+  const [period, setPeriod] = useState<Period>('week');
+  const [server, setServer] = useState(0);
+  // how many entries are asked for; a new search, server or period starts from the first page again
+  const filterKey = `${player.trim()}|${server}|${period}`;
+  const [more, setMore] = useState({ key: filterKey, n: PAGE });
+  const limit = more.key === filterKey ? more.n : PAGE;
+  const [compact, setCompact] = useState(readCompact);
+  const url = `/game-news/connections?player=${encodeURIComponent(player.trim())}&limit=${limit}${server ? `&server=${server}` : ''}${period === 'all' ? '' : `&since=${periodSince(period)}`}`;
   const load = () => api<{ items: ConnectionItem[] }>(url).then((r) => setItems(r.items)).catch(() => undefined);
   usePoll(load, 15_000);
   useEffect(() => { void api<{ items: ConnectionItem[] }>(url).then((r) => setItems(r.items)).catch(() => undefined); }, [url]);
+
+  const rows = useMemo(() => (items ? buildRows(items) : []), [items]);
+  const again = useMemo(() => repeaters(items ?? []), [items]);
+  const servers = useMemo(() => {
+    const m = new Map<number, string>();
+    for (const c of items ?? []) if (c.serverId) m.set(c.serverId, c.serverName);
+    return [...m];
+  }, [items]);
+  const shown = rows.filter((r) => matchesStatus(r, status));
+  const groups = groupByDay(shown);
+  const many = servers.length > 1 || server > 0;
+  const toggleCompact = () => {
+    const v = !compact;
+    setCompact(v);
+    try { localStorage.setItem(compactKey, v ? '1' : '0'); } catch { /* the choice just is not remembered */ }
+  };
 
   return (
     <section className="panel space-y-3 p-5">
@@ -164195,27 +164287,65 @@ export function ConnectionsSection({ player, onPick }: { player: string; onPick:
         <h3 className="font-extrabold">{t('gn.cn.title')}</h3>
         <p className="text-sm font-semibold text-mute">{t('gn.cn.note')}</p>
       </div>
+
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+        <SubTabs label={t('gn.cn.status')} value={status} onChange={setStatus} items={STATUSES.map((s) => ({ id: s, label: t(`gn.cn.st.${s}` as 'gn.cn.st.all') }))} />
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          {player.trim() && (
+            <button type="button" className="chip-filter on" onClick={() => onPick('')} aria-label={t('gn.cn.dropPlayer', { name: player.trim() })}>{player.trim()} ✕</button>
+          )}
+          {servers.length > 1 && (
+            <select className="input w-44 py-1 text-sm" value={server} aria-label={t('gn.cn.server')} onChange={(e) => setServer(Number(e.target.value))}>
+              <option value={0}>{t('gn.cn.allServers')}</option>
+              {servers.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+            </select>
+          )}
+          <select className="input w-36 py-1 text-sm" value={period} aria-label={t('gn.cn.period')} onChange={(e) => setPeriod(e.target.value as Period)}>
+            {PERIODS.map((p) => <option key={p} value={p}>{t(`gn.cn.p.${p}` as 'gn.cn.p.day')}</option>)}
+          </select>
+          <button type="button" className={`chip-filter ${compact ? 'on' : ''}`} aria-pressed={compact} onClick={toggleCompact}>{t('gn.cn.compact')}</button>
+        </div>
+      </div>
+
       {items == null && <div className="skeleton h-24 rounded-xl" aria-busy="true" />}
       {items && items.length === 0 && <EmptyState icon="🚪" title={t('gn.cn.empty')} hint={t('gn.cn.emptyHint')} />}
-      {items && items.length > 0 && (
-        <ul className="divide-y divide-line">
-          {items.map((c) => (
-            <li key={c.id} className="flex flex-wrap items-start gap-x-3 gap-y-1 py-2.5">
-              <span className={reasonCls(c)}>{c.kind === 'join' ? t('gn.cn.join') : reasonText(c.reason)}</span>
-              <div className="min-w-0 flex-1 basis-56 text-sm">
-                <div className="flex flex-wrap items-center gap-2">
-                  <button type="button" className="font-bold underline decoration-dotted underline-offset-2 hover:text-link" onClick={() => onPick(c.nick)}>{c.nick || '—'}</button>
-                  <span className="font-semibold text-mute">{c.serverName && `${c.serverName} · `}{soon(c.ts)}{c.kind === 'leave' && c.minutes >= 0 ? ` · ${t('gn.cn.minutes', { n: c.minutes })}` : ''}</span>
-                </div>
-                {c.kind === 'leave' && (
-                  <p className={c.removedBy ? 'font-semibold text-warn' : 'font-semibold text-mute'}>{c.removedBy ? t('gn.cn.removed', { why: c.removedBy }) : t('gn.cn.notUs')}</p>
-                )}
-              </div>
-            </li>
-          ))}
-        </ul>
+      {items && items.length > 0 && shown.length === 0 && <p className="py-4 text-center text-sm font-semibold text-mute">{t('gn.cn.nothing')}</p>}
+      {groups.map((g) => (
+        <div key={g.day}>
+          <h4 className="sticky top-0 z-[1] bg-card/95 py-1 text-sm font-extrabold capitalize text-mute backdrop-blur">{dayTitle(g.day)} <span className="font-semibold">· {g.rows.length}</span></h4>
+          <ul className="divide-y divide-line">
+            {g.rows.map((r) => <ConnectionRow key={r.key} r={r} compact={compact} many={many} repeat={again.has(r.who)} onPick={onPick} />)}
+          </ul>
+        </div>
+      ))}
+      {items && items.length >= limit && limit < 1000 && (
+        <div className="text-center"><button type="button" className="btn btn-soft btn-sm" onClick={() => setMore({ key: filterKey, n: limit + PAGE })}>{t('gn.cn.more')}</button></div>
       )}
     </section>
+  );
+}
+
+function ConnectionRow({ r, compact, many, repeat, onPick }: { r: Row; compact: boolean; many: boolean; repeat: boolean; onPick: (nick: string) => void }) {
+  const pill = pillOf(r);
+  const mins = visitMinutes(r);
+  const short = !!r.leave && mins != null && mins < SHORT_VISIT_MIN;
+  const span = r.join && r.leave
+    ? `${clock(r.join.ts)} → ${clock(r.leave.ts)}`
+    : r.join ? `${clock(r.join.ts)} → ${r.inGame ? t('gn.cn.now') : '…'}` : `→ ${clock(r.at)}`;
+  return (
+    <li className={`flex flex-wrap items-start gap-x-3 gap-y-1 ${compact ? 'py-1' : 'py-2.5'}`} title={fullTime(r.at)}>
+      <span className={`${pill.cls} shrink-0`}>{pill.text}</span>
+      <div className="min-w-0 flex-1 basis-56 text-sm">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+          <button type="button" className="font-bold underline decoration-dotted underline-offset-2 hover:text-link" onClick={() => onPick(r.nick)}>{r.nick || '—'}</button>
+          <span className="font-semibold tabular-nums text-mute">{span}{mins != null ? ` · ${t('gn.cn.min', { n: mins })}` : ''}</span>
+          {many && r.serverName && <span className="min-w-0 truncate text-xs font-semibold text-mute">{r.serverName}</span>}
+          {repeat && <span className="pill pill-warn" title={t('gn.cn.repeatHint', { n: REPEAT_JOINS })}>{t('gn.cn.repeat')}</span>}
+          {short && !repeat && <span className="pill pill-mute" title={t('gn.cn.shortHint', { n: SHORT_VISIT_MIN })}>{t('gn.cn.short')}</span>}
+        </div>
+        {r.leave?.removedBy && <p className="font-semibold text-warn">{t('gn.cn.removed', { why: r.leave.removedBy })}</p>}
+      </div>
+    </li>
   );
 }
 __COREGSM_EOF__
@@ -172143,6 +172273,149 @@ describe('the page of bans', () => {
     expect(filterBans(list, 0, 'GAM').map((b) => b.nick)).toEqual(['Gamma']);
   });
 });
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/pages"
+  cat > "$APP_DIR/core-frontend/src/pages/connectionsLogic.ts" << '__COREGSM_EOF__'
+/** The journal of joins and departures: pairs «came → left» into one line, filters, day groups, players who keep reconnecting. */
+
+export interface ConnectionItem { id: number; serverId?: number; serverName: string; ts: number; kind: 'join' | 'leave'; platformId: string; nick: string; reason: string; removedBy: string; minutes: number }
+
+/** one line of the journal: a finished visit (join + leave), a visit that goes on (join only) or a departure whose arrival is not known */
+export interface Row {
+  key: string;
+  /** the player: platform id, or the nickname when the game gave no id */
+  who: string;
+  nick: string;
+  serverId?: number;
+  serverName: string;
+  join: ConnectionItem | null;
+  leave: ConnectionItem | null;
+  /** the moment the line is sorted and grouped by: the departure, else the arrival */
+  at: number;
+  /** the visit is going on: no departure after the arrival */
+  inGame: boolean;
+}
+
+export type Status = 'all' | 'inGame' | 'self' | 'timeout' | 'kicked';
+export const STATUSES: Status[] = ['all', 'inGame', 'self', 'timeout', 'kicked'];
+export type Period = 'day' | 'week' | 'all';
+export const PERIODS: Period[] = ['day', 'week', 'all'];
+export const SHORT_VISIT_MIN = 3;
+export const REPEAT_JOINS = 3;
+export const REPEAT_WINDOW_MS = 60 * 60_000;
+
+const whoOf = (c: ConnectionItem): string => (c.platformId || c.nick || '?').toLowerCase();
+const MIN = 60_000;
+
+/**
+ * Items come newest first. A departure carries «minutes in the game», so its arrival is `ts − minutes` (a minute or two off):
+ * the nearest earlier arrival of the same player on the same server that is not taken yet becomes its pair.
+ */
+export function buildRows(items: ConnectionItem[]): Row[] {
+  const used = new Set<number>();
+  const joinsOf = new Map<string, ConnectionItem[]>();
+  for (const c of items) {
+    if (c.kind !== 'join') continue;
+    const k = `${c.serverId ?? c.serverName}|${whoOf(c)}`;
+    const list = joinsOf.get(k) ?? [];
+    list.push(c); // newest first
+    joinsOf.set(k, list);
+  }
+  const rows: Row[] = [];
+  for (const c of items) {
+    if (c.kind !== 'leave') continue;
+    const k = `${c.serverId ?? c.serverName}|${whoOf(c)}`;
+    const list = joinsOf.get(k) ?? [];
+    let pair: ConnectionItem | null = null;
+    if (c.minutes >= 0) {
+      const want = c.ts - c.minutes * MIN;
+      let best = Infinity;
+      for (const j of list) {
+        if (used.has(j.id) || j.ts > c.ts) continue;
+        const off = Math.abs(j.ts - want);
+        if (off <= 2 * MIN + 30_000 && off < best) { pair = j; best = off; }
+      }
+    } else {
+      // no length given: the latest arrival before the departure that nobody else took
+      pair = list.find((j) => !used.has(j.id) && j.ts <= c.ts) ?? null;
+    }
+    if (pair) used.add(pair.id);
+    rows.push({ key: `l${c.id}`, who: whoOf(c), nick: c.nick, serverId: c.serverId, serverName: c.serverName, join: pair, leave: c, at: c.ts, inGame: false });
+  }
+  const leaves = items.filter((c) => c.kind === 'leave');
+  for (const c of items) {
+    if (c.kind !== 'join' || used.has(c.id)) continue;
+    const k = `${c.serverId ?? c.serverName}|${whoOf(c)}`;
+    // still in the game: no departure of this player on this server after the arrival
+    const gone = leaves.some((l) => `${l.serverId ?? l.serverName}|${whoOf(l)}` === k && l.ts >= c.ts);
+    rows.push({ key: `j${c.id}`, who: whoOf(c), nick: c.nick, serverId: c.serverId, serverName: c.serverName, join: c, leave: null, at: c.ts, inGame: !gone });
+  }
+  return rows.sort((a, b) => b.at - a.at || b.key.localeCompare(a.key));
+}
+
+export const isTimeout = (r: Row): boolean => !!r.leave && /^Timeout/.test(r.leave.reason);
+export const isKicked = (r: Row): boolean => !!r.leave && (/^(Kicked|Banned)/.test(r.leave.reason) || !!r.leave.removedBy);
+export const isSelf = (r: Row): boolean => !!r.leave && /^LeftGame/.test(r.leave.reason) && !r.leave.removedBy;
+
+export function matchesStatus(r: Row, s: Status): boolean {
+  if (s === 'all') return true;
+  if (s === 'inGame') return r.inGame;
+  if (s === 'self') return isSelf(r);
+  if (s === 'timeout') return isTimeout(r);
+  return isKicked(r);
+}
+
+export const periodSince = (p: Period, now = Date.now()): number => (p === 'day' ? now - 24 * 60 * MIN : p === 'week' ? now - 7 * 24 * 60 * MIN : 0);
+
+/** the length of the visit in minutes: from the departure, else (a visit that goes on) from the arrival */
+export function visitMinutes(r: Row, now = Date.now()): number | null {
+  if (r.leave && r.leave.minutes >= 0) return r.leave.minutes;
+  if (r.join && r.leave) return Math.max(0, Math.round((r.leave.ts - r.join.ts) / MIN));
+  if (r.join && r.inGame) return Math.max(0, Math.round((now - r.join.ts) / MIN));
+  return null;
+}
+
+/** players who came REPEAT_JOINS times within an hour (a bad connection, a crash on entering): the keys */
+export function repeaters(items: ConnectionItem[]): Set<string> {
+  const byWho = new Map<string, number[]>();
+  for (const c of items) {
+    if (c.kind !== 'join') continue;
+    const k = whoOf(c);
+    byWho.set(k, [...(byWho.get(k) ?? []), c.ts]);
+  }
+  const out = new Set<string>();
+  for (const [k, list] of byWho) {
+    const ts = [...list].sort((a, b) => a - b);
+    for (let i = 0; i + REPEAT_JOINS - 1 < ts.length; i++) {
+      if (ts[i + REPEAT_JOINS - 1]! - ts[i]! <= REPEAT_WINDOW_MS) { out.add(k); break; }
+    }
+  }
+  return out;
+}
+
+export interface DayGroup { day: string; rows: Row[] }
+/** local calendar day of a moment: YYYY-MM-DD */
+export const dayKey = (ts: number): string => {
+  const d = new Date(ts);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+/** rows already sorted newest first, cut into days */
+export function groupByDay(rows: Row[]): DayGroup[] {
+  const out: DayGroup[] = [];
+  for (const r of rows) {
+    const day = dayKey(r.at);
+    const last = out[out.length - 1];
+    if (last && last.day === day) last.rows.push(r);
+    else out.push({ day, rows: [r] });
+  }
+  return out;
+}
+/** 'today' / 'yesterday' / null (the caller prints the date itself) */
+export function dayWord(day: string, now = Date.now()): 'today' | 'yesterday' | null {
+  if (day === dayKey(now)) return 'today';
+  if (day === dayKey(now - 24 * 60 * MIN)) return 'yesterday';
+  return null;
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/integrationsLogic.test.ts" << '__COREGSM_EOF__'

@@ -122,15 +122,17 @@ export function registerGameNewsConnections({ app, admin }: { app: Express; admi
   app.get('/api/game-news/connections', admin, (req, res) => {
     const nick = String(req.query.player ?? '').trim().toLowerCase();
     const server = Number(req.query.server);
-    const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 200));
+    const limit = Math.min(1000, Math.max(1, Number(req.query.limit) || 200));
+    const since = Number(req.query.since);
     const where: string[] = [];
     const args: (string | number)[] = [];
     if (nick) { where.push('ulower(nick) LIKE ?'); args.push(`%${nick}%`); }
     if (Number.isInteger(server) && server > 0) { where.push('server_id = ?'); args.push(server); }
+    if (Number.isFinite(since) && since > 0) { where.push('ts >= ?'); args.push(Math.floor(since)); }
     const rows = db.prepare(`SELECT * FROM game_connections ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY ts DESC, id DESC LIMIT ?`).all(...args, limit) as {
       id: number; server_id: number; ts: number; kind: string; platform_id: string; nick: string; reason: string; removed_by: string; minutes: number;
     }[];
-    res.json({ items: rows.map((r) => ({ id: r.id, serverName: serverLabel(r.server_id), ts: r.ts, kind: r.kind, platformId: r.platform_id, nick: r.nick, reason: r.reason, removedBy: r.removed_by, minutes: r.minutes })) });
+    res.json({ items: rows.map((r) => ({ id: r.id, serverId: r.server_id, serverName: serverLabel(r.server_id), ts: r.ts, kind: r.kind, platformId: r.platform_id, nick: r.nick, reason: r.reason, removedBy: r.removed_by, minutes: r.minutes })) });
   });
 
   // «Обновить плагин»: the plugin downloads the newest release; it takes effect at the next restart of the server
