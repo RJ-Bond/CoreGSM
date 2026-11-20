@@ -3,6 +3,7 @@ import { api } from '../api';
 import { t } from '../i18n';
 import { Button, Section, fail, toast } from '../ui';
 import { ChannelName, ChannelPicker } from './ChannelPicker';
+import { IconClock, IconTrophy, IconUsers } from '../icons';
 
 interface Item { id: number; prize: string; winners: number; endsAt: number; channelId: string; roleId: string; minHours: number; ended: boolean; winnerIds: string[]; entries: number }
 const BLANK = { prize: '', winners: '1', hours: '24', minHours: '0', roleId: '', channelId: '' };
@@ -46,7 +47,7 @@ export default function GiveawaysCard() {
         {items.map((g) => (
           <li key={g.id} className="rounded-xl border border-line p-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <b>🎉 #{g.id} · {g.prize}</b>
+              <b className="inline-flex items-center gap-1.5"><IconTrophy size={16} />#{g.id} · {g.prize}</b>
               <span className="flex gap-2">
                 {!g.ended && <button type="button" className="btn btn-soft btn-sm" disabled={busy} onClick={() => void run(() => api<{ items: Item[] }>(`/giveaways/${g.id}/end`, 'POST'), t('gw.drawn'))}>{t('gw.end')}</button>}
                 {g.ended && <button type="button" className="btn btn-soft btn-sm" disabled={busy} onClick={() => void run(() => api<{ items: Item[] }>(`/giveaways/${g.id}/reroll`, 'POST'), t('gw.drawn'))}>{t('gw.reroll')}</button>}
@@ -54,10 +55,10 @@ export default function GiveawaysCard() {
               </span>
             </div>
             <p className="mt-1 text-sm font-semibold text-mute">
-              {g.ended ? t('gw.endedAt') : t('gw.endsAt', { d: new Date(g.endsAt).toLocaleString() })} · 👥 {g.entries} · 🏆 {g.winners}
-              {g.minHours > 0 ? ` · ⏱️ ${g.minHours} ${t('gw.hoursShort')}` : ''} · <ChannelName id={g.channelId} />
+              {g.ended ? t('gw.endedAt') : t('gw.endsAt', { d: new Date(g.endsAt).toLocaleString() })} · <span className="inline-flex items-center gap-1"><IconUsers size={14} />{g.entries}</span> · <span className="inline-flex items-center gap-1"><IconTrophy size={14} />{g.winners}</span>
+              {g.minHours > 0 && <> · <span className="inline-flex items-center gap-1"><IconClock size={14} />{g.minHours} {t('gw.hoursShort')}</span></>} · <ChannelName id={g.channelId} />
             </p>
-            {g.ended && <p className="mt-1 text-sm font-semibold">{g.winnerIds.length ? `🏆 ${g.winnerIds.join(', ')}` : t('gw.noWinners')}</p>}
+            {g.ended && <p className="mt-1 text-sm font-semibold">{g.winnerIds.length ? <span className="inline-flex items-center gap-1.5"><IconTrophy size={15} />{g.winnerIds.join(', ')}</span> : t('gw.noWinners')}</p>}
           </li>
         ))}
       </ul>

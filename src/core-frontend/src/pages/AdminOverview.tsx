@@ -5,7 +5,7 @@ import { api, type BackupInfo, type BotStatus, type CertInfo, type Server, type 
 import type { OverviewData } from '../components/servers/overviewLogic';
 import { t, useI18n, type TKey } from '../i18n';
 import { AdminPage, Button, PageHead, Section, SmoothArea, ago, fmtDateTime, toast, usePoll, fail } from '../ui';
-import { Icon } from '../icons';
+import { Icon, IconCheck } from '../icons';
 import { downloadFile } from './Backups';
 
 interface AuditRow { id: number; ts: number; actor: string; action: string; detail: string }
@@ -292,7 +292,7 @@ export default function AdminOverview() {
           <Section title={t('adm.ov.attn')}>
             {attention.length === 0 ? (
               <div className="st-calm">
-                <span aria-hidden>✓</span>
+                <IconCheck size={14} />
                 <div>
                   <p className="font-extrabold">{t('adm.ov.allGood')}</p>
                   <p className="text-sm font-semibold text-mute">{t('adm.ov.allGoodText')}</p>

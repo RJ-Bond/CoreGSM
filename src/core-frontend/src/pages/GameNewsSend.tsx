@@ -4,6 +4,8 @@ import { t, useI18n } from '../i18n';
 import { versionLess, type NewsSendResult, type NewsServerInfo } from '../gameNews';
 import { Spinner } from '../ui';
 import { EmptyState } from './GameNewsUi';
+import { IconPlug, IconBolt, IconCheck, IconClose } from '../icons';
+import { IconRestart } from '../components/GameNewsIcons';
 
 export interface SendProps {
   withToken: NewsServerInfo[];
@@ -38,8 +40,8 @@ export function SendTab(p: SendProps) {
       <section className="panel space-y-4 p-5">
         <div className="flex flex-wrap items-center gap-2" role="group" aria-label={t('gn.q.title')}>
           <span className="text-sm font-bold text-mute">{t('gn.q.title')}</span>
-          <button type="button" className="chip-filter gap-1.5" disabled={p.picked.length === 0 || p.busy} onClick={p.onTest} title={t('gn.q.testNote')}><span aria-hidden>⚡</span>{t('gn.q.test')}</button>
-          <button type="button" className="chip-filter gap-1.5" disabled={p.picked.length === 0 || p.busy} onClick={p.onRestart} title={t('gn.q.restartNote')}><span aria-hidden>♻</span>{t('gn.q.restart')}</button>
+          <button type="button" className="chip-filter gap-1.5" disabled={p.picked.length === 0 || p.busy} onClick={p.onTest} title={t('gn.q.testNote')}><IconBolt size={16} />{t('gn.q.test')}</button>
+          <button type="button" className="chip-filter gap-1.5" disabled={p.picked.length === 0 || p.busy} onClick={p.onRestart} title={t('gn.q.restartNote')}><IconRestart size={16} />{t('gn.q.restart')}</button>
         </div>
         <NewsEditor value={p.text} onChange={p.setText} onCtrlEnter={() => p.onSend()} />
       </section>
@@ -57,7 +59,7 @@ export function SendTab(p: SendProps) {
 
           {p.supportedCount === 0 && <p className="text-sm font-semibold text-mute">{t('gn.noServers')}</p>}
           {p.supportedCount > 0 && p.withToken.length === 0 && (
-            <EmptyState icon="🔌" title={t('gn.noPlugin')} hint={t('gn.q.connectHint')} />
+            <EmptyState icon={<IconPlug size={22} />} title={t('gn.noPlugin')} hint={t('gn.q.connectHint')} />
           )}
 
           <div className="flex flex-wrap gap-2" role="group" aria-label={t('gn.servers')}>
@@ -75,7 +77,7 @@ export function SendTab(p: SendProps) {
                     <span aria-hidden className={`inline-block h-2 w-2 shrink-0 rounded-full ${!s.online ? 'bg-mute' : old ? 'bg-warn' : 'bg-ok'}`} />
                     <span className="min-w-0 wrap-break-word text-left">{s.name}</span>
                     {s.players != null && <span className="shrink-0 rounded-full bg-soft px-1.5 text-xs font-extrabold">{s.players}</span>}
-                    {on && <span aria-hidden className="shrink-0">✓</span>}
+                    {on && <IconCheck size={14} className="shrink-0" />}
                   </button>
                   <button type="button" className="border-l border-line px-2 text-mute hover:text-ink" aria-label={t('gn.plugin.settings', { name: s.name })} title={t('gn.sv.setup')} onClick={() => p.onSetup(s.id)}>⚙</button>
                 </span>
@@ -112,7 +114,7 @@ export function SendTab(p: SendProps) {
             <ul className="space-y-1 text-sm font-semibold">
               {p.lastResult.results.map((r) => (
                 <li key={r.serverId} className={r.queued ? (r.online ? 'text-ok' : undefined) : 'text-danger'}>
-                  {r.queued ? '✓' : '✕'} {r.serverName}: {r.queued ? (r.online ? t('gn.r.queued') : t('gn.r.queuedSilent')) : r.error}
+                  <span className="inline-flex items-center gap-1.5">{r.queued ? <IconCheck size={14} /> : <IconClose size={14} />}{r.serverName}:</span> {r.queued ? (r.online ? t('gn.r.queued') : t('gn.r.queuedSilent')) : r.error}
                 </li>
               ))}
             </ul>

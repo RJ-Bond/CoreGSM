@@ -8,6 +8,8 @@ import { errText, toast, usePoll } from '../ui';
 import { EmptyState, SubTabs } from './GameNewsUi';
 import { ConnectionsSection } from './GameNewsConnections';
 import { MetricsSection } from './GameNewsMetrics';
+import { IconBan } from '../icons';
+import { IconList } from '../components/GameNewsIcons';
 
 const FILTERS = ['all', 'kick', 'ban', 'warn', 'unban'] as const;
 type Filter = (typeof FILTERS)[number];
@@ -51,7 +53,7 @@ export function ModerationTab() {
           <p className="text-sm font-semibold text-mute">{t('gn.md.bansNote')}</p>
         </div>
         {data == null && <div className="skeleton h-16 rounded-xl" aria-busy="true" />}
-        {data && data.bans.length === 0 && <EmptyState icon="⛔" title={t('gn.md.bansEmpty')} hint={t('gn.md.bansEmptyHint')} />}
+        {data && data.bans.length === 0 && <EmptyState icon={<IconBan size={22} />} title={t('gn.md.bansEmpty')} hint={t('gn.md.bansEmptyHint')} />}
         {data && data.bans.length > 0 && (
           <ul className="divide-y divide-line">
             {data.bans.map((b) => (
@@ -98,7 +100,7 @@ export function ModerationTab() {
         </div>
         <SubTabs label={t('gn.md.log')} value={filter} onChange={setFilter} items={FILTERS.map((f) => ({ id: f, label: t(`gn.md.f.${f}` as 'gn.md.f.all') }))} />
         {data == null && <div className="skeleton h-24 rounded-xl" aria-busy="true" />}
-        {data && data.log.length === 0 && <EmptyState icon="🗒" title={t('gn.md.logEmpty')} hint={t('gn.md.logEmptyHint')} />}
+        {data && data.log.length === 0 && <EmptyState icon={<IconList size={22} />} title={t('gn.md.logEmpty')} hint={t('gn.md.logEmptyHint')} />}
         {data && data.log.length > 0 && (
           <ul className="divide-y divide-line">
             {data.log.map((e) => (

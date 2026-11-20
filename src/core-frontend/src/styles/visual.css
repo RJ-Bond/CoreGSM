@@ -35,3 +35,9 @@
 .jn-row.is-problem { box-shadow: inset 3px 0 0 rgb(var(--bad) / .7); padding-left: 8px; }
 .jn-row > button:focus-visible { outline: 2px solid rgb(var(--brand)); outline-offset: 2px; border-radius: var(--r-md); }
 .jn-advice { margin: 0; padding: .55rem .75rem; border-radius: var(--r-md); background: rgb(var(--warnbg)); color: rgb(var(--warn)); font-weight: 650; }
+
+/* icons of the admin pages that replaced emoji: they sit in a line with the words */
+.upd-chip, .upd-rel-c, .upd-note-row { display: inline-flex; align-items: center; gap: 6px; }
+.upd-note-row { display: flex; align-items: flex-start; }
+.upd-note-row > span:first-child { margin-top: 2px; flex: none; }
+.upd-step-dot svg { display: block; }

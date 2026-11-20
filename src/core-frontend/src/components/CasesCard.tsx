@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, ComponentType } from 'react';
 import { api } from '../api';
 import { t, useI18n, type TKey } from '../i18n';
 import { Button, Section, fail, toast } from '../ui';
+import { IconBan, IconLogout, IconMail, IconUnlock, IconVolume, IconVolumeOff, IconWarn, type IconProps } from '../icons';
 
 type Kind = 'warn' | 'ban' | 'unban' | 'kick' | 'timeout' | 'unmute' | 'appeal';
 interface Case { id: number; userId: string; userName: string; modName: string; kind: Kind; reason: string; link: string; createdAt: number; expiresAt: number | null; revokedAt: number | null }
@@ -9,7 +10,12 @@ interface Resp { items: Case[]; total: number; page: number; pageSize: number; c
 
 const KINDS: Kind[] = ['warn', 'ban', 'unban', 'kick', 'timeout', 'unmute', 'appeal'];
 const KIND_LABEL: Record<Kind, TKey> = { warn: 'mc.k.warn', ban: 'mc.k.ban', unban: 'mc.k.unban', kick: 'mc.k.kick', timeout: 'mc.k.timeout', unmute: 'mc.k.unmute', appeal: 'mc.k.appeal' };
-const KIND_EMOJI: Record<Kind, string> = { warn: '⚠️', ban: '🔨', unban: '🔓', kick: '👢', timeout: '🔇', unmute: '🔊', appeal: '📨' };
+const KIND_ICON: Record<Kind, ComponentType<IconProps>> = { warn: IconWarn, ban: IconBan, unban: IconUnlock, kick: IconLogout, timeout: IconVolumeOff, unmute: IconVolume, appeal: IconMail };
+/** the icon of a kind of a case, drawn (not a component made in the middle of a render) */
+function KindIcon({ kind }: { kind: Kind }) {
+  const I = KIND_ICON[kind];
+  return <I size={14} />;
+}
 const KIND_PILL: Record<Kind, string> = { warn: 'pill pill-warn', ban: 'pill pill-bad', unban: 'pill pill-ok', kick: 'pill pill-warn', timeout: 'pill pill-mute', unmute: 'pill pill-ok', appeal: 'pill pill-mute' };
 
 /**
@@ -65,7 +71,7 @@ export default function CasesCard() {
         <button type="button" className={`chip-filter ${kind === '' ? 'on' : ''}`} aria-pressed={kind === ''} onClick={() => { setKind(''); setPage(0); }}>{t('mc.all')}</button>
         {KINDS.map((k) => (
           <button key={k} type="button" className={`chip-filter ${kind === k ? 'on' : ''}`} aria-pressed={kind === k} onClick={() => { setKind(k); setPage(0); }}>
-            {KIND_EMOJI[k]} {t(KIND_LABEL[k])}{data?.counts[k] ? ` · ${data.counts[k]}` : ''}
+            <KindIcon kind={k} /> {t(KIND_LABEL[k])}{data?.counts[k] ? ` · ${data.counts[k]}` : ''}
           </button>
         ))}
       </div>
@@ -78,7 +84,7 @@ export default function CasesCard() {
             return (
               <li key={c.id} className="rounded-xl border border-line p-3">
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className={KIND_PILL[c.kind]}>{KIND_EMOJI[c.kind]} {t(KIND_LABEL[c.kind])}</span>
+                  <span className={KIND_PILL[c.kind]}><KindIcon kind={c.kind} /> {t(KIND_LABEL[c.kind])}</span>
                   <span className="font-black">{c.userName || c.userId}</span>
                   <span className="text-sm font-semibold text-mute">{c.userId}</span>
                   {st && <span className={st.pill}>{t(st.text)}</span>}

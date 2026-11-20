@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import type { Binding, BotStatus, DiscordGuild } from '../api';
-import { IconCheck, IconRefresh } from '../icons';
+import { IconCheck, IconRefresh, IconLinkOut } from '../icons';
 import { t, useI18n } from '../i18n';
 
 export type WizardState = 'done' | 'current' | 'blocked';
@@ -107,7 +107,7 @@ export function DiscordWizard({
     if (s.state !== 'current') return null;
     if (s.id === 'token') return <a className="btn btn-sm" href={settingsHref}>{t('d2.dw.a.token')}</a>;
     if (s.id === 'bot') return <a className="btn btn-soft btn-sm" href={settingsHref}>{t('d2.dw.a.botSettings')}</a>;
-    if (s.id === 'guild') return inviteUrl ? <a className="btn btn-sm" href={inviteUrl} target="_blank" rel="noreferrer">{t('d2.dw.a.invite')}<span aria-hidden>↗</span></a> : null;
+    if (s.id === 'guild') return inviteUrl ? <a className="btn btn-sm" href={inviteUrl} target="_blank" rel="noreferrer">{t('d2.dw.a.invite')}<IconLinkOut size={14} /></a> : null;
     if (s.id === 'channel') {
       if (input.serverCount === 0) return <a className="btn btn-sm" href="/admin/servers/new">{t('d2.dw.a.addServer')}</a>;
       if (input.bindings.length === 0) return <button type="button" className="btn btn-sm" onClick={onCreateBinding}>{t('d2.dw.a.bind')}</button>;

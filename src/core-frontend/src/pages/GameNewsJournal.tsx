@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api';
 import { soon } from '../components/GameNewsParts';
 import { Styled } from '../components/NewsEditor';
-import { KIND_ICON, PLUGIN_NOTE_ICON } from '../components/GameNewsIcons';
+import { KIND_ICON, PLUGIN_NOTE_ICON, IconList } from '../components/GameNewsIcons';
 import { confirmDialog } from '../confirm';
 import { gameColor } from '../games';
 import type { NewsServerInfo } from '../gameNews';
@@ -262,7 +262,7 @@ export function JournalTab({ onReuse, onPlayer }: { onReuse: (text: string) => v
       />
       {counts && <p className="text-xs font-semibold text-mute">{t('gn.jn.counts24')}</p>}
       {items == null && <div className="skeleton h-24 rounded-xl" aria-busy="true" />}
-      {items && items.length === 0 && <EmptyState icon="🗒" title={filter === 'problems' ? t('gn.jn.noProblems') : t('gn.jn.empty')} hint={filter === 'problems' ? t('gn.jn.noProblemsHint') : t('gn.jn.emptyHint')} />}
+      {items && items.length === 0 && <EmptyState icon={<IconList size={22} />} title={filter === 'problems' ? t('gn.jn.noProblems') : t('gn.jn.empty')} hint={filter === 'problems' ? t('gn.jn.noProblemsHint') : t('gn.jn.emptyHint')} />}
       {groups.map((g) => (
         <div key={g.day}>
           <h4 className="sticky top-0 z-[1] bg-card/95 py-1 text-sm font-extrabold capitalize text-mute backdrop-blur">{dayTitle(g.day)} <span className="font-semibold">· {g.items.length}</span></h4>

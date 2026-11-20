@@ -5,6 +5,7 @@ import { t, useI18n } from '../i18n';
 import { usePoll } from '../ui';
 import { EmptyState, SubTabs } from './GameNewsUi';
 import { useOpenProfile } from './GameNewsProfile';
+import { IconDoor } from '../components/GameNewsIcons';
 import {
   PERIODS, REPEAT_JOINS, SHORT_VISIT_MIN, STATUSES, buildRows, dayWord, groupByDay, isKicked, isTimeout, matchesStatus, periodSince, repeaters, visitMinutes,
   type ConnectionItem, type Period, type Row, type Status,
@@ -99,7 +100,7 @@ export function ConnectionsSection({ player, onPick }: { player: string; onPick:
       </div>
 
       {items == null && <div className="skeleton h-24 rounded-xl" aria-busy="true" />}
-      {items && items.length === 0 && <EmptyState icon="🚪" title={t('gn.cn.empty')} hint={t('gn.cn.emptyHint')} />}
+      {items && items.length === 0 && <EmptyState icon={<IconDoor size={22} />} title={t('gn.cn.empty')} hint={t('gn.cn.emptyHint')} />}
       {items && items.length > 0 && shown.length === 0 && <p className="py-4 text-center text-sm font-semibold text-mute">{t('gn.cn.nothing')}</p>}
       {groups.map((g) => (
         <div key={g.day}>

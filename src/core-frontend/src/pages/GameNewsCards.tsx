@@ -14,6 +14,7 @@ import { SayCheck } from './GameNewsSayCheck';
 import { EmptyState, SubTabs, WithPreview } from './GameNewsUi';
 import { ChannelName, ChannelPicker } from '../components/ChannelPicker';
 import { Field, SaveBadge, errText, toast, useAutosave } from '../ui';
+import { IconEdit } from '../icons';
 
 const onOff = (b: boolean) => (b ? t('gn.f.on') : t('gn.f.off'));
 
@@ -521,7 +522,7 @@ export function KickCard({ initial }: { initial: KickSettings }) {
       {part === 'reasons' && (
         <div className="space-y-3">
           <p className="text-sm font-semibold text-mute">{t('gn.kk.reasonsNote')}</p>
-          {f.reasons.length === 0 && <EmptyState icon="📝" title={t('gn.kk.reasonsEmpty')} hint={t('gn.kk.reasonsEmptyHint')} />}
+          {f.reasons.length === 0 && <EmptyState icon={<IconEdit size={22} />} title={t('gn.kk.reasonsEmpty')} hint={t('gn.kk.reasonsEmptyHint')} />}
           <ul className="space-y-2">
             {f.reasons.map((r, i) => (
               <li key={i} className="flex flex-wrap items-center gap-2">

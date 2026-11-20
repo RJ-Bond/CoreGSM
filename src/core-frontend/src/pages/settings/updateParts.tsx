@@ -1,11 +1,13 @@
 /** Pieces of Settings → Updates: steps, warnings, release notes, the log and the options. */
-import { useEffect, useState } from 'react';
+import { useEffect, useState, ReactNode } from 'react';
 import { api, type Changelog, type UpdateHistoryItem, type UpdateInfo, type UpdateNotes, type UpdatePreflight } from '../../api';
 import { t, useI18n, type TKey } from '../../i18n';
 import { ChannelName, ChannelPicker } from '../../components/ChannelPicker';
 export { MoreMenu } from '../../components/MoreMenu';
 import { ErrorLine, fmtDateTime, Section, errText, toast } from '../../ui';
 import { changeSummary, cleanNote, releaseCounts, groupCommits, isNewerRelease, preflightWarnings, stepStates, upcomingFlags, versionText, type PreflightWarning } from './updateLogic';
+import { IconArrow, IconCheck, IconChevronDown, IconClock, IconDisk, IconPlug, IconUsers, IconWrench } from '../../icons';
+import { IconBox, IconSparkle } from '../../components/GameNewsIcons';
 
 /** the four steps of an update as a stepper: the line after a finished step is filled, the active one pulses */
 export function StepList({ stage, finished }: { stage: UpdateInfo['stage']; finished: boolean }) {
@@ -14,7 +16,7 @@ export function StepList({ stage, finished }: { stage: UpdateInfo['stage']; fini
       {stepStates(stage, finished).map((s) => (
         <li key={s.id} className={`upd-step is-${s.state}`} aria-current={s.state === 'active' ? 'step' : undefined}>
           <span className="upd-step-top" aria-hidden>
-            <span className="upd-step-dot">{s.state === 'done' ? '✓' : ''}</span>
+            <span className="upd-step-dot">{s.state === 'done' ? <IconCheck size={12} /> : ''}</span>
             <span className="upd-step-line" />
           </span>
           <span className="upd-step-name">{t(`upd.step.${s.id}` as TKey)}</span>
@@ -34,17 +36,17 @@ export function ChangeSummary({ current, notes }: { current: string | null | und
   if (!s || s.versions === 0 || s.added + s.fixed + s.other === 0) return null;
   const parts = [t('upd.sum.versions', { n: s.versions }), s.added ? t('upd.sum.new', { n: s.added }) : '', s.fixed ? t('upd.sum.fixed', { n: s.fixed }) : '', s.other ? t('upd.sum.other', { n: s.other }) : ''].filter(Boolean);
   void parts;
-  const chips: { icon: string; text: string }[] = [
-    { icon: '📦', text: t('upd.sum.versions', { n: s.versions }) },
-    ...(s.added ? [{ icon: '✨', text: t('upd.sum.new', { n: s.added }) }] : []),
-    ...(s.fixed ? [{ icon: '🔧', text: t('upd.sum.fixed', { n: s.fixed }) }] : []),
-    ...(s.other ? [{ icon: '🧩', text: t('upd.sum.other', { n: s.other }) }] : []),
+  const chips: { id: string; icon: ReactNode; text: string }[] = [
+    { id: 'versions', icon: <IconBox size={15} />, text: t('upd.sum.versions', { n: s.versions }) },
+    ...(s.added ? [{ id: 'new', icon: <IconSparkle size={15} />, text: t('upd.sum.new', { n: s.added }) }] : []),
+    ...(s.fixed ? [{ id: 'fixed', icon: <IconWrench size={15} />, text: t('upd.sum.fixed', { n: s.fixed }) }] : []),
+    ...(s.other ? [{ id: 'other', icon: <IconPlug size={15} />, text: t('upd.sum.other', { n: s.other }) }] : []),
   ];
   return (
     <div className="relative mt-5">
       <p className="upd-label">{t('upd.sum.t')}</p>
       <ul className="upd-chips">
-        {chips.map((c) => <li key={c.icon} className="upd-chip"><span aria-hidden>{c.icon}</span>{c.text}</li>)}
+        {chips.map((c) => <li key={c.id} className="upd-chip"><span aria-hidden className="inline-flex">{c.icon}</span>{c.text}</li>)}
       </ul>
     </div>
   );
@@ -59,7 +61,7 @@ export function VersionHero({ cur, next, since, from }: { cur: string; next: str
         <dd className="upd-ver-n">{cur}</dd>
         {since ? <dd className="upd-ver-d">{t('upd.since', { date: since })}</dd> : null}
       </div>
-      <div aria-hidden className="upd-ver-arrow">→</div>
+      <div aria-hidden className="upd-ver-arrow"><IconArrow /></div>
       <div className="upd-ver-cell is-new">
         <dt>{t('upd.inRepo')}</dt>
         <dd className="upd-ver-n">{next}</dd>
@@ -77,7 +79,7 @@ export function PreflightNote({ pf, current, notes }: { pf: UpdatePreflight | nu
   if (warns.length === 0 && flags.length === 0) return null;
   return (
     <div className="upd-note" role="note">
-      {warns.map((w) => <p key={w.kind} className="upd-note-row"><span aria-hidden>{w.kind === 'players' ? '👥' : w.kind === 'noBackup' ? '💾' : '🕒'}</span><span>{warnText(w)}</span></p>)}
+      {warns.map((w) => <p key={w.kind} className="upd-note-row"><span aria-hidden>{w.kind === 'players' ? <IconUsers size={16} /> : w.kind === 'noBackup' ? <IconDisk size={16} /> : <IconClock size={16} />}</span><span>{warnText(w)}</span></p>)}
       {flags.length > 0 && (
         <div>
           <p className="font-black">{t('upd.fl.title')}</p>
@@ -119,11 +121,11 @@ export function NotesCard({ notes, log, logError, current, installedAt }: {
                 {isNewerRelease(r, current) && <span className="pill pill-ok">{t('upd.n.new')}</span>}
                 {r.version && r.version === current && <span className="pill pill-mute">{t('upd.n.current')}</span>}
                 <span className="upd-rel-counts" aria-hidden>
-                  {releaseCounts(r).added > 0 && <span className="upd-rel-c">✨ {releaseCounts(r).added}</span>}
-                  {releaseCounts(r).fixed > 0 && <span className="upd-rel-c">🔧 {releaseCounts(r).fixed}</span>}
-                  {releaseCounts(r).other > 0 && <span className="upd-rel-c">🧩 {releaseCounts(r).other}</span>}
+                  {releaseCounts(r).added > 0 && <span className="upd-rel-c"><IconSparkle size={13} /> {releaseCounts(r).added}</span>}
+                  {releaseCounts(r).fixed > 0 && <span className="upd-rel-c"><IconWrench size={13} /> {releaseCounts(r).fixed}</span>}
+                  {releaseCounts(r).other > 0 && <span className="upd-rel-c"><IconPlug size={13} /> {releaseCounts(r).other}</span>}
                 </span>
-                <span className="upd-rel-chev" aria-hidden>▾</span>
+                <span className="upd-rel-chev" aria-hidden><IconChevronDown size={16} /></span>
               </summary>
               {r.groups.map((g) => (
                 <div key={g.title} className="mt-2">

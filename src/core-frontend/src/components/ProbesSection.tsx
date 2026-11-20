@@ -7,6 +7,7 @@ import { api } from '../api';
 import { t, useI18n } from '../i18n';
 import { confirmDialog } from '../confirm';
 import { Button, ErrorLine, Field, IconCopy, IconRefresh, IconTrash, Modal, Section, ago, toast, SkeletonRows } from '../ui';
+import { IconPin } from '../icons';
 
 interface Probe { id: number; name: string; createdAt: number; lastSeen: number | null; ip: string | null; version: string | null; alive: boolean; servers: number; online: number }
 interface Issued { token: string; commands: { docker: string; node: string } }
@@ -56,7 +57,7 @@ export default function ProbesSection() {
           <li key={p.id} className="flex flex-wrap items-center gap-3 rounded-2xl bg-soft px-3 py-2.5">
             <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${p.alive ? 'bg-ok' : 'bg-mute'}`} aria-label={p.alive ? t('d2.pr.alive') : t('d2.pr.dead')} role="img" />
             <span className="min-w-0 flex-1">
-              <span className="block font-extrabold">📍 {p.name}</span>
+              <span className="flex items-center gap-1.5 font-extrabold"><IconPin size={15} />{p.name}</span>
               <span className="block text-sm font-semibold text-mute">
                 {p.lastSeen ? `${t('d2.pr.seen', { ago: ago(p.lastSeen) })}${p.alive ? ` · ${t('d2.pr.sees', { a: p.online, b: p.servers })}` : ''}${p.ip ? ` · ${p.ip}` : ''}` : t('d2.pr.never')}
               </span>

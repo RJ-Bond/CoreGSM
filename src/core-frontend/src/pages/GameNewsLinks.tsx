@@ -5,6 +5,7 @@ import { confirmDialog } from '../confirm';
 import { t, useI18n } from '../i18n';
 import { errText, toast, usePoll } from '../ui';
 import { EmptyState } from './GameNewsUi';
+import { IconLink } from '../components/GameNewsIcons';
 
 interface Link { platformId: string; masked: string; nick: string; username: string; status: string; discord: boolean; linkedAt: number }
 
@@ -33,7 +34,7 @@ export function LinksTab() {
         {items && items.length > 4 && <input className="input w-56" value={query} placeholder={t('gn.lk.search')} aria-label={t('gn.lk.search')} onChange={(e) => setQuery(e.target.value)} />}
       </div>
       {items == null && <div className="skeleton h-24 rounded-xl" aria-busy="true" />}
-      {items && items.length === 0 && <EmptyState icon="🔗" title={t('gn.lk.empty')} hint={t('gn.lk.emptyHint')} />}
+      {items && items.length === 0 && <EmptyState icon={<IconLink size={22} />} title={t('gn.lk.empty')} hint={t('gn.lk.emptyHint')} />}
       {items && items.length > 0 && list.length === 0 && <p className="text-sm font-semibold text-mute">{t('gn.lk.none')}</p>}
       {list.length > 0 && (
         <ul className="divide-y divide-line">

@@ -8,6 +8,7 @@ import { COUNTRIES } from '../countries';
 import { nextPort, shownFields, useGameProfiles } from '../gameProfiles';
 import { t, useI18n } from '../i18n';
 import { errorText } from '../apiErrors';
+import { IconCheck, IconClose } from '../icons';
 
 /** the first problem with the address field, or '' (an address only: no scheme, path, spaces or a port glued to it) */
 export function hostError(v: string): string {
@@ -181,7 +182,7 @@ export default function ServerForm({ initial, id, coverUrl, onCoverChanged, onCl
           </button>
           {test && test.online && (
             <div className="rounded-2xl bg-okbg px-4 py-3 text-sm font-bold text-ok" role="status">
-              ✔ {t('d2.sf.answered')}{test.name ? `: «${test.name}»` : ''}
+              <IconCheck size={14} /> {t('d2.sf.answered')}{test.name ? `: «${test.name}»` : ''}
               <div className="mt-0.5 font-semibold">
                 {t('d2.sf.players')} {test.players}/{test.maxPlayers}
                 {test.map ? ` ${t('d2.sf.map', { map: test.map })}` : ''}
@@ -191,7 +192,7 @@ export default function ServerForm({ initial, id, coverUrl, onCoverChanged, onCl
           )}
           {test && !test.online && (
             <div className="rounded-2xl bg-badbg px-4 py-3 text-sm font-bold text-bad" role="alert">
-              ✖ {test.error ?? t('d2.sf.noReply')}
+              <IconClose size={14} /> {test.error ?? t('d2.sf.noReply')}
             </div>
           )}
         </div>

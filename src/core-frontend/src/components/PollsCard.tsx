@@ -3,6 +3,7 @@ import { api } from '../api';
 import { useAuth } from '../auth';
 import { t, useI18n } from '../i18n';
 import { fail, toast } from '../ui';
+import { IconCheck } from '../icons';
 
 export interface PollView {
   id: number;
@@ -45,7 +46,7 @@ export function PollBlock({ poll, onChange }: { poll: PollView; onChange: (p: Po
             >
               <span aria-hidden className="absolute inset-y-0 left-0 bg-brand/15" style={{ width: `${o.pct}%` }} />
               <span className="relative flex items-center justify-between gap-3">
-                <span className="min-w-0 break-words">{poll.myVote === o.id ? '✓ ' : ''}{o.text}</span>
+                <span className="min-w-0 break-words">{poll.myVote === o.id && <IconCheck size={14} className="mr-1 inline" />}{o.text}</span>
                 <span className="shrink-0 text-sm text-mute">{o.pct}% · {o.votes}</span>
               </span>
             </button>

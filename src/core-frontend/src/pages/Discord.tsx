@@ -19,6 +19,7 @@ import FaqCard from '../components/FaqCard';
 import GiveawaysCard from '../components/GiveawaysCard';
 import VerifyCard from '../components/VerifyCard';
 import DiscordStyleCard from '../components/DiscordStyleCard';
+import { IconLinkOut } from '../icons';
 
 type Style = 'embed' | 'card' | 'both';
 interface Draft { id?: number; serverId: number; /** more servers shown in the same message (the main one is serverId) */ extraServerIds?: number[]; channelId: string; intervalSec: number; enabled: boolean; style: Style; layout?: 'detailed' | 'compact' | 'minimal' }
@@ -174,7 +175,7 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
       {settings?.discordTokenSet && bot?.state === 'online' && bot.guildCount === 0 && (
         <Notice
           tone="warn"
-          action={bot.inviteUrl ? <a className="btn btn-sm" href={bot.inviteUrl} target="_blank" rel="noreferrer">{t('dc.invite')}<span aria-hidden>↗</span></a> : undefined}
+          action={bot.inviteUrl ? <a className="btn btn-sm" href={bot.inviteUrl} target="_blank" rel="noreferrer">{t('dc.invite')}<IconLinkOut size={14} /></a> : undefined}
         >
           {t('dc.noGuild')}
         </Notice>
@@ -184,7 +185,7 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
         <div className="panel space-y-2 p-5">
           <h2 className="text-lg font-black">{t('dc.cmds')}</h2>
           {bot.commands === 0 && (
-            <Notice tone="info" action={bot.inviteUrl ? <a className="btn btn-sm" href={bot.inviteUrl} target="_blank" rel="noreferrer">{t('dc.invite')}<span aria-hidden>↗</span></a> : undefined}>
+            <Notice tone="info" action={bot.inviteUrl ? <a className="btn btn-sm" href={bot.inviteUrl} target="_blank" rel="noreferrer">{t('dc.invite')}<IconLinkOut size={14} /></a> : undefined}>
               {t('dc.cmds0')}
             </Notice>
           )}

@@ -8,6 +8,8 @@ import { ScopeNote, useScope } from './GameNewsScope';
 import { SchedulePanel } from './GameNewsRestartSchedule';
 import { EmptyState, SubTabs, WithPreview } from './GameNewsUi';
 import { Field, SaveBadge, errText, toast, useAutosave, usePoll } from '../ui';
+import { IconRestart } from '../components/GameNewsIcons';
+import { IconList } from '../components/GameNewsIcons';
 
 interface Job { serverId: number; serverName: string; runAt: number; by: string; source: string; state: string; left: number; total: number }
 interface Texts { announce: string; now: string; cancel: string }
@@ -129,7 +131,7 @@ export function ServerRestartCard({ countdown }: { countdown?: { enabled: boolea
         <div className="space-y-4">
           <p className="text-sm font-semibold text-mute">{t('gn.rr.note')}</p>
 
-          {jobs.length === 0 && <EmptyState icon="♻" title={t('gn.rr.noTimers')} hint={t('gn.rr.noTimersHint')} />}
+          {jobs.length === 0 && <EmptyState icon={<IconRestart size={22} />} title={t('gn.rr.noTimers')} hint={t('gn.rr.noTimersHint')} />}
           {jobs.map((j) => {
             const left = j.state === 'counting' ? Math.max(0, j.left - elapsed) : 0;
             return (
@@ -220,7 +222,7 @@ export function ServerRestartCard({ countdown }: { countdown?: { enabled: boolea
       )}
 
       {part === 'history' && (history.length === 0
-        ? <EmptyState icon="🗒" title={t('gn.rr.logEmpty')} />
+        ? <EmptyState icon={<IconList size={22} />} title={t('gn.rr.logEmpty')} />
         : (
           <ul className="divide-y divide-line">
             {history.map((h) => (

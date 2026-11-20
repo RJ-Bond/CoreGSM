@@ -6,6 +6,7 @@ import { confirmDialog } from '../confirm';
 import { t, useI18n } from '../i18n';
 import { Field, errText, toast, usePoll } from '../ui';
 import { EmptyState } from './GameNewsUi';
+import { IconClock } from '../icons';
 
 export interface ScheduleItem { id: number; serverId: number; serverName: string; time: string; days: number[]; warnSec: number; enabled: boolean; next: number | null; skipped: boolean }
 interface Form { id: number | null; serverId: number; time: string; days: number[]; warnSec: number; enabled: boolean }
@@ -57,7 +58,7 @@ export function SchedulePanel({ servers, onlyServer }: { servers: { id: number; 
       <p className="text-sm font-semibold text-mute">{t('gn.rs.note')}</p>
 
       {items && list.length === 0 && !form && (
-        <EmptyState icon="⏰" title={t('gn.rs.empty')} hint={t('gn.rs.emptyHint')} action={<button type="button" className="btn btn-sm" onClick={() => setForm(blank())}>{t('gn.rs.add')}</button>} />
+        <EmptyState icon={<IconClock size={22} />} title={t('gn.rs.empty')} hint={t('gn.rs.emptyHint')} action={<button type="button" className="btn btn-sm" onClick={() => setForm(blank())}>{t('gn.rs.add')}</button>} />
       )}
 
       <ul className="space-y-2">

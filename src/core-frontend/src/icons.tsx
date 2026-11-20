@@ -124,3 +124,13 @@ export const IconBars = make(<path d="M4 20V10M10 20V4M16 20v-7M22 20H2" />);
 export const IconBolt = make(<path d="M13 2L4 14h7l-1 8 9-12h-7l1-8z" />);
 export const IconPlug = make(<path d="M9 2v5M15 2v5M6 7h12v4a6 6 0 0 1-12 0V7zM12 17v5" />);
 export const IconTrophy = make(<path d="M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0V4zM7 6H4a3 3 0 0 0 3 4M17 6h3a3 3 0 0 1-3 4" />);
+
+// ---- moderation, voice and places ----
+export const IconBan = make(<><circle cx="12" cy="12" r="9" /><path d="m5.7 5.7 12.6 12.6" /></>);
+export const IconUnlock = make(<><rect x="4" y="11" width="16" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 7.5-2" /></>);
+export const IconVolume = make(<path d="M11 5 6 9H2v6h4l5 4V5zM15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13" />);
+export const IconVolumeOff = make(<path d="M11 5 6 9H2v6h4l5 4V5zM22 9l-6 6M16 9l6 6" />);
+export const IconMail = make(<><rect x="3" y="5" width="18" height="14" rx="2" /><path d="m3 7 9 6 9-6" /></>);
+export const IconPin = make(<><path d="M12 21s7-6.2 7-11.5A7 7 0 0 0 5 9.5C5 14.8 12 21 12 21z" /><circle cx="12" cy="9.5" r="2.5" /></>);
+export const IconTrendDown = make(<path d="M3 7l6 6 4-4 8 8M15 17h6v-6" />);
+export const IconStepDone = make(<path d="M5 12.5l4.5 4.5L19 7.5" />);

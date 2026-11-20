@@ -3,6 +3,7 @@ import { api } from '../api';
 import { t, useI18n } from '../i18n';
 import { Button, Section, Switch, fail, toast } from '../ui';
 import { ChannelName, ChannelPicker } from './ChannelPicker';
+import { IconShield } from '../icons';
 
 interface Channel { id: string; name: string; guild: string }
 interface Moderation {
@@ -163,7 +164,7 @@ export default function ModerationCard() {
                         disabled={busy || full}
                         onClick={() => void save({ protectedChannels: on ? m.protectedChannels.filter((x) => x !== c.id) : [...m.protectedChannels, c.id] })}
                       >
-                        <span aria-hidden="true" className="mr-1.5">{on ? '🛡️' : '#'}</span>
+                        <span aria-hidden="true" className="mr-1.5">{on ? <IconShield size={14} /> : '#'}</span>
                         {c.name}{multi ? ` · ${c.guild}` : ''}
                       </button>
                     );

@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="f4bf4d85664e"
+COREGSM_BUILD="61f672f395d1"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.2.68"
+COREGSM_VERSION="1.2.69"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -125580,10 +125580,11 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components"
   cat > "$APP_DIR/core-frontend/src/components/CasesCard.tsx" << '__COREGSM_EOF__'
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, ComponentType } from 'react';
 import { api } from '../api';
 import { t, useI18n, type TKey } from '../i18n';
 import { Button, Section, fail, toast } from '../ui';
+import { IconBan, IconLogout, IconMail, IconUnlock, IconVolume, IconVolumeOff, IconWarn, type IconProps } from '../icons';
 
 type Kind = 'warn' | 'ban' | 'unban' | 'kick' | 'timeout' | 'unmute' | 'appeal';
 interface Case { id: number; userId: string; userName: string; modName: string; kind: Kind; reason: string; link: string; createdAt: number; expiresAt: number | null; revokedAt: number | null }
@@ -125591,7 +125592,12 @@ interface Resp { items: Case[]; total: number; page: number; pageSize: number; c
 
 const KINDS: Kind[] = ['warn', 'ban', 'unban', 'kick', 'timeout', 'unmute', 'appeal'];
 const KIND_LABEL: Record<Kind, TKey> = { warn: 'mc.k.warn', ban: 'mc.k.ban', unban: 'mc.k.unban', kick: 'mc.k.kick', timeout: 'mc.k.timeout', unmute: 'mc.k.unmute', appeal: 'mc.k.appeal' };
-const KIND_EMOJI: Record<Kind, string> = { warn: '⚠️', ban: '🔨', unban: '🔓', kick: '👢', timeout: '🔇', unmute: '🔊', appeal: '📨' };
+const KIND_ICON: Record<Kind, ComponentType<IconProps>> = { warn: IconWarn, ban: IconBan, unban: IconUnlock, kick: IconLogout, timeout: IconVolumeOff, unmute: IconVolume, appeal: IconMail };
+/** the icon of a kind of a case, drawn (not a component made in the middle of a render) */
+function KindIcon({ kind }: { kind: Kind }) {
+  const I = KIND_ICON[kind];
+  return <I size={14} />;
+}
 const KIND_PILL: Record<Kind, string> = { warn: 'pill pill-warn', ban: 'pill pill-bad', unban: 'pill pill-ok', kick: 'pill pill-warn', timeout: 'pill pill-mute', unmute: 'pill pill-ok', appeal: 'pill pill-mute' };
 
 /**
@@ -125647,7 +125653,7 @@ export default function CasesCard() {
         <button type="button" className={`chip-filter ${kind === '' ? 'on' : ''}`} aria-pressed={kind === ''} onClick={() => { setKind(''); setPage(0); }}>{t('mc.all')}</button>
         {KINDS.map((k) => (
           <button key={k} type="button" className={`chip-filter ${kind === k ? 'on' : ''}`} aria-pressed={kind === k} onClick={() => { setKind(k); setPage(0); }}>
-            {KIND_EMOJI[k]} {t(KIND_LABEL[k])}{data?.counts[k] ? ` · ${data.counts[k]}` : ''}
+            <KindIcon kind={k} /> {t(KIND_LABEL[k])}{data?.counts[k] ? ` · ${data.counts[k]}` : ''}
           </button>
         ))}
       </div>
@@ -125660,7 +125666,7 @@ export default function CasesCard() {
             return (
               <li key={c.id} className="rounded-xl border border-line p-3">
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className={KIND_PILL[c.kind]}>{KIND_EMOJI[c.kind]} {t(KIND_LABEL[c.kind])}</span>
+                  <span className={KIND_PILL[c.kind]}><KindIcon kind={c.kind} /> {t(KIND_LABEL[c.kind])}</span>
                   <span className="font-black">{c.userName || c.userId}</span>
                   <span className="text-sm font-semibold text-mute">{c.userId}</span>
                   {st && <span className={st.pill}>{t(st.text)}</span>}
@@ -127000,7 +127006,7 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/components/DiscordWizard.tsx" << '__COREGSM_EOF__'
 import type { ReactNode } from 'react';
 import type { Binding, BotStatus, DiscordGuild } from '../api';
-import { IconCheck, IconRefresh } from '../icons';
+import { IconCheck, IconRefresh, IconLinkOut } from '../icons';
 import { t, useI18n } from '../i18n';
 
 export type WizardState = 'done' | 'current' | 'blocked';
@@ -127107,7 +127113,7 @@ export function DiscordWizard({
     if (s.state !== 'current') return null;
     if (s.id === 'token') return <a className="btn btn-sm" href={settingsHref}>{t('d2.dw.a.token')}</a>;
     if (s.id === 'bot') return <a className="btn btn-soft btn-sm" href={settingsHref}>{t('d2.dw.a.botSettings')}</a>;
-    if (s.id === 'guild') return inviteUrl ? <a className="btn btn-sm" href={inviteUrl} target="_blank" rel="noreferrer">{t('d2.dw.a.invite')}<span aria-hidden>↗</span></a> : null;
+    if (s.id === 'guild') return inviteUrl ? <a className="btn btn-sm" href={inviteUrl} target="_blank" rel="noreferrer">{t('d2.dw.a.invite')}<IconLinkOut size={14} /></a> : null;
     if (s.id === 'channel') {
       if (input.serverCount === 0) return <a className="btn btn-sm" href="/admin/servers/new">{t('d2.dw.a.addServer')}</a>;
       if (input.bindings.length === 0) return <button type="button" className="btn btn-sm" onClick={onCreateBinding}>{t('d2.dw.a.bind')}</button>;
@@ -127650,6 +127656,7 @@ import { api } from '../api';
 import { t } from '../i18n';
 import { Button, Section, fail, toast } from '../ui';
 import { ChannelName, ChannelPicker } from './ChannelPicker';
+import { IconClock, IconTrophy, IconUsers } from '../icons';
 
 interface Item { id: number; prize: string; winners: number; endsAt: number; channelId: string; roleId: string; minHours: number; ended: boolean; winnerIds: string[]; entries: number }
 const BLANK = { prize: '', winners: '1', hours: '24', minHours: '0', roleId: '', channelId: '' };
@@ -127693,7 +127700,7 @@ export default function GiveawaysCard() {
         {items.map((g) => (
           <li key={g.id} className="rounded-xl border border-line p-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <b>🎉 #{g.id} · {g.prize}</b>
+              <b className="inline-flex items-center gap-1.5"><IconTrophy size={16} />#{g.id} · {g.prize}</b>
               <span className="flex gap-2">
                 {!g.ended && <button type="button" className="btn btn-soft btn-sm" disabled={busy} onClick={() => void run(() => api<{ items: Item[] }>(`/giveaways/${g.id}/end`, 'POST'), t('gw.drawn'))}>{t('gw.end')}</button>}
                 {g.ended && <button type="button" className="btn btn-soft btn-sm" disabled={busy} onClick={() => void run(() => api<{ items: Item[] }>(`/giveaways/${g.id}/reroll`, 'POST'), t('gw.drawn'))}>{t('gw.reroll')}</button>}
@@ -127701,10 +127708,10 @@ export default function GiveawaysCard() {
               </span>
             </div>
             <p className="mt-1 text-sm font-semibold text-mute">
-              {g.ended ? t('gw.endedAt') : t('gw.endsAt', { d: new Date(g.endsAt).toLocaleString() })} · 👥 {g.entries} · 🏆 {g.winners}
-              {g.minHours > 0 ? ` · ⏱️ ${g.minHours} ${t('gw.hoursShort')}` : ''} · <ChannelName id={g.channelId} />
+              {g.ended ? t('gw.endedAt') : t('gw.endsAt', { d: new Date(g.endsAt).toLocaleString() })} · <span className="inline-flex items-center gap-1"><IconUsers size={14} />{g.entries}</span> · <span className="inline-flex items-center gap-1"><IconTrophy size={14} />{g.winners}</span>
+              {g.minHours > 0 && <> · <span className="inline-flex items-center gap-1"><IconClock size={14} />{g.minHours} {t('gw.hoursShort')}</span></>} · <ChannelName id={g.channelId} />
             </p>
-            {g.ended && <p className="mt-1 text-sm font-semibold">{g.winnerIds.length ? `🏆 ${g.winnerIds.join(', ')}` : t('gw.noWinners')}</p>}
+            {g.ended && <p className="mt-1 text-sm font-semibold">{g.winnerIds.length ? <span className="inline-flex items-center gap-1.5"><IconTrophy size={15} />{g.winnerIds.join(', ')}</span> : t('gw.noWinners')}</p>}
           </li>
         ))}
       </ul>
@@ -128101,6 +128108,7 @@ import { api } from '../api';
 import { t, useI18n } from '../i18n';
 import { Button, Section, Switch, fail, toast } from '../ui';
 import { ChannelName, ChannelPicker } from './ChannelPicker';
+import { IconShield } from '../icons';
 
 interface Channel { id: string; name: string; guild: string }
 interface Moderation {
@@ -128261,7 +128269,7 @@ export default function ModerationCard() {
                         disabled={busy || full}
                         onClick={() => void save({ protectedChannels: on ? m.protectedChannels.filter((x) => x !== c.id) : [...m.protectedChannels, c.id] })}
                       >
-                        <span aria-hidden="true" className="mr-1.5">{on ? '🛡️' : '#'}</span>
+                        <span aria-hidden="true" className="mr-1.5">{on ? <IconShield size={14} /> : '#'}</span>
                         {c.name}{multi ? ` · ${c.guild}` : ''}
                       </button>
                     );
@@ -129252,6 +129260,7 @@ import { api } from '../api';
 import { useAuth } from '../auth';
 import { t, useI18n } from '../i18n';
 import { fail, toast } from '../ui';
+import { IconCheck } from '../icons';
 
 export interface PollView {
   id: number;
@@ -129294,7 +129303,7 @@ export function PollBlock({ poll, onChange }: { poll: PollView; onChange: (p: Po
             >
               <span aria-hidden className="absolute inset-y-0 left-0 bg-brand/15" style={{ width: `${o.pct}%` }} />
               <span className="relative flex items-center justify-between gap-3">
-                <span className="min-w-0 break-words">{poll.myVote === o.id ? '✓ ' : ''}{o.text}</span>
+                <span className="min-w-0 break-words">{poll.myVote === o.id && <IconCheck size={14} className="mr-1 inline" />}{o.text}</span>
                 <span className="shrink-0 text-sm text-mute">{o.pct}% · {o.votes}</span>
               </span>
             </button>
@@ -129343,6 +129352,7 @@ import { api } from '../api';
 import { t, useI18n } from '../i18n';
 import { confirmDialog } from '../confirm';
 import { Button, ErrorLine, Field, IconCopy, IconRefresh, IconTrash, Modal, Section, ago, toast, SkeletonRows } from '../ui';
+import { IconPin } from '../icons';
 
 interface Probe { id: number; name: string; createdAt: number; lastSeen: number | null; ip: string | null; version: string | null; alive: boolean; servers: number; online: number }
 interface Issued { token: string; commands: { docker: string; node: string } }
@@ -129392,7 +129402,7 @@ export default function ProbesSection() {
           <li key={p.id} className="flex flex-wrap items-center gap-3 rounded-2xl bg-soft px-3 py-2.5">
             <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${p.alive ? 'bg-ok' : 'bg-mute'}`} aria-label={p.alive ? t('d2.pr.alive') : t('d2.pr.dead')} role="img" />
             <span className="min-w-0 flex-1">
-              <span className="block font-extrabold">📍 {p.name}</span>
+              <span className="flex items-center gap-1.5 font-extrabold"><IconPin size={15} />{p.name}</span>
               <span className="block text-sm font-semibold text-mute">
                 {p.lastSeen ? `${t('d2.pr.seen', { ago: ago(p.lastSeen) })}${p.alive ? ` · ${t('d2.pr.sees', { a: p.online, b: p.servers })}` : ''}${p.ip ? ` · ${p.ip}` : ''}` : t('d2.pr.never')}
               </span>
@@ -146432,6 +146442,16 @@ export const IconBars = make(<path d="M4 20V10M10 20V4M16 20v-7M22 20H2" />);
 export const IconBolt = make(<path d="M13 2L4 14h7l-1 8 9-12h-7l1-8z" />);
 export const IconPlug = make(<path d="M9 2v5M15 2v5M6 7h12v4a6 6 0 0 1-12 0V7zM12 17v5" />);
 export const IconTrophy = make(<path d="M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0V4zM7 6H4a3 3 0 0 0 3 4M17 6h3a3 3 0 0 1-3 4" />);
+
+// ---- moderation, voice and places ----
+export const IconBan = make(<><circle cx="12" cy="12" r="9" /><path d="m5.7 5.7 12.6 12.6" /></>);
+export const IconUnlock = make(<><rect x="4" y="11" width="16" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 7.5-2" /></>);
+export const IconVolume = make(<path d="M11 5 6 9H2v6h4l5 4V5zM15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13" />);
+export const IconVolumeOff = make(<path d="M11 5 6 9H2v6h4l5 4V5zM22 9l-6 6M16 9l6 6" />);
+export const IconMail = make(<><rect x="3" y="5" width="18" height="14" rx="2" /><path d="m3 7 9 6 9-6" /></>);
+export const IconPin = make(<><path d="M12 21s7-6.2 7-11.5A7 7 0 0 0 5 9.5C5 14.8 12 21 12 21z" /><circle cx="12" cy="9.5" r="2.5" /></>);
+export const IconTrendDown = make(<path d="M3 7l6 6 4-4 8 8M15 17h6v-6" />);
+export const IconStepDone = make(<path d="M5 12.5l4.5 4.5L19 7.5" />);
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/index.css" << '__COREGSM_EOF__'
@@ -160403,7 +160423,7 @@ import { api, type BackupInfo, type BotStatus, type CertInfo, type Server, type 
 import type { OverviewData } from '../components/servers/overviewLogic';
 import { t, useI18n, type TKey } from '../i18n';
 import { AdminPage, Button, PageHead, Section, SmoothArea, ago, fmtDateTime, toast, usePoll, fail } from '../ui';
-import { Icon } from '../icons';
+import { Icon, IconCheck } from '../icons';
 import { downloadFile } from './Backups';
 
 interface AuditRow { id: number; ts: number; actor: string; action: string; detail: string }
@@ -160690,7 +160710,7 @@ export default function AdminOverview() {
           <Section title={t('adm.ov.attn')}>
             {attention.length === 0 ? (
               <div className="st-calm">
-                <span aria-hidden>✓</span>
+                <IconCheck size={14} />
                 <div>
                   <p className="font-extrabold">{t('adm.ov.allGood')}</p>
                   <p className="text-sm font-semibold text-mute">{t('adm.ov.allGoodText')}</p>
@@ -163219,6 +163239,7 @@ import FaqCard from '../components/FaqCard';
 import GiveawaysCard from '../components/GiveawaysCard';
 import VerifyCard from '../components/VerifyCard';
 import DiscordStyleCard from '../components/DiscordStyleCard';
+import { IconLinkOut } from '../icons';
 
 type Style = 'embed' | 'card' | 'both';
 interface Draft { id?: number; serverId: number; /** more servers shown in the same message (the main one is serverId) */ extraServerIds?: number[]; channelId: string; intervalSec: number; enabled: boolean; style: Style; layout?: 'detailed' | 'compact' | 'minimal' }
@@ -163374,7 +163395,7 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
       {settings?.discordTokenSet && bot?.state === 'online' && bot.guildCount === 0 && (
         <Notice
           tone="warn"
-          action={bot.inviteUrl ? <a className="btn btn-sm" href={bot.inviteUrl} target="_blank" rel="noreferrer">{t('dc.invite')}<span aria-hidden>↗</span></a> : undefined}
+          action={bot.inviteUrl ? <a className="btn btn-sm" href={bot.inviteUrl} target="_blank" rel="noreferrer">{t('dc.invite')}<IconLinkOut size={14} /></a> : undefined}
         >
           {t('dc.noGuild')}
         </Notice>
@@ -163384,7 +163405,7 @@ export default function DiscordPage({ sub = '' }: { sub?: string }) {
         <div className="panel space-y-2 p-5">
           <h2 className="text-lg font-black">{t('dc.cmds')}</h2>
           {bot.commands === 0 && (
-            <Notice tone="info" action={bot.inviteUrl ? <a className="btn btn-sm" href={bot.inviteUrl} target="_blank" rel="noreferrer">{t('dc.invite')}<span aria-hidden>↗</span></a> : undefined}>
+            <Notice tone="info" action={bot.inviteUrl ? <a className="btn btn-sm" href={bot.inviteUrl} target="_blank" rel="noreferrer">{t('dc.invite')}<IconLinkOut size={14} /></a> : undefined}>
               {t('dc.cmds0')}
             </Notice>
           )}
@@ -164413,6 +164434,7 @@ import { SayCheck } from './GameNewsSayCheck';
 import { EmptyState, SubTabs, WithPreview } from './GameNewsUi';
 import { ChannelName, ChannelPicker } from '../components/ChannelPicker';
 import { Field, SaveBadge, errText, toast, useAutosave } from '../ui';
+import { IconEdit } from '../icons';
 
 const onOff = (b: boolean) => (b ? t('gn.f.on') : t('gn.f.off'));
 
@@ -164920,7 +164942,7 @@ export function KickCard({ initial }: { initial: KickSettings }) {
       {part === 'reasons' && (
         <div className="space-y-3">
           <p className="text-sm font-semibold text-mute">{t('gn.kk.reasonsNote')}</p>
-          {f.reasons.length === 0 && <EmptyState icon="📝" title={t('gn.kk.reasonsEmpty')} hint={t('gn.kk.reasonsEmptyHint')} />}
+          {f.reasons.length === 0 && <EmptyState icon={<IconEdit size={22} />} title={t('gn.kk.reasonsEmpty')} hint={t('gn.kk.reasonsEmptyHint')} />}
           <ul className="space-y-2">
             {f.reasons.map((r, i) => (
               <li key={i} className="flex flex-wrap items-center gap-2">
@@ -165276,6 +165298,7 @@ import { t, useI18n } from '../i18n';
 import { usePoll } from '../ui';
 import { EmptyState, SubTabs } from './GameNewsUi';
 import { useOpenProfile } from './GameNewsProfile';
+import { IconDoor } from '../components/GameNewsIcons';
 import {
   PERIODS, REPEAT_JOINS, SHORT_VISIT_MIN, STATUSES, buildRows, dayWord, groupByDay, isKicked, isTimeout, matchesStatus, periodSince, repeaters, visitMinutes,
   type ConnectionItem, type Period, type Row, type Status,
@@ -165370,7 +165393,7 @@ export function ConnectionsSection({ player, onPick }: { player: string; onPick:
       </div>
 
       {items == null && <div className="skeleton h-24 rounded-xl" aria-busy="true" />}
-      {items && items.length === 0 && <EmptyState icon="🚪" title={t('gn.cn.empty')} hint={t('gn.cn.emptyHint')} />}
+      {items && items.length === 0 && <EmptyState icon={<IconDoor size={22} />} title={t('gn.cn.empty')} hint={t('gn.cn.emptyHint')} />}
       {items && items.length > 0 && shown.length === 0 && <p className="py-4 text-center text-sm font-semibold text-mute">{t('gn.cn.nothing')}</p>}
       {groups.map((g) => (
         <div key={g.day}>
@@ -165418,7 +165441,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api';
 import { soon } from '../components/GameNewsParts';
 import { Styled } from '../components/NewsEditor';
-import { KIND_ICON, PLUGIN_NOTE_ICON } from '../components/GameNewsIcons';
+import { KIND_ICON, PLUGIN_NOTE_ICON, IconList } from '../components/GameNewsIcons';
 import { confirmDialog } from '../confirm';
 import { gameColor } from '../games';
 import type { NewsServerInfo } from '../gameNews';
@@ -165678,7 +165701,7 @@ export function JournalTab({ onReuse, onPlayer }: { onReuse: (text: string) => v
       />
       {counts && <p className="text-xs font-semibold text-mute">{t('gn.jn.counts24')}</p>}
       {items == null && <div className="skeleton h-24 rounded-xl" aria-busy="true" />}
-      {items && items.length === 0 && <EmptyState icon="🗒" title={filter === 'problems' ? t('gn.jn.noProblems') : t('gn.jn.empty')} hint={filter === 'problems' ? t('gn.jn.noProblemsHint') : t('gn.jn.emptyHint')} />}
+      {items && items.length === 0 && <EmptyState icon={<IconList size={22} />} title={filter === 'problems' ? t('gn.jn.noProblems') : t('gn.jn.empty')} hint={filter === 'problems' ? t('gn.jn.noProblemsHint') : t('gn.jn.emptyHint')} />}
       {groups.map((g) => (
         <div key={g.day}>
           <h4 className="sticky top-0 z-[1] bg-card/95 py-1 text-sm font-extrabold capitalize text-mute backdrop-blur">{dayTitle(g.day)} <span className="font-semibold">· {g.items.length}</span></h4>
@@ -165706,6 +165729,7 @@ import { confirmDialog } from '../confirm';
 import { t, useI18n } from '../i18n';
 import { errText, toast, usePoll } from '../ui';
 import { EmptyState } from './GameNewsUi';
+import { IconLink } from '../components/GameNewsIcons';
 
 interface Link { platformId: string; masked: string; nick: string; username: string; status: string; discord: boolean; linkedAt: number }
 
@@ -165734,7 +165758,7 @@ export function LinksTab() {
         {items && items.length > 4 && <input className="input w-56" value={query} placeholder={t('gn.lk.search')} aria-label={t('gn.lk.search')} onChange={(e) => setQuery(e.target.value)} />}
       </div>
       {items == null && <div className="skeleton h-24 rounded-xl" aria-busy="true" />}
-      {items && items.length === 0 && <EmptyState icon="🔗" title={t('gn.lk.empty')} hint={t('gn.lk.emptyHint')} />}
+      {items && items.length === 0 && <EmptyState icon={<IconLink size={22} />} title={t('gn.lk.empty')} hint={t('gn.lk.emptyHint')} />}
       {items && items.length > 0 && list.length === 0 && <p className="text-sm font-semibold text-mute">{t('gn.lk.none')}</p>}
       {list.length > 0 && (
         <ul className="divide-y divide-line">
@@ -165766,6 +165790,7 @@ import type { NewsServerInfo } from '../gameNews';
 import { t, useI18n } from '../i18n';
 import { SmoothArea, usePoll } from '../ui';
 import { EmptyState } from './GameNewsUi';
+import { IconTrend } from '../icons';
 
 export interface MetricPoint { ts: number; fps: number; minFps: number; worstMs: number; freezes: number; memMb: number; heapMb: number; players: number }
 
@@ -165853,7 +165878,7 @@ export function MetricsSection() {
         </div>
       </div>
       {(servers == null || (server && points == null)) && <div className="skeleton h-28 rounded-xl" aria-busy="true" />}
-      {points && !view && <EmptyState icon="📈" title={t('gn.mt.empty')} hint={t('gn.mt.emptyHint')} />}
+      {points && !view && <EmptyState icon={<IconTrend size={22} />} title={t('gn.mt.empty')} hint={t('gn.mt.emptyHint')} />}
       {view && (
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <Card title={t('gn.mt.fps')} values={view.fps} last={view.last.fps} fmt={(n) => n.toFixed(1)} color="rgb(var(--ok))" hint={t('gn.mt.fpsHint')} />
@@ -165878,6 +165903,8 @@ import { errText, toast, usePoll } from '../ui';
 import { EmptyState, SubTabs } from './GameNewsUi';
 import { ConnectionsSection } from './GameNewsConnections';
 import { MetricsSection } from './GameNewsMetrics';
+import { IconBan } from '../icons';
+import { IconList } from '../components/GameNewsIcons';
 
 const FILTERS = ['all', 'kick', 'ban', 'warn', 'unban'] as const;
 type Filter = (typeof FILTERS)[number];
@@ -165921,7 +165948,7 @@ export function ModerationTab() {
           <p className="text-sm font-semibold text-mute">{t('gn.md.bansNote')}</p>
         </div>
         {data == null && <div className="skeleton h-16 rounded-xl" aria-busy="true" />}
-        {data && data.bans.length === 0 && <EmptyState icon="⛔" title={t('gn.md.bansEmpty')} hint={t('gn.md.bansEmptyHint')} />}
+        {data && data.bans.length === 0 && <EmptyState icon={<IconBan size={22} />} title={t('gn.md.bansEmpty')} hint={t('gn.md.bansEmptyHint')} />}
         {data && data.bans.length > 0 && (
           <ul className="divide-y divide-line">
             {data.bans.map((b) => (
@@ -165968,7 +165995,7 @@ export function ModerationTab() {
         </div>
         <SubTabs label={t('gn.md.log')} value={filter} onChange={setFilter} items={FILTERS.map((f) => ({ id: f, label: t(`gn.md.f.${f}` as 'gn.md.f.all') }))} />
         {data == null && <div className="skeleton h-24 rounded-xl" aria-busy="true" />}
-        {data && data.log.length === 0 && <EmptyState icon="🗒" title={t('gn.md.logEmpty')} hint={t('gn.md.logEmptyHint')} />}
+        {data && data.log.length === 0 && <EmptyState icon={<IconList size={22} />} title={t('gn.md.logEmpty')} hint={t('gn.md.logEmptyHint')} />}
         {data && data.log.length > 0 && (
           <ul className="divide-y divide-line">
             {data.log.map((e) => (
@@ -166161,6 +166188,7 @@ import { confirmDialog } from '../confirm';
 import { t, useI18n } from '../i18n';
 import { Field, errText, toast, usePoll } from '../ui';
 import { EmptyState } from './GameNewsUi';
+import { IconClock } from '../icons';
 
 export interface ScheduleItem { id: number; serverId: number; serverName: string; time: string; days: number[]; warnSec: number; enabled: boolean; next: number | null; skipped: boolean }
 interface Form { id: number | null; serverId: number; time: string; days: number[]; warnSec: number; enabled: boolean }
@@ -166212,7 +166240,7 @@ export function SchedulePanel({ servers, onlyServer }: { servers: { id: number; 
       <p className="text-sm font-semibold text-mute">{t('gn.rs.note')}</p>
 
       {items && list.length === 0 && !form && (
-        <EmptyState icon="⏰" title={t('gn.rs.empty')} hint={t('gn.rs.emptyHint')} action={<button type="button" className="btn btn-sm" onClick={() => setForm(blank())}>{t('gn.rs.add')}</button>} />
+        <EmptyState icon={<IconClock size={22} />} title={t('gn.rs.empty')} hint={t('gn.rs.emptyHint')} action={<button type="button" className="btn btn-sm" onClick={() => setForm(blank())}>{t('gn.rs.add')}</button>} />
       )}
 
       <ul className="space-y-2">
@@ -166679,6 +166707,8 @@ import { t, useI18n } from '../i18n';
 import { versionLess, type NewsSendResult, type NewsServerInfo } from '../gameNews';
 import { Spinner } from '../ui';
 import { EmptyState } from './GameNewsUi';
+import { IconPlug, IconBolt, IconCheck, IconClose } from '../icons';
+import { IconRestart } from '../components/GameNewsIcons';
 
 export interface SendProps {
   withToken: NewsServerInfo[];
@@ -166713,8 +166743,8 @@ export function SendTab(p: SendProps) {
       <section className="panel space-y-4 p-5">
         <div className="flex flex-wrap items-center gap-2" role="group" aria-label={t('gn.q.title')}>
           <span className="text-sm font-bold text-mute">{t('gn.q.title')}</span>
-          <button type="button" className="chip-filter gap-1.5" disabled={p.picked.length === 0 || p.busy} onClick={p.onTest} title={t('gn.q.testNote')}><span aria-hidden>⚡</span>{t('gn.q.test')}</button>
-          <button type="button" className="chip-filter gap-1.5" disabled={p.picked.length === 0 || p.busy} onClick={p.onRestart} title={t('gn.q.restartNote')}><span aria-hidden>♻</span>{t('gn.q.restart')}</button>
+          <button type="button" className="chip-filter gap-1.5" disabled={p.picked.length === 0 || p.busy} onClick={p.onTest} title={t('gn.q.testNote')}><IconBolt size={16} />{t('gn.q.test')}</button>
+          <button type="button" className="chip-filter gap-1.5" disabled={p.picked.length === 0 || p.busy} onClick={p.onRestart} title={t('gn.q.restartNote')}><IconRestart size={16} />{t('gn.q.restart')}</button>
         </div>
         <NewsEditor value={p.text} onChange={p.setText} onCtrlEnter={() => p.onSend()} />
       </section>
@@ -166732,7 +166762,7 @@ export function SendTab(p: SendProps) {
 
           {p.supportedCount === 0 && <p className="text-sm font-semibold text-mute">{t('gn.noServers')}</p>}
           {p.supportedCount > 0 && p.withToken.length === 0 && (
-            <EmptyState icon="🔌" title={t('gn.noPlugin')} hint={t('gn.q.connectHint')} />
+            <EmptyState icon={<IconPlug size={22} />} title={t('gn.noPlugin')} hint={t('gn.q.connectHint')} />
           )}
 
           <div className="flex flex-wrap gap-2" role="group" aria-label={t('gn.servers')}>
@@ -166750,7 +166780,7 @@ export function SendTab(p: SendProps) {
                     <span aria-hidden className={`inline-block h-2 w-2 shrink-0 rounded-full ${!s.online ? 'bg-mute' : old ? 'bg-warn' : 'bg-ok'}`} />
                     <span className="min-w-0 wrap-break-word text-left">{s.name}</span>
                     {s.players != null && <span className="shrink-0 rounded-full bg-soft px-1.5 text-xs font-extrabold">{s.players}</span>}
-                    {on && <span aria-hidden className="shrink-0">✓</span>}
+                    {on && <IconCheck size={14} className="shrink-0" />}
                   </button>
                   <button type="button" className="border-l border-line px-2 text-mute hover:text-ink" aria-label={t('gn.plugin.settings', { name: s.name })} title={t('gn.sv.setup')} onClick={() => p.onSetup(s.id)}>⚙</button>
                 </span>
@@ -166787,7 +166817,7 @@ export function SendTab(p: SendProps) {
             <ul className="space-y-1 text-sm font-semibold">
               {p.lastResult.results.map((r) => (
                 <li key={r.serverId} className={r.queued ? (r.online ? 'text-ok' : undefined) : 'text-danger'}>
-                  {r.queued ? '✓' : '✕'} {r.serverName}: {r.queued ? (r.online ? t('gn.r.queued') : t('gn.r.queuedSilent')) : r.error}
+                  <span className="inline-flex items-center gap-1.5">{r.queued ? <IconCheck size={14} /> : <IconClose size={14} />}{r.serverName}:</span> {r.queued ? (r.online ? t('gn.r.queued') : t('gn.r.queuedSilent')) : r.error}
                 </li>
               ))}
             </ul>
@@ -166911,6 +166941,8 @@ import { ScopeNote, useScope } from './GameNewsScope';
 import { SchedulePanel } from './GameNewsRestartSchedule';
 import { EmptyState, SubTabs, WithPreview } from './GameNewsUi';
 import { Field, SaveBadge, errText, toast, useAutosave, usePoll } from '../ui';
+import { IconRestart } from '../components/GameNewsIcons';
+import { IconList } from '../components/GameNewsIcons';
 
 interface Job { serverId: number; serverName: string; runAt: number; by: string; source: string; state: string; left: number; total: number }
 interface Texts { announce: string; now: string; cancel: string }
@@ -167032,7 +167064,7 @@ export function ServerRestartCard({ countdown }: { countdown?: { enabled: boolea
         <div className="space-y-4">
           <p className="text-sm font-semibold text-mute">{t('gn.rr.note')}</p>
 
-          {jobs.length === 0 && <EmptyState icon="♻" title={t('gn.rr.noTimers')} hint={t('gn.rr.noTimersHint')} />}
+          {jobs.length === 0 && <EmptyState icon={<IconRestart size={22} />} title={t('gn.rr.noTimers')} hint={t('gn.rr.noTimersHint')} />}
           {jobs.map((j) => {
             const left = j.state === 'counting' ? Math.max(0, j.left - elapsed) : 0;
             return (
@@ -167123,7 +167155,7 @@ export function ServerRestartCard({ countdown }: { countdown?: { enabled: boolea
       )}
 
       {part === 'history' && (history.length === 0
-        ? <EmptyState icon="🗒" title={t('gn.rr.logEmpty')} />
+        ? <EmptyState icon={<IconList size={22} />} title={t('gn.rr.logEmpty')} />
         : (
           <ul className="divide-y divide-line">
             {history.map((h) => (
@@ -167144,12 +167176,13 @@ __COREGSM_EOF__
 import { useState, type ReactNode } from 'react';
 import { t, useI18n } from '../i18n';
 import { SCOPE_KEYS, useScope } from './GameNewsScope';
+import { IconInfo } from '../icons';
 
 /** a quiet block for a list that has nothing in it yet: what it is for and the way to fill it */
-export function EmptyState({ icon = '○', title, hint, action }: { icon?: string; title: string; hint?: string; action?: ReactNode }) {
+export function EmptyState({ icon = <IconInfo size={22} />, title, hint, action }: { icon?: ReactNode; title: string; hint?: string; action?: ReactNode }) {
   return (
     <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed border-line px-5 py-8 text-center">
-      <span aria-hidden className="flex h-11 w-11 items-center justify-center rounded-full bg-soft text-xl text-mute">{icon}</span>
+      <span aria-hidden className="flex h-11 w-11 items-center justify-center rounded-full bg-soft text-mute">{icon}</span>
       <p className="font-extrabold">{title}</p>
       {hint && <p className="max-w-md text-sm font-semibold text-mute">{hint}</p>}
       {action && <div className="pt-1">{action}</div>}
@@ -170875,6 +170908,7 @@ import { COUNTRIES } from '../countries';
 import { nextPort, shownFields, useGameProfiles } from '../gameProfiles';
 import { t, useI18n } from '../i18n';
 import { errorText } from '../apiErrors';
+import { IconCheck, IconClose } from '../icons';
 
 /** the first problem with the address field, or '' (an address only: no scheme, path, spaces or a port glued to it) */
 export function hostError(v: string): string {
@@ -171048,7 +171082,7 @@ export default function ServerForm({ initial, id, coverUrl, onCoverChanged, onCl
           </button>
           {test && test.online && (
             <div className="rounded-2xl bg-okbg px-4 py-3 text-sm font-bold text-ok" role="status">
-              ✔ {t('d2.sf.answered')}{test.name ? `: «${test.name}»` : ''}
+              <IconCheck size={14} /> {t('d2.sf.answered')}{test.name ? `: «${test.name}»` : ''}
               <div className="mt-0.5 font-semibold">
                 {t('d2.sf.players')} {test.players}/{test.maxPlayers}
                 {test.map ? ` ${t('d2.sf.map', { map: test.map })}` : ''}
@@ -171058,7 +171092,7 @@ export default function ServerForm({ initial, id, coverUrl, onCoverChanged, onCl
           )}
           {test && !test.online && (
             <div className="rounded-2xl bg-badbg px-4 py-3 text-sm font-bold text-bad" role="alert">
-              ✖ {test.error ?? t('d2.sf.noReply')}
+              <IconClose size={14} /> {test.error ?? t('d2.sf.noReply')}
             </div>
           )}
         </div>
@@ -175743,13 +175777,15 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages/settings"
   cat > "$APP_DIR/core-frontend/src/pages/settings/updateParts.tsx" << '__COREGSM_EOF__'
 /** Pieces of Settings → Updates: steps, warnings, release notes, the log and the options. */
-import { useEffect, useState } from 'react';
+import { useEffect, useState, ReactNode } from 'react';
 import { api, type Changelog, type UpdateHistoryItem, type UpdateInfo, type UpdateNotes, type UpdatePreflight } from '../../api';
 import { t, useI18n, type TKey } from '../../i18n';
 import { ChannelName, ChannelPicker } from '../../components/ChannelPicker';
 export { MoreMenu } from '../../components/MoreMenu';
 import { ErrorLine, fmtDateTime, Section, errText, toast } from '../../ui';
 import { changeSummary, cleanNote, releaseCounts, groupCommits, isNewerRelease, preflightWarnings, stepStates, upcomingFlags, versionText, type PreflightWarning } from './updateLogic';
+import { IconArrow, IconCheck, IconChevronDown, IconClock, IconDisk, IconPlug, IconUsers, IconWrench } from '../../icons';
+import { IconBox, IconSparkle } from '../../components/GameNewsIcons';
 
 /** the four steps of an update as a stepper: the line after a finished step is filled, the active one pulses */
 export function StepList({ stage, finished }: { stage: UpdateInfo['stage']; finished: boolean }) {
@@ -175758,7 +175794,7 @@ export function StepList({ stage, finished }: { stage: UpdateInfo['stage']; fini
       {stepStates(stage, finished).map((s) => (
         <li key={s.id} className={`upd-step is-${s.state}`} aria-current={s.state === 'active' ? 'step' : undefined}>
           <span className="upd-step-top" aria-hidden>
-            <span className="upd-step-dot">{s.state === 'done' ? '✓' : ''}</span>
+            <span className="upd-step-dot">{s.state === 'done' ? <IconCheck size={12} /> : ''}</span>
             <span className="upd-step-line" />
           </span>
           <span className="upd-step-name">{t(`upd.step.${s.id}` as TKey)}</span>
@@ -175778,17 +175814,17 @@ export function ChangeSummary({ current, notes }: { current: string | null | und
   if (!s || s.versions === 0 || s.added + s.fixed + s.other === 0) return null;
   const parts = [t('upd.sum.versions', { n: s.versions }), s.added ? t('upd.sum.new', { n: s.added }) : '', s.fixed ? t('upd.sum.fixed', { n: s.fixed }) : '', s.other ? t('upd.sum.other', { n: s.other }) : ''].filter(Boolean);
   void parts;
-  const chips: { icon: string; text: string }[] = [
-    { icon: '📦', text: t('upd.sum.versions', { n: s.versions }) },
-    ...(s.added ? [{ icon: '✨', text: t('upd.sum.new', { n: s.added }) }] : []),
-    ...(s.fixed ? [{ icon: '🔧', text: t('upd.sum.fixed', { n: s.fixed }) }] : []),
-    ...(s.other ? [{ icon: '🧩', text: t('upd.sum.other', { n: s.other }) }] : []),
+  const chips: { id: string; icon: ReactNode; text: string }[] = [
+    { id: 'versions', icon: <IconBox size={15} />, text: t('upd.sum.versions', { n: s.versions }) },
+    ...(s.added ? [{ id: 'new', icon: <IconSparkle size={15} />, text: t('upd.sum.new', { n: s.added }) }] : []),
+    ...(s.fixed ? [{ id: 'fixed', icon: <IconWrench size={15} />, text: t('upd.sum.fixed', { n: s.fixed }) }] : []),
+    ...(s.other ? [{ id: 'other', icon: <IconPlug size={15} />, text: t('upd.sum.other', { n: s.other }) }] : []),
   ];
   return (
     <div className="relative mt-5">
       <p className="upd-label">{t('upd.sum.t')}</p>
       <ul className="upd-chips">
-        {chips.map((c) => <li key={c.icon} className="upd-chip"><span aria-hidden>{c.icon}</span>{c.text}</li>)}
+        {chips.map((c) => <li key={c.id} className="upd-chip"><span aria-hidden className="inline-flex">{c.icon}</span>{c.text}</li>)}
       </ul>
     </div>
   );
@@ -175803,7 +175839,7 @@ export function VersionHero({ cur, next, since, from }: { cur: string; next: str
         <dd className="upd-ver-n">{cur}</dd>
         {since ? <dd className="upd-ver-d">{t('upd.since', { date: since })}</dd> : null}
       </div>
-      <div aria-hidden className="upd-ver-arrow">→</div>
+      <div aria-hidden className="upd-ver-arrow"><IconArrow /></div>
       <div className="upd-ver-cell is-new">
         <dt>{t('upd.inRepo')}</dt>
         <dd className="upd-ver-n">{next}</dd>
@@ -175821,7 +175857,7 @@ export function PreflightNote({ pf, current, notes }: { pf: UpdatePreflight | nu
   if (warns.length === 0 && flags.length === 0) return null;
   return (
     <div className="upd-note" role="note">
-      {warns.map((w) => <p key={w.kind} className="upd-note-row"><span aria-hidden>{w.kind === 'players' ? '👥' : w.kind === 'noBackup' ? '💾' : '🕒'}</span><span>{warnText(w)}</span></p>)}
+      {warns.map((w) => <p key={w.kind} className="upd-note-row"><span aria-hidden>{w.kind === 'players' ? <IconUsers size={16} /> : w.kind === 'noBackup' ? <IconDisk size={16} /> : <IconClock size={16} />}</span><span>{warnText(w)}</span></p>)}
       {flags.length > 0 && (
         <div>
           <p className="font-black">{t('upd.fl.title')}</p>
@@ -175863,11 +175899,11 @@ export function NotesCard({ notes, log, logError, current, installedAt }: {
                 {isNewerRelease(r, current) && <span className="pill pill-ok">{t('upd.n.new')}</span>}
                 {r.version && r.version === current && <span className="pill pill-mute">{t('upd.n.current')}</span>}
                 <span className="upd-rel-counts" aria-hidden>
-                  {releaseCounts(r).added > 0 && <span className="upd-rel-c">✨ {releaseCounts(r).added}</span>}
-                  {releaseCounts(r).fixed > 0 && <span className="upd-rel-c">🔧 {releaseCounts(r).fixed}</span>}
-                  {releaseCounts(r).other > 0 && <span className="upd-rel-c">🧩 {releaseCounts(r).other}</span>}
+                  {releaseCounts(r).added > 0 && <span className="upd-rel-c"><IconSparkle size={13} /> {releaseCounts(r).added}</span>}
+                  {releaseCounts(r).fixed > 0 && <span className="upd-rel-c"><IconWrench size={13} /> {releaseCounts(r).fixed}</span>}
+                  {releaseCounts(r).other > 0 && <span className="upd-rel-c"><IconPlug size={13} /> {releaseCounts(r).other}</span>}
                 </span>
-                <span className="upd-rel-chev" aria-hidden>▾</span>
+                <span className="upd-rel-chev" aria-hidden><IconChevronDown size={16} /></span>
               </summary>
               {r.groups.map((g) => (
                 <div key={g.title} className="mt-2">
@@ -182270,6 +182306,12 @@ __COREGSM_EOF__
 .jn-row.is-problem { box-shadow: inset 3px 0 0 rgb(var(--bad) / .7); padding-left: 8px; }
 .jn-row > button:focus-visible { outline: 2px solid rgb(var(--brand)); outline-offset: 2px; border-radius: var(--r-md); }
 .jn-advice { margin: 0; padding: .55rem .75rem; border-radius: var(--r-md); background: rgb(var(--warnbg)); color: rgb(var(--warn)); font-weight: 650; }
+
+/* icons of the admin pages that replaced emoji: they sit in a line with the words */
+.upd-chip, .upd-rel-c, .upd-note-row { display: inline-flex; align-items: center; gap: 6px; }
+.upd-note-row { display: flex; align-items: flex-start; }
+.upd-note-row > span:first-child { margin-top: 2px; flex: none; }
+.upd-step-dot svg { display: block; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/ui.tsx" << '__COREGSM_EOF__'
