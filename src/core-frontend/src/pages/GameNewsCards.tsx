@@ -10,6 +10,7 @@ import {
   type AnsiColor, type ChatColors, type ChatKind, type ChatSettings, type Extras, type JoinLeave, type KickSettings, type RegisterSettings, type Welcome, type WelcomeStyle,
 } from '../gameNews';
 import { ScopeNote, useScope } from './GameNewsScope';
+import { SayCheck } from './GameNewsSayCheck';
 import { EmptyState, SubTabs, WithPreview } from './GameNewsUi';
 import { ChannelName, ChannelPicker } from '../components/ChannelPicker';
 import { Field, SaveBadge, errText, toast, useAutosave } from '../ui';
@@ -733,6 +734,8 @@ export function ChatCard({ initial, joinText, leaveText, kickText }: { initial: 
           <span className="block text-sm font-semibold text-mute">{t(st.set ? 'gn.ch.fromDiscordNote' : 'gn.ch.fromDiscordNeed')}</span>
         </span>
       </label>
+
+      {st.fromDiscord && <SayCheck />}
 
       {st.fromDiscord && (
         <div className="space-y-2 rounded-xl border border-line px-4 py-3">

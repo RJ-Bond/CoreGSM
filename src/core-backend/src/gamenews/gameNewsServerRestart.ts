@@ -15,6 +15,7 @@ import { log } from '../logger.js';
 import { internal } from '../security/auth.js';
 import { pluginTarget, queueNews } from './gameNews.js';
 import { chatChannels } from './gameNewsChat.js';
+import { noteSayAttempt } from './gameNewsSayCheck.js';
 import { ansiDiscordLine } from './gameNewsChatLogic.js';
 import { plainLine } from './gameNewsJoinLeave.js';
 import {
@@ -251,9 +252,13 @@ export function registerGameNewsServerRestart({ app, admin }: { app: Express; ad
     if (!b.success) return res.status(400).json({ ok: false, status: 'error', text: 'Проверьте поля' });
     const linked = db.prepare("SELECT username FROM users WHERE discord_id = ? AND role = 'admin' AND status = 'active'").get(b.data.discordId) as { username: string } | undefined;
     // a line written in the chat channel by somebody who is not an administrator is just talk: no answer
+    if (!b.data.discordAdmin && !linked) noteSayAttempt({ ts: Date.now(), name: b.data.name, status: 'denied', why: 'не администратор: нужно право «Администратор» на сервере Discord или аккаунт администратора панели, привязанный к этому Discord' });
     if (!b.data.discordAdmin && !linked) return res.json({ ok: false, status: 'denied', silent: !!b.data.channelId, text: 'Эта команда только для администраторов.' });
     // one line in two seconds per person: a flood into the game chat helps nobody
-    if (!sayGate(b.data.discordId, Date.now())) return res.json({ ok: false, status: 'rate', rate: true, text: 'Слишком часто: подождите пару секунд.' });
+    if (!sayGate(b.data.discordId, Date.now())) {
+      noteSayAttempt({ ts: Date.now(), name: b.data.name, status: 'rate', why: 'слишком часто (одна строка в две секунды)' });
+      return res.json({ ok: false, status: 'rate', rate: true, text: 'Слишком часто: подождите пару секунд.' });
+    }
     const servers = pluginServers();
     const q = (b.data.server ?? '').trim().toLowerCase();
     const ch = b.data.channelId ? chatChannels().find((c) => c.channelId === b.data.channelId) : undefined;
@@ -267,6 +272,7 @@ export function registerGameNewsServerRestart({ app, admin }: { app: Express; ad
     const line = `<color=#7289DA>* [Discord] ${who}:</color> <color=#FFFFFF>${body}</color>`;
     const out = queueNews(line, found.map((s) => s.id), `Discord: ${who}`, now, { onlyOnline: true });
     const queued = out.filter((r) => r.queued);
+    noteSayAttempt({ ts: now, name: b.data.name, status: queued.length > 0 ? 'sent' : 'empty', why: queued.length > 0 ? `отправлено на серверов: ${queued.length}` : 'на выбранных серверах никого нет в игре' });
     const time = clock(now);
     res.json({
       ok: queued.length > 0,

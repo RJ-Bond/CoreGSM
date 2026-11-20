@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="86be8b7e08cf"
+COREGSM_BUILD="18b33ee9dfb5"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.2.66"
+COREGSM_VERSION="1.2.67"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -25271,6 +25271,7 @@ __COREGSM_EOF__
 import { registerGameNewsMetrics } from './gameNewsMetrics.js';
 import { registerGameNewsPluginLog } from './gameNewsPluginLog.js';
 import { registerGameNewsPluginAlerts } from './gameNewsPluginAlerts.js';
+import { registerSayCheck } from './gameNewsSayCheck.js';
 import type { Express, RequestHandler } from 'express';
 import { z } from 'zod';
 import { systemTarget } from '../alerts/alertRoute.js';
@@ -25371,6 +25372,7 @@ export function registerGameNewsConnections({ app, admin }: { app: Express; admi
   registerGameNewsMetrics({ app, admin });
   registerGameNewsPluginLog({ app, admin });
   registerGameNewsPluginAlerts({ app, admin });
+  registerSayCheck({ app, admin });
   // the plugin: a batch of joins and departures; a field that is too long is cut, not a reason to refuse the batch
   const cut = (n: number) => z.string().max(2000).transform((s) => s.slice(0, n));
   app.post('/api/game-news/connections', (req, res) => {
@@ -27996,6 +27998,85 @@ export function registerGameNewsRules({ app, admin }: { app: Express; admin: Req
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/gamenews"
+  cat > "$APP_DIR/core-backend/src/gamenews/gameNewsSayCheck.ts" << '__COREGSM_EOF__'
+/**
+ * «Проверить запись из Discord»: why a line written in the chat channel may not reach the game.
+ * The bot drops a message without a word when something is missing (a channel that is not listened to, no right to read the text,
+ * a writer who is not an administrator), so the panel lists what it can see: the settings, the bot, the channel and the last attempts.
+ *   GET /api/game-news/say-check   (administrators)
+ */
+import type { Express, RequestHandler } from 'express';
+import { db } from '../db.js';
+import { bot } from '../discord/botState.js';
+import { chatChannels } from './gameNewsChat.js';
+
+export interface SayAttempt { ts: number; name: string; status: 'sent' | 'empty' | 'denied' | 'rate'; why: string }
+const attempts: SayAttempt[] = [];
+
+/** what became of a line the bot handed over (the last twenty are kept in memory) */
+export function noteSayAttempt(a: SayAttempt): void {
+  attempts.unshift(a);
+  if (attempts.length > 20) attempts.length = 20;
+}
+export const resetSayAttempts = (): void => { attempts.length = 0; };
+
+export interface SayCheck { id: string; /** null = cannot be said from here */ ok: boolean | null; text: string; fix?: string }
+
+/** the list of checks, in the order a person should look at them */
+export function sayChecks(now = Date.now()): { checks: SayCheck[]; attempts: SayAttempt[] } {
+  const channels = chatChannels();
+  const checks: SayCheck[] = [];
+
+  checks.push(channels.length > 0
+    ? { id: 'channel', ok: true, text: `Бот слушает каналов: ${channels.length}` }
+    : { id: 'channel', ok: false, text: 'Ни один канал не слушается', fix: 'Включите «Пересылать чат игры в Discord», добавьте адрес webhook канала и включите «Писать из Discord в игру». Серверам нужен токен плагина.' });
+
+  const servers = new Set(channels.flatMap((c) => c.serverIds));
+  checks.push(servers.size > 0
+    ? { id: 'servers', ok: true, text: `Строки пойдут на серверов: ${servers.size}` }
+    : { id: 'servers', ok: false, text: 'Нет серверов с плагином для этого канала', fix: 'Создайте токен плагина у сервера («Игровой плагин» → «Настроить»).' });
+
+  const st = bot.status;
+  checks.push(st.state === 'online'
+    ? { id: 'bot', ok: true, text: `Бот на связи${st.tag ? `: ${st.tag}` : ''}` }
+    : st.state === 'error'
+      ? { id: 'bot', ok: false, text: `Бот не вошёл в Discord: ${st.error ?? 'ошибка'}`, fix: 'Если там сказано про Intents: Developer Portal → ваше приложение → Bot → Privileged Gateway Intents → включить «Message Content Intent», сохранить и подождать минуту.' }
+      : { id: 'bot', ok: false, text: st.state === 'connecting' ? 'Бот ещё входит в Discord' : 'Бот не запущен', fix: 'Проверьте токен бота в «Админка → Discord».' });
+
+  if (channels.length > 0 && bot.guilds.length > 0) {
+    const seen = channels.map((c) => {
+      for (const g of bot.guilds) {
+        const ch = g.channels.find((x) => x.id === c.channelId);
+        if (ch) return { id: c.channelId, guild: g.name, name: ch.name, missing: ch.missing ?? [] };
+      }
+      return { id: c.channelId, guild: '', name: '', missing: [] as string[] };
+    });
+    const hidden = seen.filter((x) => !x.name);
+    const lacking = seen.filter((x) => x.name && x.missing.length > 0);
+    checks.push(hidden.length === 0 && lacking.length === 0
+      ? { id: 'visible', ok: true, text: `Бот видит канал: #${seen[0]?.name}` }
+      : { id: 'visible', ok: false, text: hidden.length > 0 ? 'Бот не видит канал (нет права «Просмотр канала» или канала нет на сервере)' : `В канале #${lacking[0]!.name} боту не хватает прав: ${lacking[0]!.missing.join(', ')}`, fix: 'Дайте боту в этом канале права: просмотр канала, чтение истории, отправка сообщений, добавление реакций.' });
+  } else {
+    checks.push({ id: 'visible', ok: null, text: 'Видит ли бот канал, пока неизвестно (бот ещё не прислал список каналов)' });
+  }
+
+  const admins = (db.prepare("SELECT COUNT(*) AS n FROM users WHERE role = 'admin' AND status = 'active' AND discord_id IS NOT NULL AND discord_id <> ''").get() as { n: number }).n;
+  checks.push({ id: 'writers', ok: null, text: admins > 0 ? `Писать в игру могут: администраторы Discord-сервера и ${admins} админ(ов) панели с привязанным Discord` : 'Писать в игру могут только администраторы Discord-сервера (право «Администратор»); у админов панели Discord не привязан', fix: admins > 0 ? undefined : 'Привяжите Discord в профиле администратора, если у вас нет права «Администратор» на сервере Discord.' });
+
+  const recent = attempts.filter((a) => now - a.ts < 10 * 60_000);
+  checks.push(recent.length > 0
+    ? { id: 'attempts', ok: recent.some((a) => a.status === 'sent' || a.status === 'empty') ? true : null, text: `Строк от бота за 10 минут: ${recent.length}` }
+    : { id: 'attempts', ok: null, text: 'За последние 10 минут бот не передал ни одной строки', fix: 'Напишите сообщение в канале и нажмите «Проверить» ещё раз. Если после этого по-прежнему ноль, бот не читает текст (проверьте «Message Content Intent») или вы пишете не в том канале, чей webhook указан здесь.' });
+  return { checks, attempts: attempts.slice(0, 10) };
+}
+
+export function registerSayCheck({ app, admin }: { app: Express; admin: RequestHandler }): void {
+  app.get('/api/game-news/say-check', admin, (_req, res) => {
+    res.json(sayChecks());
+  });
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/gamenews"
   cat > "$APP_DIR/core-backend/src/gamenews/gameNewsSchedule.ts" << '__COREGSM_EOF__'
 /**
  * The schedule of an automatic in-game announcement (pure functions, no database).
@@ -28137,6 +28218,7 @@ import { log } from '../logger.js';
 import { internal } from '../security/auth.js';
 import { pluginTarget, queueNews } from './gameNews.js';
 import { chatChannels } from './gameNewsChat.js';
+import { noteSayAttempt } from './gameNewsSayCheck.js';
 import { ansiDiscordLine } from './gameNewsChatLogic.js';
 import { plainLine } from './gameNewsJoinLeave.js';
 import {
@@ -28373,9 +28455,13 @@ export function registerGameNewsServerRestart({ app, admin }: { app: Express; ad
     if (!b.success) return res.status(400).json({ ok: false, status: 'error', text: 'Проверьте поля' });
     const linked = db.prepare("SELECT username FROM users WHERE discord_id = ? AND role = 'admin' AND status = 'active'").get(b.data.discordId) as { username: string } | undefined;
     // a line written in the chat channel by somebody who is not an administrator is just talk: no answer
+    if (!b.data.discordAdmin && !linked) noteSayAttempt({ ts: Date.now(), name: b.data.name, status: 'denied', why: 'не администратор: нужно право «Администратор» на сервере Discord или аккаунт администратора панели, привязанный к этому Discord' });
     if (!b.data.discordAdmin && !linked) return res.json({ ok: false, status: 'denied', silent: !!b.data.channelId, text: 'Эта команда только для администраторов.' });
     // one line in two seconds per person: a flood into the game chat helps nobody
-    if (!sayGate(b.data.discordId, Date.now())) return res.json({ ok: false, status: 'rate', rate: true, text: 'Слишком часто: подождите пару секунд.' });
+    if (!sayGate(b.data.discordId, Date.now())) {
+      noteSayAttempt({ ts: Date.now(), name: b.data.name, status: 'rate', why: 'слишком часто (одна строка в две секунды)' });
+      return res.json({ ok: false, status: 'rate', rate: true, text: 'Слишком часто: подождите пару секунд.' });
+    }
     const servers = pluginServers();
     const q = (b.data.server ?? '').trim().toLowerCase();
     const ch = b.data.channelId ? chatChannels().find((c) => c.channelId === b.data.channelId) : undefined;
@@ -28389,6 +28475,7 @@ export function registerGameNewsServerRestart({ app, admin }: { app: Express; ad
     const line = `<color=#7289DA>* [Discord] ${who}:</color> <color=#FFFFFF>${body}</color>`;
     const out = queueNews(line, found.map((s) => s.id), `Discord: ${who}`, now, { onlyOnline: true });
     const queued = out.filter((r) => r.queued);
+    noteSayAttempt({ ts: now, name: b.data.name, status: queued.length > 0 ? 'sent' : 'empty', why: queued.length > 0 ? `отправлено на серверов: ${queued.length}` : 'на выбранных серверах никого нет в игре' });
     const time = clock(now);
     res.json({
       ok: queued.length > 0,
@@ -149635,6 +149722,13 @@ const en: Record<keyof typeof ru, string> = {
   'gn.sh.langHint': 'The language of the command help and errors that the plugin writes itself (the texts from the panel do not change)',
   'gn.sh.langSaved': 'The language of the plugin is saved: it applies within a few seconds',
   'gn.cn.title': 'Joins and departures',
+  'gn.sy.check': 'Check writing from Discord',
+  'gn.sy.note': 'The bot silently drops a line when something is missing: this shows what.',
+  'gn.sy.last': 'The last lines the bot handed to the panel',
+  'gn.sy.st.sent': 'went to the game',
+  'gn.sy.st.empty': 'nobody in the game',
+  'gn.sy.st.denied': 'refused',
+  'gn.sy.st.rate': 'too often',
   'gn.pa.title': 'Plugin notifications',
   'gn.pa.note': 'They go to the service channel of Discord (Admin → Alerts → Service channel) when one is chosen.',
   'gn.pa.silent': 'The plugin does not answer',
@@ -155003,6 +155097,13 @@ const ru = {
   'gn.sh.langHint': 'Язык справки команд и ошибок, которые пишет сам плагин (тексты из панели не меняются)',
   'gn.sh.langSaved': 'Язык плагина сохранён: применится в течение нескольких секунд',
   'gn.cn.title': 'Входы и выходы',
+  'gn.sy.check': 'Проверить запись из Discord',
+  'gn.sy.note': 'Бот молча отбрасывает строки, если чего-то не хватает: здесь видно, чего именно.',
+  'gn.sy.last': 'Последние строки, которые бот передал панели',
+  'gn.sy.st.sent': 'ушла в игру',
+  'gn.sy.st.empty': 'в игре никого',
+  'gn.sy.st.denied': 'отклонена',
+  'gn.sy.st.rate': 'слишком часто',
   'gn.pa.title': 'Уведомления о плагине',
   'gn.pa.note': 'Приходят в служебный канал Discord (Админка → Оповещения → Служебный канал), если он выбран.',
   'gn.pa.silent': 'Плагин не отвечает',
@@ -164311,6 +164412,7 @@ import {
   type AnsiColor, type ChatColors, type ChatKind, type ChatSettings, type Extras, type JoinLeave, type KickSettings, type RegisterSettings, type Welcome, type WelcomeStyle,
 } from '../gameNews';
 import { ScopeNote, useScope } from './GameNewsScope';
+import { SayCheck } from './GameNewsSayCheck';
 import { EmptyState, SubTabs, WithPreview } from './GameNewsUi';
 import { ChannelName, ChannelPicker } from '../components/ChannelPicker';
 import { Field, SaveBadge, errText, toast, useAutosave } from '../ui';
@@ -165034,6 +165136,8 @@ export function ChatCard({ initial, joinText, leaveText, kickText }: { initial: 
           <span className="block text-sm font-semibold text-mute">{t(st.set ? 'gn.ch.fromDiscordNote' : 'gn.ch.fromDiscordNeed')}</span>
         </span>
       </label>
+
+      {st.fromDiscord && <SayCheck />}
 
       {st.fromDiscord && (
         <div className="space-y-2 rounded-xl border border-line px-4 py-3">
@@ -166461,6 +166565,74 @@ export function RuleModal({ id, initial, servers, timezone, onClose, onSaved }: 
         </div>
       </form>
     </Modal>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/pages"
+  cat > "$APP_DIR/core-frontend/src/pages/GameNewsSayCheck.tsx" << '__COREGSM_EOF__'
+import { useState } from 'react';
+import { api } from '../api';
+import { IconAlert, IconCheck, IconClock } from '../components/GameNewsIcons';
+import { t, useI18n } from '../i18n';
+import { errText } from '../ui';
+
+interface Check { id: string; ok: boolean | null; text: string; fix?: string }
+interface Attempt { ts: number; name: string; status: 'sent' | 'empty' | 'denied' | 'rate'; why: string }
+interface Result { checks: Check[]; attempts: Attempt[] }
+
+const clock = (ts: number) => new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+/** «Проверить запись из Discord»: what the panel can see about the way of a line from the chat channel into the game */
+export function SayCheck() {
+  useI18n();
+  const [r, setR] = useState<Result | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const run = async () => {
+    setBusy(true);
+    setError('');
+    try { setR(await api<Result>('/game-news/say-check')); } catch (e) { setError(errText(e)); } finally { setBusy(false); }
+  };
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <button type="button" className="btn btn-soft btn-sm" disabled={busy} onClick={() => void run()}>{t('gn.sy.check')}</button>
+        <span className="text-sm font-semibold text-mute">{t('gn.sy.note')}</span>
+      </div>
+      {error && <p className="text-sm font-semibold text-bad">{error}</p>}
+      {r && (
+        <div className="space-y-2 rounded-xl border border-line px-4 py-3">
+          <ul className="space-y-2">
+            {r.checks.map((c) => (
+              <li key={c.id} className="flex items-start gap-2.5">
+                <span aria-hidden className={`mt-0.5 grid h-6 w-6 shrink-0 place-items-center rounded-full ${c.ok === true ? 'bg-okbg text-ok' : c.ok === false ? 'bg-badbg text-bad' : 'bg-soft text-mute'}`}>
+                  {c.ok === true ? <IconCheck size={14} /> : c.ok === false ? <IconAlert size={14} /> : <IconClock size={14} />}
+                </span>
+                <span className="min-w-0 text-sm">
+                  <span className="block font-bold">{c.text}</span>
+                  {c.fix && <span className="block font-semibold text-mute">{c.fix}</span>}
+                </span>
+              </li>
+            ))}
+          </ul>
+          {r.attempts.length > 0 && (
+            <div>
+              <div className="mb-1 text-xs font-extrabold text-mute">{t('gn.sy.last')}</div>
+              <ul className="space-y-0.5 text-sm">
+                {r.attempts.map((a, i) => (
+                  <li key={i} className="flex flex-wrap items-center gap-2">
+                    <time className="tabular-nums text-mute">{clock(a.ts)}</time>
+                    <span className="font-bold">{a.name}</span>
+                    <span className={a.status === 'sent' ? 'pill pill-ok' : a.status === 'empty' ? 'pill pill-mute' : 'pill pill-warn'}>{t(`gn.sy.st.${a.status}` as 'gn.sy.st.sent')}</span>
+                    <span className="min-w-0 truncate font-semibold text-mute">{a.why}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 __COREGSM_EOF__
