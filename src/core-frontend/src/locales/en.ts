@@ -1147,7 +1147,7 @@ const en: Record<keyof typeof ru, string> = {
   'gn.ch.confirmMarks': 'The bot puts a mark under the message: 👀 accepted, 🎮 shown in the game, 📭 nobody in the game, ⏳ too often, ❌ did not work.',
   'gn.ch.confirmCard': 'A card under the message',
   'gn.ch.confirmCardNote': 'How the line looks in the game, which server it went to and how many players are there. Goes away by itself after 12 seconds.',
-  'gn.ch.confirmLine': 'A «→ в игру» line in the channel',
+  'gn.ch.confirmLine': 'A line in the style of the game chat in the channel',
   'gn.ch.confirmLineNote': 'The bot repeats the line in the style of the game chat, so the whole talk reads in one row. It stays in the channel.',
   'gn.rg.login': 'After .login: the game is linked to the account ({login} is the login)',
   'gn.rg.colors': 'Colours of the picked-out words in the lines for the player (every kind of line has its own colour for the rest)',

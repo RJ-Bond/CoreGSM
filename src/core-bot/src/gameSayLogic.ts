@@ -19,11 +19,8 @@ export const markFor = (s: SayStatus): string => (s === 'sent' ? '👀' : s === 
 /** the mark when the game has shown the line (🎮) or could not (❌) */
 export const doneMark = (delivered: boolean): string => (delivered ? '🎮' : '❌');
 
-const ESC = String.fromCharCode(27);
-const gray = (t: string): string => `${ESC}[0;30m${t}${ESC}[0m`;
-
-/** the line in the channel in the style of the chat: «→ в игру» in grey, then the line as it stands in the game */
-export const channelLine = (ansi: string): string => `\`\`\`ansi\n${gray('→ в игру ')}${ansi}\n\`\`\``;
+/** the line in the channel in the style of the chat: the line as it stands in the game (the time, the mark and the words), nothing in front of it */
+export const channelLine = (ansi: string): string => `\`\`\`ansi\n${ansi}\n\`\`\``;
 
 /** the card under the message: the line as it will look in the game, where it went, how many players are there */
 export function cardText(a: SayAnswer): { description: string; where: string } {

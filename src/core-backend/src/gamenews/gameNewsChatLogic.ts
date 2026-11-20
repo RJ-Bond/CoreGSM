@@ -59,7 +59,7 @@ export interface ChatStored {
   channelId: string;
   /** a short card under the line an administrator wrote (where it went, how many players are there, how it looks in the game) */
   confirmCard: boolean;
-  /** the line is repeated in the channel in the style of the chat («→ в игру»), so the talk reads in one row */
+  /** the line is repeated in the channel in the style of the chat (without a prefix), so the talk reads in one row */
   confirmLine: boolean;
 }
 

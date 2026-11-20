@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="18b33ee9dfb5"
+COREGSM_BUILD="f4bf4d85664e"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.2.67"
+COREGSM_VERSION="1.2.68"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -25082,7 +25082,7 @@ export interface ChatStored {
   channelId: string;
   /** a short card under the line an administrator wrote (where it went, how many players are there, how it looks in the game) */
   confirmCard: boolean;
-  /** the line is repeated in the channel in the style of the chat («→ в игру»), so the talk reads in one row */
+  /** the line is repeated in the channel in the style of the chat (without a prefix), so the talk reads in one row */
   confirmLine: boolean;
 }
 
@@ -47348,11 +47348,8 @@ export const markFor = (s: SayStatus): string => (s === 'sent' ? '👀' : s === 
 /** the mark when the game has shown the line (🎮) or could not (❌) */
 export const doneMark = (delivered: boolean): string => (delivered ? '🎮' : '❌');
 
-const ESC = String.fromCharCode(27);
-const gray = (t: string): string => `${ESC}[0;30m${t}${ESC}[0m`;
-
-/** the line in the channel in the style of the chat: «→ в игру» in grey, then the line as it stands in the game */
-export const channelLine = (ansi: string): string => `\`\`\`ansi\n${gray('→ в игру ')}${ansi}\n\`\`\``;
+/** the line in the channel in the style of the chat: the line as it stands in the game (the time, the mark and the words), nothing in front of it */
+export const channelLine = (ansi: string): string => `\`\`\`ansi\n${ansi}\n\`\`\``;
 
 /** the card under the message: the line as it will look in the game, where it went, how many players are there */
 export function cardText(a: SayAnswer): { description: string; where: string } {
@@ -149461,7 +149458,7 @@ const en: Record<keyof typeof ru, string> = {
   'gn.ch.confirmMarks': 'The bot puts a mark under the message: 👀 accepted, 🎮 shown in the game, 📭 nobody in the game, ⏳ too often, ❌ did not work.',
   'gn.ch.confirmCard': 'A card under the message',
   'gn.ch.confirmCardNote': 'How the line looks in the game, which server it went to and how many players are there. Goes away by itself after 12 seconds.',
-  'gn.ch.confirmLine': 'A «→ в игру» line in the channel',
+  'gn.ch.confirmLine': 'A line in the style of the game chat in the channel',
   'gn.ch.confirmLineNote': 'The bot repeats the line in the style of the game chat, so the whole talk reads in one row. It stays in the channel.',
   'gn.rg.login': 'After .login: the game is linked to the account ({login} is the login)',
   'gn.rg.colors': 'Colours of the picked-out words in the lines for the player (every kind of line has its own colour for the rest)',
@@ -154836,7 +154833,7 @@ const ru = {
   'gn.ch.confirmMarks': 'Под сообщением бот ставит отметку: 👀 принято, 🎮 показано в игре, 📭 в игре никого нет, ⏳ слишком часто, ❌ не получилось.',
   'gn.ch.confirmCard': 'Карточка под сообщением',
   'gn.ch.confirmCardNote': 'Как строка выглядит в игре, на какой сервер ушла и сколько там игроков. Исчезает сама через 12 секунд.',
-  'gn.ch.confirmLine': 'Строка «→ в игру» в канале',
+  'gn.ch.confirmLine': 'Строка в стиле игрового чата в канале',
   'gn.ch.confirmLineNote': 'Бот повторяет строку в стиле игрового чата, чтобы весь разговор читался в одном ряду. Остаётся в канале.',
   'gn.rg.login': 'После .login: игра привязана к аккаунту ({login} — логин)',
   'gn.rg.colors': 'Цвета выделенных слов в строках для игрока (остальные цвета строк у каждого вида свои)',

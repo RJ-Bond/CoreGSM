@@ -12,12 +12,12 @@ describe('the confirmation of a line sent to the game', () => {
     assert.equal(doneMark(false), '❌');
   });
 
-  it('writes the line in the channel as «→ в игру» and the line, in an ansi block', () => {
+  it('writes the line in the channel as it stands in the game, in an ansi block, without a prefix', () => {
     const l = channelLine('LINE');
     assert.equal(l.startsWith('```ansi\n'), true);
     assert.equal(l.endsWith('\n```'), true);
-    assert.equal(l.includes('→ в игру '), true);
-    assert.equal(l.includes('LINE'), true);
+    assert.equal(l.includes('→'), false);
+    assert.equal(l, '```ansi\nLINE\n```');
   });
 
   it('shows where the line went with the number of players', () => {
