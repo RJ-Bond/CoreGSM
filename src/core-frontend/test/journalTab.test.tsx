@@ -35,10 +35,9 @@ describe('the journal of the plugin', () => {
     slow = { resolve: () => undefined };
     render(<JournalTab onReuse={() => undefined} onPlayer={() => undefined} />);
     await screen.findByText('all-kinds entry');
-    const tabs = screen.getAllByRole('tab');
-    fireEvent.click(tabs[1]); // «messages»: its answer is held back
+    fireEvent.click(screen.getByRole('tab', { name: /Сообщения|Messages/ })); // its answer is held back
     await waitFor(() => expect(calls.some((c) => c.includes('kind=message'))).toBe(true));
-    fireEvent.click(tabs[2]); // another tab before the held one answers
+    fireEvent.click(screen.getByRole('tab', { name: /Авто|Auto/ })); // another tab before the held one answers
     expect(await screen.findByText('an automatic entry', undefined, { timeout: 2000 })).toBeTruthy();
     slow.resolve();
     await new Promise((r) => setTimeout(r, 50));

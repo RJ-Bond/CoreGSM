@@ -491,6 +491,12 @@ CREATE TABLE IF NOT EXISTS server_changes (
 );
 CREATE INDEX IF NOT EXISTS idx_server_changes ON server_changes(server_id, ts);`),
   },
+  {
+    version: 35,
+    name: 'game_news_log_shown',
+    // how many players saw a message of the panel (the plugin reports it after it showed the message); NULL = not reported (an older plugin)
+    up: (db) => addColumn(db, 'game_news_log', 'shown', 'INTEGER'),
+  },
 ];
 
 export const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;

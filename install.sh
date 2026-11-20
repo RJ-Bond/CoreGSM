@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="2775cd3cdcf2"
+COREGSM_BUILD="495a54d3eaa2"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.2.64"
+COREGSM_VERSION="1.2.65"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -24550,7 +24550,7 @@ const sendSchema = z.object({
 });
 
 /** queued messages that waited too long stop being valid */
-function expireOld(now = Date.now()): void {
+export function expireOld(now = Date.now()): void {
   db.prepare("UPDATE game_news_log SET status = 'expired', error = 'Плагин не забрал сообщение за 5 минут' WHERE status = 'queued' AND sent_at < ?").run(now - QUEUE_TTL_MS);
 }
 
@@ -25269,6 +25269,7 @@ __COREGSM_EOF__
  * game (after an update of the game) are told in the service channel; the button «Обновить плагин»; the language of the plugin.
  */
 import { registerGameNewsMetrics } from './gameNewsMetrics.js';
+import { registerGameNewsPluginLog } from './gameNewsPluginLog.js';
 import type { Express, RequestHandler } from 'express';
 import { z } from 'zod';
 import { systemTarget } from '../alerts/alertRoute.js';
@@ -25306,7 +25307,7 @@ const lastAlert = new Map<string, number>();
 
 export interface ConnectionEvent { kind: 'join' | 'leave'; id: string; name: string; reason: string; by: string; minutes: number; at: number }
 
-function alertOnce(key: string, now: number, send: () => void): boolean {
+export function alertOnce(key: string, now: number, send: () => void): boolean {
   if (now - (lastAlert.get(key) ?? 0) < ALERT_PAUSE_MS) return false;
   lastAlert.set(key, now);
   try { send(); } catch { /* an alert must not stop the journal */ }
@@ -25367,6 +25368,7 @@ export function savePluginProblems(serverId: number, header: string, now = Date.
 
 export function registerGameNewsConnections({ app, admin }: { app: Express; admin: RequestHandler }): void {
   registerGameNewsMetrics({ app, admin });
+  registerGameNewsPluginLog({ app, admin });
   // the plugin: a batch of joins and departures; a field that is too long is cut, not a reason to refuse the batch
   const cut = (n: number) => z.string().max(2000).transform((s) => s.slice(0, n));
   app.post('/api/game-news/connections', (req, res) => {
@@ -25505,8 +25507,9 @@ __COREGSM_EOF__
 import type { Express, RequestHandler } from 'express';
 import { db } from '../db.js';
 import { serverLabel } from './gameNewsVars.js';
+import { journalDays, pruneJournalSometimes } from './gameNewsPluginLog.js';
 
-export type JournalKind = 'message' | 'auto' | 'discord' | 'restart' | 'link' | 'mod';
+export type JournalKind = 'message' | 'auto' | 'discord' | 'restart' | 'link' | 'mod' | 'plugin' | 'conn';
 
 export interface JournalEntry {
   id: string;
@@ -25519,6 +25522,9 @@ export interface JournalEntry {
   status: string;
   error: string;
   by: string;
+  /** a message: when the plugin took it, and how many players saw it (null = the plugin did not say) */
+  deliveredAt?: number | null;
+  shown?: number | null;
 }
 
 /** which kind a line of the sent-messages log is: by whom it was sent */
@@ -25528,19 +25534,21 @@ export function messageKind(sentBy: string): 'message' | 'auto' | 'discord' {
   return 'message';
 }
 
-export function journal(opts: { kind?: string; serverId?: number; limit?: number }): JournalEntry[] {
-  const limit = Math.min(200, Math.max(1, opts.limit ?? 100));
+export function journal(opts: { kind?: string; serverId?: number; limit?: number; since?: number; until?: number }): JournalEntry[] {
+  const limit = Math.min(500, Math.max(1, opts.limit ?? 100));
+  const from = opts.since ?? 0;
+  const to = opts.until ?? Number.MAX_SAFE_INTEGER;
   const out: JournalEntry[] = [];
-  const want = (k: JournalKind) => !opts.kind || opts.kind === 'all' || opts.kind === k;
+  const want = (k: JournalKind) => !opts.kind || opts.kind === 'all' || opts.kind === 'problems' || opts.kind === k;
 
   if (want('message') || want('auto') || want('discord')) {
-    const rows = db.prepare('SELECT id, server_id, server_name, text, status, error, sent_by, sent_at FROM game_news_log ORDER BY id DESC LIMIT 300').all() as {
-      id: number; server_id: number | null; server_name: string; text: string; status: string; error: string; sent_by: string; sent_at: number;
+    const rows = db.prepare('SELECT id, server_id, server_name, text, status, error, sent_by, sent_at, delivered_at, shown FROM game_news_log ORDER BY id DESC LIMIT 500').all() as {
+      id: number; server_id: number | null; server_name: string; text: string; status: string; error: string; sent_by: string; sent_at: number; delivered_at: number | null; shown: number | null;
     }[];
     for (const r of rows) {
       const kind = messageKind(r.sent_by);
-      if (!want(kind) || (opts.serverId && r.server_id !== opts.serverId)) continue;
-      out.push({ id: `m${r.id}`, ts: r.sent_at, kind, serverId: r.server_id, serverName: r.server_name, text: r.text, status: r.status, error: r.error, by: r.sent_by });
+      if (!want(kind) || (opts.serverId && r.server_id !== opts.serverId) || r.sent_at < from || r.sent_at > to) continue;
+      out.push({ id: `m${r.id}`, ts: r.sent_at, kind, serverId: r.server_id, serverName: r.server_name, text: r.text, status: r.status, error: r.error, by: r.sent_by, deliveredAt: r.delivered_at, shown: r.shown });
     }
   }
   if (want('restart')) {
@@ -25563,15 +25571,64 @@ export function journal(opts: { kind?: string; serverId?: number; limit?: number
     const rows = db.prepare("SELECT id, ts, action, detail FROM audit WHERE action IN ('game_register', 'game_login', 'game_unlink') ORDER BY id DESC LIMIT 100").all() as { id: number; ts: number; action: string; detail: string }[];
     for (const r of rows) out.push({ id: `l${r.id}`, ts: r.ts, kind: 'link', serverId: null, serverName: '', text: r.detail, status: r.action, error: '', by: '' });
   }
-  return out.sort((a, b) => b.ts - a.ts).slice(0, limit);
+  if (want('plugin')) {
+    const rows = db.prepare('SELECT id, server_id, ts, kind, name, text FROM game_plugin_log WHERE ts >= ? AND ts <= ? ORDER BY id DESC LIMIT 500').all(from, to) as { id: number; server_id: number; ts: number; kind: string; name: string; text: string }[];
+    for (const r of rows) {
+      if (opts.serverId && r.server_id !== opts.serverId) continue;
+      out.push({ id: `p${r.id}`, ts: r.ts, kind: 'plugin', serverId: r.server_id, serverName: serverLabel(r.server_id), text: r.text, status: r.kind, error: '', by: r.name });
+    }
+  }
+  // the players who left by timeout: shown only next to something else (see `around`), they have their own list in «Входы и выходы»
+  if (opts.kind === 'conn') {
+    const rows = db.prepare("SELECT id, server_id, ts, nick, reason, minutes FROM game_connections WHERE kind = 'leave' AND reason LIKE 'Timeout%' AND ts >= ? AND ts <= ? ORDER BY ts DESC LIMIT 200").all(from, to) as { id: number; server_id: number; ts: number; nick: string; reason: string; minutes: number }[];
+    for (const r of rows) {
+      if (opts.serverId && r.server_id !== opts.serverId) continue;
+      out.push({ id: `c${r.id}`, ts: r.ts, kind: 'conn', serverId: r.server_id, serverName: serverLabel(r.server_id), text: r.nick, status: r.reason, error: '', by: '' });
+    }
+  }
+  // «problems»: only what did not go well (a message that did not reach the game, a missed restart, a note of the plugin)
+  return out.filter((e) => e.ts >= from && e.ts <= to && (opts.kind !== 'problems' || isProblem(e))).sort((a, b) => b.ts - a.ts).slice(0, limit);
 }
+
+/** the entries within a few minutes of a moment (all kinds, and the timeouts): what happened around a failure */
+export function around(ts: number, serverId: number | undefined, spanMs = 5 * 60_000): JournalEntry[] {
+  const base = { serverId, since: ts - spanMs, until: ts + spanMs, limit: 200 };
+  return [...journal({ ...base, kind: 'all' }), ...journal({ ...base, kind: 'conn' })].sort((a, b) => b.ts - a.ts);
+}
+
+export interface JournalCounts { [kind: string]: number; problems: number }
+
+/** how many entries of each kind the last day has, and how many of them are a problem (not delivered, a missed restart, a note of the plugin) */
+export function counts(serverId: number | undefined, now = Date.now()): JournalCounts {
+  const day = journal({ kind: 'all', serverId, since: now - 86_400_000, limit: 500 });
+  const c: JournalCounts = { all: day.length, problems: 0 };
+  for (const e of day) {
+    c[e.kind] = (c[e.kind] ?? 0) + 1;
+    if (isProblem(e)) c.problems += 1;
+  }
+  return c;
+}
+
+export const isProblem = (e: JournalEntry): boolean =>
+  ((e.kind === 'message' || e.kind === 'auto' || e.kind === 'discord') && (e.status === 'failed' || e.status === 'expired')) ||
+  (e.kind === 'restart' && e.status === 'missed') ||
+  (e.kind === 'plugin' && e.status !== 'save');
 
 const mask = (id: string): string => (id.length > 7 ? `${id.slice(0, 4)}…${id.slice(-3)}` : id);
 
 export function registerGameNewsJournal({ app, admin }: { app: Express; admin: RequestHandler }): void {
   app.get('/api/game-news/journal', admin, (req, res) => {
     const serverId = Number(req.query.server);
-    res.json({ items: journal({ kind: String(req.query.kind ?? 'all'), serverId: Number.isInteger(serverId) && serverId > 0 ? serverId : undefined, limit: Number(req.query.limit) || 100 }) });
+    const sid = Number.isInteger(serverId) && serverId > 0 ? serverId : undefined;
+    pruneJournalSometimes();
+    // «Рядом»: everything within five minutes of a moment
+    const at = Number(req.query.around);
+    if (Number.isFinite(at) && at > 0) return res.json({ items: around(at, sid) });
+    res.json({
+      items: journal({ kind: String(req.query.kind ?? 'all'), serverId: sid, limit: Number(req.query.limit) || 100 }),
+      counts: counts(sid),
+      retentionDays: journalDays(),
+    });
   });
 
   // the players whose game account is linked to an account of the panel
@@ -26624,6 +26681,169 @@ export const PALETTE = {
 export type Palette = Record<keyof typeof PALETTE, string>;
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/gamenews"
+  cat > "$APP_DIR/core-backend/src/gamenews/gameNewsPluginLog.ts" << '__COREGSM_EOF__'
+/**
+ * What the plugin tells the panel about itself, for the journal («Игровой плагин» → «Журнал»):
+ *  - notes (`POST /api/game-news/incidents`): several players leaving at once, a high ping, the lines of Steam, a freeze, a save;
+ *  - the result of every message it showed (`POST /api/game-news/delivery`): how many players saw it, or why it could not be shown.
+ * Three messages in a row that did not reach the game tell the administrators (the service channel).
+ * The journal is kept for `gamenews_journal_days` days (30 by default).
+ */
+import type { Express, RequestHandler } from 'express';
+import { z } from 'zod';
+import { db, getSetting, setSetting } from '../db.js';
+import { systemTarget } from '../alerts/alertRoute.js';
+import { alertSettings, enqueueAlert } from '../alerts/alerts.js';
+import { expireOld, pluginTarget } from './gameNews.js';
+import { alertOnce } from './gameNewsConnections.js';
+import { plainLine } from './gameNewsJoinLeave.js';
+import { serverLabel } from './gameNewsVars.js';
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS game_plugin_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  server_id INTEGER NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  ts INTEGER NOT NULL,
+  kind TEXT NOT NULL,
+  name TEXT NOT NULL DEFAULT '',
+  text TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_game_plugin_log ON game_plugin_log(server_id, ts);
+`);
+
+/** what the plugin may report; an unknown kind is kept as «other» */
+export const PLUGIN_NOTE_KINDS = ['mass', 'ping', 'steam', 'freeze', 'save'] as const;
+export type PluginNoteKind = (typeof PLUGIN_NOTE_KINDS)[number] | 'other';
+
+export const DEFAULT_JOURNAL_DAYS = 30;
+const PER_SERVER_CAP = 2000;
+/** this many messages in a row that did not reach the game are told to the administrators */
+export const FAIL_STREAK_ALERT = 3;
+
+export const journalDays = (): number => {
+  const n = Number(getSetting('gamenews_journal_days'));
+  return Number.isInteger(n) && n >= 1 && n <= 365 ? n : DEFAULT_JOURNAL_DAYS;
+};
+
+export interface PluginNote { kind: string; text: string; name?: string; at: number }
+
+/** keeps the notes of a server; the time of the plugin counts unless its clock is far off */
+export function savePluginNotes(serverId: number, items: PluginNote[], now = Date.now()): number {
+  const insert = db.prepare('INSERT INTO game_plugin_log (server_id, ts, kind, name, text) VALUES (?, ?, ?, ?, ?)');
+  let n = 0;
+  db.transaction(() => {
+    for (const it of items) {
+      const text = plainLine(it.text).slice(0, 500);
+      if (!text) continue;
+      const kind = (PLUGIN_NOTE_KINDS as readonly string[]).includes(it.kind) ? it.kind : 'other';
+      const ts = Math.abs(it.at - now) < 3_600_000 ? it.at : now;
+      insert.run(serverId, ts, kind, plainLine(it.name ?? '').slice(0, 100), text);
+      n++;
+    }
+    db.prepare('DELETE FROM game_plugin_log WHERE server_id = ? AND id NOT IN (SELECT id FROM game_plugin_log WHERE server_id = ? ORDER BY id DESC LIMIT ?)').run(serverId, serverId, PER_SERVER_CAP);
+  })();
+  return n;
+}
+
+/** forgets what is older than the days of the journal (messages, notes); returns how many rows went */
+export function pruneJournal(days: number, now = Date.now()): number {
+  const limit = now - days * 86_400_000;
+  const a = db.prepare("DELETE FROM game_news_log WHERE sent_at < ? AND status <> 'queued'").run(limit).changes;
+  const b = db.prepare('DELETE FROM game_plugin_log WHERE ts < ?').run(limit).changes;
+  const c = db.prepare('DELETE FROM game_restart_log WHERE started_at < ?').run(limit).changes;
+  return a + b + c;
+}
+let lastPrune = 0;
+/** not more often than once an hour */
+export function pruneJournalSometimes(now = Date.now()): void {
+  if (now - lastPrune < 3_600_000) return;
+  lastPrune = now;
+  try { pruneJournal(journalDays(), now); } catch { /* the journal stays as it is */ }
+}
+
+export interface DeliveryResult { id: number; /** players who saw it; -1 = it could not be shown */ shown: number; reason?: string }
+
+/** what the plugin says about the messages it took: how many players saw each, or why it did not show */
+export function saveDelivery(serverId: number, results: DeliveryResult[], now = Date.now()): { updated: number; alerted: boolean } {
+  const seen = db.prepare("UPDATE game_news_log SET shown = ? WHERE id = ? AND server_id = ? AND status IN ('delivered', 'queued')");
+  const failed = db.prepare("UPDATE game_news_log SET status = 'failed', ok = 0, shown = -1, error = ? WHERE id = ? AND server_id = ?");
+  let updated = 0;
+  db.transaction(() => {
+    for (const r of results) {
+      const info = r.shown >= 0 ? seen.run(Math.min(r.shown, 10_000), r.id, serverId) : failed.run(plainLine(r.reason ?? '').slice(0, 200) || 'Плагин не смог показать сообщение', r.id, serverId);
+      updated += info.changes;
+    }
+  })();
+  return { updated, alerted: results.some((r) => r.shown < 0) && checkFailStreak(serverId, now) };
+}
+
+/** the last messages of a server did not reach the game three times in a row: one message to the administrators */
+export function checkFailStreak(serverId: number, now = Date.now()): boolean {
+  const last = db.prepare("SELECT status FROM game_news_log WHERE server_id = ? AND status <> 'queued' ORDER BY id DESC LIMIT ?").all(serverId, FAIL_STREAK_ALERT) as { status: string }[];
+  if (last.length < FAIL_STREAK_ALERT || !last.every((r) => r.status === 'failed' || r.status === 'expired')) return false;
+  return alertOnce(`delivery:${serverId}`, now, () => {
+    if (!systemTarget(alertSettings())) return;
+    const name = serverLabel(serverId);
+    enqueueAlert('update', name, {
+      content: '', mention: 'none',
+      embed: {
+        title: '✉ Сообщения не доходят до игры',
+        description: `Сервер **${name}**: ${FAIL_STREAK_ALERT} сообщения подряд не показаны игрокам. Проверьте, что сервер запущен и плагин на связи: «Игровой плагин» → «Журнал».`,
+        color: 0xed4245,
+        timestamp: new Date(now).toISOString(),
+      },
+    });
+  });
+}
+
+/** messages that nobody took expire (the plugin may be dead, then nobody asks): marks them and tells when three in a row did not reach the game; called by the timer */
+export function sweepQueue(now = Date.now()): void {
+  expireOld(now);
+  const rows = db.prepare("SELECT DISTINCT server_id FROM game_news_log WHERE status = 'expired' AND sent_at > ? AND server_id IS NOT NULL").all(now - 3_600_000) as { server_id: number }[];
+  for (const r of rows) checkFailStreak(r.server_id, now);
+}
+
+const noteSchema = z.object({
+  items: z.array(z.object({ kind: z.string().max(20), text: z.string().max(2000), name: z.string().max(300).optional(), at: z.number().int().positive() })).max(50),
+});
+const deliverySchema = z.object({
+  results: z.array(z.object({ id: z.number().int().positive(), shown: z.number().int().min(-1).max(100_000), reason: z.string().max(300).optional() })).max(100),
+});
+
+export function registerGameNewsPluginLog({ app, admin }: { app: Express; admin: RequestHandler }): void {
+  app.post('/api/game-news/incidents', (req, res) => {
+    const t = pluginTarget(req);
+    if (!t) return res.status(401).json({ error: 'unauthorized' });
+    const b = noteSchema.safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'bad' });
+    res.json({ ok: true, saved: savePluginNotes(t.server_id, b.data.items) });
+  });
+
+  app.post('/api/game-news/delivery', (req, res) => {
+    const t = pluginTarget(req);
+    if (!t) return res.status(401).json({ error: 'unauthorized' });
+    const b = deliverySchema.safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'bad' });
+    res.json({ ok: true, ...saveDelivery(t.server_id, b.data.results) });
+  });
+
+  // the days the journal is kept for (administrators)
+  app.put('/api/game-news/journal/settings', admin, (req, res) => {
+    const b = z.object({ days: z.number().int().min(1).max(365) }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'Проверьте поля' });
+    setSetting('gamenews_journal_days', String(b.data.days));
+    res.json({ days: b.data.days });
+  });
+
+  // «Очистить старше N дней»
+  app.delete('/api/game-news/journal', admin, (req, res) => {
+    const days = Number(req.query.olderThanDays);
+    if (!Number.isInteger(days) || days < 0 || days > 365) return res.status(400).json({ error: 'Проверьте поля' });
+    res.json({ removed: pruneJournal(days) });
+  });
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/gamenews"
   cat > "$APP_DIR/core-backend/src/gamenews/gameNewsRank.ts" << '__COREGSM_EOF__'
 import { nextRank, rankForHours } from '../profile/ranks.js';
 
@@ -27421,6 +27641,7 @@ import { MAX_TIPS, getExtras, setExtras } from './gameNewsVars.js';
 import { log } from '../logger.js';
 import { checkNews } from './gameNewsLogic.js';
 import { queueNews } from './gameNews.js';
+import { pruneJournalSometimes, sweepQueue } from './gameNewsPluginLog.js';
 import { MAX_EVERY, MIN_EVERY, cleanTimes, dueState, inWindow, nextRunAfter, upcomingRuns, type RuleKind, type Schedule } from './gameNewsSchedule.js';
 
 const MAX_RULES = 50;
@@ -27491,7 +27712,7 @@ export function startGameNewsTimer(): void {
   timer = setInterval(() => {
     if (busy) return;
     busy = true;
-    try { tickRules(); } catch (e) { log.error('game news scheduler failed', (e as Error).message); } finally { busy = false; }
+    try { tickRules(); sweepQueue(); pruneJournalSometimes(); } catch (e) { log.error('game news scheduler failed', (e as Error).message); } finally { busy = false; }
   }, 20_000);
   timer.unref();
 }
@@ -31787,6 +32008,12 @@ CREATE TABLE IF NOT EXISTS server_changes (
   new_value TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_server_changes ON server_changes(server_id, ts);`),
+  },
+  {
+    version: 35,
+    name: 'game_news_log_shown',
+    // how many players saw a message of the panel (the plugin reports it after it showed the message); NULL = not reported (an older plugin)
+    up: (db) => addColumn(db, 'game_news_log', 'shown', 'INTEGER'),
   },
 ];
 
@@ -149014,6 +149241,41 @@ const en: Record<keyof typeof ru, string> = {
   'gn.in.restart': 'Restart',
   'gn.in.discord': 'Discord',
   'gn.jn.title': 'Plugin journal',
+  'gn.jn.f.problems': 'Problems',
+  'gn.jn.f.plugin': 'Plugin',
+  'gn.jn.f.conn': 'Timeouts',
+  'gn.jn.pk.mass': 'Mass departure',
+  'gn.jn.pk.ping': 'High ping',
+  'gn.jn.pk.steam': 'Steam',
+  'gn.jn.pk.freeze': 'Freeze',
+  'gn.jn.pk.save': 'Save',
+  'gn.jn.pk.other': 'Plugin note',
+  'gn.jn.shown': 'seen by: {n}',
+  'gn.jn.shownTitle': 'How many players were on the server when the plugin showed the message',
+  'gn.jn.preview': 'How it looks in the game',
+  'gn.jn.when': 'When',
+  'gn.jn.by': 'By',
+  'gn.jn.where': 'To',
+  'gn.jn.delivery': 'Delivery',
+  'gn.jn.took': 'the plugin took it after {s} s',
+  'gn.jn.onlyServer': 'Show only this server',
+  'gn.jn.related': 'Other sends of this rule',
+  'gn.jn.relatedRestart': 'Messages of this restart',
+  'gn.jn.around': 'What was around',
+  'gn.jn.aroundNone': 'Five minutes around: nothing happened',
+  'gn.jn.counts24': 'The numbers on the tabs are for the last 24 hours',
+  'gn.jn.noProblems': 'No problems',
+  'gn.jn.noProblemsHint': 'Every message reached the game, the restarts went well, the plugin did not complain.',
+  'gn.jn.settings': 'Keeping the journal',
+  'gn.jn.keep': 'Keep',
+  'gn.jn.days': '{n} d',
+  'gn.jn.purge': 'Clear older than {n} d',
+  'gn.jn.purgeTitle': 'Clear the journal?',
+  'gn.jn.purgeText': 'Entries older than {n} days will be deleted: messages, restarts and notes of the plugin.',
+  'gn.jn.purged': 'Entries removed: {n}',
+  'gn.jn.adv.expired': 'The server is off or the plugin lost its connection with the panel. Check that the server is running and the plugin sees the panel («Game plugin» section: server state and version).',
+  'gn.jn.adv.token': 'The server has no plugin token: create it on the server card and put it into the CoreGSM.cfg of the plugin.',
+  'gn.jn.adv.world': 'The server is still loading: a message can be shown once the world of the server exists. Send it later.',
   'gn.jn.empty': 'Nothing has happened yet',
   'gn.jn.emptyHint': 'Messages to the game (yours, automatic, from Discord), restarts and linked players will be listed here.',
   'gn.jn.f.all': 'All',
@@ -154305,6 +154567,41 @@ const ru = {
   'gn.in.restart': 'Рестарт',
   'gn.in.discord': 'Discord',
   'gn.jn.title': 'Журнал плагина',
+  'gn.jn.f.problems': 'Проблемы',
+  'gn.jn.f.plugin': 'Плагин',
+  'gn.jn.f.conn': 'Таймауты',
+  'gn.jn.pk.mass': 'Массовый выход',
+  'gn.jn.pk.ping': 'Высокий пинг',
+  'gn.jn.pk.steam': 'Steam',
+  'gn.jn.pk.freeze': 'Замирание',
+  'gn.jn.pk.save': 'Сохранение',
+  'gn.jn.pk.other': 'Заметка плагина',
+  'gn.jn.shown': 'увидели: {n}',
+  'gn.jn.shownTitle': 'Сколько игроков было на сервере, когда плагин показал сообщение',
+  'gn.jn.preview': 'Так увидят в игре',
+  'gn.jn.when': 'Когда',
+  'gn.jn.by': 'Кто',
+  'gn.jn.where': 'Куда',
+  'gn.jn.delivery': 'Доставка',
+  'gn.jn.took': 'плагин забрал через {s} с',
+  'gn.jn.onlyServer': 'Показать только этот сервер',
+  'gn.jn.related': 'Другие отправки этого правила',
+  'gn.jn.relatedRestart': 'Сообщения этого рестарта',
+  'gn.jn.around': 'Что было рядом',
+  'gn.jn.aroundNone': 'Пять минут вокруг: ничего не происходило',
+  'gn.jn.counts24': 'Цифры на вкладках — за последние 24 часа',
+  'gn.jn.noProblems': 'Проблем нет',
+  'gn.jn.noProblemsHint': 'Все сообщения дошли до игры, рестарты прошли, плагин ни на что не жаловался.',
+  'gn.jn.settings': 'Хранение журнала',
+  'gn.jn.keep': 'Хранить',
+  'gn.jn.days': '{n} дн.',
+  'gn.jn.purge': 'Очистить старше {n} дн.',
+  'gn.jn.purgeTitle': 'Очистить журнал?',
+  'gn.jn.purgeText': 'Будут удалены записи старше {n} дн.: сообщения, рестарты и заметки плагина.',
+  'gn.jn.purged': 'Удалено записей: {n}',
+  'gn.jn.adv.expired': 'Сервер выключен или плагин потерял связь с панелью. Проверьте, что сервер запущен и плагин видит панель (раздел «Игровой плагин»: состояние сервера и версия).',
+  'gn.jn.adv.token': 'У сервера нет токена плагина: создайте его в карточке сервера и вставьте в CoreGSM.cfg плагина.',
+  'gn.jn.adv.world': 'Сервер ещё загружается: сообщение можно показать, когда создан мир сервера. Отправьте позже.',
   'gn.jn.empty': 'Пока ничего не происходило',
   'gn.jn.emptyHint': 'Здесь будут сообщения в игру (ваши, автообъявления, из Discord), рестарты и привязки игроков.',
   'gn.jn.f.all': 'Всё',
@@ -164707,104 +165004,283 @@ function ConnectionRow({ r, compact, many, repeat, onPick }: { r: Row; compact: 
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/GameNewsJournal.tsx" << '__COREGSM_EOF__'
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api';
 import { soon } from '../components/GameNewsParts';
 import { Styled } from '../components/NewsEditor';
+import { confirmDialog } from '../confirm';
+import { gameColor } from '../games';
+import type { NewsServerInfo } from '../gameNews';
 import { t, useI18n } from '../i18n';
-import { usePoll } from '../ui';
+import { errText, toast, usePoll } from '../ui';
 import { EmptyState, SubTabs } from './GameNewsUi';
+import { dayWord } from './connectionsLogic';
+import { FILTERS, KEEP_DAYS, PLUGIN_KINDS, adviceKey, groupDays, isMessage, isProblem, relatedOf, tookSeconds, type Entry, type Filter, type Kind } from './journalLogic';
 
-type Kind = 'message' | 'auto' | 'discord' | 'restart' | 'link' | 'mod';
-interface Entry { id: string; ts: number; kind: Kind; serverId: number | null; serverName: string; text: string; status: string; error: string; by: string }
-
-const FILTERS = ['all', 'message', 'auto', 'discord', 'restart', 'link', 'mod'] as const;
-type Filter = (typeof FILTERS)[number];
-
-const KIND_ICON: Record<Kind, string> = { message: '✉', auto: '⟳', discord: '💬', restart: '♻', link: '🔗', mod: '🚪' };
+const KIND_ICON: Record<Kind, string> = { message: '✉', auto: '⟳', discord: '💬', restart: '♻', link: '🔗', mod: '🚪', plugin: '🧩', conn: '📶' };
+const PLUGIN_ICON: Record<string, string> = { mass: '🚪', ping: '📶', steam: '🎮', freeze: '🧊', save: '💾', other: '🧩' };
 
 const MSG_STATUS: Record<string, { text: 'gn.h.queued' | 'gn.h.ok' | 'gn.h.expired' | 'gn.h.fail'; cls: string }> = {
   queued: { text: 'gn.h.queued', cls: 'pill pill-mute' },
   delivered: { text: 'gn.h.ok', cls: 'pill pill-ok' },
   expired: { text: 'gn.h.expired', cls: 'pill pill-warn' },
-  failed: { text: 'gn.h.fail', cls: 'pill pill-warn' },
+  failed: { text: 'gn.h.fail', cls: 'pill pill-bad' },
 };
 const RESTART_STATUS: Record<string, { text: 'gn.rr.o.counting' | 'gn.rr.o.done' | 'gn.rr.o.cancelled' | 'gn.rr.o.missed' | 'gn.rr.o.replaced'; cls: string }> = {
   counting: { text: 'gn.rr.o.counting', cls: 'pill pill-warn' },
   done: { text: 'gn.rr.o.done', cls: 'pill pill-ok' },
   cancelled: { text: 'gn.rr.o.cancelled', cls: 'pill pill-mute' },
-  missed: { text: 'gn.rr.o.missed', cls: 'pill pill-warn' },
+  missed: { text: 'gn.rr.o.missed', cls: 'pill pill-bad' },
   replaced: { text: 'gn.rr.o.replaced', cls: 'pill pill-mute' },
 };
 const LINK_TEXT: Record<string, 'gn.jn.reg' | 'gn.jn.login' | 'gn.jn.unlink'> = { game_register: 'gn.jn.reg', game_login: 'gn.jn.login', game_unlink: 'gn.jn.unlink' };
 
-const fetchJournal = (f: Filter) => api<{ items: Entry[] }>(`/game-news/journal?kind=${f}`).then((d) => d.items).catch(() => null);
+interface Counts { [kind: string]: number; problems: number }
+interface JournalAnswer { items: Entry[]; counts?: Counts; retentionDays?: number }
 
-/** everything the plugin did in one list: messages (by hand, by a rule, from Discord), restarts, linked players */
+const PAGE = 100;
+const COMPACT_KEY = 'coregsm_jn_compact';
+const readCompact = (): boolean => { try { return localStorage.getItem(COMPACT_KEY) === '1'; } catch { return false; } };
+const clock = (ts: number) => new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+const fullTime = (ts: number) => new Date(ts).toLocaleString([], { day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+const dayTitle = (day: string): string => {
+  const w = dayWord(day);
+  if (w) return t(`gn.cn.day.${w}` as 'gn.cn.day.today');
+  return new Date(`${day}T12:00:00`).toLocaleDateString([], { weekday: 'long', day: 'numeric', month: 'long' });
+};
+
+/** the label of an entry: who did it and where it went («Админ → Rust», «Автообъявление Тех.работы → Rust») */
+const whoWhere = (e: Entry): string => {
+  const who = e.kind === 'auto' ? e.by.replace(/^авто:\s*/i, '') || t('gn.jn.f.auto') : e.kind === 'discord' ? e.by.replace(/^Discord:\s*/i, '') || 'Discord' : e.kind === 'mod' ? e.by : e.by;
+  return [who, e.serverName].filter(Boolean).join(' → ');
+};
+
+/** the status of an entry as a pill (and for a message the number of players who saw it) */
+function StatusPills({ e }: { e: Entry }) {
+  if (e.kind === 'restart') return <span className={RESTART_STATUS[e.status]?.cls ?? 'pill pill-mute'}>{RESTART_STATUS[e.status] ? t(RESTART_STATUS[e.status].text) : e.status}</span>;
+  if (e.kind === 'mod') return <span className={e.status === 'unban' ? 'pill pill-ok' : 'pill pill-warn'}>{t(`gn.md.k.${e.status}` as 'gn.md.k.kick')}</span>;
+  if (e.kind === 'link') return <span className="pill pill-ok">{LINK_TEXT[e.status] ? t(LINK_TEXT[e.status]) : e.status}</span>;
+  if (e.kind === 'plugin') return <span className={`pill ${isProblem(e) ? 'pill-warn' : 'pill-mute'}`}>{t(`gn.jn.pk.${(PLUGIN_KINDS as readonly string[]).includes(e.status) ? e.status : 'other'}` as 'gn.jn.pk.other')}</span>;
+  if (e.kind === 'conn') return <span className="pill pill-warn">{e.status}</span>;
+  return (
+    <>
+      <span className={MSG_STATUS[e.status]?.cls ?? 'pill pill-mute'}>{MSG_STATUS[e.status] ? t(MSG_STATUS[e.status].text) : e.status}</span>
+      {e.shown != null && e.shown >= 0 && e.status === 'delivered' && <span className="pill pill-ok" title={t('gn.jn.shownTitle')}>{t('gn.jn.shown', { n: e.shown })}</span>}
+    </>
+  );
+}
+
+/** the text of an entry in one line (the whole text when it is open) */
+function Body({ e, open, onPlayer }: { e: Entry; open: boolean; onPlayer: (nick: string) => void }) {
+  if (e.kind === 'restart') return <span>{t('gn.jn.restartLine', { n: e.text })}</span>;
+  if (e.kind === 'mod') {
+    return (
+      <span>
+        <button type="button" className="font-bold underline decoration-dotted underline-offset-2 hover:text-link" title={t('gn.md.history')} onClick={(ev) => { ev.stopPropagation(); onPlayer(e.text); }}>{e.text}</button>
+        {e.error && <span className="font-semibold text-mute"> · {e.error}</span>}
+      </span>
+    );
+  }
+  if (e.kind === 'link' || e.kind === 'plugin' || e.kind === 'conn') return <span>{e.kind === 'conn' ? `${e.text} · ${e.status}` : e.text}</span>;
+  return open ? <Styled text={e.text} /> : <span className="line-clamp-1"><Styled text={e.text} /></span>;
+}
+
+/** the row of an entry: a click opens it (the whole text as the game shows it, who and when, what belongs to it, what was around it) */
+function Row({ e, color, compact, open, onToggle, all, onReuse, onPlayer, onFilterServer }: {
+  e: Entry; color: string | null; compact: boolean; open: boolean; onToggle: () => void; all: Entry[]; onReuse: (text: string) => void; onPlayer: (nick: string) => void; onFilterServer: (id: number) => void;
+}) {
+  const advice = adviceKey(e);
+  const took = tookSeconds(e);
+  const related = open ? relatedOf(e, all) : [];
+  const [near, setNear] = useState<Entry[] | null>(null);
+  const loadNear = () => api<JournalAnswer>(`/game-news/journal?around=${e.ts}${e.serverId ? `&server=${e.serverId}` : ''}`).then((r) => setNear(r.items.filter((x) => x.id !== e.id))).catch(() => setNear([]));
+  const icon = e.kind === 'plugin' ? PLUGIN_ICON[e.status] ?? PLUGIN_ICON.other : KIND_ICON[e.kind];
+  const problem = isProblem(e);
+  return (
+    <li className={`jn-row ${problem ? 'is-problem' : ''} ${open ? 'is-open' : ''}`}>
+      <button type="button" className={`flex w-full items-start gap-3 text-left ${compact ? 'py-1.5' : 'py-2.5'}`} aria-expanded={open} onClick={onToggle}>
+        <span aria-hidden className="relative flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-soft text-base" title={t(`gn.jn.f.${e.kind === 'conn' ? 'plugin' : e.kind}` as 'gn.jn.f.all')}>
+          {icon}
+          {color && <i className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full ring-2 ring-card" style={{ background: color }} />}
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
+            <time dateTime={new Date(e.ts).toISOString()} title={`${fullTime(e.ts)} · ${soon(e.ts)}`} className="font-bold tabular-nums text-mute">{clock(e.ts)}</time>
+            <span className="min-w-0 truncate font-bold">{whoWhere(e)}</span>
+            <StatusPills e={e} />
+          </span>
+          {!compact && <span className="mt-0.5 block text-sm"><Body e={e} open={open} onPlayer={onPlayer} /></span>}
+          {problem && e.error && <span className="mt-0.5 block text-sm font-semibold text-bad">{e.error}</span>}
+        </span>
+        <span aria-hidden className="mt-1.5 shrink-0 text-mute">{open ? '▴' : '▾'}</span>
+      </button>
+
+      {open && (
+        <div className="space-y-3 pb-3 pl-11 text-sm">
+          {compact && <p className="wrap-break-word"><Body e={e} open onPlayer={onPlayer} /></p>}
+          {isMessage(e) && (
+            <div>
+              <div className="mb-1 text-xs font-bold text-mute">{t('gn.jn.preview')}</div>
+              <div className="jn-chat"><Styled text={e.text} /></div>
+            </div>
+          )}
+          <dl className="grid gap-x-6 gap-y-1 sm:grid-cols-2">
+            <div><dt className="text-xs font-bold text-mute">{t('gn.jn.when')}</dt><dd className="font-semibold">{fullTime(e.ts)}</dd></div>
+            {e.by && <div><dt className="text-xs font-bold text-mute">{t('gn.jn.by')}</dt><dd className="font-semibold">{e.by}</dd></div>}
+            {e.serverName && (
+              <div><dt className="text-xs font-bold text-mute">{t('gn.jn.where')}</dt><dd className="font-semibold">{e.serverId ? <button type="button" className="underline decoration-dotted underline-offset-2 hover:text-link" title={t('gn.jn.onlyServer')} onClick={() => onFilterServer(e.serverId!)}>{e.serverName}</button> : e.serverName}</dd></div>
+            )}
+            {took != null && <div><dt className="text-xs font-bold text-mute">{t('gn.jn.delivery')}</dt><dd className="font-semibold">{t('gn.jn.took', { s: took })}{e.shown != null && e.shown >= 0 ? ` · ${t('gn.jn.shown', { n: e.shown })}` : ''}</dd></div>}
+          </dl>
+          {advice && <p className="jn-advice">{t(advice)}</p>}
+          {related.length > 0 && (
+            <div>
+              <div className="mb-1 text-xs font-bold text-mute">{e.kind === 'restart' ? t('gn.jn.relatedRestart') : t('gn.jn.related')}</div>
+              <ul className="space-y-0.5">
+                {related.map((x) => (
+                  <li key={x.id} className="flex flex-wrap items-center gap-2"><time className="tabular-nums text-mute" title={fullTime(x.ts)}>{clock(x.ts)}</time><StatusPills e={x} /><span className="min-w-0 truncate"><Styled text={x.text} /></span></li>
+                ))}
+              </ul>
+            </div>
+          )}
+          <div className="flex flex-wrap items-center gap-2">
+            {(e.kind === 'message' || e.kind === 'auto') && <button type="button" className="btn btn-soft btn-sm" onClick={() => onReuse(e.text)}>{t('gn.reuse')}</button>}
+            <button type="button" className="btn btn-soft btn-sm" onClick={() => void loadNear()}>{t('gn.jn.around')}</button>
+          </div>
+          {near && (
+            near.length === 0
+              ? <p className="font-semibold text-mute">{t('gn.jn.aroundNone')}</p>
+              : (
+                <ul className="space-y-0.5 rounded-xl bg-soft p-2.5" aria-label={t('gn.jn.around')}>
+                  {near.slice(0, 30).map((x) => (
+                    <li key={x.id} className="flex flex-wrap items-center gap-2">
+                      <time className="tabular-nums text-mute" title={fullTime(x.ts)}>{clock(x.ts)}</time>
+                      <span aria-hidden>{x.kind === 'plugin' ? PLUGIN_ICON[x.status] ?? PLUGIN_ICON.other : KIND_ICON[x.kind]}</span>
+                      <span className="min-w-0 truncate font-semibold">{x.kind === 'restart' ? t('gn.jn.restartLine', { n: x.text }) : <Styled text={x.text} />}</span>
+                    </li>
+                  ))}
+                </ul>
+              )
+          )}
+        </div>
+      )}
+    </li>
+  );
+}
+
+/** how long the journal is kept and a way to clear the old part */
+function KeepSettings({ days, onChanged }: { days: number; onChanged: () => void }) {
+  useI18n();
+  const [value, setValue] = useState(days);
+  useEffect(() => setValue(days), [days]);
+  const save = async (n: number) => {
+    setValue(n);
+    try { await api('/game-news/journal/settings', 'PUT', { days: n }); toast(t('al.saved')); onChanged(); } catch (err) { toast(errText(err), 'err'); }
+  };
+  const purge = async () => {
+    if (!(await confirmDialog({ title: t('gn.jn.purgeTitle'), text: t('gn.jn.purgeText', { n: value }), confirmLabel: t('gn.jn.purge', { n: value }), danger: true }))) return;
+    try { const r = await api<{ removed: number }>(`/game-news/journal?olderThanDays=${value}`, 'DELETE'); toast(t('gn.jn.purged', { n: r.removed })); onChanged(); } catch (err) { toast(errText(err), 'err'); }
+  };
+  return (
+    <div className="flex flex-wrap items-center gap-2 rounded-xl bg-soft p-3 text-sm">
+      <label className="flex items-center gap-2 font-bold">
+        {t('gn.jn.keep')}
+        <select className="input w-28 py-1 text-sm" value={value} onChange={(e) => void save(Number(e.target.value))}>
+          {(KEEP_DAYS.includes(value as never) ? KEEP_DAYS : [...KEEP_DAYS, value].sort((a, b) => a - b)).map((d) => <option key={d} value={d}>{t('gn.jn.days', { n: d })}</option>)}
+        </select>
+      </label>
+      <button type="button" className="btn btn-soft btn-sm" onClick={() => void purge()}>{t('gn.jn.purge', { n: value })}</button>
+    </div>
+  );
+}
+
+/** everything the plugin did in one list: messages (by hand, by a rule, from Discord), restarts, linked players, what the plugin told about itself */
 export function JournalTab({ onReuse, onPlayer }: { onReuse: (text: string) => void; onPlayer: (nick: string) => void }) {
   useI18n();
   const [filter, setFilter] = useState<Filter>('all');
+  const [server, setServer] = useState(0);
+  const [servers, setServers] = useState<NewsServerInfo[]>([]);
+  // how many entries are asked for; another filter or server starts from the first page again
+  const key = `${filter}|${server}`;
+  const [more, setMore] = useState({ key, n: PAGE });
+  const limit = more.key === key ? more.n : PAGE;
   const [items, setItems] = useState<Entry[] | null>(null);
+  const [counts, setCounts] = useState<Counts | null>(null);
+  const [keepDays, setKeepDays] = useState(30);
+  const [compact, setCompact] = useState(readCompact);
+  const [openId, setOpenId] = useState<string | null>(null);
+  const [settings, setSettings] = useState(false);
   // the filter the person looks at now: an answer for another one (a slow request of the tab left a moment ago) is dropped
-  const current = useRef<Filter>(filter);
-  current.current = filter;
+  const current = useRef(key);
+  current.current = key;
+  const url = `/game-news/journal?kind=${filter}&limit=${limit}${server ? `&server=${server}` : ''}`;
+  const take = useCallback((k: string, r: JournalAnswer) => {
+    if (current.current !== k) return;
+    setItems(r.items);
+    if (r.counts) setCounts(r.counts);
+    if (r.retentionDays) setKeepDays(r.retentionDays);
+  }, []);
   // a new filter is read at once (the poll below only repeats it: waiting for its next turn left the list empty for ten seconds)
   useEffect(() => {
     let off = false;
     setItems(null);
-    void fetchJournal(filter).then((list) => { if (!off && list) setItems(list); });
+    void api<JournalAnswer>(url).then((r) => { if (!off) take(key, r); }).catch(() => undefined);
     return () => { off = true; };
-  }, [filter]);
-  usePoll(() => { const f = current.current; return fetchJournal(f).then((list) => { if (list && current.current === f) setItems(list); }); }, 10_000);
-  const pick = (f: Filter) => setFilter(f);
+  }, [url, key, take]);
+  usePoll(() => { const k = key; return api<JournalAnswer>(url).then((r) => take(k, r)).catch(() => undefined); }, 10_000);
+  useEffect(() => { void api<{ servers: NewsServerInfo[] }>('/game-news').then((r) => setServers(r.servers.filter((s) => s.hasToken))).catch(() => undefined); }, []);
+
+  const colorOf = useMemo(() => {
+    const m = new Map<number, string>();
+    for (const s of servers) m.set(s.id, gameColor(s.game));
+    return m;
+  }, [servers]);
+  const groups = useMemo(() => groupDays(items ?? []), [items]);
+  const toggleCompact = () => { const v = !compact; setCompact(v); try { localStorage.setItem(COMPACT_KEY, v ? '1' : '0'); } catch { /* not remembered */ } };
+  const reload = () => { void api<JournalAnswer>(url).then((r) => take(key, r)).catch(() => undefined); };
 
   return (
     <section className="panel space-y-3 p-5">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h3 className="font-extrabold">{t('gn.jn.title')}</h3>
+        <div className="flex flex-wrap items-center gap-2">
+          {servers.length > 1 && (
+            <select className="input w-48 py-1 text-sm" value={server} aria-label={t('gn.cn.server')} onChange={(e) => setServer(Number(e.target.value))}>
+              <option value={0}>{t('gn.cn.allServers')}</option>
+              {servers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+          )}
+          <button type="button" className={`chip-filter ${compact ? 'on' : ''}`} aria-pressed={compact} onClick={toggleCompact}>{t('gn.cn.compact')}</button>
+          <button type="button" className={`chip-filter ${settings ? 'on' : ''}`} aria-pressed={settings} aria-label={t('gn.jn.settings')} onClick={() => setSettings((v) => !v)} title={t('gn.jn.settings')}>⚙</button>
+        </div>
       </div>
-      <SubTabs label={t('gn.jn.title')} value={filter} onChange={pick} items={FILTERS.map((f) => ({ id: f, label: t(`gn.jn.f.${f}` as 'gn.jn.f.all') }))} />
+      {settings && <KeepSettings days={keepDays} onChanged={reload} />}
+      <SubTabs
+        label={t('gn.jn.title')}
+        value={filter}
+        onChange={(f) => { setFilter(f); setOpenId(null); }}
+        items={FILTERS.map((f) => ({ id: f, label: t(`gn.jn.f.${f}` as 'gn.jn.f.all'), badge: f === 'all' ? 0 : counts ? (f === 'problems' ? counts.problems : counts[f] ?? 0) : 0 }))}
+      />
+      {counts && <p className="text-xs font-semibold text-mute">{t('gn.jn.counts24')}</p>}
       {items == null && <div className="skeleton h-24 rounded-xl" aria-busy="true" />}
-      {items && items.length === 0 && <EmptyState icon="🗒" title={t('gn.jn.empty')} hint={t('gn.jn.emptyHint')} />}
-      {items && items.length > 0 && (
-        <ul className="divide-y divide-line">
-          {items.map((e) => (
-            <li key={e.id} className="flex flex-wrap items-start gap-x-4 gap-y-1 py-3">
-              <span aria-hidden className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-soft text-base" title={t(`gn.jn.f.${e.kind}` as 'gn.jn.f.all')}>{KIND_ICON[e.kind]}</span>
-              <div className="min-w-0 flex-1 basis-60">
-                <div className="flex flex-wrap items-center gap-2 text-sm font-bold">
-                  {e.kind === 'restart'
-                    ? <span className={RESTART_STATUS[e.status]?.cls ?? 'pill pill-mute'}>{RESTART_STATUS[e.status] ? t(RESTART_STATUS[e.status].text) : e.status}</span>
-                    : e.kind === 'mod'
-                      ? <span className={e.status === 'unban' ? 'pill pill-ok' : 'pill pill-warn'}>{t(`gn.md.k.${e.status}` as 'gn.md.k.kick')}</span>
-                      : e.kind === 'link'
-                      ? <span className="pill pill-ok">{LINK_TEXT[e.status] ? t(LINK_TEXT[e.status]) : e.status}</span>
-                      : <span className={MSG_STATUS[e.status]?.cls ?? 'pill pill-mute'}>{MSG_STATUS[e.status] ? t(MSG_STATUS[e.status].text) : e.status}</span>}
-                  {e.serverName && <span>{e.serverName}</span>}
-                  <span className="font-semibold text-mute">{soon(e.ts)}{e.by ? ` · ${e.by}` : ''}</span>
-                </div>
-                {e.kind === 'restart'
-                  ? <p className="mt-1 text-sm">{t('gn.jn.restartLine', { n: e.text })}</p>
-                  : e.kind === 'mod'
-                    ? (
-                      <p className="mt-1 text-sm">
-                        <button type="button" className="font-bold underline decoration-dotted underline-offset-2 hover:text-link" title={t('gn.md.history')} onClick={() => onPlayer(e.text)}>{e.text}</button>
-                        {e.error && <span className="font-semibold text-mute"> · {e.error}</span>}
-                      </p>
-                    )
-                  : e.kind === 'link'
-                    ? <p className="mt-1 text-sm">{e.text}</p>
-                    : <p className="mt-1 wrap-break-word text-sm"><Styled text={e.text} /></p>}
-                {e.kind !== 'mod' && (e.status === 'failed' || e.status === 'expired') && e.error && <p className="text-sm font-semibold text-danger">{e.error}</p>}
-              </div>
-              {(e.kind === 'message' || e.kind === 'auto') && <button type="button" className="btn btn-soft btn-sm" onClick={() => onReuse(e.text)}>{t('gn.reuse')}</button>}
-            </li>
-          ))}
-        </ul>
+      {items && items.length === 0 && <EmptyState icon="🗒" title={filter === 'problems' ? t('gn.jn.noProblems') : t('gn.jn.empty')} hint={filter === 'problems' ? t('gn.jn.noProblemsHint') : t('gn.jn.emptyHint')} />}
+      {groups.map((g) => (
+        <div key={g.day}>
+          <h4 className="sticky top-0 z-[1] bg-card/95 py-1 text-sm font-extrabold capitalize text-mute backdrop-blur">{dayTitle(g.day)} <span className="font-semibold">· {g.items.length}</span></h4>
+          <ul className="divide-y divide-line">
+            {g.items.map((e) => (
+              <Row key={e.id} e={e} color={e.serverId && servers.length > 1 ? colorOf.get(e.serverId) ?? null : null} compact={compact} open={openId === e.id} onToggle={() => setOpenId(openId === e.id ? null : e.id)} all={items ?? []} onReuse={onReuse} onPlayer={onPlayer} onFilterServer={setServer} />
+            ))}
+          </ul>
+        </div>
+      ))}
+      {items && items.length >= limit && limit < 500 && (
+        <div className="text-center"><button type="button" className="btn btn-soft btn-sm" onClick={() => setMore({ key, n: limit + PAGE })}>{t('gn.cn.more')}</button></div>
       )}
     </section>
   );
 }
+
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/GameNewsLinks.tsx" << '__COREGSM_EOF__'
@@ -172966,6 +173442,73 @@ export function badgeSnippets(origin: string, id: number, name: string, opts: Bu
   };
 }
 __COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/pages"
+  cat > "$APP_DIR/core-frontend/src/pages/journalLogic.ts" << '__COREGSM_EOF__'
+/** The journal of the game plugin: what is a problem, what advice goes with an error, what belongs together, days. */
+import { dayKey } from './connectionsLogic';
+
+export type Kind = 'message' | 'auto' | 'discord' | 'restart' | 'link' | 'mod' | 'plugin' | 'conn';
+export interface Entry {
+  id: string; ts: number; kind: Kind; serverId: number | null; serverName: string; text: string; status: string; error: string; by: string;
+  /** a message: when the plugin took it, and how many players saw it (null / undefined = the plugin did not say) */
+  deliveredAt?: number | null;
+  shown?: number | null;
+}
+
+export const FILTERS = ['all', 'problems', 'message', 'auto', 'discord', 'restart', 'plugin', 'link', 'mod'] as const;
+export type Filter = (typeof FILTERS)[number];
+export const PLUGIN_KINDS = ['mass', 'ping', 'steam', 'freeze', 'save', 'other'] as const;
+
+export const isMessage = (e: Entry): boolean => e.kind === 'message' || e.kind === 'auto' || e.kind === 'discord';
+
+/** what did not go well: a message that did not reach the game, a missed restart, a note of the plugin that is not a plain save */
+export const isProblem = (e: Entry): boolean =>
+  (isMessage(e) && (e.status === 'failed' || e.status === 'expired')) || (e.kind === 'restart' && e.status === 'missed') || (e.kind === 'plugin' && e.status !== 'save');
+
+/** the key of the advice for the error of an entry (what to do about it), or null */
+export function adviceKey(e: Entry): 'gn.jn.adv.expired' | 'gn.jn.adv.token' | 'gn.jn.adv.world' | null {
+  if (!isMessage(e) || !(e.status === 'failed' || e.status === 'expired')) return null;
+  if (/не забрал/i.test(e.error)) return 'gn.jn.adv.expired';
+  if (/не создан токен/i.test(e.error)) return 'gn.jn.adv.token';
+  if (/мир сервера/i.test(e.error)) return 'gn.jn.adv.world';
+  return null;
+}
+
+/** how long the plugin took to take a message, in seconds with a tenth (null when it is not known) */
+export function tookSeconds(e: Entry): number | null {
+  if (!isMessage(e) || e.deliveredAt == null || e.deliveredAt < e.ts) return null;
+  return Math.round((e.deliveredAt - e.ts) / 100) / 10;
+}
+
+/**
+ * What belongs to an entry: the other sends of the same rule (an automatic announcement), the countdown messages of a restart
+ * (those of «авто: рестарт» of the same server around its start). Never the entry itself.
+ */
+export function relatedOf(e: Entry, all: Entry[], limit = 6): Entry[] {
+  if (e.kind === 'auto' && e.by) return all.filter((x) => x.id !== e.id && x.kind === 'auto' && x.by === e.by && x.serverId === e.serverId).slice(0, limit);
+  if (e.kind === 'restart') {
+    const minutes = Number(e.text) || 10;
+    return all.filter((x) => x.kind === 'auto' && x.by === 'авто: рестарт' && x.serverId === e.serverId && x.ts >= e.ts - 60_000 && x.ts <= e.ts + (minutes + 5) * 60_000).slice(0, limit);
+  }
+  return [];
+}
+
+export interface DayGroup<T> { day: string; items: T[] }
+/** entries newest first, cut into local days */
+export function groupDays<T extends { ts: number }>(list: T[]): DayGroup<T>[] {
+  const out: DayGroup<T>[] = [];
+  for (const e of list) {
+    const day = dayKey(e.ts);
+    const last = out[out.length - 1];
+    if (last && last.day === day) last.items.push(e);
+    else out.push({ day, items: [e] });
+  }
+  return out;
+}
+
+/** the days a journal may be kept for (the choice of the administrator) */
+export const KEEP_DAYS = [7, 14, 30, 90, 180, 365] as const;
+__COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages/settings"
   cat > "$APP_DIR/core-frontend/src/pages/settings/BotCard.tsx" << '__COREGSM_EOF__'
 /** Settings → Bot: Discord token, proxy, Discord sign-in, invite link and the bot's state. */
@@ -181006,6 +181549,12 @@ __COREGSM_EOF__
   a.adm-reason { display: flex; width: 100%; justify-content: space-between; padding-block: 5px; }
   a.adm-reason .adm-reason-go { margin-left: auto; }
 }
+
+/* the journal of the plugin: a message as the game shows it, a problem with a stripe, the advice for an error */
+.jn-chat { padding: .55rem .8rem; border-radius: var(--r-md); background: rgb(14 14 18); color: #f1f1f4; font-family: var(--font-mono); font-size: var(--fs-sm); line-height: 1.5; overflow-wrap: anywhere; }
+.jn-row.is-problem { box-shadow: inset 3px 0 0 rgb(var(--bad) / .7); padding-left: 8px; }
+.jn-row > button:focus-visible { outline: 2px solid rgb(var(--brand)); outline-offset: 2px; border-radius: var(--r-md); }
+.jn-advice { margin: 0; padding: .55rem .75rem; border-radius: var(--r-md); background: rgb(var(--warnbg)); color: rgb(var(--warn)); font-weight: 650; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/ui.tsx" << '__COREGSM_EOF__'

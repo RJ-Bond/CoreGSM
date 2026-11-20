@@ -29,3 +29,9 @@
   a.adm-reason { display: flex; width: 100%; justify-content: space-between; padding-block: 5px; }
   a.adm-reason .adm-reason-go { margin-left: auto; }
 }
+
+/* the journal of the plugin: a message as the game shows it, a problem with a stripe, the advice for an error */
+.jn-chat { padding: .55rem .8rem; border-radius: var(--r-md); background: rgb(14 14 18); color: #f1f1f4; font-family: var(--font-mono); font-size: var(--fs-sm); line-height: 1.5; overflow-wrap: anywhere; }
+.jn-row.is-problem { box-shadow: inset 3px 0 0 rgb(var(--bad) / .7); padding-left: 8px; }
+.jn-row > button:focus-visible { outline: 2px solid rgb(var(--brand)); outline-offset: 2px; border-radius: var(--r-md); }
+.jn-advice { margin: 0; padding: .55rem .75rem; border-radius: var(--r-md); background: rgb(var(--warnbg)); color: rgb(var(--warn)); font-weight: 650; }

@@ -6,6 +6,7 @@
  * game (after an update of the game) are told in the service channel; the button «Обновить плагин»; the language of the plugin.
  */
 import { registerGameNewsMetrics } from './gameNewsMetrics.js';
+import { registerGameNewsPluginLog } from './gameNewsPluginLog.js';
 import type { Express, RequestHandler } from 'express';
 import { z } from 'zod';
 import { systemTarget } from '../alerts/alertRoute.js';
@@ -43,7 +44,7 @@ const lastAlert = new Map<string, number>();
 
 export interface ConnectionEvent { kind: 'join' | 'leave'; id: string; name: string; reason: string; by: string; minutes: number; at: number }
 
-function alertOnce(key: string, now: number, send: () => void): boolean {
+export function alertOnce(key: string, now: number, send: () => void): boolean {
   if (now - (lastAlert.get(key) ?? 0) < ALERT_PAUSE_MS) return false;
   lastAlert.set(key, now);
   try { send(); } catch { /* an alert must not stop the journal */ }
@@ -104,6 +105,7 @@ export function savePluginProblems(serverId: number, header: string, now = Date.
 
 export function registerGameNewsConnections({ app, admin }: { app: Express; admin: RequestHandler }): void {
   registerGameNewsMetrics({ app, admin });
+  registerGameNewsPluginLog({ app, admin });
   // the plugin: a batch of joins and departures; a field that is too long is cut, not a reason to refuse the batch
   const cut = (n: number) => z.string().max(2000).transform((s) => s.slice(0, n));
   app.post('/api/game-news/connections', (req, res) => {

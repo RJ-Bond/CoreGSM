@@ -47,7 +47,7 @@ const sendSchema = z.object({
 });
 
 /** queued messages that waited too long stop being valid */
-function expireOld(now = Date.now()): void {
+export function expireOld(now = Date.now()): void {
   db.prepare("UPDATE game_news_log SET status = 'expired', error = 'Плагин не забрал сообщение за 5 минут' WHERE status = 'queued' AND sent_at < ?").run(now - QUEUE_TTL_MS);
 }
 
