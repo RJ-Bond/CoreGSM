@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="706a92d2c39e"
+COREGSM_BUILD="2999ab2222e4"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.2.61"
+COREGSM_VERSION="1.2.62"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -162176,7 +162176,7 @@ function WhenBlock({ c }: { c: Community }) {
       {peak ? (
         <p className={`cm-best ${inPeak ? 'is-now' : ''}`}>
           <span aria-hidden>🕗</span>
-          {dow === here.dow ? <>{t('cm.when.today')} <b>{peak}</b>{inPeak ? t('cm.when.peak') : ''}</> : <>{t('cm.when.dow', { d: dowShort()[dow] })} <b>{peak}</b></>}
+          <span>{dow === here.dow ? <>{t('cm.when.today')} <b>{peak}</b>{inPeak ? t('cm.when.peak') : ''}</> : <>{t('cm.when.dow', { d: dowShort()[dow] })} <b>{peak}</b></>}</span>
         </p>
       ) : null}
       {sparse ? <p className="cm-sub cm-sparse">{t('cm.when.sparse')}</p> : (
@@ -180919,7 +180919,12 @@ __COREGSM_EOF__
 .kit-icon { display: grid; justify-items: center; gap: .35rem; padding: .75rem .25rem; border-radius: var(--r-md); background: rgb(var(--soft)); color: rgb(var(--ink)); font-size: var(--fs-xs); font-weight: 600; text-align: center; overflow-wrap: anywhere; }
 .kit-icon span { color: rgb(var(--mute)); }
 /* a frame that shows a component in the other theme next to the current one */
-.kit-theme { border-radius: var(--r-xl); padding: 1.25rem; background: rgb(var(--page)); color: rgb(var(--ink)); border: 1px solid var(--tile-border); }
+.kit-theme { min-width: 0; overflow-x: auto; border-radius: var(--r-xl); padding: 1.25rem; background: rgb(var(--page)); color: rgb(var(--ink)); border: 1px solid var(--tile-border);
+  /* the colours of the utilities (text-mute, bg-card…) are written on :root as rgb(var(--x)) and keep the page's theme unless they are said again here */
+  --color-page: rgb(var(--page)); --color-card: rgb(var(--card)); --color-raised: rgb(var(--raised)); --color-ink: rgb(var(--ink)); --color-mute: rgb(var(--mute));
+  --color-line: rgb(var(--line)); --color-field: rgb(var(--field)); --color-soft: rgb(var(--soft)); --color-link: rgb(var(--link)); --color-ok: rgb(var(--ok)); --color-okbg: rgb(var(--okbg));
+  --color-warn: rgb(var(--warn)); --color-warnbg: rgb(var(--warnbg)); --color-bad: rgb(var(--bad)); --color-badbg: rgb(var(--badbg));
+}
 :root .kit-theme[data-kit-theme='light'] {
   --page: 243 244 248; --card: 255 255 255; --raised: 255 255 255; --ink: 18 20 26; --mute: 92 99 114; --line: 231 233 240; --field: 122 129 143;
   --soft: 236 238 246; --link: 79 70 229; --ok: 18 120 66; --okbg: 220 247 232; --warn: 146 94 0; --warnbg: 255 241 205; --bad: 185 40 40; --badbg: 254 226 226;
@@ -180977,6 +180982,16 @@ __COREGSM_EOF__
 @media (min-width: 640px) { .st-bars { height: 48px; } }
 .st-banner-ico::after { animation: none; opacity: .35; }
 @media (prefers-reduced-motion: no-preference) { .st-banner.is-bad .st-banner-ico::after { animation: st-ping 3.2s ease-out infinite; opacity: .5; } }
+
+/* the status page on a phone: the uptime card with a ring takes the whole row (the ring sat on the number in a half-width card) */
+@media (max-width: 639px) { .st-banner-stats > div:nth-child(3) { flex: 1 1 100%; } }
+
+/* the reasons under the health ring: «Открыть →» never breaks in two; on a phone every reason is a row of its own, the text takes the room and the action stays at the edge */
+.adm-reason-go { white-space: nowrap; }
+@media (max-width: 639px) {
+  a.adm-reason { display: flex; width: 100%; justify-content: space-between; padding-block: 5px; }
+  a.adm-reason .adm-reason-go { margin-left: auto; }
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/ui.tsx" << '__COREGSM_EOF__'

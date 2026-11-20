@@ -19,3 +19,13 @@
 @media (min-width: 640px) { .st-bars { height: 48px; } }
 .st-banner-ico::after { animation: none; opacity: .35; }
 @media (prefers-reduced-motion: no-preference) { .st-banner.is-bad .st-banner-ico::after { animation: st-ping 3.2s ease-out infinite; opacity: .5; } }
+
+/* the status page on a phone: the uptime card with a ring takes the whole row (the ring sat on the number in a half-width card) */
+@media (max-width: 639px) { .st-banner-stats > div:nth-child(3) { flex: 1 1 100%; } }
+
+/* the reasons under the health ring: «Открыть →» never breaks in two; on a phone every reason is a row of its own, the text takes the room and the action stays at the edge */
+.adm-reason-go { white-space: nowrap; }
+@media (max-width: 639px) {
+  a.adm-reason { display: flex; width: 100%; justify-content: space-between; padding-block: 5px; }
+  a.adm-reason .adm-reason-go { margin-left: auto; }
+}

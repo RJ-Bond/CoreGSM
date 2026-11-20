@@ -25,7 +25,12 @@
 .kit-icon { display: grid; justify-items: center; gap: .35rem; padding: .75rem .25rem; border-radius: var(--r-md); background: rgb(var(--soft)); color: rgb(var(--ink)); font-size: var(--fs-xs); font-weight: 600; text-align: center; overflow-wrap: anywhere; }
 .kit-icon span { color: rgb(var(--mute)); }
 /* a frame that shows a component in the other theme next to the current one */
-.kit-theme { border-radius: var(--r-xl); padding: 1.25rem; background: rgb(var(--page)); color: rgb(var(--ink)); border: 1px solid var(--tile-border); }
+.kit-theme { min-width: 0; overflow-x: auto; border-radius: var(--r-xl); padding: 1.25rem; background: rgb(var(--page)); color: rgb(var(--ink)); border: 1px solid var(--tile-border);
+  /* the colours of the utilities (text-mute, bg-card…) are written on :root as rgb(var(--x)) and keep the page's theme unless they are said again here */
+  --color-page: rgb(var(--page)); --color-card: rgb(var(--card)); --color-raised: rgb(var(--raised)); --color-ink: rgb(var(--ink)); --color-mute: rgb(var(--mute));
+  --color-line: rgb(var(--line)); --color-field: rgb(var(--field)); --color-soft: rgb(var(--soft)); --color-link: rgb(var(--link)); --color-ok: rgb(var(--ok)); --color-okbg: rgb(var(--okbg));
+  --color-warn: rgb(var(--warn)); --color-warnbg: rgb(var(--warnbg)); --color-bad: rgb(var(--bad)); --color-badbg: rgb(var(--badbg));
+}
 :root .kit-theme[data-kit-theme='light'] {
   --page: 243 244 248; --card: 255 255 255; --raised: 255 255 255; --ink: 18 20 26; --mute: 92 99 114; --line: 231 233 240; --field: 122 129 143;
   --soft: 236 238 246; --link: 79 70 229; --ok: 18 120 66; --okbg: 220 247 232; --warn: 146 94 0; --warnbg: 255 241 205; --bad: 185 40 40; --badbg: 254 226 226;

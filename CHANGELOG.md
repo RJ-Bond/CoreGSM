@@ -16,6 +16,9 @@ interface language; the GitHub release text is built from the section of the ver
 
 ## Не выпущено | Unreleased
 
+### 🐛 Исправлено | Fixed
+- 🩹 Исправлено по скриншотам: на телефоне кольцо аптайма больше не лежит на числе на «Статусе», «Открыть →» в причинах здоровья панели не рвётся на две строки, строка «Сегодня лучшее время зайти» в «Сообществе» переносится по словам, образцы тем в UI-kit используют цвета своей темы и не вылезают за экран | Fixed from screenshots: on a phone the uptime ring no longer sits on the number on the status page, «Open →» in the panel health reasons does not break in two, the «Today is the best time to join» line in Community wraps by words, the theme samples in the UI kit use the colours of their own theme and do not stick out of the screen
+
 ### ✨ Новое | New
 - 🗓 Ближайший вайп: строка «Ближайший вайп: 25 ноября, 18:00 (через 3 дня)» в шапке сервера и вайпы в календаре сообщества (.ics) | Next wipe: a «Next wipe: 25 November, 18:00 (in 3 days)» line in the server header and wipes in the community calendar (.ics)
 - 📱 Слабое устройство (память до 2 ГБ или два ядра при малой памяти) само переходит в экономный режим без украшений | A weak device (up to 2 GB of memory, or two cores with little memory) switches to the lite mode without decorations by itself

@@ -220,7 +220,7 @@ function WhenBlock({ c }: { c: Community }) {
       {peak ? (
         <p className={`cm-best ${inPeak ? 'is-now' : ''}`}>
           <span aria-hidden>🕗</span>
-          {dow === here.dow ? <>{t('cm.when.today')} <b>{peak}</b>{inPeak ? t('cm.when.peak') : ''}</> : <>{t('cm.when.dow', { d: dowShort()[dow] })} <b>{peak}</b></>}
+          <span>{dow === here.dow ? <>{t('cm.when.today')} <b>{peak}</b>{inPeak ? t('cm.when.peak') : ''}</> : <>{t('cm.when.dow', { d: dowShort()[dow] })} <b>{peak}</b></>}</span>
         </p>
       ) : null}
       {sparse ? <p className="cm-sub cm-sparse">{t('cm.when.sparse')}</p> : (
