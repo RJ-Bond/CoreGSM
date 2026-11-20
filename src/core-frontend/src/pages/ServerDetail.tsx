@@ -5,7 +5,7 @@ import ChartTable, { bucketFor, bucketRows } from '../components/ChartTable';
 import { useAppearance } from '../appearance';
 import { setPageTitleDetail } from '../pageTitle';
 import ServerReviews from '../components/server/Reviews';
-import { eventFacts, whenShort } from '../components/server/serverLogic';
+import { eventFacts, whenShort, type EventKind } from '../components/server/serverLogic';
 import ProbesView, { useProbes } from '../components/server/ProbesView';
 import { useEffect, useRef, useState, type ReactNode, type TouchEvent } from 'react';
 import { t, useI18n, type TKey } from '../i18n';
@@ -35,6 +35,7 @@ import ServerNews from '../components/server/ServerNews';
 import MoreMenu, { type MoreItem } from '../components/server/MoreMenu';
 import { gameAccent, isFullNow, offlineSince } from '../components/server/serverLogic';
 import { calmSeriesColor, useCoverAccent } from '../components/server/coverAccent';
+import { nextUsualPeak } from '../components/servers/heroLogic';
 import ServerTabs, { TAB_LIST, panelDomId, tabDomId } from '../components/server/ServerTabs';
 import { AddrCopy } from '../components/servers/serverUi';
 import { BlockBoundary, SectionCard, useSectionState, type SectionDef } from '../components/server/Sections';
@@ -110,7 +111,7 @@ export default function ServerDetail({ id, tab = '' }: { id: number; tab?: strin
 }
 
 /** under the recent events: how many outages the period had and when the last one was */
-function OutageFacts({ events }: { events: { ts: number; type: 'up' | 'down' | 'peak' | 'maintenance' }[] }) {
+function OutageFacts({ events }: { events: { ts: number; type: EventKind }[] }) {
   useI18n();
   const f = eventFacts(events);
   return (
@@ -671,6 +672,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
           recent={recent}
           now={nowTs}
           lastSeen={s.updatedAt}
+          usual={nextUsualPeak(data.baseline ?? null, nowTs, 24)}
         />
 
         {!s.online && s.error && !s.hasStatus && (

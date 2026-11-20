@@ -21,7 +21,12 @@ describe('events', () => {
     { ts: 1, type: 'maintenance' as const },
   ];
   it('counts every type', () => {
-    expect(eventCounts(ev)).toEqual({ all: 5, down: 1, up: 1, peak: 2, maintenance: 1 });
+    expect(eventCounts(ev)).toEqual({ all: 5, down: 1, up: 1, peak: 2, maintenance: 1, changes: 0 });
+  });
+  it('puts the new versions and maps under «changes»', () => {
+    const more = [...ev, { ts: 9, type: 'version' as const }, { ts: 10, type: 'map' as const }];
+    expect(eventCounts(more).changes).toBe(2);
+    expect(filterEvents(more, 'changes').map((e) => e.ts)).toEqual([9, 10]);
   });
   it('filters by type', () => {
     expect(filterEvents(ev, 'all')).toHaveLength(5);

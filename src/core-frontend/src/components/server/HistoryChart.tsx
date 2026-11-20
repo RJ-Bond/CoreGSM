@@ -7,6 +7,9 @@ import { findPeak, peakWhen } from './serverLogic';
 
 type Point = ServerDetails['points'][number];
 type Ev = ServerDetails['events'][number];
+/** the events drawn on the chart: new versions and maps stay in the feed only */
+type MarkType = 'down' | 'up' | 'peak' | 'maintenance';
+const isMark = (e: Ev): e is Ev & { type: MarkType } => e.type === 'down' || e.type === 'up' || e.type === 'peak' || e.type === 'maintenance';
 export type Series = 'players' | 'ping';
 
 /** 0..yMax with about four steps of a "nice" size (1, 2, 5 x 10^n); the scale follows the data, not the server slots */
@@ -22,15 +25,15 @@ function niceScale(dataMax: number, minTop: number): { max: number; step: number
   return { max, step, ticks };
 }
 
-const MARK: Record<Ev['type'], { fill: string; path: string }> = {
+const MARK: Record<MarkType, { fill: string; path: string }> = {
   down: { fill: 'rgb(var(--bad))', path: 'M12 5v12M7 13l5 5 5-5' },
   up: { fill: 'rgb(var(--ok))', path: 'M5 12.5l4.5 4.5L19 7.5' },
   peak: { fill: 'rgb(var(--link))', path: 'M12 19V6M7 11l5-5 5 5' },
   maintenance: { fill: 'rgb(var(--warn))', path: 'M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z' },
 };
 const MARK_ORDER = ['down', 'up', 'peak', 'maintenance'] as const;
-const MARK_KEY: Record<Ev['type'], TKey> = { down: 'd2.ef.m.down', up: 'd2.ef.m.up', peak: 'd2.ef.m.peak', maintenance: 'd2.ef.m.maint' };
-const markLabel = (type: Ev['type']) => t(MARK_KEY[type]);
+const MARK_KEY: Record<MarkType, TKey> = { down: 'd2.ef.m.down', up: 'd2.ef.m.up', peak: 'd2.ef.m.peak', maintenance: 'd2.ef.m.maint' };
+const markLabel = (type: MarkType) => t(MARK_KEY[type]);
 
 const tickLabel = (ts: number, spanMs: number) =>
   spanMs <= 36 * 3600_000
@@ -110,7 +113,7 @@ export default function HistoryChart({
   if (!zoom && (sparse || late)) t0 = Math.min(Math.max(winStart, first - (now - first) * 0.06), now - 15 * 60_000);
   const span = now - t0;
   // vertical markers for outages, returns and the busiest moment
-  const marks = events.filter((e) => e.ts >= t0 && e.ts <= now).slice(0, 40);
+  const marks = events.filter(isMark).filter((e) => e.ts >= t0 && e.ts <= now).slice(0, 40);
   const T = marks.length ? 30 : 14;
   const x = (ts: number) => L + ((ts - t0) / span) * (W - L - R);
 

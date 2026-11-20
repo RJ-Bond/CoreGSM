@@ -10,8 +10,8 @@ type Ev = ServerDetails['events'][number];
 const dayTitle = (kind: 'today' | 'yesterday' | 'date', ts: number): string =>
   kind === 'today' ? t('srv.ev.today') : kind === 'yesterday' ? t('srv.ev.yesterday')
     : new Date(ts).toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long' });
-const FILTER_KEY: Record<EventFilter, 'srv.ev.all' | 'srv.ev.down' | 'srv.ev.up' | 'srv.ev.peak' | 'srv.ev.maint'> = {
-  all: 'srv.ev.all', down: 'srv.ev.down', up: 'srv.ev.up', peak: 'srv.ev.peak', maintenance: 'srv.ev.maint',
+const FILTER_KEY: Record<EventFilter, 'srv.ev.all' | 'srv.ev.down' | 'srv.ev.up' | 'srv.ev.peak' | 'srv.ev.maint' | 'srv.ev.changes'> = {
+  all: 'srv.ev.all', down: 'srv.ev.down', up: 'srv.ev.up', peak: 'srv.ev.peak', maintenance: 'srv.ev.maint', changes: 'srv.ev.changes',
 };
 const absTime = (ts: number) => new Date(ts).toLocaleString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' });
 const clock = (ts: number) => new Date(ts).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
@@ -20,14 +20,18 @@ const ICON: Record<Ev['type'], { cls: string; path: string }> = {
   up: { cls: 'bg-okbg text-ok', path: 'M5 12.5l4.5 4.5L19 7.5' },
   down: { cls: 'bg-badbg text-bad', path: 'M12 5v10M7 12l5 5 5-5' },
   peak: { cls: 'bg-soft text-link', path: 'M3 17l6-6 4 4 8-8M15 7h6v6' },
+  version: { cls: 'bg-soft text-link', path: 'M3 12V4h8l10 10-8 8L3 12zM7.5 8h.01' },
+  map: { cls: 'bg-soft text-link', path: 'M12 21s7-6.2 7-11.5A7 7 0 0 0 5 9.5C5 14.8 12 21 12 21zM12 12a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5z' },
   maintenance: { cls: 'bg-soft text-link', path: 'M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z' },
 };
 
-const MARK_RU: Record<Ev['type'], TKey> = { up: 'd2.ef.m.up', down: 'd2.ef.m.down', peak: 'd2.ef.m.peak', maintenance: 'd2.ef.m.maint' };
+const MARK_RU: Record<Ev['type'], TKey> = { up: 'd2.ef.m.up', down: 'd2.ef.m.down', peak: 'd2.ef.m.peak', maintenance: 'd2.ef.m.maint', version: 'd2.ef.m.version', map: 'd2.ef.m.map' };
 
 function title(e: Ev, downFor: number | null, stillDown: boolean): string {
   if (e.type === 'up') return t('d2.ef.up');
   if (e.type === 'peak') return t('d2.ef.peak', { n: e.players ?? '–' });
+  if (e.type === 'version') return e.from ? t('d2.ef.version', { from: e.from, to: e.name ?? '' }) : t('d2.ef.versionTo', { to: e.name ?? '' });
+  if (e.type === 'map') return e.from ? t('d2.ef.map', { from: e.from, to: e.name ?? '' }) : t('d2.ef.mapTo', { to: e.name ?? '' });
   if (e.type === 'maintenance') return e.name ? t('d2.ef.maintName', { name: e.name }) : t('d2.ef.maint');
   if (downFor != null) return t('d2.ef.downFor', { v: fmtDuration(downFor) });
   return stillDown ? t('d2.ef.stillDown') : t('d2.ef.down');

@@ -12,18 +12,21 @@ export function gameAccent(game: string): string {
 }
 
 // ---------- events ----------
-export type EventKind = 'up' | 'down' | 'peak' | 'maintenance';
-export type EventFilter = 'all' | 'down' | 'up' | 'peak' | 'maintenance';
-export const EVENT_FILTERS: EventFilter[] = ['all', 'down', 'up', 'peak', 'maintenance'];
+export type EventKind = 'up' | 'down' | 'peak' | 'maintenance' | 'version' | 'map';
+/** «changes» are the new versions of the game and the new maps */
+export type EventFilter = 'all' | 'down' | 'up' | 'peak' | 'maintenance' | 'changes';
+export const EVENT_FILTERS: EventFilter[] = ['all', 'down', 'up', 'peak', 'maintenance', 'changes'];
 
 export function eventCounts(events: { type: EventKind }[]): Record<EventFilter, number> {
-  const c: Record<EventFilter, number> = { all: events.length, down: 0, up: 0, peak: 0, maintenance: 0 };
-  for (const e of events) c[e.type] += 1;
+  const c: Record<EventFilter, number> = { all: events.length, down: 0, up: 0, peak: 0, maintenance: 0, changes: 0 };
+  for (const e of events) c[e.type === 'version' || e.type === 'map' ? 'changes' : e.type] += 1;
   return c;
 }
 
 export function filterEvents<T extends { type: EventKind }>(events: T[], filter: EventFilter): T[] {
-  return filter === 'all' ? events : events.filter((e) => e.type === filter);
+  if (filter === 'all') return events;
+  if (filter === 'changes') return events.filter((e) => e.type === 'version' || e.type === 'map');
+  return events.filter((e) => e.type === filter);
 }
 
 const dayKey = (ts: number) => { const d = new Date(ts); return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`; };

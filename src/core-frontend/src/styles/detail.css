@@ -684,3 +684,6 @@ ul > .pl-group:first-child { padding-top: 2px; }
   /* the name and the numbers of the server stay in view next to the tabs while the page is scrolled */
   .srv-shell.srv-headwide .srv-mini-wrap { display: block; }
 }
+
+/* «usually the busiest around 20:00» under the slot bar of the header */
+.srv-hero-usual { margin: .45rem 0 0; font-size: var(--fs-sm); font-weight: 650; color: rgb(255 255 255 / .78); }

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { t, useI18n } from '../../i18n';
-import { AnimatedNumber, Burst, IconBell, ago } from '../../ui';
+import { AnimatedNumber, Burst, IconBell, ago, fmtTime } from '../../ui';
+import type { UsualPeak } from '../servers/heroLogic';
 import MaintenanceChip from '../MaintenanceChip';
 import NickPic from '../NickPic';
 import { capLevel, capacityPct, slotsInfo } from '../servers/capacity';
@@ -113,7 +114,7 @@ function WhoStack({ who, players, href, now }: { who: Who[]; players: number; hr
  * the maintenance chip, who is playing, and, when the server is full, «Сообщить, когда будет место».
  */
 export default function Hero({
-  online, hasStatus, players, max, maintenance, freeSlot, onNotify, who = [], whoHref, peak = null, recent = [], now, lastSeen = null,
+  online, hasStatus, players, max, maintenance, freeSlot, onNotify, who = [], whoHref, peak = null, recent = [], now, lastSeen = null, usual = null,
 }: {
   online: boolean;
   hasStatus: boolean;
@@ -131,6 +132,8 @@ export default function Hero({
   now: number;
   /** ms of the last answer (shown in the one status line of a server that is down) */
   lastSeen?: number | null;
+  /** when the server is usually the busiest in the coming hours (by its baseline of the week) */
+  usual?: UsualPeak | null;
 }) {
   useI18n();
   // a new record while the page is open
@@ -186,6 +189,7 @@ export default function Hero({
       </div>
       {online && <HeroSpark values={recent} />}
       {online && max > 0 && <SlotBar players={players} max={max} peak={peak} />}
+      {online && usual && <p className="srv-hero-usual">{usual.now ? t('srv.hero.usualNow', { n: usual.value }) : t('srv.hero.usualAt', { time: fmtTime(usual.at), n: usual.value })}</p>}
       {online && who.length > 0 && <WhoStack who={who} players={players} href={whoHref} now={now} />}
       {freeSlot !== 'hidden' && (
         <div className="srv-hero-free mt-3">

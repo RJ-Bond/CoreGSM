@@ -153,6 +153,21 @@ describe('confirmed failures in the poller', () => {
     assert.deepEqual(status(s.id), { online: 1, f: 0 });
   });
 
+  it('a new version or map is recorded as a change; the first answer is not one', () => {
+    const s = addServer();
+    const t = Date.now();
+    const count = () => db.prepare('SELECT COUNT(*) AS c FROM server_changes WHERE server_id = ?').pluck().get(s.id);
+    applyPollResult(s, { ...UP, version: '1.0', map: 'a' }, t);
+    assert.equal(count(), 0);
+    applyPollResult(s, { ...UP, version: '1.0', map: 'a' }, t + 1);
+    assert.equal(count(), 0);
+    applyPollResult(s, { ...UP, version: '1.1', map: 'a' }, t + 2);
+    applyPollResult(s, { ...UP, version: '1.1', map: 'b' }, t + 3);
+    assert.equal(count(), 2);
+    const rows = db.prepare('SELECT kind, old_value, new_value FROM server_changes WHERE server_id = ? ORDER BY ts').all(s.id);
+    assert.deepEqual(rows, [{ kind: 'version', old_value: '1.0', new_value: '1.1' }, { kind: 'map', old_value: 'a', new_value: 'b' }]);
+  });
+
   it('a single blip between good polls never shows the server offline', () => {
     const s = addServer();
     const t = Date.now();

@@ -475,6 +475,22 @@ CREATE INDEX IF NOT EXISTS idx_nick_history_nick ON nick_history(nick COLLATE NO
     // what the game plugin could not do (a patch that no longer fits the game after an update), as it reports with every poll
     up: (db) => addColumn(db, 'game_news_targets', 'plugin_problems', "TEXT NOT NULL DEFAULT ''"),
   },
+  {
+    version: 34,
+    name: 'server_changes',
+    // what the server reported differently than before: a new version of the game, a new map (shown in the events of the server)
+    up: (db) =>
+      db.exec(`
+CREATE TABLE IF NOT EXISTS server_changes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  server_id INTEGER NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  ts INTEGER NOT NULL,
+  kind TEXT NOT NULL,
+  old_value TEXT NOT NULL DEFAULT '',
+  new_value TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_server_changes ON server_changes(server_id, ts);`),
+  },
 ];
 
 export const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;

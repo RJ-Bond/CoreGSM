@@ -126,9 +126,19 @@ export interface PollOutcome {
  * `debounce`: a failed poll only counts after `poll_fail_threshold` consecutive failures (the scheduled poller).
  * Without it (manual refresh, a server just added or edited) the result stands at once.
  */
+/** a version or a map that differs from the last known one (both must be known: the first answer is not a change) */
+export function recordChanges(serverId: number, prev: { map: string | null; version: string | null }, r: { map: string | null; version: string | null }, ts: number): void {
+  const add = db.prepare('INSERT INTO server_changes (server_id, ts, kind, old_value, new_value) VALUES (?, ?, ?, ?, ?)');
+  for (const kind of ['version', 'map'] as const) {
+    const before = (prev[kind] ?? '').trim();
+    const after = (r[kind] ?? '').trim();
+    if (before && after && before !== after) add.run(serverId, ts, kind, before.slice(0, 80), after.slice(0, 80));
+  }
+}
+
 export function applyPollResult(s: ServerRow, r: QueryResult, ts: number, opts: { debounce?: boolean } = {}): PollOutcome {
-  const prev = db.prepare('SELECT online, players, consecutive_failures AS f FROM status WHERE server_id = ?').get(s.id) as
-    | { online: number; players: number; f: number }
+  const prev = db.prepare('SELECT online, players, consecutive_failures AS f, map, version FROM status WHERE server_id = ?').get(s.id) as
+    | { online: number; players: number; f: number; map: string | null; version: string | null }
     | undefined;
   // own «N of M» rule: only a failed scheduled poll of an online server needs the history of the last polls
   let confirmDown: boolean | undefined;
@@ -180,6 +190,7 @@ export function applyPollResult(s: ServerRow, r: QueryResult, ts: number, opts: 
     failures: d.failures,
   });
   addHistory.run(s.id, ts, d.online ? 1 : 0, r.players, r.ping, 0, maint);
+  if (d.online && r.online && prev) recordChanges(s.id, prev, r, ts);
   if (d.becameOffline) {
     // the outage began with the first failed poll: the held-back samples become offline ones
     db.prepare('UPDATE history SET online = 0, players = 0, unconfirmed = 0 WHERE server_id = ? AND unconfirmed = 1').run(s.id);

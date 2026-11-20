@@ -188,7 +188,8 @@ router.get('/api/servers/:id/details', viewer, (req, res) => {
   const peak = db
     .prepare('SELECT players, ts FROM history WHERE server_id = ? AND ts > ? ORDER BY players DESC, ts DESC LIMIT 1')
     .get(id, since) as { players: number; ts: number } | undefined;
-  const events = (
+  type ServerEvent = { ts: number; type: 'up' | 'down' | 'peak' | 'maintenance' | 'version' | 'map'; players: number | null; name?: string; from?: string };
+  const events: ServerEvent[] = (
     db
       .prepare(
         `SELECT ts, online FROM (
@@ -196,7 +197,11 @@ router.get('/api/servers/:id/details', viewer, (req, res) => {
          ) WHERE prev IS NOT NULL AND prev <> online ORDER BY ts DESC LIMIT 30`,
       )
       .all(id, since) as { ts: number; online: number }[]
-  ).map((e) => ({ ts: e.ts, type: (e.online ? 'up' : 'down') as 'up' | 'down' | 'peak' | 'maintenance', players: null as number | null }));
+  ).map((e) => ({ ts: e.ts, type: (e.online ? 'up' : 'down') as 'up' | 'down' | 'peak' | 'maintenance' | 'version' | 'map', players: null as number | null, name: undefined as string | undefined, from: undefined as string | undefined } as ServerEvent));
+  // a new version of the game or a new map
+  for (const c of db.prepare('SELECT ts, kind, old_value, new_value FROM server_changes WHERE server_id = ? AND ts > ? ORDER BY ts DESC LIMIT 30').all(id, since) as { ts: number; kind: string; old_value: string; new_value: string }[]) {
+    events.push({ ts: c.ts, type: c.kind === 'version' ? 'version' : 'map', players: null, name: c.new_value, from: c.old_value });
+  }
   // the busiest moment of the period is shown in the event feed as well
   if (peak && peak.players > 0) events.push({ ts: peak.ts, type: 'peak', players: peak.players });
   // planned maintenance (windows of this server and of all servers) starting in the period

@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="5782edb9b099"
+COREGSM_BUILD="2fc02fb92ac6"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.2.57"
+COREGSM_VERSION="1.2.58"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -31669,6 +31669,22 @@ CREATE INDEX IF NOT EXISTS idx_nick_history_nick ON nick_history(nick COLLATE NO
     // what the game plugin could not do (a patch that no longer fits the game after an update), as it reports with every poll
     up: (db) => addColumn(db, 'game_news_targets', 'plugin_problems', "TEXT NOT NULL DEFAULT ''"),
   },
+  {
+    version: 34,
+    name: 'server_changes',
+    // what the server reported differently than before: a new version of the game, a new map (shown in the events of the server)
+    up: (db) =>
+      db.exec(`
+CREATE TABLE IF NOT EXISTS server_changes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  server_id INTEGER NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  ts INTEGER NOT NULL,
+  kind TEXT NOT NULL,
+  old_value TEXT NOT NULL DEFAULT '',
+  new_value TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_server_changes ON server_changes(server_id, ts);`),
+  },
 ];
 
 export const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;
@@ -32302,9 +32318,19 @@ export interface PollOutcome {
  * `debounce`: a failed poll only counts after `poll_fail_threshold` consecutive failures (the scheduled poller).
  * Without it (manual refresh, a server just added or edited) the result stands at once.
  */
+/** a version or a map that differs from the last known one (both must be known: the first answer is not a change) */
+export function recordChanges(serverId: number, prev: { map: string | null; version: string | null }, r: { map: string | null; version: string | null }, ts: number): void {
+  const add = db.prepare('INSERT INTO server_changes (server_id, ts, kind, old_value, new_value) VALUES (?, ?, ?, ?, ?)');
+  for (const kind of ['version', 'map'] as const) {
+    const before = (prev[kind] ?? '').trim();
+    const after = (r[kind] ?? '').trim();
+    if (before && after && before !== after) add.run(serverId, ts, kind, before.slice(0, 80), after.slice(0, 80));
+  }
+}
+
 export function applyPollResult(s: ServerRow, r: QueryResult, ts: number, opts: { debounce?: boolean } = {}): PollOutcome {
-  const prev = db.prepare('SELECT online, players, consecutive_failures AS f FROM status WHERE server_id = ?').get(s.id) as
-    | { online: number; players: number; f: number }
+  const prev = db.prepare('SELECT online, players, consecutive_failures AS f, map, version FROM status WHERE server_id = ?').get(s.id) as
+    | { online: number; players: number; f: number; map: string | null; version: string | null }
     | undefined;
   // own «N of M» rule: only a failed scheduled poll of an online server needs the history of the last polls
   let confirmDown: boolean | undefined;
@@ -32356,6 +32382,7 @@ export function applyPollResult(s: ServerRow, r: QueryResult, ts: number, opts: 
     failures: d.failures,
   });
   addHistory.run(s.id, ts, d.online ? 1 : 0, r.players, r.ping, 0, maint);
+  if (d.online && r.online && prev) recordChanges(s.id, prev, r, ts);
   if (d.becameOffline) {
     // the outage began with the first failed poll: the held-back samples become offline ones
     db.prepare('UPDATE history SET online = 0, players = 0, unconfirmed = 0 WHERE server_id = ? AND unconfirmed = 1').run(s.id);
@@ -39863,7 +39890,8 @@ router.get('/api/servers/:id/details', viewer, (req, res) => {
   const peak = db
     .prepare('SELECT players, ts FROM history WHERE server_id = ? AND ts > ? ORDER BY players DESC, ts DESC LIMIT 1')
     .get(id, since) as { players: number; ts: number } | undefined;
-  const events = (
+  type ServerEvent = { ts: number; type: 'up' | 'down' | 'peak' | 'maintenance' | 'version' | 'map'; players: number | null; name?: string; from?: string };
+  const events: ServerEvent[] = (
     db
       .prepare(
         `SELECT ts, online FROM (
@@ -39871,7 +39899,11 @@ router.get('/api/servers/:id/details', viewer, (req, res) => {
          ) WHERE prev IS NOT NULL AND prev <> online ORDER BY ts DESC LIMIT 30`,
       )
       .all(id, since) as { ts: number; online: number }[]
-  ).map((e) => ({ ts: e.ts, type: (e.online ? 'up' : 'down') as 'up' | 'down' | 'peak' | 'maintenance', players: null as number | null }));
+  ).map((e) => ({ ts: e.ts, type: (e.online ? 'up' : 'down') as 'up' | 'down' | 'peak' | 'maintenance' | 'version' | 'map', players: null as number | null, name: undefined as string | undefined, from: undefined as string | undefined } as ServerEvent));
+  // a new version of the game or a new map
+  for (const c of db.prepare('SELECT ts, kind, old_value, new_value FROM server_changes WHERE server_id = ? AND ts > ? ORDER BY ts DESC LIMIT 30').all(id, since) as { ts: number; kind: string; old_value: string; new_value: string }[]) {
+    events.push({ ts: c.ts, type: c.kind === 'version' ? 'version' : 'map', players: null, name: c.new_value, from: c.old_value });
+  }
   // the busiest moment of the period is shown in the event feed as well
   if (peak && peak.players > 0) events.push({ ts: peak.ts, type: 'peak', players: peak.players });
   // planned maintenance (windows of this server and of all servers) starting in the period
@@ -123284,7 +123316,7 @@ export interface ServerDetails {
   points: { ts: number; players: number; online: number; ping: number | null }[];
   stats: { samples: number; uptimePct: number | null; avgPlayers: number | null; peakPlayers: number | null; peakAt: number | null };
   /** newest first; `players` is set for 'peak' */
-  events: { ts: number; type: 'up' | 'down' | 'peak' | 'maintenance'; players: number | null; name?: string }[];
+  events: { ts: number; type: 'up' | 'down' | 'peak' | 'maintenance' | 'version' | 'map'; players: number | null; name?: string; from?: string }[];
   /** the usual players per hour of the week (index = UTC weekday * 24 + hour) over the 4 weeks before; null = unknown */
   baseline?: (number | null)[] | null;
   /** players with the time they joined (empty when the game gives no names) */
@@ -138423,8 +138455,8 @@ type Ev = ServerDetails['events'][number];
 const dayTitle = (kind: 'today' | 'yesterday' | 'date', ts: number): string =>
   kind === 'today' ? t('srv.ev.today') : kind === 'yesterday' ? t('srv.ev.yesterday')
     : new Date(ts).toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long' });
-const FILTER_KEY: Record<EventFilter, 'srv.ev.all' | 'srv.ev.down' | 'srv.ev.up' | 'srv.ev.peak' | 'srv.ev.maint'> = {
-  all: 'srv.ev.all', down: 'srv.ev.down', up: 'srv.ev.up', peak: 'srv.ev.peak', maintenance: 'srv.ev.maint',
+const FILTER_KEY: Record<EventFilter, 'srv.ev.all' | 'srv.ev.down' | 'srv.ev.up' | 'srv.ev.peak' | 'srv.ev.maint' | 'srv.ev.changes'> = {
+  all: 'srv.ev.all', down: 'srv.ev.down', up: 'srv.ev.up', peak: 'srv.ev.peak', maintenance: 'srv.ev.maint', changes: 'srv.ev.changes',
 };
 const absTime = (ts: number) => new Date(ts).toLocaleString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' });
 const clock = (ts: number) => new Date(ts).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
@@ -138433,14 +138465,18 @@ const ICON: Record<Ev['type'], { cls: string; path: string }> = {
   up: { cls: 'bg-okbg text-ok', path: 'M5 12.5l4.5 4.5L19 7.5' },
   down: { cls: 'bg-badbg text-bad', path: 'M12 5v10M7 12l5 5 5-5' },
   peak: { cls: 'bg-soft text-link', path: 'M3 17l6-6 4 4 8-8M15 7h6v6' },
+  version: { cls: 'bg-soft text-link', path: 'M3 12V4h8l10 10-8 8L3 12zM7.5 8h.01' },
+  map: { cls: 'bg-soft text-link', path: 'M12 21s7-6.2 7-11.5A7 7 0 0 0 5 9.5C5 14.8 12 21 12 21zM12 12a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5z' },
   maintenance: { cls: 'bg-soft text-link', path: 'M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z' },
 };
 
-const MARK_RU: Record<Ev['type'], TKey> = { up: 'd2.ef.m.up', down: 'd2.ef.m.down', peak: 'd2.ef.m.peak', maintenance: 'd2.ef.m.maint' };
+const MARK_RU: Record<Ev['type'], TKey> = { up: 'd2.ef.m.up', down: 'd2.ef.m.down', peak: 'd2.ef.m.peak', maintenance: 'd2.ef.m.maint', version: 'd2.ef.m.version', map: 'd2.ef.m.map' };
 
 function title(e: Ev, downFor: number | null, stillDown: boolean): string {
   if (e.type === 'up') return t('d2.ef.up');
   if (e.type === 'peak') return t('d2.ef.peak', { n: e.players ?? '–' });
+  if (e.type === 'version') return e.from ? t('d2.ef.version', { from: e.from, to: e.name ?? '' }) : t('d2.ef.versionTo', { to: e.name ?? '' });
+  if (e.type === 'map') return e.from ? t('d2.ef.map', { from: e.from, to: e.name ?? '' }) : t('d2.ef.mapTo', { to: e.name ?? '' });
   if (e.type === 'maintenance') return e.name ? t('d2.ef.maintName', { name: e.name }) : t('d2.ef.maint');
   if (downFor != null) return t('d2.ef.downFor', { v: fmtDuration(downFor) });
   return stillDown ? t('d2.ef.stillDown') : t('d2.ef.down');
@@ -138541,7 +138577,8 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/components/server/Hero.tsx" << '__COREGSM_EOF__'
 import { useEffect, useRef, useState } from 'react';
 import { t, useI18n } from '../../i18n';
-import { AnimatedNumber, Burst, IconBell, ago } from '../../ui';
+import { AnimatedNumber, Burst, IconBell, ago, fmtTime } from '../../ui';
+import type { UsualPeak } from '../servers/heroLogic';
 import MaintenanceChip from '../MaintenanceChip';
 import NickPic from '../NickPic';
 import { capLevel, capacityPct, slotsInfo } from '../servers/capacity';
@@ -138654,7 +138691,7 @@ function WhoStack({ who, players, href, now }: { who: Who[]; players: number; hr
  * the maintenance chip, who is playing, and, when the server is full, «Сообщить, когда будет место».
  */
 export default function Hero({
-  online, hasStatus, players, max, maintenance, freeSlot, onNotify, who = [], whoHref, peak = null, recent = [], now, lastSeen = null,
+  online, hasStatus, players, max, maintenance, freeSlot, onNotify, who = [], whoHref, peak = null, recent = [], now, lastSeen = null, usual = null,
 }: {
   online: boolean;
   hasStatus: boolean;
@@ -138672,6 +138709,8 @@ export default function Hero({
   now: number;
   /** ms of the last answer (shown in the one status line of a server that is down) */
   lastSeen?: number | null;
+  /** when the server is usually the busiest in the coming hours (by its baseline of the week) */
+  usual?: UsualPeak | null;
 }) {
   useI18n();
   // a new record while the page is open
@@ -138727,6 +138766,7 @@ export default function Hero({
       </div>
       {online && <HeroSpark values={recent} />}
       {online && max > 0 && <SlotBar players={players} max={max} peak={peak} />}
+      {online && usual && <p className="srv-hero-usual">{usual.now ? t('srv.hero.usualNow', { n: usual.value }) : t('srv.hero.usualAt', { time: fmtTime(usual.at), n: usual.value })}</p>}
       {online && who.length > 0 && <WhoStack who={who} players={players} href={whoHref} now={now} />}
       {freeSlot !== 'hidden' && (
         <div className="srv-hero-free mt-3">
@@ -138754,6 +138794,9 @@ import { findPeak, peakWhen } from './serverLogic';
 
 type Point = ServerDetails['points'][number];
 type Ev = ServerDetails['events'][number];
+/** the events drawn on the chart: new versions and maps stay in the feed only */
+type MarkType = 'down' | 'up' | 'peak' | 'maintenance';
+const isMark = (e: Ev): e is Ev & { type: MarkType } => e.type === 'down' || e.type === 'up' || e.type === 'peak' || e.type === 'maintenance';
 export type Series = 'players' | 'ping';
 
 /** 0..yMax with about four steps of a "nice" size (1, 2, 5 x 10^n); the scale follows the data, not the server slots */
@@ -138769,15 +138812,15 @@ function niceScale(dataMax: number, minTop: number): { max: number; step: number
   return { max, step, ticks };
 }
 
-const MARK: Record<Ev['type'], { fill: string; path: string }> = {
+const MARK: Record<MarkType, { fill: string; path: string }> = {
   down: { fill: 'rgb(var(--bad))', path: 'M12 5v12M7 13l5 5 5-5' },
   up: { fill: 'rgb(var(--ok))', path: 'M5 12.5l4.5 4.5L19 7.5' },
   peak: { fill: 'rgb(var(--link))', path: 'M12 19V6M7 11l5-5 5 5' },
   maintenance: { fill: 'rgb(var(--warn))', path: 'M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z' },
 };
 const MARK_ORDER = ['down', 'up', 'peak', 'maintenance'] as const;
-const MARK_KEY: Record<Ev['type'], TKey> = { down: 'd2.ef.m.down', up: 'd2.ef.m.up', peak: 'd2.ef.m.peak', maintenance: 'd2.ef.m.maint' };
-const markLabel = (type: Ev['type']) => t(MARK_KEY[type]);
+const MARK_KEY: Record<MarkType, TKey> = { down: 'd2.ef.m.down', up: 'd2.ef.m.up', peak: 'd2.ef.m.peak', maintenance: 'd2.ef.m.maint' };
+const markLabel = (type: MarkType) => t(MARK_KEY[type]);
 
 const tickLabel = (ts: number, spanMs: number) =>
   spanMs <= 36 * 3600_000
@@ -138857,7 +138900,7 @@ export default function HistoryChart({
   if (!zoom && (sparse || late)) t0 = Math.min(Math.max(winStart, first - (now - first) * 0.06), now - 15 * 60_000);
   const span = now - t0;
   // vertical markers for outages, returns and the busiest moment
-  const marks = events.filter((e) => e.ts >= t0 && e.ts <= now).slice(0, 40);
+  const marks = events.filter(isMark).filter((e) => e.ts >= t0 && e.ts <= now).slice(0, 40);
   const T = marks.length ? 30 : 14;
   const x = (ts: number) => L + ((ts - t0) / span) * (W - L - R);
 
@@ -141566,18 +141609,21 @@ export function gameAccent(game: string): string {
 }
 
 // ---------- events ----------
-export type EventKind = 'up' | 'down' | 'peak' | 'maintenance';
-export type EventFilter = 'all' | 'down' | 'up' | 'peak' | 'maintenance';
-export const EVENT_FILTERS: EventFilter[] = ['all', 'down', 'up', 'peak', 'maintenance'];
+export type EventKind = 'up' | 'down' | 'peak' | 'maintenance' | 'version' | 'map';
+/** «changes» are the new versions of the game and the new maps */
+export type EventFilter = 'all' | 'down' | 'up' | 'peak' | 'maintenance' | 'changes';
+export const EVENT_FILTERS: EventFilter[] = ['all', 'down', 'up', 'peak', 'maintenance', 'changes'];
 
 export function eventCounts(events: { type: EventKind }[]): Record<EventFilter, number> {
-  const c: Record<EventFilter, number> = { all: events.length, down: 0, up: 0, peak: 0, maintenance: 0 };
-  for (const e of events) c[e.type] += 1;
+  const c: Record<EventFilter, number> = { all: events.length, down: 0, up: 0, peak: 0, maintenance: 0, changes: 0 };
+  for (const e of events) c[e.type === 'version' || e.type === 'map' ? 'changes' : e.type] += 1;
   return c;
 }
 
 export function filterEvents<T extends { type: EventKind }>(events: T[], filter: EventFilter): T[] {
-  return filter === 'all' ? events : events.filter((e) => e.type === filter);
+  if (filter === 'all') return events;
+  if (filter === 'changes') return events.filter((e) => e.type === 'version' || e.type === 'map');
+  return events.filter((e) => e.type === filter);
 }
 
 const dayKey = (ts: number) => { const d = new Date(ts); return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`; };
@@ -148359,6 +148405,8 @@ const en: Record<keyof typeof ru, string> = {
   'srv.off.showChart': 'Show the chart',
   'srv.off.hideChart': 'Hide the chart',
   'srv.hero.label': 'Server state',
+  'srv.hero.usualAt': 'Usually busiest around {time}: about {n} players',
+  'srv.hero.usualNow': 'The usual peak time right now: about {n} players',
   'srv.hero.players': 'players',
   'srv.hero.offline': 'server is unavailable',
   'srv.hero.waiting': 'waiting for the first response',
@@ -148515,6 +148563,13 @@ const en: Record<keyof typeof ru, string> = {
   'srv.ev.up': 'Returns',
   'srv.ev.peak': 'Peaks',
   'srv.ev.maint': 'Maintenance',
+  'srv.ev.changes': 'Versions and maps',
+  'd2.ef.m.version': 'version',
+  'd2.ef.m.map': 'map',
+  'd2.ef.version': 'New version: {from} → {to}',
+  'd2.ef.versionTo': 'New version: {to}',
+  'd2.ef.map': 'Map change: {from} → {to}',
+  'd2.ef.mapTo': 'Map change: {to}',
   'srv.ev.today': 'Today',
   'srv.ev.yesterday': 'Yesterday',
   'srv.ev.emptyAll': 'No events yet',
@@ -151283,6 +151338,12 @@ const en: Record<keyof typeof ru, string> = {
   'd2.ac.rep.server': 'Server:',
   'd2.ac.rep.notePh': 'A comment for the author of the report (optional)',
   'd2.ac.rep.note': 'Comment',
+  'd2.ac.rep.tplAria': 'Usual reasons',
+  'd2.ac.rep.tpl.cheat': 'Cheating',
+  'd2.ac.rep.tpl.abuse': 'Abuse',
+  'd2.ac.rep.tpl.ads': 'Advertising',
+  'd2.ac.rep.tpl.spam': 'Spam',
+  'd2.ac.rep.tpl.grief': 'Griefing',
   'd2.ac.rep.actionTaken': 'Action taken',
   'd2.ac.rep.banAria': 'A ban with the decision',
   'd2.ac.rep.noBan': 'No ban',
@@ -153614,6 +153675,8 @@ const ru = {
   'srv.off.showChart': 'Показать график',
   'srv.off.hideChart': 'Скрыть график',
   'srv.hero.label': 'Состояние сервера',
+  'srv.hero.usualAt': 'Обычно пик около {time}: примерно {n} игроков',
+  'srv.hero.usualNow': 'Сейчас обычное время пика: примерно {n} игроков',
   'srv.hero.players': 'игроков',
   'srv.hero.offline': 'сервер недоступен',
   'srv.hero.waiting': 'ожидаем первый ответ',
@@ -153770,6 +153833,13 @@ const ru = {
   'srv.ev.up': 'Возвраты',
   'srv.ev.peak': 'Пики',
   'srv.ev.maint': 'Обслуживание',
+  'srv.ev.changes': 'Версии и карты',
+  'd2.ef.m.version': 'версия',
+  'd2.ef.m.map': 'карта',
+  'd2.ef.version': 'Новая версия: {from} → {to}',
+  'd2.ef.versionTo': 'Новая версия: {to}',
+  'd2.ef.map': 'Смена карты: {from} → {to}',
+  'd2.ef.mapTo': 'Смена карты: {to}',
   'srv.ev.today': 'Сегодня',
   'srv.ev.yesterday': 'Вчера',
   'srv.ev.emptyAll': 'Событий пока нет',
@@ -156538,6 +156608,12 @@ const ru = {
   'd2.ac.rep.server': 'Сервер:',
   'd2.ac.rep.notePh': 'Комментарий для автора жалобы (необязательно)',
   'd2.ac.rep.note': 'Комментарий',
+  'd2.ac.rep.tplAria': 'Частые причины',
+  'd2.ac.rep.tpl.cheat': 'Читы',
+  'd2.ac.rep.tpl.abuse': 'Оскорбления',
+  'd2.ac.rep.tpl.ads': 'Реклама',
+  'd2.ac.rep.tpl.spam': 'Спам',
+  'd2.ac.rep.tpl.grief': 'Грифинг',
   'd2.ac.rep.actionTaken': 'Меры приняты',
   'd2.ac.rep.banAria': 'Бан вместе с решением',
   'd2.ac.rep.noBan': 'Без бана',
@@ -159002,6 +159078,11 @@ function ReviewsAdmin() {
 }
 
 const REASON_LABEL: Record<string, TKey> = { cheating: 'd2.ac.r.cheating', abuse: 'd2.ac.r.abuse', griefing: 'd2.ac.r.griefing', other: 'd2.ac.r.other' };
+/** the usual reasons of a decision and the term of the ban that goes with each by default (hours; 0 = for ever) */
+const REASON_TEMPLATES: { id: 'cheat' | 'abuse' | 'ads' | 'spam' | 'grief'; hours: string }[] = [
+  { id: 'cheat', hours: '0' }, { id: 'abuse', hours: '168' }, { id: 'ads', hours: '24' }, { id: 'spam', hours: '24' }, { id: 'grief', hours: '168' },
+];
+
 interface ReportRow { id: number; nick: string; reason: string; text: string; reporter: string; serverId: number | null; serverName: string | null; status: string; createdAt: number; handledBy: string | null; handledAt: number | null; note: string; others: number }
 
 /** the queue of reports on players: the oldest first; a closed one tells who handled it */
@@ -159040,6 +159121,12 @@ function ReportsAdmin() {
               {r.serverName && <p className="mt-1 text-xs font-bold text-mute">{t('d2.ac.rep.server')} <a href={`/servers/${r.serverId}`} className="hover:text-link">{r.serverName}</a></p>}
               {r.status === 'open' ? (
                 <div className="mt-2.5 flex flex-wrap items-center gap-2">
+                  {/* the usual reasons in one tap: they fill the note and suggest the usual term of the ban */}
+                  <div className="flex basis-full flex-wrap gap-1.5" role="group" aria-label={t('d2.ac.rep.tplAria')}>
+                    {REASON_TEMPLATES.map((tp) => (
+                      <button key={tp.id} type="button" className="chip-filter" onClick={() => { setNotes((n) => ({ ...n, [r.id]: t(`d2.ac.rep.tpl.${tp.id}` as 'd2.ac.rep.tpl.cheat') })); setBans((b) => ({ ...b, [r.id]: tp.hours })); }}>{t(`d2.ac.rep.tpl.${tp.id}` as 'd2.ac.rep.tpl.cheat')}</button>
+                    ))}
+                  </div>
                   <input className="input min-w-48 flex-1" maxLength={300} placeholder={t('d2.ac.rep.notePh')} aria-label={t('d2.ac.rep.note')} value={notes[r.id] ?? ''} onChange={(e) => setNotes((n) => ({ ...n, [r.id]: e.target.value }))} />
                   <select className="input w-auto! py-1.5!" aria-label={t('d2.ac.rep.banAria')} value={bans[r.id] ?? ''} onChange={(e) => setBans((b) => ({ ...b, [r.id]: e.target.value }))}>
                     <option value="">{t('d2.ac.rep.noBan')}</option>
@@ -168550,7 +168637,7 @@ import ChartTable, { bucketFor, bucketRows } from '../components/ChartTable';
 import { useAppearance } from '../appearance';
 import { setPageTitleDetail } from '../pageTitle';
 import ServerReviews from '../components/server/Reviews';
-import { eventFacts, whenShort } from '../components/server/serverLogic';
+import { eventFacts, whenShort, type EventKind } from '../components/server/serverLogic';
 import ProbesView, { useProbes } from '../components/server/ProbesView';
 import { useEffect, useRef, useState, type ReactNode, type TouchEvent } from 'react';
 import { t, useI18n, type TKey } from '../i18n';
@@ -168580,6 +168667,7 @@ import ServerNews from '../components/server/ServerNews';
 import MoreMenu, { type MoreItem } from '../components/server/MoreMenu';
 import { gameAccent, isFullNow, offlineSince } from '../components/server/serverLogic';
 import { calmSeriesColor, useCoverAccent } from '../components/server/coverAccent';
+import { nextUsualPeak } from '../components/servers/heroLogic';
 import ServerTabs, { TAB_LIST, panelDomId, tabDomId } from '../components/server/ServerTabs';
 import { AddrCopy } from '../components/servers/serverUi';
 import { BlockBoundary, SectionCard, useSectionState, type SectionDef } from '../components/server/Sections';
@@ -168655,7 +168743,7 @@ export default function ServerDetail({ id, tab = '' }: { id: number; tab?: strin
 }
 
 /** under the recent events: how many outages the period had and when the last one was */
-function OutageFacts({ events }: { events: { ts: number; type: 'up' | 'down' | 'peak' | 'maintenance' }[] }) {
+function OutageFacts({ events }: { events: { ts: number; type: EventKind }[] }) {
   useI18n();
   const f = eventFacts(events);
   return (
@@ -169216,6 +169304,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
           recent={recent}
           now={nowTs}
           lastSeen={s.updatedAt}
+          usual={nextUsualPeak(data.baseline ?? null, nowTs, 24)}
         />
 
         {!s.online && s.error && !s.hasStatus && (
@@ -176813,6 +176902,9 @@ ul > .pl-group:first-child { padding-top: 2px; }
   /* the name and the numbers of the server stay in view next to the tabs while the page is scrolled */
   .srv-shell.srv-headwide .srv-mini-wrap { display: block; }
 }
+
+/* «usually the busiest around 20:00» under the slot bar of the header */
+.srv-hero-usual { margin: .45rem 0 0; font-size: var(--fs-sm); font-weight: 650; color: rgb(255 255 255 / .78); }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/ember.css" << '__COREGSM_EOF__'
@@ -182699,8 +182791,8 @@ export function ThemeToggle() {
     subs.add(setTheme);
     return () => { subs.delete(setTheme); };
   }, []);
-  // the schedule is a fourth step in the admin area only
-  const next: Record<Theme, Theme> = { auto: 'light', light: 'dark', dark: adminScope ? 'night' : 'auto', night: 'auto' };
+  // the schedule (dark from 20:00 to 07:00, light by day) is the fourth step everywhere
+  const next: Record<Theme, Theme> = { auto: 'light', light: 'dark', dark: 'night', night: 'auto' };
   const label: Record<Theme, string> = { auto: t('theme.auto'), light: t('theme.light'), dark: t('theme.dark'), night: t('theme.night') };
   return (
     <button

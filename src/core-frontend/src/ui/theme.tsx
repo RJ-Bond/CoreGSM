@@ -118,8 +118,8 @@ export function ThemeToggle() {
     subs.add(setTheme);
     return () => { subs.delete(setTheme); };
   }, []);
-  // the schedule is a fourth step in the admin area only
-  const next: Record<Theme, Theme> = { auto: 'light', light: 'dark', dark: adminScope ? 'night' : 'auto', night: 'auto' };
+  // the schedule (dark from 20:00 to 07:00, light by day) is the fourth step everywhere
+  const next: Record<Theme, Theme> = { auto: 'light', light: 'dark', dark: 'night', night: 'auto' };
   const label: Record<Theme, string> = { auto: t('theme.auto'), light: t('theme.light'), dark: t('theme.dark'), night: t('theme.night') };
   return (
     <button

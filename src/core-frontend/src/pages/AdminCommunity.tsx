@@ -164,6 +164,11 @@ function ReviewsAdmin() {
 }
 
 const REASON_LABEL: Record<string, TKey> = { cheating: 'd2.ac.r.cheating', abuse: 'd2.ac.r.abuse', griefing: 'd2.ac.r.griefing', other: 'd2.ac.r.other' };
+/** the usual reasons of a decision and the term of the ban that goes with each by default (hours; 0 = for ever) */
+const REASON_TEMPLATES: { id: 'cheat' | 'abuse' | 'ads' | 'spam' | 'grief'; hours: string }[] = [
+  { id: 'cheat', hours: '0' }, { id: 'abuse', hours: '168' }, { id: 'ads', hours: '24' }, { id: 'spam', hours: '24' }, { id: 'grief', hours: '168' },
+];
+
 interface ReportRow { id: number; nick: string; reason: string; text: string; reporter: string; serverId: number | null; serverName: string | null; status: string; createdAt: number; handledBy: string | null; handledAt: number | null; note: string; others: number }
 
 /** the queue of reports on players: the oldest first; a closed one tells who handled it */
@@ -202,6 +207,12 @@ function ReportsAdmin() {
               {r.serverName && <p className="mt-1 text-xs font-bold text-mute">{t('d2.ac.rep.server')} <a href={`/servers/${r.serverId}`} className="hover:text-link">{r.serverName}</a></p>}
               {r.status === 'open' ? (
                 <div className="mt-2.5 flex flex-wrap items-center gap-2">
+                  {/* the usual reasons in one tap: they fill the note and suggest the usual term of the ban */}
+                  <div className="flex basis-full flex-wrap gap-1.5" role="group" aria-label={t('d2.ac.rep.tplAria')}>
+                    {REASON_TEMPLATES.map((tp) => (
+                      <button key={tp.id} type="button" className="chip-filter" onClick={() => { setNotes((n) => ({ ...n, [r.id]: t(`d2.ac.rep.tpl.${tp.id}` as 'd2.ac.rep.tpl.cheat') })); setBans((b) => ({ ...b, [r.id]: tp.hours })); }}>{t(`d2.ac.rep.tpl.${tp.id}` as 'd2.ac.rep.tpl.cheat')}</button>
+                    ))}
+                  </div>
                   <input className="input min-w-48 flex-1" maxLength={300} placeholder={t('d2.ac.rep.notePh')} aria-label={t('d2.ac.rep.note')} value={notes[r.id] ?? ''} onChange={(e) => setNotes((n) => ({ ...n, [r.id]: e.target.value }))} />
                   <select className="input w-auto! py-1.5!" aria-label={t('d2.ac.rep.banAria')} value={bans[r.id] ?? ''} onChange={(e) => setBans((b) => ({ ...b, [r.id]: e.target.value }))}>
                     <option value="">{t('d2.ac.rep.noBan')}</option>
