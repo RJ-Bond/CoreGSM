@@ -7,8 +7,8 @@
  * the game: a blue tag, a yellow nickname, a green clan chat.
  */
 
-/** the kinds of line that can go to Discord: three chats and three events (a player joined, left, was kicked) */
-export const CHAT_KINDS = ['global', 'clan', 'local', 'join', 'leave', 'kick'] as const;
+/** the kinds of line that can go to Discord: three chats and four events (a player joined, left, was kicked; the panel said something to the game) */
+export const CHAT_KINDS = ['global', 'clan', 'local', 'join', 'leave', 'kick', 'announce'] as const;
 export type ChatKind = (typeof CHAT_KINDS)[number];
 
 /** the eight colours of an ansi block of Discord */
@@ -29,6 +29,8 @@ export const DEFAULT_COLORS: Record<ChatKind, ChatColors> = {
   leave: { tag: 'green', name: 'pink', text: 'green' },
   // a kick: the text red, the nickname green, the reason (the «tag» colour) yellow
   kick: { tag: 'yellow', name: 'green', text: 'red' },
+  // a message of the panel: the mark («Авто», «Рестарт») blue, the name of the rule or of the writer yellow, the words white
+  announce: { tag: 'blue', name: 'yellow', text: 'white' },
 };
 
 /** the defaults of the first version: a setting that still holds exactly them has not been changed by anybody and moves to the new ones */
@@ -39,11 +41,18 @@ const OLD_DEFAULTS: Record<ChatKind, ChatColors> = {
   join: { tag: 'green', name: 'pink', text: 'green' },
   leave: { tag: 'green', name: 'pink', text: 'green' },
   kick: { tag: 'yellow', name: 'green', text: 'red' },
+  announce: { tag: 'blue', name: 'yellow', text: 'white' },
 };
 const sameColors = (x: ChatColors, y: ChatColors): boolean => x.tag === y.tag && x.name === y.name && x.text === y.text;
 
+/** which messages of the panel are shown in the channel: the automatic announcements, the countdown of a restart, what an administrator sends by hand */
+export interface AnnounceSources { auto: boolean; restart: boolean; manual: boolean }
+export const DEFAULT_ANNOUNCE: AnnounceSources = { auto: true, restart: true, manual: false };
+
 /** one webhook for the whole chat (kept encrypted), a switch for every kind, how lines look */
 export interface ChatStored {
+  /** what of the messages of the panel the «announce» kind shows */
+  announce: AnnounceSources;
   enabled: boolean;
   webhook: string;
   kinds: Record<ChatKind, boolean>;
@@ -72,7 +81,7 @@ const isAnsi = (x: unknown): x is AnsiColor => typeof x === 'string' && (ANSI_CO
 export function normalizeChat(raw: unknown): ChatStored {
   const v = (raw && typeof raw === 'object' ? raw : {}) as {
     enabled?: unknown; webhook?: unknown; kinds?: Partial<Record<ChatKind, unknown>>; webhooks?: Partial<Record<ChatKind, unknown>>;
-    style?: unknown; senderName?: unknown; showTime?: unknown; fromDiscord?: unknown; channelId?: unknown; confirmCard?: unknown; confirmLine?: unknown; colors?: Partial<Record<ChatKind, Partial<Record<keyof ChatColors, unknown>>>>;
+    announce?: Partial<Record<keyof AnnounceSources, unknown>>; style?: unknown; senderName?: unknown; showTime?: unknown; fromDiscord?: unknown; channelId?: unknown; confirmCard?: unknown; confirmLine?: unknown; colors?: Partial<Record<ChatKind, Partial<Record<keyof ChatColors, unknown>>>>;
   };
   const legacy = v.webhooks && typeof v.webhooks === 'object' ? v.webhooks : {};
   const legacyFirst = (['global', 'clan', 'local'] as const).map((k) => legacy[k]).find((x): x is string => typeof x === 'string' && x.length > 0);
@@ -82,7 +91,7 @@ export function normalizeChat(raw: unknown): ChatStored {
   for (const k of CHAT_KINDS) {
     const event = k === 'join' || k === 'leave';
     if (v.kinds && typeof v.kinds[k] === 'boolean') kinds[k] = v.kinds[k] as boolean;
-    else if (k === 'kick') kinds[k] = true; // a kick is shown by default, like a chat (an event of a player is opt-in)
+    else if (k === 'kick' || k === 'announce') kinds[k] = true; // a kick and the messages of the panel are shown by default, like a chat (an event of a player is opt-in)
     else if (event) kinds[k] = false;
     else kinds[k] = v.webhooks ? typeof legacy[k] === 'string' && !!legacy[k] : true;
     const c = v.colors?.[k] ?? {};
@@ -93,9 +102,16 @@ export function normalizeChat(raw: unknown): ChatStored {
     };
     colors[k] = sameColors(mine, OLD_DEFAULTS[k]) ? DEFAULT_COLORS[k] : mine;
   }
+  const a = v.announce && typeof v.announce === 'object' ? v.announce : {};
+  const announce: AnnounceSources = {
+    auto: typeof a.auto === 'boolean' ? a.auto : DEFAULT_ANNOUNCE.auto,
+    restart: typeof a.restart === 'boolean' ? a.restart : DEFAULT_ANNOUNCE.restart,
+    manual: typeof a.manual === 'boolean' ? a.manual : DEFAULT_ANNOUNCE.manual,
+  };
   return {
     enabled: !!v.enabled,
     webhook,
+    announce,
     kinds,
     style: v.style === 'plain' ? 'plain' : 'ansi',
     showTime: v.showTime !== false,
@@ -171,6 +187,34 @@ export function ansiDiscordLine(name: string, text: string, time = ''): string {
   const t = forBlock(text);
   if (!t) return '';
   return `${seg('cyan', stamp(time))}${seg('blue', '* [Discord]', true)} ${seg('yellow', forBlock(name) || '?', true)}${seg('white', ': ')}${seg('white', t.slice(0, 300))}`;
+}
+
+/** where a message of the panel came from: «авто: Тех.работы» is a rule, «авто: рестарт» the countdown of a restart, «Discord: …» is shown by the bot itself, the rest was written by hand */
+export function announceSource(by: string): { source: keyof AnnounceSources; label: string; who: string } | null {
+  const b = by.trim();
+  if (/^Discord:/i.test(b)) return null;
+  if (/^авто:\s*рестарт\s*$/i.test(b)) return { source: 'restart', label: 'Рестарт', who: '' };
+  if (/^авто:/i.test(b)) return { source: 'auto', label: 'Авто', who: b.replace(/^авто:\s*/i, '') };
+  return { source: 'manual', label: 'Панель', who: b };
+}
+
+/** the words of a message of the panel without its colour tags and without anything that could break a block */
+const announceText = (text: string): string => forBlock(text.replace(/<[^>]*>/g, '')).replace(/^\*\s*/, '').slice(0, 400);
+
+/** «[22:10] * [Авто] Тех.работы: текст» in an ansi block */
+export function ansiAnnounceLine(label: string, who: string, text: string, c: ChatColors, time = ''): string {
+  const t = announceText(text);
+  if (!t) return '';
+  const name = forBlock(who);
+  return `${seg(c.text, stamp(time))}${seg(c.tag, `* [${forBlock(label)}]`, true)}${name ? ` ${seg(c.name, name, true)}${seg(c.text, ':')}` : seg(c.text, ':')} ${seg(c.text, t)}`;
+}
+
+/** the same in the plain style: the mark and the name in bold */
+export function formatAnnounceLine(label: string, who: string, text: string, time = ''): string {
+  const t = announceText(text);
+  if (!t) return '';
+  const name = who.trim() ? ` **${escapeDiscord(who.trim())}**:` : ':';
+  return `${stamp(time)}**\* [${escapeDiscord(label)}]**${name} ${escapeDiscord(t)}`.trim();
 }
 
 /** the words of a kick split at {name} {reason} {admin}: the template, with what stands for each */

@@ -53,8 +53,8 @@ describe('game chat for Discord', () => {
 
   it('keeps one webhook and a switch per kind of chat', () => {
     const s = normalizeChat({ enabled: true, webhook: 'enc:x', kinds: { global: true, clan: false } });
-    assert.deepEqual(s.kinds, { global: true, clan: false, local: true, join: false, leave: false, kick: true });
-    assert.deepEqual(activeChatKinds(s), ['global', 'local', 'kick']);
+    assert.deepEqual(s.kinds, { global: true, clan: false, local: true, join: false, leave: false, kick: true, announce: true });
+    assert.deepEqual(activeChatKinds(s), ['global', 'local', 'kick', 'announce']);
     assert.deepEqual(activeChatKinds({ ...s, enabled: false }), []);
     assert.deepEqual(activeChatKinds({ ...s, webhook: '' }), []);
   });
@@ -62,9 +62,9 @@ describe('game chat for Discord', () => {
   it('turns an old setting with a webhook per chat into one webhook', () => {
     const s = normalizeChat({ enabled: true, webhooks: { clan: 'enc:clan', local: 'enc:local' } });
     assert.equal(s.webhook, 'enc:clan');
-    assert.deepEqual(s.kinds, { global: false, clan: true, local: true, join: false, leave: false, kick: true });
+    assert.deepEqual(s.kinds, { global: false, clan: true, local: true, join: false, leave: false, kick: true, announce: true });
     const d = normalizeChat(undefined);
-    assert.deepEqual(d.kinds, { global: true, clan: true, local: true, join: false, leave: false, kick: true });
+    assert.deepEqual(d.kinds, { global: true, clan: true, local: true, join: false, leave: false, kick: true, announce: true });
     assert.equal(d.style, 'ansi');
     assert.equal(d.senderName, '');
   });

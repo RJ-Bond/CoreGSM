@@ -22,7 +22,7 @@ import { log } from '../logger.js';
 import { decryptSecret, encryptSecret } from '../security/secrets.js';
 import { pluginTarget } from './gameNews.js';
 import {
-  ANSI_COLORS, CHAT_KINDS, activeChatKinds, ansiChatLine, ansiKickLine, formatKickLine, ansiEventLine, chunkLines, formatChatLine, formatEventLine, isDiscordWebhook,
+  ANSI_COLORS, CHAT_KINDS, activeChatKinds, announceSource, ansiAnnounceLine, ansiChatLine, ansiKickLine, formatAnnounceLine, formatKickLine, ansiEventLine, chunkLines, formatChatLine, formatEventLine, isDiscordWebhook,
   normalizeChat, paletteBlock, wrapForDiscord, type ChatKind, type ChatStored,
 } from './gameNewsChatLogic.js';
 import { getJoinLeave } from './gameNewsJoinLeave.js';
@@ -49,10 +49,10 @@ function webhookUrl(s: ChatStored): string | null {
 
 /** the kinds of chat that are being forwarded (what the plugin has to read) */
 
-export function chatSettingsView(serverId?: number): Pick<ChatStored, 'enabled' | 'kinds' | 'style' | 'senderName' | 'showTime' | 'colors' | 'fromDiscord'> & { set: boolean; tail: string; channel: boolean; confirmCard: boolean; confirmLine: boolean } {
+export function chatSettingsView(serverId?: number): Pick<ChatStored, 'enabled' | 'kinds' | 'announce' | 'style' | 'senderName' | 'showTime' | 'colors' | 'fromDiscord'> & { set: boolean; tail: string; channel: boolean; confirmCard: boolean; confirmLine: boolean } {
   const s = read(serverId);
   const u = webhookUrl(s);
-  return { enabled: s.enabled, set: !!u, tail: u ? `…${u.slice(-6)}` : '', kinds: s.kinds, style: s.style, senderName: s.senderName, showTime: s.showTime, colors: s.colors, fromDiscord: s.fromDiscord, channel: !!s.channelId, confirmCard: s.confirmCard, confirmLine: s.confirmLine };
+  return { enabled: s.enabled, set: !!u, tail: u ? `…${u.slice(-6)}` : '', kinds: s.kinds, announce: s.announce, style: s.style, senderName: s.senderName, showTime: s.showTime, colors: s.colors, fromDiscord: s.fromDiscord, channel: !!s.channelId, confirmCard: s.confirmCard, confirmLine: s.confirmLine };
 }
 
 /** the channel a webhook posts to (Discord tells it to anyone who holds the address) */
@@ -101,11 +101,40 @@ export function chatChannels(): { channelId: string; serverIds: number[]; confir
   return [...map].map(([channelId, e]) => ({ channelId, serverIds: [...e.ids], confirmCard: e.card, confirmLine: e.line }));
 }
 
+/** the same text for the same channel is not repeated within this time (an announcement to three servers that share a channel is one line) */
+const ANNOUNCE_REPEAT_MS = 90_000;
+const lastAnnounce = new Map<string, number>();
+export const resetAnnounceMemory = (): void => lastAnnounce.clear();
+
+/**
+ * A message of the panel that the plugin has taken (an automatic announcement, the countdown of a restart, a line sent by hand) goes to the chat in
+ * Discord like a line of the game chat: «[22:10] * [Авто] Тех.работы: текст». Switched by «Сообщения панели» and by the sources chosen there;
+ * what was written from Discord is not repeated (the bot shows it itself).
+ */
+export function postAnnounceToDiscord(serverId: number, by: string, text: string, now = Date.now()): boolean {
+  const src = announceSource(by);
+  if (!src) return false;
+  const scope = scopeOf(serverId);
+  const s = read(scope || undefined);
+  if (!activeChatKinds(s).includes('announce') || !s.announce[src.source]) return false;
+  const time = s.showTime ? clock(now) : '';
+  const line = s.style === 'ansi' ? ansiAnnounceLine(src.label, src.who, text, s.colors.announce, time) : formatAnnounceLine(src.label, src.who, text, time);
+  if (!line) return false;
+  const key = `${scope}|${src.label}|${src.who}|${text}`;
+  if (now - (lastAnnounce.get(key) ?? 0) < ANNOUNCE_REPEAT_MS) return false;
+  lastAnnounce.set(key, now);
+  if (lastAnnounce.size > 300) for (const [k, t] of lastAnnounce) if (now - t > ANNOUNCE_REPEAT_MS) lastAnnounce.delete(k);
+  enqueue(scope, line);
+  return true;
+}
+
 // ---- posting
 const MAX_QUEUE = 200;
 // one queue per set of chat settings: 0 = the general ones, a server id = that server's own (it may write to another channel)
 const queues = new Map<number, string[]>();
 const paused = new Map<number, number>();
+/** the lines waiting to be posted for a set of chat settings (0 = the general ones); for the tests */
+export const pendingLines = (scope = 0): string[] => [...(queues.get(scope) ?? [])];
 
 function enqueue(scope: number, line: string): void {
   const q = queues.get(scope) ?? [];
@@ -207,7 +236,7 @@ export function registerGameNewsChat({ app, admin }: { app: Express; admin: Requ
     const jl = getJoinLeave(t.server_id);
     const time = s.showTime ? clock(now) : '';
     for (const m of b.data.messages) {
-      if (m.type === 'kick' || !kinds.has(m.type)) continue; // a kick is written by the panel itself (postKickToDiscord)
+      if (m.type === 'kick' || m.type === 'announce' || !kinds.has(m.type)) continue; // a kick and a message of the panel are written by the panel itself
       const colors = s.colors[m.type];
       let line: string;
       if (m.type === 'join' || m.type === 'leave') {
@@ -231,6 +260,7 @@ export function registerGameNewsChat({ app, admin }: { app: Express; admin: Requ
       webhook: z.string().max(300).optional(),
       clear: z.boolean().optional(),
       kinds: z.object(Object.fromEntries(CHAT_KINDS.map((k) => [k, z.boolean()]))).partial().optional(),
+      announce: z.object({ auto: z.boolean(), restart: z.boolean(), manual: z.boolean() }).partial().optional(),
       style: z.enum(['ansi', 'plain']).optional(),
       senderName: z.string().max(80).optional(),
       showTime: z.boolean().optional(),
@@ -265,6 +295,7 @@ export function registerGameNewsChat({ app, admin }: { app: Express; admin: Requ
       const c = (b.data.colors as Partial<Record<ChatKind, Partial<Record<'tag' | 'name' | 'text', (typeof ANSI_COLORS)[number]>>>> | undefined)?.[k];
       if (c) s.colors[k] = { ...s.colors[k], ...Object.fromEntries(Object.entries(c).filter(([, v]) => v !== undefined)) };
     }
+    if (b.data.announce) s.announce = { ...s.announce, ...b.data.announce };
     if (b.data.style) s.style = b.data.style;
     if (b.data.showTime !== undefined) s.showTime = b.data.showTime;
     if (b.data.senderName !== undefined) s.senderName = normalizeChat({ senderName: b.data.senderName }).senderName;
@@ -288,6 +319,7 @@ export function registerGameNewsChat({ app, admin }: { app: Express; admin: Requ
         ansiChatLine('local', 'WhiteLegioN', '', 'Кто рядом?', s.colors.local, '', tm),
         ansiEventLine(jl.joinText, 'WhiteLegioN', s.colors.join, '', tm),
         ansiEventLine(jl.leaveText, 'WhiteLegioN', s.colors.leave, '', tm),
+        ansiAnnounceLine('Авто', 'Приглашение в Discord', 'Заходите в наш Discord: новости и поиск команды', s.colors.announce, tm),
       ]
       : [
         formatChatLine('global', 'WhiteLegioN', '', 'Привет всем!', '', tm),
@@ -295,6 +327,7 @@ export function registerGameNewsChat({ app, admin }: { app: Express; admin: Requ
         formatChatLine('local', 'WhiteLegioN', '', 'Кто рядом?', '', tm),
         formatEventLine(jl.joinText, 'WhiteLegioN', '', tm),
         formatEventLine(jl.leaveText, 'WhiteLegioN', '', tm),
+        formatAnnounceLine('Авто', 'Приглашение в Discord', 'Заходите в наш Discord: новости и поиск команды', tm),
       ];
     // «Палитра»: the eight colours as Discord draws them (the panel's preview is checked against this)
     if (req.query.palette) {

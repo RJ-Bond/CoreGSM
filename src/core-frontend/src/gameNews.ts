@@ -384,7 +384,7 @@ export interface RegisterSettings {
 }
 
 /** the game chat in Discord: one webhook (its address never leaves the backend), a switch for each kind of line and how they look */
-export const CHAT_KINDS = ['global', 'clan', 'local', 'join', 'leave', 'kick'] as const;
+export const CHAT_KINDS = ['global', 'clan', 'local', 'join', 'leave', 'kick', 'announce'] as const;
 export type ChatKind = (typeof CHAT_KINDS)[number];
 /** the eight colours of an ansi block of Discord */
 /** ready looks of the chat in Discord: the colours of the game, calm, bright, or no colours at all */
@@ -394,6 +394,7 @@ export const CHAT_PRESETS: { id: 'game' | 'calm' | 'bright' | 'plain'; style: 'a
     colors: {
       global: { tag: 'blue', name: 'yellow', text: 'blue' }, local: { tag: 'blue', name: 'yellow', text: 'blue' }, clan: { tag: 'green', name: 'yellow', text: 'green' },
       join: { tag: 'green', name: 'pink', text: 'green' }, leave: { tag: 'green', name: 'pink', text: 'green' }, kick: { tag: 'yellow', name: 'green', text: 'red' },
+      announce: { tag: 'blue', name: 'yellow', text: 'white' },
     },
   },
   {
@@ -401,6 +402,7 @@ export const CHAT_PRESETS: { id: 'game' | 'calm' | 'bright' | 'plain'; style: 'a
     colors: {
       global: { tag: 'gray', name: 'white', text: 'gray' }, local: { tag: 'gray', name: 'white', text: 'gray' }, clan: { tag: 'gray', name: 'white', text: 'gray' },
       join: { tag: 'gray', name: 'white', text: 'gray' }, leave: { tag: 'gray', name: 'white', text: 'gray' }, kick: { tag: 'gray', name: 'white', text: 'gray' },
+      announce: { tag: 'gray', name: 'white', text: 'gray' },
     },
   },
   {
@@ -408,6 +410,7 @@ export const CHAT_PRESETS: { id: 'game' | 'calm' | 'bright' | 'plain'; style: 'a
     colors: {
       global: { tag: 'cyan', name: 'yellow', text: 'white' }, local: { tag: 'gray', name: 'yellow', text: 'gray' }, clan: { tag: 'green', name: 'yellow', text: 'white' },
       join: { tag: 'green', name: 'pink', text: 'green' }, leave: { tag: 'red', name: 'pink', text: 'red' }, kick: { tag: 'yellow', name: 'green', text: 'red' },
+      announce: { tag: 'cyan', name: 'yellow', text: 'white' },
     },
   },
   {
@@ -415,6 +418,7 @@ export const CHAT_PRESETS: { id: 'game' | 'calm' | 'bright' | 'plain'; style: 'a
     colors: {
       global: { tag: 'white', name: 'white', text: 'white' }, local: { tag: 'white', name: 'white', text: 'white' }, clan: { tag: 'white', name: 'white', text: 'white' },
       join: { tag: 'white', name: 'white', text: 'white' }, leave: { tag: 'white', name: 'white', text: 'white' }, kick: { tag: 'white', name: 'white', text: 'white' },
+      announce: { tag: 'white', name: 'white', text: 'white' },
     },
   },
 ];
@@ -427,6 +431,8 @@ export interface ChatSettings {
   set: boolean;
   tail: string;
   kinds: Record<ChatKind, boolean>;
+  /** which messages of the panel the «announce» kind shows: the automatic announcements, the countdown of a restart, lines sent by hand */
+  announce: { auto: boolean; restart: boolean; manual: boolean };
   style: 'ansi' | 'plain';
   senderName: string;
   /** «[16:07]» in front of every line, like in the game */

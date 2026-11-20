@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
 import { api } from '../api';
 import { Switch } from '../components/Switch';
 import { AutoText, FoldCard, VarChips } from '../components/GameNewsParts';
@@ -614,6 +614,15 @@ function DiscordPreview({ colors, joinText, leaveText, kickText, showTime, sende
       ))}
     </p>
   );
+  // a message of the panel: the mark, the name of the rule, the words
+  const announce = () => (
+    <p key="announce" className="wrap-break-word">
+      {showTime && <span style={{ color: ANSI_CSS[colors.announce.text] }}>[{clock}] </span>}
+      <span style={{ color: ANSI_CSS[colors.announce.tag], fontWeight: 800 }}>* [{t('gn.ch.ann.sampleLabel')}]</span>{' '}
+      <span style={{ color: ANSI_CSS[colors.announce.name], fontWeight: 800 }}>{t('gn.ch.ann.sampleName')}</span>
+      <span style={{ color: ANSI_CSS[colors.announce.text] }}>: {t('gn.ch.ann.sampleText')}</span>
+    </p>
+  );
   // a message of a webhook as Discord draws it: a round picture, the name with the «БОТ» mark, the time, the code block
   return (
     <div className="flex gap-3 rounded-lg p-3" style={{ background: '#313338', color: '#dbdee1' }} aria-label={t('gn.ch.look')}>
@@ -633,6 +642,7 @@ function DiscordPreview({ colors, joinText, leaveText, kickText, showTime, sende
           {event('join', joinText)}
           {event('leave', leaveText)}
           {kick()}
+          {announce()}
         </div>
       </div>
     </div>
@@ -756,13 +766,26 @@ export function ChatCard({ initial, joinText, leaveText, kickText }: { initial: 
       <fieldset className="space-y-2">
         <legend className="mb-1 font-extrabold">{t('gn.ch.what')}</legend>
         {CHAT_KINDS.map((k) => (
-          <label key={k} className="flex items-start gap-3 font-bold">
-            <Switch className="mt-0.5" checked={st.kinds[k]} disabled={busy === k} onChange={(v) => void send({ kinds: { [k]: v } }, k, true)} />
-            <span>
-              {t(`gn.ch.kind.${k}` as 'gn.ch.kind.global')}
-              <span className="block text-sm font-semibold text-mute">{t(`gn.ch.kindNote.${k}` as 'gn.ch.kindNote.global')}</span>
-            </span>
-          </label>
+          <Fragment key={k}>
+            <label className="flex items-start gap-3 font-bold">
+              <Switch className="mt-0.5" checked={st.kinds[k]} disabled={busy === k} onChange={(v) => void send({ kinds: { [k]: v } }, k, true)} />
+              <span>
+                {t(`gn.ch.kind.${k}` as 'gn.ch.kind.global')}
+                <span className="block text-sm font-semibold text-mute">{t(`gn.ch.kindNote.${k}` as 'gn.ch.kindNote.global')}</span>
+              </span>
+            </label>
+            {k === 'announce' && st.kinds.announce && (
+              <div className="ml-12 space-y-1.5 rounded-xl bg-soft px-4 py-3" role="group" aria-label={t('gn.ch.ann.title')}>
+                <div className="text-sm font-extrabold">{t('gn.ch.ann.title')}</div>
+                {(['auto', 'restart', 'manual'] as const).map((src) => (
+                  <label key={src} className="flex items-start gap-3 text-sm font-bold">
+                    <Switch className="mt-0.5" checked={st.announce[src]} disabled={busy === `ann-${src}`} onChange={(v) => void send({ announce: { [src]: v } }, `ann-${src}`, true)} />
+                    <span>{t(`gn.ch.ann.${src}` as 'gn.ch.ann.auto')}<span className="block font-semibold text-mute">{t(`gn.ch.ann.${src}Note` as 'gn.ch.ann.autoNote')}</span></span>
+                  </label>
+                ))}
+              </div>
+            )}
+          </Fragment>
         ))}
       </fieldset>
 

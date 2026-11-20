@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="61f672f395d1"
+COREGSM_BUILD="5512cc874de0"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.2.69"
+COREGSM_VERSION="1.2.70"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -24526,6 +24526,7 @@ import { consumeDue } from './gameNewsRestartState.js';
 import { takeCommands } from './gameNewsModLog.js';
 import { savePluginProblems } from './gameNewsConnections.js';
 import { saveStats } from './gameNewsMetrics.js';
+import { postAnnounceToDiscord } from './gameNewsChat.js';
 
 export const QUEUE_TTL_MS = 5 * 60_000;
 /** the version of the game plugin this panel was built for: an older plugin is shown as outdated */
@@ -24698,10 +24699,12 @@ export function registerGameNews({ app, admin }: { app: Express; admin: RequestH
     if (req.headers['x-coregsm-stats'] !== undefined) saveStats(t.server_id, String(req.headers['x-coregsm-stats']), now);
 
     expireOld(now);
-    const rows = db.prepare("SELECT id, text FROM game_news_log WHERE server_id = ? AND status = 'queued' ORDER BY id LIMIT ?").all(t.server_id, PULL_BATCH) as { id: number; text: string }[];
+    const rows = db.prepare("SELECT id, text, sent_by FROM game_news_log WHERE server_id = ? AND status = 'queued' ORDER BY id LIMIT ?").all(t.server_id, PULL_BATCH) as { id: number; text: string; sent_by: string }[];
     if (rows.length) {
       const done = db.prepare("UPDATE game_news_log SET status = 'delivered', ok = 1, delivered_at = ? WHERE id = ? AND status = 'queued'");
       db.transaction(() => { for (const r of rows) done.run(now, r.id); })();
+      // what the plugin has taken is shown in the chat in Discord as well (when the chat shows the messages of the panel)
+      for (const r of rows) { try { postAnnounceToDiscord(t.server_id, r.sent_by, r.text, now); } catch { /* the chat must not stop the plugin */ } }
     }
     // latest = the newest plugin version this panel knows (the plugin logs when it is older); welcome = the greeting for joining players
     res.json({ messages: rows.map((r) => ({ id: r.id, text: r.text })), latest: PLUGIN_VERSION, ...welcomeFor(t.server_id, now), ...joinLeaveFor(t.server_id), register: registerEnabled(t.server_id), remindMinutes: remindMinutesFor(t.server_id), palette: PALETTE, lang: langFor(t.server_id), chat: chatKindsConfigured(t.server_id), restart: consumeDue(t.server_id), commands: takeCommands(t.server_id, now) });
@@ -24734,7 +24737,7 @@ import { log } from '../logger.js';
 import { decryptSecret, encryptSecret } from '../security/secrets.js';
 import { pluginTarget } from './gameNews.js';
 import {
-  ANSI_COLORS, CHAT_KINDS, activeChatKinds, ansiChatLine, ansiKickLine, formatKickLine, ansiEventLine, chunkLines, formatChatLine, formatEventLine, isDiscordWebhook,
+  ANSI_COLORS, CHAT_KINDS, activeChatKinds, announceSource, ansiAnnounceLine, ansiChatLine, ansiKickLine, formatAnnounceLine, formatKickLine, ansiEventLine, chunkLines, formatChatLine, formatEventLine, isDiscordWebhook,
   normalizeChat, paletteBlock, wrapForDiscord, type ChatKind, type ChatStored,
 } from './gameNewsChatLogic.js';
 import { getJoinLeave } from './gameNewsJoinLeave.js';
@@ -24761,10 +24764,10 @@ function webhookUrl(s: ChatStored): string | null {
 
 /** the kinds of chat that are being forwarded (what the plugin has to read) */
 
-export function chatSettingsView(serverId?: number): Pick<ChatStored, 'enabled' | 'kinds' | 'style' | 'senderName' | 'showTime' | 'colors' | 'fromDiscord'> & { set: boolean; tail: string; channel: boolean; confirmCard: boolean; confirmLine: boolean } {
+export function chatSettingsView(serverId?: number): Pick<ChatStored, 'enabled' | 'kinds' | 'announce' | 'style' | 'senderName' | 'showTime' | 'colors' | 'fromDiscord'> & { set: boolean; tail: string; channel: boolean; confirmCard: boolean; confirmLine: boolean } {
   const s = read(serverId);
   const u = webhookUrl(s);
-  return { enabled: s.enabled, set: !!u, tail: u ? `…${u.slice(-6)}` : '', kinds: s.kinds, style: s.style, senderName: s.senderName, showTime: s.showTime, colors: s.colors, fromDiscord: s.fromDiscord, channel: !!s.channelId, confirmCard: s.confirmCard, confirmLine: s.confirmLine };
+  return { enabled: s.enabled, set: !!u, tail: u ? `…${u.slice(-6)}` : '', kinds: s.kinds, announce: s.announce, style: s.style, senderName: s.senderName, showTime: s.showTime, colors: s.colors, fromDiscord: s.fromDiscord, channel: !!s.channelId, confirmCard: s.confirmCard, confirmLine: s.confirmLine };
 }
 
 /** the channel a webhook posts to (Discord tells it to anyone who holds the address) */
@@ -24813,11 +24816,40 @@ export function chatChannels(): { channelId: string; serverIds: number[]; confir
   return [...map].map(([channelId, e]) => ({ channelId, serverIds: [...e.ids], confirmCard: e.card, confirmLine: e.line }));
 }
 
+/** the same text for the same channel is not repeated within this time (an announcement to three servers that share a channel is one line) */
+const ANNOUNCE_REPEAT_MS = 90_000;
+const lastAnnounce = new Map<string, number>();
+export const resetAnnounceMemory = (): void => lastAnnounce.clear();
+
+/**
+ * A message of the panel that the plugin has taken (an automatic announcement, the countdown of a restart, a line sent by hand) goes to the chat in
+ * Discord like a line of the game chat: «[22:10] * [Авто] Тех.работы: текст». Switched by «Сообщения панели» and by the sources chosen there;
+ * what was written from Discord is not repeated (the bot shows it itself).
+ */
+export function postAnnounceToDiscord(serverId: number, by: string, text: string, now = Date.now()): boolean {
+  const src = announceSource(by);
+  if (!src) return false;
+  const scope = scopeOf(serverId);
+  const s = read(scope || undefined);
+  if (!activeChatKinds(s).includes('announce') || !s.announce[src.source]) return false;
+  const time = s.showTime ? clock(now) : '';
+  const line = s.style === 'ansi' ? ansiAnnounceLine(src.label, src.who, text, s.colors.announce, time) : formatAnnounceLine(src.label, src.who, text, time);
+  if (!line) return false;
+  const key = `${scope}|${src.label}|${src.who}|${text}`;
+  if (now - (lastAnnounce.get(key) ?? 0) < ANNOUNCE_REPEAT_MS) return false;
+  lastAnnounce.set(key, now);
+  if (lastAnnounce.size > 300) for (const [k, t] of lastAnnounce) if (now - t > ANNOUNCE_REPEAT_MS) lastAnnounce.delete(k);
+  enqueue(scope, line);
+  return true;
+}
+
 // ---- posting
 const MAX_QUEUE = 200;
 // one queue per set of chat settings: 0 = the general ones, a server id = that server's own (it may write to another channel)
 const queues = new Map<number, string[]>();
 const paused = new Map<number, number>();
+/** the lines waiting to be posted for a set of chat settings (0 = the general ones); for the tests */
+export const pendingLines = (scope = 0): string[] => [...(queues.get(scope) ?? [])];
 
 function enqueue(scope: number, line: string): void {
   const q = queues.get(scope) ?? [];
@@ -24919,7 +24951,7 @@ export function registerGameNewsChat({ app, admin }: { app: Express; admin: Requ
     const jl = getJoinLeave(t.server_id);
     const time = s.showTime ? clock(now) : '';
     for (const m of b.data.messages) {
-      if (m.type === 'kick' || !kinds.has(m.type)) continue; // a kick is written by the panel itself (postKickToDiscord)
+      if (m.type === 'kick' || m.type === 'announce' || !kinds.has(m.type)) continue; // a kick and a message of the panel are written by the panel itself
       const colors = s.colors[m.type];
       let line: string;
       if (m.type === 'join' || m.type === 'leave') {
@@ -24943,6 +24975,7 @@ export function registerGameNewsChat({ app, admin }: { app: Express; admin: Requ
       webhook: z.string().max(300).optional(),
       clear: z.boolean().optional(),
       kinds: z.object(Object.fromEntries(CHAT_KINDS.map((k) => [k, z.boolean()]))).partial().optional(),
+      announce: z.object({ auto: z.boolean(), restart: z.boolean(), manual: z.boolean() }).partial().optional(),
       style: z.enum(['ansi', 'plain']).optional(),
       senderName: z.string().max(80).optional(),
       showTime: z.boolean().optional(),
@@ -24977,6 +25010,7 @@ export function registerGameNewsChat({ app, admin }: { app: Express; admin: Requ
       const c = (b.data.colors as Partial<Record<ChatKind, Partial<Record<'tag' | 'name' | 'text', (typeof ANSI_COLORS)[number]>>>> | undefined)?.[k];
       if (c) s.colors[k] = { ...s.colors[k], ...Object.fromEntries(Object.entries(c).filter(([, v]) => v !== undefined)) };
     }
+    if (b.data.announce) s.announce = { ...s.announce, ...b.data.announce };
     if (b.data.style) s.style = b.data.style;
     if (b.data.showTime !== undefined) s.showTime = b.data.showTime;
     if (b.data.senderName !== undefined) s.senderName = normalizeChat({ senderName: b.data.senderName }).senderName;
@@ -25000,6 +25034,7 @@ export function registerGameNewsChat({ app, admin }: { app: Express; admin: Requ
         ansiChatLine('local', 'WhiteLegioN', '', 'Кто рядом?', s.colors.local, '', tm),
         ansiEventLine(jl.joinText, 'WhiteLegioN', s.colors.join, '', tm),
         ansiEventLine(jl.leaveText, 'WhiteLegioN', s.colors.leave, '', tm),
+        ansiAnnounceLine('Авто', 'Приглашение в Discord', 'Заходите в наш Discord: новости и поиск команды', s.colors.announce, tm),
       ]
       : [
         formatChatLine('global', 'WhiteLegioN', '', 'Привет всем!', '', tm),
@@ -25007,6 +25042,7 @@ export function registerGameNewsChat({ app, admin }: { app: Express; admin: Requ
         formatChatLine('local', 'WhiteLegioN', '', 'Кто рядом?', '', tm),
         formatEventLine(jl.joinText, 'WhiteLegioN', '', tm),
         formatEventLine(jl.leaveText, 'WhiteLegioN', '', tm),
+        formatAnnounceLine('Авто', 'Приглашение в Discord', 'Заходите в наш Discord: новости и поиск команды', tm),
       ];
     // «Палитра»: the eight colours as Discord draws them (the panel's preview is checked against this)
     if (req.query.palette) {
@@ -25030,8 +25066,8 @@ __COREGSM_EOF__
  * the game: a blue tag, a yellow nickname, a green clan chat.
  */
 
-/** the kinds of line that can go to Discord: three chats and three events (a player joined, left, was kicked) */
-export const CHAT_KINDS = ['global', 'clan', 'local', 'join', 'leave', 'kick'] as const;
+/** the kinds of line that can go to Discord: three chats and four events (a player joined, left, was kicked; the panel said something to the game) */
+export const CHAT_KINDS = ['global', 'clan', 'local', 'join', 'leave', 'kick', 'announce'] as const;
 export type ChatKind = (typeof CHAT_KINDS)[number];
 
 /** the eight colours of an ansi block of Discord */
@@ -25052,6 +25088,8 @@ export const DEFAULT_COLORS: Record<ChatKind, ChatColors> = {
   leave: { tag: 'green', name: 'pink', text: 'green' },
   // a kick: the text red, the nickname green, the reason (the «tag» colour) yellow
   kick: { tag: 'yellow', name: 'green', text: 'red' },
+  // a message of the panel: the mark («Авто», «Рестарт») blue, the name of the rule or of the writer yellow, the words white
+  announce: { tag: 'blue', name: 'yellow', text: 'white' },
 };
 
 /** the defaults of the first version: a setting that still holds exactly them has not been changed by anybody and moves to the new ones */
@@ -25062,11 +25100,18 @@ const OLD_DEFAULTS: Record<ChatKind, ChatColors> = {
   join: { tag: 'green', name: 'pink', text: 'green' },
   leave: { tag: 'green', name: 'pink', text: 'green' },
   kick: { tag: 'yellow', name: 'green', text: 'red' },
+  announce: { tag: 'blue', name: 'yellow', text: 'white' },
 };
 const sameColors = (x: ChatColors, y: ChatColors): boolean => x.tag === y.tag && x.name === y.name && x.text === y.text;
 
+/** which messages of the panel are shown in the channel: the automatic announcements, the countdown of a restart, what an administrator sends by hand */
+export interface AnnounceSources { auto: boolean; restart: boolean; manual: boolean }
+export const DEFAULT_ANNOUNCE: AnnounceSources = { auto: true, restart: true, manual: false };
+
 /** one webhook for the whole chat (kept encrypted), a switch for every kind, how lines look */
 export interface ChatStored {
+  /** what of the messages of the panel the «announce» kind shows */
+  announce: AnnounceSources;
   enabled: boolean;
   webhook: string;
   kinds: Record<ChatKind, boolean>;
@@ -25095,7 +25140,7 @@ const isAnsi = (x: unknown): x is AnsiColor => typeof x === 'string' && (ANSI_CO
 export function normalizeChat(raw: unknown): ChatStored {
   const v = (raw && typeof raw === 'object' ? raw : {}) as {
     enabled?: unknown; webhook?: unknown; kinds?: Partial<Record<ChatKind, unknown>>; webhooks?: Partial<Record<ChatKind, unknown>>;
-    style?: unknown; senderName?: unknown; showTime?: unknown; fromDiscord?: unknown; channelId?: unknown; confirmCard?: unknown; confirmLine?: unknown; colors?: Partial<Record<ChatKind, Partial<Record<keyof ChatColors, unknown>>>>;
+    announce?: Partial<Record<keyof AnnounceSources, unknown>>; style?: unknown; senderName?: unknown; showTime?: unknown; fromDiscord?: unknown; channelId?: unknown; confirmCard?: unknown; confirmLine?: unknown; colors?: Partial<Record<ChatKind, Partial<Record<keyof ChatColors, unknown>>>>;
   };
   const legacy = v.webhooks && typeof v.webhooks === 'object' ? v.webhooks : {};
   const legacyFirst = (['global', 'clan', 'local'] as const).map((k) => legacy[k]).find((x): x is string => typeof x === 'string' && x.length > 0);
@@ -25105,7 +25150,7 @@ export function normalizeChat(raw: unknown): ChatStored {
   for (const k of CHAT_KINDS) {
     const event = k === 'join' || k === 'leave';
     if (v.kinds && typeof v.kinds[k] === 'boolean') kinds[k] = v.kinds[k] as boolean;
-    else if (k === 'kick') kinds[k] = true; // a kick is shown by default, like a chat (an event of a player is opt-in)
+    else if (k === 'kick' || k === 'announce') kinds[k] = true; // a kick and the messages of the panel are shown by default, like a chat (an event of a player is opt-in)
     else if (event) kinds[k] = false;
     else kinds[k] = v.webhooks ? typeof legacy[k] === 'string' && !!legacy[k] : true;
     const c = v.colors?.[k] ?? {};
@@ -25116,9 +25161,16 @@ export function normalizeChat(raw: unknown): ChatStored {
     };
     colors[k] = sameColors(mine, OLD_DEFAULTS[k]) ? DEFAULT_COLORS[k] : mine;
   }
+  const a = v.announce && typeof v.announce === 'object' ? v.announce : {};
+  const announce: AnnounceSources = {
+    auto: typeof a.auto === 'boolean' ? a.auto : DEFAULT_ANNOUNCE.auto,
+    restart: typeof a.restart === 'boolean' ? a.restart : DEFAULT_ANNOUNCE.restart,
+    manual: typeof a.manual === 'boolean' ? a.manual : DEFAULT_ANNOUNCE.manual,
+  };
   return {
     enabled: !!v.enabled,
     webhook,
+    announce,
     kinds,
     style: v.style === 'plain' ? 'plain' : 'ansi',
     showTime: v.showTime !== false,
@@ -25194,6 +25246,34 @@ export function ansiDiscordLine(name: string, text: string, time = ''): string {
   const t = forBlock(text);
   if (!t) return '';
   return `${seg('cyan', stamp(time))}${seg('blue', '* [Discord]', true)} ${seg('yellow', forBlock(name) || '?', true)}${seg('white', ': ')}${seg('white', t.slice(0, 300))}`;
+}
+
+/** where a message of the panel came from: «авто: Тех.работы» is a rule, «авто: рестарт» the countdown of a restart, «Discord: …» is shown by the bot itself, the rest was written by hand */
+export function announceSource(by: string): { source: keyof AnnounceSources; label: string; who: string } | null {
+  const b = by.trim();
+  if (/^Discord:/i.test(b)) return null;
+  if (/^авто:\s*рестарт\s*$/i.test(b)) return { source: 'restart', label: 'Рестарт', who: '' };
+  if (/^авто:/i.test(b)) return { source: 'auto', label: 'Авто', who: b.replace(/^авто:\s*/i, '') };
+  return { source: 'manual', label: 'Панель', who: b };
+}
+
+/** the words of a message of the panel without its colour tags and without anything that could break a block */
+const announceText = (text: string): string => forBlock(text.replace(/<[^>]*>/g, '')).replace(/^\*\s*/, '').slice(0, 400);
+
+/** «[22:10] * [Авто] Тех.работы: текст» in an ansi block */
+export function ansiAnnounceLine(label: string, who: string, text: string, c: ChatColors, time = ''): string {
+  const t = announceText(text);
+  if (!t) return '';
+  const name = forBlock(who);
+  return `${seg(c.text, stamp(time))}${seg(c.tag, `* [${forBlock(label)}]`, true)}${name ? ` ${seg(c.name, name, true)}${seg(c.text, ':')}` : seg(c.text, ':')} ${seg(c.text, t)}`;
+}
+
+/** the same in the plain style: the mark and the name in bold */
+export function formatAnnounceLine(label: string, who: string, text: string, time = ''): string {
+  const t = announceText(text);
+  if (!t) return '';
+  const name = who.trim() ? ` **${escapeDiscord(who.trim())}**:` : ':';
+  return `${stamp(time)}**\* [${escapeDiscord(label)}]**${name} ${escapeDiscord(t)}`.trim();
 }
 
 /** the words of a kick split at {name} {reason} {admin}: the template, with what stands for each */
@@ -145786,7 +145866,7 @@ export interface RegisterSettings {
 }
 
 /** the game chat in Discord: one webhook (its address never leaves the backend), a switch for each kind of line and how they look */
-export const CHAT_KINDS = ['global', 'clan', 'local', 'join', 'leave', 'kick'] as const;
+export const CHAT_KINDS = ['global', 'clan', 'local', 'join', 'leave', 'kick', 'announce'] as const;
 export type ChatKind = (typeof CHAT_KINDS)[number];
 /** the eight colours of an ansi block of Discord */
 /** ready looks of the chat in Discord: the colours of the game, calm, bright, or no colours at all */
@@ -145796,6 +145876,7 @@ export const CHAT_PRESETS: { id: 'game' | 'calm' | 'bright' | 'plain'; style: 'a
     colors: {
       global: { tag: 'blue', name: 'yellow', text: 'blue' }, local: { tag: 'blue', name: 'yellow', text: 'blue' }, clan: { tag: 'green', name: 'yellow', text: 'green' },
       join: { tag: 'green', name: 'pink', text: 'green' }, leave: { tag: 'green', name: 'pink', text: 'green' }, kick: { tag: 'yellow', name: 'green', text: 'red' },
+      announce: { tag: 'blue', name: 'yellow', text: 'white' },
     },
   },
   {
@@ -145803,6 +145884,7 @@ export const CHAT_PRESETS: { id: 'game' | 'calm' | 'bright' | 'plain'; style: 'a
     colors: {
       global: { tag: 'gray', name: 'white', text: 'gray' }, local: { tag: 'gray', name: 'white', text: 'gray' }, clan: { tag: 'gray', name: 'white', text: 'gray' },
       join: { tag: 'gray', name: 'white', text: 'gray' }, leave: { tag: 'gray', name: 'white', text: 'gray' }, kick: { tag: 'gray', name: 'white', text: 'gray' },
+      announce: { tag: 'gray', name: 'white', text: 'gray' },
     },
   },
   {
@@ -145810,6 +145892,7 @@ export const CHAT_PRESETS: { id: 'game' | 'calm' | 'bright' | 'plain'; style: 'a
     colors: {
       global: { tag: 'cyan', name: 'yellow', text: 'white' }, local: { tag: 'gray', name: 'yellow', text: 'gray' }, clan: { tag: 'green', name: 'yellow', text: 'white' },
       join: { tag: 'green', name: 'pink', text: 'green' }, leave: { tag: 'red', name: 'pink', text: 'red' }, kick: { tag: 'yellow', name: 'green', text: 'red' },
+      announce: { tag: 'cyan', name: 'yellow', text: 'white' },
     },
   },
   {
@@ -145817,6 +145900,7 @@ export const CHAT_PRESETS: { id: 'game' | 'calm' | 'bright' | 'plain'; style: 'a
     colors: {
       global: { tag: 'white', name: 'white', text: 'white' }, local: { tag: 'white', name: 'white', text: 'white' }, clan: { tag: 'white', name: 'white', text: 'white' },
       join: { tag: 'white', name: 'white', text: 'white' }, leave: { tag: 'white', name: 'white', text: 'white' }, kick: { tag: 'white', name: 'white', text: 'white' },
+      announce: { tag: 'white', name: 'white', text: 'white' },
     },
   },
 ];
@@ -145829,6 +145913,8 @@ export interface ChatSettings {
   set: boolean;
   tail: string;
   kinds: Record<ChatKind, boolean>;
+  /** which messages of the panel the «announce» kind shows: the automatic announcements, the countdown of a restart, lines sent by hand */
+  announce: { auto: boolean; restart: boolean; manual: boolean };
   style: 'ansi' | 'plain';
   senderName: string;
   /** «[16:07]» in front of every line, like in the game */
@@ -149739,6 +149825,18 @@ const en: Record<keyof typeof ru, string> = {
   'gn.sh.langHint': 'The language of the command help and errors that the plugin writes itself (the texts from the panel do not change)',
   'gn.sh.langSaved': 'The language of the plugin is saved: it applies within a few seconds',
   'gn.cn.title': 'Joins and departures',
+  'gn.ch.kind.announce': 'Messages of the panel',
+  'gn.ch.kindNote.announce': 'Automatic announcements, the countdown of a restart and the messages you send from the panel: a line «* [Auto] name: text» appears in the channel when the plugin has taken the message. What exactly is shown is chosen below.',
+  'gn.ch.ann.title': 'Which messages of the panel to show',
+  'gn.ch.ann.auto': 'Automatic announcements',
+  'gn.ch.ann.autoNote': 'A line marked «Auto» with the name of the rule.',
+  'gn.ch.ann.restart': 'Countdown of a restart',
+  'gn.ch.ann.restartNote': 'A line marked «Restart»: «in 10 minutes», «in 1 minute», «now».',
+  'gn.ch.ann.manual': 'Messages sent by hand',
+  'gn.ch.ann.manualNote': 'A line marked «Panel» with the name of whoever sent it. Messages from Discord are not repeated: the bot shows them.',
+  'gn.ch.ann.sampleLabel': 'Auto',
+  'gn.ch.ann.sampleName': 'Discord invite',
+  'gn.ch.ann.sampleText': 'Join our Discord: news and team search',
   'gn.sy.check': 'Check writing from Discord',
   'gn.sy.note': 'The bot silently drops a line when something is missing: this shows what.',
   'gn.sy.last': 'The last lines the bot handed to the panel',
@@ -155114,6 +155212,18 @@ const ru = {
   'gn.sh.langHint': 'Язык справки команд и ошибок, которые пишет сам плагин (тексты из панели не меняются)',
   'gn.sh.langSaved': 'Язык плагина сохранён: применится в течение нескольких секунд',
   'gn.cn.title': 'Входы и выходы',
+  'gn.ch.kind.announce': 'Сообщения панели',
+  'gn.ch.kindNote.announce': 'Автообъявления, отсчёт рестарта и сообщения, которые вы отправляете из панели: строка «* [Авто] название: текст» появляется в канале, когда плагин забрал сообщение. Что именно показывать, выбирается ниже.',
+  'gn.ch.ann.title': 'Какие сообщения панели показывать',
+  'gn.ch.ann.auto': 'Автообъявления',
+  'gn.ch.ann.autoNote': 'Строка с пометкой «Авто» и названием правила.',
+  'gn.ch.ann.restart': 'Отсчёт рестарта',
+  'gn.ch.ann.restartNote': 'Строка с пометкой «Рестарт»: «через 10 минут», «через 1 минуту», «сейчас».',
+  'gn.ch.ann.manual': 'Сообщения, отправленные вручную',
+  'gn.ch.ann.manualNote': 'Строка с пометкой «Панель» и именем того, кто отправил. Сообщения из Discord не повторяются: их показывает бот.',
+  'gn.ch.ann.sampleLabel': 'Авто',
+  'gn.ch.ann.sampleName': 'Приглашение в Discord',
+  'gn.ch.ann.sampleText': 'Заходите в наш Discord: новости и поиск команды',
   'gn.sy.check': 'Проверить запись из Discord',
   'gn.sy.note': 'Бот молча отбрасывает строки, если чего-то не хватает: здесь видно, чего именно.',
   'gn.sy.last': 'Последние строки, которые бот передал панели',
@@ -164418,7 +164528,7 @@ function PluginModal({ server, onClose, onChanged }: { server: NewsServerInfo; o
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/GameNewsCards.tsx" << '__COREGSM_EOF__'
-import { useEffect, useRef, useState } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
 import { api } from '../api';
 import { Switch } from '../components/Switch';
 import { AutoText, FoldCard, VarChips } from '../components/GameNewsParts';
@@ -165034,6 +165144,15 @@ function DiscordPreview({ colors, joinText, leaveText, kickText, showTime, sende
       ))}
     </p>
   );
+  // a message of the panel: the mark, the name of the rule, the words
+  const announce = () => (
+    <p key="announce" className="wrap-break-word">
+      {showTime && <span style={{ color: ANSI_CSS[colors.announce.text] }}>[{clock}] </span>}
+      <span style={{ color: ANSI_CSS[colors.announce.tag], fontWeight: 800 }}>* [{t('gn.ch.ann.sampleLabel')}]</span>{' '}
+      <span style={{ color: ANSI_CSS[colors.announce.name], fontWeight: 800 }}>{t('gn.ch.ann.sampleName')}</span>
+      <span style={{ color: ANSI_CSS[colors.announce.text] }}>: {t('gn.ch.ann.sampleText')}</span>
+    </p>
+  );
   // a message of a webhook as Discord draws it: a round picture, the name with the «БОТ» mark, the time, the code block
   return (
     <div className="flex gap-3 rounded-lg p-3" style={{ background: '#313338', color: '#dbdee1' }} aria-label={t('gn.ch.look')}>
@@ -165053,6 +165172,7 @@ function DiscordPreview({ colors, joinText, leaveText, kickText, showTime, sende
           {event('join', joinText)}
           {event('leave', leaveText)}
           {kick()}
+          {announce()}
         </div>
       </div>
     </div>
@@ -165176,13 +165296,26 @@ export function ChatCard({ initial, joinText, leaveText, kickText }: { initial: 
       <fieldset className="space-y-2">
         <legend className="mb-1 font-extrabold">{t('gn.ch.what')}</legend>
         {CHAT_KINDS.map((k) => (
-          <label key={k} className="flex items-start gap-3 font-bold">
-            <Switch className="mt-0.5" checked={st.kinds[k]} disabled={busy === k} onChange={(v) => void send({ kinds: { [k]: v } }, k, true)} />
-            <span>
-              {t(`gn.ch.kind.${k}` as 'gn.ch.kind.global')}
-              <span className="block text-sm font-semibold text-mute">{t(`gn.ch.kindNote.${k}` as 'gn.ch.kindNote.global')}</span>
-            </span>
-          </label>
+          <Fragment key={k}>
+            <label className="flex items-start gap-3 font-bold">
+              <Switch className="mt-0.5" checked={st.kinds[k]} disabled={busy === k} onChange={(v) => void send({ kinds: { [k]: v } }, k, true)} />
+              <span>
+                {t(`gn.ch.kind.${k}` as 'gn.ch.kind.global')}
+                <span className="block text-sm font-semibold text-mute">{t(`gn.ch.kindNote.${k}` as 'gn.ch.kindNote.global')}</span>
+              </span>
+            </label>
+            {k === 'announce' && st.kinds.announce && (
+              <div className="ml-12 space-y-1.5 rounded-xl bg-soft px-4 py-3" role="group" aria-label={t('gn.ch.ann.title')}>
+                <div className="text-sm font-extrabold">{t('gn.ch.ann.title')}</div>
+                {(['auto', 'restart', 'manual'] as const).map((src) => (
+                  <label key={src} className="flex items-start gap-3 text-sm font-bold">
+                    <Switch className="mt-0.5" checked={st.announce[src]} disabled={busy === `ann-${src}`} onChange={(v) => void send({ announce: { [src]: v } }, `ann-${src}`, true)} />
+                    <span>{t(`gn.ch.ann.${src}` as 'gn.ch.ann.auto')}<span className="block font-semibold text-mute">{t(`gn.ch.ann.${src}Note` as 'gn.ch.ann.autoNote')}</span></span>
+                  </label>
+                ))}
+              </div>
+            )}
+          </Fragment>
         ))}
       </fieldset>
 

@@ -23,6 +23,7 @@ import { consumeDue } from './gameNewsRestartState.js';
 import { takeCommands } from './gameNewsModLog.js';
 import { savePluginProblems } from './gameNewsConnections.js';
 import { saveStats } from './gameNewsMetrics.js';
+import { postAnnounceToDiscord } from './gameNewsChat.js';
 
 export const QUEUE_TTL_MS = 5 * 60_000;
 /** the version of the game plugin this panel was built for: an older plugin is shown as outdated */
@@ -195,10 +196,12 @@ export function registerGameNews({ app, admin }: { app: Express; admin: RequestH
     if (req.headers['x-coregsm-stats'] !== undefined) saveStats(t.server_id, String(req.headers['x-coregsm-stats']), now);
 
     expireOld(now);
-    const rows = db.prepare("SELECT id, text FROM game_news_log WHERE server_id = ? AND status = 'queued' ORDER BY id LIMIT ?").all(t.server_id, PULL_BATCH) as { id: number; text: string }[];
+    const rows = db.prepare("SELECT id, text, sent_by FROM game_news_log WHERE server_id = ? AND status = 'queued' ORDER BY id LIMIT ?").all(t.server_id, PULL_BATCH) as { id: number; text: string; sent_by: string }[];
     if (rows.length) {
       const done = db.prepare("UPDATE game_news_log SET status = 'delivered', ok = 1, delivered_at = ? WHERE id = ? AND status = 'queued'");
       db.transaction(() => { for (const r of rows) done.run(now, r.id); })();
+      // what the plugin has taken is shown in the chat in Discord as well (when the chat shows the messages of the panel)
+      for (const r of rows) { try { postAnnounceToDiscord(t.server_id, r.sent_by, r.text, now); } catch { /* the chat must not stop the plugin */ } }
     }
     // latest = the newest plugin version this panel knows (the plugin logs when it is older); welcome = the greeting for joining players
     res.json({ messages: rows.map((r) => ({ id: r.id, text: r.text })), latest: PLUGIN_VERSION, ...welcomeFor(t.server_id, now), ...joinLeaveFor(t.server_id), register: registerEnabled(t.server_id), remindMinutes: remindMinutesFor(t.server_id), palette: PALETTE, lang: langFor(t.server_id), chat: chatKindsConfigured(t.server_id), restart: consumeDue(t.server_id), commands: takeCommands(t.server_id, now) });
