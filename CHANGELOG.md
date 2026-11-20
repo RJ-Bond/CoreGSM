@@ -17,6 +17,7 @@ interface language; the GitHub release text is built from the section of the ver
 ## Не выпущено | Unreleased
 
 ### ✨ Новое | New
+- 📈 «Игровой плагин» → «Модерация» → «Состояние сервера»: кадры в секунду, память, самый долгий кадр и замирания по данным плагина 0.18.11 (за 6 часов, сутки, неделю); панель принимает их из заголовка опроса и хранит 14 дней. Со старым плагином раздел просто пуст | «Game plugin» → «Moderation» → «Server state»: frames per second, memory, the longest frame and freezes from plugin 0.18.11 (6 hours, a day, a week); the panel takes them from the poll header and keeps them for 14 days. With an older plugin the section is just empty
 - 🆕 Страница сервера: в ленте событий новые версии игры и смены карт («Версии и карты»), строка «Обычно пик около 20:00: примерно N игроков» под шкалой заполнения | Server page: new game versions and map changes in the event feed («Versions and maps»), a «Usually busiest around 20:00: about N players» line under the slot bar [migration]
 - 🌗 Тема «по расписанию» (тёмная с 20:00 до 7:00) теперь четвёртый шаг кнопки темы и на сайте, не только в админке | The «by schedule» theme (dark from 20:00 to 07:00) is now the fourth step of the theme button on the site too, not only in the admin area
 - 🧰 Жалобы: частые причины одним нажатием (читы, оскорбления, реклама, спам, грифинг) заполняют заметку и подставляют обычный срок бана | Reports: the usual reasons in one tap (cheating, abuse, advertising, spam, griefing) fill in the note and suggest the usual ban term

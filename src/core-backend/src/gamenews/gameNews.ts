@@ -22,6 +22,7 @@ import { welcomeFor } from './gameNewsWelcome.js';
 import { consumeDue } from './gameNewsRestartState.js';
 import { takeCommands } from './gameNewsModLog.js';
 import { savePluginProblems } from './gameNewsConnections.js';
+import { saveStats } from './gameNewsMetrics.js';
 
 export const QUEUE_TTL_MS = 5 * 60_000;
 /** the version of the game plugin this panel was built for: an older plugin is shown as outdated */
@@ -190,6 +191,8 @@ export function registerGameNews({ app, admin }: { app: Express; admin: RequestH
       .run(now, version, pname, pname, players, pmax, pmax, t.server_id);
     // a plugin from 0.18 says what it could not patch (empty = all is well); an older one says nothing and changes nothing
     if (req.headers['x-coregsm-problems'] !== undefined) savePluginProblems(t.server_id, String(req.headers['x-coregsm-problems']), now);
+    // the state of the server from the plugin (frames per second, memory, freezes), for the charts
+    if (req.headers['x-coregsm-stats'] !== undefined) saveStats(t.server_id, String(req.headers['x-coregsm-stats']), now);
 
     expireOld(now);
     const rows = db.prepare("SELECT id, text FROM game_news_log WHERE server_id = ? AND status = 'queued' ORDER BY id LIMIT ?").all(t.server_id, PULL_BATCH) as { id: number; text: string }[];

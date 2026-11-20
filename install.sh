@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="2fc02fb92ac6"
+COREGSM_BUILD="7d956a4b56fc"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.2.58"
+COREGSM_VERSION="1.2.59"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -24515,6 +24515,7 @@ import { welcomeFor } from './gameNewsWelcome.js';
 import { consumeDue } from './gameNewsRestartState.js';
 import { takeCommands } from './gameNewsModLog.js';
 import { savePluginProblems } from './gameNewsConnections.js';
+import { saveStats } from './gameNewsMetrics.js';
 
 export const QUEUE_TTL_MS = 5 * 60_000;
 /** the version of the game plugin this panel was built for: an older plugin is shown as outdated */
@@ -24683,6 +24684,8 @@ export function registerGameNews({ app, admin }: { app: Express; admin: RequestH
       .run(now, version, pname, pname, players, pmax, pmax, t.server_id);
     // a plugin from 0.18 says what it could not patch (empty = all is well); an older one says nothing and changes nothing
     if (req.headers['x-coregsm-problems'] !== undefined) savePluginProblems(t.server_id, String(req.headers['x-coregsm-problems']), now);
+    // the state of the server from the plugin (frames per second, memory, freezes), for the charts
+    if (req.headers['x-coregsm-stats'] !== undefined) saveStats(t.server_id, String(req.headers['x-coregsm-stats']), now);
 
     expireOld(now);
     const rows = db.prepare("SELECT id, text FROM game_news_log WHERE server_id = ? AND status = 'queued' ORDER BY id LIMIT ?").all(t.server_id, PULL_BATCH) as { id: number; text: string }[];
@@ -25255,6 +25258,7 @@ __COREGSM_EOF__
  * Also here: several timeouts on one server within a minute (the network or a frozen server) and a plugin that could not patch the
  * game (after an update of the game) are told in the service channel; the button «Обновить плагин»; the language of the plugin.
  */
+import { registerGameNewsMetrics } from './gameNewsMetrics.js';
 import type { Express, RequestHandler } from 'express';
 import { z } from 'zod';
 import { systemTarget } from '../alerts/alertRoute.js';
@@ -25352,6 +25356,7 @@ export function savePluginProblems(serverId: number, header: string, now = Date.
 }
 
 export function registerGameNewsConnections({ app, admin }: { app: Express; admin: RequestHandler }): void {
+  registerGameNewsMetrics({ app, admin });
   // the plugin: a batch of joins and departures; a field that is too long is cut, not a reason to refuse the batch
   const cut = (n: number) => z.string().max(2000).transform((s) => s.slice(0, n));
   app.post('/api/game-news/connections', (req, res) => {
@@ -26283,6 +26288,94 @@ export function loginFromNick(nick: string, platformId: string, taken: (login: s
 /** one line of plain text: no tags, no control characters */
 function plainText(s: string): string {
   return Array.from(s, (ch) => (ch.charCodeAt(0) < 32 || ch.charCodeAt(0) === 127 ? ' ' : ch)).join('').replace(/[<>]/g, '').replace(/ {2,}/g, ' ').trim();
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/gamenews"
+  cat > "$APP_DIR/core-backend/src/gamenews/gameNewsMetrics.ts" << '__COREGSM_EOF__'
+/**
+ * The state of a game server that the plugin (0.18.11+) sends in the header `X-CoreGSM-Stats` of every poll:
+ * `t=<unix s>;fps=29.8;min=24.1;worst=1200;freezes=0;mem=9810;heap=4100;players=14`
+ * (frames per second on average and at the lowest, the longest frame in ms, freezes in the period, memory of the process
+ * and of the game heap in MB). A point is kept once: when `t` is newer than the last one of the server. Kept for 14 days.
+ */
+import type { Express, RequestHandler } from 'express';
+import { db } from '../db.js';
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS server_metrics (
+  server_id INTEGER NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  ts INTEGER NOT NULL,
+  fps REAL NOT NULL,
+  min_fps REAL NOT NULL,
+  worst_ms INTEGER NOT NULL,
+  freezes INTEGER NOT NULL,
+  mem_mb INTEGER NOT NULL,
+  heap_mb INTEGER NOT NULL,
+  players INTEGER NOT NULL,
+  PRIMARY KEY (server_id, ts)
+);
+`);
+
+const KEEP_MS = 14 * 86_400_000;
+
+export interface Stats { t: number; fps: number; min: number; worst: number; freezes: number; mem: number; heap: number; players: number }
+
+const num = (v: string | undefined, lo: number, hi: number): number | null => {
+  if (v === undefined || v === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) && n >= lo && n <= hi ? n : null;
+};
+
+/** the header -> a point; null when it is not a state the plugin could have sent */
+export function parseStats(header: string): Stats | null {
+  if (!header || header.length > 300) return null;
+  const kv = new Map<string, string>();
+  for (const part of header.split(';')) {
+    const i = part.indexOf('=');
+    if (i > 0) kv.set(part.slice(0, i).trim().toLowerCase(), part.slice(i + 1).trim());
+  }
+  const t = num(kv.get('t'), 1, 4_000_000_000);
+  const fps = num(kv.get('fps'), 0, 1000);
+  const min = num(kv.get('min'), 0, 1000);
+  const worst = num(kv.get('worst'), 0, 3_600_000);
+  const freezes = num(kv.get('freezes'), 0, 100_000);
+  const mem = num(kv.get('mem'), 0, 10_000_000);
+  const heap = num(kv.get('heap'), 0, 10_000_000);
+  const players = num(kv.get('players'), 0, 100_000);
+  if (t == null || fps == null || min == null || worst == null || freezes == null || mem == null || heap == null || players == null) return null;
+  return { t: Math.round(t), fps, min, worst: Math.round(worst), freezes: Math.round(freezes), mem: Math.round(mem), heap: Math.round(heap), players: Math.round(players) };
+}
+
+/** keeps the point of a poll header (once per `t`); true when a new point was stored */
+export function saveStats(serverId: number, header: string, now = Date.now()): boolean {
+  const s = parseStats(header);
+  if (!s) return false;
+  const ts = s.t * 1000;
+  // a clock that is far off is not a state of «now»
+  if (ts > now + 5 * 60_000 || ts < now - 3_600_000) return false;
+  const last = db.prepare('SELECT MAX(ts) AS ts FROM server_metrics WHERE server_id = ?').get(serverId) as { ts: number | null };
+  if (last.ts != null && ts <= last.ts) return false;
+  db.prepare('INSERT INTO server_metrics (server_id, ts, fps, min_fps, worst_ms, freezes, mem_mb, heap_mb, players) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(serverId, ts, s.fps, s.min, s.worst, s.freezes, s.mem, s.heap, s.players);
+  db.prepare('DELETE FROM server_metrics WHERE server_id = ? AND ts < ?').run(serverId, now - KEEP_MS);
+  return true;
+}
+
+export interface MetricPoint { ts: number; fps: number; minFps: number; worstMs: number; freezes: number; memMb: number; heapMb: number; players: number }
+
+export function metricsOf(serverId: number, hours: number, now = Date.now()): MetricPoint[] {
+  const rows = db.prepare('SELECT ts, fps, min_fps, worst_ms, freezes, mem_mb, heap_mb, players FROM server_metrics WHERE server_id = ? AND ts >= ? ORDER BY ts').all(serverId, now - hours * 3_600_000) as
+    { ts: number; fps: number; min_fps: number; worst_ms: number; freezes: number; mem_mb: number; heap_mb: number; players: number }[];
+  return rows.map((r) => ({ ts: r.ts, fps: r.fps, minFps: r.min_fps, worstMs: r.worst_ms, freezes: r.freezes, memMb: r.mem_mb, heapMb: r.heap_mb, players: r.players }));
+}
+
+export function registerGameNewsMetrics({ app, admin }: { app: Express; admin: RequestHandler }): void {
+  // the panel: the points of a server for the charts (administrators)
+  app.get('/api/game-news/metrics', admin, (req, res) => {
+    const server = Number(req.query.server);
+    const hours = Math.min(14 * 24, Math.max(1, Number(req.query.hours) || 24));
+    if (!Number.isInteger(server) || server <= 0) return res.status(400).json({ error: 'Проверьте поля' });
+    res.json({ points: metricsOf(server, hours) });
+  });
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/gamenews"
@@ -149062,6 +149155,25 @@ const en: Record<keyof typeof ru, string> = {
   'gn.sh.langHint': 'The language of the command help and errors that the plugin writes itself (the texts from the panel do not change)',
   'gn.sh.langSaved': 'The language of the plugin is saved: it applies within a few seconds',
   'gn.cn.title': 'Joins and departures',
+  'gn.mt.title': 'Server state',
+  'gn.mt.note': 'Frames per second, memory, the longest frame and freezes from the plugin (every few minutes). Memory that grows through the day while timeouts get more frequent points at a nightly restart; fewer frames with the same players means the server does not keep up. Needs plugin 0.18.11.',
+  'gn.mt.p.6': '6 hours',
+  'gn.mt.p.24': '24 hours',
+  'gn.mt.p.168': '7 days',
+  'gn.mt.empty': 'No data yet',
+  'gn.mt.emptyHint': 'Plugin 0.18.11 and newer sends the state every few minutes (Diagnostics.StatusMinutes); the first point appears after the first «СОСТОЯНИЕ» line in the log.',
+  'gn.mt.fps': 'Frames per second',
+  'gn.mt.fpsHint': 'The average over the period between two points: the fewer with the same players, the heavier it is for the server',
+  'gn.mt.mem': 'Process memory',
+  'gn.mt.memHint': 'The working set of the server process',
+  'gn.mt.worst': 'Longest frame',
+  'gn.mt.worstHint': 'The longest the server spent on one frame',
+  'gn.mt.freezes': 'Freezes',
+  'gn.mt.freezesHint': 'Frames longer than Diagnostics.FreezeSeconds in the period',
+  'gn.mt.min': 'min',
+  'gn.mt.max': 'max',
+  'gn.mt.gb': 'GB',
+  'gn.mt.s': 's',
   'gn.cn.note': 'One visit, one line: when the player came, when they left and how long they stayed. The game names the reason of the departure; a note about CoreGSM appears only when it removed the player. Needs plugin 0.18; kept for 30 days.',
   'gn.cn.inGame': 'In game',
   'gn.cn.now': 'now',
@@ -154332,6 +154444,25 @@ const ru = {
   'gn.sh.langHint': 'Язык справки команд и ошибок, которые пишет сам плагин (тексты из панели не меняются)',
   'gn.sh.langSaved': 'Язык плагина сохранён: применится в течение нескольких секунд',
   'gn.cn.title': 'Входы и выходы',
+  'gn.mt.title': 'Состояние сервера',
+  'gn.mt.note': 'Кадры в секунду, память, самый долгий кадр и замирания из плагина (раз в несколько минут). Память растёт весь день и участились таймауты — поможет ночной рестарт; кадров стало меньше при тех же игроках — серверу не хватает мощности. Нужен плагин 0.18.11.',
+  'gn.mt.p.6': '6 часов',
+  'gn.mt.p.24': '24 часа',
+  'gn.mt.p.168': '7 дней',
+  'gn.mt.empty': 'Данных пока нет',
+  'gn.mt.emptyHint': 'Плагин 0.18.11 и новее присылает состояние раз в несколько минут (Diagnostics.StatusMinutes); первая точка появится после первой строки «СОСТОЯНИЕ» в журнале.',
+  'gn.mt.fps': 'Кадров в секунду',
+  'gn.mt.fpsHint': 'Среднее за период между точками: чем меньше при тех же игроках, тем тяжелее серверу',
+  'gn.mt.mem': 'Память процесса',
+  'gn.mt.memHint': 'Рабочий набор процесса сервера',
+  'gn.mt.worst': 'Самый долгий кадр',
+  'gn.mt.worstHint': 'Дольше всего сервер «думал» над одним кадром',
+  'gn.mt.freezes': 'Замираний',
+  'gn.mt.freezesHint': 'Кадры дольше порога Diagnostics.FreezeSeconds за период',
+  'gn.mt.min': 'мин',
+  'gn.mt.max': 'макс',
+  'gn.mt.gb': 'ГБ',
+  'gn.mt.s': 'с',
   'gn.cn.note': 'Один визит — одна строка: когда зашёл, когда вышел и сколько пробыл. Причину выхода называет игра; пометка про CoreGSM — только если игрока убрал он. Нужен плагин 0.18; хранится 30 дней.',
   'gn.cn.inGame': 'В игре',
   'gn.cn.now': 'сейчас',
@@ -164682,6 +164813,114 @@ export function LinksTab() {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
+  cat > "$APP_DIR/core-frontend/src/pages/GameNewsMetrics.tsx" << '__COREGSM_EOF__'
+import { useEffect, useMemo, useState } from 'react';
+import { api } from '../api';
+import type { NewsServerInfo } from '../gameNews';
+import { t, useI18n } from '../i18n';
+import { SmoothArea, usePoll } from '../ui';
+import { EmptyState } from './GameNewsUi';
+
+export interface MetricPoint { ts: number; fps: number; minFps: number; worstMs: number; freezes: number; memMb: number; heapMb: number; players: number }
+
+const PERIODS = [6, 24, 168] as const;
+type Hours = (typeof PERIODS)[number];
+const KEY = 'coregsm_gn_metrics_hours';
+const readHours = (): Hours => { try { const v = Number(localStorage.getItem(KEY)); return (PERIODS as readonly number[]).includes(v) ? (v as Hours) : 24; } catch { return 24; } };
+
+const gb = (mb: number) => `${(mb / 1024).toFixed(2)} ${t('gn.mt.gb')}`;
+
+/** one figure of the state: the last value, the lowest and the highest of the period, and the curve */
+function Card({ title, values, last, fmt, color, hint }: { title: string; values: number[]; last: number; fmt: (n: number) => string; color: string; hint?: string }) {
+  const lo = Math.min(...values);
+  const hi = Math.max(...values);
+  return (
+    <div className="rounded-2xl bg-soft p-3.5" title={hint}>
+      <div className="text-sm font-bold text-mute">{title}</div>
+      <div className="mt-0.5 text-2xl font-black tabular-nums">{fmt(last)}</div>
+      <SmoothArea values={values.length > 1 ? values : [...values, ...values]} color={color} className="mt-2 h-12" label={title} />
+      <div className="mt-1 flex justify-between text-xs font-semibold tabular-nums text-mute"><span>{t('gn.mt.min')} {fmt(lo)}</span><span>{t('gn.mt.max')} {fmt(hi)}</span></div>
+    </div>
+  );
+}
+
+/**
+ * The state of a game server from the plugin (0.18.11+): frames per second, memory, the longest frame and freezes.
+ * Memory that grows through the day while the timeouts get more frequent points at the memory (a nightly restart helps);
+ * fewer frames with the same players means the server does not keep up.
+ */
+export function MetricsSection() {
+  useI18n();
+  const [servers, setServers] = useState<NewsServerInfo[] | null>(null);
+  const [server, setServer] = useState(0);
+  const [hours, setHours] = useState<Hours>(readHours);
+  const [points, setPoints] = useState<MetricPoint[] | null>(null);
+
+  useEffect(() => {
+    void api<{ servers: NewsServerInfo[] }>('/game-news').then((r) => {
+      const list = r.servers.filter((s) => s.supported && s.hasToken);
+      setServers(list);
+      setServer((cur) => (cur && list.some((s) => s.id === cur) ? cur : list[0]?.id ?? 0));
+    }).catch(() => setServers([]));
+  }, []);
+
+  const load = () => (server ? api<{ points: MetricPoint[] }>(`/game-news/metrics?server=${server}&hours=${hours}`).then((r) => setPoints(r.points)).catch(() => undefined) : Promise.resolve());
+  usePoll(load, 60_000);
+  // a new server or period: the points of the old one are not shown while the new ones come
+  useEffect(() => {
+    if (!server) return undefined;
+    let off = false;
+    setPoints(null);
+    void api<{ points: MetricPoint[] }>(`/game-news/metrics?server=${server}&hours=${hours}`).then((r) => { if (!off) setPoints(r.points); }).catch(() => undefined);
+    return () => { off = true; };
+  }, [server, hours]);
+
+  const pick = (h: Hours) => { setHours(h); try { localStorage.setItem(KEY, String(h)); } catch { /* not remembered */ } };
+  const view = useMemo(() => {
+    if (!points || points.length === 0) return null;
+    return {
+      last: points[points.length - 1]!,
+      fps: points.map((p) => p.fps),
+      mem: points.map((p) => p.memMb),
+      worst: points.map((p) => p.worstMs / 1000),
+      freezes: points.map((p) => p.freezes),
+    };
+  }, [points]);
+
+  if (servers && servers.length === 0) return null;
+  return (
+    <section className="panel space-y-3 p-5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0 flex-1 basis-64">
+          <h3 className="font-extrabold">{t('gn.mt.title')}</h3>
+          <p className="text-sm font-semibold text-mute">{t('gn.mt.note')}</p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          {servers && servers.length > 1 && (
+            <select className="input w-52 py-1 text-sm" value={server} aria-label={t('gn.cn.server')} onChange={(e) => setServer(Number(e.target.value))}>
+              {servers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+          )}
+          <div className="seg" role="group" aria-label={t('gn.cn.period')}>
+            {PERIODS.map((h) => <button key={h} type="button" className="seg-item" aria-pressed={hours === h} onClick={() => pick(h)}>{t(`gn.mt.p.${h}` as 'gn.mt.p.24')}</button>)}
+          </div>
+        </div>
+      </div>
+      {(servers == null || (server && points == null)) && <div className="skeleton h-28 rounded-xl" aria-busy="true" />}
+      {points && !view && <EmptyState icon="📈" title={t('gn.mt.empty')} hint={t('gn.mt.emptyHint')} />}
+      {view && (
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <Card title={t('gn.mt.fps')} values={view.fps} last={view.last.fps} fmt={(n) => n.toFixed(1)} color="rgb(var(--ok))" hint={t('gn.mt.fpsHint')} />
+          <Card title={t('gn.mt.mem')} values={view.mem} last={view.last.memMb} fmt={(n) => gb(n)} color="rgb(var(--brand-2))" hint={t('gn.mt.memHint')} />
+          <Card title={t('gn.mt.worst')} values={view.worst} last={view.last.worstMs / 1000} fmt={(n) => `${n.toFixed(2)} ${t('gn.mt.s')}`} color="rgb(var(--warn))" hint={t('gn.mt.worstHint')} />
+          <Card title={t('gn.mt.freezes')} values={view.freezes} last={view.last.freezes} fmt={(n) => String(Math.round(n))} color="rgb(var(--bad))" hint={t('gn.mt.freezesHint')} />
+        </div>
+      )}
+    </section>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/GameNewsModeration.tsx" << '__COREGSM_EOF__'
 import { useEffect, useState } from 'react';
 import { api } from '../api';
@@ -164692,6 +164931,7 @@ import type { ModBan, ModEntry, ModTop } from '../gameNews';
 import { errText, toast, usePoll } from '../ui';
 import { EmptyState, SubTabs } from './GameNewsUi';
 import { ConnectionsSection } from './GameNewsConnections';
+import { MetricsSection } from './GameNewsMetrics';
 
 const FILTERS = ['all', 'kick', 'ban', 'warn', 'unban'] as const;
 type Filter = (typeof FILTERS)[number];
@@ -164803,6 +165043,8 @@ export function ModerationTab() {
       </section>
 
       <ConnectionsSection player={player} onPick={setPlayer} />
+
+      <MetricsSection />
     </div>
   );
 }
