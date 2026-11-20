@@ -3,6 +3,7 @@ import { api } from '../api';
 import { NewsEditor, NewsPreview, Styled } from '../components/NewsEditor';
 import { soon } from '../components/GameNewsParts';
 import RowMenu from '../components/RowMenu';
+import { IconAuto, IconChat, IconRestart, IconShield } from '../components/GameNewsIcons';
 import { StateView } from '../components/StateView';
 import { Switch } from '../components/Switch';
 import { confirmDialog } from '../confirm';
@@ -22,6 +23,13 @@ function scheduleLabel(r: RuleInfo): string {
   if (r.kind === 'daily') return t('gn.a.dailyAt', { times: r.times.join(', ') });
   return t('gn.a.onceAt', { time: soon(r.runAt) });
 }
+
+/** the examples of the empty list: a name and a text from the locale, the schedule here */
+const EXAMPLES: { id: 'discord' | 'restart' | 'rules'; icon: typeof IconAuto; kind: 'interval' | 'daily'; everyMin: number; times: string[] }[] = [
+  { id: 'discord', icon: IconChat, kind: 'interval', everyMin: 30, times: ['20:00'] },
+  { id: 'restart', icon: IconRestart, kind: 'daily', everyMin: 60, times: ['03:50'] },
+  { id: 'rules', icon: IconShield, kind: 'interval', everyMin: 60, times: ['20:00'] },
+];
 
 /** «Автообъявления»: a message written once and sent by a schedule, without pressing «Отправить». */
 export default function GameNewsRules({ servers, rules, timezone, reload }: { servers: NewsServerInfo[]; rules: RuleInfo[]; timezone: string; reload: () => void }) {
@@ -60,7 +68,26 @@ export default function GameNewsRules({ servers, rules, timezone, reload }: { se
       </div>
 
       {rules.length === 0 && (
-        <StateView title={t('gn.a.empty')} text={t('gn.a.emptyText')} action={<button type="button" className="btn" onClick={openNew}>{t('gn.a.add')}</button>} />
+        <>
+          <StateView title={t('gn.a.empty')} text={t('gn.a.emptyText')} action={<button type="button" className="btn" onClick={openNew}>{t('gn.a.add')}</button>} />
+          {/* ready examples: one tap opens the form filled in */}
+          <section aria-label={t('gn.a.examples')}>
+            <h3 className="mb-2 text-sm font-extrabold text-mute">{t('gn.a.examples')}</h3>
+            <ul className="grid gap-3 sm:grid-cols-3">
+              {EXAMPLES.map((x) => (
+                <li key={x.id}>
+                  <button type="button" className="panel flex h-full w-full items-start gap-3 p-4 text-left transition hover:shadow-pop" onClick={() => setDraft({ id: null, body: { ...emptyRule(), name: t(`gn.a.ex.${x.id}.name` as 'gn.a.ex.discord.name'), text: t(`gn.a.ex.${x.id}.text` as 'gn.a.ex.discord.text'), kind: x.kind, everyMin: x.everyMin, times: x.times } })}>
+                    <span aria-hidden className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-soft text-link"><x.icon size={20} /></span>
+                    <span className="min-w-0">
+                      <span className="block font-bold">{t(`gn.a.ex.${x.id}.name` as 'gn.a.ex.discord.name')}</span>
+                      <span className="block text-sm font-semibold text-mute">{x.kind === 'interval' ? everyLabel(x.everyMin) : t('gn.a.dailyAt', { times: x.times.join(', ') })}</span>
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </section>
+        </>
       )}
 
       {rules.length > 0 && (

@@ -17,6 +17,7 @@ import { log } from '../logger.js';
 import { checkNews } from './gameNewsLogic.js';
 import { queueNews } from './gameNews.js';
 import { pruneJournalSometimes, sweepQueue } from './gameNewsPluginLog.js';
+import { checkPlugins } from './gameNewsPluginAlerts.js';
 import { MAX_EVERY, MIN_EVERY, cleanTimes, dueState, inWindow, nextRunAfter, upcomingRuns, type RuleKind, type Schedule } from './gameNewsSchedule.js';
 
 const MAX_RULES = 50;
@@ -87,7 +88,7 @@ export function startGameNewsTimer(): void {
   timer = setInterval(() => {
     if (busy) return;
     busy = true;
-    try { tickRules(); sweepQueue(); pruneJournalSometimes(); } catch (e) { log.error('game news scheduler failed', (e as Error).message); } finally { busy = false; }
+    try { tickRules(); sweepQueue(); pruneJournalSometimes(); checkPlugins(); } catch (e) { log.error('game news scheduler failed', (e as Error).message); } finally { busy = false; }
   }, 20_000);
   timer.unref();
 }

@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="495a54d3eaa2"
+COREGSM_BUILD="86be8b7e08cf"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.2.65"
+COREGSM_VERSION="1.2.66"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -25270,6 +25270,7 @@ __COREGSM_EOF__
  */
 import { registerGameNewsMetrics } from './gameNewsMetrics.js';
 import { registerGameNewsPluginLog } from './gameNewsPluginLog.js';
+import { registerGameNewsPluginAlerts } from './gameNewsPluginAlerts.js';
 import type { Express, RequestHandler } from 'express';
 import { z } from 'zod';
 import { systemTarget } from '../alerts/alertRoute.js';
@@ -25369,6 +25370,7 @@ export function savePluginProblems(serverId: number, header: string, now = Date.
 export function registerGameNewsConnections({ app, admin }: { app: Express; admin: RequestHandler }): void {
   registerGameNewsMetrics({ app, admin });
   registerGameNewsPluginLog({ app, admin });
+  registerGameNewsPluginAlerts({ app, admin });
   // the plugin: a batch of joins and departures; a field that is too long is cut, not a reason to refuse the batch
   const cut = (n: number) => z.string().max(2000).transform((s) => s.slice(0, n));
   app.post('/api/game-news/connections', (req, res) => {
@@ -26681,6 +26683,115 @@ export const PALETTE = {
 export type Palette = Record<keyof typeof PALETTE, string>;
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/gamenews"
+  cat > "$APP_DIR/core-backend/src/gamenews/gameNewsPluginAlerts.ts" << '__COREGSM_EOF__'
+/**
+ * What the administrators are told about the plugins themselves (the service channel, like the other alerts of the panel):
+ *  - a plugin that has not answered for N minutes (it went silent after it had been talking; once per silence);
+ *  - a plugin older than the newest one the panel knows (once per server and version).
+ * Settings: `gn_alert_silent_min` (0 = off, 10 by default) and `gn_alert_outdated` ('0' = off, on by default).
+ *   GET / PUT /api/game-news/plugin-alerts   (administrators)
+ */
+import type { Express, RequestHandler } from 'express';
+import { z } from 'zod';
+import { db, getSetting, setSetting } from '../db.js';
+import { systemTarget } from '../alerts/alertRoute.js';
+import { alertSettings, enqueueAlert } from '../alerts/alerts.js';
+import { PLUGIN_VERSION, type TargetRow } from './gameNews.js';
+import { serverLabel } from './gameNewsVars.js';
+
+export const SILENT_CHOICES = [0, 5, 10, 30, 60] as const;
+export const DEFAULT_SILENT_MIN = 10;
+/** a plugin silent for longer than this is gone for good, not an incident to announce */
+const GONE_MS = 7 * 86_400_000;
+
+export const silentMinutes = (): number => {
+  const raw = getSetting('gn_alert_silent_min');
+  if (raw == null) return DEFAULT_SILENT_MIN;
+  const n = Number(raw);
+  return (SILENT_CHOICES as readonly number[]).includes(n) ? n : DEFAULT_SILENT_MIN;
+};
+export const outdatedAlertOn = (): boolean => getSetting('gn_alert_outdated') !== '0';
+
+/** true when version `a` is older than `b` (dotted numbers); an unknown version is not «older» (nothing to announce) */
+export function isOlder(a: string, b: string): boolean {
+  const pa = a.split('.').map((x) => parseInt(x, 10));
+  const pb = b.split('.').map((x) => parseInt(x, 10));
+  if (!a || pa.some(Number.isNaN) || pb.some(Number.isNaN)) return false;
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const x = pa[i] ?? 0;
+    const y = pb[i] ?? 0;
+    if (x !== y) return x < y;
+  }
+  return false;
+}
+
+/** what was already told: «silent:<server>:<last seen>» (one silence) and «old:<server>:<version>» */
+const told = new Set<string>();
+export const resetTold = (): void => told.clear();
+
+export interface PluginAlert { kind: 'silent' | 'outdated'; serverId: number; text: string }
+
+/** what is worth telling now (and was not told yet); pure over the rows, so it can be tested */
+export function pluginAlertsDue(rows: Pick<TargetRow, 'server_id' | 'last_seen' | 'plugin_version' | 'token_hash'>[], now: number, opts: { silentMin: number; outdated: boolean; latest: string }): PluginAlert[] {
+  const out: PluginAlert[] = [];
+  for (const r of rows) {
+    if (!r.token_hash || r.last_seen <= 0) continue;
+    const silentFor = now - r.last_seen;
+    if (opts.silentMin > 0 && silentFor >= opts.silentMin * 60_000 && silentFor < GONE_MS) {
+      const key = `silent:${r.server_id}:${r.last_seen}`;
+      if (!told.has(key)) out.push({ kind: 'silent', serverId: r.server_id, text: key });
+    }
+    if (opts.outdated && silentFor < 3 * 60_000 && isOlder(r.plugin_version, opts.latest)) {
+      const key = `old:${r.server_id}:${r.plugin_version}`;
+      if (!told.has(key)) out.push({ kind: 'outdated', serverId: r.server_id, text: key });
+    }
+  }
+  return out;
+}
+
+/** called by the timer: tells the administrators about the silent and the old plugins */
+export function checkPlugins(now = Date.now()): number {
+  const rows = db.prepare("SELECT server_id, last_seen, plugin_version, token_hash FROM game_news_targets WHERE token_hash <> ''").all() as TargetRow[];
+  const due = pluginAlertsDue(rows, now, { silentMin: silentMinutes(), outdated: outdatedAlertOn(), latest: PLUGIN_VERSION });
+  let n = 0;
+  for (const a of due) {
+    told.add(a.text);
+    n++;
+    try {
+      if (!systemTarget(alertSettings())) continue;
+      const name = serverLabel(a.serverId);
+      const row = rows.find((r) => r.server_id === a.serverId);
+      enqueueAlert('update', name, a.kind === 'silent'
+        ? {
+          content: '', mention: 'none',
+          embed: { title: '🔌 Плагин не отвечает', description: `Сервер **${name}**: плагин CoreGSM не выходил на связь ${silentMinutes()} минут и больше. Проверьте, что игровой сервер запущен и плагин видит панель: «Игровой плагин».`, color: 0xed4245, timestamp: new Date(now).toISOString() },
+        }
+        : {
+          content: '', mention: 'none',
+          embed: { title: '🧩 Есть новая версия плагина', description: `Сервер **${name}**: стоит плагин ${row?.plugin_version ?? '?'}, последняя версия — ${PLUGIN_VERSION}. Обновить: «Игровой плагин» → сервер → «Обновить плагин» (вступит в силу после перезапуска сервера).`, color: 0xf5b01e, timestamp: new Date(now).toISOString() },
+        });
+    } catch { /* an alert must not stop the timer */ }
+  }
+  return n;
+}
+
+export function registerGameNewsPluginAlerts({ app, admin }: { app: Express; admin: RequestHandler }): void {
+  app.get('/api/game-news/plugin-alerts', admin, (_req, res) => {
+    res.json({ silentMin: silentMinutes(), outdated: outdatedAlertOn(), choices: SILENT_CHOICES });
+  });
+  app.put('/api/game-news/plugin-alerts', admin, (req, res) => {
+    const b = z.object({ silentMin: z.number().int().optional(), outdated: z.boolean().optional() }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'Проверьте поля' });
+    if (b.data.silentMin !== undefined) {
+      if (!(SILENT_CHOICES as readonly number[]).includes(b.data.silentMin)) return res.status(400).json({ error: 'Проверьте поля' });
+      setSetting('gn_alert_silent_min', String(b.data.silentMin));
+    }
+    if (b.data.outdated !== undefined) setSetting('gn_alert_outdated', b.data.outdated ? '1' : '0');
+    res.json({ silentMin: silentMinutes(), outdated: outdatedAlertOn(), choices: SILENT_CHOICES });
+  });
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/gamenews"
   cat > "$APP_DIR/core-backend/src/gamenews/gameNewsPluginLog.ts" << '__COREGSM_EOF__'
 /**
  * What the plugin tells the panel about itself, for the journal («Игровой плагин» → «Журнал»):
@@ -27642,6 +27753,7 @@ import { log } from '../logger.js';
 import { checkNews } from './gameNewsLogic.js';
 import { queueNews } from './gameNews.js';
 import { pruneJournalSometimes, sweepQueue } from './gameNewsPluginLog.js';
+import { checkPlugins } from './gameNewsPluginAlerts.js';
 import { MAX_EVERY, MIN_EVERY, cleanTimes, dueState, inWindow, nextRunAfter, upcomingRuns, type RuleKind, type Schedule } from './gameNewsSchedule.js';
 
 const MAX_RULES = 50;
@@ -27712,7 +27824,7 @@ export function startGameNewsTimer(): void {
   timer = setInterval(() => {
     if (busy) return;
     busy = true;
-    try { tickRules(); sweepQueue(); pruneJournalSometimes(); } catch (e) { log.error('game news scheduler failed', (e as Error).message); } finally { busy = false; }
+    try { tickRules(); sweepQueue(); pruneJournalSometimes(); checkPlugins(); } catch (e) { log.error('game news scheduler failed', (e as Error).message); } finally { busy = false; }
   }, 20_000);
   timer.unref();
 }
@@ -127109,6 +127221,60 @@ export const FootTag = () => svg(<><path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0
 export const FootBans = () => svg(<><circle cx="12" cy="12" r="9" /><path d="m5.7 5.7 12.6 12.6" /></>);
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/GameNewsIcons.tsx" << '__COREGSM_EOF__'
+/**
+ * The icons of «Игровой плагин»: one set, drawn on the same 24 x 24 stroke frame as the rest of the panel (currentColor, so a theme,
+ * an accent and a status colour all reach them). The journal and the tabs use these instead of emoji.
+ */
+import type { ComponentType, ReactNode } from 'react';
+import { Icon, type IconProps } from '../icons';
+import type { Kind } from '../pages/journalLogic';
+
+const make = (d: ReactNode) => ({ size = 18, className }: IconProps) => <Icon size={size} className={className}>{d}</Icon>;
+
+export const IconSend = make(<path d="M22 2 11 13M22 2l-7 20-4-9-9-4 20-7z" />);
+export const IconAuto = make(<><path d="M21 12a9 9 0 1 1-3-6.7L21 8" /><path d="M21 3v5h-5" /><path d="M12 8v4l2.5 1.5" /></>);
+export const IconSliders = make(<path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6" />);
+export const IconPeople = make(<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM23 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8" />);
+export const IconShield = make(<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />);
+export const IconList = make(<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" />);
+export const IconRestart = make(<path d="M23 4v6h-6M1 20v-6h6M3.5 9a9 9 0 0 1 14.9-3.4L23 10M1 14l4.6 4.4A9 9 0 0 0 20.5 15" />);
+export const IconSparkle = make(<path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3zM19 15l.9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9L19 15z" />);
+export const IconPlug = make(<path d="M9 2v6M15 2v6M6 8h12v3a6 6 0 0 1-12 0V8zM12 17v5" />);
+export const IconKey = make(<path d="M21 2l-2 2M11.4 11.6a5.5 5.5 0 1 1-7.8 7.8 5.5 5.5 0 0 1 7.8-7.8zM11.4 11.6 15.5 7.5m0 0 3 3L22 7l-3-3-3.5 3.5z" />);
+export const IconTag = make(<path d="M20.6 13.4l-7.2 7.2a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8zM7.5 7.5h.01" />);
+export const IconClock = make(<path d="M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM12 6v6l4 2" />);
+export const IconChat = make(<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />);
+export const IconLink = make(<path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7" />);
+export const IconDoor = make(<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9" />);
+export const IconSignal = make(<path d="M2 20h.01M7 20v-4M12 20v-8M17 20V8M22 20V4" />);
+export const IconGamepad = make(<path d="M6 12h4M8 10v4M15 13h.01M18 11h.01M17.3 5H6.7a4 4 0 0 0-3.9 3.2L2 15a3 3 0 0 0 5.2 2.2L9 15h6l1.8 2.2A3 3 0 0 0 22 15l-.8-6.8A4 4 0 0 0 17.3 5z" />);
+export const IconSnow = make(<path d="M12 2v20M4.9 7l14.2 10M4.9 17L19.1 7M9 4l3 2 3-2M9 20l3-2 3 2" />);
+export const IconDisk = make(<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2zM17 21v-8H7v8M7 3v5h8" />);
+export const IconCheck = make(<path d="M5 12.5l4.5 4.5L19 7.5" />);
+export const IconAlert = make(<path d="M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0zM12 9v4M12 17h.01" />);
+export const IconBox = make(<path d="M21 8l-9-5-9 5v8l9 5 9-5V8zM3.3 7L12 12l8.7-5M12 22V12" />);
+export const IconUser = make(<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z" />);
+export const IconBell = make(<path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0" />);
+export const IconPlay = make(<path d="M6 3l14 9-14 9V3z" />);
+export const IconDownload = make(<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />);
+export const IconTerminal = make(<path d="M4 17l6-6-6-6M12 19h8" />);
+
+
+/** the icon of a kind of journal entry, and of a note of the plugin (by its kind) */
+export const KIND_ICON: Record<Kind, ComponentType<IconProps>> = {
+  message: IconSend, auto: IconAuto, discord: IconChat, restart: IconRestart, link: IconLink, mod: IconShield, plugin: IconBox, conn: IconSignal,
+};
+export const PLUGIN_NOTE_ICON: Record<string, ComponentType<IconProps>> = {
+  mass: IconDoor, ping: IconSignal, steam: IconGamepad, freeze: IconSnow, save: IconDisk, other: IconBox,
+};
+
+/** the icon of a tab of the plugin page */
+export const TAB_ICON: Record<string, ComponentType<IconProps>> = {
+  send: IconSend, auto: IconAuto, general: IconSliders, players: IconPeople, mod: IconShield, journal: IconList,
+};
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
   cat > "$APP_DIR/core-frontend/src/components/GameNewsParts.tsx" << '__COREGSM_EOF__'
 import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode, type TextareaHTMLAttributes } from 'react';
 import { t, useI18n } from '../i18n';
@@ -149469,6 +149635,29 @@ const en: Record<keyof typeof ru, string> = {
   'gn.sh.langHint': 'The language of the command help and errors that the plugin writes itself (the texts from the panel do not change)',
   'gn.sh.langSaved': 'The language of the plugin is saved: it applies within a few seconds',
   'gn.cn.title': 'Joins and departures',
+  'gn.pa.title': 'Plugin notifications',
+  'gn.pa.note': 'They go to the service channel of Discord (Admin → Alerts → Service channel) when one is chosen.',
+  'gn.pa.silent': 'The plugin does not answer',
+  'gn.pa.silentHint': 'Tell when the plugin of a server is silent for longer than the chosen time (once for each silence).',
+  'gn.pa.off': 'Off',
+  'gn.pa.min': '{n} min',
+  'gn.pa.outdated': 'A new plugin version is out',
+  'gn.pa.outdatedHint': 'Tell once for each server and version when the plugin on it is older than the latest.',
+  'gn.pf.linked': 'Account: {name}',
+  'gn.pf.open': 'Player card',
+  'gn.pf.notLinked': 'No account linked',
+  'gn.pf.banned': 'Banned ({n})',
+  'gn.pf.visits': 'Visits',
+  'gn.pf.lastReason': 'last departure: {r}',
+  'gn.pf.time': 'Time in game',
+  'gn.pf.hm': '{h} h {m} min',
+  'gn.pf.m': '{m} min',
+  'gn.pf.last': 'Last seen',
+  'gn.pf.mod': 'Moderation',
+  'gn.pf.modLine': 'kicks {k} · warns {w} · bans {b}',
+  'gn.pf.history': 'What moderation did',
+  'gn.pf.recent': 'Latest visits',
+  'gn.pf.filter': 'Player history in «Moderation»',
   'gn.mt.title': 'Server state',
   'gn.mt.note': 'Frames per second, memory, the longest frame and freezes from the plugin (every few minutes). Memory that grows through the day while timeouts get more frequent points at a nightly restart; fewer frames with the same players means the server does not keep up. Needs plugin 0.18.11.',
   'gn.mt.p.6': '6 hours',
@@ -149616,6 +149805,17 @@ const en: Record<keyof typeof ru, string> = {
   'gn.s.plugin': 'Plugin',
   'gn.s.pluginVal': '{on} of {all} online',
   'gn.s.pluginNone': 'not connected',
+  'gn.sc2.plugin': 'Connected',
+  'gn.sc2.players': 'Players online',
+  'gn.sc2.playersHint': 'on servers with the plugin: {n}',
+  'gn.sc2.noPlugin': 'no plugin connected',
+  'gn.sc2.auto': 'Auto announcements',
+  'gn.sc2.noNext': 'none coming up',
+  'gn.sc2.sent': 'Sent in a day',
+  'gn.sc2.problems': 'problems: {n}',
+  'gn.sc2.allGood': 'everything arrived',
+  'gn.sc2.online': 'connected',
+  'gn.sc2.never': 'never answered',
   'gn.s.players': 'Players online',
   'gn.s.onServers': 'on {n} servers',
   'gn.s.auto': 'Auto announcements',
@@ -149624,6 +149824,7 @@ const en: Record<keyof typeof ru, string> = {
   'gn.s.sent': 'Sent in 24 hours',
   'gn.s.queued': 'queued: {n}',
   'gn.wz.title': 'Connect the plugin to a server',
+  'gn.wz.progress': '{n} of {all} done',
   'gn.wz.note': 'Until the plugin is online, nothing can be sent to the game. Three steps:',
   'gn.wz.hide': 'Hide this guide',
   'gn.wz.s1': 'Put the plugin on the server',
@@ -149767,6 +149968,13 @@ const en: Record<keyof typeof ru, string> = {
   'gn.a.add': 'Add an announcement',
   'gn.a.empty': 'No automatic announcements yet',
   'gn.a.emptyText': 'For example: «Join our Discord» every 30 minutes, or «Server restart at 4:00» every day at 3:50.',
+  'gn.a.examples': 'Ready examples',
+  'gn.a.ex.discord.name': 'Discord invite',
+  'gn.a.ex.discord.text': '<color=#6EC1FF>* Join our Discord: news, wipes and team search.</color>',
+  'gn.a.ex.restart.name': 'Restart at 4:00',
+  'gn.a.ex.restart.text': '<color=#FFB347>* The server restarts in 10 minutes (4:00). Save your progress.</color>',
+  'gn.a.ex.rules.name': 'Server rules',
+  'gn.a.ex.rules.text': '<color=#5FD068>* Server rules: respect players, no cheats or ads. Details in Discord.</color>',
   'gn.a.on': 'On',
   'gn.a.off': 'Off',
   'gn.a.next': 'next: {time}',
@@ -154795,6 +155003,29 @@ const ru = {
   'gn.sh.langHint': 'Язык справки команд и ошибок, которые пишет сам плагин (тексты из панели не меняются)',
   'gn.sh.langSaved': 'Язык плагина сохранён: применится в течение нескольких секунд',
   'gn.cn.title': 'Входы и выходы',
+  'gn.pa.title': 'Уведомления о плагине',
+  'gn.pa.note': 'Приходят в служебный канал Discord (Админка → Оповещения → Служебный канал), если он выбран.',
+  'gn.pa.silent': 'Плагин не отвечает',
+  'gn.pa.silentHint': 'Сказать, если плагин сервера молчит дольше выбранного времени (один раз за каждое молчание).',
+  'gn.pa.off': 'Выключено',
+  'gn.pa.min': '{n} мин',
+  'gn.pa.outdated': 'Вышла новая версия плагина',
+  'gn.pa.outdatedHint': 'Сказать один раз для каждого сервера и версии, когда на нём стоит плагин старше последнего.',
+  'gn.pf.linked': 'Аккаунт: {name}',
+  'gn.pf.open': 'Карточка игрока',
+  'gn.pf.notLinked': 'Аккаунт не привязан',
+  'gn.pf.banned': 'Забанен ({n})',
+  'gn.pf.visits': 'Заходов',
+  'gn.pf.lastReason': 'последний выход: {r}',
+  'gn.pf.time': 'Время в игре',
+  'gn.pf.hm': '{h} ч {m} мин',
+  'gn.pf.m': '{m} мин',
+  'gn.pf.last': 'Был в игре',
+  'gn.pf.mod': 'Модерация',
+  'gn.pf.modLine': 'кики {k} · пред. {w} · баны {b}',
+  'gn.pf.history': 'Что делала модерация',
+  'gn.pf.recent': 'Последние заходы и выходы',
+  'gn.pf.filter': 'История игрока в «Модерации»',
   'gn.mt.title': 'Состояние сервера',
   'gn.mt.note': 'Кадры в секунду, память, самый долгий кадр и замирания из плагина (раз в несколько минут). Память растёт весь день и участились таймауты — поможет ночной рестарт; кадров стало меньше при тех же игроках — серверу не хватает мощности. Нужен плагин 0.18.11.',
   'gn.mt.p.6': '6 часов',
@@ -154942,6 +155173,17 @@ const ru = {
   'gn.s.plugin': 'Плагин',
   'gn.s.pluginVal': '{on} из {all} на связи',
   'gn.s.pluginNone': 'не подключён',
+  'gn.sc2.plugin': 'На связи',
+  'gn.sc2.players': 'Игроков онлайн',
+  'gn.sc2.playersHint': 'на серверах с плагином: {n}',
+  'gn.sc2.noPlugin': 'плагин не подключён',
+  'gn.sc2.auto': 'Автообъявления',
+  'gn.sc2.noNext': 'ближайших нет',
+  'gn.sc2.sent': 'Отправлено за сутки',
+  'gn.sc2.problems': 'проблем: {n}',
+  'gn.sc2.allGood': 'всё дошло',
+  'gn.sc2.online': 'на связи',
+  'gn.sc2.never': 'ещё не отвечал',
   'gn.s.players': 'Игроков онлайн',
   'gn.s.onServers': 'на серверов: {n}',
   'gn.s.auto': 'Автообъявления',
@@ -154950,6 +155192,7 @@ const ru = {
   'gn.s.sent': 'Отправлено за 24 часа',
   'gn.s.queued': 'в очереди: {n}',
   'gn.wz.title': 'Подключите плагин к серверу',
+  'gn.wz.progress': '{n} из {all} готово',
   'gn.wz.note': 'Пока плагин не вышел на связь, сообщения в игру отправить нельзя. Три шага:',
   'gn.wz.hide': 'Скрыть подсказку',
   'gn.wz.s1': 'Положите плагин на сервер',
@@ -155093,6 +155336,13 @@ const ru = {
   'gn.a.add': 'Добавить автообъявление',
   'gn.a.empty': 'Автообъявлений пока нет',
   'gn.a.emptyText': 'Например: «Заходите в наш Discord» каждые 30 минут или «Рестарт сервера в 4:00» каждый день в 3:50.',
+  'gn.a.examples': 'Готовые примеры',
+  'gn.a.ex.discord.name': 'Приглашение в Discord',
+  'gn.a.ex.discord.text': '<color=#6EC1FF>* Заходите в наш Discord: там новости, вайпы и поиск команды.</color>',
+  'gn.a.ex.restart.name': 'Рестарт в 4:00',
+  'gn.a.ex.restart.text': '<color=#FFB347>* Через 10 минут рестарт сервера (4:00). Сохраните прогресс.</color>',
+  'gn.a.ex.rules.name': 'Правила сервера',
+  'gn.a.ex.rules.text': '<color=#5FD068>* Правила сервера: уважайте игроков, без читов и рекламы. Подробности в Discord.</color>',
   'gn.a.on': 'Включено',
   'gn.a.off': 'Выключено',
   'gn.a.next': 'следующее: {time}',
@@ -163666,7 +163916,7 @@ export default function ForgotPassword() {
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/GameNews.tsx" << '__COREGSM_EOF__'
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { api } from '../api';
 import { soon } from '../components/GameNewsParts';
 import { confirmDialog } from '../confirm';
@@ -163686,8 +163936,26 @@ import { LinksTab } from './GameNewsLinks';
 import { MOD_PLAYER_KEY, ModerationTab } from './GameNewsModeration';
 import { SendTab } from './GameNewsSend';
 import { ScopedCard, SubTabs } from './GameNewsUi';
+import { PlayerProfile, ProfileContext } from './GameNewsProfile';
+import { PluginAlertsCard } from './GameNewsPluginAlerts';
+import { IconAuto, IconBox, IconCheck, IconDownload, IconKey, IconPeople, IconPlay, IconPlug, IconSend, TAB_ICON } from '../components/GameNewsIcons';
 
 interface NewsState { servers: NewsServerInfo[]; log: NewsLogRow[]; pluginLatest: string }
+
+/** one figure of the strip on top: an icon in a round tint of the tone, the number, a caption and a hint */
+function StatCard({ icon, tone, label, value, hint }: { icon: ReactNode; tone: 'ok' | 'warn' | 'bad' | 'mute' | 'brand'; label: string; value: string; hint: string }) {
+  const tint = { ok: 'bg-okbg text-ok', warn: 'bg-warnbg text-warn', bad: 'bg-badbg text-bad', mute: 'bg-soft text-mute', brand: 'bg-soft text-link' }[tone];
+  return (
+    <div className="panel flex items-center gap-2.5 px-3 py-2.5 sm:gap-3 sm:px-4 sm:py-3">
+      <span aria-hidden className={`grid h-9 w-9 shrink-0 place-items-center rounded-xl sm:h-11 sm:w-11 sm:rounded-2xl ${tint}`}>{icon}</span>
+      <span className="min-w-0">
+        <span className="block text-xs font-bold text-mute">{label}</span>
+        <span className="block text-xl font-black leading-tight tabular-nums sm:text-2xl">{value}</span>
+        <span className="block truncate text-xs font-semibold text-mute">{hint}</span>
+      </span>
+    </div>
+  );
+}
 
 /** 'send' | 'auto' | 'general' | 's<id>' (the settings of one server) | 'players' (linked players) | 'journal' */
 type Tab = string;
@@ -163715,6 +163983,8 @@ export default function GameNewsPage({ sub = '' }: { sub?: string }) {
   // inside the settings of the general page or of a server: players | restart | discord (remembered in this browser)
   const [inner, setInner] = useState<'players' | 'restart' | 'discord'>(() => { try { const v = localStorage.getItem('coregsm.gn.inner'); return v === 'restart' || v === 'discord' ? v : 'players'; } catch { return 'players'; } });
   const pickInner = (v: 'players' | 'restart' | 'discord') => { setInner(v); try { localStorage.setItem('coregsm.gn.inner', v); } catch { /* private mode */ } };
+  // the card of a player (a click on a nickname in the journal or in the joins and departures)
+  const [profile, setProfile] = useState<string | null>(null);
   const [wizardOff, setWizardOff] = useState(() => { try { return localStorage.getItem('coregsm.gn.wizard') === '0'; } catch { return false; } });
 
   const loadMain = () => api<NewsState>('/game-news').then((d) => { setData(d); setError(''); }).catch((e: Error) => setError(e.message));
@@ -163751,7 +164021,14 @@ export default function GameNewsPage({ sub = '' }: { sub?: string }) {
   const day = Date.now() - 86_400_000;
   const delivered24 = (data?.log ?? []).filter((r) => r.status === 'delivered' && r.sentAt > day).length;
   const queued = (data?.log ?? []).filter((r) => r.status === 'queued').length;
-  const counter: Record<string, number> = { auto: activeRules.length, journal: queued };
+  const [badges, setBadges] = useState<{ problems: number; bans: number }>({ problems: 0, bans: 0 });
+  usePoll(() => Promise.all([
+    api<{ counts?: { problems?: number } }>('/game-news/journal?kind=problems&limit=1').then((r) => r.counts?.problems ?? 0).catch(() => 0),
+    api<{ bans?: unknown[] }>('/game-news/moderation?kind=ban').then((r) => r.bans?.length ?? 0).catch(() => 0),
+  ]).then(([problems, bans]) => setBadges({ problems, bans })), 30_000);
+  const counter: Record<string, number> = { auto: activeRules.length, journal: badges.problems || queued, mod: badges.bans };
+  // a badge that is a problem is red
+  const redBadge: Record<string, boolean> = { journal: badges.problems > 0 };
   // with one server its settings are the general ones; with several each gets a page of its own (in the menu on the left, on a phone in the strip)
   const serverTabs = withToken.length > 1 ? withToken : [];
   const tabList: { id: Tab; label: string }[] = [
@@ -163805,6 +164082,7 @@ export default function GameNewsPage({ sub = '' }: { sub?: string }) {
   };
 
   return (
+    <ProfileContext.Provider value={setProfile}>
     <AdminPage
       head={(
         <PageHead icon={<IconNews size={22} />} title={t('gn.title')} subtitle={t('gn.subtitle')} hint={t('gn.hint')} help={<p>{t('gn.help')}</p>} />
@@ -163814,15 +164092,27 @@ export default function GameNewsPage({ sub = '' }: { sub?: string }) {
       {!data && !error && <div className="skeleton panel h-40" aria-busy="true" aria-label={t('d2.news.loading')} />}
 
       {data && (
-        <div className="panel flex flex-wrap items-center gap-x-6 gap-y-2 px-5 py-3" role="status" aria-label={t('gn.s.plugin')}>
-          <span className="flex items-center gap-2 font-extrabold">
-            <span aria-hidden className={`inline-block h-2.5 w-2.5 rounded-full ${online.length === 0 ? 'bg-mute' : online.length < withToken.length ? 'bg-warn' : 'bg-ok'}`} />
-            {withToken.length ? t('gn.s.pluginVal', { on: online.length, all: withToken.length }) : t('gn.s.pluginNone')}
-            {online[0]?.pluginVersion && <span className="text-sm font-semibold text-mute">v{online[0].pluginVersion}</span>}
-          </span>
-          <span className="text-sm font-bold"><span aria-hidden>👥 </span>{online.length ? t('gn.st.players', { n: players }) : '—'}</span>
-          <span className="text-sm font-bold"><span aria-hidden>⟳ </span>{t('gn.s.autoVal', { n: activeRules.length })}{nextRun ? <span className="font-semibold text-mute"> · {t('gn.s.next', { time: soon(nextRun) })}</span> : null}</span>
-          <span className="text-sm font-bold"><span aria-hidden>✉ </span>{t('gn.st.sent', { n: delivered24 })}{queued ? <span className="font-semibold text-mute"> · {t('gn.s.queued', { n: queued })}</span> : null}</span>
+        <div className="space-y-2" role="status" aria-label={t('gn.s.plugin')}>
+          <div className="grid grid-cols-2 gap-2.5 xl:grid-cols-4">
+            <StatCard icon={<IconPlug size={20} />} tone={online.length === 0 ? 'mute' : online.length < withToken.length ? 'warn' : 'ok'} label={t('gn.sc2.plugin')}
+              value={withToken.length ? `${online.length} / ${withToken.length}` : '—'}
+              hint={withToken.length ? (online[0]?.pluginVersion ? `v${online[0].pluginVersion}` : t('gn.s.pluginVal', { on: online.length, all: withToken.length })) : t('gn.s.pluginNone')} />
+            <StatCard icon={<IconPeople size={20} />} tone="brand" label={t('gn.sc2.players')} value={online.length ? String(players) : '—'} hint={online.length ? t('gn.sc2.playersHint', { n: online.length }) : t('gn.sc2.noPlugin')} />
+            <StatCard icon={<IconAuto size={20} />} tone="brand" label={t('gn.sc2.auto')} value={String(activeRules.length)} hint={nextRun ? t('gn.s.next', { time: soon(nextRun) }) : t('gn.sc2.noNext')} />
+            <StatCard icon={<IconSend size={20} />} tone={badges.problems > 0 ? 'bad' : 'brand'} label={t('gn.sc2.sent')} value={String(delivered24)} hint={queued ? t('gn.s.queued', { n: queued }) : badges.problems > 0 ? t('gn.sc2.problems', { n: badges.problems }) : t('gn.sc2.allGood')} />
+          </div>
+          {withToken.length > 1 && (
+            <ul className="flex flex-wrap gap-2">
+              {withToken.map((sv) => (
+                <li key={sv.id} className="inline-flex items-center gap-2 rounded-full bg-soft px-3 py-1 text-sm font-bold">
+                  <span aria-hidden className={`inline-block h-2 w-2 rounded-full ${sv.online ? 'bg-ok' : sv.lastSeen ? 'bg-warn' : 'bg-mute'}`} />
+                  <span className="max-w-[14rem] truncate">{sv.name}</span>
+                  {sv.pluginVersion && <span className="text-mute">v{sv.pluginVersion}</span>}
+                  <span className="font-semibold text-mute">{sv.online ? t('gn.sc2.online') : sv.lastSeen ? soon(sv.lastSeen) : t('gn.sc2.never')}</span>
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
       )}
 
@@ -163835,21 +164125,33 @@ export default function GameNewsPage({ sub = '' }: { sub?: string }) {
             </div>
             <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setWizardOff(true); try { localStorage.setItem('coregsm.gn.wizard', '0'); } catch { /* private mode */ } }}>{t('gn.wz.hide')}</button>
           </div>
-          <ol className="grid gap-3 lg:grid-cols-3">
-            {[
-              { n: 1, done: withToken.length > 0, title: t('gn.wz.s1'), hint: t('gn.wz.s1h') },
-              { n: 2, done: withToken.length > 0, title: t('gn.wz.s2'), hint: t('gn.wz.s2h') },
-              { n: 3, done: online.length > 0, title: t('gn.wz.s3'), hint: t('gn.wz.s3h') },
-            ].map((st) => (
-              <li key={st.n} className="flex items-start gap-3">
-                <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-sm font-black ${st.done ? 'bg-ok text-white' : 'bg-soft text-mute'}`} aria-hidden>{st.done ? '✓' : st.n}</span>
-                <span className="min-w-0">
-                  <span className="block font-bold">{st.title}</span>
-                  <span className="block text-sm font-semibold text-mute">{st.hint}</span>
-                </span>
-              </li>
-            ))}
-          </ol>
+          {(() => {
+            const steps = [
+              { n: 1, done: withToken.length > 0, icon: <IconDownload size={22} />, title: t('gn.wz.s1'), hint: t('gn.wz.s1h') },
+              { n: 2, done: withToken.length > 0, icon: <IconKey size={22} />, title: t('gn.wz.s2'), hint: t('gn.wz.s2h') },
+              { n: 3, done: online.length > 0, icon: <IconPlay size={22} />, title: t('gn.wz.s3'), hint: t('gn.wz.s3h') },
+            ];
+            const doneN = steps.filter((x) => x.done).length;
+            return (
+              <>
+                <div className="flex items-center gap-3" role="progressbar" aria-valuemin={0} aria-valuemax={steps.length} aria-valuenow={doneN} aria-label={t('gn.wz.title')}>
+                  <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-soft"><i className="block h-full rounded-full bg-ok transition-[width] duration-500" style={{ width: `${(doneN / steps.length) * 100}%` }} /></div>
+                  <span className="text-xs font-extrabold tabular-nums text-mute">{t('gn.wz.progress', { n: doneN, all: steps.length })}</span>
+                </div>
+                <ol className="grid gap-3 lg:grid-cols-3">
+                  {steps.map((st) => (
+                    <li key={st.n} className={`flex items-start gap-3 rounded-2xl p-3 ${st.done ? 'bg-okbg/60' : 'bg-soft'}`}>
+                      <span className={`grid h-10 w-10 shrink-0 place-items-center rounded-xl ${st.done ? 'bg-ok text-white' : 'bg-card text-link'}`} aria-hidden>{st.done ? <IconCheck size={22} /> : st.icon}</span>
+                      <span className="min-w-0">
+                        <span className="block font-bold">{st.n}. {st.title}</span>
+                        <span className="block text-sm font-semibold text-mute">{st.hint}</span>
+                      </span>
+                    </li>
+                  ))}
+                </ol>
+              </>
+            );
+          })()}
           <div className="flex flex-wrap gap-2">
             {firstBare && !firstBare.hasToken && <button type="button" className="btn btn-sm" onClick={() => setSettingsFor(firstBare.id)}>{t('gn.wz.token')}</button>}
             <a className="btn btn-soft btn-sm" href={DOCS} target="_blank" rel="noreferrer">{t('gn.wz.docs')}</a>
@@ -163862,9 +164164,10 @@ export default function GameNewsPage({ sub = '' }: { sub?: string }) {
          <div className="flex min-w-max gap-2 md:min-w-0 md:flex-wrap">
           {[...tabList.slice(0, 3), ...serverTabs.map((x) => ({ id: `s${x.id}`, label: x.name, phone: true })), ...tabList.slice(3)].map((x) => (
             <span key={x.id} className={'phone' in x ? 'contents md:hidden' : 'contents'}>
-            <button type="button" role="tab" aria-selected={tab === x.id} className={`chip-filter whitespace-nowrap ${tab === x.id ? 'on' : ''}`} onClick={() => goTab(x.id)}>
+            <button type="button" role="tab" aria-selected={tab === x.id} className={`chip-filter inline-flex items-center gap-1.5 whitespace-nowrap ${tab === x.id ? 'on' : ''}`} onClick={() => goTab(x.id)}>
+              {(() => { const I = TAB_ICON[x.id] ?? (/^sd+$/.test(x.id) ? IconBox : TAB_ICON.general); return <I size={16} />; })()}
               {x.label}
-              {(counter[x.id] ?? 0) > 0 && <span className="ml-1.5 rounded-full bg-soft px-1.5 text-xs font-extrabold">{counter[x.id]}</span>}
+              {(counter[x.id] ?? 0) > 0 && <span className={`ml-0.5 rounded-full px-1.5 text-xs font-extrabold ${redBadge[x.id] ? 'bg-badbg text-bad' : 'bg-soft'}`}>{counter[x.id]}</span>}
             </button>
             </span>
           ))}
@@ -163905,6 +164208,7 @@ export default function GameNewsPage({ sub = '' }: { sub?: string }) {
                 <ScopedCard part="register" title={t('gn.rg.title')}><RegisterCard initial={rd.register} /></ScopedCard>
                 <ScopedCard part="kick" title={t('gn.kk.title')}><KickCard initial={rd.kick} /></ScopedCard>
                 {!effScope && <ExtrasCard initial={rd.extras} />}
+                {!effScope && <PluginAlertsCard />}
               </div>
             )}
             {inner === 'restart' && (
@@ -163919,10 +164223,13 @@ export default function GameNewsPage({ sub = '' }: { sub?: string }) {
 
       {data && tab === 'mod' && <ModerationTab />}
 
-      {data && tab === 'journal' && <JournalTab onReuse={(x) => { setText(x); goTab('send'); }} onPlayer={(nick) => { try { localStorage.setItem(MOD_PLAYER_KEY, nick); } catch { /* private mode */ } goTab('mod'); }} />}
+      {data && tab === 'journal' && <JournalTab onReuse={(x) => { setText(x); goTab('send'); }} onPlayer={setProfile} />}
+
+      {profile && <PlayerProfile nick={profile} onClose={() => setProfile(null)} onFilter={(nick) => { try { localStorage.setItem(MOD_PLAYER_KEY, nick); } catch { /* private mode */ } goTab('mod'); }} />}
 
       {settingsServer && <PluginModal server={settingsServer} onClose={() => setSettingsFor(null)} onChanged={() => void loadMain()} />}
     </AdminPage>
+    </ProfileContext.Provider>
   );
 }
 
@@ -164867,6 +165174,7 @@ import { soon } from '../components/GameNewsParts';
 import { t, useI18n } from '../i18n';
 import { usePoll } from '../ui';
 import { EmptyState, SubTabs } from './GameNewsUi';
+import { useOpenProfile } from './GameNewsProfile';
 import {
   PERIODS, REPEAT_JOINS, SHORT_VISIT_MIN, STATUSES, buildRows, dayWord, groupByDay, isKicked, isTimeout, matchesStatus, periodSince, repeaters, visitMinutes,
   type ConnectionItem, type Period, type Row, type Status,
@@ -164967,7 +165275,7 @@ export function ConnectionsSection({ player, onPick }: { player: string; onPick:
         <div key={g.day}>
           <h4 className="sticky top-0 z-[1] bg-card/95 py-1 text-sm font-extrabold capitalize text-mute backdrop-blur">{dayTitle(g.day)} <span className="font-semibold">· {g.rows.length}</span></h4>
           <ul className="divide-y divide-line">
-            {g.rows.map((r) => <ConnectionRow key={r.key} r={r} compact={compact} many={many} repeat={again.has(r.who)} onPick={onPick} />)}
+            {g.rows.map((r) => <ConnectionRow key={r.key} r={r} compact={compact} many={many} repeat={again.has(r.who)} />)}
           </ul>
         </div>
       ))}
@@ -164978,7 +165286,8 @@ export function ConnectionsSection({ player, onPick }: { player: string; onPick:
   );
 }
 
-function ConnectionRow({ r, compact, many, repeat, onPick }: { r: Row; compact: boolean; many: boolean; repeat: boolean; onPick: (nick: string) => void }) {
+function ConnectionRow({ r, compact, many, repeat }: { r: Row; compact: boolean; many: boolean; repeat: boolean }) {
+  const openProfile = useOpenProfile();
   const pill = pillOf(r);
   const mins = visitMinutes(r);
   const short = !!r.leave && mins != null && mins < SHORT_VISIT_MIN;
@@ -164990,7 +165299,7 @@ function ConnectionRow({ r, compact, many, repeat, onPick }: { r: Row; compact: 
       <span className={`${pill.cls} shrink-0`}>{pill.text}</span>
       <div className="min-w-0 flex-1 basis-56 text-sm">
         <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-          <button type="button" className="font-bold underline decoration-dotted underline-offset-2 hover:text-link" onClick={() => onPick(r.nick)}>{r.nick || '—'}</button>
+          <button type="button" className="font-bold underline decoration-dotted underline-offset-2 hover:text-link" title={t('gn.pf.open')} onClick={() => { if (r.nick) openProfile(r.nick); }}>{r.nick || '—'}</button>
           <span className="font-semibold tabular-nums text-mute">{span}{mins != null ? ` · ${t('gn.cn.min', { n: mins })}` : ''}</span>
           {many && r.serverName && <span className="min-w-0 truncate text-xs font-semibold text-mute">{r.serverName}</span>}
           {repeat && <span className="pill pill-warn" title={t('gn.cn.repeatHint', { n: REPEAT_JOINS })}>{t('gn.cn.repeat')}</span>}
@@ -165008,6 +165317,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api';
 import { soon } from '../components/GameNewsParts';
 import { Styled } from '../components/NewsEditor';
+import { KIND_ICON, PLUGIN_NOTE_ICON } from '../components/GameNewsIcons';
 import { confirmDialog } from '../confirm';
 import { gameColor } from '../games';
 import type { NewsServerInfo } from '../gameNews';
@@ -165015,10 +165325,15 @@ import { t, useI18n } from '../i18n';
 import { errText, toast, usePoll } from '../ui';
 import { EmptyState, SubTabs } from './GameNewsUi';
 import { dayWord } from './connectionsLogic';
-import { FILTERS, KEEP_DAYS, PLUGIN_KINDS, adviceKey, groupDays, isMessage, isProblem, relatedOf, tookSeconds, type Entry, type Filter, type Kind } from './journalLogic';
+import { FILTERS, KEEP_DAYS, PLUGIN_KINDS, adviceKey, groupDays, isMessage, isProblem, relatedOf, tookSeconds, type Entry, type Filter } from './journalLogic';
 
-const KIND_ICON: Record<Kind, string> = { message: '✉', auto: '⟳', discord: '💬', restart: '♻', link: '🔗', mod: '🚪', plugin: '🧩', conn: '📶' };
-const PLUGIN_ICON: Record<string, string> = { mass: '🚪', ping: '📶', steam: '🎮', freeze: '🧊', save: '💾', other: '🧩' };
+/** the colour of the round icon of an entry: red for a problem, green for what went well, grey for the rest */
+const toneOf = (e: Entry): string => (isProblem(e) ? 'bg-badbg text-bad' : (isMessage(e) && e.status === 'delivered') || (e.kind === 'restart' && e.status === 'done') ? 'bg-okbg text-ok' : 'bg-soft text-ink');
+/** the icon of an entry, drawn (a component picked in the middle of a render would be a new one every time) */
+function EntryIcon({ e, size }: { e: Entry; size: number }) {
+  const Ico = e.kind === 'plugin' ? PLUGIN_NOTE_ICON[e.status] ?? PLUGIN_NOTE_ICON.other : KIND_ICON[e.kind];
+  return <Ico size={size} />;
+}
 
 const MSG_STATUS: Record<string, { text: 'gn.h.queued' | 'gn.h.ok' | 'gn.h.expired' | 'gn.h.fail'; cls: string }> = {
   queued: { text: 'gn.h.queued', cls: 'pill pill-mute' },
@@ -165094,13 +165409,12 @@ function Row({ e, color, compact, open, onToggle, all, onReuse, onPlayer, onFilt
   const related = open ? relatedOf(e, all) : [];
   const [near, setNear] = useState<Entry[] | null>(null);
   const loadNear = () => api<JournalAnswer>(`/game-news/journal?around=${e.ts}${e.serverId ? `&server=${e.serverId}` : ''}`).then((r) => setNear(r.items.filter((x) => x.id !== e.id))).catch(() => setNear([]));
-  const icon = e.kind === 'plugin' ? PLUGIN_ICON[e.status] ?? PLUGIN_ICON.other : KIND_ICON[e.kind];
   const problem = isProblem(e);
   return (
     <li className={`jn-row ${problem ? 'is-problem' : ''} ${open ? 'is-open' : ''}`}>
       <button type="button" className={`flex w-full items-start gap-3 text-left ${compact ? 'py-1.5' : 'py-2.5'}`} aria-expanded={open} onClick={onToggle}>
-        <span aria-hidden className="relative flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-soft text-base" title={t(`gn.jn.f.${e.kind === 'conn' ? 'plugin' : e.kind}` as 'gn.jn.f.all')}>
-          {icon}
+        <span aria-hidden className={`relative flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${toneOf(e)}`} title={t(`gn.jn.f.${e.kind === 'conn' ? 'plugin' : e.kind}` as 'gn.jn.f.all')}>
+          <EntryIcon e={e} size={16} />
           {color && <i className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full ring-2 ring-card" style={{ background: color }} />}
         </span>
         <span className="min-w-0 flex-1">
@@ -165155,7 +165469,7 @@ function Row({ e, color, compact, open, onToggle, all, onReuse, onPlayer, onFilt
                   {near.slice(0, 30).map((x) => (
                     <li key={x.id} className="flex flex-wrap items-center gap-2">
                       <time className="tabular-nums text-mute" title={fullTime(x.ts)}>{clock(x.ts)}</time>
-                      <span aria-hidden>{x.kind === 'plugin' ? PLUGIN_ICON[x.status] ?? PLUGIN_ICON.other : KIND_ICON[x.kind]}</span>
+                      <span aria-hidden className="text-mute"><EntryIcon e={x} size={14} /></span>
                       <span className="min-w-0 truncate font-semibold">{x.kind === 'restart' ? t('gn.jn.restartLine', { n: x.text }) : <Styled text={x.text} />}</span>
                     </li>
                   ))}
@@ -165581,6 +165895,162 @@ export function ModerationTab() {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
+  cat > "$APP_DIR/core-frontend/src/pages/GameNewsPluginAlerts.tsx" << '__COREGSM_EOF__'
+import { useEffect, useState } from 'react';
+import { api } from '../api';
+import { IconBell } from '../components/GameNewsIcons';
+import { t, useI18n } from '../i18n';
+import { Switch, errText, toast } from '../ui';
+
+interface AlertState { silentMin: number; outdated: boolean; choices: number[] }
+
+/** what the administrators are told about the plugins themselves: a silent one, an old one (to the service channel) */
+export function PluginAlertsCard() {
+  useI18n();
+  const [s, setS] = useState<AlertState | null>(null);
+  useEffect(() => { void api<AlertState>('/game-news/plugin-alerts').then(setS).catch(() => undefined); }, []);
+  const save = async (patch: Partial<Pick<AlertState, 'silentMin' | 'outdated'>>) => {
+    try { setS(await api<AlertState>('/game-news/plugin-alerts', 'PUT', patch)); toast(t('al.saved')); } catch (e) { toast(errText(e), 'err'); }
+  };
+  if (!s) return <div className="skeleton h-24 rounded-2xl" aria-busy="true" />;
+  return (
+    <section className="panel space-y-3 p-5">
+      <div className="flex items-start gap-3">
+        <span aria-hidden className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-soft text-link"><IconBell size={20} /></span>
+        <div className="min-w-0">
+          <h3 className="font-extrabold">{t('gn.pa.title')}</h3>
+          <p className="text-sm font-semibold text-mute">{t('gn.pa.note')}</p>
+        </div>
+      </div>
+      <label className="flex flex-wrap items-center justify-between gap-3">
+        <span className="min-w-0 flex-1 basis-60 font-bold">{t('gn.pa.silent')}<span className="block text-sm font-semibold text-mute">{t('gn.pa.silentHint')}</span></span>
+        <select className="input w-40" value={s.silentMin} aria-label={t('gn.pa.silent')} onChange={(e) => void save({ silentMin: Number(e.target.value) })}>
+          {s.choices.map((m) => <option key={m} value={m}>{m === 0 ? t('gn.pa.off') : t('gn.pa.min', { n: m })}</option>)}
+        </select>
+      </label>
+      <label className="flex flex-wrap items-center justify-between gap-3">
+        <span className="min-w-0 flex-1 basis-60 font-bold">{t('gn.pa.outdated')}<span className="block text-sm font-semibold text-mute">{t('gn.pa.outdatedHint')}</span></span>
+        <Switch checked={s.outdated} onChange={(v) => void save({ outdated: v })} aria-label={t('gn.pa.outdated')} />
+      </label>
+    </section>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/pages"
+  cat > "$APP_DIR/core-frontend/src/pages/GameNewsProfile.tsx" << '__COREGSM_EOF__'
+import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
+import { api } from '../api';
+import { soon } from '../components/GameNewsParts';
+import { IconClock, IconDoor, IconLink, IconShield, IconUser } from '../components/GameNewsIcons';
+import type { ModBan, ModEntry } from '../gameNews';
+import { t, useI18n } from '../i18n';
+import { Modal } from '../ui';
+import type { ConnectionItem } from './connectionsLogic';
+import { playTime, playerFacts, type PlayerFacts } from './profileLogic';
+
+/** a click on a nickname anywhere in the plugin page opens the card of the player */
+export const ProfileContext = createContext<(nick: string) => void>(() => undefined);
+export const useOpenProfile = () => useContext(ProfileContext);
+
+interface Link { platformId: string; masked: string; nick: string; username: string; status: string; discord: boolean; linkedAt: number }
+
+const fmt = (ts: number) => new Date(ts).toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+
+function Fact({ icon, label, value, hint, tone = 'soft' }: { icon: ReactNode; label: string; value: string; hint?: string; tone?: 'soft' | 'bad' | 'warn' }) {
+  const cls = tone === 'bad' ? 'bg-badbg text-bad' : tone === 'warn' ? 'bg-warnbg text-warn' : 'bg-card text-link';
+  return (
+    <div className="flex items-center gap-3 rounded-2xl bg-soft px-3 py-2.5">
+      <span aria-hidden className={`grid h-9 w-9 shrink-0 place-items-center rounded-xl ${cls}`}>{icon}</span>
+      <span className="min-w-0">
+        <span className="block text-xs font-bold text-mute">{label}</span>
+        <span className="block font-black leading-tight tabular-nums">{value}</span>
+        {hint && <span className="block truncate text-xs font-semibold text-mute">{hint}</span>}
+      </span>
+    </div>
+  );
+}
+
+/** the card of a player: how long and how often he plays, what moderation did, whose account he is, the last visits */
+export function PlayerProfile({ nick, onClose, onFilter }: { nick: string; onClose: () => void; onFilter: (nick: string) => void }) {
+  useI18n();
+  const [facts, setFacts] = useState<PlayerFacts | null>(null);
+  const [link, setLink] = useState<Link | null | undefined>(undefined);
+  const [log, setLog] = useState<ModEntry[]>([]);
+
+  useEffect(() => {
+    let off = false;
+    setFacts(null);
+    const q = encodeURIComponent(nick);
+    void Promise.all([
+      api<{ items: ConnectionItem[] }>(`/game-news/connections?player=${q}&limit=300`).then((r) => r.items).catch(() => [] as ConnectionItem[]),
+      api<{ bans: ModBan[]; log: ModEntry[] }>(`/game-news/moderation?player=${q}`).catch(() => ({ bans: [] as ModBan[], log: [] as ModEntry[] })),
+      api<{ items: Link[] }>('/game-news/links').then((r) => r.items).catch(() => [] as Link[]),
+    ]).then(([conn, mod, links]) => {
+      if (off) return;
+      setFacts(playerFacts(nick, conn, mod.log, mod.bans));
+      setLog(mod.log.filter((l) => l.nick.toLowerCase() === nick.toLowerCase()).slice(0, 5));
+      setLink(links.find((l) => l.nick.toLowerCase() === nick.toLowerCase()) ?? null);
+    });
+    return () => { off = true; };
+  }, [nick]);
+
+  const pt = facts ? playTime(facts.minutes) : null;
+  return (
+    <Modal title={nick} onClose={onClose}>
+      {!facts ? <div className="skeleton h-32 rounded-2xl" aria-busy="true" /> : (
+        <div className="space-y-4">
+          <div className="flex flex-wrap items-center gap-2 text-sm font-bold">
+            {link
+              ? <span className="pill pill-ok inline-flex items-center gap-1"><IconLink size={14} />{t('gn.pf.linked', { name: link.username })}{link.discord ? ' · Discord' : ''}</span>
+              : link === null && <span className="pill pill-mute">{t('gn.pf.notLinked')}</span>}
+            {facts.active.length > 0 && <span className="pill pill-bad inline-flex items-center gap-1"><IconShield size={14} />{t('gn.pf.banned', { n: facts.active.length })}</span>}
+          </div>
+          <div className="grid gap-2.5 sm:grid-cols-2">
+            <Fact icon={<IconDoor size={18} />} label={t('gn.pf.visits')} value={String(facts.visits)} hint={facts.lastReason ? t('gn.pf.lastReason', { r: facts.lastReason }) : undefined} />
+            <Fact icon={<IconClock size={18} />} label={t('gn.pf.time')} value={pt ? (pt.h > 0 ? t('gn.pf.hm', { h: pt.h, m: pt.m }) : t('gn.pf.m', { m: pt.m })) : '—'} />
+            <Fact icon={<IconUser size={18} />} label={t('gn.pf.last')} value={facts.lastSeen ? soon(facts.lastSeen) : '—'} hint={facts.lastSeen ? fmt(facts.lastSeen) : undefined} />
+            <Fact icon={<IconShield size={18} />} label={t('gn.pf.mod')} value={t('gn.pf.modLine', { k: facts.kicks, w: facts.warns, b: facts.bans })} tone={facts.warns + facts.bans + facts.kicks > 0 ? 'warn' : 'soft'} />
+          </div>
+          {log.length > 0 && (
+            <section>
+              <h4 className="mb-1 text-xs font-extrabold text-mute">{t('gn.pf.history')}</h4>
+              <ul className="space-y-1 text-sm">
+                {log.map((l) => (
+                  <li key={l.id} className="flex flex-wrap items-center gap-2">
+                    <time className="tabular-nums text-mute">{fmt(l.ts)}</time>
+                    <span className={l.kind === 'unban' ? 'pill pill-ok' : 'pill pill-warn'}>{t(`gn.md.k.${l.kind}` as 'gn.md.k.kick')}</span>
+                    {l.reason && <span className="min-w-0 truncate font-semibold">{l.reason}</span>}
+                    <span className="text-mute">{l.admin}</span>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+          {facts.recent.length > 0 && (
+            <section>
+              <h4 className="mb-1 text-xs font-extrabold text-mute">{t('gn.pf.recent')}</h4>
+              <ul className="space-y-1 text-sm">
+                {facts.recent.map((c) => (
+                  <li key={c.id} className="flex flex-wrap items-center gap-2">
+                    <time className="tabular-nums text-mute">{fmt(c.ts)}</time>
+                    <span className={c.kind === 'join' ? 'pill pill-ok' : /^Timeout/.test(c.reason) ? 'pill pill-warn' : 'pill pill-mute'}>{c.kind === 'join' ? t('gn.cn.join') : c.reason || '—'}</span>
+                    {c.serverName && <span className="min-w-0 truncate text-mute">{c.serverName}</span>}
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+          <div className="flex flex-wrap justify-end gap-2">
+            <button type="button" className="btn btn-soft" onClick={() => { onFilter(nick); onClose(); }}>{t('gn.pf.filter')}</button>
+            <button type="button" className="btn btn-ghost" onClick={onClose}>{t('common.close')}</button>
+          </div>
+        </div>
+      )}
+    </Modal>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/GameNewsRestartSchedule.tsx" << '__COREGSM_EOF__'
 import { useState } from 'react';
 import { api } from '../api';
@@ -165716,6 +166186,7 @@ import { api } from '../api';
 import { NewsEditor, NewsPreview, Styled } from '../components/NewsEditor';
 import { soon } from '../components/GameNewsParts';
 import RowMenu from '../components/RowMenu';
+import { IconAuto, IconChat, IconRestart, IconShield } from '../components/GameNewsIcons';
 import { StateView } from '../components/StateView';
 import { Switch } from '../components/Switch';
 import { confirmDialog } from '../confirm';
@@ -165735,6 +166206,13 @@ function scheduleLabel(r: RuleInfo): string {
   if (r.kind === 'daily') return t('gn.a.dailyAt', { times: r.times.join(', ') });
   return t('gn.a.onceAt', { time: soon(r.runAt) });
 }
+
+/** the examples of the empty list: a name and a text from the locale, the schedule here */
+const EXAMPLES: { id: 'discord' | 'restart' | 'rules'; icon: typeof IconAuto; kind: 'interval' | 'daily'; everyMin: number; times: string[] }[] = [
+  { id: 'discord', icon: IconChat, kind: 'interval', everyMin: 30, times: ['20:00'] },
+  { id: 'restart', icon: IconRestart, kind: 'daily', everyMin: 60, times: ['03:50'] },
+  { id: 'rules', icon: IconShield, kind: 'interval', everyMin: 60, times: ['20:00'] },
+];
 
 /** «Автообъявления»: a message written once and sent by a schedule, without pressing «Отправить». */
 export default function GameNewsRules({ servers, rules, timezone, reload }: { servers: NewsServerInfo[]; rules: RuleInfo[]; timezone: string; reload: () => void }) {
@@ -165773,7 +166251,26 @@ export default function GameNewsRules({ servers, rules, timezone, reload }: { se
       </div>
 
       {rules.length === 0 && (
-        <StateView title={t('gn.a.empty')} text={t('gn.a.emptyText')} action={<button type="button" className="btn" onClick={openNew}>{t('gn.a.add')}</button>} />
+        <>
+          <StateView title={t('gn.a.empty')} text={t('gn.a.emptyText')} action={<button type="button" className="btn" onClick={openNew}>{t('gn.a.add')}</button>} />
+          {/* ready examples: one tap opens the form filled in */}
+          <section aria-label={t('gn.a.examples')}>
+            <h3 className="mb-2 text-sm font-extrabold text-mute">{t('gn.a.examples')}</h3>
+            <ul className="grid gap-3 sm:grid-cols-3">
+              {EXAMPLES.map((x) => (
+                <li key={x.id}>
+                  <button type="button" className="panel flex h-full w-full items-start gap-3 p-4 text-left transition hover:shadow-pop" onClick={() => setDraft({ id: null, body: { ...emptyRule(), name: t(`gn.a.ex.${x.id}.name` as 'gn.a.ex.discord.name'), text: t(`gn.a.ex.${x.id}.text` as 'gn.a.ex.discord.text'), kind: x.kind, everyMin: x.everyMin, times: x.times } })}>
+                    <span aria-hidden className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-soft text-link"><x.icon size={20} /></span>
+                    <span className="min-w-0">
+                      <span className="block font-bold">{t(`gn.a.ex.${x.id}.name` as 'gn.a.ex.discord.name')}</span>
+                      <span className="block text-sm font-semibold text-mute">{x.kind === 'interval' ? everyLabel(x.everyMin) : t('gn.a.dailyAt', { times: x.times.join(', ') })}</span>
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </section>
+        </>
       )}
 
       {rules.length > 0 && (
@@ -173508,6 +174005,55 @@ export function groupDays<T extends { ts: number }>(list: T[]): DayGroup<T>[] {
 
 /** the days a journal may be kept for (the choice of the administrator) */
 export const KEEP_DAYS = [7, 14, 30, 90, 180, 365] as const;
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/pages"
+  cat > "$APP_DIR/core-frontend/src/pages/profileLogic.ts" << '__COREGSM_EOF__'
+/** The card of a player in the journal of the plugin: what the visits, the moderation and the linked account say about him. */
+import type { ModBan, ModEntry } from '../gameNews';
+import type { ConnectionItem } from './connectionsLogic';
+
+export interface PlayerFacts {
+  /** how many times he came (the arrivals the journal has) */
+  visits: number;
+  /** the minutes of the visits that ended with a known length */
+  minutes: number;
+  /** when he was seen last: the latest arrival or departure */
+  lastSeen: number | null;
+  /** what the game said at his last departure (LeftGame, Timeout…) */
+  lastReason: string;
+  kicks: number;
+  warns: number;
+  bans: number;
+  /** bans in force now */
+  active: ModBan[];
+  /** his own journal: newest first, at most `limit` */
+  recent: ConnectionItem[];
+}
+
+export function playerFacts(nick: string, connections: ConnectionItem[], log: ModEntry[], bans: ModBan[], recentLimit = 6): PlayerFacts {
+  const same = (a: string) => a.toLowerCase() === nick.toLowerCase();
+  const own = connections.filter((c) => same(c.nick));
+  const leaves = own.filter((c) => c.kind === 'leave');
+  const joins = own.filter((c) => c.kind === 'join');
+  const sorted = [...own].sort((a, b) => b.ts - a.ts);
+  const mine = log.filter((l) => same(l.nick));
+  return {
+    visits: Math.max(joins.length, leaves.length),
+    minutes: leaves.reduce((n, l) => n + (l.minutes >= 0 ? l.minutes : 0), 0),
+    lastSeen: sorted[0]?.ts ?? null,
+    lastReason: sorted.find((c) => c.kind === 'leave')?.reason ?? '',
+    kicks: mine.filter((l) => l.kind === 'kick').length,
+    warns: mine.filter((l) => l.kind === 'warn').length,
+    bans: mine.filter((l) => l.kind === 'ban').length,
+    active: bans.filter((b) => same(b.nick)),
+    recent: sorted.slice(0, recentLimit),
+  };
+}
+
+/** a length of play in hours and minutes */
+export function playTime(minutes: number): { h: number; m: number } {
+  return { h: Math.floor(minutes / 60), m: Math.round(minutes % 60) };
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages/settings"
   cat > "$APP_DIR/core-frontend/src/pages/settings/BotCard.tsx" << '__COREGSM_EOF__'

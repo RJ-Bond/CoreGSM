@@ -4,6 +4,7 @@ import { soon } from '../components/GameNewsParts';
 import { t, useI18n } from '../i18n';
 import { usePoll } from '../ui';
 import { EmptyState, SubTabs } from './GameNewsUi';
+import { useOpenProfile } from './GameNewsProfile';
 import {
   PERIODS, REPEAT_JOINS, SHORT_VISIT_MIN, STATUSES, buildRows, dayWord, groupByDay, isKicked, isTimeout, matchesStatus, periodSince, repeaters, visitMinutes,
   type ConnectionItem, type Period, type Row, type Status,
@@ -104,7 +105,7 @@ export function ConnectionsSection({ player, onPick }: { player: string; onPick:
         <div key={g.day}>
           <h4 className="sticky top-0 z-[1] bg-card/95 py-1 text-sm font-extrabold capitalize text-mute backdrop-blur">{dayTitle(g.day)} <span className="font-semibold">· {g.rows.length}</span></h4>
           <ul className="divide-y divide-line">
-            {g.rows.map((r) => <ConnectionRow key={r.key} r={r} compact={compact} many={many} repeat={again.has(r.who)} onPick={onPick} />)}
+            {g.rows.map((r) => <ConnectionRow key={r.key} r={r} compact={compact} many={many} repeat={again.has(r.who)} />)}
           </ul>
         </div>
       ))}
@@ -115,7 +116,8 @@ export function ConnectionsSection({ player, onPick }: { player: string; onPick:
   );
 }
 
-function ConnectionRow({ r, compact, many, repeat, onPick }: { r: Row; compact: boolean; many: boolean; repeat: boolean; onPick: (nick: string) => void }) {
+function ConnectionRow({ r, compact, many, repeat }: { r: Row; compact: boolean; many: boolean; repeat: boolean }) {
+  const openProfile = useOpenProfile();
   const pill = pillOf(r);
   const mins = visitMinutes(r);
   const short = !!r.leave && mins != null && mins < SHORT_VISIT_MIN;
@@ -127,7 +129,7 @@ function ConnectionRow({ r, compact, many, repeat, onPick }: { r: Row; compact: 
       <span className={`${pill.cls} shrink-0`}>{pill.text}</span>
       <div className="min-w-0 flex-1 basis-56 text-sm">
         <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-          <button type="button" className="font-bold underline decoration-dotted underline-offset-2 hover:text-link" onClick={() => onPick(r.nick)}>{r.nick || '—'}</button>
+          <button type="button" className="font-bold underline decoration-dotted underline-offset-2 hover:text-link" title={t('gn.pf.open')} onClick={() => { if (r.nick) openProfile(r.nick); }}>{r.nick || '—'}</button>
           <span className="font-semibold tabular-nums text-mute">{span}{mins != null ? ` · ${t('gn.cn.min', { n: mins })}` : ''}</span>
           {many && r.serverName && <span className="min-w-0 truncate text-xs font-semibold text-mute">{r.serverName}</span>}
           {repeat && <span className="pill pill-warn" title={t('gn.cn.repeatHint', { n: REPEAT_JOINS })}>{t('gn.cn.repeat')}</span>}

@@ -7,6 +7,7 @@
  */
 import { registerGameNewsMetrics } from './gameNewsMetrics.js';
 import { registerGameNewsPluginLog } from './gameNewsPluginLog.js';
+import { registerGameNewsPluginAlerts } from './gameNewsPluginAlerts.js';
 import type { Express, RequestHandler } from 'express';
 import { z } from 'zod';
 import { systemTarget } from '../alerts/alertRoute.js';
@@ -106,6 +107,7 @@ export function savePluginProblems(serverId: number, header: string, now = Date.
 export function registerGameNewsConnections({ app, admin }: { app: Express; admin: RequestHandler }): void {
   registerGameNewsMetrics({ app, admin });
   registerGameNewsPluginLog({ app, admin });
+  registerGameNewsPluginAlerts({ app, admin });
   // the plugin: a batch of joins and departures; a field that is too long is cut, not a reason to refuse the batch
   const cut = (n: number) => z.string().max(2000).transform((s) => s.slice(0, n));
   app.post('/api/game-news/connections', (req, res) => {

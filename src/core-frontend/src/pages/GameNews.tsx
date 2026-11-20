@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { api } from '../api';
 import { soon } from '../components/GameNewsParts';
 import { confirmDialog } from '../confirm';
@@ -18,8 +18,26 @@ import { LinksTab } from './GameNewsLinks';
 import { MOD_PLAYER_KEY, ModerationTab } from './GameNewsModeration';
 import { SendTab } from './GameNewsSend';
 import { ScopedCard, SubTabs } from './GameNewsUi';
+import { PlayerProfile, ProfileContext } from './GameNewsProfile';
+import { PluginAlertsCard } from './GameNewsPluginAlerts';
+import { IconAuto, IconBox, IconCheck, IconDownload, IconKey, IconPeople, IconPlay, IconPlug, IconSend, TAB_ICON } from '../components/GameNewsIcons';
 
 interface NewsState { servers: NewsServerInfo[]; log: NewsLogRow[]; pluginLatest: string }
+
+/** one figure of the strip on top: an icon in a round tint of the tone, the number, a caption and a hint */
+function StatCard({ icon, tone, label, value, hint }: { icon: ReactNode; tone: 'ok' | 'warn' | 'bad' | 'mute' | 'brand'; label: string; value: string; hint: string }) {
+  const tint = { ok: 'bg-okbg text-ok', warn: 'bg-warnbg text-warn', bad: 'bg-badbg text-bad', mute: 'bg-soft text-mute', brand: 'bg-soft text-link' }[tone];
+  return (
+    <div className="panel flex items-center gap-2.5 px-3 py-2.5 sm:gap-3 sm:px-4 sm:py-3">
+      <span aria-hidden className={`grid h-9 w-9 shrink-0 place-items-center rounded-xl sm:h-11 sm:w-11 sm:rounded-2xl ${tint}`}>{icon}</span>
+      <span className="min-w-0">
+        <span className="block text-xs font-bold text-mute">{label}</span>
+        <span className="block text-xl font-black leading-tight tabular-nums sm:text-2xl">{value}</span>
+        <span className="block truncate text-xs font-semibold text-mute">{hint}</span>
+      </span>
+    </div>
+  );
+}
 
 /** 'send' | 'auto' | 'general' | 's<id>' (the settings of one server) | 'players' (linked players) | 'journal' */
 type Tab = string;
@@ -47,6 +65,8 @@ export default function GameNewsPage({ sub = '' }: { sub?: string }) {
   // inside the settings of the general page or of a server: players | restart | discord (remembered in this browser)
   const [inner, setInner] = useState<'players' | 'restart' | 'discord'>(() => { try { const v = localStorage.getItem('coregsm.gn.inner'); return v === 'restart' || v === 'discord' ? v : 'players'; } catch { return 'players'; } });
   const pickInner = (v: 'players' | 'restart' | 'discord') => { setInner(v); try { localStorage.setItem('coregsm.gn.inner', v); } catch { /* private mode */ } };
+  // the card of a player (a click on a nickname in the journal or in the joins and departures)
+  const [profile, setProfile] = useState<string | null>(null);
   const [wizardOff, setWizardOff] = useState(() => { try { return localStorage.getItem('coregsm.gn.wizard') === '0'; } catch { return false; } });
 
   const loadMain = () => api<NewsState>('/game-news').then((d) => { setData(d); setError(''); }).catch((e: Error) => setError(e.message));
@@ -83,7 +103,14 @@ export default function GameNewsPage({ sub = '' }: { sub?: string }) {
   const day = Date.now() - 86_400_000;
   const delivered24 = (data?.log ?? []).filter((r) => r.status === 'delivered' && r.sentAt > day).length;
   const queued = (data?.log ?? []).filter((r) => r.status === 'queued').length;
-  const counter: Record<string, number> = { auto: activeRules.length, journal: queued };
+  const [badges, setBadges] = useState<{ problems: number; bans: number }>({ problems: 0, bans: 0 });
+  usePoll(() => Promise.all([
+    api<{ counts?: { problems?: number } }>('/game-news/journal?kind=problems&limit=1').then((r) => r.counts?.problems ?? 0).catch(() => 0),
+    api<{ bans?: unknown[] }>('/game-news/moderation?kind=ban').then((r) => r.bans?.length ?? 0).catch(() => 0),
+  ]).then(([problems, bans]) => setBadges({ problems, bans })), 30_000);
+  const counter: Record<string, number> = { auto: activeRules.length, journal: badges.problems || queued, mod: badges.bans };
+  // a badge that is a problem is red
+  const redBadge: Record<string, boolean> = { journal: badges.problems > 0 };
   // with one server its settings are the general ones; with several each gets a page of its own (in the menu on the left, on a phone in the strip)
   const serverTabs = withToken.length > 1 ? withToken : [];
   const tabList: { id: Tab; label: string }[] = [
@@ -137,6 +164,7 @@ export default function GameNewsPage({ sub = '' }: { sub?: string }) {
   };
 
   return (
+    <ProfileContext.Provider value={setProfile}>
     <AdminPage
       head={(
         <PageHead icon={<IconNews size={22} />} title={t('gn.title')} subtitle={t('gn.subtitle')} hint={t('gn.hint')} help={<p>{t('gn.help')}</p>} />
@@ -146,15 +174,27 @@ export default function GameNewsPage({ sub = '' }: { sub?: string }) {
       {!data && !error && <div className="skeleton panel h-40" aria-busy="true" aria-label={t('d2.news.loading')} />}
 
       {data && (
-        <div className="panel flex flex-wrap items-center gap-x-6 gap-y-2 px-5 py-3" role="status" aria-label={t('gn.s.plugin')}>
-          <span className="flex items-center gap-2 font-extrabold">
-            <span aria-hidden className={`inline-block h-2.5 w-2.5 rounded-full ${online.length === 0 ? 'bg-mute' : online.length < withToken.length ? 'bg-warn' : 'bg-ok'}`} />
-            {withToken.length ? t('gn.s.pluginVal', { on: online.length, all: withToken.length }) : t('gn.s.pluginNone')}
-            {online[0]?.pluginVersion && <span className="text-sm font-semibold text-mute">v{online[0].pluginVersion}</span>}
-          </span>
-          <span className="text-sm font-bold"><span aria-hidden>👥 </span>{online.length ? t('gn.st.players', { n: players }) : '—'}</span>
-          <span className="text-sm font-bold"><span aria-hidden>⟳ </span>{t('gn.s.autoVal', { n: activeRules.length })}{nextRun ? <span className="font-semibold text-mute"> · {t('gn.s.next', { time: soon(nextRun) })}</span> : null}</span>
-          <span className="text-sm font-bold"><span aria-hidden>✉ </span>{t('gn.st.sent', { n: delivered24 })}{queued ? <span className="font-semibold text-mute"> · {t('gn.s.queued', { n: queued })}</span> : null}</span>
+        <div className="space-y-2" role="status" aria-label={t('gn.s.plugin')}>
+          <div className="grid grid-cols-2 gap-2.5 xl:grid-cols-4">
+            <StatCard icon={<IconPlug size={20} />} tone={online.length === 0 ? 'mute' : online.length < withToken.length ? 'warn' : 'ok'} label={t('gn.sc2.plugin')}
+              value={withToken.length ? `${online.length} / ${withToken.length}` : '—'}
+              hint={withToken.length ? (online[0]?.pluginVersion ? `v${online[0].pluginVersion}` : t('gn.s.pluginVal', { on: online.length, all: withToken.length })) : t('gn.s.pluginNone')} />
+            <StatCard icon={<IconPeople size={20} />} tone="brand" label={t('gn.sc2.players')} value={online.length ? String(players) : '—'} hint={online.length ? t('gn.sc2.playersHint', { n: online.length }) : t('gn.sc2.noPlugin')} />
+            <StatCard icon={<IconAuto size={20} />} tone="brand" label={t('gn.sc2.auto')} value={String(activeRules.length)} hint={nextRun ? t('gn.s.next', { time: soon(nextRun) }) : t('gn.sc2.noNext')} />
+            <StatCard icon={<IconSend size={20} />} tone={badges.problems > 0 ? 'bad' : 'brand'} label={t('gn.sc2.sent')} value={String(delivered24)} hint={queued ? t('gn.s.queued', { n: queued }) : badges.problems > 0 ? t('gn.sc2.problems', { n: badges.problems }) : t('gn.sc2.allGood')} />
+          </div>
+          {withToken.length > 1 && (
+            <ul className="flex flex-wrap gap-2">
+              {withToken.map((sv) => (
+                <li key={sv.id} className="inline-flex items-center gap-2 rounded-full bg-soft px-3 py-1 text-sm font-bold">
+                  <span aria-hidden className={`inline-block h-2 w-2 rounded-full ${sv.online ? 'bg-ok' : sv.lastSeen ? 'bg-warn' : 'bg-mute'}`} />
+                  <span className="max-w-[14rem] truncate">{sv.name}</span>
+                  {sv.pluginVersion && <span className="text-mute">v{sv.pluginVersion}</span>}
+                  <span className="font-semibold text-mute">{sv.online ? t('gn.sc2.online') : sv.lastSeen ? soon(sv.lastSeen) : t('gn.sc2.never')}</span>
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
       )}
 
@@ -167,21 +207,33 @@ export default function GameNewsPage({ sub = '' }: { sub?: string }) {
             </div>
             <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setWizardOff(true); try { localStorage.setItem('coregsm.gn.wizard', '0'); } catch { /* private mode */ } }}>{t('gn.wz.hide')}</button>
           </div>
-          <ol className="grid gap-3 lg:grid-cols-3">
-            {[
-              { n: 1, done: withToken.length > 0, title: t('gn.wz.s1'), hint: t('gn.wz.s1h') },
-              { n: 2, done: withToken.length > 0, title: t('gn.wz.s2'), hint: t('gn.wz.s2h') },
-              { n: 3, done: online.length > 0, title: t('gn.wz.s3'), hint: t('gn.wz.s3h') },
-            ].map((st) => (
-              <li key={st.n} className="flex items-start gap-3">
-                <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-sm font-black ${st.done ? 'bg-ok text-white' : 'bg-soft text-mute'}`} aria-hidden>{st.done ? '✓' : st.n}</span>
-                <span className="min-w-0">
-                  <span className="block font-bold">{st.title}</span>
-                  <span className="block text-sm font-semibold text-mute">{st.hint}</span>
-                </span>
-              </li>
-            ))}
-          </ol>
+          {(() => {
+            const steps = [
+              { n: 1, done: withToken.length > 0, icon: <IconDownload size={22} />, title: t('gn.wz.s1'), hint: t('gn.wz.s1h') },
+              { n: 2, done: withToken.length > 0, icon: <IconKey size={22} />, title: t('gn.wz.s2'), hint: t('gn.wz.s2h') },
+              { n: 3, done: online.length > 0, icon: <IconPlay size={22} />, title: t('gn.wz.s3'), hint: t('gn.wz.s3h') },
+            ];
+            const doneN = steps.filter((x) => x.done).length;
+            return (
+              <>
+                <div className="flex items-center gap-3" role="progressbar" aria-valuemin={0} aria-valuemax={steps.length} aria-valuenow={doneN} aria-label={t('gn.wz.title')}>
+                  <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-soft"><i className="block h-full rounded-full bg-ok transition-[width] duration-500" style={{ width: `${(doneN / steps.length) * 100}%` }} /></div>
+                  <span className="text-xs font-extrabold tabular-nums text-mute">{t('gn.wz.progress', { n: doneN, all: steps.length })}</span>
+                </div>
+                <ol className="grid gap-3 lg:grid-cols-3">
+                  {steps.map((st) => (
+                    <li key={st.n} className={`flex items-start gap-3 rounded-2xl p-3 ${st.done ? 'bg-okbg/60' : 'bg-soft'}`}>
+                      <span className={`grid h-10 w-10 shrink-0 place-items-center rounded-xl ${st.done ? 'bg-ok text-white' : 'bg-card text-link'}`} aria-hidden>{st.done ? <IconCheck size={22} /> : st.icon}</span>
+                      <span className="min-w-0">
+                        <span className="block font-bold">{st.n}. {st.title}</span>
+                        <span className="block text-sm font-semibold text-mute">{st.hint}</span>
+                      </span>
+                    </li>
+                  ))}
+                </ol>
+              </>
+            );
+          })()}
           <div className="flex flex-wrap gap-2">
             {firstBare && !firstBare.hasToken && <button type="button" className="btn btn-sm" onClick={() => setSettingsFor(firstBare.id)}>{t('gn.wz.token')}</button>}
             <a className="btn btn-soft btn-sm" href={DOCS} target="_blank" rel="noreferrer">{t('gn.wz.docs')}</a>
@@ -194,9 +246,10 @@ export default function GameNewsPage({ sub = '' }: { sub?: string }) {
          <div className="flex min-w-max gap-2 md:min-w-0 md:flex-wrap">
           {[...tabList.slice(0, 3), ...serverTabs.map((x) => ({ id: `s${x.id}`, label: x.name, phone: true })), ...tabList.slice(3)].map((x) => (
             <span key={x.id} className={'phone' in x ? 'contents md:hidden' : 'contents'}>
-            <button type="button" role="tab" aria-selected={tab === x.id} className={`chip-filter whitespace-nowrap ${tab === x.id ? 'on' : ''}`} onClick={() => goTab(x.id)}>
+            <button type="button" role="tab" aria-selected={tab === x.id} className={`chip-filter inline-flex items-center gap-1.5 whitespace-nowrap ${tab === x.id ? 'on' : ''}`} onClick={() => goTab(x.id)}>
+              {(() => { const I = TAB_ICON[x.id] ?? (/^sd+$/.test(x.id) ? IconBox : TAB_ICON.general); return <I size={16} />; })()}
               {x.label}
-              {(counter[x.id] ?? 0) > 0 && <span className="ml-1.5 rounded-full bg-soft px-1.5 text-xs font-extrabold">{counter[x.id]}</span>}
+              {(counter[x.id] ?? 0) > 0 && <span className={`ml-0.5 rounded-full px-1.5 text-xs font-extrabold ${redBadge[x.id] ? 'bg-badbg text-bad' : 'bg-soft'}`}>{counter[x.id]}</span>}
             </button>
             </span>
           ))}
@@ -237,6 +290,7 @@ export default function GameNewsPage({ sub = '' }: { sub?: string }) {
                 <ScopedCard part="register" title={t('gn.rg.title')}><RegisterCard initial={rd.register} /></ScopedCard>
                 <ScopedCard part="kick" title={t('gn.kk.title')}><KickCard initial={rd.kick} /></ScopedCard>
                 {!effScope && <ExtrasCard initial={rd.extras} />}
+                {!effScope && <PluginAlertsCard />}
               </div>
             )}
             {inner === 'restart' && (
@@ -251,10 +305,13 @@ export default function GameNewsPage({ sub = '' }: { sub?: string }) {
 
       {data && tab === 'mod' && <ModerationTab />}
 
-      {data && tab === 'journal' && <JournalTab onReuse={(x) => { setText(x); goTab('send'); }} onPlayer={(nick) => { try { localStorage.setItem(MOD_PLAYER_KEY, nick); } catch { /* private mode */ } goTab('mod'); }} />}
+      {data && tab === 'journal' && <JournalTab onReuse={(x) => { setText(x); goTab('send'); }} onPlayer={setProfile} />}
+
+      {profile && <PlayerProfile nick={profile} onClose={() => setProfile(null)} onFilter={(nick) => { try { localStorage.setItem(MOD_PLAYER_KEY, nick); } catch { /* private mode */ } goTab('mod'); }} />}
 
       {settingsServer && <PluginModal server={settingsServer} onClose={() => setSettingsFor(null)} onChanged={() => void loadMain()} />}
     </AdminPage>
+    </ProfileContext.Provider>
   );
 }
 

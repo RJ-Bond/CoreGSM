@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api';
 import { soon } from '../components/GameNewsParts';
 import { Styled } from '../components/NewsEditor';
+import { KIND_ICON, PLUGIN_NOTE_ICON } from '../components/GameNewsIcons';
 import { confirmDialog } from '../confirm';
 import { gameColor } from '../games';
 import type { NewsServerInfo } from '../gameNews';
@@ -9,10 +10,15 @@ import { t, useI18n } from '../i18n';
 import { errText, toast, usePoll } from '../ui';
 import { EmptyState, SubTabs } from './GameNewsUi';
 import { dayWord } from './connectionsLogic';
-import { FILTERS, KEEP_DAYS, PLUGIN_KINDS, adviceKey, groupDays, isMessage, isProblem, relatedOf, tookSeconds, type Entry, type Filter, type Kind } from './journalLogic';
+import { FILTERS, KEEP_DAYS, PLUGIN_KINDS, adviceKey, groupDays, isMessage, isProblem, relatedOf, tookSeconds, type Entry, type Filter } from './journalLogic';
 
-const KIND_ICON: Record<Kind, string> = { message: '✉', auto: '⟳', discord: '💬', restart: '♻', link: '🔗', mod: '🚪', plugin: '🧩', conn: '📶' };
-const PLUGIN_ICON: Record<string, string> = { mass: '🚪', ping: '📶', steam: '🎮', freeze: '🧊', save: '💾', other: '🧩' };
+/** the colour of the round icon of an entry: red for a problem, green for what went well, grey for the rest */
+const toneOf = (e: Entry): string => (isProblem(e) ? 'bg-badbg text-bad' : (isMessage(e) && e.status === 'delivered') || (e.kind === 'restart' && e.status === 'done') ? 'bg-okbg text-ok' : 'bg-soft text-ink');
+/** the icon of an entry, drawn (a component picked in the middle of a render would be a new one every time) */
+function EntryIcon({ e, size }: { e: Entry; size: number }) {
+  const Ico = e.kind === 'plugin' ? PLUGIN_NOTE_ICON[e.status] ?? PLUGIN_NOTE_ICON.other : KIND_ICON[e.kind];
+  return <Ico size={size} />;
+}
 
 const MSG_STATUS: Record<string, { text: 'gn.h.queued' | 'gn.h.ok' | 'gn.h.expired' | 'gn.h.fail'; cls: string }> = {
   queued: { text: 'gn.h.queued', cls: 'pill pill-mute' },
@@ -88,13 +94,12 @@ function Row({ e, color, compact, open, onToggle, all, onReuse, onPlayer, onFilt
   const related = open ? relatedOf(e, all) : [];
   const [near, setNear] = useState<Entry[] | null>(null);
   const loadNear = () => api<JournalAnswer>(`/game-news/journal?around=${e.ts}${e.serverId ? `&server=${e.serverId}` : ''}`).then((r) => setNear(r.items.filter((x) => x.id !== e.id))).catch(() => setNear([]));
-  const icon = e.kind === 'plugin' ? PLUGIN_ICON[e.status] ?? PLUGIN_ICON.other : KIND_ICON[e.kind];
   const problem = isProblem(e);
   return (
     <li className={`jn-row ${problem ? 'is-problem' : ''} ${open ? 'is-open' : ''}`}>
       <button type="button" className={`flex w-full items-start gap-3 text-left ${compact ? 'py-1.5' : 'py-2.5'}`} aria-expanded={open} onClick={onToggle}>
-        <span aria-hidden className="relative flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-soft text-base" title={t(`gn.jn.f.${e.kind === 'conn' ? 'plugin' : e.kind}` as 'gn.jn.f.all')}>
-          {icon}
+        <span aria-hidden className={`relative flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${toneOf(e)}`} title={t(`gn.jn.f.${e.kind === 'conn' ? 'plugin' : e.kind}` as 'gn.jn.f.all')}>
+          <EntryIcon e={e} size={16} />
           {color && <i className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full ring-2 ring-card" style={{ background: color }} />}
         </span>
         <span className="min-w-0 flex-1">
@@ -149,7 +154,7 @@ function Row({ e, color, compact, open, onToggle, all, onReuse, onPlayer, onFilt
                   {near.slice(0, 30).map((x) => (
                     <li key={x.id} className="flex flex-wrap items-center gap-2">
                       <time className="tabular-nums text-mute" title={fullTime(x.ts)}>{clock(x.ts)}</time>
-                      <span aria-hidden>{x.kind === 'plugin' ? PLUGIN_ICON[x.status] ?? PLUGIN_ICON.other : KIND_ICON[x.kind]}</span>
+                      <span aria-hidden className="text-mute"><EntryIcon e={x} size={14} /></span>
                       <span className="min-w-0 truncate font-semibold">{x.kind === 'restart' ? t('gn.jn.restartLine', { n: x.text }) : <Styled text={x.text} />}</span>
                     </li>
                   ))}
