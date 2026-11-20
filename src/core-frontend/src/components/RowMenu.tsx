@@ -14,9 +14,12 @@ export interface RowMenuItem {
   sep?: boolean;
 }
 
+/** the room a menu needs to the left of the button's right edge: its minimum width (13rem) and a margin */
+const MENU_ROOM = 224;
+
 export default function RowMenu({ label, items, className = '' }: { label: string; items: RowMenuItem[]; className?: string }) {
   const [open, setOpen] = useState(false);
-  const [pos, setPos] = useState<{ top?: number; bottom?: number; right: number } | null>(null);
+  const [pos, setPos] = useState<{ top?: number; bottom?: number; right?: number; left?: number } | null>(null);
   const btn = useRef<HTMLButtonElement>(null);
   const pop = useRef<HTMLDivElement>(null);
   const id = useId();
@@ -26,9 +29,11 @@ export default function RowMenu({ label, items, className = '' }: { label: strin
   useLayoutEffect(() => {
     if (!open || !btn.current) return;
     const r = btn.current.getBoundingClientRect();
-    const right = Math.max(8, window.innerWidth - r.right);
+    // the menu hangs from the right edge of the button; a button near the left edge of a phone (a wrapped card) has no room for that:
+    // then the menu starts at the button instead of being cut off by the screen
+    const horizontal = r.right < MENU_ROOM ? { left: Math.max(8, r.left) } : { right: Math.max(8, window.innerWidth - r.right) };
     // opens upwards when there is no room under the button
-    setPos(r.bottom + 260 > window.innerHeight && r.top > 260 ? { bottom: window.innerHeight - r.top + 4, right } : { top: r.bottom + 4, right });
+    setPos(r.bottom + 260 > window.innerHeight && r.top > 260 ? { bottom: window.innerHeight - r.top + 4, ...horizontal } : { top: r.bottom + 4, ...horizontal });
   }, [open]);
 
   useEffect(() => {

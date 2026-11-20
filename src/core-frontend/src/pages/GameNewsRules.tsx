@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react';
+import { useRef, useState, type FormEvent } from 'react';
 import { api } from '../api';
 import { NewsEditor, NewsPreview, Styled } from '../components/NewsEditor';
 import { soon } from '../components/GameNewsParts';
@@ -68,7 +68,7 @@ export default function GameNewsRules({ servers, rules, timezone, reload }: { se
           {rules.map((r) => (
             <li key={r.id} className="flex flex-wrap items-start gap-x-4 gap-y-2 px-5 py-4">
               <Switch className="mt-1" checked={r.enabled} aria-label={`${r.name}: ${r.enabled ? t('gn.a.on') : t('gn.a.off')}`} onChange={(v) => void toggle(r, v)} />
-              <div className="min-w-0 flex-1 basis-60">
+              <div className="min-w-0 flex-1 basis-40">
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                   <span className="min-w-0 wrap-break-word font-extrabold">{r.name}</span>
                   <span className="pill pill-mute">{scheduleLabel(r)}</span>
@@ -87,6 +87,7 @@ export default function GameNewsRules({ servers, rules, timezone, reload }: { se
                 )}
               </div>
               <RowMenu
+                className="ml-auto"
                 label={t('gn.a.menu', { name: r.name })}
                 items={[
                   { key: 'run', label: t('gn.a.run'), onSelect: () => void runNow(r) },
@@ -114,7 +115,7 @@ export default function GameNewsRules({ servers, rules, timezone, reload }: { se
   );
 }
 
-function RuleModal({ id, initial, servers, timezone, onClose, onSaved }: {
+export function RuleModal({ id, initial, servers, timezone, onClose, onSaved }: {
   id: number | null; initial: RuleBody; servers: NewsServerInfo[]; timezone: string; onClose: () => void; onSaved: () => void;
 }) {
   useI18n();
@@ -122,6 +123,9 @@ function RuleModal({ id, initial, servers, timezone, onClose, onSaved }: {
   const [time, setTime] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  // after a press on «Сохранить» the reason is shown even before the name is typed (a disabled button said nothing)
+  const [tried, setTried] = useState(false);
+  const nameRef = useRef<HTMLInputElement>(null);
   const set = <K extends keyof RuleBody>(k: K, v: RuleBody[K]) => setF((x) => ({ ...x, [k]: v }));
   const problem = validateRule(f, Date.now());
   const withPlugin = servers.filter((s) => s.hasToken);
@@ -135,7 +139,12 @@ function RuleModal({ id, initial, servers, timezone, onClose, onSaved }: {
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
-    if (problem || busy) return;
+    if (busy) return;
+    if (problem) {
+      setTried(true);
+      if (problem === 'name') nameRef.current?.focus();
+      return;
+    }
     setBusy(true);
     setError('');
     try {
@@ -152,7 +161,7 @@ function RuleModal({ id, initial, servers, timezone, onClose, onSaved }: {
     <Modal title={id == null ? t('gn.a.newTitle') : t('gn.a.editTitle')} onClose={onClose}>
       <form className="space-y-4" onSubmit={(e) => void submit(e)} noValidate>
         <Field label={t('gn.a.name')}>
-          <input className="input" value={f.name} maxLength={80} placeholder={t('gn.a.nameEx')} onChange={(e) => set('name', e.target.value)} />
+          <input ref={nameRef} className="input" value={f.name} maxLength={80} placeholder={t('gn.a.nameEx')} onChange={(e) => set('name', e.target.value)} />
         </Field>
 
         <NewsEditor value={f.text} onChange={(v) => set('text', v)} />
@@ -234,11 +243,11 @@ function RuleModal({ id, initial, servers, timezone, onClose, onSaved }: {
           {t('gn.a.enabled')}
         </label>
 
-        {problem && f.name.trim() && <p className="text-sm font-semibold text-danger">{t(`gn.a.p.${problem}` as 'gn.a.p.name')}</p>}
+        {problem && (tried || f.name.trim()) && <p role="alert" className="text-sm font-semibold text-bad">{t(`gn.a.p.${problem}` as 'gn.a.p.name')}</p>}
         <ErrorLine text={error} />
         <div className="flex flex-wrap justify-end gap-2">
           <button type="button" className="btn btn-ghost" onClick={onClose}>{t('common.cancel')}</button>
-          <button type="submit" className="btn" disabled={!!problem || busy}>{busy && <Spinner />}{t('common.save')}</button>
+          <button type="submit" className="btn" disabled={busy}>{busy && <Spinner />}{t('common.save')}</button>
         </div>
       </form>
     </Modal>
