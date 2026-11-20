@@ -11,6 +11,12 @@ const METRICS: Row['metric'][] = ['LCP', 'INP', 'CLS', 'TTFB'];
 const show = (metric: Row['metric'], v: number): string => (metric === 'CLS' ? v.toFixed(2) : v >= 1000 ? `${(v / 1000).toFixed(1)} ${t('rum.s')}` : `${Math.round(v)} ${t('rum.ms')}`);
 
 /** «Скорость у посетителей»: the 75th percentile of what real visitors saw, per page and metric, coloured by web.dev limits */
+/** a block that scrolls sideways: a keyboard user must be able to reach it (axe: scrollable-region-focusable) */
+function ScrollRegion({ label, children }: { label: string; children: React.ReactNode }) {
+  // oxlint-disable-next-line jsx-a11y/no-noninteractive-tabindex
+  return <div className="overflow-x-auto" tabIndex={0} role="region" aria-label={label}>{children}</div>;
+}
+
 export default function RumCard() {
   useI18n();
   const [s, setS] = useState<Summary | null>(null);
@@ -32,7 +38,7 @@ export default function RumCard() {
       <ErrorLine text={error} />
       {s && s.rows.length === 0 && <p className="font-semibold text-mute">{s.enabled ? t('rum.none') : t('rum.off')}</p>}
       {s && s.rows.length > 0 && (
-        <div className="overflow-x-auto">
+        <ScrollRegion label={t('rum.title')}>
           <table className="rum-table w-full text-left">
             <thead>
               <tr><th scope="col">{t('rum.page')}</th>{METRICS.map((m) => <th key={m} scope="col">{m}</th>)}<th scope="col">{t('rum.visits')}</th></tr>
@@ -53,7 +59,7 @@ export default function RumCard() {
               })}
             </tbody>
           </table>
-        </div>
+        </ScrollRegion>
       )}
       <p className="text-sm font-semibold text-mute">{t('rum.note', { d: s?.days ?? 7 })}</p>
     </Section>

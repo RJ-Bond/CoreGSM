@@ -113,8 +113,16 @@ function WhoStack({ who, players, href, now }: { who: Who[]; players: number; hr
  * The state of the server at a glance (inside the banner): a big player counter with the two-hour trend, the slot bar,
  * the maintenance chip, who is playing, and, when the server is full, «Сообщить, когда будет место».
  */
+/** «3 дня», «5 ч», «40 мин»: how long until a moment */
+function untilText(ms: number): string {
+  const min = Math.max(1, Math.round(ms / 60_000));
+  if (min < 90) return t('gn.rt.min', { n: min });
+  const h = Math.round(min / 60);
+  return h < 48 ? t('gn.rt.h', { n: h }) : t('srv.hero.days', { n: Math.round(h / 24) });
+}
+
 export default function Hero({
-  online, hasStatus, players, max, maintenance, freeSlot, onNotify, who = [], whoHref, peak = null, recent = [], now, lastSeen = null, usual = null,
+  online, hasStatus, players, max, maintenance, freeSlot, onNotify, who = [], whoHref, peak = null, recent = [], now, lastSeen = null, usual = null, nextWipe = null,
 }: {
   online: boolean;
   hasStatus: boolean;
@@ -134,6 +142,8 @@ export default function Hero({
   lastSeen?: number | null;
   /** when the server is usually the busiest in the coming hours (by its baseline of the week) */
   usual?: UsualPeak | null;
+  /** the next planned wipe: a date the players plan around */
+  nextWipe?: { at: number; name: string } | null;
 }) {
   useI18n();
   // a new record while the page is open
@@ -189,6 +199,7 @@ export default function Hero({
       </div>
       {online && <HeroSpark values={recent} />}
       {online && max > 0 && <SlotBar players={players} max={max} peak={peak} />}
+      {nextWipe && <p className="srv-hero-usual srv-hero-wipe">{t('srv.hero.wipe', { when: new Date(nextWipe.at).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' }), left: untilText(nextWipe.at - now) })}</p>}
       {online && usual && <p className="srv-hero-usual">{usual.now ? t('srv.hero.usualNow', { n: usual.value }) : t('srv.hero.usualAt', { time: fmtTime(usual.at), n: usual.value })}</p>}
       {online && who.length > 0 && <WhoStack who={who} players={players} href={whoHref} now={now} />}
       {freeSlot !== 'hidden' && (

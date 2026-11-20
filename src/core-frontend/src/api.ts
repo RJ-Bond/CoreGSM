@@ -466,6 +466,8 @@ export interface ServerDetails {
   events: { ts: number; type: 'up' | 'down' | 'peak' | 'maintenance' | 'version' | 'map'; players: number | null; name?: string; from?: string }[];
   /** the usual players per hour of the week (index = UTC weekday * 24 + hour) over the 4 weeks before; null = unknown */
   baseline?: (number | null)[] | null;
+  /** the next planned wipe (null = none announced) */
+  nextWipe?: { at: number; name: string } | null;
   /** players with the time they joined (empty when the game gives no names) */
   playersNow: PlayerNow[];
 }

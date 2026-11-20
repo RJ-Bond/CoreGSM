@@ -72,6 +72,16 @@ export function upcomingEvents(now: number): CalEvent[] {
     )
     .all(now) as { id: number; name: string; start_ts: number; end_ts: number; server: string | null }[];
   for (const w of works) out.push({ uid: `maint-${w.id}@coregsm`, start: w.start_ts, end: w.end_ts, summary: `Работы: ${w.name || 'обслуживание'}${w.server ? ` (${w.server})` : ''}`, url: base ? `${base}/news` : undefined });
+  // the planned wipes of the servers (the scenarios that have not started)
+  try {
+    const wipes = db
+      .prepare(
+        `SELECT w.id, w.name, w.wipe_at, w.duration_min, s.name AS server FROM wipe_scenarios w JOIN servers s ON s.id = w.server_id
+         WHERE w.status = 'scheduled' AND w.wipe_at > ? ORDER BY w.wipe_at LIMIT 100`,
+      )
+      .all(now) as { id: number; name: string; wipe_at: number; duration_min: number; server: string }[];
+    for (const w of wipes) out.push({ uid: `wipe-${w.id}@coregsm`, start: w.wipe_at, end: w.wipe_at + Math.max(1, w.duration_min) * 60_000, summary: `Вайп: ${w.server}`, description: w.name });
+  } catch { /* the wipe module is not loaded: no wipes in the calendar */ }
   return out;
 }
 

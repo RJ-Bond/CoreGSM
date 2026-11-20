@@ -716,6 +716,8 @@ const ru = {
   'srv.off.hideChart': 'Скрыть график',
   'srv.hero.label': 'Состояние сервера',
   'srv.hero.usualAt': 'Обычно пик около {time}: примерно {n} игроков',
+  'srv.hero.wipe': 'Ближайший вайп: {when} (через {left})',
+  'srv.hero.days': '{n} дн.',
   'srv.hero.usualNow': 'Сейчас обычное время пика: примерно {n} игроков',
   'srv.hero.players': 'игроков',
   'srv.hero.offline': 'сервер недоступен',

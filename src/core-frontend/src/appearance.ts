@@ -67,10 +67,19 @@ function read(): Appearance {
   }
 }
 
-/** the browser or the network asks to spare the traffic */
+/** a device that will hardly draw the decorations: 2 GB of memory or less (where the browser tells it), or two cores and little memory */
+export function deviceIsWeak(nav: { deviceMemory?: number; hardwareConcurrency?: number } | undefined = typeof navigator !== 'undefined' ? (navigator as unknown as { deviceMemory?: number; hardwareConcurrency?: number }) : undefined): boolean {
+  if (!nav) return false;
+  const mem = nav.deviceMemory;
+  const cores = nav.hardwareConcurrency;
+  if (typeof mem === 'number' && mem > 0 && mem <= 2) return true;
+  return typeof mem === 'number' && mem <= 4 && typeof cores === 'number' && cores > 0 && cores <= 2;
+}
+
+/** the browser or the network asks to spare the traffic, or the device is weak */
 export function networkWantsLite(): boolean {
   const c = (typeof navigator !== 'undefined' ? (navigator as unknown as { connection?: { saveData?: boolean; effectiveType?: string } }).connection : undefined);
-  return !!c && (c.saveData === true || c.effectiveType === 'slow-2g' || c.effectiveType === '2g');
+  return (!!c && (c.saveData === true || c.effectiveType === 'slow-2g' || c.effectiveType === '2g')) || deviceIsWeak();
 }
 
 /** writes the attributes: an option that is off removes its attribute, so the CSS defaults apply */

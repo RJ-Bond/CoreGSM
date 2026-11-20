@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { exportFileName } from '../src/components/server/helpers';
 import { computeWizard } from '../src/components/DiscordWizard';
 import { cleanIds, movePin, pushRecent, togglePin } from '../src/pages/adminShortcuts';
-import { normalizeAppearance, PRESETS, presetOf } from '../src/appearance';
+import { deviceIsWeak, normalizeAppearance, PRESETS, presetOf } from '../src/appearance';
 import type { Binding, BotStatus, DiscordGuild } from '../src/api';
 
 const bot = (over: Partial<BotStatus> = {}): BotStatus => ({ state: 'online', tag: 'Bot#1', clientId: '1', inviteUrl: 'https://discord.com/oauth2', error: null, updatedAt: 0, guildCount: 1, channelCount: 1, ...over });
@@ -89,5 +89,14 @@ describe('appearance', () => {
     expect(presetOf(PRESETS.oled)).toBe('oled');
     expect(presetOf({ ...PRESETS.classic, largeText: true })).toBeNull();
     expect(presetOf(normalizeAppearance({ reduceMotion: true, liteData: true }))).toBe('soft');
+  });
+
+  it('a weak device is told by its memory (and by few cores with little memory); an unknown one is not weak', () => {
+    expect(deviceIsWeak({ deviceMemory: 2, hardwareConcurrency: 8 })).toBe(true);
+    expect(deviceIsWeak({ deviceMemory: 4, hardwareConcurrency: 2 })).toBe(true);
+    expect(deviceIsWeak({ deviceMemory: 8, hardwareConcurrency: 2 })).toBe(false);
+    expect(deviceIsWeak({ deviceMemory: 4, hardwareConcurrency: 8 })).toBe(false);
+    expect(deviceIsWeak({ hardwareConcurrency: 2 })).toBe(false);
+    expect(deviceIsWeak(undefined)).toBe(false);
   });
 });

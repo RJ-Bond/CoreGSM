@@ -715,6 +715,8 @@ const en: Record<keyof typeof ru, string> = {
   'srv.off.hideChart': 'Hide the chart',
   'srv.hero.label': 'Server state',
   'srv.hero.usualAt': 'Usually busiest around {time}: about {n} players',
+  'srv.hero.wipe': 'Next wipe: {when} (in {left})',
+  'srv.hero.days': '{n} d',
   'srv.hero.usualNow': 'The usual peak time right now: about {n} players',
   'srv.hero.players': 'players',
   'srv.hero.offline': 'server is unavailable',

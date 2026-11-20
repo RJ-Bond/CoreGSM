@@ -673,6 +673,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
           now={nowTs}
           lastSeen={s.updatedAt}
           usual={nextUsualPeak(data.baseline ?? null, nowTs, 24)}
+          nextWipe={data.nextWipe ?? null}
         />
 
         {!s.online && s.error && !s.hasStatus && (

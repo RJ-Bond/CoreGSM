@@ -227,6 +227,13 @@ router.get('/api/servers/:id/details', viewer, (req, res) => {
     hours,
     createdAt,
     discord,
+    // the next planned wipe (an announced date, the same that goes to Discord)
+    nextWipe: (() => {
+      try {
+        const w = db.prepare("SELECT wipe_at, name FROM wipe_scenarios WHERE server_id = ? AND status = 'scheduled' AND wipe_at > ? ORDER BY wipe_at LIMIT 1").get(id, Date.now()) as { wipe_at: number; name: string } | undefined;
+        return w ? { at: w.wipe_at, name: w.name } : null;
+      } catch { return null; }
+    })(),
     notice: (() => {
       const n = db.prepare('SELECT text, tone, updated_at FROM server_notices WHERE server_id = ?').get(id) as { text: string; tone: string; updated_at: number } | undefined;
       return n ? { text: n.text, tone: n.tone, updatedAt: n.updated_at } : null;

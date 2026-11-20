@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="7d4da243373c"
+COREGSM_BUILD="706a92d2c39e"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.2.60"
+COREGSM_VERSION="1.2.61"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -20946,6 +20946,16 @@ export function upcomingEvents(now: number): CalEvent[] {
     )
     .all(now) as { id: number; name: string; start_ts: number; end_ts: number; server: string | null }[];
   for (const w of works) out.push({ uid: `maint-${w.id}@coregsm`, start: w.start_ts, end: w.end_ts, summary: `Работы: ${w.name || 'обслуживание'}${w.server ? ` (${w.server})` : ''}`, url: base ? `${base}/news` : undefined });
+  // the planned wipes of the servers (the scenarios that have not started)
+  try {
+    const wipes = db
+      .prepare(
+        `SELECT w.id, w.name, w.wipe_at, w.duration_min, s.name AS server FROM wipe_scenarios w JOIN servers s ON s.id = w.server_id
+         WHERE w.status = 'scheduled' AND w.wipe_at > ? ORDER BY w.wipe_at LIMIT 100`,
+      )
+      .all(now) as { id: number; name: string; wipe_at: number; duration_min: number; server: string }[];
+    for (const w of wipes) out.push({ uid: `wipe-${w.id}@coregsm`, start: w.wipe_at, end: w.wipe_at + Math.max(1, w.duration_min) * 60_000, summary: `Вайп: ${w.server}`, description: w.name });
+  } catch { /* the wipe module is not loaded: no wipes in the calendar */ }
   return out;
 }
 
@@ -40022,6 +40032,13 @@ router.get('/api/servers/:id/details', viewer, (req, res) => {
     hours,
     createdAt,
     discord,
+    // the next planned wipe (an announced date, the same that goes to Discord)
+    nextWipe: (() => {
+      try {
+        const w = db.prepare("SELECT wipe_at, name FROM wipe_scenarios WHERE server_id = ? AND status = 'scheduled' AND wipe_at > ? ORDER BY wipe_at LIMIT 1").get(id, Date.now()) as { wipe_at: number; name: string } | undefined;
+        return w ? { at: w.wipe_at, name: w.name } : null;
+      } catch { return null; }
+    })(),
     notice: (() => {
       const n = db.prepare('SELECT text, tone, updated_at FROM server_notices WHERE server_id = ?').get(id) as { text: string; tone: string; updated_at: number } | undefined;
       return n ? { text: n.text, tone: n.tone, updatedAt: n.updated_at } : null;
@@ -123412,6 +123429,8 @@ export interface ServerDetails {
   events: { ts: number; type: 'up' | 'down' | 'peak' | 'maintenance' | 'version' | 'map'; players: number | null; name?: string; from?: string }[];
   /** the usual players per hour of the week (index = UTC weekday * 24 + hour) over the 4 weeks before; null = unknown */
   baseline?: (number | null)[] | null;
+  /** the next planned wipe (null = none announced) */
+  nextWipe?: { at: number; name: string } | null;
   /** players with the time they joined (empty when the game gives no names) */
   playersNow: PlayerNow[];
 }
@@ -123909,10 +123928,19 @@ function read(): Appearance {
   }
 }
 
-/** the browser or the network asks to spare the traffic */
+/** a device that will hardly draw the decorations: 2 GB of memory or less (where the browser tells it), or two cores and little memory */
+export function deviceIsWeak(nav: { deviceMemory?: number; hardwareConcurrency?: number } | undefined = typeof navigator !== 'undefined' ? (navigator as unknown as { deviceMemory?: number; hardwareConcurrency?: number }) : undefined): boolean {
+  if (!nav) return false;
+  const mem = nav.deviceMemory;
+  const cores = nav.hardwareConcurrency;
+  if (typeof mem === 'number' && mem > 0 && mem <= 2) return true;
+  return typeof mem === 'number' && mem <= 4 && typeof cores === 'number' && cores > 0 && cores <= 2;
+}
+
+/** the browser or the network asks to spare the traffic, or the device is weak */
 export function networkWantsLite(): boolean {
   const c = (typeof navigator !== 'undefined' ? (navigator as unknown as { connection?: { saveData?: boolean; effectiveType?: string } }).connection : undefined);
-  return !!c && (c.saveData === true || c.effectiveType === 'slow-2g' || c.effectiveType === '2g');
+  return (!!c && (c.saveData === true || c.effectiveType === 'slow-2g' || c.effectiveType === '2g')) || deviceIsWeak();
 }
 
 /** writes the attributes: an option that is off removes its attribute, so the CSS defaults apply */
@@ -129360,6 +129388,12 @@ const METRICS: Row['metric'][] = ['LCP', 'INP', 'CLS', 'TTFB'];
 const show = (metric: Row['metric'], v: number): string => (metric === 'CLS' ? v.toFixed(2) : v >= 1000 ? `${(v / 1000).toFixed(1)} ${t('rum.s')}` : `${Math.round(v)} ${t('rum.ms')}`);
 
 /** «Скорость у посетителей»: the 75th percentile of what real visitors saw, per page and metric, coloured by web.dev limits */
+/** a block that scrolls sideways: a keyboard user must be able to reach it (axe: scrollable-region-focusable) */
+function ScrollRegion({ label, children }: { label: string; children: React.ReactNode }) {
+  // oxlint-disable-next-line jsx-a11y/no-noninteractive-tabindex
+  return <div className="overflow-x-auto" tabIndex={0} role="region" aria-label={label}>{children}</div>;
+}
+
 export default function RumCard() {
   useI18n();
   const [s, setS] = useState<Summary | null>(null);
@@ -129381,7 +129415,7 @@ export default function RumCard() {
       <ErrorLine text={error} />
       {s && s.rows.length === 0 && <p className="font-semibold text-mute">{s.enabled ? t('rum.none') : t('rum.off')}</p>}
       {s && s.rows.length > 0 && (
-        <div className="overflow-x-auto">
+        <ScrollRegion label={t('rum.title')}>
           <table className="rum-table w-full text-left">
             <thead>
               <tr><th scope="col">{t('rum.page')}</th>{METRICS.map((m) => <th key={m} scope="col">{m}</th>)}<th scope="col">{t('rum.visits')}</th></tr>
@@ -129402,7 +129436,7 @@ export default function RumCard() {
               })}
             </tbody>
           </table>
-        </div>
+        </ScrollRegion>
       )}
       <p className="text-sm font-semibold text-mute">{t('rum.note', { d: s?.days ?? 7 })}</p>
     </Section>
@@ -138783,8 +138817,16 @@ function WhoStack({ who, players, href, now }: { who: Who[]; players: number; hr
  * The state of the server at a glance (inside the banner): a big player counter with the two-hour trend, the slot bar,
  * the maintenance chip, who is playing, and, when the server is full, «Сообщить, когда будет место».
  */
+/** «3 дня», «5 ч», «40 мин»: how long until a moment */
+function untilText(ms: number): string {
+  const min = Math.max(1, Math.round(ms / 60_000));
+  if (min < 90) return t('gn.rt.min', { n: min });
+  const h = Math.round(min / 60);
+  return h < 48 ? t('gn.rt.h', { n: h }) : t('srv.hero.days', { n: Math.round(h / 24) });
+}
+
 export default function Hero({
-  online, hasStatus, players, max, maintenance, freeSlot, onNotify, who = [], whoHref, peak = null, recent = [], now, lastSeen = null, usual = null,
+  online, hasStatus, players, max, maintenance, freeSlot, onNotify, who = [], whoHref, peak = null, recent = [], now, lastSeen = null, usual = null, nextWipe = null,
 }: {
   online: boolean;
   hasStatus: boolean;
@@ -138804,6 +138846,8 @@ export default function Hero({
   lastSeen?: number | null;
   /** when the server is usually the busiest in the coming hours (by its baseline of the week) */
   usual?: UsualPeak | null;
+  /** the next planned wipe: a date the players plan around */
+  nextWipe?: { at: number; name: string } | null;
 }) {
   useI18n();
   // a new record while the page is open
@@ -138859,6 +138903,7 @@ export default function Hero({
       </div>
       {online && <HeroSpark values={recent} />}
       {online && max > 0 && <SlotBar players={players} max={max} peak={peak} />}
+      {nextWipe && <p className="srv-hero-usual srv-hero-wipe">{t('srv.hero.wipe', { when: new Date(nextWipe.at).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' }), left: untilText(nextWipe.at - now) })}</p>}
       {online && usual && <p className="srv-hero-usual">{usual.now ? t('srv.hero.usualNow', { n: usual.value }) : t('srv.hero.usualAt', { time: fmtTime(usual.at), n: usual.value })}</p>}
       {online && who.length > 0 && <WhoStack who={who} players={players} href={whoHref} now={now} />}
       {freeSlot !== 'hidden' && (
@@ -148499,6 +148544,8 @@ const en: Record<keyof typeof ru, string> = {
   'srv.off.hideChart': 'Hide the chart',
   'srv.hero.label': 'Server state',
   'srv.hero.usualAt': 'Usually busiest around {time}: about {n} players',
+  'srv.hero.wipe': 'Next wipe: {when} (in {left})',
+  'srv.hero.days': '{n} d',
   'srv.hero.usualNow': 'The usual peak time right now: about {n} players',
   'srv.hero.players': 'players',
   'srv.hero.offline': 'server is unavailable',
@@ -153788,6 +153835,8 @@ const ru = {
   'srv.off.hideChart': 'Скрыть график',
   'srv.hero.label': 'Состояние сервера',
   'srv.hero.usualAt': 'Обычно пик около {time}: примерно {n} игроков',
+  'srv.hero.wipe': 'Ближайший вайп: {when} (через {left})',
+  'srv.hero.days': '{n} дн.',
   'srv.hero.usualNow': 'Сейчас обычное время пика: примерно {n} игроков',
   'srv.hero.players': 'игроков',
   'srv.hero.offline': 'сервер недоступен',
@@ -169548,6 +169597,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
           now={nowTs}
           lastSeen={s.updatedAt}
           usual={nextUsualPeak(data.baseline ?? null, nowTs, 24)}
+          nextWipe={data.nextWipe ?? null}
         />
 
         {!s.online && s.error && !s.hasStatus && (
@@ -183650,7 +183700,7 @@ export default defineConfig({
   preview: { proxy: { '/api': process.env.COREGSM_API ?? 'http://localhost:3000', '/badge': process.env.COREGSM_API ?? 'http://localhost:3000', '/widget': process.env.COREGSM_API ?? 'http://localhost:3000' } },
   test: {
     // `npm run coverage` (and CI) fail when the coverage of the files the tests load falls below the floor: it may only be raised
-    coverage: { reporter: ['text-summary', 'text'], thresholds: { statements: 43, branches: 35, functions: 37, lines: 46 } },
+    coverage: { reporter: ['text-summary', 'text'], thresholds: { statements: 44, branches: 36, functions: 37, lines: 47 } },
   },
   build: {
     rollupOptions: {
