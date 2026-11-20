@@ -665,3 +665,9 @@ html[data-motion='reduce'] :is(.srv-record, .srv-swipe-hint, .srv-slots-bar > i.
 .pl-top { background: linear-gradient(90deg, rgb(var(--brand) / .09), transparent 70%); border-radius: var(--r-md); }
 .pl-group { padding: 12px 4px 4px; font-size: var(--fs-xs); font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: rgb(var(--mute)); }
 ul > .pl-group:first-child { padding-top: 2px; }
+
+/* seven tabs next to the side column do not fit on a laptop screen: icons go, the names stay (no tab is cut off) */
+@media (min-width: 1024px) and (max-width: 1599px) {
+  .srv-tabs > .seg-item { padding: .5rem .7rem; }
+  .srv-tabs .srv-tab-i { display: none; }
+}

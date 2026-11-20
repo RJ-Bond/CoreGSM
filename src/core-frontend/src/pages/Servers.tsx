@@ -11,6 +11,7 @@ import { useAuth } from '../auth';
 import { gameColor, gameGradient, gameLabel } from '../games';
 import { coverBackground, emblemStyle, gameBackdrop, coverUrlOf } from '../cover';
 import MaintenanceChip from '../components/MaintenanceChip';
+import LiveBadge from '../components/LiveBadge';
 import { AnimatedNumber, Burst, ErrorLine, GameAvatar, LoadError, IconServers, PageHead, Spark, StatusPill, ago, isLag, spanCaption, useSparkSpanMin, usePoll, toast, navigate, routeQuery, fmtTime, errText, useDayStats } from '../ui';
 import { connectGuide } from '../connectGuides';
 import { t, useI18n, type TKey } from '../i18n';
@@ -143,23 +144,6 @@ const FILTER_KEY = 'coregsm_server_filter';
 
 /** staggered entrance: the tile number goes to the --i custom property */
 const stagger = (i: number): CSSProperties => ({ ['--i' as string]: i });
-
-/** a small "live" indicator: pulsing dot and how fresh the data is */
-function LiveBadge({ at, onRefresh, busy }: { at: number; onRefresh: () => void; busy: boolean }) {
-  useI18n();
-  const [, tick] = useState(0);
-  useEffect(() => {
-    const t = window.setInterval(() => tick((n) => n + 1), 5000);
-    return () => window.clearInterval(t);
-  }, []);
-  if (!at) return null;
-  return (
-    <button type="button" className="srv-live" title={t('d2.srv.liveTitle')} onClick={onRefresh} aria-busy={busy || undefined}>
-      <span className="live-dot" aria-hidden />
-      {busy ? t('d2.srv.refreshing') : t('d2.srv.updated', { ago: ago(at) })}
-    </button>
-  );
-}
 
 /** a phone (under the Tailwind `sm` width): the tiles become compact rows */
 function useIsPhone(): boolean {
@@ -731,6 +715,9 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince, 
   const r = reactionOf(rx, s.id);
   const emb = emblemStyle(s.coverUrl, s.game);
   const nearFull = s.online && s.maxPlayers > 0 && s.players / s.maxPlayers >= 0.8;
+  // as many people as at the busiest moment of the day (a real crowd, not two players on a quiet server)
+  const dayStats = useDayStats(s.id);
+  const atPeak = s.online && dayStats.known && dayStats.peak >= 5 && s.players >= dayStats.peak;
   const { swallow, ...lp } = useQuickLongPress();
   const { isAdmin } = useAuth();
   const unnamed = s.name === s.address || s.name === `${s.host}:${s.port}`;
@@ -794,6 +781,7 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince, 
             <CountReact r={r}><AnimatedNumber value={s.players} className="text-[38px] font-extrabold leading-none tracking-[-0.03em]" /></CountReact>
             <span className="text-fs-xl font-bold text-mute">/ {s.maxPlayers}</span>
             <TrendChip serverId={s.id} />
+            {atPeak && <span className="srv-peak-chip" title={t('srv.tile.dayPeakHint', { n: dayStats.peak })}>★ {t('srv.tile.dayPeak')}</span>}
             {(s.playerNames?.length ?? 0) > 0 && <button type="button" className="srv-who" aria-label={t('srv.who')} title={t('srv.who')} aria-expanded={who} onClick={(e) => { e.stopPropagation(); setWho((v) => !v); }}><PlayerStack names={s.playerNames ?? []} /></button>}
             <span className={`ml-auto inline-flex items-center gap-1.5 text-fs-sm font-bold ${s.ping != null ? TONE_TEXT[pingTone(s.ping).tone] : 'text-mute'}`} title={s.ping != null ? t('d2.srv.ping', { ms: s.ping }) : undefined}>{s.ping != null && <><i className={`ping-dot ${pingTone(s.ping).tone}`} aria-hidden />{t('d2.bot.ms', { n: s.ping })}</>}</span>
           </div>

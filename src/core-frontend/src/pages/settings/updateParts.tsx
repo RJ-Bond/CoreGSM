@@ -169,9 +169,13 @@ export function NotesCard({ notes, log, logError, current, installedAt }: {
   );
 }
 
+/** how many of the latest entries the log shows until «show all» is pressed */
+const HISTORY_SHOWN = 3;
+
 /** what the panel started: updates and rollbacks, newest first */
 export function HistoryCard({ refreshKey }: { refreshKey: unknown }) {
   const [rows, setRows] = useState<UpdateHistoryItem[] | null>(null);
+  const [all, setAll] = useState(false);
   useEffect(() => {
     api<UpdateHistoryItem[]>('/update/history').then(setRows).catch(() => setRows([]));
   }, [refreshKey]);
@@ -181,7 +185,7 @@ export function HistoryCard({ refreshKey }: { refreshKey: unknown }) {
       {rows && rows.length === 0 && <p className="font-semibold text-mute">{t('upd.h.empty')}</p>}
       {rows && rows.length > 0 && (
         <ul className="divide-y divide-line rounded-2xl border border-line">
-          {rows.map((r) => (
+          {(all ? rows : rows.slice(0, HISTORY_SHOWN)).map((r) => (
             <li key={r.id} className="flex flex-wrap items-baseline gap-x-3 gap-y-1 px-4 py-2.5">
               <span className={`pill ${r.state === 'done' ? 'pill-ok' : 'pill-bad'}`}>{r.state === 'done' ? t('upd.h.ok') : t('upd.h.fail')}</span>
               <span className="font-bold">{r.kind === 'rollback' ? t('upd.h.rollback') : t('upd.h.update')}</span>
@@ -191,6 +195,11 @@ export function HistoryCard({ refreshKey }: { refreshKey: unknown }) {
             </li>
           ))}
         </ul>
+      )}
+      {rows && rows.length > HISTORY_SHOWN && (
+        <button type="button" className="btn btn-soft btn-sm mt-3" aria-expanded={all} onClick={() => setAll((v) => !v)}>
+          {all ? t('upd.h.fewer') : t('upd.h.all', { n: rows.length })}
+        </button>
       )}
     </Section>
   );

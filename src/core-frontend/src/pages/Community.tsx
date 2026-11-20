@@ -11,7 +11,8 @@ import { getPrefs, t, useI18n } from '../i18n';
 import { gameColor, gameLabel } from '../games';
 import { collapseRuns } from '../components/servers/feedRuns';
 import { busiestText, dowShort, FeedItem, HeatLegend, MiniHeat, PlayerAvatar, useCommunityLive, type Community, type TopPlayer } from '../components/servers/CommunityBento';
-import { AnimatedNumber, CopyButton, Empty, GameAvatar, MiniSpark, PageHead, ago, fmtDate, fmtDateTime, navigate, num } from '../ui';
+import LiveBadge from '../components/LiveBadge';
+import { AnimatedNumber, CopyButton, Empty, GameAvatar, MiniSpark, PageHead, fmtDate, fmtDateTime, navigate, num } from '../ui';
 import '../styles/analytics.css';
 import '../styles/community.css';
 import PollsCard from '../components/PollsCard';
@@ -52,7 +53,9 @@ function Delta({ now, prev }: { now: number; prev: number }) {
   const up = now >= prev;
   const text = prev > 0 ? `${up ? '+' : '−'}${Math.abs(Math.round(((now - prev) / prev) * 100))}%` : `+${now}`;
   if (now === prev) return <span className="cm-delta" title={t('cm.delta.same')}>{t('cm.delta.eq')}</span>;
-  return <span className={`cm-delta ${up ? 'up' : 'down'}`} title={t('cm.delta.prev', { n: prev })}><span aria-hidden>{up ? '▲' : '▼'}</span> {text}</span>;
+  // a fall is red only when it is a real one: a drop from three people to none is not an alarm
+  const calm = !up && (prev < 5 || (prev - now) / prev < 0.2);
+  return <span className={`cm-delta ${up ? 'up' : calm ? 'soft' : 'down'}`} title={t('cm.delta.prev', { n: prev })}><span aria-hidden>{up ? '▲' : '▼'}</span> {text}</span>;
 }
 
 /** a little line chart with a cursor and a tooltip; `values` are equally spaced, null = no data */
@@ -531,10 +534,7 @@ export default function CommunityPage() {
   return (
     <div className="space-y-5">
       <PageHead icon={<IconPeople />} title={t('cm.title')} subtitle={t('cm.subLive')}>
-        <button type="button" className="cm-refresh" onClick={refresh} aria-busy={busy || undefined} title={t('cm.refresh.title')}>
-          <span className="live-dot" aria-hidden />
-          {busy ? t('cm.refresh.busy') : t('cm.refresh.ago', { ago: ago(at) })}
-        </button>
+        <LiveBadge at={at} onRefresh={refresh} busy={busy} />
       </PageHead>
       <SectionNav items={nav} />
 

@@ -367,7 +367,7 @@ a.cm-time:hover { color: rgb(var(--link)); }
 .nb .nb-banner { height: auto; min-height: 9.5rem; }
 .nb.is-pinned .nb-banner { min-height: 11.5rem; }
 .nb.is-lead .nb-banner { min-height: 16rem; }
-.nb.is-lead .nb-title { font-size: clamp(1.9rem, 3.4vw, 2.6rem); }
+.nb.is-lead .nb-title { font-size: clamp(1.6rem, 2.6vw, 2.15rem); line-height: 1.12; }
 .nb.is-lead .nb-text { -webkit-line-clamp: 6; font-size: 1.125rem; }
 .nb::before { content: ''; position: absolute; inset: 0 auto 0 0; width: 4px; z-index: 3; background: var(--nw-cat, rgb(var(--brand))); pointer-events: none; }
 .nb.is-read::before { opacity: .45; }
@@ -525,3 +525,6 @@ a.cm-time:hover { color: rgb(var(--link)); }
 /* dark theme: a cover drawn by the panel is a step quieter so it does not outshine the text */
 :root[data-theme='dark'] .nw-gen:not(.nw-gen-ico) { filter: saturate(.88) brightness(.88); }
 @media (prefers-color-scheme: dark) { :root:not([data-theme='light']) .nw-gen:not(.nw-gen-ico) { filter: saturate(.88) brightness(.88); } }
+
+/* the lead card: a headline of two lines is enough, the text under it says the rest */
+.nb.is-lead .nb-title { -webkit-line-clamp: 2; line-clamp: 2; }

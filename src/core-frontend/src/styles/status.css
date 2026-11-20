@@ -129,4 +129,4 @@ html[data-motion='reduce'] .st-banner-ico::after, html[data-motion='reduce'] .st
 .st-note.is-bad { box-shadow: inset 4px 0 0 rgb(var(--bad)); background: rgb(var(--badbg)); }
 .st-note.is-ok { box-shadow: inset 4px 0 0 rgb(var(--ok)); }
 .st-sub-line { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem .9rem; font-weight: 600; color: rgb(var(--mute)); }
-.st-sub-line a { color: rgb(var(--link)); font-weight: 700; text-decoration: underline; }
+.st-sub-line a:not(.btn) { color: rgb(var(--link)); font-weight: 700; text-decoration: underline; }

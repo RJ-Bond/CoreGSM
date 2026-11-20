@@ -59,3 +59,12 @@
   .bn-stat { padding: .6rem .75rem; }
   .bn-appeal-head { padding: .75rem .9rem; }
 }
+
+/* a wide screen: the list and, beside it, who plays now (the pages that were one narrow column) */
+.with-rail { display: grid; gap: 1.25rem; }
+.live-rail { min-width: 0; }
+@media (min-width: 1280px) {
+  .with-rail { grid-template-columns: minmax(0, 1fr) 22rem; align-items: start; }
+  .live-rail { position: sticky; top: 1rem; }
+}
+@media (max-width: 1279px) { .live-rail { display: none; } }

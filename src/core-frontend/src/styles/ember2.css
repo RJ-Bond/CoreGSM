@@ -247,3 +247,6 @@ a.adm-reason:hover { filter: brightness(1.1); }
 :root[data-ember='1'] .srv-grid[data-size='s'] .srv-tile .srv-name { font-size: var(--fs-md); }
 :root[data-ember='1'] .srv-grid[data-size='s'] .srv-tile .srv-count :is(.srv-who, .srv-trend) { display: none; }
 :root[data-ember='1'] .srv-grid[data-size='s'] .srv-hover-actions { display: none; }
+
+/* a tile at the peak of its day */
+.srv-peak-chip { flex: none; align-self: center; padding: 0 7px; border-radius: var(--r-pill); font-size: var(--fs-xs); font-weight: 800; line-height: 20px; white-space: nowrap; color: rgb(var(--warn)); background: rgb(var(--warnbg)); }

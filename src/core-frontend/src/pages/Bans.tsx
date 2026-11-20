@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api';
 import { t, useI18n } from '../i18n';
+import LiveBadge from '../components/LiveBadge';
+import LiveRail from '../components/LiveRail';
 import { Empty, ErrorLine, LoadError, PageHead, ago, errText, fmtDateTime, toast, usePoll } from '../ui';
 import { useAuth } from '../auth';
 import { Switch } from '../components/Switch';
@@ -217,7 +219,7 @@ function AlertsToggle() {
 type Tab = 'active' | 'history' | 'appeals';
 
 /** the bans: the ones in force, the history, for the staff the appeals; `serverId` narrows it to one server (its tab) */
-export function BansView({ serverId = 0 }: { serverId?: number }) {
+export function BansView({ serverId = 0, onLoaded }: { serverId?: number; onLoaded?: (at: number) => void }) {
   useI18n();
   const { me } = useAuth();
   const staff = me?.role === 'admin' || me?.role === 'moderator';
@@ -228,7 +230,7 @@ export function BansView({ serverId = 0 }: { serverId?: number }) {
   const [server, setServer] = useState(serverId);
   const [q, setQ] = useState('');
   const [now, setNow] = useState(() => Date.now());
-  const load = () => api<BansData>('/bans').then((d) => { setData(d); setNow(Date.now()); setError(''); }).catch((e: Error) => setError(e.message));
+  const load = () => api<BansData>('/bans').then((d) => { setData(d); setNow(Date.now()); setError(''); onLoaded?.(Date.now()); }).catch((e: Error) => setError(e.message));
   usePoll(load, 60_000);
   useEffect(() => {
     if (tab !== 'history') return;
@@ -300,10 +302,16 @@ export function BansView({ serverId = 0 }: { serverId?: number }) {
 /** /bans: the bans that the game plugin has put in force */
 export default function BansPage() {
   useI18n();
+  const [at, setAt] = useState(0);
   return (
     <div className="bn-page">
-      <PageHead icon={<IconBan />} title={t('nav.bans')} subtitle={t('bans.subtitle')} />
-      <BansView />
+      <PageHead icon={<IconBan />} title={t('nav.bans')} subtitle={t('bans.subtitle')}>
+        <LiveBadge at={at} />
+      </PageHead>
+      <div className="with-rail">
+        <div className="min-w-0"><BansView onLoaded={setAt} /></div>
+        <LiveRail />
+      </div>
     </div>
   );
 }

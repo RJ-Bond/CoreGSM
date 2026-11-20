@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="4104a14f0921"
+COREGSM_BUILD="2ab7468d5ede"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.2.55"
+COREGSM_VERSION="1.2.56"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -49959,7 +49959,7 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend"
   cat > "$APP_DIR/core-frontend/lint-baseline.json" << '__COREGSM_EOF__'
 {
-  "eslint(no-shadow)": 42,
+  "eslint(no-shadow)": 41,
   "eslint(no-underscore-dangle)": 5,
   "jsx-a11y(click-events-have-key-events)": 8,
   "jsx-a11y(no-autofocus)": 12,
@@ -122566,7 +122566,7 @@ export default function App() {
           {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} isStaff={isStaff} isAdmin={!!isAdmin} />}
         </Suspense>
 
-        <AppFooter brand={access.brand.name} version={isStaff ? access.version : null} compact={page === 'admin' || ember} />
+        <AppFooter brand={access.brand.name} version={isStaff ? access.version : null} compact={page === 'admin' || ember} links={page !== 'admin'} />
 
         <nav
           className={`nav-bottom glass fixed inset-x-3 z-40 mx-auto max-w-md rounded-ui-xl md:hidden ${navHidden ? 'is-hidden' : ''}`}
@@ -124552,8 +124552,8 @@ describe('AppFooter', () => {
 
   it('has an svg icon for every link and for the version, all hidden from screen readers', () => {
     const html = renderToStaticMarkup(<AppFooter brand="CoreGSM" version="1.0.0.50" />);
-    expect((html.match(/<svg/g) ?? []).length).toBe(5);
-    expect((html.match(/aria-hidden="true"/g) ?? []).length).toBeGreaterThanOrEqual(5);
+    expect((html.match(/<svg/g) ?? []).length).toBe(6);
+    expect((html.match(/aria-hidden="true"/g) ?? []).length).toBeGreaterThanOrEqual(6);
   });
 
   it('the default brand leads to the project and the version to the changelog; a custom name stays plain', () => {
@@ -126726,6 +126726,7 @@ export const FootNews = () => svg(<><path d="M4 5h13a2 2 0 0 1 2 2v12H6a2 2 0 0 
 export const FootStatus = () => svg(<path d="M3 12h4l2.5 7 5-14L17 12h4" />);
 export const FootCommunity = () => svg(<><circle cx="9" cy="8" r="3.2" /><path d="M3 20c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5" /><circle cx="17" cy="9" r="2.4" /><path d="M16.5 14.6c2.6.2 4.5 2 4.5 4.9" /></>);
 export const FootTag = () => svg(<><path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8Z" /><path d="M7.5 7.5h.01" /></>);
+export const FootBans = () => svg(<><circle cx="12" cy="12" r="9" /><path d="m5.7 5.7 12.6 12.6" /></>);
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components"
   cat > "$APP_DIR/core-frontend/src/components/GameNewsParts.tsx" << '__COREGSM_EOF__'
@@ -127399,6 +127400,51 @@ export function NotFoundArt() {
       </g>
       <Sparkle x={52} y={44} /> <Sparkle x={226} y={104} s={0.8} /> <Sparkle x={40} y={110} s={0.7} />
     </Frame>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/LiveBadge.tsx" << '__COREGSM_EOF__'
+import { useEffect, useState } from 'react';
+import { t, useI18n } from '../i18n';
+import { ago } from '../ui';
+
+/** the «live» indicator in the head of a page: a pulsing dot and how fresh the data is; a click asks for fresh data when the page can */
+export default function LiveBadge({ at, onRefresh, busy = false }: { at: number; onRefresh?: () => void; busy?: boolean }) {
+  useI18n();
+  const [, tick] = useState(0);
+  useEffect(() => {
+    const id = window.setInterval(() => tick((n) => n + 1), 5000);
+    return () => window.clearInterval(id);
+  }, []);
+  if (!at) return null;
+  const text = busy ? t('d2.srv.refreshing') : t('d2.srv.updated', { ago: ago(at) });
+  if (!onRefresh) return <span className="srv-live" aria-live="off"><span className="live-dot" aria-hidden />{text}</span>;
+  return (
+    <button type="button" className="srv-live" title={t('d2.srv.liveTitle')} onClick={onRefresh} aria-busy={busy || undefined}>
+      <span className="live-dot" aria-hidden />
+      {text}
+    </button>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/LiveRail.tsx" << '__COREGSM_EOF__'
+import { type Server } from '../api';
+import { t, useI18n } from '../i18n';
+import { useApiQuery } from '../ui/query';
+import { StatusCards } from './news/NewsParts';
+
+/** a column «now on the servers» for the pages that are otherwise a single narrow list: the busiest servers with their players */
+export default function LiveRail() {
+  useI18n();
+  const { data } = useApiQuery<Server[]>('/servers', { pollMs: 30_000 });
+  if (!data || data.length === 0) return null;
+  const ids = [...data].sort((a, b) => Number(b.online) - Number(a.online) || b.players - a.players).slice(0, 8).map((s) => s.id);
+  return (
+    <aside className="live-rail" aria-label={t('nw.liveNow')}>
+      <StatusCards ids={ids} servers={data} />
+    </aside>
   );
 }
 __COREGSM_EOF__
@@ -129319,7 +129365,7 @@ import { useAppearance } from '../appearance';
 import { t, useI18n } from '../i18n';
 import { GameAvatar, UserAvatar } from '../ui';
 import { useRecentServers } from '../ui/recent';
-import { FootCommunity, FootNews, FootServers, FootStatus, FootTag } from './FooterIcons';
+import { FootBans, FootCommunity, FootNews, FootServers, FootStatus, FootTag } from './FooterIcons';
 import { MenuAdmin, MenuLogout, MenuUser } from './HeaderIcons';
 import '../styles/shell.css';
 
@@ -129410,12 +129456,20 @@ export const PROJECT_URL = 'https://github.com/RJ-Bond/CoreGSM';
 export const CHANGELOG_URL = `${PROJECT_URL}/blob/main/CHANGELOG.md`;
 const DEFAULT_BRAND = 'CoreGSM';
 
-export function AppFooter({ brand, version, compact = false }: { brand: string; version?: string | null; compact?: boolean }) {
+export function AppFooter({ brand, version, compact = false, links = false }: { brand: string; version?: string | null; compact?: boolean; links?: boolean }) {
   useI18n();
   if (compact) {
     return (
       <footer className="app-foot app-foot-compact">
         <span className="font-black">{brand}</span>
+        {links && (
+          <nav aria-label={t('nav.sections')}>
+            <a href="/status">{t('nav.status')}</a>
+            <a href="/bans">{t('nav.bans')}</a>
+            <a href="/community">{t('nav.community')}</a>
+            <a href="/api/v1/openapi.json" target="_blank" rel="noopener noreferrer">{t('foot.api')}</a>
+          </nav>
+        )}
         <span className="app-foot-status"><i aria-hidden />{t('foot.up')}</span>
         {version && <a className="app-foot-ver" href={CHANGELOG_URL} target="_blank" rel="noopener noreferrer" title={t('foot.version', { v: version })}><FootTag />{footVersionText(version)}</a>}
       </footer>
@@ -129437,6 +129491,7 @@ export function AppFooter({ brand, version, compact = false }: { brand: string; 
           <a href="/news"><FootNews />{t('nav.news')}</a>
           <a href="/status"><FootStatus />{t('nav.status')}</a>
           <a href="/community"><FootCommunity />{t('nav.community')}</a>
+          <a href="/bans"><FootBans />{t('nav.bans')}</a>
         </nav>
       </div>
       <div className="app-foot-col">
@@ -130196,7 +130251,7 @@ export default function StatusSubscribe({ servers }: { servers: { id: number }[]
   const { me } = useAuth();
   const subs = useSubscriptions(!!me);
   const [busy, setBusy] = useState(false);
-  if (!me) return <p className="st-sub-line"><a href="/login">{t('st.sub.login')}</a></p>;
+  if (!me) return <div className="st-sub-line"><a className="btn btn-soft btn-sm" href="/login">{t('st.sub.loginBtn')}</a><span>{t('st.sub.loginHint')}</span></div>;
   if (subs.unavailable || subs.list === null || servers.length === 0) return null;
   const kindsOf = (id: number): SubKind[] => normalizeKinds(subs.list?.find((s) => s.serverId === id)?.kinds);
   const on = servers.every((s) => kindsOf(s.id).includes('went_down'));
@@ -147726,6 +147781,7 @@ const en: Record<keyof typeof ru, string> = {
   'foot.tagline': 'Game server monitoring: who plays, when and where.',
   'foot.panel': 'Panel',
   'foot.up': 'Up and running',
+  'foot.api': 'API',
   'foot.changelog': 'Changelog',
   'hdr.search': 'Search',
   'hdr.searchAria': 'Search the panel (Ctrl K)',
@@ -148215,6 +148271,8 @@ const en: Record<keyof typeof ru, string> = {
   'srv.cap.taken': '{pct}% of slots taken',
   'srv.unit.ms': 'ms',
   'srv.tile.full': 'Almost full',
+  'srv.tile.dayPeak': 'Day peak',
+  'srv.tile.dayPeakHint': 'As many players as at the busiest moment of the day ({n})',
   'srv.pulse.label': 'Servers at a glance',
   'srv.pulse.ok': 'All systems running',
   'srv.pulse.okSub': '{n} server online|{n} servers online',
@@ -149870,7 +149928,8 @@ const en: Record<keyof typeof ru, string> = {
   'st.servers': '{n} server|{n} servers',
   'st.sub.none': 'Server availability and outage history for {d} days',
   'st.title': 'Status',
-  'st.sub.login': 'Sign in to get notified about server outages',
+  'st.sub.loginBtn': 'Get outage alerts',
+  'st.sub.loginHint': 'Sign in first: we tell you when a server goes down and when it is back.',
   'sd.news': 'News',
   'welcome.title': 'Welcome, {name}',
   'welcome.fav': 'Favourites',
@@ -150915,6 +150974,8 @@ const en: Record<keyof typeof ru, string> = {
   'upd.g.fix': 'Fixed',
   'upd.g.other': 'Other',
   'upd.h.title': 'Update log',
+  'upd.h.all': 'Show all ({n})',
+  'upd.h.fewer': 'Only the latest 3',
   'upd.h.empty': 'Nothing has run from the panel yet.',
   'upd.h.update': 'Update',
   'upd.h.rollback': 'Rollback',
@@ -152973,6 +153034,7 @@ const ru = {
   'foot.tagline': 'Мониторинг игровых серверов: кто играет, когда и где.',
   'foot.panel': 'Панель',
   'foot.up': 'Работает',
+  'foot.api': 'API',
   'foot.changelog': 'Список изменений',
   'hdr.search': 'Поиск',
   'hdr.searchAria': 'Поиск по панели (Ctrl K)',
@@ -153462,6 +153524,8 @@ const ru = {
   'srv.cap.taken': '{pct}% мест занято',
   'srv.unit.ms': 'мс',
   'srv.tile.full': 'Почти полон',
+  'srv.tile.dayPeak': 'Пик дня',
+  'srv.tile.dayPeakHint': 'Столько же игроков, сколько в самый людный момент за сутки ({n})',
   'srv.pulse.label': 'Сводка по серверам',
   'srv.pulse.ok': 'Всё работает',
   'srv.pulse.okSub': '{n} сервер онлайн|{n} сервера онлайн|{n} серверов онлайн',
@@ -155117,7 +155181,8 @@ const ru = {
   'st.servers': '{n} сервер|{n} сервера|{n} серверов',
   'st.sub.none': 'Доступность серверов и история сбоев за {d} дн.',
   'st.title': 'Статус',
-  'st.sub.login': 'Войдите, чтобы получать уведомления о сбоях серверов',
+  'st.sub.loginBtn': 'Получать уведомления о сбоях',
+  'st.sub.loginHint': 'Для этого нужно войти: напишем, когда сервер упадёт и когда вернётся.',
   'sd.news': 'Новость',
   'welcome.title': 'Добро пожаловать, {name}',
   'welcome.fav': 'Избранное',
@@ -156162,6 +156227,8 @@ const ru = {
   'upd.g.fix': 'Исправлено',
   'upd.g.other': 'Прочее',
   'upd.h.title': 'Журнал обновлений',
+  'upd.h.all': 'Показать все ({n})',
+  'upd.h.fewer': 'Только последние 3',
   'upd.h.empty': 'Из панели пока ничего не запускалось.',
   'upd.h.update': 'Обновление',
   'upd.h.rollback': 'Откат',
@@ -161143,6 +161210,8 @@ __COREGSM_EOF__
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api';
 import { t, useI18n } from '../i18n';
+import LiveBadge from '../components/LiveBadge';
+import LiveRail from '../components/LiveRail';
 import { Empty, ErrorLine, LoadError, PageHead, ago, errText, fmtDateTime, toast, usePoll } from '../ui';
 import { useAuth } from '../auth';
 import { Switch } from '../components/Switch';
@@ -161359,7 +161428,7 @@ function AlertsToggle() {
 type Tab = 'active' | 'history' | 'appeals';
 
 /** the bans: the ones in force, the history, for the staff the appeals; `serverId` narrows it to one server (its tab) */
-export function BansView({ serverId = 0 }: { serverId?: number }) {
+export function BansView({ serverId = 0, onLoaded }: { serverId?: number; onLoaded?: (at: number) => void }) {
   useI18n();
   const { me } = useAuth();
   const staff = me?.role === 'admin' || me?.role === 'moderator';
@@ -161370,7 +161439,7 @@ export function BansView({ serverId = 0 }: { serverId?: number }) {
   const [server, setServer] = useState(serverId);
   const [q, setQ] = useState('');
   const [now, setNow] = useState(() => Date.now());
-  const load = () => api<BansData>('/bans').then((d) => { setData(d); setNow(Date.now()); setError(''); }).catch((e: Error) => setError(e.message));
+  const load = () => api<BansData>('/bans').then((d) => { setData(d); setNow(Date.now()); setError(''); onLoaded?.(Date.now()); }).catch((e: Error) => setError(e.message));
   usePoll(load, 60_000);
   useEffect(() => {
     if (tab !== 'history') return;
@@ -161442,10 +161511,16 @@ export function BansView({ serverId = 0 }: { serverId?: number }) {
 /** /bans: the bans that the game plugin has put in force */
 export default function BansPage() {
   useI18n();
+  const [at, setAt] = useState(0);
   return (
     <div className="bn-page">
-      <PageHead icon={<IconBan />} title={t('nav.bans')} subtitle={t('bans.subtitle')} />
-      <BansView />
+      <PageHead icon={<IconBan />} title={t('nav.bans')} subtitle={t('bans.subtitle')}>
+        <LiveBadge at={at} />
+      </PageHead>
+      <div className="with-rail">
+        <div className="min-w-0"><BansView onLoaded={setAt} /></div>
+        <LiveRail />
+      </div>
     </div>
   );
 }
@@ -161616,7 +161691,8 @@ import { getPrefs, t, useI18n } from '../i18n';
 import { gameColor, gameLabel } from '../games';
 import { collapseRuns } from '../components/servers/feedRuns';
 import { busiestText, dowShort, FeedItem, HeatLegend, MiniHeat, PlayerAvatar, useCommunityLive, type Community, type TopPlayer } from '../components/servers/CommunityBento';
-import { AnimatedNumber, CopyButton, Empty, GameAvatar, MiniSpark, PageHead, ago, fmtDate, fmtDateTime, navigate, num } from '../ui';
+import LiveBadge from '../components/LiveBadge';
+import { AnimatedNumber, CopyButton, Empty, GameAvatar, MiniSpark, PageHead, fmtDate, fmtDateTime, navigate, num } from '../ui';
 import '../styles/analytics.css';
 import '../styles/community.css';
 import PollsCard from '../components/PollsCard';
@@ -161657,7 +161733,9 @@ function Delta({ now, prev }: { now: number; prev: number }) {
   const up = now >= prev;
   const text = prev > 0 ? `${up ? '+' : '−'}${Math.abs(Math.round(((now - prev) / prev) * 100))}%` : `+${now}`;
   if (now === prev) return <span className="cm-delta" title={t('cm.delta.same')}>{t('cm.delta.eq')}</span>;
-  return <span className={`cm-delta ${up ? 'up' : 'down'}`} title={t('cm.delta.prev', { n: prev })}><span aria-hidden>{up ? '▲' : '▼'}</span> {text}</span>;
+  // a fall is red only when it is a real one: a drop from three people to none is not an alarm
+  const calm = !up && (prev < 5 || (prev - now) / prev < 0.2);
+  return <span className={`cm-delta ${up ? 'up' : calm ? 'soft' : 'down'}`} title={t('cm.delta.prev', { n: prev })}><span aria-hidden>{up ? '▲' : '▼'}</span> {text}</span>;
 }
 
 /** a little line chart with a cursor and a tooltip; `values` are equally spaced, null = no data */
@@ -162136,10 +162214,7 @@ export default function CommunityPage() {
   return (
     <div className="space-y-5">
       <PageHead icon={<IconPeople />} title={t('cm.title')} subtitle={t('cm.subLive')}>
-        <button type="button" className="cm-refresh" onClick={refresh} aria-busy={busy || undefined} title={t('cm.refresh.title')}>
-          <span className="live-dot" aria-hidden />
-          {busy ? t('cm.refresh.busy') : t('cm.refresh.ago', { ago: ago(at) })}
-        </button>
+        <LiveBadge at={at} onRefresh={refresh} busy={busy} />
       </PageHead>
       <SectionNav items={nav} />
 
@@ -169144,23 +169219,6 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
           lastSeen={s.updatedAt}
         />
 
-        <Passport
-          d={{
-            game: gameLabel(s.game),
-            version: realVersion,
-            flag,
-            country: cName,
-            map: s.map,
-            address: s.address,
-            ping: s.ping,
-            online: s.online,
-            createdAt: data.createdAt ?? null,
-            lastSeen: s.updatedAt,
-            mode,
-            discord: discordLinks,
-          }}
-        />
-
         {!s.online && s.error && !s.hasStatus && (
           <p className="relative mt-3.5 rounded-2xl bg-black/25 px-4 py-2.5 text-sm font-bold">{s.error}</p>
         )}
@@ -169168,7 +169226,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
         {/* one main button; copy and subscribe are equal glass ones; the rest lives in «Ещё».
             On phones «Подключиться» takes the whole first row; once these buttons scroll away a small bar with it
             (and «Подписаться») floats above the bottom navigation. */}
-        <div ref={actionsRef} className="srv-actions relative mt-4 grid grid-cols-[minmax(0,1fr)_auto] gap-2 sm:flex sm:flex-wrap sm:items-center">
+        <div ref={actionsRef} className="srv-actions relative mt-4 mb-1 grid grid-cols-[minmax(0,1fr)_auto] gap-2 sm:flex sm:flex-wrap sm:items-center">
           <a className="btn-cta srv-cta max-sm:col-span-2" href={connectHref} onClick={onConnect}>
             <span>{connectLabel}</span>
             {copyInstead && <small className="srv-cta-addr">{s.address}</small>}
@@ -169193,6 +169251,23 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
             <MoreMenu items={moreItems} />
           </div>
         </div>
+
+        <Passport
+          d={{
+            game: gameLabel(s.game),
+            version: realVersion,
+            flag,
+            country: cName,
+            map: s.map,
+            address: s.address,
+            ping: s.ping,
+            online: s.online,
+            createdAt: data.createdAt ?? null,
+            lastSeen: s.updatedAt,
+            mode,
+            discord: discordLinks,
+          }}
+        />
       </article>
 
       <div className="srv-main min-w-0 space-y-3.5">
@@ -169228,7 +169303,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
 
       {swipeHint && <p className="srv-swipe-hint" role="status">{t('d2.sd.swipe')}</p>}
 
-      <h2 className="srv-tabhead">{t(TAB_LIST.find((x) => x.id === tab)?.label ?? 'd2.tabs.overview')}<span>{s.name}</span></h2>
+      <h2 className="sr-only">{t(TAB_LIST.find((x) => x.id === tab)?.label ?? 'd2.tabs.overview')}<span>{s.name}</span></h2>
 
       <div key={tab || 'overview'} className={slide.dir ? `tab-slide-${slide.dir}` : undefined} role="tabpanel" id={panelDomId(tab)} aria-labelledby={tabDomId(tab)} {...swipe}>
         <BlockBoundary label={tab || 'overview'}>{panel}</BlockBoundary>
@@ -169530,6 +169605,7 @@ import { useAuth } from '../auth';
 import { gameColor, gameGradient, gameLabel } from '../games';
 import { coverBackground, emblemStyle, gameBackdrop, coverUrlOf } from '../cover';
 import MaintenanceChip from '../components/MaintenanceChip';
+import LiveBadge from '../components/LiveBadge';
 import { AnimatedNumber, Burst, ErrorLine, GameAvatar, LoadError, IconServers, PageHead, Spark, StatusPill, ago, isLag, spanCaption, useSparkSpanMin, usePoll, toast, navigate, routeQuery, fmtTime, errText, useDayStats } from '../ui';
 import { connectGuide } from '../connectGuides';
 import { t, useI18n, type TKey } from '../i18n';
@@ -169662,23 +169738,6 @@ const FILTER_KEY = 'coregsm_server_filter';
 
 /** staggered entrance: the tile number goes to the --i custom property */
 const stagger = (i: number): CSSProperties => ({ ['--i' as string]: i });
-
-/** a small "live" indicator: pulsing dot and how fresh the data is */
-function LiveBadge({ at, onRefresh, busy }: { at: number; onRefresh: () => void; busy: boolean }) {
-  useI18n();
-  const [, tick] = useState(0);
-  useEffect(() => {
-    const t = window.setInterval(() => tick((n) => n + 1), 5000);
-    return () => window.clearInterval(t);
-  }, []);
-  if (!at) return null;
-  return (
-    <button type="button" className="srv-live" title={t('d2.srv.liveTitle')} onClick={onRefresh} aria-busy={busy || undefined}>
-      <span className="live-dot" aria-hidden />
-      {busy ? t('d2.srv.refreshing') : t('d2.srv.updated', { ago: ago(at) })}
-    </button>
-  );
-}
 
 /** a phone (under the Tailwind `sm` width): the tiles become compact rows */
 function useIsPhone(): boolean {
@@ -170250,6 +170309,9 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince, 
   const r = reactionOf(rx, s.id);
   const emb = emblemStyle(s.coverUrl, s.game);
   const nearFull = s.online && s.maxPlayers > 0 && s.players / s.maxPlayers >= 0.8;
+  // as many people as at the busiest moment of the day (a real crowd, not two players on a quiet server)
+  const dayStats = useDayStats(s.id);
+  const atPeak = s.online && dayStats.known && dayStats.peak >= 5 && s.players >= dayStats.peak;
   const { swallow, ...lp } = useQuickLongPress();
   const { isAdmin } = useAuth();
   const unnamed = s.name === s.address || s.name === `${s.host}:${s.port}`;
@@ -170313,6 +170375,7 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince, 
             <CountReact r={r}><AnimatedNumber value={s.players} className="text-[38px] font-extrabold leading-none tracking-[-0.03em]" /></CountReact>
             <span className="text-fs-xl font-bold text-mute">/ {s.maxPlayers}</span>
             <TrendChip serverId={s.id} />
+            {atPeak && <span className="srv-peak-chip" title={t('srv.tile.dayPeakHint', { n: dayStats.peak })}>★ {t('srv.tile.dayPeak')}</span>}
             {(s.playerNames?.length ?? 0) > 0 && <button type="button" className="srv-who" aria-label={t('srv.who')} title={t('srv.who')} aria-expanded={who} onClick={(e) => { e.stopPropagation(); setWho((v) => !v); }}><PlayerStack names={s.playerNames ?? []} /></button>}
             <span className={`ml-auto inline-flex items-center gap-1.5 text-fs-sm font-bold ${s.ping != null ? TONE_TEXT[pingTone(s.ping).tone] : 'text-mute'}`} title={s.ping != null ? t('d2.srv.ping', { ms: s.ping }) : undefined}>{s.ping != null && <><i className={`ping-dot ${pingTone(s.ping).tone}`} aria-hidden />{t('d2.bot.ms', { n: s.ping })}</>}</span>
           </div>
@@ -174208,9 +174271,13 @@ export function NotesCard({ notes, log, logError, current, installedAt }: {
   );
 }
 
+/** how many of the latest entries the log shows until «show all» is pressed */
+const HISTORY_SHOWN = 3;
+
 /** what the panel started: updates and rollbacks, newest first */
 export function HistoryCard({ refreshKey }: { refreshKey: unknown }) {
   const [rows, setRows] = useState<UpdateHistoryItem[] | null>(null);
+  const [all, setAll] = useState(false);
   useEffect(() => {
     api<UpdateHistoryItem[]>('/update/history').then(setRows).catch(() => setRows([]));
   }, [refreshKey]);
@@ -174220,7 +174287,7 @@ export function HistoryCard({ refreshKey }: { refreshKey: unknown }) {
       {rows && rows.length === 0 && <p className="font-semibold text-mute">{t('upd.h.empty')}</p>}
       {rows && rows.length > 0 && (
         <ul className="divide-y divide-line rounded-2xl border border-line">
-          {rows.map((r) => (
+          {(all ? rows : rows.slice(0, HISTORY_SHOWN)).map((r) => (
             <li key={r.id} className="flex flex-wrap items-baseline gap-x-3 gap-y-1 px-4 py-2.5">
               <span className={`pill ${r.state === 'done' ? 'pill-ok' : 'pill-bad'}`}>{r.state === 'done' ? t('upd.h.ok') : t('upd.h.fail')}</span>
               <span className="font-bold">{r.kind === 'rollback' ? t('upd.h.rollback') : t('upd.h.update')}</span>
@@ -174230,6 +174297,11 @@ export function HistoryCard({ refreshKey }: { refreshKey: unknown }) {
             </li>
           ))}
         </ul>
+      )}
+      {rows && rows.length > HISTORY_SHOWN && (
+        <button type="button" className="btn btn-soft btn-sm mt-3" aria-expanded={all} onClick={() => setAll((v) => !v)}>
+          {all ? t('upd.h.fewer') : t('upd.h.all', { n: rows.length })}
+        </button>
       )}
     </Section>
   );
@@ -175493,6 +175565,15 @@ __COREGSM_EOF__
   .bn-stat { padding: .6rem .75rem; }
   .bn-appeal-head { padding: .75rem .9rem; }
 }
+
+/* a wide screen: the list and, beside it, who plays now (the pages that were one narrow column) */
+.with-rail { display: grid; gap: 1.25rem; }
+.live-rail { min-width: 0; }
+@media (min-width: 1280px) {
+  .with-rail { grid-template-columns: minmax(0, 1fr) 22rem; align-items: start; }
+  .live-rail { position: sticky; top: 1rem; }
+}
+@media (max-width: 1279px) { .live-rail { display: none; } }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/buttons.css" << '__COREGSM_EOF__'
@@ -175968,6 +176049,7 @@ html[data-motion='reduce'] .cm-feed-i { animation: none; }
 .cm-delta { display: inline-flex; align-items: baseline; gap: 3px; font-size: var(--fs-xs); font-weight: 800; font-variant-numeric: tabular-nums; color: rgb(var(--mute)); }
 .cm-delta.up { color: rgb(var(--ok)); }
 .cm-delta.down { color: rgb(var(--bad)); }
+.cm-delta.soft { color: rgb(var(--mute)); }
 .cm-hero-main { flex: 1 1 22rem; min-width: 0; }
 .cm-hero-stats > div { display: flex; flex-direction: column; align-items: flex-start; }
 .cm-stat-link { font: inherit; color: inherit; text-decoration: underline dotted; text-underline-offset: 4px; }
@@ -176724,6 +176806,12 @@ html[data-motion='reduce'] :is(.srv-record, .srv-swipe-hint, .srv-slots-bar > i.
 .pl-top { background: linear-gradient(90deg, rgb(var(--brand) / .09), transparent 70%); border-radius: var(--r-md); }
 .pl-group { padding: 12px 4px 4px; font-size: var(--fs-xs); font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: rgb(var(--mute)); }
 ul > .pl-group:first-child { padding-top: 2px; }
+
+/* seven tabs next to the side column do not fit on a laptop screen: icons go, the names stay (no tab is cut off) */
+@media (min-width: 1024px) and (max-width: 1599px) {
+  .srv-tabs > .seg-item { padding: .5rem .7rem; }
+  .srv-tabs .srv-tab-i { display: none; }
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/ember.css" << '__COREGSM_EOF__'
@@ -177935,6 +178023,9 @@ a.adm-reason:hover { filter: brightness(1.1); }
 :root[data-ember='1'] .srv-grid[data-size='s'] .srv-tile .srv-name { font-size: var(--fs-md); }
 :root[data-ember='1'] .srv-grid[data-size='s'] .srv-tile .srv-count :is(.srv-who, .srv-trend) { display: none; }
 :root[data-ember='1'] .srv-grid[data-size='s'] .srv-hover-actions { display: none; }
+
+/* a tile at the peak of its day */
+.srv-peak-chip { flex: none; align-self: center; padding: 0 7px; border-radius: var(--r-pill); font-size: var(--fs-xs); font-weight: 800; line-height: 20px; white-space: nowrap; color: rgb(var(--warn)); background: rgb(var(--warnbg)); }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/emberScale.test.ts" << '__COREGSM_EOF__'
@@ -178476,7 +178567,7 @@ a.cm-time:hover { color: rgb(var(--link)); }
 .nb .nb-banner { height: auto; min-height: 9.5rem; }
 .nb.is-pinned .nb-banner { min-height: 11.5rem; }
 .nb.is-lead .nb-banner { min-height: 16rem; }
-.nb.is-lead .nb-title { font-size: clamp(1.9rem, 3.4vw, 2.6rem); }
+.nb.is-lead .nb-title { font-size: clamp(1.6rem, 2.6vw, 2.15rem); line-height: 1.12; }
 .nb.is-lead .nb-text { -webkit-line-clamp: 6; font-size: 1.125rem; }
 .nb::before { content: ''; position: absolute; inset: 0 auto 0 0; width: 4px; z-index: 3; background: var(--nw-cat, rgb(var(--brand))); pointer-events: none; }
 .nb.is-read::before { opacity: .45; }
@@ -178634,6 +178725,9 @@ a.cm-time:hover { color: rgb(var(--link)); }
 /* dark theme: a cover drawn by the panel is a step quieter so it does not outshine the text */
 :root[data-theme='dark'] .nw-gen:not(.nw-gen-ico) { filter: saturate(.88) brightness(.88); }
 @media (prefers-color-scheme: dark) { :root:not([data-theme='light']) .nw-gen:not(.nw-gen-ico) { filter: saturate(.88) brightness(.88); } }
+
+/* the lead card: a headline of two lines is enough, the text under it says the rest */
+.nb.is-lead .nb-title { -webkit-line-clamp: 2; line-clamp: 2; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/news.css" << '__COREGSM_EOF__'
@@ -180388,7 +180482,7 @@ html[data-motion='reduce'] .st-banner-ico::after, html[data-motion='reduce'] .st
 .st-note.is-bad { box-shadow: inset 4px 0 0 rgb(var(--bad)); background: rgb(var(--badbg)); }
 .st-note.is-ok { box-shadow: inset 4px 0 0 rgb(var(--ok)); }
 .st-sub-line { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem .9rem; font-weight: 600; color: rgb(var(--mute)); }
-.st-sub-line a { color: rgb(var(--link)); font-weight: 700; text-decoration: underline; }
+.st-sub-line a:not(.btn) { color: rgb(var(--link)); font-weight: 700; text-decoration: underline; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/system.css" << '__COREGSM_EOF__'

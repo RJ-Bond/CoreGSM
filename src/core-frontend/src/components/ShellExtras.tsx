@@ -9,7 +9,7 @@ import { useAppearance } from '../appearance';
 import { t, useI18n } from '../i18n';
 import { GameAvatar, UserAvatar } from '../ui';
 import { useRecentServers } from '../ui/recent';
-import { FootCommunity, FootNews, FootServers, FootStatus, FootTag } from './FooterIcons';
+import { FootBans, FootCommunity, FootNews, FootServers, FootStatus, FootTag } from './FooterIcons';
 import { MenuAdmin, MenuLogout, MenuUser } from './HeaderIcons';
 import '../styles/shell.css';
 
@@ -100,12 +100,20 @@ export const PROJECT_URL = 'https://github.com/RJ-Bond/CoreGSM';
 export const CHANGELOG_URL = `${PROJECT_URL}/blob/main/CHANGELOG.md`;
 const DEFAULT_BRAND = 'CoreGSM';
 
-export function AppFooter({ brand, version, compact = false }: { brand: string; version?: string | null; compact?: boolean }) {
+export function AppFooter({ brand, version, compact = false, links = false }: { brand: string; version?: string | null; compact?: boolean; links?: boolean }) {
   useI18n();
   if (compact) {
     return (
       <footer className="app-foot app-foot-compact">
         <span className="font-black">{brand}</span>
+        {links && (
+          <nav aria-label={t('nav.sections')}>
+            <a href="/status">{t('nav.status')}</a>
+            <a href="/bans">{t('nav.bans')}</a>
+            <a href="/community">{t('nav.community')}</a>
+            <a href="/api/v1/openapi.json" target="_blank" rel="noopener noreferrer">{t('foot.api')}</a>
+          </nav>
+        )}
         <span className="app-foot-status"><i aria-hidden />{t('foot.up')}</span>
         {version && <a className="app-foot-ver" href={CHANGELOG_URL} target="_blank" rel="noopener noreferrer" title={t('foot.version', { v: version })}><FootTag />{footVersionText(version)}</a>}
       </footer>
@@ -127,6 +135,7 @@ export function AppFooter({ brand, version, compact = false }: { brand: string; 
           <a href="/news"><FootNews />{t('nav.news')}</a>
           <a href="/status"><FootStatus />{t('nav.status')}</a>
           <a href="/community"><FootCommunity />{t('nav.community')}</a>
+          <a href="/bans"><FootBans />{t('nav.bans')}</a>
         </nav>
       </div>
       <div className="app-foot-col">

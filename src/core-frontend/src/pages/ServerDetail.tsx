@@ -682,23 +682,6 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
           lastSeen={s.updatedAt}
         />
 
-        <Passport
-          d={{
-            game: gameLabel(s.game),
-            version: realVersion,
-            flag,
-            country: cName,
-            map: s.map,
-            address: s.address,
-            ping: s.ping,
-            online: s.online,
-            createdAt: data.createdAt ?? null,
-            lastSeen: s.updatedAt,
-            mode,
-            discord: discordLinks,
-          }}
-        />
-
         {!s.online && s.error && !s.hasStatus && (
           <p className="relative mt-3.5 rounded-2xl bg-black/25 px-4 py-2.5 text-sm font-bold">{s.error}</p>
         )}
@@ -706,7 +689,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
         {/* one main button; copy and subscribe are equal glass ones; the rest lives in «Ещё».
             On phones «Подключиться» takes the whole first row; once these buttons scroll away a small bar with it
             (and «Подписаться») floats above the bottom navigation. */}
-        <div ref={actionsRef} className="srv-actions relative mt-4 grid grid-cols-[minmax(0,1fr)_auto] gap-2 sm:flex sm:flex-wrap sm:items-center">
+        <div ref={actionsRef} className="srv-actions relative mt-4 mb-1 grid grid-cols-[minmax(0,1fr)_auto] gap-2 sm:flex sm:flex-wrap sm:items-center">
           <a className="btn-cta srv-cta max-sm:col-span-2" href={connectHref} onClick={onConnect}>
             <span>{connectLabel}</span>
             {copyInstead && <small className="srv-cta-addr">{s.address}</small>}
@@ -731,6 +714,23 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
             <MoreMenu items={moreItems} />
           </div>
         </div>
+
+        <Passport
+          d={{
+            game: gameLabel(s.game),
+            version: realVersion,
+            flag,
+            country: cName,
+            map: s.map,
+            address: s.address,
+            ping: s.ping,
+            online: s.online,
+            createdAt: data.createdAt ?? null,
+            lastSeen: s.updatedAt,
+            mode,
+            discord: discordLinks,
+          }}
+        />
       </article>
 
       <div className="srv-main min-w-0 space-y-3.5">
@@ -766,7 +766,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
 
       {swipeHint && <p className="srv-swipe-hint" role="status">{t('d2.sd.swipe')}</p>}
 
-      <h2 className="srv-tabhead">{t(TAB_LIST.find((x) => x.id === tab)?.label ?? 'd2.tabs.overview')}<span>{s.name}</span></h2>
+      <h2 className="sr-only">{t(TAB_LIST.find((x) => x.id === tab)?.label ?? 'd2.tabs.overview')}<span>{s.name}</span></h2>
 
       <div key={tab || 'overview'} className={slide.dir ? `tab-slide-${slide.dir}` : undefined} role="tabpanel" id={panelDomId(tab)} aria-labelledby={tabDomId(tab)} {...swipe}>
         <BlockBoundary label={tab || 'overview'}>{panel}</BlockBoundary>

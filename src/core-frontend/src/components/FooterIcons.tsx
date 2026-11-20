@@ -12,3 +12,4 @@ export const FootNews = () => svg(<><path d="M4 5h13a2 2 0 0 1 2 2v12H6a2 2 0 0 
 export const FootStatus = () => svg(<path d="M3 12h4l2.5 7 5-14L17 12h4" />);
 export const FootCommunity = () => svg(<><circle cx="9" cy="8" r="3.2" /><path d="M3 20c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5" /><circle cx="17" cy="9" r="2.4" /><path d="M16.5 14.6c2.6.2 4.5 2 4.5 4.9" /></>);
 export const FootTag = () => svg(<><path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8Z" /><path d="M7.5 7.5h.01" /></>);
+export const FootBans = () => svg(<><circle cx="12" cy="12" r="9" /><path d="m5.7 5.7 12.6 12.6" /></>);

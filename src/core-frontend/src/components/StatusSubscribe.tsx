@@ -13,7 +13,7 @@ export default function StatusSubscribe({ servers }: { servers: { id: number }[]
   const { me } = useAuth();
   const subs = useSubscriptions(!!me);
   const [busy, setBusy] = useState(false);
-  if (!me) return <p className="st-sub-line"><a href="/login">{t('st.sub.login')}</a></p>;
+  if (!me) return <div className="st-sub-line"><a className="btn btn-soft btn-sm" href="/login">{t('st.sub.loginBtn')}</a><span>{t('st.sub.loginHint')}</span></div>;
   if (subs.unavailable || subs.list === null || servers.length === 0) return null;
   const kindsOf = (id: number): SubKind[] => normalizeKinds(subs.list?.find((s) => s.serverId === id)?.kinds);
   const on = servers.every((s) => kindsOf(s.id).includes('went_down'));
