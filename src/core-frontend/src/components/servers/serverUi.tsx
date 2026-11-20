@@ -109,7 +109,7 @@ export function CapacityBar({ players, max, color, onDark = false, big = false, 
       <div className="flex items-center gap-2">
         <div
           className={`srv-cap ${onDark ? 'on-dark' : ''} ${level} ${big ? 'big' : ''}`}
-          style={{ ['--cap' as string]: color, ...(max > 1 && max <= 40 ? { ['--slots' as string]: max } : {}) }}
+          style={{ ['--cap' as string]: color, ...(max > 1 && max <= 16 ? { ['--slots' as string]: max } : {}) }}
           role="meter"
           aria-label={t('srv.cap.label')}
           aria-valuemin={0}
@@ -274,6 +274,8 @@ export function ListSkeleton() {
 }
 
 /** the address of a server as a button: one tap copies it (the card around it is a link, so the click stays here) */
+const hostOf = (address: string): string => address.replace(/:d+$/, '');
+
 export function AddrCopy({ address, className = '', split = false }: { address: string; className?: string; split?: boolean }) {
   useI18n();
   const copy = async (e: { stopPropagation: () => void; preventDefault: () => void }) => {
@@ -284,7 +286,7 @@ export function AddrCopy({ address, className = '', split = false }: { address: 
   return (
     <button type="button" className="srv-addr-copy" title={t('srv.addr.copy')} aria-label={`${t('srv.addr.copy')}: ${address}`} onClick={(e) => void copy(e)}>
       {split && /:\d+$/.test(address)
-        ? <span className={`${className} srv-addr-split`}><span className="srv-addr-host">{address.replace(/:\d+$/, '')}</span><span className="srv-addr-port">{/:\d+$/.exec(address)?.[0]}</span></span>
+        ? <span className={`${className} srv-addr-split`}><span className="srv-addr-host"><span className="srv-addr-head">{hostOf(address).slice(0, -7)}</span><span className="srv-addr-tail">{hostOf(address).slice(-7)}</span></span><span className="srv-addr-port">{/:\d+$/.exec(address)?.[0]}</span></span>
         : <span className={className}>{address}</span>}
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V6a2 2 0 0 1 2-2h9" /></svg>
     </button>
@@ -306,8 +308,10 @@ export function TrendChip({ serverId, onDark = false, className = '' }: { server
   useI18n();
   const d = useHourTrend(serverId);
   if (d == null || d === 0) return null;
+  // a small fall (two players left) is not an alarm: red only from five
+  const calm = d < 0 && d > -5;
   return (
-    <span className={`srv-trend ${d > 0 ? 'up' : 'down'} ${onDark ? 'on-dark' : ''} ${className}`} title={t('srv.trend.hour')}>
+    <span className={`srv-trend ${d > 0 ? 'up' : calm ? 'calm' : 'down'} ${onDark ? 'on-dark' : ''} ${className}`} title={t('srv.trend.hour')}>
       <span aria-hidden>{d > 0 ? '▲' : '▼'}</span> {d > 0 ? `+${d}` : `−${-d}`} <small>{t('srv.trend.hour')}</small>
     </span>
   );

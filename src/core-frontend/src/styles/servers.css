@@ -660,3 +660,9 @@ html[data-motion='reduce'] .srv-new-chev, html[data-motion='reduce'] .srv-check,
   .srv-td-fav { grid-area: fav; }
   .srv-td-ping::before, .srv-td-up::before { content: attr(data-label) ' '; font-size: var(--fs-xs); font-weight: 650; text-transform: uppercase; letter-spacing: .04em; color: rgb(var(--mute)); margin-right: 4px; }
 }
+
+/* the tile: a small fall is not red, the end of the address stays visible, a lone player is named, the uptime says what it is */
+.srv-trend.calm { color: rgb(var(--mute)); }
+.srv-trend.on-dark.calm { color: rgb(255 255 255 / .75); }
+.srv-who-one { display: inline-block; max-width: 6.5rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 8px; border-radius: var(--r-pill); font-size: var(--fs-xs); font-weight: 800; line-height: 22px; background: rgb(var(--soft)); color: rgb(var(--ink)); }
+.srv-up-l { font-size: .68rem; font-weight: 700; color: rgb(var(--mute)); }

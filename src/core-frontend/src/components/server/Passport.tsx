@@ -65,7 +65,7 @@ export default function Passport({ d }: { d: PassportData }) {
   };
   const pt = d.ping != null && d.online ? pingTone(d.ping) : null;
   return (
-    <section className="relative mt-3.5" aria-label={t('d2.pp.label')}>
+    <section className="srv-passport relative mt-3.5" aria-label={t('d2.pp.label')}>
       <ul className="pp-ribbon">
         <Chip k={t('d2.sf.game')} icon={<path d="M6 12h4M8 10v4M15 11.5h.01M18 13.5h.01M7 7h10a4 4 0 0 1 4 4v2a4 4 0 0 1-4 4h-1.5l-2-2h-3l-2 2H7a4 4 0 0 1-4-4v-2a4 4 0 0 1 4-4z" />}>{d.game}</Chip>
         {/* a fact the server does not report is left out instead of showing a dash */}

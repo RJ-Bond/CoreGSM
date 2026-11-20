@@ -16,6 +16,10 @@ interface language; the GitHub release text is built from the section of the ver
 
 ## Не выпущено | Unreleased
 
+### ✨ Новое | New
+- 🖥 Страница сервера переделана: шапка на всю ширину (имя, число игроков, «Подключиться» и адрес, факты справа), под ней вкладки и содержимое на всю ширину; показатели в один ряд, крупный график, игроки сеткой ников, события и отзывы ниже, отдельный тикер убран | The server page is redone: a full-width header (name, player count, «Connect» and the address, facts on the right), the tabs and the content use the whole width; the figures in one row, a big chart, players as a grid of nicks, events and reviews below, the separate ticker is gone
+- 🧩 Плитки серверов: адрес обрезается с начала, порт и конец хоста видны; «аптайм» подписан; у одного игрока вместо буквы ник; малое падение за час серым, не красным; у пустого сервера шкала и мини-график; рамка в цвет игры при наведении; широкая плитка по центру | Server tiles: the address is cut at the beginning so the port and the end of the host stay; the uptime is labelled; a lone player is named instead of a letter; a small fall in the last hour is grey, not red; an empty server gets the bar and the mini chart; a frame in the game colour on hover; the wide tile is centred
+
 ## 1.2.56 · 20.11.2026
 
 ### ✨ Новое | New

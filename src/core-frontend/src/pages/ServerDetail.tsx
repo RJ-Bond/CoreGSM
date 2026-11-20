@@ -571,31 +571,22 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
       <div className="space-y-3.5">
         <ServerNews serverId={id} />
         <PinnedNotice serverId={id} notice={data.notice ?? null} canEdit={canEdit} onChange={(n) => setData((d) => (d ? { ...d, notice: n } : d))} />
-        {!ember && (
-          <SectionCard id="ov-stats" state={sections} style={stagger(0)} title={t('d2.sd.sec.stats')}>
+        <div className="grid gap-3.5 lg:grid-cols-12">
+          {/* the figures in one row under the header, then the chart over the whole width */}
+          <SectionCard id="ov-stats" state={sections} className="lg:col-span-12" style={stagger(0)} title={t('d2.sd.sec.stats')}>
             {metrics(false)}
           </SectionCard>
-        )}
-        <div className="grid gap-3.5 lg:grid-cols-12">
-          {/* Ember: the figures stand beside the chart in one row, not above it */}
-          {ember && (
-            <SectionCard id="ov-stats" state={sections} className="lg:col-span-4" style={stagger(0)} title={t('d2.sd.sec.stats')}>
-              {metrics(false)}
-            </SectionCard>
-          )}
-          {chartTile(1, false, ember ? 'lg:col-span-8' : 'lg:col-span-12')}
-          <div className="space-y-3.5 lg:col-span-5 lg:col-start-1 lg:flex lg:flex-col lg:gap-3.5 lg:space-y-0 lg:self-stretch max-lg:contents">
-          <SectionCard id="ov-events" state={sections} className={`max-lg:order-1 ${events.length === 0 ? 'max-lg:hidden' : ''}`} style={stagger(2)} title={t('d2.sd.recent')}>
+          {chartTile(1, false, 'lg:col-span-12')}
+          <SectionCard id="ov-players" state={sections} className="lg:col-span-12" style={stagger(3)} title={<span className="inline-flex items-center whitespace-nowrap">{t('d2.pl.inGame2')}{playerCountBadge}</span>}>
+            <PlayersList {...playersProps} limit={ember ? 12 : 8} moreHref={tabHref(id, 'players')} />
+          </SectionCard>
+          {/* what happened and what players say: below the main things, side by side */}
+          <SectionCard id="ov-events" state={sections} className={`lg:col-span-7 ${events.length === 0 ? 'max-lg:hidden' : ''}`} style={stagger(3)} title={t('d2.sd.recent')}>
             <EventsFeed events={events} online={s.online} limit={6} moreHref={tabHref(id, 'events')} />
             <OutageFacts events={events} />
           </SectionCard>
-          {/* the reviews sit under the events: the left column fills the height of the player list */}
-          <SectionCard id="ov-reviews" state={sections} className="max-lg:order-3 lg:flex-1" style={stagger(4)} title={t('d2.sd.playerReviews')}>
+          <SectionCard id="ov-reviews" state={sections} className={events.length === 0 ? 'lg:col-span-12' : 'lg:col-span-5'} style={stagger(4)} title={t('d2.sd.playerReviews')}>
             <ServerReviews serverId={id} />
-          </SectionCard>
-          </div>
-          <SectionCard id="ov-players" state={sections} className="lg:col-span-7 lg:col-start-6 lg:row-span-2 max-lg:order-2" style={stagger(3)} title={<span className="inline-flex items-center whitespace-nowrap">{t('d2.pl.inGame2')}{playerCountBadge}</span>}>
-            <PlayersList {...playersProps} limit={6} moreHref={tabHref(id, 'players')} />
           </SectionCard>
         </div>
         {probes && probes.probes.length > 0 && (
@@ -634,7 +625,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
       {back}
 
       {/* from lg up: the banner is a column on the left (it stays in view), the tabs and the content are on the right */}
-      <div className="srv-shell">
+      <div className="srv-shell srv-headwide">
       <article
         className={`${emblemStyle(s.coverUrl, s.game).className ? 'emblem-host' : ''} srv-banner srv-glow srv-${kind} depth relative rounded-ui-xl p-4 text-white sm:p-6`}
         style={emblemStyle(s.coverUrl, s.game).style}
@@ -736,19 +727,6 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
       <div className="srv-main min-w-0 space-y-3.5">
       <ErrorLine text={error} />
 
-      {ember && events.length > 0 && (() => {
-        const e = events[0];
-        const text = e.type === 'up' ? t('d2.ef.up') : e.type === 'peak' ? t('d2.ef.peak', { n: e.players ?? '–' }) : e.type === 'maintenance' ? (e.name ? t('d2.ef.maintName', { name: e.name }) : t('d2.ef.maint')) : t('d2.ef.down');
-        return (
-          <a className={`srv-ticker is-${e.type}`} href={tabHref(id, 'events')}>
-            <i aria-hidden />
-            <span className="srv-ticker-k">{t('srv.ticker.last')}</span>
-            <b className="truncate">{text}</b>
-            <span className="srv-ticker-t">{ago(e.ts)}</span>
-            <span className="srv-ticker-go" aria-hidden>→</span>
-          </a>
-        );
-      })()}
       <ServerTabs
         id={id}
         tab={tab}

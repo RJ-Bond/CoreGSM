@@ -630,6 +630,8 @@ const en: Record<keyof typeof ru, string> = {
   'srv.cap.taken': '{pct}% of slots taken',
   'srv.unit.ms': 'ms',
   'srv.tile.full': 'Almost full',
+  'srv.up.label': 'uptime',
+  'srv.spark.hint': 'The dashed line is the average of the day: above it the server is busier than usual, below it quieter',
   'srv.tile.dayPeak': 'Day peak',
   'srv.tile.dayPeakHint': 'As many players as at the busiest moment of the day ({n})',
   'srv.pulse.label': 'Servers at a glance',

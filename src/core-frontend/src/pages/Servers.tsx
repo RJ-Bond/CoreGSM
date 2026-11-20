@@ -685,7 +685,7 @@ function PhoneRow({ s, idx, fav, onFav, onOpen, select }: { rx: Reactions; s: Se
 }
 
 /** a server with nobody on it: not a grey zero and an empty bar, but when somebody was last there, the peak of the day and when it usually fills up */
-function EmptyNow({ s }: { s: Server }) {
+function EmptyNow({ s, accent }: { s: Server; accent?: string }) {
   useI18n();
   const day = useDayStats(s.id);
   const baseline = useBaseline(s.id);
@@ -696,11 +696,13 @@ function EmptyNow({ s }: { s: Server }) {
         <b><i aria-hidden />{t('srv.empty.title')}<small>/ {s.maxPlayers}</small></b>
         {s.ping != null && <span className={`inline-flex items-center gap-1.5 text-fs-sm font-bold ${TONE_TEXT[pingTone(s.ping).tone]}`}><i className={`ping-dot ${pingTone(s.ping).tone}`} aria-hidden />{t('d2.bot.ms', { n: s.ping })}</span>}
       </div>
+      <CapacityBar className="mt-1" players={0} max={s.maxPlayers} color="rgb(var(--ink) / .5)" slots={false} />
       <ul>
         {day.known && <li>{day.lastActiveMin == null ? t('srv.empty.noneDay') : t('srv.empty.last', { d: durText(Math.max(1, day.lastActiveMin) * 60_000) })}</li>}
         {day.known && day.peak > 0 && <li>{t('srv.empty.peak', { n: day.peak })}</li>}
         {usual && !usual.now && <li>{t('srv.empty.usual', { time: fmtTime(usual.at) })}</li>}
       </ul>
+      {accent && <div className="srv-spark-wrap" title={t('srv.spark.hint')}><Spark serverId={s.id} color={accent} /></div>}
     </div>
   );
 }
@@ -774,7 +776,7 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince, 
       </div>
 
       {s.online && s.players === 0 ? (
-        <EmptyNow s={s} />
+        <EmptyNow s={s} accent={accent} />
       ) : s.online ? (
         <>
           <div className={`srv-count flex items-baseline gap-1.5 px-1.5 ${s.players === 0 ? 'srv-zero' : ''}`}>
@@ -782,14 +784,14 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince, 
             <span className="text-fs-xl font-bold text-mute">/ {s.maxPlayers}</span>
             <TrendChip serverId={s.id} />
             {atPeak && <span className="srv-peak-chip" title={t('srv.tile.dayPeakHint', { n: dayStats.peak })}>★ {t('srv.tile.dayPeak')}</span>}
-            {(s.playerNames?.length ?? 0) > 0 && <button type="button" className="srv-who" aria-label={t('srv.who')} title={t('srv.who')} aria-expanded={who} onClick={(e) => { e.stopPropagation(); setWho((v) => !v); }}><PlayerStack names={s.playerNames ?? []} /></button>}
+            {(s.playerNames?.length ?? 0) > 0 && <button type="button" className="srv-who" aria-label={t('srv.who')} title={t('srv.who')} aria-expanded={who} onClick={(e) => { e.stopPropagation(); setWho((v) => !v); }}>{(s.playerNames?.length ?? 0) === 1 ? <span className="srv-who-one">{s.playerNames[0]}</span> : <PlayerStack names={s.playerNames ?? []} />}</button>}
             <span className={`ml-auto inline-flex items-center gap-1.5 text-fs-sm font-bold ${s.ping != null ? TONE_TEXT[pingTone(s.ping).tone] : 'text-mute'}`} title={s.ping != null ? t('d2.srv.ping', { ms: s.ping }) : undefined}>{s.ping != null && <><i className={`ping-dot ${pingTone(s.ping).tone}`} aria-hidden />{t('d2.bot.ms', { n: s.ping })}</>}</span>
           </div>
           <CapacityBar className="px-1.5" players={s.players} max={s.maxPlayers} color="rgb(var(--ink) / .5)" />
           {who && <PlayerNames className="px-1.5" names={s.playerNames ?? []} max={12} />}
           {s.players === 0
             ? <p className="srv-empty-now"><i aria-hidden />{t('srv.empty.now')}</p>
-            : <div className="srv-spark-wrap px-1.5"><Spark serverId={s.id} color={accent} /></div>}
+            : <div className="srv-spark-wrap px-1.5" title={t('srv.spark.hint')}><Spark serverId={s.id} color={accent} /></div>}
         </>
       ) : (
         s.hasStatus ? (
@@ -811,7 +813,7 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince, 
       <div className="mt-auto flex items-center justify-between gap-2 px-1.5 pt-1 text-xs font-bold text-mute">
         <AddrCopy address={s.address} className="min-w-0 font-mono" split />
         <span className="flex shrink-0 items-center gap-2">
-          {uptime != null && <span className={`srv-up ${uptime >= 99 ? 'ok' : uptime >= 95 ? 'warn' : 'bad'}`} title={t('d2.srv.uptime30')}>{(Math.round(uptime * 10) / 10).toLocaleString('ru-RU')}%</span>}
+          {uptime != null && <span className={`srv-up ${uptime >= 99 ? 'ok' : uptime >= 95 ? 'warn' : 'bad'}`} title={t('d2.srv.uptime30')}><small className="srv-up-l">{t('srv.up.label')}</small> {(Math.round(uptime * 10) / 10).toLocaleString('ru-RU')}%</span>}
           {s.online ? (s.updatedAt != null && Date.now() - s.updatedAt > 120_000 ? ago(s.updatedAt) : '') : ago(s.updatedAt)}
         </span>
       </div>

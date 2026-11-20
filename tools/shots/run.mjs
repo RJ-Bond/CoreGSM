@@ -158,6 +158,8 @@ async function shoot(cdp, base, row, outDir) {
   while (Date.now() - t0 < 15000 && (inflight > 0 || Date.now() - lastNet < 700)) await sleep(150);
   await cdp.evaluate(KILL_MOTION);
   await sleep(500);
+  // SHOTS_PROBE='<js expression>': prints what it returns for every page (to measure a layout without guessing)
+  if (process.env.SHOTS_PROBE) console.log('PROBE', page.id, JSON.stringify(await cdp.evaluate(process.env.SHOTS_PROBE)));
 
   const c = await cdp.evaluate(checksSource);
   off();

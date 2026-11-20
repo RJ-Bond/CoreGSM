@@ -666,8 +666,21 @@ html[data-motion='reduce'] :is(.srv-record, .srv-swipe-hint, .srv-slots-bar > i.
 .pl-group { padding: 12px 4px 4px; font-size: var(--fs-xs); font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: rgb(var(--mute)); }
 ul > .pl-group:first-child { padding-top: 2px; }
 
-/* seven tabs next to the side column do not fit on a laptop screen: icons go, the names stay (no tab is cut off) */
-@media (min-width: 1024px) and (max-width: 1599px) {
-  .srv-tabs > .seg-item { padding: .5rem .7rem; }
-  .srv-tabs .srv-tab-i { display: none; }
+/* the header of a server over the whole width: who and how many on the left, how to get in and the facts on the right;
+   the tabs and the content below use all the width too (the side column is gone) */
+@media (min-width: 1100px) {
+  .srv-shell.srv-headwide { display: block; }
+  .srv-shell.srv-headwide > .srv-banner { position: relative; top: auto !important; display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); grid-template-rows: auto auto auto; column-gap: 2.5rem; row-gap: .75rem; align-items: start; padding: 1.6rem 1.9rem 1.7rem; margin-bottom: .9rem; }
+  .srv-shell.srv-headwide .srv-title { grid-column: 1; grid-row: 1; flex-direction: row; align-items: center; gap: 1.1rem; }
+  .srv-shell.srv-headwide .srv-title > div { width: auto; min-width: 0; }
+  .srv-shell.srv-headwide .srv-title h1 { font-size: 2rem; line-height: 1.1; }
+  .srv-shell.srv-headwide .srv-hero { grid-column: 1; grid-row: 2 / span 2; margin-top: 0; }
+  .srv-shell.srv-headwide .srv-hero-n { font-size: 5rem; }
+  .srv-shell.srv-headwide .srv-banner > p { grid-column: 1 / -1; grid-row: 4; }
+  .srv-shell.srv-headwide .srv-actions { grid-column: 2; grid-row: 1 / span 2; margin-top: 0; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-self: center; }
+  .srv-shell.srv-headwide .srv-passport { grid-column: 2; grid-row: 3; margin-top: 0; }
+  .srv-shell.srv-headwide .srv-passport .pp-ribbon { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 0; }
+  .srv-shell.srv-headwide .srv-passport .pp-chip:first-child { grid-column: auto; }
+  /* the name and the numbers of the server stay in view next to the tabs while the page is scrolled */
+  .srv-shell.srv-headwide .srv-mini-wrap { display: block; }
 }

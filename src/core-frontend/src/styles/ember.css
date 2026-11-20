@@ -645,9 +645,9 @@
 :root[data-ember='1'] .pl-hero::before { content: ''; position: absolute; inset: 0 32px auto 32px; height: 2px; border-radius: 0 0 3px 3px; background: linear-gradient(90deg, rgb(var(--brand-2)), rgb(255 170 80) 55%, transparent); pointer-events: none; }
 :root[data-ember='1'] .pl-rank { background: linear-gradient(135deg, rgb(255 126 60), rgb(var(--brand-2))); color: #fff; }
 
-/* the server page: the figures stand beside the chart; in the narrow card they are one under another */
+/* the server page: the figures stand in one row under the header (three cards over the whole width) */
 @media (min-width: 1024px) {
-  :root[data-ember='1'] [id$='ov-stats'] .srv-metrics { grid-template-columns: minmax(0, 1fr); }
+  :root[data-ember='1'] [id$='ov-stats'] .srv-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 
 /* ======================================================================

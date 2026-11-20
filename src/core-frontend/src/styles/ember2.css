@@ -250,3 +250,17 @@ a.adm-reason:hover { filter: brightness(1.1); }
 
 /* a tile at the peak of its day */
 .srv-peak-chip { flex: none; align-self: center; padding: 0 7px; border-radius: var(--r-pill); font-size: var(--fs-xs); font-weight: 800; line-height: 20px; white-space: nowrap; color: rgb(var(--warn)); background: rgb(var(--warnbg)); }
+
+/* the address: the beginning gives way, the last characters of the host and the port stay */
+.srv-addr-host { display: inline-flex; min-width: 0; overflow: hidden; text-overflow: clip; }
+.srv-addr-head { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.srv-addr-tail { flex: none; white-space: pre; }
+/* the tile that closes a row: the facts are centred against the picture, not stuck to the top with an empty bottom */
+@media (min-width: 640px) {
+  :root[data-ember='1'] .srv-tile.srv-wide { align-content: center; row-gap: 6px; padding-top: 16px; padding-bottom: 16px; }
+  :root[data-ember='1'] .srv-tile.srv-wide > div:has(> .cover-scrim) { grid-row: 1 / span 8; }
+}
+/* under the pointer the tile gets a frame in the colour of its game */
+:root[data-ember='1'] .srv-tile:hover, :root[data-ember='1'] .srv-tile:focus-within { box-shadow: var(--shadow-2), 0 0 0 1px color-mix(in srgb, var(--gc, rgb(var(--brand))) 60%, transparent); }
+/* «Что нового» is a block of its own, not one more tile of the grid */
+:root[data-ember='1'] .srv-new { margin-top: 1.25rem; }

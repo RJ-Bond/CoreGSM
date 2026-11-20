@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="2ab7468d5ede"
+COREGSM_BUILD="5782edb9b099"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.2.56"
+COREGSM_VERSION="1.2.57"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -139767,7 +139767,7 @@ export default function Passport({ d }: { d: PassportData }) {
   };
   const pt = d.ping != null && d.online ? pingTone(d.ping) : null;
   return (
-    <section className="relative mt-3.5" aria-label={t('d2.pp.label')}>
+    <section className="srv-passport relative mt-3.5" aria-label={t('d2.pp.label')}>
       <ul className="pp-ribbon">
         <Chip k={t('d2.sf.game')} icon={<path d="M6 12h4M8 10v4M15 11.5h.01M18 13.5h.01M7 7h10a4 4 0 0 1 4 4v2a4 4 0 0 1-4 4h-1.5l-2-2h-3l-2 2H7a4 4 0 0 1-4-4v-2a4 4 0 0 1 4-4z" />}>{d.game}</Chip>
         {/* a fact the server does not report is left out instead of showing a dash */}
@@ -143556,7 +143556,7 @@ export function CapacityBar({ players, max, color, onDark = false, big = false, 
       <div className="flex items-center gap-2">
         <div
           className={`srv-cap ${onDark ? 'on-dark' : ''} ${level} ${big ? 'big' : ''}`}
-          style={{ ['--cap' as string]: color, ...(max > 1 && max <= 40 ? { ['--slots' as string]: max } : {}) }}
+          style={{ ['--cap' as string]: color, ...(max > 1 && max <= 16 ? { ['--slots' as string]: max } : {}) }}
           role="meter"
           aria-label={t('srv.cap.label')}
           aria-valuemin={0}
@@ -143721,6 +143721,8 @@ export function ListSkeleton() {
 }
 
 /** the address of a server as a button: one tap copies it (the card around it is a link, so the click stays here) */
+const hostOf = (address: string): string => address.replace(/:d+$/, '');
+
 export function AddrCopy({ address, className = '', split = false }: { address: string; className?: string; split?: boolean }) {
   useI18n();
   const copy = async (e: { stopPropagation: () => void; preventDefault: () => void }) => {
@@ -143731,7 +143733,7 @@ export function AddrCopy({ address, className = '', split = false }: { address: 
   return (
     <button type="button" className="srv-addr-copy" title={t('srv.addr.copy')} aria-label={`${t('srv.addr.copy')}: ${address}`} onClick={(e) => void copy(e)}>
       {split && /:\d+$/.test(address)
-        ? <span className={`${className} srv-addr-split`}><span className="srv-addr-host">{address.replace(/:\d+$/, '')}</span><span className="srv-addr-port">{/:\d+$/.exec(address)?.[0]}</span></span>
+        ? <span className={`${className} srv-addr-split`}><span className="srv-addr-host"><span className="srv-addr-head">{hostOf(address).slice(0, -7)}</span><span className="srv-addr-tail">{hostOf(address).slice(-7)}</span></span><span className="srv-addr-port">{/:\d+$/.exec(address)?.[0]}</span></span>
         : <span className={className}>{address}</span>}
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V6a2 2 0 0 1 2-2h9" /></svg>
     </button>
@@ -143753,8 +143755,10 @@ export function TrendChip({ serverId, onDark = false, className = '' }: { server
   useI18n();
   const d = useHourTrend(serverId);
   if (d == null || d === 0) return null;
+  // a small fall (two players left) is not an alarm: red only from five
+  const calm = d < 0 && d > -5;
   return (
-    <span className={`srv-trend ${d > 0 ? 'up' : 'down'} ${onDark ? 'on-dark' : ''} ${className}`} title={t('srv.trend.hour')}>
+    <span className={`srv-trend ${d > 0 ? 'up' : calm ? 'calm' : 'down'} ${onDark ? 'on-dark' : ''} ${className}`} title={t('srv.trend.hour')}>
       <span aria-hidden>{d > 0 ? '▲' : '▼'}</span> {d > 0 ? `+${d}` : `−${-d}`} <small>{t('srv.trend.hour')}</small>
     </span>
   );
@@ -148271,6 +148275,8 @@ const en: Record<keyof typeof ru, string> = {
   'srv.cap.taken': '{pct}% of slots taken',
   'srv.unit.ms': 'ms',
   'srv.tile.full': 'Almost full',
+  'srv.up.label': 'uptime',
+  'srv.spark.hint': 'The dashed line is the average of the day: above it the server is busier than usual, below it quieter',
   'srv.tile.dayPeak': 'Day peak',
   'srv.tile.dayPeakHint': 'As many players as at the busiest moment of the day ({n})',
   'srv.pulse.label': 'Servers at a glance',
@@ -153524,6 +153530,8 @@ const ru = {
   'srv.cap.taken': '{pct}% мест занято',
   'srv.unit.ms': 'мс',
   'srv.tile.full': 'Почти полон',
+  'srv.up.label': 'аптайм',
+  'srv.spark.hint': 'Пунктир — среднее за сутки: выше него сервер загружен больше обычного, ниже — тише',
   'srv.tile.dayPeak': 'Пик дня',
   'srv.tile.dayPeakHint': 'Столько же игроков, сколько в самый людный момент за сутки ({n})',
   'srv.pulse.label': 'Сводка по серверам',
@@ -169108,31 +169116,22 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
       <div className="space-y-3.5">
         <ServerNews serverId={id} />
         <PinnedNotice serverId={id} notice={data.notice ?? null} canEdit={canEdit} onChange={(n) => setData((d) => (d ? { ...d, notice: n } : d))} />
-        {!ember && (
-          <SectionCard id="ov-stats" state={sections} style={stagger(0)} title={t('d2.sd.sec.stats')}>
+        <div className="grid gap-3.5 lg:grid-cols-12">
+          {/* the figures in one row under the header, then the chart over the whole width */}
+          <SectionCard id="ov-stats" state={sections} className="lg:col-span-12" style={stagger(0)} title={t('d2.sd.sec.stats')}>
             {metrics(false)}
           </SectionCard>
-        )}
-        <div className="grid gap-3.5 lg:grid-cols-12">
-          {/* Ember: the figures stand beside the chart in one row, not above it */}
-          {ember && (
-            <SectionCard id="ov-stats" state={sections} className="lg:col-span-4" style={stagger(0)} title={t('d2.sd.sec.stats')}>
-              {metrics(false)}
-            </SectionCard>
-          )}
-          {chartTile(1, false, ember ? 'lg:col-span-8' : 'lg:col-span-12')}
-          <div className="space-y-3.5 lg:col-span-5 lg:col-start-1 lg:flex lg:flex-col lg:gap-3.5 lg:space-y-0 lg:self-stretch max-lg:contents">
-          <SectionCard id="ov-events" state={sections} className={`max-lg:order-1 ${events.length === 0 ? 'max-lg:hidden' : ''}`} style={stagger(2)} title={t('d2.sd.recent')}>
+          {chartTile(1, false, 'lg:col-span-12')}
+          <SectionCard id="ov-players" state={sections} className="lg:col-span-12" style={stagger(3)} title={<span className="inline-flex items-center whitespace-nowrap">{t('d2.pl.inGame2')}{playerCountBadge}</span>}>
+            <PlayersList {...playersProps} limit={ember ? 12 : 8} moreHref={tabHref(id, 'players')} />
+          </SectionCard>
+          {/* what happened and what players say: below the main things, side by side */}
+          <SectionCard id="ov-events" state={sections} className={`lg:col-span-7 ${events.length === 0 ? 'max-lg:hidden' : ''}`} style={stagger(3)} title={t('d2.sd.recent')}>
             <EventsFeed events={events} online={s.online} limit={6} moreHref={tabHref(id, 'events')} />
             <OutageFacts events={events} />
           </SectionCard>
-          {/* the reviews sit under the events: the left column fills the height of the player list */}
-          <SectionCard id="ov-reviews" state={sections} className="max-lg:order-3 lg:flex-1" style={stagger(4)} title={t('d2.sd.playerReviews')}>
+          <SectionCard id="ov-reviews" state={sections} className={events.length === 0 ? 'lg:col-span-12' : 'lg:col-span-5'} style={stagger(4)} title={t('d2.sd.playerReviews')}>
             <ServerReviews serverId={id} />
-          </SectionCard>
-          </div>
-          <SectionCard id="ov-players" state={sections} className="lg:col-span-7 lg:col-start-6 lg:row-span-2 max-lg:order-2" style={stagger(3)} title={<span className="inline-flex items-center whitespace-nowrap">{t('d2.pl.inGame2')}{playerCountBadge}</span>}>
-            <PlayersList {...playersProps} limit={6} moreHref={tabHref(id, 'players')} />
           </SectionCard>
         </div>
         {probes && probes.probes.length > 0 && (
@@ -169171,7 +169170,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
       {back}
 
       {/* from lg up: the banner is a column on the left (it stays in view), the tabs and the content are on the right */}
-      <div className="srv-shell">
+      <div className="srv-shell srv-headwide">
       <article
         className={`${emblemStyle(s.coverUrl, s.game).className ? 'emblem-host' : ''} srv-banner srv-glow srv-${kind} depth relative rounded-ui-xl p-4 text-white sm:p-6`}
         style={emblemStyle(s.coverUrl, s.game).style}
@@ -169273,19 +169272,6 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
       <div className="srv-main min-w-0 space-y-3.5">
       <ErrorLine text={error} />
 
-      {ember && events.length > 0 && (() => {
-        const e = events[0];
-        const text = e.type === 'up' ? t('d2.ef.up') : e.type === 'peak' ? t('d2.ef.peak', { n: e.players ?? '–' }) : e.type === 'maintenance' ? (e.name ? t('d2.ef.maintName', { name: e.name }) : t('d2.ef.maint')) : t('d2.ef.down');
-        return (
-          <a className={`srv-ticker is-${e.type}`} href={tabHref(id, 'events')}>
-            <i aria-hidden />
-            <span className="srv-ticker-k">{t('srv.ticker.last')}</span>
-            <b className="truncate">{text}</b>
-            <span className="srv-ticker-t">{ago(e.ts)}</span>
-            <span className="srv-ticker-go" aria-hidden>→</span>
-          </a>
-        );
-      })()}
       <ServerTabs
         id={id}
         tab={tab}
@@ -170279,7 +170265,7 @@ function PhoneRow({ s, idx, fav, onFav, onOpen, select }: { rx: Reactions; s: Se
 }
 
 /** a server with nobody on it: not a grey zero and an empty bar, but when somebody was last there, the peak of the day and when it usually fills up */
-function EmptyNow({ s }: { s: Server }) {
+function EmptyNow({ s, accent }: { s: Server; accent?: string }) {
   useI18n();
   const day = useDayStats(s.id);
   const baseline = useBaseline(s.id);
@@ -170290,11 +170276,13 @@ function EmptyNow({ s }: { s: Server }) {
         <b><i aria-hidden />{t('srv.empty.title')}<small>/ {s.maxPlayers}</small></b>
         {s.ping != null && <span className={`inline-flex items-center gap-1.5 text-fs-sm font-bold ${TONE_TEXT[pingTone(s.ping).tone]}`}><i className={`ping-dot ${pingTone(s.ping).tone}`} aria-hidden />{t('d2.bot.ms', { n: s.ping })}</span>}
       </div>
+      <CapacityBar className="mt-1" players={0} max={s.maxPlayers} color="rgb(var(--ink) / .5)" slots={false} />
       <ul>
         {day.known && <li>{day.lastActiveMin == null ? t('srv.empty.noneDay') : t('srv.empty.last', { d: durText(Math.max(1, day.lastActiveMin) * 60_000) })}</li>}
         {day.known && day.peak > 0 && <li>{t('srv.empty.peak', { n: day.peak })}</li>}
         {usual && !usual.now && <li>{t('srv.empty.usual', { time: fmtTime(usual.at) })}</li>}
       </ul>
+      {accent && <div className="srv-spark-wrap" title={t('srv.spark.hint')}><Spark serverId={s.id} color={accent} /></div>}
     </div>
   );
 }
@@ -170368,7 +170356,7 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince, 
       </div>
 
       {s.online && s.players === 0 ? (
-        <EmptyNow s={s} />
+        <EmptyNow s={s} accent={accent} />
       ) : s.online ? (
         <>
           <div className={`srv-count flex items-baseline gap-1.5 px-1.5 ${s.players === 0 ? 'srv-zero' : ''}`}>
@@ -170376,14 +170364,14 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince, 
             <span className="text-fs-xl font-bold text-mute">/ {s.maxPlayers}</span>
             <TrendChip serverId={s.id} />
             {atPeak && <span className="srv-peak-chip" title={t('srv.tile.dayPeakHint', { n: dayStats.peak })}>★ {t('srv.tile.dayPeak')}</span>}
-            {(s.playerNames?.length ?? 0) > 0 && <button type="button" className="srv-who" aria-label={t('srv.who')} title={t('srv.who')} aria-expanded={who} onClick={(e) => { e.stopPropagation(); setWho((v) => !v); }}><PlayerStack names={s.playerNames ?? []} /></button>}
+            {(s.playerNames?.length ?? 0) > 0 && <button type="button" className="srv-who" aria-label={t('srv.who')} title={t('srv.who')} aria-expanded={who} onClick={(e) => { e.stopPropagation(); setWho((v) => !v); }}>{(s.playerNames?.length ?? 0) === 1 ? <span className="srv-who-one">{s.playerNames[0]}</span> : <PlayerStack names={s.playerNames ?? []} />}</button>}
             <span className={`ml-auto inline-flex items-center gap-1.5 text-fs-sm font-bold ${s.ping != null ? TONE_TEXT[pingTone(s.ping).tone] : 'text-mute'}`} title={s.ping != null ? t('d2.srv.ping', { ms: s.ping }) : undefined}>{s.ping != null && <><i className={`ping-dot ${pingTone(s.ping).tone}`} aria-hidden />{t('d2.bot.ms', { n: s.ping })}</>}</span>
           </div>
           <CapacityBar className="px-1.5" players={s.players} max={s.maxPlayers} color="rgb(var(--ink) / .5)" />
           {who && <PlayerNames className="px-1.5" names={s.playerNames ?? []} max={12} />}
           {s.players === 0
             ? <p className="srv-empty-now"><i aria-hidden />{t('srv.empty.now')}</p>
-            : <div className="srv-spark-wrap px-1.5"><Spark serverId={s.id} color={accent} /></div>}
+            : <div className="srv-spark-wrap px-1.5" title={t('srv.spark.hint')}><Spark serverId={s.id} color={accent} /></div>}
         </>
       ) : (
         s.hasStatus ? (
@@ -170405,7 +170393,7 @@ function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince, 
       <div className="mt-auto flex items-center justify-between gap-2 px-1.5 pt-1 text-xs font-bold text-mute">
         <AddrCopy address={s.address} className="min-w-0 font-mono" split />
         <span className="flex shrink-0 items-center gap-2">
-          {uptime != null && <span className={`srv-up ${uptime >= 99 ? 'ok' : uptime >= 95 ? 'warn' : 'bad'}`} title={t('d2.srv.uptime30')}>{(Math.round(uptime * 10) / 10).toLocaleString('ru-RU')}%</span>}
+          {uptime != null && <span className={`srv-up ${uptime >= 99 ? 'ok' : uptime >= 95 ? 'warn' : 'bad'}`} title={t('d2.srv.uptime30')}><small className="srv-up-l">{t('srv.up.label')}</small> {(Math.round(uptime * 10) / 10).toLocaleString('ru-RU')}%</span>}
           {s.online ? (s.updatedAt != null && Date.now() - s.updatedAt > 120_000 ? ago(s.updatedAt) : '') : ago(s.updatedAt)}
         </span>
       </div>
@@ -176807,10 +176795,23 @@ html[data-motion='reduce'] :is(.srv-record, .srv-swipe-hint, .srv-slots-bar > i.
 .pl-group { padding: 12px 4px 4px; font-size: var(--fs-xs); font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: rgb(var(--mute)); }
 ul > .pl-group:first-child { padding-top: 2px; }
 
-/* seven tabs next to the side column do not fit on a laptop screen: icons go, the names stay (no tab is cut off) */
-@media (min-width: 1024px) and (max-width: 1599px) {
-  .srv-tabs > .seg-item { padding: .5rem .7rem; }
-  .srv-tabs .srv-tab-i { display: none; }
+/* the header of a server over the whole width: who and how many on the left, how to get in and the facts on the right;
+   the tabs and the content below use all the width too (the side column is gone) */
+@media (min-width: 1100px) {
+  .srv-shell.srv-headwide { display: block; }
+  .srv-shell.srv-headwide > .srv-banner { position: relative; top: auto !important; display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); grid-template-rows: auto auto auto; column-gap: 2.5rem; row-gap: .75rem; align-items: start; padding: 1.6rem 1.9rem 1.7rem; margin-bottom: .9rem; }
+  .srv-shell.srv-headwide .srv-title { grid-column: 1; grid-row: 1; flex-direction: row; align-items: center; gap: 1.1rem; }
+  .srv-shell.srv-headwide .srv-title > div { width: auto; min-width: 0; }
+  .srv-shell.srv-headwide .srv-title h1 { font-size: 2rem; line-height: 1.1; }
+  .srv-shell.srv-headwide .srv-hero { grid-column: 1; grid-row: 2 / span 2; margin-top: 0; }
+  .srv-shell.srv-headwide .srv-hero-n { font-size: 5rem; }
+  .srv-shell.srv-headwide .srv-banner > p { grid-column: 1 / -1; grid-row: 4; }
+  .srv-shell.srv-headwide .srv-actions { grid-column: 2; grid-row: 1 / span 2; margin-top: 0; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-self: center; }
+  .srv-shell.srv-headwide .srv-passport { grid-column: 2; grid-row: 3; margin-top: 0; }
+  .srv-shell.srv-headwide .srv-passport .pp-ribbon { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 0; }
+  .srv-shell.srv-headwide .srv-passport .pp-chip:first-child { grid-column: auto; }
+  /* the name and the numbers of the server stay in view next to the tabs while the page is scrolled */
+  .srv-shell.srv-headwide .srv-mini-wrap { display: block; }
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
@@ -177462,9 +177463,9 @@ __COREGSM_EOF__
 :root[data-ember='1'] .pl-hero::before { content: ''; position: absolute; inset: 0 32px auto 32px; height: 2px; border-radius: 0 0 3px 3px; background: linear-gradient(90deg, rgb(var(--brand-2)), rgb(255 170 80) 55%, transparent); pointer-events: none; }
 :root[data-ember='1'] .pl-rank { background: linear-gradient(135deg, rgb(255 126 60), rgb(var(--brand-2))); color: #fff; }
 
-/* the server page: the figures stand beside the chart; in the narrow card they are one under another */
+/* the server page: the figures stand in one row under the header (three cards over the whole width) */
 @media (min-width: 1024px) {
-  :root[data-ember='1'] [id$='ov-stats'] .srv-metrics { grid-template-columns: minmax(0, 1fr); }
+  :root[data-ember='1'] [id$='ov-stats'] .srv-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 
 /* ======================================================================
@@ -178026,6 +178027,20 @@ a.adm-reason:hover { filter: brightness(1.1); }
 
 /* a tile at the peak of its day */
 .srv-peak-chip { flex: none; align-self: center; padding: 0 7px; border-radius: var(--r-pill); font-size: var(--fs-xs); font-weight: 800; line-height: 20px; white-space: nowrap; color: rgb(var(--warn)); background: rgb(var(--warnbg)); }
+
+/* the address: the beginning gives way, the last characters of the host and the port stay */
+.srv-addr-host { display: inline-flex; min-width: 0; overflow: hidden; text-overflow: clip; }
+.srv-addr-head { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.srv-addr-tail { flex: none; white-space: pre; }
+/* the tile that closes a row: the facts are centred against the picture, not stuck to the top with an empty bottom */
+@media (min-width: 640px) {
+  :root[data-ember='1'] .srv-tile.srv-wide { align-content: center; row-gap: 6px; padding-top: 16px; padding-bottom: 16px; }
+  :root[data-ember='1'] .srv-tile.srv-wide > div:has(> .cover-scrim) { grid-row: 1 / span 8; }
+}
+/* under the pointer the tile gets a frame in the colour of its game */
+:root[data-ember='1'] .srv-tile:hover, :root[data-ember='1'] .srv-tile:focus-within { box-shadow: var(--shadow-2), 0 0 0 1px color-mix(in srgb, var(--gc, rgb(var(--brand))) 60%, transparent); }
+/* «Что нового» is a block of its own, not one more tile of the grid */
+:root[data-ember='1'] .srv-new { margin-top: 1.25rem; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/emberScale.test.ts" << '__COREGSM_EOF__'
@@ -180249,6 +180264,12 @@ html[data-motion='reduce'] .srv-new-chev, html[data-motion='reduce'] .srv-check,
   .srv-td-fav { grid-area: fav; }
   .srv-td-ping::before, .srv-td-up::before { content: attr(data-label) ' '; font-size: var(--fs-xs); font-weight: 650; text-transform: uppercase; letter-spacing: .04em; color: rgb(var(--mute)); margin-right: 4px; }
 }
+
+/* the tile: a small fall is not red, the end of the address stays visible, a lone player is named, the uptime says what it is */
+.srv-trend.calm { color: rgb(var(--mute)); }
+.srv-trend.on-dark.calm { color: rgb(255 255 255 / .75); }
+.srv-who-one { display: inline-block; max-width: 6.5rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 8px; border-radius: var(--r-pill); font-size: var(--fs-xs); font-weight: 800; line-height: 22px; background: rgb(var(--soft)); color: rgb(var(--ink)); }
+.srv-up-l { font-size: .68rem; font-weight: 700; color: rgb(var(--mute)); }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/shell.css" << '__COREGSM_EOF__'
