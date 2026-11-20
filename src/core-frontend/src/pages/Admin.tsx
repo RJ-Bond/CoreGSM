@@ -291,7 +291,7 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
             <CertWarning />
           </div>
         )}
-        {!home && isAdmin && <AdminStatusBar />}
+        {!home && isAdmin && current === 'servers' && <AdminStatusBar />}
         {!home && current !== 'start' && current !== 'overview' && (
           <nav className="adm-crumbs" aria-label={t('adm.crumb.aria')}>
             <a href="/admin/overview">{t('nav.admin')}</a>

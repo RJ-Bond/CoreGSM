@@ -19,9 +19,9 @@ const clock = (ts: number) => new Date(ts).toLocaleTimeString('ru-RU', { hour: '
 const ICON: Record<Ev['type'], { cls: string; path: string }> = {
   up: { cls: 'bg-okbg text-ok', path: 'M5 12.5l4.5 4.5L19 7.5' },
   down: { cls: 'bg-badbg text-bad', path: 'M12 5v10M7 12l5 5 5-5' },
-  peak: { cls: 'bg-soft text-link', path: 'M3 17l6-6 4 4 8-8M15 7h6v6' },
+  peak: { cls: 'bg-warnbg text-warn', path: 'M3 17l6-6 4 4 8-8M15 7h6v6' },
   version: { cls: 'bg-soft text-link', path: 'M3 12V4h8l10 10-8 8L3 12zM7.5 8h.01' },
-  map: { cls: 'bg-soft text-link', path: 'M12 21s7-6.2 7-11.5A7 7 0 0 0 5 9.5C5 14.8 12 21 12 21zM12 12a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5z' },
+  map: { cls: 'bg-okbg text-ok', path: 'M12 21s7-6.2 7-11.5A7 7 0 0 0 5 9.5C5 14.8 12 21 12 21zM12 12a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5z' },
   maintenance: { cls: 'bg-soft text-link', path: 'M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z' },
 };
 

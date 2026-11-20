@@ -1,0 +1,21 @@
+/* A visual pass over what looked heavy or uneven: loaded last, so it only has to say what changes. */
+
+/* a tile of a server that does not answer: a stripe on the left says it before the text is read */
+:root[data-ember='1'] .srv-tile.is-down { box-shadow: inset 3px 0 0 rgb(var(--bad) / .85), var(--shadow-2); }
+
+/* the dashed «average of the day» on a mini chart is a quiet hint until the pointer comes */
+.srv-tile .spark-avg { opacity: .35; transition: opacity .15s ease; }
+.srv-tile:hover .spark-avg, .srv-tile:focus-within .spark-avg { opacity: 1; }
+
+/* the figures of a server: three equal cards, the accent stays with the first one only as a stripe (it was a full orange block) */
+:root[data-ember='1'] [id$='ov-stats'] .srv-metrics > .srv-metric:first-child {
+  background: rgb(var(--soft)); color: inherit; box-shadow: inset 3px 0 0 rgb(var(--brand));
+}
+:root[data-ember='1'] [id$='ov-stats'] .srv-metrics > .srv-metric:first-child :is(.stat-k, .srv-metric-h, .srv-metric-per) { color: rgb(var(--mute)); }
+:root[data-ember='1'] [id$='ov-stats'] .srv-metrics > .srv-metric:first-child .srv-metric-bar { background: rgb(var(--ink) / .12); }
+:root[data-ember='1'] [id$='ov-stats'] .srv-metrics > .srv-metric:first-child .srv-metric-bar > i { background: rgb(var(--brand)); }
+
+/* the status page: the days of the 30-day strip are taller (a date and the minutes of a failure are easier to hit), the alert does not pulse */
+@media (min-width: 640px) { .st-bars { height: 48px; } }
+.st-banner-ico::after { animation: none; opacity: .35; }
+@media (prefers-reduced-motion: no-preference) { .st-banner.is-bad .st-banner-ico::after { animation: st-ping 3.2s ease-out infinite; opacity: .5; } }

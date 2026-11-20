@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="7d956a4b56fc"
+COREGSM_BUILD="7d4da243373c"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.2.59"
+COREGSM_VERSION="1.2.60"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -138557,9 +138557,9 @@ const clock = (ts: number) => new Date(ts).toLocaleTimeString('ru-RU', { hour: '
 const ICON: Record<Ev['type'], { cls: string; path: string }> = {
   up: { cls: 'bg-okbg text-ok', path: 'M5 12.5l4.5 4.5L19 7.5' },
   down: { cls: 'bg-badbg text-bad', path: 'M12 5v10M7 12l5 5 5-5' },
-  peak: { cls: 'bg-soft text-link', path: 'M3 17l6-6 4 4 8-8M15 7h6v6' },
+  peak: { cls: 'bg-warnbg text-warn', path: 'M3 17l6-6 4 4 8-8M15 7h6v6' },
   version: { cls: 'bg-soft text-link', path: 'M3 12V4h8l10 10-8 8L3 12zM7.5 8h.01' },
-  map: { cls: 'bg-soft text-link', path: 'M12 21s7-6.2 7-11.5A7 7 0 0 0 5 9.5C5 14.8 12 21 12 21zM12 12a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5z' },
+  map: { cls: 'bg-okbg text-ok', path: 'M12 21s7-6.2 7-11.5A7 7 0 0 0 5 9.5C5 14.8 12 21 12 21zM12 12a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5z' },
   maintenance: { cls: 'bg-soft text-link', path: 'M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z' },
 };
 
@@ -158058,6 +158058,7 @@ import './styles/ember2.css';
 import './styles/buttons.css';
 // phone layout fixes: loaded after the others, so it wins at equal specificity
 import './styles/mobile.css';
+import './styles/visual.css';
 import './reauth';
 import App from './App';
 import { RootBoundary } from './RootBoundary';
@@ -158700,7 +158701,7 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
             <CertWarning />
           </div>
         )}
-        {!home && isAdmin && <AdminStatusBar />}
+        {!home && isAdmin && current === 'servers' && <AdminStatusBar />}
         {!home && current !== 'start' && current !== 'overview' && (
           <nav className="adm-crumbs" aria-label={t('adm.crumb.aria')}>
             <a href="/admin/overview">{t('nav.admin')}</a>
@@ -180902,6 +180903,30 @@ __COREGSM_EOF__
 .pill-glass-maint { --dot: #a5b4fc; }
 .pill-glass-maint::before { animation: none; }
 .gauge-cap { max-width: 62%; overflow-wrap: anywhere; }
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/styles"
+  cat > "$APP_DIR/core-frontend/src/styles/visual.css" << '__COREGSM_EOF__'
+/* A visual pass over what looked heavy or uneven: loaded last, so it only has to say what changes. */
+
+/* a tile of a server that does not answer: a stripe on the left says it before the text is read */
+:root[data-ember='1'] .srv-tile.is-down { box-shadow: inset 3px 0 0 rgb(var(--bad) / .85), var(--shadow-2); }
+
+/* the dashed «average of the day» on a mini chart is a quiet hint until the pointer comes */
+.srv-tile .spark-avg { opacity: .35; transition: opacity .15s ease; }
+.srv-tile:hover .spark-avg, .srv-tile:focus-within .spark-avg { opacity: 1; }
+
+/* the figures of a server: three equal cards, the accent stays with the first one only as a stripe (it was a full orange block) */
+:root[data-ember='1'] [id$='ov-stats'] .srv-metrics > .srv-metric:first-child {
+  background: rgb(var(--soft)); color: inherit; box-shadow: inset 3px 0 0 rgb(var(--brand));
+}
+:root[data-ember='1'] [id$='ov-stats'] .srv-metrics > .srv-metric:first-child :is(.stat-k, .srv-metric-h, .srv-metric-per) { color: rgb(var(--mute)); }
+:root[data-ember='1'] [id$='ov-stats'] .srv-metrics > .srv-metric:first-child .srv-metric-bar { background: rgb(var(--ink) / .12); }
+:root[data-ember='1'] [id$='ov-stats'] .srv-metrics > .srv-metric:first-child .srv-metric-bar > i { background: rgb(var(--brand)); }
+
+/* the status page: the days of the 30-day strip are taller (a date and the minutes of a failure are easier to hit), the alert does not pulse */
+@media (min-width: 640px) { .st-bars { height: 48px; } }
+.st-banner-ico::after { animation: none; opacity: .35; }
+@media (prefers-reduced-motion: no-preference) { .st-banner.is-bad .st-banner-ico::after { animation: st-ping 3.2s ease-out infinite; opacity: .5; } }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/ui.tsx" << '__COREGSM_EOF__'

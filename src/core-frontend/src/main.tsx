@@ -24,6 +24,7 @@ import './styles/ember2.css';
 import './styles/buttons.css';
 // phone layout fixes: loaded after the others, so it wins at equal specificity
 import './styles/mobile.css';
+import './styles/visual.css';
 import './reauth';
 import App from './App';
 import { RootBoundary } from './RootBoundary';
