@@ -1,6 +1,6 @@
 /** The journal of joins and departures: pairs «came → left» into one line, filters, day groups, players who keep reconnecting. */
 
-export interface ConnectionItem { id: number; serverId?: number; serverName: string; ts: number; kind: 'join' | 'leave'; platformId: string; nick: string; reason: string; removedBy: string; minutes: number }
+export interface ConnectionItem { id: number; serverId?: number; serverName: string; ts: number; kind: 'join' | 'leave'; platformId: string; nick: string; reason: string; removedBy: string; minutes: number; /** plugin 0.18.10+: the ping before the departure */ ping?: string }
 
 /** one line of the journal: a finished visit (join + leave), a visit that goes on (join only) or a departure whose arrival is not known */
 export interface Row {

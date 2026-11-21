@@ -29,6 +29,11 @@ describe('the journal of joins and departures', () => {
     assert.deepEqual(rows.map((r) => r.kind), ['join', 'leave']);
     assert.equal(rows[1].removed_by, '.kick от Админ: спам');
   });
+  it('keeps the ping before a departure (plugin 0.18.10+), empty for an older plugin', () => {
+    conn.saveConnections(1, [{ ...leave('Timeout', NOW + 5), ping: 'обычно 48 мс, за 10 с до выхода 51 → 870 мс' }, leave('LeftGame', NOW + 6)], NOW + 7);
+    const rows = db.prepare('SELECT ping FROM game_connections WHERE ts IN (?, ?) ORDER BY ts').all(NOW + 5, NOW + 6) as { ping: string }[];
+    assert.deepEqual(rows.map((r) => r.ping), ['обычно 48 мс, за 10 с до выхода 51 → 870 мс', '']);
+  });
 
   it('alerts once when several players time out within a minute', () => {
     const t = NOW + 600_000;

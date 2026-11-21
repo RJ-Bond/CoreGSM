@@ -136,6 +136,7 @@ function ConnectionRow({ r, compact, many, repeat }: { r: Row; compact: boolean;
           {repeat && <span className="pill pill-warn" title={t('gn.cn.repeatHint', { n: REPEAT_JOINS })}>{t('gn.cn.repeat')}</span>}
           {short && !repeat && <span className="pill pill-mute" title={t('gn.cn.shortHint', { n: SHORT_VISIT_MIN })}>{t('gn.cn.short')}</span>}
         </div>
+        {r.leave?.ping && !compact && <p className="text-xs font-semibold text-mute">{t('gn.cn.ping', { ping: r.leave.ping })}</p>}
         {r.leave?.removedBy && <p className="font-semibold text-warn">{t('gn.cn.removed', { why: r.leave.removedBy })}</p>}
       </div>
     </li>

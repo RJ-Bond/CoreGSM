@@ -1475,6 +1475,7 @@ const en: Record<keyof typeof ru, string> = {
   'gn.mt.gb': 'GB',
   'gn.mt.s': 's',
   'gn.cn.note': 'One visit, one line: when the player came, when they left and how long they stayed. The game names the reason of the departure; a note about CoreGSM appears only when it removed the player. Needs plugin 0.18; kept for 30 days.',
+  'gn.cn.ping': 'Ping: {ping}',
   'gn.cn.inGame': 'In game',
   'gn.cn.now': 'now',
   'gn.cn.min': '{n} min',

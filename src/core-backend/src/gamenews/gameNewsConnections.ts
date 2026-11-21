@@ -14,6 +14,7 @@ import { z } from 'zod';
 import { systemTarget } from '../alerts/alertRoute.js';
 import { alertSettings, enqueueAlert } from '../alerts/alerts.js';
 import { db } from '../db.js';
+import { addColumn } from '../schema.js';
 import { pluginTarget } from './gameNews.js';
 import { plainLine } from './gameNewsJoinLeave.js';
 import { commandState, queueCommand } from './gameNewsModLog.js';
@@ -35,6 +36,8 @@ CREATE TABLE IF NOT EXISTS game_connections (
 CREATE INDEX IF NOT EXISTS idx_game_connections_ts ON game_connections(server_id, ts);
 CREATE INDEX IF NOT EXISTS idx_game_connections_nick ON game_connections(nick COLLATE NOCASE);
 `);
+// plugin 0.18.10+: the ping of the player before he left («обычно 48 мс, за 10 с до выхода 51 → 870 мс»)
+addColumn(db, 'game_connections', 'ping', "TEXT NOT NULL DEFAULT ''");
 
 const KEEP_MS = 30 * 86_400_000;
 /** this many timeouts on one server within the window make an alert */
@@ -44,7 +47,7 @@ const TIMEOUT_WINDOW_MS = 60_000;
 const ALERT_PAUSE_MS = 10 * 60_000;
 const lastAlert = new Map<string, number>();
 
-export interface ConnectionEvent { kind: 'join' | 'leave'; id: string; name: string; reason: string; by: string; minutes: number; at: number }
+export interface ConnectionEvent { kind: 'join' | 'leave'; id: string; name: string; reason: string; by: string; minutes: number; at: number; ping?: string }
 
 export function alertOnce(key: string, now: number, send: () => void): boolean {
   if (now - (lastAlert.get(key) ?? 0) < ALERT_PAUSE_MS) return false;
@@ -55,12 +58,12 @@ export function alertOnce(key: string, now: number, send: () => void): boolean {
 
 /** keeps the events of a server; true when they made a «many timeouts» alert */
 export function saveConnections(serverId: number, events: ConnectionEvent[], now = Date.now()): boolean {
-  const insert = db.prepare('INSERT INTO game_connections (server_id, ts, kind, platform_id, nick, reason, removed_by, minutes) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+  const insert = db.prepare('INSERT INTO game_connections (server_id, ts, kind, platform_id, nick, reason, removed_by, minutes, ping) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
   db.transaction(() => {
     for (const e of events) {
       // the time of the plugin, unless it is far off (a wrong clock on the game server)
       const ts = Math.abs(e.at - now) < 3_600_000 ? e.at : now;
-      insert.run(serverId, ts, e.kind, e.id.slice(0, 25), plainLine(e.name).slice(0, 100), plainLine(e.reason).slice(0, 100), plainLine(e.by).slice(0, 200), Math.round(e.minutes));
+      insert.run(serverId, ts, e.kind, e.id.slice(0, 25), plainLine(e.name).slice(0, 100), plainLine(e.reason).slice(0, 100), plainLine(e.by).slice(0, 200), Math.round(e.minutes), plainLine(e.ping ?? '').slice(0, 200));
     }
   })();
   db.prepare('DELETE FROM game_connections WHERE ts < ?').run(now - KEEP_MS);
@@ -119,6 +122,7 @@ export function registerGameNewsConnections({ app, admin }: { app: Express; admi
       events: z.array(z.object({
         kind: z.enum(['join', 'leave']), id: z.string().max(25), name: cut(100), reason: cut(100).default(''),
         by: cut(300).default(''), minutes: z.number().int().min(-1).max(100_000).default(-1), at: z.number().int().positive(),
+        ping: cut(200).default(''),
       })).max(100),
     }).safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'bad' });
@@ -138,9 +142,9 @@ export function registerGameNewsConnections({ app, admin }: { app: Express; admi
     if (Number.isInteger(server) && server > 0) { where.push('server_id = ?'); args.push(server); }
     if (Number.isFinite(since) && since > 0) { where.push('ts >= ?'); args.push(Math.floor(since)); }
     const rows = db.prepare(`SELECT * FROM game_connections ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY ts DESC, id DESC LIMIT ?`).all(...args, limit) as {
-      id: number; server_id: number; ts: number; kind: string; platform_id: string; nick: string; reason: string; removed_by: string; minutes: number;
+      id: number; server_id: number; ts: number; kind: string; platform_id: string; nick: string; reason: string; removed_by: string; minutes: number; ping: string;
     }[];
-    res.json({ items: rows.map((r) => ({ id: r.id, serverId: r.server_id, serverName: serverLabel(r.server_id), ts: r.ts, kind: r.kind, platformId: r.platform_id, nick: r.nick, reason: r.reason, removedBy: r.removed_by, minutes: r.minutes })) });
+    res.json({ items: rows.map((r) => ({ id: r.id, serverId: r.server_id, serverName: serverLabel(r.server_id), ts: r.ts, kind: r.kind, platformId: r.platform_id, nick: r.nick, reason: r.reason, removedBy: r.removed_by, minutes: r.minutes, ping: r.ping ?? '' })) });
   });
 
   // «Обновить плагин»: the plugin downloads the newest release; it takes effect at the next restart of the server
