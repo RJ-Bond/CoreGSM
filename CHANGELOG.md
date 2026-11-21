@@ -16,6 +16,8 @@ interface language; the GitHub release text is built from the section of the ver
 
 ## Не выпущено | Unreleased
 
+## 1.2.71 · 21.11.2026
+
 ### 🐛 Исправлено | Fixed
 - ✂ Чат из Discord в игру: у повторённой строки в канале убрано «→ в игру», остаётся строка как в игровом чате (время, пометка, слова); карточка под сообщением и реакции без изменений | Chat from Discord into the game: the repeated line in the channel no longer starts with «→ в игру», it is the line as in the game chat (time, mark, words); the card under the message and the reactions are unchanged
 - 📝 Автообъявление: кнопка «Сохранить» больше не «мёртвая» без названия: при нажатии показывается, чего не хватает (например, «Введите название»), а поле названия получает фокус | Auto announcement: the «Save» button is no longer dead without a name: pressing it shows what is missing (for example «Enter a name») and focuses the name field
