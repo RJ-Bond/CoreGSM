@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="5512cc874de0"
+COREGSM_BUILD="a69cef650d8d"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.2.70"
+COREGSM_VERSION="1.2.71"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -24530,7 +24530,7 @@ import { postAnnounceToDiscord } from './gameNewsChat.js';
 
 export const QUEUE_TTL_MS = 5 * 60_000;
 /** the version of the game plugin this panel was built for: an older plugin is shown as outdated */
-export const PLUGIN_VERSION = '0.18.3';
+export const PLUGIN_VERSION = '0.18.12';
 /** the games the plugin exists for */
 export const SUPPORTED_GAMES = new Set(['vrising']);
 const PULL_MIN_GAP_MS = 800;
@@ -25357,6 +25357,7 @@ import { z } from 'zod';
 import { systemTarget } from '../alerts/alertRoute.js';
 import { alertSettings, enqueueAlert } from '../alerts/alerts.js';
 import { db } from '../db.js';
+import { addColumn } from '../schema.js';
 import { pluginTarget } from './gameNews.js';
 import { plainLine } from './gameNewsJoinLeave.js';
 import { commandState, queueCommand } from './gameNewsModLog.js';
@@ -25378,6 +25379,8 @@ CREATE TABLE IF NOT EXISTS game_connections (
 CREATE INDEX IF NOT EXISTS idx_game_connections_ts ON game_connections(server_id, ts);
 CREATE INDEX IF NOT EXISTS idx_game_connections_nick ON game_connections(nick COLLATE NOCASE);
 `);
+// plugin 0.18.10+: the ping of the player before he left («обычно 48 мс, за 10 с до выхода 51 → 870 мс»)
+addColumn(db, 'game_connections', 'ping', "TEXT NOT NULL DEFAULT ''");
 
 const KEEP_MS = 30 * 86_400_000;
 /** this many timeouts on one server within the window make an alert */
@@ -25387,7 +25390,7 @@ const TIMEOUT_WINDOW_MS = 60_000;
 const ALERT_PAUSE_MS = 10 * 60_000;
 const lastAlert = new Map<string, number>();
 
-export interface ConnectionEvent { kind: 'join' | 'leave'; id: string; name: string; reason: string; by: string; minutes: number; at: number }
+export interface ConnectionEvent { kind: 'join' | 'leave'; id: string; name: string; reason: string; by: string; minutes: number; at: number; ping?: string }
 
 export function alertOnce(key: string, now: number, send: () => void): boolean {
   if (now - (lastAlert.get(key) ?? 0) < ALERT_PAUSE_MS) return false;
@@ -25398,12 +25401,12 @@ export function alertOnce(key: string, now: number, send: () => void): boolean {
 
 /** keeps the events of a server; true when they made a «many timeouts» alert */
 export function saveConnections(serverId: number, events: ConnectionEvent[], now = Date.now()): boolean {
-  const insert = db.prepare('INSERT INTO game_connections (server_id, ts, kind, platform_id, nick, reason, removed_by, minutes) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+  const insert = db.prepare('INSERT INTO game_connections (server_id, ts, kind, platform_id, nick, reason, removed_by, minutes, ping) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
   db.transaction(() => {
     for (const e of events) {
       // the time of the plugin, unless it is far off (a wrong clock on the game server)
       const ts = Math.abs(e.at - now) < 3_600_000 ? e.at : now;
-      insert.run(serverId, ts, e.kind, e.id.slice(0, 25), plainLine(e.name).slice(0, 100), plainLine(e.reason).slice(0, 100), plainLine(e.by).slice(0, 200), Math.round(e.minutes));
+      insert.run(serverId, ts, e.kind, e.id.slice(0, 25), plainLine(e.name).slice(0, 100), plainLine(e.reason).slice(0, 100), plainLine(e.by).slice(0, 200), Math.round(e.minutes), plainLine(e.ping ?? '').slice(0, 200));
     }
   })();
   db.prepare('DELETE FROM game_connections WHERE ts < ?').run(now - KEEP_MS);
@@ -25462,6 +25465,7 @@ export function registerGameNewsConnections({ app, admin }: { app: Express; admi
       events: z.array(z.object({
         kind: z.enum(['join', 'leave']), id: z.string().max(25), name: cut(100), reason: cut(100).default(''),
         by: cut(300).default(''), minutes: z.number().int().min(-1).max(100_000).default(-1), at: z.number().int().positive(),
+        ping: cut(200).default(''),
       })).max(100),
     }).safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'bad' });
@@ -25481,9 +25485,9 @@ export function registerGameNewsConnections({ app, admin }: { app: Express; admi
     if (Number.isInteger(server) && server > 0) { where.push('server_id = ?'); args.push(server); }
     if (Number.isFinite(since) && since > 0) { where.push('ts >= ?'); args.push(Math.floor(since)); }
     const rows = db.prepare(`SELECT * FROM game_connections ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY ts DESC, id DESC LIMIT ?`).all(...args, limit) as {
-      id: number; server_id: number; ts: number; kind: string; platform_id: string; nick: string; reason: string; removed_by: string; minutes: number;
+      id: number; server_id: number; ts: number; kind: string; platform_id: string; nick: string; reason: string; removed_by: string; minutes: number; ping: string;
     }[];
-    res.json({ items: rows.map((r) => ({ id: r.id, serverId: r.server_id, serverName: serverLabel(r.server_id), ts: r.ts, kind: r.kind, platformId: r.platform_id, nick: r.nick, reason: r.reason, removedBy: r.removed_by, minutes: r.minutes })) });
+    res.json({ items: rows.map((r) => ({ id: r.id, serverId: r.server_id, serverName: serverLabel(r.server_id), ts: r.ts, kind: r.kind, platformId: r.platform_id, nick: r.nick, reason: r.reason, removedBy: r.removed_by, minutes: r.minutes, ping: r.ping ?? '' })) });
   });
 
   // «Обновить плагин»: the plugin downloads the newest release; it takes effect at the next restart of the server
@@ -25509,6 +25513,202 @@ export function registerGameNewsConnections({ app, admin }: { app: Express; admi
     writeScoped('gamenews_lang', b.data.lang, id);
     res.json({ ok: true });
   });
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/gamenews"
+  cat > "$APP_DIR/core-backend/src/gamenews/gameNewsDaily.ts" << '__COREGSM_EOF__'
+/**
+ * The daily summary of the joins and departures (plugin 0.18+), to the service channel of Discord once a day (the hour of the panel's
+ * time zone is set, 9:00 by default), for the day before: how many came, how they left (a normal quit, a timeout, the check of Steam,
+ * removed by CoreGSM), the timeouts by hour and by player, timeouts of several players at once, and what the plugin noticed (the network
+ * of the server, a paused process, freezes, mass departures). Against the seven days before, so one day can be compared with another
+ * (e.g. a day without BepInEx). A server with nothing that day is not told.
+ * Settings: `gn_daily_summary` ('0' = off, on by default) and `gn_daily_hour` (0..23); in GET / PUT /api/game-news/plugin-alerts.
+ */
+import { db, getSetting, setSetting } from '../db.js';
+import { systemTarget } from '../alerts/alertRoute.js';
+import { alertSettings, enqueueAlert } from '../alerts/alerts.js';
+import { localParts, zonedTime } from '../admin/localTime.js';
+import { serverLabel } from './gameNewsVars.js';
+
+const DAY = 86_400_000;
+/** timeouts this close to each other are one outage (several players at once) */
+const BURST_GAP_MS = 15_000;
+const BURST_LEAST = 3;
+
+export const DEFAULT_DAILY_HOUR = 9;
+export const dailyOn = (): boolean => getSetting('gn_daily_summary') !== '0';
+export const dailyHour = (): number => {
+  const n = Number(getSetting('gn_daily_hour'));
+  return getSetting('gn_daily_hour') != null && Number.isInteger(n) && n >= 0 && n <= 23 ? n : DEFAULT_DAILY_HOUR;
+};
+const tz = () => getSetting('timezone') || process.env.TZ || 'Europe/Moscow';
+
+export interface ConnRow { ts: number; kind: string; platform_id: string; nick: string; reason: string; removed_by: string }
+export interface NoteRow { kind: string; text: string }
+
+export interface DayStats {
+  joins: number; players: number; leaves: number;
+  quit: number; timeouts: number; timeoutPlayers: number; steam: number; removed: number; other: number;
+  /** outages that took several players at once: how many players each */
+  bursts: number[];
+  /** local hour → timeouts */
+  hours: number[];
+  /** players with two or more timeouts, most first */
+  repeat: { nick: string; n: number }[];
+  notes: { net: number; stood: number; freeze: number; mass: number };
+}
+
+export type LeaveSort = 'quit' | 'timeout' | 'steam' | 'removed' | 'other';
+export function leaveSort(r: Pick<ConnRow, 'reason' | 'removed_by'>): LeaveSort {
+  if (r.removed_by) return 'removed';
+  if (/^timeout/i.test(r.reason)) return 'timeout';
+  if (/^auth/i.test(r.reason)) return 'steam';
+  if (/^leftgame/i.test(r.reason)) return 'quit';
+  return 'other';
+}
+
+/** the numbers of one day of one server; pure, so it can be tested */
+export function summarize(rows: ConnRow[], notes: NoteRow[], zone: string): DayStats {
+  const s: DayStats = { joins: 0, players: 0, leaves: 0, quit: 0, timeouts: 0, timeoutPlayers: 0, steam: 0, removed: 0, other: 0, bursts: [], hours: Array(24).fill(0), repeat: [], notes: { net: 0, stood: 0, freeze: 0, mass: 0 } };
+  const players = new Set<string>();
+  const perPlayer = new Map<string, { nick: string; n: number }>();
+  const timeouts: number[] = [];
+  for (const r of rows) {
+    if (r.platform_id) players.add(r.platform_id);
+    if (r.kind === 'join') { s.joins++; continue; }
+    if (r.kind !== 'leave') continue;
+    s.leaves++;
+    const sort = leaveSort(r);
+    if (sort === 'timeout') {
+      s.timeouts++;
+      timeouts.push(r.ts);
+      s.hours[localParts(r.ts, zone).hour]++;
+      const key = r.platform_id || r.nick;
+      const p = perPlayer.get(key) ?? { nick: r.nick || r.platform_id, n: 0 };
+      p.n++;
+      perPlayer.set(key, p);
+    } else s[sort]++;
+  }
+  s.players = players.size;
+  s.timeoutPlayers = perPlayer.size;
+  s.repeat = [...perPlayer.values()].filter((p) => p.n >= 2).sort((a, b) => b.n - a.n).slice(0, 5);
+  timeouts.sort((a, b) => a - b);
+  let run = 0;
+  for (let i = 0; i < timeouts.length; i++) {
+    run = i > 0 && timeouts[i] - timeouts[i - 1] <= BURST_GAP_MS ? run + 1 : 1;
+    const ends = i === timeouts.length - 1 || timeouts[i + 1] - timeouts[i] > BURST_GAP_MS;
+    if (ends && run >= BURST_LEAST) s.bursts.push(run);
+  }
+  for (const n of notes) {
+    if (/^СЕТЬ СЕРВЕРА/.test(n.text)) s.notes.net++;
+    else if (/^ПРОЦЕСС СТОЯЛ/.test(n.text)) s.notes.stood++;
+    else if (n.kind === 'freeze') s.notes.freeze++;
+    else if (n.kind === 'mass') s.notes.mass++;
+  }
+  return s;
+}
+
+const pct = (a: number, b: number) => (b > 0 ? `${Math.round((a / b) * 100)}%` : '–');
+const plural = (n: number, one: string, few: string, many: string) => {
+  const m10 = n % 10, m100 = n % 100;
+  return m10 === 1 && m100 !== 11 ? one : m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14) ? few : many;
+};
+
+/** the busiest hours of the timeouts, e.g. «14 ч ×3, 8 ч ×1» */
+export function busyHours(hours: number[]): string {
+  return hours.map((n, h) => ({ h, n })).filter((x) => x.n > 0).sort((a, b) => b.n - a.n || a.h - b.h).slice(0, 4).map((x) => `${x.h} ч ×${x.n}`).join(', ');
+}
+
+/** the text of the summary of one server; `week` = the timeouts and departures of the seven days before (for the comparison) */
+export function dailyText(s: DayStats, week: { timeouts: number; leaves: number; days: number }): string {
+  const lines: string[] = [];
+  lines.push(`Заходов **${s.joins}**, игроков **${s.players}**, выходов **${s.leaves}**`);
+  const parts = [`обычный выход ${s.quit}`, `**таймаут ${s.timeouts}** (${pct(s.timeouts, s.leaves)}, ${s.timeoutPlayers} ${plural(s.timeoutPlayers, 'игрок', 'игрока', 'игроков')})`];
+  if (s.steam) parts.push(`проверка Steam ${s.steam}`);
+  if (s.removed) parts.push(`снял CoreGSM ${s.removed}`);
+  if (s.other) parts.push(`другое ${s.other}`);
+  lines.push(`Как выходили: ${parts.join(' · ')}`);
+  if (s.timeouts) {
+    lines.push(`Таймауты по часам: ${busyHours(s.hours)}`);
+    lines.push(s.bursts.length
+      ? `Обрывы сразу у нескольких игроков: **${s.bursts.length}** (${s.bursts.map((n) => `${n} ${plural(n, 'игрок', 'игрока', 'игроков')}`).join(', ')}) — похоже на сеть или паузу самого сервера`
+      : 'Обрывов сразу у нескольких игроков не было — таймауты одиночные');
+    if (s.repeat.length) lines.push(`Чаще других: ${s.repeat.map((p) => `${p.nick} ×${p.n}`).join(', ')}`);
+  }
+  if (week.days > 0) {
+    const avg = week.timeouts / week.days;
+    lines.push(`За ${week.days} ${plural(week.days, 'день', 'дня', 'дней')} до этого: в среднем ${avg.toFixed(1).replace('.', ',')} таймаута в день (${pct(week.timeouts, week.leaves)} выходов)`);
+  }
+  const n = s.notes;
+  const plugin = [
+    n.net ? `обрывов сети сервера ${n.net}` : '',
+    n.stood ? `пауз процесса/ВМ ${n.stood}` : '',
+    n.freeze ? `замираний ${n.freeze}` : '',
+    n.mass ? `массовых выходов ${n.mass}` : '',
+  ].filter(Boolean);
+  lines.push(plugin.length ? `Плагин заметил: ${plugin.join(', ')}` : 'Плагин не заметил сбоев сети, пауз и замираний');
+  return lines.join('\n');
+}
+
+function rowsOf(serverId: number, from: number, to: number): ConnRow[] {
+  return db.prepare('SELECT ts, kind, platform_id, nick, reason, removed_by FROM game_connections WHERE server_id = ? AND ts >= ? AND ts < ? ORDER BY ts').all(serverId, from, to) as ConnRow[];
+}
+function notesOf(serverId: number, from: number, to: number): NoteRow[] {
+  try {
+    return db.prepare('SELECT kind, text FROM game_plugin_log WHERE server_id = ? AND ts >= ? AND ts < ?').all(serverId, from, to) as NoteRow[];
+  } catch {
+    return [];
+  }
+}
+
+/** the summary of the local day `day` ("YYYY-MM-DD") for every server that had something; [server, text] */
+export function buildDaily(day: string, zone = tz()): { serverId: number; name: string; text: string }[] {
+  const from = zonedTime(day, 0, zone);
+  const to = zonedTime(localParts(from + DAY + 3 * 3_600_000, zone).day, 0, zone); // the next midnight (a day may be 23 or 25 h)
+  const servers = db.prepare('SELECT DISTINCT server_id FROM game_connections WHERE ts >= ? AND ts < ?').all(from, to) as { server_id: number }[];
+  const out: { serverId: number; name: string; text: string }[] = [];
+  for (const { server_id: id } of servers) {
+    const s = summarize(rowsOf(id, from, to), notesOf(id, from, to), zone);
+    if (s.joins + s.leaves === 0) continue;
+    // the seven days before, as far as the journal goes back (it keeps 30 days)
+    const before = rowsOf(id, from - 7 * DAY, from);
+    const first = before.length ? before[0].ts : from;
+    const days = Math.min(7, Math.floor((from - first) / DAY));
+    const prev = before.filter((r) => r.ts >= from - days * DAY && r.kind === 'leave');
+    out.push({ serverId: id, name: serverLabel(id), text: dailyText(s, { timeouts: prev.filter((r) => leaveSort(r) === 'timeout').length, leaves: prev.length, days }) });
+  }
+  return out;
+}
+
+const DAY_NAMES = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'];
+export const dayTitle = (day: string): string => {
+  const [, m, d] = day.split('-').map(Number);
+  return `${d} ${DAY_NAMES[m - 1] ?? ''}`;
+};
+
+/** called by the timer: after the hour, once a day, the day before goes to the service channel; the number of messages */
+export function checkDaily(now = Date.now()): number {
+  if (!dailyOn()) return 0;
+  const zone = tz();
+  const today = localParts(now, zone);
+  if (today.hour < dailyHour()) return 0;
+  if (getSetting('gn_daily_last') === today.day) return 0;
+  setSetting('gn_daily_last', today.day);
+  const yesterday = localParts(zonedTime(today.day, 0, zone) - 3_600_000, zone).day;
+  const target = systemTarget(alertSettings());
+  if (!target) return 0;
+  let n = 0;
+  for (const s of buildDaily(yesterday, zone)) {
+    try {
+      enqueueAlert('update', s.name, {
+        content: '', mention: 'none',
+        embed: { title: `📊 Входы и выходы за ${dayTitle(yesterday)}`, description: `Сервер **${s.name}**\n${s.text}`, color: 0x5865f2, timestamp: new Date(now).toISOString() },
+      });
+      n++;
+    } catch { /* one server must not stop the others */ }
+  }
+  return n;
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/gamenews"
@@ -26771,6 +26971,7 @@ __COREGSM_EOF__
  *  - a plugin that has not answered for N minutes (it went silent after it had been talking; once per silence);
  *  - a plugin older than the newest one the panel knows (once per server and version).
  * Settings: `gn_alert_silent_min` (0 = off, 10 by default) and `gn_alert_outdated` ('0' = off, on by default).
+ * Also the daily summary of the joins and departures (gameNewsDaily.ts): `daily`, `dailyHour`.
  *   GET / PUT /api/game-news/plugin-alerts   (administrators)
  */
 import type { Express, RequestHandler } from 'express';
@@ -26780,6 +26981,7 @@ import { systemTarget } from '../alerts/alertRoute.js';
 import { alertSettings, enqueueAlert } from '../alerts/alerts.js';
 import { PLUGIN_VERSION, type TargetRow } from './gameNews.js';
 import { serverLabel } from './gameNewsVars.js';
+import { dailyHour, dailyOn } from './gameNewsDaily.js';
 
 export const SILENT_CHOICES = [0, 5, 10, 30, 60] as const;
 export const DEFAULT_SILENT_MIN = 10;
@@ -26857,19 +27059,23 @@ export function checkPlugins(now = Date.now()): number {
   return n;
 }
 
+const state = () => ({ silentMin: silentMinutes(), outdated: outdatedAlertOn(), choices: SILENT_CHOICES, daily: dailyOn(), dailyHour: dailyHour() });
+
 export function registerGameNewsPluginAlerts({ app, admin }: { app: Express; admin: RequestHandler }): void {
   app.get('/api/game-news/plugin-alerts', admin, (_req, res) => {
-    res.json({ silentMin: silentMinutes(), outdated: outdatedAlertOn(), choices: SILENT_CHOICES });
+    res.json(state());
   });
   app.put('/api/game-news/plugin-alerts', admin, (req, res) => {
-    const b = z.object({ silentMin: z.number().int().optional(), outdated: z.boolean().optional() }).safeParse(req.body);
+    const b = z.object({ silentMin: z.number().int().optional(), outdated: z.boolean().optional(), daily: z.boolean().optional(), dailyHour: z.number().int().min(0).max(23).optional() }).safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Проверьте поля' });
     if (b.data.silentMin !== undefined) {
       if (!(SILENT_CHOICES as readonly number[]).includes(b.data.silentMin)) return res.status(400).json({ error: 'Проверьте поля' });
       setSetting('gn_alert_silent_min', String(b.data.silentMin));
     }
     if (b.data.outdated !== undefined) setSetting('gn_alert_outdated', b.data.outdated ? '1' : '0');
-    res.json({ silentMin: silentMinutes(), outdated: outdatedAlertOn(), choices: SILENT_CHOICES });
+    if (b.data.daily !== undefined) setSetting('gn_daily_summary', b.data.daily ? '1' : '0');
+    if (b.data.dailyHour !== undefined) setSetting('gn_daily_hour', String(b.data.dailyHour));
+    res.json(state());
   });
 }
 __COREGSM_EOF__
@@ -26877,7 +27083,8 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-backend/src/gamenews/gameNewsPluginLog.ts" << '__COREGSM_EOF__'
 /**
  * What the plugin tells the panel about itself, for the journal («Игровой плагин» → «Журнал»):
- *  - notes (`POST /api/game-news/incidents`): several players leaving at once, a high ping, the lines of Steam, a freeze, a save;
+ *  - notes (`POST /api/game-news/incidents`): several players leaving at once, a high ping, the lines of Steam, a freeze, a save,
+ *    the network of the server lost or its process paused (`net`, 0.18.12+);
  *  - the result of every message it showed (`POST /api/game-news/delivery`): how many players saw it, or why it could not be shown.
  * Three messages in a row that did not reach the game tell the administrators (the service channel).
  * The journal is kept for `gamenews_journal_days` days (30 by default).
@@ -26905,7 +27112,7 @@ CREATE INDEX IF NOT EXISTS idx_game_plugin_log ON game_plugin_log(server_id, ts)
 `);
 
 /** what the plugin may report; an unknown kind is kept as «other» */
-export const PLUGIN_NOTE_KINDS = ['mass', 'ping', 'steam', 'freeze', 'save'] as const;
+export const PLUGIN_NOTE_KINDS = ['mass', 'ping', 'steam', 'freeze', 'save', 'net'] as const;
 export type PluginNoteKind = (typeof PLUGIN_NOTE_KINDS)[number] | 'other';
 
 export const DEFAULT_JOURNAL_DAYS = 30;
@@ -27836,6 +28043,7 @@ import { checkNews } from './gameNewsLogic.js';
 import { queueNews } from './gameNews.js';
 import { pruneJournalSometimes, sweepQueue } from './gameNewsPluginLog.js';
 import { checkPlugins } from './gameNewsPluginAlerts.js';
+import { checkDaily } from './gameNewsDaily.js';
 import { MAX_EVERY, MIN_EVERY, cleanTimes, dueState, inWindow, nextRunAfter, upcomingRuns, type RuleKind, type Schedule } from './gameNewsSchedule.js';
 
 const MAX_RULES = 50;
@@ -27906,7 +28114,7 @@ export function startGameNewsTimer(): void {
   timer = setInterval(() => {
     if (busy) return;
     busy = true;
-    try { tickRules(); sweepQueue(); pruneJournalSometimes(); checkPlugins(); } catch (e) { log.error('game news scheduler failed', (e as Error).message); } finally { busy = false; }
+    try { tickRules(); sweepQueue(); pruneJournalSometimes(); checkPlugins(); checkDaily(); } catch (e) { log.error('game news scheduler failed', (e as Error).message); } finally { busy = false; }
   }, 20_000);
   timer.unref();
 }
@@ -127436,7 +127644,7 @@ export const KIND_ICON: Record<Kind, ComponentType<IconProps>> = {
   message: IconSend, auto: IconAuto, discord: IconChat, restart: IconRestart, link: IconLink, mod: IconShield, plugin: IconBox, conn: IconSignal,
 };
 export const PLUGIN_NOTE_ICON: Record<string, ComponentType<IconProps>> = {
-  mass: IconDoor, ping: IconSignal, steam: IconGamepad, freeze: IconSnow, save: IconDisk, other: IconBox,
+  mass: IconDoor, ping: IconSignal, steam: IconGamepad, freeze: IconSnow, save: IconDisk, net: IconSignal, other: IconBox,
 };
 
 /** the icon of a tab of the plugin page */
@@ -149605,6 +149813,7 @@ const en: Record<keyof typeof ru, string> = {
   'gn.jn.pk.steam': 'Steam',
   'gn.jn.pk.freeze': 'Freeze',
   'gn.jn.pk.save': 'Save',
+  'gn.jn.pk.net': 'Server network',
   'gn.jn.pk.other': 'Plugin note',
   'gn.jn.shown': 'seen by: {n}',
   'gn.jn.shownTitle': 'How many players were on the server when the plugin showed the message',
@@ -149851,6 +150060,10 @@ const en: Record<keyof typeof ru, string> = {
   'gn.pa.off': 'Off',
   'gn.pa.min': '{n} min',
   'gn.pa.outdated': 'A new plugin version is out',
+  'gn.pa.daily': 'Daily summary of joins and departures',
+  'gn.pa.dailyHint': 'Once a day, for yesterday: how many came, how they left (timeouts by hour and player, outages of several players at once), what the plugin noticed, compared with the week before.',
+  'gn.pa.dailyHour': 'When to send it',
+  'gn.pa.hour': '{h}:00',
   'gn.pa.outdatedHint': 'Tell once for each server and version when the plugin on it is older than the latest.',
   'gn.pf.linked': 'Account: {name}',
   'gn.pf.open': 'Player card',
@@ -149887,6 +150100,7 @@ const en: Record<keyof typeof ru, string> = {
   'gn.mt.gb': 'GB',
   'gn.mt.s': 's',
   'gn.cn.note': 'One visit, one line: when the player came, when they left and how long they stayed. The game names the reason of the departure; a note about CoreGSM appears only when it removed the player. Needs plugin 0.18; kept for 30 days.',
+  'gn.cn.ping': 'Ping: {ping}',
   'gn.cn.inGame': 'In game',
   'gn.cn.now': 'now',
   'gn.cn.min': '{n} min',
@@ -154992,6 +155206,7 @@ const ru = {
   'gn.jn.pk.steam': 'Steam',
   'gn.jn.pk.freeze': 'Замирание',
   'gn.jn.pk.save': 'Сохранение',
+  'gn.jn.pk.net': 'Сеть сервера',
   'gn.jn.pk.other': 'Заметка плагина',
   'gn.jn.shown': 'увидели: {n}',
   'gn.jn.shownTitle': 'Сколько игроков было на сервере, когда плагин показал сообщение',
@@ -155238,6 +155453,10 @@ const ru = {
   'gn.pa.off': 'Выключено',
   'gn.pa.min': '{n} мин',
   'gn.pa.outdated': 'Вышла новая версия плагина',
+  'gn.pa.daily': 'Сводка входов и выходов за день',
+  'gn.pa.dailyHint': 'Раз в день за вчера: сколько заходили, как выходили (таймауты по часам и игрокам, обрывы сразу у нескольких), что заметил плагин, сравнение с неделей до этого.',
+  'gn.pa.dailyHour': 'Во сколько присылать',
+  'gn.pa.hour': '{h}:00',
   'gn.pa.outdatedHint': 'Сказать один раз для каждого сервера и версии, когда на нём стоит плагин старше последнего.',
   'gn.pf.linked': 'Аккаунт: {name}',
   'gn.pf.open': 'Карточка игрока',
@@ -155275,6 +155494,7 @@ const ru = {
   'gn.mt.s': 'с',
   'gn.cn.note': 'Один визит — одна строка: когда зашёл, когда вышел и сколько пробыл. Причину выхода называет игра; пометка про CoreGSM — только если игрока убрал он. Нужен плагин 0.18; хранится 30 дней.',
   'gn.cn.inGame': 'В игре',
+  'gn.cn.ping': 'Пинг: {ping}',
   'gn.cn.now': 'сейчас',
   'gn.cn.min': '{n} мин',
   'gn.cn.status': 'Состояние',
@@ -165562,6 +165782,7 @@ function ConnectionRow({ r, compact, many, repeat }: { r: Row; compact: boolean;
           {repeat && <span className="pill pill-warn" title={t('gn.cn.repeatHint', { n: REPEAT_JOINS })}>{t('gn.cn.repeat')}</span>}
           {short && !repeat && <span className="pill pill-mute" title={t('gn.cn.shortHint', { n: SHORT_VISIT_MIN })}>{t('gn.cn.short')}</span>}
         </div>
+        {r.leave?.ping && !compact && <p className="text-xs font-semibold text-mute">{t('gn.cn.ping', { ping: r.leave.ping })}</p>}
         {r.leave?.removedBy && <p className="font-semibold text-warn">{t('gn.cn.removed', { why: r.leave.removedBy })}</p>}
       </div>
     </li>
@@ -166163,14 +166384,14 @@ import { IconBell } from '../components/GameNewsIcons';
 import { t, useI18n } from '../i18n';
 import { Switch, errText, toast } from '../ui';
 
-interface AlertState { silentMin: number; outdated: boolean; choices: number[] }
+interface AlertState { silentMin: number; outdated: boolean; choices: number[]; daily: boolean; dailyHour: number }
 
 /** what the administrators are told about the plugins themselves: a silent one, an old one (to the service channel) */
 export function PluginAlertsCard() {
   useI18n();
   const [s, setS] = useState<AlertState | null>(null);
   useEffect(() => { void api<AlertState>('/game-news/plugin-alerts').then(setS).catch(() => undefined); }, []);
-  const save = async (patch: Partial<Pick<AlertState, 'silentMin' | 'outdated'>>) => {
+  const save = async (patch: Partial<Pick<AlertState, 'silentMin' | 'outdated' | 'daily' | 'dailyHour'>>) => {
     try { setS(await api<AlertState>('/game-news/plugin-alerts', 'PUT', patch)); toast(t('al.saved')); } catch (e) { toast(errText(e), 'err'); }
   };
   if (!s) return <div className="skeleton h-24 rounded-2xl" aria-busy="true" />;
@@ -166193,6 +166414,18 @@ export function PluginAlertsCard() {
         <span className="min-w-0 flex-1 basis-60 font-bold">{t('gn.pa.outdated')}<span className="block text-sm font-semibold text-mute">{t('gn.pa.outdatedHint')}</span></span>
         <Switch checked={s.outdated} onChange={(v) => void save({ outdated: v })} aria-label={t('gn.pa.outdated')} />
       </label>
+      <label className="flex flex-wrap items-center justify-between gap-3">
+        <span className="min-w-0 flex-1 basis-60 font-bold">{t('gn.pa.daily')}<span className="block text-sm font-semibold text-mute">{t('gn.pa.dailyHint')}</span></span>
+        <Switch checked={s.daily} onChange={(v) => void save({ daily: v })} aria-label={t('gn.pa.daily')} />
+      </label>
+      {s.daily && (
+        <label className="flex flex-wrap items-center justify-between gap-3">
+          <span className="min-w-0 flex-1 basis-60 font-bold">{t('gn.pa.dailyHour')}</span>
+          <select className="input w-40" value={s.dailyHour} aria-label={t('gn.pa.dailyHour')} onChange={(e) => void save({ dailyHour: Number(e.target.value) })}>
+            {Array.from({ length: 24 }, (_, h) => <option key={h} value={h}>{t('gn.pa.hour', { h })}</option>)}
+          </select>
+        </label>
+      )}
     </section>
   );
 }
@@ -174034,7 +174267,7 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/pages/connectionsLogic.ts" << '__COREGSM_EOF__'
 /** The journal of joins and departures: pairs «came → left» into one line, filters, day groups, players who keep reconnecting. */
 
-export interface ConnectionItem { id: number; serverId?: number; serverName: string; ts: number; kind: 'join' | 'leave'; platformId: string; nick: string; reason: string; removedBy: string; minutes: number }
+export interface ConnectionItem { id: number; serverId?: number; serverName: string; ts: number; kind: 'join' | 'leave'; platformId: string; nick: string; reason: string; removedBy: string; minutes: number; /** plugin 0.18.10+: the ping before the departure */ ping?: string }
 
 /** one line of the journal: a finished visit (join + leave), a visit that goes on (join only) or a departure whose arrival is not known */
 export interface Row {
@@ -174290,7 +174523,7 @@ export interface Entry {
 
 export const FILTERS = ['all', 'problems', 'message', 'auto', 'discord', 'restart', 'plugin', 'link', 'mod'] as const;
 export type Filter = (typeof FILTERS)[number];
-export const PLUGIN_KINDS = ['mass', 'ping', 'steam', 'freeze', 'save', 'other'] as const;
+export const PLUGIN_KINDS = ['mass', 'ping', 'steam', 'freeze', 'save', 'net', 'other'] as const;
 
 export const isMessage = (e: Entry): boolean => e.kind === 'message' || e.kind === 'auto' || e.kind === 'discord';
 
