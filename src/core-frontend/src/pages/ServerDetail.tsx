@@ -17,7 +17,7 @@ import { gameGradient, gameLabel } from '../games';
 import { coverBackground, coverUrlOf, emblemStyle, gameBackdrop } from '../cover';
 import { applyConnectTemplates, connectGuide } from '../connectGuides';
 import { useGameProfiles } from '../gameProfiles';
-import { Burst, CopyButton, ErrorLine, GameAvatar, IconBell, LoadError, IconCheckMark, IconRefresh, IconShare, StatusPill, ago, isLag, toast, useDepth, useFlashOnChange, usePoll, navigate, errText } from '../ui';
+import { Burst, CopyButton, ErrorLine, GameAvatar, IconBell, LoadError, IconCheckMark, IconRefresh, IconShare, StatusPill, ago, isLag, toast, useDepth, useFlashOnChange, usePoll, navigate, errText, ChartEmpty } from '../ui';
 import NotFound from '../components/NotFound';
 import { confirmDialog } from '../confirm';
 import ServerForm from './ServerForm';
@@ -500,7 +500,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
         <PeriodSeg hours={hours} onChange={setHours} />
       </div>
       {stats.samples < 2 ? (
-        <p className="py-10 text-center font-semibold text-mute">{t('d2.sd.fewData')}</p>
+        <ChartEmpty text={t('d2.sd.fewData')} />
       ) : down ? (
         <OfflineState since={outage?.ts ?? null} atLeast={outage?.atLeast ?? false} error={s.error ?? null} points={points} hours={data.hours} now={nowTs} uptimePct={stats.uptimePct ?? null} windowLabel={windowLabel}>
           {chartEl(withSeries)}

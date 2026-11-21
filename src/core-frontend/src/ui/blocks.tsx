@@ -2,6 +2,7 @@
 import { type ReactNode, type TouchEvent as ReactTouch, useEffect, useId, useRef, useState } from 'react';
 import { useAuth } from '../auth';
 import { StateView } from '../components/StateView';
+import type { ArtScene } from '../components/EmptyArt';
 import * as Dialog from '@radix-ui/react-dialog';
 import { promptDialog } from '../confirm';
 import { gameIconPath } from '../gameIcons';
@@ -233,8 +234,8 @@ export function ErrorLine({ text }: { text: string }) {
 }
 
 /** an empty list: the «empty» variant of StateView (kept under its old name, every page uses it) */
-export function Empty({ title, text, art, compact = false, children }: { title: string; text: string; art?: ReactNode; compact?: boolean; children?: ReactNode }) {
-  return <StateView kind="empty" title={title} text={text} art={art} compact={compact}>{children}</StateView>;
+export function Empty({ title, text, art, scene, compact = false, children }: { title: string; text: string; art?: ReactNode; scene?: ArtScene; compact?: boolean; children?: ReactNode }) {
+  return <StateView kind="empty" title={title} text={text} art={art} scene={scene} compact={compact}>{children}</StateView>;
 }
 
 /** Copies text to the clipboard; falls back to a dialog with the text selected where the Clipboard API is blocked. */

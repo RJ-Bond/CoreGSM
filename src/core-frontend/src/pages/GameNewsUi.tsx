@@ -2,12 +2,13 @@ import { useState, type ReactNode } from 'react';
 import { t, useI18n } from '../i18n';
 import { SCOPE_KEYS, useScope } from './GameNewsScope';
 import { IconInfo } from '../icons';
+import { EmptyArt, type ArtScene } from '../components/EmptyArt';
 
 /** a quiet block for a list that has nothing in it yet: what it is for and the way to fill it */
-export function EmptyState({ icon = <IconInfo size={22} />, title, hint, action }: { icon?: ReactNode; title: string; hint?: string; action?: ReactNode }) {
+export function EmptyState({ icon = <IconInfo size={22} />, scene, title, hint, action }: { icon?: ReactNode; scene?: ArtScene; title: string; hint?: string; action?: ReactNode }) {
   return (
     <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed border-line px-5 py-8 text-center">
-      <span aria-hidden className="flex h-11 w-11 items-center justify-center rounded-full bg-soft text-mute">{icon}</span>
+      {scene ? <EmptyArt scene={scene} size={112} /> : <span aria-hidden className="flex h-11 w-11 items-center justify-center rounded-full bg-soft text-mute">{icon}</span>}
       <p className="font-extrabold">{title}</p>
       {hint && <p className="max-w-md text-sm font-semibold text-mute">{hint}</p>}
       {action && <div className="pt-1">{action}</div>}

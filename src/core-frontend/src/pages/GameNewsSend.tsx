@@ -4,7 +4,7 @@ import { t, useI18n } from '../i18n';
 import { versionLess, type NewsSendResult, type NewsServerInfo } from '../gameNews';
 import { Spinner } from '../ui';
 import { EmptyState } from './GameNewsUi';
-import { IconPlug, IconBolt, IconCheck, IconClose } from '../icons';
+import { IconBolt, IconCheck, IconClose } from '../icons';
 import { IconRestart } from '../components/GameNewsIcons';
 
 export interface SendProps {
@@ -59,7 +59,7 @@ export function SendTab(p: SendProps) {
 
           {p.supportedCount === 0 && <p className="text-sm font-semibold text-mute">{t('gn.noServers')}</p>}
           {p.supportedCount > 0 && p.withToken.length === 0 && (
-            <EmptyState icon={<IconPlug size={22} />} title={t('gn.noPlugin')} hint={t('gn.q.connectHint')} />
+            <EmptyState scene="plug" title={t('gn.noPlugin')} hint={t('gn.q.connectHint')} />
           )}
 
           <div className="flex flex-wrap gap-2" role="group" aria-label={t('gn.servers')}>

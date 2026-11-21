@@ -9,7 +9,7 @@ import { useAppearance } from '../appearance';
 import { t, useI18n } from '../i18n';
 import { GameAvatar, UserAvatar } from '../ui';
 import { useRecentServers } from '../ui/recent';
-import { FootBans, FootCommunity, FootNews, FootServers, FootStatus, FootTag } from './FooterIcons';
+import { FootAbout, FootBans, FootCommunity, FootNews, FootServers, FootStatus, FootTag } from './FooterIcons';
 import { MenuAdmin, MenuLogout, MenuUser } from './HeaderIcons';
 import '../styles/shell.css';
 
@@ -111,6 +111,7 @@ export function AppFooter({ brand, version, compact = false, links = false }: { 
             <a href="/status">{t('nav.status')}</a>
             <a href="/bans">{t('nav.bans')}</a>
             <a href="/community">{t('nav.community')}</a>
+            <a href="/about">{t('foot.about')}</a>
             <a href="/api/v1/openapi.json" target="_blank" rel="noopener noreferrer">{t('foot.api')}</a>
           </nav>
         )}
@@ -136,6 +137,7 @@ export function AppFooter({ brand, version, compact = false, links = false }: { 
           <a href="/status"><FootStatus />{t('nav.status')}</a>
           <a href="/community"><FootCommunity />{t('nav.community')}</a>
           <a href="/bans"><FootBans />{t('nav.bans')}</a>
+          <a href="/about"><FootAbout />{t('foot.about')}</a>
         </nav>
       </div>
       <div className="app-foot-col">

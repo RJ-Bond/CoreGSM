@@ -12,10 +12,15 @@ export interface RowMenuItem {
   disabled?: boolean;
   /** a divider is drawn above the item */
   sep?: boolean;
+  /** a key that does it while the menu is open (shown at the right of the item): 'r', 'e', 'Delete' */
+  shortcut?: string;
 }
 
 /** the room a menu needs to the left of the button's right edge: its minimum width (13rem) and a margin */
 const MENU_ROOM = 224;
+
+/** «r» -> «R», «Delete» -> «Del» */
+const shortcutLabel = (k: string): string => (k === 'Delete' ? 'Del' : k.length === 1 ? k.toUpperCase() : k);
 
 export default function RowMenu({ label, items, className = '' }: { label: string; items: RowMenuItem[]; className?: string }) {
   const [open, setOpen] = useState(false);
@@ -55,6 +60,12 @@ export default function RowMenu({ label, items, className = '' }: { label: strin
     const i = els.indexOf(document.activeElement as HTMLElement);
     if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(true); }
     else if (e.key === 'Tab') close();
+    else if (!e.ctrlKey && !e.metaKey && !e.altKey && items.some((it) => it.shortcut && !it.disabled && it.shortcut.toLowerCase() === e.key.toLowerCase())) {
+      const it = items.find((x) => x.shortcut && !x.disabled && x.shortcut.toLowerCase() === e.key.toLowerCase())!;
+      e.preventDefault();
+      close();
+      if (it.href) window.location.assign(it.href); else it.onSelect?.();
+    }
     else if (e.key === 'ArrowDown') { e.preventDefault(); els[(i + 1) % els.length]?.focus(); }
     else if (e.key === 'ArrowUp') { e.preventDefault(); els[(i - 1 + els.length) % els.length]?.focus(); }
     else if (e.key === 'Home') { e.preventDefault(); els[0]?.focus(); }
@@ -88,9 +99,9 @@ export default function RowMenu({ label, items, className = '' }: { label: strin
               'data-sep': it.sep ? 'true' : undefined,
             } as const;
             return it.href && !it.disabled ? (
-              <a key={it.key} {...common} href={it.href} onClick={() => close()}>{it.label}</a>
+              <a key={it.key} {...common} href={it.href} onClick={() => close()}>{it.label}{it.shortcut && <kbd className="row-menu-kbd" aria-hidden>{shortcutLabel(it.shortcut)}</kbd>}</a>
             ) : (
-              <button key={it.key} type="button" {...common} onClick={() => { if (it.disabled) return; close(); it.onSelect?.(); }}>{it.label}</button>
+              <button key={it.key} type="button" {...common} onClick={() => { if (it.disabled) return; close(); it.onSelect?.(); }}>{it.label}{it.shortcut && <kbd className="row-menu-kbd" aria-hidden>{shortcutLabel(it.shortcut)}</kbd>}</button>
             );
           })}
         </div>,

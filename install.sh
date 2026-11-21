@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="a69cef650d8d"
+COREGSM_BUILD="585bafdb8e62"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.2.71"
+COREGSM_VERSION="1.2.72"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -122926,6 +122926,7 @@ const AdminPage = lazyPage(() => import('./pages/Admin'));
 const ProfilePage = lazyPage(() => import('./pages/Profile'));
 const PublicProfilePage = lazyPage(() => import('./pages/PublicProfile'));
 const StatusPage = lazyPage(() => import('./pages/Status'));
+const AboutPage = lazyPage(() => import('./pages/About'));
 const UiKitPage = lazyPage(() => import('./pages/UiKit'));
 const CommunityPage = lazyPage(() => import('./pages/Community'));
 const PlayerPage = lazyPage(() => import('./pages/Player'));
@@ -123150,7 +123151,7 @@ export default function App() {
         toast(t('app.sessionEnded'), 'info');
         setBoot((p) => ({ ...p, me: null }));
         const { page } = parseRoute();
-        const publicRoute = accessRef.current.publicPanel && (page === '' || page === 'servers' || page === 'news' || page === 'status' || page === 'community' || page === 'bans' || page === 'player' || page === 'u');
+        const publicRoute = accessRef.current.publicPanel && (page === '' || page === 'servers' || page === 'news' || page === 'status' || page === 'community' || page === 'bans' || page === 'about' || page === 'player' || page === 'u');
         if (!publicRoute) navigate('/login');
         void load();
       }, 300);
@@ -123213,8 +123214,8 @@ export default function App() {
   const showAuth = !me && rawPage !== 'u' && (!access.publicPanel || rawPage === 'login' || rawPage === 'auth' || rawPage === 'register');
   shellOk.current = boot.ready && !authing && !boot.offline && !boot.needsSetup && !showAuth;
   // a first segment nobody knows (typo, old link) gets the 404 page; known-but-unavailable routes keep falling back to the list
-  const notFound = rawPage !== '' && !['login', 'register', 'auth', 'profile', 'u', '_ui', 'forgot', 'reset', 'verify', 'player'].includes(rawPage) && !PAGES.some((p) => p.id === rawPage);
-  const page = notFound ? '404' : rawPage === 'u' ? 'u' : rawPage === 'player' && sub ? 'player' : rawPage === 'profile' && me ? 'profile' : rawPage === '_ui' && isAdmin ? '_ui' : visible.some((p) => p.id === rawPage) ? rawPage : 'servers';
+  const notFound = rawPage !== '' && !['login', 'register', 'auth', 'profile', 'u', '_ui', 'forgot', 'reset', 'verify', 'player', 'about'].includes(rawPage) && !PAGES.some((p) => p.id === rawPage);
+  const page = notFound ? '404' : rawPage === 'u' ? 'u' : rawPage === 'about' ? 'about' : rawPage === 'player' && sub ? 'player' : rawPage === 'profile' && me ? 'profile' : rawPage === '_ui' && isAdmin ? '_ui' : visible.some((p) => p.id === rawPage) ? rawPage : 'servers';
   const adminSection = sub.split('/')[0];
   let publicName = '';
   if (page === 'u' || page === 'player') {
@@ -123228,6 +123229,8 @@ export default function App() {
         ? 'UI-кит'
         : page === '404'
         ? t('title.notfound')
+        : page === 'about'
+        ? t('foot.about')
         : page === 'u' || page === 'player'
         ? publicName
         : page === 'profile'
@@ -123401,6 +123404,7 @@ export default function App() {
             {page === 'status' && <StatusPage />}
             {page === 'community' && <CommunityPage />}
             {page === 'bans' && <BansPage />}
+            {page === 'about' && <AboutPage brand={access.brand.name} />}
             {page === 'player' && <PlayerPage name={publicName} />}
             {page === 'admin' && <AdminPage sub={sub} updateAvailable={updateAvailable} />}
             {page === 'profile' && <ProfilePage />}
@@ -124577,6 +124581,7 @@ import { useSyncExternalStore } from 'react';
  *   reduceMotion  -> data-motion="reduce"   (CSS switches animations and transitions off; without it the OS setting rules)
  *   largeText     -> data-text="large"      (root font scale 112.5 %)
  *   highContrast  -> data-contrast="high"   (stronger ink and borders)
+ *   shapes        -> data-shapes="1"       (a status says its state with a sign as well as a colour: ✓ ! ✕)
  *   liteData      -> data-lite="1"          (data saving: no decorations or animations, polling twice as rare);
  *                    also on by itself when the browser asks for it (Save-Data, a 2G connection)
  */
@@ -124585,6 +124590,8 @@ export interface Appearance {
   largeText: boolean;
   highContrast: boolean;
   liteData: boolean;
+  /** statuses carry a sign (✓ ! ✕) next to the colour: for those who tell green from red badly */
+  shapes: boolean;
   /** pure black page and darker cards in the dark theme (saves an OLED screen, rests the eyes at night) */
   oled: boolean;
   /** the «Ember» look: graphite and an orange accent, firmer shapes (data-ember) */
@@ -124594,11 +124601,11 @@ export interface Appearance {
 /** presets: a few options at once; the ones not named are switched off */
 export type PresetId = 'classic' | 'ember' | 'contrast' | 'soft' | 'oled';
 export const PRESETS: Record<PresetId, Appearance> = {
-  classic: { reduceMotion: false, largeText: false, highContrast: false, liteData: false, oled: false, ember: false },
-  ember: { reduceMotion: false, largeText: false, highContrast: false, liteData: false, oled: false, ember: true },
-  contrast: { reduceMotion: false, largeText: true, highContrast: true, liteData: false, oled: false, ember: false },
-  soft: { reduceMotion: true, largeText: false, highContrast: false, liteData: true, oled: false, ember: false },
-  oled: { reduceMotion: false, largeText: false, highContrast: false, liteData: false, oled: true, ember: false },
+  classic: { reduceMotion: false, largeText: false, highContrast: false, liteData: false, shapes: false, oled: false, ember: false },
+  ember: { reduceMotion: false, largeText: false, highContrast: false, liteData: false, shapes: false, oled: false, ember: true },
+  contrast: { reduceMotion: false, largeText: true, highContrast: true, liteData: false, shapes: false, oled: false, ember: false },
+  soft: { reduceMotion: true, largeText: false, highContrast: false, liteData: true, shapes: false, oled: false, ember: false },
+  oled: { reduceMotion: false, largeText: false, highContrast: false, liteData: false, shapes: false, oled: true, ember: false },
 };
 export const PRESET_IDS = Object.keys(PRESETS) as PresetId[];
 /** the preset the options match exactly, or null (a custom mix) */
@@ -124622,12 +124629,12 @@ function readEmber(): boolean {
     return false;
   }
 }
-export const DEFAULT_APPEARANCE: Appearance = { reduceMotion: false, largeText: false, highContrast: false, liteData: false, oled: false, ember: false };
+export const DEFAULT_APPEARANCE: Appearance = { reduceMotion: false, largeText: false, highContrast: false, liteData: false, shapes: false, oled: false, ember: false };
 
 /** anything (a stored string, a broken value) -> a complete Appearance */
 export function normalizeAppearance(raw: unknown): Appearance {
   const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
-  return { reduceMotion: r.reduceMotion === true, largeText: r.largeText === true, highContrast: r.highContrast === true, liteData: r.liteData === true, oled: r.oled === true, ember: r.ember === true };
+  return { reduceMotion: r.reduceMotion === true, largeText: r.largeText === true, highContrast: r.highContrast === true, liteData: r.liteData === true, shapes: r.shapes === true, oled: r.oled === true, ember: r.ember === true };
 }
 
 function read(): Appearance {
@@ -124664,6 +124671,7 @@ export function applyAppearance(a: Appearance, root: HTMLElement = document.docu
   set('data-text', a.largeText ? 'large' : null);
   set('data-contrast', a.highContrast ? 'high' : null);
   set('data-lite', a.liteData || networkWantsLite() ? '1' : null);
+  set('data-shapes', a.shapes ? '1' : null);
   set('data-oled', a.oled ? '1' : null);
   set('data-ember', a.ember ? '1' : null);
   // the icon of the tab and of the home screen takes the colour of the look
@@ -124680,7 +124688,7 @@ export const getAppearance = () => current;
 
 export function setAppearance(patch: Partial<Appearance>) {
   const next = normalizeAppearance({ ...current, ...patch });
-  if (patch.ember === undefined && next.reduceMotion === current.reduceMotion && next.largeText === current.largeText && next.highContrast === current.highContrast && next.liteData === current.liteData && next.oled === current.oled && next.ember === current.ember) return;
+  if (patch.ember === undefined && next.reduceMotion === current.reduceMotion && next.largeText === current.largeText && next.highContrast === current.highContrast && next.liteData === current.liteData && next.shapes === current.shapes && next.oled === current.oled && next.ember === current.ember) return;
   current = next;
   try {
     // the look is stored on its own, and only when the visitor picks it: the administrator's default stays in force until then
@@ -125416,8 +125424,8 @@ describe('AppFooter', () => {
 
   it('has an svg icon for every link and for the version, all hidden from screen readers', () => {
     const html = renderToStaticMarkup(<AppFooter brand="CoreGSM" version="1.0.0.50" />);
-    expect((html.match(/<svg/g) ?? []).length).toBe(6);
-    expect((html.match(/aria-hidden="true"/g) ?? []).length).toBeGreaterThanOrEqual(6);
+    expect((html.match(/<svg/g) ?? []).length).toBe(7);
+    expect((html.match(/aria-hidden="true"/g) ?? []).length).toBeGreaterThanOrEqual(7);
   });
 
   it('the default brand leads to the project and the version to the changelog; a custom name stays plain', () => {
@@ -127489,6 +127497,128 @@ export default function EmailVerifyState() {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/EmptyArt.tsx" << '__COREGSM_EOF__'
+/**
+ * Small pictures for the empty lists: one for each kind of thing the list would hold (a calendar for the windows, a chat bubble for the
+ * announcements, a key for the keys…). Drawn with the colours of the theme (the accent, the soft tone, the line), so they follow the look
+ * and the accent; no files to load.
+ */
+import type { ReactNode } from 'react';
+
+export type ArtScene = 'calendar' | 'chat' | 'key' | 'news' | 'chart' | 'shield' | 'plug' | 'bell' | 'users' | 'server';
+
+const BRAND = 'rgb(var(--brand))';
+const SOFT = 'rgb(var(--soft))';
+const LINE = 'rgb(var(--line))';
+const CARD = 'rgb(var(--card))';
+const MUTE = 'rgb(var(--mute) / .55)';
+
+/** the round soft ground and two small spots every picture has */
+const Ground = ({ children }: { children: ReactNode }) => (
+  <>
+    <ellipse cx="60" cy="84" rx="38" ry="5" fill={LINE} opacity=".5" />
+    <circle cx="60" cy="46" r="38" fill={SOFT} />
+    <circle cx="20" cy="26" r="3" fill={BRAND} opacity=".5" />
+    <circle cx="102" cy="64" r="2.5" fill={BRAND} opacity=".35" />
+    <path d="M100 18l2 5 5 2-5 2-2 5-2-5-5-2 5-2z" fill={BRAND} opacity=".6" />
+    {children}
+  </>
+);
+
+const SCENES: Record<ArtScene, ReactNode> = {
+  calendar: (
+    <Ground>
+      <rect x="34" y="28" width="52" height="46" rx="8" fill={CARD} stroke={LINE} strokeWidth="2" />
+      <path d="M34 42h52" stroke={LINE} strokeWidth="2" />
+      <rect x="34" y="28" width="52" height="14" rx="8" fill={BRAND} opacity=".9" />
+      <path d="M46 24v8M74 24v8" stroke={BRAND} strokeWidth="3" strokeLinecap="round" />
+      <g fill={MUTE}><circle cx="46" cy="54" r="2.5" /><circle cx="60" cy="54" r="2.5" /><circle cx="74" cy="54" r="2.5" /><circle cx="46" cy="65" r="2.5" /><circle cx="60" cy="65" r="2.5" /></g>
+      <circle cx="74" cy="65" r="4" fill={BRAND} />
+    </Ground>
+  ),
+  chat: (
+    <Ground>
+      <path d="M32 32a8 8 0 0 1 8-8h40a8 8 0 0 1 8 8v22a8 8 0 0 1-8 8H56l-12 10v-10h-4a8 8 0 0 1-8-8V32z" fill={CARD} stroke={LINE} strokeWidth="2" strokeLinejoin="round" />
+      <rect x="40" y="33" width="28" height="4" rx="2" fill={BRAND} />
+      <rect x="40" y="42" width="40" height="4" rx="2" fill={MUTE} />
+      <rect x="40" y="51" width="22" height="4" rx="2" fill={MUTE} />
+      <circle cx="86" cy="26" r="7" fill={BRAND} /><path d="M83 26l2 2 4-4" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+    </Ground>
+  ),
+  key: (
+    <Ground>
+      <circle cx="50" cy="44" r="14" fill={CARD} stroke={LINE} strokeWidth="2" />
+      <circle cx="50" cy="44" r="5" fill={SOFT} stroke={LINE} strokeWidth="2" />
+      <path d="M62 44h26M80 44v9M88 44v6" stroke={BRAND} strokeWidth="5" strokeLinecap="round" />
+      <path d="M43 34a14 14 0 0 1 14-3" stroke={BRAND} strokeWidth="3" strokeLinecap="round" fill="none" opacity=".7" />
+    </Ground>
+  ),
+  news: (
+    <Ground>
+      <rect x="32" y="26" width="48" height="50" rx="7" fill={CARD} stroke={LINE} strokeWidth="2" />
+      <rect x="39" y="33" width="34" height="14" rx="4" fill={BRAND} opacity=".85" />
+      <rect x="39" y="52" width="34" height="4" rx="2" fill={MUTE} /><rect x="39" y="60" width="24" height="4" rx="2" fill={MUTE} />
+      <rect x="72" y="38" width="22" height="34" rx="6" fill={CARD} stroke={LINE} strokeWidth="2" />
+      <rect x="77" y="45" width="12" height="3" rx="1.5" fill={MUTE} /><rect x="77" y="52" width="12" height="3" rx="1.5" fill={MUTE} />
+    </Ground>
+  ),
+  chart: (
+    <Ground>
+      <rect x="30" y="26" width="60" height="48" rx="8" fill={CARD} stroke={LINE} strokeWidth="2" />
+      <path d="M38 62l12-14 10 8 14-18 8 6" stroke={BRAND} strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+      <path d="M38 66h44" stroke={LINE} strokeWidth="2" strokeLinecap="round" />
+      <circle cx="82" cy="36" r="4" fill={BRAND} />
+    </Ground>
+  ),
+  shield: (
+    <Ground>
+      <path d="M60 24l22 8v16c0 14-9 22-22 28-13-6-22-14-22-28V32l22-8z" fill={CARD} stroke={LINE} strokeWidth="2" strokeLinejoin="round" />
+      <path d="M60 24l22 8v16c0 14-9 22-22 28z" fill={BRAND} opacity=".18" />
+      <path d="M50 50l7 7 13-14" stroke={BRAND} strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+    </Ground>
+  ),
+  plug: (
+    <Ground>
+      <path d="M48 28v12M72 28v12" stroke={BRAND} strokeWidth="5" strokeLinecap="round" />
+      <rect x="38" y="40" width="44" height="22" rx="8" fill={CARD} stroke={LINE} strokeWidth="2" />
+      <path d="M60 62v10c0 6 8 8 14 8" stroke={LINE} strokeWidth="3" strokeLinecap="round" fill="none" />
+      <circle cx="52" cy="51" r="2.5" fill={MUTE} /><circle cx="68" cy="51" r="2.5" fill={MUTE} />
+    </Ground>
+  ),
+  bell: (
+    <Ground>
+      <path d="M60 26c-11 0-17 8-17 19v10l-5 7h44l-5-7V45c0-11-6-19-17-19z" fill={CARD} stroke={LINE} strokeWidth="2" strokeLinejoin="round" />
+      <path d="M54 72a6 6 0 0 0 12 0" stroke={BRAND} strokeWidth="3.5" strokeLinecap="round" fill="none" />
+      <circle cx="78" cy="30" r="6" fill={BRAND} />
+    </Ground>
+  ),
+  users: (
+    <Ground>
+      <circle cx="50" cy="40" r="9" fill={CARD} stroke={LINE} strokeWidth="2" />
+      <path d="M34 70c0-9 7-15 16-15s16 6 16 15" fill={CARD} stroke={LINE} strokeWidth="2" strokeLinecap="round" />
+      <circle cx="76" cy="44" r="7" fill={BRAND} opacity=".85" />
+      <path d="M66 70c0-7 5-12 12-12s12 5 12 12" fill={BRAND} opacity=".35" />
+    </Ground>
+  ),
+  server: (
+    <Ground>
+      <rect x="34" y="28" width="52" height="18" rx="6" fill={CARD} stroke={LINE} strokeWidth="2" />
+      <rect x="34" y="50" width="52" height="18" rx="6" fill={CARD} stroke={LINE} strokeWidth="2" />
+      <circle cx="44" cy="37" r="3" fill={BRAND} /><circle cx="44" cy="59" r="3" fill={MUTE} />
+      <path d="M54 37h22M54 59h22" stroke={MUTE} strokeWidth="3" strokeLinecap="round" />
+    </Ground>
+  ),
+};
+
+export function EmptyArt({ scene, size = 132 }: { scene: ArtScene; size?: number }) {
+  return (
+    <svg width={size} height={(size * 96) / 120} viewBox="0 0 120 96" fill="none" aria-hidden className="mx-auto">
+      {SCENES[scene]}
+    </svg>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
   cat > "$APP_DIR/core-frontend/src/components/FaqCard.tsx" << '__COREGSM_EOF__'
 import { useEffect, useState } from 'react';
 import { api } from '../api';
@@ -127597,6 +127727,7 @@ export const FootStatus = () => svg(<path d="M3 12h4l2.5 7 5-14L17 12h4" />);
 export const FootCommunity = () => svg(<><circle cx="9" cy="8" r="3.2" /><path d="M3 20c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5" /><circle cx="17" cy="9" r="2.4" /><path d="M16.5 14.6c2.6.2 4.5 2 4.5 4.9" /></>);
 export const FootTag = () => svg(<><path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8Z" /><path d="M7.5 7.5h.01" /></>);
 export const FootBans = () => svg(<><circle cx="12" cy="12" r="9" /><path d="m5.7 5.7 12.6 12.6" /></>);
+export const FootAbout = () => svg(<><circle cx="12" cy="12" r="9" /><path d="M12 11v5M12 8h.01" /></>);
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components"
   cat > "$APP_DIR/core-frontend/src/components/GameNewsIcons.tsx" << '__COREGSM_EOF__'
@@ -128948,10 +129079,16 @@ __COREGSM_EOF__
 import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent } from 'react';
 import { t } from '../i18n';
 import { IconBell, ago } from '../ui';
+import { IconError, IconOk, IconShield, IconUsers } from '../icons';
+import { NOTIFY_GROUPS, byDay, groupCounts, groupOf, inGroup, unreadIn, type NotifyGroup } from '../notifyLogic';
 import {
   NOTIFY_POLL_MS, badgeText, fetchNotifications, isUnavailable, markNotificationsRead, notificationHref,
   type NotificationItem,
 } from '../notifications';
+
+/** the picture and the tint of a notification by what it is about */
+const iconFor = (kind: string) => (kind === 'went_down' ? IconError : kind === 'back_online' ? IconOk : groupOf(kind) === 'slots' ? IconUsers : groupOf(kind) === 'security' ? IconShield : IconBell);
+const toneFor = (kind: string): string => (kind === 'went_down' ? 'bg-badbg text-bad' : kind === 'back_online' ? 'bg-okbg text-ok' : groupOf(kind) === 'security' ? 'bg-warnbg text-warn' : 'bg-soft text-link');
 
 /**
  * The bell in the header: unread badge and a popover with the latest notifications.
@@ -128964,6 +129101,7 @@ export default function NotificationBell({ initialUnread = 0 }: { initialUnread?
   const [open, setOpen] = useState(false);
   const [failed, setFailed] = useState(false);
   const [gone, setGone] = useState(false);
+  const [group, setGroup] = useState<NotifyGroup | 'all'>('all');
   const root = useRef<HTMLDivElement>(null);
   const btn = useRef<HTMLButtonElement>(null);
   const pop = useRef<HTMLDivElement>(null);
@@ -129051,6 +129189,9 @@ export default function NotificationBell({ initialUnread = 0 }: { initialUnread?
   };
 
   if (gone) return null;
+  const counts = groupCounts(items ?? []);
+  const shownItems = inGroup(items ?? [], group);
+  const days = byDay(shownItems);
   const badge = badgeText(unread);
   const label = unread > 0 ? t('bell.ariaUnread', { n: unread }) : t('bell.aria');
 
@@ -129089,39 +129230,57 @@ export default function NotificationBell({ initialUnread = 0 }: { initialUnread?
               {t('bell.readAll')}
             </button>
           </div>
+          {items && items.length > 0 && (
+            <div className="flex gap-1.5 overflow-x-auto border-b border-line px-3 py-2" role="group" aria-label={t('bell.groups')}>
+              {(['all', ...NOTIFY_GROUPS] as const).filter((g) => g === 'all' || counts[g] > 0).map((g) => (
+                <button key={g} type="button" className={`chip-filter whitespace-nowrap ${group === g ? 'on' : ''}`} aria-pressed={group === g} onClick={() => setGroup(g)}>
+                  {t(`bell.g.${g}` as 'bell.g.all')}
+                  {unreadIn(items, g) > 0 && <span className="ml-1.5 rounded-full bg-badbg px-1.5 text-xs font-extrabold text-bad">{unreadIn(items, g)}</span>}
+                </button>
+              ))}
+            </div>
+          )}
           <div className="max-h-[min(26rem,70dvh)] overflow-y-auto overscroll-contain">
             {items === null && <div className="skeleton m-3 h-16 rounded-2xl bg-soft" aria-hidden />}
             {failed && <p className="px-4 py-3 text-sm font-bold text-bad" role="alert">{t('bell.loadError')}</p>}
             {items && items.length === 0 && !failed && <p className="px-4 py-8 text-center font-semibold text-mute">{t('bell.empty')}</p>}
-            {items && items.length > 0 && (
-              <ul className="divide-y divide-line">
-                {items.map((n) => {
-                  const href = notificationHref(n);
-                  const body = (
-                    <>
-                      <span aria-hidden className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${n.read ? 'bg-transparent' : 'bg-brand'}`} />
-                      <span className="min-w-0 flex-1">
-                        <span className={`block wrap-break-word text-sm leading-snug ${n.read ? 'font-semibold text-mute' : 'font-extrabold'}`}>
-                          {!n.read && <span className="sr-only">{t('bell.unreadMark')} </span>}
-                          {n.text}
+            {items && items.length > 0 && shownItems.length === 0 && <p className="px-4 py-6 text-center text-sm font-semibold text-mute">{t('bell.emptyGroup')}</p>}
+            {items && days.map((d) => (
+              <div key={d.day}>
+                <h3 className="sticky top-0 z-[1] bg-card/95 px-4 py-1 text-xs font-extrabold capitalize text-mute backdrop-blur">
+                  {d.word ? t(`gn.cn.day.${d.word}` as 'gn.cn.day.today') : new Date(`${d.day}T12:00:00`).toLocaleDateString([], { weekday: 'long', day: 'numeric', month: 'long' })}
+                </h3>
+                <ul className="divide-y divide-line">
+                  {d.items.map((n) => {
+                    const href = notificationHref(n);
+                    const Ico = iconFor(n.kind);
+                    const body = (
+                      <>
+                        <span aria-hidden className={`grid h-8 w-8 shrink-0 place-items-center rounded-full ${toneFor(n.kind)}`}><Ico size={16} /></span>
+                        <span className="min-w-0 flex-1">
+                          <span className={`block wrap-break-word text-sm leading-snug ${n.read ? 'font-medium text-mute' : 'font-extrabold'}`}>
+                            {!n.read && <span className="sr-only">{t('bell.unreadMark')} </span>}
+                            {n.text}
+                          </span>
+                          <span className="mt-0.5 block text-xs font-semibold text-mute">{ago(n.ts)}</span>
                         </span>
-                        <span className="mt-0.5 block text-xs font-semibold text-mute">{ago(n.ts)}</span>
-                      </span>
-                    </>
-                  );
-                  const cls = 'flex items-start gap-3 px-4 py-3 text-left transition hover:bg-soft max-sm:min-h-[44px]';
-                  return (
-                    <li key={n.id}>
-                      {href ? (
-                        <a href={href} className={cls} onClick={() => readOne(n)}>{body}</a>
-                      ) : (
-                        <button type="button" className={`${cls} w-full`} onClick={() => readOne(n)}>{body}</button>
-                      )}
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
+                        {!n.read && <span aria-hidden className="mt-2 h-2 w-2 shrink-0 rounded-full bg-brand" />}
+                      </>
+                    );
+                    const cls = 'flex items-start gap-3 px-4 py-3 text-left transition hover:bg-soft max-sm:min-h-[44px]';
+                    return (
+                      <li key={n.id}>
+                        {href ? (
+                          <a href={href} className={cls} onClick={() => readOne(n)}>{body}</a>
+                        ) : (
+                          <button type="button" className={`${cls} w-full`} onClick={() => readOne(n)}>{body}</button>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            ))}
           </div>
         </div>
       )}
@@ -129959,10 +130118,15 @@ export interface RowMenuItem {
   disabled?: boolean;
   /** a divider is drawn above the item */
   sep?: boolean;
+  /** a key that does it while the menu is open (shown at the right of the item): 'r', 'e', 'Delete' */
+  shortcut?: string;
 }
 
 /** the room a menu needs to the left of the button's right edge: its minimum width (13rem) and a margin */
 const MENU_ROOM = 224;
+
+/** «r» -> «R», «Delete» -> «Del» */
+const shortcutLabel = (k: string): string => (k === 'Delete' ? 'Del' : k.length === 1 ? k.toUpperCase() : k);
 
 export default function RowMenu({ label, items, className = '' }: { label: string; items: RowMenuItem[]; className?: string }) {
   const [open, setOpen] = useState(false);
@@ -130002,6 +130166,12 @@ export default function RowMenu({ label, items, className = '' }: { label: strin
     const i = els.indexOf(document.activeElement as HTMLElement);
     if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(true); }
     else if (e.key === 'Tab') close();
+    else if (!e.ctrlKey && !e.metaKey && !e.altKey && items.some((it) => it.shortcut && !it.disabled && it.shortcut.toLowerCase() === e.key.toLowerCase())) {
+      const it = items.find((x) => x.shortcut && !x.disabled && x.shortcut.toLowerCase() === e.key.toLowerCase())!;
+      e.preventDefault();
+      close();
+      if (it.href) window.location.assign(it.href); else it.onSelect?.();
+    }
     else if (e.key === 'ArrowDown') { e.preventDefault(); els[(i + 1) % els.length]?.focus(); }
     else if (e.key === 'ArrowUp') { e.preventDefault(); els[(i - 1 + els.length) % els.length]?.focus(); }
     else if (e.key === 'Home') { e.preventDefault(); els[0]?.focus(); }
@@ -130035,9 +130205,9 @@ export default function RowMenu({ label, items, className = '' }: { label: strin
               'data-sep': it.sep ? 'true' : undefined,
             } as const;
             return it.href && !it.disabled ? (
-              <a key={it.key} {...common} href={it.href} onClick={() => close()}>{it.label}</a>
+              <a key={it.key} {...common} href={it.href} onClick={() => close()}>{it.label}{it.shortcut && <kbd className="row-menu-kbd" aria-hidden>{shortcutLabel(it.shortcut)}</kbd>}</a>
             ) : (
-              <button key={it.key} type="button" {...common} onClick={() => { if (it.disabled) return; close(); it.onSelect?.(); }}>{it.label}</button>
+              <button key={it.key} type="button" {...common} onClick={() => { if (it.disabled) return; close(); it.onSelect?.(); }}>{it.label}{it.shortcut && <kbd className="row-menu-kbd" aria-hidden>{shortcutLabel(it.shortcut)}</kbd>}</button>
             );
           })}
         </div>,
@@ -130304,7 +130474,7 @@ import { useAppearance } from '../appearance';
 import { t, useI18n } from '../i18n';
 import { GameAvatar, UserAvatar } from '../ui';
 import { useRecentServers } from '../ui/recent';
-import { FootBans, FootCommunity, FootNews, FootServers, FootStatus, FootTag } from './FooterIcons';
+import { FootAbout, FootBans, FootCommunity, FootNews, FootServers, FootStatus, FootTag } from './FooterIcons';
 import { MenuAdmin, MenuLogout, MenuUser } from './HeaderIcons';
 import '../styles/shell.css';
 
@@ -130406,6 +130576,7 @@ export function AppFooter({ brand, version, compact = false, links = false }: { 
             <a href="/status">{t('nav.status')}</a>
             <a href="/bans">{t('nav.bans')}</a>
             <a href="/community">{t('nav.community')}</a>
+            <a href="/about">{t('foot.about')}</a>
             <a href="/api/v1/openapi.json" target="_blank" rel="noopener noreferrer">{t('foot.api')}</a>
           </nav>
         )}
@@ -130431,6 +130602,7 @@ export function AppFooter({ brand, version, compact = false, links = false }: { 
           <a href="/status"><FootStatus />{t('nav.status')}</a>
           <a href="/community"><FootCommunity />{t('nav.community')}</a>
           <a href="/bans"><FootBans />{t('nav.bans')}</a>
+          <a href="/about"><FootAbout />{t('foot.about')}</a>
         </nav>
       </div>
       <div className="app-foot-col">
@@ -130967,6 +131139,7 @@ import type { ReactNode } from 'react';
 import { ApiError } from '../api';
 import { t } from '../i18n';
 import { Icon, IconError, IconInfo, IconSearch, IconShield } from '../icons';
+import { EmptyArt, type ArtScene } from './EmptyArt';
 import { useAppearance } from '../appearance';
 
 /**
@@ -131011,13 +131184,15 @@ function KindIcon({ kind }: { kind: StateKind }) {
 }
 
 export function StateView({
-  kind = 'empty', title, text, art, onRetry, retryLabel, action, compact = false, bare = false, className = '', heading = 'h3', children,
+  kind = 'empty', title, text, art, scene, onRetry, retryLabel, action, compact = false, bare = false, className = '', heading = 'h3', children,
 }: {
   kind?: StateKind;
   title?: string;
   text?: string;
   /** an illustration instead of the icon tile (empty lists keep their pictures) */
   art?: ReactNode;
+  /** a ready picture for what the list would hold (a calendar, a chat, a key…): in every look */
+  scene?: ArtScene;
   /** shows «Повторить» (default for error and offline states) */
   onRetry?: () => void;
   retryLabel?: string;
@@ -131043,7 +131218,7 @@ export function StateView({
       data-state={kind}
     >
       {/* the Ember look: every empty list has the same picture (an ember), the pages that bring their own art (404) keep it */}
-      {(ember && kind === 'empty' ? null : art) ?? (ember && (kind === 'empty' || kind === 'notfound') ? <div className="mb-1 text-link"><EmberArt /></div> : <div className={`mb-1 grid h-14 w-14 place-items-center rounded-3xl ${TILE[kind]}`}><KindIcon kind={kind} /></div>)}
+      {scene ? <div className="mb-1"><EmptyArt scene={scene} /></div> : (ember && kind === 'empty' ? null : art) ?? (ember && (kind === 'empty' || kind === 'notfound') ? <div className="mb-1 text-link"><EmberArt /></div> : <div className={`mb-1 grid h-14 w-14 place-items-center rounded-3xl ${TILE[kind]}`}><KindIcon kind={kind} /></div>)}
       <H className={heading === 'h1' ? 'text-2xl font-extrabold tracking-[-0.02em]' : 'text-lg font-black'}>{head}</H>
       {body && <p className="max-w-sm font-semibold text-mute">{body}</p>}
       {(onRetry || action || children) && (
@@ -137013,6 +137188,7 @@ export function AppearanceCard() {
     ['largeText', 'pf.a11y.text', 'pf.a11y.textHint'],
     ['highContrast', 'pf.a11y.contrast', 'pf.a11y.contrastHint'],
     ['liteData', 'pf.a11y.lite', 'pf.a11y.liteHint'],
+    ['shapes', 'pf.a11y.shapes', 'pf.a11y.shapesHint'],
     ['oled', 'pf.a11y.oled', 'pf.a11y.oledHint'],
     ['ember', 'pf.a11y.ember', 'pf.a11y.emberHint'],
   ];
@@ -148766,6 +148942,37 @@ const en: Record<keyof typeof ru, string> = {
   'foot.panel': 'Panel',
   'foot.up': 'Up and running',
   'foot.api': 'API',
+  'foot.about': 'About',
+  'about.title': 'About {brand}',
+  'about.sub': 'What this panel is and what it does',
+  'about.lead': '{brand} watches the game servers of the community: who plays, when and where, whether a server works, what is new. All in one place, no sign-in, with live numbers.',
+  'about.what': 'What is here',
+  'about.f.servers': 'Servers',
+  'about.f.serversText': 'Online, ping, map and history of every server, the address to join in one click.',
+  'about.f.status': 'Status',
+  'about.f.statusText': 'Uptime for 30 days and the history of outages, to see whether a server can be relied on.',
+  'about.f.news': 'News',
+  'about.f.newsText': 'Announcements, updates and events, with covers, a calendar and a subscription.',
+  'about.f.bot': 'Discord bot',
+  'about.f.botText': 'Live server cards, alerts and commands right in the channel of the community.',
+  'about.f.plugin': 'Game plugin',
+  'about.f.pluginText': 'Messages to the game chat, auto announcements, greetings, the game chat in Discord.',
+  'about.f.bans': 'Bans',
+  'about.f.bansText': 'An open list of the bans in force, the history and appeals.',
+  'about.f.community': 'Community',
+  'about.f.communityText': 'Top players, a hall of fame by seasons, polls and reviews of servers.',
+  'about.f.alerts': 'Alerts',
+  'about.f.alertsText': 'A message when a server went down and when it is back, on the site, in Discord and by mail.',
+  'about.f.backup': 'Backups',
+  'about.f.backupText': 'Copies of the settings and data, a roll back in one click and a restore check.',
+  'about.how': 'How it works',
+  'about.s1': 'The panel polls the servers',
+  'about.s1Text': 'Every half a minute by the protocol of the game: online, players, map, ping.',
+  'about.s2': 'History and status',
+  'about.s2Text': 'The answers become charts, uptime and events: peaks, outages, version changes.',
+  'about.s3': 'The community is informed',
+  'about.s3Text': 'The site, Discord and the game chat show the same and tell what matters.',
+  'about.api': 'There is an open API for sites and bots, described in OpenAPI:',
   'foot.changelog': 'Changelog',
   'hdr.search': 'Search',
   'hdr.searchAria': 'Search the panel (Ctrl K)',
@@ -149146,6 +149353,8 @@ const en: Record<keyof typeof ru, string> = {
   'pf.a11y.contrast': 'High contrast',
   'pf.a11y.contrastHint': 'Black text and firmer borders around elements.',
   'pf.a11y.lite': 'Data saver',
+  'pf.a11y.shapes': 'Signs on statuses',
+  'pf.a11y.shapesHint': 'A status carries a sign next to its colour: ✓ good, ! warning, ✕ bad. Handy if green and red are hard to tell apart.',
   'pf.preset.label': 'Ready-made look',
   'pf.preset.classic': 'Classic',
   'pf.preset.contrast': 'Contrast',
@@ -149205,6 +149414,13 @@ const en: Record<keyof typeof ru, string> = {
   'bell.readAll': 'Mark all as read',
   'bell.unreadMark': 'New:',
   'bell.empty': 'No new notifications',
+  'bell.groups': 'Groups of notifications',
+  'bell.g.all': 'All',
+  'bell.g.outage': 'Outages',
+  'bell.g.slots': 'Places and online',
+  'bell.g.security': 'Security',
+  'bell.g.other': 'Other',
+  'bell.emptyGroup': 'Nothing in this group yet',
   'bell.loadError': 'Could not load notifications',
   'sub.button': 'Subscribe',
   'sub.buttonOn': 'Subscribed',
@@ -150034,6 +150250,42 @@ const en: Record<keyof typeof ru, string> = {
   'gn.sh.langHint': 'The language of the command help and errors that the plugin writes itself (the texts from the panel do not change)',
   'gn.sh.langSaved': 'The language of the plugin is saved: it applies within a few seconds',
   'gn.cn.title': 'Joins and departures',
+  'kit.type.t': 'Type scale',
+  'kit.type.n': 'One ladder of levels: t-page, t-section, t-card, t-caption, t-num. The weight goes down with the level, so a card is not all bold.',
+  'kit.type.page': 'Page title',
+  'kit.type.section': 'Section title',
+  'kit.type.card': 'Card title',
+  'kit.type.caption': 'Caption: the explaining text is lighter than the title',
+  'kit.type.num': 'players',
+  'kit.motion.t': 'Motion',
+  'kit.motion.n': 'Three durations (--dur-1 press, --dur-2 open, --dur-3 a block comes in) and two curves. What answers an action moves; data that refreshes by itself does not.',
+  'kit.motion.rise': 'm-rise: a block comes in',
+  'kit.motion.pop': 'm-pop: opens',
+  'kit.motion.hover': 'm-hover: press and hover',
+  'kit.list.t': 'A list in groups',
+  'kit.list.n': 'GroupedList: headings by state with a count and a fold (a fold is remembered), ListToolbar over the list: a search and the states.',
+  'kit.list.label': 'Example',
+  'kit.list.search': 'Search',
+  'kit.list.all': 'All',
+  'kit.list.on': 'Running',
+  'kit.list.off': 'Switched off',
+  'kit.list.a': 'Discord invite',
+  'kit.list.b': 'Restart at 4:00',
+  'kit.list.c': 'Server rules',
+  'kit.list.d': 'An old rule',
+  'kit.list.e': 'One more',
+  'kit.zones.t': 'A card with zones',
+  'kit.zones.n': 'Section: the main thing, «Advanced» (folds), a «Danger zone» at the bottom for what cannot be undone.',
+  'kit.zones.title': 'A sample card',
+  'kit.zones.desc': 'The main settings are visible at once.',
+  'kit.zones.adv': 'Rare fields hide here.',
+  'kit.zones.danger': 'Delete everything',
+  'kit.zones.body': 'The content of the card.',
+  'kit.art.t': 'Pictures of empty lists',
+  'kit.art.n': 'EmptyArt: one for what the list would hold. The colours come from the theme and the accent. Used as scene=... of StateView, Empty and EmptyState.',
+  'adm.advanced': 'Advanced',
+  'adm.danger': 'Danger zone',
+  'lists.count': 'Entries: {n}',
   'gn.ch.kind.announce': 'Messages of the panel',
   'gn.ch.kindNote.announce': 'Automatic announcements, the countdown of a restart and the messages you send from the panel: a line «* [Auto] name: text» appears in the channel when the plugin has taken the message. What exactly is shown is chosen below.',
   'gn.ch.ann.title': 'Which messages of the panel to show',
@@ -150392,6 +150644,9 @@ const en: Record<keyof typeof ru, string> = {
   'gn.a.empty': 'No automatic announcements yet',
   'gn.a.emptyText': 'For example: «Join our Discord» every 30 minutes, or «Server restart at 4:00» every day at 3:50.',
   'gn.a.examples': 'Ready examples',
+  'gn.a.g.on': 'Running',
+  'gn.a.g.expired': 'Period is over',
+  'gn.a.g.off': 'Switched off',
   'gn.a.ex.discord.name': 'Discord invite',
   'gn.a.ex.discord.text': '<color=#6EC1FF>* Join our Discord: news, wipes and team search.</color>',
   'gn.a.ex.restart.name': 'Restart at 4:00',
@@ -152535,6 +152790,12 @@ const en: Record<keyof typeof ru, string> = {
   'd2.mt.st.past': 'Finished',
   'd2.mt.deleted': 'Window "{name}" deleted',
   'd2.mt.title': 'Maintenance',
+  'd2.mt.g.active': 'Going on now',
+  'd2.mt.g.planned': 'Planned',
+  'd2.mt.g.repeat': 'Repeating',
+  'd2.mt.g.past': 'Past',
+  'd2.mt.search': 'Name or server',
+  'd2.mt.noMatch': 'Nothing found',
   'd2.mt.subtitle': 'Maintenance windows: no false alarms',
   'd2.mt.hint': 'While a window is active, the server is marked "Maintenance" and downtime alerts are not sent.',
   'd2.mt.help': 'Pick a server (or all of them) and the time of the work. A window can repeat every day or week. During the window server cards show "Maintenance until …", and downtime is not counted as an outage and does not reach alerts.',
@@ -154159,6 +154420,37 @@ const ru = {
   'foot.panel': 'Панель',
   'foot.up': 'Работает',
   'foot.api': 'API',
+  'foot.about': 'О проекте',
+  'about.title': 'О проекте {brand}',
+  'about.sub': 'Что это за панель и что она умеет',
+  'about.lead': '{brand} следит за игровыми серверами сообщества: кто играет, когда и где, работает ли сервер, что нового. Всё в одном месте, без входа, с живыми цифрами.',
+  'about.what': 'Что здесь есть',
+  'about.f.servers': 'Серверы',
+  'about.f.serversText': 'Онлайн, пинг, карта и история каждого сервера, адрес для подключения в один клик.',
+  'about.f.status': 'Статус',
+  'about.f.statusText': 'Аптайм за 30 дней и история сбоев, чтобы было видно, можно ли на сервер рассчитывать.',
+  'about.f.news': 'Новости',
+  'about.f.newsText': 'Объявления, обновления и ивенты, с обложками, календарём и подпиской.',
+  'about.f.bot': 'Бот в Discord',
+  'about.f.botText': 'Живые карточки серверов, оповещения и команды прямо в канале сообщества.',
+  'about.f.plugin': 'Игровой плагин',
+  'about.f.pluginText': 'Сообщения в игровой чат, автообъявления, приветствия, чат игры в Discord.',
+  'about.f.bans': 'Баны',
+  'about.f.bansText': 'Открытый список действующих банов, история и заявки на разбан.',
+  'about.f.community': 'Сообщество',
+  'about.f.communityText': 'Топ игроков, зал славы по сезонам, голосования и отзывы о серверах.',
+  'about.f.alerts': 'Оповещения',
+  'about.f.alertsText': 'Сообщение, когда сервер упал и когда вернулся, на сайт, в Discord и на почту.',
+  'about.f.backup': 'Резервные копии',
+  'about.f.backupText': 'Копии настроек и данных, откат одной кнопкой и проверка восстановления.',
+  'about.how': 'Как это работает',
+  'about.s1': 'Панель опрашивает серверы',
+  'about.s1Text': 'Каждые полминуты по протоколу игры: онлайн, игроки, карта, пинг.',
+  'about.s2': 'История и статус',
+  'about.s2Text': 'Из ответов складываются графики, аптайм и события: пики, сбои, смена версий.',
+  'about.s3': 'Сообщество в курсе',
+  'about.s3Text': 'Сайт, Discord и игровой чат показывают одно и то же и сообщают о главном.',
+  'about.api': 'Для сайтов и ботов есть открытое API, описание в формате OpenAPI:',
   'foot.changelog': 'Список изменений',
   'hdr.search': 'Поиск',
   'hdr.searchAria': 'Поиск по панели (Ctrl K)',
@@ -154539,6 +154831,8 @@ const ru = {
   'pf.a11y.contrast': 'Высокий контраст',
   'pf.a11y.contrastHint': 'Чёрный текст и более чёткие границы элементов.',
   'pf.a11y.lite': 'Экономия трафика',
+  'pf.a11y.shapes': 'Знаки у статусов',
+  'pf.a11y.shapesHint': 'Рядом с цветом у статусов стоит знак: ✓ хорошо, ! внимание, ✕ плохо. Удобно, если зелёный и красный трудно различать.',
   'pf.preset.label': 'Готовый вид',
   'pf.preset.classic': 'Классика',
   'pf.preset.contrast': 'Контраст',
@@ -154598,6 +154892,13 @@ const ru = {
   'bell.readAll': 'Прочитать все',
   'bell.unreadMark': 'Новое:',
   'bell.empty': 'Новых уведомлений нет',
+  'bell.groups': 'Группы уведомлений',
+  'bell.g.all': 'Все',
+  'bell.g.outage': 'Сбои',
+  'bell.g.slots': 'Места и онлайн',
+  'bell.g.security': 'Безопасность',
+  'bell.g.other': 'Прочее',
+  'bell.emptyGroup': 'В этой группе пока ничего нет',
   'bell.loadError': 'Не удалось загрузить уведомления',
   'sub.button': 'Подписаться',
   'sub.buttonOn': 'Вы подписаны',
@@ -155427,6 +155728,42 @@ const ru = {
   'gn.sh.langHint': 'Язык справки команд и ошибок, которые пишет сам плагин (тексты из панели не меняются)',
   'gn.sh.langSaved': 'Язык плагина сохранён: применится в течение нескольких секунд',
   'gn.cn.title': 'Входы и выходы',
+  'kit.type.t': 'Шкала шрифтов',
+  'kit.type.n': 'Один набор уровней: t-page, t-section, t-card, t-caption, t-num. Вес падает с уровнем, поэтому карточка не получается вся жирной.',
+  'kit.type.page': 'Заголовок страницы',
+  'kit.type.section': 'Заголовок раздела',
+  'kit.type.card': 'Заголовок карточки',
+  'kit.type.caption': 'Подпись: поясняющий текст светлее заголовка',
+  'kit.type.num': 'игроков',
+  'kit.motion.t': 'Движение',
+  'kit.motion.n': 'Три длительности (--dur-1 нажатие, --dur-2 открытие, --dur-3 появление блока) и две кривые. Двигается то, что отвечает на действие; данные, которые обновляются сами, не анимируются.',
+  'kit.motion.rise': 'm-rise: блок появляется',
+  'kit.motion.pop': 'm-pop: открывается',
+  'kit.motion.hover': 'm-hover: нажатие и наведение',
+  'kit.list.t': 'Список в группах',
+  'kit.list.n': 'GroupedList: заголовки по состоянию со счётчиком и сворачиванием (свёрнутое запоминается), ListToolbar над списком: поиск и состояния.',
+  'kit.list.label': 'Пример',
+  'kit.list.search': 'Поиск',
+  'kit.list.all': 'Все',
+  'kit.list.on': 'Работают',
+  'kit.list.off': 'Выключены',
+  'kit.list.a': 'Приглашение в Discord',
+  'kit.list.b': 'Рестарт в 4:00',
+  'kit.list.c': 'Правила сервера',
+  'kit.list.d': 'Старое правило',
+  'kit.list.e': 'Ещё одно',
+  'kit.zones.t': 'Карточка с зонами',
+  'kit.zones.n': 'Section: главное, «Дополнительно» (сворачивается), «Опасная зона» внизу для того, что нельзя отменить.',
+  'kit.zones.title': 'Пример карточки',
+  'kit.zones.desc': 'Основные настройки видны сразу.',
+  'kit.zones.adv': 'Редкие поля прячутся сюда.',
+  'kit.zones.danger': 'Удалить всё',
+  'kit.zones.body': 'Содержимое карточки.',
+  'kit.art.t': 'Картинки пустых списков',
+  'kit.art.n': 'EmptyArt: по одной на то, что лежало бы в списке. Цвета берутся из темы и акцента. Подключаются как scene=... у StateView, Empty и EmptyState.',
+  'adm.advanced': 'Дополнительно',
+  'adm.danger': 'Опасная зона',
+  'lists.count': 'Записей: {n}',
   'gn.ch.kind.announce': 'Сообщения панели',
   'gn.ch.kindNote.announce': 'Автообъявления, отсчёт рестарта и сообщения, которые вы отправляете из панели: строка «* [Авто] название: текст» появляется в канале, когда плагин забрал сообщение. Что именно показывать, выбирается ниже.',
   'gn.ch.ann.title': 'Какие сообщения панели показывать',
@@ -155785,6 +156122,9 @@ const ru = {
   'gn.a.empty': 'Автообъявлений пока нет',
   'gn.a.emptyText': 'Например: «Заходите в наш Discord» каждые 30 минут или «Рестарт сервера в 4:00» каждый день в 3:50.',
   'gn.a.examples': 'Готовые примеры',
+  'gn.a.g.on': 'Работают',
+  'gn.a.g.expired': 'Срок вышел',
+  'gn.a.g.off': 'Выключены',
   'gn.a.ex.discord.name': 'Приглашение в Discord',
   'gn.a.ex.discord.text': '<color=#6EC1FF>* Заходите в наш Discord: там новости, вайпы и поиск команды.</color>',
   'gn.a.ex.restart.name': 'Рестарт в 4:00',
@@ -157928,6 +158268,12 @@ const ru = {
   'd2.mt.st.past': 'Завершено',
   'd2.mt.deleted': 'Окно «{name}» удалено',
   'd2.mt.title': 'Обслуживание',
+  'd2.mt.g.active': 'Идёт сейчас',
+  'd2.mt.g.planned': 'Запланировано',
+  'd2.mt.g.repeat': 'Повторяющиеся',
+  'd2.mt.g.past': 'Прошедшие',
+  'd2.mt.search': 'Название или сервер',
+  'd2.mt.noMatch': 'Ничего не найдено',
   'd2.mt.subtitle': 'Окна технических работ: без ложных тревог',
   'd2.mt.hint': 'Пока идёт окно, сервер помечается как «Обслуживание», а оповещения о падении не отправляются.',
   'd2.mt.help': 'Укажите сервер (или все сразу) и время работ. Окно может повторяться каждый день или неделю. Во время окна на карточках сервера показывается «Тех. работы до …», а падение не считается сбоем и не попадает в оповещения.',
@@ -159425,6 +159771,49 @@ export function useSubscriptions(enabled: boolean): { list: Subscription[] | nul
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
+  cat > "$APP_DIR/core-frontend/src/notifyLogic.ts" << '__COREGSM_EOF__'
+/** The notification centre: which group a notification belongs to, and how a list is cut into groups and days. */
+import type { NotificationItem } from './notifications';
+import { dayKey, dayWord } from './pages/connectionsLogic';
+
+export type NotifyGroup = 'outage' | 'slots' | 'security' | 'other';
+export const NOTIFY_GROUPS: NotifyGroup[] = ['outage', 'slots', 'security', 'other'];
+
+/** a server went down or is back; a free place; a new device, a changed or reset password; the rest */
+export function groupOf(kind: string): NotifyGroup {
+  if (kind === 'went_down' || kind === 'back_online') return 'outage';
+  if (kind === 'free_slot' || kind === 'peak' || kind === 'low') return 'slots';
+  if (kind === 'newdevice' || kind === 'changed' || kind === 'reset') return 'security';
+  return 'other';
+}
+
+export function groupCounts(items: NotificationItem[]): Record<NotifyGroup | 'all', number> {
+  const c: Record<NotifyGroup | 'all', number> = { all: items.length, outage: 0, slots: 0, security: 0, other: 0 };
+  for (const n of items) c[groupOf(n.kind)] += 1;
+  return c;
+}
+
+export function inGroup(items: NotificationItem[], g: NotifyGroup | 'all'): NotificationItem[] {
+  return g === 'all' ? items : items.filter((n) => groupOf(n.kind) === g);
+}
+
+export interface NotifyDay { day: string; word: 'today' | 'yesterday' | null; items: NotificationItem[] }
+/** newest first, cut into local days */
+export function byDay(items: NotificationItem[], now = Date.now()): NotifyDay[] {
+  const out: NotifyDay[] = [];
+  for (const n of items) {
+    const day = dayKey(n.ts);
+    const last = out[out.length - 1];
+    if (last && last.day === day) last.items.push(n);
+    else out.push({ day, word: dayWord(day, now), items: [n] });
+  }
+  return out;
+}
+
+/** the unread ones of a group */
+export const unreadIn = (items: NotificationItem[], g: NotifyGroup | 'all'): number => inGroup(items, g).filter((n) => !n.read).length;
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/pageTitle.test.ts" << '__COREGSM_EOF__'
 import { describe, expect, it } from 'vitest';
 import { tabTitle } from './pageTitle';
@@ -159454,6 +159843,83 @@ export function onPageTitleDetail(fn: (name: string | null) => void): () => void
 
 /** «Servers · Rust | Vanilla · CoreGSM»: the section, the detail when there is one */
 export const tabTitle = (section: string, detail: string | null, brand: string): string => [section, detail, brand].filter(Boolean).join(' · ');
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/pages"
+  cat > "$APP_DIR/core-frontend/src/pages/About.tsx" << '__COREGSM_EOF__'
+import { t, useI18n } from '../i18n';
+import { IconBell, IconChat, IconDisk, IconPlug, IconPeople, IconSend, IconSignal } from '../components/GameNewsIcons';
+import { IconBan, IconTrend } from '../icons';
+import { PageHead, IconServers } from '../ui';
+import type { ComponentType } from 'react';
+import type { IconProps } from '../icons';
+
+const FEATURES: { id: string; icon: ComponentType<IconProps>; href?: string }[] = [
+  { id: 'servers', icon: IconSignal, href: '/servers' },
+  { id: 'status', icon: IconTrend, href: '/status' },
+  { id: 'news', icon: IconSend, href: '/news' },
+  { id: 'bot', icon: IconChat },
+  { id: 'plugin', icon: IconPlug },
+  { id: 'bans', icon: IconBan, href: '/bans' },
+  { id: 'community', icon: IconPeople, href: '/community' },
+  { id: 'alerts', icon: IconBell },
+  { id: 'backup', icon: IconDisk },
+];
+
+/** «О проекте»: what the panel does, in a few lines for a visitor who has just arrived (public, no sign-in needed) */
+export default function AboutPage({ brand }: { brand: string }) {
+  useI18n();
+  return (
+    <div className="space-y-6">
+      <PageHead icon={<IconServers />} title={t('about.title', { brand })} subtitle={t('about.sub')} />
+      <section className="panel p-5 sm:p-6">
+        <p className="max-w-3xl text-lg font-semibold leading-relaxed">{t('about.lead', { brand })}</p>
+      </section>
+
+      <section aria-label={t('about.what')}>
+        <h2 className="t-section mb-3">{t('about.what')}</h2>
+        <ul className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          {FEATURES.map((f) => {
+            const body = (
+              <>
+                <span aria-hidden className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-soft text-link"><f.icon size={22} /></span>
+                <span className="min-w-0">
+                  <span className="t-card block">{t(`about.f.${f.id}` as 'about.f.servers')}</span>
+                  <span className="t-caption block">{t(`about.f.${f.id}Text` as 'about.f.serversText')}</span>
+                </span>
+              </>
+            );
+            return (
+              <li key={f.id}>
+                {f.href
+                  ? <a href={f.href} className="panel m-hover flex h-full items-start gap-3.5 p-4 hover:shadow-pop">{body}</a>
+                  : <div className="panel flex h-full items-start gap-3.5 p-4">{body}</div>}
+              </li>
+            );
+          })}
+        </ul>
+      </section>
+
+      <section aria-label={t('about.how')} className="panel p-5 sm:p-6">
+        <h2 className="t-section mb-3">{t('about.how')}</h2>
+        <ol className="grid gap-4 md:grid-cols-3">
+          {[1, 2, 3].map((n) => (
+            <li key={n} className="flex items-start gap-3">
+              <span aria-hidden className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-brand text-sm font-black text-white">{n}</span>
+              <span className="min-w-0">
+                <span className="t-card block">{t(`about.s${n}` as 'about.s1')}</span>
+                <span className="t-caption block">{t(`about.s${n}Text` as 'about.s1Text')}</span>
+              </span>
+            </li>
+          ))}
+        </ol>
+      </section>
+
+      <p className="t-caption">
+        {t('about.api')} <a className="text-link underline" href="/api/v1/openapi.json" target="_blank" rel="noopener noreferrer">/api/v1/openapi.json</a>
+      </p>
+    </div>
+  );
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/Admin.tsx" << '__COREGSM_EOF__'
@@ -160404,7 +160870,7 @@ import { useState } from 'react';
 import { api, type Server } from '../api';
 import { confirmDialog } from '../confirm';
 import { t, useI18n } from '../i18n';
-import { AdminPage, CopyButton, Empty, ErrorLine, Field, LoadError, PageHead, Section, IconServers, SkeletonRows, fmtDateTime, toast, usePoll } from '../ui';
+import { AdminPage, CopyButton, Empty, ErrorLine, Field, LoadError, PageHead, Section, SkeletonRows, fmtDateTime, toast, usePoll } from '../ui';
 import { IconKey } from '../icons';
 import { badgeSnippets, type WidgetSize, type WidgetTheme } from './integrationsLogic';
 
@@ -160525,7 +160991,7 @@ function KeysSection({ keys, onChanged }: { keys: ApiKey[] | null; onChanged: ()
       <ErrorLine text={error} />
 
       {keys === null && <SkeletonRows n={2} />}
-      {keys && !keys.length && <Empty title={t('intg.empty.t')} text={t('intg.empty.x')} art={<IconKey />} />}
+      {keys && !keys.length && <Empty title={t('intg.empty.t')} text={t('intg.empty.x')} scene="key" />}
       {active.length > 0 && (
         <ul className="divide-y divide-line overflow-hidden rounded-2xl border border-line">
           {active.map((k) => (
@@ -160579,7 +161045,7 @@ function SnippetsSection({ servers }: { servers: Server[] }) {
   return (
     <Section title={t('intg.snip.title')} description={t('intg.snip.desc')}>
       {!servers.length ? (
-        <Empty art={<IconServers />} title={t('intg.snip.none.t')} text={t('intg.snip.none.x')} />
+        <Empty scene="server" title={t('intg.snip.none.t')} text={t('intg.snip.none.x')} />
       ) : (
         <>
           <Field label={t('intg.snip.server')}>
@@ -165651,7 +166117,6 @@ import { t, useI18n } from '../i18n';
 import { usePoll } from '../ui';
 import { EmptyState, SubTabs } from './GameNewsUi';
 import { useOpenProfile } from './GameNewsProfile';
-import { IconDoor } from '../components/GameNewsIcons';
 import {
   PERIODS, REPEAT_JOINS, SHORT_VISIT_MIN, STATUSES, buildRows, dayWord, groupByDay, isKicked, isTimeout, matchesStatus, periodSince, repeaters, visitMinutes,
   type ConnectionItem, type Period, type Row, type Status,
@@ -165746,7 +166211,7 @@ export function ConnectionsSection({ player, onPick }: { player: string; onPick:
       </div>
 
       {items == null && <div className="skeleton h-24 rounded-xl" aria-busy="true" />}
-      {items && items.length === 0 && <EmptyState icon={<IconDoor size={22} />} title={t('gn.cn.empty')} hint={t('gn.cn.emptyHint')} />}
+      {items && items.length === 0 && <EmptyState scene="users" title={t('gn.cn.empty')} hint={t('gn.cn.emptyHint')} />}
       {items && items.length > 0 && shown.length === 0 && <p className="py-4 text-center text-sm font-semibold text-mute">{t('gn.cn.nothing')}</p>}
       {groups.map((g) => (
         <div key={g.day}>
@@ -165795,7 +166260,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api';
 import { soon } from '../components/GameNewsParts';
 import { Styled } from '../components/NewsEditor';
-import { KIND_ICON, PLUGIN_NOTE_ICON, IconList } from '../components/GameNewsIcons';
+import { KIND_ICON, PLUGIN_NOTE_ICON } from '../components/GameNewsIcons';
 import { confirmDialog } from '../confirm';
 import { gameColor } from '../games';
 import type { NewsServerInfo } from '../gameNews';
@@ -166055,7 +166520,7 @@ export function JournalTab({ onReuse, onPlayer }: { onReuse: (text: string) => v
       />
       {counts && <p className="text-xs font-semibold text-mute">{t('gn.jn.counts24')}</p>}
       {items == null && <div className="skeleton h-24 rounded-xl" aria-busy="true" />}
-      {items && items.length === 0 && <EmptyState icon={<IconList size={22} />} title={filter === 'problems' ? t('gn.jn.noProblems') : t('gn.jn.empty')} hint={filter === 'problems' ? t('gn.jn.noProblemsHint') : t('gn.jn.emptyHint')} />}
+      {items && items.length === 0 && <EmptyState scene="chart" title={filter === 'problems' ? t('gn.jn.noProblems') : t('gn.jn.empty')} hint={filter === 'problems' ? t('gn.jn.noProblemsHint') : t('gn.jn.emptyHint')} />}
       {groups.map((g) => (
         <div key={g.day}>
           <h4 className="sticky top-0 z-[1] bg-card/95 py-1 text-sm font-extrabold capitalize text-mute backdrop-blur">{dayTitle(g.day)} <span className="font-semibold">· {g.items.length}</span></h4>
@@ -166083,7 +166548,6 @@ import { confirmDialog } from '../confirm';
 import { t, useI18n } from '../i18n';
 import { errText, toast, usePoll } from '../ui';
 import { EmptyState } from './GameNewsUi';
-import { IconLink } from '../components/GameNewsIcons';
 
 interface Link { platformId: string; masked: string; nick: string; username: string; status: string; discord: boolean; linkedAt: number }
 
@@ -166112,7 +166576,7 @@ export function LinksTab() {
         {items && items.length > 4 && <input className="input w-56" value={query} placeholder={t('gn.lk.search')} aria-label={t('gn.lk.search')} onChange={(e) => setQuery(e.target.value)} />}
       </div>
       {items == null && <div className="skeleton h-24 rounded-xl" aria-busy="true" />}
-      {items && items.length === 0 && <EmptyState icon={<IconLink size={22} />} title={t('gn.lk.empty')} hint={t('gn.lk.emptyHint')} />}
+      {items && items.length === 0 && <EmptyState scene="users" title={t('gn.lk.empty')} hint={t('gn.lk.emptyHint')} />}
       {items && items.length > 0 && list.length === 0 && <p className="text-sm font-semibold text-mute">{t('gn.lk.none')}</p>}
       {list.length > 0 && (
         <ul className="divide-y divide-line">
@@ -166144,7 +166608,6 @@ import type { NewsServerInfo } from '../gameNews';
 import { t, useI18n } from '../i18n';
 import { SmoothArea, usePoll } from '../ui';
 import { EmptyState } from './GameNewsUi';
-import { IconTrend } from '../icons';
 
 export interface MetricPoint { ts: number; fps: number; minFps: number; worstMs: number; freezes: number; memMb: number; heapMb: number; players: number }
 
@@ -166232,7 +166695,7 @@ export function MetricsSection() {
         </div>
       </div>
       {(servers == null || (server && points == null)) && <div className="skeleton h-28 rounded-xl" aria-busy="true" />}
-      {points && !view && <EmptyState icon={<IconTrend size={22} />} title={t('gn.mt.empty')} hint={t('gn.mt.emptyHint')} />}
+      {points && !view && <EmptyState scene="chart" title={t('gn.mt.empty')} hint={t('gn.mt.emptyHint')} />}
       {view && (
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <Card title={t('gn.mt.fps')} values={view.fps} last={view.last.fps} fmt={(n) => n.toFixed(1)} color="rgb(var(--ok))" hint={t('gn.mt.fpsHint')} />
@@ -166257,8 +166720,6 @@ import { errText, toast, usePoll } from '../ui';
 import { EmptyState, SubTabs } from './GameNewsUi';
 import { ConnectionsSection } from './GameNewsConnections';
 import { MetricsSection } from './GameNewsMetrics';
-import { IconBan } from '../icons';
-import { IconList } from '../components/GameNewsIcons';
 
 const FILTERS = ['all', 'kick', 'ban', 'warn', 'unban'] as const;
 type Filter = (typeof FILTERS)[number];
@@ -166302,7 +166763,7 @@ export function ModerationTab() {
           <p className="text-sm font-semibold text-mute">{t('gn.md.bansNote')}</p>
         </div>
         {data == null && <div className="skeleton h-16 rounded-xl" aria-busy="true" />}
-        {data && data.bans.length === 0 && <EmptyState icon={<IconBan size={22} />} title={t('gn.md.bansEmpty')} hint={t('gn.md.bansEmptyHint')} />}
+        {data && data.bans.length === 0 && <EmptyState scene="shield" title={t('gn.md.bansEmpty')} hint={t('gn.md.bansEmptyHint')} />}
         {data && data.bans.length > 0 && (
           <ul className="divide-y divide-line">
             {data.bans.map((b) => (
@@ -166349,7 +166810,7 @@ export function ModerationTab() {
         </div>
         <SubTabs label={t('gn.md.log')} value={filter} onChange={setFilter} items={FILTERS.map((f) => ({ id: f, label: t(`gn.md.f.${f}` as 'gn.md.f.all') }))} />
         {data == null && <div className="skeleton h-24 rounded-xl" aria-busy="true" />}
-        {data && data.log.length === 0 && <EmptyState icon={<IconList size={22} />} title={t('gn.md.logEmpty')} hint={t('gn.md.logEmptyHint')} />}
+        {data && data.log.length === 0 && <EmptyState scene="news" title={t('gn.md.logEmpty')} hint={t('gn.md.logEmptyHint')} />}
         {data && data.log.length > 0 && (
           <ul className="divide-y divide-line">
             {data.log.map((e) => (
@@ -166554,7 +167015,6 @@ import { confirmDialog } from '../confirm';
 import { t, useI18n } from '../i18n';
 import { Field, errText, toast, usePoll } from '../ui';
 import { EmptyState } from './GameNewsUi';
-import { IconClock } from '../icons';
 
 export interface ScheduleItem { id: number; serverId: number; serverName: string; time: string; days: number[]; warnSec: number; enabled: boolean; next: number | null; skipped: boolean }
 interface Form { id: number | null; serverId: number; time: string; days: number[]; warnSec: number; enabled: boolean }
@@ -166606,7 +167066,7 @@ export function SchedulePanel({ servers, onlyServer }: { servers: { id: number; 
       <p className="text-sm font-semibold text-mute">{t('gn.rs.note')}</p>
 
       {items && list.length === 0 && !form && (
-        <EmptyState icon={<IconClock size={22} />} title={t('gn.rs.empty')} hint={t('gn.rs.emptyHint')} action={<button type="button" className="btn btn-sm" onClick={() => setForm(blank())}>{t('gn.rs.add')}</button>} />
+        <EmptyState scene="calendar" title={t('gn.rs.empty')} hint={t('gn.rs.emptyHint')} action={<button type="button" className="btn btn-sm" onClick={() => setForm(blank())}>{t('gn.rs.add')}</button>} />
       )}
 
       <ul className="space-y-2">
@@ -166681,6 +167141,7 @@ import { api } from '../api';
 import { NewsEditor, NewsPreview, Styled } from '../components/NewsEditor';
 import { soon } from '../components/GameNewsParts';
 import RowMenu from '../components/RowMenu';
+import { GroupedList } from '../ui/lists';
 import { IconAuto, IconChat, IconRestart, IconShield } from '../components/GameNewsIcons';
 import { StateView } from '../components/StateView';
 import { Switch } from '../components/Switch';
@@ -166734,6 +167195,12 @@ export default function GameNewsRules({ servers, rules, timezone, reload }: { se
     if (!(await confirmDialog({ title: t('gn.a.delTitle', { name: r.name }), danger: true, confirmLabel: t('gn.a.del') }))) return;
     try { await api(`/game-news/rules/${r.id}`, 'DELETE'); reload(); } catch (e) { toast(errText(e), 'err'); }
   };
+  // the rules by state: the ones that work, the ones whose period is over, the ones switched off
+  const ruleGroups = [
+    { id: 'on', title: t('gn.a.g.on'), tone: 'ok' as const, items: rules.filter((r) => r.enabled && !r.expired) },
+    { id: 'expired', title: t('gn.a.g.expired'), tone: 'warn' as const, items: rules.filter((r) => r.enabled && r.expired) },
+    { id: 'off', title: t('gn.a.g.off'), tone: 'mute' as const, items: rules.filter((r) => !r.enabled), folded: true },
+  ];
   const openNew = () => setDraft({ id: null, body: emptyRule() });
   // a copy opens as a new announcement: change what differs and save
   const duplicate = (r: RuleInfo) => setDraft({ id: null, body: { ...bodyOf(r), name: t('gn.a.copyName', { name: r.name }).slice(0, 80) } });
@@ -166747,7 +167214,7 @@ export default function GameNewsRules({ servers, rules, timezone, reload }: { se
 
       {rules.length === 0 && (
         <>
-          <StateView title={t('gn.a.empty')} text={t('gn.a.emptyText')} action={<button type="button" className="btn" onClick={openNew}>{t('gn.a.add')}</button>} />
+          <StateView scene="chat" title={t('gn.a.empty')} text={t('gn.a.emptyText')} action={<button type="button" className="btn" onClick={openNew}>{t('gn.a.add')}</button>} />
           {/* ready examples: one tap opens the form filled in */}
           <section aria-label={t('gn.a.examples')}>
             <h3 className="mb-2 text-sm font-extrabold text-mute">{t('gn.a.examples')}</h3>
@@ -166769,9 +167236,12 @@ export default function GameNewsRules({ servers, rules, timezone, reload }: { se
       )}
 
       {rules.length > 0 && (
-        <ul className="panel divide-y divide-line">
-          {rules.map((r) => (
-            <li key={r.id} className="flex flex-wrap items-start gap-x-4 gap-y-2 px-5 py-4">
+        <GroupedList
+          storageKey="autorules"
+          itemKey={(r) => r.id}
+          groups={ruleGroups}
+          render={(r) => (
+            <div className="flex flex-wrap items-start gap-x-4 gap-y-2 px-5 py-4">
               <Switch className="mt-1" checked={r.enabled} aria-label={`${r.name}: ${r.enabled ? t('gn.a.on') : t('gn.a.off')}`} onChange={(v) => void toggle(r, v)} />
               <div className="min-w-0 flex-1 basis-40">
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
@@ -166795,15 +167265,15 @@ export default function GameNewsRules({ servers, rules, timezone, reload }: { se
                 className="ml-auto"
                 label={t('gn.a.menu', { name: r.name })}
                 items={[
-                  { key: 'run', label: t('gn.a.run'), onSelect: () => void runNow(r) },
-                  { key: 'edit', label: t('gn.a.edit'), onSelect: () => setDraft({ id: r.id, body: bodyOf(r) }) },
-                  { key: 'copy', label: t('gn.a.copy'), onSelect: () => duplicate(r) },
-                  { key: 'del', label: t('gn.a.del'), danger: true, sep: true, onSelect: () => void remove(r) },
+                  { key: 'run', label: t('gn.a.run'), shortcut: 'r', onSelect: () => void runNow(r) },
+                  { key: 'edit', label: t('gn.a.edit'), shortcut: 'e', onSelect: () => setDraft({ id: r.id, body: bodyOf(r) }) },
+                  { key: 'copy', label: t('gn.a.copy'), shortcut: 'd', onSelect: () => duplicate(r) },
+                  { key: 'del', label: t('gn.a.del'), danger: true, sep: true, shortcut: 'Delete', onSelect: () => void remove(r) },
                 ]}
               />
-            </li>
-          ))}
-        </ul>
+            </div>
+          )}
+        />
       )}
 
       {draft && (
@@ -167073,7 +167543,7 @@ import { t, useI18n } from '../i18n';
 import { versionLess, type NewsSendResult, type NewsServerInfo } from '../gameNews';
 import { Spinner } from '../ui';
 import { EmptyState } from './GameNewsUi';
-import { IconPlug, IconBolt, IconCheck, IconClose } from '../icons';
+import { IconBolt, IconCheck, IconClose } from '../icons';
 import { IconRestart } from '../components/GameNewsIcons';
 
 export interface SendProps {
@@ -167128,7 +167598,7 @@ export function SendTab(p: SendProps) {
 
           {p.supportedCount === 0 && <p className="text-sm font-semibold text-mute">{t('gn.noServers')}</p>}
           {p.supportedCount > 0 && p.withToken.length === 0 && (
-            <EmptyState icon={<IconPlug size={22} />} title={t('gn.noPlugin')} hint={t('gn.q.connectHint')} />
+            <EmptyState scene="plug" title={t('gn.noPlugin')} hint={t('gn.q.connectHint')} />
           )}
 
           <div className="flex flex-wrap gap-2" role="group" aria-label={t('gn.servers')}>
@@ -167307,8 +167777,6 @@ import { ScopeNote, useScope } from './GameNewsScope';
 import { SchedulePanel } from './GameNewsRestartSchedule';
 import { EmptyState, SubTabs, WithPreview } from './GameNewsUi';
 import { Field, SaveBadge, errText, toast, useAutosave, usePoll } from '../ui';
-import { IconRestart } from '../components/GameNewsIcons';
-import { IconList } from '../components/GameNewsIcons';
 
 interface Job { serverId: number; serverName: string; runAt: number; by: string; source: string; state: string; left: number; total: number }
 interface Texts { announce: string; now: string; cancel: string }
@@ -167430,7 +167898,7 @@ export function ServerRestartCard({ countdown }: { countdown?: { enabled: boolea
         <div className="space-y-4">
           <p className="text-sm font-semibold text-mute">{t('gn.rr.note')}</p>
 
-          {jobs.length === 0 && <EmptyState icon={<IconRestart size={22} />} title={t('gn.rr.noTimers')} hint={t('gn.rr.noTimersHint')} />}
+          {jobs.length === 0 && <EmptyState scene="calendar" title={t('gn.rr.noTimers')} hint={t('gn.rr.noTimersHint')} />}
           {jobs.map((j) => {
             const left = j.state === 'counting' ? Math.max(0, j.left - elapsed) : 0;
             return (
@@ -167521,7 +167989,7 @@ export function ServerRestartCard({ countdown }: { countdown?: { enabled: boolea
       )}
 
       {part === 'history' && (history.length === 0
-        ? <EmptyState icon={<IconList size={22} />} title={t('gn.rr.logEmpty')} />
+        ? <EmptyState scene="news" title={t('gn.rr.logEmpty')} />
         : (
           <ul className="divide-y divide-line">
             {history.map((h) => (
@@ -167543,12 +168011,13 @@ import { useState, type ReactNode } from 'react';
 import { t, useI18n } from '../i18n';
 import { SCOPE_KEYS, useScope } from './GameNewsScope';
 import { IconInfo } from '../icons';
+import { EmptyArt, type ArtScene } from '../components/EmptyArt';
 
 /** a quiet block for a list that has nothing in it yet: what it is for and the way to fill it */
-export function EmptyState({ icon = <IconInfo size={22} />, title, hint, action }: { icon?: ReactNode; title: string; hint?: string; action?: ReactNode }) {
+export function EmptyState({ icon = <IconInfo size={22} />, scene, title, hint, action }: { icon?: ReactNode; scene?: ArtScene; title: string; hint?: string; action?: ReactNode }) {
   return (
     <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed border-line px-5 py-8 text-center">
-      <span aria-hidden className="flex h-11 w-11 items-center justify-center rounded-full bg-soft text-mute">{icon}</span>
+      {scene ? <EmptyArt scene={scene} size={112} /> : <span aria-hidden className="flex h-11 w-11 items-center justify-center rounded-full bg-soft text-mute">{icon}</span>}
       <p className="font-extrabold">{title}</p>
       {hint && <p className="max-w-md text-sm font-semibold text-mute">{hint}</p>}
       {action && <div className="pt-1">{action}</div>}
@@ -168110,6 +168579,7 @@ import {
   type MaintenanceInput, type MaintenanceRepeat, type MaintenanceWindow, type WindowState,
 } from '../maintenance';
 import { AdminPage, ErrorLine, Field, FieldError, IconEdit, IconPlus, IconTrash, IconWrench, LoadError, Modal, PageHead, Spinner, undoable, toast, usePoll, errText } from '../ui';
+import { GroupedList, ListToolbar } from '../ui/lists';
 
 interface Draft { id: number | null; serverId: string; name: string; start: string; end: string; repeat: MaintenanceRepeat }
 
@@ -168133,6 +168603,7 @@ export default function MaintenancePage() {
   const [error, setError] = useState('');
   const [draft, setDraft] = useState<Draft | null>(null);
   const [hidden, setHidden] = useState<number[]>([]);
+  const [query, setQuery] = useState('');
 
   const load = () =>
     Promise.all([
@@ -168150,6 +168621,19 @@ export default function MaintenancePage() {
       .map((w) => ({ w, st: windowState(w, now) }))
       .sort((a, b) => order[a.st] - order[b.st] || (a.w.nextStart ?? a.w.startTs) - (b.w.nextStart ?? b.w.startTs));
   }, [list, hidden]);
+
+  // the windows by state: what goes on now, what is planned, what repeats, what is over (folded)
+  const groups = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    const shown = q ? rows.filter(({ w }) => `${w.name} ${w.serverName ?? ''}`.toLowerCase().includes(q)) : rows;
+    const by = (st: WindowState) => shown.filter((r) => r.st === st);
+    return [
+      { id: 'active', title: t('d2.mt.g.active'), tone: 'warn' as const, items: by('active') },
+      { id: 'planned', title: t('d2.mt.g.planned'), tone: 'ok' as const, items: by('planned') },
+      { id: 'repeat', title: t('d2.mt.g.repeat'), tone: 'mute' as const, items: by('repeat') },
+      { id: 'past', title: t('d2.mt.g.past'), tone: 'mute' as const, items: by('past'), folded: true },
+    ];
+  }, [rows, query]);
 
   const open = (preset?: { startTs: number; endTs: number }) => {
     const d = emptyDraft();
@@ -168193,6 +168677,7 @@ export default function MaintenancePage() {
 
       {list && rows.length === 0 && (
         <StateView
+          scene="calendar"
           title={t('d2.mt.empty')}
           text={t('d2.mt.emptyText')}
           action={<button type="button" className="btn" onClick={() => open()}>{t('d2.mt.add')}</button>}
@@ -168201,9 +168686,14 @@ export default function MaintenancePage() {
       {!list && !error && <div className="skeleton panel h-40" aria-busy="true" aria-label={t('d2.news.loading')} />}
 
       {rows.length > 0 && (
-        <ul className="panel divide-y divide-line overflow-hidden">
-          {rows.map(({ w, st }) => (
-            <li key={w.id} className="flex flex-wrap items-center gap-x-4 gap-y-2 px-5 py-3.5">
+        <>
+          {rows.length >= 6 && <ListToolbar label={t('d2.mt.title')} search={query} onSearch={setQuery} placeholder={t('d2.mt.search')} />}
+          <GroupedList
+            storageKey="maintenance"
+            itemKey={(x) => x.w.id}
+            groups={groups}
+            render={({ w, st }) => (
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-2 px-5 py-3.5">
               <div className="min-w-0 flex-1 basis-60">
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                   <span className="min-w-0 wrap-break-word font-extrabold">{w.name}</span>
@@ -168222,9 +168712,11 @@ export default function MaintenancePage() {
                 <button type="button" className="btn btn-soft btn-sm" onClick={() => edit(w)} aria-label={t('d2.mt.editWin', { name: w.name })}><IconEdit size={16} />{t('d2.news.change')}</button>
                 <button type="button" className="row-act row-act-danger" onClick={() => remove(w)} aria-label={t('d2.mt.delWin', { name: w.name })}><IconTrash size={16} /></button>
               </div>
-            </li>
-          ))}
-        </ul>
+            </div>
+            )}
+          />
+          {groups.every((g) => g.items.length === 0) && <p className="py-6 text-center font-semibold text-mute">{t('d2.mt.noMatch')}</p>}
+        </>
       )}
 
       <StatusNotesCard servers={servers} />
@@ -170496,7 +170988,7 @@ import { gameGradient, gameLabel } from '../games';
 import { coverBackground, coverUrlOf, emblemStyle, gameBackdrop } from '../cover';
 import { applyConnectTemplates, connectGuide } from '../connectGuides';
 import { useGameProfiles } from '../gameProfiles';
-import { Burst, CopyButton, ErrorLine, GameAvatar, IconBell, LoadError, IconCheckMark, IconRefresh, IconShare, StatusPill, ago, isLag, toast, useDepth, useFlashOnChange, usePoll, navigate, errText } from '../ui';
+import { Burst, CopyButton, ErrorLine, GameAvatar, IconBell, LoadError, IconCheckMark, IconRefresh, IconShare, StatusPill, ago, isLag, toast, useDepth, useFlashOnChange, usePoll, navigate, errText, ChartEmpty } from '../ui';
 import NotFound from '../components/NotFound';
 import { confirmDialog } from '../confirm';
 import ServerForm from './ServerForm';
@@ -170979,7 +171471,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
         <PeriodSeg hours={hours} onChange={setHours} />
       </div>
       {stats.samples < 2 ? (
-        <p className="py-10 text-center font-semibold text-mute">{t('d2.sd.fewData')}</p>
+        <ChartEmpty text={t('d2.sd.fewData')} />
       ) : down ? (
         <OfflineState since={outage?.ts ?? null} atLeast={outage?.atLeast ?? false} error={s.error ?? null} points={points} hours={data.hours} now={nowTs} uptimePct={stats.uptimePct ?? null} windowLabel={windowLabel}>
           {chartEl(withSeries)}
@@ -173285,6 +173777,9 @@ import { AccentPicker } from '../components/AccentPicker';
 import { BtnSpinner } from '../components/Button';
 import { SplitButton } from '../components/SplitButton';
 import { Gauge } from '../components/Gauge';
+import { t, useI18n } from '../i18n';
+import { EmptyArt } from '../components/EmptyArt';
+import { GroupedList, ListToolbar } from '../ui/lists';
 import MaintenanceChip from '../components/MaintenanceChip';
 import { buildSparkline } from '../sparkline';
 import { confirmDialog, promptDialog } from '../confirm';
@@ -173481,6 +173976,7 @@ function Specimen() {
 }
 
 export default function UiKitPage() {
+  useI18n();
   const [seg, setSeg] = useState('day');
   const [sw, setSw] = useState({ a: true, b: false });
   const [text, setText] = useState('Мой сервер');
@@ -173531,7 +174027,7 @@ export default function UiKitPage() {
           ))}
         </Row>
         <Row label="Текст (контраст не ниже 4.5:1 на карточке и подложке)">
-          {TEXTS.map(([cls, t]) => <span key={cls} className={`rounded-ui-md bg-soft px-3 py-1.5 font-bold ${cls}`}>{t}</span>)}
+          {TEXTS.map(([cls, label]) => <span key={cls} className={`rounded-ui-md bg-soft px-3 py-1.5 font-bold ${cls}`}>{label}</span>)}
         </Row>
       </Block>
 
@@ -173771,6 +174267,51 @@ export default function UiKitPage() {
             );
           })}
         </Row>
+      </Block>
+
+      <Block title={t('kit.type.t')} note={t('kit.type.n')}>
+        <div className="space-y-2">
+          <div className="t-page">{t('kit.type.page')}</div>
+          <div className="t-section">{t('kit.type.section')}</div>
+          <div className="t-card">{t('kit.type.card')}</div>
+          <p className="t-caption">{t('kit.type.caption')}</p>
+          <div className="t-num text-2xl">1 284 <span className="t-caption">{t('kit.type.num')}</span></div>
+        </div>
+      </Block>
+
+      <Block title={t('kit.motion.t')} note={t('kit.motion.n')}>
+        <div className="flex flex-wrap gap-3">
+          <div className="panel m-rise p-4">{t('kit.motion.rise')}</div>
+          <div className="panel m-pop p-4">{t('kit.motion.pop')}</div>
+          <button type="button" className="btn btn-soft m-hover">{t('kit.motion.hover')}</button>
+        </div>
+      </Block>
+
+      <Block title={t('kit.list.t')} note={t('kit.list.n')}>
+        <ListToolbar label={t('kit.list.label')} search="" onSearch={() => undefined} placeholder={t('kit.list.search')} states={[{ id: 'all', label: t('kit.list.all'), count: 5 }, { id: 'on', label: t('kit.list.on'), count: 3 }]} value="all" onChange={() => undefined} />
+        <GroupedList
+          storageKey="uikit-demo"
+          itemKey={(x) => x}
+          groups={[
+            { id: 'on', title: t('kit.list.on'), tone: 'ok', items: [t('kit.list.a'), t('kit.list.b'), t('kit.list.c')] },
+            { id: 'off', title: t('kit.list.off'), tone: 'mute', items: [t('kit.list.d'), t('kit.list.e')], folded: true },
+          ]}
+          render={(x) => <div className="px-5 py-3 font-bold">{x}</div>}
+        />
+      </Block>
+
+      <Block title={t('kit.zones.t')} note={t('kit.zones.n')}>
+        <Section title={t('kit.zones.title')} description={t('kit.zones.desc')} advanced={<p className="text-sm text-mute">{t('kit.zones.adv')}</p>} danger={<button type="button" className="btn btn-soft btn-sm adm-danger-btn">{t('kit.zones.danger')}</button>}>
+          <p>{t('kit.zones.body')}</p>
+        </Section>
+      </Block>
+
+      <Block title={t('kit.art.t')} note={t('kit.art.n')}>
+        <div className="kit-grid" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(9rem, 1fr))' }}>
+          {(['calendar', 'chat', 'key', 'news', 'chart', 'shield', 'plug', 'bell', 'users', 'server'] as const).map((sc) => (
+            <div key={sc} className="kit-icon"><EmptyArt scene={sc} size={120} /><span>{sc}</span></div>
+          ))}
+        </div>
       </Block>
 
       <Block title="Иконки" note="Один набор: сетка 24 px, штрих 2 px, цвет currentColor. Импорт из '../ui' (или из '../icons').">
@@ -174747,7 +175288,16 @@ export function BotCard() {
   const proxyWarn = proxy.trim() && !clearProxy && !/^([a-z0-9]+:\/\/)?[^\s:@/]+(:[^\s@/]+)*(@[^\s:@/]+(:\d{1,5})?)?$/i.test(proxy.trim()) ? t('d2.bot.proxyWarn') : '';
 
   return (
-    <Section title={t('d2.bot.title')} actions={<BotPill status={status} tokenSet={tokenSet} />}>
+    <Section
+      title={t('d2.bot.title')}
+      actions={<BotPill status={status} tokenSet={tokenSet} />}
+      danger={tokenSet || secretSet ? (
+        <div className="flex flex-wrap gap-2">
+          {tokenSet && <button type="button" className="btn btn-soft btn-sm adm-danger-btn" onClick={removeToken}>{t('d2.bot.removeToken')}</button>}
+          {secretSet && <button type="button" className="btn btn-soft btn-sm adm-danger-btn" onClick={() => void removeSecret()}>{t('d2.bot.removeSecret')}</button>}
+        </div>
+      ) : undefined}
+    >
     <form onSubmit={save} className="space-y-3.5">
       {tokenSet && status?.state === 'error' && status.error && (
         <p className="rounded-2xl bg-badbg px-4 py-2.5 text-sm font-bold text-bad">{status.error}</p>
@@ -174771,9 +175321,6 @@ export function BotCard() {
       </Field>
       <FieldError id="set-token-err" text={tokenWarn} />
       </div>
-      {tokenSet && (
-        <button type="button" className="btn-link-danger text-sm" onClick={removeToken}>{t('d2.bot.removeToken')}</button>
-      )}
 
       <Field label={t('d2.bot.proxy')}>
         <ProxyField
@@ -174811,9 +175358,6 @@ export function BotCard() {
             placeholder={secretSet ? t('d2.bot.secretSaved') : t('d2.bot.secretNone')}
           />
         </Field>
-        {secretSet && (
-          <button type="button" className="btn-link-danger text-sm" onClick={() => void removeSecret()}>{t('d2.bot.removeSecret')}</button>
-        )}
         {info?.discordRedirect && (
           <div>
             <label htmlFor="set-redirect" className="label">Redirect URI</label>
@@ -182678,6 +183222,91 @@ __COREGSM_EOF__
 .upd-note-row { display: flex; align-items: flex-start; }
 .upd-note-row > span:first-child { margin-top: 2px; flex: none; }
 .upd-step-dot svg { display: block; }
+
+/* ======================================================================================================
+   The design pass: type scale, motion, lists with groups, cards with zones, tablet and wide screens
+   ====================================================================================================== */
+
+/* ---- type scale: one ladder for titles, captions and figures (the weight goes down with the level, so a card is not all bold) ---- */
+.t-page { font-size: clamp(1.5rem, 1.1rem + 1.2vw, 2.125rem); font-weight: 800; letter-spacing: -.025em; line-height: 1.1; }
+.t-section { font-size: 1.125rem; font-weight: 750; letter-spacing: -.01em; line-height: 1.25; }
+.t-card { font-size: 1rem; font-weight: 700; line-height: 1.3; }
+.t-caption { font-size: var(--fs-sm); font-weight: 500; line-height: 1.4; color: rgb(var(--mute)); }
+.t-num { font-variant-numeric: tabular-nums; font-feature-settings: 'tnum'; letter-spacing: -.02em; font-weight: 800; }
+/* the explaining text under a title is lighter than the title: paragraphs, definitions and notes in the muted colour */
+:is(p, dd, small, .block).text-mute.font-semibold:not(.pill) { font-weight: 500; }
+
+/* ---- motion: the same durations and curves everywhere (a thing that answers a click moves; data that refreshes does not) ---- */
+:root {
+  --dur-1: 120ms; /* hover, press */
+  --dur-2: 200ms; /* open, close, switch */
+  --dur-3: 320ms; /* a page or a block comes in */
+  --ease-out: cubic-bezier(.2, .8, .2, 1);
+  --ease-spring: cubic-bezier(.34, 1.56, .64, 1);
+}
+@keyframes m-rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@keyframes m-pop { from { opacity: 0; transform: scale(.96); } to { opacity: 1; transform: none; } }
+.m-rise { animation: m-rise var(--dur-3) var(--ease-out) both; }
+.m-pop { animation: m-pop var(--dur-2) var(--ease-spring) both; }
+.m-hover { transition: transform var(--dur-1) var(--ease-out), box-shadow var(--dur-1) var(--ease-out), background-color var(--dur-1) var(--ease-out); }
+@media (prefers-reduced-motion: reduce) { .m-rise, .m-pop { animation: none; } .m-hover { transition: none; } }
+html[data-motion='reduce'] :is(.m-rise, .m-pop) { animation: none; }
+
+/* ---- a list in groups: a toolbar over it, a fold per group ---- */
+.adm-listbar { position: sticky; top: 8px; z-index: 6; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 8px 10px; border-radius: var(--r-lg); background: color-mix(in srgb, rgb(var(--card)) 88%, transparent); border: 1px solid rgb(var(--line)); box-shadow: var(--shadow-1); backdrop-filter: blur(10px); }
+.adm-listbar-search { display: flex; align-items: center; gap: 8px; min-width: 12rem; flex: 1 1 14rem; max-width: 22rem; padding: 6px 12px; border-radius: var(--r-pill); background: rgb(var(--soft)); color: rgb(var(--mute)); }
+.adm-listbar-search:focus-within { box-shadow: 0 0 0 2px rgb(var(--brand) / .55); color: rgb(var(--ink)); }
+.adm-grp-head { display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 4px; border-radius: var(--r-md); text-align: left; }
+.adm-grp-head:hover { background: rgb(var(--soft) / .6); }
+.adm-grp-head:focus-visible { outline: 2px solid rgb(var(--brand)); outline-offset: 2px; }
+.adm-grp-chev { flex: none; color: rgb(var(--mute)); transition: transform var(--dur-2) var(--ease-out); }
+.adm-grp-chev.is-folded { transform: rotate(-90deg); }
+.adm-grp-count { display: inline-grid; place-items: center; min-width: 1.35rem; height: 1.35rem; padding: 0 .4rem; border-radius: var(--r-pill); background: rgb(var(--soft)); font-size: var(--fs-xs); font-weight: 800; font-variant-numeric: tabular-nums; }
+
+/* ---- a card with zones: the main thing, «Дополнительно» that folds, a red zone for what cannot be undone ---- */
+.adm-adv { border-top: 1px dashed rgb(var(--line)); padding-top: 12px; }
+.adm-adv > summary { cursor: pointer; list-style: none; display: inline-flex; align-items: center; gap: 8px; font-weight: 700; color: rgb(var(--mute)); }
+.adm-adv > summary::-webkit-details-marker { display: none; }
+.adm-adv > summary::before { content: ''; width: 7px; height: 7px; border-right: 2px solid currentColor; border-bottom: 2px solid currentColor; transform: rotate(-45deg); transition: transform var(--dur-2) var(--ease-out); }
+.adm-adv[open] > summary::before { transform: rotate(45deg); }
+.adm-adv > summary:hover { color: rgb(var(--ink)); }
+.adm-danger { padding: 12px 14px; border-radius: var(--r-lg); background: rgb(var(--badbg) / .55); box-shadow: inset 0 0 0 1px rgb(var(--bad) / .3); }
+.adm-danger-title { margin-bottom: 8px; font-size: var(--fs-sm); font-weight: 800; letter-spacing: .02em; color: rgb(var(--bad)); }
+.adm-danger-btn { color: rgb(var(--bad)); }
+
+/* ---- a tablet (768-1023 px) keeps a comfortable width; a very wide screen does not stretch the admin pages ---- */
+@media (min-width: 768px) and (max-width: 1023px) {
+  .app-wrap { max-width: 900px; margin-inline: auto; }
+  .adm-stage { display: grid; gap: 1.25rem; }
+}
+@media (min-width: 1900px) {
+  :root[data-ember='1'][data-page='admin'] .app-wrap { padding-right: max(28px, calc((100vw - 1760px) / 2)); }
+}
+
+/* a status with a sign next to its colour (Appearance → «Знаки у статусов»): ✓ for good, ! for a warning, ✕ for bad */
+html[data-shapes='1'] :is(.pill-ok, .pill-warn, .pill-bad)::before { display: inline-block; margin-right: .3em; font-weight: 900; }
+html[data-shapes='1'] .pill-ok::before { content: '\2713'; }
+html[data-shapes='1'] .pill-warn::before { content: '!'; }
+html[data-shapes='1'] .pill-bad::before { content: '\2715'; }
+html[data-shapes='1'] .adm-grp-head i, html[data-shapes='1'] .srv-mini-dot { border-radius: 2px; }
+
+/* the key that does an item of a row menu while the menu is open */
+.row-menu-item { justify-content: space-between; gap: 14px; }
+.row-menu-kbd { flex: none; min-width: 1.5rem; padding: 1px 6px; border-radius: 6px; background: rgb(var(--soft)); box-shadow: inset 0 0 0 1px rgb(var(--line)); font: inherit; font-size: var(--fs-xs); font-weight: 800; text-align: center; color: rgb(var(--mute)); }
+
+/* ---- charts: one set of colours and strokes for every chart, and one empty state ---- */
+:root {
+  --chart-1: rgb(var(--brand));
+  --chart-2: rgb(var(--link));
+  --chart-3: rgb(var(--ok));
+  --chart-4: rgb(var(--warn));
+  --chart-5: rgb(var(--bad));
+  --chart-grid: rgb(var(--line) / .7);
+  --chart-axis: rgb(var(--mute) / .8);
+  --chart-line: 2px;
+  --chart-fill: .22;
+}
+.chart-empty { display: grid; justify-items: center; gap: 4px; padding: 1.5rem 1rem; text-align: center; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/ui.tsx" << '__COREGSM_EOF__'
@@ -182706,7 +183335,7 @@ export { ago, fmtDate, fmtTime, fmtDateTime, fmtDay, num, plural } from './ui/fo
 export { ThemeToggle, adminThemeIsOwn, applyDefaultTheme, currentTheme, resetAdminTheme, setThemeChoice, setThemeScope } from './ui/theme';
 export { Modal, Field, StatusPill, GameAvatar, FillBar, PageHead, GoLink, Notice, ErrorLine, Empty, CopyButton, Logo, ProxyField, InviteButton, SkeletonRows, Wordmark } from './ui/blocks';
 export type { ProxyType } from './ui/blocks';
-export { Spark, MiniSpark, smoothPath, smoothValues, SmoothArea, FleetBar, useSparkSpanMin, useHourTrend, useDayStats, spanCaption } from './ui/charts';
+export { Spark, MiniSpark, smoothPath, smoothValues, SmoothArea, ChartEmpty, FleetBar, useSparkSpanMin, useHourTrend, useDayStats, spanCaption } from './ui/charts';
 export { toast, dismissToast, undoable, Toaster } from './ui/toast';
 export type { ToastAction, ToastOptions } from './ui/toast';
 export { errText, fail, useAction } from './ui/action';
@@ -182892,13 +183521,18 @@ export function AdminPage({ head, narrow = false, children }: { head: ReactNode;
  * The section card of the admin pages: a panel with a title (h2), an optional description and optional actions on the
  * right of the title. Padding is p-5 on phones and p-6 from sm, so the compact density and the 400 px width stay consistent.
  */
-export function Section({ title, description, actions, children, className = '', id, tone = 'panel', save, ...rest }: {
+export function Section({ title, description, actions, children, className = '', id, tone = 'panel', save, advanced, danger, ...rest }: {
   title?: ReactNode; description?: ReactNode; actions?: ReactNode; children?: ReactNode; className?: string; id?: string;
   tone?: 'panel' | 'soft'; 'data-tour'?: string;
+  /** rarely needed fields: folded under «Дополнительно» */
+  advanced?: ReactNode;
+  /** what cannot be undone (deleting, resetting): a red zone at the bottom of the card */
+  danger?: ReactNode;
   /** the state of an autosaved card, shown in its header next to the actions */
   save?: { status: SaveStatus; error?: string; retry?: () => void };
 }) {
   const hid = useId();
+  useI18n();
   return (
     <section id={id} aria-labelledby={title ? hid : undefined} className={`${tone === 'soft' ? 'rounded-ui-lg bg-soft p-4' : 'panel p-5 sm:p-6'} space-y-4 ${className}`} {...rest}>
       {(title || actions || save) && (
@@ -182916,6 +183550,18 @@ export function Section({ title, description, actions, children, className = '',
         </div>
       )}
       {children}
+      {advanced && (
+        <details className="adm-adv">
+          <summary>{t('adm.advanced')}</summary>
+          <div className="space-y-4 pt-3">{advanced}</div>
+        </details>
+      )}
+      {danger && (
+        <div className="adm-danger" role="group" aria-label={t('adm.danger')}>
+          <div className="adm-danger-title">{t('adm.danger')}</div>
+          {danger}
+        </div>
+      )}
     </section>
   );
 }
@@ -183334,6 +183980,7 @@ __COREGSM_EOF__
 import { type ReactNode, type TouchEvent as ReactTouch, useEffect, useId, useRef, useState } from 'react';
 import { useAuth } from '../auth';
 import { StateView } from '../components/StateView';
+import type { ArtScene } from '../components/EmptyArt';
 import * as Dialog from '@radix-ui/react-dialog';
 import { promptDialog } from '../confirm';
 import { gameIconPath } from '../gameIcons';
@@ -183565,8 +184212,8 @@ export function ErrorLine({ text }: { text: string }) {
 }
 
 /** an empty list: the «empty» variant of StateView (kept under its old name, every page uses it) */
-export function Empty({ title, text, art, compact = false, children }: { title: string; text: string; art?: ReactNode; compact?: boolean; children?: ReactNode }) {
-  return <StateView kind="empty" title={title} text={text} art={art} compact={compact}>{children}</StateView>;
+export function Empty({ title, text, art, scene, compact = false, children }: { title: string; text: string; art?: ReactNode; scene?: ArtScene; compact?: boolean; children?: ReactNode }) {
+  return <StateView kind="empty" title={title} text={text} art={art} scene={scene} compact={compact}>{children}</StateView>;
 }
 
 /** Copies text to the clipboard; falls back to a dialog with the text selected where the Clipboard API is blocked. */
@@ -183706,6 +184353,7 @@ __COREGSM_EOF__
 import { useEffect, useId, useState } from 'react';
 import { getToken } from '../api';
 import { getPrefs, t, useI18n } from '../i18n';
+import { EmptyArt } from '../components/EmptyArt';
 
 /**
  * The 24 h curves of all servers come in one request (/api/servers/sparks) shared by every sparkline on the page:
@@ -184019,6 +184667,17 @@ export function FleetBar({ online, lag, offline }: { online: number; lag: number
     </div>
   );
 }
+
+/** what a chart says when it has too few points to draw: a picture and one line (the same everywhere a chart can be empty) */
+export function ChartEmpty({ text, hint }: { text: string; hint?: string }) {
+  return (
+    <div className="chart-empty" role="status">
+      <EmptyArt scene="chart" size={104} />
+      <p className="font-bold">{text}</p>
+      {hint && <p className="text-sm font-semibold text-mute">{hint}</p>}
+    </div>
+  );
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/ui"
   cat > "$APP_DIR/core-frontend/src/ui/format.ts" << '__COREGSM_EOF__'
@@ -184186,6 +184845,98 @@ export function lastPathOf(page: string, active: boolean): string {
   } catch {
     return `/${page}`;
   }
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/ui"
+  cat > "$APP_DIR/core-frontend/src/ui/lists.tsx" << '__COREGSM_EOF__'
+/**
+ * The scheme of a list in the admin area: a toolbar (search, the states with their counts) on top, then the items in groups by state,
+ * every group with its title, its count and a fold. A group that is folded stays folded the next time (kept in this browser).
+ */
+import { useId, useState, type ReactNode } from 'react';
+import { t, useI18n } from '../i18n';
+import { IconChevronDown, IconSearch } from '../icons';
+
+export interface ListGroup<T> {
+  id: string;
+  title: string;
+  hint?: string;
+  tone?: 'ok' | 'warn' | 'bad' | 'mute';
+  items: T[];
+  /** folded until somebody opens it (finished things) */
+  folded?: boolean;
+}
+
+const TONE: Record<NonNullable<ListGroup<unknown>['tone']>, string> = { ok: 'bg-ok', warn: 'bg-warn', bad: 'bg-bad', mute: 'bg-mute' };
+
+const readFolds = (key: string): Record<string, boolean> => {
+  try { return JSON.parse(localStorage.getItem(`coregsm_grp_${key}`) ?? '{}') as Record<string, boolean>; } catch { return {}; }
+};
+
+/** the items cut into groups; an empty group is not shown */
+export function GroupedList<T>({ groups, itemKey, render, storageKey, className = '' }: {
+  groups: ListGroup<T>[]; itemKey: (item: T) => string | number; render: (item: T) => ReactNode; storageKey: string; className?: string;
+}) {
+  useI18n();
+  // what the person folded or opened by hand; a group that was not touched keeps its own default
+  const [folds, setFolds] = useState<Record<string, boolean>>(() => readFolds(storageKey));
+  const toggle = (id: string, now: boolean) => {
+    const next = { ...folds, [id]: !now };
+    setFolds(next);
+    try { localStorage.setItem(`coregsm_grp_${storageKey}`, JSON.stringify(next)); } catch { /* not remembered */ }
+  };
+  const base = useId();
+  return (
+    <div className={`space-y-4 ${className}`}>
+      {groups.filter((g) => g.items.length > 0).map((g) => {
+        const folded = folds[g.id] ?? !!g.folded;
+        const bodyId = `${base}-${g.id}`;
+        return (
+          <section key={g.id} aria-label={g.title}>
+            <button type="button" className="adm-grp-head" aria-expanded={!folded} aria-controls={bodyId} onClick={() => toggle(g.id, folded)}>
+              <IconChevronDown size={16} className={`adm-grp-chev ${folded ? 'is-folded' : ''}`} />
+              {g.tone && <i aria-hidden className={`h-2 w-2 rounded-full ${TONE[g.tone]}`} />}
+              <span className="font-extrabold">{g.title}</span>
+              <span className="adm-grp-count" aria-label={t('lists.count', { n: g.items.length })}>{g.items.length}</span>
+              {g.hint && <span className="hidden min-w-0 truncate text-sm font-semibold text-mute sm:inline">{g.hint}</span>}
+            </button>
+            {!folded && (
+              <ul id={bodyId} className="panel mt-1.5 divide-y divide-line overflow-hidden">
+                {g.items.map((it) => <li key={itemKey(it)}>{render(it)}</li>)}
+              </ul>
+            )}
+          </section>
+        );
+      })}
+    </div>
+  );
+}
+
+/** the bar over a list: a search and the states with how many there are in each (sticky under the header on a long page) */
+export function ListToolbar<S extends string>({ search, onSearch, placeholder, states, value, onChange, right, label }: {
+  search?: string; onSearch?: (v: string) => void; placeholder?: string;
+  states?: { id: S; label: string; count?: number }[]; value?: S; onChange?: (id: S) => void; right?: ReactNode; label: string;
+}) {
+  return (
+    <div className="adm-listbar" role="search" aria-label={label}>
+      {onSearch && (
+        <label className="adm-listbar-search">
+          <IconSearch size={16} />
+          <input type="search" className="min-w-0 flex-1 bg-transparent outline-none" value={search ?? ''} placeholder={placeholder} aria-label={placeholder ?? label} onChange={(e) => onSearch(e.target.value)} />
+        </label>
+      )}
+      {states && value && onChange && (
+        <div className="flex flex-wrap gap-1.5" role="group" aria-label={label}>
+          {states.map((s) => (
+            <button key={s.id} type="button" className={`chip-filter ${value === s.id ? 'on' : ''}`} aria-pressed={value === s.id} onClick={() => onChange(s.id)}>
+              {s.label}{s.count != null && <span className="ml-1.5 text-xs font-extrabold opacity-70">{s.count}</span>}
+            </button>
+          ))}
+        </div>
+      )}
+      {right && <div className="ml-auto flex flex-wrap items-center gap-2">{right}</div>}
+    </div>
+  );
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/ui"

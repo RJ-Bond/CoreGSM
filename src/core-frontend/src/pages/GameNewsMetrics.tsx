@@ -4,7 +4,6 @@ import type { NewsServerInfo } from '../gameNews';
 import { t, useI18n } from '../i18n';
 import { SmoothArea, usePoll } from '../ui';
 import { EmptyState } from './GameNewsUi';
-import { IconTrend } from '../icons';
 
 export interface MetricPoint { ts: number; fps: number; minFps: number; worstMs: number; freezes: number; memMb: number; heapMb: number; players: number }
 
@@ -92,7 +91,7 @@ export function MetricsSection() {
         </div>
       </div>
       {(servers == null || (server && points == null)) && <div className="skeleton h-28 rounded-xl" aria-busy="true" />}
-      {points && !view && <EmptyState icon={<IconTrend size={22} />} title={t('gn.mt.empty')} hint={t('gn.mt.emptyHint')} />}
+      {points && !view && <EmptyState scene="chart" title={t('gn.mt.empty')} hint={t('gn.mt.emptyHint')} />}
       {view && (
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <Card title={t('gn.mt.fps')} values={view.fps} last={view.last.fps} fmt={(n) => n.toFixed(1)} color="rgb(var(--ok))" hint={t('gn.mt.fpsHint')} />

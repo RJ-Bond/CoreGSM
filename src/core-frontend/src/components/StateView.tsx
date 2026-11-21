@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { ApiError } from '../api';
 import { t } from '../i18n';
 import { Icon, IconError, IconInfo, IconSearch, IconShield } from '../icons';
+import { EmptyArt, type ArtScene } from './EmptyArt';
 import { useAppearance } from '../appearance';
 
 /**
@@ -46,13 +47,15 @@ function KindIcon({ kind }: { kind: StateKind }) {
 }
 
 export function StateView({
-  kind = 'empty', title, text, art, onRetry, retryLabel, action, compact = false, bare = false, className = '', heading = 'h3', children,
+  kind = 'empty', title, text, art, scene, onRetry, retryLabel, action, compact = false, bare = false, className = '', heading = 'h3', children,
 }: {
   kind?: StateKind;
   title?: string;
   text?: string;
   /** an illustration instead of the icon tile (empty lists keep their pictures) */
   art?: ReactNode;
+  /** a ready picture for what the list would hold (a calendar, a chat, a key…): in every look */
+  scene?: ArtScene;
   /** shows «Повторить» (default for error and offline states) */
   onRetry?: () => void;
   retryLabel?: string;
@@ -78,7 +81,7 @@ export function StateView({
       data-state={kind}
     >
       {/* the Ember look: every empty list has the same picture (an ember), the pages that bring their own art (404) keep it */}
-      {(ember && kind === 'empty' ? null : art) ?? (ember && (kind === 'empty' || kind === 'notfound') ? <div className="mb-1 text-link"><EmberArt /></div> : <div className={`mb-1 grid h-14 w-14 place-items-center rounded-3xl ${TILE[kind]}`}><KindIcon kind={kind} /></div>)}
+      {scene ? <div className="mb-1"><EmptyArt scene={scene} /></div> : (ember && kind === 'empty' ? null : art) ?? (ember && (kind === 'empty' || kind === 'notfound') ? <div className="mb-1 text-link"><EmberArt /></div> : <div className={`mb-1 grid h-14 w-14 place-items-center rounded-3xl ${TILE[kind]}`}><KindIcon kind={kind} /></div>)}
       <H className={heading === 'h1' ? 'text-2xl font-extrabold tracking-[-0.02em]' : 'text-lg font-black'}>{head}</H>
       {body && <p className="max-w-sm font-semibold text-mute">{body}</p>}
       {(onRetry || action || children) && (

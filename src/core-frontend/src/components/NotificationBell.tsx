@@ -1,10 +1,16 @@
 import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent } from 'react';
 import { t } from '../i18n';
 import { IconBell, ago } from '../ui';
+import { IconError, IconOk, IconShield, IconUsers } from '../icons';
+import { NOTIFY_GROUPS, byDay, groupCounts, groupOf, inGroup, unreadIn, type NotifyGroup } from '../notifyLogic';
 import {
   NOTIFY_POLL_MS, badgeText, fetchNotifications, isUnavailable, markNotificationsRead, notificationHref,
   type NotificationItem,
 } from '../notifications';
+
+/** the picture and the tint of a notification by what it is about */
+const iconFor = (kind: string) => (kind === 'went_down' ? IconError : kind === 'back_online' ? IconOk : groupOf(kind) === 'slots' ? IconUsers : groupOf(kind) === 'security' ? IconShield : IconBell);
+const toneFor = (kind: string): string => (kind === 'went_down' ? 'bg-badbg text-bad' : kind === 'back_online' ? 'bg-okbg text-ok' : groupOf(kind) === 'security' ? 'bg-warnbg text-warn' : 'bg-soft text-link');
 
 /**
  * The bell in the header: unread badge and a popover with the latest notifications.
@@ -17,6 +23,7 @@ export default function NotificationBell({ initialUnread = 0 }: { initialUnread?
   const [open, setOpen] = useState(false);
   const [failed, setFailed] = useState(false);
   const [gone, setGone] = useState(false);
+  const [group, setGroup] = useState<NotifyGroup | 'all'>('all');
   const root = useRef<HTMLDivElement>(null);
   const btn = useRef<HTMLButtonElement>(null);
   const pop = useRef<HTMLDivElement>(null);
@@ -104,6 +111,9 @@ export default function NotificationBell({ initialUnread = 0 }: { initialUnread?
   };
 
   if (gone) return null;
+  const counts = groupCounts(items ?? []);
+  const shownItems = inGroup(items ?? [], group);
+  const days = byDay(shownItems);
   const badge = badgeText(unread);
   const label = unread > 0 ? t('bell.ariaUnread', { n: unread }) : t('bell.aria');
 
@@ -142,39 +152,57 @@ export default function NotificationBell({ initialUnread = 0 }: { initialUnread?
               {t('bell.readAll')}
             </button>
           </div>
+          {items && items.length > 0 && (
+            <div className="flex gap-1.5 overflow-x-auto border-b border-line px-3 py-2" role="group" aria-label={t('bell.groups')}>
+              {(['all', ...NOTIFY_GROUPS] as const).filter((g) => g === 'all' || counts[g] > 0).map((g) => (
+                <button key={g} type="button" className={`chip-filter whitespace-nowrap ${group === g ? 'on' : ''}`} aria-pressed={group === g} onClick={() => setGroup(g)}>
+                  {t(`bell.g.${g}` as 'bell.g.all')}
+                  {unreadIn(items, g) > 0 && <span className="ml-1.5 rounded-full bg-badbg px-1.5 text-xs font-extrabold text-bad">{unreadIn(items, g)}</span>}
+                </button>
+              ))}
+            </div>
+          )}
           <div className="max-h-[min(26rem,70dvh)] overflow-y-auto overscroll-contain">
             {items === null && <div className="skeleton m-3 h-16 rounded-2xl bg-soft" aria-hidden />}
             {failed && <p className="px-4 py-3 text-sm font-bold text-bad" role="alert">{t('bell.loadError')}</p>}
             {items && items.length === 0 && !failed && <p className="px-4 py-8 text-center font-semibold text-mute">{t('bell.empty')}</p>}
-            {items && items.length > 0 && (
-              <ul className="divide-y divide-line">
-                {items.map((n) => {
-                  const href = notificationHref(n);
-                  const body = (
-                    <>
-                      <span aria-hidden className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${n.read ? 'bg-transparent' : 'bg-brand'}`} />
-                      <span className="min-w-0 flex-1">
-                        <span className={`block wrap-break-word text-sm leading-snug ${n.read ? 'font-semibold text-mute' : 'font-extrabold'}`}>
-                          {!n.read && <span className="sr-only">{t('bell.unreadMark')} </span>}
-                          {n.text}
+            {items && items.length > 0 && shownItems.length === 0 && <p className="px-4 py-6 text-center text-sm font-semibold text-mute">{t('bell.emptyGroup')}</p>}
+            {items && days.map((d) => (
+              <div key={d.day}>
+                <h3 className="sticky top-0 z-[1] bg-card/95 px-4 py-1 text-xs font-extrabold capitalize text-mute backdrop-blur">
+                  {d.word ? t(`gn.cn.day.${d.word}` as 'gn.cn.day.today') : new Date(`${d.day}T12:00:00`).toLocaleDateString([], { weekday: 'long', day: 'numeric', month: 'long' })}
+                </h3>
+                <ul className="divide-y divide-line">
+                  {d.items.map((n) => {
+                    const href = notificationHref(n);
+                    const Ico = iconFor(n.kind);
+                    const body = (
+                      <>
+                        <span aria-hidden className={`grid h-8 w-8 shrink-0 place-items-center rounded-full ${toneFor(n.kind)}`}><Ico size={16} /></span>
+                        <span className="min-w-0 flex-1">
+                          <span className={`block wrap-break-word text-sm leading-snug ${n.read ? 'font-medium text-mute' : 'font-extrabold'}`}>
+                            {!n.read && <span className="sr-only">{t('bell.unreadMark')} </span>}
+                            {n.text}
+                          </span>
+                          <span className="mt-0.5 block text-xs font-semibold text-mute">{ago(n.ts)}</span>
                         </span>
-                        <span className="mt-0.5 block text-xs font-semibold text-mute">{ago(n.ts)}</span>
-                      </span>
-                    </>
-                  );
-                  const cls = 'flex items-start gap-3 px-4 py-3 text-left transition hover:bg-soft max-sm:min-h-[44px]';
-                  return (
-                    <li key={n.id}>
-                      {href ? (
-                        <a href={href} className={cls} onClick={() => readOne(n)}>{body}</a>
-                      ) : (
-                        <button type="button" className={`${cls} w-full`} onClick={() => readOne(n)}>{body}</button>
-                      )}
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
+                        {!n.read && <span aria-hidden className="mt-2 h-2 w-2 shrink-0 rounded-full bg-brand" />}
+                      </>
+                    );
+                    const cls = 'flex items-start gap-3 px-4 py-3 text-left transition hover:bg-soft max-sm:min-h-[44px]';
+                    return (
+                      <li key={n.id}>
+                        {href ? (
+                          <a href={href} className={cls} onClick={() => readOne(n)}>{body}</a>
+                        ) : (
+                          <button type="button" className={`${cls} w-full`} onClick={() => readOne(n)}>{body}</button>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            ))}
           </div>
         </div>
       )}

@@ -3,6 +3,7 @@ import { api } from '../api';
 import { NewsEditor, NewsPreview, Styled } from '../components/NewsEditor';
 import { soon } from '../components/GameNewsParts';
 import RowMenu from '../components/RowMenu';
+import { GroupedList } from '../ui/lists';
 import { IconAuto, IconChat, IconRestart, IconShield } from '../components/GameNewsIcons';
 import { StateView } from '../components/StateView';
 import { Switch } from '../components/Switch';
@@ -56,6 +57,12 @@ export default function GameNewsRules({ servers, rules, timezone, reload }: { se
     if (!(await confirmDialog({ title: t('gn.a.delTitle', { name: r.name }), danger: true, confirmLabel: t('gn.a.del') }))) return;
     try { await api(`/game-news/rules/${r.id}`, 'DELETE'); reload(); } catch (e) { toast(errText(e), 'err'); }
   };
+  // the rules by state: the ones that work, the ones whose period is over, the ones switched off
+  const ruleGroups = [
+    { id: 'on', title: t('gn.a.g.on'), tone: 'ok' as const, items: rules.filter((r) => r.enabled && !r.expired) },
+    { id: 'expired', title: t('gn.a.g.expired'), tone: 'warn' as const, items: rules.filter((r) => r.enabled && r.expired) },
+    { id: 'off', title: t('gn.a.g.off'), tone: 'mute' as const, items: rules.filter((r) => !r.enabled), folded: true },
+  ];
   const openNew = () => setDraft({ id: null, body: emptyRule() });
   // a copy opens as a new announcement: change what differs and save
   const duplicate = (r: RuleInfo) => setDraft({ id: null, body: { ...bodyOf(r), name: t('gn.a.copyName', { name: r.name }).slice(0, 80) } });
@@ -69,7 +76,7 @@ export default function GameNewsRules({ servers, rules, timezone, reload }: { se
 
       {rules.length === 0 && (
         <>
-          <StateView title={t('gn.a.empty')} text={t('gn.a.emptyText')} action={<button type="button" className="btn" onClick={openNew}>{t('gn.a.add')}</button>} />
+          <StateView scene="chat" title={t('gn.a.empty')} text={t('gn.a.emptyText')} action={<button type="button" className="btn" onClick={openNew}>{t('gn.a.add')}</button>} />
           {/* ready examples: one tap opens the form filled in */}
           <section aria-label={t('gn.a.examples')}>
             <h3 className="mb-2 text-sm font-extrabold text-mute">{t('gn.a.examples')}</h3>
@@ -91,9 +98,12 @@ export default function GameNewsRules({ servers, rules, timezone, reload }: { se
       )}
 
       {rules.length > 0 && (
-        <ul className="panel divide-y divide-line">
-          {rules.map((r) => (
-            <li key={r.id} className="flex flex-wrap items-start gap-x-4 gap-y-2 px-5 py-4">
+        <GroupedList
+          storageKey="autorules"
+          itemKey={(r) => r.id}
+          groups={ruleGroups}
+          render={(r) => (
+            <div className="flex flex-wrap items-start gap-x-4 gap-y-2 px-5 py-4">
               <Switch className="mt-1" checked={r.enabled} aria-label={`${r.name}: ${r.enabled ? t('gn.a.on') : t('gn.a.off')}`} onChange={(v) => void toggle(r, v)} />
               <div className="min-w-0 flex-1 basis-40">
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
@@ -117,15 +127,15 @@ export default function GameNewsRules({ servers, rules, timezone, reload }: { se
                 className="ml-auto"
                 label={t('gn.a.menu', { name: r.name })}
                 items={[
-                  { key: 'run', label: t('gn.a.run'), onSelect: () => void runNow(r) },
-                  { key: 'edit', label: t('gn.a.edit'), onSelect: () => setDraft({ id: r.id, body: bodyOf(r) }) },
-                  { key: 'copy', label: t('gn.a.copy'), onSelect: () => duplicate(r) },
-                  { key: 'del', label: t('gn.a.del'), danger: true, sep: true, onSelect: () => void remove(r) },
+                  { key: 'run', label: t('gn.a.run'), shortcut: 'r', onSelect: () => void runNow(r) },
+                  { key: 'edit', label: t('gn.a.edit'), shortcut: 'e', onSelect: () => setDraft({ id: r.id, body: bodyOf(r) }) },
+                  { key: 'copy', label: t('gn.a.copy'), shortcut: 'd', onSelect: () => duplicate(r) },
+                  { key: 'del', label: t('gn.a.del'), danger: true, sep: true, shortcut: 'Delete', onSelect: () => void remove(r) },
                 ]}
               />
-            </li>
-          ))}
-        </ul>
+            </div>
+          )}
+        />
       )}
 
       {draft && (

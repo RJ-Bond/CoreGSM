@@ -29,6 +29,7 @@ export const GUEST_PAGES = [
   { id: 'status', path: '/status' },
   { id: 'community', path: '/community' },
   { id: 'bans', path: '/bans' },
+  { id: 'about', path: '/about' },
   { id: 'server-bans', path: '/servers/1/bans' },
   { id: 'player', path: '/player/ShotsHero' },
   { id: 'public-profile', path: '/u/admin' },

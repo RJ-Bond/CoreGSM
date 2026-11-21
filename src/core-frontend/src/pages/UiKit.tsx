@@ -3,6 +3,9 @@ import { AccentPicker } from '../components/AccentPicker';
 import { BtnSpinner } from '../components/Button';
 import { SplitButton } from '../components/SplitButton';
 import { Gauge } from '../components/Gauge';
+import { t, useI18n } from '../i18n';
+import { EmptyArt } from '../components/EmptyArt';
+import { GroupedList, ListToolbar } from '../ui/lists';
 import MaintenanceChip from '../components/MaintenanceChip';
 import { buildSparkline } from '../sparkline';
 import { confirmDialog, promptDialog } from '../confirm';
@@ -199,6 +202,7 @@ function Specimen() {
 }
 
 export default function UiKitPage() {
+  useI18n();
   const [seg, setSeg] = useState('day');
   const [sw, setSw] = useState({ a: true, b: false });
   const [text, setText] = useState('Мой сервер');
@@ -249,7 +253,7 @@ export default function UiKitPage() {
           ))}
         </Row>
         <Row label="Текст (контраст не ниже 4.5:1 на карточке и подложке)">
-          {TEXTS.map(([cls, t]) => <span key={cls} className={`rounded-ui-md bg-soft px-3 py-1.5 font-bold ${cls}`}>{t}</span>)}
+          {TEXTS.map(([cls, label]) => <span key={cls} className={`rounded-ui-md bg-soft px-3 py-1.5 font-bold ${cls}`}>{label}</span>)}
         </Row>
       </Block>
 
@@ -489,6 +493,51 @@ export default function UiKitPage() {
             );
           })}
         </Row>
+      </Block>
+
+      <Block title={t('kit.type.t')} note={t('kit.type.n')}>
+        <div className="space-y-2">
+          <div className="t-page">{t('kit.type.page')}</div>
+          <div className="t-section">{t('kit.type.section')}</div>
+          <div className="t-card">{t('kit.type.card')}</div>
+          <p className="t-caption">{t('kit.type.caption')}</p>
+          <div className="t-num text-2xl">1 284 <span className="t-caption">{t('kit.type.num')}</span></div>
+        </div>
+      </Block>
+
+      <Block title={t('kit.motion.t')} note={t('kit.motion.n')}>
+        <div className="flex flex-wrap gap-3">
+          <div className="panel m-rise p-4">{t('kit.motion.rise')}</div>
+          <div className="panel m-pop p-4">{t('kit.motion.pop')}</div>
+          <button type="button" className="btn btn-soft m-hover">{t('kit.motion.hover')}</button>
+        </div>
+      </Block>
+
+      <Block title={t('kit.list.t')} note={t('kit.list.n')}>
+        <ListToolbar label={t('kit.list.label')} search="" onSearch={() => undefined} placeholder={t('kit.list.search')} states={[{ id: 'all', label: t('kit.list.all'), count: 5 }, { id: 'on', label: t('kit.list.on'), count: 3 }]} value="all" onChange={() => undefined} />
+        <GroupedList
+          storageKey="uikit-demo"
+          itemKey={(x) => x}
+          groups={[
+            { id: 'on', title: t('kit.list.on'), tone: 'ok', items: [t('kit.list.a'), t('kit.list.b'), t('kit.list.c')] },
+            { id: 'off', title: t('kit.list.off'), tone: 'mute', items: [t('kit.list.d'), t('kit.list.e')], folded: true },
+          ]}
+          render={(x) => <div className="px-5 py-3 font-bold">{x}</div>}
+        />
+      </Block>
+
+      <Block title={t('kit.zones.t')} note={t('kit.zones.n')}>
+        <Section title={t('kit.zones.title')} description={t('kit.zones.desc')} advanced={<p className="text-sm text-mute">{t('kit.zones.adv')}</p>} danger={<button type="button" className="btn btn-soft btn-sm adm-danger-btn">{t('kit.zones.danger')}</button>}>
+          <p>{t('kit.zones.body')}</p>
+        </Section>
+      </Block>
+
+      <Block title={t('kit.art.t')} note={t('kit.art.n')}>
+        <div className="kit-grid" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(9rem, 1fr))' }}>
+          {(['calendar', 'chat', 'key', 'news', 'chart', 'shield', 'plug', 'bell', 'users', 'server'] as const).map((sc) => (
+            <div key={sc} className="kit-icon"><EmptyArt scene={sc} size={120} /><span>{sc}</span></div>
+          ))}
+        </div>
       </Block>
 
       <Block title="Иконки" note="Один набор: сетка 24 px, штрих 2 px, цвет currentColor. Импорт из '../ui' (или из '../icons').">

@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { api, type Server } from '../api';
 import { confirmDialog } from '../confirm';
 import { t, useI18n } from '../i18n';
-import { AdminPage, CopyButton, Empty, ErrorLine, Field, LoadError, PageHead, Section, IconServers, SkeletonRows, fmtDateTime, toast, usePoll } from '../ui';
+import { AdminPage, CopyButton, Empty, ErrorLine, Field, LoadError, PageHead, Section, SkeletonRows, fmtDateTime, toast, usePoll } from '../ui';
 import { IconKey } from '../icons';
 import { badgeSnippets, type WidgetSize, type WidgetTheme } from './integrationsLogic';
 
@@ -123,7 +123,7 @@ function KeysSection({ keys, onChanged }: { keys: ApiKey[] | null; onChanged: ()
       <ErrorLine text={error} />
 
       {keys === null && <SkeletonRows n={2} />}
-      {keys && !keys.length && <Empty title={t('intg.empty.t')} text={t('intg.empty.x')} art={<IconKey />} />}
+      {keys && !keys.length && <Empty title={t('intg.empty.t')} text={t('intg.empty.x')} scene="key" />}
       {active.length > 0 && (
         <ul className="divide-y divide-line overflow-hidden rounded-2xl border border-line">
           {active.map((k) => (
@@ -177,7 +177,7 @@ function SnippetsSection({ servers }: { servers: Server[] }) {
   return (
     <Section title={t('intg.snip.title')} description={t('intg.snip.desc')}>
       {!servers.length ? (
-        <Empty art={<IconServers />} title={t('intg.snip.none.t')} text={t('intg.snip.none.x')} />
+        <Empty scene="server" title={t('intg.snip.none.t')} text={t('intg.snip.none.x')} />
       ) : (
         <>
           <Field label={t('intg.snip.server')}>

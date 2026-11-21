@@ -10,6 +10,7 @@ import {
   type MaintenanceInput, type MaintenanceRepeat, type MaintenanceWindow, type WindowState,
 } from '../maintenance';
 import { AdminPage, ErrorLine, Field, FieldError, IconEdit, IconPlus, IconTrash, IconWrench, LoadError, Modal, PageHead, Spinner, undoable, toast, usePoll, errText } from '../ui';
+import { GroupedList, ListToolbar } from '../ui/lists';
 
 interface Draft { id: number | null; serverId: string; name: string; start: string; end: string; repeat: MaintenanceRepeat }
 
@@ -33,6 +34,7 @@ export default function MaintenancePage() {
   const [error, setError] = useState('');
   const [draft, setDraft] = useState<Draft | null>(null);
   const [hidden, setHidden] = useState<number[]>([]);
+  const [query, setQuery] = useState('');
 
   const load = () =>
     Promise.all([
@@ -50,6 +52,19 @@ export default function MaintenancePage() {
       .map((w) => ({ w, st: windowState(w, now) }))
       .sort((a, b) => order[a.st] - order[b.st] || (a.w.nextStart ?? a.w.startTs) - (b.w.nextStart ?? b.w.startTs));
   }, [list, hidden]);
+
+  // the windows by state: what goes on now, what is planned, what repeats, what is over (folded)
+  const groups = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    const shown = q ? rows.filter(({ w }) => `${w.name} ${w.serverName ?? ''}`.toLowerCase().includes(q)) : rows;
+    const by = (st: WindowState) => shown.filter((r) => r.st === st);
+    return [
+      { id: 'active', title: t('d2.mt.g.active'), tone: 'warn' as const, items: by('active') },
+      { id: 'planned', title: t('d2.mt.g.planned'), tone: 'ok' as const, items: by('planned') },
+      { id: 'repeat', title: t('d2.mt.g.repeat'), tone: 'mute' as const, items: by('repeat') },
+      { id: 'past', title: t('d2.mt.g.past'), tone: 'mute' as const, items: by('past'), folded: true },
+    ];
+  }, [rows, query]);
 
   const open = (preset?: { startTs: number; endTs: number }) => {
     const d = emptyDraft();
@@ -93,6 +108,7 @@ export default function MaintenancePage() {
 
       {list && rows.length === 0 && (
         <StateView
+          scene="calendar"
           title={t('d2.mt.empty')}
           text={t('d2.mt.emptyText')}
           action={<button type="button" className="btn" onClick={() => open()}>{t('d2.mt.add')}</button>}
@@ -101,9 +117,14 @@ export default function MaintenancePage() {
       {!list && !error && <div className="skeleton panel h-40" aria-busy="true" aria-label={t('d2.news.loading')} />}
 
       {rows.length > 0 && (
-        <ul className="panel divide-y divide-line overflow-hidden">
-          {rows.map(({ w, st }) => (
-            <li key={w.id} className="flex flex-wrap items-center gap-x-4 gap-y-2 px-5 py-3.5">
+        <>
+          {rows.length >= 6 && <ListToolbar label={t('d2.mt.title')} search={query} onSearch={setQuery} placeholder={t('d2.mt.search')} />}
+          <GroupedList
+            storageKey="maintenance"
+            itemKey={(x) => x.w.id}
+            groups={groups}
+            render={({ w, st }) => (
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-2 px-5 py-3.5">
               <div className="min-w-0 flex-1 basis-60">
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                   <span className="min-w-0 wrap-break-word font-extrabold">{w.name}</span>
@@ -122,9 +143,11 @@ export default function MaintenancePage() {
                 <button type="button" className="btn btn-soft btn-sm" onClick={() => edit(w)} aria-label={t('d2.mt.editWin', { name: w.name })}><IconEdit size={16} />{t('d2.news.change')}</button>
                 <button type="button" className="row-act row-act-danger" onClick={() => remove(w)} aria-label={t('d2.mt.delWin', { name: w.name })}><IconTrash size={16} /></button>
               </div>
-            </li>
-          ))}
-        </ul>
+            </div>
+            )}
+          />
+          {groups.every((g) => g.items.length === 0) && <p className="py-6 text-center font-semibold text-mute">{t('d2.mt.noMatch')}</p>}
+        </>
       )}
 
       <StatusNotesCard servers={servers} />

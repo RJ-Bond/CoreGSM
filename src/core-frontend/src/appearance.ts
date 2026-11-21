@@ -5,6 +5,7 @@ import { useSyncExternalStore } from 'react';
  *   reduceMotion  -> data-motion="reduce"   (CSS switches animations and transitions off; without it the OS setting rules)
  *   largeText     -> data-text="large"      (root font scale 112.5 %)
  *   highContrast  -> data-contrast="high"   (stronger ink and borders)
+ *   shapes        -> data-shapes="1"       (a status says its state with a sign as well as a colour: ✓ ! ✕)
  *   liteData      -> data-lite="1"          (data saving: no decorations or animations, polling twice as rare);
  *                    also on by itself when the browser asks for it (Save-Data, a 2G connection)
  */
@@ -13,6 +14,8 @@ export interface Appearance {
   largeText: boolean;
   highContrast: boolean;
   liteData: boolean;
+  /** statuses carry a sign (✓ ! ✕) next to the colour: for those who tell green from red badly */
+  shapes: boolean;
   /** pure black page and darker cards in the dark theme (saves an OLED screen, rests the eyes at night) */
   oled: boolean;
   /** the «Ember» look: graphite and an orange accent, firmer shapes (data-ember) */
@@ -22,11 +25,11 @@ export interface Appearance {
 /** presets: a few options at once; the ones not named are switched off */
 export type PresetId = 'classic' | 'ember' | 'contrast' | 'soft' | 'oled';
 export const PRESETS: Record<PresetId, Appearance> = {
-  classic: { reduceMotion: false, largeText: false, highContrast: false, liteData: false, oled: false, ember: false },
-  ember: { reduceMotion: false, largeText: false, highContrast: false, liteData: false, oled: false, ember: true },
-  contrast: { reduceMotion: false, largeText: true, highContrast: true, liteData: false, oled: false, ember: false },
-  soft: { reduceMotion: true, largeText: false, highContrast: false, liteData: true, oled: false, ember: false },
-  oled: { reduceMotion: false, largeText: false, highContrast: false, liteData: false, oled: true, ember: false },
+  classic: { reduceMotion: false, largeText: false, highContrast: false, liteData: false, shapes: false, oled: false, ember: false },
+  ember: { reduceMotion: false, largeText: false, highContrast: false, liteData: false, shapes: false, oled: false, ember: true },
+  contrast: { reduceMotion: false, largeText: true, highContrast: true, liteData: false, shapes: false, oled: false, ember: false },
+  soft: { reduceMotion: true, largeText: false, highContrast: false, liteData: true, shapes: false, oled: false, ember: false },
+  oled: { reduceMotion: false, largeText: false, highContrast: false, liteData: false, shapes: false, oled: true, ember: false },
 };
 export const PRESET_IDS = Object.keys(PRESETS) as PresetId[];
 /** the preset the options match exactly, or null (a custom mix) */
@@ -50,12 +53,12 @@ function readEmber(): boolean {
     return false;
   }
 }
-export const DEFAULT_APPEARANCE: Appearance = { reduceMotion: false, largeText: false, highContrast: false, liteData: false, oled: false, ember: false };
+export const DEFAULT_APPEARANCE: Appearance = { reduceMotion: false, largeText: false, highContrast: false, liteData: false, shapes: false, oled: false, ember: false };
 
 /** anything (a stored string, a broken value) -> a complete Appearance */
 export function normalizeAppearance(raw: unknown): Appearance {
   const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
-  return { reduceMotion: r.reduceMotion === true, largeText: r.largeText === true, highContrast: r.highContrast === true, liteData: r.liteData === true, oled: r.oled === true, ember: r.ember === true };
+  return { reduceMotion: r.reduceMotion === true, largeText: r.largeText === true, highContrast: r.highContrast === true, liteData: r.liteData === true, shapes: r.shapes === true, oled: r.oled === true, ember: r.ember === true };
 }
 
 function read(): Appearance {
@@ -92,6 +95,7 @@ export function applyAppearance(a: Appearance, root: HTMLElement = document.docu
   set('data-text', a.largeText ? 'large' : null);
   set('data-contrast', a.highContrast ? 'high' : null);
   set('data-lite', a.liteData || networkWantsLite() ? '1' : null);
+  set('data-shapes', a.shapes ? '1' : null);
   set('data-oled', a.oled ? '1' : null);
   set('data-ember', a.ember ? '1' : null);
   // the icon of the tab and of the home screen takes the colour of the look
@@ -108,7 +112,7 @@ export const getAppearance = () => current;
 
 export function setAppearance(patch: Partial<Appearance>) {
   const next = normalizeAppearance({ ...current, ...patch });
-  if (patch.ember === undefined && next.reduceMotion === current.reduceMotion && next.largeText === current.largeText && next.highContrast === current.highContrast && next.liteData === current.liteData && next.oled === current.oled && next.ember === current.ember) return;
+  if (patch.ember === undefined && next.reduceMotion === current.reduceMotion && next.largeText === current.largeText && next.highContrast === current.highContrast && next.liteData === current.liteData && next.shapes === current.shapes && next.oled === current.oled && next.ember === current.ember) return;
   current = next;
   try {
     // the look is stored on its own, and only when the visitor picks it: the administrator's default stays in force until then

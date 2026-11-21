@@ -2,6 +2,7 @@
 import { useEffect, useId, useState } from 'react';
 import { getToken } from '../api';
 import { getPrefs, t, useI18n } from '../i18n';
+import { EmptyArt } from '../components/EmptyArt';
 
 /**
  * The 24 h curves of all servers come in one request (/api/servers/sparks) shared by every sparkline on the page:
@@ -312,6 +313,17 @@ export function FleetBar({ online, lag, offline }: { online: number; lag: number
           <span key={x.label} className="inline-flex items-center gap-1.5"><span className={`h-2.5 w-2.5 rounded-full ${x.cls}`} />{x.n} {x.label}</span>
         ))}
       </div>
+    </div>
+  );
+}
+
+/** what a chart says when it has too few points to draw: a picture and one line (the same everywhere a chart can be empty) */
+export function ChartEmpty({ text, hint }: { text: string; hint?: string }) {
+  return (
+    <div className="chart-empty" role="status">
+      <EmptyArt scene="chart" size={104} />
+      <p className="font-bold">{text}</p>
+      {hint && <p className="text-sm font-semibold text-mute">{hint}</p>}
     </div>
   );
 }

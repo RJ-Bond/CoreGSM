@@ -25,13 +25,18 @@ export function AdminPage({ head, narrow = false, children }: { head: ReactNode;
  * The section card of the admin pages: a panel with a title (h2), an optional description and optional actions on the
  * right of the title. Padding is p-5 on phones and p-6 from sm, so the compact density and the 400 px width stay consistent.
  */
-export function Section({ title, description, actions, children, className = '', id, tone = 'panel', save, ...rest }: {
+export function Section({ title, description, actions, children, className = '', id, tone = 'panel', save, advanced, danger, ...rest }: {
   title?: ReactNode; description?: ReactNode; actions?: ReactNode; children?: ReactNode; className?: string; id?: string;
   tone?: 'panel' | 'soft'; 'data-tour'?: string;
+  /** rarely needed fields: folded under «Дополнительно» */
+  advanced?: ReactNode;
+  /** what cannot be undone (deleting, resetting): a red zone at the bottom of the card */
+  danger?: ReactNode;
   /** the state of an autosaved card, shown in its header next to the actions */
   save?: { status: SaveStatus; error?: string; retry?: () => void };
 }) {
   const hid = useId();
+  useI18n();
   return (
     <section id={id} aria-labelledby={title ? hid : undefined} className={`${tone === 'soft' ? 'rounded-ui-lg bg-soft p-4' : 'panel p-5 sm:p-6'} space-y-4 ${className}`} {...rest}>
       {(title || actions || save) && (
@@ -49,6 +54,18 @@ export function Section({ title, description, actions, children, className = '',
         </div>
       )}
       {children}
+      {advanced && (
+        <details className="adm-adv">
+          <summary>{t('adm.advanced')}</summary>
+          <div className="space-y-4 pt-3">{advanced}</div>
+        </details>
+      )}
+      {danger && (
+        <div className="adm-danger" role="group" aria-label={t('adm.danger')}>
+          <div className="adm-danger-title">{t('adm.danger')}</div>
+          {danger}
+        </div>
+      )}
     </section>
   );
 }

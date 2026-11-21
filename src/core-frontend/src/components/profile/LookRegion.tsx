@@ -26,6 +26,7 @@ export function AppearanceCard() {
     ['largeText', 'pf.a11y.text', 'pf.a11y.textHint'],
     ['highContrast', 'pf.a11y.contrast', 'pf.a11y.contrastHint'],
     ['liteData', 'pf.a11y.lite', 'pf.a11y.liteHint'],
+    ['shapes', 'pf.a11y.shapes', 'pf.a11y.shapesHint'],
     ['oled', 'pf.a11y.oled', 'pf.a11y.oledHint'],
     ['ember', 'pf.a11y.ember', 'pf.a11y.emberHint'],
   ];

@@ -119,7 +119,16 @@ export function BotCard() {
   const proxyWarn = proxy.trim() && !clearProxy && !/^([a-z0-9]+:\/\/)?[^\s:@/]+(:[^\s@/]+)*(@[^\s:@/]+(:\d{1,5})?)?$/i.test(proxy.trim()) ? t('d2.bot.proxyWarn') : '';
 
   return (
-    <Section title={t('d2.bot.title')} actions={<BotPill status={status} tokenSet={tokenSet} />}>
+    <Section
+      title={t('d2.bot.title')}
+      actions={<BotPill status={status} tokenSet={tokenSet} />}
+      danger={tokenSet || secretSet ? (
+        <div className="flex flex-wrap gap-2">
+          {tokenSet && <button type="button" className="btn btn-soft btn-sm adm-danger-btn" onClick={removeToken}>{t('d2.bot.removeToken')}</button>}
+          {secretSet && <button type="button" className="btn btn-soft btn-sm adm-danger-btn" onClick={() => void removeSecret()}>{t('d2.bot.removeSecret')}</button>}
+        </div>
+      ) : undefined}
+    >
     <form onSubmit={save} className="space-y-3.5">
       {tokenSet && status?.state === 'error' && status.error && (
         <p className="rounded-2xl bg-badbg px-4 py-2.5 text-sm font-bold text-bad">{status.error}</p>
@@ -143,9 +152,6 @@ export function BotCard() {
       </Field>
       <FieldError id="set-token-err" text={tokenWarn} />
       </div>
-      {tokenSet && (
-        <button type="button" className="btn-link-danger text-sm" onClick={removeToken}>{t('d2.bot.removeToken')}</button>
-      )}
 
       <Field label={t('d2.bot.proxy')}>
         <ProxyField
@@ -183,9 +189,6 @@ export function BotCard() {
             placeholder={secretSet ? t('d2.bot.secretSaved') : t('d2.bot.secretNone')}
           />
         </Field>
-        {secretSet && (
-          <button type="button" className="btn-link-danger text-sm" onClick={() => void removeSecret()}>{t('d2.bot.removeSecret')}</button>
-        )}
         {info?.discordRedirect && (
           <div>
             <label htmlFor="set-redirect" className="label">Redirect URI</label>

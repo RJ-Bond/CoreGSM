@@ -29,6 +29,7 @@ const AdminPage = lazyPage(() => import('./pages/Admin'));
 const ProfilePage = lazyPage(() => import('./pages/Profile'));
 const PublicProfilePage = lazyPage(() => import('./pages/PublicProfile'));
 const StatusPage = lazyPage(() => import('./pages/Status'));
+const AboutPage = lazyPage(() => import('./pages/About'));
 const UiKitPage = lazyPage(() => import('./pages/UiKit'));
 const CommunityPage = lazyPage(() => import('./pages/Community'));
 const PlayerPage = lazyPage(() => import('./pages/Player'));
@@ -253,7 +254,7 @@ export default function App() {
         toast(t('app.sessionEnded'), 'info');
         setBoot((p) => ({ ...p, me: null }));
         const { page } = parseRoute();
-        const publicRoute = accessRef.current.publicPanel && (page === '' || page === 'servers' || page === 'news' || page === 'status' || page === 'community' || page === 'bans' || page === 'player' || page === 'u');
+        const publicRoute = accessRef.current.publicPanel && (page === '' || page === 'servers' || page === 'news' || page === 'status' || page === 'community' || page === 'bans' || page === 'about' || page === 'player' || page === 'u');
         if (!publicRoute) navigate('/login');
         void load();
       }, 300);
@@ -316,8 +317,8 @@ export default function App() {
   const showAuth = !me && rawPage !== 'u' && (!access.publicPanel || rawPage === 'login' || rawPage === 'auth' || rawPage === 'register');
   shellOk.current = boot.ready && !authing && !boot.offline && !boot.needsSetup && !showAuth;
   // a first segment nobody knows (typo, old link) gets the 404 page; known-but-unavailable routes keep falling back to the list
-  const notFound = rawPage !== '' && !['login', 'register', 'auth', 'profile', 'u', '_ui', 'forgot', 'reset', 'verify', 'player'].includes(rawPage) && !PAGES.some((p) => p.id === rawPage);
-  const page = notFound ? '404' : rawPage === 'u' ? 'u' : rawPage === 'player' && sub ? 'player' : rawPage === 'profile' && me ? 'profile' : rawPage === '_ui' && isAdmin ? '_ui' : visible.some((p) => p.id === rawPage) ? rawPage : 'servers';
+  const notFound = rawPage !== '' && !['login', 'register', 'auth', 'profile', 'u', '_ui', 'forgot', 'reset', 'verify', 'player', 'about'].includes(rawPage) && !PAGES.some((p) => p.id === rawPage);
+  const page = notFound ? '404' : rawPage === 'u' ? 'u' : rawPage === 'about' ? 'about' : rawPage === 'player' && sub ? 'player' : rawPage === 'profile' && me ? 'profile' : rawPage === '_ui' && isAdmin ? '_ui' : visible.some((p) => p.id === rawPage) ? rawPage : 'servers';
   const adminSection = sub.split('/')[0];
   let publicName = '';
   if (page === 'u' || page === 'player') {
@@ -331,6 +332,8 @@ export default function App() {
         ? 'UI-кит'
         : page === '404'
         ? t('title.notfound')
+        : page === 'about'
+        ? t('foot.about')
         : page === 'u' || page === 'player'
         ? publicName
         : page === 'profile'
@@ -504,6 +507,7 @@ export default function App() {
             {page === 'status' && <StatusPage />}
             {page === 'community' && <CommunityPage />}
             {page === 'bans' && <BansPage />}
+            {page === 'about' && <AboutPage brand={access.brand.name} />}
             {page === 'player' && <PlayerPage name={publicName} />}
             {page === 'admin' && <AdminPage sub={sub} updateAvailable={updateAvailable} />}
             {page === 'profile' && <ProfilePage />}

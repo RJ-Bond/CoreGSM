@@ -33,4 +33,16 @@ describe('the «⋯» menu of a row', () => {
     expect(menu.style.bottom).not.toBe('');
     expect(menu.style.top).toBe('');
   });
+
+  it('does an item by its key while the menu is open, and shows the key', () => {
+    const done: string[] = [];
+    window.innerWidth = 400;
+    render(<RowMenu label="Меню" items={[{ key: 'e', label: 'Изменить', shortcut: 'e', onSelect: () => done.push('edit') }, { key: 'x', label: 'Удалить', shortcut: 'Delete', onSelect: () => done.push('del') }]} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Меню' }));
+    expect(screen.getByText('E')).toBeTruthy();
+    expect(screen.getByText('Del')).toBeTruthy();
+    fireEvent.keyDown(screen.getByRole('menu'), { key: 'e' });
+    expect(done).toEqual(['edit']);
+    expect(screen.queryByRole('menu')).toBeNull();
+  });
 });
