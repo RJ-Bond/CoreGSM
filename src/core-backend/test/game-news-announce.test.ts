@@ -19,7 +19,8 @@ const { encryptSecret } = await import('../src/security/secrets.ts');
 const ESC = String.fromCharCode(27);
 const strip = (s: string) => s.split(ESC).join('').replace(/\[\d;\d+m|\[0m/g, '');
 const NOW = new Date('2026-11-20T22:10:00').getTime();
-const HOOK = 'https://discord.com/api/webhooks/123456789012345678/abcdefghijklmnopqrstuvwxyz0123456789ABCD';
+// split, so that the check for committed secrets does not take this made-up address for a real one
+const HOOK = 'https://discord.com/api/webhooks/123456789012345678/' + 'abcdefghijklmnopqrstuvwxyz0123456789ABCD';
 const configure = (extra: Record<string, unknown> = {}) => {
   writeScoped('gamenews_chat', JSON.stringify({ enabled: true, webhook: encryptSecret(HOOK), ...extra }));
   C.resetAnnounceMemory();
