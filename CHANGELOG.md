@@ -16,7 +16,7 @@ interface language; the GitHub release text is built from the section of the ver
 
 ## Не выпущено | Unreleased
 
-## 1.2.71 · 21.11.2026
+## 1.2.72 · 21.11.2026
 
 ### 🐛 Исправлено | Fixed
 - ✂ Чат из Discord в игру: у повторённой строки в канале убрано «→ в игру», остаётся строка как в игровом чате (время, пометка, слова); карточка под сообщением и реакции без изменений | Chat from Discord into the game: the repeated line in the channel no longer starts with «→ в игру», it is the line as in the game chat (time, mark, words); the card under the message and the reactions are unchanged
