@@ -42,7 +42,7 @@ export const KIND_ICON: Record<Kind, ComponentType<IconProps>> = {
   message: IconSend, auto: IconAuto, discord: IconChat, restart: IconRestart, link: IconLink, mod: IconShield, plugin: IconBox, conn: IconSignal,
 };
 export const PLUGIN_NOTE_ICON: Record<string, ComponentType<IconProps>> = {
-  mass: IconDoor, ping: IconSignal, steam: IconGamepad, freeze: IconSnow, save: IconDisk, other: IconBox,
+  mass: IconDoor, ping: IconSignal, steam: IconGamepad, freeze: IconSnow, save: IconDisk, net: IconSignal, other: IconBox,
 };
 
 /** the icon of a tab of the plugin page */

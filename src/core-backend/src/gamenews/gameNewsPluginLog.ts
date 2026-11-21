@@ -1,6 +1,7 @@
 /**
  * What the plugin tells the panel about itself, for the journal («Игровой плагин» → «Журнал»):
- *  - notes (`POST /api/game-news/incidents`): several players leaving at once, a high ping, the lines of Steam, a freeze, a save;
+ *  - notes (`POST /api/game-news/incidents`): several players leaving at once, a high ping, the lines of Steam, a freeze, a save,
+ *    the network of the server lost or its process paused (`net`, 0.18.12+);
  *  - the result of every message it showed (`POST /api/game-news/delivery`): how many players saw it, or why it could not be shown.
  * Three messages in a row that did not reach the game tell the administrators (the service channel).
  * The journal is kept for `gamenews_journal_days` days (30 by default).
@@ -28,7 +29,7 @@ CREATE INDEX IF NOT EXISTS idx_game_plugin_log ON game_plugin_log(server_id, ts)
 `);
 
 /** what the plugin may report; an unknown kind is kept as «other» */
-export const PLUGIN_NOTE_KINDS = ['mass', 'ping', 'steam', 'freeze', 'save'] as const;
+export const PLUGIN_NOTE_KINDS = ['mass', 'ping', 'steam', 'freeze', 'save', 'net'] as const;
 export type PluginNoteKind = (typeof PLUGIN_NOTE_KINDS)[number] | 'other';
 
 export const DEFAULT_JOURNAL_DAYS = 30;

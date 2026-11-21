@@ -4,14 +4,14 @@ import { IconBell } from '../components/GameNewsIcons';
 import { t, useI18n } from '../i18n';
 import { Switch, errText, toast } from '../ui';
 
-interface AlertState { silentMin: number; outdated: boolean; choices: number[] }
+interface AlertState { silentMin: number; outdated: boolean; choices: number[]; daily: boolean; dailyHour: number }
 
 /** what the administrators are told about the plugins themselves: a silent one, an old one (to the service channel) */
 export function PluginAlertsCard() {
   useI18n();
   const [s, setS] = useState<AlertState | null>(null);
   useEffect(() => { void api<AlertState>('/game-news/plugin-alerts').then(setS).catch(() => undefined); }, []);
-  const save = async (patch: Partial<Pick<AlertState, 'silentMin' | 'outdated'>>) => {
+  const save = async (patch: Partial<Pick<AlertState, 'silentMin' | 'outdated' | 'daily' | 'dailyHour'>>) => {
     try { setS(await api<AlertState>('/game-news/plugin-alerts', 'PUT', patch)); toast(t('al.saved')); } catch (e) { toast(errText(e), 'err'); }
   };
   if (!s) return <div className="skeleton h-24 rounded-2xl" aria-busy="true" />;
@@ -34,6 +34,18 @@ export function PluginAlertsCard() {
         <span className="min-w-0 flex-1 basis-60 font-bold">{t('gn.pa.outdated')}<span className="block text-sm font-semibold text-mute">{t('gn.pa.outdatedHint')}</span></span>
         <Switch checked={s.outdated} onChange={(v) => void save({ outdated: v })} aria-label={t('gn.pa.outdated')} />
       </label>
+      <label className="flex flex-wrap items-center justify-between gap-3">
+        <span className="min-w-0 flex-1 basis-60 font-bold">{t('gn.pa.daily')}<span className="block text-sm font-semibold text-mute">{t('gn.pa.dailyHint')}</span></span>
+        <Switch checked={s.daily} onChange={(v) => void save({ daily: v })} aria-label={t('gn.pa.daily')} />
+      </label>
+      {s.daily && (
+        <label className="flex flex-wrap items-center justify-between gap-3">
+          <span className="min-w-0 flex-1 basis-60 font-bold">{t('gn.pa.dailyHour')}</span>
+          <select className="input w-40" value={s.dailyHour} aria-label={t('gn.pa.dailyHour')} onChange={(e) => void save({ dailyHour: Number(e.target.value) })}>
+            {Array.from({ length: 24 }, (_, h) => <option key={h} value={h}>{t('gn.pa.hour', { h })}</option>)}
+          </select>
+        </label>
+      )}
     </section>
   );
 }

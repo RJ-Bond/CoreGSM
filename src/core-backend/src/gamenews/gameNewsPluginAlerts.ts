@@ -3,6 +3,7 @@
  *  - a plugin that has not answered for N minutes (it went silent after it had been talking; once per silence);
  *  - a plugin older than the newest one the panel knows (once per server and version).
  * Settings: `gn_alert_silent_min` (0 = off, 10 by default) and `gn_alert_outdated` ('0' = off, on by default).
+ * Also the daily summary of the joins and departures (gameNewsDaily.ts): `daily`, `dailyHour`.
  *   GET / PUT /api/game-news/plugin-alerts   (administrators)
  */
 import type { Express, RequestHandler } from 'express';
@@ -12,6 +13,7 @@ import { systemTarget } from '../alerts/alertRoute.js';
 import { alertSettings, enqueueAlert } from '../alerts/alerts.js';
 import { PLUGIN_VERSION, type TargetRow } from './gameNews.js';
 import { serverLabel } from './gameNewsVars.js';
+import { dailyHour, dailyOn } from './gameNewsDaily.js';
 
 export const SILENT_CHOICES = [0, 5, 10, 30, 60] as const;
 export const DEFAULT_SILENT_MIN = 10;
@@ -89,18 +91,22 @@ export function checkPlugins(now = Date.now()): number {
   return n;
 }
 
+const state = () => ({ silentMin: silentMinutes(), outdated: outdatedAlertOn(), choices: SILENT_CHOICES, daily: dailyOn(), dailyHour: dailyHour() });
+
 export function registerGameNewsPluginAlerts({ app, admin }: { app: Express; admin: RequestHandler }): void {
   app.get('/api/game-news/plugin-alerts', admin, (_req, res) => {
-    res.json({ silentMin: silentMinutes(), outdated: outdatedAlertOn(), choices: SILENT_CHOICES });
+    res.json(state());
   });
   app.put('/api/game-news/plugin-alerts', admin, (req, res) => {
-    const b = z.object({ silentMin: z.number().int().optional(), outdated: z.boolean().optional() }).safeParse(req.body);
+    const b = z.object({ silentMin: z.number().int().optional(), outdated: z.boolean().optional(), daily: z.boolean().optional(), dailyHour: z.number().int().min(0).max(23).optional() }).safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Проверьте поля' });
     if (b.data.silentMin !== undefined) {
       if (!(SILENT_CHOICES as readonly number[]).includes(b.data.silentMin)) return res.status(400).json({ error: 'Проверьте поля' });
       setSetting('gn_alert_silent_min', String(b.data.silentMin));
     }
     if (b.data.outdated !== undefined) setSetting('gn_alert_outdated', b.data.outdated ? '1' : '0');
-    res.json({ silentMin: silentMinutes(), outdated: outdatedAlertOn(), choices: SILENT_CHOICES });
+    if (b.data.daily !== undefined) setSetting('gn_daily_summary', b.data.daily ? '1' : '0');
+    if (b.data.dailyHour !== undefined) setSetting('gn_daily_hour', String(b.data.dailyHour));
+    res.json(state());
   });
 }

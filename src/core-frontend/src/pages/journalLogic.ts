@@ -11,7 +11,7 @@ export interface Entry {
 
 export const FILTERS = ['all', 'problems', 'message', 'auto', 'discord', 'restart', 'plugin', 'link', 'mod'] as const;
 export type Filter = (typeof FILTERS)[number];
-export const PLUGIN_KINDS = ['mass', 'ping', 'steam', 'freeze', 'save', 'other'] as const;
+export const PLUGIN_KINDS = ['mass', 'ping', 'steam', 'freeze', 'save', 'net', 'other'] as const;
 
 export const isMessage = (e: Entry): boolean => e.kind === 'message' || e.kind === 'auto' || e.kind === 'discord';
 
