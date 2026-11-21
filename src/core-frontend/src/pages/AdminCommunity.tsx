@@ -21,7 +21,7 @@ export default function AdminCommunity({ sub = '' }: { sub?: string }) {
   useI18n();
   const { me } = useAuth();
   const tabs = COMMUNITY_TABS.filter((tab) => !tab.admin || me?.role === 'admin');
-  const tab = tabs.find((tab) => tab.id === sub.split('/')[0])?.id ?? tabs[0].id;
+  const tab = tabs.find((tb) => tb.id === sub.split('/')[0])?.id ?? tabs[0].id;
   return (
     <AdminPage head={<PageHead icon={<IconTrophy />} title={t('adm.s.community')} subtitle={t('adm.com.subtitle')} />}>
       {tabs.length > 1 && (

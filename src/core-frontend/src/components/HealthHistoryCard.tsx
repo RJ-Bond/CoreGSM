@@ -39,8 +39,8 @@ export default function HealthHistoryCard({ onFlags }: { onFlags?: (f: HealthFla
         .then((r) => { if (alive) { setData({ samples: Array.isArray(r.samples) ? r.samples : [], flags: Array.isArray(r.flags) ? r.flags : [] }); setGone(false); } })
         .catch(() => { if (alive) setGone(true); });
     void load();
-    const t = setInterval(() => { if (!document.hidden) void load(); }, 60_000);
-    return () => { alive = false; clearInterval(t); };
+    const timer = setInterval(() => { if (!document.hidden) void load(); }, 60_000);
+    return () => { alive = false; clearInterval(timer); };
   }, [hours]);
   useEffect(() => { if (data) onFlags?.(data.flags); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [data]);
 

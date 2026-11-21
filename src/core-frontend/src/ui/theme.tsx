@@ -14,11 +14,11 @@ export const isNightHour = (hour: number): boolean => hour >= NIGHT_FROM || hour
 const THEME_KEY = 'coregsm_theme';
 // the community's default, remembered so that the inline script of index.html can apply it before the first paint
 const DEFAULT_KEY = 'coregsm_theme_default';
-const valid = (t: string | null): t is Theme => t === 'auto' || t === 'light' || t === 'dark' || t === 'night';
+const valid = (th: string | null): th is Theme => th === 'auto' || th === 'light' || th === 'dark' || th === 'night';
 const read = (key: string): Theme | null => {
   try {
-    const t = localStorage.getItem(key);
-    return valid(t) ? t : null;
+    const th = localStorage.getItem(key);
+    return valid(th) ? th : null;
   } catch {
     return null;
   }
@@ -52,20 +52,20 @@ function syncBarColor() {
   if (hex) document.querySelector('meta[name=theme-color]')?.setAttribute('content', hex);
 }
 let nightTimer = 0;
-const paint = (t: Theme) => {
+const paint = (th: Theme) => {
   const root = document.documentElement;
-  if (t === 'auto') root.removeAttribute('data-theme');
-  else root.setAttribute('data-theme', t === 'night' ? (isNightHour(new Date().getHours()) ? 'dark' : 'light') : t);
+  if (th === 'auto') root.removeAttribute('data-theme');
+  else root.setAttribute('data-theme', th === 'night' ? (isNightHour(new Date().getHours()) ? 'dark' : 'light') : th);
   syncBarColor();
   // the schedule is looked at again every minute while it is the theme in use
   window.clearInterval(nightTimer);
-  if (t === 'night') nightTimer = window.setInterval(() => { if (readScoped() === 'night') paint('night'); }, 60_000);
+  if (th === 'night') nightTimer = window.setInterval(() => { if (readScoped() === 'night') paint('night'); }, 60_000);
 };
-function applyTheme(t: Theme) {
-  paint(t);
+function applyTheme(th: Theme) {
+  paint(th);
   try {
     // 'auto' is stored too: it is a choice, and the community default must not override it
-    localStorage.setItem(adminScope ? ADMIN_KEY : THEME_KEY, t);
+    localStorage.setItem(adminScope ? ADMIN_KEY : THEME_KEY, th);
   } catch {
     /* private mode: the theme just is not remembered */
   }
@@ -85,9 +85,9 @@ export function applyDefaultTheme(def: Theme) {
 }
 
 /** pick a theme from elsewhere (the Ctrl+K palette): the same as the header button, which follows */
-export function setThemeChoice(t: Theme) {
-  applyTheme(t);
-  subs.forEach((f) => f(t));
+export function setThemeChoice(th: Theme) {
+  applyTheme(th);
+  subs.forEach((f) => f(th));
 }
 export const currentTheme = (): Theme => readScoped();
 
@@ -95,9 +95,9 @@ export const currentTheme = (): Theme => readScoped();
 export function setThemeScope(admin: boolean) {
   if (adminScope === admin) return;
   adminScope = admin;
-  const t = readScoped();
-  paint(t);
-  subs.forEach((f) => f(t));
+  const th = readScoped();
+  paint(th);
+  subs.forEach((f) => f(th));
 }
 
 /** «as on the site» for the admin area: forget its own theme */
@@ -107,9 +107,9 @@ export function resetAdminTheme() {
   } catch {
     /* nothing to forget */
   }
-  const t = readScoped();
-  paint(t);
-  subs.forEach((f) => f(t));
+  const th = readScoped();
+  paint(th);
+  subs.forEach((f) => f(th));
 }
 
 export function ThemeToggle() {
@@ -128,12 +128,12 @@ export function ThemeToggle() {
       title={adminScope ? t('theme.titleAdmin', { name: label[theme] }) : t('theme.title', { name: label[theme] })}
       aria-label={t('theme.aria', { name: label[theme] })}
       onClick={(e) => {
-        const t = next[theme];
+        const th = next[theme];
         // the new theme grows as a circle out of the button (View Transitions); elsewhere it just switches
         const r = e.currentTarget.getBoundingClientRect();
         revealTransition(() => {
-          applyTheme(t);
-          setTheme(t);
+          applyTheme(th);
+          setTheme(th);
         }, r.left + r.width / 2, r.top + r.height / 2);
       }}
     >

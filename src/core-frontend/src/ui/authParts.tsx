@@ -111,14 +111,14 @@ export function AuthCard({ mode, children }: { mode: 'login' | 'register'; child
       <AuthBrand subtitle={mode === 'login' ? t('auth.subLogin') : t('auth.subRegister')} />
       {access.registration && (
         <nav className="seg mb-5 flex w-full" aria-label={t('auth.switchAria')}>
-          {tabs.map((t) => (
+          {tabs.map((tb) => (
             <a
-              key={t.id}
-              href={`/${t.id}`}
-              aria-current={mode === t.id ? 'page' : undefined}
+              key={tb.id}
+              href={`/${tb.id}`}
+              aria-current={mode === tb.id ? 'page' : undefined}
               className="seg-item flex-1"
             >
-              {t.label}
+              {tb.label}
             </a>
           ))}
         </nav>

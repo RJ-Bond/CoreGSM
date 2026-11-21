@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="585bafdb8e62"
+COREGSM_BUILD="9d0bb2284477"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.2.72"
+COREGSM_VERSION="1.2.73"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -24530,6 +24530,7 @@ import { postAnnounceToDiscord } from './gameNewsChat.js';
 
 export const QUEUE_TTL_MS = 5 * 60_000;
 /** the version of the game plugin this panel was built for: an older plugin is shown as outdated */
+import { missingFeatures } from './pluginFeatures.js';
 export const PLUGIN_VERSION = '0.18.12';
 /** the games the plugin exists for */
 export const SUPPORTED_GAMES = new Set(['vrising']);
@@ -24609,6 +24610,7 @@ export function registerGameNews({ app, admin }: { app: Express; admin: RequestH
         lastSeen: t?.last_seen || null,
         online: !!t && t.last_seen > 0 && now - t.last_seen < ONLINE_MS,
         pluginVersion: t?.plugin_version ?? '',
+        pluginMissing: missingFeatures(t?.plugin_version ?? '').map((f) => f.id),
         pluginProblems: t?.plugin_problems ?? '',
         lang: langFor(s.id),
         players: liveState(s.id, now)?.players ?? null,
@@ -29153,6 +29155,55 @@ export function welcomeFor(serverId: number, now: number): { welcome: string; we
   const fill = (t: string) => applyVars(greenName(t), vars);
   const welcome = fill(w.text);
   return { welcome, welcomeNew: w.split && w.newText.trim() ? fill(w.newText) : welcome };
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/gamenews"
+  cat > "$APP_DIR/core-backend/src/gamenews/pluginFeatures.ts" << '__COREGSM_EOF__'
+/** What the game plugin can do, and since which version: the panel tells what an old plugin on a server is missing. */
+
+export interface PluginFeature { id: string; since: string }
+
+/** from the history of the plugin: the version that brought the thing the panel relies on */
+export const PLUGIN_FEATURES: PluginFeature[] = [
+  { id: 'chat', since: '0.8.0' },
+  { id: 'joins', since: '0.9.0' },
+  { id: 'restart', since: '0.10.0' },
+  { id: 'kick', since: '0.13.0' },
+  { id: 'reminders', since: '0.15.0' },
+  { id: 'palette', since: '0.17.0' },
+  { id: 'connections', since: '0.17.1' },
+  { id: 'selfUpdate', since: '0.18.0' },
+  { id: 'rconRestart', since: '0.18.10' },
+  { id: 'metrics', since: '0.18.11' },
+  { id: 'delivery', since: '0.18.11' },
+  { id: 'network', since: '0.18.12' },
+];
+
+const parts = (v: string): number[] | null => (/^\d+(\.\d+){1,3}$/.test(v) ? v.split('.').map(Number) : null);
+
+/** negative when a < b; null when either is not a readable version */
+export function cmpPlugin(a: string, b: string): number | null {
+  const x = parts(a);
+  const y = parts(b);
+  if (!x || !y) return null;
+  for (let i = 0; i < Math.max(x.length, y.length); i++) {
+    const d = (x[i] ?? 0) - (y[i] ?? 0);
+    if (d !== 0) return d;
+  }
+  return 0;
+}
+
+/** the features a plugin of this version does not have yet; an unknown version (never polled) says nothing */
+export function missingFeatures(version: string): PluginFeature[] {
+  if (!parts(version)) return [];
+  return PLUGIN_FEATURES.filter((f) => (cmpPlugin(version, f.since) ?? 0) < 0);
+}
+
+/** does the plugin of this version have the feature; true when the version is unknown, so nothing is hidden by mistake */
+export function hasFeature(version: string, id: string): boolean {
+  const f = PLUGIN_FEATURES.find((x) => x.id === id);
+  if (!f || !parts(version)) return true;
+  return (cmpPlugin(version, f.since) ?? 0) >= 0;
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
@@ -50812,7 +50863,6 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend"
   cat > "$APP_DIR/core-frontend/lint-baseline.json" << '__COREGSM_EOF__'
 {
-  "eslint(no-shadow)": 41,
   "eslint(no-underscore-dangle)": 5,
   "jsx-a11y(click-events-have-key-events)": 8,
   "jsx-a11y(no-autofocus)": 12,
@@ -123102,8 +123152,8 @@ export default function App() {
   // while the server is unreachable at start, try again by itself
   useEffect(() => {
     if (!boot.offline) return;
-    const t = setInterval(() => void load(), 10_000);
-    return () => clearInterval(t);
+    const timer = setInterval(() => void load(), 10_000);
+    return () => clearInterval(timer);
   }, [boot.offline, load]);
 
   // back from "Войти через Discord": the backend puts the new session token into the address (/auth/<jwt>).
@@ -126203,7 +126253,7 @@ interface Item {
 }
 
 /** lower case, «ё» as «е»: a query matches either way */
-const norm = (t: string) => t.toLowerCase().replace(/ё/g, 'е');
+const norm = (s: string) => s.toLowerCase().replace(/ё/g, 'е');
 
 const IconPulse = () => (
   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
@@ -126812,8 +126862,8 @@ export default function DeliveryList() {
   const waiting = !!data?.items.some((i) => i.nextTryAt != null);
   useEffect(() => {
     if (!waiting) return;
-    const t = setInterval(() => { if (!document.hidden) setNow(Date.now()); }, 1000);
-    return () => clearInterval(t);
+    const timer = setInterval(() => { if (!document.hidden) setNow(Date.now()); }, 1000);
+    return () => clearInterval(timer);
   }, [waiting]);
 
   const retry = async (id: number) => {
@@ -128232,8 +128282,8 @@ export default function HealthHistoryCard({ onFlags }: { onFlags?: (f: HealthFla
         .then((r) => { if (alive) { setData({ samples: Array.isArray(r.samples) ? r.samples : [], flags: Array.isArray(r.flags) ? r.flags : [] }); setGone(false); } })
         .catch(() => { if (alive) setGone(true); });
     void load();
-    const t = setInterval(() => { if (!document.hidden) void load(); }, 60_000);
-    return () => { alive = false; clearInterval(t); };
+    const timer = setInterval(() => { if (!document.hidden) void load(); }, 60_000);
+    return () => { alive = false; clearInterval(timer); };
   }, [hours]);
   useEffect(() => { if (data) onFlags?.(data.flags); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [data]);
 
@@ -131556,10 +131606,10 @@ export default function Tour() {
   // first sign-in: only OFFER the tour (a small card in the corner); it never dims the page on its own
   useEffect(() => {
     if (!isAdmin || !username || seen(username)) { setOffer(false); return; }
-    const t = window.setTimeout(() => setOffer(true), 2500);
+    const timer = window.setTimeout(() => setOffer(true), 2500);
     // the offer must not sit over the content for ever: it goes away by itself (and comes again next time)
     const gone = window.setTimeout(() => setOffer(false), 16_000);
-    return () => { window.clearTimeout(t); window.clearTimeout(gone); };
+    return () => { window.clearTimeout(timer); window.clearTimeout(gone); };
   }, [isAdmin, username]);
 
   useEffect(() => {
@@ -132382,16 +132432,16 @@ export function NewsCalendar({ items, onMove }: { items: NewsItem[]; onMove: (n:
     const first = new Date(month);
     const offset = (first.getDay() + 6) % 7;
     const start = new Date(first.getFullYear(), first.getMonth(), 1 - offset);
-    const cells = Array.from({ length: 42 }, (_, i) => new Date(start.getFullYear(), start.getMonth(), start.getDate() + i));
-    const byDay = new Map<string, NewsItem[]>();
-    const undated: NewsItem[] = [];
+    const grid = Array.from({ length: 42 }, (_, i) => new Date(start.getFullYear(), start.getMonth(), start.getDate() + i));
+    const days = new Map<string, NewsItem[]>();
+    const loose: NewsItem[] = [];
     for (const n of items) {
-      const t = dateOf(n);
-      if (!t) { if (movable(n)) undated.push(n); continue; }
-      const k = dayKey(new Date(t));
-      byDay.set(k, [...(byDay.get(k) ?? []), n]);
+      const due = dateOf(n);
+      if (!due) { if (movable(n)) loose.push(n); continue; }
+      const k = dayKey(new Date(due));
+      days.set(k, [...(days.get(k) ?? []), n]);
     }
-    return { cells, byDay, undated };
+    return { cells: grid, byDay: days, undated: loose };
   }, [items, month]);
 
   const todayKey = dayKey(new Date());
@@ -132874,7 +132924,7 @@ const INLINE = new RegExp(
 );
 
 function Spoiler({ children }: { children: ReactNode }) {
-  const t = useContext(ThemeCtx);
+  const th = useContext(ThemeCtx);
   const [open, setOpen] = useState(false);
   return (
     <span
@@ -132885,7 +132935,7 @@ function Spoiler({ children }: { children: ReactNode }) {
       onClick={(e) => { e.stopPropagation(); setOpen((v) => !v); }}
       onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); setOpen((v) => !v); } }}
       className="cursor-pointer rounded-sm px-0.5"
-      style={{ background: open ? t.spoilerShow : t.spoilerHide, color: open ? 'inherit' : 'transparent' }}
+      style={{ background: open ? th.spoilerShow : th.spoilerHide, color: open ? 'inherit' : 'transparent' }}
     >
       {children}
     </span>
@@ -132893,11 +132943,11 @@ function Spoiler({ children }: { children: ReactNode }) {
 }
 
 function Chip({ children, kind }: { children: ReactNode; kind: 'mention' | 'time' }) {
-  const t = useContext(ThemeCtx);
+  const th = useContext(ThemeCtx);
   return (
     <span
       className="whitespace-nowrap rounded-sm px-[3px] font-medium"
-      style={kind === 'mention' ? { background: t.mentionBg, color: t.mentionFg } : { background: t.chipBg }}
+      style={kind === 'mention' ? { background: th.mentionBg, color: th.mentionFg } : { background: th.chipBg }}
     >
       {children}
     </span>
@@ -132947,18 +132997,18 @@ export function inlineMd(text: string, depth = 0): ReactNode[] {
 }
 
 function InlineCode({ children }: { children: ReactNode }) {
-  const t = useContext(ThemeCtx);
-  return <code style={{ background: t.code, borderRadius: 4, padding: '1px 5px', fontSize: '0.88em' }} className="font-mono">{children}</code>;
+  const th = useContext(ThemeCtx);
+  return <code style={{ background: th.code, borderRadius: 4, padding: '1px 5px', fontSize: '0.88em' }} className="font-mono">{children}</code>;
 }
 
 function Link({ href, children, wrap }: { href: string; children: ReactNode; wrap?: boolean }) {
-  const t = useContext(ThemeCtx);
-  return <a href={href} target="_blank" rel="noopener noreferrer" style={{ color: t.link }} className={`hover:underline ${wrap ? 'break-all' : ''}`}>{children}</a>;
+  const th = useContext(ThemeCtx);
+  return <a href={href} target="_blank" rel="noopener noreferrer" style={{ color: th.link }} className={`hover:underline ${wrap ? 'break-all' : ''}`}>{children}</a>;
 }
 
 // ---------- blocks ----------
 export function DiscordMd({ text }: { text: string }) {
-  const t = useContext(ThemeCtx);
+  const th = useContext(ThemeCtx);
   const out: ReactNode[] = [];
   const lines = text.split('\n');
   for (let i = 0; i < lines.length; i++) {
@@ -132975,7 +133025,7 @@ export function DiscordMd({ text }: { text: string }) {
         i++;
         while (i < lines.length && !lines[i].trim().startsWith('```')) body.push(lines[i++]);
       }
-      out.push(<CodeBlock key={i} text={body.join('\n')} background={t.code} border={t.embedBorder} />);
+      out.push(<CodeBlock key={i} text={body.join('\n')} background={th.code} border={th.embedBorder} />);
       continue;
     }
     if (line.startsWith('>>> ')) {
@@ -132995,7 +133045,7 @@ export function DiscordMd({ text }: { text: string }) {
       const size = h[1].length === 1 ? 'text-[1.5em]' : h[1].length === 2 ? 'text-[1.25em]' : 'text-[1.1em]';
       // the id lets the table of contents of the news page jump here (extractHeadings builds the same ids)
       out.push(
-        <div key={i} id={`nw-h-${i}`} role="heading" aria-level={h[1].length} className={`${size} nw-h mb-0.5 mt-1.5 font-bold leading-tight`} style={{ color: t.title }}>
+        <div key={i} id={`nw-h-${i}`} role="heading" aria-level={h[1].length} className={`${size} nw-h mb-0.5 mt-1.5 font-bold leading-tight`} style={{ color: th.title }}>
           {inlineMd(h[2])}
           <HeadingAnchor id={`nw-h-${i}`} />
         </div>,
@@ -133004,7 +133054,7 @@ export function DiscordMd({ text }: { text: string }) {
     }
     const small = /^-#\s+(.*)$/.exec(line);
     if (small) {
-      out.push(<div key={i} className="text-[0.8em]" style={{ color: t.muted }}>{inlineMd(small[1])}</div>);
+      out.push(<div key={i} className="text-[0.8em]" style={{ color: th.muted }}>{inlineMd(small[1])}</div>);
       continue;
     }
     const li = /^(\s*)[-*•]\s+(.*)$/.exec(line);
@@ -133024,8 +133074,8 @@ export function DiscordMd({ text }: { text: string }) {
 }
 
 function Quote({ children }: { children: ReactNode }) {
-  const t = useContext(ThemeCtx);
-  return <div className="my-0.5 pl-3" style={{ borderLeft: `4px solid ${t.quote}` }}>{children}</div>;
+  const th = useContext(ThemeCtx);
+  return <div className="my-0.5 pl-3" style={{ borderLeft: `4px solid ${th.quote}` }}>{children}</div>;
 }
 
 function CodeBlock({ text, background, border }: { text: string; background: string; border: string }) {
@@ -139575,7 +139625,7 @@ export default function EventsFeed({ events, online, limit, moreHref, uptimePct,
     const ups = events.filter((e) => e.type === 'up').map((e) => e.ts).sort((a, b) => a - b);
     for (const e of events) {
       if (e.type !== 'down') continue;
-      const up = ups.find((t) => t > e.ts);
+      const up = ups.find((ts) => ts > e.ts);
       if (up != null) m.set(e.ts, up - e.ts);
     }
     return m;
@@ -140179,10 +140229,10 @@ export default function HistoryChart({
       const mute = rgbVar('--mute', '#5c6372');
       const line = rgbVar('--line', '#e7e9f0');
       const bad = rgbVar('--bad', '#b92828');
-      const esc = (t: string) => t.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c] as string);
-      const fit = (t: string, px: number, max: number) => {
-        const n = Math.max(8, Math.floor(max / (px * 0.58)));
-        return t.length > n ? `${t.slice(0, n - 1)}…` : t;
+      const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c] as string);
+      const fit = (s: string, px: number, maxW: number) => {
+        const n = Math.max(8, Math.floor(maxW / (px * 0.58)));
+        return s.length > n ? `${s.slice(0, n - 1)}…` : s;
       };
       const font = esc(bs.fontFamily);
       const periodName = hours <= 24 ? t('d2.hch.p24') : hours <= 168 ? t('d2.hch.p7') : t('d2.hch.p30');
@@ -140195,7 +140245,7 @@ export default function HistoryChart({
       const items: { kind: 'curve' | 'band' | 'dot'; label: string; fill?: string }[] = [
         { kind: 'curve', label: seriesName },
         ...(points.some((p) => !p.online) ? [{ kind: 'band' as const, label: t('d2.hch.down') }] : []),
-        ...MARK_ORDER.filter((t) => marks.some((m) => m.type === t)).map((t) => ({ kind: 'dot' as const, label: markLabel(t), fill: MARK[t].fill })),
+        ...MARK_ORDER.filter((mt) => marks.some((m) => m.type === mt)).map((mt) => ({ kind: 'dot' as const, label: markLabel(mt), fill: MARK[mt].fill })),
       ];
       let lx = 12;
       const ly = CAP + H + 20;
@@ -140454,12 +140504,12 @@ export default function HistoryChart({
       </div>
       {marks.length > 0 && (
         <ul className="hc-legend" aria-label={t('d2.hch.legend')}>
-          {MARK_ORDER.filter((t) => marks.some((m) => m.type === t)).map((t) => (
-            <li key={t}>
-              <span className="hc-dot" style={{ background: MARK[t].fill }} aria-hidden>
-                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3.4" strokeLinecap="round" strokeLinejoin="round"><path d={MARK[t].path} /></svg>
+          {MARK_ORDER.filter((mt) => marks.some((m) => m.type === mt)).map((mt) => (
+            <li key={mt}>
+              <span className="hc-dot" style={{ background: MARK[mt].fill }} aria-hidden>
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3.4" strokeLinecap="round" strokeLinejoin="round"><path d={MARK[mt].path} /></svg>
               </span>
-              {markLabel(t)}
+              {markLabel(mt)}
             </li>
           ))}
         </ul>
@@ -141141,8 +141191,8 @@ export default function PlayersList({
     const prev = prevRows.current;
     prevRows.current = baseRows;
     if (limit || !prev || !online) return;
-    const now = new Set(baseRows.map((r) => r.name));
-    const left = prev.filter((r) => !now.has(r.name));
+    const present = new Set(baseRows.map((r) => r.name));
+    const left = prev.filter((r) => !present.has(r.name));
     if (!left.length) return;
     setGone((g) => [...g, ...left].slice(-6));
     window.setTimeout(() => setGone((g) => g.filter((x) => !left.includes(x))), 2600);
@@ -142056,7 +142106,7 @@ export default function ServerTabs({ id, tab, counts, toc, mini }: { id: number;
   }, [tab]);
 
   const onKey = (e: ReactKeyboardEvent) => {
-    const i = TAB_LIST.findIndex((t) => t.id === tab);
+    const i = TAB_LIST.findIndex((tb) => tb.id === tab);
     let n = -1;
     if (e.key === 'ArrowRight') n = (i + 1) % TAB_LIST.length;
     else if (e.key === 'ArrowLeft') n = (i - 1 + TAB_LIST.length) % TAB_LIST.length;
@@ -143447,9 +143497,9 @@ export default function CompareChart({ servers }: { servers: Server[] }) {
       </div>
 
       <div className="mb-3 flex flex-wrap gap-2" aria-label={t('d2.cc.toggle')}>
-        {series.map((x) => (
-          <button key={x.s.id} type="button" className="cmp-chip" aria-pressed={!hidden.has(x.s.id)} onClick={() => toggle(x.s.id)} style={{ ['--c' as string]: x.color }}>
-            <i aria-hidden />{x.s.name}
+        {series.map((sr) => (
+          <button key={sr.s.id} type="button" className="cmp-chip" aria-pressed={!hidden.has(sr.s.id)} onClick={() => toggle(sr.s.id)} style={{ ['--c' as string]: sr.color }}>
+            <i aria-hidden />{sr.s.name}
           </button>
         ))}
       </div>
@@ -143468,12 +143518,12 @@ export default function CompareChart({ servers }: { servers: Server[] }) {
             {[0, 0.25, 0.5, 0.75, 1].map((f, i) => (
               <text key={f} x={L + f * (W - L - R)} y={H - 8} textAnchor={i === 0 ? 'start' : i === 4 ? 'end' : 'middle'} className="fill-mute" fontSize="12" fontWeight="700">{label(from + f * hours * 3600_000)}</text>
             ))}
-            {shown.map((x) => {
+            {shown.map((sr) => {
               const runs: [number, number][][] = [];
               let run: [number, number][] = [];
-              x.values.forEach((v, i) => { if (v == null) { if (run.length) runs.push(run); run = []; } else run.push([L + (i / Math.max(1, n - 1)) * (W - L - R), y(v)]); });
+              sr.values.forEach((v, i) => { if (v == null) { if (run.length) runs.push(run); run = []; } else run.push([L + (i / Math.max(1, n - 1)) * (W - L - R), y(v)]); });
               if (run.length) runs.push(run);
-              return runs.map((r, k) => <path key={`${x.s.id}-${k}`} d={smoothPath(r)} fill="none" stroke={x.color} strokeWidth="2.4" strokeLinejoin="round" strokeLinecap="round" opacity={hover == null ? 0.95 : 0.85} />);
+              return runs.map((r, k) => <path key={`${sr.s.id}-${k}`} d={smoothPath(r)} fill="none" stroke={sr.color} strokeWidth="2.4" strokeLinejoin="round" strokeLinecap="round" opacity={hover == null ? 0.95 : 0.85} />);
             })}
             {hover != null && (
               <>
@@ -144619,7 +144669,7 @@ export function useServerReactions(servers: Server[], loaded: boolean): Reaction
   const prev = useRef<Map<number, { players: number; online: boolean; known: boolean }> | null>(null);
   const [rx, setRx] = useState<Reactions>({});
   const timers = useRef<number[]>([]);
-  useEffect(() => () => timers.current.forEach((t) => window.clearTimeout(t)), []);
+  useEffect(() => () => timers.current.forEach((id) => window.clearTimeout(id)), []);
   useEffect(() => {
     if (!loaded) return;
     const before = prev.current;
@@ -145874,7 +145924,7 @@ export const MAX_VISIBLE = 400;
 export const MAX_BYTES = 500;
 export const byteLength = (s: string): number => new TextEncoder().encode(s).length;
 
-export interface NewsServerInfo { id: number; name: string; address: string; game: string; supported: boolean; hasToken: boolean; lastSeen: number | null; online: boolean; pluginVersion: string; pluginProblems?: string; lang?: 'ru' | 'en'; players: number | null; maxPlayers: number | null }
+export interface NewsServerInfo { id: number; name: string; address: string; game: string; supported: boolean; hasToken: boolean; lastSeen: number | null; online: boolean; pluginVersion: string; pluginMissing?: string[]; pluginProblems?: string; lang?: 'ru' | 'en'; players: number | null; maxPlayers: number | null }
 export type NewsStatus = 'queued' | 'delivered' | 'expired' | 'failed';
 export interface NewsLogRow { id: number; serverId: number | null; serverName: string; text: string; status: NewsStatus; error: string; sentBy: string; sentAt: number; deliveredAt: number | null }
 export interface NewsSendResult { text: string; results: { serverId: number; serverName: string; queued: boolean; online: boolean; error: string }[] }
@@ -149943,6 +149993,19 @@ const en: Record<keyof typeof ru, string> = {
   'gn.plugin.help': 'The plugin on the game server (BepInEx) polls the panel itself. It needs the address of the panel and the token of this server.',
   'gn.plugin.stateNone': 'No token yet.',
   'gn.plugin.stateOnline': 'The plugin is online, version {v}.',
+  'gn.sh.missing': 'This version of the plugin lacks: {list}',
+  'gn.feat.chat': 'the game chat in Discord',
+  'gn.feat.joins': 'joins and departures',
+  'gn.feat.restart': 'restart by schedule',
+  'gn.feat.kick': 'a kick from Discord',
+  'gn.feat.reminders': 'reminders to players',
+  'gn.feat.palette': 'colours from the panel',
+  'gn.feat.connections': 'the log of reasons to leave',
+  'gn.feat.selfUpdate': 'update from the panel',
+  'gn.feat.rconRestart': 'restart over RCON',
+  'gn.feat.metrics': 'state of the server (FPS, memory)',
+  'gn.feat.delivery': 'results of message delivery',
+  'gn.feat.network': 'network of the server',
   'gn.plugin.stateSilent': 'The plugin has not polled the panel for a while, last time: {time}. Messages wait up to 5 minutes.',
   'gn.plugin.stateNever': 'A token exists, but the plugin has never connected.',
   'gn.plugin.once': 'The token is shown once. Paste these lines into the plugin config:',
@@ -155421,6 +155484,19 @@ const ru = {
   'gn.plugin.help': 'Плагин на игровом сервере (BepInEx) сам опрашивает панель. Ему нужен адрес панели и токен этого сервера.',
   'gn.plugin.stateNone': 'Токен не создан.',
   'gn.plugin.stateOnline': 'Плагин на связи, версия {v}.',
+  'gn.sh.missing': 'В этой версии плагина нет: {list}',
+  'gn.feat.chat': 'чат игры в Discord',
+  'gn.feat.joins': 'входы и выходы',
+  'gn.feat.restart': 'рестарт по расписанию',
+  'gn.feat.kick': 'кик из Discord',
+  'gn.feat.reminders': 'напоминания игрокам',
+  'gn.feat.palette': 'цвета из панели',
+  'gn.feat.connections': 'журнал причин выхода',
+  'gn.feat.selfUpdate': 'обновление из панели',
+  'gn.feat.rconRestart': 'рестарт через RCON',
+  'gn.feat.metrics': 'состояние сервера (FPS, память)',
+  'gn.feat.delivery': 'итоги доставки сообщений',
+  'gn.feat.network': 'сеть сервера',
   'gn.plugin.stateSilent': 'Плагин давно не опрашивал панель, последний раз: {time}. Сообщения подождут до 5 минут.',
   'gn.plugin.stateNever': 'Токен создан, но плагин ещё ни разу не подключался.',
   'gn.plugin.once': 'Токен показан один раз. Вставьте эти строки в конфиг плагина:',
@@ -160582,7 +160658,7 @@ export default function AdminCommunity({ sub = '' }: { sub?: string }) {
   useI18n();
   const { me } = useAuth();
   const tabs = COMMUNITY_TABS.filter((tab) => !tab.admin || me?.role === 'admin');
-  const tab = tabs.find((tab) => tab.id === sub.split('/')[0])?.id ?? tabs[0].id;
+  const tab = tabs.find((tb) => tb.id === sub.split('/')[0])?.id ?? tabs[0].id;
   return (
     <AdminPage head={<PageHead icon={<IconTrophy />} title={t('adm.s.community')} subtitle={t('adm.com.subtitle')} />}>
       {tabs.length > 1 && (
@@ -167741,6 +167817,7 @@ export function ServerHead({ server, rd, latest }: { server: NewsServerInfo; rd:
             {server.players != null && ` · ${t('gn.players', { n: server.players, max: server.maxPlayers ?? 0 })}`}
           </p>
           {server.pluginProblems && <p className="text-sm font-semibold text-danger">{t('gn.sh.problems', { list: server.pluginProblems })}</p>}
+          {old && !!server.pluginMissing?.length && <p className="text-sm font-semibold text-mute">{t('gn.sh.missing', { list: server.pluginMissing.map((id) => t(`gn.feat.${id}` as 'gn.feat.chat')).join(', ') })}</p>}
           {old && <p className="text-sm font-semibold text-warn">{t('gn.sh.old', { v: latest })} · <a className="text-link hover:underline" href="https://github.com/RJ-Bond/CoreGSM-Plugin/releases/latest" target="_blank" rel="noreferrer noopener">{t('gn.sh.download')}</a></p>}
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -168384,7 +168461,7 @@ export default function Login({ onDone, notice }: { onDone: () => void; notice?:
   useEffect(() => {
     if (!lockUntil) return;
     setNow(Date.now());
-    const t = setInterval(() => {
+    const timer = setInterval(() => {
       const n = Date.now();
       setNow(n);
       if (n >= lockUntil) {
@@ -168392,7 +168469,7 @@ export default function Login({ onDone, notice }: { onDone: () => void; notice?:
         setTimeout(() => passRef.current?.focus(), 0);
       }
     }, 250);
-    return () => clearInterval(t);
+    return () => clearInterval(timer);
   }, [lockUntil]);
 
   const left = lockUntil ? Math.max(0, Math.ceil((lockUntil - now) / 1000)) : 0;
@@ -170712,12 +170789,12 @@ export default function Register({ onDone }: { onDone: () => void }) {
     if (!LOGIN_RE.test(name)) { setAvail('invalid'); return; }
     setAvail('checking');
     let stale = false;
-    const t = setTimeout(() => {
+    const timer = setTimeout(() => {
       api<{ valid: boolean; available: boolean }>(`/auth/check?username=${encodeURIComponent(name)}`)
         .then((r) => { if (!stale) setAvail(!r.valid ? 'invalid' : r.available ? 'free' : 'taken'); })
         .catch(() => { if (!stale) setAvail('idle'); });
     }, 400);
-    return () => { stale = true; clearTimeout(t); };
+    return () => { stale = true; clearTimeout(timer); };
   }, [username]);
 
   const submit = async (e: FormEvent) => {
@@ -175673,8 +175750,8 @@ const DISMISS_KEY = 'coregsm_dismissed_update_error';
 const readDismissed = (): number => {
   try { return Number(localStorage.getItem(DISMISS_KEY)) || 0; } catch { return 0; }
 };
-const rememberDismissed = (t: number) => {
-  try { localStorage.setItem(DISMISS_KEY, String(t)); } catch { /* not remembered */ }
+const rememberDismissed = (ts: number) => {
+  try { localStorage.setItem(DISMISS_KEY, String(ts)); } catch { /* not remembered */ }
 };
 
 /** «2 мин 5 с» / «45 с» */
@@ -183740,14 +183817,14 @@ export function AuthCard({ mode, children }: { mode: 'login' | 'register'; child
       <AuthBrand subtitle={mode === 'login' ? t('auth.subLogin') : t('auth.subRegister')} />
       {access.registration && (
         <nav className="seg mb-5 flex w-full" aria-label={t('auth.switchAria')}>
-          {tabs.map((t) => (
+          {tabs.map((tb) => (
             <a
-              key={t.id}
-              href={`/${t.id}`}
-              aria-current={mode === t.id ? 'page' : undefined}
+              key={tb.id}
+              href={`/${tb.id}`}
+              aria-current={mode === tb.id ? 'page' : undefined}
               className="seg-item flex-1"
             >
-              {t.label}
+              {tb.label}
             </a>
           ))}
         </nav>
@@ -185456,11 +185533,11 @@ export const isNightHour = (hour: number): boolean => hour >= NIGHT_FROM || hour
 const THEME_KEY = 'coregsm_theme';
 // the community's default, remembered so that the inline script of index.html can apply it before the first paint
 const DEFAULT_KEY = 'coregsm_theme_default';
-const valid = (t: string | null): t is Theme => t === 'auto' || t === 'light' || t === 'dark' || t === 'night';
+const valid = (th: string | null): th is Theme => th === 'auto' || th === 'light' || th === 'dark' || th === 'night';
 const read = (key: string): Theme | null => {
   try {
-    const t = localStorage.getItem(key);
-    return valid(t) ? t : null;
+    const th = localStorage.getItem(key);
+    return valid(th) ? th : null;
   } catch {
     return null;
   }
@@ -185494,20 +185571,20 @@ function syncBarColor() {
   if (hex) document.querySelector('meta[name=theme-color]')?.setAttribute('content', hex);
 }
 let nightTimer = 0;
-const paint = (t: Theme) => {
+const paint = (th: Theme) => {
   const root = document.documentElement;
-  if (t === 'auto') root.removeAttribute('data-theme');
-  else root.setAttribute('data-theme', t === 'night' ? (isNightHour(new Date().getHours()) ? 'dark' : 'light') : t);
+  if (th === 'auto') root.removeAttribute('data-theme');
+  else root.setAttribute('data-theme', th === 'night' ? (isNightHour(new Date().getHours()) ? 'dark' : 'light') : th);
   syncBarColor();
   // the schedule is looked at again every minute while it is the theme in use
   window.clearInterval(nightTimer);
-  if (t === 'night') nightTimer = window.setInterval(() => { if (readScoped() === 'night') paint('night'); }, 60_000);
+  if (th === 'night') nightTimer = window.setInterval(() => { if (readScoped() === 'night') paint('night'); }, 60_000);
 };
-function applyTheme(t: Theme) {
-  paint(t);
+function applyTheme(th: Theme) {
+  paint(th);
   try {
     // 'auto' is stored too: it is a choice, and the community default must not override it
-    localStorage.setItem(adminScope ? ADMIN_KEY : THEME_KEY, t);
+    localStorage.setItem(adminScope ? ADMIN_KEY : THEME_KEY, th);
   } catch {
     /* private mode: the theme just is not remembered */
   }
@@ -185527,9 +185604,9 @@ export function applyDefaultTheme(def: Theme) {
 }
 
 /** pick a theme from elsewhere (the Ctrl+K palette): the same as the header button, which follows */
-export function setThemeChoice(t: Theme) {
-  applyTheme(t);
-  subs.forEach((f) => f(t));
+export function setThemeChoice(th: Theme) {
+  applyTheme(th);
+  subs.forEach((f) => f(th));
 }
 export const currentTheme = (): Theme => readScoped();
 
@@ -185537,9 +185614,9 @@ export const currentTheme = (): Theme => readScoped();
 export function setThemeScope(admin: boolean) {
   if (adminScope === admin) return;
   adminScope = admin;
-  const t = readScoped();
-  paint(t);
-  subs.forEach((f) => f(t));
+  const th = readScoped();
+  paint(th);
+  subs.forEach((f) => f(th));
 }
 
 /** «as on the site» for the admin area: forget its own theme */
@@ -185549,9 +185626,9 @@ export function resetAdminTheme() {
   } catch {
     /* nothing to forget */
   }
-  const t = readScoped();
-  paint(t);
-  subs.forEach((f) => f(t));
+  const th = readScoped();
+  paint(th);
+  subs.forEach((f) => f(th));
 }
 
 export function ThemeToggle() {
@@ -185570,12 +185647,12 @@ export function ThemeToggle() {
       title={adminScope ? t('theme.titleAdmin', { name: label[theme] }) : t('theme.title', { name: label[theme] })}
       aria-label={t('theme.aria', { name: label[theme] })}
       onClick={(e) => {
-        const t = next[theme];
+        const th = next[theme];
         // the new theme grows as a circle out of the button (View Transitions); elsewhere it just switches
         const r = e.currentTarget.getBoundingClientRect();
         revealTransition(() => {
-          applyTheme(t);
-          setTheme(t);
+          applyTheme(th);
+          setTheme(th);
         }, r.left + r.width / 2, r.top + r.height / 2);
       }}
     >

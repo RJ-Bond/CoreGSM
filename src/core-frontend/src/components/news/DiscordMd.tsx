@@ -106,7 +106,7 @@ const INLINE = new RegExp(
 );
 
 function Spoiler({ children }: { children: ReactNode }) {
-  const t = useContext(ThemeCtx);
+  const th = useContext(ThemeCtx);
   const [open, setOpen] = useState(false);
   return (
     <span
@@ -117,7 +117,7 @@ function Spoiler({ children }: { children: ReactNode }) {
       onClick={(e) => { e.stopPropagation(); setOpen((v) => !v); }}
       onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); setOpen((v) => !v); } }}
       className="cursor-pointer rounded-sm px-0.5"
-      style={{ background: open ? t.spoilerShow : t.spoilerHide, color: open ? 'inherit' : 'transparent' }}
+      style={{ background: open ? th.spoilerShow : th.spoilerHide, color: open ? 'inherit' : 'transparent' }}
     >
       {children}
     </span>
@@ -125,11 +125,11 @@ function Spoiler({ children }: { children: ReactNode }) {
 }
 
 function Chip({ children, kind }: { children: ReactNode; kind: 'mention' | 'time' }) {
-  const t = useContext(ThemeCtx);
+  const th = useContext(ThemeCtx);
   return (
     <span
       className="whitespace-nowrap rounded-sm px-[3px] font-medium"
-      style={kind === 'mention' ? { background: t.mentionBg, color: t.mentionFg } : { background: t.chipBg }}
+      style={kind === 'mention' ? { background: th.mentionBg, color: th.mentionFg } : { background: th.chipBg }}
     >
       {children}
     </span>
@@ -179,18 +179,18 @@ export function inlineMd(text: string, depth = 0): ReactNode[] {
 }
 
 function InlineCode({ children }: { children: ReactNode }) {
-  const t = useContext(ThemeCtx);
-  return <code style={{ background: t.code, borderRadius: 4, padding: '1px 5px', fontSize: '0.88em' }} className="font-mono">{children}</code>;
+  const th = useContext(ThemeCtx);
+  return <code style={{ background: th.code, borderRadius: 4, padding: '1px 5px', fontSize: '0.88em' }} className="font-mono">{children}</code>;
 }
 
 function Link({ href, children, wrap }: { href: string; children: ReactNode; wrap?: boolean }) {
-  const t = useContext(ThemeCtx);
-  return <a href={href} target="_blank" rel="noopener noreferrer" style={{ color: t.link }} className={`hover:underline ${wrap ? 'break-all' : ''}`}>{children}</a>;
+  const th = useContext(ThemeCtx);
+  return <a href={href} target="_blank" rel="noopener noreferrer" style={{ color: th.link }} className={`hover:underline ${wrap ? 'break-all' : ''}`}>{children}</a>;
 }
 
 // ---------- blocks ----------
 export function DiscordMd({ text }: { text: string }) {
-  const t = useContext(ThemeCtx);
+  const th = useContext(ThemeCtx);
   const out: ReactNode[] = [];
   const lines = text.split('\n');
   for (let i = 0; i < lines.length; i++) {
@@ -207,7 +207,7 @@ export function DiscordMd({ text }: { text: string }) {
         i++;
         while (i < lines.length && !lines[i].trim().startsWith('```')) body.push(lines[i++]);
       }
-      out.push(<CodeBlock key={i} text={body.join('\n')} background={t.code} border={t.embedBorder} />);
+      out.push(<CodeBlock key={i} text={body.join('\n')} background={th.code} border={th.embedBorder} />);
       continue;
     }
     if (line.startsWith('>>> ')) {
@@ -227,7 +227,7 @@ export function DiscordMd({ text }: { text: string }) {
       const size = h[1].length === 1 ? 'text-[1.5em]' : h[1].length === 2 ? 'text-[1.25em]' : 'text-[1.1em]';
       // the id lets the table of contents of the news page jump here (extractHeadings builds the same ids)
       out.push(
-        <div key={i} id={`nw-h-${i}`} role="heading" aria-level={h[1].length} className={`${size} nw-h mb-0.5 mt-1.5 font-bold leading-tight`} style={{ color: t.title }}>
+        <div key={i} id={`nw-h-${i}`} role="heading" aria-level={h[1].length} className={`${size} nw-h mb-0.5 mt-1.5 font-bold leading-tight`} style={{ color: th.title }}>
           {inlineMd(h[2])}
           <HeadingAnchor id={`nw-h-${i}`} />
         </div>,
@@ -236,7 +236,7 @@ export function DiscordMd({ text }: { text: string }) {
     }
     const small = /^-#\s+(.*)$/.exec(line);
     if (small) {
-      out.push(<div key={i} className="text-[0.8em]" style={{ color: t.muted }}>{inlineMd(small[1])}</div>);
+      out.push(<div key={i} className="text-[0.8em]" style={{ color: th.muted }}>{inlineMd(small[1])}</div>);
       continue;
     }
     const li = /^(\s*)[-*•]\s+(.*)$/.exec(line);
@@ -256,8 +256,8 @@ export function DiscordMd({ text }: { text: string }) {
 }
 
 function Quote({ children }: { children: ReactNode }) {
-  const t = useContext(ThemeCtx);
-  return <div className="my-0.5 pl-3" style={{ borderLeft: `4px solid ${t.quote}` }}>{children}</div>;
+  const th = useContext(ThemeCtx);
+  return <div className="my-0.5 pl-3" style={{ borderLeft: `4px solid ${th.quote}` }}>{children}</div>;
 }
 
 function CodeBlock({ text, background, border }: { text: string; background: string; border: string }) {

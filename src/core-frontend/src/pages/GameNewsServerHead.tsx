@@ -73,6 +73,7 @@ export function ServerHead({ server, rd, latest }: { server: NewsServerInfo; rd:
             {server.players != null && ` · ${t('gn.players', { n: server.players, max: server.maxPlayers ?? 0 })}`}
           </p>
           {server.pluginProblems && <p className="text-sm font-semibold text-danger">{t('gn.sh.problems', { list: server.pluginProblems })}</p>}
+          {old && !!server.pluginMissing?.length && <p className="text-sm font-semibold text-mute">{t('gn.sh.missing', { list: server.pluginMissing.map((id) => t(`gn.feat.${id}` as 'gn.feat.chat')).join(', ') })}</p>}
           {old && <p className="text-sm font-semibold text-warn">{t('gn.sh.old', { v: latest })} · <a className="text-link hover:underline" href="https://github.com/RJ-Bond/CoreGSM-Plugin/releases/latest" target="_blank" rel="noreferrer noopener">{t('gn.sh.download')}</a></p>}
         </div>
         <div className="flex flex-wrap items-center gap-2">

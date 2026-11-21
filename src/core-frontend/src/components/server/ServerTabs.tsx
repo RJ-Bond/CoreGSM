@@ -79,7 +79,7 @@ export default function ServerTabs({ id, tab, counts, toc, mini }: { id: number;
   }, [tab]);
 
   const onKey = (e: ReactKeyboardEvent) => {
-    const i = TAB_LIST.findIndex((t) => t.id === tab);
+    const i = TAB_LIST.findIndex((tb) => tb.id === tab);
     let n = -1;
     if (e.key === 'ArrowRight') n = (i + 1) % TAB_LIST.length;
     else if (e.key === 'ArrowLeft') n = (i - 1 + TAB_LIST.length) % TAB_LIST.length;

@@ -27,6 +27,7 @@ import { postAnnounceToDiscord } from './gameNewsChat.js';
 
 export const QUEUE_TTL_MS = 5 * 60_000;
 /** the version of the game plugin this panel was built for: an older plugin is shown as outdated */
+import { missingFeatures } from './pluginFeatures.js';
 export const PLUGIN_VERSION = '0.18.12';
 /** the games the plugin exists for */
 export const SUPPORTED_GAMES = new Set(['vrising']);
@@ -106,6 +107,7 @@ export function registerGameNews({ app, admin }: { app: Express; admin: RequestH
         lastSeen: t?.last_seen || null,
         online: !!t && t.last_seen > 0 && now - t.last_seen < ONLINE_MS,
         pluginVersion: t?.plugin_version ?? '',
+        pluginMissing: missingFeatures(t?.plugin_version ?? '').map((f) => f.id),
         pluginProblems: t?.plugin_problems ?? '',
         lang: langFor(s.id),
         players: liveState(s.id, now)?.players ?? null,

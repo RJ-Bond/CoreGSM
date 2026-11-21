@@ -113,8 +113,8 @@ export default function PlayersList({
     const prev = prevRows.current;
     prevRows.current = baseRows;
     if (limit || !prev || !online) return;
-    const now = new Set(baseRows.map((r) => r.name));
-    const left = prev.filter((r) => !now.has(r.name));
+    const present = new Set(baseRows.map((r) => r.name));
+    const left = prev.filter((r) => !present.has(r.name));
     if (!left.length) return;
     setGone((g) => [...g, ...left].slice(-6));
     window.setTimeout(() => setGone((g) => g.filter((x) => !left.includes(x))), 2600);

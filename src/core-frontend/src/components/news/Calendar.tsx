@@ -23,16 +23,16 @@ export function NewsCalendar({ items, onMove }: { items: NewsItem[]; onMove: (n:
     const first = new Date(month);
     const offset = (first.getDay() + 6) % 7;
     const start = new Date(first.getFullYear(), first.getMonth(), 1 - offset);
-    const cells = Array.from({ length: 42 }, (_, i) => new Date(start.getFullYear(), start.getMonth(), start.getDate() + i));
-    const byDay = new Map<string, NewsItem[]>();
-    const undated: NewsItem[] = [];
+    const grid = Array.from({ length: 42 }, (_, i) => new Date(start.getFullYear(), start.getMonth(), start.getDate() + i));
+    const days = new Map<string, NewsItem[]>();
+    const loose: NewsItem[] = [];
     for (const n of items) {
-      const t = dateOf(n);
-      if (!t) { if (movable(n)) undated.push(n); continue; }
-      const k = dayKey(new Date(t));
-      byDay.set(k, [...(byDay.get(k) ?? []), n]);
+      const due = dateOf(n);
+      if (!due) { if (movable(n)) loose.push(n); continue; }
+      const k = dayKey(new Date(due));
+      days.set(k, [...(days.get(k) ?? []), n]);
     }
-    return { cells, byDay, undated };
+    return { cells: grid, byDay: days, undated: loose };
   }, [items, month]);
 
   const todayKey = dayKey(new Date());

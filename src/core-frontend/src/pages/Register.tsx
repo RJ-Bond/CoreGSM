@@ -38,12 +38,12 @@ export default function Register({ onDone }: { onDone: () => void }) {
     if (!LOGIN_RE.test(name)) { setAvail('invalid'); return; }
     setAvail('checking');
     let stale = false;
-    const t = setTimeout(() => {
+    const timer = setTimeout(() => {
       api<{ valid: boolean; available: boolean }>(`/auth/check?username=${encodeURIComponent(name)}`)
         .then((r) => { if (!stale) setAvail(!r.valid ? 'invalid' : r.available ? 'free' : 'taken'); })
         .catch(() => { if (!stale) setAvail('idle'); });
     }, 400);
-    return () => { stale = true; clearTimeout(t); };
+    return () => { stale = true; clearTimeout(timer); };
   }, [username]);
 
   const submit = async (e: FormEvent) => {

@@ -298,10 +298,10 @@ export default function HistoryChart({
       const mute = rgbVar('--mute', '#5c6372');
       const line = rgbVar('--line', '#e7e9f0');
       const bad = rgbVar('--bad', '#b92828');
-      const esc = (t: string) => t.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c] as string);
-      const fit = (t: string, px: number, max: number) => {
-        const n = Math.max(8, Math.floor(max / (px * 0.58)));
-        return t.length > n ? `${t.slice(0, n - 1)}…` : t;
+      const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c] as string);
+      const fit = (s: string, px: number, maxW: number) => {
+        const n = Math.max(8, Math.floor(maxW / (px * 0.58)));
+        return s.length > n ? `${s.slice(0, n - 1)}…` : s;
       };
       const font = esc(bs.fontFamily);
       const periodName = hours <= 24 ? t('d2.hch.p24') : hours <= 168 ? t('d2.hch.p7') : t('d2.hch.p30');
@@ -314,7 +314,7 @@ export default function HistoryChart({
       const items: { kind: 'curve' | 'band' | 'dot'; label: string; fill?: string }[] = [
         { kind: 'curve', label: seriesName },
         ...(points.some((p) => !p.online) ? [{ kind: 'band' as const, label: t('d2.hch.down') }] : []),
-        ...MARK_ORDER.filter((t) => marks.some((m) => m.type === t)).map((t) => ({ kind: 'dot' as const, label: markLabel(t), fill: MARK[t].fill })),
+        ...MARK_ORDER.filter((mt) => marks.some((m) => m.type === mt)).map((mt) => ({ kind: 'dot' as const, label: markLabel(mt), fill: MARK[mt].fill })),
       ];
       let lx = 12;
       const ly = CAP + H + 20;
@@ -573,12 +573,12 @@ export default function HistoryChart({
       </div>
       {marks.length > 0 && (
         <ul className="hc-legend" aria-label={t('d2.hch.legend')}>
-          {MARK_ORDER.filter((t) => marks.some((m) => m.type === t)).map((t) => (
-            <li key={t}>
-              <span className="hc-dot" style={{ background: MARK[t].fill }} aria-hidden>
-                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3.4" strokeLinecap="round" strokeLinejoin="round"><path d={MARK[t].path} /></svg>
+          {MARK_ORDER.filter((mt) => marks.some((m) => m.type === mt)).map((mt) => (
+            <li key={mt}>
+              <span className="hc-dot" style={{ background: MARK[mt].fill }} aria-hidden>
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3.4" strokeLinecap="round" strokeLinejoin="round"><path d={MARK[mt].path} /></svg>
               </span>
-              {markLabel(t)}
+              {markLabel(mt)}
             </li>
           ))}
         </ul>

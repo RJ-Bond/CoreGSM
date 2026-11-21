@@ -11,8 +11,8 @@ const DISMISS_KEY = 'coregsm_dismissed_update_error';
 const readDismissed = (): number => {
   try { return Number(localStorage.getItem(DISMISS_KEY)) || 0; } catch { return 0; }
 };
-const rememberDismissed = (t: number) => {
-  try { localStorage.setItem(DISMISS_KEY, String(t)); } catch { /* not remembered */ }
+const rememberDismissed = (ts: number) => {
+  try { localStorage.setItem(DISMISS_KEY, String(ts)); } catch { /* not remembered */ }
 };
 
 /** «2 мин 5 с» / «45 с» */

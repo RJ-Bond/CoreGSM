@@ -1,5 +1,4 @@
 {
-  "eslint(no-shadow)": 41,
   "eslint(no-underscore-dangle)": 5,
   "jsx-a11y(click-events-have-key-events)": 8,
   "jsx-a11y(no-autofocus)": 12,

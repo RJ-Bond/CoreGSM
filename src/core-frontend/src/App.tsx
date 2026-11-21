@@ -205,8 +205,8 @@ export default function App() {
   // while the server is unreachable at start, try again by itself
   useEffect(() => {
     if (!boot.offline) return;
-    const t = setInterval(() => void load(), 10_000);
-    return () => clearInterval(t);
+    const timer = setInterval(() => void load(), 10_000);
+    return () => clearInterval(timer);
   }, [boot.offline, load]);
 
   // back from "Войти через Discord": the backend puts the new session token into the address (/auth/<jwt>).

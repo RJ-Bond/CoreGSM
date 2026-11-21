@@ -32,7 +32,7 @@ export function useServerReactions(servers: Server[], loaded: boolean): Reaction
   const prev = useRef<Map<number, { players: number; online: boolean; known: boolean }> | null>(null);
   const [rx, setRx] = useState<Reactions>({});
   const timers = useRef<number[]>([]);
-  useEffect(() => () => timers.current.forEach((t) => window.clearTimeout(t)), []);
+  useEffect(() => () => timers.current.forEach((id) => window.clearTimeout(id)), []);
   useEffect(() => {
     if (!loaded) return;
     const before = prev.current;

@@ -141,9 +141,9 @@ export default function CompareChart({ servers }: { servers: Server[] }) {
       </div>
 
       <div className="mb-3 flex flex-wrap gap-2" aria-label={t('d2.cc.toggle')}>
-        {series.map((x) => (
-          <button key={x.s.id} type="button" className="cmp-chip" aria-pressed={!hidden.has(x.s.id)} onClick={() => toggle(x.s.id)} style={{ ['--c' as string]: x.color }}>
-            <i aria-hidden />{x.s.name}
+        {series.map((sr) => (
+          <button key={sr.s.id} type="button" className="cmp-chip" aria-pressed={!hidden.has(sr.s.id)} onClick={() => toggle(sr.s.id)} style={{ ['--c' as string]: sr.color }}>
+            <i aria-hidden />{sr.s.name}
           </button>
         ))}
       </div>
@@ -162,12 +162,12 @@ export default function CompareChart({ servers }: { servers: Server[] }) {
             {[0, 0.25, 0.5, 0.75, 1].map((f, i) => (
               <text key={f} x={L + f * (W - L - R)} y={H - 8} textAnchor={i === 0 ? 'start' : i === 4 ? 'end' : 'middle'} className="fill-mute" fontSize="12" fontWeight="700">{label(from + f * hours * 3600_000)}</text>
             ))}
-            {shown.map((x) => {
+            {shown.map((sr) => {
               const runs: [number, number][][] = [];
               let run: [number, number][] = [];
-              x.values.forEach((v, i) => { if (v == null) { if (run.length) runs.push(run); run = []; } else run.push([L + (i / Math.max(1, n - 1)) * (W - L - R), y(v)]); });
+              sr.values.forEach((v, i) => { if (v == null) { if (run.length) runs.push(run); run = []; } else run.push([L + (i / Math.max(1, n - 1)) * (W - L - R), y(v)]); });
               if (run.length) runs.push(run);
-              return runs.map((r, k) => <path key={`${x.s.id}-${k}`} d={smoothPath(r)} fill="none" stroke={x.color} strokeWidth="2.4" strokeLinejoin="round" strokeLinecap="round" opacity={hover == null ? 0.95 : 0.85} />);
+              return runs.map((r, k) => <path key={`${sr.s.id}-${k}`} d={smoothPath(r)} fill="none" stroke={sr.color} strokeWidth="2.4" strokeLinejoin="round" strokeLinecap="round" opacity={hover == null ? 0.95 : 0.85} />);
             })}
             {hover != null && (
               <>

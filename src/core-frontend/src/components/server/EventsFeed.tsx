@@ -47,7 +47,7 @@ export default function EventsFeed({ events, online, limit, moreHref, uptimePct,
     const ups = events.filter((e) => e.type === 'up').map((e) => e.ts).sort((a, b) => a - b);
     for (const e of events) {
       if (e.type !== 'down') continue;
-      const up = ups.find((t) => t > e.ts);
+      const up = ups.find((ts) => ts > e.ts);
       if (up != null) m.set(e.ts, up - e.ts);
     }
     return m;

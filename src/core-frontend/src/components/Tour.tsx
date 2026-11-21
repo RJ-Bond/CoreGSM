@@ -86,10 +86,10 @@ export default function Tour() {
   // first sign-in: only OFFER the tour (a small card in the corner); it never dims the page on its own
   useEffect(() => {
     if (!isAdmin || !username || seen(username)) { setOffer(false); return; }
-    const t = window.setTimeout(() => setOffer(true), 2500);
+    const timer = window.setTimeout(() => setOffer(true), 2500);
     // the offer must not sit over the content for ever: it goes away by itself (and comes again next time)
     const gone = window.setTimeout(() => setOffer(false), 16_000);
-    return () => { window.clearTimeout(t); window.clearTimeout(gone); };
+    return () => { window.clearTimeout(timer); window.clearTimeout(gone); };
   }, [isAdmin, username]);
 
   useEffect(() => {

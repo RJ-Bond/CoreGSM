@@ -31,7 +31,7 @@ interface Item {
 }
 
 /** lower case, «ё» as «е»: a query matches either way */
-const norm = (t: string) => t.toLowerCase().replace(/ё/g, 'е');
+const norm = (s: string) => s.toLowerCase().replace(/ё/g, 'е');
 
 const IconPulse = () => (
   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>

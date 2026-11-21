@@ -58,8 +58,8 @@ export default function DeliveryList() {
   const waiting = !!data?.items.some((i) => i.nextTryAt != null);
   useEffect(() => {
     if (!waiting) return;
-    const t = setInterval(() => { if (!document.hidden) setNow(Date.now()); }, 1000);
-    return () => clearInterval(t);
+    const timer = setInterval(() => { if (!document.hidden) setNow(Date.now()); }, 1000);
+    return () => clearInterval(timer);
   }, [waiting]);
 
   const retry = async (id: number) => {

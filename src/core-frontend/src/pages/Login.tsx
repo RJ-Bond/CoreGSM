@@ -48,7 +48,7 @@ export default function Login({ onDone, notice }: { onDone: () => void; notice?:
   useEffect(() => {
     if (!lockUntil) return;
     setNow(Date.now());
-    const t = setInterval(() => {
+    const timer = setInterval(() => {
       const n = Date.now();
       setNow(n);
       if (n >= lockUntil) {
@@ -56,7 +56,7 @@ export default function Login({ onDone, notice }: { onDone: () => void; notice?:
         setTimeout(() => passRef.current?.focus(), 0);
       }
     }, 250);
-    return () => clearInterval(t);
+    return () => clearInterval(timer);
   }, [lockUntil]);
 
   const left = lockUntil ? Math.max(0, Math.ceil((lockUntil - now) / 1000)) : 0;
