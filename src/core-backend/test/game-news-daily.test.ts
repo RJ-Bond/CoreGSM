@@ -44,9 +44,12 @@ describe('the numbers of a day', () => {
     assert.deepEqual(s.repeat, [{ nick: 'Amo', n: 2 }]);
     assert.deepEqual(s.notes, { net: 1, stood: 1, freeze: 1, mass: 0 });
     const text = D.dailyText(s, { timeouts: 7, leaves: 70, days: 7 });
-    assert.match(text, /таймаут 4\*\* \(57%, 3 игрока\)/);
-    assert.match(text, /17 ч ×3, 8 ч ×1/);
-    assert.match(text, /Обрывы сразу у нескольких игроков: \*\*1\*\* \(3 игрока\)/);
+    assert.match(text, /⏱️ таймаут — \*\*4\*\* \(57%, 3 игрока\)/);
+    assert.match(text, /`17:00` ×3 · `08:00` ×1/);
+    assert.match(text, /Обрывы сразу у нескольких игроков: 1\*\* \(3 игрока\)/);
+    assert.match(text, /🔺 больше обычного/);
+    assert.equal(D.dailyColor(s), 0xed4245, 'several at once: red');
+    assert.match(D.hourBars(s.hours), /^```\n········▃········█······\n/);
     assert.match(text, /Amo ×2/);
     assert.match(text, /в среднем 1,0 таймаута в день \(10% выходов\)/);
     assert.match(text, /обрывов сети сервера 1, пауз процесса\/ВМ 1, замираний 1/);

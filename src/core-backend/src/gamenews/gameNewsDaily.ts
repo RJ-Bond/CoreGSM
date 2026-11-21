@@ -96,31 +96,62 @@ const plural = (n: number, one: string, few: string, many: string) => {
   return m10 === 1 && m100 !== 11 ? one : m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14) ? few : many;
 };
 
-/** the busiest hours of the timeouts, e.g. «14 ч ×3, 8 ч ×1» */
+/** the busiest hours of the timeouts, e.g. «`20:00` ×6 · `14:00` ×2» */
 export function busyHours(hours: number[]): string {
-  return hours.map((n, h) => ({ h, n })).filter((x) => x.n > 0).sort((a, b) => b.n - a.n || a.h - b.h).slice(0, 4).map((x) => `${x.h} ч ×${x.n}`).join(', ');
+  return hours.map((n, h) => ({ h, n })).filter((x) => x.n > 0).sort((a, b) => b.n - a.n || a.h - b.h).slice(0, 4)
+    .map((x) => `\`${String(x.h).padStart(2, '0')}:00\` ×${x.n}`).join(' · ');
+}
+
+const BARS = '▁▂▃▄▅▆▇█';
+/** the timeouts of the day hour by hour as one line of bars (· = none), with the hours under it */
+export function hourBars(hours: number[]): string {
+  const max = Math.max(...hours, 1);
+  const bars = hours.map((n) => (n === 0 ? '·' : BARS[Math.min(BARS.length - 1, Math.ceil((n / max) * BARS.length) - 1)])).join('');
+  return '```\n' + bars + '\n0     6     12    18   23\n```';
+}
+
+/** the colour of the card: green when the timeouts are few, yellow, red when many or several players at once */
+export function dailyColor(s: DayStats): number {
+  const share = s.leaves > 0 ? s.timeouts / s.leaves : 0;
+  if (s.bursts.length > 0 || share >= 0.1) return 0xed4245;
+  if (share >= 0.05) return 0xfee75c;
+  return 0x57f287;
+}
+
+/** today against the days before: more, fewer or as usual */
+function trend(today: number, avg: number): string {
+  if (avg <= 0) return today > 0 ? '🔺 раньше таймаутов не было' : '➖ как обычно';
+  if (today > avg * 1.25) return '🔺 больше обычного';
+  if (today < avg * 0.75) return '🔻 меньше обычного';
+  return '➖ как обычно';
 }
 
 /** the text of the summary of one server; `week` = the timeouts and departures of the seven days before (for the comparison) */
 export function dailyText(s: DayStats, week: { timeouts: number; leaves: number; days: number }): string {
   const lines: string[] = [];
-  lines.push(`Заходов **${s.joins}**, игроков **${s.players}**, выходов **${s.leaves}**`);
-  const parts = [`обычный выход ${s.quit}`, `**таймаут ${s.timeouts}** (${pct(s.timeouts, s.leaves)}, ${s.timeoutPlayers} ${plural(s.timeoutPlayers, 'игрок', 'игрока', 'игроков')})`];
-  if (s.steam) parts.push(`проверка Steam ${s.steam}`);
-  if (s.removed) parts.push(`снял CoreGSM ${s.removed}`);
-  if (s.other) parts.push(`другое ${s.other}`);
-  lines.push(`Как выходили: ${parts.join(' · ')}`);
+  lines.push(`👥 Заходов **${s.joins}** · игроков **${s.players}** · выходов **${s.leaves}**`);
+
+  lines.push('', '🚪 **Как выходили**');
+  lines.push(`✅ обычный выход — **${s.quit}**`);
+  lines.push(`⏱️ таймаут — **${s.timeouts}** (${pct(s.timeouts, s.leaves)}, ${s.timeoutPlayers} ${plural(s.timeoutPlayers, 'игрок', 'игрока', 'игроков')})`);
+  if (s.steam) lines.push(`🔐 проверка Steam — **${s.steam}**`);
+  if (s.removed) lines.push(`🛡️ снял CoreGSM — **${s.removed}**`);
+  if (s.other) lines.push(`❔ другое — **${s.other}**`);
+
   if (s.timeouts) {
-    lines.push(`Таймауты по часам: ${busyHours(s.hours)}`);
+    lines.push('', `🕐 **Таймауты по часам:** ${busyHours(s.hours)}`, hourBars(s.hours));
     lines.push(s.bursts.length
-      ? `Обрывы сразу у нескольких игроков: **${s.bursts.length}** (${s.bursts.map((n) => `${n} ${plural(n, 'игрок', 'игрока', 'игроков')}`).join(', ')}) — похоже на сеть или паузу самого сервера`
-      : 'Обрывов сразу у нескольких игроков не было — таймауты одиночные');
-    if (s.repeat.length) lines.push(`Чаще других: ${s.repeat.map((p) => `${p.nick} ×${p.n}`).join(', ')}`);
+      ? `💥 **Обрывы сразу у нескольких игроков: ${s.bursts.length}** (${s.bursts.map((n) => `${n} ${plural(n, 'игрок', 'игрока', 'игроков')}`).join(', ')}) — похоже на сеть или паузу самого сервера`
+      : '🟢 Обрывов сразу у нескольких игроков не было — таймауты одиночные');
+    if (s.repeat.length) lines.push(`🔁 **Чаще других:** ${s.repeat.map((p) => `${p.nick} ×${p.n}`).join(', ')}`);
   }
+
   if (week.days > 0) {
     const avg = week.timeouts / week.days;
-    lines.push(`За ${week.days} ${plural(week.days, 'день', 'дня', 'дней')} до этого: в среднем ${avg.toFixed(1).replace('.', ',')} таймаута в день (${pct(week.timeouts, week.leaves)} выходов)`);
+    lines.push('', `📈 **Сравнение:** ${trend(s.timeouts, avg)}`);
+    lines.push(`за ${week.days} ${plural(week.days, 'день', 'дня', 'дней')} до этого в среднем ${avg.toFixed(1).replace('.', ',')} таймаута в день (${pct(week.timeouts, week.leaves)} выходов)`);
   }
+
   const n = s.notes;
   const plugin = [
     n.net ? `обрывов сети сервера ${n.net}` : '',
@@ -128,7 +159,7 @@ export function dailyText(s: DayStats, week: { timeouts: number; leaves: number;
     n.freeze ? `замираний ${n.freeze}` : '',
     n.mass ? `массовых выходов ${n.mass}` : '',
   ].filter(Boolean);
-  lines.push(plugin.length ? `Плагин заметил: ${plugin.join(', ')}` : 'Плагин не заметил сбоев сети, пауз и замираний');
+  lines.push('', plugin.length ? `⚠️ **Плагин заметил:** ${plugin.join(', ')}` : '🔌 Плагин не заметил сбоев сети, пауз и замираний');
   return lines.join('\n');
 }
 
@@ -144,11 +175,11 @@ function notesOf(serverId: number, from: number, to: number): NoteRow[] {
 }
 
 /** the summary of the local day `day` ("YYYY-MM-DD") for every server that had something; [server, text] */
-export function buildDaily(day: string, zone = tz()): { serverId: number; name: string; text: string }[] {
+export function buildDaily(day: string, zone = tz()): { serverId: number; name: string; text: string; color: number }[] {
   const from = zonedTime(day, 0, zone);
   const to = zonedTime(localParts(from + DAY + 3 * 3_600_000, zone).day, 0, zone); // the next midnight (a day may be 23 or 25 h)
   const servers = db.prepare('SELECT DISTINCT server_id FROM game_connections WHERE ts >= ? AND ts < ?').all(from, to) as { server_id: number }[];
-  const out: { serverId: number; name: string; text: string }[] = [];
+  const out: { serverId: number; name: string; text: string; color: number }[] = [];
   for (const { server_id: id } of servers) {
     const s = summarize(rowsOf(id, from, to), notesOf(id, from, to), zone);
     if (s.joins + s.leaves === 0) continue;
@@ -157,7 +188,7 @@ export function buildDaily(day: string, zone = tz()): { serverId: number; name: 
     const first = before.length ? before[0].ts : from;
     const days = Math.min(7, Math.floor((from - first) / DAY));
     const prev = before.filter((r) => r.ts >= from - days * DAY && r.kind === 'leave');
-    out.push({ serverId: id, name: serverLabel(id), text: dailyText(s, { timeouts: prev.filter((r) => leaveSort(r) === 'timeout').length, leaves: prev.length, days }) });
+    out.push({ serverId: id, name: serverLabel(id), color: dailyColor(s), text: dailyText(s, { timeouts: prev.filter((r) => leaveSort(r) === 'timeout').length, leaves: prev.length, days }) });
   }
   return out;
 }
@@ -184,7 +215,7 @@ export function checkDaily(now = Date.now()): number {
     try {
       enqueueAlert('update', s.name, {
         content: '', mention: 'none',
-        embed: { title: `📊 Входы и выходы за ${dayTitle(yesterday)}`, description: `Сервер **${s.name}**\n${s.text}`, color: 0x5865f2, timestamp: new Date(now).toISOString() },
+        embed: { title: `📊 Входы и выходы за ${dayTitle(yesterday)}`, description: `🖥️ Сервер **${s.name}**\n\n${s.text}`, color: s.color, timestamp: new Date(now).toISOString() },
       });
       n++;
     } catch { /* one server must not stop the others */ }
